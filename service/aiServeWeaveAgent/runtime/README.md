@@ -217,6 +217,45 @@ type TLSConfig struct {
 	InsecureSkipVerify bool
 }
 
+// Descriptor 只包含可安全用于状态快照的稳定配置，不得包含 API Key、
+// 自定义 Header 值或其他凭据。
+type Descriptor struct {
+	ID            string
+	Kind          Kind
+	BaseURL       string
+	MaxConcurrent int
+	Exclusive     bool
+}
+
+type ProbeResult struct {
+	Kind             Kind
+	Version          string
+	IdentityVerified bool
+	Evidence         string
+	ProbedAt         time.Time
+}
+
+type HealthReport struct {
+	State        State
+	Latency      time.Duration
+	CheckedAt    time.Time
+	ErrorSummary string
+}
+
+type Discovery struct {
+	Version      string
+	Models       []Model
+	NodeTypes    []string
+	Capabilities CapabilitySet
+	Warnings     []string
+	DiscoveredAt time.Time
+}
+
+type Model struct {
+	ID           string
+	Capabilities CapabilitySet
+}
+
 type State string
 
 const (
@@ -228,7 +267,7 @@ const (
 )
 ```
 
-`Descriptor` 保存稳定配置摘要；`ProbeResult` 保存运行时类型和版本证据；`HealthReport` 保存状态、延迟、检测时间和安全错误摘要；`Discovery` 保存模型、运行时能力、模型能力及证据来源。
+`Descriptor` 保存稳定配置摘要：`ID` 和 `Kind` 标识实例，`BaseURL` 表示规范化后的后端地址，`MaxConcurrent` 和 `Exclusive` 提供调度约束。它不得包含 `APIKey`、自定义 Header 值或 TLS 凭据。`ProbeResult` 保存运行时类型、版本、身份验证强度和安全证据摘要；`HealthReport` 保存状态、延迟、检测时间和脱敏错误摘要；`Discovery` 保存版本、模型、节点类型、运行时能力、模型能力、降级告警及证据来源。所有时间字段由适配器写入 UTC 时间。
 
 `ChatRequest` 等类型只表达 Runtime 层需要的协议中立字段。`openai` 子包定义线上 JSON DTO 并负责二者转换，从而避免把后端私有字段扩散到 Manager，也避免包循环依赖。
 
@@ -597,11 +636,13 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 
 **文件：** `runtime.go`、`types.go`、`capability.go`、`errors.go`、`stream.go` 及对应 `_test.go`。
 
-- [ ] 先写 Kind、Config 校验、能力三态合并、错误映射和 Stream 关闭语义测试。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Config|Capability|RuntimeError|Stream)'`，确认测试因类型尚未实现而失败。
-- [ ] 实现本 README 中的公共类型和接口；增加四个适配器的编译期接口断言位置。
-- [ ] 再运行同一命令，要求通过且不存在协程泄漏。
-- [ ] 运行 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
+- [x] 先写 Kind、Config 校验、能力三态合并、错误映射和 Stream 关闭语义测试。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Config|Capability|RuntimeError|Stream)'`，确认测试因类型尚未实现而失败。
+- [x] 实现本 README 中的公共类型和接口；增加四个适配器的编译期接口断言位置。（`Runtime`/`InferenceRuntime`/`WorkflowRuntime`、错误模型和 `ChanStream` 已实现；适配器编译期断言待各自阶段落地对应类型时加入。）
+- [x] 再运行同一命令，要求通过且不存在协程泄漏。
+- [x] 运行 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
+
+尚未覆盖：Config 校验逻辑（`base_url`/`kind`/Header 规则）和 `CapabilitySet` 三态合并规则，留待接入 Registry（阶段 3）读取真实配置时一并实现和测试，避免在没有消费者的情况下预先猜测校验细节。
 
 **交付物：** 上层可以只依赖 `runtime` 包完成实例分类、能力判断、错误判断和流读取。
 
