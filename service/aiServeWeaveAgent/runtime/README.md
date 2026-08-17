@@ -123,6 +123,11 @@ Manager
 
 ## 公共接口草案
 
+**实现文件：**
+
+- `service/aiServeWeaveAgent/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`。
+- `service/aiServeWeaveAgent/runtime/stream.go`：`Stream[T]` 及通用关闭语义。
+
 接口名称和签名在第一阶段通过编译期断言及契约测试固定。后续适配器不得绕过这些接口向 `Manager` 塞入后端私有状态。
 
 ```go
@@ -169,6 +174,16 @@ type Stream[T any] interface {
 
 ## 核心类型
 
+### `service/aiServeWeaveAgent/runtime/types.go`
+
+该文件保存 Runtime 包对外共享的数据结构：
+
+- 标识与配置：`Kind`、`Config`、`TLSConfig`、`Descriptor`。
+- 状态与探测：`State`、`ProbeResult`、`HealthReport`。
+- 发现结果：`Discovery`、`Model`。
+- 推理请求：`ChatRequest`、`ChatResponse`、`ChatEvent`、`EmbeddingRequest`、`EmbeddingResponse`。
+- 工作流请求：`WorkflowRequest`、`WorkflowRun`、`WorkflowEvent`、`WorkflowStatus`、`ArtifactRef`、`Artifact`。
+
 ```go
 type Kind string
 
@@ -211,6 +226,20 @@ const (
 	StateUnhealthy   State = "unhealthy"
 	StateClosed      State = "closed"
 )
+```
+
+`Descriptor` 保存稳定配置摘要；`ProbeResult` 保存运行时类型和版本证据；`HealthReport` 保存状态、延迟、检测时间和安全错误摘要；`Discovery` 保存模型、运行时能力、模型能力及证据来源。
+
+`ChatRequest` 等类型只表达 Runtime 层需要的协议中立字段。`openai` 子包定义线上 JSON DTO 并负责二者转换，从而避免把后端私有字段扩散到 Manager，也避免包循环依赖。
+
+### `service/aiServeWeaveAgent/runtime/capability.go`
+
+该文件保存能力名称、三态值、证据来源和合并规则：
+
+```go
+type Capability string
+
+type CapabilitySource string
 
 type SupportLevel string
 
@@ -219,9 +248,16 @@ const (
 	SupportSupported   SupportLevel = "supported"
 	SupportUnsupported SupportLevel = "unsupported"
 )
-```
 
-`Descriptor` 保存稳定配置摘要；`ProbeResult` 保存运行时类型和版本证据；`HealthReport` 保存状态、延迟、检测时间和安全错误摘要；`Discovery` 保存模型、运行时能力、模型能力及证据来源。`ChatRequest`、`ChatResponse`、`ChatEvent`、`EmbeddingRequest` 和 `EmbeddingResponse` 是 `types.go` 中的协议中立类型；`openai` 子包只定义线上 JSON DTO 并负责二者转换，从而避免包循环依赖。
+type CapabilityEvidence struct {
+	Capability Capability
+	Level      SupportLevel
+	Source     CapabilitySource
+	Detail     string
+}
+
+type CapabilitySet map[Capability]CapabilityEvidence
+```
 
 建议首期能力集合：
 
@@ -323,6 +359,8 @@ runtimes:
 
 ### vLLM
 
+**实现文件：** `service/aiServeWeaveAgent/runtime/vllm/runtime.go`
+
 | 动作 | 首选端点 | 说明 |
 | --- | --- | --- |
 | Probe | `GET /version`、`GET /v1/models` | 两者都符合契约才完成类型验证 |
@@ -334,6 +372,8 @@ runtimes:
 vLLM 还可能暴露 Responses、音频、rerank 等端点，但首期不因端点出现在新版文档中就自动上报；每项能力必须有契约测试和明确版本证据。参考 [vLLM OpenAI-Compatible Server](https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/) 与 [vLLM Security](https://docs.vllm.ai/en/latest/usage/security/)。
 
 ### SGLang
+
+**实现文件：** `service/aiServeWeaveAgent/runtime/sglang/runtime.go`
 
 | 动作 | 首选端点 | 说明 |
 | --- | --- | --- |
@@ -347,6 +387,8 @@ SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两�
 
 ### Ollama
 
+**实现文件：** `service/aiServeWeaveAgent/runtime/ollama/runtime.go`
+
 | 动作 | 首选端点 | 说明 |
 | --- | --- | --- |
 | Probe | `GET /api/version`、`GET /api/tags` | 使用原生 API 确认 Ollama 身份 |
@@ -358,6 +400,11 @@ SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两�
 Ollama 原生接口用于身份和模型元数据，OpenAI-compatible 接口用于推理，避免自行转换其原生 NDJSON。不同版本支持的 OpenAI 字段不同，未验证字段保持 `unknown`。参考 [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)、[List models](https://docs.ollama.com/api/tags) 和 [Get version](https://docs.ollama.com/api/version)。
 
 ### ComfyUI
+
+**实现文件：**
+
+- `service/aiServeWeaveAgent/runtime/workflow/comfyui/client.go`：HTTP/WebSocket 协议客户端和线上 DTO。
+- `service/aiServeWeaveAgent/runtime/workflow/comfyui/runtime.go`：`WorkflowRuntime` 实现、事件分发和状态归一化。
 
 | 动作 | 端点 | 说明 |
 | --- | --- | --- |
@@ -383,6 +430,8 @@ ComfyUI WebSocket 是实例级事件流。每个 Runtime 只维护一个连接�
 
 ### Registry
 
+**实现文件：** `service/aiServeWeaveAgent/runtime/registry.go`
+
 ```go
 type Factory func(cfg Config, deps Dependencies) (Runtime, error)
 
@@ -401,6 +450,8 @@ type Registry interface {
 - ComfyUI WebSocket 使用 `github.com/coder/websocket`；适配器只依赖内部定义的窄 Dial/Conn 接口，生产实现再包装该库，便于测试连接、断线和取消。
 
 ### Manager
+
+**实现文件：** `service/aiServeWeaveAgent/runtime/manager.go`
 
 Manager 使用互斥锁保护实例表，但任何网络调用都不能持锁执行。读取方获得不可变 `Snapshot`，不能拿到 Manager 内部可修改对象。
 
@@ -467,6 +518,11 @@ execution_interrupted → cancelled
 未知事件保留类型和受大小限制的原始 JSON，不能导致 WebSocket 连接退出。二进制预览帧首期忽略并计数，正式产物以 History 和 `/view` 为准。
 
 ## 错误模型
+
+**实现文件：**
+
+- `service/aiServeWeaveAgent/runtime/errors.go`：公共错误类型和错误分类。
+- `service/aiServeWeaveAgent/runtime/openai/errors.go`：OpenAI-compatible 错误响应解码。
 
 ```go
 type ErrorCode string
