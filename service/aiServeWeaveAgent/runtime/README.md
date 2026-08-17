@@ -6,7 +6,7 @@
 
 **架构：** 四种后端共用运行时管理接口；vLLM、SGLang、Ollama 通过 OpenAI-compatible 专用接口处理同步及 SSE 推理，ComfyUI 通过独立工作流接口处理提交、事件、取消和产物。`Registry` 负责构造实例，`Manager` 负责实例状态与周期健康检查，各适配器只处理自身协议差异。
 
-**技术栈：** Go 1.26、`net/http`、`encoding/json`、SSE、`context`、`httptest`，以及仅用于 ComfyUI 的 `github.com/coder/websocket`。
+**技术栈：** Go 1.26、`net/http`、`net/url`、`encoding/json`、`log/slog`、SSE、`context`、`httptest`，以及仅用于 ComfyUI 的 `github.com/coder/websocket`。首期不引入其他第三方依赖。
 
 ## 全局约束
 
@@ -23,7 +23,20 @@
 
 ## 当前状态
 
-`runtime` 目录目前只有包和目录骨架，尚未实现公共接口或任何运行时能力。本文件描述目标设计和实施顺序，不代表对应功能已经完成。
+阶段 1 的公共契约已落地：接口、核心类型、错误模型和 `ChanStream` 可编译可测试。其余文件仍是占位符。本文件描述目标设计和实施顺序，勾选状态以实施计划中的 checkbox 为准。
+
+| 文件 | 状态 | 说明 |
+| --- | --- | --- |
+| `runtime.go` | 已实现 | 三个接口已固定，尚无适配器编译期断言 |
+| `types.go` | 部分实现 | 类型骨架齐备；`Config` 校验与默认值、`ChatRequest` 完整字段集、`LogValue` 未实现 |
+| `capability.go` | 部分实现 | 三态与证据结构已定义；能力常量、合并与门禁未实现 |
+| `errors.go` | 部分实现 | `RuntimeError`、状态码映射、`Redact` 已实现；哨兵错误未定义 |
+| `stream.go` | 已实现 | `Stream[T]` 与 `ChanStream[T]`，含 `errors_test.go`、`stream_test.go` |
+| `registry.go` | 占位符 | 仅包声明 |
+| `manager.go` | 占位符 | 仅包声明 |
+| `openai/*.go` | 空文件 | 七个文件均为 0 字节 |
+| `vllm/`、`sglang/`、`ollama/` | 占位符 | 各一行包声明 |
+| `workflow/comfyui/` | 占位符 | `runtime.go` 一行包声明，`client.go` 空文件 |
 
 已有文件布局：
 
@@ -33,7 +46,9 @@ runtime/
 ├── types.go
 ├── capability.go
 ├── errors.go
+├── errors_test.go
 ├── stream.go
+├── stream_test.go
 ├── registry.go
 ├── manager.go
 ├── openai/
@@ -271,6 +286,30 @@ const (
 
 `ChatRequest` 等类型只表达 Runtime 层需要的协议中立字段。`openai` 子包定义线上 JSON DTO 并负责二者转换，从而避免把后端私有字段扩散到 Manager，也避免包循环依赖。
 
+当前 `ChatRequest` 只有 `Model` 和 `Messages`，不足以承载「请求、流与事件」章节要求的采样参数、工具调用和扩展字段。阶段 2 补齐为：
+
+```go
+type ChatRequest struct {
+	Model          string
+	Messages       []ChatMessage
+	Temperature    *float64
+	TopP           *float64
+	MaxTokens      *int
+	Stop           []string
+	Seed           *int64
+	Tools          []Tool
+	ToolChoice     string
+	ResponseFormat *ResponseFormat
+	// Extra 转发后端私有参数。键与已建模字段冲突时，
+	// 转换层返回 ErrorInvalidConfig，不做静默覆盖。
+	Extra map[string]json.RawMessage
+}
+```
+
+采样参数使用指针，用于区分「调用方未设置」与「显式设为 0」；后者必须原样传给后端，不能被默认值吞掉。可选字段为 nil 时不出现在线上 JSON 中。需要 `Tools` 的请求必须先通过 `CapabilityTools` 门禁；需要 `ResponseFormat` 的请求先通过 `CapabilityStructuredOutput`。
+
+`ChatRequest` 不含 `Stream` 字段：流式与否由调用 `Chat` 还是 `ChatStream` 决定，`openai` 转换层负责设置线上 `stream` 与 `stream_options`。
+
 ### `service/aiServeWeaveAgent/runtime/capability.go`
 
 该文件保存能力名称、三态值、证据来源和合并规则：
@@ -317,6 +356,8 @@ workflow_cancel
 artifact_read
 ```
 
+这些名称必须声明为 `Capability` 常量（`CapabilityChat`、`CapabilityChatStream`、…），禁止在适配器里散落字符串字面量。
+
 每项能力使用三态值，并记录以下来源之一：
 
 - `endpoint`：目标端点实际存在且返回符合契约的响应。
@@ -326,16 +367,50 @@ artifact_read
 
 禁止仅通过模型名字中包含 `vision`、`embed`、`tool` 等字样推断能力。
 
+### 合并规则
+
+```go
+// Merge 按来源优先级合并多个来源产生的能力集合，后传入的低优先级来源
+// 不会覆盖已有的高优先级结论。输入不被修改，返回新集合。
+func Merge(sets ...CapabilitySet) CapabilitySet
+
+// Resolve 返回单项能力的最终结论；缺失等价于 SupportUnknown。
+func (s CapabilitySet) Resolve(c Capability) CapabilityEvidence
+
+// Require 是调用前门禁：能力为 unsupported 时返回包裹
+// ErrCapabilityUnsupported 的错误，为 unknown 时返回包裹
+// ErrCapabilityUnknown 的错误，两者错误码均为 ErrorCapability。
+func (s CapabilitySet) Require(c Capability) error
+```
+
+优先级从高到低固定为 `config_override` > `endpoint` > `model_metadata` > `runtime_profile`。补充规则：
+
+- 同优先级来源冲突时，`unsupported` 胜过 `supported`，`supported` 胜过 `unknown`；即同级冲突向保守方向收敛，并在 `Discovery.Warnings` 记录一条冲突说明。
+- 模型级能力与运行时级能力分别合并后再取交集：运行时不支持则模型一定不支持；运行时 `unknown` 时以模型结论为准。
+- `config_override` 只能在 `Config.CapabilityOverrides` 中出现，`Detail` 固定记录来源为配置，便于排障时区分「后端真的支持」和「管理员声明支持」。
+
+### 门禁位置
+
+能力门禁只在两处生效，避免重复校验和判断分歧：
+
+1. 适配器的 `Chat`/`ChatStream`/`Embed`/`Submit` 入口，对本实例最近一次 `Discover` 的结果调用 `Require`。
+2. 上层调度器选择实例前，对 `Snapshot.Discovery.Capabilities` 调用 `Resolve`。
+
+适配器持有的能力快照由 `Discover` 原子替换，请求路径只读，不在请求路径上触发探测。
+
 ## 文件职责规划
 
 | 文件 | 职责 |
 | --- | --- |
 | `runtime.go` | `Runtime`、`InferenceRuntime`、`WorkflowRuntime` 接口及编译期约束 |
 | `types.go` | Kind、Config、Descriptor、Probe、Health、Discovery、模型和请求结果类型 |
-| `capability.go` | 三态能力、证据来源、合并和覆盖规则 |
-| `errors.go` | 错误分类、上游状态码映射、脱敏和 `errors.Is/As` 支持 |
-| `stream.go` | 泛型流接口、关闭语义、空闲超时和终止错误 |
-| `registry.go` | Factory 注册、重复检测、按 Kind 构造实例 |
+| `config.go` | `Config.Normalize`、`Validate`、`LogValue` 及 URL/Header 规则 |
+| `deps.go` | `Dependencies`、`Clock`、`WSDialer`、`WSConn`、`Metrics` 协作者接口 |
+| `capability.go` | 能力常量、三态、证据来源、合并优先级和 `Require` 门禁 |
+| `errors.go` | 错误分类、哨兵错误、上游状态码映射、脱敏和 `errors.Is/As` 支持 |
+| `stream.go` | 泛型流接口、`ChanStream`、关闭语义、空闲超时和终止错误 |
+| `limiter.go` | 单实例并发上限、在途计数和本地背压错误 |
+| `registry.go` | Factory 注册、重复检测、Normalize/Validate 编排、按 Kind 构造实例 |
 | `manager.go` | 实例所有权、状态机、周期检查、快照和优雅关闭 |
 | `openai/client.go` | 共享 HTTP 客户端、URL 拼接、鉴权头、大小限制和响应解码 |
 | `openai/models.go` | `/v1/models` 类型和调用 |
@@ -345,12 +420,18 @@ artifact_read
 | `openai/stream.go` | SSE 到 `ChatEvent` 的转换及取消传播 |
 | `openai/errors.go` | OpenAI-compatible 错误体解析与公共错误映射 |
 | `vllm/runtime.go` | vLLM 探测、版本、健康、模型和能力修正 |
-| `sglang/runtime.go` | SGLang 探测、健康、模型和能力修正 |
+| `vllm/profile.go` | 按已测试版本维护的保守 `runtime_profile` 能力表 |
+| `sglang/runtime.go` | SGLang 探测、健康、模型、降级标记和能力修正 |
+| `sglang/profile.go` | SGLang `runtime_profile` 能力表 |
 | `ollama/runtime.go` | Ollama 原生发现接口与 OpenAI-compatible 推理桥接 |
+| `ollama/profile.go` | Ollama `runtime_profile` 能力表 |
 | `workflow/comfyui/client.go` | ComfyUI HTTP/WebSocket 客户端、请求和响应类型 |
-| `workflow/comfyui/runtime.go` | WorkflowRuntime、事件复用、状态归一化和安全取消 |
+| `workflow/comfyui/events.go` | 单连接事件复用器、按 `prompt_id` 分发和重连 |
+| `workflow/comfyui/runtime.go` | WorkflowRuntime、状态归一化和安全取消 |
 
-测试与实现文件同目录放置，优先使用黑盒测试；只有协议解析细节使用包内测试。
+`profile.go` 以版本区间为键，只声明该版本确定支持或确定不支持的能力，其余保持 `unknown`；新增条目必须附带对应契约测试或官方文档依据，禁止凭猜测扩表。
+
+测试与实现文件同目录放置，优先使用黑盒测试（`package xxx_test`）；只有 SSE 帧解析、URL 拼接和事件归一化这类内部细节使用包内测试。跨包共用的 fake Runtime、fake Clock 和 fake WSConn 放在 `runtime/internal/runtimetest`，避免各测试文件重复实现，也避免测试辅助代码进入公共 API。
 
 ## 配置规则
 
@@ -392,7 +473,25 @@ runtimes:
 - YAML 中的 `api_key_ref` 由 Agent 配置层解析，Factory 收到的 `Config.APIKey` 已是解析后的内存值，禁止重新持久化。
 - Agent 应限制可访问的地址范围；即使配置来自控制面，也不能把 Runtime 变成任意 URL 代理。
 
-建议默认值：探测和健康检查超时 `3s`，发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`。所有值可按实例覆盖；Context 截止时间始终优先。
+校验入口固定为三个方法，定义在 `runtime/config.go`：
+
+```go
+// Normalize 填充零值字段为默认值，并把 BaseURL 规范化为不含尾斜杠的
+// scheme://host[/prefix] 形式。返回新值，不修改接收者。
+func (c Config) Normalize() Config
+
+// Validate 校验规范化后的配置，聚合报告全部问题而非只返回第一个，
+// 错误码为 ErrorInvalidConfig。
+func (c Config) Validate() error
+
+// LogValue 实现 slog.LogValuer，输出 ID、Kind、BaseURL、超时和并发上限，
+// 并省略 APIKey、Headers 值和 TLS 凭据路径。
+func (c Config) LogValue() slog.Value
+```
+
+`Normalize` 必须在 `Validate` 之前调用，Registry 的 `Create` 内部按此顺序执行，调用方无需自行拼装。URL 拼接统一走 `url.URL.JoinPath`，保留配置中的路径前缀。
+
+建议默认值：探测和健康检查超时 `3s`，发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
 
 ## 后端接入矩阵
 
@@ -479,7 +578,44 @@ type Registry interface {
 	Create(cfg Config, deps Dependencies) (Runtime, error)
 	Kinds() []Kind
 }
+
+// Dependencies 注入全部外部协作者，使适配器不依赖包级全局变量，
+// 测试可以逐项替换。零值不可用：Create 必须校验必填字段。
+type Dependencies struct {
+	HTTPClient *http.Client
+	WSDialer   WSDialer // 仅 ComfyUI 使用，其他 Kind 可为 nil
+	Clock      Clock
+	Logger     *slog.Logger
+	Metrics    Metrics
+}
+
+// Clock 抽象时间，使 Manager 的周期调度和适配器的超时可在测试中确定化。
+type Clock interface {
+	Now() time.Time
+	NewTimer(d time.Duration) (<-chan time.Time, func() bool)
+}
+
+// WSDialer 是 ComfyUI 需要的最小 WebSocket 拨号面，
+// 生产实现包装 github.com/coder/websocket。
+type WSDialer interface {
+	Dial(ctx context.Context, url string, header http.Header) (WSConn, error)
+}
+
+type WSConn interface {
+	Read(ctx context.Context) (messageType int, data []byte, err error)
+	Close() error
+}
+
+// Metrics 只接受本 README「可观测性」章节列出的指标，
+// 实现方负责标签基数控制。
+type Metrics interface {
+	Counter(name string, labels map[string]string) Counter
+	Gauge(name string, labels map[string]string) Gauge
+	Histogram(name string, labels map[string]string) Histogram
+}
 ```
+
+`Clock`、`WSDialer`、`WSConn`、`Metrics` 及其子接口定义在 `runtime/deps.go`，避免 `types.go` 混杂数据结构与协作者接口。`Metrics` 的三个子接口保持最小面（`Add(float64)`、`Set(float64)`、`Observe(float64)`），Runtime 层不感知具体指标库。
 
 - 默认 Registry 在启动阶段注册四个 Factory，运行阶段只读。
 - 重复注册返回 `ErrFactoryAlreadyRegistered`。
@@ -492,7 +628,33 @@ type Registry interface {
 
 **实现文件：** `service/aiServeWeaveAgent/runtime/manager.go`
 
-Manager 使用互斥锁保护实例表，但任何网络调用都不能持锁执行。读取方获得不可变 `Snapshot`，不能拿到 Manager 内部可修改对象。
+```go
+type Manager interface {
+	Add(ctx context.Context, cfg Config) error
+	Replace(ctx context.Context, cfg Config) error
+	Remove(ctx context.Context, id string) error
+	Get(id string) (Runtime, bool)
+	Snapshot() []Snapshot
+	Close(ctx context.Context) error
+}
+
+// Snapshot 是单个实例的不可变状态视图。切片和 CapabilitySet 在返回前
+// 深拷贝，调用方的修改不会影响 Manager 内部状态。
+type Snapshot struct {
+	Descriptor  Descriptor
+	State       State
+	Probe       ProbeResult
+	Health      HealthReport
+	Discovery   Discovery
+	Inflight    int    // 当前在途请求数
+	Degraded    []string // 端点降级说明，例如 SGLang 缺少 /health
+	UpdatedAt   time.Time
+}
+```
+
+`Add` 内部串行执行「创建 → Probe → Discover → 注册 → 启动调度」；Probe 失败时实例不进入实例表并被立即 `Close`，不留 `registering` 僵尸条目。`Get` 返回接口值，调用方通过类型断言取得 `InferenceRuntime` 或 `WorkflowRuntime`；Manager 不提供按能力选择实例的调度方法，那属于上层调度器。
+
+Manager 使用互斥锁保护实例表，但任何网络调用都不能持锁执行：先在锁内取出实例引用，再释放锁发起请求。读取方获得不可变 `Snapshot`，不能拿到 Manager 内部可修改对象。
 
 状态转换：
 
@@ -582,6 +744,24 @@ const (
 )
 ```
 
+除错误码外，还需要一组哨兵错误，供 Registry、Manager 和 ComfyUI 取消路径使用；本文其他章节已按名称引用它们，但目前尚未定义：
+
+```go
+var (
+	ErrFactoryAlreadyRegistered = errors.New("runtime: factory already registered")
+	ErrRuntimeKindUnsupported   = errors.New("runtime: runtime kind unsupported")
+	ErrRuntimeIDDuplicated      = errors.New("runtime: runtime id duplicated")
+	ErrRuntimeNotFound          = errors.New("runtime: runtime not found")
+	ErrCancelUnsupported        = errors.New("runtime: cancel unsupported")
+	ErrCapabilityUnknown        = errors.New("runtime: capability unknown")
+	ErrCapabilityUnsupported    = errors.New("runtime: capability unsupported")
+	ErrConcurrencyLimit         = errors.New("runtime: concurrency limit reached")
+	ErrRuntimeClosed            = errors.New("runtime: runtime closed")
+)
+```
+
+哨兵错误只作为 `RuntimeError.Cause` 出现，不单独返回给调用方，这样 `errors.Is` 既能匹配错误码也能匹配具体原因。对应关系：`ErrCancelUnsupported` → `ErrorCancelUnsupported`，能力类 → `ErrorCapability`，`ErrConcurrencyLimit` → 本地背压（不占用上游错误码），配置与注册类 → `ErrorInvalidConfig`，`ErrRuntimeClosed` → `ErrorClosed`。
+
 `RuntimeError` 包含 `Code`、`RuntimeID`、`Kind`、`Operation`、可选 `StatusCode`、可安全暴露的 `Message`、是否可重试和底层 `Cause`。要求：
 
 - 支持 `errors.Is`、`errors.As` 和 `Unwrap`。
@@ -597,8 +777,11 @@ const (
 - 普通请求只有在未收到响应头时才具备重试资格。
 - 流式请求一旦产生事件，不得透明重试。
 - ComfyUI `POST /prompt` 超时后结果不确定，先通过提交时的 `client_id` 和上层幂等键对账，不能直接重复提交。
-- 每个 Runtime 使用独立并发上限；达到上限返回可识别的本地背压错误，不无限排队。
-- 大响应、Artifact 和流式数据边读边传，禁止 `io.ReadAll` 无上限读取。
+- 每个 Runtime 使用独立并发上限（`limiter.go`）；达到上限立即返回包裹 `ErrConcurrencyLimit` 的错误，不排队、不阻塞调用方。
+- 并发额度在推理请求和工作流提交上计数；`Probe`、`Health`、`Discover` 不占用额度，否则后端繁忙时会失去健康可见性。
+- 流式请求在整个流生命周期内持有额度，直到 `Recv` 返回终止错误或调用 `Close`；额度释放必须走 `defer`，不能依赖正常路径。
+- 大响应、Artifact 和流式数据边读边传，禁止 `io.ReadAll` 无上限读取；统一使用 `io.LimitReader` 加显式上限，超限返回 `ErrorResponseTooLarge`。
+- 建议上限：普通响应体 `8MB`，错误体 `64KB`，单条 SSE 行 `1MB`，单个 WebSocket 事件 `1MB`，Artifact 无内存上限但必须流式且受总字节数配置约束。
 
 ## 安全要求
 
@@ -630,44 +813,130 @@ comfyui_events_total{runtime_id,type}
 
 Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传递给后端，并出现在所有关联日志与指标 exemplar 中。
 
+指标约定：`result` 标签只取 `success`、`client_error`、`upstream_error`、`timeout`、`cancelled`、`backpressure` 六个值，不使用原始状态码作为标签；状态码只出现在 `runtime_upstream_errors_total` 的 `status` 上。`runtime_stream_first_event_seconds` 是 TTFT 的可观测代理，用于后续跨节点调度。标签中禁止出现模型名以外的用户输入，避免基数爆炸。
+
+## 版本兼容矩阵
+
+各适配器的 `runtime_profile` 能力表以下表为基线；每次验证真实后端后更新对应版本，并在提交信息中记录。未在此表出现的版本一律按 `unknown` 处理，不做向前推断。
+
+| 后端 | 最低支持版本 | 已验证版本 | 关键差异 |
+| --- | --- | --- | --- |
+| vLLM | 待定 | 待填写 | `/version` 字段名随版本变化；Responses 端点仅新版存在 |
+| SGLang | 待定 | 待填写 | 早期版本无 `/health`；`/get_server_info` 为私有响应且不稳定 |
+| Ollama | 待定 | 待填写 | OpenAI-compatible 层支持的字段逐版本增加 |
+| ComfyUI | 待定 | 待填写 | `/features`、`/models/{folder}` 为较新增接口；事件字段有增删 |
+
+阶段 8 的真实后端契约测试是本表的唯一填写依据；缺失依据时保持「待填写」，不允许用文档推测代替验证。
+
+## 质量门禁
+
+按开源项目标准，以下检查在每个阶段结束时全部通过后才能勾选该阶段：
+
+```bash
+gofmt -l ./service/aiServeWeaveAgent/runtime
+go vet ./service/aiServeWeaveAgent/runtime/...
+go test ./service/aiServeWeaveAgent/runtime/...
+go test -race ./service/aiServeWeaveAgent/runtime/...
+```
+
+补充要求：
+
+- `gofmt -l` 必须无输出；所有导出标识符具备以标识符开头的完整 doc comment。
+- 协程泄漏在每个包的 `TestMain` 中统一断言，不逐个测试手写检查。
+- 测试不使用真实 `time.Sleep` 推进时间，一律通过注入的 `Clock` 控制；例外只允许出现在真实后端契约测试中。
+- 新增第三方依赖需在阶段说明中列出理由；首期只允许 `github.com/coder/websocket` 一项。
+- 表驱动测试的每个用例必须有可读 `name`，失败信息包含期望值与实际值。
+- 公共 API 变更同步更新本 README 的接口草案与文件职责表，README 与代码不一致视为缺陷。
+
 ## 实施计划
 
-### 阶段 1：公共契约和能力模型
+阶段依赖关系，阶段 4 到 6 可在阶段 2、3 完成后并行推进：
+
+```text
+阶段 1 (公共契约)
+   │
+   ├──► 阶段 1b (配置校验 + 能力合并)
+   │        │
+   │        ▼
+   ├──► 阶段 2 (openai 共享客户端) ──┐
+   │                                 │
+   └──► 阶段 3 (Registry + Manager) ─┤
+                                     ▼
+                    ┌────────────┬────────────┬────────────┐
+                    ▼            ▼            ▼            ▼
+                阶段 4        阶段 5       阶段 6       阶段 7
+                Ollama        vLLM        SGLang       ComfyUI
+                    └────────────┴────────────┴────────────┘
+                                     ▼
+                              阶段 8 (集成 + 契约测试)
+```
+
+阶段 7 只依赖阶段 1、1b、3，不依赖 `openai` 包，可与阶段 2 并行开始。
+
+### 阶段 1：公共契约、错误模型与流
 
 **文件：** `runtime.go`、`types.go`、`capability.go`、`errors.go`、`stream.go` 及对应 `_test.go`。
 
-- [x] 先写 Kind、Config 校验、能力三态合并、错误映射和 Stream 关闭语义测试。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Config|Capability|RuntimeError|Stream)'`，确认测试因类型尚未实现而失败。
+范围收窄说明：Config 校验与能力合并原计划在本阶段完成，实际推迟到阶段 1b，因为在没有消费者时无法确定校验细节。本阶段实际交付的是类型骨架、错误模型和流实现。
+
+- [x] 先写错误映射和 Stream 关闭语义测试。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(RuntimeError|Stream)'`，确认测试因类型尚未实现而失败。
 - [x] 实现本 README 中的公共类型和接口；增加四个适配器的编译期接口断言位置。（`Runtime`/`InferenceRuntime`/`WorkflowRuntime`、错误模型和 `ChanStream` 已实现；适配器编译期断言待各自阶段落地对应类型时加入。）
 - [x] 再运行同一命令，要求通过且不存在协程泄漏。
 - [x] 运行 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
 
-尚未覆盖：Config 校验逻辑（`base_url`/`kind`/Header 规则）和 `CapabilitySet` 三态合并规则，留待接入 Registry（阶段 3）读取真实配置时一并实现和测试，避免在没有消费者的情况下预先猜测校验细节。
+**交付物：** 上层可以只依赖 `runtime` 包完成实例分类、错误判断和流读取。
 
-**交付物：** 上层可以只依赖 `runtime` 包完成实例分类、能力判断、错误判断和流读取。
+### 阶段 1b：配置校验、能力模型与共享支撑
+
+阶段 1 只固定了类型骨架，以下内容被推迟且必须在任何适配器动工前补齐，否则阶段 2 到 7 会各自发明一套校验和能力判断。
+
+**文件：** 创建 `config.go`、`deps.go`、`limiter.go`、`config_test.go`、`capability_test.go`、`limiter_test.go`；修改 `capability.go`、`errors.go`、`types.go`。
+
+- [ ] 写 `Config.Normalize`/`Validate` 表驱动测试：缺失 `id`、非法 `kind`、非 http(s) scheme、URL 含 userinfo/query/fragment、路径前缀保留、禁用 Header 覆盖、零值取默认、负值显式无限制。
+- [ ] 写 `Config.LogValue` 脱敏测试，断言输出不含 `APIKey`、Header 值和 TLS 文件路径。
+- [ ] 写 `CapabilitySet` 测试：来源优先级、同级冲突向保守收敛并产生 Warning、运行时与模型能力取交集、`Require` 对 unknown 和 unsupported 返回不同 Cause 且错误码同为 `ErrorCapability`。
+- [ ] 写 `limiter` 测试：额度耗尽返回 `ErrConcurrencyLimit`、释放后可再获取、并发获取与释放在 `-race` 下无竞态、Close 后不再发放额度。
+- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime`，确认失败原因来自未实现的方法而非编译错误以外的意外。
+- [ ] 实现 `config.go`、能力常量与合并门禁、哨兵错误、`deps.go` 协作者接口、`limiter.go`，并补齐 `ChatRequest` 完整字段集。
+- [ ] 建立 `runtime/internal/runtimetest`：fake Runtime、fake Clock、fake WSDialer/WSConn。
+- [ ] 运行质量门禁全部命令。
+
+**验收：** 配置校验、能力判断和并发控制在整个包内只有一份实现；适配器无需自行解析 URL 或推断能力。
 
 ### 阶段 2：共享 OpenAI-compatible 客户端
 
 **文件：** `openai/client.go`、`models.go`、`chat.go`、`embedding.go`、`sse.go`、`stream.go`、`errors.go` 及对应测试。
 
 - [ ] 使用 `httptest.Server` 写 URL 前缀、鉴权脱敏、Context 取消、响应大小和错误体测试。
+- [ ] 写 `ChatRequest` 与线上 DTO 的双向转换测试：可选字段为 nil 时不出现在 JSON 中、显式 0 值原样传递、`Extra` 键与已建模字段冲突时返回 `ErrorInvalidConfig`。
 - [ ] 写 SSE 表驱动测试，覆盖 CRLF、多行 data、注释、空事件、`[DONE]`、畸形 JSON、超长行和中途断开。
+- [ ] 写流生命周期测试：空闲超时触发、首个事件后 `Committed=true`、`Close` 与 Context 取消都关闭响应体并使读取协程退出。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/openai`，确认失败原因分别来自未实现调用和解析逻辑。
 - [ ] 实现共享 Client、模型列表、Chat、Embedding 和 SSE Stream。
 - [ ] 运行 `go test -race ./service/aiServeWeaveAgent/runtime/openai`，要求全部通过。
+- [ ] 运行质量门禁全部命令。
 
 **交付物：** 三种 LLM Runtime 可组合该客户端，不再重复 HTTP、SSE 和错误处理。
+
+**验收：** 该包不含任何 `Kind` 判断和后端专有端点路径；`grep` 不到 `vllm`、`sglang`、`ollama` 字样。
 
 ### 阶段 3：Registry、Manager 和健康状态机
 
 **文件：** `registry.go`、`manager.go`、`registry_test.go`、`manager_test.go`。
 
-- [ ] 使用 fake Runtime 和 fake Clock 写注册冲突、未知 Kind、首次 Probe 失败、阈值转换、周期不重叠、原子替换和 Close 测试。
+- [ ] 使用 fake Runtime 和 fake Clock 写注册冲突、未知 Kind、重复 ID、首次 Probe 失败、阈值转换、周期不重叠、原子替换和 Close 测试。
+- [ ] 写 Snapshot 隔离测试：修改返回值的切片和 `CapabilitySet` 不影响后续 Snapshot 结果。
+- [ ] 写调度测试：Health 慢于间隔时不堆积、抖动落在 `[interval, interval*1.1]`、健康恢复后立即触发一次 Discover。
+- [ ] 写 `Manager.Close` 测试：停止调度、取消在途检查、关闭全部实例、汇总多个 Close 错误、二次调用幂等。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Registry|Manager)'`，确认失败。
 - [ ] 实现只读 Registry、并发安全 Manager、抖动调度和不可变 Snapshot。
 - [ ] 运行上述测试及 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
+- [ ] 运行质量门禁全部命令。
 
 **交付物：** Agent 可以稳定持有多个异构 Runtime，并对上层发布可信状态。
+
+**验收：** 实例替换过程中持续读取 Snapshot 不会看到不可用窗口；测试结束后无残留协程。
 
 ### 阶段 4：Ollama 适配器
 
@@ -676,7 +945,7 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 - [ ] 用模拟 Ollama 覆盖 `/api/version`、`/api/tags`、`/api/show`、Chat SSE 和 Embedding。
 - [ ] 覆盖“只有 `/v1/models` 但没有 Ollama 原生端点”的类型不匹配场景。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/ollama`，确认失败。
-- [ ] 实现原生发现与 OpenAI-compatible 推理组合，限制 `/api/show` 并发。
+- [ ] 实现原生发现与 OpenAI-compatible 推理组合，限制 `/api/show` 并发；加入 `var _ runtime.InferenceRuntime = (*Runtime)(nil)` 编译期断言。
 - [ ] 运行包测试和 `go test -race ./service/aiServeWeaveAgent/runtime/...`。
 
 **验收：** 能发现本地模型；普通及流式 Chat 可取消；Embedding 仅对已确认模型上报。
@@ -688,7 +957,7 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 - [ ] 模拟 `/version`、`/health`、`/v1/models`、Chat、Embedding 和 OpenAI 错误。
 - [ ] 覆盖 API Key、路径前缀、健康失败及版本字段缺失。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/vllm`，确认失败。
-- [ ] 实现适配器和保守能力表；高级能力默认 unknown。
+- [ ] 实现适配器和 `profile.go` 保守能力表；高级能力默认 unknown；加入 `InferenceRuntime` 编译期断言。
 - [ ] 运行包测试和全目录竞态测试。
 
 **验收：** vLLM 身份、健康和模型可独立报告；不访问危险管理端点。
@@ -700,7 +969,7 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 - [ ] 模拟 `/health`、`/v1/models`、可选 `/get_server_info`、Chat SSE 和错误体。
 - [ ] 覆盖 `/health` 不存在时的降级、OpenAI 响应无法证明运行时身份及私有字段变化。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/sglang`，确认失败。
-- [ ] 实现显式 Kind 驱动的适配器，不接入 `/generate`。
+- [ ] 实现显式 Kind 驱动的适配器，不接入 `/generate`；降级信息写入 `Snapshot.Degraded` 与 `Discovery.Warnings`；加入 `InferenceRuntime` 编译期断言。
 - [ ] 运行包测试和全目录竞态测试。
 
 **验收：** SGLang 端点差异不会泄漏到共享 OpenAI 包，降级状态在 Discovery 中可见。
@@ -713,7 +982,7 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 - [ ] 用可控 WebSocket 服务覆盖连接先于提交、事件分发、未知事件、二进制预览、断线重连和 History 对账。
 - [ ] 写 pending 取消、exclusive running 取消和共享实例拒绝中断测试。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/workflow/comfyui`，确认失败。
-- [ ] 实现 Client、单连接事件复用器、WorkflowRuntime 和安全取消。
+- [ ] 实现 Client、单连接事件复用器（`events.go`）、WorkflowRuntime 和安全取消；加入 `var _ runtime.WorkflowRuntime = (*Runtime)(nil)` 编译期断言。
 - [ ] 运行包测试、全目录竞态测试，并检查测试结束后无残留连接或协程。
 
 **验收：** 一个固定 API Format 工作流可以提交、观察进度、获取最终状态和流式下载产物；共享实例不会误取消其他任务。
@@ -722,12 +991,14 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 
 **文件：** 修改 `manager.go`、`service/aiServeWeaveAgent/main.go`、`service/aiServeWeaveAgent/README.md`；创建 `service/aiServeWeaveAgent/config.go`、`service/aiServeWeaveAgent/config_test.go` 和各适配器的 `_integration_test.go`。
 
-- [ ] 注册四个默认 Factory，并从 Agent 配置加载多个 Runtime。
-- [ ] 加入指标和结构化日志，写 Secret 脱敏测试。
-- [ ] 提供由环境变量启用的真实后端契约测试；未配置时明确 Skip。
+- [ ] 注册四个默认 Factory，并从 Agent 配置加载多个 Runtime；`api_key_ref` 在配置层解析为内存值后传入。
+- [ ] 加入指标和结构化日志，写 Secret 脱敏测试，断言日志中不出现 API Key、Authorization、Cookie 和完整 Prompt。
+- [ ] 写跨适配器契约测试：同一组测试用例分别跑在三个 `InferenceRuntime` 实现上，验证接口语义一致（取消行为、能力门禁错误码、流终止错误）。
+- [ ] 提供由环境变量启用的真实后端契约测试（如 `RUNTIME_E2E_VLLM_URL`）；未配置时明确 `t.Skip` 并说明所需变量。
 - [ ] 运行 `go test -race ./service/aiServeWeaveAgent/runtime/...`。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/...`，验证上层装配没有破坏编译。
 - [ ] 分别连接真实 Ollama、vLLM、SGLang、ComfyUI 执行首期验收链路，并记录运行时版本。
+- [ ] 用实测结果填写「版本兼容矩阵」，同步更新各 `profile.go` 与本 README 的接口草案。
 
 **交付物：** Agent 可通过配置接入四种已启动后端，并向上层提供稳定、一致且可观测的运行时能力。
 
@@ -741,9 +1012,30 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 - SSE 能处理标准边界、取消、断流和超限，不聚合完整输出。
 - ComfyUI 可以探测节点和模型、提交工作流、接收事件、查询历史并下载产物。
 - ComfyUI 取消不会影响不属于当前调用的任务。
+- 单实例并发达到上限时返回可识别的本地背压错误，不排队也不阻塞调用方。
+- 「版本兼容矩阵」中四个后端的「已验证版本」均已由真实后端契约测试填写。
+- 「质量门禁」全部命令通过，`gofmt -l` 无输出，`go vet` 无告警。
 - 所有单元测试和 `go test -race ./service/aiServeWeaveAgent/runtime/...` 通过。
 - 日志和错误中不存在 API Key、Authorization、Cookie 或完整 Prompt。
-- 默认测试在没有 GPU 和外部服务的环境中可重复执行。
+- 默认测试在没有 GPU 和外部服务的环境中可重复执行，且测试结束后无残留协程与连接。
+
+## 风险与待决问题
+
+| 风险 | 影响 | 缓解 | 状态 |
+| --- | --- | --- | --- |
+| SGLang 无法通过响应强验证身份 | 配置写错 `kind` 时，vLLM 与 SGLang 会互相误认 | `IdentityVerified=false` 并在 Snapshot 中显式暴露，由用户确认配置 | 已接受 |
+| ComfyUI 事件可能丢失 | 进度事件不完整，最终状态误判 | 提交前建连，断线后强制 History 对账，最终状态只信 History | 已缓解 |
+| ComfyUI `POST /prompt` 超时结果不确定 | 重复提交导致重复出图和资源浪费 | 以 `client_id` 加上层幂等键对账，禁止自动重提 | 需上层配合 |
+| 后端版本升级改变字段或端点 | 能力表失效，Discover 静默降级 | 版本兼容矩阵 + `unknown` 默认值 + Warnings 上报 | 持续 |
+| 共享 ComfyUI 实例的取消语义 | 可能中断其他调用者任务 | 非 `exclusive` 时对 running 任务直接拒绝取消 | 已接受 |
+| `Extra` 透传后端私有参数 | 可能触达后端危险参数 | 与已建模字段冲突即报错；私有参数白名单由上层负责 | 待定 |
+
+待决问题，需要在对应阶段前确认：
+
+1. 各后端的最低支持版本，决定 `profile.go` 的下界与是否需要兼容分支（阶段 5 到 7 前）。
+2. Agent 是否已有统一的 Metrics 与 Logger 抽象；若有则 `deps.go` 直接复用而非自定义接口（阶段 1b 前）。
+3. `api_key_ref` 的 Secret 解析由哪一层实现，Runtime 只接收明文内存值这一约定是否与现有配置层一致（阶段 8 前）。
+4. 地址白名单（禁止把 Runtime 变成任意 URL 代理）由 Runtime 层校验还是由控制面下发时保证（阶段 1b 前）。
 
 ## 后续演进
 
