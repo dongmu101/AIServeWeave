@@ -77,6 +77,23 @@ func TestChanStreamSendStopsAfterConsumerClose(t *testing.T) {
 	}
 }
 
+func TestChanStreamCommittedFalseBeforeFirstSend(t *testing.T) {
+	s := NewChanStream[int](0)
+	if s.Committed() {
+		t.Fatal("Committed() = true before any Send")
+	}
+}
+
+func TestChanStreamCommittedTrueAfterFirstSend(t *testing.T) {
+	s := NewChanStream[int](1)
+	if !s.Send(1) {
+		t.Fatal("Send() = false, want true")
+	}
+	if !s.Committed() {
+		t.Fatal("Committed() = false after a successful Send")
+	}
+}
+
 func TestChanStreamCloseIsIdempotent(t *testing.T) {
 	s := NewChanStream[int](0)
 	s.Close()

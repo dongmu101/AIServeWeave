@@ -15,6 +15,11 @@ import (
 // any blocked Recv to return promptly.
 type Stream[T any] interface {
 	Recv() (T, error)
+	// Committed reports whether at least one item has already been
+	// delivered to the consumer. Once true, the caller must not
+	// transparently retry the request that produced this stream — partial
+	// output (tokens, workflow events) may already be visible upstream.
+	Committed() bool
 	Close() error
 }
 
@@ -31,8 +36,9 @@ type ChanStream[T any] struct {
 	done      chan struct{}
 	closeOnce sync.Once
 
-	mu  sync.Mutex
-	err error
+	mu        sync.Mutex
+	err       error
+	committed bool
 }
 
 // NewChanStream creates a ChanStream with the given item buffer size. A
@@ -51,10 +57,21 @@ func NewChanStream[T any](buffer int) *ChanStream[T] {
 func (s *ChanStream[T]) Send(item T) bool {
 	select {
 	case s.items <- item:
+		s.mu.Lock()
+		s.committed = true
+		s.mu.Unlock()
 		return true
 	case <-s.done:
 		return false
 	}
+}
+
+// Committed reports whether Send has ever completed, i.e. at least one item
+// has been handed to the consumer.
+func (s *ChanStream[T]) Committed() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.committed
 }
 
 // CloseWithError marks the stream finished on the producer side. err == nil

@@ -1,0 +1,34 @@
+package openai
+
+import (
+	"os"
+	"runtime"
+	"testing"
+	"time"
+)
+
+// TestMain asserts no test in this package leaks a goroutine — this
+// package's ChatStream spawns a background SSE-decoding goroutine per
+// call, so leak detection matters here more than most.
+func TestMain(m *testing.M) {
+	before := runtime.NumGoroutine()
+	code := m.Run()
+	if code == 0 && !goroutineCountSettles(before) {
+		os.Stderr.WriteString("leaked goroutines detected after tests completed\n")
+		code = 1
+	}
+	os.Exit(code)
+}
+
+func goroutineCountSettles(baseline int) bool {
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if runtime.NumGoroutine() <= baseline {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

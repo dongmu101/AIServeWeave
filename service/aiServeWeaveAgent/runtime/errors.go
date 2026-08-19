@@ -25,6 +25,27 @@ const (
 	ErrorResponseTooLarge  ErrorCode = "response_too_large"
 	ErrorCancelUnsupported ErrorCode = "cancel_unsupported"
 	ErrorClosed            ErrorCode = "runtime_closed"
+	// ErrorBackpressure marks local concurrency-limit rejections. It is
+	// deliberately distinct from ErrorRateLimited/ErrorUpstream: those mean
+	// the backend said no, this means the Agent itself declined to send the
+	// request, which the "backpressure" metrics result label depends on.
+	ErrorBackpressure ErrorCode = "backpressure"
+)
+
+// Sentinel errors for conditions that Registry, Manager, the concurrency
+// limiter and the ComfyUI cancel path need to distinguish with errors.Is.
+// They only ever appear as a RuntimeError.Cause, never returned bare, so
+// callers can match either the sentinel or the RuntimeError.Code.
+var (
+	ErrFactoryAlreadyRegistered = errors.New("runtime: factory already registered")
+	ErrRuntimeKindUnsupported   = errors.New("runtime: runtime kind unsupported")
+	ErrRuntimeIDDuplicated      = errors.New("runtime: runtime id duplicated")
+	ErrRuntimeNotFound          = errors.New("runtime: runtime not found")
+	ErrCancelUnsupported        = errors.New("runtime: cancel unsupported")
+	ErrCapabilityUnknown        = errors.New("runtime: capability unknown")
+	ErrCapabilityUnsupported    = errors.New("runtime: capability unsupported")
+	ErrConcurrencyLimit         = errors.New("runtime: concurrency limit reached")
+	ErrRuntimeClosed            = errors.New("runtime: runtime closed")
 )
 
 // RuntimeError is the error type returned by all Runtime operations.

@@ -99,9 +99,74 @@ type Model struct {
 	Capabilities CapabilitySet
 }
 
+// ChatRequest is the protocol-neutral request Chat and ChatStream accept.
+// Stream is deliberately not a field: streaming or not is chosen by calling
+// Chat vs ChatStream, and the openai conversion layer sets the wire-level
+// "stream"/"stream_options" fields accordingly.
 type ChatRequest struct {
 	Model    string
 	Messages []ChatMessage
+
+	// Sampling parameters use pointers so "caller did not set this" can be
+	// distinguished from "caller explicitly set this to the zero value";
+	// the latter must reach the backend unchanged rather than being
+	// silently dropped to a default. A nil field is omitted from the wire
+	// request entirely.
+	Temperature *float64
+	TopP        *float64
+	MaxTokens   *int
+	Stop        []string
+	Seed        *int64
+
+	// Tools requires CapabilityTools support; ResponseFormat requires
+	// CapabilityStructuredOutput. Callers must check CapabilitySet.Require
+	// before setting either — Runtime implementations reject the request
+	// rather than silently drop the field.
+	Tools          []Tool
+	ToolChoice     string
+	ResponseFormat *ResponseFormat
+
+	// Extra forwards backend-private parameters verbatim. A key that
+	// collides with an already-modeled field (e.g. "model", "temperature")
+	// must be rejected by the conversion layer with ErrorInvalidConfig
+	// rather than silently overwriting the modeled value.
+	Extra map[string]json.RawMessage
+}
+
+// Tool describes a callable function the model may invoke, mirroring the
+// OpenAI-compatible "function" tool shape vLLM, SGLang and Ollama all
+// implement.
+type Tool struct {
+	// Type is currently always "function", kept as a string so a future
+	// tool type can round-trip without a Runtime code change.
+	Type     string
+	Function FunctionDefinition
+}
+
+// FunctionDefinition describes one callable function's name, human-readable
+// purpose, and JSON Schema parameters.
+type FunctionDefinition struct {
+	Name        string
+	Description string
+	// Parameters is a JSON Schema object, passed through verbatim; Runtime
+	// does not validate or interpret schema contents.
+	Parameters json.RawMessage
+}
+
+// ResponseFormat constrains the shape of a model's output, mirroring the
+// OpenAI-compatible response_format parameter.
+type ResponseFormat struct {
+	// Type is one of "text", "json_object", or "json_schema".
+	Type string
+	// JSONSchema is set when Type == "json_schema" and nil otherwise.
+	JSONSchema *JSONSchemaFormat
+}
+
+// JSONSchemaFormat is the json_schema variant of ResponseFormat.
+type JSONSchemaFormat struct {
+	Name   string
+	Strict bool
+	Schema json.RawMessage
 }
 
 type ChatMessage struct {

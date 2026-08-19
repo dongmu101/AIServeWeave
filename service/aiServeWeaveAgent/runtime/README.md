@@ -23,18 +23,22 @@
 
 ## 当前状态
 
-阶段 1 的公共契约已落地：接口、核心类型、错误模型和 `ChanStream` 可编译可测试。其余文件仍是占位符。本文件描述目标设计和实施顺序，勾选状态以实施计划中的 checkbox 为准。
+阶段 1、1b、2 和 3 已落地：公共接口、核心类型（含完整 `ChatRequest` 字段集）、能力合并与门禁、错误模型（含哨兵错误）、`Config` 校验、`deps.go` 协作者接口、`limiter.go`、`runtimetest` fakes、`openai` 共享客户端（普通 Chat、Embedding、SSE 流式 Chat），以及 Registry 和 Manager（含健康状态机、抖动调度、原子替换、不可变 Snapshot）均可编译可测试。四个适配器仍是占位符。本文件描述目标设计和实施顺序，勾选状态以实施计划中的 checkbox 为准。
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
 | `runtime.go` | 已实现 | 三个接口已固定，尚无适配器编译期断言 |
-| `types.go` | 部分实现 | 类型骨架齐备；`Config` 校验与默认值、`ChatRequest` 完整字段集、`LogValue` 未实现 |
-| `capability.go` | 部分实现 | 三态与证据结构已定义；能力常量、合并与门禁未实现 |
-| `errors.go` | 部分实现 | `RuntimeError`、状态码映射、`Redact` 已实现；哨兵错误未定义 |
-| `stream.go` | 已实现 | `Stream[T]` 与 `ChanStream[T]`，含 `errors_test.go`、`stream_test.go` |
-| `registry.go` | 占位符 | 仅包声明 |
-| `manager.go` | 占位符 | 仅包声明 |
-| `openai/*.go` | 空文件 | 七个文件均为 0 字节 |
+| `types.go` | 已实现 | 类型骨架、`ChatRequest` 完整字段集（含 `Tool`/`ResponseFormat`）齐备 |
+| `config.go` | 已实现 | `Normalize`/`Validate`/`LogValue` |
+| `deps.go` | 已实现 | `Dependencies`、`Clock`、`WSDialer`/`WSConn`、`Metrics` 及子接口；生产 `Clock` 用 `NewSystemClock` |
+| `capability.go` | 已实现 | 能力常量、`Merge`/`Resolve`/`Require`/`Intersect` |
+| `errors.go` | 已实现 | `RuntimeError`、状态码映射、`Redact`、哨兵错误、`ErrorBackpressure` |
+| `stream.go` | 已实现 | `Stream[T]` 与 `ChanStream[T]`，含 `Committed()` |
+| `limiter.go` | 已实现 | 单实例并发上限 |
+| `internal/runtimetest/` | 已实现 | fake `Clock`/`Runtime`/`WSDialer`/`WSConn` |
+| `registry.go` | 已实现 | 只读 `Registry`，`Create` 校验配置和依赖后再构造 |
+| `manager.go` | 已实现 | `Manager`：Add/Replace/Remove/Get/Snapshot/Close，健康状态机与抖动调度 |
+| `openai/*.go` | 已实现 | `client.go`/`models.go`/`chat.go`/`embedding.go`/`sse.go`/`stream.go`/`errors.go` 均已实现并测试 |
 | `vllm/`、`sglang/`、`ollama/` | 占位符 | 各一行包声明 |
 | `workflow/comfyui/` | 占位符 | `runtime.go` 一行包声明，`client.go` 空文件 |
 
@@ -173,6 +177,9 @@ type WorkflowRuntime interface {
 
 type Stream[T any] interface {
 	Recv() (T, error)
+	// Committed reports whether at least one item has already reached the
+	// consumer; once true the caller must not transparently retry.
+	Committed() bool
 	Close() error
 }
 ```
@@ -893,14 +900,21 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 **文件：** 创建 `config.go`、`deps.go`、`limiter.go`、`config_test.go`、`capability_test.go`、`limiter_test.go`；修改 `capability.go`、`errors.go`、`types.go`。
 
-- [ ] 写 `Config.Normalize`/`Validate` 表驱动测试：缺失 `id`、非法 `kind`、非 http(s) scheme、URL 含 userinfo/query/fragment、路径前缀保留、禁用 Header 覆盖、零值取默认、负值显式无限制。
-- [ ] 写 `Config.LogValue` 脱敏测试，断言输出不含 `APIKey`、Header 值和 TLS 文件路径。
-- [ ] 写 `CapabilitySet` 测试：来源优先级、同级冲突向保守收敛并产生 Warning、运行时与模型能力取交集、`Require` 对 unknown 和 unsupported 返回不同 Cause 且错误码同为 `ErrorCapability`。
-- [ ] 写 `limiter` 测试：额度耗尽返回 `ErrConcurrencyLimit`、释放后可再获取、并发获取与释放在 `-race` 下无竞态、Close 后不再发放额度。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime`，确认失败原因来自未实现的方法而非编译错误以外的意外。
-- [ ] 实现 `config.go`、能力常量与合并门禁、哨兵错误、`deps.go` 协作者接口、`limiter.go`，并补齐 `ChatRequest` 完整字段集。
-- [ ] 建立 `runtime/internal/runtimetest`：fake Runtime、fake Clock、fake WSDialer/WSConn。
-- [ ] 运行质量门禁全部命令。
+- [x] 写 `Config.Normalize`/`Validate` 表驱动测试：缺失 `id`、非法 `kind`、非 http(s) scheme、URL 含 userinfo/query/fragment、路径前缀保留、禁用 Header 覆盖、零值取默认、负值显式无限制。
+- [x] 写 `Config.LogValue` 脱敏测试，断言输出不含 `APIKey`、Header 值和 TLS 文件路径。
+- [x] 写 `CapabilitySet` 测试：来源优先级、同级冲突向保守收敛并产生 Warning、运行时与模型能力取交集、`Require` 对 unknown 和 unsupported 返回不同 Cause 且错误码同为 `ErrorCapability`。
+- [x] 写 `limiter` 测试：额度耗尽返回 `ErrConcurrencyLimit`、释放后可再获取、并发获取与释放在 `-race` 下无竞态、Close 后不再发放额度。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime`，确认失败原因来自未实现的方法而非编译错误以外的意外。
+- [x] 实现 `config.go`、能力常量与合并门禁、哨兵错误、`deps.go` 协作者接口、`limiter.go`，并补齐 `ChatRequest` 完整字段集。
+- [x] 建立 `runtime/internal/runtimetest`：fake Runtime、fake Clock、fake WSDialer/WSConn。
+- [x] 运行质量门禁全部命令。
+
+补齐时发现并填的两处文档缺口（本节之前只引用了名字，没给出定义）：
+
+- `Tool`/`ResponseFormat`（`ChatRequest` 用到但正文没有定义）：按 vLLM/SGLang/Ollama 共用的 OpenAI-compatible 工具调用与 `response_format` 形状补的，见 `types.go` 的 `Tool`/`FunctionDefinition`/`ResponseFormat`/`JSONSchemaFormat`。
+- `ErrConcurrencyLimit` 对应的 `ErrorCode`：错误模型一节说“不占用上游错误码”，但 `ErrorCode` 常量块里没有一个符合的值；新增了 `ErrorBackpressure`，供 `limiter.go` 使用，并与「可观测性」一节里的 `backpressure` 指标结果标签对上。
+
+`CapabilitySet` 的“同级冲突产生 Warning”目前实现为：冲突胜出的 `CapabilityEvidence.Detail` 写入冲突说明；把它搬进 `Discovery.Warnings` 是调用方（未来的适配器）的责任，`Merge` 本身签名未变，不返回独立的 warnings 列表。
 
 **验收：** 配置校验、能力判断和并发控制在整个包内只有一份实现；适配器无需自行解析 URL 或推断能力。
 
@@ -908,14 +922,20 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 **文件：** `openai/client.go`、`models.go`、`chat.go`、`embedding.go`、`sse.go`、`stream.go`、`errors.go` 及对应测试。
 
-- [ ] 使用 `httptest.Server` 写 URL 前缀、鉴权脱敏、Context 取消、响应大小和错误体测试。
-- [ ] 写 `ChatRequest` 与线上 DTO 的双向转换测试：可选字段为 nil 时不出现在 JSON 中、显式 0 值原样传递、`Extra` 键与已建模字段冲突时返回 `ErrorInvalidConfig`。
-- [ ] 写 SSE 表驱动测试，覆盖 CRLF、多行 data、注释、空事件、`[DONE]`、畸形 JSON、超长行和中途断开。
-- [ ] 写流生命周期测试：空闲超时触发、首个事件后 `Committed=true`、`Close` 与 Context 取消都关闭响应体并使读取协程退出。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/openai`，确认失败原因分别来自未实现调用和解析逻辑。
-- [ ] 实现共享 Client、模型列表、Chat、Embedding 和 SSE Stream。
-- [ ] 运行 `go test -race ./service/aiServeWeaveAgent/runtime/openai`，要求全部通过。
-- [ ] 运行质量门禁全部命令。
+- [x] 使用 `httptest.Server` 写 URL 前缀、鉴权脱敏、Context 取消、响应大小和错误体测试。
+- [x] 写 `ChatRequest` 与线上 DTO 的双向转换测试：可选字段为 nil 时不出现在 JSON 中、显式 0 值原样传递、`Extra` 键与已建模字段冲突时返回 `ErrorInvalidConfig`。
+- [x] 写 SSE 表驱动测试，覆盖 CRLF、多行 data、注释、空事件、`[DONE]`、畸形 JSON、超长行和中途断开。
+- [x] 写流生命周期测试：空闲超时触发、首个事件后 `Committed=true`、`Close` 与 Context 取消都关闭响应体并使读取协程退出。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/openai`，确认失败原因分别来自未实现调用和解析逻辑。
+- [x] 实现共享 Client、模型列表、Chat、Embedding 和 SSE Stream。
+- [x] 运行 `go test -race ./service/aiServeWeaveAgent/runtime/openai`，要求全部通过。
+- [x] 运行质量门禁全部命令。
+
+实现说明：
+
+- `Committed` 落地为 `Stream[T]` 接口新增的 `Committed() bool` 方法（`runtime/stream.go`），而不是某个具体事件类型上的字段——这样 ComfyUI 的 `WorkflowEvent` 流将来复用同一套“首次成功 Send 后即不可再透明重试”的语义，不必各自发明一套标记。`ChanStream[T]` 在 `Send` 成功那次调用内原子置位；`openai.chatEventStream` 通过内嵌 `*runtime.ChanStream[runtime.ChatEvent]` 自动获得该方法。
+- `Extra` 冲突检测按**字段名集合**判断，不按“这次请求恰好序列化出了哪些 key”判断：`modeledChatFields` 是固定表，即使调用方没设置 `Temperature`，`Extra["temperature"]` 依然会被拒绝——避免把“字段当前未设置”当成绕过建模字段的后门。
+- 流式请求固定发送 `stream_options.include_usage=true`，让支持该字段的后端在最后一个 chunk 带上 usage；不支持的后端会忽略这个字段（OpenAI-compatible 服务器对未知请求字段的通行做法是忽略而非报错）。
 
 **交付物：** 三种 LLM Runtime 可组合该客户端，不再重复 HTTP、SSE 和错误处理。
 
@@ -925,18 +945,27 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 **文件：** `registry.go`、`manager.go`、`registry_test.go`、`manager_test.go`。
 
-- [ ] 使用 fake Runtime 和 fake Clock 写注册冲突、未知 Kind、重复 ID、首次 Probe 失败、阈值转换、周期不重叠、原子替换和 Close 测试。
-- [ ] 写 Snapshot 隔离测试：修改返回值的切片和 `CapabilitySet` 不影响后续 Snapshot 结果。
-- [ ] 写调度测试：Health 慢于间隔时不堆积、抖动落在 `[interval, interval*1.1]`、健康恢复后立即触发一次 Discover。
-- [ ] 写 `Manager.Close` 测试：停止调度、取消在途检查、关闭全部实例、汇总多个 Close 错误、二次调用幂等。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Registry|Manager)'`，确认失败。
-- [ ] 实现只读 Registry、并发安全 Manager、抖动调度和不可变 Snapshot。
-- [ ] 运行上述测试及 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
-- [ ] 运行质量门禁全部命令。
+- [x] 使用 fake Runtime 和 fake Clock 写注册冲突、未知 Kind、重复 ID、首次 Probe 失败、阈值转换、周期不重叠、原子替换和 Close 测试。
+- [x] 写 Snapshot 隔离测试：修改返回值的切片和 `CapabilitySet` 不影响后续 Snapshot 结果。
+- [x] 写调度测试：Health 慢于间隔时不堆积、抖动落在 `[interval, interval*1.1]`、健康恢复后立即触发一次 Discover。
+- [x] 写 `Manager.Close` 测试：停止调度、取消在途检查、关闭全部实例、汇总多个 Close 错误、二次调用幂等。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Registry|Manager)'`，确认失败。
+- [x] 实现只读 Registry、并发安全 Manager、抖动调度和不可变 Snapshot。
+- [x] 运行上述测试及 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
+- [x] 运行质量门禁全部命令。
 
 **交付物：** Agent 可以稳定持有多个异构 Runtime，并对上层发布可信状态。
 
 **验收：** 实例替换过程中持续读取 Snapshot 不会看到不可用窗口；测试结束后无残留协程。
+
+实现说明：
+
+- `registry_test.go`、`manager_test.go` 按 README 约定写成黑盒测试（`package runtime_test`），因为它们需要 `internal/runtimetest`，而 `runtimetest` 反过来又 import `runtime` 做接口断言——放进包内测试会直接构成 import cycle。包内细节（SSE、URL 拼接等）仍留在 `package runtime`/`package openai`。
+- `Manager.Add`/`Replace` 里 Probe 和 Discover 都在“进入实例表之前”同步执行；Discover 失败和 Probe 失败一样会 `Close` 掉新建的 Runtime 且不注册，不会遗留 `registering` 僵尸条目（状态图上 `registering → healthy` 那条边本身就要求两者都成功）。
+- 每个实例一个调度协程，用 `select` 在同一个 goroutine 里轮流处理 Health 定时器、Discover 定时器和取消信号；Health/Discover 网络调用是同步执行的，天然保证“同一实例最多一个在途”，慢请求只是推迟下一次定时器的创建时间，不会排队堆积。
+- 取消通过每实例的 `context.CancelFunc` 实现，Health/Discover 的调用 Context 都是这个 cancel context 的子 Context——`Remove`/`Replace`/`Close` 一 cancel，正在进行中的检查立刻收到 `ctx.Done()`，不必等它自然超时。
+- `Snapshot.Inflight` 暂时恒为 `0`：README 没有说明上层如何把请求路径的 `Limiter` 获取/释放接回 Manager（`Get` 只返回裸 `Runtime`），这段留给阶段 8 的集成工作，此处不臆造一套接口。
+- 按「质量门禁」要求补了 `runtime` 和 `openai` 两个包的 `TestMain`，统一做协程泄漏检测（`runtime.NumGoroutine()` 前后对比，容忍 2s 内自然收敛），不再逐个测试手写检查。
 
 ### 阶段 4：Ollama 适配器
 

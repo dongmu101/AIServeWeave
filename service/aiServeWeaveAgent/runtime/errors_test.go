@@ -80,6 +80,26 @@ func TestClassifyTransportError(t *testing.T) {
 	}
 }
 
+func TestSentinelErrorsReachableThroughRuntimeErrorCause(t *testing.T) {
+	sentinels := []error{
+		ErrFactoryAlreadyRegistered,
+		ErrRuntimeKindUnsupported,
+		ErrRuntimeIDDuplicated,
+		ErrRuntimeNotFound,
+		ErrCancelUnsupported,
+		ErrCapabilityUnknown,
+		ErrCapabilityUnsupported,
+		ErrConcurrencyLimit,
+		ErrRuntimeClosed,
+	}
+	for _, sentinel := range sentinels {
+		wrapped := &RuntimeError{Code: ErrorInvalidConfig, Cause: sentinel}
+		if !errors.Is(wrapped, sentinel) {
+			t.Errorf("errors.Is did not reach sentinel %v through RuntimeError.Cause", sentinel)
+		}
+	}
+}
+
 func TestRedact(t *testing.T) {
 	msg := "Authorization: Bearer sk-secret123 failed for user"
 	got := Redact(msg, "sk-secret123")
