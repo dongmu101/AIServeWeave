@@ -23,7 +23,7 @@
 
 ## 当前状态
 
-阶段 1、1b、2 和 3 已落地：公共接口、核心类型（含完整 `ChatRequest` 字段集）、能力合并与门禁、错误模型（含哨兵错误）、`Config` 校验、`deps.go` 协作者接口、`limiter.go`、`runtimetest` fakes、`openai` 共享客户端（普通 Chat、Embedding、SSE 流式 Chat），以及 Registry 和 Manager（含健康状态机、抖动调度、原子替换、不可变 Snapshot）均可编译可测试。四个适配器仍是占位符。本文件描述目标设计和实施顺序，勾选状态以实施计划中的 checkbox 为准。
+阶段 1、1b、2、3、4、5、6 和 7 已落地：公共接口、核心类型（含完整 `ChatRequest` 字段集）、能力合并与门禁、错误模型（含哨兵错误）、`Config` 校验、`deps.go` 协作者接口、`limiter.go`、`runtimetest` fakes、`openai` 共享客户端（普通 Chat、Embedding、SSE 流式 Chat）、Registry 和 Manager（含健康状态机、抖动调度、原子替换、不可变 Snapshot），以及 Ollama、vLLM、SGLang 三个推理适配器均可编译可测试；Ollama 已用真实后端（0.32.14）验证，另两个仅有模拟后端测试。三者的请求路径、并发限流、能力门禁和版本区间应用逻辑下沉为共享的 `internal/oaibase`、`internal/capprofile`，各适配器只保留自身的探测/健康/发现协议。ComfyUI 工作流适配器亦已落地，是唯一引入第三方依赖（`github.com/coder/websocket`）的部分，且该依赖只出现在 `wsdial.go` 一个文件里。剩余工作是阶段 8 的集成、指标与真实后端契约测试。本文件描述目标设计和实施顺序，勾选状态以实施计划中的 checkbox 为准。
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
@@ -39,8 +39,12 @@
 | `registry.go` | 已实现 | 只读 `Registry`，`Create` 校验配置和依赖后再构造 |
 | `manager.go` | 已实现 | `Manager`：Add/Replace/Remove/Get/Snapshot/Close，健康状态机与抖动调度 |
 | `openai/*.go` | 已实现 | `client.go`/`models.go`/`chat.go`/`embedding.go`/`sse.go`/`stream.go`/`errors.go` 均已实现并测试 |
-| `vllm/`、`sglang/`、`ollama/` | 占位符 | 各一行包声明 |
-| `workflow/comfyui/` | 占位符 | `runtime.go` 一行包声明，`client.go` 空文件 |
+| `internal/oaibase/` | 已实现 | Ollama、vLLM 共用的请求路径、并发限流、能力快照与门禁 |
+| `internal/capprofile/` | 已实现 | `Table.Resolve`/`ParseVersion`/`Compare`，版本区间能力表的通用应用逻辑 |
+| `ollama/` | 已实现 | 原生发现 + OpenAI-compatible 推理；已用真实后端（0.32.14）验证 |
+| `vllm/` | 已实现 | `/version`+`/v1/models` 探测、`/health`、保守能力表；未接真实后端 |
+| `sglang/` | 已实现 | `/v1/models` 探测（身份不强验证）、`/health` 缺失降级、可选 `/get_server_info`；未接真实后端 |
+| `workflow/comfyui/` | 已实现 | `client.go`/`events.go`/`runtime.go`/`wsdial.go`：HTTP 客户端、单连接事件复用器、WorkflowRuntime、安全取消、产物流式下载；未接真实后端 |
 
 已有文件布局：
 
@@ -55,6 +59,10 @@ runtime/
 ├── stream_test.go
 ├── registry.go
 ├── manager.go
+├── internal/
+│   ├── runtimetest/
+│   ├── oaibase/
+│   └── capprofile/
 ├── openai/
 ├── vllm/
 ├── sglang/
@@ -426,6 +434,8 @@ func (s CapabilitySet) Require(c Capability) error
 | `openai/sse.go` | SSE 帧解析；支持多行 `data`、注释、空行和 `[DONE]` |
 | `openai/stream.go` | SSE 到 `ChatEvent` 的转换及取消传播 |
 | `openai/errors.go` | OpenAI-compatible 错误体解析与公共错误映射 |
+| `internal/oaibase/oaibase.go` | Ollama、vLLM（未来还有 SGLang）共用的 `Chat`/`ChatStream`/`Embed`、并发限流获取/释放、能力快照发布与门禁、`ProbeMismatch`/`ErrorClosed` 分类 |
+| `internal/capprofile/capprofile.go` | `Table.Resolve` 按版本区间应用能力表、`ParseVersion`、`Compare`；各适配器的 `profile.go` 只放具体版本表 |
 | `vllm/runtime.go` | vLLM 探测、版本、健康、模型和能力修正 |
 | `vllm/profile.go` | 按已测试版本维护的保守 `runtime_profile` 能力表 |
 | `sglang/runtime.go` | SGLang 探测、健康、模型、降级标记和能力修正 |
@@ -435,6 +445,7 @@ func (s CapabilitySet) Require(c Capability) error
 | `workflow/comfyui/client.go` | ComfyUI HTTP/WebSocket 客户端、请求和响应类型 |
 | `workflow/comfyui/events.go` | 单连接事件复用器、按 `prompt_id` 分发和重连 |
 | `workflow/comfyui/runtime.go` | WorkflowRuntime、状态归一化和安全取消 |
+| `workflow/comfyui/wsdial.go` | 基于 `github.com/coder/websocket` 的生产 `WSDialer`；本包唯一引用第三方库的文件 |
 
 `profile.go` 以版本区间为键，只声明该版本确定支持或确定不支持的能力，其余保持 `unknown`；新增条目必须附带对应契约测试或官方文档依据，禁止凭猜测扩表。
 
@@ -528,6 +539,13 @@ vLLM 还可能暴露 Responses、音频、rerank 等端点，但首期不因端�
 | Chat | `POST /v1/chat/completions` | 普通响应和 SSE |
 | Embedding | 仅在适配器契约测试通过时启用 | 默认 `unknown` |
 
+**能力证据的不对称说明：** SGLang 没有版本端点，`/get_server_info` 是否报版本随部署而定，因此
+`chat`/`chat_stream`/`completions` 由 `SourceEndpoint` 证据给出（`/v1/models` 应答，且 SGLang 的
+OpenAI-compatible server 与该路由注册在同一 server 上），而不像 vLLM 那样要求先读到版本；
+`tools`、`structured_output`、`embeddings` 等随版本和启动参数变化的能力仍只认版本表和
+`CapabilityOverrides`。这条推断及其边界写在 `sglang/runtime.go` 的 `endpointCapabilities` 与
+证据 `Detail` 中，便于评审时直接看到依据。
+
 SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两套生成协议。参考 [SGLang Bench Serving Guide](https://docs.sglang.ai/developer_guide/bench_serving) 与 [SGLang Observability](https://docs.sglang.ai/advanced_features/observability.html)。
 
 ### Ollama
@@ -541,6 +559,8 @@ SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两�
 | Discover | `GET /api/tags`，按需 `POST /api/show` | `/api/show` 用于补充单模型能力，限制并发和刷新频率 |
 | Chat | `POST /v1/chat/completions` | 复用共享 OpenAI-compatible 客户端 |
 | Embedding | `POST /v1/embeddings` | 对外保持 OpenAI 语义 |
+
+**已知差异（实测 0.32.14）：** 具备 `thinking` 能力的模型在 `/v1/chat/completions` 的响应里，把思考内容放在非标准的 `choices[].message.reasoning`（流式为 `delta.reasoning`）字段，`content` 只保留最终答案。`ChatMessage`/`ChatMessageDelta` 目前没有这个字段，因此思考内容会被丢弃：流式调用只收到最终答案（可接受），而非流式调用若 `max_tokens` 在思考阶段就耗尽，会返回 `content` 为空、`finish_reason` 为 `length` 的结果。这不是 Ollama 专有问题——vLLM 和 SGLang 的 reasoning 模型也走同一形状，因此归属应当是 `runtime.ChatMessage` 增加 reasoning 字段并由 `openai` 层统一解析，而不是在 Ollama 适配器里单独处理；在跨适配器方案确定前，本适配器不私自加字段。
 
 Ollama 原生接口用于身份和模型元数据，OpenAI-compatible 接口用于推理，避免自行转换其原生 NDJSON。不同版本支持的 OpenAI 字段不同，未验证字段保持 `unknown`。参考 [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)、[List models](https://docs.ollama.com/api/tags) 和 [Get version](https://docs.ollama.com/api/version)。
 
@@ -830,10 +850,10 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 | --- | --- | --- | --- |
 | vLLM | 待定 | 待填写 | `/version` 字段名随版本变化；Responses 端点仅新版存在 |
 | SGLang | 待定 | 待填写 | 早期版本无 `/health`；`/get_server_info` 为私有响应且不稳定 |
-| Ollama | 待定 | 待填写 | OpenAI-compatible 层支持的字段逐版本增加 |
+| Ollama | 0.1.24 | 0.32.14 | OpenAI-compatible 层支持的字段逐版本增加；`capabilities` 内联进 `/api/tags` 是较新行为，旧版需 `/api/show` 兜底 |
 | ComfyUI | 待定 | 待填写 | `/features`、`/models/{folder}` 为较新增接口；事件字段有增删 |
 
-阶段 8 的真实后端契约测试是本表的唯一填写依据；缺失依据时保持「待填写」，不允许用文档推测代替验证。
+阶段 8 的真实后端契约测试是本表的唯一填写依据；缺失依据时保持「待填写」，不允许用文档推测代替验证。Ollama 一行的「已验证版本」由 `ollama/live_test.go` 对本机 `0.32.14` 实跑 Probe/Health/Discover/Chat/SSE Chat 得出；「最低支持版本」取自 `ollama/profile.go` 的能力下限，属于文档依据而非实测，低于 `0.32.14` 的版本仍未实跑验证。
 
 ## 质量门禁
 
@@ -969,50 +989,190 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 ### 阶段 4：Ollama 适配器
 
-**文件：** `ollama/runtime.go`、`ollama/runtime_test.go`。
+**文件：** `ollama/runtime.go`、`ollama/profile.go`、`ollama/runtime_test.go`、`ollama/live_test.go`、`ollama/main_test.go`。
 
-- [ ] 用模拟 Ollama 覆盖 `/api/version`、`/api/tags`、`/api/show`、Chat SSE 和 Embedding。
-- [ ] 覆盖“只有 `/v1/models` 但没有 Ollama 原生端点”的类型不匹配场景。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/ollama`，确认失败。
-- [ ] 实现原生发现与 OpenAI-compatible 推理组合，限制 `/api/show` 并发；加入 `var _ runtime.InferenceRuntime = (*Runtime)(nil)` 编译期断言。
-- [ ] 运行包测试和 `go test -race ./service/aiServeWeaveAgent/runtime/...`。
+- [x] 用模拟 Ollama 覆盖 `/api/version`、`/api/tags`、`/api/show`、Chat SSE 和 Embedding。
+- [x] 覆盖“只有 `/v1/models` 但没有 Ollama 原生端点”的类型不匹配场景。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/ollama`，确认失败。
+- [x] 实现原生发现与 OpenAI-compatible 推理组合，限制 `/api/show` 并发；加入 `var _ runtime.InferenceRuntime = (*Runtime)(nil)` 编译期断言。
+- [x] 运行包测试和 `go test -race ./service/aiServeWeaveAgent/runtime/...`。
+- [x] 运行质量门禁全部命令。
+
+实现说明：
+
+- **模型能力列表按穷举处理。** Ollama 对一个模型返回的 `capabilities` 是完整列表，因此
+  `ollama/runtime.go` 把本包能映射的每一项都写成明确的 `supported` 或 `unsupported`，不留
+  `unknown`。这是「Embedding 仅对已确认模型上报」的落点：若缺席只记为 `unknown`，
+  `Intersect` 会让运行时级的「`/v1/embeddings` 端点存在」透传给每个模型，聊天模型也会被
+  当成可做 Embedding。Ollama 的 `insert`（FIM）没有对应的 `runtime.Capability`，直接忽略，
+  不硬凑到相近能力上。
+- **`/api/show` 兜底 + 按 digest 缓存。** 新版 Ollama 的 `/api/tags` 已内联 `capabilities`，
+  此时不再发起任何 `/api/show`；旧版才逐个补齐，并发上限 `showConcurrency = 4`，结果以模型
+  digest 为键缓存——digest 随模型内容变化，所以周期性 Discover 不会重复读取未变更的模型，
+  这就是「限制刷新频率」的实现方式。单个 `/api/show` 失败只写入 `Discovery.Warnings` 并把
+  该模型能力留为 `unknown`，不让一个模型的元数据问题拖垮整次发现。
+- **探测失败的分类。** 原生端点返回 4xx（或响应体不含 `version`）判为 `ErrorProbeMismatch`
+  ——有人应答，但不是 Ollama，覆盖「只有 `/v1/models`」的场景；连接失败和 5xx 保持原分类，
+  否则 Manager 会把一台临时不健康的 Ollama 当成接错了后端而永久丢弃。
+- **请求路径门禁读快照。** 能力判断只读最近一次 `Discover` 的原子快照：模型在快照中就用模型
+  级交集结果，不在就退回运行时级结论；首次 `Discover` 成功前所有能力均为 `unknown`，请求会被
+  拒绝。Manager 在实例可见前必定跑过 `Discover`，因此这条路径不会被正常调用命中。
+- **`ChatStream` 持有并发额度直到 `Close`。** 流式请求的 `Limiter` 额度和请求级超时 Context
+  都挂在返回的流上，由 `Close` 一次性释放（`sync.Once` 保证幂等）；这也是 `Stream` 文档要求
+  调用方必须 `Close` 的原因。
+- **`profile.go` 的版本下限偏保守。** 只声明官方 OpenAI 兼容文档明确列出的能力，且下限取得比
+  实际首次支持的版本更高：判低了会把「没验证过」说成「支持」，判高了只是退化成 `unknown`，
+  可由 `CapabilityOverrides` 补救。`vision`、`reasoning`、`parallel_tool_calls` 一律不进表——
+  前两项按模型而定，由模型元数据给结论；第三项在 Ollama 的兼容层没有公开说法。
+- **`live_test.go` 是唯一的真实后端契约测试。** 设 `OLLAMA_BASE_URL` 才运行，默认跳过，
+  保证 `go test ./...` 不依赖本机是否装了 Ollama。已对 Ollama `0.32.14` 跑通 Probe、Health、
+  Discover、Chat 和 SSE Chat（见「后端接入矩阵」的版本记录）。
 
 **验收：** 能发现本地模型；普通及流式 Chat 可取消；Embedding 仅对已确认模型上报。
 
 ### 阶段 5：vLLM 适配器
 
-**文件：** `vllm/runtime.go`、`vllm/runtime_test.go`。
+**文件：** `vllm/runtime.go`、`vllm/profile.go`、`vllm/runtime_test.go`、`vllm/main_test.go`。
 
-- [ ] 模拟 `/version`、`/health`、`/v1/models`、Chat、Embedding 和 OpenAI 错误。
-- [ ] 覆盖 API Key、路径前缀、健康失败及版本字段缺失。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/vllm`，确认失败。
-- [ ] 实现适配器和 `profile.go` 保守能力表；高级能力默认 unknown；加入 `InferenceRuntime` 编译期断言。
-- [ ] 运行包测试和全目录竞态测试。
+- [x] 模拟 `/version`、`/health`、`/v1/models`、Chat、Embedding 和 OpenAI 错误。
+- [x] 覆盖 API Key、路径前缀、健康失败及版本字段缺失。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/vllm`，确认失败。
+- [x] 实现适配器和 `profile.go` 保守能力表；高级能力默认 unknown；加入 `InferenceRuntime` 编译期断言。
+- [x] 运行包测试和全目录竞态测试。
+- [x] 运行质量门禁全部命令。
+
+实现说明：
+
+- **与 Ollama 适配器抽出了共用基座 `internal/oaibase`。** 阶段 4 完成时 `Chat`/`ChatStream`/
+  `Embed`、并发限流、能力快照发布与门禁、`ErrorClosed`/`ProbeMismatch` 分类等逻辑已经在
+  `ollama/runtime.go` 里写过一遍；vLLM 的这部分和 Ollama 完全相同（都基于共享的
+  `openai` 传输层），照抄一份不算「适配自身协议差异」，所以先把它下沉到
+  `internal/oaibase`，Ollama 适配器同步改为调用它。`internal/capprofile` 同理下沉了
+  `Table.Resolve`/`ParseVersion`/`Compare`——版本区间怎么应用是通用的，具体版本表才是
+  各适配器的知识。这两个包放在 `internal/` 而不是包内测试目录，是因为将来的
+  SGLang 适配器同样需要它们，且不应进入公共 API。README「文件职责规划」表尚未列出这两个
+  新文件，后续统一在阶段 6 完成后一并补齐，避免和阶段 5/6 的并行推进产生冲突。
+- **不访问危险管理端点。** vLLM 除本适配器用到的五个端点外，还暴露 LoRA 适配器加载/卸载、
+  `/sleep`、`/wake_up`，部分部署下还有 `/shutdown`。`TestAdapterTouchesOnlyTheFiveAllowedEndpoints`
+  记录 Probe/Health/Discover/Chat/Embed 全流程实际请求过的路径集合，断言恰好是这五个，
+  不是「没测试到就不算」。
+- **`/version` 响应体缺 `version` 字段不算探测失败。** vLLM 该响应的字段名随版本变化过；
+  只要路由本身应答（区别于 SGLang 等根本没有 `/version` 的后端），身份即视为已验证，
+  版本记为空字符串。空版本会让能力表整体不适用，`Discover` 把这一点写进
+  `Discovery.Warnings`，而不是静默地假设某个默认能力集合。
+- **Embedding 默认 `unknown`，而非「vLLM 支持就上报支持」。** vLLM 一个进程只服务一个模型，
+  `/v1/embeddings` 存在与否不说明加载的是不是 pooling/embedding 模型，因此
+  `vllm/profile.go` 不声明这项能力，必须由运维通过 `Config.CapabilityOverrides` 按实例声明；
+  `TestEmbedIsRefusedUntilDeclared` 同时断言未声明时请求不会打到后端。
+- **`profile.go` 的版本下限同样偏保守**，取自 vLLM OpenAI-Compatible Server 文档明确写出
+  该能力组合的版本，而非该能力最早出现的版本；判低了只退化为 `unknown`，可由
+  `CapabilityOverrides` 补救。
+- 本机没有可连的真实 vLLM 部署，阶段 5 未新增 `live_test.go`；版本兼容矩阵 vLLM 行保持
+  「待填写」，等阶段 8 有真实后端时再补真实验证记录，不用文档推测代替。
 
 **验收：** vLLM 身份、健康和模型可独立报告；不访问危险管理端点。
 
 ### 阶段 6：SGLang 适配器
 
-**文件：** `sglang/runtime.go`、`sglang/runtime_test.go`。
+**文件：** `sglang/runtime.go`、`sglang/profile.go`、`sglang/runtime_test.go`、`sglang/main_test.go`；补充 `internal/oaibase/oaibase_test.go`。
 
-- [ ] 模拟 `/health`、`/v1/models`、可选 `/get_server_info`、Chat SSE 和错误体。
-- [ ] 覆盖 `/health` 不存在时的降级、OpenAI 响应无法证明运行时身份及私有字段变化。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/sglang`，确认失败。
-- [ ] 实现显式 Kind 驱动的适配器，不接入 `/generate`；降级信息写入 `Snapshot.Degraded` 与 `Discovery.Warnings`；加入 `InferenceRuntime` 编译期断言。
-- [ ] 运行包测试和全目录竞态测试。
+- [x] 模拟 `/health`、`/v1/models`、可选 `/get_server_info`、Chat SSE 和错误体。
+- [x] 覆盖 `/health` 不存在时的降级、OpenAI 响应无法证明运行时身份及私有字段变化。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/sglang`，确认失败。
+- [x] 实现显式 Kind 驱动的适配器，不接入 `/generate`；降级信息写入 `Snapshot.Degraded` 与 `Discovery.Warnings`；加入 `InferenceRuntime` 编译期断言。
+- [x] 运行包测试和全目录竞态测试。
+- [x] 运行质量门禁全部命令。
+
+实现说明：
+
+- **降级信息的落点是 `Discovery.Warnings`，`Snapshot.Degraded` 自动跟随。** `manager.go` 已经把
+  `Discovery.Warnings` 复制进 `managedInstance.degraded` 并由 `Snapshot.Degraded` 暴露，所以
+  适配器不需要新接口：`/health` 缺失时，每次 `Discover` 都会带上一条降级说明，且这条说明写清了
+  退化后的检查「只能证明 HTTP 服务在，不能证明推理引擎在」——这正是运维需要知道的那半句。
+- **`/health` 缺失在 Probe 阶段就探明，运行中掉线也能自愈。** Probe 额外打一次 `/health`，
+  404 即记入 `ProbeResult.Evidence` 并切到降级路径；若实例中途被换成没有该路由的构建，
+  `Health` 自己也会在收到 404 时切换，不会把「路由没了」误报成「实例死了」。降级标志不自动
+  复位——一个消失过的路由不应在没有重新 Probe 的情况下悄悄变回健康信号。
+- **5xx 不算降级。** `/health` 返回 500 说明路由在、引擎不健康，这是健康检查该报告的事；
+  若把它也当成降级，就会把引擎的真实健康信号换成一个更弱的信号，故障反而被掩盖。
+- **身份永远标记为未强验证。** `IdentityVerified` 恒为 `false`，`Evidence` 明写「kind 来自配置，
+  OpenAI-compatible 响应无法区分 SGLang 与 vLLM」，让配置写错时看起来「已确认」的情况不存在。
+- **核心能力用端点证据，不用版本表。** 这是本适配器与 vLLM 的一处有意不对称：vLLM 有文档化的
+  `/version`，读不到版本本身就是异常，所以能力全留 `unknown`；SGLang 没有版本端点，
+  「版本未知」是常态，若照搬 vLLM 的做法，每个实例开箱即不可用，必须先配 overrides。
+  因此 `chat`/`chat_stream`/`completions` 由 `SourceEndpoint` 证据给出（依据：`/v1/models`
+  应答，而 SGLang 的 OpenAI-compatible server 与该路由注册在同一个 server 上），
+  `Detail` 里写明这条推断及其边界；真正随版本和启动参数变化的 `tools`、`structured_output`、
+  `embeddings` 仍然只认版本表和 overrides。
+- **`/get_server_info` 只取 `version`，且失败绝不影响 `Discover`。** 私有响应不是契约：
+  路由不存在、返回 5xx、字段改名、`version` 变成对象、响应体根本不是 JSON——五种情况都只写
+  一条 warning，模型列表照常发布（`TestDiscoverSurvivesPrivateEndpointChanges` 逐一覆盖）。
+  该响应里的负载字段暂不上报，因为 `Discovery` 没有承载它的字段，`Snapshot.Inflight` 的
+  接线本身也还留在阶段 8，此处不臆造一套接口。
+- **不接入 `/generate`。** `TestAdapterNeverCallsTheNativeGenerateEndpoint` 记录
+  Probe/Health/Discover/Chat/ChatStream 全流程实际请求过的路径集合并断言其精确取值，
+  而不是只断言「没调用 /generate」。
+- **补了 `internal/oaibase` 的直接测试。** 该包此前只被三个适配器间接覆盖；新增的黑盒测试
+  针对 `ChatCapabilities`、`ErrorSummary`、`ConflictWarnings` 这三个纯逻辑导出函数，
+  并补上与其他包一致的协程泄漏 `TestMain`。
+- 本机没有可连的真实 SGLang 部署，阶段 6 未新增 `live_test.go`；版本兼容矩阵 SGLang 行保持
+  「待填写」。
 
 **验收：** SGLang 端点差异不会泄漏到共享 OpenAI 包，降级状态在 Discovery 中可见。
+（前者已核对：`openai/`、`internal/oaibase/`、`internal/capprofile/` 三个共享包的非测试代码中
+不存在任何 `Kind` 分支或后端专有端点路径，仅包注释里出现后端名称。）
 
 ### 阶段 7：ComfyUI 工作流适配器
 
-**文件：** 修改 `go.mod`；创建 `go.sum`（若依赖解析后产生）；修改 `workflow/comfyui/client.go`、`workflow/comfyui/runtime.go`；创建对应 `_test.go`。
+**文件：** 修改 `go.mod`、`go.sum`；修改 `workflow/comfyui/client.go`、`workflow/comfyui/runtime.go`；创建 `workflow/comfyui/events.go`、`workflow/comfyui/wsdial.go`、`workflow/comfyui/client_test.go`、`workflow/comfyui/runtime_test.go`、`workflow/comfyui/main_test.go`；为重连测试给 `internal/runtimetest` 的假 `Clock` 增加 `PendingTimers`。
 
-- [ ] 用 HTTP 测试服务覆盖 system stats、features、object info、models、prompt、queue、history、view。
-- [ ] 用可控 WebSocket 服务覆盖连接先于提交、事件分发、未知事件、二进制预览、断线重连和 History 对账。
-- [ ] 写 pending 取消、exclusive running 取消和共享实例拒绝中断测试。
-- [ ] 运行 `go test ./service/aiServeWeaveAgent/runtime/workflow/comfyui`，确认失败。
-- [ ] 实现 Client、单连接事件复用器（`events.go`）、WorkflowRuntime 和安全取消；加入 `var _ runtime.WorkflowRuntime = (*Runtime)(nil)` 编译期断言。
-- [ ] 运行包测试、全目录竞态测试，并检查测试结束后无残留连接或协程。
+- [x] 用 HTTP 测试服务覆盖 system stats、features、object info、models、prompt、queue、history、view。
+- [x] 用可控 WebSocket 服务覆盖连接先于提交、事件分发、未知事件、二进制预览、断线重连和 History 对账。
+- [x] 写 pending 取消、exclusive running 取消和共享实例拒绝中断测试。
+- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/workflow/comfyui`，确认失败。
+- [x] 实现 Client、单连接事件复用器（`events.go`）、WorkflowRuntime 和安全取消；加入 `var _ runtime.WorkflowRuntime = (*Runtime)(nil)` 编译期断言。
+- [x] 运行包测试、全目录竞态测试，并检查测试结束后无残留连接或协程。
+- [x] 运行质量门禁全部命令。
+
+实现说明：
+
+- **依赖只加了 `github.com/coder/websocket` 一项**（v1.8.15），且只有 `wsdial.go` 一个文件引用它：
+  其余代码一律面向 `runtime.WSDialer`/`WSConn` 接口，所以全部事件测试都不需要真实 WebSocket
+  服务器。已确认该库的 `Dial` 上下文只约束握手、不绑定连接生命周期，因此 `Submit` 用带
+  `RequestTimeout` 的 Context 建连不会在返回后被 `cancel()` 掐断。`go mod tidy` 会顺手删掉
+  项目里尚未被引用的 `go-zero`，因此改回手写 `go.mod`，保留原有的 `go-zero // indirect` 行。
+- **单连接复用是 ComfyUI 的强制形状。** 它的 WebSocket 是实例级而非任务级，一条连接混着所有
+  任务的事件，每帧自带 `prompt_id`。因此每个 Runtime 只维护一条连接，按 `prompt_id` 路由；
+  没有 `prompt_id` 的实例级事件（如 `status`）广播给全部订阅者，因为它描述的是所有人共同排的
+  那个队列。
+- **复用器绝不能被慢订阅者拖住。** 一个不读取的调用方会卡住整条连接、进而卡住所有其他任务，
+  所以事件先进每订阅者 128 条的有界缓冲，由一条 pump 协程转投给流；缓冲满了就丢事件并计数，
+  而不是阻塞复用器。丢事件是安全的：最终状态永远来自 History，不来自「是否收全了事件」。
+  `TestASlowSubscriberDropsEventsInsteadOfStallingTheInstance` 覆盖这条。
+- **首次重连立即执行，之后才退避。** 最常见的情况是单次断连，等待只会让所有订阅者白等；
+  连续失败才走 500ms 起步、30s 封顶的退避，退避走注入的 `Clock`，
+  `TestRepeatedReconnectFailuresBackOffInsteadOfSpinning` 用假时钟断言「退避没走完就不会再拨号」。
+  重连期间丢失的事件不做补发，由 `Status` 读 History 对账。
+- **取消的三条边界。** pending 任务按 id 从队列删除，无歧义；running 任务只有在
+  `exclusive: true` 且队列确认「当前正在跑的就是它、且只有它一个」时才调 `/interrupt`——该路由
+  不接受任何 id，在共享实例上会掐掉别人的任务。其余情况（共享实例、多个 running、已结束、
+  查无此任务）一律返回 `ErrCancelUnsupported`，测试同时断言此时没有发出任何取消动作。
+- **`/object_info` 用流式解析，只取键。** 该响应内嵌每个节点的完整输入 schema，动辄数十 MB；
+  `decodeTopLevelKeys` 用 `json.Decoder` 逐 token 跳过值，不把整份文档读进内存，并有数量上限。
+- **`Submit` 支持幂等键。** ComfyUI 自身没有幂等语义，重复提交会真实消耗 GPU 并产出第二份结果，
+  所以 `IdempotencyKey` 到 `prompt_id` 的映射记在实例内存里，重试返回原任务；不带键则不去重。
+  这与 README 风险表「禁止自动重提」一致：适配器自己永远不会重发提交。
+- **`Status` 对「查无此任务」报 `failed` 而不是 `pending`。** ComfyUI 的 history 存在内存里，
+  服务重启后任务凭空消失；报 pending 会让调用方永远等一个不存在的任务，因此返回 failed 并在
+  `ErrorSummary` 里说明可能是服务重启。
+- **新增 `Runtime.Artifacts`，是适配器扩展而非接口方法。** `WorkflowRuntime.OpenArtifact` 收
+  `ArtifactRef` 却没有任何枚举入口，断线重连或 Agent 重启后调用方将无法找回自己的产物。
+  该方法从 History 的 outputs 里提取产物引用，识别方式是「数组元素带 filename 字段」，
+  而不是硬编码 `images`/`gifs` 这几个 key，这样自定义节点的输出也能被发现。是否提升为接口方法
+  留给上层决定，目前通过类型断言使用。
+- **两处测试先失败后修复的真实缺陷**：`json.Unmarshal(null, &map)` 不报错，导致 `null` 一度
+  通过工作流模板校验（已改为先检查首字节是 `{`）；产物枚举按节点 id 字典序排列，
+  `"12"` 排在 `"9"` 前面，已在文档和测试中明确这是稳定顺序而非执行顺序。
 
 **验收：** 一个固定 API Format 工作流可以提交、观察进度、获取最终状态和流式下载产物；共享实例不会误取消其他任务。
 
