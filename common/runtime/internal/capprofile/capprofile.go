@@ -15,7 +15,7 @@ import (
 	"strconv"
 	"strings"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 // Entry declares the capabilities a backend is known to support from

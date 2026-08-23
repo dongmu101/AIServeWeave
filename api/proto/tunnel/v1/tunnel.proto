@@ -1,0 +1,599 @@
+// Package tunnel.v1 is the wire contract of the Agent tunnel: a mTLS gRPC
+// link that an Agent behind NAT opens outbound to every Gateway replica, plus
+// the Registry service that issues the node identity used by those links.
+//
+// The tunnel carries runtime semantics, never arbitrary HTTP. Every payload in
+// this file mirrors a type of common/runtime, so both sides
+// can convert to that package's Go types without inventing a second canonical
+// model. Agent and Gateway share this one file and its generated code.
+//
+// Two rules are load-bearing and must survive any future edit:
+//   - No message here carries a credential. RuntimeSpec references an API key
+//     by name (api_key_ref) and never by value; RuntimeSnapshot mirrors
+//     runtime.Snapshot, which is credential-free by construction.
+//   - No message here can express "fetch this URL" or "run this command". The
+//     Agent is not a general-purpose proxy, and the protocol deliberately
+//     leaves no extension point that would make it one.
+syntax = "proto3";
+
+package tunnel.v1;
+
+import "google/protobuf/duration.proto";
+import "google/protobuf/timestamp.proto";
+
+option go_package = "AIServeWeave/api/proto/tunnel/v1;tunnelv1";
+
+// -----------------------------------------------------------------------
+// Services
+// -----------------------------------------------------------------------
+
+// Tunnel is implemented by every Gateway replica; an Agent connects to each
+// replica separately, so a request never needs forwarding between replicas.
+// Both methods require a valid client certificate, and each replica must
+// independently check that the node_id in the certificate SAN matches the
+// node_id declared on the stream, closing the stream when they differ.
+service Tunnel {
+  // Control is the long-lived control plane: heartbeats, status reporting,
+  // config delivery, replica roster and graceful drain. Exactly one per
+  // (Agent, replica) pair.
+  rpc Control(stream AgentControl) returns (stream GatewayControl);
+
+  // Serve is one data-plane slot. The Agent opens it, sends Ready and waits;
+  // the Gateway dispatches a request into it. A slot serves one request at a
+  // time and may send Ready again to be reused afterwards.
+  rpc Serve(stream AgentFrame) returns (stream GatewayFrame);
+}
+
+// NodeIdentity is implemented by the Registry alone, never by a Gateway
+// replica: one-shot bootstrap token validation needs strongly consistent
+// storage, and the CA private key must not be distributed to data-plane
+// replicas.
+service NodeIdentity {
+  // Register exchanges a one-time bootstrap token for a node certificate.
+  // This is the only method in the whole contract that does not require a
+  // client certificate.
+  rpc Register(RegisterRequest) returns (RegisterResponse);
+
+  // RenewCertificate rotates a node certificate and requires the current
+  // certificate to still be valid.
+  rpc RenewCertificate(RenewRequest) returns (RenewResponse);
+}
+
+// -----------------------------------------------------------------------
+// Node identity
+// -----------------------------------------------------------------------
+
+message RegisterRequest {
+  // node_id is the Agent's proposed identity. Whether the Registry honours it
+  // or assigns its own is an open question (README, 待决问题 3); the response
+  // carries the authoritative value either way.
+  string node_id = 1;
+  bytes csr = 2;                        // PKCS#10 certificate request, DER
+  string bootstrap_token = 3;           // one-time, short-lived, tenant-bound
+  string agent_version = 4;
+}
+
+message RegisterResponse {
+  string node_id = 1;                   // authoritative; must match cert SAN
+  bytes certificate_pem = 2;
+  bytes ca_bundle_pem = 3;
+  google.protobuf.Timestamp not_after = 4;
+}
+
+message RenewRequest {
+  string node_id = 1;
+  bytes csr = 2;
+}
+
+message RenewResponse {
+  bytes certificate_pem = 1;
+  bytes ca_bundle_pem = 2;
+  google.protobuf.Timestamp not_after = 3;
+}
+
+// -----------------------------------------------------------------------
+// Data plane
+// -----------------------------------------------------------------------
+
+// GatewayFrame is one frame from Gateway to Agent on a Serve stream.
+message GatewayFrame {
+  string request_id = 1;                // trace id, carried on every frame
+  oneof body {
+    RequestHeaders headers = 2;
+    DataChunk data = 3;                 // request body part (artifact upload, workflow input)
+    RequestEnd end = 4;
+    Cancel cancel = 5;
+    Ping ping = 6;                      // application keepalive, separate from gRPC keepalive
+  }
+}
+
+// AgentFrame is one frame from Agent to Gateway on a Serve stream.
+message AgentFrame {
+  string request_id = 1;                // empty on Ready and Pong
+  oneof body {
+    Ready ready = 2;
+    ResponseHeaders headers = 3;
+    DataChunk data = 4;                 // stream event or artifact part
+    ResponseEnd end = 5;
+    Pong pong = 6;
+  }
+}
+
+// Ready parks a slot in the idle pool, waiting for a request.
+message Ready {
+  string node_id = 1;
+  string slot_id = 2;                   // Agent-generated, so both sides' logs line up
+  SlotClass class = 3;
+}
+
+enum SlotClass {
+  SLOT_CLASS_UNSPECIFIED = 0;
+  SLOT_CLASS_INFERENCE = 1;             // chat / embed / workflow submit and events
+  SLOT_CLASS_BULK = 2;                  // artifact transfer, physically isolated from inference
+}
+
+message RequestHeaders {
+  string runtime_id = 1;                // must match the Agent's local allowlist
+  Operation operation = 2;
+  // deadline_unix_ms is an absolute deadline. It is carried in-band because a
+  // reused slot outlives any single request, so the gRPC stream deadline
+  // cannot express a per-request one. 0 means "no Gateway-supplied deadline";
+  // the Agent still applies its local maximum.
+  int64 deadline_unix_ms = 3;
+  bytes payload = 4;                    // decoded according to operation
+  map<string, string> trace = 5;        // fixed key set only, e.g. request_id, tenant_id
+}
+
+enum Operation {
+  OPERATION_UNSPECIFIED = 0;
+  OPERATION_LIST_MODELS = 1;
+  OPERATION_CHAT = 2;
+  OPERATION_CHAT_STREAM = 3;
+  OPERATION_EMBED = 4;
+  OPERATION_WORKFLOW_SUBMIT = 5;
+  OPERATION_WORKFLOW_SUBSCRIBE = 6;
+  OPERATION_WORKFLOW_STATUS = 7;
+  OPERATION_WORKFLOW_CANCEL = 8;
+  OPERATION_ARTIFACT_OPEN = 9;
+}
+
+// RequestEnd closes the request-body direction of a slot. Operations whose
+// request fits entirely in RequestHeaders.payload still send it, so the Agent
+// has one uniform signal that no more input is coming.
+message RequestEnd {}
+
+// Cancel asks the Agent to cancel the in-flight request. The Agent must drop a
+// Cancel whose request_id does not match the request currently on the slot:
+// otherwise a late cancel would kill a new request that reused the slot.
+message Cancel {
+  string reason = 1;                    // diagnostic only, never interpreted
+}
+
+message Ping {
+  int64 sent_unix_ms = 1;
+}
+
+message Pong {
+  int64 sent_unix_ms = 1;               // echoed from the Ping, for RTT
+}
+
+// ResponseHeaders precedes the body of an ARTIFACT_OPEN response and is unused
+// by every other operation.
+message ResponseHeaders {
+  string content_type = 1;
+  int64 size = 2;                       // -1 when unknown
+}
+
+// DataChunk is one piece of a request or response body. On streaming
+// operations each chunk holds exactly one event and must be sent as soon as it
+// is produced: aggregating chunks is what turns millisecond TTFT into seconds.
+message DataChunk {
+  bytes payload = 1;
+}
+
+// ResponseEnd terminates a request. An unset error means success.
+message ResponseEnd {
+  TunnelError error = 1;
+}
+
+// TunnelError is the wire mirror of runtime.RuntimeError, so an error code,
+// its retryable flag and its sanitized message cross the tunnel intact.
+message TunnelError {
+  string code = 1;                      // runtime.ErrorCode string value
+  string runtime_id = 2;
+  string kind = 3;
+  string operation = 4;
+  int32 status_code = 5;                // 0 when not applicable
+  string message = 6;                   // already sanitized
+  bool retryable = 7;
+  // cause names a runtime sentinel error (e.g. "ErrRuntimeNotFound") so the
+  // far side can restore it for errors.Is. Only sentinels cross: a
+  // non-sentinel cause may hold unsanitized detail and is dropped here.
+  string cause = 8;
+}
+
+// -----------------------------------------------------------------------
+// Control plane
+// -----------------------------------------------------------------------
+
+message AgentControl {
+  oneof body {
+    Hello hello = 1;                    // first frame on the stream
+    Heartbeat heartbeat = 2;
+    RuntimeStatus status = 3;           // mirror of runtime.Manager.Snapshot()
+    Draining draining = 4;              // graceful shutdown notice
+    Pong pong = 5;
+  }
+}
+
+message GatewayControl {
+  oneof body {
+    HelloAck ack = 1;
+    HeartbeatAck hb_ack = 2;
+    RuntimeConfig config = 3;
+    SlotHint slot_hint = 4;
+    GatewayRoster roster = 5;
+    Shutdown shutdown = 6;
+    Ping ping = 7;
+  }
+}
+
+message Hello {
+  string node_id = 1;
+  string agent_version = 2;
+  NodeResources resources = 3;
+  // runtime_ids is the Agent's local allowlist. The Gateway uses it to avoid
+  // dispatching to a runtime the Agent would reject anyway; the Agent still
+  // enforces the allowlist on every request.
+  repeated string runtime_ids = 4;
+}
+
+message NodeResources {
+  int32 cpu_cores = 1;
+  int64 memory_bytes = 2;
+  int32 gpu_count = 3;
+  int64 gpu_memory_bytes = 4;
+  string os = 5;
+  string arch = 6;
+}
+
+message HelloAck {
+  string replica_id = 1;
+  int64 server_unix_ms = 2;
+}
+
+message Heartbeat {
+  int64 sent_unix_ms = 1;
+  int32 inflight_requests = 2;
+  int32 idle_slots = 3;
+}
+
+message HeartbeatAck {
+  int64 sent_unix_ms = 1;               // echoed, for RTT
+  int64 server_unix_ms = 2;
+}
+
+// Draining tells the replica the Agent is shutting down: stop dispatching, let
+// in-flight requests finish.
+message Draining {
+  string reason = 1;
+  int64 deadline_unix_ms = 2;
+}
+
+// Shutdown asks the Agent to drain and disconnect from this replica.
+message Shutdown {
+  string reason = 1;
+  google.protobuf.Duration grace_period = 2;
+}
+
+// SlotHint suggests slot watermarks for this replica. It is advice: the Agent
+// clamps it to its locally configured limits.
+message SlotHint {
+  int32 min_slots = 1;
+  int32 max_slots = 2;
+  int32 bulk_slots = 3;
+}
+
+// GatewayRoster is the authoritative list of Gateway replicas, maintained by
+// the Registry and broadcast by every replica on its own Control stream. The
+// Agent opens and closes tunnels to match it.
+message GatewayRoster {
+  repeated GatewayReplica replicas = 1;
+  int64 version = 2;                    // monotonic; the Agent ignores older versions
+}
+
+message GatewayReplica {
+  string replica_id = 1;
+  string endpoint = 2;                  // host:port, must be directly dialable by the Agent
+  ReplicaState state = 3;
+}
+
+enum ReplicaState {
+  REPLICA_STATE_UNSPECIFIED = 0;
+  REPLICA_STATE_ACTIVE = 1;             // dispatching normally, keep connected
+  REPLICA_STATE_DRAINING = 2;           // no new requests: stop refilling slots, let in-flight finish
+  REPLICA_STATE_REMOVED = 3;            // gone, close the tunnel
+}
+
+// RuntimeStatus mirrors runtime.Manager.Snapshot(). It is reported on change
+// and re-sent in full periodically to reconcile. The same snapshot goes to
+// every replica, since it comes from one Manager.
+message RuntimeStatus {
+  repeated RuntimeSnapshot snapshots = 1;
+  // full marks a periodic reconciliation carrying every instance, as opposed
+  // to a change-triggered report.
+  bool full = 2;
+  google.protobuf.Timestamp reported_at = 3;
+}
+
+// RuntimeConfig delivers one runtime configuration change. Success or failure
+// is observed through the next RuntimeStatus rather than a dedicated ack.
+message RuntimeConfig {
+  ConfigAction action = 1;
+  string runtime_id = 2;                // the only field REMOVE needs
+  RuntimeSpec spec = 3;                 // unset for REMOVE
+}
+
+enum ConfigAction {
+  CONFIG_ACTION_UNSPECIFIED = 0;
+  CONFIG_ACTION_ADD = 1;
+  CONFIG_ACTION_REPLACE = 2;
+  CONFIG_ACTION_REMOVE = 3;
+}
+
+// RuntimeSpec mirrors runtime.Config with one deliberate difference: there is
+// no api_key field. The control plane names a secret, the Agent resolves it
+// locally, and a compromised Gateway therefore learns no credentials.
+message RuntimeSpec {
+  string id = 1;
+  string kind = 2;
+  string base_url = 3;
+  string api_key_ref = 4;               // secret name, never a secret value
+  map<string, string> headers = 5;
+  google.protobuf.Duration probe_timeout = 6;
+  google.protobuf.Duration request_timeout = 7;
+  google.protobuf.Duration stream_idle_timeout = 8;
+  google.protobuf.Duration health_interval = 9;
+  google.protobuf.Duration discovery_interval = 10;
+  int64 max_concurrent = 11;
+  TLSSpec tls = 12;
+  map<string, string> capability_overrides = 13;  // capability -> support level
+  bool exclusive = 14;
+}
+
+message TLSSpec {
+  string ca_file = 1;
+  string server_name = 2;
+  bool insecure_skip_verify = 3;
+}
+
+// -----------------------------------------------------------------------
+// runtime type mirrors
+// -----------------------------------------------------------------------
+
+// RuntimeSnapshot mirrors runtime.Snapshot. It is credential-free by
+// construction, which is what makes it safe to report to every replica.
+message RuntimeSnapshot {
+  RuntimeDescriptor descriptor = 1;
+  string state = 2;
+  ProbeResult probe = 3;
+  HealthReport health = 4;
+  Discovery discovery = 5;
+  int64 inflight = 6;
+  repeated string degraded = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+message RuntimeDescriptor {
+  string id = 1;
+  string kind = 2;
+  string base_url = 3;
+  int64 max_concurrent = 4;
+  bool exclusive = 5;
+}
+
+message ProbeResult {
+  string kind = 1;
+  string version = 2;
+  bool identity_verified = 3;
+  string evidence = 4;
+  google.protobuf.Timestamp probed_at = 5;
+}
+
+message HealthReport {
+  string state = 1;
+  google.protobuf.Duration latency = 2;
+  google.protobuf.Timestamp checked_at = 3;
+  string error_summary = 4;             // already sanitized
+}
+
+message Discovery {
+  string version = 1;
+  repeated Model models = 2;
+  repeated string node_types = 3;
+  map<string, CapabilityEvidence> capabilities = 4;
+  repeated string warnings = 5;
+  google.protobuf.Timestamp discovered_at = 6;
+}
+
+message CapabilityEvidence {
+  string capability = 1;
+  string level = 2;                     // unknown | supported | unsupported
+  string source = 3;
+  string detail = 4;
+}
+
+message Model {
+  string id = 1;
+  map<string, CapabilityEvidence> capabilities = 2;
+}
+
+// ModelList is the LIST_MODELS response payload; protobuf has no top-level
+// repeated field, so the slice needs an envelope.
+message ModelList {
+  repeated Model models = 1;
+}
+
+message ChatRequest {
+  string model = 1;
+  repeated ChatMessage messages = 2;
+
+  // Sampling parameters use proto3 presence for the same reason the Go type
+  // uses pointers: "unset" and "explicitly zero" are different requests, and
+  // an explicit zero must reach the backend unchanged.
+  optional double temperature = 3;
+  optional double top_p = 4;
+  optional int64 max_tokens = 5;
+  repeated string stop = 6;
+  optional int64 seed = 7;
+
+  repeated Tool tools = 8;
+  string tool_choice = 9;
+  ResponseFormat response_format = 10;
+
+  // extra forwards backend-private parameters verbatim; each value is a raw
+  // JSON document.
+  map<string, bytes> extra = 11;
+}
+
+message ChatMessage {
+  string role = 1;
+  string content = 2;
+  string name = 3;
+  string tool_call_id = 4;
+  repeated ToolCall tool_calls = 5;
+}
+
+message ToolCall {
+  string id = 1;
+  string type = 2;
+  FunctionCall function = 3;
+}
+
+message FunctionCall {
+  string name = 1;
+  string arguments = 2;
+}
+
+message Tool {
+  string type = 1;                      // currently always "function"
+  FunctionDefinition function = 2;
+}
+
+message FunctionDefinition {
+  string name = 1;
+  string description = 2;
+  bytes parameters = 3;                 // JSON Schema, passed through verbatim
+}
+
+message ResponseFormat {
+  string type = 1;                      // text | json_object | json_schema
+  JSONSchemaFormat json_schema = 2;     // set only when type == "json_schema"
+}
+
+message JSONSchemaFormat {
+  string name = 1;
+  bool strict = 2;
+  bytes schema = 3;                     // raw JSON
+}
+
+message ChatResponse {
+  string id = 1;
+  string model = 2;
+  ChatMessage message = 3;
+  string finish_reason = 4;
+  Usage usage = 5;
+  google.protobuf.Timestamp created_at = 6;
+}
+
+message ChatEvent {
+  string id = 1;
+  string model = 2;
+  ChatMessageDelta delta = 3;
+  string finish_reason = 4;
+  Usage usage = 5;                      // unset on all but the final event
+}
+
+message ChatMessageDelta {
+  string role = 1;
+  string content = 2;
+  repeated ToolCallDelta tool_calls = 3;
+}
+
+message ToolCallDelta {
+  int64 index = 1;
+  string id = 2;
+  string type = 3;
+  FunctionCallDelta function = 4;
+}
+
+message FunctionCallDelta {
+  string name = 1;
+  string arguments = 2;
+}
+
+message Usage {
+  int64 prompt_tokens = 1;
+  int64 completion_tokens = 2;
+  int64 total_tokens = 3;
+}
+
+message EmbeddingRequest {
+  string model = 1;
+  repeated string input = 2;
+  optional int64 dimensions = 3;
+}
+
+message EmbeddingResponse {
+  string model = 1;
+  repeated Embedding data = 2;
+  Usage usage = 3;
+}
+
+message Embedding {
+  int64 index = 1;
+  repeated float vector = 2;
+}
+
+// WorkflowRequest mirrors runtime.WorkflowRequest minus the template: workflow
+// templates are large enough to threaten the frame size limit, so they travel
+// as DataChunks rather than inside RequestHeaders.
+message WorkflowRequest {
+  string client_id = 1;
+  string idempotency_key = 2;
+}
+
+message WorkflowRun {
+  string id = 1;
+  string runtime_id = 2;
+  google.protobuf.Timestamp submitted_at = 3;
+}
+
+// RunRef is the request payload of the operations that identify a run by id:
+// WORKFLOW_SUBSCRIBE, WORKFLOW_STATUS and WORKFLOW_CANCEL.
+message RunRef {
+  string run_id = 1;
+}
+
+message WorkflowEvent {
+  string type = 1;
+  string run_id = 2;
+  string node_id = 3;
+  bytes raw = 4;                        // size-limited, unparsed backend payload
+  google.protobuf.Timestamp received_at = 5;
+}
+
+message WorkflowStatus {
+  string state = 1;
+  int64 queue_position = 2;
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp finished_at = 4;
+  string error_summary = 5;             // already sanitized
+}
+
+message ArtifactRef {
+  string run_id = 1;
+  string filename = 2;
+  string subfolder = 3;
+  string type = 4;
+}

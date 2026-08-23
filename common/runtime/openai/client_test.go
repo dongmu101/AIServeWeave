@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 func TestClientURLPrefixPreserved(t *testing.T) {

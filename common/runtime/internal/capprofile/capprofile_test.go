@@ -3,8 +3,8 @@ package capprofile_test
 import (
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/capprofile"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/capprofile"
 )
 
 func TestParseVersion(t *testing.T) {

@@ -551,56 +551,44 @@ audit_logs
 
 每个请求应携带同一个 `request_id`，贯穿 Gateway、Scheduler、Tunnel、Agent 和推理后端。
 
-## 推荐代码结构
+## 代码结构
+
+项目按服务分目录，每个服务一个顶层包，服务内部再按职责分子包。当前实际结构：
 
 ```text
 AIServeWeave/
-├── cmd/
-│   ├── aiserveweave-registry/
-│   ├── aiserveweave-gateway/
-│   └── aiserveweave-agent/
-├── internal/
-│   ├── admin/
-│   ├── auth/
-│   ├── gateway/
-│   ├── protocol/
-│   │   ├── canonical/
-│   │   ├── openai/
-│   │   ├── anthropic/
-│   │   └── ollama/
-│   ├── backend/
-│   │   ├── openai/
-│   │   ├── vllm/
-│   │   ├── ollama/
-│   │   └── comfyui/
-│   ├── node/
-│   ├── scheduler/
-│   ├── tunnel/
-│   ├── workflow/
-│   ├── job/
-│   ├── artifact/
-│   ├── usage/
-│   ├── storage/
-│   └── observability/
 ├── api/
-│   ├── proto/
-│   └── openapi/
-├── migrations/
-├── web/
+│   └── proto/tunnel/v1/        # Agent/Gateway/Registry 共享的 gRPC 契约
+├── common/                     # 跨服务共享代码
+│   ├── runtime/                # 推理后端抽象：能力探测、配额、流式转换
+│   │   ├── internal/           # 包内私有工具与测试辅助
+│   │   ├── ollama/  openai/  sglang/  vllm/
+│   │   └── workflow/comfyui/
+│   └── tunnelwire/             # 隧道 proto 编解码，Agent 与 Gateway 共用
 ├── deploy/
-│   ├── docker/
-│   └── kubernetes/
-├── configs/
-├── docs/
-├── README.md
-└── go.mod
+│   └── docker-compose.yaml
+└── service/
+    ├── aiServeWeaveAgent/      # 节点面，已有主要实现
+    │   ├── tunnel/             # 主动出站隧道，见该目录 README
+    │   └── workflow/           # ComfyUI 工作流清单、绑定与校验
+    ├── aiServeWeaveGateway/    # 数据面，隧道服务端、调度器与 OpenAI 前门已落地
+    │   ├── tunnelserver/       # 隧道终结：节点表、槽池、九个 Operation 的分发
+    │   └── e2e/                # 真实 mTLS 下 Agent 与 Gateway 的联调测试
+    ├── aiServeWeaveRegistry/   # 控制面注册中心，仅骨架
+    ├── aiServeWeaveControlPlane/  # 尚未开始
+    └── aiServeWeaveConsole/       # 尚未开始
 ```
 
-`go.mod` 应使用完整仓库地址：
+后续随功能推进补齐的目录（当前尚不存在）：`api/openapi/`、`migrations/`、`configs/`、`web/`、`docs/`、`deploy/kubernetes/`。
 
-```go
-module github.com/dongmu101/AIServeWeave
-```
+调度器、鉴权、用量统计等模块目前尚无归属目录，落地时按所属服务放进 `service/<服务名>/` 下的子包；确实被多个服务共用的再上提到 `common/`。
+
+`common/` 下已有两个包，都是因为 Gateway 与 Agent 必须按同一套规则解释同一份数据才上提的：
+
+- `common/runtime` —— 推理语义的类型与接口（`Stream`、`RuntimeError`、九个 Operation 的请求响应类型）。Agent 用它实现后端适配器，Gateway 用它表达调度器和 API 层看到的请求，两边共用一份定义而不是各自复述。
+- `common/tunnelwire` —— 这些类型与 `api/proto/tunnel/v1` 之间的双向编解码。隧道两端都要做这次转换，放在一个包里意味着「凭据不过隧道」「nil 与显式零值不等价」这两条不变量只有一处实现、一处测试。
+
+模块路径使用短名 `module AIServeWeave`，包内互相引用一律以此为前缀，例如 `AIServeWeave/api/proto/tunnel/v1`。
 
 ## 开发路线
 
@@ -689,12 +677,23 @@ ComfyUI 接入应同时验证一条异步生成链路：
 
 ## 当前状态
 
-项目处于架构设计和基础骨架阶段，下一步建议先实现：
+节点与节点到 Gateway 的链路已经打通，MVP 优先验证链路（OpenAI 流式请求 → Gateway → Scheduler → Agent → Ollama → SSE 返回）已经用真实机器跑通一次；Registry 仍待建。已完成的部分：
 
-1. 定义 Registry、Gateway 与 Agent 之间的 protobuf 协议。
-2. 实现节点注册、心跳和节点状态机。
-3. 实现 Ollama/vLLM 后端探测与模型同步。
-4. 实现 OpenAI Chat Completions 的普通和流式代理。
-5. 打通 Tunnel 模式下的端到端推理请求。
-6. 实现 ComfyUI 探测、固定工作流提交和 WebSocket 进度转换。
-7. 实现 Job 状态持久化、取消任务和生成图片下载。
+1. Registry、Gateway 与 Agent 之间的 protobuf 协议（`api/proto/tunnel/v1`，三边共用）。
+2. `common/runtime`：推理后端抽象——实例管理、健康状态机、能力发现与并发限流，以及 vLLM、SGLang、Ollama、ComfyUI 四个适配器。
+3. `common/tunnelwire`：`runtime` 类型与隧道 proto 的双向编解码，隧道两端共用一份。
+4. Agent 的隧道客户端：节点身份与证书轮换、Control 流与心跳、槽池与九个 Operation 的分发、多副本连接表与名册处理、隧道指标与压测。
+5. Gateway 的隧道服务端：节点表、槽池、九个 Operation 的分发，以及把隧道对面呈现为一个 `runtime.InferenceRuntime` 的 `NodeRuntime`。
+6. 三副本端到端联调：真实 TCP、真实 mTLS，每个副本独立完成推理，请求路径上无副本间转发。
+7. Gateway 的调度器（`service/aiServeWeaveGateway/scheduler`）：按模型与能力选节点，处理背压与重试语义——流式请求只在返回第一个 token 之前重试。
+8. Gateway 的 OpenAI 前门（`service/aiServeWeaveGateway/httpapi`）：`POST /v1/chat/completions`（含 SSE 流式）、`POST /v1/embeddings`、`GET /v1/models`，静态 API Key 鉴权。`POST /v1/responses` 未做——`common/runtime` 和隧道协议都没有对应的类型/Operation，需要先扩协议，留给后续。
+9. 真实端到端：本机 Ollama + 真实 mTLS 隧道 + Gateway HTTP 前门，非流式与 SSE 流式 Chat 都跑通，流式 TTFT 实测在百毫秒量级，由 Ollama 推理时延主导，隧道与前门本身开销可忽略。
+
+   隧道两侧的进度与设计见 [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md)（阶段 7 有详细实测数据）。
+
+下一步建议先实现：
+
+1. Registry 的 `NodeIdentity` 服务：bootstrap token 一次性校验与 CA 私钥保管。
+2. Registry 的名册维护与向各副本广播，替换当前由 `SetRoster` 手工注入的形式。
+3. 故障注入剩余场景与滚动升级演练已在单机完成（拔网线、kill 全部副本、证书过期、后端假死、逐副本滚动升级，见 `service/aiServeWeaveAgent/tunnel/README.md` 阶段 7）；24h 长稳测试工具已落地并在本机运行中，完成后补数据。
+4. 实现 Job 状态持久化、取消任务和生成图片下载。

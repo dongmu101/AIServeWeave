@@ -10,7 +10,7 @@ import (
 	"sync"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 // Clock is a manually-advanced runtime.Clock, so Manager's periodic

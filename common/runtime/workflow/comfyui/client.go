@@ -15,7 +15,7 @@ import (
 	"net/url"
 	"strings"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 const (

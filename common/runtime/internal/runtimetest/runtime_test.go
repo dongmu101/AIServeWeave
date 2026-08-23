@@ -5,8 +5,8 @@ import (
 	"errors"
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/runtimetest"
 )
 
 func TestRuntimeDefaultsAreUsableWithoutConfiguringAnyFunc(t *testing.T) {

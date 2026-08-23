@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/ollama"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime/ollama"
 )
 
 // --- fake Ollama server -----------------------------------------------

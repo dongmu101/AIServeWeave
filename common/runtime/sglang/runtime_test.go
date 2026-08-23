@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/sglang"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime/sglang"
 )
 
 const servedModel = "Qwen/Qwen2.5-7B-Instruct"

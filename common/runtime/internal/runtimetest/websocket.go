@@ -6,7 +6,7 @@ import (
 	"io"
 	"net/http"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 // WSDialer is a scriptable runtime.WSDialer for the ComfyUI adapter's

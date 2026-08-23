@@ -13,8 +13,8 @@ import (
 	"sort"
 	"sync"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/oaibase"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/oaibase"
 )
 
 const (

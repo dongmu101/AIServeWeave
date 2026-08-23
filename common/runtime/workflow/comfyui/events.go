@@ -10,7 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 const (

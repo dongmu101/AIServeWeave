@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime/internal/runtimetest"
 )
 
 func TestClockNowStartsAtGivenTime(t *testing.T) {

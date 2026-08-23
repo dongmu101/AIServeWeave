@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 // marshalToMap marshals dto and decodes it back into a

@@ -1,8 +1,8 @@
 package vllm
 
 import (
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/capprofile"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/capprofile"
 )
 
 // runtimeProfile is the conservative, version-keyed capability table for

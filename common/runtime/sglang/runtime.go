@@ -22,9 +22,9 @@ import (
 	"net/http"
 	"sync/atomic"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/oaibase"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/openai"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/oaibase"
+	"AIServeWeave/common/runtime/openai"
 )
 
 const (

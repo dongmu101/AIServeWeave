@@ -6,7 +6,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 // wsReadLimit bounds a single inbound WebSocket frame. ComfyUI's "executed"

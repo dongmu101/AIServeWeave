@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 // Runtime is a scriptable runtime.Runtime: each method calls the

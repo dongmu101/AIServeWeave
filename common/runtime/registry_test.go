@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/runtimetest"
 )
 
 func validDeps() runtime.Dependencies {

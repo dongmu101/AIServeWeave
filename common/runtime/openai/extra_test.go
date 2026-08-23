@@ -5,7 +5,7 @@ import (
 	"errors"
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 func TestMergeExtraFieldsAddsUnmodeledKeys(t *testing.T) {

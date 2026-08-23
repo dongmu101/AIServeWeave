@@ -152,8 +152,8 @@ Manager
 
 **实现文件：**
 
-- `service/aiServeWeaveAgent/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`。
-- `service/aiServeWeaveAgent/runtime/stream.go`：`Stream[T]` 及通用关闭语义。
+- `common/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`。
+- `common/runtime/stream.go`：`Stream[T]` 及通用关闭语义。
 
 接口名称和签名在第一阶段通过编译期断言及契约测试固定。后续适配器不得绕过这些接口向 `Manager` 塞入后端私有状态。
 
@@ -204,7 +204,7 @@ type Stream[T any] interface {
 
 ## 核心类型
 
-### `service/aiServeWeaveAgent/runtime/types.go`
+### `common/runtime/types.go`
 
 该文件保存 Runtime 包对外共享的数据结构：
 
@@ -325,7 +325,7 @@ type ChatRequest struct {
 
 `ChatRequest` 不含 `Stream` 字段：流式与否由调用 `Chat` 还是 `ChatStream` 决定，`openai` 转换层负责设置线上 `stream` 与 `stream_options`。
 
-### `service/aiServeWeaveAgent/runtime/capability.go`
+### `common/runtime/capability.go`
 
 该文件保存能力名称、三态值、证据来源和合并规则：
 
@@ -515,7 +515,7 @@ func (c Config) LogValue() slog.Value
 
 ### vLLM
 
-**实现文件：** `service/aiServeWeaveAgent/runtime/vllm/runtime.go`
+**实现文件：** `common/runtime/vllm/runtime.go`
 
 | 动作 | 首选端点 | 说明 |
 | --- | --- | --- |
@@ -529,7 +529,7 @@ vLLM 还可能暴露 Responses、音频、rerank 等端点，但首期不因端�
 
 ### SGLang
 
-**实现文件：** `service/aiServeWeaveAgent/runtime/sglang/runtime.go`
+**实现文件：** `common/runtime/sglang/runtime.go`
 
 | 动作 | 首选端点 | 说明 |
 | --- | --- | --- |
@@ -550,7 +550,7 @@ SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两�
 
 ### Ollama
 
-**实现文件：** `service/aiServeWeaveAgent/runtime/ollama/runtime.go`
+**实现文件：** `common/runtime/ollama/runtime.go`
 
 | 动作 | 首选端点 | 说明 |
 | --- | --- | --- |
@@ -568,8 +568,8 @@ Ollama 原生接口用于身份和模型元数据，OpenAI-compatible 接口用�
 
 **实现文件：**
 
-- `service/aiServeWeaveAgent/runtime/workflow/comfyui/client.go`：HTTP/WebSocket 协议客户端和线上 DTO。
-- `service/aiServeWeaveAgent/runtime/workflow/comfyui/runtime.go`：`WorkflowRuntime` 实现、事件分发和状态归一化。
+- `common/runtime/workflow/comfyui/client.go`：HTTP/WebSocket 协议客户端和线上 DTO。
+- `common/runtime/workflow/comfyui/runtime.go`：`WorkflowRuntime` 实现、事件分发和状态归一化。
 
 | 动作 | 端点 | 说明 |
 | --- | --- | --- |
@@ -595,7 +595,7 @@ ComfyUI WebSocket 是实例级事件流。每个 Runtime 只维护一个连接�
 
 ### Registry
 
-**实现文件：** `service/aiServeWeaveAgent/runtime/registry.go`
+**实现文件：** `common/runtime/registry.go`
 
 ```go
 type Factory func(cfg Config, deps Dependencies) (Runtime, error)
@@ -653,7 +653,7 @@ type Metrics interface {
 
 ### Manager
 
-**实现文件：** `service/aiServeWeaveAgent/runtime/manager.go`
+**实现文件：** `common/runtime/manager.go`
 
 ```go
 type Manager interface {
@@ -749,8 +749,8 @@ execution_interrupted → cancelled
 
 **实现文件：**
 
-- `service/aiServeWeaveAgent/runtime/errors.go`：公共错误类型和错误分类。
-- `service/aiServeWeaveAgent/runtime/openai/errors.go`：OpenAI-compatible 错误响应解码。
+- `common/runtime/errors.go`：公共错误类型和错误分类。
+- `common/runtime/openai/errors.go`：OpenAI-compatible 错误响应解码。
 
 ```go
 type ErrorCode string
@@ -860,10 +860,10 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 按开源项目标准，以下检查在每个阶段结束时全部通过后才能勾选该阶段：
 
 ```bash
-gofmt -l ./service/aiServeWeaveAgent/runtime
-go vet ./service/aiServeWeaveAgent/runtime/...
-go test ./service/aiServeWeaveAgent/runtime/...
-go test -race ./service/aiServeWeaveAgent/runtime/...
+gofmt -l ./common/runtime
+go vet ./common/runtime/...
+go test ./common/runtime/...
+go test -race ./common/runtime/...
 ```
 
 补充要求：
@@ -907,10 +907,10 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 范围收窄说明：Config 校验与能力合并原计划在本阶段完成，实际推迟到阶段 1b，因为在没有消费者时无法确定校验细节。本阶段实际交付的是类型骨架、错误模型和流实现。
 
 - [x] 先写错误映射和 Stream 关闭语义测试。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(RuntimeError|Stream)'`，确认测试因类型尚未实现而失败。
+- [x] 运行 `go test ./common/runtime -run 'Test(RuntimeError|Stream)'`，确认测试因类型尚未实现而失败。
 - [x] 实现本 README 中的公共类型和接口；增加四个适配器的编译期接口断言位置。（`Runtime`/`InferenceRuntime`/`WorkflowRuntime`、错误模型和 `ChanStream` 已实现；适配器编译期断言待各自阶段落地对应类型时加入。）
 - [x] 再运行同一命令，要求通过且不存在协程泄漏。
-- [x] 运行 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
+- [x] 运行 `go test -race ./common/runtime`，要求通过。
 
 **交付物：** 上层可以只依赖 `runtime` 包完成实例分类、错误判断和流读取。
 
@@ -924,7 +924,7 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 - [x] 写 `Config.LogValue` 脱敏测试，断言输出不含 `APIKey`、Header 值和 TLS 文件路径。
 - [x] 写 `CapabilitySet` 测试：来源优先级、同级冲突向保守收敛并产生 Warning、运行时与模型能力取交集、`Require` 对 unknown 和 unsupported 返回不同 Cause 且错误码同为 `ErrorCapability`。
 - [x] 写 `limiter` 测试：额度耗尽返回 `ErrConcurrencyLimit`、释放后可再获取、并发获取与释放在 `-race` 下无竞态、Close 后不再发放额度。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime`，确认失败原因来自未实现的方法而非编译错误以外的意外。
+- [x] 运行 `go test ./common/runtime`，确认失败原因来自未实现的方法而非编译错误以外的意外。
 - [x] 实现 `config.go`、能力常量与合并门禁、哨兵错误、`deps.go` 协作者接口、`limiter.go`，并补齐 `ChatRequest` 完整字段集。
 - [x] 建立 `runtime/internal/runtimetest`：fake Runtime、fake Clock、fake WSDialer/WSConn。
 - [x] 运行质量门禁全部命令。
@@ -946,9 +946,9 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 - [x] 写 `ChatRequest` 与线上 DTO 的双向转换测试：可选字段为 nil 时不出现在 JSON 中、显式 0 值原样传递、`Extra` 键与已建模字段冲突时返回 `ErrorInvalidConfig`。
 - [x] 写 SSE 表驱动测试，覆盖 CRLF、多行 data、注释、空事件、`[DONE]`、畸形 JSON、超长行和中途断开。
 - [x] 写流生命周期测试：空闲超时触发、首个事件后 `Committed=true`、`Close` 与 Context 取消都关闭响应体并使读取协程退出。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/openai`，确认失败原因分别来自未实现调用和解析逻辑。
+- [x] 运行 `go test ./common/runtime/openai`，确认失败原因分别来自未实现调用和解析逻辑。
 - [x] 实现共享 Client、模型列表、Chat、Embedding 和 SSE Stream。
-- [x] 运行 `go test -race ./service/aiServeWeaveAgent/runtime/openai`，要求全部通过。
+- [x] 运行 `go test -race ./common/runtime/openai`，要求全部通过。
 - [x] 运行质量门禁全部命令。
 
 实现说明：
@@ -969,9 +969,9 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 - [x] 写 Snapshot 隔离测试：修改返回值的切片和 `CapabilitySet` 不影响后续 Snapshot 结果。
 - [x] 写调度测试：Health 慢于间隔时不堆积、抖动落在 `[interval, interval*1.1]`、健康恢复后立即触发一次 Discover。
 - [x] 写 `Manager.Close` 测试：停止调度、取消在途检查、关闭全部实例、汇总多个 Close 错误、二次调用幂等。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime -run 'Test(Registry|Manager)'`，确认失败。
+- [x] 运行 `go test ./common/runtime -run 'Test(Registry|Manager)'`，确认失败。
 - [x] 实现只读 Registry、并发安全 Manager、抖动调度和不可变 Snapshot。
-- [x] 运行上述测试及 `go test -race ./service/aiServeWeaveAgent/runtime`，要求通过。
+- [x] 运行上述测试及 `go test -race ./common/runtime`，要求通过。
 - [x] 运行质量门禁全部命令。
 
 **交付物：** Agent 可以稳定持有多个异构 Runtime，并对上层发布可信状态。
@@ -993,9 +993,9 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 - [x] 用模拟 Ollama 覆盖 `/api/version`、`/api/tags`、`/api/show`、Chat SSE 和 Embedding。
 - [x] 覆盖“只有 `/v1/models` 但没有 Ollama 原生端点”的类型不匹配场景。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/ollama`，确认失败。
+- [x] 运行 `go test ./common/runtime/ollama`，确认失败。
 - [x] 实现原生发现与 OpenAI-compatible 推理组合，限制 `/api/show` 并发；加入 `var _ runtime.InferenceRuntime = (*Runtime)(nil)` 编译期断言。
-- [x] 运行包测试和 `go test -race ./service/aiServeWeaveAgent/runtime/...`。
+- [x] 运行包测试和 `go test -race ./common/runtime/...`。
 - [x] 运行质量门禁全部命令。
 
 实现说明：
@@ -1036,7 +1036,7 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 - [x] 模拟 `/version`、`/health`、`/v1/models`、Chat、Embedding 和 OpenAI 错误。
 - [x] 覆盖 API Key、路径前缀、健康失败及版本字段缺失。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/vllm`，确认失败。
+- [x] 运行 `go test ./common/runtime/vllm`，确认失败。
 - [x] 实现适配器和 `profile.go` 保守能力表；高级能力默认 unknown；加入 `InferenceRuntime` 编译期断言。
 - [x] 运行包测试和全目录竞态测试。
 - [x] 运行质量门禁全部命令。
@@ -1078,7 +1078,7 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 
 - [x] 模拟 `/health`、`/v1/models`、可选 `/get_server_info`、Chat SSE 和错误体。
 - [x] 覆盖 `/health` 不存在时的降级、OpenAI 响应无法证明运行时身份及私有字段变化。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/sglang`，确认失败。
+- [x] 运行 `go test ./common/runtime/sglang`，确认失败。
 - [x] 实现显式 Kind 驱动的适配器，不接入 `/generate`；降级信息写入 `Snapshot.Degraded` 与 `Discovery.Warnings`；加入 `InferenceRuntime` 编译期断言。
 - [x] 运行包测试和全目录竞态测试。
 - [x] 运行质量门禁全部命令。
@@ -1129,7 +1129,7 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 - [x] 用 HTTP 测试服务覆盖 system stats、features、object info、models、prompt、queue、history、view。
 - [x] 用可控 WebSocket 服务覆盖连接先于提交、事件分发、未知事件、二进制预览、断线重连和 History 对账。
 - [x] 写 pending 取消、exclusive running 取消和共享实例拒绝中断测试。
-- [x] 运行 `go test ./service/aiServeWeaveAgent/runtime/workflow/comfyui`，确认失败。
+- [x] 运行 `go test ./common/runtime/workflow/comfyui`，确认失败。
 - [x] 实现 Client、单连接事件复用器（`events.go`）、WorkflowRuntime 和安全取消；加入 `var _ runtime.WorkflowRuntime = (*Runtime)(nil)` 编译期断言。
 - [x] 运行包测试、全目录竞态测试，并检查测试结束后无残留连接或协程。
 - [x] 运行质量门禁全部命令。
@@ -1184,7 +1184,7 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 - [ ] 加入指标和结构化日志，写 Secret 脱敏测试，断言日志中不出现 API Key、Authorization、Cookie 和完整 Prompt。
 - [ ] 写跨适配器契约测试：同一组测试用例分别跑在三个 `InferenceRuntime` 实现上，验证接口语义一致（取消行为、能力门禁错误码、流终止错误）。
 - [ ] 提供由环境变量启用的真实后端契约测试（如 `RUNTIME_E2E_VLLM_URL`）；未配置时明确 `t.Skip` 并说明所需变量。
-- [ ] 运行 `go test -race ./service/aiServeWeaveAgent/runtime/...`。
+- [ ] 运行 `go test -race ./common/runtime/...`。
 - [ ] 运行 `go test ./service/aiServeWeaveAgent/...`，验证上层装配没有破坏编译。
 - [ ] 分别连接真实 Ollama、vLLM、SGLang、ComfyUI 执行首期验收链路，并记录运行时版本。
 - [ ] 用实测结果填写「版本兼容矩阵」，同步更新各 `profile.go` 与本 README 的接口草案。
@@ -1204,7 +1204,7 @@ go test -race ./service/aiServeWeaveAgent/runtime/...
 - 单实例并发达到上限时返回可识别的本地背压错误，不排队也不阻塞调用方。
 - 「版本兼容矩阵」中四个后端的「已验证版本」均已由真实后端契约测试填写。
 - 「质量门禁」全部命令通过，`gofmt -l` 无输出，`go vet` 无告警。
-- 所有单元测试和 `go test -race ./service/aiServeWeaveAgent/runtime/...` 通过。
+- 所有单元测试和 `go test -race ./common/runtime/...` 通过。
 - 日志和错误中不存在 API Key、Authorization、Cookie 或完整 Prompt。
 - 默认测试在没有 GPU 和外部服务的环境中可重复执行，且测试结束后无残留协程与连接。
 

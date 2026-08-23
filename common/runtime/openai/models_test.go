@@ -6,7 +6,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 func TestListModels(t *testing.T) {

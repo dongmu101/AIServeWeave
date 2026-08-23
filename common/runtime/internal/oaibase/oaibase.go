@@ -20,8 +20,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/openai"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/openai"
 )
 
 // Base is the shared half of an inference adapter. It is safe for

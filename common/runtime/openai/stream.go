@@ -8,7 +8,7 @@ import (
 	"net/http"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 const (

@@ -26,6 +26,9 @@ func TestLimiterAcquireUpToMaxThenRejects(t *testing.T) {
 	if !errors.As(err, &rtErr) || rtErr.Code != ErrorBackpressure {
 		t.Fatalf("acquire 3 Code = %v, want %s", err, ErrorBackpressure)
 	}
+	if !rtErr.Retryable {
+		t.Fatalf("acquire 3 Retryable = false, want true: the request never reached the backend, so a scheduler must be free to place it on another node")
+	}
 
 	release1()
 	release2()
@@ -79,6 +82,9 @@ func TestLimiterCloseStopsIssuing(t *testing.T) {
 	var rtErr *RuntimeError
 	if !errors.As(err, &rtErr) || rtErr.Code != ErrorClosed {
 		t.Fatalf("acquire after Close Code = %v, want %s", err, ErrorClosed)
+	}
+	if rtErr.Retryable {
+		t.Fatalf("acquire after Close Retryable = true, want false: this instance is gone, retrying it can never succeed")
 	}
 }
 

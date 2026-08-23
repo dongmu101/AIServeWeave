@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/vllm"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime/vllm"
 )
 
 const servedModel = "meta-llama/Llama-3.1-8B-Instruct"

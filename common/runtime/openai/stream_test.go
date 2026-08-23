@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 func writeSSEChunk(w http.ResponseWriter, flusher http.Flusher, jsonPayload string) {

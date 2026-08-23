@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/runtimetest"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/workflow/comfyui"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/runtimetest"
+	"AIServeWeave/common/runtime/workflow/comfyui"
 )
 
 const (

@@ -23,8 +23,10 @@ func NewLimiter(max int) *Limiter {
 // invoke exactly once, typically via defer, regardless of how the request
 // ends; extra calls to release are safe no-ops. Acquire never blocks or
 // queues: at capacity it immediately returns a *RuntimeError with Code
-// ErrorBackpressure wrapping ErrConcurrencyLimit. After Close it returns a
-// *RuntimeError with Code ErrorClosed wrapping ErrRuntimeClosed.
+// ErrorBackpressure wrapping ErrConcurrencyLimit, marked Retryable because
+// the request was never sent to the backend and so may safely run again
+// elsewhere. After Close it returns a *RuntimeError with Code ErrorClosed
+// wrapping ErrRuntimeClosed, which is not retryable: this instance is gone.
 func (l *Limiter) Acquire() (release func(), err error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -42,6 +44,7 @@ func (l *Limiter) Acquire() (release func(), err error) {
 			Code:      ErrorBackpressure,
 			Operation: "acquire",
 			Message:   "concurrency limit reached",
+			Retryable: true,
 			Cause:     ErrConcurrencyLimit,
 		}
 	}

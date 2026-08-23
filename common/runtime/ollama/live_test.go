@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/ollama"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/ollama"
 )
 
 // TestLiveOllama exercises the adapter against a real Ollama server, which

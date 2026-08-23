@@ -4,7 +4,7 @@ import (
 	"context"
 	"net/http"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
+	"AIServeWeave/common/runtime"
 )
 
 type embeddingRequestDTO struct {

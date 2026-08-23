@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"AIServeWeave/service/aiServeWeaveAgent/runtime"
-	"AIServeWeave/service/aiServeWeaveAgent/runtime/internal/oaibase"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/internal/oaibase"
 )
 
 // TestMain enforces the package's goroutine-leak gate. Base's streaming
