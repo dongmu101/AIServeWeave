@@ -9,6 +9,7 @@ import (
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 )
@@ -79,13 +80,9 @@ func (s *Server) Serve(stream tunnelv1.Tunnel_ServeServer) error {
 		done:   make(chan struct{}),
 	}
 
-	n.mu.Lock()
-	n.live++
-	n.mu.Unlock()
+	n.addLive(sl.class, 1)
 	defer func() {
-		n.mu.Lock()
-		n.live--
-		n.mu.Unlock()
+		n.addLive(sl.class, -1)
 		s.forget(n)
 	}()
 
@@ -163,6 +160,7 @@ func (s *slot) current() *call {
 func (s *slot) send(frame *tunnelv1.GatewayFrame) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
+	s.node.metrics.FrameBytes(DirectionOutbound, proto.Size(frame))
 	return s.stream.Send(frame)
 }
 
@@ -200,6 +198,7 @@ func (s *slot) readLoop() error {
 			}
 			return err
 		}
+		s.node.metrics.FrameBytes(DirectionInbound, proto.Size(frame))
 
 		switch body := frame.GetBody().(type) {
 		case *tunnelv1.AgentFrame_Ready:
@@ -208,7 +207,7 @@ func (s *slot) readLoop() error {
 			// the slot would be offered for a second request while the
 			// first one's frames are still coming.
 			if s.current() != nil {
-				return s.fault("Ready arrived while a request was still in flight")
+				return s.fault(FaultReadyWhileInflight, "Ready arrived while a request was still in flight")
 			}
 			if !s.park() {
 				return status.Error(codes.Unavailable, "node is draining")
@@ -238,7 +237,7 @@ func (s *slot) readLoop() error {
 func (s *slot) route(frame *tunnelv1.AgentFrame) error {
 	c := s.current()
 	if c == nil {
-		return s.fault("response frame arrived on an idle slot")
+		return s.fault(FaultFrameOnIdleSlot, "response frame arrived on an idle slot")
 	}
 	if c.id != frame.GetRequestId() {
 		// A frame for a request that is no longer on this slot is dropped
@@ -256,7 +255,7 @@ func (s *slot) route(frame *tunnelv1.AgentFrame) error {
 			len(data.GetPayload()), s.srv.cfg.MaxFrameBytes)
 		c.abort(err)
 		s.finish(c)
-		return s.fault(err.Error())
+		return s.fault(FaultFrameTooLarge, err.Error())
 	}
 
 	last := frame.GetEnd() != nil
@@ -271,12 +270,24 @@ func (s *slot) route(frame *tunnelv1.AgentFrame) error {
 // fault ends the slot because the Agent broke the frame contract. The stream
 // is closed rather than resynchronized: a slot whose framing is not understood
 // cannot be safely reused for a later request.
-func (s *slot) fault(reason string) error {
+//
+// The two reason arguments are not redundant: kind is the bounded label the
+// metric carries, detail is the human sentence the log carries and may quote
+// sizes and ids that must never become label values.
+//
+// fault 因 Agent 违反帧契约而结束该槽。这里是关闭流而不是重新同步：一个帧结构已经
+// 无法理解的槽，不能安全地复用给后面的请求。
+//
+// 两个 reason 参数并不冗余：kind 是指标携带的有界标签，detail 是日志携带的自然语句，
+// 其中可能引用尺寸与 id，而那些绝不能变成标签值。
+func (s *slot) fault(kind SlotFaultReason, detail string) error {
+	s.node.metrics.SlotFault(kind)
 	s.srv.logger.Warn("closing slot on a protocol fault",
 		slog.String("node_id", s.node.id),
 		slog.String("slot_id", s.id),
-		slog.String("reason", reason))
-	err := status.Error(codes.FailedPrecondition, reason)
+		slog.String("fault", string(kind)),
+		slog.String("reason", detail))
+	err := status.Error(codes.FailedPrecondition, detail)
 	s.close(err)
 	return err
 }

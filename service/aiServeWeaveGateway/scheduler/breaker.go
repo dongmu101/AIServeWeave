@@ -57,12 +57,13 @@ type breakerRegistry struct {
 	failureThreshold int
 	baseCooldown     time.Duration
 	maxCooldown      time.Duration
+	metrics          *recorder
 
 	mu      sync.Mutex
 	entries map[Candidate]*breakerState
 }
 
-func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Duration) *breakerRegistry {
+func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Duration, rec *recorder) *breakerRegistry {
 	if failureThreshold <= 0 {
 		failureThreshold = defaultFailureThreshold
 	}
@@ -79,6 +80,7 @@ func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Dur
 		failureThreshold: failureThreshold,
 		baseCooldown:     baseCooldown,
 		maxCooldown:      maxCooldown,
+		metrics:          rec,
 		entries:          make(map[Candidate]*breakerState),
 	}
 }
@@ -90,12 +92,27 @@ func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Dur
 // half-open state.
 func (r *breakerRegistry) eligible(c Candidate, now time.Time) bool {
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	st, ok := r.entries[c]
-	if !ok || !st.open {
+	switch {
+	case !ok || !st.open:
+		r.mu.Unlock()
 		return true
+	case now.Before(st.openUntil):
+		r.mu.Unlock()
+		return false
 	}
-	return !now.Before(st.openUntil)
+	// The cooldown has elapsed, so the candidate is eligible again even
+	// though the breaker has not yet been reset by a successful probe. The
+	// gauge follows eligibility rather than the internal open flag: an
+	// operator reading it wants to know whether this candidate is being
+	// excluded right now, not which field says so.
+	//
+	// 冷却已过，因此即便熔断器尚未被一次成功探测重置，该候选也重新可选。量表跟随的是
+	// 「是否可选」而不是内部的 open 标志：读它的运维想知道的是这个候选此刻是否正被
+	// 排除，而不是哪个字段这么写。
+	r.mu.Unlock()
+	r.metrics.BreakerOpen(c, false)
+	return true
 }
 
 // record applies the outcome of one dispatch attempt against c. Only errors
@@ -104,28 +121,48 @@ func (r *breakerRegistry) eligible(c Candidate, now time.Time) bool {
 // non-qualifying error already says nothing about whether the node itself is
 // healthy.
 func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	// Whether this call changed the breaker's decision is worked out under the
+	// lock and published after it: the recorder is a foreign object, and
+	// calling into one while holding a lock is how a lock ordering rule gets
+	// invented by accident.
+	//
+	// 这次调用是否改变了熔断器的判断，在锁内算出、锁外发布：记录器是外部对象，持锁
+	// 调用外部对象，正是一条锁顺序规则被意外发明出来的方式。
+	var (
+		closed  bool
+		tripped bool
+	)
 
+	r.mu.Lock()
 	if !breakerFailure(err) {
 		if st, ok := r.entries[c]; ok {
+			closed = st.open
 			st.consecutiveFailures = 0
 			st.tripCount = 0
 			st.open = false
 		}
-		return
+	} else {
+		st, ok := r.entries[c]
+		if !ok {
+			st = &breakerState{}
+			r.entries[c] = st
+		}
+		st.consecutiveFailures++
+		if st.consecutiveFailures >= r.failureThreshold {
+			st.open = true
+			st.openUntil = now.Add(r.cooldown(st.tripCount))
+			st.tripCount++
+			tripped = true
+		}
 	}
+	r.mu.Unlock()
 
-	st, ok := r.entries[c]
-	if !ok {
-		st = &breakerState{}
-		r.entries[c] = st
-	}
-	st.consecutiveFailures++
-	if st.consecutiveFailures >= r.failureThreshold {
-		st.open = true
-		st.openUntil = now.Add(r.cooldown(st.tripCount))
-		st.tripCount++
+	switch {
+	case tripped:
+		r.metrics.BreakerTrip(c)
+		r.metrics.BreakerOpen(c, true)
+	case closed:
+		r.metrics.BreakerOpen(c, false)
 	}
 }
 

@@ -16,6 +16,7 @@ import (
 	"syscall"
 	"time"
 
+	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/runtime/ollama"
 	"AIServeWeave/common/runtime/sglang"
@@ -53,6 +54,8 @@ func main() {
 		"probe 127.0.0.1's well-known Ollama/vLLM ports and register whatever answers; never touches any other host")
 	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
 		"how often auto-discovery looks for a newly appeared local instance")
+	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",
+		"address the Prometheus /metrics listener binds; loopback by default because the agent never listens on a public port, empty disables it")
 	flag.Parse()
 
 	logger, err := newLogger(*logLevel)
@@ -62,7 +65,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval); err != nil {
+	if err := run(logger, opts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -138,7 +141,7 @@ func (o *tunnelOptions) runtimeIDs() []string {
 // config file described in tunnel/README.md: until that file lands, this is
 // the only way to give the agent a real backend to dispatch to. An empty
 // ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration) error {
+func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -147,7 +150,16 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 		return err
 	}
 
-	deps := newDependencies(logger)
+	// One metrics registry for the node: the runtime layer and the tunnel
+	// record into the same sink, which is what makes "the backend is slow"
+	// and "the tunnel is slow" comparable numbers rather than two stories.
+	//
+	// 整个节点共用一个指标注册表：运行时层与隧道记录进同一个下沉端，这才让「后端慢」
+	// 与「隧道慢」成为两个可以互相对照的数字，而不是两套说辞。
+	metricsRegistry := metrics.New(tunnel.Descriptions())
+	metricsServer := startMetricsEndpoint(logger, metricsRegistry, metricsAddr)
+
+	deps := newDependencies(logger, metricsRegistry)
 	manager := runtime.NewManager(registry, deps)
 
 	configuredRuntimes := 0
@@ -201,12 +213,43 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 	if err := manager.Close(shutdownCtx); err != nil {
 		return err
 	}
+	// Closed after the runtimes, so a scrape landing during the drain still
+	// sees the tunnel's connection state fall to zero.
+	//
+	// 在运行时之后关闭，这样落在排空期间的一次抓取仍能看到隧道连接状态归零。
+	if metricsServer != nil {
+		_ = metricsServer.Close()
+	}
 	if fatal != nil {
 		return fatal
 	}
 
 	logger.Info("agent stopped")
 	return nil
+}
+
+// startMetricsEndpoint serves the registry on addr, or returns nil when the
+// operator disabled it. A failure to listen is logged rather than returned:
+// an agent that refuses to start because its metrics port is taken is an
+// agent whose node is offline for a reason nobody would guess from the
+// symptom.
+//
+// startMetricsEndpoint 在 addr 上提供注册表内容；运维关闭该端点时返回 nil。监听失败
+// 只记录、不返回：一个因为指标端口被占用就拒绝启动的 Agent，会让整个节点因为一个
+// 从症状根本猜不到的原因而离线。
+func startMetricsEndpoint(logger *slog.Logger, registry *metrics.Registry, addr string) *http.Server {
+	if addr == "" {
+		logger.Warn("no -metrics-addr; this agent exports no metrics")
+		return nil
+	}
+	server := registry.Server(addr)
+	go func() {
+		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			logger.Error("metrics listener stopped", slog.Any("error", err))
+		}
+	}()
+	logger.Info("metrics listening", slog.String("metrics_addr", addr))
+	return server
 }
 
 // startLocalDiscovery starts localdiscovery.Scanner in the background and
@@ -345,8 +388,12 @@ func newRegistry() (runtime.Registry, error) {
 }
 
 // newDependencies builds the production dependency set: the real wall clock,
-// a shared HTTP client and the WebSocket dialer the ComfyUI adapter needs.
-func newDependencies(logger *slog.Logger) runtime.Dependencies {
+// a shared HTTP client, the WebSocket dialer the ComfyUI adapter needs, and
+// the metrics sink shared with the tunnel.
+//
+// newDependencies 构建生产用的依赖集合：真实墙钟、共享的 HTTP 客户端、ComfyUI 适配器
+// 所需的 WebSocket 拨号器，以及与隧道共用的指标下沉端。
+func newDependencies(logger *slog.Logger, sink runtime.Metrics) runtime.Dependencies {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DialContext = (&net.Dialer{Timeout: dialTimeout}).DialContext
 	transport.ResponseHeaderTimeout = responseHeaderTimeout
@@ -356,7 +403,7 @@ func newDependencies(logger *slog.Logger) runtime.Dependencies {
 		WSDialer:   comfyui.NewDialer(httpClient),
 		Clock:      runtime.NewSystemClock(),
 		Logger:     logger,
-		Metrics:    nopMetrics{},
+		Metrics:    sink,
 	}
 }
 
@@ -369,18 +416,3 @@ func newLogger(level string) (*slog.Logger, error) {
 	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
 	return slog.New(handler), nil
 }
-
-// nopMetrics satisfies runtime.Metrics while the agent has no metrics backend
-// wired up. Every instrument it hands out discards its samples.
-type nopMetrics struct{}
-
-func (nopMetrics) Counter(string, map[string]string) runtime.Counter     { return nopInstrument{} }
-func (nopMetrics) Gauge(string, map[string]string) runtime.Gauge         { return nopInstrument{} }
-func (nopMetrics) Histogram(string, map[string]string) runtime.Histogram { return nopInstrument{} }
-
-// nopInstrument discards every sample recorded against it.
-type nopInstrument struct{}
-
-func (nopInstrument) Add(float64)     {}
-func (nopInstrument) Set(float64)     {}
-func (nopInstrument) Observe(float64) {}

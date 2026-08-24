@@ -464,12 +464,14 @@ qwen-coder
 
 ## 数据模型
 
-初期可以使用 PostgreSQL 保存控制面数据：
+控制面数据存 PostgreSQL 或 MySQL，由 `aiServeWeaveControlPlane` 的 `Database.Driver` 选择，PostgreSQL 是首要目标——后续那些 JSON 列（工作流模板、部署 revision、job 事件）用得上 JSONB 的索引能力。当前已落地的四张表只用标量列，两种引擎表达一致，因此双支持代价很低；某个 JSON 列落地时应重新评估这一点。
+
+下表中标注「已落地」的是已经建好的表，其余是规划：
 
 ```text
-tenants
-users
-api_keys
+tenants          ← 已落地
+users            ← 已落地
+api_keys         ← 已落地
 
 nodes
 node_credentials
@@ -495,7 +497,7 @@ artifacts
 
 inference_requests
 usage_records
-audit_logs
+audit_logs       ← 已落地
 ```
 
 主要关系：
@@ -515,8 +517,8 @@ audit_logs
 
 安全能力应从第一版开始建设：
 
-- 用户 API Key 只保存不可逆哈希
-- Agent 使用短期注册令牌换取节点证书
+- 用户 API Key 只保存不可逆哈希（已落地，见 `common/apikey` 与控制面）
+- Agent 使用短期注册令牌换取节点证书（已落地，见 Registry）
 - Agent 与 Registry、Gateway 和 Tunnel 服务之间使用 mTLS
 - 推理后端密钥加密保存
 - 用户、租户、模型和节点权限隔离
@@ -532,22 +534,36 @@ audit_logs
 
 ## 可观测性
 
-建议从一开始接入 OpenTelemetry，并提供 Prometheus 指标：
+Prometheus 指标已落地，OpenTelemetry 尚未接入。
 
-- 节点在线数量
-- 节点心跳延迟
-- 模型部署健康状态
-- 请求量和并发数
-- 首 token 延迟（TTFT）
-- 总响应时间
-- 输入和输出 token
-- 每秒输出 token
-- 后端错误率和超时率
-- 调度选择结果
-- Tunnel 吞吐和连接状态
-- ComfyUI 队列长度、任务等待时间和执行时间
-- ComfyUI 工作流成功率、节点错误和 GPU OOM 次数
-- Artifact 上传、下载、大小和存储使用量
+**指标下沉端是 `common/metrics`**：一个实现 `runtime.Metrics` 的进程内注册表，外加 Prometheus 文本格式导出，零第三方依赖——导出格式本身是稳定且有文档的文本协议，换成客户端库就是为几百行能写清楚的代码往每个二进制里拖一整棵传递依赖。每个记录指标的包各自持有一张 `Descriptions` 目录（指标名、help 文本、直方图分桶），服务启动时把它们并起来交给 `metrics.New`，这样指标定义与它的记录点留在同一个文件里。
+
+两个服务各在一个**只绑回环**的地址上导出：
+
+| 服务 | flag | 默认值 |
+| --- | --- | --- |
+| Gateway | `-metrics-addr` | `127.0.0.1:9090` |
+| Agent | `-metrics-addr` | `127.0.0.1:9091` |
+
+默认回环是有意的：导出内容会点出连到该进程的每一个 `node_id`，那是一份公网监听器没理由对外派发的资产清单。留空则完全关闭该端点。
+
+已覆盖的清单项（完整指标表见 [service/aiServeWeaveGateway/README.md「指标」](service/aiServeWeaveGateway/README.md#指标) 与 [service/aiServeWeaveAgent/tunnel/README.md「可观测性」](service/aiServeWeaveAgent/tunnel/README.md#可观测性)）：
+
+- 节点在线数量 —— `tunnel_server_connected_nodes` / `tunnel_connected_replicas`
+- 节点心跳延迟 —— `tunnel_server_heartbeat_interval_seconds` / `tunnel_control_heartbeat_rtt_seconds`
+- 模型部署健康状态 —— `tunnel_server_node_state`，以及调度器按 Agent 上报健康状态所做的候选过滤
+- 请求量和并发数 —— `gateway_http_requests_total` / `gateway_http_inflight_requests`
+- 首 token 延迟（TTFT）—— `gateway_http_ttft_seconds`，与隧道两侧的 `*_stream_first_event_seconds` 配套定位"慢在哪一段"
+- 总响应时间 —— `gateway_http_request_duration_seconds`
+- 输入和输出 token —— `gateway_tokens_total{direction}`
+- 每秒输出 token —— `gateway_output_tokens_per_second`
+- 后端错误率和超时率 —— `gateway_scheduler_dispatches_total{result}` 与两侧的 `*_requests_total{result}`，`result` 沿用六值约定
+- 调度选择结果 —— `gateway_scheduler_candidates` / `gateway_scheduler_no_candidate_total` / `gateway_scheduler_retries_total`，以及熔断器的 `gateway_scheduler_breaker_open` / `_trips_total`
+- Tunnel 吞吐和连接状态 —— 两侧各十余个 `tunnel_*` / `tunnel_server_*` 指标
+
+尚未覆盖：ComfyUI 队列长度与任务时长、工作流成功率与 GPU OOM、Artifact 上传下载与存储用量——这三组跟着 ComfyUI 与产物存储那条线一起做。Registry 也还没有指标端点。
+
+**标签取值一律来自封闭枚举或本地配置，任何来自对端或调用方的自由文本都不进标签。** 具体地：模型名与请求路径由调用方在公开 API 里给出，进了标签就等于让单个客户端决定指标后端里有多少条序列；prompt、工作流 JSON、请求 id、错误消息同理。每个记录指标的包都有一个可执行的标签基数测试，而不是靠评审记住这条规则。
 
 每个请求应携带同一个 `request_id`，贯穿 Gateway、Scheduler、Tunnel、Agent 和推理后端。
 
@@ -560,6 +576,10 @@ AIServeWeave/
 ├── api/
 │   └── proto/tunnel/v1/        # Agent/Gateway/Registry 共享的 gRPC 契约
 ├── common/                     # 跨服务共享代码
+│   ├── metrics/                # runtime.Metrics 的实现与 Prometheus 文本导出，三个服务共用
+│   │   └── metricstest/        # 各服务测试断言指标与标签用的内存收集器
+│   ├── apikey/                 # API Key 的格式与哈希，Gateway 与控制面共用
+│   ├── metrics/                # runtime.Metrics 的实现与 Prometheus 导出，三服务共用
 │   ├── runtime/                # 推理后端抽象：能力探测、配额、流式转换
 │   │   ├── internal/           # 包内私有工具与测试辅助
 │   │   ├── ollama/  openai/  sglang/  vllm/
@@ -575,18 +595,22 @@ AIServeWeave/
     │   ├── tunnelserver/       # 隧道终结：节点表、槽池、九个 Operation 的分发
     │   └── e2e/                # 真实 mTLS 下 Agent 与 Gateway 的联调测试
     ├── aiServeWeaveRegistry/   # 控制面注册中心，仅骨架
-    ├── aiServeWeaveControlPlane/  # 尚未开始
-    └── aiServeWeaveConsole/       # 尚未开始
+    ├── aiServeWeaveControlPlane/  # 控制面 Admin API，租户/用户/API Key/审计已落地
+    │   ├── internal/           # model、store、logic、token、cache、handler、svc
+    │   └── e2e/                # 真实 HTTP + Gateway 真实客户端的闭环测试
+    └── aiServeWeaveConsole/       # 尚未开始（前端）
 ```
 
 后续随功能推进补齐的目录（当前尚不存在）：`api/openapi/`、`migrations/`、`configs/`、`web/`、`docs/`、`deploy/kubernetes/`。
 
 调度器、鉴权、用量统计等模块目前尚无归属目录，落地时按所属服务放进 `service/<服务名>/` 下的子包；确实被多个服务共用的再上提到 `common/`。
 
-`common/` 下已有两个包，都是因为 Gateway 与 Agent 必须按同一套规则解释同一份数据才上提的：
+`common/` 下已有四个包，都是因为多个服务必须按同一套规则解释同一份数据才上提的：
 
 - `common/runtime` —— 推理语义的类型与接口（`Stream`、`RuntimeError`、九个 Operation 的请求响应类型）。Agent 用它实现后端适配器，Gateway 用它表达调度器和 API 层看到的请求，两边共用一份定义而不是各自复述。
-- `common/tunnelwire` —— 这些类型与 `api/proto/tunnel/v1` 之间的双向编解码。隧道两端都要做这次转换，放在一个包里意味着「凭据不过隧道」「nil 与显式零值不等价」这两条不变量只有一处实现、一处测试。
+- `common/tunnelwire` —— 这些类型与 `api/proto/tunnel/v1` 之间的双向编解码。隧道两端都要做这次转换，放在一个包里意味着「凭据不过隧道」「nil 与显式零值不等价」这两条不变量只有一处实现、一处测试。结果标签的六值约定（`ResultFor`）也在这里：两端必须对同一个错误做出相同分类，两份分类实现迟早会在「哪些失败算节点的错」上产生分歧。
+- `common/metrics` —— `runtime.Metrics` 的真实实现与 Prometheus 导出。三个服务共用一份，是因为「后端慢」「隧道慢」「前门慢」只有记进同一套仪器、同一套分桶，才是可以互相相减的数字。
+- `common/apikey` —— API Key 的格式、哈希算法与展示形式。控制面铸造它、Gateway 校验它，两边必须算出同一个哈希才查得到同一行，因此它是两者之间的契约而不是任一方的内部实现。
 
 模块路径使用短名 `module AIServeWeave`，包内互相引用一律以此为前缀，例如 `AIServeWeave/api/proto/tunnel/v1`。
 
@@ -677,7 +701,7 @@ ComfyUI 接入应同时验证一条异步生成链路：
 
 ## 当前状态
 
-节点与节点到 Gateway 的链路已经打通，MVP 优先验证链路（OpenAI 流式请求 → Gateway → Scheduler → Agent → Ollama → SSE 返回）已经用真实机器跑通一次；Registry 的 `NodeIdentity` 与 `GatewayDirectory` 也已落地，第一阶段的两个缺口都已补上。第二阶段已开始：调度器的健康过滤与熔断先落地了。已完成的部分：
+节点与节点到 Gateway 的链路已经打通，MVP 优先验证链路（OpenAI 流式请求 → Gateway → Scheduler → Agent → Ollama → SSE 返回）已经用真实机器跑通一次；Registry 的 `NodeIdentity` 与 `GatewayDirectory` 也已落地，第一阶段的两个缺口都已补上。第二阶段已开始：调度器的健康过滤与熔断、Agent 自动发现、Prometheus 指标导出，以及控制面的租户/用户/API Key/审计都已落地。已完成的部分：
 
 1. Registry、Gateway 与 Agent 之间的 protobuf 协议（`api/proto/tunnel/v1`，三边共用）。
 2. `common/runtime`：推理后端抽象——实例管理、健康状态机、能力发现与并发限流，以及 vLLM、SGLang、Ollama、ComfyUI 四个适配器。
@@ -686,19 +710,26 @@ ComfyUI 接入应同时验证一条异步生成链路：
 5. Gateway 的隧道服务端：节点表、槽池、九个 Operation 的分发，以及把隧道对面呈现为一个 `runtime.InferenceRuntime` 的 `NodeRuntime`。
 6. 三副本端到端联调：真实 TCP、真实 mTLS，每个副本独立完成推理，请求路径上无副本间转发。
 7. Gateway 的调度器（`service/aiServeWeaveGateway/scheduler`）：按模型与能力选节点，处理背压与重试语义——流式请求只在返回第一个 token 之前重试。
-8. Gateway 的 OpenAI 前门（`service/aiServeWeaveGateway/httpapi`）：`POST /v1/chat/completions`（含 SSE 流式）、`POST /v1/embeddings`、`GET /v1/models`，静态 API Key 鉴权。`POST /v1/responses` 未做——`common/runtime` 和隧道协议都没有对应的类型/Operation，需要先扩协议，留给后续。
+8. Gateway 的 OpenAI 前门（`service/aiServeWeaveGateway/httpapi`）：`POST /v1/chat/completions`（含 SSE 流式）、`POST /v1/embeddings`、`GET /v1/models`。鉴权当初是静态 API Key 列表，现已改为对着控制面校验（见第 15 项），静态列表退化为回退路径。`POST /v1/responses` 未做——`common/runtime` 和隧道协议都没有对应的类型/Operation，需要先扩协议，留给后续。
 9. 真实端到端：本机 Ollama + 真实 mTLS 隧道 + Gateway HTTP 前门，非流式与 SSE 流式 Chat 都跑通，流式 TTFT 实测在百毫秒量级，由 Ollama 推理时延主导，隧道与前门本身开销可忽略。
 10. Registry 的 `NodeIdentity` 服务（`service/aiServeWeaveRegistry`）：自建 CA、一次性 bootstrap token 的铸造与校验、节点证书签发与续期。用 Agent 现有的 `tunnel.IdentityManager` 当客户端直接对着真实 Registry 跑通了完整流程（不是自造假客户端）。
 11. Registry 的 `GatewayDirectory` 服务与 Gateway 侧的 `registryclient`：Gateway 副本向 Registry 报到、收到名册变化即转发给 `tunnelserver.Server.SetRoster`，断线按全抖动退避重连，优雅关闭前先广播 `DRAINING`。此前 `SetRoster` 一直是等着调用方的手工注入点，现在有了真正的调用方。
 12. Gateway 调度器的健康检查、熔断与恢复（第二阶段第一项）：`candidates()` 现在会排除 Agent 上报为 `unhealthy`/`closed` 的 runtime 实例，并按 `(node_id, runtime_id)` 维护一个熔断器——`connection_failed`/`timeout`/`upstream_error` 连续失败达到阈值后该候选被临时排除，冷却后自动探测恢复；`backpressure`/`rate_limited` 明确不计入，这两个是"忙"不是"坏"。阈值是未经真实流量验证的初始默认值，详见 [service/aiServeWeaveGateway/README.md「健康过滤与熔断」](service/aiServeWeaveGateway/README.md#健康过滤与熔断)。
 13. Agent 自动发现本机 Ollama/vLLM（第二阶段第二项，`service/aiServeWeaveAgent/localdiscovery`）：启动即探测 `127.0.0.1` 上 Ollama（11434）与 vLLM（8000）的默认端口，答上的直接注册进 `runtime.Manager`，之后每 30 秒（`-auto-discover-interval` 可调）重新扫一遍还没发现的候选，好让"先起 Agent 再起 Ollama"这种顺序也能用。刻意只探测本机回环地址，不做局域网扫描或 mDNS；已经手动用 `-ollama-url` 配置过的地址会被天然跳过（按地址去重，不是按 ID）；发现后的健康跟踪完全交给 `runtime.Manager` 已有的探测循环，发现器自己不留状态、不做摘除。`-auto-discover=false` 可以整体关掉。
 
+14. 指标落地（第二阶段的「Token、延迟和吞吐统计」与「Prometheus 和 OpenTelemetry」的 Prometheus 那一半）：`common/metrics` 是 `runtime.Metrics` 的真实实现与 Prometheus 文本导出（零第三方依赖）；Gateway 侧新增了与 Agent 侧对称的一份隧道指标（`tunnel_server_*`，视角相反因此刻意不同名）、调度器指标（含此前只能从选择结果间接推断的熔断状态）与前门指标（请求量、并发、TTFT、总时长、输入输出 token、每秒输出 token）；Agent 侧此前记了指标却没有后端可取，现在 `nopMetrics` 已被真实注册表取代。两个服务各自在只绑回环的 `-metrics-addr` 上提供 `GET /metrics`。模型名与请求路径不进任何标签，每个记录指标的包都有可执行的标签基数测试。详见「可观测性」一节。
+
+15. 控制面的 Admin API（第二阶段的「Web 管理控制台」的后端那一半，以及「用户、租户、API Key」）：`service/aiServeWeaveControlPlane` 是仓库第一个基于 go-zero 的服务，用 gorm（PostgreSQL / MySQL 双支持）与 Redis。已落地租户创建、用户登录与管理、API Key 的签发与吊销、管理操作审计。**Gateway 的鉴权已改成对着它校验**：`-control-plane-addr` 指向控制面后，`-api-keys` 明文列表退化为无控制面时的回退路径，README 安全设计那条「用户 API Key 只保存不可逆哈希」第一次真正成立。Gateway 发出的是它自己算的 SHA-256 而不是用户的 key，因此凭据从不进入控制面。为什么这个服务用 go-zero 而数据面不用、三种凭据为何三种存法、吊销的生效路径与那个 30 秒缓存窗口，都在 [service/aiServeWeaveControlPlane/README.md](service/aiServeWeaveControlPlane/README.md)。
+
     隧道两侧的进度与设计见 [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md)（阶段 7 有详细实测数据）；Registry 的存储布局、`-mint-token` 用法与已知限制见 [service/aiServeWeaveRegistry/README.md](service/aiServeWeaveRegistry/README.md)。
 
 下一步建议先实现：
 
-1. Gateway 侧的隧道指标：Agent 侧的 13 个隧道指标已有实现可参照，服务端侧还没有对应的一份。
-2. `node_id` 冲突检测与运维口径：Registry 目前对非空 `node_id` 直接采信，不检测跨节点冲突，上线前需要定下这个口径（隧道 README「待决问题 3」）。
-3. 故障注入剩余场景与滚动升级演练已在单机完成（拔网线、kill 全部副本、证书过期、后端假死、逐副本滚动升级，见 `service/aiServeWeaveAgent/tunnel/README.md` 阶段 7）；24h 长稳测试工具已落地并在本机运行中，完成后补数据。
-4. 实现 Job 状态持久化、取消任务和生成图片下载。
-5. 熔断阈值（`FailureThreshold`/`BaseCooldown`/`MaxCooldown`）需要真实流量数据校准；熔断状态目前也没有指标暴露出来，等 Gateway 侧隧道指标落地时应该一并加上。
+1. `node_id` 冲突检测与运维口径：Registry 目前对非空 `node_id` 直接采信，不检测跨节点冲突，上线前需要定下这个口径（隧道 README「待决问题 3」）。
+2. 故障注入剩余场景与滚动升级演练已在单机完成（拔网线、kill 全部副本、证书过期、后端假死、逐副本滚动升级，见 `service/aiServeWeaveAgent/tunnel/README.md` 阶段 7）；24h 长稳测试工具已落地并在本机运行中，完成后补数据。现在 `/metrics` 上有 `go_goroutines` 与 `go_memstats_heap_alloc_bytes`，长稳测试的"无泄漏"判据不必再靠进程外观察。
+3. 实现 Job 状态持久化、取消任务和生成图片下载。
+4. 熔断阈值（`FailureThreshold`/`BaseCooldown`/`MaxCooldown`）需要真实流量数据校准。熔断状态现在有指标了（`gateway_scheduler_breaker_open` / `_trips_total`），校准所需的观测手段已经就位，缺的是真实流量。
+5. Registry 的指标端点：`common/metrics` 已经就位，缺的是 Registry 自己的目录与记录点。
+6. 配额、并发与速率限制（第二阶段清单第 3 项）：控制面已经把 `Identity`（租户 + key）放到 Gateway 的请求 context 上了，那就是接入点。
+7. Console 前端：`aiServeWeaveConsole` 仍是空目录。Admin API 已经可用，缺的是页面。
+8. OpenTelemetry：第二阶段清单的另一半。`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器，但真正缺的是 trace——`request_id` 已经贯穿全链路日志，把它接成 span 是独立的一步。

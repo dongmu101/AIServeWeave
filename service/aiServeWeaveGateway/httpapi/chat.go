@@ -283,6 +283,13 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, req cha
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
 	h.logTTFT(r, req.Model, candidate.NodeID, start, false)
+	// A non-streamed response's first byte is its last: TTFT and total
+	// response time are the same number, and only the latter is recorded, so
+	// the TTFT distribution stays a statement about streaming.
+	//
+	// 非流式响应的首字节就是它的末字节：TTFT 与总响应时间是同一个数字，因此只记录
+	// 后者，好让 TTFT 分布始终是关于流式的陈述。
+	h.metrics.Usage(resp.Usage, time.Since(start))
 }
 
 func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCompletionRequest, start time.Time) {
@@ -319,11 +326,19 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 	}()
 
 	loggedTTFT := false
+	// The last usage the backend reported wins: OpenAI's streaming protocol
+	// puts usage on a trailing chunk, and a backend that sends it more than
+	// once is restating a running total rather than adding to it.
+	//
+	// 以后端最后一次上报的用量为准：OpenAI 的流式协议把用量放在末尾的 chunk 上，而
+	// 多次发送用量的后端是在重述一个累计值，不是在做累加。
+	var usage runtime.Usage
 	for {
 		ev, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			flusher.Flush()
+			h.metrics.Usage(usage, time.Since(start))
 			return
 		}
 		if err != nil {
@@ -355,6 +370,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 			}},
 		}
 		if ev.Usage != nil {
+			usage = *ev.Usage
 			chunk.Usage = &usageJSON{
 				PromptTokens:     ev.Usage.PromptTokens,
 				CompletionTokens: ev.Usage.CompletionTokens,
@@ -368,6 +384,13 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 		if !loggedTTFT {
 			loggedTTFT = true
 			h.logTTFT(r, req.Model, candidate.NodeID, start, true)
+			// Measured after Flush, not before: a chunk still sitting in a
+			// buffer has not reached anyone, and the whole point of this
+			// figure is what the client actually experienced.
+			//
+			// 在 Flush 之后而不是之前计量：还留在缓冲里的 chunk 并没有到达任何人，
+			// 而这个数字的全部意义就在于客户端实际体验到了什么。
+			h.metrics.TTFT(EndpointChatCompletions, time.Since(start))
 		}
 	}
 }

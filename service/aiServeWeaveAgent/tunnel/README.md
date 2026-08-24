@@ -630,6 +630,12 @@ tunnel_cancel_total{node_id,replica_id,reason}
 - `tunnel_stream_first_event_seconds` 与 Gateway 侧端到端 TTFT 的差值，是判断"慢在隧道还是慢在模型"的核心手段。它只统计**渐进式响应**（事件流与产物体）的首帧；一问一答的操作首帧就是全部答案，混在一起两个分布都失去意义。
 - `tunnel_slot_acquire_failures_total` 非零说明副本接受了 Control 却拒绝 Serve（进程半死、流配额、代理故障）。Agent 在一次失败后暂停开槽 `slotOpenBackoff`，因此该计数器的斜率是有界的——它突然变陡意味着副本反复短暂恢复，而不是 Agent 在自旋。
 
+**导出方式。** 这些指标由 `common/metrics` 的注册表接住，Agent 在 `-metrics-addr`（默认 `127.0.0.1:9091`，留空则关闭）上以 Prometheus 文本格式提供 `GET /metrics`。`Descriptions()` 是本包的目录——help 文本与直方图分桶跟指标常量写在同一个文件里，`main.go` 只负责把它交给 `metrics.New`。Agent 从不监听公网端口这条约束同样适用于这个端点，因此它默认只绑回环。
+
+同一个注册表也交给了 `runtime.Dependencies.Metrics`：节点只有一个指标后端，「后端慢」与「隧道慢」才是可以互相相减的数字。
+
+Gateway 侧有一份对称的服务端指标，前缀 `tunnel_server_`，刻意不与这里同名——两端从相反方向测量同一条链路，其分歧本身就有意义（这边数的是 Agent 执行了多少，那边数的是副本递交了多少，两者之差正是请求丢在哪里的答案）。清单见 [Gateway README「指标」](../../aiServeWeaveGateway/README.md#指标)。
+
 ## 首字延迟预算
 
 面向互联网用户的目标是端到端 TTFT 不劣于直连太多。按单跳跨城 30ms RTT 估算：

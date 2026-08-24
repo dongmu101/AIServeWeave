@@ -66,7 +66,14 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	// stream it was announced on, and that stream is gone.
 	n.draining = false
 	n.lastHeartbeat = s.clock.Now()
+	streams := len(n.controls)
 	n.mu.Unlock()
+
+	if streams == 1 {
+		s.controlsChanged(1)
+	}
+	n.metrics.ControlStreams(streams)
+	n.metrics.NodeState(nodeConnected)
 
 	s.logger.Info("node connected",
 		slog.String("node_id", n.id),
@@ -76,7 +83,22 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	defer func() {
 		n.mu.Lock()
 		delete(n.controls, session)
+		remaining := len(n.controls)
 		n.mu.Unlock()
+
+		if remaining == 0 {
+			s.controlsChanged(-1)
+			// The node keeps no state a later stream would inherit, so its
+			// state gauge reads gone rather than being left at its last value:
+			// a stale 1 on a departed node is exactly the reading that makes
+			// an operator look for capacity that is not there.
+			//
+			// 该节点没有留给后来的流继承的状态，因此它的状态量表读作 gone，而不是
+			// 停在最后一个值上：一个已离开节点上残留的 1，正是会让运维去找一份并
+			// 不存在的容量的读数。
+			n.metrics.NodeState(nodeGone)
+		}
+		n.metrics.ControlStreams(remaining)
 		s.forget(n)
 		s.logger.Info("node disconnected", slog.String("node_id", n.id))
 	}()
@@ -137,10 +159,20 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 		case *tunnelv1.AgentControl_Heartbeat:
 			now := s.clock.Now()
 			n.mu.Lock()
+			previous := n.lastHeartbeat
 			n.lastHeartbeat = now
 			n.inflight = int(body.Heartbeat.GetInflightRequests())
 			n.reportedIdle = int(body.Heartbeat.GetIdleSlots())
 			n.mu.Unlock()
+
+			// The interval is measured against the previous heartbeat rather
+			// than against the Agent's own sent_unix_ms: the two clocks are
+			// not synchronized, and a gap this replica actually waited is the
+			// figure that matters for deciding a node is late.
+			//
+			// 间隔以上一次心跳为基准计算，而不是用 Agent 自己的 sent_unix_ms：两边
+			// 时钟并不同步，而判断一个节点是否迟到，要看的是本副本实际等了多久。
+			n.metrics.Heartbeat(now.Sub(previous))
 			if err := session.send(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_HbAck{HbAck: &tunnelv1.HeartbeatAck{
 				SentUnixMs:   body.Heartbeat.GetSentUnixMs(),
 				ServerUnixMs: now.UnixMilli(),
@@ -161,6 +193,7 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 			idle := n.idle
 			n.idle = make(map[tunnelv1.SlotClass][]*slot)
 			n.mu.Unlock()
+			n.metrics.NodeState(nodeDraining)
 			for _, stack := range idle {
 				for _, sl := range stack {
 					sl.close(errors.New("node is draining"))

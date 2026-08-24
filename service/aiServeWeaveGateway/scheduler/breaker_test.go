@@ -45,7 +45,7 @@ func TestBreakerFailureQualifiesTheThreeNodeLevelCodes(t *testing.T) {
 }
 
 func TestBreakerTripsOpenAfterConsecutiveQualifyingFailures(t *testing.T) {
-	r := newBreakerRegistry(3, time.Second, time.Minute)
+	r := newBreakerRegistry(3, time.Second, time.Minute, newRecorder(nil))
 	c := Candidate{NodeID: "node-a", RuntimeID: "rt-1"}
 	now := time.Unix(0, 0)
 
@@ -62,7 +62,7 @@ func TestBreakerTripsOpenAfterConsecutiveQualifyingFailures(t *testing.T) {
 }
 
 func TestBreakerBecomesEligibleAgainAfterCooldown(t *testing.T) {
-	r := newBreakerRegistry(1, time.Second, time.Minute)
+	r := newBreakerRegistry(1, time.Second, time.Minute, newRecorder(nil))
 	c := Candidate{NodeID: "node-a", RuntimeID: "rt-1"}
 	now := time.Unix(0, 0)
 
@@ -76,7 +76,7 @@ func TestBreakerBecomesEligibleAgainAfterCooldown(t *testing.T) {
 }
 
 func TestBreakerSuccessResetsTheStreak(t *testing.T) {
-	r := newBreakerRegistry(3, time.Second, time.Minute)
+	r := newBreakerRegistry(3, time.Second, time.Minute, newRecorder(nil))
 	c := Candidate{NodeID: "node-a", RuntimeID: "rt-1"}
 	now := time.Unix(0, 0)
 
@@ -91,7 +91,7 @@ func TestBreakerSuccessResetsTheStreak(t *testing.T) {
 }
 
 func TestBreakerNonQualifyingFailuresDoNotTrip(t *testing.T) {
-	r := newBreakerRegistry(3, time.Second, time.Minute)
+	r := newBreakerRegistry(3, time.Second, time.Minute, newRecorder(nil))
 	c := Candidate{NodeID: "node-a", RuntimeID: "rt-1"}
 	now := time.Unix(0, 0)
 
@@ -105,7 +105,7 @@ func TestBreakerNonQualifyingFailuresDoNotTrip(t *testing.T) {
 }
 
 func TestBreakerFailedProbeExtendsTheCooldownAndEscalates(t *testing.T) {
-	r := newBreakerRegistry(1, time.Second, time.Minute)
+	r := newBreakerRegistry(1, time.Second, time.Minute, newRecorder(nil))
 	c := Candidate{NodeID: "node-a", RuntimeID: "rt-1"}
 	now := time.Unix(0, 0)
 
@@ -127,7 +127,7 @@ func TestBreakerFailedProbeExtendsTheCooldownAndEscalates(t *testing.T) {
 }
 
 func TestBreakerCooldownIsCappedAtMaxCooldown(t *testing.T) {
-	r := newBreakerRegistry(1, time.Second, 5*time.Second)
+	r := newBreakerRegistry(1, time.Second, 5*time.Second, newRecorder(nil))
 	if got := r.cooldown(0); got != time.Second {
 		t.Errorf("cooldown(0) = %v, want the base cooldown 1s", got)
 	}
@@ -140,7 +140,7 @@ func TestBreakerCooldownIsCappedAtMaxCooldown(t *testing.T) {
 }
 
 func TestBreakerSuccessfulProbeFullyResets(t *testing.T) {
-	r := newBreakerRegistry(1, time.Second, time.Minute)
+	r := newBreakerRegistry(1, time.Second, time.Minute, newRecorder(nil))
 	c := Candidate{NodeID: "node-a", RuntimeID: "rt-1"}
 	now := time.Unix(0, 0)
 
@@ -157,7 +157,7 @@ func TestBreakerSuccessfulProbeFullyResets(t *testing.T) {
 }
 
 func TestNewBreakerRegistryAppliesDefaults(t *testing.T) {
-	r := newBreakerRegistry(0, 0, 0)
+	r := newBreakerRegistry(0, 0, 0, newRecorder(nil))
 	if r.failureThreshold != defaultFailureThreshold {
 		t.Errorf("failureThreshold = %d, want default %d", r.failureThreshold, defaultFailureThreshold)
 	}

@@ -29,6 +29,8 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/metrics"
+	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
@@ -52,7 +54,13 @@ func run() error {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	addr := flag.String("addr", ":8080", "address the HTTP API listener binds")
 	apiKeys := flag.String("api-keys", "",
-		"comma-separated API keys the HTTP API accepts as a Bearer token; empty disables authentication (local use only)")
+		"comma-separated API keys the HTTP API accepts as a Bearer token, used only when -control-plane-addr is empty; empty disables authentication (local use only)")
+	controlPlaneAddr := flag.String("control-plane-addr", "",
+		"control plane base URL for API key verification, e.g. http://127.0.0.1:8090; empty falls back to -api-keys")
+	controlPlaneToken := flag.String("control-plane-token", "",
+		"token presented to the control plane's internal endpoint; must match its InternalToken. Prefer AISW_CONTROL_PLANE_TOKEN over this flag, which is visible in a process listing")
+	keyCacheTTL := flag.Duration("key-cache-ttl", controlplaneclient.DefaultCacheTTL,
+		"how long a verified API key is trusted in process; this is the window a revoked key keeps working")
 	tunnelAddr := flag.String("tunnel-addr", "", "address the tunnel listener binds, e.g. :8443; empty disables the tunnel")
 	certFile := flag.String("tls-cert", "", "PEM certificate this replica presents to Agents")
 	keyFile := flag.String("tls-key", "", "PEM private key for -tls-cert")
@@ -61,6 +69,8 @@ func run() error {
 	registryAddr := flag.String("registry-addr", "", "Registry GatewayDirectory endpoint, host:port; empty leaves the roster to be set manually via SetRoster")
 	registryCA := flag.String("registry-ca", "", "PEM CA bundle verifying the Registry's server certificate")
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
+	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
+		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	flag.Parse()
 
 	var lvl slog.Level
@@ -81,9 +91,23 @@ func run() error {
 		id = host
 	}
 
+	// One registry for the whole process: the tunnel server, the scheduler
+	// and the front door measure three points on the same request path, and
+	// splitting them across registries would mean three endpoints whose
+	// numbers cannot be subtracted from one another.
+	//
+	// 整个进程共用一个注册表：隧道服务端、调度器与前门测的是同一条请求路径上的三个
+	// 点，把它们拆到不同注册表里，就意味着三个彼此的数字无法相减的端点。
+	registry := metrics.New(
+		tunnelserver.Descriptions(),
+		scheduler.Descriptions(),
+		httpapi.Descriptions(),
+	)
+
 	server, err := tunnelserver.New(tunnelserver.Config{
 		ReplicaID: id,
 		Logger:    logger,
+		Metrics:   registry,
 		SlotHint: &tunnelv1.SlotHint{
 			MinSlots:  2,
 			MaxSlots:  8,
@@ -94,14 +118,43 @@ func run() error {
 		return err
 	}
 
-	sched := scheduler.New(server, scheduler.Config{})
+	verifier, err := keyVerifier(*controlPlaneAddr, *controlPlaneToken, *keyCacheTTL, logger)
+	if err != nil {
+		return err
+	}
+
+	sched := scheduler.New(server, scheduler.Config{Metrics: registry})
 	httpServer := &http.Server{
-		Addr:    *addr,
-		Handler: httpapi.New(sched, httpapi.Config{APIKeys: splitCommaList(*apiKeys), Logger: logger}),
+		Addr: *addr,
+		Handler: httpapi.New(sched, httpapi.Config{
+			Verifier: verifier,
+			APIKeys:  splitCommaList(*apiKeys),
+			Logger:   logger,
+			Metrics:  registry,
+		}),
 	}
 	httpServeErr := make(chan error, 1)
 	go func() { httpServeErr <- httpServer.ListenAndServe() }()
 	logger.Info("gateway started", slog.String("addr", *addr), slog.String("replica_id", id))
+
+	// The metrics listener's failure is logged rather than returned: losing
+	// observability is bad, and taking a serving Gateway down over it would
+	// be worse.
+	//
+	// 指标监听器的失败只记录、不返回：失去可观测性很糟，但为此让一个正在服务的
+	// Gateway 停机更糟。
+	var metricsServer *http.Server
+	if *metricsAddr == "" {
+		logger.Warn("no -metrics-addr; this replica exports no metrics")
+	} else {
+		metricsServer = registry.Server(*metricsAddr)
+		go func() {
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("metrics listening", slog.String("metrics_addr", *metricsAddr))
+	}
 
 	var (
 		grpcServer *grpc.Server
@@ -206,8 +259,54 @@ func run() error {
 		}
 	}
 
+	// The metrics endpoint is closed last, so a scrape landing during the
+	// drain still sees the node count going to zero rather than a refused
+	// connection.
+	//
+	// 指标端点最后关闭，这样落在排空期间的一次抓取仍能看到节点数归零，而不是一个被
+	// 拒绝的连接。
+	if metricsServer != nil {
+		_ = metricsServer.Close()
+	}
+
 	logger.Info("gateway stopped")
 	return nil
+}
+
+// controlPlaneTokenEnv is where the control plane token is read from when the
+// flag is empty. An environment variable is not secret either, but it does not
+// appear in `ps` output the way a flag does, which is the difference between a
+// secret readable by the operator and one readable by every user on the host.
+//
+// controlPlaneTokenEnv 是 flag 为空时读取控制面 token 的来源。环境变量同样算不上
+// 保密，但它不像 flag 那样出现在 `ps` 输出里——这正是「运维可读的秘密」与「主机上
+// 每个用户都可读的秘密」之间的区别。
+const controlPlaneTokenEnv = "AISW_CONTROL_PLANE_TOKEN"
+
+// keyVerifier builds the control plane verifier, or returns nil when no
+// control plane is configured, in which case the static -api-keys list is used.
+//
+// keyVerifier 构建控制面校验器；未配置控制面时返回 nil，此时使用静态的 -api-keys
+// 列表。
+func keyVerifier(addr, token string, cacheTTL time.Duration, logger *slog.Logger) (httpapi.KeyVerifier, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	verifier, err := controlplaneclient.New(controlplaneclient.Config{
+		Endpoint: addr,
+		Token:    token,
+		CacheTTL: cacheTTL,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("verifying API keys against the control plane",
+		slog.String("control_plane_addr", addr),
+		slog.Duration("key_cache_ttl", cacheTTL))
+	return verifier, nil
 }
 
 // splitCommaList parses a comma-separated flag value, trimming whitespace

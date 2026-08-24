@@ -63,6 +63,24 @@ const (
 	backoffMax     = 30 * time.Second
 )
 
+// drainNoticeGrace is how long a shutting-down replica waits for the Registry
+// to acknowledge its DRAINING notice, by ending the stream, before tearing
+// the connection down anyway.
+//
+// It exists because Send only hands a frame to the transport: cancelling the
+// stream immediately afterwards resets it, and a reset can outrun the frame
+// on the wire. The symptom is a rolling upgrade in which the Registry never
+// learns the replica is leaving and keeps handing its address to Agents until
+// the heartbeat timeout catches up.
+//
+// drainNoticeGrace 是一个正在关闭的副本，等待 Registry 通过结束流来确认它的 DRAINING
+// 通告的时长，超时后无论如何都拆掉连接。
+//
+// 它之所以存在，是因为 Send 只是把帧交给传输层：紧接着取消流会发出 reset，而 reset
+// 可能跑在那一帧前面。表现出来的症状是：滚动升级时 Registry 始终不知道该副本要离开，
+// 于是继续把它的地址派给 Agent，直到心跳超时才追上。
+const drainNoticeGrace = 2 * time.Second
+
 // Run dials the Registry's GatewayDirectory, joins as cfg.ReplicaID, and
 // feeds every roster it receives to server.SetRoster. It reconnects with
 // full-jitter backoff on any failure and blocks until ctx is canceled, at
@@ -95,7 +113,7 @@ func Run(ctx context.Context, cfg Config, server RosterSetter) error {
 		if ctx.Err() != nil {
 			return nil
 		}
-		err := joinOnce(ctx, client, cfg, server, logger)
+		err := joinOnce(ctx, client, cfg, server, logger, clock)
 		if ctx.Err() != nil {
 			return nil
 		}
@@ -113,7 +131,7 @@ func Run(ctx context.Context, cfg Config, server RosterSetter) error {
 // joinOnce runs one Join call to completion: it registers, relays roster
 // updates until the stream fails or ctx is canceled, and on cancellation
 // sends a best-effort DRAINING notice before returning.
-func joinOnce(ctx context.Context, client tunnelv1.GatewayDirectoryClient, cfg Config, server RosterSetter, logger *slog.Logger) error {
+func joinOnce(ctx context.Context, client tunnelv1.GatewayDirectoryClient, cfg Config, server RosterSetter, logger *slog.Logger, clock runtime.Clock) error {
 	// The stream is opened on its own cancelable context, detached from ctx:
 	// canceling ctx directly would abort the stream before the DRAINING
 	// notice below has a chance to reach the wire. streamCancel is what
@@ -150,6 +168,22 @@ func joinOnce(ctx context.Context, client tunnelv1.GatewayDirectoryClient, cfg C
 	case <-ctx.Done():
 		_ = stream.Send(&tunnelv1.JoinRequest{State: tunnelv1.ReplicaState_REPLICA_STATE_DRAINING})
 		_ = stream.CloseSend()
+		// Wait for the Registry to end the stream — its acknowledgement that
+		// the half-close, and therefore the notice ahead of it, arrived —
+		// before cancelling. The grace period bounds a Registry that does not
+		// answer: a replica must still be able to exit.
+		//
+		// 等 Registry 结束这条流——那是它对半关闭、以及排在半关闭之前那条通告已经
+		// 到达的确认——之后再取消。宽限期用于约束不作答的 Registry：副本无论如何
+		// 都必须能退出。
+		timer, stopTimer := clock.NewTimer(drainNoticeGrace)
+		select {
+		case <-recvErr:
+		case <-timer:
+			logger.Warn("registry did not acknowledge the DRAINING notice within the grace period",
+				slog.String("registry_addr", cfg.Addr))
+		}
+		stopTimer()
 		streamCancel()
 		return nil
 	case err := <-recvErr:

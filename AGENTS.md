@@ -8,6 +8,7 @@
 
 - [README.md](README.md) —— 架构、协议兼容、数据模型、路线图。
 - [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md) —— 隧道协议定义、连接状态机、槽池、实施阶段。改隧道相关代码前必读。
+- [service/aiServeWeaveControlPlane/README.md](service/aiServeWeaveControlPlane/README.md) —— 控制面为什么用 go-zero 而数据面不用、三种凭据的三种存法、吊销的生效路径。改控制面或 Gateway 鉴权前必读。
 
 **README 与代码不一致视为缺陷。** 改公共 API 时同步更新对应文档，不要留到"以后补"。
 
@@ -19,11 +20,14 @@
 | --- | --- |
 | `api/proto/` | 三边共享的 gRPC 契约，已生成 |
 | `common/runtime/` | 推理后端抽象：能力探测、配额、流式转换。Agent 与 Gateway 共用 |
-| `common/tunnelwire/` | `common/runtime` 类型与隧道 proto 之间的双向编解码，隧道两端共用 |
+| `common/tunnelwire/` | `common/runtime` 类型与隧道 proto 之间的双向编解码，隧道两端共用；结果标签的六值约定也在这里 |
+| `common/metrics/` | `runtime.Metrics` 的实现与 Prometheus 文本导出，三个服务共用一个注册表；`metricstest/` 是各服务测试用的内存收集器 |
+| `common/apikey/` | API Key 的格式、哈希与展示形式。控制面铸造、Gateway 校验，两边必须算出同一个哈希，因此它是契约而非任一方的内部实现 |
 | `service/aiServeWeaveAgent/` | 主要实现所在：`tunnel/`（隧道）、`workflow/`（ComfyUI 工作流） |
 | `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门）均已落地；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）与 `GatewayDirectory`（副本名册）已落地，详见其 README |
-| `service/aiServeWeaveConsole/`<br>`service/aiServeWeaveControlPlane/` | 尚无 Go 代码 |
+| `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户、用户、API Key、审计已落地；配额未做。详见其 README |
+| `service/aiServeWeaveConsole/` | 尚无代码（前端） |
 
 动手前先确认目标服务是否已有实现，不要在骨架服务里凭空假设已有的包。
 
@@ -51,12 +55,27 @@ go test -race ./service/...
 ## 编码约定
 
 - 所有导出标识符有完整 doc comment，以标识符本身开头。
+- 注释一律中英双语，英文在前、中文紧随其后成对出现 —— doc comment 首行必须以标识符本身开头，godoc 才认，所以英文只能在前。中文是等价表述而非逐词直译，英文改了中文同步改，两边不一致按缺陷处理。行尾短注释同理，用 `//` 一行写完两种语言：
+
+  ```go
+  // Consume validates token and marks it used, so a second call with the same
+  // value fails. It returns ErrInvalidToken for a token that is unknown,
+  // already used, or expired.
+  //
+  // Consume 校验 token 并将其标记为已使用，同一个值第二次调用必定失败。
+  // token 未知、已用过或已过期，都返回 ErrInvalidToken。
+  func (s *Store) Consume(token string) error {
+
+      now := s.clock.Now() // single timestamp for the whole check / 整次校验共用一个时间戳
+  ```
+
+  生成代码（`*.pb.go`）与 `.proto` 里的注释不受此约束。此约定只对新写和改动的代码生效：仓库里既有的纯英文注释保持原样，**不要**为了统一风格发起全量回溯改写，只在动到某个函数时顺手把那一处补成双语。
 - 表驱动测试，每个用例有可读 `name`，失败信息同时包含期望值与实际值。
 - 测试不用真实 `time.Sleep` 推进时间，一律通过注入的 `runtime.Clock` 控制。
 - 协程泄漏在各包 `main_test.go` 的 `TestMain` 里统一断言，**不要**在单个测试里手写检查。
 - 默认测试不依赖真实 Gateway、GPU 或外部网络；需要真实后端的测试单独隔离（参考 `runtime/ollama/live_test.go`）。
 - 包内测试辅助放 `internal/`（如 `runtime/internal/runtimetest/`），不外泄给使用方。
-- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。
+- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。**数据面（Agent、Gateway、Registry）的直接依赖只有 gRPC、protobuf 与 `coder/websocket`，这条线要守住。** go-zero、gorm、go-redis、golang-jwt、x/crypto 是控制面引入的，理由见控制面 README 的「为什么这个服务用 go-zero，而数据面不用」；Gateway 侧唯一因此新增的代码是 `controlplaneclient`，它只用标准库 `net/http`。
 
 ## 安全红线
 

@@ -140,7 +140,7 @@ type Manager struct {
 	// metrics carries the two node-scoped gauges. The sink comes from the
 	// Client template, so a node has one metrics backend rather than one per
 	// configuration site.
-	metrics *metrics
+	metrics *recorder
 
 	// wake carries "the roster or a tunnel changed, reconsider the table" to
 	// the run loop. It holds one token; a second change before the loop wakes
@@ -208,7 +208,7 @@ func NewManager(cfg ManagerConfig) (*Manager, error) {
 		clock:   cfg.Clock,
 		logger:  logger,
 		roster:  NewRoster(cfg.MaxGateways, logger),
-		metrics: newMetrics(cfg.Client.Metrics, cfg.Client.NodeID, ""),
+		metrics: newRecorder(cfg.Client.Metrics, cfg.Client.NodeID, ""),
 		wake:    make(chan struct{}, 1),
 		tunnels: map[string]*tunnelEntry{},
 		stopped: map[string]stoppedRecord{},

@@ -46,6 +46,7 @@ type Scheduler struct {
 	server   *tunnelserver.Server
 	clock    runtime.Clock
 	breakers *breakerRegistry
+	metrics  *recorder
 }
 
 // Config configures New. Every field is optional.
@@ -63,6 +64,12 @@ type Config struct {
 	// defaultBaseCooldown / defaultMaxCooldown.
 	BaseCooldown time.Duration
 	MaxCooldown  time.Duration
+
+	// Metrics receives the scheduler's instruments, described by
+	// Descriptions. Nil discards them.
+	//
+	// Metrics 接收调度器的仪器，其描述见 Descriptions。为 nil 时全部丢弃。
+	Metrics runtime.Metrics
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
@@ -71,10 +78,12 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
+	rec := newRecorder(cfg.Metrics)
 	return &Scheduler{
 		server:   server,
 		clock:    clock,
-		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown),
+		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
+		metrics:  rec,
 	}
 }
 
@@ -82,6 +91,7 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 // candidate while the failure is Retryable.
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
 	candidates := s.candidates(req.Model, runtime.CapabilityChat)
+	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.ChatResponse{}, Candidate{}, ErrNoCapableNode
 	}
@@ -89,6 +99,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	for _, c := range candidates {
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Chat(ctx, req)
 		s.breakers.record(c, err, s.clock.Now())
+		s.metrics.Dispatch(c, err)
 		if err == nil {
 			return resp, c, nil
 		}
@@ -96,6 +107,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 		if !retryable(err) {
 			return runtime.ChatResponse{}, c, err
 		}
+		s.metrics.Retry(runtime.CapabilityChat)
 	}
 	return runtime.ChatResponse{}, Candidate{}, lastErr
 }
@@ -103,6 +115,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 // Embed dispatches req the same way Chat does.
 func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, Candidate, error) {
 	candidates := s.candidates(req.Model, runtime.CapabilityEmbeddings)
+	s.metrics.Selection(runtime.CapabilityEmbeddings, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.EmbeddingResponse{}, Candidate{}, ErrNoCapableNode
 	}
@@ -110,6 +123,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	for _, c := range candidates {
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Embed(ctx, req)
 		s.breakers.record(c, err, s.clock.Now())
+		s.metrics.Dispatch(c, err)
 		if err == nil {
 			return resp, c, nil
 		}
@@ -117,6 +131,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 		if !retryable(err) {
 			return runtime.EmbeddingResponse{}, c, err
 		}
+		s.metrics.Retry(runtime.CapabilityEmbeddings)
 	}
 	return runtime.EmbeddingResponse{}, Candidate{}, lastErr
 }
@@ -130,6 +145,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 // node switch.
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
 	candidates := s.candidates(req.Model, runtime.CapabilityChatStream)
+	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, ErrNoCapableNode
 	}
@@ -138,8 +154,10 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		stream, err := s.server.Runtime(c.NodeID, c.RuntimeID).ChatStream(ctx, req)
 		if err != nil {
 			s.breakers.record(c, err, s.clock.Now())
+			s.metrics.Dispatch(c, err)
 			lastErr = err
 			if retryable(err) {
+				s.metrics.Retry(runtime.CapabilityChatStream)
 				continue
 			}
 			return nil, c, err
@@ -148,6 +166,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		first, err := stream.Recv()
 		if err == nil {
 			s.breakers.record(c, nil, s.clock.Now())
+			s.metrics.Dispatch(c, nil)
 			return &prefetchStream{first: first, hasFirst: true, underlying: stream}, c, nil
 		}
 		stream.Close()
@@ -155,15 +174,18 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			// A valid, empty response: nothing was produced, but nothing
 			// failed either. Do not retry a successful call.
 			s.breakers.record(c, nil, s.clock.Now())
+			s.metrics.Dispatch(c, nil)
 			return &prefetchStream{eof: true}, c, nil
 		}
 		s.breakers.record(c, err, s.clock.Now())
+		s.metrics.Dispatch(c, err)
 		lastErr = err
 		// Committed() is defined to flip only once an event has been
 		// delivered, so it is necessarily still false here; the check
 		// documents that this is the property being relied on, not an
 		// accident of call order.
 		if !stream.Committed() && retryable(err) {
+			s.metrics.Retry(runtime.CapabilityChatStream)
 			continue
 		}
 		return nil, c, err

@@ -279,7 +279,7 @@ type Client struct {
 	state State
 	// metrics is rebound to the replica named by HelloAck, so every sample
 	// after the handshake carries the link it describes.
-	metrics        *metrics
+	metrics        *recorder
 	replicaID      string
 	rtt            time.Duration
 	pool           *Pool
@@ -309,7 +309,7 @@ func NewClient(cfg ClientConfig, transport Transport) (*Client, error) {
 			slog.String("node_id", cfg.NodeID),
 			slog.String("endpoint", cfg.Endpoint)),
 		backoff:        NewBackoff(cfg.BackoffInitial, cfg.BackoffMax, cfg.Jitter),
-		metrics:        newMetrics(cfg.Metrics, cfg.NodeID, ""),
+		metrics:        newRecorder(cfg.Metrics, cfg.NodeID, ""),
 		state:          StateDisconnected,
 		activeReplicas: 1,
 	}, nil
@@ -634,7 +634,7 @@ func (c *Client) setState(s State) {
 
 // recorder returns the metrics recorder bound to whatever replica this
 // tunnel currently knows it reached.
-func (c *Client) recorder() *metrics {
+func (c *Client) recorder() *recorder {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.metrics

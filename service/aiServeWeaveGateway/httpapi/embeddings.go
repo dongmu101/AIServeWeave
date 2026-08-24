@@ -3,6 +3,7 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"time"
 
 	"AIServeWeave/common/runtime"
 )
@@ -41,6 +42,7 @@ type embeddingJSON struct {
 
 // embeddings implements POST /v1/embeddings.
 func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
+	start := time.Now()
 	var req embeddingsRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
@@ -73,4 +75,12 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 			TotalTokens:  resp.Usage.TotalTokens,
 		},
 	})
+	// An embedding request has prompt tokens and no completion tokens, so
+	// this contributes to the prompt total and leaves the output-rate
+	// distribution alone — which is what it should be: there is no output
+	// stream here to have a rate.
+	//
+	// 嵌入请求只有输入 token、没有输出 token，因此这里只贡献输入合计，不碰输出速率
+	// 分布——本该如此：这里没有输出流，也就没有速率可言。
+	h.metrics.Usage(resp.Usage, time.Since(start))
 }

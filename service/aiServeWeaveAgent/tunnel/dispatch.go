@@ -83,7 +83,7 @@ type Dispatcher struct {
 	cfg     DispatchConfig
 	clock   runtime.Clock
 	logger  *slog.Logger
-	metrics *metrics
+	metrics *recorder
 
 	// mu guards limiters, the per-instance concurrency gates.
 	mu       sync.Mutex
@@ -124,7 +124,7 @@ func NewDispatcher(cfg DispatchConfig) (*Dispatcher, error) {
 		cfg:      cfg,
 		clock:    cfg.Clock,
 		logger:   cfg.Logger,
-		metrics:  newMetrics(cfg.Metrics, cfg.NodeID, ""),
+		metrics:  newRecorder(cfg.Metrics, cfg.NodeID, ""),
 		limiters: map[string]*limiterEntry{},
 	}, nil
 }

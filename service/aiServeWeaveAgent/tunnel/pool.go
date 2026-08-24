@@ -176,7 +176,7 @@ type Pool struct {
 	clock     runtime.Clock
 	logger    *slog.Logger
 	handler   Handler
-	metrics   *metrics
+	metrics   *recorder
 
 	// wake carries a "something changed, reconsider the watermarks" signal to
 	// the maintenance loop. It holds one token: a second change arriving
@@ -234,7 +234,7 @@ func NewPool(cfg PoolConfig, transport Transport) (*Pool, error) {
 			slog.String("node_id", cfg.NodeID),
 			slog.String("replica_id", cfg.ReplicaID)),
 		handler:        cfg.Handler,
-		metrics:        newMetrics(cfg.Metrics, cfg.NodeID, cfg.ReplicaID),
+		metrics:        newRecorder(cfg.Metrics, cfg.NodeID, cfg.ReplicaID),
 		wake:           make(chan struct{}, 1),
 		slots:          map[string]*slot{},
 		activeReplicas: cfg.ActiveReplicas,

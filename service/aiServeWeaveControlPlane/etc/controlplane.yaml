@@ -1,0 +1,70 @@
+# aiserveweave-controlplane configuration.
+#
+# 本文件的每个密钥都是占位符，绝不能原样用于任何面向真实用户的部署。
+# 用 `openssl rand -base64 32` 生成各自独立的值，并通过部署系统的密钥管理
+# 注入，不要提交进仓库。
+#
+# Every secret in this file is a placeholder and must never be used as-is in a
+# deployment serving real users. Generate independent values with
+# `openssl rand -base64 32` and inject them through the deployment's secret
+# management rather than committing them.
+
+Name: aiserveweave-controlplane
+Host: 127.0.0.1
+Port: 8090
+
+# go-zero 的访问日志。控制面处理凭据，因此不记录请求体。
+# go-zero's access log. The control plane handles credentials, so bodies are
+# not logged.
+Log:
+  ServiceName: aiserveweave-controlplane
+  Mode: console
+  Level: info
+
+Database:
+  # postgres 或 mysql。PostgreSQL 是首要目标（后续 JSON 列会用到 JSONB），
+  # MySQL 同样受支持——当前这四张表只用标量列，两种引擎表达一致。
+  # postgres or mysql. PostgreSQL is the primary target (JSONB matters for the
+  # JSON columns still to come); MySQL is supported too — today's four tables
+  # use only scalar columns, which both engines express identically.
+  Driver: postgres
+  DSN: "postgres://aisw:aisw@127.0.0.1:5432/aiserveweave?sslmode=disable"
+  # MySQL 写法（注意 parseTime=True，否则每个时间列都会扫描失败）：
+  # The MySQL form (parseTime=True is required, or every time column fails to
+  # scan):
+  # Driver: mysql
+  # DSN: "aisw:aisw@tcp(127.0.0.1:3306)/aiserveweave?charset=utf8mb4&parseTime=True&loc=Local"
+  MaxOpenConns: 20
+  MaxIdleConns: 5
+  ConnMaxLifetime: 30m
+  # 本地起步时打开；生产部署应关闭，改用带版本的迁移。
+  # On for a local start; a production deployment turns this off and uses
+  # versioned migrations instead.
+  AutoMigrate: true
+
+# 可选。留空则每次 API Key 校验都落到数据库。
+# Optional. Leave empty and every API key verification goes to the database.
+Redis:
+  Addr: "127.0.0.1:6379"
+  Password: ""
+  DB: 0
+  # 一个已被吊销的 key 仍可能被放行的最大窗口——吊销本身会主动清除缓存，
+  # 这个 TTL 只是兜底。
+  # The widest window a revoked key can still be served in — revocation drops
+  # the entry itself, and this TTL is only the backstop.
+  TTL: 30s
+
+Auth:
+  # 占位符，务必替换。
+  # Placeholder. Replace it.
+  AccessSecret: "REPLACE-ME-with-openssl-rand-base64-32-value"
+  AccessExpire: 12h
+
+# Gateway 用它调用 /internal/v1/apikeys/verify。
+# The Gateway presents this to /internal/v1/apikeys/verify.
+InternalToken: "REPLACE-ME-with-a-separate-openssl-rand-base64-32-value"
+
+# 授权创建租户。它是 Console 将来注册流程的临时替身。
+# Authorizes tenant creation. It stands in for the Console's eventual sign-up
+# flow.
+BootstrapToken: "REPLACE-ME-with-a-third-openssl-rand-base64-32-value"

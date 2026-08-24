@@ -20,8 +20,9 @@ import (
 // gRPC streams with no ordering between them. It is dropped only once the last
 // of those streams is gone.
 type node struct {
-	id  string
-	srv *Server
+	id      string
+	srv     *Server
+	metrics *recorder
 
 	mu sync.Mutex
 
@@ -57,15 +58,24 @@ type node struct {
 	// live counts every open slot stream, parked or busy, so the node entry
 	// is not dropped while a request is still running on it.
 	live int
+	// liveByClass is the same count split per class, which is what the slot
+	// occupancy gauge needs: busy is what is open minus what is parked, and
+	// that subtraction is only meaningful within one class.
+	//
+	// liveByClass 是同一个计数按 class 拆开的结果，这正是槽位占用量表所需要的：
+	// busy 等于已打开减去已停放，而这个减法只在同一个 class 内才有意义。
+	liveByClass map[tunnelv1.SlotClass]int
 }
 
 func newNode(id string, srv *Server) *node {
 	return &node{
-		id:        id,
-		srv:       srv,
-		controls:  make(map[*controlSession]struct{}),
-		snapshots: make(map[string]runtime.Snapshot),
-		idle:      make(map[tunnelv1.SlotClass][]*slot),
+		id:          id,
+		srv:         srv,
+		metrics:     srv.metrics.forNode(id),
+		controls:    make(map[*controlSession]struct{}),
+		snapshots:   make(map[string]runtime.Snapshot),
+		idle:        make(map[tunnelv1.SlotClass][]*slot),
+		liveByClass: make(map[tunnelv1.SlotClass]int),
 	}
 }
 
@@ -210,11 +220,15 @@ func (n *node) applyStatus(status *tunnelv1.RuntimeStatus, snaps []runtime.Snaps
 // slot rather than offering work to something on its way out.
 func (n *node) park(s *slot) bool {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	if n.draining {
+		n.mu.Unlock()
 		return false
 	}
 	n.idle[s.class] = append(n.idle[s.class], s)
+	idle, busy := n.occupancyLocked(s.class)
+	n.mu.Unlock()
+
+	n.metrics.Slots(s.class, idle, busy)
 	return true
 }
 
@@ -223,36 +237,85 @@ func (n *node) park(s *slot) bool {
 // and the answer to backpressure is another node, not a wait.
 func (n *node) acquire(class tunnelv1.SlotClass) *slot {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	if n.draining {
+		n.mu.Unlock()
 		return nil
 	}
+	var taken *slot
 	stack := n.idle[class]
 	for len(stack) > 0 {
 		s := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 		if s.take() {
-			n.idle[class] = stack
-			return s
+			taken = s
+			break
 		}
 		// The slot died while parked; drop it and try the next one.
 	}
 	n.idle[class] = stack
-	return nil
+	idle, busy := n.occupancyLocked(class)
+	n.mu.Unlock()
+
+	n.metrics.Slots(class, idle, busy)
+	return taken
 }
 
 // unpark removes a slot from the idle set, used when its stream ends while it
 // was parked.
 func (n *node) unpark(s *slot) {
 	n.mu.Lock()
-	defer n.mu.Unlock()
 	stack := n.idle[s.class]
 	for i, cur := range stack {
 		if cur == s {
 			n.idle[s.class] = append(stack[:i], stack[i+1:]...)
-			return
+			break
 		}
 	}
+	idle, busy := n.occupancyLocked(s.class)
+	n.mu.Unlock()
+
+	n.metrics.Slots(s.class, idle, busy)
+}
+
+// addLive adjusts the open-slot counts by delta and republishes the class's
+// occupancy. It is how a slot stream's arrival and departure reach the gauge:
+// opening a stream changes what is open without changing what is parked, and
+// only reporting the park would leave busy overstated for the life of the
+// stream.
+//
+// addLive 按 delta 调整已打开槽的计数，并重新发布该 class 的占用情况。槽流的到来
+// 与离开正是这样传到量表上的：打开一条流会改变「已打开」而不改变「已停放」，若只
+// 上报停放动作，busy 在该流的整个生命周期里都会偏高。
+func (n *node) addLive(class tunnelv1.SlotClass, delta int) {
+	n.mu.Lock()
+	n.live += delta
+	n.liveByClass[class] += delta
+	if n.liveByClass[class] <= 0 {
+		delete(n.liveByClass, class)
+	}
+	idle, busy := n.occupancyLocked(class)
+	n.mu.Unlock()
+
+	n.metrics.Slots(class, idle, busy)
+}
+
+// occupancyLocked returns one class's parked and busy slot counts. Callers
+// must hold n.mu.
+//
+// occupancyLocked 返回某个 class 已停放与忙碌的槽数。调用方必须持有 n.mu。
+func (n *node) occupancyLocked(class tunnelv1.SlotClass) (idle, busy int) {
+	idle = len(n.idle[class])
+	busy = n.liveByClass[class] - idle
+	if busy < 0 {
+		// A slot removed from the idle set before its stream count caught up
+		// would otherwise report a negative gauge, which reads as a defect in
+		// whoever consumes it rather than in the moment it describes.
+		//
+		// 一个先于流计数更新就被移出空闲集合的槽，否则会让量表出现负值——那读起来
+		// 像是消费方的缺陷，而不是它所描述的那个瞬间。
+		busy = 0
+	}
+	return idle, busy
 }
 
 // durationProto converts a Go duration to its proto form, mapping a

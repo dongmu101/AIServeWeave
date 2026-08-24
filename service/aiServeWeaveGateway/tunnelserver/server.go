@@ -61,6 +61,14 @@ type Config struct {
 	// tuning knob: a frame over the limit ends the request as a protocol
 	// error rather than being buffered.
 	MaxFrameBytes int
+
+	// Metrics receives this replica's tunnel instruments, described by
+	// Descriptions. Nil discards them, which is what a Gateway with no
+	// metrics backend configured gets.
+	//
+	// Metrics 接收本副本的隧道仪器，其描述见 Descriptions。为 nil 时全部丢弃，
+	// 这也是未配置指标后端的 Gateway 所得到的行为。
+	Metrics runtime.Metrics
 }
 
 // Defaults for the optional Config fields.
@@ -92,9 +100,10 @@ type Server struct {
 	// answers a call this file implements.
 	tunnelv1.UnimplementedTunnelServer
 
-	cfg    Config
-	logger *slog.Logger
-	clock  runtime.Clock
+	cfg     Config
+	logger  *slog.Logger
+	clock   runtime.Clock
+	metrics *recorder
 
 	mu    sync.RWMutex
 	nodes map[string]*node
@@ -108,6 +117,16 @@ type Server struct {
 	// closed stops new streams from being accepted after Close, so a
 	// shutting-down replica does not take on work it is about to drop.
 	closed bool
+
+	// connected counts nodes holding at least one Control stream. It is not
+	// len(nodes): an entry survives briefly with only a slot on it, and
+	// counting that as a connected node would report capacity this replica
+	// cannot actually reach with a roster or a shutdown.
+	//
+	// connected 统计至少持有一条 Control 流的节点数。它不等于 len(nodes)：一个条目
+	// 可能短暂地只剩一个槽，把那种情况算作已连接节点，就是在上报一份本副本其实既
+	// 发不出名册也发不出 shutdown 的容量。
+	connected int
 }
 
 // New returns a Server ready to be registered with a gRPC server. It returns
@@ -131,10 +150,11 @@ func New(cfg Config) (*Server, error) {
 		clock = runtime.NewSystemClock()
 	}
 	return &Server{
-		cfg:    cfg,
-		logger: logger.With(slog.String("replica_id", cfg.ReplicaID)),
-		clock:  clock,
-		nodes:  make(map[string]*node),
+		cfg:     cfg,
+		logger:  logger.With(slog.String("replica_id", cfg.ReplicaID)),
+		clock:   clock,
+		metrics: newRecorder(cfg.Metrics, cfg.ReplicaID),
+		nodes:   make(map[string]*node),
 	}, nil
 }
 
@@ -154,6 +174,8 @@ func (s *Server) SetRoster(roster *tunnelv1.GatewayRoster) {
 		targets = append(targets, n)
 	}
 	s.mu.Unlock()
+
+	s.metrics.RosterVersion(roster.GetVersion())
 
 	frame := &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Roster{Roster: roster}}
 	for _, n := range targets {
@@ -221,6 +243,22 @@ func (s *Server) forget(n *node) {
 	if cur, ok := s.nodes[n.id]; ok && cur == n && n.isEmpty() {
 		delete(s.nodes, n.id)
 	}
+}
+
+// controlsChanged adjusts the connected-node count and republishes it. delta
+// is +1 when a node gained its first Control stream and -1 when it lost its
+// last, and zero for every change in between, which is why the caller passes a
+// delta rather than the stream count.
+//
+// controlsChanged 调整已连接节点计数并重新发布。节点获得第一条 Control 流时 delta
+// 为 +1，失去最后一条时为 -1，两者之间的每次变化都是 0——这正是调用方传增量而不是
+// 传流数量的原因。
+func (s *Server) controlsChanged(delta int) {
+	s.mu.Lock()
+	s.connected += delta
+	connected := s.connected
+	s.mu.Unlock()
+	s.metrics.ConnectedNodes(connected)
 }
 
 // currentRoster returns the roster to send a freshly connected Agent, or nil

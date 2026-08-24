@@ -274,7 +274,7 @@ func (s *slot) begin(ctx context.Context, handlers *sync.WaitGroup, id string, h
 func (s *slot) serve(req *slotRequest, headers *tunnelv1.RequestHeaders) {
 	err := s.invoke(req, headers)
 	duration := s.pool.clock.Now().Sub(req.started)
-	s.pool.metrics.Request(req.op, resultFor(err), duration)
+	s.pool.metrics.Request(req.op, tunnelwire.ResultFor(err), duration)
 
 	// Cancelling before anything else releases a receive loop that may be
 	// blocked handing the handler a body chunk it will never read.

@@ -56,6 +56,21 @@ type Response struct {
 
 	headers  *tunnelv1.ResponseHeaders
 	finished bool
+
+	// The recording state below is touched only from the caller's own
+	// goroutine — Recv and Close are already single-consumer by contract — so
+	// it needs no lock of its own.
+	//
+	// 以下记录状态只会被调用方自己的协程碰到——按契约 Recv 与 Close 本就是单消费者
+	// ——因此不需要为它单独加锁。
+	metrics     *recorder
+	clock       runtime.Clock
+	operation   tunnelv1.Operation
+	started     time.Time
+	progressive bool
+	sawFirst    bool
+	outcome     error
+	recordOnce  sync.Once
 }
 
 // call is the caller's half of a dispatched request, and the only thing the
@@ -117,12 +132,26 @@ func (c *call) release() {
 // the request elsewhere, instead of queueing behind capacity this replica
 // cannot see the end of.
 func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
+	started := s.clock.Now()
+	rec := s.metrics.forNode(req.NodeID)
+	// failed records a dispatch that never became a Response. Everything that
+	// returns before the Response is built goes through it, so the dispatch
+	// counter's total is every attempt rather than only the ones that got far
+	// enough to have a caller reading them.
+	//
+	// failed 记录一次从未变成 Response 的分发。所有在 Response 构造之前返回的路径都
+	// 走它，因此分发计数器的总数是全部尝试，而不只是那些走到有调用方在读的部分。
+	failed := func(err error) error {
+		rec.Dispatch(req.Operation, tunnelwire.ResultFor(err), s.clock.Now().Sub(started))
+		return err
+	}
+
 	if req.RuntimeID == "" {
-		return nil, dispatchError(runtime.ErrorInvalidConfig, req, "request carried no runtime_id", false, nil)
+		return nil, failed(dispatchError(runtime.ErrorInvalidConfig, req, "request carried no runtime_id", false, nil))
 	}
 	n, ok := s.lookup(req.NodeID)
 	if !ok {
-		return nil, dispatchError(runtime.ErrorConnection, req, "node is not connected to this replica", true, ErrNodeNotConnected)
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "node is not connected to this replica", true, ErrNodeNotConnected))
 	}
 
 	class := req.Class
@@ -131,7 +160,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 	}
 	sl := n.acquire(class)
 	if sl == nil {
-		return nil, dispatchError(runtime.ErrorBackpressure, req, "node has no idle slot", true, ErrNoIdleSlot)
+		return nil, failed(dispatchError(runtime.ErrorBackpressure, req, "node has no idle slot", true, ErrNoIdleSlot))
 	}
 
 	requestID := req.Trace["request_id"]
@@ -141,7 +170,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 	c := newCall(requestID)
 	if err := sl.begin(c); err != nil {
 		sl.close(err)
-		return nil, dispatchError(runtime.ErrorConnection, req, "slot closed before the request was written", true, err)
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "slot closed before the request was written", true, err))
 	}
 
 	deadline := req.Deadline
@@ -165,7 +194,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 	}
 	if err := sl.send(headers); err != nil {
 		sl.close(err)
-		return nil, dispatchError(runtime.ErrorConnection, req, "writing the request failed", true, err)
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "writing the request failed", true, err))
 	}
 
 	if req.Body != nil {
@@ -180,7 +209,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		}
 		if err := req.Body(send); err != nil {
 			sl.close(err)
-			return nil, dispatchError(runtime.ErrorConnection, req, "writing the request body failed", true, err)
+			return nil, failed(dispatchError(runtime.ErrorConnection, req, "writing the request body failed", true, err))
 		}
 	}
 
@@ -192,10 +221,45 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		Body:      &tunnelv1.GatewayFrame_End{End: &tunnelv1.RequestEnd{}},
 	}); err != nil {
 		sl.close(err)
-		return nil, dispatchError(runtime.ErrorConnection, req, "closing the request failed", true, err)
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "closing the request failed", true, err))
 	}
 
-	return &Response{ctx: ctx, call: c, slot: sl}, nil
+	return &Response{
+		ctx:       ctx,
+		call:      c,
+		slot:      sl,
+		metrics:   rec,
+		clock:     s.clock,
+		operation: req.Operation,
+		started:   started,
+		// Only a progressive response has a meaningful time-to-first-frame:
+		// for a request-response operation the first frame is the whole
+		// answer, and mixing the two would leave neither distribution
+		// readable. This is the same rule the Agent's own first-event metric
+		// follows, which is what makes the two comparable.
+		//
+		// 只有渐进式响应才有有意义的首帧时间：一问一答的操作首帧就是全部答案，把
+		// 两者混在一起会让两个分布都不可读。这与 Agent 自己的首帧指标遵循同一条
+		// 规则，两者也正因此可以对照。
+		progressive: progressiveResponse(req.Operation),
+	}, nil
+}
+
+// progressiveResponse reports whether an operation's response arrives as more
+// than one frame: a token stream, a workflow event stream or an artifact body.
+// An operation this build does not know is treated as not progressive, so an
+// unrecognized enum adds nothing to a latency distribution it may not belong
+// in.
+//
+// progressiveResponse 报告某个操作的响应是否分多帧到达：token 流、工作流事件流，
+// 或产物体。本次构建不认识的操作按非渐进式处理，这样一个无法识别的枚举就不会往一个
+// 它未必属于的延迟分布里添数。
+func progressiveResponse(op tunnelv1.Operation) bool {
+	spec, err := tunnelwire.SpecFor(op)
+	if err != nil {
+		return false
+	}
+	return spec.Shape == tunnelwire.ShapeStream || spec.Shape == tunnelwire.ShapeBody
 }
 
 // Recv returns the next response payload. It returns io.EOF when the request
@@ -220,18 +284,36 @@ func (r *Response) Recv() ([]byte, error) {
 			case frame.GetEnd() != nil:
 				r.finished = true
 				if pb := frame.GetEnd().GetError(); pb != nil {
-					return nil, tunnelwire.ErrorFromProto(pb)
+					err := tunnelwire.ErrorFromProto(pb)
+					r.outcome = err
+					return nil, err
 				}
 				return nil, io.EOF
 			default:
+				r.observeFirstEvent()
 				return frame.GetData().GetPayload(), nil
 			}
 		case <-r.call.aborted:
+			r.outcome = r.call.abortErr
 			return nil, r.call.abortErr
 		case <-r.ctx.Done():
+			r.outcome = r.ctx.Err()
 			return nil, r.ctx.Err()
 		}
 	}
+}
+
+// observeFirstEvent records the replica-side time to first response frame,
+// once per response and only for a progressive one.
+//
+// observeFirstEvent 记录副本侧到首个响应帧的时间，每个响应只记一次，且只对渐进式
+// 响应记录。
+func (r *Response) observeFirstEvent() {
+	if r.sawFirst || !r.progressive {
+		return
+	}
+	r.sawFirst = true
+	r.metrics.StreamFirstEvent(r.operation, r.clock.Now().Sub(r.started))
 }
 
 // Headers returns the ResponseHeaders of an artifact download. It is populated
@@ -248,7 +330,18 @@ func (r *Response) Close() error {
 			RequestId: r.call.id,
 			Body:      &tunnelv1.GatewayFrame_Cancel{Cancel: &tunnelv1.Cancel{Reason: "gateway_cancel"}},
 		})
+		r.metrics.Cancel()
 	}
+	// Close, not the last Recv, is where a dispatch is counted: a caller may
+	// stop reading at any point, and only Close is guaranteed to run for every
+	// response. Once ensures a caller that closes twice does not double-count.
+	//
+	// 分发是在 Close 而不是最后一次 Recv 处计数的：调用方可能在任何位置停止读取，
+	// 而只有 Close 才保证每个响应都会执行到。Once 保证重复调用 Close 的调用方不会
+	// 把同一次分发算两遍。
+	r.recordOnce.Do(func() {
+		r.metrics.Dispatch(r.operation, tunnelwire.ResultFor(r.outcome), r.clock.Now().Sub(r.started))
+	})
 	r.call.release()
 	return nil
 }

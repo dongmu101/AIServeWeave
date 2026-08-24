@@ -1,7 +1,45 @@
+# 控制面的数据库与缓存。
+#
+# 这里同时提供 PostgreSQL 与 MySQL：控制面两种驱动都支持，由
+# service/aiServeWeaveControlPlane/etc/controlplane.yaml 的 Database.Driver 选择。
+# PostgreSQL 是首要目标（后续那些 JSON 列会用到 JSONB），默认起的也是它；
+# 需要 MySQL 时用 `docker compose --profile mysql up` 把它一并拉起。
+#
+# The control plane's database and cache.
+#
+# Both PostgreSQL and MySQL are offered here: the control plane supports both
+# drivers, selected by Database.Driver in
+# service/aiServeWeaveControlPlane/etc/controlplane.yaml. PostgreSQL is the
+# primary target (JSONB matters for the JSON columns still to come) and is what
+# comes up by default; bring MySQL up alongside it with
+# `docker compose --profile mysql up` when you need it.
+
 services:
+  postgres:
+    image: postgres:18-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-aiserveweave}
+      POSTGRES_USER: ${POSTGRES_USER:-aiserveweave}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiserveweave}
+    ports:
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
   mysql:
     image: mysql:9.7
     restart: unless-stopped
+    # 默认不启动，避免同时占着两个数据库；需要时加 --profile mysql。
+    # Not started by default, so two databases are not held open at once; add
+    # --profile mysql when you need it.
+    profiles: ["mysql"]
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
@@ -35,5 +73,6 @@ services:
       retries: 5
 
 volumes:
+  postgres-data:
   mysql-data:
   redis-data:

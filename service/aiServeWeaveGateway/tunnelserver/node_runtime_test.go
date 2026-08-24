@@ -140,10 +140,26 @@ func runtimeAgent(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunne
 
 func TestNodeRuntimeSatisfiesTheRuntimeContractOverTheTunnel(t *testing.T) {
 	h, rt := newRuntimeHarness(t)
-	_ = h
 	ctx := context.Background()
 
+	// A slot re-parks asynchronously: the Agent sends Ready only after it has
+	// finished the previous request, and this replica takes it back into the
+	// idle set from the slot's own goroutine. These subtests run one after
+	// another on the same two slots, so each has to wait for that to land —
+	// otherwise it races the previous subtest's re-park and gets the
+	// backpressure a genuinely full node would return.
+	//
+	// 槽是异步重新停放的：Agent 要等上一个请求结束后才发 Ready，而本副本是在槽自己的
+	// 协程里把它收回空闲集合的。这些子测试前后相继地跑在同两个槽上，因此每个都必须等
+	// 这件事落地——否则它就是在和上一个子测试的重新停放赛跑，然后拿到一个真正满载的
+	// 节点才会返回的背压。
+	awaitSlots := func(t *testing.T) {
+		t.Helper()
+		waitFor(t, "both slots to be parked", func() bool { return idleCount(h, "mac-mini-01") == 2 })
+	}
+
 	t.Run("ListModels", func(t *testing.T) {
+		awaitSlots(t)
 		models, err := rt.ListModels(ctx)
 		if err != nil {
 			t.Fatalf("ListModels: %v", err)
@@ -154,6 +170,7 @@ func TestNodeRuntimeSatisfiesTheRuntimeContractOverTheTunnel(t *testing.T) {
 	})
 
 	t.Run("Chat", func(t *testing.T) {
+		awaitSlots(t)
 		resp, err := rt.Chat(ctx, runtime.ChatRequest{
 			Model:    "qwen3:8b",
 			Messages: []runtime.ChatMessage{{Role: "user", Content: "hello"}},
@@ -170,6 +187,7 @@ func TestNodeRuntimeSatisfiesTheRuntimeContractOverTheTunnel(t *testing.T) {
 	})
 
 	t.Run("Embed", func(t *testing.T) {
+		awaitSlots(t)
 		resp, err := rt.Embed(ctx, runtime.EmbeddingRequest{Model: "nomic-embed", Input: []string{"x"}})
 		if err != nil {
 			t.Fatalf("Embed: %v", err)
@@ -180,6 +198,7 @@ func TestNodeRuntimeSatisfiesTheRuntimeContractOverTheTunnel(t *testing.T) {
 	})
 
 	t.Run("Submit", func(t *testing.T) {
+		awaitSlots(t)
 		run, err := rt.Submit(ctx, runtime.WorkflowRequest{
 			Template: json.RawMessage(`{"3":{"class_type":"KSampler"}}`),
 			ClientID: "client-1",

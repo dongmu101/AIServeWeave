@@ -1,11 +1,11 @@
 package tunnel
 
 import (
-	"context"
 	"errors"
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 )
@@ -95,19 +95,26 @@ var NodeScopedMetrics = []string{
 	MetricLimiterRejectionsTotal,
 }
 
-// Result is the outcome label on MetricRequestsTotal. It takes the same six
-// values as the runtime package's result convention, so a request can be
-// followed across the two layers without translating.
-type Result string
+// Result is the outcome label on MetricRequestsTotal. It is an alias for
+// tunnelwire.Result, where the classification now lives so that both ends of
+// the tunnel label one request identically.
+//
+// Result 是 MetricRequestsTotal 的结果标签。它是 tunnelwire.Result 的别名——分类
+// 逻辑已移到那里，好让隧道两端对同一个请求打出相同的标签。
+type Result = tunnelwire.Result
 
-// The six result values. Raw status codes are deliberately not among them.
+// The six result values, re-exported so this package's callers and tests keep
+// naming them through the tunnel package they already import.
+//
+// 六个结果取值，在此转出，好让本包的调用方与测试继续通过它们本就导入的 tunnel 包
+// 来称呼它们。
 const (
-	ResultSuccess       Result = "success"
-	ResultClientError   Result = "client_error"
-	ResultUpstreamError Result = "upstream_error"
-	ResultTimeout       Result = "timeout"
-	ResultCancelled     Result = "cancelled"
-	ResultBackpressure  Result = "backpressure"
+	ResultSuccess       = tunnelwire.ResultSuccess
+	ResultClientError   = tunnelwire.ResultClientError
+	ResultUpstreamError = tunnelwire.ResultUpstreamError
+	ResultTimeout       = tunnelwire.ResultTimeout
+	ResultCancelled     = tunnelwire.ResultCancelled
+	ResultBackpressure  = tunnelwire.ResultBackpressure
 )
 
 // ReconnectReason is the reason label on MetricReconnectsTotal. It is a
@@ -193,45 +200,120 @@ func (s State) Metric() float64 {
 	}
 }
 
-// metrics is the tunnel's typed view of runtime.Metrics: every recording site
+// Descriptions is this package's metric catalogue, for a service to hand to
+// metrics.New. It carries the help text and bucket choices for the thirteen
+// instruments named above, so an Agent's /metrics endpoint documents them
+// without main.go restating anything this file already knows.
+//
+// Descriptions 是本包的指标目录，供服务交给 metrics.New。它带着上面十三个仪器的
+// help 文本与分桶选择，因此 Agent 的 /metrics 端点能为它们附上说明，而 main.go
+// 不必复述任何本文件已经知道的东西。
+func Descriptions() metrics.Descriptions {
+	return metrics.Descriptions{
+		MetricConnectionState: {
+			Kind: metrics.KindGauge,
+			Help: "Tunnel state: 0 disconnected, 1 connecting, 2 connected, 3 draining, 4 retired, 5 failed.",
+		},
+		MetricConnectedReplicas: {
+			Kind: metrics.KindGauge,
+			Help: "Replicas this node currently holds a usable tunnel to. Zero, and only zero, means offline.",
+		},
+		MetricRosterVersion: {
+			Kind: metrics.KindGauge,
+			Help: "Replica roster version this node has applied.",
+		},
+		MetricReconnectsTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Reconnect attempts, by the classified reason the previous connection ended.",
+		},
+		MetricHeartbeatRTTSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Round trip of acknowledged Control heartbeats.",
+			Buckets: metrics.SecondsBuckets(),
+		},
+		MetricSlotsTotal: {
+			Kind: metrics.KindGauge,
+			Help: "Slots this node holds, by class and state. Slots still opening count as neither.",
+		},
+		MetricSlotAcquireFailuresTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Slots that could not be brought into service: the stream would not open, or Ready would not send.",
+		},
+		MetricLimiterRejectionsTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Requests the per-instance hard quota refused after the slot soft quota had already admitted them.",
+		},
+		MetricRequestsTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Finished requests, by operation and result.",
+		},
+		MetricRequestDurationSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Whole-request latency, by operation.",
+			Buckets: metrics.SecondsBuckets(),
+		},
+		MetricStreamFirstEventSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Time from RequestHeaders arriving to the first response frame of a progressive operation.",
+			Buckets: metrics.SecondsBuckets(),
+		},
+		MetricFrameBytes: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Serialized data-plane frame size, by direction.",
+			Buckets: metrics.BytesBuckets(),
+		},
+		MetricCancelTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Cancelled requests, by reason.",
+		},
+	}
+}
+
+// recorder is the tunnel's typed view of runtime.Metrics: every recording site
 // in the package calls one of its methods, so the label vocabulary above is
 // enforced by the type system rather than by review.
 //
-// The zero value is not usable; newMetrics builds one, and a nil sink is
+// The zero value is not usable; newRecorder builds one, and a nil sink is
 // replaced by a discard so no caller needs a nil check.
-type metrics struct {
+//
+// recorder 是隧道对 runtime.Metrics 的类型化视图：包内每个记录点都调用它的某个方法，
+// 因此上面那套标签词汇由类型系统而非评审来保证。
+//
+// 零值不可用；newRecorder 负责构造，nil 的 sink 会被替换成丢弃实现，因此调用方无需
+// 做 nil 判断。
+type recorder struct {
 	sink      runtime.Metrics
 	nodeID    string
 	replicaID string
 }
 
-// newMetrics returns a recorder for one node, optionally already bound to a
+// newRecorder returns a recorder for one node, optionally already bound to a
 // replica. A nil sink discards everything, which is what an agent with no
 // metrics backend configured gets.
-func newMetrics(sink runtime.Metrics, nodeID, replicaID string) *metrics {
+func newRecorder(sink runtime.Metrics, nodeID, replicaID string) *recorder {
 	if sink == nil {
 		sink = discardMetrics{}
 	}
 	if replicaID == "" {
 		replicaID = unknownReplica
 	}
-	return &metrics{sink: sink, nodeID: nodeID, replicaID: replicaID}
+	return &recorder{sink: sink, nodeID: nodeID, replicaID: replicaID}
 }
 
 // forReplica returns a copy bound to replicaID, for use once HelloAck has
 // named the replica this tunnel reached.
-func (m *metrics) forReplica(replicaID string) *metrics {
-	return newMetrics(m.sink, m.nodeID, replicaID)
+func (m *recorder) forReplica(replicaID string) *recorder {
+	return newRecorder(m.sink, m.nodeID, replicaID)
 }
 
 // node returns the labels of a node-scoped metric.
-func (m *metrics) node() map[string]string {
+func (m *recorder) node() map[string]string {
 	return map[string]string{LabelNodeID: m.nodeID}
 }
 
 // link returns the labels of a per-tunnel metric, plus the extra pairs the
 // call site adds.
-func (m *metrics) link(extra ...string) map[string]string {
+func (m *recorder) link(extra ...string) map[string]string {
 	labels := map[string]string{LabelNodeID: m.nodeID, LabelReplicaID: m.replicaID}
 	for i := 0; i+1 < len(extra); i += 2 {
 		labels[extra[i]] = extra[i+1]
@@ -240,53 +322,53 @@ func (m *metrics) link(extra ...string) map[string]string {
 }
 
 // ConnectionState publishes this tunnel's state.
-func (m *metrics) ConnectionState(state State) {
+func (m *recorder) ConnectionState(state State) {
 	m.sink.Gauge(MetricConnectionState, m.link()).Set(state.Metric())
 }
 
 // ConnectedReplicas publishes how many tunnels can take a request.
-func (m *metrics) ConnectedReplicas(n int) {
+func (m *recorder) ConnectedReplicas(n int) {
 	m.sink.Gauge(MetricConnectedReplicas, m.node()).Set(float64(n))
 }
 
 // RosterVersion publishes the roster version this node has applied.
-func (m *metrics) RosterVersion(version int64) {
+func (m *recorder) RosterVersion(version int64) {
 	m.sink.Gauge(MetricRosterVersion, m.node()).Set(float64(version))
 }
 
 // Reconnect counts one reconnect attempt.
-func (m *metrics) Reconnect(reason ReconnectReason) {
+func (m *recorder) Reconnect(reason ReconnectReason) {
 	m.sink.Counter(MetricReconnectsTotal, m.link(LabelReason, string(reason))).Add(1)
 }
 
 // HeartbeatRTT observes one acknowledged heartbeat's round trip.
-func (m *metrics) HeartbeatRTT(d time.Duration) {
+func (m *recorder) HeartbeatRTT(d time.Duration) {
 	m.sink.Histogram(MetricHeartbeatRTTSeconds, m.link()).Observe(d.Seconds())
 }
 
 // Slots publishes one class's occupancy. Opening slots are counted as
 // neither: they cannot take a request yet, and reporting them as idle would
 // make the gauge disagree with what the pool will actually serve.
-func (m *metrics) Slots(class tunnelv1.SlotClass, idle, busy int) {
+func (m *recorder) Slots(class tunnelv1.SlotClass, idle, busy int) {
 	label := slotClassLabel(class)
 	m.sink.Gauge(MetricSlotsTotal, m.link(LabelClass, label, LabelState, SlotStateIdle)).Set(float64(idle))
 	m.sink.Gauge(MetricSlotsTotal, m.link(LabelClass, label, LabelState, SlotStateBusy)).Set(float64(busy))
 }
 
 // SlotAcquireFailure counts one slot that could not be brought into service.
-func (m *metrics) SlotAcquireFailure(class tunnelv1.SlotClass) {
+func (m *recorder) SlotAcquireFailure(class tunnelv1.SlotClass) {
 	m.sink.Counter(MetricSlotAcquireFailuresTotal, m.link(LabelClass, slotClassLabel(class))).Add(1)
 }
 
 // LimiterRejection counts one request the instance's hard quota refused.
-func (m *metrics) LimiterRejection(runtimeID string) {
+func (m *recorder) LimiterRejection(runtimeID string) {
 	labels := m.node()
 	labels[LabelRuntimeID] = runtimeID
 	m.sink.Counter(MetricLimiterRejectionsTotal, labels).Add(1)
 }
 
 // Request records one finished request: its outcome and its duration.
-func (m *metrics) Request(op tunnelv1.Operation, result Result, d time.Duration) {
+func (m *recorder) Request(op tunnelv1.Operation, result Result, d time.Duration) {
 	label := operationLabel(op)
 	m.sink.Counter(MetricRequestsTotal, m.link(LabelOperation, label, LabelResult, string(result))).Add(1)
 	m.sink.Histogram(MetricRequestDurationSeconds, m.link(LabelOperation, label)).Observe(d.Seconds())
@@ -294,17 +376,17 @@ func (m *metrics) Request(op tunnelv1.Operation, result Result, d time.Duration)
 
 // StreamFirstEvent observes the tunnel-side TTFT of one progressive
 // response.
-func (m *metrics) StreamFirstEvent(op tunnelv1.Operation, d time.Duration) {
+func (m *recorder) StreamFirstEvent(op tunnelv1.Operation, d time.Duration) {
 	m.sink.Histogram(MetricStreamFirstEventSeconds, m.link(LabelOperation, operationLabel(op))).Observe(d.Seconds())
 }
 
 // FrameBytes observes one data-plane frame's serialized size.
-func (m *metrics) FrameBytes(direction string, n int) {
+func (m *recorder) FrameBytes(direction string, n int) {
 	m.sink.Histogram(MetricFrameBytes, m.link(LabelDirection, direction)).Observe(float64(n))
 }
 
 // Cancel counts one cancelled request.
-func (m *metrics) Cancel(reason CancelReason) {
+func (m *recorder) Cancel(reason CancelReason) {
 	m.sink.Counter(MetricCancelTotal, m.link(LabelReason, string(reason))).Add(1)
 }
 
@@ -317,46 +399,6 @@ func operationLabel(op tunnelv1.Operation) string {
 		return name
 	}
 	return "unknown"
-}
-
-// resultFor maps a request outcome onto the six-value result convention. It
-// reads the error's code, never its message.
-func resultFor(err error) Result {
-	if err == nil {
-		return ResultSuccess
-	}
-
-	var re *runtime.RuntimeError
-	code := runtime.ErrorUpstream
-	if errors.As(err, &re) {
-		code = re.Code
-	} else {
-		code, _ = tunnelwire.ClassifyBareError(err)
-		if errors.Is(err, context.Canceled) {
-			return ResultCancelled
-		}
-	}
-
-	switch code {
-	case runtime.ErrorRateLimited, runtime.ErrorBackpressure:
-		return ResultBackpressure
-	case runtime.ErrorTimeout:
-		return ResultTimeout
-	case runtime.ErrorInvalidConfig, runtime.ErrorUnauthorized, runtime.ErrorCapability,
-		runtime.ErrorProtocol, runtime.ErrorResponseTooLarge, runtime.ErrorCancelUnsupported,
-		runtime.ErrorProbeMismatch:
-		return ResultClientError
-	case runtime.ErrorConnection:
-		// A link teardown is how a cancelled request surfaces: the tunnel's
-		// error set has no cancellation code, so the cause is what separates
-		// "the user hung up" from "the connection broke".
-		if errors.Is(err, context.Canceled) {
-			return ResultCancelled
-		}
-		return ResultUpstreamError
-	default:
-		return ResultUpstreamError
-	}
 }
 
 // reconnectReasonFor classifies the error that ended a connection.
