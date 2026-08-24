@@ -22,7 +22,7 @@
 | `common/tunnelwire/` | `common/runtime` 类型与隧道 proto 之间的双向编解码，隧道两端共用 |
 | `service/aiServeWeaveAgent/` | 主要实现所在：`tunnel/`（隧道）、`workflow/`（ComfyUI 工作流） |
 | `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门）均已落地；`e2e/`（与 Agent 的联调测试） |
-| `service/aiServeWeaveRegistry/` | 仅有 `main.go` 骨架 |
+| `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）与 `GatewayDirectory`（副本名册）已落地，详见其 README |
 | `service/aiServeWeaveConsole/`<br>`service/aiServeWeaveControlPlane/` | 尚无 Go 代码 |
 
 动手前先确认目标服务是否已有实现，不要在骨架服务里凭空假设已有的包。

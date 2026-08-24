@@ -21,6 +21,7 @@ import (
 	"AIServeWeave/common/runtime/sglang"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
 
@@ -48,6 +49,10 @@ func main() {
 	ollamaURL := flag.String("ollama-url", "",
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
+	autoDiscover := flag.Bool("auto-discover", true,
+		"probe 127.0.0.1's well-known Ollama/vLLM ports and register whatever answers; never touches any other host")
+	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
+		"how often auto-discovery looks for a newly appeared local instance")
 	flag.Parse()
 
 	logger, err := newLogger(*logLevel)
@@ -57,7 +62,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, *ollamaURL, *ollamaID); err != nil {
+	if err := run(logger, opts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -133,7 +138,7 @@ func (o *tunnelOptions) runtimeIDs() []string {
 // config file described in tunnel/README.md: until that file lands, this is
 // the only way to give the agent a real backend to dispatch to. An empty
 // ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string) error {
+func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -154,13 +159,17 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string) e
 	}
 
 	// Runtime configuration is not loaded from disk yet, so beyond the
-	// Ollama instance above the manager starts with no instances. Declared
-	// runtimes will be added here once the agent config file lands.
+	// Ollama instance above the manager starts with no instances until
+	// auto-discovery (below) or the tunnel's config delivery adds one.
+	// Declared runtimes will be added here once the agent config file lands.
 	logger.Info("agent started",
 		slog.Any("supported_kinds", registry.Kinds()),
 		slog.Int("configured_runtimes", configuredRuntimes),
 		slog.Bool("tunnel_enabled", opts.enabled()),
+		slog.Bool("auto_discover", autoDiscover),
 	)
+
+	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
 
 	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts)
 	if err != nil {
@@ -185,6 +194,8 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string) e
 		}
 	}
 
+	<-discoveryDone // wait for the last scan's Manager.Add calls to finish before Close starts tearing instances down
+
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
 	if err := manager.Close(shutdownCtx); err != nil {
@@ -196,6 +207,40 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string) e
 
 	logger.Info("agent stopped")
 	return nil
+}
+
+// startLocalDiscovery starts localdiscovery.Scanner in the background and
+// returns a channel that is closed once its goroutine has exited — after ctx
+// is canceled, not before — so the caller can wait for any in-flight
+// Manager.Add call to finish before Close starts tearing instances down.
+// When autoDiscover is false the channel is returned already closed, so
+// waiting on it is always safe regardless of whether discovery is enabled.
+func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runtime.Manager, autoDiscover bool, interval time.Duration) <-chan struct{} {
+	done := make(chan struct{})
+	if !autoDiscover {
+		close(done)
+		return done
+	}
+	scanner, err := localdiscovery.New(localdiscovery.Config{
+		Manager:  manager,
+		Interval: interval,
+		Logger:   logger,
+	})
+	if err != nil {
+		// Config is entirely flag-derived and always valid, so this is not
+		// reachable in practice; closing done rather than panicking keeps a
+		// theoretical failure here from taking the rest of the agent down.
+		logger.Error("local discovery did not start", slog.Any("error", err))
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		if err := scanner.Run(ctx); err != nil {
+			logger.Error("local discovery stopped unexpectedly", slog.Any("error", err))
+		}
+	}()
+	return done
 }
 
 // startTunnel wires the connection table and runs it in the background,

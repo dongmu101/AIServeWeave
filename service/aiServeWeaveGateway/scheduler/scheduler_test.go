@@ -7,6 +7,7 @@ import (
 	"io"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -152,7 +153,7 @@ func TestChatPicksTheMoreIdleNode(t *testing.T) {
 	connectNode(t, h, "node-b", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"),
 		chatHandler("node-b", &moreIdleCount), chatHandler("node-b", &moreIdleCount))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{
 		Model:    "qwen3:8b",
 		Messages: []runtime.ChatMessage{{Role: "user", Content: "hi"}},
@@ -175,7 +176,7 @@ func TestChatReturnsErrNoCapableNodeForAnUnknownModel(t *testing.T) {
 	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	_, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "does-not-exist"})
 	if !errors.Is(err, scheduler.ErrNoCapableNode) {
 		t.Errorf("err = %v, want ErrNoCapableNode", err)
@@ -190,7 +191,7 @@ func TestChatRetriesOnARetryableFailure(t *testing.T) {
 		failingHandler(&failingCount), failingHandler(&failingCount))
 	connectNode(t, h, "node-b", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-b", &workingCount))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
 	if err != nil {
 		t.Fatalf("Chat: %v", err)
@@ -210,7 +211,7 @@ func TestChatDoesNotRetryANonRetryableFailure(t *testing.T) {
 		nonRetryableHandler(&failingCount), nonRetryableHandler(&failingCount))
 	connectNode(t, h, "node-b", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-b", &workingCount))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	_, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
 	if err == nil {
 		t.Fatal("Chat succeeded, want the non-retryable error")
@@ -230,7 +231,7 @@ func TestChatStreamRetriesBeforeTheFirstEventButNotAfter(t *testing.T) {
 		failingHandler(&failingCount), failingHandler(&failingCount))
 	connectNode(t, h, "node-b", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), streamThenFailHandler(&workingCount))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	stream, candidate, err := sched.ChatStream(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
@@ -269,7 +270,7 @@ func TestChatStreamEmptyResponseIsNotAnError(t *testing.T) {
 			return nil
 		})
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	stream, _, err := sched.ChatStream(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
 	if err != nil {
 		t.Fatalf("ChatStream: %v", err)
@@ -284,7 +285,7 @@ func TestEmbedDispatches(t *testing.T) {
 	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "nomic-embed"), chatHandler("node-a", nil))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	resp, candidate, err := sched.Embed(context.Background(), runtime.EmbeddingRequest{Model: "nomic-embed", Input: []string{"x"}})
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
@@ -304,12 +305,175 @@ func TestModelsAggregatesAcrossNodesAndDeduplicates(t *testing.T) {
 	// A second node also serving qwen3:8b must not produce a duplicate entry.
 	connectNode(t, h, "node-c", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-c", nil))
 
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	models := sched.Models(context.Background())
 	if len(models) != 2 {
 		t.Fatalf("Models = %v, want 2 distinct models", models)
 	}
 	if models[0].ID != "gemma3:27b" || models[1].ID != "qwen3:8b" {
 		t.Errorf("Models = %v, want [gemma3:27b qwen3:8b] sorted", models)
+	}
+}
+
+// flakyThenWorkingHandler answers the first failThreshold requests with a
+// retryable upstream error, then answers every request after that as a
+// normal chatHandler would — simulating a node that comes back after being
+// briefly broken.
+func flakyThenWorkingHandler(source string, failThreshold int32, count *atomic.Int32) gatewaytest.SlotHandler {
+	working := chatHandler(source, nil)
+	return func(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+		n := count.Add(1)
+		if n <= failThreshold {
+			return &gatewaytest.WireError{Code: "upstream_error", Message: "backend down", Retryable: true}
+		}
+		return working(req, body, reply)
+	}
+}
+
+// backpressureHandler always answers with a backpressure wire error, the
+// congestion signal that must never trip a breaker.
+func backpressureHandler(count *atomic.Int32) gatewaytest.SlotHandler {
+	return func(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+		if count != nil {
+			count.Add(1)
+		}
+		return &gatewaytest.WireError{Code: "backpressure", Message: "no idle slot", Retryable: true}
+	}
+}
+
+func TestChatSkipsANodeAfterItsBreakerTrips(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var failCount atomic.Int32
+	// A single node so the breaker's effect is unambiguous: once it trips,
+	// there is nothing else candidates() could have picked instead.
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), failingHandler(&failCount))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, FailureThreshold: 2})
+	for i := range 2 {
+		_, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
+		if err == nil {
+			t.Fatalf("call %d: Chat succeeded, want the scripted upstream_error", i+1)
+		}
+	}
+	if got := failCount.Load(); got != 2 {
+		t.Fatalf("node-a was contacted %d times before the trip, want exactly 2", got)
+	}
+
+	_, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
+	if !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Fatalf("Chat after the trip = %v, want ErrNoCapableNode (the only candidate should be excluded)", err)
+	}
+	if got := failCount.Load(); got != 2 {
+		t.Errorf("node-a was contacted again after tripping (count=%d), want it skipped entirely", got)
+	}
+}
+
+func TestChatRecoversAfterTheCooldownOnceAProbeSucceeds(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var count atomic.Int32
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"),
+		flakyThenWorkingHandler("node-a", 2, &count))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{
+		Clock: h.Clock, FailureThreshold: 2, BaseCooldown: 10 * time.Second, MaxCooldown: time.Minute,
+	})
+	// The node has one slot, which re-parks asynchronously after each reply;
+	// wait for it between sequential calls so a call never races ahead and
+	// sees a spurious "no idle slot" instead of what the breaker decided.
+	waitForSlot := func() {
+		t.Helper()
+		gatewaytest.WaitFor(t, "node-a's slot to re-park", func() bool { return gatewaytest.IdleCount(h, "node-a") == 1 })
+	}
+	waitForSlot()
+	for range 2 {
+		if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); err == nil {
+			t.Fatal("Chat succeeded before the handler was scripted to recover")
+		}
+		waitForSlot()
+	}
+
+	// Breaker is open now; too early to probe.
+	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Fatalf("Chat during the cooldown = %v, want ErrNoCapableNode", err)
+	}
+
+	h.Clock.Advance(10 * time.Second)
+	resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
+	if err != nil {
+		t.Fatalf("Chat after the cooldown elapsed: %v", err)
+	}
+	if candidate.NodeID != "node-a" || resp.Message.Content != "served by node-a" {
+		t.Errorf("recovered call did not reach node-a: candidate=%+v content=%q", candidate, resp.Message.Content)
+	}
+	waitForSlot()
+
+	// Fully recovered: further calls must not be excluded again.
+	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); err != nil {
+		t.Errorf("Chat after recovery: %v, want success", err)
+	}
+}
+
+func TestChatBackpressureNeverTripsTheBreaker(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var count atomic.Int32
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), backpressureHandler(&count))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, FailureThreshold: 2})
+	for i := range 10 {
+		_, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
+		var rtErr *runtime.RuntimeError
+		if !errors.As(err, &rtErr) || rtErr.Code != runtime.ErrorBackpressure {
+			t.Fatalf("call %d: err = %v, want a backpressure RuntimeError (breaker must never intercept it)", i+1, err)
+		}
+	}
+	if got := count.Load(); got != 10 {
+		t.Errorf("node-a was contacted %d times, want all 10 (backpressure must never exclude the node)", got)
+	}
+}
+
+func TestCandidatesExcludeAnUnhealthyRuntimeAndReadmitItOnRecovery(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var count atomic.Int32
+	unhealthy := chatCapableSnapshot("backend-1", "qwen3:8b")
+	unhealthy.State = runtime.StateUnhealthy
+
+	c := h.Connect("node-a", "backend-1")
+	c.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full:       true,
+		ReportedAt: timestamppb.New(h.Clock.Now()),
+		Snapshots:  tunnelwire.SnapshotsToProto([]runtime.Snapshot{unhealthy}),
+	}}})
+	h.OpenSlot("node-a", tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, "node-a-slot-0", chatHandler("node-a", &count))
+	gatewaytest.WaitFor(t, "slot to park on node-a", func() bool { return gatewaytest.IdleCount(h, "node-a") == 1 })
+	gatewaytest.WaitFor(t, "inventory to arrive on node-a", func() bool {
+		info, _ := h.Srv.Node("node-a")
+		return len(info.Runtimes) == 1
+	})
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Fatalf("Chat against an unhealthy runtime = %v, want ErrNoCapableNode", err)
+	}
+	if got := count.Load(); got != 0 {
+		t.Errorf("the unhealthy node was contacted %d times, want 0", got)
+	}
+
+	healthy := chatCapableSnapshot("backend-1", "qwen3:8b")
+	c.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full:       true,
+		ReportedAt: timestamppb.New(h.Clock.Now()),
+		Snapshots:  tunnelwire.SnapshotsToProto([]runtime.Snapshot{healthy}),
+	}}})
+	gatewaytest.WaitFor(t, "node-a to report healthy", func() bool {
+		info, _ := h.Srv.Node("node-a")
+		return len(info.Runtimes) == 1 && info.Runtimes[0].State == runtime.StateHealthy
+	})
+
+	resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
+	if err != nil {
+		t.Fatalf("Chat after recovery: %v", err)
+	}
+	if candidate.NodeID != "node-a" || resp.Message.Content != "served by node-a" {
+		t.Errorf("recovered call did not reach node-a: candidate=%+v content=%q", candidate, resp.Message.Content)
 	}
 }

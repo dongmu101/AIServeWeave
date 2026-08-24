@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"sort"
+	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/runtime"
@@ -35,16 +36,46 @@ type ModelInfo struct {
 // not yet produced any output, which is the point up to which a client can
 // safely see it retried without risking duplicate or discontinuous content.
 //
-// Scheduler holds no state of its own — every call reads a fresh view from
-// server — so one Scheduler can be shared freely across requests and
-// goroutines.
+// Beyond that, Scheduler now also owns a circuit breaker per candidate (see
+// breaker.go): every dispatch attempt's outcome is recorded, so a candidate
+// that keeps failing is excluded from future selections for a while. That
+// state must survive across requests, so — unlike before — a Scheduler is no
+// longer stateless and must be constructed once and shared for the life of
+// the process; main.go already does this.
 type Scheduler struct {
-	server *tunnelserver.Server
+	server   *tunnelserver.Server
+	clock    runtime.Clock
+	breakers *breakerRegistry
+}
+
+// Config configures New. Every field is optional.
+type Config struct {
+	// Clock supplies time for the circuit breaker's cooldown windows. Nil
+	// uses the system clock; tests inject a fake so cooldown expiry is
+	// exercised without sleeping.
+	Clock runtime.Clock
+	// FailureThreshold is how many consecutive breaker-qualifying failures
+	// (see breakerFailure) trip a candidate's breaker open. Zero uses
+	// defaultFailureThreshold.
+	FailureThreshold int
+	// BaseCooldown and MaxCooldown bound how long a tripped breaker stays
+	// open before its next probe, doubling per repeated trip. Zero uses
+	// defaultBaseCooldown / defaultMaxCooldown.
+	BaseCooldown time.Duration
+	MaxCooldown  time.Duration
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
-func New(server *tunnelserver.Server) *Scheduler {
-	return &Scheduler{server: server}
+func New(server *tunnelserver.Server, cfg Config) *Scheduler {
+	clock := cfg.Clock
+	if clock == nil {
+		clock = runtime.NewSystemClock()
+	}
+	return &Scheduler{
+		server:   server,
+		clock:    clock,
+		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown),
+	}
 }
 
 // Chat dispatches req to the best available node, retrying on the next
@@ -57,6 +88,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	var lastErr error
 	for _, c := range candidates {
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Chat(ctx, req)
+		s.breakers.record(c, err, s.clock.Now())
 		if err == nil {
 			return resp, c, nil
 		}
@@ -77,6 +109,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	var lastErr error
 	for _, c := range candidates {
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Embed(ctx, req)
+		s.breakers.record(c, err, s.clock.Now())
 		if err == nil {
 			return resp, c, nil
 		}
@@ -104,6 +137,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 	for _, c := range candidates {
 		stream, err := s.server.Runtime(c.NodeID, c.RuntimeID).ChatStream(ctx, req)
 		if err != nil {
+			s.breakers.record(c, err, s.clock.Now())
 			lastErr = err
 			if retryable(err) {
 				continue
@@ -113,14 +147,17 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 
 		first, err := stream.Recv()
 		if err == nil {
+			s.breakers.record(c, nil, s.clock.Now())
 			return &prefetchStream{first: first, hasFirst: true, underlying: stream}, c, nil
 		}
 		stream.Close()
 		if err == io.EOF {
 			// A valid, empty response: nothing was produced, but nothing
 			// failed either. Do not retry a successful call.
+			s.breakers.record(c, nil, s.clock.Now())
 			return &prefetchStream{eof: true}, c, nil
 		}
+		s.breakers.record(c, err, s.clock.Now())
 		lastErr = err
 		// Committed() is defined to flip only once an event has been
 		// delivered, so it is necessarily still false here; the check
@@ -145,6 +182,9 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 			continue
 		}
 		for _, snap := range node.Runtimes {
+			if !runtimeHealthy(snap.State) {
+				continue
+			}
 			for _, m := range snap.Discovery.Models {
 				if _, ok := seen[m.ID]; ok {
 					continue
@@ -176,6 +216,7 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 
 	nodes := s.server.Nodes()
 	rand.Shuffle(len(nodes), func(i, j int) { nodes[i], nodes[j] = nodes[j], nodes[i] })
+	now := s.clock.Now()
 
 	var found []scored
 	for _, node := range nodes {
@@ -184,6 +225,9 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 		}
 		idle := node.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_INFERENCE]
 		for _, snap := range node.Runtimes {
+			if !runtimeHealthy(snap.State) {
+				continue
+			}
 			for _, m := range snap.Discovery.Models {
 				if m.ID != model {
 					continue
@@ -192,8 +236,12 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 				if effective.Require(cap) != nil {
 					continue
 				}
+				candidate := Candidate{NodeID: node.NodeID, RuntimeID: snap.Descriptor.ID}
+				if !s.breakers.eligible(candidate, now) {
+					continue
+				}
 				found = append(found, scored{
-					Candidate: Candidate{NodeID: node.NodeID, RuntimeID: snap.Descriptor.ID},
+					Candidate: candidate,
 					idle:      idle,
 					inflight:  node.InflightRequests,
 				})
@@ -213,6 +261,17 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 		candidates[i] = f.Candidate
 	}
 	return candidates
+}
+
+// runtimeHealthy reports whether a runtime instance in state should still be
+// offered as a candidate. Manager's health probe (common/runtime) already
+// decided this — a Gateway inventing a second opinion from the same signal
+// would just be a slower, staler copy of it — so this is a straight read of
+// the state Agent reported, not a new judgment. registering and unknown stay
+// eligible: an instance that has not finished its first probe yet is not the
+// same thing as one a probe has already condemned.
+func runtimeHealthy(state runtime.State) bool {
+	return state != runtime.StateUnhealthy && state != runtime.StateClosed
 }
 
 // retryable reports whether err is a *runtime.RuntimeError marked

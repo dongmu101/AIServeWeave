@@ -59,6 +59,15 @@ service NodeIdentity {
   rpc RenewCertificate(RenewRequest) returns (RenewResponse);
 }
 
+// GatewayDirectory is implemented by the Registry alone. Every Gateway
+// replica joins it once at startup and keeps the stream open for as long as
+// it wants to remain in the roster; the Registry authors GatewayRoster from
+// every currently open Join stream and pushes the full roster to all of them
+// on any change.
+service GatewayDirectory {
+  rpc Join(stream JoinRequest) returns (stream GatewayRoster);
+}
+
 // -----------------------------------------------------------------------
 // Node identity
 // -----------------------------------------------------------------------
@@ -313,6 +322,17 @@ enum ReplicaState {
   REPLICA_STATE_ACTIVE = 1;             // dispatching normally, keep connected
   REPLICA_STATE_DRAINING = 2;           // no new requests: stop refilling slots, let in-flight finish
   REPLICA_STATE_REMOVED = 3;            // gone, close the tunnel
+}
+
+// JoinRequest reports one Gateway replica's own endpoint and state to the
+// Registry on a GatewayDirectory.Join stream. replica_id and endpoint are
+// read from the first message only; a later message on the same stream needs
+// only set state, e.g. DRAINING right before a graceful shutdown so Agents
+// that have not yet connected to this replica know not to bother.
+message JoinRequest {
+  string replica_id = 1;
+  string endpoint = 2;
+  ReplicaState state = 3;
 }
 
 // RuntimeStatus mirrors runtime.Manager.Snapshot(). It is reported on change

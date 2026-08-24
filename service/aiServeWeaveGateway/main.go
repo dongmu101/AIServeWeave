@@ -30,6 +30,7 @@ import (
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
 )
@@ -57,6 +58,9 @@ func run() error {
 	keyFile := flag.String("tls-key", "", "PEM private key for -tls-cert")
 	clientCAFile := flag.String("client-ca", "", "PEM CA bundle that node certificates must chain to")
 	replicaID := flag.String("replica-id", "", "identity announced to Agents; defaults to the hostname")
+	registryAddr := flag.String("registry-addr", "", "Registry GatewayDirectory endpoint, host:port; empty leaves the roster to be set manually via SetRoster")
+	registryCA := flag.String("registry-ca", "", "PEM CA bundle verifying the Registry's server certificate")
+	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
 	flag.Parse()
 
 	var lvl slog.Level
@@ -90,7 +94,7 @@ func run() error {
 		return err
 	}
 
-	sched := scheduler.New(server)
+	sched := scheduler.New(server, scheduler.Config{})
 	httpServer := &http.Server{
 		Addr:    *addr,
 		Handler: httpapi.New(sched, httpapi.Config{APIKeys: splitCommaList(*apiKeys), Logger: logger}),
@@ -136,6 +140,26 @@ func run() error {
 			slog.String("tunnel_addr", tunnelLis.Addr().String()))
 	}
 
+	registryErr := make(chan error, 1)
+	if *registryAddr != "" {
+		endpoint := *advertiseAddr
+		if endpoint == "" {
+			endpoint = *tunnelAddr
+		}
+		go func() {
+			registryErr <- registryclient.Run(ctx, registryclient.Config{
+				Addr:      *registryAddr,
+				CAFile:    *registryCA,
+				ReplicaID: id,
+				Endpoint:  endpoint,
+				Logger:    logger,
+			}, server)
+		}()
+		logger.Info("joining registry roster", slog.String("registry_addr", *registryAddr))
+	} else {
+		logger.Warn("no -registry-addr; the replica roster must be set manually via Server.SetRoster")
+	}
+
 	select {
 	case <-ctx.Done():
 		logger.Info("shutdown signal received, draining connected nodes")
@@ -144,6 +168,10 @@ func run() error {
 			return err
 		}
 	case err := <-tunnelErr:
+		if err != nil {
+			return err
+		}
+	case err := <-registryErr:
 		if err != nil {
 			return err
 		}

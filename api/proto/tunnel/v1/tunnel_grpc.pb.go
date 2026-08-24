@@ -346,3 +346,111 @@ var NodeIdentity_ServiceDesc = grpc.ServiceDesc{
 	Streams:  []grpc.StreamDesc{},
 	Metadata: "api/proto/tunnel/v1/tunnel.proto",
 }
+
+const (
+	GatewayDirectory_Join_FullMethodName = "/tunnel.v1.GatewayDirectory/Join"
+)
+
+// GatewayDirectoryClient is the client API for GatewayDirectory service.
+//
+// For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
+//
+// GatewayDirectory is implemented by the Registry alone. Every Gateway
+// replica joins it once at startup and keeps the stream open for as long as
+// it wants to remain in the roster; the Registry authors GatewayRoster from
+// every currently open Join stream and pushes the full roster to all of them
+// on any change.
+type GatewayDirectoryClient interface {
+	Join(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[JoinRequest, GatewayRoster], error)
+}
+
+type gatewayDirectoryClient struct {
+	cc grpc.ClientConnInterface
+}
+
+func NewGatewayDirectoryClient(cc grpc.ClientConnInterface) GatewayDirectoryClient {
+	return &gatewayDirectoryClient{cc}
+}
+
+func (c *gatewayDirectoryClient) Join(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[JoinRequest, GatewayRoster], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &GatewayDirectory_ServiceDesc.Streams[0], GatewayDirectory_Join_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[JoinRequest, GatewayRoster]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GatewayDirectory_JoinClient = grpc.BidiStreamingClient[JoinRequest, GatewayRoster]
+
+// GatewayDirectoryServer is the server API for GatewayDirectory service.
+// All implementations must embed UnimplementedGatewayDirectoryServer
+// for forward compatibility.
+//
+// GatewayDirectory is implemented by the Registry alone. Every Gateway
+// replica joins it once at startup and keeps the stream open for as long as
+// it wants to remain in the roster; the Registry authors GatewayRoster from
+// every currently open Join stream and pushes the full roster to all of them
+// on any change.
+type GatewayDirectoryServer interface {
+	Join(grpc.BidiStreamingServer[JoinRequest, GatewayRoster]) error
+	mustEmbedUnimplementedGatewayDirectoryServer()
+}
+
+// UnimplementedGatewayDirectoryServer must be embedded to have
+// forward compatible implementations.
+//
+// NOTE: this should be embedded by value instead of pointer to avoid a nil
+// pointer dereference when methods are called.
+type UnimplementedGatewayDirectoryServer struct{}
+
+func (UnimplementedGatewayDirectoryServer) Join(grpc.BidiStreamingServer[JoinRequest, GatewayRoster]) error {
+	return status.Error(codes.Unimplemented, "method Join not implemented")
+}
+func (UnimplementedGatewayDirectoryServer) mustEmbedUnimplementedGatewayDirectoryServer() {}
+func (UnimplementedGatewayDirectoryServer) testEmbeddedByValue()                          {}
+
+// UnsafeGatewayDirectoryServer may be embedded to opt out of forward compatibility for this service.
+// Use of this interface is not recommended, as added methods to GatewayDirectoryServer will
+// result in compilation errors.
+type UnsafeGatewayDirectoryServer interface {
+	mustEmbedUnimplementedGatewayDirectoryServer()
+}
+
+func RegisterGatewayDirectoryServer(s grpc.ServiceRegistrar, srv GatewayDirectoryServer) {
+	// If the following call panics, it indicates UnimplementedGatewayDirectoryServer was
+	// embedded by pointer and is nil.  This will cause panics if an
+	// unimplemented method is ever invoked, so we test this at initialization
+	// time to prevent it from happening at runtime later due to I/O.
+	if t, ok := srv.(interface{ testEmbeddedByValue() }); ok {
+		t.testEmbeddedByValue()
+	}
+	s.RegisterService(&GatewayDirectory_ServiceDesc, srv)
+}
+
+func _GatewayDirectory_Join_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(GatewayDirectoryServer).Join(&grpc.GenericServerStream[JoinRequest, GatewayRoster]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type GatewayDirectory_JoinServer = grpc.BidiStreamingServer[JoinRequest, GatewayRoster]
+
+// GatewayDirectory_ServiceDesc is the grpc.ServiceDesc for GatewayDirectory service.
+// It's only intended for direct use with grpc.RegisterService,
+// and not to be introspected or modified (even as a copy)
+var GatewayDirectory_ServiceDesc = grpc.ServiceDesc{
+	ServiceName: "tunnel.v1.GatewayDirectory",
+	HandlerType: (*GatewayDirectoryServer)(nil),
+	Methods:     []grpc.MethodDesc{},
+	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "Join",
+			Handler:       _GatewayDirectory_Join_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
+	},
+	Metadata: "api/proto/tunnel/v1/tunnel.proto",
+}

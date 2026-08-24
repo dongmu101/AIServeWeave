@@ -677,7 +677,7 @@ ComfyUI 接入应同时验证一条异步生成链路：
 
 ## 当前状态
 
-节点与节点到 Gateway 的链路已经打通，MVP 优先验证链路（OpenAI 流式请求 → Gateway → Scheduler → Agent → Ollama → SSE 返回）已经用真实机器跑通一次；Registry 仍待建。已完成的部分：
+节点与节点到 Gateway 的链路已经打通，MVP 优先验证链路（OpenAI 流式请求 → Gateway → Scheduler → Agent → Ollama → SSE 返回）已经用真实机器跑通一次；Registry 的 `NodeIdentity` 与 `GatewayDirectory` 也已落地，第一阶段的两个缺口都已补上。第二阶段已开始：调度器的健康过滤与熔断先落地了。已完成的部分：
 
 1. Registry、Gateway 与 Agent 之间的 protobuf 协议（`api/proto/tunnel/v1`，三边共用）。
 2. `common/runtime`：推理后端抽象——实例管理、健康状态机、能力发现与并发限流，以及 vLLM、SGLang、Ollama、ComfyUI 四个适配器。
@@ -688,12 +688,17 @@ ComfyUI 接入应同时验证一条异步生成链路：
 7. Gateway 的调度器（`service/aiServeWeaveGateway/scheduler`）：按模型与能力选节点，处理背压与重试语义——流式请求只在返回第一个 token 之前重试。
 8. Gateway 的 OpenAI 前门（`service/aiServeWeaveGateway/httpapi`）：`POST /v1/chat/completions`（含 SSE 流式）、`POST /v1/embeddings`、`GET /v1/models`，静态 API Key 鉴权。`POST /v1/responses` 未做——`common/runtime` 和隧道协议都没有对应的类型/Operation，需要先扩协议，留给后续。
 9. 真实端到端：本机 Ollama + 真实 mTLS 隧道 + Gateway HTTP 前门，非流式与 SSE 流式 Chat 都跑通，流式 TTFT 实测在百毫秒量级，由 Ollama 推理时延主导，隧道与前门本身开销可忽略。
+10. Registry 的 `NodeIdentity` 服务（`service/aiServeWeaveRegistry`）：自建 CA、一次性 bootstrap token 的铸造与校验、节点证书签发与续期。用 Agent 现有的 `tunnel.IdentityManager` 当客户端直接对着真实 Registry 跑通了完整流程（不是自造假客户端）。
+11. Registry 的 `GatewayDirectory` 服务与 Gateway 侧的 `registryclient`：Gateway 副本向 Registry 报到、收到名册变化即转发给 `tunnelserver.Server.SetRoster`，断线按全抖动退避重连，优雅关闭前先广播 `DRAINING`。此前 `SetRoster` 一直是等着调用方的手工注入点，现在有了真正的调用方。
+12. Gateway 调度器的健康检查、熔断与恢复（第二阶段第一项）：`candidates()` 现在会排除 Agent 上报为 `unhealthy`/`closed` 的 runtime 实例，并按 `(node_id, runtime_id)` 维护一个熔断器——`connection_failed`/`timeout`/`upstream_error` 连续失败达到阈值后该候选被临时排除，冷却后自动探测恢复；`backpressure`/`rate_limited` 明确不计入，这两个是"忙"不是"坏"。阈值是未经真实流量验证的初始默认值，详见 [service/aiServeWeaveGateway/README.md「健康过滤与熔断」](service/aiServeWeaveGateway/README.md#健康过滤与熔断)。
+13. Agent 自动发现本机 Ollama/vLLM（第二阶段第二项，`service/aiServeWeaveAgent/localdiscovery`）：启动即探测 `127.0.0.1` 上 Ollama（11434）与 vLLM（8000）的默认端口，答上的直接注册进 `runtime.Manager`，之后每 30 秒（`-auto-discover-interval` 可调）重新扫一遍还没发现的候选，好让"先起 Agent 再起 Ollama"这种顺序也能用。刻意只探测本机回环地址，不做局域网扫描或 mDNS；已经手动用 `-ollama-url` 配置过的地址会被天然跳过（按地址去重，不是按 ID）；发现后的健康跟踪完全交给 `runtime.Manager` 已有的探测循环，发现器自己不留状态、不做摘除。`-auto-discover=false` 可以整体关掉。
 
-   隧道两侧的进度与设计见 [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md)（阶段 7 有详细实测数据）。
+    隧道两侧的进度与设计见 [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md)（阶段 7 有详细实测数据）；Registry 的存储布局、`-mint-token` 用法与已知限制见 [service/aiServeWeaveRegistry/README.md](service/aiServeWeaveRegistry/README.md)。
 
 下一步建议先实现：
 
-1. Registry 的 `NodeIdentity` 服务：bootstrap token 一次性校验与 CA 私钥保管。
-2. Registry 的名册维护与向各副本广播，替换当前由 `SetRoster` 手工注入的形式。
+1. Gateway 侧的隧道指标：Agent 侧的 13 个隧道指标已有实现可参照，服务端侧还没有对应的一份。
+2. `node_id` 冲突检测与运维口径：Registry 目前对非空 `node_id` 直接采信，不检测跨节点冲突，上线前需要定下这个口径（隧道 README「待决问题 3」）。
 3. 故障注入剩余场景与滚动升级演练已在单机完成（拔网线、kill 全部副本、证书过期、后端假死、逐副本滚动升级，见 `service/aiServeWeaveAgent/tunnel/README.md` 阶段 7）；24h 长稳测试工具已落地并在本机运行中，完成后补数据。
 4. 实现 Job 状态持久化、取消任务和生成图片下载。
+5. 熔断阈值（`FailureThreshold`/`BaseCooldown`/`MaxCooldown`）需要真实流量数据校准；熔断状态目前也没有指标暴露出来，等 Gateway 侧隧道指标落地时应该一并加上。

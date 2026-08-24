@@ -2,13 +2,16 @@
 
 数据面。对外终结 OpenAI / Anthropic 兼容 API，对内通过隧道把请求派给节点。
 
-**当前进度：隧道服务端已落地，对外 API 与调度器尚未开始。** 这个二进制现在能接住 Agent 并知道每个节点能服务什么，但还没有把请求送进去的入口。
+**当前进度：隧道服务端、调度器、OpenAI 前门与 Registry 名册订阅均已落地；缺的是指标。** 这个二进制现在能接住 Agent、知道每个节点能服务什么、把 HTTP 请求路由过去，并且自己的副本身份也会同步给 Registry 维护的名册。
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
 | `tunnelserver/` | 已实现 | 隧道终结：mTLS 认证、节点表、槽池、九个 Operation 的分发、`NodeRuntime` |
+| `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器 |
+| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings` |
+| `registryclient/` | 已实现 | 向 Registry 的 `GatewayDirectory` 报到，把收到的名册转发给 `tunnelserver.Server.SetRoster` |
 | `e2e/` | 已实现 | 真实 TCP + mTLS 下三副本与真实 Agent 的联调测试 |
-| `main.go` | 部分 | 装配隧道监听；对外 HTTP 监听仍未绑定 |
+| `main.go` | 已实现 | 装配隧道监听、HTTP 监听、Registry 名册订阅 |
 
 隧道协议本身定义在 [../aiServeWeaveAgent/tunnel/README.md](../aiServeWeaveAgent/tunnel/README.md)，改这里的代码前先读那份。两端共用 `common/runtime`（类型与接口）与 `common/tunnelwire`（proto 编解码），不允许任一侧另写一份等价转换。
 
@@ -16,17 +19,28 @@
 
 这四条不是实现细节，是设计约束，改动时不能绕过：
 
-1. **证书是身份的唯一来源。** `node_id` 只从 TLS 栈**验证过的**证书链里读（`VerifiedChains`，不是 `PeerCertificates`），流上声明的 `node_id` 必须与之相符，不符就断流。没开客户端校验的副本认不出任何人，而不是认可所有人。
+1. **证书是身份的唯一来源。** `node_id` 只从 TLS 栈**验证过的**证书链里读（`VerifiedChains`，不是 `PeerCertificates`），流上声明的 `node_id` 必须与之相符，不符就断流。没开客户端校验的副本认不出任何人，而不是认可所有人。这个判断逻辑收在 `common/nodeid.FromPeer` 里，Registry 的 `RenewCertificate` 也复用同一份，避免两处各写一份而漂移。
 2. **不排队。** 没有空闲槽时 `Dispatch` 立刻返回 `ErrorBackpressure`（`Retryable: true`），由调度器换节点。槽是预先 park 好的，所以"这个节点满了"是微秒级的答案。
 3. **不缓冲。** 响应帧一帧一交给调用方，调用方不读就阻塞，背压顺着 gRPC 流控传回 Agent。没有队列可以涨，也就没有队列需要限长。
 4. **不转发。** 每个副本只服务连到自己身上的节点。请求路径上没有副本间跳转，这是多副本设计的前提，不是优化。
 
+## 名册来源
+
+`Server.SetRoster` 是名册的唯一注入点，`registryclient.Run` 是它现在的调用方：启动时向 `-registry-addr` 指定的 Registry 发起 `GatewayDirectory.Join`，上报 `-replica-id`（默认取 hostname）和 `-tunnel-advertise-addr`（未设置则退回 `-tunnel-addr`，NAT/负载均衡场景下必须显式设置成 Agent 真正能拨通的地址），把收到的每一份名册转发给 `SetRoster`；连接断开按全抖动指数退避重连；收到关闭信号时先发一条 `DRAINING` 状态再断开，让还没连上这个副本的 Agent 提前知道不用再连。`-registry-addr` 留空则完全跳过订阅，等价于旧行为（名册需要调用方手工调用 `SetRoster` 注入），方便本地单副本调试不必起 Registry。
+
+## 健康过滤与熔断
+
+`scheduler.candidates()` 现在有两层排除，都在 `service/aiServeWeaveGateway/scheduler/scheduler.go` 与 `breaker.go`：
+
+1. **读 Agent 已经算好的健康状态。** `runtime.Snapshot.State` 是 `unhealthy`/`closed` 的 runtime 实例直接被过滤——这是 Agent 侧 `runtime.Manager` 探测出来的结论，Gateway 只是消费它，不重新判断一遍。
+2. **Gateway 侧的熔断器。** 按 `(node_id, runtime_id)` 维护一个失败计数：`connection_failed`/`timeout`/`upstream_error` 三种错误计入连续失败，达到 `FailureThreshold`（默认 5）后该候选被排除一段冷却时间（默认 5s，翻倍退避到 2m 封顶），冷却结束后下一次请求本身就是一次探测，成功即整体复位。`ErrorBackpressure`/`ErrorRateLimited` 明确不计入——它们是"这一刻满了"，不是"坏了"。没有做教科书式的三态 half-open + 单飞探测：Gateway 本来就是零排队、失败立即换节点的模型，冷却期内多个请求同时探测同一个候选，最坏情况也只是各自快速失败再换节点。
+
+`FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖。
+
 ## 下一步
 
-1. **调度器**：按模型与能力从节点表选节点；`code == "backpressure"` 表示换节点且不计入熔断，`Retryable` 表示这个请求能否再跑一次——两者回答的是不同问题。
-2. **OpenAI Chat Completions 前门**：普通与 SSE 流式，复用 `common/runtime` 的请求响应类型，不另立一套。
-3. **名册来源**：目前 `Server.SetRoster` 由调用方手工注入，上线前要接到 Registry 的名册广播上。
-4. **指标**：Agent 侧的 13 个隧道指标已有实现可参照，服务端侧需要对应的一份，标签同样禁止出现 payload 内容。
+1. **指标**：Agent 侧的 13 个隧道指标已有实现可参照，服务端侧需要对应的一份，标签同样禁止出现 payload 内容；熔断状态（打开/半开次数、每候选失败计数）值得作为新增指标的一部分一起做。
+2. **Gateway↔Registry 双向认证**：目前 Gateway 只校验 Registry 的服务端证书，不向 Registry 出示客户端证书；要不要让 Gateway 也进入 Registry 签发的 mTLS 体系，等控制面需要更强隔离时再评估。
 
 ## 质量门禁
 

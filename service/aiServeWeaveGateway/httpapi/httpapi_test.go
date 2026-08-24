@@ -24,7 +24,7 @@ func newServer(t *testing.T, cfg httpapi.Config) (*httptest.Server, *gatewaytest
 	if cfg.Logger == nil {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
-	sched := scheduler.New(h.Srv)
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
 	srv := httptest.NewServer(httpapi.New(sched, cfg))
 	t.Cleanup(srv.Close)
 	return srv, h
@@ -137,7 +137,7 @@ func TestChatCompletionsStreamingEndsWithDone(t *testing.T) {
 // goroutine is the proof.
 func TestChatCompletionsStreamingStopsOnClientDisconnect(t *testing.T) {
 	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
-	srv := httptest.NewServer(httpapi.New(scheduler.New(h.Srv), httpapi.Config{Logger: slog.New(slog.DiscardHandler)}))
+	srv := httptest.NewServer(httpapi.New(scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock}), httpapi.Config{Logger: slog.New(slog.DiscardHandler)}))
 
 	started := make(chan struct{})
 	connectNodeWithHandler(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), blockingStreamHandler(started))
