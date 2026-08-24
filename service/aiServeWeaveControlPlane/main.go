@@ -49,8 +49,17 @@ func run() error {
 	// 用 conf.Load 而不是 conf.MustLoad，用 rest.NewServer 而不是 rest.MustNewServer：
 	// go-zero 的 Must* 系列会从库的深处直接退出进程，从而跳过其上每一个 defer 的 Close。
 	// 本二进制与仓库中另外三个一样，沿着 run() 回溯退出。
+	// conf.UseEnv expands ${VAR} in the file, which is what lets a deployment
+	// keep its secrets out of the config: the committed file names them and
+	// the deployment's own secret management supplies the values. Without it
+	// every deployment would have to template the file itself, and the usual
+	// shortcut for that is to commit the real values.
+	//
+	// conf.UseEnv 展开文件里的 ${VAR}，这正是让部署把密钥留在配置之外的办法：提交进
+	// 仓库的文件只写出它们的名字，取值由部署自己的密钥管理提供。没有它，每个部署都得
+	// 自己模板化这个文件，而那件事常见的捷径就是把真实取值提交上去。
 	var cfg config.Config
-	if err := conf.Load(*configFile, &cfg); err != nil {
+	if err := conf.Load(*configFile, &cfg, conf.UseEnv()); err != nil {
 		return err
 	}
 

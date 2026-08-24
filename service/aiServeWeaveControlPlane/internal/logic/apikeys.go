@@ -3,10 +3,12 @@ package logic
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
 	"AIServeWeave/common/apikey"
+	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
@@ -181,6 +183,15 @@ func (s *Service) RevokeAPIKey(ctx context.Context, actor Actor, keyID string) e
 type Verification struct {
 	TenantID string
 	KeyID    string
+	// Limits is the tenant's quota, handed to the Gateway alongside the
+	// identity so enforcement costs no extra round trip. The Gateway caches
+	// the whole verification, so a limit change takes effect within the same
+	// window a revocation does — see the README's 吊销的生效路径.
+	//
+	// Limits 是租户的配额，与身份一并交给 Gateway，好让执行不必额外付出一次往返。
+	// Gateway 缓存的是整个校验结果，因此一次限制变更的生效窗口，与一次吊销的相同
+	// ——见 README「吊销的生效路径」。
+	Limits quota.Limits
 }
 
 // VerifyKeyHash resolves a key hash to the tenant it authenticates, or
@@ -218,7 +229,46 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	if !key.Usable(s.clock.Now()) {
 		return Verification{}, ErrNotFound
 	}
-	return Verification{TenantID: key.TenantID, KeyID: key.ID}, nil
+	// The tenant is read for its limits, and checked while it is here. A
+	// suspended tenant whose keys still authenticated would make suspension
+	// mean nothing on the one path that matters — the inference request path
+	// is the only place a tenant's keys are actually used.
+	//
+	// 这里读取租户是为了拿它的限制，顺便也检查它。一个被暂停的租户，其 key 若仍能
+	// 通过认证，就会让「暂停」在唯一要紧的那条路径上失去意义——推理请求路径正是租户
+	// 的 key 真正被使用的地方。
+	tenant, err := s.store.GetTenant(ctx, key.TenantID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return Verification{}, ErrNotFound
+		}
+		return Verification{}, err
+	}
+	if tenant.Status != model.StatusActive {
+		return Verification{}, ErrNotFound
+	}
+	return Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits()}, nil
+}
+
+// SetTenantLimits writes a tenant's quota. Only an owner or admin may call it:
+// raising one's own limit would otherwise be the cheapest way past it.
+//
+// SetTenantLimits 写入一个租户的配额。只有 owner 或 admin 可以调用：否则「调高自己的
+// 限制」就会成为绕过它的最省事办法。
+func (s *Service) SetTenantLimits(ctx context.Context, actor Actor, limits quota.Limits) (quota.Limits, error) {
+	if actor.Role != model.RoleOwner && actor.Role != model.RoleAdmin {
+		return quota.Limits{}, ErrForbidden
+	}
+	if err := limits.Validate(); err != nil {
+		return quota.Limits{}, fmt.Errorf("%w: %s", ErrInvalidInput, err)
+	}
+	if err := s.store.UpdateTenantLimits(ctx, actor.TenantID, limits); err != nil {
+		return quota.Limits{}, translate(err)
+	}
+	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionTenantLimits, actor.TenantID,
+		fmt.Sprintf("requests_per_minute=%d tokens_per_minute=%d max_concurrent=%d",
+			limits.RequestsPerMinute, limits.TokensPerMinute, limits.MaxConcurrent), actor.IP)
+	return limits, nil
 }
 
 // TouchAPIKey records that a key was used. The Gateway calls it at most once

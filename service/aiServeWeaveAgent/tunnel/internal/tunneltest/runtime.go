@@ -95,6 +95,7 @@ type WorkflowRuntime struct {
 	SubscribeFunc    func(ctx context.Context, runID string) (runtime.Stream[runtime.WorkflowEvent], error)
 	StatusFunc       func(ctx context.Context, runID string) (runtime.WorkflowStatus, error)
 	CancelFunc       func(ctx context.Context, runID string) error
+	ArtifactsFunc    func(ctx context.Context, runID string) ([]runtime.ArtifactRef, error)
 	OpenArtifactFunc func(ctx context.Context, ref runtime.ArtifactRef) (runtime.Artifact, error)
 }
 
@@ -128,6 +129,14 @@ func (r *WorkflowRuntime) Cancel(ctx context.Context, runID string) error {
 		return r.CancelFunc(ctx, runID)
 	}
 	return nil
+}
+
+// Artifacts implements runtime.WorkflowRuntime.
+func (r *WorkflowRuntime) Artifacts(ctx context.Context, runID string) ([]runtime.ArtifactRef, error) {
+	if r.ArtifactsFunc != nil {
+		return r.ArtifactsFunc(ctx, runID)
+	}
+	return nil, nil
 }
 
 // OpenArtifact implements runtime.WorkflowRuntime.

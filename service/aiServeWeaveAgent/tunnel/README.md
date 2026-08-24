@@ -12,7 +12,7 @@
 
 ## 当前状态
 
-阶段 1 到 7 已落地，阶段 7 剩下的是需要真实部署（真实后端、会断的网线、会过期的证书、24 小时）才能做的验收项：`api/proto/tunnel/v1/tunnel.proto` 定义了完整线上契约（`Tunnel` 与 `NodeIdentity` 两个服务、数据面帧、控制面帧、全部 `runtime` 类型镜像），`common/tunnelwire` 实现了双向转换与 payload 编解码（阶段 7 从 `tunnel/convert.go` 拆出，与 Gateway 共用），`tunnel/identity.go` 实现了本地密钥生成、向 Registry 换证与轮换、证书落盘与 mTLS 配置，`tunnel/client.go` + `control.go` + `backoff.go` 实现了单条隧道的连接状态机、Control 流与退避重连，`tunnel/pool.go` + `slot.go` 实现了单副本槽池的水位管理与单槽帧循环，`tunnel/dispatch.go` 把九个 Operation 接到 `runtime.Manager` 上，`tunnel/manager.go` + `roster.go` 实现了多副本连接表与名册处理，`tunnel/metrics.go` 接上了全部 13 个指标，`main.go` 完成装配。Gateway 侧的隧道服务端见 [service/aiServeWeaveGateway/README.md](../../aiServeWeaveGateway/README.md)，三副本端到端联调在 `service/aiServeWeaveGateway/e2e`；阶段 7 剩余项见该阶段的清单。
+阶段 1 到 7 已落地，阶段 7 剩下的是需要真实部署（真实后端、会断的网线、会过期的证书、24 小时）才能做的验收项：`api/proto/tunnel/v1/tunnel.proto` 定义了完整线上契约（`Tunnel` 与 `NodeIdentity` 两个服务、数据面帧、控制面帧、全部 `runtime` 类型镜像），`common/tunnelwire` 实现了双向转换与 payload 编解码（阶段 7 从 `tunnel/convert.go` 拆出，与 Gateway 共用），`tunnel/identity.go` 实现了本地密钥生成、向 Registry 换证与轮换、证书落盘与 mTLS 配置，`tunnel/client.go` + `control.go` + `backoff.go` 实现了单条隧道的连接状态机、Control 流与退避重连，`tunnel/pool.go` + `slot.go` 实现了单副本槽池的水位管理与单槽帧循环，`tunnel/dispatch.go` 把十个 Operation 接到 `runtime.Manager` 上，`tunnel/manager.go` + `roster.go` 实现了多副本连接表与名册处理，`tunnel/metrics.go` 接上了全部 13 个指标，`main.go` 完成装配。Gateway 侧的隧道服务端见 [service/aiServeWeaveGateway/README.md](../../aiServeWeaveGateway/README.md)，三副本端到端联调在 `service/aiServeWeaveGateway/e2e`；阶段 7 剩余项见该阶段的清单。
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
@@ -24,7 +24,7 @@
 | `backoff.go` | 已实现 | 全抖动指数退避 |
 | `pool.go` | 已实现 | 单副本槽池：预热、水位补充、空闲回收、分类配额、额度分摊、`SlotHint` clamp |
 | `slot.go` | 已实现 | 单槽帧循环、`Handler`/`ResponseSink` 接口、per-request context 与取消、槽轮换 |
-| `dispatch.go` | 已实现 | 九个 Operation 的分发、白名单、能力断言、deadline 取小、limiter 额度、大小上限 |
+| `dispatch.go` | 已实现 | 十个 Operation 的分发、白名单、能力断言、deadline 取小、limiter 额度、大小上限 |
 | `manager.go` | 已实现 | 多副本连接表、名册差分、额度重算、证书轮换时逐条重连、聚合状态 |
 | `roster.go` | 已实现 | 名册校验、版本去重、空名册降级、`max_gateways` 截断、`active` 计数 |
 | `metrics.go` | 已实现 | 13 个指标的记录点、封闭标签词表、六值 `result` 映射、丢弃型默认 sink |
@@ -220,6 +220,7 @@ enum Operation {
   OPERATION_WORKFLOW_STATUS    = 7;
   OPERATION_WORKFLOW_CANCEL    = 8;
   OPERATION_ARTIFACT_OPEN      = 9;
+  OPERATION_ARTIFACT_LIST      = 10;
 }
 
 message ResponseHeaders {
@@ -262,6 +263,7 @@ message TunnelError {
 | `WORKFLOW_STATUS` | `run_id` | 单个 `DataChunk`（`WorkflowStatus`） |
 | `WORKFLOW_CANCEL` | `run_id` | 无 `DataChunk`，只有 `ResponseEnd` |
 | `ARTIFACT_OPEN` | `ArtifactRef` | `ResponseHeaders` + N 个 `DataChunk`（字节流） |
+| `ARTIFACT_LIST` | `RunRef` | 单个 `DataChunk`（`ArtifactList`） |
 
 payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`。
 
@@ -295,7 +297,10 @@ message Hello {
   string agent_version = 2;
   NodeResources resources = 3;        // CPU、内存、GPU、显存、OS
   repeated string runtime_ids = 4;    // 本地白名单，Gateway 据此校验派发目标
+  map<string, string> labels = 5;     // 运维赋予的节点事实，Gateway 路由规则据此选择
 }
+
+`labels` 由 Agent 的 `-labels` 声明并被 Gateway **原样采信**，因此它们绝不能参与授权判断——一个被攻破的 Agent 可以声称任何标签。它们表达的是「工作应该去哪」的偏好，而不是「有权接收工作」。要让标签可信，需要 Registry 在签发节点证书时把它们绑进去，那是独立的一步。
 
 // GatewayRoster 是全部 Gateway 副本的权威列表，由 Registry 维护、
 // 各副本通过自己的 Control 流广播。Agent 据此补齐或关闭连接。
@@ -317,6 +322,8 @@ enum ReplicaState {
   REPLICA_STATE_REMOVED  = 3;         // 已下线，Agent 应关闭连接
 }
 ```
+
+`Hello.labels` 由 Agent 的 `-labels` 声明（`region=local,gpu=4090`），Gateway 的路由规则据此选择节点，重连即重新读取——它们描述的是机器而不是负载。**Gateway 原样采信这份声明，因此标签绝不能参与授权判断**：一个被攻破的 Agent 可以声称任何标签。它们表达的是「工作应该去哪」的偏好，而不是「有权接收工作」。要让标签可信，需要 Registry 在签发节点证书时把它们绑进去，那是独立的一步。
 
 `RuntimeStatus` 直接由 `runtime.Manager.Snapshot()` 转换而来，包含 `Descriptor`、`State`、`Probe`、`Health`、`Discovery`（版本、模型、能力集合、Warnings）和 `Degraded`。**Snapshot 不含凭据**，这是它可以安全上报的前提。上报采用变更触发加定期全量：状态变化立即上报，无变化时每 60s 发一次全量对账。
 

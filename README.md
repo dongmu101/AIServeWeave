@@ -197,10 +197,10 @@ type InferEvent struct {
 
 第一阶段优先支持：
 
-- `POST /v1/chat/completions`
-- `POST /v1/responses`
-- `POST /v1/embeddings`
-- `GET /v1/models`
+- `POST /v1/chat/completions` —— 已落地（含 SSE）
+- `POST /v1/responses` —— 已落地（含 SSE）
+- `POST /v1/embeddings` —— 已落地
+- `GET /v1/models` —— 已落地
 
 后续增加：
 
@@ -364,13 +364,24 @@ WorkflowTemplate: flux-text-to-image
 AIServeWeave 对外提供统一的异步 Job API：
 
 ```text
-POST   /v1/workflows/{workflow_id}/runs     提交工作流
-GET    /v1/jobs/{job_id}                    查询任务状态
-GET    /v1/jobs/{job_id}/events             获取 SSE 进度事件
-POST   /v1/jobs/{job_id}/cancel             取消任务
-GET    /v1/jobs/{job_id}/artifacts          获取产物列表
-GET    /v1/artifacts/{artifact_id}           下载生成产物
+POST   /v1/workflows/{workflow_id}/runs     提交工作流        ← 已落地
+GET    /v1/jobs/{job_id}                    查询任务状态      ← 已落地
+GET    /v1/jobs/{job_id}/events             获取 SSE 进度事件  ← 已落地
+POST   /v1/jobs/{job_id}/cancel             取消任务          ← 已落地
+GET    /v1/jobs/{job_id}/artifacts          获取产物列表      ← 已落地
+GET    /v1/artifacts/{artifact_id}           下载生成产物      ← 已落地
 ```
+
+六个端点均已在 Gateway 落地，实现见 `service/aiServeWeaveGateway/httpapi/`（`jobs.go` 提交与状态、
+`jobevents.go` SSE 事件流、`jobcancel.go` 取消、`artifacts.go` 产物列举与下载）与 `service/aiServeWeaveGateway/workflow/`（模板目录与输入绑定）。
+事件流的终态事件是「运行如何结束」的权威：它一到，job 状态就地落库，此后状态查询不再打扰节点。
+
+产物那一步顺带扩了隧道契约：新增 `OPERATION_ARTIFACT_LIST`，`runtime.WorkflowRuntime` 相应新增
+`Artifacts` 方法。公开的 `artifact_id` 由 Gateway 铸造，后端定位产物用的
+`filename`+`subfolder`+`type` 三元组不作为标识符外泄——那是通往节点磁盘布局的一条路径。**job 表目前只在 Gateway 进程内存里**，
+上限 `DefaultMaxJobs` 条、超出逐出最旧的一条，副本重启即丢失，也不跨副本共享——持久化属于控制面
+`jobs` 表，那张表还没建。已落地的两个端点按租户隔离：不属于本租户的 job id 与不存在的 job id
+得到同一个 404。
 
 统一任务状态：
 
@@ -433,6 +444,14 @@ qwen-coder
 | Route | Model 到一个或多个 Deployment 的选择规则 |
 
 这种抽象允许在不影响客户端的情况下更换底层模型、量化版本、节点或推理框架。
+
+**已落地的部分**：`Model`（逻辑模型）与 `Route`/`RouteTarget` 由 `service/aiServeWeaveGateway/routing`
+实现，Target 携带真实模型名、节点选择器、优先级与权重；`Node` 的标签由 Agent 的 `-labels` 声明。
+路由表当前从文件加载（Gateway 的 `-model-routes`），尚未进控制面的表。`Backend` 与 `Deployment`
+仍是节点上报的 runtime 快照，没有独立的持久化实体。
+
+**节点标签是偏好，不是权限。** 它们由 Agent 自行声明、Gateway 原样采信，因此绝不能参与授权判断
+——被攻破的 Agent 可以声称任何标签。要让标签可信，需要由 Registry 在签发证书时绑定，那是独立的一步。
 
 ## 调度流程
 
@@ -579,20 +598,24 @@ AIServeWeave/
 │   ├── metrics/                # runtime.Metrics 的实现与 Prometheus 文本导出，三个服务共用
 │   │   └── metricstest/        # 各服务测试断言指标与标签用的内存收集器
 │   ├── apikey/                 # API Key 的格式与哈希，Gateway 与控制面共用
+│   ├── quota/                  # 租户限制值与含义，控制面存储、Gateway 执行
 │   ├── metrics/                # runtime.Metrics 的实现与 Prometheus 导出，三服务共用
 │   ├── runtime/                # 推理后端抽象：能力探测、配额、流式转换
 │   │   ├── internal/           # 包内私有工具与测试辅助
 │   │   ├── ollama/  openai/  sglang/  vllm/
 │   │   └── workflow/comfyui/
 │   └── tunnelwire/             # 隧道 proto 编解码，Agent 与 Gateway 共用
-├── deploy/
+├── deploy/                     # Docker Compose 编排、compose 版控制面配置、部署说明
 │   └── docker-compose.yaml
 └── service/
     ├── aiServeWeaveAgent/      # 节点面，已有主要实现
     │   ├── tunnel/             # 主动出站隧道，见该目录 README
-    │   └── workflow/           # ComfyUI 工作流清单、绑定与校验
+    │   └── workflow/           # 空目录：四个文件只有 package 声明，模板绑定实际在 Gateway 侧
     ├── aiServeWeaveGateway/    # 数据面，隧道服务端、调度器与 OpenAI 前门已落地
-    │   ├── tunnelserver/       # 隧道终结：节点表、槽池、九个 Operation 的分发
+    │   ├── tunnelserver/       # 隧道终结：节点表、槽池、十个 Operation 的分发
+    │   ├── workflow/           # 管理员注册的 ComfyUI 工作流模板目录与输入绑定
+    │   ├── ratelimit/          # 租户配额执行：令牌桶，内存与 Redis 两个实现
+    │   ├── routing/            # 逻辑模型到部署的映射：别名、节点选择器、优先级
     │   └── e2e/                # 真实 mTLS 下 Agent 与 Gateway 的联调测试
     ├── aiServeWeaveRegistry/   # 控制面注册中心，仅骨架
     ├── aiServeWeaveControlPlane/  # 控制面 Admin API，租户/用户/API Key/审计已落地
@@ -601,16 +624,19 @@ AIServeWeave/
     └── aiServeWeaveConsole/       # 尚未开始（前端）
 ```
 
+`Dockerfile` 在仓库根，由 `SERVICE` build-arg 选择三个二进制中的一个。
+
 后续随功能推进补齐的目录（当前尚不存在）：`api/openapi/`、`migrations/`、`configs/`、`web/`、`docs/`、`deploy/kubernetes/`。
 
 调度器、鉴权、用量统计等模块目前尚无归属目录，落地时按所属服务放进 `service/<服务名>/` 下的子包；确实被多个服务共用的再上提到 `common/`。
 
 `common/` 下已有四个包，都是因为多个服务必须按同一套规则解释同一份数据才上提的：
 
-- `common/runtime` —— 推理语义的类型与接口（`Stream`、`RuntimeError`、九个 Operation 的请求响应类型）。Agent 用它实现后端适配器，Gateway 用它表达调度器和 API 层看到的请求，两边共用一份定义而不是各自复述。
+- `common/runtime` —— 推理语义的类型与接口（`Stream`、`RuntimeError`、十个 Operation 的请求响应类型）。Agent 用它实现后端适配器，Gateway 用它表达调度器和 API 层看到的请求，两边共用一份定义而不是各自复述。
 - `common/tunnelwire` —— 这些类型与 `api/proto/tunnel/v1` 之间的双向编解码。隧道两端都要做这次转换，放在一个包里意味着「凭据不过隧道」「nil 与显式零值不等价」这两条不变量只有一处实现、一处测试。结果标签的六值约定（`ResultFor`）也在这里：两端必须对同一个错误做出相同分类，两份分类实现迟早会在「哪些失败算节点的错」上产生分歧。
 - `common/metrics` —— `runtime.Metrics` 的真实实现与 Prometheus 导出。三个服务共用一份，是因为「后端慢」「隧道慢」「前门慢」只有记进同一套仪器、同一套分桶，才是可以互相相减的数字。
 - `common/apikey` —— API Key 的格式、哈希算法与展示形式。控制面铸造它、Gateway 校验它，两边必须算出同一个哈希才查得到同一行，因此它是两者之间的契约而不是任一方的内部实现。
+- `common/quota` —— 租户限制值及其含义。控制面存储并随 key 校验结果下发，Gateway 执行。一个租户的限制在一边意味着「每分钟」、在另一边意味着「每秒」，不是评审能抓到的缺陷，而是几个月后的一张工单。
 
 模块路径使用短名 `module AIServeWeave`，包内互相引用一律以此为前缀，例如 `AIServeWeave/api/proto/tunnel/v1`。
 
@@ -628,8 +654,8 @@ AIServeWeave/
 - 逻辑模型到多个节点的路由
 - API Key 鉴权
 - 基础请求和错误日志
-- 提交一个固定的 ComfyUI 文生图工作流
-- 查询 ComfyUI Job 状态并下载生成图片
+- 提交一个固定的 ComfyUI 文生图工作流 —— 已落地（`POST /v1/workflows/{workflow_id}/runs`）
+- 查询 ComfyUI Job 状态并下载生成图片 —— 已落地（状态、SSE 进度事件、取消、产物列举与下载）
 
 完成后的最小链路：
 
@@ -642,9 +668,15 @@ Workflow API → AIServeWeave → Agent → ComfyUI → Artifact
 ### 第二阶段：可用平台
 
 - Web 管理控制台
-- 模型别名和节点标签
-- 配额、并发限制和速率限制
-- Responses 和 Embeddings API
+- 模型别名和节点标签 —— 已落地。逻辑模型经路由表映射到（真实模型名、节点选择器、优先级）；
+  节点标签由 Agent 的 `-labels` 声明、随 Hello 上报。路由表目前由 Gateway 的 `-model-routes`
+  从文件加载，控制面接管时换成一次拉取
+- 配额、并发限制和速率限制 —— 已落地（每租户的每分钟请求数、每分钟 token 数、最大并发；
+  限制值由控制面存储、随 API Key 校验结果下发，由 Gateway 执行）
+- Responses 和 Embeddings API —— 均已落地。Responses 在前门转换成内部 canonical 请求，
+  因此只会 Chat Completions 的后端（如 Ollama）也能服务它；代价是不支持 `store` /
+  `previous_response_id`（服务端会话状态需要跨请求持久化与节点粘性），这些字段被明确拒绝
+  而不是静默忽略
 - 健康检查、熔断和恢复
 - 自动发现 Ollama 和 vLLM
 - ComfyUI 工作流模板和版本管理
@@ -653,7 +685,8 @@ Workflow API → AIServeWeave → Agent → ComfyUI → Artifact
 - 输入文件上传和 S3-compatible 产物存储
 - Token、延迟和吞吐统计
 - Prometheus 和 OpenTelemetry
-- Docker Compose 部署
+- Docker Compose 部署 —— 已落地（`deploy/`：一个多阶段 Dockerfile 加编排 Registry、控制面、
+  Gateway 与依赖服务；证书链由 Registry 的 CA 闭合，见 [deploy/README.md](deploy/README.md)）
 
 ### 第三阶段：生产能力
 
@@ -706,8 +739,8 @@ ComfyUI 接入应同时验证一条异步生成链路：
 1. Registry、Gateway 与 Agent 之间的 protobuf 协议（`api/proto/tunnel/v1`，三边共用）。
 2. `common/runtime`：推理后端抽象——实例管理、健康状态机、能力发现与并发限流，以及 vLLM、SGLang、Ollama、ComfyUI 四个适配器。
 3. `common/tunnelwire`：`runtime` 类型与隧道 proto 的双向编解码，隧道两端共用一份。
-4. Agent 的隧道客户端：节点身份与证书轮换、Control 流与心跳、槽池与九个 Operation 的分发、多副本连接表与名册处理、隧道指标与压测。
-5. Gateway 的隧道服务端：节点表、槽池、九个 Operation 的分发，以及把隧道对面呈现为一个 `runtime.InferenceRuntime` 的 `NodeRuntime`。
+4. Agent 的隧道客户端：节点身份与证书轮换、Control 流与心跳、槽池与十个 Operation 的分发、多副本连接表与名册处理、隧道指标与压测。
+5. Gateway 的隧道服务端：节点表、槽池、十个 Operation 的分发，以及把隧道对面呈现为一个 `runtime.InferenceRuntime` 的 `NodeRuntime`。
 6. 三副本端到端联调：真实 TCP、真实 mTLS，每个副本独立完成推理，请求路径上无副本间转发。
 7. Gateway 的调度器（`service/aiServeWeaveGateway/scheduler`）：按模型与能力选节点，处理背压与重试语义——流式请求只在返回第一个 token 之前重试。
 8. Gateway 的 OpenAI 前门（`service/aiServeWeaveGateway/httpapi`）：`POST /v1/chat/completions`（含 SSE 流式）、`POST /v1/embeddings`、`GET /v1/models`。鉴权当初是静态 API Key 列表，现已改为对着控制面校验（见第 15 项），静态列表退化为回退路径。`POST /v1/responses` 未做——`common/runtime` 和隧道协议都没有对应的类型/Operation，需要先扩协议，留给后续。

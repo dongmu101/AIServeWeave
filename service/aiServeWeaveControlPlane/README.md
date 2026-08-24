@@ -2,11 +2,11 @@
 
 控制面的 Admin API：Console 背后的租户、用户、API Key 与审计线索，以及供 Gateway 校验 API Key 的内部端点。
 
-**当前进度：第二阶段「用户、租户、API Key 和配额」的前三项已落地，配额未做。** 这个二进制现在能创建租户、让用户登录、签发与吊销 API Key、记录管理操作审计，并且 Gateway 已经改成对着它校验 key —— `-api-keys` 明文列表退化为无控制面时的回退路径。
+**当前进度：第二阶段「用户、租户、API Key 和配额」四项均已落地。** 这个二进制现在能创建租户、让用户登录、签发与吊销 API Key、记录管理操作审计，并且 Gateway 已经改成对着它校验 key —— `-api-keys` 明文列表退化为无控制面时的回退路径。
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
-| `internal/model/` | 已实现 | 四张表的 gorm 映射：`tenants`、`users`、`api_keys`、`audit_logs` |
+| `internal/model/` | 已实现 | 四张表的 gorm 映射：`tenants`、`users`、`api_keys`、`audit_logs`。租户配额是 `tenants` 上的三个标量列，不是单独一张表：每个租户恰好一组，而一对一的表会给那条位于推理请求路径上的查询平添一次 join |
 | `internal/store/` | 已实现 | 四个窄接口 + `gormstore/`（PostgreSQL / MySQL）+ `memstore/`（测试用内存实现） |
 | `internal/logic/` | 已实现 | 业务层：权限、审计、key 生命周期。不依赖 HTTP，也不依赖数据库 |
 | `internal/token/` | 已实现 | 会话令牌的签发与校验（HS256，golang-jwt/v5） |
@@ -75,14 +75,17 @@ MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫
 # 数据库与缓存
 docker compose -f deploy/docker-compose.yaml up -d postgres redis
 
-# 三个密钥，各自独立
-openssl rand -base64 32   # Auth.AccessSecret
-openssl rand -base64 32   # InternalToken
-openssl rand -base64 32   # BootstrapToken
+# 三个密钥，各自独立生成后 export —— 配置文件里写的是 ${VAR}，没有任何取值
+export AISW_ACCESS_SECRET=$(openssl rand -base64 32)
+export AISW_INTERNAL_TOKEN=$(openssl rand -base64 32)
+export AISW_BOOTSTRAP_TOKEN=$(openssl rand -base64 32)
 
-# 填进 etc/controlplane.yaml 后
 go run ./service/aiServeWeaveControlPlane -f service/aiServeWeaveControlPlane/etc/controlplane.yaml
 ```
+
+密钥从环境变量注入（`conf.Load` 带 `conf.UseEnv()`）。**未注入时展开为空串，而 `Validate` 要求至少 32 字符，因此会带着一条可操作的报错启动失败**——这比此前那个 44 字符的 `REPLACE-ME-...` 占位符要好：那个长度足以通过校验，服务可以带着一个仓库里人人可见的密钥跑起来。
+
+注意 `conf.UseEnv` 展开 `${VAR}` 但**不支持** `${VAR:-default}`——写成后者时整个表达式变成空串，而不是退回默认值。整套编排见 [deploy/README.md](../../deploy/README.md)。
 
 创建第一个租户（`BootstrapToken` 是这个操作唯一的凭据，因为此时还没有可登录的用户）：
 
@@ -112,22 +115,23 @@ go run ./service/aiServeWeaveGateway \
 | BootstrapToken | `POST /admin/v1/tenants` |
 | InternalToken | `POST /internal/v1/apikeys/verify` |
 
+`PUT /admin/v1/tenants/limits` 设置调用方自己所属租户的配额，owner 与 admin 可用。请求体里没有租户 id：租户来自会话，因此管理员无法通过改请求体把它指向别人的租户。member 不可调用——能调高自己租户限制的角色，绕过限制最省事的办法就是调高它。
+
 角色：`owner` 可以做任何事（含增删用户）；`admin` 可以管理 key 与只读一切；`member` 只能管理自己创建的 key。**跨租户与越权一律返回 404 而不是 403** —— 能分辨「存在但不属于你」与「不存在」的调用方，可以据此枚举出别人的 id。
 
 ## 已知缺口
 
 1. **审计写入不在事务里。** 动作成功而审计写入失败时，动作保留、记录丢失（只进日志）。修法是把两者放进同一个事务，它要等本层先拥有事务。
-2. **配额与速率限制没做。** 第二阶段清单里「配额、并发限制和速率限制」那一项，`Identity` 已经在 Gateway 的请求 context 上了，是它的接入点。
+2. **配额是每租户的，不是每 key 的。** 同一租户的多个 key 共用一份额度。按 key 计费需要 `api_keys` 上再加三列与一次额外的表达式，等有人真的需要「给某个集成单独限速」时再做。
 3. **Gateway↔控制面用共享密钥，不是 mTLS。** Gateway 本就在集群自有网络内访问控制面；要更强隔离时再评估。
 4. **X-Forwarded-For 不被采信。** 审计记录的是 `RemoteAddr`。要采信该头，必须与「配置一份可信代理清单」一并改动。
 5. **go-zero 自己的指标没接进 `common/metrics`。** 本服务目前没有 `/metrics` 端点。
 
 ## 下一步
 
-1. **配额与限流**，接在 `Identity` 上。
-2. **吊销推送**，把 Gateway 那 30 秒窗口压到零。
-3. **带版本的 SQL 迁移**，替换 `AutoMigrate`。
-4. **`/metrics` 端点**，把本服务接进 `common/metrics`。
+1. **吊销推送**，把 Gateway 那 30 秒窗口压到零。
+2. **带版本的 SQL 迁移**，替换 `AutoMigrate`。
+3. **`/metrics` 端点**，把本服务接进 `common/metrics`。
 
 ## 质量门禁
 

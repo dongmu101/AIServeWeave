@@ -1,0 +1,103 @@
+# aiserveweave-controlplane configuration, for the Docker Compose stack.
+#
+# It differs from service/aiServeWeaveControlPlane/etc/controlplane.yaml in
+# three lines and nothing else: the listen host, the database DSN and the Redis
+# address all name container hostnames rather than loopback. Keeping the two
+# files separate is deliberate — one templated file serving both would have to
+# express "127.0.0.1 here, postgres there" in a syntax conf.UseEnv does not
+# have (it expands ${VAR} but not ${VAR:-default}), and the usual workaround
+# for that is to require an env var for something that has an obvious local
+# default.
+#
+# 这是 Docker Compose 那一套所用的 aiserveweave-controlplane 配置。
+#
+# 它与 service/aiServeWeaveControlPlane/etc/controlplane.yaml 的差别只有三行：监听
+# 主机、数据库 DSN、Redis 地址，都改成容器主机名而不是回环地址。两份文件分开是刻意的
+# ——一份模板同时服务两种场景，就得用一种 conf.UseEnv 并不具备的语法来表达「这里是
+# 127.0.0.1，那里是 postgres」（它展开 ${VAR}，不展开 ${VAR:-default}），而那件事
+# 常见的绕法，是给一个本来有显然本地默认值的东西也强加一个环境变量。
+#
+# 三个密钥从环境变量注入，本文件里没有任何一个的取值。
+# 用 `openssl rand -base64 32` 各生成一个独立的值再 export。
+#
+# 三个密钥写成 ${VAR}：conf.UseEnv 会展开它们，未设置时展开为空串，而 Validate
+# 要求至少 32 字符，因此忘记注入的部署会带着一条可操作的报错启动失败——而不是
+# 带着一个提交在仓库里、人人可见的占位符继续跑下去。
+#
+# The three secrets are injected from the environment; no value for any of them
+# lives in this file. Generate an independent value for each with
+# `openssl rand -base64 32` and export it.
+#
+# They are written as ${VAR}: conf.UseEnv expands them, an unset variable
+# expands to the empty string, and Validate requires at least 32 characters —
+# so a deployment that forgot to inject them fails to start with an actionable
+# error rather than running on a placeholder that is committed here for anyone
+# to read.
+
+Name: aiserveweave-controlplane
+Host: 0.0.0.0
+Port: 8090
+
+# go-zero 的访问日志。控制面处理凭据，因此不记录请求体。
+# go-zero's access log. The control plane handles credentials, so bodies are
+# not logged.
+Log:
+  ServiceName: aiserveweave-controlplane
+  Mode: console
+  Level: info
+
+Database:
+  # postgres 或 mysql。PostgreSQL 是首要目标（后续 JSON 列会用到 JSONB），
+  # MySQL 同样受支持——当前这四张表只用标量列，两种引擎表达一致。
+  # postgres or mysql. PostgreSQL is the primary target (JSONB matters for the
+  # JSON columns still to come); MySQL is supported too — today's four tables
+  # use only scalar columns, which both engines express identically.
+  Driver: postgres
+  # Plain ${VAR}, never ${VAR:-default}: conf.UseEnv does not implement the
+  # second form and expands the whole thing to an empty string. The defaults
+  # live one layer up, in the compose file's own environment block, where that
+  # syntax does work.
+  #
+  # 只用 ${VAR}，绝不用 ${VAR:-default}：conf.UseEnv 没有实现第二种形式，会把整个
+  # 表达式展开成空串。默认值放在上一层——compose 文件自己的 environment 块里，那种
+  # 语法在那里确实有效。
+  DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
+  # MySQL 写法（注意 parseTime=True，否则每个时间列都会扫描失败）：
+  # The MySQL form (parseTime=True is required, or every time column fails to
+  # scan):
+  # Driver: mysql
+  # DSN: "aisw:aisw@tcp(127.0.0.1:3306)/aiserveweave?charset=utf8mb4&parseTime=True&loc=Local"
+  MaxOpenConns: 20
+  MaxIdleConns: 5
+  ConnMaxLifetime: 30m
+  # 本地起步时打开；生产部署应关闭，改用带版本的迁移。
+  # On for a local start; a production deployment turns this off and uses
+  # versioned migrations instead.
+  AutoMigrate: true
+
+# 可选。留空则每次 API Key 校验都落到数据库。
+# Optional. Leave empty and every API key verification goes to the database.
+Redis:
+  Addr: "redis:6379"
+  Password: ""
+  DB: 0
+  # 一个已被吊销的 key 仍可能被放行的最大窗口——吊销本身会主动清除缓存，
+  # 这个 TTL 只是兜底。
+  # The widest window a revoked key can still be served in — revocation drops
+  # the entry itself, and this TTL is only the backstop.
+  TTL: 30s
+
+Auth:
+  # 占位符，务必替换。
+  # Placeholder. Replace it.
+  AccessSecret: "${AISW_ACCESS_SECRET}"
+  AccessExpire: 12h
+
+# Gateway 用它调用 /internal/v1/apikeys/verify。
+# The Gateway presents this to /internal/v1/apikeys/verify.
+InternalToken: "${AISW_INTERNAL_TOKEN}"
+
+# 授权创建租户。它是 Console 将来注册流程的临时替身。
+# Authorizes tenant creation. It stands in for the Console's eventual sign-up
+# flow.
+BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"

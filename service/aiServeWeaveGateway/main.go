@@ -10,6 +10,8 @@
 package main
 
 import (
+	"github.com/redis/go-redis/v9"
+
 	"context"
 	"crypto/tls"
 	"crypto/x509"
@@ -32,9 +34,12 @@ import (
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
+	"AIServeWeave/service/aiServeWeaveGateway/routing"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
+	"AIServeWeave/service/aiServeWeaveGateway/workflow"
 )
 
 // drainGrace is how long connected Agents are given to finish in-flight
@@ -69,6 +74,12 @@ func run() error {
 	registryAddr := flag.String("registry-addr", "", "Registry GatewayDirectory endpoint, host:port; empty leaves the roster to be set manually via SetRoster")
 	registryCA := flag.String("registry-ca", "", "PEM CA bundle verifying the Registry's server certificate")
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
+	redisAddr := flag.String("redis-addr", "",
+		"Redis host:port for fleet-wide rate limiting; empty enforces per-replica, which admits the configured allowance once per replica")
+	modelRoutes := flag.String("model-routes", "",
+		"comma-separated files or directories of routing tables mapping logical model names onto deployments; empty passes model ids through unchanged")
+	workflowTemplates := flag.String("workflow-templates", "",
+		"comma-separated files or directories of ComfyUI workflow template manifests; empty registers none, and every workflow submit then 404s")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	flag.Parse()
@@ -123,14 +134,55 @@ func run() error {
 		return err
 	}
 
-	sched := scheduler.New(server, scheduler.Config{Metrics: registry})
+	// Templates are loaded before anything starts serving: a manifest that
+	// binds an input to a node it does not have is an operator mistake, and
+	// failing here puts it on the operator's terminal instead of on a
+	// caller's request an hour later.
+	//
+	// 模板在开始服务之前加载：把输入绑到不存在节点上的清单是运维的失误，在这里失败
+	// 能把它摆在运维的终端上，而不是一小时后摆在某个调用方的请求上。
+	workflows, err := workflow.Load(splitCommaList(*workflowTemplates)...)
+	if err != nil {
+		return err
+	}
+	logger.Info("workflow templates loaded", slog.Int("count", workflows.Len()))
+
+	// Which limiter this replica gets is a deployment question, not a code
+	// one: one replica enforces exactly either way, and several replicas only
+	// enforce the configured allowance when they share Redis. Without it each
+	// admits a full allowance of its own, which is recorded rather than
+	// silently accepted — see the README.
+	//
+	// 本副本用哪个限流器是部署问题而不是代码问题：单副本两种方式都精确，而多副本只有
+	// 共享 Redis 时才真正执行配置的额度。没有它时每个副本各放行一份完整额度，这一点
+	// 被记录下来而不是默默接受——见 README。
+	limiter, err := rateLimiter(*redisAddr, logger)
+	if err != nil {
+		return err
+	}
+
+	// Routes are loaded before anything serves: a table naming a target with
+	// no runtime model is an operator mistake, and failing here puts it on
+	// their terminal instead of on a caller's request an hour later.
+	//
+	// 路由表在开始服务之前加载：一张 target 没有运行时模型的表是运维的失误，在这里
+	// 失败能把它摆在他们的终端上，而不是一小时后摆在某个调用方的请求上。
+	table, err := routing.Load(splitCommaList(*modelRoutes)...)
+	if err != nil {
+		return err
+	}
+	logger.Info("model routes loaded", slog.Int("aliases", table.Len()))
+
+	sched := scheduler.New(server, scheduler.Config{Metrics: registry, Routes: table})
 	httpServer := &http.Server{
 		Addr: *addr,
 		Handler: httpapi.New(sched, httpapi.Config{
-			Verifier: verifier,
-			APIKeys:  splitCommaList(*apiKeys),
-			Logger:   logger,
-			Metrics:  registry,
+			Verifier:  verifier,
+			APIKeys:   splitCommaList(*apiKeys),
+			Logger:    logger,
+			Metrics:   registry,
+			Workflows: workflows,
+			Limiter:   limiter,
 		}),
 	}
 	httpServeErr := make(chan error, 1)
@@ -311,6 +363,23 @@ func keyVerifier(addr, token string, cacheTTL time.Duration, logger *slog.Logger
 
 // splitCommaList parses a comma-separated flag value, trimming whitespace
 // and dropping empty entries.
+// rateLimiter builds the quota limiter this replica enforces with.
+//
+// rateLimiter 构造本副本用于执行配额的限流器。
+func rateLimiter(redisAddr string, logger *slog.Logger) (ratelimit.Limiter, error) {
+	if redisAddr == "" {
+		logger.Warn("no -redis-addr: rate limits are enforced per replica, so a fleet of N replicas admits N times each tenant's configured allowance")
+		return ratelimit.NewMemory(ratelimit.MemoryConfig{}), nil
+	}
+	client := redis.NewClient(&redis.Options{Addr: redisAddr})
+	limiter, err := ratelimit.NewRedis(ratelimit.RedisConfig{Client: client})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("rate limits are enforced fleet-wide", slog.String("redis_addr", redisAddr))
+	return limiter, nil
+}
+
 func splitCommaList(s string) []string {
 	var out []string
 	for _, part := range strings.Split(s, ",") {

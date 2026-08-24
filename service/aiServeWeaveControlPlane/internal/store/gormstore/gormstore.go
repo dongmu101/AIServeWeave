@@ -19,6 +19,7 @@ import (
 
 	"gorm.io/gorm"
 
+	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
@@ -77,6 +78,28 @@ func (s *Store) GetTenant(ctx context.Context, id string) (model.Tenant, error) 
 	var out model.Tenant
 	err := s.db.WithContext(ctx).Where("id = ?", id).Take(&out).Error
 	return out, translate(err)
+}
+
+// UpdateTenantLimits writes the tenant's quota. It updates the three columns
+// by name rather than saving the struct: a full save would write back every
+// column read a moment earlier, turning a concurrent status change into a
+// silent rollback.
+//
+// UpdateTenantLimits 写入租户的配额。它按列名更新那三列，而不是保存整个结构体：整体
+// 保存会把片刻之前读到的每一列都写回去，从而把一次并发的状态变更变成一次无声的回滚。
+func (s *Store) UpdateTenantLimits(ctx context.Context, id string, limits quota.Limits) error {
+	result := s.db.WithContext(ctx).Model(&model.Tenant{}).Where("id = ?", id).Updates(map[string]any{
+		"requests_per_minute": limits.RequestsPerMinute,
+		"tokens_per_minute":   limits.TokensPerMinute,
+		"max_concurrent":      limits.MaxConcurrent,
+	})
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 // -----------------------------------------------------------------------

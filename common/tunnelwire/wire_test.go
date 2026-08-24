@@ -1072,3 +1072,58 @@ func TestConvertConfigPreservesNegativeDurations(t *testing.T) {
 		t.Errorf("MaxConcurrent = %d, want -1", got.MaxConcurrent)
 	}
 }
+
+// TestArtifactListRoundTrip covers the ARTIFACT_LIST payload. The nil and
+// empty cases are separate on purpose: this package's standing rule is that
+// nil and an explicit zero value are not the same thing, and a run that
+// produced no artifacts must not come back as a decoding failure.
+//
+// TestArtifactListRoundTrip 覆盖 ARTIFACT_LIST 载荷。nil 与空切片刻意分开：本包的
+// 既有规矩是 nil 与显式零值不等价，而一次没有产出产物的运行不能表现为解码失败。
+func TestArtifactListRoundTrip(t *testing.T) {
+	tests := []struct {
+		name string
+		refs []runtime.ArtifactRef
+		want int
+	}{
+		{
+			name: "several artifacts",
+			refs: []runtime.ArtifactRef{
+				{RunID: "prompt-1", Filename: "ComfyUI_00001_.png", Subfolder: "", Type: "output"},
+				{RunID: "prompt-1", Filename: "clip.webm", Subfolder: "video", Type: "output"},
+			},
+			want: 2,
+		},
+		{
+			name: "a run that produced nothing",
+			refs: nil,
+			want: 0,
+		},
+		{
+			name: "an explicitly empty list",
+			refs: []runtime.ArtifactRef{},
+			want: 0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			encoded, err := tunnelwire.MarshalArtifactList(tt.refs)
+			if err != nil {
+				t.Fatalf("MarshalArtifactList() error = %v, want nil", err)
+			}
+			got, err := tunnelwire.UnmarshalArtifactList(encoded)
+			if err != nil {
+				t.Fatalf("UnmarshalArtifactList() error = %v, want nil", err)
+			}
+			if len(got) != tt.want {
+				t.Fatalf("decoded %d artifacts, want %d", len(got), tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.refs[i] {
+					t.Errorf("artifact %d = %+v, want %+v", i, got[i], tt.refs[i])
+				}
+			}
+		})
+	}
+}

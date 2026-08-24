@@ -1,13 +1,21 @@
 # aiserveweave-controlplane configuration.
 #
-# 本文件的每个密钥都是占位符，绝不能原样用于任何面向真实用户的部署。
-# 用 `openssl rand -base64 32` 生成各自独立的值，并通过部署系统的密钥管理
-# 注入，不要提交进仓库。
+# 三个密钥从环境变量注入，本文件里没有任何一个的取值。
+# 用 `openssl rand -base64 32` 各生成一个独立的值再 export。
 #
-# Every secret in this file is a placeholder and must never be used as-is in a
-# deployment serving real users. Generate independent values with
-# `openssl rand -base64 32` and inject them through the deployment's secret
-# management rather than committing them.
+# 三个密钥写成 ${VAR}：conf.UseEnv 会展开它们，未设置时展开为空串，而 Validate
+# 要求至少 32 字符，因此忘记注入的部署会带着一条可操作的报错启动失败——而不是
+# 带着一个提交在仓库里、人人可见的占位符继续跑下去。
+#
+# The three secrets are injected from the environment; no value for any of them
+# lives in this file. Generate an independent value for each with
+# `openssl rand -base64 32` and export it.
+#
+# They are written as ${VAR}: conf.UseEnv expands them, an unset variable
+# expands to the empty string, and Validate requires at least 32 characters —
+# so a deployment that forgot to inject them fails to start with an actionable
+# error rather than running on a placeholder that is committed here for anyone
+# to read.
 
 Name: aiserveweave-controlplane
 Host: 127.0.0.1
@@ -57,14 +65,14 @@ Redis:
 Auth:
   # 占位符，务必替换。
   # Placeholder. Replace it.
-  AccessSecret: "REPLACE-ME-with-openssl-rand-base64-32-value"
+  AccessSecret: "${AISW_ACCESS_SECRET}"
   AccessExpire: 12h
 
 # Gateway 用它调用 /internal/v1/apikeys/verify。
 # The Gateway presents this to /internal/v1/apikeys/verify.
-InternalToken: "REPLACE-ME-with-a-separate-openssl-rand-base64-32-value"
+InternalToken: "${AISW_INTERNAL_TOKEN}"
 
 # 授权创建租户。它是 Console 将来注册流程的临时替身。
 # Authorizes tenant creation. It stands in for the Console's eventual sign-up
 # flow.
-BootstrapToken: "REPLACE-ME-with-a-third-openssl-rand-base64-32-value"
+BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"

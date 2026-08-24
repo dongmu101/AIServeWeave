@@ -285,7 +285,7 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		if cached, ok := ctx.Cache.Get(r.Context(), req.Hash); ok {
-			writeJSON(w, http.StatusOK, types.VerifyResponse{TenantID: cached.TenantID, KeyID: cached.KeyID})
+			writeJSON(w, http.StatusOK, types.VerifyResponse{TenantID: cached.TenantID, KeyID: cached.KeyID, Limits: cached.Limits})
 			return
 		}
 
@@ -298,7 +298,36 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, types.VerifyResponse{
 			TenantID: verification.TenantID,
 			KeyID:    verification.KeyID,
+			Limits:   verification.Limits,
 		})
+	}
+}
+
+// setTenantLimits handles PUT /admin/v1/tenants/limits: the caller's own
+// tenant's quota. It is PUT rather than PATCH because the body is the whole
+// set — a partial update would need a way to say "leave this one alone" that
+// is distinct from "set it to unlimited", and zero already means unlimited.
+//
+// setTenantLimits 处理 PUT /admin/v1/tenants/limits：调用方自己所属租户的配额。用 PUT
+// 而不是 PATCH，因为请求体就是完整的一组——部分更新需要一种区别于「设为不限制」的方式
+// 来表达「这个不动」，而零已经表示不限制了。
+func setTenantLimits(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.SetLimitsRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		limits, err := ctx.Logic.SetTenantLimits(r.Context(), actor, req.Limits())
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, limits)
 	}
 }
 

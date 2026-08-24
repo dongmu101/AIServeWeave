@@ -63,6 +63,12 @@ const (
 	PayloadArtifactRef PayloadKind = "artifact_ref"
 	// PayloadArtifactBytes carries raw artifact bytes, not a proto message.
 	PayloadArtifactBytes PayloadKind = "artifact_bytes"
+	// PayloadArtifactList carries a marshalled tunnelv1.ArtifactList: which
+	// artifacts a run produced, and none of their bytes.
+	//
+	// PayloadArtifactList 携带序列化的 tunnelv1.ArtifactList：一次运行产出了哪些
+	// 产物，不含它们的任何字节。
+	PayloadArtifactList PayloadKind = "artifact_list"
 )
 
 // ResponseShape describes how many DataChunks an Operation's response uses,
@@ -152,6 +158,18 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Request:   PayloadArtifactRef,
 		Response:  PayloadArtifactBytes,
 		Shape:     ShapeBody,
+	},
+	// Listing is ShapeSingle, not ShapeBody: the reply is one bounded proto
+	// message naming the artifacts, so it travels like a status query rather
+	// than like the artifacts themselves.
+	//
+	// 列举是 ShapeSingle 而不是 ShapeBody：回复是一条有界的 proto 消息，只点名产物，
+	// 因此它像一次状态查询那样传输，而不像产物本身那样。
+	tunnelv1.Operation_OPERATION_ARTIFACT_LIST: {
+		Operation: tunnelv1.Operation_OPERATION_ARTIFACT_LIST,
+		Request:   PayloadRunRef,
+		Response:  PayloadArtifactList,
+		Shape:     ShapeSingle,
 	},
 }
 
@@ -372,6 +390,25 @@ func UnmarshalRunRef(b []byte) (string, error) {
 		return "", err
 	}
 	return pb.GetRunId(), nil
+}
+
+// MarshalArtifactList encodes refs as the single ARTIFACT_LIST response chunk.
+func MarshalArtifactList(refs []runtime.ArtifactRef) ([]byte, error) {
+	return marshalPayload(ArtifactRefsToProto(refs), "artifact list")
+}
+
+// UnmarshalArtifactList decodes the single ARTIFACT_LIST response chunk. A run
+// that produced no artifacts decodes to a nil slice, not an error: having
+// nothing to show is a normal outcome for a cancelled or still-queued run.
+//
+// UnmarshalArtifactList 解码 ARTIFACT_LIST 的单个响应块。没有产出任何产物的运行解码
+// 为 nil 切片而不是错误：对一次被取消或仍在排队的运行来说，无物可示是正常结果。
+func UnmarshalArtifactList(b []byte) ([]runtime.ArtifactRef, error) {
+	var pb tunnelv1.ArtifactList
+	if err := unmarshalPayload(b, &pb, "artifact list"); err != nil {
+		return nil, err
+	}
+	return ArtifactRefsFromProto(&pb), nil
 }
 
 // MarshalArtifactRef encodes ref as an ARTIFACT_OPEN request payload.
@@ -1093,6 +1130,35 @@ func ArtifactRefToProto(ref runtime.ArtifactRef) *tunnelv1.ArtifactRef {
 		Subfolder: ref.Subfolder,
 		Type:      ref.Type,
 	}
+}
+
+// ArtifactRefsToProto wraps a slice of artifact references in the envelope
+// protobuf needs for a top-level repeated field.
+//
+// ArtifactRefsToProto 把一组产物引用装进 protobuf 顶层 repeated 字段所需的信封里。
+func ArtifactRefsToProto(refs []runtime.ArtifactRef) *tunnelv1.ArtifactList {
+	pb := &tunnelv1.ArtifactList{}
+	if len(refs) > 0 {
+		pb.Artifacts = make([]*tunnelv1.ArtifactRef, len(refs))
+		for i, ref := range refs {
+			pb.Artifacts[i] = ArtifactRefToProto(ref)
+		}
+	}
+	return pb
+}
+
+// ArtifactRefsFromProto unwraps an artifact list.
+//
+// ArtifactRefsFromProto 拆开产物列表的信封。
+func ArtifactRefsFromProto(pb *tunnelv1.ArtifactList) []runtime.ArtifactRef {
+	if pb == nil || len(pb.GetArtifacts()) == 0 {
+		return nil
+	}
+	out := make([]runtime.ArtifactRef, len(pb.GetArtifacts()))
+	for i, ref := range pb.GetArtifacts() {
+		out[i] = ArtifactRefFromProto(ref)
+	}
+	return out
 }
 
 // ArtifactRefFromProto restores an artifact reference.

@@ -82,5 +82,5 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 	//
 	// 嵌入请求只有输入 token、没有输出 token，因此这里只贡献输入合计，不碰输出速率
 	// 分布——本该如此：这里没有输出流，也就没有速率可言。
-	h.metrics.Usage(resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
 }

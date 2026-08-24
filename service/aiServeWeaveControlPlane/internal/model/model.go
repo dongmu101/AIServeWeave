@@ -18,6 +18,8 @@ package model
 
 import (
 	"time"
+
+	"AIServeWeave/common/quota"
 )
 
 // Status values shared by tenants, users and API keys. They are strings
@@ -72,11 +74,44 @@ const (
 // 都以它限定范围——这个限定就是多租户本身，且它由 store 层强制执行，而不是留给每个
 // handler 自己记得。
 type Tenant struct {
-	ID        string `gorm:"primaryKey;size:32"`
-	Name      string `gorm:"size:128;not null"`
-	Status    string `gorm:"size:16;not null;index"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	ID     string `gorm:"primaryKey;size:32"`
+	Name   string `gorm:"size:128;not null"`
+	Status string `gorm:"size:16;not null;index"`
+	// The three limit columns are the tenant's quota, stored here rather than
+	// in a table of their own: every tenant has exactly one set, and a
+	// one-to-one table would add a join to the one query that sits on the
+	// inference request path.
+	//
+	// Zero means unlimited, which is what every existing row gets when this
+	// column is added. A deployment upgrading into this feature must not
+	// suddenly start rejecting the traffic it accepted yesterday.
+	//
+	// 这三个限制列是租户的配额，存在这里而不是单独一张表：每个租户恰好有一组，而
+	// 一对一的表会给那条位于推理请求路径上的查询平添一次 join。
+	//
+	// 零表示不限制，这也是本列加上时所有既有行得到的值。一个升级到本功能的部署，
+	// 绝不能突然开始拒绝它昨天还接受的流量。
+	RequestsPerMinute int `gorm:"not null;default:0"`
+	TokensPerMinute   int `gorm:"not null;default:0"`
+	MaxConcurrent     int `gorm:"not null;default:0"`
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
+}
+
+// Limits renders the tenant's quota in the form the Gateway enforces. It is a
+// method rather than an embedded struct so the columns stay flat: a schema is
+// read by people writing SQL during an incident, and gorm's embedded prefixes
+// are one more thing they would have to know.
+//
+// Limits 把租户的配额渲染成 Gateway 所执行的那个形式。它是一个方法而不是内嵌结构体，
+// 好让这些列保持扁平：schema 会被故障处置中写 SQL 的人直接阅读，而 gorm 的内嵌前缀
+// 是他们又要多知道的一件事。
+func (t Tenant) Limits() quota.Limits {
+	return quota.Limits{
+		RequestsPerMinute: t.RequestsPerMinute,
+		TokensPerMinute:   t.TokensPerMinute,
+		MaxConcurrent:     t.MaxConcurrent,
+	}
 }
 
 // TableName pins the table name to the README's 数据模型 listing, rather than
@@ -201,6 +236,7 @@ const (
 	ActionUserUpdate   = "user.update"
 	ActionAPIKeyCreate = "apikey.create"
 	ActionAPIKeyRevoke = "apikey.revoke"
+	ActionTenantLimits = "tenant.limits"
 )
 
 // AuditLog is one administrative action, recorded for the README's

@@ -23,8 +23,9 @@
 | `common/tunnelwire/` | `common/runtime` 类型与隧道 proto 之间的双向编解码，隧道两端共用；结果标签的六值约定也在这里 |
 | `common/metrics/` | `runtime.Metrics` 的实现与 Prometheus 文本导出，三个服务共用一个注册表；`metricstest/` 是各服务测试用的内存收集器 |
 | `common/apikey/` | API Key 的格式、哈希与展示形式。控制面铸造、Gateway 校验，两边必须算出同一个哈希，因此它是契约而非任一方的内部实现 |
-| `service/aiServeWeaveAgent/` | 主要实现所在：`tunnel/`（隧道）、`workflow/`（ComfyUI 工作流） |
-| `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门）均已落地；`e2e/`（与 Agent 的联调测试） |
+| `common/quota/` | 租户限制值及其含义。控制面存储与下发、Gateway 执行，两边必须按同一套规则解释同一份数据，因此同样是契约 |
+| `service/aiServeWeaveAgent/` | 主要实现所在：`tunnel/`（隧道）。`workflow/` 四个文件目前只有 package 声明，是空壳 |
+| `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）均已落地；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）与 `GatewayDirectory`（副本名册）已落地，详见其 README |
 | `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户、用户、API Key、审计已落地；配额未做。详见其 README |
 | `service/aiServeWeaveConsole/` | 尚无代码（前端） |
@@ -75,7 +76,7 @@ go test -race ./service/...
 - 协程泄漏在各包 `main_test.go` 的 `TestMain` 里统一断言，**不要**在单个测试里手写检查。
 - 默认测试不依赖真实 Gateway、GPU 或外部网络；需要真实后端的测试单独隔离（参考 `runtime/ollama/live_test.go`）。
 - 包内测试辅助放 `internal/`（如 `runtime/internal/runtimetest/`），不外泄给使用方。
-- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。**数据面（Agent、Gateway、Registry）的直接依赖只有 gRPC、protobuf 与 `coder/websocket`，这条线要守住。** go-zero、gorm、go-redis、golang-jwt、x/crypto 是控制面引入的，理由见控制面 README 的「为什么这个服务用 go-zero，而数据面不用」；Gateway 侧唯一因此新增的代码是 `controlplaneclient`，它只用标准库 `net/http`。
+- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。**Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 `coder/websocket`，这条线要守住。** Gateway 在此之外多一个 `go-redis`：跨副本限流需要一份共享计数，而本地计数在 N 个副本下会放行 N 倍额度——这是一次经过评估的例外，`-redis-addr` 留空时退回副本内执行，代价记录在 Gateway README。go-zero、gorm、golang-jwt、x/crypto 仍只属于控制面，理由见控制面 README 的「为什么这个服务用 go-zero，而数据面不用」；Gateway 的 `controlplaneclient` 依旧只用标准库 `net/http`。
 
 ## 安全红线
 

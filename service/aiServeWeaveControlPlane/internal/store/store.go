@@ -26,6 +26,7 @@ import (
 	"errors"
 	"time"
 
+	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 )
 
@@ -51,6 +52,14 @@ var ErrConflict = errors.New("store: conflict")
 type Tenants interface {
 	CreateTenant(ctx context.Context, tenant *model.Tenant) error
 	GetTenant(ctx context.Context, id string) (model.Tenant, error)
+	// UpdateTenantLimits writes the tenant's quota. It takes the whole set
+	// rather than one dimension: a partial update would need a way to say
+	// "leave this one alone" that is distinct from "set it to unlimited",
+	// and zero already means unlimited.
+	//
+	// UpdateTenantLimits 写入租户的配额。它接受整组而不是单个维度：部分更新需要一种
+	// 区别于「设为不限制」的方式来表达「这个不动」，而零已经表示不限制了。
+	UpdateTenantLimits(ctx context.Context, id string, limits quota.Limits) error
 }
 
 // Users persists the people who sign in to the Console.

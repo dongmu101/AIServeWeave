@@ -28,6 +28,7 @@ import (
 	"sync"
 	"time"
 
+	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
@@ -81,6 +82,38 @@ func (s *Store) GetTenant(_ context.Context, id string) (model.Tenant, error) {
 		return model.Tenant{}, store.ErrNotFound
 	}
 	return tenant, nil
+}
+
+// PutTenant overwrites a tenant row wholesale. It exists for tests that need a
+// tenant in a state no logic-layer method produces yet — suspension, for
+// instance, has no admin endpoint. It is on this store only: the gorm store
+// has no equivalent, and nothing outside a test may call it.
+//
+// PutTenant 整行覆盖一个租户。它为那些需要把租户置于 logic 层方法尚无法产生的状态的
+// 测试而存在——比如「暂停」目前还没有对应的管理端点。它只属于本 store：gorm 那个没有
+// 等价物，且测试之外的任何地方都不得调用它。
+func (s *Store) PutTenant(tenant model.Tenant) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tenants[tenant.ID] = tenant
+}
+
+// UpdateTenantLimits writes the tenant's quota.
+//
+// UpdateTenantLimits 写入租户的配额。
+func (s *Store) UpdateTenantLimits(_ context.Context, id string, limits quota.Limits) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	tenant, ok := s.tenants[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	tenant.RequestsPerMinute = limits.RequestsPerMinute
+	tenant.TokensPerMinute = limits.TokensPerMinute
+	tenant.MaxConcurrent = limits.MaxConcurrent
+	stamp(&tenant.CreatedAt, &tenant.UpdatedAt)
+	s.tenants[id] = tenant
+	return nil
 }
 
 // CreateUser inserts one user, rejecting a duplicate email the way the unique

@@ -3,11 +3,13 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 )
 
 // This file is the front door's observability surface. It answers the request
@@ -22,9 +24,10 @@ import (
 //     a thousand misspelled models would mint a thousand series. Per-model
 //     accounting belongs in usage records, which are bounded by a catalogue of
 //     models this deployment actually has.
-//   - The request path. Only the three routes this package serves become
-//     endpoint values; anything else is "other", so a scan for /wp-admin.php
-//     cannot grow the metric.
+//   - The request path. Only the routes this package serves become endpoint
+//     values, and the two that carry an identifier are matched by shape so the
+//     identifier never enters the label; anything else is "other", so a scan
+//     for /wp-admin.php cannot grow the metric.
 //
 // 本文件是前门的可观测性界面。它回答 README「可观测性」清单中属于请求的那一半——
 // 请求量与并发、TTFT、总响应时间、输入与输出 token、每秒输出 token——并且在回答时
@@ -34,8 +37,9 @@ import (
 //
 //   - 模型名。它是请求体里的自由文本：一个客户端请求一千个拼错的模型，就会造出一千条
 //     序列。按模型记账属于用量记录，那里由本部署实际拥有的模型目录来约束。
-//   - 请求路径。只有本包服务的三条路由会成为 endpoint 取值；其余一律记为 "other"，
-//     因此对 /wp-admin.php 的扫描无法把指标撑大。
+//   - 请求路径。只有本包服务的那几条路由会成为 endpoint 取值，其中带标识符的两条按
+//     形状匹配，因此标识符从不进入标签；其余一律记为 "other"，所以对 /wp-admin.php
+//     的扫描无法把指标撑大。
 
 // Metric names, one per instrument this package records.
 //
@@ -86,6 +90,22 @@ const (
 	// 输出 token 数时才记录，因此不上报用量的后端会让这个分布保持为空，而不是往里
 	// 灌零。
 	MetricOutputTokensPerSecond = "gateway_output_tokens_per_second"
+	// MetricRateLimitedTotal counts requests a tenant's quota refused, by the
+	// dimension that refused them. Its slope against the request counter is
+	// how an operator tells "this tenant is misconfigured" from "this tenant
+	// outgrew its plan".
+	//
+	// MetricRateLimitedTotal 按拒绝维度统计被租户配额拒掉的请求。它与请求计数器的
+	// 斜率之比，是运维用来区分「这个租户配错了」与「这个租户长大了」的依据。
+	MetricRateLimitedTotal = "gateway_rate_limited_total"
+	// MetricLimiterUnavailableTotal counts requests let through because the
+	// limiter could not answer. A non-zero slope means quotas are silently not
+	// being enforced, which is exactly the kind of degradation that is
+	// invisible until someone is billed for it.
+	//
+	// MetricLimiterUnavailableTotal 统计因限流器无法作答而被放行的请求。斜率非零意味着
+	// 配额正在悄悄失去执行，而这正是那种「直到有人收到账单才被发现」的退化。
+	MetricLimiterUnavailableTotal = "gateway_rate_limiter_unavailable_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model
@@ -96,6 +116,13 @@ const (
 	LabelEndpoint  = "endpoint"
 	LabelStatus    = "status"
 	LabelDirection = "direction"
+	// LabelReason names the quota dimension that rejected a request. Its
+	// values come from ratelimit's closed Reason set — never from a tenant id,
+	// which would grow this metric by one series per customer.
+	//
+	// LabelReason 指出拒绝该请求的配额维度。它的取值来自 ratelimit 那个封闭的 Reason
+	// 集合——绝不来自租户 id，那会让这个指标每多一个客户就多一条序列。
+	LabelReason = "reason"
 )
 
 // Endpoint label values, one per route this package serves plus the catch-all
@@ -106,7 +133,34 @@ const (
 	EndpointModels          = "models"
 	EndpointChatCompletions = "chat_completions"
 	EndpointEmbeddings      = "embeddings"
-	EndpointOther           = "other"
+	EndpointResponses       = "responses"
+	// EndpointWorkflowRuns and EndpointJobs cover the two routes whose paths
+	// carry an identifier. Neither identifier becomes part of the label: a
+	// job id is minted per request, so letting it through would let one
+	// client grow this metric without bound.
+	//
+	// EndpointWorkflowRuns 与 EndpointJobs 覆盖路径里带标识符的那两条路由。两个标识符
+	// 都不会进入标签：job id 是每个请求现铸的，放它进来等于让单个客户端把这个指标撑到
+	// 无界。
+	EndpointWorkflowRuns = "workflow_runs"
+	EndpointJobs         = "jobs"
+	// EndpointJobEvents is separate from EndpointJobs because an SSE watch
+	// lasts as long as the generation while a status call lasts milliseconds.
+	// Sharing one duration histogram would describe neither.
+	//
+	// EndpointJobEvents 与 EndpointJobs 分开，因为一次 SSE 旁观持续整个生成过程，而
+	// 一次状态查询是毫秒级的。共用一个时长直方图，哪一个都描述不了。
+	EndpointJobEvents = "job_events"
+	EndpointJobCancel = "job_cancel"
+	// EndpointJobArtifacts is the listing; EndpointArtifactDownload is the
+	// body. They are separate for the same reason job_events is separate from
+	// jobs: one is a bounded reply and the other streams a whole generation.
+	//
+	// EndpointJobArtifacts 是列举，EndpointArtifactDownload 是响应体。两者分开的理由
+	// 与 job_events 之于 jobs 相同：一个是有界回复，另一个要流完整整一次生成。
+	EndpointJobArtifacts     = "job_artifacts"
+	EndpointArtifactDownload = "artifact_download"
+	EndpointOther            = "other"
 )
 
 // Token direction label values on MetricTokensTotal.
@@ -150,6 +204,14 @@ func Descriptions() metrics.Descriptions {
 			Help:    "Completion tokens divided by the time the request took.",
 			Buckets: []float64{1, 5, 10, 25, 50, 100, 250, 500, 1000},
 		},
+		MetricRateLimitedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Requests refused by a tenant's quota, by the dimension that refused them.",
+		},
+		MetricLimiterUnavailableTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Requests let through because the rate limiter could not answer.",
+		},
 	}
 }
 
@@ -167,9 +229,34 @@ func endpointFor(path string) string {
 		return EndpointChatCompletions
 	case "/v1/embeddings":
 		return EndpointEmbeddings
-	default:
-		return EndpointOther
+	case "/v1/responses":
+		return EndpointResponses
 	}
+	// The two routes below carry an identifier in the path, so they are
+	// matched by shape rather than by equality. The shape is still a closed
+	// set: what does not match one of them is "other", identifier and all.
+	//
+	// 下面两条路由的路径里带标识符，因此按形状而不是相等来匹配。形状本身仍是封闭集合：
+	// 匹配不上的一律是 "other"，连同它的标识符一起。
+	if strings.HasPrefix(path, "/v1/workflows/") && strings.HasSuffix(path, "/runs") {
+		return EndpointWorkflowRuns
+	}
+	if strings.HasPrefix(path, "/v1/artifacts/") {
+		return EndpointArtifactDownload
+	}
+	if strings.HasPrefix(path, "/v1/jobs/") {
+		if strings.HasSuffix(path, "/events") {
+			return EndpointJobEvents
+		}
+		if strings.HasSuffix(path, "/cancel") {
+			return EndpointJobCancel
+		}
+		if strings.HasSuffix(path, "/artifacts") {
+			return EndpointJobArtifacts
+		}
+		return EndpointJobs
+	}
+	return EndpointOther
 }
 
 // recorder is the front door's typed view of runtime.Metrics: every recording
@@ -257,6 +344,21 @@ func (r *recorder) Usage(usage runtime.Usage, d time.Duration) {
 	if seconds := d.Seconds(); seconds > 0 {
 		r.sink.Histogram(MetricOutputTokensPerSecond, nil).Observe(float64(usage.CompletionTokens) / seconds)
 	}
+}
+
+// RateLimited records one request refused by a quota.
+//
+// RateLimited 记录一次被配额拒绝的请求。
+func (r *recorder) RateLimited(reason ratelimit.Reason) {
+	r.sink.Counter(MetricRateLimitedTotal, map[string]string{LabelReason: string(reason)}).Add(1)
+}
+
+// LimiterUnavailable records one request let through because the limiter could
+// not answer.
+//
+// LimiterUnavailable 记录一次因限流器无法作答而被放行的请求。
+func (r *recorder) LimiterUnavailable() {
+	r.sink.Counter(MetricLimiterUnavailableTotal, nil).Add(1)
 }
 
 // statusOf reports the status a finished response carried, defaulting to 200

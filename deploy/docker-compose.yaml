@@ -1,18 +1,37 @@
-# 控制面的数据库与缓存。
+# 一套可以跑起来的 AIServeWeave：依赖服务、Registry、控制面与 Gateway。
 #
-# 这里同时提供 PostgreSQL 与 MySQL：控制面两种驱动都支持，由
-# service/aiServeWeaveControlPlane/etc/controlplane.yaml 的 Database.Driver 选择。
-# PostgreSQL 是首要目标（后续那些 JSON 列会用到 JSONB），默认起的也是它；
-# 需要 MySQL 时用 `docker compose --profile mysql up` 把它一并拉起。
+# Agent 刻意不在这里：它的工作是连本机上已经跑着的 Ollama / vLLM / ComfyUI，
+# 而把它塞进容器只会在它与那些后端之间多一层网络。用法见下面的注释。
 #
-# The control plane's database and cache.
+# 起步：
 #
-# Both PostgreSQL and MySQL are offered here: the control plane supports both
-# drivers, selected by Database.Driver in
-# service/aiServeWeaveControlPlane/etc/controlplane.yaml. PostgreSQL is the
-# primary target (JSONB matters for the JSON columns still to come) and is what
-# comes up by default; bring MySQL up alongside it with
-# `docker compose --profile mysql up` when you need it.
+#   cd deploy
+#   cp .env.example .env && $EDITOR .env      # 三个密钥，各自独立生成
+#   docker compose up -d
+#
+# 证书链：Registry 首次启动时生成自己的 CA，Gateway 的隧道证书由它签发
+# （registry-init 这一步）。Agent 用同一个 CA 验证 Gateway——这不是巧合，而是
+# tunnel/identity.go 的信任模型：Agent 只信任 Registry 的 CA。
+#
+# A runnable AIServeWeave: the dependencies, the Registry, the control plane
+# and the Gateway.
+#
+# The Agent is deliberately absent. Its job is to reach the Ollama / vLLM /
+# ComfyUI already running on a machine, and putting it in a container only adds
+# a network hop between it and those backends. See the note at the bottom for
+# how to run it.
+#
+# Getting started:
+#
+#   cd deploy
+#   cp .env.example .env && $EDITOR .env      # three secrets, generated separately
+#   docker compose up -d
+#
+# The certificate chain: the Registry generates its own CA on first start, and
+# signs the Gateway's tunnel certificate from it (the registry-init step). An
+# Agent verifies the Gateway against that same CA — not a coincidence but the
+# trust model in tunnel/identity.go, where the Registry CA is the only root an
+# Agent trusts.
 
 services:
   postgres:
@@ -72,7 +91,168 @@ services:
       timeout: 5s
       retries: 5
 
+  # ---------------------------------------------------------------------
+  # AIServeWeave 自己的三个二进制 / The three AIServeWeave binaries
+  # ---------------------------------------------------------------------
+
+  # registry-init 跑一次就退出：它让 Registry 生成 CA（LoadOrCreate 的副作用），
+  # 并从那个 CA 签一张 Gateway 隧道监听器用的服务端证书。
+  #
+  # 它必须先于 gateway 完成，因此 gateway 用 service_completed_successfully 等它。
+  #
+  # registry-init runs once and exits: it makes the Registry generate its CA (a
+  # side effect of LoadOrCreate) and signs a server certificate from that CA for
+  # the Gateway's tunnel listener.
+  #
+  # It has to finish before the gateway starts, which is what
+  # service_completed_successfully below waits for.
+  registry-init:
+    build:
+      context: ..
+      args:
+        SERVICE: aiServeWeaveRegistry
+    command:
+      - -data-dir=/data
+      - -issue-server-cert
+      - -tls-host=gateway,127.0.0.1,localhost
+      - -out-dir=/data/gateway-certs
+    volumes:
+      - registry-data:/data
+    restart: "no"
+
+  registry:
+    build:
+      context: ..
+      args:
+        SERVICE: aiServeWeaveRegistry
+    restart: unless-stopped
+    command:
+      - -addr=:9443
+      - -data-dir=/data
+      - -tls-host=registry,127.0.0.1,localhost
+      - -log-level=${LOG_LEVEL:-info}
+    volumes:
+      - registry-data:/data
+    ports:
+      # 暴露到回环，好让宿主机上的 Agent 能换证书。
+      # Exposed on loopback so an Agent on the host can get its certificate.
+      - "127.0.0.1:${REGISTRY_PORT:-9443}:9443"
+    depends_on:
+      registry-init:
+        condition: service_completed_successfully
+
+  controlplane:
+    build:
+      context: ..
+      args:
+        SERVICE: aiServeWeaveControlPlane
+    restart: unless-stopped
+    command: ["-f", "/etc/aiserveweave/controlplane.yaml"]
+    environment:
+      # 这三个是密钥。compose 在这里提供默认值，配置文件里只有 ${VAR}
+      # ——conf.UseEnv 不支持带默认值的形式，见 controlplane.yaml 的注释。
+      #
+      # These three are secrets. Compose supplies the defaults here and the
+      # config file carries only ${VAR}: conf.UseEnv has no default-value form,
+      # as controlplane.yaml notes.
+      AISW_ACCESS_SECRET: ${AISW_ACCESS_SECRET:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_INTERNAL_TOKEN: ${AISW_INTERNAL_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_BOOTSTRAP_TOKEN: ${AISW_BOOTSTRAP_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      POSTGRES_USER: ${POSTGRES_USER:-aiserveweave}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiserveweave}
+      POSTGRES_DB: ${POSTGRES_DB:-aiserveweave}
+    volumes:
+      - ./controlplane.yaml:/etc/aiserveweave/controlplane.yaml:ro
+    ports:
+      - "127.0.0.1:${CONTROLPLANE_PORT:-8090}:8090"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  gateway:
+    build:
+      context: ..
+      args:
+        SERVICE: aiServeWeaveGateway
+    restart: unless-stopped
+    command:
+      - -addr=:8080
+      - -tunnel-addr=:8443
+      # Agent 拨的是这个地址，因此它必须是宿主机上可达的那个，而不是容器内的。
+      # An Agent dials this, so it has to be the address reachable from the
+      # host rather than the one inside the container network.
+      - -tunnel-advertise-addr=${GATEWAY_ADVERTISE_ADDR:-127.0.0.1:8443}
+      # 全部三份材料都来自 Registry 的 data volume：registry-init 签出的那张证书，
+      # 以及 Registry 自己生成的 CA bundle。
+      #
+      # All three come from the Registry's data volume: the certificate
+      # registry-init signed, and the CA bundle the Registry generated itself.
+      - -tls-cert=/registry-data/gateway-certs/server-cert.pem
+      - -tls-key=/registry-data/gateway-certs/server-key.pem
+      # 节点证书由 Registry 的 CA 签发，因此这里的客户端 CA 就是那份 CA bundle。
+      # Node certificates are signed by the Registry's CA, so the client CA
+      # here is that same bundle.
+      - -client-ca=/registry-data/ca/ca-cert.pem
+      - -registry-addr=registry:9443
+      - -registry-ca=/registry-data/ca/ca-cert.pem
+      - -control-plane-addr=http://controlplane:8090
+      - -redis-addr=redis:6379
+      # 容器内绑 0.0.0.0，但端口只映射到宿主机回环，因此实际暴露面与
+      # Gateway README 那条「默认只绑回环」的意图一致：导出内容会点出每一个
+      # 连着的 node_id，那不是一份该对外派发的清单。
+      #
+      # Bound to 0.0.0.0 inside the container but published only on the host's
+      # loopback, so the reachable surface matches the intent the Gateway
+      # README states for the loopback default: the export names every
+      # connected node_id, which is not a list to hand out.
+      - -metrics-addr=:9090
+      - -log-level=${LOG_LEVEL:-info}
+    environment:
+      # flag 在 ps 输出里可见，因此内部令牌走环境变量。
+      # A flag is visible in ps output, so the internal token goes through the
+      # environment.
+      AISW_CONTROL_PLANE_TOKEN: ${AISW_INTERNAL_TOKEN:?set it in deploy/.env}
+    volumes:
+      # 只读挂载：Gateway 出示这些材料，从不写它们。私钥是 0600，而两个镜像用的是
+      # 同一个 uid，因此读得到。
+      #
+      # Mounted read-only: the Gateway presents these and never writes them.
+      # The private key is 0600 and both images run as the same uid, which is
+      # what makes it readable.
+      - registry-data:/registry-data:ro
+    ports:
+      - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
+      - "127.0.0.1:${GATEWAY_TUNNEL_PORT:-8443}:8443"
+      - "127.0.0.1:${GATEWAY_METRICS_PORT:-9090}:9090"
+    depends_on:
+      registry:
+        condition: service_started
+      controlplane:
+        condition: service_started
+      redis:
+        condition: service_healthy
+
+# Agent 在宿主机上跑，因为它要连本机的推理后端：
+#
+#   TOKEN=$(docker compose exec -T registry /usr/local/bin/service \
+#             -data-dir /data -mint-token)
+#   echo "$TOKEN" > /tmp/aisw-token
+#   docker compose cp registry:/data/ca/ca-cert.pem /tmp/aisw-ca.pem
+#   go run ./service/aiServeWeaveAgent \
+#     -registry 127.0.0.1:9443 -ca-file /tmp/aisw-ca.pem \
+#     -bootstrap-token-file /tmp/aisw-token \
+#     -cert-file ./data/agent/cert.pem -key-file ./data/agent/key.pem \
+#     -gateway 127.0.0.1:8443 \
+#     -ollama-url http://127.0.0.1:11434 \
+#     -labels region=local
+#
+# The Agent runs on the host because it reaches this machine's own inference
+# backends; the commands above are the same on any host.
+
 volumes:
   postgres-data:
   mysql-data:
   redis-data:
+  registry-data:

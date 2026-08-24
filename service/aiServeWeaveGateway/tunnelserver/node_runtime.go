@@ -243,6 +243,24 @@ func (r *NodeRuntime) Cancel(ctx context.Context, runID string) error {
 	return err
 }
 
+// Artifacts lists what a run produced. Unlike OpenArtifact this carries no
+// artifact bytes, so it travels on an inference slot like any other bounded
+// reply rather than occupying a bulk slot.
+//
+// Artifacts 列举一次运行产出了什么。与 OpenArtifact 不同，它不携带任何产物字节，
+// 因此像其他有界回复一样走推理槽，而不占用批量槽。
+func (r *NodeRuntime) Artifacts(ctx context.Context, runID string) ([]runtime.ArtifactRef, error) {
+	payload, err := tunnelwire.MarshalRunRef(runID)
+	if err != nil {
+		return nil, err
+	}
+	body, err := r.single(ctx, tunnelv1.Operation_OPERATION_ARTIFACT_LIST, payload, nil)
+	if err != nil {
+		return nil, err
+	}
+	return tunnelwire.UnmarshalArtifactList(body)
+}
+
 // OpenArtifact streams one output artifact. The body is read from the tunnel
 // as the caller reads it: a large artifact is never held whole in this
 // process, and it travels on a bulk slot so it cannot displace inference.

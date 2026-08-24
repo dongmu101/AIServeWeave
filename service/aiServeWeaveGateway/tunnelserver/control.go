@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"maps"
 	"sync"
 
 	"google.golang.org/grpc/codes"
@@ -62,6 +63,7 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	n.agentVersion = hello.GetAgentVersion()
 	n.resources = hello.GetResources()
 	n.runtimeIDs = append([]string(nil), hello.GetRuntimeIds()...)
+	n.labels = maps.Clone(hello.GetLabels())
 	// A reconnecting Agent is not draining any more: Draining describes the
 	// stream it was announced on, and that stream is gone.
 	n.draining = false

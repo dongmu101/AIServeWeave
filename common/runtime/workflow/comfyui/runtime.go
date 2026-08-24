@@ -597,12 +597,15 @@ func (r *Runtime) OpenArtifact(ctx context.Context, ref runtime.ArtifactRef) (ru
 // Artifacts lists the output files a finished run produced, read from its
 // History entry.
 //
-// It is an adapter extension rather than part of WorkflowRuntime: the
-// interface takes an ArtifactRef but offers no way to enumerate them, and a
-// caller that missed the node_output events — after a reconnect, or after
-// an Agent restart — has no other way to find its own outputs. Promoting it
-// to the interface is an upper-layer decision, so it stays available
-// through a type assertion for now.
+// It is part of runtime.WorkflowRuntime: the interface takes an ArtifactRef
+// but offers no way to enumerate them, and a caller that missed the
+// node_output events — after a reconnect, or after an Agent restart — has no
+// other way to find its own outputs. It travels the tunnel as
+// OPERATION_ARTIFACT_LIST.
+//
+// 它是 runtime.WorkflowRuntime 的一部分：该接口接受 ArtifactRef 却没有枚举它们的
+// 办法，而错过了 node_output 事件的调用方——重连之后，或 Agent 重启之后——就再无
+// 别的途径找到自己的产物。它以 OPERATION_ARTIFACT_LIST 走隧道。
 func (r *Runtime) Artifacts(ctx context.Context, runID string) ([]runtime.ArtifactRef, error) {
 	if err := r.checkOpen("artifacts"); err != nil {
 		return nil, err

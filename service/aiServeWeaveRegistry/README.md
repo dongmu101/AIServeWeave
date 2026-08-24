@@ -37,6 +37,17 @@ aiserveweave-registry -data-dir ./data/registry -mint-token -ttl 15m
 
 **已知限制**：这个 CLI 模式直接读写 `tokens.json`，和正在运行的 server 进程之间没有跨进程锁。两者极小概率同时写文件时后写的会覆盖先写的——单个 token 的铸造/消费都是低频操作，真撞上了重试一次即可，不是安全问题。这条限制和 Agent 侧 `-ollama-url` 之类的过渡 flag 性质一样：控制台落地后这条路径整个替换掉，不需要现在就补跨进程锁。
 
+## `-issue-server-cert`：Gateway 的隧道证书从哪来
+
+Gateway 的隧道监听器需要一张服务端证书，而它别处拿不到：Agent 只信任一个根——`tunnel/identity.go` 的 `TLSConfig` 把 `-ca-file` 加载的 Registry CA 作为 `RootCAs`，因此任何其他签发方的证书都会被每一个 Agent 拒绝。而本服务通过 RPC 签发的是**节点**证书（`ExtKeyUsageClientAuth` + `aiserveweave://node/<id>` SAN），那不是监听器该出示的东西。
+
+```bash
+aiserveweave-registry -data-dir ./data/registry -issue-server-cert \
+  -tls-host gateway,127.0.0.1 -out-dir ./certs
+```
+
+写出 `server-cert.pem`（0644）与 `server-key.pem`（0600），`ExtKeyUsageServerAuth`，SAN 取 `-tls-host`。与 `-mint-token` 一样是 CLI 模式而不是 RPC，理由相同：这是部署时执行一次的运维动作，执行者本来就对 CA 有文件系统访问权。`deploy/docker-compose.yaml` 的 `registry-init` 就是这条命令。
+
 ## `GatewayDirectory`：Gateway 副本怎么拿到名册
 
 Gateway 副本启动时用 `service/aiServeWeaveGateway/registryclient` 拨号 `GatewayDirectory.Join`（一条双向流），报告自己的 `replica_id`/`endpoint`；Registry 把当前所有在线副本的名册广播给每一条打开的流，副本集合或状态变化时重新广播一次，版本号单调递增。副本优雅关闭前会在流上多发一条 `state: DRAINING` 的消息，再关闭连接；连接断开（无论是否发过 DRAINING）都会让该副本立刻从名册里消失并触发一次广播——不保留"已标记 removed 但还留着"的中间态。

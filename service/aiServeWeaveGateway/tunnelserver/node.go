@@ -2,6 +2,7 @@ package tunnelserver
 
 import (
 	"log/slog"
+	"maps"
 	"sort"
 	"sync"
 	"time"
@@ -39,6 +40,13 @@ type node struct {
 	// anyway; it is a shortcut, never the enforcement point, which stays on
 	// the Agent.
 	runtimeIDs []string
+	// labels are what the Agent declared in Hello. They are taken at face
+	// value and must never decide authorization — see the proto's note on
+	// Hello.labels.
+	//
+	// labels 是 Agent 在 Hello 中声明的内容。它们被原样采信，且绝不能参与授权判断
+	// ——见 proto 中对 Hello.labels 的说明。
+	labels map[string]string
 
 	// snapshots is the runtime inventory, keyed by runtime_id. A report with
 	// full set replaces the map wholesale; an incremental report merges, so
@@ -87,6 +95,13 @@ type NodeInfo struct {
 	Resources    *tunnelv1.NodeResources
 	// RuntimeIDs is the Agent's declared allowlist.
 	RuntimeIDs []string
+	// Labels are the operator-assigned facts the Agent declared, which routing
+	// rules select on. They are a preference about where work should go, never
+	// permission to receive it: a compromised Agent could claim any label.
+	//
+	// Labels 是 Agent 声明的、由运维赋予的事实，路由规则据此选择。它们表达的是「工作
+	// 应该去哪」的偏好，绝不是「有权接收工作」：被攻破的 Agent 可以声称任何标签。
+	Labels map[string]string
 	// Runtimes is the last reported inventory, sorted by runtime_id so two
 	// consecutive reads of an unchanged node compare equal.
 	Runtimes []runtime.Snapshot
@@ -167,6 +182,7 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		AgentVersion:     n.agentVersion,
 		Resources:        n.resources,
 		RuntimeIDs:       append([]string(nil), n.runtimeIDs...),
+		Labels:           maps.Clone(n.labels),
 		Runtimes:         runtimes,
 		IdleSlots:        idle,
 		InflightRequests: n.inflight,

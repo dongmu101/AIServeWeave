@@ -16,7 +16,11 @@
 // ——在 routes.go 里不过一页代码。
 package types
 
-import "time"
+import (
+	"time"
+
+	"AIServeWeave/common/quota"
+)
 
 // LoginRequest is a Console sign-in.
 //
@@ -160,17 +164,49 @@ type VerifyRequest struct {
 	Hash string `json:"hash"`
 }
 
-// VerifyResponse tells the Gateway which tenant to attribute a request to.
-// It carries nothing else — not the key's name, not its creator, not its
-// expiry — because the data plane has no use for any of it and every extra
-// field is one more thing to invalidate when it changes.
+// VerifyResponse tells the Gateway which tenant to attribute a request to, and
+// what that tenant may consume. It carries nothing else — not the key's name,
+// not its creator, not its expiry — because the data plane has no use for any
+// of it and every extra field is one more thing to invalidate when it changes.
 //
-// VerifyResponse 告诉 Gateway 该把一次请求归给哪个租户。它别无其他内容——不含 key
-// 的名称、创建者或过期时间——因为数据面用不着它们，而每多一个字段，就多一样在它变化
-// 时需要失效的东西。
+// Limits is the one addition that earns its place: the Gateway enforces the
+// quota, and sending it here means enforcement costs no round trip of its own.
+// It shares the identity's cache lifetime, so a limit change lands in the same
+// window a revocation does.
+//
+// VerifyResponse 告诉 Gateway 该把一次请求归给哪个租户，以及该租户可以消耗多少。它
+// 别无其他内容——不含 key 的名称、创建者或过期时间——因为数据面用不着它们，而每多一个
+// 字段，就多一样在它变化时需要失效的东西。
+//
+// Limits 是唯一配得上位置的新增项：配额由 Gateway 执行，把它放在这里，意味着执行不必
+// 自己付出一次往返。它与身份共用缓存生命期，因此一次限制变更的落地窗口与一次吊销相同。
 type VerifyResponse struct {
-	TenantID string `json:"tenant_id"`
-	KeyID    string `json:"key_id"`
+	TenantID string       `json:"tenant_id"`
+	KeyID    string       `json:"key_id"`
+	Limits   quota.Limits `json:"limits"`
+}
+
+// SetLimitsRequest sets the caller's own tenant's quota. There is no tenant id
+// in it: the tenant comes from the session, so an admin cannot aim this at
+// somebody else's tenant by editing a request body.
+//
+// SetLimitsRequest 设置调用方自己所属租户的配额。它里面没有租户 id：租户来自会话，
+// 因此管理员无法通过改请求体把它指向别人的租户。
+type SetLimitsRequest struct {
+	RequestsPerMinute int `json:"requests_per_minute"`
+	TokensPerMinute   int `json:"tokens_per_minute"`
+	MaxConcurrent     int `json:"max_concurrent"`
+}
+
+// Limits returns the request in the shared contract's form.
+//
+// Limits 以共享契约的形式返回该请求。
+func (r SetLimitsRequest) Limits() quota.Limits {
+	return quota.Limits{
+		RequestsPerMinute: r.RequestsPerMinute,
+		TokensPerMinute:   r.TokensPerMinute,
+		MaxConcurrent:     r.MaxConcurrent,
+	}
 }
 
 // ErrorResponse is the failure shape every endpoint returns.

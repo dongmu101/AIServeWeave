@@ -160,6 +160,14 @@ type ClientConfig struct {
 	Endpoint string
 	// AgentVersion is reported in Hello.
 	AgentVersion string
+	// Labels are operator-assigned facts about this node — region=local,
+	// gpu=4090 — that the Gateway's routing rules select on. They describe the
+	// machine rather than its load, so they travel with Hello and a reconnect
+	// is what re-reads them.
+	//
+	// Labels 是运维赋予本节点的事实——region=local、gpu=4090——Gateway 的路由规则据此
+	// 选择节点。它们描述的是机器而不是它的负载，因此随 Hello 一同传送，重连即重新读取。
+	Labels map[string]string
 	// Resources describes the node's hardware for the scheduler. It may be
 	// nil on a node that does not report hardware.
 	Resources *tunnelv1.NodeResources
@@ -443,6 +451,7 @@ func (c *Client) handshake(ctx context.Context, stream ControlStream, reader *co
 		AgentVersion: c.cfg.AgentVersion,
 		Resources:    c.cfg.Resources,
 		RuntimeIds:   c.helloRuntimeIDs(),
+		Labels:       c.cfg.Labels,
 	}}}
 	if err := stream.Send(hello); err != nil {
 		return c.streamError("send hello", err)

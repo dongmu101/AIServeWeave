@@ -289,7 +289,7 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, req cha
 	//
 	// 非流式响应的首字节就是它的末字节：TTFT 与总响应时间是同一个数字，因此只记录
 	// 后者，好让 TTFT 分布始终是关于流式的陈述。
-	h.metrics.Usage(resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
 }
 
 func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCompletionRequest, start time.Time) {
@@ -311,19 +311,25 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	// A client disconnect must unblock a Recv that is waiting on the
-	// tunnel, or the goroutine serving this request never returns: closing
-	// the stream is what carries that cancellation across the tunnel
-	// boundary, per AGENTS.md's "任何一跳都不得无界缓冲".
-	done := make(chan struct{})
-	defer close(done)
-	go func() {
-		select {
-		case <-r.Context().Done():
-			stream.Close()
-		case <-done:
-		}
-	}()
+	// A client disconnect unblocks the Recv below on its own:
+	// tunnelserver.Response.Recv selects on the request's context (call.go),
+	// so cancellation returns from it immediately and the deferred Close then
+	// carries the cancel across the tunnel to the Agent, per AGENTS.md's
+	// "任何一跳都不得无界缓冲".
+	//
+	// There used to be a goroutine here that called Close on cancellation.
+	// It bought nothing — Recv already returns on its own — and it broke
+	// Response's stated single-consumer contract (see call.go's note on the
+	// recording state), which the race detector caught as a real data race
+	// between that Close and this Recv.
+	//
+	// 客户端断连会让下面的 Recv 自行解除阻塞：tunnelserver.Response.Recv 自己 select
+	// 请求的 context（call.go），因此取消会让它立即返回，随后被 defer 的 Close 把这次
+	// 取消经隧道送给 Agent，对应 AGENTS.md 的「任何一跳都不得无界缓冲」。
+	//
+	// 这里原本有一个在取消时调用 Close 的协程。它什么也没换来——Recv 本就会自行返回
+	// ——却破坏了 Response 声明的单消费者契约（见 call.go 对记录状态的说明），竞态
+	// 检测器把它抓成了那次 Close 与这里的 Recv 之间的一次真实数据竞争。
 
 	loggedTTFT := false
 	// The last usage the backend reported wins: OpenAI's streaming protocol
@@ -338,7 +344,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 		if errors.Is(err, io.EOF) {
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			flusher.Flush()
-			h.metrics.Usage(usage, time.Since(start))
+			h.recordUsage(r.Context(), usage, time.Since(start))
 			return
 		}
 		if err != nil {

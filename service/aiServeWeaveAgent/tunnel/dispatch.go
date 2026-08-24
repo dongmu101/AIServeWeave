@@ -335,6 +335,31 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		// The only operation whose success is a bare ResponseEnd.
 		return wr.Cancel(ctx, runID)
 
+	case tunnelv1.Operation_OPERATION_ARTIFACT_LIST:
+		wr, err := workflowRuntime(rt, id)
+		if err != nil {
+			return err
+		}
+		runID, err := tunnelwire.UnmarshalRunRef(reqPayload)
+		if err != nil {
+			return err
+		}
+		refs, err := wr.Artifacts(ctx, runID)
+		if err != nil {
+			return err
+		}
+		// An empty list is still sent as a chunk: "this run produced nothing"
+		// is an answer, and the caller must be able to tell it apart from a
+		// reply that never arrived.
+		//
+		// 空列表同样作为一个块发出：「这次运行什么都没产出」是一个答复，调用方必须能
+		// 把它与「答复根本没到」区分开。
+		payload, err := tunnelwire.MarshalArtifactList(refs)
+		if err != nil {
+			return err
+		}
+		return d.sendChunk(sink, payload)
+
 	case tunnelv1.Operation_OPERATION_ARTIFACT_OPEN:
 		wr, err := workflowRuntime(rt, id)
 		if err != nil {

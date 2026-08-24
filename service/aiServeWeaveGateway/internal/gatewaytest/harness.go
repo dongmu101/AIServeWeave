@@ -3,11 +3,16 @@ package gatewaytest
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
 
+	"google.golang.org/protobuf/types/known/timestamppb"
+
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
 )
 
@@ -97,6 +102,41 @@ func (h *Harness) Connect(nodeID string, runtimeIDs ...string) *Control {
 	}
 	c.Ack = ack
 	return c
+}
+
+// ConnectWithLabels connects a node carrying operator-assigned labels, reports
+// snap, and parks one slot per handler. It is the labelled counterpart of the
+// per-package connectNode helpers, kept here because building a Hello with
+// labels is harness business rather than any one test's.
+//
+// ConnectWithLabels 连接一个带有运维标签的节点，上报 snap，并为每个 handler park 一个
+// 槽。它是各包 connectNode 辅助函数的带标签对应物，放在这里是因为「构造一个带标签的
+// Hello」属于测试框架的事，而不是某一个测试的事。
+func (h *Harness) ConnectWithLabels(t *testing.T, nodeID, runtimeID string, labels map[string]string, snap runtime.Snapshot, handlers ...SlotHandler) {
+	t.Helper()
+	c := h.StartControl(nodeID, &tunnelv1.Hello{
+		NodeId:       nodeID,
+		AgentVersion: "test",
+		RuntimeIds:   []string{runtimeID},
+		Labels:       labels,
+	})
+	frame := c.Expect(t)
+	if frame.GetAck() == nil {
+		t.Fatalf("first gateway frame = %T, want HelloAck", frame.GetBody())
+	}
+	c.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full:       true,
+		ReportedAt: timestamppb.New(h.Clock.Now()),
+		Snapshots:  tunnelwire.SnapshotsToProto([]runtime.Snapshot{snap}),
+	}}})
+	for i, handle := range handlers {
+		h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, fmt.Sprintf("%s-slot-%d", nodeID, i), handle)
+	}
+	WaitFor(t, "slots to park on "+nodeID, func() bool { return IdleCount(h, nodeID) == len(handlers) })
+	WaitFor(t, "inventory to arrive on "+nodeID, func() bool {
+		info, _ := h.Srv.Node(nodeID)
+		return len(info.Runtimes) == 1 && len(info.Labels) == len(labels)
+	})
 }
 
 // StartControl starts a Control handler and sends hello, without requiring
@@ -260,6 +300,18 @@ func (s *AgentSlot) Wait(t *testing.T) error {
 // DataFrame builds a DataChunk response frame.
 func DataFrame(payload []byte) *tunnelv1.AgentFrame {
 	return &tunnelv1.AgentFrame{Body: &tunnelv1.AgentFrame_Data{Data: &tunnelv1.DataChunk{Payload: payload}}}
+}
+
+// HeaderFrame builds the ResponseHeaders frame that precedes an artifact
+// body. Only ARTIFACT_OPEN sends one; every other operation goes straight to
+// its DataChunks.
+//
+// HeaderFrame 构造产物响应体之前的那个 ResponseHeaders 帧。只有 ARTIFACT_OPEN 会发
+// 它，其余操作都直接进入自己的 DataChunk。
+func HeaderFrame(contentType string, size int64) *tunnelv1.AgentFrame {
+	return &tunnelv1.AgentFrame{Body: &tunnelv1.AgentFrame_Headers{
+		Headers: &tunnelv1.ResponseHeaders{ContentType: contentType, Size: size},
+	}}
 }
 
 // WireError lets a scripted handler dictate the exact TunnelError an Agent

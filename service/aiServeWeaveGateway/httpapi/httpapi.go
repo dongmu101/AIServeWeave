@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
+	"AIServeWeave/service/aiServeWeaveGateway/workflow"
 )
 
 // Config configures the HTTP front door.
@@ -33,24 +35,75 @@ type Config struct {
 	//
 	// Metrics 接收前门的仪器，其描述见 Descriptions。为 nil 时全部丢弃。
 	Metrics runtime.Metrics
+
+	// Workflows is the catalogue of registered workflow templates. Nil leaves
+	// the workflow routes mounted but registering nothing, so a submit gets
+	// the same 404 as an unknown template rather than a route that vanishes
+	// depending on configuration.
+	//
+	// Workflows 是已注册工作流模板的目录。为 nil 时工作流路由照常挂载但目录为空，
+	// 因此提交会得到与「模板不存在」相同的 404，而不是一条随配置忽隐忽现的路由。
+	Workflows *workflow.Registry
+
+	// MaxJobs bounds the in-memory job table. Zero uses DefaultMaxJobs.
+	//
+	// MaxJobs 限制内存 job 表的大小。为零时采用 DefaultMaxJobs。
+	MaxJobs int
+
+	// Limiter enforces each tenant's quota.Limits. Nil disables enforcement
+	// entirely, which is what a deployment with no control plane gets: there
+	// are no limits to enforce when there is nothing issuing them.
+	//
+	// Limiter 执行每个租户的 quota.Limits。为 nil 时完全关闭执行，未部署控制面的
+	// 环境得到的正是这个：没有东西签发限制时，也就没有限制可执行。
+	Limiter ratelimit.Limiter
+
+	// Clock stamps job timestamps. Nil uses the system clock; tests inject a
+	// fake so a job's timeline is asserted without sleeping.
+	//
+	// Clock 为 job 的时间戳提供时间。为 nil 时使用系统时钟；测试注入假时钟，好在
+	// 不睡眠的前提下断言 job 的时间线。
+	Clock runtime.Clock
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
-// POST /v1/chat/completions (streaming and non-streaming) and
-// POST /v1/embeddings, wrapped in request logging and API key
+// POST /v1/chat/completions (streaming and non-streaming),
+// POST /v1/embeddings, POST /v1/workflows/{workflow_id}/runs,
+// GET /v1/jobs/{job_id}, GET /v1/jobs/{job_id}/events (SSE),
+// POST /v1/jobs/{job_id}/cancel, GET /v1/jobs/{job_id}/artifacts and
+// GET /v1/artifacts/{artifact_id}, wrapped in request logging and API key
 // authentication.
 func New(sched *scheduler.Scheduler, cfg Config) http.Handler {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	clock := cfg.Clock
+	if clock == nil {
+		clock = runtime.NewSystemClock()
+	}
 
-	h := &handlers{sched: sched, logger: logger, metrics: newRecorder(cfg.Metrics)}
+	h := &handlers{
+		sched:     sched,
+		logger:    logger,
+		metrics:   newRecorder(cfg.Metrics),
+		workflows: cfg.Workflows,
+		jobs:      newJobStore(cfg.MaxJobs),
+		clock:     clock,
+		limiter:   cfg.Limiter,
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", h.models)
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", h.embeddings)
+	mux.HandleFunc("POST /v1/responses", h.responses)
+	mux.HandleFunc("POST /v1/workflows/{workflow_id}/runs", h.submitRun)
+	mux.HandleFunc("GET /v1/jobs/{job_id}", h.jobStatus)
+	mux.HandleFunc("GET /v1/jobs/{job_id}/events", h.jobEvents)
+	mux.HandleFunc("POST /v1/jobs/{job_id}/cancel", h.cancelJob)
+	mux.HandleFunc("GET /v1/jobs/{job_id}/artifacts", h.listArtifacts)
+	mux.HandleFunc("GET /v1/artifacts/{artifact_id}", h.downloadArtifact)
 
 	auth := newAuthenticator(cfg.Verifier, cfg.APIKeys, logger)
 	// Observation wraps authentication rather than the other way round, so a
@@ -59,13 +112,23 @@ func New(sched *scheduler.Scheduler, cfg Config) http.Handler {
 	//
 	// 观测包在鉴权之外而不是之内，因此被拒绝的密钥同样计入请求：401 的尖峰正是请求
 	// 计数器要让人看见的那类事情。
-	return h.observe(withLogging(logger, auth.middleware(mux)))
+	// The limiter sits inside authentication and outside the routes: there is
+	// no tenant to enforce against until the key has been resolved, and every
+	// route is subject to the quota once there is one.
+	//
+	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
+	// 租户，每条路由都受配额约束。
+	return h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux))))
 }
 
 type handlers struct {
-	sched   *scheduler.Scheduler
-	logger  *slog.Logger
-	metrics *recorder
+	sched     *scheduler.Scheduler
+	logger    *slog.Logger
+	metrics   *recorder
+	workflows *workflow.Registry
+	jobs      *jobStore
+	clock     runtime.Clock
+	limiter   ratelimit.Limiter
 }
 
 // observe wraps the whole handler chain in the request counter, the duration

@@ -84,6 +84,7 @@ type tunnelOptions struct {
 	caFile          string
 	bootstrapToken  string
 	allowedRuntimes string
+	labels          string
 	maxGateways     int
 }
 
@@ -101,7 +102,41 @@ func registerTunnelFlags() *tunnelOptions {
 	flag.StringVar(&opts.bootstrapToken, "bootstrap-token-file", "", "one-time registration token path, deleted after use")
 	flag.StringVar(&opts.allowedRuntimes, "allowed-runtimes", "",
 		"comma-separated runtime ids the gateway may dispatch to; empty means every configured runtime")
+	flag.StringVar(&opts.labels, "labels", "",
+		"comma-separated key=value facts about this node for the gateway's routing rules, e.g. region=local,gpu=4090")
 	return opts
+}
+
+// nodeLabels parses -labels into the map Hello carries.
+//
+// A malformed entry is dropped rather than fatal: labels express a routing
+// preference, and refusing to start over a typo in one would take a working
+// node offline for something that only affects where requests prefer to go.
+// The Agent logs what it parsed, so the typo is still visible.
+//
+// nodeLabels 把 -labels 解析成 Hello 所携带的映射。
+//
+// 格式错误的条目被丢弃而不是致命错误：标签表达的是路由偏好，为其中一个的笔误而拒绝
+// 启动，会为「只影响请求偏好去哪」的事情让一个本来能工作的节点下线。Agent 会记录它
+// 解析出了什么，因此那个笔误依然可见。
+func (o *tunnelOptions) nodeLabels() map[string]string {
+	out := make(map[string]string)
+	for _, pair := range strings.Split(o.labels, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		key, value, ok := strings.Cut(pair, "=")
+		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
+		if !ok || key == "" {
+			continue
+		}
+		out[key] = value
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // enabled reports whether the operator asked for a tunnel at all.
@@ -351,6 +386,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			AgentVersion:    agentVersion,
 			Manager:         manager,
 			AllowedRuntimes: opts.runtimeIDs(),
+			Labels:          opts.nodeLabels(),
 			Handler:         dispatcher,
 			Metrics:         metrics,
 			Logger:          logger,

@@ -245,6 +245,7 @@ func TestDispatchReportsACapabilityGap(t *testing.T) {
 		{name: "chat on a workflow-only backend", workflow: true, operation: tunnelv1.Operation_OPERATION_CHAT},
 		{name: "list models on a workflow-only backend", workflow: true, operation: tunnelv1.Operation_OPERATION_LIST_MODELS},
 		{name: "workflow submit on an inference-only backend", operation: tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT},
+		{name: "artifact list on an inference-only backend", operation: tunnelv1.Operation_OPERATION_ARTIFACT_LIST},
 		{name: "artifact open on an inference-only backend", operation: tunnelv1.Operation_OPERATION_ARTIFACT_OPEN},
 	}
 
@@ -480,6 +481,71 @@ func TestDispatchServesEveryOperation(t *testing.T) {
 				}
 				if status.State != runtime.WorkflowRunning || status.QueuePosition != 2 {
 					t.Errorf("status = %+v, want running at position 2", status)
+				}
+			},
+		},
+		{
+			name:      "artifact list",
+			operation: tunnelv1.Operation_OPERATION_ARTIFACT_LIST,
+			payload: func(t *testing.T) []byte {
+				return mustMarshal(t, tunnelwire.MarshalRunRef, testRunID)
+			},
+			install: func(t *testing.T, f *dispatchFixture) {
+				f.workflow(0).ArtifactsFunc = func(_ context.Context, runID string) ([]runtime.ArtifactRef, error) {
+					if runID != testRunID {
+						t.Errorf("run id = %q, want %q", runID, testRunID)
+					}
+					return []runtime.ArtifactRef{
+						{RunID: runID, Filename: "ComfyUI_00001_.png", Type: "output"},
+						{RunID: runID, Filename: "clip.webm", Subfolder: "video", Type: "output"},
+					}, nil
+				}
+			},
+			verify: func(t *testing.T, sink *recordingSink) {
+				chunks := sink.payloads()
+				if len(chunks) != 1 {
+					t.Fatalf("chunks = %d, want 1", len(chunks))
+				}
+				refs, err := tunnelwire.UnmarshalArtifactList(chunks[0])
+				if err != nil {
+					t.Fatalf("tunnelwire.UnmarshalArtifactList: %v", err)
+				}
+				if len(refs) != 2 {
+					t.Fatalf("artifacts = %d, want 2", len(refs))
+				}
+				if refs[0].Filename != "ComfyUI_00001_.png" || refs[1].Subfolder != "video" {
+					t.Errorf("artifacts = %+v, want the two the runtime reported", refs)
+				}
+			},
+		},
+		{
+			name:      "artifact list for a run that produced nothing",
+			operation: tunnelv1.Operation_OPERATION_ARTIFACT_LIST,
+			payload: func(t *testing.T) []byte {
+				return mustMarshal(t, tunnelwire.MarshalRunRef, testRunID)
+			},
+			install: func(t *testing.T, f *dispatchFixture) {
+				f.workflow(0).ArtifactsFunc = func(context.Context, string) ([]runtime.ArtifactRef, error) {
+					return nil, nil
+				}
+			},
+			// An empty list is still one chunk: "this run produced nothing"
+			// is an answer, and a caller must be able to tell it apart from
+			// "the reply never arrived".
+			//
+			// 空列表同样是一个块：「这次运行什么都没产出」是一个答复，调用方必须能把
+			// 它与「答复根本没到」区分开。
+			verify: func(t *testing.T, sink *recordingSink) {
+				chunks := sink.payloads()
+				if len(chunks) != 1 {
+					t.Fatalf("chunks = %d, want 1", len(chunks))
+				}
+				refs, err := tunnelwire.UnmarshalArtifactList(chunks[0])
+				if err != nil {
+					t.Fatalf("tunnelwire.UnmarshalArtifactList: %v", err)
+				}
+				if len(refs) != 0 {
+					t.Errorf("artifacts = %+v, want none", refs)
 				}
 			},
 		},

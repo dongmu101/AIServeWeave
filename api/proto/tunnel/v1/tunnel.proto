@@ -164,6 +164,7 @@ enum Operation {
   OPERATION_WORKFLOW_STATUS = 7;
   OPERATION_WORKFLOW_CANCEL = 8;
   OPERATION_ARTIFACT_OPEN = 9;
+  OPERATION_ARTIFACT_LIST = 10;
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose
@@ -255,6 +256,16 @@ message Hello {
   // dispatching to a runtime the Agent would reject anyway; the Agent still
   // enforces the allowlist on every request.
   repeated string runtime_ids = 4;
+  // labels are operator-assigned facts about this node — region=local,
+  // gpu=4090 — that routing rules select on. They arrive with Hello rather
+  // than with the heartbeat because they describe the machine, not its load,
+  // and a reconnect is what re-reads them.
+  //
+  // They are declared by the Agent and taken at face value, so they must never
+  // decide authorization: a compromised Agent could claim any label it liked.
+  // They express a preference about where work should go, not permission to
+  // receive it.
+  map<string, string> labels = 5;
 }
 
 message NodeResources {
@@ -616,4 +627,17 @@ message ArtifactRef {
   string filename = 2;
   string subfolder = 3;
   string type = 4;
+}
+
+// ArtifactList is the ARTIFACT_LIST response payload: which artifacts a
+// finished run produced, without any of their bytes. Protobuf has no top-level
+// repeated field, so the slice needs an envelope, the same way ModelList wraps
+// LIST_MODELS.
+//
+// Listing is a separate operation from ARTIFACT_OPEN because the two have
+// nothing in common at the transport layer: this one is a small, bounded reply
+// on an inference slot, while opening an artifact streams an unbounded body on
+// a bulk slot.
+message ArtifactList {
+  repeated ArtifactRef artifacts = 1;
 }

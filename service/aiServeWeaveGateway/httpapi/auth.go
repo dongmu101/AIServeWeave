@@ -7,6 +7,8 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+
+	"AIServeWeave/common/quota"
 )
 
 // Identity is who a verified API key belongs to. It is attached to the request
@@ -18,6 +20,13 @@ import (
 type Identity struct {
 	TenantID string
 	KeyID    string
+	// Limits is the tenant's quota, learned from the same verification that
+	// established the identity. It travels with the identity rather than being
+	// fetched separately so enforcement adds no round trip to the request path.
+	//
+	// Limits 是租户的配额，与确立身份的那次校验一同得知。它随身份一起传递而不是单独
+	// 拉取，好让执行不给请求路径增加任何往返。
+	Limits quota.Limits
 }
 
 // ErrKeyRejected is what a verifier returns for a key that does not

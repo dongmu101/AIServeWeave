@@ -1,0 +1,13 @@
+# Everything the build does not read. The build context is sent to the daemon
+# in full, so a stray data/ directory with a CA key in it would otherwise be
+# shipped to it.
+#
+# 构建不读取的一切。构建上下文会被整个发送给 daemon，因此一个混在里面、装着 CA 私钥的
+# data/ 目录，否则就会被一并送过去。
+.git
+.github
+data
+deploy/certs
+*.md
+**/testdata
+**/*_test.go
