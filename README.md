@@ -4,6 +4,8 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 项目目标是构建一套“AI 推理控制平面 + 兼容 API 网关”，让应用只对接一个稳定入口，而底层可以运行 Ollama、vLLM、ComfyUI 或其他 AI 推理服务。
 
+本文描述项目定位、能力规划与目标架构，包含尚未实现的设计，不作为功能可用性声明。开发进度、优先级、依赖和验收统一见 [STATUS.md](STATUS.md)。部署操作见 [deploy/README.md](deploy/README.md)，具体接口与运行限制见各服务 README。
+
 ## 项目目标
 
 - 集中管理本地设备、内网设备和 GPU 服务器等推理节点
@@ -17,39 +19,27 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 ## 整体架构
 
-AIServeWeave 分为控制面、数据面和节点面。项目初期采用模块化单体，避免过早拆分微服务；流量和团队规模增长后，再按模块独立部署。
+AIServeWeave 分为控制面、数据面和节点面，采用单仓库、按服务组织的模块化架构。ControlPlane、Registry、Gateway 与 Agent 各自承担明确职责；逻辑分层不要求所有模块同进程，也不要求提前将每项能力拆成独立服务。
 
 ```text
-                         ┌─────────────────────┐
-                         │  管理控制台 Console │
-                         └──────────┬──────────┘
-                                    │ Admin API
-                         ┌──────────▼──────────┐
-                         │  AIServeWeave       │
-                         │                     │
-                         │  控制面             │
-                         │  - 用户与租户       │
-                         │  - 节点与模型管理   │
-                         │  - 路由与调度策略   │
-                         │  - API Key 与配额   │
-                         │                     │
-Client ─ OpenAI/Claude ─►│  API Gateway        │
-                         │  - 协议转换         │
-                         │  - 鉴权与限流       │
-                         │  - 调度与重试       │
-                         │  - SSE 流转发       │
-                         └──────┬────────┬─────┘
-                                │        │
-                      直接访问模式        │ 反向隧道
-                                │        │
-                  ┌─────────────▼─┐  ┌──▼───────────────┐
-                  │ GPU Server    │  │ Mac / 内网设备   │
-                  │ Agent         │  │ Agent            │
-                  │               │  │                  │
-                  │ vLLM / ComfyUI│  │ Ollama / MLX     │
-                  │ TensorRT-LLM  │  │ ComfyUI          │
-                  └───────────────┘  └──────────────────┘
+Console ── Admin / Operator API ──► ControlPlane ──► 关系数据库
+                                      │              配置、Job、审计
+                               配置同步 / 内部 API
+                                      │
+Client ── 兼容 API / Workflow API ──► Gateway ──► 对象存储
+                                      │              输入与产物
+                          ┌───────────┴───────────┐
+                       Direct                  Tunnel
+                          │                       ▲
+                    可达推理后端             Agent 主动出站
+                                                  │
+                                           本地推理后端
+
+Registry ◄── Agent 身份注册 / 续期
+         ◄── Gateway 副本名册订阅
 ```
+
+配置与任务元数据通过控制面管理；推理事件和文件流由数据面转发。Registry 负责身份与副本发现，节点实时健康与能力由 Agent 经隧道上报 Gateway。
 
 ### 控制面
 
@@ -88,16 +78,19 @@ Client ─ OpenAI/Claude ─►│  API Gateway        │
 
 ### aiserveweave-registry
 
-注册与发现中心负责维护控制面的节点、后端、模型和能力状态：
+Registry 负责节点身份和 Gateway 副本发现：
 
-- 接收 Agent 注册并签发或校验节点身份
-- 维护节点心跳、健康状态和上下线事件
-- 保存 Backend、Deployment、模型和能力信息
-- 提供节点、模型和推理服务发现接口
-- 管理节点标签、维护状态和租户可见范围
-- 向 Gateway 提供可用 Deployment 快照或变更事件
+- 校验一次性注册令牌，签发与续期节点证书
+- 维护 Gateway 副本名册，通知可连接的隧道入口及排空状态
+- 为节点身份唯一性、凭据失效和服务间认证提供执行边界
 
-如果后续加入用户、权限、部署策略和管理 API，可以将其扩展为 `aiserveweave-control-plane`，Registry 保持为内部模块。
+节点实时健康、运行时能力与连接状态由 Gateway 管理；租户、模型目录、部署期望状态、路由和管理审计属于 ControlPlane，避免多处维护同一份权威状态。
+
+### aiserveweave-control-plane
+
+ControlPlane 提供租户 Admin API、平台运维 API 和服务间内部 API，负责持久化配置、权限、Job 历史与审计。配置发布应有版本、Gateway 生效确认与回滚路径；运行状态由数据面报告，不能用期望状态代替实际状态。
+
+Console 通过控制面访问管理能力；数据库驱动与 ORM 留在控制面，Gateway 使用内部客户端访问元数据。Job 持久化的可用性与普通推理请求的可用性分别定义。
 
 ### aiserveweave-gateway
 
@@ -106,7 +99,7 @@ Client ─ OpenAI/Claude ─►│  API Gateway        │
 - 提供 OpenAI、Anthropic 和工作流兼容 API
 - 完成 API Key 鉴权、配额和限流
 - 将外部协议转换成内部统一协议
-- 根据 Registry 状态和路由策略选择 Deployment
+- 根据节点健康、能力快照和路由策略选择 Deployment
 - 通过 Direct 或 Tunnel 模式转发请求
 - 处理 SSE 流式响应、超时、熔断和有限重试
 - 记录请求用量、时延、状态和错误
@@ -134,7 +127,7 @@ Agent 是部署在每台算力机器上的轻量 Go 程序。
 | Direct | 有内网或公网可达地址的 GPU 服务器 | Gateway 直接调用节点推理服务 |
 | Tunnel | 家庭 Mac、办公网或 NAT 后节点 | Agent 主动连接 AIServeWeave，请求通过隧道转发 |
 
-MVP 可以使用 gRPC 双向流实现 Tunnel。流量规模增大后，可将 Tunnel Hub 独立部署，并评估 HTTP/2 或 QUIC 多路复用。
+Tunnel 使用 gRPC 双向流传递运行时语义；协议以 `api/proto/tunnel/v1/tunnel.proto` 为唯一来源。Direct 只访问受配置与权限约束的后端地址，不能退化为任意 HTTP 代理。
 
 ### aiserveweave-console
 
@@ -195,14 +188,14 @@ type InferEvent struct {
 }
 ```
 
-第一阶段优先支持：
+基础兼容 API：
 
-- `POST /v1/chat/completions` —— 已落地（含 SSE）
-- `POST /v1/responses` —— 已落地（含 SSE）
-- `POST /v1/embeddings` —— 已落地
-- `GET /v1/models` —— 已落地
+- `POST /v1/chat/completions`（含 SSE）
+- `POST /v1/responses`（含 SSE）
+- `POST /v1/embeddings`
+- `GET /v1/models`
 
-后续增加：
+扩展协议范围：
 
 - Anthropic `POST /v1/messages`
 - Ollama 原生 API
@@ -254,7 +247,7 @@ AIServeWeave 将 ComfyUI 视为一种独立 Backend，并同时支持：
 1. External：用户已经启动 ComfyUI，Agent 只负责探测、注册和代理。
 2. Managed：平台下发声明式部署配置，由 Agent 负责安装或启动、健康检查、停止和升级。
 
-MVP 优先实现 External，确认工作流链路稳定后再实现 Managed，避免第一版同时承担 Python、CUDA、模型和自定义节点的复杂依赖管理。
+External 与 Managed 共用工作流执行语义；Managed 额外承担 Python、CUDA、模型与自定义节点的环境和生命周期管理。
 
 ### ComfyUI 部署模式
 
@@ -322,7 +315,7 @@ spec:
     timeout: 5s
 ```
 
-首个 Managed 实现建议只支持 Linux NVIDIA GPU 上的 Docker/容器运行时；Mac 上先接入用户已经安装和启动的 ComfyUI。后续再评估 macOS 原生 Python 环境或 ComfyUI Desktop 的生命周期管理。
+Managed 的基础目标环境为 Linux NVIDIA GPU 与 Docker/容器运行时；macOS 的 External 接入与原生环境生命周期管理是不同的支持范围。
 
 部署控制应包含：
 
@@ -335,7 +328,7 @@ spec:
 - 升级前检查正在运行的 Job，默认等待排空后再滚动重启
 - 自定义节点采用允许列表并固定版本，安装动作写入审计日志
 
-模型文件通常很大，MVP 不负责自动下载。Managed 模式先挂载用户准备好的共享模型目录；后续再增加带校验和、断点续传、磁盘配额和来源白名单的模型分发能力。
+模型文件通常很大，Managed 模式支持挂载用户准备好的共享模型目录。模型分发是独立能力，需要校验和、断点续传、磁盘配额和来源白名单。
 
 ### 工作流模板
 
@@ -364,26 +357,21 @@ WorkflowTemplate: flux-text-to-image
 AIServeWeave 对外提供统一的异步 Job API：
 
 ```text
-POST   /v1/workflows/{workflow_id}/runs     提交工作流        ← 已落地
-GET    /v1/jobs/{job_id}                    查询任务状态      ← 已落地
-GET    /v1/jobs/{job_id}/events             获取 SSE 进度事件  ← 已落地
-POST   /v1/jobs/{job_id}/cancel             取消任务          ← 已落地
-GET    /v1/jobs/{job_id}/artifacts          获取产物列表      ← 已落地
-GET    /v1/artifacts/{artifact_id}           下载生成产物      ← 已落地
+POST   /v1/workflows/{workflow_id}/runs     提交工作流
+GET    /v1/jobs/{job_id}                    查询任务状态
+GET    /v1/jobs/{job_id}/events             获取 SSE 进度事件
+POST   /v1/jobs/{job_id}/cancel             取消任务
+GET    /v1/jobs/{job_id}/artifacts          获取产物列表
+GET    /v1/artifacts/{artifact_id}           下载生成产物
 ```
 
-六个端点均已在 Gateway 落地，实现见 `service/aiServeWeaveGateway/httpapi/`（`jobs.go` 提交与状态、
-`jobevents.go` SSE 事件流、`jobcancel.go` 取消、`artifacts.go` 产物列举与下载）与 `service/aiServeWeaveGateway/workflow/`（模板目录与输入绑定）。
-事件流的终态事件是「运行如何结束」的权威：它一到，job 状态就地落库，此后状态查询不再打扰节点。
+Job 的公开 ID 与后端 `prompt_id` 分离；公开产物 ID 与后端磁盘路径分离。不属于本租户的 Job/产物与不存在的资源返回相同的 404。
 
-产物那一步顺带扩了隧道契约：新增 `OPERATION_ARTIFACT_LIST`，`runtime.WorkflowRuntime` 相应新增
-`Artifacts` 方法。公开的 `artifact_id` 由 Gateway 铸造，后端定位产物用的
-`filename`+`subfolder`+`type` 三元组不作为标识符外泄——那是通往节点磁盘布局的一条路径。**job 表目前只在 Gateway 进程内存里**，
-上限 `DefaultMaxJobs` 条、超出逐出最旧的一条，副本重启即丢失，也不跨副本共享——持久化属于控制面
-`jobs` 表，那张表还没建。已落地的两个端点按租户隔离：不属于本租户的 job id 与不存在的 job id
-得到同一个 404。
+Job 持久化由控制面管理，目标数据库为 MySQL 9.7 / InnoDB。Gateway 保留有界运行态缓存，经内部 API 写入生命周期并恢复未结束的任务。终态应依据后端确认，取消请求被接受不等于任务已经取消。
 
-统一任务状态：
+数据库事务不能与 ComfyUI 提交组成一个本地原子事务。设计必须区分提交意图、后端确认与结果未知，采用幂等更新和状态对账；结果未知时不盲目重新提交。后台同步有批次、频率和并发上限；多副本恢复必须明确执行权，避免重复执行。断线或观测超时不应直接被解释为后端已经停止。
+
+目标任务执行状态（提交确认状态另行建模）：
 
 ```text
 queued → running → succeeded
@@ -398,12 +386,12 @@ ComfyUI 的 `prompt_id` 是后端任务 ID，不能直接作为公开 ID。AISer
 
 ### 文件与产物
 
-ComfyUI 支持输入文件和较大的生成产物，文件流不应直接存入 PostgreSQL：
+ComfyUI 支持输入文件和较大的生成产物，文件流不应直接存入关系数据库：
 
 - 输入图片先上传到 AIServeWeave，再由 Agent 上传到目标 ComfyUI
-- 生成完成后，Agent 从 ComfyUI 拉取产物并上传到对象存储
-- PostgreSQL 只保存文件元数据、哈希、大小、租户和存储位置
-- MVP 可使用本地文件存储，生产环境建议使用 S3-compatible 对象存储
+- 生成完成后，由数据面从 ComfyUI 流式拉取产物并写入对象存储；经 Agent 访问时保持隧道背压，不向节点分发平台存储主凭据
+- 关系数据库只保存文件元数据、哈希、大小、租户和存储位置
+- 单机部署可使用本地文件存储，共享产物采用 S3-compatible 对象存储
 - 下载接口使用短期签名 URL 或经过鉴权的流式代理
 - 为输入文件、预览图和最终产物设置大小、格式和保留期限限制
 
@@ -445,13 +433,9 @@ qwen-coder
 
 这种抽象允许在不影响客户端的情况下更换底层模型、量化版本、节点或推理框架。
 
-**已落地的部分**：`Model`（逻辑模型）与 `Route`/`RouteTarget` 由 `service/aiServeWeaveGateway/routing`
-实现，Target 携带真实模型名、节点选择器、优先级与权重；`Node` 的标签由 Agent 的 `-labels` 声明。
-路由表当前从文件加载（Gateway 的 `-model-routes`），尚未进控制面的表。`Backend` 与 `Deployment`
-仍是节点上报的 runtime 快照，没有独立的持久化实体。
+路由目标携带真实模型名、节点选择器、优先级与权重；管理配置的期望状态与节点上报的能力快照分别保存。持久化 Backend/Deployment 时，应明确其稳定身份和生命周期，不能直接把瞬时连接对象当作实体。
 
-**节点标签是偏好，不是权限。** 它们由 Agent 自行声明、Gateway 原样采信，因此绝不能参与授权判断
-——被攻破的 Agent 可以声称任何标签。要让标签可信，需要由 Registry 在签发证书时绑定，那是独立的一步。
+**节点标签是偏好，不是权限。** Agent 自报标签只用于调度筛选。租户是否可以访问某模型、模板或节点池，必须由受信任的授权配置决定。
 
 ## 调度流程
 
@@ -469,7 +453,7 @@ qwen-coder
   → 记录结果和用量
 ```
 
-初期建议实现以下策略：
+调度策略的规划范围：
 
 - 加权轮询
 - 最少正在执行请求
@@ -483,14 +467,14 @@ qwen-coder
 
 ## 数据模型
 
-控制面数据存 PostgreSQL 或 MySQL，由 `aiServeWeaveControlPlane` 的 `Database.Driver` 选择，PostgreSQL 是首要目标——后续那些 JSON 列（工作流模板、部署 revision、job 事件）用得上 JSONB 的索引能力。当前已落地的四张表只用标量列，两种引擎表达一致，因此双支持代价很低；某个 JSON 列落地时应重新评估这一点。
+关系数据库由 ControlPlane 的 `Database.Driver` 选择。Job 持久化以 MySQL 9.7 / InnoDB 为目标，保留既有 PostgreSQL 接入；跨引擎兼容范围以迁移与集成测试为准，不假定 JSON 类型、索引或锁行为相同。Gateway 与 Agent 不直接依赖关系数据库。
 
-下表中标注「已落地」的是已经建好的表，其余是规划：
+以下为逻辑数据模型，表示实体职责与关系，不要求每个条目都独立建表。物理表、索引与迁移随相应能力设计；具体完成状态见 [STATUS.md](STATUS.md)。
 
 ```text
-tenants          ← 已落地
-users            ← 已落地
-api_keys         ← 已落地
+tenants
+users
+api_keys
 
 nodes
 node_credentials
@@ -512,11 +496,12 @@ workflow_versions
 workflow_requirements
 jobs
 job_events
+job_artifacts
 artifacts
 
 inference_requests
 usage_records
-audit_logs       ← 已落地
+audit_logs
 ```
 
 主要关系：
@@ -528,16 +513,16 @@ audit_logs       ← 已落地
 - Route Target 保存权重、优先级和匹配条件
 - 一个 Workflow Template 可以有多个不可变版本
 - Job 保存公开任务 ID、ComfyUI `prompt_id` 和实际 Deployment 的映射
-- Artifact 保存输入文件、预览图和最终生成文件的元数据
+- Artifact 保存输入文件、预览图和最终生成文件的元数据；Job Artifact 保存任务与稳定公开产物 ID 的关联
 
-请求明细和时序指标不应无限写入 PostgreSQL。MVP 可以只保存请求摘要；后续将指标发送到 Prometheus，将高容量日志发送到 ClickHouse 或 Loki。
+任务、事件、文件元数据与请求摘要均需定义保留期和有界清理。Prometheus 承担指标采集，历史指标与日志使用适合查询规模的存储；用量账本独立定义去重与结算规则。备份范围应同时覆盖数据库、Registry 身份材料和对象存储，恢复后进行引用一致性检查。
 
 ## 安全设计
 
 安全能力应从第一版开始建设：
 
-- 用户 API Key 只保存不可逆哈希（已落地，见 `common/apikey` 与控制面）
-- Agent 使用短期注册令牌换取节点证书（已落地，见 Registry）
+- 用户 API Key 只保存不可逆哈希
+- Agent 使用短期注册令牌换取节点证书
 - Agent 与 Registry、Gateway 和 Tunnel 服务之间使用 mTLS
 - 推理后端密钥加密保存
 - 用户、租户、模型和节点权限隔离
@@ -553,216 +538,46 @@ audit_logs       ← 已落地
 
 ## 可观测性
 
-Prometheus 指标已落地，OpenTelemetry 尚未接入。
+指标经 `runtime.Metrics` 抽象记录，`common/metrics` 提供注册表与 Prometheus 导出。指标定义与记录点放在同一模块，服务装配时统一注册。追踪通过请求关联标识连接 Gateway、Scheduler、Tunnel、Agent 和后端；后端不支持传播时明确链路边界。
 
-**指标下沉端是 `common/metrics`**：一个实现 `runtime.Metrics` 的进程内注册表，外加 Prometheus 文本格式导出，零第三方依赖——导出格式本身是稳定且有文档的文本协议，换成客户端库就是为几百行能写清楚的代码往每个二进制里拖一整棵传递依赖。每个记录指标的包各自持有一张 `Descriptions` 目录（指标名、help 文本、直方图分桶），服务启动时把它们并起来交给 `metrics.New`，这样指标定义与它的记录点留在同一个文件里。
+观测范围包括节点连接与心跳、部署健康、请求量与并发、TTFT、总时长、token 用量、吞吐、错误与重试、ComfyUI 队列及任务时长、GPU OOM、产物传输与存储用量。
 
-两个服务各在一个**只绑回环**的地址上导出：
+指标端点应处于受控网络；节点标识涉及资产信息。标签来源必须受控且基数有界，模型名、请求路径、request ID、Prompt、工作流 JSON 和任意错误文本不能直接成为标签。具体指标、端点配置与实现边界见 [Gateway README](service/aiServeWeaveGateway/README.md) 和 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md)。
 
-| 服务 | flag | 默认值 |
-| --- | --- | --- |
-| Gateway | `-metrics-addr` | `127.0.0.1:9090` |
-| Agent | `-metrics-addr` | `127.0.0.1:9091` |
-
-默认回环是有意的：导出内容会点出连到该进程的每一个 `node_id`，那是一份公网监听器没理由对外派发的资产清单。留空则完全关闭该端点。
-
-已覆盖的清单项（完整指标表见 [service/aiServeWeaveGateway/README.md「指标」](service/aiServeWeaveGateway/README.md#指标) 与 [service/aiServeWeaveAgent/tunnel/README.md「可观测性」](service/aiServeWeaveAgent/tunnel/README.md#可观测性)）：
-
-- 节点在线数量 —— `tunnel_server_connected_nodes` / `tunnel_connected_replicas`
-- 节点心跳延迟 —— `tunnel_server_heartbeat_interval_seconds` / `tunnel_control_heartbeat_rtt_seconds`
-- 模型部署健康状态 —— `tunnel_server_node_state`，以及调度器按 Agent 上报健康状态所做的候选过滤
-- 请求量和并发数 —— `gateway_http_requests_total` / `gateway_http_inflight_requests`
-- 首 token 延迟（TTFT）—— `gateway_http_ttft_seconds`，与隧道两侧的 `*_stream_first_event_seconds` 配套定位"慢在哪一段"
-- 总响应时间 —— `gateway_http_request_duration_seconds`
-- 输入和输出 token —— `gateway_tokens_total{direction}`
-- 每秒输出 token —— `gateway_output_tokens_per_second`
-- 后端错误率和超时率 —— `gateway_scheduler_dispatches_total{result}` 与两侧的 `*_requests_total{result}`，`result` 沿用六值约定
-- 调度选择结果 —— `gateway_scheduler_candidates` / `gateway_scheduler_no_candidate_total` / `gateway_scheduler_retries_total`，以及熔断器的 `gateway_scheduler_breaker_open` / `_trips_total`
-- Tunnel 吞吐和连接状态 —— 两侧各十余个 `tunnel_*` / `tunnel_server_*` 指标
-
-尚未覆盖：ComfyUI 队列长度与任务时长、工作流成功率与 GPU OOM、Artifact 上传下载与存储用量——这三组跟着 ComfyUI 与产物存储那条线一起做。Registry 也还没有指标端点。
-
-**标签取值一律来自封闭枚举或本地配置，任何来自对端或调用方的自由文本都不进标签。** 具体地：模型名与请求路径由调用方在公开 API 里给出，进了标签就等于让单个客户端决定指标后端里有多少条序列；prompt、工作流 JSON、请求 id、错误消息同理。每个记录指标的包都有一个可执行的标签基数测试，而不是靠评审记住这条规则。
-
-每个请求应携带同一个 `request_id`，贯穿 Gateway、Scheduler、Tunnel、Agent 和推理后端。
+历史曲线、告警、请求检索和用量账本具有不同的数据保留与授权需求。Console 通过控制面授权查询，不能把副本的实时指标当作历史统计。可用性、延迟、恢复时间与可接受数据丢失范围应有量化验收口径，数值在容量与故障测试后确定。
 
 ## 代码结构
 
-项目按服务分目录，每个服务一个顶层包，服务内部再按职责分子包。当前实际结构：
+按服务归属组织实现，共享包只承载跨服务必须一致的契约。
+
+| 路径 | 职责 |
+| --- | --- |
+| `api/proto/tunnel/v1/` | Agent、Gateway、Registry 共用的 gRPC 契约与生成代码 |
+| `common/runtime/` | 运行时语义、能力门禁、后端适配与并发控制 |
+| `common/tunnelwire/` | runtime 与隧道 proto 的唯一转换边界 |
+| `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
+| `common/nodeview/`、`common/workflowview/` | 允许列表约束的机群、模板和 Job 展示契约 |
+| `common/metrics/` | 指标注册、采集与 Prometheus 导出 |
+| `service/aiServeWeaveAgent/` | 本机发现、运行时管理、主动出站隧道 |
+| `service/aiServeWeaveGateway/` | 前门、调度、路由、隧道终结、配额与工作流执行入口 |
+| `service/aiServeWeaveRegistry/` | 节点身份与副本发现 |
+| `service/aiServeWeaveControlPlane/` | 管理与内部 API、数据库存储、权限、配置与审计 |
+| `service/aiServeWeaveConsole/` | Next.js 管理界面及受限的服务端转发入口 |
+| `deploy/` | 部署配置与操作说明 |
+
+模块路径为 `AIServeWeave`。依赖边界、编码和质量门禁见 [AGENTS.md](AGENTS.md)；隧道状态机见 [隧道设计](service/aiServeWeaveAgent/tunnel/README.md)，控制面凭据与授权设计见 [控制面 README](service/aiServeWeaveControlPlane/README.md)。
+
+## 核心业务链路
 
 ```text
-AIServeWeave/
-├── api/
-│   └── proto/tunnel/v1/        # Agent/Gateway/Registry 共享的 gRPC 契约
-├── common/                     # 跨服务共享代码
-│   ├── metrics/                # runtime.Metrics 的实现与 Prometheus 文本导出，三个服务共用
-│   │   └── metricstest/        # 各服务测试断言指标与标签用的内存收集器
-│   ├── apikey/                 # API Key 的格式与哈希，Gateway 与控制面共用
-│   ├── quota/                  # 租户限制值与含义，控制面存储、Gateway 执行
-│   ├── metrics/                # runtime.Metrics 的实现与 Prometheus 导出，三服务共用
-│   ├── runtime/                # 推理后端抽象：能力探测、配额、流式转换
-│   │   ├── internal/           # 包内私有工具与测试辅助
-│   │   ├── ollama/  openai/  sglang/  vllm/
-│   │   └── workflow/comfyui/
-│   └── tunnelwire/             # 隧道 proto 编解码，Agent 与 Gateway 共用
-├── deploy/                     # Docker Compose 编排、compose 版控制面配置、部署说明
-│   └── docker-compose.yaml
-└── service/
-    ├── aiServeWeaveAgent/      # 节点面，已有主要实现
-    │   ├── tunnel/             # 主动出站隧道，见该目录 README
-    │   └── workflow/           # 空目录：四个文件只有 package 声明，模板绑定实际在 Gateway 侧
-    ├── aiServeWeaveGateway/    # 数据面，隧道服务端、调度器与 OpenAI 前门已落地
-    │   ├── tunnelserver/       # 隧道终结：节点表、槽池、十个 Operation 的分发
-    │   ├── workflow/           # 管理员注册的 ComfyUI 工作流模板目录与输入绑定
-    │   ├── ratelimit/          # 租户配额执行：令牌桶，内存与 Redis 两个实现
-    │   ├── routing/            # 逻辑模型到部署的映射：别名、节点选择器、优先级
-    │   └── e2e/                # 真实 mTLS 下 Agent 与 Gateway 的联调测试
-    ├── aiServeWeaveRegistry/   # 控制面注册中心，仅骨架
-    ├── aiServeWeaveControlPlane/  # 控制面 Admin API，租户/用户/API Key/审计已落地
-    │   ├── internal/           # model、store、logic、token、cache、handler、svc
-    │   └── e2e/                # 真实 HTTP + Gateway 真实客户端的闭环测试
-    └── aiServeWeaveConsole/       # 前端脚手架（Next.js + shadcn/ui），尚无业务页面
+OpenAI SDK → Gateway 协议解析 → 能力与路由筛选
+           → Agent 隧道 → Ollama / vLLM → SSE 返回
+
+Workflow API → 受控模板绑定 → Job 提交与确认
+             → Agent → ComfyUI → 状态同步与产物存储
+             → 控制面任务历史 → Console 查询和授权下载
 ```
 
-`Dockerfile` 在仓库根，由 `SERVICE` build-arg 选择三个二进制中的一个。
+两条链路分别对应同步/流式推理与异步任务。实时转发、持久历史和文件可用性需要分别定义故障语义，不能以某一环节成功推断整个链路可靠。
 
-后续随功能推进补齐的目录（当前尚不存在）：`api/openapi/`、`migrations/`、`configs/`、`web/`、`docs/`、`deploy/kubernetes/`。
-
-调度器、鉴权、用量统计等模块目前尚无归属目录，落地时按所属服务放进 `service/<服务名>/` 下的子包；确实被多个服务共用的再上提到 `common/`。
-
-`common/` 下已有四个包，都是因为多个服务必须按同一套规则解释同一份数据才上提的：
-
-- `common/runtime` —— 推理语义的类型与接口（`Stream`、`RuntimeError`、十个 Operation 的请求响应类型）。Agent 用它实现后端适配器，Gateway 用它表达调度器和 API 层看到的请求，两边共用一份定义而不是各自复述。
-- `common/tunnelwire` —— 这些类型与 `api/proto/tunnel/v1` 之间的双向编解码。隧道两端都要做这次转换，放在一个包里意味着「凭据不过隧道」「nil 与显式零值不等价」这两条不变量只有一处实现、一处测试。结果标签的六值约定（`ResultFor`）也在这里：两端必须对同一个错误做出相同分类，两份分类实现迟早会在「哪些失败算节点的错」上产生分歧。
-- `common/metrics` —— `runtime.Metrics` 的真实实现与 Prometheus 导出。三个服务共用一份，是因为「后端慢」「隧道慢」「前门慢」只有记进同一套仪器、同一套分桶，才是可以互相相减的数字。
-- `common/apikey` —— API Key 的格式、哈希算法与展示形式。控制面铸造它、Gateway 校验它，两边必须算出同一个哈希才查得到同一行，因此它是两者之间的契约而不是任一方的内部实现。
-- `common/quota` —— 租户限制值及其含义。控制面存储并随 key 校验结果下发，Gateway 执行。一个租户的限制在一边意味着「每分钟」、在另一边意味着「每秒」，不是评审能抓到的缺陷，而是几个月后的一张工单。
-
-模块路径使用短名 `module AIServeWeave`，包内互相引用一律以此为前缀，例如 `AIServeWeave/api/proto/tunnel/v1`。
-
-## 开发路线
-
-### 第一阶段：最小闭环
-
-- Registry、Gateway 和 Agent 建立安全连接
-- 节点注册、心跳和上下线状态
-- Agent 手动配置 Ollama 或 vLLM 地址
-- Agent 手动配置并探测 ComfyUI 地址
-- 同步模型列表和基础能力
-- OpenAI Chat Completions API
-- SSE 流式转发
-- 逻辑模型到多个节点的路由
-- API Key 鉴权
-- 基础请求和错误日志
-- 提交一个固定的 ComfyUI 文生图工作流 —— 已落地（`POST /v1/workflows/{workflow_id}/runs`）
-- 查询 ComfyUI Job 状态并下载生成图片 —— 已落地（状态、SSE 进度事件、取消、产物列举与下载）
-
-完成后的最小链路：
-
-```text
-OpenAI SDK → AIServeWeave → Mac Ollama / Server vLLM
-
-Workflow API → AIServeWeave → Agent → ComfyUI → Artifact
-```
-
-### 第二阶段：可用平台
-
-- Web 管理控制台
-- 模型别名和节点标签 —— 已落地。逻辑模型经路由表映射到（真实模型名、节点选择器、优先级）；
-  节点标签由 Agent 的 `-labels` 声明、随 Hello 上报。路由表目前由 Gateway 的 `-model-routes`
-  从文件加载，控制面接管时换成一次拉取
-- 配额、并发限制和速率限制 —— 已落地（每租户的每分钟请求数、每分钟 token 数、最大并发；
-  限制值由控制面存储、随 API Key 校验结果下发，由 Gateway 执行）
-- Responses 和 Embeddings API —— 均已落地。Responses 在前门转换成内部 canonical 请求，
-  因此只会 Chat Completions 的后端（如 Ollama）也能服务它；代价是不支持 `store` /
-  `previous_response_id`（服务端会话状态需要跨请求持久化与节点粘性），这些字段被明确拒绝
-  而不是静默忽略
-- 健康检查、熔断和恢复
-- 自动发现 Ollama 和 vLLM
-- ComfyUI 工作流模板和版本管理
-- Linux NVIDIA GPU 上的 ComfyUI Managed Docker 部署
-- ComfyUI SSE 任务进度、取消和错误展示
-- 输入文件上传和 S3-compatible 产物存储
-- Token、延迟和吞吐统计
-- Prometheus 和 OpenTelemetry
-- Docker Compose 部署 —— 已落地（`deploy/`：一个多阶段 Dockerfile 加编排 Registry、控制面、
-  Gateway 与依赖服务；证书链由 Registry 的 CA 闭合，见 [deploy/README.md](deploy/README.md)）
-
-### 第三阶段：生产能力
-
-- 多租户 RBAC
-- Anthropic Messages API
-- OpenAI-compatible Image Generation 到 ComfyUI 模板的映射
-- ComfyUI 自定义节点、模型依赖和版本兼容检查
-- ComfyUI 安全升级、任务排空和模型分发
-- 图片、视频、音频和 3D 等多类型产物管理
-- GPU 指标和资源感知调度
-- 请求排队和背压
-- Agent 自动升级
-- Kubernetes 部署
-- Registry 和 Gateway 高可用
-- 独立 Tunnel Gateway
-- Redis、NATS 或其他事件基础设施
-- 审计、告警和计费
-
-## MVP 优先验证
-
-项目首先应验证以下完整链路：
-
-```text
-OpenAI 流式请求
-  → Gateway 协议解析
-  → Scheduler 选择部署
-  → NAT 后的 Mac Agent
-  → Ollama
-  → SSE 流式返回客户端
-```
-
-这条链路同时覆盖协议转换、模型路由、反向连接和流式传输，是 AIServeWeave 最关键的技术闭环。闭环稳定后，再开发完整控制台、更多协议和复杂调度策略。
-
-ComfyUI 接入应同时验证一条异步生成链路：
-
-```text
-上传输入文件或提交模板参数
-  → 创建 AIServeWeave Job
-  → 根据模型、节点类型和显存选择 ComfyUI Deployment
-  → Agent 提交 API Format 工作流
-  → WebSocket 进度转换为 AIServeWeave Job Event
-  → 拉取生成文件并保存为 Artifact
-  → 客户端查询或下载结果
-```
-
-## 当前状态
-
-节点与节点到 Gateway 的链路已经打通，MVP 优先验证链路（OpenAI 流式请求 → Gateway → Scheduler → Agent → Ollama → SSE 返回）已经用真实机器跑通一次；Registry 的 `NodeIdentity` 与 `GatewayDirectory` 也已落地，第一阶段的两个缺口都已补上。第二阶段已开始：调度器的健康过滤与熔断、Agent 自动发现、Prometheus 指标导出，以及控制面的租户/用户/API Key/审计都已落地。已完成的部分：
-
-1. Registry、Gateway 与 Agent 之间的 protobuf 协议（`api/proto/tunnel/v1`，三边共用）。
-2. `common/runtime`：推理后端抽象——实例管理、健康状态机、能力发现与并发限流，以及 vLLM、SGLang、Ollama、ComfyUI 四个适配器。
-3. `common/tunnelwire`：`runtime` 类型与隧道 proto 的双向编解码，隧道两端共用一份。
-4. Agent 的隧道客户端：节点身份与证书轮换、Control 流与心跳、槽池与十个 Operation 的分发、多副本连接表与名册处理、隧道指标与压测。
-5. Gateway 的隧道服务端：节点表、槽池、十个 Operation 的分发，以及把隧道对面呈现为一个 `runtime.InferenceRuntime` 的 `NodeRuntime`。
-6. 三副本端到端联调：真实 TCP、真实 mTLS，每个副本独立完成推理，请求路径上无副本间转发。
-7. Gateway 的调度器（`service/aiServeWeaveGateway/scheduler`）：按模型与能力选节点，处理背压与重试语义——流式请求只在返回第一个 token 之前重试。
-8. Gateway 的 OpenAI 前门（`service/aiServeWeaveGateway/httpapi`）：`POST /v1/chat/completions`（含 SSE 流式）、`POST /v1/embeddings`、`GET /v1/models`。鉴权当初是静态 API Key 列表，现已改为对着控制面校验（见第 15 项），静态列表退化为回退路径。`POST /v1/responses` 未做——`common/runtime` 和隧道协议都没有对应的类型/Operation，需要先扩协议，留给后续。
-9. 真实端到端：本机 Ollama + 真实 mTLS 隧道 + Gateway HTTP 前门，非流式与 SSE 流式 Chat 都跑通，流式 TTFT 实测在百毫秒量级，由 Ollama 推理时延主导，隧道与前门本身开销可忽略。
-10. Registry 的 `NodeIdentity` 服务（`service/aiServeWeaveRegistry`）：自建 CA、一次性 bootstrap token 的铸造与校验、节点证书签发与续期。用 Agent 现有的 `tunnel.IdentityManager` 当客户端直接对着真实 Registry 跑通了完整流程（不是自造假客户端）。
-11. Registry 的 `GatewayDirectory` 服务与 Gateway 侧的 `registryclient`：Gateway 副本向 Registry 报到、收到名册变化即转发给 `tunnelserver.Server.SetRoster`，断线按全抖动退避重连，优雅关闭前先广播 `DRAINING`。此前 `SetRoster` 一直是等着调用方的手工注入点，现在有了真正的调用方。
-12. Gateway 调度器的健康检查、熔断与恢复（第二阶段第一项）：`candidates()` 现在会排除 Agent 上报为 `unhealthy`/`closed` 的 runtime 实例，并按 `(node_id, runtime_id)` 维护一个熔断器——`connection_failed`/`timeout`/`upstream_error` 连续失败达到阈值后该候选被临时排除，冷却后自动探测恢复；`backpressure`/`rate_limited` 明确不计入，这两个是"忙"不是"坏"。阈值是未经真实流量验证的初始默认值，详见 [service/aiServeWeaveGateway/README.md「健康过滤与熔断」](service/aiServeWeaveGateway/README.md#健康过滤与熔断)。
-13. Agent 自动发现本机 Ollama/vLLM（第二阶段第二项，`service/aiServeWeaveAgent/localdiscovery`）：启动即探测 `127.0.0.1` 上 Ollama（11434）与 vLLM（8000）的默认端口，答上的直接注册进 `runtime.Manager`，之后每 30 秒（`-auto-discover-interval` 可调）重新扫一遍还没发现的候选，好让"先起 Agent 再起 Ollama"这种顺序也能用。刻意只探测本机回环地址，不做局域网扫描或 mDNS；已经手动用 `-ollama-url` 配置过的地址会被天然跳过（按地址去重，不是按 ID）；发现后的健康跟踪完全交给 `runtime.Manager` 已有的探测循环，发现器自己不留状态、不做摘除。`-auto-discover=false` 可以整体关掉。
-
-14. 指标落地（第二阶段的「Token、延迟和吞吐统计」与「Prometheus 和 OpenTelemetry」的 Prometheus 那一半）：`common/metrics` 是 `runtime.Metrics` 的真实实现与 Prometheus 文本导出（零第三方依赖）；Gateway 侧新增了与 Agent 侧对称的一份隧道指标（`tunnel_server_*`，视角相反因此刻意不同名）、调度器指标（含此前只能从选择结果间接推断的熔断状态）与前门指标（请求量、并发、TTFT、总时长、输入输出 token、每秒输出 token）；Agent 侧此前记了指标却没有后端可取，现在 `nopMetrics` 已被真实注册表取代。两个服务各自在只绑回环的 `-metrics-addr` 上提供 `GET /metrics`。模型名与请求路径不进任何标签，每个记录指标的包都有可执行的标签基数测试。详见「可观测性」一节。
-
-15. 控制面的 Admin API（第二阶段的「Web 管理控制台」的后端那一半，以及「用户、租户、API Key」）：`service/aiServeWeaveControlPlane` 是仓库第一个基于 go-zero 的服务，用 gorm（PostgreSQL / MySQL 双支持）与 Redis。已落地租户创建、用户登录与管理、API Key 的签发与吊销、管理操作审计。**Gateway 的鉴权已改成对着它校验**：`-control-plane-addr` 指向控制面后，`-api-keys` 明文列表退化为无控制面时的回退路径，README 安全设计那条「用户 API Key 只保存不可逆哈希」第一次真正成立。Gateway 发出的是它自己算的 SHA-256 而不是用户的 key，因此凭据从不进入控制面。为什么这个服务用 go-zero 而数据面不用、三种凭据为何三种存法、吊销的生效路径与那个 30 秒缓存窗口，都在 [service/aiServeWeaveControlPlane/README.md](service/aiServeWeaveControlPlane/README.md)。
-
-    隧道两侧的进度与设计见 [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md)（阶段 7 有详细实测数据）；Registry 的存储布局、`-mint-token` 用法与已知限制见 [service/aiServeWeaveRegistry/README.md](service/aiServeWeaveRegistry/README.md)。
-
-下一步建议先实现：
-
-1. `node_id` 冲突检测与运维口径：Registry 目前对非空 `node_id` 直接采信，不检测跨节点冲突，上线前需要定下这个口径（隧道 README「待决问题 3」）。
-2. 故障注入剩余场景与滚动升级演练已在单机完成（拔网线、kill 全部副本、证书过期、后端假死、逐副本滚动升级，见 `service/aiServeWeaveAgent/tunnel/README.md` 阶段 7）；24h 长稳测试工具已落地并在本机运行中，完成后补数据。现在 `/metrics` 上有 `go_goroutines` 与 `go_memstats_heap_alloc_bytes`，长稳测试的"无泄漏"判据不必再靠进程外观察。
-3. 实现 Job 状态持久化、取消任务和生成图片下载。
-4. 熔断阈值（`FailureThreshold`/`BaseCooldown`/`MaxCooldown`）需要真实流量数据校准。熔断状态现在有指标了（`gateway_scheduler_breaker_open` / `_trips_total`），校准所需的观测手段已经就位，缺的是真实流量。
-5. Registry 的指标端点：`common/metrics` 已经就位，缺的是 Registry 自己的目录与记录点。
-6. 配额、并发与速率限制（第二阶段清单第 3 项）：控制面已经把 `Identity`（租户 + key）放到 Gateway 的请求 context 上了，那就是接入点。
-7. Console 前端：技术选型已定并落地——Next.js 16（App Router）+ React 19 + Tailwind 4 + shadcn/ui，表格用 TanStack Table + TanStack Virtual，图表用 ECharts。Admin API 已经可用，缺的是业务页面。
-8. OpenTelemetry：第二阶段清单的另一半。`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器，但真正缺的是 trace——`request_id` 已经贯穿全链路日志，把它接成 span 是独立的一步。
+开发里程碑、任务顺序、未完成项和验收记录统一维护在 [STATUS.md](STATUS.md)。
