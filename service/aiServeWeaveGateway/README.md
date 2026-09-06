@@ -13,7 +13,7 @@
 | `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：清单加载、声明式输入、绑定与校验 |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
 | `registryclient/` | 已实现 | 向 Registry 的 `GatewayDirectory` 报到，把收到的名册转发给 `tunnelserver.Server.SetRoster` |
-| `controlplaneclient/` | 已实现 | `Verifier` 对着控制面校验 API Key，进程内缓存，发出的是哈希而不是调用方的 key；`JobsClient`（STATUS.md 的 J04）是控制面 Job 持久化内部 API 的客户端，与 `Verifier` 刻意分开——它不缓存、不重试，且尚未被 Gateway 的提交/状态同步路径实际调用，接入属于 J05/J06 |
+| `controlplaneclient/` | 已实现 | `Verifier` 对着控制面校验 API Key，进程内缓存，发出的是哈希而不是调用方的 key；`JobsClient`（STATUS.md 的 J04）是控制面 Job 持久化内部 API 的客户端，与 `Verifier` 刻意分开——它不缓存、不重试；`GatewayPersister` 把它适配成 `httpapi.JobPersistClient`，已接入 `httpapi/jobpersist.go` 的后台持久化器（J05）。重启后从控制面恢复未终态 job 的路由绑定属于 J06，尚未实现 |
 | `e2e/` | 已实现 | 真实 TCP + mTLS 下三副本与真实 Agent 的联调测试 |
 | `main.go` | 已实现 | 装配隧道监听、HTTP 监听、Registry 名册订阅、`/metrics` 监听 |
 
@@ -97,7 +97,7 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 
 `data` 里嵌的是后端自己的载荷（大小已由 ComfyUI 适配器限制）：进度数字与节点输出只存在于那里，丢掉它的流只会报告「有事在发生」，却说不出进行到哪一步。终态帧额外带 `status`，随后流结束。
 
-设计上有九条约束，改这里的代码时不能绕过：
+设计上有十条约束，改这里的代码时不能绕过：
 
 1. **调用方给不出图。** 请求体只有 `inputs`，图来自已注册的模板。模板把每个可替换输入声明为「节点 + 字段 + 类型 + 范围」，且该字段必须已存在于图中——输入只覆盖模板作者放好的值，从不创建字段。声明错误的模板在 `workflow.Load` 时就失败，挂在运维的终端上而不是某个调用方的请求上。这是 README 顶层「平台不应允许普通 API 调用者随意修改整个节点图」的落实。
 2. **`prompt_id` 不外泄。** 公开 id 是 Gateway 自己铸的 `job_...`，后端的 `prompt_id` 只存在 job 记录里。它不是我们该派发的东西，而且只在单个 ComfyUI 内部唯一。
@@ -106,8 +106,9 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 5. **取消是请求，不是结论。** ComfyUI 的中断是异步的，因此 `cancel` 返回 202 后 job 仍是后端最后报告的那个状态，直到状态查询或事件流带回真正的结果——在这里就把它标成 `cancelled`，是 Gateway 在编造一个没人告诉过它的结果。已结束的 job 返回 409（请求与状态冲突），节点不具备中断能力时返回 501（`cancel_unsupported`），而不是笼统的 500——后者会让调用方跑到我们这边找问题。
 6. **产物的公开 id 与后端路径无关。** 后端用 `filename`+`subfolder`+`type` 三元组定位产物，那是通往它自己磁盘布局的一条路径。这个三元组绝不作为标识符抵达调用方：`artifact_id` 在列举时铸造、经由存储解回，因此调用方无法伪造一个指向本次运行没有产出的文件的 id。id 在多次列举之间稳定——每次调用铸一套新的，会让每轮轮询都把存储撑大一点。
 7. **产物下载走批量槽，且不落地。** `OPERATION_ARTIFACT_LIST` 是有界回复，走推理槽；`OPERATION_ARTIFACT_OPEN` 流出整个响应体，走批量槽，两类槽在隧道里物理隔离，一次大的下载挤不掉推理。前门用 `io.Copy` 直通转发，本进程从不完整持有一个产物，背压经由同一次读取抵达 Agent。回显进 `Content-Disposition` 的文件名先被清洗：目录部分、CR、LF、引号与控制字符一律移除而不是转义——那个名字来自后端，并经由工作流自己的保存节点前缀最终来自调用方。
-8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；副本重启即丢失，也不跨副本共享。持久化属于控制面的 `jobs` 表，表与内部读写 API 均已建好（J03、J04），但本包尚未调用这条 API——写入时机、失败语义与状态机的设计见 [ControlPlane README 的「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#job-持久化契约j01-设计j03-已建表j04-已实现内部-api)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
+8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；副本重启即丢失，也不跨副本共享。持久化属于控制面的 `jobs` 表，写入时机、失败语义与状态机的设计见 [ControlPlane README 的「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#job-持久化契约j01-设计j03-已建表j04-已实现内部-apij05-已接入持久化)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖，第十条约束是这条原则的具体落实。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
 9. **后台同步器代替不再轮询的调用方推进 job。** `httpapi/jobsync.go` 的 `jobSyncer` 周期性向每个非终态 job 的节点问一次状态，实现在 `jobStore.dueForSync`/`syncSucceeded`/`syncFailed` 上；没有它，一次没人继续轮询、也没人挂着 SSE 的运行会永远停在最后被观测到的状态，即便后端早已跑完。它在三个维度上同时有界：`SyncBatchSize`（默认 200）限定一轮问多少个 job，`SyncConcurrency`（默认 8）限定同时问多少个，`SyncCallTimeout`（默认 10s）限定单次询问能挂多久；一轮必须跑完才安排下一轮的计时器（默认间隔 `SyncInterval` 5s），因此从不重叠、慢一轮只会推迟下一轮而不会堆积。节点消失时 `NodeRuntime.snapshot` 返回 `*runtime.RuntimeError{Code: ErrorConnection}`，这是预期内的失败，不当错误记日志、也不改 job 状态——README「state 是最后观测状态」在这里必须继续成立，一个节点短暂不可达不是运行本身发生变化的证据；连续失败会按 `syncFailures` 翻倍退避（上限 `SyncMaxBackoff`，默认 5 分钟），一个持续消失的节点因此被越问越少，而不是每轮都问。任何一次前台观测（状态轮询或 SSE 事件，两者共用 `jobStore.update`）都会清空这份退避：既然确实有什么触达到了它，此前的惩罚期就不再成立。`Server.Close` 停止这个后台循环并等待正在进行的一轮跑完——本身已被批次、并发与超时三重限定，因此这个等待有界，main.go 在 HTTP 监听器停止、隧道被拆除之前调用它，避免对着一条正在有意关闭的隧道打出一串「node is not connected」告警。
+10. **后台持久化器把 job 记录写进控制面，且从不与推理路径同步。** `httpapi/jobpersist.go` 的 `jobPersister`（STATUS.md 的 J05）在 `submitRun`、`jobStatus` 轮询与 SSE 终态写入这三处观测点之后被非阻塞地 `nudge()` 提醒，但它自己的写入永远在另一个协程里进行——202、轮询响应、SSE 帧都在持久化调用返回之前就已经发给调用方。一个 job 需要持久化的条件是 `job.needsPersist()`：`persisted` 为 false（从未确认过 `CreateJob`），或 `persistedSeq < ObservedSeq`（已确认的落后于本副本最新的观测）；`ObservedSeq` 只在 `jobStore.update()` 里因 State 或 ErrorSummary 真正变化才自增，一次只确认同一状态的轮询不会触发一次白白的持久化写入。**结果不明时的重试只会针对同一个 job id 与同一份路由绑定再问一次控制面，绝不重新提交给节点、也绝不铸造新 job id**——`jobPersister` 结构体本身没有 `scheduler` 依赖，架构上就做不到后者，这正是 STATUS.md「结果未知时不盲目重提」在代码里的落实。批次、并发与超时的三重有界与退避机制与 `jobSyncer`同构，但用独立的 `persistFailures`/`nextPersistAt` 记账：控制面不可达与节点不可达是两个互不相关的故障域，合用一套退避会让一处故障拖住另一处本该继续的重试。`dueForPersist` 刻意不排除终态 job——一次运行的最终状态恰恰是最不该丢失的记录，也是 `jobSyncer` 自己的轮询在 job 到达终态那一刻起就不再覆盖的情形。**这是尽力而为的旁路，不是可靠队列**：重试状态存在 `jobStore` 自己的记账里，与内存 job 表其余部分同样在进程重启时丢失、同样受 `DefaultMaxJobs` 逐出上限约束——一个还没来得及持久化就被逐出的 job，这次持久化机会随之消失，这是已知且如实记录的限制，不是靠着承诺“不会丢”蒙混过去的隐患。
 
 `-workflow-templates` 接受逗号分隔的文件或目录（目录下取 `*.json`，其余忽略），留空则不注册任何模板，此时提交一律 404。清单形如：
 

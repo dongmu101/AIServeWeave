@@ -139,6 +139,22 @@ func run() error {
 		return err
 	}
 
+	// The Job persistence client shares -control-plane-addr and the same
+	// token as key verification above — both are this replica talking to
+	// the same control plane about its own callers' business (STATUS.md's
+	// J04/J05). A deployment with no control plane configured gets
+	// Gateway-local job tracking only, the same degrade keyVerifier already
+	// returns nil for.
+	//
+	// Job 持久化客户端与上面的 key 校验共用 -control-plane-addr 与同一个
+	// token——两者都是本副本就自己调用方的业务在与同一个控制面对话
+	// （STATUS.md 的 J04/J05）。未配置控制面的部署只得到仅限 Gateway 本地的
+	// job 跟踪，与 keyVerifier 已经为此返回 nil 的退化相同。
+	jobPersist, err := jobPersistClient(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
 	// Templates are loaded before anything starts serving: a manifest that
 	// binds an input to a node it does not have is an operator mistake, and
 	// failing here puts it on the operator's terminal instead of on a
@@ -180,12 +196,13 @@ func run() error {
 
 	sched := scheduler.New(server, scheduler.Config{Metrics: registry, Routes: table})
 	front := httpapi.New(sched, httpapi.Config{
-		Verifier:  verifier,
-		APIKeys:   splitCommaList(*apiKeys),
-		Logger:    logger,
-		Metrics:   registry,
-		Workflows: workflows,
-		Limiter:   limiter,
+		Verifier:         verifier,
+		APIKeys:          splitCommaList(*apiKeys),
+		Logger:           logger,
+		Metrics:          registry,
+		Workflows:        workflows,
+		Limiter:          limiter,
+		JobPersistClient: jobPersist,
 	})
 
 	// The docs routes are registered on a mux that wraps front rather than
@@ -434,6 +451,45 @@ func keyVerifier(addr, token string, cacheTTL time.Duration, logger *slog.Logger
 		slog.String("control_plane_addr", addr),
 		slog.Duration("key_cache_ttl", cacheTTL))
 	return verifier, nil
+}
+
+// jobPersistClient builds the Gateway's side of the control plane's Job
+// persistence API, or returns nil when no control plane is configured —
+// mirroring keyVerifier's own degrade path.
+//
+// It returns the httpapi.JobPersistClient interface type explicitly, not
+// *controlplaneclient.GatewayPersister: returning the concrete pointer and
+// letting Go box a nil one into httpapi.Config.JobPersistClient would make
+// cfg.JobPersistClient != nil true even when nothing was configured — an
+// interface holding a nil pointer is not a nil interface. Returning the
+// interface type here means the "not configured" case really does return a
+// nil interface value.
+//
+// jobPersistClient 构建 Gateway 一侧的控制面 Job 持久化 API 客户端；未配置控制面
+// 时返回 nil——与 keyVerifier 自己的退化路径一致。
+//
+// 它显式返回 httpapi.JobPersistClient 接口类型，而不是
+// *controlplaneclient.GatewayPersister：若返回具体指针类型，让 Go 把一个 nil
+// 指针装箱进 httpapi.Config.JobPersistClient，会导致即使什么都没配置，
+// cfg.JobPersistClient != nil 也会为真——一个持有 nil 指针的接口，不是一个
+// nil 接口。在这里返回接口类型，才能让「未配置」这种情形真正返回一个 nil
+// 接口值。
+func jobPersistClient(addr, token string, logger *slog.Logger) (httpapi.JobPersistClient, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewJobsClient(controlplaneclient.JobsClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("persisting job records to the control plane", slog.String("control_plane_addr", addr))
+	return controlplaneclient.NewGatewayPersister(client), nil
 }
 
 // splitCommaList parses a comma-separated flag value, trimming whitespace

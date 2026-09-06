@@ -75,6 +75,61 @@ type job struct {
 	// nextSyncAt 是后台同步器下一次可以询问这个 job 的时间。零值永远视为已到期，
 	// 因此一个刚提交的 job 从它的第一轮起就已合格，无需 add 特意设置这个字段。
 	nextSyncAt time.Time
+	// ObservedSeq counts real observations of this job's state — it
+	// increments in update() whenever State or ErrorSummary actually
+	// changes, never on a poll that confirms the same thing again. It is
+	// what the control plane's jobs table calls ObservedSeq too (see the
+	// ControlPlane README's 「Job 持久化契约」): this Gateway replica is the
+	// one party positioned to assign it, since it is the one asking the
+	// node and receiving events in the first place.
+	//
+	// ObservedSeq 计数这个 job 状态的真实观测次数——每当 State 或 ErrorSummary
+	// 确有变化时，它就在 update() 里自增，而一次只是重新确认同一件事的轮询
+	// 不会让它变化。这也是控制面 jobs 表所说的 ObservedSeq（见 ControlPlane
+	// README「Job 持久化契约」）：本 Gateway 副本正是有资格赋予它的那一方，
+	// 因为归根结底是它在询问节点、接收事件。
+	ObservedSeq int64
+	// persisted reports whether the control plane has ever confirmed a
+	// CreateJob for this job. It is separate from persistedSeq because the
+	// first fact ("a row exists") and the ongoing one ("the row reflects
+	// ObservedSeq") fail independently: the control plane can be reachable
+	// for a create and then vanish before the first state update, or vice
+	// versa.
+	//
+	// persisted 报告控制面是否已经确认过这个 job 的一次 CreateJob。它与
+	// persistedSeq 分开，因为第一个事实（「这一行存在」）与持续的那个事实
+	// （「这一行反映了 ObservedSeq」）会独立地失败：控制面可能在一次创建时可达，
+	// 随后在第一次状态更新之前就不可达了，反过来也一样。
+	persisted bool
+	// persistedSeq is the highest ObservedSeq the control plane has
+	// confirmed receiving, via either CreateJob (which implicitly confirms
+	// seq 0, the initial state) or UpdateJobState.
+	//
+	// persistedSeq 是控制面已确认收到的最高 ObservedSeq，途径是 CreateJob
+	// （隐含确认了 seq 0，即初始状态）或 UpdateJobState。
+	persistedSeq int64
+	// persistFailures and nextPersistAt are the persistence backoff's own
+	// bookkeeping, kept separate from syncFailures/nextSyncAt above because
+	// the two failure domains are independent: the control plane being
+	// unreachable says nothing about whether the node is, and conflating
+	// their backoff timers would have one outage silence retries for the
+	// other.
+	//
+	// persistFailures 与 nextPersistAt 是持久化退避自己的记账，与上面的
+	// syncFailures/nextSyncAt 分开保存，因为这两个故障域互不相关：控制面不可达
+	// 说明不了节点是否可达，把两者的退避计时器混为一谈，会让一处故障压制住另一处
+	// 本该继续的重试。
+	persistFailures int
+	nextPersistAt   time.Time
+}
+
+// needsPersist reports whether the control plane's record of this job is
+// missing or behind this replica's own latest observation.
+//
+// needsPersist 报告控制面对这个 job 的记录是缺失的，还是落后于本副本自己最新
+// 的观测。
+func (j job) needsPersist() bool {
+	return !j.persisted || j.persistedSeq < j.ObservedSeq
 }
 
 // artifactRecord is what a public artifact id resolves to: which job it
@@ -263,12 +318,167 @@ func (s *jobStore) update(id string, status runtime.WorkflowStatus, now time.Tim
 	if !ok {
 		return
 	}
+	// ObservedSeq advances only on a real change. QueuePosition moving on
+	// its own does not count: the control plane's jobs table has no column
+	// for it (see model.Job), so a poll that only confirms a new queue
+	// position would otherwise burn a persistence write on nothing the
+	// control plane can even store.
+	//
+	// ObservedSeq 只在真正发生变化时前进。QueuePosition 单独变动不算数：控制面
+	// 的 jobs 表根本没有对应的列（见 model.Job），因此一次只确认了新排队位置的
+	// 轮询，若也推进它，只会为一件控制面根本存不下的事白白消耗一次持久化写入。
+	if j.State != status.State || j.ErrorSummary != status.ErrorSummary {
+		j.ObservedSeq++
+	}
 	j.State = status.State
 	j.QueuePosition = status.QueuePosition
 	j.ErrorSummary = status.ErrorSummary
 	j.UpdatedAt = now
 	j.syncFailures = 0
 	j.nextSyncAt = now
+	s.byID[id] = j
+}
+
+// forPersist returns id's full internal record for the background
+// persister, or false if it has since been evicted. It is not tenant-scoped:
+// the caller is this package's own persister, already trusted with every
+// job's routing data — the same trust boundary jobSyncer's dueForSync
+// crosses to reach Candidate and RunID.
+//
+// forPersist 为后台持久化器返回 id 的完整内部记录，若已被逐出则返回 false。
+// 它不按租户限定范围：调用方是本包自己的持久化器，早已被信任持有每个 job 的
+// 路由数据——与 jobSyncer 的 dueForSync 为触及 Candidate 与 RunID 所跨越的
+// 是同一条信任边界。
+func (s *jobStore) forPersist(id string) (job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	return j, ok
+}
+
+// dueForPersist returns up to max job ids whose control-plane record is
+// missing or behind (see job.needsPersist) and whose next persistence
+// attempt is at or before now, longest-overdue first. Like dueForSync, it
+// claims each returned id by pushing its nextPersistAt out to
+// now.Add(claimFor), so a call still in flight when the next tick starts is
+// not dispatched a second time.
+//
+// Unlike dueForSync this does not exclude terminal jobs — a terminal run's
+// final state is exactly the record most worth not losing, and it is the
+// one case jobSyncer's own polling loop stops covering the moment a job
+// reaches it.
+//
+// dueForPersist 返回最多 max 个满足以下条件的 job id：其控制面记录缺失或落后
+// （见 job.needsPersist），且下一次持久化尝试的时间不晚于 now，逾期最久的排在
+// 最前面。与 dueForSync 一样，它通过把每个被返回 id 的下一次尝试时间推到
+// now.Add(claimFor) 来完成认领，这样一次仍在进行中的调用不会在下一轮开始时被
+// 重复分派。
+//
+// 与 dueForSync 不同，这里不排除终态 job——一次运行的最终状态恰恰是最不该丢失
+// 的那份记录，而这正是 jobSyncer 自己的轮询循环在一个 job 到达终态那一刻起就
+// 不再覆盖的情形。
+func (s *jobStore) dueForPersist(now time.Time, max int, claimFor time.Duration) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	type dueJob struct {
+		id string
+		at time.Time
+	}
+	candidates := make([]dueJob, 0, len(s.order))
+	for id, j := range s.byID {
+		if !j.needsPersist() || j.nextPersistAt.After(now) {
+			continue
+		}
+		candidates = append(candidates, dueJob{id: id, at: j.nextPersistAt})
+	}
+	sort.Slice(candidates, func(i, k int) bool {
+		if candidates[i].at.Equal(candidates[k].at) {
+			return candidates[i].id < candidates[k].id
+		}
+		return candidates[i].at.Before(candidates[k].at)
+	})
+	if len(candidates) > max {
+		candidates = candidates[:max]
+	}
+
+	claimed := now.Add(claimFor)
+	out := make([]string, 0, len(candidates))
+	for _, d := range candidates {
+		j := s.byID[d.id]
+		j.nextPersistAt = claimed
+		s.byID[d.id] = j
+		out = append(out, d.id)
+	}
+	return out
+}
+
+// persistedCreate records that the control plane has confirmed a CreateJob
+// for id, implicitly confirming ObservedSeq 0 — the initial state that call
+// carried. A job evicted in the meantime is left alone, matching update's
+// own rule against resurrecting an evicted row.
+//
+// persistedCreate 记录控制面已确认一次针对 id 的 CreateJob，隐含确认了
+// ObservedSeq 0——那次调用所携带的初始状态。期间已被逐出的 job 保持不变，
+// 与 update 自己「不复活已逐出行」的规则一致。
+func (s *jobStore) persistedCreate(id string, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	j.persisted = true
+	j.persistedSeq = 0
+	j.persistFailures = 0
+	j.nextPersistAt = now
+	s.byID[id] = j
+}
+
+// persistedState records that the control plane has confirmed an
+// UpdateJobState carrying seq. The caller passes the seq it sent — read from
+// forPersist just before the call — rather than this method reading
+// ObservedSeq itself, because ObservedSeq may have advanced again while the
+// call was in flight; recording exactly what was confirmed, not whatever is
+// current now, is what keeps this bookkeeping accurate.
+//
+// persistedState 记录控制面已确认一次携带 seq 的 UpdateJobState。调用方传入
+// 它发送时的那个 seq——在调用前从 forPersist 读到的——而不是让本方法自己去读
+// ObservedSeq，因为调用在途期间 ObservedSeq 可能已经又前进了；记录「确切被
+// 确认的是什么」而不是「此刻是什么」，才能让这份记账保持准确。
+func (s *jobStore) persistedState(id string, seq int64, now time.Time) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	j.persistedSeq = seq
+	j.persistFailures = 0
+	j.nextPersistAt = now
+	s.byID[id] = j
+}
+
+// persistFailed records a failed persistence attempt without touching
+// anything about the job the control plane still lacks — the point of this
+// bookkeeping is exactly to remember that it is still owed. backoff computes
+// how long to wait before this job is due again, based on the
+// consecutive-failure count now on record, mirroring syncFailed's own
+// contract in jobsync.go.
+//
+// persistFailed 记录一次失败的持久化尝试，且不触碰控制面依然欠缺的那部分——
+// 这份记账存在的意义正是记住它仍然欠着。backoff 依据当前记录的连续失败次数，
+// 算出这个 job 下一次到期还要等多久，与 jobsync.go 里 syncFailed 自己的契约
+// 一致。
+func (s *jobStore) persistFailed(id string, now time.Time, backoff func(failures int) time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	j.persistFailures++
+	j.nextPersistAt = now.Add(backoff(j.persistFailures))
 	s.byID[id] = j
 }
 

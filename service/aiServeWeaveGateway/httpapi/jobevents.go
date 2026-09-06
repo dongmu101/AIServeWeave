@@ -143,6 +143,7 @@ func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 			// 这条流才是「运行如何结束」的权威，因此存储在这里知悉结果。没有这一步，
 			// 状态端点会继续为一次早已结束的运行去打扰节点。
 			h.jobs.update(j.ID, runtime.WorkflowStatus{State: state}, h.clock.Now())
+			h.persister.nudge()
 		}
 		if err := writeNamedSSE(w, string(ev.Type), frame); err != nil {
 			return

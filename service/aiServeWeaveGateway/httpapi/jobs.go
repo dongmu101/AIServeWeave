@@ -137,6 +137,14 @@ func (h *handlers) submitRun(w http.ResponseWriter, r *http.Request) {
 		UpdatedAt:  now,
 	}
 	h.jobs.add(j)
+	// The persister is nudged, never waited on: this response is already
+	// decided by SubmitWorkflow having succeeded, and the control plane
+	// hearing about it is a side channel per the persistence contract, not
+	// a condition of this 202.
+	//
+	// 持久化器在这里被提醒，而绝不会被等待：这个响应早已由 SubmitWorkflow 的
+	// 成功决定，控制面得知此事按持久化契约是一条旁路，不是这个 202 的前提条件。
+	h.persister.nudge()
 
 	// The inputs are not logged: a prompt is exactly the free text README's
 	// 安全红线 keeps out of logs.
@@ -181,6 +189,7 @@ func (h *handlers) jobStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	now := h.clock.Now()
 	h.jobs.update(j.ID, status, now)
+	h.persister.nudge()
 	j.State = status.State
 	j.QueuePosition = status.QueuePosition
 	j.ErrorSummary = status.ErrorSummary

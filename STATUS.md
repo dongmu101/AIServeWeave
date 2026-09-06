@@ -46,11 +46,11 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 
 | 状态 | 编号 | 待开发任务 | 验收目标 |
 | --- | --- | --- | --- |
-| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-设计j03-已建表j04-已实现内部-api)，本项仅完成设计，不含建表与代码 |
+| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-设计j03-已建表j04-已实现内部-apij05-已接入持久化)，本项仅完成设计，不含建表与代码 |
 | [x] | J02 | 在 Gateway 增加有界后台状态同步 | 调用方不再轮询/SSE 时也能推进任务；限制扫描批次、并发和频率，处理节点消失、超时和优雅停止——实现见 `httpapi/jobsync.go`，详见 [Gateway README「工作流 Job」第九条](service/aiServeWeaveGateway/README.md#工作流-job) |
 | [x] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录——实现见 `internal/store/gormstore/jobmigrate.go` 与 `internal/model/job.go`，详见 [ControlPlane README「Job 持久化契约」的「已实现的存储层」小节](service/aiServeWeaveControlPlane/README.md#已实现的存储层j03)；真实 MySQL 上的验证留给 J08 |
-| [x] | J04 | 实现控制面内部 Job 读写 API 与 Gateway 客户端 | 服务间鉴权、租户隔离、幂等写入和并发条件更新；重复/乱序事件不能覆盖终态；错误与日志不泄露凭据、Prompt 或工作流 JSON——实现见 `internal/handler`（`/internal/v1/jobs*`，InternalToken 守卫）、`internal/logic/jobs.go` 与 Gateway 侧 `controlplaneclient/jobs.go` 的 `JobsClient`，详见 [ControlPlane README「Job 持久化契约」的「已实现的内部 API」小节](service/aiServeWeaveControlPlane/README.md#已实现的内部-api-与-gateway-客户端j04)；**尚未接入 Gateway 的提交/同步路径，留给 J05** |
-| [ ] | J05 | 处理数据库与 ComfyUI 提交之间的故障窗口 | 覆盖“后端已接收但映射尚未落库”；结果未知时不盲目重提；补写若采用队列须有容量上限与可靠恢复机制，不能仅靠内存重试承诺不丢 |
+| [x] | J04 | 实现控制面内部 Job 读写 API 与 Gateway 客户端 | 服务间鉴权、租户隔离、幂等写入和并发条件更新；重复/乱序事件不能覆盖终态；错误与日志不泄露凭据、Prompt 或工作流 JSON——实现见 `internal/handler`（`/internal/v1/jobs*`，InternalToken 守卫）、`internal/logic/jobs.go` 与 Gateway 侧 `controlplaneclient/jobs.go` 的 `JobsClient`，详见 [ControlPlane README「Job 持久化契约」的「已实现的内部 API」小节](service/aiServeWeaveControlPlane/README.md#已实现的内部-api-与-gateway-客户端j04)；接入 Gateway 提交/同步路径见 J05 |
+| [x] | J05 | 处理数据库与 ComfyUI 提交之间的故障窗口 | 覆盖"后端已接收但映射尚未落库"；结果未知时不盲目重提；补写若采用队列须有容量上限与可靠恢复机制，不能仅靠内存重试承诺不丢——实现见 `httpapi/jobpersist.go` 的 `jobPersister`，详见 [ControlPlane README「Job 持久化契约」的「已接入持久化」小节](service/aiServeWeaveControlPlane/README.md#已接入持久化j05)；恢复机制是有界退避重试而非持久队列，如实记录了「进程重启/逐出即丢」的边界，重启后的路由恢复留给 J06 |
 | [ ] | J06 | 实现重启恢复与跨 Gateway 副本访问 | 重启后可恢复非终态任务；任一可服务副本可查询、取消和访问产物；保存稳定节点/运行时标识，不序列化连接对象；明确恢复执行权及失联处理 |
 | [ ] | J07 | 提供持久化历史查询与 Console Job 管理 | 按租户、时间、状态、工作流分页；支持详情、进度、取消和授权产物访问；明确实时状态与最后观测时间，补齐 Console C26 |
 | [ ] | J08 | 在真实 MySQL 9.7 上完成集成与故障恢复验证 | 覆盖迁移、并发更新、重复事件、跨租户拒绝、数据库中断、Gateway 重启、多副本查询和提交结果未知；默认单元测试不依赖真实数据库 |

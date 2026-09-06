@@ -94,6 +94,48 @@ type Config struct {
 	// SyncMaxBackoff 限定一个反复失败的 job 在后台尝试之间最多等待多久。为零时采用
 	// DefaultSyncMaxBackoff。
 	SyncMaxBackoff time.Duration
+
+	// JobPersistClient writes job records to the control plane's internal
+	// Job API (STATUS.md's J04/J05). Nil disables the persister entirely —
+	// a deployment with no control plane gets Gateway-local job tracking
+	// only, the same degrade a nil Verifier already implies for API keys.
+	//
+	// JobPersistClient 把 job 记录写入控制面的内部 Job API（STATUS.md 的
+	// J04/J05）。为 nil 时完全关闭持久化器——未部署控制面的环境只得到
+	// Gateway 本地的 job 跟踪，与 nil Verifier 对 API Key 已经隐含的退化
+	// 相同。
+	JobPersistClient JobPersistClient
+	// PersistInterval is how often the background persister sweeps for jobs
+	// whose control-plane record is missing or behind. Zero uses
+	// DefaultPersistInterval.
+	//
+	// PersistInterval 是后台持久化器扫描控制面记录缺失或落后的 job 的间隔。
+	// 为零时采用 DefaultPersistInterval。
+	PersistInterval time.Duration
+	// PersistBatchSize bounds how many jobs one sweep writes. Zero uses
+	// DefaultPersistBatchSize.
+	//
+	// PersistBatchSize 限定一次扫描写入多少个 job。为零时采用
+	// DefaultPersistBatchSize。
+	PersistBatchSize int
+	// PersistConcurrency bounds how many of those writes are in flight at
+	// once. Zero uses DefaultPersistConcurrency.
+	//
+	// PersistConcurrency 限定其中同时在途的写入个数。为零时采用
+	// DefaultPersistConcurrency。
+	PersistConcurrency int
+	// PersistCallTimeout bounds a single write to the control plane. Zero
+	// uses DefaultPersistCallTimeout.
+	//
+	// PersistCallTimeout 限定单次写入控制面的时长。为零时采用
+	// DefaultPersistCallTimeout。
+	PersistCallTimeout time.Duration
+	// PersistMaxBackoff caps how long a repeatedly failing job waits between
+	// persistence attempts. Zero uses DefaultPersistMaxBackoff.
+	//
+	// PersistMaxBackoff 限定一个反复失败的 job 在持久化尝试之间最多等待多久。
+	// 为零时采用 DefaultPersistMaxBackoff。
+	PersistMaxBackoff time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
@@ -132,6 +174,29 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	})
 	go syncer.run()
 
+	// The persister only exists when a control plane is configured to write
+	// job records to — the same nil-degrades pattern cfg.Verifier already
+	// follows for API keys. A deployment with none gets Gateway-local job
+	// tracking only, honestly, rather than a background loop that starts
+	// and immediately has nothing it can do.
+	//
+	// 持久化器只在配置了可写入 job 记录的控制面时才存在——与 cfg.Verifier 对
+	// API Key 已经遵循的同一种「为 nil 时退化」模式。未配置的部署如实得到
+	// 仅限 Gateway 本地的 job 跟踪，而不是一个启动起来却什么都做不了的后台
+	// 循环。
+	var persister *jobPersister
+	if cfg.JobPersistClient != nil {
+		persister = newJobPersister(h.jobs, cfg.JobPersistClient, clock, logger, jobPersistConfig{
+			Interval:    cfg.PersistInterval,
+			BatchSize:   cfg.PersistBatchSize,
+			Concurrency: cfg.PersistConcurrency,
+			CallTimeout: cfg.PersistCallTimeout,
+			MaxBackoff:  cfg.PersistMaxBackoff,
+		})
+		go persister.run()
+	}
+	h.persister = persister
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", h.models)
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
@@ -158,9 +223,10 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
 	return &Server{
-		Handler:  h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux)))),
-		handlers: h,
-		syncer:   syncer,
+		Handler:   h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux)))),
+		handlers:  h,
+		syncer:    syncer,
+		persister: persister,
 	}
 }
 
@@ -179,28 +245,38 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 // 一个方法，接收它所限定的租户，返回副本。
 type Server struct {
 	http.Handler
-	handlers *handlers
-	syncer   *jobSyncer
+	handlers  *handlers
+	syncer    *jobSyncer
+	persister *jobPersister
 }
 
-// Close stops the background job syncer and waits for its current sweep, if
-// any, to finish. Call it during shutdown, after the HTTP listener has
-// stopped accepting new requests and before the scheduler's underlying
-// tunnel is torn down — the syncer dispatches through that same scheduler,
-// and stopping it first avoids a burst of "node is not connected" warnings
-// against a tunnel that is closing on purpose rather than one that failed.
+// Close stops the background job syncer and the job persister, waiting for
+// each one's current round, if any, to finish. Call it during shutdown,
+// after the HTTP listener has stopped accepting new requests and before the
+// scheduler's underlying tunnel is torn down — the syncer dispatches
+// through that same scheduler, and stopping it first avoids a burst of
+// "node is not connected" warnings against a tunnel that is closing on
+// purpose rather than one that failed. The persister does not dispatch
+// through the tunnel at all — it talks to the control plane — but stopping
+// it here too means shutdown has one place that waits for every background
+// loop this package started, not two.
 //
 // It does not stop the HTTP handler itself; that remains the caller's
 // http.Server to shut down.
 //
-// Close 停止后台 job 同步器，并等待它正在进行的一轮（如果有）跑完。应当在关闭期间
-// 调用它——在 HTTP 监听器停止接受新请求之后、调度器底下的隧道被拆除之前——同步器
-// 经由同一个调度器分派，先停止它能避免对着一条正在有意关闭而非故障的隧道打出一串
-// 「node is not connected」告警。
+// Close 停止后台 job 同步器与 job 持久化器，并分别等待它们正在进行的一轮
+// （如果有）跑完。应当在关闭期间调用它——在 HTTP 监听器停止接受新请求之后、
+// 调度器底下的隧道被拆除之前——同步器经由同一个调度器分派，先停止它能避免
+// 对着一条正在有意关闭而非故障的隧道打出一串「node is not connected」告警。
+// 持久化器根本不经由隧道分派——它对话的是控制面——但在这里一并停止它，
+// 意味着关闭流程只有一处要等待本包启动的每一个后台循环，而不是两处。
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
 	s.syncer.Stop()
+	if s.persister != nil {
+		s.persister.Stop()
+	}
 }
 
 // JobsFor returns this replica's runs for one tenant, newest first, and
@@ -234,6 +310,13 @@ type handlers struct {
 	jobs      *jobStore
 	clock     runtime.Clock
 	limiter   ratelimit.Limiter
+	// persister is nil when no JobPersistClient is configured. Its nudge
+	// method is nil-receiver-safe, so call sites never need to check this
+	// for nil themselves — see jobpersist.go.
+	//
+	// persister 在未配置 JobPersistClient 时为 nil。它的 nudge 方法对 nil
+	// 接收者是安全的，因此调用点从不需要自己检查它是否为 nil——见 jobpersist.go。
+	persister *jobPersister
 }
 
 // observe wraps the whole handler chain in the request counter, the duration
