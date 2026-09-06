@@ -136,6 +136,37 @@ type Config struct {
 	// PersistMaxBackoff 限定一个反复失败的 job 在持久化尝试之间最多等待多久。
 	// 为零时采用 DefaultPersistMaxBackoff。
 	PersistMaxBackoff time.Duration
+
+	// JobRecoveryClient asks the control plane which non-terminal jobs are
+	// bound to a node/runtime this replica can currently reach, so a
+	// restarted replica can recover the route bindings its in-memory job
+	// table lost (STATUS.md's J06). Nil disables the recoverer entirely — a
+	// deployment with no control plane has nothing to recover from, the same
+	// degrade JobPersistClient and Verifier already follow.
+	//
+	// JobRecoveryClient 向控制面询问哪些非终态 job 绑定在本副本此刻够得着的
+	// 节点/runtime 上，好让一个重启后的副本能恢复其内存 job 表已经丢失的路由
+	// 绑定（STATUS.md 的 J06）。为 nil 时完全关闭恢复器——未部署控制面的环境
+	// 没有什么可供恢复，与 JobPersistClient 和 Verifier 已经遵循的同一种退化。
+	JobRecoveryClient JobRecoveryClient
+	// RecoverInterval is how often the background recoverer sweeps currently
+	// connected nodes for jobs to recover. Zero uses DefaultRecoverInterval.
+	//
+	// RecoverInterval 是后台恢复器扫描当前已连接节点、寻找待恢复 job 的间隔。
+	// 为零时采用 DefaultRecoverInterval。
+	RecoverInterval time.Duration
+	// RecoverConcurrency bounds how many nodes are asked about at once. Zero
+	// uses DefaultRecoverConcurrency.
+	//
+	// RecoverConcurrency 限定同时询问多少个节点。为零时采用
+	// DefaultRecoverConcurrency。
+	RecoverConcurrency int
+	// RecoverCallTimeout bounds a single recovery call to the control plane.
+	// Zero uses DefaultRecoverCallTimeout.
+	//
+	// RecoverCallTimeout 限定单次向控制面发起的恢复调用的时长。为零时采用
+	// DefaultRecoverCallTimeout。
+	RecoverCallTimeout time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
@@ -197,6 +228,24 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	}
 	h.persister = persister
 
+	// The recoverer follows the same nil-degrades pattern: no control plane
+	// configured means nothing to recover non-terminal jobs from, so this
+	// replica simply keeps whatever its own in-memory job table already
+	// holds — the pre-J06 behavior, not a silently broken one.
+	//
+	// 恢复器遵循同一种「为 nil 时退化」模式：未配置控制面意味着没有什么可供
+	// 恢复非终态 job，本副本因此照旧只保留自己内存 job 表已有的内容——这是
+	// J06 之前的行为，不是一种悄悄坏掉的行为。
+	var recoverer *jobRecoverer
+	if cfg.JobRecoveryClient != nil {
+		recoverer = newJobRecoverer(h.jobs, sched, cfg.JobRecoveryClient, clock, logger, jobRecoverConfig{
+			Interval:    cfg.RecoverInterval,
+			Concurrency: cfg.RecoverConcurrency,
+			CallTimeout: cfg.RecoverCallTimeout,
+		})
+		go recoverer.run()
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", h.models)
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
@@ -227,6 +276,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		handlers:  h,
 		syncer:    syncer,
 		persister: persister,
+		recoverer: recoverer,
 	}
 }
 
@@ -248,34 +298,39 @@ type Server struct {
 	handlers  *handlers
 	syncer    *jobSyncer
 	persister *jobPersister
+	recoverer *jobRecoverer
 }
 
-// Close stops the background job syncer and the job persister, waiting for
-// each one's current round, if any, to finish. Call it during shutdown,
+// Close stops the background job syncer, persister and recoverer, waiting
+// for each one's current round, if any, to finish. Call it during shutdown,
 // after the HTTP listener has stopped accepting new requests and before the
-// scheduler's underlying tunnel is torn down — the syncer dispatches
-// through that same scheduler, and stopping it first avoids a burst of
-// "node is not connected" warnings against a tunnel that is closing on
-// purpose rather than one that failed. The persister does not dispatch
-// through the tunnel at all — it talks to the control plane — but stopping
-// it here too means shutdown has one place that waits for every background
-// loop this package started, not two.
+// scheduler's underlying tunnel is torn down — the syncer and the recoverer
+// both dispatch through that same scheduler, and stopping them first avoids
+// a burst of "node is not connected" warnings against a tunnel that is
+// closing on purpose rather than one that failed. The persister does not
+// dispatch through the tunnel at all — it talks to the control plane — but
+// stopping it here too means shutdown has one place that waits for every
+// background loop this package started, not three.
 //
 // It does not stop the HTTP handler itself; that remains the caller's
 // http.Server to shut down.
 //
-// Close 停止后台 job 同步器与 job 持久化器，并分别等待它们正在进行的一轮
+// Close 停止后台 job 同步器、持久化器与恢复器，并分别等待它们正在进行的一轮
 // （如果有）跑完。应当在关闭期间调用它——在 HTTP 监听器停止接受新请求之后、
-// 调度器底下的隧道被拆除之前——同步器经由同一个调度器分派，先停止它能避免
-// 对着一条正在有意关闭而非故障的隧道打出一串「node is not connected」告警。
-// 持久化器根本不经由隧道分派——它对话的是控制面——但在这里一并停止它，
-// 意味着关闭流程只有一处要等待本包启动的每一个后台循环，而不是两处。
+// 调度器底下的隧道被拆除之前——同步器与恢复器都经由同一个调度器分派，先停止
+// 它们能避免对着一条正在有意关闭而非故障的隧道打出一串「node is not
+// connected」告警。持久化器根本不经由隧道分派——它对话的是控制面——但在这里
+// 一并停止它，意味着关闭流程只有一处要等待本包启动的每一个后台循环，而不是
+// 三处。
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
 	s.syncer.Stop()
 	if s.persister != nil {
 		s.persister.Stop()
+	}
+	if s.recoverer != nil {
+		s.recoverer.Stop()
 	}
 }
 

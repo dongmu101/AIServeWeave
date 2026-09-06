@@ -151,6 +151,18 @@ func (s *Service) UpdateJobState(ctx context.Context, tenantID, jobID string, p 
 	return applied, job, nil
 }
 
+// ListActiveJobsForRoute returns every non-terminal job bound to
+// (nodeID, runtimeID), across every tenant — see store.Jobs'
+// ListActiveJobsForRoute for why this one read is not tenant-scoped.
+//
+// ListActiveJobsForRoute 返回绑定到 (nodeID, runtimeID) 的每一个非终态 job，
+// 跨越所有租户——为什么这一次读取不按租户限定范围，见 store.Jobs 的
+// ListActiveJobsForRoute。
+func (s *Service) ListActiveJobsForRoute(ctx context.Context, nodeID, runtimeID string) ([]model.Job, error) {
+	jobs, err := s.store.ListActiveJobsForRoute(ctx, nodeID, runtimeID)
+	return jobs, translate(err)
+}
+
 // CreateJobArtifactParams is one artifact a run produced, as the Gateway's
 // artifact listing minted a public id for it.
 //

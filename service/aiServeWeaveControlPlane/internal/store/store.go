@@ -364,7 +364,37 @@ type Jobs interface {
 	// 不存在、或不属于 tenantID 的 job——这两种情形本包别处的 store.ErrNotFound
 	// 本就刻意保持不可区分。
 	UpdateJobState(ctx context.Context, tenantID, id string, update JobStateUpdate) (applied bool, err error)
+	// ListActiveJobsForRoute returns up to MaxActiveJobsForRoute non-terminal
+	// jobs bound to (nodeID, runtimeID), across every tenant — the one read
+	// in this package that is not scoped by tenant, for the same reason
+	// GetAPIKeyByHash is not: a Gateway replica recovering after a restart
+	// (STATUS.md's J06) knows which nodes and runtimes are connected to it
+	// right now, not which tenants submitted the work running on them, so
+	// recovery must be able to ask "what do I owe this route binding"
+	// without a tenant to scope by.
+	//
+	// ListActiveJobsForRoute 返回最多 MaxActiveJobsForRoute 个绑定到
+	// (nodeID, runtimeID) 的非终态 job，跨越所有租户——本包中唯一一次不按租户
+	// 限定范围的读取，理由与 GetAPIKeyByHash 相同：一个重启后正在恢复的
+	// Gateway 副本（STATUS.md 的 J06）知道此刻连接到自己的是哪些节点与
+	// runtime，却不知道是哪些租户把工作提交到了它们身上，因此恢复必须能够
+	// 在没有租户可供限定范围的情况下，发问「我欠这个路由绑定什么」。
+	ListActiveJobsForRoute(ctx context.Context, nodeID, runtimeID string) ([]model.Job, error)
 }
+
+// MaxActiveJobsForRoute bounds ListActiveJobsForRoute. It is not a page —
+// there is no cursor, and a route with more truly-concurrent non-terminal
+// runs than this needs a capacity conversation, not a bigger constant here.
+// Recovery for whatever does not fit is not lost forever: the same
+// (nodeID, runtimeID) is asked about again on the recovering replica's next
+// sweep, and a run past the cap simply waits a bit longer to be noticed.
+//
+// MaxActiveJobsForRoute 限制 ListActiveJobsForRoute。它不是一页——没有游标，
+// 一个非终态并发运行数真的超过这个数字的路由，需要的是一次容量方面的讨论，
+// 而不是把这里的常量调大。装不下的那部分恢复并非永久丢失：同一个
+// (nodeID, runtimeID) 会在正在恢复的副本下一轮扫描时被再次问起，只是超出
+// 上限的那次运行会晚一点才被注意到。
+const MaxActiveJobsForRoute = 500
 
 // JobArtifacts persists what a run produced, keyed by the public artifact id
 // a Gateway replica minted. See model.JobArtifact's doc comment for why the

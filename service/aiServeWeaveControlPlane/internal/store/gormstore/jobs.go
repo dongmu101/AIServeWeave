@@ -115,6 +115,29 @@ func (s *Store) UpdateJobState(ctx context.Context, tenantID, id string, update 
 	return false, nil
 }
 
+// ListActiveJobsForRoute returns up to store.MaxActiveJobsForRoute
+// non-terminal jobs bound to (nodeID, runtimeID), oldest first — oldest
+// first because a recovering Gateway replica sweeping this list in order is
+// what "past the cap waits a bit longer" (the constant's own doc comment)
+// actually means: the longest-neglected runs are the ones a truncated
+// result should not further delay.
+//
+// ListActiveJobsForRoute 返回最多 store.MaxActiveJobsForRoute 个绑定到
+// (nodeID, runtimeID) 的非终态 job，最旧的在前——之所以最旧在前，是因为一个
+// 正在恢复的 Gateway 副本按此顺序扫描，才真正落实了那个常量文档注释里「超出
+// 上限的那次运行会晚一点才被注意到」的意思：被拖得最久的那些运行，不该被一次
+// 被截断的结果拖得更久。
+func (s *Store) ListActiveJobsForRoute(ctx context.Context, nodeID, runtimeID string) ([]model.Job, error) {
+	var out []model.Job
+	err := s.db.WithContext(ctx).
+		Where("node_id = ? AND runtime_id = ? AND state NOT IN (?)",
+			nodeID, runtimeID, []string{model.JobSucceeded, model.JobFailed, model.JobCancelled}).
+		Order("created_at ASC, id ASC").
+		Limit(store.MaxActiveJobsForRoute).
+		Find(&out).Error
+	return out, translate(err)
+}
+
 // -----------------------------------------------------------------------
 // Job artifacts
 // -----------------------------------------------------------------------

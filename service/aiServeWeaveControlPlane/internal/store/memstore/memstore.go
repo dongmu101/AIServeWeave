@@ -441,6 +441,33 @@ func (s *Store) UpdateJobState(_ context.Context, tenantID, id string, update st
 	return true, nil
 }
 
+// ListActiveJobsForRoute returns up to store.MaxActiveJobsForRoute
+// non-terminal jobs bound to (nodeID, runtimeID), oldest first, across every
+// tenant.
+//
+// ListActiveJobsForRoute 返回最多 store.MaxActiveJobsForRoute 个绑定到
+// (nodeID, runtimeID) 的非终态 job，最旧的在前，跨越所有租户。
+func (s *Store) ListActiveJobsForRoute(_ context.Context, nodeID, runtimeID string) ([]model.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.Job
+	for _, job := range s.jobs {
+		if job.NodeID == nodeID && job.RuntimeID == runtimeID && !job.Terminal() {
+			out = append(out, job)
+		}
+	}
+	sort.Slice(out, func(i, k int) bool {
+		if out[i].CreatedAt.Equal(out[k].CreatedAt) {
+			return out[i].ID < out[k].ID
+		}
+		return out[i].CreatedAt.Before(out[k].CreatedAt)
+	})
+	if len(out) > store.MaxActiveJobsForRoute {
+		out = out[:store.MaxActiveJobsForRoute]
+	}
+	return out, nil
+}
+
 // CreateJobArtifact inserts one artifact record, rejecting a duplicate id
 // the way the primary key does.
 //

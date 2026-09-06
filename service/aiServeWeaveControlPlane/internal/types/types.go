@@ -339,6 +339,18 @@ type JobResponse struct {
 	TerminalAt      *time.Time `json:"terminal_at,omitempty"`
 }
 
+// ListActiveJobsResponse is every non-terminal job a Gateway replica
+// recovering after a restart (STATUS.md's J06) owes a route binding —
+// across every tenant, since a replica knows which nodes are connected to
+// it, not which tenants submitted work to them.
+//
+// ListActiveJobsResponse 是一个重启后正在恢复的 Gateway 副本（STATUS.md 的
+// J06）对某个路由绑定所欠的每一个非终态 job——跨越所有租户，因为一个副本
+// 知道的是哪些节点连接到自己，而不是哪些租户把工作提交到了它们身上。
+type ListActiveJobsResponse struct {
+	Items []JobResponse `json:"items"`
+}
+
 // UpdateJobStateRequest is one status observation a Gateway replica reports
 // — from a foreground poll, an SSE event, or its background syncer. See
 // store.JobStateUpdate for the ObservedSeq gate this is applied under.

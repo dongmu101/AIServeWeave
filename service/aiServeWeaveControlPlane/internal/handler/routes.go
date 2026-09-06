@@ -75,6 +75,24 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Path:    "/internal/v1/jobs",
 			Handler: requireSharedSecret(ctx.Config.InternalToken, createJob(ctx)),
 		},
+		// /jobs/active is registered ahead of /jobs/:id and relies on
+		// go-zero's router preferring a literal path segment over a param
+		// one at the same depth — e2e/jobs_e2e_test.go's
+		// TestListActiveJobsForRouteRoutesAheadOfTheParameterizedGetJobRoute
+		// pins that behavior so a router upgrade that changed it would be
+		// caught here rather than by a Gateway recovery sweep silently
+		// hitting the wrong handler.
+		//
+		// /jobs/active 排在 /jobs/:id 之前，依赖 go-zero 的路由器在同一深度上
+		// 优先选择字面路径段而不是参数段这条行为。e2e/jobs_e2e_test.go 的
+		// TestListActiveJobsForRouteRoutesAheadOfTheParameterizedGetJobRoute
+		// 把这个行为钉住，好让路由器升级一旦改变了它，能在这里被发现，而不是
+		// 让 Gateway 的恢复扫描默默命中错误的 handler。
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/jobs/active",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, listActiveJobsForRoute(ctx)),
+		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/:id",

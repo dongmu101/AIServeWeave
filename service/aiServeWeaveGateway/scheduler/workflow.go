@@ -159,3 +159,20 @@ func (s *Scheduler) workflowCandidates(cap runtime.Capability) []Candidate {
 		return snap.Discovery.Capabilities.Require(cap) == nil
 	})
 }
+
+// WorkflowCapableCandidates returns every currently connected node/runtime
+// this replica could dispatch a workflow submission to right now. STATUS.md's
+// J06 uses it to know which (NodeID, RuntimeID) route bindings this replica
+// might owe a recovery check to: a run recorded against a node this replica
+// cannot currently reach is not this replica's to recover, and this method
+// is what tells the caller which nodes qualify without duplicating
+// workflowCandidates' own routing and capability logic.
+//
+// WorkflowCapableCandidates 返回本副本此刻真的能把工作流提交过去的每一个已连接
+// 节点/运行时。STATUS.md 的 J06 用它来判断本副本可能欠着恢复检查的是哪些
+// (NodeID, RuntimeID) 路由绑定：一次记录在本副本此刻够不着的节点上的运行，不该
+// 由本副本去恢复，而这个方法正是在不重复 workflowCandidates 自己的路由与能力
+// 判断逻辑的前提下，告知调用方哪些节点符合条件。
+func (s *Scheduler) WorkflowCapableCandidates() []Candidate {
+	return s.workflowCandidates(runtime.CapabilityWorkflowExecution)
+}

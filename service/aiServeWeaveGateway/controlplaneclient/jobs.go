@@ -302,6 +302,36 @@ func (c *JobsClient) UpdateJobState(ctx context.Context, tenantID, jobID string,
 	return resp.Applied, resp.Job.toJob(), nil
 }
 
+// ListActiveJobsForRoute returns every non-terminal job the control plane
+// has on record bound to (nodeID, runtimeID), across every tenant. It exists
+// for a Gateway replica recovering after a restart (STATUS.md's J06): the
+// replica knows which nodes and runtimes are connected to it right now, not
+// which tenants submitted the work running on them, so recovery must be
+// able to ask "what do I owe this route binding" without a tenant to scope
+// by — unlike every other method on this client, which is why this is the
+// one call with no tenantID parameter.
+//
+// ListActiveJobsForRoute 返回控制面对 (nodeID, runtimeID) 记录在案的每一个
+// 非终态 job，跨越所有租户。它的存在是为了让一个重启后正在恢复的 Gateway 副本
+// （STATUS.md 的 J06）能够发问「我欠这个路由绑定什么」，而无需一个租户来限定
+// 范围——因为该副本知道的是此刻连接到自己的是哪些节点与 runtime，而不是哪些
+// 租户把工作提交到了它们身上。与本客户端其余每个方法不同，这也是唯一一个没有
+// tenantID 参数的调用。
+func (c *JobsClient) ListActiveJobsForRoute(ctx context.Context, nodeID, runtimeID string) ([]Job, error) {
+	var resp struct {
+		Items []jobWire `json:"items"`
+	}
+	path := "/internal/v1/jobs/active?node_id=" + url.QueryEscape(nodeID) + "&runtime_id=" + url.QueryEscape(runtimeID)
+	if err := c.call(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]Job, len(resp.Items))
+	for i, j := range resp.Items {
+		out[i] = j.toJob()
+	}
+	return out, nil
+}
+
 // JobArtifact is one recorded artifact.
 //
 // JobArtifact 是一条已记录的产物。

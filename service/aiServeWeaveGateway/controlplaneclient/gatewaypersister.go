@@ -6,8 +6,12 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 )
 
-// GatewayPersister adapts a JobsClient to httpapi.JobPersistClient's
-// minimal, primitive-typed interface.
+// GatewayPersister adapts a JobsClient to httpapi.JobPersistClient's and
+// httpapi.JobRecoveryClient's minimal, primitive-typed interfaces. One
+// adapter satisfies both: writing job records (J05) and reading back which
+// ones a restarted replica has forgotten (J06) are different concerns, but
+// both are just JobsClient calls reshaped to types httpapi can name without
+// importing this package.
 //
 // The adaptation exists only because of the direction this package's
 // dependency already runs: this file imports httpapi (for the interface it
@@ -62,4 +66,33 @@ func (g *GatewayPersister) UpdateJobState(ctx context.Context, tenantID, jobID, 
 	return applied, err
 }
 
-var _ httpapi.JobPersistClient = (*GatewayPersister)(nil)
+// ListActiveJobsForRoute implements httpapi.JobRecoveryClient.
+func (g *GatewayPersister) ListActiveJobsForRoute(ctx context.Context, nodeID, runtimeID string) ([]httpapi.RecoveredJob, error) {
+	jobs, err := g.client.ListActiveJobsForRoute(ctx, nodeID, runtimeID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]httpapi.RecoveredJob, len(jobs))
+	for i, j := range jobs {
+		out[i] = httpapi.RecoveredJob{
+			JobID:           j.JobID,
+			TenantID:        j.TenantID,
+			WorkflowID:      j.WorkflowID,
+			WorkflowVersion: j.WorkflowVersion,
+			NodeID:          j.NodeID,
+			RuntimeID:       j.RuntimeID,
+			BackendRunID:    j.BackendRunID,
+			State:           j.State,
+			ErrorSummary:    j.ErrorSummary,
+			ObservedSeq:     j.ObservedSeq,
+			CreatedAt:       j.CreatedAt,
+			UpdatedAt:       j.UpdatedAt,
+		}
+	}
+	return out, nil
+}
+
+var (
+	_ httpapi.JobPersistClient  = (*GatewayPersister)(nil)
+	_ httpapi.JobRecoveryClient = (*GatewayPersister)(nil)
+)

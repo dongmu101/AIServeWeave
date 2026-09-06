@@ -202,6 +202,39 @@ func newJobStore(max int) *jobStore {
 func (s *jobStore) add(j job) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.insertLocked(j)
+}
+
+// recoverIfMissing inserts j only if no job with j.ID is already known, and
+// reports whether it did. It exists for STATUS.md's J06: a background
+// recovery sweep asking the control plane about a route binding may be told
+// about a job this replica already knows — because it submitted it, because
+// an earlier sweep already recovered it, or because another goroutine's
+// sweep is racing this one — and inserting it again would give s.order two
+// entries for one id, corrupting eviction order and duplicating the job in
+// every tenant's listing.
+//
+// recoverIfMissing 仅在尚不存在 j.ID 对应的 job 时才插入它，并报告是否插入了。
+// 它为 STATUS.md 的 J06 而存在：一次后台恢复扫描向控制面询问某个路由绑定，
+// 可能被告知一个本副本已经知道的 job——因为是本副本自己提交的，因为更早的一轮
+// 扫描已经恢复过它，或者因为另一个协程的扫描正与这次竞争——重复插入会让
+// s.order 里出现两条同一个 id 的记录，既破坏逐出顺序，也会让这个 job 在每个
+// 租户的列表里重复出现。
+func (s *jobStore) recoverIfMissing(j job) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.byID[j.ID]; exists {
+		return false
+	}
+	s.insertLocked(j)
+	return true
+}
+
+// insertLocked is add and recoverIfMissing's shared body. Callers must hold
+// s.mu.
+//
+// insertLocked 是 add 与 recoverIfMissing 共用的实现主体。调用方必须持有 s.mu。
+func (s *jobStore) insertLocked(j job) {
 	s.byID[j.ID] = j
 	s.order = append(s.order, j.ID)
 	for len(s.order) > s.max {

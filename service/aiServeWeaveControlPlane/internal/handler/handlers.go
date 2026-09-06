@@ -591,6 +591,39 @@ func createJob(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// listActiveJobsForRoute handles GET /internal/v1/jobs/active. It answers a
+// recovering Gateway replica's question "what do I owe this route binding"
+// (STATUS.md's J06): node_id and runtime_id are query parameters and there
+// is no tenant_id — this is the one internal Job endpoint not scoped by
+// tenant, for the same reason GetAPIKeyByHash is not (see store.Jobs'
+// ListActiveJobsForRoute).
+//
+// listActiveJobsForRoute 处理 GET /internal/v1/jobs/active。它回答一个正在
+// 恢复的 Gateway 副本的问题——「我欠这个路由绑定什么」（STATUS.md 的 J06）：
+// node_id 与 runtime_id 是查询参数，且没有 tenant_id——这是唯一一个不按租户
+// 限定范围的内部 Job 端点，理由与 GetAPIKeyByHash 相同（见 store.Jobs 的
+// ListActiveJobsForRoute）。
+func listActiveJobsForRoute(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		nodeID, runtimeID := query.Get("node_id"), query.Get("runtime_id")
+		if nodeID == "" || runtimeID == "" {
+			writeError(w, http.StatusBadRequest, "node_id and runtime_id are required")
+			return
+		}
+		jobs, err := ctx.Logic.ListActiveJobsForRoute(r.Context(), nodeID, runtimeID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.JobResponse, len(jobs))
+		for i, j := range jobs {
+			out[i] = renderJob(j)
+		}
+		writeJSON(w, http.StatusOK, types.ListActiveJobsResponse{Items: out})
+	}
+}
+
 // getJob handles GET /internal/v1/jobs/:id. tenant_id is a query parameter
 // rather than something this endpoint infers, for the same reason it is a
 // body field on createJob: there is no session here to read it from, only
