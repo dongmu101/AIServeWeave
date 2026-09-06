@@ -107,22 +107,22 @@ func (s *Service) CreateAPIKey(ctx context.Context, actor Actor, name string, li
 	return CreatedKey{Key: key, Plaintext: generated.Plaintext}, nil
 }
 
-// ListAPIKeys returns the actor's tenant's keys. The stored hash is cleared
-// before returning: it is not a secret in the sense the plaintext is, but it
-// is the exact value a verification looks up by, and nothing above this layer
-// has a use for it.
+// ListAPIKeys returns one page of the actor's tenant's keys. The stored hash
+// is cleared before returning: it is not a secret in the sense the plaintext
+// is, but it is the exact value a verification looks up by, and nothing above
+// this layer has a use for it.
 //
-// ListAPIKeys 返回 actor 所属租户的 key。返回前会清空存储的哈希：它不像明文那样是
-// 秘密，但它正是校验时据以查询的那个值，而本层之上没有任何地方用得着它。
-func (s *Service) ListAPIKeys(ctx context.Context, actor Actor) ([]model.APIKey, error) {
-	keys, err := s.store.ListAPIKeys(ctx, actor.TenantID)
+// ListAPIKeys 返回 actor 所属租户 key 列表中的一页。返回前会清空存储的哈希：它不像明文
+// 那样是秘密，但它正是校验时据以查询的那个值，而本层之上没有任何地方用得着它。
+func (s *Service) ListAPIKeys(ctx context.Context, actor Actor, query store.ListQuery, filter store.APIKeyFilter) (store.Page[model.APIKey], error) {
+	page, err := s.store.ListAPIKeys(ctx, actor.TenantID, query, filter)
 	if err != nil {
-		return nil, translate(err)
+		return store.Page[model.APIKey]{}, translate(err)
 	}
-	for i := range keys {
-		keys[i].Hash = ""
+	for i := range page.Items {
+		page.Items[i].Hash = ""
 	}
-	return keys, nil
+	return page, nil
 }
 
 // RevokeAPIKey revokes one key belonging to the actor's tenant. A member may
@@ -132,19 +132,9 @@ func (s *Service) ListAPIKeys(ctx context.Context, actor Actor) ([]model.APIKey,
 // RevokeAPIKey 吊销 actor 所属租户的一个 key。member 只能吊销自己创建的 key；owner
 // 与 admin 可以吊销该租户的任何 key。
 func (s *Service) RevokeAPIKey(ctx context.Context, actor Actor, keyID string) error {
-	keys, err := s.store.ListAPIKeys(ctx, actor.TenantID)
+	target, err := s.store.GetAPIKey(ctx, actor.TenantID, keyID)
 	if err != nil {
 		return translate(err)
-	}
-	var target model.APIKey
-	for _, key := range keys {
-		if key.ID == keyID {
-			target = key
-			break
-		}
-	}
-	if target.ID == "" {
-		return ErrNotFound
 	}
 	if !actor.canManageKeys() && target.CreatedBy != actor.UserID {
 		// Reported as not-found rather than forbidden: a member who can tell

@@ -16,7 +16,8 @@ import (
 //
 //   - Public: sign-in only.
 //   - Session: everything the Console does on behalf of a signed-in user.
-//   - Shared secret: tenant bootstrap, and the Gateway's verification call.
+//   - Shared secret: tenant bootstrap, the Gateway's verification call, and
+//     the operator fleet inventory — which is mounted only when configured.
 //
 // RegisterHandlers 挂载本服务提供的每一条路由。
 //
@@ -25,7 +26,7 @@ import (
 //
 //   - 公开：仅登录。
 //   - 会话：Console 代表已登录用户所做的一切。
-//   - 共享密钥：租户引导，以及 Gateway 的校验调用。
+//   - 共享密钥：租户引导、Gateway 的校验调用，以及运维机群清单——后者只在被配置时挂载。
 func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: login(ctx)},
@@ -37,6 +38,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, listAPIKeys(ctx))},
 		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, createAPIKey(ctx))},
 		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: requireSession(ctx, revokeAPIKey(ctx))},
+		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: requireSession(ctx, currentTenant(ctx))},
 		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: requireSession(ctx, setTenantLimits(ctx))},
 		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: requireSession(ctx, listAudit(ctx))},
 	})
@@ -56,4 +58,59 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Handler: requireSharedSecret(ctx.Config.InternalToken, verifyKey(ctx)),
 		},
 	})
+
+	// The fleet inventory is mounted only when it is configured, so a
+	// deployment without an operations console has no such route rather than
+	// a route that answers "not configured". It is under its own prefix and
+	// its own secret because a node has no tenant: there is nothing on it for
+	// a session to be scoped by, and putting it in the session group would
+	// mean every tenant's admin could read the whole fleet.
+	//
+	// 机群清单只在被配置时才挂载，因此没有运维控制台的部署是根本没有这条路由，而不是
+	// 有一条回答「未配置」的路由。它使用自己的路径前缀与自己的密钥，因为节点没有租户：
+	// 它身上没有任何东西可供会话限定范围，而把它放进会话组，就意味着每个租户的管理员
+	// 都能读到整个机群。
+	if ctx.Fleet != nil {
+		server.AddRoutes([]rest.Route{
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/nodes",
+				Handler: requireSharedSecret(ctx.Config.Fleet.OperatorToken, listFleetNodes(ctx)),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/models",
+				Handler: requireSharedSecret(ctx.Config.Fleet.OperatorToken, listFleetModels(ctx)),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/workflows",
+				Handler: requireSharedSecret(ctx.Config.Fleet.OperatorToken, listOperatorWorkflows(ctx)),
+			},
+		})
+
+		// The workflow menu and a tenant's own runs are tenant questions, so
+		// they are session-guarded like the rest of the Admin API. They are
+		// mounted here rather than in the session group above only because
+		// they need a configured Gateway read path — without one this service
+		// cannot see a template or a job at all, and a route that answered
+		// "not configured" would be worse than no route.
+		//
+		// 工作流菜单与租户自己的运行是租户的问题，因此与 Admin API 的其余部分一样由
+		// 会话守卫。它们挂在这里而不是上面的会话组，只是因为它们需要一条已配置的
+		// Gateway 读取路径——没有它，本服务根本看不到任何模板或 job，而一条回答
+		// 「未配置」的路由比没有路由更糟。
+		server.AddRoutes([]rest.Route{
+			{
+				Method:  http.MethodGet,
+				Path:    "/admin/v1/workflows",
+				Handler: requireSession(ctx, listWorkflows(ctx)),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/admin/v1/jobs",
+				Handler: requireSession(ctx, listJobs(ctx)),
+			},
+		})
+	}
 }

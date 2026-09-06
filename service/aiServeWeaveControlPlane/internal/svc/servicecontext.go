@@ -26,6 +26,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
@@ -39,6 +40,16 @@ type ServiceContext struct {
 	Logic  *logic.Service
 	Issuer *token.Issuer
 	Cache  *cache.Verifications
+	// Fleet aggregates the node inventory across Gateway replicas. It is nil
+	// when the deployment did not configure one, and every handler that uses
+	// it is mounted only in that case — so a service without an operations
+	// console has no fleet endpoint at all, not an endpoint that answers
+	// "not configured".
+	//
+	// Fleet 跨 Gateway 副本聚合节点清单。部署未配置时它为 nil，而使用它的每个 handler
+	// 也只在配置了的情况下才挂载——因此一个没有运维控制台的服务，是根本没有机群端点，
+	// 而不是有一个回答「未配置」的端点。
+	Fleet *fleet.Aggregator
 
 	db *gorm.DB
 }
@@ -87,7 +98,13 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		Logic:  logic.New(st, clock, logic.WithInvalidator(verifications)),
 		Issuer: issuer,
 		Cache:  verifications,
-		db:     db,
+		Fleet: fleet.New(fleet.Config{
+			Gateways: cfg.Fleet.Gateways,
+			Token:    cfg.Fleet.GatewayToken,
+			Timeout:  cfg.Fleet.Timeout,
+			Clock:    clock,
+		}),
+		db: db,
 	}, nil
 }
 

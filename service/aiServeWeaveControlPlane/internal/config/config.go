@@ -68,6 +68,76 @@ type Config struct {
 	// Console 将来注册流程的临时替身，正如 Registry 的 -mint-token 是节点纳管的
 	// 临时替身。
 	BootstrapToken string
+
+	// Fleet configures the operator inventory: which Gateway replicas to ask
+	// about connected nodes, and the two secrets involved. It is optional,
+	// and leaving it out is the ordinary case — a deployment that does not
+	// run an operations console has no reason to let this service reach into
+	// the data plane at all.
+	//
+	// Fleet 配置运维清单：向哪些 Gateway 副本询问已连接的节点，以及所涉及的两个密钥。
+	// 它是可选的，且省略它才是常态——一个不运行运维控制台的部署，没有任何理由让本服务
+	// 去够数据面。
+	Fleet FleetConf `json:",optional"`
+}
+
+// FleetConf configures the fleet inventory.
+//
+// The node inventory is not tenant data: a node is shared infrastructure that
+// any tenant's request may be routed to, and there is no tenant dimension on
+// it to filter by. So it is not served on the session-guarded Admin API at
+// all — it has its own guard and its own path prefix, and a tenant's session
+// cannot reach it however the roles are later changed.
+//
+// FleetConf 配置机群清单。
+//
+// 节点清单不是租户数据：节点是共享的基础设施，任何租户的请求都可能被路由到它，而它
+// 身上没有可供过滤的租户维度。因此它根本不放在由会话守卫的 Admin API 上——它有自己的
+// 守卫与自己的路径前缀，无论将来角色如何调整，租户的会话都够不到它。
+type FleetConf struct {
+	// Gateways are the base URLs of each Gateway replica's operator
+	// listener, e.g. http://gateway-1:8091. A replica that is not listed is
+	// simply not asked, and the nodes connected only to it are missing from
+	// the answer — which is why the response names the replicas it reached.
+	//
+	// Gateways 是各 Gateway 副本运维监听器的基础 URL，例如 http://gateway-1:8091。
+	// 没有列出的副本不会被询问，只连到它上面的节点也就不会出现在答案里——这正是响应
+	// 要点明它联系到了哪些副本的原因。
+	Gateways []string `json:",optional"`
+	// GatewayToken authenticates this service to those listeners. It must
+	// match each Gateway's AISW_GATEWAY_ADMIN_TOKEN.
+	//
+	// GatewayToken 用于本服务向那些监听器表明身份。它必须与各 Gateway 的
+	// AISW_GATEWAY_ADMIN_TOKEN 一致。
+	GatewayToken string `json:",optional"`
+	// OperatorToken authorizes a caller to read the inventory from this
+	// service. It is a third secret rather than a reuse of InternalToken,
+	// because the two authorize opposite directions: InternalToken lets a
+	// Gateway ask this service about a key, and reusing it would mean any
+	// Gateway could also read the whole fleet.
+	//
+	// OperatorToken 授权调用方从本服务读取清单。它是第三个密钥而不是复用
+	// InternalToken，因为两者授权的是相反的方向：InternalToken 让 Gateway 可以向本
+	// 服务询问某个 key，复用它就意味着任何 Gateway 也能读到整个机群。
+	OperatorToken string `json:",optional"`
+	// Timeout bounds one call to one replica. A replica that is slow must
+	// not hold the whole aggregation, which is why the answer can be partial.
+	//
+	// Timeout 限制对单个副本的单次调用。一个慢副本不能拖住整次聚合，这正是答案可以是
+	// 局部的原因。
+	Timeout time.Duration `json:",default=3s"`
+}
+
+// Enabled reports whether the fleet inventory is configured. All three parts
+// are required together: replicas to ask, a secret to ask them with, and a
+// secret to be asked with. A partial configuration is a mistake, and
+// Validate says so rather than starting a half-built feature.
+//
+// Enabled 报告机群清单是否已配置。三部分必须同时具备：可询问的副本、用来询问它们的
+// 密钥，以及被询问时所要求的密钥。配置不全属于失误，Validate 会指出这一点，而不是启动
+// 一个只搭了一半的功能。
+func (f FleetConf) Enabled() bool {
+	return len(f.Gateways) > 0 || f.GatewayToken != "" || f.OperatorToken != ""
 }
 
 // Supported database drivers.
@@ -201,6 +271,20 @@ func (c Config) Validate() error {
 	} {
 		if len(secret) < minSecretLen {
 			return errors.New("config: " + name + " must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.Fleet.Enabled() {
+		if len(c.Fleet.Gateways) == 0 {
+			return errors.New("config: Fleet.Gateways is required once the fleet inventory is configured")
+		}
+		for _, name := range []string{"Fleet.GatewayToken", "Fleet.OperatorToken"} {
+			secret := c.Fleet.GatewayToken
+			if name == "Fleet.OperatorToken" {
+				secret = c.Fleet.OperatorToken
+			}
+			if len(secret) < minSecretLen {
+				return errors.New("config: " + name + " must be at least 32 characters; generate one with `openssl rand -base64 32`")
+			}
 		}
 	}
 	return nil

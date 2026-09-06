@@ -205,6 +205,36 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 	return tenant, owner, nil
 }
 
+// CurrentTenant returns the actor's own tenant, quota included.
+//
+// Every signed-in role may read it, unlike SetTenantLimits, which is owner and
+// admin only. The asymmetry is deliberate: a member cannot raise a limit, but
+// a member whose requests are being throttled needs to be able to see which
+// limit is doing it. Hiding the number would not protect anything — the
+// Gateway already tells a caller it was rate limited — it would only make the
+// Console a worse place to find out why.
+//
+// There is no audit record: this is a read of the caller's own tenant, and an
+// audit trail that logged every page view would bury the writes it exists to
+// preserve.
+//
+// CurrentTenant 返回 actor 自己所属的租户，包含配额。
+//
+// 任何已登录的角色都可以读取它，这与仅限 owner 和 admin 的 SetTenantLimits 不同。这种
+// 不对称是刻意的：member 无法调高限制，但一个请求正在被限流的 member，需要看得到是哪
+// 条限制在起作用。隐藏这个数字保护不了任何东西——Gateway 早就告诉调用方它被限流了
+// ——只会让 Console 成为一个更难查明原因的地方。
+//
+// 这里没有审计记录：这是对调用方自己租户的一次读取，而一份把每次翻页都记下来的审计
+// 线索，会把它本该保全的那些写操作淹没掉。
+func (s *Service) CurrentTenant(ctx context.Context, actor Actor) (model.Tenant, error) {
+	tenant, err := s.store.GetTenant(ctx, actor.TenantID)
+	if err != nil {
+		return model.Tenant{}, translate(err)
+	}
+	return tenant, nil
+}
+
 // CreateUser adds a user to the actor's tenant. Only an owner may do this:
 // adding a user is granting access, and delegating that to every admin makes
 // the owner's own account no longer the boundary it looks like.
@@ -258,12 +288,21 @@ func (s *Service) createUser(ctx context.Context, tenantID, email, password, nam
 	return user, nil
 }
 
-// ListUsers returns the actor's tenant's users.
+// ListUsers returns one page of the actor's tenant's users.
 //
-// ListUsers 返回 actor 所属租户的用户。
-func (s *Service) ListUsers(ctx context.Context, actor Actor) ([]model.User, error) {
-	users, err := s.store.ListUsers(ctx, actor.TenantID)
-	return users, translate(err)
+// ListUsers 返回 actor 所属租户用户列表中的一页。
+func (s *Service) ListUsers(ctx context.Context, actor Actor, query store.ListQuery, filter store.UserFilter) (store.Page[model.User], error) {
+	if filter.Role != "" && !validRole(filter.Role) {
+		// An unknown role filters to nothing, which reads as "this tenant has
+		// no such users" — a wrong answer to a malformed question. Refusing
+		// says which of the two it was.
+		//
+		// 未知角色会筛出空集，读起来像「这个租户没有这类用户」——对一个畸形问题给出的
+		// 错误答案。拒绝它则说清了到底是哪一种情况。
+		return store.Page[model.User]{}, ErrInvalidInput
+	}
+	page, err := s.store.ListUsers(ctx, actor.TenantID, query, filter)
+	return page, translate(err)
 }
 
 // Authenticate verifies a sign-in and returns the user it belongs to.
@@ -311,12 +350,23 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip string) 
 // Authenticate 在 email 不存在时也花掉与存在时相同的计算。
 const dummyDigest = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
-// ListAudit returns the actor's tenant's audit trail.
+// ListAudit returns one page of the actor's tenant's audit trail.
 //
-// ListAudit 返回 actor 所属租户的审计线索。
-func (s *Service) ListAudit(ctx context.Context, actor Actor, limit int) ([]model.AuditLog, error) {
-	entries, err := s.store.ListAudit(ctx, actor.TenantID, limit)
-	return entries, translate(err)
+// An inverted or empty time window is refused rather than answered with an
+// empty page: no rows is a fact about the tenant, and a caller who mixed up
+// their two timestamps should learn that instead of concluding nothing
+// happened.
+//
+// ListAudit 返回 actor 所属租户审计线索中的一页。
+//
+// 一个颠倒或为空的时间窗会被拒绝，而不是以空页作答：没有记录是关于该租户的一个事实，
+// 而一个把两个时间戳搞反了的调用方，应当得知这一点，而不是据此断定什么都没发生过。
+func (s *Service) ListAudit(ctx context.Context, actor Actor, query store.ListQuery, filter store.AuditFilter) (store.Page[model.AuditLog], error) {
+	if !filter.Since.IsZero() && !filter.Until.IsZero() && !filter.Until.After(filter.Since) {
+		return store.Page[model.AuditLog]{}, ErrInvalidInput
+	}
+	page, err := s.store.ListAudit(ctx, actor.TenantID, query, filter)
+	return page, translate(err)
 }
 
 // audit appends one record, best effort. A failed audit write must not fail
@@ -360,6 +410,13 @@ func translate(err error) error {
 		return ErrNotFound
 	case errors.Is(err, store.ErrConflict):
 		return ErrConflict
+	case errors.Is(err, store.ErrInvalidCursor):
+		// A cursor this service did not produce is a malformed request, not a
+		// missing row: the caller sent something, and what they sent is wrong.
+		//
+		// 一个并非本服务产生的游标属于畸形请求，而不是某一行的缺失：调用方确实发来了
+		// 东西，只是发来的东西不对。
+		return ErrInvalidInput
 	default:
 		return err
 	}

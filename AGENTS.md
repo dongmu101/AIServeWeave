@@ -24,11 +24,13 @@
 | `common/metrics/` | `runtime.Metrics` 的实现与 Prometheus 文本导出，三个服务共用一个注册表；`metricstest/` 是各服务测试用的内存收集器 |
 | `common/apikey/` | API Key 的格式、哈希与展示形式。控制面铸造、Gateway 校验，两边必须算出同一个哈希，因此它是契约而非任一方的内部实现 |
 | `common/quota/` | 租户限制值及其含义。控制面存储与下发、Gateway 执行，两边必须按同一套规则解释同一份数据，因此同样是契约 |
+| `common/workflowview/` | 工作流模板目录与实时 job 视图的契约，Gateway 与控制面共用。模板不含图、job 不含运行位置（节点/运行时/解析后的模型），两者都是刻意的 |
+| `common/nodeview/` | 机群清单的契约：Gateway 报告已连接节点、控制面聚合后交给运维控制台的形状。渲染采用允许列表——只输出这里点名的字段，不序列化 `NodeInfo` 或 `Descriptor` 碰巧持有的一切 |
 | `service/aiServeWeaveAgent/` | 主要实现所在：`tunnel/`（隧道）。`workflow/` 四个文件目前只有 package 声明，是空壳 |
-| `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）均已落地；`e2e/`（与 Agent 的联调测试） |
+| `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）、`adminapi/`（`-admin-addr` 上只读的机群清单、工作流目录与按租户的 job 端点，供控制面聚合）均已落地；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）与 `GatewayDirectory`（副本名册）已落地，详见其 README |
-| `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户、用户、API Key、审计已落地；配额未做。详见其 README |
-| `service/aiServeWeaveConsole/` | 前端脚手架已就位（Next.js 16 + React 19 + Tailwind 4 + shadcn/ui + TanStack Table + ECharts），尚无业务页面。TypeScript 走 6/7 双版本并存，见其 [AGENTS.md](service/aiServeWeaveConsole/AGENTS.md) |
+| `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户、用户、API Key、审计、租户配额（读写）均已落地；三个列表端点为游标分页 + 服务端筛选，返回信封而非裸数组；另有只在配置了 Gateway 读取路径时才挂载的两组端点：`/operator/v1/*` 机群与发布状态（独立密钥守卫，节点没有租户维度）、`/admin/v1/workflows` 与 `/admin/v1/jobs`（会话守卫，返回租户前清空副本 id 与内部 endpoint）。详见其 README |
+| `service/aiServeWeaveConsole/` | Next.js 16 + React 19 + Tailwind 4 + shadcn/ui。已落地登录、服务端会话（AES-256-GCM 密封的 HttpOnly Cookie）、对 Admin API 的白名单转发入口与统一请求层，以及用户、API Key（含一次性明文）、管理审计三个页面；配额编辑等待控制面的读取接口。浏览器不持有控制面令牌，新增 Admin API 调用必须往白名单加一行。TypeScript 走 6/7 双版本并存，测试用 Node 内置 runner，均见其 [AGENTS.md](service/aiServeWeaveConsole/AGENTS.md) 与 [STATUS.md](service/aiServeWeaveConsole/STATUS.md) |
 
 动手前先确认目标服务是否已有实现，不要在骨架服务里凭空假设已有的包。
 

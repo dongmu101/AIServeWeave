@@ -32,6 +32,7 @@ import (
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/metrics"
+	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
@@ -82,6 +83,8 @@ func run() error {
 		"comma-separated files or directories of ComfyUI workflow template manifests; empty registers none, and every workflow submit then 404s")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
+	adminAddr := flag.String("admin-addr", "",
+		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
 	flag.Parse()
 
 	var lvl slog.Level
@@ -174,20 +177,66 @@ func run() error {
 	logger.Info("model routes loaded", slog.Int("aliases", table.Len()))
 
 	sched := scheduler.New(server, scheduler.Config{Metrics: registry, Routes: table})
-	httpServer := &http.Server{
-		Addr: *addr,
-		Handler: httpapi.New(sched, httpapi.Config{
-			Verifier:  verifier,
-			APIKeys:   splitCommaList(*apiKeys),
-			Logger:    logger,
-			Metrics:   registry,
-			Workflows: workflows,
-			Limiter:   limiter,
-		}),
-	}
+	front := httpapi.New(sched, httpapi.Config{
+		Verifier:  verifier,
+		APIKeys:   splitCommaList(*apiKeys),
+		Logger:    logger,
+		Metrics:   registry,
+		Workflows: workflows,
+		Limiter:   limiter,
+	})
+	httpServer := &http.Server{Addr: *addr, Handler: front}
 	httpServeErr := make(chan error, 1)
 	go func() { httpServeErr <- httpServer.ListenAndServe() }()
 	logger.Info("gateway started", slog.String("addr", *addr), slog.String("replica_id", id))
+
+	// The operator inventory listener is off unless an address is given, and
+	// it refuses to start without a token: a fleet inventory is not something
+	// to serve unauthenticated because a variable was unset. Its failure is
+	// returned rather than logged, unlike the metrics listener's — an
+	// operator who asked for this listener and did not get it should find out
+	// at startup, not when a console shows an empty fleet.
+	//
+	// 运维清单监听器在未给出地址时不启用，且没有 token 时拒绝启动：机群清单不该因为
+	// 某个变量没设置就以未认证的方式提供出去。它的失败是返回而不是记录日志，这与指标
+	// 监听器不同——一个要求启用它却没能启用的运维，应当在启动时就发现，而不是在控制台
+	// 显示出一个空机群时才发现。
+	var adminServer *http.Server
+	if *adminAddr == "" {
+		logger.Info("no -admin-addr; this replica serves no operator inventory")
+	} else {
+		adminHandler, err := adminapi.New(adminapi.Config{
+			Token:     os.Getenv("AISW_GATEWAY_ADMIN_TOKEN"),
+			Nodes:     server.Nodes,
+			Jobs:      front.JobsFor,
+			Templates: front.Templates,
+			ReplicaID: id,
+		})
+		if err != nil {
+			return err
+		}
+		// The port is bound here, before anything is announced, so a bind
+		// failure is returned from run() rather than logged next to a line
+		// claiming the listener is up. ListenAndServe in a goroutine cannot
+		// do that: it binds after the caller has moved on, and an address
+		// already in use becomes a log line under a "listening" one.
+		//
+		// 端口在这里绑定，早于任何宣告，因此绑定失败是从 run() 返回，而不是被记在一行
+		// 声称监听器已就绪的日志旁边。在协程里调用 ListenAndServe 做不到这一点：它在
+		// 调用方已经继续往下走之后才绑定，于是「地址已被占用」变成了一条压在
+		// 「listening」下面的日志。
+		adminListener, err := net.Listen("tcp", *adminAddr)
+		if err != nil {
+			return err
+		}
+		adminServer = &http.Server{Handler: adminHandler}
+		go func() {
+			if err := adminServer.Serve(adminListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("operator inventory listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("operator inventory listening", slog.String("admin_addr", adminListener.Addr().String()))
+	}
 
 	// The metrics listener's failure is logged rather than returned: losing
 	// observability is bad, and taking a serving Gateway down over it would
@@ -319,6 +368,9 @@ func run() error {
 	// 拒绝的连接。
 	if metricsServer != nil {
 		_ = metricsServer.Close()
+	}
+	if adminServer != nil {
+		_ = adminServer.Close()
 	}
 
 	logger.Info("gateway stopped")

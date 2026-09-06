@@ -10,6 +10,7 @@ import (
 	"AIServeWeave/common/apikey"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // TestCreatedKeyVerifies is the happy path the whole feature exists for: a
@@ -74,18 +75,18 @@ func TestListedKeysCarryNoSecret(t *testing.T) {
 	f := newFixture(t)
 	created := f.mustCreateKey(f.ownerAt, "production")
 
-	keys, err := f.svc.ListAPIKeys(context.Background(), f.ownerAt)
+	page, err := f.svc.ListAPIKeys(context.Background(), f.ownerAt, store.ListQuery{}, store.APIKeyFilter{})
 	if err != nil {
 		t.Fatalf("ListAPIKeys: %v", err)
 	}
-	if len(keys) != 1 {
-		t.Fatalf("got %d keys, want 1", len(keys))
+	if len(page.Items) != 1 {
+		t.Fatalf("got %d keys, want 1", len(page.Items))
 	}
-	if keys[0].Hash != "" {
-		t.Errorf("a listed key carries its lookup hash: %q", keys[0].Hash)
+	if page.Items[0].Hash != "" {
+		t.Errorf("a listed key carries its lookup hash: %q", page.Items[0].Hash)
 	}
-	if keys[0].Display != created.Key.Display {
-		t.Errorf("Display = %q, want %q", keys[0].Display, created.Key.Display)
+	if page.Items[0].Display != created.Key.Display {
+		t.Errorf("Display = %q, want %q", page.Items[0].Display, created.Key.Display)
 	}
 }
 
@@ -359,14 +360,14 @@ func TestKeyOperationsAreAudited(t *testing.T) {
 		t.Fatalf("RevokeAPIKey: %v", err)
 	}
 
-	entries, err := f.svc.ListAudit(context.Background(), f.ownerAt, 0)
+	page, err := f.svc.ListAudit(context.Background(), f.ownerAt, store.ListQuery{}, store.AuditFilter{})
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
 
 	actions := map[string]bool{}
 	secret := strings.TrimPrefix(created.Plaintext, apikey.Prefix)
-	for _, entry := range entries {
+	for _, entry := range page.Items {
 		actions[entry.Action] = true
 		if strings.Contains(entry.Detail, secret) {
 			t.Errorf("an audit record carries the key's secret: %q", entry.Detail)

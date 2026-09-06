@@ -4,11 +4,14 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/url"
 	"strconv"
 	"time"
 
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/types"
@@ -88,6 +91,36 @@ func createTenant(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// currentTenant returns the caller's own tenant and its quota. The tenant
+// comes from the session, so there is nothing in the request to point
+// elsewhere.
+//
+// currentTenant 返回调用方自己所属的租户及其配额。租户来自会话，因此请求里没有任何
+// 可以指向别处的东西。
+func currentTenant(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		tenant, err := ctx.Logic.CurrentTenant(r.Context(), actor)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.TenantProfileResponse{
+			Tenant: types.Tenant{
+				ID:        tenant.ID,
+				Name:      tenant.Name,
+				Status:    tenant.Status,
+				CreatedAt: tenant.CreatedAt,
+			},
+			Limits: tenant.Limits(),
+		})
+	}
+}
+
 // -----------------------------------------------------------------------
 // Users
 // -----------------------------------------------------------------------
@@ -102,16 +135,20 @@ func listUsers(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		users, err := ctx.Logic.ListUsers(r.Context(), actor)
+		query := r.URL.Query()
+		page, err := ctx.Logic.ListUsers(r.Context(), actor, listQuery(query), store.UserFilter{
+			Role:  query.Get("role"),
+			Query: query.Get("q"),
+		})
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
-		out := make([]types.User, len(users))
-		for i, user := range users {
+		out := make([]types.User, len(page.Items))
+		for i, user := range page.Items {
 			out[i] = renderUser(user)
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, types.UserListResponse{Items: out, NextCursor: page.NextCursor})
 	}
 }
 
@@ -153,16 +190,20 @@ func listAPIKeys(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		keys, err := ctx.Logic.ListAPIKeys(r.Context(), actor)
+		query := r.URL.Query()
+		page, err := ctx.Logic.ListAPIKeys(r.Context(), actor, listQuery(query), store.APIKeyFilter{
+			Status: query.Get("status"),
+			Query:  query.Get("q"),
+		})
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
-		out := make([]types.APIKey, len(keys))
-		for i, key := range keys {
+		out := make([]types.APIKey, len(page.Items))
+		for i, key := range page.Items {
 			out[i] = renderAPIKey(key)
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, types.APIKeyListResponse{Items: out, NextCursor: page.NextCursor})
 	}
 }
 
@@ -237,15 +278,26 @@ func listAudit(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		limit, _ := strconv.Atoi(r.URL.Query().Get("limit"))
+		query := r.URL.Query()
+		since, sinceOK := timeParam(query.Get("since"))
+		until, untilOK := timeParam(query.Get("until"))
+		if !sinceOK || !untilOK {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
 
-		entries, err := ctx.Logic.ListAudit(r.Context(), actor, limit)
+		page, err := ctx.Logic.ListAudit(r.Context(), actor, listQuery(query), store.AuditFilter{
+			Action:  query.Get("action"),
+			ActorID: query.Get("actor_id"),
+			Since:   since,
+			Until:   until,
+		})
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
-		out := make([]types.AuditEntry, len(entries))
-		for i, entry := range entries {
+		out := make([]types.AuditEntry, len(page.Items))
+		for i, entry := range page.Items {
 			out[i] = types.AuditEntry{
 				ID:        entry.ID,
 				ActorID:   entry.ActorID,
@@ -256,8 +308,204 @@ func listAudit(ctx *svc.ServiceContext) http.HandlerFunc {
 				CreatedAt: entry.CreatedAt,
 			}
 		}
-		writeJSON(w, http.StatusOK, out)
+		writeJSON(w, http.StatusOK, types.AuditListResponse{Items: out, NextCursor: page.NextCursor})
 	}
+}
+
+// listQuery reads the two paging parameters every list endpoint accepts.
+//
+// A limit that is not a number becomes zero, which the store reads as its
+// default. That is deliberate: `?limit=abc` is a caller's mistake in a
+// parameter that only bounds a page, and answering it with a default page is
+// more useful than refusing the read. A limit above the cap is clamped by the
+// store, not here, so one rule governs it.
+//
+// listQuery 读取每个列表端点都接受的那两个分页参数。
+//
+// 一个不是数字的 limit 会变成零，而 store 把零读作它的默认值。这是刻意的：`?limit=abc`
+// 是调用方在一个只用于限制单页大小的参数上犯的错，用一页默认大小的数据作答，比拒绝这次
+// 读取更有用。超过上限的 limit 由 store 截断而不是在这里截断，好让这条规则只有一处。
+func listQuery(query url.Values) store.ListQuery {
+	limit, _ := strconv.Atoi(query.Get("limit"))
+	return store.ListQuery{Limit: limit, Cursor: query.Get("cursor")}
+}
+
+// timeParam reads an optional RFC 3339 bound. An absent parameter is the zero
+// time, which means that end is unbounded; a malformed one is reported, not
+// ignored, because silently dropping a time filter answers a different
+// question than the one that was asked.
+//
+// timeParam 读取一个可选的 RFC 3339 边界。参数缺席即零值时间，表示该端不设边界；格式
+// 错误则会被报出而不是被忽略，因为悄悄丢掉一个时间筛选，等于回答了一个与提问不同的问题。
+func timeParam(raw string) (time.Time, bool) {
+	if raw == "" {
+		return time.Time{}, true
+	}
+	parsed, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return parsed, true
+}
+
+// -----------------------------------------------------------------------
+// Operator: the fleet inventory
+// -----------------------------------------------------------------------
+
+// listFleetNodes returns every node the configured Gateway replicas report.
+//
+// It serves the fleet package's own types rather than a copy in this package.
+// Those structs already carry the JSON tags that are the contract — they have
+// to, because the aggregation reads the same shape from the Gateway — and a
+// second declaration here would be a second thing to keep in step with it.
+//
+// The response is deliberately not filtered by anything: there is no tenant
+// dimension on a node to filter by, which is exactly why this endpoint is
+// behind the operator token instead of a session.
+//
+// listFleetNodes 返回已配置的各 Gateway 副本所报告的全部节点。
+//
+// 它直接提供 fleet 包自己的类型，而不是本包里的一份副本。那些结构体本来就带着构成契约
+// 的 JSON 标签——它们必须带，因为聚合正是从 Gateway 读取同一种形状——在这里再声明一遍，
+// 只会多出一样需要与之保持同步的东西。
+//
+// 该响应刻意不做任何过滤：节点身上没有可供过滤的租户维度，而这恰恰就是本端点由运维
+// token 而不是会话守卫的原因。
+func listFleetNodes(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		snapshot, err := ctx.Fleet.Nodes(r.Context())
+		if err != nil {
+			respondFleetErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, snapshot)
+	}
+}
+
+// listFleetModels returns the same read, seen as a model catalog.
+//
+// listFleetModels 返回同一次读取，以模型目录的视角呈现。
+func listFleetModels(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		catalog, err := ctx.Fleet.Models(r.Context())
+		if err != nil {
+			respondFleetErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, catalog)
+	}
+}
+
+// listWorkflows returns the workflow menu to a signed-in tenant user.
+//
+// The catalogue is the same for every tenant — templates are the Gateway's own
+// file configuration — and it is on the session-guarded API because it is what
+// a caller needs in order to submit a run at all. What it does not carry is
+// the graph, which never leaves the Gateway; see common/workflowview.
+//
+// listWorkflows 把工作流菜单返回给已登录的租户用户。
+//
+// 这份目录对每个租户都相同——模板是 Gateway 自己的文件配置——它放在由会话守卫的 API 上，
+// 因为那是调用方提交一次运行所必需的东西。它不携带的是图，图从不离开 Gateway；
+// 见 common/workflowview。
+func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		if _, ok := actorFrom(r.Context()); !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		catalogue, err := ctx.Fleet.Workflows(r.Context())
+		if err != nil {
+			respondFleetErr(w, err)
+			return
+		}
+		// A tenant is shown the menu, not the fleet. Both the per-template
+		// replica list and the per-replica status carry replica ids and the
+		// configured endpoints — internal hostnames and ports — and this
+		// response is on its way to a tenant's browser. What survives is
+		// Partial, which is the part a tenant can act on: the list may be
+		// incomplete.
+		//
+		// 租户看到的是菜单，不是机群。逐模板的副本列表与逐副本的状态都携带副本 id 与
+		// 配置的 endpoint——内部主机名与端口——而这个响应正在前往租户的浏览器。留下来的
+		// 是 Partial，那是租户能据以行动的部分：这份列表可能不完整。
+		catalogue.Replicas = nil
+		for i := range catalogue.Templates {
+			catalogue.Templates[i].Replicas = nil
+		}
+		writeJSON(w, http.StatusOK, catalogue)
+	}
+}
+
+// listOperatorWorkflows returns the same catalogue with the rollout visible.
+//
+// listOperatorWorkflows 返回同一份目录，但发布状态可见。
+func listOperatorWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		catalogue, err := ctx.Fleet.Workflows(r.Context())
+		if err != nil {
+			respondFleetErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, catalogue)
+	}
+}
+
+// listJobs returns the caller's own tenant's current runs.
+//
+// The tenant comes from the session and is passed down to each replica, so
+// the filtering happens in the job table rather than here. This is a live
+// view: the Gateway's job table is in memory, bounded and per replica, and the
+// response says so through Truncated and Partial rather than leaving a short
+// list to be read as a quiet week.
+//
+// listJobs 返回调用方自己所属租户当前的运行。
+//
+// 租户来自会话，并被向下传给每个副本，因此过滤发生在 job 表里而不是这里。这是一个实时
+// 视图：Gateway 的 job 表位于内存、有上限、且每副本各自持有，响应通过 Truncated 与
+// Partial 说明这一点，而不是任由一份短列表被读成「这一周很清闲」。
+func listJobs(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		view, err := ctx.Fleet.Jobs(r.Context(), actor.TenantID)
+		if err != nil {
+			respondFleetErr(w, err)
+			return
+		}
+		// Where a run is held is not a tenant's answer, by the same reasoning
+		// that keeps the node inventory off this API: a replica id and a
+		// configured endpoint are infrastructure identity. Partial and
+		// Truncated survive because they are what stop the list from being
+		// read as complete.
+		//
+		// 一次运行被谁持有不是租户的答案，理由与把节点清单挡在本 API 之外的相同：副本
+		// id 与配置的 endpoint 都属于基础设施身份。Partial 与 Truncated 保留下来，
+		// 因为它们正是阻止这份列表被读成「完整」的东西。
+		view.Replicas = nil
+		for i := range view.Jobs {
+			view.Jobs[i].Replica = ""
+		}
+		writeJSON(w, http.StatusOK, view)
+	}
+}
+
+// respondFleetErr maps an aggregation failure. A replica that did not answer
+// is not one of these — that is a partial success, and it is reported inside
+// the document rather than as a status code, because the nodes that did answer
+// are still worth showing.
+//
+// respondFleetErr 映射一次聚合失败。某个副本没有作答不属于这里的情形——那是部分成功，
+// 它在文档内部报告而不是用状态码报告，因为已经作答的那些节点依然值得展示。
+func respondFleetErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, fleet.ErrDisabled) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 // -----------------------------------------------------------------------

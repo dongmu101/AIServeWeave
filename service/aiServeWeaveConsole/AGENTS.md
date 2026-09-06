@@ -43,14 +43,49 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 **因此 `pnpm typecheck` 通过不等于 `pnpm build` 通过**：两者是不同编译器。提交前两个都要跑。等 typescript-eslint 支持 TS 7 后，这套并存可以拆掉，届时删掉 `@typescript/native`、把 `typescript` 换回 `typescript@7` 即可。
 
+## 测试用 Node 内置 runner，没有测试框架依赖
+
+```bash
+pnpm test         # node --test "lib/**/*.test.ts"
+```
+
+Node 24 直接执行 `.ts`（类型擦除）并自带 `node:test` 与 `node:assert/strict`，因此单元测试**没有引入任何依赖**——这正是根仓库「标准库能解决的不引入依赖」那条约定在前端的落法。约束有两条，都不影响现有代码：
+
+- 被测模块及其依赖里的相对 import **必须写扩展名**（`./errors.ts`），因为 Node 的 ESM 解析不做扩展名补全。为此 `tsconfig.json` 开了 `allowImportingTsExtensions`，Turbopack 与 `next build` 都能正常解析。`@/` 别名 Node 解析不了，所以 `lib/console/` 内部一律用带扩展名的相对路径；`app/` 与 `components/` 不被 Node 直接执行，继续用别名。
+- 类型擦除不支持 `enum`、`namespace` 与构造函数参数属性，写测试涉及的模块时避开这三样。
+
+因此可测的是纯逻辑：契约解析、会话密封、转发白名单、来源校验、请求层的重试与错误分类。组件与页面属于人工验收（见 [STATUS.md](STATUS.md) 的 Q03），需要 DOM 渲染测试时再评估是否引入 vitest + jsdom，并按根 AGENTS 的要求说明理由。
+
+测试不依赖真实控制面、网络或时钟：`api-client` 的 `fetch` 与 `sleep` 通过参数注入，会话过期用注入的时间判断。
+
 ## 提交前门禁
 
 ```bash
 pnpm lint         # ESLint（内部 TS 6）
 pnpm typecheck    # TS 7
+pnpm test         # Node 内置 runner
 pnpm build        # Next.js 构建，内部 TS 6
 ```
+
+`pnpm typecheck` 需要 `.next/types` 已由一次 `next build` 或 `next dev` 生成；新增路由后先跑 `pnpm build` 再跑 `pnpm typecheck`。
 
 ## 与后端的边界
 
 Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直连 Agent。根仓库 [AGENTS.md](../../AGENTS.md) 的安全红线同样适用：API Key 明文、完整 Prompt、工作流 JSON 不得进日志或错误提示，前端展示 API Key 一律用后端返回的展示形式（`common/apikey` 定义），不要自己拼。
+
+### 请求链路只有一条，别开第二条
+
+```text
+浏览器 → /api/session 或 /api/admin/*（Console 服务端） → ControlPlane Admin API
+```
+
+- 浏览器**永远不持有控制面令牌**。令牌只在 [app/api/session/route.ts](app/api/session/route.ts) 取得，密封进 HttpOnly Cookie，由 [lib/server/control-plane.ts](lib/server/control-plane.ts) 在服务端附加到上游请求。新增页面不要直接 `fetch` 控制面地址。
+- `/api/admin/*` 不是代理：能转发什么由 [lib/console/upstream-routes.ts](lib/console/upstream-routes.ts) 的白名单决定，含方法、路径与允许透传的查询参数。**新增一个 Admin API 调用 = 往那张表加一行并补测试**，不加就是 404。
+- 写操作走 [lib/console/request-origin.ts](lib/console/request-origin.ts) 的同源校验（CSRF 防护是 SameSite=Lax + Origin 检查，不是 token）。部署时反向代理必须原样透传 `Host`。
+- 会话 Cookie 由 [lib/console/session-payload.ts](lib/console/session-payload.ts) 用 AES-256-GCM 密封。**不要从浏览器可改的值里读角色**：角色只用于决定渲染哪些入口，授权始终由控制面执行。
+- 响应契约在 [lib/console/contract.ts](lib/console/contract.ts) 里对着 `internal/types/types.go` 手写校验，控制面改字段时同步改这里并补测试。上游错误文本一律不渲染，界面文案由 [lib/console/errors.ts](lib/console/errors.ts) 按状态码固定。
+- 读请求可重试（上限 3 次），**写请求绝不自动重试**：重发一次创建 Key 会铸出第二个凭据。
+- 服务端读取请求体一律走 `lib/server/responses.ts` 的 `readBoundedText`，它**在读取过程中**计数并在超限时取消流。不要改用 `request.text()` 再判断长度：那样上限只是一份读完之后的报告，不带 `Content-Length` 的分块请求可以先把任意大小塞进内存。
+- 工作流菜单与运行是**租户**页面（`/api/admin/*`），机群与发布状态是**运维**页面。同一个 `/console/workflows` 同时用到两者：菜单人人可见，副本一致性区块只在服务端判定为运维时才发起第二次请求。
+- 运维页面（节点、模型、发布状态）走的是**第二个入口** `/api/operator/*`，用部署密钥而不是租户会话转发，白名单在同一文件的 `OPERATOR_ROUTES` 里。客户端请求必须写 `surface: "operator"`，否则会被当作租户调用发到 `/api/admin` 并得到 404。谁能看到这些页面由 `lib/server/operator.ts` 决定——那是一处已知缺口，理由写在该文件里。
+- 三个列表端点返回 `{items, next_cursor}` 信封，分页是 keyset 游标，接口**没有总数**。游标只放组件状态，URL 里只同步筛选条件（`components/console/use-url-filters.ts`），且不放能标识个人的输入。翻页历史有上界（`lib/console/paging.ts`），一页替换上一页而不是追加。

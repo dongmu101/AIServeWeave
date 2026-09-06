@@ -34,6 +34,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/handler"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/memstore"
@@ -60,6 +61,8 @@ const (
 	internalToken  = "internal-token-that-is-long-enough-for-validation"
 	accessSecret   = "access-secret-that-is-long-enough-for-validation"
 	ownerPassword  = "correct-horse-battery"
+	gatewayToken   = "gateway-token-that-is-long-enough-for-validation"
+	operatorToken  = "operator-token-that-is-long-enough-for-validation"
 )
 
 // harness is one running control plane and the client calls a test makes
@@ -78,6 +81,16 @@ type harness struct {
 //
 // newHarness 在一个空闲端口上启动控制面，并随测试一并拆除。
 func newHarness(t *testing.T) *harness {
+	return newHarnessWith(t, nil)
+}
+
+// newHarnessWith starts a control plane whose Gateway read path points at the
+// given endpoints. Passing none leaves the fleet unconfigured, which is the
+// ordinary deployment and the one every other test here runs against.
+//
+// newHarnessWith 启动一个控制面，其 Gateway 读取路径指向给定的 endpoint。不传则机群
+// 未配置，那是常态部署，也是这里其他每个测试所面对的那种。
+func newHarnessWith(t *testing.T, gateways []string) *harness {
 	t.Helper()
 
 	port := freePort(t)
@@ -93,6 +106,14 @@ func newHarness(t *testing.T) *harness {
 		Auth:           config.AuthConf{AccessSecret: accessSecret, AccessExpire: time.Hour},
 		InternalToken:  internalToken,
 		BootstrapToken: bootstrapToken,
+	}
+	if len(gateways) > 0 {
+		cfg.Fleet = config.FleetConf{
+			Gateways:      gateways,
+			GatewayToken:  gatewayToken,
+			OperatorToken: operatorToken,
+			Timeout:       2 * time.Second,
+		}
 	}
 
 	st := memstore.New()
@@ -110,6 +131,11 @@ func newHarness(t *testing.T) *harness {
 		Config: cfg,
 		Logic:  logic.New(st, runtime.NewSystemClock()),
 		Issuer: issuer,
+		Fleet: fleet.New(fleet.Config{
+			Gateways: gateways,
+			Token:    gatewayToken,
+			Timeout:  2 * time.Second,
+		}),
 	}
 
 	server, err := rest.NewServer(cfg.RestConf)

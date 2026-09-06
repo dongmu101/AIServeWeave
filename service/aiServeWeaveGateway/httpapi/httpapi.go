@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
@@ -73,7 +74,7 @@ type Config struct {
 // POST /v1/jobs/{job_id}/cancel, GET /v1/jobs/{job_id}/artifacts and
 // GET /v1/artifacts/{artifact_id}, wrapped in request logging and API key
 // authentication.
-func New(sched *scheduler.Scheduler, cfg Config) http.Handler {
+func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	logger := cfg.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -118,7 +119,51 @@ func New(sched *scheduler.Scheduler, cfg Config) http.Handler {
 	//
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
-	return h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux))))
+	return &Server{
+		Handler:  h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux)))),
+		handlers: h,
+	}
+}
+
+// Server is the front door, plus a read-only window onto the job table.
+//
+// The window exists so the operator listener can report the runs this replica
+// is holding without going through the front door — that path requires a
+// tenant's API key, which no operator has and none should need to read their
+// own deployment's state. It is deliberately narrow: one method, taking the
+// tenant it is scoped to, returning copies.
+//
+// Server 是前门，外加一个对 job 表的只读窗口。
+//
+// 这个窗口的存在，是为了让运维监听器无需经由前门就能报告本副本持有的运行——那条路径
+// 需要租户的 API Key，而运维并没有，也不该为了读自己部署的状态而需要它。它刻意很窄：
+// 一个方法，接收它所限定的租户，返回副本。
+type Server struct {
+	http.Handler
+	handlers *handlers
+}
+
+// JobsFor returns this replica's runs for one tenant, newest first, and
+// whether the table has dropped older runs to stay within its bound.
+//
+// The tenant id is a parameter rather than a filter applied afterwards: this
+// table holds every tenant's runs, and a caller that could ask for all of
+// them would be one forgotten argument away from a cross-tenant read.
+//
+// JobsFor 返回本副本上某一个租户的运行，最新的在前，并报告该表是否为守住上限而丢弃过
+// 较早的运行。
+//
+// 租户 id 是参数而不是事后施加的过滤：这张表持有每个租户的运行，而一个能索取全部的
+// 调用方，距离一次跨租户读取只差一个被遗忘的实参。
+func (s *Server) JobsFor(tenantID string) ([]workflowview.Job, bool) {
+	return s.handlers.jobs.forTenant(tenantID)
+}
+
+// Templates returns the registered workflow catalogue, without the graphs.
+//
+// Templates 返回已注册的工作流目录，不含图。
+func (s *Server) Templates() []workflowview.Template {
+	return renderTemplates(s.handlers.workflows)
 }
 
 type handlers struct {

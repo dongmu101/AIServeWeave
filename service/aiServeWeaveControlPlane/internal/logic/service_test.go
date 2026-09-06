@@ -8,6 +8,7 @@ import (
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // TestAuthenticateRefusesEveryFailureAlike is the account-enumeration
@@ -188,13 +189,13 @@ func TestPasswordIsNeverStoredInPlaintext(t *testing.T) {
 func TestTenantCreationIsAudited(t *testing.T) {
 	f := newFixture(t)
 
-	entries, err := f.svc.ListAudit(context.Background(), f.ownerAt, 0)
+	page, err := f.svc.ListAudit(context.Background(), f.ownerAt, store.ListQuery{}, store.AuditFilter{})
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
 
 	var found bool
-	for _, entry := range entries {
+	for _, entry := range page.Items {
 		if entry.Action == model.ActionTenantCreate {
 			found = true
 			if entry.ActorID != "" {
@@ -224,11 +225,11 @@ func TestAuditIsScopedToTheTenant(t *testing.T) {
 	}
 	other := logic.Actor{UserID: otherOwner.ID, TenantID: otherTenant.ID, Role: model.RoleOwner}
 
-	entries, err := f.svc.ListAudit(context.Background(), other, 0)
+	page, err := f.svc.ListAudit(context.Background(), other, store.ListQuery{}, store.AuditFilter{})
 	if err != nil {
 		t.Fatalf("ListAudit: %v", err)
 	}
-	for _, entry := range entries {
+	for _, entry := range page.Items {
 		if entry.TenantID != otherTenant.ID {
 			t.Errorf("tenant %q read an audit record belonging to %q", otherTenant.ID, entry.TenantID)
 		}

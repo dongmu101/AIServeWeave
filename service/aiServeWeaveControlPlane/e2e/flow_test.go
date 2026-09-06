@@ -210,11 +210,11 @@ func TestTenantsAreIsolatedOverHTTP(t *testing.T) {
 		t.Fatalf("creating a key for tenant A: status %d", status)
 	}
 
-	var listedByB []types.APIKey
+	var listedByB types.APIKeyListResponse
 	if status := h.call(http.MethodGet, "/admin/v1/apikeys", sessionB, nil, &listedByB); status != http.StatusOK {
 		t.Fatalf("listing keys as tenant B: status %d", status)
 	}
-	for _, key := range listedByB {
+	for _, key := range listedByB.Items {
 		if key.ID == keyA.APIKey.ID {
 			t.Errorf("tenant B can see tenant A's key %q", key.ID)
 		}
@@ -245,15 +245,18 @@ func TestListedKeysNeverCarryTheSecret(t *testing.T) {
 		t.Fatalf("creating a key: status %d", status)
 	}
 
-	var listed []types.APIKey
+	var listed types.APIKeyListResponse
 	if status := h.call(http.MethodGet, "/admin/v1/apikeys", session, nil, &listed); status != http.StatusOK {
 		t.Fatalf("listing keys: status %d", status)
 	}
-	if len(listed) != 1 {
-		t.Fatalf("got %d keys, want 1", len(listed))
+	if len(listed.Items) != 1 {
+		t.Fatalf("got %d keys, want 1", len(listed.Items))
 	}
-	if listed[0].Display != created.APIKey.Display {
-		t.Errorf("Display = %q, want %q", listed[0].Display, created.APIKey.Display)
+	if listed.NextCursor != "" {
+		t.Errorf("NextCursor = %q, want empty for a single-page listing", listed.NextCursor)
+	}
+	if listed.Items[0].Display != created.APIKey.Display {
+		t.Errorf("Display = %q, want %q", listed.Items[0].Display, created.APIKey.Display)
 	}
 	// The wire type has no field for either the plaintext or the hash, so the
 	// assertion is that the listing cannot be turned back into a working key.
@@ -261,7 +264,7 @@ func TestListedKeysNeverCarryTheSecret(t *testing.T) {
 	// 线上类型既没有明文字段也没有哈希字段，因此这里断言的是：列表无法被还原成一个
 	// 能用的 key。
 	verifier := gatewayVerifier(h, newSteppableClock())
-	if _, err := verifier.Verify(context.Background(), listed[0].Display); !errors.Is(err, httpapi.ErrKeyRejected) {
+	if _, err := verifier.Verify(context.Background(), listed.Items[0].Display); !errors.Is(err, httpapi.ErrKeyRejected) {
 		t.Errorf("the display form authenticated as a key: err = %v", err)
 	}
 }
@@ -284,7 +287,7 @@ func TestAdministrativeActionsAreAudited(t *testing.T) {
 		t.Fatalf("revoking the key: status %d", status)
 	}
 
-	var entries []types.AuditEntry
+	var entries types.AuditListResponse
 	if status := h.call(http.MethodGet, "/admin/v1/audit", session, nil, &entries); status != http.StatusOK {
 		t.Fatalf("reading the audit trail: status %d", status)
 	}
@@ -295,7 +298,7 @@ func TestAdministrativeActionsAreAudited(t *testing.T) {
 		"apikey.create": false,
 		"apikey.revoke": false,
 	}
-	for _, entry := range entries {
+	for _, entry := range entries.Items {
 		if _, tracked := want[entry.Action]; tracked {
 			want[entry.Action] = true
 		}

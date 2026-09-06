@@ -84,6 +84,35 @@ type Tenant struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
+// TenantProfileResponse is the caller's own tenant together with the quota
+// that applies to it.
+//
+// The two are returned by one call because they are read together every time:
+// a Console that showed the tenant without its limits, or the limits without
+// knowing whose they are, would immediately ask for the other. There is no
+// tenant id in the request — the tenant comes from the session, the same rule
+// SetLimitsRequest follows, so nobody can aim this at another tenant.
+//
+// Limits is quota.Limits rather than a shape of this package's own: the
+// meaning of these three numbers is a contract shared with the Gateway, and a
+// second declaration of them here would be a second place to keep in sync.
+// It carries omitempty on every field, so an unconfigured tenant's limits
+// encode as `{}` — absent means zero, and zero means unlimited.
+//
+// TenantProfileResponse 是调用方自己所属的租户，连同适用于它的配额。
+//
+// 两者由一次调用返回，因为它们每次都是一起读的：一个只显示租户而不显示其限制、或者
+// 只显示限制却不知道那是谁的限制的 Console，紧接着就会去要另一半。请求里没有租户 id
+// ——租户来自会话，与 SetLimitsRequest 遵循同一条规则，因此没人能把它指向别的租户。
+//
+// Limits 用的是 quota.Limits 而不是本包自己的形状：这三个数字的含义是与 Gateway 共享的
+// 契约，在这里再声明一遍，就是多了一处需要保持同步的地方。它每个字段都带 omitempty，
+// 因此一个未配置的租户其 limits 编码为 `{}`——缺席即为零，而零表示不限制。
+type TenantProfileResponse struct {
+	Tenant Tenant       `json:"tenant"`
+	Limits quota.Limits `json:"limits"`
+}
+
 // CreateUserRequest adds a user to the caller's tenant.
 //
 // CreateUserRequest 向调用方所属租户添加一个用户。
@@ -139,6 +168,52 @@ type APIKey struct {
 	LastUsedAt *time.Time `json:"last_used_at,omitempty"`
 	RevokedAt  *time.Time `json:"revoked_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
+}
+
+// UserListResponse, APIKeyListResponse and AuditListResponse are the three
+// list shapes. They are envelopes rather than bare arrays, and that is a
+// deliberate break with the shape these endpoints used to return.
+//
+// A bare array has nowhere to put a cursor, and these lists need one: they
+// grow without bound, and a response that returned all of them would be a
+// request any caller could use to pull an unbounded result set through this
+// process. Adding parallel paginated endpoints instead would leave two ways to
+// read one list, which is the kind of duplication this repository treats as a
+// contract defect. The Console is the only consumer, and it is updated with
+// this change.
+//
+// NextCursor carries omitempty: its absence is how a response says this is the
+// last page. There is no total — see store.Page for why.
+//
+// UserListResponse、APIKeyListResponse 与 AuditListResponse 是三种列表形状。它们是信封
+// 而不是裸数组，这是对这些端点原有形状的一次刻意破坏性变更。
+//
+// 裸数组没有地方放游标，而这些列表需要游标：它们会无限增长，一个把它们全部返回的响应，
+// 会成为任何调用方都能用来经由本进程拉取无界结果集的请求。改为并列增设分页端点，则会
+// 留下两种读取同一份列表的方式，而那正是本仓库视为契约缺陷的那类重复。Console 是唯一
+// 的消费方，它随本次改动一并更新。
+//
+// NextCursor 带 omitempty：它的缺席就是响应在说这是最后一页。这里没有总数——原因见
+// store.Page。
+type UserListResponse struct {
+	Items      []User `json:"items"`
+	NextCursor string `json:"next_cursor,omitempty"`
+}
+
+// APIKeyListResponse is one page of a tenant's keys.
+//
+// APIKeyListResponse 是一个租户 key 列表中的一页。
+type APIKeyListResponse struct {
+	Items      []APIKey `json:"items"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+}
+
+// AuditListResponse is one page of a tenant's audit trail.
+//
+// AuditListResponse 是一个租户审计线索中的一页。
+type AuditListResponse struct {
+	Items      []AuditEntry `json:"items"`
+	NextCursor string       `json:"next_cursor,omitempty"`
 }
 
 // AuditEntry is one administrative action, as rendered to the Console.

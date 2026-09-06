@@ -25,6 +25,7 @@ package memstore
 import (
 	"context"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -150,17 +151,24 @@ func (s *Store) GetUserByEmail(_ context.Context, email string) (model.User, err
 // ListUsers reads one tenant's users, newest first.
 //
 // ListUsers 读取某个租户的用户，最新的在前。
-func (s *Store) ListUsers(_ context.Context, tenantID string) ([]model.User, error) {
+func (s *Store) ListUsers(_ context.Context, tenantID string, query store.ListQuery, filter store.UserFilter) (store.Page[model.User], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []model.User
 	for _, user := range s.users {
-		if user.TenantID == tenantID {
-			out = append(out, user)
+		if user.TenantID != tenantID {
+			continue
 		}
+		if filter.Role != "" && user.Role != filter.Role {
+			continue
+		}
+		if !matches(filter.Query, user.Email, user.Name) {
+			continue
+		}
+		out = append(out, user)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	return out, nil
+	sortNewestFirst(out, func(u model.User) (time.Time, string) { return u.CreatedAt, u.ID })
+	return paginate(out, query, func(u model.User) (time.Time, string) { return u.CreatedAt, u.ID })
 }
 
 // MarkUserLogin records a successful sign-in.
@@ -212,17 +220,37 @@ func (s *Store) GetAPIKeyByHash(_ context.Context, hash string) (model.APIKey, e
 // ListAPIKeys reads one tenant's keys, newest first.
 //
 // ListAPIKeys 读取某个租户的 key，最新的在前。
-func (s *Store) ListAPIKeys(_ context.Context, tenantID string) ([]model.APIKey, error) {
+func (s *Store) ListAPIKeys(_ context.Context, tenantID string, query store.ListQuery, filter store.APIKeyFilter) (store.Page[model.APIKey], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var out []model.APIKey
 	for _, key := range s.keys {
-		if key.TenantID == tenantID {
-			out = append(out, key)
+		if key.TenantID != tenantID {
+			continue
 		}
+		if filter.Status != "" && key.Status != filter.Status {
+			continue
+		}
+		if !matches(filter.Query, key.Name, key.Display) {
+			continue
+		}
+		out = append(out, key)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	return out, nil
+	sortNewestFirst(out, func(k model.APIKey) (time.Time, string) { return k.CreatedAt, k.ID })
+	return paginate(out, query, func(k model.APIKey) (time.Time, string) { return k.CreatedAt, k.ID })
+}
+
+// GetAPIKey reads one key by id, scoped to its tenant.
+//
+// GetAPIKey 按 id 读取一个 key，并限定在其租户范围内。
+func (s *Store) GetAPIKey(_ context.Context, tenantID, id string) (model.APIKey, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.keys[id]
+	if !ok || key.TenantID != tenantID {
+		return model.APIKey{}, store.ErrNotFound
+	}
+	return key, nil
 }
 
 // RevokeAPIKey marks one active key revoked, scoped to its tenant.
@@ -298,23 +326,97 @@ func (s *Store) AppendAudit(_ context.Context, entry *model.AuditLog) error {
 // ListAudit reads one tenant's audit trail, newest first.
 //
 // ListAudit 读取某个租户的审计线索，最新的在前。
-func (s *Store) ListAudit(_ context.Context, tenantID string, limit int) ([]model.AuditLog, error) {
+func (s *Store) ListAudit(_ context.Context, tenantID string, query store.ListQuery, filter store.AuditFilter) (store.Page[model.AuditLog], error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if limit <= 0 {
-		limit = 100
-	}
 	var out []model.AuditLog
 	for _, entry := range s.audit {
-		if entry.TenantID == tenantID {
-			out = append(out, entry)
+		if entry.TenantID != tenantID {
+			continue
+		}
+		if filter.Action != "" && entry.Action != filter.Action {
+			continue
+		}
+		if filter.ActorID != "" && entry.ActorID != filter.ActorID {
+			continue
+		}
+		if !filter.Since.IsZero() && entry.CreatedAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && !entry.CreatedAt.Before(filter.Until) {
+			continue
+		}
+		out = append(out, entry)
+	}
+	sortNewestFirst(out, func(e model.AuditLog) (time.Time, string) { return e.CreatedAt, e.ID })
+	return paginate(out, query, func(e model.AuditLog) (time.Time, string) { return e.CreatedAt, e.ID })
+}
+
+// sortNewestFirst orders rows the way every list in this package is read:
+// newest first, with the id breaking ties. The tie break is what makes the
+// order total — two rows written in the same instant would otherwise swap
+// places between calls, and a keyset cursor pointing at one of them would skip
+// or repeat the other.
+//
+// sortNewestFirst 按本包每个列表被读取的方式排序：最新的在前，id 用于打破平手。正是
+// 这个平局判定让顺序成为全序——否则同一瞬间写入的两行会在多次调用之间互换位置，而指向
+// 其中一行的 keyset 游标会跳过或重复另一行。
+func sortNewestFirst[T any](items []T, key func(T) (time.Time, string)) {
+	sort.Slice(items, func(i, j int) bool {
+		leftAt, leftID := key(items[i])
+		rightAt, rightID := key(items[j])
+		if leftAt.Equal(rightAt) {
+			return leftID > rightID
+		}
+		return leftAt.After(rightAt)
+	})
+}
+
+// paginate cuts an already-ordered slice at the cursor and to the page size.
+//
+// paginate 把一个已排好序的切片按游标与分页大小裁开。
+func paginate[T any](items []T, query store.ListQuery, key func(T) (time.Time, string)) (store.Page[T], error) {
+	at, id, err := store.DecodeCursor(query.Cursor)
+	if err != nil {
+		return store.Page[T]{}, err
+	}
+	if query.Cursor != "" {
+		rest := items[:0:0]
+		for _, item := range items {
+			itemAt, itemID := key(item)
+			if itemAt.After(at) || (itemAt.Equal(at) && itemID >= id) {
+				continue
+			}
+			rest = append(rest, item)
+		}
+		items = rest
+	}
+
+	size := query.Size()
+	if len(items) <= size {
+		return store.Page[T]{Items: items}, nil
+	}
+	last := items[size-1]
+	lastAt, lastID := key(last)
+	return store.Page[T]{Items: items[:size], NextCursor: store.EncodeCursor(lastAt, lastID)}, nil
+}
+
+// matches reports whether any field contains the query, case-insensitively.
+// An empty query matches everything, which is how "no filter" is expressed.
+//
+// matches 报告是否有任一字段以不区分大小写的方式包含该查询词。空查询匹配一切，
+// 「不筛选」就是这么表达的。
+func matches(query string, fields ...string) bool {
+	if query == "" {
+		return true
+	}
+	needle := strings.ToLower(query)
+	for _, field := range fields {
+		if strings.Contains(strings.ToLower(field), needle) {
+			return true
 		}
 	}
-	sort.SliceStable(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
-	if len(out) > limit {
-		out = out[:limit]
-	}
-	return out, nil
+	return false
 }
 
 // stamp fills the timestamps gorm would set on insert, so a test that orders

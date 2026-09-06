@@ -1,10 +1,12 @@
 package httpapi
 
 import (
+	"sort"
 	"sync"
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
@@ -97,6 +99,14 @@ type jobStore struct {
 	// artifacts 解析公开产物 id。它独立于 byID 建键，因为下载在寻址一个产物时并不
 	// 指名它的 job；它随所属 job 一同被清理，因此被逐出的 job 不会留下仍可访问的产物。
 	artifacts map[string]artifactRecord
+	// evicted records that the bound has been hit at least once, so a reader
+	// of this table knows its list is not the whole story. It is never reset:
+	// once runs have been dropped, no later quiet period makes the table
+	// complete again.
+	//
+	// evicted 记录上限至少被触及过一次，好让这张表的读取者知道它的列表并非全部。它
+	// 从不被重置：一旦有运行被丢弃，之后再怎么清闲，这张表也回不到完整。
+	evicted bool
 }
 
 func newJobStore(max int) *jobStore {
@@ -121,6 +131,7 @@ func (s *jobStore) add(j job) {
 	for len(s.order) > s.max {
 		oldest := s.order[0]
 		s.order = s.order[1:]
+		s.evicted = true
 		s.evictLocked(oldest)
 	}
 }
@@ -226,4 +237,51 @@ func (s *jobStore) update(id string, status runtime.WorkflowStatus, now time.Tim
 	j.ErrorSummary = status.ErrorSummary
 	j.UpdatedAt = now
 	s.byID[id] = j
+}
+
+// forTenant returns one tenant's jobs, newest first, and whether the table has
+// evicted anything to stay within its bound.
+//
+// The eviction flag is not about this tenant: the table is shared and bounded
+// across all of them, so a busy neighbour can push this tenant's older runs
+// out. A caller shown a short list without that flag would read it as "nothing
+// else ran", which is the one conclusion an in-memory, bounded, per-replica
+// table cannot support.
+//
+// forTenant 返回某一个租户的 job，最新的在前，并报告该表是否为守住上限而逐出过内容。
+//
+// 逐出标志说的不是这个租户：这张表由所有租户共享且有上限，因此一个繁忙的邻居可以把本
+// 租户较早的运行挤出去。一个看到短列表却没有这个标志的调用方，会把它读成「没有别的运行
+// 过」——而那恰恰是一张进程内、有上限、且每副本各自持有的表最无法支撑的结论。
+func (s *jobStore) forTenant(tenantID string) ([]workflowview.Job, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	out := make([]workflowview.Job, 0, len(s.order))
+	// order is oldest first; the caller wants newest first, which is how a
+	// person reads a job list.
+	//
+	// order 是最早的在前；调用方要的是最新的在前，那才是人读 job 列表的方式。
+	for i := len(s.order) - 1; i >= 0; i-- {
+		j, ok := s.byID[s.order[i]]
+		if !ok || j.TenantID != tenantID {
+			continue
+		}
+		artifacts := make([]string, 0, len(j.artifactIDs))
+		for _, id := range j.artifactIDs {
+			artifacts = append(artifacts, id)
+		}
+		sort.Strings(artifacts)
+		out = append(out, workflowview.Job{
+			ID:            j.ID,
+			WorkflowID:    j.WorkflowID,
+			State:         string(j.State),
+			QueuePosition: j.QueuePosition,
+			ErrorSummary:  j.ErrorSummary,
+			CreatedAt:     j.CreatedAt,
+			UpdatedAt:     j.UpdatedAt,
+			ArtifactIDs:   artifacts,
+		})
+	}
+	return out, s.evicted
 }
