@@ -162,6 +162,88 @@ func TestListActiveJobsForRouteRecoversAcrossTenants(t *testing.T) {
 	}
 }
 
+// TestJobHistoryIsIsolatedByTenantOverHTTP is STATUS.md's J07 closed loop
+// for the tenant-facing side: a run persisted through the Gateway's
+// internal API becomes visible to its own tenant's session through
+// GET /admin/v1/jobs/history, and invisible to another tenant's — the same
+// isolation TestTenantsAreIsolatedOverHTTP already asserts for API keys,
+// exercised here for job history instead.
+//
+// TestJobHistoryIsIsolatedByTenantOverHTTP 是 STATUS.md J07 面向租户一侧的
+// 闭环：一次经由 Gateway 内部 API 持久化的运行，能被自己租户的会话通过
+// GET /admin/v1/jobs/history 看到，且对另一个租户的会话不可见——与
+// TestTenantsAreIsolatedOverHTTP 已经为 API Key 断言过的是同一种隔离，这里
+// 换成了 job 历史。
+func TestJobHistoryIsIsolatedByTenantOverHTTP(t *testing.T) {
+	h := newHarness(t)
+	tenantA, sessionA := bootstrap(h, "Acme", "acme-owner@example.com")
+	_, sessionB := bootstrap(h, "Beta", "beta-owner@example.com")
+
+	client := gatewayJobsClient(h)
+	if _, err := client.CreateJob(context.Background(), controlplaneclient.CreateJobRequest{
+		JobID: "job_history_1", TenantID: tenantA.Tenant.ID, WorkflowID: "text-to-image",
+		NodeID: "node-1", RuntimeID: "comfy-1", BackendRunID: "prompt-1", State: "succeeded",
+	}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+
+	var listedByA types.JobHistoryListResponse
+	if status := h.call(http.MethodGet, "/admin/v1/jobs/history", sessionA, nil, &listedByA); status != http.StatusOK {
+		t.Fatalf("listing job history as tenant A: status %d", status)
+	}
+	found := false
+	for _, j := range listedByA.Items {
+		if j.JobID == "job_history_1" {
+			found = true
+			if j.State != "succeeded" {
+				t.Errorf("job history entry state = %q, want succeeded", j.State)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("tenant A's own job did not appear in its job history")
+	}
+
+	var listedByB types.JobHistoryListResponse
+	if status := h.call(http.MethodGet, "/admin/v1/jobs/history", sessionB, nil, &listedByB); status != http.StatusOK {
+		t.Fatalf("listing job history as tenant B: status %d", status)
+	}
+	for _, j := range listedByB.Items {
+		if j.JobID == "job_history_1" {
+			t.Error("tenant B can see tenant A's job in its own job history listing")
+		}
+	}
+
+	var detail types.JobHistoryResponse
+	if status := h.call(http.MethodGet, "/admin/v1/jobs/history/job_history_1", sessionA, nil, &detail); status != http.StatusOK {
+		t.Fatalf("tenant A reading its own job's detail: status %d", status)
+	}
+	if detail.JobID != "job_history_1" {
+		t.Errorf("detail.JobID = %q, want job_history_1", detail.JobID)
+	}
+
+	if status := h.call(http.MethodGet, "/admin/v1/jobs/history/job_history_1", sessionB, nil, nil); status != http.StatusNotFound {
+		t.Errorf("tenant B reading tenant A's job detail: status = %d, want 404", status)
+	}
+}
+
+// TestJobHistoryRejectsAMalformedTimeWindow asserts the since/until
+// validation flow_test.go's audit tests already exercise for /admin/v1/audit
+// holds for job history too, over the real HTTP path.
+//
+// TestJobHistoryRejectsAMalformedTimeWindow 断言 flow_test.go 的审计测试已经
+// 为 /admin/v1/audit 验证过的 since/until 校验，在 job 历史上同样成立，走的
+// 是真实 HTTP 路径。
+func TestJobHistoryRejectsAMalformedTimeWindow(t *testing.T) {
+	h := newHarness(t)
+	_, session := bootstrap(h, "Acme", "acme-owner2@example.com")
+
+	status := h.call(http.MethodGet, "/admin/v1/jobs/history?since=not-a-timestamp", session, nil, nil)
+	if status != http.StatusBadRequest {
+		t.Errorf("since=not-a-timestamp: status = %d, want 400", status)
+	}
+}
+
 // TestListActiveJobsForRouteRoutesAheadOfTheParameterizedGetJobRoute pins
 // the routing precedence routes.go's own comment documents: a raw call to
 // /internal/v1/jobs/active must dispatch to listActiveJobsForRoute, not be

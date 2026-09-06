@@ -312,6 +312,96 @@ func listAudit(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// -----------------------------------------------------------------------
+// Job history (STATUS.md's J07)
+// -----------------------------------------------------------------------
+
+// listJobHistory returns one page of the caller's tenant's persisted job
+// history. Unlike listJobs (the Fleet-backed live view further down, mounted
+// only when a Gateway read path is configured), this reads the jobs table
+// directly and therefore works regardless of Fleet configuration — a
+// deployment with no operations console still gets to see what it ran.
+//
+// listJobHistory 返回调用方所属租户持久化 job 历史中的一页。与下面由 Fleet
+// 支撑的实时视图 listJobs（只在配置了 Gateway 读取路径时才挂载）不同，这里
+// 直接读 jobs 表，因此与 Fleet 是否配置无关——一个没有运维控制台的部署，依然
+// 能看到自己跑过什么。
+func listJobHistory(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		query := r.URL.Query()
+		since, sinceOK := timeParam(query.Get("since"))
+		until, untilOK := timeParam(query.Get("until"))
+		if !sinceOK || !untilOK {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		page, err := ctx.Logic.ListJobs(r.Context(), actor.TenantID, listQuery(query), store.JobFilter{
+			State:      query.Get("state"),
+			WorkflowID: query.Get("workflow_id"),
+			Since:      since,
+			Until:      until,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.JobHistoryResponse, len(page.Items))
+		for i, job := range page.Items {
+			out[i] = renderJobHistory(job)
+		}
+		writeJSON(w, http.StatusOK, types.JobHistoryListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// getJobHistory returns one persisted job, scoped to the caller's tenant.
+//
+// getJobHistory 返回一个持久化 job，限定在调用方所属租户范围内。
+func getJobHistory(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		jobID := pathvar.Vars(r)["id"]
+		if jobID == "" {
+			writeError(w, http.StatusBadRequest, "a job id is required")
+			return
+		}
+		job, err := ctx.Logic.GetJob(r.Context(), actor.TenantID, jobID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderJobHistory(job))
+	}
+}
+
+// renderJobHistory converts a persisted job to the tenant-facing wire form,
+// stripping the route binding JobResponse (the internal API's own
+// rendering) carries. See types.JobHistoryResponse for why.
+//
+// renderJobHistory 把一个持久化 job 转换成面向租户的线上形式，剥离
+// JobResponse（内部 API 自己的渲染）携带的路由绑定。为什么这样做，见
+// types.JobHistoryResponse。
+func renderJobHistory(j model.Job) types.JobHistoryResponse {
+	return types.JobHistoryResponse{
+		JobID:           j.ID,
+		WorkflowID:      j.WorkflowID,
+		WorkflowVersion: j.WorkflowVersion,
+		State:           j.State,
+		ErrorSummary:    j.ErrorSummary,
+		CreatedAt:       j.CreatedAt,
+		UpdatedAt:       j.UpdatedAt,
+		TerminalAt:      j.TerminalAt,
+	}
+}
+
 // listQuery reads the two paging parameters every list endpoint accepts.
 //
 // A limit that is not a number becomes zero, which the store reads as its

@@ -103,6 +103,45 @@ func (s *Service) GetJob(ctx context.Context, tenantID, jobID string) (model.Job
 	return job, translate(err)
 }
 
+// ListJobs returns one page of tenantID's persisted job history, per
+// STATUS.md's J07. It is what makes a job's record outlive the Gateway
+// replica that ran it and that replica's bounded in-memory table — see the
+// ControlPlane README's 已知缺口 for why /admin/v1/jobs (the live view) could
+// not answer "what ran last week" before this existed.
+//
+// An unknown state filters to nothing, which would read as "this tenant has
+// no such jobs" — a wrong answer to a malformed question, the same
+// reasoning ListUsers already applies to an unknown role filter. Refusing it
+// says which of the two it actually was.
+//
+// ListJobs 返回 tenantID 持久化 job 历史中的一页，对应 STATUS.md 的 J07。这正是
+// 让一条 job 记录比运行它的 Gateway 副本、以及那个副本有界的内存表活得更久的
+// 东西——为什么 /admin/v1/jobs（实时视图）在这之前回答不了「上周跑过什么」，
+// 见 ControlPlane README 的已知缺口。
+//
+// 一个未知的状态会筛出空集，读起来像「这个租户没有这类 job」——对一个畸形
+// 问题给出的错误答案，与 ListUsers 已经对未知角色筛选采用的推理相同。拒绝它
+// 说清了到底是哪一种情况。
+func (s *Service) ListJobs(ctx context.Context, tenantID string, query store.ListQuery, filter store.JobFilter) (store.Page[model.Job], error) {
+	if filter.State != "" && !validJobState(filter.State) {
+		return store.Page[model.Job]{}, ErrInvalidInput
+	}
+	if !filter.Since.IsZero() && !filter.Until.IsZero() && !filter.Until.After(filter.Since) {
+		return store.Page[model.Job]{}, ErrInvalidInput
+	}
+	page, err := s.store.ListJobs(ctx, tenantID, query, filter)
+	return page, translate(err)
+}
+
+func validJobState(state string) bool {
+	switch state {
+	case model.JobPending, model.JobRunning, model.JobSucceeded, model.JobFailed, model.JobCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
 // UpdateJobStateParams is one status observation a Gateway replica reports,
 // from a foreground poll, an SSE event, or the background syncer — this
 // layer does not distinguish which, because store.UpdateJobState's

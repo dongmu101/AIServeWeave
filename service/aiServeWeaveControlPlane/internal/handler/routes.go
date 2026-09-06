@@ -41,6 +41,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: requireSession(ctx, currentTenant(ctx))},
 		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: requireSession(ctx, setTenantLimits(ctx))},
 		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: requireSession(ctx, listAudit(ctx))},
+		// Job history (STATUS.md's J07) reads the jobs table directly and is
+		// mounted here, unconditionally, unlike the Fleet-backed live view
+		// further down: it has no dependency on a configured Gateway read
+		// path, so a deployment without one still gets to see what it ran.
+		//
+		// Job 历史（STATUS.md 的 J07）直接读 jobs 表，无条件挂载在这里，
+		// 与下面由 Fleet 支撑的实时视图不同：它不依赖任何已配置的 Gateway
+		// 读取路径，因此没有配置那条路径的部署，依然能看到自己跑过什么。
+		{Method: http.MethodGet, Path: "/admin/v1/jobs/history", Handler: requireSession(ctx, listJobHistory(ctx))},
+		{Method: http.MethodGet, Path: "/admin/v1/jobs/history/:id", Handler: requireSession(ctx, getJobHistory(ctx))},
 	})
 
 	server.AddRoutes([]rest.Route{

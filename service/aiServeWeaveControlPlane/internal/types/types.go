@@ -284,6 +284,51 @@ func (r SetLimitsRequest) Limits() quota.Limits {
 	}
 }
 
+// JobHistoryResponse is one persisted job as the tenant-facing Admin API
+// shows it (STATUS.md's J07) — the persisted counterpart to the live
+// workflowview.Job the fleet-backed /admin/v1/jobs already renders. Unlike
+// JobResponse (the internal API's full record, meant only for a Gateway
+// replica reconstructing its own routing), this omits NodeID, RuntimeID and
+// BackendRunID: a tenant has no business knowing which node or backend run
+// id served their request, the same omission the live view already makes
+// for replica identity.
+//
+// UpdatedAt is when this record was last actually observed to change, not a
+// live value — a run may have progressed further on the node without this
+// row having caught up yet. See the ControlPlane README's 「Job 持久化契约」
+// for why persisted state is a last-observed snapshot, and TerminalAt for
+// the one timestamp that, once set, is guaranteed not to move again.
+//
+// JobHistoryResponse 是租户侧 Admin API 展示的一条持久化 job 记录（STATUS.md
+// 的 J07）——是由 fleet 支撑的 `/admin/v1/jobs` 已经渲染的那个实时
+// workflowview.Job 的持久化对应物。与 JobResponse（内部 API 的完整记录，
+// 只为 Gateway 副本重建自己的路由而存在）不同，这里省去了 NodeID、RuntimeID
+// 与 BackendRunID：租户没有理由知道是哪个节点或后端运行 id 服务了自己的请求，
+// 这与实时视图已经对副本身份做的省略相同。
+//
+// UpdatedAt 是这条记录最后一次被真正观测到发生变化的时刻，不是一个实时值——
+// 这次运行可能已经在节点上继续推进，只是这一行还没跟上。持久化状态为什么是
+// 一份最后观测的快照，见 ControlPlane README「Job 持久化契约」；TerminalAt
+// 则是唯一一个一旦被设置就保证不会再移动的时间戳。
+type JobHistoryResponse struct {
+	JobID           string     `json:"job_id"`
+	WorkflowID      string     `json:"workflow_id"`
+	WorkflowVersion string     `json:"workflow_version,omitempty"`
+	State           string     `json:"state"`
+	ErrorSummary    string     `json:"error_summary,omitempty"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	TerminalAt      *time.Time `json:"terminal_at,omitempty"`
+}
+
+// JobHistoryListResponse is one page of a tenant's persisted job history.
+//
+// JobHistoryListResponse 是一个租户持久化 job 历史中的一页。
+type JobHistoryListResponse struct {
+	Items      []JobHistoryResponse `json:"items"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+}
+
 // CreateJobRequest is what a Gateway replica reports about a run it just
 // submitted, per STATUS.md's J01/J04 persistence contract. TenantID is what
 // the Gateway asserts about its own caller — this endpoint is guarded by the
