@@ -194,9 +194,9 @@ Fleet:
 
 **`/admin/v1/jobs` 是实时视图，不是历史。** Gateway 的 job 表在进程内存、有上限、每副本各自持有：运行会随副本重启消失、被上限挤出，且从不跨副本可见。因此它能回答「现在在跑什么」，回答不了「上周跑过什么」——回答后者的是 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（STATUS.md 的 J07，见下面「Job 持久化契约」一节的「已实现的持久化历史查询」小节），两者直接读 `jobs` 表，与 `Fleet` 是否配置无关，因此不挂在这两条实时端点旁边，而在常规会话组里无条件挂载。
 
-## Job 持久化契约（J01-J07 已完成，取消与产物访问未做）
+## Job 持久化契约（J01-J08 已完成，取消与产物访问未做）
 
-本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）、J07（历史查询）落地时对齐，不是它们的替代。以下到「与后续任务的关系」为止是 J01 的契约本身，只定义、不引入数据库代码；「已实现的存储层」「已实现的内部 API 与 Gateway 客户端」「已接入持久化」「已实现的重启恢复」「已实现的持久化历史查询」五小节分别记录 J03、J04、J05、J06、J07 在这份契约上落地了什么。
+本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）、J07（历史查询）、J08（真实 MySQL 验证）落地时对齐，不是它们的替代。以下到「与后续任务的关系」为止是 J01 的契约本身，只定义、不引入数据库代码；「已实现的存储层」「已实现的内部 API 与 Gateway 客户端」「已接入持久化」「已实现的重启恢复」「已实现的持久化历史查询」「真实 MySQL 9.7 上的集成与故障验证」六小节分别记录 J03、J04、J05、J06、J07、J08 在这份契约上落地了什么。
 
 ### 为什么是两个事实，不是一次写入
 
@@ -259,7 +259,7 @@ Gateway 现有内存 store（`jobstore.go:228-240` 的 `update`）是无条件�
 - **建表用带版本的 SQL，不是 `Store.Migrate` 的 `AutoMigrate`。** `MigrateJobs` 独立于四张老表的迁移之外，理由是验收目标本身写明「迁移可重复执行且有版本记录」——`AutoMigrate` 恰恰两者都不提供。迁移文件在 `internal/store/gormstore/migrations/jobs/`，按文件名顺序执行，每个文件在自己的事务里执行并把文件名记入 `schema_migrations_jobs` 表，因此一次执行到一半的失败不会被误记为已完成，重复调用在 schema 已是最新时是空操作。
 - **`jobs`/`job_artifacts` 目前只支持 MySQL。** 这是 STATUS.md 对 Job 持久化目标数据库的既有决定（MySQL 9.7/InnoDB），不是本次任务顺手做出的选择；对 PostgreSQL 部署调用 `MigrateJobs` 直接返回明确错误，而不是尝试用跨方言的 SQL 或悄悄跳过。`internal/svc/servicecontext.go` 把它接进现有的 `AutoMigrate` 开关：配置了 `AutoMigrate` 且驱动是 MySQL 时，启动会依次跑完四表迁移与这两张新表的迁移。
 - **索引对应验收目标「按租户与时间/状态建立查询索引」。** `jobs` 表有 `(tenant_id, created_at, id)`（供 `ListJobs` 的 keyset 分页与时间窗筛选）与 `(tenant_id, state)`（供按状态筛选）两个复合索引；`job_artifacts` 按 `job_id` 与 `tenant_id` 分别建索引。
-- **真实 MySQL 上的验证是 J08 的范围，不是本节。** 与 `gormstore` 里其余四张表的既有测试划分一致（业务规则在 `memstore` 上测，SQL 本身对着真实引擎测），这里为 `pendingJobMigrations` 的顺序与跳过逻辑写了不依赖数据库的单元测试，迁移 SQL 本身在真实 MySQL 9.7 上跑通仍待 J08。
+- **真实 MySQL 上的验证由 J08 完成，见下方「Job 持久化契约」小节。** 与 `gormstore` 里其余四张表的既有测试划分一致（业务规则在 `memstore` 上测，SQL 本身对着真实引擎测），这里为 `pendingJobMigrations` 的顺序与跳过逻辑写了不依赖数据库的单元测试；迁移 SQL 本身、并发更新、跨租户隔离与故障行为在真实 MySQL 9.7 上的验证见 `internal/store/gormstore/mysql_live_test.go`。
 
 ### 已实现的内部 API 与 Gateway 客户端（J04）
 
@@ -313,13 +313,20 @@ Gateway 侧的消费者是 `httpapi/jobrecover.go` 的 `jobRecoverer`，与 `job
 
 **取消与授权产物访问明确未做，且刻意不做成经由控制面转发。** ControlPlane README 已经写明「取消/产物访问完全不经过控制面……不应该在这两条路径上新增对控制面的依赖」——这条决策没有被本次改动推翻。Console 也不持有任何租户的 Gateway API Key，因此历史页面上的取消按钮与产物下载，此刻没有一条可用的鉴权链路能落地，不是补一段转发代码就能解决的：需要先决定"一个已登录的租户会话如何被兑现为一次对 Gateway 数据面的有权限调用"，这本身是一次独立的架构决策，留给后续任务专门设计，不在 J07 这一轮里顺手拍板。
 
+### 真实 MySQL 9.7 上的集成与故障验证（J08）
+
+前面几节的每一条设计断言——迁移可重复、并发更新按 `observed_seq` 单调裁定、跨租户读写互相拒绝、数据库不可达时快速失败而不是挂起——到这里为止都只在 `memstore` 或不依赖数据库的单元测试上验证过。J08 把同一批断言对着真实 `mysql:9.7` 引擎重新跑一遍，测试文件与其余对外部后端的验证遵循同一条约定（见 `common/runtime/ollama` 的 `live_test.go`）：按需启用、默认跳过。
+
+- **`internal/store/gormstore/mysql_live_test.go`** 覆盖 store 层：`MigrateJobs` 的可重复性（第二次调用在已是最新的 schema 上什么都不应用）；`CreateJob` 对同租户重复 id 的幂等与跨租户抢占同一 id 的真实冲突（经由 MySQL 自身的主键唯一性，通过 gorm 的 `TranslateError` 转译）；`UpdateJobState` 面对二十个并发写入者时，由真实行锁（`UPDATE ... WHERE observed_seq < ?`）而不是本进程里的任何协调，裁定出恰好落在最高序号上的结果，且终态之后的更新不会被更低序号的并发写入超车；`ListActiveJobsForRoute` 跨租户聚合、排除终态；以及一个指向不可达数据库的 `Store` 在 context 超时内快速返回错误而不是无限期挂起。
+- **`e2e/mysql_live_test.go`** 覆盖 J06/J05 点名的、单进程内假件在结构上就答不出的两个问题——「Gateway 重启」与「多副本查询」：用两个完全独立的 `controlplaneclient.JobsClient`（互不知道对方存在，只共享同一个真实数据库）模拟"副本 1 创建、副本 2（重启后）用 `ListActiveJobsForRoute` 找回路由绑定"，以及"两个副本并发上报状态，真实 MySQL 的 `observed_seq` 门槛而非任何协调机制裁定谁的观测留下"；另有一个"提交结果未知"场景：同一个 `CreateJob` 请求发送两次，用 `ListActiveJobsForRoute` 直接清点真实表里这个路由下该 job id 出现了几次，确认幂等重试没有留下第二行。
+- **默认 `go test ./...` 不受影响。** 两个文件都以 `AISW_MYSQL_TEST_DSN` 环境变量门控，未设置时每个用例 `t.Skip`，不需要真实数据库、也不需要 Docker；本次改动已用真实 `mysql:9.7` 容器（Docker）连同 `-race` 跑通过全部用例。
+
 ### 与后续任务的关系
 
-Job 持久化契约到这里，J01～J07 的只读历史部分均已完成：定义、建表、内部 API、接入写入、重启恢复、持久化历史查询。留下三处已知的、如实记录而非蒙混过去的边界：
+Job 持久化契约到这里，J01～J08 均已完成（J07 只完成只读历史部分）：定义、建表、内部 API、接入写入、重启恢复、持久化历史查询、真实 MySQL 验证。留下两处已知的、如实记录而非蒙混过去的边界：
 
 - 一个 job 在被 J05 的持久化器追上之前就被 Gateway 内存表逐出，这条记录永久丢失——不是靠扩大内存表解决，而是接受这一权衡：内存表的有界性是「任何一跳都不得无界缓冲」的红线，持久化没赶上逐出速度的窗口期损失，比无界的内存表更可接受。
-- Job 历史的取消与授权产物访问需要一条全新的「会话到租户级 Gateway 调用权限」的链路，尚未设计，更未实现——见上面这一节的说明。
-- Console 侧尚未接入这两个新端点（`app/console/jobs` 目前渲染的是 Fleet 实时视图），这部分留给 Console STATUS 的 C26 任务。
+- Job 历史的取消与授权产物访问需要一条全新的「会话到租户级 Gateway 调用权限」的链路，尚未设计，更未实现，Console 侧也尚未接入持久化历史的两个新端点——均见上面「已实现的持久化历史查询」一节的说明，留给 Console STATUS 的 C26 任务。
 
 ## 已知缺口
 

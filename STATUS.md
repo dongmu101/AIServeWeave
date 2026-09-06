@@ -32,7 +32,7 @@ R01/R02 可与 Job 主线并行。P07 与 J03 共用迁移框架；P04 依赖 J0
 - [x] Console 登录与服务端会话、用户/Key/审计/配额页面、只读节点与模型清单、工作流目录和实时 Job 视图。
 - [x] Agent/Gateway Prometheus 指标导出，以及包含 Console 的 Docker Compose 部署配置。
 
-当前主要边界：Job 的权威路由绑定（节点/运行时/后端运行标识）仍以单个 Gateway 副本的有界内存为主，但已持久化到控制面（J01–J06）——副本重启或节点重连后，非终态 job 通过 `GET /internal/v1/jobs/active` 按路由绑定恢复，一个还没来得及持久化就被逐出的 job 仍会永久丢失，真实 MySQL 上的验证留给 J08。控制面已提供按租户/时间/状态/工作流分页的持久化 Job 历史查询（`/admin/v1/jobs/history*`，J07），但 Console 尚无页面接它，取消与产物访问仍缺一条可用的鉴权链路，未实现。模型、节点和模板的只读页面不等于管理与发布能力。
+当前主要边界：Job 的权威路由绑定（节点/运行时/后端运行标识）仍以单个 Gateway 副本的有界内存为主，但已持久化到控制面（J01–J06，真实 MySQL 9.7 集成与故障验证见 J08）——副本重启或节点重连后，非终态 job 通过 `GET /internal/v1/jobs/active` 按路由绑定恢复，一个还没来得及持久化就被逐出的 job 仍会永久丢失。控制面已提供按租户/时间/状态/工作流分页的持久化 Job 历史查询（`/admin/v1/jobs/history*`，J07），但 Console 尚无页面接它，取消与产物访问仍缺一条可用的鉴权链路，未实现。模型、节点和模板的只读页面不等于管理与发布能力。
 
 历史验证索引：真实 Ollama + mTLS + Gateway 非流式/SSE、多副本联调、故障注入与滚动升级记录见 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md) 和 Gateway e2e 测试。24h 长稳工具已存在，最终结果需核实归档，不沿用旧文档“正在运行”的描述。
 
@@ -46,14 +46,14 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 
 | 状态 | 编号 | 待开发任务 | 验收目标 |
 | --- | --- | --- | --- |
-| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-j07-已完成-取消与产物访问未做)，本项仅完成设计，不含建表与代码 |
+| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-j08-已完成-取消与产物访问未做)，本项仅完成设计，不含建表与代码 |
 | [x] | J02 | 在 Gateway 增加有界后台状态同步 | 调用方不再轮询/SSE 时也能推进任务；限制扫描批次、并发和频率，处理节点消失、超时和优雅停止——实现见 `httpapi/jobsync.go`，详见 [Gateway README「工作流 Job」第九条](service/aiServeWeaveGateway/README.md#工作流-job) |
-| [x] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录——实现见 `internal/store/gormstore/jobmigrate.go` 与 `internal/model/job.go`，详见 [ControlPlane README「Job 持久化契约」的「已实现的存储层」小节](service/aiServeWeaveControlPlane/README.md#已实现的存储层j03)；真实 MySQL 上的验证留给 J08 |
+| [x] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录——实现见 `internal/store/gormstore/jobmigrate.go` 与 `internal/model/job.go`，详见 [ControlPlane README「Job 持久化契约」的「已实现的存储层」小节](service/aiServeWeaveControlPlane/README.md#已实现的存储层j03)；真实 MySQL 上的迁移可重复性已在 J08 验证 |
 | [x] | J04 | 实现控制面内部 Job 读写 API 与 Gateway 客户端 | 服务间鉴权、租户隔离、幂等写入和并发条件更新；重复/乱序事件不能覆盖终态；错误与日志不泄露凭据、Prompt 或工作流 JSON——实现见 `internal/handler`（`/internal/v1/jobs*`，InternalToken 守卫）、`internal/logic/jobs.go` 与 Gateway 侧 `controlplaneclient/jobs.go` 的 `JobsClient`，详见 [ControlPlane README「Job 持久化契约」的「已实现的内部 API」小节](service/aiServeWeaveControlPlane/README.md#已实现的内部-api-与-gateway-客户端j04)；接入 Gateway 提交/同步路径见 J05 |
 | [x] | J05 | 处理数据库与 ComfyUI 提交之间的故障窗口 | 覆盖"后端已接收但映射尚未落库"；结果未知时不盲目重提；补写若采用队列须有容量上限与可靠恢复机制，不能仅靠内存重试承诺不丢——实现见 `httpapi/jobpersist.go` 的 `jobPersister`，详见 [ControlPlane README「Job 持久化契约」的「已接入持久化」小节](service/aiServeWeaveControlPlane/README.md#已接入持久化j05)；恢复机制是有界退避重试而非持久队列，如实记录了「进程重启/逐出即丢」的边界，重启后的路由恢复留给 J06 |
 | [x] | J06 | 实现重启恢复与跨 Gateway 副本访问 | 重启后可恢复非终态任务；任一可服务副本可查询、取消和访问产物；保存稳定节点/运行时标识，不序列化连接对象；明确恢复执行权及失联处理——实现见 `httpapi/jobrecover.go` 的 `jobRecoverer`、控制面新端点 `GET /internal/v1/jobs/active`（跨租户，仅按路由绑定过滤），详见 [ControlPlane README「Job 持久化契约」的「已实现的重启恢复」小节](service/aiServeWeaveControlPlane/README.md#已实现的重启恢复j06)；恢复执行权刻意非排他，靠 `observed_seq` 单调门槛而非锁/租约化解并发；节点永久失联的 job 停在最后观测状态，不编造终态 |
 | [ ] | J07 | 提供持久化历史查询与 Console Job 管理 | 按租户、时间、状态、工作流分页；支持详情、进度、取消和授权产物访问；明确实时状态与最后观测时间，补齐 Console C26——只读部分已实现：`GET /admin/v1/jobs/history`、`GET /admin/v1/jobs/history/:id`（会话守卫，不依赖 Fleet 配置），详见 [ControlPlane README「Job 持久化契约」的「已实现的持久化历史查询」小节](service/aiServeWeaveControlPlane/README.md#已实现的持久化历史查询j07-的只读部分)；**取消与授权产物访问未做**——需要一条全新的「会话到租户级 Gateway 调用权限」链路，与既有「取消/产物访问不经过控制面」的架构决策存在张力，留待专门设计；Console 页面接入同样未做（C26） |
-| [ ] | J08 | 在真实 MySQL 9.7 上完成集成与故障恢复验证 | 覆盖迁移、并发更新、重复事件、跨租户拒绝、数据库中断、Gateway 重启、多副本查询和提交结果未知；默认单元测试不依赖真实数据库 |
+| [x] | J08 | 在真实 MySQL 9.7 上完成集成与故障恢复验证 | 覆盖迁移、并发更新、重复事件、跨租户拒绝、数据库中断、Gateway 重启、多副本查询和提交结果未知；默认单元测试不依赖真实数据库——实现见 `internal/store/gormstore/mysql_live_test.go`（迁移可重复、并发更新按 `observed_seq` 由真实行锁裁定、跨租户冲突/隔离、数据库不可达快速失败）与 `e2e/mysql_live_test.go`（两个独立 `JobsClient` 模拟重启/多副本、幂等重试），均以 `AISW_MYSQL_TEST_DSN` 环境变量按需启用（同 `common/runtime/ollama/live_test.go` 的既有约定），在真实 `mysql:9.7`（Docker）上以 `-race` 全部通过验证；未设置该变量时自动跳过，`go test ./...` 保持不依赖外部环境 |
 
 实施顺序：先完成 J01；J02 可独立交付，J03/J04 建立存储链路，J05/J06 补故障恢复，再完成 J07；J08 随各阶段验证，作为整体验收门禁。
 
@@ -62,7 +62,7 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 - MySQL 保存任务与产物元数据；图片、视频、音频文件保存在文件系统或对象存储。
 - `job_events` 为可选扩展，先确定是否需要历史事件回放；关键状态可记录，高频采样进度不默认逐条永久落库。
 - 定义任务、事件与产物元数据的保留期、清理批次和容量限制，避免将内存上限问题转移成数据库无限增长。
-- Compose 已有 `mysql:9.7` 服务，但默认控制面仍连接 PostgreSQL；补齐 MySQL Driver/DSN、启动依赖和部署说明，不能仅启用 mysql profile 就宣称完成切换。
+- Compose 已有 `mysql:9.7` 服务；MySQL Driver/DSN 已补齐并在 J08 用真实引擎验证，但默认控制面仍连接 PostgreSQL——四张老表的双引擎支持是既有决定，`jobs`/`job_artifacts` 仅支持 MySQL 是 Job 持久化的既有决定，两者都不是"仅启用 mysql profile"就等同完成切换，切换默认驱动仍是部署时的显式选择。
 - Job 元数据恢复不等于文件可用；原节点离线后的产物访问依赖下述对象存储任务。
 
 ## P0：节点身份与开源交付
