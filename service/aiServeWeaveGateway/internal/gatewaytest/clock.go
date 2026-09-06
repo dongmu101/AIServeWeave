@@ -76,4 +76,23 @@ func (c *Clock) Advance(d time.Duration) {
 	}
 }
 
+// PendingTimers reports how many timers are registered and still waiting to
+// fire. Tests use it to synchronize with a goroutine that is about to wait on
+// the clock, so they can call Advance at the right moment instead of
+// guessing with a real sleep.
+//
+// PendingTimers 报告已注册且仍在等待触发的计时器数量。测试用它来与一个即将在
+// 该时钟上等待的协程同步，好在正确的时刻调用 Advance，而不是靠一次真实的睡眠去猜。
+func (c *Clock) PendingTimers() int {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n := 0
+	for _, t := range c.timers {
+		if !t.fired && !t.stopped {
+			n++
+		}
+	}
+	return n
+}
+
 var _ runtime.Clock = (*Clock)(nil)

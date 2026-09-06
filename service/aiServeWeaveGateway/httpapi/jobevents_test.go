@@ -390,10 +390,12 @@ func blockingSubscribeHandler(started chan<- struct{}) gatewaytest.SlotHandler {
 // 那个协程上，就是证明。
 func TestJobEventsStopsOnClientDisconnect(t *testing.T) {
 	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
-	srv := httptest.NewServer(httpapi.New(
+	front := httpapi.New(
 		scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock}),
 		httpapi.Config{Workflows: templates(t), Logger: slog.New(slog.DiscardHandler)},
-	))
+	)
+	t.Cleanup(front.Close)
+	srv := httptest.NewServer(front)
 
 	started := make(chan struct{})
 	connectNodeWithHandler(t, h, "node-comfy", "comfy-1", workflowSnapshot("comfy-1"), blockingSubscribeHandler(started))

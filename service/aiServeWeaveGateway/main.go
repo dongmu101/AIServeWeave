@@ -355,6 +355,15 @@ func run() error {
 	}
 	cancel()
 
+	// The background job syncer is stopped before the tunnel: it dispatches
+	// through the same scheduler, and stopping it here avoids a burst of
+	// "node is not connected" warnings against a tunnel that is closing on
+	// purpose rather than one that failed.
+	//
+	// 后台 job 同步器在隧道之前停止：它经由同一个调度器分派，在这里停止它能避免
+	// 对着一条正在有意关闭而非故障的隧道打出一串「node is not connected」告警。
+	front.Close()
+
 	if grpcServer != nil {
 		// Ask the Agents to leave first, then stop accepting: GracefulStop
 		// alone would wait for streams that are long-lived by design and

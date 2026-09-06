@@ -54,6 +54,27 @@ type job struct {
 	// 回答的是调用方已经拿到的那些 id，而不是新的一套。ArtifactRef 由四个字符串组成，
 	// 因而可比较，这正是它能做本映射键的原因。
 	artifactIDs map[runtime.ArtifactRef]string
+	// syncFailures counts consecutive failed background sync attempts. It is
+	// distinct from any state a caller can observe — a node being briefly
+	// unreachable is not evidence the run itself changed — and it drives
+	// nextSyncAt's backoff so a node that has disappeared is not re-asked
+	// every tick. A foreground observation (a status poll or an SSE event)
+	// resets it: whatever made the job briefly hard to reach evidently no
+	// longer applies once something did reach it.
+	//
+	// syncFailures 计数连续失败的后台同步尝试。它与调用方能观察到的任何状态都无关——
+	// 一个节点短暂不可达，不能证明这次运行本身发生了变化——它驱动 nextSyncAt 的退避，
+	// 好让一个已经消失的节点不会每一轮都被重新询问。一次前台观测（一次状态轮询或一个
+	// SSE 事件）会将其清零：既然确实有什么触达到了它，此前让它一度难以触达的原因，
+	// 显然已不再成立。
+	syncFailures int
+	// nextSyncAt is when the background syncer may next ask about this job.
+	// The zero value is always due, so a freshly submitted job is eligible
+	// from its very first tick without add needing to set this explicitly.
+	//
+	// nextSyncAt 是后台同步器下一次可以询问这个 job 的时间。零值永远视为已到期，
+	// 因此一个刚提交的 job 从它的第一轮起就已合格，无需 add 特意设置这个字段。
+	nextSyncAt time.Time
 }
 
 // artifactRecord is what a public artifact id resolves to: which job it
@@ -223,8 +244,18 @@ func (s *jobStore) get(id, tenantID string) (job, bool) {
 // the meantime is not resurrected — the answer already went out to the
 // caller, and re-adding it would let an eviction be undone by a status poll.
 //
+// This is a foreground observation — a caller's own poll or an SSE event —
+// so it also clears any backoff the background syncer had accumulated for
+// this job: whatever made it briefly hard to reach evidently no longer
+// applies, and the syncer should not keep waiting out a penalty a more
+// recent, successful observation has already overtaken.
+//
 // update 把节点的最新状态应用到已存的 job 上。期间已被逐出的 job 不会被复活——答复
 // 早已发给调用方，重新加回去等于让一次状态轮询撤销一次逐出。
+//
+// 这是一次前台观测——调用方自己的轮询或一次 SSE 事件——因此它也会清空后台同步器
+// 为这个 job 累积的退避：既然显然已经有什么触达到了它，此前让它一度难以触达的原因
+// 就不再成立，同步器不该继续等一个已经被更新、更成功的观测超过的惩罚期。
 func (s *jobStore) update(id string, status runtime.WorkflowStatus, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -236,6 +267,107 @@ func (s *jobStore) update(id string, status runtime.WorkflowStatus, now time.Tim
 	j.QueuePosition = status.QueuePosition
 	j.ErrorSummary = status.ErrorSummary
 	j.UpdatedAt = now
+	j.syncFailures = 0
+	j.nextSyncAt = now
+	s.byID[id] = j
+}
+
+// syncCandidate is what the background syncer needs to ask a node about one
+// job. It carries none of the job's other fields — the syncer has no
+// business reading them, only dispatching on them.
+//
+// syncCandidate 是后台同步器询问某个 job 所需的全部信息。它不携带 job 的其他字段——
+// 同步器没有理由读取它们，只需要靠它们去分派。
+type syncCandidate struct {
+	ID        string
+	Candidate scheduler.Candidate
+	RunID     string
+}
+
+// dueForSync returns up to max non-terminal jobs whose next sync attempt is
+// at or before now, longest-overdue first, and immediately pushes each
+// returned job's nextSyncAt out to now.Add(claimFor). That push is a claim:
+// a job handed out here will not be handed out again until claimFor elapses,
+// so a call still in flight when the next tick starts is not dispatched a
+// second time. The caller is expected to report back sooner via
+// syncSucceeded or syncFailed, both of which set a more specific nextSyncAt
+// that supersedes this placeholder.
+//
+// dueForSync 返回最多 max 个下次同步时间不晚于 now 的非终态 job，逾期最久的排在最
+// 前面，并立即把每一个被返回 job 的下次同步时间推到 now.Add(claimFor)。这一推就是
+// 一次认领：这里派发出去的 job，在 claimFor 过去之前不会被再次派发，因此一次仍在
+// 进行中的调用不会在下一轮开始时被重复分派。调用方应当更早地通过 syncSucceeded 或
+// syncFailed 回报结果，两者都会设置一个更具体的 nextSyncAt，取代这个占位值。
+func (s *jobStore) dueForSync(now time.Time, max int, claimFor time.Duration) []syncCandidate {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	type dueJob struct {
+		id string
+		at time.Time
+	}
+	candidates := make([]dueJob, 0, len(s.order))
+	for id, j := range s.byID {
+		if j.terminal() || j.nextSyncAt.After(now) {
+			continue
+		}
+		candidates = append(candidates, dueJob{id: id, at: j.nextSyncAt})
+	}
+	sort.Slice(candidates, func(i, k int) bool {
+		if candidates[i].at.Equal(candidates[k].at) {
+			return candidates[i].id < candidates[k].id
+		}
+		return candidates[i].at.Before(candidates[k].at)
+	})
+	if len(candidates) > max {
+		candidates = candidates[:max]
+	}
+
+	out := make([]syncCandidate, 0, len(candidates))
+	claimed := now.Add(claimFor)
+	for _, d := range candidates {
+		j := s.byID[d.id]
+		j.nextSyncAt = claimed
+		s.byID[d.id] = j
+		out = append(out, syncCandidate{ID: j.ID, Candidate: j.Candidate, RunID: j.RunID})
+	}
+	return out
+}
+
+// syncSucceeded applies a background-fetched status the same way update
+// does, and is the syncer's own entry point for it — kept separate so
+// jobs.go's foreground path and jobsync.go's background path each have a
+// name that says which one it is, even though the body is identical.
+//
+// syncSucceeded 以与 update 相同的方式应用一次后台取得的状态，是同步器自己的入口——
+// 与前台路径分开命名，好让 jobs.go 的前台路径与 jobsync.go 的后台路径各自的名字都
+// 说明自己是哪一个，即便两者的函数体相同。
+func (s *jobStore) syncSucceeded(id string, status runtime.WorkflowStatus, now time.Time) {
+	s.update(id, status, now)
+}
+
+// syncFailed records a failed background sync attempt without touching the
+// job's observed state — a node being briefly unreachable is not evidence
+// the run itself changed, and README requires state to stay the last thing
+// actually observed. backoff computes how long to wait before this job is
+// due again, based on the consecutive-failure count now on record; the
+// caller supplies it so jobsync.go owns the backoff curve and this method
+// only owns where the count and the resulting deadline are stored.
+//
+// syncFailed 记录一次失败的后台同步尝试,但不触碰 job 的已观测状态——节点短暂不可达
+// 不能证明这次运行本身发生了变化,而 README 要求 state 保持为最后一次真正观测到的
+// 结果。backoff 依据当前记录的连续失败次数,算出这个 job 下一次到期还要等多久；
+// 由调用方提供它，好让 jobsync.go 拥有退避曲线本身，这个方法只负责存放次数与由此
+// 得出的截止时间。
+func (s *jobStore) syncFailed(id string, now time.Time, backoff func(failures int) time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	j.syncFailures++
+	j.nextSyncAt = now.Add(backoff(j.syncFailures))
 	s.byID[id] = j
 }
 

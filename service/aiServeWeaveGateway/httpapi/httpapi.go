@@ -59,12 +59,41 @@ type Config struct {
 	// 环境得到的正是这个：没有东西签发限制时，也就没有限制可执行。
 	Limiter ratelimit.Limiter
 
-	// Clock stamps job timestamps. Nil uses the system clock; tests inject a
-	// fake so a job's timeline is asserted without sleeping.
+	// Clock stamps job timestamps and drives the background job syncer below.
+	// Nil uses the system clock; tests inject a fake so a job's timeline —
+	// and the syncer's ticks — are asserted without sleeping.
 	//
-	// Clock 为 job 的时间戳提供时间。为 nil 时使用系统时钟；测试注入假时钟，好在
-	// 不睡眠的前提下断言 job 的时间线。
+	// Clock 为 job 的时间戳提供时间，也驱动下面的后台 job 同步器。为 nil 时使用
+	// 系统时钟；测试注入假时钟，好在不睡眠的前提下断言 job 的时间线与同步器的节拍。
 	Clock runtime.Clock
+
+	// SyncInterval is how often the background syncer sweeps for non-terminal
+	// jobs to ask about. Zero uses DefaultSyncInterval.
+	//
+	// SyncInterval 是后台同步器扫描非终态 job 并询问它们的间隔。为零时采用
+	// DefaultSyncInterval。
+	SyncInterval time.Duration
+	// SyncBatchSize bounds how many jobs one sweep considers. Zero uses
+	// DefaultSyncBatchSize.
+	//
+	// SyncBatchSize 限定一次扫描考虑多少个 job。为零时采用 DefaultSyncBatchSize。
+	SyncBatchSize int
+	// SyncConcurrency bounds how many of those jobs are asked about at once.
+	// Zero uses DefaultSyncConcurrency.
+	//
+	// SyncConcurrency 限定其中同时被询问的个数。为零时采用 DefaultSyncConcurrency。
+	SyncConcurrency int
+	// SyncCallTimeout bounds a single background status call. Zero uses
+	// DefaultSyncCallTimeout.
+	//
+	// SyncCallTimeout 限定单次后台状态调用的时长。为零时采用 DefaultSyncCallTimeout。
+	SyncCallTimeout time.Duration
+	// SyncMaxBackoff caps how long a repeatedly failing job waits between
+	// background attempts. Zero uses DefaultSyncMaxBackoff.
+	//
+	// SyncMaxBackoff 限定一个反复失败的 job 在后台尝试之间最多等待多久。为零时采用
+	// DefaultSyncMaxBackoff。
+	SyncMaxBackoff time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
@@ -94,6 +123,15 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		limiter:   cfg.Limiter,
 	}
 
+	syncer := newJobSyncer(h.jobs, sched, clock, logger, jobSyncConfig{
+		Interval:    cfg.SyncInterval,
+		BatchSize:   cfg.SyncBatchSize,
+		Concurrency: cfg.SyncConcurrency,
+		CallTimeout: cfg.SyncCallTimeout,
+		MaxBackoff:  cfg.SyncMaxBackoff,
+	})
+	go syncer.run()
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", h.models)
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
@@ -122,6 +160,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	return &Server{
 		Handler:  h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux)))),
 		handlers: h,
+		syncer:   syncer,
 	}
 }
 
@@ -141,6 +180,27 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 type Server struct {
 	http.Handler
 	handlers *handlers
+	syncer   *jobSyncer
+}
+
+// Close stops the background job syncer and waits for its current sweep, if
+// any, to finish. Call it during shutdown, after the HTTP listener has
+// stopped accepting new requests and before the scheduler's underlying
+// tunnel is torn down — the syncer dispatches through that same scheduler,
+// and stopping it first avoids a burst of "node is not connected" warnings
+// against a tunnel that is closing on purpose rather than one that failed.
+//
+// It does not stop the HTTP handler itself; that remains the caller's
+// http.Server to shut down.
+//
+// Close 停止后台 job 同步器，并等待它正在进行的一轮（如果有）跑完。应当在关闭期间
+// 调用它——在 HTTP 监听器停止接受新请求之后、调度器底下的隧道被拆除之前——同步器
+// 经由同一个调度器分派，先停止它能避免对着一条正在有意关闭而非故障的隧道打出一串
+// 「node is not connected」告警。
+//
+// 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
+func (s *Server) Close() {
+	s.syncer.Stop()
 }
 
 // JobsFor returns this replica's runs for one tenant, newest first, and
