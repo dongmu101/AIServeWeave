@@ -284,6 +284,121 @@ func (r SetLimitsRequest) Limits() quota.Limits {
 	}
 }
 
+// CreateJobRequest is what a Gateway replica reports about a run it just
+// submitted, per STATUS.md's J01/J04 persistence contract. TenantID is what
+// the Gateway asserts about its own caller — this endpoint is guarded by the
+// internal shared secret, not a tenant session, so there is no session to
+// derive it from the way the Admin API's other writes do.
+//
+// NodeID, RuntimeID and BackendRunID travel over this internal channel even
+// though no tenant-facing response ever carries them: a restarted Gateway
+// replica recovering a job's route binding (STATUS.md's J06) has nowhere
+// else to read them back from.
+//
+// CreateJobRequest 是一个 Gateway 副本就它刚提交的一次运行所报告的内容，对应
+// STATUS.md 的 J01/J04 持久化契约。TenantID 是 Gateway 对自己调用方所做的
+// 断言——本端点由内部共享密钥守卫，而不是租户会话，因此没有会话可供像 Admin API
+// 其余写操作那样据以推导它。
+//
+// NodeID、RuntimeID 与 BackendRunID 会经由这条内部通道传输，即便没有任何面向
+// 租户的响应会携带它们：一个正在恢复某个 job 路由绑定的重启后 Gateway 副本
+// （STATUS.md 的 J06），没有别的地方能把它们读回来。
+type CreateJobRequest struct {
+	JobID           string `json:"job_id"`
+	TenantID        string `json:"tenant_id"`
+	WorkflowID      string `json:"workflow_id"`
+	WorkflowVersion string `json:"workflow_version,omitempty"`
+	NodeID          string `json:"node_id"`
+	RuntimeID       string `json:"runtime_id"`
+	BackendRunID    string `json:"backend_run_id"`
+	State           string `json:"state"`
+	ObservedSeq     int64  `json:"observed_seq"`
+}
+
+// JobResponse is the internal API's full record of one job — the storage
+// layer's view, not the Admin API's. It is never served to a tenant session:
+// listJobs (the Admin API's own handler) renders workflowview.Job instead,
+// which is where the route binding this struct carries gets stripped.
+//
+// JobResponse 是内部 API 对一个 job 的完整记录——存储层的视角，不是 Admin API
+// 的视角。它绝不提供给租户会话：listJobs（Admin API 自己的 handler）渲染的是
+// workflowview.Job，这个结构体携带的路由绑定信息正是在那里被剥离的。
+type JobResponse struct {
+	JobID           string     `json:"job_id"`
+	TenantID        string     `json:"tenant_id"`
+	WorkflowID      string     `json:"workflow_id"`
+	WorkflowVersion string     `json:"workflow_version,omitempty"`
+	NodeID          string     `json:"node_id"`
+	RuntimeID       string     `json:"runtime_id"`
+	BackendRunID    string     `json:"backend_run_id"`
+	State           string     `json:"state"`
+	ErrorSummary    string     `json:"error_summary,omitempty"`
+	ObservedSeq     int64      `json:"observed_seq"`
+	CreatedAt       time.Time  `json:"created_at"`
+	UpdatedAt       time.Time  `json:"updated_at"`
+	TerminalAt      *time.Time `json:"terminal_at,omitempty"`
+}
+
+// UpdateJobStateRequest is one status observation a Gateway replica reports
+// — from a foreground poll, an SSE event, or its background syncer. See
+// store.JobStateUpdate for the ObservedSeq gate this is applied under.
+//
+// UpdateJobStateRequest 是一个 Gateway 副本报告的一次状态观测——来自一次前台
+// 轮询、一次 SSE 事件，或它的后台同步器。这次更新据以放行的 ObservedSeq 门槛，
+// 见 store.JobStateUpdate。
+type UpdateJobStateRequest struct {
+	TenantID     string `json:"tenant_id"`
+	State        string `json:"state"`
+	ErrorSummary string `json:"error_summary,omitempty"`
+	ObservedSeq  int64  `json:"observed_seq"`
+}
+
+// UpdateJobStateResponse reports whether this call's update was the one
+// that applied, alongside the job's current row — which the caller needs to
+// read regardless of Applied, since a lost race still leaves something on
+// record worth knowing about.
+//
+// UpdateJobStateResponse 报告这次调用的更新是否是真正生效的那一个，并附上该
+// job 当前的行——无论 Applied 为何，调用方都需要读取它，因为一次落败的竞争
+// 依然会留下一条值得了解的记录。
+type UpdateJobStateResponse struct {
+	Applied bool        `json:"applied"`
+	Job     JobResponse `json:"job"`
+}
+
+// CreateJobArtifactRequest is one artifact a run produced, with the public
+// id the Gateway's own artifact listing already minted for it.
+//
+// CreateJobArtifactRequest 是一次运行产出的一个产物，携带 Gateway 自己的产物
+// 列举已经为它铸造的公开 id。
+type CreateJobArtifactRequest struct {
+	ArtifactID string `json:"artifact_id"`
+	TenantID   string `json:"tenant_id"`
+	Filename   string `json:"filename"`
+	Subfolder  string `json:"subfolder,omitempty"`
+	Type       string `json:"type,omitempty"`
+}
+
+// JobArtifactResponse is one recorded artifact.
+//
+// JobArtifactResponse 是一条已记录的产物。
+type JobArtifactResponse struct {
+	ArtifactID string    `json:"artifact_id"`
+	JobID      string    `json:"job_id"`
+	TenantID   string    `json:"tenant_id"`
+	Filename   string    `json:"filename"`
+	Subfolder  string    `json:"subfolder,omitempty"`
+	Type       string    `json:"type,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// ListJobArtifactsResponse is one job's recorded artifacts.
+//
+// ListJobArtifactsResponse 是一个 job 已记录的产物。
+type ListJobArtifactsResponse struct {
+	Items []JobArtifactResponse `json:"items"`
+}
+
 // ErrorResponse is the failure shape every endpoint returns.
 //
 // ErrorResponse 是每个端点返回失败时的形状。

@@ -117,7 +117,7 @@ go run ./service/aiServeWeaveGateway \
 | 公开 | `POST /admin/v1/auth/login` |
 | 会话（JWT） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits` |
 | BootstrapToken | `POST /admin/v1/tenants` |
-| InternalToken | `POST /internal/v1/apikeys/verify` |
+| InternalToken | `POST /internal/v1/apikeys/verify`、`/internal/v1/jobs*`（STATUS.md 的 J04，见「Job 持久化契约」一节的「已实现的内部 API」小节） |
 
 `GET /admin/v1/tenants/current` 返回调用方自己所属的租户及其配额，任何已登录角色都可读；`PUT /admin/v1/tenants/limits` 设置该配额，仅 owner 与 admin 可写。两者的请求里都没有租户 id：租户来自会话，因此管理员无法通过改请求体把它指向别人的租户。读写权限刻意不对称——member 无法调高限制，但一个正在被限流的 member 需要看得到是哪条限制在起作用；而能调高自己租户限制的角色，绕过限制最省事的办法就是调高它。
 
@@ -194,9 +194,9 @@ Fleet:
 
 **`/admin/v1/jobs` 是实时视图，不是历史。** Gateway 的 job 表在进程内存、有上限、每副本各自持有：运行会随副本重启消失、被上限挤出，且从不跨副本可见。因此它能回答「现在在跑什么」，回答不了「上周跑过什么」。持久化的 Job 历史需要本服务的一张 jobs 表和一条来自 Gateway 的写路径，尚未实现——见下面的已知缺口。
 
-## Job 持久化契约（J01 设计；J03 已建表）
+## Job 持久化契约（J01 设计；J03 已建表；J04 已实现内部 API）
 
-本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）落地时对齐，不是它们的替代。以下到「与后续任务的关系」为止是 J01 的契约本身，只定义、不引入数据库代码；「已实现的存储层」小节记录 J03 在这份契约上落地了什么。
+本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）落地时对齐，不是它们的替代。以下到「与后续任务的关系」为止是 J01 的契约本身，只定义、不引入数据库代码；「已实现的存储层」「已实现的内部 API 与 Gateway 客户端」两小节分别记录 J03、J04 在这份契约上落地了什么。
 
 ### 为什么是两个事实，不是一次写入
 
@@ -261,12 +261,32 @@ Gateway 现有内存 store（`jobstore.go:228-240` 的 `update`）是无条件�
 - **索引对应验收目标「按租户与时间/状态建立查询索引」。** `jobs` 表有 `(tenant_id, created_at, id)`（供 `ListJobs` 的 keyset 分页与时间窗筛选）与 `(tenant_id, state)`（供按状态筛选）两个复合索引；`job_artifacts` 按 `job_id` 与 `tenant_id` 分别建索引。
 - **真实 MySQL 上的验证是 J08 的范围，不是本节。** 与 `gormstore` 里其余四张表的既有测试划分一致（业务规则在 `memstore` 上测，SQL 本身对着真实引擎测），这里为 `pendingJobMigrations` 的顺序与跳过逻辑写了不依赖数据库的单元测试，迁移 SQL 本身在真实 MySQL 9.7 上跑通仍待 J08。
 
+### 已实现的内部 API 与 Gateway 客户端（J04）
+
+`internal/handler` 新增五个端点，与 `/internal/v1/apikeys/verify` 共用 `InternalToken` 这同一把共享密钥守卫（见上面「路由与守卫」）：
+
+| 端点 | 对应契约动作 |
+| --- | --- |
+| `POST /internal/v1/jobs` | 「已确认」：记录一次提交 |
+| `GET /internal/v1/jobs/:id?tenant_id=…` | 读取一个 job 当前的持久化行 |
+| `PATCH /internal/v1/jobs/:id/state` | 状态更新，走 J03 的 `UpdateJobState`（终态不可覆盖 + `observed_seq` 单调） |
+| `POST /internal/v1/jobs/:id/artifacts` | 记录一个产物 |
+| `GET /internal/v1/jobs/:id/artifacts?tenant_id=…` | 列举一个 job 的产物 |
+
+几处对齐上面契约、且不是随手做出的选择：
+
+- **鉴权是「Gateway 这个服务是谁」，不是「哪个租户的会话」。** `tenant_id` 在 `POST`/`PATCH` 里是请求体字段、在 `GET` 里是查询参数，而不是从会话推导——这条内部通道上没有会话，`tenant_id` 是 Gateway 对自己调用方所做的断言，与 `verifyKey` 对哈希的信任边界相同。
+- **幂等写入在 `internal/logic/jobs.go` 里落实，而不是要求调用方自己去重。** `CreateJob` 遇到重复 id 时不返回冲突，而是读回并返回已有的那一行——但仅当那一行确实属于同一租户；不同租户抢占同一个 id 时仍然是真实的 `ErrConflict`（409）。`CreateJobArtifact` 同理，且更简单：不重新读取，直接把调用方本就知道的内容当作已生效返回，因为重试者发来的字段本该与它第一次发的相同。
+- **`PATCH .../state` 返回的 job 与 `applied` 是两件独立的事。** 一次陈旧或已在终态之后到达的更新，`applied=false` 且 `err=nil`——这是 J01 明确要求的「无声成功」，不是需要调用方特殊处理的错误路径；返回体里的 job 永远是数据库当前那一行，即便这次调用没能改动它，调用方也能看到真正落地的是什么。
+- **错误与日志不携带凭据、Prompt 或工作流 JSON。** 这五个端点的请求体/响应体只有 id、状态词汇、时间戳与路由标识（node/runtime/backend run id），没有字段能装下这些东西；`respondErr` 沿用既有的粗粒度错误映射（`ErrNotFound`→404、`ErrConflict`→409、`ErrInvalidInput`→400、其余→500 且不回显原始错误文本），与本服务其余端点一致。
+
+Gateway 侧的客户端是 `service/aiServeWeaveGateway/controlplaneclient/jobs.go` 的 `JobsClient`，与既有的 `Verifier` 分属两个类型而不是合并成一个：`Verifier` 坐在每次推理请求上、必须靠缓存摊薄延迟；`JobsClient` 的调用是 Gateway 内存 job 表的一条旁路，绝不能被推理响应等待，混进 `Verifier` 会让人在不该等待的地方顺手写出一次阻塞调用。`JobsClient` 把契约的「提交结果未知」态显式命名为 `ErrOutcomeUnknown`——包住超时、连接失败、本 Gateway 自己的 token 被拒绝，或任何未识别的状态码——`ErrConflict`/`ErrNotFound`/`ErrInvalidRequest` 才是控制面给出的确定答案。**这个客户端目前没有被 Gateway 的提交或状态同步路径调用**：把它接进 `httpapi/jobs.go` 的提交流程与 `httpapi/jobsync.go` 的后台同步，同时处理「数据库故障不拖垮推理」的降级路径，是 J05 的范围，不是 J04 的。
+
 ### 与后续任务的关系
 
-以下留给对应任务，本节（含上面「已实现的存储层」）不预先决定实现细节：
+以下留给对应任务，本节（含上面「已实现的存储层」与「已实现的内部 API」）不预先决定实现细节：
 
-- 内部 API 的鉴权方式、幂等键的具体形态 → J04。
-- "提交结果未知"记录的补写机制（队列还是定时对账、容量上限） → J05。
+- "提交结果未知"记录的补写机制（队列还是定时对账、容量上限），以及把 `JobsClient` 真正接进 Gateway 提交与同步路径 → J05。
 - 副本重启后谁有权继续同步/取消一个非终态 job（认领与超时释放） → J06。
 
 ## 已知缺口
@@ -279,7 +299,7 @@ Gateway 现有内存 store（`jobstore.go:228-240` 的 `update`）是无条件�
 6. **没有平台运维身份。** 机群清单由共享密钥守卫，背后没有用户，因此本服务无法记录「是谁读的」，也无法把运维权限授予某个具体的人。当前是由 Console 侧的名单决定谁能使用那个密钥（见 Console 的 `lib/server/operator.ts`），这是一处缺口而不是设计。真正的解法是在角色模型里引入平台级身份，那时机群端点可以改为会话守卫并进入审计。
 7. **机群清单只读。** 节点的审批、禁用与维护状态需要持久化与下发路径，路由配置的版本、发布与回滚需要把那张表从 Gateway 的文件搬进本服务。两者都还没做。
 8. **Job 状态不会自行推进这一条已在 Gateway 侧补上。** `/admin/v1/jobs` 返回的 `state` 仍是 Gateway 最后观测到的状态，但现在即使提交方停止轮询、也不挂着事件流，Gateway 自己的后台同步器（`httpapi/jobsync.go`，见 [Gateway README 工作流 Job 一节](../aiServeWeaveGateway/README.md#工作流-job)第九条）也会代为继续观测，因此运行仍会走向终态，只是本服务这次聚合到的仍是某一时刻的快照。真正的缺口收窄到「没有 Job 历史」（见下一条）：状态会推进,但推进的记录仍只存在于 Gateway 内存里，本服务读到的是聚合时的截面，不是可回放的时间线。
-9. **没有 Job 历史。** `/admin/v1/jobs` 聚合的是各 Gateway 副本内存中的 job 表，副本重启即丢、超过上限即逐出。持久化需要本服务建 jobs 表，并让 Gateway 把 job 生命周期写过来——那会把本服务放上推理请求的写路径，因此必须先定清楚「写失败时推理不能被阻断」，这条契约见上面「[Job 持久化契约](#job-持久化契约j01-设计尚未实现)」一节；建表与写路径本身仍未实现。产物同理：产物由 Gateway 数据面用租户的 API Key 提供，本服务不在那条路径上，控制台只能列出产物 id。
+9. **没有 Job 历史。** `/admin/v1/jobs` 聚合的是各 Gateway 副本内存中的 job 表，副本重启即丢、超过上限即逐出。持久化需要本服务建 jobs 表（已完成，J03）并有一条 Gateway 把 job 生命周期写过来的内部 API（已完成，J04，见上面「[Job 持久化契约](#job-持久化契约j01-设计j03-已建表j04-已实现内部-api)」一节）——但 Gateway 的提交与状态同步路径尚未实际调用这条 API，因此持久化链路目前是「建好但空转」：表存在、写入接口存在，没有任何真实 job 经它落库。接上这条调用，同时处理「写失败时推理不能被阻断」的降级路径，是 J05 的范围。产物同理：产物由 Gateway 数据面用租户的 API Key 提供，本服务不在那条路径上，控制台只能列出产物 id。
 10. **没有指标、请求检索与告警。** 这三项需要时序库与可检索的日志存储，仓库里都没有；Gateway 各副本的 Prometheus 文本导出不等于历史曲线。
 
 ## 下一步

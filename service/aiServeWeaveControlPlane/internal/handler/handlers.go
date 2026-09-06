@@ -551,6 +551,196 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// -----------------------------------------------------------------------
+// Internal: Job persistence (STATUS.md's J04)
+// -----------------------------------------------------------------------
+
+// createJob handles POST /internal/v1/jobs: a Gateway replica reporting a
+// run it just submitted. See the ControlPlane README's 「Job 持久化契约」 for
+// why this call must never be on the inference request's own critical path
+// — that discipline belongs to the Gateway-side client (STATUS.md's J04)
+// and the caller of it (J05), not to this handler, which only does the
+// write it is asked to do.
+//
+// createJob 处理 POST /internal/v1/jobs：一个 Gateway 副本报告它刚提交的一次
+// 运行。为什么这次调用绝不能出现在推理请求自己的关键路径上，见 ControlPlane
+// README「Job 持久化契约」——那份纪律属于 Gateway 侧的客户端（STATUS.md 的
+// J04）与调用它的那一方（J05），不属于这个只负责完成被要求的写入的 handler。
+func createJob(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateJobRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		job, err := ctx.Logic.CreateJob(r.Context(), logic.CreateJobParams{
+			JobID:           req.JobID,
+			TenantID:        req.TenantID,
+			WorkflowID:      req.WorkflowID,
+			WorkflowVersion: req.WorkflowVersion,
+			NodeID:          req.NodeID,
+			RuntimeID:       req.RuntimeID,
+			BackendRunID:    req.BackendRunID,
+			State:           req.State,
+			ObservedSeq:     req.ObservedSeq,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderJob(job))
+	}
+}
+
+// getJob handles GET /internal/v1/jobs/:id. tenant_id is a query parameter
+// rather than something this endpoint infers, for the same reason it is a
+// body field on createJob: there is no session here to read it from, only
+// the Gateway's own assertion.
+//
+// getJob 处理 GET /internal/v1/jobs/:id。tenant_id 是查询参数，而不是本端点自行
+// 推断的东西，理由与它在 createJob 里是请求体字段相同：这里没有会话可供读取，
+// 只有 Gateway 自己的断言。
+func getJob(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID := pathvar.Vars(r)["id"]
+		tenantID := r.URL.Query().Get("tenant_id")
+		if jobID == "" || tenantID == "" {
+			writeError(w, http.StatusBadRequest, "a job id and tenant_id are required")
+			return
+		}
+		job, err := ctx.Logic.GetJob(r.Context(), tenantID, jobID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderJob(job))
+	}
+}
+
+// updateJobState handles PATCH /internal/v1/jobs/:id/state. It is PATCH
+// rather than PUT because the request is one observation to be reconciled
+// against what is already on record, per store.JobStateUpdate's
+// ObservedSeq gate — not the whole row to overwrite.
+//
+// updateJobState 处理 PATCH /internal/v1/jobs/:id/state。用 PATCH 而不是 PUT，
+// 是因为这次请求是一次要与已有记录相协调的观测——依据 store.JobStateUpdate 的
+// ObservedSeq 门槛——而不是要整行覆盖。
+func updateJobState(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID := pathvar.Vars(r)["id"]
+		if jobID == "" {
+			writeError(w, http.StatusBadRequest, "a job id is required")
+			return
+		}
+		var req types.UpdateJobStateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		applied, job, err := ctx.Logic.UpdateJobState(r.Context(), req.TenantID, jobID, logic.UpdateJobStateParams{
+			State:        req.State,
+			ErrorSummary: req.ErrorSummary,
+			ObservedSeq:  req.ObservedSeq,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.UpdateJobStateResponse{Applied: applied, Job: renderJob(job)})
+	}
+}
+
+// createJobArtifact handles POST /internal/v1/jobs/:id/artifacts.
+//
+// createJobArtifact 处理 POST /internal/v1/jobs/:id/artifacts。
+func createJobArtifact(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID := pathvar.Vars(r)["id"]
+		if jobID == "" {
+			writeError(w, http.StatusBadRequest, "a job id is required")
+			return
+		}
+		var req types.CreateJobArtifactRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		artifact, err := ctx.Logic.CreateJobArtifact(r.Context(), logic.CreateJobArtifactParams{
+			ArtifactID: req.ArtifactID,
+			JobID:      jobID,
+			TenantID:   req.TenantID,
+			Filename:   req.Filename,
+			Subfolder:  req.Subfolder,
+			Type:       req.Type,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderJobArtifact(artifact))
+	}
+}
+
+// listJobArtifacts handles GET /internal/v1/jobs/:id/artifacts.
+//
+// listJobArtifacts 处理 GET /internal/v1/jobs/:id/artifacts。
+func listJobArtifacts(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		jobID := pathvar.Vars(r)["id"]
+		tenantID := r.URL.Query().Get("tenant_id")
+		if jobID == "" || tenantID == "" {
+			writeError(w, http.StatusBadRequest, "a job id and tenant_id are required")
+			return
+		}
+		artifacts, err := ctx.Logic.ListJobArtifacts(r.Context(), tenantID, jobID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.JobArtifactResponse, len(artifacts))
+		for i, a := range artifacts {
+			out[i] = renderJobArtifact(a)
+		}
+		writeJSON(w, http.StatusOK, types.ListJobArtifactsResponse{Items: out})
+	}
+}
+
+// renderJob converts a stored job to its internal wire form — the storage
+// layer's view, route binding included. See types.JobResponse for why this
+// is safe only because nothing on the tenant-facing Admin API ever calls it.
+//
+// renderJob 把存储的 job 转换成内部线上形式——存储层的视角，包含路由绑定。这样
+// 做为何安全，仅仅是因为面向租户的 Admin API 从不调用它，见 types.JobResponse。
+func renderJob(job model.Job) types.JobResponse {
+	return types.JobResponse{
+		JobID:           job.ID,
+		TenantID:        job.TenantID,
+		WorkflowID:      job.WorkflowID,
+		WorkflowVersion: job.WorkflowVersion,
+		NodeID:          job.NodeID,
+		RuntimeID:       job.RuntimeID,
+		BackendRunID:    job.BackendRunID,
+		State:           job.State,
+		ErrorSummary:    job.ErrorSummary,
+		ObservedSeq:     job.ObservedSeq,
+		CreatedAt:       job.CreatedAt,
+		UpdatedAt:       job.UpdatedAt,
+		TerminalAt:      job.TerminalAt,
+	}
+}
+
+// renderJobArtifact converts a stored artifact to its wire form.
+//
+// renderJobArtifact 把存储的产物转换成线上形式。
+func renderJobArtifact(a model.JobArtifact) types.JobArtifactResponse {
+	return types.JobArtifactResponse{
+		ArtifactID: a.ID,
+		JobID:      a.JobID,
+		TenantID:   a.TenantID,
+		Filename:   a.Filename,
+		Subfolder:  a.Subfolder,
+		Type:       a.Type,
+		CreatedAt:  a.CreatedAt,
+	}
+}
+
 // setTenantLimits handles PUT /admin/v1/tenants/limits: the caller's own
 // tenant's quota. It is PUT rather than PATCH because the body is the whole
 // set — a partial update would need a way to say "leave this one alone" that

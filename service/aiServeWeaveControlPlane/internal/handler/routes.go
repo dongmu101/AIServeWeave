@@ -59,6 +59,44 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		},
 	})
 
+	// The Job persistence endpoints (STATUS.md's J04) share the same
+	// InternalToken as key verification above: both are the Gateway talking
+	// to this service about its own callers' business, not a person acting
+	// in a tenant's session, and both already accept the same known cost of
+	// a shared secret over mTLS — see the service README's 已知缺口.
+	//
+	// Job 持久化端点（STATUS.md 的 J04）与上面的 key 校验共用同一个
+	// InternalToken：两者都是 Gateway 就自己调用方的业务在与本服务对话，而不是
+	// 某个人在租户会话里的操作，且两者已经接受了共享密钥而非 mTLS 这个同样已知
+	// 的代价——见服务 README 的「已知缺口」。
+	server.AddRoutes([]rest.Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/jobs",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, createJob(ctx)),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/jobs/:id",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, getJob(ctx)),
+		},
+		{
+			Method:  http.MethodPatch,
+			Path:    "/internal/v1/jobs/:id/state",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, updateJobState(ctx)),
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/jobs/:id/artifacts",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, createJobArtifact(ctx)),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/jobs/:id/artifacts",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, listJobArtifacts(ctx)),
+		},
+	})
+
 	// The fleet inventory is mounted only when it is configured, so a
 	// deployment without an operations console has no such route rather than
 	// a route that answers "not configured". It is under its own prefix and
