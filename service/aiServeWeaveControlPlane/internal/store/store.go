@@ -145,6 +145,33 @@ type APIKeyFilter struct {
 	Query string
 }
 
+// JobFilter narrows a job list. An empty field does not filter.
+//
+// JobFilter 收窄 job 列表。字段为空表示不筛选。
+type JobFilter struct {
+	State      string
+	WorkflowID string
+	// Since is inclusive and Until is exclusive, matching AuditFilter's
+	// convention so consecutive windows tile without gaps or overlap.
+	//
+	// Since 含端点、Until 不含，与 AuditFilter 的约定一致，好让相邻的时间窗
+	// 无缝拼接，既不重叠也不留空隙。
+	Since time.Time
+	Until time.Time
+}
+
+// JobStateUpdate is what UpdateJobState applies to one job, gated by
+// ObservedSeq. See model.Job's doc comment for why the gate exists.
+//
+// JobStateUpdate 是 UpdateJobState 施加于一个 job 的内容，以 ObservedSeq 为放行
+// 条件。这道条件为什么存在，见 model.Job 的文档注释。
+type JobStateUpdate struct {
+	State        string
+	ErrorSummary string
+	ObservedSeq  int64
+	At           time.Time
+}
+
 // AuditFilter narrows an audit list. A zero time does not bound that end.
 //
 // AuditFilter 收窄审计列表。时间为零值表示该端不设边界。
@@ -286,6 +313,83 @@ type Audit interface {
 	ListAudit(ctx context.Context, tenantID string, query ListQuery, filter AuditFilter) (Page[model.AuditLog], error)
 }
 
+// Jobs persists the control plane's record of a workflow run, per the
+// ControlPlane README's 「Job 持久化契约」 and STATUS.md's J01/J03. It is a
+// side channel to a Gateway's own in-memory job table, not a replacement for
+// it: CreateJob and UpdateJobState must never become something the inference
+// request path waits on, which is why neither takes a context deadline this
+// package chooses — that discipline belongs to whatever calls this interface
+// over the network (STATUS.md's J04), not to the interface itself.
+//
+// Jobs 持久化控制面对一次工作流运行的记录，对应 ControlPlane README「Job 持久化
+// 契约」与 STATUS.md 的 J01/J03。它是 Gateway 自己内存 job 表的一条旁路，不是
+// 替代：CreateJob 与 UpdateJobState 绝不能变成推理请求路径要等待的东西，这正是
+// 本接口不由自己选择 context 截止时间的原因——那份纪律属于经由网络调用这个接口的
+// 那一方（STATUS.md 的 J04），不属于接口本身。
+type Jobs interface {
+	// CreateJob inserts one job. A duplicate ID — the same run reported
+	// twice, which the persistence contract's "提交结果未知" window makes
+	// possible — returns ErrConflict rather than overwriting the existing
+	// row; the caller treats that as the idempotent success it is, not as a
+	// failure.
+	//
+	// CreateJob 插入一个 job。重复的 ID——同一次运行被报告了两次，持久化契约的
+	// 「提交结果未知」窗口正会造成这种情况——返回 ErrConflict 而不是覆盖已有的
+	// 行；调用方将其当作它本来就是的那种幂等成功处理，而不是失败。
+	CreateJob(ctx context.Context, job *model.Job) error
+	// GetJob reads one job by id, scoped to its tenant.
+	//
+	// GetJob 按 id 读取一个 job，并限定在其租户范围内。
+	GetJob(ctx context.Context, tenantID, id string) (model.Job, error)
+	// ListJobs reads one tenant's jobs, newest first.
+	//
+	// ListJobs 读取某个租户的 job，最新的在前。
+	ListJobs(ctx context.Context, tenantID string, query ListQuery, filter JobFilter) (Page[model.Job], error)
+	// UpdateJobState applies update to one job if update.ObservedSeq is
+	// strictly greater than the job's stored value and the job is not
+	// already terminal, and reports whether it did. Neither condition
+	// failing is an error: a stale or duplicate update, or one that arrives
+	// after the run has already reached a terminal state, is expected
+	// traffic from a background syncer or a replayed event, and applied=false
+	// is how the caller learns nothing needed to change. ErrNotFound is
+	// reserved for a job that genuinely does not exist, or does not belong
+	// to tenantID — the two cases store.ErrNotFound already keeps
+	// indistinguishable elsewhere in this package.
+	//
+	// UpdateJobState 在 update.ObservedSeq 严格大于该 job 已存储的值、且该 job
+	// 尚未处于终态时，将 update 应用于它，并报告是否确实应用了。两个条件中任一
+	// 不成立都不是错误：一次陈旧或重复的更新，或者一次运行早已到达终态之后才
+	// 抵达的更新，是来自后台同步器或一次被重放事件的预期流量，applied=false
+	// 就是调用方据以得知「无需改变任何东西」的方式。ErrNotFound 保留给一个确实
+	// 不存在、或不属于 tenantID 的 job——这两种情形本包别处的 store.ErrNotFound
+	// 本就刻意保持不可区分。
+	UpdateJobState(ctx context.Context, tenantID, id string, update JobStateUpdate) (applied bool, err error)
+}
+
+// JobArtifacts persists what a run produced, keyed by the public artifact id
+// a Gateway replica minted. See model.JobArtifact's doc comment for why the
+// backend's own locator is stored here but never the identifier a caller
+// sees.
+//
+// JobArtifacts 持久化一次运行产出的内容，以 Gateway 副本铸造的公开产物 id 为键。
+// 后端自己的定位信息为何存在这里、却从不是调用方看到的标识符，见 model.JobArtifact
+// 的文档注释。
+type JobArtifacts interface {
+	// CreateJobArtifact inserts one artifact record. Like CreateJob, a
+	// duplicate ID is ErrConflict, treated by the caller as an idempotent
+	// success — re-listing a job's artifacts after a retry must not create
+	// a second row for the same output.
+	//
+	// CreateJobArtifact 插入一个产物记录。与 CreateJob 一样，重复的 ID 是
+	// ErrConflict，调用方将其当作幂等成功处理——重试后重新列举一个 job 的产物，
+	// 不得为同一份输出创建第二行。
+	CreateJobArtifact(ctx context.Context, artifact *model.JobArtifact) error
+	// ListJobArtifacts reads one job's artifacts, scoped to its tenant.
+	//
+	// ListJobArtifacts 读取一个 job 的产物，并限定在其租户范围内。
+	ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([]model.JobArtifact, error)
+}
+
 // Store is every persistence capability the service has, for wiring at
 // startup. Handlers and logic take the narrow interfaces above, never this.
 //
@@ -296,4 +400,6 @@ type Store interface {
 	Users
 	APIKeys
 	Audit
+	Jobs
+	JobArtifacts
 }

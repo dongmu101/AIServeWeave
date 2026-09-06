@@ -6,8 +6,8 @@
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
-| `internal/model/` | 已实现 | 四张表的 gorm 映射：`tenants`、`users`、`api_keys`、`audit_logs`。租户配额是 `tenants` 上的三个标量列，不是单独一张表：每个租户恰好一组，而一对一的表会给那条位于推理请求路径上的查询平添一次 join |
-| `internal/store/` | 已实现 | 四个窄接口 + `gormstore/`（PostgreSQL / MySQL）+ `memstore/`（测试用内存实现） |
+| `internal/model/` | 已实现 | 四张表的 gorm 映射：`tenants`、`users`、`api_keys`、`audit_logs`。租户配额是 `tenants` 上的三个标量列，不是单独一张表：每个租户恰好一组，而一对一的表会给那条位于推理请求路径上的查询平添一次 join。另有 `jobs`、`job_artifacts` 两张表（`job.go`），是 Job 持久化契约的存储层落地，详见下方「Job 持久化契约」一节 |
+| `internal/store/` | 已实现 | 六个窄接口（含 `Jobs`、`JobArtifacts`）+ `gormstore/`（PostgreSQL / MySQL；`jobs`/`job_artifacts` 走独立的带版本迁移，仅 MySQL）+ `memstore/`（测试用内存实现） |
 | `internal/logic/` | 已实现 | 业务层：权限、审计、key 生命周期。不依赖 HTTP，也不依赖数据库 |
 | `internal/token/` | 已实现 | 会话令牌的签发与校验（HS256，golang-jwt/v5） |
 | `internal/cache/` | 已实现 | key 校验的 Redis 缓存，吊销时主动失效 |
@@ -65,13 +65,13 @@ DELETE /admin/v1/apikeys/:id
 
 ## 数据库
 
-PostgreSQL 与 MySQL 都支持，由 `Database.Driver` 选择，PostgreSQL 是首要目标。
+PostgreSQL 与 MySQL 都支持，由 `Database.Driver` 选择，PostgreSQL 是首要目标——但这仅对 `tenants`/`users`/`api_keys`/`audit_logs` 四张老表成立。`jobs`/`job_artifacts` 两张新表是 STATUS.md 对 Job 持久化的既有决定，只支持 MySQL 9.7/InnoDB，见下方「Job 持久化契约」一节。
 
-当前这四张表只用标量列，两种引擎表达一致，因此双支持的代价很低。**这在某个 JSON 列落地的那天就不再成立** —— 后续二十张表里的 `workflow_templates`、`deployment_revisions`、`job_events` 都要存 JSON，JSONB 的索引能力是 MySQL JSON 比不了的。到那一步应当重新评估是否继续双支持，而不是悄悄糊过去。
+当前这四张老表只用标量列，两种引擎表达一致，因此双支持的代价很低。**这在某个 JSON 列落地的那天就不再成立** —— 后续二十张表里的 `workflow_templates`、`deployment_revisions`、`job_events` 都要存 JSON，JSONB 的索引能力是 MySQL JSON 比不了的。到那一步应当重新评估是否继续双支持，而不是悄悄糊过去。
 
 MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫描失败。
 
-**迁移目前用 gorm 的 `AutoMigrate`，默认关闭。** 它无法表达回滚、不会删列、不留执行记录。在本服务只有四张表且没有生产数据期间够用；一旦其中任何一条不再成立，这里就换成带版本的 SQL 文件。
+**这四张老表的迁移用 gorm 的 `AutoMigrate`，默认关闭。** 它无法表达回滚、不会删列、不留执行记录。在本服务只有这四张表且没有生产数据期间够用；一旦其中任何一条不再成立，这里就换成带版本的 SQL 文件。`jobs`/`job_artifacts` 已经先一步换了：它们的验收目标明确要求「迁移可重复执行且有版本记录」，因此用的是独立的带版本 SQL 迁移，而不是 `AutoMigrate`，见下方「Job 持久化契约」一节。
 
 ## 本地起一套
 
@@ -194,9 +194,9 @@ Fleet:
 
 **`/admin/v1/jobs` 是实时视图，不是历史。** Gateway 的 job 表在进程内存、有上限、每副本各自持有：运行会随副本重启消失、被上限挤出，且从不跨副本可见。因此它能回答「现在在跑什么」，回答不了「上周跑过什么」。持久化的 Job 历史需要本服务的一张 jobs 表和一条来自 Gateway 的写路径，尚未实现——见下面的已知缺口。
 
-## Job 持久化契约（J01 设计，尚未实现）
+## Job 持久化契约（J01 设计；J03 已建表）
 
-本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）落地时对齐，不是它们的替代。本节只定义契约，不引入数据库代码。
+本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）落地时对齐，不是它们的替代。以下到「与后续任务的关系」为止是 J01 的契约本身，只定义、不引入数据库代码；「已实现的存储层」小节记录 J03 在这份契约上落地了什么。
 
 ### 为什么是两个事实，不是一次写入
 
@@ -250,11 +250,21 @@ Gateway 现有内存 store（`jobstore.go:228-240` 的 `update`）是无条件�
 
 延续 Gateway README「工作流 Job」一节已经确立的口径——job 视图刻意不含运行位置：`node_id`、`runtime_id`、后端 `run_id` 不进入任何面向调用方或 Console 的响应。但持久化记录本身必须存这些字段，否则 J06（重启恢复）与取消/产物访问在副本重启后无从谈起。也就是说"存储层需要"和"对外可见"是两层独立的决定，J03 建表时两者都要满足，不能因为对外视图不显示就干脆不存。
 
+### 已实现的存储层（J03）
+
+`internal/model/job.go` 定义 `Job`、`JobArtifact` 两张表，`internal/store/store.go` 的 `Jobs`、`JobArtifacts` 接口是 logic 层将来会依赖的窄接口，`memstore`（测试用）与 `gormstore`（生产）各有一份实现，`internal/store/gormstore/jobmigrate.go` 是建表本身。几处对齐上面契约的地方：
+
+- **`Job` 只存路由绑定，不存判断。** `NodeID`、`RuntimeID`、`BackendRunID` 三列就是「持久化记录需要、但对外不暴露的字段」一节点名的东西；本表本身不产出任何 HTTP 响应，字段是否对外可见是 J04 的事，这里只保证需要的都在。
+- **`UpdateJobState` 是契约里「终态不可覆盖 + `observed_seq` 单调」的唯一实现入口。** `gormstore` 版本把两个条件一起写进一条 `UPDATE ... WHERE state NOT IN (...) AND observed_seq < ?` 的 `WHERE` 子句，由数据库自己的行锁裁定谁先落地，不是本进程里的先读后写再比较；`RowsAffected=0` 时才补一次存在性查询，只用来分清「job 不存在」（`ErrNotFound`）与「job 存在但这次更新陈旧或已终态」（`applied=false, err=nil`）——契约明确后者必须是无声的幂等成功，不能与前者共用一个错误。`memstore` 版本用一次锁内的读改写实现相同的判定，供 logic 层测试。
+- **建表用带版本的 SQL，不是 `Store.Migrate` 的 `AutoMigrate`。** `MigrateJobs` 独立于四张老表的迁移之外，理由是验收目标本身写明「迁移可重复执行且有版本记录」——`AutoMigrate` 恰恰两者都不提供。迁移文件在 `internal/store/gormstore/migrations/jobs/`，按文件名顺序执行，每个文件在自己的事务里执行并把文件名记入 `schema_migrations_jobs` 表，因此一次执行到一半的失败不会被误记为已完成，重复调用在 schema 已是最新时是空操作。
+- **`jobs`/`job_artifacts` 目前只支持 MySQL。** 这是 STATUS.md 对 Job 持久化目标数据库的既有决定（MySQL 9.7/InnoDB），不是本次任务顺手做出的选择；对 PostgreSQL 部署调用 `MigrateJobs` 直接返回明确错误，而不是尝试用跨方言的 SQL 或悄悄跳过。`internal/svc/servicecontext.go` 把它接进现有的 `AutoMigrate` 开关：配置了 `AutoMigrate` 且驱动是 MySQL 时，启动会依次跑完四表迁移与这两张新表的迁移。
+- **索引对应验收目标「按租户与时间/状态建立查询索引」。** `jobs` 表有 `(tenant_id, created_at, id)`（供 `ListJobs` 的 keyset 分页与时间窗筛选）与 `(tenant_id, state)`（供按状态筛选）两个复合索引；`job_artifacts` 按 `job_id` 与 `tenant_id` 分别建索引。
+- **真实 MySQL 上的验证是 J08 的范围，不是本节。** 与 `gormstore` 里其余四张表的既有测试划分一致（业务规则在 `memstore` 上测，SQL 本身对着真实引擎测），这里为 `pendingJobMigrations` 的顺序与跳过逻辑写了不依赖数据库的单元测试，迁移 SQL 本身在真实 MySQL 9.7 上跑通仍待 J08。
+
 ### 与后续任务的关系
 
-J01 只定义到这里为止；以下留给对应任务，本节不预先决定实现细节：
+以下留给对应任务，本节（含上面「已实现的存储层」）不预先决定实现细节：
 
-- 具体的表结构、列类型与索引 → J03。
 - 内部 API 的鉴权方式、幂等键的具体形态 → J04。
 - "提交结果未知"记录的补写机制（队列还是定时对账、容量上限） → J05。
 - 副本重启后谁有权继续同步/取消一个非终态 job（认领与超时释放） → J06。

@@ -36,7 +36,7 @@ R01/R02 可与 Job 主线并行。P07 与 J03 共用迁移框架；P04 依赖 J0
 
 历史验证索引：真实 Ollama + mTLS + Gateway 非流式/SSE、多副本联调、故障注入与滚动升级记录见 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md) 和 Gateway e2e 测试。24h 长稳工具已存在，最终结果需核实归档，不沿用旧文档“正在运行”的描述。
 
-已有关系表为 `tenants`、`users`、`api_keys`、`audit_logs`；其他逻辑实体不代表已建表。Responses 经前门转换为 canonical 请求，`store` / `previous_response_id` 被明确拒绝。Agent 的 `workflow/` 为占位包，现有模板目录与绑定属于 Gateway，不能按目录名称重复实现。
+已有关系表为 `tenants`、`users`、`api_keys`、`audit_logs`（PostgreSQL/MySQL 双支持）与 `jobs`、`job_artifacts`（仅 MySQL，J03 新增，见下方 P0）；其他逻辑实体不代表已建表。Responses 经前门转换为 canonical 请求，`store` / `previous_response_id` 被明确拒绝。Agent 的 `workflow/` 为占位包，现有模板目录与绑定属于 Gateway，不能按目录名称重复实现。
 
 ## P0：Job 可靠性闭环（下一轮主线）
 
@@ -48,7 +48,7 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 | --- | --- | --- | --- |
 | [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-设计尚未实现)，本项仅完成设计，不含建表与代码 |
 | [x] | J02 | 在 Gateway 增加有界后台状态同步 | 调用方不再轮询/SSE 时也能推进任务；限制扫描批次、并发和频率，处理节点消失、超时和优雅停止——实现见 `httpapi/jobsync.go`，详见 [Gateway README「工作流 Job」第九条](service/aiServeWeaveGateway/README.md#工作流-job) |
-| [ ] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录 |
+| [x] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录——实现见 `internal/store/gormstore/jobmigrate.go` 与 `internal/model/job.go`，详见 [ControlPlane README「Job 持久化契约」的「已实现的存储层」小节](service/aiServeWeaveControlPlane/README.md#已实现的存储层j03)；真实 MySQL 上的验证留给 J08 |
 | [ ] | J04 | 实现控制面内部 Job 读写 API 与 Gateway 客户端 | 服务间鉴权、租户隔离、幂等写入和并发条件更新；重复/乱序事件不能覆盖终态；错误与日志不泄露凭据、Prompt 或工作流 JSON |
 | [ ] | J05 | 处理数据库与 ComfyUI 提交之间的故障窗口 | 覆盖“后端已接收但映射尚未落库”；结果未知时不盲目重提；补写若采用队列须有容量上限与可靠恢复机制，不能仅靠内存重试承诺不丢 |
 | [ ] | J06 | 实现重启恢复与跨 Gateway 副本访问 | 重启后可恢复非终态任务；任一可服务副本可查询、取消和访问产物；保存稳定节点/运行时标识，不序列化连接对象；明确恢复执行权及失联处理 |

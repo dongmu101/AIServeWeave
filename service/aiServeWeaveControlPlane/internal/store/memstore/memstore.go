@@ -38,11 +38,13 @@ import (
 //
 // Store 是内存版 store.Store。零值不可用，请使用 New。
 type Store struct {
-	mu      sync.Mutex
-	tenants map[string]model.Tenant
-	users   map[string]model.User
-	keys    map[string]model.APIKey
-	audit   []model.AuditLog
+	mu        sync.Mutex
+	tenants   map[string]model.Tenant
+	users     map[string]model.User
+	keys      map[string]model.APIKey
+	audit     []model.AuditLog
+	jobs      map[string]model.Job
+	artifacts map[string]model.JobArtifact
 }
 
 // New returns an empty store.
@@ -50,9 +52,11 @@ type Store struct {
 // New 返回一个空的 store。
 func New() *Store {
 	return &Store{
-		tenants: map[string]model.Tenant{},
-		users:   map[string]model.User{},
-		keys:    map[string]model.APIKey{},
+		tenants:   map[string]model.Tenant{},
+		users:     map[string]model.User{},
+		keys:      map[string]model.APIKey{},
+		jobs:      map[string]model.Job{},
+		artifacts: map[string]model.JobArtifact{},
 	}
 }
 
@@ -350,6 +354,124 @@ func (s *Store) ListAudit(_ context.Context, tenantID string, query store.ListQu
 	}
 	sortNewestFirst(out, func(e model.AuditLog) (time.Time, string) { return e.CreatedAt, e.ID })
 	return paginate(out, query, func(e model.AuditLog) (time.Time, string) { return e.CreatedAt, e.ID })
+}
+
+// CreateJob inserts one job, rejecting a duplicate id the way the primary
+// key does.
+//
+// CreateJob 插入一个 job，并像主键那样拒绝重复的 id。
+func (s *Store) CreateJob(_ context.Context, job *model.Job) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.jobs[job.ID]; exists {
+		return store.ErrConflict
+	}
+	stamp(&job.CreatedAt, &job.UpdatedAt)
+	s.jobs[job.ID] = *job
+	return nil
+}
+
+// GetJob reads one job by id, scoped to its tenant.
+//
+// GetJob 按 id 读取一个 job，并限定在其租户范围内。
+func (s *Store) GetJob(_ context.Context, tenantID, id string) (model.Job, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[id]
+	if !ok || job.TenantID != tenantID {
+		return model.Job{}, store.ErrNotFound
+	}
+	return job, nil
+}
+
+// ListJobs reads one tenant's jobs, newest first.
+//
+// ListJobs 读取某个租户的 job，最新的在前。
+func (s *Store) ListJobs(_ context.Context, tenantID string, query store.ListQuery, filter store.JobFilter) (store.Page[model.Job], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.Job
+	for _, job := range s.jobs {
+		if job.TenantID != tenantID {
+			continue
+		}
+		if filter.State != "" && job.State != filter.State {
+			continue
+		}
+		if filter.WorkflowID != "" && job.WorkflowID != filter.WorkflowID {
+			continue
+		}
+		if !filter.Since.IsZero() && job.CreatedAt.Before(filter.Since) {
+			continue
+		}
+		if !filter.Until.IsZero() && !job.CreatedAt.Before(filter.Until) {
+			continue
+		}
+		out = append(out, job)
+	}
+	sortNewestFirst(out, func(j model.Job) (time.Time, string) { return j.CreatedAt, j.ID })
+	return paginate(out, query, func(j model.Job) (time.Time, string) { return j.CreatedAt, j.ID })
+}
+
+// UpdateJobState applies update if it is newer than the job's stored
+// ObservedSeq and the job is not already terminal. See store.Jobs for the
+// full contract.
+//
+// UpdateJobState 在 update 比该 job 已存储的 ObservedSeq 更新、且该 job 尚未处于
+// 终态时应用它。完整契约见 store.Jobs。
+func (s *Store) UpdateJobState(_ context.Context, tenantID, id string, update store.JobStateUpdate) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	job, ok := s.jobs[id]
+	if !ok || job.TenantID != tenantID {
+		return false, store.ErrNotFound
+	}
+	if job.Terminal() || update.ObservedSeq <= job.ObservedSeq {
+		return false, nil
+	}
+	job.State = update.State
+	job.ErrorSummary = update.ErrorSummary
+	job.ObservedSeq = update.ObservedSeq
+	job.UpdatedAt = update.At
+	if job.Terminal() {
+		terminalAt := update.At
+		job.TerminalAt = &terminalAt
+	}
+	s.jobs[id] = job
+	return true, nil
+}
+
+// CreateJobArtifact inserts one artifact record, rejecting a duplicate id
+// the way the primary key does.
+//
+// CreateJobArtifact 插入一个产物记录，并像主键那样拒绝重复的 id。
+func (s *Store) CreateJobArtifact(_ context.Context, artifact *model.JobArtifact) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.artifacts[artifact.ID]; exists {
+		return store.ErrConflict
+	}
+	if artifact.CreatedAt.IsZero() {
+		artifact.CreatedAt = time.Now()
+	}
+	s.artifacts[artifact.ID] = *artifact
+	return nil
+}
+
+// ListJobArtifacts reads one job's artifacts, scoped to its tenant.
+//
+// ListJobArtifacts 读取一个 job 的产物，并限定在其租户范围内。
+func (s *Store) ListJobArtifacts(_ context.Context, tenantID, jobID string) ([]model.JobArtifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.JobArtifact
+	for _, artifact := range s.artifacts {
+		if artifact.JobID == jobID && artifact.TenantID == tenantID {
+			out = append(out, artifact)
+		}
+	}
+	sortNewestFirst(out, func(a model.JobArtifact) (time.Time, string) { return a.CreatedAt, a.ID })
+	return out, nil
 }
 
 // sortNewestFirst orders rows the way every list in this package is read:

@@ -80,6 +80,27 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		if err := st.Migrate(ctx); err != nil {
 			return nil, errors.Join(errors.New("running the schema migration"), err)
 		}
+		// The jobs/job_artifacts migration is separate from the AutoMigrate
+		// call above and MySQL-only, per STATUS.md's J03 and the gormstore
+		// package doc on jobMigrationsFS. It shares the AutoMigrate flag
+		// rather than getting one of its own: both are "alter my schema at
+		// startup", and a deployment that already opted into that for the
+		// first four tables has made the same call for these two. A
+		// PostgreSQL deployment simply does not get Job persistence yet —
+		// that is a true gap, not a silently skipped feature, and it is
+		// named in the ControlPlane README.
+		//
+		// jobs/job_artifacts 的迁移与上面的 AutoMigrate 调用分开，且仅限 MySQL，
+		// 对应 STATUS.md 的 J03 与 gormstore 包里 jobMigrationsFS 的文档注释。
+		// 它复用 AutoMigrate 这一个开关，而不是另设一个：两者都是「启动时改动我的
+		// schema」，一个已经为前四张表选择了这一点的部署，对这两张表也做出了
+		// 同样的选择。一个 PostgreSQL 部署此刻确实还得不到 Job 持久化——这是一个
+		// 真实的缺口，不是被悄悄跳过的功能，且已在 ControlPlane README 里点名。
+		if cfg.Database.Driver == config.DriverMySQL {
+			if _, err := st.MigrateJobs(ctx); err != nil {
+				return nil, errors.Join(errors.New("running the jobs schema migration"), err)
+			}
+		}
 	}
 
 	verifications := cache.New(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.Redis.TTL)
