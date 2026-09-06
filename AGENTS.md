@@ -28,7 +28,7 @@
 | `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）均已落地；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）与 `GatewayDirectory`（副本名册）已落地，详见其 README |
 | `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户、用户、API Key、审计已落地；配额未做。详见其 README |
-| `service/aiServeWeaveConsole/` | 尚无代码（前端） |
+| `service/aiServeWeaveConsole/` | 前端脚手架已就位（Next.js 16 + React 19 + Tailwind 4 + shadcn/ui + TanStack Table + ECharts），尚无业务页面。TypeScript 走 6/7 双版本并存，见其 [AGENTS.md](service/aiServeWeaveConsole/AGENTS.md) |
 
 动手前先确认目标服务是否已有实现，不要在骨架服务里凭空假设已有的包。
 

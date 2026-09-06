@@ -621,7 +621,7 @@ AIServeWeave/
     ├── aiServeWeaveControlPlane/  # 控制面 Admin API，租户/用户/API Key/审计已落地
     │   ├── internal/           # model、store、logic、token、cache、handler、svc
     │   └── e2e/                # 真实 HTTP + Gateway 真实客户端的闭环测试
-    └── aiServeWeaveConsole/       # 尚未开始（前端）
+    └── aiServeWeaveConsole/       # 前端脚手架（Next.js + shadcn/ui），尚无业务页面
 ```
 
 `Dockerfile` 在仓库根，由 `SERVICE` build-arg 选择三个二进制中的一个。
@@ -764,5 +764,5 @@ ComfyUI 接入应同时验证一条异步生成链路：
 4. 熔断阈值（`FailureThreshold`/`BaseCooldown`/`MaxCooldown`）需要真实流量数据校准。熔断状态现在有指标了（`gateway_scheduler_breaker_open` / `_trips_total`），校准所需的观测手段已经就位，缺的是真实流量。
 5. Registry 的指标端点：`common/metrics` 已经就位，缺的是 Registry 自己的目录与记录点。
 6. 配额、并发与速率限制（第二阶段清单第 3 项）：控制面已经把 `Identity`（租户 + key）放到 Gateway 的请求 context 上了，那就是接入点。
-7. Console 前端：`aiServeWeaveConsole` 仍是空目录。Admin API 已经可用，缺的是页面。
+7. Console 前端：技术选型已定并落地——Next.js 16（App Router）+ React 19 + Tailwind 4 + shadcn/ui，表格用 TanStack Table + TanStack Virtual，图表用 ECharts。Admin API 已经可用，缺的是业务页面。
 8. OpenTelemetry：第二阶段清单的另一半。`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器，但真正缺的是 trace——`request_id` 已经贯穿全链路日志，把它接成 span 是独立的一步。
