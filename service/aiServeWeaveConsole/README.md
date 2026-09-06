@@ -160,11 +160,24 @@ pnpm build
 pnpm start
 ```
 
-这只启动 Console；现有 [deploy](../../deploy/README.md) 编排不包含 Console。生产部署需要：
+这只启动 Console。使用 Docker 时，[deploy](../../deploy/README.md) 已包含 `console` 服务，
+会通过容器网络连接控制面；从仓库根目录也可单独构建镜像：
 
-- 设置 `AISW_CONSOLE_SESSION_SECRET`（至少 32 字符，未设置会直接启动失败）与 `AISW_CONSOLE_CONTROL_PLANE_URL`。
-- 在 HTTPS 之后运行，否则 Secure Cookie 不会被浏览器保存。
+```bash
+docker build -t aisw-console ./service/aiServeWeaveConsole
+```
+
+镜像使用 Node.js 24、项目指定的 pnpm 与冻结锁文件构建，启用 `output: "standalone"`，
+以非 root 用户执行 `node server.js`。静态资源随镜像发布，`.env*`、本地依赖和构建产物
+由 `.dockerignore` 排除；会话密钥和上游地址在运行时注入。
+
+生产部署需要：
+
+- 设置 `AISW_CONSOLE_SESSION_SECRET`（至少 32 字符，未设置时首次需要配置的请求会失败；Compose 会在启动前检查是否为空）与 `AISW_CONSOLE_CONTROL_PLANE_URL`。
+- 在 HTTPS 之后运行并启用 Secure Cookie；Compose 为本地回环 HTTP 默认设置 `AISW_CONSOLE_COOKIE_SECURE=false`，对外 HTTPS 部署需改为 `true`。
 - 反向代理原样透传 `Host`，否则写操作的同源检查会全部拒绝。
+
+初始密码不限制长度或字符，可以留空；创建用户和登录时都按原值提交。此规则只适用于用户密码，部署会话密钥仍按独立配置要求设置。
 
 ## 开发约定
 

@@ -26,11 +26,6 @@ import {
 } from "@/components/ui/select";
 import { parseUser, ROLE_LABELS, type Role } from "@/lib/console/contract";
 import { ApiError, describe } from "@/lib/console/errors";
-import {
-  MAX_PASSWORD_BYTES,
-  MIN_PASSWORD_BYTES,
-  passwordProblem,
-} from "@/lib/console/format";
 import { assignableRoles } from "@/lib/console/permissions";
 
 /**
@@ -72,18 +67,6 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
       setError("请填写邮箱。");
       return;
     }
-    // The byte rule is checked here so the person is told the real limit
-    // before a round trip, not answered 400 with a message this Console would
-    // refuse to render anyway.
-    //
-    // 字节规则在这里检查，好让当事人在一次往返之前就知道真正的限制，而不是收到一个
-    // 400——何况本 Console 本来也不会渲染它的文案。
-    const problem = passwordProblem(password);
-    if (problem) {
-      setError(problem);
-      return;
-    }
-
     setPending(true);
     setError(null);
     try {
@@ -169,13 +152,12 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
               id="new-user-password"
               type="password"
               autoComplete="new-password"
-              required
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               disabled={pending}
             />
             <p className="text-xs text-muted-foreground">
-              {MIN_PASSWORD_BYTES}–{MAX_PASSWORD_BYTES} 个字节（一个中文字符按 3 字节计）。
+              不限制长度或字符，可以留空。
             </p>
           </div>
 

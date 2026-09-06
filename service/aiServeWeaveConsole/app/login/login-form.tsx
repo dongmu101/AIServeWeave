@@ -77,7 +77,6 @@ export function LoginForm({ next }: { next: string }) {
           name="password"
           type="password"
           autoComplete="current-password"
-          required
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           disabled={pending}
@@ -88,8 +87,7 @@ export function LoginForm({ next }: { next: string }) {
         登录
       </SubmitButton>
       <p className="text-xs text-muted-foreground">
-        登录状态保存在仅服务端可读的会话 Cookie 中，有效期由控制面签发的令牌决定；
-        当前没有自动续期，令牌到期后需要重新登录。
+        忘记密码或尚未获得账号，请联系部署管理员。
       </p>
     </form>
   );

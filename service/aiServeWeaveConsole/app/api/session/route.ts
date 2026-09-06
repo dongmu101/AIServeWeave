@@ -144,7 +144,7 @@ function credentialsFrom(
   if (typeof email !== "string" || typeof password !== "string") {
     return null;
   }
-  if (email === "" || password === "") {
+  if (email === "") {
     return null;
   }
   return { email, password };

@@ -139,13 +139,12 @@ func TestCreateUserValidation(t *testing.T) {
 	}{
 		{name: "valid", email: "a@example.com", password: testPassword, role: model.RoleMember},
 		{name: "empty email", email: "  ", password: testPassword, role: model.RoleMember, wantErr: logic.ErrInvalidInput},
-		{name: "short password", email: "b@example.com", password: "short", role: model.RoleMember, wantErr: logic.ErrInvalidInput},
+		{name: "short password", email: "b@example.com", password: "short", role: model.RoleMember},
 		{
 			name:     "password past bcrypt's truncation point",
 			email:    "c@example.com",
 			password: strings.Repeat("x", 73),
 			role:     model.RoleMember,
-			wantErr:  logic.ErrInvalidInput,
 		},
 		{name: "unknown role", email: "d@example.com", password: testPassword, role: "superuser", wantErr: logic.ErrInvalidInput},
 		{name: "duplicate email", email: "owner@example.com", password: testPassword, role: model.RoleMember, wantErr: logic.ErrConflict},

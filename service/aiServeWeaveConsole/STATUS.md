@@ -104,7 +104,7 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26 实时部分已完成（见各节
 ### 用户
 
 - [x] **C08 用户列表**：展示名称、邮箱、角色、状态、最近登录与创建时间；当前接口是全量数组，本地筛选和排序明确只作用于已加载数据。
-- [x] **C09 创建用户**：仅 owner 显示创建入口，字段使用 `email/password/name/role`；角色值对齐 `owner/admin/member`，默认选择 member。密码长度校验与后端的 UTF-8 字节限制一致（12–72 字节），创建后清空密码并刷新列表。
+- [x] **C09 创建用户**：仅 owner 显示创建入口，字段使用 `email/password/name/role`；角色值对齐 `owner/admin/member`，默认选择 member。初始密码不限制长度、字符或非空，创建后清空密码并刷新列表。
 - [x] **C10 用户权限反馈**：admin/member 只读；处理邮箱冲突和创建失败；没有后端接口的编辑、删除、禁用、重置密码操作不开放。
 
 **验收**：owner 创建用户后，新用户可以登录且属于同一租户；admin/member 无创建入口，绕过页面直接提交仍被后端拒绝；错误不泄露密码。
@@ -130,10 +130,10 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26 实时部分已完成（见各节
 
 | 任务 | 落点 |
 | --- | --- |
-| C08–C10 | `app/console/users/page.tsx`（服务端取角色）、`users-view.tsx`（列表与本地筛选）、`create-user-dialog.tsx`（仅 owner 可见，密码按 UTF-8 字节校验） |
+| C08–C10 | `app/console/users/page.tsx`（服务端取角色）、`users-view.tsx`（列表与本地筛选）、`create-user-dialog.tsx`（仅 owner 可见，密码原样提交） |
 | C11–C14 | `app/console/keys/page.tsx`、`keys-view.tsx`（状态列由 `apiKeyState` 计算，吊销确认含网关缓存说明）、`create-key-dialog.tsx`（TTL 选项与一次性明文对话框） |
 | C15–C17 | `app/console/audit/page.tsx`、`audit-view.tsx`（TanStack Table + Virtual，条数选择器，范围说明与非原子写入说明） |
-| 共享 | `lib/console/permissions.ts`（角色矩阵，单一来源）、`lib/console/format.ts`（时间、Key 状态、TTL、密码字节、本地筛选）、`components/console/use-resource.ts`（加载/空/失败三态，失败不退化为空数组） |
+| 共享 | `lib/console/permissions.ts`（角色矩阵，单一来源）、`lib/console/format.ts`（时间、Key 状态、TTL、本地筛选）、`components/console/use-resource.ts`（加载/空/失败三态，失败不退化为空数组） |
 
 **验收结果（2026-09-06）**：门禁 `pnpm lint`、`pnpm typecheck`、`pnpm test`（38 用例）、`pnpm build` 全部通过。随后以 **真实控制面 + 真实 PostgreSQL 17**（Docker，Redis 关闭）而非 Mock 联调，两个租户（Acme、Globex）、三种角色：
 
@@ -268,9 +268,25 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 
 ## 测试、文档与交付门禁
 
-- [x] **Q01 测试基础（M1）**：选用 Node 24 内置的 `node:test` + `node:assert/strict`，**没有新增任何依赖**（理由与两条使用约束见 [AGENTS.md](AGENTS.md)）；脚本为 `pnpm test`，当前 47 个表驱动用例覆盖契约解析（含一次性 Key）、会话密封与过期、转发白名单、来源校验、请求层重试与错误分类、角色矩阵、Key 状态与密码字节规则。`fetch` 与 `sleep` 通过参数注入，过期判定用注入的时间，不依赖真实网络、控制面或 `sleep`。
+密码策略变更：已取消初始密码的长度、字符与非空限制，创建租户、创建用户和登录保持一致；
+长密码完整参与校验，旧 bcrypt 账号继续兼容。已更新运行中的控制面与 Console，并在真实
+部署验证短密码、空密码和长密码的创建与登录、错误密码拒绝以及原账号登录；临时测试账号
+已清理。Console lint、类型检查、68 个测试、镜像构建，以及 Go vet/build/test/race 通过。
+本机 `go generate ./api/...` 因 protoc 7.35.0 与仓库记录的 7.34.1 不同，只产生版本注释差异；
+生成文件已恢复，未将无关变更纳入本次修改。
+
+部署补充：`deploy/docker-compose.yaml` 已包含 `console` 服务，使用本目录的独立 Dockerfile
+构建 Next.js standalone 镜像。会话密钥在运行时注入，本地入口默认 `127.0.0.1:3000`；
+升级已有部署时需补充 `AISW_CONSOLE_SESSION_SECRET`。完整配置及 HTTPS 要求见
+[部署说明](../../deploy/README.md)。
+
+部署验证：Compose 配置解析、缺少密钥时拒绝启动、Console 镜像构建均通过；临时隔离容器
+验证了非 root 运行、登录页、静态资源、HttpOnly Cookie 与认证请求转发。容器内使用测试
+控制面，未启动现有 Compose 部署；Console 的 lint、类型检查与 69 个单元测试通过。
+
+- [x] **Q01 测试基础（M1）**：选用 Node 24 内置的 `node:test` + `node:assert/strict`，**没有新增任何依赖**（理由与两条使用约束见 [AGENTS.md](AGENTS.md)）；脚本为 `pnpm test`，当前 47 个表驱动用例覆盖契约解析（含一次性 Key）、会话密封与过期、转发白名单、来源校验、请求层重试与错误分类、角色矩阵、Key 状态与密码创建与登录回环。`fetch` 与 `sleep` 通过参数注入，过期判定用注入的时间，不依赖真实网络、控制面或 `sleep`。
 - [x] **Q02 契约与关键流程（随 M1–M3）**：覆盖登录失效、跨租户切换、角色矩阵、一次性 Key、`204`、失败重试、配额零值/缺省字段、分页响应乱序；测试数据与当前 Go 请求响应一致。
-  - Console 47 个用例覆盖：登录失效与 401 转登录、跨租户隔离、角色矩阵、一次性 Key 与 `display` 前缀关系、`204`、读重试与写不重试、配额零值与 `omitempty` 缺省字段（`limits: {}`）、列表信封与 `next_cursor` 的四种取值、游标历史上界、查询参数构造、密码字节规则、Key 过期与吊销状态。
+  - Console 47 个用例覆盖：登录失效与 401 转登录、跨租户隔离、角色矩阵、一次性 Key 与 `display` 前缀关系、`204`、读重试与写不重试、配额零值与 `omitempty` 缺省字段（`limits: {}`）、列表信封与 `next_cursor` 的四种取值、游标历史上界、查询参数构造、密码创建与登录回环、Key 过期与吊销状态。
   - 控制面新增 Go 用例覆盖：同一时刻写入行的全序分页（不重不漏）、翻页途中并发写入不影响后续页、单页上限与默认值、无效游标、三类筛选与租户隔离、颠倒/空时间窗、未知角色筛选、配额读写回环。
   - 「分页响应乱序」在浏览器中验证：逐字符快速输入筛选词时旧请求被取消，页面只呈现最终查询的结果（见 M3 验收记录）。
 

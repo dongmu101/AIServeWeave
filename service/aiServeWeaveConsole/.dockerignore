@@ -1,0 +1,15 @@
+# Keep local dependencies, build output and credentials out of the context.
+# 本地依赖、构建产物与凭据不进入构建上下文。
+node_modules
+.next
+out
+build
+coverage
+.env*
+*.pem
+*.key
+*.tsbuildinfo
+next-env.d.ts
+*.log
+.git
+.DS_Store

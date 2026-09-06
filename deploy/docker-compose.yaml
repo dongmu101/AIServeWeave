@@ -1,4 +1,5 @@
-# 一套可以跑起来的 AIServeWeave：依赖服务、Registry、控制面与 Gateway。
+# A runnable AIServeWeave includes Console alongside its backend services.
+# 一套可以跑起来的 AIServeWeave：Console、依赖服务、Registry、控制面与 Gateway。
 #
 # Agent 刻意不在这里：它的工作是连本机上已经跑着的 Ollama / vLLM / ComfyUI，
 # 而把它塞进容器只会在它与那些后端之间多一层网络。用法见下面的注释。
@@ -6,7 +7,7 @@
 # 起步：
 #
 #   cd deploy
-#   cp .env.example .env && $EDITOR .env      # 三个密钥，各自独立生成
+#   cp .env.example .env && $EDITOR .env      # four independent secrets / 四个独立密钥
 #   docker compose up -d
 #
 # 证书链：Registry 首次启动时生成自己的 CA，Gateway 的隧道证书由它签发
@@ -14,7 +15,7 @@
 # tunnel/identity.go 的信任模型：Agent 只信任 Registry 的 CA。
 #
 # A runnable AIServeWeave: the dependencies, the Registry, the control plane
-# and the Gateway.
+# and the Gateway, with the Console UI.
 #
 # The Agent is deliberately absent. Its job is to reach the Ollama / vLLM /
 # ComfyUI already running on a machine, and putting it in a container only adds
@@ -24,7 +25,7 @@
 # Getting started:
 #
 #   cd deploy
-#   cp .env.example .env && $EDITOR .env      # three secrets, generated separately
+#   cp .env.example .env && $EDITOR .env      # four independent secrets / 四个独立密钥
 #   docker compose up -d
 #
 # The certificate chain: the Registry generates its own CA on first start, and
@@ -176,6 +177,30 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+
+  console:
+    build:
+      context: ../service/aiServeWeaveConsole
+    restart: unless-stopped
+    environment:
+      AISW_CONSOLE_CONTROL_PLANE_URL: http://controlplane:8090
+      AISW_CONSOLE_SESSION_SECRET: ${AISW_CONSOLE_SESSION_SECRET:?set it in deploy/.env — openssl rand -base64 48}
+      # Local Compose uses HTTP on loopback. Enable Secure cookies behind HTTPS.
+      # 本地 Compose 使用回环 HTTP；部署在 HTTPS 之后时启用 Secure Cookie。
+      AISW_CONSOLE_COOKIE_SECURE: ${AISW_CONSOLE_COOKIE_SECURE:-false}
+    ports:
+      - "127.0.0.1:${CONSOLE_PORT:-3000}:3000"
+    depends_on:
+      controlplane:
+        condition: service_started
+    healthcheck:
+      # Check the UI without credentials; backend availability is independent.
+      # 无凭据检查 UI，后端可用性独立判断。
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
 
   gateway:
     build:

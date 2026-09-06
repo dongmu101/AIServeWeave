@@ -139,48 +139,6 @@ export function ttlSeconds(choice: string): number | null {
 }
 
 /**
- * passwordByteLength measures a password the way the control plane does.
- *
- * The rule there is 12 to 72 *bytes*, not characters, because bcrypt truncates
- * past 72 bytes. A form counting characters would accept a 24-character
- * Chinese passphrase — 72 bytes in UTF-8 — and then be told 400 by the server,
- * or worse, accept 30 characters and have the tail silently ignored.
- *
- * passwordByteLength 按控制面的方式度量一个密码。
- *
- * 那边的规则是 12 到 72 个**字节**而不是字符，因为 bcrypt 会截断超过 72 字节的部分。
- * 一个按字符计数的表单会接受一个 24 字符的中文口令——在 UTF-8 下正好 72 字节——然后被
- * 服务端答以 400；更糟的情况是接受 30 个字符，而尾部被静默忽略。
- */
-export function passwordByteLength(password: string): number {
-  return new TextEncoder().encode(password).length;
-}
-
-/** MIN_PASSWORD_BYTES and MAX_PASSWORD_BYTES mirror logic.validatePassword.
- *
- * MIN_PASSWORD_BYTES 与 MAX_PASSWORD_BYTES 镜像 logic.validatePassword。 */
-export const MIN_PASSWORD_BYTES = 12;
-export const MAX_PASSWORD_BYTES = 72;
-
-/**
- * passwordProblem returns why a password would be refused, or null when it
- * would not. It checks length only, which is the whole of the server's rule.
- *
- * passwordProblem 返回一个密码会被拒绝的原因，不会被拒绝时返回 null。它只检查长度，
- * 而那就是服务端规则的全部。
- */
-export function passwordProblem(password: string): string | null {
-  const bytes = passwordByteLength(password);
-  if (bytes < MIN_PASSWORD_BYTES) {
-    return `密码至少 ${MIN_PASSWORD_BYTES} 个字节，当前 ${bytes} 个（中文字符按 3 字节计）。`;
-  }
-  if (bytes > MAX_PASSWORD_BYTES) {
-    return `密码最多 ${MAX_PASSWORD_BYTES} 个字节，当前 ${bytes} 个（中文字符按 3 字节计）。`;
-  }
-  return null;
-}
-
-/**
  * matchesQuery reports whether a row's searchable fields contain the query.
  *
  * It is deliberately dumb — a case-insensitive substring over fields the view

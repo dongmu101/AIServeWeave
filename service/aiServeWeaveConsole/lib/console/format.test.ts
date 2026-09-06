@@ -10,8 +10,6 @@ import {
   limitProblem,
   observationAge,
   matchesQuery,
-  passwordByteLength,
-  passwordProblem,
   TTL_CHOICES,
   ttlSeconds,
   UNKNOWN_TIME,
@@ -93,35 +91,6 @@ test("every TTL choice is explicit, and never is the API's negative value", () =
     assert.ok(
       choice.seconds <= 365 * 24 * 60 * 60,
       `${choice.value}: the control plane refuses more than MaxKeyLifetime`
-    );
-  }
-});
-
-test("a password is measured in bytes, the way bcrypt sees it", () => {
-  const cases: { name: string; password: string; bytes: number; ok: boolean }[] = [
-    { name: "eleven ascii characters", password: "a".repeat(11), bytes: 11, ok: false },
-    { name: "twelve ascii characters", password: "a".repeat(12), bytes: 12, ok: true },
-    { name: "seventy-two ascii characters", password: "a".repeat(72), bytes: 72, ok: true },
-    { name: "seventy-three ascii characters", password: "a".repeat(73), bytes: 73, ok: false },
-    // Four Chinese characters are twelve bytes: long enough by the server's
-    // rule, and rejected by any form that counted characters.
-    //
-    // 四个中文字符是十二字节：按服务端的规则已经够长，而任何按字符计数的表单都会拒绝它。
-    { name: "four chinese characters", password: "密码口令", bytes: 12, ok: true },
-    { name: "three chinese characters", password: "密码口", bytes: 9, ok: false },
-    // Twenty-five Chinese characters are seventy-five bytes: short enough by
-    // character count, and silently truncated by bcrypt.
-    //
-    // 二十五个中文字符是七十五字节：按字符数看很短，却会被 bcrypt 静默截断。
-    { name: "twenty-five chinese characters", password: "密".repeat(25), bytes: 75, ok: false },
-  ];
-
-  for (const item of cases) {
-    assert.equal(passwordByteLength(item.password), item.bytes, `${item.name}: bytes`);
-    assert.equal(
-      passwordProblem(item.password) === null,
-      item.ok,
-      `${item.name}: accepted?`
     );
   }
 });

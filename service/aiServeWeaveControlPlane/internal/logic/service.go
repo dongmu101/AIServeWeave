@@ -174,9 +174,6 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 	if name == "" || ownerEmail == "" {
 		return model.Tenant{}, model.User{}, ErrInvalidInput
 	}
-	if err := validatePassword(ownerPassword); err != nil {
-		return model.Tenant{}, model.User{}, err
-	}
 
 	now := s.clock.Now()
 	tenant := model.Tenant{
@@ -252,9 +249,6 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, email, password, 
 	if email == "" {
 		return model.User{}, ErrInvalidInput
 	}
-	if err := validatePassword(password); err != nil {
-		return model.User{}, err
-	}
 
 	user, err := s.createUser(ctx, actor.TenantID, email, password, name, role, s.clock.Now())
 	if err != nil {
@@ -268,7 +262,7 @@ func (s *Service) CreateUser(ctx context.Context, actor Actor, email, password, 
 //
 // createUser 是共用的插入路径。它绝不记录或返回密码。
 func (s *Service) createUser(ctx context.Context, tenantID, email, password, name, role string, now time.Time) (model.User, error) {
-	digest, err := bcrypt.GenerateFromPassword([]byte(password), bcryptCost)
+	digest, err := hashPassword(password)
 	if err != nil {
 		return model.User{}, err
 	}
@@ -276,7 +270,7 @@ func (s *Service) createUser(ctx context.Context, tenantID, email, password, nam
 		ID:           model.NewID(model.PrefixUser),
 		TenantID:     tenantID,
 		Email:        email,
-		PasswordHash: string(digest),
+		PasswordHash: digest,
 		Name:         name,
 		Role:         role,
 		Status:       model.StatusActive,
@@ -328,7 +322,7 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip string) 
 	if digest == "" {
 		digest = dummyDigest
 	}
-	compareErr := bcrypt.CompareHashAndPassword([]byte(digest), []byte(password))
+	compareErr := comparePassword(digest, password)
 	if err != nil || compareErr != nil || user.Status != model.StatusActive {
 		return model.User{}, ErrInvalidCredentials
 	}
@@ -428,32 +422,6 @@ func translate(err error) error {
 // normalizeEmail 转小写并去除空白，这样一个人就不能持有两个仅大小写不同的账户。
 func normalizeEmail(email string) string {
 	return strings.ToLower(strings.TrimSpace(email))
-}
-
-// minPasswordLen is the only password rule enforced here. Composition rules —
-// a digit, a symbol, mixed case — push people toward predictable substitutions
-// and are not what makes a password hard to guess; length is.
-//
-// minPasswordLen 是这里唯一强制的密码规则。组成规则——必须有数字、符号、大小写混合
-// ——只会把人推向可预测的替换写法，并不是让密码难猜的原因；长度才是。
-const minPasswordLen = 12
-
-func validatePassword(password string) error {
-	if len(password) < minPasswordLen {
-		return ErrInvalidInput
-	}
-	// bcrypt silently truncates past 72 bytes, so a longer password would be
-	// accepted while only its first 72 bytes matter — a caller who believes
-	// their 100-character passphrase is fully checked deserves to be told
-	// otherwise rather than quietly humored.
-	//
-	// bcrypt 会静默截断超过 72 字节的部分，因此更长的密码虽然会被接受，但只有前 72
-	// 字节起作用——一个以为自己 100 字符口令被完整校验的调用方，应当被明确告知，而
-	// 不是被悄悄敷衍过去。
-	if len(password) > 72 {
-		return ErrInvalidInput
-	}
-	return nil
 }
 
 func validRole(role string) bool {

@@ -221,11 +221,18 @@ test("sign-in posts to the session route and returns only the rendered identity"
   });
 });
 
-test("a rejected sign-in is unauthorized, and a token in the response is never returned", async () => {
+test("a rejected sign-in reports invalid credentials, and never exposes a token", async () => {
   const fake = recorder([json(401, { error: "invalid_credentials" })]);
   await assert.rejects(
     signIn("owner@example.com", "wrong", fake.deps),
-    (error: unknown) => error instanceof ApiError && error.kind === "unauthorized"
+    (error: unknown) => {
+      assert.ok(error instanceof ApiError);
+      assert.equal(error.kind, "invalid_credentials");
+      assert.equal(error.status, 401);
+      assert.match(error.message, /邮箱或密码/);
+      assert.doesNotMatch(error.message, /已失效/);
+      return true;
+    }
   );
 
   const withToken = recorder([

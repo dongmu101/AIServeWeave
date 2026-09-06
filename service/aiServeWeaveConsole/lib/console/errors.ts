@@ -7,6 +7,7 @@
  * 界面只根据 kind 决定展示什么，因此上游新增的报错文本永远不会变成屏幕上的新文案。
  */
 export type ApiErrorKind =
+  | "invalid_credentials"
   | "unauthorized"
   | "forbidden"
   | "not_found"
@@ -27,6 +28,7 @@ export type ApiErrorKind =
  * 可能点出内部实现，而本仓库把泄漏它当作缺陷而非措辞问题。
  */
 const MESSAGES: Record<ApiErrorKind, string> = {
+  invalid_credentials: "邮箱或密码不正确，请检查后重试。",
   unauthorized: "登录状态已失效，请重新登录。",
   forbidden: "当前角色没有执行该操作的权限。",
   not_found: "目标不存在，或不属于当前租户。",

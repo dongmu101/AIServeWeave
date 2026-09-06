@@ -11,3 +11,8 @@ deploy/certs
 *.md
 **/testdata
 **/*_test.go
+# Exclude Console dependencies, build output and environment files from Go builds.
+# Go 构建同样排除 Console 依赖、构建产物与环境配置文件。
+**/node_modules
+**/.next
+**/.env*

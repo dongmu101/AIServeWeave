@@ -34,7 +34,7 @@ export default async function LoginPage({
             AIServeWeave 控制台
           </h1>
           <p className="text-sm text-muted-foreground">
-            使用租户内的账号登录。租户与首个 owner 由运维引导创建。
+            使用管理员提供的邮箱和密码登录。
           </p>
         </div>
         <LoginForm next={target} />

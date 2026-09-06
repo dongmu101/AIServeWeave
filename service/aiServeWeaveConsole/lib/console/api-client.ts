@@ -152,7 +152,12 @@ export async function signIn(
     undefined
   );
   if (!response.ok) {
-    throw new ApiError(kindForStatus(response.status), response.status);
+    // A rejected login means invalid credentials, not an expired session.
+    // 登录被拒绝表示凭据不正确，不表示已有会话过期。
+    throw new ApiError(
+      response.status === 401 ? "invalid_credentials" : kindForStatus(response.status),
+      response.status
+    );
   }
   return parseSessionUser(await readJson(response));
 }

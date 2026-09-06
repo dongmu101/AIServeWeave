@@ -1,0 +1,5 @@
+# Keep deployment credentials local; commit only the example configuration.
+# 部署凭据仅保留在本地，只提交示例配置。
+.env
+.env.*
+!.env.example
