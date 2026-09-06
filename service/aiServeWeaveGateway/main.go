@@ -6,7 +6,9 @@
 // authenticated TLS and tracks what each connected node can serve, and it
 // binds an HTTP listener serving GET /v1/models, POST /v1/chat/completions
 // (streaming and non-streaming) and POST /v1/embeddings, dispatching through
-// a scheduler.Scheduler over that same tunnel state.
+// a scheduler.Scheduler over that same tunnel state. The same listener also
+// serves GET /docs (a vendored Swagger UI) and GET /openapi.yaml, unauthenticated,
+// describing every route this binary and the operator listener expose.
 package main
 
 import (
@@ -185,7 +187,19 @@ func run() error {
 		Workflows: workflows,
 		Limiter:   limiter,
 	})
-	httpServer := &http.Server{Addr: *addr, Handler: front}
+
+	// The docs routes are registered on a mux that wraps front rather than
+	// inside httpapi: they describe the API and answer to nobody, so they
+	// must not sit behind the API key check front's own routes require.
+	//
+	// 文档路由注册在包着 front 的 mux 上，而不是 httpapi 内部：它们描述的是这个 API、
+	// 不对任何人认证，因此不能落在 front 自己那些路由所要求的 API Key 校验之后。
+	topMux := http.NewServeMux()
+	if err := mountDocs(topMux); err != nil {
+		return err
+	}
+	topMux.Handle("/", front)
+	httpServer := &http.Server{Addr: *addr, Handler: topMux}
 	httpServeErr := make(chan error, 1)
 	go func() { httpServeErr <- httpServer.ListenAndServe() }()
 	logger.Info("gateway started", slog.String("addr", *addr), slog.String("replica_id", id))

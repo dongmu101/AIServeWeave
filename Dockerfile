@@ -38,7 +38,22 @@ FROM alpine:3.22
 #
 # ca-certificates 用于出站 TLS——真实部署中 Gateway 通过 HTTPS 调用控制面。隧道自身的
 # 信任来自 Registry 的 CA，那是挂载进来的，不是打进镜像的。
-RUN apk add --no-cache ca-certificates && adduser -D -u 10001 aisw
+
+# /data is only the Registry's, for its CA and issued certificates
+# (-data-dir), but it costs nothing to create in the other two images. It has
+# to exist here, owned by aisw, rather than being created by the entrypoint at
+# runtime: a fresh named volume mounted over an empty path in the image comes
+# out owned by root, and USER below means the process can never be root to fix
+# that itself. Docker seeds a new volume's ownership from the image directory
+# it is mounted over, which is what this line is for.
+#
+# /data 只属于 Registry，装它的 CA 与签发的证书（-data-dir），但在另外两个镜像里建它
+# 不费什么代价。它必须在这里建好、属主是 aisw，而不是留给运行时的入口进程去建：一个全新
+# 的具名卷挂载到镜像里一个空路径上时，落地的属主是 root，而下面的 USER 意味着进程永远
+# 不可能是 root 去自己修正这一点。Docker 用镜像里被挂载路径的属主来初始化一个新卷，这
+# 一行就是为了让它能提供这个属主。
+RUN apk add --no-cache ca-certificates && adduser -D -u 10001 aisw && \
+    mkdir -p /data && chown aisw:aisw /data
 USER aisw
 COPY --from=build /out/service /usr/local/bin/service
 ENTRYPOINT ["/usr/local/bin/service"]

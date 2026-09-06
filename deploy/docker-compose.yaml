@@ -178,6 +178,79 @@ services:
       redis:
         condition: service_healthy
 
+  # bootstrap runs once and exits: if AISW_DEFAULT_OWNER_EMAIL is set, it waits
+  # for controlplane to accept connections and then creates that tenant and
+  # owner, the same call the "第一个租户与第一个 key" section of the README
+  # walks through by hand. Left unset, it prints one line and exits 0 — this
+  # is opt-in, and a fresh clone with an unedited .env creates nothing.
+  #
+  # A second run (a restart, or `docker compose up` again) finds the account
+  # already exists (the control plane answers 409) and exits 0 without
+  # touching it — recreating this container is not a way to reset the
+  # password, only `docker compose exec controlplane ...` or the Console
+  # itself can do that.
+  #
+  # bootstrap 跑一次就退出：如果设置了 AISW_DEFAULT_OWNER_EMAIL，它会等 controlplane
+  # 能接受连接后创建那个租户与 owner，与 README「第一个租户与第一个 key」一节手动走的是
+  # 同一个调用。不设置则打一行日志、退出 0——这是可选的，一份没改过 .env 的全新 clone
+  # 不会自动创建任何东西。
+  #
+  # 再次运行（重启，或再来一次 `docker compose up`）会发现账号已存在（控制面答 409），
+  # 什么也不碰就退出 0——重建这个容器不是重置密码的办法，只有 `docker compose exec
+  # controlplane ...` 或 Console 自己能做到。
+  bootstrap:
+    image: curlimages/curl:8.11.1
+    restart: "no"
+    environment:
+      AISW_BOOTSTRAP_TOKEN: ${AISW_BOOTSTRAP_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_DEFAULT_TENANT_NAME: ${AISW_DEFAULT_TENANT_NAME:-Default}
+      AISW_DEFAULT_OWNER_EMAIL: ${AISW_DEFAULT_OWNER_EMAIL:-}
+      AISW_DEFAULT_OWNER_PASSWORD: ${AISW_DEFAULT_OWNER_PASSWORD:-}
+    depends_on:
+      controlplane:
+        condition: service_started
+    entrypoint: ["/bin/sh", "-c"]
+    # $$ escapes compose's own ${VAR} interpolation: everything after it is
+    # read by the shell inside the curl image, not substituted by compose
+    # when this file is parsed.
+    #
+    # $$ 是为了转义 compose 自己的 ${VAR} 插值：往后的内容由 curl 镜像里的 shell 读取，
+    # 而不是在解析这份文件时被 compose 替换掉。
+    command:
+      - |
+        set -eu
+        if [ -z "$$AISW_DEFAULT_OWNER_EMAIL" ]; then
+          echo "bootstrap: AISW_DEFAULT_OWNER_EMAIL is empty, skipping automatic tenant creation (see deploy/README.md for the manual curl)"
+          exit 0
+        fi
+        i=0
+        until curl -s -o /dev/null http://controlplane:8090/admin/v1/auth/login -X POST -d '{}'; do
+          i=$$((i + 1))
+          if [ "$$i" -ge 60 ]; then
+            echo "bootstrap: controlplane did not accept connections within 120s, giving up"
+            exit 1
+          fi
+          sleep 2
+        done
+        body=$$(mktemp)
+        status=$$(curl -sS -o "$$body" -w '%{http_code}' -X POST http://controlplane:8090/admin/v1/tenants \
+          -H "Authorization: Bearer $$AISW_BOOTSTRAP_TOKEN" \
+          -H 'Content-Type: application/json' \
+          -d "{\"name\":\"$$AISW_DEFAULT_TENANT_NAME\",\"owner_email\":\"$$AISW_DEFAULT_OWNER_EMAIL\",\"owner_password\":\"$$AISW_DEFAULT_OWNER_PASSWORD\"}")
+        case "$$status" in
+          201)
+            echo "bootstrap: default tenant and owner created, log into Console with $$AISW_DEFAULT_OWNER_EMAIL"
+            ;;
+          409)
+            echo "bootstrap: that email already has a tenant, nothing to do"
+            ;;
+          *)
+            echo "bootstrap: tenant creation failed with HTTP $$status"
+            cat "$$body"
+            exit 1
+            ;;
+        esac
+
   console:
     build:
       context: ../service/aiServeWeaveConsole

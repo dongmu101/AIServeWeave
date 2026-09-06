@@ -1,0 +1,846 @@
+openapi: 3.0.3
+info:
+  title: AIServeWeave Gateway API
+  description: |
+    aiServeWeaveGateway 对外暴露的两组 HTTP 接口：
+
+    - **公开推理前门**（默认监听地址，需要租户 API Key）：OpenAI 兼容的
+      chat/embeddings/responses/models，以及工作流 Job 的提交、状态、SSE 事件流、
+      取消与产物下载。
+    - **只读运维接口**（`-admin-addr` 单独配置时才挂载，使用部署密钥而非租户 Key）：
+      机群清单、工作流目录、按租户的 job 列表，供控制面聚合展示，不做任何写操作。
+
+    源码位置：`service/aiServeWeaveGateway/httpapi/`（公开前门）与
+    `service/aiServeWeaveGateway/adminapi/`（运维接口）。
+  version: "1.0"
+servers:
+  - url: http://localhost:8080
+    description: 公开推理前门（默认端口，可通过 -addr 配置）
+  - url: http://localhost:8081
+    description: 只读运维接口（通过 -admin-addr 单独配置，未配置则不启动）
+
+tags:
+  - name: models
+    description: 模型发现
+  - name: chat
+    description: OpenAI 兼容的 Chat Completions
+  - name: embeddings
+    description: OpenAI 兼容的 Embeddings
+  - name: responses
+    description: OpenAI 兼容的 Responses（转换为 canonical chat 请求）
+  - name: workflows
+    description: 工作流 Job 的提交、状态、事件、取消与产物
+  - name: admin
+    description: 只读运维接口（机群清单 / 工作流目录 / 按租户 job），使用部署密钥
+
+security:
+  - bearerAuth: []
+
+paths:
+  /v1/models:
+    get:
+      tags: [models]
+      summary: 列出当前至少一个已连接节点声明支持 chat 能力的模型
+      operationId: listModels
+      responses:
+        "200":
+          description: 模型列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelList"
+
+  /v1/chat/completions:
+    post:
+      tags: [chat]
+      summary: OpenAI 兼容的 Chat Completions（支持流式与非流式）
+      operationId: createChatCompletion
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: |
+            非流式：完整的 ChatCompletionResponse。
+            流式（stream=true）：`text/event-stream`，逐帧 `data: <ChatCompletionChunk>`，
+            以 `data: [DONE]` 结束。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
+                description: SSE 帧序列，每帧为 ChatCompletionChunk 的 JSON
+        "400":
+          $ref: "#/components/responses/OpenAIError"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+        "429":
+          $ref: "#/components/responses/OpenAIError"
+        "5XX":
+          $ref: "#/components/responses/OpenAIError"
+
+  /v1/embeddings:
+    post:
+      tags: [embeddings]
+      summary: OpenAI 兼容的 Embeddings
+      operationId: createEmbedding
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbeddingsRequest"
+      responses:
+        "200":
+          description: 向量列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingsResponse"
+        "400":
+          $ref: "#/components/responses/OpenAIError"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+
+  /v1/responses:
+    post:
+      tags: [responses]
+      summary: OpenAI 兼容的 Responses（边界处转换为 canonical chat 请求）
+      description: |
+        只服务无状态的一次性生成：`previous_response_id`、`store=true`、
+        `background=true` 均被拒绝（400），因为本 Gateway 不持有已存储的会话，
+        也不做后台任务。内置工具（web_search 等）与非 function 类型的工具同样被拒绝。
+      operationId: createResponse
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ResponsesRequest"
+      responses:
+        "200":
+          description: |
+            非流式：完整的 Response 对象。流式（stream=true）：`text/event-stream`。
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ResponseObject"
+        "400":
+          $ref: "#/components/responses/OpenAIError"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+
+  /v1/workflows/{workflow_id}/runs:
+    post:
+      tags: [workflows]
+      summary: 提交一次工作流运行
+      description: |
+        请求体只携带模板已声明的输入值；图本身来自服务端注册的模板，调用方无法传入
+        任意图。请求体上限 1 MiB。
+      operationId: submitWorkflowRun
+      parameters:
+        - $ref: "#/components/parameters/WorkflowID"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/RunRequest"
+      responses:
+        "202":
+          description: 已接受，返回刚创建的 job（状态多为 queued）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "400":
+          $ref: "#/components/responses/OpenAIError"
+        "404":
+          description: 工作流模板未注册，或没有节点能运行工作流
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIErrorBody"
+
+  /v1/jobs/{job_id}:
+    get:
+      tags: [workflows]
+      summary: 查询一次运行的状态
+      description: |
+        已结束的运行直接由本 Gateway 的内存 job 表作答；仍在进行中的会去问运行它的
+        节点，状态来自后端的队列与历史。
+      operationId: getJobStatus
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: job 当前视图
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+
+  /v1/jobs/{job_id}/events:
+    get:
+      tags: [workflows]
+      summary: 订阅一次运行的事件流（SSE）
+      description: |
+        已经结束的运行会立即得到携带终态的单独一帧而不是订阅。事件名（SSE 的
+        `event:` 字段）为后端事件类型（如 progress、node_output、succeeded、
+        failed、cancelled 等），载荷为 JobEvent。
+      operationId: streamJobEvents
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: text/event-stream，逐帧 JobEvent
+          content:
+            text/event-stream:
+              schema:
+                type: string
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+        "5XX":
+          $ref: "#/components/responses/OpenAIError"
+
+  /v1/jobs/{job_id}/cancel:
+    post:
+      tags: [workflows]
+      summary: 请求取消一次运行
+      description: |
+        取消是异步请求而不是结论：本端点返回 202 与最后已知的 job 视图，真实结果由
+        状态端点或事件流报告。已结束的 job 返回 409；节点不支持中断时返回 501。
+      operationId: cancelJob
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "202":
+          description: 取消请求已接受
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Job"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+        "409":
+          description: job 已结束，无法取消
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIErrorBody"
+        "501":
+          description: 运行该 job 的节点不支持中断
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIErrorBody"
+
+  /v1/jobs/{job_id}/artifacts:
+    get:
+      tags: [workflows]
+      summary: 列出一次运行产出的产物
+      description: |
+        公开的 artifact_id 在这里铸造：后端用 filename/subfolder/type 三元组定位
+        文件，该三元组从不作为标识符外传。同一 job 多次列举返回相同的 id。
+      operationId: listJobArtifacts
+      parameters:
+        - $ref: "#/components/parameters/JobID"
+      responses:
+        "200":
+          description: 产物列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ArtifactList"
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+
+  /v1/artifacts/{artifact_id}:
+    get:
+      tags: [workflows]
+      summary: 下载一个产物
+      description: 响应体直通转发，从隧道边读边送，从不在 Gateway 进程内整体缓冲。
+      operationId: downloadArtifact
+      parameters:
+        - name: artifact_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 产物内容（Content-Type 与 Content-Disposition 视后端而定）
+          content:
+            application/octet-stream:
+              schema:
+                type: string
+                format: binary
+        "404":
+          $ref: "#/components/responses/OpenAIError"
+
+  /internal/v1/nodes:
+    get:
+      tags: [admin]
+      summary: 本副本当前看到的机群清单
+      operationId: getFleetSnapshot
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: 机群快照
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Replica"
+        "401":
+          $ref: "#/components/responses/AdminError"
+
+  /internal/v1/workflows:
+    get:
+      tags: [admin]
+      summary: 本副本注册的工作流模板目录（未配置模板目录时不挂载此路由）
+      operationId: getWorkflowCatalog
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: 模板目录
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/TemplateCatalog"
+        "401":
+          $ref: "#/components/responses/AdminError"
+
+  /internal/v1/jobs:
+    get:
+      tags: [admin]
+      summary: 本副本上某一个租户的运行列表（未启用前门时不挂载此路由）
+      description: tenant_id 为必填查询参数；缺省时返回 400，而不是返回全部租户的运行。
+      operationId: getTenantJobs
+      security:
+        - adminToken: []
+      parameters:
+        - name: tenant_id
+          in: query
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: 该租户在本副本上的运行
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/JobPage"
+        "400":
+          $ref: "#/components/responses/AdminError"
+        "401":
+          $ref: "#/components/responses/AdminError"
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: "租户 API Key（Authorization: Bearer <key>）。未配置任何鉴权方式的部署会放行一切请求。"
+    adminToken:
+      type: http
+      scheme: bearer
+      description: 部署级运维密钥（AISW_GATEWAY_ADMIN_TOKEN），与租户 API Key 无关。
+
+  parameters:
+    WorkflowID:
+      name: workflow_id
+      in: path
+      required: true
+      schema:
+        type: string
+    JobID:
+      name: job_id
+      in: path
+      required: true
+      schema:
+        type: string
+
+  responses:
+    OpenAIError:
+      description: OpenAI 兼容的错误体
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/OpenAIErrorBody"
+    AdminError:
+      description: 运维接口的错误体
+      content:
+        application/json:
+          schema:
+            type: object
+            properties:
+              error:
+                type: string
+
+  schemas:
+    OpenAIErrorBody:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            message:
+              type: string
+            type:
+              type: string
+            code:
+              type: string
+
+    ModelList:
+      type: object
+      properties:
+        object:
+          type: string
+          example: list
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              object: { type: string, example: model }
+              owned_by: { type: string, example: aiserveweave }
+
+    ChatMessage:
+      type: object
+      required: [role, content]
+      properties:
+        role: { type: string, enum: [system, user, assistant, tool] }
+        content: { type: string }
+        name: { type: string }
+        tool_call_id: { type: string }
+        tool_calls:
+          type: array
+          items:
+            $ref: "#/components/schemas/ToolCall"
+
+    ToolCall:
+      type: object
+      properties:
+        id: { type: string }
+        type: { type: string, example: function }
+        function:
+          type: object
+          properties:
+            name: { type: string }
+            arguments: { type: string }
+
+    Tool:
+      type: object
+      properties:
+        type: { type: string, example: function }
+        function:
+          type: object
+          properties:
+            name: { type: string }
+            description: { type: string }
+            parameters:
+              type: object
+              description: JSON Schema，原样透传
+
+    ResponseFormat:
+      type: object
+      properties:
+        type: { type: string, enum: [text, json_object, json_schema] }
+        json_schema:
+          type: object
+          properties:
+            name: { type: string }
+            strict: { type: boolean }
+            schema:
+              type: object
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model: { type: string }
+        messages:
+          type: array
+          items:
+            $ref: "#/components/schemas/ChatMessage"
+        stream: { type: boolean, default: false }
+        temperature: { type: number }
+        top_p: { type: number }
+        max_tokens: { type: integer }
+        stop:
+          description: 单个字符串或字符串数组
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+        seed: { type: integer, format: int64 }
+        tools:
+          type: array
+          items:
+            $ref: "#/components/schemas/Tool"
+        tool_choice:
+          description: 字符串（auto/none/required）或指名单个工具的对象
+        response_format:
+          $ref: "#/components/schemas/ResponseFormat"
+
+    Usage:
+      type: object
+      properties:
+        prompt_tokens: { type: integer }
+        completion_tokens: { type: integer }
+        total_tokens: { type: integer }
+
+    ChatCompletionResponse:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: chat.completion }
+        created: { type: integer, format: int64 }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              message:
+                $ref: "#/components/schemas/ChatMessage"
+              finish_reason: { type: string }
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    ChatCompletionChunk:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string, example: chat.completion.chunk }
+        created: { type: integer, format: int64 }
+        model: { type: string }
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index: { type: integer }
+              delta:
+                type: object
+                properties:
+                  role: { type: string }
+                  content: { type: string }
+                  tool_calls:
+                    type: array
+                    items:
+                      $ref: "#/components/schemas/ToolCall"
+              finish_reason:
+                type: string
+                nullable: true
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    EmbeddingsRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model: { type: string }
+        input:
+          description: 单个字符串或字符串数组
+          oneOf:
+            - type: string
+            - type: array
+              items: { type: string }
+
+    EmbeddingsResponse:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        model: { type: string }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object: { type: string, example: embedding }
+              index: { type: integer }
+              embedding:
+                type: array
+                items: { type: number, format: float }
+        usage:
+          $ref: "#/components/schemas/Usage"
+
+    ResponsesRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model: { type: string }
+        input:
+          description: 单个字符串或输入项数组（每项含 role 与 content）
+        instructions: { type: string }
+        max_output_tokens: { type: integer }
+        temperature: { type: number }
+        top_p: { type: number }
+        stream: { type: boolean, default: false }
+        tools:
+          type: array
+          items:
+            type: object
+            properties:
+              type: { type: string, enum: [function] }
+              name: { type: string }
+              description: { type: string }
+              parameters:
+                type: object
+              strict: { type: boolean }
+        tool_choice:
+          description: 字符串或指名单个工具的对象
+        text:
+          type: object
+          properties:
+            format:
+              type: object
+              properties:
+                type: { type: string, enum: [text, json_schema] }
+                name: { type: string }
+                strict: { type: boolean }
+                schema:
+                  type: object
+        previous_response_id:
+          type: string
+          description: 不支持，非空即 400
+        store:
+          type: boolean
+          description: 不支持，true 即 400
+        background:
+          type: boolean
+          description: 不支持，true 即 400
+
+    ResponseObject:
+      type: object
+      properties:
+        id: { type: string }
+        object: { type: string }
+        created_at: { type: integer, format: int64 }
+        status: { type: string }
+        model: { type: string }
+        output:
+          type: array
+          items:
+            type: object
+        usage:
+          type: object
+          properties:
+            input_tokens: { type: integer }
+            output_tokens: { type: integer }
+            total_tokens: { type: integer }
+        error:
+          type: object
+          nullable: true
+          properties:
+            code: { type: string }
+            message: { type: string }
+        incomplete_details:
+          type: object
+          nullable: true
+          properties:
+            reason: { type: string }
+        instructions: { type: string, nullable: true }
+        max_output_tokens: { type: integer }
+        temperature: { type: number }
+        top_p: { type: number }
+        parallel_tool_calls: { type: boolean }
+        tools:
+          type: array
+          items:
+            type: object
+        tool_choice: {}
+
+    RunRequest:
+      type: object
+      properties:
+        inputs:
+          type: object
+          description: 模板声明过的输入名到取值（原样 JSON）
+          additionalProperties: true
+        idempotency_key:
+          type: string
+
+    Job:
+      type: object
+      properties:
+        job_id: { type: string }
+        workflow_id: { type: string }
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        queue_position: { type: integer }
+        error: { type: string }
+
+    JobEvent:
+      type: object
+      properties:
+        job_id: { type: string }
+        type: { type: string }
+        node: { type: string }
+        status:
+          type: string
+          enum: [queued, running, succeeded, failed, cancelled]
+        data:
+          type: object
+          description: 后端原始载荷，逐事件类型而不同
+        received_at: { type: string, format: date-time }
+
+    ArtifactList:
+      type: object
+      properties:
+        object: { type: string, example: list }
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              artifact_id: { type: string }
+              filename: { type: string }
+              type:
+                type: string
+                description: 后端分区名（output/temp/input）
+
+    Replica:
+      type: object
+      properties:
+        replica_id: { type: string }
+        generated_at: { type: string, format: date-time }
+        nodes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Node"
+
+    Node:
+      type: object
+      properties:
+        node_id: { type: string }
+        agent_version: { type: string }
+        live: { type: boolean }
+        draining: { type: boolean }
+        last_heartbeat: { type: string, format: date-time }
+        labels:
+          type: object
+          additionalProperties: { type: string }
+        resources:
+          type: object
+          properties:
+            cpu_cores: { type: integer }
+            memory_bytes: { type: integer, format: int64 }
+            gpu_count: { type: integer }
+            gpu_memory_bytes: { type: integer, format: int64 }
+            os: { type: string }
+            arch: { type: string }
+        inflight_requests: { type: integer }
+        idle_slots:
+          type: object
+          additionalProperties: { type: integer }
+          description: "槽位 class（inference/bulk）到空闲数量"
+        declared_runtime_ids:
+          type: array
+          items: { type: string }
+        runtimes:
+          type: array
+          items:
+            $ref: "#/components/schemas/Runtime"
+
+    Runtime:
+      type: object
+      properties:
+        id: { type: string }
+        kind: { type: string }
+        base_url: { type: string }
+        state: { type: string }
+        version: { type: string }
+        identity_verified: { type: boolean }
+        latency_millis: { type: integer, format: int64 }
+        checked_at: { type: string, format: date-time }
+        error_summary: { type: string }
+        capabilities:
+          type: object
+          additionalProperties: { type: string }
+        models:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              capabilities:
+                type: object
+                additionalProperties: { type: string }
+        warnings:
+          type: array
+          items: { type: string }
+        degraded:
+          type: array
+          items: { type: string }
+        discovered_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+
+    TemplateCatalog:
+      type: object
+      properties:
+        replica_id: { type: string }
+        generated_at: { type: string, format: date-time }
+        templates:
+          type: array
+          items:
+            $ref: "#/components/schemas/Template"
+
+    Template:
+      type: object
+      properties:
+        id: { type: string }
+        description: { type: string }
+        valid: { type: boolean }
+        validation_error: { type: string }
+        inputs:
+          type: array
+          items:
+            type: object
+            properties:
+              name: { type: string }
+              type: { type: string }
+              required: { type: boolean }
+              default: {}
+              max_length: { type: integer }
+              min: { type: number }
+              max: { type: number }
+
+    JobPage:
+      type: object
+      properties:
+        replica_id: { type: string }
+        generated_at: { type: string, format: date-time }
+        tenant_id: { type: string }
+        truncated: { type: boolean }
+        jobs:
+          type: array
+          items:
+            type: object
+            properties:
+              id: { type: string }
+              workflow_id: { type: string }
+              state: { type: string }
+              queue_position: { type: integer }
+              error_summary: { type: string }
+              created_at: { type: string, format: date-time }
+              updated_at: { type: string, format: date-time }
+              artifact_ids:
+                type: array
+                items: { type: string }
