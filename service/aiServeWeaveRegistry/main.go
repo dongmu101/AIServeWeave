@@ -3,32 +3,56 @@
 // authoritative roster of Gateway replicas that every node's tunnel client
 // dials against.
 //
-// The same binary doubles as the bootstrap-token minting tool via -mint-token,
-// standing in for the Console described in the top-level README until that
-// exists — see service/aiServeWeaveRegistry/README.md for its limitations.
+// The same binary doubles as the bootstrap-token admin tool via -mint-token
+// and -revoke-token, standing in for the Console described in the top-level
+// README until that exists. Both are gRPC clients of the running server's
+// TokenAdmin service (STATUS.md's S02), not direct file access: minting and
+// revocation both need to observe and update the same mutex-guarded state
+// Register consumes, which only the server process can do safely — see
+// service/aiServeWeaveRegistry/README.md.
 package main
 
 import (
 	"context"
+	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/ca"
+	"AIServeWeave/service/aiServeWeaveRegistry/internal/identitystore"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/registryserver"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/tokenstore"
 )
+
+// minAdminTokenLen matches the control plane's OperatorToken minimum
+// (internal/config/config.go's Validate), the codebase's existing
+// admin-shared-secret convention, so the two do not drift apart.
+const minAdminTokenLen = 32
+
+// version is stamped at build time via -ldflags="-X main.version=...", see
+// the root Dockerfile and scripts/build-release.sh; "dev" is what a plain
+// `go build` produces.
+//
+// version 在构建时通过 -ldflags="-X main.version=..." 注入，见根 Dockerfile 与
+// scripts/build-release.sh；直接 `go build` 得到的就是 "dev"。
+var version = "dev"
 
 func main() {
 	if err := run(); err != nil {
@@ -40,16 +64,31 @@ func main() {
 func run() error {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	addr := flag.String("addr", ":9090", "address the gRPC listener binds")
-	dataDir := flag.String("data-dir", "./data/registry", "directory holding the CA key pair and the bootstrap token store")
+	dataDir := flag.String("data-dir", "./data/registry", "directory holding the CA key pair, the bootstrap token store, and the node identity ledger")
 	tlsHosts := flag.String("tls-host", "", "comma-separated hostnames/IPs the self-issued server certificate covers; empty uses the -addr host")
 	certFile := flag.String("tls-cert", "", "PEM certificate this Registry presents; empty self-issues one from its own CA")
 	keyFile := flag.String("tls-key", "", "PEM private key for -tls-cert")
-	mintToken := flag.Bool("mint-token", false, "mint a bootstrap token and print it to stdout instead of running the server")
+	adminTokenFile := flag.String("admin-token-file", "",
+		"path to the shared secret guarding TokenAdmin (mint/revoke/disable/enable), at least 32 bytes; server mode: empty disables the service; -mint-token/-revoke-token/-disable-node/-enable-node: always required")
+	gatewayTokenFile := flag.String("gateway-token-file", "",
+		"path to the shared secret guarding GatewayDirectory.Join (STATUS.md's S03), at least 32 bytes; server mode: empty leaves Join open, as before S03")
+	mintToken := flag.Bool("mint-token", false, "call TokenAdmin.MintToken on a running Registry and print the token to stdout, instead of running the server")
 	tokenTTL := flag.Duration("ttl", 15*time.Minute, "-mint-token only: how long the minted token stays valid")
+	bindNodeID := flag.String("bind-node-id", "", "-mint-token only: bind the minted token to this node_id, authorizing a reinstall (see the Registry README)")
+	revokeToken := flag.String("revoke-token", "", "call TokenAdmin.RevokeToken on a running Registry for this token value, instead of running the server")
+	disableNode := flag.String("disable-node", "", "call TokenAdmin.DisableNode on a running Registry for this node_id, instead of running the server")
+	enableNode := flag.String("enable-node", "", "call TokenAdmin.EnableNode on a running Registry for this node_id, instead of running the server")
+	registryAddr := flag.String("registry-addr", "", "-mint-token/-revoke-token/-disable-node/-enable-node only: address of the running Registry to call; empty derives it from -addr")
 	issueServerCert := flag.Bool("issue-server-cert", false,
 		"issue a server certificate from this Registry's CA and write it to -out-dir instead of running the server")
 	outDir := flag.String("out-dir", "", "-issue-server-cert only: directory to write server-cert.pem and server-key.pem into")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		os.Stdout.WriteString("aiserveweave-registry " + version + "\n")
+		return nil
+	}
 
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(*logLevel)); err != nil {
@@ -57,13 +96,11 @@ func run() error {
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
 
-	tokens, err := tokenstore.Open(filepath.Join(*dataDir, "tokens.json"))
-	if err != nil {
-		return err
-	}
-
-	if *mintToken {
-		return runMintToken(tokens, *tokenTTL)
+	if *mintToken || *revokeToken != "" || *disableNode != "" || *enableNode != "" {
+		return runTokenAdminClient(os.Stdout, *dataDir, *registryAddr, *addr, *adminTokenFile, tokenAdminAction{
+			mint: *mintToken, ttl: *tokenTTL, bindNodeID: *bindNodeID, revoke: *revokeToken,
+			disableNodeID: *disableNode, enableNodeID: *enableNode,
+		})
 	}
 
 	root, err := ca.LoadOrCreate(filepath.Join(*dataDir, "ca"))
@@ -75,7 +112,27 @@ func run() error {
 		return runIssueServerCert(root, *outDir, splitCommaList(*tlsHosts))
 	}
 
-	server, err := registryserver.New(registryserver.Config{CA: root, Tokens: tokens, Logger: logger})
+	tokens, err := tokenstore.Open(filepath.Join(*dataDir, "tokens.json"))
+	if err != nil {
+		return err
+	}
+	identities, err := identitystore.Open(filepath.Join(*dataDir, "identities.json"))
+	if err != nil {
+		return err
+	}
+	adminToken, err := loadAdminToken(*adminTokenFile)
+	if err != nil {
+		return err
+	}
+	gatewayToken, err := loadSharedSecret(*gatewayTokenFile, "-gateway-token-file")
+	if err != nil {
+		return err
+	}
+
+	server, err := registryserver.New(registryserver.Config{
+		CA: root, Tokens: tokens, Identities: identities, Logger: logger,
+		AdminToken: adminToken, GatewayToken: gatewayToken,
+	})
 	if err != nil {
 		return err
 	}
@@ -92,6 +149,9 @@ func run() error {
 	grpcServer := grpc.NewServer(grpc.Creds(creds))
 	tunnelv1.RegisterNodeIdentityServer(grpcServer, server)
 	tunnelv1.RegisterGatewayDirectoryServer(grpcServer, server)
+	if adminToken != "" {
+		tunnelv1.RegisterTokenAdminServer(grpcServer, server)
+	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -168,17 +228,119 @@ func runIssueServerCert(root *ca.CA, outDir string, hosts []string) error {
 	return nil
 }
 
-// runMintToken mints one bootstrap token and prints it to stdout. It is a
-// transitional operator tool, not an RPC: see the Registry README for why
-// running it alongside a live server carries a small, accepted race on the
-// shared token file.
-func runMintToken(tokens *tokenstore.Store, ttl time.Duration) error {
-	token, err := tokens.Mint(ttl, time.Now())
+// tokenAdminAction selects and parameterizes runTokenAdminClient's single
+// call: exactly one of mint or revoke is meaningful, mirroring how -mint-token
+// and -revoke-token are themselves mutually exclusive CLI modes.
+type tokenAdminAction struct {
+	mint          bool
+	ttl           time.Duration
+	bindNodeID    string
+	revoke        string
+	disableNodeID string
+	enableNodeID  string
+}
+
+// runTokenAdminClient dials a running Registry's TokenAdmin service and
+// performs one mint or revoke call, printing the result to out. It is a
+// gRPC client rather than direct file access — see this file's package doc
+// comment for why that is the point of S02, not an incidental implementation
+// choice.
+func runTokenAdminClient(out io.Writer, dataDir, registryAddr, listenAddr, adminTokenFile string, action tokenAdminAction) error {
+	adminToken, err := loadAdminToken(adminTokenFile)
 	if err != nil {
 		return err
 	}
-	os.Stdout.WriteString(token + "\n")
+	if adminToken == "" {
+		return errors.New("-mint-token/-revoke-token/-disable-node/-enable-node needs -admin-token-file")
+	}
+
+	root, err := ca.LoadOrCreate(filepath.Join(dataDir, "ca"))
+	if err != nil {
+		return err
+	}
+	target := registryAddr
+	if target == "" {
+		target = defaultRegistryAddr(listenAddr)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(root.Bundle()) {
+		return errors.New("registry: CA bundle contains no usable certificate")
+	}
+	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		MinVersion: tls.VersionTLS13,
+		RootCAs:    pool,
+	})))
+	if err != nil {
+		return fmt.Errorf("registry: cannot create a client for %s: %w", target, err)
+	}
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+adminToken)
+	client := tunnelv1.NewTokenAdminClient(conn)
+
+	if action.mint {
+		resp, err := client.MintToken(ctx, &tunnelv1.MintTokenRequest{
+			Ttl:    durationpb.New(action.ttl),
+			NodeId: action.bindNodeID,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Fprintln(out, resp.GetToken())
+		return nil
+	}
+
+	if action.revoke != "" {
+		if _, err := client.RevokeToken(ctx, &tunnelv1.RevokeTokenRequest{Token: action.revoke}); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "revoked")
+		return nil
+	}
+
+	if action.disableNodeID != "" {
+		if _, err := client.DisableNode(ctx, &tunnelv1.DisableNodeRequest{NodeId: action.disableNodeID}); err != nil {
+			return err
+		}
+		fmt.Fprintln(out, "disabled")
+		return nil
+	}
+
+	if _, err := client.EnableNode(ctx, &tunnelv1.EnableNodeRequest{NodeId: action.enableNodeID}); err != nil {
+		return err
+	}
+	fmt.Fprintln(out, "enabled")
 	return nil
+}
+
+// loadAdminToken reads the TokenAdmin shared secret from path, or returns ""
+// without error if path is empty — the server-mode caller takes that as
+// "leave TokenAdmin disabled," and the CLI-client-mode caller rejects it
+// itself, since a secret is not optional there.
+func loadAdminToken(path string) (string, error) {
+	return loadSharedSecret(path, "-admin-token-file")
+}
+
+// loadSharedSecret reads a bearer-token secret from path, or returns "" without
+// error if path is empty — every caller here treats an empty secret as "leave
+// this guard disabled," not as a malformed configuration. flagName only
+// appears in error messages, so a misconfigured file names the flag that
+// needs fixing.
+func loadSharedSecret(path, flagName string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", fmt.Errorf("registry: cannot read %s %s: %w", flagName, path, err)
+	}
+	token := strings.TrimSpace(string(data))
+	if len(token) < minAdminTokenLen {
+		return "", fmt.Errorf("registry: %s %s must contain a secret at least %d bytes long", flagName, path, minAdminTokenLen)
+	}
+	return token, nil
 }
 
 // serverCredentials builds the Registry's own listener TLS configuration.

@@ -230,6 +230,20 @@ test("the operator surface is separate from the tenant one", () => {
       operator: null,
       tenant: null,
     },
+    {
+      name: "a tenant's persisted job history stays on the tenant surface",
+      method: "GET",
+      path: "/admin/v1/jobs/history",
+      operator: null,
+      tenant: "/admin/v1/jobs/history",
+    },
+    {
+      name: "a persisted job's detail stays on the tenant surface",
+      method: "GET",
+      path: "/admin/v1/jobs/history/job_1",
+      operator: null,
+      tenant: "/admin/v1/jobs/history/job_1",
+    },
   ];
 
   for (const item of cases) {

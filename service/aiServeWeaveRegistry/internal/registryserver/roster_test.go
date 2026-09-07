@@ -8,6 +8,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 )
@@ -21,6 +22,13 @@ type joinTestClient struct {
 
 func dialJoin(t *testing.T, f *registryFixture) *joinTestClient {
 	t.Helper()
+	return dialJoinWithToken(t, f, "")
+}
+
+// dialJoinWithToken is dialJoin, additionally attaching token as
+// GatewayDirectory.Join's bearer credential (STATUS.md's S03) when non-empty.
+func dialJoinWithToken(t *testing.T, f *registryFixture, token string) *joinTestClient {
+	t.Helper()
 	creds := credentials.NewTLS(&tls.Config{MinVersion: tls.VersionTLS13, RootCAs: f.ca.Pool()})
 	conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
@@ -28,7 +36,11 @@ func dialJoin(t *testing.T, f *registryFixture) *joinTestClient {
 	}
 	t.Cleanup(func() { conn.Close() })
 	client := tunnelv1.NewGatewayDirectoryClient(conn)
-	stream, err := client.Join(context.Background())
+	ctx := context.Background()
+	if token != "" {
+		ctx = metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+token)
+	}
+	stream, err := client.Join(ctx)
 	if err != nil {
 		t.Fatalf("Join() error = %v", err)
 	}

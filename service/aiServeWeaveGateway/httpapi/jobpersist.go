@@ -72,6 +72,14 @@ type JobPersistClient interface {
 	// 条件。applied 报告这次观测是否真正落地；为什么这里 false 不是错误，
 	// 见类型的文档注释。
 	UpdateJobState(ctx context.Context, tenantID, jobID, state, errorSummary string, observedSeq int64) (applied bool, err error)
+	// CreateJobArtifact records one artifact a run produced, using the
+	// public id listArtifacts already minted for it. Like CreateJob, a
+	// duplicate id for the same job and tenant is not an error.
+	//
+	// CreateJobArtifact 记录一次运行产出的一个产物，使用 listArtifacts 已经
+	// 为它铸造的公开 id。与 CreateJob 一样，同一 job 与租户下重复的 id 不是
+	// 错误。
+	CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType string) error
 }
 
 // jobPersistConfig collects the persister's tunable bounds, defaulted by
@@ -248,7 +256,8 @@ func (jp *jobPersister) run() {
 func (jp *jobPersister) tick() {
 	now := jp.clock.Now()
 	due := jp.jobs.dueForPersist(now, jp.cfg.BatchSize, jp.cfg.Interval)
-	if len(due) == 0 {
+	dueArtifacts := jp.jobs.dueForArtifactPersist(now, jp.cfg.BatchSize, jp.cfg.Interval)
+	if len(due) == 0 && len(dueArtifacts) == 0 {
 		return
 	}
 
@@ -261,6 +270,15 @@ func (jp *jobPersister) tick() {
 			defer wg.Done()
 			defer func() { <-sem }()
 			jp.persistOne(id)
+		}(id)
+	}
+	for _, id := range dueArtifacts {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			jp.persistArtifacts(id)
 		}(id)
 	}
 	wg.Wait()
@@ -315,6 +333,41 @@ func (jp *jobPersister) persistOne(id string) {
 		return
 	}
 	jp.jobs.persistedState(id, seq, jp.clock.Now())
+}
+
+// persistArtifacts reports id's pending artifacts one call per artifact,
+// since CreateJobArtifact takes one at a time. A per-artifact failure marks
+// the whole job's artifact batch as failed and backs off, but the artifacts
+// that did succeed have already been removed from the pending list by
+// artifactPersisted, so a retry only ever reports what is still owed.
+//
+// persistArtifacts 逐个上报 id 待确认的产物，因为 CreateJobArtifact 一次只
+// 接受一个。单个产物失败会把整个 job 的这批标记为失败并退避，但已经成功的
+// 那些产物已经被 artifactPersisted 从待确认列表移除，因此重试时只会上报
+// 依然欠着的部分。
+func (jp *jobPersister) persistArtifacts(id string) {
+	ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
+	defer cancel()
+
+	tenantID, artifacts, ok := jp.jobs.artifactsForPersist(id)
+	if !ok {
+		return
+	}
+
+	failed := false
+	for _, a := range artifacts {
+		err := jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type)
+		if err != nil {
+			failed = true
+			jp.logger.Warn("job artifact persistence did not reach the control plane; the artifact remains downloadable, this record is not yet durable",
+				slog.String("job_id", id), slog.String("artifact_id", a.ArtifactID), slog.Any("error", err))
+			continue
+		}
+		jp.jobs.artifactPersisted(id, a.ArtifactID)
+	}
+	if failed {
+		jp.jobs.artifactPersistFailed(id, jp.clock.Now(), jp.backoff)
+	}
 }
 
 // backoff doubles the base interval per consecutive failure, capped at

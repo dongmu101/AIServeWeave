@@ -48,3 +48,16 @@ func addrHost(addr string) string {
 	}
 	return host
 }
+
+// defaultRegistryAddr derives a dial target for -mint-token/-revoke-token
+// from the server's own -addr, so an operator running them on the same host
+// the server listens on does not also have to pass -registry-addr. It reuses
+// addrHost so the derived host matches the SAN a self-issued server
+// certificate carries when -tls-host was left empty too.
+func defaultRegistryAddr(listenAddr string) string {
+	_, port, err := net.SplitHostPort(listenAddr)
+	if err != nil {
+		return listenAddr
+	}
+	return net.JoinHostPort(addrHost(listenAddr), port)
+}

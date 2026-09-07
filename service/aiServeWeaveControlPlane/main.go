@@ -30,6 +30,14 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
+// version is stamped at build time via -ldflags="-X main.version=...", see
+// the root Dockerfile and scripts/build-release.sh; "dev" is what a plain
+// `go build` produces.
+//
+// version 在构建时通过 -ldflags="-X main.version=..." 注入，见根 Dockerfile 与
+// scripts/build-release.sh；直接 `go build` 得到的就是 "dev"。
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		os.Stderr.WriteString("controlplane: " + err.Error() + "\n")
@@ -39,7 +47,13 @@ func main() {
 
 func run() error {
 	configFile := flag.String("f", "etc/controlplane.yaml", "path to the configuration file")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		os.Stdout.WriteString("aiserveweave-controlplane " + version + "\n")
+		return nil
+	}
 
 	// conf.Load rather than conf.MustLoad, and rest.NewServer rather than
 	// rest.MustNewServer: go-zero's Must* helpers exit the process from deep

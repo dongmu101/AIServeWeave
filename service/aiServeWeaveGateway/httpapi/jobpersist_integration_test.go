@@ -37,6 +37,10 @@ func (f *fakeJobPersistClient) UpdateJobState(context.Context, string, string, s
 	return true, nil
 }
 
+func (f *fakeJobPersistClient) CreateJobArtifact(context.Context, string, string, string, string, string, string) error {
+	return nil
+}
+
 func (f *fakeJobPersistClient) createdJobIDs() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()

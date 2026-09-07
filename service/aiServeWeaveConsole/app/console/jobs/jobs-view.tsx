@@ -280,7 +280,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
  * 状态。在 Gateway 之前就在这里宣称"已取消"，会是本控制台在编造一个没人报告过
  * 的结果，而这正是 Gateway 自己的 README 明确为自己排除掉的那种失败模式。
  */
-function CancelButton({
+export function CancelButton({
   jobId,
   onCancelled,
 }: {
@@ -336,7 +336,7 @@ function CancelButton({
  * ArtifactLinks 为每个产物 id 渲染一条下载链接，每一条都是对经由网关的产物代理
  * 路由的一次普通导航，而不是一次 fetch：响应体可能是数兆字节的图片或视频，
  * 浏览器的下载链接会把它串流下来，本组件从不持有这些字节。 */
-function ArtifactLinks({ artifactIds }: { artifactIds: string[] }) {
+export function ArtifactLinks({ artifactIds }: { artifactIds: string[] }) {
   return (
     <div className="flex flex-col gap-0.5">
       {artifactIds.map((id) => (
@@ -364,7 +364,7 @@ function ArtifactLinks({ artifactIds }: { artifactIds: string[] }) {
  * 路由不经由 lib/console/api-client.ts 的 ApiErrorKind，因此这份映射放在这里，
  * 而不是 lib/console/errors.ts——同样的推理用在了 Gateway Key 表单上，见
  * app/console/settings/settings-view.tsx 的 describeSettingsError。 */
-function describeGatewayError(code: string | undefined, status: number): string {
+export function describeGatewayError(code: string | undefined, status: number): string {
   switch (code) {
     case "gateway_key_missing":
       return "尚未配置 Gateway Key，请前往「设置」页配置。";

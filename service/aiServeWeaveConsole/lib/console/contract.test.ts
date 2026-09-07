@@ -5,6 +5,8 @@ import {
   parseApiKeys,
   parseCreatedApiKey,
   parseAuditEntries,
+  parseJobHistoryDetail,
+  parseJobHistoryEntries,
   parseLoginResult,
   parseTenantLimits,
   parseTenantProfile,
@@ -143,6 +145,51 @@ test("audit entries keep the fields the API actually returns", () => {
   assert.equal(entries[0]?.actorId, "u-1");
   assert.equal(entries[0]?.action, "apikey.create");
   assert.throws(() => parseAuditEntries({ items: [{ id: "a-1" }] }), ApiError);
+});
+
+test("a job history list entry omits artifacts, which the detail endpoint fills in", () => {
+  const entries = parseJobHistoryEntries({
+    items: [
+      {
+        job_id: "job_1",
+        workflow_id: "text-to-image",
+        state: "succeeded",
+        created_at: "2026-09-06T09:00:00Z",
+        updated_at: "2026-09-06T09:05:00Z",
+        terminal_at: "2026-09-06T09:05:00Z",
+      },
+    ],
+  }).items;
+  assert.equal(entries[0]?.jobId, "job_1");
+  assert.equal(entries[0]?.workflowVersion, "", "omitted workflow_version reads as empty");
+  assert.equal(entries[0]?.artifacts, null, "the list endpoint sends no artifacts field");
+
+  const detail = parseJobHistoryDetail({
+    job_id: "job_1",
+    workflow_id: "text-to-image",
+    state: "succeeded",
+    created_at: "2026-09-06T09:00:00Z",
+    updated_at: "2026-09-06T09:05:00Z",
+    artifacts: [
+      {
+        artifact_id: "art_1",
+        job_id: "job_1",
+        tenant_id: "t-1",
+        filename: "out.png",
+        type: "output",
+        created_at: "2026-09-06T09:05:00Z",
+      },
+    ],
+  });
+  assert.equal(detail.artifacts?.length, 1);
+  assert.equal(detail.artifacts?.[0]?.artifactId, "art_1");
+  assert.equal(detail.terminalAt, null, "an omitted terminal_at means the run has not finished");
+
+  assert.throws(
+    () => parseJobHistoryEntries({ items: [{ job_id: "job_1" }] }),
+    ApiError,
+    "a job history entry missing required fields is refused"
+  );
 });
 
 test("an omitted limit is zero, and zero means unlimited", () => {

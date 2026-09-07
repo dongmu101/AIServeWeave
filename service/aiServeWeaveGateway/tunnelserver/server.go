@@ -113,6 +113,10 @@ type Server struct {
 	// replica only carries it, which is why it is stored whole rather than
 	// merged.
 	roster *tunnelv1.GatewayRoster
+	// revoked mirrors roster.RevokedNodeIds as a set, for isRevoked's O(1)
+	// lookup on every Control handshake — a lookup that runs far more often
+	// than the roster itself changes.
+	revoked map[string]struct{}
 
 	// closed stops new streams from being accepted after Close, so a
 	// shutting-down replica does not take on work it is about to drop.
@@ -166,12 +170,28 @@ func (s *Server) ReplicaID() string { return s.cfg.ReplicaID }
 // seen, so re-sending an unchanged roster is safe but pointless; SetRoster
 // therefore broadcasts whatever it is given and leaves de-duplication to the
 // caller that owns the Registry subscription.
+//
+// It also kills every connected node whose node_id appears in
+// roster.RevokedNodeIds (STATUS.md's S03): disabling a node must take effect
+// against a connection this replica already holds open, not just against the
+// next handshake attempt, and the roster push is the only channel the
+// Registry has to tell an already-running replica that.
 func (s *Server) SetRoster(roster *tunnelv1.GatewayRoster) {
+	revoked := make(map[string]struct{}, len(roster.GetRevokedNodeIds()))
+	for _, id := range roster.GetRevokedNodeIds() {
+		revoked[id] = struct{}{}
+	}
+
 	s.mu.Lock()
 	s.roster = roster
+	s.revoked = revoked
 	targets := make([]*node, 0, len(s.nodes))
+	var toKill []*node
 	for _, n := range s.nodes {
 		targets = append(targets, n)
+		if _, ok := revoked[n.id]; ok {
+			toKill = append(toKill, n)
+		}
 	}
 	s.mu.Unlock()
 
@@ -181,6 +201,18 @@ func (s *Server) SetRoster(roster *tunnelv1.GatewayRoster) {
 	for _, n := range targets {
 		n.broadcast(frame)
 	}
+	for _, n := range toKill {
+		n.kill()
+	}
+}
+
+// isRevoked reports whether nodeID is in the most recently installed
+// roster's revoked set.
+func (s *Server) isRevoked(nodeID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.revoked[nodeID]
+	return ok
 }
 
 // Close stops the replica from accepting new streams and asks every connected

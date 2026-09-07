@@ -65,6 +65,12 @@ func (s *Server) Serve(stream tunnelv1.Tunnel_ServeServer) error {
 	if ready.GetClass() == tunnelv1.SlotClass_SLOT_CLASS_UNSPECIFIED {
 		return status.Error(codes.InvalidArgument, "Ready carried no slot class")
 	}
+	// Defense in depth alongside Control's own check (STATUS.md's S03): a
+	// revoked node_id must not be able to keep serving requests through a
+	// data-plane slot it opened independently of any Control stream.
+	if s.isRevoked(certNodeID) {
+		return status.Errorf(codes.PermissionDenied, "node_id %q is disabled", certNodeID)
+	}
 
 	n, err := s.node(certNodeID)
 	if err != nil {

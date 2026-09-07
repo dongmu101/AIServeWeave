@@ -51,6 +51,14 @@ import (
 // nothing.
 const drainGrace = 30 * time.Second
 
+// version is stamped at build time via -ldflags="-X main.version=...", see
+// the root Dockerfile and scripts/build-release.sh; "dev" is what a plain
+// `go build` produces.
+//
+// version 在构建时通过 -ldflags="-X main.version=..." 注入，见根 Dockerfile 与
+// scripts/build-release.sh；直接 `go build` 得到的就是 "dev"。
+var version = "dev"
+
 func main() {
 	if err := run(); err != nil {
 		os.Stderr.WriteString("gateway: " + err.Error() + "\n")
@@ -76,6 +84,8 @@ func run() error {
 	replicaID := flag.String("replica-id", "", "identity announced to Agents; defaults to the hostname")
 	registryAddr := flag.String("registry-addr", "", "Registry GatewayDirectory endpoint, host:port; empty leaves the roster to be set manually via SetRoster")
 	registryCA := flag.String("registry-ca", "", "PEM CA bundle verifying the Registry's server certificate")
+	registryJoinTokenFile := flag.String("registry-join-token-file", "",
+		"path to the shared secret GatewayDirectory.Join presents to the Registry (STATUS.md's S03); empty omits it, which only works when the Registry has no -gateway-token-file configured")
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
 	redisAddr := flag.String("redis-addr", "",
 		"Redis host:port for fleet-wide rate limiting; empty enforces per-replica, which admits the configured allowance once per replica")
@@ -87,7 +97,13 @@ func run() error {
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	adminAddr := flag.String("admin-addr", "",
 		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		os.Stdout.WriteString("aiserveweave-gateway " + version + "\n")
+		return nil
+	}
 
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(*logLevel)); err != nil {
@@ -345,13 +361,18 @@ func run() error {
 		if endpoint == "" {
 			endpoint = *tunnelAddr
 		}
+		registryJoinToken, err := loadSecretFile(*registryJoinTokenFile)
+		if err != nil {
+			return err
+		}
 		go func() {
 			registryErr <- registryclient.Run(ctx, registryclient.Config{
-				Addr:      *registryAddr,
-				CAFile:    *registryCA,
-				ReplicaID: id,
-				Endpoint:  endpoint,
-				Logger:    logger,
+				Addr:         *registryAddr,
+				CAFile:       *registryCA,
+				ReplicaID:    id,
+				Endpoint:     endpoint,
+				GatewayToken: registryJoinToken,
+				Logger:       logger,
 			}, server)
 		}()
 		logger.Info("joining registry roster", slog.String("registry_addr", *registryAddr))
@@ -524,6 +545,20 @@ func rateLimiter(redisAddr string, logger *slog.Logger) (ratelimit.Limiter, erro
 	}
 	logger.Info("rate limits are enforced fleet-wide", slog.String("redis_addr", redisAddr))
 	return limiter, nil
+}
+
+// loadSecretFile reads a bearer-token secret from path, trimmed of
+// surrounding whitespace, or returns "" without error if path is empty — the
+// caller treats that as "send no credential," not as a misconfiguration.
+func loadSecretFile(path string) (string, error) {
+	if path == "" {
+		return "", nil
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return "", errors.New("cannot read " + path + ": " + err.Error())
+	}
+	return strings.TrimSpace(string(data)), nil
 }
 
 func splitCommaList(s string) []string {

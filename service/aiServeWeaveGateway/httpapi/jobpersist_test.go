@@ -28,6 +28,12 @@ type fakePersistClient struct {
 	createErr     func(jobID string) error
 	updateErr     func(jobID string) error
 	updateApplied bool
+	artifactCalls []artifactCall
+	artifactErr   func(jobID, artifactID string) error
+}
+
+type artifactCall struct {
+	jobID, artifactID, tenantID, filename, subfolder, artifactType string
 }
 
 type createCall struct {
@@ -77,6 +83,17 @@ func (f *fakePersistClient) UpdateJobState(_ context.Context, tenantID, jobID, s
 		}
 	}
 	return applied, nil
+}
+
+func (f *fakePersistClient) CreateJobArtifact(_ context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType string) error {
+	f.mu.Lock()
+	f.artifactCalls = append(f.artifactCalls, artifactCall{jobID, artifactID, tenantID, filename, subfolder, artifactType})
+	errFn := f.artifactErr
+	f.mu.Unlock()
+	if errFn != nil {
+		return errFn(jobID, artifactID)
+	}
+	return nil
 }
 
 func (f *fakePersistClient) createCallCount(jobID string) int {
@@ -312,5 +329,95 @@ func TestJobPersisterStopWaitsForTheInFlightTickAndExitsPromptly(t *testing.T) {
 	case <-stopped:
 	case <-time.After(gatewaytest.Timeout):
 		t.Fatal("Stop did not return after the in-flight call finished")
+	}
+}
+
+func TestJobPersisterReportsArtifactsMintedByListArtifacts(t *testing.T) {
+	clock := gatewaytest.NewClock()
+	jobs := newJobStore(0)
+	addTestJob(jobs, "job_1", "tenant-a", "run-1", clock.Now())
+	jobs.recordArtifacts("job_1", []runtime.ArtifactRef{
+		{RunID: "run-1", Filename: "out.png", Subfolder: "", Type: "output"},
+	})
+
+	client := newFakePersistClient()
+	p := newJobPersister(jobs, client, clock, discardLogger(), jobPersistConfig{Interval: time.Second})
+
+	p.tick()
+
+	client.mu.Lock()
+	calls := append([]artifactCall(nil), client.artifactCalls...)
+	client.mu.Unlock()
+	if len(calls) != 1 {
+		t.Fatalf("artifact calls after first tick = %d, want 1", len(calls))
+	}
+	if calls[0].jobID != "job_1" || calls[0].tenantID != "tenant-a" || calls[0].filename != "out.png" {
+		t.Errorf("artifact call = %+v, want job_1/tenant-a/out.png", calls[0])
+	}
+
+	_, pending, ok := jobs.artifactsForPersist("job_1")
+	if !ok || len(pending) != 0 {
+		t.Errorf("pending artifacts after a successful report = %v, want none", pending)
+	}
+
+	// A tick with nothing new pending makes no further calls.
+	//
+	// 没有新的待确认产物时，下一轮不会再发起调用。
+	clock.Advance(time.Second)
+	p.tick()
+	client.mu.Lock()
+	calls = append([]artifactCall(nil), client.artifactCalls...)
+	client.mu.Unlock()
+	if len(calls) != 1 {
+		t.Errorf("artifact calls after a tick with nothing new pending = %d, want still 1", len(calls))
+	}
+}
+
+func TestJobPersisterRetriesOnlyTheArtifactsStillOwedAfterAPartialFailure(t *testing.T) {
+	clock := gatewaytest.NewClock()
+	jobs := newJobStore(0)
+	addTestJob(jobs, "job_1", "tenant-a", "run-1", clock.Now())
+	jobs.recordArtifacts("job_1", []runtime.ArtifactRef{
+		{RunID: "run-1", Filename: "a.png", Type: "output"},
+		{RunID: "run-1", Filename: "b.png", Type: "output"},
+	})
+
+	client := newFakePersistClient()
+	client.artifactErr = func(_, artifactID string) error {
+		if artifactID == "" {
+			return nil
+		}
+		return errUnreachable
+	}
+	_, initial, _ := jobs.artifactsForPersist("job_1")
+	failing := initial[0].ArtifactID
+	client.artifactErr = func(_, artifactID string) error {
+		if artifactID == failing {
+			return errUnreachable
+		}
+		return nil
+	}
+
+	p := newJobPersister(jobs, client, clock, discardLogger(), jobPersistConfig{Interval: time.Second, MaxBackoff: 8 * time.Second})
+	p.tick()
+
+	_, pending, ok := jobs.artifactsForPersist("job_1")
+	if !ok || len(pending) != 1 || pending[0].ArtifactID != failing {
+		t.Fatalf("pending artifacts after a partial failure = %+v, want only %q", pending, failing)
+	}
+
+	client.artifactErr = nil
+	clock.Advance(2 * time.Second)
+	p.tick()
+
+	_, pending, ok = jobs.artifactsForPersist("job_1")
+	if !ok || len(pending) != 0 {
+		t.Errorf("pending artifacts once the control plane recovers = %v, want none", pending)
+	}
+	client.mu.Lock()
+	total := len(client.artifactCalls)
+	client.mu.Unlock()
+	if total != 3 {
+		t.Errorf("total artifact calls = %d, want 3 (2 in the first batch, 1 retry)", total)
 	}
 }

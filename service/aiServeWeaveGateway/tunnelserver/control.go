@@ -51,6 +51,13 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 		return status.Errorf(codes.PermissionDenied,
 			"Hello declared a node_id that the client certificate does not authorize")
 	}
+	// A revoked node_id (STATUS.md's S03) is refused before a node entry is
+	// even created for it: its certificate is still cryptographically valid
+	// until it expires, so nothing but this check stops it from reconnecting
+	// the instant kill (node.go) ends its previous stream.
+	if s.isRevoked(certNodeID) {
+		return status.Errorf(codes.PermissionDenied, "node_id %q is disabled", certNodeID)
+	}
 
 	n, err := s.node(certNodeID)
 	if err != nil {
@@ -143,11 +150,40 @@ func recvHello(stream tunnelv1.Tunnel_ControlServer) (*tunnelv1.Hello, error) {
 	return hello, nil
 }
 
+// controlRecv is one result of session.stream.Recv(), carried over a channel
+// so serveControl can select on it alongside n.revoked — a plain blocking
+// Recv call gives kill (node.go) no way to interrupt this loop from outside
+// it.
+type controlRecv struct {
+	frame *tunnelv1.AgentControl
+	err   error
+}
+
 // serveControl is the read loop: it answers heartbeats, folds status reports
-// into the node's inventory, and records a drain announcement.
+// into the node's inventory, and records a drain announcement. It returns
+// early, without waiting for the next Recv, the moment n.revoked closes —
+// STATUS.md's S03 needs a disable to end an already-open Control stream, not
+// just refuse the next handshake.
 func (s *Server) serveControl(n *node, session *controlSession) error {
+	recvCh := make(chan controlRecv, 1)
+	go func() {
+		for {
+			frame, err := session.stream.Recv()
+			recvCh <- controlRecv{frame: frame, err: err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+
 	for {
-		frame, err := session.stream.Recv()
+		var recv controlRecv
+		select {
+		case <-n.revoked:
+			return status.Error(codes.PermissionDenied, "node is disabled")
+		case recv = <-recvCh:
+		}
+		frame, err := recv.frame, recv.err
 		if err != nil {
 			if errors.Is(err, io.EOF) {
 				// The Agent half-closed, which is how it reports that

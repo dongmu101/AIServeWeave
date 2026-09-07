@@ -64,8 +64,57 @@ service NodeIdentity {
 // it wants to remain in the roster; the Registry authors GatewayRoster from
 // every currently open Join stream and pushes the full roster to all of them
 // on any change.
+//
+// Join is guarded by a static bearer token (STATUS.md's S03), distinct from
+// TokenAdmin's: a Gateway replica only needs to prove it is allowed to learn
+// and appear in the roster, not to mint or revoke bootstrap tokens or disable
+// nodes, so it is handed a narrower credential. A Registry configured with no
+// such token leaves Join open, matching the behavior before S03 — the same
+// opt-in shape TokenAdmin itself uses for AdminToken.
 service GatewayDirectory {
   rpc Join(stream JoinRequest) returns (stream GatewayRoster);
+}
+
+// TokenAdmin is implemented by the Registry alone, guarded by a static
+// bearer token distinct from any node's mTLS identity (STATUS.md's S02) and
+// from GatewayDirectory.Join's own token (STATUS.md's S03). Minting,
+// revocation, and node enable/disable all need to observe and update the
+// same mutex-guarded state Register itself consumes, which only the process
+// holding that mutex can do safely — that is why this replaces direct file
+// access to the token store instead of leaving it a CLI-only,
+// server-independent tool.
+service TokenAdmin {
+  // MintToken issues a fresh one-time bootstrap token. A non-empty node_id
+  // binds the token to that node identity: Register then treats the bound
+  // value as authoritative — overriding whatever node_id the Agent proposes
+  // — and applies the resulting identity-ledger update unconditionally, the
+  // same way RenewCertificate's own proof of key possession does, because
+  // this authenticated mint call is the out-of-band authorization a
+  // reinstall needs (see the Registry README's node_id 唯一性 section). An
+  // empty node_id mints an unbound token: Register keeps today's behavior,
+  // assigning or accepting whatever node_id the Agent proposes and refusing
+  // a ledger conflict.
+  rpc MintToken(MintTokenRequest) returns (MintTokenResponse);
+
+  // RevokeToken guarantees a token can never be consumed, whether or not it
+  // already has been: revoking an already-used, already-revoked, or expired
+  // token is not an error, since all of those already guarantee the same
+  // thing.
+  rpc RevokeToken(RevokeTokenRequest) returns (RevokeTokenResponse);
+
+  // DisableNode marks a node_id as revoked (STATUS.md's S03): Register and
+  // RenewCertificate both refuse it from this point on, and the Registry
+  // pushes the updated revoked set to every joined Gateway replica on
+  // GatewayRoster, which closes that node_id's existing Control stream(s) —
+  // the "生效路径" the task asks for, not merely blocking future handshakes.
+  // Disabling a node_id that is already disabled, or one that has never
+  // registered, is not an error: both already guarantee the node cannot
+  // authenticate.
+  rpc DisableNode(DisableNodeRequest) returns (DisableNodeResponse);
+
+  // EnableNode clears a prior DisableNode. Enabling a node_id that is not
+  // currently disabled is not an error.
+  rpc EnableNode(EnableNodeRequest) returns (EnableNodeResponse);
 }
 
 // -----------------------------------------------------------------------
@@ -75,10 +124,12 @@ service GatewayDirectory {
 message RegisterRequest {
   // node_id is the Agent's proposed identity. Whether the Registry honours it
   // or assigns its own is an open question (README, 待决问题 3); the response
-  // carries the authoritative value either way.
+  // carries the authoritative value either way — unless bootstrap_token is
+  // itself node_id-bound (TokenAdmin.MintToken), in which case the bound
+  // value always wins.
   string node_id = 1;
   bytes csr = 2;                        // PKCS#10 certificate request, DER
-  string bootstrap_token = 3;           // one-time, short-lived, tenant-bound
+  string bootstrap_token = 3;           // one-time, short-lived, optionally node_id-bound (TokenAdmin.MintToken)
   string agent_version = 4;
 }
 
@@ -99,6 +150,38 @@ message RenewResponse {
   bytes ca_bundle_pem = 2;
   google.protobuf.Timestamp not_after = 3;
 }
+
+// -----------------------------------------------------------------------
+// Token administration
+// -----------------------------------------------------------------------
+
+message MintTokenRequest {
+  google.protobuf.Duration ttl = 1;
+  string node_id = 2;                   // optional; binds the token (see TokenAdmin.MintToken)
+}
+
+message MintTokenResponse {
+  string token = 1;
+  google.protobuf.Timestamp expires_at = 2;
+}
+
+message RevokeTokenRequest {
+  string token = 1;
+}
+
+message RevokeTokenResponse {}
+
+message DisableNodeRequest {
+  string node_id = 1;
+}
+
+message DisableNodeResponse {}
+
+message EnableNodeRequest {
+  string node_id = 1;
+}
+
+message EnableNodeResponse {}
 
 // -----------------------------------------------------------------------
 // Data plane
@@ -320,6 +403,13 @@ message SlotHint {
 message GatewayRoster {
   repeated GatewayReplica replicas = 1;
   int64 version = 2;                    // monotonic; the Agent ignores older versions
+  // revoked_node_ids is the full current set of disabled node_ids
+  // (TokenAdmin.DisableNode, STATUS.md's S03), broadcast on every change the
+  // same way the replica list itself is. A Gateway replica diffs this against
+  // what it knew before and forcibly closes the Control stream of any node_id
+  // that just became revoked, instead of waiting for that node to reconnect
+  // and be refused.
+  repeated string revoked_node_ids = 3;
 }
 
 message GatewayReplica {

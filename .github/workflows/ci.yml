@@ -1,0 +1,134 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# 三个作业相互独立、并行执行：go 与 console 门禁不依赖真实外部后端，
+# mysql-integration 单独跑一份真实 MySQL 9.7，对应 AGENTS.md 与 J08 的
+# "默认测试不依赖真实数据库、外部后端测试独立运行" 约定。
+#
+# The three jobs are independent and run in parallel: the go and console
+# gates need no real external backend, and mysql-integration alone runs
+# against a real MySQL 9.7 — matching AGENTS.md's and J08's convention that
+# the default test suite stays hermetic while external-backend tests run
+# on their own.
+jobs:
+  go:
+    name: Go 格式 / vet / build / proto / test / race
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l ./service ./api)"
+          if [ -n "$out" ]; then
+            echo "以下文件未经 gofmt 格式化 / the following files are not gofmt-formatted:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc-gen-go / protoc-gen-go-grpc
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: 校验 proto 生成结果与仓库一致 / verify proto generation is up to date
+        run: |
+          go generate ./api/...
+          if ! git diff --exit-code -- api/; then
+            echo "生成代码与 .proto 不一致，请在本地重新执行 'go generate ./api/...' 并提交结果 / generated code is out of date, rerun 'go generate ./api/...' locally and commit the result"
+            exit 1
+          fi
+
+      - name: go test
+        run: go test ./...
+
+      - name: go test -race（仅数据面服务，与 AGENTS.md 质量门禁一致）
+        run: go test -race ./service/...
+
+  console:
+    name: Console lint / typecheck / test / build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: service/aiServeWeaveConsole
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          package_json_file: service/aiServeWeaveConsole/package.json
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: service/aiServeWeaveConsole/pnpm-lock.yaml
+
+      - name: pnpm install
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm lint
+        run: pnpm lint
+
+      - name: pnpm build
+        run: pnpm build
+
+      - name: pnpm typecheck
+        run: pnpm typecheck
+
+      - name: pnpm test
+        run: pnpm test
+
+  mysql-integration:
+    name: 真实 MySQL 9.7 集成测试（J08，独立于默认测试）
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:9.7
+        env:
+          MYSQL_ALLOW_EMPTY_PASSWORD: "yes"
+          MYSQL_DATABASE: aiserveweave
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+    env:
+      AISW_MYSQL_TEST_DSN: "root:@tcp(127.0.0.1:3306)/aiserveweave?parseTime=True&charset=utf8mb4"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: go test -race（控制面，含 gormstore 与 e2e 的真实 MySQL 用例）
+        run: go test -race ./service/aiServeWeaveControlPlane/...

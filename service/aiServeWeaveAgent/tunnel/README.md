@@ -990,7 +990,7 @@ go test -race ./service/aiServeWeaveAgent/...
 
 1. ~~**`runtime` 包的位置**~~ **已定：整棵 `runtime/` 下沉到 `common/runtime`，`convert.go` 拆出为 `common/tunnelwire`。** 决定于 Gateway 动工之前。两件事一起做的原因是它们是同一件事的两半：Gateway 要的不只是 `Stream`、`RuntimeError` 和九个 Operation 的类型，还有这些类型与 proto 之间的转换 —— 隧道两端做的是同一次转换的正反两向，各写一份必然漂移，而「凭据不过隧道」「nil 与显式零值不等价」这两条不变量正是靠这次转换保证的。适配器（`ollama/`、`vllm/`、`comfyui/` 等）跟着 `runtime` 一起走，因为它们依赖 `runtime/internal/`，Go 的 internal 规则不允许它们留在原地；Gateway 不 import 它们，也就不会链进去。隧道侧只有 `convert.go` 搬家、四个文件加 `tunnelwire.` 前缀，`operationName` 与 `classifyBareError` 因为跨文件使用而导出为 `OperationName`、`ClassifyBareError`。
 2. **Registry 的 `NodeIdentity` 服务仍未实现。** Agent 侧阶段 2 已按 proto 落地并对 fake Registry 验证，因此不再阻塞隧道开发；但**上线前必须有真实 Registry**，包括 bootstrap token 的一次性强一致校验与 CA 私钥保管。临时用离线签发的证书手工分发也能让 Agent 跑起来（只要 SAN 形式一致），但那条路上没有轮换。
-3. `node_id` 的分配方式：控制台预分配还是 Agent 提交候选后由 Registry 确认。**已不阻塞**：`Register` 两种都支持（配置留空即由 Registry 分配），响应中的 `node_id` 始终权威，配置与之不符时 Agent 拒绝启动。仍需在上线前定下运维口径。
+3. ~~`node_id` 的分配方式：控制台预分配还是 Agent 提交候选后由 Registry 确认；`node_id` 冲突（同一 `node_id` 带着不同 key 再次出现）的运维口径。~~ **已定（STATUS.md 的 S01）：分配方式两种都支持**（配置留空即由 Registry 分配），响应中的 `node_id` 始终权威，配置与之不符时 Agent 拒绝启动；**冲突口径见 [Registry README「`node_id` 唯一性（S01）」](../../aiServeWeaveRegistry/README.md#node_id-唯一性s01)**——Registry 按公钥指纹分辨新注册、无害重连与冲突，冲突一律拒绝并要求运维带外确认后手动清空账本记录，不在协议层自动分辨"重装"与"冒用"。
 4. Secret 引用 `api_key_ref` 的解析方式（本地文件、环境变量还是外部 Secret 管理器），需与 `runtime` 阶段 8 的结论保持一致。
 5. **名册的下发时效**：Registry 到 Gateway 是推送还是轮询（Gateway 侧待决问题 3）。若为 30s 轮询，则副本扩容后 Agent 最长 30s 才会连上新副本，需确认这个窗口可接受。
 6. **`node_total` 的默认取值**：取各 Runtime `MaxConcurrent` 之和是否合理，还是应该更保守。压测（`stress_test.go`）已经能给出"这个 `node_total` 下会被硬配额拦下多少"的数字，但真实取值要等接上真实后端的吞吐才能定。

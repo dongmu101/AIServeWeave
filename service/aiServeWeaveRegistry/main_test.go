@@ -1,8 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"crypto/x509"
 	"encoding/pem"
+	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	goruntime "runtime"
@@ -10,7 +13,13 @@ import (
 	"testing"
 	"time"
 
+	"google.golang.org/grpc"
+
+	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/ca"
+	"AIServeWeave/service/aiServeWeaveRegistry/internal/identitystore"
+	"AIServeWeave/service/aiServeWeaveRegistry/internal/registryserver"
+	"AIServeWeave/service/aiServeWeaveRegistry/internal/tokenstore"
 )
 
 // TestMain asserts no test in this package leaks a goroutine.
@@ -138,5 +147,89 @@ func TestRunIssueServerCertRejects(t *testing.T) {
 				t.Errorf("error = %q, want it to name %q", err, tt.wantErr)
 			}
 		})
+	}
+}
+
+// TestRunTokenAdminClientMintsAndRevokesOverRPC covers the -mint-token/
+// -revoke-token CLI paths end to end against a real server: what STATUS.md's
+// S02 changed them from (direct, racy access to tokens.json) into (gRPC
+// clients of TokenAdmin), so the thing worth testing is that they actually
+// reach a running server rather than that some function returns nil.
+//
+// TestRunTokenAdminClientMintsAndRevokesOverRPC 端到端覆盖 -mint-token/
+// -revoke-token 这两条 CLI 路径，针对一个真实的 server：STATUS.md 的 S02 把
+// 它们从「直接、有竞态地读写 tokens.json」改成了「TokenAdmin 的 gRPC 客户端」，
+// 值得测的是它们确实打到了一个正在运行的 server，而不是某个函数返回了 nil。
+func TestRunTokenAdminClientMintsAndRevokesOverRPC(t *testing.T) {
+	dir := t.TempDir()
+	root, err := ca.LoadOrCreate(filepath.Join(dir, "ca"))
+	if err != nil {
+		t.Fatalf("ca.LoadOrCreate() error = %v", err)
+	}
+	tokens, err := tokenstore.Open(filepath.Join(dir, "tokens.json"))
+	if err != nil {
+		t.Fatalf("tokenstore.Open() error = %v", err)
+	}
+	identities, err := identitystore.Open(filepath.Join(dir, "identities.json"))
+	if err != nil {
+		t.Fatalf("identitystore.Open() error = %v", err)
+	}
+
+	const adminToken = "test-admin-token-0123456789abcdef"
+	adminTokenFile := filepath.Join(dir, "admin-token")
+	if err := os.WriteFile(adminTokenFile, []byte(adminToken), 0o600); err != nil {
+		t.Fatalf("write admin token file: %v", err)
+	}
+
+	server, err := registryserver.New(registryserver.Config{
+		CA: root, Tokens: tokens, Identities: identities, AdminToken: adminToken,
+	})
+	if err != nil {
+		t.Fatalf("registryserver.New() error = %v", err)
+	}
+	creds, err := serverCredentials(root, "", "", "127.0.0.1:0", "")
+	if err != nil {
+		t.Fatalf("serverCredentials() error = %v", err)
+	}
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("Listen() error = %v", err)
+	}
+	grpcServer := grpc.NewServer(grpc.Creds(creds))
+	tunnelv1.RegisterTokenAdminServer(grpcServer, server)
+	go grpcServer.Serve(lis)
+	t.Cleanup(grpcServer.GracefulStop)
+
+	var out bytes.Buffer
+	if err := runTokenAdminClient(&out, dir, lis.Addr().String(), "", adminTokenFile, tokenAdminAction{
+		mint: true, ttl: 15 * time.Minute,
+	}); err != nil {
+		t.Fatalf("runTokenAdminClient(mint) error = %v", err)
+	}
+	token := strings.TrimSpace(out.String())
+	if token == "" {
+		t.Fatal("runTokenAdminClient(mint) printed an empty token")
+	}
+
+	if _, err := tokens.Consume(token, time.Now()); err != nil {
+		t.Fatalf("Consume() on the RPC-minted token error = %v, want nil", err)
+	}
+
+	// A second token, this time revoked instead of consumed: the running
+	// server's own in-memory store must observe the revocation immediately,
+	// which is the entire reason revocation goes over RPC and not through a
+	// second process editing tokens.json.
+	tok2, err := tokens.Mint(15*time.Minute, time.Now())
+	if err != nil {
+		t.Fatalf("Mint() error = %v", err)
+	}
+	out.Reset()
+	if err := runTokenAdminClient(&out, dir, lis.Addr().String(), "", adminTokenFile, tokenAdminAction{
+		revoke: tok2,
+	}); err != nil {
+		t.Fatalf("runTokenAdminClient(revoke) error = %v", err)
+	}
+	if _, err := tokens.Consume(tok2, time.Now()); !errors.Is(err, tokenstore.ErrInvalidToken) {
+		t.Fatalf("Consume() on the RPC-revoked token error = %v, want ErrInvalidToken", err)
 	}
 }

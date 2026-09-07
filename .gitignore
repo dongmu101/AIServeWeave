@@ -1,2 +1,5 @@
 .agents
 .claude
+
+# scripts/build-release.sh output
+dist/

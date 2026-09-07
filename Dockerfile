@@ -13,6 +13,15 @@
 
 FROM golang:1.27-alpine AS build
 ARG SERVICE
+# VERSION is stamped into the binary's `main.version` (see each service's
+# `-version` flag) so a running container reports the tag it was built from
+# instead of always saying "dev". Release CI passes the tag; a plain
+# docker build with no --build-arg VERSION keeps the "dev" default.
+#
+# VERSION 被打进二进制的 `main.version`（见各服务的 `-version` flag），好让一个正在
+# 跑的容器报告它是从哪个 tag 构建的，而不是永远显示 "dev"。发布流水线会传入 tag；不带
+# --build-arg VERSION 的普通 docker build 保留 "dev" 默认值。
+ARG VERSION=dev
 WORKDIR /src
 
 # Dependencies are fetched in their own layer so a source-only change does not
@@ -29,7 +38,7 @@ COPY . .
 # 关闭 CGO，好让产物能跑在没有 libc 需要匹配的精简基础镜像上。-trimpath 让构建机的
 # 路径不进入二进制。
 RUN test -n "$SERVICE" || (echo "SERVICE build-arg is required" >&2; exit 1) && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/service ./service/${SERVICE}
+    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/service ./service/${SERVICE}
 
 FROM alpine:3.22
 # ca-certificates is for outbound TLS — the Gateway calls the control plane

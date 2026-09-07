@@ -21,6 +21,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
@@ -69,6 +70,7 @@ type scriptedDirectory struct {
 	connections    int
 	firstRequests  []*tunnelv1.JoinRequest
 	laterRequests  []*tunnelv1.JoinRequest
+	authorizations []string
 }
 
 func (d *scriptedDirectory) Join(stream tunnelv1.GatewayDirectory_JoinServer) error {
@@ -77,10 +79,18 @@ func (d *scriptedDirectory) Join(stream tunnelv1.GatewayDirectory_JoinServer) er
 		return err
 	}
 
+	var auth string
+	if md, ok := metadata.FromIncomingContext(stream.Context()); ok {
+		if values := md.Get("authorization"); len(values) == 1 {
+			auth = values[0]
+		}
+	}
+
 	d.mu.Lock()
 	idx := d.connections
 	d.connections++
 	d.firstRequests = append(d.firstRequests, first)
+	d.authorizations = append(d.authorizations, auth)
 	roster := d.rosters[min(idx, len(d.rosters)-1)]
 	closeAfterSend := d.closeAfterSend
 	d.mu.Unlock()
@@ -110,6 +120,15 @@ func (d *scriptedDirectory) requests() (first, later []*tunnelv1.JoinRequest) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return append([]*tunnelv1.JoinRequest(nil), d.firstRequests...), append([]*tunnelv1.JoinRequest(nil), d.laterRequests...)
+}
+
+func (d *scriptedDirectory) lastAuthorization() string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if len(d.authorizations) == 0 {
+		return ""
+	}
+	return d.authorizations[len(d.authorizations)-1]
 }
 
 // testCA is a throwaway certificate authority for the fake Registry's own
@@ -208,6 +227,35 @@ func startFakeRegistry(t *testing.T, dir *scriptedDirectory) (addr, caFile strin
 		t.Fatalf("write CA file: %v", err)
 	}
 	return lis.Addr().String(), caPath
+}
+
+// TestRunSendsTheGatewayTokenAsBearerAuthorization covers the outgoing half
+// of STATUS.md's S03: Run must attach Config.GatewayToken to Join exactly the
+// way the Registry's requireGatewayToken (registryserver/roster.go) expects
+// to read it back.
+func TestRunSendsTheGatewayTokenAsBearerAuthorization(t *testing.T) {
+	dir := &scriptedDirectory{
+		rosters: []*tunnelv1.GatewayRoster{{Version: 1}},
+	}
+	addr, caFile := startFakeRegistry(t, dir)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	runErr := make(chan error, 1)
+	go func() {
+		runErr <- registryclient.Run(ctx, registryclient.Config{
+			Addr:         addr,
+			CAFile:       caFile,
+			ReplicaID:    "replica-a",
+			Endpoint:     "10.0.0.9:8443",
+			GatewayToken: "test-gateway-token",
+		}, &fakeRosterSetter{})
+	}()
+	t.Cleanup(cancel)
+
+	waitFor(t, func() bool { return dir.lastAuthorization() != "" })
+	if got, want := dir.lastAuthorization(), "Bearer test-gateway-token"; got != want {
+		t.Fatalf("Join() authorization metadata = %q, want %q", got, want)
+	}
 }
 
 func TestRunRelaysEveryRosterAndSendsDrainingOnShutdown(t *testing.T) {

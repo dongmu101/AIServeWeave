@@ -1,0 +1,186 @@
+name: Release
+
+# 打一个 vX.Y.Z tag 触发：重跑一遍质量门禁，交叉编译四个二进制的全部受支持平台，
+# 生成校验和，构建并推送四个服务的多架构容器镜像到 GHCR，创建 GitHub Release。
+# 流程与版本策略见根 RELEASING.md，不在这里重复。
+#
+# Fires on a vX.Y.Z tag push: reruns the quality gates, cross-compiles all
+# four binaries for every supported platform, generates checksums, builds and
+# pushes multi-arch images for all four services to GHCR, and creates a
+# GitHub Release. The process and versioning policy live in the root
+# RELEASING.md — not repeated here.
+on:
+  push:
+    tags:
+      - "v[0-9]+.[0-9]+.[0-9]+"
+
+permissions:
+  contents: write   # create the GitHub Release and upload its assets
+  packages: write   # push images to GHCR
+
+jobs:
+  verify:
+    name: 发布前质量门禁（同 CI）
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: gofmt
+        run: |
+          out="$(gofmt -l ./service ./api)"
+          if [ -n "$out" ]; then
+            echo "以下文件未经 gofmt 格式化 / the following files are not gofmt-formatted:"
+            echo "$out"
+            exit 1
+          fi
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: go build
+        run: go build ./...
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install protoc-gen-go / protoc-gen-go-grpc
+        run: |
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@latest
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@latest
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: 校验 proto 生成结果与仓库一致 / verify proto generation is up to date
+        run: |
+          go generate ./api/...
+          if ! git diff --exit-code -- api/; then
+            echo "生成代码与 .proto 不一致，发布中止 / generated code is out of date, aborting release"
+            exit 1
+          fi
+
+      - name: go test
+        run: go test ./...
+
+      - name: go test -race（仅数据面服务）
+        run: go test -race ./service/...
+
+  binaries:
+    name: 交叉编译二进制与校验和
+    needs: verify
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - name: scripts/build-release.sh
+        env:
+          VERSION: ${{ github.ref_name }}
+        run: scripts/build-release.sh
+
+      - name: Upload dist as a build artifact（供 release 作业下载）
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          retention-days: 1
+
+  images:
+    name: 构建并推送容器镜像
+    needs: verify
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        include:
+          - image: registry
+            context: .
+            build_args: |
+              SERVICE=aiServeWeaveRegistry
+              VERSION=${{ github.ref_name }}
+          - image: controlplane
+            context: .
+            build_args: |
+              SERVICE=aiServeWeaveControlPlane
+              VERSION=${{ github.ref_name }}
+          - image: gateway
+            context: .
+            build_args: |
+              SERVICE=aiServeWeaveGateway
+              VERSION=${{ github.ref_name }}
+          - image: console
+            context: service/aiServeWeaveConsole
+            build_args: ""
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU（跨架构模拟，供 buildx 构建 linux/arm64）
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          platforms: linux/amd64,linux/arm64
+          push: true
+          build-args: ${{ matrix.build_args }}
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/aiserveweave-${{ matrix.image }}:${{ github.ref_name }}
+            ghcr.io/${{ github.repository_owner }}/aiserveweave-${{ matrix.image }}:latest
+
+  release:
+    name: 创建 GitHub Release
+    needs: [binaries, images]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout（读 CHANGELOG）
+        uses: actions/checkout@v4
+
+      - name: Download dist
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist
+
+      - name: 提取本版本的 CHANGELOG 小节 / extract this version's CHANGELOG section
+        run: |
+          version="${GITHUB_REF_NAME#v}"
+          awk -v ver="## [$version]" '
+            index($0, ver) == 1 { found=1; next }
+            found && (/^## \[/ || /^\[.*\]: http/) { exit }
+            found { print }
+          ' CHANGELOG.md > release-notes.md
+          if [ ! -s release-notes.md ]; then
+            echo "CHANGELOG.md 里没有找到 [$version] 小节，发布中止 / no [$version] section found in CHANGELOG.md, aborting" >&2
+            exit 1
+          fi
+
+      - name: gh release create
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file release-notes.md \
+            dist/*

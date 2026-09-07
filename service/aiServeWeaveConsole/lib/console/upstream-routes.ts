@@ -128,6 +128,27 @@ const ROUTES: readonly UpstreamRoute[] = [
     segments: [literal("admin"), literal("v1"), literal("jobs")],
     query: [],
   },
+  {
+    method: "GET",
+    segments: [
+      literal("admin"),
+      literal("v1"),
+      literal("jobs"),
+      literal("history"),
+    ],
+    query: ["limit", "cursor", "state", "workflow_id", "since", "until"],
+  },
+  {
+    method: "GET",
+    segments: [
+      literal("admin"),
+      literal("v1"),
+      literal("jobs"),
+      literal("history"),
+      param(),
+    ],
+    query: [],
+  },
 ];
 
 /**

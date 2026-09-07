@@ -310,15 +310,23 @@ func (r SetLimitsRequest) Limits() quota.Limits {
 // 这次运行可能已经在节点上继续推进，只是这一行还没跟上。持久化状态为什么是
 // 一份最后观测的快照，见 ControlPlane README「Job 持久化契约」；TerminalAt
 // 则是唯一一个一旦被设置就保证不会再移动的时间戳。
+// Artifacts is only populated by getJobHistory (one job, one extra query is
+// cheap); listJobHistory leaves it nil rather than issuing a
+// ListJobArtifacts per row for a page of jobs most callers never expand.
+//
+// Artifacts 只由 getJobHistory 填充（单个 job，多一次查询代价很低）；
+// listJobHistory 让它保持 nil，而不是为一页里大多数调用方根本不会展开的每一行
+// 都发起一次 ListJobArtifacts。
 type JobHistoryResponse struct {
-	JobID           string     `json:"job_id"`
-	WorkflowID      string     `json:"workflow_id"`
-	WorkflowVersion string     `json:"workflow_version,omitempty"`
-	State           string     `json:"state"`
-	ErrorSummary    string     `json:"error_summary,omitempty"`
-	CreatedAt       time.Time  `json:"created_at"`
-	UpdatedAt       time.Time  `json:"updated_at"`
-	TerminalAt      *time.Time `json:"terminal_at,omitempty"`
+	JobID           string                `json:"job_id"`
+	WorkflowID      string                `json:"workflow_id"`
+	WorkflowVersion string                `json:"workflow_version,omitempty"`
+	State           string                `json:"state"`
+	ErrorSummary    string                `json:"error_summary,omitempty"`
+	CreatedAt       time.Time             `json:"created_at"`
+	UpdatedAt       time.Time             `json:"updated_at"`
+	TerminalAt      *time.Time            `json:"terminal_at,omitempty"`
+	Artifacts       []JobArtifactResponse `json:"artifacts,omitempty"`
 }
 
 // JobHistoryListResponse is one page of a tenant's persisted job history.

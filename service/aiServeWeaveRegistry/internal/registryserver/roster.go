@@ -1,16 +1,50 @@
 package registryserver
 
 import (
+	"context"
+	"crypto/subtle"
 	"errors"
 	"io"
 	"log/slog"
 	"sync"
 
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 )
+
+// requireGatewayToken authenticates a GatewayDirectory.Join caller the same
+// way requireAdmin (token_admin.go) authenticates a TokenAdmin caller — a
+// constant-time comparison against a "authorization: Bearer <token>" gRPC
+// metadata entry — but against the narrower GatewayToken (STATUS.md's S03).
+// An empty GatewayToken leaves Join open, matching this method's behavior
+// before S03: unlike TokenAdmin's registration, Join cannot be conditionally
+// unregistered, since GatewayDirectory is core functionality a Gateway
+// replica cannot run without.
+func (s *Server) requireGatewayToken(ctx context.Context) error {
+	if s.gatewayToken == "" {
+		return nil
+	}
+	md, ok := metadata.FromIncomingContext(ctx)
+	if !ok {
+		return status.Error(codes.Unauthenticated, "missing authorization metadata")
+	}
+	values := md.Get("authorization")
+	if len(values) != 1 {
+		return status.Error(codes.Unauthenticated, "missing authorization metadata")
+	}
+	const prefix = "Bearer "
+	header := values[0]
+	if len(header) <= len(prefix) || header[:len(prefix)] != prefix {
+		return status.Error(codes.Unauthenticated, "malformed authorization metadata")
+	}
+	if subtle.ConstantTimeCompare([]byte(header[len(prefix):]), []byte(s.gatewayToken)) != 1 {
+		return status.Error(codes.PermissionDenied, "invalid gateway token")
+	}
+	return nil
+}
 
 // rosterState is the Registry's authoritative view of connected Gateway
 // replicas: one entry per open Join stream, plus a monotonic version that
@@ -21,6 +55,7 @@ import (
 type rosterState struct {
 	mu       sync.Mutex
 	replicas map[string]*tunnelv1.GatewayReplica
+	revoked  map[string]struct{}
 	version  int64
 	streams  map[*joinStream]struct{}
 }
@@ -48,6 +83,10 @@ func (j *joinStream) send(roster *tunnelv1.GatewayRoster) error {
 // long as this call is open, and drops out the moment it ends, by error or
 // by the replica hanging up.
 func (s *Server) Join(stream tunnelv1.GatewayDirectory_JoinServer) error {
+	if err := s.requireGatewayToken(stream.Context()); err != nil {
+		return err
+	}
+
 	first, err := stream.Recv()
 	if err != nil {
 		return err
@@ -136,6 +175,44 @@ func (r *rosterState) leave(js *joinStream) {
 	broadcast(roster, targets)
 }
 
+// setRevoked replaces the revoked node_id set and broadcasts the resulting
+// roster to every currently open stream, unless the set is unchanged from
+// what was already broadcast — TokenAdmin.DisableNode/EnableNode both call
+// this after every write, and Enable undoing something that was never
+// disabled must not bump the version and force every replica to reprocess an
+// identical roster.
+func (r *rosterState) setRevoked(nodeIDs []string) {
+	next := make(map[string]struct{}, len(nodeIDs))
+	for _, id := range nodeIDs {
+		next[id] = struct{}{}
+	}
+
+	r.mu.Lock()
+	if mapsEqual(r.revoked, next) {
+		r.mu.Unlock()
+		return
+	}
+	r.revoked = next
+	r.version++
+	roster, targets := r.snapshotLocked()
+	r.mu.Unlock()
+
+	broadcast(roster, targets)
+}
+
+// mapsEqual reports whether two sets of node_ids hold the same members.
+func mapsEqual(a, b map[string]struct{}) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for id := range a {
+		if _, ok := b[id]; !ok {
+			return false
+		}
+	}
+	return true
+}
+
 // snapshotLocked builds the current roster and the list of streams to send it
 // to. Callers must hold r.mu.
 func (r *rosterState) snapshotLocked() (*tunnelv1.GatewayRoster, []*joinStream) {
@@ -143,7 +220,11 @@ func (r *rosterState) snapshotLocked() (*tunnelv1.GatewayRoster, []*joinStream) 
 	for _, rep := range r.replicas {
 		replicas = append(replicas, rep)
 	}
-	roster := &tunnelv1.GatewayRoster{Replicas: replicas, Version: r.version}
+	revoked := make([]string, 0, len(r.revoked))
+	for id := range r.revoked {
+		revoked = append(revoked, id)
+	}
+	roster := &tunnelv1.GatewayRoster{Replicas: replicas, Version: r.version, RevokedNodeIds: revoked}
 	targets := make([]*joinStream, 0, len(r.streams))
 	for js := range r.streams {
 		targets = append(targets, js)

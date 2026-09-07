@@ -214,12 +214,21 @@ func TestJobHistoryIsIsolatedByTenantOverHTTP(t *testing.T) {
 		}
 	}
 
+	if _, err := client.CreateJobArtifact(context.Background(), "job_history_1", controlplaneclient.CreateJobArtifactRequest{
+		ArtifactID: "art_1", TenantID: tenantA.Tenant.ID, Filename: "out.png", Type: "output",
+	}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
 	var detail types.JobHistoryResponse
 	if status := h.call(http.MethodGet, "/admin/v1/jobs/history/job_history_1", sessionA, nil, &detail); status != http.StatusOK {
 		t.Fatalf("tenant A reading its own job's detail: status %d", status)
 	}
 	if detail.JobID != "job_history_1" {
 		t.Errorf("detail.JobID = %q, want job_history_1", detail.JobID)
+	}
+	if len(detail.Artifacts) != 1 || detail.Artifacts[0].ArtifactID != "art_1" {
+		t.Errorf("detail.Artifacts = %+v, want exactly one artifact art_1", detail.Artifacts)
 	}
 
 	if status := h.call(http.MethodGet, "/admin/v1/jobs/history/job_history_1", sessionB, nil, nil); status != http.StatusNotFound {

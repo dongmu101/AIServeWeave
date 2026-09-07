@@ -66,6 +66,18 @@ func (g *GatewayPersister) UpdateJobState(ctx context.Context, tenantID, jobID, 
 	return applied, err
 }
 
+// CreateJobArtifact implements httpapi.JobPersistClient.
+func (g *GatewayPersister) CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType string) error {
+	_, err := g.client.CreateJobArtifact(ctx, jobID, CreateJobArtifactRequest{
+		ArtifactID: artifactID,
+		TenantID:   tenantID,
+		Filename:   filename,
+		Subfolder:  subfolder,
+		Type:       artifactType,
+	})
+	return err
+}
+
 // ListActiveJobsForRoute implements httpapi.JobRecoveryClient.
 func (g *GatewayPersister) ListActiveJobsForRoute(ctx context.Context, nodeID, runtimeID string) ([]httpapi.RecoveredJob, error) {
 	jobs, err := g.client.ListActiveJobsForRoute(ctx, nodeID, runtimeID)

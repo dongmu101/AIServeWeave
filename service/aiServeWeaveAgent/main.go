@@ -26,11 +26,17 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
 
-const (
-	// agentVersion is reported in the tunnel handshake and to the Registry.
-	// It is a constant until the build stamps a real version in.
-	agentVersion = "dev"
+// version is reported in the tunnel handshake and to the Registry, and
+// printed by -version. It is stamped at build time via
+// -ldflags="-X main.version=...", see the root Dockerfile and
+// scripts/build-release.sh; "dev" is what a plain `go build` produces.
+//
+// version 在隧道握手中上报给 Registry，也是 -version 打印的内容。构建时通过
+// -ldflags="-X main.version=..." 注入，见根 Dockerfile 与
+// scripts/build-release.sh；直接 `go build` 得到的就是 "dev"。
+var version = "dev"
 
+const (
 	// shutdownTimeout bounds how long the agent waits for in-flight runtime
 	// work to wind down before exiting anyway.
 	shutdownTimeout = 15 * time.Second
@@ -56,7 +62,13 @@ func main() {
 		"how often auto-discovery looks for a newly appeared local instance")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",
 		"address the Prometheus /metrics listener binds; loopback by default because the agent never listens on a public port, empty disables it")
+	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
+
+	if *showVersion {
+		os.Stdout.WriteString("aiserveweave-agent " + version + "\n")
+		return
+	}
 
 	logger, err := newLogger(*logLevel)
 	if err != nil {
@@ -353,7 +365,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		KeyFile:            opts.keyFile,
 		CAFile:             opts.caFile,
 		BootstrapTokenFile: opts.bootstrapToken,
-		AgentVersion:       agentVersion,
+		AgentVersion:       version,
 		Logger:             logger,
 	}, connector)
 	if err != nil {
@@ -383,7 +395,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 	tunnels, err := tunnel.NewManager(tunnel.ManagerConfig{
 		Client: tunnel.ClientConfig{
 			NodeID:          identity.NodeID,
-			AgentVersion:    agentVersion,
+			AgentVersion:    version,
 			Manager:         manager,
 			AllowedRuntimes: opts.runtimeIDs(),
 			Labels:          opts.nodeLabels(),

@@ -194,7 +194,7 @@ Fleet:
 
 **`/admin/v1/jobs` 是实时视图，不是历史。** Gateway 的 job 表在进程内存、有上限、每副本各自持有：运行会随副本重启消失、被上限挤出，且从不跨副本可见。因此它能回答「现在在跑什么」，回答不了「上周跑过什么」——回答后者的是 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（STATUS.md 的 J07，见下面「Job 持久化契约」一节的「已实现的持久化历史查询」小节），两者直接读 `jobs` 表，与 `Fleet` 是否配置无关，因此不挂在这两条实时端点旁边，而在常规会话组里无条件挂载。
 
-## Job 持久化契约（J01-J08 已完成，取消与产物访问未做）
+## Job 持久化契约（J01-J08 均已完成）
 
 本节是 [STATUS.md](../../STATUS.md) J01 的交付物：定义 Gateway 内存 job 表之外那份持久化记录的写入时机、失败语义与状态机，供 J03（建表）、J04（内部 API）、J05（故障窗口）、J06（重启恢复）、J07（历史查询）、J08（真实 MySQL 验证）落地时对齐，不是它们的替代。以下到「与后续任务的关系」为止是 J01 的契约本身，只定义、不引入数据库代码；「已实现的存储层」「已实现的内部 API 与 Gateway 客户端」「已接入持久化」「已实现的重启恢复」「已实现的持久化历史查询」「真实 MySQL 9.7 上的集成与故障验证」六小节分别记录 J03、J04、J05、J06、J07、J08 在这份契约上落地了什么。
 
@@ -303,7 +303,7 @@ Gateway 侧的消费者是 `httpapi/jobrecover.go` 的 `jobRecoverer`，与 `job
 
 **恢复的执行权刻意不是排他的。** 一个节点/runtime 可能同时连接到不止一个 Gateway 副本（STATUS.md 的 P2 就提到这一点），此设计不为它们选出一个"负责"的副本，也没有认领或租约机制。多个副本各自独立地同步、持久化同一个 job，在构造上就是安全的：本节前面「状态更新：幂等、单调，拒绝无条件覆盖」定义的 `observed_seq` 门槛，无需协调即可化解并发写入——这与它已经化解单个副本上一次前台轮询与一次后台同步的竞争，是同一条机制。**一个再也没有重新连接到任何副本的节点不被当作失败处理**：没有任何东西会为一个够不着的 job 主动编造终态，它的持久化记录只会停在最后观测到的状态，与 Gateway README 一贯的立场一致。
 
-### 已实现的持久化历史查询（J07 的只读部分）
+### 已实现的持久化历史查询与 Console 接入（J07）
 
 `internal/handler` 在常规会话组（不依赖 `Fleet` 配置）新增两个端点：`GET /admin/v1/jobs/history`（按 `state`、`workflow_id`、`since`、`until` 筛选，keyset 分页，参数与校验规则复用 `/admin/v1/audit` 已有的 `listQuery`/`timeParam`）与 `GET /admin/v1/jobs/history/:id`。两者都直接读 `jobs` 表，因此与前一节 `/admin/v1/jobs`（Fleet 实时视图）互补而非替代：一个回答「现在在跑什么」，一个回答「上周跑过什么」，即便对方所需的 Gateway 读取路径完全没有配置。
 
@@ -313,7 +313,9 @@ Gateway 侧的消费者是 `httpapi/jobrecover.go` 的 `jobRecoverer`，与 `job
 
 **取消与授权产物访问已在 Console 一侧实现。** 上面「数据库故障不拖垮普通推理链路」一节那句「取消/产物访问完全不经过控制面……不应该在这两条路径上新增对控制面的依赖」，回答的是一个更窄的问题：J02～J06 的持久化后台写入链路，不该把已经存在的「客户端持自己的 API Key 直连 Gateway」这条取消/产物路径也拉扯进控制面。它没有讨论过、也回答不了 Console 这个结构上不可能持有任何租户 API Key 的会话客户端，要如何把一次已登录的租户会话兑现成一次对 Gateway 数据面有权限的调用——这是它俩之间真正要解决的问题。
 
-采用的方案是 **Console 服务端直接持有一把该租户的 Gateway API Key**（owner/admin 用已有的「创建 API Key」功能生成，粘贴进 Console 一个新的设置页由 Console 加密存储在会话 cookie 里），不做 scope 收紧——这把 Key 与租户自己创建的 Key 权限完全相同，Console 自己的会话/角色体系（owner/admin/member）是唯一的授权判断点，判断通过后直接用这把 Key 调 Gateway 的 `/v1/jobs/{id}/cancel` 与 `/v1/jobs/{id}/artifacts`。**Gateway 与控制面都没有为此新增任何代码**——这是选择这个方案而不是按次签发限定域 token 的主要原因。已知的代价：这把 Key 一旦被拿到，能做的不只是取消/读产物，也能拿去跑推理、烧配额；爆炸半径仍局限在单个租户内，但比加了 scope 字段的版本更大。这是当前阶段（没有真实租户在生产环境运行）刻意接受的权衡，不是遗漏，真有生产租户之后应当重新评估是否要收紧。实现见 Console 的 `AGENTS.md`「与后端的边界」一节记录的这条明文例外，以及 `lib/server/gateway.ts`、`app/api/gateway-key/`、`app/api/gateway/`、`app/console/settings/`；目前只接在 Console 的实时 Job 视图上，尚未接到持久化历史页面（该页面本身也还没有），也没有做产物预览。
+采用的方案是 **Console 服务端直接持有一把该租户的 Gateway API Key**（owner/admin 用已有的「创建 API Key」功能生成，粘贴进 Console 一个新的设置页由 Console 加密存储在会话 cookie 里），不做 scope 收紧——这把 Key 与租户自己创建的 Key 权限完全相同，Console 自己的会话/角色体系（owner/admin/member）是唯一的授权判断点，判断通过后直接用这把 Key 调 Gateway 的 `/v1/jobs/{id}/cancel` 与 `/v1/jobs/{id}/artifacts`。**Gateway 与控制面都没有为此新增任何代码**——这是选择这个方案而不是按次签发限定域 token 的主要原因。已知的代价：这把 Key 一旦被拿到，能做的不只是取消/读产物，也能拿去跑推理、烧配额；爆炸半径仍局限在单个租户内，但比加了 scope 字段的版本更大。这是当前阶段（没有真实租户在生产环境运行）刻意接受的权衡，不是遗漏，真有生产租户之后应当重新评估是否要收紧。实现见 Console 的 `AGENTS.md`「与后端的边界」一节记录的这条明文例外，以及 `lib/server/gateway.ts`、`app/api/gateway-key/`、`app/api/gateway/`、`app/console/settings/`；同时接在 Console 的实时 Job 视图（`app/console/jobs`）与持久化历史详情页（`app/console/jobs/history/[id]`）上。
+
+**持久化历史列表页、详情页与产物预览已经落地。** `app/console/jobs/history`（列表，走上面两个新端点的分页与筛选）与 `app/console/jobs/history/[id]`（详情）已经接上；详情页能内联预览图片/视频产物，靠的是产物本身仍经由上面那把 Gateway API Key 从 Gateway 数据面流式取回，本服务只提供产物 id 列表。**这份 id 列表此前是空的**：J04 建好了 `CreateJobArtifact` 写入 API，但直到这次修复前，Gateway 从未调用它——`listArtifacts` 铸造的公开产物 id 只留在 Gateway 自己的内存里，从未上报到本服务的 `job_artifacts` 表。修复是在 `jobPersister`（J05 的同一个后台循环）里新增一条并行的旁路：`jobStore` 记录每个 job 尚未确认的产物（`pendingArtifacts`），`jobPersister.persistArtifacts` 按批调用 `CreateJobArtifact` 上报，失败的产物留在待确认列表里等下一轮重试，成功的立即移除——与 job 状态本身的持久化重试是同一套纪律，只是粒度更细（逐产物而不是逐 job）。`getJobHistory` 现在会带上 `ListJobArtifacts` 的结果渲染进 `JobHistoryResponse.Artifacts`（仅详情端点，列表端点不逐行多发一次查询）。
 
 ### 真实 MySQL 9.7 上的集成与故障验证（J08）
 
@@ -325,10 +327,9 @@ Gateway 侧的消费者是 `httpapi/jobrecover.go` 的 `jobRecoverer`，与 `job
 
 ### 与后续任务的关系
 
-Job 持久化契约到这里，J01～J08 均已完成（J07 只完成只读历史部分）：定义、建表、内部 API、接入写入、重启恢复、持久化历史查询、真实 MySQL 验证。留下两处已知的、如实记录而非蒙混过去的边界：
+Job 持久化契约到这里，J01～J08 均已完成：定义、建表、内部 API、接入写入、重启恢复、持久化历史查询与 Console 接入、真实 MySQL 验证。留下一处已知的、如实记录而非蒙混过去的边界：
 
-- 一个 job 在被 J05 的持久化器追上之前就被 Gateway 内存表逐出，这条记录永久丢失——不是靠扩大内存表解决，而是接受这一权衡：内存表的有界性是「任何一跳都不得无界缓冲」的红线，持久化没赶上逐出速度的窗口期损失，比无界的内存表更可接受。
-- Job 历史的取消与授权产物访问需要一条全新的「会话到租户级 Gateway 调用权限」的链路，尚未设计，更未实现，Console 侧也尚未接入持久化历史的两个新端点——均见上面「已实现的持久化历史查询」一节的说明，留给 Console STATUS 的 C26 任务。
+- 一个 job 在被 J05 的持久化器追上之前就被 Gateway 内存表逐出，这条记录永久丢失——不是靠扩大内存表解决，而是接受这一权衡：内存表的有界性是「任何一跳都不得无界缓冲」的红线，持久化没赶上逐出速度的窗口期损失，比无界的内存表更可接受。产物的持久化（`jobPersister.persistArtifacts`）继承的是同一张内存表，因此同一条权衡也适用于它：一个还没来得及上报就被逐出的 job，其产物记录同样永久丢失。
 
 ## 已知缺口
 
@@ -340,7 +341,7 @@ Job 持久化契约到这里，J01～J08 均已完成（J07 只完成只读历�
 6. **没有平台运维身份。** 机群清单由共享密钥守卫，背后没有用户，因此本服务无法记录「是谁读的」，也无法把运维权限授予某个具体的人。当前是由 Console 侧的名单决定谁能使用那个密钥（见 Console 的 `lib/server/operator.ts`），这是一处缺口而不是设计。真正的解法是在角色模型里引入平台级身份，那时机群端点可以改为会话守卫并进入审计。
 7. **机群清单只读。** 节点的审批、禁用与维护状态需要持久化与下发路径，路由配置的版本、发布与回滚需要把那张表从 Gateway 的文件搬进本服务。两者都还没做。
 8. **Job 状态不会自行推进这一条已在 Gateway 侧补上。** `/admin/v1/jobs` 返回的 `state` 仍是 Gateway 最后观测到的状态，但现在即使提交方停止轮询、也不挂着事件流，Gateway 自己的后台同步器（`httpapi/jobsync.go`，见 [Gateway README 工作流 Job 一节](../aiServeWeaveGateway/README.md#工作流-job)第九条）也会代为继续观测，因此运行仍会走向终态，只是本服务这次聚合到的仍是某一时刻的快照。真正的缺口收窄到「没有 Job 历史」（见下一条）：状态会推进,但推进的记录仍只存在于 Gateway 内存里，本服务读到的是聚合时的截面，不是可回放的时间线。
-9. **可查询的 Job 历史已经建好，但 Console 还没有页面接它。** `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（J07，见上面「Job 持久化契约」一节的「已实现的持久化历史查询」小节）直接读 `jobs` 表，按租户、时间、状态、工作流分页，副本重启不再让它消失——`/admin/v1/jobs`（实时聚合）与它是两条并存的路径，回答的是两个不同的问题，不是谁取代谁。缺的是 Console 侧读这两个新端点的页面（`app/console/jobs` 目前只渲染实时视图）与 Job 详情页。取消与产物下载已经实现，但目前只接在实时视图上（见上面同一小节的说明）：Console 服务端持有一把未收窄的租户 Gateway API Key，直连 Gateway 数据面，产物本身仍由 Gateway 数据面用租户的 API Key 提供，本服务不在那条路径上。
+9. **可查询的 Job 历史已经建好，Console 也已经接上。** `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（J07，见上面「Job 持久化契约」一节的「已实现的持久化历史查询」小节）直接读 `jobs` 表，按租户、时间、状态、工作流分页，副本重启不再让它消失——`/admin/v1/jobs`（实时聚合）与它是两条并存的路径，回答的是两个不同的问题，不是谁取代谁。Console 侧的历史列表页与 Job 详情页（`app/console/jobs/history`）已经落地，取消与产物下载也已实现并同时接在实时视图与持久化详情页上：Console 服务端持有一把未收窄的租户 Gateway API Key，直连 Gateway 数据面，产物本身仍由 Gateway 数据面用租户的 API Key 提供，本服务不在那条路径上。详情页能展示产物，是因为 Gateway 现在会把 `listArtifacts` 铸造的每一个公开产物 id 上报给本服务的 `job_artifacts` 表（`jobPersister.persistArtifacts`，同一条旁路持久化路径）——这一步此前遗漏过：J04 建好了 `CreateJobArtifact` 写入 API，但直到这次修复前 Gateway 从未调用它，`job_artifacts` 表在生产环境里实际上一直是空的。
 10. **没有指标、请求检索与告警。** 这三项需要时序库与可检索的日志存储，仓库里都没有；Gateway 各副本的 Prometheus 文本导出不等于历史曲线。
 
 ## 下一步

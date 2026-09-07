@@ -378,7 +378,17 @@ func getJobHistory(ctx *svc.ServiceContext) http.HandlerFunc {
 			respondErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, renderJobHistory(job))
+		artifacts, err := ctx.Logic.ListJobArtifacts(r.Context(), actor.TenantID, jobID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := renderJobHistory(job)
+		out.Artifacts = make([]types.JobArtifactResponse, len(artifacts))
+		for i, a := range artifacts {
+			out.Artifacts[i] = renderJobArtifact(a)
+		}
+		writeJSON(w, http.StatusOK, out)
 	}
 }
 

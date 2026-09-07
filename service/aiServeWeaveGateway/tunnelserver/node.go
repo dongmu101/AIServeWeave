@@ -1,6 +1,7 @@
 package tunnelserver
 
 import (
+	"errors"
 	"log/slog"
 	"maps"
 	"sort"
@@ -73,6 +74,13 @@ type node struct {
 	// liveByClass 是同一个计数按 class 拆开的结果，这正是槽位占用量表所需要的：
 	// busy 等于已打开减去已停放，而这个减法只在同一个 class 内才有意义。
 	liveByClass map[tunnelv1.SlotClass]int
+
+	// revoked is closed exactly once, by kill, to interrupt every Control
+	// stream's blocking Recv from outside its own read loop — the mechanism
+	// STATUS.md's S03 needs so a disable takes effect against a connection
+	// that is already open, not just against the next handshake attempt.
+	revoked     chan struct{}
+	revokedOnce sync.Once
 }
 
 func newNode(id string, srv *Server) *node {
@@ -84,7 +92,43 @@ func newNode(id string, srv *Server) *node {
 		snapshots:   make(map[string]runtime.Snapshot),
 		idle:        make(map[tunnelv1.SlotClass][]*slot),
 		liveByClass: make(map[tunnelv1.SlotClass]int),
+		revoked:     make(chan struct{}),
 	}
+}
+
+// kill forcibly ends this node's connection: every open Control stream's read
+// loop observes n.revoked closed and returns, which ends that Control RPC and
+// closes the stream from this replica's side — an Agent whose node_id was
+// just disabled cannot keep the link open by refusing to cooperate, unlike a
+// graceful Draining notice, which only ever asks. Idle slots are closed the
+// same way an Agent-announced drain closes them; a request already in flight
+// on a busy slot is left to finish or fail on its own, the same restraint
+// Server.Close already applies fleet-wide — severing a data-plane stream
+// mid-request is a strictly worse failure mode for whoever is waiting on it
+// than letting it run out.
+//
+// kill 强制结束该节点的连接：每一条打开的 Control 流的读循环观察到 n.revoked 被关闭后
+// 返回，从而结束那次 Control RPC 并由本副本一侧关闭连接——一个刚被禁用节点的 Agent
+// 无法通过拒绝配合来维持这条链路，这与只是请求的 Draining 通告不同。空闲槽的处理方式与
+// Agent 主动宣告 draining 时一致；仍在处理中的忙碌槽不做打断，这与 Server.Close 在整个
+// 副本范围内已经采用的克制一致——对正等待结果的一方来说，中途掐断数据面的流，是比让它
+// 跑完更糟的失败方式。
+func (n *node) kill() {
+	n.revokedOnce.Do(func() {
+		close(n.revoked)
+
+		n.mu.Lock()
+		n.draining = true
+		idle := n.idle
+		n.idle = make(map[tunnelv1.SlotClass][]*slot)
+		n.mu.Unlock()
+
+		for _, stack := range idle {
+			for _, sl := range stack {
+				sl.close(errors.New("node is disabled"))
+			}
+		}
+	})
 }
 
 // NodeInfo is a point-in-time view of one connected node, for the scheduler.

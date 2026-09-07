@@ -121,6 +121,27 @@ type job struct {
 	// 本该继续的重试。
 	persistFailures int
 	nextPersistAt   time.Time
+	// pendingArtifacts lists artifacts recordArtifacts has minted a public id
+	// for but the control plane has not yet confirmed via CreateJobArtifact.
+	// jobPersister drains this the same way it drains job state above — a
+	// side channel that never gates listArtifacts answering the caller.
+	//
+	// pendingArtifacts 列出 recordArtifacts 已经铸造过公开 id、但控制面尚未
+	// 通过 CreateJobArtifact 确认的产物。jobPersister 排空它的方式与上面排空
+	// job 状态相同——是一条旁路，绝不会拦住 listArtifacts 对调用方的应答。
+	pendingArtifacts      []pendingArtifact
+	artifactPersistFails  int
+	nextArtifactPersistAt time.Time
+}
+
+// pendingArtifact is one artifact awaiting a CreateJobArtifact confirmation.
+//
+// pendingArtifact 是一个等待 CreateJobArtifact 确认的产物。
+type pendingArtifact struct {
+	ArtifactID string
+	Filename   string
+	Subfolder  string
+	Type       string
 }
 
 // needsPersist reports whether the control plane's record of this job is
@@ -283,6 +304,9 @@ func (s *jobStore) recordArtifacts(jobID string, refs []runtime.ArtifactRef) []s
 		if !seen {
 			id = "art_" + newRequestID()
 			j.artifactIDs[ref] = id
+			j.pendingArtifacts = append(j.pendingArtifacts, pendingArtifact{
+				ArtifactID: id, Filename: ref.Filename, Subfolder: ref.Subfolder, Type: ref.Type,
+			})
 		}
 		ids[i] = id
 		s.artifacts[id] = artifactRecord{
@@ -512,6 +536,118 @@ func (s *jobStore) persistFailed(id string, now time.Time, backoff func(failures
 	}
 	j.persistFailures++
 	j.nextPersistAt = now.Add(backoff(j.persistFailures))
+	s.byID[id] = j
+}
+
+// dueForArtifactPersist returns up to max job ids with artifacts awaiting a
+// CreateJobArtifact confirmation, longest-overdue first, claiming each by
+// pushing nextArtifactPersistAt out to now.Add(claimFor) — the same claim
+// discipline dueForPersist uses, so a batch still in flight is not
+// dispatched a second time.
+//
+// dueForArtifactPersist 返回最多 max 个存在待确认产物的 job id，逾期最久的
+// 排在最前面，并通过把 nextArtifactPersistAt 推到 now.Add(claimFor) 来认领
+// 每一个——与 dueForPersist 相同的认领纪律，防止一个仍在进行中的批次被重复
+// 分派。
+func (s *jobStore) dueForArtifactPersist(now time.Time, max int, claimFor time.Duration) []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	type dueJob struct {
+		id string
+		at time.Time
+	}
+	candidates := make([]dueJob, 0, len(s.order))
+	for id, j := range s.byID {
+		if len(j.pendingArtifacts) == 0 || j.nextArtifactPersistAt.After(now) {
+			continue
+		}
+		candidates = append(candidates, dueJob{id: id, at: j.nextArtifactPersistAt})
+	}
+	sort.Slice(candidates, func(i, k int) bool {
+		if candidates[i].at.Equal(candidates[k].at) {
+			return candidates[i].id < candidates[k].id
+		}
+		return candidates[i].at.Before(candidates[k].at)
+	})
+	if len(candidates) > max {
+		candidates = candidates[:max]
+	}
+
+	claimed := now.Add(claimFor)
+	out := make([]string, 0, len(candidates))
+	for _, d := range candidates {
+		j := s.byID[d.id]
+		j.nextArtifactPersistAt = claimed
+		s.byID[d.id] = j
+		out = append(out, d.id)
+	}
+	return out
+}
+
+// artifactsForPersist returns a snapshot of id's pending artifacts, along
+// with the tenant they belong to. Like forPersist, it reads fresh rather
+// than trusting whatever dueForArtifactPersist last saw, since recordArtifacts
+// may have appended more in the meantime.
+//
+// artifactsForPersist 返回 id 待确认产物的一份快照，连同它们所属的租户。与
+// forPersist 一样，它读取的是当下的数据，而不是信任 dueForArtifactPersist
+// 上次看到的那份，因为 recordArtifacts 可能同时又追加了更多。
+func (s *jobStore) artifactsForPersist(id string) (tenantID string, artifacts []pendingArtifact, ok bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, exists := s.byID[id]
+	if !exists {
+		return "", nil, false
+	}
+	out := make([]pendingArtifact, len(j.pendingArtifacts))
+	copy(out, j.pendingArtifacts)
+	return j.TenantID, out, true
+}
+
+// artifactPersisted removes artifactID from id's pending list once the
+// control plane has confirmed it, and resets the failure count — the same
+// per-artifact granularity as artifactsForPersist, so one artifact failing
+// does not block another in the same job from being marked done.
+//
+// artifactPersisted 在控制面确认某个产物后，把 artifactID 从 id 的待确认列表
+// 中移除，并清零失败计数——与 artifactsForPersist 相同的逐产物粒度，因此同一
+// job 里一个产物的失败不会拦住另一个被标记完成。
+func (s *jobStore) artifactPersisted(id, artifactID string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	kept := j.pendingArtifacts[:0]
+	for _, a := range j.pendingArtifacts {
+		if a.ArtifactID != artifactID {
+			kept = append(kept, a)
+		}
+	}
+	j.pendingArtifacts = kept
+	j.artifactPersistFails = 0
+	s.byID[id] = j
+}
+
+// artifactPersistFailed records a failed artifact-persistence batch for id
+// without touching its pending list — those artifacts are still owed — and
+// re-arms nextArtifactPersistAt via backoff, mirroring persistFailed's own
+// contract for job state.
+//
+// artifactPersistFailed 为 id 记录一次失败的产物持久化批次，不触碰它的待确认
+// 列表——那些产物依然欠着——并通过 backoff 重新设定 nextArtifactPersistAt，
+// 与 persistFailed 对 job 状态的做法一致。
+func (s *jobStore) artifactPersistFailed(id string, now time.Time, backoff func(failures int) time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	j, ok := s.byID[id]
+	if !ok {
+		return
+	}
+	j.artifactPersistFails++
+	j.nextArtifactPersistAt = now.Add(backoff(j.artifactPersistFails))
 	s.byID[id] = j
 }
 

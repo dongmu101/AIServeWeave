@@ -20,6 +20,7 @@ import (
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/metadata"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/runtime"
@@ -45,6 +46,13 @@ type Config struct {
 	// tunnelserver.Config.
 	ReplicaID string
 	Endpoint  string
+
+	// GatewayToken authenticates this replica to GatewayDirectory.Join
+	// (STATUS.md's S03), sent as "authorization: Bearer <token>" gRPC
+	// metadata. Empty omits the header, which only works when the Registry
+	// itself was started with no -gateway-token-file — the same opt-in shape
+	// as the Registry side.
+	GatewayToken string
 
 	// Clock supplies time and reconnect timers. Nil uses the system clock;
 	// tests inject a fake so backoff is exercised without sleeping.
@@ -138,6 +146,9 @@ func joinOnce(ctx context.Context, client tunnelv1.GatewayDirectoryClient, cfg C
 	// actually tears the stream down, once that notice is sent.
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	defer streamCancel()
+	if cfg.GatewayToken != "" {
+		streamCtx = metadata.AppendToOutgoingContext(streamCtx, "authorization", "Bearer "+cfg.GatewayToken)
+	}
 
 	stream, err := client.Join(streamCtx)
 	if err != nil {

@@ -1,6 +1,6 @@
 # AIServeWeave 开发状态与待办
 
-更新日期：2026-09-06。
+更新日期：2026-09-07。
 
 本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。本次更新仅整理文档，不代表重新执行过测试或部署验收。
 
@@ -32,7 +32,7 @@ R01/R02 可与 Job 主线并行。P07 与 J03 共用迁移框架；P04 依赖 J0
 - [x] Console 登录与服务端会话、用户/Key/审计/配额页面、只读节点与模型清单、工作流目录和实时 Job 视图。
 - [x] Agent/Gateway Prometheus 指标导出，以及包含 Console 的 Docker Compose 部署配置。
 
-当前主要边界：Job 的权威路由绑定（节点/运行时/后端运行标识）仍以单个 Gateway 副本的有界内存为主，但已持久化到控制面（J01–J06，真实 MySQL 9.7 集成与故障验证见 J08）——副本重启或节点重连后，非终态 job 通过 `GET /internal/v1/jobs/active` 按路由绑定恢复，一个还没来得及持久化就被逐出的 job 仍会永久丢失。控制面已提供按租户/时间/状态/工作流分页的持久化 Job 历史查询（`/admin/v1/jobs/history*`，J07），但 Console 尚无页面接它，取消与产物访问仍缺一条可用的鉴权链路，未实现。模型、节点和模板的只读页面不等于管理与发布能力。
+当前主要边界：Job 的权威路由绑定（节点/运行时/后端运行标识）仍以单个 Gateway 副本的有界内存为主，但已持久化到控制面（J01–J07，真实 MySQL 9.7 集成与故障验证见 J08）——副本重启或节点重连后，非终态 job 通过 `GET /internal/v1/jobs/active` 按路由绑定恢复，一个还没来得及持久化就被逐出的 job（连同它的产物记录）仍会永久丢失。控制面提供的持久化 Job 历史查询（`/admin/v1/jobs/history*`）与 Console 的取消/产物访问已经打通并接上了页面（`app/console/jobs/history`），产物预览随之落地。模型、节点和模板的只读页面不等于管理与发布能力。
 
 历史验证索引：真实 Ollama + mTLS + Gateway 非流式/SSE、多副本联调、故障注入与滚动升级记录见 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md) 和 Gateway e2e 测试。24h 长稳工具已存在，最终结果需核实归档，不沿用旧文档“正在运行”的描述。
 
@@ -46,13 +46,13 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 
 | 状态 | 编号 | 待开发任务 | 验收目标 |
 | --- | --- | --- | --- |
-| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-j08-已完成-取消与产物访问未做)，本项仅完成设计，不含建表与代码 |
+| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-j08-均已完成)，本项仅完成设计，不含建表与代码 |
 | [x] | J02 | 在 Gateway 增加有界后台状态同步 | 调用方不再轮询/SSE 时也能推进任务；限制扫描批次、并发和频率，处理节点消失、超时和优雅停止——实现见 `httpapi/jobsync.go`，详见 [Gateway README「工作流 Job」第九条](service/aiServeWeaveGateway/README.md#工作流-job) |
 | [x] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录——实现见 `internal/store/gormstore/jobmigrate.go` 与 `internal/model/job.go`，详见 [ControlPlane README「Job 持久化契约」的「已实现的存储层」小节](service/aiServeWeaveControlPlane/README.md#已实现的存储层j03)；真实 MySQL 上的迁移可重复性已在 J08 验证 |
 | [x] | J04 | 实现控制面内部 Job 读写 API 与 Gateway 客户端 | 服务间鉴权、租户隔离、幂等写入和并发条件更新；重复/乱序事件不能覆盖终态；错误与日志不泄露凭据、Prompt 或工作流 JSON——实现见 `internal/handler`（`/internal/v1/jobs*`，InternalToken 守卫）、`internal/logic/jobs.go` 与 Gateway 侧 `controlplaneclient/jobs.go` 的 `JobsClient`，详见 [ControlPlane README「Job 持久化契约」的「已实现的内部 API」小节](service/aiServeWeaveControlPlane/README.md#已实现的内部-api-与-gateway-客户端j04)；接入 Gateway 提交/同步路径见 J05 |
 | [x] | J05 | 处理数据库与 ComfyUI 提交之间的故障窗口 | 覆盖"后端已接收但映射尚未落库"；结果未知时不盲目重提；补写若采用队列须有容量上限与可靠恢复机制，不能仅靠内存重试承诺不丢——实现见 `httpapi/jobpersist.go` 的 `jobPersister`，详见 [ControlPlane README「Job 持久化契约」的「已接入持久化」小节](service/aiServeWeaveControlPlane/README.md#已接入持久化j05)；恢复机制是有界退避重试而非持久队列，如实记录了「进程重启/逐出即丢」的边界，重启后的路由恢复留给 J06 |
 | [x] | J06 | 实现重启恢复与跨 Gateway 副本访问 | 重启后可恢复非终态任务；任一可服务副本可查询、取消和访问产物；保存稳定节点/运行时标识，不序列化连接对象；明确恢复执行权及失联处理——实现见 `httpapi/jobrecover.go` 的 `jobRecoverer`、控制面新端点 `GET /internal/v1/jobs/active`（跨租户，仅按路由绑定过滤），详见 [ControlPlane README「Job 持久化契约」的「已实现的重启恢复」小节](service/aiServeWeaveControlPlane/README.md#已实现的重启恢复j06)；恢复执行权刻意非排他，靠 `observed_seq` 单调门槛而非锁/租约化解并发；节点永久失联的 job 停在最后观测状态，不编造终态 |
-| [ ] | J07 | 提供持久化历史查询与 Console Job 管理 | 按租户、时间、状态、工作流分页；支持详情、进度、取消和授权产物访问；明确实时状态与最后观测时间，补齐 Console C26——只读历史查询已实现：`GET /admin/v1/jobs/history`、`GET /admin/v1/jobs/history/:id`（会话守卫，不依赖 Fleet 配置），详见 [ControlPlane README「Job 持久化契约」的「已实现的持久化历史查询」小节](service/aiServeWeaveControlPlane/README.md#已实现的持久化历史查询j07-的只读部分)；**取消与授权产物访问已实现，但只接在实时视图上**——Console 服务端持有一把未收窄的租户 Gateway API Key（`AGENTS.md`「与后端的边界」声明的唯一例外），直连 Gateway 数据面，会话/角色体系做授权判断，Gateway 与控制面均未改代码，详见 Console `STATUS.md` 的 C26；已知代价是这把 Key 权限与用户自建 Key 相同、爆炸半径覆盖整个租户，是当前无生产租户阶段的刻意权衡，有真实租户后应重新评估；**持久化历史页面本身、Job 详情页与产物预览仍未做**（Console 页面只读了实时聚合，没有读上面那两个历史端点），C26 未完全补齐 |
+| [x] | J07 | 提供持久化历史查询与 Console Job 管理 | 按租户、时间、状态、工作流分页；支持详情、进度、取消和授权产物访问；明确实时状态与最后观测时间，补齐 Console C26——只读历史查询已实现：`GET /admin/v1/jobs/history`、`GET /admin/v1/jobs/history/:id`（会话守卫，不依赖 Fleet 配置），详见 [ControlPlane README「Job 持久化契约」的「已实现的持久化历史查询与 Console 接入」小节](service/aiServeWeaveControlPlane/README.md#已实现的持久化历史查询与-console-接入j07)；取消与授权产物访问已实现，同时接在实时视图与持久化历史详情页上——Console 服务端持有一把未收窄的租户 Gateway API Key（`AGENTS.md`「与后端的边界」声明的唯一例外），直连 Gateway 数据面，会话/角色体系做授权判断，Gateway 与控制面均未为此改代码，详见 Console `STATUS.md` 的 C26；已知代价是这把 Key 权限与用户自建 Key 相同、爆炸半径覆盖整个租户，是当前无生产租户阶段的刻意权衡，有真实租户后应重新评估；持久化历史列表页、Job 详情页与产物预览（图片/视频内联）均已实现于 `app/console/jobs/history`；产物预览能拿到 id 列表，是因为本轮同时补上了此前遗漏的一处缺口——J04 建好的 `CreateJobArtifact` 写入 API 从未被 Gateway 调用过，`jobPersister` 现已新增 `persistArtifacts` 把 `listArtifacts` 铸造的产物 id 上报进 `job_artifacts` 表 |
 | [x] | J08 | 在真实 MySQL 9.7 上完成集成与故障恢复验证 | 覆盖迁移、并发更新、重复事件、跨租户拒绝、数据库中断、Gateway 重启、多副本查询和提交结果未知；默认单元测试不依赖真实数据库——实现见 `internal/store/gormstore/mysql_live_test.go`（迁移可重复、并发更新按 `observed_seq` 由真实行锁裁定、跨租户冲突/隔离、数据库不可达快速失败）与 `e2e/mysql_live_test.go`（两个独立 `JobsClient` 模拟重启/多副本、幂等重试），均以 `AISW_MYSQL_TEST_DSN` 环境变量按需启用（同 `common/runtime/ollama/live_test.go` 的既有约定），在真实 `mysql:9.7`（Docker）上以 `-race` 全部通过验证；未设置该变量时自动跳过，`go test ./...` 保持不依赖外部环境 |
 
 实施顺序：先完成 J01；J02 可独立交付，J03/J04 建立存储链路，J05/J06 补故障恢复，再完成 J07；J08 随各阶段验证，作为整体验收门禁。
@@ -67,12 +67,12 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 
 ## P0：节点身份与开源交付
 
-- [ ] **S01 节点身份唯一性**：检测重复 `node_id`，区分正常续期、重装与身份冒用；补并发注册测试和运维处理说明。
-- [ ] **S02 正式注册令牌管理**：提供受控签发、过期、撤销与一次性消费路径，解决 CLI/server 共享 token 文件的并发一致性；明确令牌与节点或租户的授权绑定规则。
-- [ ] **S03 身份认证与吊销设计**：明确 Gateway 加入 Registry 名册的认证与授权；建立节点禁用/证书吊销到现有连接及重连的生效路径。
-- [ ] **R01 开源治理文件**：由维护者确定许可证并补 LICENSE、CONTRIBUTING、SECURITY，说明贡献流程和私密漏洞报告渠道。
-- [ ] **R02 持续集成**：自动执行仓库规定的 Go 格式、vet、build、proto 生成一致性、测试与 race 门禁，以及 Console lint/typecheck/test/build；外部后端测试独立运行。
-- [ ] **R03 版本发布**：提供版本化二进制与容器镜像、校验和、变更记录、支持的平台与升级说明，验证全新环境的最小部署链路。
+- [x] **S01 节点身份唯一性**：检测重复 `node_id`，区分正常续期、重装与身份冒用；补并发注册测试和运维处理说明——实现见 `service/aiServeWeaveRegistry/internal/identitystore`（按公钥指纹记录每个 `node_id` 的绑定）与 `internal/registryserver/identity.go` 的 `Register`/`RenewCertificate`，详见 [Registry README「`node_id` 唯一性（S01）」](service/aiServeWeaveRegistry/README.md#node_id-唯一性s01)；`Register` 用签发在前、账本检查在后的顺序，让一次冲突只白白消耗一枚已花费的引导令牌而不弄脏账本；并发注册由账本自身的互斥锁序列化，测试覆盖同一账本层与真实 gRPC 层。**"重装"与"冒用"分辨依赖 S02 的令牌 node_id 绑定**：用了绑定令牌的重装会跳过冲突检查直接放行，没用绑定令牌的冲突仍是同一个拒绝分支，要求运维带外确认后手动清空账本记录或补铸一枚绑定令牌。
+- [x] **S02 正式注册令牌管理**：提供受控签发、过期、撤销与一次性消费路径，解决 CLI/server 共享 token 文件的并发一致性；明确令牌与节点或租户的授权绑定规则——实现见 `internal/tokenstore.Store`（`MintForNode`/`Consume`/`Revoke`，均带 `node_id` 绑定与撤销状态）与新的 `tunnelv1.TokenAdmin` gRPC 服务（`internal/registryserver/token_admin.go` 的 `MintToken`/`RevokeToken`，`-admin-token-file` 守护的 Bearer 认证），详见 [Registry README「`TokenAdmin`：受控签发、撤销与 node_id 绑定（S02）」](service/aiServeWeaveRegistry/README.md#tokenadmin受控签发撤销与-node_id-绑定s02)。`-mint-token`/`-revoke-token` 改成了该服务的 gRPC 客户端而不再直接读写 `tokens.json`，从根上消灭了 CLI/server 并发问题（撤销必须让运行中的 server 立刻感知内存状态，文件锁做不到这一点）。绑定规则：令牌可选绑定单个 `node_id`（`Register` 用它覆盖请求提出的值并跳过账本冲突检查，授权来自铸造调用本身经过的认证）；不做租户绑定——节点是所有租户共用的基础设施，没有租户维度，proto 里原先"tenant-bound"的注释已删除，谁能调用 `TokenAdmin` 仍是一把不区分调用者的共享密钥，留给路线图第三阶段的多租户 RBAC。
+- [x] **S03 身份认证与吊销设计**：明确 Gateway 加入 Registry 名册的认证与授权；建立节点禁用/证书吊销到现有连接及重连的生效路径——实现见 `internal/registryserver/roster.go` 的 `requireGatewayToken`（`GatewayDirectory.Join` 新增独立于 `AdminToken` 的 `-gateway-token-file` 共享密钥，留空退回 S03 之前的未认证行为）与 `internal/registryserver/token_admin.go` 的 `DisableNode`/`EnableNode`（持久化进 `internal/identitystore.Store` 的禁用标记，拒绝之后的 `Register`/`RenewCertificate`），详见 [Registry README「`GatewayDirectory.Join` 的认证（S03）」与「节点禁用与证书吊销（S03）」两节](service/aiServeWeaveRegistry/README.md#gatewaydirectoryjoin-的认证s03)；生效路径覆盖既有连接：`DisableNode`/`EnableNode` 把当前禁用集合写进 `GatewayRoster.revoked_node_ids`，复用既有的名册广播通道推给每个 Gateway 副本，`tunnelserver.Server.SetRoster`（`service/aiServeWeaveGateway/tunnelserver/server.go`）据此对已连接节点调用 `node.kill()`（`node.go`）强制结束其 `Control` 流并清空空闲槽，同时让新的 `Control`/`Serve` 握手对被禁用的 `node_id` 直接拒绝；忙碌槽上正在处理的请求不受打断，与 `Server.Close` 已有的克制一致。禁用生效是最终一致而非瞬时：一个还没收到最新名册的副本在那之前仍会认为该节点合法，Registry 本身不维护 CRL/OCSP。
+- [x] **R01 开源治理文件**：由维护者确定许可证并补 LICENSE、CONTRIBUTING、SECURITY，说明贡献流程和私密漏洞报告渠道——已选定 Apache-2.0，落地 [LICENSE](LICENSE)、[CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)；私密漏洞报告走 GitHub Security Advisories（仓库 Security 标签页的 Private Vulnerability Reporting），不新增专属邮箱。
+- [x] **R02 持续集成**：自动执行仓库规定的 Go 格式、vet、build、proto 生成一致性、测试与 race 门禁，以及 Console lint/typecheck/test/build；外部后端测试独立运行——实现见 [.github/workflows/ci.yml](.github/workflows/ci.yml)：`go` 作业跑 `gofmt -l`、`go vet`、`go build`，重新执行 `go generate ./api/...` 后 `git diff --exit-code` 校验生成结果与仓库一致，再跑 `go test ./...` 与 `go test -race ./service/...`；`console` 作业在 `service/aiServeWeaveConsole` 下跑 `pnpm lint`/`build`/`typecheck`/`test`；`mysql-integration` 作业用真实 `mysql:9.7` 容器设置 `AISW_MYSQL_TEST_DSN`，单独跑控制面的 J08 用例，与前两个作业并行、互不依赖，对应仓库"默认测试不依赖真实数据库"的约定。本机 Ollama 的 `live_test.go` 未设置 `OLLAMA_BASE_URL`，CI 上按既有约定自动跳过，不在 CI 内新增真实 Ollama 依赖。三个作业均已在本机按 CI 所用命令逐条跑通。
+- [x] **R03 版本发布**：提供版本化二进制与容器镜像、校验和、变更记录、支持的平台与升级说明，验证全新环境的最小部署链路——四个服务的 `main.go` 均新增 `-version` flag，版本经 `-ldflags -X main.version=...` 在构建时注入（根 [Dockerfile](Dockerfile) 与 [scripts/build-release.sh](scripts/build-release.sh)）；`scripts/build-release.sh` 交叉编译四服务 × 四平台（linux/darwin × amd64/arm64）并生成 `SHA256SUMS.txt`；[.github/workflows/release.yml](.github/workflows/release.yml) 在 `vX.Y.Z` tag push 上自动重跑质量门禁、产出二进制与校验和、构建推送四个服务的多架构镜像到 GHCR、创建带 CHANGELOG 摘录的 GitHub Release；[CHANGELOG.md](CHANGELOG.md) 与 [RELEASING.md](RELEASING.md)（版本号策略、支持平台矩阵、打版本步骤、升级说明——明确不保证跨版本滚动升级或 schema 兼容，对应 `A03` 仍未完成）均已落地。验收依据：`go build ./...`、`gofmt`、`go vet` 通过；四个服务的 `-version` flag 本地逐一验证过打印后立即退出；`scripts/build-release.sh` 本地跑通并生成正确命名与校验和；`docker build --build-arg VERSION=...` 验证过版本能打进镜像；`deploy/README.md`「起步」一节的完整流程（`cp .env.example .env` 回填密钥、`docker compose up -d --build`、健康检查、bootstrap 自动建号、Console 登录）在本地全新环境跑通一遍验证了最小部署链路，随后 `docker compose down -v` 清理——**未**实际推送过镜像到真实 GHCR（当前环境没有可用于此仓库的推送凭据，推送是对外可见操作，不在本地环境内擅自执行），流水线本身的端到端有效性有待第一次真实打 tag 时验证。
 - [ ] **R04 文档一致性**：核对根 README、各服务 README、AGENTS 代码地图和 Console STATUS 中过时的“未实现”描述；已实现与规划能力分开标注。
 
 ## P1：平台管理与运维

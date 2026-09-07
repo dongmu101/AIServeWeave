@@ -36,6 +36,29 @@ type record struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Used      bool      `json:"used"`
 	UsedAt    time.Time `json:"used_at,omitzero"`
+	// NodeID binds this token to one node identity, empty for an unbound
+	// token. See Store.MintForNode.
+	NodeID string `json:"node_id,omitempty"`
+	// Revoked and RevokedAt let an admin invalidate a token before it is
+	// ever consumed. See Store.Revoke.
+	Revoked   bool      `json:"revoked,omitempty"`
+	RevokedAt time.Time `json:"revoked_at,omitzero"`
+}
+
+// retirementTime returns when r stopped being consumable — its UsedAt or
+// RevokedAt, whichever applies — and whether it has retired at all. gc uses
+// this instead of ExpiresAt for a used or revoked record because an admin
+// revoking a token, or a node consuming it, is a more meaningful signal for
+// how long to keep the record around than its original expiry.
+func (r *record) retirementTime() (time.Time, bool) {
+	switch {
+	case r.Used:
+		return r.UsedAt, true
+	case r.Revoked:
+		return r.RevokedAt, true
+	default:
+		return time.Time{}, false
+	}
 }
 
 // gcAge is how long past expiry (or use) a record is kept before Mint or
@@ -84,11 +107,24 @@ func Open(path string) (*Store, error) {
 	return s, nil
 }
 
-// Mint generates a fresh one-time token valid until now+ttl, persists it, and
-// returns the token value. The value is not recoverable once this call
-// returns — the caller (an operator, via the Registry's -mint-token CLI mode)
-// is responsible for handing it to the node out of band.
+// Mint generates a fresh, unbound one-time token valid until now+ttl. It is
+// MintForNode with an empty nodeID; see MintForNode for the persistence and
+// return-value contract.
 func (s *Store) Mint(ttl time.Duration, now time.Time) (string, error) {
+	return s.MintForNode(ttl, now, "")
+}
+
+// MintForNode generates a fresh one-time token valid until now+ttl, persists
+// it, and returns the token value. The value is not recoverable once this
+// call returns — the caller (an operator, via the Registry's TokenAdmin
+// service) is responsible for handing it to the node out of band.
+//
+// A non-empty nodeID binds the token to that node identity: Consume reports
+// it back to the caller, which is how Register (STATUS.md's S02) tells an
+// operator-authorized reinstall of an existing node_id apart from an
+// ordinary bootstrap. An empty nodeID mints an unbound token, usable for any
+// node_id, matching this store's original behavior.
+func (s *Store) MintForNode(ttl time.Duration, now time.Time, nodeID string) (string, error) {
 	if ttl <= 0 {
 		return "", errors.New("tokenstore: ttl must be positive")
 	}
@@ -104,6 +140,7 @@ func (s *Store) Mint(ttl time.Duration, now time.Time) (string, error) {
 		Token:     token,
 		IssuedAt:  now,
 		ExpiresAt: now.Add(ttl),
+		NodeID:    nodeID,
 	}
 	s.gc(now)
 	if err := s.persistLocked(); err != nil {
@@ -114,9 +151,42 @@ func (s *Store) Mint(ttl time.Duration, now time.Time) (string, error) {
 }
 
 // Consume validates token and marks it used, so a second call with the same
-// value fails. It returns ErrInvalidToken for a token that is unknown,
-// already used, or expired.
-func (s *Store) Consume(token string, now time.Time) error {
+// value fails. On success it returns the node_id the token was bound to at
+// mint time, or "" for an unbound token. It returns ErrInvalidToken for a
+// token that is unknown, already used, revoked, or expired — the four cases
+// are deliberately not distinguished: telling a caller which one applies
+// would let it probe for tokens that exist but are merely spent, revoked, or
+// expired.
+func (s *Store) Consume(token string, now time.Time) (string, error) {
+	if token == "" {
+		return "", ErrInvalidToken
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.records[token]
+	if !ok || r.Used || r.Revoked || now.After(r.ExpiresAt) {
+		return "", ErrInvalidToken
+	}
+	r.Used = true
+	r.UsedAt = now
+	s.gc(now)
+	if err := s.persistLocked(); err != nil {
+		r.Used = false
+		r.UsedAt = time.Time{}
+		return "", err
+	}
+	return r.NodeID, nil
+}
+
+// Revoke marks token so it can never be consumed, regardless of whether it
+// already has been. Revoking an already-used, already-revoked, or expired
+// token still succeeds — Revoke's contract is that the token can never
+// succeed again, which those states already guarantee — so callers do not
+// need to check a token's state before revoking it. It returns
+// ErrInvalidToken only for a token this store has never minted.
+func (s *Store) Revoke(token string, now time.Time) error {
 	if token == "" {
 		return ErrInvalidToken
 	}
@@ -125,29 +195,34 @@ func (s *Store) Consume(token string, now time.Time) error {
 	defer s.mu.Unlock()
 
 	r, ok := s.records[token]
-	if !ok || r.Used || now.After(r.ExpiresAt) {
+	if !ok {
 		return ErrInvalidToken
 	}
-	r.Used = true
-	r.UsedAt = now
+	if r.Revoked {
+		return nil
+	}
+	wasRevoked, prevRevokedAt := r.Revoked, r.RevokedAt
+	r.Revoked = true
+	r.RevokedAt = now
 	s.gc(now)
 	if err := s.persistLocked(); err != nil {
-		r.Used = false
-		r.UsedAt = time.Time{}
+		r.Revoked, r.RevokedAt = wasRevoked, prevRevokedAt
 		return err
 	}
 	return nil
 }
 
-// gc drops records that expired, or were used, more than gcAge ago. Callers
-// must hold s.mu.
+// gc drops records that retired (were used or revoked), or expired unused,
+// more than gcAge ago. Callers must hold s.mu.
 func (s *Store) gc(now time.Time) {
 	for token, r := range s.records {
-		if r.Used && now.Sub(r.UsedAt) > gcAge {
-			delete(s.records, token)
+		if retiredAt, retired := r.retirementTime(); retired {
+			if now.Sub(retiredAt) > gcAge {
+				delete(s.records, token)
+			}
 			continue
 		}
-		if !r.Used && now.Sub(r.ExpiresAt) > gcAge {
+		if now.Sub(r.ExpiresAt) > gcAge {
 			delete(s.records, token)
 		}
 	}

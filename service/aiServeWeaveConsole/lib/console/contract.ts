@@ -142,6 +142,42 @@ export interface AuditEntry {
 }
 
 /**
+ * JobArtifact mirrors types.JobArtifactResponse: one recorded output of a
+ * persisted job.
+ *
+ * JobArtifact 镜像 types.JobArtifactResponse：一个持久化 job 记录下的产物。
+ */
+export interface JobArtifact {
+  artifactId: string;
+  filename: string;
+  subfolder: string;
+  type: string;
+  createdAt: string;
+}
+
+/**
+ * JobHistoryEntry mirrors types.JobHistoryResponse: one persisted job as the
+ * tenant-facing Admin API shows it. `artifacts` is null on the list endpoint
+ * (`GET /admin/v1/jobs/history`) — the control plane only attaches it on the
+ * single-item detail endpoint — and populated on the detail one.
+ *
+ * JobHistoryEntry 镜像 types.JobHistoryResponse：租户侧 Admin API 展示的一条
+ * 持久化 job 记录。`artifacts` 在列表端点（`GET /admin/v1/jobs/history`）上为
+ * null——控制面只在单条详情端点上附带它——在详情端点上则被填充。
+ */
+export interface JobHistoryEntry {
+  jobId: string;
+  workflowId: string;
+  workflowVersion: string;
+  state: string;
+  errorSummary: string;
+  createdAt: string;
+  updatedAt: string;
+  terminalAt: string | null;
+  artifacts: JobArtifact[] | null;
+}
+
+/**
  * LoginResult mirrors types.LoginResponse. It exists only on the Console
  * server: the token never reaches the browser, so no client module imports it.
  *
@@ -246,6 +282,23 @@ function count(source: Record<string, unknown>, key: string): number {
     return 0;
   }
   if (typeof value !== "number" || !Number.isInteger(value) || value < 0) {
+    fail();
+  }
+  return value;
+}
+
+/** optionalText reads an `omitempty` string field. Absent becomes "" —
+ * matching Go's own zero value, which is what the field encodes as anyway
+ * when it is present but empty.
+ *
+ * optionalText 读取一个 `omitempty` 的字符串字段。缺席时为 ""——与 Go 自己的
+ * 零值一致，反正该字段存在但为空时编码出来也是这样。 */
+function optionalText(source: Record<string, unknown>, key: string): string {
+  const value = source[key];
+  if (value === undefined) {
+    return "";
+  }
+  if (typeof value !== "string") {
     fail();
   }
   return value;
@@ -369,6 +422,64 @@ export function parseAuditEntries(value: unknown): Page<AuditEntry> {
       createdAt: timestamp(source, "created_at"),
     };
   });
+}
+
+/** parseJobArtifact validates one types.JobArtifactResponse.
+ *
+ * parseJobArtifact 校验一个 types.JobArtifactResponse。 */
+function parseJobArtifact(value: unknown): JobArtifact {
+  const source = record(value);
+  return {
+    artifactId: text(source, "artifact_id"),
+    filename: text(source, "filename"),
+    subfolder: optionalText(source, "subfolder"),
+    type: optionalText(source, "type"),
+    createdAt: timestamp(source, "created_at"),
+  };
+}
+
+/** parseJobHistoryEntry validates one types.JobHistoryResponse, shared by the
+ * list and detail endpoints — `artifacts` is simply absent on the former.
+ *
+ * parseJobHistoryEntry 校验一个 types.JobHistoryResponse，列表与详情端点共用
+ * 这个解析器——`artifacts` 在前者上只是缺席。 */
+function parseJobHistoryEntry(value: unknown): JobHistoryEntry {
+  const source = record(value);
+  const artifacts = source.artifacts;
+  return {
+    jobId: text(source, "job_id"),
+    workflowId: text(source, "workflow_id"),
+    workflowVersion: optionalText(source, "workflow_version"),
+    state: text(source, "state"),
+    errorSummary: optionalText(source, "error_summary"),
+    createdAt: timestamp(source, "created_at"),
+    updatedAt: timestamp(source, "updated_at"),
+    terminalAt: optionalTimestamp(source, "terminal_at"),
+    artifacts:
+      artifacts === undefined || artifacts === null
+        ? null
+        : Array.isArray(artifacts)
+          ? artifacts.map(parseJobArtifact)
+          : fail(),
+  };
+}
+
+/**
+ * parseJobHistoryEntries validates one page of `GET /admin/v1/jobs/history`.
+ *
+ * parseJobHistoryEntries 校验 `GET /admin/v1/jobs/history` 的一页。
+ */
+export function parseJobHistoryEntries(value: unknown): Page<JobHistoryEntry> {
+  return parsePage(value, parseJobHistoryEntry);
+}
+
+/**
+ * parseJobHistoryDetail validates `GET /admin/v1/jobs/history/:id`.
+ *
+ * parseJobHistoryDetail 校验 `GET /admin/v1/jobs/history/:id`。
+ */
+export function parseJobHistoryDetail(value: unknown): JobHistoryEntry {
+  return parseJobHistoryEntry(value);
 }
 
 /**
