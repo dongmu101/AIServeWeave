@@ -16,5 +16,5 @@ export default async function JobsPage() {
   if (!session) {
     redirect("/login");
   }
-  return <JobsView />;
+  return <JobsView hasGatewayKey={Boolean(session.gatewayApiKey)} />;
 }

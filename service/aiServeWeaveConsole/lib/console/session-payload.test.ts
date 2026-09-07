@@ -96,6 +96,29 @@ test("open refuses a document that is not a session", () => {
   }
 });
 
+test("gatewayApiKey survives a seal/open round trip when present", () => {
+  const withKey: SessionPayload = { ...payload, gatewayApiKey: "aisw_secret" };
+  const opened = open(seal(withKey, key), key);
+  assert.deepEqual(opened, withKey);
+});
+
+test("gatewayApiKey is absent, not an empty string, when never set", () => {
+  const opened = open(seal(payload, key), key);
+  assert.equal(opened?.gatewayApiKey, undefined);
+  assert.equal(Object.hasOwn(opened ?? {}, "gatewayApiKey"), false);
+});
+
+test("open refuses a gatewayApiKey of the wrong type instead of dropping it", () => {
+  // This is sealed with the real key, the same way the "not a session" cases
+  // above are: the check under test is the shape check on one optional
+  // field, not the cryptography.
+  //
+  // 这里同样用真密钥密封，与上面「不是一个会话」的用例相同：被检验的是针对一个
+  // 可选字段的形状检查，而不是密码学本身。
+  const document = JSON.stringify({ ...payload, gatewayApiKey: 12345 });
+  assert.equal(open(sealRaw(document), key), null);
+});
+
 test("isExpired compares against the injected time, not the wall clock", () => {
   const cases: { name: string; expiresAt: string; now: string; want: boolean }[] = [
     { name: "well before expiry", expiresAt: "2026-09-06T12:00:00Z", now: "2026-09-06T11:59:00Z", want: false },

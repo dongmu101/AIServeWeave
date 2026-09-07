@@ -83,6 +83,31 @@ export function canEditTenantLimits(role: string): boolean {
 }
 
 /**
+ * canManageGatewayKey reports whether a role may set or clear this tenant's
+ * Console-held Gateway API Key (see SessionPayload.gatewayApiKey).
+ *
+ * Unlike every other function in this module, this one is not merely UI
+ * guidance restating a check the control plane will make again — there is no
+ * control plane call behind setting this key, so `app/api/gateway-key/route.ts`
+ * enforces this same rule itself, server-side, as the only line of defense.
+ * The rule mirrors canCreateApiKey's owner/admin split on purpose: this key
+ * can do everything a created key can, so who may hand the Console a working
+ * one should be no looser than who may mint one in the first place.
+ *
+ * canManageGatewayKey 报告某个角色是否可以设置或清空本租户由 Console 持有的 Gateway
+ * API Key（见 SessionPayload.gatewayApiKey）。
+ *
+ * 与本模块中其余每一个函数不同，这一个不只是复述控制面还会再检查一遍的规则用来指导
+ * 界面——设置这把 key 背后根本没有控制面调用，因此 `app/api/gateway-key/route.ts`
+ * 在服务端自己执行同一条规则，作为唯一一道防线。这条规则刻意与 canCreateApiKey 的
+ * owner/admin 划分保持一致：这把 key 能做任何一把创建出来的 key 能做的一切，因此谁
+ * 可以把一把能用的 key 交给 Console，不该比谁可以铸造一把 key 更宽松。
+ */
+export function canManageGatewayKey(role: string): boolean {
+  return role === "owner" || role === "admin";
+}
+
+/**
  * assignableRoles is what a creation form may offer. It is the full set: an
  * owner creating a user may pick any role, including another owner.
  *

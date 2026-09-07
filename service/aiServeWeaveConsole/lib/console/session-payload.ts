@@ -82,6 +82,39 @@ export interface SessionPayload {
    * expiresAt 是控制面令牌的过期时刻，RFC 3339 格式。 */
   expiresAt: string;
   user: SessionUser;
+  /**
+   * gatewayApiKey is the one declared exception to "Console only talks to
+   * the control plane": a tenant's own Gateway data-plane API Key, pasted in
+   * by an owner or admin on the settings page, sealed into this same cookie
+   * rather than a persistent store this stateless service does not have.
+   * It powers exactly two calls — canceling a run and reading its artifacts
+   * — both of which the Gateway itself authenticates with an ordinary
+   * tenant API Key, never with anything the control plane issues.
+   *
+   * It is optional because most sessions never configure it, and absent
+   * rather than empty-string when unset, so a cleared key and a key nobody
+   * has ever set are the same state.
+   *
+   * This key is not scoped down: it can do everything any tenant-created key
+   * can, including running inference against the tenant's own quota. That is
+   * a deliberate, recorded trade-off for the stage this project is at (no
+   * production tenants yet) — see the ControlPlane README's 「Job 持久化契约」
+   * — not an oversight to quietly fix later without discussion.
+   *
+   * gatewayApiKey 是「Console 只与控制面对话」这条规则唯一的明文例外：一把该租户自己的
+   * Gateway 数据面 API Key，由 owner 或 admin 在设置页粘贴进来，密封进这同一个 cookie，
+   * 而不是这个无状态服务并不具备的某种持久化存储。它只驱动两次调用——取消一次运行、
+   * 读取它的产物——两者 Gateway 自己认的都是一把普通的租户 API Key，而不是控制面签发的
+   * 任何东西。
+   *
+   * 它是可选的，因为大多数会话从不配置它；未设置时是缺席而不是空字符串，这样「被清空的
+   * key」与「从未设置过的 key」是同一种状态。
+   *
+   * 这把 key 没有做范围收紧：它能做任何租户自建 key 能做的一切，包括拿租户自己的配额去
+   * 跑推理。这是针对本项目当前阶段（尚无生产租户）刻意做出、且已记录在案的权衡——见
+   * ControlPlane README 的「Job 持久化契约」——不是留着以后悄悄修、不再讨论的疏漏。
+   */
+  gatewayApiKey?: string;
 }
 
 /**
@@ -204,6 +237,22 @@ function validate(value: unknown): SessionPayload | null {
   if (strings.some((field) => typeof field !== "string")) {
     return null;
   }
+  // gatewayApiKey is optional, but its presence is strict: a wrong-typed
+  // value fails the whole session the way a wrong-typed required field does,
+  // rather than being silently dropped. A cookie this server sealed never
+  // has one, so seeing one is a sign the format changed underneath this
+  // reader, not something to paper over.
+  //
+  // gatewayApiKey 是可选的，但一旦出现，类型要求是严格的：一个类型不对的值，会像某个
+  // 必填字段类型不对时一样让整个会话失败，而不是被悄悄丢弃。本服务密封的 cookie 里
+  // 这个字段要么是字符串要么缺席；出现一个类型不对的值，说明格式在这个读取器之下已经
+  // 变了，而不是可以糊弄过去的小事。
+  if (
+    source.gatewayApiKey !== undefined &&
+    typeof source.gatewayApiKey !== "string"
+  ) {
+    return null;
+  }
   return {
     token: source.token as string,
     expiresAt: source.expiresAt as string,
@@ -214,5 +263,8 @@ function validate(value: unknown): SessionPayload | null {
       name: fields.name as string,
       role: fields.role as string,
     },
+    ...(source.gatewayApiKey !== undefined
+      ? { gatewayApiKey: source.gatewayApiKey as string }
+      : {}),
   };
 }

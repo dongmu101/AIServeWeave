@@ -17,6 +17,11 @@ import { deriveSessionKey } from "@/lib/console/session-payload";
  * DEFAULT_CONTROL_PLANE_URL 与控制面的本地默认地址一致。 */
 const DEFAULT_CONTROL_PLANE_URL = "http://127.0.0.1:8090";
 
+/** DEFAULT_GATEWAY_URL matches the Gateway's local default (`-addr`).
+ *
+ * DEFAULT_GATEWAY_URL 与 Gateway 的本地默认地址一致（`-addr`）。 */
+const DEFAULT_GATEWAY_URL = "http://127.0.0.1:8080";
+
 /** DEFAULT_TIMEOUT_MS bounds one call to the control plane.
  *
  * DEFAULT_TIMEOUT_MS 限定一次对控制面的调用。 */
@@ -29,6 +34,13 @@ const DEFAULT_TIMEOUT_MS = 10_000;
  */
 export interface ServerConfig {
   controlPlaneUrl: string;
+  /** gatewayUrl is the Gateway's data-plane base address — the declared
+   * exception's upstream. See SessionPayload.gatewayApiKey for why Console
+   * ever needs one.
+   *
+   * gatewayUrl 是 Gateway 数据面的基地址——那个已声明例外所对应的上游。为什么
+   * Console 会需要它，见 SessionPayload.gatewayApiKey。 */
+  gatewayUrl: string;
   sessionKey: Buffer;
   /** cookieSecure marks the session cookie HTTPS-only. It is on in production
    * and off in development, where the Console is served over plain HTTP.
@@ -77,6 +89,7 @@ export function serverConfig(): ServerConfig {
   }
   cached = {
     controlPlaneUrl: controlPlaneUrl(),
+    gatewayUrl: gatewayUrl(),
     sessionKey: deriveSessionKey(sessionSecret()),
     cookieSecure: flag(
       process.env.AISW_CONSOLE_COOKIE_SECURE,
@@ -113,6 +126,36 @@ function controlPlaneUrl(): string {
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
     throw new Error("AISW_CONSOLE_CONTROL_PLANE_URL must use http or https");
+  }
+  return parsed.origin;
+}
+
+/** gatewayUrl reads the Gateway data-plane base address, with the same
+ * validation controlPlaneUrl applies. Unlike the control plane, an unset
+ * value is not an error at read time: only sessions that actually configure
+ * a gatewayApiKey ever reach it, and a deployment that never uses the
+ * cancel/artifact exception should not have to set a variable it does not
+ * need.
+ *
+ * gatewayUrl 读取 Gateway 数据面的基地址，校验规则与 controlPlaneUrl 相同。与
+ * 控制面不同，未设置在读取时不算错误：只有真的配置了 gatewayApiKey 的会话才会
+ * 用到它，而一个从不使用取消/产物这个例外的部署，不该被要求设置一个自己用不上的
+ * 变量。 */
+function gatewayUrl(): string {
+  const raw = process.env.AISW_CONSOLE_GATEWAY_URL?.trim();
+  if (!raw) {
+    return DEFAULT_GATEWAY_URL;
+  }
+  let parsed: URL;
+  try {
+    parsed = new URL(raw);
+  } catch {
+    throw new Error(
+      "AISW_CONSOLE_GATEWAY_URL must be an absolute URL such as http://127.0.0.1:8080"
+    );
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("AISW_CONSOLE_GATEWAY_URL must use http or https");
   }
   return parsed.origin;
 }

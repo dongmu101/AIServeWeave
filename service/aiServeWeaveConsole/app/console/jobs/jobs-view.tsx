@@ -1,11 +1,14 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
+import { toast } from "sonner";
 
 import { FleetFreshness } from "@/components/console/fleet-freshness";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
 import { useResource } from "@/components/console/use-resource";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -58,7 +61,7 @@ const STATE_LABELS: Record<string, string> = {
   cancelled: "已取消",
 };
 
-export function JobsView() {
+export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
   const view = useResource<JobView>({
     method: "GET",
     path: "/admin/v1/jobs",
@@ -94,8 +97,8 @@ export function JobsView() {
           <li>
             <strong>这是实时视图，不是历史。</strong>
             网关的 Job 表在进程内存里、有条数上限、且每个副本各自持有，因此副本重启、条数
-            超限，或某个副本没有作答，都会让运行从这里消失。持久化的历史需要控制面新建
-            Job 表与写入路径，尚未实现。
+            超限，或某个副本没有作答，都会让运行从这里消失。控制面已经建好持久化的 Job
+            历史表与写入路径，但本控制台还没有读它的页面，因此这里暂时仍是唯一的运行视图。
           </li>
           <li>
             <strong>状态是「最后观测状态」，不是此刻的状态。</strong>
@@ -164,6 +167,7 @@ export function JobsView() {
                     <TableHead>提交时间</TableHead>
                     <TableHead>观测时间</TableHead>
                     <TableHead>产物</TableHead>
+                    <TableHead>操作</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -215,9 +219,22 @@ export function JobsView() {
                       <TableCell className="text-xs">
                         {job.artifactIds.length === 0 ? (
                           <span className="text-muted-foreground">无</span>
+                        ) : hasGatewayKey ? (
+                          <ArtifactLinks artifactIds={job.artifactIds} />
                         ) : (
                           <span title={job.artifactIds.join("\n")}>
                             {job.artifactIds.length} 个
+                          </span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {isTerminalJobState(job.state) ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : hasGatewayKey ? (
+                          <CancelButton jobId={job.id} onCancelled={view.reload} />
+                        ) : (
+                          <span className="text-xs text-muted-foreground">
+                            未配置 Key
                           </span>
                         )}
                       </TableCell>
@@ -229,12 +246,135 @@ export function JobsView() {
           )}
 
           <p className="text-xs text-muted-foreground">
-            产物要用本租户自己的 API Key 从网关数据面下载，本控制台不持有那个 Key，因此这里
-            只列出产物 id 而不提供下载。取消运行同理，也走网关数据面。运行落在哪个网关副本上
-            属于基础设施信息，与节点清单一样不在租户视图中呈现。
+            {hasGatewayKey
+              ? "取消与产物下载走的是网关数据面，用的是「设置」页配置的那把 Key，不经过控制面。"
+              : "取消与产物下载走的是网关数据面，认的是租户自己的 API Key。前往「设置」页配置一把，才能在这里使用这两项操作；未配置前，产物仅列出 id。"}
+            运行落在哪个网关副本上属于基础设施信息，与节点清单一样不在租户视图中呈现。
+            {hasGatewayKey ? null : (
+              <>
+                {" "}
+                <Link href="/console/settings" className="underline underline-offset-2">
+                  前往设置
+                </Link>
+              </>
+            )}
           </p>
         </>
       )}
     </div>
   );
+}
+
+/**
+ * CancelButton posts to the Gateway-proxy cancel route and reloads the list
+ * on success. It does not optimistically mark the row cancelled: cancel is a
+ * request, not a conclusion — ComfyUI's own interrupt is asynchronous, and
+ * the Gateway itself still answers with whatever it last knew until the real
+ * result comes back. Claiming "cancelled" here before the Gateway does would
+ * be this console fabricating a result nobody reported, the same failure
+ * mode the Gateway's own README explicitly rules out for itself.
+ *
+ * CancelButton 向经由网关的取消代理路由发起 POST，成功后重新加载列表。它不会
+ * 乐观地把这一行标记为已取消：取消是一次请求，不是一个结论——ComfyUI 自己的
+ * 中断是异步的，在真正的结果回来之前，Gateway 本身仍然只会回答它最后知道的
+ * 状态。在 Gateway 之前就在这里宣称"已取消"，会是本控制台在编造一个没人报告过
+ * 的结果，而这正是 Gateway 自己的 README 明确为自己排除掉的那种失败模式。
+ */
+function CancelButton({
+  jobId,
+  onCancelled,
+}: {
+  jobId: string;
+  onCancelled: () => void;
+}) {
+  const [pending, setPending] = React.useState(false);
+
+  async function cancel() {
+    if (pending) {
+      return;
+    }
+    setPending(true);
+    try {
+      const response = await fetch(
+        `/api/gateway/jobs/${encodeURIComponent(jobId)}/cancel`,
+        { method: "POST" }
+      );
+      if (response.ok) {
+        toast.success("已发送取消请求");
+        onCancelled();
+        return;
+      }
+      const body = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      toast.error(describeGatewayError(body?.error, response.status));
+    } catch {
+      toast.error("无法连接网关，请检查网络后重试。");
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return (
+    <Button
+      type="button"
+      variant="outline"
+      size="sm"
+      disabled={pending}
+      onClick={cancel}
+    >
+      {pending ? "取消中…" : "取消"}
+    </Button>
+  );
+}
+
+/** ArtifactLinks renders one download link per artifact id, each a plain
+ * navigation to the Gateway-proxy artifact route rather than a fetch: the
+ * body can be a multi-megabyte image or video, and a browser download link
+ * streams it without this component ever holding the bytes.
+ *
+ * ArtifactLinks 为每个产物 id 渲染一条下载链接，每一条都是对经由网关的产物代理
+ * 路由的一次普通导航，而不是一次 fetch：响应体可能是数兆字节的图片或视频，
+ * 浏览器的下载链接会把它串流下来，本组件从不持有这些字节。 */
+function ArtifactLinks({ artifactIds }: { artifactIds: string[] }) {
+  return (
+    <div className="flex flex-col gap-0.5">
+      {artifactIds.map((id) => (
+        <a
+          key={id}
+          href={`/api/gateway/artifacts/${encodeURIComponent(id)}`}
+          className="underline underline-offset-2"
+          title={id}
+        >
+          下载
+        </a>
+      ))}
+    </div>
+  );
+}
+
+/** describeGatewayError turns the error code the two Gateway-proxy routes
+ * report into on-screen text. These routes do not go through
+ * lib/console/api-client.ts's ApiErrorKind, so the mapping lives here rather
+ * than in lib/console/errors.ts — see describeSettingsError in
+ * app/console/settings/settings-view.tsx for the same reasoning applied to
+ * the Gateway Key form.
+ *
+ * describeGatewayError 把两个网关代理路由报告的错误代号转换成屏幕上的文案。这些
+ * 路由不经由 lib/console/api-client.ts 的 ApiErrorKind，因此这份映射放在这里，
+ * 而不是 lib/console/errors.ts——同样的推理用在了 Gateway Key 表单上，见
+ * app/console/settings/settings-view.tsx 的 describeSettingsError。 */
+function describeGatewayError(code: string | undefined, status: number): string {
+  switch (code) {
+    case "gateway_key_missing":
+      return "尚未配置 Gateway Key，请前往「设置」页配置。";
+    case "gateway_key_rejected":
+      return "配置的 Gateway Key 已失效，请前往「设置」页重新配置。";
+    case "forbidden_origin":
+      return "请求来源校验失败，请刷新页面后重试。";
+    default:
+      return status === 504 || status === 502
+        ? "无法连接网关，请稍后重试。"
+        : "操作失败，请稍后重试。";
+  }
 }
