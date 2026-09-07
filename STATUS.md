@@ -2,7 +2,7 @@
 
 更新日期：2026-09-07。
 
-本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。本次更新仅整理文档，不代表重新执行过测试或部署验收。
+本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
 
 ## 文档分工与里程碑
 
@@ -46,7 +46,7 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 
 | 状态 | 编号 | 待开发任务 | 验收目标 |
 | --- | --- | --- | --- |
-| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01-j08-均已完成)，本项仅完成设计，不含建表与代码 |
+| [x] | J01 | 定义持久化契约与失败语义：创建、提交确认、状态更新、终态、恢复；确定写入失败与推理可用性的关系 | 区分未提交、已确认和提交结果未知；明确何时向客户端确认持久化受理；数据库故障不拖垮普通推理链路——契约见 [ControlPlane README「Job 持久化契约」](service/aiServeWeaveControlPlane/README.md#job-持久化契约j01j08-实现与边界)，本项仅完成设计，不含建表与代码 |
 | [x] | J02 | 在 Gateway 增加有界后台状态同步 | 调用方不再轮询/SSE 时也能推进任务；限制扫描批次、并发和频率，处理节点消失、超时和优雅停止——实现见 `httpapi/jobsync.go`，详见 [Gateway README「工作流 Job」第九条](service/aiServeWeaveGateway/README.md#工作流-job) |
 | [x] | J03 | 建立 `jobs`、`job_artifacts` 表及带版本迁移 | 保存租户、工作流及版本、后端运行映射、状态版本、时间和稳定产物 ID；按租户与时间/状态建立查询索引；迁移可重复执行且有版本记录——实现见 `internal/store/gormstore/jobmigrate.go` 与 `internal/model/job.go`，详见 [ControlPlane README「Job 持久化契约」的「已实现的存储层」小节](service/aiServeWeaveControlPlane/README.md#已实现的存储层j03)；真实 MySQL 上的迁移可重复性已在 J08 验证 |
 | [x] | J04 | 实现控制面内部 Job 读写 API 与 Gateway 客户端 | 服务间鉴权、租户隔离、幂等写入和并发条件更新；重复/乱序事件不能覆盖终态；错误与日志不泄露凭据、Prompt 或工作流 JSON——实现见 `internal/handler`（`/internal/v1/jobs*`，InternalToken 守卫）、`internal/logic/jobs.go` 与 Gateway 侧 `controlplaneclient/jobs.go` 的 `JobsClient`，详见 [ControlPlane README「Job 持久化契约」的「已实现的内部 API」小节](service/aiServeWeaveControlPlane/README.md#已实现的内部-api-与-gateway-客户端j04)；接入 Gateway 提交/同步路径见 J05 |
@@ -73,7 +73,11 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 - [x] **R01 开源治理文件**：由维护者确定许可证并补 LICENSE、CONTRIBUTING、SECURITY，说明贡献流程和私密漏洞报告渠道——已选定 Apache-2.0，落地 [LICENSE](LICENSE)、[CONTRIBUTING.md](CONTRIBUTING.md)、[SECURITY.md](SECURITY.md)；私密漏洞报告走 GitHub Security Advisories（仓库 Security 标签页的 Private Vulnerability Reporting），不新增专属邮箱。
 - [x] **R02 持续集成**：自动执行仓库规定的 Go 格式、vet、build、proto 生成一致性、测试与 race 门禁，以及 Console lint/typecheck/test/build；外部后端测试独立运行——实现见 [.github/workflows/ci.yml](.github/workflows/ci.yml)：`go` 作业跑 `gofmt -l`、`go vet`、`go build`，重新执行 `go generate ./api/...` 后 `git diff --exit-code` 校验生成结果与仓库一致，再跑 `go test ./...` 与 `go test -race ./service/...`；`console` 作业在 `service/aiServeWeaveConsole` 下跑 `pnpm lint`/`build`/`typecheck`/`test`；`mysql-integration` 作业用真实 `mysql:9.7` 容器设置 `AISW_MYSQL_TEST_DSN`，单独跑控制面的 J08 用例，与前两个作业并行、互不依赖，对应仓库"默认测试不依赖真实数据库"的约定。本机 Ollama 的 `live_test.go` 未设置 `OLLAMA_BASE_URL`，CI 上按既有约定自动跳过，不在 CI 内新增真实 Ollama 依赖。三个作业均已在本机按 CI 所用命令逐条跑通。
 - [x] **R03 版本发布**：提供版本化二进制与容器镜像、校验和、变更记录、支持的平台与升级说明，验证全新环境的最小部署链路——四个服务的 `main.go` 均新增 `-version` flag，版本经 `-ldflags -X main.version=...` 在构建时注入（根 [Dockerfile](Dockerfile) 与 [scripts/build-release.sh](scripts/build-release.sh)）；`scripts/build-release.sh` 交叉编译四服务 × 四平台（linux/darwin × amd64/arm64）并生成 `SHA256SUMS.txt`；[.github/workflows/release.yml](.github/workflows/release.yml) 在 `vX.Y.Z` tag push 上自动重跑质量门禁、产出二进制与校验和、构建推送四个服务的多架构镜像到 GHCR、创建带 CHANGELOG 摘录的 GitHub Release；[CHANGELOG.md](CHANGELOG.md) 与 [RELEASING.md](RELEASING.md)（版本号策略、支持平台矩阵、打版本步骤、升级说明——明确不保证跨版本滚动升级或 schema 兼容，对应 `A03` 仍未完成）均已落地。验收依据：`go build ./...`、`gofmt`、`go vet` 通过；四个服务的 `-version` flag 本地逐一验证过打印后立即退出；`scripts/build-release.sh` 本地跑通并生成正确命名与校验和；`docker build --build-arg VERSION=...` 验证过版本能打进镜像；`deploy/README.md`「起步」一节的完整流程（`cp .env.example .env` 回填密钥、`docker compose up -d --build`、健康检查、bootstrap 自动建号、Console 登录）在本地全新环境跑通一遍验证了最小部署链路，随后 `docker compose down -v` 清理——**未**实际推送过镜像到真实 GHCR（当前环境没有可用于此仓库的推送凭据，推送是对外可见操作，不在本地环境内擅自执行），流水线本身的端到端有效性有待第一次真实打 tag 时验证。
-- [ ] **R04 文档一致性**：核对根 README、各服务 README、AGENTS 代码地图和 Console STATUS 中过时的“未实现”描述；已实现与规划能力分开标注。
+- [x] **R04 文档一致性**：已按源码核对根 README、五个服务 README、隧道 README、根/Console AGENTS 与 Console STATUS；修正配额读取、分页、Job 同步/历史、Registry、Responses 和自动发现的过时描述，补齐原空白的 Agent README，分开当前能力、规划与历史验收记录。核对依据为控制面路由、Console 转发白名单与页面、Gateway `jobsync.go`/`jobpersist.go`/`jobrecover.go`/`artifacts.go`、Registry gRPC 实现及 Agent 装配；文档相对链接与 `git diff --check` 已检查。本轮仅修改文档，未重新运行 Go/Console 测试或实机验收。
+
+### R04 核对发现的实现限制
+
+J01–J08 的既有勾选记录保留，但不能解读为全部可靠性目标已满足：公开 `durability` 字段尚未输出；J06 恢复器只扫描非终态 Job，未恢复终态 Job 与历史产物 ID 的数据面映射，因此“任一副本可取消/访问产物”的验收目标尚不完整。J07/C26 已有历史与下载页面，但不保证重启或切换副本后仍可下载。后续应补齐这些实现与故障验证；本次 R04 只修正文档，不改变行为。
 
 ## P1：平台管理与运维
 
@@ -119,4 +123,4 @@ Job 持久化目标数据库采用 **MySQL 9.7 / InnoDB**。沿用控制面现�
 - [Gateway README](service/aiServeWeaveGateway/README.md)：Job 内存边界、状态观测、产物与路由配置。
 - [ControlPlane README](service/aiServeWeaveControlPlane/README.md)：历史任务、管理写路径、数据库迁移与监控缺口。
 - [Registry README](service/aiServeWeaveRegistry/README.md)：身份冲突、token 存储、单实例与认证边界。
-- [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C22、C24、C26–C29 与 Q03 待交付项。
+- [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C22、C24、C27–C29 与 Q03 待交付项；C25/C26 已交付范围与剩余限制。

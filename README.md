@@ -6,6 +6,12 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 本文描述项目定位、能力规划与目标架构，包含尚未实现的设计，不作为功能可用性声明。开发进度、优先级、依赖和验收统一见 [STATUS.md](STATUS.md)。部署操作见 [deploy/README.md](deploy/README.md)，具体接口与运行限制见各服务 README。
 
+## 当前能力与规划边界
+
+当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户、API Key、审计、配额与 MySQL Job 历史；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。接口限制以服务 README 为准。
+
+下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，但控制面/Console 的节点管理写路径仍待 P01。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+
 ## 项目目标
 
 - 集中管理本地设备、内网设备和 GPU 服务器等推理节点
@@ -188,21 +194,22 @@ type InferEvent struct {
 }
 ```
 
-基础兼容 API：
+已实现的基础兼容 API（参数与限制见 [Gateway README](service/aiServeWeaveGateway/README.md)）：
 
 - `POST /v1/chat/completions`（含 SSE）
 - `POST /v1/responses`（含 SSE）
 - `POST /v1/embeddings`
 - `GET /v1/models`
 
-扩展协议范围：
+规划中的扩展协议范围：
 
 - Anthropic `POST /v1/messages`
 - Ollama 原生 API
 - 音频转录和翻译
 - rerank
 - OpenAI-compatible 图像生成
-- ComfyUI 工作流和异步任务 API
+
+ComfyUI 工作流和异步任务 API 已实现，见下方「ComfyUI 任务 API」。
 
 vLLM 已提供 Chat Completions、Responses、Embeddings 和音频等多种 OpenAI-compatible API；Ollama 也提供部分 OpenAI API 兼容能力。因此，第一版以 OpenAI 协议作为主要对外协议和后端协议，可以减少适配成本。
 
@@ -235,7 +242,7 @@ DeploymentCapability
 
 ComfyUI 是基于节点图的生成式 AI 推理引擎，可生成图片、视频、音频等内容。它的执行方式是提交整个工作流并异步排队，不应强行套用 LLM 的同步请求模型。
 
-AIServeWeave 将 ComfyUI 视为一种独立 Backend，并同时支持：
+AIServeWeave 将 ComfyUI 视为一种独立 Backend。以下为目标接入范围，目前已实现 External 后端适配与 Agent Tunnel 链路；Direct 待核实，Managed 与 Comfy Cloud 尚未交付：
 
 - 节点上自托管的 ComfyUI
 - 通过 Direct 模式访问的 ComfyUI 服务器
@@ -285,7 +292,7 @@ Agent 对 ComfyUI 的接入职责：
 - [ComfyUI WebSocket 消息](https://docs.comfy.org/development/comfyui-server/comms_messages)
 - [ComfyUI Cloud API](https://docs.comfy.org/development/cloud/overview)
 
-### 托管部署
+### 托管部署（规划）
 
 Managed 模式使用声明式部署规格，控制面保存期望状态，Agent 负责将本机实际状态收敛到期望状态：
 
@@ -384,9 +391,9 @@ ComfyUI 的 `prompt_id` 是后端任务 ID，不能直接作为公开 ID。AISer
 
 对于简单的文生图场景，可以把 OpenAI-compatible `POST /v1/images/generations` 映射到管理员指定的 ComfyUI 工作流模板。复杂工作流仍使用 AIServeWeave Workflow API，以免丢失 ComfyUI 的图结构、视频输出和自定义参数能力。
 
-### 文件与产物
+### 文件与产物（目标方案）
 
-ComfyUI 支持输入文件和较大的生成产物，文件流不应直接存入关系数据库：
+当前已实现从原节点授权流式下载产物，以及向控制面旁路写入 Job/产物元数据。输入上传、对象存储与保留期清理尚未交付；以下是 P04/P05 的目标方案，文件流不直接存入关系数据库：
 
 - 输入图片先上传到 AIServeWeave，再由 Agent 上传到目标 ComfyUI
 - 生成完成后，由数据面从 ComfyUI 流式拉取产物并写入对象存储；经 Agent 访问时保持隧道背压，不向节点分发平台存储主凭据
@@ -574,7 +581,7 @@ OpenAI SDK → Gateway 协议解析 → 能力与路由筛选
            → Agent 隧道 → Ollama / vLLM → SSE 返回
 
 Workflow API → 受控模板绑定 → Job 提交与确认
-             → Agent → ComfyUI → 状态同步与产物存储
+             → Agent → ComfyUI → 状态同步与产物流式转发
              → 控制面任务历史 → Console 查询和授权下载
 ```
 

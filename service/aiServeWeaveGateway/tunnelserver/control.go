@@ -72,8 +72,12 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	n.runtimeIDs = append([]string(nil), hello.GetRuntimeIds()...)
 	n.labels = maps.Clone(hello.GetLabels())
 	// A reconnecting Agent is not draining any more: Draining describes the
-	// stream it was announced on, and that stream is gone.
+	// stream it was announced on, and that stream is gone. Maintenance is the
+	// opposite: it is a Registry-level fact about the node_id, not the
+	// stream, so a reconnect must pick up whatever this replica's roster
+	// currently says instead of resetting it.
 	n.draining = false
+	n.maintenance = s.isMaintenance(certNodeID)
 	n.lastHeartbeat = s.clock.Now()
 	streams := len(n.controls)
 	n.mu.Unlock()

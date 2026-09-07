@@ -172,6 +172,49 @@ func TestChatPicksTheMoreIdleNode(t *testing.T) {
 	}
 }
 
+// TestChatExcludesANodeUnderOperatorMaintenance covers STATUS.md's P01: a
+// node_id the Registry has put under maintenance must not receive new
+// dispatch, even though its Control stream stays up and it would otherwise
+// be the only capable node.
+func TestChatExcludesANodeUnderOperatorMaintenance(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var maintenanceCount, healthyCount atomic.Int32
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", &maintenanceCount))
+	connectNode(t, h, "node-b", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-b", &healthyCount))
+
+	h.Srv.SetRoster(&tunnelv1.GatewayRoster{Version: 1, MaintenanceNodeIds: []string{"node-a"}})
+	gatewaytest.WaitFor(t, "node-a to report maintenance", func() bool {
+		info, _ := h.Srv.Node("node-a")
+		return info.Maintenance
+	})
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	for i := range 5 {
+		resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{
+			Model:    "qwen3:8b",
+			Messages: []runtime.ChatMessage{{Role: "user", Content: "hi"}},
+		})
+		if err != nil {
+			t.Fatalf("call %d: Chat: %v", i+1, err)
+		}
+		if candidate.NodeID != "node-b" {
+			t.Errorf("call %d: candidate.NodeID = %q, want node-b (node-a is under maintenance)", i+1, candidate.NodeID)
+		}
+		if resp.Message.Content != "served by node-b" {
+			t.Errorf("call %d: content = %q, want %q", i+1, resp.Message.Content, "served by node-b")
+		}
+		gatewaytest.WaitFor(t, "node-b's slot to re-park", func() bool {
+			return gatewaytest.IdleCount(h, "node-b") == 1
+		})
+	}
+	if maintenanceCount.Load() != 0 {
+		t.Errorf("the maintenance node was contacted %d times, want 0", maintenanceCount.Load())
+	}
+	if healthyCount.Load() != 5 {
+		t.Errorf("the healthy node was contacted %d times, want 5", healthyCount.Load())
+	}
+}
+
 func TestChatReturnsErrNoCapableNodeForAnUnknownModel(t *testing.T) {
 	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))

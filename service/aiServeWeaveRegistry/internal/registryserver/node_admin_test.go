@@ -13,12 +13,13 @@ import (
 func TestDisableNodeRejectsFutureRegisterAndRenewCertificate(t *testing.T) {
 	f := startRegistry(t)
 	admin, ctx := tokenAdminClient(t, f)
+	f.approve(t, "node-a")
 
 	tok, err := f.tokens.Mint(15*time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("Mint() error = %v", err)
 	}
-	manager := newAgentIdentityManager(t, f, tok)
+	manager := newAgentIdentityManager(t, f, "node-a", tok)
 	id, err := manager.Ensure(ctx)
 	if err != nil {
 		t.Fatalf("Ensure() error = %v", err)
@@ -52,12 +53,13 @@ func TestDisableNodeRejectsFutureRegisterAndRenewCertificate(t *testing.T) {
 func TestEnableNodeAllowsRegisterAndRenewCertificateAgain(t *testing.T) {
 	f := startRegistry(t)
 	admin, ctx := tokenAdminClient(t, f)
+	f.approve(t, "node-a")
 
 	tok, err := f.tokens.Mint(15*time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("Mint() error = %v", err)
 	}
-	manager := newAgentIdentityManager(t, f, tok)
+	manager := newAgentIdentityManager(t, f, "node-a", tok)
 	id, err := manager.Ensure(ctx)
 	if err != nil {
 		t.Fatalf("Ensure() error = %v", err)

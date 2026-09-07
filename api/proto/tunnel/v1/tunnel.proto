@@ -52,6 +52,13 @@ service NodeIdentity {
   // Register exchanges a one-time bootstrap token for a node certificate.
   // This is the only method in the whole contract that does not require a
   // client certificate.
+  //
+  // A node_id first presented with an unbound bootstrap token, and not
+  // already approved by an operator (TokenAdmin.ApproveNode, STATUS.md's
+  // P01), is refused: the identity ledger records the attempt as pending
+  // approval instead of signing a certificate. A node_id presented with a
+  // node_id-bound token skips this gate — minting that token is itself the
+  // approval.
   rpc Register(RegisterRequest) returns (RegisterResponse);
 
   // RenewCertificate rotates a node certificate and requires the current
@@ -115,6 +122,34 @@ service TokenAdmin {
   // EnableNode clears a prior DisableNode. Enabling a node_id that is not
   // currently disabled is not an error.
   rpc EnableNode(EnableNodeRequest) returns (EnableNodeResponse);
+
+  // ApproveNode clears a node_id's pending-approval mark (STATUS.md's P01),
+  // creating a record for it if none exists yet — an operator may approve a
+  // node_id before it has ever registered, the same way DisableNode may
+  // pre-emptively revoke one. It has no effect on a node_id registered via a
+  // node_id-bound bootstrap token: minting that token is itself the approval
+  // (see MintToken), so such a node_id is never marked pending in the first
+  // place.
+  rpc ApproveNode(ApproveNodeRequest) returns (ApproveNodeResponse);
+
+  // SetMaintenance marks a node_id as under operator-forced maintenance
+  // (STATUS.md's P01): the Registry pushes the updated set to every joined
+  // Gateway replica on GatewayRoster, and a replica stops assigning new work
+  // to that node_id without closing its existing Control stream or
+  // interrupting in-flight requests — unlike DisableNode, this is not an
+  // identity revocation. Setting maintenance on a node_id that is already
+  // under maintenance is not an error.
+  rpc SetMaintenance(SetMaintenanceRequest) returns (SetMaintenanceResponse);
+
+  // ClearMaintenance clears a prior SetMaintenance. Clearing maintenance on a
+  // node_id that is not currently under it is not an error.
+  rpc ClearMaintenance(ClearMaintenanceRequest) returns (ClearMaintenanceResponse);
+
+  // ListNodeStates reports every node_id the identity ledger has an opinion
+  // about — pending approval, disabled, or under maintenance — so a caller
+  // building an operator console can render "expected state" without this
+  // service exposing its on-disk ledger format directly.
+  rpc ListNodeStates(ListNodeStatesRequest) returns (ListNodeStatesResponse);
 }
 
 // -----------------------------------------------------------------------
@@ -122,11 +157,12 @@ service TokenAdmin {
 // -----------------------------------------------------------------------
 
 message RegisterRequest {
-  // node_id is the Agent's proposed identity. Whether the Registry honours it
-  // or assigns its own is an open question (README, 待决问题 3); the response
-  // carries the authoritative value either way — unless bootstrap_token is
-  // itself node_id-bound (TokenAdmin.MintToken), in which case the bound
-  // value always wins.
+  // node_id is the Agent's proposed identity. It is required unless
+  // bootstrap_token is itself node_id-bound (TokenAdmin.MintToken), in which
+  // case the bound value always wins and overrides whatever is set here: an
+  // unbound registration can no longer leave this empty for the Registry to
+  // assign one (STATUS.md's P01) — an operator approves a node_id by name,
+  // and a self-assigned one would have nothing stable to approve.
   string node_id = 1;
   bytes csr = 2;                        // PKCS#10 certificate request, DER
   string bootstrap_token = 3;           // one-time, short-lived, optionally node_id-bound (TokenAdmin.MintToken)
@@ -182,6 +218,48 @@ message EnableNodeRequest {
 }
 
 message EnableNodeResponse {}
+
+message ApproveNodeRequest {
+  string node_id = 1;
+}
+
+message ApproveNodeResponse {}
+
+message SetMaintenanceRequest {
+  string node_id = 1;
+}
+
+message SetMaintenanceResponse {}
+
+message ClearMaintenanceRequest {
+  string node_id = 1;
+}
+
+message ClearMaintenanceResponse {}
+
+message ListNodeStatesRequest {}
+
+message ListNodeStatesResponse {
+  repeated NodeState states = 1;
+}
+
+// NodeState is one node_id's entry in the identity ledger, as ListNodeStates
+// reports it. A node_id absent from this list has no ledger entry at all:
+// it has never registered, been pre-approved, pre-disabled, or put under
+// maintenance.
+message NodeState {
+  string node_id = 1;
+  // pending_approval is true when this node_id has attempted to register
+  // with an unbound bootstrap token but no operator has approved it yet
+  // (STATUS.md's P01). Register refuses it while this holds.
+  bool pending_approval = 2;
+  // disabled mirrors TokenAdmin.DisableNode (STATUS.md's S03).
+  bool disabled = 3;
+  // maintenance mirrors TokenAdmin.SetMaintenance (STATUS.md's P01).
+  bool maintenance = 4;
+  google.protobuf.Timestamp first_seen_at = 5;
+  google.protobuf.Timestamp last_seen_at = 6;
+}
 
 // -----------------------------------------------------------------------
 // Data plane
@@ -410,6 +488,13 @@ message GatewayRoster {
   // that just became revoked, instead of waiting for that node to reconnect
   // and be refused.
   repeated string revoked_node_ids = 3;
+  // maintenance_node_ids is the full current set of node_ids under
+  // operator-forced maintenance (TokenAdmin.SetMaintenance, STATUS.md's
+  // P01), broadcast the same way revoked_node_ids is. Unlike a revoked
+  // node_id, a maintenance node_id's existing Control stream is left alone:
+  // a replica diffs this set and stops assigning new work to the node
+  // without disconnecting it.
+  repeated string maintenance_node_ids = 4;
 }
 
 message GatewayReplica {

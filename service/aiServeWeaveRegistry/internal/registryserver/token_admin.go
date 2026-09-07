@@ -102,6 +102,86 @@ func (s *Server) EnableNode(ctx context.Context, req *tunnelv1.EnableNodeRequest
 	return &tunnelv1.EnableNodeResponse{}, nil
 }
 
+// ApproveNode implements tunnelv1.TokenAdminServer (STATUS.md's P01).
+func (s *Server) ApproveNode(ctx context.Context, req *tunnelv1.ApproveNodeRequest) (*tunnelv1.ApproveNodeResponse, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+	if err := s.identities.Approve(nodeID, s.clock.Now()); err != nil {
+		s.logger.Error("node approve failed", slog.String("node_id", nodeID), slog.String("error", err.Error()))
+		return nil, status.Error(codes.Internal, "cannot approve node")
+	}
+
+	s.logger.Info("node approved", slog.String("node_id", nodeID))
+	return &tunnelv1.ApproveNodeResponse{}, nil
+}
+
+// SetMaintenance implements tunnelv1.TokenAdminServer (STATUS.md's P01).
+// Beyond persisting the flag, it recomputes and re-broadcasts the roster's
+// maintenance_node_ids so every joined Gateway replica stops assigning new
+// work to this node_id without waiting for it to reconnect — unlike
+// DisableNode, the node_id's existing Control stream is left alone.
+func (s *Server) SetMaintenance(ctx context.Context, req *tunnelv1.SetMaintenanceRequest) (*tunnelv1.SetMaintenanceResponse, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+	if err := s.identities.SetMaintenance(nodeID, s.clock.Now()); err != nil {
+		s.logger.Error("node maintenance set failed", slog.String("node_id", nodeID), slog.String("error", err.Error()))
+		return nil, status.Error(codes.Internal, "cannot set node maintenance")
+	}
+	s.roster.setMaintenance(s.identities.MaintenanceNodeIDs())
+
+	s.logger.Info("node entered maintenance", slog.String("node_id", nodeID))
+	return &tunnelv1.SetMaintenanceResponse{}, nil
+}
+
+// ClearMaintenance implements tunnelv1.TokenAdminServer (STATUS.md's P01).
+func (s *Server) ClearMaintenance(ctx context.Context, req *tunnelv1.ClearMaintenanceRequest) (*tunnelv1.ClearMaintenanceResponse, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+	if err := s.identities.ClearMaintenance(nodeID, s.clock.Now()); err != nil {
+		s.logger.Error("node maintenance clear failed", slog.String("node_id", nodeID), slog.String("error", err.Error()))
+		return nil, status.Error(codes.Internal, "cannot clear node maintenance")
+	}
+	s.roster.setMaintenance(s.identities.MaintenanceNodeIDs())
+
+	s.logger.Info("node exited maintenance", slog.String("node_id", nodeID))
+	return &tunnelv1.ClearMaintenanceResponse{}, nil
+}
+
+// ListNodeStates implements tunnelv1.TokenAdminServer (STATUS.md's P01).
+func (s *Server) ListNodeStates(ctx context.Context, _ *tunnelv1.ListNodeStatesRequest) (*tunnelv1.ListNodeStatesResponse, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		return nil, err
+	}
+	states := s.identities.States()
+	resp := &tunnelv1.ListNodeStatesResponse{States: make([]*tunnelv1.NodeState, 0, len(states))}
+	for _, st := range states {
+		resp.States = append(resp.States, &tunnelv1.NodeState{
+			NodeId:          st.NodeID,
+			PendingApproval: st.PendingApproval,
+			Disabled:        st.Disabled,
+			Maintenance:     st.Maintenance,
+			FirstSeenAt:     timestamppb.New(st.FirstSeenAt),
+			LastSeenAt:      timestamppb.New(st.LastSeenAt),
+		})
+	}
+	return resp, nil
+}
+
 // requireAdmin authenticates the caller of a TokenAdmin method against a
 // "authorization: Bearer <token>" gRPC metadata entry, compared in constant
 // time — the same Bearer-token convention adminapi.go (Gateway) and

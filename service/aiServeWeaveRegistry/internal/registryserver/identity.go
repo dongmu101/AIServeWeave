@@ -2,11 +2,8 @@ package registryserver
 
 import (
 	"context"
-	"crypto/rand"
 	"crypto/x509"
-	"encoding/hex"
 	"errors"
-	"fmt"
 	"log/slog"
 
 	"google.golang.org/grpc/codes"
@@ -73,10 +70,18 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	case boundNodeID != "":
 		nodeID = boundNodeID
 	case nodeID == "":
-		nodeID, err = generateNodeID()
-		if err != nil {
-			return nil, status.Error(codes.Internal, "cannot assign a node identity")
-		}
+		// Before STATUS.md's P01, an empty node_id was a supported
+		// convenience: the Registry generated a random one and handed it
+		// back. Approval gating makes that convenience incoherent — an
+		// operator cannot approve a node_id by name before it exists, and a
+		// freshly generated id would differ on every retry, so a "pending"
+		// record from one attempt could never be the one an operator
+		// approves. An unbound registration must therefore now name itself,
+		// so an operator has something stable to approve; a node-bound
+		// token (which already skips this gate below) is the path for a
+		// caller that still wants the Registry to assign the identity.
+		return nil, status.Error(codes.InvalidArgument,
+			"node_id is required: an unbound bootstrap token can no longer self-assign one, since it would have nothing stable for an operator to approve")
 	}
 
 	// A disabled node_id (TokenAdmin.DisableNode, STATUS.md's S03) is refused
@@ -92,6 +97,35 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	fingerprint, err := csrFingerprint(req.GetCsr())
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "cannot read the certificate request: %v", err)
+	}
+
+	// A node_id presented with an unbound bootstrap token must be approved
+	// by an operator before Register will sign anything for it (STATUS.md's
+	// P01). A bound token skips this: minting it was itself the approval,
+	// the same reasoning that already lets the bound-token branch below
+	// bypass Reserve's conflict check. A node_id with no ledger entry at all
+	// is exactly as unapproved as one explicitly marked pending, so both
+	// collapse into the same refusal — the attempt is recorded either way,
+	// which is what lets an operator find it in TokenAdmin.ListNodeStates
+	// and approve it for the Agent's next retry.
+	if boundNodeID == "" {
+		approved := true
+		if s.identities.IsPending(nodeID) {
+			approved = false
+		} else if !s.identities.HasRecord(nodeID) {
+			approved = false
+		}
+		if !approved {
+			if err := s.identities.RecordPending(nodeID, now); err != nil {
+				s.logger.Error("identity store failed", slog.String("error", err.Error()))
+				return nil, status.Error(codes.Internal, "cannot record node identity")
+			}
+			s.logger.Warn("node registration pending operator approval",
+				slog.String("node_id", nodeID),
+				slog.String("agent_version", req.GetAgentVersion()))
+			return nil, status.Errorf(codes.PermissionDenied,
+				"node_id %q is pending operator approval; an operator must approve it before registration can proceed", nodeID)
+		}
 	}
 
 	certPEM, notAfter, err := s.ca.Sign(req.GetCsr(), nodeID, now)
@@ -232,16 +266,4 @@ func csrFingerprint(csrDER []byte) (string, error) {
 		return "", err
 	}
 	return identitystore.Fingerprint(csr.PublicKey)
-}
-
-// generateNodeID returns a random node identity for a Register call that left
-// node_id empty. It is deliberately simple: the top-level README's "待决问题
-// 3" marks collision handling and an operator-facing naming scheme as open
-// questions to settle before production, not something this phase blocks on.
-func generateNodeID() (string, error) {
-	buf := make([]byte, 8)
-	if _, err := rand.Read(buf); err != nil {
-		return "", fmt.Errorf("registryserver: cannot generate node id: %w", err)
-	}
-	return "node-" + hex.EncodeToString(buf), nil
 }

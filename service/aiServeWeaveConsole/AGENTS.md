@@ -37,7 +37,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 由此产生三个可执行文件，用途不同：
 
-- `pnpm typecheck` → `tsc`，即 **TS 7**，原生 Go 编译器，日常类型检查用它（当前空项目下比 TS 6 快约 4 倍）。
+- `pnpm typecheck` → `tsc`，即 **TS 7**，原生 Go 编译器，日常类型检查用它（项目初建时曾测得约 4 倍速度差，不作为当前性能保证）。
 - `pnpm exec tsc6` → **TS 6**，与 `next build` 内部所用版本一致。
 - `pnpm lint` / `pnpm build` → 内部走 TS 6。
 
@@ -73,9 +73,9 @@ pnpm build        # Next.js 构建，内部 TS 6
 
 Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直连 Agent。根仓库 [AGENTS.md](../../AGENTS.md) 的安全红线同样适用：API Key 明文、完整 Prompt、工作流 JSON 不得进日志或错误提示，前端展示 API Key 一律用后端返回的展示形式（`common/apikey` 定义），不要自己拼。
 
-**唯一的例外：Job 历史页面的取消与产物访问，Console 服务端直连 Gateway 数据面。** 取消（`POST /v1/jobs/{id}/cancel`）与产物下载（`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}`）在 Gateway 数据面认的是租户自己的 API Key，控制面从不持有、也不该持有它，因此这两个操作没有办法走"经控制面转发"这条唯一路径——详细取舍见 [ControlPlane README「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#已实现的持久化历史查询j07-的只读部分)。做法是：owner/admin 用已有的"创建 API Key"功能生成一把该租户的 Key，粘贴进 Console 一个专门的设置页，由 Console 服务端加密存储，仅用于代表已登录会话调用上述两个 Gateway 端点；这把 Key **不做 scope 收紧**，与用户自己创建的 Key 权限完全相同，被拿到后不只能取消/读产物，也能拿去跑推理烧配额——这是当前没有真实租户在生产环境运行阶段的刻意权衡，不是遗漏，真有生产租户后应重新评估是否收紧。除这两个端点外，其余一切仍然只走控制面；这把 Key **绝不下发到浏览器**，浏览器侧仍然只持有 Console 自己的会话 Cookie。
+**唯一的例外：实时 Job 与历史详情页面的取消与产物访问，Console 服务端直连 Gateway 数据面。** 取消（`POST /v1/jobs/{id}/cancel`）与产物下载（`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}`）在 Gateway 数据面认的是租户自己的 API Key，控制面从不持有、也不该持有它，因此这两个操作没有办法走"经控制面转发"这条唯一路径——详细取舍见 [ControlPlane README「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#已实现的持久化历史查询与-console-接入j07)。做法是：owner/admin 用已有的"创建 API Key"功能生成一把该租户的 Key，粘贴进 Console 一个专门的设置页，由 Console 服务端加密存储，仅用于代表已登录会话调用上述取消、产物列举与下载端点；这把 Key **不做 scope 收紧**，与用户自己创建的 Key 权限完全相同，被拿到后不只能取消/读产物，也能拿去跑推理烧配额——这是当前没有真实租户在生产环境运行阶段的刻意权衡，不是遗漏，真有生产租户后应重新评估是否收紧。除这些端点外，其余一切仍然只走控制面；这把 Key **不向浏览器 JavaScript 返回明文**；设置时由用户输入，随后只以密封的 HttpOnly 会话 Cookie 保存，服务端解密使用。
 
-### 请求链路只有一条，别开第二条
+### 管理请求使用统一的受限入口
 
 ```text
 浏览器 → /api/session 或 /api/admin/*（Console 服务端） → ControlPlane Admin API
@@ -84,7 +84,7 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 - 浏览器**永远不持有控制面令牌**。令牌只在 [app/api/session/route.ts](app/api/session/route.ts) 取得，密封进 HttpOnly Cookie，由 [lib/server/control-plane.ts](lib/server/control-plane.ts) 在服务端附加到上游请求。新增页面不要直接 `fetch` 控制面地址。
 - `/api/admin/*` 不是代理：能转发什么由 [lib/console/upstream-routes.ts](lib/console/upstream-routes.ts) 的白名单决定，含方法、路径与允许透传的查询参数。**新增一个 Admin API 调用 = 往那张表加一行并补测试**，不加就是 404。
 - 写操作走 [lib/console/request-origin.ts](lib/console/request-origin.ts) 的同源校验（CSRF 防护是 SameSite=Lax + Origin 检查，不是 token）。部署时反向代理必须原样透传 `Host`。
-- 会话 Cookie 由 [lib/console/session-payload.ts](lib/console/session-payload.ts) 用 AES-256-GCM 密封。**不要从浏览器可改的值里读角色**：角色只用于决定渲染哪些入口，授权始终由控制面执行。
+- 会话 Cookie 由 [lib/console/session-payload.ts](lib/console/session-payload.ts) 用 AES-256-GCM 密封。**不要从浏览器可改的值里读角色**：Admin API 授权由控制面执行；运维入口由服务端运维名单限制，Gateway 例外入口还须检查可信会话/角色，并由 Gateway 校验租户 Key。
 - 响应契约在 [lib/console/contract.ts](lib/console/contract.ts) 里对着 `internal/types/types.go` 手写校验，控制面改字段时同步改这里并补测试。上游错误文本一律不渲染，界面文案由 [lib/console/errors.ts](lib/console/errors.ts) 按状态码固定。
 - 读请求可重试（上限 3 次），**写请求绝不自动重试**：重发一次创建 Key 会铸出第二个凭据。
 - 服务端读取请求体一律走 `lib/server/responses.ts` 的 `readBoundedText`，它**在读取过程中**计数并在超限时取消流。不要改用 `request.text()` 再判断长度：那样上限只是一份读完之后的报告，不带 `Content-Length` 的分块请求可以先把任意大小塞进内存。

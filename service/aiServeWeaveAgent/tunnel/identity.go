@@ -412,8 +412,12 @@ func (m *IdentityManager) bootstrap(ctx context.Context) (*Identity, error) {
 	if err != nil {
 		return nil, err
 	}
-	// An empty NodeID is legal: the Registry then assigns one and the
-	// response is authoritative either way.
+	// An empty NodeID is only accepted by the Registry when the bootstrap
+	// token itself is node_id-bound; an unbound token now requires one
+	// (STATUS.md's P01), since an operator approves a node_id by name and a
+	// self-assigned one would leave nothing stable to approve. This Agent
+	// does not know which kind of token it holds, so it always proposes
+	// whatever is configured — including empty — and lets Register decide.
 	csr, err := createCSR(key, m.cfg.NodeID)
 	if err != nil {
 		return nil, err

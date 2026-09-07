@@ -4,9 +4,9 @@
 
 ## 目标与范围
 
-首版面向单个租户内的 owner、admin、member，完成登录、用户列表与创建、API Key 生命周期、管理审计的真实接口闭环。配额编辑在补齐读取接口后交付。节点、模型、路由、工作流和监控按后端 Admin API 的成熟度逐步接入。
+首版面向单个租户内的 owner、admin、member，完成登录、用户列表与创建、API Key 生命周期、管理审计的真实接口闭环。配额读取与编辑已交付。节点、模型、路由、工作流和监控按后端 Admin API 的成熟度逐步接入。
 
-Console 只调用控制面的 Admin API，不直连 Gateway、Registry、Agent、推理后端或数据库。租户引导由运维完成，首版不提供持有 BootstrapToken 的注册页、跨租户管理或租户切换。
+Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产物访问是已实现的例外，由 Console 服务端持有租户 Gateway Key 直连数据面，见 [AGENTS.md](AGENTS.md#与后端的边界)。不直连 Registry、Agent、推理后端或数据库。租户引导由运维完成，首版不提供持有 BootstrapToken 的注册页、跨租户管理或租户切换。
 
 ## 当前状态
 
@@ -14,15 +14,15 @@ Console 只调用控制面的 Admin API，不直连 Gateway、Registry、Agent�
 | --- | --- | --- |
 | 工程基础 | 已就位 | Next.js 16 App Router、React 19、Tailwind CSS 4、pnpm |
 | UI 基础 | 已就位 | `components/ui/` 已有按钮、输入、表格、对话框、标签页、骨架屏等组件；`lib/utils.ts` 使用 `cn` 包 |
-| 表格与图表依赖 | 已安装，未接业务 | TanStack Table、TanStack Virtual、ECharts、`echarts-for-react` |
+| 表格与图表依赖 | 表格已接入，图表待数据源 | TanStack Table 用于列表、TanStack Virtual 用于审计虚拟滚动；ECharts 与 `echarts-for-react` 尚未接入指标业务 |
 | TypeScript 与门禁 | 已配置 | TS 6 / 7 并存；已有 `lint`、`typecheck`、`build` 脚本，不代表本次已运行通过 |
 | 页面 | M1 已就位 | 登录页 `app/login/`、受保护布局与概览页 `app/console/`；根布局已改为中文站点元数据 |
 | 登录、会话与 API 客户端 | 已落地 | `/api/session` 与 `/api/admin/*` 服务端入口、AES-256-GCM 密封的会话 Cookie、`lib/console/api-client.ts` |
-| 业务测试 | 已建设 | Console `pnpm test` 走 Node 内置 `node:test`，61 个用例，无新增依赖；控制面新增分页、筛选、租户读取、机群与工作流聚合的 Go 测试及 e2e 隔离断言，Gateway 新增运维端点测试 |
+| 业务测试 | 已建设 | Console `pnpm test` 走 Node 内置 `node:test`，覆盖契约、权限、分页与 Gateway 凭据等纯逻辑，无新增测试框架依赖；控制面新增分页、筛选、租户读取、机群与工作流聚合的 Go 测试及 e2e 隔离断言，Gateway 新增运维端点测试 |
 | 使用文档 | 已重写 | README 记录调用链路、环境变量、门禁与部署前置条件 |
 | 业务页面（用户/Key/审计/配额） | M2、M3 已就位 | `app/console/users`、`keys`、`audit`、`quota`，均对接真实 Admin API；三张列表为服务端游标分页与筛选 |
 | 运维页面（节点/模型/发布状态） | M4、M5 已就位 | `app/console/fleet`、`models`，以及 `workflows` 的运维区块；只读，只在配置了运维模式的部署中存在，且只对名单内的人存在 |
-| 工作流与运行（租户） | M5 已就位 | `app/console/workflows`（菜单，不含图）、`app/console/jobs`（实时视图，非历史） |
+| 工作流与运行（租户） | M5 已就位 | `app/console/workflows`（菜单，不含图）、`app/console/jobs`（实时视图）、`app/console/jobs/history`（持久化历史与详情），取消和产物访问经服务端 Gateway 入口 |
 
 实现时遵守 [Console 开发约定](AGENTS.md) 与 [仓库开发约定](../../AGENTS.md)。技术栈沿用现有选型；动 Next.js 代码前先读本地 `node_modules/next/dist/docs/`，不在本规划中引入依赖升级。
 
@@ -35,23 +35,18 @@ Console 只调用控制面的 Admin API，不直连 Gateway、Registry、Agent�
 | 登录 | `POST /admin/v1/auth/login` | 返回 `token`、`expires_at`、`user`；没有 refresh、logout 或当前用户查询接口 |
 | 用户 | `GET/POST /admin/v1/users` | 登录用户可读本租户列表；仅 owner 可创建；未提供编辑、删除、禁用、改密接口 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | 登录用户可读本租户列表；owner/admin 可创建与吊销；member 仅可吊销自己创建的 Key |
-| 租户配额 | `PUT /admin/v1/tenants/limits` | owner/admin 可写本租户的整组限制；没有读取当前配额的 Admin API |
-| 审计 | `GET /admin/v1/audit?limit=...` | 当前所有登录角色均可读取本租户审计；只有 `limit` 参数，没有游标、分页总数或服务端筛选 |
+| 租户配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | 全部登录角色可读；owner/admin 可整组写入，零表示不限制 |
+| 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 
-当前用户与 Key 列表返回数组；吊销成功返回 `204`；错误体为 `{ "error": "..." }`。不能套用未经核实的统一分页响应结构。
+用户、Key 与审计列表返回 `{items, next_cursor}` 信封，支持游标分页与服务端筛选；吊销成功返回 `204`，错误体为 `{ "error": "..." }`。Job 历史另有 `/admin/v1/jobs/history` 与详情端点，不依赖 Fleet 配置。
 
-### 需要跟踪的文档差异
+### R04 文档核对（2026-09-07）
 
-- 根目录 AGENTS 的代码地图仍写“控制面配额未做”，当前代码已有写入与下发能力；真正阻塞 Console 编辑闭环的是读取接口。
-- 控制面 README 将 member 概括为“管理自己的 Key”，但当前创建逻辑仅允许 owner/admin；列表逻辑向 member 返回本租户全部 Key 的展示信息。
-- 控制面 README 提到 owner 增删用户，但路由当前只支持列表与创建。
-- 控制面 README 概括越权为 `404`，实际角色不允许的操作返回 `403`；资源不存在、跨租户及 member 吊销他人 Key 返回 `404`。前端要分别处理，不能把所有 `404` 推断为权限问题。
+已对照控制面路由、角色逻辑及 Console 转发白名单修正配额读取、列表分页与 Job 历史的过时描述。member 可查看本租户 Key 展示信息、只能吊销自己创建的 Key，不能创建 Key；用户接口只有列表与创建。角色不允许返回 `403`，资源不存在、跨租户或 member 吊销他人 Key 返回 `404`；重复吊销同样返回 `404`。这些边界已在服务 README 中记录。
 
-- 吊销不幂等：`RevokeAPIKey` 经由 `store.RevokeAPIKey` 匹配 active 行，重复吊销返回 `404`，与「他人租户的 Key」「不存在的 id」同码。前端无法区分三者，只能刷新列表后说明状态已变。这一点当前文档均未写明。
-
-上述差异作为文档修正或产品权限调整任务记录，页面先与实际后端行为对齐；若要改变授权范围，必须由控制面先实现并测试。
+历史验收记录保留其当时范围；以下阶段中的实测数字不代表本次重新运行。C25 完成的是只读模板目录，模板版本管理与发布仍归根 STATUS 的 P03；C26 的历史与产物页面已接入，但没有 Console SSE 订阅，历史快照和可访问的产物不保证重启后可下载，见 Gateway README 的持久化限制。
 
 ## 实施顺序
 
@@ -63,7 +58,7 @@ Console 只调用控制面的 Admin API，不直连 Gateway、Registry、Agent�
 | M4 推理资源管理 | P2 | 节点、运行时、模型、路由 | 对应控制面聚合与管理 API |
 | M5 工作流与可观测性 | P2 | 模板、Job、产物、指标 | Admin API、持久化与指标查询能力 |
 
-M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预览）已完成（见各节勾选项与验收记录），C27–C29 仍待后端能力，M3 的后端缺口可提前排期。M4/M5 不阻塞首版管理闭环；没有数据来源的菜单暂不开放，不用示例数据冒充运行状态。
+M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预览）已完成（见各节勾选项与验收记录），C27–C29 仍待后端能力，C22/C24 的管理写路径仍待交付。M4/M5 不阻塞首版管理闭环；没有数据来源的菜单暂不开放，不用示例数据冒充运行状态。
 
 ## M1：控制台基础与会话（P0）
 
@@ -79,7 +74,7 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 
 | 任务 | 落点 |
 | --- | --- |
-| C01 | `app/layout.tsx`（中文元数据、`robots: noindex`）、`app/login/`、`app/console/layout.tsx`、`app/console/console-shell.tsx`、`app/console/page.tsx`。导航当前只有「概览」，用户/Key/审计随 M2 视图落地再加菜单项；租户只显示 ID，不编造名称 |
+| C01 | `app/layout.tsx`（中文元数据、`robots: noindex`）、`app/login/`、`app/console/layout.tsx`、`app/console/console-shell.tsx`、`app/console/page.tsx`。M1 验收时导航只有「概览」；后续 M2–M5 已补业务菜单，租户展示以真实接口为准 |
 | C02 | `app/api/session/route.ts`、`app/api/admin/[...path]/route.ts`、`lib/console/upstream-routes.ts`（方法 + 路径 + 查询参数白名单）、`lib/server/control-plane.ts`（上游地址来自配置） |
 | C03 | `lib/console/session-payload.ts`（AES-256-GCM 密封，含 `SESSION_COOKIE`）、`lib/server/session.ts`（HttpOnly / SameSite=Lax / 生产 Secure / 到期跟随令牌）、`lib/console/request-origin.ts`（写操作同源校验）、`lib/server/config.ts` |
 | C04 | `app/api/session/route.ts` 的 `DELETE`、`app/console/console-shell.tsx`（退出后 `router.refresh()` 清路由缓存）、`components/console/use-console-request.ts`（401 转登录）、`lib/console/internal-path.ts`（只允许站内返回地址）、`proxy.ts` |
@@ -185,13 +180,13 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 
 未覆盖：gorm 实现的 keyset SQL 只在 PostgreSQL 上跑过，MySQL 未实测；`likePattern` 的转义假定默认转义符 `\`，MySQL 开启 `NO_BACKSLASH_ESCAPES` 时行为不同。两者记为已知限制。
 
-## M4：节点、运行时、模型与路由（P2，待 Admin API）
+## M4：节点、运行时、模型与路由（只读已完成，管理写路径待开发）
 
 | 任务 | Console 交付 | 必须先具备的后端能力 |
 | --- | --- | --- |
 | [x] C21 节点与运行时 | 节点列表、在线状态、最近心跳、标签、运行时与能力详情；缺失指标显示不可用 | ControlPlane 聚合节点快照、权限过滤、数据时间戳；CPU/GPU 等字段须有真实上报来源 |
 | [ ] C22 节点管理 | 接入说明、审批、禁用、维护状态与操作审计 | 正式管理接口与生效路径；不能用 Console 操作直接替代 Registry 内部能力 |
-| [x] C23 模型与部署目录 | 区分逻辑 Model、Backend、Deployment，展示能力与实际可用部署 | 租户可见目录和部署状态查询；明确快照与持久化数据的关系 |
+| [x] C23 模型与部署目录 | 运维只读的模型、节点/runtime 与能力目录 | ControlPlane Operator API 聚合 Gateway 快照；不是租户模型授权或持久化 Deployment 管理 |
 | [ ] C24 路由配置 | 编辑真实模型映射、节点选择器、优先级与权重，校验并展示生效结果 | 路由持久化、版本、发布/回滚、Gateway 同步与审计；当前文件配置不等于管理 API |
 
 **验收**：页面数据均来自授权的 Admin API；过期快照有明确提示；写操作能确认实际生效状态，失败不会伪装为已发布。
@@ -225,21 +220,21 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 
 **已知缺口（记入控制面 README 的「已知缺口」6、7 两条）**：系统里没有平台运维身份，机群端点背后没有用户，因此控制面无法记录是谁读的，也无法把权限授予某个具体的人——当前由 Console 侧名单决定，这是缺口不是设计。建议运维控制台与面向租户的控制台分开部署。
 
-## M5：工作流、Job 与可观测性（P2，待后端能力）
+## M5：工作流、Job 与可观测性（目录与 Job 页面已接入，指标等待开发）
 
 | 任务 | Console 交付 | 必须先具备的后端能力 |
 | --- | --- | --- |
-| [x] C25 工作流模板 | 模板列表、输入定义、节点/模型依赖、校验结果与版本 | 受租户授权的模板管理 API、版本与校验接口；完整工作流 JSON 不进日志或错误提示 |
-| [x] C26 Job 与产物 | Job 列表、详情、进度、取消、产物预览与下载 | ControlPlane 的 Job 管理入口、持久化、分页、授权事件流和产物访问；不能直接复用 Gateway 公共数据面地址 |
+| [x] C25 工作流模板（只读范围） | 模板目录、输入声明、校验状态与运维副本一致性 | Gateway 文件目录经控制面聚合；版本管理、依赖编辑与发布留给根 STATUS P03 |
+| [x] C26 Job 与产物（当前范围） | 实时列表、持久化历史与详情、状态快照、取消、产物预览/下载 | 历史走 ControlPlane；取消与产物走 Console 服务端 Gateway 例外路径；尚未接入 Console SSE，重启后的下载受 Gateway 映射恢复限制 |
 | [ ] C27 总览与指标 | 请求量、成功率、延迟、Token 与容量时序；ECharts 支持 `dataZoom` | 控制面授权聚合/查询 API，明确指标定义、时间窗口、单位、采样与租户范围；已有 Prometheus 导出不等于可直接绘制历史曲线 |
 | [ ] C28 请求与错误检索 | 按时间、状态、request ID 查询脱敏元数据 | 可检索存储、保留期、分页与权限接口；不得展示或记录完整 Prompt、鉴权头 |
 | [ ] C29 告警 | 告警列表、规则与处理状态 | 指标查询、告警计算、规则与通知管理 API；不在浏览器实现唯一的告警判定 |
 
-Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。当前 Gateway Job 表为进程内存，不能据此承诺跨副本、重启后可查的任务历史。
+Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。Gateway 实时视图来自有界内存；已落库的历史记录由控制面查询。非终态恢复与产物下载边界见 [Gateway README](../aiServeWeaveGateway/README.md#持久化与访问的现有限制)。
 
 ### M5 的两个前置决定
 
-1. **可做的只有 C25。** 工作流模板的数据今天真实存在（Gateway 的文件配置）；Job 的持久化历史不存在，指标与请求检索所需的时序库与日志存储仓库里根本没有。选定的范围是 **C25 + 一个实时 Job 视图**：跨副本聚合 Gateway 内存中的 job 表，**不是持久化**，界面必须明说。
+1. **M5 初次实施范围为 C25 + 实时 Job 视图。** 当时没有持久化历史；后续 J03–J08/C26 已补 MySQL 历史、详情与产物页面。当前仍缺指标时序、请求检索与告警所需的数据源。
 2. **模板两边都开。** 租户看到菜单（能提交什么、接受什么输入），运维额外看到发布状态（哪些副本注册了它、是否一致）。无论哪一侧，完整的 ComfyUI 图都不输出。
 
 ### C25 / C26（实时部分）实现位置

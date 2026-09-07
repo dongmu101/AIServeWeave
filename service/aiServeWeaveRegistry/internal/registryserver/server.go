@@ -116,6 +116,11 @@ func New(cfg Config) (*Server, error) {
 		revoked[id] = struct{}{}
 	}
 	s.roster.revoked = revoked
+	maintenance := make(map[string]struct{})
+	for _, id := range cfg.Identities.MaintenanceNodeIDs() {
+		maintenance[id] = struct{}{}
+	}
+	s.roster.maintenance = maintenance
 	return s, nil
 }
 

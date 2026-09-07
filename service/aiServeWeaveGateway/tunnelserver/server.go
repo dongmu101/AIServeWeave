@@ -117,6 +117,9 @@ type Server struct {
 	// lookup on every Control handshake — a lookup that runs far more often
 	// than the roster itself changes.
 	revoked map[string]struct{}
+	// maintenance mirrors roster.MaintenanceNodeIds as a set, for isMaintenance's
+	// O(1) lookup on every Control handshake, the same reason revoked exists.
+	maintenance map[string]struct{}
 
 	// closed stops new streams from being accepted after Close, so a
 	// shutting-down replica does not take on work it is about to drop.
@@ -176,15 +179,25 @@ func (s *Server) ReplicaID() string { return s.cfg.ReplicaID }
 // against a connection this replica already holds open, not just against the
 // next handshake attempt, and the roster push is the only channel the
 // Registry has to tell an already-running replica that.
+//
+// A node_id in roster.MaintenanceNodeIds (STATUS.md's P01) is handled
+// differently: its maintenance flag is updated but its connection is left
+// alone, since operator-forced maintenance excludes a node from new dispatch
+// without revoking its identity.
 func (s *Server) SetRoster(roster *tunnelv1.GatewayRoster) {
 	revoked := make(map[string]struct{}, len(roster.GetRevokedNodeIds()))
 	for _, id := range roster.GetRevokedNodeIds() {
 		revoked[id] = struct{}{}
 	}
+	maintenance := make(map[string]struct{}, len(roster.GetMaintenanceNodeIds()))
+	for _, id := range roster.GetMaintenanceNodeIds() {
+		maintenance[id] = struct{}{}
+	}
 
 	s.mu.Lock()
 	s.roster = roster
 	s.revoked = revoked
+	s.maintenance = maintenance
 	targets := make([]*node, 0, len(s.nodes))
 	var toKill []*node
 	for _, n := range s.nodes {
@@ -199,6 +212,8 @@ func (s *Server) SetRoster(roster *tunnelv1.GatewayRoster) {
 
 	frame := &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Roster{Roster: roster}}
 	for _, n := range targets {
+		_, isMaintenance := maintenance[n.id]
+		n.setMaintenance(isMaintenance)
 		n.broadcast(frame)
 	}
 	for _, n := range toKill {
@@ -212,6 +227,15 @@ func (s *Server) isRevoked(nodeID string) bool {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	_, ok := s.revoked[nodeID]
+	return ok
+}
+
+// isMaintenance reports whether nodeID is in the most recently installed
+// roster's maintenance set.
+func (s *Server) isMaintenance(nodeID string) bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	_, ok := s.maintenance[nodeID]
 	return ok
 }
 

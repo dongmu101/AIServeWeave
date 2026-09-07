@@ -59,6 +59,12 @@ type node struct {
 	inflight      int
 	reportedIdle  int
 	draining      bool
+	// maintenance is set from the Registry's GatewayRoster.maintenance_node_ids
+	// (STATUS.md's P01), not by the Agent. Unlike draining it never closes
+	// idle slots or the Control stream: a node under operator-forced
+	// maintenance stays fully connected and finishes in-flight work, it is
+	// merely excluded from new dispatch (scheduler.go).
+	maintenance bool
 
 	// idle holds parked slots per class, most recently parked last. Reuse is
 	// LIFO because a slot that just finished a request is the one most likely
@@ -131,6 +137,16 @@ func (n *node) kill() {
 	})
 }
 
+// setMaintenance records the Registry's current maintenance flag for this
+// node_id (STATUS.md's P01). It is not idempotent-checked against the
+// previous value: the caller (Server.SetRoster) already diffs the roster's
+// set, and a redundant call here is a cheap no-op assignment either way.
+func (n *node) setMaintenance(maintenance bool) {
+	n.mu.Lock()
+	n.maintenance = maintenance
+	n.mu.Unlock()
+}
+
 // NodeInfo is a point-in-time view of one connected node, for the scheduler.
 // It is a copy: holding one never blocks the tunnel.
 type NodeInfo struct {
@@ -162,6 +178,11 @@ type NodeInfo struct {
 	// draining node must not be given new work, but its in-flight requests
 	// are still running.
 	Draining bool
+	// Maintenance is set by an operator via the Registry (STATUS.md's P01),
+	// not by the Agent. It excludes the node from new dispatch the same way
+	// Draining does, but does not mean the node is on its way out: it stays
+	// Live and its Control stream is untouched.
+	Maintenance bool
 	// Live reports whether a Control stream is established and the last
 	// heartbeat is recent enough.
 	Live bool
@@ -232,6 +253,7 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		InflightRequests: n.inflight,
 		LastHeartbeat:    n.lastHeartbeat,
 		Draining:         n.draining,
+		Maintenance:      n.maintenance,
 		Live:             live,
 	}
 }

@@ -246,7 +246,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	seen := make(map[string]struct{})
 	var out []ModelInfo
 	for _, node := range s.server.Nodes() {
-		if !node.Live || node.Draining {
+		if !node.Live || node.Draining || node.Maintenance {
 			continue
 		}
 		for _, snap := range node.Runtimes {
@@ -367,7 +367,7 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 
 	var found []scored
 	for _, node := range nodes {
-		if !node.Live || node.Draining {
+		if !node.Live || node.Draining || node.Maintenance {
 			continue
 		}
 		// The node selector is checked before anything else about the node:

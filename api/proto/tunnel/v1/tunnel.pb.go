@@ -268,11 +268,12 @@ func (ConfigAction) EnumDescriptor() ([]byte, []int) {
 
 type RegisterRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// node_id is the Agent's proposed identity. Whether the Registry honours it
-	// or assigns its own is an open question (README, 待决问题 3); the response
-	// carries the authoritative value either way — unless bootstrap_token is
-	// itself node_id-bound (TokenAdmin.MintToken), in which case the bound
-	// value always wins.
+	// node_id is the Agent's proposed identity. It is required unless
+	// bootstrap_token is itself node_id-bound (TokenAdmin.MintToken), in which
+	// case the bound value always wins and overrides whatever is set here: an
+	// unbound registration can no longer leave this empty for the Registry to
+	// assign one (STATUS.md's P01) — an operator approves a node_id by name,
+	// and a self-assigned one would have nothing stable to approve.
 	NodeId         string `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
 	Csr            []byte `protobuf:"bytes,2,opt,name=csr,proto3" json:"csr,omitempty"`                                             // PKCS#10 certificate request, DER
 	BootstrapToken string `protobuf:"bytes,3,opt,name=bootstrap_token,json=bootstrapToken,proto3" json:"bootstrap_token,omitempty"` // one-time, short-lived, optionally node_id-bound (TokenAdmin.MintToken)
@@ -863,6 +864,419 @@ func (*EnableNodeResponse) Descriptor() ([]byte, []int) {
 	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{11}
 }
 
+type ApproveNodeRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApproveNodeRequest) Reset() {
+	*x = ApproveNodeRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[12]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApproveNodeRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApproveNodeRequest) ProtoMessage() {}
+
+func (x *ApproveNodeRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[12]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApproveNodeRequest.ProtoReflect.Descriptor instead.
+func (*ApproveNodeRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{12}
+}
+
+func (x *ApproveNodeRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+type ApproveNodeResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ApproveNodeResponse) Reset() {
+	*x = ApproveNodeResponse{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ApproveNodeResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ApproveNodeResponse) ProtoMessage() {}
+
+func (x *ApproveNodeResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ApproveNodeResponse.ProtoReflect.Descriptor instead.
+func (*ApproveNodeResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{13}
+}
+
+type SetMaintenanceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMaintenanceRequest) Reset() {
+	*x = SetMaintenanceRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMaintenanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMaintenanceRequest) ProtoMessage() {}
+
+func (x *SetMaintenanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMaintenanceRequest.ProtoReflect.Descriptor instead.
+func (*SetMaintenanceRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *SetMaintenanceRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+type SetMaintenanceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SetMaintenanceResponse) Reset() {
+	*x = SetMaintenanceResponse{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SetMaintenanceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SetMaintenanceResponse) ProtoMessage() {}
+
+func (x *SetMaintenanceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SetMaintenanceResponse.ProtoReflect.Descriptor instead.
+func (*SetMaintenanceResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{15}
+}
+
+type ClearMaintenanceRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	NodeId        string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearMaintenanceRequest) Reset() {
+	*x = ClearMaintenanceRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearMaintenanceRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearMaintenanceRequest) ProtoMessage() {}
+
+func (x *ClearMaintenanceRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearMaintenanceRequest.ProtoReflect.Descriptor instead.
+func (*ClearMaintenanceRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *ClearMaintenanceRequest) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+type ClearMaintenanceResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClearMaintenanceResponse) Reset() {
+	*x = ClearMaintenanceResponse{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClearMaintenanceResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClearMaintenanceResponse) ProtoMessage() {}
+
+func (x *ClearMaintenanceResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClearMaintenanceResponse.ProtoReflect.Descriptor instead.
+func (*ClearMaintenanceResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{17}
+}
+
+type ListNodeStatesRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodeStatesRequest) Reset() {
+	*x = ListNodeStatesRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodeStatesRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodeStatesRequest) ProtoMessage() {}
+
+func (x *ListNodeStatesRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodeStatesRequest.ProtoReflect.Descriptor instead.
+func (*ListNodeStatesRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{18}
+}
+
+type ListNodeStatesResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	States        []*NodeState           `protobuf:"bytes,1,rep,name=states,proto3" json:"states,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListNodeStatesResponse) Reset() {
+	*x = ListNodeStatesResponse{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListNodeStatesResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListNodeStatesResponse) ProtoMessage() {}
+
+func (x *ListNodeStatesResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListNodeStatesResponse.ProtoReflect.Descriptor instead.
+func (*ListNodeStatesResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *ListNodeStatesResponse) GetStates() []*NodeState {
+	if x != nil {
+		return x.States
+	}
+	return nil
+}
+
+// NodeState is one node_id's entry in the identity ledger, as ListNodeStates
+// reports it. A node_id absent from this list has no ledger entry at all:
+// it has never registered, been pre-approved, pre-disabled, or put under
+// maintenance.
+type NodeState struct {
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	NodeId string                 `protobuf:"bytes,1,opt,name=node_id,json=nodeId,proto3" json:"node_id,omitempty"`
+	// pending_approval is true when this node_id has attempted to register
+	// with an unbound bootstrap token but no operator has approved it yet
+	// (STATUS.md's P01). Register refuses it while this holds.
+	PendingApproval bool `protobuf:"varint,2,opt,name=pending_approval,json=pendingApproval,proto3" json:"pending_approval,omitempty"`
+	// disabled mirrors TokenAdmin.DisableNode (STATUS.md's S03).
+	Disabled bool `protobuf:"varint,3,opt,name=disabled,proto3" json:"disabled,omitempty"`
+	// maintenance mirrors TokenAdmin.SetMaintenance (STATUS.md's P01).
+	Maintenance   bool                   `protobuf:"varint,4,opt,name=maintenance,proto3" json:"maintenance,omitempty"`
+	FirstSeenAt   *timestamppb.Timestamp `protobuf:"bytes,5,opt,name=first_seen_at,json=firstSeenAt,proto3" json:"first_seen_at,omitempty"`
+	LastSeenAt    *timestamppb.Timestamp `protobuf:"bytes,6,opt,name=last_seen_at,json=lastSeenAt,proto3" json:"last_seen_at,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *NodeState) Reset() {
+	*x = NodeState{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *NodeState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*NodeState) ProtoMessage() {}
+
+func (x *NodeState) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use NodeState.ProtoReflect.Descriptor instead.
+func (*NodeState) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *NodeState) GetNodeId() string {
+	if x != nil {
+		return x.NodeId
+	}
+	return ""
+}
+
+func (x *NodeState) GetPendingApproval() bool {
+	if x != nil {
+		return x.PendingApproval
+	}
+	return false
+}
+
+func (x *NodeState) GetDisabled() bool {
+	if x != nil {
+		return x.Disabled
+	}
+	return false
+}
+
+func (x *NodeState) GetMaintenance() bool {
+	if x != nil {
+		return x.Maintenance
+	}
+	return false
+}
+
+func (x *NodeState) GetFirstSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.FirstSeenAt
+	}
+	return nil
+}
+
+func (x *NodeState) GetLastSeenAt() *timestamppb.Timestamp {
+	if x != nil {
+		return x.LastSeenAt
+	}
+	return nil
+}
+
 // GatewayFrame is one frame from Gateway to Agent on a Serve stream.
 type GatewayFrame struct {
 	state     protoimpl.MessageState `protogen:"open.v1"`
@@ -881,7 +1295,7 @@ type GatewayFrame struct {
 
 func (x *GatewayFrame) Reset() {
 	*x = GatewayFrame{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[12]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[21]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -893,7 +1307,7 @@ func (x *GatewayFrame) String() string {
 func (*GatewayFrame) ProtoMessage() {}
 
 func (x *GatewayFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[12]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[21]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -906,7 +1320,7 @@ func (x *GatewayFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayFrame.ProtoReflect.Descriptor instead.
 func (*GatewayFrame) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{12}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{21}
 }
 
 func (x *GatewayFrame) GetRequestId() string {
@@ -1020,7 +1434,7 @@ type AgentFrame struct {
 
 func (x *AgentFrame) Reset() {
 	*x = AgentFrame{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[13]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[22]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1032,7 +1446,7 @@ func (x *AgentFrame) String() string {
 func (*AgentFrame) ProtoMessage() {}
 
 func (x *AgentFrame) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[13]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[22]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1045,7 +1459,7 @@ func (x *AgentFrame) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentFrame.ProtoReflect.Descriptor instead.
 func (*AgentFrame) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{13}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{22}
 }
 
 func (x *AgentFrame) GetRequestId() string {
@@ -1153,7 +1567,7 @@ type Ready struct {
 
 func (x *Ready) Reset() {
 	*x = Ready{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[14]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[23]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1165,7 +1579,7 @@ func (x *Ready) String() string {
 func (*Ready) ProtoMessage() {}
 
 func (x *Ready) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[14]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[23]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1178,7 +1592,7 @@ func (x *Ready) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ready.ProtoReflect.Descriptor instead.
 func (*Ready) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{14}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{23}
 }
 
 func (x *Ready) GetNodeId() string {
@@ -1219,7 +1633,7 @@ type RequestHeaders struct {
 
 func (x *RequestHeaders) Reset() {
 	*x = RequestHeaders{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[15]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[24]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1231,7 +1645,7 @@ func (x *RequestHeaders) String() string {
 func (*RequestHeaders) ProtoMessage() {}
 
 func (x *RequestHeaders) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[15]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[24]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1244,7 +1658,7 @@ func (x *RequestHeaders) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestHeaders.ProtoReflect.Descriptor instead.
 func (*RequestHeaders) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{15}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{24}
 }
 
 func (x *RequestHeaders) GetRuntimeId() string {
@@ -1293,7 +1707,7 @@ type RequestEnd struct {
 
 func (x *RequestEnd) Reset() {
 	*x = RequestEnd{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[16]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[25]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1305,7 +1719,7 @@ func (x *RequestEnd) String() string {
 func (*RequestEnd) ProtoMessage() {}
 
 func (x *RequestEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[16]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[25]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1318,7 +1732,7 @@ func (x *RequestEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RequestEnd.ProtoReflect.Descriptor instead.
 func (*RequestEnd) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{16}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{25}
 }
 
 // Cancel asks the Agent to cancel the in-flight request. The Agent must drop a
@@ -1333,7 +1747,7 @@ type Cancel struct {
 
 func (x *Cancel) Reset() {
 	*x = Cancel{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[17]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[26]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1345,7 +1759,7 @@ func (x *Cancel) String() string {
 func (*Cancel) ProtoMessage() {}
 
 func (x *Cancel) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[17]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[26]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1358,7 +1772,7 @@ func (x *Cancel) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Cancel.ProtoReflect.Descriptor instead.
 func (*Cancel) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{17}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{26}
 }
 
 func (x *Cancel) GetReason() string {
@@ -1377,7 +1791,7 @@ type Ping struct {
 
 func (x *Ping) Reset() {
 	*x = Ping{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[18]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[27]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1389,7 +1803,7 @@ func (x *Ping) String() string {
 func (*Ping) ProtoMessage() {}
 
 func (x *Ping) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[18]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[27]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1402,7 +1816,7 @@ func (x *Ping) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Ping.ProtoReflect.Descriptor instead.
 func (*Ping) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{18}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{27}
 }
 
 func (x *Ping) GetSentUnixMs() int64 {
@@ -1421,7 +1835,7 @@ type Pong struct {
 
 func (x *Pong) Reset() {
 	*x = Pong{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[19]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[28]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1433,7 +1847,7 @@ func (x *Pong) String() string {
 func (*Pong) ProtoMessage() {}
 
 func (x *Pong) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[19]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[28]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1446,7 +1860,7 @@ func (x *Pong) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Pong.ProtoReflect.Descriptor instead.
 func (*Pong) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{19}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{28}
 }
 
 func (x *Pong) GetSentUnixMs() int64 {
@@ -1468,7 +1882,7 @@ type ResponseHeaders struct {
 
 func (x *ResponseHeaders) Reset() {
 	*x = ResponseHeaders{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[20]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[29]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1480,7 +1894,7 @@ func (x *ResponseHeaders) String() string {
 func (*ResponseHeaders) ProtoMessage() {}
 
 func (x *ResponseHeaders) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[20]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[29]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1493,7 +1907,7 @@ func (x *ResponseHeaders) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResponseHeaders.ProtoReflect.Descriptor instead.
 func (*ResponseHeaders) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{20}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{29}
 }
 
 func (x *ResponseHeaders) GetContentType() string {
@@ -1522,7 +1936,7 @@ type DataChunk struct {
 
 func (x *DataChunk) Reset() {
 	*x = DataChunk{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[21]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[30]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1534,7 +1948,7 @@ func (x *DataChunk) String() string {
 func (*DataChunk) ProtoMessage() {}
 
 func (x *DataChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[21]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[30]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1547,7 +1961,7 @@ func (x *DataChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DataChunk.ProtoReflect.Descriptor instead.
 func (*DataChunk) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{21}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{30}
 }
 
 func (x *DataChunk) GetPayload() []byte {
@@ -1567,7 +1981,7 @@ type ResponseEnd struct {
 
 func (x *ResponseEnd) Reset() {
 	*x = ResponseEnd{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[22]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[31]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1579,7 +1993,7 @@ func (x *ResponseEnd) String() string {
 func (*ResponseEnd) ProtoMessage() {}
 
 func (x *ResponseEnd) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[22]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[31]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1592,7 +2006,7 @@ func (x *ResponseEnd) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResponseEnd.ProtoReflect.Descriptor instead.
 func (*ResponseEnd) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{22}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{31}
 }
 
 func (x *ResponseEnd) GetError() *TunnelError {
@@ -1623,7 +2037,7 @@ type TunnelError struct {
 
 func (x *TunnelError) Reset() {
 	*x = TunnelError{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[23]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[32]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1635,7 +2049,7 @@ func (x *TunnelError) String() string {
 func (*TunnelError) ProtoMessage() {}
 
 func (x *TunnelError) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[23]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[32]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1648,7 +2062,7 @@ func (x *TunnelError) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TunnelError.ProtoReflect.Descriptor instead.
 func (*TunnelError) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{23}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{32}
 }
 
 func (x *TunnelError) GetCode() string {
@@ -1723,7 +2137,7 @@ type AgentControl struct {
 
 func (x *AgentControl) Reset() {
 	*x = AgentControl{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[24]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[33]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1735,7 +2149,7 @@ func (x *AgentControl) String() string {
 func (*AgentControl) ProtoMessage() {}
 
 func (x *AgentControl) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[24]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[33]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1748,7 +2162,7 @@ func (x *AgentControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use AgentControl.ProtoReflect.Descriptor instead.
 func (*AgentControl) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{24}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{33}
 }
 
 func (x *AgentControl) GetBody() isAgentControl_Body {
@@ -1855,7 +2269,7 @@ type GatewayControl struct {
 
 func (x *GatewayControl) Reset() {
 	*x = GatewayControl{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[25]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[34]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1867,7 +2281,7 @@ func (x *GatewayControl) String() string {
 func (*GatewayControl) ProtoMessage() {}
 
 func (x *GatewayControl) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[25]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[34]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1880,7 +2294,7 @@ func (x *GatewayControl) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayControl.ProtoReflect.Descriptor instead.
 func (*GatewayControl) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{25}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{34}
 }
 
 func (x *GatewayControl) GetBody() isGatewayControl_Body {
@@ -2024,7 +2438,7 @@ type Hello struct {
 
 func (x *Hello) Reset() {
 	*x = Hello{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[26]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[35]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2036,7 +2450,7 @@ func (x *Hello) String() string {
 func (*Hello) ProtoMessage() {}
 
 func (x *Hello) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[26]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[35]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2049,7 +2463,7 @@ func (x *Hello) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Hello.ProtoReflect.Descriptor instead.
 func (*Hello) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{26}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{35}
 }
 
 func (x *Hello) GetNodeId() string {
@@ -2101,7 +2515,7 @@ type NodeResources struct {
 
 func (x *NodeResources) Reset() {
 	*x = NodeResources{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[27]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[36]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2113,7 +2527,7 @@ func (x *NodeResources) String() string {
 func (*NodeResources) ProtoMessage() {}
 
 func (x *NodeResources) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[27]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[36]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2126,7 +2540,7 @@ func (x *NodeResources) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use NodeResources.ProtoReflect.Descriptor instead.
 func (*NodeResources) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{27}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{36}
 }
 
 func (x *NodeResources) GetCpuCores() int32 {
@@ -2181,7 +2595,7 @@ type HelloAck struct {
 
 func (x *HelloAck) Reset() {
 	*x = HelloAck{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[28]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[37]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2193,7 +2607,7 @@ func (x *HelloAck) String() string {
 func (*HelloAck) ProtoMessage() {}
 
 func (x *HelloAck) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[28]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[37]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2206,7 +2620,7 @@ func (x *HelloAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HelloAck.ProtoReflect.Descriptor instead.
 func (*HelloAck) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{28}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{37}
 }
 
 func (x *HelloAck) GetReplicaId() string {
@@ -2234,7 +2648,7 @@ type Heartbeat struct {
 
 func (x *Heartbeat) Reset() {
 	*x = Heartbeat{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[29]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[38]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2246,7 +2660,7 @@ func (x *Heartbeat) String() string {
 func (*Heartbeat) ProtoMessage() {}
 
 func (x *Heartbeat) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[29]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[38]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2259,7 +2673,7 @@ func (x *Heartbeat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Heartbeat.ProtoReflect.Descriptor instead.
 func (*Heartbeat) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{29}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{38}
 }
 
 func (x *Heartbeat) GetSentUnixMs() int64 {
@@ -2293,7 +2707,7 @@ type HeartbeatAck struct {
 
 func (x *HeartbeatAck) Reset() {
 	*x = HeartbeatAck{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[30]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[39]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2305,7 +2719,7 @@ func (x *HeartbeatAck) String() string {
 func (*HeartbeatAck) ProtoMessage() {}
 
 func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[30]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[39]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2318,7 +2732,7 @@ func (x *HeartbeatAck) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HeartbeatAck.ProtoReflect.Descriptor instead.
 func (*HeartbeatAck) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{30}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{39}
 }
 
 func (x *HeartbeatAck) GetSentUnixMs() int64 {
@@ -2347,7 +2761,7 @@ type Draining struct {
 
 func (x *Draining) Reset() {
 	*x = Draining{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[31]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[40]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2359,7 +2773,7 @@ func (x *Draining) String() string {
 func (*Draining) ProtoMessage() {}
 
 func (x *Draining) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[31]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[40]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2372,7 +2786,7 @@ func (x *Draining) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Draining.ProtoReflect.Descriptor instead.
 func (*Draining) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{31}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{40}
 }
 
 func (x *Draining) GetReason() string {
@@ -2400,7 +2814,7 @@ type Shutdown struct {
 
 func (x *Shutdown) Reset() {
 	*x = Shutdown{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[32]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[41]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2412,7 +2826,7 @@ func (x *Shutdown) String() string {
 func (*Shutdown) ProtoMessage() {}
 
 func (x *Shutdown) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[32]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[41]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2425,7 +2839,7 @@ func (x *Shutdown) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Shutdown.ProtoReflect.Descriptor instead.
 func (*Shutdown) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{32}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{41}
 }
 
 func (x *Shutdown) GetReason() string {
@@ -2455,7 +2869,7 @@ type SlotHint struct {
 
 func (x *SlotHint) Reset() {
 	*x = SlotHint{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[33]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[42]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2467,7 +2881,7 @@ func (x *SlotHint) String() string {
 func (*SlotHint) ProtoMessage() {}
 
 func (x *SlotHint) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[33]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[42]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2480,7 +2894,7 @@ func (x *SlotHint) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SlotHint.ProtoReflect.Descriptor instead.
 func (*SlotHint) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{33}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{42}
 }
 
 func (x *SlotHint) GetMinSlots() int32 {
@@ -2518,13 +2932,20 @@ type GatewayRoster struct {
 	// that just became revoked, instead of waiting for that node to reconnect
 	// and be refused.
 	RevokedNodeIds []string `protobuf:"bytes,3,rep,name=revoked_node_ids,json=revokedNodeIds,proto3" json:"revoked_node_ids,omitempty"`
-	unknownFields  protoimpl.UnknownFields
-	sizeCache      protoimpl.SizeCache
+	// maintenance_node_ids is the full current set of node_ids under
+	// operator-forced maintenance (TokenAdmin.SetMaintenance, STATUS.md's
+	// P01), broadcast the same way revoked_node_ids is. Unlike a revoked
+	// node_id, a maintenance node_id's existing Control stream is left alone:
+	// a replica diffs this set and stops assigning new work to the node
+	// without disconnecting it.
+	MaintenanceNodeIds []string `protobuf:"bytes,4,rep,name=maintenance_node_ids,json=maintenanceNodeIds,proto3" json:"maintenance_node_ids,omitempty"`
+	unknownFields      protoimpl.UnknownFields
+	sizeCache          protoimpl.SizeCache
 }
 
 func (x *GatewayRoster) Reset() {
 	*x = GatewayRoster{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[34]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[43]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2536,7 +2957,7 @@ func (x *GatewayRoster) String() string {
 func (*GatewayRoster) ProtoMessage() {}
 
 func (x *GatewayRoster) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[34]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[43]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2549,7 +2970,7 @@ func (x *GatewayRoster) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayRoster.ProtoReflect.Descriptor instead.
 func (*GatewayRoster) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{34}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{43}
 }
 
 func (x *GatewayRoster) GetReplicas() []*GatewayReplica {
@@ -2573,6 +2994,13 @@ func (x *GatewayRoster) GetRevokedNodeIds() []string {
 	return nil
 }
 
+func (x *GatewayRoster) GetMaintenanceNodeIds() []string {
+	if x != nil {
+		return x.MaintenanceNodeIds
+	}
+	return nil
+}
+
 type GatewayReplica struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	ReplicaId     string                 `protobuf:"bytes,1,opt,name=replica_id,json=replicaId,proto3" json:"replica_id,omitempty"`
@@ -2584,7 +3012,7 @@ type GatewayReplica struct {
 
 func (x *GatewayReplica) Reset() {
 	*x = GatewayReplica{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[35]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[44]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2596,7 +3024,7 @@ func (x *GatewayReplica) String() string {
 func (*GatewayReplica) ProtoMessage() {}
 
 func (x *GatewayReplica) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[35]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[44]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2609,7 +3037,7 @@ func (x *GatewayReplica) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GatewayReplica.ProtoReflect.Descriptor instead.
 func (*GatewayReplica) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{35}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{44}
 }
 
 func (x *GatewayReplica) GetReplicaId() string {
@@ -2649,7 +3077,7 @@ type JoinRequest struct {
 
 func (x *JoinRequest) Reset() {
 	*x = JoinRequest{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[36]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[45]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2661,7 +3089,7 @@ func (x *JoinRequest) String() string {
 func (*JoinRequest) ProtoMessage() {}
 
 func (x *JoinRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[36]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[45]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2674,7 +3102,7 @@ func (x *JoinRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JoinRequest.ProtoReflect.Descriptor instead.
 func (*JoinRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{36}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{45}
 }
 
 func (x *JoinRequest) GetReplicaId() string {
@@ -2714,7 +3142,7 @@ type RuntimeStatus struct {
 
 func (x *RuntimeStatus) Reset() {
 	*x = RuntimeStatus{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[37]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[46]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2726,7 +3154,7 @@ func (x *RuntimeStatus) String() string {
 func (*RuntimeStatus) ProtoMessage() {}
 
 func (x *RuntimeStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[37]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[46]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2739,7 +3167,7 @@ func (x *RuntimeStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeStatus.ProtoReflect.Descriptor instead.
 func (*RuntimeStatus) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{37}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{46}
 }
 
 func (x *RuntimeStatus) GetSnapshots() []*RuntimeSnapshot {
@@ -2776,7 +3204,7 @@ type RuntimeConfig struct {
 
 func (x *RuntimeConfig) Reset() {
 	*x = RuntimeConfig{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[38]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[47]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2788,7 +3216,7 @@ func (x *RuntimeConfig) String() string {
 func (*RuntimeConfig) ProtoMessage() {}
 
 func (x *RuntimeConfig) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[38]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[47]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2801,7 +3229,7 @@ func (x *RuntimeConfig) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeConfig.ProtoReflect.Descriptor instead.
 func (*RuntimeConfig) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{38}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{47}
 }
 
 func (x *RuntimeConfig) GetAction() ConfigAction {
@@ -2850,7 +3278,7 @@ type RuntimeSpec struct {
 
 func (x *RuntimeSpec) Reset() {
 	*x = RuntimeSpec{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[39]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[48]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2862,7 +3290,7 @@ func (x *RuntimeSpec) String() string {
 func (*RuntimeSpec) ProtoMessage() {}
 
 func (x *RuntimeSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[39]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[48]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -2875,7 +3303,7 @@ func (x *RuntimeSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeSpec.ProtoReflect.Descriptor instead.
 func (*RuntimeSpec) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{39}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{48}
 }
 
 func (x *RuntimeSpec) GetId() string {
@@ -2987,7 +3415,7 @@ type TLSSpec struct {
 
 func (x *TLSSpec) Reset() {
 	*x = TLSSpec{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[40]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[49]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -2999,7 +3427,7 @@ func (x *TLSSpec) String() string {
 func (*TLSSpec) ProtoMessage() {}
 
 func (x *TLSSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[40]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[49]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3012,7 +3440,7 @@ func (x *TLSSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use TLSSpec.ProtoReflect.Descriptor instead.
 func (*TLSSpec) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{40}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{49}
 }
 
 func (x *TLSSpec) GetCaFile() string {
@@ -3054,7 +3482,7 @@ type RuntimeSnapshot struct {
 
 func (x *RuntimeSnapshot) Reset() {
 	*x = RuntimeSnapshot{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[41]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[50]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3066,7 +3494,7 @@ func (x *RuntimeSnapshot) String() string {
 func (*RuntimeSnapshot) ProtoMessage() {}
 
 func (x *RuntimeSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[41]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[50]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3079,7 +3507,7 @@ func (x *RuntimeSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeSnapshot.ProtoReflect.Descriptor instead.
 func (*RuntimeSnapshot) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{41}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{50}
 }
 
 func (x *RuntimeSnapshot) GetDescriptor_() *RuntimeDescriptor {
@@ -3151,7 +3579,7 @@ type RuntimeDescriptor struct {
 
 func (x *RuntimeDescriptor) Reset() {
 	*x = RuntimeDescriptor{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[42]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[51]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3163,7 +3591,7 @@ func (x *RuntimeDescriptor) String() string {
 func (*RuntimeDescriptor) ProtoMessage() {}
 
 func (x *RuntimeDescriptor) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[42]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[51]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3176,7 +3604,7 @@ func (x *RuntimeDescriptor) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RuntimeDescriptor.ProtoReflect.Descriptor instead.
 func (*RuntimeDescriptor) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{42}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{51}
 }
 
 func (x *RuntimeDescriptor) GetId() string {
@@ -3227,7 +3655,7 @@ type ProbeResult struct {
 
 func (x *ProbeResult) Reset() {
 	*x = ProbeResult{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[43]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[52]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3239,7 +3667,7 @@ func (x *ProbeResult) String() string {
 func (*ProbeResult) ProtoMessage() {}
 
 func (x *ProbeResult) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[43]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[52]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3252,7 +3680,7 @@ func (x *ProbeResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ProbeResult.ProtoReflect.Descriptor instead.
 func (*ProbeResult) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{43}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{52}
 }
 
 func (x *ProbeResult) GetKind() string {
@@ -3302,7 +3730,7 @@ type HealthReport struct {
 
 func (x *HealthReport) Reset() {
 	*x = HealthReport{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[44]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[53]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3314,7 +3742,7 @@ func (x *HealthReport) String() string {
 func (*HealthReport) ProtoMessage() {}
 
 func (x *HealthReport) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[44]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[53]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3327,7 +3755,7 @@ func (x *HealthReport) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use HealthReport.ProtoReflect.Descriptor instead.
 func (*HealthReport) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{44}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{53}
 }
 
 func (x *HealthReport) GetState() string {
@@ -3372,7 +3800,7 @@ type Discovery struct {
 
 func (x *Discovery) Reset() {
 	*x = Discovery{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[45]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[54]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3384,7 +3812,7 @@ func (x *Discovery) String() string {
 func (*Discovery) ProtoMessage() {}
 
 func (x *Discovery) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[45]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[54]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3397,7 +3825,7 @@ func (x *Discovery) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Discovery.ProtoReflect.Descriptor instead.
 func (*Discovery) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{45}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{54}
 }
 
 func (x *Discovery) GetVersion() string {
@@ -3454,7 +3882,7 @@ type CapabilityEvidence struct {
 
 func (x *CapabilityEvidence) Reset() {
 	*x = CapabilityEvidence{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[46]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[55]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3466,7 +3894,7 @@ func (x *CapabilityEvidence) String() string {
 func (*CapabilityEvidence) ProtoMessage() {}
 
 func (x *CapabilityEvidence) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[46]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[55]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3479,7 +3907,7 @@ func (x *CapabilityEvidence) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use CapabilityEvidence.ProtoReflect.Descriptor instead.
 func (*CapabilityEvidence) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{46}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{55}
 }
 
 func (x *CapabilityEvidence) GetCapability() string {
@@ -3520,7 +3948,7 @@ type Model struct {
 
 func (x *Model) Reset() {
 	*x = Model{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[47]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[56]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3532,7 +3960,7 @@ func (x *Model) String() string {
 func (*Model) ProtoMessage() {}
 
 func (x *Model) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[47]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[56]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3545,7 +3973,7 @@ func (x *Model) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Model.ProtoReflect.Descriptor instead.
 func (*Model) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{47}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{56}
 }
 
 func (x *Model) GetId() string {
@@ -3573,7 +4001,7 @@ type ModelList struct {
 
 func (x *ModelList) Reset() {
 	*x = ModelList{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[48]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[57]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3585,7 +4013,7 @@ func (x *ModelList) String() string {
 func (*ModelList) ProtoMessage() {}
 
 func (x *ModelList) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[48]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[57]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3598,7 +4026,7 @@ func (x *ModelList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ModelList.ProtoReflect.Descriptor instead.
 func (*ModelList) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{48}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{57}
 }
 
 func (x *ModelList) GetModels() []*Model {
@@ -3632,7 +4060,7 @@ type ChatRequest struct {
 
 func (x *ChatRequest) Reset() {
 	*x = ChatRequest{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[49]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[58]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3644,7 +4072,7 @@ func (x *ChatRequest) String() string {
 func (*ChatRequest) ProtoMessage() {}
 
 func (x *ChatRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[49]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[58]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3657,7 +4085,7 @@ func (x *ChatRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatRequest.ProtoReflect.Descriptor instead.
 func (*ChatRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{49}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{58}
 }
 
 func (x *ChatRequest) GetModel() string {
@@ -3750,7 +4178,7 @@ type ChatMessage struct {
 
 func (x *ChatMessage) Reset() {
 	*x = ChatMessage{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[50]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[59]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3762,7 +4190,7 @@ func (x *ChatMessage) String() string {
 func (*ChatMessage) ProtoMessage() {}
 
 func (x *ChatMessage) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[50]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[59]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3775,7 +4203,7 @@ func (x *ChatMessage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatMessage.ProtoReflect.Descriptor instead.
 func (*ChatMessage) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{50}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{59}
 }
 
 func (x *ChatMessage) GetRole() string {
@@ -3824,7 +4252,7 @@ type ToolCall struct {
 
 func (x *ToolCall) Reset() {
 	*x = ToolCall{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[51]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[60]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3836,7 +4264,7 @@ func (x *ToolCall) String() string {
 func (*ToolCall) ProtoMessage() {}
 
 func (x *ToolCall) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[51]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[60]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3849,7 +4277,7 @@ func (x *ToolCall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCall.ProtoReflect.Descriptor instead.
 func (*ToolCall) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{51}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{60}
 }
 
 func (x *ToolCall) GetId() string {
@@ -3883,7 +4311,7 @@ type FunctionCall struct {
 
 func (x *FunctionCall) Reset() {
 	*x = FunctionCall{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[52]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[61]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3895,7 +4323,7 @@ func (x *FunctionCall) String() string {
 func (*FunctionCall) ProtoMessage() {}
 
 func (x *FunctionCall) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[52]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[61]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3908,7 +4336,7 @@ func (x *FunctionCall) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FunctionCall.ProtoReflect.Descriptor instead.
 func (*FunctionCall) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{52}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{61}
 }
 
 func (x *FunctionCall) GetName() string {
@@ -3935,7 +4363,7 @@ type Tool struct {
 
 func (x *Tool) Reset() {
 	*x = Tool{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[53]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[62]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -3947,7 +4375,7 @@ func (x *Tool) String() string {
 func (*Tool) ProtoMessage() {}
 
 func (x *Tool) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[53]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[62]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -3960,7 +4388,7 @@ func (x *Tool) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Tool.ProtoReflect.Descriptor instead.
 func (*Tool) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{53}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{62}
 }
 
 func (x *Tool) GetType() string {
@@ -3988,7 +4416,7 @@ type FunctionDefinition struct {
 
 func (x *FunctionDefinition) Reset() {
 	*x = FunctionDefinition{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[54]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[63]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4000,7 +4428,7 @@ func (x *FunctionDefinition) String() string {
 func (*FunctionDefinition) ProtoMessage() {}
 
 func (x *FunctionDefinition) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[54]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[63]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4013,7 +4441,7 @@ func (x *FunctionDefinition) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FunctionDefinition.ProtoReflect.Descriptor instead.
 func (*FunctionDefinition) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{54}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{63}
 }
 
 func (x *FunctionDefinition) GetName() string {
@@ -4047,7 +4475,7 @@ type ResponseFormat struct {
 
 func (x *ResponseFormat) Reset() {
 	*x = ResponseFormat{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[55]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[64]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4059,7 +4487,7 @@ func (x *ResponseFormat) String() string {
 func (*ResponseFormat) ProtoMessage() {}
 
 func (x *ResponseFormat) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[55]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[64]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4072,7 +4500,7 @@ func (x *ResponseFormat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ResponseFormat.ProtoReflect.Descriptor instead.
 func (*ResponseFormat) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{55}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{64}
 }
 
 func (x *ResponseFormat) GetType() string {
@@ -4100,7 +4528,7 @@ type JSONSchemaFormat struct {
 
 func (x *JSONSchemaFormat) Reset() {
 	*x = JSONSchemaFormat{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[56]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[65]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4112,7 +4540,7 @@ func (x *JSONSchemaFormat) String() string {
 func (*JSONSchemaFormat) ProtoMessage() {}
 
 func (x *JSONSchemaFormat) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[56]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[65]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4125,7 +4553,7 @@ func (x *JSONSchemaFormat) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use JSONSchemaFormat.ProtoReflect.Descriptor instead.
 func (*JSONSchemaFormat) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{56}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{65}
 }
 
 func (x *JSONSchemaFormat) GetName() string {
@@ -4163,7 +4591,7 @@ type ChatResponse struct {
 
 func (x *ChatResponse) Reset() {
 	*x = ChatResponse{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[57]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[66]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4175,7 +4603,7 @@ func (x *ChatResponse) String() string {
 func (*ChatResponse) ProtoMessage() {}
 
 func (x *ChatResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[57]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[66]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4188,7 +4616,7 @@ func (x *ChatResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatResponse.ProtoReflect.Descriptor instead.
 func (*ChatResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{57}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{66}
 }
 
 func (x *ChatResponse) GetId() string {
@@ -4246,7 +4674,7 @@ type ChatEvent struct {
 
 func (x *ChatEvent) Reset() {
 	*x = ChatEvent{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[58]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[67]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4258,7 +4686,7 @@ func (x *ChatEvent) String() string {
 func (*ChatEvent) ProtoMessage() {}
 
 func (x *ChatEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[58]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[67]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4271,7 +4699,7 @@ func (x *ChatEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatEvent.ProtoReflect.Descriptor instead.
 func (*ChatEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{58}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{67}
 }
 
 func (x *ChatEvent) GetId() string {
@@ -4320,7 +4748,7 @@ type ChatMessageDelta struct {
 
 func (x *ChatMessageDelta) Reset() {
 	*x = ChatMessageDelta{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[59]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[68]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4332,7 +4760,7 @@ func (x *ChatMessageDelta) String() string {
 func (*ChatMessageDelta) ProtoMessage() {}
 
 func (x *ChatMessageDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[59]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[68]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4345,7 +4773,7 @@ func (x *ChatMessageDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ChatMessageDelta.ProtoReflect.Descriptor instead.
 func (*ChatMessageDelta) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{59}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{68}
 }
 
 func (x *ChatMessageDelta) GetRole() string {
@@ -4381,7 +4809,7 @@ type ToolCallDelta struct {
 
 func (x *ToolCallDelta) Reset() {
 	*x = ToolCallDelta{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[60]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[69]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4393,7 +4821,7 @@ func (x *ToolCallDelta) String() string {
 func (*ToolCallDelta) ProtoMessage() {}
 
 func (x *ToolCallDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[60]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[69]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4406,7 +4834,7 @@ func (x *ToolCallDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ToolCallDelta.ProtoReflect.Descriptor instead.
 func (*ToolCallDelta) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{60}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{69}
 }
 
 func (x *ToolCallDelta) GetIndex() int64 {
@@ -4447,7 +4875,7 @@ type FunctionCallDelta struct {
 
 func (x *FunctionCallDelta) Reset() {
 	*x = FunctionCallDelta{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[61]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[70]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4459,7 +4887,7 @@ func (x *FunctionCallDelta) String() string {
 func (*FunctionCallDelta) ProtoMessage() {}
 
 func (x *FunctionCallDelta) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[61]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[70]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4472,7 +4900,7 @@ func (x *FunctionCallDelta) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use FunctionCallDelta.ProtoReflect.Descriptor instead.
 func (*FunctionCallDelta) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{61}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{70}
 }
 
 func (x *FunctionCallDelta) GetName() string {
@@ -4500,7 +4928,7 @@ type Usage struct {
 
 func (x *Usage) Reset() {
 	*x = Usage{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[62]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[71]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4512,7 +4940,7 @@ func (x *Usage) String() string {
 func (*Usage) ProtoMessage() {}
 
 func (x *Usage) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[62]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[71]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4525,7 +4953,7 @@ func (x *Usage) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Usage.ProtoReflect.Descriptor instead.
 func (*Usage) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{62}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{71}
 }
 
 func (x *Usage) GetPromptTokens() int64 {
@@ -4560,7 +4988,7 @@ type EmbeddingRequest struct {
 
 func (x *EmbeddingRequest) Reset() {
 	*x = EmbeddingRequest{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[63]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4572,7 +5000,7 @@ func (x *EmbeddingRequest) String() string {
 func (*EmbeddingRequest) ProtoMessage() {}
 
 func (x *EmbeddingRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[63]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4585,7 +5013,7 @@ func (x *EmbeddingRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmbeddingRequest.ProtoReflect.Descriptor instead.
 func (*EmbeddingRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{63}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{72}
 }
 
 func (x *EmbeddingRequest) GetModel() string {
@@ -4620,7 +5048,7 @@ type EmbeddingResponse struct {
 
 func (x *EmbeddingResponse) Reset() {
 	*x = EmbeddingResponse{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[64]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[73]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4632,7 +5060,7 @@ func (x *EmbeddingResponse) String() string {
 func (*EmbeddingResponse) ProtoMessage() {}
 
 func (x *EmbeddingResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[64]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[73]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4645,7 +5073,7 @@ func (x *EmbeddingResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use EmbeddingResponse.ProtoReflect.Descriptor instead.
 func (*EmbeddingResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{64}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{73}
 }
 
 func (x *EmbeddingResponse) GetModel() string {
@@ -4679,7 +5107,7 @@ type Embedding struct {
 
 func (x *Embedding) Reset() {
 	*x = Embedding{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[65]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[74]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4691,7 +5119,7 @@ func (x *Embedding) String() string {
 func (*Embedding) ProtoMessage() {}
 
 func (x *Embedding) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[65]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[74]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4704,7 +5132,7 @@ func (x *Embedding) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use Embedding.ProtoReflect.Descriptor instead.
 func (*Embedding) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{65}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{74}
 }
 
 func (x *Embedding) GetIndex() int64 {
@@ -4734,7 +5162,7 @@ type WorkflowRequest struct {
 
 func (x *WorkflowRequest) Reset() {
 	*x = WorkflowRequest{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[66]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[75]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4746,7 +5174,7 @@ func (x *WorkflowRequest) String() string {
 func (*WorkflowRequest) ProtoMessage() {}
 
 func (x *WorkflowRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[66]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[75]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4759,7 +5187,7 @@ func (x *WorkflowRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkflowRequest.ProtoReflect.Descriptor instead.
 func (*WorkflowRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{66}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{75}
 }
 
 func (x *WorkflowRequest) GetClientId() string {
@@ -4787,7 +5215,7 @@ type WorkflowRun struct {
 
 func (x *WorkflowRun) Reset() {
 	*x = WorkflowRun{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[67]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[76]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4799,7 +5227,7 @@ func (x *WorkflowRun) String() string {
 func (*WorkflowRun) ProtoMessage() {}
 
 func (x *WorkflowRun) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[67]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[76]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4812,7 +5240,7 @@ func (x *WorkflowRun) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkflowRun.ProtoReflect.Descriptor instead.
 func (*WorkflowRun) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{67}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{76}
 }
 
 func (x *WorkflowRun) GetId() string {
@@ -4847,7 +5275,7 @@ type RunRef struct {
 
 func (x *RunRef) Reset() {
 	*x = RunRef{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[68]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[77]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4859,7 +5287,7 @@ func (x *RunRef) String() string {
 func (*RunRef) ProtoMessage() {}
 
 func (x *RunRef) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[68]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[77]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4872,7 +5300,7 @@ func (x *RunRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RunRef.ProtoReflect.Descriptor instead.
 func (*RunRef) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{68}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{77}
 }
 
 func (x *RunRef) GetRunId() string {
@@ -4895,7 +5323,7 @@ type WorkflowEvent struct {
 
 func (x *WorkflowEvent) Reset() {
 	*x = WorkflowEvent{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[69]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[78]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4907,7 +5335,7 @@ func (x *WorkflowEvent) String() string {
 func (*WorkflowEvent) ProtoMessage() {}
 
 func (x *WorkflowEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[69]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[78]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4920,7 +5348,7 @@ func (x *WorkflowEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkflowEvent.ProtoReflect.Descriptor instead.
 func (*WorkflowEvent) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{69}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{78}
 }
 
 func (x *WorkflowEvent) GetType() string {
@@ -4971,7 +5399,7 @@ type WorkflowStatus struct {
 
 func (x *WorkflowStatus) Reset() {
 	*x = WorkflowStatus{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[70]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[79]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -4983,7 +5411,7 @@ func (x *WorkflowStatus) String() string {
 func (*WorkflowStatus) ProtoMessage() {}
 
 func (x *WorkflowStatus) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[70]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[79]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -4996,7 +5424,7 @@ func (x *WorkflowStatus) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use WorkflowStatus.ProtoReflect.Descriptor instead.
 func (*WorkflowStatus) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{70}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{79}
 }
 
 func (x *WorkflowStatus) GetState() string {
@@ -5046,7 +5474,7 @@ type ArtifactRef struct {
 
 func (x *ArtifactRef) Reset() {
 	*x = ArtifactRef{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[71]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[80]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5058,7 +5486,7 @@ func (x *ArtifactRef) String() string {
 func (*ArtifactRef) ProtoMessage() {}
 
 func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[71]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[80]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5071,7 +5499,7 @@ func (x *ArtifactRef) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactRef.ProtoReflect.Descriptor instead.
 func (*ArtifactRef) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{71}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{80}
 }
 
 func (x *ArtifactRef) GetRunId() string {
@@ -5120,7 +5548,7 @@ type ArtifactList struct {
 
 func (x *ArtifactList) Reset() {
 	*x = ArtifactList{}
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[81]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -5132,7 +5560,7 @@ func (x *ArtifactList) String() string {
 func (*ArtifactList) ProtoMessage() {}
 
 func (x *ArtifactList) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72]
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[81]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -5145,7 +5573,7 @@ func (x *ArtifactList) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ArtifactList.ProtoReflect.Descriptor instead.
 func (*ArtifactList) Descriptor() ([]byte, []int) {
-	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{72}
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{81}
 }
 
 func (x *ArtifactList) GetArtifacts() []*ArtifactRef {
@@ -5192,7 +5620,27 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x13DisableNodeResponse\",\n" +
 	"\x11EnableNodeRequest\x12\x17\n" +
 	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x14\n" +
-	"\x12EnableNodeResponse\"\x97\x02\n" +
+	"\x12EnableNodeResponse\"-\n" +
+	"\x12ApproveNodeRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x15\n" +
+	"\x13ApproveNodeResponse\"0\n" +
+	"\x15SetMaintenanceRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x18\n" +
+	"\x16SetMaintenanceResponse\"2\n" +
+	"\x17ClearMaintenanceRequest\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\"\x1a\n" +
+	"\x18ClearMaintenanceResponse\"\x17\n" +
+	"\x15ListNodeStatesRequest\"F\n" +
+	"\x16ListNodeStatesResponse\x12,\n" +
+	"\x06states\x18\x01 \x03(\v2\x14.tunnel.v1.NodeStateR\x06states\"\x8b\x02\n" +
+	"\tNodeState\x12\x17\n" +
+	"\anode_id\x18\x01 \x01(\tR\x06nodeId\x12)\n" +
+	"\x10pending_approval\x18\x02 \x01(\bR\x0fpendingApproval\x12\x1a\n" +
+	"\bdisabled\x18\x03 \x01(\bR\bdisabled\x12 \n" +
+	"\vmaintenance\x18\x04 \x01(\bR\vmaintenance\x12>\n" +
+	"\rfirst_seen_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\vfirstSeenAt\x12<\n" +
+	"\flast_seen_at\x18\x06 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
+	"lastSeenAt\"\x97\x02\n" +
 	"\fGatewayFrame\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\tR\trequestId\x125\n" +
@@ -5312,11 +5760,12 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\tmin_slots\x18\x01 \x01(\x05R\bminSlots\x12\x1b\n" +
 	"\tmax_slots\x18\x02 \x01(\x05R\bmaxSlots\x12\x1d\n" +
 	"\n" +
-	"bulk_slots\x18\x03 \x01(\x05R\tbulkSlots\"\x8a\x01\n" +
+	"bulk_slots\x18\x03 \x01(\x05R\tbulkSlots\"\xbc\x01\n" +
 	"\rGatewayRoster\x125\n" +
 	"\breplicas\x18\x01 \x03(\v2\x19.tunnel.v1.GatewayReplicaR\breplicas\x12\x18\n" +
 	"\aversion\x18\x02 \x01(\x03R\aversion\x12(\n" +
-	"\x10revoked_node_ids\x18\x03 \x03(\tR\x0erevokedNodeIds\"z\n" +
+	"\x10revoked_node_ids\x18\x03 \x03(\tR\x0erevokedNodeIds\x120\n" +
+	"\x14maintenance_node_ids\x18\x04 \x03(\tR\x12maintenanceNodeIds\"z\n" +
 	"\x0eGatewayReplica\x12\x1d\n" +
 	"\n" +
 	"replica_id\x18\x01 \x01(\tR\treplicaId\x12\x1a\n" +
@@ -5586,14 +6035,18 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\bRegister\x12\x1a.tunnel.v1.RegisterRequest\x1a\x1b.tunnel.v1.RegisterResponse\x12E\n" +
 	"\x10RenewCertificate\x12\x17.tunnel.v1.RenewRequest\x1a\x18.tunnel.v1.RenewResponse2P\n" +
 	"\x10GatewayDirectory\x12<\n" +
-	"\x04Join\x12\x16.tunnel.v1.JoinRequest\x1a\x18.tunnel.v1.GatewayRoster(\x010\x012\xbb\x02\n" +
+	"\x04Join\x12\x16.tunnel.v1.JoinRequest\x1a\x18.tunnel.v1.GatewayRoster(\x010\x012\x94\x05\n" +
 	"\n" +
 	"TokenAdmin\x12F\n" +
 	"\tMintToken\x12\x1b.tunnel.v1.MintTokenRequest\x1a\x1c.tunnel.v1.MintTokenResponse\x12L\n" +
 	"\vRevokeToken\x12\x1d.tunnel.v1.RevokeTokenRequest\x1a\x1e.tunnel.v1.RevokeTokenResponse\x12L\n" +
 	"\vDisableNode\x12\x1d.tunnel.v1.DisableNodeRequest\x1a\x1e.tunnel.v1.DisableNodeResponse\x12I\n" +
 	"\n" +
-	"EnableNode\x12\x1c.tunnel.v1.EnableNodeRequest\x1a\x1d.tunnel.v1.EnableNodeResponseB+Z)AIServeWeave/api/proto/tunnel/v1;tunnelv1b\x06proto3"
+	"EnableNode\x12\x1c.tunnel.v1.EnableNodeRequest\x1a\x1d.tunnel.v1.EnableNodeResponse\x12L\n" +
+	"\vApproveNode\x12\x1d.tunnel.v1.ApproveNodeRequest\x1a\x1e.tunnel.v1.ApproveNodeResponse\x12U\n" +
+	"\x0eSetMaintenance\x12 .tunnel.v1.SetMaintenanceRequest\x1a!.tunnel.v1.SetMaintenanceResponse\x12[\n" +
+	"\x10ClearMaintenance\x12\".tunnel.v1.ClearMaintenanceRequest\x1a#.tunnel.v1.ClearMaintenanceResponse\x12U\n" +
+	"\x0eListNodeStates\x12 .tunnel.v1.ListNodeStatesRequest\x1a!.tunnel.v1.ListNodeStatesResponseB+Z)AIServeWeave/api/proto/tunnel/v1;tunnelv1b\x06proto3"
 
 var (
 	file_api_proto_tunnel_v1_tunnel_proto_rawDescOnce sync.Once
@@ -5608,204 +6061,224 @@ func file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP() []byte {
 }
 
 var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 80)
+var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
 var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
-	(SlotClass)(0),                // 0: tunnel.v1.SlotClass
-	(Operation)(0),                // 1: tunnel.v1.Operation
-	(ReplicaState)(0),             // 2: tunnel.v1.ReplicaState
-	(ConfigAction)(0),             // 3: tunnel.v1.ConfigAction
-	(*RegisterRequest)(nil),       // 4: tunnel.v1.RegisterRequest
-	(*RegisterResponse)(nil),      // 5: tunnel.v1.RegisterResponse
-	(*RenewRequest)(nil),          // 6: tunnel.v1.RenewRequest
-	(*RenewResponse)(nil),         // 7: tunnel.v1.RenewResponse
-	(*MintTokenRequest)(nil),      // 8: tunnel.v1.MintTokenRequest
-	(*MintTokenResponse)(nil),     // 9: tunnel.v1.MintTokenResponse
-	(*RevokeTokenRequest)(nil),    // 10: tunnel.v1.RevokeTokenRequest
-	(*RevokeTokenResponse)(nil),   // 11: tunnel.v1.RevokeTokenResponse
-	(*DisableNodeRequest)(nil),    // 12: tunnel.v1.DisableNodeRequest
-	(*DisableNodeResponse)(nil),   // 13: tunnel.v1.DisableNodeResponse
-	(*EnableNodeRequest)(nil),     // 14: tunnel.v1.EnableNodeRequest
-	(*EnableNodeResponse)(nil),    // 15: tunnel.v1.EnableNodeResponse
-	(*GatewayFrame)(nil),          // 16: tunnel.v1.GatewayFrame
-	(*AgentFrame)(nil),            // 17: tunnel.v1.AgentFrame
-	(*Ready)(nil),                 // 18: tunnel.v1.Ready
-	(*RequestHeaders)(nil),        // 19: tunnel.v1.RequestHeaders
-	(*RequestEnd)(nil),            // 20: tunnel.v1.RequestEnd
-	(*Cancel)(nil),                // 21: tunnel.v1.Cancel
-	(*Ping)(nil),                  // 22: tunnel.v1.Ping
-	(*Pong)(nil),                  // 23: tunnel.v1.Pong
-	(*ResponseHeaders)(nil),       // 24: tunnel.v1.ResponseHeaders
-	(*DataChunk)(nil),             // 25: tunnel.v1.DataChunk
-	(*ResponseEnd)(nil),           // 26: tunnel.v1.ResponseEnd
-	(*TunnelError)(nil),           // 27: tunnel.v1.TunnelError
-	(*AgentControl)(nil),          // 28: tunnel.v1.AgentControl
-	(*GatewayControl)(nil),        // 29: tunnel.v1.GatewayControl
-	(*Hello)(nil),                 // 30: tunnel.v1.Hello
-	(*NodeResources)(nil),         // 31: tunnel.v1.NodeResources
-	(*HelloAck)(nil),              // 32: tunnel.v1.HelloAck
-	(*Heartbeat)(nil),             // 33: tunnel.v1.Heartbeat
-	(*HeartbeatAck)(nil),          // 34: tunnel.v1.HeartbeatAck
-	(*Draining)(nil),              // 35: tunnel.v1.Draining
-	(*Shutdown)(nil),              // 36: tunnel.v1.Shutdown
-	(*SlotHint)(nil),              // 37: tunnel.v1.SlotHint
-	(*GatewayRoster)(nil),         // 38: tunnel.v1.GatewayRoster
-	(*GatewayReplica)(nil),        // 39: tunnel.v1.GatewayReplica
-	(*JoinRequest)(nil),           // 40: tunnel.v1.JoinRequest
-	(*RuntimeStatus)(nil),         // 41: tunnel.v1.RuntimeStatus
-	(*RuntimeConfig)(nil),         // 42: tunnel.v1.RuntimeConfig
-	(*RuntimeSpec)(nil),           // 43: tunnel.v1.RuntimeSpec
-	(*TLSSpec)(nil),               // 44: tunnel.v1.TLSSpec
-	(*RuntimeSnapshot)(nil),       // 45: tunnel.v1.RuntimeSnapshot
-	(*RuntimeDescriptor)(nil),     // 46: tunnel.v1.RuntimeDescriptor
-	(*ProbeResult)(nil),           // 47: tunnel.v1.ProbeResult
-	(*HealthReport)(nil),          // 48: tunnel.v1.HealthReport
-	(*Discovery)(nil),             // 49: tunnel.v1.Discovery
-	(*CapabilityEvidence)(nil),    // 50: tunnel.v1.CapabilityEvidence
-	(*Model)(nil),                 // 51: tunnel.v1.Model
-	(*ModelList)(nil),             // 52: tunnel.v1.ModelList
-	(*ChatRequest)(nil),           // 53: tunnel.v1.ChatRequest
-	(*ChatMessage)(nil),           // 54: tunnel.v1.ChatMessage
-	(*ToolCall)(nil),              // 55: tunnel.v1.ToolCall
-	(*FunctionCall)(nil),          // 56: tunnel.v1.FunctionCall
-	(*Tool)(nil),                  // 57: tunnel.v1.Tool
-	(*FunctionDefinition)(nil),    // 58: tunnel.v1.FunctionDefinition
-	(*ResponseFormat)(nil),        // 59: tunnel.v1.ResponseFormat
-	(*JSONSchemaFormat)(nil),      // 60: tunnel.v1.JSONSchemaFormat
-	(*ChatResponse)(nil),          // 61: tunnel.v1.ChatResponse
-	(*ChatEvent)(nil),             // 62: tunnel.v1.ChatEvent
-	(*ChatMessageDelta)(nil),      // 63: tunnel.v1.ChatMessageDelta
-	(*ToolCallDelta)(nil),         // 64: tunnel.v1.ToolCallDelta
-	(*FunctionCallDelta)(nil),     // 65: tunnel.v1.FunctionCallDelta
-	(*Usage)(nil),                 // 66: tunnel.v1.Usage
-	(*EmbeddingRequest)(nil),      // 67: tunnel.v1.EmbeddingRequest
-	(*EmbeddingResponse)(nil),     // 68: tunnel.v1.EmbeddingResponse
-	(*Embedding)(nil),             // 69: tunnel.v1.Embedding
-	(*WorkflowRequest)(nil),       // 70: tunnel.v1.WorkflowRequest
-	(*WorkflowRun)(nil),           // 71: tunnel.v1.WorkflowRun
-	(*RunRef)(nil),                // 72: tunnel.v1.RunRef
-	(*WorkflowEvent)(nil),         // 73: tunnel.v1.WorkflowEvent
-	(*WorkflowStatus)(nil),        // 74: tunnel.v1.WorkflowStatus
-	(*ArtifactRef)(nil),           // 75: tunnel.v1.ArtifactRef
-	(*ArtifactList)(nil),          // 76: tunnel.v1.ArtifactList
-	nil,                           // 77: tunnel.v1.RequestHeaders.TraceEntry
-	nil,                           // 78: tunnel.v1.Hello.LabelsEntry
-	nil,                           // 79: tunnel.v1.RuntimeSpec.HeadersEntry
-	nil,                           // 80: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	nil,                           // 81: tunnel.v1.Discovery.CapabilitiesEntry
-	nil,                           // 82: tunnel.v1.Model.CapabilitiesEntry
-	nil,                           // 83: tunnel.v1.ChatRequest.ExtraEntry
-	(*timestamppb.Timestamp)(nil), // 84: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),   // 85: google.protobuf.Duration
+	(SlotClass)(0),                   // 0: tunnel.v1.SlotClass
+	(Operation)(0),                   // 1: tunnel.v1.Operation
+	(ReplicaState)(0),                // 2: tunnel.v1.ReplicaState
+	(ConfigAction)(0),                // 3: tunnel.v1.ConfigAction
+	(*RegisterRequest)(nil),          // 4: tunnel.v1.RegisterRequest
+	(*RegisterResponse)(nil),         // 5: tunnel.v1.RegisterResponse
+	(*RenewRequest)(nil),             // 6: tunnel.v1.RenewRequest
+	(*RenewResponse)(nil),            // 7: tunnel.v1.RenewResponse
+	(*MintTokenRequest)(nil),         // 8: tunnel.v1.MintTokenRequest
+	(*MintTokenResponse)(nil),        // 9: tunnel.v1.MintTokenResponse
+	(*RevokeTokenRequest)(nil),       // 10: tunnel.v1.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),      // 11: tunnel.v1.RevokeTokenResponse
+	(*DisableNodeRequest)(nil),       // 12: tunnel.v1.DisableNodeRequest
+	(*DisableNodeResponse)(nil),      // 13: tunnel.v1.DisableNodeResponse
+	(*EnableNodeRequest)(nil),        // 14: tunnel.v1.EnableNodeRequest
+	(*EnableNodeResponse)(nil),       // 15: tunnel.v1.EnableNodeResponse
+	(*ApproveNodeRequest)(nil),       // 16: tunnel.v1.ApproveNodeRequest
+	(*ApproveNodeResponse)(nil),      // 17: tunnel.v1.ApproveNodeResponse
+	(*SetMaintenanceRequest)(nil),    // 18: tunnel.v1.SetMaintenanceRequest
+	(*SetMaintenanceResponse)(nil),   // 19: tunnel.v1.SetMaintenanceResponse
+	(*ClearMaintenanceRequest)(nil),  // 20: tunnel.v1.ClearMaintenanceRequest
+	(*ClearMaintenanceResponse)(nil), // 21: tunnel.v1.ClearMaintenanceResponse
+	(*ListNodeStatesRequest)(nil),    // 22: tunnel.v1.ListNodeStatesRequest
+	(*ListNodeStatesResponse)(nil),   // 23: tunnel.v1.ListNodeStatesResponse
+	(*NodeState)(nil),                // 24: tunnel.v1.NodeState
+	(*GatewayFrame)(nil),             // 25: tunnel.v1.GatewayFrame
+	(*AgentFrame)(nil),               // 26: tunnel.v1.AgentFrame
+	(*Ready)(nil),                    // 27: tunnel.v1.Ready
+	(*RequestHeaders)(nil),           // 28: tunnel.v1.RequestHeaders
+	(*RequestEnd)(nil),               // 29: tunnel.v1.RequestEnd
+	(*Cancel)(nil),                   // 30: tunnel.v1.Cancel
+	(*Ping)(nil),                     // 31: tunnel.v1.Ping
+	(*Pong)(nil),                     // 32: tunnel.v1.Pong
+	(*ResponseHeaders)(nil),          // 33: tunnel.v1.ResponseHeaders
+	(*DataChunk)(nil),                // 34: tunnel.v1.DataChunk
+	(*ResponseEnd)(nil),              // 35: tunnel.v1.ResponseEnd
+	(*TunnelError)(nil),              // 36: tunnel.v1.TunnelError
+	(*AgentControl)(nil),             // 37: tunnel.v1.AgentControl
+	(*GatewayControl)(nil),           // 38: tunnel.v1.GatewayControl
+	(*Hello)(nil),                    // 39: tunnel.v1.Hello
+	(*NodeResources)(nil),            // 40: tunnel.v1.NodeResources
+	(*HelloAck)(nil),                 // 41: tunnel.v1.HelloAck
+	(*Heartbeat)(nil),                // 42: tunnel.v1.Heartbeat
+	(*HeartbeatAck)(nil),             // 43: tunnel.v1.HeartbeatAck
+	(*Draining)(nil),                 // 44: tunnel.v1.Draining
+	(*Shutdown)(nil),                 // 45: tunnel.v1.Shutdown
+	(*SlotHint)(nil),                 // 46: tunnel.v1.SlotHint
+	(*GatewayRoster)(nil),            // 47: tunnel.v1.GatewayRoster
+	(*GatewayReplica)(nil),           // 48: tunnel.v1.GatewayReplica
+	(*JoinRequest)(nil),              // 49: tunnel.v1.JoinRequest
+	(*RuntimeStatus)(nil),            // 50: tunnel.v1.RuntimeStatus
+	(*RuntimeConfig)(nil),            // 51: tunnel.v1.RuntimeConfig
+	(*RuntimeSpec)(nil),              // 52: tunnel.v1.RuntimeSpec
+	(*TLSSpec)(nil),                  // 53: tunnel.v1.TLSSpec
+	(*RuntimeSnapshot)(nil),          // 54: tunnel.v1.RuntimeSnapshot
+	(*RuntimeDescriptor)(nil),        // 55: tunnel.v1.RuntimeDescriptor
+	(*ProbeResult)(nil),              // 56: tunnel.v1.ProbeResult
+	(*HealthReport)(nil),             // 57: tunnel.v1.HealthReport
+	(*Discovery)(nil),                // 58: tunnel.v1.Discovery
+	(*CapabilityEvidence)(nil),       // 59: tunnel.v1.CapabilityEvidence
+	(*Model)(nil),                    // 60: tunnel.v1.Model
+	(*ModelList)(nil),                // 61: tunnel.v1.ModelList
+	(*ChatRequest)(nil),              // 62: tunnel.v1.ChatRequest
+	(*ChatMessage)(nil),              // 63: tunnel.v1.ChatMessage
+	(*ToolCall)(nil),                 // 64: tunnel.v1.ToolCall
+	(*FunctionCall)(nil),             // 65: tunnel.v1.FunctionCall
+	(*Tool)(nil),                     // 66: tunnel.v1.Tool
+	(*FunctionDefinition)(nil),       // 67: tunnel.v1.FunctionDefinition
+	(*ResponseFormat)(nil),           // 68: tunnel.v1.ResponseFormat
+	(*JSONSchemaFormat)(nil),         // 69: tunnel.v1.JSONSchemaFormat
+	(*ChatResponse)(nil),             // 70: tunnel.v1.ChatResponse
+	(*ChatEvent)(nil),                // 71: tunnel.v1.ChatEvent
+	(*ChatMessageDelta)(nil),         // 72: tunnel.v1.ChatMessageDelta
+	(*ToolCallDelta)(nil),            // 73: tunnel.v1.ToolCallDelta
+	(*FunctionCallDelta)(nil),        // 74: tunnel.v1.FunctionCallDelta
+	(*Usage)(nil),                    // 75: tunnel.v1.Usage
+	(*EmbeddingRequest)(nil),         // 76: tunnel.v1.EmbeddingRequest
+	(*EmbeddingResponse)(nil),        // 77: tunnel.v1.EmbeddingResponse
+	(*Embedding)(nil),                // 78: tunnel.v1.Embedding
+	(*WorkflowRequest)(nil),          // 79: tunnel.v1.WorkflowRequest
+	(*WorkflowRun)(nil),              // 80: tunnel.v1.WorkflowRun
+	(*RunRef)(nil),                   // 81: tunnel.v1.RunRef
+	(*WorkflowEvent)(nil),            // 82: tunnel.v1.WorkflowEvent
+	(*WorkflowStatus)(nil),           // 83: tunnel.v1.WorkflowStatus
+	(*ArtifactRef)(nil),              // 84: tunnel.v1.ArtifactRef
+	(*ArtifactList)(nil),             // 85: tunnel.v1.ArtifactList
+	nil,                              // 86: tunnel.v1.RequestHeaders.TraceEntry
+	nil,                              // 87: tunnel.v1.Hello.LabelsEntry
+	nil,                              // 88: tunnel.v1.RuntimeSpec.HeadersEntry
+	nil,                              // 89: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	nil,                              // 90: tunnel.v1.Discovery.CapabilitiesEntry
+	nil,                              // 91: tunnel.v1.Model.CapabilitiesEntry
+	nil,                              // 92: tunnel.v1.ChatRequest.ExtraEntry
+	(*timestamppb.Timestamp)(nil),    // 93: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),      // 94: google.protobuf.Duration
 }
 var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
-	84, // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
-	84, // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
-	85, // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
-	84, // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	19, // 4: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
-	25, // 5: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
-	20, // 6: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
-	21, // 7: tunnel.v1.GatewayFrame.cancel:type_name -> tunnel.v1.Cancel
-	22, // 8: tunnel.v1.GatewayFrame.ping:type_name -> tunnel.v1.Ping
-	18, // 9: tunnel.v1.AgentFrame.ready:type_name -> tunnel.v1.Ready
-	24, // 10: tunnel.v1.AgentFrame.headers:type_name -> tunnel.v1.ResponseHeaders
-	25, // 11: tunnel.v1.AgentFrame.data:type_name -> tunnel.v1.DataChunk
-	26, // 12: tunnel.v1.AgentFrame.end:type_name -> tunnel.v1.ResponseEnd
-	23, // 13: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
-	0,  // 14: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
-	1,  // 15: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
-	77, // 16: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
-	27, // 17: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
-	30, // 18: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
-	33, // 19: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
-	41, // 20: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
-	35, // 21: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
-	23, // 22: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
-	32, // 23: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
-	34, // 24: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
-	42, // 25: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
-	37, // 26: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
-	38, // 27: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
-	36, // 28: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
-	22, // 29: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
-	31, // 30: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
-	78, // 31: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
-	85, // 32: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
-	39, // 33: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
-	2,  // 34: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
-	2,  // 35: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
-	45, // 36: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
-	84, // 37: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
-	3,  // 38: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
-	43, // 39: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
-	79, // 40: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
-	85, // 41: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
-	85, // 42: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
-	85, // 43: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
-	85, // 44: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
-	85, // 45: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
-	44, // 46: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
-	80, // 47: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	46, // 48: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
-	47, // 49: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
-	48, // 50: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
-	49, // 51: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
-	84, // 52: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	84, // 53: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
-	85, // 54: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
-	84, // 55: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
-	51, // 56: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
-	81, // 57: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
-	84, // 58: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
-	82, // 59: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
-	51, // 60: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
-	54, // 61: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
-	57, // 62: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
-	59, // 63: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
-	83, // 64: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
-	55, // 65: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
-	56, // 66: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
-	58, // 67: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
-	60, // 68: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
-	54, // 69: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
-	66, // 70: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
-	84, // 71: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
-	63, // 72: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
-	66, // 73: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
-	64, // 74: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
-	65, // 75: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
-	69, // 76: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
-	66, // 77: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
-	84, // 78: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
-	84, // 79: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
-	84, // 80: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
-	84, // 81: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
-	75, // 82: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
-	50, // 83: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	50, // 84: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	28, // 85: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
-	17, // 86: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
-	4,  // 87: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
-	6,  // 88: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
-	40, // 89: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
-	8,  // 90: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
-	10, // 91: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
-	12, // 92: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
-	14, // 93: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
-	29, // 94: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
-	16, // 95: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
-	5,  // 96: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
-	7,  // 97: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
-	38, // 98: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
-	9,  // 99: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
-	11, // 100: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
-	13, // 101: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
-	15, // 102: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
-	94, // [94:103] is the sub-list for method output_type
-	85, // [85:94] is the sub-list for method input_type
-	85, // [85:85] is the sub-list for extension type_name
-	85, // [85:85] is the sub-list for extension extendee
-	0,  // [0:85] is the sub-list for field type_name
+	93,  // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
+	93,  // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
+	94,  // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
+	93,  // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	24,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
+	93,  // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
+	93,  // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
+	28,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
+	34,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
+	29,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
+	30,  // 10: tunnel.v1.GatewayFrame.cancel:type_name -> tunnel.v1.Cancel
+	31,  // 11: tunnel.v1.GatewayFrame.ping:type_name -> tunnel.v1.Ping
+	27,  // 12: tunnel.v1.AgentFrame.ready:type_name -> tunnel.v1.Ready
+	33,  // 13: tunnel.v1.AgentFrame.headers:type_name -> tunnel.v1.ResponseHeaders
+	34,  // 14: tunnel.v1.AgentFrame.data:type_name -> tunnel.v1.DataChunk
+	35,  // 15: tunnel.v1.AgentFrame.end:type_name -> tunnel.v1.ResponseEnd
+	32,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
+	0,   // 17: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
+	1,   // 18: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
+	86,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
+	36,  // 20: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
+	39,  // 21: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
+	42,  // 22: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
+	50,  // 23: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
+	44,  // 24: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
+	32,  // 25: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
+	41,  // 26: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
+	43,  // 27: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
+	51,  // 28: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
+	46,  // 29: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
+	47,  // 30: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
+	45,  // 31: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
+	31,  // 32: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
+	40,  // 33: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
+	87,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
+	94,  // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
+	48,  // 36: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
+	2,   // 37: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
+	2,   // 38: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
+	54,  // 39: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
+	93,  // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
+	3,   // 41: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
+	52,  // 42: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
+	88,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
+	94,  // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
+	94,  // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
+	94,  // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
+	94,  // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
+	94,  // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
+	53,  // 49: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
+	89,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	55,  // 51: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
+	56,  // 52: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
+	57,  // 53: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
+	58,  // 54: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
+	93,  // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	93,  // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
+	94,  // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
+	93,  // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
+	60,  // 59: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
+	90,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
+	93,  // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
+	91,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
+	60,  // 63: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
+	63,  // 64: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
+	66,  // 65: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
+	68,  // 66: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
+	92,  // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
+	64,  // 68: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
+	65,  // 69: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
+	67,  // 70: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
+	69,  // 71: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
+	63,  // 72: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
+	75,  // 73: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
+	93,  // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
+	72,  // 75: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
+	75,  // 76: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
+	73,  // 77: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
+	74,  // 78: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
+	78,  // 79: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
+	75,  // 80: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
+	93,  // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
+	93,  // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
+	93,  // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
+	93,  // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
+	84,  // 85: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
+	59,  // 86: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	59,  // 87: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	37,  // 88: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
+	26,  // 89: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
+	4,   // 90: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
+	6,   // 91: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
+	49,  // 92: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
+	8,   // 93: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
+	10,  // 94: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
+	12,  // 95: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
+	14,  // 96: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
+	16,  // 97: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
+	18,  // 98: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
+	20,  // 99: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
+	22,  // 100: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
+	38,  // 101: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
+	25,  // 102: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
+	5,   // 103: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
+	7,   // 104: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
+	47,  // 105: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
+	9,   // 106: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
+	11,  // 107: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
+	13,  // 108: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
+	15,  // 109: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
+	17,  // 110: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
+	19,  // 111: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
+	21,  // 112: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
+	23,  // 113: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
+	101, // [101:114] is the sub-list for method output_type
+	88,  // [88:101] is the sub-list for method input_type
+	88,  // [88:88] is the sub-list for extension type_name
+	88,  // [88:88] is the sub-list for extension extendee
+	0,   // [0:88] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_tunnel_v1_tunnel_proto_init() }
@@ -5813,28 +6286,28 @@ func file_api_proto_tunnel_v1_tunnel_proto_init() {
 	if File_api_proto_tunnel_v1_tunnel_proto != nil {
 		return
 	}
-	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[12].OneofWrappers = []any{
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[21].OneofWrappers = []any{
 		(*GatewayFrame_Headers)(nil),
 		(*GatewayFrame_Data)(nil),
 		(*GatewayFrame_End)(nil),
 		(*GatewayFrame_Cancel)(nil),
 		(*GatewayFrame_Ping)(nil),
 	}
-	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[13].OneofWrappers = []any{
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[22].OneofWrappers = []any{
 		(*AgentFrame_Ready)(nil),
 		(*AgentFrame_Headers)(nil),
 		(*AgentFrame_Data)(nil),
 		(*AgentFrame_End)(nil),
 		(*AgentFrame_Pong)(nil),
 	}
-	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[24].OneofWrappers = []any{
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[33].OneofWrappers = []any{
 		(*AgentControl_Hello)(nil),
 		(*AgentControl_Heartbeat)(nil),
 		(*AgentControl_Status)(nil),
 		(*AgentControl_Draining)(nil),
 		(*AgentControl_Pong)(nil),
 	}
-	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[25].OneofWrappers = []any{
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[34].OneofWrappers = []any{
 		(*GatewayControl_Ack)(nil),
 		(*GatewayControl_HbAck)(nil),
 		(*GatewayControl_Config)(nil),
@@ -5843,15 +6316,15 @@ func file_api_proto_tunnel_v1_tunnel_proto_init() {
 		(*GatewayControl_Shutdown)(nil),
 		(*GatewayControl_Ping)(nil),
 	}
-	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[49].OneofWrappers = []any{}
-	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[63].OneofWrappers = []any{}
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[58].OneofWrappers = []any{}
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_tunnel_v1_tunnel_proto_rawDesc), len(file_api_proto_tunnel_v1_tunnel_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   80,
+			NumMessages:   89,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

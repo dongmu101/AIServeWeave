@@ -110,6 +110,17 @@ func startRegistryWithGatewayToken(t *testing.T, gatewayToken string) *registryF
 	return &registryFixture{addr: lis.Addr().String(), ca: root, tokens: tokens, identities: identities, adminToken: testAdminToken}
 }
 
+// approve pre-approves nodeID directly against the fixture's ledger
+// (STATUS.md's P01), the way an operator would via TokenAdmin.ApproveNode,
+// so a test exercising something other than the approval gate itself does
+// not have to detour through the gRPC client to clear it.
+func (f *registryFixture) approve(t *testing.T, nodeID string) {
+	t.Helper()
+	if err := f.identities.Approve(nodeID, time.Now()); err != nil {
+		t.Fatalf("identities.Approve(%q) error = %v", nodeID, err)
+	}
+}
+
 // tokenAdminClient dials the fixture Registry with no client certificate and
 // returns a TokenAdmin client plus a context already carrying f's admin
 // token, so a test only has to supply the request.
@@ -135,7 +146,13 @@ func tokenAdminClient(t *testing.T, f *registryFixture) (tunnelv1.TokenAdminClie
 // newAgentIdentityManager builds a tunnel.IdentityManager wired against the
 // fixture Registry exactly the way service/aiServeWeaveAgent/main.go wires
 // the real one — this is the actual client code an Agent runs, not a stand-in.
-func newAgentIdentityManager(t *testing.T, f *registryFixture, bootstrapToken string) *tunnel.IdentityManager {
+//
+// nodeID is required (unlike the pre-P01 tests this helper once served): an
+// unbound bootstrap token can no longer self-assign one (STATUS.md's P01),
+// so every caller must supply a fixed node_id and, unless the test means to
+// exercise the pending-approval gate itself, approve it first via
+// registryFixture.approve.
+func newAgentIdentityManager(t *testing.T, f *registryFixture, nodeID, bootstrapToken string) *tunnel.IdentityManager {
 	t.Helper()
 	dir := t.TempDir()
 	tokenFile := filepath.Join(dir, "bootstrap-token")
@@ -148,6 +165,7 @@ func newAgentIdentityManager(t *testing.T, f *registryFixture, bootstrapToken st
 		t.Fatalf("NewGRPCRegistryConnector() error = %v", err)
 	}
 	manager, err := tunnel.NewIdentityManager(tunnel.IdentityConfig{
+		NodeID:             nodeID,
 		RegistryEndpoint:   f.addr,
 		CertFile:           filepath.Join(dir, "node.crt"),
 		KeyFile:            filepath.Join(dir, "node.key"),
@@ -163,12 +181,13 @@ func newAgentIdentityManager(t *testing.T, f *registryFixture, bootstrapToken st
 
 func TestRegisterIssuesAWorkingIdentityForARealAgentClient(t *testing.T) {
 	f := startRegistry(t)
+	f.approve(t, "node-a")
 	tok, err := f.tokens.Mint(15*time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("Mint() error = %v", err)
 	}
 
-	manager := newAgentIdentityManager(t, f, tok)
+	manager := newAgentIdentityManager(t, f, "node-a", tok)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -182,7 +201,7 @@ func TestRegisterIssuesAWorkingIdentityForARealAgentClient(t *testing.T) {
 
 	// The token is one-time: a second Agent registering with the same value
 	// must be rejected even though it still has the token in memory.
-	replay := newAgentIdentityManager(t, f, tok)
+	replay := newAgentIdentityManager(t, f, "node-a", tok)
 	if _, err := replay.Ensure(ctx); err == nil {
 		t.Fatal("Ensure() with a spent bootstrap token = nil error, want a rejection")
 	}
@@ -190,7 +209,7 @@ func TestRegisterIssuesAWorkingIdentityForARealAgentClient(t *testing.T) {
 
 func TestRegisterRejectsAnInvalidToken(t *testing.T) {
 	f := startRegistry(t)
-	manager := newAgentIdentityManager(t, f, "not-a-real-token")
+	manager := newAgentIdentityManager(t, f, "node-a", "not-a-real-token")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -201,11 +220,12 @@ func TestRegisterRejectsAnInvalidToken(t *testing.T) {
 
 func TestRenewCertificateRotatesAWorkingIdentity(t *testing.T) {
 	f := startRegistry(t)
+	f.approve(t, "node-a")
 	tok, err := f.tokens.Mint(15*time.Minute, time.Now())
 	if err != nil {
 		t.Fatalf("Mint() error = %v", err)
 	}
-	manager := newAgentIdentityManager(t, f, tok)
+	manager := newAgentIdentityManager(t, f, "node-a", tok)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -266,6 +286,7 @@ func newCSR(t *testing.T) []byte {
 
 func TestRegisterAllowsARepeatedRegistrationWithTheSameKeyUnderOneNodeID(t *testing.T) {
 	f := startRegistry(t)
+	f.approve(t, "node-fixed")
 	client := rawIdentityClient(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -299,6 +320,7 @@ func TestRegisterAllowsARepeatedRegistrationWithTheSameKeyUnderOneNodeID(t *test
 
 func TestRegisterRejectsANodeIDReappearingUnderADifferentKey(t *testing.T) {
 	f := startRegistry(t)
+	f.approve(t, "node-fixed")
 	client := rawIdentityClient(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -334,6 +356,7 @@ func TestRegisterRejectsANodeIDReappearingUnderADifferentKey(t *testing.T) {
 
 func TestConcurrentRegistrationForOneNodeIDWithDifferentKeysAllowsExactlyOne(t *testing.T) {
 	f := startRegistry(t)
+	f.approve(t, "node-fixed")
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
@@ -411,7 +434,8 @@ func TestMintTokenThenRegisterConsumesTheMintedToken(t *testing.T) {
 		t.Fatal("MintToken() returned an empty token")
 	}
 
-	manager := newAgentIdentityManager(t, f, resp.GetToken())
+	f.approve(t, "node-a")
+	manager := newAgentIdentityManager(t, f, "node-a", resp.GetToken())
 	registerCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := manager.Ensure(registerCtx); err != nil {
@@ -446,7 +470,8 @@ func TestRevokeTokenPreventsRegistration(t *testing.T) {
 		t.Fatalf("RevokeToken() error = %v", err)
 	}
 
-	manager := newAgentIdentityManager(t, f, tok)
+	f.approve(t, "node-a")
+	manager := newAgentIdentityManager(t, f, "node-a", tok)
 	registerCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := manager.Ensure(registerCtx); err == nil {

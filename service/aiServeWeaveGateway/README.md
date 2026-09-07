@@ -1,6 +1,6 @@
 # aiserveweave-gateway
 
-数据面。对外终结 OpenAI / Anthropic 兼容 API，对内通过隧道把请求派给节点。
+数据面。对外终结 OpenAI 兼容 API 与工作流 Job API（Anthropic 尚属规划），对内通过隧道把请求派给节点。
 
 **当前进度：隧道服务端、调度器、OpenAI 前门、ComfyUI 工作流的提交与状态查询、Registry 名册订阅、指标导出与只读的运维清单端点均已落地。** 这个二进制现在能接住 Agent、知道每个节点能服务什么、把 HTTP 请求路由过去，自己的副本身份会同步给 Registry 维护的名册，并在 `-metrics-addr` 上导出 Prometheus 文本格式的指标。
 
@@ -53,7 +53,7 @@ go run ./service/aiServeWeaveGateway -admin-addr 127.0.0.1:8091 ...
 - 模板目录**不含图**。仓库把完整的工作流 JSON 与 API key 归为同一类，图从不离开本进程；输入所写入的节点与字段同样不外传（那也是图结构，调用方按名字替换）。渲染是压根没取用图，而不是事后剥掉——后者距离被打破只差一行被遗忘的代码。
 - job 视图**不含运行位置**：节点 id、运行时 id 与解析后的模型都刻意缺席。节点属于运维视图，而 `scheduler.Candidate.Model` 的文档写明客户端从不得知它——那是别名解析的结果，告知调用方等于取消了别名的意义。
 - job 表有条数上限且跨租户共享，逐出过内容时 `truncated` 为 true。一份短列表若没有这个标志，会被读成「这段时间很清闲」，而那恰恰是这张表最无法支撑的结论。
-- **`state` 是最后观测状态，不是此刻的状态。** Gateway 只在提交方轮询 `GET /v1/jobs/{job_id}` 或挂着事件流时才得知一次运行有了进展，后台没有对账。提交方一旦停止查询，那次运行就会在条目存活期间一直停在最后看到的状态，无论后端实际早在多久之前就已完成。`updated_at` 是该状态被观测到的时刻，也是区分「仍在运行」与「从那以后没人看过」的唯一依据——消费方脱离它去渲染 `state`，是在断言一件本服务从未声称过的事。有界的后台状态同步（对非终态运行按频率上限去问节点）是一个已知缺口：补它需要处理「节点已消失」与「提交方从未回来」两种情形，属于独立工作，尚未做。
+- **`state` 是最后观测状态，不是此刻的状态。** 前台轮询、SSE 与有界后台同步器（`httpapi/jobsync.go`）都会更新观测；调用方停止查询后，后台仍会推进非终态 Job。节点不可达时保留最后状态并退避，不编造终态。消费方应同时展示 `updated_at`，同步频率与失败边界见下方「工作流 Job」第九条。
 - 它与推理监听器分处不同端口：公开监听器面对持有租户 API Key 的调用方，这一个面对持有部署密钥的控制面。放同一个端口，就意味着距离「某个租户读到整个机群」只差一条配错的路由。
 - 没有 token 时**拒绝启动**而不是以未认证方式提供：一份谁连上端口就能读的机群清单不是值得保留的降级模式。这个失败会返回，不像 `-metrics-addr` 那样只记日志——要求启用它却没启用，应当在启动时就发现。
 - 响应形状是 `common/nodeview`（节点）与 `common/workflowview`（模板与 job）的契约，与控制面共用一份声明。渲染采用**允许列表**：只输出该包点名的字段，而不是序列化 `NodeInfo` 或 `Descriptor` 碰巧持有的一切。运行时凭据本来就不在 `Snapshot` 里（它们在 Agent 的 `runtime.Config`，`common/tunnelwire` 过隧道前已丢弃 API key），允许列表是从这一侧保证它继续如此。
@@ -106,7 +106,7 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 5. **取消是请求，不是结论。** ComfyUI 的中断是异步的，因此 `cancel` 返回 202 后 job 仍是后端最后报告的那个状态，直到状态查询或事件流带回真正的结果——在这里就把它标成 `cancelled`，是 Gateway 在编造一个没人告诉过它的结果。已结束的 job 返回 409（请求与状态冲突），节点不具备中断能力时返回 501（`cancel_unsupported`），而不是笼统的 500——后者会让调用方跑到我们这边找问题。
 6. **产物的公开 id 与后端路径无关。** 后端用 `filename`+`subfolder`+`type` 三元组定位产物，那是通往它自己磁盘布局的一条路径。这个三元组绝不作为标识符抵达调用方：`artifact_id` 在列举时铸造、经由存储解回，因此调用方无法伪造一个指向本次运行没有产出的文件的 id。id 在多次列举之间稳定——每次调用铸一套新的，会让每轮轮询都把存储撑大一点。
 7. **产物下载走批量槽，且不落地。** `OPERATION_ARTIFACT_LIST` 是有界回复，走推理槽；`OPERATION_ARTIFACT_OPEN` 流出整个响应体，走批量槽，两类槽在隧道里物理隔离，一次大的下载挤不掉推理。前门用 `io.Copy` 直通转发，本进程从不完整持有一个产物，背压经由同一次读取抵达 Agent。回显进 `Content-Disposition` 的文件名先被清洗：目录部分、CR、LF、引号与控制字符一律移除而不是转义——那个名字来自后端，并经由工作流自己的保存节点前缀最终来自调用方。
-8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；副本重启即丢失，也不跨副本共享。持久化属于控制面的 `jobs` 表，写入时机、失败语义与状态机的设计见 [ControlPlane README 的「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#job-持久化契约j01-j08-均已完成)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖，第十条约束是这条原则的具体落实。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
+8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；内存条目在副本重启时丢失，内存表不跨副本共享；配置控制面持久化后，已落库历史保留，非终态路由绑定可由后台恢复器读回（第十一条）。持久化属于控制面的 `jobs` 表，写入时机、失败语义与状态机的设计见 [ControlPlane README 的「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#job-持久化契约j01j08-实现与边界)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖，第十条约束是这条原则的具体落实。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
 9. **后台同步器代替不再轮询的调用方推进 job。** `httpapi/jobsync.go` 的 `jobSyncer` 周期性向每个非终态 job 的节点问一次状态，实现在 `jobStore.dueForSync`/`syncSucceeded`/`syncFailed` 上；没有它，一次没人继续轮询、也没人挂着 SSE 的运行会永远停在最后被观测到的状态，即便后端早已跑完。它在三个维度上同时有界：`SyncBatchSize`（默认 200）限定一轮问多少个 job，`SyncConcurrency`（默认 8）限定同时问多少个，`SyncCallTimeout`（默认 10s）限定单次询问能挂多久；一轮必须跑完才安排下一轮的计时器（默认间隔 `SyncInterval` 5s），因此从不重叠、慢一轮只会推迟下一轮而不会堆积。节点消失时 `NodeRuntime.snapshot` 返回 `*runtime.RuntimeError{Code: ErrorConnection}`，这是预期内的失败，不当错误记日志、也不改 job 状态——README「state 是最后观测状态」在这里必须继续成立，一个节点短暂不可达不是运行本身发生变化的证据；连续失败会按 `syncFailures` 翻倍退避（上限 `SyncMaxBackoff`，默认 5 分钟），一个持续消失的节点因此被越问越少，而不是每轮都问。任何一次前台观测（状态轮询或 SSE 事件，两者共用 `jobStore.update`）都会清空这份退避：既然确实有什么触达到了它，此前的惩罚期就不再成立。`Server.Close` 停止这个后台循环并等待正在进行的一轮跑完——本身已被批次、并发与超时三重限定，因此这个等待有界，main.go 在 HTTP 监听器停止、隧道被拆除之前调用它，避免对着一条正在有意关闭的隧道打出一串「node is not connected」告警。
 10. **后台持久化器把 job 记录写进控制面，且从不与推理路径同步。** `httpapi/jobpersist.go` 的 `jobPersister`（STATUS.md 的 J05）在 `submitRun`、`jobStatus` 轮询与 SSE 终态写入这三处观测点之后被非阻塞地 `nudge()` 提醒，但它自己的写入永远在另一个协程里进行——202、轮询响应、SSE 帧都在持久化调用返回之前就已经发给调用方。一个 job 需要持久化的条件是 `job.needsPersist()`：`persisted` 为 false（从未确认过 `CreateJob`），或 `persistedSeq < ObservedSeq`（已确认的落后于本副本最新的观测）；`ObservedSeq` 只在 `jobStore.update()` 里因 State 或 ErrorSummary 真正变化才自增，一次只确认同一状态的轮询不会触发一次白白的持久化写入。**结果不明时的重试只会针对同一个 job id 与同一份路由绑定再问一次控制面，绝不重新提交给节点、也绝不铸造新 job id**——`jobPersister` 结构体本身没有 `scheduler` 依赖，架构上就做不到后者，这正是 STATUS.md「结果未知时不盲目重提」在代码里的落实。批次、并发与超时的三重有界与退避机制与 `jobSyncer`同构，但用独立的 `persistFailures`/`nextPersistAt` 记账：控制面不可达与节点不可达是两个互不相关的故障域，合用一套退避会让一处故障拖住另一处本该继续的重试。`dueForPersist` 刻意不排除终态 job——一次运行的最终状态恰恰是最不该丢失的记录，也是 `jobSyncer` 自己的轮询在 job 到达终态那一刻起就不再覆盖的情形。**这是尽力而为的旁路，不是可靠队列**：重试状态存在 `jobStore` 自己的记账里，与内存 job 表其余部分同样在进程重启时丢失、同样受 `DefaultMaxJobs` 逐出上限约束——一个还没来得及持久化就被逐出的 job，这次持久化机会随之消失，这是已知且如实记录的限制，不是靠着承诺"不会丢"蒙混过去的隐患。
 11. **后台恢复器在重启后找回非终态 job 的路由绑定，且从不发明结果。** `httpapi/jobrecover.go` 的 `jobRecoverer`（STATUS.md 的 J06）周期性地就 `scheduler.WorkflowCapableCandidates()` 报告的每一个当前已连接节点/runtime，向控制面问一句「我欠这个路由绑定什么」（`JobRecoveryClient.ListActiveJobsForRoute`），并用 `jobStore.recoverIfMissing` 把本副本尚不知道的 job 补回内存表——这正是重启后 `job.Candidate`（节点/运行时标识）与 `job.RunID`（后端运行标识）失而复得的地方，且从不序列化任何连接对象：`NodeRuntime` 本就在每次调用时重新按 (nodeID, runtimeID) 解析节点（见隧道那边的 `node_runtime.go`），恢复回来的 `Candidate` 不过是它一直以来的那两个字符串。恢复到的 job 会把 `ObservedSeq`/`persisted`/`persistedSeq` 播种为控制面已有的值，而不是从零开始——否则 `jobPersister` 头几次真实观测会因为本地序号"看起来更旧"而被控制面无声丢弃。**恢复的执行权刻意不是排他的**：这个节点/runtime 连接到的任何副本都可以恢复并操作同一个 job，多个副本各自独立同步或持久化同一个 job 在构造上就是安全的——控制面的 `observed_seq` 单调门槛（见 ControlPlane README「Job 持久化契约」）本就无需协调即可化解并发写入，这里没有锁要拿，因为没有什么需要锁来保护。**一个再也没有重新连接到任何副本的节点不会被当作失败处理**：本恢复器从不主动为一个够不着的 job 编造状态，该 job 只会停在最后观测到的记录上，与本 README 一贯反对"编造一个没人告诉过它的结果"的立场一致。
@@ -274,3 +274,7 @@ go test -race ./service/aiServeWeaveGateway/...
 ```
 
 `e2e` 包会真的监听回环端口、真的做 TLS 握手、真的跑 Agent 的隧道客户端。它不依赖 GPU、外部网络或真实后端——后端是脚本化的 `runtime.InferenceRuntime`，因为这个包测的是 Agent 与 Gateway 之间发生的事。
+
+## 持久化与访问的现有限制
+
+R04 对照 `httpapi/jobs.go`、`jobrecover.go` 与 `artifacts.go` 核实：公开 Job 响应尚未输出 J01 设计的 `durability` 字段；202 只表示后端提交成功，不确认落库。后台恢复仅扫描非终态 Job，下载只查本副本内存中的产物映射，不会按历史产物 ID 从控制面恢复映射。因此历史元数据可查不保证终态 Job 或原产物 ID 在重启/切换副本后仍能通过数据面访问；原节点离线也会影响文件可用性。

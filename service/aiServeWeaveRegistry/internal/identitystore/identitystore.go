@@ -103,6 +103,21 @@ type record struct {
 	// before it has ever registered — in which case Fingerprint stays empty
 	// until, if ever, it is enabled again and does register.
 	Disabled bool `json:"disabled,omitempty"`
+	// PendingApproval marks a node_id as having attempted registration with
+	// an unbound bootstrap token without an operator's prior approval
+	// (STATUS.md's P01): Register refuses to sign a certificate for it. The
+	// field is named for its blocking value rather than its opposite so a
+	// ledger file written before this field existed decodes every prior
+	// record as approved (Go's zero value for a missing bool is false) —
+	// nodes that registered before P01 shipped keep working without a
+	// migration step.
+	PendingApproval bool `json:"pending_approval,omitempty"`
+	// Maintenance marks a node_id as under operator-forced maintenance
+	// (STATUS.md's P01): the Registry broadcasts it to every joined Gateway
+	// replica the same way Disabled is, but it does not revoke the node_id's
+	// identity — a replica stops assigning new work to it without closing
+	// its existing Control stream.
+	Maintenance bool `json:"maintenance,omitempty"`
 }
 
 // fileMode matches tokenstore's: this file is not a secret, but there is no
@@ -152,10 +167,20 @@ func Open(path string) (*Store, error) {
 // bootstrap token — see identity.go's Register for why that ordering is
 // deliberate.
 //
+// A record with no fingerprint yet is treated the same as no record at all:
+// Disable and Approve both create a record administratively, before a
+// node_id has ever registered, and leave Fingerprint empty — the first real
+// registration must bind it, not be refused as conflicting with an empty
+// string nobody ever proved they hold.
+//
 // Reserve 检查 nodeID 相对于账本的状态，除非发生冲突，否则把 fingerprint
 // 记录为它当前的绑定。Register 在签发已经准备就绪、只差把响应交回去之前调用
 // 本方法，因此一次冲突不会让调用方额外损失什么——它在到这一步之前已经花掉的
 // 只是那个引导令牌；为什么这个调用顺序是刻意的，见 identity.go 的 Register。
+//
+// 一条尚无指纹的记录，与完全没有记录同等对待：Disable 与 Approve 都会在一个
+// node_id 从未注册过的情况下管理性地创建记录，且把 Fingerprint 留空——第一次
+// 真正的注册必须绑定它，而不应被当作与一个从没人证明持有过的空字符串冲突而拒绝。
 func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -167,6 +192,16 @@ func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, err
 		}
 		if err := s.persistLocked(); err != nil {
 			delete(s.records, nodeID)
+			return 0, err
+		}
+		return OutcomeNew, nil
+	}
+	if r.Fingerprint == "" {
+		prevFingerprint, prevSeen := r.Fingerprint, r.LastSeenAt
+		r.Fingerprint = fingerprint
+		r.LastSeenAt = now
+		if err := s.persistLocked(); err != nil {
+			r.Fingerprint, r.LastSeenAt = prevFingerprint, prevSeen
 			return 0, err
 		}
 		return OutcomeNew, nil
@@ -290,6 +325,182 @@ func (s *Store) DisabledNodeIDs() []string {
 		}
 	}
 	return ids
+}
+
+// IsPending reports whether nodeID is currently blocked on operator approval
+// (STATUS.md's P01). A node_id with no record at all is not pending in the
+// sense this method answers — RecordPending is what Register calls to create
+// that record in the first place, so a caller deciding whether to refuse
+// Register checks the absence of a record and this method together.
+func (s *Store) IsPending(nodeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[nodeID]
+	return ok && r.PendingApproval
+}
+
+// HasRecord reports whether nodeID has any ledger entry at all. Register
+// uses it alongside IsPending: a node_id that has never been seen before is
+// exactly as unapproved as one explicitly marked pending, since approval
+// (Approve) always creates a record the same way Disable does.
+func (s *Store) HasRecord(nodeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.records[nodeID]
+	return ok
+}
+
+// RecordPending upserts nodeID's ledger entry as pending approval, so an
+// operator reviewing the pending queue (ListNodeStates) can see the attempt.
+// It deliberately does not touch Fingerprint: the Agent generates a fresh
+// key on every bootstrap attempt (tunnel.IdentityManager.bootstrap), so
+// binding the CSR's fingerprint here would make the retry that follows
+// approval collide with it as a conflict (Reserve) instead of succeeding —
+// exactly the retry this gate exists to eventually let through. It does not
+// clear an existing Disabled or Maintenance flag either: those are
+// independent facets Register's caller already checks before ever reaching
+// the approval gate.
+func (s *Store) RecordPending(nodeID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.records[nodeID]
+	if !ok {
+		r = &record{NodeID: nodeID, FirstSeenAt: now}
+		s.records[nodeID] = r
+	}
+	prevPending, prevSeen := r.PendingApproval, r.LastSeenAt
+	r.PendingApproval = true
+	r.LastSeenAt = now
+	if err := s.persistLocked(); err != nil {
+		if !ok {
+			delete(s.records, nodeID)
+		} else {
+			r.PendingApproval, r.LastSeenAt = prevPending, prevSeen
+		}
+		return err
+	}
+	return nil
+}
+
+// Approve clears nodeID's pending-approval mark, creating a record for it if
+// none exists yet — an operator may approve a node_id before it has ever
+// attempted to register, the same way Disable may pre-emptively revoke one.
+// Approving a node_id that is not currently pending, including one with no
+// record at all, is not an error.
+func (s *Store) Approve(nodeID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.records[nodeID]
+	if !ok {
+		r = &record{NodeID: nodeID, FirstSeenAt: now}
+		s.records[nodeID] = r
+	}
+	prevPending, prevSeen := r.PendingApproval, r.LastSeenAt
+	r.PendingApproval = false
+	r.LastSeenAt = now
+	if err := s.persistLocked(); err != nil {
+		if !ok {
+			delete(s.records, nodeID)
+		} else {
+			r.PendingApproval, r.LastSeenAt = prevPending, prevSeen
+		}
+		return err
+	}
+	return nil
+}
+
+// SetMaintenance marks nodeID under operator-forced maintenance
+// (STATUS.md's P01), creating a record for it if none exists yet. Setting
+// maintenance on a node_id that is already under it is not an error.
+func (s *Store) SetMaintenance(nodeID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.records[nodeID]
+	if !ok {
+		r = &record{NodeID: nodeID, FirstSeenAt: now}
+		s.records[nodeID] = r
+	}
+	prevMaintenance, prevSeen := r.Maintenance, r.LastSeenAt
+	r.Maintenance = true
+	r.LastSeenAt = now
+	if err := s.persistLocked(); err != nil {
+		if !ok {
+			delete(s.records, nodeID)
+		} else {
+			r.Maintenance, r.LastSeenAt = prevMaintenance, prevSeen
+		}
+		return err
+	}
+	return nil
+}
+
+// ClearMaintenance clears a prior SetMaintenance. Clearing maintenance on a
+// node_id that is not currently under it, including one with no record at
+// all, is not an error.
+func (s *Store) ClearMaintenance(nodeID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.records[nodeID]
+	if !ok || !r.Maintenance {
+		return nil
+	}
+	prevSeen := r.LastSeenAt
+	r.Maintenance = false
+	r.LastSeenAt = now
+	if err := s.persistLocked(); err != nil {
+		r.Maintenance, r.LastSeenAt = true, prevSeen
+		return err
+	}
+	return nil
+}
+
+// MaintenanceNodeIDs returns every node_id currently under maintenance, in no
+// particular order, the same way DisabledNodeIDs does for disabled node_ids.
+func (s *Store) MaintenanceNodeIDs() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ids := make([]string, 0)
+	for id, r := range s.records {
+		if r.Maintenance {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// State is one node_id's ledger entry as States reports it — the same shape
+// TokenAdmin.ListNodeStates exposes over the wire, kept in this package so
+// registryserver does not have to reach into record's unexported fields.
+type State struct {
+	NodeID          string
+	PendingApproval bool
+	Disabled        bool
+	Maintenance     bool
+	FirstSeenAt     time.Time
+	LastSeenAt      time.Time
+}
+
+// States returns every node_id the ledger has an opinion about, in no
+// particular order.
+func (s *Store) States() []State {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	states := make([]State, 0, len(s.records))
+	for _, r := range s.records {
+		states = append(states, State{
+			NodeID:          r.NodeID,
+			PendingApproval: r.PendingApproval,
+			Disabled:        r.Disabled,
+			Maintenance:     r.Maintenance,
+			FirstSeenAt:     r.FirstSeenAt,
+			LastSeenAt:      r.LastSeenAt,
+		})
+	}
+	return states
 }
 
 // persistLocked writes every record to s.path atomically. Callers must hold

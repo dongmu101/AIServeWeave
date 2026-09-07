@@ -204,6 +204,13 @@ type NodeIdentityClient interface {
 	// Register exchanges a one-time bootstrap token for a node certificate.
 	// This is the only method in the whole contract that does not require a
 	// client certificate.
+	//
+	// A node_id first presented with an unbound bootstrap token, and not
+	// already approved by an operator (TokenAdmin.ApproveNode, STATUS.md's
+	// P01), is refused: the identity ledger records the attempt as pending
+	// approval instead of signing a certificate. A node_id presented with a
+	// node_id-bound token skips this gate — minting that token is itself the
+	// approval.
 	Register(ctx context.Context, in *RegisterRequest, opts ...grpc.CallOption) (*RegisterResponse, error)
 	// RenewCertificate rotates a node certificate and requires the current
 	// certificate to still be valid.
@@ -250,6 +257,13 @@ type NodeIdentityServer interface {
 	// Register exchanges a one-time bootstrap token for a node certificate.
 	// This is the only method in the whole contract that does not require a
 	// client certificate.
+	//
+	// A node_id first presented with an unbound bootstrap token, and not
+	// already approved by an operator (TokenAdmin.ApproveNode, STATUS.md's
+	// P01), is refused: the identity ledger records the attempt as pending
+	// approval instead of signing a certificate. A node_id presented with a
+	// node_id-bound token skips this gate — minting that token is itself the
+	// approval.
 	Register(context.Context, *RegisterRequest) (*RegisterResponse, error)
 	// RenewCertificate rotates a node certificate and requires the current
 	// certificate to still be valid.
@@ -470,10 +484,14 @@ var GatewayDirectory_ServiceDesc = grpc.ServiceDesc{
 }
 
 const (
-	TokenAdmin_MintToken_FullMethodName   = "/tunnel.v1.TokenAdmin/MintToken"
-	TokenAdmin_RevokeToken_FullMethodName = "/tunnel.v1.TokenAdmin/RevokeToken"
-	TokenAdmin_DisableNode_FullMethodName = "/tunnel.v1.TokenAdmin/DisableNode"
-	TokenAdmin_EnableNode_FullMethodName  = "/tunnel.v1.TokenAdmin/EnableNode"
+	TokenAdmin_MintToken_FullMethodName        = "/tunnel.v1.TokenAdmin/MintToken"
+	TokenAdmin_RevokeToken_FullMethodName      = "/tunnel.v1.TokenAdmin/RevokeToken"
+	TokenAdmin_DisableNode_FullMethodName      = "/tunnel.v1.TokenAdmin/DisableNode"
+	TokenAdmin_EnableNode_FullMethodName       = "/tunnel.v1.TokenAdmin/EnableNode"
+	TokenAdmin_ApproveNode_FullMethodName      = "/tunnel.v1.TokenAdmin/ApproveNode"
+	TokenAdmin_SetMaintenance_FullMethodName   = "/tunnel.v1.TokenAdmin/SetMaintenance"
+	TokenAdmin_ClearMaintenance_FullMethodName = "/tunnel.v1.TokenAdmin/ClearMaintenance"
+	TokenAdmin_ListNodeStates_FullMethodName   = "/tunnel.v1.TokenAdmin/ListNodeStates"
 )
 
 // TokenAdminClient is the client API for TokenAdmin service.
@@ -517,6 +535,30 @@ type TokenAdminClient interface {
 	// EnableNode clears a prior DisableNode. Enabling a node_id that is not
 	// currently disabled is not an error.
 	EnableNode(ctx context.Context, in *EnableNodeRequest, opts ...grpc.CallOption) (*EnableNodeResponse, error)
+	// ApproveNode clears a node_id's pending-approval mark (STATUS.md's P01),
+	// creating a record for it if none exists yet — an operator may approve a
+	// node_id before it has ever registered, the same way DisableNode may
+	// pre-emptively revoke one. It has no effect on a node_id registered via a
+	// node_id-bound bootstrap token: minting that token is itself the approval
+	// (see MintToken), so such a node_id is never marked pending in the first
+	// place.
+	ApproveNode(ctx context.Context, in *ApproveNodeRequest, opts ...grpc.CallOption) (*ApproveNodeResponse, error)
+	// SetMaintenance marks a node_id as under operator-forced maintenance
+	// (STATUS.md's P01): the Registry pushes the updated set to every joined
+	// Gateway replica on GatewayRoster, and a replica stops assigning new work
+	// to that node_id without closing its existing Control stream or
+	// interrupting in-flight requests — unlike DisableNode, this is not an
+	// identity revocation. Setting maintenance on a node_id that is already
+	// under maintenance is not an error.
+	SetMaintenance(ctx context.Context, in *SetMaintenanceRequest, opts ...grpc.CallOption) (*SetMaintenanceResponse, error)
+	// ClearMaintenance clears a prior SetMaintenance. Clearing maintenance on a
+	// node_id that is not currently under it is not an error.
+	ClearMaintenance(ctx context.Context, in *ClearMaintenanceRequest, opts ...grpc.CallOption) (*ClearMaintenanceResponse, error)
+	// ListNodeStates reports every node_id the identity ledger has an opinion
+	// about — pending approval, disabled, or under maintenance — so a caller
+	// building an operator console can render "expected state" without this
+	// service exposing its on-disk ledger format directly.
+	ListNodeStates(ctx context.Context, in *ListNodeStatesRequest, opts ...grpc.CallOption) (*ListNodeStatesResponse, error)
 }
 
 type tokenAdminClient struct {
@@ -567,6 +609,46 @@ func (c *tokenAdminClient) EnableNode(ctx context.Context, in *EnableNodeRequest
 	return out, nil
 }
 
+func (c *tokenAdminClient) ApproveNode(ctx context.Context, in *ApproveNodeRequest, opts ...grpc.CallOption) (*ApproveNodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ApproveNodeResponse)
+	err := c.cc.Invoke(ctx, TokenAdmin_ApproveNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenAdminClient) SetMaintenance(ctx context.Context, in *SetMaintenanceRequest, opts ...grpc.CallOption) (*SetMaintenanceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(SetMaintenanceResponse)
+	err := c.cc.Invoke(ctx, TokenAdmin_SetMaintenance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenAdminClient) ClearMaintenance(ctx context.Context, in *ClearMaintenanceRequest, opts ...grpc.CallOption) (*ClearMaintenanceResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClearMaintenanceResponse)
+	err := c.cc.Invoke(ctx, TokenAdmin_ClearMaintenance_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenAdminClient) ListNodeStates(ctx context.Context, in *ListNodeStatesRequest, opts ...grpc.CallOption) (*ListNodeStatesResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListNodeStatesResponse)
+	err := c.cc.Invoke(ctx, TokenAdmin_ListNodeStates_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TokenAdminServer is the server API for TokenAdmin service.
 // All implementations must embed UnimplementedTokenAdminServer
 // for forward compatibility.
@@ -608,6 +690,30 @@ type TokenAdminServer interface {
 	// EnableNode clears a prior DisableNode. Enabling a node_id that is not
 	// currently disabled is not an error.
 	EnableNode(context.Context, *EnableNodeRequest) (*EnableNodeResponse, error)
+	// ApproveNode clears a node_id's pending-approval mark (STATUS.md's P01),
+	// creating a record for it if none exists yet — an operator may approve a
+	// node_id before it has ever registered, the same way DisableNode may
+	// pre-emptively revoke one. It has no effect on a node_id registered via a
+	// node_id-bound bootstrap token: minting that token is itself the approval
+	// (see MintToken), so such a node_id is never marked pending in the first
+	// place.
+	ApproveNode(context.Context, *ApproveNodeRequest) (*ApproveNodeResponse, error)
+	// SetMaintenance marks a node_id as under operator-forced maintenance
+	// (STATUS.md's P01): the Registry pushes the updated set to every joined
+	// Gateway replica on GatewayRoster, and a replica stops assigning new work
+	// to that node_id without closing its existing Control stream or
+	// interrupting in-flight requests — unlike DisableNode, this is not an
+	// identity revocation. Setting maintenance on a node_id that is already
+	// under maintenance is not an error.
+	SetMaintenance(context.Context, *SetMaintenanceRequest) (*SetMaintenanceResponse, error)
+	// ClearMaintenance clears a prior SetMaintenance. Clearing maintenance on a
+	// node_id that is not currently under it is not an error.
+	ClearMaintenance(context.Context, *ClearMaintenanceRequest) (*ClearMaintenanceResponse, error)
+	// ListNodeStates reports every node_id the identity ledger has an opinion
+	// about — pending approval, disabled, or under maintenance — so a caller
+	// building an operator console can render "expected state" without this
+	// service exposing its on-disk ledger format directly.
+	ListNodeStates(context.Context, *ListNodeStatesRequest) (*ListNodeStatesResponse, error)
 	mustEmbedUnimplementedTokenAdminServer()
 }
 
@@ -629,6 +735,18 @@ func (UnimplementedTokenAdminServer) DisableNode(context.Context, *DisableNodeRe
 }
 func (UnimplementedTokenAdminServer) EnableNode(context.Context, *EnableNodeRequest) (*EnableNodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnableNode not implemented")
+}
+func (UnimplementedTokenAdminServer) ApproveNode(context.Context, *ApproveNodeRequest) (*ApproveNodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ApproveNode not implemented")
+}
+func (UnimplementedTokenAdminServer) SetMaintenance(context.Context, *SetMaintenanceRequest) (*SetMaintenanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method SetMaintenance not implemented")
+}
+func (UnimplementedTokenAdminServer) ClearMaintenance(context.Context, *ClearMaintenanceRequest) (*ClearMaintenanceResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ClearMaintenance not implemented")
+}
+func (UnimplementedTokenAdminServer) ListNodeStates(context.Context, *ListNodeStatesRequest) (*ListNodeStatesResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListNodeStates not implemented")
 }
 func (UnimplementedTokenAdminServer) mustEmbedUnimplementedTokenAdminServer() {}
 func (UnimplementedTokenAdminServer) testEmbeddedByValue()                    {}
@@ -723,6 +841,78 @@ func _TokenAdmin_EnableNode_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TokenAdmin_ApproveNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ApproveNodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenAdminServer).ApproveNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TokenAdmin_ApproveNode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenAdminServer).ApproveNode(ctx, req.(*ApproveNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenAdmin_SetMaintenance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(SetMaintenanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenAdminServer).SetMaintenance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TokenAdmin_SetMaintenance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenAdminServer).SetMaintenance(ctx, req.(*SetMaintenanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenAdmin_ClearMaintenance_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ClearMaintenanceRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenAdminServer).ClearMaintenance(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TokenAdmin_ClearMaintenance_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenAdminServer).ClearMaintenance(ctx, req.(*ClearMaintenanceRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TokenAdmin_ListNodeStates_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListNodeStatesRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenAdminServer).ListNodeStates(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TokenAdmin_ListNodeStates_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenAdminServer).ListNodeStates(ctx, req.(*ListNodeStatesRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TokenAdmin_ServiceDesc is the grpc.ServiceDesc for TokenAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -745,6 +935,22 @@ var TokenAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EnableNode",
 			Handler:    _TokenAdmin_EnableNode_Handler,
+		},
+		{
+			MethodName: "ApproveNode",
+			Handler:    _TokenAdmin_ApproveNode_Handler,
+		},
+		{
+			MethodName: "SetMaintenance",
+			Handler:    _TokenAdmin_SetMaintenance_Handler,
+		},
+		{
+			MethodName: "ClearMaintenance",
+			Handler:    _TokenAdmin_ClearMaintenance_Handler,
+		},
+		{
+			MethodName: "ListNodeStates",
+			Handler:    _TokenAdmin_ListNodeStates_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

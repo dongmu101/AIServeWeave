@@ -77,6 +77,15 @@ type Node struct {
 	//
 	// Draining 表示 Agent 已宣告自己正在关闭：不再接新活，但在途请求仍在运行。
 	Draining bool `json:"draining"`
+	// Maintenance means an operator forced this node_id into maintenance via
+	// the Registry (STATUS.md's P01): no new work, but unlike Draining the
+	// node is not on its way out — its Control stream and in-flight requests
+	// are untouched, and it stays Live.
+	//
+	// Maintenance 表示运维经由 Registry 把该 node_id 强制置入维护状态
+	// （STATUS.md 的 P01）：不再接新活，但与 Draining 不同，该节点并非正在离开——
+	// 其 Control 流与在途请求都不受影响，且它依然是 Live。
+	Maintenance bool `json:"maintenance"`
 	// LastHeartbeat is absent when the node has not sent one yet. Absent is
 	// not "a long time ago", and the two must not render the same way.
 	//

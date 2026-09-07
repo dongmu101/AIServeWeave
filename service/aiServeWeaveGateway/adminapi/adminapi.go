@@ -187,6 +187,7 @@ func renderNode(info tunnelserver.NodeInfo) nodeview.Node {
 		AgentVersion:       info.AgentVersion,
 		Live:               info.Live,
 		Draining:           info.Draining,
+		Maintenance:        info.Maintenance,
 		Labels:             copyLabels(info.Labels),
 		InflightRequests:   info.InflightRequests,
 		DeclaredRuntimeIDs: append([]string(nil), info.RuntimeIDs...),

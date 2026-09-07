@@ -1,8 +1,8 @@
 # AIServeWeave Console
 
-AIServeWeave 的 Web 管理控制台，负责租户内的用户、API Key、配额和管理审计，后续扩展节点、模型、路由、工作流与可观测性页面。整体架构见 [项目 README](../../README.md)。
+AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模型目录、工作流目录和 Job 页面。整体架构见 [项目 README](../../README.md)。
 
-**当前已完成 M1–M3，以及 M4/M5 的只读部分：登录、服务端会话、受限接口转发、统一 API 客户端，用户、API Key、管理审计、租户配额、工作流菜单与当前运行六个租户页面，外加运维模式下的节点、模型与发布状态。** 节点管理、路由配置、Job 历史、指标与告警等待对应后端能力。详细任务、后端依赖与验收结果见 [STATUS.md](STATUS.md)。
+**当前已完成 M1–M3、M4 的只读 C21/C23，以及 M5 的 C25 只读目录与 C26 Job 页面。** 包括登录、服务端会话、受限接口转发、用户、API Key、审计、配额、工作流、实时 Job、持久化历史与详情，以及 Job 取消和产物预览/下载。节点管理、路由与模板发布、指标、检索和告警仍待开发；Console 尚无 Job SSE 订阅。详细边界与验收记录见 [STATUS.md](STATUS.md)。
 
 ## 技术栈
 
@@ -44,7 +44,7 @@ Console 的业务后端是 ControlPlane Admin API，调用链如下：
 浏览器 → /api/session 或 /api/admin/*（Console 的 Next.js 服务端） → ControlPlane Admin API
 ```
 
-Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责身份验证、租户隔离和业务授权。Console 不直连 Gateway 数据面、Registry、Agent、推理后端或数据库。
+Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责身份验证、租户隔离和业务授权。运维读取另走 `/api/operator/*` 与部署密钥。Job 取消与产物访问是唯一的数据面例外：浏览器调用 `/api/gateway/*`，Console 服务端使用会话 Cookie 中加密保存的租户 Gateway Key 转发；Key 不返回浏览器 JavaScript，权限未收窄，详见 [AGENTS.md](AGENTS.md#与后端的边界)。Console 不直连 Registry、Agent、推理后端或数据库。
 
 这一层的三条性质是刻意的，不是实现细节：
 
@@ -66,13 +66,15 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 机群清单 | `GET /operator/v1/nodes`、`GET /operator/v1/models` | `/console/fleet`、`/console/models` | **不是租户接口**：节点是所有租户共用的基础设施，由独立的运维密钥守卫。只读，且只在配置了运维模式的部署中存在 |
 | 工作流菜单 | `GET /admin/v1/workflows` | `/console/workflows` | 租户接口，返回模板与输入声明；**不含工作流的图**。控制面在返回前清空副本 id 与内部 endpoint |
 | 当前运行 | `GET /admin/v1/jobs` | `/console/jobs` | 租户接口，**实时视图不是历史**：网关的 Job 表在内存、有上限、每副本各自持有。不含运行位置，产物只给 id |
+| Job 历史 | `GET /admin/v1/jobs/history`、`GET /admin/v1/jobs/history/:id` | `/console/jobs/history` | MySQL 持久化快照；不依赖 Fleet；数据面下载仍受 Gateway 内存映射与原节点可达性限制 |
+| 取消与产物 | `POST /v1/jobs/{id}/cancel`、`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}` | 实时 Job 与历史详情 | Console 服务端使用租户 Key 直连 Gateway，需在 `/console/settings` 配置 |
 | 发布状态 | `GET /operator/v1/workflows` | `/console/workflows`（运维区块） | 同一份目录，保留「哪些副本注册了它、是否一致」 |
 
 三个列表端点返回 `{ "items": [...], "next_cursor": "..." }` 信封而不是裸数组：`next_cursor` 缺席表示末页，**接口不提供总数**。分页是基于 `(created_at, id)` 倒序的 keyset 游标，`limit` 默认 50、上限 200。契约细节见 [控制面 README](../aiServeWeaveControlPlane/README.md#列表分页)。
 
-API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveControlPlane/internal/types/types.go)、[路由](../aiServeWeaveControlPlane/internal/handler/routes.go) 和业务逻辑为准。当前用户与 Key 列表返回数组，吊销成功返回 `204`，错误体为 `{ "error": "..." }`。
+API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveControlPlane/internal/types/types.go)、[路由](../aiServeWeaveControlPlane/internal/handler/routes.go) 和业务逻辑为准。用户、Key 与审计列表均返回上述分页信封，吊销成功返回 `204`，错误体为 `{ "error": "..." }`。
 
-节点、模型、路由、工作流与监控页面需要控制面补齐对应 Admin API。Gateway 已有推理和 Job API，并不代表这些功能已经具备 Console 管理入口；具体依赖见 [STATUS.md](STATUS.md)。
+节点和模型只读目录、工作流与 Job 页面已有接口；节点管理、路由/模板发布与监控仍需补齐管理 API。Gateway 已有推理和 Job API，并不代表这些功能已经具备 Console 管理入口；具体依赖见 [STATUS.md](STATUS.md)。
 
 ### 准备后端联调环境
 
@@ -118,7 +120,11 @@ app/console/quota/   租户资料与配额读写
 app/console/fleet/   机群节点（运维模式）
 app/console/models/  模型与部署目录（运维模式）
 app/console/workflows/ 工作流菜单（租户）+ 副本一致性（运维模式）
-app/console/jobs/    当前运行（租户，实时视图而非历史）
+app/console/jobs/    当前运行（租户，实时视图）
+app/console/jobs/history/ 持久化历史与详情、图片/视频产物预览
+app/console/settings/ 租户 Gateway Key 设置
+app/api/gateway-key/ Gateway Key 的会话内加密保存与清除
+app/api/gateway/     Job 取消、产物列举与流式下载
 app/api/session/     登录与退出：唯一取得控制面令牌的地方
 app/api/admin/       受白名单限制的 Admin API 转发入口（租户会话）
 app/api/operator/    受白名单限制的机群清单转发入口（部署密钥）

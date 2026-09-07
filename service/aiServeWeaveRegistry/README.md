@@ -9,7 +9,7 @@
 | `internal/ca` | 已实现 | Registry 自己的证书颁发机构：加载或生成根证书、签发节点证书与 Registry 自己的服务端证书 |
 | `internal/tokenstore` | 已实现 | 一次性 bootstrap token 的存储：铸造（含可选 node_id 绑定）、消费、撤销、过期与重放校验 |
 | `internal/identitystore` | 已实现 | `node_id` 唯一性账本（S01）：记录每个 `node_id` 最近绑定的公钥指纹，供 `Register` 分辨新注册、无害重连与身份冲突；S02 之后，一枚 node_id 绑定的令牌可以让 `Register` 跳过冲突检查，直接覆盖账本；S03 之后同一条记录还携带禁用标记，供 `Disable`/`Enable`/`IsDisabled`/`DisabledNodeIDs` 使用 |
-| `internal/registryserver` | 已实现 | `NodeIdentity`（`Register`/`RenewCertificate`）、`GatewayDirectory`（`Join`，S03 起需要 `-gateway-token-file` 认证）与 `TokenAdmin`（`MintToken`/`RevokeToken`/`DisableNode`/`EnableNode`）三个 gRPC 服务的实现 |
+| `internal/registryserver` | 已实现 | `NodeIdentity`（`Register`/`RenewCertificate`）、`GatewayDirectory`（`Join`，配置 `-gateway-token-file` 时要求认证，留空仍未认证）与 `TokenAdmin`（`MintToken`/`RevokeToken`/`DisableNode`/`EnableNode`）三个 gRPC 服务的实现 |
 | `main.go` | 已实现 | 装配 gRPC 监听 + `-mint-token`/`-revoke-token`/`-disable-node`/`-enable-node`（`TokenAdmin` 的 gRPC 客户端）CLI 工具 |
 
 ## 证书与 token 存放在哪
@@ -20,6 +20,7 @@
 <data-dir>/ca/ca-key.pem     根私钥，0600，永不出这台机器
 <data-dir>/ca/ca-cert.pem    根证书，0644，就是 Agent/Gateway 配置里要用的 CA bundle
 <data-dir>/tokens.json       bootstrap token 的一次性使用记录，0600
+<data-dir>/identities.json   node_id 公钥绑定与禁用状态，0600
 ```
 
 根证书首次启动时自动生成（ECDSA P-256，10 年有效期）；之后每次启动直接加载同一份。节点证书由 `internal/ca.CA.Sign` 签发，`URIs` 携带 `aiserveweave://node/<node_id>` SAN（`common/nodeid.URI`），`ExtKeyUsageClientAuth`，30 天有效期——这个签发逻辑照抄自 `tunnel/identity_test.go` 里 `fakeRegistry` 的做法，因为那段代码本来就是"Registry 该怎么签"的规范说明；`internal/registryserver` 的测试直接把 `tunnel.IdentityManager`（Agent 的真实客户端代码）当客户端跑一遍完整流程，而不是自造一个假客户端，为的是证明这里签出来的证书确实能被 Agent 现有代码验证通过。
@@ -28,7 +29,7 @@ Registry 自己的 gRPC 监听默认也用这同一个根证书自签一张服�
 
 ## `TokenAdmin`：受控签发、撤销与 node_id 绑定（S02）
 
-顶层 README 把"控制台生成 bootstrap token"列为尚未开始的组件（`aiserveweave-console`）。在它落地之前，同一个二进制加 `-mint-token`/`-revoke-token` 标志就是发 token 与撤销 token 的方式——但两者都是对正在运行的 Registry 发起的 gRPC 调用（`tunnelv1.TokenAdmin` 服务），不是直接读写 `tokens.json`：
+Console 已有租户管理与只读机群页面，但尚无 Registry 令牌管理入口；当前同一个二进制加 `-mint-token`/`-revoke-token` 标志就是发 token 与撤销 token 的方式——但两者都是对正在运行的 Registry 发起的 gRPC 调用（`tunnelv1.TokenAdmin` 服务），不是直接读写 `tokens.json`：
 
 ```bash
 # server 进程需要先带上 -admin-token-file 才会挂载 TokenAdmin；留空则该服务不注册。
@@ -61,7 +62,7 @@ aiserveweave-registry -data-dir ./data/registry -issue-server-cert \
   -tls-host gateway,127.0.0.1 -out-dir ./certs
 ```
 
-写出 `server-cert.pem`（0644）与 `server-key.pem`（0600），`ExtKeyUsageServerAuth`，SAN 取 `-tls-host`。与 `-mint-token` 一样是 CLI 模式而不是 RPC，理由相同：这是部署时执行一次的运维动作，执行者本来就对 CA 有文件系统访问权。`deploy/docker-compose.yaml` 的 `registry-init` 就是这条命令。
+写出 `server-cert.pem`（0644）与 `server-key.pem`（0600），`ExtKeyUsageServerAuth`，SAN 取 `-tls-host`。这条命令直接访问本地 CA 文件，不走 RPC；`-mint-token`/`-revoke-token` 则是 RPC 客户端。区别在于：这是部署时执行一次的运维动作，执行者本来就对 CA 有文件系统访问权。`deploy/docker-compose.yaml` 的 `registry-init` 就是这条命令。
 
 ## `GatewayDirectory`：Gateway 副本怎么拿到名册
 
@@ -101,7 +102,7 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 ## `node_id` 唯一性（S01）
 
-`Register` 在签发证书之后、把响应交回去之前，会把这次 CSR 携带的公钥指纹（`internal/identitystore.Fingerprint`：DER 编码 `SubjectPublicKeyInfo` 的 SHA-256）与 `internal/identitystore.Store` 账本里 `node_id` 上次绑定的指纹比对，得到三种结果之一：
+`Register` 在签发证书之后、把响应交回去之前，会把这次 CSR 携带的公钥指纹（`internal/identitystore.Fingerprint`：DER 编码 `SubjectPublicKeyInfo` 的 SHA-256）与 `internal/identitystore.Store` 账本里 `node_id` 上次绑定的指纹比对，得到以下结果之一：
 
 - **`node_id` 从未出现过。** 记录这次的指纹，正常签发——与此前行为一致。
 - **`node_id` 已在案，指纹相同。** 判定为无害的重连（多半是节点从未把上一次签发的证书落盘），照常签发；日志用 `first_registration=false` 与首次注册区分。
@@ -118,7 +119,7 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 ## 已知限制 / 下一步
 
-- **单实例假设。** bootstrap token 的一次性校验与 `node_id` 身份账本都靠本地文件 + 内存锁保证强一致，这只在只有一个 Registry 进程时成立。顶层 README 路线图把「Registry 和 Gateway 高可用」放在第三阶段，在那之前不要跑多个 Registry 实例。
+- **单实例假设。** bootstrap token 的一次性校验与 `node_id` 身份账本都靠本地文件 + 内存锁保证强一致，这只在只有一个 Registry 进程时成立。Registry 高可用仍列在根 STATUS 的 P2；Gateway 已支持多副本，不能据此运行多个共享状态目录的 Registry 实例。
 - **令牌绑定的是 node_id，不是租户。** 这是刻意的：机群是所有租户共用的基础设施，节点本身没有租户维度可言——同样的判断，见控制面 README 关于 `/operator/v1/*` 为什么不放进会话守卫的说明。因此 S02 只做了 node_id 绑定（解决"重装"与"冒用"的分辨，见上文），proto 里 `bootstrap_token` 早先"tenant-bound"的注释已经删掉；哪些人能调用 `TokenAdmin`（今天是持有 `-admin-token-file` 里那把共享密钥的所有人）本身要不要引入租户/角色维度，属于路线图第三阶段的多租户 RBAC。
 - **`-admin-token-file`/`-gateway-token-file` 都是不区分调用者的共享密钥。** 和这两把密钥守护的其它管理面（控制面 `OperatorToken`、Gateway `adminapi`）一样，持有对应密钥的任何人都能执行该密钥授权的全部操作，没有按操作者归因的审计轨迹；引入平台级运维身份之前，这是已知且接受的缺口。
 - **Gateway↔Registry 仍是单向 mTLS。** S03 给 `Join` 加上的是应用层的共享密钥认证，不是让 Gateway 持有 Registry 签发的客户端证书；要不要升级到 mTLS，等控制面需要更强隔离时再评估。

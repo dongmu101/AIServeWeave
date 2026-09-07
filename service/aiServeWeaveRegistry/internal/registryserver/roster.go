@@ -53,11 +53,12 @@ func (s *Server) requireGatewayToken(ctx context.Context) error {
 // pointless — this file always bumps the version when the replica set or a
 // replica's state actually changes, and never otherwise.
 type rosterState struct {
-	mu       sync.Mutex
-	replicas map[string]*tunnelv1.GatewayReplica
-	revoked  map[string]struct{}
-	version  int64
-	streams  map[*joinStream]struct{}
+	mu          sync.Mutex
+	replicas    map[string]*tunnelv1.GatewayReplica
+	revoked     map[string]struct{}
+	maintenance map[string]struct{}
+	version     int64
+	streams     map[*joinStream]struct{}
 }
 
 // joinStream is one Gateway replica's open GatewayDirectory.Join call.
@@ -200,6 +201,30 @@ func (r *rosterState) setRevoked(nodeIDs []string) {
 	broadcast(roster, targets)
 }
 
+// setMaintenance replaces the maintenance node_id set and broadcasts the
+// resulting roster to every currently open stream, unless the set is
+// unchanged from what was already broadcast — the same idempotence
+// setRevoked gives DisableNode/EnableNode, here for
+// SetMaintenance/ClearMaintenance.
+func (r *rosterState) setMaintenance(nodeIDs []string) {
+	next := make(map[string]struct{}, len(nodeIDs))
+	for _, id := range nodeIDs {
+		next[id] = struct{}{}
+	}
+
+	r.mu.Lock()
+	if mapsEqual(r.maintenance, next) {
+		r.mu.Unlock()
+		return
+	}
+	r.maintenance = next
+	r.version++
+	roster, targets := r.snapshotLocked()
+	r.mu.Unlock()
+
+	broadcast(roster, targets)
+}
+
 // mapsEqual reports whether two sets of node_ids hold the same members.
 func mapsEqual(a, b map[string]struct{}) bool {
 	if len(a) != len(b) {
@@ -224,7 +249,16 @@ func (r *rosterState) snapshotLocked() (*tunnelv1.GatewayRoster, []*joinStream) 
 	for id := range r.revoked {
 		revoked = append(revoked, id)
 	}
-	roster := &tunnelv1.GatewayRoster{Replicas: replicas, Version: r.version, RevokedNodeIds: revoked}
+	maintenance := make([]string, 0, len(r.maintenance))
+	for id := range r.maintenance {
+		maintenance = append(maintenance, id)
+	}
+	roster := &tunnelv1.GatewayRoster{
+		Replicas:           replicas,
+		Version:            r.version,
+		RevokedNodeIds:     revoked,
+		MaintenanceNodeIds: maintenance,
+	}
 	targets := make([]*joinStream, 0, len(r.streams))
 	for js := range r.streams {
 		targets = append(targets, js)
