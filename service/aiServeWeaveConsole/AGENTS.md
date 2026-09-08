@@ -81,13 +81,15 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 浏览器 → /api/session 或 /api/admin/*（Console 服务端） → ControlPlane Admin API
 ```
 
-- 浏览器**永远不持有控制面令牌**。令牌只在 [app/api/session/route.ts](app/api/session/route.ts) 取得，密封进 HttpOnly Cookie，由 [lib/server/control-plane.ts](lib/server/control-plane.ts) 在服务端附加到上游请求。新增页面不要直接 `fetch` 控制面地址。
+- 浏览器**永远不持有控制面令牌**。租户令牌在 [app/api/session/route.ts](app/api/session/route.ts) 取得，平台令牌在 `app/api/operator-session/route.ts` 取得，密封进 HttpOnly Cookie，由 [lib/server/control-plane.ts](lib/server/control-plane.ts) 在服务端附加到上游请求。新增页面不要直接 `fetch` 控制面地址。
 - `/api/admin/*` 不是代理：能转发什么由 [lib/console/upstream-routes.ts](lib/console/upstream-routes.ts) 的白名单决定，含方法、路径与允许透传的查询参数。**新增一个 Admin API 调用 = 往那张表加一行并补测试**，不加就是 404。
 - 写操作走 [lib/console/request-origin.ts](lib/console/request-origin.ts) 的同源校验（CSRF 防护是 SameSite=Lax + Origin 检查，不是 token）。部署时反向代理必须原样透传 `Host`。
 - 会话 Cookie 由 [lib/console/session-payload.ts](lib/console/session-payload.ts) 用 AES-256-GCM 密封。**不要从浏览器可改的值里读角色**：Admin API 授权由控制面执行；运维入口由服务端运维名单限制，Gateway 例外入口还须检查可信会话/角色，并由 Gateway 校验租户 Key。
 - 响应契约在 [lib/console/contract.ts](lib/console/contract.ts) 里对着 `internal/types/types.go` 手写校验，控制面改字段时同步改这里并补测试。上游错误文本一律不渲染，界面文案由 [lib/console/errors.ts](lib/console/errors.ts) 按状态码固定。
 - 读请求可重试（上限 3 次），**写请求绝不自动重试**：重发一次创建 Key 会铸出第二个凭据。
 - 服务端读取请求体一律走 `lib/server/responses.ts` 的 `readBoundedText`，它**在读取过程中**计数并在超限时取消流。不要改用 `request.text()` 再判断长度：那样上限只是一份读完之后的报告，不带 `Content-Length` 的分块请求可以先把任意大小塞进内存。
-- 工作流菜单与运行是**租户**页面（`/api/admin/*`），机群与发布状态是**运维**页面。同一个 `/console/workflows` 同时用到两者：菜单人人可见，副本一致性区块只在服务端判定为运维时才发起第二次请求。
-- 运维页面（节点、模型、发布状态）走的是**第二个入口** `/api/operator/*`，用部署密钥而不是租户会话转发，白名单在同一文件的 `OPERATOR_ROUTES` 里。客户端请求必须写 `surface: "operator"`，否则会被当作租户调用发到 `/api/admin` 并得到 404。谁能看到这些页面由 `lib/server/operator.ts` 决定——那是一处已知缺口，理由写在该文件里。
+- 工作流菜单与运行是**租户**页面（`/api/admin/*`），机群与发布状态是**运维**页面。租户菜单在 `/console/workflows`，副本发布状态在独立的 `/operator/workflows`；租户页面不发起平台请求。
+- 运维页面位于 `/operator/*`，由独立平台会话守卫，入口 `/api/operator/*` 仅读取 `aisw_operator_session` Cookie，使用平台 JWT 转发。白名单仍在 `OPERATOR_ROUTES`，客户端必须指定 `surface: "operator"`；不再使用共享运维 token 或邮箱名单。平台与租户 Cookie 的名称、载荷和加密用途隔离，任一退出/401 只清除对应 Cookie。新增节点写操作须同源校验、有界请求体，禁止自动重试。
 - 三个列表端点返回 `{items, next_cursor}` 信封，分页是 keyset 游标，接口**没有总数**。游标只放组件状态，URL 里只同步筛选条件（`components/console/use-url-filters.ts`），且不放能标识个人的输入。翻页历史有上界（`lib/console/paging.ts`），一页替换上一页而不是追加。
+
+平台会话实现位于 `lib/console/operator-session.ts` 与 `lib/server/operator-session.ts`，AES-256-GCM 使用独立 HKDF 用途与认证版本。平台审计 `/operator/v1/audit` 与租户审计使用不同会话范围。平台账户由部署管理员经 BootstrapToken 引导创建，不提供浏览器引导注册入口。

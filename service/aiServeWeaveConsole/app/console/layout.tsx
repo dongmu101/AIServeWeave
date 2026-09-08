@@ -2,7 +2,6 @@ import type * as React from "react";
 import { redirect } from "next/navigation";
 
 import { ConsoleShell } from "@/app/console/console-shell";
-import { operatorAccess } from "@/lib/server/operator";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -33,16 +32,8 @@ export default async function ConsoleLayout({
     redirect("/login");
   }
 
-  // Whether the operator pages exist for this person is decided here, on the
-  // server, and passed down as a fact. A client component that worked it out
-  // for itself would need the allowlist in the browser, and a menu item is not
-  // worth shipping a deployment's operator roster to every tenant user.
-  //
-  // 运维页面对这个人是否存在，在这里、在服务端决定，并作为一个事实向下传递。若由客户端
-  // 组件自行判断，就得把名单送进浏览器，而一个菜单项不值得把某个部署的运维名录发给每一
-  // 个租户用户。
   return (
-    <ConsoleShell user={session.user} operator={operatorAccess(session.user).allowed}>
+    <ConsoleShell user={session.user}>
       {children}
     </ConsoleShell>
   );

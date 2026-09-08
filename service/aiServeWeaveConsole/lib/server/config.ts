@@ -49,19 +49,7 @@ export interface ServerConfig {
    * Console 走的是明文 HTTP。 */
   cookieSecure: boolean;
   timeoutMs: number;
-  /** operatorToken authenticates this Console to the control plane's fleet
-   * endpoints. Empty means this deployment is not an operations console, and
-   * the fleet pages do not exist in it.
-   *
-   * operatorToken 用于本 Console 向控制面的机群端点表明身份。为空表示本部署不是运维
-   * 控制台，机群页面在其中根本不存在。 */
-  operatorToken: string;
-  /** operatorEmails are the people who may use that token, lowercased. An
-   * empty list grants nobody — see lib/server/operator.
-   *
-   * operatorEmails 是可以使用那个 token 的人，已转小写。空列表不授予任何人
-   * —— 见 lib/server/operator。 */
-  operatorEmails: readonly string[];
+
 }
 
 /** cached holds the resolved configuration for the life of the process.
@@ -99,8 +87,6 @@ export function serverConfig(): ServerConfig {
       process.env.AISW_CONSOLE_UPSTREAM_TIMEOUT_MS,
       DEFAULT_TIMEOUT_MS
     ),
-    operatorToken: process.env.AISW_CONSOLE_OPERATOR_TOKEN?.trim() ?? "",
-    operatorEmails: emailList(process.env.AISW_CONSOLE_OPERATOR_EMAILS),
   };
   return cached;
 }
@@ -192,21 +178,6 @@ function sessionSecret(): string {
     "[console] AISW_CONSOLE_SESSION_SECRET is unset; using an ephemeral development secret. Sessions end when this process restarts."
   );
   return crypto.randomUUID() + crypto.randomUUID();
-}
-
-/**
- * emailList reads the operator allowlist. Values are lowercased and trimmed so
- * a list written with the casing of somebody's mail client still matches the
- * address the control plane normalized on sign-in.
- *
- * emailList 读取运维名单。取值会转小写并去空白，这样一份按某人邮件客户端的大小写写下的
- * 名单，依然能匹配上控制面在登录时归一化过的地址。
- */
-function emailList(raw: string | undefined): readonly string[] {
-  return (raw ?? "")
-    .split(",")
-    .map((entry) => entry.trim().toLowerCase())
-    .filter((entry) => entry !== "");
 }
 
 /** flag reads a boolean environment variable.

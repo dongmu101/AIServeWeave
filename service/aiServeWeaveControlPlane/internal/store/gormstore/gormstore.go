@@ -56,6 +56,7 @@ func (s *Store) Migrate(ctx context.Context) error {
 	return s.db.WithContext(ctx).AutoMigrate(
 		&model.Tenant{},
 		&model.User{},
+		&model.PlatformOperator{},
 		&model.APIKey{},
 		&model.AuditLog{},
 	)
@@ -144,6 +145,36 @@ func (s *Store) ListUsers(ctx context.Context, tenantID string, query store.List
 func (s *Store) MarkUserLogin(ctx context.Context, id string, at time.Time) error {
 	return translate(s.db.WithContext(ctx).
 		Model(&model.User{}).
+		Where("id = ?", id).
+		Update("last_login_at", at).Error)
+}
+
+// -----------------------------------------------------------------------
+// Platform operators (STATUS.md's P01)
+// -----------------------------------------------------------------------
+
+// CreatePlatformOperator inserts one platform operator.
+//
+// CreatePlatformOperator 插入一个平台运维账户。
+func (s *Store) CreatePlatformOperator(ctx context.Context, operator *model.PlatformOperator) error {
+	return translate(s.db.WithContext(ctx).Create(operator).Error)
+}
+
+// GetPlatformOperatorByEmail reads one platform operator by sign-in identifier.
+//
+// GetPlatformOperatorByEmail 按登录标识读取一个平台运维账户。
+func (s *Store) GetPlatformOperatorByEmail(ctx context.Context, email string) (model.PlatformOperator, error) {
+	var out model.PlatformOperator
+	err := s.db.WithContext(ctx).Where("email = ?", email).Take(&out).Error
+	return out, translate(err)
+}
+
+// MarkPlatformOperatorLogin records a successful sign-in.
+//
+// MarkPlatformOperatorLogin 记录一次成功登录。
+func (s *Store) MarkPlatformOperatorLogin(ctx context.Context, id string, at time.Time) error {
+	return translate(s.db.WithContext(ctx).
+		Model(&model.PlatformOperator{}).
 		Where("id = ?", id).
 		Update("last_login_at", at).Error)
 }

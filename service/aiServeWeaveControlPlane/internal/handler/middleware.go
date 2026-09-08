@@ -20,6 +20,7 @@ import (
 	"strings"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
@@ -53,10 +54,23 @@ func actorFrom(ctx context.Context) (logic.Actor, bool) {
 	return actor, ok
 }
 
-// requireSession verifies the caller's session token and attaches the actor it
-// asserts.
+// requireSession verifies the caller's session token and attaches the actor
+// it asserts.
+//
+// It refuses a platform operator's session (STATUS.md's P01) rather than
+// letting one through with TenantID set to model.PlatformScope: without this
+// check, a tenant-facing handler would treat "platform" as an ordinary,
+// if empty, tenant id instead of refusing the request — the wrong failure
+// mode in the opposite direction from what requirePlatformSession guards
+// against.
 //
 // requireSession 校验调用方的会话令牌，并附上它所主张的 actor。
+//
+// 它会拒绝一个平台运维的会话（STATUS.md 的 P01），而不是放行一个
+// TenantID 为 model.PlatformScope 的会话：没有这项检查，面向租户的
+// handler 会把 "platform" 当成一个普通的、只是恰好没有数据的租户 id 来处理，
+// 而不是拒绝这次请求——这是与 requirePlatformSession 所防范的方向相反的
+// 错误失效模式。
 func requireSession(ctx *svc.ServiceContext, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		presented, ok := bearerToken(r.Header.Get("Authorization"))
@@ -67,6 +81,46 @@ func requireSession(ctx *svc.ServiceContext, next http.HandlerFunc) http.Handler
 		claims, err := ctx.Issuer.Parse(presented)
 		if err != nil {
 			writeError(w, http.StatusUnauthorized, "invalid or expired session")
+			return
+		}
+		if claims.TenantID == model.PlatformScope {
+			writeError(w, http.StatusUnauthorized, "invalid or expired session")
+			return
+		}
+		actor := logic.Actor{
+			UserID:   claims.UserID,
+			TenantID: claims.TenantID,
+			Role:     claims.Role,
+			IP:       clientIP(r),
+		}
+		next(w, r.WithContext(withActor(r.Context(), actor)))
+	}
+}
+
+// requirePlatformSession verifies the caller's session token the same way
+// requireSession does, and additionally refuses one that does not assert a
+// platform operator (STATUS.md's P01) — a tenant session must not reach a
+// node-ops handler by finding the right path, and a platform session must
+// not reach a tenant handler by the same mistake in the other direction.
+//
+// requirePlatformSession 与 requireSession 一样校验调用方的会话令牌，并额外
+// 拒绝一个不主张平台运维身份的会话（STATUS.md 的 P01）——不能让租户会话
+// 靠找到正确的路径就够到节点操作 handler，反过来，也不能让平台会话以同样
+// 的失误够到租户 handler。
+func requirePlatformSession(ctx *svc.ServiceContext, next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		presented, ok := bearerToken(r.Header.Get("Authorization"))
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "missing bearer token")
+			return
+		}
+		claims, err := ctx.Issuer.Parse(presented)
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid or expired session")
+			return
+		}
+		if claims.TenantID != model.PlatformScope || claims.Role != model.RolePlatformOperator {
+			writeError(w, http.StatusForbidden, "your role does not permit this")
 			return
 		}
 		actor := logic.Actor{

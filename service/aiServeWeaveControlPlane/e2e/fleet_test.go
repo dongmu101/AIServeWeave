@@ -129,9 +129,10 @@ func TestTheOperatorSurfaceKeepsTheRollout(t *testing.T) {
 	}, nil)
 
 	h := newHarnessWith(t, []string{first, second})
+	platformSession := bootstrapPlatformOperator(h, "operator@example.com")
 
 	var catalogue fleet.Catalogue
-	if status := h.call(http.MethodGet, "/operator/v1/workflows", operatorToken, nil, &catalogue); status != http.StatusOK {
+	if status := h.call(http.MethodGet, "/operator/v1/workflows", platformSession, nil, &catalogue); status != http.StatusOK {
 		t.Fatalf("status = %d, want 200", status)
 	}
 
@@ -162,6 +163,7 @@ func TestTheFleetSurfacesRefuseEachOthersCredentials(t *testing.T) {
 	gateway := stubGateway(t, "replica-a", []workflowview.Template{{ID: "portrait", Valid: true}}, nil)
 	h := newHarnessWith(t, []string{gateway})
 	_, session := bootstrap(h, "Acme", "owner@example.com")
+	platformSession := bootstrapPlatformOperator(h, "operator@example.com")
 
 	tests := []struct {
 		name       string
@@ -170,9 +172,9 @@ func TestTheFleetSurfacesRefuseEachOthersCredentials(t *testing.T) {
 		wantStatus int
 	}{
 		{name: "a session on the tenant menu", path: "/admin/v1/workflows", token: session, wantStatus: http.StatusOK},
-		{name: "a session on the operator catalogue", path: "/operator/v1/workflows", token: session, wantStatus: http.StatusUnauthorized},
-		{name: "the operator token on the tenant menu", path: "/admin/v1/workflows", token: operatorToken, wantStatus: http.StatusUnauthorized},
-		{name: "the operator token on its own catalogue", path: "/operator/v1/workflows", token: operatorToken, wantStatus: http.StatusOK},
+		{name: "a session on the operator catalogue", path: "/operator/v1/workflows", token: session, wantStatus: http.StatusForbidden},
+		{name: "a platform session on the tenant menu", path: "/admin/v1/workflows", token: platformSession, wantStatus: http.StatusUnauthorized},
+		{name: "a platform session on its own catalogue", path: "/operator/v1/workflows", token: platformSession, wantStatus: http.StatusOK},
 		{name: "the gateway token on the operator catalogue", path: "/operator/v1/workflows", token: gatewayToken, wantStatus: http.StatusUnauthorized},
 		{name: "the internal token on the operator catalogue", path: "/operator/v1/workflows", token: internalToken, wantStatus: http.StatusUnauthorized},
 	}

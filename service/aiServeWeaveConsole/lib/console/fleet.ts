@@ -71,6 +71,7 @@ export interface FleetNode {
   agentVersion: string;
   live: boolean;
   draining: boolean;
+  maintenance: boolean;
   lastHeartbeat: string | null;
   labels: Record<string, string>;
   resources: NodeResources | null;
@@ -318,6 +319,7 @@ function parseNode(value: unknown): FleetNode {
     agentVersion: text(source, "agent_version"),
     live: flag(source, "live"),
     draining: flag(source, "draining"),
+    maintenance: typeof source.maintenance === "boolean" ? source.maintenance : fail(),
     lastHeartbeat: optionalTimestamp(source, "last_heartbeat"),
     labels: stringMap(source, "labels"),
     resources:

@@ -52,6 +52,7 @@ export interface PagedResource<T> extends Omit<Resource<Page<T>>, "data"> {
  */
 export function usePagedResource<T>(spec: {
   path: string;
+  surface?: "admin" | "operator";
   /** filters are the query parameters other than paging. Empty values are
    * dropped so an untouched filter does not become `?q=` on the wire.
    *
@@ -61,7 +62,7 @@ export function usePagedResource<T>(spec: {
   pageSize: number;
   parse: (value: unknown) => Page<T>;
 }): PagedResource<T> {
-  const filterKey = JSON.stringify(spec.filters) + `|${spec.pageSize}`;
+  const filterKey = `${spec.surface ?? "admin"}|${spec.path}|${JSON.stringify(spec.filters)}|${spec.pageSize}`;
   const [history, setHistory] = React.useState<string[]>([...INITIAL_HISTORY]);
   const [lastFilterKey, setLastFilterKey] = React.useState(filterKey);
 
@@ -81,6 +82,7 @@ export function usePagedResource<T>(spec: {
   const page = useResource<Page<T>>({
     method: "GET",
     path: spec.path,
+    surface: spec.surface,
     query,
     parse: spec.parse,
   });

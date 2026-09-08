@@ -65,7 +65,9 @@ export function useConsoleRequest() {
         return await request({ ...spec, signal });
       } catch (error) {
         if (error instanceof ApiError && error.kind === "unauthorized") {
-          router.replace(loginPath(pathname));
+          router.replace(spec.surface === "operator"
+            ? `/operator/login?next=${encodeURIComponent(pathname)}`
+            : loginPath(pathname));
         }
         throw error;
       } finally {

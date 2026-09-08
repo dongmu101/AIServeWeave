@@ -25,6 +25,7 @@ function nodeDocument(overrides: Record<string, unknown> = {}) {
     node_id: "node-a",
     agent_version: "1.2.3",
     live: true,
+    maintenance: false,
     last_heartbeat: "2026-01-01T11:59:00Z",
     labels: { zone: "rack-1" },
     resources: { cpu_cores: 32, gpu_count: 2, os: "linux", arch: "amd64" },
@@ -225,3 +226,15 @@ test("a catalog that lost its timestamp or its models is refused", () => {
     assert.throws(() => parseModelCatalog(item.value), ApiError, item.name);
   }
 });
+
+for (const maintenance of [true, false]) {
+  test(`fleet preserves observed maintenance=${maintenance}`, () => {
+    const snapshot = parseFleetSnapshot({ collected_at: "2026-01-01T12:00:00Z", replicas: [replicaDocument()], nodes: [nodeDocument({ maintenance })], partial: false });
+    assert.equal(snapshot.nodes[0]?.maintenance, maintenance);
+  });
+}
+for (const [name, maintenance] of [["missing", undefined], ["null", null], ["string", "false"], ["number", 0]] as const) {
+  test(`fleet rejects ${name} observed maintenance instead of inventing state`, () => {
+    assert.throws(() => parseFleetSnapshot({ collected_at: "2026-01-01T12:00:00Z", replicas: [replicaDocument()], nodes: [nodeDocument({ maintenance })], partial: false }), ApiError);
+  });
+}

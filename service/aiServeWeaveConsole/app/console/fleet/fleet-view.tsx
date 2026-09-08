@@ -5,6 +5,7 @@ import * as React from "react";
 import { FleetFreshness } from "@/components/console/fleet-freshness";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
 import { useResource } from "@/components/console/use-resource";
+import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -37,7 +38,9 @@ import { formatDateTime, matchesQuery } from "@/lib/console/format";
  */
 const NO_SNAPSHOT: FleetNode[] = [];
 
-export function FleetView() {
+/** FleetView renders independently refreshed Gateway observations.
+ * FleetView 渲染可独立刷新的 Gateway 观测。 */
+export function FleetView({ title = "节点" }: { title?: string }) {
   const fleet = useResource<FleetSnapshot>({
     method: "GET",
     surface: "operator",
@@ -66,12 +69,14 @@ export function FleetView() {
   return (
     <div className="grid gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">节点</h1>
+        <h1 className="font-heading text-lg font-semibold">{title}</h1>
         <p className="text-sm text-muted-foreground">
           运维视图：整个机群的节点是所有租户共用的基础设施，不属于任何一个租户。
           标签、硬件与运行时清单都是 Agent 自述的内容；平台判定的只有在线状态。
         </p>
       </div>
+
+      <Button variant="outline" className="w-fit" disabled={fleet.loading} onClick={fleet.reload}>刷新实时机群</Button>
 
       {fleet.error ? (
         <ErrorState message={fleet.error} onRetry={fleet.reload} />
@@ -129,10 +134,11 @@ function NodeCard({ node }: { node: FleetNode }) {
     <Card>
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2">
-          <code className="font-mono text-sm">{node.nodeId}</code>
+          <code className="min-w-0 break-all font-mono text-sm">{node.nodeId}</code>
           <Badge variant={node.live ? "secondary" : "outline"}>
             {node.live ? "在线" : "离线"}
           </Badge>
+          <Badge variant="outline">{node.maintenance ? "维护中（观测）" : "未维护（观测）"}</Badge>
           {node.draining ? <Badge variant="outline">正在退出</Badge> : null}
           {node.agentVersion ? (
             <span className="text-xs font-normal text-muted-foreground">
@@ -142,6 +148,7 @@ function NodeCard({ node }: { node: FleetNode }) {
         </CardTitle>
       </CardHeader>
       <CardContent className="grid gap-4">
+        <p className="text-xs text-muted-foreground">维护标记取自控制面选定的一份 Gateway 观测。聚合接口不提供每个副本的维护标记，不能据此确认所有副本已生效。</p>
         <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
           <Fact label="最近心跳" value={formatDateTime(node.lastHeartbeat, "无心跳")} />
           <Fact label="在途请求" value={String(node.inflightRequests)} />

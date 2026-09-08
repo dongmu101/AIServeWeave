@@ -110,14 +110,17 @@ go run ./service/aiServeWeaveGateway \
 
 ## 路由与守卫
 
-三组守卫就是本服务全部的授权面，都在 `internal/handler/routes.go` 一屏之内：
+这几组守卫就是本服务全部的授权面，都在 `internal/handler/routes.go` 一屏之内：
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login` |
-| 会话（JWT） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits` |
-| BootstrapToken | `POST /admin/v1/tenants` |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login` |
+| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*` |
+| 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径），见「机群清单」与「节点写路径」两节 |
+| BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`/internal/v1/jobs*`（STATUS.md 的 J04/J06，见「Job 持久化契约」一节的「已实现的内部 API」与「已实现的重启恢复」小节） |
+
+租户会话（`requireSession`）与平台会话（`requirePlatformSession`）虽然共用同一个 `token.Issuer`，却互相拒绝对方的令牌——见「平台运维身份」一节 `Claims.TenantID` 哨兵值的说明；一次路由配置失误不会让某个会话跨界生效。
 
 `GET /admin/v1/tenants/current` 返回调用方自己所属的租户及其配额，任何已登录角色都可读；`PUT /admin/v1/tenants/limits` 设置该配额，仅 owner 与 admin 可写。两者的请求里都没有租户 id：租户来自会话，因此管理员无法通过改请求体把它指向别人的租户。读写权限刻意不对称——member 无法调高限制，但一个正在被限流的 member 需要看得到是哪条限制在起作用；而能调高自己租户限制的角色，绕过限制最省事的办法就是调高它。
 
@@ -163,19 +166,50 @@ go run ./service/aiServeWeaveGateway \
 Fleet:
   Gateways: ["http://gateway-1:8091", "http://gateway-2:8091"]
   GatewayToken: "${AISW_GATEWAY_ADMIN_TOKEN}"   # 与各 Gateway 的同名变量一致
-  OperatorToken: "${AISW_OPERATOR_TOKEN}"       # 调用方向本服务出示的
   Timeout: 3s
 ```
 
-**为什么不放在会话守卫的 Admin API 上。** 节点是所有租户共用的基础设施：任何租户的请求都可能被路由到任何节点，而节点身上没有租户维度可供过滤。放进会话组，就意味着每个租户的管理员都能读到整个机群的节点 ID、标签、GPU 型号与已加载模型。因此它用自己的路径前缀与自己的密钥，无论将来角色如何调整，租户会话都够不到。
+**为什么不放在租户会话组里。** 节点是所有租户共用的基础设施：任何租户的请求都可能被路由到任何节点，而节点身上没有租户维度可供过滤。放进租户会话组，就意味着每个租户的管理员都能读到整个机群的节点 ID、标签、GPU 型号与已加载模型。因此它用自己的路径前缀，无论将来租户角色如何调整都够不到。
 
-`OperatorToken` 是第三个密钥而不是复用 `InternalToken`：两者授权的方向相反——`InternalToken` 让 Gateway 来问本服务某个 key，复用它就等于任何 Gateway 也能读到整个机群。
+**守卫是 `requirePlatformSession`，不是共享密钥（STATUS.md 的 P01）。** 此前这里还有第三把共享密钥 `Fleet.OperatorToken`（`InternalToken` 授权 Gateway 问 key，复用它会让任何 Gateway 也能读到整个机群，因此另起一把）；P01 引入平台运维身份后，这把密钥已移除——「谁能读机群」现在由一名登录的平台运维决定，且能记入审计，不再是「谁拿到了这份密钥」。升级到本版本的部署需要改为先创建平台运维账户（见下）。
 
 **聚合是局部的，且明说这一点。** 每个 Gateway 副本只知道连到它自己身上的节点，所以「有哪些节点」有 N 个局部答案、没有权威答案。本服务向全部副本并发发问并合并结果：
 
 - 同一个 Agent 连到多个副本时只出现一次；展示的视图取自「认为它在线」的那份，同等条件下取心跳更新的那份，而 `replicas` 保留所有报告过它的副本。
 - 响应里有三个时间与状态字段：`collected_at`（本服务发问的时刻）、每个副本各自的 `generated_at`（它查看自己节点表的时刻），以及 `partial`。**某个副本没作答不会让列表悄悄变短**——它会成为 `replicas` 里一条具名的失败，错误取自封闭集合 `unreachable` / `timeout` / `unauthorized` / `malformed`，绝不透传传输层文本（那会点出内部网络的主机与端口，而这份文档正在前往浏览器）。
 - 模型目录由同一次读取推导，不额外往返：一个机群的第二个视图若单独再读一次，两者就会彼此矛盾。目录里的是**后端上报的模型 id**，不是调用方可用的名字——别名在 Gateway 的路由表里，那是 Gateway 的文件配置，本服务不持有它。
+
+## 节点写路径：审批、禁用、维护（P01）
+
+节点身份的账本权威在 Registry（`internal/identitystore`），本服务不复制一份，只做转发加审计：
+
+```yaml
+Registry:
+  Addr: "registry:9090"
+  CACertFile: "/etc/aiserveweave/registry-ca.pem"   # 留空则信任宿主机根证书库，自签 CA 通常需要设置
+  AdminToken: "${AISW_REGISTRY_ADMIN_TOKEN}"        # 与 Registry 的 -admin-token-file 一致
+  Timeout: 5s
+```
+
+`Registry` 独立于 `Fleet` 配置——审批/禁用/维护不依赖任何 Gateway 读取路径，只在 `Registry.Addr`/`AdminToken` 都配置时才挂载：
+
+| 端点 | 对应 Registry `TokenAdmin` 方法 |
+| --- | --- |
+| `GET /operator/v1/nodes/states` | `ListNodeStates` |
+| `POST /operator/v1/nodes/:id/approve` | `ApproveNode` |
+| `POST /operator/v1/nodes/:id/disable` | `DisableNode` |
+| `POST /operator/v1/nodes/:id/enable` | `EnableNode` |
+| `POST /operator/v1/nodes/:id/maintenance` | `SetMaintenance` |
+| `DELETE /operator/v1/nodes/:id/maintenance` | `ClearMaintenance` |
+
+全部由 `requirePlatformSession` 守卫，且只在 Registry 调用成功后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`ActorID` 是平台运维的 id）——失败的调用不留痕迹，理由与 `Service.audit` 的既有约定相同：一个没发生的动作不该被记成发生过。`internal/registryclient` 是本服务第一个说 gRPC 的包，鉴权方式（纯 TLS + metadata 里的 Bearer admin token）照抄 Registry 自己 CLI 客户端已经在用的写法，不引入 mTLS。
+
+## 平台运维身份（P01）
+
+平台运维与租户用户是两张分开的表（`platform_operators`，不是 `TenantID` 留空的 `users`）与两条分开的登录入口：
+
+- `POST /admin/v1/platform/operators`：引导创建账户，复用与 `POST /admin/v1/tenants` 相同的 `BootstrapToken`——两者都是背后尚无已登录用户的操作，没有理由再引入一把含义相同的密钥。
+- `POST /admin/v1/platform/auth/login`：签发一个会话令牌，`Claims.TenantID` 固定为哨兵值 `"platform"`（`model.PlatformScope`）、`Claims.Role` 固定为 `"platform_operator"`。之所以能用同一个 `token.Issuer`、不必新起一套签发器：真实租户 id 永远以 `NewID(PrefixTenant)` 生成、必定带 `tnt_` 前缀，字面量 `"platform"` 永不会与之相撞，因此这两个字符串已经足够把两种会话彼此分开，也彼此隔离——`requireSession` 会拒绝一个携带 `PlatformScope` 的令牌，`requirePlatformSession` 只接受它，双向都不允许对方蒙混过关。
 
 ## 工作流菜单与运行（租户）
 
@@ -340,8 +374,8 @@ J01～J08 已有定义、建表、内部 API、后台写入、非终态恢复、
 3. **Gateway↔控制面用共享密钥，不是 mTLS。** Gateway 本就在集群自有网络内访问控制面；要更强隔离时再评估。
 4. **X-Forwarded-For 不被采信。** 审计记录的是 `RemoteAddr`。要采信该头，必须与「配置一份可信代理清单」一并改动。
 5. **go-zero 自己的指标没接进 `common/metrics`。** 本服务目前没有 `/metrics` 端点。
-6. **没有平台运维身份。** 机群清单由共享密钥守卫，背后没有用户，因此本服务无法记录「是谁读的」，也无法把运维权限授予某个具体的人。当前是由 Console 侧的名单决定谁能使用那个密钥（见 Console 的 `lib/server/operator.ts`），这是一处缺口而不是设计。真正的解法是在角色模型里引入平台级身份，那时机群端点可以改为会话守卫并进入审计。
-7. **机群清单只读。** 节点的审批、禁用与维护状态需要持久化与下发路径，路由配置的版本、发布与回滚需要把那张表从 Gateway 的文件搬进本服务。两者都还没做。
+6. **平台运维身份已落地，但归因止步于本服务。** STATUS.md 的 P01 引入了 `platform_operators` 表与 `requirePlatformSession`，`/operator/v1/*` 与节点写路径都由平台运维的会话守卫，本服务的 `audit_logs`（`TenantID=model.PlatformScope`）记着是哪个 operator 做了什么。但这份归因传到 Registry 就断了：本服务用同一把共享的 `Registry.AdminToken` 调用 `TokenAdmin`，Registry 自己分不清这次调用背后是哪个 operator（见 Registry README 对应的已知限制）。
+7. **节点的审批、禁用与维护现在有了持久化与下发路径（P01）。** `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 与 `GET /operator/v1/nodes/states` 把这些操作转发给 Registry 的 `TokenAdmin`（节点身份账本的权威来源仍在 Registry，本服务不复制一份），仅在配置了 `Registry`（见下）时挂载。路由配置的版本、发布与回滚仍未做——那张表仍需从 Gateway 的文件搬进本服务，是 P02 的范围。
 8. **Job 状态与事件历史有不同边界。** Gateway 后台同步已实现，持久化历史保存最后观测快照；节点不可达时保留旧状态并退避。尚无持久化事件时间线，历史记录也不能证明后端此刻可达。
 9. **历史元数据不保证数据面访问可恢复。** 历史列表、详情与 Console 取消/产物入口已接入，见 J07；但 Gateway 仅恢复非终态 Job，产物下载仍依赖副本内存映射。终态 Job 与旧产物 ID 在重启/切换副本后的访问，以及原节点离线后的文件可用性，仍需补齐。
 10. **没有指标、请求检索与告警。** 这三项需要时序库与可检索的日志存储，仓库里都没有；Gateway 各副本的 Prometheus 文本导出不等于历史曲线。
@@ -361,3 +395,9 @@ go test -race ./service/aiServeWeaveControlPlane/...
 ```
 
 `e2e` 包起一个真实的 go-zero 服务、真实的 JWT 会话，并用 Gateway 真实的 `controlplaneclient` 打完整闭环。它不需要数据库：store 是接口，测试用内存实现，因此默认的 `go test ./...` 不依赖任何外部服务。`gormstore` 对真实引擎的验证是单独的事。
+
+## 平台运维审计查询（P01 Console 阶段三）
+
+`GET /operator/v1/audit` 由 `requirePlatformSession` 守卫，固定读取 `model.PlatformScope` 的审计记录，不接受调用方指定租户范围。查询参数与租户审计相同：`limit`、`cursor`、`action`、`actor_id`、`since`、`until`，响应为 `{items, next_cursor}`；无需 Fleet 或 Registry 配置。租户 JWT 不可调用此端点，平台 JWT 也不可调用租户审计端点。覆盖测试见 `e2e/platform_audit_test.go`。
+
+Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Console 运维 token 或邮箱名单。节点状态的传播仍是最终一致，审计仍沿用已有非事务写入边界。

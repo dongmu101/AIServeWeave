@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -268,9 +269,11 @@ func revokeAPIKey(ctx *svc.ServiceContext) http.HandlerFunc {
 // Audit
 // -----------------------------------------------------------------------
 
-// listAudit returns the caller's tenant's audit trail.
+// listAudit returns the audit trail scoped by the authenticated tenant or
+// platform session. Request parameters cannot select another scope.
 //
-// listAudit 返回调用方所属租户的审计线索。
+// listAudit 返回由已认证的租户或平台会话限定范围的审计线索。
+// 请求参数不能选择其他范围。
 func listAudit(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := actorFrom(r.Context())
@@ -446,6 +449,147 @@ func timeParam(raw string) (time.Time, bool) {
 		return time.Time{}, false
 	}
 	return parsed, true
+}
+
+// -----------------------------------------------------------------------
+// Platform operators and node ops (STATUS.md's P01)
+// -----------------------------------------------------------------------
+
+// createPlatformOperator bootstraps a platform operator account. It is
+// guarded by the bootstrap token, the same one createTenant uses: both are
+// operations with no signed-in user behind them yet, and reusing the one
+// secret that already means "you may create a foundational identity in this
+// system out of band" avoids introducing a second one that means the same
+// thing.
+//
+// createPlatformOperator 引导创建一个平台运维账户。它由 bootstrap token
+// 守卫，与 createTenant 用的是同一个：两者都是背后尚无已登录用户的操作，
+// 复用这一个已经代表「你可以带外创建本系统中一个基础身份」的密钥，好过
+// 再引入一个含义相同的第二个。
+func createPlatformOperator(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreatePlatformOperatorRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		operator, err := ctx.Logic.CreatePlatformOperator(r.Context(), req.Email, req.Password, req.Name, clientIP(r))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderPlatformOperator(operator))
+	}
+}
+
+// platformLogin authenticates a platform operator and issues a session
+// token scoped to model.PlatformScope (requirePlatformSession checks it).
+//
+// platformLogin 认证一名平台运维并签发一个限定在 model.PlatformScope 范围内
+// 的会话令牌（由 requirePlatformSession 校验）。
+func platformLogin(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.LoginRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		operator, err := ctx.Logic.PlatformAuthenticate(r.Context(), req.Email, req.Password, clientIP(r))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		signed, expiry, err := ctx.Issuer.Issue(token.Claims{
+			UserID:   operator.ID,
+			TenantID: model.PlatformScope,
+			Role:     model.RolePlatformOperator,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.PlatformLoginResponse{
+			Token:     signed,
+			ExpiresAt: expiry,
+			Operator:  renderPlatformOperator(operator),
+		})
+	}
+}
+
+// nodeOpsHandler builds a handler for one of the five node-ops write
+// endpoints, all of which share the same shape: read the actor and the
+// node_id, decode an empty body, call one Service method, answer 204.
+//
+// nodeOpsHandler 为五个节点操作写端点中的一个构造 handler，它们共用同一种
+// 形状：读出 actor 与 node_id，解码一个空请求体，调用 Service 的一个方法，
+// 应答 204。
+func nodeOpsHandler(action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.NodeOpsRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := action(r.Context(), actor, nodeID); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// listNodeStates returns every node_id the Registry's identity ledger has
+// an opinion about.
+//
+// listNodeStates 返回 Registry 身份账本里有记录的每一个 node_id。
+func listNodeStates(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		states, err := ctx.Logic.ListNodeStates(r.Context(), actor)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.NodeState, len(states))
+		for i, st := range states {
+			out[i] = types.NodeState{
+				NodeID:          st.NodeID,
+				PendingApproval: st.PendingApproval,
+				Disabled:        st.Disabled,
+				Maintenance:     st.Maintenance,
+				FirstSeenAt:     st.FirstSeenAt,
+				LastSeenAt:      st.LastSeenAt,
+			}
+		}
+		writeJSON(w, http.StatusOK, types.ListNodeStatesResponse{Items: out})
+	}
+}
+
+// renderPlatformOperator converts a stored platform operator to its wire
+// form. The digest has no field to land in, mirroring renderUser.
+//
+// renderPlatformOperator 把存储的平台运维账户转换成线上形式。摘要没有可以
+// 落脚的字段，与 renderUser 一致。
+func renderPlatformOperator(operator model.PlatformOperator) types.PlatformOperator {
+	return types.PlatformOperator{
+		ID:          operator.ID,
+		Email:       operator.Email,
+		Name:        operator.Name,
+		Status:      operator.Status,
+		LastLoginAt: operator.LastLoginAt,
+		CreatedAt:   operator.CreatedAt,
+	}
 }
 
 // -----------------------------------------------------------------------

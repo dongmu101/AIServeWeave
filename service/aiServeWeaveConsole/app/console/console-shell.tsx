@@ -36,21 +36,6 @@ const NAV_ITEMS: readonly { href: string; label: string }[] = [
 ];
 
 /**
- * OPERATOR_NAV_ITEMS are the fleet views, shown only to an operator on an
- * operations console. They are a separate list rather than a flag on each row
- * because they are a separate audience: everything above is scoped to one
- * tenant, and everything here is shared infrastructure that belongs to none.
- *
- * OPERATOR_NAV_ITEMS 是机群视图，只对运维控制台上的运维展示。它们是一个独立的列表而不是
- * 每行加一个标志，因为它们面向的是另一批人：上面的一切都限定在单个租户内，而这里的一切
- * 都是不属于任何租户的共享基础设施。
- */
-const OPERATOR_NAV_ITEMS: readonly { href: string; label: string }[] = [
-  { href: "/console/fleet", label: "节点" },
-  { href: "/console/models", label: "模型" },
-];
-
-/**
  * ConsoleShell is the frame every console page renders in: navigation, who is
  * signed in, and the way out.
  *
@@ -67,17 +52,9 @@ const OPERATOR_NAV_ITEMS: readonly { href: string; label: string }[] = [
  */
 export function ConsoleShell({
   user,
-  operator,
   children,
 }: {
   user: SessionUser;
-  /** operator is decided on the server. It only chooses what to draw: the
-   * pages themselves answer 404 to anybody else, and the control plane's
-   * fleet endpoints are behind a secret this browser never holds.
-   *
-   * operator 由服务端决定。它只选择画出什么：页面本身会对其他任何人回 404，而控制面
-   * 的机群端点背后是一个本浏览器从不持有的密钥。 */
-  operator: boolean;
   children: React.ReactNode;
 }) {
   const router = useRouter();
@@ -110,8 +87,8 @@ export function ConsoleShell({
           <span className="font-heading text-sm font-semibold">
             AIServeWeave 控制台
           </span>
-          <nav aria-label="控制台导航" className="flex items-center gap-1">
-            {[...NAV_ITEMS, ...(operator ? OPERATOR_NAV_ITEMS : [])].map((item) => {
+          <nav aria-label="控制台导航" className="flex flex-wrap items-center gap-1">
+            {NAV_ITEMS.map((item) => {
               const active =
                 pathname === item.href || pathname.startsWith(`${item.href}/`);
               return (
@@ -127,6 +104,7 @@ export function ConsoleShell({
               );
             })}
           </nav>
+          <Link href="/operator" className="text-sm underline">平台运维</Link>
           <div className="ml-auto flex items-center gap-3">
             <div className="text-right text-xs leading-tight">
               <div className="font-medium">{user.name || user.email}</div>

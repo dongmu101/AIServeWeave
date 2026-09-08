@@ -302,6 +302,22 @@ type APIKeys interface {
 	MarkAPIKeyUsed(ctx context.Context, id string, at time.Time) error
 }
 
+// PlatformOperators persists the people who sign in to manage the fleet
+// (STATUS.md's P01), separately from Users: see model.PlatformOperator's
+// doc comment for why the two are not one table.
+//
+// PlatformOperators 持久化登录以管理机群的人（STATUS.md 的 P01），与 Users
+// 分开：为什么两者不是一张表，见 model.PlatformOperator 的文档注释。
+type PlatformOperators interface {
+	CreatePlatformOperator(ctx context.Context, operator *model.PlatformOperator) error
+	// GetPlatformOperatorByEmail is the platform sign-in lookup, mirroring
+	// Users.GetUserByEmail.
+	//
+	// GetPlatformOperatorByEmail 是平台运维的登录查询，与 Users.GetUserByEmail 对应。
+	GetPlatformOperatorByEmail(ctx context.Context, email string) (model.PlatformOperator, error)
+	MarkPlatformOperatorLogin(ctx context.Context, id string, at time.Time) error
+}
+
 // Audit appends administrative actions. It has no update and no delete, which
 // is the interface stating the table's append-only rule in a form no
 // implementation can quietly break.
@@ -428,6 +444,7 @@ type JobArtifacts interface {
 type Store interface {
 	Tenants
 	Users
+	PlatformOperators
 	APIKeys
 	Audit
 	Jobs

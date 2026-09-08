@@ -28,6 +28,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
 )
@@ -50,6 +51,20 @@ type ServiceContext struct {
 	// 也只在配置了的情况下才挂载——因此一个没有运维控制台的服务，是根本没有机群端点，
 	// 而不是有一个回答「未配置」的端点。
 	Fleet *fleet.Aggregator
+
+	// RegistryClient calls the Registry's TokenAdmin service on behalf of a
+	// platform operator (STATUS.md's P01). It is nil when the deployment did
+	// not configure one, and every handler that uses it is mounted only in
+	// that case — mirroring Fleet's own rule, for the same reason: a
+	// deployment without a platform-operator console has no node write
+	// endpoint at all, not one that answers "not configured".
+	//
+	// RegistryClient 代表一名平台运维调用 Registry 的 TokenAdmin 服务
+	// （STATUS.md 的 P01）。部署未配置时它为 nil，使用它的每个 handler 也
+	// 只在配置了的情况下才挂载——与 Fleet 自己的规则相同，理由也相同：一个
+	// 没有平台运维控制台的部署，是根本没有节点写端点，而不是有一个回答
+	// 「未配置」的端点。
+	RegistryClient *registryclient.Client
 
 	db *gorm.DB
 }
@@ -114,9 +129,24 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		return nil, err
 	}
 
+	logicOpts := []logic.Option{logic.WithInvalidator(verifications)}
+	var registryClient *registryclient.Client
+	if cfg.Registry.Enabled() {
+		registryClient, err = registryclient.New(registryclient.Config{
+			Addr:       cfg.Registry.Addr,
+			CAFile:     cfg.Registry.CACertFile,
+			AdminToken: cfg.Registry.AdminToken,
+			Timeout:    cfg.Registry.Timeout,
+		})
+		if err != nil {
+			return nil, errors.Join(errors.New("connecting to the configured Registry"), err)
+		}
+		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
+	}
+
 	return &ServiceContext{
 		Config: cfg,
-		Logic:  logic.New(st, clock, logic.WithInvalidator(verifications)),
+		Logic:  logic.New(st, clock, logicOpts...),
 		Issuer: issuer,
 		Cache:  verifications,
 		Fleet: fleet.New(fleet.Config{
@@ -125,7 +155,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Timeout:  cfg.Fleet.Timeout,
 			Clock:    clock,
 		}),
-		db: db,
+		RegistryClient: registryClient,
+		db:             db,
 	}, nil
 }
 
@@ -136,6 +167,11 @@ func (s *ServiceContext) Close() error {
 	var errs []error
 	if err := s.Cache.Close(); err != nil {
 		errs = append(errs, err)
+	}
+	if s.RegistryClient != nil {
+		if err := s.RegistryClient.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if s.db != nil {
 		sqlDB, err := s.db.DB()

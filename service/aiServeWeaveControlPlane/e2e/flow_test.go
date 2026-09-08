@@ -41,6 +41,36 @@ func bootstrap(h *harness, name, email string) (types.CreateTenantResponse, stri
 	return created, session.Token
 }
 
+// bootstrapPlatformOperator creates a platform operator account and signs it
+// in, returning the platform session token every later call to a
+// requirePlatformSession-guarded endpoint uses (STATUS.md's P01). It is the
+// platform-identity counterpart to bootstrap.
+//
+// bootstrapPlatformOperator 创建一个平台运维账户并登录，返回之后每次调用由
+// requirePlatformSession 守卫的端点都要用的平台会话令牌（STATUS.md 的
+// P01）。它是 bootstrap 在平台身份一侧的对应物。
+func bootstrapPlatformOperator(h *harness, email string) string {
+	h.t.Helper()
+
+	status := h.call(http.MethodPost, "/admin/v1/platform/operators", bootstrapToken, types.CreatePlatformOperatorRequest{
+		Email:    email,
+		Password: ownerPassword,
+	}, nil)
+	if status != http.StatusCreated {
+		h.t.Fatalf("creating a platform operator: status %d", status)
+	}
+
+	var session types.PlatformLoginResponse
+	status = h.call(http.MethodPost, "/admin/v1/platform/auth/login", "", types.LoginRequest{
+		Email:    email,
+		Password: ownerPassword,
+	}, &session)
+	if status != http.StatusOK {
+		h.t.Fatalf("signing a platform operator in: status %d", status)
+	}
+	return session.Token
+}
+
 // gatewayVerifier returns the Gateway's real verification client, pointed at
 // this control plane.
 //

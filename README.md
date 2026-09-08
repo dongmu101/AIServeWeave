@@ -10,7 +10,7 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户、API Key、审计、配额与 MySQL Job 历史；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。接口限制以服务 README 为准。
 
-下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，但控制面/Console 的节点管理写路径仍待 P01。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
 
 ## 项目目标
 

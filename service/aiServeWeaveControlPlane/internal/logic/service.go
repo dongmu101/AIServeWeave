@@ -25,6 +25,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
@@ -59,6 +60,12 @@ var (
 	//
 	// ErrForbidden 表示调用方的角色不允许的请求。
 	ErrForbidden = errors.New("logic: forbidden")
+	// ErrRegistryUnconfigured is returned by every platform node-ops method
+	// when no RegistryClient was given to New — see WithRegistryClient.
+	//
+	// ErrRegistryUnconfigured 在没有通过 WithRegistryClient 向 New 提供
+	// RegistryClient 时，由每一个平台节点操作方法返回。
+	ErrRegistryUnconfigured = errors.New("logic: the Registry client is not configured")
 )
 
 // bcryptCost is the work factor for user passwords. It applies to passwords
@@ -85,13 +92,38 @@ type Invalidator interface {
 	Invalidate(ctx context.Context, keyHash string)
 }
 
+// RegistryClient forwards node-identity operations to the Registry
+// (STATUS.md's P01): the identity ledger (approval, disable, maintenance)
+// lives there, not in this service's database, so this layer's platform
+// node-ops methods are thin translations onto this interface plus an audit
+// write, never a second copy of the ledger's state. It is an interface here,
+// implemented by registryclient.Client, for the same reason Invalidator is:
+// this layer's tests substitute a fake and stay free of gRPC and a real
+// Registry process.
+//
+// RegistryClient 把节点身份操作转发给 Registry（STATUS.md 的 P01）：身份账本
+// （审批、禁用、维护）活在那里，不在本服务的数据库里，因此本层的平台节点
+// 操作方法只是对这个接口的一层薄翻译外加一条审计记录，绝不是账本状态的
+// 第二份拷贝。它在这里是一个接口、由 registryclient.Client 实现，理由与
+// Invalidator 相同：本层的测试可以替换一个假件，从而无需 gRPC 与一个真实的
+// Registry 进程。
+type RegistryClient interface {
+	ApproveNode(ctx context.Context, nodeID string) error
+	DisableNode(ctx context.Context, nodeID string) error
+	EnableNode(ctx context.Context, nodeID string) error
+	SetMaintenance(ctx context.Context, nodeID string) error
+	ClearMaintenance(ctx context.Context, nodeID string) error
+	ListNodeStates(ctx context.Context) ([]registryclient.NodeState, error)
+}
+
 // Service is the business layer. Construct one with New.
 //
 // Service 是业务层。用 New 构造。
 type Service struct {
-	store       store.Store
-	clock       runtime.Clock
-	invalidator Invalidator
+	store          store.Store
+	clock          runtime.Clock
+	invalidator    Invalidator
+	registryClient RegistryClient
 }
 
 // Option configures a Service.
@@ -107,6 +139,21 @@ type Option func(*Service)
 // ——数据库才是事实来源——但一条已缓存的校验结果会一直存活到它的 TTL 结束。
 func WithInvalidator(invalidator Invalidator) Option {
 	return func(s *Service) { s.invalidator = invalidator }
+}
+
+// WithRegistryClient gives the Service a way to reach the Registry's
+// TokenAdmin service. Without one, every platform node-ops method
+// (ApproveNode, DisableNode, ...) returns ErrRegistryUnconfigured — a
+// deployment with no platform-operator console configured has no reason to
+// let this service reach the Registry at all, and the methods must say so
+// rather than nil-panic.
+//
+// WithRegistryClient 为 Service 提供一条通往 Registry TokenAdmin 服务的路径。
+// 没有它，每一个平台节点操作方法（ApproveNode、DisableNode……）都会返回
+// ErrRegistryUnconfigured——一个没有配置平台运维控制台的部署，没有理由让本
+// 服务够到 Registry，而这些方法必须说明这一点，而不是空指针 panic。
+func WithRegistryClient(client RegistryClient) Option {
+	return func(s *Service) { s.registryClient = client }
 }
 
 // New returns a Service over st. A nil clock uses the system clock; tests
@@ -344,16 +391,16 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip string) 
 // Authenticate 在 email 不存在时也花掉与存在时相同的计算。
 const dummyDigest = "$2a$10$N9qo8uLOickgx2ZMRZoMyeIjZAgcfl7p92ldGxad68LJZdL17lhWy"
 
-// ListAudit returns one page of the actor's tenant's audit trail.
+// ListAudit returns one page of the actor's tenant or platform audit trail.
 //
 // An inverted or empty time window is refused rather than answered with an
-// empty page: no rows is a fact about the tenant, and a caller who mixed up
+// empty page: no rows is a fact about the scope, and a caller who mixed up
 // their two timestamps should learn that instead of concluding nothing
 // happened.
 //
-// ListAudit 返回 actor 所属租户审计线索中的一页。
+// ListAudit 返回 actor 所属租户或平台审计线索中的一页。
 //
-// 一个颠倒或为空的时间窗会被拒绝，而不是以空页作答：没有记录是关于该租户的一个事实，
+// 一个颠倒或为空的时间窗会被拒绝，而不是以空页作答：没有记录是关于该范围的一个事实，
 // 而一个把两个时间戳搞反了的调用方，应当得知这一点，而不是据此断定什么都没发生过。
 func (s *Service) ListAudit(ctx context.Context, actor Actor, query store.ListQuery, filter store.AuditFilter) (store.Page[model.AuditLog], error) {
 	if !filter.Since.IsZero() && !filter.Until.IsZero() && !filter.Until.After(filter.Since) {

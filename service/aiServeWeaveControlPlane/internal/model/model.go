@@ -65,6 +65,32 @@ const (
 	RoleMember = "member"
 )
 
+// PlatformScope is the sentinel value logic.Actor.TenantID and AuditLog.TenantID
+// carry for a platform operator (STATUS.md's P01), rather than a real tenant
+// id. It is safe to use as a sentinel because every real tenant id comes from
+// NewID(PrefixTenant) and therefore always starts with "tnt_" — "platform"
+// can never collide with one, so this needs no reserved column, no nullable
+// TenantID, and no schema change to either of the two dual-engine tables it
+// appears in.
+//
+// PlatformScope 是平台运维身份（STATUS.md 的 P01）在 logic.Actor.TenantID 与
+// AuditLog.TenantID 里携带的哨兵值，而不是一个真实租户 id。用它作哨兵是安全的：
+// 每个真实租户 id 都来自 NewID(PrefixTenant)，因此必定以 "tnt_" 开头——"platform"
+// 永远不会与之相撞，所以它出现的那两张双引擎表都不需要为此保留列、不需要把
+// TenantID 改成可空，也不需要任何 schema 变更。
+const PlatformScope = "platform"
+
+// RolePlatformOperator is the logic.Actor.Role a platform operator's session
+// carries. It is deliberately not one of the tenant Role* constants above:
+// platform operators are authorized separately from tenant roles (STATUS.md's
+// P01), and giving their session the same Role vocabulary as a tenant admin
+// would make the two easy to confuse in a permission check.
+//
+// RolePlatformOperator 是平台运维会话所携带的 logic.Actor.Role。它刻意不是上面
+// 租户 Role* 常量中的一个：平台运维身份与租户角色分开授权（STATUS.md 的 P01），
+// 若让两者的会话共用同一套 Role 词汇，权限检查时就容易把二者混淆。
+const RolePlatformOperator = "platform_operator"
+
 // Tenant is one isolation boundary. Every other row in this package belongs to
 // exactly one tenant, and every query the API layer issues is scoped by it —
 // that scoping is what tenancy is, and it is enforced in the store layer
@@ -158,6 +184,45 @@ type User struct {
 // TableName 钉死表名，理由见 Tenant.TableName。
 func (User) TableName() string { return "users" }
 
+// PlatformOperator is a person who signs in to manage the fleet — node
+// approval, disable and maintenance (STATUS.md's P01) — rather than a
+// tenant. It is a separate table from User, not a User with an empty
+// TenantID: User.TenantID is `not null` precisely because every tenant user
+// belongs to exactly one tenant, and a platform operator belongs to none.
+// Sharing one table would mean weakening that constraint for every row to
+// accommodate a kind of account that is a small minority of them.
+//
+// Its Email is unique across this table only, not against users.Email: a
+// platform operator and a tenant user are different login surfaces
+// (different endpoints, different session scope — see PlatformScope), so
+// the same person holding both is not the identity collision an email
+// uniqueness constraint exists to prevent.
+//
+// PlatformOperator 是登录以管理机群的人——节点审批、禁用与维护
+// （STATUS.md 的 P01）——而不是某个租户的人。它是与 User 分开的一张表，而不是
+// 一个 TenantID 留空的 User：User.TenantID 是 `not null`，正是因为每个租户用户
+// 都恰好属于一个租户，而平台运维不属于任何租户。共用一张表，就意味着要为了
+// 容纳这一小部分账户，削弱对每一行都成立的这条约束。
+//
+// 它的 Email 只在本表内唯一，不与 users.Email 比对：平台运维与租户用户是两个
+// 不同的登录入口（不同端点、不同会话范围——见 PlatformScope），因此同一个人
+// 同时持有两者，并不是 email 唯一性约束想要防止的那种身份冲突。
+type PlatformOperator struct {
+	ID           string `gorm:"primaryKey;size:32"`
+	Email        string `gorm:"size:255;not null;uniqueIndex"`
+	PasswordHash string `gorm:"size:120;not null"`
+	Name         string `gorm:"size:128"`
+	Status       string `gorm:"size:16;not null;index"`
+	LastLoginAt  *time.Time
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// TableName pins the table name. See Tenant.TableName.
+//
+// TableName 钉死表名，理由见 Tenant.TableName。
+func (PlatformOperator) TableName() string { return "platform_operators" }
+
 // APIKey is one credential a caller presents to the Gateway. The plaintext
 // exists only in the response to the call that created it; what lives here is
 // the hash it is looked up by and the display form a listing may show.
@@ -237,6 +302,16 @@ const (
 	ActionAPIKeyCreate = "apikey.create"
 	ActionAPIKeyRevoke = "apikey.revoke"
 	ActionTenantLimits = "tenant.limits"
+
+	// Platform actions (STATUS.md's P01) are recorded with TenantID set to
+	// PlatformScope rather than a real tenant, since a node has no tenant.
+	ActionPlatformOperatorCreate = "platform_operator.create"
+	ActionPlatformOperatorLogin  = "platform_operator.login"
+	ActionNodeApprove            = "node.approve"
+	ActionNodeDisable            = "node.disable"
+	ActionNodeEnable             = "node.enable"
+	ActionNodeMaintenanceEnter   = "node.maintenance.enter"
+	ActionNodeMaintenanceExit    = "node.maintenance.exit"
 )
 
 // AuditLog is one administrative action, recorded for the README's

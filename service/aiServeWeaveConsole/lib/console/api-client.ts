@@ -16,7 +16,7 @@ import type { ApiErrorKind } from "./errors.ts";
  * The two server entry points. They are distinct constants, and a request has
  * to name which one it wants, because they forward with different credentials
  * to different audiences: the admin base spends the signed-in tenant session,
- * the operator base spends a deployment secret that has no user behind it.
+ * the operator base spends the independently authenticated platform session.
  *
  * Defaulting to the admin base is safe in the direction that matters: a call
  * that forgets to say `surface` is sent as the tenant, and the operator
@@ -24,8 +24,7 @@ import type { ApiErrorKind } from "./errors.ts";
  * The opposite default would silently spend the operator token.
  *
  * 两个服务端入口。它们是两个不同的常量，且一次请求必须点名要哪一个，因为它们用不同的
- * 凭据转发给不同的受众：admin 入口花的是已登录的租户会话，operator 入口花的是一个背后
- * 没有用户的部署密钥。
+ * 凭据转发给不同的受众：admin 入口花的是已登录的租户会话，operator 入口使用独立认证的平台会话。
  *
  * 默认取 admin 入口，在要紧的那个方向上是安全的：忘了写 `surface` 的调用会以租户身份
  * 发出，而租户入口上的白名单会对机群路径回 404。反过来做默认值，则会悄悄花掉运维 token。

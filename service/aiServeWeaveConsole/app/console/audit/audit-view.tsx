@@ -118,8 +118,19 @@ const GRID =
 const ROW_HEIGHT = 40;
 
 const NO_ENTRIES: AuditEntry[] = [];
+const PLATFORM_ACTIONS = [
+  { value: "platform_operator.create", label: "创建运维账户" },
+  { value: "platform_operator.login", label: "运维登录" },
+  { value: "node.approve", label: "审批节点" },
+  { value: "node.disable", label: "禁用节点" },
+  { value: "node.enable", label: "启用节点" },
+  { value: "node.maintenance.enter", label: "进入维护" },
+  { value: "node.maintenance.exit", label: "退出维护" },
+];
 
-export function AuditView() {
+/** AuditView shares paging and virtualization across isolated audit surfaces.
+ * AuditView 在隔离的审计入口之间共用分页与虚拟滚动。 */
+export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator" }) {
   const [filters, setFilters] = useUrlFilters([
     "q",
     "action",
@@ -142,7 +153,8 @@ export function AuditView() {
     : 100;
 
   const audit = usePagedResource<AuditEntry>({
-    path: "/admin/v1/audit",
+    path: surface === "operator" ? "/operator/v1/audit" : "/admin/v1/audit",
+    surface,
     filters: {
       action: filters.action,
       actor_id: filters.actor_id,
@@ -160,6 +172,7 @@ export function AuditView() {
   });
 
   const rows = audit.items ?? NO_ENTRIES;
+  const actions = surface === "operator" ? PLATFORM_ACTIONS : AUDIT_ACTIONS;
 
   const table = useTable({ features, columns, data: rows });
   const modelRows = table.getRowModel().rows;
@@ -185,10 +198,9 @@ export function AuditView() {
   return (
     <div className="grid gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">管理审计</h1>
+        <h1 className="font-heading text-lg font-semibold">{surface === "operator" ? "平台审计" : "管理审计"}</h1>
         <p className="text-sm text-muted-foreground">
-          当前租户的管理操作记录：登录、创建用户、创建与吊销 Key、修改配额。
-          这不是推理请求日志，网关处理的调用不会出现在这里。
+          {surface === "operator" ? "平台运维账户与节点操作记录；与租户审计独立，不包含推理请求。" : "当前租户的管理操作记录：登录、创建用户、创建与吊销 Key、修改配额。这不是推理请求日志，网关处理的调用不会出现在这里。"}
         </p>
       </div>
 
@@ -206,11 +218,11 @@ export function AuditView() {
             }}
           >
             <SelectTrigger id="audit-action">
-              <SelectValue />
+              <SelectValue>{filters.action === "" ? "全部动作" : actions.find((action) => action.value === filters.action)?.label ?? filters.action}</SelectValue>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">全部动作</SelectItem>
-              {AUDIT_ACTIONS.map((action) => (
+              {actions.map((action) => (
                 <SelectItem key={action.value} value={action.value}>
                   {action.label}
                 </SelectItem>
@@ -226,7 +238,7 @@ export function AuditView() {
           <Input
             id="audit-actor"
             className="w-56 font-mono text-xs"
-            placeholder="usr_..."
+            placeholder={surface === "operator" ? "平台操作者 ID" : "usr_..."}
             value={draftActor}
             onChange={(event) => setDraftActor(event.target.value)}
           />
@@ -271,7 +283,7 @@ export function AuditView() {
             }}
           >
             <SelectTrigger id="audit-size">
-              <SelectValue />
+              <SelectValue>{pageSize} 条 / 页</SelectValue>
             </SelectTrigger>
             <SelectContent>
               {PAGE_SIZES.map((size) => (
@@ -325,7 +337,7 @@ export function AuditView() {
                 <p className="px-3 py-8 text-center text-sm text-muted-foreground">
                   {hasFilters(filters)
                     ? "没有符合筛选条件的记录"
-                    : "该租户还没有管理操作记录"}
+                    : surface === "operator" ? "平台还没有运维操作记录" : "该租户还没有管理操作记录"}
                 </p>
               ) : (
                 <div
@@ -380,7 +392,7 @@ export function AuditView() {
       )}
 
       <p className="text-xs text-muted-foreground">
-        筛选与翻页由控制面执行，覆盖当前租户的全部记录；接口不提供总数，因此这里只显示
+        筛选与翻页由控制面执行，覆盖{surface === "operator" ? "平台的全部运维记录" : "当前租户的全部记录"}；接口不提供总数，因此这里只显示
         页码而不显示总页数。审计写入与被记录的操作不在同一个事务中，控制面在写入失败时
         只记录日志；因此这份记录可能少于实际发生的操作，不能当作完备账本使用。
       </p>

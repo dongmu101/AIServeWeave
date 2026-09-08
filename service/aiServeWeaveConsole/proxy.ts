@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 
+import { OPERATOR_COOKIE } from "@/lib/console/operator-session";
 import { loginPath } from "@/lib/console/internal-path";
 import { SESSION_COOKIE } from "@/lib/console/session-payload";
 
@@ -24,6 +25,18 @@ import { SESSION_COOKIE } from "@/lib/console/session-payload";
  * 抵达应用之前。
  */
 export function proxy(request: NextRequest): NextResponse {
+  if (request.nextUrl.pathname.startsWith("/operator")) {
+    if (request.nextUrl.pathname === "/operator/login") return NextResponse.next();
+    const target = request.nextUrl.pathname + request.nextUrl.search;
+    if (!request.cookies.has(OPERATOR_COOKIE)) {
+      return NextResponse.redirect(new URL(`/operator/login?next=${encodeURIComponent(target)}`, request.url));
+    }
+    // Overwrite the routing hint; the layout validates it before use.
+    // 覆盖路由提示，布局使用前仍会校验。
+    const headers = new Headers(request.headers);
+    headers.set("x-aisw-operator-return", target);
+    return NextResponse.next({ request: { headers } });
+  }
   if (request.cookies.has(SESSION_COOKIE)) {
     return NextResponse.next();
   }
@@ -44,5 +57,5 @@ export function proxy(request: NextRequest): NextResponse {
  * 一次解析错误。
  */
 export const config = {
-  matcher: ["/console/:path*"],
+  matcher: ["/console/:path*", "/operator/:path*"],
 };

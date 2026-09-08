@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
+import { nodeActionRequest } from "./node-ops.ts";
 import { resolveOperatorUpstream, resolveUpstream } from "./upstream-routes.ts";
 
 /** resolve is the call under test, with the query string spelled inline.
@@ -258,4 +259,39 @@ test("the operator surface is separate from the tenant one", () => {
       `${item.name}: tenant table`
     );
   }
+});
+
+test("platform operations and audit are allowlisted only on their own surface", () => {
+  const operatorResolve = (method: string, path: string) => resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams());
+  for (const [method, path] of [
+    ["GET", "/operator/v1/nodes/states"],
+    ["POST", "/operator/v1/nodes/node-1/approve"],
+    ["POST", "/operator/v1/nodes/node-1/disable"],
+    ["POST", "/operator/v1/nodes/node-1/enable"],
+    ["POST", "/operator/v1/nodes/node-1/maintenance"],
+    ["DELETE", "/operator/v1/nodes/node-1/maintenance"],
+    ["GET", "/operator/v1/audit"],
+  ]) {
+    assert.equal(operatorResolve(method, path)?.path, path);
+    assert.equal(resolve(method, path), null);
+  }
+  assert.equal(operatorResolve("DELETE", "/operator/v1/nodes/node-1"), null);
+  assert.equal(operatorResolve("POST", "/admin/v1/platform/operators"), null);
+});
+
+test("node routes accept operator labels, preserving one safe path segment", () => {
+  for (const id of ["gpu:0", "台北节点", "n".repeat(180), "node%2Fone"]) {
+    const request = nodeActionRequest(id, "disable");
+    const result = resolveOperatorUpstream(request.method, request.path.split("/").slice(1).map(decodeURIComponent), new URLSearchParams());
+    assert.equal(result?.path, `/operator/v1/nodes/${encodeURIComponent(id)}/disable`);
+  }
+  for (const id of ["..", ".", "node/one", "node\\one", "node\n"]) {
+    assert.equal(resolveOperatorUpstream("POST", ["operator", "v1", "nodes", id, "disable"], new URLSearchParams()), null);
+  }
+});
+
+
+test("platform audit forwards only its pagination and filter parameters", () => {
+  const result = resolveOperatorUpstream("GET", ["operator", "v1", "audit"], new URLSearchParams("limit=10&cursor=c&action=node.disable&actor_id=pop_1&since=start&until=end&tenant_id=tnt_1&token=untrusted"));
+  assert.equal(result?.search, "?limit=10&cursor=c&action=node.disable&actor_id=pop_1&since=start&until=end");
 });

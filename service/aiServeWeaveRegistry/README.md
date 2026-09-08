@@ -100,6 +100,26 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 **这条链路是最终一致的，不是瞬时的。** 从 `DisableNode` 返回到某个 Gateway 副本真正切断连接之间，存在名册广播传播的窗口；一个还没收到最新名册的副本仍会认为该节点合法。这与 S02 之前 `GatewayRoster` 本身传播新副本/状态变化时的一致性模型相同，S03 没有改变这一点，只是把「哪些节点被禁用」纳入了同一份需要传播的状态。
 
+## 节点审批与维护（P01）
+
+`TokenAdmin` 再新增四个方法，`AdminToken` 同样守护：
+
+- **`ApproveNode(node_id)`**：清除某个 `node_id` 的待审批标记（持久化进与 S01/S03 同一份 `internal/identitystore.Store` 账本），创建记录（若不存在）——运维可以在节点第一次尝试注册之前就先按名字批准它，与 `DisableNode` 对未注册 `node_id` 的预先禁用是同一种写法。
+- **`SetMaintenance(node_id)` / `ClearMaintenance(node_id)`**：把 `node_id` 标记为运维强制维护中，走与 `DisableNode` 相同的"写账本 + 用新的完整集合调用 `rosterState.setMaintenance` 重新广播"路径，只是广播的字段是 `GatewayRoster.maintenance_node_ids` 而不是 `revoked_node_ids`。**这不是身份吊销**：Gateway 收到后只标记该节点不再接新任务（`tunnelserver` 的 `node.maintenance`，调度器据此排除），既不调用 `kill()`，也不影响它已经打开的 `Control` 流或在途请求；节点维护中依然是 `Live`。
+- **`ListNodeStates()`**：返回账本里有记录的每一个 `node_id`（待审批 / 已禁用 / 维护中三个布尔，外加首次/最近观测时间），供上层（控制面）渲染"期望状态"，不必读 `identities.json` 本身。
+
+**严格审批：一个从未被批准过的 `node_id`，`Register` 会直接拒绝，而不是照常签发。** 具体规则见 `identity.go` 的 `Register`：
+
+- 消耗的是**未绑定** node_id 的引导令牌时，`Register` 在 `IsDisabled` 检查之后、签发证书之前，先查这个 `node_id` 是否已有账本记录且未被标记待审批——没有记录，或记录里 `PendingApproval=true`，一律拒绝（`PermissionDenied`），并调用 `identitystore.Store.RecordPending` 把这次尝试记下来（只记 `node_id` 与观测时间，**不**绑定这次呈递的公钥指纹——见下一段为什么）。运维用 `ApproveNode` 批准后，Agent 的下一次重试才会真正走到签发那一步。
+- 消耗的是**绑定了 node_id** 的令牌时，这条门槛完全不适用：铸造这枚令牌本身就是运维的授权动作，与它已经跳过 S01 冲突检查的既有逻辑是同一个理由。
+- **不区分"待审批"与"拒绝"两种动作**：运维不想放行的待审批节点，直接用既有的 `DisableNode` 处理即可——`Register` 里 `IsDisabled` 检查发生在待审批检查之前，天然生效，不必再多一个"拒绝"的概念。
+
+**待审批账本记录刻意不绑定公钥指纹。** 若把首次尝试的 CSR 指纹当作这个 `node_id` 的"占位绑定"存下来，运维批准之后，Agent 的重试会呈递一把新生成的密钥（`tunnel.IdentityManager.bootstrap` 每次都重新生成），触发 S01 的指纹冲突检查，被误判为"node_id 已注册于不同 key"而拒绝——这正是这套机制要解决的问题，不能自己先犯一遍。因此 `RecordPending` 只记 `node_id` 本身，真正的指纹绑定要等真正签发的那一次调用 `Reserve` 才发生。
+
+**一个推论：无绑定令牌时不能再自行生成随机 `node_id`。** 严格审批要求运维能"按名字"批准一个节点，而一个直到 `Register` 内部才随机生成、且每次重试都会变的 id，先天没有什么可供批准。因此未绑定令牌的 `RegisterRequest.node_id` 现在是必填的——留空直接返回 `InvalidArgument`；仍然想要 Registry 代为分配身份的调用方，走绑定令牌这条路径。
+
+**`Reserve` 把"账本里指纹为空的记录"当作没有先前绑定处理，而不是当作冲突。** `Disable` 与 `Approve` 都可能提前为一个从未注册过的 `node_id` 创建记录，此时 `Fingerprint` 是空字符串；这次修复之前，第一次真实注册会被误判为"与空字符串冲突"而拒绝——这正是 P01 让"预先批准"成为常规工作流后才暴露出来的既有潜在缺陷（此前 S03 的"预先禁用"路径很少真的走到后续注册，因而没触发过）。
+
 ## `node_id` 唯一性（S01）
 
 `Register` 在签发证书之后、把响应交回去之前，会把这次 CSR 携带的公钥指纹（`internal/identitystore.Fingerprint`：DER 编码 `SubjectPublicKeyInfo` 的 SHA-256）与 `internal/identitystore.Store` 账本里 `node_id` 上次绑定的指纹比对，得到以下结果之一：
@@ -121,6 +141,6 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 - **单实例假设。** bootstrap token 的一次性校验与 `node_id` 身份账本都靠本地文件 + 内存锁保证强一致，这只在只有一个 Registry 进程时成立。Registry 高可用仍列在根 STATUS 的 P2；Gateway 已支持多副本，不能据此运行多个共享状态目录的 Registry 实例。
 - **令牌绑定的是 node_id，不是租户。** 这是刻意的：机群是所有租户共用的基础设施，节点本身没有租户维度可言——同样的判断，见控制面 README 关于 `/operator/v1/*` 为什么不放进会话守卫的说明。因此 S02 只做了 node_id 绑定（解决"重装"与"冒用"的分辨，见上文），proto 里 `bootstrap_token` 早先"tenant-bound"的注释已经删掉；哪些人能调用 `TokenAdmin`（今天是持有 `-admin-token-file` 里那把共享密钥的所有人）本身要不要引入租户/角色维度，属于路线图第三阶段的多租户 RBAC。
-- **`-admin-token-file`/`-gateway-token-file` 都是不区分调用者的共享密钥。** 和这两把密钥守护的其它管理面（控制面 `OperatorToken`、Gateway `adminapi`）一样，持有对应密钥的任何人都能执行该密钥授权的全部操作，没有按操作者归因的审计轨迹；引入平台级运维身份之前，这是已知且接受的缺口。
+- **`-admin-token-file`/`-gateway-token-file` 依然是本服务自己无法归因到具体操作者的共享密钥。** 控制面已经在自己那一侧引入了平台运维身份（STATUS.md 的 P01）：`ApproveNode`/`DisableNode`/`SetMaintenance` 等操作现在由一名已登录的平台运维发起，且控制面的 `audit_logs` 记着是谁、在什么时候做的——但那份归因活在控制面，不在这里。从 Registry 自己的 gRPC 层看，每一次 `TokenAdmin` 调用呈递的仍然只是同一把共享的 `-admin-token-file`，Registry 分辨不出这次调用背后是哪个操作者，也没有自己的审计表；真正把归因下沉到这一层，需要控制面把操作者身份也带进调用（例如一个短期、按操作者签发的令牌），这仍是路线图第三阶段多租户 RBAC 要解决的范围。
 - **Gateway↔Registry 仍是单向 mTLS。** S03 给 `Join` 加上的是应用层的共享密钥认证，不是让 Gateway 持有 Registry 签发的客户端证书；要不要升级到 mTLS，等控制面需要更强隔离时再评估。
 - **禁用生效依赖名册广播，不是密码学吊销。** `DisableNode` 不会让节点证书本身失效——Registry 不维护 CRL/OCSP，证书在到期前始终密码学有效。它能拒绝任何还认识这个 `node_id` 的 Registry/Gateway 组件，但一个从未连上任何在线副本、或连着一个还没收到最新名册的副本的节点，在那之前不会感知到自己被禁用；这与 `GatewayRoster` 本身的一致性模型相同。

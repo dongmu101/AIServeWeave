@@ -208,9 +208,9 @@ type APIKeyListResponse struct {
 	NextCursor string   `json:"next_cursor,omitempty"`
 }
 
-// AuditListResponse is one page of a tenant's audit trail.
+// AuditListResponse is one page of a tenant or platform audit trail.
 //
-// AuditListResponse 是一个租户审计线索中的一页。
+// AuditListResponse 是租户或平台审计线索中的一页。
 type AuditListResponse struct {
 	Items      []AuditEntry `json:"items"`
 	NextCursor string       `json:"next_cursor,omitempty"`
@@ -469,4 +469,80 @@ type ListJobArtifactsResponse struct {
 // ErrorResponse 是每个端点返回失败时的形状。
 type ErrorResponse struct {
 	Error string `json:"error"`
+}
+
+// -----------------------------------------------------------------------
+// Platform operators and node ops (STATUS.md's P01)
+// -----------------------------------------------------------------------
+
+// CreatePlatformOperatorRequest bootstraps a platform operator account. It
+// is guarded by the bootstrap token, not a session — see
+// createPlatformOperator's doc comment.
+//
+// CreatePlatformOperatorRequest 引导创建一个平台运维账户。它由 bootstrap
+// token 而不是会话守卫——见 createPlatformOperator 的文档注释。
+type CreatePlatformOperatorRequest struct {
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name,omitempty"`
+}
+
+// PlatformOperator is a platform operator, as rendered to the Console.
+// PasswordHash has no field here for the same reason User's does not.
+//
+// PlatformOperator 是一个平台运维账户，以呈现给 Console 的形式表达。这里没有
+// PasswordHash 字段，理由与 User 相同。
+type PlatformOperator struct {
+	ID          string     `json:"id"`
+	Email       string     `json:"email"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// PlatformLoginResponse carries the session token and who it belongs to,
+// mirroring LoginResponse for a platform operator instead of a tenant user.
+//
+// PlatformLoginResponse 携带会话令牌及其归属，与 LoginResponse 对应，只是
+// 面向平台运维而不是租户用户。
+type PlatformLoginResponse struct {
+	Token     string           `json:"token"`
+	ExpiresAt time.Time        `json:"expires_at"`
+	Operator  PlatformOperator `json:"operator"`
+}
+
+// NodeOpsRequest is the body every node-ops write endpoint accepts: none of
+// them take any field beyond the node_id already in the path, so this is an
+// intentionally empty struct rather than an absent one — decode's
+// DisallowUnknownFields still refuses a caller that sent something, which is
+// worth catching (an accidental "reason" field, say) rather than silently
+// ignoring.
+//
+// NodeOpsRequest 是每个节点操作写端点接受的请求体：它们都不接受除路径里的
+// node_id 之外的任何字段，因此这里是一个刻意留空的结构体，而不是干脆没有
+// ——decode 的 DisallowUnknownFields 依然会拒绝发来了内容的调用方，这样的
+// 内容（比如不小心传了个 "reason" 字段）值得被发现，而不是被悄悄忽略。
+type NodeOpsRequest struct{}
+
+// NodeState is one node_id's entry in the Registry's identity ledger, as
+// ListNodeStates reports it.
+//
+// NodeState 是一个 node_id 在 Registry 身份账本里的条目，即 ListNodeStates
+// 所报告的内容。
+type NodeState struct {
+	NodeID          string    `json:"node_id"`
+	PendingApproval bool      `json:"pending_approval"`
+	Disabled        bool      `json:"disabled"`
+	Maintenance     bool      `json:"maintenance"`
+	FirstSeenAt     time.Time `json:"first_seen_at"`
+	LastSeenAt      time.Time `json:"last_seen_at"`
+}
+
+// ListNodeStatesResponse is every node_id the identity ledger has an
+// opinion about.
+//
+// ListNodeStatesResponse 是身份账本里有记录的每一个 node_id。
+type ListNodeStatesResponse struct {
+	Items []NodeState `json:"items"`
 }

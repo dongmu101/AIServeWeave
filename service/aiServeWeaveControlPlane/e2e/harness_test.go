@@ -62,7 +62,6 @@ const (
 	accessSecret   = "access-secret-that-is-long-enough-for-validation"
 	ownerPassword  = "correct-horse-battery"
 	gatewayToken   = "gateway-token-that-is-long-enough-for-validation"
-	operatorToken  = "operator-token-that-is-long-enough-for-validation"
 )
 
 // harness is one running control plane and the client calls a test makes
@@ -109,10 +108,9 @@ func newHarnessWith(t *testing.T, gateways []string) *harness {
 	}
 	if len(gateways) > 0 {
 		cfg.Fleet = config.FleetConf{
-			Gateways:      gateways,
-			GatewayToken:  gatewayToken,
-			OperatorToken: operatorToken,
-			Timeout:       2 * time.Second,
+			Gateways:     gateways,
+			GatewayToken: gatewayToken,
+			Timeout:      2 * time.Second,
 		}
 	}
 

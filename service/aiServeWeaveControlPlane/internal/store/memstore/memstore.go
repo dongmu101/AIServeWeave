@@ -38,13 +38,14 @@ import (
 //
 // Store 是内存版 store.Store。零值不可用，请使用 New。
 type Store struct {
-	mu        sync.Mutex
-	tenants   map[string]model.Tenant
-	users     map[string]model.User
-	keys      map[string]model.APIKey
-	audit     []model.AuditLog
-	jobs      map[string]model.Job
-	artifacts map[string]model.JobArtifact
+	mu                sync.Mutex
+	tenants           map[string]model.Tenant
+	users             map[string]model.User
+	platformOperators map[string]model.PlatformOperator
+	keys              map[string]model.APIKey
+	audit             []model.AuditLog
+	jobs              map[string]model.Job
+	artifacts         map[string]model.JobArtifact
 }
 
 // New returns an empty store.
@@ -52,11 +53,12 @@ type Store struct {
 // New 返回一个空的 store。
 func New() *Store {
 	return &Store{
-		tenants:   map[string]model.Tenant{},
-		users:     map[string]model.User{},
-		keys:      map[string]model.APIKey{},
-		jobs:      map[string]model.Job{},
-		artifacts: map[string]model.JobArtifact{},
+		tenants:           map[string]model.Tenant{},
+		users:             map[string]model.User{},
+		platformOperators: map[string]model.PlatformOperator{},
+		keys:              map[string]model.APIKey{},
+		jobs:              map[string]model.Job{},
+		artifacts:         map[string]model.JobArtifact{},
 	}
 }
 
@@ -190,6 +192,52 @@ func (s *Store) MarkUserLogin(_ context.Context, id string, at time.Time) error 
 	return nil
 }
 
+// CreatePlatformOperator inserts one platform operator, rejecting a duplicate
+// email the way the unique index does.
+//
+// CreatePlatformOperator 插入一个平台运维账户，并像唯一索引那样拒绝重复的 email。
+func (s *Store) CreatePlatformOperator(_ context.Context, operator *model.PlatformOperator) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.platformOperators {
+		if existing.Email == operator.Email {
+			return store.ErrConflict
+		}
+	}
+	stamp(&operator.CreatedAt, &operator.UpdatedAt)
+	s.platformOperators[operator.ID] = *operator
+	return nil
+}
+
+// GetPlatformOperatorByEmail reads one platform operator by sign-in identifier.
+//
+// GetPlatformOperatorByEmail 按登录标识读取一个平台运维账户。
+func (s *Store) GetPlatformOperatorByEmail(_ context.Context, email string) (model.PlatformOperator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, operator := range s.platformOperators {
+		if operator.Email == email {
+			return operator, nil
+		}
+	}
+	return model.PlatformOperator{}, store.ErrNotFound
+}
+
+// MarkPlatformOperatorLogin records a successful sign-in.
+//
+// MarkPlatformOperatorLogin 记录一次成功登录。
+func (s *Store) MarkPlatformOperatorLogin(_ context.Context, id string, at time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operator, ok := s.platformOperators[id]
+	if !ok {
+		return store.ErrNotFound
+	}
+	operator.LastLoginAt = &at
+	s.platformOperators[id] = operator
+	return nil
+}
+
 // CreateAPIKey inserts one key, rejecting a duplicate hash the way the unique
 // index does.
 //
@@ -286,6 +334,18 @@ func (s *Store) MarkAPIKeyUsed(_ context.Context, id string, at time.Time) error
 	key.LastUsedAt = &at
 	s.keys[id] = key
 	return nil
+}
+
+// ReplacePlatformOperator overwrites one stored platform operator, for the
+// same reason ReplaceUser exists — a suspended platform operator account, in
+// particular, which no handler can currently produce.
+//
+// ReplacePlatformOperator 覆写一个已存储的平台运维账户，理由与 ReplaceUser
+// 相同——尤其是一个已停用的平台运维账户，目前没有任何 handler 能产生它。
+func (s *Store) ReplacePlatformOperator(operator model.PlatformOperator) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.platformOperators[operator.ID] = operator
 }
 
 // ReplaceUser overwrites one stored user. Like ReplaceAPIKey, it exists only

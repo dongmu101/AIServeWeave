@@ -1,6 +1,6 @@
 # AIServeWeave 开发状态与待办
 
-更新日期：2026-09-07。
+更新日期：2026-09-08。
 
 本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
 
@@ -83,7 +83,7 @@ J01–J08 的既有勾选记录保留，但不能解读为全部可靠性目标�
 
 | 状态 | 编号 | 待开发任务 | 交付边界 |
 | --- | --- | --- | --- |
-| [ ] | P01 | 节点审批、禁用、维护与运维身份 | 持久化期望状态并下发、展示实际生效结果；平台运维身份与租户角色分开授权，操作可归因审计；对应 Console C22 |
+| [x] | P01 | 节点审批、禁用、维护与运维身份 | 持久化期望状态并下发、展示实际生效结果；平台运维身份与租户角色分开授权，操作可归因审计；对应 Console C22——**Registry 与 ControlPlane 后端已实现并测试**：Registry 的 `identitystore` 扩展出待审批（`PendingApproval`）与维护（`Maintenance`）两个状态位，`TokenAdmin` 新增 `ApproveNode`/`SetMaintenance`/`ClearMaintenance`/`ListNodeStates`，`Register` 对未绑定令牌的注册加了审批门禁（详见 Registry README「节点审批与维护（P01）」）；Gateway 的 `tunnelserver` 按 `GatewayRoster.maintenance_node_ids` 标记节点但不断连，调度器据此排除新派发；ControlPlane 新增 `platform_operators` 表与独立登录入口（`POST /admin/v1/platform/auth/login`），`/operator/v1/*` 从共享密钥换成 `requirePlatformSession`，新增节点写路径 `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 转发给 Registry 并写入 `audit_logs`（`TenantID=model.PlatformScope`，详见 ControlPlane README「节点写路径」「平台运维身份」两节）。**Console 阶段三 / C22 已接入**：`/operator/login` 使用独立平台 Cookie，`/operator/fleet` 支持待审批/离线记录与五种节点操作，模型/发布状态/平台审计位于独立运维页面；共享 token/邮箱名单已移除。新增 `GET /operator/v1/audit`，过滤和分页复用既有审计。Go 门禁与 Console lint/typecheck/test、Webpack 生产构建及隔离 HTTP/浏览器冒烟验证通过，详见 Console STATUS「P01 阶段三 / C22 验收」。Gateway 仅提供合并观测，不承诺全副本确认；真实集群传播与全站 Q03 验收仍需后续完成。 |
 | [ ] | P02 | 模型与路由管理 | 控制面存储、校验、版本发布、Gateway 同步确认及回滚，补 Console C24；保留明确的文件配置迁移方案 |
 | [ ] | P03 | 工作流模板版本与发布 | 创建、输入/输出校验、依赖检查、发布与回滚、租户可见范围；记录自定义节点及模型版本，任务关联提交时的模板版本 |
 | [ ] | P04 | 输入上传与持久产物存储 | 本地/S3-compatible 存储、授权上传下载、格式与大小限制、保留期和清理；有界流式传输，元数据可与文件对账 |

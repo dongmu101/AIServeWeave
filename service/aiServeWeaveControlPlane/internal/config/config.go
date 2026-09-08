@@ -79,6 +79,21 @@ type Config struct {
 	// 它是可选的，且省略它才是常态——一个不运行运维控制台的部署，没有任何理由让本服务
 	// 去够数据面。
 	Fleet FleetConf `json:",optional"`
+
+	// Registry configures this service's client to the Registry's TokenAdmin
+	// service (STATUS.md's P01): node approval, disable/enable and
+	// maintenance. Like Fleet, it is optional — a deployment with no
+	// platform-operator console has no reason to let this service reach the
+	// Registry at all — and unlike Fleet it does not gate on Gateway
+	// replicas: node identity operations do not need a configured read path
+	// into the data plane.
+	//
+	// Registry 配置本服务对 Registry TokenAdmin 服务（STATUS.md 的 P01）的
+	// 客户端：节点审批、禁用/启用与维护。与 Fleet 一样它是可选的——一个没有
+	// 平台运维控制台的部署，没有理由让本服务够到 Registry——但与 Fleet 不同，
+	// 它不依赖 Gateway 副本：节点身份操作不需要一条通往数据面的已配置读取
+	// 路径。
+	Registry RegistryConf `json:",optional"`
 }
 
 // FleetConf configures the fleet inventory.
@@ -110,16 +125,6 @@ type FleetConf struct {
 	// GatewayToken 用于本服务向那些监听器表明身份。它必须与各 Gateway 的
 	// AISW_GATEWAY_ADMIN_TOKEN 一致。
 	GatewayToken string `json:",optional"`
-	// OperatorToken authorizes a caller to read the inventory from this
-	// service. It is a third secret rather than a reuse of InternalToken,
-	// because the two authorize opposite directions: InternalToken lets a
-	// Gateway ask this service about a key, and reusing it would mean any
-	// Gateway could also read the whole fleet.
-	//
-	// OperatorToken 授权调用方从本服务读取清单。它是第三个密钥而不是复用
-	// InternalToken，因为两者授权的是相反的方向：InternalToken 让 Gateway 可以向本
-	// 服务询问某个 key，复用它就意味着任何 Gateway 也能读到整个机群。
-	OperatorToken string `json:",optional"`
 	// Timeout bounds one call to one replica. A replica that is slow must
 	// not hold the whole aggregation, which is why the answer can be partial.
 	//
@@ -128,16 +133,57 @@ type FleetConf struct {
 	Timeout time.Duration `json:",default=3s"`
 }
 
-// Enabled reports whether the fleet inventory is configured. All three parts
-// are required together: replicas to ask, a secret to ask them with, and a
-// secret to be asked with. A partial configuration is a mistake, and
-// Validate says so rather than starting a half-built feature.
+// Enabled reports whether the fleet inventory is configured. Both parts are
+// required together: replicas to ask, and a secret to ask them with. A
+// partial configuration is a mistake, and Validate says so rather than
+// starting a half-built feature. Reading the inventory back out is
+// authorized separately, by a platform operator's session
+// (requirePlatformSession) rather than a third secret here — see
+// STATUS.md's P01.
 //
-// Enabled 报告机群清单是否已配置。三部分必须同时具备：可询问的副本、用来询问它们的
-// 密钥，以及被询问时所要求的密钥。配置不全属于失误，Validate 会指出这一点，而不是启动
-// 一个只搭了一半的功能。
+// Enabled 报告机群清单是否已配置。两部分必须同时具备：可询问的副本，以及用来
+// 询问它们的密钥。配置不全属于失误，Validate 会指出这一点，而不是启动一个只搭了
+// 一半的功能。读取清单的授权分开处理，由平台运维的会话
+// （requirePlatformSession）负责，而不是这里的第三个密钥——见 STATUS.md 的 P01。
 func (f FleetConf) Enabled() bool {
-	return len(f.Gateways) > 0 || f.GatewayToken != "" || f.OperatorToken != ""
+	return len(f.Gateways) > 0 || f.GatewayToken != ""
+}
+
+// RegistryConf configures the Registry TokenAdmin client (STATUS.md's P01).
+//
+// RegistryConf 配置 Registry TokenAdmin 客户端（STATUS.md 的 P01）。
+type RegistryConf struct {
+	// Addr is the Registry's TokenAdmin endpoint, host:port.
+	//
+	// Addr 是 Registry 的 TokenAdmin 端点，形如 host:port。
+	Addr string `json:",optional"`
+	// CACertFile verifies the Registry's server certificate. Empty uses the
+	// host's root store, which only works when the Registry's certificate
+	// chains to a public CA; a self-issued Registry CA needs this set.
+	//
+	// CACertFile 用于校验 Registry 的服务端证书。留空则使用宿主机的根证书库，
+	// 这只在 Registry 的证书链最终指向一个公共 CA 时才有效；自签的 Registry
+	// CA 需要设置这一项。
+	CACertFile string `json:",optional"`
+	// AdminToken authenticates this service to TokenAdmin, matching the
+	// Registry's -admin-token-file.
+	//
+	// AdminToken 用于向 TokenAdmin 表明身份，须与 Registry 的
+	// -admin-token-file 一致。
+	AdminToken string `json:",optional"`
+	// Timeout bounds one call to the Registry.
+	//
+	// Timeout 限制对 Registry 的单次调用。
+	Timeout time.Duration `json:",default=5s"`
+}
+
+// Enabled reports whether the Registry client is configured. Both Addr and
+// AdminToken are required together, the same reasoning as FleetConf.Enabled.
+//
+// Enabled 报告 Registry 客户端是否已配置。Addr 与 AdminToken 必须同时具备，
+// 理由与 FleetConf.Enabled 相同。
+func (r RegistryConf) Enabled() bool {
+	return r.Addr != "" || r.AdminToken != ""
 }
 
 // Supported database drivers.
@@ -277,14 +323,16 @@ func (c Config) Validate() error {
 		if len(c.Fleet.Gateways) == 0 {
 			return errors.New("config: Fleet.Gateways is required once the fleet inventory is configured")
 		}
-		for _, name := range []string{"Fleet.GatewayToken", "Fleet.OperatorToken"} {
-			secret := c.Fleet.GatewayToken
-			if name == "Fleet.OperatorToken" {
-				secret = c.Fleet.OperatorToken
-			}
-			if len(secret) < minSecretLen {
-				return errors.New("config: " + name + " must be at least 32 characters; generate one with `openssl rand -base64 32`")
-			}
+		if len(c.Fleet.GatewayToken) < minSecretLen {
+			return errors.New("config: Fleet.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.Registry.Enabled() {
+		if c.Registry.Addr == "" {
+			return errors.New("config: Registry.Addr is required once the Registry client is configured")
+		}
+		if len(c.Registry.AdminToken) < minSecretLen {
+			return errors.New("config: Registry.AdminToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
 		}
 	}
 	return nil

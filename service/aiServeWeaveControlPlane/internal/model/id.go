@@ -14,10 +14,11 @@ import (
 // 答案」变成「一眼看出错误」：一个内容为 "usr_..." 的 tenant_id，无论出现在日志行、
 // 工单还是 WHERE 子句里，都是一望即知的错。
 const (
-	PrefixTenant   = "tnt_"
-	PrefixUser     = "usr_"
-	PrefixAPIKey   = "key_"
-	PrefixAuditLog = "aud_"
+	PrefixTenant           = "tnt_"
+	PrefixUser             = "usr_"
+	PrefixAPIKey           = "key_"
+	PrefixAuditLog         = "aud_"
+	PrefixPlatformOperator = "plt_"
 )
 
 // randomBytes is the entropy in an id. 14 bytes leaves a 32-character id
