@@ -39,6 +39,8 @@ import (
 // Store 是内存版 store.Store。零值不可用，请使用 New。
 type Store struct {
 	mu                sync.Mutex
+	routes            []model.RouteRevision
+	workflowTemplates []model.WorkflowTemplateRevision
 	tenants           map[string]model.Tenant
 	users             map[string]model.User
 	platformOperators map[string]model.PlatformOperator
@@ -559,6 +561,60 @@ func (s *Store) ListJobArtifacts(_ context.Context, tenantID, jobID string) ([]m
 	}
 	sortNewestFirst(out, func(a model.JobArtifact) (time.Time, string) { return a.CreatedAt, a.ID })
 	return out, nil
+}
+
+// ListJobArtifactsBefore returns up to store.MaxExpiredJobArtifacts
+// artifacts of artifactType older than cutoff, across every tenant, oldest
+// first — the order a cleanup sweep wants, so the most-overdue artifacts are
+// reaped first when there are more than one tick's cap.
+//
+// ListJobArtifactsBefore 返回最多 store.MaxExpiredJobArtifacts 个、类型为
+// artifactType 且早于 cutoff 的产物，跨越所有租户，最旧的在前——这正是一次
+// 清理扫描想要的顺序，当数量超过一轮的上限时，逾期最久的产物会被优先回收。
+func (s *Store) ListJobArtifactsBefore(_ context.Context, artifactType string, cutoff time.Time) ([]model.JobArtifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.JobArtifact
+	for _, artifact := range s.artifacts {
+		if artifact.Type == artifactType && artifact.CreatedAt.Before(cutoff) {
+			out = append(out, artifact)
+		}
+	}
+	sortOldestFirst(out, func(a model.JobArtifact) (time.Time, string) { return a.CreatedAt, a.ID })
+	if len(out) > store.MaxExpiredJobArtifacts {
+		out = out[:store.MaxExpiredJobArtifacts]
+	}
+	return out, nil
+}
+
+// DeleteJobArtifact removes one artifact record. A missing id is not an
+// error, matching gormstore's own DeleteJobArtifact.
+//
+// DeleteJobArtifact 移除一个产物记录。不存在的 id 不算错误，与 gormstore 自己的
+// DeleteJobArtifact 一致。
+func (s *Store) DeleteJobArtifact(_ context.Context, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.artifacts, id)
+	return nil
+}
+
+// sortOldestFirst is sortNewestFirst's reverse, for the one list in this
+// package a cleanup sweep reads in age order rather than the user-facing
+// newest-first convention every other list follows.
+//
+// sortOldestFirst 是 sortNewestFirst 的反向排序，供本包中唯一一个按年龄顺序
+// （而不是其余每个列表都遵循的、面向用户的最新在前约定）读取的列表使用，
+// 即一次清理扫描。
+func sortOldestFirst[T any](items []T, key func(T) (time.Time, string)) {
+	sort.Slice(items, func(i, j int) bool {
+		leftAt, leftID := key(items[i])
+		rightAt, rightID := key(items[j])
+		if leftAt.Equal(rightAt) {
+			return leftID < rightID
+		}
+		return leftAt.Before(rightAt)
+	})
 }
 
 // sortNewestFirst orders rows the way every list in this package is read:

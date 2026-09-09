@@ -5,6 +5,8 @@ import (
 
 	"github.com/zeromicro/go-zero/rest"
 
+	"AIServeWeave/common/modelroute"
+	"AIServeWeave/common/workflowtemplate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
@@ -38,6 +40,33 @@ import (
 //   - 共享密钥：租户引导、平台运维账户引导（复用同一个 BootstrapToken——见
 //     logic.CreatePlatformOperator 的文档注释），以及 Gateway 的校验调用。
 func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
+
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/operator/v1/routes", Handler: requirePlatformSession(ctx, currentRoutes(ctx, false))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/history", Handler: requirePlatformSession(ctx, routeHistory(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/revisions/:revision", Handler: requirePlatformSession(ctx, routeRevision(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/status", Handler: requirePlatformSession(ctx, routingStatus(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/rollback", Handler: requirePlatformSession(ctx, rollbackRoutes(ctx))},
+		{Method: http.MethodGet, Path: "/internal/v1/routes/current", Handler: requireSharedSecret(ctx.Config.InternalToken, currentRoutes(ctx, true))},
+	})
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodPost, Path: "/operator/v1/routes/validate", Handler: requirePlatformSession(ctx, validateRoutes(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/publish", Handler: requirePlatformSession(ctx, publishRoutes(ctx))},
+	}, rest.WithMaxBytes(modelroute.MaxDocumentBytes))
+
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: requirePlatformSession(ctx, listWorkflowTemplates(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id", Handler: requirePlatformSession(ctx, getWorkflowTemplate(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/history", Handler: requirePlatformSession(ctx, workflowTemplateHistory(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/revisions/:revision", Handler: requirePlatformSession(ctx, workflowTemplateRevisionAt(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/status", Handler: requirePlatformSession(ctx, workflowTemplateStatus(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/rollback", Handler: requirePlatformSession(ctx, rollbackWorkflowTemplate(ctx))},
+		{Method: http.MethodGet, Path: "/internal/v1/workflow-templates/current", Handler: requireSharedSecret(ctx.Config.InternalToken, currentWorkflowTemplatesBundle(ctx))},
+	})
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/validate", Handler: requirePlatformSession(ctx, validateWorkflowTemplate(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: requirePlatformSession(ctx, publishWorkflowTemplate(ctx))},
+	}, rest.WithMaxBytes(workflowtemplate.MaxContentBytes))
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: login(ctx)},
 		// The platform operator login (STATUS.md's P01) is public the same
@@ -157,6 +186,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/:id/artifacts",
 			Handler: requireSharedSecret(ctx.Config.InternalToken, listJobArtifacts(ctx)),
+		},
+		{
+			Method:  http.MethodDelete,
+			Path:    "/internal/v1/jobs/:id/artifacts/:artifact_id",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, deleteJobArtifact(ctx)),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/job-artifacts/expired",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx)),
 		},
 	})
 

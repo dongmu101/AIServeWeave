@@ -80,9 +80,9 @@ export function errorResponse(status: number, code: string): Response {
  * 声明的 Content-Length 仍然先检查一次。对一个诚实的超大请求，那是一次更省事的拒绝；
  * 对不诚实的那个则毫无代价——谎报长度或干脆不报的调用方，会被下面的计数抓住。
  */
-export async function readBoundedText(request: Request): Promise<string | null> {
+export async function readBoundedText(request: Pick<Request, "headers" | "body">, maxBytes = MAX_BODY_BYTES): Promise<string | null> {
   const declared = Number(request.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) {
+  if (Number.isFinite(declared) && declared > maxBytes) {
     return null;
   }
   if (!request.body) {
@@ -106,7 +106,7 @@ export async function readBoundedText(request: Request): Promise<string | null> 
       return text + decoder.decode();
     }
     received += value.byteLength;
-    if (received > MAX_BODY_BYTES) {
+    if (received > maxBytes) {
       // Cancelling tells the source to stop producing. Without it the rest of
       // the body keeps arriving into a buffer nobody is going to read.
       //

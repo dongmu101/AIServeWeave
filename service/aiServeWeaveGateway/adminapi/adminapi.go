@@ -43,8 +43,10 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/modelroute"
 	"AIServeWeave/common/nodeview"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/workflowtemplate"
 	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
 )
@@ -53,6 +55,8 @@ import (
 //
 // Config 配置运维监听器的 handler。
 type Config struct {
+	// Routes reports the effective routing publication. / Routes 报告生效路由发布。
+	Routes func() modelroute.Applied
 	// Token authenticates the caller. An empty token is refused at
 	// construction rather than accepted as "no authentication": a fleet
 	// inventory served to anybody who can reach the port is not a degraded
@@ -81,6 +85,16 @@ type Config struct {
 	//
 	// Templates 报告本副本注册的工作流目录。
 	Templates func() []workflowview.Template
+	// Workflows reports the effective workflow-template bundle status
+	// (P03) — mode, count and bundle digest — mirroring what Routes reports
+	// for routing. It is separate from Templates because the two answer
+	// different questions: Templates is the catalogue itself, this is
+	// whether this replica's copy of it is current.
+	//
+	// Workflows 报告生效的工作流模板整包状态（P03）——来源、数量与整包摘要——
+	// 与 Routes 为路由报告的东西同构。它与 Templates 分开，因为两者回答的是不同
+	// 的问题：Templates 是目录本身，这个回答的是本副本手上的这份是否是最新的。
+	Workflows func() workflowtemplate.Applied
 	// ReplicaID identifies which replica produced a document. The control
 	// plane needs it to tell one replica's partial view from another's.
 	//
@@ -105,6 +119,15 @@ func New(cfg Config) (http.Handler, error) {
 	}
 
 	mux := http.NewServeMux()
+	if cfg.Routes != nil {
+		mux.HandleFunc("GET /internal/v1/routes", func(w http.ResponseWriter, r *http.Request) {
+			if !authorized(r, cfg.Token) {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			writeJSON(w, http.StatusOK, modelroute.ReplicaStatus{Applied: cfg.Routes(), ReplicaID: cfg.ReplicaID, GeneratedAt: clock.Now().UTC()})
+		})
+	}
 	mux.HandleFunc("GET /internal/v1/nodes", func(w http.ResponseWriter, r *http.Request) {
 		if !authorized(r, cfg.Token) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -124,6 +147,15 @@ func New(cfg Config) (http.Handler, error) {
 				GeneratedAt: clock.Now().UTC(),
 				Templates:   cfg.Templates(),
 			})
+		})
+	}
+	if cfg.Workflows != nil {
+		mux.HandleFunc("GET /internal/v1/workflows/status", func(w http.ResponseWriter, r *http.Request) {
+			if !authorized(r, cfg.Token) {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			writeJSON(w, http.StatusOK, workflowtemplate.ReplicaStatus{Applied: cfg.Workflows(), ReplicaID: cfg.ReplicaID, GeneratedAt: clock.Now().UTC()})
 		})
 	}
 

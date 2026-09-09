@@ -145,14 +145,39 @@ func (j Job) Terminal() bool {
 // Filename、Subfolder 与 Type 是后端自己的三段式定位信息（即 runtime.ArtifactRef
 // 去掉在这里与 JobID 重复的 RunID）。与 job 的路由绑定一样，这份定位信息只为恢复
 // 而存储，不是交给调用方的标识符——公开 ID 才是。
+//
+// SHA256, SizeBytes, ContentType and StorageKey describe the copy of this
+// artifact's bytes a Gateway replica has (or has not yet) made into its
+// configured object storage backend (STATUS.md's P04; see
+// service/aiServeWeaveGateway/objectstore). They are empty/zero for an
+// artifact recorded before that copy happens, or whenever byte persistence
+// is disabled — the same "accept the zero value until the feature lands"
+// tolerance WorkflowVersion already established on Job above, applied here
+// to a feature that lands after the row itself already exists rather than
+// before it. StorageKey is this backend's own key, meaningful only together
+// with whichever backend a Gateway replica is configured to use — it is not
+// a URL and never crosses to a tenant-facing view.
+//
+// SHA256、SizeBytes、ContentType 与 StorageKey 描述的是 Gateway 副本是否
+// （或尚未）把这个产物的字节复制进了它配置的对象存储后端（STATUS.md 的
+// P04；见 service/aiServeWeaveGateway/objectstore）。对于这次复制发生之前
+// 记录的产物，或字节持久化被关闭时，它们为空/零值——与上面 Job 的
+// WorkflowVersion 已经确立的「在功能落地之前接受零值」的容忍度相同，只是
+// 这里的功能是在这一行本身已经存在之后才落地，而不是之前。StorageKey 是
+// 该后端自己的 key，只有连同 Gateway 副本配置使用的是哪个后端才有意义——
+// 它不是一个 URL，也从不进入面向租户的视图。
 type JobArtifact struct {
-	ID        string    `gorm:"primaryKey;size:64"`
-	JobID     string    `gorm:"size:64;not null;index:idx_job_artifacts_job"`
-	TenantID  string    `gorm:"size:32;not null;index:idx_job_artifacts_tenant"`
-	Filename  string    `gorm:"size:512;not null"`
-	Subfolder string    `gorm:"size:512;not null;default:''"`
-	Type      string    `gorm:"size:32;not null;default:''"`
-	CreatedAt time.Time `gorm:"not null"`
+	ID          string    `gorm:"primaryKey;size:64"`
+	JobID       string    `gorm:"size:64;not null;index:idx_job_artifacts_job"`
+	TenantID    string    `gorm:"size:32;not null;index:idx_job_artifacts_tenant"`
+	Filename    string    `gorm:"size:512;not null"`
+	Subfolder   string    `gorm:"size:512;not null;default:''"`
+	Type        string    `gorm:"size:32;not null;default:''"`
+	SHA256      string    `gorm:"size:64;not null;default:''"`
+	SizeBytes   int64     `gorm:"not null;default:0"`
+	ContentType string    `gorm:"size:255;not null;default:''"`
+	StorageKey  string    `gorm:"size:1024;not null;default:''"`
+	CreatedAt   time.Time `gorm:"not null"`
 }
 
 // TableName pins the table name. See Tenant.TableName in model.go.

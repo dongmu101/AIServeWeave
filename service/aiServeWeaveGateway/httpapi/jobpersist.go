@@ -2,29 +2,45 @@ package httpapi
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
 	"log/slog"
+	"path"
 	"sync"
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
 // Defaults for the background job persister. They bound how much work one
 // replica does writing job records to the control plane: at most
 // DefaultPersistBatchSize jobs per DefaultPersistInterval, at most
-// DefaultPersistConcurrency of them in flight at once, and no single call is
-// allowed to hang past DefaultPersistCallTimeout.
+// DefaultPersistConcurrency of them in flight at once, and no single
+// metadata call is allowed to hang past DefaultPersistCallTimeout.
+//
+// DefaultArtifactCopyTimeout is a separate, much larger bound: it applies
+// only to the node-to-storage byte copy persistArtifacts does when
+// ArtifactStorage is configured, which moves real file bytes rather than a
+// small JSON body and needs a timeout sized for that.
 //
 // 后台 job 持久化器的默认值。它们限定了一个副本向控制面写入 job 记录最多做多少
 // 工作：每 DefaultPersistInterval 至多 DefaultPersistBatchSize 个 job，至多
-// DefaultPersistConcurrency 个同时在途，且单次调用不允许挂起超过
+// DefaultPersistConcurrency 个同时在途，且单次元数据调用不允许挂起超过
 // DefaultPersistCallTimeout。
+//
+// DefaultArtifactCopyTimeout 是一个独立、大得多的上限：它只施加于配置了
+// ArtifactStorage 时 persistArtifacts 所做的「节点到存储」字节复制——那搬运的
+// 是真实文件字节而非一个小的 JSON 请求体，需要一个按此设定的时长。
 const (
-	DefaultPersistInterval    = 5 * time.Second
-	DefaultPersistBatchSize   = 200
-	DefaultPersistConcurrency = 8
-	DefaultPersistCallTimeout = 3 * time.Second
-	DefaultPersistMaxBackoff  = 5 * time.Minute
+	DefaultPersistInterval     = 5 * time.Second
+	DefaultPersistBatchSize    = 200
+	DefaultPersistConcurrency  = 8
+	DefaultPersistCallTimeout  = 3 * time.Second
+	DefaultPersistMaxBackoff   = 5 * time.Minute
+	DefaultArtifactCopyTimeout = 5 * time.Minute
 )
 
 // JobPersistClient is what the background persister needs to write one
@@ -76,10 +92,37 @@ type JobPersistClient interface {
 	// public id listArtifacts already minted for it. Like CreateJob, a
 	// duplicate id for the same job and tenant is not an error.
 	//
+	// sha256, contentType and storageKey are empty and sizeBytes is 0 when
+	// this replica has no ArtifactStorage configured, or has not yet copied
+	// this artifact's bytes into it — persistArtifacts calls this the same
+	// way either way, so a control plane without the P04 columns applied
+	// yet, or a Gateway without object storage configured, both still get
+	// the metadata-only record this call always carried before P04.
+	//
 	// CreateJobArtifact 记录一次运行产出的一个产物，使用 listArtifacts 已经
 	// 为它铸造的公开 id。与 CreateJob 一样，同一 job 与租户下重复的 id 不是
 	// 错误。
-	CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType string) error
+	//
+	// 本副本未配置 ArtifactStorage、或尚未把这个产物的字节复制进去时，
+	// sha256、contentType、storageKey 为空，sizeBytes 为 0——persistArtifacts
+	// 两种情况下都用同一种方式调用本方法，因此无论是尚未套用 P04 新列的控制面，
+	// 还是未配置对象存储的 Gateway，得到的都仍是 P04 之前这次调用本就携带的
+	// 那份仅有元数据的记录。
+	CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64) error
+}
+
+// artifactOpener is the one scheduler method the persister needs to pull an
+// artifact's bytes for copying into object storage. It is an interface
+// rather than a concrete *scheduler.Scheduler for the same reason
+// jobrecover.go's jobRecoverCandidates is: a test can drive it against a
+// stub without a tunnel.
+//
+// artifactOpener 是持久化器为把产物字节复制进对象存储所需要的唯一一个
+// scheduler 方法。它是一个接口而不是具体的 *scheduler.Scheduler，理由与
+// jobrecover.go 的 jobRecoverCandidates 相同：测试能针对一个桩来驱动它，
+// 而无需搭起隧道。
+type artifactOpener interface {
+	OpenArtifact(ctx context.Context, c scheduler.Candidate, ref runtime.ArtifactRef) (runtime.Artifact, error)
 }
 
 // jobPersistConfig collects the persister's tunable bounds, defaulted by
@@ -93,6 +136,12 @@ type jobPersistConfig struct {
 	Concurrency int
 	CallTimeout time.Duration
 	MaxBackoff  time.Duration
+	// ArtifactCopyTimeout bounds one artifact's node-to-storage byte copy.
+	// See DefaultArtifactCopyTimeout for why it is not CallTimeout.
+	//
+	// ArtifactCopyTimeout 限定单个产物「节点到存储」的字节复制时长。为何它
+	// 不是 CallTimeout，见 DefaultArtifactCopyTimeout。
+	ArtifactCopyTimeout time.Duration
 }
 
 // jobPersister is the bypass write path from this Gateway replica's in-memory
@@ -146,6 +195,18 @@ type jobPersister struct {
 	clock  runtime.Clock
 	logger *slog.Logger
 	cfg    jobPersistConfig
+	// opener and storage are both nil-able and independent of client: opener
+	// is nil only in tests that do not exercise artifact byte persistence,
+	// and storage is nil whenever the deployment has no ArtifactStorage
+	// configured (STATUS.md's P04) — in which case persistArtifacts reports
+	// artifact metadata exactly as it did before P04 existed.
+	//
+	// opener 与 storage 都可以为 nil，且相互独立：opener 只在不测试产物字节
+	// 持久化的测试里为 nil；storage 在部署未配置 ArtifactStorage
+	// （STATUS.md 的 P04）时为 nil——这种情况下 persistArtifacts 上报产物
+	// 元数据的方式与 P04 出现之前完全一致。
+	opener  artifactOpener
+	storage objectstore.Backend
 
 	// poke wakes the loop early after a submit or an observation, so a
 	// healthy control plane sees a fresh job persisted within about one
@@ -168,7 +229,7 @@ type jobPersister struct {
 //
 // newJobPersister 用默认值填补 cfg 里的零值字段来构建一个持久化器。它不会
 // 启动后台循环，要启动需要以协程方式调用 run。
-func newJobPersister(jobs *jobStore, client JobPersistClient, clock runtime.Clock, logger *slog.Logger, cfg jobPersistConfig) *jobPersister {
+func newJobPersister(jobs *jobStore, client JobPersistClient, opener artifactOpener, storage objectstore.Backend, clock runtime.Clock, logger *slog.Logger, cfg jobPersistConfig) *jobPersister {
 	if cfg.Interval <= 0 {
 		cfg.Interval = DefaultPersistInterval
 	}
@@ -184,15 +245,20 @@ func newJobPersister(jobs *jobStore, client JobPersistClient, clock runtime.Cloc
 	if cfg.MaxBackoff <= 0 {
 		cfg.MaxBackoff = DefaultPersistMaxBackoff
 	}
+	if cfg.ArtifactCopyTimeout <= 0 {
+		cfg.ArtifactCopyTimeout = DefaultArtifactCopyTimeout
+	}
 	return &jobPersister{
-		jobs:   jobs,
-		client: client,
-		clock:  clock,
-		logger: logger,
-		cfg:    cfg,
-		poke:   make(chan struct{}, 1),
-		stop:   make(chan struct{}),
-		done:   make(chan struct{}),
+		jobs:    jobs,
+		client:  client,
+		opener:  opener,
+		storage: storage,
+		clock:   clock,
+		logger:  logger,
+		cfg:     cfg,
+		poke:    make(chan struct{}, 1),
+		stop:    make(chan struct{}),
+		done:    make(chan struct{}),
 	}
 }
 
@@ -305,7 +371,7 @@ func (jp *jobPersister) persistOne(id string) {
 	}
 
 	if !j.persisted {
-		err := jp.client.CreateJob(ctx, j.ID, j.TenantID, j.WorkflowID, "",
+		err := jp.client.CreateJob(ctx, j.ID, j.TenantID, j.WorkflowID, j.WorkflowVersion,
 			j.Candidate.NodeID, j.Candidate.RuntimeID, j.RunID, string(j.State), 0)
 		if err != nil {
 			jp.jobs.persistFailed(id, jp.clock.Now(), jp.backoff)
@@ -336,38 +402,135 @@ func (jp *jobPersister) persistOne(id string) {
 }
 
 // persistArtifacts reports id's pending artifacts one call per artifact,
-// since CreateJobArtifact takes one at a time. A per-artifact failure marks
-// the whole job's artifact batch as failed and backs off, but the artifacts
-// that did succeed have already been removed from the pending list by
-// artifactPersisted, so a retry only ever reports what is still owed.
+// since CreateJobArtifact takes one at a time. When jp.storage is
+// configured, each artifact's bytes are first copied from the node that
+// produced it into that storage by persistArtifactBytes, and the resulting
+// hash, size, content type and storage key ride along on the same
+// CreateJobArtifact call; when it is not configured, this reports exactly
+// the metadata-only record it always did before P04. A per-artifact failure
+// marks the whole job's artifact batch as failed and backs off, but the
+// artifacts that did succeed have already been removed from the pending
+// list by artifactPersisted, so a retry only ever reports what is still
+// owed.
+//
+// Each artifact gets its own fresh call context rather than sharing one
+// across the whole batch, because a byte copy needs jp.cfg.ArtifactCopyTimeout
+// — sized for moving real file bytes — not the much smaller
+// jp.cfg.CallTimeout a metadata-only call shares this loop with.
 //
 // persistArtifacts 逐个上报 id 待确认的产物，因为 CreateJobArtifact 一次只
-// 接受一个。单个产物失败会把整个 job 的这批标记为失败并退避，但已经成功的
-// 那些产物已经被 artifactPersisted 从待确认列表移除，因此重试时只会上报
-// 依然欠着的部分。
+// 接受一个。配置了 jp.storage 时，每个产物的字节会先由 persistArtifactBytes
+// 从产出它的节点被复制进那个存储，算出的哈希、大小、内容类型与存储 key
+// 随同一次 CreateJobArtifact 调用一起上报；未配置时，本方法上报的仍是 P04
+// 出现之前那种仅有元数据的记录。单个产物失败会把整个 job 的这批标记为失败
+// 并退避，但已经成功的那些产物已经被 artifactPersisted 从待确认列表移除，
+// 因此重试时只会上报依然欠着的部分。
+//
+// 每个产物都拿到自己独立的一次调用上下文，而不是整批共用一个，因为字节
+// 复制需要 jp.cfg.ArtifactCopyTimeout——按搬运真实文件字节设定——而不是与它
+// 共处同一个循环、小得多的元数据调用超时 jp.cfg.CallTimeout。
 func (jp *jobPersister) persistArtifacts(id string) {
-	ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
-	defer cancel()
-
-	tenantID, artifacts, ok := jp.jobs.artifactsForPersist(id)
+	tenantID, candidate, runID, artifacts, ok := jp.jobs.artifactsForPersist(id)
 	if !ok {
 		return
 	}
 
 	failed := false
 	for _, a := range artifacts {
-		err := jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type)
+		sha256Hex, contentType, storageKey := "", "", ""
+		sizeBytes := int64(0)
+		if jp.storage != nil {
+			var err error
+			sha256Hex, contentType, storageKey, sizeBytes, err = jp.persistArtifactBytes(candidate, runID, tenantID, id, a)
+			if err != nil {
+				failed = true
+				jp.logger.Warn("copying an artifact into object storage failed; it remains downloadable live from the node, this copy is not yet durable",
+					slog.String("job_id", id), slog.String("artifact_id", a.ArtifactID), slog.Any("error", err))
+				continue
+			}
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.CallTimeout)
+		err := jp.client.CreateJobArtifact(ctx, id, a.ArtifactID, tenantID, a.Filename, a.Subfolder, a.Type, sha256Hex, contentType, storageKey, sizeBytes)
+		cancel()
 		if err != nil {
 			failed = true
 			jp.logger.Warn("job artifact persistence did not reach the control plane; the artifact remains downloadable, this record is not yet durable",
 				slog.String("job_id", id), slog.String("artifact_id", a.ArtifactID), slog.Any("error", err))
 			continue
 		}
+		if storageKey != "" {
+			jp.jobs.artifactStored(a.ArtifactID, storageKey, contentType, sizeBytes)
+		}
 		jp.jobs.artifactPersisted(id, a.ArtifactID)
 	}
 	if failed {
 		jp.jobs.artifactPersistFailed(id, jp.clock.Now(), jp.backoff)
 	}
+}
+
+// persistArtifactBytes pulls one artifact's bytes from the node that
+// produced it (via jp.opener, the same OpenArtifact a live download uses)
+// and copies them into jp.storage under a key derived from tenantID, jobID
+// and the artifact's own public id — three already-safe, internally
+// generated identifiers, so the key never carries anything a caller
+// supplied. It hashes and counts the bytes as they are copied, through
+// countingReader wrapping the same read Put already does, rather than
+// reading the artifact a second time.
+//
+// persistArtifactBytes 从产出某个产物的节点拉取它的字节（经由 jp.opener，
+// 与一次实时下载所用的 OpenArtifact 相同），并复制进 jp.storage，key 由
+// tenantID、jobID 与产物自己的公开 id 派生——三者都已经是安全的、内部生成的
+// 标识符，因此这个 key 里从不会带上调用方提供的任何东西。它借助包裹在 Put
+// 本就要做的那次读取之外的 countingReader，在复制字节的同时完成哈希与计数，
+// 而不必把产物再读一遍。
+func (jp *jobPersister) persistArtifactBytes(candidate scheduler.Candidate, runID, tenantID, jobID string, a pendingArtifact) (sha256Hex, contentType, storageKey string, size int64, err error) {
+	ctx, cancel := context.WithTimeout(context.Background(), jp.cfg.ArtifactCopyTimeout)
+	defer cancel()
+
+	ref := runtime.ArtifactRef{RunID: runID, Filename: a.Filename, Subfolder: a.Subfolder, Type: a.Type}
+	artifact, err := jp.opener.OpenArtifact(ctx, candidate, ref)
+	if err != nil {
+		return "", "", "", 0, err
+	}
+	defer artifact.Body.Close()
+
+	// path.Join rather than string concatenation, so an empty tenantID —
+	// what an unconfigured, no-auth deployment's requests carry (see
+	// auth.go's authenticator) — collapses cleanly instead of producing a
+	// leading "/" that objectstore.validateKey would then reject as an
+	// absolute path.
+	//
+	// 用 path.Join 而不是字符串拼接，这样一个空 tenantID——未配置鉴权、放行
+	// 一切的部署（见 auth.go 的 authenticator）的请求所携带的值——会被干净地
+	// 折叠掉，而不会产生一个开头的 "/"，进而被 objectstore.validateKey 当作
+	// 绝对路径拒绝。
+	key := path.Join(tenantID, jobID, a.ArtifactID)
+	hash := sha256.New()
+	counted := &countingReader{r: io.TeeReader(artifact.Body, hash)}
+	if err := jp.storage.Put(ctx, key, counted, artifact.Size); err != nil {
+		return "", "", "", 0, err
+	}
+	return hex.EncodeToString(hash.Sum(nil)), artifact.ContentType, key, counted.n, nil
+}
+
+// countingReader wraps a Reader to count the bytes actually read through
+// it, so a caller mid-stream (like persistArtifactBytes, hashing the same
+// bytes objectstore.Backend.Put is reading) learns the real byte count
+// without a second, separate read of whatever it wrapped.
+//
+// countingReader 包装一个 Reader 以统计实际经它读取的字节数，好让调用方
+// （比如 persistArtifactBytes，正在为 objectstore.Backend.Put 读的同一批
+// 字节计算哈希）不必对被包装的内容再单独读一遍就能得到真实字节数。
+type countingReader struct {
+	r io.Reader
+	n int64
+}
+
+func (c *countingReader) Read(p []byte) (int, error) {
+	n, err := c.r.Read(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // backoff doubles the base interval per consecutive failure, capped at

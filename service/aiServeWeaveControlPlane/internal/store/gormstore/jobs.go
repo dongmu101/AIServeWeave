@@ -160,3 +160,25 @@ func (s *Store) ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([
 		Find(&out).Error
 	return out, translate(err)
 }
+
+// ListJobArtifactsBefore returns up to store.MaxExpiredJobArtifacts
+// artifacts of artifactType older than cutoff, across every tenant.
+//
+// ListJobArtifactsBefore 返回最多 store.MaxExpiredJobArtifacts 个、类型为
+// artifactType 且早于 cutoff 的产物，跨越所有租户。
+func (s *Store) ListJobArtifactsBefore(ctx context.Context, artifactType string, cutoff time.Time) ([]model.JobArtifact, error) {
+	var out []model.JobArtifact
+	err := s.db.WithContext(ctx).
+		Where("type = ? AND created_at < ?", artifactType, cutoff).
+		Order("created_at ASC, id ASC").
+		Limit(store.MaxExpiredJobArtifacts).
+		Find(&out).Error
+	return out, translate(err)
+}
+
+// DeleteJobArtifact removes one artifact record.
+//
+// DeleteJobArtifact 移除一个产物记录。
+func (s *Store) DeleteJobArtifact(ctx context.Context, id string) error {
+	return translate(s.db.WithContext(ctx).Where("id = ?", id).Delete(&model.JobArtifact{}).Error)
+}

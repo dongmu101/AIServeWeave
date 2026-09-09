@@ -22,6 +22,7 @@ const (
 	CapabilityWorkflowEvents    Capability = "workflow_events"
 	CapabilityWorkflowCancel    Capability = "workflow_cancel"
 	CapabilityArtifactRead      Capability = "artifact_read"
+	CapabilityInputWrite        Capability = "input_write"
 )
 
 // CapabilitySource records how a piece of capability evidence was obtained,

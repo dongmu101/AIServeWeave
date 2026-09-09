@@ -33,20 +33,67 @@ func (e *InputError) Error() string {
 	return fmt.Sprintf("workflow: input %q %s", e.Name, e.Reason)
 }
 
-// Bind substitutes values into a copy of the template's graph and returns the
-// API-format workflow to submit. The stored template is never modified, so
-// one registry entry serves concurrent requests.
+// FileHeader is one uploaded file's metadata, known as soon as a multipart
+// request part's own header is read — before any of its bytes are — so Bind
+// can validate and account for it without reading a single byte of the
+// upload itself.
 //
-// Values must be exactly the declared inputs: an undeclared name is an error
-// rather than something to ignore, since silently dropping it would let a
-// caller believe they had changed something they had not.
+// FileHeader 是一个已上传文件的元数据，在读到某个 multipart 请求分片自己的
+// 头部时就已知——早于它的任何字节——因此 Bind 无需读取上传本身的一个字节，
+// 就能对它做校验与记账。
+type FileHeader struct {
+	Filename string
+	// Size is the exact byte count the caller declared, or -1 if unknown.
+	//
+	// Size 是调用方声明的确切字节数，未知则为 -1。
+	Size int64
+}
+
+// PendingFile is one declared file input a caller supplied, whose bytes
+// still need to be uploaded to whichever node ends up running this workflow
+// before the graph Bind returns is actually submittable (STATUS.md's P04).
+// Bind cannot finish this itself: which node that is is not decided until
+// after Bind returns. The caller (httpapi.submitRun) uploads each one via
+// scheduler.UploadInput against the node it selects, then completes the
+// graph with workflow.SetGraphField before submitting it.
 //
-// Bind 把取值代入模板图的一份副本，返回可提交的 API Format 工作流。存储的模板从不被
-// 修改，因此一个目录条目可以服务并发请求。
+// PendingFile 是调用方提供的一个已声明文件输入，它的字节仍需要在 Bind 返回
+// 的图真正可提交之前，被上传到最终运行这个工作流的那个节点上（STATUS.md 的
+// P04）。Bind 自己完成不了这件事：是哪个节点，直到 Bind 返回之后才会决定。
+// 调用方（httpapi.submitRun）针对自己选定的节点，经 scheduler.UploadInput
+// 逐个上传，再用 workflow.SetGraphField 补完这张图，然后才提交它。
+type PendingFile struct {
+	Name     string
+	Node     string
+	Field    string
+	Filename string
+	Size     int64
+}
+
+// Bind substitutes scalar values into a copy of the template's graph and
+// returns the API-format workflow to submit, together with the file inputs
+// the caller supplied that still need their bytes uploaded — see
+// PendingFile. The stored template is never modified, so one registry entry
+// serves concurrent requests.
 //
-// values 必须正好是那些已声明的输入：未声明的名字是错误而不是可以忽略的东西——默默
-// 丢掉它，会让调用方以为自己改动了实际上没改动的东西。
-func (t *Template) Bind(values map[string]json.RawMessage) (json.RawMessage, error) {
+// values and files partition the declared inputs between them: a name may
+// appear in at most one, and every name in either must be declared by this
+// template and match its declared Type (a scalar-typed input given as a
+// file, or a file-typed input given as a JSON value, is an error) —
+// undeclared or mismatched names are errors rather than something to
+// ignore, since silently dropping one would let a caller believe they had
+// changed something they had not.
+//
+// Bind 把标量取值代入模板图的一份副本，返回可提交的 API Format 工作流，
+// 连同调用方提供的、字节仍需上传的那些文件输入——见 PendingFile。存储的
+// 模板从不被修改，因此一个目录条目可以服务并发请求。
+//
+// values 与 files 共同瓜分已声明的输入：一个名字最多出现在其中一个里，且
+// 出现在任一个里的名字都必须是本模板已声明的、且与其已声明的 Type 相符
+// （把一个标量类型的输入当文件给出，或把一个文件类型的输入当 JSON 值给出，
+// 都是错误）——未声明或类型不符的名字是错误而不是可以忽略的东西，默默丢掉
+// 它会让调用方以为自己改动了实际上没改动的东西。
+func (t *Template) Bind(values map[string]json.RawMessage, files map[string]FileHeader) (json.RawMessage, []PendingFile, error) {
 	declared := make(map[string]Input, len(t.Inputs))
 	for _, in := range t.Inputs {
 		declared[in.Name] = in
@@ -57,8 +104,21 @@ func (t *Template) Bind(values map[string]json.RawMessage) (json.RawMessage, err
 	// 排序是为了让含多个未知名字的请求每次都在同一个上失败；每次都不一样的报错更难
 	// 处理。
 	for _, name := range sortedKeys(values) {
-		if _, ok := declared[name]; !ok {
-			return nil, &InputError{Name: truncate(name, MaxInputNameInError), Reason: "is not declared by this workflow"}
+		in, ok := declared[name]
+		if !ok {
+			return nil, nil, &InputError{Name: truncate(name, MaxInputNameInError), Reason: "is not declared by this workflow"}
+		}
+		if in.Type == InputFile {
+			return nil, nil, &InputError{Name: name, Reason: "is a file input and must be uploaded as a file, not given as a JSON value"}
+		}
+	}
+	for _, name := range sortedFileKeys(files) {
+		in, ok := declared[name]
+		if !ok {
+			return nil, nil, &InputError{Name: truncate(name, MaxInputNameInError), Reason: "is not declared by this workflow"}
+		}
+		if in.Type != InputFile {
+			return nil, nil, &InputError{Name: name, Reason: "is not a file input"}
 		}
 	}
 
@@ -69,27 +129,47 @@ func (t *Template) Bind(values map[string]json.RawMessage) (json.RawMessage, err
 		//
 		// Validate 在加载时已经拒绝过这种图，因此走到这里说明该模板是在内存里构造
 		// 且从未校验过的。
-		return nil, fmt.Errorf("workflow: template %q: %w", t.ID, err)
+		return nil, nil, fmt.Errorf("workflow: template %q: %w", t.ID, err)
 	}
 
+	var pending []PendingFile
 	for _, in := range t.Inputs {
+		if in.Type == InputFile {
+			fh, given := files[in.Name]
+			if !given {
+				if in.Required {
+					return nil, nil, &InputError{Name: in.Name, Reason: "is required"}
+				}
+				continue
+			}
+			pending = append(pending, PendingFile{
+				Name: in.Name, Node: in.Node, Field: in.Field,
+				Filename: fh.Filename, Size: fh.Size,
+			})
+			continue
+		}
+
 		raw, given := values[in.Name]
 		if !given {
 			if len(in.Default) > 0 {
 				raw = in.Default
 			} else if in.Required {
-				return nil, &InputError{Name: in.Name, Reason: "is required"}
+				return nil, nil, &InputError{Name: in.Name, Reason: "is required"}
 			} else {
 				continue
 			}
 		}
-		encoded, err := in.coerce(raw)
+		encoded, err := coerce(in, raw)
 		if err != nil {
-			return nil, &InputError{Name: in.Name, Reason: err.Error()}
+			return nil, nil, &InputError{Name: in.Name, Reason: err.Error()}
 		}
 		g.inputs[in.Node][in.Field] = encoded
 	}
-	return g.marshal()
+	graph, err := g.marshal()
+	if err != nil {
+		return nil, nil, err
+	}
+	return graph, pending, nil
 }
 
 // coerce checks raw against the input's declared type and bounds, and returns
@@ -97,10 +177,17 @@ func (t *Template) Bind(values map[string]json.RawMessage) (json.RawMessage, err
 // the parsed value rather than passed through, so nothing a caller wrapped in
 // whitespace or exotic number formatting reaches the backend verbatim.
 //
+// It is a package function rather than a method because Input is now an
+// alias onto common/workflowtemplate.Input (P03): Go does not allow a method
+// with a receiver type defined in another package, alias or not.
+//
 // coerce 按输入声明的类型与边界检查 raw，并返回要写进图里的取值。返回的字节是由解析
 // 后的值重新编码而来，而不是原样透传，因此调用方用空白或古怪数字格式包装的内容不会
 // 原封不动地抵达后端。
-func (in Input) coerce(raw json.RawMessage) (json.RawMessage, error) {
+//
+// 它是一个包函数而不是方法，因为 Input 现在是指向 common/workflowtemplate.Input
+// 的别名（P03）：Go 不允许接收者类型定义在别的包里的方法，是否别名都一样。
+func coerce(in Input, raw json.RawMessage) (json.RawMessage, error) {
 	switch in.Type {
 	case InputString:
 		var s string
@@ -121,7 +208,7 @@ func (in Input) coerce(raw json.RawMessage) (json.RawMessage, error) {
 		if err := json.Unmarshal(raw, &n); err != nil {
 			return nil, fmt.Errorf("must be an integer")
 		}
-		if err := in.checkBounds(float64(n)); err != nil {
+		if err := checkBounds(in, float64(n)); err != nil {
 			return nil, err
 		}
 		return json.Marshal(n)
@@ -134,7 +221,7 @@ func (in Input) coerce(raw json.RawMessage) (json.RawMessage, error) {
 		if math.IsNaN(n) || math.IsInf(n, 0) {
 			return nil, fmt.Errorf("must be a finite number")
 		}
-		if err := in.checkBounds(n); err != nil {
+		if err := checkBounds(in, n); err != nil {
 			return nil, err
 		}
 		return json.Marshal(n)
@@ -158,7 +245,7 @@ func (in Input) coerce(raw json.RawMessage) (json.RawMessage, error) {
 // checkBounds applies Min and Max, both inclusive.
 //
 // checkBounds 应用 Min 与 Max，两端均为闭区间。
-func (in Input) checkBounds(v float64) error {
+func checkBounds(in Input, v float64) error {
 	if in.Min != nil && v < *in.Min {
 		return fmt.Errorf("must be at least %v", *in.Min)
 	}
@@ -169,6 +256,15 @@ func (in Input) checkBounds(v float64) error {
 }
 
 func sortedKeys(m map[string]json.RawMessage) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedFileKeys(m map[string]FileHeader) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)

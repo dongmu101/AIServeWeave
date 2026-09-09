@@ -594,6 +594,44 @@ func (r *Runtime) OpenArtifact(ctx context.Context, ref runtime.ArtifactRef) (ru
 	}, nil
 }
 
+// UploadInput streams body to ComfyUI's input area via POST /upload/image
+// (STATUS.md's P04), so a later Submit's Template can reference it — a
+// LoadImage-style node's filename widget takes exactly the InputRef this
+// returns. It travels the tunnel as OPERATION_INPUT_UPLOAD.
+//
+// UploadInput 经 POST /upload/image 把 body 流式送进 ComfyUI 的输入区
+// （STATUS.md 的 P04），这样之后某个 Submit 的 Template 就能引用它——
+// LoadImage 一类节点的文件名字段接受的正是这里返回的 InputRef。它以
+// OPERATION_INPUT_UPLOAD 走隧道。
+func (r *Runtime) UploadInput(ctx context.Context, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+	if err := r.checkOpen("upload_input"); err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+	if err := r.requireCapability("upload_input", runtime.CapabilityInputWrite); err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+	if meta.Filename == "" {
+		return runtime.InputUploadResult{}, &runtime.RuntimeError{
+			Code:      runtime.ErrorInvalidConfig,
+			RuntimeID: r.cfg.ID,
+			Kind:      runtime.KindComfyUI,
+			Operation: "upload_input",
+			Message:   "input upload has no filename",
+		}
+	}
+
+	resp, err := r.client.UploadImage(ctx, meta, body)
+	if err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+
+	ref := resp.Name
+	if resp.Subfolder != "" {
+		ref = resp.Subfolder + "/" + resp.Name
+	}
+	return runtime.InputUploadResult{InputRef: ref}, nil
+}
+
 // Artifacts lists the output files a finished run produced, read from its
 // History entry.
 //
@@ -698,20 +736,21 @@ func (r *Runtime) EventStreamStats() (reconnects, binaryFrames, droppedEvents in
 }
 
 // endpointCapabilities is the capability evidence a reachable ComfyUI
-// provides. These four are structural: every ComfyUI build serves /prompt,
-// /ws, /queue and /view, so a server that answered discovery serves them
-// too. What varies is not whether cancellation exists but whether it is
-// safe to use, which the Cancel documentation and the exclusive flag
-// govern — not this capability.
+// provides. These five are structural: every ComfyUI build serves /prompt,
+// /ws, /queue, /view and /upload/image, so a server that answered discovery
+// serves them too. What varies is not whether cancellation exists but
+// whether it is safe to use, which the Cancel documentation and the
+// exclusive flag govern — not this capability.
 func endpointCapabilities() runtime.CapabilitySet {
-	detail := fmt.Sprintf("GET %s answered; ComfyUI serves %s, %s, %s and %s in the same server",
-		pathSystemStats, pathPrompt, pathWebSocket, pathQueue, pathView)
-	set := make(runtime.CapabilitySet, 4)
+	detail := fmt.Sprintf("GET %s answered; ComfyUI serves %s, %s, %s, %s and %s in the same server",
+		pathSystemStats, pathPrompt, pathWebSocket, pathQueue, pathView, pathUploadImage)
+	set := make(runtime.CapabilitySet, 5)
 	for _, capability := range []runtime.Capability{
 		runtime.CapabilityWorkflowExecution,
 		runtime.CapabilityWorkflowEvents,
 		runtime.CapabilityWorkflowCancel,
 		runtime.CapabilityArtifactRead,
+		runtime.CapabilityInputWrite,
 	} {
 		set[capability] = runtime.CapabilityEvidence{
 			Capability: capability,

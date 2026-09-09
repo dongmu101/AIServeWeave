@@ -8,7 +8,7 @@ info:
       chat/embeddings/responses/models，以及工作流 Job 的提交、状态、SSE 事件流、
       取消与产物下载。
     - **只读运维接口**（`-admin-addr` 单独配置时才挂载，使用部署密钥而非租户 Key）：
-      机群清单、工作流目录、按租户的 job 列表，供控制面聚合展示，不做任何写操作。
+      机群清单、工作流目录、按租户的 job 列表与路由生效状态，供控制面聚合展示，不做任何写操作。
 
     源码位置：`service/aiServeWeaveGateway/httpapi/`（公开前门）与
     `service/aiServeWeaveGateway/adminapi/`（运维接口）。
@@ -141,7 +141,15 @@ paths:
       summary: 提交一次工作流运行
       description: |
         请求体只携带模板已声明的输入值；图本身来自服务端注册的模板，调用方无法传入
-        任意图。请求体上限 1 MiB。
+        任意图。
+
+        模板不声明文件类型输入（`type: file`）时用 `application/json`，请求体上限
+        1 MiB。模板声明了文件类型输入时（STATUS.md 的 P04）改用
+        `multipart/form-data`：`inputs` 表单字段携带与 JSON 形态相同的请求体，其余
+        每个表单字段名对应一个已声明的文件输入名、值为该文件的字节；整个请求上限
+        200 MiB。字节先被 Gateway 挑中的节点接收，再经该节点写入其本地 ComfyUI 的
+        输入目录——因此含文件输入的提交固定在单个候选节点上，不做跨节点重试：那个
+        节点的分发失败即整体失败，不会换一个节点重新上传文件。
       operationId: submitWorkflowRun
       parameters:
         - $ref: "#/components/parameters/WorkflowID"
@@ -151,6 +159,17 @@ paths:
           application/json:
             schema:
               $ref: "#/components/schemas/RunRequest"
+          multipart/form-data:
+            schema:
+              type: object
+              properties:
+                inputs:
+                  type: string
+                  description: 与 application/json 形态相同的请求体，作为 JSON 字符串放进这个表单字段
+              additionalProperties:
+                type: string
+                format: binary
+                description: 表单字段名即模板声明的文件输入名，值为该文件的字节
       responses:
         "202":
           description: 已接受，返回刚创建的 job（状态多为 queued）
@@ -284,6 +303,34 @@ paths:
                 format: binary
         "404":
           $ref: "#/components/responses/OpenAIError"
+
+  /internal/v1/routes:
+    get:
+      tags: [admin]
+      summary: 本副本实际应用的路由版本与最近同步状态
+      description: 仅在运维监听器提供；文件模式不会被视为控制面版本确认。错误为固定代号，不包含配置或凭据。
+      operationId: getAppliedRoutes
+      security:
+        - adminToken: []
+      responses:
+        "200":
+          description: 路由生效状态
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [replica_id, generated_at, mode, revision, digest, applied_at, checked_at]
+                properties:
+                  replica_id: {type: string}
+                  generated_at: {type: string, format: date-time}
+                  mode: {type: string, enum: [file, controlplane]}
+                  revision: {type: integer, format: int64, minimum: 0}
+                  digest: {type: string}
+                  applied_at: {type: string, format: date-time}
+                  checked_at: {type: string, format: date-time}
+                  error: {type: string}
+        "401":
+          $ref: "#/components/responses/AdminError"
 
   /internal/v1/nodes:
     get:

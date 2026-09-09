@@ -103,6 +103,7 @@ const (
 	Operation_OPERATION_WORKFLOW_CANCEL    Operation = 8
 	Operation_OPERATION_ARTIFACT_OPEN      Operation = 9
 	Operation_OPERATION_ARTIFACT_LIST      Operation = 10
+	Operation_OPERATION_INPUT_UPLOAD       Operation = 11
 )
 
 // Enum value maps for Operation.
@@ -119,6 +120,7 @@ var (
 		8:  "OPERATION_WORKFLOW_CANCEL",
 		9:  "OPERATION_ARTIFACT_OPEN",
 		10: "OPERATION_ARTIFACT_LIST",
+		11: "OPERATION_INPUT_UPLOAD",
 	}
 	Operation_value = map[string]int32{
 		"OPERATION_UNSPECIFIED":        0,
@@ -132,6 +134,7 @@ var (
 		"OPERATION_WORKFLOW_CANCEL":    8,
 		"OPERATION_ARTIFACT_OPEN":      9,
 		"OPERATION_ARTIFACT_LIST":      10,
+		"OPERATION_INPUT_UPLOAD":       11,
 	}
 )
 
@@ -5583,6 +5586,136 @@ func (x *ArtifactList) GetArtifacts() []*ArtifactRef {
 	return nil
 }
 
+// InputUploadRequest is the OPERATION_INPUT_UPLOAD request payload's
+// metadata (STATUS.md's P04, the input-upload half of "文件与产物"). The
+// bytes themselves follow as DataChunks and RequestEnd closes them, the same
+// "headers then DataChunks then RequestEnd" shape WORKFLOW_SUBMIT already
+// uses for a body too large to fit in RequestHeaders.payload — reused here
+// rather than inventing a second framing for request bodies.
+//
+// This message deliberately carries no destination beyond filename/subfolder:
+// where the bytes land on disk is decided entirely by the runtime adapter
+// that receives them (e.g. common/runtime/workflow/comfyui forwarding to
+// ComfyUI's own /upload/image), never by a path or URL named here — the same
+// "no message here can express fetch this URL" rule this file's header
+// states for every other operation.
+type InputUploadRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Filename      string                 `protobuf:"bytes,1,opt,name=filename,proto3" json:"filename,omitempty"`   // caller-supplied name; never interpreted as a filesystem path
+	Subfolder     string                 `protobuf:"bytes,2,opt,name=subfolder,proto3" json:"subfolder,omitempty"` // optional backend-specific subfolder, e.g. ComfyUI's input subfolders
+	Size          int64                  `protobuf:"varint,3,opt,name=size,proto3" json:"size,omitempty"`          // exact byte count the DataChunks will carry; -1 if unknown
+	Sha256        string                 `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`       // optional integrity check computed by the caller before sending, hex-encoded; empty if not computed
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InputUploadRequest) Reset() {
+	*x = InputUploadRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[82]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InputUploadRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InputUploadRequest) ProtoMessage() {}
+
+func (x *InputUploadRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[82]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InputUploadRequest.ProtoReflect.Descriptor instead.
+func (*InputUploadRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{82}
+}
+
+func (x *InputUploadRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *InputUploadRequest) GetSubfolder() string {
+	if x != nil {
+		return x.Subfolder
+	}
+	return ""
+}
+
+func (x *InputUploadRequest) GetSize() int64 {
+	if x != nil {
+		return x.Size
+	}
+	return 0
+}
+
+func (x *InputUploadRequest) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
+// InputUploadResult is the OPERATION_INPUT_UPLOAD response payload.
+type InputUploadResult struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// input_ref is an opaque handle a later WORKFLOW_SUBMIT's template can
+	// reference (e.g. the filename ComfyUI's own /upload/image assigned,
+	// which may differ from the requested filename on a collision). It is
+	// meaningful only to the runtime adapter that produced it.
+	InputRef      string `protobuf:"bytes,1,opt,name=input_ref,json=inputRef,proto3" json:"input_ref,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *InputUploadResult) Reset() {
+	*x = InputUploadResult{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[83]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *InputUploadResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*InputUploadResult) ProtoMessage() {}
+
+func (x *InputUploadResult) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[83]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use InputUploadResult.ProtoReflect.Descriptor instead.
+func (*InputUploadResult) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{83}
+}
+
+func (x *InputUploadResult) GetInputRef() string {
+	if x != nil {
+		return x.InputRef
+	}
+	return ""
+}
+
 var File_api_proto_tunnel_v1_tunnel_proto protoreflect.FileDescriptor
 
 const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
@@ -6000,11 +6133,18 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\tsubfolder\x18\x03 \x01(\tR\tsubfolder\x12\x12\n" +
 	"\x04type\x18\x04 \x01(\tR\x04type\"D\n" +
 	"\fArtifactList\x124\n" +
-	"\tartifacts\x18\x01 \x03(\v2\x16.tunnel.v1.ArtifactRefR\tartifacts*V\n" +
+	"\tartifacts\x18\x01 \x03(\v2\x16.tunnel.v1.ArtifactRefR\tartifacts\"z\n" +
+	"\x12InputUploadRequest\x12\x1a\n" +
+	"\bfilename\x18\x01 \x01(\tR\bfilename\x12\x1c\n" +
+	"\tsubfolder\x18\x02 \x01(\tR\tsubfolder\x12\x12\n" +
+	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"0\n" +
+	"\x11InputUploadResult\x12\x1b\n" +
+	"\tinput_ref\x18\x01 \x01(\tR\binputRef*V\n" +
 	"\tSlotClass\x12\x1a\n" +
 	"\x16SLOT_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SLOT_CLASS_INFERENCE\x10\x01\x12\x13\n" +
-	"\x0fSLOT_CLASS_BULK\x10\x02*\xbe\x02\n" +
+	"\x0fSLOT_CLASS_BULK\x10\x02*\xda\x02\n" +
 	"\tOperation\x12\x19\n" +
 	"\x15OPERATION_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15OPERATION_LIST_MODELS\x10\x01\x12\x12\n" +
@@ -6017,7 +6157,8 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x19OPERATION_WORKFLOW_CANCEL\x10\b\x12\x1b\n" +
 	"\x17OPERATION_ARTIFACT_OPEN\x10\t\x12\x1b\n" +
 	"\x17OPERATION_ARTIFACT_LIST\x10\n" +
-	"*~\n" +
+	"\x12\x1a\n" +
+	"\x16OPERATION_INPUT_UPLOAD\x10\v*~\n" +
 	"\fReplicaState\x12\x1d\n" +
 	"\x19REPLICA_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14REPLICA_STATE_ACTIVE\x10\x01\x12\x1a\n" +
@@ -6061,7 +6202,7 @@ func file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP() []byte {
 }
 
 var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 89)
+var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 91)
 var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
 	(SlotClass)(0),                   // 0: tunnel.v1.SlotClass
 	(Operation)(0),                   // 1: tunnel.v1.Operation
@@ -6149,24 +6290,26 @@ var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
 	(*WorkflowStatus)(nil),           // 83: tunnel.v1.WorkflowStatus
 	(*ArtifactRef)(nil),              // 84: tunnel.v1.ArtifactRef
 	(*ArtifactList)(nil),             // 85: tunnel.v1.ArtifactList
-	nil,                              // 86: tunnel.v1.RequestHeaders.TraceEntry
-	nil,                              // 87: tunnel.v1.Hello.LabelsEntry
-	nil,                              // 88: tunnel.v1.RuntimeSpec.HeadersEntry
-	nil,                              // 89: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	nil,                              // 90: tunnel.v1.Discovery.CapabilitiesEntry
-	nil,                              // 91: tunnel.v1.Model.CapabilitiesEntry
-	nil,                              // 92: tunnel.v1.ChatRequest.ExtraEntry
-	(*timestamppb.Timestamp)(nil),    // 93: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),      // 94: google.protobuf.Duration
+	(*InputUploadRequest)(nil),       // 86: tunnel.v1.InputUploadRequest
+	(*InputUploadResult)(nil),        // 87: tunnel.v1.InputUploadResult
+	nil,                              // 88: tunnel.v1.RequestHeaders.TraceEntry
+	nil,                              // 89: tunnel.v1.Hello.LabelsEntry
+	nil,                              // 90: tunnel.v1.RuntimeSpec.HeadersEntry
+	nil,                              // 91: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	nil,                              // 92: tunnel.v1.Discovery.CapabilitiesEntry
+	nil,                              // 93: tunnel.v1.Model.CapabilitiesEntry
+	nil,                              // 94: tunnel.v1.ChatRequest.ExtraEntry
+	(*timestamppb.Timestamp)(nil),    // 95: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),      // 96: google.protobuf.Duration
 }
 var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
-	93,  // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
-	93,  // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
-	94,  // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
-	93,  // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	95,  // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
+	95,  // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
+	96,  // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
+	95,  // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
 	24,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
-	93,  // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
-	93,  // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
+	95,  // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
+	95,  // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
 	28,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
 	34,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
 	29,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
@@ -6179,7 +6322,7 @@ var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
 	32,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
 	0,   // 17: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
 	1,   // 18: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
-	86,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
+	88,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
 	36,  // 20: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
 	39,  // 21: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
 	42,  // 22: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
@@ -6194,57 +6337,57 @@ var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
 	45,  // 31: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
 	31,  // 32: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
 	40,  // 33: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
-	87,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
-	94,  // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
+	89,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
+	96,  // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
 	48,  // 36: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
 	2,   // 37: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
 	2,   // 38: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
 	54,  // 39: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
-	93,  // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
+	95,  // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
 	3,   // 41: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
 	52,  // 42: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
-	88,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
-	94,  // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
-	94,  // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
-	94,  // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
-	94,  // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
-	94,  // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
+	90,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
+	96,  // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
+	96,  // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
+	96,  // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
+	96,  // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
+	96,  // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
 	53,  // 49: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
-	89,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	91,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
 	55,  // 51: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
 	56,  // 52: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
 	57,  // 53: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
 	58,  // 54: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
-	93,  // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	93,  // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
-	94,  // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
-	93,  // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
+	95,  // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	95,  // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
+	96,  // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
+	95,  // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
 	60,  // 59: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
-	90,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
-	93,  // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
-	91,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
+	92,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
+	95,  // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
+	93,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
 	60,  // 63: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
 	63,  // 64: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
 	66,  // 65: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
 	68,  // 66: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
-	92,  // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
+	94,  // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
 	64,  // 68: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
 	65,  // 69: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
 	67,  // 70: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
 	69,  // 71: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
 	63,  // 72: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
 	75,  // 73: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
-	93,  // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
+	95,  // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
 	72,  // 75: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
 	75,  // 76: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
 	73,  // 77: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
 	74,  // 78: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
 	78,  // 79: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
 	75,  // 80: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
-	93,  // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
-	93,  // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
-	93,  // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
-	93,  // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
+	95,  // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
+	95,  // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
+	95,  // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
+	95,  // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
 	84,  // 85: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
 	59,  // 86: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
 	59,  // 87: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
@@ -6324,7 +6467,7 @@ func file_api_proto_tunnel_v1_tunnel_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_tunnel_v1_tunnel_proto_rawDesc), len(file_api_proto_tunnel_v1_tunnel_proto_rawDesc)),
 			NumEnums:      4,
-			NumMessages:   89,
+			NumMessages:   91,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

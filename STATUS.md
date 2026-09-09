@@ -25,7 +25,7 @@ R01/R02 可与 Job 主线并行。P07 与 J03 共用迁移框架；P04 依赖 J0
 - [x] Registry 节点证书签发与续期、Gateway 副本名册；Agent 主动出站建立 mTLS 隧道、多副本连接与槽池。
 - [x] Ollama、vLLM、SGLang、ComfyUI 运行时适配；本机 Ollama/vLLM 自动发现。
 - [x] OpenAI Chat Completions、Responses、Embeddings、Models 前门，支持相应流式接口；Responses 不支持持久会话续接。
-- [x] 模型别名、节点标签、优先级与权重路由，以及健康过滤、熔断、恢复和受限重试；路由目前由文件配置。
+- [x] 模型别名、节点标签、优先级与权重路由，以及健康过滤、熔断、恢复和受限重试；路由支持文件配置与控制面版本管理/热更新（P02）。
 - [x] 工作流模板加载与输入绑定、Job 提交、状态查询、SSE 事件、取消、产物列举与流式下载。
 - [x] 控制面的租户、用户登录与创建、API Key 签发/吊销、审计、配额读写；列表游标分页与服务端筛选。
 - [x] Gateway 租户请求数、token 数和并发限制，包含内存与 Redis 实现。
@@ -84,9 +84,9 @@ J01–J08 的既有勾选记录保留，但不能解读为全部可靠性目标�
 | 状态 | 编号 | 待开发任务 | 交付边界 |
 | --- | --- | --- | --- |
 | [x] | P01 | 节点审批、禁用、维护与运维身份 | 持久化期望状态并下发、展示实际生效结果；平台运维身份与租户角色分开授权，操作可归因审计；对应 Console C22——**Registry 与 ControlPlane 后端已实现并测试**：Registry 的 `identitystore` 扩展出待审批（`PendingApproval`）与维护（`Maintenance`）两个状态位，`TokenAdmin` 新增 `ApproveNode`/`SetMaintenance`/`ClearMaintenance`/`ListNodeStates`，`Register` 对未绑定令牌的注册加了审批门禁（详见 Registry README「节点审批与维护（P01）」）；Gateway 的 `tunnelserver` 按 `GatewayRoster.maintenance_node_ids` 标记节点但不断连，调度器据此排除新派发；ControlPlane 新增 `platform_operators` 表与独立登录入口（`POST /admin/v1/platform/auth/login`），`/operator/v1/*` 从共享密钥换成 `requirePlatformSession`，新增节点写路径 `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 转发给 Registry 并写入 `audit_logs`（`TenantID=model.PlatformScope`，详见 ControlPlane README「节点写路径」「平台运维身份」两节）。**Console 阶段三 / C22 已接入**：`/operator/login` 使用独立平台 Cookie，`/operator/fleet` 支持待审批/离线记录与五种节点操作，模型/发布状态/平台审计位于独立运维页面；共享 token/邮箱名单已移除。新增 `GET /operator/v1/audit`，过滤和分页复用既有审计。Go 门禁与 Console lint/typecheck/test、Webpack 生产构建及隔离 HTTP/浏览器冒烟验证通过，详见 Console STATUS「P01 阶段三 / C22 验收」。Gateway 仅提供合并观测，不承诺全副本确认；真实集群传播与全站 Q03 验收仍需后续完成。 |
-| [ ] | P02 | 模型与路由管理 | 控制面存储、校验、版本发布、Gateway 同步确认及回滚，补 Console C24；保留明确的文件配置迁移方案 |
-| [ ] | P03 | 工作流模板版本与发布 | 创建、输入/输出校验、依赖检查、发布与回滚、租户可见范围；记录自定义节点及模型版本，任务关联提交时的模板版本 |
-| [ ] | P04 | 输入上传与持久产物存储 | 本地/S3-compatible 存储、授权上传下载、格式与大小限制、保留期和清理；有界流式传输，元数据可与文件对账 |
+| [x] | P02 | 模型与路由管理 | `common/modelroute` 共享契约；控制面 PostgreSQL/MySQL 版本迁移、CAS 发布/回滚与原子审计，Gateway 有界拉取/持久缓存/快照热切换与逐副本状态，Console C24 编辑/导入/比较/发布回滚均已落地。修复同优先级权重此前未参与调度的问题。Go 门禁、Console 检查、真实双数据库 race 与两 Gateway 故障/恢复联调、Chrome 交互验证通过；文件模式接管/退出步骤见 Gateway README「控制面管理路由」。每版 1 MiB、最多 1000 个别名/每别名 100 目标，历史最多 1000 版；生效确认仅覆盖配置中的 Fleet 端点，不承诺全局原子切换。 |
+| [x] | P03 | 工作流模板版本与发布 | `common/workflowtemplate` 共享契约（输入/输出/依赖/图，图仅本包与 Gateway 内部流转，绝不进入任何目录响应）；控制面 PostgreSQL/MySQL 版本迁移、按模板 id 独立 CAS 发布/回滚与原子审计（首次发布无预先播种的单例行，与 P02 路由的结构性差异，见下）、每模板一份租户可见列表随版本不可变保存；Gateway 新增 `-workflow-source=controlplane`（`workflowsync` 有界拉取/持久缓存/整包摘要热切换，`file` 模式保留不变）、`Handle` 原子承载生效目录、`POST /v1/workflows/{id}/runs` 对不可见租户返回与"不存在"相同的 404、`job.WorkflowVersion` 由此前恒为空改为记录提交时的模板版本字符串；Console 新增 `/operator/workflow-templates` 创建/编辑/发布/回滚/历史对比/整包状态页面，`/operator/workflows` 发布状态页与租户 `/console/workflows` 追加展示版本、可见范围、输出与依赖。Go 门禁、Console lint/typecheck/test/build、真实 PostgreSQL 17 与 MySQL 9.7 race 通过；真实 ControlPlane（MySQL 9.7）+ Console 生产构建 + 真实 Chrome（Playwright）验证过登录、创建模板、发布 v1/v2、历史列表与对比、回滚到 v3 的完整交互链路（无 Gateway 时"副本应用状态"如实报告未完成，符合预期）。**真实 MySQL 并发测试抓到一处真实缺陷**：许多事务并发对同一个从未发布过的模板 id 做首次发布时，两步"先 UPDATE 确认不存在、再 INSERT"的旧实现会在 InnoDB 默认隔离级别下因间隙锁互相等待被判 1213 死锁，而不是可识别的重复键冲突；修复为单条语句的 upsert-then-CAS，三次真实 MySQL 连续验证通过，细节见 ControlPlane README「工作流模板发布契约（P03）」。范围边界：不做模板删除/归档 API；依赖检查（自定义节点/模型版本）与输出声明均仅结构性校验（非空、去重、数量上限、Output 的 Node 需存在于图中），不与 Fleet 已连接节点实际上报的已装能力交叉核对——当前 `localdiscovery` 未采集此类信息，接入需要新协议设计，超出本轮范围；`/admin/v1/workflows`、`/operator/v1/workflows` 两个既有 Fleet 聚合端点语义不变，只是元素多了新字段，真正的可见范围授权边界在 Gateway 数据面而非这两个聚合视图。 |
+| [x] | P04 | 输入上传与持久产物存储 | 本地/S3-compatible 存储、授权上传下载、格式与大小限制、保留期和清理；有界流式传输，元数据可与文件对账——`objectstore` 包（local/s3/webdav 三个后端，WebDAV 面向群晖/QNAP 等只有该协议的 NAS）落地产物字节的可选持久化，下载优先读持久副本、失败回退节点实时拉取；`OPERATION_INPUT_UPLOAD` 隧道操作 + `multipart/form-data` 提交端点，让工作流的 `InputFile` 输入能以"单次请求原子提交、不跨节点重试"的方式上传（详见 Gateway README 第 12/13 条）；上传/下载复用既有 API Key 鉴权中间件，覆盖全部 `/v1/*` 路由，无需单独授权路径；Gateway 新增第四个后台循环 `artifactCleaner` 按产物类型区分保留期（output 默认 30 天、temp/预览默认 24 小时）到期清理，先删对象存储字节再删控制面元数据行（详见 Gateway README 第 14 条、ControlPlane README「已实现的产物保留期清理」）；`httpapi/uploadformat.go` 补上格式校验的最后一块——扩展名允许列表（`Config.AllowedUploadExtensions`，默认覆盖常见图片/视频/音频格式）先过滤文件名，再用 `net/http.DetectContentType` 嗅探真实字节核对类别前缀，拦下"改名成 .png 的可执行文件"这类扩展名与内容不符的上传，嗅探窗口有界（512 字节）不引入无界缓冲（详见 Gateway README 第 15 条）。Go 门禁（`gofmt`/`vet`/`build`/`generate`/`test`/`-race`）通过。 |
 | [ ] | P05 | 用户与会话生命周期 | 改密、重置密码、禁用、角色调整、会话撤销；定义已有 JWT 与 API Key 的失效语义，补权限测试和管理页面 |
 | [ ] | P06 | Key 吊销通知 | 向 Gateway 推送失效，缩短当前缓存窗口；明确断线、漏通知、重连补偿和可验证的生效时限 |
 | [ ] | P07 | 数据库升级与恢复 | 用带版本迁移替换 AutoMigrate；覆盖 PostgreSQL/MySQL 真实引擎、已有数据升级、备份恢复和失败处理 |
@@ -123,4 +123,4 @@ J01–J08 的既有勾选记录保留，但不能解读为全部可靠性目标�
 - [Gateway README](service/aiServeWeaveGateway/README.md)：Job 内存边界、状态观测、产物与路由配置。
 - [ControlPlane README](service/aiServeWeaveControlPlane/README.md)：历史任务、管理写路径、数据库迁移与监控缺口。
 - [Registry README](service/aiServeWeaveRegistry/README.md)：身份冲突、token 存储、单实例与认证边界。
-- [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C22、C24、C27–C29 与 Q03 待交付项；C25/C26 已交付范围与剩余限制。
+- [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C27–C29 与 Q03 待交付项；C22/C24 已交付；C25/C26 已交付范围与剩余限制。

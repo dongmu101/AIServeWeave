@@ -144,27 +144,79 @@ func (a *Aggregator) Workflows(ctx context.Context) (Catalogue, error) {
 
 // sameTemplate reports whether two replicas describe a template identically.
 //
-// It compares what a caller can observe — the description and the declared
-// inputs — because that is what differs when a rollout is half done. The
-// graph is not compared for the reason it is not carried: it never leaves the
-// Gateway, so two replicas serving different graphs under one id is a
-// divergence this view cannot see, and the Gateway README is where that gap
-// belongs.
+// It compares what a caller can observe — the description, the declared
+// inputs and outputs, the declared dependencies, and (P03) the version and
+// tenant visibility — because that is what differs when a rollout is half
+// done. The graph is not compared for the reason it is not carried: it never
+// leaves the Gateway, so two replicas serving different graphs under one id
+// is a divergence this view cannot see, and the Gateway README is where that
+// gap belongs.
 //
 // sameTemplate 报告两个副本是否以完全相同的方式描述同一个模板。
 //
-// 它比较调用方能观察到的部分——描述与已声明的输入——因为发布进行到一半时，不同的正是
-// 这些。图不参与比较，理由与它不被携带相同：它从不离开 Gateway，因此「两个副本在同一个
-// id 下提供不同的图」是本视图看不见的一种不一致，而那处缺口应记在 Gateway README 里。
+// 它比较调用方能观察到的部分——描述、已声明的输入与输出、已声明的依赖，以及
+// （P03）版本与租户可见范围——因为发布进行到一半时，不同的正是这些。图不参与
+// 比较，理由与它不被携带相同：它从不离开 Gateway，因此「两个副本在同一个 id 下
+// 提供不同的图」是本视图看不见的一种不一致，而那处缺口应记在 Gateway README 里。
 func sameTemplate(left, right workflowview.Template) bool {
-	if left.Description != right.Description || left.Valid != right.Valid {
+	if left.Description != right.Description || left.Valid != right.Valid || left.Version != right.Version {
 		return false
 	}
-	if len(left.Inputs) != len(right.Inputs) {
+	if len(left.Inputs) != len(right.Inputs) || len(left.Outputs) != len(right.Outputs) {
 		return false
 	}
 	for i := range left.Inputs {
 		if !sameInput(left.Inputs[i], right.Inputs[i]) {
+			return false
+		}
+	}
+	for i := range left.Outputs {
+		if left.Outputs[i] != right.Outputs[i] {
+			return false
+		}
+	}
+	if !sameDependencies(left.Dependencies, right.Dependencies) {
+		return false
+	}
+	return sameStrings(left.VisibleTenantIDs, right.VisibleTenantIDs)
+}
+
+// sameDependencies compares two declared dependency lists by content,
+// independent of slice identity — nil and empty are the same "none declared".
+//
+// sameDependencies 按内容比较两份已声明的依赖清单，与切片本身的同一性无关——
+// nil 与空切片同为"未声明任何依赖"。
+func sameDependencies(left, right workflowview.Dependencies) bool {
+	if len(left.CustomNodes) != len(right.CustomNodes) || len(left.Models) != len(right.Models) {
+		return false
+	}
+	for i := range left.CustomNodes {
+		if left.CustomNodes[i] != right.CustomNodes[i] {
+			return false
+		}
+	}
+	for i := range left.Models {
+		if left.Models[i] != right.Models[i] {
+			return false
+		}
+	}
+	return true
+}
+
+// sameStrings compares two string slices by content, independent of order:
+// a tenant allow list is a set, not a sequence.
+//
+// sameStrings 按内容比较两个字符串切片，与顺序无关：一份租户允许列表是一个集合，
+// 不是一个序列。
+func sameStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	l, r := append([]string(nil), left...), append([]string(nil), right...)
+	sort.Strings(l)
+	sort.Strings(r)
+	for i := range l {
+		if l[i] != r[i] {
 			return false
 		}
 	}

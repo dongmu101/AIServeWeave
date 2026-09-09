@@ -375,6 +375,45 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		}
 		return d.forwardArtifact(ctx, sink, id, artifact)
 
+	case tunnelv1.Operation_OPERATION_INPUT_UPLOAD:
+		wr, err := workflowRuntime(rt, id)
+		if err != nil {
+			return err
+		}
+		meta, err := tunnelwire.UnmarshalInputUploadRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		if meta.Filename == "" {
+			return &runtime.RuntimeError{
+				Code:      runtime.ErrorProtocol,
+				RuntimeID: id,
+				Operation: dispatchOperation,
+				Message:   "input upload carried no filename",
+			}
+		}
+		// The file streams straight from the DataChunk channel into
+		// UploadInput rather than being collected first like readBody does
+		// for a workflow template: an input file has no size guarantee
+		// remotely as tight as a template's, and buffering it whole here
+		// would be exactly the unbounded hold README.md's dispatch.go rule
+		// forbids.
+		//
+		// 文件直接从 DataChunk 通道流进 UploadInput，而不是像 readBody 对
+		// 工作流模板那样先收集完整——输入文件远没有模板那样紧的体积保证，
+		// 在这里把它整体缓冲下来，正是 README.md 对 dispatch.go 的规则所
+		// 禁止的那种无界持有。
+		body := &chanReader{ctx: ctx, body: req.Body, limit: d.cfg.MaxRequestBytes, id: id}
+		result, err := wr.UploadInput(ctx, meta, body)
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalInputUploadResult(result)
+		if err != nil {
+			return err
+		}
+		return d.sendChunk(sink, payload)
+
 	default:
 		// tunnelwire.SpecFor already rejected unknown operations, so reaching here means
 		// the table and this switch have drifted apart.
@@ -628,4 +667,57 @@ func (d *Dispatcher) readBody(ctx context.Context, id string, body <-chan []byte
 			return nil, context.Cause(ctx)
 		}
 	}
+}
+
+// chanReader adapts a request body channel to io.Reader, so a handler can
+// stream it straight into a backend call (UploadImage's multipart writer,
+// for instance) without ever holding the whole body in this process the way
+// readBody deliberately does for the one caller that actually wants that
+// (a workflow template, already size-bounded well below what an input file
+// may need). The limit is enforced as chunks arrive, the same discipline
+// readBody uses, so an oversized upload is cut off rather than accumulated
+// first and rejected second — except here "accumulated" would mean written
+// most of the way into a downstream request already in flight.
+//
+// chanReader 把一个请求体通道适配成 io.Reader，好让处理器能把它直接流进某次
+// 后端调用（比如 UploadImage 的 multipart writer），而不必像 readBody 对
+// 唯一真正需要那样做的调用方（工作流模板，其大小早已被限定在一个远比输入
+// 文件可能需要的更低的上限）那样，把整个 body 持有在本进程里。限制在分片
+// 到达时就地强制执行，与 readBody 相同的纪律，因此一次超大的上传会被就地
+// 切断，而不是先攒够整个 body 才被拒绝——只是这里的「攒够」意味着已经把
+// 大半个文件写进了一个仍在进行中的下游请求。
+type chanReader struct {
+	ctx     context.Context
+	body    <-chan []byte
+	limit   int
+	read    int
+	pending []byte
+	id      string
+}
+
+func (r *chanReader) Read(p []byte) (int, error) {
+	for len(r.pending) == 0 {
+		select {
+		case chunk, ok := <-r.body:
+			if !ok {
+				return 0, io.EOF
+			}
+			r.read += len(chunk)
+			if r.limit > 0 && r.read > r.limit {
+				return 0, &runtime.RuntimeError{
+					Code:      runtime.ErrorResponseTooLarge,
+					RuntimeID: r.id,
+					Operation: dispatchOperation,
+					Message: "the request body exceeds the local limit of " +
+						strconv.Itoa(r.limit) + " bytes",
+				}
+			}
+			r.pending = chunk
+		case <-r.ctx.Done():
+			return 0, context.Cause(r.ctx)
+		}
+	}
+	n := copy(p, r.pending)
+	r.pending = r.pending[n:]
+	return n, nil
 }

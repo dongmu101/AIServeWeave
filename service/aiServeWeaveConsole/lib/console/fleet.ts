@@ -413,6 +413,13 @@ export interface WorkflowInput {
   max: number | null;
 }
 
+/** WorkflowOutput declares one produced artifact, as a caller sees it (P03).
+ * WorkflowOutput 声明一个产出，以调用方看到的样子（P03）。 */
+export interface WorkflowOutput { name: string; type: string; description: string }
+/** WorkflowNodeDependency names one declared custom-node or model dependency (P03).
+ * WorkflowNodeDependency 点名一个已声明的自定义节点或模型依赖（P03）。 */
+export interface WorkflowNodeDependency { name: string; version: string }
+
 /**
  * WorkflowTemplate is one registered workflow, as a caller needs to know it.
  *
@@ -422,6 +429,15 @@ export interface WorkflowTemplate {
   id: string;
   description: string;
   inputs: WorkflowInput[];
+  /** outputs and custom-node/model dependencies are declared metadata (P03):
+   * structurally checked when published, never verified against what a run
+   * actually produced or what a node actually has installed.
+   *
+   * outputs 与自定义节点/模型依赖是已声明的元数据（P03）：发布时经结构性检查，
+   * 从不核对某次运行实际产出了什么、或某个节点实际安装了什么。 */
+  outputs: WorkflowOutput[];
+  customNodeDependencies: WorkflowNodeDependency[];
+  modelDependencies: WorkflowNodeDependency[];
   valid: boolean;
   validationError: string;
   /** replicas is empty on the tenant surface: which replicas hold a template
@@ -430,6 +446,22 @@ export interface WorkflowTemplate {
    * replicas 在租户面上为空：哪些副本持有某个模板是运维的问题，租户端点会清空它。 */
   replicas: string[];
   divergent: boolean;
+  /** version is opaque and empty for a file-loaded template; a template
+   * published through the control plane (P03) carries its revision number
+   * as a string here.
+   *
+   * version 是不透明的，文件加载的模板留空；经控制面发布（P03）的模板在这里
+   * 携带其版本号的字符串形式。 */
+  version: string;
+  /** visibleTenantIds is the tenant allow list a control-plane publication
+   * (P03) set for this template; empty means every tenant may see and run
+   * it. The tenant-facing catalogue is already filtered by this before it
+   * ever reaches a tenant, so a tenant page never needs to read it.
+   *
+   * visibleTenantIds 是控制面发布（P03）为本模板设置的租户允许列表；为空意味着
+   * 所有租户都能看到并运行它。面向租户的目录在到达租户之前就已经按它过滤过，
+   * 因此租户页面从不需要读取它。 */
+  visibleTenantIds: string[];
 }
 
 /**
@@ -501,6 +533,20 @@ export function parseWorkflowCatalogue(value: unknown): WorkflowCatalogue {
         validationError: text(template, "validation_error"),
         replicas: strings(template, "replicas"),
         divergent: flag(template, "divergent"),
+        version: text(template, "version"),
+        visibleTenantIds: strings(template, "visible_tenant_ids"),
+        outputs: list(template.outputs, (entry) => {
+          const output = record(entry);
+          return { name: required(output, "name"), type: required(output, "type"), description: text(output, "description") };
+        }),
+        customNodeDependencies: list(record(template.dependencies ?? {}).custom_nodes, (entry) => {
+          const dep = record(entry);
+          return { name: required(dep, "name"), version: text(dep, "version") };
+        }),
+        modelDependencies: list(record(template.dependencies ?? {}).models, (entry) => {
+          const dep = record(entry);
+          return { name: required(dep, "name"), version: text(dep, "version") };
+        }),
         inputs: list(template.inputs, (entry) => {
           const input = record(entry);
           const raw = input.default;

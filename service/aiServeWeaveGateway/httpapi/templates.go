@@ -23,23 +23,27 @@ import (
 // Template 出发再删掉图的渲染，会让仓库的安全规则距离被打破只差一行被遗忘的代码。输入
 // 所写入的节点与字段被略去则是出于一个更小的理由——它们同样是图结构，而调用方是按名字
 // 替换的。
-func renderTemplates(registry *workflow.Registry) []workflowview.Template {
-	if registry == nil {
+func renderTemplates(handle *workflow.Handle) []workflowview.Template {
+	if handle == nil {
 		return []workflowview.Template{}
 	}
 
-	ids := registry.IDs()
+	ids := handle.IDs()
 	out := make([]workflowview.Template, 0, len(ids))
 	for _, id := range ids {
-		template, ok := registry.Lookup(id)
+		template, ok := handle.Lookup(id)
 		if !ok {
 			continue
 		}
 		view := workflowview.Template{
-			ID:          template.ID,
-			Description: template.Description,
-			Inputs:      make([]workflowview.Input, 0, len(template.Inputs)),
-			Valid:       true,
+			ID:               template.ID,
+			Description:      template.Description,
+			Inputs:           make([]workflowview.Input, 0, len(template.Inputs)),
+			Outputs:          make([]workflowview.Output, 0, len(template.Outputs)),
+			Dependencies:     template.Dependencies,
+			Version:          template.Version,
+			VisibleTenantIDs: template.VisibleTenantIDs,
+			Valid:            true,
 		}
 		// A registry only holds templates that validated at load, so this
 		// re-check is expected to pass. It runs anyway because the catalogue
@@ -61,6 +65,13 @@ func renderTemplates(registry *workflow.Registry) []workflowview.Template {
 				MaxLength: input.MaxLength,
 				Min:       input.Min,
 				Max:       input.Max,
+			})
+		}
+		for _, output := range template.Outputs {
+			view.Outputs = append(view.Outputs, workflowview.Output{
+				Name:        output.Name,
+				Type:        output.Type,
+				Description: output.Description,
 			})
 		}
 		out = append(out, view)

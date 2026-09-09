@@ -37,12 +37,11 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
-	"AIServeWeave/service/aiServeWeaveGateway/routing"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
-	"AIServeWeave/service/aiServeWeaveGateway/workflow"
 )
 
 // drainGrace is how long connected Agents are given to finish in-flight
@@ -89,14 +88,48 @@ func run() error {
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
 	redisAddr := flag.String("redis-addr", "",
 		"Redis host:port for fleet-wide rate limiting; empty enforces per-replica, which admits the configured allowance once per replica")
+	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
+	routeStateFile := flag.String("route-state-file", "", "durable last-good route snapshot; required in controlplane mode")
+	routeSyncInterval := flag.Duration("route-sync-interval", 30*time.Second, "managed route polling interval")
 	modelRoutes := flag.String("model-routes", "",
 		"comma-separated files or directories of routing tables mapping logical model names onto deployments; empty passes model ids through unchanged")
+	workflowSource := flag.String("workflow-source", "file", "workflow template source: file or controlplane")
+	workflowStateFile := flag.String("workflow-state-file", "", "durable last-good workflow template bundle; required in controlplane mode")
+	workflowSyncInterval := flag.Duration("workflow-sync-interval", 30*time.Second, "managed workflow template polling interval")
 	workflowTemplates := flag.String("workflow-templates", "",
 		"comma-separated files or directories of ComfyUI workflow template manifests; empty registers none, and every workflow submit then 404s")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	adminAddr := flag.String("admin-addr", "",
 		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
+	artifactStorageKind := flag.String("artifact-storage", "",
+		"generated artifact storage backend (STATUS.md's P04): local, s3, webdav, or empty to disable byte persistence — artifacts then remain pull-only from the node that produced them, today's pre-P04 behavior")
+	artifactStorageLocalDir := flag.String("artifact-storage-local-dir", "", "directory for -artifact-storage=local")
+	artifactStorageS3Endpoint := flag.String("artifact-storage-s3-endpoint", "",
+		"custom endpoint for -artifact-storage=s3, e.g. a MinIO/Ceph RGW/NAS S3 gateway URL; empty targets AWS itself")
+	artifactStorageS3Region := flag.String("artifact-storage-s3-region", "",
+		"region for -artifact-storage=s3; most non-AWS S3-compatible servers ignore this but the SDK requires some value to sign with")
+	artifactStorageS3Bucket := flag.String("artifact-storage-s3-bucket", "", "bucket for -artifact-storage=s3")
+	artifactStorageS3Prefix := flag.String("artifact-storage-s3-prefix", "", "key prefix for -artifact-storage=s3, so one bucket can be shared across purposes or environments")
+	artifactStorageS3PathStyle := flag.Bool("artifact-storage-s3-path-style", false,
+		"use path-style addressing for -artifact-storage=s3; required by most non-AWS S3-compatible servers (MinIO, Ceph RGW)")
+	artifactStorageS3AccessKeyIDFile := flag.String("artifact-storage-s3-access-key-id-file", "", "path to a file holding the S3 access key id for -artifact-storage=s3")
+	artifactStorageS3SecretAccessKeyFile := flag.String("artifact-storage-s3-secret-access-key-file", "", "path to a file holding the S3 secret access key for -artifact-storage=s3")
+	artifactStorageWebDAVURL := flag.String("artifact-storage-webdav-url", "",
+		"WebDAV server root for -artifact-storage=webdav, e.g. https://nas.example.internal/webdav — the protocol most home/office NAS boxes expose even without an S3 gateway")
+	artifactStorageWebDAVDir := flag.String("artifact-storage-webdav-dir", "", "path prefix under -artifact-storage-webdav-url, so one WebDAV share can be split across purposes or environments")
+	artifactStorageWebDAVUsernameFile := flag.String("artifact-storage-webdav-username-file", "", "path to a file holding the WebDAV username for -artifact-storage=webdav")
+	artifactStorageWebDAVPasswordFile := flag.String("artifact-storage-webdav-password-file", "", "path to a file holding the WebDAV password for -artifact-storage=webdav")
+	artifactCopyTimeout := flag.Duration("artifact-copy-timeout", 0,
+		"bound on one artifact's node-to-storage byte copy; zero uses httpapi.DefaultArtifactCopyTimeout, sized for moving real file bytes rather than a JSON round trip")
+	artifactCleanupInterval := flag.Duration("artifact-cleanup-interval", 0,
+		"how often the artifact retention sweep runs (STATUS.md's P04); zero uses httpapi.DefaultArtifactCleanupInterval. Only runs when a control plane is configured (-control-plane-addr), the same as job persistence")
+	artifactRetention := flag.Duration("artifact-retention", 0,
+		"how long a persisted \"output\" artifact is kept before the cleanup sweep reaps it; zero uses httpapi.DefaultArtifactRetention")
+	artifactPreviewRetention := flag.Duration("artifact-preview-retention", 0,
+		"how long a persisted \"temp\" (preview/intermediate) artifact is kept, deliberately much shorter than -artifact-retention; zero uses httpapi.DefaultArtifactPreviewRetention")
+	allowedUploadExtensions := flag.String("workflow-upload-allowed-extensions", "",
+		"comma-separated, dot-prefixed file extensions a workflow InputFile upload may use (STATUS.md's P04); empty uses httpapi.DefaultAllowedUploadExtensions, there is no way to disable the check")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
@@ -171,18 +204,20 @@ func run() error {
 		return err
 	}
 
-	// Templates are loaded before anything starts serving: a manifest that
-	// binds an input to a node it does not have is an operator mistake, and
-	// failing here puts it on the operator's terminal instead of on a
+	// Templates are loaded (file mode) or pulled from a validated cache
+	// (controlplane mode, P03) before anything starts serving: a manifest
+	// that binds an input to a node it does not have is an operator mistake,
+	// and failing here puts it on the operator's terminal instead of on a
 	// caller's request an hour later.
 	//
-	// 模板在开始服务之前加载：把输入绑到不存在节点上的清单是运维的失误，在这里失败
-	// 能把它摆在运维的终端上，而不是一小时后摆在某个调用方的请求上。
-	workflows, err := workflow.Load(splitCommaList(*workflowTemplates)...)
+	// 模板在开始服务之前加载（文件模式）或从已校验缓存拉取（controlplane 模式，
+	// P03）：把输入绑到不存在节点上的清单是运维的失误，在这里失败能把它摆在运维的
+	// 终端上，而不是一小时后摆在某个调用方的请求上。
+	workflowStatus, workflowHandle, workflowSyncer, err := configureWorkflows(ctx, *workflowSource, *workflowTemplates, *workflowStateFile, *controlPlaneAddr, *controlPlaneToken, *workflowSyncInterval)
 	if err != nil {
 		return err
 	}
-	logger.Info("workflow templates loaded", slog.Int("count", workflows.Len()))
+	logger.Info("workflow templates loaded", slog.Int("count", workflowHandle.Len()))
 
 	// Which limiter this replica gets is a deployment question, not a code
 	// one: one replica enforces exactly either way, and several replicas only
@@ -198,26 +233,45 @@ func run() error {
 		return err
 	}
 
-	// Routes are loaded before anything serves: a table naming a target with
-	// no runtime model is an operator mistake, and failing here puts it on
-	// their terminal instead of on a caller's request an hour later.
-	//
-	// 路由表在开始服务之前加载：一张 target 没有运行时模型的表是运维的失误，在这里
-	// 失败能把它摆在他们的终端上，而不是一小时后摆在某个调用方的请求上。
-	table, err := routing.Load(splitCommaList(*modelRoutes)...)
+	sched := scheduler.New(server, scheduler.Config{Metrics: registry})
+	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {
 		return err
 	}
-	logger.Info("model routes loaded", slog.Int("aliases", table.Len()))
+	if routeSyncer != nil {
+		syncCtx, stopSync := context.WithCancel(ctx)
+		syncDone := make(chan struct{})
+		go func() { defer close(syncDone); routeSyncer.Run(syncCtx) }()
+		defer func() { stopSync(); <-syncDone }()
+	}
+	if workflowSyncer != nil {
+		syncCtx, stopSync := context.WithCancel(ctx)
+		syncDone := make(chan struct{})
+		go func() { defer close(syncDone); workflowSyncer.Run(syncCtx) }()
+		defer func() { stopSync(); <-syncDone }()
+	}
 
-	sched := scheduler.New(server, scheduler.Config{Metrics: registry, Routes: table})
+	artifactStorage, err := buildArtifactStorage(*artifactStorageKind, *artifactStorageLocalDir,
+		*artifactStorageS3Endpoint, *artifactStorageS3Region, *artifactStorageS3Bucket, *artifactStorageS3Prefix, *artifactStorageS3PathStyle,
+		*artifactStorageS3AccessKeyIDFile, *artifactStorageS3SecretAccessKeyFile,
+		*artifactStorageWebDAVURL, *artifactStorageWebDAVDir, *artifactStorageWebDAVUsernameFile, *artifactStorageWebDAVPasswordFile)
+	if err != nil {
+		return err
+	}
+
 	httpCfg := httpapi.Config{
-		Verifier:  verifier,
-		APIKeys:   splitCommaList(*apiKeys),
-		Logger:    logger,
-		Metrics:   registry,
-		Workflows: workflows,
-		Limiter:   limiter,
+		Verifier:                 verifier,
+		APIKeys:                  splitCommaList(*apiKeys),
+		Logger:                   logger,
+		Metrics:                  registry,
+		Workflows:                workflowHandle,
+		Limiter:                  limiter,
+		ArtifactStorage:          artifactStorage,
+		ArtifactCopyTimeout:      *artifactCopyTimeout,
+		ArtifactCleanupInterval:  *artifactCleanupInterval,
+		ArtifactRetention:        *artifactRetention,
+		ArtifactPreviewRetention: *artifactPreviewRetention,
+		AllowedUploadExtensions:  splitCommaList(*allowedUploadExtensions),
 	}
 	// jobPersistence is assigned to both interface-typed fields only when it
 	// is genuinely non-nil: httpapi.Config's fields are interfaces, and
@@ -232,6 +286,7 @@ func run() error {
 	if jobPersistence != nil {
 		httpCfg.JobPersistClient = jobPersistence
 		httpCfg.JobRecoveryClient = jobPersistence
+		httpCfg.ArtifactCleanupClient = jobPersistence
 	}
 	front := httpapi.New(sched, httpCfg)
 
@@ -268,6 +323,8 @@ func run() error {
 	} else {
 		adminHandler, err := adminapi.New(adminapi.Config{
 			Token:     os.Getenv("AISW_GATEWAY_ADMIN_TOKEN"),
+			Routes:    routeStatus,
+			Workflows: workflowStatus,
 			Nodes:     server.Nodes,
 			Jobs:      front.JobsFor,
 			Templates: front.Templates,
@@ -559,6 +616,70 @@ func loadSecretFile(path string) (string, error) {
 		return "", errors.New("cannot read " + path + ": " + err.Error())
 	}
 	return strings.TrimSpace(string(data)), nil
+}
+
+// buildArtifactStorage constructs the objectstore.Backend STATUS.md's P04
+// artifact persistence uses, from -artifact-storage and its per-backend
+// flags. kind == "" disables it — httpapi.Config.ArtifactStorage stays nil,
+// and jobPersister reports artifact metadata exactly as it did before P04 —
+// the same nil-degrades pattern every other optional dependency in this file
+// follows.
+//
+// Secrets (the S3 key pair, the WebDAV credentials) are read from files via
+// loadSecretFile rather than accepted as flag values themselves, matching
+// this file's existing -xxx-file convention (see -registry-join-token-file):
+// a flag value is visible in a process listing, a secret must not be.
+//
+// buildArtifactStorage 依据 -artifact-storage 及其各后端子参数，构造
+// STATUS.md P04 产物持久化所用的 objectstore.Backend。kind 为空时关闭它——
+// httpapi.Config.ArtifactStorage 保持 nil，jobPersister 上报产物元数据的
+// 方式与 P04 之前完全一致——与本文件里其余每一个可选依赖遵循的是同一种
+// 「为 nil 时退化」模式。
+//
+// 密钥（S3 的一对 key、WebDAV 凭据）经由 loadSecretFile 从文件读取，而不是
+// 直接作为 flag 值接受，与本文件既有的 -xxx-file 约定一致（参见
+// -registry-join-token-file）：flag 值在进程列表里可见，密钥不能。
+func buildArtifactStorage(kind, localDir,
+	s3Endpoint, s3Region, s3Bucket, s3Prefix string, s3PathStyle bool, s3AccessKeyIDFile, s3SecretAccessKeyFile string,
+	webdavURL, webdavDir, webdavUsernameFile, webdavPasswordFile string,
+) (objectstore.Backend, error) {
+	if kind == "" {
+		return nil, nil
+	}
+	cfg := objectstore.Config{Kind: kind}
+	switch kind {
+	case "local":
+		cfg.Local = objectstore.LocalConfig{Dir: localDir}
+	case "s3":
+		accessKeyID, err := loadSecretFile(s3AccessKeyIDFile)
+		if err != nil {
+			return nil, err
+		}
+		secretAccessKey, err := loadSecretFile(s3SecretAccessKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		cfg.S3 = objectstore.S3Config{
+			Endpoint:        s3Endpoint,
+			Region:          s3Region,
+			Bucket:          s3Bucket,
+			Prefix:          s3Prefix,
+			UsePathStyle:    s3PathStyle,
+			AccessKeyID:     accessKeyID,
+			SecretAccessKey: secretAccessKey,
+		}
+	case "webdav":
+		username, err := loadSecretFile(webdavUsernameFile)
+		if err != nil {
+			return nil, err
+		}
+		password, err := loadSecretFile(webdavPasswordFile)
+		if err != nil {
+			return nil, err
+		}
+		cfg.WebDAV = objectstore.WebDAVConfig{URL: webdavURL, Dir: webdavDir, Username: username, Password: password}
+	}
+	return objectstore.New(cfg)
 }
 
 func splitCommaList(s string) []string {

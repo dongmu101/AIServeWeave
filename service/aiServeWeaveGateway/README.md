@@ -7,10 +7,12 @@
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
 | `tunnelserver/` | 已实现 | 隧道终结：mTLS 认证、节点表、槽池、十个 Operation 的分发、`NodeRuntime` |
-| `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重 |
+| `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
+| `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
 | `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
-| `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：清单加载、声明式输入、绑定与校验 |
+| `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：文件或控制面来源（P03）、声明式输入/输出/依赖、绑定与校验；`Handle` 原子持有当前生效目录 |
+| `workflowsync/` | 已实现 | 控制面版本的有界拉取、逐模板校验、持久化最近有效整包与生效状态（P03） |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
 | `registryclient/` | 已实现 | 向 Registry 的 `GatewayDirectory` 报到，把收到的名册转发给 `tunnelserver.Server.SetRoster` |
 | `controlplaneclient/` | 已实现 | `Verifier` 对着控制面校验 API Key，进程内缓存，发出的是哈希而不是调用方的 key；`JobsClient`（STATUS.md 的 J04）是控制面 Job 持久化内部 API 的客户端，与 `Verifier` 刻意分开——它不缓存、不重试；`GatewayPersister` 把它同时适配成 `httpapi.JobPersistClient`（J05，写入）与 `httpapi.JobRecoveryClient`（J06，重启后按路由绑定读回非终态 job），分别接入 `httpapi/jobpersist.go` 与 `httpapi/jobrecover.go` 的两个后台循环 |
@@ -41,12 +43,14 @@ AISW_GATEWAY_ADMIN_TOKEN=$(openssl rand -base64 32) \
 go run ./service/aiServeWeaveGateway -admin-addr 127.0.0.1:8091 ...
 ```
 
-三个端点，Bearer token 均来自 `AISW_GATEWAY_ADMIN_TOKEN`（常数时间比较），**都不接受写操作**：
+几个端点，Bearer token 均来自 `AISW_GATEWAY_ADMIN_TOKEN`（常数时间比较），**都不接受写操作**：
 
 | 端点 | 内容 |
 | --- | --- |
 | `GET /internal/v1/nodes` | 连到本副本的节点、运行时与能力 |
-| `GET /internal/v1/workflows` | 本副本注册的工作流模板：id、描述、输入声明、校验状态 |
+| `GET /internal/v1/routes` | 本副本生效的路由状态：来源、版本、摘要（P02） |
+| `GET /internal/v1/workflows` | 本副本注册的工作流模板：id、描述、输入/输出声明、依赖、版本与可见范围（P03）、校验状态 |
+| `GET /internal/v1/workflows/status` | 本副本生效的工作流模板整包状态：来源、数量、整包摘要（P03） |
 | `GET /internal/v1/jobs?tenant_id=…` | 本副本 job 表中**某一个租户**的运行 |
 
 - `tenant_id` 在 job 端点上是**必填**：这张表持有每个租户的运行，一个能返回全部的端点会让控制面的过滤成为横在两个租户之间的唯一一道东西。缺失时返回 400，而不是「乐于助人」地返回全部。
@@ -97,7 +101,7 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 
 `data` 里嵌的是后端自己的载荷（大小已由 ComfyUI 适配器限制）：进度数字与节点输出只存在于那里，丢掉它的流只会报告「有事在发生」，却说不出进行到哪一步。终态帧额外带 `status`，随后流结束。
 
-设计上有十一条约束，改这里的代码时不能绕过：
+设计上有十三条约束，改这里的代码时不能绕过：
 
 1. **调用方给不出图。** 请求体只有 `inputs`，图来自已注册的模板。模板把每个可替换输入声明为「节点 + 字段 + 类型 + 范围」，且该字段必须已存在于图中——输入只覆盖模板作者放好的值，从不创建字段。声明错误的模板在 `workflow.Load` 时就失败，挂在运维的终端上而不是某个调用方的请求上。这是 README 顶层「平台不应允许普通 API 调用者随意修改整个节点图」的落实。
 2. **`prompt_id` 不外泄。** 公开 id 是 Gateway 自己铸的 `job_...`，后端的 `prompt_id` 只存在 job 记录里。它不是我们该派发的东西，而且只在单个 ComfyUI 内部唯一。
@@ -108,10 +112,14 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 7. **产物下载走批量槽，且不落地。** `OPERATION_ARTIFACT_LIST` 是有界回复，走推理槽；`OPERATION_ARTIFACT_OPEN` 流出整个响应体，走批量槽，两类槽在隧道里物理隔离，一次大的下载挤不掉推理。前门用 `io.Copy` 直通转发，本进程从不完整持有一个产物，背压经由同一次读取抵达 Agent。回显进 `Content-Disposition` 的文件名先被清洗：目录部分、CR、LF、引号与控制字符一律移除而不是转义——那个名字来自后端，并经由工作流自己的保存节点前缀最终来自调用方。
 8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；内存条目在副本重启时丢失，内存表不跨副本共享；配置控制面持久化后，已落库历史保留，非终态路由绑定可由后台恢复器读回（第十一条）。持久化属于控制面的 `jobs` 表，写入时机、失败语义与状态机的设计见 [ControlPlane README 的「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#job-持久化契约j01j08-实现与边界)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖，第十条约束是这条原则的具体落实。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
 9. **后台同步器代替不再轮询的调用方推进 job。** `httpapi/jobsync.go` 的 `jobSyncer` 周期性向每个非终态 job 的节点问一次状态，实现在 `jobStore.dueForSync`/`syncSucceeded`/`syncFailed` 上；没有它，一次没人继续轮询、也没人挂着 SSE 的运行会永远停在最后被观测到的状态，即便后端早已跑完。它在三个维度上同时有界：`SyncBatchSize`（默认 200）限定一轮问多少个 job，`SyncConcurrency`（默认 8）限定同时问多少个，`SyncCallTimeout`（默认 10s）限定单次询问能挂多久；一轮必须跑完才安排下一轮的计时器（默认间隔 `SyncInterval` 5s），因此从不重叠、慢一轮只会推迟下一轮而不会堆积。节点消失时 `NodeRuntime.snapshot` 返回 `*runtime.RuntimeError{Code: ErrorConnection}`，这是预期内的失败，不当错误记日志、也不改 job 状态——README「state 是最后观测状态」在这里必须继续成立，一个节点短暂不可达不是运行本身发生变化的证据；连续失败会按 `syncFailures` 翻倍退避（上限 `SyncMaxBackoff`，默认 5 分钟），一个持续消失的节点因此被越问越少，而不是每轮都问。任何一次前台观测（状态轮询或 SSE 事件，两者共用 `jobStore.update`）都会清空这份退避：既然确实有什么触达到了它，此前的惩罚期就不再成立。`Server.Close` 停止这个后台循环并等待正在进行的一轮跑完——本身已被批次、并发与超时三重限定，因此这个等待有界，main.go 在 HTTP 监听器停止、隧道被拆除之前调用它，避免对着一条正在有意关闭的隧道打出一串「node is not connected」告警。
-10. **后台持久化器把 job 记录写进控制面，且从不与推理路径同步。** `httpapi/jobpersist.go` 的 `jobPersister`（STATUS.md 的 J05）在 `submitRun`、`jobStatus` 轮询与 SSE 终态写入这三处观测点之后被非阻塞地 `nudge()` 提醒，但它自己的写入永远在另一个协程里进行——202、轮询响应、SSE 帧都在持久化调用返回之前就已经发给调用方。一个 job 需要持久化的条件是 `job.needsPersist()`：`persisted` 为 false（从未确认过 `CreateJob`），或 `persistedSeq < ObservedSeq`（已确认的落后于本副本最新的观测）；`ObservedSeq` 只在 `jobStore.update()` 里因 State 或 ErrorSummary 真正变化才自增，一次只确认同一状态的轮询不会触发一次白白的持久化写入。**结果不明时的重试只会针对同一个 job id 与同一份路由绑定再问一次控制面，绝不重新提交给节点、也绝不铸造新 job id**——`jobPersister` 结构体本身没有 `scheduler` 依赖，架构上就做不到后者，这正是 STATUS.md「结果未知时不盲目重提」在代码里的落实。批次、并发与超时的三重有界与退避机制与 `jobSyncer`同构，但用独立的 `persistFailures`/`nextPersistAt` 记账：控制面不可达与节点不可达是两个互不相关的故障域，合用一套退避会让一处故障拖住另一处本该继续的重试。`dueForPersist` 刻意不排除终态 job——一次运行的最终状态恰恰是最不该丢失的记录，也是 `jobSyncer` 自己的轮询在 job 到达终态那一刻起就不再覆盖的情形。**这是尽力而为的旁路，不是可靠队列**：重试状态存在 `jobStore` 自己的记账里，与内存 job 表其余部分同样在进程重启时丢失、同样受 `DefaultMaxJobs` 逐出上限约束——一个还没来得及持久化就被逐出的 job，这次持久化机会随之消失，这是已知且如实记录的限制，不是靠着承诺"不会丢"蒙混过去的隐患。
+10. **后台持久化器把 job 记录写进控制面，且从不与推理路径同步。** `httpapi/jobpersist.go` 的 `jobPersister`（STATUS.md 的 J05）在 `submitRun`、`jobStatus` 轮询与 SSE 终态写入这三处观测点之后被非阻塞地 `nudge()` 提醒，但它自己的写入永远在另一个协程里进行——202、轮询响应、SSE 帧都在持久化调用返回之前就已经发给调用方。一个 job 需要持久化的条件是 `job.needsPersist()`：`persisted` 为 false（从未确认过 `CreateJob`），或 `persistedSeq < ObservedSeq`（已确认的落后于本副本最新的观测）；`ObservedSeq` 只在 `jobStore.update()` 里因 State 或 ErrorSummary 真正变化才自增，一次只确认同一状态的轮询不会触发一次白白的持久化写入。**结果不明时的重试只会针对同一个 job id 与同一份路由绑定再问一次控制面，绝不重新提交给节点、也绝不铸造新 job id**——`jobPersister` 唯一一个形似 `scheduler` 的依赖是 `artifactOpener`（P04 起为把产物字节复制进对象存储而存在），已经收窄到 `OpenArtifact` 这一个方法，类型里没有任何地方能发起 `Submit` 或派发，架构上就做不到重新提交，这正是 STATUS.md「结果未知时不盲目重提」在代码里的落实。批次、并发与超时的三重有界与退避机制与 `jobSyncer`同构，但用独立的 `persistFailures`/`nextPersistAt` 记账：控制面不可达与节点不可达是两个互不相关的故障域，合用一套退避会让一处故障拖住另一处本该继续的重试。`dueForPersist` 刻意不排除终态 job——一次运行的最终状态恰恰是最不该丢失的记录，也是 `jobSyncer` 自己的轮询在 job 到达终态那一刻起就不再覆盖的情形。**这是尽力而为的旁路，不是可靠队列**：重试状态存在 `jobStore` 自己的记账里，与内存 job 表其余部分同样在进程重启时丢失、同样受 `DefaultMaxJobs` 逐出上限约束——一个还没来得及持久化就被逐出的 job，这次持久化机会随之消失，这是已知且如实记录的限制，不是靠着承诺"不会丢"蒙混过去的隐患。
 11. **后台恢复器在重启后找回非终态 job 的路由绑定，且从不发明结果。** `httpapi/jobrecover.go` 的 `jobRecoverer`（STATUS.md 的 J06）周期性地就 `scheduler.WorkflowCapableCandidates()` 报告的每一个当前已连接节点/runtime，向控制面问一句「我欠这个路由绑定什么」（`JobRecoveryClient.ListActiveJobsForRoute`），并用 `jobStore.recoverIfMissing` 把本副本尚不知道的 job 补回内存表——这正是重启后 `job.Candidate`（节点/运行时标识）与 `job.RunID`（后端运行标识）失而复得的地方，且从不序列化任何连接对象：`NodeRuntime` 本就在每次调用时重新按 (nodeID, runtimeID) 解析节点（见隧道那边的 `node_runtime.go`），恢复回来的 `Candidate` 不过是它一直以来的那两个字符串。恢复到的 job 会把 `ObservedSeq`/`persisted`/`persistedSeq` 播种为控制面已有的值，而不是从零开始——否则 `jobPersister` 头几次真实观测会因为本地序号"看起来更旧"而被控制面无声丢弃。**恢复的执行权刻意不是排他的**：这个节点/runtime 连接到的任何副本都可以恢复并操作同一个 job，多个副本各自独立同步或持久化同一个 job 在构造上就是安全的——控制面的 `observed_seq` 单调门槛（见 ControlPlane README「Job 持久化契约」）本就无需协调即可化解并发写入，这里没有锁要拿，因为没有什么需要锁来保护。**一个再也没有重新连接到任何副本的节点不会被当作失败处理**：本恢复器从不主动为一个够不着的 job 编造状态，该 job 只会停在最后观测到的记录上，与本 README 一贯反对"编造一个没人告诉过它的结果"的立场一致。
+12. **产物字节可选地被复制进对象存储，下载优先读它。** `objectstore` 包（STATUS.md 的 P04）是一个 `Backend` 接口加三个实现——`local`（单机磁盘）、`s3`（S3-compatible，含 MinIO/Ceph RGW 等自建网关）、`webdav`（群晖/QNAP/TrueNAS 等只有 WebDAV、没有 S3 网关的 NAS）——由 `-artifact-storage=local|s3|webdav` 选择，留空则完全关闭这条路径，产物仍旧只能从产出它的节点实时拉取，与 P04 之前的行为完全一致。开启后，`jobpersist.go` 的 `jobPersister.persistArtifacts` 在上报产物元数据之前先经 `persistArtifactBytes` 把字节从节点拉到配置的后端：`countingReader` 包着 `io.TeeReader` 在 `objectstore.Backend.Put` 读取的同一遍里完成 SHA-256 与字节计数，不多读第二遍；存储 key 由 `path.Join(tenantID, jobID, artifactID)` 派生——用 `path.Join` 而不是字符串拼接，是因为未配置鉴权的部署（`-api-keys` 与 `-control-plane-addr` 都留空）请求不带租户，空 `tenantID` 直接拼接会产出一个开头的 `/`，被 `objectstore` 的 key 校验当绝对路径拒绝，这是一次真实撞上过的 bug，由端到端集成测试抓到。字节复制失败时**完全不发起 `CreateJobArtifact` 调用**，而不是退化成仅报元数据——控制面绝不能记一个尚不存在的 `StorageKey`；失败与产物元数据上报共用同一套按 `artifactPersistFailed` 计数的退避重试。哈希、大小、内容类型与存储 key 随 `CreateJobArtifact` 一起上报（详见 ControlPlane README 对应小节），但 `StorageKey` 从不出现在任何租户可见的响应里——一个 `types.JobArtifactResponse` 被 `getJobHistory`（租户侧）与内部列举接口共用，因此只携带 SHA256/SizeBytes/ContentType 这些描述租户自己文件的字段，存储后端的内部寻址与节点 id 一样不该被租户看到。`downloadArtifact` 只在 `jobStore` 的产物记录已经带有 `StorageKey` 时才尝试 `Backend.Open`，任何失败（含未找到）都直接回退到一贯的节点实时拉取，而不是把一次存储故障变成一次调用方无计可施的错误。字节复制用独立的 `ArtifactCopyTimeout`（默认 5 分钟）而不是 `CallTimeout`（默认 3 秒）：后者是为一次 JSON 往返设计的，套用在搬运真实文件字节上会把大产物的复制提前掐断。S3 一侧默认关闭 SDK 较新的 `aws-chunked` 结尾校验和并改用 `UNSIGNED-PAYLOAD` 签名——前者是 AWS 专有扩展、不是每个 S3-compatible 服务端都支持，后者是让流式上传不必先整体缓冲来算载荷哈希的代价，两者都是为了兼容本包真正瞄准的非 AWS 服务端而做的取舍。新增的两个依赖——`aws-sdk-go-v2`（S3-compatible 客户端）与 `studio-b12/gowebdav`（WebDAV 客户端）——仅被这个包引用，不影响 Agent/Registry 的最小依赖线；S3 与 WebDAV 的凭据一律经 `-artifact-storage-s3-access-key-id-file` 等 `-xxx-file` flag 从文件读取，不作为明文 flag 值出现在进程列表里，任何可能泄漏它们的错误文本都先经 `runtime.Redact` 清洗。保留期清理见第十四条；输入上传的隧道协议层与 HTTP 前门见第十三条。
+13. **输入文件在同一次 HTTP 请求内原子完成上传与提交，不做跨节点重试。** `common/workflowtemplate` 新增 `InputFile` 输入类型（STATUS.md 的 P04），值不是 JSON——调用方带外提供字节，因此不可能像字符串输入那样夹带图结构；`Input.Default` 对 `InputFile` 类型直接被 `Validate` 拒绝，因为一个静态默认文件引用没有实际上传与之对应。`workflow.Template.Bind` 的签名相应拆成 `(values, files) (graph, pending, err)`：标量输入照旧当场写进图，`InputFile` 输入既不写图也不报错，而是作为 `PendingFile`（携带 Name/Node/Field/Filename/Size）回报——它对应哪个节点字段，在选定节点、字节真正上传过去之前根本无从知道。`httpapi.submitRun` 因此按请求的 `Content-Type` 分叉：不含文件的 `application/json` 走法与 P04 之前完全一致；含文件的 `multipart/form-data`（`inputs` 表单字段携带同样的 JSON、其余具名分片是文件本身）由 `parseRunRequest` 经标准库 `ParseMultipartForm` 解析——大分片按阈值溢写临时磁盘而不是无界驻留内存，这是在"纯流式解析 multipart 会禁止先收集完整的 headers 再决定上传目标节点"与"绝不无界缓冲"这两条约束之间选的折衷，注释里写明了取舍。有 `pending` 文件时，`submitWithFiles` 挑选 `scheduler.WorkflowCapableCandidates()` 的第一个候选，经新增的 `scheduler.UploadInput`（复用 `OpenArtifact` 的流式纪律，边读边送）逐个把文件推给它，用返回的 `InputRef` 经 `workflow.SetGraphField` 补全图，再用新增的 `scheduler.SubmitWorkflowTo` 提交给这同一个候选——**全程不重试**：`SubmitWorkflow` 原有的跨候选重试循环在这里不安全复用，换一个候选意味着刚上传到前一个候选的文件根本不在它会去找的地方，对每个可能重试到的候选都重新上传一遍，是这个 API 主动放弃、而不是悄悄掩盖的取舍，其代价与"单次请求原子提交"的设计选择直接对应。这条链路的隧道协议层——`OPERATION_INPUT_UPLOAD`（复用既有帧结构，见隧道 README「payload 编码约定」一节）、`tunnelserver.NodeRuntime.UploadInput`（走批量槽，边读边送）、Agent 侧 `dispatch.go` 的 `chanReader` 流式转发、`comfyui.Runtime.UploadInput` 经 `POST /upload/image` 落盘——已在更早一轮落地；本轮补上的是 `workflow`/`httpapi` 这一层，使其从"Gateway 能把字节送进 ComfyUI"变成客户端真正可用的端点。
+14. **产物按类型区分保留期，到期由第四个后台循环清理，字节先于元数据行消失。** `httpapi/artifactcleanup.go` 的 `artifactCleaner`（STATUS.md 的 P04）是继 `jobSyncer`（J02）、`jobPersister`（J05）、`jobRecoverer`（J06）之后的第四个 `run()`/`tick()`/`Stop()` 后台循环，仅在 `Config.ArtifactCleanupClient` 非空（即控制面持久化已启用）时启动，与前三者同一条"未配置就整体不跑"的规则。它按 `Config.ArtifactRetention`（output 类型，默认 30 天）与 `ArtifactPreviewRetention`（temp 类型，默认 24 小时）两条各自独立的保留期分别向控制面新增的 `GET /internal/v1/job-artifacts/expired` 发问——这正是"预览图单独处理"的落实方式：不是给预览产物另开一条持久化或存储路径，只是给它一条短得多的到期线，P04 Stage 2 已有的持久化写入路径完全不变。`tick()` 逐类型调用 `sweepType`，对每一条到期记录调用 `reap()`：**先删对象存储里的字节（`objectstore.Backend.Delete`），只有这一步成功才继续删控制面那一行元数据**——顺序反过来会在删除失败时留下一行指向已经消失的字节的记录，而现在的顺序失败时最坏情况是留下一份没人再指向的孤儿字节，两者中显然是后者代价更小；`StorageKey` 为空（产物从未被复制进对象存储，或复制发生在启用对象存储之前）时跳过存储删除、只删行，这与 `downloadArtifact` 遇到空 `StorageKey` 时的处理是同一条判断。一条产物删除失败（无论是存储侧还是控制面侧）不影响同一轮里其余产物的清理，失败的那条留给下一轮 `Interval`（默认 10 分钟）自然重试，不是一次显式退避——到期产物的清理本就不是时间敏感操作，下一轮自然重试与专门实现一套退避策略相比是同等有效但更简单的选择。`main.go` 新增的 `-artifact-cleanup-interval`/`-artifact-retention`/`-artifact-preview-retention` 三个 flag 留空时各自退回上述默认值。`controlplaneclient.GatewayPersister` 同时满足 `httpapi.ArtifactCleanupClient`（新增）——与它已经满足的 `JobPersistClient`/`JobRecoveryClient` 是同一个适配器上追加的第三个接口，理由不变：`httpapi` 不能反向导入 `controlplaneclient`。`controlplaneclient.call()` 相应新增对 `http.StatusNoContent` 的识别——`DeleteJobArtifact` 是这条客户端目前唯一一个成功时不带响应体的调用，之前的 switch 只认 200/201，会把它的 204 错判成 `ErrOutcomeUnknown`。**已知边界**：输入上传的字节从不落盘到控制面或对象存储（P04 Stage 3 选择的"单次请求原子提交"架构决定了这一点），因此本条清理逻辑只覆盖已持久化的输出产物。上传文件的格式/内容类型校验见第十五条。
+15. **上传文件校验分两层：文件名扩展名先过滤，再嗅探真实字节。** `httpapi/uploadformat.go`（STATUS.md 的 P04，补上"格式与大小限制"里大小限制之外、此前一直留白的格式那一半）在 `parseRunRequest` 解析 multipart 分片时先用 `validateUploadFilename` 按扩展名（大小写不敏感，`Config.AllowedUploadExtensions`，为空退回 `DefaultAllowedUploadExtensions` 的图片/视频/音频常见格式，没有关闭这项检查的开关，与几行之外的 `MaxWorkflowUploadBytes` 一样）拒绝明显不对的文件——这一步不读文件的一个字节，因为此刻甚至还不知道会不会选中一个能处理工作流的节点。第二层在 `submitWithFiles` 真正开始转发字节之前：`validateUploadContent` 用 `net/http.DetectContentType` 嗅探最多 512 字节（与该函数自己文档声明的窗口一致，因此无论文件大小如何都是一次有界读取，符合"任何一跳都不得无界缓冲"），核对结果是否落在这个扩展名该有的类别前缀里（`image/`、`video/`、`audio/`）——**这张"扩展名→类别前缀"表刻意不放进 `Config`：它编码的是格式本身长什么样，不是部署策略**，一个改名成 `.png` 的可执行文件即使通过了第一层的文件名检查，也会在这里因为嗅探结果不是 `image/*` 而被拦下。一个部署往 `Config.AllowedUploadExtensions` 加进这张类别表里没有的扩展名（比如某种不透明的二进制模型格式）时，第二层对它直接跳过，只凭扩展名放行——不透明的二进制格式本就没有一个统一的字节特征可供比对，强行套一个错误的类别只会制造假阳性。嗅探不消耗字节：`validateUploadContent` 返回的 reader 用 `io.MultiReader` 把已经读出的探测窗口接回原始流的前面，下游收到的仍是完整、逐字节不变的文件。两层校验的失败都会在 `errUnsupportedUploadFormat` 上打上标记，`submitRun` 据此在 `submitWithFiles` 返回的错误进入通用的 `handleDispatchError`（会把未识别错误一律映射成 500）之前拦下它，改答 400——这是调用方的输入问题，不是节点或后端的错。`main.go` 新增的 `-workflow-upload-allowed-extensions`（逗号分隔）留空时退回默认列表。
 
-`-workflow-templates` 接受逗号分隔的文件或目录（目录下取 `*.json`，其余忽略），留空则不注册任何模板，此时提交一律 404。清单形如：
+`-workflow-source=file`（默认）下，`-workflow-templates` 接受逗号分隔的文件或目录（目录下取 `*.json`，其余忽略），留空则不注册任何模板，此时提交一律 404。清单形如：
 
 ```json
 {
@@ -124,7 +132,33 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 }
 ```
 
+`-workflow-source=controlplane`（P03）下改由控制面管理版本，见下一节；两种来源构建的是同一个 `workflow.Registry`，走同一条 `workflow.Handle` 读取路径，`submitRun` 与目录渲染都不需要知道背后是哪一种。文件模式加载的模板 `Version` 字段恒为空字符串，`job.WorkflowVersion` 相应记录为空——它从未被版本化，不该在 job 记录里声称一个自己没有的版本。
+
 README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产物列表这一步顺带扩了隧道契约：新增 `OPERATION_ARTIFACT_LIST`（`RunRef` 进、`ArtifactList` 出，走推理槽），`runtime.WorkflowRuntime` 相应新增 `Artifacts` 方法——ComfyUI 适配器早有这个实现，此前停在适配器里过不了隧道。
+
+## 工作流模板版本与发布（P03）
+
+`-workflow-source=controlplane` 下，由 `workflowsync` 从 `GET /internal/v1/workflow-templates/current` 拉取整套已发布模板；使用已有 `-control-plane-addr` 和 `AISW_CONTROL_PLANE_TOKEN`（或 `-control-plane-token`），与 P02 路由共用同一套控制面凭据，不增加数据库依赖。结构与 P02 路由完全同构（见下方「控制面管理路由」一节），区别只在发布的形状：路由是单一全局表，模板是多份各自独立版本化的文档，因此这里的回归防护按模板 id 分别追踪版本，整包状态用 `BundleDigest`（对已排序的 `(template_id, revision, digest)` 三元组取指纹）取代路由单一的 `revision`/`digest`。
+
+```bash
+mkdir -p ./data/gateway-1
+aiserveweave-gateway \
+  -workflow-source controlplane \
+  -control-plane-addr http://controlplane:8090 \
+  -workflow-state-file ./data/gateway-1/workflow-templates.json \
+  -workflow-sync-interval 30s \
+  -admin-addr 127.0.0.1:8091
+```
+
+此模式必须指定可写的状态文件，且不能同时设置 `-workflow-templates`。落盘缓存存放整份 `[]workflowtemplate.Snapshot`；启用整包大小上限 `workflowtemplate.MaxContentBytes * workflowtemplate.MaxTemplates`。校验规则与文件模式完全相同——两边都调用 `common/workflowtemplate.Validate`，不允许各自判断分叉（见该函数文档注释）。
+
+`GET /internal/v1/workflows/status` 由运维监听器现有 Token 守卫，返回 `replica_id`、`generated_at`、`mode`、`template_count`、`bundle_digest`、`applied_at`、`checked_at` 与固定错误代号，供控制面的 `/operator/v1/workflow-templates/status` 聚合比对；现有 `GET /internal/v1/workflows` 端点不变，仍返回 `workflowview.TemplateCatalog`（不含图的目录），只是其元素现在多了 `version`、`visible_tenant_ids`、`outputs`、`dependencies` 四个字段。
+
+**租户可见范围在提交路径强制执行，不只是目录过滤。** 每个模板版本携带一份 `VisibleTenantIDs`（空 = 对所有租户可见）；`POST /v1/workflows/{workflow_id}/runs` 对不在允许列表上的租户返回与「模板不存在」相同的 404，不泄露存在性——这是数据面的真实授权边界；控制面聚合出的 `/admin/v1/workflows` 菜单按同一份 `VisibleTenantIDs` 过滤只是给租户看的便利视图，两者独立生效。
+
+**依赖检查仅做结构性声明校验，不核对节点实际能力。** 模板作者可以声明 `Dependencies{CustomNodes, Models}`（自定义节点包与模型 checkpoint 及其版本），发布时只检查非空、去重与数量上限，从不与任何已连接节点实际上报的已装列表交叉核对——因为目前没有节点上报这类信息，跨这条边界属于超出本轮范围的新协议设计。`Outputs` 同理：声明的是产出该结果的节点与种类，仅结构性校验该节点存在于图中，不核实运行后是否真的产出了声明种类的产物。
+
+公开契约见 `common/workflowtemplate`；限额、控制面存储与 CAS 语义见 [ControlPlane README「工作流模板发布契约（P03）」](../aiServeWeaveControlPlane/README.md#工作流模板发布契约p03)。
 
 ## Responses API
 
@@ -198,7 +232,7 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 
 三条规则：
 
-1. **排序有两层，外层属于运维。** target 按 priority 依次尝试（数值小的在前，与 Kubernetes 一致），只有在同一个 target 内部才由「空闲槽最多、在途最少」的负载启发式决定。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个声明的偏好，不会被一台一时更空闲的机器推翻。优先级是排序不是排除——首选匹配不到节点时会落到次选。
+1. **排序有两层，外层属于运维。** target 按 priority 依次尝试（数值小的在前，与 Kubernetes 一致），同优先级的可用 target 按权重随机排列（0 等同 1），再在各 target 内部按「空闲槽最多、在途最少」选择候选。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个声明的偏好，不会被一台一时更空闲的机器推翻。优先级是排序不是排除——首选匹配不到节点时会落到次选。
 2. **节点选择器是「与」。** 声明的每个标签都必须匹配；空选择器匹配所有节点。一条意为「其中任意一个」的规则根本无法表达「本地那台 4090」，而那正是运维实际会写的规则。
 3. **别名在离开 Gateway 之前被改写成真实模型名**，客户端始终不会得知后者。`GET /v1/models` 因此在有路由表时只列别名——两者都公布等于邀请客户端绑定到某个运行时模型，而那正是别名要防止的事。没有活节点能服务的别名会被略去：一个用起来就 404 的目录条目，比一个缺失的条目更糟。
 
@@ -278,3 +312,35 @@ go test -race ./service/aiServeWeaveGateway/...
 ## 持久化与访问的现有限制
 
 R04 对照 `httpapi/jobs.go`、`jobrecover.go` 与 `artifacts.go` 核实：公开 Job 响应尚未输出 J01 设计的 `durability` 字段；202 只表示后端提交成功，不确认落库。后台恢复仅扫描非终态 Job，下载只查本副本内存中的产物映射，不会按历史产物 ID 从控制面恢复映射。因此历史元数据可查不保证终态 Job 或原产物 ID 在重启/切换副本后仍能通过数据面访问；原节点离线也会影响文件可用性。
+
+## 控制面管理路由（P02）
+
+`-route-source=file` 是默认值，继续通过 `-model-routes` 读取文件/目录。显式选择 `-route-source=controlplane` 后，由 `routesync` 从 `GET /internal/v1/routes/current` 拉取整套不可变路由；使用已有 `-control-plane-addr` 和 `AISW_CONTROL_PLANE_TOKEN`（或 `-control-plane-token`），不增加数据库依赖。
+
+```bash
+mkdir -p ./data/gateway-1
+# AISW_CONTROL_PLANE_TOKEN 与 AISW_GATEWAY_ADMIN_TOKEN 由部署环境注入。
+aiserveweave-gateway \
+  -route-source controlplane \
+  -control-plane-addr http://controlplane:8090 \
+  -route-state-file ./data/gateway-1/routes.json \
+  -route-sync-interval 30s \
+  -admin-addr 127.0.0.1:8091
+```
+
+此模式必须指定可写的状态文件，且不能同时设置 `-model-routes`。单次拉取超时 5s，默认每轮结束后等待 30s，不重叠；时钟与轮询间隔可注入测试。响应与缓存都限制为 1 MiB 路由正文加 64 KiB 元数据，拒绝空缺的 routes、无效摘要、版本倒退及同版本不同内容。每个副本使用自己的缓存文件，文件所属控制面环境不能混用。
+
+新配置先完整校验，再写临时文件、fsync、原子替换及目录同步，成功后原子切换调度器快照。每个请求及一次模型列表读取只使用一份路由快照；在途请求和已有流不改目的地。控制面故障、无效新配置或缓存写入失败时保留最近有效配置。启动时先检查缓存并尝试拉取；两者均无有效版本则拒绝启动，绝不隐式退回透传。缓存回退后仍报告同步失败，恢复拉取才清除该状态。
+
+`GET /internal/v1/routes` 由运维监听器现有 Token 守卫，返回 `replica_id`、`generated_at`、`mode`、`revision`、`digest`、`applied_at`、`checked_at` 与固定错误代号。文件模式也返回状态，但不算应用了控制面版本。控制面只对 `Fleet.Gateways` 明确配置的端点确认；副本丢失/重复身份、超过一分钟的时间偏差或版本/摘要不匹配均不能成为“全部应用”。这是一轮观测，不是全局原子发布协议。
+
+路由仍是模型映射而非权限：没有匹配别名时保留原名请求语义，标签仍为 Agent 自述的筛选条件。P02 同时修复此前 Weight 只存储却未参与调度的缺口，同优先级权重现在实际影响首选目标；优先级、能力/健康过滤、每目标负载顺序与有限重试保持原职责。选择器也修正了空值边界：声明空标签值要求节点实际携带该标签，缺失标签不再被 map 零值误判为匹配。
+
+### 从文件配置迁移
+
+1. 在控制面受控启用一次 `Database.AutoMigrate`，创建带版本记录的路由表；完成后按部署策略关闭。
+2. 平台运维在 Console `/operator/routes` 导入现有 JSON 文件，核对别名、目标模型、标签、优先级和权重，验证后发布第一版。多文件合并后同样限制 1 MiB，重复别名被拒绝。
+3. 逐个将 Gateway 改为控制面模式，移除 `-model-routes`，为每个副本挂载独立持久缓存；在 Console 逐个检查实际版本与摘要。滚动接管期间新旧模式可能并存，显示未完成。
+4. 配置内容回滚应在 Console 选择历史版本并发布为新版本。若需退出控制面模式，先导出选定版本的 `routes` 数组到文件、校验后显式切回 file 并重启；不得把包含 revision 等元数据的缓存文件直接当作旧路由数组使用。
+
+公开契约见 `common/modelroute`；带宽/内存/历史容量上限和控制面 API 见 [ControlPlane README](../aiServeWeaveControlPlane/README.md#模型路由发布p02)。

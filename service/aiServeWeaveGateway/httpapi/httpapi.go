@@ -9,6 +9,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/workflowview"
+	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
@@ -37,14 +38,18 @@ type Config struct {
 	// Metrics 接收前门的仪器，其描述见 Descriptions。为 nil 时全部丢弃。
 	Metrics runtime.Metrics
 
-	// Workflows is the catalogue of registered workflow templates. Nil leaves
+	// Workflows holds the catalogue of registered workflow templates behind
+	// an atomic pointer (P03), so a control-plane sync can hot-swap it
+	// without a request ever observing a half-applied registry. Nil leaves
 	// the workflow routes mounted but registering nothing, so a submit gets
 	// the same 404 as an unknown template rather than a route that vanishes
 	// depending on configuration.
 	//
-	// Workflows 是已注册工作流模板的目录。为 nil 时工作流路由照常挂载但目录为空，
-	// 因此提交会得到与「模板不存在」相同的 404，而不是一条随配置忽隐忽现的路由。
-	Workflows *workflow.Registry
+	// Workflows 用一个原子指针持有已注册工作流模板的目录（P03），因此控制面同步
+	// 可以热替换它，而不会让任何请求观察到一份只换了一半的目录。为 nil 时工作流
+	// 路由照常挂载但目录为空，因此提交会得到与「模板不存在」相同的 404，而不是
+	// 一条随配置忽隐忽现的路由。
+	Workflows *workflow.Handle
 
 	// MaxJobs bounds the in-memory job table. Zero uses DefaultMaxJobs.
 	//
@@ -136,6 +141,32 @@ type Config struct {
 	// PersistMaxBackoff 限定一个反复失败的 job 在持久化尝试之间最多等待多久。
 	// 为零时采用 DefaultPersistMaxBackoff。
 	PersistMaxBackoff time.Duration
+	// ArtifactStorage persists generated artifact bytes as they are pulled
+	// from the node that produced them (STATUS.md's P04), so they remain
+	// downloadable after that node disconnects — see the ControlPlane
+	// README's known gap for what the in-memory-only path before P04 could
+	// not do. Nil disables byte persistence entirely: artifact metadata
+	// (filename/subfolder/type) is still reported to the control plane
+	// exactly as before, and downloads always pull live from the node,
+	// exactly today's behavior.
+	//
+	// ArtifactStorage 在产物字节从产出它们的节点被拉取时就地持久化它们
+	// （STATUS.md 的 P04），使其在该节点断开后依然可下载——P04 之前那条
+	// 仅存于内存的路径做不到什么，见 ControlPlane README 的已知缺口。为
+	// nil 时完全关闭字节持久化：产物元数据（文件名/子目录/类型）仍会照常
+	// 上报给控制面，下载也始终从节点实时拉取，与今天的行为完全一致。
+	ArtifactStorage objectstore.Backend
+	// ArtifactCopyTimeout bounds one artifact's node-to-storage byte copy.
+	// Zero uses DefaultArtifactCopyTimeout. It is deliberately separate from
+	// PersistCallTimeout, which bounds the lightweight metadata call to the
+	// control plane — a byte copy moves a real file and needs a timeout
+	// sized for that, not for a JSON round trip.
+	//
+	// ArtifactCopyTimeout 限定单个产物「节点到存储」的字节复制时长。为零时
+	// 采用 DefaultArtifactCopyTimeout。它刻意与 PersistCallTimeout 分开——
+	// 后者限定到控制面的轻量元数据调用，而一次字节复制搬运的是真实文件，
+	// 需要一个按此设定、而非按一次 JSON 往返设定的时长。
+	ArtifactCopyTimeout time.Duration
 
 	// JobRecoveryClient asks the control plane which non-terminal jobs are
 	// bound to a node/runtime this replica can currently reach, so a
@@ -167,6 +198,53 @@ type Config struct {
 	// RecoverCallTimeout 限定单次向控制面发起的恢复调用的时长。为零时采用
 	// DefaultRecoverCallTimeout。
 	RecoverCallTimeout time.Duration
+
+	// ArtifactCleanupClient reaps expired artifact records and their object
+	// storage bytes (STATUS.md's P04). Nil disables the cleanup sweeper
+	// entirely — a deployment with no control plane, or one that never
+	// configured ArtifactStorage, has nothing to sweep, the same
+	// nil-degrades pattern JobPersistClient and Verifier already follow.
+	//
+	// ArtifactCleanupClient 回收已过期的产物记录及其对象存储字节
+	// （STATUS.md 的 P04）。为 nil 时完全关闭清理扫描器——未部署控制面、
+	// 或从未配置 ArtifactStorage 的部署没有什么可供清理，与 JobPersistClient
+	// 和 Verifier 已经遵循的同一种「为 nil 时退化」模式。
+	ArtifactCleanupClient ArtifactCleanupClient
+	// ArtifactCleanupInterval is how often the cleanup sweeper checks for
+	// expired artifacts. Zero uses DefaultArtifactCleanupInterval.
+	//
+	// ArtifactCleanupInterval 是清理扫描器检查过期产物的间隔。为零时采用
+	// DefaultArtifactCleanupInterval。
+	ArtifactCleanupInterval time.Duration
+	// ArtifactRetention is how long a persisted "output" artifact is kept
+	// before the sweeper reaps it. Zero uses DefaultArtifactRetention.
+	//
+	// ArtifactRetention 是一个已持久化的 "output" 产物在被扫描器回收之前
+	// 保留多久。为零时采用 DefaultArtifactRetention。
+	ArtifactRetention time.Duration
+	// ArtifactPreviewRetention is how long a persisted "temp" (preview)
+	// artifact is kept — deliberately much shorter than ArtifactRetention,
+	// see artifactcleanup.go's package constants. Zero uses
+	// DefaultArtifactPreviewRetention.
+	//
+	// ArtifactPreviewRetention 是一个已持久化的 "temp"（预览）产物保留多久——
+	// 刻意比 ArtifactRetention 短得多，见 artifactcleanup.go 的包常量。为零时
+	// 采用 DefaultArtifactPreviewRetention。
+	ArtifactPreviewRetention time.Duration
+
+	// AllowedUploadExtensions is the file-extension allowlist (dot-prefixed,
+	// case-insensitive) submitRun enforces on a workflow's InputFile parts
+	// (STATUS.md's P04). Empty uses DefaultAllowedUploadExtensions — there is
+	// no way to disable the check entirely, the same as MaxWorkflowUploadBytes
+	// a few lines below it in jobs.go. See uploadformat.go for the byte-sniff
+	// check layered on top of this filename check.
+	//
+	// AllowedUploadExtensions 是 submitRun 对工作流 InputFile 分片强制执行的
+	// 文件扩展名允许列表（带前导点、大小写不敏感，STATUS.md 的 P04）。为空时
+	// 采用 DefaultAllowedUploadExtensions——没有办法完全关闭这项检查，与
+	// jobs.go 里几行之外的 MaxWorkflowUploadBytes 一样。叠加在这层文件名检查
+	// 之上的字节嗅探检查见 uploadformat.go。
+	AllowedUploadExtensions []string
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
@@ -187,13 +265,15 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	}
 
 	h := &handlers{
-		sched:     sched,
-		logger:    logger,
-		metrics:   newRecorder(cfg.Metrics),
-		workflows: cfg.Workflows,
-		jobs:      newJobStore(cfg.MaxJobs),
-		clock:     clock,
-		limiter:   cfg.Limiter,
+		sched:                   sched,
+		logger:                  logger,
+		metrics:                 newRecorder(cfg.Metrics),
+		workflows:               cfg.Workflows,
+		jobs:                    newJobStore(cfg.MaxJobs),
+		clock:                   clock,
+		limiter:                 cfg.Limiter,
+		storage:                 cfg.ArtifactStorage,
+		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
 	}
 
 	syncer := newJobSyncer(h.jobs, sched, clock, logger, jobSyncConfig{
@@ -217,12 +297,13 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 循环。
 	var persister *jobPersister
 	if cfg.JobPersistClient != nil {
-		persister = newJobPersister(h.jobs, cfg.JobPersistClient, clock, logger, jobPersistConfig{
-			Interval:    cfg.PersistInterval,
-			BatchSize:   cfg.PersistBatchSize,
-			Concurrency: cfg.PersistConcurrency,
-			CallTimeout: cfg.PersistCallTimeout,
-			MaxBackoff:  cfg.PersistMaxBackoff,
+		persister = newJobPersister(h.jobs, cfg.JobPersistClient, sched, cfg.ArtifactStorage, clock, logger, jobPersistConfig{
+			Interval:            cfg.PersistInterval,
+			BatchSize:           cfg.PersistBatchSize,
+			Concurrency:         cfg.PersistConcurrency,
+			CallTimeout:         cfg.PersistCallTimeout,
+			MaxBackoff:          cfg.PersistMaxBackoff,
+			ArtifactCopyTimeout: cfg.ArtifactCopyTimeout,
 		})
 		go persister.run()
 	}
@@ -244,6 +325,41 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 			CallTimeout: cfg.RecoverCallTimeout,
 		})
 		go recoverer.run()
+	}
+
+	// The cleanup sweeper follows the same nil-degrades pattern: no control
+	// plane configured to reap through means there is nothing durable to
+	// clean up in the first place.
+	//
+	// 清理扫描器遵循同一种「为 nil 时退化」模式：未配置可供回收的控制面，
+	// 意味着从一开始就没有什么持久化的东西需要清理。
+	var cleaner *artifactCleaner
+	if cfg.ArtifactCleanupClient != nil {
+		// Defaulted here, per field, rather than left to
+		// newArtifactCleaner's own zero-check on the whole map: that check
+		// only fires when RetentionByType is nil, and a map built with a
+		// zero cfg.ArtifactRetention would otherwise mean "expire the
+		// instant an artifact is created" instead of "use the default".
+		//
+		// 在这里逐字段补上默认值，而不是留给 newArtifactCleaner 自己对整个
+		// map 的零值检查——那个检查只在 RetentionByType 为 nil 时才触发，
+		// 一个用零值 cfg.ArtifactRetention 构造出的 map，若不这样处理，
+		// 含义就会变成「产物一创建就过期」，而不是「采用默认值」。
+		retention, previewRetention := cfg.ArtifactRetention, cfg.ArtifactPreviewRetention
+		if retention <= 0 {
+			retention = DefaultArtifactRetention
+		}
+		if previewRetention <= 0 {
+			previewRetention = DefaultArtifactPreviewRetention
+		}
+		cleaner = newArtifactCleaner(cfg.ArtifactCleanupClient, cfg.ArtifactStorage, clock, logger, artifactCleanupConfig{
+			Interval: cfg.ArtifactCleanupInterval,
+			RetentionByType: map[string]time.Duration{
+				"output": retention,
+				"temp":   previewRetention,
+			},
+		})
+		go cleaner.run()
 	}
 
 	mux := http.NewServeMux()
@@ -277,6 +393,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		syncer:    syncer,
 		persister: persister,
 		recoverer: recoverer,
+		cleaner:   cleaner,
 	}
 }
 
@@ -299,29 +416,33 @@ type Server struct {
 	syncer    *jobSyncer
 	persister *jobPersister
 	recoverer *jobRecoverer
+	cleaner   *artifactCleaner
 }
 
-// Close stops the background job syncer, persister and recoverer, waiting
-// for each one's current round, if any, to finish. Call it during shutdown,
-// after the HTTP listener has stopped accepting new requests and before the
-// scheduler's underlying tunnel is torn down — the syncer and the recoverer
-// both dispatch through that same scheduler, and stopping them first avoids
-// a burst of "node is not connected" warnings against a tunnel that is
-// closing on purpose rather than one that failed. The persister does not
-// dispatch through the tunnel at all — it talks to the control plane — but
-// stopping it here too means shutdown has one place that waits for every
-// background loop this package started, not three.
+// Close stops the background job syncer, persister, recoverer and artifact
+// cleanup sweeper, waiting for each one's current round, if any, to finish.
+// Call it during shutdown, after the HTTP listener has stopped accepting
+// new requests and before the scheduler's underlying tunnel is torn down —
+// the syncer and the recoverer both dispatch through that same scheduler,
+// and stopping them first avoids a burst of "node is not connected"
+// warnings against a tunnel that is closing on purpose rather than one that
+// failed. The persister and the cleanup sweeper do not dispatch through the
+// tunnel at all — they talk to the control plane (and, for the sweeper,
+// object storage) — but stopping them here too means shutdown has one
+// place that waits for every background loop this package started, not
+// four.
 //
 // It does not stop the HTTP handler itself; that remains the caller's
 // http.Server to shut down.
 //
-// Close 停止后台 job 同步器、持久化器与恢复器，并分别等待它们正在进行的一轮
-// （如果有）跑完。应当在关闭期间调用它——在 HTTP 监听器停止接受新请求之后、
-// 调度器底下的隧道被拆除之前——同步器与恢复器都经由同一个调度器分派，先停止
-// 它们能避免对着一条正在有意关闭而非故障的隧道打出一串「node is not
-// connected」告警。持久化器根本不经由隧道分派——它对话的是控制面——但在这里
-// 一并停止它，意味着关闭流程只有一处要等待本包启动的每一个后台循环，而不是
-// 三处。
+// Close 停止后台 job 同步器、持久化器、恢复器与产物清理扫描器，并分别等待
+// 它们正在进行的一轮（如果有）跑完。应当在关闭期间调用它——在 HTTP 监听器
+// 停止接受新请求之后、调度器底下的隧道被拆除之前——同步器与恢复器都经由
+// 同一个调度器分派，先停止它们能避免对着一条正在有意关闭而非故障的隧道
+// 打出一串「node is not connected」告警。持久化器与清理扫描器根本不经由
+// 隧道分派——它们对话的是控制面（清理扫描器还对话对象存储）——但在这里
+// 一并停止它们，意味着关闭流程只有一处要等待本包启动的每一个后台循环，
+// 而不是四处。
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
@@ -331,6 +452,9 @@ func (s *Server) Close() {
 	}
 	if s.recoverer != nil {
 		s.recoverer.Stop()
+	}
+	if s.cleaner != nil {
+		s.cleaner.Stop()
 	}
 }
 
@@ -361,7 +485,7 @@ type handlers struct {
 	sched     *scheduler.Scheduler
 	logger    *slog.Logger
 	metrics   *recorder
-	workflows *workflow.Registry
+	workflows *workflow.Handle
 	jobs      *jobStore
 	clock     runtime.Clock
 	limiter   ratelimit.Limiter
@@ -372,6 +496,19 @@ type handlers struct {
 	// persister 在未配置 JobPersistClient 时为 nil。它的 nudge 方法对 nil
 	// 接收者是安全的，因此调用点从不需要自己检查它是否为 nil——见 jobpersist.go。
 	persister *jobPersister
+	// storage is nil when no Config.ArtifactStorage is configured, in which
+	// case downloadArtifact pulls live from the node exactly as it always
+	// has. See jobpersist.go's persistArtifacts for the write side.
+	//
+	// storage 在未配置 Config.ArtifactStorage 时为 nil，此时 downloadArtifact
+	// 照旧从节点实时拉取。写入侧见 jobpersist.go 的 persistArtifacts。
+	storage objectstore.Backend
+	// allowedUploadExtensions is Config.AllowedUploadExtensions normalized
+	// into a lookup set — see uploadformat.go.
+	//
+	// allowedUploadExtensions 是归一化成查找集合后的
+	// Config.AllowedUploadExtensions——见 uploadformat.go。
+	allowedUploadExtensions map[string]struct{}
 }
 
 // observe wraps the whole handler chain in the request counter, the duration

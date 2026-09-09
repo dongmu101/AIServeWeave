@@ -259,3 +259,57 @@ func TestModelsListsAliasesInsteadOfRuntimeModels(t *testing.T) {
 		t.Errorf("Models() = %v, want just the alias qwen-coder", ids)
 	}
 }
+
+func TestRouteSwapPreservesInflightAndChangesNextRequest(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	entered, release := make(chan struct{}), make(chan struct{})
+	connectNode(t, h, "node-old", "backend", chatCapableSnapshot("backend", "old"), func(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+		close(entered)
+		<-release
+		return echoModelHandler("old", nil)(req, body, reply)
+	})
+	connectNode(t, h, "node-new", "backend", chatCapableSnapshot("backend", "new"), echoModelHandler("new", nil))
+	before := routes(t, routing.Route{Model: "alias", Targets: []routing.Target{{RuntimeModel: "old"}}})
+	after := routes(t, routing.Route{Model: "alias", Targets: []routing.Target{{RuntimeModel: "new"}}})
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, Routes: before})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		resp, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "alias"})
+		if err != nil || resp.Message.Content != "old served old" {
+			t.Errorf("want old inflight response, got %+v err=%v", resp, err)
+		}
+	}()
+	<-entered
+	sched.SetRoutes(after)
+	resp, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "alias"})
+	close(release)
+	<-done
+	if err != nil || resp.Message.Content != "new served new" {
+		t.Fatalf("want new response, got %+v err=%v", resp, err)
+	}
+}
+
+func TestModelsUsesOneRouteSnapshotDuringConcurrentSwaps(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectNode(t, h, "node", "backend", chatCapableSnapshot("backend", "real"), echoModelHandler("node", nil))
+	first := routes(t, routing.Route{Model: "a", Targets: []routing.Target{{RuntimeModel: "real"}}}, routing.Route{Model: "b", Targets: []routing.Target{{RuntimeModel: "real"}}})
+	second := routes(t, routing.Route{Model: "c", Targets: []routing.Target{{RuntimeModel: "real"}}}, routing.Route{Model: "d", Targets: []routing.Target{{RuntimeModel: "real"}}})
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, Routes: first})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 3000; i++ {
+			sched.SetRoutes(first)
+			sched.SetRoutes(second)
+		}
+	}()
+	for i := 0; i < 3000; i++ {
+		models := sched.Models(context.Background())
+		if len(models) != 2 || !(models[0].ID == "a" && models[1].ID == "b" || models[0].ID == "c" && models[1].ID == "d") {
+			t.Errorf("want complete a,b or c,d snapshot, got %+v", models)
+			break
+		}
+	}
+	<-done
+}

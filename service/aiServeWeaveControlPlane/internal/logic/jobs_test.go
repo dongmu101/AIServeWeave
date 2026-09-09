@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
@@ -152,5 +153,55 @@ func TestCreateJobArtifactIsIdempotentOnADuplicateID(t *testing.T) {
 	}
 	if len(artifacts) != 1 {
 		t.Fatalf("ListJobArtifacts returned %d rows, want 1 — a retried create must not add a second row for the same output", len(artifacts))
+	}
+}
+
+func TestListExpiredJobArtifactsAndDeleteJobArtifact(t *testing.T) {
+	f := newFixture(t)
+	mustCreateJob(t, f, "job_1")
+
+	if _, err := f.svc.CreateJobArtifact(context.Background(), logic.CreateJobArtifactParams{
+		ArtifactID: "art_1", JobID: "job_1", TenantID: f.tenant.ID, Filename: "out.png", Type: "output",
+	}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+	// A fresh temp artifact of a different type must not show up as expired
+	// for "output", regardless of age — ListExpiredJobArtifacts filters by
+	// type, not just by cutoff.
+	//
+	// 一个类型不同的新鲜 temp 产物，无论年龄多大，都不该被当作 "output" 的
+	// 过期项冒出来——ListExpiredJobArtifacts 按类型过滤，不只是按截止时刻。
+	if _, err := f.svc.CreateJobArtifact(context.Background(), logic.CreateJobArtifactParams{
+		ArtifactID: "art_2", JobID: "job_1", TenantID: f.tenant.ID, Filename: "preview.png", Type: "temp",
+	}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	f.clock.Advance(48 * time.Hour)
+
+	expired, err := f.svc.ListExpiredJobArtifacts(context.Background(), "output", f.clock.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("ListExpiredJobArtifacts: %v", err)
+	}
+	if len(expired) != 1 || expired[0].ID != "art_1" {
+		t.Fatalf("ListExpiredJobArtifacts(output) = %v, want exactly [art_1]", expired)
+	}
+
+	if err := f.svc.DeleteJobArtifact(context.Background(), "art_1"); err != nil {
+		t.Fatalf("DeleteJobArtifact: %v", err)
+	}
+	remaining, err := f.svc.ListJobArtifacts(context.Background(), f.tenant.ID, "job_1")
+	if err != nil {
+		t.Fatalf("ListJobArtifacts: %v", err)
+	}
+	if len(remaining) != 1 || remaining[0].ID != "art_2" {
+		t.Fatalf("ListJobArtifacts after delete = %v, want only art_2 left", remaining)
+	}
+
+	// Deleting an id that no longer exists is not an error.
+	//
+	// 删除一个已不存在的 id 不算错误。
+	if err := f.svc.DeleteJobArtifact(context.Background(), "art_1"); err != nil {
+		t.Errorf("DeleteJobArtifact (already gone) = %v, want nil", err)
 	}
 }

@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"io"
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/routing"
@@ -37,6 +38,47 @@ func (s *Scheduler) SubmitWorkflow(ctx context.Context, req runtime.WorkflowRequ
 		s.metrics.Retry(runtime.CapabilityWorkflowExecution)
 	}
 	return runtime.WorkflowRun{}, Candidate{}, lastErr
+}
+
+// SubmitWorkflowTo queues req on c specifically, with no candidate selection
+// and no retry on failure. It exists for a submission that has already
+// committed to one node — because it uploaded input files there via
+// UploadInput (STATUS.md's P04) — where SubmitWorkflow's own
+// multi-candidate retry loop is not safe to reuse: retrying on another
+// candidate would mean the files just uploaded to this one are not where
+// that other node's ComfyUI would look for them, and re-uploading to every
+// candidate a retry might try is exactly the "no automatic retry across
+// candidates" trade-off this API embodies rather than hides.
+//
+// SubmitWorkflowTo 把 req 排入 c 这一个指定候选，不做候选挑选，失败也不重试。
+// 它的存在，是为了服务一次已经押定某个节点的提交——因为它已经把输入文件
+// 经 UploadInput 上传到了那一个节点上（STATUS.md 的 P04）——这种情形下复用
+// SubmitWorkflow 自己的多候选重试循环并不安全：换个候选重试，意味着刚上传
+// 到这一个节点上的文件，并不在那个节点的 ComfyUI 会去找的地方；而对重试
+// 可能尝试的每一个候选都重新上传一遍，正是这个 API 主动体现、而不是悄悄
+// 掩盖的「不跨候选自动重试」这个取舍。
+func (s *Scheduler) SubmitWorkflowTo(ctx context.Context, c Candidate, req runtime.WorkflowRequest) (runtime.WorkflowRun, error) {
+	run, err := s.server.Runtime(c.NodeID, c.RuntimeID).Submit(ctx, req)
+	s.breakers.record(c, err, s.clock.Now())
+	s.metrics.Dispatch(c, err)
+	return run, err
+}
+
+// UploadInput streams body to c's runtime backend, so a later
+// SubmitWorkflowTo's req.Template can reference the result through
+// runtime.InputUploadResult.InputRef (STATUS.md's P04). Like OpenArtifact in
+// the opposite direction, body is read as the tunnel consumes it: nothing
+// here holds an upload whole.
+//
+// UploadInput 把 body 流式送到 c 的 runtime 后端，这样之后某个
+// SubmitWorkflowTo 的 req.Template 就能通过 runtime.InputUploadResult.InputRef
+// 引用这次上传的结果（STATUS.md 的 P04）。与相反方向的 OpenArtifact 一样，
+// body 随隧道的消费而被读取：这里不会有什么完整持有一次上传。
+func (s *Scheduler) UploadInput(ctx context.Context, c Candidate, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+	result, err := s.server.Runtime(c.NodeID, c.RuntimeID).UploadInput(ctx, meta, body)
+	s.breakers.record(c, err, s.clock.Now())
+	s.metrics.Dispatch(c, err)
+	return result, err
 }
 
 // WorkflowStatus asks c for the state of runID. It takes the candidate rather

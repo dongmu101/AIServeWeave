@@ -12,6 +12,8 @@ import type { OperatorIdentity } from "@/lib/console/operator-session";
 const navigation = [
   { href: "/operator/fleet", label: "机群与审批" },
   { href: "/operator/models", label: "模型" },
+  { href: "/operator/routes", label: "模型路由" },
+  { href: "/operator/workflow-templates", label: "工作流模板" },
   { href: "/operator/workflows", label: "发布状态" },
   { href: "/operator/audit", label: "运维审计" },
 ];

@@ -1,4 +1,6 @@
+import { MAX_ROUTE_DOCUMENT_BYTES, routeBodyLimit } from "@/lib/console/model-routes";
 import { isTrustedWrite } from "@/lib/console/request-origin";
+import { MAX_CONTENT_BYTES, templateBodyLimit } from "@/lib/console/workflow-templates";
 import { resolveOperatorUpstream } from "@/lib/console/upstream-routes";
 import { callControlPlane } from "@/lib/server/control-plane";
 import {
@@ -83,7 +85,7 @@ async function forward(
 
   let body: string | undefined;
   if (request.method !== "GET") {
-    const raw = await readBoundedText(request);
+    const raw = await readBoundedText(request, routeBodyLimit(upstream.path) ?? templateBodyLimit(upstream.path));
     if (raw === null) {
       return errorResponse(413, "body_too_large");
     }
@@ -96,6 +98,12 @@ async function forward(
     search: upstream.search,
     token: session.token,
     body,
+    maxResponseBytes:
+      upstream.path === "/operator/v1/routes" || upstream.path.startsWith("/operator/v1/routes/")
+        ? MAX_ROUTE_DOCUMENT_BYTES
+        : upstream.path.startsWith("/operator/v1/workflow-templates/")
+          ? MAX_CONTENT_BYTES
+          : undefined,
   });
   if (result.kind !== "response") {
     return errorResponse(result.kind === "timeout" ? 504 : 502, "upstream");

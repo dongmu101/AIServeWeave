@@ -8,9 +8,9 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 ## 当前能力与规划边界
 
-当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户、API Key、审计、配额与 MySQL Job 历史；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。接口限制以服务 README 为准。
+当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户、API Key、审计、配额与 MySQL Job 历史；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
 
-下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
 
 ## 项目目标
 
@@ -391,16 +391,13 @@ ComfyUI 的 `prompt_id` 是后端任务 ID，不能直接作为公开 ID。AISer
 
 对于简单的文生图场景，可以把 OpenAI-compatible `POST /v1/images/generations` 映射到管理员指定的 ComfyUI 工作流模板。复杂工作流仍使用 AIServeWeave Workflow API，以免丢失 ComfyUI 的图结构、视频输出和自定义参数能力。
 
-### 文件与产物（目标方案）
+### 文件与产物
 
-当前已实现从原节点授权流式下载产物，以及向控制面旁路写入 Job/产物元数据。输入上传、对象存储与保留期清理尚未交付；以下是 P04/P05 的目标方案，文件流不直接存入关系数据库：
+P04 的核心链路已实现，文件流不直接存入关系数据库：
 
-- 输入图片先上传到 AIServeWeave，再由 Agent 上传到目标 ComfyUI
-- 生成完成后，由数据面从 ComfyUI 流式拉取产物并写入对象存储；经 Agent 访问时保持隧道背压，不向节点分发平台存储主凭据
-- 关系数据库只保存文件元数据、哈希、大小、租户和存储位置
-- 单机部署可使用本地文件存储，共享产物采用 S3-compatible 对象存储
-- 下载接口使用短期签名 URL 或经过鉴权的流式代理
-- 为输入文件、预览图和最终产物设置大小、格式和保留期限限制
+- **输入上传**：客户端在提交工作流的同一次 `multipart/form-data` HTTP 请求里携带文件（`common/workflowtemplate` 的 `InputFile` 输入类型），Gateway 选定一个候选节点后经隧道新增的 `OPERATION_INPUT_UPLOAD` 把字节流式推给它，节点把文件写进本地 ComfyUI 的输入目录，返回的引用被织入提交的图；这次上传与提交固定在同一个候选节点、不做跨节点重试，细节见 Gateway README 数据面约束一节的第十三条。
+- **产物持久化**：生成完成后，Gateway 从 ComfyUI 流式拉取产物并写入可插拔的对象存储（`local`/`s3`-compatible/`webdav`，`service/aiServeWeaveGateway/objectstore`），下载接口优先读已持久化的副本、任何失败回退到经隧道向节点的实时代理；关系数据库保存文件元数据、哈希、大小、租户与存储位置，细节见同一节的第十二条。
+- **尚未交付**：预览图的单独处理、保留期与清理批次、下载接口的短期签名 URL 形态（当前是经鉴权的流式代理，未提供签名 URL）。
 
 ### ComfyUI 调度
 
@@ -563,7 +560,9 @@ audit_logs
 | `common/runtime/` | 运行时语义、能力门禁、后端适配与并发控制 |
 | `common/tunnelwire/` | runtime 与隧道 proto 的唯一转换边界 |
 | `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
-| `common/nodeview/`、`common/workflowview/` | 允许列表约束的机群、模板和 Job 展示契约 |
+| `common/modelroute/` | 模型路由发布契约：别名/目标、CAS 版本化快照与生效状态（P02） |
+| `common/workflowtemplate/` | 工作流模板发布契约：内容、版本化快照与生效状态（P03），图仅在此契约与 Gateway 内部流转 |
+| `common/nodeview/`、`common/workflowview/` | 允许列表约束的机群、模板和 Job 展示契约，不含图 |
 | `common/metrics/` | 指标注册、采集与 Prometheus 导出 |
 | `service/aiServeWeaveAgent/` | 本机发现、运行时管理、主动出站隧道 |
 | `service/aiServeWeaveGateway/` | 前门、调度、路由、隧道终结、配额与工作流执行入口 |

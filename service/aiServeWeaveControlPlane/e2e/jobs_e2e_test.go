@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"testing"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/types"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
@@ -277,5 +278,102 @@ func TestListActiveJobsForRouteRoutesAheadOfTheParameterizedGetJobRoute(t *testi
 	}
 	if body.Items == nil && len(body.Items) != 0 {
 		t.Errorf("body.Items = %v, want an empty (possibly nil) slice for a route with no active jobs", body.Items)
+	}
+}
+
+// TestExpiredJobArtifactsListAndDeleteThroughTheRealGatewayClient closes the
+// loop for STATUS.md's P04 cleanup sweep the same way
+// TestJobLifecycleThroughTheRealGatewayClient does for Job persistence: a
+// real Gateway client against a real control plane, exercising
+// ListExpiredJobArtifacts and DeleteJobArtifact's actual wire contract
+// rather than the handler in isolation.
+//
+// TestExpiredJobArtifactsListAndDeleteThroughTheRealGatewayClient 为
+// STATUS.md P04 的清理扫描闭合环路，方式与
+// TestJobLifecycleThroughTheRealGatewayClient 为 Job 持久化所做的相同：一个
+// 真实的 Gateway 客户端对着一个真实的控制面，走的是 ListExpiredJobArtifacts
+// 与 DeleteJobArtifact 真实的线上契约，而不是孤立测试 handler。
+func TestExpiredJobArtifactsListAndDeleteThroughTheRealGatewayClient(t *testing.T) {
+	h := newHarness(t)
+	client := gatewayJobsClient(h)
+	ctx := context.Background()
+
+	if _, err := client.CreateJob(ctx, controlplaneclient.CreateJobRequest{
+		JobID: "job_e2e_cleanup", TenantID: "tenant-a", WorkflowID: "text-to-image",
+		NodeID: "node-1", RuntimeID: "comfy-1", BackendRunID: "prompt-1",
+		State: "succeeded", ObservedSeq: 0,
+	}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := client.CreateJobArtifact(ctx, "job_e2e_cleanup", controlplaneclient.CreateJobArtifactRequest{
+		ArtifactID: "art_e2e_cleanup", TenantID: "tenant-a", Filename: "out.png", Type: "output",
+		StorageKey: "tenant-a/job_e2e_cleanup/art_e2e_cleanup",
+	}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	// A cutoff before the artifact was created finds nothing — there is no
+	// fake clock to advance here, so the "not yet expired" case is exercised
+	// by a cutoff in the past instead of one in the future.
+	//
+	// 一个早于产物创建时刻的截止时间应该一无所获——这里没有假时钟可供推进，
+	// 因此"尚未过期"这个情形是靠一个位于过去、而不是未来的截止时间来验证的。
+	notYet, err := client.ListExpiredJobArtifacts(ctx, "output", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatalf("ListExpiredJobArtifacts (cutoff before creation): %v", err)
+	}
+	for _, a := range notYet {
+		if a.ArtifactID == "art_e2e_cleanup" {
+			t.Fatalf("ListExpiredJobArtifacts with a cutoff before creation found the just-created artifact")
+		}
+	}
+
+	expired, err := client.ListExpiredJobArtifacts(ctx, "output", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ListExpiredJobArtifacts: %v", err)
+	}
+	var found *controlplaneclient.ExpiredJobArtifact
+	for i := range expired {
+		if expired[i].ArtifactID == "art_e2e_cleanup" {
+			found = &expired[i]
+		}
+	}
+	if found == nil {
+		t.Fatalf("ListExpiredJobArtifacts = %+v, want art_e2e_cleanup among them", expired)
+	}
+	if found.StorageKey != "tenant-a/job_e2e_cleanup/art_e2e_cleanup" || found.TenantID != "tenant-a" {
+		t.Errorf("expired artifact = %+v, want StorageKey and TenantID preserved from CreateJobArtifact", found)
+	}
+	// A different type must not have matched.
+	//
+	// 不同的类型不该匹配上。
+	otherType, err := client.ListExpiredJobArtifacts(ctx, "temp", time.Now().Add(time.Hour))
+	if err != nil {
+		t.Fatalf("ListExpiredJobArtifacts(temp): %v", err)
+	}
+	for _, a := range otherType {
+		if a.ArtifactID == "art_e2e_cleanup" {
+			t.Fatalf("ListExpiredJobArtifacts(temp) found an artifact created as type=output")
+		}
+	}
+
+	if err := client.DeleteJobArtifact(ctx, found.JobID, found.ArtifactID); err != nil {
+		t.Fatalf("DeleteJobArtifact: %v", err)
+	}
+	remaining, err := client.ListJobArtifacts(ctx, "tenant-a", "job_e2e_cleanup")
+	if err != nil {
+		t.Fatalf("ListJobArtifacts: %v", err)
+	}
+	if len(remaining) != 0 {
+		t.Errorf("ListJobArtifacts after delete = %+v, want none", remaining)
+	}
+
+	// Deleting an already-gone artifact is not an error — a cleanup sweep
+	// retrying after an ambiguous earlier result depends on this.
+	//
+	// 删除一个已经不在的产物不算错误——一次清理扫描在更早一次结果不明后重试，
+	// 依赖的正是这一点。
+	if err := client.DeleteJobArtifact(ctx, found.JobID, found.ArtifactID); err != nil {
+		t.Errorf("DeleteJobArtifact (already gone) = %v, want nil", err)
 	}
 }

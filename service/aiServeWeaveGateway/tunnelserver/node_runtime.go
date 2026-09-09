@@ -297,6 +297,47 @@ func (r *NodeRuntime) OpenArtifact(ctx context.Context, ref runtime.ArtifactRef)
 	}, nil
 }
 
+// UploadInput streams body to the node's runtime backend (STATUS.md's P04),
+// so a later Submit's Template can reference the result. body is read in
+// bounded chunks and each is sent as soon as it is read — the same
+// discipline OpenArtifact holds in the opposite direction — so a large
+// upload is never held whole in this process; it travels on a bulk slot,
+// same as artifact transfer, so it cannot displace inference.
+//
+// UploadInput 把 body 流式送到节点的 runtime 后端（STATUS.md 的 P04），这样
+// 之后某个 Submit 的 Template 就能引用这次上传的结果。body 被分成有界的块
+// 读取，读到即发——与 OpenArtifact 在相反方向上坚持的纪律相同——因此一次大的
+// 上传从不会被本进程完整持有；它与产物传输一样走批量槽，因此不会挤占推理。
+func (r *NodeRuntime) UploadInput(ctx context.Context, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+	payload, err := tunnelwire.MarshalInputUploadRequest(meta)
+	if err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+	sendBody := func(send func([]byte) error) error {
+		limit := r.srv.cfg.MaxFrameBytes
+		buf := make([]byte, limit)
+		for {
+			n, readErr := body.Read(buf)
+			if n > 0 {
+				if sendErr := send(buf[:n]); sendErr != nil {
+					return sendErr
+				}
+			}
+			if readErr == io.EOF {
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
+		}
+	}
+	out, err := r.single(ctx, tunnelv1.Operation_OPERATION_INPUT_UPLOAD, payload, sendBody)
+	if err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+	return tunnelwire.UnmarshalInputUploadResult(out)
+}
+
 // -----------------------------------------------------------------------
 // Plumbing
 // -----------------------------------------------------------------------

@@ -35,16 +35,28 @@ const DefaultMaxJobs = 10000
 // 自己的 prompt_id。README 明确要求后者永远不充当前者——它不是我们该派发的东西，而且
 // 只在单个 ComfyUI 内部唯一。
 type job struct {
-	ID            string
-	WorkflowID    string
-	TenantID      string
-	Candidate     scheduler.Candidate
-	RunID         string
-	State         runtime.WorkflowState
-	QueuePosition int
-	ErrorSummary  string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	ID         string
+	WorkflowID string
+	// WorkflowVersion is the template's own opaque version string at the
+	// moment this job was submitted (P03) — empty for a template loaded from
+	// a local file, which was never versioned. It is captured here rather
+	// than looked up again later because a template can be republished while
+	// this job is still running, and this job ran the version it bound
+	// against, not whatever is current now.
+	//
+	// WorkflowVersion 是本 job 提交那一刻，模板自身的不透明版本字符串（P03）——
+	// 文件加载的模板从未被版本化，因此留空。之所以在这里捕获而不是之后再查，是因为
+	// 模板可能在本 job 仍在运行时被重新发布，而本 job 跑的是它绑定时的那个版本，
+	// 不是此刻的当前版本。
+	WorkflowVersion string
+	TenantID        string
+	Candidate       scheduler.Candidate
+	RunID           string
+	State           runtime.WorkflowState
+	QueuePosition   int
+	ErrorSummary    string
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 	// artifactIDs maps a backend artifact reference to the public id minted
 	// for it, so re-listing a job answers with the ids a caller already has
 	// rather than a fresh set. ArtifactRef is four strings and therefore
@@ -156,13 +168,27 @@ func (j job) needsPersist() bool {
 // artifactRecord is what a public artifact id resolves to: which job it
 // belongs to, who may read it, and where to fetch it from.
 //
+// StorageKey, ContentType and Size describe a copy of this artifact this
+// replica has made into its configured object storage (STATUS.md's P04);
+// StorageKey is empty until jobPersister.persistArtifacts succeeds, or
+// forever if ArtifactStorage is not configured, in which case downloadArtifact
+// falls back to the Candidate/Ref pair as it always has.
+//
 // artifactRecord 是一个公开产物 id 解析出来的东西：它属于哪个 job、谁可以读它，
 // 以及从哪里取。
+//
+// StorageKey、ContentType 与 Size 描述的是本副本把这个产物复制进其配置的对象
+// 存储所得到的一份副本（STATUS.md 的 P04）；在 jobPersister.persistArtifacts
+// 成功之前 StorageKey 为空，若未配置 ArtifactStorage 则永远为空，此时
+// downloadArtifact 照旧回退到 Candidate/Ref 这一对。
 type artifactRecord struct {
-	JobID     string
-	TenantID  string
-	Candidate scheduler.Candidate
-	Ref       runtime.ArtifactRef
+	JobID       string
+	TenantID    string
+	Candidate   scheduler.Candidate
+	Ref         runtime.ArtifactRef
+	StorageKey  string
+	ContentType string
+	Size        int64
 }
 
 // terminal reports whether the run has finished, in which case its state can
@@ -586,23 +612,48 @@ func (s *jobStore) dueForArtifactPersist(now time.Time, max int, claimFor time.D
 }
 
 // artifactsForPersist returns a snapshot of id's pending artifacts, along
-// with the tenant they belong to. Like forPersist, it reads fresh rather
-// than trusting whatever dueForArtifactPersist last saw, since recordArtifacts
-// may have appended more in the meantime.
+// with the tenant they belong to and the route binding (Candidate, RunID)
+// needed to pull their bytes from the node that produced them. Like
+// forPersist, it reads fresh rather than trusting whatever
+// dueForArtifactPersist last saw, since recordArtifacts may have appended
+// more in the meantime.
 //
-// artifactsForPersist 返回 id 待确认产物的一份快照，连同它们所属的租户。与
-// forPersist 一样，它读取的是当下的数据，而不是信任 dueForArtifactPersist
-// 上次看到的那份，因为 recordArtifacts 可能同时又追加了更多。
-func (s *jobStore) artifactsForPersist(id string) (tenantID string, artifacts []pendingArtifact, ok bool) {
+// artifactsForPersist 返回 id 待确认产物的一份快照，连同它们所属的租户，以及
+// 从产出它们的节点拉取字节所需的路由绑定（Candidate、RunID）。与 forPersist
+// 一样，它读取的是当下的数据，而不是信任 dueForArtifactPersist 上次看到的
+// 那份，因为 recordArtifacts 可能同时又追加了更多。
+func (s *jobStore) artifactsForPersist(id string) (tenantID string, candidate scheduler.Candidate, runID string, artifacts []pendingArtifact, ok bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	j, exists := s.byID[id]
 	if !exists {
-		return "", nil, false
+		return "", scheduler.Candidate{}, "", nil, false
 	}
 	out := make([]pendingArtifact, len(j.pendingArtifacts))
 	copy(out, j.pendingArtifacts)
-	return j.TenantID, out, true
+	return j.TenantID, j.Candidate, j.RunID, out, true
+}
+
+// artifactStored records that artifactID's bytes have been copied into
+// object storage under storageKey, so downloadArtifact can serve it from
+// there instead of pulling it live from the node again. A since-evicted
+// artifact is left alone, matching update's own rule against resurrecting an
+// evicted row.
+//
+// artifactStored 记录 artifactID 的字节已被复制进对象存储、键为 storageKey，
+// 这样 downloadArtifact 就能从那里作答，而不必再次从节点实时拉取。期间已被
+// 逐出的产物保持不变，与 update 自己「不复活已逐出行」的规则一致。
+func (s *jobStore) artifactStored(artifactID, storageKey, contentType string, size int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec, ok := s.artifacts[artifactID]
+	if !ok {
+		return
+	}
+	rec.StorageKey = storageKey
+	rec.ContentType = contentType
+	rec.Size = size
+	s.artifacts[artifactID] = rec
 }
 
 // artifactPersisted removes artifactID from id's pending list once the

@@ -332,3 +332,47 @@ type Artifact struct {
 	Size        int64
 	Body        io.ReadCloser
 }
+
+// InputUploadMeta describes an input file about to be uploaded to a
+// workflow-capable backend (STATUS.md's P04), before any of its bytes.
+// Filename and Subfolder are caller-supplied labels, never a filesystem
+// path — where the bytes actually land on disk is decided entirely by the
+// adapter implementing WorkflowRuntime.UploadInput, the same separation
+// ArtifactRef already draws for an output's locator.
+//
+// InputUploadMeta 描述一个即将上传给具备工作流能力的后端的输入文件
+// （STATUS.md 的 P04），发生在它的任何字节之前。Filename 与 Subfolder 是
+// 调用方提供的标签，绝不是文件系统路径——字节最终落在磁盘的什么位置，完全
+// 由实现 WorkflowRuntime.UploadInput 的适配器决定，与 ArtifactRef 已经为
+// 一个输出的定位信息划出的界线相同。
+type InputUploadMeta struct {
+	Filename  string
+	Subfolder string
+	// Size is the exact byte count the caller will supply, or -1 if unknown.
+	//
+	// Size 是调用方将提供的确切字节数，未知则为 -1。
+	Size int64
+	// SHA256 is an optional hex-encoded integrity check the caller computed
+	// before sending; empty if not computed.
+	//
+	// SHA256 是调用方发送前算好的、可选的十六进制整体性校验；未计算则为空。
+	SHA256 string
+}
+
+// InputUploadResult is what UploadInput returns once an input's bytes have
+// been fully received.
+//
+// InputUploadResult 是一个输入的字节被完整接收之后，UploadInput 返回的东西。
+type InputUploadResult struct {
+	// InputRef is an opaque handle a later WorkflowRequest's Template can
+	// reference — e.g. the filename ComfyUI's own /upload/image assigned,
+	// which may differ from the requested filename on a collision.
+	// Meaningful only to the adapter that produced it; callers must not
+	// parse or construct one.
+	//
+	// InputRef 是一个不透明句柄，供之后某个 WorkflowRequest 的 Template
+	// 引用——例如 ComfyUI 自己的 /upload/image 所分配的文件名，遇到重名时
+	// 可能与请求的文件名不同。它只对产生它的适配器有意义；调用方不得解析
+	// 或自行构造它。
+	InputRef string
+}

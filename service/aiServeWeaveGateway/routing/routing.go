@@ -7,27 +7,19 @@
 // quantization, move a model to a different node, or take a GPU server down,
 // without any client changing what it asks for.
 //
-// The table is loaded from files rather than from the control plane. That is a
-// deliberate first step, matching how -workflow-templates works: the feature
-// becomes usable without first building three tables and a CRUD surface for
-// them. When the Console needs to edit routes, this package keeps its shape
-// and Load is replaced by a fetch — Table is already the only thing the
-// scheduler depends on.
-//
 // routing 包把客户端所请求的逻辑模型，映射到真正能服务它的那些部署上。
 //
 // 它是 README「模型与部署抽象」的可执行版本：客户端说 "qwen-coder"，本包答以一列有序
 // 的（真实模型名、节点选择器）对。正是这层间接，让运维可以更换量化版本、把模型挪到
 // 另一个节点、或者关掉一台 GPU 服务器，而无需任何客户端改变它所请求的东西。
-//
-// 路由表从文件加载而不是从控制面。这是一个有意为之的第一步，与 -workflow-templates
-// 的做法一致：功能可用，无需先建三张表并为它们配一套 CRUD。等 Console 需要编辑路由
-// 时，本包保持形状，Load 换成一次拉取即可——调度器依赖的本来就只有 Table 一个东西。
 package routing
 
 import (
+	"AIServeWeave/common/modelroute"
 	"encoding/json"
 	"fmt"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,88 +33,14 @@ import (
 // 值得在启动时失败。
 const MaxRouteFileBytes = 1 << 20
 
-// Target is one place a logical model can be served from.
-//
-// Target 是一个逻辑模型可以被服务的一处去向。
-type Target struct {
-	// RuntimeModel is the model id a node actually advertises. It is what the
-	// request is rewritten to before it goes down the tunnel.
-	//
-	// RuntimeModel 是节点实际声明的模型 id。请求在下隧道之前会被改写成它。
-	RuntimeModel string `json:"runtime_model"`
-	// NodeSelector narrows this target to nodes carrying every label in it. An
-	// empty selector matches every node.
-	//
-	// NodeSelector 把本 target 收窄到带有其中每一个标签的节点上。选择器为空则匹配
-	// 所有节点。
-	NodeSelector map[string]string `json:"node_selector,omitempty"`
-	// Priority orders targets, lowest first. It is the operator's stated
-	// preference — "the local Mac before the rented GPU" — and it is applied
-	// before any load-based ordering, so a healthy first choice is used until
-	// it stops being available.
-	//
-	// Priority 为 target 排序，数值小的在前。它是运维声明的偏好——「先用本地那台 Mac，
-	// 再用租来的 GPU」——并且先于任何基于负载的排序生效，因此健康的首选会一直被使用，
-	// 直到它不再可用。
-	Priority int `json:"priority,omitempty"`
-	// Weight splits traffic between targets of equal priority. Zero means one
-	// share, so a table that never mentions weight spreads evenly.
-	//
-	// Weight 在同优先级的 target 之间分配流量。为零表示一份，因此从不提及 weight 的
-	// 表会均匀铺开。
-	Weight int `json:"weight,omitempty"`
-}
+// Target is a shared deployment selector. / Target 是共享的部署选择器。
+type Target = modelroute.Target
 
-// MatchesNode reports whether a node carrying labels satisfies this target's
-// selector. The selector is a conjunction: every declared label must match. A
-// rule meaning "any of these" could not express "the local 4090" at all, and
-// that is the rule operators actually write.
-//
-// MatchesNode 报告带有 labels 的节点是否满足本 target 的选择器。选择器是「与」：每个
-// 声明的标签都必须匹配。一条意为「其中任意一个」的规则根本无法表达「本地那台 4090」，
-// 而那正是运维实际会写的规则。
-func (t Target) MatchesNode(labels map[string]string) bool {
-	for key, want := range t.NodeSelector {
-		if labels[key] != want {
-			return false
-		}
-	}
-	return true
-}
+// Route is a shared logical model route. / Route 是共享的逻辑模型路由。
+type Route = modelroute.Route
 
-// Route is one logical model and everywhere it can be served from.
-//
-// Route 是一个逻辑模型，以及它可以被服务的全部去向。
-type Route struct {
-	Model   string   `json:"model"`
-	Targets []Target `json:"targets"`
-}
-
-// Validate rejects a route that cannot be acted on.
-//
-// Validate 拒绝一条无法执行的路由。
-func (r Route) Validate() error {
-	if strings.TrimSpace(r.Model) == "" {
-		return fmt.Errorf("routing: a route has an empty model")
-	}
-	if len(r.Targets) == 0 {
-		return fmt.Errorf("routing: route %q has no target", r.Model)
-	}
-	for i, t := range r.Targets {
-		if strings.TrimSpace(t.RuntimeModel) == "" {
-			return fmt.Errorf("routing: route %q target %d has an empty runtime_model", r.Model, i)
-		}
-		if t.Weight < 0 {
-			return fmt.Errorf("routing: route %q target %d has a negative weight", r.Model, i)
-		}
-	}
-	return nil
-}
-
-// Table is the loaded routing table. It is built once at startup and read-only
-// afterwards, so it needs no lock.
-//
-// Table 是已加载的路由表。它在启动时构建一次，此后只读，因此无需加锁。
+// Table is immutable after construction and safe for concurrent readers.
+// Table 在构造后不可变，可以安全地并发读取。
 type Table struct {
 	byModel map[string][]Target
 	models  []string
@@ -161,6 +79,9 @@ func Load(paths ...string) (*Table, error) {
 		}
 	}
 	sort.Strings(table.models)
+	if err := modelroute.Validate(table.Routes()); err != nil {
+		return nil, err
+	}
 	return table, nil
 }
 
@@ -172,7 +93,15 @@ func (t *Table) loadFile(path string) error {
 	if info.Size() > MaxRouteFileBytes {
 		return fmt.Errorf("routing: %s is %d bytes, over the %d limit", path, info.Size(), MaxRouteFileBytes)
 	}
-	body, err := os.ReadFile(path)
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	body, err := io.ReadAll(io.LimitReader(f, MaxRouteFileBytes+1))
+	if len(body) > MaxRouteFileBytes {
+		return fmt.Errorf("routing: file exceeds limit")
+	}
 	if err != nil {
 		return fmt.Errorf("routing: reading %s: %w", path, err)
 	}
@@ -198,7 +127,7 @@ func (t *Table) loadFile(path string) error {
 		t.byModel[route.Model] = targets
 		t.models = append(t.models, route.Model)
 	}
-	return nil
+	return modelroute.Validate(t.Routes())
 }
 
 // Resolve returns the targets for a logical model, best first.
@@ -209,7 +138,7 @@ func (t *Table) Resolve(model string) ([]Target, bool) {
 		return nil, false
 	}
 	targets, ok := t.byModel[model]
-	return targets, ok
+	return cloneTargets(targets), ok
 }
 
 // Models returns every alias this table defines, sorted.
@@ -232,4 +161,39 @@ func (t *Table) Len() int {
 		return 0
 	}
 	return len(t.byModel)
+}
+
+// New validates and owns a deep copy of routes. / New 校验并持有路由的深拷贝。
+func New(routes []Route) (*Table, error) {
+	if err := modelroute.Validate(routes); err != nil {
+		return nil, err
+	}
+	t := &Table{byModel: make(map[string][]Target)}
+	for _, r := range routes {
+		targets := cloneTargets(r.Targets)
+		sort.SliceStable(targets, func(i, j int) bool { return targets[i].Priority < targets[j].Priority })
+		t.byModel[r.Model] = targets
+		t.models = append(t.models, r.Model)
+	}
+	sort.Strings(t.models)
+	return t, nil
+}
+
+// Routes returns a detached copy of the effective table. / Routes 返回生效路由表的独立拷贝。
+func (t *Table) Routes() []Route {
+	out := []Route{}
+	if t != nil {
+		for _, m := range t.models {
+			out = append(out, Route{Model: m, Targets: cloneTargets(t.byModel[m])})
+		}
+	}
+	return out
+}
+
+func cloneTargets(in []Target) []Target {
+	out := append([]Target(nil), in...)
+	for i := range out {
+		out[i].NodeSelector = maps.Clone(out[i].NodeSelector)
+	}
+	return out
 }

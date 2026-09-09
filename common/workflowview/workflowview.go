@@ -32,6 +32,24 @@ package workflowview
 import (
 	"encoding/json"
 	"time"
+
+	"AIServeWeave/common/workflowtemplate"
+)
+
+// Dependencies, NodeDependency and ModelDependency are aliases onto
+// common/workflowtemplate: a template author's declared dependency list
+// carries no graph position and is not the security-sensitive part of a
+// template (see Template's own doc comment on Graph), so the same shape
+// serves both the publication contract and this read-only catalogue view.
+//
+// Dependencies、NodeDependency 与 ModelDependency 是指向
+// common/workflowtemplate 的别名：模板作者声明的依赖清单不携带图位置，也不是
+// 模板中安全敏感的那部分（见 Template 自己关于 Graph 的文档注释），因此发布契约
+// 与这份只读目录视图可以共用同一个形状。
+type (
+	Dependencies    = workflowtemplate.Dependencies
+	NodeDependency  = workflowtemplate.NodeDependency
+	ModelDependency = workflowtemplate.ModelDependency
 )
 
 // TemplateCatalog is one replica's registered workflow templates.
@@ -59,6 +77,45 @@ type Template struct {
 	ID          string  `json:"id"`
 	Description string  `json:"description,omitempty"`
 	Inputs      []Input `json:"inputs"`
+	// Outputs are the artifacts a template's author declared it produces.
+	// Like Dependencies, this is a P03 addition: structurally checked
+	// declarations, not something the Gateway verifies a run actually
+	// produced.
+	//
+	// Outputs 是模板作者声明本模板产出的产物。与 Dependencies 一样，这是 P03 新增
+	// 的字段：经结构性校验的声明，而不是 Gateway 核实过某次运行确实产出了的东西。
+	Outputs []Output `json:"outputs,omitempty"`
+	// Dependencies are the custom nodes and model checkpoints the template's
+	// author declared it needs (P03). They are shown for the same reason
+	// Inputs are: a caller deciding whether a template is usable needs to
+	// know what it depends on, even though nothing here confirms any
+	// connected node actually has it installed.
+	//
+	// Dependencies 是模板作者声明本模板所需的自定义节点与模型 checkpoint
+	// （P03）。展示它们的理由与展示 Inputs 相同：调用方在判断一个模板是否可用时，
+	// 需要知道它依赖什么，尽管这里的任何内容都不确认某个已连接节点确实装了它。
+	Dependencies Dependencies `json:"dependencies,omitempty"`
+	// Version is opaque and empty for a template this Gateway loaded from a
+	// local file. A template published through the control plane (P03)
+	// carries its revision number as a string here — the same value a job
+	// submitted against it records as its own WorkflowVersion.
+	//
+	// Version 是不透明的，本 Gateway 从本地文件加载的模板留空。经控制面发布
+	// （P03）的模板在这里携带其版本号的字符串形式——与针对它提交的 job 记录为自身
+	// WorkflowVersion 的值相同。
+	Version string `json:"version,omitempty"`
+	// VisibleTenantIDs is the tenant allow list a control-plane publication
+	// (P03) set for this template; empty means every tenant may see and run
+	// it, which is also what a file-loaded template always reports. This
+	// field exists for an aggregator or an operator view to reason about
+	// visibility — a tenant-facing menu is expected to have already been
+	// filtered by it before this Template ever reaches a tenant's response.
+	//
+	// VisibleTenantIDs 是控制面发布（P03）为本模板设置的租户允许列表；为空意味着
+	// 所有租户都能看到并运行它，文件加载的模板也总是报告这个状态。这个字段是为了
+	// 让聚合器或运维视图能推理可见范围——面向租户的菜单预期在本 Template 抵达
+	// 租户的响应之前，就已经按它过滤过了。
+	VisibleTenantIDs []string `json:"visible_tenant_ids,omitempty"`
 	// Valid reports whether the template passed its own validation when the
 	// replica loaded it. A replica refuses to start on an invalid template,
 	// so this is true in practice — it is carried anyway so an operator page
@@ -102,6 +159,22 @@ type Input struct {
 	MaxLength int             `json:"max_length,omitempty"`
 	Min       *float64        `json:"min,omitempty"`
 	Max       *float64        `json:"max,omitempty"`
+}
+
+// Output declares one produced artifact, as a caller sees it (P03).
+//
+// The node that produces it is not here, for the same reason an Input's node
+// and field are not: it is graph structure, and it is the template author's
+// business, not the caller's.
+//
+// Output 声明一个产出，以调用方看到的样子（P03）。
+//
+// 产出它的节点不在这里，理由与 Input 的节点和字段不在这里相同：它是图结构，是模板
+// 作者的事，不是调用方的事。
+type Output struct {
+	Name        string `json:"name"`
+	Type        string `json:"type"`
+	Description string `json:"description,omitempty"`
 }
 
 // JobPage is one replica's view of one tenant's runs.

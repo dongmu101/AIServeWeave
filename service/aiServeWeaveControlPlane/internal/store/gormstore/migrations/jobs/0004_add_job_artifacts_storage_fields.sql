@@ -1,0 +1,5 @@
+ALTER TABLE job_artifacts
+    ADD COLUMN sha256       VARCHAR(64)   NOT NULL DEFAULT '',
+    ADD COLUMN size_bytes   BIGINT        NOT NULL DEFAULT 0,
+    ADD COLUMN content_type VARCHAR(255)  NOT NULL DEFAULT '',
+    ADD COLUMN storage_key  VARCHAR(1024) NOT NULL DEFAULT '';

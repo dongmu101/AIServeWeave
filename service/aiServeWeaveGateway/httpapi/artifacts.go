@@ -2,12 +2,15 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
+
+	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 )
 
 // MaxArtifactFilenameInHeader bounds the filename echoed in
@@ -78,14 +81,27 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 }
 
 // downloadArtifact implements GET /v1/artifacts/{artifact_id}, streaming the
-// body straight through: the artifact is read from the tunnel as the client
-// reads it, so a large generation is never held whole in this process and
-// backpressure reaches the Agent through the same read, per AGENTS.md's
-// "任何一跳都不得无界缓冲".
+// body straight through: a large generation is never held whole in this
+// process, per AGENTS.md's "任何一跳都不得无界缓冲".
 //
-// downloadArtifact 实现 GET /v1/artifacts/{artifact_id}，把响应体直通转发：产物随
-// 客户端的读取而从隧道读出，因此一次大的生成从不被本进程完整持有，背压也经由同一次
-// 读取抵达 Agent，对应 AGENTS.md 的「任何一跳都不得无界缓冲」。
+// When jobPersister has already copied this artifact into h.storage
+// (STATUS.md's P04), that copy is preferred — it survives after the node
+// that produced the artifact disconnects, which a live tunnel pull cannot.
+// Any failure reading it, not found included, falls back to pulling live
+// from the node exactly as this handler always has: a storage hiccup should
+// not break a download the node can still serve directly, and an artifact
+// recorded before object storage was configured (or while it is disabled)
+// has no StorageKey to try in the first place.
+//
+// downloadArtifact 实现 GET /v1/artifacts/{artifact_id}，把响应体直通转发：
+// 一次大的生成从不被本进程完整持有，对应 AGENTS.md 的「任何一跳都不得无界
+// 缓冲」。
+//
+// 当 jobPersister 已经把这个产物复制进 h.storage（STATUS.md 的 P04）时，
+// 优先读取那份副本——它在产出该产物的节点断开之后依然可用，这是一次实时的
+// 隧道拉取做不到的。读取它失败的任何情形，包括未找到，都会回退到照旧从节点
+// 实时拉取：存储的一次小故障不该弄坏一个节点本就还能直接服务的下载，而在
+// 对象存储配置之前（或被关闭期间）记录的产物，本就没有 StorageKey 可以尝试。
 func (h *handlers) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
 	rec, ok := h.jobs.artifact(r.PathValue("artifact_id"), identity.TenantID)
@@ -94,24 +110,56 @@ func (h *handlers) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if rec.StorageKey != "" && h.storage != nil {
+		body, info, err := h.storage.Open(r.Context(), rec.StorageKey)
+		if err == nil {
+			defer body.Close()
+			contentType := rec.ContentType
+			if contentType == "" {
+				contentType = info.ContentType
+			}
+			size := rec.Size
+			if size < 0 {
+				size = info.Size
+			}
+			h.streamArtifact(w, rec, "storage", body, contentType, size)
+			return
+		}
+		if !errors.Is(err, objectstore.ErrNotFound) {
+			h.logger.Warn("reading a persisted artifact from storage failed; falling back to a live pull from the node",
+				slog.String("job_id", rec.JobID), slog.String("storage_key", rec.StorageKey), slog.Any("error", err))
+		}
+	}
+
 	artifact, err := h.sched.OpenArtifact(r.Context(), rec.Candidate, rec.Ref)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
 	}
 	defer artifact.Body.Close()
+	h.streamArtifact(w, rec, "node", artifact.Body, artifact.ContentType, artifact.Size)
+}
 
-	if artifact.ContentType != "" {
-		w.Header().Set("Content-Type", artifact.ContentType)
+// streamArtifact writes the common response headers and copies body to w,
+// the shared tail of downloadArtifact's two sources (object storage or a
+// live node pull) — source names which one, for the one log line a
+// mid-stream failure produces.
+//
+// streamArtifact 写入通用的响应头并把 body 拷贝进 w，是 downloadArtifact
+// 两个来源（对象存储或一次实时的节点拉取）共用的尾段——source 指出是哪一个，
+// 用于流式传输中途失败时的那一行日志。
+func (h *handlers) streamArtifact(w http.ResponseWriter, rec artifactRecord, source string, body io.Reader, contentType string, size int64) {
+	if contentType != "" {
+		w.Header().Set("Content-Type", contentType)
 	}
-	if artifact.Size >= 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(artifact.Size, 10))
+	if size >= 0 {
+		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 	if name := safeFilename(rec.Ref.Filename); name != "" {
 		w.Header().Set("Content-Disposition", `attachment; filename="`+name+`"`)
 	}
 
-	if _, err := io.Copy(w, artifact.Body); err != nil {
+	if _, err := io.Copy(w, body); err != nil {
 		// The status and some bytes are already out, so there is no error
 		// body to write; the caller sees a short read, which is what a
 		// truncated download looks like at every other layer too.
@@ -120,7 +168,7 @@ func (h *handlers) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 		// 而在其他每一层上，被截断的下载看起来也正是这样。
 		h.logger.Error("streaming an artifact failed",
 			slog.String("job_id", rec.JobID),
-			slog.String("node_id", rec.Candidate.NodeID),
+			slog.String("source", source),
 			slog.Any("error", err))
 	}
 }

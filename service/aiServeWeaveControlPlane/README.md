@@ -177,7 +177,7 @@ Fleet:
 
 - 同一个 Agent 连到多个副本时只出现一次；展示的视图取自「认为它在线」的那份，同等条件下取心跳更新的那份，而 `replicas` 保留所有报告过它的副本。
 - 响应里有三个时间与状态字段：`collected_at`（本服务发问的时刻）、每个副本各自的 `generated_at`（它查看自己节点表的时刻），以及 `partial`。**某个副本没作答不会让列表悄悄变短**——它会成为 `replicas` 里一条具名的失败，错误取自封闭集合 `unreachable` / `timeout` / `unauthorized` / `malformed`，绝不透传传输层文本（那会点出内部网络的主机与端口，而这份文档正在前往浏览器）。
-- 模型目录由同一次读取推导，不额外往返：一个机群的第二个视图若单独再读一次，两者就会彼此矛盾。目录里的是**后端上报的模型 id**，不是调用方可用的名字——别名在 Gateway 的路由表里，那是 Gateway 的文件配置，本服务不持有它。
+- 模型目录由同一次读取推导，不额外往返：一个机群的第二个视图若单独再读一次，两者就会彼此矛盾。目录里的是**后端上报的模型 id**，不是调用方可用的名字——别名由独立路由版本 API 管理（P02）；机群模型目录仍只表示后端观测，不能代替路由期望状态。
 
 ## 节点写路径：审批、禁用、维护（P01）
 
@@ -217,14 +217,16 @@ Registry:
 
 | 端点 | 内容 |
 | --- | --- |
-| `GET /admin/v1/workflows` | 可提交的工作流模板与输入声明 |
+| `GET /admin/v1/workflows` | 可提交的工作流模板与输入声明；按 P03 的租户可见范围过滤 |
 | `GET /admin/v1/jobs` | 本租户当前的运行 |
 
 它们挂在这里而不是常规会话组，只是因为需要一条已配置的 Gateway 读取路径——没有它，本服务根本看不到任何模板或 job，而一条回答「未配置」的路由比没有路由更糟。
 
 **租户响应里没有基础设施身份。** 聚合过程会拿到副本 id 与配置的 endpoint（内部主机名与端口），这两样在返回租户之前一律清空：模板不带 `replicas`、job 不带 `replica`、响应不带逐副本状态列表。留下来的是 `partial` 与 `truncated`——那是租户能据以行动的部分。运维面 `GET /operator/v1/workflows` 返回同一份目录且保留副本信息，因为「发布推到了哪几个副本」正是运维要问的。e2e 测试 `TestTenantWorkflowAndJobViewsCarryNoInfrastructureIdentity` 守着这条线。
 
-**同一模板在副本间可能不同。** 各副本从自己的文件配置加载模板，发布推到一半是正常状态。合并因此不选出胜者：目录记录注册了它的副本，并用 `divergent` 说明它们是否一致——只有部分副本拥有的模板同样算不一致，因为落在其余副本上的请求会得到 404。比较的是调用方可观察的部分（描述与输入声明）；图不离开 Gateway，因此「同一个 id 下图不同」是本视图看不见的一种不一致。
+**同一模板在副本间可能不同。** 各副本从自己的文件配置或控制面同步（P03）加载模板，发布推到一半是正常状态。合并因此不选出胜者：目录记录注册了它的副本，并用 `divergent` 说明它们是否一致——只有部分副本拥有的模板同样算不一致，因为落在其余副本上的请求会得到 404。比较的是调用方可观察的部分（描述、输入/输出声明、依赖、版本与可见范围）；图不离开 Gateway，因此「同一个 id 下图不同」是本视图看不见的一种不一致。
+
+**租户可见范围过滤（P03）只在这条聚合菜单上生效，是便利视图不是安全边界。** `listWorkflows` 在清空副本身份之前，先按会话租户 id 与每个模板的 `VisibleTenantIDs` 过滤——空列表即对所有租户可见。真正的授权边界在 Gateway 自己的数据面：`POST /v1/workflows/{workflow_id}/runs` 对不在允许列表上的租户返回与「模板不存在」相同的 404，与这份菜单是否一致无关；`GET /operator/v1/workflows`（运维面）不做此过滤，因为运维需要看到完整可见范围本身。
 
 **`/admin/v1/jobs` 是实时视图，不是历史。** Gateway 的 job 表在进程内存、有上限、每副本各自持有：运行会随副本重启消失、被上限挤出，且从不跨副本可见。因此它能回答「现在在跑什么」，回答不了「上周跑过什么」——回答后者的是 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（STATUS.md 的 J07，见下面「Job 持久化契约」一节的「已实现的持久化历史查询」小节），两者直接读 `jobs` 表，与 `Fleet` 是否配置无关，因此不挂在这两条实时端点旁边，而在常规会话组里无条件挂载。
 
@@ -339,6 +341,20 @@ Gateway 侧的消费者是 `httpapi/jobrecover.go` 的 `jobRecoverer`，与 `job
 
 **恢复的执行权刻意不是排他的。** 一个节点/runtime 可能同时连接到不止一个 Gateway 副本（STATUS.md 的 P2 就提到这一点），此设计不为它们选出一个"负责"的副本，也没有认领或租约机制。多个副本各自独立地同步、持久化同一个 job，在构造上就是安全的：本节前面「状态更新：幂等、单调，拒绝无条件覆盖」定义的 `observed_seq` 门槛，无需协调即可化解并发写入——这与它已经化解单个副本上一次前台轮询与一次后台同步的竞争，是同一条机制。**一个再也没有重新连接到任何副本的节点不被当作失败处理**：没有任何东西会为一个够不着的 job 主动编造终态，它的持久化记录只会停在最后观测到的状态，与 Gateway README 一贯的立场一致。
 
+### 已实现的产物保留期清理（P04）
+
+`internal/handler` 新增两个内部端点，同样由 `InternalToken` 守卫，供 Gateway 一侧新增的后台清理循环使用：
+
+| 端点 | 作用 |
+| --- | --- |
+| `GET /internal/v1/job-artifacts/expired?type=…&before=…`（`before` 为 RFC3339 时间戳） | 列举某一产物类型里 `created_at` 早于 `before` 的行,按最旧优先排序,单次最多 `store.MaxExpiredJobArtifacts`（200）条 |
+| `DELETE /internal/v1/jobs/:id/artifacts/:artifact_id` | 删除一条产物元数据行 |
+
+- **列表按类型、不按租户限定范围。** 与 `/internal/v1/jobs/active`（J06）同一个理由:清理循环要回答的是「这个类型里有哪些行老到该清了」,不是「某个租户名下有哪些产物」——它本就该扫过所有租户。响应体里的 `ExpiredJobArtifact` 携带 `StorageKey`,这是唯一一个把该字段序列化出去的响应:`internal/types.JobArtifactResponse`（J04）刻意不带它,因为那是租户可见的响应;这里的调用方是 Gateway 自己的清理循环,需要这个键才能去对象存储里删掉对应的字节。
+- **删除是幂等的。** `logic.Service.DeleteJobArtifact` 对已经不存在的行返回成功而不是 404——清理循环的重试路径与「这一行本来就没了」在效果上没有区别,让调用方去区分这两种情况没有意义,`gormstore`/`memstore` 两个实现都遵循这条约定。
+- **顺序由调用方保证,不是这两个端点自己的事。** 「先删对象存储里的字节,再删这行元数据」是 Gateway 侧 `artifactCleaner`（见 Gateway README）的职责,不是控制面能替它保证的——控制面这边的 `DeleteJobArtifact` 单看是一次单表删除,不知道也不需要知道调用方是不是先做完了另一件事。这与 J05 的旁路持久化是同一条分工原则:控制面只管自己这一步的正确性,跨系统的顺序保证留给发起调用的那一侧。
+- **保留期时长本身不在控制面。** 「output 类型保留多久、temp/预览类型保留多久」是 Gateway 侧的配置（`ArtifactRetention`/`ArtifactPreviewRetention`）,这两个端点只回答「给定一个截止时刻,哪些行落在它之前」——控制面不对「什么算过期」有主张,只是按调用方给的 `before` 参数机械筛选,这与 J01 里「Job 持久化契约不定义调度策略,只定义状态如何被观测」是同一条边界。
+
 ### 已实现的持久化历史查询与 Console 接入（J07）
 
 `internal/handler` 在常规会话组（不依赖 `Fleet` 配置）新增两个端点：`GET /admin/v1/jobs/history`（按 `state`、`workflow_id`、`since`、`until` 筛选，keyset 分页，参数与校验规则复用 `/admin/v1/audit` 已有的 `listQuery`/`timeParam`）与 `GET /admin/v1/jobs/history/:id`。两者都直接读 `jobs` 表，因此与前一节 `/admin/v1/jobs`（Fleet 实时视图）互补而非替代：一个回答「现在在跑什么」，一个回答「上周跑过什么」，即便对方所需的 Gateway 读取路径完全没有配置。
@@ -375,7 +391,7 @@ J01～J08 已有定义、建表、内部 API、后台写入、非终态恢复、
 4. **X-Forwarded-For 不被采信。** 审计记录的是 `RemoteAddr`。要采信该头，必须与「配置一份可信代理清单」一并改动。
 5. **go-zero 自己的指标没接进 `common/metrics`。** 本服务目前没有 `/metrics` 端点。
 6. **平台运维身份已落地，但归因止步于本服务。** STATUS.md 的 P01 引入了 `platform_operators` 表与 `requirePlatformSession`，`/operator/v1/*` 与节点写路径都由平台运维的会话守卫，本服务的 `audit_logs`（`TenantID=model.PlatformScope`）记着是哪个 operator 做了什么。但这份归因传到 Registry 就断了：本服务用同一把共享的 `Registry.AdminToken` 调用 `TokenAdmin`，Registry 自己分不清这次调用背后是哪个 operator（见 Registry README 对应的已知限制）。
-7. **节点的审批、禁用与维护现在有了持久化与下发路径（P01）。** `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 与 `GET /operator/v1/nodes/states` 把这些操作转发给 Registry 的 `TokenAdmin`（节点身份账本的权威来源仍在 Registry，本服务不复制一份），仅在配置了 `Registry`（见下）时挂载。路由配置的版本、发布与回滚仍未做——那张表仍需从 Gateway 的文件搬进本服务，是 P02 的范围。
+7. **节点的审批、禁用与维护现在有了持久化与下发路径（P01）。** `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 与 `GET /operator/v1/nodes/states` 把这些操作转发给 Registry 的 `TokenAdmin`（节点身份账本的权威来源仍在 Registry，本服务不复制一份），仅在配置了 `Registry`（见下）时挂载。路由配置的版本、发布、回滚及逐副本确认已通过独立 P02 API 落地，见下方「模型路由发布」。
 8. **Job 状态与事件历史有不同边界。** Gateway 后台同步已实现，持久化历史保存最后观测快照；节点不可达时保留旧状态并退避。尚无持久化事件时间线，历史记录也不能证明后端此刻可达。
 9. **历史元数据不保证数据面访问可恢复。** 历史列表、详情与 Console 取消/产物入口已接入，见 J07；但 Gateway 仅恢复非终态 Job，产物下载仍依赖副本内存映射。终态 Job 与旧产物 ID 在重启/切换副本后的访问，以及原节点离线后的文件可用性，仍需补齐。
 10. **没有指标、请求检索与告警。** 这三项需要时序库与可检索的日志存储，仓库里都没有；Gateway 各副本的 Prometheus 文本导出不等于历史曲线。
@@ -401,3 +417,56 @@ go test -race ./service/aiServeWeaveControlPlane/...
 `GET /operator/v1/audit` 由 `requirePlatformSession` 守卫，固定读取 `model.PlatformScope` 的审计记录，不接受调用方指定租户范围。查询参数与租户审计相同：`limit`、`cursor`、`action`、`actor_id`、`since`、`until`，响应为 `{items, next_cursor}`；无需 Fleet 或 Registry 配置。租户 JWT 不可调用此端点，平台 JWT 也不可调用租户审计端点。覆盖测试见 `e2e/platform_audit_test.go`。
 
 Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Console 运维 token 或邮箱名单。节点状态的传播仍是最终一致，审计仍沿用已有非事务写入边界。
+
+## 模型路由发布（P02）
+
+平台运维管理整套路由，草稿留在 Console 页面，发布后成为不可变快照。共享结构和校验唯一源为 `common/modelroute`，包括别名、真实模型、节点选择器、priority 与 weight。别名与真实模型不可为空，目标权重非负，优先级和权重须为 JavaScript 安全整数；别名唯一，每版最多 1000 个别名、每别名 100 个目标，规范 JSON 数组最多 1 MiB（请求/快照额外预留 64 KiB 元数据）。没有任何后端凭据、任意 URL 或推理内容字段。
+
+| 接口 | 守卫与行为 |
+| --- | --- |
+| `GET /operator/v1/routes` | 平台会话；当前 Snapshot，未发布时 revision 为 0、routes 为空数组 |
+| `POST /operator/v1/routes/validate` | 平台会话；`{routes}`，只校验并返回 `{valid:true,digest}` |
+| `POST /operator/v1/routes/publish` | 平台会话；`{expected_revision,routes}`，成功 201 返回完整快照，版本冲突 409 |
+| `POST /operator/v1/routes/rollback` | 平台会话；`{expected_revision,revision}`，复制历史内容为新版本，记录 rollback_of，成功 201 |
+| `GET /operator/v1/routes/history` | 平台会话；before 版本游标、limit 1–50，倒序元数据 `{items,next_before?}`，不返回每版正文 |
+| `GET /operator/v1/routes/revisions/:revision` | 平台会话；单个不可变历史快照 |
+| `GET /operator/v1/routes/status` | 平台会话；期望版本与每个配置 Gateway 的实时观测，不依赖缓存 ACK |
+| `GET /internal/v1/routes/current` | InternalToken；供 Gateway 拉取，尚未发布返回 404 |
+
+发布和回滚在同一个数据库事务里完成当前版本 CAS、不可变历史插入与平台审计（`routes.publish` / `routes.rollback`）。并发使用同一 expected_revision 只有一个胜出；审计失败不会留下已经切换的当前版本。回滚不改写旧版本，也不降低版本号。历史最多 1000 版，达到容量时拒绝新发布/回滚（409），不自动删除历史；需要更多容量时另行设计保留策略，不能绕过上限手工改 active 指针。
+
+`route_revisions` 存正文和版本元数据，`route_actives` 是 ID=1 的当前版本指针。JSON 作为 PostgreSQL TEXT / MySQL MEDIUMTEXT 保存，不使用方言相关 JSON 查询。迁移位于 `internal/store/gormstore/migrations/routes/{postgres,mysql}`，`MigrateRoutes` 在 `Database.AutoMigrate` 显式启用时调用，独立记录 `schema_migrations_routes`。各 CREATE 幂等，执行成功后记版本；MySQL DDL 隐式提交，失败重试重放未记录步骤，不能声称 DDL 与版本记录为一个原子事务。此实现不替换老表 AutoMigrate，也不改变 Job 的 MySQL-only 范围（P07 仍独立）。
+
+生效查询最多并发 8 个 Gateway，每个调用受超时与 16 KiB 响应上限约束；结果包含所有 `Fleet.Gateways` 端点，缺失或失败不会被丢弃。只有非空端点集合、唯一副本身份、controlplane 模式、完全匹配的版本和摘要、无同步错误且时间有效，complete 才为 true；生成时间偏差超过一分钟标为 stale。读取期间发生新的发布会将 complete 降为 false。未列入 Fleet 的副本不在确认范围内，配置管理员须保证名册完整。
+
+验证：`TestLiveRoutes` 使用 `AISW_POSTGRES_TEST_DSN` / `AISW_MYSQL_TEST_DSN` 按需启用，在独立 PostgreSQL 17 与 MySQL 9.7 上以 race 验证重复迁移、20 个并发首次发布、原子审计失败回滚、历史容量及大于 64 KiB 的版本回滚；默认测试不需要外部数据库。HTTP 测试覆盖守卫隔离、验证/发布/回滚、分页及大小限制。
+
+## 工作流模板发布契约（P03）
+
+平台运维创建、发布与回滚工作流模板，草稿留在 Console 页面，发布后成为不可变版本。与 P02 路由的核心差异只有一处：路由是单一全局表，模板是**多份各自独立版本化的文档**，因此每个方法都以 `template_id` 为键，而不是单一的 `id=1` 单例指针。共享结构和校验唯一源为 `common/workflowtemplate`，包括输入（节点/字段/类型/范围）、输出（节点/种类）、依赖（自定义节点/模型及其版本）与图（API Format ComfyUI 工作流）；限额为每模板最多 100 个输入、20 个输出、100 个自定义节点依赖、100 个模型依赖，图不超过 4 MiB，整份发布文档不超过 4 MiB + 256 KiB，平台最多发布 500 个不同模板 id，单个模板最多保留 1000 个历史版本。
+
+**图从不进入任何目录响应。** 与 Job 的完整 Prompt、API Key 同属安全红线内的东西：`/operator/v1/workflow-templates`（列表）与 Fleet 聚合出的 `/admin/v1/workflows`、`/operator/v1/workflows` 均不携带图，只有 `GET /operator/v1/workflow-templates/:id`、`GET .../revisions/:revision`（平台会话，编辑/对比用）与 `GET /internal/v1/workflow-templates/current`（InternalToken，供 Gateway 同步）这两类端点会带图，因为调用方分别是模板的作者与本就需要执行它的 Gateway。
+
+| 接口 | 守卫与行为 |
+| --- | --- |
+| `GET /operator/v1/workflow-templates` | 平台会话；每个模板当前头版本的列表，不含图 |
+| `GET /operator/v1/workflow-templates/:id` | 平台会话；当前完整快照（含图）；从未发布过的 id 返回 404 |
+| `POST /operator/v1/workflow-templates/:id/validate` | 平台会话；`{content, visible_tenant_ids}`，只校验并返回 `{valid:true,digest}` |
+| `POST /operator/v1/workflow-templates/:id/publish` | 平台会话；`{expected_revision, content, visible_tenant_ids}`，成功 201 返回完整快照，版本冲突 409；`expected_revision=0` 且该 id 从未发布过即为"创建" |
+| `POST /operator/v1/workflow-templates/:id/rollback` | 平台会话；`{expected_revision, revision}`，复制历史内容与可见范围为新版本，记录 rollback_of，成功 201 |
+| `GET /operator/v1/workflow-templates/:id/history` | 平台会话；before 版本游标、limit 1–50，倒序元数据 `{items,next_before?}`，不返回每版正文 |
+| `GET /operator/v1/workflow-templates/:id/revisions/:revision` | 平台会话；单个不可变历史快照（含图） |
+| `GET /operator/v1/workflow-templates/status` | 平台会话；期望整包（数量+摘要）与每个配置 Gateway 的实时观测，不依赖缓存 ACK |
+| `GET /internal/v1/workflow-templates/current` | InternalToken；供 Gateway 拉取全部模板当前头版本（含图），供 workflowsync 构建整包 |
+
+发布和回滚在同一个数据库事务里完成该模板指针的 CAS、不可变历史插入与平台审计（`workflow_templates.publish` / `workflow_templates.rollback`）。**首次发布（创建）没有可预先播种的单例行**——这是与 P02 路由唯一的结构性差异：一次真实 MySQL 并发测试就抓到过由此产生的一类真实缺陷：许多事务并发对同一个从未见过的模板 id 做普通 `INSERT`，不是简单地败于重复键，而是在 InnoDB 默认隔离级别下因两阶段的"发现不存在、再插入"彼此交错成一个锁等待环，被 MySQL 判为 1213 死锁杀掉，而不是 `translate()` 认识的重复键错误。修复是把"确保指针行存在"从普通 INSERT 换成 `INSERT ... ON CONFLICT DO NOTHING` 式的 upsert，让它成为单条语句而不是两步——详见 `internal/store/gormstore/workflowtemplates.go` 的 `PublishWorkflowTemplateRevision` 文档注释。回滚不改写旧版本，也不降低版本号；单模板历史达到 1000 版容量时拒绝新发布/回滚（409）。创建新模板（`expected_revision=0` 且该 id 此前不存在）额外检查平台已发布的不同模板总数，达到 500 时拒绝；重新发布一个已存在的模板不受此上限影响。
+
+`workflow_template_revisions` 以 `(template_id, revision)` 复合主键存正文（`description`/`inputs_json`/`outputs_json`/`dependencies_json`/`visible_tenants_json`/`graph_json` 六列）和版本元数据，`workflow_template_actives` 以 `template_id` 为主键、每个模板一行指针（无需预先播种，首次发布时惰性创建）。JSON 各自作为 PostgreSQL TEXT / MySQL MEDIUMTEXT 保存,不使用方言相关 JSON 查询。迁移位于 `internal/store/gormstore/migrations/workflowtemplates/{postgres,mysql}`，`MigrateWorkflowTemplates` 在 `Database.AutoMigrate` 显式启用时调用，独立记录 `schema_migrations_workflow_templates`，与 `MigrateRoutes` 同一时机、同一模式。
+
+**租户可见范围随版本一起不可变。** `VisibleTenantIDs` 是发布请求的一部分，落在同一份不可变历史行里；回滚到旧版本时，恢复的是那个版本自己的可见范围，而不只是它的图——这是刻意的简化：可见范围变更走的是与内容变更同一条发布/审计路径，不另设一条无审计轨迹的"仅改可见范围"旁路。空列表表示对所有租户可见；租户可见范围过滤只发生在 Gateway 的运行提交路径（`POST /v1/workflows/{workflow_id}/runs`）与本服务聚合出的租户菜单（`/admin/v1/workflows`）两处，各自独立生效，互不依赖。
+
+**依赖检查是结构性声明校验，不是能力核对。** `Dependencies{CustomNodes, Models}` 只在发布时检查非空、去重与数量上限，从不与 Fleet 里任何已连接节点实际上报的已装列表交叉核对——因为目前没有节点上报这类信息，接入那条边界属于超出本轮范围的新协议设计，如实记在这里而不是假装已经做到。`Outputs` 同理，只结构性校验声明的节点存在于图中，不核实运行后是否真的产出了声明种类的产物。
+
+生效查询（`/operator/v1/workflow-templates/status`）与 P02 路由的 `/operator/v1/routes/status` 同构：最多并发 8 个 Gateway，每个调用受超时与 16 KiB 响应上限约束；结果包含所有 `Fleet.Gateways` 端点，缺失或失败不会被丢弃。只有非空端点集合、唯一副本身份、controlplane 模式、完全匹配的模板数量和整包摘要、无同步错误且时间有效，complete 才为 true。读取期间发生新的发布会将 complete 降为 false。
+
+验证：`TestLiveWorkflowTemplates` 使用 `AISW_POSTGRES_TEST_DSN` / `AISW_MYSQL_TEST_DSN` 按需启用，在独立 PostgreSQL 17 与 MySQL 9.7 上以 race 验证重复迁移、20 个并发首次创建（含上述死锁修复的回归验证）、两个独立模板 id 各自独立版本化、原子审计失败回滚与历史容量；默认测试不需要外部数据库，本轮已在真实 MySQL 9.7 与 PostgreSQL 17 上分别跑通验证过。HTTP 测试（`e2e/workflowtemplates_test.go`）覆盖守卫隔离、验证/发布/回滚、独立模板互不干扰、`/status` 与 `/:id` 路径不互相遮蔽、分页及大小限制；租户菜单可见范围过滤借用 `e2e/fleet_test.go` 已有的桩 Gateway 基础设施验证——过滤发生在 Fleet 聚合出的菜单上，与本服务自己的模板存储是两回事（见上方"图从不进入任何目录响应"一段的端点划分）。

@@ -157,6 +157,22 @@ function TemplateCard({
       {template.validationError ? (
         <p className="px-3 pt-2 text-xs text-destructive">{template.validationError}</p>
       ) : null}
+      {template.outputs.length > 0 || template.customNodeDependencies.length > 0 || template.modelDependencies.length > 0 ? (
+        <div className="space-y-1 px-3 pt-2 text-xs text-muted-foreground">
+          {template.outputs.length > 0 ? (
+            <p>产出：{template.outputs.map((output) => `${output.name}（${output.type}）`).join("、")}</p>
+          ) : null}
+          {template.customNodeDependencies.length > 0 || template.modelDependencies.length > 0 ? (
+            <p>
+              依赖：
+              {[...template.customNodeDependencies, ...template.modelDependencies]
+                .map((dep) => (dep.version ? `${dep.name}@${dep.version}` : dep.name))
+                .join("、")}
+              （模板作者声明，未与节点实际已装能力核对）
+            </p>
+          ) : null}
+        </div>
+      ) : null}
       {template.divergent && !operator ? (
         // A tenant is told what they can act on — the request may behave
         // differently — without being told which replicas differ. That is

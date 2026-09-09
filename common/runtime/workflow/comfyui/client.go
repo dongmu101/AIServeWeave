@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -35,8 +36,12 @@ const (
 )
 
 // Endpoint paths. They are collected here so the set of routes this adapter
-// is allowed to touch can be read at a glance — ComfyUI also serves routes
-// that upload files or change server state, and none of them appear below.
+// is allowed to touch can be read at a glance. pathUploadImage is the one
+// route here that changes server state rather than only reading it — it
+// exists to satisfy runtime.WorkflowRuntime.UploadInput (STATUS.md's P04):
+// writing an input file is a capability the tunnel protocol names
+// explicitly (OPERATION_INPUT_UPLOAD), not a side effect this adapter
+// reaches for on its own.
 const (
 	pathSystemStats = "/system_stats"
 	pathFeatures    = "/features"
@@ -47,6 +52,7 @@ const (
 	pathHistory     = "/history"
 	pathInterrupt   = "/interrupt"
 	pathView        = "/view"
+	pathUploadImage = "/upload/image"
 	pathWebSocket   = "/ws"
 )
 
@@ -615,6 +621,102 @@ func (c *Client) View(ctx context.Context, ref runtime.ArtifactRef) (*http.Respo
 		query.Set("type", ref.Type)
 	}
 	return c.OpenStream(ctx, "open_artifact", pathView, query)
+}
+
+// uploadImageResponse is POST /upload/image's response body: the name and
+// subfolder ComfyUI actually stored the file under, which can differ from
+// what was requested on a filename collision (ComfyUI appends a counter
+// rather than overwriting).
+type uploadImageResponse struct {
+	Name      string `json:"name"`
+	Subfolder string `json:"subfolder"`
+	Type      string `json:"type"`
+}
+
+// UploadImage streams body to POST /upload/image, the input area a
+// workflow's LoadImage-style nodes read from (STATUS.md's P04). Like View
+// in the opposite direction, it never buffers the transfer whole: the
+// multipart envelope is written directly to the outgoing request body via
+// io.Pipe as body is read, so a large upload does not sit fully in memory
+// on either side of this call.
+//
+// UploadImage 把 body 流式送到 POST /upload/image，即工作流里 LoadImage
+// 一类节点读取输入的地方（STATUS.md 的 P04）。与反方向的 View 一样，它绝不
+// 整体缓冲这次传输：multipart 信封经由 io.Pipe 随 body 的读取直接写进发出的
+// 请求体，因此一次大的上传不会在任何一侧被完整持有在内存里。
+func (c *Client) UploadImage(ctx context.Context, meta runtime.InputUploadMeta, body io.Reader) (uploadImageResponse, error) {
+	const operation = "upload_input"
+
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+	go func() {
+		part, err := mw.CreateFormFile("image", meta.Filename)
+		if err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		src := body
+		if meta.Size >= 0 {
+			src = io.LimitReader(body, meta.Size)
+		}
+		if _, err := io.Copy(part, src); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		if meta.Subfolder != "" {
+			if err := mw.WriteField("subfolder", meta.Subfolder); err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+		}
+		if err := mw.WriteField("type", "input"); err != nil {
+			_ = pw.CloseWithError(err)
+			return
+		}
+		_ = pw.CloseWithError(mw.Close())
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.resolve(pathUploadImage, nil).String(), pr)
+	if err != nil {
+		return uploadImageResponse{}, c.localError(operation, runtime.ErrorInvalidConfig, fmt.Sprintf("build request: %v", err))
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return uploadImageResponse{}, c.transportError(ctx, operation, err)
+	}
+	defer resp.Body.Close()
+
+	respBytes, truncated, err := readLimited(resp.Body, c.maxRespBytes)
+	if err != nil {
+		return uploadImageResponse{}, c.transportError(ctx, operation, err)
+	}
+	if truncated {
+		return uploadImageResponse{}, c.tooLargeError(operation, resp.StatusCode)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return uploadImageResponse{}, c.errorFromResponse(operation, resp.StatusCode, respBytes)
+	}
+	var out uploadImageResponse
+	if err := json.Unmarshal(respBytes, &out); err != nil {
+		return uploadImageResponse{}, &runtime.RuntimeError{
+			Code:       runtime.ErrorProtocol,
+			RuntimeID:  c.runtimeID,
+			Kind:       runtime.KindComfyUI,
+			Operation:  operation,
+			StatusCode: resp.StatusCode,
+			Message:    "decode response: invalid JSON",
+			Cause:      err,
+		}
+	}
+	return out, nil
 }
 
 // MaxArtifactBytes reports the configured per-artifact size cap.

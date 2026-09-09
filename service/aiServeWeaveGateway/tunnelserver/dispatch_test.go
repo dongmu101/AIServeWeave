@@ -524,6 +524,34 @@ func TestDispatchSendsArtifactsToABulkSlot(t *testing.T) {
 	}
 }
 
+func TestDispatchSendsInputUploadsToABulkSlot(t *testing.T) {
+	// A large input file must not occupy an inference slot either — the same
+	// reason artifact downloads don't, see TestDispatchSendsArtifactsToABulkSlot.
+	h := newHarness(t, tunnelserver.Config{})
+	h.connect("mac-mini-01")
+	h.openSlot("mac-mini-01", tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, "inference-1", echoHandler)
+	h.openSlot("mac-mini-01", tunnelv1.SlotClass_SLOT_CLASS_BULK, "bulk-1", echoHandler)
+	waitFor(t, "both slots to park", func() bool { return idleCount(h, "mac-mini-01") == 2 })
+
+	resp, err := h.srv.Dispatch(context.Background(), tunnelserver.Request{
+		NodeID:    "mac-mini-01",
+		RuntimeID: "comfy-1",
+		Operation: tunnelv1.Operation_OPERATION_INPUT_UPLOAD,
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	defer resp.Close()
+
+	info, _ := h.srv.Node("mac-mini-01")
+	if info.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_BULK] != 0 {
+		t.Error("the bulk slot is still idle; the upload went somewhere else")
+	}
+	if info.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_INFERENCE] != 1 {
+		t.Error("the inference slot was consumed by an input upload")
+	}
+}
+
 func TestDispatchRejectsAnOversizedResponseChunk(t *testing.T) {
 	h := newHarness(t, tunnelserver.Config{MaxFrameBytes: 64})
 	h.connect("mac-mini-01")

@@ -34,7 +34,7 @@ import { nodePathSegment } from "./node-path.ts";
  * non-empty segment.
  *
  * Segment 是路径中的一节：字面量，或接受一节非空内容的占位符。 */
-type Segment = { literal: string } | { param: true } | { node: true };
+type Segment = { literal: string } | { param: true } | { node: true } | { revision: true };
 
 /** UpstreamRoute is one allowed call.
  *
@@ -167,6 +167,21 @@ const ROUTES: readonly UpstreamRoute[] = [
  * 用一张表加一个行标志，会让「这次调用由哪个密钥支付」距离出错只有一个布尔值之遥。
  */
 const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("validate")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("publish")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("rollback")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes"), literal("status")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes"), literal("history")], query: ["limit", "before"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes"), literal("revisions"), { revision: true }], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("workflow-templates")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), literal("status")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param()], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("history")], query: ["limit", "before"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("revisions"), { revision: true }], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("validate")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("publish")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("rollback")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), literal("states")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("audit")], query: ["limit", "cursor", "action", "actor_id", "since", "until"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("approve")], query: [] },
@@ -271,7 +286,7 @@ function matches(pattern: readonly Segment[], segments: readonly string[]) {
     if (segment === undefined || segment === "") {
       return false;
     }
-    return "node" in slot ? nodePathSegment(segment) : "param" in slot ? isSafeParam(segment) : slot.literal === segment;
+    return "revision" in slot ? /^[1-9][0-9]*$/.test(segment) && Number.isSafeInteger(Number(segment)) : "node" in slot ? nodePathSegment(segment) : "param" in slot ? isSafeParam(segment) : slot.literal === segment;
   });
 }
 

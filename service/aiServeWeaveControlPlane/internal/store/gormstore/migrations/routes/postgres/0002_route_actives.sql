@@ -1,0 +1,4 @@
+CREATE TABLE IF NOT EXISTS route_actives (
+ id INTEGER PRIMARY KEY CHECK (id = 1),
+ revision BIGINT NOT NULL DEFAULT 0
+)

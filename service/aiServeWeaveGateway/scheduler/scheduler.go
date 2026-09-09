@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
@@ -57,7 +58,7 @@ type Scheduler struct {
 	clock    runtime.Clock
 	breakers *breakerRegistry
 	metrics  *recorder
-	routes   *routing.Table
+	routes   atomic.Pointer[routing.Table]
 }
 
 // Config configures New. Every field is optional.
@@ -93,20 +94,25 @@ type Config struct {
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
+// New 返回在连接到 server 的节点之间调度请求的 Scheduler。
 func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	clock := cfg.Clock
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
 	rec := newRecorder(cfg.Metrics)
-	return &Scheduler{
+	s := &Scheduler{
 		server:   server,
 		clock:    clock,
 		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
 		metrics:  rec,
-		routes:   cfg.Routes,
 	}
+	s.routes.Store(cfg.Routes)
+	return s
 }
+
+// SetRoutes atomically replaces routes for future requests. / SetRoutes 原子替换后续请求使用的路由。
+func (s *Scheduler) SetRoutes(table *routing.Table) { s.routes.Store(table) }
 
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable.
@@ -233,10 +239,11 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // 没有路由表时它列出节点声明的内容，因此从不编写路由表的部署不受影响。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	_ = ctx
-	if s.routes.Len() > 0 {
+	routes := s.routes.Load()
+	if routes.Len() > 0 {
 		var out []ModelInfo
-		for _, alias := range s.routes.Models() {
-			if len(s.candidates(alias, runtime.CapabilityChat)) > 0 {
+		for _, alias := range routes.Models() {
+			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 {
 				out = append(out, ModelInfo{ID: alias})
 			}
 		}
@@ -275,19 +282,27 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 // first.
 //
 // The ordering has two levels, and the outer one is the operator's. Targets
-// are tried in the priority they were configured with, and only within one
-// target does the load heuristic decide. That is what makes "the local Mac
+// are tried in priority order, with weighted choice among equal priorities;
+// only within one target does the load heuristic decide. That is what makes "the local Mac
 // before the rented GPU" mean what it says: a stated preference that a
 // momentarily idler machine cannot override.
 //
 // candidates 把请求的模型经路由表解析，返回每一个能服务它的 (node, runtime, 运行时
 // 模型) 三元组，最优的在前。
 //
-// 排序有两层，外层属于运维。target 按配置的优先级依次尝试，只有在同一个 target 内部
+// 外层按运维配置的优先级依次尝试，同优先级目标按权重选择；只有在同一个 target 内部
 // 才由负载启发式决定。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个
 // 声明的偏好，不会被一台一时更空闲的机器推翻。
 func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate {
-	targets, routed := s.routes.Resolve(model)
+	return s.candidatesWith(s.routes.Load(), model, cap)
+}
+
+func (s *Scheduler) candidatesWith(routes *routing.Table, model string, cap runtime.Capability) []Candidate {
+	return s.candidatesWithRandom(routes, model, cap, rand.Float64)
+}
+
+func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, cap runtime.Capability, draw func() float64) []Candidate {
+	targets, routed := routes.Resolve(model)
 	if !routed {
 		// An unrouted model is used exactly as the node advertises it. A
 		// deployment with no routing table is the common case, not an error.
@@ -296,24 +311,11 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 		targets = []routing.Target{{RuntimeModel: model}}
 	}
 
-	var out []Candidate
-	seen := make(map[Candidate]struct{})
+	groups := make([]targetCandidates, 0, len(targets))
 	for _, target := range targets {
-		for _, c := range s.pick(target, cap) {
-			if _, dup := seen[c]; dup {
-				// Two targets can select the same node for the same runtime
-				// model. Keeping the first occurrence preserves the higher
-				// priority's position.
-				//
-				// 两个 target 可能为同一个运行时模型选中同一个节点。保留首次出现，
-				// 就保住了较高优先级的位置。
-				continue
-			}
-			seen[c] = struct{}{}
-			out = append(out, c)
-		}
+		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(target, cap)})
 	}
-	return out
+	return weightedCandidates(groups, draw)
 }
 
 // pick returns every (node, runtime) pair that can serve target with cap,

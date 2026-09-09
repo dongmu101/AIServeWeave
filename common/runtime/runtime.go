@@ -1,6 +1,9 @@
 package runtime
 
-import "context"
+import (
+	"context"
+	"io"
+)
 
 type Runtime interface {
 	Descriptor() Descriptor
@@ -34,4 +37,17 @@ type WorkflowRuntime interface {
 	// ——重连之后，或 Agent 重启之后——就无从找到自己的产物。
 	Artifacts(ctx context.Context, runID string) ([]ArtifactRef, error)
 	OpenArtifact(ctx context.Context, ref ArtifactRef) (Artifact, error)
+	// UploadInput writes body to the backend's input area (STATUS.md's P04),
+	// so a later Submit's Template can reference the result through
+	// InputUploadResult.InputRef. body is read to EOF or meta.Size bytes,
+	// whichever the adapter enforces first; an implementation must never
+	// buffer the whole body in memory, the same streaming discipline
+	// OpenArtifact already holds in the opposite direction.
+	//
+	// UploadInput 把 body 写入后端的输入区（STATUS.md 的 P04），这样之后某个
+	// Submit 的 Template 就能通过 InputUploadResult.InputRef 引用这次上传的
+	// 结果。body 被读到 EOF 或 meta.Size 字节为止，以适配器先执行到的那个
+	// 为准；实现绝不能把整个 body 缓冲进内存，与 OpenArtifact 在相反方向上
+	// 已经坚持的流式纪律相同。
+	UploadInput(ctx context.Context, meta InputUploadMeta, body io.Reader) (InputUploadResult, error)
 }

@@ -69,6 +69,16 @@ const (
 	// PayloadArtifactList 携带序列化的 tunnelv1.ArtifactList：一次运行产出了哪些
 	// 产物，不含它们的任何字节。
 	PayloadArtifactList PayloadKind = "artifact_list"
+	// PayloadInputUploadRequest carries a marshalled runtime.InputUploadMeta
+	// without its bytes; the file itself follows as DataChunks, the same
+	// split PayloadWorkflowRequest makes for a workflow template.
+	//
+	// PayloadInputUploadRequest 携带序列化的 runtime.InputUploadMeta，不含它的
+	// 字节；文件本身作为 DataChunk 跟在后面，与 PayloadWorkflowRequest 对工作流
+	// 模板所做的拆分相同。
+	PayloadInputUploadRequest PayloadKind = "input_upload_request"
+	// PayloadInputUploadResult carries a marshalled runtime.InputUploadResult.
+	PayloadInputUploadResult PayloadKind = "input_upload_result"
 )
 
 // ResponseShape describes how many DataChunks an Operation's response uses,
@@ -170,6 +180,19 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Request:   PayloadRunRef,
 		Response:  PayloadArtifactList,
 		Shape:     ShapeSingle,
+	},
+	// The request body follows the same "headers then DataChunks" shape
+	// WORKFLOW_SUBMIT uses: the file's bytes are too large, and too
+	// variable in size, to fit in RequestHeaders.payload.
+	//
+	// 请求体的形状与 WORKFLOW_SUBMIT 相同——「headers 之后跟 DataChunk」：
+	// 文件的字节太大、大小也太不确定，装不进 RequestHeaders.payload。
+	tunnelv1.Operation_OPERATION_INPUT_UPLOAD: {
+		Operation:   tunnelv1.Operation_OPERATION_INPUT_UPLOAD,
+		Request:     PayloadInputUploadRequest,
+		Response:    PayloadInputUploadResult,
+		Shape:       ShapeSingle,
+		RequestBody: true,
 	},
 }
 
@@ -423,6 +446,38 @@ func UnmarshalArtifactRef(b []byte) (runtime.ArtifactRef, error) {
 		return runtime.ArtifactRef{}, err
 	}
 	return ArtifactRefFromProto(&pb), nil
+}
+
+// MarshalInputUploadRequest encodes meta as an INPUT_UPLOAD request payload.
+// meta's bytes are not included: they travel as DataChunks so a large input
+// cannot push a single frame past the receive limit.
+func MarshalInputUploadRequest(meta runtime.InputUploadMeta) ([]byte, error) {
+	return marshalPayload(InputUploadMetaToProto(meta), "input upload request")
+}
+
+// UnmarshalInputUploadRequest decodes an INPUT_UPLOAD request payload. The
+// caller reads the file's bytes from the DataChunks that follow.
+func UnmarshalInputUploadRequest(b []byte) (runtime.InputUploadMeta, error) {
+	var pb tunnelv1.InputUploadRequest
+	if err := unmarshalPayload(b, &pb, "input upload request"); err != nil {
+		return runtime.InputUploadMeta{}, err
+	}
+	return InputUploadMetaFromProto(&pb), nil
+}
+
+// MarshalInputUploadResult encodes result as the single INPUT_UPLOAD
+// response chunk.
+func MarshalInputUploadResult(result runtime.InputUploadResult) ([]byte, error) {
+	return marshalPayload(InputUploadResultToProto(result), "input upload result")
+}
+
+// UnmarshalInputUploadResult decodes the single INPUT_UPLOAD response chunk.
+func UnmarshalInputUploadResult(b []byte) (runtime.InputUploadResult, error) {
+	var pb tunnelv1.InputUploadResult
+	if err := unmarshalPayload(b, &pb, "input upload result"); err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+	return InputUploadResultFromProto(&pb), nil
 }
 
 // -----------------------------------------------------------------------
@@ -1172,6 +1227,44 @@ func ArtifactRefFromProto(pb *tunnelv1.ArtifactRef) runtime.ArtifactRef {
 		Subfolder: pb.GetSubfolder(),
 		Type:      pb.GetType(),
 	}
+}
+
+// InputUploadMetaToProto mirrors an input upload's metadata onto the wire
+// without its bytes, which travel separately as DataChunks — the same split
+// WorkflowRequestToProto makes for a workflow template.
+func InputUploadMetaToProto(meta runtime.InputUploadMeta) *tunnelv1.InputUploadRequest {
+	return &tunnelv1.InputUploadRequest{
+		Filename:  meta.Filename,
+		Subfolder: meta.Subfolder,
+		Size:      meta.Size,
+		Sha256:    meta.SHA256,
+	}
+}
+
+// InputUploadMetaFromProto restores an input upload's metadata.
+func InputUploadMetaFromProto(pb *tunnelv1.InputUploadRequest) runtime.InputUploadMeta {
+	if pb == nil {
+		return runtime.InputUploadMeta{}
+	}
+	return runtime.InputUploadMeta{
+		Filename:  pb.GetFilename(),
+		Subfolder: pb.GetSubfolder(),
+		Size:      pb.GetSize(),
+		SHA256:    pb.GetSha256(),
+	}
+}
+
+// InputUploadResultToProto mirrors an input upload's result onto the wire.
+func InputUploadResultToProto(result runtime.InputUploadResult) *tunnelv1.InputUploadResult {
+	return &tunnelv1.InputUploadResult{InputRef: result.InputRef}
+}
+
+// InputUploadResultFromProto restores an input upload's result.
+func InputUploadResultFromProto(pb *tunnelv1.InputUploadResult) runtime.InputUploadResult {
+	if pb == nil {
+		return runtime.InputUploadResult{}
+	}
+	return runtime.InputUploadResult{InputRef: pb.GetInputRef()}
 }
 
 // -----------------------------------------------------------------------

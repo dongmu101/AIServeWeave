@@ -1032,6 +1032,95 @@ func TestDispatchSplitsAnArtifactIntoBoundedFrames(t *testing.T) {
 	}
 }
 
+func TestDispatchStreamsAnInputUploadFromDataChunksWithoutBuffering(t *testing.T) {
+	f := newDispatchFixture(t, nil)
+
+	var gotMeta runtime.InputUploadMeta
+	var gotBody []byte
+	f.workflow(0).UploadInputFunc = func(_ context.Context, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+		gotMeta = meta
+		b, err := io.ReadAll(body)
+		if err != nil {
+			return runtime.InputUploadResult{}, err
+		}
+		gotBody = b
+		return runtime.InputUploadResult{InputRef: "42.png"}, nil
+	}
+
+	meta := runtime.InputUploadMeta{Filename: "photo.png", Subfolder: "", Size: 12, SHA256: "deadbeef"}
+	payload := mustMarshal(t, tunnelwire.MarshalInputUploadRequest, meta)
+	sink, err := f.dispatch(tunnelv1.Operation_OPERATION_INPUT_UPLOAD, payload, func(req *tunnel.Request) {
+		body := make(chan []byte, 2)
+		body <- []byte("hello ")
+		body <- []byte("world!")
+		close(body)
+		req.Body = body
+	})
+	if err != nil {
+		t.Fatalf("dispatch failed: %v", err)
+	}
+
+	if gotMeta.Filename != "photo.png" || gotMeta.SHA256 != "deadbeef" || gotMeta.Size != 12 {
+		t.Errorf("UploadInput received meta = %+v, want the unmarshalled request", gotMeta)
+	}
+	if string(gotBody) != "hello world!" {
+		t.Errorf("UploadInput received body = %q, want %q", gotBody, "hello world!")
+	}
+
+	chunks := sink.payloads()
+	if len(chunks) != 1 {
+		t.Fatalf("response chunks = %d, want 1", len(chunks))
+	}
+	result, err := tunnelwire.UnmarshalInputUploadResult(chunks[0])
+	if err != nil {
+		t.Fatalf("UnmarshalInputUploadResult: %v", err)
+	}
+	if result.InputRef != "42.png" {
+		t.Errorf("InputRef = %q, want %q", result.InputRef, "42.png")
+	}
+}
+
+func TestDispatchRefusesAnInputUploadWithNoFilename(t *testing.T) {
+	f := newDispatchFixture(t, nil)
+	called := false
+	f.workflow(0).UploadInputFunc = func(context.Context, runtime.InputUploadMeta, io.Reader) (runtime.InputUploadResult, error) {
+		called = true
+		return runtime.InputUploadResult{}, nil
+	}
+
+	payload := mustMarshal(t, tunnelwire.MarshalInputUploadRequest, runtime.InputUploadMeta{})
+	_, err := f.dispatch(tunnelv1.Operation_OPERATION_INPUT_UPLOAD, payload, nil)
+	wantCode(t, err, runtime.ErrorProtocol)
+	if called {
+		t.Error("UploadInput was called with no filename")
+	}
+}
+
+func TestDispatchRefusesAnOversizedInputUpload(t *testing.T) {
+	f := newDispatchFixture(t, func(cfg *tunnel.DispatchConfig) {
+		cfg.MaxRequestBytes = 8
+	})
+	called := false
+	f.workflow(0).UploadInputFunc = func(_ context.Context, _ runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+		called = true
+		_, err := io.ReadAll(body)
+		return runtime.InputUploadResult{}, err
+	}
+
+	payload := mustMarshal(t, tunnelwire.MarshalInputUploadRequest, runtime.InputUploadMeta{Filename: "big.bin"})
+	_, err := f.dispatch(tunnelv1.Operation_OPERATION_INPUT_UPLOAD, payload, func(req *tunnel.Request) {
+		body := make(chan []byte, 2)
+		body <- []byte("0123456789")
+		body <- []byte("0123456789")
+		close(body)
+		req.Body = body
+	})
+	wantCode(t, err, runtime.ErrorResponseTooLarge)
+	if !called {
+		t.Error("UploadInput was never called")
+	}
+}
+
 func TestDispatchRefusesAnOversizedResponseFrame(t *testing.T) {
 	f := newDispatchFixture(t, func(cfg *tunnel.DispatchConfig) {
 		cfg.MaxFrameBytes = 8

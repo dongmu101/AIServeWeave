@@ -12,7 +12,7 @@
 
 ## 当前状态
 
-阶段 1 到 7 的实现已落地；Ollama 联调、本机故障注入与逐副本替换已有历史记录，24h 长稳结果尚待核实归档，跨网络部署验收仍待补齐：`api/proto/tunnel/v1/tunnel.proto` 定义了完整线上契约（`Tunnel`、`NodeIdentity`、`GatewayDirectory` 与 `TokenAdmin` 四个服务、数据面帧、控制面帧、全部 `runtime` 类型镜像），`common/tunnelwire` 实现了双向转换与 payload 编解码（阶段 7 从 `tunnel/convert.go` 拆出，与 Gateway 共用），`tunnel/identity.go` 实现了本地密钥生成、向 Registry 换证与轮换、证书落盘与 mTLS 配置，`tunnel/client.go` + `control.go` + `backoff.go` 实现了单条隧道的连接状态机、Control 流与退避重连，`tunnel/pool.go` + `slot.go` 实现了单副本槽池的水位管理与单槽帧循环，`tunnel/dispatch.go` 把十个 Operation 接到 `runtime.Manager` 上，`tunnel/manager.go` + `roster.go` 实现了多副本连接表与名册处理，`tunnel/metrics.go` 接上了全部 13 个指标，`main.go` 完成装配。Gateway 侧的隧道服务端见 [service/aiServeWeaveGateway/README.md](../../aiServeWeaveGateway/README.md)，三副本端到端联调在 `service/aiServeWeaveGateway/e2e`；阶段 7 剩余项见该阶段的清单。
+阶段 1 到 7 的实现已落地；Ollama 联调、本机故障注入与逐副本替换已有历史记录，24h 长稳结果尚待核实归档，跨网络部署验收仍待补齐：`api/proto/tunnel/v1/tunnel.proto` 定义了完整线上契约（`Tunnel`、`NodeIdentity`、`GatewayDirectory` 与 `TokenAdmin` 四个服务、数据面帧、控制面帧、全部 `runtime` 类型镜像），`common/tunnelwire` 实现了双向转换与 payload 编解码（阶段 7 从 `tunnel/convert.go` 拆出，与 Gateway 共用），`tunnel/identity.go` 实现了本地密钥生成、向 Registry 换证与轮换、证书落盘与 mTLS 配置，`tunnel/client.go` + `control.go` + `backoff.go` 实现了单条隧道的连接状态机、Control 流与退避重连，`tunnel/pool.go` + `slot.go` 实现了单副本槽池的水位管理与单槽帧循环，`tunnel/dispatch.go` 把十一个 Operation 接到 `runtime.Manager` 上（第十一个 `INPUT_UPLOAD` 是 STATUS.md P04 的新增，晚于首期七个阶段落地，用的正是「后续演进」一节要求的方式——只加 Operation，不改既有帧结构），`tunnel/manager.go` + `roster.go` 实现了多副本连接表与名册处理，`tunnel/metrics.go` 接上了全部 13 个指标，`main.go` 完成装配。Gateway 侧的隧道服务端见 [service/aiServeWeaveGateway/README.md](../../aiServeWeaveGateway/README.md)，三副本端到端联调在 `service/aiServeWeaveGateway/e2e`；阶段 7 剩余项见该阶段的清单。
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
@@ -24,7 +24,7 @@
 | `backoff.go` | 已实现 | 全抖动指数退避 |
 | `pool.go` | 已实现 | 单副本槽池：预热、水位补充、空闲回收、分类配额、额度分摊、`SlotHint` clamp |
 | `slot.go` | 已实现 | 单槽帧循环、`Handler`/`ResponseSink` 接口、per-request context 与取消、槽轮换 |
-| `dispatch.go` | 已实现 | 十个 Operation 的分发、白名单、能力断言、deadline 取小、limiter 额度、大小上限 |
+| `dispatch.go` | 已实现 | 十一个 Operation 的分发、白名单、能力断言、deadline 取小、limiter 额度、大小上限 |
 | `manager.go` | 已实现 | 多副本连接表、名册差分、额度重算、证书轮换时逐条重连、聚合状态 |
 | `roster.go` | 已实现 | 名册校验、版本去重、空名册降级、`max_gateways` 截断、`active` 计数 |
 | `metrics.go` | 已实现 | 13 个指标的记录点、封闭标签词表、六值 `result` 映射、丢弃型默认 sink |
@@ -221,6 +221,7 @@ enum Operation {
   OPERATION_WORKFLOW_CANCEL    = 8;
   OPERATION_ARTIFACT_OPEN      = 9;
   OPERATION_ARTIFACT_LIST      = 10;
+  OPERATION_INPUT_UPLOAD       = 11;  // STATUS.md P04：输入文件上传，晚于首期落地
 }
 
 message ResponseHeaders {
@@ -264,8 +265,11 @@ message TunnelError {
 | `WORKFLOW_CANCEL` | `run_id` | 无 `DataChunk`，只有 `ResponseEnd` |
 | `ARTIFACT_OPEN` | `ArtifactRef` | `ResponseHeaders` + N 个 `DataChunk`（字节流） |
 | `ARTIFACT_LIST` | `RunRef` | 单个 `DataChunk`（`ArtifactList`） |
+| `INPUT_UPLOAD` | `InputUploadRequest`（文件字节另走 `DataChunk`） | 单个 `DataChunk`（`InputUploadResult`） |
 
-payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`。
+payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`；`INPUT_UPLOAD` 的文件字节同理，且体积比模板更没有上限保证。
+
+`INPUT_UPLOAD`（STATUS.md 的 P04）是首期七个阶段完成后按「后续演进」一节要求的方式新增的：只加一个 Operation、复用既有帧结构，不改任何已有消息。`InputUploadRequest` 只携带 `filename`、`subfolder`、`size`、`sha256` 四个元数据字段，绝不携带目标 URL 或路径——文件落盘的具体位置完全由接收端的 runtime 适配器决定（例如 `common/runtime/workflow/comfyui` 转发到 ComfyUI 自己的 `/upload/image`），这是协议文件头部「不得表达 fetch 这个 URL」这条红线在新 Operation 上的延续。Agent 侧 `dispatch.go` 用 `chanReader` 把请求体 channel 适配成 `io.Reader`，直接流进 `WorkflowRuntime.UploadInput`，不像 `WORKFLOW_SUBMIT` 的 `readBody` 那样先整体收集——模板有 `MaxRequestBytes` 兜底的宽松上限，输入文件的体积没有那么宽松的保证，提前攒够整个文件正是「任何一跳都不得无界缓冲」要防的事。Gateway 侧与 `ARTIFACT_OPEN` 一样走批量槽（`tunnelserver.classFor`），避免一次大的上传挤占推理槽。
 
 **流式事件严禁聚合。** `CHAT_STREAM` 每收到一个 `ChatEvent` 就 `Send` 一帧；Gateway 每收到一帧就 flush。这条规则是 TTFT 的唯一保障，任何"攒够 N 条再发"的优化都必须先证明不影响首字延迟。
 

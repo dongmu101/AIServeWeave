@@ -6,7 +6,10 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
+
+	"AIServeWeave/common/workflowtemplate"
 )
 
 // MaxTemplateBytes bounds one template manifest. An API-format graph is a
@@ -91,6 +94,73 @@ func (r *Registry) loadFile(path string) error {
 	r.byID[tpl.ID] = &tpl
 	r.ids = append(r.ids, tpl.ID)
 	return nil
+}
+
+// FromBundle builds a Registry from a set of published template revisions
+// pulled from the control plane (P03's controlplane source), applying the
+// same rules Load applies to files: every template is validated, a duplicate
+// id fails the whole build, and Version/VisibleTenantIDs are carried onto
+// each Template from its Snapshot.
+//
+// FromBundle 从一组自控制面拉取的已发布模板版本（P03 的 controlplane 来源）构建
+// Registry，套用与 Load 对文件相同的规则：所有模板都会被校验，重复 id 会让整体
+// 构建失败，且 Version/VisibleTenantIDs 从各自的 Snapshot 带到对应的 Template 上。
+func FromBundle(snapshots []workflowtemplate.Snapshot) (*Registry, error) {
+	reg := &Registry{byID: make(map[string]*Template)}
+	for _, snap := range snapshots {
+		tpl := &Template{
+			ID:               snap.TemplateID,
+			Description:      snap.Description,
+			Inputs:           snap.Inputs,
+			Outputs:          snap.Outputs,
+			Dependencies:     snap.Dependencies,
+			Graph:            snap.Graph,
+			Version:          strconv.FormatInt(snap.Revision, 10),
+			VisibleTenantIDs: snap.VisibleTenantIDs,
+		}
+		if err := tpl.Validate(); err != nil {
+			return nil, fmt.Errorf("workflow: template %q from control plane: %w", tpl.ID, err)
+		}
+		if _, dup := reg.byID[tpl.ID]; dup {
+			return nil, fmt.Errorf("workflow: control plane bundle declares id %q more than once", tpl.ID)
+		}
+		reg.byID[tpl.ID] = tpl
+		reg.ids = append(reg.ids, tpl.ID)
+	}
+	sort.Strings(reg.ids)
+	return reg, nil
+}
+
+// BundleDigest fingerprints every template currently in the registry,
+// independently of iteration order, for status reporting (P03). A
+// file-loaded template carries no revision, so it contributes Revision 0;
+// this is the same registry either source builds, so both report through
+// this one method rather than each computing its own notion of a digest.
+//
+// BundleDigest 为目录中当前的每个模板取指纹，不受遍历顺序影响，用于状态上报
+// （P03）。文件加载的模板不携带版本，因此贡献 Revision 0；两种来源构建的是同一种
+// Registry，因此都通过这一个方法上报，而不是各自计算一套摘要。
+func (r *Registry) BundleDigest() (string, error) {
+	if r == nil {
+		return workflowtemplate.BundleDigest(nil)
+	}
+	infos := make([]workflowtemplate.RevisionInfo, 0, len(r.byID))
+	for _, id := range r.ids {
+		tpl := r.byID[id]
+		digest, err := workflowtemplate.Digest(tpl.ID, workflowtemplate.Content{
+			Description:  tpl.Description,
+			Inputs:       tpl.Inputs,
+			Outputs:      tpl.Outputs,
+			Dependencies: tpl.Dependencies,
+			Graph:        tpl.Graph,
+		}, tpl.VisibleTenantIDs)
+		if err != nil {
+			return "", err
+		}
+		revision, _ := strconv.ParseInt(tpl.Version, 10, 64)
+		infos = append(infos, workflowtemplate.RevisionInfo{TemplateID: tpl.ID, Revision: revision, Digest: digest})
+	}
+	return workflowtemplate.BundleDigest(infos)
 }
 
 // Lookup returns the template registered under id.

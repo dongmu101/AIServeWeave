@@ -2,6 +2,7 @@ package controlplaneclient
 
 import (
 	"context"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 )
@@ -67,13 +68,17 @@ func (g *GatewayPersister) UpdateJobState(ctx context.Context, tenantID, jobID, 
 }
 
 // CreateJobArtifact implements httpapi.JobPersistClient.
-func (g *GatewayPersister) CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType string) error {
+func (g *GatewayPersister) CreateJobArtifact(ctx context.Context, jobID, artifactID, tenantID, filename, subfolder, artifactType, sha256, contentType, storageKey string, sizeBytes int64) error {
 	_, err := g.client.CreateJobArtifact(ctx, jobID, CreateJobArtifactRequest{
-		ArtifactID: artifactID,
-		TenantID:   tenantID,
-		Filename:   filename,
-		Subfolder:  subfolder,
-		Type:       artifactType,
+		ArtifactID:  artifactID,
+		TenantID:    tenantID,
+		Filename:    filename,
+		Subfolder:   subfolder,
+		Type:        artifactType,
+		SHA256:      sha256,
+		SizeBytes:   sizeBytes,
+		ContentType: contentType,
+		StorageKey:  storageKey,
 	})
 	return err
 }
@@ -104,7 +109,29 @@ func (g *GatewayPersister) ListActiveJobsForRoute(ctx context.Context, nodeID, r
 	return out, nil
 }
 
+// ListExpiredJobArtifacts implements httpapi.ArtifactCleanupClient.
+func (g *GatewayPersister) ListExpiredJobArtifacts(ctx context.Context, artifactType string, cutoff time.Time) ([]httpapi.ExpiredJobArtifact, error) {
+	artifacts, err := g.client.ListExpiredJobArtifacts(ctx, artifactType, cutoff)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]httpapi.ExpiredJobArtifact, len(artifacts))
+	for i, a := range artifacts {
+		out[i] = httpapi.ExpiredJobArtifact{
+			ArtifactID: a.ArtifactID, JobID: a.JobID, TenantID: a.TenantID,
+			Type: a.Type, StorageKey: a.StorageKey, CreatedAt: a.CreatedAt,
+		}
+	}
+	return out, nil
+}
+
+// DeleteJobArtifact implements httpapi.ArtifactCleanupClient.
+func (g *GatewayPersister) DeleteJobArtifact(ctx context.Context, jobID, artifactID string) error {
+	return g.client.DeleteJobArtifact(ctx, jobID, artifactID)
+}
+
 var (
-	_ httpapi.JobPersistClient  = (*GatewayPersister)(nil)
-	_ httpapi.JobRecoveryClient = (*GatewayPersister)(nil)
+	_ httpapi.JobPersistClient      = (*GatewayPersister)(nil)
+	_ httpapi.JobRecoveryClient     = (*GatewayPersister)(nil)
+	_ httpapi.ArtifactCleanupClient = (*GatewayPersister)(nil)
 )

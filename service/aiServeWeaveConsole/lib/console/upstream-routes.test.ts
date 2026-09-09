@@ -227,7 +227,7 @@ test("the operator surface is separate from the tenant one", () => {
     {
       name: "an unknown operator path",
       method: "GET",
-      path: "/operator/v1/routes",
+      path: "/operator/v1/unknown",
       operator: null,
       tenant: null,
     },

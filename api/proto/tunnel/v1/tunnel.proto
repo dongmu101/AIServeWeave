@@ -326,6 +326,7 @@ enum Operation {
   OPERATION_WORKFLOW_CANCEL = 8;
   OPERATION_ARTIFACT_OPEN = 9;
   OPERATION_ARTIFACT_LIST = 10;
+  OPERATION_INPUT_UPLOAD = 11;
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose
@@ -815,4 +816,33 @@ message ArtifactRef {
 // a bulk slot.
 message ArtifactList {
   repeated ArtifactRef artifacts = 1;
+}
+
+// InputUploadRequest is the OPERATION_INPUT_UPLOAD request payload's
+// metadata (STATUS.md's P04, the input-upload half of "文件与产物"). The
+// bytes themselves follow as DataChunks and RequestEnd closes them, the same
+// "headers then DataChunks then RequestEnd" shape WORKFLOW_SUBMIT already
+// uses for a body too large to fit in RequestHeaders.payload — reused here
+// rather than inventing a second framing for request bodies.
+//
+// This message deliberately carries no destination beyond filename/subfolder:
+// where the bytes land on disk is decided entirely by the runtime adapter
+// that receives them (e.g. common/runtime/workflow/comfyui forwarding to
+// ComfyUI's own /upload/image), never by a path or URL named here — the same
+// "no message here can express fetch this URL" rule this file's header
+// states for every other operation.
+message InputUploadRequest {
+  string filename = 1;                  // caller-supplied name; never interpreted as a filesystem path
+  string subfolder = 2;                 // optional backend-specific subfolder, e.g. ComfyUI's input subfolders
+  int64 size = 3;                       // exact byte count the DataChunks will carry; -1 if unknown
+  string sha256 = 4;                    // optional integrity check computed by the caller before sending, hex-encoded; empty if not computed
+}
+
+// InputUploadResult is the OPERATION_INPUT_UPLOAD response payload.
+message InputUploadResult {
+  // input_ref is an opaque handle a later WORKFLOW_SUBMIT's template can
+  // reference (e.g. the filename ComfyUI's own /upload/image assigned,
+  // which may differ from the requested filename on a collision). It is
+  // meaningful only to the runtime adapter that produced it.
+  string input_ref = 1;
 }

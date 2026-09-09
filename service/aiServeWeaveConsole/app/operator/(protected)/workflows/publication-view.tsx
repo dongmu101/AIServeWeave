@@ -29,10 +29,11 @@ export function PublicationView() {
     {rollout.error ? <ErrorState message={rollout.error} onRetry={rollout.reload} /> : rollout.loading || !rollout.data ? <LoadingState label="正在采集发布状态" /> : <>
       <FleetFreshness collectedAt={rollout.data.collectedAt} replicas={rollout.data.replicas} partial={rollout.data.partial} />
       {shown.length === 0 ? <EmptyState title={rollout.data.templates.length ? "没有符合筛选条件的模板" : "本次采集未发现模板"} /> : <Table>
-        <TableHeader><TableRow><TableHead>模板</TableHead><TableHead>已注册副本</TableHead><TableHead>校验</TableHead><TableHead>声明一致性</TableHead></TableRow></TableHeader>
+        <TableHeader><TableRow><TableHead>模板</TableHead><TableHead>已注册副本</TableHead><TableHead>版本 / 可见范围</TableHead><TableHead>校验</TableHead><TableHead>声明一致性</TableHead></TableRow></TableHeader>
         <TableBody>{shown.map((template) => <TableRow key={template.id}>
           <TableCell><code className="text-xs">{template.id}</code><p className="text-xs text-muted-foreground">{template.description}</p></TableCell>
           <TableCell className="text-xs">{template.replicas.join("、") || "未知"}</TableCell>
+          <TableCell className="text-xs">{template.version ? `v${template.version}` : "文件模式（无版本）"}<br />{template.visibleTenantIds.length ? `${template.visibleTenantIds.length} 个租户可见` : "对所有租户可见"}</TableCell>
           <TableCell><Badge variant={template.valid ? "outline" : "destructive"}>{template.valid ? "通过" : "未通过"}</Badge>{template.validationError ? <p className="text-xs text-destructive">{template.validationError}</p> : null}</TableCell>
           <TableCell>{template.divergent ? "副本之间不同，调用结果可能不同" : rollout.data?.partial ? "已采集范围内未发现差异" : "已采集副本一致"}</TableCell>
         </TableRow>)}</TableBody>

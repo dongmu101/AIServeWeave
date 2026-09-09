@@ -2,6 +2,7 @@ package tunneltest
 
 import (
 	"context"
+	"io"
 
 	"AIServeWeave/common/runtime"
 )
@@ -97,6 +98,7 @@ type WorkflowRuntime struct {
 	CancelFunc       func(ctx context.Context, runID string) error
 	ArtifactsFunc    func(ctx context.Context, runID string) ([]runtime.ArtifactRef, error)
 	OpenArtifactFunc func(ctx context.Context, ref runtime.ArtifactRef) (runtime.Artifact, error)
+	UploadInputFunc  func(ctx context.Context, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error)
 }
 
 // Submit implements runtime.WorkflowRuntime.
@@ -145,6 +147,19 @@ func (r *WorkflowRuntime) OpenArtifact(ctx context.Context, ref runtime.Artifact
 		return r.OpenArtifactFunc(ctx, ref)
 	}
 	return runtime.Artifact{Ref: ref, Size: -1}, nil
+}
+
+// UploadInput implements runtime.WorkflowRuntime. The default drains body to
+// EOF, the same "someone must consume it" discipline dispatch.go's real
+// callers depend on, rather than silently ignoring what a test sent.
+func (r *WorkflowRuntime) UploadInput(ctx context.Context, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+	if r.UploadInputFunc != nil {
+		return r.UploadInputFunc(ctx, meta, body)
+	}
+	if _, err := io.Copy(io.Discard, body); err != nil {
+		return runtime.InputUploadResult{}, err
+	}
+	return runtime.InputUploadResult{}, nil
 }
 
 // EventStream returns a finished stream carrying events, which is what an

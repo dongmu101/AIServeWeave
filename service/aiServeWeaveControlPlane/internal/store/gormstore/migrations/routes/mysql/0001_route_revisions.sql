@@ -1,0 +1,8 @@
+CREATE TABLE IF NOT EXISTS route_revisions (
+ revision BIGINT PRIMARY KEY,
+ digest VARCHAR(64) NOT NULL,
+ routes_json MEDIUMTEXT NOT NULL,
+ actor_id VARCHAR(32) NOT NULL,
+ created_at DATETIME(6) NOT NULL,
+ rollback_of BIGINT NOT NULL DEFAULT 0
+) ENGINE=InnoDB

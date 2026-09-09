@@ -76,6 +76,6 @@ function record(value: unknown): Record<string, unknown> {
 export function operatorTarget(value?: string | null): string {
   if (!value || /[\\\r\n]/.test(value)) return "/operator/fleet";
   const path = value.split(/[?#]/)[0];
-  if (!["/operator/fleet", "/operator/models", "/operator/workflows", "/operator/audit"].includes(path)) return "/operator/fleet";
+  if (!["/operator/fleet", "/operator/models", "/operator/workflows", "/operator/routes", "/operator/workflow-templates", "/operator/audit"].includes(path)) return "/operator/fleet";
   return value;
 }

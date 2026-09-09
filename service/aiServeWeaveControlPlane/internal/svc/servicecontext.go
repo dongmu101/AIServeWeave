@@ -111,6 +111,12 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		// schema」，一个已经为前四张表选择了这一点的部署，对这两张表也做出了
 		// 同样的选择。一个 PostgreSQL 部署此刻确实还得不到 Job 持久化——这是一个
 		// 真实的缺口，不是被悄悄跳过的功能，且已在 ControlPlane README 里点名。
+		if _, err := st.MigrateRoutes(ctx); err != nil {
+			return nil, errors.Join(errors.New("running the routing schema migration"), err)
+		}
+		if _, err := st.MigrateWorkflowTemplates(ctx); err != nil {
+			return nil, errors.Join(errors.New("running the workflow template schema migration"), err)
+		}
 		if cfg.Database.Driver == config.DriverMySQL {
 			if _, err := st.MigrateJobs(ctx); err != nil {
 				return nil, errors.Join(errors.New("running the jobs schema migration"), err)

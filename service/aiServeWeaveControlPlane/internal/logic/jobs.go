@@ -3,6 +3,7 @@ package logic
 import (
 	"context"
 	"errors"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -214,6 +215,18 @@ type CreateJobArtifactParams struct {
 	Filename   string
 	Subfolder  string
 	Type       string
+	// SHA256, SizeBytes, ContentType and StorageKey are empty/zero when the
+	// Gateway replica reporting this artifact has no object storage
+	// configured, or has not yet copied this artifact's bytes into it. See
+	// model.JobArtifact's doc comment.
+	//
+	// Gateway 副本未配置对象存储、或尚未把这个产物的字节复制进去时，
+	// SHA256、SizeBytes、ContentType 与 StorageKey 均为空/零值。见
+	// model.JobArtifact 的文档注释。
+	SHA256      string
+	SizeBytes   int64
+	ContentType string
+	StorageKey  string
 }
 
 // CreateJobArtifact records one artifact. Like CreateJob, a duplicate id is
@@ -232,13 +245,17 @@ func (s *Service) CreateJobArtifact(ctx context.Context, p CreateJobArtifactPara
 		return model.JobArtifact{}, ErrInvalidInput
 	}
 	artifact := model.JobArtifact{
-		ID:        p.ArtifactID,
-		JobID:     p.JobID,
-		TenantID:  p.TenantID,
-		Filename:  p.Filename,
-		Subfolder: p.Subfolder,
-		Type:      p.Type,
-		CreatedAt: s.clock.Now(),
+		ID:          p.ArtifactID,
+		JobID:       p.JobID,
+		TenantID:    p.TenantID,
+		Filename:    p.Filename,
+		Subfolder:   p.Subfolder,
+		Type:        p.Type,
+		SHA256:      p.SHA256,
+		SizeBytes:   p.SizeBytes,
+		ContentType: p.ContentType,
+		StorageKey:  p.StorageKey,
+		CreatedAt:   s.clock.Now(),
 	}
 	err := s.store.CreateJobArtifact(ctx, &artifact)
 	if err != nil && !errors.Is(err, store.ErrConflict) {
@@ -254,4 +271,31 @@ func (s *Service) CreateJobArtifact(ctx context.Context, p CreateJobArtifactPara
 func (s *Service) ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([]model.JobArtifact, error) {
 	artifacts, err := s.store.ListJobArtifacts(ctx, tenantID, jobID)
 	return artifacts, translate(err)
+}
+
+// ListExpiredJobArtifacts returns up to store.MaxExpiredJobArtifacts
+// artifacts of artifactType created before cutoff, across every tenant —
+// see store.JobArtifacts' ListJobArtifactsBefore for why this one read has
+// no tenant to scope by: a Gateway cleanup sweep (STATUS.md's P04) reaps by
+// age and type, a retention policy Gateway decides, not by who produced an
+// artifact.
+//
+// ListExpiredJobArtifacts 返回最多 store.MaxExpiredJobArtifacts 个、类型为
+// artifactType 且创建于 cutoff 之前的产物，跨越所有租户——为什么这一次读取
+// 没有租户可供限定范围，见 store.JobArtifacts 的 ListJobArtifactsBefore：
+// Gateway 的一次清理扫描（STATUS.md 的 P04）按年龄与类型回收，那是 Gateway
+// 决定的保留策略，不是按谁产出了某个产物来限定范围的东西。
+func (s *Service) ListExpiredJobArtifacts(ctx context.Context, artifactType string, cutoff time.Time) ([]model.JobArtifact, error) {
+	artifacts, err := s.store.ListJobArtifactsBefore(ctx, artifactType, cutoff)
+	return artifacts, translate(err)
+}
+
+// DeleteJobArtifact removes one artifact record. Like CreateJobArtifact, a
+// missing id is not an error: the cleanup sweep that calls this only wants
+// "this row is gone".
+//
+// DeleteJobArtifact 移除一个产物记录。与 CreateJobArtifact 一样，不存在的 id
+// 不算错误：调用它的清理扫描想要的只是「这一行不在了」。
+func (s *Service) DeleteJobArtifact(ctx context.Context, id string) error {
+	return translate(s.store.DeleteJobArtifact(ctx, id))
 }

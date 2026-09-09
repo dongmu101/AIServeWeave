@@ -434,7 +434,41 @@ type JobArtifacts interface {
 	//
 	// ListJobArtifacts 读取一个 job 的产物，并限定在其租户范围内。
 	ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([]model.JobArtifact, error)
+	// ListJobArtifactsBefore returns up to MaxExpiredJobArtifacts artifacts
+	// of artifactType created before cutoff, across every tenant — the
+	// second read in this package with no tenant to scope by, for the same
+	// reason ListActiveJobsForRoute has none: a cleanup sweep (STATUS.md's
+	// P04) reaps artifacts by age and type, a retention policy Gateway
+	// decides, not something scoped by who produced them.
+	//
+	// ListJobArtifactsBefore 返回最多 MaxExpiredJobArtifacts 个、类型为
+	// artifactType 且创建于 cutoff 之前的产物，跨越所有租户——本包中第二次
+	// 不按租户限定范围的读取，理由与 ListActiveJobsForRoute 相同：一次清理
+	// 扫描（STATUS.md 的 P04）按年龄与类型回收产物，那是 Gateway 决定的保留
+	// 策略，不是按谁产出了它来限定范围的东西。
+	ListJobArtifactsBefore(ctx context.Context, artifactType string, cutoff time.Time) ([]model.JobArtifact, error)
+	// DeleteJobArtifact removes one artifact record. Deleting an id that
+	// does not exist is not an error: the cleanup sweep that calls this only
+	// ever wants "this row is gone", and a row an earlier, interrupted sweep
+	// already deleted already guarantees that.
+	//
+	// DeleteJobArtifact 移除一个产物记录。删除一个不存在的 id 不算错误：
+	// 调用它的清理扫描想要的始终只是「这一行不在了」，而一次更早、被中断的
+	// 扫描如果已经删过它，这件事本就已经成立。
+	DeleteJobArtifact(ctx context.Context, id string) error
 }
+
+// MaxExpiredJobArtifacts bounds ListJobArtifactsBefore, the same way
+// MaxActiveJobsForRoute bounds ListActiveJobsForRoute: it is not a page —
+// there is no cursor — and it exists so one cleanup sweep tick does bounded
+// work. Artifacts past the cap are not lost: the next tick reaps them, aged
+// further still.
+//
+// MaxExpiredJobArtifacts 限制 ListJobArtifactsBefore，与 MaxActiveJobsForRoute
+// 限制 ListActiveJobsForRoute 的方式相同：它不是一页——没有游标——存在的意义
+// 是让一次清理扫描的一轮做有界的工作。超出上限的产物并未丢失：下一轮扫描会
+// 回收它们，届时它们只是又老了一些。
+const MaxExpiredJobArtifacts = 200
 
 // Store is every persistence capability the service has, for wiring at
 // startup. Handlers and logic take the narrow interfaces above, never this.
@@ -442,6 +476,8 @@ type JobArtifacts interface {
 // Store 是本服务全部的持久化能力，供启动时装配使用。handler 与 logic 取用上面那些
 // 窄接口，绝不取用它。
 type Store interface {
+	Routes
+	WorkflowTemplates
 	Tenants
 	Users
 	PlatformOperators

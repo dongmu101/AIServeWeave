@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"strings"
 	"testing"
 
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -134,6 +135,31 @@ func runtimeAgent(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunne
 			}
 		}
 		return nil
+
+	case tunnelv1.Operation_OPERATION_INPUT_UPLOAD:
+		// Like WORKFLOW_SUBMIT above, the point of asserting on body here —
+		// on the Agent side of the tunnel — is that the bytes actually made
+		// the trip through DataChunk framing intact, not merely that
+		// NodeRuntime believes it sent them.
+		//
+		// 与上面的 WORKFLOW_SUBMIT 一样，在这里——隧道的 Agent 一侧——对 body
+		// 断言的意义在于字节确实完整地经由 DataChunk 分帧走完了这趟旅程，
+		// 而不仅仅是 NodeRuntime 自认为发送过它们。
+		meta, err := tunnelwire.UnmarshalInputUploadRequest(req.GetPayload())
+		if err != nil {
+			return err
+		}
+		var joined []byte
+		for _, chunk := range body {
+			joined = append(joined, chunk...)
+		}
+		payload, err := tunnelwire.MarshalInputUploadResult(runtime.InputUploadResult{
+			InputRef: meta.Filename + ":" + string(joined),
+		})
+		if err != nil {
+			return err
+		}
+		return reply(dataFrame(payload))
 	}
 	return errors.New("unsupported operation")
 }
@@ -294,6 +320,20 @@ func TestNodeRuntimeOpenArtifactStreamsTheBody(t *testing.T) {
 	}
 	if string(body) != "abcdef" {
 		t.Errorf("body = %q, want %q", body, "abcdef")
+	}
+}
+
+func TestNodeRuntimeUploadInputStreamsTheBody(t *testing.T) {
+	_, rt := newRuntimeHarness(t)
+
+	result, err := rt.UploadInput(context.Background(),
+		runtime.InputUploadMeta{Filename: "photo.png", Size: 12},
+		strings.NewReader("hello world!"))
+	if err != nil {
+		t.Fatalf("UploadInput: %v", err)
+	}
+	if result.InputRef != "photo.png:hello world!" {
+		t.Errorf("InputRef = %q, want the Agent's echo of filename and full body", result.InputRef)
 	}
 }
 

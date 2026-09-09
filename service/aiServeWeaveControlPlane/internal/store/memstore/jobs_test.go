@@ -3,6 +3,7 @@ package memstore_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
@@ -242,5 +243,108 @@ func TestListJobArtifactsIsScopedToTenantAndJob(t *testing.T) {
 		if a.JobID != "job_1" || a.TenantID != "tenant-a" {
 			t.Errorf("ListJobArtifacts returned artifact %+v outside its scope", a)
 		}
+	}
+}
+
+func TestListJobArtifactsBeforeFiltersByTypeAgeAndAcrossTenants(t *testing.T) {
+	s := memstore.New()
+	ctx := context.Background()
+	now := time.Now()
+	for _, a := range []*model.JobArtifact{
+		{ID: "art_old_output_a", TenantID: "tenant-a", Type: "output", CreatedAt: now.Add(-48 * time.Hour)},
+		{ID: "art_old_output_b", TenantID: "tenant-b", Type: "output", CreatedAt: now.Add(-72 * time.Hour)},
+		{ID: "art_new_output", TenantID: "tenant-a", Type: "output", CreatedAt: now.Add(-time.Hour)},
+		{ID: "art_old_temp", TenantID: "tenant-a", Type: "temp", CreatedAt: now.Add(-48 * time.Hour)},
+	} {
+		if err := s.CreateJobArtifact(ctx, a); err != nil {
+			t.Fatalf("CreateJobArtifact(%s): %v", a.ID, err)
+		}
+	}
+
+	got, err := s.ListJobArtifactsBefore(ctx, "output", now.Add(-24*time.Hour))
+	if err != nil {
+		t.Fatalf("ListJobArtifactsBefore: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("ListJobArtifactsBefore(output, -24h) returned %d, want 2 (both old outputs, across tenants)", len(got))
+	}
+	ids := map[string]bool{}
+	for _, a := range got {
+		ids[a.ID] = true
+	}
+	if !ids["art_old_output_a"] || !ids["art_old_output_b"] {
+		t.Errorf("ListJobArtifactsBefore = %v, want both old output artifacts regardless of tenant", got)
+	}
+	if ids["art_new_output"] {
+		t.Error("ListJobArtifactsBefore returned an artifact newer than the cutoff")
+	}
+	if ids["art_old_temp"] {
+		t.Error("ListJobArtifactsBefore returned an artifact of a different type")
+	}
+}
+
+func TestListJobArtifactsBeforeOrdersOldestFirstAndCapsAtTheLimit(t *testing.T) {
+	s := memstore.New()
+	ctx := context.Background()
+	now := time.Now()
+	const total = store.MaxExpiredJobArtifacts + 5
+	for i := range total {
+		a := &model.JobArtifact{
+			ID:        fmt.Sprintf("art_%03d", i),
+			TenantID:  "tenant-a",
+			Type:      "output",
+			CreatedAt: now.Add(-time.Duration(total-i) * time.Minute), // ascending: art_000 is oldest
+		}
+		if err := s.CreateJobArtifact(ctx, a); err != nil {
+			t.Fatalf("CreateJobArtifact(%s): %v", a.ID, err)
+		}
+	}
+
+	got, err := s.ListJobArtifactsBefore(ctx, "output", now)
+	if err != nil {
+		t.Fatalf("ListJobArtifactsBefore: %v", err)
+	}
+	if len(got) != store.MaxExpiredJobArtifacts {
+		t.Fatalf("ListJobArtifactsBefore returned %d, want exactly the cap %d", len(got), store.MaxExpiredJobArtifacts)
+	}
+	if got[0].ID != "art_000" {
+		t.Errorf("first result = %q, want the oldest artifact art_000", got[0].ID)
+	}
+	for i := 1; i < len(got); i++ {
+		if got[i].CreatedAt.Before(got[i-1].CreatedAt) {
+			t.Fatalf("result %d (%s, %s) is older than result %d (%s, %s), want oldest-first order",
+				i, got[i].ID, got[i].CreatedAt, i-1, got[i-1].ID, got[i-1].CreatedAt)
+		}
+	}
+}
+
+func TestDeleteJobArtifactRemovesTheRowAndIsIdempotent(t *testing.T) {
+	s := memstore.New()
+	ctx := context.Background()
+	if err := s.CreateJobArtifact(ctx, &model.JobArtifact{ID: "art_1", JobID: "job_1", TenantID: "tenant-a"}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	if err := s.DeleteJobArtifact(ctx, "art_1"); err != nil {
+		t.Fatalf("first DeleteJobArtifact: %v", err)
+	}
+	got, err := s.ListJobArtifacts(ctx, "tenant-a", "job_1")
+	if err != nil {
+		t.Fatalf("ListJobArtifacts: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("ListJobArtifacts after delete = %v, want none", got)
+	}
+
+	// A missing id is not an error — the cleanup sweep that calls this only
+	// wants "this row is gone", and it already is.
+	//
+	// 不存在的 id 不算错误——调用它的清理扫描想要的只是「这一行不在了」，
+	// 而它本就已经不在了。
+	if err := s.DeleteJobArtifact(ctx, "art_1"); err != nil {
+		t.Fatalf("second DeleteJobArtifact (already gone): %v, want nil", err)
+	}
+	if err := s.DeleteJobArtifact(ctx, "art_never_existed"); err != nil {
+		t.Fatalf("DeleteJobArtifact on an id that never existed: %v, want nil", err)
 	}
 }

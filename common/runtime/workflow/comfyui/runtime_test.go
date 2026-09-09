@@ -57,6 +57,17 @@ type fakeComfy struct {
 	artifactSize  int64 // when > 0, overrides the advertised Content-Length
 	artifactGone  bool
 	viewCallCount int
+
+	uploadStatus    int
+	uploadName      string // overrides the echoed filename when set, simulating ComfyUI's collision rename
+	uploadSubfolder string
+	// uploadReceived records what the last /upload/image call actually sent,
+	// so a test can assert the multipart body carried the real bytes and
+	// fields rather than trusting the response alone.
+	uploadReceived struct {
+		filename, subfolder, typ string
+		body                     []byte
+	}
 }
 
 func newFakeComfy(t *testing.T, opts ...func(*fakeComfy)) *fakeComfy {
@@ -213,6 +224,55 @@ func newFakeComfy(t *testing.T, opts ...func(*fakeComfy)) *fakeComfy {
 		_, _ = io.WriteString(w, body)
 	})
 
+	mux.HandleFunc("/upload/image", func(w http.ResponseWriter, r *http.Request) {
+		f.record(r.URL.Path)
+		f.mu.Lock()
+		status := f.uploadStatus
+		f.mu.Unlock()
+		if status != 0 {
+			writeError(w, status, "unavailable")
+			return
+		}
+		if err := r.ParseMultipartForm(32 << 20); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		file, header, err := r.FormFile("image")
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		defer file.Close()
+		body, err := io.ReadAll(file)
+		if err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+
+		receivedSubfolder := r.FormValue("subfolder")
+
+		f.mu.Lock()
+		f.uploadReceived.filename = header.Filename
+		f.uploadReceived.subfolder = receivedSubfolder
+		f.uploadReceived.typ = r.FormValue("type")
+		f.uploadReceived.body = body
+		name, subfolder := f.uploadName, f.uploadSubfolder
+		f.mu.Unlock()
+
+		// A real ComfyUI echoes back what it received unless a test scripts
+		// an override to simulate its own collision-rename behavior.
+		//
+		// 真实的 ComfyUI 会原样回显收到的内容，除非测试脚本化了一个覆盖值
+		// 来模拟它自己的重名改名行为。
+		if name == "" {
+			name = header.Filename
+		}
+		if subfolder == "" {
+			subfolder = receivedSubfolder
+		}
+		writeJSON(w, map[string]any{"name": name, "subfolder": subfolder, "type": "input"})
+	})
+
 	f.server = httptest.NewServer(mux)
 	t.Cleanup(f.server.Close)
 	return f
@@ -247,6 +307,13 @@ func (f *fakeComfy) recorded() []string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]string(nil), f.calls...)
+}
+
+func (f *fakeComfy) lastUpload() (filename, subfolder, typ string, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	r := f.uploadReceived
+	return r.filename, r.subfolder, r.typ, append([]byte(nil), r.body...)
 }
 
 func (f *fakeComfy) called(path string) bool {
@@ -1299,6 +1366,79 @@ func TestOpenArtifactRequiresAFilename(t *testing.T) {
 
 	_, err := rt.OpenArtifact(context.Background(), runtime.ArtifactRef{RunID: testRunID})
 	requireErrorCode(t, err, runtime.ErrorInvalidConfig)
+}
+
+func TestUploadInputStreamsTheBodyToUploadImage(t *testing.T) {
+	f := newFakeComfy(t)
+	rt := newRuntime(t, f, newScriptedWS(1))
+	mustDiscover(t, rt)
+
+	result, err := rt.UploadInput(context.Background(),
+		runtime.InputUploadMeta{Filename: "photo.png", Subfolder: "batch-1", Size: 12},
+		strings.NewReader("hello world!"))
+	if err != nil {
+		t.Fatalf("UploadInput: %v", err)
+	}
+
+	if result.InputRef != "batch-1/photo.png" {
+		t.Errorf("InputRef = %q, want %q (ComfyUI echoed the requested name and subfolder)", result.InputRef, "batch-1/photo.png")
+	}
+
+	filename, subfolder, typ, body := f.lastUpload()
+	if filename != "photo.png" {
+		t.Errorf("/upload/image received filename = %q, want %q", filename, "photo.png")
+	}
+	if subfolder != "batch-1" {
+		t.Errorf("/upload/image received subfolder = %q, want %q", subfolder, "batch-1")
+	}
+	if typ != "input" {
+		t.Errorf("/upload/image received type = %q, want %q", typ, "input")
+	}
+	if string(body) != "hello world!" {
+		t.Errorf("/upload/image received body = %q, want %q", body, "hello world!")
+	}
+}
+
+// TestUploadInputHonorsComfyUIsRenameOnCollision covers ComfyUI appending a
+// counter to a filename that already exists rather than overwriting it: the
+// returned InputRef must reflect what ComfyUI actually stored the file
+// under, not what the caller asked for.
+//
+// TestUploadInputHonorsComfyUIsRenameOnCollision 覆盖的是 ComfyUI 对已存在的
+// 文件名追加计数器而不是覆盖它的情形：返回的 InputRef 必须反映 ComfyUI 实际
+// 存储该文件所用的名字，而不是调用方请求的那个。
+func TestUploadInputHonorsComfyUIsRenameOnCollision(t *testing.T) {
+	f := newFakeComfy(t, func(f *fakeComfy) { f.uploadName = "photo (1).png" })
+	rt := newRuntime(t, f, newScriptedWS(1))
+	mustDiscover(t, rt)
+
+	result, err := rt.UploadInput(context.Background(),
+		runtime.InputUploadMeta{Filename: "photo.png", Size: 5}, strings.NewReader("hello"))
+	if err != nil {
+		t.Fatalf("UploadInput: %v", err)
+	}
+	if result.InputRef != "photo (1).png" {
+		t.Errorf("InputRef = %q, want the name ComfyUI actually stored it under", result.InputRef)
+	}
+}
+
+func TestUploadInputRequiresAFilename(t *testing.T) {
+	f := newFakeComfy(t)
+	rt := newRuntime(t, f, newScriptedWS(1))
+	mustDiscover(t, rt)
+
+	_, err := rt.UploadInput(context.Background(), runtime.InputUploadMeta{}, strings.NewReader(""))
+	requireErrorCode(t, err, runtime.ErrorInvalidConfig)
+}
+
+func TestUploadInputSurfacesAnUpstreamFailure(t *testing.T) {
+	f := newFakeComfy(t, func(f *fakeComfy) { f.uploadStatus = http.StatusInternalServerError })
+	rt := newRuntime(t, f, newScriptedWS(1))
+	mustDiscover(t, rt)
+
+	_, err := rt.UploadInput(context.Background(),
+		runtime.InputUploadMeta{Filename: "photo.png"}, strings.NewReader("x"))
+	requireErrorCode(t, err, runtime.ErrorUpstream)
 }
 
 func TestArtifactsAreReadFromHistory(t *testing.T) {

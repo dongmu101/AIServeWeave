@@ -18,6 +18,7 @@ const testGraph = `{
   "3": {"class_type": "KSampler", "inputs": {"seed": 0, "steps": 20, "cfg": 8.0, "model": ["4", 0]}},
   "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512, "batch_size": 1}},
   "6": {"class_type": "CLIPTextEncode", "inputs": {"text": "", "clip": ["4", 1]}, "_meta": {"title": "Positive"}},
+  "7": {"class_type": "LoadImage", "inputs": {"image": "example.png"}},
   "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0]}}
 }`
 
@@ -29,6 +30,7 @@ func testTemplate(t *testing.T) *workflow.Template {
 			{Name: "prompt", Node: "6", Field: "text", Type: workflow.InputString, Required: true, MaxLength: 16},
 			{Name: "width", Node: "5", Field: "width", Type: workflow.InputInteger, Default: json.RawMessage(`768`), Min: f(64), Max: f(2048)},
 			{Name: "cfg", Node: "3", Field: "cfg", Type: workflow.InputNumber, Min: f(0), Max: f(20)},
+			{Name: "image", Node: "7", Field: "image", Type: workflow.InputFile},
 		},
 		Graph: json.RawMessage(testGraph),
 	}
@@ -60,10 +62,10 @@ func nodeField(t *testing.T, bound json.RawMessage, node, field string) any {
 
 func TestBindAppliesDeclaredInputs(t *testing.T) {
 	tpl := testTemplate(t)
-	bound, err := tpl.Bind(map[string]json.RawMessage{
+	bound, _, err := tpl.Bind(map[string]json.RawMessage{
 		"prompt": json.RawMessage(`"a cat"`),
 		"width":  json.RawMessage(`1024`),
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("Bind() error = %v, want nil", err)
 	}
@@ -91,7 +93,7 @@ func TestBindAppliesDeclaredInputs(t *testing.T) {
 
 func TestBindAppliesDefaultForOmittedInput(t *testing.T) {
 	tpl := testTemplate(t)
-	bound, err := tpl.Bind(map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`)})
+	bound, _, err := tpl.Bind(map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`)}, nil)
 	if err != nil {
 		t.Fatalf("Bind() error = %v, want nil", err)
 	}
@@ -103,7 +105,7 @@ func TestBindAppliesDefaultForOmittedInput(t *testing.T) {
 func TestBindLeavesTemplateGraphUnchanged(t *testing.T) {
 	tpl := testTemplate(t)
 	before := string(tpl.Graph)
-	if _, err := tpl.Bind(map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`)}); err != nil {
+	if _, _, err := tpl.Bind(map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`)}, nil); err != nil {
 		t.Fatalf("Bind() error = %v, want nil", err)
 	}
 	if got := string(tpl.Graph); got != before {
@@ -171,7 +173,7 @@ func TestBindRejects(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			tpl := testTemplate(t)
-			bound, err := tpl.Bind(tt.values)
+			bound, _, err := tpl.Bind(tt.values, nil)
 			if err == nil {
 				t.Fatalf("Bind() error = nil, want an error mentioning %q; bound = %s", tt.wantInput, bound)
 			}
@@ -197,12 +199,147 @@ func TestBindRejects(t *testing.T) {
 func TestBindTruncatesUnknownInputName(t *testing.T) {
 	tpl := testTemplate(t)
 	long := strings.Repeat("x", 4096)
-	_, err := tpl.Bind(map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`), long: json.RawMessage(`1`)})
+	_, _, err := tpl.Bind(map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`), long: json.RawMessage(`1`)}, nil)
 	var inputErr *workflow.InputError
 	if !errors.As(err, &inputErr) {
 		t.Fatalf("Bind() error = %v, want *workflow.InputError", err)
 	}
 	if len(inputErr.Name) > workflow.MaxInputNameInError {
 		t.Errorf("InputError.Name is %d bytes, want at most %d", len(inputErr.Name), workflow.MaxInputNameInError)
+	}
+}
+
+func requiredValues() map[string]json.RawMessage {
+	return map[string]json.RawMessage{"prompt": json.RawMessage(`"a cat"`)}
+}
+
+// TestBindReturnsAPendingFileForASuppliedFileInput covers the split Bind
+// makes for a file-typed input: the graph field it targets is left
+// untouched (there is no value to substitute yet), and the input is
+// reported back as a PendingFile carrying everything a later
+// scheduler.UploadInput + workflow.SetGraphField step needs.
+//
+// TestBindReturnsAPendingFileForASuppliedFileInput 覆盖 Bind 对一个文件类型
+// 输入所做的拆分：它所指向的图字段保持不动（此刻还没有可替换的取值），
+// 而该输入会作为一个 PendingFile 被回报，携带之后一步
+// scheduler.UploadInput + workflow.SetGraphField 所需的一切。
+func TestBindReturnsAPendingFileForASuppliedFileInput(t *testing.T) {
+	tpl := testTemplate(t)
+	bound, pending, err := tpl.Bind(requiredValues(), map[string]workflow.FileHeader{
+		"image": {Filename: "cat.png", Size: 1234},
+	})
+	if err != nil {
+		t.Fatalf("Bind() error = %v, want nil", err)
+	}
+	if len(pending) != 1 {
+		t.Fatalf("pending = %d, want 1", len(pending))
+	}
+	p := pending[0]
+	if p.Name != "image" || p.Node != "7" || p.Field != "image" || p.Filename != "cat.png" || p.Size != 1234 {
+		t.Errorf("pending[0] = %+v, want the declared input's Node/Field plus the given filename and size", p)
+	}
+	// The graph field is untouched: it still holds whatever the template
+	// author's own graph had there, not the caller's filename.
+	//
+	// 图字段保持原样：那里仍是模板作者自己的图本来就有的东西，而不是调用方
+	// 给出的文件名。
+	if got, want := nodeField(t, bound, "7", "image"), "example.png"; got != want {
+		t.Errorf("node 7 image = %v, want the template's own untouched %q", got, want)
+	}
+}
+
+func TestBindSkipsAnOptionalFileInputThatWasNotSupplied(t *testing.T) {
+	tpl := testTemplate(t)
+	_, pending, err := tpl.Bind(requiredValues(), nil)
+	if err != nil {
+		t.Fatalf("Bind() error = %v, want nil", err)
+	}
+	if len(pending) != 0 {
+		t.Errorf("pending = %+v, want none: the file input is optional and was not supplied", pending)
+	}
+}
+
+func TestBindRejectsAScalarValueForAFileInput(t *testing.T) {
+	tpl := testTemplate(t)
+	values := requiredValues()
+	values["image"] = json.RawMessage(`"cat.png"`)
+	_, _, err := tpl.Bind(values, nil)
+	var inputErr *workflow.InputError
+	if !errors.As(err, &inputErr) {
+		t.Fatalf("Bind() error = %v, want *workflow.InputError", err)
+	}
+	if inputErr.Name != "image" || !strings.Contains(inputErr.Reason, "file") {
+		t.Errorf("InputError = %+v, want it to name image and explain it must be a file", inputErr)
+	}
+}
+
+func TestBindRejectsAFilePartForANonFileInput(t *testing.T) {
+	tpl := testTemplate(t)
+	_, _, err := tpl.Bind(requiredValues(), map[string]workflow.FileHeader{"prompt": {Filename: "x"}})
+	var inputErr *workflow.InputError
+	if !errors.As(err, &inputErr) {
+		t.Fatalf("Bind() error = %v, want *workflow.InputError", err)
+	}
+	if inputErr.Name != "prompt" || !strings.Contains(inputErr.Reason, "not a file") {
+		t.Errorf("InputError = %+v, want it to name prompt and explain it is not a file input", inputErr)
+	}
+}
+
+func TestBindRejectsAnUnknownFileName(t *testing.T) {
+	tpl := testTemplate(t)
+	_, _, err := tpl.Bind(requiredValues(), map[string]workflow.FileHeader{"checkpoint": {Filename: "evil.safetensors"}})
+	var inputErr *workflow.InputError
+	if !errors.As(err, &inputErr) {
+		t.Fatalf("Bind() error = %v, want *workflow.InputError", err)
+	}
+	if inputErr.Name != "checkpoint" || !strings.Contains(inputErr.Reason, "not declared") {
+		t.Errorf("InputError = %+v, want it to name checkpoint and say it is not declared", inputErr)
+	}
+}
+
+func TestBindRequiresARequiredFileInput(t *testing.T) {
+	tpl := testTemplate(t)
+	for i := range tpl.Inputs {
+		if tpl.Inputs[i].Name == "image" {
+			tpl.Inputs[i].Required = true
+		}
+	}
+	_, _, err := tpl.Bind(requiredValues(), nil)
+	var inputErr *workflow.InputError
+	if !errors.As(err, &inputErr) {
+		t.Fatalf("Bind() error = %v, want *workflow.InputError", err)
+	}
+	if inputErr.Name != "image" || !strings.Contains(inputErr.Reason, "required") {
+		t.Errorf("InputError = %+v, want it to name image and say it is required", inputErr)
+	}
+}
+
+func TestSetGraphFieldWritesTheValueAndLeavesEverythingElseAlone(t *testing.T) {
+	tpl := testTemplate(t)
+	bound, pending, err := tpl.Bind(requiredValues(), map[string]workflow.FileHeader{"image": {Filename: "cat.png", Size: 3}})
+	if err != nil {
+		t.Fatalf("Bind() error = %v, want nil", err)
+	}
+	p := pending[0]
+
+	patched, err := workflow.SetGraphField(bound, p.Node, p.Field, "cat (1).png")
+	if err != nil {
+		t.Fatalf("SetGraphField() error = %v, want nil", err)
+	}
+	if got, want := nodeField(t, patched, "7", "image"), "cat (1).png"; got != want {
+		t.Errorf("node 7 image = %v, want the uploaded InputRef %q", got, want)
+	}
+	// Everything Bind already wrote survives the patch untouched.
+	//
+	// Bind 已经写下的一切在这次修补之后原样保留。
+	if got, want := nodeField(t, patched, "6", "text"), "a cat"; got != want {
+		t.Errorf("node 6 text = %v, want the value Bind already substituted, %q", got, want)
+	}
+}
+
+func TestSetGraphFieldRejectsAnUnknownNode(t *testing.T) {
+	tpl := testTemplate(t)
+	if _, err := workflow.SetGraphField(tpl.Graph, "no-such-node", "image", "cat.png"); err == nil {
+		t.Fatal("SetGraphField() on an unknown node: want an error, got nil")
 	}
 }

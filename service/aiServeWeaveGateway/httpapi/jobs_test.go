@@ -33,7 +33,7 @@ const textToImageGraph = `{
 //
 // templates 写出一份只含一个模板的目录并加载它，与 Gateway 启动时加载
 // -workflow-templates 的路径一致。
-func templates(t *testing.T) *workflow.Registry {
+func templates(t *testing.T) *workflow.Handle {
 	t.Helper()
 	dir := t.TempDir()
 	body, err := json.Marshal(workflow.Template{
@@ -54,7 +54,7 @@ func templates(t *testing.T) *workflow.Registry {
 	if err != nil {
 		t.Fatalf("workflow.Load: %v", err)
 	}
-	return reg
+	return workflow.NewHandle(reg)
 }
 
 func ptr(v float64) *float64 { return &v }

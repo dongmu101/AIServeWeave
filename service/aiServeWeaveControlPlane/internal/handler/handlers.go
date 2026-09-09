@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"time"
 
@@ -642,19 +643,31 @@ func listFleetModels(ctx *svc.ServiceContext) http.HandlerFunc {
 
 // listWorkflows returns the workflow menu to a signed-in tenant user.
 //
-// The catalogue is the same for every tenant — templates are the Gateway's own
-// file configuration — and it is on the session-guarded API because it is what
-// a caller needs in order to submit a run at all. What it does not carry is
-// the graph, which never leaves the Gateway; see common/workflowview.
+// The catalogue is not the same for every tenant since P03: a template
+// published with a tenant allow list (workflowview.Template.VisibleTenantIDs)
+// is filtered out here for every tenant not on it, before this response ever
+// leaves the control plane. This is on the session-guarded API because it is
+// what a caller needs in order to submit a run at all. What it does not carry
+// is the graph, which never leaves the Gateway; see common/workflowview.
+//
+// Filtering here is a convenience for the menu, not the security boundary:
+// the Gateway itself refuses a run against a template invisible to the
+// submitting tenant (see httpapi.submitRun), independent of whether this
+// listing agrees.
 //
 // listWorkflows 把工作流菜单返回给已登录的租户用户。
 //
-// 这份目录对每个租户都相同——模板是 Gateway 自己的文件配置——它放在由会话守卫的 API 上，
-// 因为那是调用方提交一次运行所必需的东西。它不携带的是图，图从不离开 Gateway；
-// 见 common/workflowview。
+// 自 P03 起，这份目录对每个租户不再相同：一个带租户允许列表发布的模板
+// （workflowview.Template.VisibleTenantIDs），会在这个响应离开控制面之前，为不在
+// 列表上的每个租户过滤掉。它放在由会话守卫的 API 上，因为那是调用方提交一次运行所
+// 必需的东西。它不携带的是图，图从不离开 Gateway；见 common/workflowview。
+//
+// 这里的过滤只是菜单的便利，不是安全边界：Gateway 自己会拒绝对提交租户不可见的
+// 模板发起运行（见 httpapi.submitRun），与这份列表是否一致无关。
 func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		if _, ok := actorFrom(r.Context()); !ok {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
@@ -663,6 +676,13 @@ func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 			respondFleetErr(w, err)
 			return
 		}
+		visible := make([]fleet.Workflow, 0, len(catalogue.Templates))
+		for _, template := range catalogue.Templates {
+			if len(template.VisibleTenantIDs) == 0 || slices.Contains(template.VisibleTenantIDs, actor.TenantID) {
+				visible = append(visible, template)
+			}
+		}
+		catalogue.Templates = visible
 		// A tenant is shown the menu, not the fleet. Both the per-template
 		// replica list and the per-replica status carry replica ids and the
 		// configured endpoints — internal hostnames and ports — and this
@@ -940,12 +960,16 @@ func createJobArtifact(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		artifact, err := ctx.Logic.CreateJobArtifact(r.Context(), logic.CreateJobArtifactParams{
-			ArtifactID: req.ArtifactID,
-			JobID:      jobID,
-			TenantID:   req.TenantID,
-			Filename:   req.Filename,
-			Subfolder:  req.Subfolder,
-			Type:       req.Type,
+			ArtifactID:  req.ArtifactID,
+			JobID:       jobID,
+			TenantID:    req.TenantID,
+			Filename:    req.Filename,
+			Subfolder:   req.Subfolder,
+			Type:        req.Type,
+			SHA256:      req.SHA256,
+			SizeBytes:   req.SizeBytes,
+			ContentType: req.ContentType,
+			StorageKey:  req.StorageKey,
 		})
 		if err != nil {
 			respondErr(w, err)
@@ -979,6 +1003,79 @@ func listJobArtifacts(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// listExpiredJobArtifacts handles GET /internal/v1/job-artifacts/expired. It
+// answers a Gateway cleanup sweep's question "which artifacts of this type
+// are older than this cutoff" (STATUS.md's P04): type and before are query
+// parameters and there is no tenant_id — like listActiveJobsForRoute, this
+// is an internal Job endpoint not scoped by tenant, because the sweep reaps
+// by age and type across the whole fleet, not on behalf of any one tenant's
+// session.
+//
+// listExpiredJobArtifacts 处理 GET /internal/v1/job-artifacts/expired。它
+// 回答一次 Gateway 清理扫描的问题——「这个类型里哪些产物早于这个截止时刻」
+// （STATUS.md 的 P04）：type 与 before 是查询参数，且没有 tenant_id——与
+// listActiveJobsForRoute 一样，这是一个不按租户限定范围的内部 Job 端点，
+// 因为这次扫描是按年龄与类型面向整个机群回收，不是代表某一个租户的会话。
+func listExpiredJobArtifacts(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		query := r.URL.Query()
+		artifactType, beforeParam := query.Get("type"), query.Get("before")
+		if artifactType == "" || beforeParam == "" {
+			writeError(w, http.StatusBadRequest, "type and before are required")
+			return
+		}
+		before, err := time.Parse(time.RFC3339, beforeParam)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "before must be an RFC3339 timestamp")
+			return
+		}
+		artifacts, err := ctx.Logic.ListExpiredJobArtifacts(r.Context(), artifactType, before)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.ExpiredJobArtifact, len(artifacts))
+		for i, a := range artifacts {
+			out[i] = types.ExpiredJobArtifact{
+				ArtifactID: a.ID,
+				JobID:      a.JobID,
+				TenantID:   a.TenantID,
+				Type:       a.Type,
+				StorageKey: a.StorageKey,
+				CreatedAt:  a.CreatedAt,
+			}
+		}
+		writeJSON(w, http.StatusOK, types.ListExpiredJobArtifactsResponse{Items: out})
+	}
+}
+
+// deleteJobArtifact handles DELETE /internal/v1/jobs/:id/artifacts/:artifact_id.
+// The job id in the path is not used to scope the delete — an artifact id is
+// already globally unique and is what the cleanup sweep that calls this
+// holds, from listExpiredJobArtifacts — but the path mirrors
+// createJobArtifact/listJobArtifacts' own shape for a consistent Job
+// artifact URL family rather than introducing a bare /internal/v1/job-artifacts/:id.
+//
+// deleteJobArtifact 处理 DELETE /internal/v1/jobs/:id/artifacts/:artifact_id。
+// 路径里的 job id 不用于限定删除范围——产物 id 本就全局唯一，也正是调用它的
+// 清理扫描从 listExpiredJobArtifacts 拿到手上的东西——但这个路径沿用了
+// createJobArtifact/listJobArtifacts 自己的形状，为的是保持一个一致的 Job
+// 产物 URL 族，而不是另开一个裸的 /internal/v1/job-artifacts/:id。
+func deleteJobArtifact(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := pathvar.Vars(r)["artifact_id"]
+		if artifactID == "" {
+			writeError(w, http.StatusBadRequest, "an artifact id is required")
+			return
+		}
+		if err := ctx.Logic.DeleteJobArtifact(r.Context(), artifactID); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // renderJob converts a stored job to its internal wire form — the storage
 // layer's view, route binding included. See types.JobResponse for why this
 // is safe only because nothing on the tenant-facing Admin API ever calls it.
@@ -1008,13 +1105,16 @@ func renderJob(job model.Job) types.JobResponse {
 // renderJobArtifact 把存储的产物转换成线上形式。
 func renderJobArtifact(a model.JobArtifact) types.JobArtifactResponse {
 	return types.JobArtifactResponse{
-		ArtifactID: a.ID,
-		JobID:      a.JobID,
-		TenantID:   a.TenantID,
-		Filename:   a.Filename,
-		Subfolder:  a.Subfolder,
-		Type:       a.Type,
-		CreatedAt:  a.CreatedAt,
+		ArtifactID:  a.ID,
+		JobID:       a.JobID,
+		TenantID:    a.TenantID,
+		Filename:    a.Filename,
+		Subfolder:   a.Subfolder,
+		Type:        a.Type,
+		SHA256:      a.SHA256,
+		SizeBytes:   a.SizeBytes,
+		ContentType: a.ContentType,
+		CreatedAt:   a.CreatedAt,
 	}
 }
 

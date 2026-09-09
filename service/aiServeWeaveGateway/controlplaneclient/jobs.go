@@ -336,26 +336,38 @@ func (c *JobsClient) ListActiveJobsForRoute(ctx context.Context, nodeID, runtime
 //
 // JobArtifact 是一条已记录的产物。
 type JobArtifact struct {
-	ArtifactID string
-	JobID      string
-	TenantID   string
-	Filename   string
-	Subfolder  string
-	Type       string
-	CreatedAt  time.Time
+	ArtifactID  string
+	JobID       string
+	TenantID    string
+	Filename    string
+	Subfolder   string
+	Type        string
+	SHA256      string
+	SizeBytes   int64
+	ContentType string
+	CreatedAt   time.Time
 }
 
 // CreateJobArtifactRequest is one artifact to record, with the public id the
-// Gateway's own artifact listing already minted for it.
+// Gateway's own artifact listing already minted for it. SHA256, SizeBytes,
+// ContentType and StorageKey are left zero when this replica has no object
+// storage configured, or has not copied this artifact's bytes into it yet —
+// see model.JobArtifact's doc comment on the control plane side.
 //
 // CreateJobArtifactRequest 是要记录的一个产物，携带 Gateway 自己的产物列举已经
-// 为它铸造的公开 id。
+// 为它铸造的公开 id。本副本未配置对象存储、或尚未把这个产物的字节复制进去时，
+// SHA256、SizeBytes、ContentType 与 StorageKey 保持零值——见控制面一侧
+// model.JobArtifact 的文档注释。
 type CreateJobArtifactRequest struct {
-	ArtifactID string
-	TenantID   string
-	Filename   string
-	Subfolder  string
-	Type       string
+	ArtifactID  string
+	TenantID    string
+	Filename    string
+	Subfolder   string
+	Type        string
+	SHA256      string
+	SizeBytes   int64
+	ContentType string
+	StorageKey  string
 }
 
 // CreateJobArtifact records one artifact a run produced. Like CreateJob, a
@@ -365,14 +377,20 @@ type CreateJobArtifactRequest struct {
 // 租户下重复的 id 不是错误。
 func (c *JobsClient) CreateJobArtifact(ctx context.Context, jobID string, req CreateJobArtifactRequest) (JobArtifact, error) {
 	var wire struct {
-		ArtifactID string `json:"artifact_id"`
-		TenantID   string `json:"tenant_id"`
-		Filename   string `json:"filename"`
-		Subfolder  string `json:"subfolder,omitempty"`
-		Type       string `json:"type,omitempty"`
+		ArtifactID  string `json:"artifact_id"`
+		TenantID    string `json:"tenant_id"`
+		Filename    string `json:"filename"`
+		Subfolder   string `json:"subfolder,omitempty"`
+		Type        string `json:"type,omitempty"`
+		SHA256      string `json:"sha256,omitempty"`
+		SizeBytes   int64  `json:"size_bytes,omitempty"`
+		ContentType string `json:"content_type,omitempty"`
+		StorageKey  string `json:"storage_key,omitempty"`
 	}
 	wire.ArtifactID, wire.TenantID, wire.Filename, wire.Subfolder, wire.Type =
 		req.ArtifactID, req.TenantID, req.Filename, req.Subfolder, req.Type
+	wire.SHA256, wire.SizeBytes, wire.ContentType, wire.StorageKey =
+		req.SHA256, req.SizeBytes, req.ContentType, req.StorageKey
 
 	var artifact jobArtifactWire
 	path := "/internal/v1/jobs/" + url.PathEscape(jobID) + "/artifacts"
@@ -398,6 +416,63 @@ func (c *JobsClient) ListJobArtifacts(ctx context.Context, tenantID, jobID strin
 		out[i] = a.toArtifact()
 	}
 	return out, nil
+}
+
+// ExpiredJobArtifact is one artifact record a cleanup sweep (STATUS.md's
+// P04) may reap. Unlike JobArtifact it carries StorageKey: the caller here
+// is exactly the party that needs it, to delete the object storage bytes
+// before the row itself.
+//
+// ExpiredJobArtifact 是一次清理扫描（STATUS.md 的 P04）可能回收的一条产物
+// 记录。与 JobArtifact 不同，它携带 StorageKey：这里的调用方正是需要它的
+// 那一方，用来在删除这一行本身之前，先删掉对象存储里的字节。
+type ExpiredJobArtifact struct {
+	ArtifactID string
+	JobID      string
+	TenantID   string
+	Type       string
+	StorageKey string
+	CreatedAt  time.Time
+}
+
+// ListExpiredJobArtifacts returns up to store.MaxExpiredJobArtifacts
+// artifacts of artifactType created before cutoff, across every tenant —
+// see the control plane's ListJobArtifactsBefore for why this one read has
+// no tenant to scope by.
+//
+// ListExpiredJobArtifacts 返回最多 store.MaxExpiredJobArtifacts 个、类型为
+// artifactType 且创建于 cutoff 之前的产物，跨越所有租户——为什么这一次读取
+// 没有租户可供限定范围，见控制面的 ListJobArtifactsBefore。
+func (c *JobsClient) ListExpiredJobArtifacts(ctx context.Context, artifactType string, cutoff time.Time) ([]ExpiredJobArtifact, error) {
+	var resp struct {
+		Items []expiredJobArtifactWire `json:"items"`
+	}
+	path := "/internal/v1/job-artifacts/expired?type=" + url.QueryEscape(artifactType) +
+		"&before=" + url.QueryEscape(cutoff.Format(time.RFC3339))
+	if err := c.call(ctx, http.MethodGet, path, nil, &resp); err != nil {
+		return nil, err
+	}
+	out := make([]ExpiredJobArtifact, len(resp.Items))
+	for i, a := range resp.Items {
+		out[i] = ExpiredJobArtifact{
+			ArtifactID: a.ArtifactID, JobID: a.JobID, TenantID: a.TenantID,
+			Type: a.Type, StorageKey: a.StorageKey, CreatedAt: a.CreatedAt,
+		}
+	}
+	return out, nil
+}
+
+// DeleteJobArtifact removes one artifact record. Like CreateJobArtifact, a
+// duplicate (here, repeated) call is not an error: deleting an id already
+// gone is exactly what a cleanup sweep retrying after an ambiguous earlier
+// result wants.
+//
+// DeleteJobArtifact 移除一个产物记录。与 CreateJobArtifact 一样，重复调用
+// 不是错误：删除一个已经不在的 id，正是一次清理扫描在更早一次结果不明后
+// 重试时想要的行为。
+func (c *JobsClient) DeleteJobArtifact(ctx context.Context, jobID, artifactID string) error {
+	path := "/internal/v1/jobs/" + url.PathEscape(jobID) + "/artifacts/" + url.PathEscape(artifactID)
+	return c.call(ctx, http.MethodDelete, path, nil, nil)
 }
 
 // jobWire is the internal API's job shape. It stays unexported: Job is what
@@ -434,19 +509,33 @@ func (j jobWire) toJob() Job {
 }
 
 type jobArtifactWire struct {
+	ArtifactID  string    `json:"artifact_id"`
+	JobID       string    `json:"job_id"`
+	TenantID    string    `json:"tenant_id"`
+	Filename    string    `json:"filename"`
+	Subfolder   string    `json:"subfolder,omitempty"`
+	Type        string    `json:"type,omitempty"`
+	SHA256      string    `json:"sha256,omitempty"`
+	SizeBytes   int64     `json:"size_bytes,omitempty"`
+	ContentType string    `json:"content_type,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
+}
+
+type expiredJobArtifactWire struct {
 	ArtifactID string    `json:"artifact_id"`
 	JobID      string    `json:"job_id"`
 	TenantID   string    `json:"tenant_id"`
-	Filename   string    `json:"filename"`
-	Subfolder  string    `json:"subfolder,omitempty"`
 	Type       string    `json:"type,omitempty"`
+	StorageKey string    `json:"storage_key,omitempty"`
 	CreatedAt  time.Time `json:"created_at"`
 }
 
 func (a jobArtifactWire) toArtifact() JobArtifact {
 	return JobArtifact{
 		ArtifactID: a.ArtifactID, JobID: a.JobID, TenantID: a.TenantID,
-		Filename: a.Filename, Subfolder: a.Subfolder, Type: a.Type, CreatedAt: a.CreatedAt,
+		Filename: a.Filename, Subfolder: a.Subfolder, Type: a.Type,
+		SHA256: a.SHA256, SizeBytes: a.SizeBytes, ContentType: a.ContentType,
+		CreatedAt: a.CreatedAt,
 	}
 }
 
@@ -499,6 +588,16 @@ func (c *JobsClient) call(ctx context.Context, method, path string, body, out an
 		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
 			return fmt.Errorf("%w: decoding the response: %v", ErrOutcomeUnknown, err)
 		}
+		return nil
+
+	case http.StatusNoContent:
+		// A 204 carries no body by definition, so out — always nil for the
+		// one caller (DeleteJobArtifact) that reaches this case — is never
+		// decoded into, unlike the 200/201 case above.
+		//
+		// 按定义，204 不携带任何响应体，因此 out——对唯一走到这一分支的调用方
+		// （DeleteJobArtifact）而言始终为 nil——不会像上面的 200/201 那样被
+		// 解码进去。
 		return nil
 
 	case http.StatusNotFound:

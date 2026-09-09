@@ -442,19 +442,50 @@ type CreateJobArtifactRequest struct {
 	Filename   string `json:"filename"`
 	Subfolder  string `json:"subfolder,omitempty"`
 	Type       string `json:"type,omitempty"`
+	// SHA256, SizeBytes, ContentType and StorageKey are omitted when the
+	// reporting Gateway replica has not copied this artifact's bytes into
+	// object storage. See model.JobArtifact's doc comment.
+	//
+	// 上报的 Gateway 副本尚未把这个产物的字节复制进对象存储时，SHA256、
+	// SizeBytes、ContentType 与 StorageKey 均被省略。见 model.JobArtifact
+	// 的文档注释。
+	SHA256      string `json:"sha256,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	StorageKey  string `json:"storage_key,omitempty"`
 }
 
-// JobArtifactResponse is one recorded artifact.
+// JobArtifactResponse is one recorded artifact. It is shared by the
+// internal API's own listing and by the tenant-facing job history view
+// (JobHistoryResponse.Artifacts), so — like JobHistoryResponse's own doc
+// comment already draws for NodeID/RuntimeID/BackendRunID — it carries only
+// what is safe either way: SHA256, SizeBytes and ContentType describe the
+// tenant's own file and are no more revealing than the Content-Disposition
+// a download already sends, but model.JobArtifact's StorageKey never
+// appears here. StorageKey is meaningless without knowing which object
+// storage backend a Gateway replica is configured to read it from, and a
+// tenant has no business learning that backend's internal addressing any
+// more than they do a node id.
 //
-// JobArtifactResponse 是一条已记录的产物。
+// JobArtifactResponse 是一条已记录的产物。它被内部 API 自己的列举与面向
+// 租户的 job 历史视图（JobHistoryResponse.Artifacts）共用，因此——如同
+// JobHistoryResponse 自己的文档注释已经为 NodeID/RuntimeID/BackendRunID
+// 划出的界线——它只携带无论哪种场景都安全的内容：SHA256、SizeBytes 与
+// ContentType 描述的是租户自己的文件，其暴露程度不超过下载本就会发出的
+// Content-Disposition，但 model.JobArtifact 的 StorageKey 从不出现在这里。
+// 不知道 Gateway 副本配置读取它所用的是哪个对象存储后端，StorageKey 就毫无
+// 意义，而租户没有理由了解该后端的内部寻址，正如他们没有理由了解节点 id。
 type JobArtifactResponse struct {
-	ArtifactID string    `json:"artifact_id"`
-	JobID      string    `json:"job_id"`
-	TenantID   string    `json:"tenant_id"`
-	Filename   string    `json:"filename"`
-	Subfolder  string    `json:"subfolder,omitempty"`
-	Type       string    `json:"type,omitempty"`
-	CreatedAt  time.Time `json:"created_at"`
+	ArtifactID  string    `json:"artifact_id"`
+	JobID       string    `json:"job_id"`
+	TenantID    string    `json:"tenant_id"`
+	Filename    string    `json:"filename"`
+	Subfolder   string    `json:"subfolder,omitempty"`
+	Type        string    `json:"type,omitempty"`
+	SHA256      string    `json:"sha256,omitempty"`
+	SizeBytes   int64     `json:"size_bytes,omitempty"`
+	ContentType string    `json:"content_type,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // ListJobArtifactsResponse is one job's recorded artifacts.
@@ -462,6 +493,34 @@ type JobArtifactResponse struct {
 // ListJobArtifactsResponse 是一个 job 已记录的产物。
 type ListJobArtifactsResponse struct {
 	Items []JobArtifactResponse `json:"items"`
+}
+
+// ExpiredJobArtifact is one artifact record a cleanup sweep (STATUS.md's
+// P04) may reap, returned only from the internal (Gateway-only) API — it is
+// not JobArtifactResponse and never will be, because unlike that type it
+// carries StorageKey: the caller here is exactly the one party that needs
+// it, to delete the object storage bytes before the row itself is deleted.
+//
+// ExpiredJobArtifact 是一次清理扫描（STATUS.md 的 P04）可能回收的一条产物
+// 记录，只从内部（仅 Gateway 可用）API 返回——它不是、也永远不会是
+// JobArtifactResponse，因为与那个类型不同，它携带 StorageKey：这里的调用方
+// 正是唯一需要它的那一方，用来在这一行本身被删除之前，先删掉对象存储里的
+// 字节。
+type ExpiredJobArtifact struct {
+	ArtifactID string    `json:"artifact_id"`
+	JobID      string    `json:"job_id"`
+	TenantID   string    `json:"tenant_id"`
+	Type       string    `json:"type"`
+	StorageKey string    `json:"storage_key,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// ListExpiredJobArtifactsResponse is one page of artifacts eligible for
+// cleanup.
+//
+// ListExpiredJobArtifactsResponse 是一页可供清理的产物。
+type ListExpiredJobArtifactsResponse struct {
+	Items []ExpiredJobArtifact `json:"items"`
 }
 
 // ErrorResponse is the failure shape every endpoint returns.

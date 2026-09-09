@@ -1,3 +1,4 @@
+import { readBoundedText } from "./responses";
 import { serverConfig } from "@/lib/server/config";
 
 /**
@@ -44,6 +45,8 @@ export interface UpstreamCall {
    *
    * body 是一个已序列化的 JSON 文档。 */
   body?: string;
+  /** maxResponseBytes bounds route publication responses. / maxResponseBytes 限制路由发布响应。 */
+  maxResponseBytes?: number;
 }
 
 /**
@@ -82,7 +85,9 @@ export async function callControlPlane(
       cache: "no-store",
       signal: AbortSignal.timeout(config.timeoutMs),
     });
-    return { kind: "response", status: response.status, text: await response.text() };
+    const text = call.maxResponseBytes === undefined ? await response.text() : await readBoundedText(response, call.maxResponseBytes);
+    if (text === null) return { kind: "unreachable" };
+    return { kind: "response", status: response.status, text };
   } catch (error) {
     return isTimeout(error) ? { kind: "timeout" } : { kind: "unreachable" };
   }

@@ -93,3 +93,5 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 - 三个列表端点返回 `{items, next_cursor}` 信封，分页是 keyset 游标，接口**没有总数**。游标只放组件状态，URL 里只同步筛选条件（`components/console/use-url-filters.ts`），且不放能标识个人的输入。翻页历史有上界（`lib/console/paging.ts`），一页替换上一页而不是追加。
 
 平台会话实现位于 `lib/console/operator-session.ts` 与 `lib/server/operator-session.ts`，AES-256-GCM 使用独立 HKDF 用途与认证版本。平台审计 `/operator/v1/audit` 与租户审计使用不同会话范围。平台账户由部署管理员经 BootstrapToken 引导创建，不提供浏览器引导注册入口。
+
+路由管理（P02）位于 `/operator/routes`，草稿只在页面保留。平台发布/回滚须携带 expected_revision，不自动重试；读请求须防止过期响应覆盖新的草稿或生效状态。仅匹配路由验证/发布的请求体允许 1 MiB + 64 KiB，不能全局放宽普通管理端点。后端公共校验源是 `common/modelroute`，前端镜像需同步测试。
