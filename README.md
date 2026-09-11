@@ -546,9 +546,9 @@ audit_logs
 
 观测范围包括节点连接与心跳、部署健康、请求量与并发、TTFT、总时长、token 用量、吞吐、错误与重试、ComfyUI 队列及任务时长、GPU OOM、产物传输与存储用量。
 
-指标端点应处于受控网络；节点标识涉及资产信息。标签来源必须受控且基数有界，模型名、请求路径、request ID、Prompt、工作流 JSON 和任意错误文本不能直接成为标签。具体指标、端点配置与实现边界见 [Gateway README](service/aiServeWeaveGateway/README.md) 和 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md)。
+指标端点应处于受控网络；节点标识涉及资产信息。标签来源必须受控且基数有界，模型名、请求路径、request ID、Prompt、工作流 JSON 和任意错误文本不能直接成为标签。具体指标、端点配置与实现边界见 [Gateway README](service/aiServeWeaveGateway/README.md)、[Registry README](service/aiServeWeaveRegistry/README.md#指标)、[控制面 README](service/aiServeWeaveControlPlane/README.md#指标与历史监控p08) 和 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md)。Registry 与控制面均已接入 `common/metrics`，各自的 `-metrics-addr` 与 Gateway 同构。
 
-历史曲线、告警、请求检索和用量账本具有不同的数据保留与授权需求。Console 通过控制面授权查询，不能把副本的实时指标当作历史统计。可用性、延迟、恢复时间与可接受数据丢失范围应有量化验收口径，数值在容量与故障测试后确定。
+历史曲线、告警、请求检索和用量账本具有不同的数据保留与授权需求（P08 完成前者，P09 完成后两者）。历史时序不是独立的 TSDB：控制面定时抓取 Gateway/Registry 的 `/metrics` 文本（`common/metrics.ParseExposition`，零新依赖），按标签白名单聚合后落地到既有关系库的 `metrics_history_points` 表，`GET /operator/v1/metrics/history` 经平台会话授权查询，供 Console `/operator/metrics`（C27）绘制曲线——Console 不能把副本的实时指标当作历史统计。跨服务 trace 目前只做到结构化日志：`common/reqid` 把 Gateway 前门铸造的 request_id 带到 Scheduler、Tunnel 与 Agent 的关键节点，可据此在日志里拼接一次请求的跨服务时间线，尚无独立的 trace 存储或查询入口。可用性、延迟、恢复时间与可接受数据丢失范围应有量化验收口径，数值在容量与故障测试后确定。
 
 ## 代码结构
 

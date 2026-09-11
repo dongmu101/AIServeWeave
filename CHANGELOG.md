@@ -19,6 +19,7 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- P08 指标、追踪与历史监控：Registry 与控制面接入 `common/metrics`（新增 `-metrics-addr`、指标目录与标签基数测试）；控制面新增 `internal/metricshistory` 定时抓取 Gateway/Registry 的 Prometheus 文本、聚合后写入固定版本 SQL 落地的 `metrics_history_points` 表（复用现有关系库，不引入独立时序数据库）与保留期清理；`GET /operator/v1/metrics/history` 与 Console `/operator/metrics`（C27，ECharts `dataZoom`）；新增共享 `common/reqid` 包，把 Gateway 前门的 request_id 带到 Scheduler/Tunnel/Agent 的结构化日志，实现最轻量的跨服务请求关联。
 - P07 数据库升级与恢复：双引擎固定版本 SQL、锁与校验和/dirty 账本、独立 up/status/resume 命令、已有数据升级及原生备份恢复测试；事务 outbox 跨崩溃补发 Key 吊销。
 - P05 用户与会话生命周期：Redis 权威可吊销会话、租户用户与平台运维改密/重置/禁用/启用/角色及会话管理，以及对应 Console 页面。
 - P06 Key 吊销通知：ControlPlane 以 Redis generation 长轮询唤醒 Gateway；健康链路 1 秒内清缓存，通知异常时 Gateway 立即停用正向缓存并逐请求校验。
@@ -28,6 +29,10 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 - Redis 成为 ControlPlane 必需依赖，Compose 使用 AOF `appendfsync always`；无 `sid` 的旧 JWT 升级后失效。
 - 禁用租户用户会在同一数据库事务中吊销其创建的 active API Key；ControlPlane Key 缓存改用 generation 防止并发旧读取回填。
 - Gateway 的 `-key-cache-ttl` 保留为纵深防御；提交后通知前崩溃由 P07 outbox 重试，漏通知、断线重连和控制面副本切换由持久 generation 补偿。
+
+### Fixed
+
+- `common/metrics.Registry` 的 `Counter`/`Gauge`/`Histogram` 此前对 nil 接收者 panic——一个未初始化的 `*Registry` 字段被装进 `runtime.Metrics` 接口后不再是 nil 接口，调用方常见的 `== nil` 判断拦不住它；现在与其余记录点一致，返回丢弃仪器。
 
 ## [0.1.0] - 2026-09-07
 

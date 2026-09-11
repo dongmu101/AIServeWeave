@@ -140,6 +140,18 @@ services:
       - -addr=:9443
       - -data-dir=/data
       - -tls-host=registry,127.0.0.1,localhost
+      # 容器内绑 0.0.0.0，只映射到宿主机回环——与 gateway 的 -metrics-addr 同一条
+      # 理由：导出内容点名每一个曾经注册过的 node_id。绑 0.0.0.0 是为了让控制面
+      # 容器能在 compose 内部网络上以 registry:9091 抓取它（P08 的
+      # MetricsHistory 采集器），而不是为了对宿主机之外开放。
+      #
+      # Bound to 0.0.0.0 inside the container, published only on the host's
+      # loopback — same reasoning as gateway's -metrics-addr: the export
+      # names every node_id ever registered. Binding 0.0.0.0 is so the
+      # control plane container can scrape it as registry:9091 on the
+      # compose-internal network (P08's MetricsHistory collector), not to
+      # open it beyond the host.
+      - -metrics-addr=:9091
       - -log-level=${LOG_LEVEL:-info}
     volumes:
       - registry-data:/data
@@ -147,6 +159,7 @@ services:
       # 暴露到回环，好让宿主机上的 Agent 能换证书。
       # Exposed on loopback so an Agent on the host can get its certificate.
       - "127.0.0.1:${REGISTRY_PORT:-9443}:9443"
+      - "127.0.0.1:${REGISTRY_METRICS_PORT:-9091}:9091"
     depends_on:
       registry-init:
         condition: service_completed_successfully

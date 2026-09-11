@@ -409,16 +409,15 @@ J01～J08 已有定义、建表、内部 API、后台写入、非终态恢复、
 2. **配额是每租户的，不是每 key 的。** 同一租户的多个 key 共用一份额度。按 key 计费需要 `api_keys` 上再加三列与一次额外的表达式，等有人真的需要「给某个集成单独限速」时再做。
 3. **Gateway↔控制面用共享密钥，不是 mTLS。** Gateway 本就在集群自有网络内访问控制面；要更强隔离时再评估。
 4. **X-Forwarded-For 不被采信。** 审计记录的是 `RemoteAddr`。要采信该头，必须与「配置一份可信代理清单」一并改动。
-5. **go-zero 自己的指标没接进 `common/metrics`。** 本服务目前没有 `/metrics` 端点。
-6. **平台运维身份已落地，但归因止步于本服务。** STATUS.md 的 P01 引入了 `platform_operators` 表与 `requirePlatformSession`，`/operator/v1/*` 与节点写路径都由平台运维的会话守卫，本服务的 `audit_logs`（`TenantID=model.PlatformScope`）记着是哪个 operator 做了什么。但这份归因传到 Registry 就断了：本服务用同一把共享的 `Registry.AdminToken` 调用 `TokenAdmin`，Registry 自己分不清这次调用背后是哪个 operator（见 Registry README 对应的已知限制）。
-7. **节点的审批、禁用与维护现在有了持久化与下发路径（P01）。** `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 与 `GET /operator/v1/nodes/states` 把这些操作转发给 Registry 的 `TokenAdmin`（节点身份账本的权威来源仍在 Registry，本服务不复制一份），仅在配置了 `Registry`（见下）时挂载。路由配置的版本、发布、回滚及逐副本确认已通过独立 P02 API 落地，见下方「模型路由发布」。
-8. **Job 状态与事件历史有不同边界。** Gateway 后台同步已实现，持久化历史保存最后观测快照；节点不可达时保留旧状态并退避。尚无持久化事件时间线，历史记录也不能证明后端此刻可达。
-9. **历史元数据不保证数据面访问可恢复。** 历史列表、详情与 Console 取消/产物入口已接入，见 J07；但 Gateway 仅恢复非终态 Job，产物下载仍依赖副本内存映射。终态 Job 与旧产物 ID 在重启/切换副本后的访问，以及原节点离线后的文件可用性，仍需补齐。
-10. **没有指标、请求检索与告警。** 这三项需要时序库与可检索的日志存储，仓库里都没有；Gateway 各副本的 Prometheus 文本导出不等于历史曲线。
+5. **平台运维身份已落地，但归因止步于本服务。** STATUS.md 的 P01 引入了 `platform_operators` 表与 `requirePlatformSession`，`/operator/v1/*` 与节点写路径都由平台运维的会话守卫，本服务的 `audit_logs`（`TenantID=model.PlatformScope`）记着是哪个 operator 做了什么。但这份归因传到 Registry 就断了：本服务用同一把共享的 `Registry.AdminToken` 调用 `TokenAdmin`，Registry 自己分不清这次调用背后是哪个 operator（见 Registry README 对应的已知限制）。
+6. **节点的审批、禁用与维护现在有了持久化与下发路径（P01）。** `/operator/v1/nodes/:id/{approve,disable,enable,maintenance}` 与 `GET /operator/v1/nodes/states` 把这些操作转发给 Registry 的 `TokenAdmin`（节点身份账本的权威来源仍在 Registry，本服务不复制一份），仅在配置了 `Registry`（见下）时挂载。路由配置的版本、发布、回滚及逐副本确认已通过独立 P02 API 落地，见下方「模型路由发布」。
+7. **Job 状态与事件历史有不同边界。** Gateway 后台同步已实现，持久化历史保存最后观测快照；节点不可达时保留旧状态并退避。尚无持久化事件时间线，历史记录也不能证明后端此刻可达。
+8. **历史元数据不保证数据面访问可恢复。** 历史列表、详情与 Console 取消/产物入口已接入，见 J07；但 Gateway 仅恢复非终态 Job，产物下载仍依赖副本内存映射。终态 Job 与旧产物 ID 在重启/切换副本后的访问，以及原节点离线后的文件可用性，仍需补齐。
+9. **没有请求检索与告警。** 指标与历史时序已由 P08 落地（见下方「指标与历史监控」）；请求检索与告警仍需要可检索的日志存储与规则/通知管理，属于 P09。
 
 ## 下一步
 
-1. **`/metrics` 端点**，把本服务接进 `common/metrics`。
+1. **请求检索与告警（P09）**：需要可检索的脱敏请求元数据存储，以及告警规则与通知管理，对应 Console C28/C29。
 
 ## 质量门禁
 
@@ -488,3 +487,30 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 生效查询（`/operator/v1/workflow-templates/status`）与 P02 路由的 `/operator/v1/routes/status` 同构：最多并发 8 个 Gateway，每个调用受超时与 16 KiB 响应上限约束；结果包含所有 `Fleet.Gateways` 端点，缺失或失败不会被丢弃。只有非空端点集合、唯一副本身份、controlplane 模式、完全匹配的模板数量和整包摘要、无同步错误且时间有效，complete 才为 true。读取期间发生新的发布会将 complete 降为 false。
 
 验证：`TestLiveWorkflowTemplates` 使用 `AISW_POSTGRES_TEST_DSN` / `AISW_MYSQL_TEST_DSN` 按需启用，在独立 PostgreSQL 17 与 MySQL 9.7 上以 race 验证重复迁移、20 个并发首次创建（含上述死锁修复的回归验证）、两个独立模板 id 各自独立版本化、原子审计失败回滚与历史容量；默认测试不需要外部数据库，本轮已在真实 MySQL 9.7 与 PostgreSQL 17 上分别跑通验证过。HTTP 测试（`e2e/workflowtemplates_test.go`）覆盖守卫隔离、验证/发布/回滚、独立模板互不干扰、`/status` 与 `/:id` 路径不互相遮蔽、分页及大小限制；租户菜单可见范围过滤借用 `e2e/fleet_test.go` 已有的桩 Gateway 基础设施验证——过滤发生在 Fleet 聚合出的菜单上，与本服务自己的模板存储是两回事（见上方"图从不进入任何目录响应"一段的端点划分）。
+
+## 指标与历史监控（P08）
+
+本服务接入 `common/metrics`，与 Gateway/Registry 同构：`-metrics-addr`（默认 `127.0.0.1:9090`，与 REST 监听端口分开，留空则关闭）上的 `GET /metrics` 以 Prometheus 文本格式导出 `internal/metrics.Descriptions()` 声明的目录。`internal/handler/instrumented.go` 的 `instrumented(...)` 包裹每一条 `routes.go` 里注册的路由，以路由自身的静态路径模板（如 `/admin/v1/jobs/history/:id`）而不是原始请求路径作为 `route` 标签——因此无论实际出现过多少个不同的 id，标签始终有界。另记录吊销 outbox 的滞后量（`controlplane_revocation_outbox_lag`，每 5 秒刷新一次 `generation - delivered_generation`）与 Fleet/Registry 客户端调用的成功/失败计数。
+
+| 指标 | 标签 | 说明 |
+| --- | --- | --- |
+| `controlplane_http_requests_total` | `route,status` | 按路由模板与状态码分类的请求数 |
+| `controlplane_http_request_duration_seconds` | `route` | 请求耗时 |
+| `controlplane_http_inflight_requests` | `route` | 按路由模板的在途请求数（简化实现：并发同路由请求互相覆盖为 1，只回答"此刻是否有在途请求"） |
+| `controlplane_revocation_outbox_lag` | — | 吊销 outbox 的 `generation - delivered_generation` |
+| `controlplane_fleet_calls_total` | `result` | `ctx.Fleet.*` 调用，`result` 为 `success`\|`error`（不还原 Fleet 自己更细的逐副本错误分类，避免猜出一个本包不拥有的标签取值） |
+| `controlplane_registry_client_calls_total` | `result` | 经 `ctx.Logic` 到达 Registry `TokenAdmin` 的调用（节点审批/禁用/启用/维护/列出状态），取值同上 |
+
+**历史时序复用本服务已有的关系库，不是独立 TSDB。** `internal/metricshistory` 是一个可选的后台采集器，仅在 `MetricsHistory` 配置时启动（`Enabled()` 判定与 `Fleet`/`Registry` 同一约定）：
+
+```yaml
+MetricsHistory:
+  GatewayAddrs: ["http://gateway-1:9090", "http://gateway-2:9090"]  # 各 Gateway 的 -metrics-addr，与 Fleet.Gateways(adminapi 端口)不同
+  RegistryAddr: "http://registry:9091"                              # Registry 的 -metrics-addr
+  Interval: 5m     # 既是抓取周期，也是落库粒度：计数器/量表本就是累计值，窗口收尾抓一次即是代表值
+  Retention: 2160h  # 90 天，默认值；超期由独立的保留期清理协程每天清理一次
+```
+
+采集器定时向每个来源的标准 Prometheus 文本 `/metrics` 发 HTTP GET（复用现有 `-metrics-addr`，不新增内部协议或鉴权机制——与 README「可观测性」一节"指标端点应处于受控网络"的立场一致，边界由网络位置而非端点自身鉴权负责），用 `common/metrics.ParseExposition`（现有 Prometheus 文本写入器的逆操作，零新依赖）解析，按 `internal/metricshistory` 的封闭标签白名单聚合——例如 `tunnel_server_slots_total` 只保留 `class`/`state`，跨全部 `node_id` 求和，因此历史数据的基数不随机群规模增长——写入固定版本 SQL 迁移落地的 `metrics_history_points` 表（`metric, labels, bucket_at, value`，`(metric, labels, bucket_at)` 唯一索引支持幂等 upsert）。部署上，Gateway/Registry 的 `-metrics-addr` 需要从默认回环改绑到本服务可达的内部网络接口，见 [deploy/README.md](../../deploy/README.md)。
+
+`GET /operator/v1/metrics/history?since=&until=` 由 `requirePlatformSession` 守卫，`since`/`until` 为必填的 RFC 3339 时间戳，按 `internal/logic.HistoryMetricNames` 这份封闭指标名单查询，按 `(metric, labels)` 分组为 Console ECharts 面板需要的多条时间序列返回。供 Console C27（`/operator/metrics`）使用，是平台运维视角，不按租户拆分——现有 Gateway 指标按设计不带 `tenant_id` 标签。

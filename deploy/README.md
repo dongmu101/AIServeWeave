@@ -79,10 +79,21 @@ echo "controlplane 已就绪"
 | OpenAI 兼容 API | `http://127.0.0.1:8080/v1/...` |
 | 控制面 Admin API | `http://127.0.0.1:8090/admin/v1/...` |
 | Gateway 指标 | `http://127.0.0.1:9090/metrics` |
+| Registry 指标（P08） | `http://127.0.0.1:9091/metrics` |
 | Registry（Agent 用） | `127.0.0.1:9443` |
 | Gateway 隧道（Agent 用） | `127.0.0.1:8443` |
 
 全部只绑宿主机回环。要对外提供服务，前面必须先有一层带鉴权的入口。
+
+**启用历史指标采集（P08）。** Gateway 与 Registry 的 `-metrics-addr` 在容器内都绑 `0.0.0.0`，因此控制面容器已经能以 `http://gateway:9090`、`http://registry:9091` 在 compose 内部网络上抓到它们——宿主机回环映射只影响从宿主机之外访问，不影响容器间访问。要让控制面开始采集历史时序（供 Console `/operator/metrics` 使用），在 `controlplane.yaml` 里加一段 `MetricsHistory`（默认未配置，采集器不会启动）：
+
+```yaml
+MetricsHistory:
+  GatewayAddrs: ["http://gateway:9090"]
+  RegistryAddr: "http://registry:9091"
+```
+
+字段与默认值见 [控制面 README「指标与历史监控」](../service/aiServeWeaveControlPlane/README.md#指标与历史监控p08)。
 
 ### Redis 会话持久化（P05）
 
