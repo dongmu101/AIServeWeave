@@ -1,10 +1,13 @@
 package scheduler_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
@@ -518,5 +522,23 @@ func TestCandidatesExcludeAnUnhealthyRuntimeAndReadmitItOnRecovery(t *testing.T)
 	}
 	if candidate.NodeID != "node-a" || resp.Message.Content != "served by node-a" {
 		t.Errorf("recovered call did not reach node-a: candidate=%+v content=%q", candidate, resp.Message.Content)
+	}
+}
+
+func TestChatLogsDispatchDecisionWithRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, Logger: logger})
+
+	ctx := reqid.WithValue(context.Background(), "sched-req-id")
+	if _, _, err := sched.Chat(ctx, runtime.ChatRequest{Model: "qwen3:8b"}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "sched-req-id") {
+		t.Errorf("scheduler log = %q, want it to contain the ctx request_id", buf.String())
 	}
 }

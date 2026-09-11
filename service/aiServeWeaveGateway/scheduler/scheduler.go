@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"math/rand"
 	"sort"
 	"sync/atomic"
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/routing"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
@@ -58,6 +60,7 @@ type Scheduler struct {
 	clock    runtime.Clock
 	breakers *breakerRegistry
 	metrics  *recorder
+	logger   *slog.Logger
 	routes   atomic.Pointer[routing.Table]
 }
 
@@ -83,6 +86,13 @@ type Config struct {
 	// Metrics 接收调度器的仪器，其描述见 Descriptions。为 nil 时全部丢弃。
 	Metrics runtime.Metrics
 
+	// Logger receives one "dispatch decided" event per attempt, keyed by the
+	// request_id carried on ctx (see common/reqid). Nil discards them.
+	//
+	// Logger 接收每次尝试一条「派发决策」事件，以 ctx 上携带的 request_id
+	// (见 common/reqid)为键。为 nil 时丢弃。
+	Logger *slog.Logger
+
 	// Routes maps logical model names onto the deployments that serve them.
 	// Nil, or a table with no entry for the requested model, means the model
 	// id is used as the node advertises it — a deployment that never writes a
@@ -100,12 +110,17 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	rec := newRecorder(cfg.Metrics)
 	s := &Scheduler{
 		server:   server,
 		clock:    clock,
 		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
 		metrics:  rec,
+		logger:   logger,
 	}
 	s.routes.Store(cfg.Routes)
 	return s
@@ -113,6 +128,23 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 
 // SetRoutes atomically replaces routes for future requests. / SetRoutes 原子替换后续请求使用的路由。
 func (s *Scheduler) SetRoutes(table *routing.Table) { s.routes.Store(table) }
+
+// logDispatchDecision logs one dispatch attempt's outcome, keyed by the
+// request_id carried on ctx — the same one tunnelserver.Dispatch reads back
+// off ctx (common/reqid), so this line and the tunnel-side dispatch lines it
+// precedes share one correlation key across the hop.
+//
+// logDispatchDecision 记录一次派发尝试的结果，以 ctx 上携带的 request_id 为键
+// ——与 tunnelserver.Dispatch 从 ctx 读回的是同一个(common/reqid)，因此这一行
+// 与它之后隧道侧的分发日志，跨这一跳共用同一个关联键。
+func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candidate, err error) {
+	s.logger.Info("scheduler dispatch decided",
+		slog.String("request_id", reqid.FromContext(ctx)),
+		slog.String("operation", op),
+		slog.String("node_id", c.NodeID),
+		slog.String("runtime_id", c.RuntimeID),
+		slog.Bool("success", err == nil))
+}
 
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable.
@@ -127,6 +159,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Chat(ctx, withModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "chat", c, err)
 		if err == nil {
 			return resp, c, nil
 		}
@@ -151,6 +184,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Embed(ctx, withEmbedModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "embed", c, err)
 		if err == nil {
 			return resp, c, nil
 		}
@@ -182,6 +216,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		if err != nil {
 			s.breakers.record(c, err, s.clock.Now())
 			s.metrics.Dispatch(c, err)
+			s.logDispatchDecision(ctx, "chat_stream", c, err)
 			lastErr = err
 			if retryable(err) {
 				s.metrics.Retry(runtime.CapabilityChatStream)
@@ -194,6 +229,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		if err == nil {
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
+			s.logDispatchDecision(ctx, "chat_stream", c, nil)
 			return &prefetchStream{first: first, hasFirst: true, underlying: stream}, c, nil
 		}
 		stream.Close()
@@ -202,10 +238,12 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			// failed either. Do not retry a successful call.
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
+			s.logDispatchDecision(ctx, "chat_stream", c, nil)
 			return &prefetchStream{eof: true}, c, nil
 		}
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "chat_stream", c, err)
 		lastErr = err
 		// Committed() is defined to flip only once an event has been
 		// delivered, so it is necessarily still false here; the check
