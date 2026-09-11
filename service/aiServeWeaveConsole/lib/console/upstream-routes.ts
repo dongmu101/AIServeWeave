@@ -199,6 +199,7 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("rollback")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), literal("states")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("audit")], query: ["limit", "cursor", "action", "actor_id", "since", "until"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("metrics"), literal("history")], query: ["since", "until"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("approve")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("disable")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("enable")], query: [] },

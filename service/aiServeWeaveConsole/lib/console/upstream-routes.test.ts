@@ -315,3 +315,13 @@ test("platform audit forwards only its pagination and filter parameters", () => 
   const result = resolveOperatorUpstream("GET", ["operator", "v1", "audit"], new URLSearchParams("limit=10&cursor=c&action=node.disable&actor_id=pop_1&since=start&until=end&tenant_id=tnt_1&token=untrusted"));
   assert.equal(result?.search, "?limit=10&cursor=c&action=node.disable&actor_id=pop_1&since=start&until=end");
 });
+
+test("operator metrics history route forwards since/until only", () => {
+  const result = resolveOperatorUpstream(
+    "GET",
+    ["operator", "v1", "metrics", "history"],
+    new URLSearchParams("since=2026-09-11T00:00:00Z&until=2026-09-12T00:00:00Z&bogus=1")
+  );
+  assert.equal(result?.path, "/operator/v1/metrics/history");
+  assert.equal(result?.search, "?since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z");
+});
