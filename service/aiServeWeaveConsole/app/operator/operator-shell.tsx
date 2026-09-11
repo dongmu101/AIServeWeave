@@ -16,6 +16,7 @@ const navigation = [
   { href: "/operator/workflow-templates", label: "工作流模板" },
   { href: "/operator/workflows", label: "发布状态" },
   { href: "/operator/audit", label: "运维审计" },
+  { href: "/operator/metrics", label: "指标" },
   { href: "/operator/operators", label: "运维账户" },
   { href: "/operator/account", label: "账户安全" },
 ];
