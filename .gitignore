@@ -3,3 +3,6 @@
 
 # scripts/build-release.sh output
 dist/
+
+# local git worktrees for isolated implementation work
+.worktrees/
