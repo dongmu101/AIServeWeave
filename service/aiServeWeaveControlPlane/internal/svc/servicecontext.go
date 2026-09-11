@@ -24,11 +24,13 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	commonmetrics "AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
+	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
@@ -84,6 +86,14 @@ type ServiceContext struct {
 	// 没有平台运维控制台的部署，是根本没有节点写端点，而不是有一个回答
 	// 「未配置」的端点。
 	RegistryClient *registryclient.Client
+
+	// MetricsRegistry is this replica's process-wide common/metrics sink.
+	// Never nil: main.go always constructs one, whether or not -metrics-addr
+	// is configured to export it.
+	//
+	// MetricsRegistry 是本副本进程级的 common/metrics 汇点。永不为 nil：无论
+	// 是否配置 -metrics-addr 来导出它，main.go 都会构造一个。
+	MetricsRegistry *commonmetrics.Registry
 
 	db          *gorm.DB
 	redisClient *redis.Client
@@ -164,6 +174,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
 	}
 
+	metricsRegistry := commonmetrics.New(cpmetrics.Descriptions())
+
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() { defer close(relayDone); relay.Run(relayCtx) }()
@@ -181,11 +193,12 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Timeout:  cfg.Fleet.Timeout,
 			Clock:    clock,
 		}),
-		RegistryClient: registryClient,
-		db:             db,
-		redisClient:    redisClient,
-		relayCancel:    relayCancel,
-		relayDone:      relayDone,
+		RegistryClient:  registryClient,
+		MetricsRegistry: metricsRegistry,
+		db:              db,
+		redisClient:     redisClient,
+		relayCancel:     relayCancel,
+		relayDone:       relayDone,
 	}, nil
 }
 

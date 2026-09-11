@@ -16,8 +16,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"log/slog"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
@@ -49,6 +51,8 @@ func run() error {
 	configFile := flag.String("f", "etc/controlplane.yaml", "path to the configuration file")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	migrate := flag.String("migrate", "", "database-only command: up, status, or resume")
+	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
+		"address the Prometheus /metrics listener binds; loopback by default, empty disables it")
 	flag.Parse()
 
 	if *showVersion {
@@ -113,6 +117,32 @@ func run() error {
 	}
 	defer server.Stop()
 	handler.RegisterHandlers(server, svcCtx)
+
+	var metricsServer *http.Server
+	if *metricsAddr == "" {
+		logger.Warn("no -metrics-addr; this replica exports no metrics")
+	} else {
+		metricsServer = svcCtx.MetricsRegistry.Server(*metricsAddr)
+		go func() {
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("metrics listening", slog.String("metrics_addr", *metricsAddr))
+	}
+	// Closed before the REST server's own defer server.Stop() runs (defers
+	// unwind LIFO, so this one — declared after server.Stop()'s defer — fires
+	// first), so a scrape mid-shutdown still sees an answering process rather
+	// than a connection refused for the whole drain window.
+	//
+	// 在 REST 服务器自己的 defer server.Stop() 之前关闭(defer 按后进先出展开，
+	// 这一个——注册在 server.Stop() 的 defer 之后——先执行)，好让一次落在关停
+	// 过程中的抓取，看到的仍是一个在应答的进程，而不是整段排空窗口内的连接拒绝。
+	defer func() {
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
+	}()
 
 	serveErr := make(chan error, 1)
 	go func() {

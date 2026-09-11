@@ -43,33 +43,33 @@ import (
 func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodGet, Path: "/operator/v1/routes", Handler: requirePlatformSession(ctx, currentRoutes(ctx, false))},
-		{Method: http.MethodGet, Path: "/operator/v1/routes/history", Handler: requirePlatformSession(ctx, routeHistory(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/routes/revisions/:revision", Handler: requirePlatformSession(ctx, routeRevision(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/routes/status", Handler: requirePlatformSession(ctx, routingStatus(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/routes/rollback", Handler: requirePlatformSession(ctx, rollbackRoutes(ctx))},
-		{Method: http.MethodGet, Path: "/internal/v1/routes/current", Handler: requireSharedSecret(ctx.Config.InternalToken, currentRoutes(ctx, true))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes", requirePlatformSession(ctx, currentRoutes(ctx, false)))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/history", requirePlatformSession(ctx, routeHistory(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/revisions/:revision", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/revisions/:revision", requirePlatformSession(ctx, routeRevision(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/status", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/status", requirePlatformSession(ctx, routingStatus(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/rollback", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/rollback", requirePlatformSession(ctx, rollbackRoutes(ctx)))},
+		{Method: http.MethodGet, Path: "/internal/v1/routes/current", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/routes/current", requireSharedSecret(ctx.Config.InternalToken, currentRoutes(ctx, true)))},
 	})
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodPost, Path: "/operator/v1/routes/validate", Handler: requirePlatformSession(ctx, validateRoutes(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/routes/publish", Handler: requirePlatformSession(ctx, publishRoutes(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/validate", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/validate", requirePlatformSession(ctx, validateRoutes(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/publish", requirePlatformSession(ctx, publishRoutes(ctx)))},
 	}, rest.WithMaxBytes(modelroute.MaxDocumentBytes))
 
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: requirePlatformSession(ctx, listWorkflowTemplates(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id", Handler: requirePlatformSession(ctx, getWorkflowTemplate(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/history", Handler: requirePlatformSession(ctx, workflowTemplateHistory(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/revisions/:revision", Handler: requirePlatformSession(ctx, workflowTemplateRevisionAt(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/status", Handler: requirePlatformSession(ctx, workflowTemplateStatus(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/rollback", Handler: requirePlatformSession(ctx, rollbackWorkflowTemplate(ctx))},
-		{Method: http.MethodGet, Path: "/internal/v1/workflow-templates/current", Handler: requireSharedSecret(ctx.Config.InternalToken, currentWorkflowTemplatesBundle(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates", requirePlatformSession(ctx, listWorkflowTemplates(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id", requirePlatformSession(ctx, getWorkflowTemplate(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/history", requirePlatformSession(ctx, workflowTemplateHistory(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/revisions/:revision", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/revisions/:revision", requirePlatformSession(ctx, workflowTemplateRevisionAt(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/status", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/status", requirePlatformSession(ctx, workflowTemplateStatus(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/rollback", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/rollback", requirePlatformSession(ctx, rollbackWorkflowTemplate(ctx)))},
+		{Method: http.MethodGet, Path: "/internal/v1/workflow-templates/current", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/workflow-templates/current", requireSharedSecret(ctx.Config.InternalToken, currentWorkflowTemplatesBundle(ctx)))},
 	})
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/validate", Handler: requirePlatformSession(ctx, validateWorkflowTemplate(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: requirePlatformSession(ctx, publishWorkflowTemplate(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/validate", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/validate", requirePlatformSession(ctx, validateWorkflowTemplate(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/publish", requirePlatformSession(ctx, publishWorkflowTemplate(ctx)))},
 	}, rest.WithMaxBytes(workflowtemplate.MaxContentBytes))
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: login(ctx)},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/login", login(ctx))},
 		// The platform operator login (STATUS.md's P01) is public the same
 		// way the tenant login above is: there is no session yet to guard
 		// with. It is a distinct endpoint, not an email-based dispatch on
@@ -80,36 +80,36 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 没有会话可供守卫。它是一个独立的端点，而不是在上面那一个基础上
 		// 按 email 分流，因为两者校验的是不同的表，绝不能因为客户端的一个
 		// bug 而被彼此混淆。
-		{Method: http.MethodPost, Path: "/admin/v1/platform/auth/login", Handler: platformLogin(ctx)},
+		{Method: http.MethodPost, Path: "/admin/v1/platform/auth/login", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/platform/auth/login", platformLogin(ctx))},
 	})
 
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: requireSession(ctx, sessionAction(ctx.Logic.Logout))},
-		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: requireSession(ctx, changeOwnPassword(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions))},
-		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout))},
-		{Method: http.MethodPost, Path: "/operator/v1/auth/password", Handler: requirePlatformSession(ctx, changeOwnPlatformPassword(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/auth/sessions/revoke", Handler: requirePlatformSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions))},
-		{Method: http.MethodGet, Path: "/operator/v1/operators", Handler: requirePlatformSession(ctx, listPlatformOperators(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators", Handler: requirePlatformSession(ctx, createPlatformOperatorAs(ctx))},
-		{Method: http.MethodPut, Path: "/operator/v1/operators/:id/password", Handler: requirePlatformSession(ctx, resetPlatformOperatorPassword(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/disable", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.DisablePlatformOperator))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/enable", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.EnablePlatformOperator))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/sessions/revoke", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.RevokePlatformOperatorSessions))},
-		{Method: http.MethodGet, Path: "/admin/v1/users", Handler: requireSession(ctx, listUsers(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/users", Handler: requireSession(ctx, createUser(ctx))},
-		{Method: http.MethodPut, Path: "/admin/v1/users/:id/password", Handler: requireSession(ctx, resetUserPassword(ctx))},
-		{Method: http.MethodPut, Path: "/admin/v1/users/:id/role", Handler: requireSession(ctx, changeUserRole(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/users/:id/disable", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.DisableUser))},
-		{Method: http.MethodPost, Path: "/admin/v1/users/:id/enable", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.EnableUser))},
-		{Method: http.MethodPost, Path: "/admin/v1/users/:id/sessions/revoke", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.RevokeUserSessions))},
-		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, listAPIKeys(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, createAPIKey(ctx))},
-		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: requireSession(ctx, revokeAPIKey(ctx))},
-		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: requireSession(ctx, currentTenant(ctx))},
-		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: requireSession(ctx, setTenantLimits(ctx))},
-		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: requireSession(ctx, listAudit(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: requirePlatformSession(ctx, listAudit(ctx))},
+		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session", requireSession(ctx, sessionAction(ctx.Logic.Logout)))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/password", requireSession(ctx, changeOwnPassword(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/sessions/revoke", requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/session", requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout)))},
+		{Method: http.MethodPost, Path: "/operator/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/password", requirePlatformSession(ctx, changeOwnPlatformPassword(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/auth/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/sessions/revoke", requirePlatformSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions)))},
+		{Method: http.MethodGet, Path: "/operator/v1/operators", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators", requirePlatformSession(ctx, listPlatformOperators(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators", requirePlatformSession(ctx, createPlatformOperatorAs(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/operators/:id/password", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/password", requirePlatformSession(ctx, resetPlatformOperatorPassword(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/disable", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/disable", requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.DisablePlatformOperator)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/enable", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/enable", requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.EnablePlatformOperator)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/sessions/revoke", requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.RevokePlatformOperatorSessions)))},
+		{Method: http.MethodGet, Path: "/admin/v1/users", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users", requireSession(ctx, listUsers(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users", requireSession(ctx, createUser(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/users/:id/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/password", requireSession(ctx, resetUserPassword(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/users/:id/role", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/role", requireSession(ctx, changeUserRole(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/disable", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/disable", requireSession(ctx, userLifecycleAction(ctx.Logic.DisableUser)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/enable", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/enable", requireSession(ctx, userLifecycleAction(ctx.Logic.EnableUser)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/sessions/revoke", requireSession(ctx, userLifecycleAction(ctx.Logic.RevokeUserSessions)))},
+		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, listAPIKeys(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, createAPIKey(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys/:id", requireSession(ctx, revokeAPIKey(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/current", requireSession(ctx, currentTenant(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/limits", requireSession(ctx, setTenantLimits(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/audit", requireSession(ctx, listAudit(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/audit", requirePlatformSession(ctx, listAudit(ctx)))},
 		// Job history (STATUS.md's J07) reads the jobs table directly and is
 		// mounted here, unconditionally, unlike the Fleet-backed live view
 		// further down: it has no dependency on a configured Gateway read
@@ -118,15 +118,15 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// Job 历史（STATUS.md 的 J07）直接读 jobs 表，无条件挂载在这里，
 		// 与下面由 Fleet 支撑的实时视图不同：它不依赖任何已配置的 Gateway
 		// 读取路径，因此没有配置那条路径的部署，依然能看到自己跑过什么。
-		{Method: http.MethodGet, Path: "/admin/v1/jobs/history", Handler: requireSession(ctx, listJobHistory(ctx))},
-		{Method: http.MethodGet, Path: "/admin/v1/jobs/history/:id", Handler: requireSession(ctx, getJobHistory(ctx))},
+		{Method: http.MethodGet, Path: "/admin/v1/jobs/history", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs/history", requireSession(ctx, listJobHistory(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/jobs/history/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs/history/:id", requireSession(ctx, getJobHistory(ctx)))},
 	})
 
 	server.AddRoutes([]rest.Route{
 		{
 			Method:  http.MethodPost,
 			Path:    "/admin/v1/tenants",
-			Handler: requireSharedSecret(ctx.Config.BootstrapToken, createTenant(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants", requireSharedSecret(ctx.Config.BootstrapToken, createTenant(ctx))),
 		},
 		// Platform operator bootstrap (STATUS.md's P01) reuses the same
 		// BootstrapToken as tenant creation — see createPlatformOperator's
@@ -139,7 +139,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodPost,
 			Path:    "/admin/v1/platform/operators",
-			Handler: requireSharedSecret(ctx.Config.BootstrapToken, createPlatformOperator(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/platform/operators", requireSharedSecret(ctx.Config.BootstrapToken, createPlatformOperator(ctx))),
 		},
 	})
 
@@ -147,14 +147,14 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/apikeys/verify",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, verifyKey(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/apikeys/verify", requireSharedSecret(ctx.Config.InternalToken, verifyKey(ctx))),
 		},
 	})
 	server.AddRoutes([]rest.Route{
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/apikeys/revocations/watch",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, watchAPIKeyRevocations(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/apikeys/revocations/watch", requireSharedSecret(ctx.Config.InternalToken, watchAPIKeyRevocations(ctx))),
 		},
 	}, rest.WithTimeout(revocationWatchWait+time.Second))
 	// The Job persistence endpoints (STATUS.md's J04) share the same
@@ -171,7 +171,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/jobs",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, createJob(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs", requireSharedSecret(ctx.Config.InternalToken, createJob(ctx))),
 		},
 		// /jobs/active is registered ahead of /jobs/:id and relies on
 		// go-zero's router preferring a literal path segment over a param
@@ -189,37 +189,37 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/active",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, listActiveJobsForRoute(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/active", requireSharedSecret(ctx.Config.InternalToken, listActiveJobsForRoute(ctx))),
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/:id",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, getJob(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id", requireSharedSecret(ctx.Config.InternalToken, getJob(ctx))),
 		},
 		{
 			Method:  http.MethodPatch,
 			Path:    "/internal/v1/jobs/:id/state",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, updateJobState(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/state", requireSharedSecret(ctx.Config.InternalToken, updateJobState(ctx))),
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/jobs/:id/artifacts",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, createJobArtifact(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/artifacts", requireSharedSecret(ctx.Config.InternalToken, createJobArtifact(ctx))),
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/:id/artifacts",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, listJobArtifacts(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/artifacts", requireSharedSecret(ctx.Config.InternalToken, listJobArtifacts(ctx))),
 		},
 		{
 			Method:  http.MethodDelete,
 			Path:    "/internal/v1/jobs/:id/artifacts/:artifact_id",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, deleteJobArtifact(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/artifacts/:artifact_id", requireSharedSecret(ctx.Config.InternalToken, deleteJobArtifact(ctx))),
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/job-artifacts/expired",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/job-artifacts/expired", requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx))),
 		},
 	})
 
@@ -251,17 +251,17 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/nodes",
-				Handler: requirePlatformSession(ctx, listFleetNodes(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes", requirePlatformSession(ctx, listFleetNodes(ctx))),
 			},
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/models",
-				Handler: requirePlatformSession(ctx, listFleetModels(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/models", requirePlatformSession(ctx, listFleetModels(ctx))),
 			},
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/workflows",
-				Handler: requirePlatformSession(ctx, listOperatorWorkflows(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflows", requirePlatformSession(ctx, listOperatorWorkflows(ctx))),
 			},
 		})
 
@@ -280,12 +280,12 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodGet,
 				Path:    "/admin/v1/workflows",
-				Handler: requireSession(ctx, listWorkflows(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/workflows", requireSession(ctx, listWorkflows(ctx))),
 			},
 			{
 				Method:  http.MethodGet,
 				Path:    "/admin/v1/jobs",
-				Handler: requireSession(ctx, listJobs(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs", requireSession(ctx, listJobs(ctx))),
 			},
 		})
 	}
@@ -305,32 +305,32 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/nodes/states",
-				Handler: requirePlatformSession(ctx, listNodeStates(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/states", requirePlatformSession(ctx, listNodeStates(ctx))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/approve",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ApproveNode)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/approve", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ApproveNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/disable",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.DisableNode)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/disable", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.DisableNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/enable",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnableNode)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/enable", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnableNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/maintenance",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnterMaintenance)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnterMaintenance))),
 			},
 			{
 				Method:  http.MethodDelete,
 				Path:    "/operator/v1/nodes/:id/maintenance",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ExitMaintenance)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ExitMaintenance))),
 			},
 		})
 	}
