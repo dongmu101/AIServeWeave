@@ -33,6 +33,15 @@ export function canCreateUser(role: string): boolean {
   return role === "owner";
 }
 
+/** canManageUsers reports whether the Console should render tenant lifecycle
+ * controls. The ControlPlane remains the authorization boundary.
+ *
+ * canManageUsers 报告 Console 是否应渲染租户用户生命周期控件。ControlPlane 仍是
+ * 授权边界。 */
+export function canManageUsers(role: string): boolean {
+  return role === "owner";
+}
+
 /**
  * canCreateApiKey reports whether a role may mint keys. Owner and admin may;
  * a member may not, despite what the control plane README's summary suggests

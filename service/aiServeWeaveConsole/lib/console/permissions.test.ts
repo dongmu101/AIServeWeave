@@ -6,6 +6,7 @@ import {
   canCreateUser,
   canEditTenantLimits,
   canManageGatewayKey,
+  canManageUsers,
   canRevokeApiKey,
 } from "./permissions.ts";
 
@@ -16,21 +17,23 @@ test("the role matrix matches what the control plane enforces", () => {
     createKey: boolean;
     editLimits: boolean;
     manageGatewayKey: boolean;
+    manageUsers: boolean;
   }[] = [
-    { role: "owner", createUser: true, createKey: true, editLimits: true, manageGatewayKey: true },
-    { role: "admin", createUser: false, createKey: true, editLimits: true, manageGatewayKey: true },
-    { role: "member", createUser: false, createKey: false, editLimits: false, manageGatewayKey: false },
+    { role: "owner", createUser: true, createKey: true, editLimits: true, manageGatewayKey: true, manageUsers: true },
+    { role: "admin", createUser: false, createKey: true, editLimits: true, manageGatewayKey: true, manageUsers: false },
+    { role: "member", createUser: false, createKey: false, editLimits: false, manageGatewayKey: false, manageUsers: false },
     // A role this build does not know grants nothing. Failing closed keeps an
     // added role from silently inheriting an owner's controls.
     //
     // 本次构建不认识的角色什么都不授予。失败时保持关闭，可以避免新增的角色悄悄继承
     // owner 的控件。
-    { role: "auditor", createUser: false, createKey: false, editLimits: false, manageGatewayKey: false },
-    { role: "", createUser: false, createKey: false, editLimits: false, manageGatewayKey: false },
+    { role: "auditor", createUser: false, createKey: false, editLimits: false, manageGatewayKey: false, manageUsers: false },
+    { role: "", createUser: false, createKey: false, editLimits: false, manageGatewayKey: false, manageUsers: false },
   ];
 
   for (const item of cases) {
     assert.equal(canCreateUser(item.role), item.createUser, `${item.role}: create user`);
+    assert.equal(canManageUsers(item.role), item.manageUsers, `${item.role}: manage users`);
     assert.equal(canCreateApiKey(item.role), item.createKey, `${item.role}: create key`);
     assert.equal(
       canEditTenantLimits(item.role),

@@ -239,7 +239,7 @@ func TestWorkflowTemplateTenantVisibilityFiltersTheTenantMenu(t *testing.T) {
 		{ID: "public", Valid: true, Inputs: []workflowview.Input{}},
 		{ID: "private", Valid: true, Inputs: []workflowview.Input{}, VisibleTenantIDs: []string{allowedTenantID}},
 	}, nil)
-	h2 := newHarnessWith(t, []string{gateway})
+	h2 := newHarnessWithSessions(t, []string{gateway}, h.sessions)
 
 	var forAllowed struct {
 		Templates []workflowview.Template `json:"templates"`

@@ -60,14 +60,13 @@ export async function writeSession(payload: SessionPayload): Promise<void> {
 /**
  * clearSession removes the session cookie.
  *
- * This ends the Console's session and nothing else: the control plane token it
- * held stays valid until it expires, because this service has no endpoint to
- * revoke one. The UI must not claim otherwise.
+ * Callers invoke the ControlPlane revocation endpoint before reaching this
+ * helper, so deleting the cookie completes an already revoked session.
  *
  * clearSession 移除会话 cookie。
  *
- * 它结束的只是 Console 的会话：其中持有的控制面令牌在过期之前依然有效，因为本服务没有
- * 可用来吊销它的端点。界面上不得作相反的表述。
+ * 调用方会先调用 ControlPlane 吊销端点再抵达本辅助函数，因此删除 Cookie 是在完成
+ * 一个已经吊销的会话。
  */
 export async function clearSession(): Promise<void> {
   (await cookies()).delete(SESSION_COOKIE);

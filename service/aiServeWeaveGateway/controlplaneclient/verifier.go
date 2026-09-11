@@ -13,8 +13,8 @@
 // Verification must not cost a round trip per request. Every inference call
 // carries a key, and going to the control plane for each one would put an HTTP
 // hop in front of every token. The in-process cache makes the common case free;
-// the cost is a bounded window in which a revoked key still works, which is
-// what CacheTTL bounds and what the service README records.
+// a generation watcher clears it on revocation and disables it whenever that
+// notification path cannot prove itself healthy.
 //
 // controlplaneclient 是 Gateway 一侧的控制面 API Key 校验：它把出示的 key 解析为它所
 // 认证的租户，并在进程内缓存结果。
@@ -26,8 +26,8 @@
 // 却无法用来在别处冒充它通过认证。
 //
 // 校验不能每个请求付出一次往返。每一次推理调用都携带 key，为每一次都去问控制面，等于
-// 在每个 token 前面垫上一跳 HTTP。进程内缓存让常见情况零开销；代价是一个被吊销的 key
-// 仍然可用的有界窗口，那正是 CacheTTL 所限制、也是服务 README 所记录的东西。
+// 在每个 token 前面垫上一跳 HTTP。进程内缓存让常见情况零开销；generation 监听器会在
+// 吊销时清空它，并在通知路径无法证明自身健康时将其禁用。
 package controlplaneclient
 
 import (
@@ -36,6 +36,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -47,11 +48,11 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 )
 
-// Default bounds. CacheTTL is short because it is the window a revoked key
-// keeps working in, and revocation is an incident response action.
+// Default bounds. CacheTTL is the defense-in-depth expiry and the fallback for
+// a ControlPlane crash between database commit and Redis invalidation.
 //
-// 默认上限。CacheTTL 很短，因为它就是一个被吊销的 key 仍能继续工作的窗口，而吊销是
-// 一个应急响应动作。
+// 默认上限。CacheTTL 是纵深防御的过期时间，也是控制面在数据库提交与 Redis 失效之间
+// 崩溃时的兜底。
 const (
 	DefaultCacheTTL     = 30 * time.Second
 	DefaultCacheEntries = 4096
@@ -73,10 +74,10 @@ type Config struct {
 	// InternalToken 一致。
 	Token string
 	// CacheTTL bounds how long a verification is trusted without asking
-	// again. Zero uses DefaultCacheTTL.
+	// again while revocation watching is healthy. Zero uses DefaultCacheTTL.
 	//
-	// CacheTTL 限制一次校验结果在不再询问的前提下被信任多久。为零时使用
-	// DefaultCacheTTL。
+	// CacheTTL 限制吊销监听健康时一次校验结果在不再询问的前提下被信任多久。
+	// 为零时使用 DefaultCacheTTL。
 	CacheTTL time.Duration
 	// CacheEntries bounds the cache. Zero uses DefaultCacheEntries.
 	//
@@ -97,6 +98,28 @@ type Config struct {
 	//
 	// Clock 为缓存过期提供时间。为 nil 时使用系统时钟。
 	Clock runtime.Clock
+	// RevocationHTTPClient is dedicated to the long-poll notification path.
+	// Nil builds a client with RevocationTimeout.
+	//
+	// RevocationHTTPClient 专用于长轮询通知路径。为 nil 时使用
+	// RevocationTimeout 构造客户端。
+	RevocationHTTPClient *http.Client
+	// RevocationTimeout bounds one watch request. Zero uses the five-second
+	// security default.
+	//
+	// RevocationTimeout 限制单次监听请求。零值使用五秒的安全默认值。
+	RevocationTimeout time.Duration
+	// RetryMin and RetryMax bound notification reconnect backoff. Zero values
+	// use the package defaults.
+	//
+	// RetryMin 与 RetryMax 限制通知重连退避。零值使用包默认值。
+	RetryMin time.Duration
+	RetryMax time.Duration
+	// Logger records notification health transitions without request data.
+	// Nil uses slog.Default.
+	//
+	// Logger 记录不含请求数据的通知健康状态变化。为 nil 时使用 slog.Default。
+	Logger *slog.Logger
 }
 
 // Verifier resolves API keys against the control plane.
@@ -112,6 +135,14 @@ type Verifier struct {
 	maxSize int
 	mu      sync.Mutex
 	entries map[string]entry
+
+	generation   int64
+	cacheHealthy bool
+	epoch        uint64
+	watchClient  *http.Client
+	retryMin     time.Duration
+	retryMax     time.Duration
+	logger       *slog.Logger
 }
 
 // entry is one cached verification and the instant it stops being trusted.
@@ -159,15 +190,47 @@ func New(cfg Config) (*Verifier, error) {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
+	revocationTimeout := cfg.RevocationTimeout
+	if revocationTimeout <= 0 {
+		revocationTimeout = DefaultRevocationWatchTimeout
+	}
+	watchClient := cfg.RevocationHTTPClient
+	if watchClient == nil {
+		watchClient = &http.Client{}
+	} else {
+		copy := *watchClient
+		watchClient = &copy
+	}
+	watchClient.Timeout = revocationTimeout
+	watchClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	retryMin := cfg.RetryMin
+	if retryMin <= 0 {
+		retryMin = DefaultRevocationRetryMin
+	}
+	retryMax := cfg.RetryMax
+	if retryMax <= 0 {
+		retryMax = DefaultRevocationRetryMax
+	}
+	if retryMax < retryMin {
+		return nil, errors.New("controlplaneclient: revocation retry maximum must not be less than the minimum")
+	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.Default()
+	}
 
 	return &Verifier{
-		endpoint: endpoint,
-		token:    cfg.Token,
-		client:   client,
-		clock:    clock,
-		ttl:      ttl,
-		maxSize:  maxSize,
-		entries:  make(map[string]entry),
+		endpoint:    endpoint,
+		token:       cfg.Token,
+		client:      client,
+		clock:       clock,
+		ttl:         ttl,
+		maxSize:     maxSize,
+		entries:     make(map[string]entry),
+		watchClient: watchClient,
+		retryMin:    retryMin,
+		retryMax:    retryMax,
+		logger:      logger,
 	}, nil
 }
 
@@ -188,35 +251,39 @@ func (v *Verifier) Verify(ctx context.Context, key string) (httpapi.Identity, er
 		return httpapi.Identity{}, fmt.Errorf("%w: malformed key", httpapi.ErrKeyRejected)
 	}
 
-	if identity, ok := v.cached(hash); ok {
+	if identity, ok, epoch := v.cached(hash); ok {
+		return identity, nil
+	} else {
+		identity, err := v.ask(ctx, hash)
+		if err != nil {
+			return httpapi.Identity{}, err
+		}
+		v.store(hash, identity, epoch)
 		return identity, nil
 	}
-
-	identity, err := v.ask(ctx, hash)
-	if err != nil {
-		return httpapi.Identity{}, err
-	}
-	v.store(hash, identity)
-	return identity, nil
 }
 
 // cached returns a verification that has not expired.
 //
 // cached 返回一条尚未过期的校验结果。
-func (v *Verifier) cached(hash string) (httpapi.Identity, bool) {
+func (v *Verifier) cached(hash string) (httpapi.Identity, bool, uint64) {
 	now := v.clock.Now()
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	epoch := v.epoch
+	if !v.cacheHealthy {
+		return httpapi.Identity{}, false, epoch
+	}
 	found, ok := v.entries[hash]
 	if !ok {
-		return httpapi.Identity{}, false
+		return httpapi.Identity{}, false, epoch
 	}
 	if !now.Before(found.expiry) {
 		delete(v.entries, hash)
-		return httpapi.Identity{}, false
+		return httpapi.Identity{}, false, epoch
 	}
-	return found.identity, true
+	return found.identity, true, epoch
 }
 
 // store caches one verification, evicting expired entries when the cache is
@@ -231,11 +298,14 @@ func (v *Verifier) cached(hash string) (httpapi.Identity, bool) {
 //
 // 只缓存成功的校验。缓存拒绝结果会让一个用编造 key 试探的调用方把这张表塞满不为任何人
 // 服务的条目，而拒绝本来就是那条「往返一次、且没人在等」的路径。
-func (v *Verifier) store(hash string, identity httpapi.Identity) {
+func (v *Verifier) store(hash string, identity httpapi.Identity, epoch uint64) {
 	now := v.clock.Now()
 
 	v.mu.Lock()
 	defer v.mu.Unlock()
+	if !v.cacheHealthy || v.epoch != epoch {
+		return
+	}
 	if len(v.entries) >= v.maxSize {
 		for cached, found := range v.entries {
 			if !now.Before(found.expiry) {

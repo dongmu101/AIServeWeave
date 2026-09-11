@@ -2,15 +2,16 @@
 
 控制面的 Admin API：Console 背后的租户、用户、API Key 与审计线索，以及供 Gateway 校验 API Key 的内部端点。
 
-**当前进度：第二阶段「用户、租户、API Key 和配额」四项均已落地，列表已改为游标分页与服务端筛选，并新增了只读的机群清单、工作流目录与实时运行聚合。** 这个二进制现在能创建租户、让用户登录、签发与吊销 API Key、记录管理操作审计，并且 Gateway 已经改成对着它校验 key —— `-api-keys` 明文列表退化为无控制面时的回退路径。
+**当前进度：租户、用户生命周期、Redis 可吊销会话、API Key、配额、发布与只读聚合均已落地。** 这个二进制现在能创建租户、管理租户用户与平台运维、立即撤销 JWT 会话、签发与吊销 API Key、记录管理操作审计，并且 Gateway 已经改成对着它校验 key —— `-api-keys` 明文列表退化为无控制面时的回退路径。
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
-| `internal/model/` | 已实现 | 四张表的 gorm 映射：`tenants`、`users`、`api_keys`、`audit_logs`。租户配额是 `tenants` 上的三个标量列，不是单独一张表：每个租户恰好一组，而一对一的表会给那条位于推理请求路径上的查询平添一次 join。另有 `jobs`、`job_artifacts` 两张表（`job.go`），是 Job 持久化契约的存储层落地，详见下方「Job 持久化契约」一节 |
+| `internal/model/` | 已实现 | 五张基础表的 gorm 映射：`tenants`、`users`、`platform_operators`、`api_keys`、`audit_logs`。租户配额是 `tenants` 上的三个标量列；Job 与发布相关的版本化表见对应章节 |
 | `internal/store/` | 已实现 | 六个窄接口（含 `Jobs`、`JobArtifacts`）+ `gormstore/`（PostgreSQL / MySQL；`jobs`/`job_artifacts` 走独立的带版本迁移，仅 MySQL）+ `memstore/`（测试用内存实现） |
 | `internal/logic/` | 已实现 | 业务层：权限、审计、key 生命周期。不依赖 HTTP，也不依赖数据库 |
-| `internal/token/` | 已实现 | 会话令牌的签发与校验（HS256，golang-jwt/v5） |
-| `internal/cache/` | 已实现 | key 校验的 Redis 缓存，吊销时主动失效 |
+| `internal/token/` | 已实现 | 会话令牌的签发与校验（HS256，强制 `session_id`） |
+| `internal/session/` | 已实现 | Redis 权威会话、每账户 20 个上限、单个/批量撤销与生命周期登录门；内存实现供默认测试 |
+| `internal/cache/` | 已实现 | key 校验的 Redis 代际缓存，吊销以常数时间令整代失效 |
 | `internal/handler/` | 已实现 | go-zero rest 路由、认证中间件、JSON 翻译 |
 | `internal/svc/` | 已实现 | 启动时装配：数据库、缓存、签发器 |
 | `e2e/` | 已实现 | 真实 HTTP + 真实 JWT + Gateway 真实客户端的闭环测试 |
@@ -40,6 +41,7 @@
 | --- | --- | --- |
 | 用户密码 | bcrypt（长密码先取 SHA-256 十六进制摘要） | 人自己选的，一定活在某人已有的字典里，慢哈希是对的 |
 | API Key | SHA-256 | 256 位均匀随机，不存在字典；而校验在每次推理请求上发生，逐请求 bcrypt 等于给每个 token 垫几十毫秒 |
+| JWT 会话 | JWT 只带随机 `session_id`，服务端状态在 Redis | 每次管理请求同时验签与查会话，才能立即撤销 |
 | 共享密钥（Internal/Bootstrap） | 配置文件明文 | 它们是部署配置而非用户凭据；比较走常数时间，长度不足 32 字符时启动直接失败 |
 
 初始密码不限制最小长度、最大密码长度或字符组成，也允许空字符串；创建租户与创建用户采用相同规则，登录按原样校验，不裁剪空格。HTTP 请求体仍有 64 KiB 上限。
@@ -54,24 +56,31 @@
 
 ```text
 DELETE /admin/v1/apikeys/:id
-  → 数据库置为 revoked（先）
-  → 删除 Redis 缓存条目（后）
-  → Gateway 进程内缓存仍持有，最多 -key-cache-ttl（默认 30s）
+  → 同一数据库事务：置为 revoked + 递增 outbox generation
+  → outbox 发送者持有行锁，Redis Lua 原子推进并发布校验 generation
+  → 成功后确认 delivered_generation，失败保留待发送状态
+  → Gateway 长轮询收到新 generation，1s 内清空进程内正向缓存
 ```
 
-顺序是「先写库再清缓存」而不是反过来：先清缓存会留下一个窗口，期间一次并发校验会用一行仍然 active 的记录把缓存重新填上。
+顺序是「先写库再推进 generation」。缓存 miss 会连同当前 generation 一起读取；回填时 Lua 只允许仍匹配该代际的写入，因此一次在吊销前开始的数据库读取，无法在吊销后把旧正向结果填进新代际。
 
-**Gateway 那 30 秒是本设计已知的代价。** 它换来的是校验不必每个请求一次 HTTP 往返。要把它压到零，需要控制面向 Gateway 推送失效（反向通道），那是独立的一步，见下面「下一步」。
+`GET /internal/v1/apikeys/revocations/watch?after=<generation>` 与校验端点共用 `InternalToken`。处理器先确认 Redis Pub/Sub 订阅，再读当前 generation，并最多等待 2 秒；Pub/Sub 只负责即时唤醒，持久 generation 才负责断线、漏通知、重连和控制面副本切换后的补偿。Gateway 侧 5 秒检测静默断线；通知不健康时清空并停用本地缓存，逐请求调用本服务，无法验证就保持既有 503 语义。
+
+P07 使用 `key_revocation_outbox` 的一行合并待发通知：Key 吊销或用户禁用与 `generation + 1` 同事务提交；请求随后同步尝试发布，后台启动时立即补发并每秒重试，单次尝试最多 5 秒。发送者锁定该行，Redis 成功后才确认 `delivered_generation`。提交后通知前崩溃会留下持久待发状态，重启或其他控制面副本继续发送；发布后确认前崩溃可能重复通知，语义为至少一次，重复清缓存无害。该行不保存凭据或哈希，存储容量恒定。数据库与 Redis 故障期间仍依赖 TTL 作为纵深防御，不承诺零秒失效或已鉴权推理中断。
 
 ## 数据库
 
-PostgreSQL 与 MySQL 都支持，由 `Database.Driver` 选择，PostgreSQL 是首要目标——但这仅对 `tenants`/`users`/`api_keys`/`audit_logs` 四张老表成立。`jobs`/`job_artifacts` 两张新表是 STATUS.md 对 Job 持久化的既有决定，只支持 MySQL 9.7/InnoDB，见下方「Job 持久化契约」一节。
+PostgreSQL 与 MySQL 都支持，由 `Database.Driver` 选择，PostgreSQL 是首要目标——但这仅对 `tenants`/`users`/`platform_operators`/`api_keys`/`audit_logs` 五张基础表成立。`jobs`/`job_artifacts` 两张新表是 STATUS.md 对 Job 持久化的既有决定，只支持 MySQL 9.7/InnoDB，见下方「Job 持久化契约」一节。
 
-当前这四张老表只用标量列，两种引擎表达一致，因此双支持的代价很低。**这在某个 JSON 列落地的那天就不再成立** —— 后续二十张表里的 `workflow_templates`、`deployment_revisions`、`job_events` 都要存 JSON，JSONB 的索引能力是 MySQL JSON 比不了的。到那一步应当重新评估是否继续双支持，而不是悄悄糊过去。
+当前这五张基础表只用标量列，两种引擎表达一致，因此双支持的代价很低。**这在某个 JSON 列落地的那天就不再成立** —— 后续表里的 JSON 数据仍应按各自版本化迁移与查询需求评估，而不是悄悄糊过去。
 
 MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫描失败。
 
-**这四张老表的迁移用 gorm 的 `AutoMigrate`，默认关闭。** 它无法表达回滚、不会删列、不留执行记录。在本服务只有这四张表且没有生产数据期间够用；一旦其中任何一条不再成立，这里就换成带版本的 SQL 文件。`jobs`/`job_artifacts` 已经先一步换了：它们的验收目标明确要求「迁移可重复执行且有版本记录」，因此用的是独立的带版本 SQL 迁移，而不是 `AutoMigrate`，见下方「Job 持久化契约」一节。
+**P07 已用固定版本 SQL 替换基础表 AutoMigrate。** `migrations/base/{postgres,mysql}` 包含基础五表、历史配额/登录时间增量、索引与吊销 outbox；所有命名空间共用专用连接锁、校验和与 dirty 状态检查。已有路由、模板与 Job 的 SQL 和版本号保持不变，旧账本升级时补记校验和。MySQL 失败需显式 `resume`，不会伪装成 DDL 可回滚。
+
+`-migrate up|status|resume` 使用 Database 配置独立执行，不要求 Redis 或会话密钥。默认服务启动只校验版本、映射列、声明索引和 outbox；缺失、未知、不兼容或 dirty schema 均拒绝服务。旧配置 `Database.AutoMigrate: true` 仍兼容，但它也只执行已内嵌的版本 SQL；生产先用迁移账号执行命令，再以 `AutoMigrate: false` 和受限运行账号启动。
+
+升级顺序、失败恢复、备份命令、恢复后的安全状态核对与可复现双引擎演练见 [数据库升级与恢复](../../deploy/database-recovery.md)。无破坏性 down 迁移；数据库恢复也不等于 Registry/Redis/对象存储的全平台灾备。
 
 ## 本地起一套
 
@@ -118,7 +127,7 @@ go run ./service/aiServeWeaveGateway \
 | 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*` |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径），见「机群清单」与「节点写路径」两节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
-| InternalToken | `POST /internal/v1/apikeys/verify`、`/internal/v1/jobs*`（STATUS.md 的 J04/J06，见「Job 持久化契约」一节的「已实现的内部 API」与「已实现的重启恢复」小节） |
+| InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
 
 租户会话（`requireSession`）与平台会话（`requirePlatformSession`）虽然共用同一个 `token.Issuer`，却互相拒绝对方的令牌——见「平台运维身份」一节 `Claims.TenantID` 哨兵值的说明；一次路由配置失误不会让某个会话跨界生效。
 
@@ -132,7 +141,8 @@ go run ./service/aiServeWeaveGateway \
 | --- | --- | --- | --- |
 | 创建用户 | 可以 | 否（403） | 否（403） |
 | 读用户列表 | 可以 | 可以 | 可以 |
-| 编辑 / 删除 / 禁用 / 改密用户 | **无接口** | 无接口 | 无接口 |
+| 重置他人密码、改角色、禁用/启用、撤销他人会话 | 可以（不能作用于自己） | 否（403） | 否（403） |
+| 修改自己密码、撤销自己全部会话、退出当前会话 | 可以 | 可以 | 可以 |
 | 创建 API Key | 可以 | 可以 | 否（403） |
 | 吊销 API Key | 本租户任意 | 本租户任意 | 仅自己创建的（其余 404） |
 | 读 Key 列表 | 可以 | 可以 | 可以（本租户全部的展示信息） |
@@ -210,6 +220,16 @@ Registry:
 
 - `POST /admin/v1/platform/operators`：引导创建账户，复用与 `POST /admin/v1/tenants` 相同的 `BootstrapToken`——两者都是背后尚无已登录用户的操作，没有理由再引入一把含义相同的密钥。
 - `POST /admin/v1/platform/auth/login`：签发一个会话令牌，`Claims.TenantID` 固定为哨兵值 `"platform"`（`model.PlatformScope`）、`Claims.Role` 固定为 `"platform_operator"`。之所以能用同一个 `token.Issuer`、不必新起一套签发器：真实租户 id 永远以 `NewID(PrefixTenant)` 生成、必定带 `tnt_` 前缀，字面量 `"platform"` 永不会与之相撞，因此这两个字符串已经足够把两种会话彼此分开，也彼此隔离——`requireSession` 会拒绝一个携带 `PlatformScope` 的令牌，`requirePlatformSession` 只接受它，双向都不允许对方蒙混过关。
+
+## 用户与会话生命周期（P05）
+
+Redis 现在是会话的权威来源而不是可选缓存：JWT 必须带随机 `sid`，每个受保护请求既验 JWT，也要求 Redis 中存在身份、租户/范围和角色完全一致的记录。旧版无 `sid` JWT 在升级时统一失效。每账户最多 20 个会话，第 21 个挤掉最早到期者；退出只撤销当前会话，改密、重置密码、改角色与禁用会先关闭短期登录门并撤销全部会话，再写数据库，避免并发登录穿过变更窗口。Redis 不可用时登录与管理请求 fail closed 为 `503`，不降级成只验 JWT。
+
+租户 owner 可管理其他用户；不能禁用/降级自己，数据库事务与行锁保证并发操作也不会留下零个有效 owner。禁用用户在同一数据库事务里把其全部 active API Key 置为 revoked；重新启用不会恢复 Key。密码与角色变化不影响 Key。Key 校验缓存以 generation 命名，吊销推进并发布 generation；一个早先开始的数据库读取只能尝试写回旧代际，不能在吊销后重新填脏新缓存，Gateway 也通过同一 generation 清空进程内正向缓存。
+
+平台运维可在始终保留一名有效运维的前提下创建和管理其他运维；账户管理不依赖 Fleet 或 Registry 配置。BootstrapToken 入口保留作首次创建与带外恢复。
+
+租户端点：`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}`、`PUT /admin/v1/users/:id/{password,role}`、`POST /admin/v1/users/:id/{disable,enable}` 与 `POST /admin/v1/users/:id/sessions/revoke`。平台端点为对应的 `/operator/v1/auth/*` 与 `/operator/v1/operators*`，并包含分页列表和会话内创建。
 
 ## 工作流菜单与运行（租户）
 
@@ -294,10 +314,10 @@ Gateway 内存 store（`jobstore.go` 的 `update`）会在状态或错误摘要�
 
 - **`Job` 只存路由绑定，不存判断。** `NodeID`、`RuntimeID`、`BackendRunID` 三列就是「持久化记录需要、但对外不暴露的字段」一节点名的东西；本表本身不产出任何 HTTP 响应，字段是否对外可见是 J04 的事，这里只保证需要的都在。
 - **`UpdateJobState` 是契约里「终态不可覆盖 + `observed_seq` 单调」的唯一实现入口。** `gormstore` 版本把两个条件一起写进一条 `UPDATE ... WHERE state NOT IN (...) AND observed_seq < ?` 的 `WHERE` 子句，由数据库自己的行锁裁定谁先落地，不是本进程里的先读后写再比较；`RowsAffected=0` 时才补一次存在性查询，只用来分清「job 不存在」（`ErrNotFound`）与「job 存在但这次更新陈旧或已终态」（`applied=false, err=nil`）——契约明确后者必须是无声的幂等成功，不能与前者共用一个错误。`memstore` 版本用一次锁内的读改写实现相同的判定，供 logic 层测试。
-- **建表用带版本的 SQL，不是 `Store.Migrate` 的 `AutoMigrate`。** `MigrateJobs` 独立于四张老表的迁移之外，理由是验收目标本身写明「迁移可重复执行且有版本记录」——`AutoMigrate` 恰恰两者都不提供。迁移文件在 `internal/store/gormstore/migrations/jobs/`，按文件名顺序执行，每个文件在自己的事务里执行并把文件名记入 `schema_migrations_jobs` 表，因此一次执行到一半的失败不会被误记为已完成，重复调用在 schema 已是最新时是空操作。
-- **`jobs`/`job_artifacts` 目前只支持 MySQL。** 这是 STATUS.md 对 Job 持久化目标数据库的既有决定（MySQL 9.7/InnoDB），不是本次任务顺手做出的选择；对 PostgreSQL 部署调用 `MigrateJobs` 直接返回明确错误，而不是尝试用跨方言的 SQL 或悄悄跳过。`internal/svc/servicecontext.go` 把它接进现有的 `AutoMigrate` 开关：配置了 `AutoMigrate` 且驱动是 MySQL 时，启动会依次跑完四表迁移与这两张新表的迁移。
+- **建表用固定版本 SQL。** `MigrateJobs` 与基础/路由/模板迁移共用 P07 执行器，文件名仍记录在 `schema_migrations_jobs`，并新增 checksum/dirty 元数据。MySQL DDL 隐式提交：执行前持久置 dirty，全部成功后才确认完成。已有建表、索引和产物存储字段的增量步骤支持检查后重放，故障处置见上方「数据库」与部署恢复说明。
+- **`jobs`/`job_artifacts` 目前只支持 MySQL。** 这是 STATUS.md 对 Job 持久化目标数据库的既有决定（MySQL 9.7/InnoDB）。对 PostgreSQL 调用 `MigrateJobs` 返回明确错误；完整迁移命令只在 MySQL 上包含 Job 命名空间，不扩大其支持范围。
 - **索引对应验收目标「按租户与时间/状态建立查询索引」。** `jobs` 表有 `(tenant_id, created_at, id)`（供 `ListJobs` 的 keyset 分页与时间窗筛选）与 `(tenant_id, state)`（供按状态筛选）两个复合索引；`job_artifacts` 按 `job_id` 与 `tenant_id` 分别建索引。
-- **真实 MySQL 上的验证由 J08 完成，见下方「Job 持久化契约」小节。** 与 `gormstore` 里其余四张表的既有测试划分一致（业务规则在 `memstore` 上测，SQL 本身对着真实引擎测），这里为 `pendingJobMigrations` 的顺序与跳过逻辑写了不依赖数据库的单元测试；迁移 SQL 本身、并发更新、跨租户隔离与故障行为在真实 MySQL 9.7 上的验证见 `internal/store/gormstore/mysql_live_test.go`。
+- **真实 MySQL 上的验证由 J08 完成，见下方「Job 持久化契约」小节。** 与 `gormstore` 里其余基础表的既有测试划分一致（业务规则在 `memstore` 上测，SQL 本身对着真实引擎测），这里为 `pendingJobMigrations` 的顺序与跳过逻辑写了不依赖数据库的单元测试；迁移 SQL 本身、并发更新、跨租户隔离与故障行为在真实 MySQL 9.7 上的验证见 `internal/store/gormstore/mysql_live_test.go`。
 
 ### 已实现的内部 API 与 Gateway 客户端（J04）
 
@@ -398,9 +418,7 @@ J01～J08 已有定义、建表、内部 API、后台写入、非终态恢复、
 
 ## 下一步
 
-1. **吊销推送**，把 Gateway 那 30 秒窗口压到零。
-2. **四张老表的带版本 SQL 迁移**，替换 `AutoMigrate`；Job 两表已有独立迁移，见 P07。
-3. **`/metrics` 端点**，把本服务接进 `common/metrics`。
+1. **`/metrics` 端点**，把本服务接进 `common/metrics`。
 
 ## 质量门禁
 
@@ -435,7 +453,7 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 
 发布和回滚在同一个数据库事务里完成当前版本 CAS、不可变历史插入与平台审计（`routes.publish` / `routes.rollback`）。并发使用同一 expected_revision 只有一个胜出；审计失败不会留下已经切换的当前版本。回滚不改写旧版本，也不降低版本号。历史最多 1000 版，达到容量时拒绝新发布/回滚（409），不自动删除历史；需要更多容量时另行设计保留策略，不能绕过上限手工改 active 指针。
 
-`route_revisions` 存正文和版本元数据，`route_actives` 是 ID=1 的当前版本指针。JSON 作为 PostgreSQL TEXT / MySQL MEDIUMTEXT 保存，不使用方言相关 JSON 查询。迁移位于 `internal/store/gormstore/migrations/routes/{postgres,mysql}`，`MigrateRoutes` 在 `Database.AutoMigrate` 显式启用时调用，独立记录 `schema_migrations_routes`。各 CREATE 幂等，执行成功后记版本；MySQL DDL 隐式提交，失败重试重放未记录步骤，不能声称 DDL 与版本记录为一个原子事务。此实现不替换老表 AutoMigrate，也不改变 Job 的 MySQL-only 范围（P07 仍独立）。
+`route_revisions` 存正文和版本元数据，`route_actives` 是 ID=1 的当前版本指针。JSON 作为 PostgreSQL TEXT / MySQL MEDIUMTEXT 保存，不使用方言相关 JSON 查询。迁移位于 `internal/store/gormstore/migrations/routes/{postgres,mysql}`，`MigrateRoutes` 在 `Database.AutoMigrate` 显式启用时调用，独立记录 `schema_migrations_routes`。P07 已把基础/路由/模板/Job 接入同一迁移执行器，保留各自 SQL 和账本；增加校验和、锁和 dirty 状态，MySQL 失败后必须显式 resume，Job 的 MySQL-only 范围不变。
 
 生效查询最多并发 8 个 Gateway，每个调用受超时与 16 KiB 响应上限约束；结果包含所有 `Fleet.Gateways` 端点，缺失或失败不会被丢弃。只有非空端点集合、唯一副本身份、controlplane 模式、完全匹配的版本和摘要、无同步错误且时间有效，complete 才为 true；生成时间偏差超过一分钟标为 stale。读取期间发生新的发布会将 complete 降为 false。未列入 Fleet 的副本不在确认范围内，配置管理员须保证名册完整。
 

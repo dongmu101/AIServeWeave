@@ -1,12 +1,13 @@
 import { parseLoginResult } from "@/lib/console/contract";
 import { isTrustedWrite } from "@/lib/console/request-origin";
+import { logoutDisposition } from "@/lib/console/session-revocation";
 import { callControlPlane } from "@/lib/server/control-plane";
 import {
   errorResponse,
   jsonResponse,
   readBoundedText,
 } from "@/lib/server/responses";
-import { clearSession, writeSession } from "@/lib/server/session";
+import { clearSession, readSession, writeSession } from "@/lib/server/session";
 
 /**
  * This route owns the Console session, and it is the only place a control
@@ -103,6 +104,14 @@ export async function POST(request: Request): Promise<Response> {
 export async function DELETE(request: Request): Promise<Response> {
   if (!trusted(request)) {
     return errorResponse(403, "forbidden_origin");
+  }
+  const session = await readSession();
+  const result = session
+    ? await callControlPlane({ method: "DELETE", path: "/admin/v1/auth/session", token: session.token })
+    : null;
+  const disposition = logoutDisposition(result);
+  if (!disposition.clear) {
+    return errorResponse(disposition.status, disposition.error!);
   }
   await clearSession();
   return jsonResponse(204, null);

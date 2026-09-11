@@ -3,7 +3,11 @@ package e2e_test
 import (
 	"context"
 	"errors"
+	"io"
+	"log/slog"
 	"net/http"
+	"runtime"
+	"strconv"
 	"testing"
 	"time"
 
@@ -12,6 +16,28 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 )
+
+type observedWatchTransport struct {
+	base    http.RoundTripper
+	watches chan int64
+}
+
+// RoundTrip records this verifier's watch cursor before delegating the call.
+//
+// RoundTrip 在转发调用前记录这个 verifier 的监听游标。
+func (t *observedWatchTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	if request.URL.Path == "/internal/v1/apikeys/revocations/watch" {
+		after, err := strconv.ParseInt(request.URL.Query().Get("after"), 10, 64)
+		if err == nil {
+			select {
+			case t.watches <- after:
+			case <-request.Context().Done():
+				return nil, request.Context().Err()
+			}
+		}
+	}
+	return t.base.RoundTrip(request)
+}
 
 // bootstrap creates a tenant and signs its owner in, returning the session
 // token every later call uses.
@@ -77,15 +103,48 @@ func bootstrapPlatformOperator(h *harness, email string) string {
 // gatewayVerifier 返回 Gateway 真实的校验客户端，指向本控制面。
 func gatewayVerifier(h *harness, clock *steppableClock) *controlplaneclient.Verifier {
 	h.t.Helper()
+	observed := &observedWatchTransport{base: http.DefaultTransport, watches: make(chan int64, 8)}
 	verifier, err := controlplaneclient.New(controlplaneclient.Config{
-		Endpoint: h.base,
-		Token:    internalToken,
-		Clock:    clock,
+		Endpoint:             h.base,
+		Token:                internalToken,
+		Clock:                clock,
+		RevocationHTTPClient: &http.Client{Transport: observed},
+		Logger:               slog.New(slog.NewTextHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		h.t.Fatalf("controlplaneclient.New: %v", err)
 	}
+	// Advance once before starting so the first watch reads a different current
+	// generation and completes immediately instead of waiting for a heartbeat.
+	//
+	// 启动前先推进一次，使首次监听立即读到不同的当前 generation，而不必等待心跳。
+	h.revocations.InvalidateAll(context.Background())
+	want := h.revocations.current()
+	watchCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		verifier.RunRevocationWatch(watchCtx)
+	}()
+	waitForObservedWatch(h.t, observed.watches, 0)
+	waitForObservedWatch(h.t, observed.watches, want)
+	h.t.Cleanup(func() {
+		cancel()
+		<-done
+	})
 	return verifier
+}
+
+func waitForObservedWatch(t *testing.T, watches <-chan int64, want int64) {
+	t.Helper()
+	select {
+	case got := <-watches:
+		if got != want {
+			t.Fatalf("revocation watch after = %d, want %d", got, want)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatalf("revocation watch after = absent, want %d", want)
+	}
 }
 
 // TestKeyIssuedByTheConsoleAuthenticatesAtTheGateway is the closed loop this
@@ -122,14 +181,12 @@ func TestKeyIssuedByTheConsoleAuthenticatesAtTheGateway(t *testing.T) {
 	}
 }
 
-// TestRevokedKeyStopsWorkingAtTheGateway covers the other half of the loop,
-// including the cache window: revocation takes effect at the control plane
-// immediately, and at the Gateway once its in-process cache entry expires.
-// That window is a documented cost, and this test is where its size is pinned.
+// TestRevokedKeyStopsWorkingAtTheGateway covers the notification half of the
+// loop: revocation advances the generation and the Gateway clears its cached
+// positive result before the next authenticated call.
 //
-// TestRevokedKeyStopsWorkingAtTheGateway 覆盖这个闭环的另一半，包括缓存窗口：吊销在
-// 控制面立即生效，在 Gateway 则要等它进程内的缓存条目过期。那个窗口是一项有文档记载的
-// 代价，而它的大小正是由本测试钉住的。
+// TestRevokedKeyStopsWorkingAtTheGateway 覆盖闭环的通知一半：吊销推进 generation，
+// Gateway 在下一次鉴权调用前清除已缓存的正向结果。
 func TestRevokedKeyStopsWorkingAtTheGateway(t *testing.T) {
 	h := newHarness(t)
 	_, session := bootstrap(h, "Acme", "owner@example.com")
@@ -150,25 +207,19 @@ func TestRevokedKeyStopsWorkingAtTheGateway(t *testing.T) {
 		t.Fatalf("revoking the key: status %d", status)
 	}
 
-	// A fresh verifier has no cache entry, so it sees the revocation at once —
-	// this is what the control plane itself now answers.
-	//
-	// 新建的 verifier 没有缓存条目，因此它立刻就能看到吊销结果——这正是控制面此刻给出
-	// 的答复。
-	fresh := gatewayVerifier(h, newSteppableClock())
-	if _, err := fresh.Verify(context.Background(), key.Key); !errors.Is(err, httpapi.ErrKeyRejected) {
-		t.Errorf("the control plane still accepts a revoked key: err = %v", err)
-	}
-
-	// The original verifier keeps serving it until its cached entry expires.
-	//
-	// 原来那个 verifier 会继续放行它，直到其缓存条目过期。
-	if _, err := verifier.Verify(context.Background(), key.Key); err != nil {
-		t.Errorf("the cached entry stopped working early, which contradicts the documented window: %v", err)
-	}
-	clock.Advance(controlplaneclient.DefaultCacheTTL + time.Second)
-	if _, err := verifier.Verify(context.Background(), key.Key); !errors.Is(err, httpapi.ErrKeyRejected) {
-		t.Errorf("a revoked key outlived the cache TTL: err = %v", err)
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err := verifier.Verify(context.Background(), key.Key)
+		if errors.Is(err, httpapi.ErrKeyRejected) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("verifying during revocation propagation: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the Gateway accepted a revoked key for longer than one second")
+		}
+		runtime.Gosched()
 	}
 }
 

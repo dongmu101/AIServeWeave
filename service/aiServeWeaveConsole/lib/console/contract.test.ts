@@ -8,6 +8,7 @@ import {
   parseJobHistoryDetail,
   parseJobHistoryEntries,
   parseLoginResult,
+  parsePlatformOperators,
   parseTenantLimits,
   parseTenantProfile,
   parseUsers,
@@ -46,6 +47,30 @@ test("a user page is read from the envelope the API returns", () => {
     createdAt: "2026-09-01T09:00:00Z",
   });
   assert.deepEqual(parseUsers({ items: [] }), { items: [], nextCursor: null });
+});
+
+test("a platform operator page keeps status without inventing a tenant role", () => {
+  const page = parsePlatformOperators({
+    items: [{
+      id: "plt_1",
+      email: "ops@example.com",
+      name: "Ops",
+      status: "active",
+      created_at: "2026-09-09T01:00:00Z",
+    }],
+    next_cursor: "next",
+  });
+  assert.deepEqual(page, {
+    items: [{
+      id: "plt_1",
+      email: "ops@example.com",
+      name: "Ops",
+      status: "active",
+      lastLoginAt: null,
+      createdAt: "2026-09-09T01:00:00Z",
+    }],
+    nextCursor: "next",
+  });
 });
 
 test("next_cursor decides whether there is another page, not the page size", () => {

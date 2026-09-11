@@ -16,7 +16,7 @@ export async function writeOperatorSession(session: OperatorSession): Promise<vo
     sameSite: "lax", secure: config.cookieSecure, path: "/", expires: new Date(session.expiresAt) });
 }
 
-/** clearOperatorSession ends only the Console platform session, not its upstream JWT. / clearOperatorSession 仅结束 Console 平台会话，不吊销上游 JWT。 */
+/** clearOperatorSession removes the cookie after upstream revocation. / clearOperatorSession 在上游吊销后移除 Cookie。 */
 export async function clearOperatorSession(): Promise<void> {
   (await cookies()).delete(OPERATOR_COOKIE);
 }

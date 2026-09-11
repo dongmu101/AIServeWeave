@@ -1,6 +1,6 @@
 # Console 开发状态与任务规划
 
-更新日期：2026-09-08。M1–M3 已完成；M4 完成 C21–C24，M5 完成 C25 与 C26（C27–C29 未做，理由见各节）。本文记录 `service/aiServeWeaveConsole` 的现状、实施顺序、后端依赖与验收标准；任务尚未实现时保持未勾选，不将依赖安装视为业务功能完成。
+更新日期：2026-09-10。M1–M3 已完成；M4 完成 C21–C24，M5 完成 C25 与 C26，P05 用户与会话生命周期已接入（C27–C29 未做，理由见各节）。本文记录 `service/aiServeWeaveConsole` 的现状、实施顺序、后端依赖与验收标准；任务尚未实现时保持未勾选，不将依赖安装视为业务功能完成。
 
 ## 目标与范围
 
@@ -17,7 +17,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 表格与图表依赖 | 表格已接入，图表待数据源 | TanStack Table 用于列表、TanStack Virtual 用于审计虚拟滚动；ECharts 与 `echarts-for-react` 尚未接入指标业务 |
 | TypeScript 与门禁 | 已配置 | TS 6 / 7 并存；已有 `lint`、`typecheck`、`build` 脚本，不代表本次已运行通过 |
 | 页面 | M1 已就位 | 登录页 `app/login/`、受保护布局与概览页 `app/console/`；根布局已改为中文站点元数据 |
-| 登录、会话与 API 客户端 | 已落地 | `/api/session` 与 `/api/admin/*` 服务端入口、AES-256-GCM 密封的会话 Cookie、`lib/console/api-client.ts` |
+| 登录、会话与 API 客户端 | 已落地 | `/api/session` 与 `/api/admin/*` 服务端入口、AES-256-GCM 密封 Cookie、Redis 服务端撤销、`lib/console/api-client.ts` |
 | 业务测试 | 已建设 | Console `pnpm test` 走 Node 内置 `node:test`，覆盖契约、权限、分页与 Gateway 凭据等纯逻辑，无新增测试框架依赖；控制面新增分页、筛选、租户读取、机群与工作流聚合的 Go 测试及 e2e 隔离断言，Gateway 新增运维端点测试 |
 | 使用文档 | 已重写 | README 记录调用链路、环境变量、门禁与部署前置条件 |
 | 业务页面（用户/Key/审计/配额） | M2、M3 已就位 | `app/console/users`、`keys`、`audit`、`quota`，均对接真实 Admin API；三张列表为服务端游标分页与筛选 |
@@ -32,8 +32,8 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 
 | 能力 | 已有接口 | Console 接入边界 |
 | --- | --- | --- |
-| 登录 | `POST /admin/v1/auth/login` | 返回 `token`、`expires_at`、`user`；没有 refresh、logout 或当前用户查询接口 |
-| 用户 | `GET/POST /admin/v1/users` | 登录用户可读本租户列表；仅 owner 可创建；未提供编辑、删除、禁用、改密接口 |
+| 登录 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | Redis 可吊销会话；无 refresh 接口 |
+| 用户 | `GET/POST /admin/v1/users`、`PUT/POST /admin/v1/users/:id/*` | 登录用户可读；owner 可创建、重置密码、改角色、禁用/启用与撤销会话 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | 登录用户可读本租户列表；owner/admin 可创建与吊销；member 仅可吊销自己创建的 Key |
 | 租户配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | 全部登录角色可读；owner/admin 可整组写入，零表示不限制 |
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
@@ -65,7 +65,7 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 - [x] **C01 页面框架**：替换欢迎页与默认元数据；以中文为首版界面语言，建立登录页和受保护的管理布局，提供导航、当前用户、角色、租户 ID 与退出入口。没有租户详情接口时不编造租户名称。
 - [x] **C02 请求与会话边界**：采用浏览器 → Next.js 同源服务端入口 → ControlPlane Admin API 的方案。服务端固定上游地址并显式限定方法和路径，不做任意 URL 代理；浏览器无法指定上游 Host 或注入服务间凭据。
 - [x] **C03 登录与会话生命周期**：登录令牌存入 HttpOnly Cookie，生产开启 Secure，设置合适的 SameSite 与到期时间；写操作校验来源并落实 CSRF 防护。明确刷新页面时的用户信息恢复方案，身份只能来自可信会话，不能信任浏览器可修改的角色值；鉴权最终由控制面执行。
-- [x] **C04 退出与失效**：退出清理 Cookie 和用户数据缓存；过期或受保护请求返回 `401` 时转到登录页；只允许站内返回地址。当前退出仅清理 Console 会话，不宣称已撤销后端 JWT；不虚构自动续期能力。
+- [x] **C04 退出与失效**：退出先撤销 ControlPlane Redis 会话，再清理 Cookie 和用户数据缓存；过期或受保护请求返回 `401` 时转到登录页；`503`/断网时保留 Cookie 供重试，只允许站内返回地址，不虚构自动续期能力。
 - [x] **C05 统一 API 客户端**：依据 Go JSON 契约维护类型与响应校验；覆盖数组、可选字段、日期、`204`、`400/401/403/404/409/5xx`、断网与超时。请求可取消，读请求重试有上限，创建 Key、创建用户等写请求不自动重试。
 - [x] **C06 共享交互**：统一表格、表单错误、加载、空数据、失败重试、确认对话框与通知。表单提交期间防重复点击；只读查询失败不呈现为“零条记录”。
 - [x] **C07 数据与凭据保护**：认证响应、业务响应不进入共享缓存；令牌、密码、Key 明文不进入 localStorage、URL、日志、异常文本或分析事件。前端只采用必要字段和固定错误文案；涉及 Go 日志时遵守 `runtime.Redact` 约定。
@@ -323,3 +323,9 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 新增测试覆盖文档/字段/数量/安全整数、白名单和独立请求大小上限、流式导入超限取消、并发初始读取不覆盖草稿，以及发布前的旧状态/历史响应失效。前端 lint、TS7、113 个 Node 测试与 Webpack 生产构建通过（仍使用既有 TS6 构建链）。
 
 真实 PostgreSQL 控制面 + 两个 Gateway 二进制 + Console 的隔离联调中，已验证版本发布、409 并发冲突、回滚递增、一个副本离线不能判完成、控制面停机保留旧路由、Gateway 离线缓存重启及恢复确认。Chrome 验证编辑/验证/确认发布、历史比较、回滚保留草稿、冲突提示和重新读取后保留草稿。未使用真实 GPU 推理或生产集群；加权分配和在途快照行为由确定性调度/race 测试验证，全站 Q03 仍独立。
+
+## P05 用户与会话生命周期验收（2026-09-10）
+
+已接入 `/console/users` 的 owner 管理操作、`/console/account` 自助改密/会话撤销、`/operator/operators` 平台运维账户管理与 `/operator/account` 平台账户安全。退出不再只删本地 Cookie：Console 服务端先调用对应 ControlPlane Redis 会话撤销端点，`204/401` 才清 Cookie，`503`、超时或断网保留 Cookie 供重试。租户与平台 Cookie、白名单和跳转继续相互隔离。
+
+纯逻辑测试新增平台账户契约、租户/平台生命周期白名单、owner 管理权限与退出处置矩阵；`pnpm test` 为 134 个用例。`pnpm lint`、TS 7 `pnpm typecheck` 与 `next build --webpack` 已通过，构建清单包含 `/console/account`、`/operator/account` 与 `/operator/operators`。默认 Turbopack 在本机沙箱仍因内部 CSS 子进程绑定端口失败，沿用仓库既有 Webpack 验收路径。真实 Chrome 连接临时 PostgreSQL/Redis/ControlPlane 与生产构建 Console，验证租户 owner 登录、目标用户管理控件、账户安全页、独立平台登录、运维账户页，以及两个标签页的租户/平台会话同时有效；高影响的改密/禁用最终提交由真实 HTTP e2e 覆盖，未在 GUI 重复执行。

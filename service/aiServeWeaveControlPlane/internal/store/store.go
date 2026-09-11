@@ -131,6 +131,14 @@ type UserFilter struct {
 	Query string
 }
 
+// PlatformOperatorFilter narrows a platform-operator list.
+//
+// PlatformOperatorFilter 收窄平台运维账户列表。
+type PlatformOperatorFilter struct {
+	Status string
+	Query  string
+}
+
 // APIKeyFilter narrows a key list. An empty field does not filter.
 //
 // APIKeyFilter 收窄 key 列表。字段为空表示不筛选。
@@ -259,6 +267,10 @@ type Tenants interface {
 // Users 持久化登录 Console 的人。
 type Users interface {
 	CreateUser(ctx context.Context, user *model.User) error
+	// GetUser reads one user by id, scoped to its tenant.
+	//
+	// GetUser 按 id 读取一个用户，并限定在其租户范围内。
+	GetUser(ctx context.Context, tenantID, id string) (model.User, error)
 	// GetUserByEmail is the sign-in lookup, and the one read in this package
 	// that is not scoped by tenant: at sign-in time nobody has said which
 	// tenant they belong to yet, which is exactly what this call determines.
@@ -268,6 +280,18 @@ type Users interface {
 	GetUserByEmail(ctx context.Context, email string) (model.User, error)
 	ListUsers(ctx context.Context, tenantID string, query ListQuery, filter UserFilter) (Page[model.User], error)
 	MarkUserLogin(ctx context.Context, id string, at time.Time) error
+	UpdateUserPassword(ctx context.Context, tenantID, id, passwordHash string, audit model.AuditLog) (model.User, error)
+	UpdateUserRole(ctx context.Context, tenantID, id, role string, at time.Time, audit model.AuditLog) (UserLifecycleResult, error)
+	SetUserStatus(ctx context.Context, tenantID, id, status string, at time.Time, audit model.AuditLog) (UserLifecycleResult, error)
+}
+
+// UserLifecycleResult reports the stored user and whether a state mutation
+// actually changed it.
+//
+// UserLifecycleResult 报告已存储用户，以及状态变更是否确实改变了它。
+type UserLifecycleResult struct {
+	User    model.User
+	Changed bool
 }
 
 // APIKeys persists the credentials callers present to the Gateway.
@@ -310,12 +334,25 @@ type APIKeys interface {
 // 分开：为什么两者不是一张表，见 model.PlatformOperator 的文档注释。
 type PlatformOperators interface {
 	CreatePlatformOperator(ctx context.Context, operator *model.PlatformOperator) error
+	CreatePlatformOperatorWithAudit(ctx context.Context, operator *model.PlatformOperator, audit model.AuditLog) error
 	// GetPlatformOperatorByEmail is the platform sign-in lookup, mirroring
 	// Users.GetUserByEmail.
 	//
 	// GetPlatformOperatorByEmail 是平台运维的登录查询，与 Users.GetUserByEmail 对应。
 	GetPlatformOperatorByEmail(ctx context.Context, email string) (model.PlatformOperator, error)
+	GetPlatformOperator(ctx context.Context, id string) (model.PlatformOperator, error)
+	ListPlatformOperators(ctx context.Context, query ListQuery, filter PlatformOperatorFilter) (Page[model.PlatformOperator], error)
 	MarkPlatformOperatorLogin(ctx context.Context, id string, at time.Time) error
+	UpdatePlatformOperatorPassword(ctx context.Context, id, passwordHash string, audit model.AuditLog) (model.PlatformOperator, error)
+	SetPlatformOperatorStatus(ctx context.Context, id, status string, at time.Time, audit model.AuditLog) (PlatformOperatorLifecycleResult, error)
+}
+
+// PlatformOperatorLifecycleResult reports whether a stored status changed.
+//
+// PlatformOperatorLifecycleResult 报告已存储状态是否发生变化。
+type PlatformOperatorLifecycleResult struct {
+	Operator model.PlatformOperator
+	Changed  bool
 }
 
 // Audit appends administrative actions. It has no update and no delete, which

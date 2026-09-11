@@ -11,6 +11,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/memstore"
 )
 
@@ -91,13 +92,14 @@ var _ runtime.Clock = (*fakeClock)(nil)
 // fixture 是一个被测服务及其 store 与时钟，外加一个已创建好的租户与 owner——这是
 // 本包每个测试的起点状态。
 type fixture struct {
-	t       *testing.T
-	svc     *logic.Service
-	store   *memstore.Store
-	clock   *fakeClock
-	tenant  model.Tenant
-	owner   model.User
-	ownerAt logic.Actor
+	t        *testing.T
+	svc      *logic.Service
+	store    *memstore.Store
+	clock    *fakeClock
+	tenant   model.Tenant
+	owner    model.User
+	ownerAt  logic.Actor
+	sessions *session.Memory
 }
 
 const testPassword = "correct-horse-battery"
@@ -106,24 +108,34 @@ func newFixture(t *testing.T) *fixture {
 	t.Helper()
 	st := memstore.New()
 	clock := newFakeClock()
-	svc := logic.New(st, clock)
+	sessions := session.NewMemory(clock)
+	svc := logic.New(st, clock, logic.WithSessions(sessions))
 
 	tenant, owner, err := svc.CreateTenant(context.Background(), "Acme", "owner@example.com", testPassword, "10.0.0.1")
 	if err != nil {
 		t.Fatalf("CreateTenant: %v", err)
 	}
+	ownerSessionID := "ses_owner"
+	if err := sessions.Create(context.Background(), session.Record{
+		ID: ownerSessionID, Subject: session.Subject{Kind: session.SubjectTenantUser, ID: owner.ID},
+		TenantID: tenant.ID, Role: owner.Role, ExpiresAt: clock.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Create owner session: %v", err)
+	}
 	return &fixture{
-		t:      t,
-		svc:    svc,
-		store:  st,
-		clock:  clock,
-		tenant: tenant,
-		owner:  owner,
+		t:        t,
+		svc:      svc,
+		store:    st,
+		clock:    clock,
+		tenant:   tenant,
+		owner:    owner,
+		sessions: sessions,
 		ownerAt: logic.Actor{
-			UserID:   owner.ID,
-			TenantID: tenant.ID,
-			Role:     owner.Role,
-			IP:       "10.0.0.1",
+			SessionID: ownerSessionID,
+			UserID:    owner.ID,
+			TenantID:  tenant.ID,
+			Role:      owner.Role,
+			IP:        "10.0.0.1",
 		},
 	}
 }

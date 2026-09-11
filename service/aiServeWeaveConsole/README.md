@@ -2,7 +2,7 @@
 
 AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模型目录、工作流目录和 Job 页面。整体架构见 [项目 README](../../README.md)。
 
-**当前已完成 M1–M3、M4 的 C21–C24，以及 M5 的 C25 只读目录与 C26 Job 页面。** 包括登录、服务端会话、受限接口转发、用户、API Key、审计、配额、工作流、实时 Job、持久化历史与详情，以及 Job 取消和产物预览/下载。模板发布、指标、检索和告警仍待开发；Console 尚无 Job SSE 订阅。详细边界与验收记录见 [STATUS.md](STATUS.md)。
+**当前已完成 M1–M3、M4 的 C21–C24、M5 的 C25/C26，以及 P05 用户与会话生命周期。** 包括 Redis 可吊销登录、用户与平台运维管理、账户安全、API Key、审计、配额、工作流、Job 与产物。指标、检索和告警仍待开发；Console 尚无 Job SSE 订阅。详细边界与验收记录见 [STATUS.md](STATUS.md)。
 
 ## 技术栈
 
@@ -58,8 +58,9 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 
 | 功能 | 接口 | Console 页面 | 当前边界 |
 | --- | --- | --- | --- |
-| 登录 | `POST /admin/v1/auth/login` | `/login` | 返回会话令牌、过期时间与用户信息；没有续期或登出接口 |
-| 用户 | `GET/POST /admin/v1/users` | `/console/users` | 本租户列表，支持 `role`、`q` 筛选；仅 owner 可创建；未提供编辑、删除、禁用与改密接口 |
+| 登录与账户安全 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | `/login`、`/console/account` | 退出会先撤销服务端会话；改密与撤销全部会话后重新登录 |
+| 用户 | `GET/POST /admin/v1/users`、`PUT/POST /admin/v1/users/:id/*` | `/console/users` | owner 可重置密码、改角色、禁用/启用和撤销会话；禁用永久吊销该用户创建的 Key |
+| 平台运维账户 | `/operator/v1/operators*`、`/operator/v1/auth/*` | `/operator/operators`、`/operator/account` | 平台会话独立；不能禁用自己或最后一名有效运维 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
 | 配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | `/console/quota` | 任何登录角色可读租户资料与配额；仅 owner/admin 可整组写入。零表示不限制 |
 | 审计 | `GET /admin/v1/audit` | `/console/audit` | 支持 `action`、`actor_id`、`since`、`until` 筛选与游标分页 |
@@ -78,17 +79,19 @@ API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveCon
 
 ### 准备后端联调环境
 
-1. 按 [ControlPlane README](../aiServeWeaveControlPlane/README.md) 启动数据库、可选 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
+1. 按 [ControlPlane README](../aiServeWeaveControlPlane/README.md) 启动数据库、启用 AOF 持久化的 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
 2. 由运维按部署说明创建第一个租户及 owner。租户引导使用 BootstrapToken，常规 Console 会话不持有它。
 3. 以该 owner 登录 Console，走完「创建用户 → 创建 Key → 关闭一次性明文 → 吊销 → 查询审计 → 退出」。
 
-一次可复制的本地联调（不含 Redis，控制面会退回每次校验都查库）：
+一次可复制的本地联调必须包含 Redis；P05 后控制面不会退回只验 JWT：
 
 ```bash
 docker run -d --name aisw-pg -p 5432:5432 \
   -e POSTGRES_USER=aisw -e POSTGRES_PASSWORD=aisw -e POSTGRES_DB=aiserveweave postgres:17-alpine
+docker run -d --name aisw-redis -p 6379:6379 redis:8-alpine \
+  redis-server --appendonly yes --appendfsync always
 
-# 仓库根目录：把 etc/controlplane.yaml 的 Redis.Addr 改成空串后启动
+# 仓库根目录：使用 etc/controlplane.yaml 中的 Redis 地址启动
 AISW_ACCESS_SECRET=$(openssl rand -base64 32) \
 AISW_INTERNAL_TOKEN=$(openssl rand -base64 32) \
 AISW_BOOTSTRAP_TOKEN=$(openssl rand -base64 32) \
@@ -113,12 +116,13 @@ AISW_CONSOLE_COOKIE_SECURE=false pnpm dev
 ```text
 app/login/           登录页与登录表单
 app/console/         受保护的管理布局、外壳与概览页
-app/console/users/   用户列表与创建用户
+app/console/users/   用户列表、创建与生命周期管理
+app/console/account/ 租户账户改密与会话撤销
 app/console/keys/    API Key 列表、创建（一次性明文）与吊销
 app/console/audit/   管理审计（TanStack Table + Virtual 虚拟滚动）
 app/console/quota/   租户资料与配额读写
 app/operator/login/ 平台运维登录（独立 Cookie）
-app/operator/(protected)/ 平台会话布局、fleet/models/workflows/audit 页面
+app/operator/(protected)/ 平台会话布局、机群/发布/运维账户/账户安全页面
 app/console/fleet/   旧节点入口，跳转到 /operator/fleet
 app/console/models/  旧模型入口，跳转到 /operator/models
 app/console/workflows/ 工作流菜单（租户）
@@ -206,9 +210,9 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 
 访问 `/operator/login`，使用部署管理员通过控制面的 `POST /admin/v1/platform/operators` 引导创建的平台账户；租户 owner/admin 不自动获得平台权限。旧 `AISW_CONSOLE_OPERATOR_TOKEN` / `AISW_CONSOLE_OPERATOR_EMAILS` 已移除，不再读取。
 
-平台 Cookie `aisw_operator_session` 与租户 `aisw_console_session` 可同时存在，均为 HttpOnly、SameSite=Lax，并使用不同加密用途。退出运维只结束平台 Console 会话，不撤销上游 JWT，也不退出租户会话。
+平台 Cookie `aisw_operator_session` 与租户 `aisw_console_session` 可同时存在，均为 HttpOnly、SameSite=Lax，并使用不同加密用途。退出运维先撤销上游 Redis 会话，只清理平台 Cookie，不退出租户会话。
 
-`/operator/fleet` 展示 Registry 账本（含待审批、离线节点）及 Gateway 合并观测，支持审批、禁用/启用、进入/退出维护；写操作确认后执行一次，成功会刷新两份状态，失败不自动重试。Gateway 当前只返回合并观测，不能据此确认所有副本均已生效。含路径分隔符/控制字符的节点 ID 无法由当前单段 HTTP 路由表达，页面禁用其操作并指向 Registry 运维工具；中文、冒号和长标签可用。
+`/operator/fleet` 展示 Registry 账本（含待审批、离线节点）及 Gateway 合并观测，支持审批、禁用/启用、进入/退出维护；写操作确认后执行一次，成功会刷新两份状态，失败不自动重试。`/operator/operators` 管理平台运维账户，`/operator/account` 管理自己的密码与会话。退出运维先撤销服务端 JWT，只清理平台 Cookie，不影响租户会话。
 
 `/operator/audit` 经 `GET /operator/v1/audit` 查询平台范围，支持动作、操作者、时间与游标分页，不依赖 Fleet/Registry 配置。审计沿用控制面现有的尽力写入语义，不是完整事务账本。
 

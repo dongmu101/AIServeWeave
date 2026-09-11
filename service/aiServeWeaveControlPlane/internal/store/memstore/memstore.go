@@ -142,6 +142,19 @@ func (s *Store) CreateUser(_ context.Context, user *model.User) error {
 	return nil
 }
 
+// GetUser reads one user by id, scoped to its tenant.
+//
+// GetUser 按 id 读取一个用户，并限定在其租户范围内。
+func (s *Store) GetUser(_ context.Context, tenantID, id string) (model.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[id]
+	if !ok || user.TenantID != tenantID {
+		return model.User{}, store.ErrNotFound
+	}
+	return user, nil
+}
+
 // GetUserByEmail reads one user by sign-in identifier.
 //
 // GetUserByEmail 按登录标识读取一个用户。
@@ -194,6 +207,92 @@ func (s *Store) MarkUserLogin(_ context.Context, id string, at time.Time) error 
 	return nil
 }
 
+// UpdateUserPassword changes one scoped user's digest and appends its audit
+// entry under the same lock.
+//
+// UpdateUserPassword 在同一把锁下修改一个限定范围用户的摘要并追加审计。
+func (s *Store) UpdateUserPassword(_ context.Context, tenantID, id, passwordHash string, audit model.AuditLog) (model.User, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[id]
+	if !ok || user.TenantID != tenantID {
+		return model.User{}, store.ErrNotFound
+	}
+	user.PasswordHash = passwordHash
+	user.UpdatedAt = audit.CreatedAt
+	s.users[id] = user
+	s.audit = append(s.audit, audit)
+	return user, nil
+}
+
+// UpdateUserRole changes one scoped user's role without removing the last
+// active owner.
+//
+// UpdateUserRole 修改一个限定范围用户的角色，且不会移除最后一个有效 owner。
+func (s *Store) UpdateUserRole(_ context.Context, tenantID, id, role string, at time.Time, audit model.AuditLog) (store.UserLifecycleResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[id]
+	if !ok || user.TenantID != tenantID {
+		return store.UserLifecycleResult{}, store.ErrNotFound
+	}
+	if user.Role == role {
+		return store.UserLifecycleResult{User: user}, nil
+	}
+	if user.Status == model.StatusActive && user.Role == model.RoleOwner && role != model.RoleOwner && s.activeOwners(tenantID) <= 1 {
+		return store.UserLifecycleResult{}, store.ErrConflict
+	}
+	user.Role = role
+	user.UpdatedAt = at
+	s.users[id] = user
+	s.audit = append(s.audit, audit)
+	return store.UserLifecycleResult{User: user, Changed: true}, nil
+}
+
+// SetUserStatus changes one scoped user's status and revokes their active API
+// Keys when suspending them, all under the same lock.
+//
+// SetUserStatus 在同一把锁下修改一个限定范围用户的状态，并在暂停时吊销其有效 API Key。
+func (s *Store) SetUserStatus(_ context.Context, tenantID, id, status string, at time.Time, audit model.AuditLog) (store.UserLifecycleResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[id]
+	if !ok || user.TenantID != tenantID {
+		return store.UserLifecycleResult{}, store.ErrNotFound
+	}
+	if user.Status == status {
+		return store.UserLifecycleResult{User: user}, nil
+	}
+	if status == model.StatusSuspended && user.Status == model.StatusActive && user.Role == model.RoleOwner && s.activeOwners(tenantID) <= 1 {
+		return store.UserLifecycleResult{}, store.ErrConflict
+	}
+	user.Status = status
+	user.UpdatedAt = at
+	s.users[id] = user
+	if status == model.StatusSuspended {
+		for keyID, key := range s.keys {
+			if key.TenantID == tenantID && key.CreatedBy == id && key.Status == model.StatusActive {
+				key.Status = model.StatusRevoked
+				key.RevokedAt = &at
+				key.UpdatedAt = at
+				s.keys[keyID] = key
+			}
+		}
+	}
+	s.audit = append(s.audit, audit)
+	return store.UserLifecycleResult{User: user, Changed: true}, nil
+}
+
+func (s *Store) activeOwners(tenantID string) int {
+	count := 0
+	for _, user := range s.users {
+		if user.TenantID == tenantID && user.Status == model.StatusActive && user.Role == model.RoleOwner {
+			count++
+		}
+	}
+	return count
+}
+
 // CreatePlatformOperator inserts one platform operator, rejecting a duplicate
 // email the way the unique index does.
 //
@@ -211,6 +310,23 @@ func (s *Store) CreatePlatformOperator(_ context.Context, operator *model.Platfo
 	return nil
 }
 
+// CreatePlatformOperatorWithAudit inserts an operator and audit row together.
+//
+// CreatePlatformOperatorWithAudit 一并插入运维账户与审计行。
+func (s *Store) CreatePlatformOperatorWithAudit(_ context.Context, operator *model.PlatformOperator, audit model.AuditLog) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, existing := range s.platformOperators {
+		if existing.Email == operator.Email {
+			return store.ErrConflict
+		}
+	}
+	stamp(&operator.CreatedAt, &operator.UpdatedAt)
+	s.platformOperators[operator.ID] = *operator
+	s.audit = append(s.audit, audit)
+	return nil
+}
+
 // GetPlatformOperatorByEmail reads one platform operator by sign-in identifier.
 //
 // GetPlatformOperatorByEmail 按登录标识读取一个平台运维账户。
@@ -223,6 +339,39 @@ func (s *Store) GetPlatformOperatorByEmail(_ context.Context, email string) (mod
 		}
 	}
 	return model.PlatformOperator{}, store.ErrNotFound
+}
+
+// GetPlatformOperator reads one platform operator by id.
+//
+// GetPlatformOperator 按 id 读取一个平台运维账户。
+func (s *Store) GetPlatformOperator(_ context.Context, id string) (model.PlatformOperator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operator, ok := s.platformOperators[id]
+	if !ok {
+		return model.PlatformOperator{}, store.ErrNotFound
+	}
+	return operator, nil
+}
+
+// ListPlatformOperators reads platform operators newest first.
+//
+// ListPlatformOperators 读取平台运维账户，最新的在前。
+func (s *Store) ListPlatformOperators(_ context.Context, query store.ListQuery, filter store.PlatformOperatorFilter) (store.Page[model.PlatformOperator], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.PlatformOperator
+	for _, operator := range s.platformOperators {
+		if filter.Status != "" && operator.Status != filter.Status {
+			continue
+		}
+		if !matches(filter.Query, operator.Email, operator.Name) {
+			continue
+		}
+		out = append(out, operator)
+	}
+	sortNewestFirst(out, func(operator model.PlatformOperator) (time.Time, string) { return operator.CreatedAt, operator.ID })
+	return paginate(out, query, func(operator model.PlatformOperator) (time.Time, string) { return operator.CreatedAt, operator.ID })
 }
 
 // MarkPlatformOperatorLogin records a successful sign-in.
@@ -240,6 +389,58 @@ func (s *Store) MarkPlatformOperatorLogin(_ context.Context, id string, at time.
 	return nil
 }
 
+// UpdatePlatformOperatorPassword changes an operator digest and appends its
+// audit under the same lock.
+//
+// UpdatePlatformOperatorPassword 在同一把锁下修改运维账户摘要并追加审计。
+func (s *Store) UpdatePlatformOperatorPassword(_ context.Context, id, passwordHash string, audit model.AuditLog) (model.PlatformOperator, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operator, ok := s.platformOperators[id]
+	if !ok {
+		return model.PlatformOperator{}, store.ErrNotFound
+	}
+	operator.PasswordHash = passwordHash
+	operator.UpdatedAt = audit.CreatedAt
+	s.platformOperators[id] = operator
+	s.audit = append(s.audit, audit)
+	return operator, nil
+}
+
+// SetPlatformOperatorStatus changes an operator status without removing the
+// last active operator.
+//
+// SetPlatformOperatorStatus 修改运维账户状态，且不会移除最后一个有效运维账户。
+func (s *Store) SetPlatformOperatorStatus(_ context.Context, id, status string, at time.Time, audit model.AuditLog) (store.PlatformOperatorLifecycleResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	operator, ok := s.platformOperators[id]
+	if !ok {
+		return store.PlatformOperatorLifecycleResult{}, store.ErrNotFound
+	}
+	if operator.Status == status {
+		return store.PlatformOperatorLifecycleResult{Operator: operator}, nil
+	}
+	if status == model.StatusSuspended && operator.Status == model.StatusActive && s.activePlatformOperators() <= 1 {
+		return store.PlatformOperatorLifecycleResult{}, store.ErrConflict
+	}
+	operator.Status = status
+	operator.UpdatedAt = at
+	s.platformOperators[id] = operator
+	s.audit = append(s.audit, audit)
+	return store.PlatformOperatorLifecycleResult{Operator: operator, Changed: true}, nil
+}
+
+func (s *Store) activePlatformOperators() int {
+	count := 0
+	for _, operator := range s.platformOperators {
+		if operator.Status == model.StatusActive {
+			count++
+		}
+	}
+	return count
+}
+
 // CreateAPIKey inserts one key, rejecting a duplicate hash the way the unique
 // index does.
 //
@@ -247,6 +448,10 @@ func (s *Store) MarkPlatformOperatorLogin(_ context.Context, id string, at time.
 func (s *Store) CreateAPIKey(_ context.Context, key *model.APIKey) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	creator, ok := s.users[key.CreatedBy]
+	if !ok || creator.TenantID != key.TenantID || creator.Status != model.StatusActive {
+		return store.ErrNotFound
+	}
 	for _, existing := range s.keys {
 		if existing.Hash == key.Hash {
 			return store.ErrConflict

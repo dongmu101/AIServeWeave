@@ -16,5 +16,5 @@ export default async function UsersPage() {
   if (!session) {
     redirect("/login");
   }
-  return <UsersView role={session.user.role} />;
+  return <UsersView role={session.user.role} currentUserId={session.user.id} />;
 }

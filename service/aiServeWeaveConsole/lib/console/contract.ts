@@ -106,6 +106,19 @@ export interface User {
   createdAt: string;
 }
 
+/** PlatformOperator mirrors the platform account list without inventing a
+ * tenant or role.
+ *
+ * PlatformOperator 镜像平台账户列表，不虚构租户或角色。 */
+export interface PlatformOperator {
+  id: string;
+  email: string;
+  name: string;
+  status: string;
+  lastLoginAt: string | null;
+  createdAt: string;
+}
+
 /**
  * ApiKeySummary mirrors types.APIKey: the read form of a credential, carrying
  * the display form and never the plaintext or the hash.
@@ -372,6 +385,23 @@ export function parseUser(value: unknown): User {
  */
 export function parseUsers(value: unknown): Page<User> {
   return parsePage(value, parseUser);
+}
+
+/** parsePlatformOperators validates one platform-operator page.
+ *
+ * parsePlatformOperators 校验一页平台运维账户。 */
+export function parsePlatformOperators(value: unknown): Page<PlatformOperator> {
+  return parsePage(value, parsePlatformOperator);
+}
+
+/** parsePlatformOperator validates one platform operator. / parsePlatformOperator 校验一名平台运维。 */
+export function parsePlatformOperator(value: unknown): PlatformOperator {
+  const source = record(value);
+  return {
+    id: text(source, "id"), email: text(source, "email"), name: text(source, "name"),
+    status: text(source, "status"), lastLoginAt: optionalTimestamp(source, "last_login_at"),
+    createdAt: timestamp(source, "created_at"),
+  };
 }
 
 /**

@@ -84,6 +84,10 @@ echo "controlplane 已就绪"
 
 全部只绑宿主机回环。要对外提供服务，前面必须先有一层带鉴权的入口。
 
+### Redis 会话持久化（P05）
+
+控制面会话以 Redis 为权威状态，因此 Redis 已不是可选缓存。Compose 使用具名卷 `redis-data`、AOF `appendonly yes` 与 `appendfsync always`；控制面只在会话创建/撤销已由 Redis 确认后返回成功。Redis 暂时不可用时管理请求返回 `503`，不会退回只验 JWT。丢失 Redis 数据会安全地让所有人重新登录；不要恢复一份早于安全操作的旧快照，否则可能恢复旧会话记录。生产集群的复制、故障切换与备份 RPO 仍须由部署方按 Redis 拓扑验证。
+
 ## Console
 
 `console` 默认随整套服务启动，使用独立的 Node.js 24 多阶段镜像。构建时按 Console 的
@@ -354,6 +358,6 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 ## 已知限制
 
 - **单 Registry 实例。** bootstrap token 的一次性校验靠本地文件加内存锁，只在单进程时成立（Registry README 已记录）。这套编排里 `registry` 没有副本。
-- **`AutoMigrate` 开着。** 本地起步够用；生产部署应关掉它并改用带版本的迁移。
+- **本地开启 `Database.AutoMigrate`。** P07 已将实现换成固定版本 SQL；生产先执行 `-migrate up`，再关掉该开关，以只校验 schema 的模式启动。升级、dirty 处置和恢复演练见 [数据库升级与恢复](database-recovery.md)。
 - **Gateway 单副本。** 多副本需要每个副本一张自己的证书（`-tls-host` 覆盖各自的地址）与各自的 `-replica-id`，名册由 Registry 负责；限流已经通过 `-redis-addr` 跨副本共享。
 - **没有 TLS 终结。** Console 的 3000 与 Gateway 的 8080 都是明文 HTTP，只绑回环。对外提供服务时在反向代理终结 TLS，并启用 Console Secure Cookie。

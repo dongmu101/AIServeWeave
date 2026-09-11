@@ -31,9 +31,9 @@ Log:
 
 Database:
   # postgres 或 mysql。PostgreSQL 是首要目标（后续 JSON 列会用到 JSONB），
-  # MySQL 同样受支持——当前这四张表只用标量列，两种引擎表达一致。
+  # MySQL 同样受支持——当前五张基础表只用标量列，两种引擎表达一致。
   # postgres or mysql. PostgreSQL is the primary target (JSONB matters for the
-  # JSON columns still to come); MySQL is supported too — today's four tables
+  # JSON columns still to come); MySQL is supported too — today's five base tables
   # use only scalar columns, which both engines express identically.
   Driver: postgres
   DSN: "postgres://aisw:aisw@127.0.0.1:5432/aiserveweave?sslmode=disable"
@@ -45,21 +45,20 @@ Database:
   MaxOpenConns: 20
   MaxIdleConns: 5
   ConnMaxLifetime: 30m
-  # 本地起步时打开；生产部署应关闭，改用带版本的迁移。
-  # On for a local start; a production deployment turns this off and uses
-  # versioned migrations instead.
+  # Apply embedded versioned SQL locally; production runs -migrate up first,
+  # then starts with this disabled and checks schema compatibility only.
+  # 本地执行内嵌版本 SQL；生产先运行 -migrate up，再关闭本项，仅检查 schema 兼容性。
   AutoMigrate: true
 
-# 可选。留空则每次 API Key 校验都落到数据库。
-# Optional. Leave empty and every API key verification goes to the database.
+# 必填。Redis 存储可吊销的 Console 会话，并缓存 API Key 校验。
+# Required. Redis stores revocable Console sessions and caches API key verification.
 Redis:
   Addr: "127.0.0.1:6379"
   Password: ""
   DB: 0
-  # 一个已被吊销的 key 仍可能被放行的最大窗口——吊销本身会主动清除缓存，
-  # 这个 TTL 只是兜底。
-  # The widest window a revoked key can still be served in — revocation drops
-  # the entry itself, and this TTL is only the backstop.
+  # Natural verification-cache expiry; the transactional outbox retries
+  # revocation notifications across crashes. TTL remains defense in depth.
+  # 校验缓存的自然过期时间；事务 outbox 跨崩溃重试吊销通知，TTL 保留为纵深防御。
   TTL: 30s
 
 Auth:

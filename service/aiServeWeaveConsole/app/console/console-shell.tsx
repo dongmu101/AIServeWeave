@@ -33,6 +33,7 @@ const NAV_ITEMS: readonly { href: string; label: string }[] = [
   { href: "/console/jobs", label: "运行" },
   { href: "/console/jobs/history", label: "运行历史" },
   { href: "/console/settings", label: "设置" },
+  { href: "/console/account", label: "账户安全" },
 ];
 
 /**

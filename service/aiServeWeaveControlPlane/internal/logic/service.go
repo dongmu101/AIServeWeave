@@ -26,6 +26,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
@@ -60,6 +61,13 @@ var (
 	//
 	// ErrForbidden 表示调用方的角色不允许的请求。
 	ErrForbidden = errors.New("logic: forbidden")
+	// ErrUnavailable means a required security dependency could not answer.
+	// Callers must not turn it into an accepted request or an invalid-credential
+	// response.
+	//
+	// ErrUnavailable 表示必需的安全依赖无法作答。调用方既不能因此放行请求，也不能
+	// 把它伪装成凭据无效。
+	ErrUnavailable = errors.New("logic: unavailable")
 	// ErrRegistryUnconfigured is returned by every platform node-ops method
 	// when no RegistryClient was given to New — see WithRegistryClient.
 	//
@@ -90,6 +98,7 @@ const bcryptCost = bcrypt.DefaultCost
 // 生效」，而不是「必须有 Redis 参与」。
 type Invalidator interface {
 	Invalidate(ctx context.Context, keyHash string)
+	InvalidateAll(ctx context.Context)
 }
 
 // RegistryClient forwards node-identity operations to the Registry
@@ -123,6 +132,7 @@ type Service struct {
 	store          store.Store
 	clock          runtime.Clock
 	invalidator    Invalidator
+	sessions       session.Store
 	registryClient RegistryClient
 }
 
@@ -139,6 +149,13 @@ type Option func(*Service)
 // ——数据库才是事实来源——但一条已缓存的校验结果会一直存活到它的 TTL 结束。
 func WithInvalidator(invalidator Invalidator) Option {
 	return func(s *Service) { s.invalidator = invalidator }
+}
+
+// WithSessions gives the Service its authoritative session store.
+//
+// WithSessions 为 Service 提供权威会话存储。
+func WithSessions(sessions session.Store) Option {
+	return func(s *Service) { s.sessions = sessions }
 }
 
 // WithRegistryClient gives the Service a way to reach the Registry's
@@ -180,9 +197,10 @@ func New(st store.Store, clock runtime.Clock, opts ...Option) *Service {
 // Actor 是一次管理操作的已认证调用方。handler 从请求中已验证的 token 构造它；本层
 // 绝不从请求体中的任何内容推导出它。
 type Actor struct {
-	UserID   string
-	TenantID string
-	Role     string
+	SessionID string
+	UserID    string
+	TenantID  string
+	Role      string
 	// IP is recorded in the audit trail. It is the only Actor field that
 	// comes from the network rather than from a verified token, so it is
 	// treated as evidence, never as an authorization input.
@@ -360,6 +378,22 @@ func (s *Service) ListUsers(ctx context.Context, actor Actor, query store.ListQu
 // 一个固定的假摘要——这样响应时间就不会区分「没有这个账户」与「密码错误」。否则，
 // 登录表单就在回答「这个人在这里有没有账户」，而那不是它该回答的问题。
 func (s *Service) Authenticate(ctx context.Context, email, password, ip string) (model.User, error) {
+	user, err := s.AuthenticateCredentials(ctx, email, password)
+	if err != nil {
+		return model.User{}, err
+	}
+	if err := s.RecordUserLogin(ctx, &user, ip); err != nil {
+		return model.User{}, err
+	}
+	return user, nil
+}
+
+// AuthenticateCredentials verifies credentials without recording a login.
+// The HTTP layer calls RecordUserLogin only after Redis session creation.
+//
+// AuthenticateCredentials 校验凭据但不记录登录。HTTP 层只在 Redis 会话创建后调用
+// RecordUserLogin。
+func (s *Service) AuthenticateCredentials(ctx context.Context, email, password string) (model.User, error) {
 	user, err := s.store.GetUserByEmail(ctx, normalizeEmail(email))
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return model.User{}, err
@@ -373,14 +407,20 @@ func (s *Service) Authenticate(ctx context.Context, email, password, ip string) 
 	if err != nil || compareErr != nil || user.Status != model.StatusActive {
 		return model.User{}, ErrInvalidCredentials
 	}
+	return user, nil
+}
 
+// RecordUserLogin records a login only after its server-side session exists.
+//
+// RecordUserLogin 只在服务端会话存在后记录一次登录。
+func (s *Service) RecordUserLogin(ctx context.Context, user *model.User, ip string) error {
 	now := s.clock.Now()
 	if err := s.store.MarkUserLogin(ctx, user.ID, now); err != nil {
-		return model.User{}, err
+		return err
 	}
 	user.LastLoginAt = &now
 	s.audit(ctx, user.TenantID, user.ID, model.ActionUserLogin, user.ID, "", ip)
-	return user, nil
+	return nil
 }
 
 // dummyDigest is a valid bcrypt digest of a value nothing will ever match. It
@@ -427,7 +467,12 @@ func (s *Service) ListAudit(ctx context.Context, actor Actor, query store.ListQu
 // 已知缺口，记在服务 README 里：修法是把审计写入与该动作放进同一个事务，而它要等本层
 // 先拥有事务。
 func (s *Service) audit(ctx context.Context, tenantID, actorID, action, target, detail, ip string) {
-	entry := model.AuditLog{
+	entry := s.auditEntry(tenantID, actorID, action, target, detail, ip)
+	_ = s.store.AppendAudit(ctx, &entry)
+}
+
+func (s *Service) auditEntry(tenantID, actorID, action, target, detail, ip string) model.AuditLog {
+	return model.AuditLog{
 		ID:        model.NewID(model.PrefixAuditLog),
 		TenantID:  tenantID,
 		ActorID:   actorID,
@@ -437,7 +482,6 @@ func (s *Service) audit(ctx context.Context, tenantID, actorID, action, target, 
 		IP:        ip,
 		CreatedAt: s.clock.Now(),
 	}
-	_ = s.store.AppendAudit(ctx, &entry)
 }
 
 // translate maps store errors onto this layer's vocabulary.

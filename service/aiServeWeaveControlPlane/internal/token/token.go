@@ -35,16 +35,17 @@ import (
 // 或格式错误。持有一个坏令牌的调用方，对上述任何一种情况都做不出不同的应对。
 var ErrInvalid = errors.New("token: invalid token")
 
-// Claims is what a session token asserts. It carries identity and role and
-// nothing else: a token is presented on every request, and every field added
-// here is a field that goes stale the moment an administrator changes it.
+// Claims is what a session token asserts. SessionID binds the signed token to
+// one revocable server-side session; the remaining fields carry its identity
+// and role and are compared with that session on every request.
 //
-// Claims 是一个会话令牌所主张的内容。它只携带身份与角色，别无其他：令牌会在每个请求
-// 上出示，而这里每多一个字段，就多一个在管理员改动它的那一刻就开始过期的字段。
+// Claims 是一个会话令牌所主张的内容。SessionID 把签名令牌绑定到一个可吊销的服务端
+// 会话；其余字段携带身份与角色，并在每次请求时与该会话比对。
 type Claims struct {
-	UserID   string
-	TenantID string
-	Role     string
+	SessionID string
+	UserID    string
+	TenantID  string
+	Role      string
 }
 
 // Claim names, fixed here because they are part of the token format: changing
@@ -53,9 +54,10 @@ type Claims struct {
 // claim 的名字固定在这里，因为它们是令牌格式的一部分：改动其中任何一个，都会让所有
 // 在途会话失效。
 const (
-	claimUserID   = "uid"
-	claimTenantID = "tid"
-	claimRole     = "role"
+	claimSessionID = "sid"
+	claimUserID    = "uid"
+	claimTenantID  = "tid"
+	claimRole      = "role"
 )
 
 // signingMethod is the one algorithm this service issues and accepts.
@@ -117,15 +119,19 @@ func NewIssuer(secret string, lifetime time.Duration, clock runtime.Clock) (*Iss
 //
 // Issue 返回 c 对应的已签名令牌，以及它过期的时刻。
 func (i *Issuer) Issue(c Claims) (string, time.Time, error) {
+	if c.SessionID == "" || c.UserID == "" || c.TenantID == "" || c.Role == "" {
+		return "", time.Time{}, ErrInvalid
+	}
 	now := i.clock.Now()
 	expiry := now.Add(i.lifetime)
 
 	tok := jwt.NewWithClaims(signingMethod, jwt.MapClaims{
-		claimUserID:   c.UserID,
-		claimTenantID: c.TenantID,
-		claimRole:     c.Role,
-		"iat":         now.Unix(),
-		"exp":         expiry.Unix(),
+		claimSessionID: c.SessionID,
+		claimUserID:    c.UserID,
+		claimTenantID:  c.TenantID,
+		claimRole:      c.Role,
+		"iat":          now.Unix(),
+		"exp":          expiry.Unix(),
 	})
 	signed, err := tok.SignedString(i.secret)
 	if err != nil {
@@ -158,9 +164,10 @@ func (i *Issuer) Parse(signed string) (Claims, error) {
 		return Claims{}, ErrInvalid
 	}
 	claims := Claims{
-		UserID:   stringClaim(mapped, claimUserID),
-		TenantID: stringClaim(mapped, claimTenantID),
-		Role:     stringClaim(mapped, claimRole),
+		SessionID: stringClaim(mapped, claimSessionID),
+		UserID:    stringClaim(mapped, claimUserID),
+		TenantID:  stringClaim(mapped, claimTenantID),
+		Role:      stringClaim(mapped, claimRole),
 	}
 	// A token missing an identity is refused rather than passed along as an
 	// empty one: an empty TenantID would scope a query to no tenant, and
@@ -168,7 +175,7 @@ func (i *Issuer) Parse(signed string) (Claims, error) {
 	//
 	// 缺少身份的令牌会被拒绝，而不是当作空身份放行：空的 TenantID 会把查询限定到
 	// 「没有租户」，而「没有租户」离「所有租户」只差一个笔误。
-	if claims.UserID == "" || claims.TenantID == "" || claims.Role == "" {
+	if claims.SessionID == "" || claims.UserID == "" || claims.TenantID == "" || claims.Role == "" {
 		return Claims{}, ErrInvalid
 	}
 	return claims, nil

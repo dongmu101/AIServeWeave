@@ -1,16 +1,14 @@
 // Package model holds the control plane's persisted entities and the gorm
-// mapping for them. It covers the first four tables of the top-level README's
-// 数据模型 section — tenants, users, api_keys, audit_logs — and nothing else:
-// the remaining twenty are added as the features that need them land, not
-// ahead of them.
+// mapping for them. Its five base tables are tenants, users,
+// platform_operators, api_keys, and audit_logs; feature-specific models land
+// only with the features that need them.
 //
 // One rule shapes every struct here: a field that holds a credential holds
 // only its irreversible form. There is no column anywhere in this package that
 // a leaked database dump could be replayed from.
 //
-// model 包保存控制面的持久化实体及其 gorm 映射。它覆盖顶层 README「数据模型」一节的
-// 前四张表——tenants、users、api_keys、audit_logs——仅此而已：其余二十张表等到需要
-// 它们的功能落地时再加，而不是提前建好。
+// model 包保存控制面的持久化实体及其 gorm 映射。五张基础表是 tenants、users、
+// platform_operators、api_keys 与 audit_logs；功能专用模型只随真正需要它们的功能落地。
 //
 // 有一条规则塑造了这里的每一个结构体：凡是保存凭据的字段，只保存其不可逆形式。本包
 // 中不存在任何一列，能让泄漏的数据库转储被重放利用。
@@ -295,23 +293,36 @@ func (k APIKey) Usable(now time.Time) bool {
 // 审计动作名。集合是封闭的，每条写路径都使用其中之一，这样审计查询就能针对一套已知
 // 词汇来写，而不是去猜过去的代码碰巧传了什么。
 const (
-	ActionTenantCreate = "tenant.create"
-	ActionUserCreate   = "user.create"
-	ActionUserLogin    = "user.login"
-	ActionUserUpdate   = "user.update"
-	ActionAPIKeyCreate = "apikey.create"
-	ActionAPIKeyRevoke = "apikey.revoke"
-	ActionTenantLimits = "tenant.limits"
+	ActionTenantCreate       = "tenant.create"
+	ActionUserCreate         = "user.create"
+	ActionUserLogin          = "user.login"
+	ActionUserUpdate         = "user.update"
+	ActionUserPasswordChange = "user.password.change"
+	ActionUserPasswordReset  = "user.password.reset"
+	ActionUserRoleChange     = "user.role.change"
+	ActionUserDisable        = "user.disable"
+	ActionUserEnable         = "user.enable"
+	ActionUserSessionsRevoke = "user.sessions.revoke"
+	ActionSessionLogout      = "session.logout"
+	ActionAPIKeyCreate       = "apikey.create"
+	ActionAPIKeyRevoke       = "apikey.revoke"
+	ActionTenantLimits       = "tenant.limits"
 
 	// Platform actions (STATUS.md's P01) are recorded with TenantID set to
 	// PlatformScope rather than a real tenant, since a node has no tenant.
-	ActionPlatformOperatorCreate = "platform_operator.create"
-	ActionPlatformOperatorLogin  = "platform_operator.login"
-	ActionNodeApprove            = "node.approve"
-	ActionNodeDisable            = "node.disable"
-	ActionNodeEnable             = "node.enable"
-	ActionNodeMaintenanceEnter   = "node.maintenance.enter"
-	ActionNodeMaintenanceExit    = "node.maintenance.exit"
+	ActionPlatformOperatorCreate         = "platform_operator.create"
+	ActionPlatformOperatorLogin          = "platform_operator.login"
+	ActionPlatformOperatorPasswordChange = "platform_operator.password.change"
+	ActionPlatformOperatorPasswordReset  = "platform_operator.password.reset"
+	ActionPlatformOperatorDisable        = "platform_operator.disable"
+	ActionPlatformOperatorEnable         = "platform_operator.enable"
+	ActionPlatformOperatorSessionsRevoke = "platform_operator.sessions.revoke"
+	ActionPlatformSessionLogout          = "platform_session.logout"
+	ActionNodeApprove                    = "node.approve"
+	ActionNodeDisable                    = "node.disable"
+	ActionNodeEnable                     = "node.enable"
+	ActionNodeMaintenanceEnter           = "node.maintenance.enter"
+	ActionNodeMaintenanceExit            = "node.maintenance.exit"
 )
 
 // AuditLog is one administrative action, recorded for the README's

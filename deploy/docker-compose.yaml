@@ -87,7 +87,10 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
-    command: ["redis-server", "--appendonly", "yes"]
+    # P05 会话吊销以 Redis 为权威状态；确认成功的写入必须先 fsync。
+    # P05 session revocation is authoritative in Redis; acknowledged writes
+    # must be fsynced before they are reported successful.
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:

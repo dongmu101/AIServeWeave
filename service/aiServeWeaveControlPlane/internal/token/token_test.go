@@ -79,7 +79,7 @@ func newIssuer(t *testing.T, clock runtime.Clock) *token.Issuer {
 func TestIssuedTokenParsesBack(t *testing.T) {
 	clock := newFakeClock()
 	issuer := newIssuer(t, clock)
-	want := token.Claims{UserID: "usr_1", TenantID: "tnt_1", Role: "owner"}
+	want := token.Claims{SessionID: "ses_1", UserID: "usr_1", TenantID: "tnt_1", Role: "owner"}
 
 	signed, expiry, err := issuer.Issue(want)
 	if err != nil {
@@ -106,7 +106,7 @@ func TestTokenExpires(t *testing.T) {
 	clock := newFakeClock()
 	issuer := newIssuer(t, clock)
 
-	signed, _, err := issuer.Issue(token.Claims{UserID: "usr_1", TenantID: "tnt_1", Role: "owner"})
+	signed, _, err := issuer.Issue(token.Claims{SessionID: "ses_1", UserID: "usr_1", TenantID: "tnt_1", Role: "owner"})
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -132,6 +132,7 @@ func TestParseRejectsAlgorithmConfusion(t *testing.T) {
 	clock := newFakeClock()
 	issuer := newIssuer(t, clock)
 	claims := jwt.MapClaims{
+		"sid":  "ses_evil",
 		"uid":  "usr_evil",
 		"tid":  "tnt_victim",
 		"role": "owner",
@@ -190,7 +191,7 @@ func TestParseRejectsMalformedAndIncompleteTokens(t *testing.T) {
 	clock := newFakeClock()
 	issuer := newIssuer(t, clock)
 
-	valid, _, err := issuer.Issue(token.Claims{UserID: "usr_1", TenantID: "tnt_1", Role: "owner"})
+	valid, _, err := issuer.Issue(token.Claims{SessionID: "ses_1", UserID: "usr_1", TenantID: "tnt_1", Role: "owner"})
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -202,6 +203,7 @@ func TestParseRejectsMalformedAndIncompleteTokens(t *testing.T) {
 	// 一个不带租户的令牌：Parse 会拒绝而不是放行，因为空租户会把查询限定到「什么都
 	// 没有」，而那离「所有东西」只差一个笔误。
 	noTenant := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"sid":  "ses_1",
 		"uid":  "usr_1",
 		"role": "owner",
 		"exp":  clock.Now().Add(time.Hour).Unix(),
@@ -226,6 +228,52 @@ func TestParseRejectsMalformedAndIncompleteTokens(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			if _, err := issuer.Parse(tt.token); !errors.Is(err, token.ErrInvalid) {
 				t.Errorf("Parse(%q) error = %v, want ErrInvalid", tt.name, err)
+			}
+		})
+	}
+}
+
+// TestParseRejectsTokenWithoutSessionID catches a legacy token becoming
+// usable without a revocable server-side session after the P05 cut-over.
+//
+// TestParseRejectsTokenWithoutSessionID 防止 P05 切换前的旧令牌在没有可吊销
+// 服务端会话的情况下继续可用。
+func TestParseRejectsTokenWithoutSessionID(t *testing.T) {
+	clock := newFakeClock()
+	issuer := newIssuer(t, clock)
+	legacy := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
+		"uid":  "usr_1",
+		"tid":  "tnt_1",
+		"role": "owner",
+		"iat":  clock.Now().Unix(),
+		"exp":  clock.Now().Add(time.Hour).Unix(),
+	})
+	signed, err := legacy.SignedString([]byte(testSecret))
+	if err != nil {
+		t.Fatalf("SignedString: %v", err)
+	}
+
+	if _, err := issuer.Parse(signed); !errors.Is(err, token.ErrInvalid) {
+		t.Errorf("Parse error = %v, want %v", err, token.ErrInvalid)
+	}
+}
+
+func TestIssueRejectsIncompleteClaims(t *testing.T) {
+	issuer := newIssuer(t, newFakeClock())
+	tests := []struct {
+		name   string
+		claims token.Claims
+	}{
+		{name: "missing session", claims: token.Claims{UserID: "usr_1", TenantID: "tnt_1", Role: "owner"}},
+		{name: "missing user", claims: token.Claims{SessionID: "ses_1", TenantID: "tnt_1", Role: "owner"}},
+		{name: "missing tenant", claims: token.Claims{SessionID: "ses_1", UserID: "usr_1", Role: "owner"}},
+		{name: "missing role", claims: token.Claims{SessionID: "ses_1", UserID: "usr_1", TenantID: "tnt_1"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, _, err := issuer.Issue(tt.claims); !errors.Is(err, token.ErrInvalid) {
+				t.Errorf("Issue error = %v, want %v", err, token.ErrInvalid)
 			}
 		})
 	}

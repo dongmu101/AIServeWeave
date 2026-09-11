@@ -240,18 +240,21 @@ func TestCreateAPIKeyLifetime(t *testing.T) {
 func TestCreateAPIKeyPermissions(t *testing.T) {
 	tests := []struct {
 		name    string
-		role    string
+		actor   func(*fixture) logic.Actor
 		wantErr error
 	}{
-		{name: "an owner may mint", role: model.RoleOwner},
-		{name: "an admin may mint", role: model.RoleAdmin},
-		{name: "a member may not", role: model.RoleMember, wantErr: logic.ErrForbidden},
+		{name: "an owner may mint", actor: func(f *fixture) logic.Actor { return f.ownerAt }},
+		{name: "an admin may mint", actor: func(f *fixture) logic.Actor {
+			_, actor := f.userWithSession(model.RoleAdmin, "key-admin@example.com")
+			return actor
+		}},
+		{name: "a member may not", actor: func(f *fixture) logic.Actor { return f.actorWithRole(model.RoleMember) }, wantErr: logic.ErrForbidden},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixture(t)
-			_, err := f.svc.CreateAPIKey(context.Background(), f.actorWithRole(tt.role), "k", 0)
+			_, err := f.svc.CreateAPIKey(context.Background(), tt.actor(f), "k", 0)
 			if !errors.Is(err, tt.wantErr) {
 				t.Errorf("CreateAPIKey error = %v, want %v", err, tt.wantErr)
 			}

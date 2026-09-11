@@ -15,9 +15,11 @@ package logic
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
@@ -31,6 +33,37 @@ import (
 // 它由 bootstrap token 而不是会话守卫——第一次调用它时，运维自己的登录尚不
 // 存在——它的审计记录以系统作为行为人，理由与 CreateTenant 的相同。
 func (s *Service) CreatePlatformOperator(ctx context.Context, email, password, name, ip string) (model.PlatformOperator, error) {
+	operator, err := s.newPlatformOperator(email, password, name)
+	if err != nil {
+		return model.PlatformOperator{}, err
+	}
+	if err := s.store.CreatePlatformOperator(ctx, &operator); err != nil {
+		return model.PlatformOperator{}, translate(err)
+	}
+	s.audit(ctx, model.PlatformScope, "", model.ActionPlatformOperatorCreate, operator.ID, "", ip)
+	return operator, nil
+}
+
+// CreatePlatformOperatorAs creates another platform operator and records the
+// authenticated platform actor in the same transaction.
+//
+// CreatePlatformOperatorAs 创建另一名平台运维，并在同一事务中记录已认证的平台行为人。
+func (s *Service) CreatePlatformOperatorAs(ctx context.Context, actor Actor, email, password, name string) (model.PlatformOperator, error) {
+	if err := s.requirePlatformActor(actor); err != nil {
+		return model.PlatformOperator{}, err
+	}
+	operator, err := s.newPlatformOperator(email, password, name)
+	if err != nil {
+		return model.PlatformOperator{}, err
+	}
+	audit := s.auditEntry(model.PlatformScope, actor.UserID, model.ActionPlatformOperatorCreate, operator.ID, "", actor.IP)
+	if err := s.store.CreatePlatformOperatorWithAudit(ctx, &operator, audit); err != nil {
+		return model.PlatformOperator{}, translate(err)
+	}
+	return operator, nil
+}
+
+func (s *Service) newPlatformOperator(email, password, name string) (model.PlatformOperator, error) {
 	email = normalizeEmail(email)
 	if email == "" {
 		return model.PlatformOperator{}, ErrInvalidInput
@@ -47,11 +80,168 @@ func (s *Service) CreatePlatformOperator(ctx context.Context, email, password, n
 		Status:       model.StatusActive,
 		CreatedAt:    s.clock.Now(),
 	}
-	if err := s.store.CreatePlatformOperator(ctx, &operator); err != nil {
+	return operator, nil
+}
+
+// ListPlatformOperators returns one filtered page to a platform operator.
+//
+// ListPlatformOperators 向平台运维返回一页经过筛选的运维账户。
+func (s *Service) ListPlatformOperators(ctx context.Context, actor Actor, query store.ListQuery, filter store.PlatformOperatorFilter) (store.Page[model.PlatformOperator], error) {
+	if err := s.requirePlatformActor(actor); err != nil {
+		return store.Page[model.PlatformOperator]{}, err
+	}
+	if filter.Status != "" && filter.Status != model.StatusActive && filter.Status != model.StatusSuspended {
+		return store.Page[model.PlatformOperator]{}, ErrInvalidInput
+	}
+	page, err := s.store.ListPlatformOperators(ctx, query, filter)
+	return page, translate(err)
+}
+
+// ChangeOwnPlatformPassword verifies and changes the current operator's
+// password, revoking all of their sessions.
+//
+// ChangeOwnPlatformPassword 校验并修改当前运维的密码，且吊销其全部会话。
+func (s *Service) ChangeOwnPlatformPassword(ctx context.Context, actor Actor, currentPassword, newPassword string) error {
+	if err := s.requirePlatformActor(actor); err != nil {
+		return err
+	}
+	operator, err := s.store.GetPlatformOperator(ctx, actor.UserID)
+	if err != nil {
+		return translate(err)
+	}
+	if operator.Status != model.StatusActive || comparePassword(operator.PasswordHash, currentPassword) != nil {
+		return ErrInvalidCredentials
+	}
+	digest, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	gate, err := s.beginPlatformMutation(ctx, operator)
+	if err != nil {
+		return err
+	}
+	audit := s.auditEntry(model.PlatformScope, actor.UserID, model.ActionPlatformOperatorPasswordChange, operator.ID, "", actor.IP)
+	_, mutationErr := s.store.UpdatePlatformOperatorPassword(ctx, operator.ID, digest, audit)
+	return s.finishMutation(ctx, gate, mutationErr)
+}
+
+// ResetPlatformOperatorPassword changes another operator's password and
+// revokes their sessions.
+//
+// ResetPlatformOperatorPassword 修改另一名运维的密码并吊销其会话。
+func (s *Service) ResetPlatformOperatorPassword(ctx context.Context, actor Actor, operatorID, newPassword string) error {
+	operator, err := s.managedPlatformOperator(ctx, actor, operatorID)
+	if err != nil {
+		return err
+	}
+	digest, err := hashPassword(newPassword)
+	if err != nil {
+		return err
+	}
+	gate, err := s.beginPlatformMutation(ctx, operator)
+	if err != nil {
+		return err
+	}
+	audit := s.auditEntry(model.PlatformScope, actor.UserID, model.ActionPlatformOperatorPasswordReset, operator.ID, "", actor.IP)
+	_, mutationErr := s.store.UpdatePlatformOperatorPassword(ctx, operator.ID, digest, audit)
+	return s.finishMutation(ctx, gate, mutationErr)
+}
+
+// DisablePlatformOperator suspends another operator while preserving at least
+// one active platform operator.
+//
+// DisablePlatformOperator 暂停另一名运维，同时保留至少一名有效平台运维。
+func (s *Service) DisablePlatformOperator(ctx context.Context, actor Actor, operatorID string) error {
+	operator, err := s.managedPlatformOperator(ctx, actor, operatorID)
+	if err != nil {
+		return err
+	}
+	if operator.Status == model.StatusSuspended {
+		return nil
+	}
+	gate, err := s.beginPlatformMutation(ctx, operator)
+	if err != nil {
+		return err
+	}
+	audit := s.auditEntry(model.PlatformScope, actor.UserID, model.ActionPlatformOperatorDisable, operator.ID, "", actor.IP)
+	_, mutationErr := s.store.SetPlatformOperatorStatus(ctx, operator.ID, model.StatusSuspended, s.clock.Now(), audit)
+	return s.finishMutation(ctx, gate, mutationErr)
+}
+
+// EnablePlatformOperator reactivates another operator without restoring old
+// sessions.
+//
+// EnablePlatformOperator 重新启用另一名运维，但不恢复旧会话。
+func (s *Service) EnablePlatformOperator(ctx context.Context, actor Actor, operatorID string) error {
+	operator, err := s.managedPlatformOperator(ctx, actor, operatorID)
+	if err != nil {
+		return err
+	}
+	if operator.Status == model.StatusActive {
+		return nil
+	}
+	gate, err := s.beginPlatformMutation(ctx, operator)
+	if err != nil {
+		return err
+	}
+	audit := s.auditEntry(model.PlatformScope, actor.UserID, model.ActionPlatformOperatorEnable, operator.ID, "", actor.IP)
+	_, mutationErr := s.store.SetPlatformOperatorStatus(ctx, operator.ID, model.StatusActive, s.clock.Now(), audit)
+	return s.finishMutation(ctx, gate, mutationErr)
+}
+
+// RevokePlatformOperatorSessions revokes every session belonging to another
+// operator.
+//
+// RevokePlatformOperatorSessions 吊销另一名运维的全部会话。
+func (s *Service) RevokePlatformOperatorSessions(ctx context.Context, actor Actor, operatorID string) error {
+	operator, err := s.managedPlatformOperator(ctx, actor, operatorID)
+	if err != nil {
+		return err
+	}
+	if s.sessions == nil {
+		return ErrUnavailable
+	}
+	count, err := s.sessions.RevokeAll(ctx, platformSubject(operator))
+	if err != nil {
+		return sessionError(err)
+	}
+	if count > 0 {
+		s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionPlatformOperatorSessionsRevoke, operator.ID,
+			fmt.Sprintf("sessions revoked %d", count), actor.IP)
+	}
+	return nil
+}
+
+func (s *Service) managedPlatformOperator(ctx context.Context, actor Actor, operatorID string) (model.PlatformOperator, error) {
+	if err := s.requirePlatformActor(actor); err != nil {
+		return model.PlatformOperator{}, err
+	}
+	if operatorID == "" {
+		return model.PlatformOperator{}, ErrInvalidInput
+	}
+	if actor.UserID == operatorID {
+		return model.PlatformOperator{}, ErrConflict
+	}
+	operator, err := s.store.GetPlatformOperator(ctx, operatorID)
+	if err != nil {
 		return model.PlatformOperator{}, translate(err)
 	}
-	s.audit(ctx, model.PlatformScope, "", model.ActionPlatformOperatorCreate, operator.ID, "", ip)
 	return operator, nil
+}
+
+func (s *Service) beginPlatformMutation(ctx context.Context, operator model.PlatformOperator) (session.Gate, error) {
+	if s.sessions == nil {
+		return session.Gate{}, ErrUnavailable
+	}
+	gate, err := s.sessions.BeginMutation(ctx, platformSubject(operator))
+	if err != nil {
+		return session.Gate{}, sessionError(err)
+	}
+	return gate, nil
+}
+
+func platformSubject(operator model.PlatformOperator) session.Subject {
+	return session.Subject{Kind: session.SubjectPlatformOperator, ID: operator.ID}
 }
 
 // PlatformAuthenticate verifies a platform operator's sign-in, mirroring
@@ -63,6 +253,21 @@ func (s *Service) CreatePlatformOperator(ctx context.Context, email, password, n
 // 一致：即便 email 不存在，密码比较也照样针对一个固定的假摘要执行，因此
 // 这里的失败无法被用来枚举运维账户。
 func (s *Service) PlatformAuthenticate(ctx context.Context, email, password, ip string) (model.PlatformOperator, error) {
+	operator, err := s.PlatformAuthenticateCredentials(ctx, email, password)
+	if err != nil {
+		return model.PlatformOperator{}, err
+	}
+	if err := s.RecordPlatformOperatorLogin(ctx, &operator, ip); err != nil {
+		return model.PlatformOperator{}, err
+	}
+	return operator, nil
+}
+
+// PlatformAuthenticateCredentials verifies platform credentials without
+// recording a login.
+//
+// PlatformAuthenticateCredentials 校验平台凭据但不记录登录。
+func (s *Service) PlatformAuthenticateCredentials(ctx context.Context, email, password string) (model.PlatformOperator, error) {
 	operator, err := s.store.GetPlatformOperatorByEmail(ctx, normalizeEmail(email))
 	if err != nil && !errors.Is(err, store.ErrNotFound) {
 		return model.PlatformOperator{}, err
@@ -76,14 +281,21 @@ func (s *Service) PlatformAuthenticate(ctx context.Context, email, password, ip 
 	if err != nil || compareErr != nil || operator.Status != model.StatusActive {
 		return model.PlatformOperator{}, ErrInvalidCredentials
 	}
+	return operator, nil
+}
 
+// RecordPlatformOperatorLogin records a platform login only after its Redis
+// session exists.
+//
+// RecordPlatformOperatorLogin 只在 Redis 会话存在后记录一次平台登录。
+func (s *Service) RecordPlatformOperatorLogin(ctx context.Context, operator *model.PlatformOperator, ip string) error {
 	now := s.clock.Now()
 	if err := s.store.MarkPlatformOperatorLogin(ctx, operator.ID, now); err != nil {
-		return model.PlatformOperator{}, err
+		return err
 	}
 	operator.LastLoginAt = &now
 	s.audit(ctx, model.PlatformScope, operator.ID, model.ActionPlatformOperatorLogin, operator.ID, "", ip)
-	return operator, nil
+	return nil
 }
 
 // isPlatformActor reports whether actor is an authenticated platform
@@ -110,6 +322,13 @@ func (s *Service) requirePlatformActor(actor Actor) error {
 	if !isPlatformActor(actor) {
 		return ErrForbidden
 	}
+	return nil
+}
+
+func (s *Service) requireRegistryActor(actor Actor) error {
+	if err := s.requirePlatformActor(actor); err != nil {
+		return err
+	}
 	if s.registryClient == nil {
 		return ErrRegistryUnconfigured
 	}
@@ -124,7 +343,7 @@ func (s *Service) requirePlatformActor(actor Actor) error {
 // Registry，并且只在成功时记一条审计——为什么失败的操作不留审计，见
 // service.go 的 audit 文档注释。
 func (s *Service) ApproveNode(ctx context.Context, actor Actor, nodeID string) error {
-	if err := s.requirePlatformActor(actor); err != nil {
+	if err := s.requireRegistryActor(actor); err != nil {
 		return err
 	}
 	if nodeID == "" {
@@ -141,7 +360,7 @@ func (s *Service) ApproveNode(ctx context.Context, actor Actor, nodeID string) e
 //
 // DisableNode 吊销一个 node_id 的身份（STATUS.md 的 S03/P01）。
 func (s *Service) DisableNode(ctx context.Context, actor Actor, nodeID string) error {
-	if err := s.requirePlatformActor(actor); err != nil {
+	if err := s.requireRegistryActor(actor); err != nil {
 		return err
 	}
 	if nodeID == "" {
@@ -158,7 +377,7 @@ func (s *Service) DisableNode(ctx context.Context, actor Actor, nodeID string) e
 //
 // EnableNode 清除此前的 DisableNode（STATUS.md 的 S03/P01）。
 func (s *Service) EnableNode(ctx context.Context, actor Actor, nodeID string) error {
-	if err := s.requirePlatformActor(actor); err != nil {
+	if err := s.requireRegistryActor(actor); err != nil {
 		return err
 	}
 	if nodeID == "" {
@@ -178,7 +397,7 @@ func (s *Service) EnableNode(ctx context.Context, actor Actor, nodeID string) er
 // EnterMaintenance 把一个 node_id 置入运维强制的维护状态（STATUS.md 的
 // P01）：节点保持连接、跑完在途请求，但不再接收新派发。
 func (s *Service) EnterMaintenance(ctx context.Context, actor Actor, nodeID string) error {
-	if err := s.requirePlatformActor(actor); err != nil {
+	if err := s.requireRegistryActor(actor); err != nil {
 		return err
 	}
 	if nodeID == "" {
@@ -195,7 +414,7 @@ func (s *Service) EnterMaintenance(ctx context.Context, actor Actor, nodeID stri
 //
 // ExitMaintenance 清除此前的 EnterMaintenance。
 func (s *Service) ExitMaintenance(ctx context.Context, actor Actor, nodeID string) error {
-	if err := s.requirePlatformActor(actor); err != nil {
+	if err := s.requireRegistryActor(actor); err != nil {
 		return err
 	}
 	if nodeID == "" {
@@ -217,7 +436,7 @@ func (s *Service) ExitMaintenance(ctx context.Context, actor Actor, nodeID strin
 // 已禁用或维护中——好让平台运维控制台渲染出「期望状态」（STATUS.md 的 P01）。
 // 这里没有审计记录：这是一次读取，与 CurrentTenant 一样。
 func (s *Service) ListNodeStates(ctx context.Context, actor Actor) ([]registryclient.NodeState, error) {
-	if err := s.requirePlatformActor(actor); err != nil {
+	if err := s.requireRegistryActor(actor); err != nil {
 		return nil, err
 	}
 	return s.registryClient.ListNodeStates(ctx)

@@ -48,6 +48,7 @@ func main() {
 func run() error {
 	configFile := flag.String("f", "etc/controlplane.yaml", "path to the configuration file")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	migrate := flag.String("migrate", "", "database-only command: up, status, or resume")
 	flag.Parse()
 
 	if *showVersion {
@@ -72,6 +73,16 @@ func run() error {
 	// conf.UseEnv 展开文件里的 ${VAR}，这正是让部署把密钥留在配置之外的办法：提交进
 	// 仓库的文件只写出它们的名字，取值由部署自己的密钥管理提供。没有它，每个部署都得
 	// 自己模板化这个文件，而那件事常见的捷径就是把真实取值提交上去。
+	if *migrate != "" {
+		var databaseConfig struct{ Database config.DatabaseConf }
+		if err := conf.Load(*configFile, &databaseConfig, conf.UseEnv()); err != nil {
+			return err
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		return svc.RunDatabaseCommand(ctx, databaseConfig.Database, *migrate, os.Stdout)
+	}
+
 	var cfg config.Config
 	if err := conf.Load(*configFile, &cfg, conf.UseEnv()); err != nil {
 		return err
@@ -92,11 +103,8 @@ func run() error {
 		}
 	}()
 
-	if !svcCtx.CacheEnabled() {
-		logger.Warn("no Redis configured; every API key verification will query the database")
-	}
 	if cfg.Database.AutoMigrate {
-		logger.Warn("AutoMigrate is on; this process alters its own schema at startup")
+		logger.Warn("AutoMigrate is on; this process applies embedded versioned SQL at startup")
 	}
 
 	server, err := rest.NewServer(cfg.RestConf)

@@ -34,14 +34,12 @@ type Config struct {
 	// Database 是控制面数据库。
 	Database DatabaseConf
 
-	// Redis caches key verifications for the Gateway. It is optional: with no
-	// address configured the service still works, every verification goes to
-	// the database, and the operator is warned at startup. A cache that must
-	// be present to serve traffic is not a cache.
+	// Redis stores revocable Console sessions and also caches key verifications
+	// for the Gateway. It is required because accepting a JWT without checking
+	// its server-side session would silently disable revocation.
 	//
-	// Redis 为 Gateway 缓存 key 校验结果。它是可选的：未配置地址时服务照常工作，
-	// 每次校验都落到数据库，且启动时会有告警。一个必须存在才能承载流量的缓存
-	// 不叫缓存。
+	// Redis 存储可吊销的 Console 会话，也为 Gateway 缓存 key 校验结果。它是必需的，
+	// 因为只接受 JWT 而不检查服务端会话，会悄悄关闭吊销能力。
 	Redis RedisConf `json:",optional"`
 
 	// Auth configures the Console's session tokens.
@@ -188,10 +186,9 @@ func (r RegistryConf) Enabled() bool {
 
 // Supported database drivers.
 //
-// PostgreSQL is the primary target: the twenty tables still to come include
-// several JSON columns (workflow templates, deployment revisions, job events),
-// and JSONB's indexing is a real advantage there. MySQL is supported because
-// deployments have it, and because the four tables this service owns today use
+// PostgreSQL is the primary target because future analytical tables will use
+// JSON query and index features. MySQL is supported because
+// deployments have it, and because the five base tables this service owns use
 // only scalar columns, which both engines express identically. That equivalence
 // is what makes dual support cheap right now — and it stops being true the day
 // a JSON column lands, which is the point to re-evaluate rather than quietly
@@ -199,9 +196,8 @@ func (r RegistryConf) Enabled() bool {
 //
 // 支持的数据库驱动。
 //
-// PostgreSQL 是首要目标：尚未落地的那二十张表里有若干 JSON 列（工作流模板、部署
-// revision、job 事件），JSONB 的索引能力在那里是实打实的优势。之所以支持 MySQL，是因为
-// 有些部署本来就有它，也因为本服务今天拥有的这四张表只使用标量列，而两种引擎对标量列的
+// PostgreSQL 是首要目标，因为后续分析表会使用 JSON 查询与索引能力。之所以支持 MySQL，是因为
+// 有些部署本来就有它，也因为本服务的五张基础表只使用标量列，而两种引擎对标量列的
 // 表达完全一致。正是这种等价性让「同时支持两者」在当下代价很低——而它会在某个 JSON 列
 // 落地的那天不再成立，那时应当重新评估，而不是悄悄糊过去。
 const (
@@ -249,12 +245,12 @@ type DatabaseConf struct {
 	// ConnMaxLifetime 限制单个连接被复用的时长，好让数据库滚动切换无需重启本服务
 	// 即可被感知。
 	ConnMaxLifetime time.Duration `json:",default=30m"`
-	// AutoMigrate runs the schema migration at startup. It defaults to false
-	// so a production deployment does not silently alter its own schema on a
-	// rollout; local setups turn it on.
+	// AutoMigrate applies embedded versioned SQL at startup for compatibility
+	// with local configurations. False only checks the schema; production runs
+	// the database-only migration command before starting a service replica.
 	//
-	// AutoMigrate 在启动时执行 schema 迁移。默认为 false，好让生产部署不会在一次
-	// 发布中悄悄改动自己的 schema；本地环境可以打开它。
+	// AutoMigrate 在启动时执行内嵌版本 SQL，兼容既有本地配置。false 仅检查 schema；
+	// 生产在启动服务副本前，先运行独立的数据库迁移命令。
 	AutoMigrate bool `json:",default=false"`
 }
 
@@ -265,14 +261,13 @@ type RedisConf struct {
 	Addr     string `json:",optional"`
 	Password string `json:",optional"`
 	DB       int    `json:",default=0"`
-	// TTL bounds how long a verification result is trusted without asking
-	// the database again. It is the window a revoked key can still be served
-	// within, so it is short by default: revocation is an incident response
-	// action, and a minute of exposure after one is already a long time.
+	// TTL bounds how long a verification result is trusted without asking the
+	// database again. Generation notifications clear ordinary revocations;
+	// this remains their defense-in-depth expiry while the transactional outbox
+	// retries publication across crashes.
 	//
-	// TTL 限制一次校验结果在不再询问数据库的前提下被信任多久。它就是一个已被
-	// 吊销的 key 仍可能被放行的窗口，因此默认值很短：吊销是应急响应动作，事后再暴露
-	// 一分钟已经算久了。
+	// TTL 限制一次校验结果在不再询问数据库的前提下被信任多久。普通吊销由 generation
+	// 通知清除；这里保留纵深防御的过期边界，事务 outbox 负责跨崩溃重试发布。
 	TTL time.Duration `json:",default=30s"`
 }
 
@@ -309,6 +304,9 @@ const minSecretLen = 32
 func (c Config) Validate() error {
 	if c.Database.DSN == "" {
 		return errors.New("config: Database.DSN is required")
+	}
+	if c.Redis.Addr == "" {
+		return errors.New("config: Redis.Addr is required for revocable sessions")
 	}
 	for name, secret := range map[string]string{
 		"Auth.AccessSecret": c.Auth.AccessSecret,

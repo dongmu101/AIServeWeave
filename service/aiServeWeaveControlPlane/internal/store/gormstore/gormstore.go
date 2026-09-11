@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 
 	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
@@ -37,29 +38,11 @@ type Store struct {
 // New 基于 db 返回一个 Store。
 func New(db *gorm.DB) *Store { return &Store{db: db} }
 
-// Migrate creates or updates the four tables this service owns.
-//
-// AutoMigrate is a deliberate starting point, not the end state: it cannot
-// express a down migration, it will not drop a column, and it leaves no
-// record of what ran when. It is enough while this service owns four tables
-// and no production data; the moment either changes, this becomes versioned
-// SQL files. That transition is named in the service README so it is a
-// scheduled decision rather than a surprise.
-//
-// Migrate 创建或更新本服务拥有的四张表。
-//
-// 用 AutoMigrate 是一个有意为之的起点，而非终态：它无法表达回滚迁移，不会删除列，
-// 也不留下「何时执行了什么」的记录。在本服务只拥有四张表、且没有生产数据期间它足够
-// 用；一旦其中任何一条不再成立，这里就要换成带版本的 SQL 文件。这个切换点写在服务
-// README 里，好让它成为一个排上日程的决定，而不是一次意外。
+// Migrate applies the versioned base schema, preserving existing data.
+// Migrate 应用基础表的版本化迁移，并保留已有数据。
 func (s *Store) Migrate(ctx context.Context) error {
-	return s.db.WithContext(ctx).AutoMigrate(
-		&model.Tenant{},
-		&model.User{},
-		&model.PlatformOperator{},
-		&model.APIKey{},
-		&model.AuditLog{},
-	)
+	_, err := s.migrateOne(ctx, "base")
+	return err
 }
 
 // -----------------------------------------------------------------------
@@ -187,7 +170,16 @@ func (s *Store) MarkPlatformOperatorLogin(ctx context.Context, id string, at tim
 //
 // CreateAPIKey 插入一个 key。
 func (s *Store) CreateAPIKey(ctx context.Context, key *model.APIKey) error {
-	return translate(s.db.WithContext(ctx).Create(key).Error)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var creator model.User
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND tenant_id = ? AND status = ?", key.CreatedBy, key.TenantID, model.StatusActive).
+			Take(&creator).Error; err != nil {
+			return err
+		}
+		return tx.Create(key).Error
+	})
+	return translate(err)
 }
 
 // GetAPIKeyByHash reads one key by its stored hash. This is the Gateway's
@@ -245,17 +237,19 @@ func (s *Store) GetAPIKey(ctx context.Context, tenantID, id string) (model.APIKe
 // 吊销在真正要紧的意义上具备幂等性：第二次吊销不会悄悄改写第一次的时间戳，因此审计
 // 线索保留的是该 key 实际停止工作的那一刻。
 func (s *Store) RevokeAPIKey(ctx context.Context, tenantID, id string, at time.Time) error {
-	result := s.db.WithContext(ctx).
-		Model(&model.APIKey{}).
-		Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, model.StatusActive).
-		Updates(map[string]any{"status": model.StatusRevoked, "revoked_at": at})
-	if err := translate(result.Error); err != nil {
-		return err
-	}
-	if result.RowsAffected == 0 {
-		return store.ErrNotFound
-	}
-	return nil
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		result := tx.Model(&model.APIKey{}).
+			Where("id = ? AND tenant_id = ? AND status = ?", id, tenantID, model.StatusActive).
+			Updates(map[string]any{"status": model.StatusRevoked, "revoked_at": at})
+		if result.Error != nil {
+			return result.Error
+		}
+		if result.RowsAffected == 0 {
+			return store.ErrNotFound
+		}
+		return enqueueRevocation(tx)
+	})
+	return translate(err)
 }
 
 // MarkAPIKeyUsed records a coarse last-used timestamp.

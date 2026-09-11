@@ -18,6 +18,7 @@ import (
 	"log"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"gorm.io/driver/mysql"
 	"gorm.io/driver/postgres"
 	"gorm.io/gorm"
@@ -29,9 +30,19 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
 )
+
+// RevocationSource exposes the durable generation behind API Key cache
+// invalidation.
+//
+// RevocationSource 暴露 API Key 缓存失效背后的持久 generation。
+type RevocationSource interface {
+	WatchGeneration(ctx context.Context, after int64, wait time.Duration) (int64, error)
+}
 
 // ServiceContext is everything the handlers need.
 //
@@ -41,6 +52,14 @@ type ServiceContext struct {
 	Logic  *logic.Service
 	Issuer *token.Issuer
 	Cache  *cache.Verifications
+	// Revocations supplies the generation watched by Gateway replicas.
+	//
+	// Revocations 提供 Gateway 副本监听的失效 generation。
+	Revocations RevocationSource
+	// Sessions is the authoritative server-side half of every Console JWT.
+	//
+	// Sessions 是每个 Console JWT 在服务端的权威部分。
+	Sessions session.Store
 	// Fleet aggregates the node inventory across Gateway replicas. It is nil
 	// when the deployment did not configure one, and every handler that uses
 	// it is mounted only in that case — so a service without an operations
@@ -66,7 +85,10 @@ type ServiceContext struct {
 	// 「未配置」的端点。
 	RegistryClient *registryclient.Client
 
-	db *gorm.DB
+	db          *gorm.DB
+	redisClient *redis.Client
+	relayCancel context.CancelFunc
+	relayDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -91,41 +113,31 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	}
 
 	st := gormstore.New(db)
-	if cfg.Database.AutoMigrate {
-		if err := st.Migrate(ctx); err != nil {
-			return nil, errors.Join(errors.New("running the schema migration"), err)
-		}
-		// The jobs/job_artifacts migration is separate from the AutoMigrate
-		// call above and MySQL-only, per STATUS.md's J03 and the gormstore
-		// package doc on jobMigrationsFS. It shares the AutoMigrate flag
-		// rather than getting one of its own: both are "alter my schema at
-		// startup", and a deployment that already opted into that for the
-		// first four tables has made the same call for these two. A
-		// PostgreSQL deployment simply does not get Job persistence yet —
-		// that is a true gap, not a silently skipped feature, and it is
-		// named in the ControlPlane README.
-		//
-		// jobs/job_artifacts 的迁移与上面的 AutoMigrate 调用分开，且仅限 MySQL，
-		// 对应 STATUS.md 的 J03 与 gormstore 包里 jobMigrationsFS 的文档注释。
-		// 它复用 AutoMigrate 这一个开关，而不是另设一个：两者都是「启动时改动我的
-		// schema」，一个已经为前四张表选择了这一点的部署，对这两张表也做出了
-		// 同样的选择。一个 PostgreSQL 部署此刻确实还得不到 Job 持久化——这是一个
-		// 真实的缺口，不是被悄悄跳过的功能，且已在 ControlPlane README 里点名。
-		if _, err := st.MigrateRoutes(ctx); err != nil {
-			return nil, errors.Join(errors.New("running the routing schema migration"), err)
-		}
-		if _, err := st.MigrateWorkflowTemplates(ctx); err != nil {
-			return nil, errors.Join(errors.New("running the workflow template schema migration"), err)
-		}
-		if cfg.Database.Driver == config.DriverMySQL {
-			if _, err := st.MigrateJobs(ctx); err != nil {
-				return nil, errors.Join(errors.New("running the jobs schema migration"), err)
+	ready := false
+	defer func() {
+		if !ready {
+			if pool, err := db.DB(); err == nil {
+				_ = pool.Close()
 			}
 		}
+	}()
+	if cfg.Database.AutoMigrate {
+		if err := st.MigrateAll(ctx, false); err != nil {
+			return nil, errors.Join(errors.New("running versioned schema migrations"), err)
+		}
+	} else if err := st.CheckSchema(ctx); err != nil {
+		return nil, err
 	}
 
-	verifications := cache.New(cfg.Redis.Addr, cfg.Redis.Password, cfg.Redis.DB, cfg.Redis.TTL)
+	redisClient := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB, ContextTimeoutEnabled: true})
+	defer func() {
+		if !ready {
+			_ = redisClient.Close()
+		}
+	}()
+	verifications := cache.NewWithClient(redisClient, cfg.Redis.TTL)
 	if err := verifications.Ping(ctx); err != nil {
+		_ = redisClient.Close()
 		return nil, errors.Join(errors.New("reaching the configured Redis"), err)
 	}
 
@@ -135,7 +147,9 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		return nil, err
 	}
 
-	logicOpts := []logic.Option{logic.WithInvalidator(verifications)}
+	sessions := session.NewRedis(redisClient, clock)
+	relay := revocationoutbox.New(st, verifications, clock)
+	logicOpts := []logic.Option{logic.WithInvalidator(relay), logic.WithSessions(sessions)}
 	var registryClient *registryclient.Client
 	if cfg.Registry.Enabled() {
 		registryClient, err = registryclient.New(registryclient.Config{
@@ -150,11 +164,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
 	}
 
+	relayCtx, relayCancel := context.WithCancel(ctx)
+	relayDone := make(chan struct{})
+	go func() { defer close(relayDone); relay.Run(relayCtx) }()
+	ready = true
 	return &ServiceContext{
-		Config: cfg,
-		Logic:  logic.New(st, clock, logicOpts...),
-		Issuer: issuer,
-		Cache:  verifications,
+		Config:      cfg,
+		Logic:       logic.New(st, clock, logicOpts...),
+		Issuer:      issuer,
+		Cache:       verifications,
+		Revocations: verifications,
+		Sessions:    sessions,
 		Fleet: fleet.New(fleet.Config{
 			Gateways: cfg.Fleet.Gateways,
 			Token:    cfg.Fleet.GatewayToken,
@@ -163,6 +183,9 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}),
 		RegistryClient: registryClient,
 		db:             db,
+		redisClient:    redisClient,
+		relayCancel:    relayCancel,
+		relayDone:      relayDone,
 	}, nil
 }
 
@@ -170,9 +193,18 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 //
 // Close 释放数据库与缓存连接。
 func (s *ServiceContext) Close() error {
+	if s.relayCancel != nil {
+		s.relayCancel()
+		<-s.relayDone
+	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {
 		errs = append(errs, err)
+	}
+	if s.redisClient != nil {
+		if err := s.redisClient.Close(); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if s.RegistryClient != nil {
 		if err := s.RegistryClient.Close(); err != nil {

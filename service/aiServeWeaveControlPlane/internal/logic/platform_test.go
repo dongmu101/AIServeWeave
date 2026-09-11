@@ -5,10 +5,12 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/memstore"
 )
@@ -66,6 +68,7 @@ type platformFixture struct {
 	registry *fakeRegistryClient
 	operator model.PlatformOperator
 	actor    logic.Actor
+	sessions *session.Memory
 }
 
 func newPlatformFixture(t *testing.T) *platformFixture {
@@ -73,11 +76,19 @@ func newPlatformFixture(t *testing.T) *platformFixture {
 	st := memstore.New()
 	clock := newFakeClock()
 	registry := &fakeRegistryClient{}
-	svc := logic.New(st, clock, logic.WithRegistryClient(registry))
+	sessions := session.NewMemory(clock)
+	svc := logic.New(st, clock, logic.WithRegistryClient(registry), logic.WithSessions(sessions))
 
 	operator, err := svc.CreatePlatformOperator(context.Background(), "operator@example.com", testPassword, "Ops", "10.0.0.1")
 	if err != nil {
 		t.Fatalf("CreatePlatformOperator: %v", err)
+	}
+	sessionID := "ses_platform_owner"
+	if err := sessions.Create(context.Background(), session.Record{
+		ID: sessionID, Subject: session.Subject{Kind: session.SubjectPlatformOperator, ID: operator.ID},
+		TenantID: model.PlatformScope, Role: model.RolePlatformOperator, ExpiresAt: clock.Now().Add(time.Hour),
+	}); err != nil {
+		t.Fatalf("Create platform session: %v", err)
 	}
 	return &platformFixture{
 		t:        t,
@@ -86,12 +97,119 @@ func newPlatformFixture(t *testing.T) *platformFixture {
 		clock:    clock,
 		registry: registry,
 		operator: operator,
+		sessions: sessions,
 		actor: logic.Actor{
-			UserID:   operator.ID,
-			TenantID: model.PlatformScope,
-			Role:     model.RolePlatformOperator,
-			IP:       "10.0.0.1",
+			SessionID: sessionID,
+			UserID:    operator.ID,
+			TenantID:  model.PlatformScope,
+			Role:      model.RolePlatformOperator,
+			IP:        "10.0.0.1",
 		},
+	}
+}
+
+func (f *platformFixture) operatorWithSession(email string) (model.PlatformOperator, logic.Actor) {
+	f.t.Helper()
+	operator, err := f.svc.CreatePlatformOperatorAs(context.Background(), f.actor, email, testPassword, email)
+	if err != nil {
+		f.t.Fatalf("CreatePlatformOperatorAs: %v", err)
+	}
+	sessionID := "ses_" + operator.ID
+	if err := f.sessions.Create(context.Background(), session.Record{
+		ID: sessionID, Subject: session.Subject{Kind: session.SubjectPlatformOperator, ID: operator.ID},
+		TenantID: model.PlatformScope, Role: model.RolePlatformOperator, ExpiresAt: f.clock.Now().Add(time.Hour),
+	}); err != nil {
+		f.t.Fatalf("Create platform session: %v", err)
+	}
+	return operator, logic.Actor{SessionID: sessionID, UserID: operator.ID, TenantID: model.PlatformScope, Role: model.RolePlatformOperator, IP: "10.0.0.2"}
+}
+
+func TestPlatformOperatorLifecycle(t *testing.T) {
+	f := newPlatformFixture(t)
+	target, targetActor := f.operatorWithSession("managed-operator@example.com")
+
+	if err := f.svc.ResetPlatformOperatorPassword(context.Background(), f.actor, target.ID, "replacement"); err != nil {
+		t.Fatalf("ResetPlatformOperatorPassword: %v", err)
+	}
+	if err := f.sessions.Validate(context.Background(), targetActor.SessionID,
+		session.Subject{Kind: session.SubjectPlatformOperator, ID: target.ID}, model.PlatformScope, model.RolePlatformOperator); !errors.Is(err, session.ErrInvalid) {
+		t.Errorf("Validate reset session error = %v, want %v", err, session.ErrInvalid)
+	}
+	if _, err := f.svc.PlatformAuthenticate(context.Background(), target.Email, testPassword, "10.0.0.2"); !errors.Is(err, logic.ErrInvalidCredentials) {
+		t.Errorf("old password error = %v, want %v", err, logic.ErrInvalidCredentials)
+	}
+	if _, err := f.svc.PlatformAuthenticate(context.Background(), target.Email, "replacement", "10.0.0.2"); err != nil {
+		t.Errorf("replacement password error = %v, want nil", err)
+	}
+
+	if err := f.svc.DisablePlatformOperator(context.Background(), f.actor, target.ID); err != nil {
+		t.Fatalf("DisablePlatformOperator: %v", err)
+	}
+	if _, err := f.svc.PlatformAuthenticate(context.Background(), target.Email, "replacement", "10.0.0.2"); !errors.Is(err, logic.ErrInvalidCredentials) {
+		t.Errorf("disabled login error = %v, want %v", err, logic.ErrInvalidCredentials)
+	}
+	if err := f.svc.EnablePlatformOperator(context.Background(), f.actor, target.ID); err != nil {
+		t.Fatalf("EnablePlatformOperator: %v", err)
+	}
+	if _, err := f.svc.PlatformAuthenticate(context.Background(), target.Email, "replacement", "10.0.0.2"); err != nil {
+		t.Errorf("enabled login error = %v, want nil", err)
+	}
+}
+
+func TestPlatformOperatorCannotDisableSelf(t *testing.T) {
+	f := newPlatformFixture(t)
+	if err := f.svc.DisablePlatformOperator(context.Background(), f.actor, f.operator.ID); !errors.Is(err, logic.ErrConflict) {
+		t.Errorf("DisablePlatformOperator(self) error = %v, want %v", err, logic.ErrConflict)
+	}
+}
+
+func TestConcurrentDisablesPreserveOnePlatformOperator(t *testing.T) {
+	f := newPlatformFixture(t)
+	second, secondActor := f.operatorWithSession("second-platform@example.com")
+	start := make(chan struct{})
+	errs := make(chan error, 2)
+	var wg sync.WaitGroup
+	for _, request := range []struct {
+		actor  logic.Actor
+		target string
+	}{{actor: f.actor, target: second.ID}, {actor: secondActor, target: f.operator.ID}} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			errs <- f.svc.DisablePlatformOperator(context.Background(), request.actor, request.target)
+		}()
+	}
+	close(start)
+	wg.Wait()
+	close(errs)
+	var successes, conflicts int
+	for err := range errs {
+		switch {
+		case err == nil:
+			successes++
+		case errors.Is(err, logic.ErrConflict):
+			conflicts++
+		default:
+			t.Errorf("DisablePlatformOperator error = %v, want nil or %v", err, logic.ErrConflict)
+		}
+	}
+	if successes != 1 || conflicts != 1 {
+		t.Errorf("results = %d successes, %d conflicts; want 1 and 1", successes, conflicts)
+	}
+}
+
+func TestPlatformManagementDoesNotRequireRegistryClient(t *testing.T) {
+	clock := newFakeClock()
+	sessions := session.NewMemory(clock)
+	svc := logic.New(memstore.New(), clock, logic.WithSessions(sessions))
+	operator, err := svc.CreatePlatformOperator(context.Background(), "standalone@example.com", testPassword, "", "10.0.0.1")
+	if err != nil {
+		t.Fatalf("CreatePlatformOperator: %v", err)
+	}
+	actor := logic.Actor{SessionID: "ses_standalone", UserID: operator.ID, TenantID: model.PlatformScope, Role: model.RolePlatformOperator}
+	if _, err := svc.ListPlatformOperators(context.Background(), actor, store.ListQuery{}, store.PlatformOperatorFilter{}); err != nil {
+		t.Errorf("ListPlatformOperators error = %v, want nil", err)
 	}
 }
 

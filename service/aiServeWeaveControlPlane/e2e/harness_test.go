@@ -25,6 +25,7 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
@@ -37,6 +38,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/handler"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/memstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
@@ -69,10 +71,75 @@ const (
 //
 // harness 是一个正在运行的控制面，以及测试对它发起的各种客户端调用。
 type harness struct {
-	t      *testing.T
-	base   string
-	store  *memstore.Store
-	server *rest.Server
+	t           *testing.T
+	base        string
+	store       *memstore.Store
+	sessions    session.Store
+	revocations *memoryRevocations
+	svcCtx      *svc.ServiceContext
+	server      *rest.Server
+}
+
+type memoryRevocations struct {
+	mu         sync.Mutex
+	generation int64
+	changed    chan struct{}
+}
+
+func newMemoryRevocations() *memoryRevocations {
+	return &memoryRevocations{changed: make(chan struct{})}
+}
+
+// Invalidate advances the in-memory notification generation.
+//
+// Invalidate 推进内存通知 generation。
+func (m *memoryRevocations) Invalidate(context.Context, string) {
+	m.invalidate()
+}
+
+// InvalidateAll advances the same global in-memory generation.
+//
+// InvalidateAll 推进同一份全局内存 generation。
+func (m *memoryRevocations) InvalidateAll(context.Context) {
+	m.invalidate()
+}
+
+func (m *memoryRevocations) invalidate() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.generation++
+	close(m.changed)
+	m.changed = make(chan struct{})
+}
+
+// WatchGeneration waits for a changed generation or a bounded heartbeat.
+//
+// WatchGeneration 等待 generation 变化或有界心跳结束。
+func (m *memoryRevocations) WatchGeneration(ctx context.Context, after int64, wait time.Duration) (int64, error) {
+	m.mu.Lock()
+	generation := m.generation
+	changed := m.changed
+	m.mu.Unlock()
+	if generation != after {
+		return generation, nil
+	}
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-changed:
+	case <-timer.C:
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.generation, nil
+}
+
+func (m *memoryRevocations) current() int64 {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.generation
 }
 
 // newHarness starts a control plane on a free port and tears it down with the
@@ -90,6 +157,15 @@ func newHarness(t *testing.T) *harness {
 // newHarnessWith 启动一个控制面，其 Gateway 读取路径指向给定的 endpoint。不传则机群
 // 未配置，那是常态部署，也是这里其他每个测试所面对的那种。
 func newHarnessWith(t *testing.T, gateways []string) *harness {
+	return newHarnessWithSessions(t, gateways, nil)
+}
+
+// newHarnessWithSessions starts a harness over a supplied session store. It
+// lets multi-replica tests model the shared Redis used in production.
+//
+// newHarnessWithSessions 基于指定会话存储启动测试夹具，让多副本测试可以模拟生产环境
+// 共享的 Redis。
+func newHarnessWithSessions(t *testing.T, gateways []string, sessions session.Store) *harness {
 	t.Helper()
 
 	port := freePort(t)
@@ -115,7 +191,12 @@ func newHarnessWith(t *testing.T, gateways []string) *harness {
 	}
 
 	st := memstore.New()
-	issuer, err := token.NewIssuer(accessSecret, time.Hour, runtime.NewSystemClock())
+	clock := runtime.NewSystemClock()
+	if sessions == nil {
+		sessions = session.NewMemory(clock)
+	}
+	revocations := newMemoryRevocations()
+	issuer, err := token.NewIssuer(accessSecret, time.Hour, clock)
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
@@ -126,9 +207,11 @@ func newHarnessWith(t *testing.T, gateways []string) *harness {
 	// ServiceContext 是逐字段构造的，而不是走 NewServiceContext——后者会去连数据库。
 	// handler 触及的一切都是真实的；只有 store 接口背后那部分不是。
 	svcCtx := &svc.ServiceContext{
-		Config: cfg,
-		Logic:  logic.New(st, runtime.NewSystemClock()),
-		Issuer: issuer,
+		Config:      cfg,
+		Logic:       logic.New(st, clock, logic.WithInvalidator(revocations), logic.WithSessions(sessions)),
+		Issuer:      issuer,
+		Revocations: revocations,
+		Sessions:    sessions,
 		Fleet: fleet.New(fleet.Config{
 			Gateways: gateways,
 			Token:    gatewayToken,
@@ -145,7 +228,7 @@ func newHarnessWith(t *testing.T, gateways []string) *harness {
 	go server.Start()
 	t.Cleanup(server.Stop)
 
-	h := &harness{t: t, base: fmt.Sprintf("http://127.0.0.1:%d", port), store: st, server: server}
+	h := &harness{t: t, base: fmt.Sprintf("http://127.0.0.1:%d", port), store: st, sessions: sessions, revocations: revocations, svcCtx: svcCtx, server: server}
 	h.waitReady()
 	return h
 }

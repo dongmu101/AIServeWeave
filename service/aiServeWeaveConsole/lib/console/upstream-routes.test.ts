@@ -24,6 +24,13 @@ test("the allowlist admits exactly the calls the Console makes", () => {
   }[] = [
     { name: "list users", method: "GET", path: "/admin/v1/users", want: "/admin/v1/users" },
     { name: "create user", method: "POST", path: "/admin/v1/users", want: "/admin/v1/users" },
+    { name: "change own password", method: "POST", path: "/admin/v1/auth/password", want: "/admin/v1/auth/password" },
+    { name: "revoke own sessions", method: "POST", path: "/admin/v1/auth/sessions/revoke", want: "/admin/v1/auth/sessions/revoke" },
+    { name: "reset user password", method: "PUT", path: "/admin/v1/users/usr_1/password", want: "/admin/v1/users/usr_1/password" },
+    { name: "change user role", method: "PUT", path: "/admin/v1/users/usr_1/role", want: "/admin/v1/users/usr_1/role" },
+    { name: "disable user", method: "POST", path: "/admin/v1/users/usr_1/disable", want: "/admin/v1/users/usr_1/disable" },
+    { name: "enable user", method: "POST", path: "/admin/v1/users/usr_1/enable", want: "/admin/v1/users/usr_1/enable" },
+    { name: "revoke user sessions", method: "POST", path: "/admin/v1/users/usr_1/sessions/revoke", want: "/admin/v1/users/usr_1/sessions/revoke" },
     { name: "list keys", method: "GET", path: "/admin/v1/apikeys", want: "/admin/v1/apikeys" },
     { name: "create key", method: "POST", path: "/admin/v1/apikeys", want: "/admin/v1/apikeys" },
     {
@@ -271,12 +278,25 @@ test("platform operations and audit are allowlisted only on their own surface", 
     ["POST", "/operator/v1/nodes/node-1/maintenance"],
     ["DELETE", "/operator/v1/nodes/node-1/maintenance"],
     ["GET", "/operator/v1/audit"],
+    ["POST", "/operator/v1/auth/password"],
+    ["POST", "/operator/v1/auth/sessions/revoke"],
+    ["GET", "/operator/v1/operators"],
+    ["POST", "/operator/v1/operators"],
+    ["PUT", "/operator/v1/operators/plt_1/password"],
+    ["POST", "/operator/v1/operators/plt_1/disable"],
+    ["POST", "/operator/v1/operators/plt_1/enable"],
+    ["POST", "/operator/v1/operators/plt_1/sessions/revoke"],
   ]) {
     assert.equal(operatorResolve(method, path)?.path, path);
     assert.equal(resolve(method, path), null);
   }
   assert.equal(operatorResolve("DELETE", "/operator/v1/nodes/node-1"), null);
   assert.equal(operatorResolve("POST", "/admin/v1/platform/operators"), null);
+});
+
+test("platform operator list forwards only its filters", () => {
+  const result = resolveOperatorUpstream("GET", ["operator", "v1", "operators"], new URLSearchParams("limit=10&cursor=c&status=active&q=ops&tenant_id=tnt_1"));
+  assert.equal(result?.search, "?limit=10&cursor=c&status=active&q=ops");
 });
 
 test("node routes accept operator labels, preserving one safe path segment", () => {

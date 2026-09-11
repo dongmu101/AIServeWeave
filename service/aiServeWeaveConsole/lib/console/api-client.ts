@@ -162,12 +162,10 @@ export async function signIn(
 }
 
 /**
- * signOut clears the Console session. It does not claim to revoke the control
- * plane token: this service cannot, and saying otherwise in the UI would be a
- * promise nothing keeps.
+ * signOut asks the Console server to revoke the ControlPlane session before
+ * it clears the sealed cookie.
  *
- * signOut 清理 Console 会话。它并不声称吊销了控制面令牌：本服务做不到，而在界面上
- * 另作表述，会成为一句没有任何东西兑现的承诺。
+ * signOut 要求 Console 服务端先吊销 ControlPlane 会话，再清理密封 Cookie。
  */
 export async function signOut(deps: RequestDeps = {}): Promise<void> {
   const doFetch = deps.fetchImpl ?? globalThis.fetch;

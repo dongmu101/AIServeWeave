@@ -8,7 +8,7 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 ## 当前能力与规划边界
 
-当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户、API Key、审计、配额与 MySQL Job 历史；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
+当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
 
 下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
 
@@ -586,4 +586,4 @@ Workflow API → 受控模板绑定 → Job 提交与确认
 
 两条链路分别对应同步/流式推理与异步任务。实时转发、持久历史和文件可用性需要分别定义故障语义，不能以某一环节成功推断整个链路可靠。
 
-开发里程碑、任务顺序、未完成项和验收记录统一维护在 [STATUS.md](STATUS.md)。
+开发里程碑、任务顺序、未完成项和验收记录统一维护在 [STATUS.md](STATUS.md)。控制面的 schema 升级、迁移失败处理与备份恢复见 [数据库升级与恢复](deploy/database-recovery.md)。

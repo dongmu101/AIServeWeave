@@ -1,0 +1,14 @@
+CREATE INDEX idx_tenants_status ON tenants (status);
+CREATE INDEX idx_users_tenant_id ON users (tenant_id);
+CREATE UNIQUE INDEX idx_users_email ON users (email);
+CREATE INDEX idx_users_status ON users (status);
+CREATE UNIQUE INDEX idx_platform_operators_email ON platform_operators (email);
+CREATE INDEX idx_platform_operators_status ON platform_operators (status);
+CREATE INDEX idx_api_keys_tenant_id ON api_keys (tenant_id);
+CREATE UNIQUE INDEX idx_api_keys_hash ON api_keys (hash);
+CREATE INDEX idx_api_keys_status ON api_keys (status);
+CREATE INDEX idx_api_keys_expires_at ON api_keys (expires_at);
+CREATE INDEX idx_audit_logs_tenant_id ON audit_logs (tenant_id);
+CREATE INDEX idx_audit_logs_actor_id ON audit_logs (actor_id);
+CREATE INDEX idx_audit_logs_action ON audit_logs (action);
+CREATE INDEX idx_audit_logs_created_at ON audit_logs (created_at);

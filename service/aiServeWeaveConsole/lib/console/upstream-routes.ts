@@ -74,6 +74,13 @@ const ROUTES: readonly UpstreamRoute[] = [
     segments: [literal("admin"), literal("v1"), literal("users")],
     query: [],
   },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("auth"), literal("password")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("auth"), literal("sessions"), literal("revoke")], query: [] },
+  { method: "PUT", segments: [literal("admin"), literal("v1"), literal("users"), param(), literal("password")], query: [] },
+  { method: "PUT", segments: [literal("admin"), literal("v1"), literal("users"), param(), literal("role")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("users"), param(), literal("disable")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("users"), param(), literal("enable")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("users"), param(), literal("sessions"), literal("revoke")], query: [] },
   {
     method: "GET",
     segments: [literal("admin"), literal("v1"), literal("apikeys")],
@@ -167,6 +174,14 @@ const ROUTES: readonly UpstreamRoute[] = [
  * 用一张表加一个行标志，会让「这次调用由哪个密钥支付」距离出错只有一个布尔值之遥。
  */
 const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("auth"), literal("password")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("auth"), literal("sessions"), literal("revoke")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("operators")], query: ["limit", "cursor", "status", "q"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("operators")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("operators"), param(), literal("password")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("operators"), param(), literal("disable")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("operators"), param(), literal("enable")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("operators"), param(), literal("sessions"), literal("revoke")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("validate")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("publish")], query: [] },

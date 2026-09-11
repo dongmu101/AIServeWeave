@@ -15,13 +15,16 @@ package handler
 import (
 	"context"
 	"crypto/subtle"
+	"errors"
 	"net"
 	"net/http"
 	"strings"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
 )
 
 // actorKey is the context key the session middleware stores the caller under.
@@ -87,11 +90,15 @@ func requireSession(ctx *svc.ServiceContext, next http.HandlerFunc) http.Handler
 			writeError(w, http.StatusUnauthorized, "invalid or expired session")
 			return
 		}
+		if !validateLiveSession(w, r, ctx, claims, session.SubjectTenantUser) {
+			return
+		}
 		actor := logic.Actor{
-			UserID:   claims.UserID,
-			TenantID: claims.TenantID,
-			Role:     claims.Role,
-			IP:       clientIP(r),
+			SessionID: claims.SessionID,
+			UserID:    claims.UserID,
+			TenantID:  claims.TenantID,
+			Role:      claims.Role,
+			IP:        clientIP(r),
 		}
 		next(w, r.WithContext(withActor(r.Context(), actor)))
 	}
@@ -123,14 +130,35 @@ func requirePlatformSession(ctx *svc.ServiceContext, next http.HandlerFunc) http
 			writeError(w, http.StatusForbidden, "your role does not permit this")
 			return
 		}
+		if !validateLiveSession(w, r, ctx, claims, session.SubjectPlatformOperator) {
+			return
+		}
 		actor := logic.Actor{
-			UserID:   claims.UserID,
-			TenantID: claims.TenantID,
-			Role:     claims.Role,
-			IP:       clientIP(r),
+			SessionID: claims.SessionID,
+			UserID:    claims.UserID,
+			TenantID:  claims.TenantID,
+			Role:      claims.Role,
+			IP:        clientIP(r),
 		}
 		next(w, r.WithContext(withActor(r.Context(), actor)))
 	}
+}
+
+func validateLiveSession(w http.ResponseWriter, r *http.Request, ctx *svc.ServiceContext, claims token.Claims, kind string) bool {
+	if ctx.Sessions == nil {
+		writeError(w, http.StatusServiceUnavailable, "session service unavailable")
+		return false
+	}
+	err := ctx.Sessions.Validate(r.Context(), claims.SessionID, session.Subject{Kind: kind, ID: claims.UserID}, claims.TenantID, claims.Role)
+	if err == nil {
+		return true
+	}
+	if errors.Is(err, session.ErrUnavailable) {
+		writeError(w, http.StatusServiceUnavailable, "session service unavailable")
+		return false
+	}
+	writeError(w, http.StatusUnauthorized, "invalid or expired session")
+	return false
 }
 
 // requireSharedSecret guards the two endpoints that have no signed-in user

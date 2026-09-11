@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -138,6 +139,60 @@ func newVerifier(t *testing.T, cp *fakeControlPlane, clock runtime.Clock) *contr
 	return verifier
 }
 
+type initialWatchTransport struct {
+	calls   atomic.Int64
+	applied chan struct{}
+	once    sync.Once
+}
+
+// RoundTrip returns one bootstrap generation, then blocks until cancellation.
+//
+// RoundTrip 返回一次启动 generation，随后阻塞到请求取消。
+func (t *initialWatchTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if t.calls.Add(1) == 1 {
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     make(http.Header),
+			Body:       io.NopCloser(strings.NewReader(`{"generation":0}`)),
+			Request:    req,
+		}, nil
+	}
+	t.once.Do(func() { close(t.applied) })
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func newCachingVerifier(t *testing.T, cp *fakeControlPlane, clock runtime.Clock) *controlplaneclient.Verifier {
+	t.Helper()
+	transport := &initialWatchTransport{applied: make(chan struct{})}
+	verifier, err := controlplaneclient.New(controlplaneclient.Config{
+		Endpoint:             cp.server.URL,
+		Token:                testToken,
+		Clock:                clock,
+		RevocationHTTPClient: &http.Client{Transport: transport},
+		Logger:               slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		verifier.RunRevocationWatch(ctx)
+	}()
+	select {
+	case <-transport.applied:
+	case <-time.After(time.Second):
+		t.Fatal("initial revocation generation was not applied")
+	}
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+	return verifier
+}
+
 func mustKey(t *testing.T) string {
 	t.Helper()
 	generated, err := apikey.Generate()
@@ -197,7 +252,7 @@ func TestVerifyReturnsTheIdentity(t *testing.T) {
 func TestVerificationIsCached(t *testing.T) {
 	cp := newFakeControlPlane(t)
 	clock := newFakeClock()
-	verifier := newVerifier(t, cp, clock)
+	verifier := newCachingVerifier(t, cp, clock)
 	key := mustKey(t)
 
 	for range 5 {
@@ -218,15 +273,14 @@ func TestVerificationIsCached(t *testing.T) {
 	}
 }
 
-// TestCacheExpiryBoundary pins the window a revoked key keeps working in — the
-// cost this cache trades for, and the number the service README quotes.
+// TestCacheExpiryBoundary pins the defense-in-depth lifetime of a healthy
+// positive cache entry independently of revocation notifications.
 //
-// TestCacheExpiryBoundary 钉住一个被吊销的 key 仍能继续工作的窗口——这正是本缓存所
-// 换取的代价，也是服务 README 所引用的那个数字。
+// TestCacheExpiryBoundary 独立于吊销通知，固定健康正向缓存条目的纵深防御生命期。
 func TestCacheExpiryBoundary(t *testing.T) {
 	cp := newFakeControlPlane(t)
 	clock := newFakeClock()
-	verifier := newVerifier(t, cp, clock)
+	verifier := newCachingVerifier(t, cp, clock)
 	key := mustKey(t)
 
 	if _, err := verifier.Verify(context.Background(), key); err != nil {

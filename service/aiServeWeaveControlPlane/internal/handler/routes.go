@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"time"
 
 	"github.com/zeromicro/go-zero/rest"
 
@@ -83,8 +84,25 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	})
 
 	server.AddRoutes([]rest.Route{
+		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: requireSession(ctx, sessionAction(ctx.Logic.Logout))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: requireSession(ctx, changeOwnPassword(ctx))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions))},
+		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout))},
+		{Method: http.MethodPost, Path: "/operator/v1/auth/password", Handler: requirePlatformSession(ctx, changeOwnPlatformPassword(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/auth/sessions/revoke", Handler: requirePlatformSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions))},
+		{Method: http.MethodGet, Path: "/operator/v1/operators", Handler: requirePlatformSession(ctx, listPlatformOperators(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators", Handler: requirePlatformSession(ctx, createPlatformOperatorAs(ctx))},
+		{Method: http.MethodPut, Path: "/operator/v1/operators/:id/password", Handler: requirePlatformSession(ctx, resetPlatformOperatorPassword(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/disable", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.DisablePlatformOperator))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/enable", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.EnablePlatformOperator))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/sessions/revoke", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.RevokePlatformOperatorSessions))},
 		{Method: http.MethodGet, Path: "/admin/v1/users", Handler: requireSession(ctx, listUsers(ctx))},
 		{Method: http.MethodPost, Path: "/admin/v1/users", Handler: requireSession(ctx, createUser(ctx))},
+		{Method: http.MethodPut, Path: "/admin/v1/users/:id/password", Handler: requireSession(ctx, resetUserPassword(ctx))},
+		{Method: http.MethodPut, Path: "/admin/v1/users/:id/role", Handler: requireSession(ctx, changeUserRole(ctx))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/disable", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.DisableUser))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/enable", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.EnableUser))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/sessions/revoke", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.RevokeUserSessions))},
 		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, listAPIKeys(ctx))},
 		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, createAPIKey(ctx))},
 		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: requireSession(ctx, revokeAPIKey(ctx))},
@@ -132,7 +150,13 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Handler: requireSharedSecret(ctx.Config.InternalToken, verifyKey(ctx)),
 		},
 	})
-
+	server.AddRoutes([]rest.Route{
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/apikeys/revocations/watch",
+			Handler: requireSharedSecret(ctx.Config.InternalToken, watchAPIKeyRevocations(ctx)),
+		},
+	}, rest.WithTimeout(revocationWatchWait+time.Second))
 	// The Job persistence endpoints (STATUS.md's J04) share the same
 	// InternalToken as key verification above: both are the Gateway talking
 	// to this service about its own callers' business, not a person acting

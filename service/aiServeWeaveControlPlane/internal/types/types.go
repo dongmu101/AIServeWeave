@@ -30,6 +30,29 @@ type LoginRequest struct {
 	Password string `json:"password"`
 }
 
+// ChangePasswordRequest changes the caller's password after verifying the
+// current one.
+//
+// ChangePasswordRequest 在校验当前密码后修改调用方密码。
+type ChangePasswordRequest struct {
+	CurrentPassword string `json:"current_password"`
+	NewPassword     string `json:"new_password"`
+}
+
+// ResetPasswordRequest replaces another account's password.
+//
+// ResetPasswordRequest 替换另一个账户的密码。
+type ResetPasswordRequest struct {
+	NewPassword string `json:"new_password"`
+}
+
+// ChangeRoleRequest replaces one tenant user's role.
+//
+// ChangeRoleRequest 替换一个租户用户的角色。
+type ChangeRoleRequest struct {
+	Role string `json:"role"`
+}
+
 // LoginResponse carries the session token and who it belongs to. It never
 // carries the password digest.
 //
@@ -259,6 +282,13 @@ type VerifyResponse struct {
 	TenantID string       `json:"tenant_id"`
 	KeyID    string       `json:"key_id"`
 	Limits   quota.Limits `json:"limits"`
+}
+
+// RevocationGenerationResponse is one notification cursor or heartbeat.
+//
+// RevocationGenerationResponse 是一次失效通知游标或心跳。
+type RevocationGenerationResponse struct {
+	Generation int64 `json:"generation"`
 }
 
 // SetLimitsRequest sets the caller's own tenant's quota. There is no tenant id
@@ -558,6 +588,14 @@ type PlatformOperator struct {
 	Status      string     `json:"status"`
 	LastLoginAt *time.Time `json:"last_login_at,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
+}
+
+// PlatformOperatorListResponse is one page of platform operators.
+//
+// PlatformOperatorListResponse 是一页平台运维账户。
+type PlatformOperatorListResponse struct {
+	Items      []PlatformOperator `json:"items"`
+	NextCursor string             `json:"next_cursor,omitempty"`
 }
 
 // PlatformLoginResponse carries the session token and who it belongs to,

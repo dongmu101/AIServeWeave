@@ -13,6 +13,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
@@ -42,13 +43,29 @@ func login(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		user, err := ctx.Logic.Authenticate(r.Context(), req.Email, req.Password, clientIP(r))
+		user, err := ctx.Logic.AuthenticateCredentials(r.Context(), req.Email, req.Password)
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
-		signed, expiry, err := ctx.Issuer.Issue(sessionClaims(user))
+		sessionID := session.NewID()
+		signed, expiry, err := ctx.Issuer.Issue(sessionClaims(sessionID, user))
 		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		if err := ctx.Sessions.Create(r.Context(), session.Record{
+			ID:        sessionID,
+			Subject:   session.Subject{Kind: session.SubjectTenantUser, ID: user.ID},
+			TenantID:  user.TenantID,
+			Role:      user.Role,
+			ExpiresAt: expiry,
+		}); err != nil {
+			respondSessionCreateErr(w, err)
+			return
+		}
+		if err := ctx.Logic.RecordUserLogin(r.Context(), &user, clientIP(r)); err != nil {
+			_, _ = ctx.Sessions.Revoke(r.Context(), session.Subject{Kind: session.SubjectTenantUser, ID: user.ID}, sessionID)
 			respondErr(w, err)
 			return
 		}
@@ -57,6 +74,46 @@ func login(ctx *svc.ServiceContext) http.HandlerFunc {
 			ExpiresAt: expiry,
 			User:      renderUser(user),
 		})
+	}
+}
+
+// sessionAction adapts a no-body session mutation to an HTTP handler.
+//
+// sessionAction 把一个无请求体的会话变更适配成 HTTP handler。
+func sessionAction(action func(context.Context, logic.Actor) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := action(r.Context(), actor); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// changeOwnPassword changes the current tenant user's password.
+//
+// changeOwnPassword 修改当前租户用户的密码。
+func changeOwnPassword(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.ChangePasswordRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := ctx.Logic.ChangeOwnPassword(r.Context(), actor, req.CurrentPassword, req.NewPassword); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -175,6 +232,68 @@ func createUser(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, renderUser(user))
+	}
+}
+
+// resetUserPassword replaces another tenant user's password.
+//
+// resetUserPassword 替换同租户另一名用户的密码。
+func resetUserPassword(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.ResetPasswordRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := ctx.Logic.ResetUserPassword(r.Context(), actor, pathvar.Vars(r)["id"], req.NewPassword); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// changeUserRole replaces another tenant user's role.
+//
+// changeUserRole 替换同租户另一名用户的角色。
+func changeUserRole(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.ChangeRoleRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := ctx.Logic.ChangeUserRole(r.Context(), actor, pathvar.Vars(r)["id"], req.Role); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// userLifecycleAction adapts a no-body target-user mutation.
+//
+// userLifecycleAction 适配一个无请求体的目标用户变更。
+func userLifecycleAction(action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := action(r.Context(), actor, pathvar.Vars(r)["id"]); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
@@ -482,6 +601,118 @@ func createPlatformOperator(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// createPlatformOperatorAs creates an operator on behalf of an authenticated
+// platform operator.
+//
+// createPlatformOperatorAs 代表一名已认证的平台运维创建另一名运维。
+func createPlatformOperatorAs(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.CreatePlatformOperatorRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		operator, err := ctx.Logic.CreatePlatformOperatorAs(r.Context(), actor, req.Email, req.Password, req.Name)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderPlatformOperator(operator))
+	}
+}
+
+// listPlatformOperators returns one filtered page of platform operators.
+//
+// listPlatformOperators 返回一页经过筛选的平台运维账户。
+func listPlatformOperators(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		query := r.URL.Query()
+		page, err := ctx.Logic.ListPlatformOperators(r.Context(), actor, listQuery(query), store.PlatformOperatorFilter{
+			Status: query.Get("status"), Query: query.Get("q"),
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		items := make([]types.PlatformOperator, len(page.Items))
+		for i, operator := range page.Items {
+			items[i] = renderPlatformOperator(operator)
+		}
+		writeJSON(w, http.StatusOK, types.PlatformOperatorListResponse{Items: items, NextCursor: page.NextCursor})
+	}
+}
+
+// changeOwnPlatformPassword changes the current platform operator password.
+//
+// changeOwnPlatformPassword 修改当前平台运维的密码。
+func changeOwnPlatformPassword(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.ChangePasswordRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := ctx.Logic.ChangeOwnPlatformPassword(r.Context(), actor, req.CurrentPassword, req.NewPassword); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// resetPlatformOperatorPassword replaces another operator's password.
+//
+// resetPlatformOperatorPassword 替换另一名运维的密码。
+func resetPlatformOperatorPassword(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.ResetPasswordRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if err := ctx.Logic.ResetPlatformOperatorPassword(r.Context(), actor, pathvar.Vars(r)["id"], req.NewPassword); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// platformOperatorLifecycleAction adapts a no-body target-operator mutation.
+//
+// platformOperatorLifecycleAction 适配一个无请求体的目标运维账户变更。
+func platformOperatorLifecycleAction(action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := action(r.Context(), actor, pathvar.Vars(r)["id"]); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // platformLogin authenticates a platform operator and issues a session
 // token scoped to model.PlatformScope (requirePlatformSession checks it).
 //
@@ -493,17 +724,34 @@ func platformLogin(ctx *svc.ServiceContext) http.HandlerFunc {
 		if !decode(w, r, &req) {
 			return
 		}
-		operator, err := ctx.Logic.PlatformAuthenticate(r.Context(), req.Email, req.Password, clientIP(r))
+		operator, err := ctx.Logic.PlatformAuthenticateCredentials(r.Context(), req.Email, req.Password)
 		if err != nil {
 			respondErr(w, err)
 			return
 		}
+		sessionID := session.NewID()
 		signed, expiry, err := ctx.Issuer.Issue(token.Claims{
-			UserID:   operator.ID,
-			TenantID: model.PlatformScope,
-			Role:     model.RolePlatformOperator,
+			SessionID: sessionID,
+			UserID:    operator.ID,
+			TenantID:  model.PlatformScope,
+			Role:      model.RolePlatformOperator,
 		})
 		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		if err := ctx.Sessions.Create(r.Context(), session.Record{
+			ID:        sessionID,
+			Subject:   session.Subject{Kind: session.SubjectPlatformOperator, ID: operator.ID},
+			TenantID:  model.PlatformScope,
+			Role:      model.RolePlatformOperator,
+			ExpiresAt: expiry,
+		}); err != nil {
+			respondSessionCreateErr(w, err)
+			return
+		}
+		if err := ctx.Logic.RecordPlatformOperatorLogin(r.Context(), &operator, clientIP(r)); err != nil {
+			_, _ = ctx.Sessions.Revoke(r.Context(), session.Subject{Kind: session.SubjectPlatformOperator, ID: operator.ID}, sessionID)
 			respondErr(w, err)
 			return
 		}
@@ -796,7 +1044,8 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 
-		if cached, ok := ctx.Cache.Get(r.Context(), req.Hash); ok {
+		cached, ok, generation := ctx.Cache.Get(r.Context(), req.Hash)
+		if ok {
 			writeJSON(w, http.StatusOK, types.VerifyResponse{TenantID: cached.TenantID, KeyID: cached.KeyID, Limits: cached.Limits})
 			return
 		}
@@ -806,7 +1055,7 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 			respondErr(w, err)
 			return
 		}
-		ctx.Cache.Put(r.Context(), req.Hash, verification)
+		ctx.Cache.Put(r.Context(), req.Hash, verification, generation)
 		writeJSON(w, http.StatusOK, types.VerifyResponse{
 			TenantID: verification.TenantID,
 			KeyID:    verification.KeyID,
@@ -1153,8 +1402,8 @@ func setTenantLimits(ctx *svc.ServiceContext) http.HandlerFunc {
 // sessionClaims is what a session token asserts about a user.
 //
 // sessionClaims 是会话令牌就一个用户所主张的内容。
-func sessionClaims(user model.User) token.Claims {
-	return token.Claims{UserID: user.ID, TenantID: user.TenantID, Role: user.Role}
+func sessionClaims(sessionID string, user model.User) token.Claims {
+	return token.Claims{SessionID: sessionID, UserID: user.ID, TenantID: user.TenantID, Role: user.Role}
 }
 
 // renderUser converts a stored user to its wire form. The digest has no field
@@ -1231,12 +1480,22 @@ func respondErr(w http.ResponseWriter, err error) {
 	case errors.Is(err, logic.ErrNotFound):
 		writeError(w, http.StatusNotFound, "not found")
 	case errors.Is(err, logic.ErrConflict):
-		writeError(w, http.StatusConflict, "already exists")
+		writeError(w, http.StatusConflict, "conflict")
 	case errors.Is(err, logic.ErrInvalidInput):
 		writeError(w, http.StatusBadRequest, "the request is not valid")
+	case errors.Is(err, logic.ErrUnavailable):
+		writeError(w, http.StatusServiceUnavailable, "service unavailable")
 	default:
 		writeError(w, http.StatusInternalServerError, "internal error")
 	}
+}
+
+func respondSessionCreateErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, session.ErrUnavailable) || errors.Is(err, session.ErrMutationActive) {
+		respondErr(w, logic.ErrUnavailable)
+		return
+	}
+	respondErr(w, err)
 }
 
 // writeJSON writes one JSON response.

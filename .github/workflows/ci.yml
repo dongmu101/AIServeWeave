@@ -6,15 +6,10 @@ on:
   pull_request:
     branches: [main]
 
-# 三个作业相互独立、并行执行：go 与 console 门禁不依赖真实外部后端，
-# mysql-integration 单独跑一份真实 MySQL 9.7，对应 AGENTS.md 与 J08 的
-# "默认测试不依赖真实数据库、外部后端测试独立运行" 约定。
-#
-# The three jobs are independent and run in parallel: the go and console
-# gates need no real external backend, and mysql-integration alone runs
-# against a real MySQL 9.7 — matching AGENTS.md's and J08's convention that
-# the default test suite stays hermetic while external-backend tests run
-# on their own.
+# The default Go/Console gates remain offline; database-integration uses
+# isolated real engines for J08/P07 upgrade, failure, and native recovery tests.
+# 默认 Go/Console 门禁保持离线；database-integration 使用独立真实引擎，
+# 执行 J08/P07 的升级、故障与原生恢复测试。
 jobs:
   go:
     name: Go 格式 / vet / build / proto / test / race
@@ -103,10 +98,32 @@ jobs:
       - name: pnpm test
         run: pnpm test
 
-  mysql-integration:
-    name: 真实 MySQL 9.7 集成测试（J08，独立于默认测试）
+  database-integration:
+    name: PostgreSQL 18 / MySQL 9.7 升级与恢复（J08/P07）
     runs-on: ubuntu-latest
     services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_USER: aisw
+          POSTGRES_PASSWORD: integration-only
+          POSTGRES_DB: aiserveweave
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd="pg_isready -U aisw -d aiserveweave"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
+      redis:
+        image: redis:8-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd="redis-cli ping"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=10
       mysql:
         image: mysql:9.7
         env:
@@ -120,7 +137,9 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     env:
+      AISW_POSTGRES_TEST_DSN: "postgres://aisw:integration-only@127.0.0.1:5432/aiserveweave?sslmode=disable"
       AISW_MYSQL_TEST_DSN: "root:@tcp(127.0.0.1:3306)/aiserveweave?parseTime=True&charset=utf8mb4"
+      AISW_REDIS_TEST_ADDR: "127.0.0.1:6379"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -130,5 +149,8 @@ jobs:
         with:
           go-version-file: go.mod
 
-      - name: go test -race（控制面，含 gormstore 与 e2e 的真实 MySQL 用例）
-        run: go test -race ./service/aiServeWeaveControlPlane/...
+      - name: go test -race（双数据库、原生备份恢复及 Redis outbox）
+        env:
+          AISW_POSTGRES_TEST_CONTAINER: ${{ job.services.postgres.id }}
+          AISW_MYSQL_TEST_CONTAINER: ${{ job.services.mysql.id }}
+        run: go test -race -p 1 ./service/aiServeWeaveControlPlane/...

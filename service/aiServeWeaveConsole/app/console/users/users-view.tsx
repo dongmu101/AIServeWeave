@@ -8,6 +8,7 @@ import {
 } from "@tanstack/react-table";
 
 import { CreateUserDialog } from "@/app/console/users/create-user-dialog";
+import { UserActions } from "@/app/console/users/user-actions";
 import { DataTable } from "@/components/console/data-table";
 import { Pager } from "@/components/console/pager";
 import { ErrorState, LoadingState } from "@/components/console/states";
@@ -27,7 +28,7 @@ import {
 } from "@/components/ui/select";
 import { parseUsers, ROLE_LABELS, ROLES, type Role, type User } from "@/lib/console/contract";
 import { formatDateTime } from "@/lib/console/format";
-import { canCreateUser } from "@/lib/console/permissions";
+import { canCreateUser, canManageUsers } from "@/lib/console/permissions";
 
 /**
  * The user list.
@@ -78,7 +79,7 @@ const columns = helper.columns([
 const PAGE_SIZE = 50;
 const NO_USERS: User[] = [];
 
-export function UsersView({ role }: { role: string }) {
+export function UsersView({ role, currentUserId }: { role: string; currentUserId: string }) {
   const [filters, setFilters] = useUrlFilters(["q", "role"] as const);
   const [draftQuery, setDraftQuery] = React.useState(filters.q);
   const debouncedQuery = useDebouncedValue(draftQuery);
@@ -105,8 +106,7 @@ export function UsersView({ role }: { role: string }) {
         <div>
           <h1 className="font-heading text-lg font-semibold">用户</h1>
           <p className="text-sm text-muted-foreground">
-            当前租户的用户，按创建时间倒序分页。控制面尚未提供编辑、删除、禁用与重置
-            密码接口，这些操作不在此开放。
+            当前租户的用户，按创建时间倒序分页。角色、密码、会话与禁用状态由 owner 管理。
           </p>
         </div>
         {canCreateUser(role) ? (
@@ -164,6 +164,10 @@ export function UsersView({ role }: { role: string }) {
             }
           />
           <Pager resource={users} loadedCount={rows.length} />
+          {canManageUsers(role) ? <section className="grid gap-3" aria-label="用户管理操作">
+            <h2 className="font-heading font-semibold">管理本页用户</h2>
+            {rows.filter((user) => user.id !== currentUserId).map((user) => <UserActions key={user.id} user={user} onChanged={users.reload} />)}
+          </section> : null}
         </>
       )}
     </div>

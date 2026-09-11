@@ -17,6 +17,18 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ## [Unreleased]
 
+### Added
+
+- P07 数据库升级与恢复：双引擎固定版本 SQL、锁与校验和/dirty 账本、独立 up/status/resume 命令、已有数据升级及原生备份恢复测试；事务 outbox 跨崩溃补发 Key 吊销。
+- P05 用户与会话生命周期：Redis 权威可吊销会话、租户用户与平台运维改密/重置/禁用/启用/角色及会话管理，以及对应 Console 页面。
+- P06 Key 吊销通知：ControlPlane 以 Redis generation 长轮询唤醒 Gateway；健康链路 1 秒内清缓存，通知异常时 Gateway 立即停用正向缓存并逐请求校验。
+
+### Changed
+
+- Redis 成为 ControlPlane 必需依赖，Compose 使用 AOF `appendfsync always`；无 `sid` 的旧 JWT 升级后失效。
+- 禁用租户用户会在同一数据库事务中吊销其创建的 active API Key；ControlPlane Key 缓存改用 generation 防止并发旧读取回填。
+- Gateway 的 `-key-cache-ttl` 保留为纵深防御；提交后通知前崩溃由 P07 outbox 重试，漏通知、断线重连和控制面副本切换由持久 generation 补偿。
+
 ## [0.1.0] - 2026-09-07
 
 首个可安装、可部署的版本：三个数据面/身份服务加 Console 均有版本化二进制与容器镜像；

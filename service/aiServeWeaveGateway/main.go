@@ -75,7 +75,7 @@ func run() error {
 	controlPlaneToken := flag.String("control-plane-token", "",
 		"token presented to the control plane's internal endpoint; must match its InternalToken. Prefer AISW_CONTROL_PLANE_TOKEN over this flag, which is visible in a process listing")
 	keyCacheTTL := flag.Duration("key-cache-ttl", controlplaneclient.DefaultCacheTTL,
-		"how long a verified API key is trusted in process; this is the window a revoked key keeps working")
+		"how long a verified API key is trusted while revocation watching is healthy; also bounds the documented commit-before-notification crash window")
 	tunnelAddr := flag.String("tunnel-addr", "", "address the tunnel listener binds, e.g. :8443; empty disables the tunnel")
 	certFile := flag.String("tls-cert", "", "PEM certificate this replica presents to Agents")
 	keyFile := flag.String("tls-key", "", "PEM private key for -tls-cert")
@@ -186,6 +186,18 @@ func run() error {
 	verifier, err := keyVerifier(*controlPlaneAddr, *controlPlaneToken, *keyCacheTTL, logger)
 	if err != nil {
 		return err
+	}
+	if verifier != nil {
+		watchCtx, stopWatch := context.WithCancel(ctx)
+		watchDone := make(chan struct{})
+		go func() {
+			defer close(watchDone)
+			verifier.RunRevocationWatch(watchCtx)
+		}()
+		defer func() {
+			stopWatch()
+			<-watchDone
+		}()
 	}
 
 	// The Job persistence/recovery adapter shares -control-plane-addr and the
@@ -524,7 +536,7 @@ const controlPlaneTokenEnv = "AISW_CONTROL_PLANE_TOKEN"
 //
 // keyVerifier 构建控制面校验器；未配置控制面时返回 nil，此时使用静态的 -api-keys
 // 列表。
-func keyVerifier(addr, token string, cacheTTL time.Duration, logger *slog.Logger) (httpapi.KeyVerifier, error) {
+func keyVerifier(addr, token string, cacheTTL time.Duration, logger *slog.Logger) (*controlplaneclient.Verifier, error) {
 	if addr == "" {
 		return nil, nil
 	}
@@ -535,6 +547,7 @@ func keyVerifier(addr, token string, cacheTTL time.Duration, logger *slog.Logger
 		Endpoint: addr,
 		Token:    token,
 		CacheTTL: cacheTTL,
+		Logger:   logger,
 	})
 	if err != nil {
 		return nil, err

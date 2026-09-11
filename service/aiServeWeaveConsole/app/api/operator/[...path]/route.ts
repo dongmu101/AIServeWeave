@@ -35,6 +35,13 @@ export async function POST(request: Request, context: RouteContext) {
   return forward(request, context);
 }
 
+/** PUT forwards a replacement.
+ *
+ * PUT 转发一次整体替换。 */
+export async function PUT(request: Request, context: RouteContext) {
+  return forward(request, context);
+}
+
 /** DELETE forwards a removal.
  *
  * DELETE 转发一次删除。 */
