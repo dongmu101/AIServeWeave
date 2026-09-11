@@ -92,6 +92,15 @@ type Config struct {
 	// 它不依赖 Gateway 副本：节点身份操作不需要一条通往数据面的已配置读取
 	// 路径。
 	Registry RegistryConf `json:",optional"`
+
+	// MetricsHistory configures periodic scraping of Gateway/Registry
+	// Prometheus endpoints into rollup history for Console C27 (P08). Like
+	// Fleet and Registry, it is optional and off by default.
+	//
+	// MetricsHistory 配置定时抓取 Gateway/Registry 的 Prometheus 端点、为
+	// Console C27 落地汇总历史(P08)。与 Fleet、Registry 一样，它是可选的，
+	// 默认关闭。
+	MetricsHistory MetricsHistoryConf `json:",optional"`
 }
 
 // FleetConf configures the fleet inventory.
@@ -182,6 +191,52 @@ type RegistryConf struct {
 // 理由与 FleetConf.Enabled 相同。
 func (r RegistryConf) Enabled() bool {
 	return r.Addr != "" || r.AdminToken != ""
+}
+
+// MetricsHistoryConf configures periodic scraping of Gateway/Registry
+// Prometheus text endpoints into rollup history for Console C27.
+// Unconfigured (the zero value), the background collector does not start and
+// GET /operator/v1/metrics/history is not mounted — the same "no config, no
+// route" convention Fleet and Registry already follow.
+//
+// MetricsHistoryConf 配置定时抓取 Gateway/Registry 的 Prometheus 文本端点、为
+// Console C27 落地汇总历史。未配置时(零值)后台采集器不启动，
+// GET /operator/v1/metrics/history 也不挂载——与 Fleet、Registry 现有的
+// "没配置就没有这条路由"约定一致。
+type MetricsHistoryConf struct {
+	// GatewayAddrs are Gateway replicas' -metrics-addr endpoints, e.g.
+	// "http://gateway-1:9090". Distinct from Fleet.Gateways, which points at
+	// adminapi on a different port.
+	//
+	// GatewayAddrs 是各 Gateway 副本 -metrics-addr 的端点，例如
+	// "http://gateway-1:9090"。与 Fleet.Gateways 不同——后者指向 adminapi，
+	// 端口不同。
+	GatewayAddrs []string `json:",optional"`
+	// RegistryAddr is the Registry's -metrics-addr endpoint.
+	//
+	// RegistryAddr 是 Registry 的 -metrics-addr 端点。
+	RegistryAddr string `json:",optional"`
+	// Interval is both the scrape cadence and the rollup bucket width:
+	// Gateway/Registry counters and gauges are already cumulative, so a
+	// scrape at the end of each window is the natural representative value —
+	// scraping more often would not improve accuracy, only cost more
+	// requests.
+	//
+	// Interval 既是抓取周期，也是落库的汇总粒度：Gateway/Registry 的计数器与
+	// 量表本就是累计值，每个窗口收尾时抓一次就是自然的代表值——抓得更频繁不会
+	// 提高准确度，只会多花请求。
+	Interval time.Duration `json:",default=5m"`
+	// Retention bounds how long a rollup row is kept before cleanup deletes it.
+	//
+	// Retention 限制一行汇总数据在被清理任务删除前保留多久。
+	Retention time.Duration `json:",default=2160h"`
+}
+
+// Enabled reports whether the metrics-history collector is configured.
+//
+// Enabled 报告指标历史采集器是否已配置。
+func (m MetricsHistoryConf) Enabled() bool {
+	return len(m.GatewayAddrs) > 0 || m.RegistryAddr != ""
 }
 
 // Supported database drivers.
@@ -331,6 +386,14 @@ func (c Config) Validate() error {
 		}
 		if len(c.Registry.AdminToken) < minSecretLen {
 			return errors.New("config: Registry.AdminToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.MetricsHistory.Enabled() {
+		if c.MetricsHistory.Interval <= 0 {
+			return errors.New("config: MetricsHistory.Interval must be positive once metrics history is configured")
+		}
+		if c.MetricsHistory.Retention <= 0 {
+			return errors.New("config: MetricsHistory.Retention must be positive once metrics history is configured")
 		}
 	}
 	return nil
