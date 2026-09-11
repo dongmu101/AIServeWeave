@@ -60,6 +60,23 @@ func (s *Store) FlushRevocations(ctx context.Context, publish func(context.Conte
 	return flushed, nil
 }
 
+// RevocationOutboxLag reports the outbox's current generation and delivered
+// generation, for a caller that wants to expose their difference as a
+// point-in-time gauge (P08's controlplane_revocation_outbox_lag) rather than
+// drive a delivery attempt the way FlushRevocations does.
+//
+// RevocationOutboxLag 报告 outbox 当前的 generation 与 delivered_generation，
+// 供调用方把两者之差暴露成一个瞬时量表(P08 的
+// controlplane_revocation_outbox_lag)，而不是像 FlushRevocations 那样驱动一次
+// 发送尝试。
+func (s *Store) RevocationOutboxLag(ctx context.Context) (generation, delivered int64, err error) {
+	var outbox revocationOutbox
+	if err := s.db.WithContext(ctx).Where("id = ?", revocationOutboxID).Take(&outbox).Error; err != nil {
+		return 0, 0, translate(err)
+	}
+	return outbox.Generation, outbox.DeliveredGeneration, nil
+}
+
 func enqueueRevocation(tx *gorm.DB) error {
 	result := tx.Model(&revocationOutbox{}).
 		Where("id = ?", revocationOutboxID).

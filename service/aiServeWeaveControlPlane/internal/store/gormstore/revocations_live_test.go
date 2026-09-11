@@ -70,6 +70,43 @@ func TestLiveRevocationMutationsRollBackWithoutOutbox(t *testing.T) {
 	})
 }
 
+// TestLiveRevocationOutboxLagReflectsUndeliveredGenerations proves
+// RevocationOutboxLag reads back the same generation/delivered_generation a
+// pending revocation and a successful flush actually left behind.
+//
+// TestLiveRevocationOutboxLagReflectsUndeliveredGenerations 证明
+// RevocationOutboxLag 读回的 generation/delivered_generation，与一次待发送的
+// 吊销及一次成功发送实际留下的值一致。
+func TestLiveRevocationOutboxLagReflectsUndeliveredGenerations(t *testing.T) {
+	migrationDatabases(t, func(t *testing.T, db *gorm.DB, _ string) {
+		ctx := context.Background()
+		st := migrateRevocationStore(t, ctx, db)
+		fixture := seedRevocationFixture(t, ctx, st, model.StatusActive)
+
+		if err := st.RevokeAPIKey(ctx, fixture.tenantID, fixture.keyID, fixture.at); err != nil {
+			t.Fatalf("RevokeAPIKey error = %v, want nil", err)
+		}
+		generation, delivered, err := st.RevocationOutboxLag(ctx)
+		if err != nil {
+			t.Fatalf("RevocationOutboxLag error = %v, want nil", err)
+		}
+		if generation-delivered != 1 {
+			t.Fatalf("lag = %d, want 1 right after one undelivered revocation", generation-delivered)
+		}
+
+		if _, err := st.FlushRevocations(ctx, func(context.Context) error { return nil }); err != nil {
+			t.Fatalf("FlushRevocations error = %v, want nil", err)
+		}
+		generation, delivered, err = st.RevocationOutboxLag(ctx)
+		if err != nil {
+			t.Fatalf("RevocationOutboxLag error = %v, want nil", err)
+		}
+		if generation-delivered != 0 {
+			t.Fatalf("lag = %d, want 0 after a successful flush", generation-delivered)
+		}
+	})
+}
+
 // TestLiveRevocationsPersistAndRetry proves a failed publisher leaves durable
 // work that a reconstructed Store can deliver and confirm exactly once.
 //

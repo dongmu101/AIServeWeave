@@ -770,7 +770,7 @@ func platformLogin(ctx *svc.ServiceContext) http.HandlerFunc {
 // nodeOpsHandler 为五个节点操作写端点中的一个构造 handler，它们共用同一种
 // 形状：读出 actor 与 node_id，解码一个空请求体，调用 Service 的一个方法，
 // 应答 204。
-func nodeOpsHandler(action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
+func nodeOpsHandler(ctx *svc.ServiceContext, action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := actorFrom(r.Context())
 		if !ok {
@@ -786,7 +786,9 @@ func nodeOpsHandler(action func(context.Context, logic.Actor, string) error) htt
 		if !decode(w, r, &req) {
 			return
 		}
-		if err := action(r.Context(), actor, nodeID); err != nil {
+		err := action(r.Context(), actor, nodeID)
+		recordRegistryClientCall(ctx, err)
+		if err != nil {
 			respondErr(w, err)
 			return
 		}
@@ -806,6 +808,7 @@ func listNodeStates(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		states, err := ctx.Logic.ListNodeStates(r.Context(), actor)
+		recordRegistryClientCall(ctx, err)
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -867,6 +870,7 @@ func renderPlatformOperator(operator model.PlatformOperator) types.PlatformOpera
 func listFleetNodes(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		snapshot, err := ctx.Fleet.Nodes(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -881,6 +885,7 @@ func listFleetNodes(ctx *svc.ServiceContext) http.HandlerFunc {
 func listFleetModels(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		catalog, err := ctx.Fleet.Models(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -920,6 +925,7 @@ func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		catalogue, err := ctx.Fleet.Workflows(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -955,6 +961,7 @@ func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 func listOperatorWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		catalogue, err := ctx.Fleet.Workflows(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return

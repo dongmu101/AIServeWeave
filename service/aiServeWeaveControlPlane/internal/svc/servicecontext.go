@@ -16,6 +16,7 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -99,6 +100,8 @@ type ServiceContext struct {
 	redisClient *redis.Client
 	relayCancel context.CancelFunc
 	relayDone   chan struct{}
+	lagCancel   context.CancelFunc
+	lagDone     chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -179,6 +182,11 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() { defer close(relayDone); relay.Run(relayCtx) }()
+
+	lagCtx, lagCancel := context.WithCancel(ctx)
+	lagDone := make(chan struct{})
+	go func() { defer close(lagDone); runOutboxLagGauge(lagCtx, st, metricsRegistry) }()
+
 	ready = true
 	return &ServiceContext{
 		Config:      cfg,
@@ -199,7 +207,57 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		redisClient:     redisClient,
 		relayCancel:     relayCancel,
 		relayDone:       relayDone,
+		lagCancel:       lagCancel,
+		lagDone:         lagDone,
 	}, nil
+}
+
+// outboxLagStore is the read the outbox-lag gauge needs — a subset of
+// *gormstore.Store, named here so the poller does not depend on the whole
+// concrete store type.
+//
+// outboxLagStore 是滞后量表所需要的那次读取——*gormstore.Store 的一个子集，在
+// 此单独命名，好让这个轮询器不依赖整个具体的 store 类型。
+type outboxLagStore interface {
+	RevocationOutboxLag(ctx context.Context) (generation, delivered int64, err error)
+}
+
+// outboxLagPollInterval is how often runOutboxLagGauge refreshes the gauge. A
+// point-in-time gauge does not need to track every single generation bump —
+// it only has to be fresh enough that an operator staring at the C27 chart
+// sees a stuck relay within a few intervals, not immediately.
+//
+// outboxLagPollInterval 是 runOutboxLagGauge 刷新量表的频率。一个瞬时量表不需要
+// 追踪每一次 generation 的递增——只需要新鲜到让盯着 C27 图表的运维在几个周期内
+// 发现一个卡住的中继，而不必立刻发现。
+const outboxLagPollInterval = 5 * time.Second
+
+// runOutboxLagGauge sets controlplane_revocation_outbox_lag to
+// generation - delivered_generation once per outboxLagPollInterval, until ctx
+// is done. A read failure is logged and skipped rather than treated as a
+// zero lag — reporting "caught up" on a database error would hide the very
+// condition an operator relies on this gauge to catch.
+//
+// runOutboxLagGauge 每隔一个 outboxLagPollInterval 把
+// controlplane_revocation_outbox_lag 设为 generation - delivered_generation，
+// 直到 ctx 结束。读取失败只记日志并跳过，而不是当作零滞后处理——把一次数据库
+// 错误报告成"已追上"，恰好会掩盖运维依赖这个量表去发现的那种状况。
+func runOutboxLagGauge(ctx context.Context, st outboxLagStore, registry *commonmetrics.Registry) {
+	ticker := time.NewTicker(outboxLagPollInterval)
+	defer ticker.Stop()
+	for {
+		generation, delivered, err := st.RevocationOutboxLag(ctx)
+		if err != nil {
+			slog.Warn("outbox lag gauge read failed", slog.Any("error", err))
+		} else {
+			registry.Gauge(cpmetrics.MetricOutboxLagGeneration, nil).Set(float64(generation - delivered))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // Close releases the database and cache connections.
@@ -209,6 +267,10 @@ func (s *ServiceContext) Close() error {
 	if s.relayCancel != nil {
 		s.relayCancel()
 		<-s.relayDone
+	}
+	if s.lagCancel != nil {
+		s.lagCancel()
+		<-s.lagDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {

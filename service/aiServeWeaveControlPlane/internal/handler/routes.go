@@ -310,27 +310,27 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/approve",
-				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/approve", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ApproveNode))),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/approve", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.ApproveNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/disable",
-				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/disable", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.DisableNode))),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/disable", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.DisableNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/enable",
-				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/enable", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnableNode))),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/enable", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.EnableNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/maintenance",
-				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnterMaintenance))),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.EnterMaintenance))),
 			},
 			{
 				Method:  http.MethodDelete,
 				Path:    "/operator/v1/nodes/:id/maintenance",
-				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ExitMaintenance))),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.ExitMaintenance))),
 			},
 		})
 	}
