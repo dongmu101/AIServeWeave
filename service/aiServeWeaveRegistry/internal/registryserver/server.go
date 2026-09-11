@@ -29,6 +29,7 @@ type Server struct {
 	identities   *identitystore.Store
 	clock        runtime.Clock
 	logger       *slog.Logger
+	metrics      *recorder
 	adminToken   string
 	gatewayToken string
 
@@ -57,6 +58,10 @@ type Config struct {
 
 	// Logger receives request-lifecycle events. Nil discards them.
 	Logger *slog.Logger
+
+	// Metrics receives this server's counters and gauges. Nil records nothing.
+	// Metrics 接收本服务的计数器与量表。为 nil 时不记录任何东西。
+	Metrics runtime.Metrics
 
 	// AdminToken guards MintToken, RevokeToken, DisableNode and EnableNode
 	// (STATUS.md's S02/S03). Empty disables all four — every call is
@@ -103,6 +108,7 @@ func New(cfg Config) (*Server, error) {
 		identities:   cfg.Identities,
 		clock:        clock,
 		logger:       logger,
+		metrics:      newRecorder(cfg.Metrics),
 		adminToken:   cfg.AdminToken,
 		gatewayToken: cfg.GatewayToken,
 	}

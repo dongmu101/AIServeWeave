@@ -56,15 +56,18 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	boundNodeID, err := s.tokens.Consume(req.GetBootstrapToken(), now)
 	if err != nil {
 		if errors.Is(err, tokenstore.ErrInvalidToken) {
+			s.metrics.Register(ResultUnauthorized)
 			return nil, status.Error(codes.Unauthenticated, "bootstrap token is invalid or expired")
 		}
 		s.logger.Error("bootstrap token store failed", slog.String("error", err.Error()))
+		s.metrics.Register(ResultInternal)
 		return nil, status.Error(codes.Internal, "cannot validate bootstrap token")
 	}
 
 	nodeID := req.GetNodeId()
 	switch {
 	case boundNodeID != "" && nodeID != "" && nodeID != boundNodeID:
+		s.metrics.Register(ResultUnauthorized)
 		return nil, status.Errorf(codes.PermissionDenied,
 			"bootstrap token is bound to node_id %q, not %q", boundNodeID, nodeID)
 	case boundNodeID != "":
@@ -80,6 +83,7 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		// so an operator has something stable to approve; a node-bound
 		// token (which already skips this gate below) is the path for a
 		// caller that still wants the Registry to assign the identity.
+		s.metrics.Register(ResultInvalid)
 		return nil, status.Error(codes.InvalidArgument,
 			"node_id is required: an unbound bootstrap token can no longer self-assign one, since it would have nothing stable for an operator to approve")
 	}
@@ -91,11 +95,13 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	// revoke a compromised node without also having to hunt down and revoke
 	// every bootstrap token that might still let it back in.
 	if s.identities.IsDisabled(nodeID) {
+		s.metrics.Register(ResultUnauthorized)
 		return nil, status.Errorf(codes.PermissionDenied, "node_id %q is disabled", nodeID)
 	}
 
 	fingerprint, err := csrFingerprint(req.GetCsr())
 	if err != nil {
+		s.metrics.Register(ResultInvalid)
 		return nil, status.Errorf(codes.InvalidArgument, "cannot read the certificate request: %v", err)
 	}
 
@@ -118,11 +124,13 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		if !approved {
 			if err := s.identities.RecordPending(nodeID, now); err != nil {
 				s.logger.Error("identity store failed", slog.String("error", err.Error()))
+				s.metrics.Register(ResultInternal)
 				return nil, status.Error(codes.Internal, "cannot record node identity")
 			}
 			s.logger.Warn("node registration pending operator approval",
 				slog.String("node_id", nodeID),
 				slog.String("agent_version", req.GetAgentVersion()))
+			s.metrics.Register(ResultPendingApproval)
 			return nil, status.Errorf(codes.PermissionDenied,
 				"node_id %q is pending operator approval; an operator must approve it before registration can proceed", nodeID)
 		}
@@ -130,6 +138,7 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 
 	certPEM, notAfter, err := s.ca.Sign(req.GetCsr(), nodeID, now)
 	if err != nil {
+		s.metrics.Register(ResultInvalid)
 		return nil, status.Errorf(codes.InvalidArgument, "cannot issue a node certificate: %v", err)
 	}
 
@@ -139,11 +148,13 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		// to check the ledger against.
 		if err := s.identities.Set(nodeID, fingerprint, now); err != nil {
 			s.logger.Error("identity store failed", slog.String("error", err.Error()))
+			s.metrics.Register(ResultInternal)
 			return nil, status.Error(codes.Internal, "cannot record node identity")
 		}
 		s.logger.Info("node registered via a node-bound bootstrap token (authorized reinstall)",
 			slog.String("node_id", nodeID),
 			slog.String("agent_version", req.GetAgentVersion()))
+		s.metrics.Register(ResultSuccess)
 		return &tunnelv1.RegisterResponse{
 			NodeId:         nodeID,
 			CertificatePem: certPEM,
@@ -155,6 +166,7 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	outcome, err := s.identities.Reserve(nodeID, fingerprint, now)
 	if err != nil {
 		s.logger.Error("identity store failed", slog.String("error", err.Error()))
+		s.metrics.Register(ResultInternal)
 		return nil, status.Error(codes.Internal, "cannot record node identity")
 	}
 	if outcome == identitystore.OutcomeConflict {
@@ -181,6 +193,7 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		s.logger.Warn("node_id re-registered with a different public key",
 			slog.String("node_id", nodeID),
 			slog.String("agent_version", req.GetAgentVersion()))
+		s.metrics.Register(ResultConflict)
 		return nil, status.Errorf(codes.AlreadyExists,
 			"node_id %q is already registered with a different key; an operator must confirm this is a reinstall before it can proceed", nodeID)
 	}
@@ -189,6 +202,11 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		slog.String("node_id", nodeID),
 		slog.String("agent_version", req.GetAgentVersion()),
 		slog.Bool("first_registration", outcome == identitystore.OutcomeNew))
+	if outcome == identitystore.OutcomeNew {
+		s.metrics.Register(ResultSuccess)
+	} else {
+		s.metrics.Register(ResultReconnect)
+	}
 	return &tunnelv1.RegisterResponse{
 		NodeId:         nodeID,
 		CertificatePem: certPEM,
@@ -204,9 +222,11 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 func (s *Server) RenewCertificate(ctx context.Context, req *tunnelv1.RenewRequest) (*tunnelv1.RenewResponse, error) {
 	peerID, err := nodeid.FromPeer(ctx)
 	if err != nil {
+		s.metrics.CertRenewal(ResultUnauthorized)
 		return nil, err
 	}
 	if peerID != req.GetNodeId() {
+		s.metrics.CertRenewal(ResultUnauthorized)
 		return nil, status.Errorf(codes.Unauthenticated,
 			"client certificate names %q but the request is for %q", peerID, req.GetNodeId())
 	}
@@ -214,17 +234,20 @@ func (s *Server) RenewCertificate(ctx context.Context, req *tunnelv1.RenewReques
 	// its certificate is still cryptographically valid until it expires, and
 	// renewal is exactly what would otherwise let it outlast a disable.
 	if s.identities.IsDisabled(req.GetNodeId()) {
+		s.metrics.CertRenewal(ResultUnauthorized)
 		return nil, status.Errorf(codes.PermissionDenied, "node_id %q is disabled", req.GetNodeId())
 	}
 
 	fingerprint, err := csrFingerprint(req.GetCsr())
 	if err != nil {
+		s.metrics.CertRenewal(ResultInvalid)
 		return nil, status.Errorf(codes.InvalidArgument, "cannot read the certificate request: %v", err)
 	}
 
 	now := s.clock.Now()
 	certPEM, notAfter, err := s.ca.Sign(req.GetCsr(), req.GetNodeId(), now)
 	if err != nil {
+		s.metrics.CertRenewal(ResultInvalid)
 		return nil, status.Errorf(codes.InvalidArgument, "cannot issue a node certificate: %v", err)
 	}
 
@@ -238,10 +261,12 @@ func (s *Server) RenewCertificate(ctx context.Context, req *tunnelv1.RenewReques
 	// key——用 Reserve 处理，会把它当作与在案的 key 冲突而拒绝。
 	if err := s.identities.Set(req.GetNodeId(), fingerprint, now); err != nil {
 		s.logger.Error("identity store failed", slog.String("error", err.Error()))
+		s.metrics.CertRenewal(ResultInternal)
 		return nil, status.Error(codes.Internal, "cannot record node identity")
 	}
 
 	s.logger.Info("node certificate renewed", slog.String("node_id", req.GetNodeId()))
+	s.metrics.CertRenewal(ResultSuccess)
 	return &tunnelv1.RenewResponse{
 		CertificatePem: certPEM,
 		CaBundlePem:    s.ca.Bundle(),
