@@ -245,7 +245,7 @@ func run() error {
 		return err
 	}
 
-	sched := scheduler.New(server, scheduler.Config{Metrics: registry})
+	sched := scheduler.New(server, scheduler.Config{Metrics: registry, Logger: logger})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {
 		return err
