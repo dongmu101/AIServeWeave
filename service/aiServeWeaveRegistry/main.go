@@ -22,6 +22,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -35,6 +36,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/metrics"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/ca"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/identitystore"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/registryserver"
@@ -64,6 +66,8 @@ func main() {
 func run() error {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	addr := flag.String("addr", ":9090", "address the gRPC listener binds")
+	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",
+		"address the Prometheus /metrics listener binds; loopback by default, empty disables it")
 	dataDir := flag.String("data-dir", "./data/registry", "directory holding the CA key pair, the bootstrap token store, and the node identity ledger")
 	tlsHosts := flag.String("tls-host", "", "comma-separated hostnames/IPs the self-issued server certificate covers; empty uses the -addr host")
 	certFile := flag.String("tls-cert", "", "PEM certificate this Registry presents; empty self-issues one from its own CA")
@@ -129,9 +133,12 @@ func run() error {
 		return err
 	}
 
+	registry := metrics.New(registryserver.Descriptions())
+
 	server, err := registryserver.New(registryserver.Config{
 		CA: root, Tokens: tokens, Identities: identities, Logger: logger,
 		AdminToken: adminToken, GatewayToken: gatewayToken,
+		Metrics: registry,
 	})
 	if err != nil {
 		return err
@@ -156,6 +163,19 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	var metricsServer *http.Server
+	if *metricsAddr == "" {
+		logger.Warn("no -metrics-addr; this replica exports no metrics")
+	} else {
+		metricsServer = registry.Server(*metricsAddr)
+		go func() {
+			if err := metricsServer.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("metrics listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("metrics listening", slog.String("metrics_addr", *metricsAddr))
+	}
+
 	serveErr := make(chan error, 1)
 	go func() { serveErr <- grpcServer.Serve(lis) }()
 	logger.Info("registry started", slog.String("addr", lis.Addr().String()), slog.String("data_dir", *dataDir))
@@ -170,6 +190,15 @@ func run() error {
 	}
 
 	grpcServer.GracefulStop()
+	// Closed last, after the gRPC listener has drained, so a scrape mid-drain
+	// still sees the connected-replica gauge go to zero rather than reporting
+	// stale capacity for a replica that is already gone.
+	//
+	// 在 gRPC 监听器排空之后才关闭，这样一次落在排空过程中的抓取，看到的是已经
+	// 归零的已连接副本量表，而不是一个其实已经离开的副本留下的过期容量。
+	if metricsServer != nil {
+		_ = metricsServer.Close()
+	}
 	logger.Info("registry stopped")
 	return nil
 }
