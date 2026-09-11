@@ -137,6 +137,23 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 `RenewCertificate` 不走这条检查：它自己的认证（`nodeid.FromPeer` 必须等于请求里的 `node_id`）已经证明调用方持有该 `node_id` 当前的私钥，因此续期时账本用 `identitystore.Store.Set` 无条件覆盖指纹——一次续期常规地会带来一把新生成的 key，若也用 `Reserve` 处理会被误判为冲突。
 
+## 指标
+
+进程内有一个 `metrics.Registry`（`common/metrics`），`internal/registryserver` 在其全部 RPC 方法里记录进它，由 `-metrics-addr`（默认 `127.0.0.1:9091`，与 `-addr` 的 gRPC 端口分开，留空则关闭）上的 `GET /metrics` 以 Prometheus 文本格式导出，格式与 Gateway 的 `/metrics` 完全一致。
+
+指标目录与记录点在 `internal/registryserver/metrics.go`：
+
+| 指标 | 标签 | 说明 |
+| --- | --- | --- |
+| `registry_register_total` | `result` | `Register` 调用按结果分类：`success`\|`reconnect`\|`conflict`\|`pending_approval`\|`invalid`\|`unauthorized`\|`internal` |
+| `registry_cert_renewal_total` | `result` | `RenewCertificate` 调用按结果分类，取值集合同上 |
+| `registry_gateway_replicas_connected` | — | 当前通过 `GatewayDirectory.Join` 保持连接的 Gateway 副本数 |
+| `registry_token_ops_total` | `operation,result` | `TokenAdmin.MintToken`/`RevokeToken`，`operation` 取 `mint`\|`revoke` |
+| `registry_node_state_changes_total` | `action,result` | `ApproveNode`/`DisableNode`/`EnableNode`/`SetMaintenance`/`ClearMaintenance`，`action` 取对应动作名 |
+| `registry_list_node_states_total` | `result` | `ListNodeStates` 调用次数 |
+
+**`node_id` 不进任何标签。** 身份账本包含历史上出现过的所有节点，不像 Gateway 的 `tunnel_server_*` 系列只统计"当前连接"这个有界集合——按节点粒度排查走结构化日志，不是指标的职责。标签取值有一份封闭常量表（`metrics.go` 的 `Result*`/`TokenOp*`/`NodeAction*`），`internal/registryserver/metrics_cardinality_test.go` 的 `TestMetricLabelValuesAreBounded` 是这条纪律的可执行版本，驱动全部 RPC 的成功/失败分支后断言实际记录的标签值都落在这张表里。
+
 ## 已知限制 / 下一步
 
 - **单实例假设。** bootstrap token 的一次性校验与 `node_id` 身份账本都靠本地文件 + 内存锁保证强一致，这只在只有一个 Registry 进程时成立。Registry 高可用仍列在根 STATUS 的 P2；Gateway 已支持多副本，不能据此运行多个共享状态目录的 Registry 实例。

@@ -297,9 +297,10 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 
 ## 下一步
 
-1. **Registry 侧指标**：Registry 目前不记录任何指标，也没有 `/metrics` 端点。`common/metrics` 已经就位，缺的是 Registry 自己的目录与记录点。
-2. **OpenTelemetry**：`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器，但真正缺的是 trace——`request_id` 已经贯穿全链路日志，把它接成 span 是独立的一步。
-3. **Gateway↔Registry 双向认证**：目前 Gateway 只校验 Registry 的服务端证书，不向 Registry 出示客户端证书；要不要让 Gateway 也进入 Registry 签发的 mTLS 体系，等控制面需要更强隔离时再评估。
+1. **OpenTelemetry**：`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器。P08 已经把 Gateway 前门铸造的 `request_id`（`common/reqid`）一路带到 Scheduler 派发决策、Tunnel 分发/完成与 Agent 后端调用，落地为可按 `request_id` 关联的结构化日志，但仍是日志而非独立的 trace 存储——接入真正的 span/trace 后端是独立的一步，见 STATUS.md 的 P08。
+2. **Gateway↔Registry 双向认证**：目前 Gateway 只校验 Registry 的服务端证书，不向 Registry 出示客户端证书；要不要让 Gateway 也进入 Registry 签发的 mTLS 体系，等控制面需要更强隔离时再评估。
+
+Registry 侧指标已在 P08 落地，见 [Registry README](../aiServeWeaveRegistry/README.md#指标)。
 
 ## 质量门禁
 
