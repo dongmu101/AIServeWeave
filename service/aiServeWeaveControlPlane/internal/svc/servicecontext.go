@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log"
 	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -32,6 +33,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
@@ -102,6 +104,18 @@ type ServiceContext struct {
 	relayDone   chan struct{}
 	lagCancel   context.CancelFunc
 	lagDone     chan struct{}
+
+	// metricsHistoryCancel/metricsHistoryDone tear down the collector and
+	// retention goroutines started below, only running at all when
+	// cfg.MetricsHistory.Enabled() — the same "no config, no goroutine"
+	// convention Fleet and Registry already follow for their own optional
+	// pieces.
+	//
+	// metricsHistoryCancel/metricsHistoryDone 关停下面启动的采集器与保留期
+	// 清理协程，只在 cfg.MetricsHistory.Enabled() 时才会真的启动——与 Fleet、
+	// Registry 自己那些可选部件遵循的"没配置就没有协程"约定相同。
+	metricsHistoryCancel context.CancelFunc
+	metricsHistoryDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -187,6 +201,31 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	lagDone := make(chan struct{})
 	go func() { defer close(lagDone); runOutboxLagGauge(lagCtx, st, metricsRegistry) }()
 
+	var metricsHistoryCancel context.CancelFunc
+	var metricsHistoryDone chan struct{}
+	if cfg.MetricsHistory.Enabled() {
+		collector := metricshistory.New(metricshistory.Config{
+			GatewayAddrs: cfg.MetricsHistory.GatewayAddrs,
+			RegistryAddr: cfg.MetricsHistory.RegistryAddr,
+			Interval:     cfg.MetricsHistory.Interval,
+			Store:        st,
+		})
+		retention := metricshistory.NewRetention(st, cfg.MetricsHistory.Retention, nil, nil)
+
+		mhCtx, mhCancel := context.WithCancel(ctx)
+		mhDone := make(chan struct{})
+		go func() {
+			defer close(mhDone)
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() { defer wg.Done(); collector.Run(mhCtx) }()
+			go func() { defer wg.Done(); retention.Run(mhCtx, metricsHistoryRetentionInterval) }()
+			wg.Wait()
+		}()
+		metricsHistoryCancel = mhCancel
+		metricsHistoryDone = mhDone
+	}
+
 	ready = true
 	return &ServiceContext{
 		Config:      cfg,
@@ -201,16 +240,28 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Timeout:  cfg.Fleet.Timeout,
 			Clock:    clock,
 		}),
-		RegistryClient:  registryClient,
-		MetricsRegistry: metricsRegistry,
-		db:              db,
-		redisClient:     redisClient,
-		relayCancel:     relayCancel,
-		relayDone:       relayDone,
-		lagCancel:       lagCancel,
-		lagDone:         lagDone,
+		RegistryClient:       registryClient,
+		MetricsRegistry:      metricsRegistry,
+		db:                   db,
+		redisClient:          redisClient,
+		relayCancel:          relayCancel,
+		relayDone:            relayDone,
+		lagCancel:            lagCancel,
+		lagDone:              lagDone,
+		metricsHistoryCancel: metricsHistoryCancel,
+		metricsHistoryDone:   metricsHistoryDone,
 	}, nil
 }
+
+// metricsHistoryRetentionInterval is how often the retention cleanup goroutine
+// runs — once a day is plenty for a job that only prunes rows past a
+// 90-day-scale window; it does not need to share MetricsHistoryConf.Interval,
+// which is the much finer collector cadence.
+//
+// metricsHistoryRetentionInterval 是保留期清理协程的运行频率——对一个只清理
+// 90 天量级窗口之外数据的任务，一天一次足够；它不需要与
+// MetricsHistoryConf.Interval(更细的采集节奏)共用同一个值。
+const metricsHistoryRetentionInterval = 24 * time.Hour
 
 // outboxLagStore is the read the outbox-lag gauge needs — a subset of
 // *gormstore.Store, named here so the poller does not depend on the whole
@@ -271,6 +322,10 @@ func (s *ServiceContext) Close() error {
 	if s.lagCancel != nil {
 		s.lagCancel()
 		<-s.lagDone
+	}
+	if s.metricsHistoryCancel != nil {
+		s.metricsHistoryCancel()
+		<-s.metricsHistoryDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {
