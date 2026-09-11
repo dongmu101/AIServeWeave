@@ -110,6 +110,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/limits", requireSession(ctx, setTenantLimits(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/audit", requireSession(ctx, listAudit(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/audit", requirePlatformSession(ctx, listAudit(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/metrics/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/metrics/history", requirePlatformSession(ctx, metricsHistory(ctx)))},
 		// Job history (STATUS.md's J07) reads the jobs table directly and is
 		// mounted here, unconditionally, unlike the Fleet-backed live view
 		// further down: it has no dependency on a configured Gateway read

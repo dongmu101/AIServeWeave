@@ -643,3 +643,30 @@ type NodeState struct {
 type ListNodeStatesResponse struct {
 	Items []NodeState `json:"items"`
 }
+
+// MetricsHistoryPoint is one bucket of a MetricsHistorySeries (P08, Console C27).
+//
+// MetricsHistoryPoint 是 MetricsHistorySeries 的一个 bucket(P08，Console C27)。
+type MetricsHistoryPoint struct {
+	BucketAt time.Time `json:"bucket_at"`
+	Value    float64   `json:"value"`
+}
+
+// MetricsHistorySeries is one (metric, labels) time series over the queried
+// window.
+//
+// MetricsHistorySeries 是查询窗口内一条 (metric, labels) 时间序列。
+type MetricsHistorySeries struct {
+	Metric string                `json:"metric"`
+	Labels map[string]string     `json:"labels"`
+	Points []MetricsHistoryPoint `json:"points"`
+}
+
+// MetricsHistoryResponse answers GET /operator/v1/metrics/history.
+//
+// MetricsHistoryResponse 回答 GET /operator/v1/metrics/history。
+type MetricsHistoryResponse struct {
+	Since  time.Time              `json:"since"`
+	Until  time.Time              `json:"until"`
+	Series []MetricsHistorySeries `json:"series"`
+}
