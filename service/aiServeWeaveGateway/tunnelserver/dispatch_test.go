@@ -11,6 +11,7 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
 )
@@ -620,5 +621,33 @@ func TestDispatchSurvivesConcurrentRequestsAcrossSlots(t *testing.T) {
 	close(errs)
 	for err := range errs {
 		t.Error(err)
+	}
+}
+
+func TestDispatchPrefersRequestIDFromContext(t *testing.T) {
+	h := newHarness(t, tunnelserver.Config{})
+	h.connect("mac-mini-01")
+	slot := h.openSlot("mac-mini-01", tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, "slot-1", nil)
+	waitFor(t, "the slot to park", func() bool { return idleCount(h, "mac-mini-01") == 1 })
+
+	ctx := reqid.WithValue(context.Background(), "ctx-req-id")
+	resp, err := h.srv.Dispatch(ctx, tunnelserver.Request{
+		NodeID:    "mac-mini-01",
+		RuntimeID: "ollama-1",
+		Operation: tunnelv1.Operation_OPERATION_LIST_MODELS,
+	})
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	defer resp.Close()
+
+	dctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+	frame, err := slot.stream.ToAgent(dctx)
+	if err != nil {
+		t.Fatalf("waiting for RequestHeaders: %v", err)
+	}
+	if got := frame.GetRequestId(); got != "ctx-req-id" {
+		t.Errorf("dispatched request_id = %q, want the id carried on ctx", got)
 	}
 }

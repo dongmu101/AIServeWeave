@@ -6,11 +6,13 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"log/slog"
 	"strconv"
 	"sync"
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 )
@@ -71,6 +73,18 @@ type Response struct {
 	sawFirst    bool
 	outcome     error
 	recordOnce  sync.Once
+
+	// nodeID, runtimeID and logger exist only so Close can log this
+	// dispatch's completion alongside recording its metric — the metric
+	// already needs operation/result/duration, so the log line reuses the
+	// same computation rather than opening a second path to the same facts.
+	//
+	// nodeID、runtimeID 与 logger 存在的唯一目的，是让 Close 能在记录指标的同时
+	// 记一行本次分发完成的日志——指标本就需要 operation/result/duration，日志行
+	// 复用同一次计算，而不是另开一条通往同样事实的路径。
+	nodeID    string
+	runtimeID string
+	logger    *slog.Logger
 }
 
 // call is the caller's half of a dispatched request, and the only thing the
@@ -163,10 +177,18 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		return nil, failed(dispatchError(runtime.ErrorBackpressure, req, "node has no idle slot", true, ErrNoIdleSlot))
 	}
 
-	requestID := req.Trace["request_id"]
+	requestID := reqid.FromContext(ctx)
+	if requestID == "" {
+		requestID = req.Trace["request_id"]
+	}
 	if requestID == "" {
 		requestID = newRequestID()
 	}
+	s.logger.Info("tunnel dispatch started",
+		slog.String("request_id", requestID),
+		slog.String("node_id", req.NodeID),
+		slog.String("runtime_id", req.RuntimeID),
+		slog.String("operation", req.Operation.String()))
 	c := newCall(requestID)
 	if err := sl.begin(c); err != nil {
 		sl.close(err)
@@ -232,6 +254,9 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		clock:     s.clock,
 		operation: req.Operation,
 		started:   started,
+		nodeID:    req.NodeID,
+		runtimeID: req.RuntimeID,
+		logger:    s.logger,
 		// Only a progressive response has a meaningful time-to-first-frame:
 		// for a request-response operation the first frame is the whole
 		// answer, and mixing the two would leave neither distribution
@@ -340,7 +365,16 @@ func (r *Response) Close() error {
 	// 而只有 Close 才保证每个响应都会执行到。Once 保证重复调用 Close 的调用方不会
 	// 把同一次分发算两遍。
 	r.recordOnce.Do(func() {
-		r.metrics.Dispatch(r.operation, tunnelwire.ResultFor(r.outcome), r.clock.Now().Sub(r.started))
+		d := r.clock.Now().Sub(r.started)
+		result := tunnelwire.ResultFor(r.outcome)
+		r.metrics.Dispatch(r.operation, result, d)
+		r.logger.Info("tunnel dispatch completed",
+			slog.String("request_id", r.call.id),
+			slog.String("node_id", r.nodeID),
+			slog.String("runtime_id", r.runtimeID),
+			slog.String("operation", r.operation.String()),
+			slog.String("result", string(result)),
+			slog.Duration("duration", d))
 	})
 	r.call.release()
 	return nil
