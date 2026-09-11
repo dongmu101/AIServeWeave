@@ -479,3 +479,19 @@ func sortFloatsNames(v []string) {
 		}
 	}
 }
+
+// TestNilRegistryDiscardsRatherThanPanics covers the case a caller stores an
+// unconstructed *Registry field and passes it along as a runtime.Metrics —
+// the field is a concrete nil pointer, so it boxes into a non-nil interface
+// and an ordinary "== nil" check on the interface would not catch it.
+//
+// TestNilRegistryDiscardsRatherThanPanics 覆盖调用方存了一个未构造的
+// *Registry 字段、并把它当作 runtime.Metrics 传出去的情形——该字段是一个具体
+// 类型的 nil 指针，装进接口后就不再是 nil 接口，对接口做一次普通的 "== nil"
+// 判断抓不到它。
+func TestNilRegistryDiscardsRatherThanPanics(t *testing.T) {
+	var r *Registry
+	r.Counter("c", nil).Add(1)
+	r.Gauge("g", nil).Set(1)
+	r.Histogram("h", nil).Observe(1)
+}
