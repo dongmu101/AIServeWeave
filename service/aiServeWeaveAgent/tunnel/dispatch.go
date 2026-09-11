@@ -181,8 +181,28 @@ func (d *Dispatcher) Handle(ctx context.Context, req *Request, sink ResponseSink
 	return d.run(ctx, rt, spec, req, sink)
 }
 
-// run performs one operation against rt.
-func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwire.OperationSpec, req *Request, sink ResponseSink) error {
+// run performs one operation against rt. It logs one start and one finish
+// event keyed by req.ID, covering every operation through this single entry
+// point rather than one log call per case below.
+//
+// run 对 rt 执行一次操作。它以 req.ID 为键记一条起始与一条结束事件，通过这一个
+// 统一入口覆盖全部操作，而不是在下面每个 case 里各写一次日志调用。
+func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwire.OperationSpec, req *Request, sink ResponseSink) (err error) {
+	started := d.clock.Now()
+	runtimeID := req.Headers.GetRuntimeId()
+	d.logger.Info("backend call started",
+		slog.String("request_id", req.ID),
+		slog.String("runtime_id", runtimeID),
+		slog.String("operation", spec.Operation.String()))
+	defer func() {
+		d.logger.Info("backend call finished",
+			slog.String("request_id", req.ID),
+			slog.String("runtime_id", runtimeID),
+			slog.String("operation", spec.Operation.String()),
+			slog.Bool("success", err == nil),
+			slog.Duration("duration", d.clock.Now().Sub(started)))
+	}()
+
 	id := req.Headers.GetRuntimeId()
 	reqPayload := req.Headers.GetPayload()
 

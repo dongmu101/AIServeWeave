@@ -1,6 +1,7 @@
 package tunnel_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -1262,4 +1263,27 @@ func TestDispatchRefusesAForbiddenRuntimeOverASlotStream(t *testing.T) {
 	}
 	// A refused request costs no slot.
 	f.expectReady(c)
+}
+
+func TestRunLogsBackendCallStartAndFinish(t *testing.T) {
+	var buf bytes.Buffer
+	f := newDispatchFixture(t, func(cfg *tunnel.DispatchConfig) {
+		cfg.Logger = slog.New(slog.NewJSONHandler(&buf, nil))
+	})
+	rt := f.inference(0)
+	rt.ListModelsFunc = func(context.Context) ([]runtime.Model, error) {
+		return []runtime.Model{{ID: "demo"}}, nil
+	}
+
+	if _, err := f.dispatch(tunnelv1.Operation_OPERATION_LIST_MODELS, nil, nil); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+
+	log := buf.String()
+	if !strings.Contains(log, "req-1") {
+		t.Errorf("dispatcher log = %q, want it to contain the request id", log)
+	}
+	if !strings.Contains(log, "backend call started") || !strings.Contains(log, "backend call finished") {
+		t.Errorf("dispatcher log = %q, want both a start and a finish line", log)
+	}
 }
