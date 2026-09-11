@@ -522,4 +522,5 @@ type Store interface {
 	Audit
 	Jobs
 	JobArtifacts
+	MetricsHistory
 }

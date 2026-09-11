@@ -48,6 +48,7 @@ type Store struct {
 	audit             []model.AuditLog
 	jobs              map[string]model.Job
 	artifacts         map[string]model.JobArtifact
+	metricsHistory    []model.MetricsHistoryPoint
 }
 
 // New returns an empty store.
