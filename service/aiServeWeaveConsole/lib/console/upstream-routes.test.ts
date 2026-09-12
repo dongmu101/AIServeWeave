@@ -325,3 +325,26 @@ test("operator metrics history route forwards since/until only", () => {
   assert.equal(result?.path, "/operator/v1/metrics/history");
   assert.equal(result?.search, "?since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z");
 });
+
+test("tenant request log route forwards its filters and drops tenant_id", () => {
+  const result = resolve(
+    "GET",
+    "/admin/v1/requests",
+    "limit=50&cursor=x&since=2026-09-11T00:00:00Z&until=2026-09-12T00:00:00Z&status=ok&request_id=req_1&tenant_id=tnt_1"
+  );
+  assert.equal(result?.path, "/admin/v1/requests");
+  assert.equal(
+    result?.search,
+    "?limit=50&cursor=x&since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z&status=ok&request_id=req_1"
+  );
+});
+
+test("operator request log route resolves and forwards tenant_id", () => {
+  const result = resolveOperatorUpstream(
+    "GET",
+    ["operator", "v1", "requests"],
+    new URLSearchParams("tenant_id=tnt_1")
+  );
+  assert.equal(result?.path, "/operator/v1/requests");
+  assert.equal(result?.search, "?tenant_id=tnt_1");
+});

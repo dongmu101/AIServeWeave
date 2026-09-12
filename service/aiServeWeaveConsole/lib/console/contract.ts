@@ -155,6 +155,27 @@ export interface AuditEntry {
 }
 
 /**
+ * RequestLogEntry mirrors types.RequestLogResponse: one persisted,
+ * authenticated OpenAI front-door request (STATUS.md's P09/C28). tenantId
+ * is "" on the tenant-scoped endpoint, where the API omits it because it is
+ * already implied by the caller's own session.
+ *
+ * RequestLogEntry 镜像 types.RequestLogResponse：一条持久化的、已通过鉴权的
+ * OpenAI 前门请求(STATUS.md 的 P09/C28)。在按租户限定的端点上 tenantId 为
+ * ""，因为 API 在那里省略了它——它已经由调用方自己的会话隐含。
+ */
+export interface RequestLogEntry {
+  requestId: string;
+  tenantId: string;
+  keyDisplay: string;
+  endpoint: string;
+  statusCode: number;
+  outcome: string;
+  durationMs: number;
+  createdAt: string;
+}
+
+/**
  * JobArtifact mirrors types.JobArtifactResponse: one recorded output of a
  * persisted job.
  *
@@ -449,6 +470,29 @@ export function parseAuditEntries(value: unknown): Page<AuditEntry> {
       target: text(source, "target"),
       detail: text(source, "detail"),
       ip: text(source, "ip"),
+      createdAt: timestamp(source, "created_at"),
+    };
+  });
+}
+
+/**
+ * parseRequestLogEntries validates one page of `GET /admin/v1/requests` or
+ * `GET /operator/v1/requests`.
+ *
+ * parseRequestLogEntries 校验 `GET /admin/v1/requests` 或
+ * `GET /operator/v1/requests` 的一页。
+ */
+export function parseRequestLogEntries(value: unknown): Page<RequestLogEntry> {
+  return parsePage(value, (item) => {
+    const source = record(item);
+    return {
+      requestId: text(source, "request_id"),
+      tenantId: optionalText(source, "tenant_id"),
+      keyDisplay: text(source, "key_display"),
+      endpoint: text(source, "endpoint"),
+      statusCode: count(source, "status_code"),
+      outcome: text(source, "outcome"),
+      durationMs: count(source, "duration_ms"),
       createdAt: timestamp(source, "created_at"),
     };
   });

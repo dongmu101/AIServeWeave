@@ -9,6 +9,7 @@ import {
   parseJobHistoryEntries,
   parseLoginResult,
   parsePlatformOperators,
+  parseRequestLogEntries,
   parseTenantLimits,
   parseTenantProfile,
   parseUsers,
@@ -170,6 +171,38 @@ test("audit entries keep the fields the API actually returns", () => {
   assert.equal(entries[0]?.actorId, "u-1");
   assert.equal(entries[0]?.action, "apikey.create");
   assert.throws(() => parseAuditEntries({ items: [{ id: "a-1" }] }), ApiError);
+});
+
+test("request log entries keep the fields the API actually returns", () => {
+  const page = parseRequestLogEntries({
+    items: [
+      {
+        request_id: "req_1",
+        key_display: "aisw-abcd1234",
+        endpoint: "chat",
+        status_code: 200,
+        outcome: "ok",
+        duration_ms: 842,
+        created_at: "2026-09-11T08:00:00Z",
+      },
+    ],
+    next_cursor: "",
+  });
+  assert.deepEqual(page.items[0], {
+    requestId: "req_1",
+    tenantId: "",
+    keyDisplay: "aisw-abcd1234",
+    endpoint: "chat",
+    statusCode: 200,
+    outcome: "ok",
+    durationMs: 842,
+    createdAt: "2026-09-11T08:00:00Z",
+  });
+  assert.equal(page.nextCursor, null);
+});
+
+test("a request log entry the Console cannot trust is refused", () => {
+  assert.throws(() => parseRequestLogEntries({ items: [{ request_id: "req_1" }] }), ApiError);
 });
 
 test("a job history list entry omits artifacts, which the detail endpoint fills in", () => {

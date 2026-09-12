@@ -158,6 +158,11 @@ const ROUTES: readonly UpstreamRoute[] = [
     ],
     query: [],
   },
+  {
+    method: "GET",
+    segments: [literal("admin"), literal("v1"), literal("requests")],
+    query: ["limit", "cursor", "since", "until", "status", "request_id"],
+  },
 ];
 
 /**
@@ -200,6 +205,7 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), literal("states")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("audit")], query: ["limit", "cursor", "action", "actor_id", "since", "until"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("metrics"), literal("history")], query: ["since", "until"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("requests")], query: ["limit", "cursor", "since", "until", "status", "request_id", "tenant_id"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("approve")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("disable")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("enable")], query: [] },
