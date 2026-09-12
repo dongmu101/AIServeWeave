@@ -296,25 +296,31 @@ func TestEvaluatorSparseDataDoesNotSpuriouslyBreachAGreaterThanRule(t *testing.T
 // finding: a fresh rule using OperatorLessThan (a completely normal
 // combination — "alert if capacity < 3 nodes", "alert if request_rate < 1
 // to catch an outage") must NOT fire just because metrics_history has no
-// rows yet for its window (a brand new rule, or the first bucketWidth after
-// a fresh deployment). Without the len(points) == 0 guard in
-// evaluateRule, every missing bucket zero-fills, 0 < threshold is true for
-// every bucket, allBreach returns true, and the rule fires immediately —
-// exactly the "alerting cries wolf" failure this guard exists to prevent.
+// rows yet for its window, PROVIDED the rule is still within its grace
+// period (CreatedAt recent relative to now). Without the
+// len(points) == 0 guard in evaluateRule, every missing bucket zero-fills,
+// 0 < threshold is true for every bucket, allBreach returns true, and the
+// rule fires immediately — exactly the "alerting cries wolf" failure this
+// guard exists to prevent. (The grace period's expiry — an old rule with a
+// persistently empty raw series DOES fire — is covered separately by
+// TestEvaluatorFiresPersistentZeroAfterGracePeriodExpires.)
 //
 // TestEvaluatorSkipsWhenNoRawDataYet 是这次 review 发现问题的回归测试：一条
 // 使用 OperatorLessThan 的新规则(完全正常的组合——"capacity < 3 就告警"、
 // "request_rate < 1 用于捕捉故障")，不能仅仅因为 metrics_history 这个窗口
-// 内还没有任何行(刚创建的新规则，或部署后的第一个 bucketWidth)就触发。
-// 如果 evaluateRule 里没有 len(points) == 0 这道防线，缺失的每个桶都会被
-// 填成 0，0 < threshold 对每个桶都成立，allBreach 返回 true，规则立刻触发——
-// 这正是这道防线要防止的"告警狼来了"失败模式。
+// 内还没有任何行就触发——前提是该规则仍处于宽限期内(CreatedAt 相对 now
+// 还很新)。如果 evaluateRule 里没有 len(points) == 0 这道防线，缺失的每个
+// 桶都会被填成 0，0 < threshold 对每个桶都成立，allBreach 返回 true，规则
+// 立刻触发——这正是这道防线要防止的"告警狼来了"失败模式。(宽限期过期后——
+// 一条持续为空的旧规则应当照常触发——由另一个测试
+// TestEvaluatorFiresPersistentZeroAfterGracePeriodExpires 单独覆盖。)
 func TestEvaluatorSkipsWhenNoRawDataYet(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC).Truncate(bucketWidth)
 	clock := fakeClock{now: now}
 	rule := testRule(3, 3)
 	rule.Operator = model.OperatorLessThan
 	rule.Metric = model.MetricCapacity
+	rule.CreatedAt = now // just created: well within the grace period
 	store := newFakeStore()
 	store.rules = []model.AlertRule{rule}
 	// Zero points at all for the queried window — a fresh rule / fresh
@@ -328,10 +334,59 @@ func TestEvaluatorSkipsWhenNoRawDataYet(t *testing.T) {
 	}
 
 	if store.createCalls != 0 {
-		t.Errorf("CreateAlertInstance called %d times, want 0 (no raw data yet must not fire an lt rule on zero-filled buckets)", store.createCalls)
+		t.Errorf("CreateAlertInstance called %d times, want 0 (no raw data yet, still within grace period, must not fire an lt rule on zero-filled buckets)", store.createCalls)
 	}
 	if len(notifier.calls) != 0 {
 		t.Errorf("Notify called %d times, want 0", len(notifier.calls))
+	}
+}
+
+// TestEvaluatorFiresPersistentZeroAfterGracePeriodExpires is the regression
+// test for the re-review finding: some raw series (tunnel_server_slots_
+// total, gateway_http_requests_total) are only written when something
+// happens, so zero connected nodes or zero traffic since boot leaves
+// metrics_history empty not just for one bucketWidth but indefinitely. If
+// the "no data yet" skip applied forever, a genuinely alarming "capacity
+// has been zero this whole time" condition could never fire no matter how
+// long it persisted. This test uses a rule whose CreatedAt is well past the
+// grace period (ConsecutiveBuckets*bucketWidth since creation) with a
+// still-empty raw series, and confirms the rule now fires — the grace
+// period must expire, not suppress forever.
+//
+// TestEvaluatorFiresPersistentZeroAfterGracePeriodExpires 是这次二次 review
+// 发现问题的回归测试：有些原始序列(tunnel_server_slots_total、
+// gateway_http_requests_total)只在发生了什么事情时才写入，零个已连接节点
+// 或自启动以来零流量会让 metrics_history 不只是一个 bucketWidth、而是
+// 无限期地保持为空。如果"还没有数据"这道防线永远生效，一个真正值得告警的
+// "capacity 一直是零"的情况就永远不会触发，无论它持续多久。这个测试用一条
+// CreatedAt 远早于宽限期(创建以来已经过了 ConsecutiveBuckets*bucketWidth)
+// 的规则，原始序列仍然为空，验证规则现在会触发——宽限期必须会过期，而不是
+// 永远压制告警。
+func TestEvaluatorFiresPersistentZeroAfterGracePeriodExpires(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC).Truncate(bucketWidth)
+	clock := fakeClock{now: now}
+	rule := testRule(3, 3)
+	rule.Operator = model.OperatorLessThan
+	rule.Metric = model.MetricCapacity
+	rule.CreatedAt = now.Add(-1 * time.Hour) // far past the 3*bucketWidth (15m) grace period
+	store := newFakeStore()
+	store.rules = []model.AlertRule{rule}
+	// Still zero raw points — e.g. no node has ever connected — but the
+	// rule is old enough that this must now be evaluated as a genuine
+	// sustained-zero condition, not benefit-of-the-doubt "too new".
+	store.points = nil
+	notifier := &fakeNotifier{}
+
+	e := alertengine.New(store, notifier, clock, nil)
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if store.createCalls != 1 {
+		t.Errorf("CreateAlertInstance called %d times, want 1 (persistent zero on an old rule must fire, grace period must expire)", store.createCalls)
+	}
+	if len(notifier.calls) != 1 {
+		t.Errorf("Notify called %d times, want 1", len(notifier.calls))
 	}
 }
 

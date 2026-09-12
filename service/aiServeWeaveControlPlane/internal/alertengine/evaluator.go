@@ -150,24 +150,53 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule model.AlertRule, now 
 	if err != nil {
 		return err
 	}
-	// No raw metrics_history rows at all covering this window — a brand
-	// new rule, or the first bucketWidth after a fresh deployment. This
-	// must be checked against the raw points, not against DerivedSeries's
-	// output: every derivation helper in metrics.go always returns exactly
-	// len(bucketAts) values (missing buckets zero-fill via map lookups,
-	// they never shrink the slice), so a zero-data window would otherwise
-	// silently read as counterDelta/gaugeValue == 0 for every bucket —
-	// which breaches a `lt` rule (e.g. "capacity < 3") on every single
-	// evaluation before a single real metric has ever been collected.
+	// No raw metrics_history rows at all covering this window, AND the
+	// rule is still within its grace period (one ConsecutiveBuckets-sized
+	// window since it was created) — give a brand-new rule, or the first
+	// bucketWidth after a fresh deployment, a chance to actually collect
+	// something before judging it. This must be checked against the raw
+	// points, not against DerivedSeries's output: every derivation helper
+	// in metrics.go always returns exactly len(bucketAts) values (missing
+	// buckets zero-fill via map lookups, they never shrink the slice), so
+	// a zero-data window would otherwise silently read as
+	// counterDelta/gaugeValue == 0 for every bucket — which breaches a
+	// `lt` rule (e.g. "capacity < 3") on the very first evaluation, before
+	// a single real metric has ever been collected.
 	//
-	// 窗口内完全没有原始 metrics_history 行——可能是刚创建的新规则，也可能是
-	// 部署后的第一个 bucketWidth。这个判断必须基于原始 points，不能基于
-	// DerivedSeries 的输出长度：metrics.go 里每一个派生函数都始终返回恰好
-	// len(bucketAts) 个值(缺失的桶通过 map 查找零值填充，从不会让切片变短)，
-	// 否则一个完全没有数据的窗口会悄悄读成 counterDelta/gaugeValue 处处为
-	// 0——这会让一条 `lt` 规则(比如"capacity < 3")在还没采集到任何真实指标
-	// 之前，每次评估都被判定为触发。
-	if len(points) == 0 {
+	// The grace period must expire, though: some raw series
+	// (tunnel_server_slots_total, gateway_http_requests_total) are only
+	// written when something happens — zero connected nodes or zero
+	// traffic since boot means metrics_history stays empty not just for
+	// one bucketWidth but indefinitely. If this guard applied forever, a
+	// genuinely alarming "capacity has been zero this whole time" or
+	// "request_rate has been zero this whole time" condition could never
+	// fire, no matter how long it persisted — silently-never-fires, which
+	// is worse than the original false-positive-on-creation bug this guard
+	// exists to fix. So past the grace period, an empty raw series is no
+	// longer given the benefit of the doubt: fall through to
+	// DerivedSeries/allBreach as normal, where zero-filled buckets
+	// legitimately breaching a `lt` rule is then the correct outcome.
+	//
+	// 窗口内完全没有原始 metrics_history 行，且该规则仍处于宽限期内(自
+	// CreatedAt 起，一个 ConsecutiveBuckets 大小的窗口时长)——给刚创建的
+	// 新规则，或部署后的第一个 bucketWidth，一个真正采集到数据的机会，再
+	// 去评估它。这个判断必须基于原始 points，不能基于 DerivedSeries 的
+	// 输出长度：metrics.go 里每一个派生函数都始终返回恰好 len(bucketAts)
+	// 个值(缺失的桶通过 map 查找零值填充，从不会让切片变短)，否则一个
+	// 完全没有数据的窗口会悄悄读成 counterDelta/gaugeValue 处处为 0——这会
+	// 让一条 `lt` 规则(比如"capacity < 3")在还没采集到任何真实指标之前的
+	// 第一次评估就被判定为触发。
+	//
+	// 但这个宽限期必须会过期：有些原始序列(tunnel_server_slots_total、
+	// gateway_http_requests_total)只在发生了什么事情时才会写入——零个已
+	// 连接节点或自启动以来零流量，会让 metrics_history 不只是一个
+	// bucketWidth、而是无限期地保持为空。如果这道防线永远生效，一个真正
+	// 值得告警的"capacity 一直是零"或"request_rate 一直是零"的情况就永远
+	// 不会触发，不管它持续多久——这种"静默永不触发"比这道防线本来要修的
+	// "创建时误触发"更糟。所以过了宽限期之后，空的原始序列不再享有这种
+	// 豁免：照常走到 DerivedSeries/allBreach，零值填充的桶合理地触发一条
+	// `lt` 规则，此时就是正确的结果。
+	if len(points) == 0 && now.Sub(rule.CreatedAt) < time.Duration(rule.ConsecutiveBuckets)*bucketWidth {
 		return nil
 	}
 	values, err := DerivedSeries(rule.Metric, points, bucketAts)
