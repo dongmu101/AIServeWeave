@@ -121,6 +121,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 读取路径，因此没有配置那条路径的部署，依然能看到自己跑过什么。
 		{Method: http.MethodGet, Path: "/admin/v1/jobs/history", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs/history", requireSession(ctx, listJobHistory(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/jobs/history/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs/history/:id", requireSession(ctx, getJobHistory(ctx)))},
+		// Request search (STATUS.md's P09/C28): the tenant self-service view
+		// and the platform cross-tenant view, mirroring how job history sits
+		// next to /operator/v1/audit above — read-only, session-scoped
+		// searches over an append-only table.
+		//
+		// 请求检索（STATUS.md 的 P09/C28）：租户自助视角与平台跨租户视角，
+		// 与上面 job 历史紧挨着 /operator/v1/audit 的安排一致——都是针对一张
+		// 只追加表的、由会话限定范围的只读检索。
+		{Method: http.MethodGet, Path: "/admin/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/requests", requireSession(ctx, listRequestLogsTenant(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/requests", requirePlatformSession(ctx, listRequestLogsOperator(ctx)))},
 	})
 
 	server.AddRoutes([]rest.Route{
@@ -221,6 +231,19 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/job-artifacts/expired",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/job-artifacts/expired", requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx))),
+		},
+		// Request-log push (STATUS.md's P09/C28) shares the same InternalToken
+		// as the Job endpoints above, for the same reason: a Gateway replica
+		// reporting its own callers' business, not a person in a tenant
+		// session.
+		//
+		// 请求日志推送（STATUS.md 的 P09/C28）与上面的 Job 端点共用同一个
+		// InternalToken，理由相同：这是 Gateway 副本在报告自己调用方的业务，
+		// 而不是某个人在租户会话里的操作。
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/requestlogs",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/requestlogs", requireSharedSecret(ctx.Config.InternalToken, createRequestLogs(ctx))),
 		},
 	})
 

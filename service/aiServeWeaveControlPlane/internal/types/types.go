@@ -367,6 +367,69 @@ type JobHistoryListResponse struct {
 	NextCursor string               `json:"next_cursor,omitempty"`
 }
 
+// RequestLogRecordRequest is one record inside a POST /internal/v1/requestlogs
+// batch.
+//
+// RequestLogRecordRequest 是一次 POST /internal/v1/requestlogs 批量推送里的
+// 一条记录。
+type RequestLogRecordRequest struct {
+	RequestID  string    `json:"request_id"`
+	TenantID   string    `json:"tenant_id"`
+	KeyDisplay string    `json:"key_display,omitempty"`
+	Endpoint   string    `json:"endpoint"`
+	StatusCode int       `json:"status_code"`
+	Outcome    string    `json:"outcome"`
+	DurationMS int64     `json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// CreateRequestLogsRequest is the body of POST /internal/v1/requestlogs.
+//
+// CreateRequestLogsRequest 是 POST /internal/v1/requestlogs 的请求体。
+type CreateRequestLogsRequest struct {
+	Records []RequestLogRecordRequest `json:"records"`
+}
+
+// CreateRequestLogsResponse reports how many of the submitted records were
+// accepted, so a Gateway replica's own observability can tell a malformed
+// payload from a healthy one without the internal API ever needing to fail
+// the whole batch over one bad entry.
+//
+// CreateRequestLogsResponse 报告提交的记录中有多少条被接受，使 Gateway 副本
+// 自己的可观测性能够区分畸形负载与健康负载，而无需内部 API 因一条坏记录就
+// 让整个批次失败。
+type CreateRequestLogsResponse struct {
+	Accepted int `json:"accepted"`
+}
+
+// RequestLogResponse is one persisted request record, as both the tenant and
+// the operator search endpoints render it. It carries every field
+// request_logs stores — there is no route-binding-style internal-only data
+// to strip here, unlike JobResponse versus JobHistoryResponse.
+//
+// RequestLogResponse 是一条已持久化的请求记录，租户与运维两个检索端点都用
+// 这个形状渲染它。它携带 request_logs 存储的每一个字段——这里没有像
+// JobResponse 相对 JobHistoryResponse 那样需要剥离的、路由绑定式的内部专用
+// 数据。
+type RequestLogResponse struct {
+	RequestID  string    `json:"request_id"`
+	TenantID   string    `json:"tenant_id,omitempty"`
+	KeyDisplay string    `json:"key_display"`
+	Endpoint   string    `json:"endpoint"`
+	StatusCode int       `json:"status_code"`
+	Outcome    string    `json:"outcome"`
+	DurationMS int64     `json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// RequestLogListResponse is one page of request records.
+//
+// RequestLogListResponse 是请求记录的一页结果。
+type RequestLogListResponse struct {
+	Items      []RequestLogResponse `json:"items"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+}
+
 // CreateJobRequest is what a Gateway replica reports about a run it just
 // submitted, per STATUS.md's J01/J04 persistence contract. TenantID is what
 // the Gateway asserts about its own caller — this endpoint is guarded by the

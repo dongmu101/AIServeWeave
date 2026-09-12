@@ -1111,6 +1111,140 @@ func createJob(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// createRequestLogs handles POST /internal/v1/requestlogs: a Gateway
+// replica reports a batch of authenticated front-door requests it just
+// finished serving. Like createJob, this call must never sit on an
+// inference request's own critical path — that discipline belongs to the
+// Gateway's own bounded background pusher, not to this handler, which only
+// does the write it is asked to do.
+//
+// createRequestLogs 处理 POST /internal/v1/requestlogs：一个 Gateway 副本
+// 报告一批它刚服务完的、已通过鉴权的前门请求。与 createJob 一样，这次调用
+// 绝不能出现在推理请求自己的关键路径上——那份纪律属于 Gateway 自己的有界
+// 后台推送器，不属于这个只负责完成被要求的写入的 handler。
+func createRequestLogs(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateRequestLogsRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		batch := make([]logic.CreateRequestLogParams, len(req.Records))
+		for i, rec := range req.Records {
+			batch[i] = logic.CreateRequestLogParams{
+				RequestID: rec.RequestID, TenantID: rec.TenantID, KeyDisplay: rec.KeyDisplay,
+				Endpoint: rec.Endpoint, StatusCode: rec.StatusCode, Outcome: rec.Outcome,
+				DurationMS: rec.DurationMS, CreatedAt: rec.CreatedAt,
+			}
+		}
+		accepted, err := ctx.Logic.CreateRequestLogs(r.Context(), batch)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.CreateRequestLogsResponse{Accepted: accepted})
+	}
+}
+
+// renderRequestLog converts a persisted request record to its wire form.
+// includeTenant is false on the tenant-scoped endpoint, where the tenant is
+// already implied by the caller's own session and repeating it on every row
+// would be noise, not information.
+//
+// renderRequestLog 把一条持久化的请求记录转换成线上形式。includeTenant 在
+// 按租户限定的端点上为 false——那里租户已经由调用方自己的会话隐含，在每一行
+// 上重复它是噪音，不是信息。
+func renderRequestLog(r model.RequestLog, includeTenant bool) types.RequestLogResponse {
+	out := types.RequestLogResponse{
+		RequestID: r.ID, KeyDisplay: r.KeyDisplay, Endpoint: r.Endpoint,
+		StatusCode: r.StatusCode, Outcome: r.Outcome, DurationMS: r.DurationMS, CreatedAt: r.CreatedAt,
+	}
+	if includeTenant {
+		out.TenantID = r.TenantID
+	}
+	return out
+}
+
+// requestLogFilterFrom reads the query parameters both search endpoints
+// share.
+//
+// requestLogFilterFrom 读取两个检索端点共用的查询参数。
+func requestLogFilterFrom(query url.Values) (store.RequestLogFilter, bool) {
+	since, sinceOK := timeParam(query.Get("since"))
+	until, untilOK := timeParam(query.Get("until"))
+	if !sinceOK || !untilOK {
+		return store.RequestLogFilter{}, false
+	}
+	return store.RequestLogFilter{
+		RequestID: query.Get("request_id"),
+		Outcome:   query.Get("status"),
+		Since:     since,
+		Until:     until,
+	}, true
+}
+
+// listRequestLogsTenant handles GET /admin/v1/requests, scoped to the
+// caller's own tenant — STATUS.md's P09/C28 tenant self-service view.
+//
+// listRequestLogsTenant 处理 GET /admin/v1/requests，限定在调用方自己的
+// 租户范围内——STATUS.md P09/C28 的租户自助视角。
+func listRequestLogsTenant(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		filter, ok := requestLogFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = actor.TenantID
+		page, err := ctx.Logic.ListRequestLogs(r.Context(), listQuery(r.URL.Query()), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.RequestLogResponse, len(page.Items))
+		for i, rec := range page.Items {
+			out[i] = renderRequestLog(rec, false)
+		}
+		writeJSON(w, http.StatusOK, types.RequestLogListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// listRequestLogsOperator handles GET /operator/v1/requests — STATUS.md's
+// P09/C28 platform cross-tenant view. An absent tenant_id searches every
+// tenant; a present one narrows to it, the same optional-scope shape
+// listActiveJobsForRoute already has no equivalent of on the tenant side,
+// because only the platform surface is trusted to ask for everything at
+// once.
+//
+// listRequestLogsOperator 处理 GET /operator/v1/requests——STATUS.md
+// P09/C28 的平台跨租户视角。缺席的 tenant_id 会检索每一个租户；给出时则
+// 收窄到该租户。这种可选范围的形状，租户一侧没有对应物，因为只有平台入口
+// 才被信任可以一次性检索全部租户。
+func listRequestLogsOperator(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, ok := requestLogFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = r.URL.Query().Get("tenant_id")
+		page, err := ctx.Logic.ListRequestLogs(r.Context(), listQuery(r.URL.Query()), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.RequestLogResponse, len(page.Items))
+		for i, rec := range page.Items {
+			out[i] = renderRequestLog(rec, true)
+		}
+		writeJSON(w, http.StatusOK, types.RequestLogListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
 // listActiveJobsForRoute handles GET /internal/v1/jobs/active. It answers a
 // recovering Gateway replica's question "what do I owe this route binding"
 // (STATUS.md's J06): node_id and runtime_id are query parameters and there
