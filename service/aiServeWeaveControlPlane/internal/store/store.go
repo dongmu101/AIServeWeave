@@ -507,6 +507,52 @@ type JobArtifacts interface {
 // 回收它们，届时它们只是又老了一些。
 const MaxExpiredJobArtifacts = 200
 
+// RequestLogFilter narrows a RequestLogs listing. An empty TenantID means
+// every tenant — the operator cross-tenant search path (STATUS.md's P09/C28)
+// — while every tenant-scoped caller sets it to the caller's own tenant.
+//
+// RequestLogFilter 收窄一次 RequestLogs 列举。TenantID 为空表示不限租户——对应
+// STATUS.md P09/C28 的运维跨租户检索路径——而每个按租户限定的调用方都会把它
+// 设为调用方自己的租户。
+type RequestLogFilter struct {
+	TenantID  string
+	RequestID string
+	Outcome   string
+	Since     time.Time
+	Until     time.Time
+}
+
+// RequestLogs persists the control plane's record of one authenticated
+// OpenAI front-door request, per STATUS.md's P09/C28 and the design doc's
+// request-search contract. Unlike Jobs, a row here is a one-shot append: no
+// update method exists because a request's outcome is already final by the
+// time the Gateway reports it.
+//
+// RequestLogs 持久化控制面对一次已通过鉴权的 OpenAI 前门请求的记录，对应
+// STATUS.md 的 P09/C28 与设计文档的请求检索契约。与 Jobs 不同，这里的一行是
+// 一次性追加：不存在更新方法，因为 Gateway 上报时这次请求的结果已经是终态。
+type RequestLogs interface {
+	// CreateRequestLogs inserts a batch of records, silently skipping any
+	// whose id already exists — the batch push's own idempotency, since the
+	// Gateway may report the same record more than once across retries of
+	// an ambiguous earlier push.
+	//
+	// CreateRequestLogs 插入一批记录，静默跳过任何 id 已存在的记录——这就是
+	// 批量推送自身的幂等性，因为 Gateway 可能会在一次结果不明的早先推送之后
+	// 重复上报同一条记录。
+	CreateRequestLogs(ctx context.Context, records []model.RequestLog) error
+	// ListRequestLogs reads one page, newest first.
+	//
+	// ListRequestLogs 读取一页，最新的在前。
+	ListRequestLogs(ctx context.Context, query ListQuery, filter RequestLogFilter) (Page[model.RequestLog], error)
+	// DeleteRequestLogsBefore removes every row older than before, for the
+	// retention sweeper.
+	//
+	// DeleteRequestLogsBefore 删除每一行早于 before 的记录，供保留期清理协程
+	// 使用。
+	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (int64, error)
+}
+
 // Store is every persistence capability the service has, for wiring at
 // startup. Handlers and logic take the narrow interfaces above, never this.
 //
@@ -523,4 +569,5 @@ type Store interface {
 	Jobs
 	JobArtifacts
 	MetricsHistory
+	RequestLogs
 }
