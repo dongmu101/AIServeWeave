@@ -1111,6 +1111,48 @@ func createJob(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// MaxRequestLogsBodyBytes bounds the body of POST /internal/v1/requestlogs.
+// It is sized for httpapi.DefaultRequestLogBatchSize (500 records, see
+// requestlogpush.go in the Gateway) with real headroom: one serialized
+// record measures roughly 224 bytes, so 500 of them need roughly 112 KB —
+// this constant is more than double that. The two constants are a coupled
+// cross-service contract: this endpoint's own decodeRequestLogs (not the
+// package's shared decode, whose maxBodyBytes is far too small for a batch)
+// enforces this limit, so changing either constant without checking the
+// other risks silently truncating batches and dropping them the way the
+// original shared 64 KiB limit did.
+//
+// MaxRequestLogsBodyBytes 限定 POST /internal/v1/requestlogs 请求体的大小。
+// 它按 httpapi.DefaultRequestLogBatchSize（500 条记录，见 Gateway 的
+// requestlogpush.go）留有真实余量来设定：一条序列化记录约 224 字节，500 条约
+// 需 112 KB——这个常量是它的两倍还多。这两个常量是一份耦合的跨服务契约：本
+// 端点专用的 decodeRequestLogs（而不是本包共用的 decode——它的 maxBodyBytes
+// 对一个批次而言太小）负责执行这个上限，因此改动任一常量而不检查另一个，都
+// 有可能重演最初那个共用 64 KiB 限制曾经造成的批次静默截断与丢弃。
+const MaxRequestLogsBodyBytes = 256 << 10
+
+// decodeRequestLogs allows a bounded batch of request-log records — see
+// MaxRequestLogsBodyBytes for why this endpoint needs a larger limit than
+// the package's shared decode.
+//
+// decodeRequestLogs 接受一批有界的请求日志记录——为什么本端点需要一个比本包
+// 共用 decode 更大的上限，见 MaxRequestLogsBodyBytes。
+func decodeRequestLogs(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestLogsBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request log batch exceeds limit")
+		} else {
+			writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
+		}
+		return false
+	}
+	return true
+}
+
 // createRequestLogs handles POST /internal/v1/requestlogs: a Gateway
 // replica reports a batch of authenticated front-door requests it just
 // finished serving. Like createJob, this call must never sit on an
@@ -1125,7 +1167,7 @@ func createJob(ctx *svc.ServiceContext) http.HandlerFunc {
 func createRequestLogs(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var req types.CreateRequestLogsRequest
-		if !decode(w, r, &req) {
+		if !decodeRequestLogs(w, r, &req) {
 			return
 		}
 		batch := make([]logic.CreateRequestLogParams, len(req.Records))

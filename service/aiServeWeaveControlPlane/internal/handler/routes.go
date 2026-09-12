@@ -232,20 +232,28 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Path:    "/internal/v1/job-artifacts/expired",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/job-artifacts/expired", requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx))),
 		},
-		// Request-log push (STATUS.md's P09/C28) shares the same InternalToken
-		// as the Job endpoints above, for the same reason: a Gateway replica
-		// reporting its own callers' business, not a person in a tenant
-		// session.
-		//
-		// 请求日志推送（STATUS.md 的 P09/C28）与上面的 Job 端点共用同一个
-		// InternalToken，理由相同：这是 Gateway 副本在报告自己调用方的业务，
-		// 而不是某个人在租户会话里的操作。
+	})
+	// Request-log push (STATUS.md's P09/C28) shares the same InternalToken as
+	// the Job endpoints above, for the same reason: a Gateway replica
+	// reporting its own callers' business, not a person in a tenant session.
+	// It is registered in its own group, mirroring the routes/workflow-templates
+	// publish endpoints above, because a batch of up to
+	// httpapi.DefaultRequestLogBatchSize records does not fit the package's
+	// shared 64 KiB decode limit — see MaxRequestLogsBodyBytes.
+	//
+	// 请求日志推送（STATUS.md 的 P09/C28）与上面的 Job 端点共用同一个
+	// InternalToken，理由相同：这是 Gateway 副本在报告自己调用方的业务，而不是
+	// 某个人在租户会话里的操作。它被单独注册成一组，与上面 routes/
+	// workflow-templates 的发布端点做法一致，因为多达
+	// httpapi.DefaultRequestLogBatchSize 条记录的一个批次，装不进本包共用的
+	// 64 KiB decode 上限——见 MaxRequestLogsBodyBytes。
+	server.AddRoutes([]rest.Route{
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/requestlogs",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/requestlogs", requireSharedSecret(ctx.Config.InternalToken, createRequestLogs(ctx))),
 		},
-	})
+	}, rest.WithMaxBytes(MaxRequestLogsBodyBytes))
 
 	// The fleet inventory is mounted only when it is configured, so a
 	// deployment without an operations console has no such route rather than
