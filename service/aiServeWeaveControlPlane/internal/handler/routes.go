@@ -131,6 +131,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 只追加表的、由会话限定范围的只读检索。
 		{Method: http.MethodGet, Path: "/admin/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/requests", requireSession(ctx, listRequestLogsTenant(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/requests", requirePlatformSession(ctx, listRequestLogsOperator(ctx)))},
+		// Alert rule CRUD (STATUS.md's P09/C29), platform-wide like fleet
+		// metrics themselves.
+		//
+		// 告警规则 CRUD（STATUS.md 的 P09/C29），与它评估的机群指标一样是
+		// 平台级的。
+		{Method: http.MethodPost, Path: "/operator/v1/alert-rules", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules", requirePlatformSession(ctx, createAlertRule(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/alert-rules", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules", requirePlatformSession(ctx, listAlertRules(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, getAlertRule(ctx)))},
+		{Method: http.MethodPatch, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, updateAlertRule(ctx)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, deleteAlertRule(ctx)))},
 	})
 
 	server.AddRoutes([]rest.Route{

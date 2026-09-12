@@ -672,6 +672,51 @@ type PlatformLoginResponse struct {
 	Operator  PlatformOperator `json:"operator"`
 }
 
+// -----------------------------------------------------------------------
+// Alert rules (STATUS.md's P09/C29)
+// -----------------------------------------------------------------------
+
+// AlertRuleRequest is the body of both POST /operator/v1/alert-rules and
+// PATCH /operator/v1/alert-rules/:id — the latter is a full-replace update,
+// see store.AlertRuleUpdate's doc comment.
+//
+// AlertRuleRequest 是 POST /operator/v1/alert-rules 与
+// PATCH /operator/v1/alert-rules/:id 共用的请求体——后者是整体替换式更新，
+// 见 store.AlertRuleUpdate 的文档注释。
+type AlertRuleRequest struct {
+	Name               string  `json:"name"`
+	Metric             string  `json:"metric"`
+	Operator           string  `json:"operator"`
+	Threshold          float64 `json:"threshold"`
+	ConsecutiveBuckets int     `json:"consecutive_buckets"`
+	WebhookURL         string  `json:"webhook_url,omitempty"`
+	Enabled            bool    `json:"enabled"`
+}
+
+// AlertRuleResponse is one alert rule.
+//
+// AlertRuleResponse 是一条告警规则。
+type AlertRuleResponse struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Metric             string    `json:"metric"`
+	Operator           string    `json:"operator"`
+	Threshold          float64   `json:"threshold"`
+	ConsecutiveBuckets int       `json:"consecutive_buckets"`
+	WebhookURL         string    `json:"webhook_url,omitempty"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// AlertRuleListResponse is one page of alert rules.
+//
+// AlertRuleListResponse 是一页告警规则。
+type AlertRuleListResponse struct {
+	Items      []AlertRuleResponse `json:"items"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+}
+
 // NodeOpsRequest is the body every node-ops write endpoint accepts: none of
 // them take any field beyond the node_id already in the path, so this is an
 // intentionally empty struct rather than an absent one — decode's

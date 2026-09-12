@@ -713,6 +713,149 @@ func platformOperatorLifecycleAction(action func(context.Context, logic.Actor, s
 	}
 }
 
+// -----------------------------------------------------------------------
+// Alert rules (STATUS.md's P09/C29)
+// -----------------------------------------------------------------------
+
+// renderAlertRule converts one model.AlertRule into its wire form.
+//
+// renderAlertRule 把一条 model.AlertRule 转换成它的线上表示形式。
+func renderAlertRule(r model.AlertRule) types.AlertRuleResponse {
+	return types.AlertRuleResponse{
+		ID: r.ID, Name: r.Name, Metric: r.Metric, Operator: r.Operator, Threshold: r.Threshold,
+		ConsecutiveBuckets: r.ConsecutiveBuckets, WebhookURL: r.WebhookURL, Enabled: r.Enabled,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	}
+}
+
+// alertRuleParamsFrom converts one AlertRuleRequest into logic.CreateAlertRuleParams,
+// which logic.UpdateAlertRuleParams is a type alias of — the same params shape
+// serves both create and full-replace update.
+//
+// alertRuleParamsFrom 把一个 AlertRuleRequest 转换成 logic.CreateAlertRuleParams
+// ——logic.UpdateAlertRuleParams 是它的类型别名，同一套参数形状同时服务创建与
+// 整体替换式更新。
+func alertRuleParamsFrom(req types.AlertRuleRequest) logic.CreateAlertRuleParams {
+	return logic.CreateAlertRuleParams{
+		Name: req.Name, Metric: req.Metric, Operator: req.Operator, Threshold: req.Threshold,
+		ConsecutiveBuckets: req.ConsecutiveBuckets, WebhookURL: req.WebhookURL, Enabled: req.Enabled,
+	}
+}
+
+// createAlertRule handles POST /operator/v1/alert-rules.
+//
+// createAlertRule 处理 POST /operator/v1/alert-rules。
+func createAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.AlertRuleRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		rule, err := ctx.Logic.CreateAlertRule(r.Context(), actor, alertRuleParamsFrom(req))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderAlertRule(rule))
+	}
+}
+
+// listAlertRules handles GET /operator/v1/alert-rules, optionally filtered by
+// the ?enabled= query parameter.
+//
+// listAlertRules 处理 GET /operator/v1/alert-rules，可选按 ?enabled= 查询参数过滤。
+func listAlertRules(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var filter store.AlertRuleFilter
+		if v := r.URL.Query().Get("enabled"); v != "" {
+			enabled := v == "true"
+			filter.Enabled = &enabled
+		}
+		page, err := ctx.Logic.ListAlertRules(r.Context(), actor, listQuery(r.URL.Query()), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.AlertRuleResponse, len(page.Items))
+		for i, rule := range page.Items {
+			out[i] = renderAlertRule(rule)
+		}
+		writeJSON(w, http.StatusOK, types.AlertRuleListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// getAlertRule handles GET /operator/v1/alert-rules/:id.
+//
+// getAlertRule 处理 GET /operator/v1/alert-rules/:id。
+func getAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		rule, err := ctx.Logic.GetAlertRule(r.Context(), actor, pathvar.Vars(r)["id"])
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderAlertRule(rule))
+	}
+}
+
+// updateAlertRule handles PATCH /operator/v1/alert-rules/:id, a full-replace
+// update — see store.AlertRuleUpdate's doc comment for why.
+//
+// updateAlertRule 处理 PATCH /operator/v1/alert-rules/:id，是一次整体替换式
+// 更新——原因见 store.AlertRuleUpdate 的文档注释。
+func updateAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.AlertRuleRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		rule, err := ctx.Logic.UpdateAlertRule(r.Context(), actor, pathvar.Vars(r)["id"], alertRuleParamsFrom(req))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderAlertRule(rule))
+	}
+}
+
+// deleteAlertRule handles DELETE /operator/v1/alert-rules/:id.
+//
+// deleteAlertRule 处理 DELETE /operator/v1/alert-rules/:id。
+func deleteAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := ctx.Logic.DeleteAlertRule(r.Context(), actor, pathvar.Vars(r)["id"]); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // platformLogin authenticates a platform operator and issues a session
 // token scoped to model.PlatformScope (requirePlatformSession checks it).
 //
