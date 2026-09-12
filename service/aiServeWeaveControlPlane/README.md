@@ -543,3 +543,46 @@ CREATE INDEX idx_request_logs_tenant_outcome_created ON request_logs (tenant_id,
 - `GET /operator/v1/requests`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则返回全部租户，响应保留 `tenant_id` 字段。
 
 **保留期默认 30 天**（`config.DefaultRequestLogRetention`，`Config.RequestLogRetention` 可覆盖）——比 `metrics_history` 的 90 天短，因为这是逐请求明细而非 5 分钟聚合桶，同等时间窗口下行数级别不同。`internal/requestlogretention` 是一个独立的后台协程，每 24 小时运行一次，按创建时间批量删除过期行；与 `MetricsHistory` 需要显式配置才启动不同，这个清理协程**只要表已迁移就无条件运行**——填充这张表的内部推送 API 只要设置了 `InternalToken` 就已经挂载，不存在一个独立的「是否配置了」的问题。
+
+## 告警评估与通知（P09/C29）
+
+`internal/alertengine` 新增两张表，供运维定义基于 `metrics_history` 派生指标的阈值告警（Console C29：`/operator/alert-rules`、`/operator/alerts`），与 `request_logs` 一样走 PostgreSQL/MySQL 双支持的固定版本迁移（`gormstore/alertingmigrate.go`）：
+
+```sql
+alert_rules(
+  id                   VARCHAR(64) PRIMARY KEY,
+  name                 VARCHAR(128) NOT NULL,
+  metric               VARCHAR(32)  NOT NULL,  -- 封闭枚举，见下
+  operator             VARCHAR(8)   NOT NULL,  -- lt/lte/gt/gte
+  threshold            DOUBLE NOT NULL,
+  consecutive_buckets  INT NOT NULL,           -- 连续多少个 5 分钟桶越界才判定触发
+  webhook_url          VARCHAR(512) NOT NULL DEFAULT '',
+  enabled              BOOLEAN NOT NULL DEFAULT TRUE,  -- 索引
+  created_at, updated_at
+);
+
+alert_instances(
+  id                VARCHAR(64) PRIMARY KEY,
+  rule_id           VARCHAR(64) NOT NULL,      -- 与 status 组成联合索引 idx_alert_instances_rule_status
+  status            VARCHAR(16) NOT NULL,      -- firing/acknowledged/resolved，resolved 是终态
+  value_at_fire     DOUBLE,
+  created_at        TIMESTAMP,                 -- 首次触发时间；复用共享 keyset 分页助手固定的 created_at/id 排序，与 P09a 的 RequestLog.ID 同一命名理由
+  last_evaluated_at TIMESTAMP,
+  resolved_at       TIMESTAMP NULL,
+  acknowledged_by   VARCHAR(32) NOT NULL DEFAULT '',
+  acknowledged_at   TIMESTAMP NULL,
+  notify_status     VARCHAR(16) NOT NULL,      -- pending/sent/failed/skipped
+  notify_attempts   INT NOT NULL DEFAULT 0
+);
+```
+
+`alert_rules.Metric` 只接受 5 个封闭取值：`request_rate`、`success_rate`、`latency_p95`、`token_usage`、`capacity`。这些**不是** `metrics_history.metric` 列的原始值——P08 的采集器只写入原始 Prometheus 计数器/直方图汇总行（`gateway_http_requests_total`、`gateway_http_request_duration_seconds_bucket/_sum/_count`、`gateway_tokens_total`、`tunnel_server_slots_total`）。`internal/alertengine/metrics.go` 的 `DerivedSeries` 把它们折算成语义值，其中 `success_rate`/`latency_p95` 是把此前只存在于 Console 前端 `lib/console/metrics-charts.ts`（`deltaByBucket`/`approxP95`）的近似算法移植成 Go 实现——两端没有共享运行时，是对同一套语义的独立重实现而非共享代码。算法细节不在此重复推导，见设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)「派生指标计算」一节与 `internal/alertengine/metrics.go` 源码注释。
+
+评估循环（`internal/alertengine/evaluator.go` 的 `Evaluator.Run`）随服务启动**无条件运行**——不像 `MetricsHistory` 需要先配置外部 Gateway/Registry 地址才启动，告警评估只读同一个数据库里已有的 `metrics_history` 表，没有需要外部前提条件的理由，因此与 P09a 的请求日志保留期清理协程走同一先例。默认每 60 秒一轮（`config.DefaultAlertEvaluationInterval`，`Config.AlertEvaluationInterval` 可覆盖），每轮读取全部 `Enabled=true` 规则，在其 `ConsecutiveBuckets` 窗口内比较派生值与 `Threshold`：全部桶越界且没有已打开（`firing`/`acknowledged`）实例时新建一条 `alert_instances`；已有打开实例时只续 `LastEvaluatedAt`，不重复创建、不重复通知（刻意去抖动，避免同一次故障产生通知风暴）；条件不再满足且存在打开实例时转 `resolved`。
+
+`internal/alertengine/webhook.go` 的 `Sender` 在每次 firing/resolved 状态转换、且规则配置了 `WebhookURL` 时投递一次固定 JSON payload：标准库 `net/http`，**固定 3 次尝试、指数退避（1s、2s）、每次尝试 5 秒超时**，全部失败后把该实例的 `NotifyStatus` 置为 `failed`、`NotifyAttempts` 记为已尝试次数，此后不再重试、不入持久投递队列——运维在 `/operator/alerts` 列表里能看到发送失败，需要时自行核实下游 Webhook 网关。
+
+API 全部挂 `requirePlatformSession`，写操作复用 `audit_logs`（`TenantID=model.PlatformScope`）：
+
+- 规则 CRUD（5 个端点）：`POST`/`GET`/`GET /:id`/`PATCH`/`DELETE` `/operator/v1/alert-rules`。
+- 实例（2 个端点）：`GET /operator/v1/alerts`（列表，支持按 `status`、时间窗口分页，复用既有 `store.ListQuery`/`Page[T]`）、`POST /operator/v1/alerts/:id/acknowledge`（`firing` → `acknowledged`；对已 `resolved` 的实例返回冲突错误，不允许状态倒退）。
