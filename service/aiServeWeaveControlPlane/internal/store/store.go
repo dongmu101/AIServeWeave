@@ -553,6 +553,91 @@ type RequestLogs interface {
 	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
+// AlertRuleFilter narrows a ListAlertRules call. An empty Enabled means no
+// filter on that field.
+//
+// AlertRuleFilter 收窄一次 ListAlertRules 调用。Enabled 为 nil 表示不按该
+// 字段过滤。
+type AlertRuleFilter struct {
+	Enabled *bool
+}
+
+// AlertInstanceFilter narrows a ListAlertInstances call.
+//
+// AlertInstanceFilter 收窄一次 ListAlertInstances 调用。
+type AlertInstanceFilter struct {
+	Status string
+	RuleID string
+	Since  time.Time
+	Until  time.Time
+}
+
+// Alerting persists alert rules and their fired instances (STATUS.md's
+// P09/C29). Platform-wide, not tenant-scoped, matching the metrics it
+// evaluates.
+//
+// Alerting 持久化告警规则及其触发实例（STATUS.md 的 P09/C29）。平台级，不
+// 分租户，与它所评估的指标一致。
+type Alerting interface {
+	CreateAlertRule(ctx context.Context, rule *model.AlertRule) error
+	GetAlertRule(ctx context.Context, id string) (model.AlertRule, error)
+	ListAlertRules(ctx context.Context, query ListQuery, filter AlertRuleFilter) (Page[model.AlertRule], error)
+	// ListEnabledAlertRules returns every enabled rule, unpaginated — this
+	// table is operator-authored configuration, not request volume, and
+	// the evaluation loop needs the whole set on every tick.
+	//
+	// ListEnabledAlertRules 返回全部已启用的规则，不分页——这张表是运维
+	// 编写的配置，不是请求量级的数据，评估循环每一轮都需要完整集合。
+	ListEnabledAlertRules(ctx context.Context) ([]model.AlertRule, error)
+	// UpdateAlertRule replaces the named mutable fields of one rule.
+	// ErrNotFound if no such rule exists.
+	//
+	// UpdateAlertRule 替换一条规则指定的可变字段。规则不存在时返回
+	// ErrNotFound。
+	UpdateAlertRule(ctx context.Context, id string, update AlertRuleUpdate) (model.AlertRule, error)
+	DeleteAlertRule(ctx context.Context, id string) error
+
+	CreateAlertInstance(ctx context.Context, instance *model.AlertInstance) error
+	// GetOpenAlertInstance returns the most recent alert_instances row for
+	// ruleID whose Status is firing or acknowledged, and whether one
+	// exists. At most one such row can exist per rule at a time — the
+	// evaluation loop enforces that invariant, this method just reads it.
+	//
+	// GetOpenAlertInstance 返回 ruleID 下最近一条状态为 firing 或
+	// acknowledged 的实例行，以及它是否存在。同一时刻每条规则至多存在一行
+	// 这样的记录——这个不变式由评估循环维护，本方法只负责读取。
+	GetOpenAlertInstance(ctx context.Context, ruleID string) (model.AlertInstance, bool, error)
+	TouchAlertInstance(ctx context.Context, id string, lastEvaluatedAt time.Time) error
+	ResolveAlertInstance(ctx context.Context, id string, resolvedAt time.Time) error
+	// AcknowledgeAlertInstance transitions a firing instance to
+	// acknowledged. ErrConflict if the instance is already resolved — an
+	// operator cannot acknowledge a closed alert.
+	//
+	// AcknowledgeAlertInstance 把一个 firing 的实例转为 acknowledged。实例
+	// 已经是 resolved 时返回 ErrConflict——运维不能确认一个已经关闭的告警。
+	AcknowledgeAlertInstance(ctx context.Context, id, actorID string, at time.Time) (model.AlertInstance, error)
+	SetAlertInstanceNotifyResult(ctx context.Context, id, status string, attempts int) error
+	ListAlertInstances(ctx context.Context, query ListQuery, filter AlertInstanceFilter) (Page[model.AlertInstance], error)
+}
+
+// AlertRuleUpdate is the set of AlertRule fields UpdateAlertRule may
+// change — every mutable field, since this resource is small operator
+// configuration where a full-replace PATCH is simpler than partial-field
+// semantics.
+//
+// AlertRuleUpdate 是 UpdateAlertRule 可以修改的 AlertRule 字段集合——覆盖
+// 每一个可变字段，因为这是一份小体量的运维配置，整体替换式的 PATCH 比
+// 局部字段语义更简单。
+type AlertRuleUpdate struct {
+	Name               string
+	Metric             string
+	Operator           string
+	Threshold          float64
+	ConsecutiveBuckets int
+	WebhookURL         string
+	Enabled            bool
+}
+
 // Store is every persistence capability the service has, for wiring at
 // startup. Handlers and logic take the narrow interfaces above, never this.
 //
@@ -570,4 +655,5 @@ type Store interface {
 	JobArtifacts
 	MetricsHistory
 	RequestLogs
+	Alerting
 }
