@@ -50,6 +50,8 @@ type Store struct {
 	artifacts         map[string]model.JobArtifact
 	metricsHistory    []model.MetricsHistoryPoint
 	requestLogs       map[string]model.RequestLog
+	alertRules        map[string]model.AlertRule
+	alertInstances    map[string]model.AlertInstance
 }
 
 // New returns an empty store.
@@ -64,6 +66,8 @@ func New() *Store {
 		jobs:              map[string]model.Job{},
 		artifacts:         map[string]model.JobArtifact{},
 		requestLogs:       map[string]model.RequestLog{},
+		alertRules:        map[string]model.AlertRule{},
+		alertInstances:    map[string]model.AlertInstance{},
 	}
 }
 
