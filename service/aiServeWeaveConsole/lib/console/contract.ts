@@ -176,6 +176,49 @@ export interface RequestLogEntry {
 }
 
 /**
+ * AlertRule mirrors types.AlertRuleResponse: one operator-defined
+ * threshold rule over a derived metrics_history metric (STATUS.md's
+ * P09/C29).
+ *
+ * AlertRule 镜像 types.AlertRuleResponse：一条运维定义的、基于派生
+ * metrics_history 指标的阈值规则（STATUS.md 的 P09/C29）。
+ */
+export interface AlertRule {
+  id: string;
+  name: string;
+  metric: string;
+  operator: string;
+  threshold: number;
+  consecutiveBuckets: number;
+  webhookUrl: string;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * AlertInstance mirrors types.AlertInstanceResponse: one fired instance of
+ * an AlertRule.
+ *
+ * AlertInstance 镜像 types.AlertInstanceResponse：一条 AlertRule 触发出的
+ * 实例。
+ */
+export interface AlertInstance {
+  id: string;
+  ruleId: string;
+  ruleName: string;
+  status: string;
+  valueAtFire: number;
+  createdAt: string;
+  lastEvaluatedAt: string;
+  resolvedAt: string | null;
+  acknowledgedBy: string;
+  acknowledgedAt: string | null;
+  notifyStatus: string;
+  notifyAttempts: number;
+}
+
+/**
  * JobArtifact mirrors types.JobArtifactResponse: one recorded output of a
  * persisted job.
  *
@@ -319,6 +362,42 @@ function count(source: Record<string, unknown>, key: string): number {
     fail();
   }
   return value;
+}
+
+/**
+ * float reads a required finite number field — unlike count, no
+ * integer or non-negative constraint, for fields like a threshold or an
+ * observed metric value that are genuinely fractional.
+ *
+ * float 读取一个必需的有限数值字段——与 count 不同，不做整数或非负约束，
+ * 用于阈值、观测到的指标值这类本就可能是小数的字段。
+ */
+function float(source: Record<string, unknown>, key: string): number {
+  const value = source[key];
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    fail();
+  }
+  return value as number;
+}
+
+/**
+ * boolean reads a required boolean field. There is no `omitempty` variant
+ * in this codebase's wire types for a bool — Go's encoding/json always
+ * emits `false` explicitly for a zero-value bool field with no
+ * `omitempty` tag — so an absent value here is a contract violation, not
+ * a default.
+ *
+ * boolean 读取一个必需的布尔字段。本仓库的线上类型里布尔字段没有
+ * `omitempty` 变体——Go 的 encoding/json 对没有 `omitempty` 标签的布尔
+ * 零值字段总会显式输出 `false`——因此这里值缺席属于契约违例，而不是取
+ * 默认值。
+ */
+function boolean(source: Record<string, unknown>, key: string): boolean {
+  const value = source[key];
+  if (typeof value !== "boolean") {
+    fail();
+  }
+  return value as boolean;
 }
 
 /** optionalText reads an `omitempty` string field. Absent becomes "" —
@@ -494,6 +573,54 @@ export function parseRequestLogEntries(value: unknown): Page<RequestLogEntry> {
       outcome: text(source, "outcome"),
       durationMs: count(source, "duration_ms"),
       createdAt: timestamp(source, "created_at"),
+    };
+  });
+}
+
+/**
+ * parseAlertRules validates one page of `GET /operator/v1/alert-rules`.
+ *
+ * parseAlertRules 校验 `GET /operator/v1/alert-rules` 的一页。
+ */
+export function parseAlertRules(value: unknown): Page<AlertRule> {
+  return parsePage(value, (item) => {
+    const source = record(item);
+    return {
+      id: text(source, "id"),
+      name: text(source, "name"),
+      metric: text(source, "metric"),
+      operator: text(source, "operator"),
+      threshold: float(source, "threshold"),
+      consecutiveBuckets: count(source, "consecutive_buckets"),
+      webhookUrl: optionalText(source, "webhook_url"),
+      enabled: boolean(source, "enabled"),
+      createdAt: timestamp(source, "created_at"),
+      updatedAt: timestamp(source, "updated_at"),
+    };
+  });
+}
+
+/**
+ * parseAlertInstances validates one page of `GET /operator/v1/alerts`.
+ *
+ * parseAlertInstances 校验 `GET /operator/v1/alerts` 的一页。
+ */
+export function parseAlertInstances(value: unknown): Page<AlertInstance> {
+  return parsePage(value, (item) => {
+    const source = record(item);
+    return {
+      id: text(source, "id"),
+      ruleId: text(source, "rule_id"),
+      ruleName: optionalText(source, "rule_name"),
+      status: text(source, "status"),
+      valueAtFire: float(source, "value_at_fire"),
+      createdAt: timestamp(source, "created_at"),
+      lastEvaluatedAt: timestamp(source, "last_evaluated_at"),
+      resolvedAt: optionalTimestamp(source, "resolved_at"),
+      acknowledgedBy: optionalText(source, "acknowledged_by"),
+      acknowledgedAt: optionalTimestamp(source, "acknowledged_at"),
+      notifyStatus: text(source, "notify_status"),
+      notifyAttempts: count(source, "notify_attempts"),
     };
   });
 }

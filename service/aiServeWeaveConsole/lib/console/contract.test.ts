@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  parseAlertInstances,
+  parseAlertRules,
   parseApiKeys,
   parseCreatedApiKey,
   parseAuditEntries,
@@ -203,6 +205,107 @@ test("request log entries keep the fields the API actually returns", () => {
 
 test("a request log entry the Console cannot trust is refused", () => {
   assert.throws(() => parseRequestLogEntries({ items: [{ request_id: "req_1" }] }), ApiError);
+});
+
+test("an alert rule page keeps the boolean enabled field and the optional webhook_url", () => {
+  const page = parseAlertRules({
+    items: [
+      {
+        id: "rule_1",
+        name: "high error rate",
+        metric: "error_rate",
+        operator: "gt",
+        threshold: 0.5,
+        consecutive_buckets: 3,
+        webhook_url: "https://example.com/hook",
+        enabled: true,
+        created_at: "2026-09-01T09:00:00Z",
+        updated_at: "2026-09-02T09:00:00Z",
+      },
+      {
+        id: "rule_2",
+        name: "disabled rule",
+        metric: "latency_p99",
+        operator: "lt",
+        threshold: 100,
+        consecutive_buckets: 1,
+        enabled: false,
+        created_at: "2026-09-01T09:00:00Z",
+        updated_at: "2026-09-01T09:00:00Z",
+      },
+    ],
+    next_cursor: "next",
+  });
+  assert.deepEqual(page.items[0], {
+    id: "rule_1",
+    name: "high error rate",
+    metric: "error_rate",
+    operator: "gt",
+    threshold: 0.5,
+    consecutiveBuckets: 3,
+    webhookUrl: "https://example.com/hook",
+    enabled: true,
+    createdAt: "2026-09-01T09:00:00Z",
+    updatedAt: "2026-09-02T09:00:00Z",
+  });
+  assert.equal(page.items[1]?.enabled, false, "an explicit false must round-trip, not read as absent");
+  assert.equal(page.items[1]?.webhookUrl, "", "an omitted webhook_url reads as empty");
+  assert.equal(page.nextCursor, "next");
+});
+
+test("an alert rule missing a required field is refused", () => {
+  const cases: { name: string; value: unknown }[] = [
+    { name: "missing enabled", value: { id: "r", name: "n", metric: "m", operator: "gt", threshold: 1, consecutive_buckets: 1, created_at: "2026-09-01T09:00:00Z", updated_at: "2026-09-01T09:00:00Z" } },
+    { name: "enabled is a string, not a boolean", value: { id: "r", name: "n", metric: "m", operator: "gt", threshold: 1, consecutive_buckets: 1, enabled: "true", created_at: "2026-09-01T09:00:00Z", updated_at: "2026-09-01T09:00:00Z" } },
+    { name: "threshold is missing", value: { id: "r", name: "n", metric: "m", operator: "gt", consecutive_buckets: 1, enabled: true, created_at: "2026-09-01T09:00:00Z", updated_at: "2026-09-01T09:00:00Z" } },
+  ];
+  for (const item of cases) {
+    assert.throws(() => parseAlertRules({ items: [item.value] }), ApiError, item.name);
+  }
+});
+
+test("an alert instance page carries resolved_at as null until the instance resolves", () => {
+  const page = parseAlertInstances({
+    items: [
+      {
+        id: "alert_1",
+        rule_id: "rule_1",
+        rule_name: "high error rate",
+        status: "firing",
+        value_at_fire: 0.9,
+        created_at: "2026-09-06T09:00:00Z",
+        last_evaluated_at: "2026-09-06T09:05:00Z",
+        notify_status: "sent",
+        notify_attempts: 1,
+      },
+      {
+        id: "alert_2",
+        rule_id: "rule_1",
+        rule_name: "high error rate",
+        status: "resolved",
+        value_at_fire: 0.9,
+        created_at: "2026-09-06T09:00:00Z",
+        last_evaluated_at: "2026-09-06T09:10:00Z",
+        resolved_at: "2026-09-06T09:10:00Z",
+        acknowledged_by: "u-1",
+        acknowledged_at: "2026-09-06T09:06:00Z",
+        notify_status: "sent",
+        notify_attempts: 1,
+      },
+    ],
+  });
+  assert.equal(page.items[0]?.resolvedAt, null, "a still-firing alert has no resolved_at yet");
+  assert.equal(page.items[0]?.acknowledgedAt, null);
+  assert.equal(page.items[1]?.resolvedAt, "2026-09-06T09:10:00Z");
+  assert.equal(page.items[1]?.acknowledgedBy, "u-1");
+  assert.equal(page.items[1]?.acknowledgedAt, "2026-09-06T09:06:00Z");
+});
+
+test("an alert instance missing a required field is refused", () => {
+  assert.throws(
+    () => parseAlertInstances({ items: [{ id: "alert_1", rule_id: "rule_1" }] }),
+    ApiError
+  );
 });
 
 test("a job history list entry omits artifacts, which the detail endpoint fills in", () => {

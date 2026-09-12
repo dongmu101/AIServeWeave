@@ -348,3 +348,65 @@ test("operator request log route resolves and forwards tenant_id", () => {
   assert.equal(result?.path, "/operator/v1/requests");
   assert.equal(result?.search, "?tenant_id=tnt_1");
 });
+
+test("all seven alerting routes resolve", () => {
+  const operatorResolve = (method: string, path: string) =>
+    resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams());
+
+  const cases: { name: string; method: string; path: string }[] = [
+    { name: "create rule", method: "POST", path: "/operator/v1/alert-rules" },
+    { name: "list rules", method: "GET", path: "/operator/v1/alert-rules" },
+    { name: "read one rule", method: "GET", path: "/operator/v1/alert-rules/rule_1" },
+    { name: "update rule", method: "PATCH", path: "/operator/v1/alert-rules/rule_1" },
+    { name: "delete rule", method: "DELETE", path: "/operator/v1/alert-rules/rule_1" },
+    { name: "list instances", method: "GET", path: "/operator/v1/alerts" },
+    { name: "acknowledge instance", method: "POST", path: "/operator/v1/alerts/alert_1/acknowledge" },
+  ];
+
+  for (const item of cases) {
+    assert.equal(operatorResolve(item.method, item.path)?.path, item.path, item.name);
+  }
+});
+
+test("the alert-rules routes reject a method they do not list", () => {
+  const operatorResolve = (method: string, path: string) =>
+    resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams());
+
+  // PUT is not one of POST/GET/PATCH/DELETE for these paths, so it must not
+  // resolve — a closed method allowlist bug here would let an unintended verb
+  // reach the control plane.
+  //
+  // PUT 不在这几条路径的 POST/GET/PATCH/DELETE 之列，因此不应被解析——这里若存在
+  // 方法白名单的疏漏，会放一个本不该到达控制面的动词过去。
+  assert.equal(operatorResolve("PUT", "/operator/v1/alert-rules"), null, "list");
+  assert.equal(operatorResolve("PUT", "/operator/v1/alert-rules/rule_1"), null, "get/patch/delete by id");
+  assert.equal(operatorResolve("PATCH", "/operator/v1/alert-rules"), null, "patch requires an id");
+  assert.equal(operatorResolve("DELETE", "/operator/v1/alert-rules"), null, "delete requires an id");
+  assert.equal(operatorResolve("PUT", "/operator/v1/alerts"), null, "list instances");
+  assert.equal(operatorResolve("PUT", "/operator/v1/alerts/alert_1/acknowledge"), null, "acknowledge");
+});
+
+test("the alert-rules list forwards exactly limit, cursor and enabled", () => {
+  const result = resolveOperatorUpstream(
+    "GET",
+    ["operator", "v1", "alert-rules"],
+    new URLSearchParams("limit=20&cursor=c1&enabled=true&metric=error_rate")
+  );
+  assert.equal(result?.path, "/operator/v1/alert-rules");
+  assert.equal(result?.search, "?limit=20&cursor=c1&enabled=true");
+});
+
+test("the alert instances list forwards exactly its named filters", () => {
+  const result = resolveOperatorUpstream(
+    "GET",
+    ["operator", "v1", "alerts"],
+    new URLSearchParams(
+      "limit=20&cursor=c1&status=firing&rule_id=rule_1&since=2026-09-11T00:00:00Z&until=2026-09-12T00:00:00Z&bogus=1"
+    )
+  );
+  assert.equal(result?.path, "/operator/v1/alerts");
+  assert.equal(
+    result?.search,
+    "?limit=20&cursor=c1&status=firing&rule_id=rule_1&since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z"
+  );
+});
