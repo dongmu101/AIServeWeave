@@ -216,6 +216,22 @@ func run() error {
 		return err
 	}
 
+	// The request-log client shares the same -control-plane-addr and token as
+	// everything else above — this replica pushing its own front-door request
+	// records to the control plane it already talks to (STATUS.md's P09/C28).
+	// A deployment with no control plane configured gets no searchable
+	// request history, the same degrade jobPersistenceAdapter already returns
+	// nil for.
+	//
+	// 请求日志客户端与上面的一切共用同一个 -control-plane-addr 与 token——
+	// 本副本把自己的前门请求记录推送给它本已在对话的那个控制面（STATUS.md 的
+	// P09/C28）。未配置控制面的部署得不到可检索的请求历史，与
+	// jobPersistenceAdapter 已经为此返回 nil 的退化相同。
+	requestLogClient, err := requestLogClientAdapter(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
 	// Templates are loaded (file mode) or pulled from a validated cache
 	// (controlplane mode, P03) before anything starts serving: a manifest
 	// that binds an input to a node it does not have is an operator mistake,
@@ -299,6 +315,19 @@ func run() error {
 		httpCfg.JobPersistClient = jobPersistence
 		httpCfg.JobRecoveryClient = jobPersistence
 		httpCfg.ArtifactCleanupClient = jobPersistence
+	}
+	// Same guard, same reason: requestLogClient is a concrete
+	// *controlplaneclient.RequestLogsClient, and httpCfg.RequestLogClient is
+	// an interface field, so a bare assignment of a nil pointer would box a
+	// non-nil interface holding nil — see requestLogClientAdapter's doc
+	// comment.
+	//
+	// 同样的防护，同样的理由：requestLogClient 是一个具体的
+	// *controlplaneclient.RequestLogsClient，而 httpCfg.RequestLogClient 是
+	// 接口字段，裸赋值一个 nil 指针会装箱出一个「非 nil 接口持有 nil」——见
+	// requestLogClientAdapter 的文档注释。
+	if requestLogClient != nil {
+		httpCfg.RequestLogClient = requestLogClient
 	}
 	front := httpapi.New(sched, httpCfg)
 
@@ -596,6 +625,36 @@ func jobPersistenceAdapter(addr, token string, logger *slog.Logger) (*controlpla
 	}
 	logger.Info("persisting and recovering job records against the control plane", slog.String("control_plane_addr", addr))
 	return controlplaneclient.NewGatewayPersister(client), nil
+}
+
+// requestLogClientAdapter builds the Gateway's side of the control plane's
+// request-log push API, or returns nil when no control plane is configured
+// — mirroring jobPersistenceAdapter's own degrade path and its "return the
+// concrete type" reasoning: see that function's doc comment for why a nil
+// *controlplaneclient.RequestLogsClient must never be assigned directly
+// into an httpapi.Config interface field.
+//
+// requestLogClientAdapter 构建 Gateway 一侧的控制面请求日志推送 API 客户端，
+// 或在未配置控制面时返回 nil——与 jobPersistenceAdapter 自己的退化路径及其
+// "返回具体类型"的理由相同：为什么一个 nil 的
+// *controlplaneclient.RequestLogsClient 绝不能被直接赋给 httpapi.Config 的
+// 接口字段，见该函数的文档注释。
+func requestLogClientAdapter(addr, token string, logger *slog.Logger) (*controlplaneclient.RequestLogsClient, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewRequestLogsClient(controlplaneclient.RequestLogsClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("pushing request logs to the control plane", slog.String("control_plane_addr", addr))
+	return client, nil
 }
 
 // splitCommaList parses a comma-separated flag value, trimming whitespace

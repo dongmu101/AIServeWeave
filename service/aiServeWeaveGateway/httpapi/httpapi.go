@@ -245,6 +245,36 @@ type Config struct {
 	// jobs.go 里几行之外的 MaxWorkflowUploadBytes 一样。叠加在这层文件名检查
 	// 之上的字节嗅探检查见 uploadformat.go。
 	AllowedUploadExtensions []string
+
+	// RequestLogClient pushes batches of authenticated front-door request
+	// records to the control plane's internal API (STATUS.md's P09/C28).
+	// Nil disables request logging entirely — a deployment with no control
+	// plane gets no searchable request history, the same nil-degrades
+	// pattern JobPersistClient already follows.
+	//
+	// RequestLogClient 把一批已鉴权的前门请求记录推送给控制面的内部 API
+	// （STATUS.md 的 P09/C28）。为 nil 时完全关闭请求日志——未部署控制面的
+	// 环境得不到可检索的请求历史，与 JobPersistClient 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	RequestLogClient RequestLogClient
+	// RequestLogBufferSize bounds the in-memory push buffer. Zero uses
+	// DefaultRequestLogBufferSize.
+	//
+	// RequestLogBufferSize 限定内存推送缓冲的大小。为零时采用
+	// DefaultRequestLogBufferSize。
+	RequestLogBufferSize int
+	// RequestLogBatchSize bounds how many records one push call carries.
+	// Zero uses DefaultRequestLogBatchSize.
+	//
+	// RequestLogBatchSize 限定单次推送调用携带多少条记录。为零时采用
+	// DefaultRequestLogBatchSize。
+	RequestLogBatchSize int
+	// RequestLogFlushInterval is the maximum time a record waits in the
+	// buffer before being pushed. Zero uses DefaultRequestLogFlushInterval.
+	//
+	// RequestLogFlushInterval 是一条记录在缓冲中等待推送的最长时间。为零时
+	// 采用 DefaultRequestLogFlushInterval。
+	RequestLogFlushInterval time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
@@ -308,6 +338,25 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		go persister.run()
 	}
 	h.persister = persister
+
+	// The request-log pusher follows the same nil-degrades pattern: no
+	// control plane configured to push to means there is nowhere for a
+	// searchable request history to go, so this replica simply records
+	// nothing rather than buffering records no one will ever read.
+	//
+	// 请求日志推送器遵循同一种「为 nil 时退化」模式：未配置可供推送的控制面，
+	// 意味着可检索的请求历史无处可去，本副本因此干脆不记录，而不是缓冲一堆
+	// 永远不会被读取的记录。
+	var pusher *requestLogPusher
+	if cfg.RequestLogClient != nil {
+		pusher = newRequestLogPusher(cfg.RequestLogClient, clock, logger, requestLogPushConfig{
+			BufferSize:    cfg.RequestLogBufferSize,
+			BatchSize:     cfg.RequestLogBatchSize,
+			FlushInterval: cfg.RequestLogFlushInterval,
+		})
+		go pusher.run()
+		h.requestLogs = pusher
+	}
 
 	// The recoverer follows the same nil-degrades pattern: no control plane
 	// configured means nothing to recover non-terminal jobs from, so this
@@ -388,12 +437,13 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
 	return &Server{
-		Handler:   h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux)))),
-		handlers:  h,
-		syncer:    syncer,
-		persister: persister,
-		recoverer: recoverer,
-		cleaner:   cleaner,
+		Handler:          h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))),
+		handlers:         h,
+		syncer:           syncer,
+		persister:        persister,
+		recoverer:        recoverer,
+		cleaner:          cleaner,
+		requestLogPusher: pusher,
 	}
 }
 
@@ -412,37 +462,39 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 // 一个方法，接收它所限定的租户，返回副本。
 type Server struct {
 	http.Handler
-	handlers  *handlers
-	syncer    *jobSyncer
-	persister *jobPersister
-	recoverer *jobRecoverer
-	cleaner   *artifactCleaner
+	handlers         *handlers
+	syncer           *jobSyncer
+	persister        *jobPersister
+	recoverer        *jobRecoverer
+	cleaner          *artifactCleaner
+	requestLogPusher *requestLogPusher
 }
 
-// Close stops the background job syncer, persister, recoverer and artifact
-// cleanup sweeper, waiting for each one's current round, if any, to finish.
-// Call it during shutdown, after the HTTP listener has stopped accepting
-// new requests and before the scheduler's underlying tunnel is torn down —
-// the syncer and the recoverer both dispatch through that same scheduler,
-// and stopping them first avoids a burst of "node is not connected"
-// warnings against a tunnel that is closing on purpose rather than one that
-// failed. The persister and the cleanup sweeper do not dispatch through the
+// Close stops the background job syncer, persister, recoverer, artifact
+// cleanup sweeper and request-log pusher, waiting for each one's current
+// round, if any, to finish. Call it during shutdown, after the HTTP
+// listener has stopped accepting new requests and before the scheduler's
+// underlying tunnel is torn down — the syncer and the recoverer both
+// dispatch through that same scheduler, and stopping them first avoids a
+// burst of "node is not connected" warnings against a tunnel that is
+// closing on purpose rather than one that failed. The persister, the
+// cleanup sweeper and the request-log pusher do not dispatch through the
 // tunnel at all — they talk to the control plane (and, for the sweeper,
 // object storage) — but stopping them here too means shutdown has one
 // place that waits for every background loop this package started, not
-// four.
+// five.
 //
 // It does not stop the HTTP handler itself; that remains the caller's
 // http.Server to shut down.
 //
-// Close 停止后台 job 同步器、持久化器、恢复器与产物清理扫描器，并分别等待
-// 它们正在进行的一轮（如果有）跑完。应当在关闭期间调用它——在 HTTP 监听器
-// 停止接受新请求之后、调度器底下的隧道被拆除之前——同步器与恢复器都经由
-// 同一个调度器分派，先停止它们能避免对着一条正在有意关闭而非故障的隧道
-// 打出一串「node is not connected」告警。持久化器与清理扫描器根本不经由
-// 隧道分派——它们对话的是控制面（清理扫描器还对话对象存储）——但在这里
-// 一并停止它们，意味着关闭流程只有一处要等待本包启动的每一个后台循环，
-// 而不是四处。
+// Close 停止后台 job 同步器、持久化器、恢复器、产物清理扫描器与请求日志
+// 推送器，并分别等待它们正在进行的一轮（如果有）跑完。应当在关闭期间调用
+// 它——在 HTTP 监听器停止接受新请求之后、调度器底下的隧道被拆除之前——
+// 同步器与恢复器都经由同一个调度器分派，先停止它们能避免对着一条正在有意
+// 关闭而非故障的隧道打出一串「node is not connected」告警。持久化器、
+// 清理扫描器与请求日志推送器根本不经由隧道分派——它们对话的是控制面
+// （清理扫描器还对话对象存储）——但在这里一并停止它们，意味着关闭流程
+// 只有一处要等待本包启动的每一个后台循环，而不是五处。
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
@@ -455,6 +507,9 @@ func (s *Server) Close() {
 	}
 	if s.cleaner != nil {
 		s.cleaner.Stop()
+	}
+	if s.requestLogPusher != nil {
+		s.requestLogPusher.Stop()
 	}
 }
 
