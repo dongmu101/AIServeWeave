@@ -150,12 +150,44 @@ func (e *Evaluator) evaluateRule(ctx context.Context, rule model.AlertRule, now 
 	if err != nil {
 		return err
 	}
+	// No raw metrics_history rows at all covering this window — a brand
+	// new rule, or the first bucketWidth after a fresh deployment. This
+	// must be checked against the raw points, not against DerivedSeries's
+	// output: every derivation helper in metrics.go always returns exactly
+	// len(bucketAts) values (missing buckets zero-fill via map lookups,
+	// they never shrink the slice), so a zero-data window would otherwise
+	// silently read as counterDelta/gaugeValue == 0 for every bucket —
+	// which breaches a `lt` rule (e.g. "capacity < 3") on every single
+	// evaluation before a single real metric has ever been collected.
+	//
+	// 窗口内完全没有原始 metrics_history 行——可能是刚创建的新规则，也可能是
+	// 部署后的第一个 bucketWidth。这个判断必须基于原始 points，不能基于
+	// DerivedSeries 的输出长度：metrics.go 里每一个派生函数都始终返回恰好
+	// len(bucketAts) 个值(缺失的桶通过 map 查找零值填充，从不会让切片变短)，
+	// 否则一个完全没有数据的窗口会悄悄读成 counterDelta/gaugeValue 处处为
+	// 0——这会让一条 `lt` 规则(比如"capacity < 3")在还没采集到任何真实指标
+	// 之前，每次评估都被判定为触发。
+	if len(points) == 0 {
+		return nil
+	}
 	values, err := DerivedSeries(rule.Metric, points, bucketAts)
 	if err != nil {
 		return err
 	}
 	// The leading bucket was only for diffing; the rule's own window is
 	// the remaining ConsecutiveBuckets values.
+	//
+	// This length check can never actually trigger: DerivedSeries always
+	// returns len(bucketAts) values regardless of how sparse points is
+	// (see the len(points) == 0 guard above, which is what actually
+	// protects against missing data). Left in place as a harmless
+	// defensive belt-and-suspenders check in case that invariant ever
+	// changes.
+	//
+	// 这个长度检查实际上永远不会触发：不论 points 有多稀疏，
+	// DerivedSeries 始终返回 len(bucketAts) 个值(真正防住数据缺失的是上面
+	// 的 len(points) == 0 判断)。这里保留只是防御性的双重保险，以防这条
+	// 不变式将来被打破。
 	window := values[1:]
 	if len(window) < rule.ConsecutiveBuckets {
 		return nil // not enough history yet

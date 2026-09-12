@@ -249,14 +249,33 @@ func TestEvaluatorResolvesWhenConditionClears(t *testing.T) {
 	}
 }
 
-func TestEvaluatorSkipsRuleWithInsufficientHistory(t *testing.T) {
+// TestEvaluatorSparseDataDoesNotSpuriouslyBreachAGreaterThanRule covers a
+// rule whose window has some, but not enough, raw data: with an
+// OperatorGreaterThan rule, the missing buckets zero-fill and 0 is not
+// greater than the threshold, so it correctly never breaches. This does
+// NOT exercise the "no data at all" guard (see
+// TestEvaluatorSkipsWhenNoRawDataYet for that) — it only shows a
+// `gt`-operator rule happens not to false-positive on sparse data, which is
+// why the original version of this test (misleadingly named
+// "...InsufficientHistory") did not catch the `lt`-operator false-firing
+// bug a review later found.
+//
+// TestEvaluatorSparseDataDoesNotSpuriouslyBreachAGreaterThanRule 覆盖一条
+// 窗口内数据不完整(但不是完全没有)的规则：对于 OperatorGreaterThan 规则，
+// 缺失的桶会被填成 0，而 0 不大于阈值，所以正确地不会触发。这个测试
+// 并不覆盖"完全没有数据"的场景(那个场景见
+// TestEvaluatorSkipsWhenNoRawDataYet)——它只是说明 `gt` 运算符的规则碰巧
+// 不会在稀疏数据上误报，这正是这个测试原来的名字
+// ("...InsufficientHistory")具有误导性、且没能抓住后来 review 发现的
+// `lt` 运算符误触发缺陷的原因。
+func TestEvaluatorSparseDataDoesNotSpuriouslyBreachAGreaterThanRule(t *testing.T) {
 	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC).Truncate(bucketWidth)
 	clock := fakeClock{now: now}
 	rule := testRule(10, 3)
 	store := newFakeStore()
 	store.rules = []model.AlertRule{rule}
-	// Only seed the last bucket's worth of data — nowhere near enough for
-	// a 3-bucket window plus its leading diff bucket.
+	// Only seed the last bucket's worth of data — sparse, but not empty:
+	// len(points) == 1, so the len(points) == 0 guard does not apply here.
 	store.points = seedRequestRatePoints(now, now, 20)
 	notifier := &fakeNotifier{}
 
@@ -266,7 +285,50 @@ func TestEvaluatorSkipsRuleWithInsufficientHistory(t *testing.T) {
 	}
 
 	if store.createCalls != 0 {
-		t.Errorf("CreateAlertInstance called %d times, want 0 (insufficient history)", store.createCalls)
+		t.Errorf("CreateAlertInstance called %d times, want 0 (zero-filled buckets don't breach a gt rule)", store.createCalls)
+	}
+	if len(notifier.calls) != 0 {
+		t.Errorf("Notify called %d times, want 0", len(notifier.calls))
+	}
+}
+
+// TestEvaluatorSkipsWhenNoRawDataYet is the regression test for the review
+// finding: a fresh rule using OperatorLessThan (a completely normal
+// combination — "alert if capacity < 3 nodes", "alert if request_rate < 1
+// to catch an outage") must NOT fire just because metrics_history has no
+// rows yet for its window (a brand new rule, or the first bucketWidth after
+// a fresh deployment). Without the len(points) == 0 guard in
+// evaluateRule, every missing bucket zero-fills, 0 < threshold is true for
+// every bucket, allBreach returns true, and the rule fires immediately —
+// exactly the "alerting cries wolf" failure this guard exists to prevent.
+//
+// TestEvaluatorSkipsWhenNoRawDataYet 是这次 review 发现问题的回归测试：一条
+// 使用 OperatorLessThan 的新规则(完全正常的组合——"capacity < 3 就告警"、
+// "request_rate < 1 用于捕捉故障")，不能仅仅因为 metrics_history 这个窗口
+// 内还没有任何行(刚创建的新规则，或部署后的第一个 bucketWidth)就触发。
+// 如果 evaluateRule 里没有 len(points) == 0 这道防线，缺失的每个桶都会被
+// 填成 0，0 < threshold 对每个桶都成立，allBreach 返回 true，规则立刻触发——
+// 这正是这道防线要防止的"告警狼来了"失败模式。
+func TestEvaluatorSkipsWhenNoRawDataYet(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC).Truncate(bucketWidth)
+	clock := fakeClock{now: now}
+	rule := testRule(3, 3)
+	rule.Operator = model.OperatorLessThan
+	rule.Metric = model.MetricCapacity
+	store := newFakeStore()
+	store.rules = []model.AlertRule{rule}
+	// Zero points at all for the queried window — a fresh rule / fresh
+	// deployment with nothing collected yet.
+	store.points = nil
+	notifier := &fakeNotifier{}
+
+	e := alertengine.New(store, notifier, clock, nil)
+	if err := e.RunOnce(context.Background()); err != nil {
+		t.Fatalf("RunOnce() error = %v", err)
+	}
+
+	if store.createCalls != 0 {
+		t.Errorf("CreateAlertInstance called %d times, want 0 (no raw data yet must not fire an lt rule on zero-filled buckets)", store.createCalls)
 	}
 	if len(notifier.calls) != 0 {
 		t.Errorf("Notify called %d times, want 0", len(notifier.calls))
