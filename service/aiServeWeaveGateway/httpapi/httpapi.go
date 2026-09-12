@@ -349,7 +349,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 永远不会被读取的记录。
 	var pusher *requestLogPusher
 	if cfg.RequestLogClient != nil {
-		pusher = newRequestLogPusher(cfg.RequestLogClient, clock, logger, requestLogPushConfig{
+		pusher = newRequestLogPusher(cfg.RequestLogClient, clock, logger, h.metrics, requestLogPushConfig{
 			BufferSize:    cfg.RequestLogBufferSize,
 			BatchSize:     cfg.RequestLogBatchSize,
 			FlushInterval: cfg.RequestLogFlushInterval,

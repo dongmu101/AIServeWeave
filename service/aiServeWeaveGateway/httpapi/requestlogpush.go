@@ -64,10 +64,11 @@ const (
 //
 // requestLogPusher 实现 requestLogSink。
 type requestLogPusher struct {
-	client RequestLogClient
-	clock  runtime.Clock
-	logger *slog.Logger
-	cfg    requestLogPushConfig
+	client  RequestLogClient
+	clock   runtime.Clock
+	logger  *slog.Logger
+	metrics *recorder
+	cfg     requestLogPushConfig
 
 	ch   chan RequestLogRecord
 	stop chan struct{}
@@ -76,11 +77,17 @@ type requestLogPusher struct {
 
 // newRequestLogPusher builds a pusher with cfg's zero fields replaced by
 // defaults. It does not start the background loop; call run in a goroutine
-// for that — the same two-step construction jobSyncer already uses.
+// for that — the same two-step construction jobSyncer already uses. A nil
+// metrics follows the same nil-degrades convention as a nil clock or logger:
+// newRecorder(nil) discards everything, so a caller that has no metrics
+// backend configured (most tests) need not construct one.
 //
 // newRequestLogPusher 用默认值填补 cfg 里的零值字段来构建一个推送器。它不会
 // 启动后台循环，要启动需要以协程方式调用 run——与 jobSyncer 相同的两步构造。
-func newRequestLogPusher(client RequestLogClient, clock runtime.Clock, logger *slog.Logger, cfg requestLogPushConfig) *requestLogPusher {
+// metrics 为 nil 时遵循与 clock、logger 相同的"为 nil 时退化"约定：
+// newRecorder(nil) 会丢弃一切，因此未配置指标后端的调用方(多数测试)无需
+// 自行构造一个。
+func newRequestLogPusher(client RequestLogClient, clock runtime.Clock, logger *slog.Logger, metrics *recorder, cfg requestLogPushConfig) *requestLogPusher {
 	if cfg.BufferSize <= 0 {
 		cfg.BufferSize = DefaultRequestLogBufferSize
 	}
@@ -99,8 +106,11 @@ func newRequestLogPusher(client RequestLogClient, clock runtime.Clock, logger *s
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	if metrics == nil {
+		metrics = newRecorder(nil)
+	}
 	return &requestLogPusher{
-		client: client, clock: clock, logger: logger, cfg: cfg,
+		client: client, clock: clock, logger: logger, metrics: metrics, cfg: cfg,
 		ch:   make(chan RequestLogRecord, cfg.BufferSize),
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
@@ -147,6 +157,7 @@ func (p *requestLogPusher) run() {
 		if err := p.client.PushRequestLogs(ctx, batch); err != nil {
 			p.logger.Warn("pushing request logs to the control plane failed; the batch is dropped, not retried",
 				slog.Any("error", err), slog.Int("batch_size", len(batch)))
+			p.metrics.RequestLogPushFailed()
 		}
 		cancel()
 		batch = make([]RequestLogRecord, 0, p.cfg.BatchSize)

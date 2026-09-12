@@ -115,6 +115,20 @@ const (
 	// (STATUS.md 的 P09/C28)。斜率非零意味着检索表正在悄悄丢失最近的请求，
 	// 而不是服务这些请求本身出了问题。
 	MetricRequestLogDroppedTotal = "gateway_request_log_dropped_total"
+	// MetricRequestLogPushFailedTotal counts batches that reached
+	// PushRequestLogs but failed to reach the control plane or were refused
+	// by it (STATUS.md's P09/C28) — a network error or a non-200 status, as
+	// distinct from MetricRequestLogDroppedTotal's buffer-full case. A
+	// non-zero slope means the search table is silently missing recent
+	// requests for a different reason: the control plane side of the push,
+	// not this replica's own buffer, could not keep up.
+	//
+	// MetricRequestLogPushFailedTotal 统计已经到达 PushRequestLogs、却未能
+	// 送达或被控制面拒绝的批次(STATUS.md 的 P09/C28)——网络错误或非 200
+	// 状态码，与 MetricRequestLogDroppedTotal 的缓冲已满情形不同。斜率非零
+	// 意味着检索表正在悄悄丢失最近的请求，但原因不同：是推送在控制面一侧、
+	// 而不是本副本自己的缓冲跟不上。
+	MetricRequestLogPushFailedTotal = "gateway_request_log_push_failed_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model
@@ -224,6 +238,10 @@ func Descriptions() metrics.Descriptions {
 		MetricRequestLogDroppedTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Request-log records dropped because the push buffer was full.",
+		},
+		MetricRequestLogPushFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Request-log batches that reached the control plane call but failed (network error or non-200 status).",
 		},
 	}
 }
@@ -380,6 +398,15 @@ func (r *recorder) LimiterUnavailable() {
 // RequestLogDropped 记录一条因推送缓冲已满而被丢弃的请求记录。
 func (r *recorder) RequestLogDropped() {
 	r.sink.Counter(MetricRequestLogDroppedTotal, nil).Add(1)
+}
+
+// RequestLogPushFailed records one batch that reached PushRequestLogs but
+// failed — a network error or a non-200 status from the control plane.
+//
+// RequestLogPushFailed 记录一个已经到达 PushRequestLogs 却失败的批次——一次
+// 网络错误，或控制面返回了非 200 状态码。
+func (r *recorder) RequestLogPushFailed() {
+	r.sink.Counter(MetricRequestLogPushFailedTotal, nil).Add(1)
 }
 
 // statusOf reports the status a finished response carried, defaulting to 200
