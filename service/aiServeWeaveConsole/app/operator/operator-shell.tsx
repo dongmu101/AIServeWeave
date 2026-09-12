@@ -18,6 +18,8 @@ const navigation = [
   { href: "/operator/audit", label: "运维审计" },
   { href: "/operator/requests", label: "请求检索" },
   { href: "/operator/metrics", label: "指标" },
+  { href: "/operator/alert-rules", label: "告警规则" },
+  { href: "/operator/alerts", label: "告警" },
   { href: "/operator/operators", label: "运维账户" },
   { href: "/operator/account", label: "账户安全" },
 ];
