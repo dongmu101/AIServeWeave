@@ -16,18 +16,19 @@ import type { SessionUser } from "@/lib/console/session-payload";
 /**
  * NAV_ITEMS is the tenant navigation: the views every signed-in role reaches,
  * each with a real Admin API behind it. A menu entry for a page with no data
- * source would be a promise the backend cannot keep, which is why metrics and
- * request search are absent — they have no Admin API, and no store behind one.
+ * source would be a promise the backend cannot keep, which is why metrics is
+ * absent — it has no Admin API, and no store behind one.
  *
  * NAV_ITEMS 是租户导航：每个已登录角色都能到达的视图，每一个背后都确有 Admin API。给一个
- * 没有数据来源的页面挂菜单项，等于许下后端兑现不了的承诺，这正是指标与请求检索不在其中的
- * 原因——它们既没有 Admin API，那个 API 背后也没有存储。
+ * 没有数据来源的页面挂菜单项，等于许下后端兑现不了的承诺，这正是指标不在其中的
+ * 原因——它没有 Admin API，那个 API 背后也没有存储。
  */
 const NAV_ITEMS: readonly { href: string; label: string }[] = [
   { href: "/console", label: "概览" },
   { href: "/console/users", label: "用户" },
   { href: "/console/keys", label: "API Key" },
   { href: "/console/audit", label: "审计" },
+  { href: "/console/requests", label: "请求检索" },
   { href: "/console/quota", label: "配额" },
   { href: "/console/workflows", label: "工作流" },
   { href: "/console/jobs", label: "运行" },
