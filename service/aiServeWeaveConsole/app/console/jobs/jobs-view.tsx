@@ -87,7 +87,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">工作流运行</h1>
         <p className="text-sm text-muted-foreground">

@@ -54,7 +54,7 @@ Node 24 直接执行 `.ts`（类型擦除）并自带 `node:test` 与 `node:asse
 - 被测模块及其依赖里的相对 import **必须写扩展名**（`./errors.ts`），因为 Node 的 ESM 解析不做扩展名补全。为此 `tsconfig.json` 开了 `allowImportingTsExtensions`，Turbopack 与 `next build` 都能正常解析。`@/` 别名 Node 解析不了，所以 `lib/console/` 内部一律用带扩展名的相对路径；`app/` 与 `components/` 不被 Node 直接执行，继续用别名。
 - 类型擦除不支持 `enum`、`namespace` 与构造函数参数属性，写测试涉及的模块时避开这三样。
 
-因此可测的是纯逻辑：契约解析、会话密封、转发白名单、来源校验、请求层的重试与错误分类。组件与页面属于人工验收（见 [STATUS.md](STATUS.md) 的 Q03），需要 DOM 渲染测试时再评估是否引入 vitest + jsdom，并按根 AGENTS 的要求说明理由。
+默认 runner 测纯逻辑：契约解析、会话密封、转发白名单、来源校验、请求层的重试与错误分类。P10/Q03 另有独立 `pnpm test:e2e`，使用开发依赖 Playwright 在生产构建与隔离回环服务上验证真实浏览器的布局、键盘、焦点和堆内存；不接真实控制面，不属于默认 `pnpm test`。浏览器驱动无法由 Node 内置测试 runner 提供，因此引入这一个专用开发依赖。复现与覆盖边界见 [P10 验收手册](../../deploy/p10-acceptance.md)。
 
 测试不依赖真实控制面、网络或时钟：`api-client` 的 `fetch` 与 `sleep` 通过参数注入，会话过期用注入的时间判断。
 

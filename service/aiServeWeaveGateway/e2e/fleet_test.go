@@ -24,6 +24,10 @@ import (
 // and real reconnect backoff are involved, so it is measured in seconds.
 const waitTimeout = 20 * time.Second
 
+// fleetMaxInferenceSlots bounds each replica's inference slot hint.
+// fleetMaxInferenceSlots 限定每个副本建议的推理槽数量。
+const fleetMaxInferenceSlots = 4
+
 // replica is one Gateway process's worth of tunnel termination: a listener, a
 // gRPC server and the tunnelserver that owns the node table.
 type replica struct {
@@ -104,7 +108,7 @@ func newReplicaOn(t *testing.T, p *pki, id, addr string, heartbeatTimeout time.D
 	srv, err := tunnelserver.New(tunnelserver.Config{
 		ReplicaID:        id,
 		Logger:           slog.New(slog.DiscardHandler),
-		SlotHint:         &tunnelv1.SlotHint{MinSlots: 2, MaxSlots: 4, BulkSlots: 1},
+		SlotHint:         &tunnelv1.SlotHint{MinSlots: 2, MaxSlots: fleetMaxInferenceSlots, BulkSlots: 1},
 		HeartbeatTimeout: heartbeatTimeout,
 	})
 	if err != nil {

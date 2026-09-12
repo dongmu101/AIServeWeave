@@ -68,7 +68,7 @@ export function WorkflowsView({ operator }: { operator: boolean }) {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">工作流</h1>
         <p className="text-sm text-muted-foreground">
@@ -112,7 +112,7 @@ export function WorkflowsView({ operator }: { operator: boolean }) {
               }
             />
           ) : (
-            <div className="grid gap-3">
+            <div className="grid grid-cols-1 gap-3">
               {shown.map((template) => (
                 <TemplateCard key={template.id} template={template} operator={operator} />
               ))}

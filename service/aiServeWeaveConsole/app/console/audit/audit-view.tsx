@@ -196,7 +196,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
   });
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">{surface === "operator" ? "平台审计" : "管理审计"}</h1>
         <p className="text-sm text-muted-foreground">

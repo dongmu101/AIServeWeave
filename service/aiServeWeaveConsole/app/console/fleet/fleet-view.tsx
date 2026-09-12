@@ -147,9 +147,9 @@ function NodeCard({ node }: { node: FleetNode }) {
           ) : null}
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-4">
+      <CardContent className="grid grid-cols-1 gap-4">
         <p className="text-xs text-muted-foreground">维护标记取自控制面选定的一份 Gateway 观测。聚合接口不提供每个副本的维护标记，不能据此确认所有副本已生效。</p>
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
           <Fact label="最近心跳" value={formatDateTime(node.lastHeartbeat, "无心跳")} />
           <Fact label="在途请求" value={String(node.inflightRequests)} />
           <Fact
@@ -179,7 +179,7 @@ function NodeCard({ node }: { node: FleetNode }) {
                 <span className="text-sm text-muted-foreground">无</span>
               ) : (
                 Object.entries(node.labels).map(([name, value]) => (
-                  <Badge key={name} variant="outline" className="font-mono text-xs">
+                  <Badge key={name} variant="outline" className="h-auto max-w-full whitespace-normal break-all font-mono text-xs">
                     {name}={value}
                   </Badge>
                 ))

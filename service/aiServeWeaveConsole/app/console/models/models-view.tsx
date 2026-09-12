@@ -71,7 +71,7 @@ export function ModelsView() {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">模型与部署</h1>
         <p className="text-sm text-muted-foreground">
@@ -117,7 +117,7 @@ export function ModelsView() {
               }
             />
           ) : (
-            <div className="grid gap-3">
+            <div className="grid grid-cols-1 gap-3">
               {shown.map((model) => (
                 <div key={model.id} className="rounded-xl border">
                   <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">

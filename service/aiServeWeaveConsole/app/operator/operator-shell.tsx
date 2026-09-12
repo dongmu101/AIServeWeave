@@ -46,6 +46,6 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
       <Button variant="outline" size="sm" onClick={leave} disabled={pending} aria-busy={pending}>退出运维</Button>
       <FormError message={error} />
     </div></header>
-    <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">{children}</main>
+    <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 wrap-anywhere px-4 py-6">{children}</main>
   </div>;
 }

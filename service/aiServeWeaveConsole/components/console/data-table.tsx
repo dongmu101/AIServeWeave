@@ -57,7 +57,7 @@ export function DataTable<
   const columnCount = table.getAllLeafColumns().length;
 
   return (
-    <div className="rounded-xl border">
+    <div className="min-w-0 rounded-xl border">
       <Table>
         {caption ? <caption className="sr-only">{caption}</caption> : null}
         <TableHeader>

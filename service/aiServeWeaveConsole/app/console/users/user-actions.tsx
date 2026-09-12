@@ -40,7 +40,7 @@ export function UserActions({ user, onChanged }: { user: User; onChanged: () => 
         <SelectContent>{assignableRoles.map((item) => <SelectItem key={item} value={item}>{ROLE_LABELS[item]}</SelectItem>)}</SelectContent>
       </Select>
       <Button variant="outline" disabled={pending || role === user.role} onClick={() => mutate(`${base}/role`, "PUT", { role })}>保存角色</Button>
-      <Input className="w-44" type="password" autoComplete="new-password" placeholder="新密码（可为空）" value={password} onChange={(event) => setPassword(event.target.value)} disabled={pending} />
+      <Input className="w-44" type="password" autoComplete="new-password" aria-label={`为 ${user.email} 设置新密码（可为空）`} placeholder="新密码（可为空）" value={password} onChange={(event) => setPassword(event.target.value)} disabled={pending} />
       <Button variant="outline" disabled={pending} onClick={() => mutate(`${base}/password`, "PUT", { new_password: password })}>重置密码</Button>
       <Button variant="outline" disabled={pending} onClick={() => window.confirm("撤销该用户的全部会话？") && mutate(`${base}/sessions/revoke`)}>撤销会话</Button>
       {user.status === "active" ? <Button variant="destructive" disabled={pending} onClick={() => window.confirm("禁用用户将永久吊销其创建的全部 API Key；Gateway 缓存仍可能在配置 TTL 内接受它们。继续？") && mutate(`${base}/disable`)}>禁用</Button>

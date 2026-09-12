@@ -14,7 +14,7 @@ AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模�
 | 图表 | ECharts + `echarts-for-react` |
 | 包管理 | pnpm，版本以 `package.json` 的 `packageManager` 为准（当前为 12.3.4） |
 | 类型检查 | TypeScript 6 / 7 并存，分别服务 ESLint/构建与日常类型检查 |
-| 测试 | Node 24 内置 `node:test`，无额外依赖 |
+| 测试 | 单元测试用 Node 24 内置 `node:test`；Q03 浏览器验收另用 Playwright 开发依赖 |
 
 TanStack Table 用于三张列表，TanStack Virtual 用于审计长列表；ECharts 已安装但尚无指标接口可画。版本与脚本以 [package.json](package.json) 为准。
 
@@ -165,7 +165,7 @@ pnpm build
 
 `pnpm typecheck` 使用 TS 7；ESLint 与 Next.js 构建内部使用 TS 6。因此类型检查通过不等于构建通过，不能删掉其中一道门禁。双版本的原因和维护方式见 [AGENTS.md](AGENTS.md)。
 
-`pnpm test` 走 Node 24 内置的 `node:test`，不引入测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面属于人工验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。
+`pnpm test` 走 Node 24 内置的 `node:test`，不引入单元测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面另走下方 P10/Q03 浏览器验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。
 
 构建成功后，可在同一目录启动生产模式服务：
 
@@ -205,6 +205,12 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 - 接口不返回总数，界面只显示页码，不显示总页数，也不用已加载条数去推算。
 - 读取失败不得画成「零条记录」，两者用 `components/console/states.tsx` 中不同的状态组件表达。
 - 业务实现、接口变化和验收结果同步更新本 README 与 [STATUS.md](STATUS.md)，区分已完成能力和规划任务。
+
+## 界面验收（P10 / Q03）
+
+`pnpm test:e2e` 独立运行浏览器验收。先执行生产构建，再运行 `pnpm exec playwright install chromium` 准备浏览器；已有 Chrome 时使用 `AISW_BROWSER_CHANNEL=chrome pnpm test:e2e`。测试启动独立回环端口 3100，以合成会话和有上限的数据覆盖窄屏、长文本、键盘、焦点、错误恢复与万条记录分页；不依赖真实 ControlPlane。`pnpm test` 的纯逻辑边界不变。
+
+Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏页面还保存成功截图。覆盖范围、内存测量方法与归档要求见 [P10 验收手册](../../deploy/p10-acceptance.md)，本轮结果见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)。
 
 ## 平台运维（P01 / C22）
 

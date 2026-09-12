@@ -275,6 +275,8 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 
 `FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖。
 
+P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此默认值保持不变。真实流量校准的记录要求、长稳 CSV/JSON 归档方法与测试覆盖范围见 [P10 验收手册](../../deploy/p10-acceptance.md)；2026-09-12 的短时实测见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)。
+
 ## 指标
 
 进程里只有一个 `metrics.Registry`（`common/metrics`），隧道服务端、调度器与前门都记录进它，由 `-metrics-addr`（默认 `127.0.0.1:9090`，留空则关闭）上的 `GET /metrics` 以 Prometheus 文本格式导出。**默认只绑回环**：导出内容会点出连到本副本的每一个 `node_id`，那是一份公网监听器没理由对外派发的资产清单；要让集群外的 Prometheus 抓取，前面必须先有鉴权。

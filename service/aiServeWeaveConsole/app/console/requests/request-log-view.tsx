@@ -226,7 +226,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
   });
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">请求检索</h1>
         <p className="text-sm text-muted-foreground">

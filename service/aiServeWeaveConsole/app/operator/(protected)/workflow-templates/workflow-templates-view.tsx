@@ -162,7 +162,7 @@ export function WorkflowTemplatesView() {
     <section className="space-y-3 rounded-lg border p-4">
       <h2 className="font-semibold">选择模板</h2>
       {listError && <p className="text-destructive text-sm">{listError}</p>}
-      <div className="flex flex-wrap gap-2">{list.map((item) => <Button key={item.template_id} variant={templateID === item.template_id ? "default" : "outline"} disabled={busy} onClick={() => void action(() => selectTemplate(item.template_id))}>{item.template_id} · v{item.revision}</Button>)}</div>
+      <div className="flex flex-wrap gap-2">{list.map((item) => <Button key={item.template_id} className="h-auto max-w-full whitespace-normal break-all" variant={templateID === item.template_id ? "default" : "outline"} disabled={busy} onClick={() => void action(() => selectTemplate(item.template_id))}>{item.template_id} · v{item.revision}</Button>)}</div>
       <div className="flex items-end gap-2"><label className="grid flex-1 gap-1 text-sm">模板 ID（已存在则编辑，否则创建新模板）<Input value={templateID} onChange={(e) => setTemplateID(e.target.value)} /></label><Button variant="outline" disabled={busy || !templateID.trim()} onClick={() => void action(() => selectTemplate(templateID))}>加载</Button></div>
       {notFound && <p className="text-sm text-muted-foreground">该 ID 尚未发布，以下表单将创建它的第一个版本。</p>}
     </section>

@@ -62,6 +62,9 @@ export function ConsoleShell({
   const router = useRouter();
   const pathname = usePathname();
   const [leaving, setLeaving] = React.useState(false);
+  const activeHref = NAV_ITEMS.findLast(
+    (item) => pathname === item.href || pathname.startsWith(`${item.href}/`)
+  )?.href;
 
   async function leave() {
     setLeaving(true);
@@ -91,8 +94,7 @@ export function ConsoleShell({
           </span>
           <nav aria-label="控制台导航" className="flex flex-wrap items-center gap-1">
             {NAV_ITEMS.map((item) => {
-              const active =
-                pathname === item.href || pathname.startsWith(`${item.href}/`);
+              const active = item.href === activeHref;
               return (
                 <Button
                   key={item.href}
@@ -107,8 +109,8 @@ export function ConsoleShell({
             })}
           </nav>
           <Link href="/operator" className="text-sm underline">平台运维</Link>
-          <div className="ml-auto flex items-center gap-3">
-            <div className="text-right text-xs leading-tight">
+          <div className="ml-auto flex min-w-0 max-w-full items-center gap-3">
+            <div className="min-w-0 break-all text-right text-xs leading-tight">
               <div className="font-medium">{user.name || user.email}</div>
               <div className="text-muted-foreground">
                 租户 <code className="font-mono">{user.tenantId}</code>
@@ -128,7 +130,7 @@ export function ConsoleShell({
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full max-w-6xl flex-1 px-4 py-6">
+      <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 wrap-anywhere px-4 py-6">
         {children}
       </main>
     </div>

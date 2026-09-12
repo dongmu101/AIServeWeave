@@ -108,7 +108,7 @@ export function HistoryView() {
     filters.until !== "";
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
         <h1 className="font-heading text-lg font-semibold">运行历史</h1>
         <p className="text-sm text-muted-foreground">

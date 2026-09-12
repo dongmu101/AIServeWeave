@@ -1,0 +1,52 @@
+{
+  "schema_version": 1,
+  "provenance": {
+    "backend": "scriptedRuntime",
+    "go_version": "go1.27.1",
+    "platform": "darwin/arm64",
+    "topology": "one Agent and 3 Gateway replicas in one test process",
+    "traffic": "synthetic fixed Chat responses; no Ollama server, real model, or GPU",
+    "transport": "loopback TCP with mTLS",
+    "workload": "one Chat worker per replica, 200ms interval, 5s request timeout"
+  },
+  "requested_duration": "2m0s",
+  "sample_interval": "5s",
+  "started_at": "2026-09-12T17:33:16.31702+08:00",
+  "finished_at": "2026-09-12T17:35:16.317642+08:00",
+  "observed_seconds": 120.000943709,
+  "max_sample_gap_seconds": 5.002705,
+  "allowed_sample_gap_seconds": 10,
+  "completed": true,
+  "sample_count": 25,
+  "baseline_samples": 6,
+  "requests": 1875,
+  "failures": 5,
+  "failure_rate": 0.0026666666666666666,
+  "goroutines": {
+    "baseline": 82,
+    "final": 82,
+    "growth_fraction": 0
+  },
+  "heap_alloc_bytes": {
+    "baseline": 1736860,
+    "final": 1883824,
+    "growth_fraction": 0.08461476457515286
+  },
+  "connected_replicas": {
+    "min": 3,
+    "max": 3
+  },
+  "idle_slots": {
+    "min": 4,
+    "max": 6
+  },
+  "expected_replicas": 3,
+  "allowed_idle_slots": {
+    "min": 1,
+    "max": 12
+  },
+  "growth_ceiling": 1,
+  "failure_rate_ceiling": 0.01,
+  "passed": true,
+  "errors": []
+}
