@@ -115,6 +115,22 @@ type Config struct {
 	// 表已迁移就总会运行——不存在一个独立的"是否配置了"的问题，因为填充这张
 	// 表的内部推送 API，只要设置了 InternalToken 就无条件挂载。
 	RequestLogRetention time.Duration `json:",optional"`
+
+	// AlertEvaluationInterval is how often the alert evaluation loop
+	// (STATUS.md's P09/C29) runs. Zero uses DefaultAlertEvaluationInterval.
+	// Like RequestLogRetention's sweeper, this loop always runs once the
+	// alerting tables are migrated — it only reads metrics_history, already
+	// present in the same database, so there is no "is it configured"
+	// question the way MetricsHistory.Enabled() has for its external
+	// Gateway/Registry addresses.
+	//
+	// AlertEvaluationInterval 是告警评估循环(STATUS.md 的 P09/C29)的运行
+	// 频率。为零时采用 DefaultAlertEvaluationInterval。与 RequestLogRetention
+	// 的清理协程一样，这个循环只要告警相关的表已迁移就总会运行——它只读取
+	// 同一个数据库里已经存在的 metrics_history，不存在 MetricsHistory.
+	// Enabled() 那种因为依赖外部 Gateway/Registry 地址而产生的"是否配置了"
+	// 的问题。
+	AlertEvaluationInterval time.Duration `json:",optional"`
 }
 
 // DefaultRequestLogRetention is how long a request_logs row is kept when
@@ -123,6 +139,13 @@ type Config struct {
 // DefaultRequestLogRetention 是 Config.RequestLogRetention 为零时，一条
 // request_logs 行被保留的时长。
 const DefaultRequestLogRetention = 30 * 24 * time.Hour
+
+// DefaultAlertEvaluationInterval is how often the alert evaluation loop
+// runs when Config.AlertEvaluationInterval is zero.
+//
+// DefaultAlertEvaluationInterval 是 Config.AlertEvaluationInterval 为零时，
+// 告警评估循环的运行频率。
+const DefaultAlertEvaluationInterval = 60 * time.Second
 
 // FleetConf configures the fleet inventory.
 //
@@ -419,6 +442,9 @@ func (c Config) Validate() error {
 	}
 	if c.RequestLogRetention < 0 {
 		return errors.New("config: RequestLogRetention must not be negative")
+	}
+	if c.AlertEvaluationInterval < 0 {
+		return errors.New("config: AlertEvaluationInterval must not be negative")
 	}
 	return nil
 }

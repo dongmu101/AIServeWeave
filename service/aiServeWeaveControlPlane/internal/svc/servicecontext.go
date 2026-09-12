@@ -28,6 +28,7 @@ import (
 
 	commonmetrics "AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
@@ -132,6 +133,19 @@ type ServiceContext struct {
 	// 就无条件挂载。
 	requestLogRetentionCancel context.CancelFunc
 	requestLogRetentionDone   chan struct{}
+
+	// alertEvaluatorCancel/alertEvaluatorDone tear down the alert evaluation
+	// loop (STATUS.md's P09/C29) started below. Like
+	// requestLogRetentionCancel/requestLogRetentionDone, this goroutine
+	// always starts — it only reads metrics_history, already present in the
+	// same database once migrated, so there is no "enabled" gate.
+	//
+	// alertEvaluatorCancel/alertEvaluatorDone 关停下面启动的告警评估循环
+	// (STATUS.md 的 P09/C29)。与 requestLogRetentionCancel/
+	// requestLogRetentionDone 一样，这个协程总是会启动——它只读取同一个数据库
+	// 里迁移后已经存在的 metrics_history，不存在"是否启用"的开关。
+	alertEvaluatorCancel context.CancelFunc
+	alertEvaluatorDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -253,6 +267,18 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		requestlogretention.New(st, requestLogRetention, nil, nil).Run(rlCtx, requestLogRetentionInterval)
 	}()
 
+	alertInterval := cfg.AlertEvaluationInterval
+	if alertInterval <= 0 {
+		alertInterval = config.DefaultAlertEvaluationInterval
+	}
+	aeCtx, aeCancel := context.WithCancel(ctx)
+	aeDone := make(chan struct{})
+	go func() {
+		defer close(aeDone)
+		evaluator := alertengine.New(st, alertengine.NewSender(nil, nil), nil, nil)
+		evaluator.Run(aeCtx, alertInterval)
+	}()
+
 	ready = true
 	return &ServiceContext{
 		Config:      cfg,
@@ -279,6 +305,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		metricsHistoryDone:        metricsHistoryDone,
 		requestLogRetentionCancel: rlCancel,
 		requestLogRetentionDone:   rlDone,
+		alertEvaluatorCancel:      aeCancel,
+		alertEvaluatorDone:        aeDone,
 	}, nil
 }
 
@@ -369,6 +397,10 @@ func (s *ServiceContext) Close() error {
 	if s.requestLogRetentionCancel != nil {
 		s.requestLogRetentionCancel()
 		<-s.requestLogRetentionDone
+	}
+	if s.alertEvaluatorCancel != nil {
+		s.alertEvaluatorCancel()
+		<-s.alertEvaluatorDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {
