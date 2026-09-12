@@ -1,6 +1,6 @@
 # P09b 告警(C29)
 
-本文档设计 STATUS.md P09 的后半部分:Console C29「告警列表、规则与处理状态」。**本轮仅完成设计,不进入实施**——待 C28(见同目录 `2026-09-11-p09-request-search-design.md`)落地、STATUS.md 排期到 P09b 时再据本文档写实施计划。范围不含真实邮件/IM 通知集成、不含跨 `request_logs` 表的告警规则。
+本文档设计 STATUS.md P09 的后半部分:Console C29「告警列表、规则与处理状态」。C28(见同目录 `2026-09-11-p09-request-search-design.md`)已经落地,本文档现进入实施阶段(实施计划见 `docs/superpowers/plans/`)。范围不含真实邮件/IM 通知集成、不含跨 `request_logs` 表的告警规则。
 
 ## 已确认的范围决策
 
@@ -20,7 +20,7 @@
 | --- | --- |
 | `ID` | `model.NewID("alr_")` |
 | `Name` | 运维自定义的规则名称,展示用 |
-| `Metric` | 封闭枚举,取自 `metrics_history` 已有的指标名(请求量/成功率/延迟 p95/token 用量/容量,与 P08 `ParseExposition` 输出的指标名对齐,不允许自由文本指标名) |
+| `Metric` | 封闭枚举:`request_rate`(请求量)、`success_rate`(成功率)、`latency_p95`(延迟 P95)、`token_usage`(token 用量)、`capacity`(容量)——不是 `metrics_history` 原始行的 `metric` 列值,而是评估循环从原始行派生出的统一语义,见下方「派生指标计算」一节;不允许自由文本指标名 |
 | `Operator` | 封闭枚举:`lt`/`lte`/`gt`/`gte` |
 | `Threshold` | `float64`,与 `Metric` 单位一致(如成功率用 0~1 之间的比例) |
 | `ConsecutiveBuckets` | 连续命中多少个 5 分钟桶才判定触发,默认 1,防止单个抖动桶造成误报 |
@@ -49,13 +49,27 @@
 控制面新增一个后台协程(与 `metricshistory.Collector` 同级,新增 `internal/alertengine` 包),固定间隔(默认与 `metrics_history` 的采集粒度对齐,60 秒一次)执行:
 
 1. 读取所有 `Enabled=true` 的规则。
-2. 对每条规则,按 `Metric` 从 `metrics_history` 取最近 `ConsecutiveBuckets` 个已完整写入的 5 分钟桶。
+2. 对每条规则,按 `Metric` 调用下方「派生指标计算」得到最近 `ConsecutiveBuckets` 个 5 分钟桶的派生值序列。
 3. 若全部桶都满足 `Operator`/`Threshold` 条件:
    - 若该规则当前没有处于 `firing`/`acknowledged` 状态的实例,创建一条新的 `alert_instances`(`Status=firing`),并把它加入待通知队列。
    - 若已经存在(`firing`/`acknowledged`),只更新 `LastEvaluatedAt`,**不重复创建、不重复通知**——这是刻意的去抖动设计,防止同一次故障产生通知风暴。
 4. 若条件不再满足,且存在处于 `firing`/`acknowledged` 的实例,将其转为 `resolved`(`ResolvedAt=now`),如该规则配置了 `WebhookURL`,额外发一次"resolved"事件。
 
-评估循环本身用注入的 `runtime.Clock` 驱动测试,不依赖真实定时器等待。
+评估循环的单次执行体(`RunOnce`)用注入的 `runtime.Clock` 驱动测试,不依赖真实时间;循环本身(`Run`)按 `metricshistory.Retention.Run`/`Collector.Run` 的既有先例用 `time.NewTicker` 驱动,只测 `RunOnce`、不测 `Run` 的定时器分支——与仓库里控制面后台清理/采集协程的既有测试范围一致。
+
+**是否需要"未配置就不启动"的开关:不需要。** 与 `metricshistory` 依赖外部 Gateway/Registry 地址(`MetricsHistoryConf.Enabled()`)不同,告警评估循环只读同一个数据库里已经存在的 `metrics_history` 表,没有需要外部配置才能工作的前提条件。因此告警评估循环与 P09a 的请求日志保留期清理协程一样,**在服务启动时无条件运行**,只有评估间隔(默认 60 秒)一个可调参数;`/operator/v1/alert-rules`、`/operator/v1/alerts` 等路由同样无条件挂载,不引入"配置了才挂路由"这种目前控制面路由层没有先例的写法。
+
+### 派生指标计算
+
+`metrics_history` 落库的是 P08 采集器原始 Prometheus 指标名的逐桶行(`gateway_http_requests_total`、`gateway_http_request_duration_seconds_bucket/_sum/_count`、`gateway_tokens_total`、`tunnel_server_slots_total`,见 `internal/logic/metricshistory.go` 的 `HistoryMetricNames`),不是"成功率""P95"这类语义化数值——这两项目前只有 Console 前端 TypeScript(`lib/console/metrics-charts.ts` 的 `deltaByBucket`/`approxP95`)算过,后端 Go 从未实现。评估循环新增一个纯函数集合,把 `ListRollup` 返回的原始行折算成 `alert_rules.Metric` 的五个语义值:
+
+- `request_rate`:直接读 `gateway_http_requests_total` 各 `status` 标签值之和,按桶计数(计数器,需要与上一桶做差得到"这个桶内发生了多少次",逻辑对应 Console 前端 `deltaByBucket` 处理计数器重置/单调递增的方式,在 Go 侧照此语义重新实现,而不是简单相减,以正确处理副本重启导致的计数器归零)。
+- `success_rate`:同一批 `gateway_http_requests_total` 行按 `status` 标签分子分母相除(`status` 前两位为 `2` 的计数之和 ÷ 全部计数之和)。
+- `latency_p95`:对窗口内的每一个 `bucket_at`,取该时刻全部 `le` 标签的 `gateway_http_request_duration_seconds_bucket` 累计计数,按 `le` 升序找到第一个"累计计数 ≥ 该时刻总计数(即最大 `le` 桶的计数)的 95%"的桶,取其 `le` 值作为该时刻的近似 P95——这是仓库里 Console 前端 `approxP95` 已经验证过的近似算法(不做桶内线性插值,足够判断阈值触发,不追求精确分位数),在 Go 侧按同样语义重新实现(算法逻辑照搬,不是共享代码——前端 TypeScript 与后端 Go 之间没有共享运行时)。
+- `token_usage`:`gateway_tokens_total` 按桶计数器差值求和(不分 `direction` 标签,取 prompt+completion 合计)。
+- `capacity`:直接读 `tunnel_server_slots_total`(量表,不需要差值)。
+
+计数器差值计算需要跨桶读取(计算第 N 个桶的速率需要第 N-1 个桶的原始累计值),因此评估循环每次取 `ConsecutiveBuckets + 1` 个桶用于差分,只对外暴露 `ConsecutiveBuckets` 个派生值。
 
 ## 通知
 
@@ -92,7 +106,7 @@
 
 两个页面都挂在既有 `/operator` 导航下,与 `/operator/metrics`(C27)相邻,復用同一个平台会话守卫与页面布局约定。
 
-## 验证(实施阶段执行,本轮不涉及)
+## 验证
 
 - 评估循环的判定逻辑(阈值比较、连续桶计数、去抖动、自动 resolve)用注入的假 `metrics_history` 读取接口与 `runtime.Clock` 做表驱动测试,不依赖真实数据库或真实时钟。
 - Webhook 发送的重试与失败记录用假 HTTP 服务器覆盖成功/超时/5xx 分支。
