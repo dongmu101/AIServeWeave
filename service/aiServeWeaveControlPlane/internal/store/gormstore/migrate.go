@@ -52,7 +52,7 @@ func migrationChecksum(body string) string {
 }
 
 func migrationNamespaces(dialect string) []string {
-	groups := []string{"base", "routes", "workflow_templates", "metrics_history", "request_logs"}
+	groups := []string{"base", "routes", "workflow_templates", "metrics_history", "request_logs", "alerting"}
 	if dialect == "mysql" {
 		groups = append(groups, "jobs")
 	}

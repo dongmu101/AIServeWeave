@@ -19,6 +19,8 @@ const (
 	PrefixAPIKey           = "key_"
 	PrefixAuditLog         = "aud_"
 	PrefixPlatformOperator = "plt_"
+	PrefixAlertRule        = "alr_"
+	PrefixAlertInstance    = "ali_"
 )
 
 // randomBytes is the entropy in an id. 14 bytes leaves a 32-character id

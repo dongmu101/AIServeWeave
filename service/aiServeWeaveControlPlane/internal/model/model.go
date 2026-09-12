@@ -323,6 +323,10 @@ const (
 	ActionNodeEnable                     = "node.enable"
 	ActionNodeMaintenanceEnter           = "node.maintenance.enter"
 	ActionNodeMaintenanceExit            = "node.maintenance.exit"
+	ActionAlertRuleCreate                = "alert_rule.create"
+	ActionAlertRuleUpdate                = "alert_rule.update"
+	ActionAlertRuleDelete                = "alert_rule.delete"
+	ActionAlertAcknowledge               = "alert.acknowledge"
 )
 
 // AuditLog is one administrative action, recorded for the README's
