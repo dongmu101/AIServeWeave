@@ -537,7 +537,7 @@ CREATE INDEX idx_request_logs_tenant_outcome_created ON request_logs (tenant_id,
 
 `POST /internal/v1/requestlogs`（`requireSharedSecret(ctx.Config.InternalToken, ...)` 守卫，与 J04 的 Job 内部 API 同一信任级别）接受一批记录，每条自带 `tenant_id`——因为一个 Gateway 副本同时服务多个租户，一个批次可能跨租户。**写入按主键唯一约束加 `clause.OnConflict{DoNothing: true}` 天然幂等**（PostgreSQL 译为 `ON CONFLICT DO NOTHING`，MySQL 译为等价的忽略冲突语义），不先读已有行确认——调用方（Gateway 后台推送器）不关心单条写入结果，只关心整批调用有没有网络层失败，失败则本地丢弃、不重试，与 Gateway README「请求日志中间件与推送」描述的行为对应。批内任何缺少必填字段（`request_id`/`tenant_id`/`endpoint`）的记录被跳过而不是让整批失败，响应用 `accepted` 计数报告实际写入条数。控制面**不校验** `tenant_id` 是否存在——与 Job 内部 API 相同的信任边界。
 
-两个只读检索端点共享 `since`/`until`（必填 RFC 3339 时间戳）、`status`（可选，按 `outcome` 精确匹配）、`request_id`（可选，精确匹配）与 `cursor`/`limit`（复用 `jobs`/`audit_logs` 既有的 keyset 分页）：
+两个只读检索端点共享 `since`/`until`（可选 RFC 3339 时间戳，缺省表示该端不设边界）、`status`（可选，按 `outcome` 精确匹配）、`request_id`（可选，精确匹配）与 `cursor`/`limit`（复用 `jobs`/`audit_logs` 既有的 keyset 分页）：
 
 - `GET /admin/v1/requests`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，租户无法指定别的 `tenant_id`，响应省略 `tenant_id` 字段。
 - `GET /operator/v1/requests`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则返回全部租户，响应保留 `tenant_id` 字段。
