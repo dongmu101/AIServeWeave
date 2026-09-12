@@ -46,10 +46,11 @@ func validateAlertRuleFields(name, metric, operator string, consecutiveBuckets i
 }
 
 // CreateAlertRule creates one alert rule as the authenticated platform
-// actor, recording the audit entry in the same transaction as the insert.
+// actor, recording the audit entry only on success — see service.go's audit
+// doc comment for why a failed action leaves none.
 //
-// CreateAlertRule 以已认证的平台身份创建一条告警规则，并在与插入同一事务中
-// 记录审计。
+// CreateAlertRule 以已认证的平台身份创建一条告警规则，只在成功时记录审计
+// ——为什么失败的操作不留审计，见 service.go 的 audit 文档注释。
 func (s *Service) CreateAlertRule(ctx context.Context, actor Actor, p CreateAlertRuleParams) (model.AlertRule, error) {
 	if err := s.requirePlatformActor(actor); err != nil {
 		return model.AlertRule{}, err
