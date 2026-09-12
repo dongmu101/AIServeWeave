@@ -19,6 +19,7 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- P09a 请求与错误检索（C28）：控制面新增 `request_logs` 表（PostgreSQL/MySQL 双支持，固定版本 SQL 迁移，默认保留 30 天，独立协程每日清理），Gateway 新增请求日志中间件与有界后台推送器——对已鉴权的 chat/responses/embeddings/models 四个前门端点按状态码分类进封闭 outcome 枚举，异步批量上报，缓冲满时丢弃并计入 `gateway_request_log_dropped_total`；控制面新增 `POST /internal/v1/requestlogs`（按主键幂等）、`GET /admin/v1/requests`（租户）、`GET /operator/v1/requests`（运维，跨租户）；Console 新增 `/console/requests`、`/operator/requests` 两个只读检索页。不记录请求体、响应体、模型名、node_id、Prompt 或鉴权头。C29（告警）留待后续版本。
 - P08 指标、追踪与历史监控：Registry 与控制面接入 `common/metrics`（新增 `-metrics-addr`、指标目录与标签基数测试）；控制面新增 `internal/metricshistory` 定时抓取 Gateway/Registry 的 Prometheus 文本、聚合后写入固定版本 SQL 落地的 `metrics_history_points` 表（复用现有关系库，不引入独立时序数据库）与保留期清理；`GET /operator/v1/metrics/history` 与 Console `/operator/metrics`（C27，ECharts `dataZoom`）；新增共享 `common/reqid` 包，把 Gateway 前门的 request_id 带到 Scheduler/Tunnel/Agent 的结构化日志，实现最轻量的跨服务请求关联。
 - P07 数据库升级与恢复：双引擎固定版本 SQL、锁与校验和/dirty 账本、独立 up/status/resume 命令、已有数据升级及原生备份恢复测试；事务 outbox 跨崩溃补发 Key 吊销。
 - P05 用户与会话生命周期：Redis 权威可吊销会话、租户用户与平台运维改密/重置/禁用/启用/角色及会话管理，以及对应 Console 页面。

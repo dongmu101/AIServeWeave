@@ -514,3 +514,32 @@ MetricsHistory:
 采集器定时向每个来源的标准 Prometheus 文本 `/metrics` 发 HTTP GET（复用现有 `-metrics-addr`，不新增内部协议或鉴权机制——与 README「可观测性」一节"指标端点应处于受控网络"的立场一致，边界由网络位置而非端点自身鉴权负责），用 `common/metrics.ParseExposition`（现有 Prometheus 文本写入器的逆操作，零新依赖）解析，按 `internal/metricshistory` 的封闭标签白名单聚合——例如 `tunnel_server_slots_total` 只保留 `class`/`state`，跨全部 `node_id` 求和，因此历史数据的基数不随机群规模增长——写入固定版本 SQL 迁移落地的 `metrics_history_points` 表（`metric, labels, bucket_at, value`，`(metric, labels, bucket_at)` 唯一索引支持幂等 upsert）。部署上，Gateway/Registry 的 `-metrics-addr` 需要从默认回环改绑到本服务可达的内部网络接口，见 [deploy/README.md](../../deploy/README.md)。
 
 `GET /operator/v1/metrics/history?since=&until=` 由 `requirePlatformSession` 守卫，`since`/`until` 为必填的 RFC 3339 时间戳，按 `internal/logic.HistoryMetricNames` 这份封闭指标名单查询，按 `(metric, labels)` 分组为 Console ECharts 面板需要的多条时间序列返回。供 Console C27（`/operator/metrics`）使用，是平台运维视角，不按租户拆分——现有 Gateway 指标按设计不带 `tenant_id` 标签。
+
+## 请求日志检索（P09/C28）
+
+`request_logs` 保存 Gateway 已通过鉴权的 chat/responses/embeddings/models 四个前门端点的每一次请求，供 Console C28（`/console/requests`、`/operator/requests`）检索。与 `metrics_history_points` 同构：都是「高频追加、按时间清理」的时序数据，因此同样走 PostgreSQL/MySQL 双支持的固定版本 SQL 迁移（`gormstore/requestlogmigrate.go`），而不跟随 `jobs` 那种带状态机的 MySQL-only 先例。
+
+```sql
+request_logs(
+  id           VARCHAR(64) PRIMARY KEY,  -- Gateway 侧 common/reqid 铸造的 request_id，不是代理键
+  tenant_id    VARCHAR(32) NOT NULL,
+  key_display  VARCHAR(64) NOT NULL,     -- apikey.Display 的展示形式，不是完整 key 或哈希
+  endpoint     VARCHAR(16) NOT NULL,     -- 封闭枚举：chat/responses/embeddings/models
+  status_code  SMALLINT NOT NULL,
+  outcome      VARCHAR(24) NOT NULL,     -- 封闭枚举，Gateway 侧从状态码纯推导，不存自由文本错误
+  duration_ms  BIGINT NOT NULL,
+  created_at   TIMESTAMP NOT NULL  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
+);
+-- 索引比照 jobs 表按 (tenant_id, created_at) 与 (tenant_id, status) 的既有模式：
+CREATE INDEX idx_request_logs_tenant_created         ON request_logs (tenant_id, created_at, id);
+CREATE INDEX idx_request_logs_tenant_outcome_created ON request_logs (tenant_id, outcome, created_at, id);
+```
+
+`POST /internal/v1/requestlogs`（`requireSharedSecret(ctx.Config.InternalToken, ...)` 守卫，与 J04 的 Job 内部 API 同一信任级别）接受一批记录，每条自带 `tenant_id`——因为一个 Gateway 副本同时服务多个租户，一个批次可能跨租户。**写入按主键唯一约束加 `clause.OnConflict{DoNothing: true}` 天然幂等**（PostgreSQL 译为 `ON CONFLICT DO NOTHING`，MySQL 译为等价的忽略冲突语义），不先读已有行确认——调用方（Gateway 后台推送器）不关心单条写入结果，只关心整批调用有没有网络层失败，失败则本地丢弃、不重试，与 Gateway README「请求日志中间件与推送」描述的行为对应。批内任何缺少必填字段（`request_id`/`tenant_id`/`endpoint`）的记录被跳过而不是让整批失败，响应用 `accepted` 计数报告实际写入条数。控制面**不校验** `tenant_id` 是否存在——与 Job 内部 API 相同的信任边界。
+
+两个只读检索端点共享 `since`/`until`（必填 RFC 3339 时间戳）、`status`（可选，按 `outcome` 精确匹配）、`request_id`（可选，精确匹配）与 `cursor`/`limit`（复用 `jobs`/`audit_logs` 既有的 keyset 分页）：
+
+- `GET /admin/v1/requests`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，租户无法指定别的 `tenant_id`，响应省略 `tenant_id` 字段。
+- `GET /operator/v1/requests`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则返回全部租户，响应保留 `tenant_id` 字段。
+
+**保留期默认 30 天**（`config.DefaultRequestLogRetention`，`Config.RequestLogRetention` 可覆盖）——比 `metrics_history` 的 90 天短，因为这是逐请求明细而非 5 分钟聚合桶，同等时间窗口下行数级别不同。`internal/requestlogretention` 是一个独立的后台协程，每 24 小时运行一次，按创建时间批量删除过期行；与 `MetricsHistory` 需要显式配置才启动不同，这个清理协程**只要表已迁移就无条件运行**——填充这张表的内部推送 API 只要设置了 `InternalToken` 就已经挂载，不存在一个独立的「是否配置了」的问题。

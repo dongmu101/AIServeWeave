@@ -138,6 +138,30 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 
 README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产物列表这一步顺带扩了隧道契约：新增 `OPERATION_ARTIFACT_LIST`（`RunRef` 进、`ArtifactList` 出，走推理槽），`runtime.WorkflowRuntime` 相应新增 `Artifacts` 方法——ComfyUI 适配器早有这个实现，此前停在适配器里过不了隧道。
 
+## 请求日志中间件与推送（P09/C28）
+
+`httpapi/requestlog.go` 与 `httpapi/requestlogpush.go` 是 Gateway 一侧对 STATUS.md P09/C28（请求与错误检索）的实现：把一次已完成、已鉴权的前门请求，采集成可检索的脱敏元数据，异步批量推送给控制面。
+
+1. **中间件插在鉴权之后、限流之前。** 完整链路是 `observe → withLogging → auth.middleware → requestLogMiddleware → rateLimit → mux`。放在 `auth.middleware` 之后，使 `IdentityFrom(ctx)` 已经就绪，不需要跨中间件共享指针；中间件包裹 `rateLimit` 与 `mux`，因此限流拒绝与业务 handler 的最终状态码都能被捕获。只对四个已知路径生效——`/v1/models`、`/v1/chat/completions`、`/v1/embeddings`、`/v1/responses`；其余路径（工作流 Job、产物下载等）直接跳过，不占用缓冲区容量。`h.requestLogs` 为 `nil`（未配置控制面推送）时中间件是纯粹透传。
+2. **状态码到 outcome 的封闭映射。** `outcomeForStatus` 是只依赖状态码的纯函数，不读取、不拼接任何业务错误文本，因此 `chat.go`/`responses.go`/`embeddings.go`/`models.go` 都不需要为支持请求检索而改动：
+
+   | 状态码 | Outcome |
+   | --- | --- |
+   | 2xx | `ok` |
+   | 400 | `invalid_request` |
+   | 401 | `unauthorized` |
+   | 403 | `forbidden` |
+   | 404 | `not_found` |
+   | 429 | `rate_limited` |
+   | 500 | `internal` |
+   | 502/503/504 | `upstream_unavailable` |
+   | 其他（含客户端提前断开、状态码未写出） | `error` |
+
+3. **有界缓冲、批量异步推送，从不重试。** `requestLogPusher` 用一个容量 10000（`DefaultRequestLogBufferSize`）的有界 channel 承接中间件产生的记录；后台协程按攒够 500 条（`DefaultRequestLogBatchSize`）或每 5 秒（`DefaultRequestLogFlushInterval`）——以先到者为准——把一批推给控制面的 `POST /internal/v1/requestlogs`（`controlplaneclient.RequestLogsClient`）。**channel 满时丢弃新记录，同时对指标 `gateway_request_log_dropped_total` 自增，不阻塞正在处理的推理请求**——这是 AGENTS.md 安全红线「任何一跳都不得无界缓冲」的落实，请求记录是诊断性数据，允许极端负载下的少量丢失。一批推送失败（网络层错误）时整批本地丢弃，不重试——重试请求记录只会造成无界的本地积压。Gateway 优雅停止时对现有缓冲做一次尽力而为的 flush，不保证清空。
+4. **上报字段不含任何需要脱敏的内容。** 记录只有 `request_id`（`common/reqid` 铸造，同时是控制面 `request_logs` 表的主键，天然防重）、`tenant_id`、`apikey.Display(key)` 的展示形式（前缀 + 明文前 8 位，不存完整 key 或哈希）、封闭 `endpoint` 枚举、原始状态码、`Outcome`、耗时毫秒数与创建时间；不记录请求体、响应体、模型名、node_id、Prompt 片段或鉴权头。
+
+设计与验证细节见 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)；控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane README「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/README.md#请求日志检索p09c28)。
+
 ## 工作流模板版本与发布（P03）
 
 `-workflow-source=controlplane` 下，由 `workflowsync` 从 `GET /internal/v1/workflow-templates/current` 拉取整套已发布模板；使用已有 `-control-plane-addr` 和 `AISW_CONTROL_PLANE_TOKEN`（或 `-control-plane-token`），与 P02 路由共用同一套控制面凭据，不增加数据库依赖。结构与 P02 路由完全同构（见下方「控制面管理路由」一节），区别只在发布的形状：路由是单一全局表，模板是多份各自独立版本化的文档，因此这里的回归防护按模板 id 分别追踪版本，整包状态用 `BundleDigest`（对已排序的 `(template_id, revision, digest)` 三元组取指纹）取代路由单一的 `revision`/`digest`。
@@ -274,6 +298,7 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 | `tunnel_server_cancels_total` | `+node_id` | 调用方先走导致的取消 |
 | `gateway_rate_limited_total` | `reason` | 被租户配额拒掉的请求。`reason` 取自封闭集合，**租户 id 不进标签**——那会让指标每多一个客户就多一条序列 |
 | `gateway_rate_limiter_unavailable_total` | — | 因限流器无法作答而被放行的请求。斜率非零 = 配额正在悄悄失效 |
+| `gateway_request_log_dropped_total` | — | 因有界推送缓冲已满而被丢弃的请求记录（P09/C28）。斜率非零 = 检索表正悄悄丢失最近的请求，不代表服务这些请求本身出了问题 |
 | `gateway_scheduler_dispatches_total` | `node_id,runtime_id,result` | 与 `tunnel_server_dispatch_total` 之差 = 调度器根本没派出去的请求 |
 | `gateway_scheduler_no_candidate_total` | `capability` | 完全找不到可用节点 |
 | `gateway_scheduler_retries_total` | `capability` | 可重试失败后换候选 |

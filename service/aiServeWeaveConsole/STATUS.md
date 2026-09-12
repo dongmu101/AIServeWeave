@@ -1,6 +1,6 @@
 # Console 开发状态与任务规划
 
-更新日期：2026-09-11。M1–M3 已完成；M4 完成 C21–C24，M5 完成 C25、C26 与 C27（P08），P05 用户与会话生命周期已接入（C28–C29 未做，属于 P09）。本文记录 `service/aiServeWeaveConsole` 的现状、实施顺序、后端依赖与验收标准；任务尚未实现时保持未勾选，不将依赖安装视为业务功能完成。
+更新日期：2026-09-12。M1–M3 已完成；M4 完成 C21–C24，M5 完成 C25、C26、C27（P08）与 C28（P09a，请求检索，见 [根 STATUS 的 P09 行](../../STATUS.md)），P05 用户与会话生命周期已接入（C29 告警未做，属于 P09）。本文记录 `service/aiServeWeaveConsole` 的现状、实施顺序、后端依赖与验收标准；任务尚未实现时保持未勾选，不将依赖安装视为业务功能完成。
 
 ## 目标与范围
 
@@ -58,7 +58,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | M4 推理资源管理 | P2 | 节点、运行时、模型、路由 | 对应控制面聚合与管理 API |
 | M5 工作流与可观测性 | P2 | 模板、Job、产物、指标 | Admin API、持久化与指标查询能力 |
 
-M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预览）已完成，C27 已随根 STATUS 的 P08 完成（见各节勾选项与验收记录），C28–C29 仍待后端能力（P09），C24 的路由管理写路径已交付，见下方 P02 验收。M4/M5 不阻塞首版管理闭环；没有数据来源的菜单暂不开放，不用示例数据冒充运行状态。
+M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预览）已完成，C27 已随根 STATUS 的 P08 完成、C28 已随根 STATUS 的 P09a 完成（见各节勾选项与验收记录），C29（告警）仍待后端能力（P09），C24 的路由管理写路径已交付，见下方 P02 验收。M4/M5 不阻塞首版管理闭环；没有数据来源的菜单暂不开放，不用示例数据冒充运行状态。
 
 ## M1：控制台基础与会话（P0）
 
@@ -227,7 +227,7 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 | [x] C25 工作流模板（只读范围） | 模板目录、输入声明、校验状态与运维副本一致性 | Gateway 文件目录经控制面聚合；版本管理、依赖编辑与发布留给根 STATUS P03 |
 | [x] C26 Job 与产物（当前范围） | 实时列表、持久化历史与详情、状态快照、取消、产物预览/下载 | 历史走 ControlPlane；取消与产物走 Console 服务端 Gateway 例外路径；尚未接入 Console SSE，重启后的下载受 Gateway 映射恢复限制 |
 | [x] C27 总览与指标 | `/operator/metrics`：请求量（按端点/状态）、成功率、延迟 p95 近似值、Token 用量与容量五组 ECharts 曲线，`dataZoom` 可交互；空态与错误态分离 | 控制面 `GET /operator/v1/metrics/history`（P08）：`internal/metricshistory` 定时抓取 Gateway/Registry 的 `/metrics` 文本、按标签白名单聚合后落地到关系库的 `metrics_history_points` 表；是平台运维视角，不按租户拆分——现有 Gateway 指标按设计不带 `tenant_id` 标签 |
-| [ ] C28 请求与错误检索 | 按时间、状态、request ID 查询脱敏元数据 | 可检索存储、保留期、分页与权限接口；不得展示或记录完整 Prompt、鉴权头 |
+| [x] C28 请求与错误检索 | `/console/requests`、`/operator/requests`：按时间、状态、request ID 查询脱敏元数据，共享 `app/console/requests/request-log-view.tsx` 列表/分页/筛选视图；运维视角额外多一个 `tenant_id` 筛选框 | 控制面 `POST /internal/v1/requestlogs`（Gateway 异步批量上报）、`GET /admin/v1/requests`、`GET /operator/v1/requests`（P09）：新表 `request_logs`，保留期默认 30 天；不展示或记录完整 Prompt、鉴权头 |
 | [ ] C29 告警 | 告警列表、规则与处理状态 | 指标查询、告警计算、规则与通知管理 API；不在浏览器实现唯一的告警判定 |
 
 Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。Gateway 实时视图来自有界内存；已落库的历史记录由控制面查询。非终态恢复与产物下载边界见 [Gateway README](../aiServeWeaveGateway/README.md#持久化与访问的现有限制)。
@@ -259,7 +259,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 
 **取消与产物下载已实现，走的是声明过的例外。** 见 Console `AGENTS.md`「与后端的边界」一节：本控制台服务端持有一把该租户的 Gateway API Key（owner/admin 在「设置」页粘贴，由本控制台加密存储在会话 cookie 里，从不下发到浏览器），未做 scope 收紧，取消（`app/api/gateway/jobs/[id]/cancel`）与产物下载（`app/api/gateway/artifacts/[id]`，边读边送、不缓冲）经由 `lib/server/gateway.ts` 直连 Gateway 数据面，授权判断（谁能配置这把 key）由 `lib/console/permissions.ts` 的 `canManageGatewayKey` 在服务端自己执行——这是本代码库里少数几个没有下游再检查一遍、本身就是唯一防线的权限判断。已知代价是这把 Key 权限与用户自建 Key 相同，被拿到后不只能取消/读产物、也能拿去跑推理烧配额——这是当前没有真实租户在生产环境运行阶段的刻意权衡，不是遗漏，有真实租户后应重新评估是否收紧。**同时接在 C25/C26 的实时视图与持久化历史详情页上。**
 
-**持久化历史列表页、Job 详情页与产物预览均已实现。** 后端 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（见根 STATUS 的 J07）已由 `app/console/jobs/history`（列表，`lib/console/contract.ts` 的 `parseJobHistoryEntries`）与 `app/console/jobs/history/[id]`（详情，`parseJobHistoryDetail`）接上；两个新端点加进了 `lib/console/upstream-routes.ts` 的转发白名单。详情页对图片/视频扩展名内联预览（`<img>`/`<video>` 直接指向 `app/api/gateway/artifacts/[id]`），其余产物退回下载链接——这与实时视图共用同一个下载路由，区别只是多了一层按扩展名的展示选择，猜不出媒体类型时不强行渲染。产物 id 能出现在详情页，前提是根仓库这一轮同时补上的一处后端缺口：Gateway 此前从未把 `listArtifacts` 铸造的产物 id 上报给控制面的 `job_artifacts` 表，`jobPersister` 现已新增 `persistArtifacts` 补上这条旁路（见 ControlPlane README「Job 持久化契约」）。C27 已随根 STATUS 的 P08 完成，见下方「C27（指标）实现位置」；C28–C29 仍需要可检索日志存储与告警规则/通知管理，仓库里都没有，属于 P09。
+**持久化历史列表页、Job 详情页与产物预览均已实现。** 后端 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（见根 STATUS 的 J07）已由 `app/console/jobs/history`（列表，`lib/console/contract.ts` 的 `parseJobHistoryEntries`）与 `app/console/jobs/history/[id]`（详情，`parseJobHistoryDetail`）接上；两个新端点加进了 `lib/console/upstream-routes.ts` 的转发白名单。详情页对图片/视频扩展名内联预览（`<img>`/`<video>` 直接指向 `app/api/gateway/artifacts/[id]`），其余产物退回下载链接——这与实时视图共用同一个下载路由，区别只是多了一层按扩展名的展示选择，猜不出媒体类型时不强行渲染。产物 id 能出现在详情页，前提是根仓库这一轮同时补上的一处后端缺口：Gateway 此前从未把 `listArtifacts` 铸造的产物 id 上报给控制面的 `job_artifacts` 表，`jobPersister` 现已新增 `persistArtifacts` 补上这条旁路（见 ControlPlane README「Job 持久化契约」）。C27 已随根 STATUS 的 P08 完成，见下方「C27（指标）实现位置」；C28（请求与错误检索）已随根 STATUS 的 P09a 完成，见下方「C28（请求检索）实现位置」；C29（告警）仍需要告警规则/通知管理，仓库里还没有，属于 P09。
 
 **验收**：事件流可取消且内存有界；产物受租户授权保护；C27 图表区分「加载失败」（`ErrorState`，带重试）与「无数据」（`EmptyState`），显示查询窗口；完整工作流与 Prompt 不进入日志、异常或遥测。
 
@@ -274,6 +274,17 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | Console | `lib/console/metrics-charts.ts`（`deltaByBucket`/`approxP95` 纯逻辑）、`app/operator/(protected)/metrics`（`/operator/metrics` 页面与视图） |
 
 后端指标接入（Registry、控制面自身的 HTTP 请求量/耗时、吊销 outbox 滞后量、Fleet/Registry 客户端调用结果）与跨服务 trace（`common/reqid` 把 request_id 从 Gateway 前门带到 Scheduler/Tunnel/Agent 的结构化日志）不在 Console 范围内，实现位置见根 STATUS 的 P08 行与各服务 README。
+
+### C28（请求检索）实现位置
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | `internal/types.RequestLogResponse`/`RequestLogListResponse`（控制面）、`lib/console/contract.ts` 的 `RequestLogEntry`/`parseRequestLogEntries`（Console） |
+| Gateway | `httpapi/requestlog.go`（中间件、状态码→outcome 封闭映射）、`httpapi/requestlogpush.go`（有界 channel + 后台批量推送器）、`controlplaneclient` 的 `RequestLogsClient` |
+| 控制面 | 新表 `request_logs`（`internal/store/gormstore/requestlogmigrate.go` 固定版本迁移）、`internal/store` 的 `RequestLogs` 接口（gormstore/memstore 两个实现）、`internal/logic.CreateRequestLogs`/`ListRequestLogs`、`internal/handler` 的 `POST /internal/v1/requestlogs`、`GET /admin/v1/requests`、`GET /operator/v1/requests`、`internal/requestlogretention`（保留期清理，默认 30 天） |
+| Console | `app/console/requests/request-log-view.tsx`（租户/运维共享的列表/分页/筛选视图）、`app/console/requests/page.tsx`（`/console/requests`）、`app/operator/(protected)/requests/page.tsx`（`/operator/requests`，多一个 `tenant_id` 筛选框）、`lib/console/upstream-routes.ts` 新增两条转发白名单 |
+
+详见根 STATUS 的 P09 行、[Gateway README「请求日志中间件与推送（P09/C28）」](../aiServeWeaveGateway/README.md#请求日志中间件与推送p09c28)、[ControlPlane README「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/README.md#请求日志检索p09c28)与设计文档 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（149 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，详见根 STATUS 的 P09 行。
 
 ## 测试、文档与交付门禁
 
