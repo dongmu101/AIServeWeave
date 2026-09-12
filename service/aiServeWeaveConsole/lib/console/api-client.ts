@@ -64,7 +64,7 @@ const REQUEST_TIMEOUT_MS = 15_000;
  * 对照 Go 契约校验过，而把它设为唯一入口，就不留任何绕过它的路径。
  */
 export interface RequestSpec<T> {
-  method: "GET" | "POST" | "PUT" | "DELETE";
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
   /** surface picks the entry point, and with it the credential the call is
    * forwarded with. It defaults to the tenant's Admin API.
    *

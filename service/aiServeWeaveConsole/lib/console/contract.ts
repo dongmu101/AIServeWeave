@@ -577,27 +577,35 @@ export function parseRequestLogEntries(value: unknown): Page<RequestLogEntry> {
   });
 }
 
+/** parseAlertRule validates one types.AlertRuleResponse, shared by the list
+ * parser below and by the single-item responses of `POST`, `GET .../:id` and
+ * `PATCH .../:id`.
+ *
+ * parseAlertRule 校验一个 types.AlertRuleResponse，供下面的列表解析器与
+ * `POST`、`GET .../:id`、`PATCH .../:id` 的单条响应共用。 */
+export function parseAlertRule(value: unknown): AlertRule {
+  const source = record(value);
+  return {
+    id: text(source, "id"),
+    name: text(source, "name"),
+    metric: text(source, "metric"),
+    operator: text(source, "operator"),
+    threshold: float(source, "threshold"),
+    consecutiveBuckets: count(source, "consecutive_buckets"),
+    webhookUrl: optionalText(source, "webhook_url"),
+    enabled: boolean(source, "enabled"),
+    createdAt: timestamp(source, "created_at"),
+    updatedAt: timestamp(source, "updated_at"),
+  };
+}
+
 /**
  * parseAlertRules validates one page of `GET /operator/v1/alert-rules`.
  *
  * parseAlertRules 校验 `GET /operator/v1/alert-rules` 的一页。
  */
 export function parseAlertRules(value: unknown): Page<AlertRule> {
-  return parsePage(value, (item) => {
-    const source = record(item);
-    return {
-      id: text(source, "id"),
-      name: text(source, "name"),
-      metric: text(source, "metric"),
-      operator: text(source, "operator"),
-      threshold: float(source, "threshold"),
-      consecutiveBuckets: count(source, "consecutive_buckets"),
-      webhookUrl: optionalText(source, "webhook_url"),
-      enabled: boolean(source, "enabled"),
-      createdAt: timestamp(source, "created_at"),
-      updatedAt: timestamp(source, "updated_at"),
-    };
-  });
+  return parsePage(value, parseAlertRule);
 }
 
 /**

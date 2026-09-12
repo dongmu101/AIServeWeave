@@ -42,6 +42,16 @@ export async function PUT(request: Request, context: RouteContext) {
   return forward(request, context);
 }
 
+/** PATCH forwards a full-replace update (e.g. an alert rule edit — the
+ * control plane treats this PATCH as a full replacement, not a partial
+ * merge, see types.AlertRuleRequest's doc comment).
+ *
+ * PATCH 转发一次整体替换式更新（例如告警规则编辑——控制面把这个 PATCH 当作整体
+ * 替换而非局部合并，见 types.AlertRuleRequest 的文档注释）。 */
+export async function PATCH(request: Request, context: RouteContext) {
+  return forward(request, context);
+}
+
 /** DELETE forwards a removal.
  *
  * DELETE 转发一次删除。 */

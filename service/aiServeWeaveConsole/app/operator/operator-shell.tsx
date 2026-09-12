@@ -15,6 +15,7 @@ const navigation = [
   { href: "/operator/routes", label: "模型路由" },
   { href: "/operator/workflow-templates", label: "工作流模板" },
   { href: "/operator/workflows", label: "发布状态" },
+  { href: "/operator/alert-rules", label: "告警规则" },
   { href: "/operator/audit", label: "运维审计" },
   { href: "/operator/requests", label: "请求检索" },
   { href: "/operator/metrics", label: "指标" },
