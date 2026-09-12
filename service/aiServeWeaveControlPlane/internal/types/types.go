@@ -717,6 +717,37 @@ type AlertRuleListResponse struct {
 	NextCursor string              `json:"next_cursor,omitempty"`
 }
 
+// AlertInstanceResponse is one fired alert instance. RuleName is
+// denormalized in by the handler (a lookup against the small alert_rules
+// table, not stored redundantly) so the Console list doesn't need a
+// second round trip per row.
+//
+// AlertInstanceResponse 是一条已触发的告警实例。RuleName 由 handler 反查
+// 填入（查询的是很小的 alert_rules 表，而非冗余存储），这样 Console 的
+// 列表页每一行都不需要再多发一次请求。
+type AlertInstanceResponse struct {
+	ID              string     `json:"id"`
+	RuleID          string     `json:"rule_id"`
+	RuleName        string     `json:"rule_name"`
+	Status          string     `json:"status"`
+	ValueAtFire     float64    `json:"value_at_fire"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastEvaluatedAt time.Time  `json:"last_evaluated_at"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
+	AcknowledgedBy  string     `json:"acknowledged_by,omitempty"`
+	AcknowledgedAt  *time.Time `json:"acknowledged_at,omitempty"`
+	NotifyStatus    string     `json:"notify_status"`
+	NotifyAttempts  int        `json:"notify_attempts"`
+}
+
+// AlertInstanceListResponse is one page of alert instances.
+//
+// AlertInstanceListResponse 是一页告警实例。
+type AlertInstanceListResponse struct {
+	Items      []AlertInstanceResponse `json:"items"`
+	NextCursor string                  `json:"next_cursor,omitempty"`
+}
+
 // NodeOpsRequest is the body every node-ops write endpoint accepts: none of
 // them take any field beyond the node_id already in the path, so this is an
 // intentionally empty struct rather than an absent one — decode's

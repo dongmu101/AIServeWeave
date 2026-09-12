@@ -856,6 +856,91 @@ func deleteAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// listAlerts handles GET /operator/v1/alerts.
+//
+// listAlerts 处理 GET /operator/v1/alerts。
+func listAlerts(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		query := r.URL.Query()
+		since, sinceOK := timeParam(query.Get("since"))
+		until, untilOK := timeParam(query.Get("until"))
+		if !sinceOK || !untilOK {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		page, err := ctx.Logic.ListAlertInstances(r.Context(), actor, listQuery(query), store.AlertInstanceFilter{
+			Status: query.Get("status"), RuleID: query.Get("rule_id"), Since: since, Until: until,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		// Enrich with rule names in one pass — this table is small
+		// (operator-authored rules), so a full ListEnabledAlertRules-style
+		// fetch per response is cheap; here we fetch each referenced rule
+		// once via a small id->name cache built as we go, avoiding a
+		// second round trip per row without needing a JOIN this store
+		// layer doesn't expose.
+		//
+		// 在一次遍历里补上规则名——这张表很小（运维手写的规则），所以像
+		// ListEnabledAlertRules 那样整表抓取的代价可以忽略；这里按 id 建一个
+		// 小缓存，每条被引用的规则只查一次，不需要这层 store 没提供的 JOIN，
+		// 就能避免每一行都多发一次请求。
+		names := map[string]string{}
+		out := make([]types.AlertInstanceResponse, len(page.Items))
+		for i, inst := range page.Items {
+			name, ok := names[inst.RuleID]
+			if !ok {
+				if rule, err := ctx.Logic.GetAlertRule(r.Context(), actor, inst.RuleID); err == nil {
+					name = rule.Name
+				}
+				names[inst.RuleID] = name
+			}
+			out[i] = renderAlertInstance(inst, name)
+		}
+		writeJSON(w, http.StatusOK, types.AlertInstanceListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// renderAlertInstance converts one model.AlertInstance into its wire form,
+// with ruleName filled in by the caller (see listAlerts and
+// acknowledgeAlert for the two ways that name is obtained).
+//
+// renderAlertInstance 把一条 model.AlertInstance 转换成它的线上表示形式，
+// ruleName 由调用方填入（获取方式见 listAlerts 与 acknowledgeAlert 两处）。
+func renderAlertInstance(a model.AlertInstance, ruleName string) types.AlertInstanceResponse {
+	return types.AlertInstanceResponse{
+		ID: a.ID, RuleID: a.RuleID, RuleName: ruleName, Status: a.Status, ValueAtFire: a.ValueAtFire,
+		CreatedAt: a.CreatedAt, LastEvaluatedAt: a.LastEvaluatedAt, ResolvedAt: a.ResolvedAt,
+		AcknowledgedBy: a.AcknowledgedBy, AcknowledgedAt: a.AcknowledgedAt,
+		NotifyStatus: a.NotifyStatus, NotifyAttempts: a.NotifyAttempts,
+	}
+}
+
+// acknowledgeAlert handles POST /operator/v1/alerts/:id/acknowledge.
+//
+// acknowledgeAlert 处理 POST /operator/v1/alerts/:id/acknowledge。
+func acknowledgeAlert(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		instance, err := ctx.Logic.AcknowledgeAlert(r.Context(), actor, pathvar.Vars(r)["id"])
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderAlertInstance(instance, ""))
+	}
+}
+
 // platformLogin authenticates a platform operator and issues a session
 // token scoped to model.PlatformScope (requirePlatformSession checks it).
 //

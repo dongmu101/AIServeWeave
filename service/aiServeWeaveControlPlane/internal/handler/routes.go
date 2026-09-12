@@ -141,6 +141,8 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, getAlertRule(ctx)))},
 		{Method: http.MethodPatch, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, updateAlertRule(ctx)))},
 		{Method: http.MethodDelete, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, deleteAlertRule(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/alerts", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alerts", requirePlatformSession(ctx, listAlerts(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/alerts/:id/acknowledge", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alerts/:id/acknowledge", requirePlatformSession(ctx, acknowledgeAlert(ctx)))},
 	})
 
 	server.AddRoutes([]rest.Route{
