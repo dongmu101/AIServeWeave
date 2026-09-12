@@ -496,6 +496,15 @@ type handlers struct {
 	// persister 在未配置 JobPersistClient 时为 nil。它的 nudge 方法对 nil
 	// 接收者是安全的，因此调用点从不需要自己检查它是否为 nil——见 jobpersist.go。
 	persister *jobPersister
+	// requestLogs is nil when no control plane is configured to push
+	// request-log records to, in which case requestLogMiddleware is a pure
+	// pass-through — the same nil-degrades pattern persister already
+	// follows.
+	//
+	// requestLogs 在未配置可供推送请求记录的控制面时为 nil，此时
+	// requestLogMiddleware 是纯粹的透传——与 persister 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	requestLogs requestLogSink
 	// storage is nil when no Config.ArtifactStorage is configured, in which
 	// case downloadArtifact pulls live from the node exactly as it always
 	// has. See jobpersist.go's persistArtifacts for the write side.

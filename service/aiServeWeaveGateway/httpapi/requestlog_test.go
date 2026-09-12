@@ -1,6 +1,13 @@
 package httpapi
 
-import "testing"
+import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"testing"
+
+	"AIServeWeave/common/runtime"
+)
 
 func TestOutcomeForStatusIsAClosedMapping(t *testing.T) {
 	tests := []struct {
@@ -52,5 +59,94 @@ func TestRequestLogEndpointOnlyMatchesTheFourFrontDoorRoutes(t *testing.T) {
 				t.Fatalf("requestLogEndpoint(%q) = (%q, %v), want (%q, %v)", tt.path, gotEP, gotOK, tt.wantEP, tt.wantOK)
 			}
 		})
+	}
+}
+
+type fakeRequestLogSink struct {
+	records []requestLogRecord
+}
+
+func (s *fakeRequestLogSink) enqueue(r requestLogRecord) bool {
+	s.records = append(s.records, r)
+	return true
+}
+
+func TestRequestLogMiddlewareRecordsOnlyAuthenticatedFrontDoorRequests(t *testing.T) {
+	tests := []struct {
+		name         string
+		path         string
+		withIdentity bool
+		wantRecorded bool
+	}{
+		{name: "an authenticated chat request is recorded", path: "/v1/chat/completions", withIdentity: true, wantRecorded: true},
+		{name: "no identity in context means no tenant, so nothing is recorded", path: "/v1/chat/completions", withIdentity: false, wantRecorded: false},
+		{name: "an authenticated job route is out of scope", path: "/v1/jobs/job_1", withIdentity: true, wantRecorded: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sink := &fakeRequestLogSink{}
+			h := &handlers{requestLogs: sink, metrics: newRecorder(nil), clock: runtime.NewSystemClock()}
+			next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+
+			req := httptest.NewRequest(http.MethodPost, tt.path, nil)
+			req.Header.Set("Authorization", "Bearer aisw-testkeyplaintextvalue")
+			ctx := req.Context()
+			if tt.withIdentity {
+				ctx = context.WithValue(ctx, identityKey{}, Identity{TenantID: "tnt_1", KeyID: "key_1"})
+			}
+			rec := httptest.NewRecorder()
+			h.requestLogMiddleware(next).ServeHTTP(rec, req.WithContext(ctx))
+
+			if got := len(sink.records) == 1; got != tt.wantRecorded {
+				t.Fatalf("recorded a request = %v (records=%v), want %v", got, sink.records, tt.wantRecorded)
+			}
+		})
+	}
+}
+
+func TestRequestLogMiddlewareFieldsMatchTheRequest(t *testing.T) {
+	sink := &fakeRequestLogSink{}
+	h := &handlers{requestLogs: sink, metrics: newRecorder(nil), clock: runtime.NewSystemClock()}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusTooManyRequests) })
+
+	req := httptest.NewRequest(http.MethodPost, "/v1/embeddings", nil)
+	req.Header.Set("Authorization", "Bearer aisw-abcdefgh12345678")
+	ctx := context.WithValue(req.Context(), identityKey{}, Identity{TenantID: "tnt_9", KeyID: "key_9"})
+	rec := httptest.NewRecorder()
+	h.requestLogMiddleware(next).ServeHTTP(rec, req.WithContext(ctx))
+
+	if len(sink.records) != 1 {
+		t.Fatalf("got %d records, want 1", len(sink.records))
+	}
+	got := sink.records[0]
+	if got.TenantID != "tnt_9" {
+		t.Errorf("TenantID = %q, want tnt_9", got.TenantID)
+	}
+	if got.Endpoint != requestLogEndpointEmbeddings {
+		t.Errorf("Endpoint = %q, want %q", got.Endpoint, requestLogEndpointEmbeddings)
+	}
+	if got.StatusCode != http.StatusTooManyRequests {
+		t.Errorf("StatusCode = %d, want %d", got.StatusCode, http.StatusTooManyRequests)
+	}
+	if got.Outcome != OutcomeRateLimited {
+		t.Errorf("Outcome = %q, want %q", got.Outcome, OutcomeRateLimited)
+	}
+	if got.KeyDisplay == "" || got.KeyDisplay == "aisw-abcdefgh12345678" {
+		t.Errorf("KeyDisplay = %q, want a non-empty display form that is not the full plaintext key", got.KeyDisplay)
+	}
+}
+
+func TestRequestLogMiddlewareIsANoOpWhenNoSinkIsConfigured(t *testing.T) {
+	h := &handlers{requestLogs: nil, metrics: newRecorder(nil), clock: runtime.NewSystemClock()}
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) })
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
+	ctx := context.WithValue(req.Context(), identityKey{}, Identity{TenantID: "tnt_1"})
+	rec := httptest.NewRecorder()
+	// Must not panic with a nil sink — this is the "no control plane
+	// configured" degrade path every other background feature in this
+	// package already follows.
+	h.requestLogMiddleware(next).ServeHTTP(rec, req.WithContext(ctx))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (the wrapped handler must still run)", rec.Code)
 	}
 }

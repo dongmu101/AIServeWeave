@@ -106,6 +106,15 @@ const (
 	// MetricLimiterUnavailableTotal 统计因限流器无法作答而被放行的请求。斜率非零意味着
 	// 配额正在悄悄失去执行，而这正是那种「直到有人收到账单才被发现」的退化。
 	MetricLimiterUnavailableTotal = "gateway_rate_limiter_unavailable_total"
+	// MetricRequestLogDroppedTotal counts request-log records dropped
+	// because the bounded push buffer was full (STATUS.md's P09/C28). A
+	// non-zero slope means the search table is silently missing recent
+	// requests, not that anything about serving them failed.
+	//
+	// MetricRequestLogDroppedTotal 统计因有界推送缓冲已满而被丢弃的请求记录
+	// (STATUS.md 的 P09/C28)。斜率非零意味着检索表正在悄悄丢失最近的请求，
+	// 而不是服务这些请求本身出了问题。
+	MetricRequestLogDroppedTotal = "gateway_request_log_dropped_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model
@@ -211,6 +220,10 @@ func Descriptions() metrics.Descriptions {
 		MetricLimiterUnavailableTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Requests let through because the rate limiter could not answer.",
+		},
+		MetricRequestLogDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Request-log records dropped because the push buffer was full.",
 		},
 	}
 }
@@ -359,6 +372,14 @@ func (r *recorder) RateLimited(reason ratelimit.Reason) {
 // LimiterUnavailable 记录一次因限流器无法作答而被放行的请求。
 func (r *recorder) LimiterUnavailable() {
 	r.sink.Counter(MetricLimiterUnavailableTotal, nil).Add(1)
+}
+
+// RequestLogDropped records one request-log record dropped because the
+// push buffer was full.
+//
+// RequestLogDropped 记录一条因推送缓冲已满而被丢弃的请求记录。
+func (r *recorder) RequestLogDropped() {
+	r.sink.Counter(MetricRequestLogDroppedTotal, nil).Add(1)
 }
 
 // statusOf reports the status a finished response carried, defaulting to 200

@@ -15,7 +15,10 @@
 package httpapi
 
 import (
+	"net/http"
 	"time"
+
+	"AIServeWeave/common/apikey"
 )
 
 // Outcome values. Closed by design: STATUS.md's P09/C28 requires that no
@@ -126,4 +129,82 @@ type requestLogRecord struct {
 	Outcome    string
 	DurationMS int64
 	CreatedAt  time.Time
+}
+
+// requestLogSink is what the middleware hands a finished record to. It is
+// satisfied by the bounded background pusher (requestlogpush.go); tests use
+// a fake. enqueue reports whether the record was accepted, purely so the
+// middleware's own tests can observe the outcome — the middleware itself
+// never acts differently on false, since a dropped record is the sink's own
+// bounded-buffer policy, not something the middleware retries or escalates.
+//
+// requestLogSink 是中间件把一条完成的记录交付给的对象。它由有界后台推送器
+// (requestlogpush.go)实现；测试中用假实现替代。enqueue 报告该记录是否被
+// 接受，纯粹是为了让中间件自己的测试能够观察结果——中间件本身从不因 false
+// 而采取不同行动，因为一条记录被丢弃是接收端自己的有界缓冲策略，不是中间件
+// 需要重试或上报的事情。
+type requestLogSink interface {
+	enqueue(requestLogRecord) bool
+}
+
+// requestLogMiddleware records one requestLogRecord per finished request
+// that both resolved a tenant identity (auth.middleware already ran) and
+// matches one of the four routes STATUS.md's P09/C28 covers. It is placed
+// after auth.middleware in the chain specifically so IdentityFrom(ctx) is
+// already populated when this code runs — see the design doc's "采集链路"
+// section for why that ordering avoids any cross-middleware context-sharing
+// machinery.
+//
+// A nil h.requestLogs (no control plane configured to push to) makes this
+// middleware a pure pass-through, the same nil-degrades convention every
+// other background feature in this package already follows.
+//
+// requestLogMiddleware 为每一个既解析出了租户身份(auth.middleware 已经跑过)
+// 又匹配 STATUS.md P09/C28 覆盖的四条路由之一的、已完成的请求，记录一条
+// requestLogRecord。它被特意放在链路中 auth.middleware 之后，好让这段代码
+// 运行时 IdentityFrom(ctx) 已经就绪——为什么这个顺序能避免任何跨中间件的
+// context 共享机制，见设计文档「采集链路」一节。
+//
+// h.requestLogs 为 nil(未配置可供推送的控制面)时，本中间件是纯粹的透传，
+// 与本包其余每一个后台特性已经遵循的同一种"为 nil 时退化"约定相同。
+func (h *handlers) requestLogMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if h.requestLogs == nil {
+			next.ServeHTTP(w, r)
+			return
+		}
+		endpoint, ok := requestLogEndpoint(r.URL.Path)
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+		identity, ok := IdentityFrom(r.Context())
+		if !ok {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		start := h.clock.Now()
+		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(sw, r)
+		status := statusOf(sw)
+
+		var keyDisplay string
+		if key, ok := bearerToken(r.Header.Get("Authorization")); ok {
+			keyDisplay = apikey.Display(key)
+		}
+		accepted := h.requestLogs.enqueue(requestLogRecord{
+			RequestID:  requestIDFrom(r.Context()),
+			TenantID:   identity.TenantID,
+			KeyDisplay: keyDisplay,
+			Endpoint:   endpoint,
+			StatusCode: status,
+			Outcome:    outcomeForStatus(status),
+			DurationMS: h.clock.Now().Sub(start).Milliseconds(),
+			CreatedAt:  start,
+		})
+		if !accepted {
+			h.metrics.RequestLogDropped()
+		}
+	})
 }
