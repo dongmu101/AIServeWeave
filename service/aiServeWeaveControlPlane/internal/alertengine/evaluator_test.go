@@ -9,20 +9,31 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 )
 
-// fakeClock is a minimal runtime.Clock fixed at a known instant — RunOnce
-// only ever calls Now(), so NewTimer is never exercised and left unused.
+// fakeClock is a minimal runtime.Clock fixed at a known instant. RunOnce
+// only ever calls Now(), but webhook_test.go (same package) also drives
+// the Sender's retry loop, so NewTimer returns an already-fired channel
+// instead of actually waiting — retries proceed immediately under test.
 // Mirrors metricshistory/retention_test.go's local fakeClock (no shared
 // fake-clock package exists in this repo).
 //
-// fakeClock 是一个固定在已知时刻的最小 runtime.Clock——RunOnce 只调用
-// Now()，NewTimer 从未被用到，故留空未实现。与
-// metricshistory/retention_test.go 的本地 fakeClock 一致(本仓库没有共享的
-// fake-clock 包)。
+// fakeClock 是一个固定在已知时刻的最小 runtime.Clock。RunOnce 只调用
+// Now()，但 webhook_test.go(同一个包)还要驱动 Sender 的重试循环，因此
+// NewTimer 返回一个已经触发的 channel 而不是真的等待——测试中重试立即
+// 继续。与 metricshistory/retention_test.go 的本地 fakeClock 一致(本仓库
+// 没有共享的 fake-clock 包)。
 type fakeClock struct{ now time.Time }
 
 func (c fakeClock) Now() time.Time { return c.now }
+
+// NewTimer returns a channel that has already fired and a no-op stop
+// func, so callers waiting on it under test proceed without a real delay.
+//
+// NewTimer 返回一个已经触发的 channel 和一个空操作的 stop 函数，测试中
+// 等待它的调用方无需真正延迟即可继续。
 func (c fakeClock) NewTimer(time.Duration) (<-chan time.Time, func() bool) {
-	panic("not used by RunOnce")
+	ch := make(chan time.Time, 1)
+	ch <- c.now
+	return ch, func() bool { return false }
 }
 
 const bucketWidth = 5 * time.Minute
