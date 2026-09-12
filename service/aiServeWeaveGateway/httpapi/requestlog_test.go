@@ -32,10 +32,10 @@ func TestOutcomeForStatusIsAClosedMapping(t *testing.T) {
 
 func TestRequestLogEndpointOnlyMatchesTheFourFrontDoorRoutes(t *testing.T) {
 	tests := []struct {
-		name     string
-		path     string
-		wantEP   string
-		wantOK   bool
+		name   string
+		path   string
+		wantEP string
+		wantOK bool
 	}{
 		{name: "models", path: "/v1/models", wantEP: "models", wantOK: true},
 		{name: "chat completions", path: "/v1/chat/completions", wantEP: "chat", wantOK: true},

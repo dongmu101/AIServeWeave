@@ -27,15 +27,15 @@ import (
 // 不得进入可检索的 request_logs 表，因此每一个可能的状态码都必须落进这些
 // 取值之一，而绝不是状态码自身的消息文本。
 const (
-	OutcomeOK                 = "ok"
-	OutcomeInvalidRequest     = "invalid_request"
-	OutcomeUnauthorized       = "unauthorized"
-	OutcomeForbidden          = "forbidden"
-	OutcomeNotFound           = "not_found"
-	OutcomeRateLimited        = "rate_limited"
-	OutcomeInternal           = "internal"
+	OutcomeOK                  = "ok"
+	OutcomeInvalidRequest      = "invalid_request"
+	OutcomeUnauthorized        = "unauthorized"
+	OutcomeForbidden           = "forbidden"
+	OutcomeNotFound            = "not_found"
+	OutcomeRateLimited         = "rate_limited"
+	OutcomeInternal            = "internal"
 	OutcomeUpstreamUnavailable = "upstream_unavailable"
-	OutcomeError              = "error"
+	OutcomeError               = "error"
 )
 
 // requestLogEndpoint values, the closed set request_logs.endpoint accepts —
