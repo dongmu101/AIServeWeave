@@ -221,10 +221,24 @@ func latencyP95(points []model.MetricsHistoryPoint, bucketAts []time.Time) []flo
 	out := make([]float64, len(bucketAts))
 	for i, at := range bucketAts {
 		prev := at.Add(-5 * time.Minute)
+		// total is the max clamped delta across every le bucket, not just
+		// the highest-le one: byLeAndBucket sums raw rows across every
+		// label combination present at that timestamp (multiple Gateway
+		// replicas included), each le bucket's delta is clamped to zero
+		// independently, and a staggered restart can make one le bucket's
+		// clamped delta exceed +Inf's — mirroring Console's
+		// Math.max(...buckets.map(...)) rather than assuming monotonicity
+		// survives independent clamping.
+		//
+		// total 是全部 le 桶各自钳制增量里的最大值，而不只是最高 le 那个
+		// 桶的值：byLeAndBucket 把该时刻出现的每一种标签组合(含多个
+		// Gateway 副本)的原始行都汇总在一起，每个 le 桶的增量又是各自独立
+		// 钳制为非负的，副本交错重启就可能让某个较低 le 桶的钳制增量超过
+		// +Inf 桶——这里照抄 Console 的 Math.max(...buckets.map(...))，
+		// 而不是假设独立钳制之后单调性依然成立。
 		var total float64
-		if len(les) > 0 {
-			last := les[len(les)-1]
-			total = max(0, byLeAndBucket[last][at]-byLeAndBucket[last][prev])
+		for _, le := range les {
+			total = max(total, max(0, byLeAndBucket[le][at]-byLeAndBucket[le][prev]))
 		}
 		if total == 0 {
 			out[i] = 0
