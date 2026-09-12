@@ -1,5 +1,5 @@
 // requestlogpush.go is the Gateway's bounded, asynchronous side of
-// STATUS.md's P09/C28: it buffers requestLogRecord values enqueued by
+// STATUS.md's P09/C28: it buffers RequestLogRecord values enqueued by
 // requestlog.go's middleware and pushes them to the control plane in
 // batches, on a timer or once a batch fills, whichever comes first. It
 // never blocks the middleware and never retries a failed push — both are
@@ -8,7 +8,7 @@
 // or an unbounded local backlog.
 //
 // requestlogpush.go 是 Gateway 一侧对 STATUS.md P09/C28 有界、异步的那一半：
-// 它缓冲 requestlog.go 中间件入队的 requestLogRecord，按定时器或攒满一批
+// 它缓冲 requestlog.go 中间件入队的 RequestLogRecord，按定时器或攒满一批
 // (以先到者为准)批量推送给控制面。它从不阻塞中间件，也从不重试失败的推送——
 // 两者都是设计文档里刻意的决定：这些是诊断性记录，不是 job 状态，这里的一次
 // 数据库故障不能变成推理路径的延迟，也不能变成一份无界的本地积压。
@@ -31,7 +31,7 @@ import (
 // controlplaneclient——与 KeyVerifier、JobPersistClient 已经采用的是同一种
 // 拆分，好让本包无需控制面即可测试。
 type RequestLogClient interface {
-	PushRequestLogs(ctx context.Context, records []requestLogRecord) error
+	PushRequestLogs(ctx context.Context, records []RequestLogRecord) error
 }
 
 // requestLogPushConfig tunes the pusher. Zero fields take the package
@@ -69,7 +69,7 @@ type requestLogPusher struct {
 	logger *slog.Logger
 	cfg    requestLogPushConfig
 
-	ch   chan requestLogRecord
+	ch   chan RequestLogRecord
 	stop chan struct{}
 	done chan struct{}
 }
@@ -101,7 +101,7 @@ func newRequestLogPusher(client RequestLogClient, clock runtime.Clock, logger *s
 	}
 	return &requestLogPusher{
 		client: client, clock: clock, logger: logger, cfg: cfg,
-		ch:   make(chan requestLogRecord, cfg.BufferSize),
+		ch:   make(chan RequestLogRecord, cfg.BufferSize),
 		stop: make(chan struct{}),
 		done: make(chan struct{}),
 	}
@@ -116,7 +116,7 @@ func newRequestLogPusher(client RequestLogClient, clock runtime.Clock, logger *s
 // enqueue 实现 requestLogSink。它从不阻塞：缓冲已满时丢弃新记录并报告
 // false，调用方(requestlog.go 的中间件)把它变成一次指标而不是一次重试——为
 // 什么在这里阻塞或重试正是不该发生的事，见本文件的包文档注释。
-func (p *requestLogPusher) enqueue(r requestLogRecord) bool {
+func (p *requestLogPusher) enqueue(r RequestLogRecord) bool {
 	select {
 	case p.ch <- r:
 		return true
@@ -138,7 +138,7 @@ func (p *requestLogPusher) run() {
 	ticker, stopTicker := p.clock.NewTimer(p.cfg.FlushInterval)
 	defer stopTicker()
 
-	batch := make([]requestLogRecord, 0, p.cfg.BatchSize)
+	batch := make([]RequestLogRecord, 0, p.cfg.BatchSize)
 	flush := func() {
 		if len(batch) == 0 {
 			return
@@ -149,7 +149,7 @@ func (p *requestLogPusher) run() {
 				slog.Any("error", err), slog.Int("batch_size", len(batch)))
 		}
 		cancel()
-		batch = make([]requestLogRecord, 0, p.cfg.BatchSize)
+		batch = make([]RequestLogRecord, 0, p.cfg.BatchSize)
 	}
 
 	for {

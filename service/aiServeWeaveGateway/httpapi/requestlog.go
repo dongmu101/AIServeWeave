@@ -112,15 +112,18 @@ func requestLogEndpoint(path string) (string, bool) {
 	}
 }
 
-// requestLogRecord is one finished, authenticated front-door request,
+// RequestLogRecord is one finished, authenticated front-door request,
 // ready to be pushed to the control plane. It carries nothing beyond what
 // the design doc's field table allows — no request body, no response body,
-// no model name.
+// no model name. It is exported specifically so controlplaneclient's
+// RequestLogsClient — an implementation of RequestLogClient living outside
+// this package — can be typed against it.
 //
-// requestLogRecord 是一条已完成、已鉴权的前门请求，可供推送至控制面。它携带
+// RequestLogRecord 是一条已完成、已鉴权的前门请求，可供推送至控制面。它携带
 // 的字段不超出设计文档字段表所允许的范围——没有请求体、没有响应体、没有
-// 模型名。
-type requestLogRecord struct {
+// 模型名。它被特意导出，正是为了让本包之外、RequestLogClient 的实现方
+// controlplaneclient 的 RequestLogsClient 能够以它为类型。
+type RequestLogRecord struct {
 	RequestID  string
 	TenantID   string
 	KeyDisplay string
@@ -144,10 +147,10 @@ type requestLogRecord struct {
 // 而采取不同行动，因为一条记录被丢弃是接收端自己的有界缓冲策略，不是中间件
 // 需要重试或上报的事情。
 type requestLogSink interface {
-	enqueue(requestLogRecord) bool
+	enqueue(RequestLogRecord) bool
 }
 
-// requestLogMiddleware records one requestLogRecord per finished request
+// requestLogMiddleware records one RequestLogRecord per finished request
 // that both resolved a tenant identity (auth.middleware already ran) and
 // matches one of the four routes STATUS.md's P09/C28 covers. It is placed
 // after auth.middleware in the chain specifically so IdentityFrom(ctx) is
@@ -161,7 +164,7 @@ type requestLogSink interface {
 //
 // requestLogMiddleware 为每一个既解析出了租户身份(auth.middleware 已经跑过)
 // 又匹配 STATUS.md P09/C28 覆盖的四条路由之一的、已完成的请求，记录一条
-// requestLogRecord。它被特意放在链路中 auth.middleware 之后，好让这段代码
+// RequestLogRecord。它被特意放在链路中 auth.middleware 之后，好让这段代码
 // 运行时 IdentityFrom(ctx) 已经就绪——为什么这个顺序能避免任何跨中间件的
 // context 共享机制，见设计文档「采集链路」一节。
 //
@@ -193,7 +196,7 @@ func (h *handlers) requestLogMiddleware(next http.Handler) http.Handler {
 		if key, ok := bearerToken(r.Header.Get("Authorization")); ok {
 			keyDisplay = apikey.Display(key)
 		}
-		accepted := h.requestLogs.enqueue(requestLogRecord{
+		accepted := h.requestLogs.enqueue(RequestLogRecord{
 			RequestID:  requestIDFrom(r.Context()),
 			TenantID:   identity.TenantID,
 			KeyDisplay: keyDisplay,

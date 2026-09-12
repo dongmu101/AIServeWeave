@@ -63,10 +63,10 @@ func TestRequestLogEndpointOnlyMatchesTheFourFrontDoorRoutes(t *testing.T) {
 }
 
 type fakeRequestLogSink struct {
-	records []requestLogRecord
+	records []RequestLogRecord
 }
 
-func (s *fakeRequestLogSink) enqueue(r requestLogRecord) bool {
+func (s *fakeRequestLogSink) enqueue(r RequestLogRecord) bool {
 	s.records = append(s.records, r)
 	return true
 }
