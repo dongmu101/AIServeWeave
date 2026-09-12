@@ -100,13 +100,13 @@ function notifyStatusLabel(status: string): string {
 }
 
 /** statusBadgeVariant gives firing/acknowledged/resolved distinct visual
- * weight, the same convention `HistoryView`'s job-state column uses:
+ * weight, the same convention `OperatorsView` and `NodeOperationsView` use:
  * the state most needing attention reads as destructive, a settled one as
  * outline, and the state in between as secondary.
  *
  * statusBadgeVariant 让 firing/acknowledged/resolved 三种状态有明显区分，
- * 与 `HistoryView` 的 job 状态列同一套约定：最需要关注的状态用 destructive
- * 呈现，已尘埃落定的用 outline，居中的用 secondary。 */
+ * 与 `OperatorsView`、`NodeOperationsView` 同一套约定：最需要关注的状态用
+ * destructive 呈现，已尘埃落定的用 outline，居中的用 secondary。 */
 function statusBadgeVariant(status: string): "destructive" | "secondary" | "outline" {
   if (status === "firing") {
     return "destructive";
@@ -185,15 +185,32 @@ export function AlertsView() {
         });
       } catch (failure) {
         setAcknowledgingId(null);
-        setAckErrors((previous) => ({ ...previous, [instance.id]: describe(failure) }));
+        const message = describe(failure);
+        setAckErrors((previous) => ({ ...previous, [instance.id]: message }));
         // A conflict means the instance's status already changed server-side
         // — e.g. it resolved between page load and this click — so the row
         // this button was drawn on no longer reflects reality. Reload rather
-        // than leave a stale "firing" badge next to the error.
+        // than leave a stale "firing" badge next to the error. But `reload`
+        // flips `alerts.loading` back to true, and React batches that with
+        // the `setAckErrors` call above into one re-render, so the table
+        // switches straight to LoadingState and buries the inline message —
+        // permanently, if the operator is filtered to status=firing, since
+        // the row won't match that filter once it comes back resolved. A
+        // toast survives both the reload and the row's disappearance, the
+        // same way `console-shell.tsx` and `jobs-view.tsx` report a failed
+        // write that the page's own state can't reliably keep on screen.
         //
         // 冲突意味着这条实例的状态已经在服务端发生了变化——例如页面加载之后、
         // 点击之前它已经被解决——此时按钮所在的这一行已经不反映现实。这里选择
-        // 重新加载，而不是让一个过期的「触发中」徽章与错误提示并列。
+        // 重新加载，而不是让一个过期的「触发中」徽章与错误提示并列。但
+        // `reload` 会把 `alerts.loading` 重新置为 true，而 React 会把它与上面
+        // 的 `setAckErrors` 批处理进同一次重渲染，于是表格直接切换成
+        // LoadingState，把刚设置的内联提示盖住——如果运维当前正按
+        // status=firing 筛选，这条实例 reload 回来变成 resolved 后不再匹配
+        // 筛选条件，提示会被永久盖住看不见。toast 不受 reload 或该行消失的
+        // 影响，与 `console-shell.tsx`、`jobs-view.tsx` 报告一次写失败、又
+        // 不能只靠页面自身状态兜底展示的做法一致。
+        toast.error(message);
         if (failure instanceof ApiError && failure.kind === "conflict") {
           alerts.reload();
         }
