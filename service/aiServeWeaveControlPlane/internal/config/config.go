@@ -101,7 +101,28 @@ type Config struct {
 	// Console C27 落地汇总历史(P08)。与 Fleet、Registry 一样，它是可选的，
 	// 默认关闭。
 	MetricsHistory MetricsHistoryConf `json:",optional"`
+
+	// RequestLogRetention is how long a persisted request_logs row (STATUS.md's
+	// P09/C28) is kept before the retention sweeper reaps it. Zero uses
+	// DefaultRequestLogRetention. Unlike MetricsHistory, this sweeper always
+	// runs once the table is migrated — there is no separate "is it
+	// configured" question, since the internal push API that populates the
+	// table is mounted unconditionally whenever InternalToken is set.
+	//
+	// RequestLogRetention 是一条已持久化的 request_logs 行(STATUS.md 的
+	// P09/C28)在被保留期清理协程回收之前保留多久。为零时采用
+	// DefaultRequestLogRetention。与 MetricsHistory 不同，这个清理协程只要
+	// 表已迁移就总会运行——不存在一个独立的"是否配置了"的问题，因为填充这张
+	// 表的内部推送 API，只要设置了 InternalToken 就无条件挂载。
+	RequestLogRetention time.Duration `json:",optional"`
 }
+
+// DefaultRequestLogRetention is how long a request_logs row is kept when
+// Config.RequestLogRetention is zero.
+//
+// DefaultRequestLogRetention 是 Config.RequestLogRetention 为零时，一条
+// request_logs 行被保留的时长。
+const DefaultRequestLogRetention = 30 * 24 * time.Hour
 
 // FleetConf configures the fleet inventory.
 //
@@ -395,6 +416,9 @@ func (c Config) Validate() error {
 		if c.MetricsHistory.Retention <= 0 {
 			return errors.New("config: MetricsHistory.Retention must be positive once metrics history is configured")
 		}
+	}
+	if c.RequestLogRetention < 0 {
+		return errors.New("config: RequestLogRetention must not be negative")
 	}
 	return nil
 }

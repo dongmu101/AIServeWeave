@@ -35,6 +35,7 @@ import (
 	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
@@ -116,6 +117,21 @@ type ServiceContext struct {
 	// Registry 自己那些可选部件遵循的"没配置就没有协程"约定相同。
 	metricsHistoryCancel context.CancelFunc
 	metricsHistoryDone   chan struct{}
+
+	// requestLogRetentionCancel/requestLogRetentionDone tear down the
+	// request_logs retention sweeper started below. Unlike
+	// metricsHistoryCancel/metricsHistoryDone, this goroutine always starts —
+	// there is no "enabled" gate, since the request_logs table always exists
+	// once migrated and the internal push API that populates it is mounted
+	// unconditionally whenever InternalToken is configured.
+	//
+	// requestLogRetentionCancel/requestLogRetentionDone 关停下面启动的
+	// request_logs 保留期清理协程。与 metricsHistoryCancel/metricsHistoryDone
+	// 不同，这个协程总是会启动——不存在"是否启用"的开关，因为 request_logs
+	// 表只要迁移过就总是存在，而填充它的内部推送 API 只要配置了 InternalToken
+	// 就无条件挂载。
+	requestLogRetentionCancel context.CancelFunc
+	requestLogRetentionDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -226,6 +242,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		metricsHistoryDone = mhDone
 	}
 
+	requestLogRetention := cfg.RequestLogRetention
+	if requestLogRetention <= 0 {
+		requestLogRetention = config.DefaultRequestLogRetention
+	}
+	rlCtx, rlCancel := context.WithCancel(ctx)
+	rlDone := make(chan struct{})
+	go func() {
+		defer close(rlDone)
+		requestlogretention.New(st, requestLogRetention, nil, nil).Run(rlCtx, requestLogRetentionInterval)
+	}()
+
 	ready = true
 	return &ServiceContext{
 		Config:      cfg,
@@ -240,16 +267,18 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Timeout:  cfg.Fleet.Timeout,
 			Clock:    clock,
 		}),
-		RegistryClient:       registryClient,
-		MetricsRegistry:      metricsRegistry,
-		db:                   db,
-		redisClient:          redisClient,
-		relayCancel:          relayCancel,
-		relayDone:            relayDone,
-		lagCancel:            lagCancel,
-		lagDone:              lagDone,
-		metricsHistoryCancel: metricsHistoryCancel,
-		metricsHistoryDone:   metricsHistoryDone,
+		RegistryClient:            registryClient,
+		MetricsRegistry:           metricsRegistry,
+		db:                        db,
+		redisClient:               redisClient,
+		relayCancel:               relayCancel,
+		relayDone:                 relayDone,
+		lagCancel:                 lagCancel,
+		lagDone:                   lagDone,
+		metricsHistoryCancel:      metricsHistoryCancel,
+		metricsHistoryDone:        metricsHistoryDone,
+		requestLogRetentionCancel: rlCancel,
+		requestLogRetentionDone:   rlDone,
 	}, nil
 }
 
@@ -262,6 +291,16 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 // 90 天量级窗口之外数据的任务，一天一次足够；它不需要与
 // MetricsHistoryConf.Interval(更细的采集节奏)共用同一个值。
 const metricsHistoryRetentionInterval = 24 * time.Hour
+
+// requestLogRetentionInterval is how often the request-log retention
+// cleanup goroutine runs — daily, the same cadence metricsHistoryRetentionInterval
+// already uses, for the same reason: a cleanup task has no reason to run
+// more often than once a day.
+//
+// requestLogRetentionInterval 是 request_logs 保留期清理协程的运行频率——
+// 每天一次，与 metricsHistoryRetentionInterval 相同的节奏，理由也相同：
+// 一个清理任务没有理由比一天一次更频繁地运行。
+const requestLogRetentionInterval = 24 * time.Hour
 
 // outboxLagStore is the read the outbox-lag gauge needs — a subset of
 // *gormstore.Store, named here so the poller does not depend on the whole
@@ -326,6 +365,10 @@ func (s *ServiceContext) Close() error {
 	if s.metricsHistoryCancel != nil {
 		s.metricsHistoryCancel()
 		<-s.metricsHistoryDone
+	}
+	if s.requestLogRetentionCancel != nil {
+		s.requestLogRetentionCancel()
+		<-s.requestLogRetentionDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {
