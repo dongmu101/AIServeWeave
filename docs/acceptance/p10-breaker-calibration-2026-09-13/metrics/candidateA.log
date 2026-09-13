@@ -1,0 +1,1524 @@
+=== candidateA stable: pre metrics 2026-09-13T10:35:09Z ===
+# HELP gateway_http_inflight_requests Requests currently being served, by endpoint.
+# TYPE gateway_http_inflight_requests gauge
+gateway_http_inflight_requests{endpoint="chat_completions"} 0
+gateway_http_inflight_requests{endpoint="models"} 0
+# HELP gateway_http_request_duration_seconds Total response time, by endpoint.
+# TYPE gateway_http_request_duration_seconds histogram
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.005"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.01"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.5"} 7
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="1"} 46
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="2.5"} 82
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="5"} 82
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="10"} 82
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="30"} 82
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="60"} 82
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="+Inf"} 82
+gateway_http_request_duration_seconds_sum{endpoint="chat_completions"} 95.892606706
+gateway_http_request_duration_seconds_count{endpoint="chat_completions"} 82
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.005"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.01"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="2.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="10"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="30"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="60"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="+Inf"} 1
+gateway_http_request_duration_seconds_sum{endpoint="models"} 0.013238667
+gateway_http_request_duration_seconds_count{endpoint="models"} 1
+# HELP gateway_http_requests_total Finished HTTP requests, by endpoint and status code.
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{endpoint="chat_completions",status="200"} 81
+gateway_http_requests_total{endpoint="chat_completions",status="429"} 1
+gateway_http_requests_total{endpoint="models",status="200"} 1
+# HELP gateway_http_ttft_seconds Time from receiving a request to the first byte of content reaching the client.
+# TYPE gateway_http_ttft_seconds histogram
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.005"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.01"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.025"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.05"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.1"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.25"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.5"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="1"} 13
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="2.5"} 13
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="5"} 13
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="10"} 13
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="30"} 13
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="60"} 13
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="+Inf"} 13
+gateway_http_ttft_seconds_sum{endpoint="chat_completions"} 7.843329751
+gateway_http_ttft_seconds_count{endpoint="chat_completions"} 13
+# HELP gateway_output_tokens_per_second Completion tokens divided by the time the request took.
+# TYPE gateway_output_tokens_per_second histogram
+gateway_output_tokens_per_second_bucket{le="1"} 0
+gateway_output_tokens_per_second_bucket{le="5"} 0
+gateway_output_tokens_per_second_bucket{le="10"} 0
+gateway_output_tokens_per_second_bucket{le="25"} 26
+gateway_output_tokens_per_second_bucket{le="50"} 60
+gateway_output_tokens_per_second_bucket{le="100"} 81
+gateway_output_tokens_per_second_bucket{le="250"} 81
+gateway_output_tokens_per_second_bucket{le="500"} 81
+gateway_output_tokens_per_second_bucket{le="1000"} 81
+gateway_output_tokens_per_second_bucket{le="+Inf"} 81
+gateway_output_tokens_per_second_sum 2785.519399084279
+gateway_output_tokens_per_second_count 81
+# HELP gateway_scheduler_candidates Candidates available to one selection.
+# TYPE gateway_scheduler_candidates histogram
+gateway_scheduler_candidates_bucket{capability="chat",le="0"} 0
+gateway_scheduler_candidates_bucket{capability="chat",le="1"} 69
+gateway_scheduler_candidates_bucket{capability="chat",le="2"} 69
+gateway_scheduler_candidates_bucket{capability="chat",le="4"} 69
+gateway_scheduler_candidates_bucket{capability="chat",le="8"} 69
+gateway_scheduler_candidates_bucket{capability="chat",le="16"} 69
+gateway_scheduler_candidates_bucket{capability="chat",le="32"} 69
+gateway_scheduler_candidates_bucket{capability="chat",le="+Inf"} 69
+gateway_scheduler_candidates_sum{capability="chat"} 69
+gateway_scheduler_candidates_count{capability="chat"} 69
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="0"} 0
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="1"} 13
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="2"} 13
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="4"} 13
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="8"} 13
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="16"} 13
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="32"} 13
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="+Inf"} 13
+gateway_scheduler_candidates_sum{capability="chat_stream"} 13
+gateway_scheduler_candidates_count{capability="chat_stream"} 13
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 1
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 81
+# HELP gateway_scheduler_retries_total Moves to the next candidate after a retryable failure.
+# TYPE gateway_scheduler_retries_total counter
+gateway_scheduler_retries_total{capability="chat"} 1
+# HELP gateway_tokens_total Tokens reported by the backend, by direction.
+# TYPE gateway_tokens_total counter
+gateway_tokens_total{direction="completion"} 2552
+gateway_tokens_total{direction="prompt"} 1979
+# HELP go_goroutines Goroutines currently existing in this process.
+# TYPE go_goroutines gauge
+go_goroutines 35
+# HELP go_memstats_heap_alloc_bytes Heap bytes currently allocated and in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 3.040944e+06
+# HELP tunnel_server_connected_nodes Nodes currently holding a live tunnel to this replica.
+# TYPE tunnel_server_connected_nodes gauge
+tunnel_server_connected_nodes{replica_id="gw-local-default"} 1
+# HELP tunnel_server_control_streams Live Control streams this replica holds for the node.
+# TYPE tunnel_server_control_streams gauge
+tunnel_server_control_streams{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_dispatch_duration_seconds Time from a dispatch arriving at this replica to its response being released.
+# TYPE tunnel_server_dispatch_duration_seconds histogram
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.005"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.01"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.025"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.05"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.1"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.25"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.5"} 7
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="1"} 37
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="2.5"} 69
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="5"} 69
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="10"} 69
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="30"} 69
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="60"} 69
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="+Inf"} 69
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 82.55841808199999
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 69
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 9
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 13
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 13
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 13
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 13
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 13
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 13
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 13.261377373999998
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 13
+# HELP tunnel_server_dispatch_total Dispatches finished, by operation and result.
+# TYPE tunnel_server_dispatch_total counter
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="backpressure"} 1
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="success"} 68
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="success"} 13
+# HELP tunnel_server_frame_bytes Serialized data-plane frame size, by direction.
+# TYPE tunnel_server_frame_bytes histogram
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 563
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 563
+tunnel_server_frame_bytes_sum{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 35839
+tunnel_server_frame_bytes_count{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 563
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 162
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 162
+tunnel_server_frame_bytes_sum{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 11241
+tunnel_server_frame_bytes_count{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 162
+# HELP tunnel_server_heartbeat_interval_seconds Gap between consecutive heartbeats received from the node.
+# TYPE tunnel_server_heartbeat_interval_seconds histogram
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="2.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="10"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="30"} 17
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="60"} 17
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 17
+tunnel_server_heartbeat_interval_seconds_sum{node_id="local-mac-agent-1",replica_id="gw-local-default"} 255.02057987499995
+tunnel_server_heartbeat_interval_seconds_count{node_id="local-mac-agent-1",replica_id="gw-local-default"} 17
+# HELP tunnel_server_heartbeats_total Heartbeats received from the node.
+# TYPE tunnel_server_heartbeats_total counter
+tunnel_server_heartbeats_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 17
+# HELP tunnel_server_node_state Node state seen from this replica: 0 gone, 1 connected, 2 draining.
+# TYPE tunnel_server_node_state gauge
+tunnel_server_node_state{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_roster_version Replica roster version this replica last broadcast to its nodes.
+# TYPE tunnel_server_roster_version gauge
+tunnel_server_roster_version{replica_id="gw-local-default"} 1
+# HELP tunnel_server_slots_total Slots this replica holds for the node, by class and state.
+# TYPE tunnel_server_slots_total gauge
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 1
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 5
+# HELP tunnel_server_stream_first_event_seconds Time from a dispatch being written to its first response frame arriving.
+# TYPE tunnel_server_stream_first_event_seconds histogram
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 13
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 13
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 13
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 13
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 13
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 13
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 13
+tunnel_server_stream_first_event_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 7.838339293
+tunnel_server_stream_first_event_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 13
+=== end pre ===
+=== candidateA stable: post metrics 2026-09-13T10:39:10Z ===
+# HELP gateway_http_inflight_requests Requests currently being served, by endpoint.
+# TYPE gateway_http_inflight_requests gauge
+gateway_http_inflight_requests{endpoint="chat_completions"} 0
+gateway_http_inflight_requests{endpoint="models"} 0
+# HELP gateway_http_request_duration_seconds Total response time, by endpoint.
+# TYPE gateway_http_request_duration_seconds histogram
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.005"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.01"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.5"} 7
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="1"} 46
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="2.5"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="5"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="10"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="30"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="60"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="+Inf"} 427
+gateway_http_request_duration_seconds_sum{endpoint="chat_completions"} 576.9556243370006
+gateway_http_request_duration_seconds_count{endpoint="chat_completions"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.005"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.01"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="2.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="10"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="30"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="60"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="+Inf"} 1
+gateway_http_request_duration_seconds_sum{endpoint="models"} 0.013238667
+gateway_http_request_duration_seconds_count{endpoint="models"} 1
+# HELP gateway_http_requests_total Finished HTTP requests, by endpoint and status code.
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{endpoint="chat_completions",status="200"} 425
+gateway_http_requests_total{endpoint="chat_completions",status="429"} 1
+gateway_http_requests_total{endpoint="chat_completions",status="503"} 1
+gateway_http_requests_total{endpoint="models",status="200"} 1
+# HELP gateway_http_ttft_seconds Time from receiving a request to the first byte of content reaching the client.
+# TYPE gateway_http_ttft_seconds histogram
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.005"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.01"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.025"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.05"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.1"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.25"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.5"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="1"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="2.5"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="5"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="10"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="30"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="60"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="+Inf"} 153
+gateway_http_ttft_seconds_sum{endpoint="chat_completions"} 120.977861043
+gateway_http_ttft_seconds_count{endpoint="chat_completions"} 153
+# HELP gateway_output_tokens_per_second Completion tokens divided by the time the request took.
+# TYPE gateway_output_tokens_per_second histogram
+gateway_output_tokens_per_second_bucket{le="1"} 0
+gateway_output_tokens_per_second_bucket{le="5"} 0
+gateway_output_tokens_per_second_bucket{le="10"} 0
+gateway_output_tokens_per_second_bucket{le="25"} 30
+gateway_output_tokens_per_second_bucket{le="50"} 404
+gateway_output_tokens_per_second_bucket{le="100"} 425
+gateway_output_tokens_per_second_bucket{le="250"} 425
+gateway_output_tokens_per_second_bucket{le="500"} 425
+gateway_output_tokens_per_second_bucket{le="1000"} 425
+gateway_output_tokens_per_second_bucket{le="+Inf"} 425
+gateway_output_tokens_per_second_sum 14471.227287196276
+gateway_output_tokens_per_second_count 425
+# HELP gateway_scheduler_candidates Candidates available to one selection.
+# TYPE gateway_scheduler_candidates histogram
+gateway_scheduler_candidates_bucket{capability="chat",le="0"} 0
+gateway_scheduler_candidates_bucket{capability="chat",le="1"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="2"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="4"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="8"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="16"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="32"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="+Inf"} 274
+gateway_scheduler_candidates_sum{capability="chat"} 274
+gateway_scheduler_candidates_count{capability="chat"} 274
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="0"} 0
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="1"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="2"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="4"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="8"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="16"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="32"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="+Inf"} 153
+gateway_scheduler_candidates_sum{capability="chat_stream"} 153
+gateway_scheduler_candidates_count{capability="chat_stream"} 153
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 1
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 425
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 1
+# HELP gateway_scheduler_retries_total Moves to the next candidate after a retryable failure.
+# TYPE gateway_scheduler_retries_total counter
+gateway_scheduler_retries_total{capability="chat"} 1
+# HELP gateway_tokens_total Tokens reported by the backend, by direction.
+# TYPE gateway_tokens_total counter
+gateway_tokens_total{direction="completion"} 18799
+gateway_tokens_total{direction="prompt"} 10754
+# HELP go_goroutines Goroutines currently existing in this process.
+# TYPE go_goroutines gauge
+go_goroutines 33
+# HELP go_memstats_heap_alloc_bytes Heap bytes currently allocated and in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 3.488448e+06
+# HELP tunnel_server_cancels_total Requests cancelled because the caller left before the response finished.
+# TYPE tunnel_server_cancels_total counter
+tunnel_server_cancels_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_connected_nodes Nodes currently holding a live tunnel to this replica.
+# TYPE tunnel_server_connected_nodes gauge
+tunnel_server_connected_nodes{replica_id="gw-local-default"} 1
+# HELP tunnel_server_control_streams Live Control streams this replica holds for the node.
+# TYPE tunnel_server_control_streams gauge
+tunnel_server_control_streams{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_dispatch_duration_seconds Time from a dispatch arriving at this replica to its response being released.
+# TYPE tunnel_server_dispatch_duration_seconds histogram
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.005"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.01"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.025"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.05"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.1"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.25"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.5"} 7
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="1"} 37
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="2.5"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="5"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="10"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="30"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="60"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="+Inf"} 274
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 367.36668899999995
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 9
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 153
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 209.3419457060002
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 153
+# HELP tunnel_server_dispatch_total Dispatches finished, by operation and result.
+# TYPE tunnel_server_dispatch_total counter
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="backpressure"} 1
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="success"} 272
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="upstream_error"} 1
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="success"} 153
+# HELP tunnel_server_frame_bytes Serialized data-plane frame size, by direction.
+# TYPE tunnel_server_frame_bytes histogram
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 6339
+tunnel_server_frame_bytes_sum{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 403453
+tunnel_server_frame_bytes_count{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 6339
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 853
+tunnel_server_frame_bytes_sum{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 60284
+tunnel_server_frame_bytes_count{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 853
+# HELP tunnel_server_heartbeat_interval_seconds Gap between consecutive heartbeats received from the node.
+# TYPE tunnel_server_heartbeat_interval_seconds histogram
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="2.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="10"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="30"} 33
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="60"} 33
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 33
+tunnel_server_heartbeat_interval_seconds_sum{node_id="local-mac-agent-1",replica_id="gw-local-default"} 495.04077262500005
+tunnel_server_heartbeat_interval_seconds_count{node_id="local-mac-agent-1",replica_id="gw-local-default"} 33
+# HELP tunnel_server_heartbeats_total Heartbeats received from the node.
+# TYPE tunnel_server_heartbeats_total counter
+tunnel_server_heartbeats_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 33
+# HELP tunnel_server_node_state Node state seen from this replica: 0 gone, 1 connected, 2 draining.
+# TYPE tunnel_server_node_state gauge
+tunnel_server_node_state{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_roster_version Replica roster version this replica last broadcast to its nodes.
+# TYPE tunnel_server_roster_version gauge
+tunnel_server_roster_version{replica_id="gw-local-default"} 1
+# HELP tunnel_server_slots_total Slots this replica holds for the node, by class and state.
+# TYPE tunnel_server_slots_total gauge
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 1
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 3
+# HELP tunnel_server_stream_first_event_seconds Time from a dispatch being written to its first response frame arriving.
+# TYPE tunnel_server_stream_first_event_seconds histogram
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 153
+tunnel_server_stream_first_event_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 120.91550862700005
+tunnel_server_stream_first_event_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 153
+=== end post ===
+=== candidateA saturation: pre metrics 2026-09-13T10:39:34Z ===
+# HELP gateway_http_inflight_requests Requests currently being served, by endpoint.
+# TYPE gateway_http_inflight_requests gauge
+gateway_http_inflight_requests{endpoint="chat_completions"} 0
+gateway_http_inflight_requests{endpoint="models"} 0
+# HELP gateway_http_request_duration_seconds Total response time, by endpoint.
+# TYPE gateway_http_request_duration_seconds histogram
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.005"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.01"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.5"} 7
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="1"} 46
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="2.5"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="5"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="10"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="30"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="60"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="+Inf"} 427
+gateway_http_request_duration_seconds_sum{endpoint="chat_completions"} 576.9556243370006
+gateway_http_request_duration_seconds_count{endpoint="chat_completions"} 427
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.005"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.01"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="2.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="10"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="30"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="60"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="+Inf"} 1
+gateway_http_request_duration_seconds_sum{endpoint="models"} 0.013238667
+gateway_http_request_duration_seconds_count{endpoint="models"} 1
+# HELP gateway_http_requests_total Finished HTTP requests, by endpoint and status code.
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{endpoint="chat_completions",status="200"} 425
+gateway_http_requests_total{endpoint="chat_completions",status="429"} 1
+gateway_http_requests_total{endpoint="chat_completions",status="503"} 1
+gateway_http_requests_total{endpoint="models",status="200"} 1
+# HELP gateway_http_ttft_seconds Time from receiving a request to the first byte of content reaching the client.
+# TYPE gateway_http_ttft_seconds histogram
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.005"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.01"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.025"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.05"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.1"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.25"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.5"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="1"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="2.5"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="5"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="10"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="30"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="60"} 153
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="+Inf"} 153
+gateway_http_ttft_seconds_sum{endpoint="chat_completions"} 120.977861043
+gateway_http_ttft_seconds_count{endpoint="chat_completions"} 153
+# HELP gateway_output_tokens_per_second Completion tokens divided by the time the request took.
+# TYPE gateway_output_tokens_per_second histogram
+gateway_output_tokens_per_second_bucket{le="1"} 0
+gateway_output_tokens_per_second_bucket{le="5"} 0
+gateway_output_tokens_per_second_bucket{le="10"} 0
+gateway_output_tokens_per_second_bucket{le="25"} 30
+gateway_output_tokens_per_second_bucket{le="50"} 404
+gateway_output_tokens_per_second_bucket{le="100"} 425
+gateway_output_tokens_per_second_bucket{le="250"} 425
+gateway_output_tokens_per_second_bucket{le="500"} 425
+gateway_output_tokens_per_second_bucket{le="1000"} 425
+gateway_output_tokens_per_second_bucket{le="+Inf"} 425
+gateway_output_tokens_per_second_sum 14471.227287196276
+gateway_output_tokens_per_second_count 425
+# HELP gateway_scheduler_candidates Candidates available to one selection.
+# TYPE gateway_scheduler_candidates histogram
+gateway_scheduler_candidates_bucket{capability="chat",le="0"} 0
+gateway_scheduler_candidates_bucket{capability="chat",le="1"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="2"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="4"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="8"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="16"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="32"} 274
+gateway_scheduler_candidates_bucket{capability="chat",le="+Inf"} 274
+gateway_scheduler_candidates_sum{capability="chat"} 274
+gateway_scheduler_candidates_count{capability="chat"} 274
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="0"} 0
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="1"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="2"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="4"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="8"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="16"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="32"} 153
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="+Inf"} 153
+gateway_scheduler_candidates_sum{capability="chat_stream"} 153
+gateway_scheduler_candidates_count{capability="chat_stream"} 153
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 1
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 425
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 1
+# HELP gateway_scheduler_retries_total Moves to the next candidate after a retryable failure.
+# TYPE gateway_scheduler_retries_total counter
+gateway_scheduler_retries_total{capability="chat"} 1
+# HELP gateway_tokens_total Tokens reported by the backend, by direction.
+# TYPE gateway_tokens_total counter
+gateway_tokens_total{direction="completion"} 18799
+gateway_tokens_total{direction="prompt"} 10754
+# HELP go_goroutines Goroutines currently existing in this process.
+# TYPE go_goroutines gauge
+go_goroutines 33
+# HELP go_memstats_heap_alloc_bytes Heap bytes currently allocated and in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 4.49508e+06
+# HELP tunnel_server_cancels_total Requests cancelled because the caller left before the response finished.
+# TYPE tunnel_server_cancels_total counter
+tunnel_server_cancels_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_connected_nodes Nodes currently holding a live tunnel to this replica.
+# TYPE tunnel_server_connected_nodes gauge
+tunnel_server_connected_nodes{replica_id="gw-local-default"} 1
+# HELP tunnel_server_control_streams Live Control streams this replica holds for the node.
+# TYPE tunnel_server_control_streams gauge
+tunnel_server_control_streams{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_dispatch_duration_seconds Time from a dispatch arriving at this replica to its response being released.
+# TYPE tunnel_server_dispatch_duration_seconds histogram
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.005"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.01"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.025"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.05"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.1"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.25"} 1
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.5"} 7
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="1"} 37
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="2.5"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="5"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="10"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="30"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="60"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="+Inf"} 274
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 367.36668899999995
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 274
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 9
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 153
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 209.3419457060002
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 153
+# HELP tunnel_server_dispatch_total Dispatches finished, by operation and result.
+# TYPE tunnel_server_dispatch_total counter
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="backpressure"} 1
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="success"} 272
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="upstream_error"} 1
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="success"} 153
+# HELP tunnel_server_frame_bytes Serialized data-plane frame size, by direction.
+# TYPE tunnel_server_frame_bytes histogram
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 6339
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 6339
+tunnel_server_frame_bytes_sum{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 403453
+tunnel_server_frame_bytes_count{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 6339
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 853
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 853
+tunnel_server_frame_bytes_sum{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 60284
+tunnel_server_frame_bytes_count{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 853
+# HELP tunnel_server_heartbeat_interval_seconds Gap between consecutive heartbeats received from the node.
+# TYPE tunnel_server_heartbeat_interval_seconds histogram
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="2.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="10"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="30"} 35
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="60"} 35
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 35
+tunnel_server_heartbeat_interval_seconds_sum{node_id="local-mac-agent-1",replica_id="gw-local-default"} 525.042843917
+tunnel_server_heartbeat_interval_seconds_count{node_id="local-mac-agent-1",replica_id="gw-local-default"} 35
+# HELP tunnel_server_heartbeats_total Heartbeats received from the node.
+# TYPE tunnel_server_heartbeats_total counter
+tunnel_server_heartbeats_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 35
+# HELP tunnel_server_node_state Node state seen from this replica: 0 gone, 1 connected, 2 draining.
+# TYPE tunnel_server_node_state gauge
+tunnel_server_node_state{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_roster_version Replica roster version this replica last broadcast to its nodes.
+# TYPE tunnel_server_roster_version gauge
+tunnel_server_roster_version{replica_id="gw-local-default"} 1
+# HELP tunnel_server_slots_total Slots this replica holds for the node, by class and state.
+# TYPE tunnel_server_slots_total gauge
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 1
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 3
+# HELP tunnel_server_stream_first_event_seconds Time from a dispatch being written to its first response frame arriving.
+# TYPE tunnel_server_stream_first_event_seconds histogram
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 153
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 153
+tunnel_server_stream_first_event_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 120.91550862700005
+tunnel_server_stream_first_event_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 153
+=== end pre ===
+=== candidateA saturation: post metrics 2026-09-13T10:42:37Z ===
+# HELP gateway_http_inflight_requests Requests currently being served, by endpoint.
+# TYPE gateway_http_inflight_requests gauge
+gateway_http_inflight_requests{endpoint="chat_completions"} 0
+gateway_http_inflight_requests{endpoint="models"} 0
+# HELP gateway_http_request_duration_seconds Total response time, by endpoint.
+# TYPE gateway_http_request_duration_seconds histogram
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.005"} 1021162
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.01"} 1022074
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.025"} 1022597
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.05"} 1022902
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.1"} 1023041
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.25"} 1023113
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.5"} 1023135
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="1"} 1023186
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="2.5"} 1023580
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="5"} 1023586
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="10"} 1023624
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="30"} 1023637
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="60"} 1023637
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="+Inf"} 1023637
+gateway_http_request_duration_seconds_sum{endpoint="chat_completions"} 1326.0152415639143
+gateway_http_request_duration_seconds_count{endpoint="chat_completions"} 1023637
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.005"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.01"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="2.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="10"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="30"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="60"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="+Inf"} 1
+gateway_http_request_duration_seconds_sum{endpoint="models"} 0.013238667
+gateway_http_request_duration_seconds_count{endpoint="models"} 1
+# HELP gateway_http_requests_total Finished HTTP requests, by endpoint and status code.
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{endpoint="chat_completions",status="200"} 463
+gateway_http_requests_total{endpoint="chat_completions",status="404"} 428536
+gateway_http_requests_total{endpoint="chat_completions",status="429"} 592971
+gateway_http_requests_total{endpoint="chat_completions",status="502"} 44
+gateway_http_requests_total{endpoint="chat_completions",status="503"} 1623
+gateway_http_requests_total{endpoint="models",status="200"} 1
+# HELP gateway_http_ttft_seconds Time from receiving a request to the first byte of content reaching the client.
+# TYPE gateway_http_ttft_seconds histogram
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.005"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.01"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.025"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.05"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.1"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.25"} 2
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.5"} 2
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="1"} 155
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="2.5"} 157
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="5"} 158
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="10"} 166
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="30"} 166
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="60"} 166
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="+Inf"} 166
+gateway_http_ttft_seconds_sum{endpoint="chat_completions"} 184.387851961
+gateway_http_ttft_seconds_count{endpoint="chat_completions"} 166
+# HELP gateway_output_tokens_per_second Completion tokens divided by the time the request took.
+# TYPE gateway_output_tokens_per_second histogram
+gateway_output_tokens_per_second_bucket{le="1"} 0
+gateway_output_tokens_per_second_bucket{le="5"} 11
+gateway_output_tokens_per_second_bucket{le="10"} 31
+gateway_output_tokens_per_second_bucket{le="25"} 63
+gateway_output_tokens_per_second_bucket{le="50"} 440
+gateway_output_tokens_per_second_bucket{le="100"} 463
+gateway_output_tokens_per_second_bucket{le="250"} 463
+gateway_output_tokens_per_second_bucket{le="500"} 463
+gateway_output_tokens_per_second_bucket{le="1000"} 463
+gateway_output_tokens_per_second_bucket{le="+Inf"} 463
+gateway_output_tokens_per_second_sum 14918.577321027173
+gateway_output_tokens_per_second_count 463
+# HELP gateway_request_log_push_failed_total Request-log batches that reached the control plane call but failed (network error or non-200 status).
+# TYPE gateway_request_log_push_failed_total counter
+gateway_request_log_push_failed_total 10
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 28
+# HELP gateway_scheduler_candidates Candidates available to one selection.
+# TYPE gateway_scheduler_candidates histogram
+gateway_scheduler_candidates_bucket{capability="chat",le="0"} 257163
+gateway_scheduler_candidates_bucket{capability="chat",le="1"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="2"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="4"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="8"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="16"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="32"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="+Inf"} 614142
+gateway_scheduler_candidates_sum{capability="chat"} 356979
+gateway_scheduler_candidates_count{capability="chat"} 614142
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="0"} 171373
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="1"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="2"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="4"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="8"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="16"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="32"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="+Inf"} 408486
+gateway_scheduler_candidates_sum{capability="chat_stream"} 237113
+gateway_scheduler_candidates_count{capability="chat_stream"} 408486
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 592971
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 463
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 658
+# HELP gateway_scheduler_no_candidate_total Requests that found no node able to serve the model with the requested capability.
+# TYPE gateway_scheduler_no_candidate_total counter
+gateway_scheduler_no_candidate_total{capability="chat"} 257163
+gateway_scheduler_no_candidate_total{capability="chat_stream"} 171373
+# HELP gateway_scheduler_retries_total Moves to the next candidate after a retryable failure.
+# TYPE gateway_scheduler_retries_total counter
+gateway_scheduler_retries_total{capability="chat"} 356681
+gateway_scheduler_retries_total{capability="chat_stream"} 236947
+# HELP gateway_tokens_total Tokens reported by the backend, by direction.
+# TYPE gateway_tokens_total counter
+gateway_tokens_total{direction="completion"} 20496
+gateway_tokens_total{direction="prompt"} 11642
+# HELP go_goroutines Goroutines currently existing in this process.
+# TYPE go_goroutines gauge
+go_goroutines 38
+# HELP go_memstats_heap_alloc_bytes Heap bytes currently allocated and in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 4.405368e+06
+# HELP tunnel_server_cancels_total Requests cancelled because the caller left before the response finished.
+# TYPE tunnel_server_cancels_total counter
+tunnel_server_cancels_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_connected_nodes Nodes currently holding a live tunnel to this replica.
+# TYPE tunnel_server_connected_nodes gauge
+tunnel_server_connected_nodes{replica_id="gw-local-default"} 1
+# HELP tunnel_server_control_streams Live Control streams this replica holds for the node.
+# TYPE tunnel_server_control_streams gauge
+tunnel_server_control_streams{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_dispatch_duration_seconds Time from a dispatch arriving at this replica to its response being released.
+# TYPE tunnel_server_dispatch_duration_seconds histogram
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.005"} 356296
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.01"} 356305
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.025"} 356489
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.05"} 356600
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.1"} 356636
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.25"} 356657
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.5"} 356664
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="1"} 356698
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="2.5"} 356939
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="5"} 356945
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="10"} 356969
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="30"} 356979
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="60"} 356979
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="+Inf"} 356979
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 708.2327695722514
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 356979
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 236674
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 236675
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 236801
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 236883
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 236909
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 236921
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 236926
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 236944
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 237096
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 237096
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 237110
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 237113
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 237113
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 237113
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 385.22085355111324
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 237113
+# HELP tunnel_server_dispatch_total Dispatches finished, by operation and result.
+# TYPE tunnel_server_dispatch_total counter
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="backpressure"} 356297
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="success"} 297
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="upstream_error"} 385
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="backpressure"} 236674
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="success"} 166
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="upstream_error"} 273
+# HELP tunnel_server_frame_bytes Serialized data-plane frame size, by direction.
+# TYPE tunnel_server_frame_bytes histogram
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 8198
+tunnel_server_frame_bytes_sum{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 608127
+tunnel_server_frame_bytes_count{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 8198
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 2243
+tunnel_server_frame_bytes_sum{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 151773
+tunnel_server_frame_bytes_count{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 2243
+# HELP tunnel_server_heartbeat_interval_seconds Gap between consecutive heartbeats received from the node.
+# TYPE tunnel_server_heartbeat_interval_seconds histogram
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="2.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="10"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="30"} 47
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="60"} 47
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 47
+tunnel_server_heartbeat_interval_seconds_sum{node_id="local-mac-agent-1",replica_id="gw-local-default"} 705.059236458
+tunnel_server_heartbeat_interval_seconds_count{node_id="local-mac-agent-1",replica_id="gw-local-default"} 47
+# HELP tunnel_server_heartbeats_total Heartbeats received from the node.
+# TYPE tunnel_server_heartbeats_total counter
+tunnel_server_heartbeats_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 47
+# HELP tunnel_server_node_state Node state seen from this replica: 0 gone, 1 connected, 2 draining.
+# TYPE tunnel_server_node_state gauge
+tunnel_server_node_state{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_roster_version Replica roster version this replica last broadcast to its nodes.
+# TYPE tunnel_server_roster_version gauge
+tunnel_server_roster_version{replica_id="gw-local-default"} 1
+# HELP tunnel_server_slots_total Slots this replica holds for the node, by class and state.
+# TYPE tunnel_server_slots_total gauge
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 1
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 8
+# HELP tunnel_server_stream_first_event_seconds Time from a dispatch being written to its first response frame arriving.
+# TYPE tunnel_server_stream_first_event_seconds histogram
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 2
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 2
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 155
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 157
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 158
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 166
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 166
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 166
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 166
+tunnel_server_stream_first_event_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 184.32359812500005
+tunnel_server_stream_first_event_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 166
+=== end post ===
+=== candidateA saturation-moderate: pre metrics 2026-09-13T10:44:46Z ===
+# HELP gateway_http_inflight_requests Requests currently being served, by endpoint.
+# TYPE gateway_http_inflight_requests gauge
+gateway_http_inflight_requests{endpoint="chat_completions"} 0
+gateway_http_inflight_requests{endpoint="models"} 0
+# HELP gateway_http_request_duration_seconds Total response time, by endpoint.
+# TYPE gateway_http_request_duration_seconds histogram
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.005"} 1021162
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.01"} 1022074
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.025"} 1022597
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.05"} 1022902
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.1"} 1023041
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.25"} 1023113
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.5"} 1023135
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="1"} 1023186
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="2.5"} 1023580
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="5"} 1023586
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="10"} 1023624
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="30"} 1023637
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="60"} 1023637
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="+Inf"} 1023637
+gateway_http_request_duration_seconds_sum{endpoint="chat_completions"} 1326.0152415639143
+gateway_http_request_duration_seconds_count{endpoint="chat_completions"} 1023637
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.005"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.01"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="2.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="10"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="30"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="60"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="+Inf"} 1
+gateway_http_request_duration_seconds_sum{endpoint="models"} 0.013238667
+gateway_http_request_duration_seconds_count{endpoint="models"} 1
+# HELP gateway_http_requests_total Finished HTTP requests, by endpoint and status code.
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{endpoint="chat_completions",status="200"} 463
+gateway_http_requests_total{endpoint="chat_completions",status="404"} 428536
+gateway_http_requests_total{endpoint="chat_completions",status="429"} 592971
+gateway_http_requests_total{endpoint="chat_completions",status="502"} 44
+gateway_http_requests_total{endpoint="chat_completions",status="503"} 1623
+gateway_http_requests_total{endpoint="models",status="200"} 1
+# HELP gateway_http_ttft_seconds Time from receiving a request to the first byte of content reaching the client.
+# TYPE gateway_http_ttft_seconds histogram
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.005"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.01"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.025"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.05"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.1"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.25"} 2
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.5"} 2
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="1"} 155
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="2.5"} 157
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="5"} 158
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="10"} 166
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="30"} 166
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="60"} 166
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="+Inf"} 166
+gateway_http_ttft_seconds_sum{endpoint="chat_completions"} 184.387851961
+gateway_http_ttft_seconds_count{endpoint="chat_completions"} 166
+# HELP gateway_output_tokens_per_second Completion tokens divided by the time the request took.
+# TYPE gateway_output_tokens_per_second histogram
+gateway_output_tokens_per_second_bucket{le="1"} 0
+gateway_output_tokens_per_second_bucket{le="5"} 11
+gateway_output_tokens_per_second_bucket{le="10"} 31
+gateway_output_tokens_per_second_bucket{le="25"} 63
+gateway_output_tokens_per_second_bucket{le="50"} 440
+gateway_output_tokens_per_second_bucket{le="100"} 463
+gateway_output_tokens_per_second_bucket{le="250"} 463
+gateway_output_tokens_per_second_bucket{le="500"} 463
+gateway_output_tokens_per_second_bucket{le="1000"} 463
+gateway_output_tokens_per_second_bucket{le="+Inf"} 463
+gateway_output_tokens_per_second_sum 14918.577321027173
+gateway_output_tokens_per_second_count 463
+# HELP gateway_request_log_push_failed_total Request-log batches that reached the control plane call but failed (network error or non-200 status).
+# TYPE gateway_request_log_push_failed_total counter
+gateway_request_log_push_failed_total 10
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 28
+# HELP gateway_scheduler_candidates Candidates available to one selection.
+# TYPE gateway_scheduler_candidates histogram
+gateway_scheduler_candidates_bucket{capability="chat",le="0"} 257163
+gateway_scheduler_candidates_bucket{capability="chat",le="1"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="2"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="4"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="8"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="16"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="32"} 614142
+gateway_scheduler_candidates_bucket{capability="chat",le="+Inf"} 614142
+gateway_scheduler_candidates_sum{capability="chat"} 356979
+gateway_scheduler_candidates_count{capability="chat"} 614142
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="0"} 171373
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="1"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="2"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="4"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="8"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="16"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="32"} 408486
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="+Inf"} 408486
+gateway_scheduler_candidates_sum{capability="chat_stream"} 237113
+gateway_scheduler_candidates_count{capability="chat_stream"} 408486
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 592971
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 463
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 658
+# HELP gateway_scheduler_no_candidate_total Requests that found no node able to serve the model with the requested capability.
+# TYPE gateway_scheduler_no_candidate_total counter
+gateway_scheduler_no_candidate_total{capability="chat"} 257163
+gateway_scheduler_no_candidate_total{capability="chat_stream"} 171373
+# HELP gateway_scheduler_retries_total Moves to the next candidate after a retryable failure.
+# TYPE gateway_scheduler_retries_total counter
+gateway_scheduler_retries_total{capability="chat"} 356681
+gateway_scheduler_retries_total{capability="chat_stream"} 236947
+# HELP gateway_tokens_total Tokens reported by the backend, by direction.
+# TYPE gateway_tokens_total counter
+gateway_tokens_total{direction="completion"} 20496
+gateway_tokens_total{direction="prompt"} 11642
+# HELP go_goroutines Goroutines currently existing in this process.
+# TYPE go_goroutines gauge
+go_goroutines 38
+# HELP go_memstats_heap_alloc_bytes Heap bytes currently allocated and in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 3.682296e+06
+# HELP tunnel_server_cancels_total Requests cancelled because the caller left before the response finished.
+# TYPE tunnel_server_cancels_total counter
+tunnel_server_cancels_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_connected_nodes Nodes currently holding a live tunnel to this replica.
+# TYPE tunnel_server_connected_nodes gauge
+tunnel_server_connected_nodes{replica_id="gw-local-default"} 1
+# HELP tunnel_server_control_streams Live Control streams this replica holds for the node.
+# TYPE tunnel_server_control_streams gauge
+tunnel_server_control_streams{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_dispatch_duration_seconds Time from a dispatch arriving at this replica to its response being released.
+# TYPE tunnel_server_dispatch_duration_seconds histogram
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.005"} 356296
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.01"} 356305
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.025"} 356489
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.05"} 356600
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.1"} 356636
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.25"} 356657
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.5"} 356664
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="1"} 356698
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="2.5"} 356939
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="5"} 356945
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="10"} 356969
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="30"} 356979
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="60"} 356979
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="+Inf"} 356979
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 708.2327695722514
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 356979
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 236674
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 236675
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 236801
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 236883
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 236909
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 236921
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 236926
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 236944
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 237096
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 237096
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 237110
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 237113
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 237113
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 237113
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 385.22085355111324
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 237113
+# HELP tunnel_server_dispatch_total Dispatches finished, by operation and result.
+# TYPE tunnel_server_dispatch_total counter
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="backpressure"} 356297
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="success"} 297
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="upstream_error"} 385
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="backpressure"} 236674
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="success"} 166
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="upstream_error"} 273
+# HELP tunnel_server_frame_bytes Serialized data-plane frame size, by direction.
+# TYPE tunnel_server_frame_bytes histogram
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 8198
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 8198
+tunnel_server_frame_bytes_sum{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 608127
+tunnel_server_frame_bytes_count{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 8198
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 2243
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 2243
+tunnel_server_frame_bytes_sum{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 151773
+tunnel_server_frame_bytes_count{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 2243
+# HELP tunnel_server_heartbeat_interval_seconds Gap between consecutive heartbeats received from the node.
+# TYPE tunnel_server_heartbeat_interval_seconds histogram
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="2.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="10"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="30"} 55
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="60"} 55
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 55
+tunnel_server_heartbeat_interval_seconds_sum{node_id="local-mac-agent-1",replica_id="gw-local-default"} 825.060203583
+tunnel_server_heartbeat_interval_seconds_count{node_id="local-mac-agent-1",replica_id="gw-local-default"} 55
+# HELP tunnel_server_heartbeats_total Heartbeats received from the node.
+# TYPE tunnel_server_heartbeats_total counter
+tunnel_server_heartbeats_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 55
+# HELP tunnel_server_node_state Node state seen from this replica: 0 gone, 1 connected, 2 draining.
+# TYPE tunnel_server_node_state gauge
+tunnel_server_node_state{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_roster_version Replica roster version this replica last broadcast to its nodes.
+# TYPE tunnel_server_roster_version gauge
+tunnel_server_roster_version{replica_id="gw-local-default"} 1
+# HELP tunnel_server_slots_total Slots this replica holds for the node, by class and state.
+# TYPE tunnel_server_slots_total gauge
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 1
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 8
+# HELP tunnel_server_stream_first_event_seconds Time from a dispatch being written to its first response frame arriving.
+# TYPE tunnel_server_stream_first_event_seconds histogram
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 2
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 2
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 155
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 157
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 158
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 166
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 166
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 166
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 166
+tunnel_server_stream_first_event_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 184.32359812500005
+tunnel_server_stream_first_event_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 166
+=== end pre ===
+=== candidateA saturation-moderate: post metrics 2026-09-13T10:46:50Z ===
+# HELP gateway_http_inflight_requests Requests currently being served, by endpoint.
+# TYPE gateway_http_inflight_requests gauge
+gateway_http_inflight_requests{endpoint="chat_completions"} 0
+gateway_http_inflight_requests{endpoint="models"} 0
+# HELP gateway_http_request_duration_seconds Total response time, by endpoint.
+# TYPE gateway_http_request_duration_seconds histogram
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.005"} 1021162
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.01"} 1022074
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.025"} 1022597
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.05"} 1022902
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.1"} 1023041
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.25"} 1023113
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="0.5"} 1023135
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="1"} 1023187
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="2.5"} 1023583
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="5"} 1023757
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="10"} 1023795
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="30"} 1023808
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="60"} 1023808
+gateway_http_request_duration_seconds_bucket{endpoint="chat_completions",le="+Inf"} 1023808
+gateway_http_request_duration_seconds_sum{endpoint="chat_completions"} 2060.5417121109144
+gateway_http_request_duration_seconds_count{endpoint="chat_completions"} 1023808
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.005"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.01"} 0
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.025"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.05"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.25"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="0.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="1"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="2.5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="5"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="10"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="30"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="60"} 1
+gateway_http_request_duration_seconds_bucket{endpoint="models",le="+Inf"} 1
+gateway_http_request_duration_seconds_sum{endpoint="models"} 0.013238667
+gateway_http_request_duration_seconds_count{endpoint="models"} 1
+# HELP gateway_http_requests_total Finished HTTP requests, by endpoint and status code.
+# TYPE gateway_http_requests_total counter
+gateway_http_requests_total{endpoint="chat_completions",status="200"} 634
+gateway_http_requests_total{endpoint="chat_completions",status="404"} 428536
+gateway_http_requests_total{endpoint="chat_completions",status="429"} 592971
+gateway_http_requests_total{endpoint="chat_completions",status="502"} 44
+gateway_http_requests_total{endpoint="chat_completions",status="503"} 1623
+gateway_http_requests_total{endpoint="models",status="200"} 1
+# HELP gateway_http_ttft_seconds Time from receiving a request to the first byte of content reaching the client.
+# TYPE gateway_http_ttft_seconds histogram
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.005"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.01"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.025"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.05"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.1"} 0
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.25"} 2
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="0.5"} 3
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="1"} 156
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="2.5"} 158
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="5"} 215
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="10"} 223
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="30"} 223
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="60"} 223
+gateway_http_ttft_seconds_bucket{endpoint="chat_completions",le="+Inf"} 223
+gateway_http_ttft_seconds_sum{endpoint="chat_completions"} 390.95800332999994
+gateway_http_ttft_seconds_count{endpoint="chat_completions"} 223
+# HELP gateway_output_tokens_per_second Completion tokens divided by the time the request took.
+# TYPE gateway_output_tokens_per_second histogram
+gateway_output_tokens_per_second_bucket{le="1"} 0
+gateway_output_tokens_per_second_bucket{le="5"} 11
+gateway_output_tokens_per_second_bucket{le="10"} 53
+gateway_output_tokens_per_second_bucket{le="25"} 232
+gateway_output_tokens_per_second_bucket{le="50"} 610
+gateway_output_tokens_per_second_bucket{le="100"} 634
+gateway_output_tokens_per_second_bucket{le="250"} 634
+gateway_output_tokens_per_second_bucket{le="500"} 634
+gateway_output_tokens_per_second_bucket{le="1000"} 634
+gateway_output_tokens_per_second_bucket{le="+Inf"} 634
+gateway_output_tokens_per_second_sum 16821.19560020003
+gateway_output_tokens_per_second_count 634
+# HELP gateway_request_log_push_failed_total Request-log batches that reached the control plane call but failed (network error or non-200 status).
+# TYPE gateway_request_log_push_failed_total counter
+gateway_request_log_push_failed_total 10
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 28
+# HELP gateway_scheduler_candidates Candidates available to one selection.
+# TYPE gateway_scheduler_candidates histogram
+gateway_scheduler_candidates_bucket{capability="chat",le="0"} 257163
+gateway_scheduler_candidates_bucket{capability="chat",le="1"} 614256
+gateway_scheduler_candidates_bucket{capability="chat",le="2"} 614256
+gateway_scheduler_candidates_bucket{capability="chat",le="4"} 614256
+gateway_scheduler_candidates_bucket{capability="chat",le="8"} 614256
+gateway_scheduler_candidates_bucket{capability="chat",le="16"} 614256
+gateway_scheduler_candidates_bucket{capability="chat",le="32"} 614256
+gateway_scheduler_candidates_bucket{capability="chat",le="+Inf"} 614256
+gateway_scheduler_candidates_sum{capability="chat"} 357093
+gateway_scheduler_candidates_count{capability="chat"} 614256
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="0"} 171373
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="1"} 408543
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="2"} 408543
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="4"} 408543
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="8"} 408543
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="16"} 408543
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="32"} 408543
+gateway_scheduler_candidates_bucket{capability="chat_stream",le="+Inf"} 408543
+gateway_scheduler_candidates_sum{capability="chat_stream"} 237170
+gateway_scheduler_candidates_count{capability="chat_stream"} 408543
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 592971
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 634
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 658
+# HELP gateway_scheduler_no_candidate_total Requests that found no node able to serve the model with the requested capability.
+# TYPE gateway_scheduler_no_candidate_total counter
+gateway_scheduler_no_candidate_total{capability="chat"} 257163
+gateway_scheduler_no_candidate_total{capability="chat_stream"} 171373
+# HELP gateway_scheduler_retries_total Moves to the next candidate after a retryable failure.
+# TYPE gateway_scheduler_retries_total counter
+gateway_scheduler_retries_total{capability="chat"} 356681
+gateway_scheduler_retries_total{capability="chat_stream"} 236947
+# HELP gateway_tokens_total Tokens reported by the backend, by direction.
+# TYPE gateway_tokens_total counter
+gateway_tokens_total{direction="completion"} 28413
+gateway_tokens_total{direction="prompt"} 15606
+# HELP go_goroutines Goroutines currently existing in this process.
+# TYPE go_goroutines gauge
+go_goroutines 40
+# HELP go_memstats_heap_alloc_bytes Heap bytes currently allocated and in use.
+# TYPE go_memstats_heap_alloc_bytes gauge
+go_memstats_heap_alloc_bytes 4.875552e+06
+# HELP tunnel_server_cancels_total Requests cancelled because the caller left before the response finished.
+# TYPE tunnel_server_cancels_total counter
+tunnel_server_cancels_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_connected_nodes Nodes currently holding a live tunnel to this replica.
+# TYPE tunnel_server_connected_nodes gauge
+tunnel_server_connected_nodes{replica_id="gw-local-default"} 1
+# HELP tunnel_server_control_streams Live Control streams this replica holds for the node.
+# TYPE tunnel_server_control_streams gauge
+tunnel_server_control_streams{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_dispatch_duration_seconds Time from a dispatch arriving at this replica to its response being released.
+# TYPE tunnel_server_dispatch_duration_seconds histogram
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.005"} 356296
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.01"} 356305
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.025"} 356489
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.05"} 356600
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.1"} 356636
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.25"} 356657
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="0.5"} 356664
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="1"} 356698
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="2.5"} 356941
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="5"} 357059
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="10"} 357083
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="30"} 357093
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="60"} 357093
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",le="+Inf"} 357093
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 1200.885190698252
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default"} 357093
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 236674
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 236675
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 236801
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 236883
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 236909
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 236921
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 236926
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 236945
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 237097
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 237153
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 237167
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 237170
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 237170
+tunnel_server_dispatch_duration_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 237170
+tunnel_server_dispatch_duration_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 626.9008632171134
+tunnel_server_dispatch_duration_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 237170
+# HELP tunnel_server_dispatch_total Dispatches finished, by operation and result.
+# TYPE tunnel_server_dispatch_total counter
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="backpressure"} 356297
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="success"} 411
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT",replica_id="gw-local-default",result="upstream_error"} 385
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="backpressure"} 236674
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="success"} 223
+tunnel_server_dispatch_total{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",result="upstream_error"} 273
+# HELP tunnel_server_frame_bytes Serialized data-plane frame size, by direction.
+# TYPE tunnel_server_frame_bytes histogram
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 10726
+tunnel_server_frame_bytes_bucket{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 10726
+tunnel_server_frame_bytes_sum{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 769911
+tunnel_server_frame_bytes_count{direction="inbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 10726
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="256"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1024"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4096"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="16384"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="65536"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="262144"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="1.048576e+06"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="4.194304e+06"} 2585
+tunnel_server_frame_bytes_bucket{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 2585
+tunnel_server_frame_bytes_sum{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 174476
+tunnel_server_frame_bytes_count{direction="outbound",node_id="local-mac-agent-1",replica_id="gw-local-default"} 2585
+# HELP tunnel_server_heartbeat_interval_seconds Gap between consecutive heartbeats received from the node.
+# TYPE tunnel_server_heartbeat_interval_seconds histogram
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.25"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="0.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="1"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="2.5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="5"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="10"} 0
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="30"} 64
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="60"} 64
+tunnel_server_heartbeat_interval_seconds_bucket{node_id="local-mac-agent-1",replica_id="gw-local-default",le="+Inf"} 64
+tunnel_server_heartbeat_interval_seconds_sum{node_id="local-mac-agent-1",replica_id="gw-local-default"} 960.0723410000002
+tunnel_server_heartbeat_interval_seconds_count{node_id="local-mac-agent-1",replica_id="gw-local-default"} 64
+# HELP tunnel_server_heartbeats_total Heartbeats received from the node.
+# TYPE tunnel_server_heartbeats_total counter
+tunnel_server_heartbeats_total{node_id="local-mac-agent-1",replica_id="gw-local-default"} 64
+# HELP tunnel_server_node_state Node state seen from this replica: 0 gone, 1 connected, 2 draining.
+# TYPE tunnel_server_node_state gauge
+tunnel_server_node_state{node_id="local-mac-agent-1",replica_id="gw-local-default"} 1
+# HELP tunnel_server_roster_version Replica roster version this replica last broadcast to its nodes.
+# TYPE tunnel_server_roster_version gauge
+tunnel_server_roster_version{replica_id="gw-local-default"} 1
+# HELP tunnel_server_slots_total Slots this replica holds for the node, by class and state.
+# TYPE tunnel_server_slots_total gauge
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_BULK",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 1
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="busy"} 0
+tunnel_server_slots_total{class="SLOT_CLASS_INFERENCE",node_id="local-mac-agent-1",replica_id="gw-local-default",state="idle"} 8
+# HELP tunnel_server_stream_first_event_seconds Time from a dispatch being written to its first response frame arriving.
+# TYPE tunnel_server_stream_first_event_seconds histogram
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.005"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.01"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.025"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.05"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.1"} 0
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.25"} 2
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="0.5"} 3
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="1"} 156
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="2.5"} 158
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="5"} 215
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="10"} 223
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="30"} 223
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="60"} 223
+tunnel_server_stream_first_event_seconds_bucket{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default",le="+Inf"} 223
+tunnel_server_stream_first_event_seconds_sum{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 390.87135382899993
+tunnel_server_stream_first_event_seconds_count{node_id="local-mac-agent-1",operation="OPERATION_CHAT_STREAM",replica_id="gw-local-default"} 223
+=== end post ===
+=== candidateA saturation-hard-paced: pre metrics 2026-09-13T10:53:19Z ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 33
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 592971
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 837
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 667
+=== candidateA saturation-hard-paced: post metrics 2026-09-13T10:55:25Z ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 33
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 597744
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 1009
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 667

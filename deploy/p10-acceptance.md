@@ -53,6 +53,8 @@ go test ./service/aiServeWeaveGateway/e2e \
 
 在相同负载下比较候选参数，记录误熔断与恢复代价，再决定是否调整。报告须给出实测环境、参数、原始指标、结论与适用范围；固定响应、默认单元测试或文档中的历史数字不能充当真实流量结果。
 
+`service/aiServeWeaveGateway/main.go` 提供 `-breaker-failure-threshold`/`-breaker-base-cooldown`/`-breaker-max-cooldown` 三个 flag（默认 `0`，沿用 `scheduler` 包内置默认值），用于在不重新编译的前提下切换候选参数；复现或补充新一轮对比时直接用这三个 flag 起不同的 Gateway 副本。2026-09-13 已用它们在单机真实环境（ControlPlane + Registry + 真实 Agent + 真实 Ollama）下对比了默认值（5/5s/2m）与一组更激进的候选（3/2s/20s），覆盖稳定负载、中度/硬饱和与真实断连恢复四类场景；结论是保留当前默认值，详见 [验收记录](../docs/acceptance/p10-breaker-calibration-2026-09-13/README.md)。该记录仅覆盖单机单节点，多节点机群下的成本收益、以及超过 2 分钟的持续故障窗口仍未验证，后续如需进一步校准可参照该记录「建议」一节列出的缺口。
+
 ## Console Q03
 
 使用生产构建、独立回环端口 3100 和临时浏览器上下文。测试签发仅用于自身的合成会话，拦截浏览器 API 调用；上游地址设为不可用的回环端口，未声明请求会令用例失败。它验证页面渲染与交互，不替代 ControlPlane 鉴权、真实数据库或真实业务写入联调。

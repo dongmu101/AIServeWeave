@@ -273,9 +273,9 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 1. **读 Agent 已经算好的健康状态。** `runtime.Snapshot.State` 是 `unhealthy`/`closed` 的 runtime 实例直接被过滤——这是 Agent 侧 `runtime.Manager` 探测出来的结论，Gateway 只是消费它，不重新判断一遍。
 2. **Gateway 侧的熔断器。** 按 `(node_id, runtime_id)` 维护一个失败计数：`connection_failed`/`timeout`/`upstream_error` 三种错误计入连续失败，达到 `FailureThreshold`（默认 5）后该候选被排除一段冷却时间（默认 5s，翻倍退避到 2m 封顶），冷却结束后下一次请求本身就是一次探测，成功即整体复位。`ErrorBackpressure`/`ErrorRateLimited` 明确不计入——它们是"这一刻满了"，不是"坏了"。没有做教科书式的三态 half-open + 单飞探测：Gateway 本来就是零排队、失败立即换节点的模型，冷却期内多个请求同时探测同一个候选，最坏情况也只是各自快速失败再换节点。
 
-`FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖。
+`FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖；`main.go` 把它们暴露为三个 CLI flag（`-breaker-failure-threshold`、`-breaker-base-cooldown`、`-breaker-max-cooldown`，均默认 `0`，表示沿用 `scheduler` 包内的内置默认值 5 / 5s / 2m），便于在不同候选参数之间对比而不用重新编译。
 
-P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此默认值保持不变。真实流量校准的记录要求、长稳 CSV/JSON 归档方法与测试覆盖范围见 [P10 验收手册](../../deploy/p10-acceptance.md)；2026-09-12 的短时实测见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)。
+P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此默认值保持不变。真实流量校准的记录要求、长稳 CSV/JSON 归档方法与测试覆盖范围见 [P10 验收手册](../../deploy/p10-acceptance.md)；2026-09-12 的短时实测见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)；2026-09-13 使用上述三个新 flag 对比候选参数的真实流量熔断校准见 [验收记录](../../docs/acceptance/p10-breaker-calibration-2026-09-13/README.md)。
 
 ## 指标
 

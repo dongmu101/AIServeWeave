@@ -88,6 +88,12 @@ func run() error {
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
 	redisAddr := flag.String("redis-addr", "",
 		"Redis host:port for fleet-wide rate limiting; empty enforces per-replica, which admits the configured allowance once per replica")
+	breakerFailureThreshold := flag.Int("breaker-failure-threshold", 0,
+		"consecutive breaker-qualifying failures (connection/timeout/upstream errors only) before a candidate node trips open; zero uses scheduler's built-in default (5), which is unvalidated against real traffic as of P10 — see docs/acceptance/p10-breaker-calibration-2026-09-13")
+	breakerBaseCooldown := flag.Duration("breaker-base-cooldown", 0,
+		"initial cooldown a tripped breaker stays open before its next probe attempt; zero uses scheduler's built-in default (5s)")
+	breakerMaxCooldown := flag.Duration("breaker-max-cooldown", 0,
+		"cap on cooldown growth after repeated trips (doubles per trip until this cap); zero uses scheduler's built-in default (2m)")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
 	routeStateFile := flag.String("route-state-file", "", "durable last-good route snapshot; required in controlplane mode")
 	routeSyncInterval := flag.Duration("route-sync-interval", 30*time.Second, "managed route polling interval")
@@ -261,7 +267,13 @@ func run() error {
 		return err
 	}
 
-	sched := scheduler.New(server, scheduler.Config{Metrics: registry, Logger: logger})
+	sched := scheduler.New(server, scheduler.Config{
+		Metrics:          registry,
+		Logger:           logger,
+		FailureThreshold: *breakerFailureThreshold,
+		BaseCooldown:     *breakerBaseCooldown,
+		MaxCooldown:      *breakerMaxCooldown,
+	})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {
 		return err

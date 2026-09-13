@@ -1,0 +1,120 @@
+=== start t=2026-09-13T11:08:47.3NZ ===
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 557
+=== t20_pre_outage t=2026-09-13T11:09:07.3NZ ===
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 583
+killing ollama at 2026-09-13T11:09:07.3NZ
+=== t35_outage t=2026-09-13T11:09:22.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 1
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 583
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== t50_outage t=2026-09-13T11:09:37.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 1
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 583
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== t65_outage t=2026-09-13T11:09:52.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 1
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 583
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+relaunching ollama at 2026-09-13T11:09:52.3NZ
+=== t80_recovery t=2026-09-13T11:10:07.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 1
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 583
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== t95_recovery t=2026-09-13T11:10:22.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 585
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== t110_recovery t=2026-09-13T11:10:37.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 607
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== t125_recovery t=2026-09-13T11:10:52.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 628
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== t140_recovery t=2026-09-13T11:11:07.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 649
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
+=== end t=2026-09-13T11:12:29.3NZ ===
+# HELP gateway_scheduler_breaker_open 1 while a candidate's circuit breaker excludes it from selection, 0 otherwise.
+# TYPE gateway_scheduler_breaker_open gauge
+gateway_scheduler_breaker_open{node_id="local-mac-agent-1",runtime_id="ollama"} 0
+# HELP gateway_scheduler_breaker_trips_total Circuit breaker trips, by candidate.
+# TYPE gateway_scheduler_breaker_trips_total counter
+gateway_scheduler_breaker_trips_total{node_id="local-mac-agent-1",runtime_id="ollama"} 6
+# HELP gateway_scheduler_dispatches_total Dispatch attempts, by candidate and result.
+# TYPE gateway_scheduler_dispatches_total counter
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="backpressure",runtime_id="ollama"} 4771
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="success",runtime_id="ollama"} 761
+gateway_scheduler_dispatches_total{node_id="local-mac-agent-1",result="upstream_error",runtime_id="ollama"} 8
