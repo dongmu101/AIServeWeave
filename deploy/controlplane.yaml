@@ -1,21 +1,7 @@
 # aiserveweave-controlplane configuration, for the Docker Compose stack.
 #
-# It differs from service/aiServeWeaveControlPlane/etc/controlplane.yaml in
-# three lines and nothing else: the listen host, the database DSN and the Redis
-# address all name container hostnames rather than loopback. Keeping the two
-# files separate is deliberate — one templated file serving both would have to
-# express "127.0.0.1 here, postgres there" in a syntax conf.UseEnv does not
-# have (it expands ${VAR} but not ${VAR:-default}), and the usual workaround
-# for that is to require an env var for something that has an obvious local
-# default.
-#
-# 这是 Docker Compose 那一套所用的 aiserveweave-controlplane 配置。
-#
-# 它与 service/aiServeWeaveControlPlane/etc/controlplane.yaml 的差别只有三行：监听
-# 主机、数据库 DSN、Redis 地址，都改成容器主机名而不是回环地址。两份文件分开是刻意的
-# ——一份模板同时服务两种场景，就得用一种 conf.UseEnv 并不具备的语法来表达「这里是
-# 127.0.0.1，那里是 postgres」（它展开 ${VAR}，不展开 ${VAR:-default}），而那件事
-# 常见的绕法，是给一个本来有显然本地默认值的东西也强加一个环境变量。
+# Container hostnames and MySQL Job persistence are configured here.
+# 此配置使用容器主机名，并选择支持 Job 持久化的 MySQL。
 #
 # 三个密钥从环境变量注入，本文件里没有任何一个的取值。
 # 用 `openssl rand -base64 32` 各生成一个独立的值再 export。
@@ -47,26 +33,10 @@ Log:
   Level: info
 
 Database:
-  # postgres 或 mysql。PostgreSQL 是首要目标（后续 JSON 列会用到 JSONB），
-  # MySQL 同样受支持——当前五张基础表只用标量列，两种引擎表达一致。
-  # postgres or mysql. PostgreSQL is the primary target (JSONB matters for the
-  # JSON columns still to come); MySQL is supported too — today's five base tables
-  # use only scalar columns, which both engines express identically.
-  Driver: postgres
-  # Plain ${VAR}, never ${VAR:-default}: conf.UseEnv does not implement the
-  # second form and expands the whole thing to an empty string. The defaults
-  # live one layer up, in the compose file's own environment block, where that
-  # syntax does work.
-  #
-  # 只用 ${VAR}，绝不用 ${VAR:-default}：conf.UseEnv 没有实现第二种形式，会把整个
-  # 表达式展开成空串。默认值放在上一层——compose 文件自己的 environment 块里，那种
-  # 语法在那里确实有效。
-  DSN: "postgres://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres:5432/${POSTGRES_DB}?sslmode=disable"
-  # MySQL 写法（注意 parseTime=True，否则每个时间列都会扫描失败）：
-  # The MySQL form (parseTime=True is required, or every time column fails to
-  # scan):
-  # Driver: mysql
-  # DSN: "aisw:aisw@tcp(127.0.0.1:3306)/aiserveweave?charset=utf8mb4&parseTime=True&loc=Local"
+  # MySQL 9.7 supports all namespaces, including jobs and job_artifacts.
+  # MySQL 9.7 支持所有迁移命名空间，包括 jobs 与 job_artifacts。
+  Driver: mysql
+  DSN: "${MYSQL_USER}:${MYSQL_PASSWORD}@tcp(mysql:3306)/${MYSQL_DATABASE}?charset=utf8mb4&parseTime=True&loc=UTC"
   MaxOpenConns: 20
   MaxIdleConns: 5
   ConnMaxLifetime: 30m
@@ -100,3 +70,31 @@ InternalToken: "${AISW_INTERNAL_TOKEN}"
 # Authorizes tenant creation. It stands in for the Console's eventual sign-up
 # flow.
 BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"
+
+# Registry 的 TokenAdmin 客户端：驱动平台运维的节点操作（批准/禁用/启用/维护）与
+# GET .../nodes/states。CACertFile 复用 registry-init 签发的同一份 CA——见本目录
+# README「证书链是怎么闭合的」——AdminToken 须与 registry 服务的 -admin-token-file
+# 内容一致。
+#
+# The Registry's TokenAdmin client: drives the platform operator's node
+# operations (approve/disable/enable/maintenance) and GET .../nodes/states.
+# CACertFile reuses the same CA registry-init issues — see this directory's
+# README's "证书链是怎么闭合的" — AdminToken must match the registry service's
+# -admin-token-file content.
+Registry:
+  Addr: "registry:9443"
+  CACertFile: "/registry-data/ca/ca-cert.pem"
+  AdminToken: "${AISW_REGISTRY_ADMIN_TOKEN}"
+
+# 机群聚合：向每个 Gateway 副本的 -admin-addr 只读清单发问，驱动平台运维的节点/模型/
+# 路由与工作流模板状态/job 页面。GatewayToken 须与 gateway 服务的 AISW_GATEWAY_ADMIN_TOKEN
+# 一致。这套编排只有一个 Gateway 副本，见本目录 README「已知限制」。
+#
+# Fleet aggregation: asks each Gateway replica's read-only -admin-addr
+# inventory, driving the platform operator's node/model/routing and
+# workflow-template status/job pages. GatewayToken must match the gateway
+# service's AISW_GATEWAY_ADMIN_TOKEN. This compose stack runs a single
+# Gateway replica — see this directory's README's "已知限制".
+Fleet:
+  Gateways: ["http://gateway:8091"]
+  GatewayToken: "${AISW_GATEWAY_ADMIN_TOKEN}"

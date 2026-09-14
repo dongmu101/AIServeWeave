@@ -36,6 +36,7 @@
 
 services:
   postgres:
+    profiles: ["postgres"]
     image: postgres:18-alpine
     restart: unless-stopped
     environment:
@@ -62,10 +63,8 @@ services:
   mysql:
     image: mysql:9.7
     restart: unless-stopped
-    # 默认不启动，避免同时占着两个数据库；需要时加 --profile mysql。
-    # Not started by default, so two databases are not held open at once; add
-    # --profile mysql when you need it.
-    profiles: ["mysql"]
+    # MySQL is the default database because Job persistence requires it.
+    # MySQL 是默认数据库，因为 Job 持久化依赖它。
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
@@ -136,10 +135,36 @@ services:
       args:
         SERVICE: aiServeWeaveRegistry
     restart: unless-stopped
+    environment:
+      # TokenAdmin 的共享密钥，由下面的入口脚本写进 -admin-token-file；须与
+      # controlplane.yaml 里 Registry.AdminToken 的值一致。
+      #
+      # TokenAdmin's shared secret, written to the -admin-token-file below by
+      # the entrypoint script; must match controlplane.yaml's
+      # Registry.AdminToken.
+      AISW_REGISTRY_ADMIN_TOKEN: ${AISW_REGISTRY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+    # -admin-token-file only takes a file path, not an inline value
+    # (loadAdminToken in the Registry's main.go reads it from disk), so this
+    # entrypoint writes the env var to the data volume once before exec'ing
+    # the actual binary — the same reasoning as bootstrap's shell wrapper
+    # below, applied to ENTRYPOINT instead of command.
+    #
+    # -admin-token-file 只接受文件路径而非内联值（Registry main.go 里的
+    # loadAdminToken 从磁盘读取），所以这个入口先把环境变量写进数据卷一次，再
+    # exec 真正的二进制——与下面 bootstrap 的 shell 包装同一个理由，只是用在了
+    # ENTRYPOINT 而不是 command 上。
+    entrypoint: ["/bin/sh", "-c"]
     command:
-      - -addr=:9443
-      - -data-dir=/data
-      - -tls-host=registry,127.0.0.1,localhost
+      - |
+        set -eu
+        echo "$$AISW_REGISTRY_ADMIN_TOKEN" > /data/admin-token
+        exec /usr/local/bin/service \
+          -addr=:9443 \
+          -data-dir=/data \
+          -tls-host=registry,127.0.0.1,localhost \
+          -admin-token-file=/data/admin-token \
+          -metrics-addr=:9091 \
+          -log-level=${LOG_LEVEL:-info}
       # 容器内绑 0.0.0.0，只映射到宿主机回环——与 gateway 的 -metrics-addr 同一条
       # 理由：导出内容点名每一个曾经注册过的 node_id。绑 0.0.0.0 是为了让控制面
       # 容器能在 compose 内部网络上以 registry:9091 抓取它（P08 的
@@ -151,8 +176,6 @@ services:
       # control plane container can scrape it as registry:9091 on the
       # compose-internal network (P08's MetricsHistory collector), not to
       # open it beyond the host.
-      - -metrics-addr=:9091
-      - -log-level=${LOG_LEVEL:-info}
     volumes:
       - registry-data:/data
     ports:
@@ -172,44 +195,60 @@ services:
     restart: unless-stopped
     command: ["-f", "/etc/aiserveweave/controlplane.yaml"]
     environment:
-      # 这三个是密钥。compose 在这里提供默认值，配置文件里只有 ${VAR}
+      # 这五个是密钥。compose 在这里提供默认值，配置文件里只有 ${VAR}
       # ——conf.UseEnv 不支持带默认值的形式，见 controlplane.yaml 的注释。
       #
-      # These three are secrets. Compose supplies the defaults here and the
+      # These five are secrets. Compose supplies the defaults here and the
       # config file carries only ${VAR}: conf.UseEnv has no default-value form,
       # as controlplane.yaml notes.
       AISW_ACCESS_SECRET: ${AISW_ACCESS_SECRET:?set it in deploy/.env — openssl rand -base64 32}
       AISW_INTERNAL_TOKEN: ${AISW_INTERNAL_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_BOOTSTRAP_TOKEN: ${AISW_BOOTSTRAP_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
-      POSTGRES_USER: ${POSTGRES_USER:-aiserveweave}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-aiserveweave}
-      POSTGRES_DB: ${POSTGRES_DB:-aiserveweave}
+      AISW_REGISTRY_ADMIN_TOKEN: ${AISW_REGISTRY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_GATEWAY_ADMIN_TOKEN: ${AISW_GATEWAY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      MYSQL_USER: ${MYSQL_USER:-aiserveweave}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
     volumes:
       - ./controlplane.yaml:/etc/aiserveweave/controlplane.yaml:ro
+      # 只读，读的是 registry-init 签发的同一份 CA（见本目录 README「证书链是怎么
+      # 闭合的」），供 Registry.CACertFile 校验 Registry 的服务端证书。
+      #
+      # Read-only, the same CA registry-init issues (see this directory's
+      # README's "证书链是怎么闭合的"), for Registry.CACertFile to verify the
+      # Registry's server certificate.
+      - registry-data:/registry-data:ro
     ports:
       - "127.0.0.1:${CONTROLPLANE_PORT:-8090}:8090"
     depends_on:
-      postgres:
+      mysql:
         condition: service_healthy
       redis:
         condition: service_healthy
+      registry-init:
+        condition: service_completed_successfully
 
   # bootstrap runs once and exits: if AISW_DEFAULT_OWNER_EMAIL is set, it waits
   # for controlplane to accept connections and then creates that tenant and
   # owner, the same call the "第一个租户与第一个 key" section of the README
   # walks through by hand. Left unset, it prints one line and exits 0 — this
   # is opt-in, and a fresh clone with an unedited .env creates nothing.
+  # If AISW_DEFAULT_OPERATOR_EMAIL is also set, it then creates a platform
+  # operator the same way, using the same bootstrap token (createPlatformOperator
+  # accepts no other credential — see its doc comment in the control plane).
   #
-  # A second run (a restart, or `docker compose up` again) finds the account
-  # already exists (the control plane answers 409) and exits 0 without
-  # touching it — recreating this container is not a way to reset the
+  # A second run (a restart, or `docker compose up` again) finds the account(s)
+  # already exist (the control plane answers 409) and exits 0 without
+  # touching them — recreating this container is not a way to reset a
   # password, only `docker compose exec controlplane ...` or the Console
   # itself can do that.
   #
   # bootstrap 跑一次就退出：如果设置了 AISW_DEFAULT_OWNER_EMAIL，它会等 controlplane
   # 能接受连接后创建那个租户与 owner，与 README「第一个租户与第一个 key」一节手动走的是
   # 同一个调用。不设置则打一行日志、退出 0——这是可选的，一份没改过 .env 的全新 clone
-  # 不会自动创建任何东西。
+  # 不会自动创建任何东西。若同时设置了 AISW_DEFAULT_OPERATOR_EMAIL，接着会用同一个
+  # bootstrap token 创建一个平台运维账户（createPlatformOperator 不接受其他凭据，
+  # 见控制面里它的文档注释）。
   #
   # 再次运行（重启，或再来一次 `docker compose up`）会发现账号已存在（控制面答 409），
   # 什么也不碰就退出 0——重建这个容器不是重置密码的办法，只有 `docker compose exec
@@ -222,6 +261,9 @@ services:
       AISW_DEFAULT_TENANT_NAME: ${AISW_DEFAULT_TENANT_NAME:-Default}
       AISW_DEFAULT_OWNER_EMAIL: ${AISW_DEFAULT_OWNER_EMAIL:-}
       AISW_DEFAULT_OWNER_PASSWORD: ${AISW_DEFAULT_OWNER_PASSWORD:-}
+      AISW_DEFAULT_OPERATOR_EMAIL: ${AISW_DEFAULT_OPERATOR_EMAIL:-}
+      AISW_DEFAULT_OPERATOR_PASSWORD: ${AISW_DEFAULT_OPERATOR_PASSWORD:-}
+      AISW_DEFAULT_OPERATOR_NAME: ${AISW_DEFAULT_OPERATOR_NAME:-Admin}
     depends_on:
       controlplane:
         condition: service_started
@@ -235,8 +277,8 @@ services:
     command:
       - |
         set -eu
-        if [ -z "$$AISW_DEFAULT_OWNER_EMAIL" ]; then
-          echo "bootstrap: AISW_DEFAULT_OWNER_EMAIL is empty, skipping automatic tenant creation (see deploy/README.md for the manual curl)"
+        if [ -z "$$AISW_DEFAULT_OWNER_EMAIL" ] && [ -z "$$AISW_DEFAULT_OPERATOR_EMAIL" ]; then
+          echo "bootstrap: AISW_DEFAULT_OWNER_EMAIL and AISW_DEFAULT_OPERATOR_EMAIL are both empty, skipping automatic account creation (see deploy/README.md for the manual curl)"
           exit 0
         fi
         i=0
@@ -248,24 +290,46 @@ services:
           fi
           sleep 2
         done
-        body=$$(mktemp)
-        status=$$(curl -sS -o "$$body" -w '%{http_code}' -X POST http://controlplane:8090/admin/v1/tenants \
-          -H "Authorization: Bearer $$AISW_BOOTSTRAP_TOKEN" \
-          -H 'Content-Type: application/json' \
-          -d "{\"name\":\"$$AISW_DEFAULT_TENANT_NAME\",\"owner_email\":\"$$AISW_DEFAULT_OWNER_EMAIL\",\"owner_password\":\"$$AISW_DEFAULT_OWNER_PASSWORD\"}")
-        case "$$status" in
-          201)
-            echo "bootstrap: default tenant and owner created, log into Console with $$AISW_DEFAULT_OWNER_EMAIL"
-            ;;
-          409)
-            echo "bootstrap: that email already has a tenant, nothing to do"
-            ;;
-          *)
-            echo "bootstrap: tenant creation failed with HTTP $$status"
-            cat "$$body"
-            exit 1
-            ;;
-        esac
+        if [ -n "$$AISW_DEFAULT_OWNER_EMAIL" ]; then
+          body=$$(mktemp)
+          status=$$(curl -sS -o "$$body" -w '%{http_code}' -X POST http://controlplane:8090/admin/v1/tenants \
+            -H "Authorization: Bearer $$AISW_BOOTSTRAP_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "{\"name\":\"$$AISW_DEFAULT_TENANT_NAME\",\"owner_email\":\"$$AISW_DEFAULT_OWNER_EMAIL\",\"owner_password\":\"$$AISW_DEFAULT_OWNER_PASSWORD\"}")
+          case "$$status" in
+            201)
+              echo "bootstrap: default tenant and owner created, log into Console with $$AISW_DEFAULT_OWNER_EMAIL"
+              ;;
+            409)
+              echo "bootstrap: that email already has a tenant, nothing to do"
+              ;;
+            *)
+              echo "bootstrap: tenant creation failed with HTTP $$status"
+              cat "$$body"
+              exit 1
+              ;;
+          esac
+        fi
+        if [ -n "$$AISW_DEFAULT_OPERATOR_EMAIL" ]; then
+          body=$$(mktemp)
+          status=$$(curl -sS -o "$$body" -w '%{http_code}' -X POST http://controlplane:8090/admin/v1/platform/operators \
+            -H "Authorization: Bearer $$AISW_BOOTSTRAP_TOKEN" \
+            -H 'Content-Type: application/json' \
+            -d "{\"email\":\"$$AISW_DEFAULT_OPERATOR_EMAIL\",\"password\":\"$$AISW_DEFAULT_OPERATOR_PASSWORD\",\"name\":\"$$AISW_DEFAULT_OPERATOR_NAME\"}")
+          case "$$status" in
+            201)
+              echo "bootstrap: default platform operator created, log into Console with $$AISW_DEFAULT_OPERATOR_EMAIL"
+              ;;
+            409)
+              echo "bootstrap: that email already has a platform operator, nothing to do"
+              ;;
+            *)
+              echo "bootstrap: platform operator creation failed with HTTP $$status"
+              cat "$$body"
+              exit 1
+              ;;
+          esac
+        fi
 
   console:
     build:
@@ -328,12 +392,22 @@ services:
       # README states for the loopback default: the export names every
       # connected node_id, which is not a list to hand out.
       - -metrics-addr=:9090
+      # 只读的运维清单，供控制面的 Fleet 聚合器调用；不发布到宿主机端口——只有
+      # compose 内部网络上的 controlplane 需要够到它，见 Gateway README「运维只读
+      # 端点」。
+      #
+      # The read-only operator inventory the control plane's Fleet aggregator
+      # calls; not published to a host port — only controlplane on the
+      # compose-internal network needs to reach it, see the Gateway README's
+      # "运维只读端点".
+      - -admin-addr=:8091
       - -log-level=${LOG_LEVEL:-info}
     environment:
-      # flag 在 ps 输出里可见，因此内部令牌走环境变量。
-      # A flag is visible in ps output, so the internal token goes through the
+      # flag 在 ps 输出里可见，因此这两个令牌都走环境变量。
+      # A flag is visible in ps output, so both tokens go through the
       # environment.
       AISW_CONTROL_PLANE_TOKEN: ${AISW_INTERNAL_TOKEN:?set it in deploy/.env}
+      AISW_GATEWAY_ADMIN_TOKEN: ${AISW_GATEWAY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
     volumes:
       # 只读挂载：Gateway 出示这些材料，从不写它们。私钥是 0600，而两个镜像用的是
       # 同一个 uid，因此读得到。
