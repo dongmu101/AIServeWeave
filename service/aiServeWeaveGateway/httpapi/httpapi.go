@@ -298,6 +298,32 @@ type Config struct {
 	// ImagesGenerationTimeout 限定 imagesGenerations 整个同步的「提交到终态」
 	// 循环。为零时采用 DefaultImagesGenerationTimeout。
 	ImagesGenerationTimeout time.Duration
+
+	// ResponsesClient persists and continues Responses API turns opted into
+	// store:true or previous_response_id (STATUS.md's P2 "Responses 持久
+	// 会话"). Nil keeps both fields refused exactly as before this feature
+	// existed — a deployment with no control plane configured for it gets
+	// no conversation persistence, the same nil-degrades pattern
+	// JobPersistClient already follows.
+	//
+	// ResponsesClient 持久化并续接选择了 store:true 或 previous_response_id
+	// 的 Responses API 轮次（STATUS.md 的 P2「Responses 持久会话」）。为 nil
+	// 时两个字段的行为与本功能存在之前完全一样，均被拒绝——未为此配置控制面
+	// 的部署得不到会话持久化，与 JobPersistClient 已经遵循的同一种「为 nil
+	// 时退化」模式。
+	ResponsesClient ResponsesPersistClient
+	// ResponsePersistConcurrency bounds concurrent CreateResponseTurn calls.
+	// Zero uses DefaultResponsePersistConcurrency.
+	//
+	// ResponsePersistConcurrency 限制并发的 CreateResponseTurn 调用数。为零
+	// 时采用 DefaultResponsePersistConcurrency。
+	ResponsePersistConcurrency int
+	// ResponsePersistCallTimeout bounds one CreateResponseTurn or
+	// GetResponseTurn call. Zero uses DefaultResponsePersistCallTimeout.
+	//
+	// ResponsePersistCallTimeout 限制单次 CreateResponseTurn 或
+	// GetResponseTurn 调用。为零时采用 DefaultResponsePersistCallTimeout。
+	ResponsePersistCallTimeout time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
@@ -398,6 +424,23 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		})
 		go pusher.run()
 		h.requestLogs = pusher
+	}
+
+	// The response-turn persister follows the same nil-degrades pattern: no
+	// control plane configured to persist to means store and
+	// previous_response_id stay refused, exactly as they were before this
+	// feature existed.
+	//
+	// 轮次持久化器遵循同一种「为 nil 时退化」模式：未配置可供持久化的控制面，
+	// 意味着 store 与 previous_response_id 保持被拒绝，与本功能存在之前完全
+	// 一样。
+	responsePersistCallTimeout := cfg.ResponsePersistCallTimeout
+	if responsePersistCallTimeout <= 0 {
+		responsePersistCallTimeout = DefaultResponsePersistCallTimeout
+	}
+	h.responsePersistCallTimeout = responsePersistCallTimeout
+	if cfg.ResponsesClient != nil {
+		h.responsePersist = newResponsePersister(cfg.ResponsesClient, cfg.ResponsePersistConcurrency, responsePersistCallTimeout, logger, h.metrics)
 	}
 
 	// The recoverer follows the same nil-degrades pattern: no control plane
@@ -635,6 +678,26 @@ type handlers struct {
 	// 与已经补过默认值的 Config.ImagesGenerationTimeout——见 images.go。
 	imagesWorkflowID        string
 	imagesGenerationTimeout time.Duration
+
+	// responsePersist is nil when no Config.ResponsesClient is configured, in
+	// which case store and previous_response_id stay refused exactly as
+	// before this feature existed — see responsespersist.go's nil-receiver
+	// convention.
+	//
+	// responsePersist 在未配置 Config.ResponsesClient 时为 nil，此时 store 与
+	// previous_response_id 的行为与本功能存在之前完全一样，均被拒绝——见
+	// responsespersist.go 的「对 nil 接收者安全」约定。
+	responsePersist *responsePersister
+	// responsePersistCallTimeout bounds the synchronous GetResponseTurn call
+	// loadResponsePrefix makes on a caller's own request path — the timeout
+	// responsePersister.callTimeout applies to the asynchronous write side,
+	// reused here for the read side so one Config field governs both.
+	//
+	// responsePersistCallTimeout 限制 loadResponsePrefix 在调用方自己的请求
+	// 路径上发起的那次同步 GetResponseTurn 调用——与
+	// responsePersister.callTimeout 施加于异步写入一侧的是同一个超时，这里
+	// 复用它，好让一个 Config 字段同时管住两侧。
+	responsePersistCallTimeout time.Duration
 }
 
 // observe wraps the whole handler chain in the request counter, the duration

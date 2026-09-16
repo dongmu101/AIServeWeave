@@ -589,3 +589,31 @@ API 全部挂 `requirePlatformSession`，写操作复用 `audit_logs`（`TenantI
 
 - 规则 CRUD（5 个端点）：`POST`/`GET`/`GET /:id`/`PATCH`/`DELETE` `/operator/v1/alert-rules`。
 - 实例（2 个端点）：`GET /operator/v1/alerts`（列表，支持按 `status`、时间窗口分页，复用既有 `store.ListQuery`/`Page[T]`）、`POST /operator/v1/alerts/:id/acknowledge`（`firing` → `acknowledged`；对已 `resolved` 的实例返回冲突错误，不允许状态倒退）。
+
+## Responses 持久会话（P2）
+
+Gateway 的 `POST /v1/responses` 默认无状态：`store`/`previous_response_id` 均被拒绝。本项让这两个字段在配置了本控制面时生效，沿用 Job 持久化（J01–J08）已经确立的形状——控制面表 + 内部 CRUD API + Gateway 客户端——而不是重新设计一套模式，详见设计文档 [`docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md`](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md) 第三节。
+
+```sql
+response_turns(
+  id                     VARCHAR(64) PRIMARY KEY,  -- Gateway 铸造的 response id
+  tenant_id              VARCHAR(32) NOT NULL,
+  previous_response_id   VARCHAR(64) NOT NULL DEFAULT '',  -- 空表示根轮次
+  model                  VARCHAR(128) NOT NULL DEFAULT '',
+  messages               TEXT NOT NULL,  -- 不透明 JSON，本服务从不解析
+  created_at             TIMESTAMP NOT NULL          -- 与 tenant_id 组成 idx_response_turns_tenant
+);
+```
+
+与 `jobs`/`job_artifacts`（仅 MySQL）不同，`response_turns` 走与 `request_logs`/`alert_rules` 相同的 PostgreSQL/MySQL 双支持固定版本迁移（`gormstore/responseturnmigrate.go`，命名空间 `response_turns`）——本功能不是 Job 那条主线的一部分，没有理由继承它「仅 MySQL」的既有决定。
+
+**一轮只存自己的贡献，不存累积历史**：`messages` 是这一轮自己的输入（system 指示、用户输入）加上 assistant 的回复，不是从根轮次到这一轮的完整对话。续接一段对话时，Gateway 沿 `previous_response_id` 逐跳调用 `GetResponseTurn` 走到根，再按时间顺序拼接每一跳的 `messages`——这份链式遍历逻辑完全在 Gateway 一侧（`httpapi/responsespersist.go` 的 `loadResponsePrefix`），本服务只负责单跳的存取。这个决定的直接后果是：写入的数据量与对话轮数成正比而非平方，但读取一段长对话需要多次往返而非一次；`loadResponsePrefix` 把这个往返数量有界（默认 50 跳），超出时拒绝而不是默默截断历史。
+
+内部 API（`InternalToken` 守卫，与 Job 端点共用同一把密钥，理由同 Job：这是 Gateway 就自己调用方的业务在与本服务对话，不是租户会话）：
+
+- `POST /internal/v1/responses`：`CreateResponseTurn`，同一租户下重复的 `response_id` 是幂等成功（返回已有行），不是冲突——与 `CreateJob` 相同的「提交结果未知」窗口处理方式。
+- `GET /internal/v1/responses/:id?tenant_id=...`：`GetResponseTurn`，`tenant_id` 是查询参数而非从会话推断——这里没有会话，只有 Gateway 自己的断言，与 `GET /internal/v1/jobs/:id` 相同。
+
+Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，与 `JobsClient` 同构：`ErrNotFound`/`ErrConflict`/`ErrInvalidRequest`/`ErrOutcomeUnknown` 同一套词汇）+ `ResponsesPersister` 适配器满足 `httpapi` 自己声明的窄接口 `ResponsesPersistClient`（打破导入环，与 `GatewayPersister` 之于 Jobs 同理）。`store:true` 的写入侧是有界异步（信号量限流的 fire-and-forget，默认并发 8，绝不阻塞调用方正在等待的响应，掉线时计入 `gateway_response_persist_dropped_total`/`gateway_response_persist_failed_total`）；`previous_response_id` 的读取侧是同步的——调用方点名了一段具体对话，必须在这次请求内得到确切答案（未知 id 答 400，控制面不可达答 503），而不能因为一次后台写入还在路上就悄悄给出一段更短的历史。详见 [Gateway README「Responses 持久会话」](../aiServeWeaveGateway/README.md#responses-持久会话p2)。
+
+未配置本控制面（`-control-plane-addr` 为空）时，`store`/`previous_response_id` 的行为与本功能存在之前完全一样：均被拒绝。已知缺口：无自动保留期清理（`response_turns` 会话内容可能包含长期 Prompt，目前无过期回收，与 `request_logs`/产物保留期清理不同）；未接入真实 PostgreSQL/MySQL 的 live 测试验证双数据库迁移（默认测试套件与 `memstore` 等价单元测试已通过即视为完成，与 P09 新增表同一先例）。

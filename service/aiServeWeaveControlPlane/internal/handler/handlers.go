@@ -1778,6 +1778,110 @@ func renderJobArtifact(a model.JobArtifact) types.JobArtifactResponse {
 	}
 }
 
+// -----------------------------------------------------------------------
+// Response turns (STATUS.md's P2 "Responses 持久会话")
+// -----------------------------------------------------------------------
+
+// maxResponseTurnBodyBytes bounds POST /internal/v1/responses. It is larger
+// than the package's shared maxBodyBytes for the same reason
+// MaxRequestLogsBodyBytes is: a stored turn's Messages is a rendered
+// conversation, not a small metadata record, and the 64 KiB shared limit
+// that is generous for a Job row would be tight for a real multi-turn
+// exchange. 1 MiB matches the size this repository already accepts for one
+// route-publish body (STATUS.md's P02); a conversation this Gateway itself
+// sends to a model already fits comfortably under that.
+//
+// maxResponseTurnBodyBytes 限定 POST /internal/v1/responses 的请求体大小。
+// 它比本包共用的 maxBodyBytes 更大，理由与 MaxRequestLogsBodyBytes 相同：
+// 一轮持久化的 Messages 是渲染出的对话内容，不是一条小的元数据记录，对
+// Job 这样的一行而言宽裕的 64 KiB 上限，对一次真实的多轮对话而言会显得
+// 局促。1 MiB 与本仓库已经为单次路由发布请求体接受的大小一致（STATUS.md 的
+// P02）；一次本 Gateway 自己会发给模型的对话，早已舒适地落在这个上限之内。
+const maxResponseTurnBodyBytes = 1 << 20
+
+func decodeResponseTurn(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxResponseTurnBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "response turn exceeds size limit")
+		} else {
+			writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
+		}
+		return false
+	}
+	return true
+}
+
+// createResponseTurn handles POST /internal/v1/responses: a Gateway replica
+// reports one Responses API turn a caller asked to persist. Like createJob,
+// this call must never sit on the Responses request's own critical path —
+// see httpapi's async persister for the discipline that keeps it off it.
+//
+// createResponseTurn 处理 POST /internal/v1/responses：一个 Gateway 副本
+// 报告调用方要求持久化的一轮 Responses API。与 createJob 一样，这次调用
+// 绝不能出现在 Responses 请求自己的关键路径上——让它保持在路径之外的纪律，
+// 见 httpapi 的异步持久化器。
+func createResponseTurn(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateResponseTurnRequest
+		if !decodeResponseTurn(w, r, &req) {
+			return
+		}
+		turn, err := ctx.Logic.CreateResponseTurn(r.Context(), logic.CreateResponseTurnParams{
+			ResponseID:         req.ResponseID,
+			TenantID:           req.TenantID,
+			PreviousResponseID: req.PreviousResponseID,
+			Model:              req.Model,
+			Messages:           string(req.Messages),
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderResponseTurn(turn))
+	}
+}
+
+// getResponseTurn handles GET /internal/v1/responses/:id. tenant_id is a
+// query parameter for the same reason it is on getJob: there is no session
+// here to read it from, only the Gateway's own assertion.
+//
+// getResponseTurn 处理 GET /internal/v1/responses/:id。tenant_id 是查询
+// 参数，理由与 getJob 相同：这里没有会话可供读取，只有 Gateway 自己的断言。
+func getResponseTurn(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		responseID := pathvar.Vars(r)["id"]
+		tenantID := r.URL.Query().Get("tenant_id")
+		if responseID == "" || tenantID == "" {
+			writeError(w, http.StatusBadRequest, "a response id and tenant_id are required")
+			return
+		}
+		turn, err := ctx.Logic.GetResponseTurn(r.Context(), tenantID, responseID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderResponseTurn(turn))
+	}
+}
+
+// renderResponseTurn converts a stored turn to its internal wire form.
+//
+// renderResponseTurn 把存储的一轮转换成内部线上形式。
+func renderResponseTurn(turn model.ResponseTurn) types.ResponseTurnResponse {
+	return types.ResponseTurnResponse{
+		ResponseID:         turn.ID,
+		TenantID:           turn.TenantID,
+		PreviousResponseID: turn.PreviousResponseID,
+		Model:              turn.Model,
+		Messages:           json.RawMessage(turn.Messages),
+		CreatedAt:          turn.CreatedAt,
+	}
+}
+
 // setTenantLimits handles PUT /admin/v1/tenants/limits: the caller's own
 // tenant's quota. It is PUT rather than PATCH because the body is the whole
 // set — a partial update would need a way to say "leave this one alone" that

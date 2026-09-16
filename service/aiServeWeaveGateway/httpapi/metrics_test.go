@@ -29,6 +29,8 @@ var httpapiMetrics = []string{
 	MetricArtifactTransferBytesTotal,
 	MetricArtifactTransferDurationSeconds,
 	MetricArtifactTransfersTotal,
+	MetricResponsePersistDroppedTotal,
+	MetricResponsePersistFailedTotal,
 }
 
 func TestHTTPAPIDescriptionsCoverEveryMetric(t *testing.T) {

@@ -248,6 +248,24 @@ func run() error {
 		return err
 	}
 
+	// The response-turn persistence client shares the same -control-plane-addr
+	// and token as everything else above — this replica persisting and
+	// continuing Responses API conversations against the control plane it
+	// already talks to (STATUS.md's P2 "Responses 持久会话"). A deployment
+	// with no control plane configured gets store and previous_response_id
+	// refused exactly as they were before this feature existed, the same
+	// degrade jobPersistenceAdapter already returns nil for.
+	//
+	// 轮次持久化客户端与上面的一切共用同一个 -control-plane-addr 与 token——
+	// 本副本对着它本已在对话的那个控制面持久化并续接 Responses API 对话
+	// （STATUS.md 的 P2「Responses 持久会话」）。未配置控制面的部署得到的
+	// store 与 previous_response_id 行为，与本功能存在之前完全一样，均被
+	// 拒绝——与 jobPersistenceAdapter 已经为此返回 nil 的退化相同。
+	responsesPersist, err := responsesPersistAdapter(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
 	// Templates are loaded (file mode) or pulled from a validated cache
 	// (controlplane mode, P03) before anything starts serving: a manifest
 	// that binds an input to a node it does not have is an operator mistake,
@@ -359,6 +377,19 @@ func run() error {
 	// requestLogClientAdapter 的文档注释。
 	if requestLogClient != nil {
 		httpCfg.RequestLogClient = requestLogClient
+	}
+	// Same guard, same reason: responsesPersist is a concrete
+	// *controlplaneclient.ResponsesPersister, and httpCfg.ResponsesClient is
+	// an interface field, so a bare assignment of a nil pointer would box a
+	// non-nil interface holding nil — see responsesPersistAdapter's doc
+	// comment.
+	//
+	// 同样的防护，同样的理由：responsesPersist 是一个具体的
+	// *controlplaneclient.ResponsesPersister，而 httpCfg.ResponsesClient 是
+	// 接口字段，裸赋值一个 nil 指针会装箱出一个「非 nil 接口持有 nil」——见
+	// responsesPersistAdapter 的文档注释。
+	if responsesPersist != nil {
+		httpCfg.ResponsesClient = responsesPersist
 	}
 	front := httpapi.New(sched, httpCfg)
 
@@ -686,6 +717,37 @@ func requestLogClientAdapter(addr, token string, logger *slog.Logger) (*controlp
 	}
 	logger.Info("pushing request logs to the control plane", slog.String("control_plane_addr", addr))
 	return client, nil
+}
+
+// responsesPersistAdapter builds the Gateway's side of the control plane's
+// Response-turn persistence API (STATUS.md's P2 "Responses 持久会话"), or
+// returns nil when no control plane is configured — mirroring
+// jobPersistenceAdapter's own degrade path and its "return the concrete
+// type" reasoning: see that function's doc comment for why a nil
+// *controlplaneclient.ResponsesPersister must never be assigned directly
+// into an httpapi.Config interface field.
+//
+// responsesPersistAdapter 构建 Gateway 一侧的控制面 Response 轮次持久化 API
+// 客户端（STATUS.md 的 P2「Responses 持久会话」），或在未配置控制面时返回
+// nil——与 jobPersistenceAdapter 自己的退化路径及其"返回具体类型"的理由
+// 相同：为什么一个 nil 的 *controlplaneclient.ResponsesPersister 绝不能被
+// 直接赋给 httpapi.Config 的接口字段，见该函数的文档注释。
+func responsesPersistAdapter(addr, token string, logger *slog.Logger) (*controlplaneclient.ResponsesPersister, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewResponsesClient(controlplaneclient.ResponsesClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("persisting Responses API conversation history against the control plane", slog.String("control_plane_addr", addr))
+	return controlplaneclient.NewResponsesPersister(client), nil
 }
 
 // splitCommaList parses a comma-separated flag value, trimming whitespace

@@ -28,40 +28,123 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 	}
 	if field := req.unsupported(); field != "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_parameter",
-			field+" is not supported by this gateway: responses are not stored and each request is scheduled independently")
+			field+" is not supported by this gateway")
 		return
 	}
+
+	// store and previous_response_id need a persisted-conversation tenant to
+	// scope by, which only exists when both a control plane is configured
+	// (h.responsePersist non-nil) and the caller authenticated to a real
+	// tenant — an unauthenticated or statically-keyed deployment has no
+	// tenant boundary to store a conversation behind. Refusing here, by
+	// name, keeps the same "tell the caller, do not silently drop"
+	// discipline unsupported() already applies to background.
+	//
+	// store 与 previous_response_id 需要一个可供限定范围的、已持久化对话的
+	// 租户——这只在同时满足以下两点时存在：配置了控制面（h.responsePersist
+	// 非 nil），且调用方认证到了一个真实租户——一个未鉴权或使用静态 key 的
+	// 部署没有可供存放会话的租户边界。在这里指名拒绝，延续的是 unsupported()
+	// 已经对 background 采用的「告知调用方，而非默默丢弃」纪律。
+	var tenantID string
+	wantsPersistence := req.PreviousResponseID != "" || (req.Store != nil && *req.Store)
+	if wantsPersistence {
+		identity, ok := IdentityFrom(r.Context())
+		if h.responsePersist == nil || !ok || identity.TenantID == "" {
+			field := "store"
+			if req.PreviousResponseID != "" {
+				field = "previous_response_id"
+			}
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_parameter",
+				field+" is not supported by this gateway: no control plane is configured to store conversation history")
+			return
+		}
+		tenantID = identity.TenantID
+	}
+
 	canonical, err := req.toRuntime()
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
+	// ownMessages is what this one turn contributes — captured before a
+	// previous_response_id's prefix is prepended below, so persisting it
+	// later stores only this turn's own share of the conversation, not the
+	// whole accumulated history a second time. See model.ResponseTurn's doc
+	// comment on the control plane side.
+	//
+	// ownMessages 是这一轮自己贡献的内容——在下面依据 previous_response_id
+	// 拼接前缀之前捕获，这样此后持久化时只存这一轮自己的那一份，而不是把
+	// 累积的完整历史再存一遍。见控制面一侧 model.ResponseTurn 的文档注释。
+	ownMessages := canonical.Messages
 
+	if req.PreviousResponseID != "" {
+		prefix, err := h.loadResponsePrefix(r.Context(), tenantID, req.PreviousResponseID)
+		if err != nil {
+			if errors.Is(err, ErrResponseTurnNotFound) {
+				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "unknown previous_response_id")
+			} else {
+				h.logger.Error("failed to load a response's previous turns", slog.Any("error", err))
+				writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "server_error", "could not load the referenced conversation")
+			}
+			return
+		}
+		canonical.Messages = append(prefix, canonical.Messages...)
+	}
+
+	responseID := newResponseID()
 	if req.Stream {
-		h.responsesStream(w, r, req, canonical, start)
+		h.responsesStream(w, r, req, canonical, start, responseID, tenantID, ownMessages)
 		return
 	}
-	h.responsesOnce(w, r, req, canonical, start)
+	h.responsesOnce(w, r, req, canonical, start, responseID, tenantID, ownMessages)
 }
 
 // responsesOnce serves a non-streaming response.
 //
 // responsesOnce 服务一次非流式响应。
-func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, start time.Time) {
+func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
 	resp, _, err := h.sched.Chat(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
 	}
 
-	body := req.render(newResponseID(), resp.Model, h.clock.Now())
+	body := req.render(responseID, resp.Model, h.clock.Now())
 	body.Status, body.IncompleteDetails = statusFor(resp.FinishReason)
 	body.Output = outputItemsFor(resp.Message)
 	body.Usage = usageFor(resp.Usage)
 
+	if req.Store != nil && *req.Store {
+		h.persistResponseTurn(responseID, tenantID, req.PreviousResponseID, body.Model, ownMessages, resp.Message)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
 	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
+}
+
+// persistResponseTurn asynchronously persists one turn's contribution —
+// ownMessages plus the assistant's reply — under responseID. It is a thin
+// wrapper around h.responsePersist.persist that does the one bit of
+// assembly both responsesOnce and responsesStream need: appending the
+// assistant's message onto this turn's own input before handing the whole
+// thing to the persister as opaque JSON.
+//
+// persistResponseTurn 异步持久化一轮的贡献——ownMessages 加上 assistant 的
+// 回复——归入 responseID 之下。它是对 h.responsePersist.persist 的一层薄
+// 包装，只做 responsesOnce 与 responsesStream 都需要的那一点组装：把
+// assistant 消息追加到这一轮自己的输入之后，再把整体作为不透明 JSON 交给
+// 持久化器。
+func (h *handlers) persistResponseTurn(responseID, tenantID, previousResponseID, model string, ownMessages []runtime.ChatMessage, assistant runtime.ChatMessage) {
+	turn := make([]runtime.ChatMessage, 0, len(ownMessages)+1)
+	turn = append(turn, ownMessages...)
+	turn = append(turn, assistant)
+	encoded, err := json.Marshal(turn)
+	if err != nil {
+		h.logger.Error("failed to encode a response turn for persistence", slog.Any("error", err))
+		return
+	}
+	h.responsePersist.persist(responseID, tenantID, previousResponseID, model, encoded)
 }
 
 // render builds the response envelope, echoing back the request parameters a
@@ -177,7 +260,7 @@ func outputItemsFor(msg runtime.ChatMessage) []responseOutputRaw {
 // 把文本包在一层嵌套的生命周期里——先 response、再 item、再 content part——而客户端的
 // 状态机正是建立在这些边界上的。因此即便下面的后端始终只递上来一串扁平的 delta，事件
 // 也要按那个顺序发出。
-func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, start time.Time) {
+func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
 	stream, candidate, err := h.sched.ChatStream(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
@@ -195,7 +278,7 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 	w.WriteHeader(http.StatusOK)
 
 	em := &responsesEmitter{w: w, flusher: flusher}
-	obj := req.render(newResponseID(), req.Model, h.clock.Now())
+	obj := req.render(responseID, req.Model, h.clock.Now())
 	obj.Status = "in_progress"
 	em.event("response.created", map[string]any{"response": obj})
 	em.event("response.in_progress", map[string]any{"response": obj})
@@ -283,6 +366,17 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 	obj.Usage = usageFor(usage)
 	em.event("response.completed", map[string]any{"response": obj})
 	h.recordUsage(r.Context(), usage, time.Since(start))
+
+	// opened guards this the same way it guards obj.Output above: a stream
+	// that never produced a content delta has nothing worth persisting as
+	// this turn's assistant reply.
+	//
+	// opened 在这里的作用与它在上面守护 obj.Output 时相同：一次从未产出过
+	// 内容 delta 的流，没有什么值得作为这一轮 assistant 回复持久化的东西。
+	if opened && req.Store != nil && *req.Store {
+		h.persistResponseTurn(responseID, tenantID, req.PreviousResponseID, obj.Model,
+			ownMessages, runtime.ChatMessage{Role: "assistant", Content: text.String()})
+	}
 }
 
 // responsesEmitter writes SSE frames, numbering them as it goes. The sequence

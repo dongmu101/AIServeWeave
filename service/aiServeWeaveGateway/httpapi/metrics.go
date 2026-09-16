@@ -176,6 +176,26 @@ const (
 	//
 	// MetricArtifactTransfersTotal 按结果统计产物字节搬运次数。
 	MetricArtifactTransfersTotal = "gateway_artifact_transfers_total"
+	// MetricResponsePersistDroppedTotal counts Responses API turns opted into
+	// store:true that were dropped because the bounded async persister's
+	// concurrency limit was already full (STATUS.md's P2 "Responses 持久
+	// 会话"). A non-zero slope means a caller's stored conversation is
+	// silently missing a turn, not that serving that turn's response failed.
+	//
+	// MetricResponsePersistDroppedTotal 统计因有界异步持久化器的并发上限已满
+	// 而被丢弃的、选择了 store:true 的 Responses API 轮次（STATUS.md 的 P2
+	// 「Responses 持久会话」）。斜率非零意味着调用方存储的对话正在悄悄缺失
+	// 一轮，而不是服务这一轮的响应本身出了问题。
+	MetricResponsePersistDroppedTotal = "gateway_response_persist_dropped_total"
+	// MetricResponsePersistFailedTotal counts turns that reached the control
+	// plane's create-turn call but failed — a network error or a non-2xx
+	// status — as distinct from MetricResponsePersistDroppedTotal's
+	// concurrency-full case.
+	//
+	// MetricResponsePersistFailedTotal 统计已经发起了控制面创建调用、却失败
+	// 的轮次——网络错误或非 2xx 状态——与 MetricResponsePersistDroppedTotal 的
+	// 并发已满情形不同。
+	MetricResponsePersistFailedTotal = "gateway_response_persist_failed_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model
@@ -353,6 +373,14 @@ func Descriptions() metrics.Descriptions {
 			Kind: metrics.KindCounter,
 			Help: "Artifact node-to-storage byte copies, by outcome.",
 		},
+		MetricResponsePersistDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Responses API turns opted into store:true, dropped because the async persister's concurrency limit was full.",
+		},
+		MetricResponsePersistFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Responses API turns whose control plane persist call reached the network but failed.",
+		},
 	}
 }
 
@@ -529,6 +557,23 @@ func (r *recorder) RequestLogDropped() {
 // 网络错误，或控制面返回了非 200 状态码。
 func (r *recorder) RequestLogPushFailed() {
 	r.sink.Counter(MetricRequestLogPushFailedTotal, nil).Add(1)
+}
+
+// ResponsePersistDropped records one Responses API turn dropped because the
+// async persister's concurrency limit was full.
+//
+// ResponsePersistDropped 记录一轮因异步持久化器并发上限已满而被丢弃的
+// Responses API 轮次。
+func (r *recorder) ResponsePersistDropped() {
+	r.sink.Counter(MetricResponsePersistDroppedTotal, nil).Add(1)
+}
+
+// ResponsePersistFailed records one turn whose control plane persist call
+// reached the network but failed.
+//
+// ResponsePersistFailed 记录一轮已发起控制面持久化调用、却失败的轮次。
+func (r *recorder) ResponsePersistFailed() {
+	r.sink.Counter(MetricResponsePersistFailedTotal, nil).Add(1)
 }
 
 // WorkflowJobFinished records one workflow job's first observed terminal

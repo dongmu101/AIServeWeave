@@ -199,8 +199,8 @@ aiserveweave-gateway \
 
 | 字段 | 为什么不行 |
 | --- | --- |
-| `previous_response_id` | 续接已存储的会话要求 Gateway 既持有那次会话、又把后续请求发给同一个节点。两者它都没有：响应不被存储，调度器按请求选节点 |
-| `store` / `background` | 同上，都需要跨请求的服务端状态 |
+| `previous_response_id` / `store` | 仅在配置了持久化会话历史的控制面时才被兑现（STATUS.md 的 P2「Responses 持久会话」，见下一节）；未配置控制面、或调用方未认证到真实租户时仍被指名拒绝——续接一段对话既需要 Gateway 持有它，又需要一个可供限定范围的租户 |
+| `background` | 需要跨请求的服务端异步任务，本 Gateway 没有近似的东西 |
 | 内置工具（`web_search`、`file_search`、`code_interpreter`、`mcp`） | 由 OpenAI 自己的服务执行。本 Gateway 只把请求转给模型、不运行任何东西 |
 | 图像/音频/文件输入部件 | 需要一种本仓库尚不具备的 canonical 表示 |
 
@@ -209,6 +209,16 @@ aiserveweave-gateway \
 **后端没上报 usage 时 `usage` 字段被省略，不发 `0/0/0`。**「这次不花钱」与「没人说过它花了多少」是两个不同的断言，而前者正是那种会出现在成本看板上的数字。
 
 调度按 `CapabilityChat` 过滤而不是 `CapabilityResponses`：转换之后它就是一次 chat 请求。能力矩阵里的 `responses` 表示「后端原生支持 `/v1/responses`」，那条路径目前没有被使用。
+
+### Responses 持久会话（P2）
+
+`-control-plane-addr` 配置了控制面时，`store`/`previous_response_id` 从「指名拒绝」变成生效，沿用 Job 持久化（J01–J08）已确立的控制面表 + 内部 API + Gateway 客户端形状；控制面一侧的存储契约见 [ControlPlane README「Responses 持久会话（P2）」](../aiServeWeaveControlPlane/README.md#responses-持久会话p2)，设计见 [`docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md`](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md) 第三节。
+
+- **写入侧是有界异步的（`httpapi/responsespersist.go` 的 `responsePersister`）**：`store:true` 时，这一轮自己的输入加上 assistant 的回复被编码成不透明 JSON，交给一个信号量限流的后台写入（默认并发 8，`-control-plane-addr`/`-control-plane-token` 复用），绝不阻塞调用方正在等待的响应——并发已满时丢弃并计入 `gateway_response_persist_dropped_total`，写入失败计入 `gateway_response_persist_failed_total`，均不重试、不入持久队列，与请求日志推送同一纪律。
+- **读取侧是同步的**：`previous_response_id` 非空时，Gateway 在派发请求之前先沿它逐跳调用控制面的 `GetResponseTurn` 走到根轮次，按时间顺序拼接每一跳自己的消息，作为前缀拼在这一轮自己的输入之前再发给后端——这一步是调用方请求路径的一部分，因为调用方点名了一段具体对话，需要一个确切答案而不是一段可能残缺的历史。链路深度有界（默认 50 跳，`maxResponseChainDepth`），超出时拒绝（503）而不是静默截断；未知或不属于该租户的 `previous_response_id` 答 400，不是编造一段更短的历史，也不是看起来像本 Gateway 自身故障的 500。
+- **一轮只存自己的贡献**：持久化的 `messages` 是这一轮自己的 system 指示/用户输入加上 assistant 回复，不是从根到这一轮的完整对话——存储量与对话轮数成正比而非平方，代价是续接一段长对话需要多次控制面往返而非一次（已被 `maxResponseChainDepth` 有界）。
+- **`store`/`previous_response_id` 都需要一个真实租户**：未配置 `Verifier`（静态 key 列表或完全不鉴权）意味着没有可供限定范围的租户，两个字段依旧被拒绝，即便控制面本身已经配置。
+- 未接入 P09/C28 请求检索，与图像生成前门同一先例（`request_logs.endpoint` 是绑定数据库列的封闭枚举）。
 
 ## 配额与限流
 

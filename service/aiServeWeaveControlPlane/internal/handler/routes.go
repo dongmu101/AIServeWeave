@@ -244,6 +244,24 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Path:    "/internal/v1/job-artifacts/expired",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/job-artifacts/expired", requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx))),
 		},
+		// Response-turn persistence (STATUS.md's P2 "Responses 持久会话") shares
+		// the same InternalToken as the Job endpoints above, for the same
+		// reason: a Gateway replica reporting its own callers' business, not a
+		// person in a tenant session.
+		//
+		// Response-turn 持久化（STATUS.md 的 P2「Responses 持久会话」）与上面的
+		// Job 端点共用同一个 InternalToken，理由相同：这是 Gateway 副本在报告
+		// 自己调用方的业务，而不是某个人在租户会话里的操作。
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/responses",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/responses", requireSharedSecret(ctx.Config.InternalToken, createResponseTurn(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/responses/:id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/responses/:id", requireSharedSecret(ctx.Config.InternalToken, getResponseTurn(ctx))),
+		},
 	})
 	// Request-log push (STATUS.md's P09/C28) shares the same InternalToken as
 	// the Job endpoints above, for the same reason: a Gateway replica

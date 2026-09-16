@@ -17,6 +17,7 @@
 package types
 
 import (
+	"encoding/json"
 	"time"
 
 	"AIServeWeave/common/quota"
@@ -808,4 +809,42 @@ type MetricsHistoryResponse struct {
 	Since  time.Time              `json:"since"`
 	Until  time.Time              `json:"until"`
 	Series []MetricsHistorySeries `json:"series"`
+}
+
+// CreateResponseTurnRequest is what a Gateway replica reports after
+// finishing one Responses API turn the caller asked to persist, per
+// STATUS.md's P2 "Responses 持久会话". TenantID is the Gateway's own
+// assertion about its caller, the same reason it is a body field on
+// CreateJobRequest rather than something read from a session.
+//
+// Messages is opaque JSON this service never parses — see
+// model.ResponseTurn's doc comment for why. It is what the Gateway must
+// send back unchanged when a later turn's previous_response_id points here.
+//
+// CreateResponseTurnRequest 是一个 Gateway 副本在完成调用方要求持久化的
+// 一轮 Responses API 之后所报告的内容，对应 STATUS.md 的 P2「Responses 持久
+// 会话」。TenantID 是 Gateway 对自己调用方所做的断言，理由与它是
+// CreateJobRequest 的请求体字段而非从会话读取相同。
+//
+// Messages 是本服务从不解析的不透明 JSON——为什么，见 model.ResponseTurn 的
+// 文档注释。它是当此后某一轮的 previous_response_id 指向这里时，Gateway
+// 必须原样取回的内容。
+type CreateResponseTurnRequest struct {
+	ResponseID         string          `json:"response_id"`
+	TenantID           string          `json:"tenant_id"`
+	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	Model              string          `json:"model,omitempty"`
+	Messages           json.RawMessage `json:"messages"`
+}
+
+// ResponseTurnResponse is the internal API's record of one persisted turn.
+//
+// ResponseTurnResponse 是内部 API 对一轮已持久化记录的呈现。
+type ResponseTurnResponse struct {
+	ResponseID         string          `json:"response_id"`
+	TenantID           string          `json:"tenant_id"`
+	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	Model              string          `json:"model,omitempty"`
+	Messages           json.RawMessage `json:"messages"`
+	CreatedAt          time.Time       `json:"created_at"`
 }

@@ -524,6 +524,32 @@ type JobArtifacts interface {
 // 回收它们，届时它们只是又老了一些。
 const MaxExpiredJobArtifacts = 200
 
+// ResponseTurns persists one turn of a Responses API conversation a Gateway
+// replica asked this service to remember, per STATUS.md's P2 "Responses
+// 持久会话". See model.ResponseTurn's doc comment for why Messages is opaque
+// JSON this package never inspects, and why PreviousResponseID is a plain
+// column rather than a foreign key.
+//
+// ResponseTurns 持久化一个 Gateway 副本请求本服务代为记住的 Responses API
+// 会话中的一轮，对应 STATUS.md 的 P2「Responses 持久会话」。为什么 Messages
+// 是本包从不检视的不透明 JSON、为什么 PreviousResponseID 是普通列而非外键，
+// 见 model.ResponseTurn 的文档注释。
+type ResponseTurns interface {
+	// CreateResponseTurn inserts one turn. A duplicate ID returns
+	// ErrConflict rather than overwriting the existing row — the same
+	// idempotent-retry shape CreateJob already gives a Gateway replica
+	// unsure whether an earlier call landed.
+	//
+	// CreateResponseTurn 插入一轮。重复的 ID 返回 ErrConflict 而不是覆盖已有
+	// 的行——与 CreateJob 已经给出的形状相同，供一个不确定此前调用是否成功
+	// 的 Gateway 副本幂等重试。
+	CreateResponseTurn(ctx context.Context, turn *model.ResponseTurn) error
+	// GetResponseTurn reads one turn by id, scoped to its tenant.
+	//
+	// GetResponseTurn 按 id 读取一轮，并限定在其租户范围内。
+	GetResponseTurn(ctx context.Context, tenantID, id string) (model.ResponseTurn, error)
+}
+
 // RequestLogFilter narrows a RequestLogs listing. An empty TenantID means
 // every tenant — the operator cross-tenant search path (STATUS.md's P09/C28)
 // — while every tenant-scoped caller sets it to the caller's own tenant.
@@ -670,6 +696,7 @@ type Store interface {
 	Audit
 	Jobs
 	JobArtifacts
+	ResponseTurns
 	MetricsHistory
 	RequestLogs
 	Alerting

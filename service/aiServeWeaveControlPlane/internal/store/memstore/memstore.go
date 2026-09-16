@@ -48,6 +48,7 @@ type Store struct {
 	audit             []model.AuditLog
 	jobs              map[string]model.Job
 	artifacts         map[string]model.JobArtifact
+	responseTurns     map[string]model.ResponseTurn
 	metricsHistory    []model.MetricsHistoryPoint
 	requestLogs       map[string]model.RequestLog
 	alertRules        map[string]model.AlertRule
@@ -65,6 +66,7 @@ func New() *Store {
 		keys:              map[string]model.APIKey{},
 		jobs:              map[string]model.Job{},
 		artifacts:         map[string]model.JobArtifact{},
+		responseTurns:     map[string]model.ResponseTurn{},
 		requestLogs:       map[string]model.RequestLog{},
 		alertRules:        map[string]model.AlertRule{},
 		alertInstances:    map[string]model.AlertInstance{},

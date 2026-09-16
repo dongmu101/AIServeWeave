@@ -48,9 +48,16 @@ type responsesRequest struct {
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	Text            *responsesText  `json:"text,omitempty"`
 
-	// Refused below. Each one needs something this Gateway does not have.
+	// PreviousResponseID and Store are honoured only when a control plane is
+	// configured to persist conversation history (STATUS.md's P2 "Responses
+	// 持久会话"); see responses_handler.go. Background is always refused —
+	// this Gateway has nothing resembling the asynchronous job this field
+	// asks for on the Responses API's own terms.
 	//
-	// 以下字段会被拒绝。每一个都需要本 Gateway 不具备的东西。
+	// PreviousResponseID 与 Store 只有在配置了持久化会话历史的控制面时才会被
+	// 兑现（STATUS.md 的 P2「Responses 持久会话」）；见 responses_handler.go。
+	// Background 始终被拒绝——本 Gateway 没有任何近似于这个字段在 Responses
+	// API 自己的语境里所要求的那种异步任务的东西。
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 	Store              *bool  `json:"store,omitempty"`
 	Background         *bool  `json:"background,omitempty"`
@@ -313,24 +320,21 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
 	return out, nil
 }
 
-// unsupported names the field this Gateway cannot honour, or empty when the
-// request only asks for things it can do.
+// unsupported names the field this Gateway can never honour, regardless of
+// configuration, or empty when the request only asks for things it can do.
+// store and previous_response_id are not here: whether this Gateway can
+// honour them depends on whether a control plane is configured to persist
+// conversation history (STATUS.md's P2 "Responses 持久会话"), which this
+// pure method has no way to know — see responses_handler.go's own check,
+// gated on h.responsePersist.
 //
-// unsupported 指出本 Gateway 无法兑现的那个字段；请求只要求它做得到的事情时返回空。
+// unsupported 指出本 Gateway 无论如何配置都无法兑现的字段；请求只要求它做得到
+// 的事情时返回空。store 与 previous_response_id 不在此列：本 Gateway 能否
+// 兑现它们，取决于是否配置了持久化会话历史的控制面（STATUS.md 的 P2
+// 「Responses 持久会话」），而这个纯函数无从得知——判断见 responses_handler.go
+// 自己的检查，以 h.responsePersist 为条件。
 func (req responsesRequest) unsupported() string {
-	switch {
-	case req.PreviousResponseID != "":
-		// Continuing a stored conversation requires the Gateway to hold that
-		// conversation and to send the follow-up to the same node. It holds
-		// neither: responses are not stored, and the scheduler picks a node
-		// per request.
-		//
-		// 续接一次已存储的会话，要求 Gateway 既持有那次会话，又把后续请求发给同一个
-		// 节点。两者它都没有：响应不被存储，而调度器是按请求选节点的。
-		return "previous_response_id"
-	case req.Store != nil && *req.Store:
-		return "store"
-	case req.Background != nil && *req.Background:
+	if req.Background != nil && *req.Background {
 		return "background"
 	}
 	return ""
