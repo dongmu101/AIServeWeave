@@ -8,9 +8,9 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 ## 当前能力与规划边界
 
-当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
+当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models、图像生成，Anthropic Messages v1（含 SSE，纯文本子集，不支持工具调用与图片/文档内容块），Ollama 原生 API（`/api/chat`/`/api/generate`/`/api/embeddings`，纯推理端点，不支持工具调用与模型管理），以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
 
-下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 模式在代码中尚不存在，边界核实见 [A04 设计文档](docs/superpowers/specs/2026-09-15-a04-direct-mode-boundary-design.md)。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+下文的架构图与职责列表包含目标能力：Anthropic 完整功能对等（工具调用、图片/文档内容块）、Ollama 模型管理端点代理、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 模式在代码中尚不存在，边界核实见 [A04 设计文档](docs/superpowers/specs/2026-09-15-a04-direct-mode-boundary-design.md)。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
 
 ## 项目目标
 
@@ -200,14 +200,14 @@ type InferEvent struct {
 - `POST /v1/responses`（含 SSE）
 - `POST /v1/embeddings`
 - `GET /v1/models`
+- `POST /v1/messages`（Anthropic Messages **v1，纯文本子集**：不支持工具调用与图片/文档内容块，二者按名字拒绝而非静默丢弃；追求完整功能对等需要一次跨前门的核心类型改动，见 [Gateway README「Anthropic Messages」](service/aiServeWeaveGateway/README.md#anthropic-messages)）
+- `POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（Ollama 原生 API **纯推理端点**：不支持工具调用、`format`、视觉输入与模型管理类端点，均按名字拒绝或明确答「不支持」而非静默忽略/404，见 [Gateway README「Ollama 原生 API」](service/aiServeWeaveGateway/README.md#ollama-原生-api)）
+- `POST /v1/images/generations`（OpenAI-compatible 图像生成，映射到管理员指定的单一 ComfyUI 模板，见 [Gateway README「图像生成」](service/aiServeWeaveGateway/README.md#图像生成)）
 
 规划中的扩展协议范围：
 
-- Anthropic `POST /v1/messages`
-- Ollama 原生 API
 - 音频转录和翻译
 - rerank
-- OpenAI-compatible 图像生成
 
 ComfyUI 工作流和异步任务 API 已实现，见下方「ComfyUI 任务 API」。
 

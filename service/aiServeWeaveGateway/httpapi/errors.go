@@ -36,18 +36,28 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, code, message 
 // or scheduler.ErrNoCapableNode becomes an HTTP response, so every handler
 // maps errors the same way.
 func handleDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) {
+	status, errType, code, message := dispatchErrorDetails(logger, err)
+	writeOpenAIError(w, status, errType, code, message)
+}
+
+// dispatchErrorDetails classifies a scheduler/runtime dispatch failure into
+// the status, error type, code and message every front door reports it as,
+// and logs the real error server-side. It is the single place a
+// *runtime.RuntimeError or scheduler.ErrNoCapableNode is turned into a
+// classification, so a second wire protocol (anthropic.go's error body) can
+// reuse the same judgment handleDispatchError already makes instead of
+// re-deriving it.
+func dispatchErrorDetails(logger *slog.Logger, err error) (status int, errType, code, message string) {
 	if errors.Is(err, scheduler.ErrNoCapableNode) {
 		logger.Warn("no node can serve this request")
-		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "model_not_found",
-			"the requested model is not available on any connected node")
-		return
+		return http.StatusNotFound, "invalid_request_error", "model_not_found",
+			"the requested model is not available on any connected node"
 	}
 
 	var rtErr *runtime.RuntimeError
 	if !errors.As(err, &rtErr) {
 		logger.Error("dispatch failed with an unclassified error", slog.Any("error", err))
-		writeOpenAIError(w, http.StatusInternalServerError, "api_error", "internal_error", "internal error")
-		return
+		return http.StatusInternalServerError, "api_error", "internal_error", "internal error"
 	}
 
 	logger.Error("dispatch failed",
@@ -56,8 +66,7 @@ func handleDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) 
 		slog.Bool("retryable", rtErr.Retryable),
 		slog.Any("error", rtErr))
 
-	status, errType, code, message := classify(rtErr.Code)
-	writeOpenAIError(w, status, errType, code, message)
+	return classify(rtErr.Code)
 }
 
 // classify maps a runtime.ErrorCode to the HTTP status and generic body an

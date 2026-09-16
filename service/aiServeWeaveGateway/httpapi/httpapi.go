@@ -303,6 +303,10 @@ type Config struct {
 // New returns the front door's http.Handler: GET /v1/models,
 // POST /v1/chat/completions (streaming and non-streaming),
 // POST /v1/embeddings, POST /v1/responses, POST /v1/images/generations,
+// POST /v1/messages (Anthropic Messages v1, text-only — see anthropic.go),
+// POST /api/chat, POST /api/generate, POST /api/embeddings (Ollama native
+// API, pure inference only — see ollama.go) plus a clear "not supported"
+// answer on Ollama's model-management endpoints,
 // POST /v1/workflows/{workflow_id}/runs, GET /v1/jobs/{job_id},
 // GET /v1/jobs/{job_id}/events (SSE), POST /v1/jobs/{job_id}/cancel,
 // GET /v1/jobs/{job_id}/artifacts and GET /v1/artifacts/{artifact_id},
@@ -455,6 +459,18 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	mux.HandleFunc("POST /v1/responses", h.responses)
 	mux.HandleFunc("POST /v1/images/generations", h.imagesGenerations)
+	mux.HandleFunc("POST /v1/messages", h.anthropicMessages)
+	mux.HandleFunc("POST /api/chat", h.ollamaChat)
+	mux.HandleFunc("POST /api/generate", h.ollamaGenerate)
+	mux.HandleFunc("POST /api/embeddings", h.ollamaEmbeddings)
+	mux.HandleFunc("POST /api/create", ollamaUnsupported)
+	mux.HandleFunc("POST /api/pull", ollamaUnsupported)
+	mux.HandleFunc("POST /api/push", ollamaUnsupported)
+	mux.HandleFunc("DELETE /api/delete", ollamaUnsupported)
+	mux.HandleFunc("POST /api/copy", ollamaUnsupported)
+	mux.HandleFunc("POST /api/show", ollamaUnsupported)
+	mux.HandleFunc("GET /api/tags", ollamaUnsupported)
+	mux.HandleFunc("GET /api/ps", ollamaUnsupported)
 	mux.HandleFunc("POST /v1/workflows/{workflow_id}/runs", h.submitRun)
 	mux.HandleFunc("GET /v1/jobs/{job_id}", h.jobStatus)
 	mux.HandleFunc("GET /v1/jobs/{job_id}/events", h.jobEvents)

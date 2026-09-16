@@ -225,6 +225,22 @@ const (
 	EndpointEmbeddings        = "embeddings"
 	EndpointResponses         = "responses"
 	EndpointImagesGenerations = "images_generations"
+	EndpointAnthropicMessages = "anthropic_messages"
+	EndpointOllamaChat        = "ollama_chat"
+	EndpointOllamaGenerate    = "ollama_generate"
+	EndpointOllamaEmbeddings  = "ollama_embeddings"
+	// EndpointOllamaUnsupported covers every Ollama model-management route
+	// (create/pull/push/delete/copy/show/tags/ps) under one label: they all
+	// answer the same fixed "not supported" body (ollama.go's
+	// ollamaUnsupported) and none of them dispatches to a backend, so a
+	// per-route breakdown would not distinguish any real behavior.
+	//
+	// EndpointOllamaUnsupported 把每一条 Ollama 模型管理路由
+	// （create/pull/push/delete/copy/show/tags/ps）归入同一个标签：它们答复
+	// 的都是同一个固定的「不支持」响应体（ollama.go 的
+	// ollamaUnsupported），也都不会派发给任何后端，按路由拆开并不能区分出
+	// 任何真实差异。
+	EndpointOllamaUnsupported = "ollama_unsupported"
 	// EndpointWorkflowRuns and EndpointJobs cover the two routes whose paths
 	// carry an identifier. Neither identifier becomes part of the label: a
 	// job id is minted per request, so letting it through would let one
@@ -358,6 +374,16 @@ func endpointFor(path string) string {
 		return EndpointResponses
 	case "/v1/images/generations":
 		return EndpointImagesGenerations
+	case "/v1/messages":
+		return EndpointAnthropicMessages
+	case "/api/chat":
+		return EndpointOllamaChat
+	case "/api/generate":
+		return EndpointOllamaGenerate
+	case "/api/embeddings":
+		return EndpointOllamaEmbeddings
+	case "/api/create", "/api/pull", "/api/push", "/api/delete", "/api/copy", "/api/show", "/api/tags", "/api/ps":
+		return EndpointOllamaUnsupported
 	}
 	// The two routes below carry an identifier in the path, so they are
 	// matched by shape rather than by equality. The shape is still a closed

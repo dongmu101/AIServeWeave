@@ -1,6 +1,6 @@
 # aiserveweave-gateway
 
-数据面。对外终结 OpenAI 兼容 API 与工作流 Job API（Anthropic 尚属规划），对内通过隧道把请求派给节点。
+数据面。对外终结 OpenAI 兼容 API、Anthropic Messages v1（纯文本）、Ollama 原生推理 API（纯推理端点）与工作流 Job API，对内通过隧道把请求派给节点。
 
 **当前进度：隧道服务端、调度器、OpenAI 前门、ComfyUI 工作流的提交与状态查询、Registry 名册订阅、指标导出与只读的运维清单端点均已落地。** 这个二进制现在能接住 Agent、知道每个节点能服务什么、把 HTTP 请求路由过去，自己的副本身份会同步给 Registry 维护的名册，并在 `-metrics-addr` 上导出 Prometheus 文本格式的指标。
 
@@ -10,7 +10,7 @@
 | `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
 | `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
-| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
+| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
 | `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：文件或控制面来源（P03）、声明式输入/输出/依赖、绑定与校验；`Handle` 原子持有当前生效目录 |
 | `workflowsync/` | 已实现 | 控制面版本的有界拉取、逐模板校验、持久化最近有效整包与生效状态（P03） |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
@@ -304,6 +304,34 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **`n` 目前只接受 1**，`quality`/`style` 未实现，均按名字拒绝而不是静默忽略。
 - 本项实现过程中发现并修复了一处独立于本功能之外的既有缺陷：`runtime.WorkflowStatus.OutOfMemory` 此前从未真正跨隧道传输（`tunnel.proto`/`common/tunnelwire` 都缺这个字段），意味着 A06 的 `gateway_workflow_job_oom_total` 指标在生产环境里从未被真正观测到过 true，详见设计文档 2.5 节。
 - 本机无真实 ComfyUI/GPU 环境验证，与 A06 同一先例，默认测试套件（假节点）作为交付依据。
+
+## Anthropic Messages
+
+`POST /v1/messages`（STATUS.md 的 P2）是 Anthropic Messages 协议的 v1、纯文本子集，边界设计见 [P2 设计文档「Anthropic Messages 兼容边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)。实现见 `httpapi/anthropic.go`。
+
+- **架构与 Responses 相同：在边界处转换，不新增调度路径。** 请求在 `toRuntime()` 里被转换成与 `chat.go`/`responses.go` 完全同一个 canonical `runtime.ChatRequest`，经同一个 `Scheduler.Chat`/`ChatStream` 派发，因此一个只会 Chat Completions 的后端在不知道 Anthropic 协议存在的情况下就能服务这个端点；不改动 `common/runtime` 核心类型或调度逻辑。
+- **v1 范围：纯文本，无工具，无图片/文档内容块。** `tools`、`tool_choice` 字段一旦出现即按名字拒绝（400），不静默忽略；`content` 数组里出现非 `"text"` 类型的块（`image`、`tool_use`、`tool_result` 等）同样按名字拒绝。原因是结构性的，不是尚未实现：今天的 `runtime.ChatMessage.Content` 是单一字符串，没有地方安放结构化内容块或工具调用，做到完整功能对等需要一次跨 OpenAI/Anthropic 两个前门共用的核心类型改动，设计文档§四.3 把它列为独立后续任务，不在本项范围内。
+- **`system` 字段与 `content` 数组的归约规则相同**：顶层 `system`（字符串，或全为 `"text"` 块的数组）映射成一条前置的 `Role: "system"` 消息；每条 `messages[i].content`（字符串，或全为 `"text"` 块的数组）拼接成纯文本，多个文本块之间不插入分隔符。`messages[i].role` 只接受 `"user"`/`"assistant"`，其余角色（含 Anthropic 协议里不存在于 `messages` 数组的 `"system"`）按名字拒绝。
+- **`max_tokens` 是必填字段**，Anthropic 协议本身如此要求；缺失或非正数答 400，不像 OpenAI 前门那样是可选参数。
+- **流式响应是 Anthropic 自己的具名 SSE 帧**（`event: <name>\ndata: <json>\n\n`），不是 OpenAI 前门 `chat.go` 用的裸 `data:` 帧；两者共用底层 `runtime.Stream[runtime.ChatEvent]`，只是 `httpapi/anthropic.go` 另有一套 `writeAnthropicSSE`。`message_start`/`content_block_start` 在第一次 `Recv` 之前就无条件写出（不像 OpenAI 前门那样懒等首个 delta），这样即使一次生成完全没有产出内容，事件序列依然完整；结束时依次写出 `content_block_stop`/`message_delta`（携带 `stop_reason` 与 `usage`）/`message_stop`。
+- **`stop_reason` 由后端不透明的 finish reason（OpenAI 风格：`"stop"`/`"length"`/`"tool_calls"`……）映射到 Anthropic 封闭词汇**（`anthropicStopReason`）：`"length"` → `"max_tokens"`，`"tool_calls"` → `"tool_use"`，其余（含空字符串）→ `"end_turn"`。
+- **未接入 P09/C28 请求检索**：`request_logs.endpoint` 是绑定数据库列的封闭枚举，新增取值需要评估迁移，超出本轮范围，与 P2 图像生成一节的既有先例相同——`requestLogEndpoint` 未识别的路径会被中间件跳过，不记录也不报错。
+- 错误体是 Anthropic 自己的 `{"type":"error","error":{"type":...,"message":...}}` 形状（`writeAnthropicError`），与 OpenAI 前门的 `openAIErrorBody` 分开；调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）两边共用，同一次失败在两个协议下报告一致的状态码。
+
+## Ollama 原生 API
+
+`POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（STATUS.md 的 P2）是 Gateway 对客户端的第二套原生推理前门，边界设计见 [P2 设计文档「Ollama 原生 API 兼容边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)。实现见 `httpapi/ollama.go`。**与 Agent 怎么连后端 Ollama 实例无关**：`common/runtime/ollama` 对那个后端刻意选择 OpenAI 兼容协议（见该包的包文档），这里只是在 Gateway 对客户端的一侧再开一扇门。
+
+- **架构与 Anthropic 相同：边界处转换，不新增调度路径。** `toRuntime()` 把请求转换成与其他每个前门同一个 canonical `runtime.ChatRequest`/`runtime.EmbeddingRequest`，经同一个 `Scheduler.Chat`/`ChatStream`/`Embed` 派发；不改动 `common/runtime` 核心类型或调度逻辑。
+- **范围是「纯推理端点」，与设计文档§九.2 的任务拆分一致**：`tools`、`format` 与每条消息的 `images` 一旦出现即按名字拒绝（400），不静默忽略——今天的 `runtime.ChatMessage.Content` 单一字符串没有地方安放它们；`/api/generate` 额外拒绝 `images`/`context`/`raw`/`template`/`suffix`，理由相同（`context` 尤其如此：这里没有可供延续的每请求状态）。`keep_alive` 与 `options` 里除采样参数外的其余旋钮（`num_ctx`、`num_gpu`、`mirostat`……）被静默忽略而非拒绝——这个 Gateway 不管理单个后端进程的内存驻留或上下文窗口大小，没有什么可供遵从或拒绝。
+- **`stream` 的默认值与 OpenAI 前门相反**：Ollama 自己的协议里字段整体缺失即视为 `true`，因此 wire 结构体用 `*bool` 区分「缺失」与「显式 false」（`wantsStream()`）。
+- **流式响应是换行分隔的 JSON（`application/x-ndjson`）**，不是 SSE：每行一个对象，末尾一行 `"done":true`，与 OpenAI/Anthropic 前门的 SSE 帧完全不同的协议形状。
+- **`/api/generate` 把 `prompt`/`system` 归约成两条消息**：`system`（如果非空）映射成前置的 `Role: "system"` 消息，`prompt` 映射成一条 `Role: "user"` 消息，与 Anthropic 前门对 `system` 字段的归约方式一致。
+- **不编造未测量的计时字段**：真实 Ollama 的响应还带 `total_duration`/`load_duration`/`prompt_eval_duration`/`eval_duration` 这类计时字段，本 Gateway 不追踪，因此整体不输出（而不是发送一个有误导性的零值）；`prompt_eval_count`/`eval_count` 映射到后端真实上报的 `resp.Usage.PromptTokens`/`CompletionTokens`，是可信数字。
+- **模型管理端点明确答「不支持」，不是 404 或误导性的成功**：`/api/create`、`/api/pull`、`/api/push`、`/api/delete`、`/api/copy`、`/api/show`、`/api/tags`、`/api/ps` 统一挂载到 `ollamaUnsupported`，答 501 与 `{"error": "..."}` 说明——Gateway 从不管理任何节点上的本地模型文件，那是每个节点与自己后端之间的事，设计文档§五.3 把这条边界列为实现前必须明确声明的事项。
+- **`/api/embeddings` 是单条 prompt 的旧版端点**，不是批量输入的新版 `/api/embed`——本 v1 前门不实现后者。
+- **未接入 P09/C28 请求检索**：与 Anthropic 前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，`requestLogEndpoint` 未识别的路径会被中间件跳过，不记录也不报错。
+- 错误体是 Ollama 自己的 `{"error": "..."}` 形状（`writeOllamaError`），调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
 
 ## 指标
 
