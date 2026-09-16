@@ -973,9 +973,11 @@ func TestConvertSnapshotRoundTrip(t *testing.T) {
 			ProbedAt:         fixedTime,
 		},
 		Health: runtime.HealthReport{
-			State:     runtime.StateHealthy,
-			Latency:   3 * time.Millisecond,
-			CheckedAt: fixedTime,
+			State:        runtime.StateHealthy,
+			Latency:      3 * time.Millisecond,
+			CheckedAt:    fixedTime,
+			QueueRunning: 1,
+			QueuePending: 4,
 		},
 		Discovery: runtime.Discovery{
 			Version:   "0.32.14",

@@ -5,7 +5,7 @@ export const MAX_ROUTES_BYTES = 1 << 20;
 /** MAX_ROUTE_DOCUMENT_BYTES allows bounded snapshot metadata. / MAX_ROUTE_DOCUMENT_BYTES 为快照元数据预留有界空间。 */
 export const MAX_ROUTE_DOCUMENT_BYTES = MAX_ROUTES_BYTES + 64 * 1024;
 /** ModelTarget preserves Gateway target semantics. / ModelTarget 保留 Gateway 目标语义。 */
-export interface ModelTarget { runtime_model: string; node_selector?: Record<string, string>; priority?: number; weight?: number }
+export interface ModelTarget { runtime_model: string; node_selector?: Record<string, string>; priority?: number; weight?: number; min_gpu_memory_bytes?: number }
 /** ModelRoute maps an alias to targets. / ModelRoute 把别名映射到目标。 */
 export interface ModelRoute { model: string; targets: ModelTarget[] }
 /** RouteRevision describes an immutable publication. / RouteRevision 描述不可变发布。 */
@@ -37,11 +37,12 @@ export function parseRoutes(value: unknown): ModelRoute[] {
     if (!model.trim() || aliases.has(model) || !Array.isArray(route.targets) || route.targets.length < 1 || route.targets.length > 100) throw new ApiError("invalid");
     aliases.add(model);
     return { model, targets: route.targets.map((item) => {
-      const target = object(item); known(target, ["runtime_model", "node_selector", "priority", "weight"]);
+      const target = object(item); known(target, ["runtime_model", "node_selector", "priority", "weight", "min_gpu_memory_bytes"]);
       const result: ModelTarget = { runtime_model: string(target.runtime_model) };
       if (!result.runtime_model.trim()) throw new ApiError("invalid");
       if (target.priority !== undefined) result.priority = integer(target.priority, Number.MIN_SAFE_INTEGER);
       if (target.weight !== undefined) result.weight = integer(target.weight);
+      if (target.min_gpu_memory_bytes !== undefined) result.min_gpu_memory_bytes = integer(target.min_gpu_memory_bytes);
       if (target.node_selector !== undefined && target.node_selector !== null) result.node_selector = Object.fromEntries(Object.entries(object(target.node_selector)).map(([key, value]) => { if (!key.trim()) throw new ApiError("invalid"); return [key, string(value)]; }));
       return result;
     }) };

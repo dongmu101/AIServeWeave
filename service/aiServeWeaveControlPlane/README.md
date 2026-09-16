@@ -500,6 +500,9 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 | `controlplane_revocation_outbox_lag` | — | 吊销 outbox 的 `generation - delivered_generation` |
 | `controlplane_fleet_calls_total` | `result` | `ctx.Fleet.*` 调用，`result` 为 `success`\|`error`（不还原 Fleet 自己更细的逐副本错误分类，避免猜出一个本包不拥有的标签取值） |
 | `controlplane_registry_client_calls_total` | `result` | 经 `ctx.Logic` 到达 Registry `TokenAdmin` 的调用（节点审批/禁用/启用/维护/列出状态），取值同上 |
+| `controlplane_artifact_storage_bytes` | — | 已实际复制进对象存储的产物总字节数（STATUS.md 的 A06） |
+
+**`controlplane_artifact_storage_bytes` 定期重新计算，不是累加计数器。** `internal/svc.runArtifactStorageGauge` 每 5 秒对 `job_artifacts` 表做一次 `SELECT COALESCE(SUM(size_bytes),0) WHERE storage_key <> ''`（`store.JobArtifacts.SumArtifactStorageBytes`，gormstore/memstore 均已实现），与 `runOutboxLagGauge` 同一先例：无条件随服务启动，不需要任何外部地址配置，只读本服务自己已有的表。选择"定期从权威表重算"而不是"在 Gateway 侧维护一个上传 +size、清理 -size 的运行时计数器"，是因为 Gateway 的 job/产物状态是有界内存、副本重启即丢（见 Gateway README 相应小节）——一个由 Gateway 持有的运行时计数器会在每次副本重启后静默归零，而它本该描述的对象存储字节依然存在；`job_artifacts` 是这份产物元数据本就持久化、唯一权威的位置，读它比另开一条易漂移的影子账本更简单也更对。一次读取失败只记日志并保留量表上一次的读数，不会把它误报成零（与 `runOutboxLagGauge` 遇到读失败时的处理一致）。
 
 **历史时序复用本服务已有的关系库，不是独立 TSDB。** `internal/metricshistory` 是一个可选的后台采集器，仅在 `MetricsHistory` 配置时启动（`Enabled()` 判定与 `Fleet`/`Registry` 同一约定）：
 

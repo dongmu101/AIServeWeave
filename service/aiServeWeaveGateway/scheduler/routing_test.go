@@ -159,6 +159,77 @@ func TestNodeSelectorPicksTheLabelledNode(t *testing.T) {
 	_ = resp
 }
 
+// TestMinGPUMemoryExcludesAnUndersizedNode is STATUS.md's P2 admission
+// threshold: a target that declares a memory requirement must skip a node
+// whose declared GPU memory falls short, even though that node would
+// otherwise win on load alone.
+//
+// TestMinGPUMemoryExcludesAnUndersizedNode 是 STATUS.md P2 的准入门槛：一个声明了
+// 显存需求的 target，必须跳过一个声明显存不够的节点，即便单看负载它本该胜出。
+func TestMinGPUMemoryExcludesAnUndersizedNode(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var smallCount, bigCount atomic.Int32
+	// The undersized node has more idle slots, so load-based ordering alone
+	// would pick it. The capacity filter is what keeps it out entirely.
+	//
+	// 显存不够的节点空闲槽更多，因此单靠基于负载的排序会选中它。是容量过滤把它彻底
+	// 排除在外。
+	h.ConnectWithResources(t, "node-small", "backend-1", &tunnelv1.NodeResources{GpuMemoryBytes: 8 << 30},
+		chatCapableSnapshot("backend-1", "qwen3:8b"),
+		echoModelHandler("node-small", &smallCount), echoModelHandler("node-small", &smallCount))
+	h.ConnectWithResources(t, "node-big", "backend-1", &tunnelv1.NodeResources{GpuMemoryBytes: 24 << 30},
+		chatCapableSnapshot("backend-1", "qwen3:8b"), echoModelHandler("node-big", &bigCount))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{
+		Clock: h.Clock,
+		Routes: routes(t, routing.Route{
+			Model:   "qwen-coder",
+			Targets: []routing.Target{{RuntimeModel: "qwen3:8b", MinGPUMemoryBytes: 16 << 30}},
+		}),
+	})
+
+	_, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen-coder"})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if candidate.NodeID != "node-big" {
+		t.Errorf("candidate = %q, want node-big despite it having fewer idle slots", candidate.NodeID)
+	}
+	if smallCount.Load() != 0 {
+		t.Errorf("the undersized node was contacted %d times, want 0", smallCount.Load())
+	}
+}
+
+// TestMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources confirms the
+// default-open behavior modelroute.Target.MinGPUMemoryBytes's doc comment
+// promises: a node that never reported hardware is not evidence of
+// insufficient capacity, and must not lose eligibility the day a target
+// first sets a requirement.
+//
+// TestMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources 确认
+// modelroute.Target.MinGPUMemoryBytes 文档注释所承诺的默认放行行为：一个从未上报
+// 硬件的节点不是容量不足的证据，不能因为某个 target 第一次设置了要求就失去资格。
+func TestMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), echoModelHandler("node-a", nil))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{
+		Clock: h.Clock,
+		Routes: routes(t, routing.Route{
+			Model:   "qwen-coder",
+			Targets: []routing.Target{{RuntimeModel: "qwen3:8b", MinGPUMemoryBytes: 24 << 30}},
+		}),
+	})
+
+	_, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen-coder"})
+	if err != nil {
+		t.Fatalf("Chat: %v, want the undeclared-resources node to remain eligible", err)
+	}
+	if candidate.NodeID != "node-a" {
+		t.Errorf("candidate = %q, want node-a", candidate.NodeID)
+	}
+}
+
 // TestPriorityIsTriedBeforeLoad covers the operator's stated preference
 // beating the load heuristic: "the local Mac before the rented GPU" has to
 // mean that even when the rented GPU is more idle.

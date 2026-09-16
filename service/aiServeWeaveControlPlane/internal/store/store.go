@@ -493,6 +493,23 @@ type JobArtifacts interface {
 	// 调用它的清理扫描想要的始终只是「这一行不在了」，而一次更早、被中断的
 	// 扫描如果已经删过它，这件事本就已经成立。
 	DeleteJobArtifact(ctx context.Context, id string) error
+	// SumArtifactStorageBytes totals size_bytes across every artifact whose
+	// bytes actually reached object storage (storage_key non-empty),
+	// regardless of tenant or type — the read behind MetricArtifactStorageBytes
+	// (STATUS.md's A06). An artifact never copied to storage (no
+	// -artifact-storage configured, or copy skipped for another reason)
+	// contributes nothing, matching what an operator watching the gauge
+	// actually wants to know: how many bytes this deployment's object
+	// storage is holding, not how many bytes every produced image happened
+	// to be.
+	//
+	// SumArtifactStorageBytes 对每个字节确已抵达对象存储（storage_key 非空）
+	// 的产物累加 size_bytes，不分租户或类型——这是 MetricArtifactStorageBytes
+	// 背后的读取（STATUS.md 的 A06）。一个从未被复制进存储的产物（未配置
+	// -artifact-storage，或因其他原因跳过复制）不计入其中，这与一个盯着这个
+	// 量表的运维真正想知道的事情一致：这个部署的对象存储里躺着多少字节，
+	// 而不是每一张产出的图本身有多大。
+	SumArtifactStorageBytes(ctx context.Context) (int64, error)
 }
 
 // MaxExpiredJobArtifacts bounds ListJobArtifactsBefore, the same way

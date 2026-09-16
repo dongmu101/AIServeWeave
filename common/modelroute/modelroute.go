@@ -33,6 +33,26 @@ type Target struct {
 	NodeSelector map[string]string `json:"node_selector,omitempty"`
 	Priority     int               `json:"priority,omitempty"`
 	Weight       int               `json:"weight,omitempty"`
+	// MinGPUMemoryBytes is the smallest GPU memory total a candidate node
+	// must declare (tunnelv1.NodeResources.GpuMemoryBytes) to be considered
+	// for this target — STATUS.md's P2 admission-threshold filtering. Zero
+	// (the default) applies no filter: a target that never sets it behaves
+	// exactly as before this field existed. A node that has not reported
+	// its hardware, or reported zero GPU memory, is never excluded by this
+	// field either — an undeclared capacity is not evidence of insufficient
+	// capacity, so it must not turn into "no candidates" the day a target
+	// first sets this field. See the P2 design doc's 数据形状与调度消费方式
+	// candidates section for why this lives on Target rather than a
+	// separate model-requirements registry.
+	//
+	// MinGPUMemoryBytes 是候选节点必须声明（tunnelv1.NodeResources.GpuMemoryBytes）
+	// 的最小 GPU 显存总量，达不到就不参与这个 target 的调度——STATUS.md 的 P2
+	// 准入门槛过滤。零值（默认）不做任何过滤：一个从未设置它的 target，行为与这个
+	// 字段出现之前完全一致。一个尚未上报硬件、或上报了零 GPU 显存的节点，同样不会
+	// 因这个字段被排除——未声明的容量不是容量不足的证据，不能让某个 target 第一次
+	// 设置这个字段的那天，变成"没有候选"。这个字段为何挂在 Target 上而不是一份独立
+	// 的模型需求登记表，见 P2 设计文档「数据形状与调度消费方式候选」一节。
+	MinGPUMemoryBytes int64 `json:"min_gpu_memory_bytes,omitempty"`
 }
 
 // MatchesNode requires every selected label to exist and match. / MatchesNode 要求每个选择器标签均存在并匹配。
@@ -62,6 +82,9 @@ func (r Route) Validate() error {
 	}
 	for _, t := range r.Targets {
 		if strings.TrimSpace(t.RuntimeModel) == "" || t.Weight < 0 || int64(t.Weight) > 9007199254740991 || int64(t.Priority) > 9007199254740991 || int64(t.Priority) < -9007199254740991 {
+			return errors.New("modelroute: invalid target")
+		}
+		if t.MinGPUMemoryBytes < 0 || t.MinGPUMemoryBytes > 9007199254740991 {
 			return errors.New("modelroute: invalid target")
 		}
 		for k := range t.NodeSelector {

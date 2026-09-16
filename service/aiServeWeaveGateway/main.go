@@ -94,6 +94,12 @@ func run() error {
 		"initial cooldown a tripped breaker stays open before its next probe attempt; zero uses scheduler's built-in default (5s)")
 	breakerMaxCooldown := flag.Duration("breaker-max-cooldown", 0,
 		"cap on cooldown growth after repeated trips (doubles per trip until this cap); zero uses scheduler's built-in default (2m)")
+	workflowQueueMaxWait := flag.Duration("workflow-queue-max-wait", 0,
+		"STATUS.md's P2 bounded task queueing: how long a workflow submission waits, re-polling candidates, once every workflow-capable node is busy in a retryable way, before the failure is returned; zero disables queueing, which fails such a submission immediately (today's behavior, and the default)")
+	workflowQueueRetryInterval := flag.Duration("workflow-queue-retry-interval", 0,
+		"how often a queued workflow submission re-polls candidates; zero uses scheduler's built-in default (500ms); ignored when -workflow-queue-max-wait is zero")
+	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", 0,
+		"maximum workflow submissions allowed to wait at once; one beyond this is rejected immediately rather than queueing; zero uses scheduler's built-in default (64); ignored when -workflow-queue-max-wait is zero")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
 	routeStateFile := flag.String("route-state-file", "", "durable last-good route snapshot; required in controlplane mode")
 	routeSyncInterval := flag.Duration("route-sync-interval", 30*time.Second, "managed route polling interval")
@@ -268,11 +274,14 @@ func run() error {
 	}
 
 	sched := scheduler.New(server, scheduler.Config{
-		Metrics:          registry,
-		Logger:           logger,
-		FailureThreshold: *breakerFailureThreshold,
-		BaseCooldown:     *breakerBaseCooldown,
-		MaxCooldown:      *breakerMaxCooldown,
+		Metrics:            registry,
+		Logger:             logger,
+		FailureThreshold:   *breakerFailureThreshold,
+		BaseCooldown:       *breakerBaseCooldown,
+		MaxCooldown:        *breakerMaxCooldown,
+		QueueMaxWait:       *workflowQueueMaxWait,
+		QueueRetryInterval: *workflowQueueRetryInterval,
+		QueueMaxWaiters:    *workflowQueueMaxWaiters,
 	})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {

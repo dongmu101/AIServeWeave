@@ -1296,6 +1296,8 @@ func SnapshotToProto(s runtime.Snapshot) *tunnelv1.RuntimeSnapshot {
 			Latency:      durationToProto(s.Health.Latency),
 			CheckedAt:    timeToProto(s.Health.CheckedAt),
 			ErrorSummary: s.Health.ErrorSummary,
+			QueueRunning: int32(s.Health.QueueRunning),
+			QueuePending: int32(s.Health.QueuePending),
 		},
 		Discovery: &tunnelv1.Discovery{
 			Version:      s.Discovery.Version,
@@ -1341,6 +1343,8 @@ func SnapshotFromProto(pb *tunnelv1.RuntimeSnapshot) runtime.Snapshot {
 			Latency:      durationFromProto(health.GetLatency()),
 			CheckedAt:    timeFromProto(health.GetCheckedAt()),
 			ErrorSummary: health.GetErrorSummary(),
+			QueueRunning: int(health.GetQueueRunning()),
+			QueuePending: int(health.GetQueuePending()),
 		},
 		Discovery: runtime.Discovery{
 			Version:      disc.GetVersion(),

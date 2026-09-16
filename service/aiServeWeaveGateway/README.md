@@ -138,6 +138,9 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 
 README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产物列表这一步顺带扩了隧道契约：新增 `OPERATION_ARTIFACT_LIST`（`RunRef` 进、`ArtifactList` 出，走推理槽），`runtime.WorkflowRuntime` 相应新增 `Artifacts` 方法——ComfyUI 适配器早有这个实现，此前停在适配器里过不了隧道。
 
+16. **任务时长/成功率/OOM/产物传输四项指标各只有一个记录点，不在多个调用方重复统计（STATUS.md 的 A06）。** `jobStore.update` 是 `jobSyncer`、`jobStatus` 轮询与 SSE 终态写入三条路径共用的唯一写入口，且早已用 `ObservedSeq`（第十条）分辨"真实变化"与"重复轮询"——`gateway_workflow_jobs_total`/`gateway_workflow_job_duration_seconds`/`gateway_workflow_job_oom_total` 就利用这同一个判断，只在一个 job **从非终态第一次转入终态**的那一次 `update` 调用里记录，此前所有非终态 `update` 与此后所有重复报告同一终态的 `update` 都不再记。时长取 `now - job.CreatedAt`（提交到终态的墙钟时间），不是后端自己上报的 `StartedAt`/`FinishedAt`——ComfyUI 适配器目前从不填充这两个字段，取 Gateway 自己记录的提交时间是唯一可靠的起点。OOM 计数完全依赖 `runtime.WorkflowStatus.OutOfMemory`，该字段由 ComfyUI 适配器对 history 的 `exception_type`/`exception_message` 做文本匹配设置（`common/runtime/workflow/comfyui/runtime.go` 的 `looksLikeOutOfMemory`），Gateway 侧只负责在终态转换时读取、从不重新判断。产物传输的两个指标记在 `jobpersist.go` 的 `persistArtifactBytes` 里，与它本就在做的 `countingReader` 字节计数共用同一次读取，不为指标多读一遍产物。三者的记录器都通过 `*recorder`（`jobPersistConfig.Metrics`/`jobStore.metrics`）注入，为 `nil` 时安全退化为不记录——多数测试与任何未接入 `-metrics-addr` 的部署都是这个状态。
+17. **ComfyUI 队列深度记在 Agent 侧，不在 Gateway 这份目录里；对象存储用量记在控制面。** 队列深度只有持有真实隧道连接、能直接问 ComfyUI `GET /queue` 的那一侧才知道，因此 `comfyui_queue_running`/`comfyui_queue_pending`（`runtime_id` 标签）由 `common/runtime/workflow/comfyui` 适配器记录，复用 `Status`/`Cancel` 本就会发起的 `GET /queue`，不为指标新增任何请求——见 [Agent README](../aiServeWeaveAgent/README.md)。对象存储用量故意不做成 Gateway 侧的运行时累加计数器：Gateway 的 job/产物状态是有界内存、副本重启即丢（第八条），一个"上传 +size、清理 -size"的计数器会在每次重启后静默归零，却不影响对象存储里真实躺着的字节——因此改为控制面按 STATUS.md 的 A06 定期对 `job_artifacts` 表做 `SUM(size_bytes)`（只算 `storage_key` 非空的行），产物元数据本就持久化在那里，是这个数字唯一权威的来源；见 [ControlPlane README](../aiServeWeaveControlPlane/README.md)。
+
 ## 请求日志中间件与推送（P09/C28）
 
 `httpapi/requestlog.go` 与 `httpapi/requestlogpush.go` 是 Gateway 一侧对 STATUS.md P09/C28（请求与错误检索）的实现：把一次已完成、已鉴权的前门请求，采集成可检索的脱敏元数据，异步批量推送给控制面。
@@ -258,9 +261,11 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 
 三条规则：
 
-1. **排序有两层，外层属于运维。** target 按 priority 依次尝试（数值小的在前，与 Kubernetes 一致），同优先级的可用 target 按权重随机排列（0 等同 1），再在各 target 内部按「空闲槽最多、在途最少」选择候选。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个声明的偏好，不会被一台一时更空闲的机器推翻。优先级是排序不是排除——首选匹配不到节点时会落到次选。
+1. **排序有两层，外层属于运维。** target 按 priority 依次尝试（数值小的在前，与 Kubernetes 一致），同优先级的可用 target 按权重随机排列（0 等同 1），再在各 target 内部按「空闲槽最多、上报队列占用最低、在途最少」三级选择候选（第二级见下方第 5 条）。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个声明的偏好，不会被一台一时更空闲的机器推翻。优先级是排序不是排除——首选匹配不到节点时会落到次选。
 2. **节点选择器是「与」。** 声明的每个标签都必须匹配；空选择器匹配所有节点。一条意为「其中任意一个」的规则根本无法表达「本地那台 4090」，而那正是运维实际会写的规则。
 3. **别名在离开 Gateway 之前被改写成真实模型名**，客户端始终不会得知后者。`GET /v1/models` 因此在有路由表时只列别名——两者都公布等于邀请客户端绑定到某个运行时模型，而那正是别名要防止的事。没有活节点能服务的别名会被略去：一个用起来就 404 的目录条目，比一个缺失的条目更糟。
+4. **`min_gpu_memory_bytes` 是准入门槛，不是排序维度**（STATUS.md 的 P2）。target 可选声明一个最小 GPU 显存总量；候选节点声明的显存（Agent 在 Hello 握手时上报的 `NodeResources.GpuMemoryBytes`，见 [Agent README](../aiServeWeaveAgent/README.md) 的 `hostresources/`）低于这个值就在候选阶段被整体排除，不参与后续任何排序。零值（默认）不做任何过滤。**未上报硬件、或上报零显存的节点永远不被此字段排除**——未声明的容量不是容量不足的证据，这样才能保证某个 target 第一次设置这个字段的那天，不会把所有还没升级 Agent 版本的节点一并挡在外面。详见 [P2 设计文档](../../docs/superpowers/specs/2026-09-15-p2-resource-aware-scheduling-design.md)。
+5. **队列占用是排序维度，不是准入门槛，且只对 ComfyUI 有意义**（STATUS.md 的 P2 实时利用率子任务）。ComfyUI 同一时间只渲染一个任务，但它的软件并发上限与其他运行时共用同一个默认值——这意味着一个正在渲染的 ComfyUI 实例，空闲槽读数照样可以很高，「空闲槽最多」这一级排序因此分不清它和一个真正空闲的实例。`common/runtime/workflow/comfyui.Runtime.Health` 在存活性检查之外顺带查一次 `GET /queue`，写进 `HealthReport.QueueRunning`/`QueuePending`（`tunnel.proto` 的 `HealthReport` 消息新增字段，随 `RuntimeSnapshot` 一起到达 Gateway）；`pickBy` 在「空闲槽」相同的候选之间，优先选这两个数之和更低的一个，再退回「在途最少」。其余运行时种类这两个字段恒为 0，排序上等同于「确认空闲」——不上报这件事本身从不被当作惩罚，也不影响 Ollama/vLLM/SGLang 现有的排序结果。查询失败不影响健康检查本身，只是把这两个字段留在零值。必要性评估与范围收窄见 [必要性评估文档](../../docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md)。
 
 **节点标签由 Agent 的 `-labels` 声明**（`region=local,gpu=4090`），随 Hello 上报，重连即重新读取——它们描述的是机器而不是负载。畸形条目被丢弃而不是让 Agent 拒绝启动：为一个只影响「请求偏好去哪」的笔误让节点下线，代价不对等。
 
@@ -276,6 +281,16 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 `FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖；`main.go` 把它们暴露为三个 CLI flag（`-breaker-failure-threshold`、`-breaker-base-cooldown`、`-breaker-max-cooldown`，均默认 `0`，表示沿用 `scheduler` 包内的内置默认值 5 / 5s / 2m），便于在不同候选参数之间对比而不用重新编译。
 
 P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此默认值保持不变。真实流量校准的记录要求、长稳 CSV/JSON 归档方法与测试覆盖范围见 [P10 验收手册](../../deploy/p10-acceptance.md)；2026-09-12 的短时实测见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)；2026-09-13 使用上述三个新 flag 对比候选参数的真实流量熔断校准见 [验收记录](../../docs/acceptance/p10-breaker-calibration-2026-09-13/README.md)。
+
+## 工作流 Job 的有界排队（STATUS.md 的 P2）
+
+「tunnelserver 的四条约束」第二条"不排队"说的是隧道数据面：`Dispatch` 没有空闲槽就立刻返回 `ErrorBackpressure`，从不在那一层等待，这一点没有变。本节说的是它上面一层——`scheduler.SubmitWorkflow` 在每一个当前候选都以可重试的背压类失败作答（即所有候选此刻都忙）时，可选地等待一段有界时间、期间重新轮询候选集，而不是立即把失败返回给调用方；详见 [P2 设计文档「有界任务排队」一节](../../docs/superpowers/specs/2026-09-15-p2-resource-aware-scheduling-design.md)。
+
+- **默认关闭，行为与之前完全一致。** `-workflow-queue-max-wait` 默认 `0`，此时候选耗尽立即失败，等同于这个功能存在之前的行为。
+- **只覆盖工作流 Job 提交（`SubmitWorkflow`），不覆盖 Chat/Embed。** OpenAI 前门是同步请求，客户端已经在等响应，在 Gateway 内部再排队没有意义（设计文档第六节第 3 条）；工作流 Job 本身是异步提交+轮询模型，天然适合排队。
+- **候选完全不存在（`ErrNoCapableNode`）或失败不可重试时永远不排队。** 前者重试也不会凭空出现一个节点；后者（例如 ComfyUI 可能已经收到了这次提交）重试有制造第二次生成的风险，两者都保持立即失败。
+- **两条独立的界，缺一不可**（AGENTS.md「任何一跳都不得无界缓冲」）：`-workflow-queue-max-wait` 限最长等待时长，`-workflow-queue-max-waiters`（默认 64）限同时在等的提交数，超过后新的提交立即被拒绝而不是排进一个更长的队。`-workflow-queue-retry-interval`（默认 500ms）是等待期间重新轮询候选集的间隔。
+- **可观测**：`gateway_scheduler_queue_depth`（当前排队数）、`gateway_scheduler_queue_wait_seconds`（按 `outcome`∈`resolved`/`canceled`/`timeout` 分桶的等待时长）、`gateway_scheduler_queue_rejected_total`（因排队已满被拒绝的次数），见下方「指标」。
 
 ## 指标
 
@@ -307,12 +322,23 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 | `gateway_scheduler_candidates` | `capability` | 每次选择的候选数，向 1 收拢即失去冗余 |
 | `gateway_scheduler_breaker_open` | `node_id,runtime_id` | 候选当前是否被熔断排除 |
 | `gateway_scheduler_breaker_trips_total` | `node_id,runtime_id` | 熔断跳闸次数 |
+| `gateway_scheduler_queue_depth` | 无 | 当前排队等待的工作流提交数（STATUS.md 的 P2） |
+| `gateway_scheduler_queue_wait_seconds` | `outcome` | 排队提交的等待时长分布 |
+| `gateway_scheduler_queue_rejected_total` | 无 | 因排队已满（`-workflow-queue-max-waiters`）被立即拒绝的次数 |
 | `gateway_http_requests_total` | `endpoint,status` | `endpoint` 是本包十条路由加 `other`；带标识符的六条按形状匹配，工作流 id 与 job id 都不进标签。`job_events` 与 `jobs` 分开：一次 SSE 旁观持续整个生成过程，与毫秒级的状态查询共用直方图，哪个都描述不了 |
 | `gateway_http_request_duration_seconds` | `endpoint` | 总响应时间 |
 | `gateway_http_inflight_requests` | `endpoint` | 并发数 |
 | `gateway_http_ttft_seconds` | `endpoint` | 首字节实际到达客户端（在 `Flush` 之后计量），只有流式会记 |
 | `gateway_tokens_total` | `direction` | `prompt`\|`completion`，取后端上报值 |
 | `gateway_output_tokens_per_second` | — | 输出 token 数除以请求耗时 |
+| `gateway_workflow_jobs_total` | `result` | 工作流 job 按终态结果计数，`jobStore.update` 在一个 job**首次**到达终态那一刻记录（STATUS.md 的 A06）——`ObservedSeq` 已经把这一刻从后续重复轮询里分离出来，因此这里不是「调用方问了几次」的倍数，而是真实的完成量 |
+| `gateway_workflow_job_duration_seconds` | `result` | 与上一行同一个记录点观测的墙钟时间：从 job 提交（`CreatedAt`）到首次到达终态 |
+| `gateway_workflow_job_oom_total` | — | `gateway_workflow_jobs_total{result=failed}` 的子集：后端适配器（目前只有 ComfyUI）把这次失败分类为显存/内存耗尽（`runtime.WorkflowStatus.OutOfMemory`），依据 ComfyUI history 的 `exception_type`/`exception_message` 做尽力而为的文本匹配，不是稳定契约 |
+| `gateway_artifact_transfers_total` | `result` | 一次产物「节点到存储」字节复制的结果，`jobpersist.go` 的 `persistArtifactBytes` 记录 |
+| `gateway_artifact_transfer_bytes_total` | — | 已成功复制进对象存储的产物字节数，与上一行同一次调用产生，只在成功时累加 |
+| `gateway_artifact_transfer_duration_seconds` | — | 单次产物字节复制耗时，无论成败 |
+
+ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_queue_pending`，`runtime_id` 标签）记在 Agent 侧，不在这份表里——见 [Agent README](../aiServeWeaveAgent/README.md) 的对应小节；控制面侦测的存储用量指标（`controlplane_artifact_storage_bytes`）同理，见 [ControlPlane README](../aiServeWeaveControlPlane/README.md)。三者合起来是 STATUS.md A06 要求的"队列长度、任务时长、成功率、OOM、产物传输与存储用量"六项观测。
 
 **模型名不进任何标签，请求路径也不进。** 两者都是调用方在公开 API 的请求体/URL 里给的自由文本，进了标签就等于让单个客户端决定指标后端里有多少条序列。按模型记账属于用量记录，那里由本部署实际拥有的模型目录来约束。这条规则有可执行版本：`scheduler` 与 `tunnelserver` 各有一个标签基数测试，任何记录点开始传模型名都会当场失败。
 

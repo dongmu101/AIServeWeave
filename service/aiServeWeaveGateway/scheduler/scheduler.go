@@ -22,6 +22,17 @@ import (
 // capability.
 var ErrNoCapableNode = errors.New("scheduler: no node can serve this model")
 
+// defaultQueueRetryInterval and defaultQueueMaxWaiters are the defaults for
+// Config.QueueRetryInterval and Config.QueueMaxWaiters when queueing is
+// enabled (Config.QueueMaxWait > 0) but a caller leaves one of them unset.
+//
+// defaultQueueRetryInterval 与 defaultQueueMaxWaiters 是排队开启
+// （Config.QueueMaxWait > 0）但调用方未设置其中某项时使用的默认值。
+const (
+	defaultQueueRetryInterval = 500 * time.Millisecond
+	defaultQueueMaxWaiters    = 64
+)
+
 // Candidate is the (node, runtime instance) pair a request was dispatched
 // to, kept around so a caller can log or attribute the response to it.
 type Candidate struct {
@@ -62,6 +73,14 @@ type Scheduler struct {
 	metrics  *recorder
 	logger   *slog.Logger
 	routes   atomic.Pointer[routing.Table]
+
+	// queueMaxWait, queueRetryInterval and queueSlots implement STATUS.md's
+	// P2 bounded task queueing for workflow submissions (see workflow.go's
+	// queueSubmitWorkflow). queueSlots is nil, and queueing disabled, unless
+	// Config.QueueMaxWait was positive at construction.
+	queueMaxWait       time.Duration
+	queueRetryInterval time.Duration
+	queueSlots         chan struct{}
 }
 
 // Config configures New. Every field is optional.
@@ -101,6 +120,36 @@ type Config struct {
 	// Routes 把逻辑模型名映射到服务它们的部署上。为 nil、或表中没有所请求模型的条目
 	// 时，模型 id 按节点声明的原样使用——从不编写路由表的部署，行为与此前完全一致。
 	Routes *routing.Table
+
+	// QueueMaxWait bounds STATUS.md's P2 bounded task queueing for
+	// SubmitWorkflow: once every currently connected workflow-capable
+	// candidate has answered one submission attempt with a retryable
+	// backpressure-style failure, SubmitWorkflow waits up to this long,
+	// re-polling the candidate set, before giving up and returning that
+	// failure — instead of returning it immediately, which is what happens
+	// today and what the zero value (the default) still does. Queueing never
+	// applies when no candidate exists at all (ErrNoCapableNode) or when a
+	// failure is not retryable: see the P2 design doc's 有界任务排队 section
+	// for why those two cases must not wait.
+	//
+	// QueueMaxWait 限定 STATUS.md P2 的有界任务排队：当每一个当前已连接、具备工作流
+	// 能力的候选，在一轮提交尝试里都以可重试的背压类失败作答时，SubmitWorkflow 会
+	// 等待至多这么久、期间重新轮询候选集，而不是像今天（以及零值默认）这样立即把
+	// 失败返回给调用方。候选完全不存在（ErrNoCapableNode）或失败不可重试的情形永远
+	// 不排队：理由见 P2 设计文档的「有界任务排队」一节。
+	QueueMaxWait time.Duration
+	// QueueRetryInterval is how often a queued submission re-polls the
+	// candidate set while it waits. Zero (with QueueMaxWait positive) uses
+	// defaultQueueRetryInterval. Ignored when QueueMaxWait is zero.
+	QueueRetryInterval time.Duration
+	// QueueMaxWaiters bounds how many submissions may be waiting at once, so
+	// the queue itself cannot become the unbounded buffer AGENTS.md's
+	// security rules forbid ("任何一跳都不得无界缓冲"). A submission that
+	// finds the bound already reached is rejected immediately rather than
+	// becoming an unbounded third waiter axis. Zero (with QueueMaxWait
+	// positive) uses defaultQueueMaxWaiters. Ignored when QueueMaxWait is
+	// zero.
+	QueueMaxWaiters int
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
@@ -123,6 +172,20 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 		logger:   logger,
 	}
 	s.routes.Store(cfg.Routes)
+
+	if cfg.QueueMaxWait > 0 {
+		interval := cfg.QueueRetryInterval
+		if interval <= 0 {
+			interval = defaultQueueRetryInterval
+		}
+		maxWaiters := cfg.QueueMaxWaiters
+		if maxWaiters <= 0 {
+			maxWaiters = defaultQueueMaxWaiters
+		}
+		s.queueMaxWait = cfg.QueueMaxWait
+		s.queueRetryInterval = interval
+		s.queueSlots = make(chan struct{}, maxWaiters)
+	}
 	return s
 }
 
@@ -398,6 +461,7 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 	type scored struct {
 		Candidate
 		idle     int
+		queued   int
 		inflight int
 	}
 
@@ -419,6 +483,20 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 		if !target.MatchesNode(node.Labels) {
 			continue
 		}
+		// STATUS.md's P2 admission-threshold filtering: a node whose
+		// declared GPU memory total cannot meet the target's requirement is
+		// excluded before either runtime on it is even looked at, the same
+		// way the node selector is. Checked once per node, not per runtime,
+		// because NodeResources describes the machine, not any one runtime
+		// instance on it.
+		//
+		// STATUS.md P2 的准入门槛过滤：一个声明的 GPU 显存总量达不到 target 要求的
+		// 节点，在其上任何一个 runtime 被看到之前就被排除，与节点选择器同一时机。
+		// 按节点而非按 runtime 检查一次，因为 NodeResources 描述的是这台机器，不是
+		// 它上面的某一个 runtime 实例。
+		if !nodeHasCapacity(node, target.MinGPUMemoryBytes) {
+			continue
+		}
 		idle := node.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_INFERENCE]
 		for _, snap := range node.Runtimes {
 			if !runtimeHealthy(snap.State) {
@@ -434,14 +512,33 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 			found = append(found, scored{
 				Candidate: candidate,
 				idle:      idle,
+				queued:    snap.Health.QueueRunning + snap.Health.QueuePending,
 				inflight:  node.InflightRequests,
 			})
 		}
 	}
 
+	// queued (STATUS.md's P2 realtime-utilization signal) breaks ties inside
+	// an idle tier, before inflight: idle is a software slot count that a
+	// single-job-at-a-time backend like ComfyUI can report as high even
+	// while its one GPU is saturated (the necessity assessment in
+	// docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md
+	// documents why), so idle alone cannot distinguish two such candidates.
+	// It is 0 for every runtime kind that does not report it, which sorts
+	// the same as "confirmed empty" — never a penalty for not reporting.
+	//
+	// queued（STATUS.md P2 的实时利用率信号）在同一个 idle 档位内、排在 inflight
+	// 之前打破平局：idle 是一个软件层面的槽位计数，像 ComfyUI 这种同一时间只跑一个
+	// 任务的后端即便唯一的 GPU 已经跑满也能上报很高的 idle（必要性评估文档
+	// docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md
+	// 记录了原因），所以单靠 idle 无法区分这样两个候选。对不上报该信号的运行时
+	// 种类它恒为 0，排序上等同于"确认空闲"——不上报这件事本身从不被当作惩罚。
 	sort.SliceStable(found, func(i, j int) bool {
 		if found[i].idle != found[j].idle {
 			return found[i].idle > found[j].idle
+		}
+		if found[i].queued != found[j].queued {
+			return found[i].queued < found[j].queued
 		}
 		return found[i].inflight < found[j].inflight
 	})
@@ -451,6 +548,24 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 		candidates[i] = f.Candidate
 	}
 	return candidates
+}
+
+// nodeHasCapacity reports whether node's declared GPU memory total meets
+// minBytes. minBytes <= 0 means the target set no requirement, which always
+// passes. A node that has not reported hardware, or reported zero GPU
+// memory, also always passes: an undeclared capacity is not evidence of
+// insufficient capacity — see modelroute.Target.MinGPUMemoryBytes's doc
+// comment for why this default-open behavior is deliberate.
+//
+// nodeHasCapacity 报告 node 声明的 GPU 显存总量是否达到 minBytes。minBytes <= 0
+// 表示 target 未设置要求，永远通过。一个尚未上报硬件、或上报零 GPU 显存的节点同样
+// 永远通过：未声明的容量不是容量不足的证据——这个默认放行的行为为何是刻意的，见
+// modelroute.Target.MinGPUMemoryBytes 的文档注释。
+func nodeHasCapacity(node tunnelserver.NodeInfo, minBytes int64) bool {
+	if minBytes <= 0 || node.Resources == nil || node.Resources.GpuMemoryBytes <= 0 {
+		return true
+	}
+	return node.Resources.GpuMemoryBytes >= minBytes
 }
 
 // withModel returns req rewritten to the runtime model a candidate serves.

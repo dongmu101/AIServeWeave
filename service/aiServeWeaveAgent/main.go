@@ -22,6 +22,7 @@ import (
 	"AIServeWeave/common/runtime/sglang"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
@@ -203,7 +204,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 	//
 	// 整个节点共用一个指标注册表：运行时层与隧道记录进同一个下沉端，这才让「后端慢」
 	// 与「隧道慢」成为两个可以互相对照的数字，而不是两套说辞。
-	metricsRegistry := metrics.New(tunnel.Descriptions())
+	metricsRegistry := metrics.New(tunnel.Descriptions(), comfyui.Descriptions())
 	metricsServer := startMetricsEndpoint(logger, metricsRegistry, metricsAddr)
 
 	deps := newDependencies(logger, metricsRegistry)
@@ -399,6 +400,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			Manager:         manager,
 			AllowedRuntimes: opts.runtimeIDs(),
 			Labels:          opts.nodeLabels(),
+			Resources:       hostresources.Detect(ctx, logger),
 			Handler:         dispatcher,
 			Metrics:         metrics,
 			Logger:          logger,

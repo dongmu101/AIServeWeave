@@ -270,6 +270,8 @@ type HealthReport struct {
 	Latency      time.Duration
 	CheckedAt    time.Time
 	ErrorSummary string
+	QueueRunning int
+	QueuePending int
 }
 
 type Discovery struct {
@@ -297,7 +299,7 @@ const (
 )
 ```
 
-`Descriptor` 保存稳定配置摘要：`ID` 和 `Kind` 标识实例，`BaseURL` 表示规范化后的后端地址，`MaxConcurrent` 和 `Exclusive` 提供调度约束。它不得包含 `APIKey`、自定义 Header 值或 TLS 凭据。`ProbeResult` 保存运行时类型、版本、身份验证强度和安全证据摘要；`HealthReport` 保存状态、延迟、检测时间和脱敏错误摘要；`Discovery` 保存版本、模型、节点类型、运行时能力、模型能力、降级告警及证据来源。所有时间字段由适配器写入 UTC 时间。
+`Descriptor` 保存稳定配置摘要：`ID` 和 `Kind` 标识实例，`BaseURL` 表示规范化后的后端地址，`MaxConcurrent` 和 `Exclusive` 提供调度约束。它不得包含 `APIKey`、自定义 Header 值或 TLS 凭据。`ProbeResult` 保存运行时类型、版本、身份验证强度和安全证据摘要；`HealthReport` 保存状态、延迟、检测时间和脱敏错误摘要，另有 `QueueRunning`/`QueuePending` 两个仅 ComfyUI 适配器填充的队列占用信号（STATUS.md 的 P2 实时利用率子任务，供 Gateway 调度排序使用），其余适配器恒为 0；`Discovery` 保存版本、模型、节点类型、运行时能力、模型能力、降级告警及证据来源。所有时间字段由适配器写入 UTC 时间。
 
 `ChatRequest` 等类型只表达 Runtime 层需要的协议中立字段。`openai` 子包定义线上 JSON DTO 并负责二者转换，从而避免把后端私有字段扩散到 Manager，也避免包循环依赖。
 

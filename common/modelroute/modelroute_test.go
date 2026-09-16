@@ -13,6 +13,8 @@ func TestValidateAndDigest(t *testing.T) {
 		{"empty alias", []Route{{Targets: []Target{{RuntimeModel: "backend"}}}}, false},
 		{"no target", []Route{{Model: "alias"}}, false},
 		{"negative weight", []Route{{Model: "alias", Targets: []Target{{RuntimeModel: "backend", Weight: -1}}}}, false},
+		{"valid min gpu memory", []Route{{Model: "alias", Targets: []Target{{RuntimeModel: "backend", MinGPUMemoryBytes: 24 << 30}}}}, true},
+		{"negative min gpu memory", []Route{{Model: "alias", Targets: []Target{{RuntimeModel: "backend", MinGPUMemoryBytes: -1}}}}, false},
 		{"duplicate alias", []Route{{Model: "alias", Targets: []Target{{RuntimeModel: "backend"}}}, {Model: "alias", Targets: []Target{{RuntimeModel: "other"}}}}, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -47,6 +49,8 @@ func TestPublicationBoundsAndSafeNumbers(t *testing.T) {
 		{"largest safe weight", Target{RuntimeModel: "m", Weight: 9007199254740991}, true},
 		{"unsafe weight", Target{RuntimeModel: "m", Weight: 9007199254740992}, false},
 		{"unsafe priority", Target{RuntimeModel: "m", Priority: -9007199254740992}, false},
+		{"largest safe min gpu memory", Target{RuntimeModel: "m", MinGPUMemoryBytes: 9007199254740991}, true},
+		{"unsafe min gpu memory", Target{RuntimeModel: "m", MinGPUMemoryBytes: 9007199254740992}, false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			err := Validate([]Route{{Model: "a", Targets: []Target{tc.target}}})

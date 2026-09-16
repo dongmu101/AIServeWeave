@@ -348,3 +348,48 @@ func TestDeleteJobArtifactRemovesTheRowAndIsIdempotent(t *testing.T) {
 		t.Fatalf("DeleteJobArtifact on an id that never existed: %v, want nil", err)
 	}
 }
+
+// TestSumArtifactStorageBytesCountsOnlyArtifactsActuallyCopiedToStorage
+// asserts the sum ignores artifacts with no StorageKey — never persisted to
+// object storage, either because -artifact-storage was not configured for
+// this deployment (STATUS.md's P04) or because the copy is still pending —
+// and that it spans every tenant, matching MetricArtifactStorageBytes'
+// deployment-wide scope (STATUS.md's A06).
+//
+// TestSumArtifactStorageBytesCountsOnlyArtifactsActuallyCopiedToStorage
+// 断言合计会忽略没有 StorageKey 的产物——从未被持久化进对象存储，原因或是
+// 本部署未配置 -artifact-storage（STATUS.md 的 P04），或是复制仍在进行中——
+// 并且它跨越每一个租户，与 MetricArtifactStorageBytes 面向整个部署的范围
+// 一致（STATUS.md 的 A06）。
+func TestSumArtifactStorageBytesCountsOnlyArtifactsActuallyCopiedToStorage(t *testing.T) {
+	s := memstore.New()
+	ctx := context.Background()
+	for _, a := range []*model.JobArtifact{
+		{ID: "art_a", TenantID: "tenant-a", StorageKey: "tenant-a/job_1/art_a", SizeBytes: 100},
+		{ID: "art_b", TenantID: "tenant-b", StorageKey: "tenant-b/job_2/art_b", SizeBytes: 250},
+		{ID: "art_never_persisted", TenantID: "tenant-a", StorageKey: "", SizeBytes: 999},
+	} {
+		if err := s.CreateJobArtifact(ctx, a); err != nil {
+			t.Fatalf("CreateJobArtifact(%s): %v", a.ID, err)
+		}
+	}
+
+	got, err := s.SumArtifactStorageBytes(ctx)
+	if err != nil {
+		t.Fatalf("SumArtifactStorageBytes: %v", err)
+	}
+	if got != 350 {
+		t.Errorf("SumArtifactStorageBytes = %d, want 350 (100+250, excluding the never-persisted artifact)", got)
+	}
+}
+
+func TestSumArtifactStorageBytesOfAnEmptyStoreIsZero(t *testing.T) {
+	s := memstore.New()
+	got, err := s.SumArtifactStorageBytes(context.Background())
+	if err != nil {
+		t.Fatalf("SumArtifactStorageBytes: %v", err)
+	}
+	if got != 0 {
+		t.Errorf("SumArtifactStorageBytes on an empty store = %d, want 0", got)
+	}
+}

@@ -230,6 +230,14 @@ type jobStore struct {
 	// evicted 记录上限至少被触及过一次，好让这张表的读取者知道它的列表并非全部。它
 	// 从不被重置：一旦有运行被丢弃，之后再怎么清闲，这张表也回不到完整。
 	evicted bool
+	// metrics is nil in most tests and in a caller that built a jobStore
+	// directly; update guards every use so a missing recorder degrades to
+	// "no metrics" rather than a nil pointer panic (STATUS.md's A06).
+	//
+	// metrics 在多数测试和直接构造 jobStore 的调用方那里为 nil；update 对每次
+	// 使用都做了判空，因此缺失的记录器会退化成「没有指标」而不是空指针 panic
+	// （STATUS.md 的 A06）。
+	metrics *recorder
 }
 
 func newJobStore(max int) *jobStore {
@@ -413,6 +421,20 @@ func (s *jobStore) update(id string, status runtime.WorkflowStatus, now time.Tim
 	if j.State != status.State || j.ErrorSummary != status.ErrorSummary {
 		j.ObservedSeq++
 	}
+	// Recorded before j.State is overwritten, using j's own terminal() so the
+	// transition fires exactly once: a job repeatedly polled after it
+	// finished has !j.terminal() false on every later call, and this guard
+	// is what keeps MetricWorkflowJobsTotal a real rate instead of a
+	// multiple of however many times a caller happened to ask (STATUS.md's
+	// A06).
+	//
+	// 在 j.State 被覆盖之前记录，用 j 自己的 terminal() 判断，让这次转换恰好
+	// 触发一次：一个结束后仍被反复轮询的 job，之后每次调用 !j.terminal() 都
+	// 是 false，这个判断正是让 MetricWorkflowJobsTotal 成为真实比率、而不是
+	// 「调用方碰巧问了几次」的倍数的原因（STATUS.md 的 A06）。
+	if s.metrics != nil && !j.terminal() && jobTerminal(status.State) {
+		s.metrics.WorkflowJobFinished(resultFor(status.State), now.Sub(j.CreatedAt), status.OutOfMemory)
+	}
 	j.State = status.State
 	j.QueuePosition = status.QueuePosition
 	j.ErrorSummary = status.ErrorSummary
@@ -420,6 +442,39 @@ func (s *jobStore) update(id string, status runtime.WorkflowStatus, now time.Tim
 	j.syncFailures = 0
 	j.nextSyncAt = now
 	s.byID[id] = j
+}
+
+// jobTerminal is job.terminal()'s logic against a bare runtime.WorkflowState,
+// for the one call site (update) that must ask it of status before a job's
+// own State field has been overwritten.
+//
+// jobTerminal 是 job.terminal() 的逻辑对一个裸 runtime.WorkflowState 的版本，
+// 供唯一的调用点（update）在 job 自己的 State 字段被覆盖之前，向 status 提出
+// 同样的问题。
+func jobTerminal(state runtime.WorkflowState) bool {
+	switch state {
+	case runtime.WorkflowSucceeded, runtime.WorkflowFailed, runtime.WorkflowCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// resultFor maps a terminal runtime.WorkflowState onto MetricWorkflowJobsTotal's
+// closed result vocabulary. It is only ever called with a state jobTerminal
+// already accepted.
+//
+// resultFor 把一个终态的 runtime.WorkflowState 映射到 MetricWorkflowJobsTotal
+// 的封闭结果词汇上。它只会在 jobTerminal 已经接受过的状态上被调用。
+func resultFor(state runtime.WorkflowState) string {
+	switch state {
+	case runtime.WorkflowSucceeded:
+		return ResultSucceeded
+	case runtime.WorkflowCancelled:
+		return ResultCancelled
+	default:
+		return ResultFailed
+	}
 }
 
 // forPersist returns id's full internal record for the background

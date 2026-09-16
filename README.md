@@ -10,7 +10,7 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
 
-下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+下文的架构图与职责列表包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 模式在代码中尚不存在，边界核实见 [A04 设计文档](docs/superpowers/specs/2026-09-15-a04-direct-mode-boundary-design.md)。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
 
 ## 项目目标
 
@@ -242,7 +242,7 @@ DeploymentCapability
 
 ComfyUI 是基于节点图的生成式 AI 推理引擎，可生成图片、视频、音频等内容。它的执行方式是提交整个工作流并异步排队，不应强行套用 LLM 的同步请求模型。
 
-AIServeWeave 将 ComfyUI 视为一种独立 Backend。以下为目标接入范围，目前已实现 External 后端适配与 Agent Tunnel 链路；Direct 待核实，Managed 与 Comfy Cloud 尚未交付：
+AIServeWeave 将 ComfyUI 视为一种独立 Backend。以下为目标接入范围，目前已实现 External 后端适配与 Agent Tunnel 链路；Direct 在代码中尚不存在（见 [A04 设计文档](docs/superpowers/specs/2026-09-15-a04-direct-mode-boundary-design.md)），Managed 与 Comfy Cloud 尚未交付：
 
 - 节点上自托管的 ComfyUI
 - 通过 Direct 模式访问的 ComfyUI 服务器

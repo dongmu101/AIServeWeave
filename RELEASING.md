@@ -14,16 +14,25 @@ is about releases only.
   （如 `v0.1.0`）。
 - 项目目前在 `0.x`：**minor 版本升级仍可能包含破坏性变更**（协议、配置、数据库
   schema、CLI flag）。达到 `1.0.0` 前不作兼容承诺，参见 [STATUS.md](STATUS.md) 的
-  `A03`（协议与配置升级兼容）——那一项还没做。
+  `A03`（协议与配置升级兼容）——该项已交付协议演进规则、配置版本策略与滚动升级/
+  回退边界的设计文档（[`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md)），
+  但那份文档划的是"哪些方向字节层面不会崩"的边界，不是生产级兼容性承诺，本条的
+  立场不因此改变。
 - 每个版本的实际变更记在 [CHANGELOG.md](CHANGELOG.md)，`Added`/`Changed`/`Fixed`/
   `Removed` 分类；破坏性变更单独标注，不要淹没在普通条目里。
 
 Follows [Semantic Versioning](https://semver.org/); tags look like `vMAJOR.MINOR.PATCH`.
 While the project is on `0.x`, a minor bump may still break protocol, config,
 database schema, or CLI flags — there is no compatibility promise before
-`1.0.0` (see STATUS.md's `A03`, which is not done yet). Every release's actual
-changes live in [CHANGELOG.md](CHANGELOG.md); breaking changes get their own
-callout, not buried among routine entries.
+`1.0.0` (see STATUS.md's `A03`, which now ships a design document covering
+proto evolution rules, config versioning and rolling-upgrade/rollback
+boundaries —
+[`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md).
+That document draws the line on which directions don't break at the byte
+level; it is not a production-grade compatibility guarantee, and this
+paragraph's stance is unchanged by it). Every release's actual changes live
+in [CHANGELOG.md](CHANGELOG.md); breaking changes get their own callout, not
+buried among routine entries.
 
 ## 支持平台 / Supported platforms
 
@@ -102,31 +111,58 @@ means don't run that binary — report it as an issue.
 
 ## 升级说明 / Upgrading
 
-**当前不保证跨版本滚动升级或数据库 schema 向后兼容**（STATUS.md 的 `A03` 仍未完成）。
-在这条完成之前，升级请按以下步骤，不要假设"新镜像原地替换旧镜像"总是安全的：
+**当前仍不对生产环境做跨版本滚动升级的承诺**——STATUS.md 的 `A03` 已交付协议演进
+规则、配置版本策略与升级/回退顺序的设计文档（
+[`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md)），
+但那份文档给出的是字节层面"哪些方向不会崩"的边界和已知缺口，不是端到端演练验证过
+的生产保证（没有真实多副本混合版本集群的滚动升级排练，见文档第九节缺口 1）。默认
+仍按以下步骤停机升级，不要假设"新镜像原地替换旧镜像"总是安全的；确实需要滚动升级
+时，先读一遍上述设计文档第六、七节的版本互操作范围声明和推荐顺序：
 
 1. 读目标版本 CHANGELOG 里的 Breaking Changes / Known limitations，确认没有需要手动
    处理的 schema 变更或配置项改名。
-2. 备份数据库（PostgreSQL 或 MySQL，取决于部署选择的是哪个）。控制面目前的迁移是
-   `AutoMigrate`（真正的带版本迁移是 P07，尚未交付），升级前的备份是唯一的回退手段。
+2. 备份数据库（PostgreSQL 或 MySQL，取决于部署选择的是哪个）。控制面的迁移是 P07
+   交付的带版本 SQL 迁移（`-migrate up/status/resume`），仅追加式的迁移允许回退二
+   进制，但没有 DOWN 脚本——一旦某次迁移是破坏性的（删列/改列/改名），备份仍是唯一
+   的回退手段，见 [数据库升级与恢复](deploy/database-recovery.md)。
 3. 停止全部服务（`docker compose down`，不加 `-v`，保留数据卷）。
 4. 拉取新版本镜像或替换新二进制。
 5. 重新启动，观察日志确认迁移与启动无误，再对外恢复流量。
 
-不要在生产环境上尝试不停机的滚动升级——多副本混合版本运行未经验证，`api/proto` 的
-协议演进规则也还没定义（同样是 A03 的范围）。
+不要在生产环境上尝试未经演练的不停机滚动升级——多副本混合版本运行只验证到字段级
+wire 兼容性（A03 设计文档第二节），没有真实多副本集群的端到端验证。
 
-**Cross-version rolling upgrades and database schema backward compatibility
-are not guaranteed yet** (STATUS.md's `A03` is still open). Until that lands,
-follow the steps above rather than assuming a new image can always replace
-the old one in place: read the target version's Breaking Changes / Known
-limitations, back up the database (the control plane currently uses
-`AutoMigrate` — versioned migrations are `P07`, not delivered — so a backup is
-the only rollback path), stop every service with data volumes intact, swap in
-the new images or binaries, then restart and check logs before restoring
-traffic. Do not attempt a no-downtime rolling upgrade in production — running
-mixed versions across replicas is unverified, and `api/proto` has no defined
-evolution rules yet (also `A03`'s scope).
+**There is still no production commitment to cross-version rolling
+upgrades.** STATUS.md's `A03` now ships a design document covering proto
+evolution rules, config versioning, and upgrade/rollback ordering
+([`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md)),
+but it draws byte-level "won't break" boundaries and known gaps, not an
+end-to-end-rehearsed production guarantee (no real multi-replica
+mixed-version rolling-upgrade rehearsal exists yet — see gap 1 in the
+document's section 9). Default to the stop-the-world steps below rather than
+assuming a new image can always replace the old one in place; if a rolling
+upgrade is genuinely needed, read sections 6–7 of that document first for
+the interoperability matrix and recommended ordering:
+
+1. Read the target version's Breaking Changes / Known limitations in the
+   CHANGELOG to confirm there's no schema change or renamed config item that
+   needs manual handling.
+2. Back up the database (PostgreSQL or MySQL, whichever the deployment
+   uses). The control plane's migrations are `P07`'s versioned SQL
+   migrations (`-migrate up/status/resume`) — append-only migrations allow
+   rolling the binary back, but there is no DOWN script, so once a migration
+   is destructive (dropped/renamed/retyped column), the backup is still the
+   only rollback path; see [Database Upgrade and Recovery](deploy/database-recovery.md).
+3. Stop every service (`docker compose down`, without `-v`, keeping data
+   volumes).
+4. Pull the new images or swap in the new binaries.
+5. Restart, check logs for a clean migration and startup, then restore
+   traffic.
+
+Do not attempt an unrehearsed no-downtime rolling upgrade in production —
+mixed versions across replicas are only verified at the field-level wire
+compatibility (A03 design document, section 2); there is no rehearsed
+evidence yet for a real multi-replica mixed-version cluster.
 
 ## 使用已发布产物做全新部署 / Deploying a released version from scratch
 

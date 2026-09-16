@@ -176,6 +176,50 @@ func TestChatPicksTheMoreIdleNode(t *testing.T) {
 	}
 }
 
+// TestChatPicksTheLessQueuedNodeWhenIdleTies covers the P2 realtime-
+// utilization ranking signal (STATUS.md): when two candidates report the
+// same idle slot count, pickBy prefers the one with less reported queue
+// occupancy instead of leaving the tie to inflight alone — this is the
+// signal a single-job-at-a-time backend like ComfyUI needs because its idle
+// count alone cannot tell a busy instance from a free one (see the
+// necessity assessment in
+// docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md).
+//
+// TestChatPicksTheLessQueuedNodeWhenIdleTies 覆盖 P2 实时利用率排序信号
+// （STATUS.md）：两个候选上报相同的空闲槽数时，pickBy 优先选择上报队列占用更低的
+// 那个，而不是把平局完全留给 inflight——这正是 ComfyUI 这种同一时间只跑一个任务的
+// 后端所需要的信号，因为单靠它的空闲槽数无法区分忙碌实例和空闲实例（详见必要性
+// 评估文档 docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md）。
+func TestChatPicksTheLessQueuedNodeWhenIdleTies(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var busyCount, freeCount atomic.Int32
+
+	busySnap := chatCapableSnapshot("backend-1", "qwen3:8b")
+	busySnap.Health = runtime.HealthReport{QueueRunning: 1, QueuePending: 3}
+	freeSnap := chatCapableSnapshot("backend-1", "qwen3:8b")
+
+	connectNode(t, h, "node-busy", "backend-1", busySnap, chatHandler("node-busy", &busyCount))
+	connectNode(t, h, "node-free", "backend-1", freeSnap, chatHandler("node-free", &freeCount))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{
+		Model:    "qwen3:8b",
+		Messages: []runtime.ChatMessage{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if candidate.NodeID != "node-free" {
+		t.Errorf("candidate.NodeID = %q, want node-free (equal idle, lower queue occupancy)", candidate.NodeID)
+	}
+	if resp.Message.Content != "served by node-free" {
+		t.Errorf("content = %q, want %q", resp.Message.Content, "served by node-free")
+	}
+	if busyCount.Load() != 0 {
+		t.Errorf("the busier node was contacted %d times, want 0", busyCount.Load())
+	}
+}
+
 // TestChatExcludesANodeUnderOperatorMaintenance covers STATUS.md's P01: a
 // node_id the Registry has put under maintenance must not receive new
 // dispatch, even though its Control stream stays up and it would otherwise

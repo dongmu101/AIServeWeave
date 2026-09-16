@@ -612,6 +612,12 @@ message HealthReport {
   google.protobuf.Duration latency = 2;
   google.protobuf.Timestamp checked_at = 3;
   string error_summary = 4;             // already sanitized
+  // queue_running/queue_pending are ComfyUI-only occupancy signals (STATUS.md's
+  // P2 realtime-utilization subtask); every other runtime kind leaves both 0,
+  // which the scheduler must treat the same as "not reported", not "confirmed
+  // idle".
+  int32 queue_running = 5;
+  int32 queue_pending = 6;
 }
 
 message Discovery {

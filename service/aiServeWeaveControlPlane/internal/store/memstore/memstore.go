@@ -811,6 +811,24 @@ func (s *Store) DeleteJobArtifact(_ context.Context, id string) error {
 	return nil
 }
 
+// SumArtifactStorageBytes totals SizeBytes across every artifact whose bytes
+// actually reached object storage (StorageKey non-empty), matching
+// gormstore's own SumArtifactStorageBytes.
+//
+// SumArtifactStorageBytes 对每个字节确已抵达对象存储（StorageKey 非空）的
+// 产物累加 SizeBytes，与 gormstore 自己的 SumArtifactStorageBytes 一致。
+func (s *Store) SumArtifactStorageBytes(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total int64
+	for _, artifact := range s.artifacts {
+		if artifact.StorageKey != "" {
+			total += artifact.SizeBytes
+		}
+	}
+	return total, nil
+}
+
 // sortOldestFirst is sortNewestFirst's reverse, for the one list in this
 // package a cleanup sweep reads in age order rather than the user-facing
 // newest-first convention every other list follows.

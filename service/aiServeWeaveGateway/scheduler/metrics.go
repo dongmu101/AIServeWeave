@@ -1,6 +1,8 @@
 package scheduler
 
 import (
+	"time"
+
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
@@ -74,6 +76,33 @@ const (
 	// MetricBreakerTripsTotal 统计熔断跳闸次数。区分「反复抖动」与「持续损坏」的是
 	// 它的斜率，而不是那个量表。
 	MetricBreakerTripsTotal = "gateway_scheduler_breaker_trips_total"
+	// MetricQueueDepth is how many workflow submissions are currently waiting
+	// in STATUS.md's P2 bounded task queue (queueSubmitWorkflow). It only
+	// moves on a Scheduler constructed with Config.QueueMaxWait positive;
+	// otherwise no submission ever queues, so it stays at zero.
+	//
+	// MetricQueueDepth 是当前有多少工作流提交正在 STATUS.md P2 的有界任务队列里
+	// 等待（queueSubmitWorkflow）。只有在 Scheduler 以 Config.QueueMaxWait 为正值
+	// 构造时它才会变化；否则没有提交会排队，它恒为零。
+	MetricQueueDepth = "gateway_scheduler_queue_depth"
+	// MetricQueueWaitSeconds observes how long a queued submission waited
+	// before it stopped waiting, labeled by how it stopped: it found
+	// capacity ("resolved"), its own context was cancelled ("canceled"), or
+	// it ran out of QueueMaxWait ("timeout").
+	//
+	// MetricQueueWaitSeconds 观测一次排队提交在停止等待前等了多久，按它是如何停止的
+	// 打标签：等到了容量（"resolved"）、自己的 context 被取消（"canceled"），或用尽了
+	// QueueMaxWait（"timeout"）。
+	MetricQueueWaitSeconds = "gateway_scheduler_queue_wait_seconds"
+	// MetricQueueRejectedTotal counts submissions that could not even enter
+	// the queue because Config.QueueMaxWaiters concurrent waiters were
+	// already there. This is the queue's own bound working as designed
+	// (AGENTS.md's "任何一跳都不得无界缓冲"), not an error.
+	//
+	// MetricQueueRejectedTotal 统计因为 Config.QueueMaxWaiters 个并发等待者已经占满
+	// 而连排队都排不进去的提交。这是队列自身边界按设计生效（AGENTS.md 的「任何一跳
+	// 都不得无界缓冲」），不是一个错误。
+	MetricQueueRejectedTotal = "gateway_scheduler_queue_rejected_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model.
@@ -84,6 +113,16 @@ const (
 	LabelRuntimeID  = "runtime_id"
 	LabelResult     = "result"
 	LabelCapability = "capability"
+	// LabelOutcome carries one of the queueOutcome* values below, on
+	// MetricQueueWaitSeconds only.
+	LabelOutcome = "outcome"
+)
+
+// queueOutcome* are the closed vocabulary for LabelOutcome.
+const (
+	queueOutcomeResolved = "resolved"
+	queueOutcomeCanceled = "canceled"
+	queueOutcomeTimeout  = "timeout"
 )
 
 // Descriptions is this package's metric catalogue, for a service to hand to
@@ -116,6 +155,19 @@ func Descriptions() metrics.Descriptions {
 		MetricBreakerTripsTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Circuit breaker trips, by candidate.",
+		},
+		MetricQueueDepth: {
+			Kind: metrics.KindGauge,
+			Help: "Workflow submissions currently waiting in the bounded task queue (STATUS.md's P2).",
+		},
+		MetricQueueWaitSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "How long a queued workflow submission waited before it stopped waiting, by outcome.",
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10, 30, 60},
+		},
+		MetricQueueRejectedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Workflow submissions rejected because the queue's maximum concurrent waiters was already reached.",
 		},
 	}
 }
@@ -193,6 +245,31 @@ func (r *recorder) BreakerOpen(c Candidate, open bool) {
 // BreakerTrip 计一次跳闸。
 func (r *recorder) BreakerTrip(c Candidate) {
 	r.sink.Counter(MetricBreakerTripsTotal, candidateLabels(c)).Add(1)
+}
+
+// QueueDepth publishes how many workflow submissions are currently waiting
+// in the bounded task queue.
+//
+// QueueDepth 发布当前有多少工作流提交正在有界任务队列里等待。
+func (r *recorder) QueueDepth(n int) {
+	r.sink.Gauge(MetricQueueDepth, nil).Set(float64(n))
+}
+
+// QueueWait observes how long a queued submission waited before outcome
+// ended the wait.
+//
+// QueueWait 观测一次排队提交在 outcome 结束等待前等了多久。
+func (r *recorder) QueueWait(d time.Duration, outcome string) {
+	r.sink.Histogram(MetricQueueWaitSeconds, map[string]string{LabelOutcome: outcome}).Observe(d.Seconds())
+}
+
+// QueueRejected counts one submission that could not enter the queue
+// because Config.QueueMaxWaiters concurrent waiters were already there.
+//
+// QueueRejected 统计一次因为并发等待者已达 Config.QueueMaxWaiters 而无法进入队列的
+// 提交。
+func (r *recorder) QueueRejected() {
+	r.sink.Counter(MetricQueueRejectedTotal, nil).Add(1)
 }
 
 // discardMetrics is the sink used when no metrics backend is configured.

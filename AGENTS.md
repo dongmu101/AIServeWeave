@@ -27,7 +27,7 @@
 | `common/workflowview/` | 工作流模板目录与实时 job 视图的契约，Gateway 与控制面共用。模板不含图、job 不含运行位置（节点/运行时/解析后的模型），两者都是刻意的 |
 | `common/modelroute/` | 模型别名与目标、路由快照/摘要、生效状态和容量校验的共享契约；控制面发布与 Gateway 应用共用 |
 | `common/nodeview/` | 机群清单的契约：Gateway 报告已连接节点、控制面聚合后交给运维控制台的形状。渲染采用允许列表——只输出这里点名的字段，不序列化 `NodeInfo` 或 `Descriptor` 碰巧持有的一切 |
-| `service/aiServeWeaveAgent/` | `tunnel/`（隧道）与 `localdiscovery/`（本机 Ollama/vLLM 自动发现）已实现；`workflow/` 四个文件目前只有 package 声明，是空壳 |
+| `service/aiServeWeaveAgent/` | `tunnel/`（隧道）、`localdiscovery/`（本机 Ollama/vLLM 自动发现）与 `hostresources/`（Hello 握手前的 CPU/内存/GPU 静态容量探测，STATUS.md P2）已实现；`workflow/` 四个文件目前只有 package 声明，是空壳 |
 | `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）、`routesync/`（控制面路由拉取、缓存与热切换）、`adminapi/`（`-admin-addr` 上只读的机群清单、工作流目录与按租户的 job 端点，供控制面聚合）均已落地；`controlplaneclient/` 提供 Key 校验与 Job 持久化客户端，`httpapi/` 已接入有界后台同步、旁路持久化与非终态恢复；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）、`GatewayDirectory`（副本名册）与 `TokenAdmin`（令牌签发/撤销、节点禁用/启用）已落地，详见其 README |
 | `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户用户与平台运维生命周期、Redis 权威会话、API Key、审计、配额均已落地；禁用用户在数据库事务内吊销其 Key，Key 缓存以 generation 常数时间失效；列表为游标分页 + 服务端筛选。另有 Fleet 聚合、发布管理、Job 历史与内部写 API，详见其 README |

@@ -14,30 +14,139 @@ import (
 // cancellation, artifacts — goes back to the same node, because the run only
 // exists in that one ComfyUI's queue.
 //
+// When every current candidate answers with a retryable backpressure-style
+// failure — every node is busy right now, not permanently unable to serve
+// this request — and the Scheduler was constructed with Config.QueueMaxWait
+// positive, SubmitWorkflow does not give up immediately. It waits up to that
+// long, re-polling the candidate set, before returning the failure
+// (STATUS.md's P2 bounded task queueing; see queueSubmitWorkflow). The
+// default (QueueMaxWait zero) keeps today's behavior: an exhausted candidate
+// set fails the call right away.
+//
 // SubmitWorkflow 把 req 排入某个具备工作流能力的节点，返回 run 句柄与接受它的候选。
 // 调用方必须保存这个候选：此后关于这次运行的一切问题——状态、事件、取消、产物——都要
 // 回到同一个节点，因为这次运行只存在于那一个 ComfyUI 的队列里。
+//
+// 当每一个当前候选都以可重试的背压类失败作答——每个节点此刻都忙，不是永久无法服务
+// 这次请求——且 Scheduler 构造时 Config.QueueMaxWait 为正值，SubmitWorkflow 不会
+// 立即放弃。它会等待至多这么久、期间重新轮询候选集，再把失败返回给调用方
+// （STATUS.md 的 P2 有界任务排队，见 queueSubmitWorkflow）。默认值（QueueMaxWait
+// 为零）保持今天的行为：候选集耗尽立即让这次调用失败。
 func (s *Scheduler) SubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (runtime.WorkflowRun, Candidate, error) {
+	run, c, err, exhausted := s.attemptSubmitWorkflow(ctx, req)
+	if err == nil || !exhausted || s.queueSlots == nil {
+		return run, c, err
+	}
+	return s.queueSubmitWorkflow(ctx, req, err)
+}
+
+// attemptSubmitWorkflow runs exactly one pass over the current candidate
+// set, exactly what SubmitWorkflow did before queueing existed. exhausted
+// reports whether every tried candidate failed with a retryable error — the
+// only condition queueSubmitWorkflow will wait on. It is false both when no
+// candidate exists at all (ErrNoCapableNode) and when a candidate failed
+// with a non-retryable error, because waiting cannot change either outcome.
+//
+// attemptSubmitWorkflow 对当前候选集跑恰好一轮——就是排队功能出现之前 SubmitWorkflow
+// 所做的事。exhausted 报告是否每一个被尝试的候选都以可重试错误失败——这是
+// queueSubmitWorkflow 唯一会等待的条件。候选完全不存在（ErrNoCapableNode）与候选以
+// 不可重试错误失败这两种情形下它都是 false，因为等待无法改变这两种结果中的任何一个。
+func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (run runtime.WorkflowRun, c Candidate, err error, exhausted bool) {
 	candidates := s.workflowCandidates(runtime.CapabilityWorkflowExecution)
 	s.metrics.Selection(runtime.CapabilityWorkflowExecution, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.WorkflowRun{}, Candidate{}, ErrNoCapableNode
+		return runtime.WorkflowRun{}, Candidate{}, ErrNoCapableNode, false
 	}
 	var lastErr error
-	for _, c := range candidates {
-		run, err := s.server.Runtime(c.NodeID, c.RuntimeID).Submit(ctx, req)
-		s.breakers.record(c, err, s.clock.Now())
-		s.metrics.Dispatch(c, err)
-		if err == nil {
-			return run, c, nil
+	for _, cand := range candidates {
+		attemptRun, attemptErr := s.server.Runtime(cand.NodeID, cand.RuntimeID).Submit(ctx, req)
+		s.breakers.record(cand, attemptErr, s.clock.Now())
+		s.metrics.Dispatch(cand, attemptErr)
+		if attemptErr == nil {
+			return attemptRun, cand, nil, false
 		}
-		lastErr = err
-		if !submitRetryable(err) {
-			return runtime.WorkflowRun{}, c, err
+		lastErr = attemptErr
+		if !submitRetryable(attemptErr) {
+			return runtime.WorkflowRun{}, cand, attemptErr, false
 		}
 		s.metrics.Retry(runtime.CapabilityWorkflowExecution)
 	}
-	return runtime.WorkflowRun{}, Candidate{}, lastErr
+	return runtime.WorkflowRun{}, Candidate{}, lastErr, true
+}
+
+// queueSubmitWorkflow implements STATUS.md's P2 bounded task queueing. It is
+// reached only after attemptSubmitWorkflow found every current candidate
+// busy in a retryable way; firstErr is that first exhausted attempt's
+// failure, returned unchanged if the wait budget runs out without a
+// candidate becoming available.
+//
+// The wait is bounded on two independent axes, per AGENTS.md's "任何一跳都
+// 不得无界缓冲": a maximum duration (s.queueMaxWait) and a maximum number of
+// concurrently queued submissions (the s.queueSlots semaphore). A submission
+// that finds the semaphore already full is rejected immediately — it does
+// not become a third, unbounded axis of queueing.
+//
+// queueSubmitWorkflow 实现 STATUS.md 的 P2 有界任务排队。只有在 attemptSubmitWorkflow
+// 发现每一个当前候选都以可重试方式繁忙之后才会走到这里；firstErr 是那次耗尽尝试的
+// 失败，等待预算用完、仍没有候选可用时会原样返回它。
+//
+// 等待在两条彼此独立的轴上都设了界，对应 AGENTS.md「任何一跳都不得无界缓冲」：一个
+// 最长时长（s.queueMaxWait）与一个最大并发排队数（s.queueSlots 信号量）。发现信号量
+// 已满的提交会被立即拒绝——它不会成为排队的第三条无界轴。
+func (s *Scheduler) queueSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest, firstErr error) (runtime.WorkflowRun, Candidate, error) {
+	if !s.acquireQueueSlot() {
+		s.metrics.QueueRejected()
+		return runtime.WorkflowRun{}, Candidate{}, firstErr
+	}
+	defer s.releaseQueueSlot()
+
+	start := s.clock.Now()
+	deadline := start.Add(s.queueMaxWait)
+	lastErr := firstErr
+	for {
+		remaining := deadline.Sub(s.clock.Now())
+		if remaining <= 0 {
+			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeTimeout)
+			return runtime.WorkflowRun{}, Candidate{}, lastErr
+		}
+		timer, stop := s.clock.NewTimer(min(s.queueRetryInterval, remaining))
+		select {
+		case <-ctx.Done():
+			stop()
+			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeCanceled)
+			return runtime.WorkflowRun{}, Candidate{}, ctx.Err()
+		case <-timer:
+		}
+
+		run, c, err, exhausted := s.attemptSubmitWorkflow(ctx, req)
+		if err == nil {
+			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeResolved)
+			return run, c, nil
+		}
+		lastErr = err
+		if !exhausted {
+			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeResolved)
+			return runtime.WorkflowRun{}, c, err
+		}
+	}
+}
+
+// acquireQueueSlot claims one of the queue's bounded waiter slots, reporting
+// whether one was available.
+func (s *Scheduler) acquireQueueSlot() bool {
+	select {
+	case s.queueSlots <- struct{}{}:
+		s.metrics.QueueDepth(len(s.queueSlots))
+		return true
+	default:
+		return false
+	}
+}
+
+// releaseQueueSlot returns a waiter slot claimed by acquireQueueSlot.
+func (s *Scheduler) releaseQueueSlot() {
+	<-s.queueSlots
+	s.metrics.QueueDepth(len(s.queueSlots))
 }
 
 // SubmitWorkflowTo queues req on c specifically, with no candidate selection

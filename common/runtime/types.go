@@ -73,12 +73,23 @@ type ProbeResult struct {
 
 // HealthReport is a point-in-time health snapshot. ErrorSummary contains a
 // sanitized diagnostic message and must not include credentials, headers, or
-// request payloads.
+// request payloads. QueueRunning and QueuePending are a ComfyUI-only
+// occupancy signal (STATUS.md's P2 realtime-utilization subtask): every
+// other runtime kind leaves both 0, and the scheduler treats that the same
+// as "not reported", so it never penalizes a runtime kind that has no queue
+// concept.
+//
+// HealthReport 是某一时刻的健康快照。ErrorSummary 是脱敏后的诊断信息，不得包含
+// 凭据、Header 或请求体。QueueRunning 与 QueuePending 是仅 ComfyUI 才有的占用信号
+// （STATUS.md P2 的实时利用率子任务）：其余运行时种类两者恒为 0，调度器把这与
+// "未上报"同等对待，因此不会惩罚本就没有队列概念的运行时种类。
 type HealthReport struct {
 	State        State
 	Latency      time.Duration
 	CheckedAt    time.Time
 	ErrorSummary string
+	QueueRunning int
+	QueuePending int
 }
 
 // Discovery is an immutable-by-convention snapshot of runtime metadata and
@@ -313,6 +324,18 @@ type WorkflowStatus struct {
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
 	ErrorSummary  string
+	// OutOfMemory is the adapter's best-effort classification of a Failed run
+	// as a backend out-of-memory error, from whatever structured evidence the
+	// backend's own failure report carries (STATUS.md's A06). It is never set
+	// for a State other than WorkflowFailed, and a false value means either
+	// success or a failure the adapter could not attribute to memory
+	// exhaustion — not proof memory was not the cause.
+	//
+	// OutOfMemory 是适配器对一次 Failed 运行的尽力而为分类：是否为后端显存/内存
+	// 不足，依据后端失败报告自身携带的结构化证据判断（STATUS.md 的 A06）。它
+	// 从不在 State 非 WorkflowFailed 时被置位；取值为 false 既可能是成功，也
+	// 可能是适配器无法归因到内存耗尽的失败——不是「确认不是内存问题」的证明。
+	OutOfMemory bool
 }
 
 // ArtifactRef identifies a single output artifact produced by a workflow

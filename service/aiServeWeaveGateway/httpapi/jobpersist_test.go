@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"AIServeWeave/common/metrics/metricstest"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
@@ -490,7 +491,8 @@ func TestJobPersisterCopiesArtifactBytesIntoConfiguredStorage(t *testing.T) {
 	}
 
 	client := newFakePersistClient()
-	p := newJobPersister(jobs, client, opener, storage, clock, discardLogger(), jobPersistConfig{Interval: time.Second})
+	mx := metricstest.New()
+	p := newJobPersister(jobs, client, opener, storage, clock, discardLogger(), jobPersistConfig{Interval: time.Second, Metrics: newRecorder(mx)})
 	p.tick()
 
 	client.mu.Lock()
@@ -500,6 +502,21 @@ func TestJobPersisterCopiesArtifactBytesIntoConfiguredStorage(t *testing.T) {
 		t.Fatalf("artifact calls = %d, want 1", len(calls))
 	}
 	call := calls[0]
+
+	// STATUS.md's A06: the transfer is observed on the same successful copy,
+	// with the real byte count — not a size the caller merely hoped for.
+	//
+	// STATUS.md 的 A06：这次搬运在同一次成功复制中被观测到，携带的是真实的
+	// 字节数——而不是调用方一厢情愿的大小。
+	if got := mx.Sum(MetricArtifactTransfersTotal, map[string]string{LabelResult: ResultSucceeded}); got != 1 {
+		t.Errorf("%s{result=succeeded} = %v, want 1", MetricArtifactTransfersTotal, got)
+	}
+	if got := mx.Sum(MetricArtifactTransferBytesTotal, nil); got != float64(len(body)) {
+		t.Errorf("%s = %v, want %d", MetricArtifactTransferBytesTotal, got, len(body))
+	}
+	if mx.Find(MetricArtifactTransferDurationSeconds, nil) == nil {
+		t.Error("no transfer duration observed")
+	}
 
 	wantSHA := sha256.Sum256([]byte(body))
 	if call.sha256 != hex.EncodeToString(wantSHA[:]) {

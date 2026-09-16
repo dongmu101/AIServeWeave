@@ -305,6 +305,14 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		storage:                 cfg.ArtifactStorage,
 		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
 	}
+	// h.jobs.metrics is set after the struct literal rather than inside it:
+	// h.metrics must exist first, and a struct literal cannot reference the
+	// value it is still constructing (STATUS.md's A06).
+	//
+	// h.jobs.metrics 在结构体字面量之外赋值，而不是在其内部：h.metrics 必须
+	// 先存在，而一个结构体字面量无法引用自己尚在构造中的值（STATUS.md 的
+	// A06）。
+	h.jobs.metrics = h.metrics
 
 	syncer := newJobSyncer(h.jobs, sched, clock, logger, jobSyncConfig{
 		Interval:    cfg.SyncInterval,
@@ -334,6 +342,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 			CallTimeout:         cfg.PersistCallTimeout,
 			MaxBackoff:          cfg.PersistMaxBackoff,
 			ArtifactCopyTimeout: cfg.ArtifactCopyTimeout,
+			Metrics:             h.metrics,
 		})
 		go persister.run()
 	}

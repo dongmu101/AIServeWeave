@@ -106,6 +106,16 @@ type ServiceContext struct {
 	relayDone   chan struct{}
 	lagCancel   context.CancelFunc
 	lagDone     chan struct{}
+	// artifactStorageCancel/artifactStorageDone tear down
+	// runArtifactStorageGauge (STATUS.md's A06), started unconditionally the
+	// same way lagCancel/lagDone are — it only reads job_artifacts, so it
+	// needs no external address to be configured.
+	//
+	// artifactStorageCancel/artifactStorageDone 关停 runArtifactStorageGauge
+	// （STATUS.md 的 A06），与 lagCancel/lagDone 同样无条件启动——它只读取
+	// job_artifacts，不需要配置任何外部地址。
+	artifactStorageCancel context.CancelFunc
+	artifactStorageDone   chan struct{}
 
 	// metricsHistoryCancel/metricsHistoryDone tear down the collector and
 	// retention goroutines started below, only running at all when
@@ -231,6 +241,13 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	lagDone := make(chan struct{})
 	go func() { defer close(lagDone); runOutboxLagGauge(lagCtx, st, metricsRegistry) }()
 
+	artifactStorageCtx, artifactStorageCancel := context.WithCancel(ctx)
+	artifactStorageDone := make(chan struct{})
+	go func() {
+		defer close(artifactStorageDone)
+		runArtifactStorageGauge(artifactStorageCtx, st, metricsRegistry)
+	}()
+
 	var metricsHistoryCancel context.CancelFunc
 	var metricsHistoryDone chan struct{}
 	if cfg.MetricsHistory.Enabled() {
@@ -301,6 +318,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		relayDone:                 relayDone,
 		lagCancel:                 lagCancel,
 		lagDone:                   lagDone,
+		artifactStorageCancel:     artifactStorageCancel,
+		artifactStorageDone:       artifactStorageDone,
 		metricsHistoryCancel:      metricsHistoryCancel,
 		metricsHistoryDone:        metricsHistoryDone,
 		requestLogRetentionCancel: rlCancel,
@@ -378,6 +397,58 @@ func runOutboxLagGauge(ctx context.Context, st outboxLagStore, registry *commonm
 	}
 }
 
+// artifactStorageStore is the read the artifact-storage gauge needs
+// (STATUS.md's A06), named separately from outboxLagStore for the same
+// reason that one is named separately from the whole store type: a poller
+// should depend on exactly the one method it calls.
+//
+// artifactStorageStore 是产物存储量表所需要的那次读取（STATUS.md 的 A06），
+// 与 outboxLagStore 分开命名的理由相同：一个轮询器应当只依赖它调用的那一个
+// 方法。
+type artifactStorageStore interface {
+	SumArtifactStorageBytes(ctx context.Context) (int64, error)
+}
+
+// artifactStoragePollInterval matches outboxLagPollInterval's reasoning: a
+// gauge derived from a SUM over job_artifacts does not need sub-second
+// freshness, only freshness within a few intervals of an operator looking
+// at it.
+//
+// artifactStoragePollInterval 与 outboxLagPollInterval 的理由相同：一个从
+// job_artifacts 的 SUM 派生出的量表不需要亚秒级的新鲜度，只需要在运维查看
+// 它的几个周期之内保持新鲜。
+const artifactStoragePollInterval = 5 * time.Second
+
+// runArtifactStorageGauge sets controlplane_artifact_storage_bytes to the
+// current SUM(size_bytes) over job_artifacts rows whose bytes actually
+// reached object storage, once per artifactStoragePollInterval, until ctx is
+// done. It runs unconditionally, the same as runOutboxLagGauge: it reads
+// only job_artifacts, which already exists whether or not any deployment
+// feature that touches it is configured (STATUS.md's A06).
+//
+// runArtifactStorageGauge 每隔一个 artifactStoragePollInterval，把
+// controlplane_artifact_storage_bytes 设为 job_artifacts 中字节确已抵达对象
+// 存储的行上 SUM(size_bytes) 的当前值，直到 ctx 结束。它与 runOutboxLagGauge
+// 同样无条件运行：它只读取 job_artifacts，无论触及它的哪项部署功能是否配置，
+// 这张表本就存在（STATUS.md 的 A06）。
+func runArtifactStorageGauge(ctx context.Context, st artifactStorageStore, registry *commonmetrics.Registry) {
+	ticker := time.NewTicker(artifactStoragePollInterval)
+	defer ticker.Stop()
+	for {
+		total, err := st.SumArtifactStorageBytes(ctx)
+		if err != nil {
+			slog.Warn("artifact storage gauge read failed", slog.Any("error", err))
+		} else {
+			registry.Gauge(cpmetrics.MetricArtifactStorageBytes, nil).Set(float64(total))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
 // Close releases the database and cache connections.
 //
 // Close 释放数据库与缓存连接。
@@ -389,6 +460,10 @@ func (s *ServiceContext) Close() error {
 	if s.lagCancel != nil {
 		s.lagCancel()
 		<-s.lagDone
+	}
+	if s.artifactStorageCancel != nil {
+		s.artifactStorageCancel()
+		<-s.artifactStorageDone
 	}
 	if s.metricsHistoryCancel != nil {
 		s.metricsHistoryCancel()

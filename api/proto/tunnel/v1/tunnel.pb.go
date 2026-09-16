@@ -3722,11 +3722,17 @@ func (x *ProbeResult) GetProbedAt() *timestamppb.Timestamp {
 }
 
 type HealthReport struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	State         string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
-	Latency       *durationpb.Duration   `protobuf:"bytes,2,opt,name=latency,proto3" json:"latency,omitempty"`
-	CheckedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=checked_at,json=checkedAt,proto3" json:"checked_at,omitempty"`
-	ErrorSummary  string                 `protobuf:"bytes,4,opt,name=error_summary,json=errorSummary,proto3" json:"error_summary,omitempty"` // already sanitized
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	State        string                 `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
+	Latency      *durationpb.Duration   `protobuf:"bytes,2,opt,name=latency,proto3" json:"latency,omitempty"`
+	CheckedAt    *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=checked_at,json=checkedAt,proto3" json:"checked_at,omitempty"`
+	ErrorSummary string                 `protobuf:"bytes,4,opt,name=error_summary,json=errorSummary,proto3" json:"error_summary,omitempty"` // already sanitized
+	// queue_running/queue_pending are ComfyUI-only occupancy signals (STATUS.md's
+	// P2 realtime-utilization subtask); every other runtime kind leaves both 0,
+	// which the scheduler must treat the same as "not reported", not "confirmed
+	// idle".
+	QueueRunning  int32 `protobuf:"varint,5,opt,name=queue_running,json=queueRunning,proto3" json:"queue_running,omitempty"`
+	QueuePending  int32 `protobuf:"varint,6,opt,name=queue_pending,json=queuePending,proto3" json:"queue_pending,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3787,6 +3793,20 @@ func (x *HealthReport) GetErrorSummary() string {
 		return x.ErrorSummary
 	}
 	return ""
+}
+
+func (x *HealthReport) GetQueueRunning() int32 {
+	if x != nil {
+		return x.QueueRunning
+	}
+	return 0
+}
+
+func (x *HealthReport) GetQueuePending() int32 {
+	if x != nil {
+		return x.QueuePending
+	}
+	return 0
 }
 
 type Discovery struct {
@@ -5969,13 +5989,15 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\aversion\x18\x02 \x01(\tR\aversion\x12+\n" +
 	"\x11identity_verified\x18\x03 \x01(\bR\x10identityVerified\x12\x1a\n" +
 	"\bevidence\x18\x04 \x01(\tR\bevidence\x127\n" +
-	"\tprobed_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bprobedAt\"\xb9\x01\n" +
+	"\tprobed_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\bprobedAt\"\x83\x02\n" +
 	"\fHealthReport\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x123\n" +
 	"\alatency\x18\x02 \x01(\v2\x19.google.protobuf.DurationR\alatency\x129\n" +
 	"\n" +
 	"checked_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tcheckedAt\x12#\n" +
-	"\rerror_summary\x18\x04 \x01(\tR\ferrorSummary\"\xf7\x02\n" +
+	"\rerror_summary\x18\x04 \x01(\tR\ferrorSummary\x12#\n" +
+	"\rqueue_running\x18\x05 \x01(\x05R\fqueueRunning\x12#\n" +
+	"\rqueue_pending\x18\x06 \x01(\x05R\fqueuePending\"\xf7\x02\n" +
 	"\tDiscovery\x12\x18\n" +
 	"\aversion\x18\x01 \x01(\tR\aversion\x12(\n" +
 	"\x06models\x18\x02 \x03(\v2\x10.tunnel.v1.ModelR\x06models\x12\x1d\n" +
