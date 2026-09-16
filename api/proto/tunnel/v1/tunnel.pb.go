@@ -5416,6 +5416,7 @@ type WorkflowStatus struct {
 	StartedAt     *timestamppb.Timestamp `protobuf:"bytes,3,opt,name=started_at,json=startedAt,proto3" json:"started_at,omitempty"`
 	FinishedAt    *timestamppb.Timestamp `protobuf:"bytes,4,opt,name=finished_at,json=finishedAt,proto3" json:"finished_at,omitempty"`
 	ErrorSummary  string                 `protobuf:"bytes,5,opt,name=error_summary,json=errorSummary,proto3" json:"error_summary,omitempty"` // already sanitized
+	OutOfMemory   bool                   `protobuf:"varint,6,opt,name=out_of_memory,json=outOfMemory,proto3" json:"out_of_memory,omitempty"` // only ever true alongside state == "failed"
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5483,6 +5484,13 @@ func (x *WorkflowStatus) GetErrorSummary() string {
 		return x.ErrorSummary
 	}
 	return ""
+}
+
+func (x *WorkflowStatus) GetOutOfMemory() bool {
+	if x != nil {
+		return x.OutOfMemory
+	}
+	return false
 }
 
 type ArtifactRef struct {
@@ -6140,7 +6148,7 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\anode_id\x18\x03 \x01(\tR\x06nodeId\x12\x10\n" +
 	"\x03raw\x18\x04 \x01(\fR\x03raw\x12;\n" +
 	"\vreceived_at\x18\x05 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
-	"receivedAt\"\xea\x01\n" +
+	"receivedAt\"\x8e\x02\n" +
 	"\x0eWorkflowStatus\x12\x14\n" +
 	"\x05state\x18\x01 \x01(\tR\x05state\x12%\n" +
 	"\x0equeue_position\x18\x02 \x01(\x03R\rqueuePosition\x129\n" +
@@ -6148,7 +6156,8 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"started_at\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\tstartedAt\x12;\n" +
 	"\vfinished_at\x18\x04 \x01(\v2\x1a.google.protobuf.TimestampR\n" +
 	"finishedAt\x12#\n" +
-	"\rerror_summary\x18\x05 \x01(\tR\ferrorSummary\"r\n" +
+	"\rerror_summary\x18\x05 \x01(\tR\ferrorSummary\x12\"\n" +
+	"\rout_of_memory\x18\x06 \x01(\bR\voutOfMemory\"r\n" +
 	"\vArtifactRef\x12\x15\n" +
 	"\x06run_id\x18\x01 \x01(\tR\x05runId\x12\x1a\n" +
 	"\bfilename\x18\x02 \x01(\tR\bfilename\x12\x1c\n" +

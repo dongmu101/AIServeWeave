@@ -389,7 +389,7 @@ queued → running → succeeded
 
 ComfyUI 的 `prompt_id` 是后端任务 ID，不能直接作为公开 ID。AIServeWeave 应生成自己的 `job_id`，保存二者映射，并使用租户权限保护状态、事件和产物。
 
-对于简单的文生图场景，可以把 OpenAI-compatible `POST /v1/images/generations` 映射到管理员指定的 ComfyUI 工作流模板。复杂工作流仍使用 AIServeWeave Workflow API，以免丢失 ComfyUI 的图结构、视频输出和自定义参数能力。
+对于简单的文生图场景，`POST /v1/images/generations` 已实现，把 OpenAI-compatible 请求映射到管理员通过 `-images-workflow-id` 指定的 ComfyUI 工作流模板；复杂工作流仍使用 AIServeWeave Workflow API，以免丢失 ComfyUI 的图结构、视频输出和自定义参数能力。配置约定、同步执行模型与已知限制见 [Gateway README「图像生成」](service/aiServeWeaveGateway/README.md#图像生成) 与 [STATUS.md 的 P2](STATUS.md#p2后续扩展)。
 
 ### 文件与产物
 

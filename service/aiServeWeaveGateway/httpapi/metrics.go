@@ -220,10 +220,11 @@ const (
 //
 // endpoint 标签取值，本包服务的每条路由各一个，外加一个把其余所有路径收拢进来的兜底值。
 const (
-	EndpointModels          = "models"
-	EndpointChatCompletions = "chat_completions"
-	EndpointEmbeddings      = "embeddings"
-	EndpointResponses       = "responses"
+	EndpointModels            = "models"
+	EndpointChatCompletions   = "chat_completions"
+	EndpointEmbeddings        = "embeddings"
+	EndpointResponses         = "responses"
+	EndpointImagesGenerations = "images_generations"
 	// EndpointWorkflowRuns and EndpointJobs cover the two routes whose paths
 	// carry an identifier. Neither identifier becomes part of the label: a
 	// job id is minted per request, so letting it through would let one
@@ -355,6 +356,8 @@ func endpointFor(path string) string {
 		return EndpointEmbeddings
 	case "/v1/responses":
 		return EndpointResponses
+	case "/v1/images/generations":
+		return EndpointImagesGenerations
 	}
 	// The two routes below carry an identifier in the path, so they are
 	// matched by shape rather than by equality. The shape is still a closed

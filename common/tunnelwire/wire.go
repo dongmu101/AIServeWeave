@@ -1158,6 +1158,7 @@ func WorkflowStatusToProto(status runtime.WorkflowStatus) *tunnelv1.WorkflowStat
 		StartedAt:     timePtrToProto(status.StartedAt),
 		FinishedAt:    timePtrToProto(status.FinishedAt),
 		ErrorSummary:  status.ErrorSummary,
+		OutOfMemory:   status.OutOfMemory,
 	}
 }
 
@@ -1172,6 +1173,7 @@ func WorkflowStatusFromProto(pb *tunnelv1.WorkflowStatus) runtime.WorkflowStatus
 		StartedAt:     timePtrFromProto(pb.GetStartedAt()),
 		FinishedAt:    timePtrFromProto(pb.GetFinishedAt()),
 		ErrorSummary:  pb.GetErrorSummary(),
+		OutOfMemory:   pb.GetOutOfMemory(),
 	}
 }
 

@@ -10,7 +10,7 @@
 | `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
 | `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
-| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
+| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
 | `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：文件或控制面来源（P03）、声明式输入/输出/依赖、绑定与校验；`Handle` 原子持有当前生效目录 |
 | `workflowsync/` | 已实现 | 控制面版本的有界拉取、逐模板校验、持久化最近有效整包与生效状态（P03） |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
@@ -291,6 +291,19 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **候选完全不存在（`ErrNoCapableNode`）或失败不可重试时永远不排队。** 前者重试也不会凭空出现一个节点；后者（例如 ComfyUI 可能已经收到了这次提交）重试有制造第二次生成的风险，两者都保持立即失败。
 - **两条独立的界，缺一不可**（AGENTS.md「任何一跳都不得无界缓冲」）：`-workflow-queue-max-wait` 限最长等待时长，`-workflow-queue-max-waiters`（默认 64）限同时在等的提交数，超过后新的提交立即被拒绝而不是排进一个更长的队。`-workflow-queue-retry-interval`（默认 500ms）是等待期间重新轮询候选集的间隔。
 - **可观测**：`gateway_scheduler_queue_depth`（当前排队数）、`gateway_scheduler_queue_wait_seconds`（按 `outcome`∈`resolved`/`canceled`/`timeout` 分桶的等待时长）、`gateway_scheduler_queue_rejected_total`（因排队已满被拒绝的次数），见下方「指标」。
+
+## 图像生成
+
+`POST /v1/images/generations`（STATUS.md 的 P2）把 OpenAI-compatible 图像生成请求映射到管理员指定的单一 ComfyUI 工作流模板，边界设计见 [P2 设计文档「图像生成映射到 ComfyUI」](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md)。
+
+- **`-images-workflow-id` 未配置时该路由照常挂载但答 404**，与其余工作流路由「路由总是挂载、由配置决定行为」的既有模式一致。配置了但对应模板在启动期缺少必填 `prompt` 字符串输入、或没有至少一个 `Type == "image"` 的 `Output`，进程直接启动失败（`main.go` 的 `validateImagesWorkflow`）——这是一次性静态检查，**不会**在 `-workflow-source=controlplane` 热替换目录时重新触发；一次剥离了所需字段的重新发布，只会在下一次请求时表现为 400/500，不是启动失败。
+- **约定优于配置**：调用方的 `prompt` 绑定到模板声明的 `prompt` 输入，`size`（`"WIDTHxHEIGHT"`）仅在模板同时声明了 `width`/`height` 整数输入时才被接受，否则按名字拒绝。没有单独的输入名映射配置——这样模板经控制面热替换时，映射关系不会与它的 `Inputs` 声明脱节。
+- **全程同步**：内部经 `scheduler.SubmitWorkflow`（与 `/v1/workflows/{id}/runs` 共用同一个入口，因此正确参与 P2 有界排队）提交后，以注入的 `runtime.Clock` 驱动的 500ms 固定间隔轮询 `WorkflowStatus` 直到终态或 `-images-generation-timeout`（默认 120s）超时；超时答 504，运行本身在节点上继续、不被取消，job 记录早于轮询循环写入，因此仍可用 `GET /v1/jobs/{job_id}` 查询。
+- **产物筛选是运行期的扩展名约定，不是结构化的图判定**：`runtime.ArtifactRef` 不携带节点身份，因此无法把一次产物与模板声明的哪个 `Output.Node` 关联；实现上，`WorkflowArtifacts()` 结果里 `Type == "output"` 且文件名后缀属于已知图片扩展名（`.png .jpg .jpeg .webp .gif .bmp`）的才被当作生成图像，其余（包括模板作者自己保存的非图像调试产物）静默跳过。零个合格产物答 500。
+- **`response_format=b64_json`（默认）** 经 `OpenArtifact` 有界读取（`MaxImageResponseBytes` 32 MiB，刻意远小于产物传输本身的 512 MiB 上限——把一个足尺寸产物 base64 膨胀进一个 JSON 响应体不是同步处理器该做的事）后 base64 编码；**`response_format=url`** 直接返回既有的 `GET /v1/artifacts/{artifact_id}` 路径，不新增同步持久化，靠该路径本就有的「优先读持久副本、失败回退实时节点拉取」覆盖异步持久化器还没赶上的窗口。
+- **`n` 目前只接受 1**，`quality`/`style` 未实现，均按名字拒绝而不是静默忽略。
+- 本项实现过程中发现并修复了一处独立于本功能之外的既有缺陷：`runtime.WorkflowStatus.OutOfMemory` 此前从未真正跨隧道传输（`tunnel.proto`/`common/tunnelwire` 都缺这个字段），意味着 A06 的 `gateway_workflow_job_oom_total` 指标在生产环境里从未被真正观测到过 true，详见设计文档 2.5 节。
+- 本机无真实 ComfyUI/GPU 环境验证，与 A06 同一先例，默认测试套件（假节点）作为交付依据。
 
 ## 指标
 

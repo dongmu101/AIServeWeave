@@ -839,6 +839,34 @@ func TestConvertPayloadRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			// A06's gateway_workflow_job_oom_total metric (STATUS.md) reads
+			// this field off the status jobStore.update receives from exactly
+			// this wire decode, so a regression here would silently zero out
+			// that metric in production without any test elsewhere catching
+			// it — WorkflowStatusToProto/FromProto once dropped this field
+			// entirely.
+			//
+			// A06 的 gateway_workflow_job_oom_total 指标（STATUS.md）读取的
+			// 正是 jobStore.update 从这次隧道解码里拿到的这个字段，因此这里
+			// 一旦退化，会在生产环境里悄悄把那个指标清零，而不会被别处的任何
+			// 测试发现——WorkflowStatusToProto/FromProto 曾经完全丢弃过这个
+			// 字段。
+			name: "workflow status failed out of memory",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalWorkflowStatus(runtime.WorkflowStatus{
+					State:        runtime.WorkflowFailed,
+					ErrorSummary: "CUDA out of memory",
+					OutOfMemory:  true,
+				})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalWorkflowStatus(b) },
+			want: runtime.WorkflowStatus{
+				State:        runtime.WorkflowFailed,
+				ErrorSummary: "CUDA out of memory",
+				OutOfMemory:  true,
+			},
+		},
+		{
 			name: "artifact ref",
 			encode: func() ([]byte, error) {
 				return tunnelwire.MarshalArtifactRef(runtime.ArtifactRef{

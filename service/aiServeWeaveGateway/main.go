@@ -110,6 +110,10 @@ func run() error {
 	workflowSyncInterval := flag.Duration("workflow-sync-interval", 30*time.Second, "managed workflow template polling interval")
 	workflowTemplates := flag.String("workflow-templates", "",
 		"comma-separated files or directories of ComfyUI workflow template manifests; empty registers none, and every workflow submit then 404s")
+	imagesWorkflowID := flag.String("images-workflow-id", "",
+		"registered workflow template id POST /v1/images/generations binds a caller's prompt onto (STATUS.md's P2); empty disables the endpoint (404). The template must declare a required string input named \"prompt\" and at least one output typed \"image\", checked at startup; optional \"width\"/\"height\" integer inputs let a caller's size parameter through")
+	imagesGenerationTimeout := flag.Duration("images-generation-timeout", 0,
+		"bound on POST /v1/images/generations' whole synchronous submit-to-terminal wait; zero uses httpapi.DefaultImagesGenerationTimeout (120s)")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	adminAddr := flag.String("admin-addr", "",
@@ -259,6 +263,10 @@ func run() error {
 	}
 	logger.Info("workflow templates loaded", slog.Int("count", workflowHandle.Len()))
 
+	if err := validateImagesWorkflow(workflowHandle, *imagesWorkflowID); err != nil {
+		return err
+	}
+
 	// Which limiter this replica gets is a deployment question, not a code
 	// one: one replica enforces exactly either way, and several replicas only
 	// enforce the configured allowance when they share Redis. Without it each
@@ -321,6 +329,8 @@ func run() error {
 		ArtifactRetention:        *artifactRetention,
 		ArtifactPreviewRetention: *artifactPreviewRetention,
 		AllowedUploadExtensions:  splitCommaList(*allowedUploadExtensions),
+		ImagesWorkflowID:         *imagesWorkflowID,
+		ImagesGenerationTimeout:  *imagesGenerationTimeout,
 	}
 	// jobPersistence is assigned to both interface-typed fields only when it
 	// is genuinely non-nil: httpapi.Config's fields are interfaces, and

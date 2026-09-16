@@ -802,6 +802,7 @@ message WorkflowStatus {
   google.protobuf.Timestamp started_at = 3;
   google.protobuf.Timestamp finished_at = 4;
   string error_summary = 5;             // already sanitized
+  bool out_of_memory = 6;               // only ever true alongside state == "failed"
 }
 
 message ArtifactRef {

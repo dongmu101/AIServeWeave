@@ -275,15 +275,38 @@ type Config struct {
 	// RequestLogFlushInterval 是一条记录在缓冲中等待推送的最长时间。为零时
 	// 采用 DefaultRequestLogFlushInterval。
 	RequestLogFlushInterval time.Duration
+
+	// ImagesWorkflowID is the registered workflow template POST
+	// /v1/images/generations binds a caller's prompt onto (STATUS.md's P2).
+	// Empty disables the route: it stays mounted but answers 404, the same
+	// "route always mounted, configuration decides" pattern the workflow
+	// routes already follow. The caller of httpapi.New (main.go) is
+	// responsible for validating at startup that this id, once non-empty,
+	// names a template with the required declared inputs and outputs — see
+	// main.go's own validation and the Gateway README's 图像生成 section.
+	//
+	// ImagesWorkflowID 是 POST /v1/images/generations 把调用方提示词绑定到
+	// 其上的那个已注册工作流模板（STATUS.md 的 P2）。为空时该路由关闭：
+	// 它照常挂载但答复 404，与工作流路由已经遵循的「路由总是挂载、由配置
+	// 决定」同一模式。httpapi.New 的调用方（main.go）负责在启动期校验：
+	// 一旦这个 id 非空，它必须指向一个声明了所需输入与输出的模板——见
+	// main.go 自己的校验与 Gateway README「图像生成」一节。
+	ImagesWorkflowID string
+	// ImagesGenerationTimeout bounds imagesGenerations' whole synchronous
+	// Submit-to-terminal loop. Zero uses DefaultImagesGenerationTimeout.
+	//
+	// ImagesGenerationTimeout 限定 imagesGenerations 整个同步的「提交到终态」
+	// 循环。为零时采用 DefaultImagesGenerationTimeout。
+	ImagesGenerationTimeout time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
 // POST /v1/chat/completions (streaming and non-streaming),
-// POST /v1/embeddings, POST /v1/workflows/{workflow_id}/runs,
-// GET /v1/jobs/{job_id}, GET /v1/jobs/{job_id}/events (SSE),
-// POST /v1/jobs/{job_id}/cancel, GET /v1/jobs/{job_id}/artifacts and
-// GET /v1/artifacts/{artifact_id}, wrapped in request logging and API key
-// authentication.
+// POST /v1/embeddings, POST /v1/responses, POST /v1/images/generations,
+// POST /v1/workflows/{workflow_id}/runs, GET /v1/jobs/{job_id},
+// GET /v1/jobs/{job_id}/events (SSE), POST /v1/jobs/{job_id}/cancel,
+// GET /v1/jobs/{job_id}/artifacts and GET /v1/artifacts/{artifact_id},
+// wrapped in request logging and API key authentication.
 func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	logger := cfg.Logger
 	if logger == nil {
@@ -292,6 +315,10 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	clock := cfg.Clock
 	if clock == nil {
 		clock = runtime.NewSystemClock()
+	}
+	imagesGenerationTimeout := cfg.ImagesGenerationTimeout
+	if imagesGenerationTimeout <= 0 {
+		imagesGenerationTimeout = DefaultImagesGenerationTimeout
 	}
 
 	h := &handlers{
@@ -304,6 +331,8 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		limiter:                 cfg.Limiter,
 		storage:                 cfg.ArtifactStorage,
 		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
+		imagesWorkflowID:        cfg.ImagesWorkflowID,
+		imagesGenerationTimeout: imagesGenerationTimeout,
 	}
 	// h.jobs.metrics is set after the struct literal rather than inside it:
 	// h.metrics must exist first, and a struct literal cannot reference the
@@ -425,6 +454,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	mux.HandleFunc("POST /v1/responses", h.responses)
+	mux.HandleFunc("POST /v1/images/generations", h.imagesGenerations)
 	mux.HandleFunc("POST /v1/workflows/{workflow_id}/runs", h.submitRun)
 	mux.HandleFunc("GET /v1/jobs/{job_id}", h.jobStatus)
 	mux.HandleFunc("GET /v1/jobs/{job_id}/events", h.jobEvents)
@@ -582,6 +612,13 @@ type handlers struct {
 	// allowedUploadExtensions 是归一化成查找集合后的
 	// Config.AllowedUploadExtensions——见 uploadformat.go。
 	allowedUploadExtensions map[string]struct{}
+	// imagesWorkflowID and imagesGenerationTimeout are Config.ImagesWorkflowID
+	// and Config.ImagesGenerationTimeout (already defaulted) — see images.go.
+	//
+	// imagesWorkflowID 与 imagesGenerationTimeout 分别是 Config.ImagesWorkflowID
+	// 与已经补过默认值的 Config.ImagesGenerationTimeout——见 images.go。
+	imagesWorkflowID        string
+	imagesGenerationTimeout time.Duration
 }
 
 // observe wraps the whole handler chain in the request counter, the duration
