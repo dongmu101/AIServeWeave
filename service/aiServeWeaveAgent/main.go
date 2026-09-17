@@ -24,6 +24,7 @@ import (
 	"AIServeWeave/common/runtime/workflow/comfyui"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
+	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
 
@@ -54,6 +55,7 @@ const (
 func main() {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	opts := registerTunnelFlags()
+	mpOpts := registerModelPullFlags()
 	ollamaURL := flag.String("ollama-url", "",
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
@@ -78,7 +80,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
+	if err := run(logger, opts, mpOpts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -181,6 +183,44 @@ func (o *tunnelOptions) runtimeIDs() []string {
 	return ids
 }
 
+// modelPullOptions is the configuration for modelpull (STATUS.md's P2 model
+// distribution, subtask 1: see
+// docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md). It
+// comes from flags, is entirely local to this node, and is never accepted
+// from the Gateway or control plane. An empty manifest disables the feature.
+//
+// modelPullOptions 是 modelpull 的配置（STATUS.md P2 模型分发子任务一，见
+// docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md）。它来自
+// flag，完全是本节点本地的，从不接受 Gateway 或控制面下发。清单为空时功能关闭。
+type modelPullOptions struct {
+	manifest   string
+	allowlist  string
+	quotaBytes int64
+}
+
+func registerModelPullFlags() *modelPullOptions {
+	opts := &modelPullOptions{}
+	flag.StringVar(&opts.manifest, "model-pull-manifest", "",
+		"path to a JSON manifest of models to fetch and verify at startup; empty disables model pulling")
+	flag.StringVar(&opts.allowlist, "model-pull-allowlist", "",
+		"comma-separated URL prefixes models may be pulled from; empty rejects every pull")
+	flag.Int64Var(&opts.quotaBytes, "model-pull-quota-bytes", 0,
+		"byte budget for this run's model pulls; <=0 means unlimited")
+	return opts
+}
+
+// allowlistPrefixes parses -model-pull-allowlist the same way
+// tunnelOptions.runtimeIDs parses -allowed-runtimes.
+func (o *modelPullOptions) allowlistPrefixes() []string {
+	var prefixes []string
+	for _, p := range strings.Split(o.allowlist, ",") {
+		if p = strings.TrimSpace(p); p != "" {
+			prefixes = append(prefixes, p)
+		}
+	}
+	return prefixes
+}
+
 // run wires the runtime registry and manager, then blocks until the process is
 // signalled to stop. It returns the first error that prevents a clean start or
 // a clean shutdown.
@@ -189,7 +229,7 @@ func (o *tunnelOptions) runtimeIDs() []string {
 // config file described in tunnel/README.md: until that file lands, this is
 // the only way to give the agent a real backend to dispatch to. An empty
 // ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -230,6 +270,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 	)
 
 	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
+	modelPullDone := startModelPull(ctx, logger, mpOpts)
 
 	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts)
 	if err != nil {
@@ -255,6 +296,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 	}
 
 	<-discoveryDone // wait for the last scan's Manager.Add calls to finish before Close starts tearing instances down
+	<-modelPullDone // ctx is already canceled by now, so any in-flight fetch unwinds quickly
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
@@ -330,6 +372,49 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 		if err := scanner.Run(ctx); err != nil {
 			logger.Error("local discovery stopped unexpectedly", slog.Any("error", err))
 		}
+	}()
+	return done
+}
+
+// startModelPull runs modelpull.RunManifest in the background and returns a
+// channel that is closed once it has finished. Unlike startLocalDiscovery,
+// this never blocks the Hello handshake or the tunnel connection on purpose:
+// a model download can take arbitrarily long, and an agent that looked
+// "hung" because it was still fetching a multi-gigabyte file before ever
+// reaching the gateway would be worse than one that connects immediately and
+// fetches in parallel. A missing or empty manifest disables the feature
+// entirely, and any failure is logged rather than treated as fatal — this is
+// best-effort, the same restraint hostresources uses for its own probing.
+//
+// startModelPull 在后台跑 modelpull.RunManifest，返回一个它结束后就会关闭的
+// channel。与 startLocalDiscovery 不同，这里故意不阻塞 Hello 握手或隧道连接：
+// 模型下载耗时可能无上限，一个因为还在下载几个 GB 的文件、连 Gateway 都没连上
+// 就"看起来卡死"的 Agent，比一个立刻接入、下载并行进行的 Agent 要糟糕得多。
+// 清单为空时功能整体关闭，任何失败都只记日志、不当作致命错误——这是与
+// hostresources 自己探测时同一种"尽力而为"的克制。
+func startModelPull(ctx context.Context, logger *slog.Logger, opts *modelPullOptions) <-chan struct{} {
+	done := make(chan struct{})
+	if opts.manifest == "" {
+		close(done)
+		return done
+	}
+	go func() {
+		defer close(done)
+		specs, err := modelpull.LoadManifest(opts.manifest)
+		if err != nil {
+			logger.Error("model pull manifest not loaded", slog.Any("error", err))
+			return
+		}
+		cfg := modelpull.Config{Allowlist: opts.allowlistPrefixes(), QuotaBytes: opts.quotaBytes}
+		result := modelpull.RunManifest(ctx, cfg, specs)
+		for name, err := range result.Failed {
+			logger.Error("model pull failed", slog.String("name", name), slog.Any("error", err))
+		}
+		logger.Info("model pull finished",
+			slog.Int("pulled", len(result.Pulled)),
+			slog.Int("skipped", len(result.Skipped)),
+			slog.Int("failed", len(result.Failed)),
+		)
 	}()
 	return done
 }
