@@ -260,6 +260,31 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	return runtime.EmbeddingResponse{}, Candidate{}, lastErr
 }
 
+// Rerank dispatches req the same way Chat and Embed do.
+func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, Candidate, error) {
+	candidates := s.candidates(req.Model, runtime.CapabilityRerank)
+	s.metrics.Selection(runtime.CapabilityRerank, len(candidates))
+	if len(candidates) == 0 {
+		return runtime.RerankResponse{}, Candidate{}, ErrNoCapableNode
+	}
+	var lastErr error
+	for _, c := range candidates {
+		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Rerank(ctx, withRerankModel(req, c.Model))
+		s.breakers.record(c, err, s.clock.Now())
+		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "rerank", c, err)
+		if err == nil {
+			return resp, c, nil
+		}
+		lastErr = err
+		if !retryable(err) {
+			return runtime.RerankResponse{}, c, err
+		}
+		s.metrics.Retry(runtime.CapabilityRerank)
+	}
+	return runtime.RerankResponse{}, Candidate{}, lastErr
+}
+
 // TranscriptionCandidates ranks the nodes able to serve req.Model with
 // CapabilityAudioTranscription. It is exported, unlike Chat/Embed's own
 // candidates() call, because a caller must pick one candidate itself before
@@ -618,6 +643,18 @@ func withModel(req runtime.ChatRequest, model string) runtime.ChatRequest {
 //
 // withEmbedModel 是嵌入请求版的 withModel。
 func withEmbedModel(req runtime.EmbeddingRequest, model string) runtime.EmbeddingRequest {
+	if model == "" || model == req.Model {
+		return req
+	}
+	out := req
+	out.Model = model
+	return out
+}
+
+// withRerankModel is withModel for rerank requests.
+//
+// withRerankModel 是 rerank 请求版的 withModel。
+func withRerankModel(req runtime.RerankRequest, model string) runtime.RerankRequest {
 	if model == "" || model == req.Model {
 		return req
 	}

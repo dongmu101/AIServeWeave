@@ -478,6 +478,13 @@ func TestConvertOperationSpec(t *testing.T) {
 			wantShape:    tunnelwire.ShapeSingle,
 		},
 		{
+			name:         "rerank",
+			op:           tunnelv1.Operation_OPERATION_RERANK,
+			wantRequest:  tunnelwire.PayloadRerankRequest,
+			wantResponse: tunnelwire.PayloadRerankResponse,
+			wantShape:    tunnelwire.ShapeSingle,
+		},
+		{
 			name:         "workflow submit carries the template as body chunks",
 			op:           tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT,
 			wantRequest:  tunnelwire.PayloadWorkflowRequest,
@@ -772,6 +779,46 @@ func TestConvertPayloadRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			name: "rerank request with top_n",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalRerankRequest(runtime.RerankRequest{
+					Model:     "rerank-1",
+					Query:     "what is a cat",
+					Documents: []string{"a", "b"},
+					TopN:      ptr(1),
+				})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalRerankRequest(b) },
+			want: runtime.RerankRequest{
+				Model:     "rerank-1",
+				Query:     "what is a cat",
+				Documents: []string{"a", "b"},
+				TopN:      ptr(1),
+			},
+		},
+		{
+			name: "rerank request without top_n",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalRerankRequest(runtime.RerankRequest{Model: "m", Query: "q", Documents: []string{"a"}})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalRerankRequest(b) },
+			want:   runtime.RerankRequest{Model: "m", Query: "q", Documents: []string{"a"}},
+		},
+		{
+			name: "rerank response",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalRerankResponse(runtime.RerankResponse{
+					Model:   "rerank-1",
+					Results: []runtime.RerankResult{{Index: 1, Score: 0.9}, {Index: 0, Score: 0.1}},
+				})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalRerankResponse(b) },
+			want: runtime.RerankResponse{
+				Model:   "rerank-1",
+				Results: []runtime.RerankResult{{Index: 1, Score: 0.9}, {Index: 0, Score: 0.1}},
+			},
+		},
+		{
 			name: "workflow run",
 			encode: func() ([]byte, error) {
 				return tunnelwire.MarshalWorkflowRun(runtime.WorkflowRun{
@@ -960,6 +1007,8 @@ func TestConvertUnmarshalRejectsMalformedPayload(t *testing.T) {
 		{name: "workflow status", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalWorkflowStatus(b); return err }},
 		{name: "run ref", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalRunRef(b); return err }},
 		{name: "artifact ref", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalArtifactRef(b); return err }},
+		{name: "rerank request", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalRerankRequest(b); return err }},
+		{name: "rerank response", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalRerankResponse(b); return err }},
 	}
 
 	for _, tt := range tests {

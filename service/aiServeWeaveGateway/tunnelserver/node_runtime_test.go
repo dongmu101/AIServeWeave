@@ -106,6 +106,20 @@ func runtimeAgent(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunne
 		}
 		return reply(dataFrame(payload))
 
+	case tunnelv1.Operation_OPERATION_RERANK:
+		in, err := tunnelwire.UnmarshalRerankRequest(req.GetPayload())
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalRerankResponse(runtime.RerankResponse{
+			Model:   "rerank-1",
+			Results: []runtime.RerankResult{{Index: 0, Score: 1}, {Index: len(in.Documents) - 1, Score: 0.5}},
+		})
+		if err != nil {
+			return err
+		}
+		return reply(dataFrame(payload))
+
 	case tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT:
 		// The template travels in DataChunks, never in the headers: the
 		// assertion that it arrived intact belongs here, on the Agent side.
@@ -240,6 +254,17 @@ func TestNodeRuntimeSatisfiesTheRuntimeContractOverTheTunnel(t *testing.T) {
 		}
 		if len(resp.Data) != 1 || len(resp.Data[0].Vector) != 2 || resp.Data[0].Vector[1] != -0.25 {
 			t.Errorf("embedding = %v, want one 2-dimensional vector ending in -0.25", resp.Data)
+		}
+	})
+
+	t.Run("Rerank", func(t *testing.T) {
+		awaitSlots(t)
+		resp, err := rt.Rerank(ctx, runtime.RerankRequest{Model: "rerank-1", Query: "x", Documents: []string{"a", "b"}})
+		if err != nil {
+			t.Fatalf("Rerank: %v", err)
+		}
+		if len(resp.Results) != 2 || resp.Results[1].Score != 0.5 {
+			t.Errorf("results = %v, want two results ending in score 0.5", resp.Results)
 		}
 	})
 

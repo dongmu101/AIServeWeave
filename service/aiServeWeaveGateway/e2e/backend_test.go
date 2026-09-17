@@ -165,3 +165,10 @@ func (r *scriptedRuntime) Transcribe(ctx context.Context, req runtime.AudioTrans
 	}
 	return runtime.AudioTranscriptionResponse{Text: fmt.Sprintf("echo:%d bytes", n)}, nil
 }
+
+func (r *scriptedRuntime) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+	return runtime.RerankResponse{
+		Model:   req.Model,
+		Results: []runtime.RerankResult{{Index: 0, Score: 1}},
+	}, nil
+}

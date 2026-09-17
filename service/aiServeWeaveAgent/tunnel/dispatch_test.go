@@ -398,6 +398,33 @@ func TestDispatchServesEveryOperation(t *testing.T) {
 			},
 		},
 		{
+			name:      "rerank",
+			operation: tunnelv1.Operation_OPERATION_RERANK,
+			payload: func(t *testing.T) []byte {
+				return mustMarshal(t, tunnelwire.MarshalRerankRequest, runtime.RerankRequest{
+					Model: "rerank-1", Query: "q", Documents: []string{"a", "b"}})
+			},
+			install: func(t *testing.T, f *dispatchFixture) {
+				f.inference(0).RerankFunc = func(_ context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+					return runtime.RerankResponse{Model: req.Model,
+						Results: []runtime.RerankResult{{Index: 1, Score: 0.9}, {Index: 0, Score: 0.1}}}, nil
+				}
+			},
+			verify: func(t *testing.T, sink *recordingSink) {
+				chunks := sink.payloads()
+				if len(chunks) != 1 {
+					t.Fatalf("chunks = %d, want 1", len(chunks))
+				}
+				resp, err := tunnelwire.UnmarshalRerankResponse(chunks[0])
+				if err != nil {
+					t.Fatalf("tunnelwire.UnmarshalRerankResponse: %v", err)
+				}
+				if len(resp.Results) != 2 || resp.Results[0].Index != 1 || resp.Results[0].Score != 0.9 {
+					t.Errorf("results = %+v, want two results starting with index 1 score 0.9", resp.Results)
+				}
+			},
+		},
+		{
 			name:      "workflow submit",
 			operation: tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT,
 			payload: func(t *testing.T) []byte {

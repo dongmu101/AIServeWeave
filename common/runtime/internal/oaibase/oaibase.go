@@ -208,6 +208,28 @@ func (b *Base) Transcribe(ctx context.Context, req runtime.AudioTranscriptionReq
 	return openai.Transcribe(ctx, b.client, req, audio)
 }
 
+// Rerank scores req.Documents against req.Query, gated on CapabilityRerank.
+// No adapter's Discover publishes this capability today (STATUS.md's P2), so
+// by default every call is rejected locally as unsupported — the same
+// pattern Transcribe already applies, with no adapter yet on the other side
+// of the gate.
+//
+// Rerank 把 req.Documents 相对 req.Query 打分，受 CapabilityRerank 门禁。今天
+// 没有任何适配器的 Discover 会发布这项能力（STATUS.md 的 P2），因此默认情况下
+// 每次调用都在本地被判定为不支持——与 Transcribe 已经应用的模式相同，只是
+// 门禁另一侧此刻还没有适配器。
+func (b *Base) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+	release, err := b.BeginRequest("rerank", req.Model, runtime.CapabilityRerank)
+	if err != nil {
+		return runtime.RerankResponse{}, err
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(ctx, b.cfg.RequestTimeout)
+	defer cancel()
+	return openai.Rerank(ctx, b.client, req)
+}
+
 // Close releases the instance's concurrency budget and makes every
 // subsequent call fail with ErrorClosed. It is idempotent. Streams already
 // handed to callers are not closed here; their own Close still works.

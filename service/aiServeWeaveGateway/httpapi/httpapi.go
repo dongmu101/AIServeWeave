@@ -336,6 +336,8 @@ type Config struct {
 // POST /v1/audio/transcriptions and POST /v1/audio/translations (audio.go,
 // STATUS.md's P2 — a single candidate, no cross-node retry, see
 // Scheduler.Transcribe),
+// POST /v1/rerank (rerank.go, STATUS.md's P2 — no adapter's Discover reports
+// CapabilityRerank yet, so every call is refused locally until one does),
 // POST /v1/workflows/{workflow_id}/runs, GET /v1/jobs/{job_id},
 // GET /v1/jobs/{job_id}/events (SSE), POST /v1/jobs/{job_id}/cancel,
 // GET /v1/jobs/{job_id}/artifacts and GET /v1/artifacts/{artifact_id},
@@ -508,6 +510,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	mux.HandleFunc("POST /v1/messages", h.anthropicMessages)
 	mux.HandleFunc("POST /v1/audio/transcriptions", h.audioTranscriptions)
 	mux.HandleFunc("POST /v1/audio/translations", h.audioTranslations)
+	mux.HandleFunc("POST /v1/rerank", h.rerank)
 	mux.HandleFunc("POST /api/chat", h.ollamaChat)
 	mux.HandleFunc("POST /api/generate", h.ollamaGenerate)
 	mux.HandleFunc("POST /api/embeddings", h.ollamaEmbeddings)

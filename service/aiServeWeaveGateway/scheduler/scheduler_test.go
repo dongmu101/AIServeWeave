@@ -101,6 +101,14 @@ func chatHandler(source string, count *atomic.Int32) gatewaytest.SlotHandler {
 				return err
 			}
 			return reply(gatewaytest.DataFrame(payload))
+		case tunnelv1.Operation_OPERATION_RERANK:
+			payload, err := tunnelwire.MarshalRerankResponse(runtime.RerankResponse{
+				Results: []runtime.RerankResult{{Index: 0, Score: 1}},
+			})
+			if err != nil {
+				return err
+			}
+			return reply(gatewaytest.DataFrame(payload))
 		}
 		return errors.New("unsupported operation")
 	}
@@ -386,6 +394,25 @@ func TestEmbedDispatches(t *testing.T) {
 	}
 	if len(resp.Data) != 1 {
 		t.Errorf("Data = %v, want one embedding", resp.Data)
+	}
+}
+
+func TestRerankDispatches(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	snap := chatCapableSnapshot("backend-1", "rerank-1")
+	snap.Discovery.Models[0].Capabilities[runtime.CapabilityRerank] = runtime.CapabilityEvidence{Level: runtime.SupportSupported}
+	connectNode(t, h, "node-a", "backend-1", snap, chatHandler("node-a", nil))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	resp, candidate, err := sched.Rerank(context.Background(), runtime.RerankRequest{Model: "rerank-1", Query: "q", Documents: []string{"a"}})
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	if candidate.NodeID != "node-a" {
+		t.Errorf("candidate.NodeID = %q, want node-a", candidate.NodeID)
+	}
+	if len(resp.Results) != 1 {
+		t.Errorf("Results = %v, want one result", resp.Results)
 	}
 }
 

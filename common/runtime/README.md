@@ -176,6 +176,10 @@ type InferenceRuntime interface {
 	// No adapter's Discover publishes CapabilityAudioTranscription today, so
 	// the shared oaibase.Base gate rejects every call as unsupported.
 	Transcribe(ctx context.Context, req AudioTranscriptionRequest, audio io.Reader) (AudioTranscriptionResponse, error)
+	// Rerank scores documents against a query (STATUS.md's P2). No adapter's
+	// Discover publishes CapabilityRerank today, so the shared oaibase.Base
+	// gate rejects every call as unsupported — the same pattern as Transcribe.
+	Rerank(ctx context.Context, req RerankRequest) (RerankResponse, error)
 }
 
 type WorkflowRuntime interface {
@@ -1236,7 +1240,7 @@ go test -race ./common/runtime/...
 
 首期稳定后再独立规划：
 
-1. OpenAI Responses、Completions、rerank 等更多能力。音频转录/翻译（STATUS.md 的 P2）已经在这里落地了 `InferenceRuntime.Transcribe` 接口、`common/tunnelwire`/`tunnel.proto` 的传输层与 Gateway 的 `/v1/audio/transcriptions`/`/v1/audio/translations` 前门，但没有任何适配器的 `Discover` 报告 `CapabilityAudioTranscription`——协议已经打通，真正接一个语音后端（如 Whisper 兼容服务）仍是独立待办。
+1. OpenAI Responses、Completions 等更多能力。音频转录/翻译与 rerank（STATUS.md 的 P2）已经在这里落地了 `InferenceRuntime.Transcribe`/`Rerank` 接口、`common/tunnelwire`/`tunnel.proto` 的传输层与 Gateway 的 `/v1/audio/transcriptions`/`/v1/audio/translations`/`/v1/rerank` 前门，但没有任何适配器的 `Discover` 报告 `CapabilityAudioTranscription`/`CapabilityRerank`——协议已经打通，真正接一个语音后端（如 Whisper 兼容服务）或声明一个后端确实支持 rerank 仍是独立待办。
 2. Agent Tunnel 上的普通、SSE、WebSocket 和 Artifact 多路复用。
 3. ComfyUI 工作流模板、输入绑定、Job 持久化和对象存储。
 4. 运行时自动发现与配置建议，但仍由用户确认 Kind 和地址。

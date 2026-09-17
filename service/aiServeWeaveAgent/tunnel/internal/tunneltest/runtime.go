@@ -55,6 +55,7 @@ type InferenceRuntime struct {
 	ChatStreamFunc func(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], error)
 	EmbedFunc      func(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, error)
 	TranscribeFunc func(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error)
+	RerankFunc     func(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error)
 }
 
 // ListModels implements runtime.InferenceRuntime.
@@ -100,6 +101,14 @@ func (r *InferenceRuntime) Transcribe(ctx context.Context, req runtime.AudioTran
 		return runtime.AudioTranscriptionResponse{}, err
 	}
 	return runtime.AudioTranscriptionResponse{}, nil
+}
+
+// Rerank implements runtime.InferenceRuntime.
+func (r *InferenceRuntime) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+	if r.RerankFunc != nil {
+		return r.RerankFunc(ctx, req)
+	}
+	return runtime.RerankResponse{}, nil
 }
 
 // WorkflowRuntime is a scriptable runtime.WorkflowRuntime.

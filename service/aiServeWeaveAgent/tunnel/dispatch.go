@@ -275,6 +275,25 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		}
 		return d.sendChunk(sink, payload)
 
+	case tunnelv1.Operation_OPERATION_RERANK:
+		ir, err := inferenceRuntime(rt, id)
+		if err != nil {
+			return err
+		}
+		rerankReq, err := tunnelwire.UnmarshalRerankRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		resp, err := ir.Rerank(ctx, rerankReq)
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalRerankResponse(resp)
+		if err != nil {
+			return err
+		}
+		return d.sendChunk(sink, payload)
+
 	case tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT:
 		wr, err := workflowRuntime(rt, id)
 		if err != nil {

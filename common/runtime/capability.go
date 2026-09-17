@@ -34,6 +34,19 @@ const (
 	// 的 P2）。两个任务刻意共用一个能力：它们的 wire 与后端契约只在请求的 Task
 	// 字段上不同，调用方需要证明支持的东西并无不同。
 	CapabilityAudioTranscription Capability = "audio_transcription"
+	// CapabilityRerank gates InferenceRuntime.Rerank (STATUS.md's P2). It is
+	// the pilot for the "new InferenceRuntime method" breaking-change pattern
+	// the P2 API compat design doc recommended validating before audio
+	// transcription reused it: new capability constant, new request/response
+	// types, a new interface method, and a shared oaibase default that keeps
+	// every existing adapter compiling.
+	//
+	// CapabilityRerank 为 InferenceRuntime.Rerank 门禁（STATUS.md 的 P2）。它是
+	// P2 API 兼容边界设计文档建议先行验证的「新增 InferenceRuntime 方法」这套
+	// 破坏性变更模式的试点，音频转录随后复用了同一套模式：新增能力常量、新增
+	// 请求/响应类型、接口新增方法，以及一个让全部既有适配器保持可编译的
+	// oaibase 共享默认实现。
+	CapabilityRerank Capability = "rerank"
 )
 
 // CapabilitySource records how a piece of capability evidence was obtained,

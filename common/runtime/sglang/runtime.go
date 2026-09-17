@@ -106,6 +106,14 @@ func (r *Runtime) Transcribe(ctx context.Context, req runtime.AudioTranscription
 	return r.base.Transcribe(ctx, req, audio)
 }
 
+// Rerank scores documents against a query. No endpoint reports
+// CapabilityRerank, so the shared gate in Base rejects every call as
+// unsupported until an operator declares it via Config.CapabilityOverrides
+// (STATUS.md's P2).
+func (r *Runtime) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+	return r.base.Rerank(ctx, req)
+}
+
 // Close releases the instance's concurrency budget and makes every
 // subsequent call fail with ErrorClosed. It is idempotent.
 func (r *Runtime) Close() error { return r.base.Close() }

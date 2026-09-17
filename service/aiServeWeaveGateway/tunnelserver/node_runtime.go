@@ -170,6 +170,19 @@ func (r *NodeRuntime) Embed(ctx context.Context, req runtime.EmbeddingRequest) (
 	return tunnelwire.UnmarshalEmbeddingResponse(body)
 }
 
+// Rerank scores documents against a query on the node.
+func (r *NodeRuntime) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+	payload, err := tunnelwire.MarshalRerankRequest(req)
+	if err != nil {
+		return runtime.RerankResponse{}, err
+	}
+	body, err := r.single(ctx, tunnelv1.Operation_OPERATION_RERANK, payload, nil)
+	if err != nil {
+		return runtime.RerankResponse{}, err
+	}
+	return tunnelwire.UnmarshalRerankResponse(body)
+}
+
 // Transcribe runs an audio transcription or translation on the node. Like
 // UploadInput, audio is read in bounded chunks and sent as it is read, so a
 // large audio file is never held whole by this process; it travels on the

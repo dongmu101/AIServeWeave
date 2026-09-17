@@ -257,6 +257,40 @@ type Embedding struct {
 	Vector []float32
 }
 
+// RerankRequest asks a backend to score Documents against Query and return
+// them ordered by relevance. TopN, when set, asks the backend to return only
+// the best-scoring TopN results rather than the whole list — a nil TopN
+// means "all of them."
+//
+// RerankRequest 请求后端把 Documents 相对 Query 打分并按相关性排序。TopN
+// 设置时，要求后端只返回打分最高的 TopN 条而非全部——TopN 为 nil 表示「全部」。
+type RerankRequest struct {
+	Model     string
+	Query     string
+	Documents []string
+	TopN      *int
+}
+
+// RerankResponse is what Rerank returns: Results ordered best-first,
+// each naming which original Documents entry it scored via Index.
+//
+// RerankResponse 是 Rerank 的返回值：Results 按最优先排序，每一项通过
+// Index 指明它为 Documents 中的哪一条打分。
+type RerankResponse struct {
+	Model   string
+	Results []RerankResult
+}
+
+// RerankResult scores one document from the original RerankRequest.Documents
+// slice. Index is the document's position in that slice, not a rank.
+//
+// RerankResult 为原始 RerankRequest.Documents 切片中的一条文档打分。Index 是
+// 该文档在切片中的位置，不是名次。
+type RerankResult struct {
+	Index int
+	Score float64
+}
+
 // WorkflowRequest submits an API Format ComfyUI workflow. Template must
 // already be validated and size-limited by the caller; the runtime does not
 // inspect node contents beyond what it needs for cancellation and event

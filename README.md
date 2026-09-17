@@ -204,10 +204,7 @@ type InferEvent struct {
 - `POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（Ollama 原生 API **纯推理端点**：不支持工具调用、`format`、视觉输入与模型管理类端点，均按名字拒绝或明确答「不支持」而非静默忽略/404，见 [Gateway README「Ollama 原生 API」](service/aiServeWeaveGateway/README.md#ollama-原生-api)）
 - `POST /v1/images/generations`（OpenAI-compatible 图像生成，映射到管理员指定的单一 ComfyUI 模板，见 [Gateway README「图像生成」](service/aiServeWeaveGateway/README.md#图像生成)）
 - `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（协议与传输层已实现：固定扩展名允许列表、`response_format` 仅 `text`/`json`；但没有任何适配器的 `Discover` 报告支持，接一个真实语音后端仍是独立待办，见 [Gateway README「音频转录与翻译」](service/aiServeWeaveGateway/README.md#音频转录与翻译)）
-
-规划中的扩展协议范围：
-
-- rerank
+- `POST /v1/rerank`（Cohere/Jina 风格 rerank 契约，vLLM 等自托管 OpenAI 生态服务器的事实约定；协议与传输层已实现，但没有任何适配器的 `Discover` 报告 `CapabilityRerank`，接一个真实后端仍是独立待办，见 [Gateway README「Rerank」](service/aiServeWeaveGateway/README.md#rerank)）
 
 ComfyUI 工作流和异步任务 API 已实现，见下方「ComfyUI 任务 API」。
 

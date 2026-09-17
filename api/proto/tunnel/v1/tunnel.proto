@@ -328,6 +328,7 @@ enum Operation {
   OPERATION_ARTIFACT_LIST = 10;
   OPERATION_INPUT_UPLOAD = 11;
   OPERATION_AUDIO_TRANSCRIBE = 12;       // transcription and translation share one operation; AudioTranscriptionRequest.task selects
+  OPERATION_RERANK = 13;
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose
@@ -885,4 +886,24 @@ message AudioTranscriptionResponse {
   string text = 1;
   string language = 2;
   optional double duration = 3;
+}
+
+// RerankRequest is the OPERATION_RERANK request payload (STATUS.md's P2).
+message RerankRequest {
+  string model = 1;
+  string query = 2;
+  repeated string documents = 3;
+  optional int64 top_n = 4;
+}
+
+message RerankResponse {
+  string model = 1;
+  repeated RerankResult results = 2;
+}
+
+// RerankResult scores one document from the request's documents list.
+// index is that document's position in the request, not a rank.
+message RerankResult {
+  int64 index = 1;
+  double score = 2;
 }

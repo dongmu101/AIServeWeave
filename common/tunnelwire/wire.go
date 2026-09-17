@@ -92,6 +92,10 @@ const (
 	// PayloadAudioTranscriptionResponse carries a marshalled
 	// runtime.AudioTranscriptionResponse.
 	PayloadAudioTranscriptionResponse PayloadKind = "audio_transcription_response"
+	// PayloadRerankRequest carries a marshalled runtime.RerankRequest.
+	PayloadRerankRequest PayloadKind = "rerank_request"
+	// PayloadRerankResponse carries a marshalled runtime.RerankResponse.
+	PayloadRerankResponse PayloadKind = "rerank_response"
 )
 
 // ResponseShape describes how many DataChunks an Operation's response uses,
@@ -218,6 +222,16 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Response:    PayloadAudioTranscriptionResponse,
 		Shape:       ShapeSingle,
 		RequestBody: true,
+	},
+	// Rerank's request body is a bounded list of strings, the same
+	// "everything fits in RequestHeaders.payload" shape EMBED already uses —
+	// unlike AUDIO_TRANSCRIBE/INPUT_UPLOAD/WORKFLOW_SUBMIT it carries no
+	// binary body.
+	tunnelv1.Operation_OPERATION_RERANK: {
+		Operation: tunnelv1.Operation_OPERATION_RERANK,
+		Request:   PayloadRerankRequest,
+		Response:  PayloadRerankResponse,
+		Shape:     ShapeSingle,
 	},
 }
 
@@ -537,6 +551,34 @@ func UnmarshalAudioTranscriptionResponse(b []byte) (runtime.AudioTranscriptionRe
 		return runtime.AudioTranscriptionResponse{}, err
 	}
 	return AudioTranscriptionResponseFromProto(&pb), nil
+}
+
+// MarshalRerankRequest encodes req as a RERANK request payload.
+func MarshalRerankRequest(req runtime.RerankRequest) ([]byte, error) {
+	return marshalPayload(RerankRequestToProto(req), "rerank request")
+}
+
+// UnmarshalRerankRequest decodes a RERANK request payload.
+func UnmarshalRerankRequest(b []byte) (runtime.RerankRequest, error) {
+	var pb tunnelv1.RerankRequest
+	if err := unmarshalPayload(b, &pb, "rerank request"); err != nil {
+		return runtime.RerankRequest{}, err
+	}
+	return RerankRequestFromProto(&pb), nil
+}
+
+// MarshalRerankResponse encodes resp as the single RERANK response chunk.
+func MarshalRerankResponse(resp runtime.RerankResponse) ([]byte, error) {
+	return marshalPayload(RerankResponseToProto(resp), "rerank response")
+}
+
+// UnmarshalRerankResponse decodes the single RERANK response chunk.
+func UnmarshalRerankResponse(b []byte) (runtime.RerankResponse, error) {
+	var pb tunnelv1.RerankResponse
+	if err := unmarshalPayload(b, &pb, "rerank response"); err != nil {
+		return runtime.RerankResponse{}, err
+	}
+	return RerankResponseFromProto(&pb), nil
 }
 
 // -----------------------------------------------------------------------
@@ -1056,6 +1098,56 @@ func EmbeddingResponseFromProto(pb *tunnelv1.EmbeddingResponse) runtime.Embeddin
 	}
 	if u := usageFromProto(pb.GetUsage()); u != nil {
 		resp.Usage = *u
+	}
+	return resp
+}
+
+// RerankRequestToProto mirrors a rerank request onto the wire.
+func RerankRequestToProto(req runtime.RerankRequest) *tunnelv1.RerankRequest {
+	return &tunnelv1.RerankRequest{
+		Model:     req.Model,
+		Query:     req.Query,
+		Documents: req.Documents,
+		TopN:      intPtrToProto(req.TopN),
+	}
+}
+
+// RerankRequestFromProto restores a rerank request.
+func RerankRequestFromProto(pb *tunnelv1.RerankRequest) runtime.RerankRequest {
+	if pb == nil {
+		return runtime.RerankRequest{}
+	}
+	return runtime.RerankRequest{
+		Model:     pb.GetModel(),
+		Query:     pb.GetQuery(),
+		Documents: pb.GetDocuments(),
+		TopN:      intPtrFromProto(pb.TopN),
+	}
+}
+
+// RerankResponseToProto mirrors a rerank result onto the wire.
+func RerankResponseToProto(resp runtime.RerankResponse) *tunnelv1.RerankResponse {
+	pb := &tunnelv1.RerankResponse{Model: resp.Model}
+	if len(resp.Results) > 0 {
+		pb.Results = make([]*tunnelv1.RerankResult, len(resp.Results))
+		for i, r := range resp.Results {
+			pb.Results[i] = &tunnelv1.RerankResult{Index: int64(r.Index), Score: r.Score}
+		}
+	}
+	return pb
+}
+
+// RerankResponseFromProto restores a rerank result.
+func RerankResponseFromProto(pb *tunnelv1.RerankResponse) runtime.RerankResponse {
+	if pb == nil {
+		return runtime.RerankResponse{}
+	}
+	resp := runtime.RerankResponse{Model: pb.GetModel()}
+	if results := pb.GetResults(); len(results) > 0 {
+		resp.Results = make([]runtime.RerankResult, len(results))
+		for i, r := range results {
+			resp.Results[i] = runtime.RerankResult{Index: int(r.GetIndex()), Score: r.GetScore()}
+		}
 	}
 	return resp
 }

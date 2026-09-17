@@ -105,6 +105,7 @@ const (
 	Operation_OPERATION_ARTIFACT_LIST      Operation = 10
 	Operation_OPERATION_INPUT_UPLOAD       Operation = 11
 	Operation_OPERATION_AUDIO_TRANSCRIBE   Operation = 12 // transcription and translation share one operation; AudioTranscriptionRequest.task selects
+	Operation_OPERATION_RERANK             Operation = 13
 )
 
 // Enum value maps for Operation.
@@ -123,6 +124,7 @@ var (
 		10: "OPERATION_ARTIFACT_LIST",
 		11: "OPERATION_INPUT_UPLOAD",
 		12: "OPERATION_AUDIO_TRANSCRIBE",
+		13: "OPERATION_RERANK",
 	}
 	Operation_value = map[string]int32{
 		"OPERATION_UNSPECIFIED":        0,
@@ -138,6 +140,7 @@ var (
 		"OPERATION_ARTIFACT_LIST":      10,
 		"OPERATION_INPUT_UPLOAD":       11,
 		"OPERATION_AUDIO_TRANSCRIBE":   12,
+		"OPERATION_RERANK":             13,
 	}
 )
 
@@ -5958,6 +5961,181 @@ func (x *AudioTranscriptionResponse) GetDuration() float64 {
 	return 0
 }
 
+// RerankRequest is the OPERATION_RERANK request payload (STATUS.md's P2).
+type RerankRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	Query         string                 `protobuf:"bytes,2,opt,name=query,proto3" json:"query,omitempty"`
+	Documents     []string               `protobuf:"bytes,3,rep,name=documents,proto3" json:"documents,omitempty"`
+	TopN          *int64                 `protobuf:"varint,4,opt,name=top_n,json=topN,proto3,oneof" json:"top_n,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RerankRequest) Reset() {
+	*x = RerankRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[86]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RerankRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RerankRequest) ProtoMessage() {}
+
+func (x *RerankRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[86]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RerankRequest.ProtoReflect.Descriptor instead.
+func (*RerankRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{86}
+}
+
+func (x *RerankRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *RerankRequest) GetQuery() string {
+	if x != nil {
+		return x.Query
+	}
+	return ""
+}
+
+func (x *RerankRequest) GetDocuments() []string {
+	if x != nil {
+		return x.Documents
+	}
+	return nil
+}
+
+func (x *RerankRequest) GetTopN() int64 {
+	if x != nil && x.TopN != nil {
+		return *x.TopN
+	}
+	return 0
+}
+
+type RerankResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Model         string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	Results       []*RerankResult        `protobuf:"bytes,2,rep,name=results,proto3" json:"results,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RerankResponse) Reset() {
+	*x = RerankResponse{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[87]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RerankResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RerankResponse) ProtoMessage() {}
+
+func (x *RerankResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[87]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RerankResponse.ProtoReflect.Descriptor instead.
+func (*RerankResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{87}
+}
+
+func (x *RerankResponse) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *RerankResponse) GetResults() []*RerankResult {
+	if x != nil {
+		return x.Results
+	}
+	return nil
+}
+
+// RerankResult scores one document from the request's documents list.
+// index is that document's position in the request, not a rank.
+type RerankResult struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Index         int64                  `protobuf:"varint,1,opt,name=index,proto3" json:"index,omitempty"`
+	Score         float64                `protobuf:"fixed64,2,opt,name=score,proto3" json:"score,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *RerankResult) Reset() {
+	*x = RerankResult{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[88]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *RerankResult) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*RerankResult) ProtoMessage() {}
+
+func (x *RerankResult) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[88]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use RerankResult.ProtoReflect.Descriptor instead.
+func (*RerankResult) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{88}
+}
+
+func (x *RerankResult) GetIndex() int64 {
+	if x != nil {
+		return x.Index
+	}
+	return 0
+}
+
+func (x *RerankResult) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
 var File_api_proto_tunnel_v1_tunnel_proto protoreflect.FileDescriptor
 
 const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
@@ -6401,11 +6579,23 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1a\n" +
 	"\blanguage\x18\x02 \x01(\tR\blanguage\x12\x1f\n" +
 	"\bduration\x18\x03 \x01(\x01H\x00R\bduration\x88\x01\x01B\v\n" +
-	"\t_duration*V\n" +
+	"\t_duration\"}\n" +
+	"\rRerankRequest\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12\x14\n" +
+	"\x05query\x18\x02 \x01(\tR\x05query\x12\x1c\n" +
+	"\tdocuments\x18\x03 \x03(\tR\tdocuments\x12\x18\n" +
+	"\x05top_n\x18\x04 \x01(\x03H\x00R\x04topN\x88\x01\x01B\b\n" +
+	"\x06_top_n\"Y\n" +
+	"\x0eRerankResponse\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x121\n" +
+	"\aresults\x18\x02 \x03(\v2\x17.tunnel.v1.RerankResultR\aresults\":\n" +
+	"\fRerankResult\x12\x14\n" +
+	"\x05index\x18\x01 \x01(\x03R\x05index\x12\x14\n" +
+	"\x05score\x18\x02 \x01(\x01R\x05score*V\n" +
 	"\tSlotClass\x12\x1a\n" +
 	"\x16SLOT_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SLOT_CLASS_INFERENCE\x10\x01\x12\x13\n" +
-	"\x0fSLOT_CLASS_BULK\x10\x02*\xfa\x02\n" +
+	"\x0fSLOT_CLASS_BULK\x10\x02*\x90\x03\n" +
 	"\tOperation\x12\x19\n" +
 	"\x15OPERATION_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15OPERATION_LIST_MODELS\x10\x01\x12\x12\n" +
@@ -6420,7 +6610,8 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x17OPERATION_ARTIFACT_LIST\x10\n" +
 	"\x12\x1a\n" +
 	"\x16OPERATION_INPUT_UPLOAD\x10\v\x12\x1e\n" +
-	"\x1aOPERATION_AUDIO_TRANSCRIBE\x10\f*~\n" +
+	"\x1aOPERATION_AUDIO_TRANSCRIBE\x10\f\x12\x14\n" +
+	"\x10OPERATION_RERANK\x10\r*~\n" +
 	"\fReplicaState\x12\x1d\n" +
 	"\x19REPLICA_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14REPLICA_STATE_ACTIVE\x10\x01\x12\x1a\n" +
@@ -6468,7 +6659,7 @@ func file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP() []byte {
 }
 
 var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 93)
+var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 96)
 var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
 	(SlotClass)(0),                     // 0: tunnel.v1.SlotClass
 	(Operation)(0),                     // 1: tunnel.v1.Operation
@@ -6561,24 +6752,27 @@ var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
 	(*InputUploadResult)(nil),          // 88: tunnel.v1.InputUploadResult
 	(*AudioTranscriptionRequest)(nil),  // 89: tunnel.v1.AudioTranscriptionRequest
 	(*AudioTranscriptionResponse)(nil), // 90: tunnel.v1.AudioTranscriptionResponse
-	nil,                                // 91: tunnel.v1.RequestHeaders.TraceEntry
-	nil,                                // 92: tunnel.v1.Hello.LabelsEntry
-	nil,                                // 93: tunnel.v1.RuntimeSpec.HeadersEntry
-	nil,                                // 94: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	nil,                                // 95: tunnel.v1.Discovery.CapabilitiesEntry
-	nil,                                // 96: tunnel.v1.Model.CapabilitiesEntry
-	nil,                                // 97: tunnel.v1.ChatRequest.ExtraEntry
-	(*timestamppb.Timestamp)(nil),      // 98: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),        // 99: google.protobuf.Duration
+	(*RerankRequest)(nil),              // 91: tunnel.v1.RerankRequest
+	(*RerankResponse)(nil),             // 92: tunnel.v1.RerankResponse
+	(*RerankResult)(nil),               // 93: tunnel.v1.RerankResult
+	nil,                                // 94: tunnel.v1.RequestHeaders.TraceEntry
+	nil,                                // 95: tunnel.v1.Hello.LabelsEntry
+	nil,                                // 96: tunnel.v1.RuntimeSpec.HeadersEntry
+	nil,                                // 97: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	nil,                                // 98: tunnel.v1.Discovery.CapabilitiesEntry
+	nil,                                // 99: tunnel.v1.Model.CapabilitiesEntry
+	nil,                                // 100: tunnel.v1.ChatRequest.ExtraEntry
+	(*timestamppb.Timestamp)(nil),      // 101: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),        // 102: google.protobuf.Duration
 }
 var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
-	98,  // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
-	98,  // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
-	99,  // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
-	98,  // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	101, // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
+	101, // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
+	102, // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
+	101, // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
 	25,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
-	98,  // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
-	98,  // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
+	101, // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
+	101, // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
 	29,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
 	35,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
 	30,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
@@ -6591,7 +6785,7 @@ var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
 	33,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
 	0,   // 17: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
 	1,   // 18: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
-	91,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
+	94,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
 	37,  // 20: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
 	40,  // 21: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
 	43,  // 22: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
@@ -6606,92 +6800,93 @@ var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
 	46,  // 31: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
 	32,  // 32: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
 	41,  // 33: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
-	92,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
-	99,  // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
+	95,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
+	102, // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
 	49,  // 36: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
 	2,   // 37: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
 	2,   // 38: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
 	55,  // 39: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
-	98,  // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
+	101, // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
 	3,   // 41: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
 	53,  // 42: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
-	93,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
-	99,  // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
-	99,  // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
-	99,  // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
-	99,  // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
-	99,  // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
+	96,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
+	102, // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
+	102, // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
+	102, // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
+	102, // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
+	102, // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
 	54,  // 49: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
-	94,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	97,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
 	56,  // 51: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
 	57,  // 52: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
 	58,  // 53: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
 	59,  // 54: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
-	98,  // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	98,  // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
-	99,  // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
-	98,  // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
+	101, // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	101, // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
+	102, // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
+	101, // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
 	61,  // 59: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
-	95,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
-	98,  // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
-	96,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
+	98,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
+	101, // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
+	99,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
 	61,  // 63: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
 	64,  // 64: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
 	67,  // 65: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
 	69,  // 66: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
-	97,  // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
+	100, // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
 	65,  // 68: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
 	66,  // 69: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
 	68,  // 70: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
 	70,  // 71: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
 	64,  // 72: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
 	76,  // 73: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
-	98,  // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
+	101, // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
 	73,  // 75: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
 	76,  // 76: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
 	74,  // 77: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
 	75,  // 78: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
 	79,  // 79: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
 	76,  // 80: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
-	98,  // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
-	98,  // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
-	98,  // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
-	98,  // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
+	101, // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
+	101, // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
+	101, // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
+	101, // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
 	85,  // 85: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
 	4,   // 86: tunnel.v1.AudioTranscriptionRequest.task:type_name -> tunnel.v1.AudioTask
-	60,  // 87: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	60,  // 88: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	38,  // 89: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
-	27,  // 90: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
-	5,   // 91: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
-	7,   // 92: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
-	50,  // 93: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
-	9,   // 94: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
-	11,  // 95: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
-	13,  // 96: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
-	15,  // 97: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
-	17,  // 98: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
-	19,  // 99: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
-	21,  // 100: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
-	23,  // 101: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
-	39,  // 102: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
-	26,  // 103: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
-	6,   // 104: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
-	8,   // 105: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
-	48,  // 106: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
-	10,  // 107: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
-	12,  // 108: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
-	14,  // 109: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
-	16,  // 110: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
-	18,  // 111: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
-	20,  // 112: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
-	22,  // 113: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
-	24,  // 114: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
-	102, // [102:115] is the sub-list for method output_type
-	89,  // [89:102] is the sub-list for method input_type
-	89,  // [89:89] is the sub-list for extension type_name
-	89,  // [89:89] is the sub-list for extension extendee
-	0,   // [0:89] is the sub-list for field type_name
+	93,  // 87: tunnel.v1.RerankResponse.results:type_name -> tunnel.v1.RerankResult
+	60,  // 88: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	60,  // 89: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	38,  // 90: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
+	27,  // 91: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
+	5,   // 92: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
+	7,   // 93: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
+	50,  // 94: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
+	9,   // 95: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
+	11,  // 96: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
+	13,  // 97: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
+	15,  // 98: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
+	17,  // 99: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
+	19,  // 100: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
+	21,  // 101: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
+	23,  // 102: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
+	39,  // 103: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
+	26,  // 104: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
+	6,   // 105: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
+	8,   // 106: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
+	48,  // 107: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
+	10,  // 108: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
+	12,  // 109: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
+	14,  // 110: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
+	16,  // 111: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
+	18,  // 112: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
+	20,  // 113: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
+	22,  // 114: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
+	24,  // 115: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
+	103, // [103:116] is the sub-list for method output_type
+	90,  // [90:103] is the sub-list for method input_type
+	90,  // [90:90] is the sub-list for extension type_name
+	90,  // [90:90] is the sub-list for extension extendee
+	0,   // [0:90] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_tunnel_v1_tunnel_proto_init() }
@@ -6733,13 +6928,14 @@ func file_api_proto_tunnel_v1_tunnel_proto_init() {
 	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72].OneofWrappers = []any{}
 	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[84].OneofWrappers = []any{}
 	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[85].OneofWrappers = []any{}
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[86].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_tunnel_v1_tunnel_proto_rawDesc), len(file_api_proto_tunnel_v1_tunnel_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   93,
+			NumMessages:   96,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

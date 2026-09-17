@@ -10,7 +10,7 @@
 | `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
 | `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
-| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/audio/transcriptions`/`POST /v1/audio/translations`（P2，见「音频转录与翻译」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
+| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/audio/transcriptions`/`POST /v1/audio/translations`（P2，见「音频转录与翻译」）、`POST /v1/rerank`（P2，见「Rerank」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
 | `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：文件或控制面来源（P03）、声明式输入/输出/依赖、绑定与校验；`Handle` 原子持有当前生效目录 |
 | `workflowsync/` | 已实现 | 控制面版本的有界拉取、逐模板校验、持久化最近有效整包与生效状态（P03） |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
@@ -354,6 +354,17 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **v1 范围**：`response_format` 只接受 `"text"`/`"json"`（默认 `"json"`，只含 `text` 字段），OpenAI 的 `srt`/`vtt`/`verbose_json` 按名字拒绝而非静默降级；`language` 字段只对转录有意义，翻译请求携带它会被拒绝（翻译的输出语言恒为英文）；固定、不可配置的扩展名允许列表（`.mp3`/`.wav`/`.ogg`/`.flac`）叠加与工作流上传共用的字节嗅探（`uploadformat.go` 的 `validateUploadContent`），拦下扩展名与实际字节不符的上传。
 - **未接入 P09/C28 请求检索**：与 Anthropic/Ollama 前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，加值超出本轮范围。
 - 错误体是 OpenAI 前门共用的 `openAIErrorBody` 形状，调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
+
+## Rerank
+
+`POST /v1/rerank`（STATUS.md 的 P2）把文档相对一个查询打分并按相关性排序，边界设计见 [P2 设计文档「rerank 能力边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md) 第七节。实现见 `httpapi/rerank.go`；这是 P2 API 兼容边界设计文档建议先行验证的「新增 `InferenceRuntime` 方法」这套破坏性变更模式的试点，音频转录随后复用了同一套模式（见上一节）。
+
+- **`InferenceRuntime` 新增 `Rerank(ctx, req RerankRequest) (RerankResponse, error)`**，新增 `CapabilityRerank` 门禁。`oaibase.Base.Rerank` 是三个 OpenAI 兼容适配器（ollama、vllm、sglang）共享的实现，调用 `common/runtime/openai.Rerank` 打 `POST /v1/rerank`——这不是 OpenAI 自家定义的端点，而是 vLLM、TEI 等自托管 OpenAI 生态服务器沿用 Cohere/Jina rerank 契约形成的事实约定，与 `/v1/embeddings` 有 OpenAI 自己的定义不同。
+- **没有任何适配器的 `Discover` 会发布这项能力**：三个适配器都只是把调用委托给 `oaibase.Base.Rerank`，而 `Base` 的能力门禁只认从 `Discover` 收到的证据（或运维经 `Config.CapabilityOverrides` 手工声明），因此在为某个部署确认后端支持之前，每一次调用都会被本地拒绝为不支持——与音频转录同一先例。
+- **请求体是纯文本 JSON，不涉及二进制流**：`RerankRequest{Model, Query, Documents, TopN}`/`RerankResponse{Model, Results []RerankResult{Index, Score}}` 走与 Chat/Embed 同款的「wire 解析 → runtime 类型 → `Scheduler.Rerank` → 适配器」路径；隧道上新增的 `OPERATION_RERANK` 与 `OPERATION_EMBED` 同形状（`ShapeSingle`，无 `RequestBody`），跑在 `SLOT_CLASS_INFERENCE`，不是 `OPERATION_AUDIO_TRANSCRIBE` 那种 bulk 槽。
+- **是 Chat/Embed 那样的多候选重试循环**：`Scheduler.Rerank` 与 `Scheduler.Embed` 同构，对可重试失败换下一个候选——与音频转录的单候选、不换节点重试不同，因为这里没有已经开始流向某个节点的字节需要担心。
+- **未接入 P09/C28 请求检索**：与 Anthropic/Ollama/音频前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，加值超出本轮范围。
+- 错误体是 OpenAI 前门共用的 `openAIErrorBody` 形状，调度失败的分类逻辑与其余前门共用。
 
 ## 指标
 
