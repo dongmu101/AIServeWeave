@@ -333,6 +333,9 @@ type Config struct {
 // POST /api/chat, POST /api/generate, POST /api/embeddings (Ollama native
 // API, pure inference only — see ollama.go) plus a clear "not supported"
 // answer on Ollama's model-management endpoints,
+// POST /v1/audio/transcriptions and POST /v1/audio/translations (audio.go,
+// STATUS.md's P2 — a single candidate, no cross-node retry, see
+// Scheduler.Transcribe),
 // POST /v1/workflows/{workflow_id}/runs, GET /v1/jobs/{job_id},
 // GET /v1/jobs/{job_id}/events (SSE), POST /v1/jobs/{job_id}/cancel,
 // GET /v1/jobs/{job_id}/artifacts and GET /v1/artifacts/{artifact_id},
@@ -503,6 +506,8 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	mux.HandleFunc("POST /v1/responses", h.responses)
 	mux.HandleFunc("POST /v1/images/generations", h.imagesGenerations)
 	mux.HandleFunc("POST /v1/messages", h.anthropicMessages)
+	mux.HandleFunc("POST /v1/audio/transcriptions", h.audioTranscriptions)
+	mux.HandleFunc("POST /v1/audio/translations", h.audioTranslations)
 	mux.HandleFunc("POST /api/chat", h.ollamaChat)
 	mux.HandleFunc("POST /api/generate", h.ollamaGenerate)
 	mux.HandleFunc("POST /api/embeddings", h.ollamaEmbeddings)

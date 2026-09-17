@@ -434,6 +434,44 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		}
 		return d.sendChunk(sink, payload)
 
+	case tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE:
+		ir, err := inferenceRuntime(rt, id)
+		if err != nil {
+			return err
+		}
+		audioReq, err := tunnelwire.UnmarshalAudioTranscriptionRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		if audioReq.Model == "" {
+			return &runtime.RuntimeError{
+				Code:      runtime.ErrorProtocol,
+				RuntimeID: id,
+				Operation: dispatchOperation,
+				Message:   "audio transcription carried no model",
+			}
+		}
+		// The audio streams straight from the DataChunk channel into
+		// Transcribe, the same discipline OPERATION_INPUT_UPLOAD applies
+		// just above: an audio file has no tight size guarantee, so
+		// buffering it whole here would be the unbounded hold README.md's
+		// dispatch.go rule forbids.
+		//
+		// 音频直接从 DataChunk 通道流进 Transcribe，与上面
+		// OPERATION_INPUT_UPLOAD 遵循的纪律相同：音频文件没有紧的体积
+		// 保证，在这里把它整体缓冲下来正是 README.md 对 dispatch.go 的
+		// 规则所禁止的那种无界持有。
+		audio := &chanReader{ctx: ctx, body: req.Body, limit: d.cfg.MaxRequestBytes, id: id}
+		result, err := ir.Transcribe(ctx, audioReq, audio)
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalAudioTranscriptionResponse(result)
+		if err != nil {
+			return err
+		}
+		return d.sendChunk(sink, payload)
+
 	default:
 		// tunnelwire.SpecFor already rejected unknown operations, so reaching here means
 		// the table and this switch have drifted apart.

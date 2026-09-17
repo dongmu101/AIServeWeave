@@ -9,6 +9,7 @@ package ollama
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"sort"
 	"sync"
@@ -124,6 +125,14 @@ func (r *Runtime) ChatStream(ctx context.Context, req runtime.ChatRequest) (runt
 // request.
 func (r *Runtime) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, error) {
 	return r.base.Embed(ctx, req)
+}
+
+// Transcribe runs an audio transcription or translation over the
+// OpenAI-compatible endpoint. Ollama's Discover never reports
+// CapabilityAudioTranscription today, so the shared gate in Base rejects
+// every call as unsupported (STATUS.md's P2).
+func (r *Runtime) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	return r.base.Transcribe(ctx, req, audio)
 }
 
 // Close releases the instance's concurrency budget and makes every

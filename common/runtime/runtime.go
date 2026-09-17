@@ -19,6 +19,15 @@ type InferenceRuntime interface {
 	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
 	ChatStream(ctx context.Context, req ChatRequest) (Stream[ChatEvent], error)
 	Embed(ctx context.Context, req EmbeddingRequest) (EmbeddingResponse, error)
+	// Transcribe runs audio transcription or translation (req.Task selects
+	// which), reading audio to EOF. Like UploadInput, an implementation must
+	// never buffer the whole body in memory — audio is read and forwarded as
+	// it arrives.
+	//
+	// Transcribe 执行音频转录或翻译（由 req.Task 选择），把 audio 读到 EOF 为止。
+	// 与 UploadInput 一样，实现绝不能把整个音频体缓冲进内存——音频随到达即被
+	// 读取并转发。
+	Transcribe(ctx context.Context, req AudioTranscriptionRequest, audio io.Reader) (AudioTranscriptionResponse, error)
 }
 
 type WorkflowRuntime interface {

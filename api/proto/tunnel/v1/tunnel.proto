@@ -327,6 +327,7 @@ enum Operation {
   OPERATION_ARTIFACT_OPEN = 9;
   OPERATION_ARTIFACT_LIST = 10;
   OPERATION_INPUT_UPLOAD = 11;
+  OPERATION_AUDIO_TRANSCRIBE = 12;       // transcription and translation share one operation; AudioTranscriptionRequest.task selects
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose
@@ -852,4 +853,36 @@ message InputUploadResult {
   // which may differ from the requested filename on a collision). It is
   // meaningful only to the runtime adapter that produced it.
   string input_ref = 1;
+}
+
+// AudioTranscriptionRequest is the OPERATION_AUDIO_TRANSCRIBE request
+// payload's metadata (STATUS.md's P2). Like InputUploadRequest, it carries
+// no audio bytes: they follow as DataChunks and RequestEnd closes them, the
+// same framing WORKFLOW_SUBMIT and INPUT_UPLOAD already use for a body too
+// large for RequestHeaders.payload.
+message AudioTranscriptionRequest {
+  string model = 1;
+  string filename = 2;                  // caller-supplied name; never interpreted as a filesystem path
+  AudioTask task = 3;
+  optional string language = 4;         // meaningful only for AUDIO_TASK_TRANSCRIBE
+  optional string prompt = 5;
+  optional double temperature = 6;
+  string response_format = 7;           // "text" or "json"; empty means "json"
+}
+
+// AudioTask selects which of the two OpenAI-compatible audio endpoints a
+// AudioTranscriptionRequest targets.
+enum AudioTask {
+  AUDIO_TASK_UNSPECIFIED = 0;
+  AUDIO_TASK_TRANSCRIBE = 1;
+  AUDIO_TASK_TRANSLATE = 2;
+}
+
+// AudioTranscriptionResponse is the OPERATION_AUDIO_TRANSCRIBE response
+// payload. language and duration are best-effort: a backend that does not
+// report them leaves both absent.
+message AudioTranscriptionResponse {
+  string text = 1;
+  string language = 2;
+  optional double duration = 3;
 }

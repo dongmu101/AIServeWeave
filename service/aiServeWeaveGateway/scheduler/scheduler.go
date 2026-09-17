@@ -260,6 +260,37 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	return runtime.EmbeddingResponse{}, Candidate{}, lastErr
 }
 
+// TranscriptionCandidates ranks the nodes able to serve req.Model with
+// CapabilityAudioTranscription. It is exported, unlike Chat/Embed's own
+// candidates() call, because a caller must pick one candidate itself before
+// Transcribe starts streaming audio — see Transcribe's doc comment for why.
+//
+// TranscriptionCandidates 对能以 CapabilityAudioTranscription 服务 req.Model
+// 的节点排序。与 Chat/Embed 内部直接调用的 candidates() 不同，这里导出，是
+// 因为调用方必须在 Transcribe 开始流式发送音频之前自己选定一个候选——原因
+// 见 Transcribe 的文档注释。
+func (s *Scheduler) TranscriptionCandidates(model string) []Candidate {
+	return s.candidates(model, runtime.CapabilityAudioTranscription)
+}
+
+// Transcribe streams audio to a single, already-chosen candidate for a
+// transcription or translation task. Unlike Chat/Embed it is not a
+// multi-candidate retry loop: once bytes start flowing to c, retrying on a
+// different candidate would require the caller to re-read the whole file
+// from the start, the same reasoning UploadInput's doc comment gives for not
+// retrying an upload across nodes.
+//
+// Transcribe 把音频流式发送给一个已经选定的候选，用于一次转录或翻译任务。
+// 与 Chat/Embed 不同，它不是多候选重试循环：字节一旦开始流向 c，换一个候选
+// 重试就需要调用方从头重新读一遍整个文件——与 UploadInput 文档注释里「不跨
+// 节点重试一次上传」给出的理由相同。
+func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Transcribe(ctx, req, audio)
+	s.breakers.record(c, err, s.clock.Now())
+	s.metrics.Dispatch(c, err)
+	return resp, err
+}
+
 // ChatStream dispatches req and returns a stream already positioned to
 // deliver its first event (or io.EOF for a valid empty response). Whether a
 // request "has produced output yet" can only be answered by reading from the

@@ -13,6 +13,7 @@ package vllm
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 
 	"AIServeWeave/common/runtime"
@@ -77,6 +78,14 @@ func (r *Runtime) ChatStream(ctx context.Context, req runtime.ChatRequest) (runt
 // Config.CapabilityOverrides.
 func (r *Runtime) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, error) {
 	return r.base.Embed(ctx, req)
+}
+
+// Transcribe runs an audio transcription or translation. No endpoint reports
+// CapabilityAudioTranscription, so the shared gate in Base rejects every
+// call as unsupported until an operator declares it via
+// Config.CapabilityOverrides (STATUS.md's P2).
+func (r *Runtime) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	return r.base.Transcribe(ctx, req, audio)
 }
 
 // Close releases the instance's concurrency budget and makes every

@@ -79,6 +79,19 @@ const (
 	PayloadInputUploadRequest PayloadKind = "input_upload_request"
 	// PayloadInputUploadResult carries a marshalled runtime.InputUploadResult.
 	PayloadInputUploadResult PayloadKind = "input_upload_result"
+	// PayloadAudioTranscriptionRequest carries a marshalled
+	// runtime.AudioTranscriptionRequest without its audio bytes; the audio
+	// itself follows as DataChunks, the same split PayloadInputUploadRequest
+	// makes for an upload's bytes.
+	//
+	// PayloadAudioTranscriptionRequest 携带序列化的
+	// runtime.AudioTranscriptionRequest，不含它的音频字节；音频本身作为
+	// DataChunk 跟在后面，与 PayloadInputUploadRequest 对一次上传字节所做的
+	// 拆分相同。
+	PayloadAudioTranscriptionRequest PayloadKind = "audio_transcription_request"
+	// PayloadAudioTranscriptionResponse carries a marshalled
+	// runtime.AudioTranscriptionResponse.
+	PayloadAudioTranscriptionResponse PayloadKind = "audio_transcription_response"
 )
 
 // ResponseShape describes how many DataChunks an Operation's response uses,
@@ -191,6 +204,18 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Operation:   tunnelv1.Operation_OPERATION_INPUT_UPLOAD,
 		Request:     PayloadInputUploadRequest,
 		Response:    PayloadInputUploadResult,
+		Shape:       ShapeSingle,
+		RequestBody: true,
+	},
+	// Same "headers then DataChunks" shape as INPUT_UPLOAD: audio bytes are
+	// too large and too variable in size to fit in RequestHeaders.payload.
+	//
+	// 与 INPUT_UPLOAD 相同的「headers 之后跟 DataChunk」形状：音频字节太大、
+	// 大小也太不确定，装不进 RequestHeaders.payload。
+	tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE: {
+		Operation:   tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE,
+		Request:     PayloadAudioTranscriptionRequest,
+		Response:    PayloadAudioTranscriptionResponse,
 		Shape:       ShapeSingle,
 		RequestBody: true,
 	},
@@ -478,6 +503,40 @@ func UnmarshalInputUploadResult(b []byte) (runtime.InputUploadResult, error) {
 		return runtime.InputUploadResult{}, err
 	}
 	return InputUploadResultFromProto(&pb), nil
+}
+
+// MarshalAudioTranscriptionRequest encodes req as an AUDIO_TRANSCRIBE request
+// payload. req's audio bytes are not included: they travel as DataChunks, the
+// same split MarshalInputUploadRequest makes for an upload's bytes.
+func MarshalAudioTranscriptionRequest(req runtime.AudioTranscriptionRequest) ([]byte, error) {
+	return marshalPayload(AudioTranscriptionRequestToProto(req), "audio transcription request")
+}
+
+// UnmarshalAudioTranscriptionRequest decodes an AUDIO_TRANSCRIBE request
+// payload. The caller reads the audio's bytes from the DataChunks that
+// follow.
+func UnmarshalAudioTranscriptionRequest(b []byte) (runtime.AudioTranscriptionRequest, error) {
+	var pb tunnelv1.AudioTranscriptionRequest
+	if err := unmarshalPayload(b, &pb, "audio transcription request"); err != nil {
+		return runtime.AudioTranscriptionRequest{}, err
+	}
+	return AudioTranscriptionRequestFromProto(&pb), nil
+}
+
+// MarshalAudioTranscriptionResponse encodes resp as the single
+// AUDIO_TRANSCRIBE response chunk.
+func MarshalAudioTranscriptionResponse(resp runtime.AudioTranscriptionResponse) ([]byte, error) {
+	return marshalPayload(AudioTranscriptionResponseToProto(resp), "audio transcription response")
+}
+
+// UnmarshalAudioTranscriptionResponse decodes the single AUDIO_TRANSCRIBE
+// response chunk.
+func UnmarshalAudioTranscriptionResponse(b []byte) (runtime.AudioTranscriptionResponse, error) {
+	var pb tunnelv1.AudioTranscriptionResponse
+	if err := unmarshalPayload(b, &pb, "audio transcription response"); err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	return AudioTranscriptionResponseFromProto(&pb), nil
 }
 
 // -----------------------------------------------------------------------
@@ -1267,6 +1326,89 @@ func InputUploadResultFromProto(pb *tunnelv1.InputUploadResult) runtime.InputUpl
 		return runtime.InputUploadResult{}
 	}
 	return runtime.InputUploadResult{InputRef: pb.GetInputRef()}
+}
+
+// audioTaskToProto and audioTaskFromProto convert runtime.AudioTask, the one
+// field distinguishing AudioTranscriptionRequest's two OpenAI-compatible
+// backends, without letting an unrecognized value silently become one or the
+// other on this build.
+func audioTaskToProto(task runtime.AudioTask) tunnelv1.AudioTask {
+	switch task {
+	case runtime.AudioTaskTranscribe:
+		return tunnelv1.AudioTask_AUDIO_TASK_TRANSCRIBE
+	case runtime.AudioTaskTranslate:
+		return tunnelv1.AudioTask_AUDIO_TASK_TRANSLATE
+	default:
+		return tunnelv1.AudioTask_AUDIO_TASK_UNSPECIFIED
+	}
+}
+
+func audioTaskFromProto(task tunnelv1.AudioTask) runtime.AudioTask {
+	switch task {
+	case tunnelv1.AudioTask_AUDIO_TASK_TRANSCRIBE:
+		return runtime.AudioTaskTranscribe
+	case tunnelv1.AudioTask_AUDIO_TASK_TRANSLATE:
+		return runtime.AudioTaskTranslate
+	default:
+		return ""
+	}
+}
+
+// AudioTranscriptionRequestToProto mirrors an audio transcription request's
+// metadata onto the wire without its bytes, which travel separately as
+// DataChunks — the same split InputUploadMetaToProto makes for an upload.
+func AudioTranscriptionRequestToProto(req runtime.AudioTranscriptionRequest) *tunnelv1.AudioTranscriptionRequest {
+	pb := &tunnelv1.AudioTranscriptionRequest{
+		Model:          req.Model,
+		Filename:       req.Filename,
+		Task:           audioTaskToProto(req.Task),
+		Language:       req.Language,
+		Prompt:         req.Prompt,
+		ResponseFormat: req.ResponseFormat,
+	}
+	if req.Temperature != nil {
+		pb.Temperature = req.Temperature
+	}
+	return pb
+}
+
+// AudioTranscriptionRequestFromProto restores an audio transcription
+// request's metadata.
+func AudioTranscriptionRequestFromProto(pb *tunnelv1.AudioTranscriptionRequest) runtime.AudioTranscriptionRequest {
+	if pb == nil {
+		return runtime.AudioTranscriptionRequest{}
+	}
+	return runtime.AudioTranscriptionRequest{
+		Model:          pb.GetModel(),
+		Filename:       pb.GetFilename(),
+		Task:           audioTaskFromProto(pb.GetTask()),
+		Language:       pb.Language,
+		Prompt:         pb.Prompt,
+		Temperature:    pb.Temperature,
+		ResponseFormat: pb.GetResponseFormat(),
+	}
+}
+
+// AudioTranscriptionResponseToProto mirrors an audio transcription result
+// onto the wire.
+func AudioTranscriptionResponseToProto(resp runtime.AudioTranscriptionResponse) *tunnelv1.AudioTranscriptionResponse {
+	return &tunnelv1.AudioTranscriptionResponse{
+		Text:     resp.Text,
+		Language: resp.Language,
+		Duration: resp.Duration,
+	}
+}
+
+// AudioTranscriptionResponseFromProto restores an audio transcription result.
+func AudioTranscriptionResponseFromProto(pb *tunnelv1.AudioTranscriptionResponse) runtime.AudioTranscriptionResponse {
+	if pb == nil {
+		return runtime.AudioTranscriptionResponse{}
+	}
+	return runtime.AudioTranscriptionResponse{
+		Text:     pb.GetText(),
+		Language: pb.GetLanguage(),
+		Duration: pb.Duration,
+	}
 }
 
 // -----------------------------------------------------------------------

@@ -203,10 +203,10 @@ type InferEvent struct {
 - `POST /v1/messages`（Anthropic Messages **v1，纯文本子集**：不支持工具调用与图片/文档内容块，二者按名字拒绝而非静默丢弃；追求完整功能对等需要一次跨前门的核心类型改动，见 [Gateway README「Anthropic Messages」](service/aiServeWeaveGateway/README.md#anthropic-messages)）
 - `POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（Ollama 原生 API **纯推理端点**：不支持工具调用、`format`、视觉输入与模型管理类端点，均按名字拒绝或明确答「不支持」而非静默忽略/404，见 [Gateway README「Ollama 原生 API」](service/aiServeWeaveGateway/README.md#ollama-原生-api)）
 - `POST /v1/images/generations`（OpenAI-compatible 图像生成，映射到管理员指定的单一 ComfyUI 模板，见 [Gateway README「图像生成」](service/aiServeWeaveGateway/README.md#图像生成)）
+- `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（协议与传输层已实现：固定扩展名允许列表、`response_format` 仅 `text`/`json`；但没有任何适配器的 `Discover` 报告支持，接一个真实语音后端仍是独立待办，见 [Gateway README「音频转录与翻译」](service/aiServeWeaveGateway/README.md#音频转录与翻译)）
 
 规划中的扩展协议范围：
 
-- 音频转录和翻译
 - rerank
 
 ComfyUI 工作流和异步任务 API 已实现，见下方「ComfyUI 任务 API」。

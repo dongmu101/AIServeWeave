@@ -1122,6 +1122,99 @@ func TestDispatchRefusesAnOversizedInputUpload(t *testing.T) {
 	}
 }
 
+func TestDispatchStreamsAnAudioTranscriptionFromDataChunksWithoutBuffering(t *testing.T) {
+	f := newDispatchFixture(t, nil)
+
+	var gotReq runtime.AudioTranscriptionRequest
+	var gotAudio []byte
+	f.inference(0).TranscribeFunc = func(_ context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+		gotReq = req
+		b, err := io.ReadAll(audio)
+		if err != nil {
+			return runtime.AudioTranscriptionResponse{}, err
+		}
+		gotAudio = b
+		duration := 1.5
+		return runtime.AudioTranscriptionResponse{Text: "hello world", Language: "en", Duration: &duration}, nil
+	}
+
+	req := runtime.AudioTranscriptionRequest{Model: "whisper-1", Filename: "clip.mp3", Task: runtime.AudioTaskTranscribe}
+	payload := mustMarshal(t, tunnelwire.MarshalAudioTranscriptionRequest, req)
+	sink, err := f.dispatch(tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE, payload, func(req *tunnel.Request) {
+		body := make(chan []byte, 2)
+		body <- []byte("fake ")
+		body <- []byte("audio")
+		close(body)
+		req.Body = body
+	})
+	if err != nil {
+		t.Fatalf("dispatch failed: %v", err)
+	}
+
+	if gotReq.Model != "whisper-1" || gotReq.Task != runtime.AudioTaskTranscribe {
+		t.Errorf("Transcribe received req = %+v, want the unmarshalled request", gotReq)
+	}
+	if string(gotAudio) != "fake audio" {
+		t.Errorf("Transcribe received audio = %q, want %q", gotAudio, "fake audio")
+	}
+
+	chunks := sink.payloads()
+	if len(chunks) != 1 {
+		t.Fatalf("response chunks = %d, want 1", len(chunks))
+	}
+	result, err := tunnelwire.UnmarshalAudioTranscriptionResponse(chunks[0])
+	if err != nil {
+		t.Fatalf("UnmarshalAudioTranscriptionResponse: %v", err)
+	}
+	if result.Text != "hello world" || result.Language != "en" {
+		t.Errorf("result = %+v, want text/language from Transcribe", result)
+	}
+	if result.Duration == nil || *result.Duration != 1.5 {
+		t.Errorf("Duration = %v, want 1.5", result.Duration)
+	}
+}
+
+func TestDispatchRefusesAnAudioTranscriptionWithNoModel(t *testing.T) {
+	f := newDispatchFixture(t, nil)
+	called := false
+	f.inference(0).TranscribeFunc = func(context.Context, runtime.AudioTranscriptionRequest, io.Reader) (runtime.AudioTranscriptionResponse, error) {
+		called = true
+		return runtime.AudioTranscriptionResponse{}, nil
+	}
+
+	payload := mustMarshal(t, tunnelwire.MarshalAudioTranscriptionRequest, runtime.AudioTranscriptionRequest{Filename: "clip.mp3"})
+	_, err := f.dispatch(tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE, payload, nil)
+	wantCode(t, err, runtime.ErrorProtocol)
+	if called {
+		t.Error("Transcribe was called with no model")
+	}
+}
+
+func TestDispatchRefusesAnOversizedAudioTranscription(t *testing.T) {
+	f := newDispatchFixture(t, func(cfg *tunnel.DispatchConfig) {
+		cfg.MaxRequestBytes = 8
+	})
+	called := false
+	f.inference(0).TranscribeFunc = func(_ context.Context, _ runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+		called = true
+		_, err := io.ReadAll(audio)
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+
+	payload := mustMarshal(t, tunnelwire.MarshalAudioTranscriptionRequest, runtime.AudioTranscriptionRequest{Model: "whisper-1", Filename: "big.mp3"})
+	_, err := f.dispatch(tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE, payload, func(req *tunnel.Request) {
+		body := make(chan []byte, 2)
+		body <- []byte("0123456789")
+		body <- []byte("0123456789")
+		close(body)
+		req.Body = body
+	})
+	wantCode(t, err, runtime.ErrorResponseTooLarge)
+	if !called {
+		t.Error("Transcribe was never called")
+	}
+}
+
 func TestDispatchRefusesAnOversizedResponseFrame(t *testing.T) {
 	f := newDispatchFixture(t, func(cfg *tunnel.DispatchConfig) {
 		cfg.MaxFrameBytes = 8

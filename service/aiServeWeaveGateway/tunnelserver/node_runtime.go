@@ -170,6 +170,41 @@ func (r *NodeRuntime) Embed(ctx context.Context, req runtime.EmbeddingRequest) (
 	return tunnelwire.UnmarshalEmbeddingResponse(body)
 }
 
+// Transcribe runs an audio transcription or translation on the node. Like
+// UploadInput, audio is read in bounded chunks and sent as it is read, so a
+// large audio file is never held whole by this process; it travels on the
+// bulk slot class (call.go's classFor) for the same reason artifact transfer
+// and input upload do.
+func (r *NodeRuntime) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	payload, err := tunnelwire.MarshalAudioTranscriptionRequest(req)
+	if err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	sendBody := func(send func([]byte) error) error {
+		limit := r.srv.cfg.MaxFrameBytes
+		buf := make([]byte, limit)
+		for {
+			n, readErr := audio.Read(buf)
+			if n > 0 {
+				if sendErr := send(buf[:n]); sendErr != nil {
+					return sendErr
+				}
+			}
+			if readErr == io.EOF {
+				return nil
+			}
+			if readErr != nil {
+				return readErr
+			}
+		}
+	}
+	out, err := r.single(ctx, tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE, payload, sendBody)
+	if err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	return tunnelwire.UnmarshalAudioTranscriptionResponse(out)
+}
+
 // -----------------------------------------------------------------------
 // Workflows
 // -----------------------------------------------------------------------

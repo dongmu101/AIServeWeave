@@ -399,3 +399,70 @@ type InputUploadResult struct {
 	// 或自行构造它。
 	InputRef string
 }
+
+// AudioTask names which of the two OpenAI-compatible audio endpoints a
+// AudioTranscriptionRequest targets: transcription keeps the source language,
+// translation always answers in English. They share one Capability and one
+// request/response shape because the wire and backend contracts differ only
+// in this one field, not in how bytes flow.
+//
+// AudioTask 指明一次 AudioTranscriptionRequest 面向 OpenAI 兼容的两个音频端点中的
+// 哪一个：转录保留原语言，翻译始终以英文作答。两者共用一个 Capability 与一套
+// 请求/响应形状，因为 wire 层与后端契约的差异只在这一个字段上，不在字节如何流动上。
+type AudioTask string
+
+const (
+	AudioTaskTranscribe AudioTask = "transcribe"
+	AudioTaskTranslate  AudioTask = "translate"
+)
+
+// AudioTranscriptionRequest describes an audio transcription or translation
+// call, before any of the audio bytes — which travel separately as the
+// audio io.Reader InferenceRuntime.Transcribe takes, the same split
+// InputUploadMeta makes for an upload's bytes. Filename carries the source
+// extension a backend may need to pick a decoder; it is a label, never a
+// filesystem path.
+//
+// AudioTranscriptionRequest 描述一次音频转录或翻译调用，发生在任何音频字节之前
+// ——字节作为 InferenceRuntime.Transcribe 单独接受的 audio io.Reader 传输，与
+// InputUploadMeta 对一次上传字节所做的拆分相同。Filename 携带源文件扩展名，供
+// 后端据此选择解码器；它是一个标签，绝不是文件系统路径。
+type AudioTranscriptionRequest struct {
+	Model    string
+	Filename string
+	Task     AudioTask
+	// Language is a BCP-47/ISO-639-1 hint for AudioTaskTranscribe; a backend
+	// may ignore it. Meaningless for AudioTaskTranslate, whose output
+	// language is always English.
+	//
+	// Language 是 AudioTaskTranscribe 的 BCP-47/ISO-639-1 提示；后端可以忽略
+	// 它。对 AudioTaskTranslate 无意义——它的输出语言恒为英文。
+	Language *string
+	// Prompt steers the backend's decoding the way OpenAI's own transcription
+	// prompt parameter does; it is not a chat prompt.
+	//
+	// Prompt 按 OpenAI 自家转录接口 prompt 参数的方式引导后端解码；它不是
+	// 一个 chat 提示词。
+	Prompt      *string
+	Temperature *float64
+	// ResponseFormat is "text" or "json" (the default when empty). Other
+	// OpenAI values (srt, vtt, verbose_json) are out of v1's scope and are
+	// rejected by the caller before a request reaches this type.
+	//
+	// ResponseFormat 取 "text" 或 "json"（留空时默认为 "json"）。OpenAI 的其余
+	// 取值（srt、vtt、verbose_json）不在 v1 范围内，调用方在请求到达这个类型
+	// 之前就已拒绝。
+	ResponseFormat string
+}
+
+// AudioTranscriptionResponse is what Transcribe returns once the backend has
+// fully processed the audio. Language and Duration are best-effort: a
+// backend that does not report them leaves both zero.
+//
+// AudioTranscriptionResponse 是后端完整处理完音频之后 Transcribe 返回的结果。
+// Language 与 Duration 是尽力而为：不报告它们的后端会让两者都保持零值。
+type AudioTranscriptionResponse struct {
+	Text     string
+	Language string
+	Duration *float64
+}

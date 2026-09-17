@@ -104,6 +104,7 @@ const (
 	Operation_OPERATION_ARTIFACT_OPEN      Operation = 9
 	Operation_OPERATION_ARTIFACT_LIST      Operation = 10
 	Operation_OPERATION_INPUT_UPLOAD       Operation = 11
+	Operation_OPERATION_AUDIO_TRANSCRIBE   Operation = 12 // transcription and translation share one operation; AudioTranscriptionRequest.task selects
 )
 
 // Enum value maps for Operation.
@@ -121,6 +122,7 @@ var (
 		9:  "OPERATION_ARTIFACT_OPEN",
 		10: "OPERATION_ARTIFACT_LIST",
 		11: "OPERATION_INPUT_UPLOAD",
+		12: "OPERATION_AUDIO_TRANSCRIBE",
 	}
 	Operation_value = map[string]int32{
 		"OPERATION_UNSPECIFIED":        0,
@@ -135,6 +137,7 @@ var (
 		"OPERATION_ARTIFACT_OPEN":      9,
 		"OPERATION_ARTIFACT_LIST":      10,
 		"OPERATION_INPUT_UPLOAD":       11,
+		"OPERATION_AUDIO_TRANSCRIBE":   12,
 	}
 )
 
@@ -267,6 +270,57 @@ func (x ConfigAction) Number() protoreflect.EnumNumber {
 // Deprecated: Use ConfigAction.Descriptor instead.
 func (ConfigAction) EnumDescriptor() ([]byte, []int) {
 	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{3}
+}
+
+// AudioTask selects which of the two OpenAI-compatible audio endpoints a
+// AudioTranscriptionRequest targets.
+type AudioTask int32
+
+const (
+	AudioTask_AUDIO_TASK_UNSPECIFIED AudioTask = 0
+	AudioTask_AUDIO_TASK_TRANSCRIBE  AudioTask = 1
+	AudioTask_AUDIO_TASK_TRANSLATE   AudioTask = 2
+)
+
+// Enum value maps for AudioTask.
+var (
+	AudioTask_name = map[int32]string{
+		0: "AUDIO_TASK_UNSPECIFIED",
+		1: "AUDIO_TASK_TRANSCRIBE",
+		2: "AUDIO_TASK_TRANSLATE",
+	}
+	AudioTask_value = map[string]int32{
+		"AUDIO_TASK_UNSPECIFIED": 0,
+		"AUDIO_TASK_TRANSCRIBE":  1,
+		"AUDIO_TASK_TRANSLATE":   2,
+	}
+)
+
+func (x AudioTask) Enum() *AudioTask {
+	p := new(AudioTask)
+	*p = x
+	return p
+}
+
+func (x AudioTask) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (AudioTask) Descriptor() protoreflect.EnumDescriptor {
+	return file_api_proto_tunnel_v1_tunnel_proto_enumTypes[4].Descriptor()
+}
+
+func (AudioTask) Type() protoreflect.EnumType {
+	return &file_api_proto_tunnel_v1_tunnel_proto_enumTypes[4]
+}
+
+func (x AudioTask) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use AudioTask.Descriptor instead.
+func (AudioTask) EnumDescriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{4}
 }
 
 type RegisterRequest struct {
@@ -5744,6 +5798,166 @@ func (x *InputUploadResult) GetInputRef() string {
 	return ""
 }
 
+// AudioTranscriptionRequest is the OPERATION_AUDIO_TRANSCRIBE request
+// payload's metadata (STATUS.md's P2). Like InputUploadRequest, it carries
+// no audio bytes: they follow as DataChunks and RequestEnd closes them, the
+// same framing WORKFLOW_SUBMIT and INPUT_UPLOAD already use for a body too
+// large for RequestHeaders.payload.
+type AudioTranscriptionRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	Model          string                 `protobuf:"bytes,1,opt,name=model,proto3" json:"model,omitempty"`
+	Filename       string                 `protobuf:"bytes,2,opt,name=filename,proto3" json:"filename,omitempty"` // caller-supplied name; never interpreted as a filesystem path
+	Task           AudioTask              `protobuf:"varint,3,opt,name=task,proto3,enum=tunnel.v1.AudioTask" json:"task,omitempty"`
+	Language       *string                `protobuf:"bytes,4,opt,name=language,proto3,oneof" json:"language,omitempty"` // meaningful only for AUDIO_TASK_TRANSCRIBE
+	Prompt         *string                `protobuf:"bytes,5,opt,name=prompt,proto3,oneof" json:"prompt,omitempty"`
+	Temperature    *float64               `protobuf:"fixed64,6,opt,name=temperature,proto3,oneof" json:"temperature,omitempty"`
+	ResponseFormat string                 `protobuf:"bytes,7,opt,name=response_format,json=responseFormat,proto3" json:"response_format,omitempty"` // "text" or "json"; empty means "json"
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *AudioTranscriptionRequest) Reset() {
+	*x = AudioTranscriptionRequest{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[84]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AudioTranscriptionRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AudioTranscriptionRequest) ProtoMessage() {}
+
+func (x *AudioTranscriptionRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[84]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AudioTranscriptionRequest.ProtoReflect.Descriptor instead.
+func (*AudioTranscriptionRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{84}
+}
+
+func (x *AudioTranscriptionRequest) GetModel() string {
+	if x != nil {
+		return x.Model
+	}
+	return ""
+}
+
+func (x *AudioTranscriptionRequest) GetFilename() string {
+	if x != nil {
+		return x.Filename
+	}
+	return ""
+}
+
+func (x *AudioTranscriptionRequest) GetTask() AudioTask {
+	if x != nil {
+		return x.Task
+	}
+	return AudioTask_AUDIO_TASK_UNSPECIFIED
+}
+
+func (x *AudioTranscriptionRequest) GetLanguage() string {
+	if x != nil && x.Language != nil {
+		return *x.Language
+	}
+	return ""
+}
+
+func (x *AudioTranscriptionRequest) GetPrompt() string {
+	if x != nil && x.Prompt != nil {
+		return *x.Prompt
+	}
+	return ""
+}
+
+func (x *AudioTranscriptionRequest) GetTemperature() float64 {
+	if x != nil && x.Temperature != nil {
+		return *x.Temperature
+	}
+	return 0
+}
+
+func (x *AudioTranscriptionRequest) GetResponseFormat() string {
+	if x != nil {
+		return x.ResponseFormat
+	}
+	return ""
+}
+
+// AudioTranscriptionResponse is the OPERATION_AUDIO_TRANSCRIBE response
+// payload. language and duration are best-effort: a backend that does not
+// report them leaves both absent.
+type AudioTranscriptionResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Text          string                 `protobuf:"bytes,1,opt,name=text,proto3" json:"text,omitempty"`
+	Language      string                 `protobuf:"bytes,2,opt,name=language,proto3" json:"language,omitempty"`
+	Duration      *float64               `protobuf:"fixed64,3,opt,name=duration,proto3,oneof" json:"duration,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *AudioTranscriptionResponse) Reset() {
+	*x = AudioTranscriptionResponse{}
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[85]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *AudioTranscriptionResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*AudioTranscriptionResponse) ProtoMessage() {}
+
+func (x *AudioTranscriptionResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_tunnel_v1_tunnel_proto_msgTypes[85]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use AudioTranscriptionResponse.ProtoReflect.Descriptor instead.
+func (*AudioTranscriptionResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP(), []int{85}
+}
+
+func (x *AudioTranscriptionResponse) GetText() string {
+	if x != nil {
+		return x.Text
+	}
+	return ""
+}
+
+func (x *AudioTranscriptionResponse) GetLanguage() string {
+	if x != nil {
+		return x.Language
+	}
+	return ""
+}
+
+func (x *AudioTranscriptionResponse) GetDuration() float64 {
+	if x != nil && x.Duration != nil {
+		return *x.Duration
+	}
+	return 0
+}
+
 var File_api_proto_tunnel_v1_tunnel_proto protoreflect.FileDescriptor
 
 const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
@@ -6171,11 +6385,27 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x04size\x18\x03 \x01(\x03R\x04size\x12\x16\n" +
 	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"0\n" +
 	"\x11InputUploadResult\x12\x1b\n" +
-	"\tinput_ref\x18\x01 \x01(\tR\binputRef*V\n" +
+	"\tinput_ref\x18\x01 \x01(\tR\binputRef\"\xad\x02\n" +
+	"\x19AudioTranscriptionRequest\x12\x14\n" +
+	"\x05model\x18\x01 \x01(\tR\x05model\x12\x1a\n" +
+	"\bfilename\x18\x02 \x01(\tR\bfilename\x12(\n" +
+	"\x04task\x18\x03 \x01(\x0e2\x14.tunnel.v1.AudioTaskR\x04task\x12\x1f\n" +
+	"\blanguage\x18\x04 \x01(\tH\x00R\blanguage\x88\x01\x01\x12\x1b\n" +
+	"\x06prompt\x18\x05 \x01(\tH\x01R\x06prompt\x88\x01\x01\x12%\n" +
+	"\vtemperature\x18\x06 \x01(\x01H\x02R\vtemperature\x88\x01\x01\x12'\n" +
+	"\x0fresponse_format\x18\a \x01(\tR\x0eresponseFormatB\v\n" +
+	"\t_languageB\t\n" +
+	"\a_promptB\x0e\n" +
+	"\f_temperature\"z\n" +
+	"\x1aAudioTranscriptionResponse\x12\x12\n" +
+	"\x04text\x18\x01 \x01(\tR\x04text\x12\x1a\n" +
+	"\blanguage\x18\x02 \x01(\tR\blanguage\x12\x1f\n" +
+	"\bduration\x18\x03 \x01(\x01H\x00R\bduration\x88\x01\x01B\v\n" +
+	"\t_duration*V\n" +
 	"\tSlotClass\x12\x1a\n" +
 	"\x16SLOT_CLASS_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14SLOT_CLASS_INFERENCE\x10\x01\x12\x13\n" +
-	"\x0fSLOT_CLASS_BULK\x10\x02*\xda\x02\n" +
+	"\x0fSLOT_CLASS_BULK\x10\x02*\xfa\x02\n" +
 	"\tOperation\x12\x19\n" +
 	"\x15OPERATION_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15OPERATION_LIST_MODELS\x10\x01\x12\x12\n" +
@@ -6189,7 +6419,8 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x17OPERATION_ARTIFACT_OPEN\x10\t\x12\x1b\n" +
 	"\x17OPERATION_ARTIFACT_LIST\x10\n" +
 	"\x12\x1a\n" +
-	"\x16OPERATION_INPUT_UPLOAD\x10\v*~\n" +
+	"\x16OPERATION_INPUT_UPLOAD\x10\v\x12\x1e\n" +
+	"\x1aOPERATION_AUDIO_TRANSCRIBE\x10\f*~\n" +
 	"\fReplicaState\x12\x1d\n" +
 	"\x19REPLICA_STATE_UNSPECIFIED\x10\x00\x12\x18\n" +
 	"\x14REPLICA_STATE_ACTIVE\x10\x01\x12\x1a\n" +
@@ -6199,7 +6430,11 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x19CONFIG_ACTION_UNSPECIFIED\x10\x00\x12\x15\n" +
 	"\x11CONFIG_ACTION_ADD\x10\x01\x12\x19\n" +
 	"\x15CONFIG_ACTION_REPLACE\x10\x02\x12\x18\n" +
-	"\x14CONFIG_ACTION_REMOVE\x10\x032\x88\x01\n" +
+	"\x14CONFIG_ACTION_REMOVE\x10\x03*\\\n" +
+	"\tAudioTask\x12\x1a\n" +
+	"\x16AUDIO_TASK_UNSPECIFIED\x10\x00\x12\x19\n" +
+	"\x15AUDIO_TASK_TRANSCRIBE\x10\x01\x12\x18\n" +
+	"\x14AUDIO_TASK_TRANSLATE\x10\x022\x88\x01\n" +
 	"\x06Tunnel\x12A\n" +
 	"\aControl\x12\x17.tunnel.v1.AgentControl\x1a\x19.tunnel.v1.GatewayControl(\x010\x01\x12;\n" +
 	"\x05Serve\x12\x15.tunnel.v1.AgentFrame\x1a\x17.tunnel.v1.GatewayFrame(\x010\x012\x9a\x01\n" +
@@ -6232,227 +6467,231 @@ func file_api_proto_tunnel_v1_tunnel_proto_rawDescGZIP() []byte {
 	return file_api_proto_tunnel_v1_tunnel_proto_rawDescData
 }
 
-var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
-var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 91)
+var file_api_proto_tunnel_v1_tunnel_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
+var file_api_proto_tunnel_v1_tunnel_proto_msgTypes = make([]protoimpl.MessageInfo, 93)
 var file_api_proto_tunnel_v1_tunnel_proto_goTypes = []any{
-	(SlotClass)(0),                   // 0: tunnel.v1.SlotClass
-	(Operation)(0),                   // 1: tunnel.v1.Operation
-	(ReplicaState)(0),                // 2: tunnel.v1.ReplicaState
-	(ConfigAction)(0),                // 3: tunnel.v1.ConfigAction
-	(*RegisterRequest)(nil),          // 4: tunnel.v1.RegisterRequest
-	(*RegisterResponse)(nil),         // 5: tunnel.v1.RegisterResponse
-	(*RenewRequest)(nil),             // 6: tunnel.v1.RenewRequest
-	(*RenewResponse)(nil),            // 7: tunnel.v1.RenewResponse
-	(*MintTokenRequest)(nil),         // 8: tunnel.v1.MintTokenRequest
-	(*MintTokenResponse)(nil),        // 9: tunnel.v1.MintTokenResponse
-	(*RevokeTokenRequest)(nil),       // 10: tunnel.v1.RevokeTokenRequest
-	(*RevokeTokenResponse)(nil),      // 11: tunnel.v1.RevokeTokenResponse
-	(*DisableNodeRequest)(nil),       // 12: tunnel.v1.DisableNodeRequest
-	(*DisableNodeResponse)(nil),      // 13: tunnel.v1.DisableNodeResponse
-	(*EnableNodeRequest)(nil),        // 14: tunnel.v1.EnableNodeRequest
-	(*EnableNodeResponse)(nil),       // 15: tunnel.v1.EnableNodeResponse
-	(*ApproveNodeRequest)(nil),       // 16: tunnel.v1.ApproveNodeRequest
-	(*ApproveNodeResponse)(nil),      // 17: tunnel.v1.ApproveNodeResponse
-	(*SetMaintenanceRequest)(nil),    // 18: tunnel.v1.SetMaintenanceRequest
-	(*SetMaintenanceResponse)(nil),   // 19: tunnel.v1.SetMaintenanceResponse
-	(*ClearMaintenanceRequest)(nil),  // 20: tunnel.v1.ClearMaintenanceRequest
-	(*ClearMaintenanceResponse)(nil), // 21: tunnel.v1.ClearMaintenanceResponse
-	(*ListNodeStatesRequest)(nil),    // 22: tunnel.v1.ListNodeStatesRequest
-	(*ListNodeStatesResponse)(nil),   // 23: tunnel.v1.ListNodeStatesResponse
-	(*NodeState)(nil),                // 24: tunnel.v1.NodeState
-	(*GatewayFrame)(nil),             // 25: tunnel.v1.GatewayFrame
-	(*AgentFrame)(nil),               // 26: tunnel.v1.AgentFrame
-	(*Ready)(nil),                    // 27: tunnel.v1.Ready
-	(*RequestHeaders)(nil),           // 28: tunnel.v1.RequestHeaders
-	(*RequestEnd)(nil),               // 29: tunnel.v1.RequestEnd
-	(*Cancel)(nil),                   // 30: tunnel.v1.Cancel
-	(*Ping)(nil),                     // 31: tunnel.v1.Ping
-	(*Pong)(nil),                     // 32: tunnel.v1.Pong
-	(*ResponseHeaders)(nil),          // 33: tunnel.v1.ResponseHeaders
-	(*DataChunk)(nil),                // 34: tunnel.v1.DataChunk
-	(*ResponseEnd)(nil),              // 35: tunnel.v1.ResponseEnd
-	(*TunnelError)(nil),              // 36: tunnel.v1.TunnelError
-	(*AgentControl)(nil),             // 37: tunnel.v1.AgentControl
-	(*GatewayControl)(nil),           // 38: tunnel.v1.GatewayControl
-	(*Hello)(nil),                    // 39: tunnel.v1.Hello
-	(*NodeResources)(nil),            // 40: tunnel.v1.NodeResources
-	(*HelloAck)(nil),                 // 41: tunnel.v1.HelloAck
-	(*Heartbeat)(nil),                // 42: tunnel.v1.Heartbeat
-	(*HeartbeatAck)(nil),             // 43: tunnel.v1.HeartbeatAck
-	(*Draining)(nil),                 // 44: tunnel.v1.Draining
-	(*Shutdown)(nil),                 // 45: tunnel.v1.Shutdown
-	(*SlotHint)(nil),                 // 46: tunnel.v1.SlotHint
-	(*GatewayRoster)(nil),            // 47: tunnel.v1.GatewayRoster
-	(*GatewayReplica)(nil),           // 48: tunnel.v1.GatewayReplica
-	(*JoinRequest)(nil),              // 49: tunnel.v1.JoinRequest
-	(*RuntimeStatus)(nil),            // 50: tunnel.v1.RuntimeStatus
-	(*RuntimeConfig)(nil),            // 51: tunnel.v1.RuntimeConfig
-	(*RuntimeSpec)(nil),              // 52: tunnel.v1.RuntimeSpec
-	(*TLSSpec)(nil),                  // 53: tunnel.v1.TLSSpec
-	(*RuntimeSnapshot)(nil),          // 54: tunnel.v1.RuntimeSnapshot
-	(*RuntimeDescriptor)(nil),        // 55: tunnel.v1.RuntimeDescriptor
-	(*ProbeResult)(nil),              // 56: tunnel.v1.ProbeResult
-	(*HealthReport)(nil),             // 57: tunnel.v1.HealthReport
-	(*Discovery)(nil),                // 58: tunnel.v1.Discovery
-	(*CapabilityEvidence)(nil),       // 59: tunnel.v1.CapabilityEvidence
-	(*Model)(nil),                    // 60: tunnel.v1.Model
-	(*ModelList)(nil),                // 61: tunnel.v1.ModelList
-	(*ChatRequest)(nil),              // 62: tunnel.v1.ChatRequest
-	(*ChatMessage)(nil),              // 63: tunnel.v1.ChatMessage
-	(*ToolCall)(nil),                 // 64: tunnel.v1.ToolCall
-	(*FunctionCall)(nil),             // 65: tunnel.v1.FunctionCall
-	(*Tool)(nil),                     // 66: tunnel.v1.Tool
-	(*FunctionDefinition)(nil),       // 67: tunnel.v1.FunctionDefinition
-	(*ResponseFormat)(nil),           // 68: tunnel.v1.ResponseFormat
-	(*JSONSchemaFormat)(nil),         // 69: tunnel.v1.JSONSchemaFormat
-	(*ChatResponse)(nil),             // 70: tunnel.v1.ChatResponse
-	(*ChatEvent)(nil),                // 71: tunnel.v1.ChatEvent
-	(*ChatMessageDelta)(nil),         // 72: tunnel.v1.ChatMessageDelta
-	(*ToolCallDelta)(nil),            // 73: tunnel.v1.ToolCallDelta
-	(*FunctionCallDelta)(nil),        // 74: tunnel.v1.FunctionCallDelta
-	(*Usage)(nil),                    // 75: tunnel.v1.Usage
-	(*EmbeddingRequest)(nil),         // 76: tunnel.v1.EmbeddingRequest
-	(*EmbeddingResponse)(nil),        // 77: tunnel.v1.EmbeddingResponse
-	(*Embedding)(nil),                // 78: tunnel.v1.Embedding
-	(*WorkflowRequest)(nil),          // 79: tunnel.v1.WorkflowRequest
-	(*WorkflowRun)(nil),              // 80: tunnel.v1.WorkflowRun
-	(*RunRef)(nil),                   // 81: tunnel.v1.RunRef
-	(*WorkflowEvent)(nil),            // 82: tunnel.v1.WorkflowEvent
-	(*WorkflowStatus)(nil),           // 83: tunnel.v1.WorkflowStatus
-	(*ArtifactRef)(nil),              // 84: tunnel.v1.ArtifactRef
-	(*ArtifactList)(nil),             // 85: tunnel.v1.ArtifactList
-	(*InputUploadRequest)(nil),       // 86: tunnel.v1.InputUploadRequest
-	(*InputUploadResult)(nil),        // 87: tunnel.v1.InputUploadResult
-	nil,                              // 88: tunnel.v1.RequestHeaders.TraceEntry
-	nil,                              // 89: tunnel.v1.Hello.LabelsEntry
-	nil,                              // 90: tunnel.v1.RuntimeSpec.HeadersEntry
-	nil,                              // 91: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	nil,                              // 92: tunnel.v1.Discovery.CapabilitiesEntry
-	nil,                              // 93: tunnel.v1.Model.CapabilitiesEntry
-	nil,                              // 94: tunnel.v1.ChatRequest.ExtraEntry
-	(*timestamppb.Timestamp)(nil),    // 95: google.protobuf.Timestamp
-	(*durationpb.Duration)(nil),      // 96: google.protobuf.Duration
+	(SlotClass)(0),                     // 0: tunnel.v1.SlotClass
+	(Operation)(0),                     // 1: tunnel.v1.Operation
+	(ReplicaState)(0),                  // 2: tunnel.v1.ReplicaState
+	(ConfigAction)(0),                  // 3: tunnel.v1.ConfigAction
+	(AudioTask)(0),                     // 4: tunnel.v1.AudioTask
+	(*RegisterRequest)(nil),            // 5: tunnel.v1.RegisterRequest
+	(*RegisterResponse)(nil),           // 6: tunnel.v1.RegisterResponse
+	(*RenewRequest)(nil),               // 7: tunnel.v1.RenewRequest
+	(*RenewResponse)(nil),              // 8: tunnel.v1.RenewResponse
+	(*MintTokenRequest)(nil),           // 9: tunnel.v1.MintTokenRequest
+	(*MintTokenResponse)(nil),          // 10: tunnel.v1.MintTokenResponse
+	(*RevokeTokenRequest)(nil),         // 11: tunnel.v1.RevokeTokenRequest
+	(*RevokeTokenResponse)(nil),        // 12: tunnel.v1.RevokeTokenResponse
+	(*DisableNodeRequest)(nil),         // 13: tunnel.v1.DisableNodeRequest
+	(*DisableNodeResponse)(nil),        // 14: tunnel.v1.DisableNodeResponse
+	(*EnableNodeRequest)(nil),          // 15: tunnel.v1.EnableNodeRequest
+	(*EnableNodeResponse)(nil),         // 16: tunnel.v1.EnableNodeResponse
+	(*ApproveNodeRequest)(nil),         // 17: tunnel.v1.ApproveNodeRequest
+	(*ApproveNodeResponse)(nil),        // 18: tunnel.v1.ApproveNodeResponse
+	(*SetMaintenanceRequest)(nil),      // 19: tunnel.v1.SetMaintenanceRequest
+	(*SetMaintenanceResponse)(nil),     // 20: tunnel.v1.SetMaintenanceResponse
+	(*ClearMaintenanceRequest)(nil),    // 21: tunnel.v1.ClearMaintenanceRequest
+	(*ClearMaintenanceResponse)(nil),   // 22: tunnel.v1.ClearMaintenanceResponse
+	(*ListNodeStatesRequest)(nil),      // 23: tunnel.v1.ListNodeStatesRequest
+	(*ListNodeStatesResponse)(nil),     // 24: tunnel.v1.ListNodeStatesResponse
+	(*NodeState)(nil),                  // 25: tunnel.v1.NodeState
+	(*GatewayFrame)(nil),               // 26: tunnel.v1.GatewayFrame
+	(*AgentFrame)(nil),                 // 27: tunnel.v1.AgentFrame
+	(*Ready)(nil),                      // 28: tunnel.v1.Ready
+	(*RequestHeaders)(nil),             // 29: tunnel.v1.RequestHeaders
+	(*RequestEnd)(nil),                 // 30: tunnel.v1.RequestEnd
+	(*Cancel)(nil),                     // 31: tunnel.v1.Cancel
+	(*Ping)(nil),                       // 32: tunnel.v1.Ping
+	(*Pong)(nil),                       // 33: tunnel.v1.Pong
+	(*ResponseHeaders)(nil),            // 34: tunnel.v1.ResponseHeaders
+	(*DataChunk)(nil),                  // 35: tunnel.v1.DataChunk
+	(*ResponseEnd)(nil),                // 36: tunnel.v1.ResponseEnd
+	(*TunnelError)(nil),                // 37: tunnel.v1.TunnelError
+	(*AgentControl)(nil),               // 38: tunnel.v1.AgentControl
+	(*GatewayControl)(nil),             // 39: tunnel.v1.GatewayControl
+	(*Hello)(nil),                      // 40: tunnel.v1.Hello
+	(*NodeResources)(nil),              // 41: tunnel.v1.NodeResources
+	(*HelloAck)(nil),                   // 42: tunnel.v1.HelloAck
+	(*Heartbeat)(nil),                  // 43: tunnel.v1.Heartbeat
+	(*HeartbeatAck)(nil),               // 44: tunnel.v1.HeartbeatAck
+	(*Draining)(nil),                   // 45: tunnel.v1.Draining
+	(*Shutdown)(nil),                   // 46: tunnel.v1.Shutdown
+	(*SlotHint)(nil),                   // 47: tunnel.v1.SlotHint
+	(*GatewayRoster)(nil),              // 48: tunnel.v1.GatewayRoster
+	(*GatewayReplica)(nil),             // 49: tunnel.v1.GatewayReplica
+	(*JoinRequest)(nil),                // 50: tunnel.v1.JoinRequest
+	(*RuntimeStatus)(nil),              // 51: tunnel.v1.RuntimeStatus
+	(*RuntimeConfig)(nil),              // 52: tunnel.v1.RuntimeConfig
+	(*RuntimeSpec)(nil),                // 53: tunnel.v1.RuntimeSpec
+	(*TLSSpec)(nil),                    // 54: tunnel.v1.TLSSpec
+	(*RuntimeSnapshot)(nil),            // 55: tunnel.v1.RuntimeSnapshot
+	(*RuntimeDescriptor)(nil),          // 56: tunnel.v1.RuntimeDescriptor
+	(*ProbeResult)(nil),                // 57: tunnel.v1.ProbeResult
+	(*HealthReport)(nil),               // 58: tunnel.v1.HealthReport
+	(*Discovery)(nil),                  // 59: tunnel.v1.Discovery
+	(*CapabilityEvidence)(nil),         // 60: tunnel.v1.CapabilityEvidence
+	(*Model)(nil),                      // 61: tunnel.v1.Model
+	(*ModelList)(nil),                  // 62: tunnel.v1.ModelList
+	(*ChatRequest)(nil),                // 63: tunnel.v1.ChatRequest
+	(*ChatMessage)(nil),                // 64: tunnel.v1.ChatMessage
+	(*ToolCall)(nil),                   // 65: tunnel.v1.ToolCall
+	(*FunctionCall)(nil),               // 66: tunnel.v1.FunctionCall
+	(*Tool)(nil),                       // 67: tunnel.v1.Tool
+	(*FunctionDefinition)(nil),         // 68: tunnel.v1.FunctionDefinition
+	(*ResponseFormat)(nil),             // 69: tunnel.v1.ResponseFormat
+	(*JSONSchemaFormat)(nil),           // 70: tunnel.v1.JSONSchemaFormat
+	(*ChatResponse)(nil),               // 71: tunnel.v1.ChatResponse
+	(*ChatEvent)(nil),                  // 72: tunnel.v1.ChatEvent
+	(*ChatMessageDelta)(nil),           // 73: tunnel.v1.ChatMessageDelta
+	(*ToolCallDelta)(nil),              // 74: tunnel.v1.ToolCallDelta
+	(*FunctionCallDelta)(nil),          // 75: tunnel.v1.FunctionCallDelta
+	(*Usage)(nil),                      // 76: tunnel.v1.Usage
+	(*EmbeddingRequest)(nil),           // 77: tunnel.v1.EmbeddingRequest
+	(*EmbeddingResponse)(nil),          // 78: tunnel.v1.EmbeddingResponse
+	(*Embedding)(nil),                  // 79: tunnel.v1.Embedding
+	(*WorkflowRequest)(nil),            // 80: tunnel.v1.WorkflowRequest
+	(*WorkflowRun)(nil),                // 81: tunnel.v1.WorkflowRun
+	(*RunRef)(nil),                     // 82: tunnel.v1.RunRef
+	(*WorkflowEvent)(nil),              // 83: tunnel.v1.WorkflowEvent
+	(*WorkflowStatus)(nil),             // 84: tunnel.v1.WorkflowStatus
+	(*ArtifactRef)(nil),                // 85: tunnel.v1.ArtifactRef
+	(*ArtifactList)(nil),               // 86: tunnel.v1.ArtifactList
+	(*InputUploadRequest)(nil),         // 87: tunnel.v1.InputUploadRequest
+	(*InputUploadResult)(nil),          // 88: tunnel.v1.InputUploadResult
+	(*AudioTranscriptionRequest)(nil),  // 89: tunnel.v1.AudioTranscriptionRequest
+	(*AudioTranscriptionResponse)(nil), // 90: tunnel.v1.AudioTranscriptionResponse
+	nil,                                // 91: tunnel.v1.RequestHeaders.TraceEntry
+	nil,                                // 92: tunnel.v1.Hello.LabelsEntry
+	nil,                                // 93: tunnel.v1.RuntimeSpec.HeadersEntry
+	nil,                                // 94: tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	nil,                                // 95: tunnel.v1.Discovery.CapabilitiesEntry
+	nil,                                // 96: tunnel.v1.Model.CapabilitiesEntry
+	nil,                                // 97: tunnel.v1.ChatRequest.ExtraEntry
+	(*timestamppb.Timestamp)(nil),      // 98: google.protobuf.Timestamp
+	(*durationpb.Duration)(nil),        // 99: google.protobuf.Duration
 }
 var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
-	95,  // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
-	95,  // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
-	96,  // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
-	95,  // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
-	24,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
-	95,  // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
-	95,  // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
-	28,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
-	34,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
-	29,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
-	30,  // 10: tunnel.v1.GatewayFrame.cancel:type_name -> tunnel.v1.Cancel
-	31,  // 11: tunnel.v1.GatewayFrame.ping:type_name -> tunnel.v1.Ping
-	27,  // 12: tunnel.v1.AgentFrame.ready:type_name -> tunnel.v1.Ready
-	33,  // 13: tunnel.v1.AgentFrame.headers:type_name -> tunnel.v1.ResponseHeaders
-	34,  // 14: tunnel.v1.AgentFrame.data:type_name -> tunnel.v1.DataChunk
-	35,  // 15: tunnel.v1.AgentFrame.end:type_name -> tunnel.v1.ResponseEnd
-	32,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
+	98,  // 0: tunnel.v1.RegisterResponse.not_after:type_name -> google.protobuf.Timestamp
+	98,  // 1: tunnel.v1.RenewResponse.not_after:type_name -> google.protobuf.Timestamp
+	99,  // 2: tunnel.v1.MintTokenRequest.ttl:type_name -> google.protobuf.Duration
+	98,  // 3: tunnel.v1.MintTokenResponse.expires_at:type_name -> google.protobuf.Timestamp
+	25,  // 4: tunnel.v1.ListNodeStatesResponse.states:type_name -> tunnel.v1.NodeState
+	98,  // 5: tunnel.v1.NodeState.first_seen_at:type_name -> google.protobuf.Timestamp
+	98,  // 6: tunnel.v1.NodeState.last_seen_at:type_name -> google.protobuf.Timestamp
+	29,  // 7: tunnel.v1.GatewayFrame.headers:type_name -> tunnel.v1.RequestHeaders
+	35,  // 8: tunnel.v1.GatewayFrame.data:type_name -> tunnel.v1.DataChunk
+	30,  // 9: tunnel.v1.GatewayFrame.end:type_name -> tunnel.v1.RequestEnd
+	31,  // 10: tunnel.v1.GatewayFrame.cancel:type_name -> tunnel.v1.Cancel
+	32,  // 11: tunnel.v1.GatewayFrame.ping:type_name -> tunnel.v1.Ping
+	28,  // 12: tunnel.v1.AgentFrame.ready:type_name -> tunnel.v1.Ready
+	34,  // 13: tunnel.v1.AgentFrame.headers:type_name -> tunnel.v1.ResponseHeaders
+	35,  // 14: tunnel.v1.AgentFrame.data:type_name -> tunnel.v1.DataChunk
+	36,  // 15: tunnel.v1.AgentFrame.end:type_name -> tunnel.v1.ResponseEnd
+	33,  // 16: tunnel.v1.AgentFrame.pong:type_name -> tunnel.v1.Pong
 	0,   // 17: tunnel.v1.Ready.class:type_name -> tunnel.v1.SlotClass
 	1,   // 18: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
-	88,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
-	36,  // 20: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
-	39,  // 21: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
-	42,  // 22: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
-	50,  // 23: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
-	44,  // 24: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
-	32,  // 25: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
-	41,  // 26: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
-	43,  // 27: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
-	51,  // 28: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
-	46,  // 29: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
-	47,  // 30: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
-	45,  // 31: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
-	31,  // 32: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
-	40,  // 33: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
-	89,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
-	96,  // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
-	48,  // 36: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
+	91,  // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
+	37,  // 20: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
+	40,  // 21: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
+	43,  // 22: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
+	51,  // 23: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
+	45,  // 24: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
+	33,  // 25: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
+	42,  // 26: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
+	44,  // 27: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
+	52,  // 28: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
+	47,  // 29: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
+	48,  // 30: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
+	46,  // 31: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
+	32,  // 32: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
+	41,  // 33: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
+	92,  // 34: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
+	99,  // 35: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
+	49,  // 36: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
 	2,   // 37: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
 	2,   // 38: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
-	54,  // 39: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
-	95,  // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
+	55,  // 39: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
+	98,  // 40: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
 	3,   // 41: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
-	52,  // 42: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
-	90,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
-	96,  // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
-	96,  // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
-	96,  // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
-	96,  // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
-	96,  // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
-	53,  // 49: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
-	91,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	55,  // 51: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
-	56,  // 52: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
-	57,  // 53: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
-	58,  // 54: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
-	95,  // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	95,  // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
-	96,  // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
-	95,  // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
-	60,  // 59: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
-	92,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
-	95,  // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
-	93,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
-	60,  // 63: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
-	63,  // 64: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
-	66,  // 65: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
-	68,  // 66: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
-	94,  // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
-	64,  // 68: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
-	65,  // 69: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
-	67,  // 70: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
-	69,  // 71: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
-	63,  // 72: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
-	75,  // 73: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
-	95,  // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
-	72,  // 75: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
-	75,  // 76: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
-	73,  // 77: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
-	74,  // 78: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
-	78,  // 79: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
-	75,  // 80: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
-	95,  // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
-	95,  // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
-	95,  // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
-	95,  // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
-	84,  // 85: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
-	59,  // 86: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	59,  // 87: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	37,  // 88: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
-	26,  // 89: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
-	4,   // 90: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
-	6,   // 91: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
-	49,  // 92: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
-	8,   // 93: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
-	10,  // 94: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
-	12,  // 95: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
-	14,  // 96: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
-	16,  // 97: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
-	18,  // 98: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
-	20,  // 99: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
-	22,  // 100: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
-	38,  // 101: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
-	25,  // 102: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
-	5,   // 103: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
-	7,   // 104: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
-	47,  // 105: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
-	9,   // 106: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
-	11,  // 107: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
-	13,  // 108: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
-	15,  // 109: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
-	17,  // 110: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
-	19,  // 111: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
-	21,  // 112: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
-	23,  // 113: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
-	101, // [101:114] is the sub-list for method output_type
-	88,  // [88:101] is the sub-list for method input_type
-	88,  // [88:88] is the sub-list for extension type_name
-	88,  // [88:88] is the sub-list for extension extendee
-	0,   // [0:88] is the sub-list for field type_name
+	53,  // 42: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
+	93,  // 43: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
+	99,  // 44: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
+	99,  // 45: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
+	99,  // 46: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
+	99,  // 47: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
+	99,  // 48: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
+	54,  // 49: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
+	94,  // 50: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	56,  // 51: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
+	57,  // 52: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
+	58,  // 53: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
+	59,  // 54: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
+	98,  // 55: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	98,  // 56: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
+	99,  // 57: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
+	98,  // 58: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
+	61,  // 59: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
+	95,  // 60: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
+	98,  // 61: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
+	96,  // 62: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
+	61,  // 63: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
+	64,  // 64: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
+	67,  // 65: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
+	69,  // 66: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
+	97,  // 67: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
+	65,  // 68: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
+	66,  // 69: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
+	68,  // 70: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
+	70,  // 71: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
+	64,  // 72: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
+	76,  // 73: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
+	98,  // 74: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
+	73,  // 75: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
+	76,  // 76: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
+	74,  // 77: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
+	75,  // 78: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
+	79,  // 79: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
+	76,  // 80: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
+	98,  // 81: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
+	98,  // 82: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
+	98,  // 83: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
+	98,  // 84: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
+	85,  // 85: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
+	4,   // 86: tunnel.v1.AudioTranscriptionRequest.task:type_name -> tunnel.v1.AudioTask
+	60,  // 87: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	60,  // 88: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	38,  // 89: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
+	27,  // 90: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
+	5,   // 91: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
+	7,   // 92: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
+	50,  // 93: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
+	9,   // 94: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
+	11,  // 95: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
+	13,  // 96: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
+	15,  // 97: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
+	17,  // 98: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
+	19,  // 99: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
+	21,  // 100: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
+	23,  // 101: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
+	39,  // 102: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
+	26,  // 103: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
+	6,   // 104: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
+	8,   // 105: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
+	48,  // 106: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
+	10,  // 107: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
+	12,  // 108: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
+	14,  // 109: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
+	16,  // 110: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
+	18,  // 111: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
+	20,  // 112: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
+	22,  // 113: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
+	24,  // 114: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
+	102, // [102:115] is the sub-list for method output_type
+	89,  // [89:102] is the sub-list for method input_type
+	89,  // [89:89] is the sub-list for extension type_name
+	89,  // [89:89] is the sub-list for extension extendee
+	0,   // [0:89] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_tunnel_v1_tunnel_proto_init() }
@@ -6492,13 +6731,15 @@ func file_api_proto_tunnel_v1_tunnel_proto_init() {
 	}
 	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[58].OneofWrappers = []any{}
 	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[72].OneofWrappers = []any{}
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[84].OneofWrappers = []any{}
+	file_api_proto_tunnel_v1_tunnel_proto_msgTypes[85].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_tunnel_v1_tunnel_proto_rawDesc), len(file_api_proto_tunnel_v1_tunnel_proto_rawDesc)),
-			NumEnums:      4,
-			NumMessages:   91,
+			NumEnums:      5,
+			NumMessages:   93,
 			NumExtensions: 0,
 			NumServices:   4,
 		},

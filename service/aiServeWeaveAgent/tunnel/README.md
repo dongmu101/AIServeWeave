@@ -222,6 +222,7 @@ enum Operation {
   OPERATION_ARTIFACT_OPEN      = 9;
   OPERATION_ARTIFACT_LIST      = 10;
   OPERATION_INPUT_UPLOAD       = 11;  // STATUS.md P04：输入文件上传，晚于首期落地
+  OPERATION_AUDIO_TRANSCRIBE   = 12;  // STATUS.md P2：音频转录/翻译共用一个 operation，AudioTranscriptionRequest.task 选择
 }
 
 message ResponseHeaders {
@@ -266,10 +267,13 @@ message TunnelError {
 | `ARTIFACT_OPEN` | `ArtifactRef` | `ResponseHeaders` + N 个 `DataChunk`（字节流） |
 | `ARTIFACT_LIST` | `RunRef` | 单个 `DataChunk`（`ArtifactList`） |
 | `INPUT_UPLOAD` | `InputUploadRequest`（文件字节另走 `DataChunk`） | 单个 `DataChunk`（`InputUploadResult`） |
+| `AUDIO_TRANSCRIBE` | `AudioTranscriptionRequest`（音频字节另走 `DataChunk`） | 单个 `DataChunk`（`AudioTranscriptionResponse`） |
 
-payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`；`INPUT_UPLOAD` 的文件字节同理，且体积比模板更没有上限保证。
+payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`；`INPUT_UPLOAD` 与 `AUDIO_TRANSCRIBE` 的文件/音频字节同理，且体积比模板更没有上限保证。
 
 `INPUT_UPLOAD`（STATUS.md 的 P04）是首期七个阶段完成后按「后续演进」一节要求的方式新增的：只加一个 Operation、复用既有帧结构，不改任何已有消息。`InputUploadRequest` 只携带 `filename`、`subfolder`、`size`、`sha256` 四个元数据字段，绝不携带目标 URL 或路径——文件落盘的具体位置完全由接收端的 runtime 适配器决定（例如 `common/runtime/workflow/comfyui` 转发到 ComfyUI 自己的 `/upload/image`），这是协议文件头部「不得表达 fetch 这个 URL」这条红线在新 Operation 上的延续。Agent 侧 `dispatch.go` 用 `chanReader` 把请求体 channel 适配成 `io.Reader`，直接流进 `WorkflowRuntime.UploadInput`，不像 `WORKFLOW_SUBMIT` 的 `readBody` 那样先整体收集——模板有 `MaxRequestBytes` 兜底的宽松上限，输入文件的体积没有那么宽松的保证，提前攒够整个文件正是「任何一跳都不得无界缓冲」要防的事。Gateway 侧与 `ARTIFACT_OPEN` 一样走批量槽（`tunnelserver.classFor`），避免一次大的上传挤占推理槽。
+
+`AUDIO_TRANSCRIBE`（STATUS.md 的 P2）复用 `INPUT_UPLOAD` 立下的同一套框架，而不是另起一套：转录与翻译共用这一个 Operation，`AudioTranscriptionRequest.task` 字段选择去哪个后端端点。Agent 侧同样用 `chanReader` 把音频体直接流进 `InferenceRuntime.Transcribe`，绝不整体缓冲；Gateway 侧同样走批量槽。与 `INPUT_UPLOAD` 服务的 `WorkflowRuntime` 不同，这次新增的方法在 `InferenceRuntime` 上，是一次影响所有推理适配器（`ollama`、`vllm`、`sglang`）的接口变更，但没有任何适配器的 `Discover` 会发布 `CapabilityAudioTranscription`，因此在为某个部署接入语音探测之前，这个 Operation 到达 Agent 后总是被能力门禁拒绝——协议已经打通，能力尚未打开。
 
 **流式事件严禁聚合。** `CHAT_STREAM` 每收到一个 `ChatEvent` 就 `Send` 一帧；Gateway 每收到一帧就 flush。这条规则是 TTFT 的唯一保障，任何"攒够 N 条再发"的优化都必须先证明不影响首字延迟。
 

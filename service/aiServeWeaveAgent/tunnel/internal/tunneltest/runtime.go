@@ -54,6 +54,7 @@ type InferenceRuntime struct {
 	ChatFunc       func(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, error)
 	ChatStreamFunc func(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], error)
 	EmbedFunc      func(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, error)
+	TranscribeFunc func(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error)
 }
 
 // ListModels implements runtime.InferenceRuntime.
@@ -86,6 +87,19 @@ func (r *InferenceRuntime) Embed(ctx context.Context, req runtime.EmbeddingReque
 		return r.EmbedFunc(ctx, req)
 	}
 	return runtime.EmbeddingResponse{}, nil
+}
+
+// Transcribe implements runtime.InferenceRuntime. The default drains audio to
+// EOF, the same "someone must consume it" discipline WorkflowRuntime.UploadInput's
+// default already applies, rather than silently ignoring what a test sent.
+func (r *InferenceRuntime) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	if r.TranscribeFunc != nil {
+		return r.TranscribeFunc(ctx, req, audio)
+	}
+	if _, err := io.Copy(io.Discard, audio); err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	return runtime.AudioTranscriptionResponse{}, nil
 }
 
 // WorkflowRuntime is a scriptable runtime.WorkflowRuntime.

@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
@@ -181,6 +182,30 @@ func (b *Base) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime
 	ctx, cancel := context.WithTimeout(ctx, b.cfg.RequestTimeout)
 	defer cancel()
 	return openai.Embed(ctx, b.client, req)
+}
+
+// Transcribe runs an audio transcription or translation, gated on
+// CapabilityAudioTranscription. No adapter's Discover publishes this
+// capability today (STATUS.md's P2), so by default every call is rejected
+// locally as unsupported rather than assumed to work — the same "never
+// assume a backend supports it" principle Chat and Embed already apply via
+// CapabilitiesFor, here with no adapter yet on the other side of the gate.
+//
+// Transcribe 执行一次音频转录或翻译，受 CapabilityAudioTranscription 门禁。
+// 今天没有任何适配器的 Discover 会发布这项能力（STATUS.md 的 P2），因此默认
+// 情况下每次调用都在本地被判定为不支持而拒绝，而不是被假定可行——与 Chat、
+// Embed 已经通过 CapabilitiesFor 应用的「绝不假设后端支持」原则相同，只是
+// 门禁另一侧此刻还没有适配器。
+func (b *Base) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	release, err := b.BeginRequest("transcribe", req.Model, runtime.CapabilityAudioTranscription)
+	if err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(ctx, b.cfg.RequestTimeout)
+	defer cancel()
+	return openai.Transcribe(ctx, b.client, req, audio)
 }
 
 // Close releases the instance's concurrency budget and makes every

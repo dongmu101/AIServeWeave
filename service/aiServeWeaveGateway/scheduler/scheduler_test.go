@@ -389,6 +389,86 @@ func TestEmbedDispatches(t *testing.T) {
 	}
 }
 
+// transcribeHandler answers OPERATION_AUDIO_TRANSCRIBE with the audio bytes
+// it received, tagged with source, so a test can tell which node served the
+// request and that the bytes survived DataChunk framing.
+func transcribeHandler(source string) gatewaytest.SlotHandler {
+	return func(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+		if req.GetOperation() != tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE {
+			return errors.New("unsupported operation")
+		}
+		var joined []byte
+		for _, chunk := range body {
+			joined = append(joined, chunk...)
+		}
+		payload, err := tunnelwire.MarshalAudioTranscriptionResponse(runtime.AudioTranscriptionResponse{
+			Text: "served by " + source + ": " + string(joined),
+		})
+		if err != nil {
+			return err
+		}
+		return reply(gatewaytest.DataFrame(payload))
+	}
+}
+
+// connectTranscriptionNode wires up nodeID with a bulk slot, since
+// AUDIO_TRANSCRIBE travels on SLOT_CLASS_BULK (tunnelserver's classFor) —
+// unlike connectNode's inference-only slots, which a transcription request
+// would never be dispatched to.
+func connectTranscriptionNode(t *testing.T, h *gatewaytest.Harness, nodeID, runtimeID, model string) {
+	t.Helper()
+	snap := chatCapableSnapshot(runtimeID, model)
+	snap.Discovery.Models[0].Capabilities[runtime.CapabilityAudioTranscription] = runtime.CapabilityEvidence{Level: runtime.SupportSupported}
+
+	c := h.Connect(nodeID, runtimeID)
+	c.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full:       true,
+		ReportedAt: timestamppb.New(h.Clock.Now()),
+		Snapshots:  tunnelwire.SnapshotsToProto([]runtime.Snapshot{snap}),
+	}}})
+	h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_BULK, nodeID+"-bulk-0", transcribeHandler(nodeID))
+	gatewaytest.WaitFor(t, "bulk slot to park on "+nodeID, func() bool {
+		info, _ := h.Srv.Node(nodeID)
+		return info.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_BULK] == 1
+	})
+	gatewaytest.WaitFor(t, "inventory to arrive on "+nodeID, func() bool {
+		info, _ := h.Srv.Node(nodeID)
+		return len(info.Runtimes) == 1
+	})
+}
+
+func TestTranscribeDispatchesToACandidateAndStreamsTheAudio(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectTranscriptionNode(t, h, "node-a", "backend-1", "whisper-1")
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	candidates := sched.TranscriptionCandidates("whisper-1")
+	if len(candidates) != 1 {
+		t.Fatalf("TranscriptionCandidates = %v, want 1", candidates)
+	}
+
+	resp, err := sched.Transcribe(context.Background(), candidates[0],
+		runtime.AudioTranscriptionRequest{Model: "whisper-1", Filename: "clip.mp3", Task: runtime.AudioTaskTranscribe},
+		strings.NewReader("fake audio"))
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	if resp.Text != "served by node-a: fake audio" {
+		t.Errorf("Text = %q, want the Agent's echo tagged with node-a", resp.Text)
+	}
+}
+
+func TestTranscriptionCandidatesEmptyForAModelWithoutTheCapability(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	// chatCapableSnapshot's model never advertises CapabilityAudioTranscription.
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	if candidates := sched.TranscriptionCandidates("qwen3:8b"); len(candidates) != 0 {
+		t.Errorf("TranscriptionCandidates = %v, want none for a model never discovered as transcription-capable", candidates)
+	}
+}
+
 func TestModelsAggregatesAcrossNodesAndDeduplicates(t *testing.T) {
 	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))

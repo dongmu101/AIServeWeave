@@ -385,13 +385,14 @@ func (r *Response) Close() error {
 // occupy an inference slot for minutes and wreck the node's TTFT.
 func classFor(op tunnelv1.Operation) tunnelv1.SlotClass {
 	switch op {
-	case tunnelv1.Operation_OPERATION_ARTIFACT_OPEN, tunnelv1.Operation_OPERATION_INPUT_UPLOAD:
-		// Both move a caller-sized file's worth of bytes rather than a
-		// bounded JSON reply, so both are physically isolated from
+	case tunnelv1.Operation_OPERATION_ARTIFACT_OPEN, tunnelv1.Operation_OPERATION_INPUT_UPLOAD,
+		tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE:
+		// All three move a caller-sized file's worth of bytes rather than a
+		// bounded JSON reply, so all are physically isolated from
 		// inference the same way — see README「产物下载走批量槽」.
 		//
-		// 两者搬运的都是与调用方文件同等大小的字节，而不是一个有界的
-		// JSON 回复，因此两者都以相同方式与推理物理隔离——见 README
+		// 三者搬运的都是与调用方文件同等大小的字节，而不是一个有界的
+		// JSON 回复，因此都以相同方式与推理物理隔离——见 README
 		// 「产物下载走批量槽」。
 		return tunnelv1.SlotClass_SLOT_CLASS_BULK
 	default:

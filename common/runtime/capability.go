@@ -23,6 +23,17 @@ const (
 	CapabilityWorkflowCancel    Capability = "workflow_cancel"
 	CapabilityArtifactRead      Capability = "artifact_read"
 	CapabilityInputWrite        Capability = "input_write"
+	// CapabilityAudioTranscription gates InferenceRuntime.Transcribe for both
+	// AudioTaskTranscribe and AudioTaskTranslate (STATUS.md's P2). It is a
+	// deliberately single capability for both tasks: their wire and backend
+	// contracts differ only in the request's Task field, not in what the
+	// caller must prove is supported.
+	//
+	// CapabilityAudioTranscription 同时为 AudioTaskTranscribe 与
+	// AudioTaskTranslate 两种任务门禁 InferenceRuntime.Transcribe（STATUS.md
+	// 的 P2）。两个任务刻意共用一个能力：它们的 wire 与后端契约只在请求的 Task
+	// 字段上不同，调用方需要证明支持的东西并无不同。
+	CapabilityAudioTranscription Capability = "audio_transcription"
 )
 
 // CapabilitySource records how a piece of capability evidence was obtained,

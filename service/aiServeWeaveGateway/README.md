@@ -1,16 +1,16 @@
 # aiserveweave-gateway
 
-数据面。对外终结 OpenAI 兼容 API、Anthropic Messages v1（纯文本）、Ollama 原生推理 API（纯推理端点）与工作流 Job API，对内通过隧道把请求派给节点。
+数据面。对外终结 OpenAI 兼容 API、Anthropic Messages v1（纯文本）、Ollama 原生推理 API（纯推理端点）、音频转录/翻译端点与工作流 Job API，对内通过隧道把请求派给节点。
 
 **当前进度：隧道服务端、调度器、OpenAI 前门、ComfyUI 工作流的提交与状态查询、Registry 名册订阅、指标导出与只读的运维清单端点均已落地。** 这个二进制现在能接住 Agent、知道每个节点能服务什么、把 HTTP 请求路由过去，自己的副本身份会同步给 Registry 维护的名册，并在 `-metrics-addr` 上导出 Prometheus 文本格式的指标。
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
-| `tunnelserver/` | 已实现 | 隧道终结：mTLS 认证、节点表、槽池、十个 Operation 的分发、`NodeRuntime` |
+| `tunnelserver/` | 已实现 | 隧道终结：mTLS 认证、节点表、槽池、十二个 Operation 的分发、`NodeRuntime` |
 | `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
 | `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
-| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
+| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/audio/transcriptions`/`POST /v1/audio/translations`（P2，见「音频转录与翻译」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
 | `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：文件或控制面来源（P03）、声明式输入/输出/依赖、绑定与校验；`Handle` 原子持有当前生效目录 |
 | `workflowsync/` | 已实现 | 控制面版本的有界拉取、逐模板校验、持久化最近有效整包与生效状态（P03） |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
@@ -342,6 +342,18 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **`/api/embeddings` 是单条 prompt 的旧版端点**，不是批量输入的新版 `/api/embed`——本 v1 前门不实现后者。
 - **未接入 P09/C28 请求检索**：与 Anthropic 前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，`requestLogEndpoint` 未识别的路径会被中间件跳过，不记录也不报错。
 - 错误体是 Ollama 自己的 `{"error": "..."}` 形状（`writeOllamaError`），调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
+
+## 音频转录与翻译
+
+`POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（STATUS.md 的 P2）是 OpenAI 兼容的音频转录/翻译端点，边界设计见 [P2 设计文档「音频转录/翻译能力边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)。实现见 `httpapi/audio.go`；不同于 Anthropic/Ollama 两个前门，这是唯一需要给 `common/runtime.InferenceRuntime` 新增方法（`Transcribe`）的一次破坏性接口变更，而不是纯粹在边界处转换。
+
+- **`InferenceRuntime` 新增 `Transcribe(ctx, req AudioTranscriptionRequest, audio io.Reader) (AudioTranscriptionResponse, error)`**，转录与翻译共用一个方法与一个 `CapabilityAudioTranscription`：两者的 wire 与后端契约只在请求的 `Task` 字段上不同。`oaibase.Base.Transcribe` 是三个 OpenAI 兼容适配器（ollama、vllm、sglang）共享的实现，调用 `common/runtime/openai.Transcribe` 打 `/v1/audio/transcriptions` 或 `/v1/audio/translations`。
+- **没有任何适配器的 `Discover` 会发布这项能力**：三个适配器都只是把调用委托给 `oaibase.Base.Transcribe`，而 `Base` 的能力门禁（`CapabilitiesFor` + `CapabilitySet.Require`）只认从 `Discover` 收到的证据，因此在真正为某个部署接入语音探测之前，每一次调用都会被本地拒绝为不支持，而不是被假定可行——「绝不假设后端支持」原则在这里第一次没有适配器把门打开。
+- **音频体从不整体缓冲**：Gateway 收到的是 `multipart/form-data`（`r.ParseMultipartForm` 把过大的分片溢写到磁盘临时文件，与 `submitWithFiles` 对工作流 InputFile 分片的处理相同），文件部分随隧道消费而读取；隧道上新增的 `OPERATION_AUDIO_TRANSCRIBE` 复用 `OPERATION_INPUT_UPLOAD` 的「headers 之后跟 DataChunk」框架，并同样跑在 `SLOT_CLASS_BULK`（`tunnelserver.classFor`），与产物下载、输入上传物理隔离于推理之外。
+- **不是 Chat/Embed 那样的多候选重试循环**：`Scheduler.Transcribe` 只接受调用方已经选定的一个 `Candidate`，`httpapi.audioTranscriptions`/`audioTranslations` 经 `Scheduler.TranscriptionCandidates(model)` 取候选、只用第一个——字节一旦开始流向某个节点，换节点重试就需要调用方从头重新读一遍整个文件，与 `UploadInput` 不跨节点重试的既有理由相同。
+- **v1 范围**：`response_format` 只接受 `"text"`/`"json"`（默认 `"json"`，只含 `text` 字段），OpenAI 的 `srt`/`vtt`/`verbose_json` 按名字拒绝而非静默降级；`language` 字段只对转录有意义，翻译请求携带它会被拒绝（翻译的输出语言恒为英文）；固定、不可配置的扩展名允许列表（`.mp3`/`.wav`/`.ogg`/`.flac`）叠加与工作流上传共用的字节嗅探（`uploadformat.go` 的 `validateUploadContent`），拦下扩展名与实际字节不符的上传。
+- **未接入 P09/C28 请求检索**：与 Anthropic/Ollama 前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，加值超出本轮范围。
+- 错误体是 OpenAI 前门共用的 `openAIErrorBody` 形状，调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
 
 ## 指标
 

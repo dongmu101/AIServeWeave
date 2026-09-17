@@ -3,6 +3,7 @@ package e2e
 import (
 	"context"
 	"fmt"
+	"io"
 	"sync/atomic"
 	"time"
 
@@ -155,4 +156,12 @@ func (r *scriptedRuntime) Embed(ctx context.Context, req runtime.EmbeddingReques
 		Model: req.Model,
 		Data:  []runtime.Embedding{{Index: 0, Vector: []float32{1, 0}}},
 	}, nil
+}
+
+func (r *scriptedRuntime) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	n, err := io.Copy(io.Discard, audio)
+	if err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	return runtime.AudioTranscriptionResponse{Text: fmt.Sprintf("echo:%d bytes", n)}, nil
 }

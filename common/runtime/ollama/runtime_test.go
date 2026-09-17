@@ -595,6 +595,24 @@ func TestChatWithToolsSucceedsForToolCapableModel(t *testing.T) {
 	}
 }
 
+func TestTranscribeIsRejectedAsUnsupported(t *testing.T) {
+	// Ollama's Discover never publishes CapabilityAudioTranscription
+	// (STATUS.md's P2), so a call is rejected even after a successful
+	// Discover — the "never assume a backend supports it" principle,
+	// exercised here rather than only stated in a design doc.
+	f := newFakeOllama(t)
+	f.setModels(standardModels()...)
+	rt := newRuntime(t, f)
+	mustDiscover(t, rt)
+
+	_, err := rt.Transcribe(context.Background(), runtime.AudioTranscriptionRequest{
+		Model:    chatModel,
+		Filename: "clip.mp3",
+		Task:     runtime.AudioTaskTranscribe,
+	}, strings.NewReader("fake audio"))
+	requireErrorCode(t, err, runtime.ErrorCapability)
+}
+
 // --- streaming --------------------------------------------------------
 
 func TestChatStreamDeliversDeltasAndReleasesTheSlotOnClose(t *testing.T) {

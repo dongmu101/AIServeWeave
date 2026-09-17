@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -208,6 +209,72 @@ func (c *Client) doRaw(ctx context.Context, operation, method, path string, reqB
 		return nil, c.transportError(ctx, operation, err)
 	}
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		respBytes, truncated, err := readLimited(resp.Body, c.maxRespBytes)
+		if err != nil {
+			return nil, c.transportError(ctx, operation, err)
+		}
+		if truncated {
+			return nil, c.tooLargeError(operation, resp.StatusCode)
+		}
+		return nil, c.errorFromResponse(operation, resp.StatusCode, respBytes)
+	}
+	return resp, nil
+}
+
+// doMultipart streams a multipart/form-data request: fields as plain form
+// values, plus one file part named fileField whose bytes come from body.
+// The multipart envelope is written by a goroutine into an io.Pipe, so body
+// is read and forwarded as the transport consumes it — never buffered whole,
+// the same discipline doRaw's JSON path does not need because a ChatRequest
+// is already a bounded in-memory value.
+//
+// doMultipart 流式发送一个 multipart/form-data 请求：fields 作为普通表单字段，
+// 外加一个名为 fileField 的文件分片，其字节来自 body。multipart 信封由一个
+// goroutine 写入 io.Pipe，因此 body 随传输层的消费而被读取并转发——绝不整体
+// 缓冲，这是 doRaw 的 JSON 路径不需要的纪律，因为 ChatRequest 本就是一个有界
+// 的内存内值。
+func (c *Client) doMultipart(ctx context.Context, operation, path string, fields map[string]string, fileField, filename string, body io.Reader) (*http.Response, error) {
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+
+	go func() {
+		err := func() error {
+			for name, value := range fields {
+				if err := mw.WriteField(name, value); err != nil {
+					return err
+				}
+			}
+			part, err := mw.CreateFormFile(fileField, filename)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(part, body); err != nil {
+				return err
+			}
+			return mw.Close()
+		}()
+		_ = pw.CloseWithError(err)
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.resolve(path).String(), pr)
+	if err != nil {
+		return nil, c.localError(operation, runtime.ErrorInvalidConfig, fmt.Sprintf("build request: %v", err))
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	if c.apiKey != "" {
+		req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	}
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, c.transportError(ctx, operation, err)
+	}
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		defer resp.Body.Close()
 		respBytes, truncated, err := readLimited(resp.Body, c.maxRespBytes)
