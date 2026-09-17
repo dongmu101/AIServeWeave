@@ -1,6 +1,6 @@
 # aiserveweave-registry
 
-控制面：签发节点证书，维护 Gateway 副本名册。这两件事都要求强一致的一次性状态（bootstrap token 不能被重放、CA 私钥不能泄露），所以只由 Registry 一个进程持有，不下发给任何 Gateway 副本——见顶层 [README.md「安全设计」](../../README.md#安全设计)。
+控制面：签发节点证书，维护 Gateway 副本名册。这两件事都要求强一致的一次性状态（bootstrap token 不能被重放、CA 私钥不能泄露），所以只由 Registry 一个进程持有，不下发给任何 Gateway 副本——见 [SECURITY.md「安全设计」](../../SECURITY.md#安全设计)。
 
 **当前进度：`NodeIdentity`、`GatewayDirectory`、`TokenAdmin` 均已实现。** `NodeIdentity`/`GatewayDirectory` 是第一阶段最后补上的两块：Agent 侧的 bootstrap/续期客户端代码（`service/aiServeWeaveAgent/tunnel/identity.go`）此前已经写好并测试过，只是没有真的 Registry 可以对接；Gateway 侧的 `tunnelserver.Server.SetRoster` 也是现成的注入点，只是没有调用方。`TokenAdmin`（受控签发、撤销、node_id 绑定，STATUS.md 的 S02）是补上的第三块，见下文「`TokenAdmin`」一节；`GatewayDirectory.Join` 的认证与节点禁用/证书吊销（STATUS.md 的 S03）是第四块，见下文「`GatewayDirectory.Join` 的认证（S03）」与「节点禁用与证书吊销（S03）」两节。
 

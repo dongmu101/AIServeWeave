@@ -6,7 +6,8 @@
 
 本文件只写跨仓库的通用约定，细节以专门文档为准，不在此复述：
 
-- [README.md](README.md) —— 架构、协议兼容、数据模型、路线图。
+- [README.md](README.md) —— 项目介绍与快速开始，以及完整文档索引。
+- [docs/architecture.md](docs/architecture.md) —— 分层架构、各服务职责、代码结构；[docs/protocol.md](docs/protocol.md) 协议兼容与调度、[docs/comfyui.md](docs/comfyui.md) ComfyUI 接入、[docs/data-model.md](docs/data-model.md) 数据模型。
 - [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md) —— 隧道协议定义、连接状态机、槽池、实施阶段。改隧道相关代码前必读。
 - [service/aiServeWeaveControlPlane/README.md](service/aiServeWeaveControlPlane/README.md) —— 控制面为什么用 go-zero 而数据面不用、三种凭据的三种存法、吊销的生效路径。改控制面或 Gateway 鉴权前必读。
 

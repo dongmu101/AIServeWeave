@@ -2,7 +2,7 @@
 
 更新日期：2026-09-08。
 
-本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
+本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [架构设计](docs/architecture.md)与[协议兼容与调度](docs/protocol.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
 
 ## 文档分工与里程碑
 

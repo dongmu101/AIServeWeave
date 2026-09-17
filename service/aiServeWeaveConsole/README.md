@@ -1,6 +1,6 @@
 # AIServeWeave Console
 
-AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模型目录、工作流目录和 Job 页面。整体架构见 [项目 README](../../README.md)。
+AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模型目录、工作流目录和 Job 页面。整体架构见 [架构设计](../../docs/architecture.md)。
 
 **当前已完成 M1–M3、M4 的 C21–C24、M5 的 C25/C26，以及 P05 用户与会话生命周期。** 包括 Redis 可吊销登录、用户与平台运维管理、账户安全、API Key、审计、配额、工作流、Job 与产物。指标、检索和告警仍待开发；Console 尚无 Job SSE 订阅。详细边界与验收记录见 [STATUS.md](STATUS.md)。
 
