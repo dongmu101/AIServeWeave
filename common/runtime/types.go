@@ -299,6 +299,23 @@ type WorkflowRequest struct {
 	Template       json.RawMessage
 	ClientID       string
 	IdempotencyKey string
+	// MinGPUMemoryBytes is the smallest GPU memory total a candidate node must
+	// declare to run this workflow, mirroring modelroute.Target's field of the
+	// same name and the same default-open semantics: zero applies no filter,
+	// and a node that has not reported hardware is never excluded by it. It
+	// is the caller's to set — the scheduler has no notion of what a workflow
+	// graph requires — closing the gap where workflow submissions previously
+	// could never reach STATUS.md's P2 admission-threshold filtering at all,
+	// since it only ever flowed through modelroute.Target for the Chat/Embed/
+	// Rerank paths.
+	//
+	// MinGPUMemoryBytes 是候选节点必须声明的最小 GPU 显存总量才能运行本工作流，
+	// 与 modelroute.Target 同名字段及其默认放行语义一致：零值不做任何过滤，一个
+	// 尚未上报硬件的节点同样不会被它排除。它由调用方设置——调度器本身不理解某张
+	// 工作流图需要什么——补上此前的缺口：工作流提交此前完全无法触达 STATUS.md P2
+	// 的准入门槛过滤，因为该过滤只经由 modelroute.Target 流向 Chat/Embed/Rerank
+	// 路径。
+	MinGPUMemoryBytes int64
 }
 
 // WorkflowRun is the local handle for a submitted workflow. ID wraps the

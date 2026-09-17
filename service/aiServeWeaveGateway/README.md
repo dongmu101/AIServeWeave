@@ -299,6 +299,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **默认关闭，行为与之前完全一致。** `-workflow-queue-max-wait` 默认 `0`，此时候选耗尽立即失败，等同于这个功能存在之前的行为。
 - **只覆盖工作流 Job 提交（`SubmitWorkflow`），不覆盖 Chat/Embed。** OpenAI 前门是同步请求，客户端已经在等响应，在 Gateway 内部再排队没有意义（设计文档第六节第 3 条）；工作流 Job 本身是异步提交+轮询模型，天然适合排队。
 - **候选完全不存在（`ErrNoCapableNode`）或失败不可重试时永远不排队。** 前者重试也不会凭空出现一个节点；后者（例如 ComfyUI 可能已经收到了这次提交）重试有制造第二次生成的风险，两者都保持立即失败。
+- **`runtime.WorkflowRequest.MinGPUMemoryBytes` 把「模型别名与节点标签」第 4 条的准入门槛过滤接到了工作流提交路径**——这个过滤此前只经由一个有路由的模型的 `Target.MinGPUMemoryBytes` 生效，`workflowCandidates` 传的是空 `routing.Target{}`，导致它对工作流提交结构性地永远不生效，即便 P2 设计文档自己的首要场景就是"一个大模型工作流不应该被派给显存总量明显不够的节点"。字段由调用方设置（今天没有任何调用方设置它，默认零值不做过滤，行为不变），语义与 `Target.MinGPUMemoryBytes` 完全一致：达不到要求的候选在 `pickBy` 里被排除、绝不进入排队等待（等待无法让一个声明不足的显存总量变得足够，与"候选完全不存在时不排队"是同一类判断），未上报硬件的节点仍默认放行。**模板层面如何声明"这个工作流需要多少显存"仍未设计**——与 `modelroute.Target.MinGPUMemoryBytes` 今天完全靠运维手工声明、没有自动推断来源同一处境，是独立于本次调度器接线之外的后续任务。
 - **两条独立的界，缺一不可**（AGENTS.md「任何一跳都不得无界缓冲」）：`-workflow-queue-max-wait` 限最长等待时长，`-workflow-queue-max-waiters`（默认 64）限同时在等的提交数，超过后新的提交立即被拒绝而不是排进一个更长的队。`-workflow-queue-retry-interval`（默认 500ms）是等待期间重新轮询候选集的间隔。
 - **可观测**：`gateway_scheduler_queue_depth`（当前排队数）、`gateway_scheduler_queue_wait_seconds`（按 `outcome`∈`resolved`/`canceled`/`timeout` 分桶的等待时长）、`gateway_scheduler_queue_rejected_total`（因排队已满被拒绝的次数），见下方「指标」。
 

@@ -188,6 +188,45 @@ func TestSubmitWorkflowDoesNotQueueWhenNoCandidateExists(t *testing.T) {
 	}
 }
 
+// TestSubmitWorkflowDoesNotQueueWhenTheOnlyCandidateLacksCapacity is the
+// interaction the P2 resource-aware-scheduling design doc's §六.4 called out
+// by name: admission-threshold filtering (nodeHasCapacity) must exclude an
+// undersized node before bounded queueing ever gets a turn, because no
+// amount of waiting turns a declared-insufficient GPU memory total into a
+// sufficient one. This is the workflow-path sibling of
+// TestSubmitWorkflowDoesNotQueueWhenNoCandidateExists: there the gap is no
+// node at all, here it is a node that exists but is filtered before
+// pickBy's ranking ever sees it, so attemptSubmitWorkflow must observe the
+// same zero-candidate outcome and never mark itself exhausted.
+//
+// TestSubmitWorkflowDoesNotQueueWhenTheOnlyCandidateLacksCapacity 是 P2
+// 资源感知调度设计文档 §六.4 点名的交互：准入门槛过滤（nodeHasCapacity）必须在
+// 有界排队轮到之前就排除一个显存不够的节点，因为无论等多久，一个声明不足的显存
+// 总量都不会变得足够。它是 TestSubmitWorkflowDoesNotQueueWhenNoCandidateExists
+// 在工作流路径上的姊妹测试：那边的缺口是完全没有节点，这里是节点存在但在
+// pickBy 的排序看到它之前就被过滤掉了，因此 attemptSubmitWorkflow 必须观察到
+// 同样的零候选结果，绝不能把自己标记为"耗尽重试"。
+func TestSubmitWorkflowDoesNotQueueWhenTheOnlyCandidateLacksCapacity(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var count atomic.Int32
+	h.ConnectWithResources(t, "node-small", "comfy-1", &tunnelv1.NodeResources{GpuMemoryBytes: 8 << 30},
+		workflowCapableSnapshot("comfy-1"), workflowHandler("node-small", &count))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, QueueMaxWait: 10 * time.Second})
+	_, _, err := sched.SubmitWorkflow(context.Background(), runtime.WorkflowRequest{
+		Template: json.RawMessage(`{}`), MinGPUMemoryBytes: 16 << 30,
+	})
+	if !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Errorf("err = %v, want ErrNoCapableNode returned immediately", err)
+	}
+	if n := h.Clock.PendingTimers(); n != 0 {
+		t.Errorf("PendingTimers() = %d, want 0: a capacity-excluded candidate must not start a queue wait", n)
+	}
+	if count.Load() != 0 {
+		t.Errorf("the undersized node was contacted %d times, want 0", count.Load())
+	}
+}
+
 // TestSubmitWorkflowDoesNotQueueOnANonRetryableFailure confirms a failure
 // submitRetryable rejects skips the queue even with queueing configured: an
 // upstream error may already have queued the workflow on the backend, and

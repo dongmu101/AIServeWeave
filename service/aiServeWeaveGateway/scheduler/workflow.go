@@ -52,7 +52,7 @@ func (s *Scheduler) SubmitWorkflow(ctx context.Context, req runtime.WorkflowRequ
 // queueSubmitWorkflow 唯一会等待的条件。候选完全不存在（ErrNoCapableNode）与候选以
 // 不可重试错误失败这两种情形下它都是 false，因为等待无法改变这两种结果中的任何一个。
 func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (run runtime.WorkflowRun, c Candidate, err error, exhausted bool) {
-	candidates := s.workflowCandidates(runtime.CapabilityWorkflowExecution)
+	candidates := s.workflowCandidates(runtime.CapabilityWorkflowExecution, req.MinGPUMemoryBytes)
 	s.metrics.Selection(runtime.CapabilityWorkflowExecution, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.WorkflowRun{}, Candidate{}, ErrNoCapableNode, false
@@ -297,16 +297,25 @@ func submitRetryable(err error) bool {
 // inference request there is no model to match: a ComfyUI instance advertises
 // its capability at the runtime level, and which checkpoints a given graph
 // needs is a property of the template, not of the request's model field.
+// minGPUMemoryBytes carries STATUS.md's P2 admission-threshold filtering
+// through to pickBy exactly as a routed model's Target.MinGPUMemoryBytes
+// does for Chat/Embed/Rerank; zero (the common case today, since no caller
+// yet has a source for this number) applies no filter.
 //
 // workflowCandidates 对能运行工作流的节点排序。与推理请求不同，这里没有模型要匹配：
 // ComfyUI 实例在 runtime 这一层声明能力，而某张图需要哪些 checkpoint 是模板的属性，
-// 不是请求 model 字段的属性。
-func (s *Scheduler) workflowCandidates(cap runtime.Capability) []Candidate {
+// 不是请求 model 字段的属性。minGPUMemoryBytes 把 STATUS.md P2 的准入门槛过滤一路
+// 带到 pickBy，与一个有路由的模型经 Target.MinGPUMemoryBytes 对 Chat/Embed/Rerank
+// 所做的完全一样；零值（今天的常见情形，因为还没有调用方有这个数字的来源）不做任何
+// 过滤。
+func (s *Scheduler) workflowCandidates(cap runtime.Capability, minGPUMemoryBytes int64) []Candidate {
 	// An empty target matches every node: a workflow request carries no model
-	// to route, so there is nothing for a routing rule to select on.
+	// to route, so there is nothing for a routing rule to select on beyond
+	// the capacity filter minGPUMemoryBytes may add.
 	//
-	// 空 target 匹配所有节点：工作流请求不携带可路由的模型，因此路由规则无从选择。
-	return s.pickBy(routing.Target{}, func(snap runtime.Snapshot) bool {
+	// 空 target 匹配所有节点：工作流请求不携带可路由的模型，因此除了
+	// minGPUMemoryBytes 可能带来的容量过滤外，路由规则无从选择。
+	return s.pickBy(routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, func(snap runtime.Snapshot) bool {
 		return snap.Discovery.Capabilities.Require(cap) == nil
 	})
 }
@@ -323,7 +332,10 @@ func (s *Scheduler) workflowCandidates(cap runtime.Capability) []Candidate {
 // 节点/运行时。STATUS.md 的 J06 用它来判断本副本可能欠着恢复检查的是哪些
 // (NodeID, RuntimeID) 路由绑定：一次记录在本副本此刻够不着的节点上的运行，不该
 // 由本副本去恢复，而这个方法正是在不重复 workflowCandidates 自己的路由与能力
-// 判断逻辑的前提下，告知调用方哪些节点符合条件。
+// 判断逻辑的前提下，告知调用方哪些节点符合条件。它查的是一个已经在跑的 run 记录
+// 在案的绑定，不是新提交要满足的显存要求，因此不带 minGPUMemoryBytes 过滤——一个
+// 节点的显存声明会随时间变化，但已经在它上面跑的 run 不会因此被重新判定为不该
+// 恢复。
 func (s *Scheduler) WorkflowCapableCandidates() []Candidate {
-	return s.workflowCandidates(runtime.CapabilityWorkflowExecution)
+	return s.workflowCandidates(runtime.CapabilityWorkflowExecution, 0)
 }

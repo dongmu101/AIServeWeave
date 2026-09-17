@@ -121,6 +121,65 @@ func TestSubmitWorkflowReturnsErrNoCapableNodeWhenNothingRunsWorkflows(t *testin
 	}
 }
 
+// TestSubmitWorkflowMinGPUMemoryExcludesAnUndersizedNode closes the gap
+// STATUS.md's P2 admission-threshold filtering originally left open: the
+// filter only ever flowed through a routed model's Target.MinGPUMemoryBytes,
+// so it could never apply to a workflow submission — the design doc's own
+// primary example ("一个大模型工作流不应该被派给显存总量明显不够的节点"). With
+// WorkflowRequest.MinGPUMemoryBytes now wired to the same nodeHasCapacity
+// check, a workflow-capable but undersized node must be excluded even though
+// it is the only candidate that would otherwise be picked on load.
+//
+// TestSubmitWorkflowMinGPUMemoryExcludesAnUndersizedNode 补上 STATUS.md P2
+// 准入门槛过滤原本留下的缺口：这个过滤此前只经由一个有路由的模型的
+// Target.MinGPUMemoryBytes 生效，因此永远无法应用到工作流提交——而这恰恰是设计文档
+// 自己的首要场景（"一个大模型工作流不应该被派给显存总量明显不够的节点"）。现在
+// WorkflowRequest.MinGPUMemoryBytes 接到了同一个 nodeHasCapacity 检查，一个能跑
+// 工作流但显存不够的节点必须被排除，即便单看负载它是唯一会被选中的候选。
+func TestSubmitWorkflowMinGPUMemoryExcludesAnUndersizedNode(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var count atomic.Int32
+	h.ConnectWithResources(t, "node-small", "comfy-1", &tunnelv1.NodeResources{GpuMemoryBytes: 8 << 30},
+		workflowCapableSnapshot("comfy-1"), workflowHandler("node-small", &count))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	_, _, err := sched.SubmitWorkflow(context.Background(), runtime.WorkflowRequest{
+		Template: json.RawMessage(`{}`), MinGPUMemoryBytes: 16 << 30,
+	})
+	if !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Errorf("err = %v, want ErrNoCapableNode: the only node declares less GPU memory than required", err)
+	}
+	if count.Load() != 0 {
+		t.Errorf("the undersized node was contacted %d times, want 0", count.Load())
+	}
+}
+
+// TestSubmitWorkflowMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources
+// mirrors TestMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources for the
+// workflow path: a node that never reported hardware is not evidence of
+// insufficient capacity, so a submission that sets MinGPUMemoryBytes must
+// not lose its only candidate over it.
+//
+// TestSubmitWorkflowMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources
+// 是 TestMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources 在工作流路径上的
+// 对应版本：一个从未上报硬件的节点不是容量不足的证据，一次设置了 MinGPUMemoryBytes
+// 的提交不该因此失去它唯一的候选。
+func TestSubmitWorkflowMinGPUMemoryDoesNotExcludeANodeWithUndeclaredResources(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectNode(t, h, "node-comfy", "comfy-1", workflowCapableSnapshot("comfy-1"), submitEchoHandler())
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	_, candidate, err := sched.SubmitWorkflow(context.Background(), runtime.WorkflowRequest{
+		Template: json.RawMessage(`{}`), MinGPUMemoryBytes: 24 << 30,
+	})
+	if err != nil {
+		t.Fatalf("SubmitWorkflow() error = %v, want the undeclared-resources node to remain eligible", err)
+	}
+	if candidate.NodeID != "node-comfy" {
+		t.Errorf("candidate.NodeID = %q, want node-comfy", candidate.NodeID)
+	}
+}
+
 // TestSubmitWorkflowRetriesOnlyBeforeTheBackendCouldHaveSeenIt is the
 // scheduling half of README's "ComfyUI 作业一旦开始执行，不应自动迁移到其他节点".
 // A submit that failed on the way in may be retried elsewhere; one that
