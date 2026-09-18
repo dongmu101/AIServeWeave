@@ -35,12 +35,14 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/usageretention"
 )
 
 // RevocationSource exposes the durable generation behind API Key cache
@@ -77,6 +79,19 @@ type ServiceContext struct {
 	// 也只在配置了的情况下才挂载——因此一个没有运维控制台的服务，是根本没有机群端点，
 	// 而不是有一个回答「未配置」的端点。
 	Fleet *fleet.Aggregator
+
+	// ModelPullRouter forwards STATUS.md's P2 model distribution subtask
+	// two's per-node pull trigger and status calls to whichever Gateway
+	// replica currently holds that node's connection. It is nil when the
+	// deployment did not configure one, mirroring Fleet's own rule and for
+	// the same reason: a deployment without it has no model-pull endpoint
+	// at all, not one that answers "not configured".
+	//
+	// ModelPullRouter 把 STATUS.md P2 模型分发子任务二里针对单个节点的拉取
+	// 触发与状态查询，转发给当前持有该节点连接的那个 Gateway 副本。部署未
+	// 配置时它为 nil，与 Fleet 自己的规则相同，理由也相同：一个没有配置它的
+	// 部署，是根本没有模型拉取端点，而不是有一个回答「未配置」的端点。
+	ModelPullRouter *modelpullrouter.Router
 
 	// RegistryClient calls the Registry's TokenAdmin service on behalf of a
 	// platform operator (STATUS.md's P01). It is nil when the deployment did
@@ -156,6 +171,22 @@ type ServiceContext struct {
 	// 里迁移后已经存在的 metrics_history，不存在"是否启用"的开关。
 	alertEvaluatorCancel context.CancelFunc
 	alertEvaluatorDone   chan struct{}
+
+	// usageRetentionCancel/usageRetentionDone tear down the usage_records
+	// retention sweeper started below (STATUS.md's P2 usage ledger). Like
+	// requestLogRetentionCancel/requestLogRetentionDone, this goroutine
+	// always starts — there is no "enabled" gate, since the usage_records
+	// table always exists once migrated and the internal push API that
+	// populates it is mounted unconditionally whenever InternalToken is
+	// configured.
+	//
+	// usageRetentionCancel/usageRetentionDone 关停下面启动的 usage_records
+	// 保留期清理协程（STATUS.md 的 P2 用量账本）。与
+	// requestLogRetentionCancel/requestLogRetentionDone 一样，这个协程总是
+	// 会启动——不存在"是否启用"的开关，因为 usage_records 表只要迁移过就总是
+	// 存在，而填充它的内部推送 API 只要配置了 InternalToken 就无条件挂载。
+	usageRetentionCancel context.CancelFunc
+	usageRetentionDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -230,6 +261,14 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}
 		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
 	}
+	modelPullRouter := modelpullrouter.New(modelpullrouter.Config{
+		Gateways: cfg.ModelPull.Gateways,
+		Token:    cfg.ModelPull.GatewayToken,
+		Timeout:  cfg.ModelPull.Timeout,
+	})
+	if modelPullRouter != nil {
+		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))
+	}
 
 	metricsRegistry := commonmetrics.New(cpmetrics.Descriptions())
 
@@ -296,6 +335,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		evaluator.Run(aeCtx, alertInterval)
 	}()
 
+	usageRecordRetention := cfg.UsageRecordRetention
+	if usageRecordRetention <= 0 {
+		usageRecordRetention = config.DefaultUsageRecordRetention
+	}
+	urCtx, urCancel := context.WithCancel(ctx)
+	urDone := make(chan struct{})
+	go func() {
+		defer close(urDone)
+		usageretention.New(st, usageRecordRetention, nil, nil).Run(urCtx, usageRecordRetentionInterval)
+	}()
+
 	ready = true
 	return &ServiceContext{
 		Config:      cfg,
@@ -310,6 +360,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Timeout:  cfg.Fleet.Timeout,
 			Clock:    clock,
 		}),
+		ModelPullRouter:           modelPullRouter,
 		RegistryClient:            registryClient,
 		MetricsRegistry:           metricsRegistry,
 		db:                        db,
@@ -326,6 +377,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		requestLogRetentionDone:   rlDone,
 		alertEvaluatorCancel:      aeCancel,
 		alertEvaluatorDone:        aeDone,
+		usageRetentionCancel:      urCancel,
+		usageRetentionDone:        urDone,
 	}, nil
 }
 
@@ -348,6 +401,16 @@ const metricsHistoryRetentionInterval = 24 * time.Hour
 // 每天一次，与 metricsHistoryRetentionInterval 相同的节奏，理由也相同：
 // 一个清理任务没有理由比一天一次更频繁地运行。
 const requestLogRetentionInterval = 24 * time.Hour
+
+// usageRecordRetentionInterval is how often the usage-record retention
+// cleanup goroutine runs — daily, the same cadence
+// requestLogRetentionInterval already uses, for the same reason: a cleanup
+// task has no reason to run more often than once a day.
+//
+// usageRecordRetentionInterval 是 usage_records 保留期清理协程的运行
+// 频率——每天一次，与 requestLogRetentionInterval 相同的节奏，理由也相同：
+// 一个清理任务没有理由比一天一次更频繁地运行。
+const usageRecordRetentionInterval = 24 * time.Hour
 
 // outboxLagStore is the read the outbox-lag gauge needs — a subset of
 // *gormstore.Store, named here so the poller does not depend on the whole
@@ -476,6 +539,10 @@ func (s *ServiceContext) Close() error {
 	if s.alertEvaluatorCancel != nil {
 		s.alertEvaluatorCancel()
 		<-s.alertEvaluatorDone
+	}
+	if s.usageRetentionCancel != nil {
+		s.usageRetentionCancel()
+		<-s.usageRetentionDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {

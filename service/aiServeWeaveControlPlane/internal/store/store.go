@@ -471,6 +471,19 @@ type JobArtifacts interface {
 	//
 	// ListJobArtifacts 读取一个 job 的产物，并限定在其租户范围内。
 	ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([]model.JobArtifact, error)
+	// GetJobArtifact reads one artifact by its bare public id, with no tenant
+	// scope — like DeleteJobArtifact, but for a read. It exists for a Gateway
+	// replica recovering a download it has no local record of (STATUS.md's
+	// Gateway 故障切换收尾): the request carries only the artifact id, with
+	// no job id to scope ListJobArtifacts by, so the caller must fetch the
+	// row first and compare its own TenantID against what it asserted.
+	//
+	// GetJobArtifact 按裸 id 读取一个产物，不限定租户——像 DeleteJobArtifact，
+	// 但用于读取。它为一个正在恢复一次本地毫无记录的下载的 Gateway 副本而存在
+	// （STATUS.md 的「Gateway 故障切换收尾」）：请求只携带产物 id，没有 job id
+	// 可供 ListJobArtifacts 限定范围，因此调用方必须先取回这一行，再自行比对
+	// 它的 TenantID 与自己断言的是否一致。
+	GetJobArtifact(ctx context.Context, id string) (model.JobArtifact, error)
 	// ListJobArtifactsBefore returns up to MaxExpiredJobArtifacts artifacts
 	// of artifactType created before cutoff, across every tenant — the
 	// second read in this package with no tenant to scope by, for the same
@@ -596,6 +609,73 @@ type RequestLogs interface {
 	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (int64, error)
 }
 
+// UsageRecordFilter narrows a SummarizeUsage call. An empty TenantID means
+// every tenant — the operator cross-tenant view (STATUS.md's P2 usage
+// ledger) — while the tenant self-service view always sets it to the
+// caller's own tenant, the same shape RequestLogFilter already has.
+//
+// UsageRecordFilter 收窄一次 SummarizeUsage 调用。TenantID 为空表示不限
+// 租户——对应 STATUS.md P2 用量账本的运维跨租户视角——而租户自助视角总是
+// 把它设为调用方自己的租户，与 RequestLogFilter 相同的形状。
+type UsageRecordFilter struct {
+	TenantID string
+	Since    time.Time
+	Until    time.Time
+}
+
+// UsageSummary is one (tenant, model) group's totals over the queried
+// window — the settlement query's own unit of output (STATUS.md's P2 "结算
+// 规则"): usage_records rows are immutable, one-shot ledger entries, and
+// settlement is this aggregation read over them, not a separately stored
+// derived table. RequestCount is included because a settlement process
+// reconciling against an external invoice needs the request count as often
+// as it needs the token sums.
+//
+// UsageSummary 是查询窗口内一个 (tenant, model) 分组的汇总——结算查询自身
+// 的输出单元（STATUS.md 的 P2「结算规则」）：usage_records 的行是不可变的、
+// 一次性追加的账本条目，结算就是对它们的这次聚合读取，而不是另外存储的一张
+// 派生表。包含 RequestCount，是因为一个对着外部账单核对的结算流程，对请求
+// 计数的需要不亚于对 token 汇总的需要。
+type UsageSummary struct {
+	TenantID         string
+	Model            string
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	RequestCount     int64
+}
+
+// UsageRecords persists the control plane's durable per-tenant/model token
+// usage ledger, per STATUS.md's P2 usage ledger. Like RequestLogs, a row
+// here is a one-shot append: no update method exists because a request's
+// usage is already final by the time the Gateway reports it.
+//
+// UsageRecords 持久化控制面按租户/模型的持久化 token 用量账本，对应
+// STATUS.md 的 P2 用量账本。与 RequestLogs 相同，这里的一行是一次性追加：
+// 不存在更新方法，因为 Gateway 上报时这次请求的用量已经是终态。
+type UsageRecords interface {
+	// CreateUsageRecords inserts a batch of records, silently skipping any
+	// whose id already exists — the batch push's own idempotency and this
+	// table's stated dedup rule, mirroring CreateRequestLogs.
+	//
+	// CreateUsageRecords 插入一批记录，静默跳过任何 id 已存在的记录——这就是
+	// 批量推送自身的幂等性，也是这张表所声明的去重规则，与 CreateRequestLogs
+	// 相同。
+	CreateUsageRecords(ctx context.Context, records []model.UsageRecord) error
+	// SummarizeUsage aggregates usage_records into one row per (tenant,
+	// model) group within filter's window — the settlement query.
+	//
+	// SummarizeUsage 把 usage_records 聚合成 filter 窗口内每个 (tenant,
+	// model) 分组一行——即结算查询。
+	SummarizeUsage(ctx context.Context, filter UsageRecordFilter) ([]UsageSummary, error)
+	// DeleteUsageRecordsBefore removes every row older than before, for the
+	// retention sweeper.
+	//
+	// DeleteUsageRecordsBefore 删除每一行早于 before 的记录，供保留期清理
+	// 协程使用。
+	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (int64, error)
+}
+
 // AlertRuleFilter narrows a ListAlertRules call. An empty Enabled means no
 // filter on that field.
 //
@@ -699,5 +779,6 @@ type Store interface {
 	ResponseTurns
 	MetricsHistory
 	RequestLogs
+	UsageRecords
 	Alerting
 }

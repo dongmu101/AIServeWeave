@@ -377,3 +377,61 @@ func TestExpiredJobArtifactsListAndDeleteThroughTheRealGatewayClient(t *testing.
 		t.Errorf("DeleteJobArtifact (already gone) = %v, want nil", err)
 	}
 }
+
+// TestArtifactRouteThroughTheRealGatewayClient is the "Gateway 故障切换收尾"
+// item's closed loop: a Gateway replica that has no local record of an
+// artifact — because a different replica ran the job, or this replica
+// restarted — asks the control plane by the artifact's bare public id alone,
+// with no job id to scope by, and gets back enough to serve a download: the
+// StorageKey a copy was persisted under, plus the owning job's
+// NodeID/RuntimeID to pull live if no such copy exists.
+//
+// TestArtifactRouteThroughTheRealGatewayClient 是「Gateway 故障切换收尾」这项
+// 的闭环：一个对某个产物毫无本地记录的 Gateway 副本——因为是另一个副本跑的
+// 这个 job，或者本副本重启过——只用产物自己的裸公开 id 向控制面发问，没有
+// job id 可供限定范围，得到的答复足以提供一次下载：一份副本曾被持久化时的
+// StorageKey，以及所属 job 的 NodeID/RuntimeID，供没有这样一份副本时实时拉取。
+func TestArtifactRouteThroughTheRealGatewayClient(t *testing.T) {
+	h := newHarness(t)
+	client := gatewayJobsClient(h)
+	ctx := context.Background()
+
+	if _, err := client.CreateJob(ctx, controlplaneclient.CreateJobRequest{
+		JobID: "job_e2e_route", TenantID: "tenant-a", WorkflowID: "text-to-image",
+		NodeID: "node-1", RuntimeID: "comfy-1", BackendRunID: "prompt-1",
+		State: "succeeded", ObservedSeq: 0,
+	}); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	if _, err := client.CreateJobArtifact(ctx, "job_e2e_route", controlplaneclient.CreateJobArtifactRequest{
+		ArtifactID: "art_e2e_route", TenantID: "tenant-a", Filename: "out.png", Type: "output",
+		StorageKey: "tenant-a/job_e2e_route/art_e2e_route",
+	}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	route, err := client.ArtifactRoute(ctx, "tenant-a", "art_e2e_route")
+	if err != nil {
+		t.Fatalf("ArtifactRoute: %v", err)
+	}
+	if route.JobID != "job_e2e_route" || route.StorageKey != "tenant-a/job_e2e_route/art_e2e_route" {
+		t.Errorf("ArtifactRoute = %+v, want job_id=job_e2e_route and the StorageKey CreateJobArtifact recorded", route)
+	}
+	if route.NodeID != "node-1" || route.RuntimeID != "comfy-1" {
+		t.Errorf("ArtifactRoute route binding = {node_id: %q, runtime_id: %q}, want node-1, comfy-1 — a recovering replica needs this pair to pull live if StorageKey's copy is unavailable", route.NodeID, route.RuntimeID)
+	}
+
+	// A different tenant asking for the same artifact id must be told it does
+	// not exist, exactly as GetJob already answers for a job under the wrong
+	// tenant.
+	//
+	// 另一个租户询问同一个产物 id，必须被告知它不存在，与 GetJob 对一个属于
+	// 错误租户的 job 已经给出的答复完全一致。
+	if _, err := client.ArtifactRoute(ctx, "tenant-b", "art_e2e_route"); err != controlplaneclient.ErrNotFound {
+		t.Errorf("ArtifactRoute(wrong tenant) = %v, want ErrNotFound", err)
+	}
+
+	if _, err := client.ArtifactRoute(ctx, "tenant-a", "art_missing"); err != controlplaneclient.ErrNotFound {
+		t.Errorf("ArtifactRoute(unknown id) = %v, want ErrNotFound", err)
+	}
+}

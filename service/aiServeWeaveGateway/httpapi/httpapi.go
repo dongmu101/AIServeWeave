@@ -199,6 +199,20 @@ type Config struct {
 	// DefaultRecoverCallTimeout。
 	RecoverCallTimeout time.Duration
 
+	// ArtifactRecoveryClient lets listArtifacts and downloadArtifact answer a
+	// job or artifact this replica has no local record of, by reading back
+	// what the control plane already has on file (STATUS.md's Gateway 故障
+	// 切换收尾). Nil disables the fallback entirely — a deployment with no
+	// control plane, or a local miss that predates this feature, gets
+	// exactly today's 404/"job not found".
+	//
+	// ArtifactRecoveryClient 让 listArtifacts 与 downloadArtifact 能够回答一个
+	// 本副本没有本地记录的 job 或产物，做法是读回控制面已经存档的内容
+	// （STATUS.md 的「Gateway 故障切换收尾」）。为 nil 时完全关闭这条回退——
+	// 未部署控制面的环境，或本功能存在之前就会发生的一次本地未命中，得到的
+	// 正是今天的 404/"job not found"。
+	ArtifactRecoveryClient ArtifactRecoveryClient
+
 	// ArtifactCleanupClient reaps expired artifact records and their object
 	// storage bytes (STATUS.md's P04). Nil disables the cleanup sweeper
 	// entirely — a deployment with no control plane, or one that never
@@ -275,6 +289,36 @@ type Config struct {
 	// RequestLogFlushInterval 是一条记录在缓冲中等待推送的最长时间。为零时
 	// 采用 DefaultRequestLogFlushInterval。
 	RequestLogFlushInterval time.Duration
+
+	// UsageLedgerClient pushes batches of per-tenant/model token usage to the
+	// control plane's internal API (STATUS.md's P2 usage ledger). Nil
+	// disables the ledger entirely — a deployment with no control plane gets
+	// no durable usage records, the same nil-degrades pattern
+	// RequestLogClient already follows.
+	//
+	// UsageLedgerClient 把一批按租户/模型的 token 用量推送给控制面的内部 API
+	// （STATUS.md 的 P2 用量账本）。为 nil 时完全关闭账本——未部署控制面的
+	// 环境得不到持久化的用量记录，与 RequestLogClient 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	UsageLedgerClient UsageLedgerClient
+	// UsageLedgerBufferSize bounds the in-memory push buffer. Zero uses
+	// DefaultUsageLedgerBufferSize.
+	//
+	// UsageLedgerBufferSize 限定内存推送缓冲的大小。为零时采用
+	// DefaultUsageLedgerBufferSize。
+	UsageLedgerBufferSize int
+	// UsageLedgerBatchSize bounds how many records one push call carries.
+	// Zero uses DefaultUsageLedgerBatchSize.
+	//
+	// UsageLedgerBatchSize 限定单次推送调用携带多少条记录。为零时采用
+	// DefaultUsageLedgerBatchSize。
+	UsageLedgerBatchSize int
+	// UsageLedgerFlushInterval is the maximum time a record waits in the
+	// buffer before being pushed. Zero uses DefaultUsageLedgerFlushInterval.
+	//
+	// UsageLedgerFlushInterval 是一条记录在缓冲中等待推送的最长时间。为零时
+	// 采用 DefaultUsageLedgerFlushInterval。
+	UsageLedgerFlushInterval time.Duration
 
 	// ImagesWorkflowID is the registered workflow template POST
 	// /v1/images/generations binds a caller's prompt onto (STATUS.md's P2).
@@ -366,6 +410,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		limiter:                 cfg.Limiter,
 		storage:                 cfg.ArtifactStorage,
 		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
+		artifactRecovery:        cfg.ArtifactRecoveryClient,
 		imagesWorkflowID:        cfg.ImagesWorkflowID,
 		imagesGenerationTimeout: imagesGenerationTimeout,
 	}
@@ -429,6 +474,25 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		})
 		go pusher.run()
 		h.requestLogs = pusher
+	}
+
+	// The usage-ledger pusher follows the same nil-degrades pattern: no
+	// control plane configured to push to means there is nowhere for a
+	// durable per-tenant/model usage ledger to go, so this replica simply
+	// records nothing rather than buffering records no one will ever read.
+	//
+	// 用量账本推送器遵循同一种「为 nil 时退化」模式：未配置可供推送的控制面，
+	// 意味着按租户/模型的持久化用量账本无处可去，本副本因此干脆不记录，而
+	// 不是缓冲一堆永远不会被读取的记录。
+	var usageLedgerPusher *usageLedgerPusher
+	if cfg.UsageLedgerClient != nil {
+		usageLedgerPusher = newUsageLedgerPusher(cfg.UsageLedgerClient, clock, logger, h.metrics, usageLedgerPushConfig{
+			BufferSize:    cfg.UsageLedgerBufferSize,
+			BatchSize:     cfg.UsageLedgerBatchSize,
+			FlushInterval: cfg.UsageLedgerFlushInterval,
+		})
+		go usageLedgerPusher.run()
+		h.usageLedger = usageLedgerPusher
 	}
 
 	// The response-turn persister follows the same nil-degrades pattern: no
@@ -543,13 +607,14 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
 	return &Server{
-		Handler:          h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))),
-		handlers:         h,
-		syncer:           syncer,
-		persister:        persister,
-		recoverer:        recoverer,
-		cleaner:          cleaner,
-		requestLogPusher: pusher,
+		Handler:           h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))),
+		handlers:          h,
+		syncer:            syncer,
+		persister:         persister,
+		recoverer:         recoverer,
+		cleaner:           cleaner,
+		requestLogPusher:  pusher,
+		usageLedgerPusher: usageLedgerPusher,
 	}
 }
 
@@ -568,39 +633,41 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 // 一个方法，接收它所限定的租户，返回副本。
 type Server struct {
 	http.Handler
-	handlers         *handlers
-	syncer           *jobSyncer
-	persister        *jobPersister
-	recoverer        *jobRecoverer
-	cleaner          *artifactCleaner
-	requestLogPusher *requestLogPusher
+	handlers          *handlers
+	syncer            *jobSyncer
+	persister         *jobPersister
+	recoverer         *jobRecoverer
+	cleaner           *artifactCleaner
+	requestLogPusher  *requestLogPusher
+	usageLedgerPusher *usageLedgerPusher
 }
 
 // Close stops the background job syncer, persister, recoverer, artifact
-// cleanup sweeper and request-log pusher, waiting for each one's current
-// round, if any, to finish. Call it during shutdown, after the HTTP
-// listener has stopped accepting new requests and before the scheduler's
-// underlying tunnel is torn down — the syncer and the recoverer both
-// dispatch through that same scheduler, and stopping them first avoids a
-// burst of "node is not connected" warnings against a tunnel that is
+// cleanup sweeper, request-log pusher and usage-ledger pusher, waiting for
+// each one's current round, if any, to finish. Call it during shutdown,
+// after the HTTP listener has stopped accepting new requests and before the
+// scheduler's underlying tunnel is torn down — the syncer and the recoverer
+// both dispatch through that same scheduler, and stopping them first avoids
+// a burst of "node is not connected" warnings against a tunnel that is
 // closing on purpose rather than one that failed. The persister, the
-// cleanup sweeper and the request-log pusher do not dispatch through the
-// tunnel at all — they talk to the control plane (and, for the sweeper,
-// object storage) — but stopping them here too means shutdown has one
-// place that waits for every background loop this package started, not
-// five.
+// cleanup sweeper, the request-log pusher and the usage-ledger pusher do
+// not dispatch through the tunnel at all — they talk to the control plane
+// (and, for the sweeper, object storage) — but stopping them here too means
+// shutdown has one place that waits for every background loop this package
+// started, not six.
 //
 // It does not stop the HTTP handler itself; that remains the caller's
 // http.Server to shut down.
 //
-// Close 停止后台 job 同步器、持久化器、恢复器、产物清理扫描器与请求日志
-// 推送器，并分别等待它们正在进行的一轮（如果有）跑完。应当在关闭期间调用
-// 它——在 HTTP 监听器停止接受新请求之后、调度器底下的隧道被拆除之前——
-// 同步器与恢复器都经由同一个调度器分派，先停止它们能避免对着一条正在有意
-// 关闭而非故障的隧道打出一串「node is not connected」告警。持久化器、
-// 清理扫描器与请求日志推送器根本不经由隧道分派——它们对话的是控制面
-// （清理扫描器还对话对象存储）——但在这里一并停止它们，意味着关闭流程
-// 只有一处要等待本包启动的每一个后台循环，而不是五处。
+// Close 停止后台 job 同步器、持久化器、恢复器、产物清理扫描器、请求日志
+// 推送器与用量账本推送器，并分别等待它们正在进行的一轮（如果有）跑完。
+// 应当在关闭期间调用它——在 HTTP 监听器停止接受新请求之后、调度器底下的
+// 隧道被拆除之前——同步器与恢复器都经由同一个调度器分派，先停止它们能
+// 避免对着一条正在有意关闭而非故障的隧道打出一串「node is not
+// connected」告警。持久化器、清理扫描器、请求日志推送器与用量账本推送器
+// 根本不经由隧道分派——它们对话的是控制面（清理扫描器还对话对象存储）——
+// 但在这里一并停止它们，意味着关闭流程只有一处要等待本包启动的每一个
+// 后台循环，而不是六处。
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
@@ -616,6 +683,9 @@ func (s *Server) Close() {
 	}
 	if s.requestLogPusher != nil {
 		s.requestLogPusher.Stop()
+	}
+	if s.usageLedgerPusher != nil {
+		s.usageLedgerPusher.Stop()
 	}
 }
 
@@ -666,6 +736,14 @@ type handlers struct {
 	// requestLogMiddleware 是纯粹的透传——与 persister 已经遵循的同一种
 	// 「为 nil 时退化」模式。
 	requestLogs requestLogSink
+	// usageLedger is nil when no control plane is configured to push usage
+	// records to, in which case ledgerUsage (ratelimit.go) is a no-op — the
+	// same nil-degrades pattern requestLogs already follows.
+	//
+	// usageLedger 在未配置可供推送用量记录的控制面时为 nil，此时
+	// ledgerUsage（ratelimit.go）是空操作——与 requestLogs 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	usageLedger usageLedgerSink
 	// storage is nil when no Config.ArtifactStorage is configured, in which
 	// case downloadArtifact pulls live from the node exactly as it always
 	// has. See jobpersist.go's persistArtifacts for the write side.
@@ -673,6 +751,14 @@ type handlers struct {
 	// storage 在未配置 Config.ArtifactStorage 时为 nil，此时 downloadArtifact
 	// 照旧从节点实时拉取。写入侧见 jobpersist.go 的 persistArtifacts。
 	storage objectstore.Backend
+	// artifactRecovery is nil when no Config.ArtifactRecoveryClient is
+	// configured, in which case listArtifacts and downloadArtifact answer a
+	// local miss exactly as they always have — see artifactrecovery.go.
+	//
+	// artifactRecovery 在未配置 Config.ArtifactRecoveryClient 时为 nil，此时
+	// listArtifacts 与 downloadArtifact 对一次本地未命中的应答与它们一贯的
+	// 行为完全一样——见 artifactrecovery.go。
+	artifactRecovery ArtifactRecoveryClient
 	// allowedUploadExtensions is Config.AllowedUploadExtensions normalized
 	// into a lookup set — see uploadformat.go.
 	//

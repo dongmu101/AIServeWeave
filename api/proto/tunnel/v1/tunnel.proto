@@ -397,6 +397,7 @@ message AgentControl {
     RuntimeStatus status = 3;           // mirror of runtime.Manager.Snapshot()
     Draining draining = 4;              // graceful shutdown notice
     Pong pong = 5;
+    ModelPullReport model_pull = 6;     // STATUS.md P2 model distribution subtask 2
   }
 }
 
@@ -409,6 +410,7 @@ message GatewayControl {
     GatewayRoster roster = 5;
     Shutdown shutdown = 6;
     Ping ping = 7;
+    ModelPullTrigger model_pull_trigger = 8; // STATUS.md P2 model distribution subtask 2
   }
 }
 
@@ -548,6 +550,69 @@ enum ConfigAction {
   CONFIG_ACTION_ADD = 1;
   CONFIG_ACTION_REPLACE = 2;
   CONFIG_ACTION_REMOVE = 3;
+}
+
+// ModelPullTrigger asks the Agent to start pulling model artifacts it
+// already knows about from its local manifest (STATUS.md's P2 model
+// distribution subtask 1), referenced only by name. It can never carry a
+// URL or any other fetch instruction: the load-bearing rule at the top of
+// this file forbids a message that expresses "fetch this URL", and a
+// replica whose trust were compromised must not be able to hand the Agent
+// an arbitrary source.
+//
+// ModelPullTrigger 要求 Agent 开始拉取它本地清单（STATUS.md P2 模型分发子
+// 任务一）里已经认识的制品，只按名字引用。它永远不能携带 URL 或任何其他取
+// 数指令：本文件头部的 load-bearing 规则禁止表达"fetch this URL"的消息，一
+// 个信任被攻破的副本不能借此让 Agent 访问任意来源。
+message ModelPullTrigger {
+  repeated string names = 1;
+}
+
+// ModelPullReport mirrors the Agent-local Puller's current status for every
+// name it knows about — every entry in its local manifest, whether or not a
+// ModelPullTrigger has ever named it. It carries no source URL, matching
+// ModelPullTrigger's restriction in the other direction, and no raw error
+// text: ModelPullStatus.reason is a closed vocabulary so a transport error
+// that happens to embed spec.SourceURL (a presigned URL can carry a
+// signature token in its query string) never crosses the tunnel.
+//
+// ModelPullReport 镜像 Agent 本地 Puller 当前已知的每一个名字的状态——本地
+// 清单里的每一条，无论 ModelPullTrigger 是否点过它的名。它不携带来源
+// URL，与 ModelPullTrigger 在另一个方向上的限制对称；也不携带原始错误文
+// 本：ModelPullStatus.reason 是封闭词表，这样一个恰好把 spec.SourceURL
+// （预签名 URL 的查询串可能带签名 token）编进错误文本的传输错误，永远不
+// 会跨越隧道。
+message ModelPullReport {
+  repeated ModelPullStatus pulls = 1;
+}
+
+enum ModelPullState {
+  MODEL_PULL_STATE_UNSPECIFIED = 0;   // known to the manifest, never triggered
+  MODEL_PULL_STATE_PENDING = 1;       // queued behind another in-flight pull
+  MODEL_PULL_STATE_DOWNLOADING = 2;
+  MODEL_PULL_STATE_DONE = 3;
+  MODEL_PULL_STATE_FAILED = 4;
+}
+
+enum ModelPullFailureReason {
+  MODEL_PULL_FAILURE_REASON_UNSPECIFIED = 0;
+  MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME = 1;        // not in the Agent's local manifest
+  MODEL_PULL_FAILURE_REASON_INVALID_SPEC = 2;        // manifest entry itself malformed
+  MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED = 3;     // source_url outside -model-pull-allowlist
+  MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED = 4;
+  MODEL_PULL_FAILURE_REASON_FETCH_FAILED = 5;        // transport error, detail stays in the Agent's own log
+  MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS = 6;   // non-200/206 HTTP response
+  MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH = 7;
+  MODEL_PULL_FAILURE_REASON_STORAGE_ERROR = 8;       // local disk write/rename failure
+}
+
+message ModelPullStatus {
+  string name = 1;
+  ModelPullState state = 2;
+  int64 bytes_downloaded = 3;
+  int64 bytes_total = 4;                 // 0 when unknown (Spec.SizeBytes was 0)
+  ModelPullFailureReason reason = 5;     // set only when state == FAILED
+  int64 updated_unix_ms = 6;
 }
 
 // RuntimeSpec mirrors runtime.Config with one deliberate difference: there is

@@ -78,6 +78,19 @@ type Config struct {
 	// 去够数据面。
 	Fleet FleetConf `json:",optional"`
 
+	// ModelPull configures forwarding STATUS.md's P2 model distribution
+	// subtask two's per-node pull trigger and status calls to whichever
+	// Gateway replica currently holds that node's connection. It is
+	// optional and independent of Fleet — a deployment can trigger model
+	// pulls without ever configuring the read-only fleet inventory, and the
+	// two point at different Gateway listeners with different tokens.
+	//
+	// ModelPull 配置把 STATUS.md P2 模型分发子任务二里针对单个节点的拉取触发
+	// 与状态查询，转发给当前持有该节点连接的那个 Gateway 副本。它是可选的，
+	// 且与 Fleet 相互独立——一个部署可以在从未配置只读机群清单的情况下触发
+	// 模型拉取，且两者指向不同的 Gateway 监听器、使用不同的 token。
+	ModelPull ModelPullConf `json:",optional"`
+
 	// Registry configures this service's client to the Registry's TokenAdmin
 	// service (STATUS.md's P01): node approval, disable/enable and
 	// maintenance. Like Fleet, it is optional — a deployment with no
@@ -131,6 +144,26 @@ type Config struct {
 	// Enabled() 那种因为依赖外部 Gateway/Registry 地址而产生的"是否配置了"
 	// 的问题。
 	AlertEvaluationInterval time.Duration `json:",optional"`
+
+	// UsageRecordRetention is how long a persisted usage_records row
+	// (STATUS.md's P2 usage ledger) is kept before the retention sweeper
+	// reaps it. Zero uses DefaultUsageRecordRetention. Like
+	// RequestLogRetention's sweeper, this loop always runs once the table is
+	// migrated — the internal push API that populates it is mounted
+	// unconditionally whenever InternalToken is set. Its default exceeds
+	// RequestLogRetention's 30 days because usage_records underpins
+	// settlement, not diagnostics: a billing dispute months after the fact
+	// still needs the ledger entry, not just this window's Prometheus
+	// counters.
+	//
+	// UsageRecordRetention 是一条已持久化的 usage_records 行(STATUS.md 的
+	// P2 用量账本)在被保留期清理协程回收之前保留多久。为零时采用
+	// DefaultUsageRecordRetention。与 RequestLogRetention 的清理协程一样，
+	// 这个循环只要表已迁移就总会运行——填充这张表的内部推送 API，只要设置了
+	// InternalToken 就无条件挂载。它的默认值超过 RequestLogRetention 的
+	// 30 天，因为 usage_records 支撑的是结算而非诊断：几个月后的一次账单
+	// 争议仍然需要这条账本记录，而不只是那个时间窗口内的 Prometheus 计数器。
+	UsageRecordRetention time.Duration `json:",optional"`
 }
 
 // DefaultRequestLogRetention is how long a request_logs row is kept when
@@ -146,6 +179,15 @@ const DefaultRequestLogRetention = 30 * 24 * time.Hour
 // DefaultAlertEvaluationInterval 是 Config.AlertEvaluationInterval 为零时，
 // 告警评估循环的运行频率。
 const DefaultAlertEvaluationInterval = 60 * time.Second
+
+// DefaultUsageRecordRetention is how long a usage_records row is kept when
+// Config.UsageRecordRetention is zero — 400 days, covering a full billing
+// year plus buffer for late dispute resolution.
+//
+// DefaultUsageRecordRetention 是 Config.UsageRecordRetention 为零时，一条
+// usage_records 行被保留的时长——400 天，覆盖完整的一个计费年度并留有
+// 处理迟到账单争议的余量。
+const DefaultUsageRecordRetention = 400 * 24 * time.Hour
 
 // FleetConf configures the fleet inventory.
 //
@@ -198,6 +240,57 @@ type FleetConf struct {
 // （requirePlatformSession）负责，而不是这里的第三个密钥——见 STATUS.md 的 P01。
 func (f FleetConf) Enabled() bool {
 	return len(f.Gateways) > 0 || f.GatewayToken != ""
+}
+
+// ModelPullConf configures forwarding STATUS.md's P2 model distribution
+// subtask two's per-node pull trigger and status calls.
+//
+// It deliberately does not reuse FleetConf: FleetConf.Gateways points at
+// each replica's -admin-addr, a read-only inventory listener, while this
+// points at each replica's separate -model-pull-addr — a write listener
+// with its own token (Gateway README's "两个不同的监听器、不同的 token").
+// Folding the two into one list would mean one config value serving two
+// listeners that must never share a token.
+//
+// ModelPullConf 配置转发 STATUS.md P2 模型分发子任务二里针对单个节点的拉取
+// 触发与状态查询。
+//
+// 它刻意不复用 FleetConf：FleetConf.Gateways 指向各副本的 -admin-addr（一个
+// 只读清单监听器），而这里指向各副本另一个独立的 -model-pull-addr——一个带
+// 自己 token 的写监听器（Gateway README 的"两个不同的监听器、不同的
+// token"）。把两者合并成一份清单，就意味着一个配置值要同时服务两个绝不能
+// 共用 token 的监听器。
+type ModelPullConf struct {
+	// Gateways are the base URLs of each Gateway replica's -model-pull-addr
+	// listener, e.g. http://gateway-1:8092. A replica not listed here is
+	// simply never asked, and node_id connected only to it cannot be
+	// triggered or queried through this service.
+	//
+	// Gateways 是各 Gateway 副本 -model-pull-addr 监听器的基础 URL，例如
+	// http://gateway-1:8092。没有列在这里的副本不会被询问，只连到它上面的
+	// node_id 也就无法经本服务被触发或查询。
+	Gateways []string `json:",optional"`
+	// GatewayToken authenticates this service to those listeners. It must
+	// match each Gateway's AISW_GATEWAY_MODEL_PULL_TOKEN.
+	//
+	// GatewayToken 用于本服务向那些监听器表明身份。它必须与各 Gateway 的
+	// AISW_GATEWAY_MODEL_PULL_TOKEN 一致。
+	GatewayToken string `json:",optional"`
+	// Timeout bounds one call to one replica. Every configured replica is
+	// asked concurrently, so a slow one delays only itself.
+	//
+	// Timeout 限制对单个副本的单次调用。每个已配置副本都被并发询问，因此一
+	// 个慢副本只会拖延它自己。
+	Timeout time.Duration `json:",default=3s"`
+}
+
+// Enabled reports whether model-pull forwarding is configured. Both parts
+// are required together, the same reasoning as FleetConf.Enabled.
+//
+// Enabled 报告模型拉取转发是否已配置。两部分必须同时具备，理由与
+// FleetConf.Enabled 相同。
+func (m ModelPullConf) Enabled() bool {
+	return len(m.Gateways) > 0 || m.GatewayToken != ""
 }
 
 // RegistryConf configures the Registry TokenAdmin client (STATUS.md's P01).
@@ -424,6 +517,14 @@ func (c Config) Validate() error {
 			return errors.New("config: Fleet.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
 		}
 	}
+	if c.ModelPull.Enabled() {
+		if len(c.ModelPull.Gateways) == 0 {
+			return errors.New("config: ModelPull.Gateways is required once model-pull forwarding is configured")
+		}
+		if len(c.ModelPull.GatewayToken) < minSecretLen {
+			return errors.New("config: ModelPull.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
 	if c.Registry.Enabled() {
 		if c.Registry.Addr == "" {
 			return errors.New("config: Registry.Addr is required once the Registry client is configured")
@@ -445,6 +546,9 @@ func (c Config) Validate() error {
 	}
 	if c.AlertEvaluationInterval < 0 {
 		return errors.New("config: AlertEvaluationInterval must not be negative")
+	}
+	if c.UsageRecordRetention < 0 {
+		return errors.New("config: UsageRecordRetention must not be negative")
 	}
 	return nil
 }

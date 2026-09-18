@@ -41,19 +41,70 @@ type usageSink struct {
 
 type usageSinkKey struct{}
 
-// recordUsage records a backend-reported usage against both the metrics and,
-// when the request is subject to a quota, the tenant's token allowance. Every
+// recordUsage records a backend-reported usage against the metrics, the
+// tenant's token allowance (when the request is subject to a quota), and the
+// durable usage ledger (STATUS.md's P2 "按租户/模型的持久化用量账本"). Every
 // handler that learns a token count calls it instead of the metrics recorder
 // directly, so a new endpoint cannot start serving traffic that is metered but
-// never billed.
+// never billed or never ledgered.
 //
-// recordUsage 把后端上报的用量同时记入指标，以及（当该请求受配额约束时）租户的 token
-// 额度。每个得知 token 数的处理器都调用它而不是直接调用指标记录器，这样新端点就不会
-// 开始承载「有度量却从不计费」的流量。
-func (h *handlers) recordUsage(ctx context.Context, usage runtime.Usage, elapsed time.Duration) {
+// endpoint and model identify the record for the ledger only — h.metrics.Usage
+// deliberately never receives them, for the cardinality reason its own doc
+// comment (metrics.go) explains. model is never raw client free text: this
+// method is only ever called from a dispatch success path, after the
+// scheduler has already resolved the request against a modelroute alias.
+//
+// recordUsage 把后端上报的用量同时记入指标、（当该请求受配额约束时）租户的
+// token 额度，以及持久化用量账本（STATUS.md 的 P2「按租户/模型的持久化用量
+// 账本」）。每个得知 token 数的处理器都调用它而不是直接调用指标记录器，这样
+// 新端点就不会开始承载「有度量却从不计费、也从不入账」的流量。
+//
+// endpoint 与 model 只用来标识账本里的这条记录——h.metrics.Usage 刻意从不
+// 接收它们，理由见它自己的文档注释（metrics.go）里关于基数的说明。model
+// 从不是客户端的自由文本：本方法只在派发成功路径上被调用，此时调度器早已
+// 把请求解析到了一个 modelroute 别名上。
+func (h *handlers) recordUsage(ctx context.Context, usage runtime.Usage, elapsed time.Duration, endpoint, model string) {
 	h.metrics.Usage(usage, elapsed)
 	if sink, ok := ctx.Value(usageSinkKey{}).(*usageSink); ok {
 		sink.tokens += usage.TotalTokens
+	}
+	h.ledgerUsage(ctx, usage, endpoint, model)
+}
+
+// ledgerUsage enqueues usage into the durable usage ledger, when one is
+// configured and there is something to record. Two conditions skip the
+// enqueue rather than writing a record: an all-zero usage (some backends
+// omit it on intermediate chunks; there is nothing to bill) and a request
+// with no resolved tenant identity (an unauthenticated deployment has no
+// tenant to ledger against — the same no-op rateLimit already applies).
+//
+// ledgerUsage 在配置了账本、且确有内容可记时，把用量入队进持久化用量账本。
+// 两种情形会跳过入队而不是写入一条记录：全零用量（部分后端在中间 chunk 上
+// 不上报用量；此时无可计费之物）与没有解析出租户身份的请求（未启用鉴权的
+// 部署没有可记账的租户——与 rateLimit 已经采用的同一种空操作）。
+func (h *handlers) ledgerUsage(ctx context.Context, usage runtime.Usage, endpoint, model string) {
+	if h.usageLedger == nil {
+		return
+	}
+	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens == 0 {
+		return
+	}
+	identity, ok := IdentityFrom(ctx)
+	if !ok || identity.TenantID == "" {
+		return
+	}
+	accepted := h.usageLedger.enqueue(UsageRecord{
+		RequestID:        requestIDFrom(ctx),
+		TenantID:         identity.TenantID,
+		Model:            model,
+		Endpoint:         endpoint,
+		PromptTokens:     usage.PromptTokens,
+		CompletionTokens: usage.CompletionTokens,
+		TotalTokens:      usage.TotalTokens,
+		CreatedAt:        h.clock.Now(),
+	})
+	if !accepted {
+		h.metrics.UsageLedgerDropped()
 	}
 }
 

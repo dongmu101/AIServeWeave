@@ -289,7 +289,7 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, req cha
 	//
 	// 非流式响应的首字节就是它的末字节：TTFT 与总响应时间是同一个数字，因此只记录
 	// 后者，好让 TTFT 分布始终是关于流式的陈述。
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointChat, req.Model)
 }
 
 func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCompletionRequest, start time.Time) {
@@ -344,7 +344,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 		if errors.Is(err, io.EOF) {
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			flusher.Flush()
-			h.recordUsage(r.Context(), usage, time.Since(start))
+			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointChat, req.Model)
 			return
 		}
 		if err != nil {

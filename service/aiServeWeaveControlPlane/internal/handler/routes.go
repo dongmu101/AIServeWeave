@@ -131,6 +131,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 只追加表的、由会话限定范围的只读检索。
 		{Method: http.MethodGet, Path: "/admin/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/requests", requireSession(ctx, listRequestLogsTenant(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/requests", requirePlatformSession(ctx, listRequestLogsOperator(ctx)))},
+		// Usage-ledger settlement queries (STATUS.md's P2 usage ledger): the
+		// tenant self-service view and the platform cross-tenant view, sitting
+		// next to request search above for the same reason — read-only,
+		// session-scoped aggregation over an append-only table.
+		//
+		// 用量账本结算查询（STATUS.md 的 P2 用量账本）：租户自助视角与平台
+		// 跨租户视角，紧挨着上面的请求检索，理由相同——都是针对一张只追加表
+		// 的、由会话限定范围的只读聚合。
+		{Method: http.MethodGet, Path: "/admin/v1/usage/summary", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/usage/summary", requireSession(ctx, summarizeUsageTenant(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/usage/summary", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/usage/summary", requirePlatformSession(ctx, summarizeUsageOperator(ctx)))},
 		// Alert rule CRUD (STATUS.md's P09/C29), platform-wide like fleet
 		// metrics themselves.
 		//
@@ -244,6 +254,11 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Path:    "/internal/v1/job-artifacts/expired",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/job-artifacts/expired", requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx))),
 		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/artifacts/:artifact_id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/artifacts/:artifact_id", requireSharedSecret(ctx.Config.InternalToken, getArtifactRoute(ctx))),
+		},
 		// Response-turn persistence (STATUS.md's P2 "Responses 持久会话") shares
 		// the same InternalToken as the Job endpoints above, for the same
 		// reason: a Gateway replica reporting its own callers' business, not a
@@ -284,6 +299,20 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/requestlogs", requireSharedSecret(ctx.Config.InternalToken, createRequestLogs(ctx))),
 		},
 	}, rest.WithMaxBytes(MaxRequestLogsBodyBytes))
+
+	// Usage-ledger push (STATUS.md's P2 usage ledger) shares the same
+	// InternalToken and the same "its own route group for a bigger body
+	// limit" reasoning as request-log push directly above.
+	//
+	// 用量账本推送（STATUS.md 的 P2 用量账本）与紧邻上方的请求日志推送共用
+	// 同一个 InternalToken，以及同一种"为更大的体积上限单独成组"的理由。
+	server.AddRoutes([]rest.Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/usagerecords",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/usagerecords", requireSharedSecret(ctx.Config.InternalToken, createUsageRecords(ctx))),
+		},
+	}, rest.WithMaxBytes(MaxUsageRecordsBodyBytes))
 
 	// The fleet inventory is mounted only when it is configured, so a
 	// deployment without an operations console has no such route rather than
@@ -393,6 +422,31 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 				Method:  http.MethodDelete,
 				Path:    "/operator/v1/nodes/:id/maintenance",
 				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.ExitMaintenance))),
+			},
+		})
+	}
+
+	// Model-pull forwarding (STATUS.md's P2 model distribution subtask two,
+	// the control plane forwarding layer) is mounted independently of both
+	// Fleet and RegistryClient: it reaches a third Gateway listener
+	// (-model-pull-addr) with its own token, and needs neither the
+	// read-only inventory nor the Registry's identity ledger to work.
+	//
+	// 模型拉取转发（STATUS.md 的 P2 模型分发子任务二，控制面转发层）与
+	// Fleet、RegistryClient 都分开挂载：它够到的是第三个、带着自己 token 的
+	// Gateway 监听器（-model-pull-addr），既不需要只读清单，也不需要
+	// Registry 的身份账本。
+	if ctx.ModelPullRouter != nil {
+		server.AddRoutes([]rest.Route{
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/nodes/:id/model-pulls",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/model-pulls", requirePlatformSession(ctx, triggerModelPull(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/nodes/:id/model-pulls",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/model-pulls", requirePlatformSession(ctx, modelPullStatus(ctx))),
 			},
 		})
 	}

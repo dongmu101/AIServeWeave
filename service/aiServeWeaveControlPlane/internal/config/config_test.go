@@ -58,3 +58,28 @@ func TestMetricsHistoryConfDisabledByDefault(t *testing.T) {
 		t.Error("Enabled() = true, want false for the zero value")
 	}
 }
+
+func TestModelPullConfValidation(t *testing.T) {
+	cfg := validConfig()
+	cfg.ModelPull = config.ModelPullConf{Gateways: []string{"http://gateway-1:8092"}, GatewayToken: strings.Repeat("m", 32)}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil for a fully configured ModelPull", err)
+	}
+
+	cfg.ModelPull.GatewayToken = "too-short"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ModelPull.GatewayToken") {
+		t.Errorf("Validate error = %v, want one naming ModelPull.GatewayToken", err)
+	}
+
+	cfg.ModelPull = config.ModelPullConf{GatewayToken: strings.Repeat("m", 32)}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ModelPull.Gateways") {
+		t.Errorf("Validate error = %v, want one naming ModelPull.Gateways for a token with no endpoints", err)
+	}
+}
+
+func TestModelPullConfDisabledByDefault(t *testing.T) {
+	var m config.ModelPullConf
+	if m.Enabled() {
+		t.Error("Enabled() = true, want false for the zero value")
+	}
+}

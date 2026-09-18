@@ -13,6 +13,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
@@ -1056,6 +1057,127 @@ func listNodeStates(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// -----------------------------------------------------------------------
+// Operator: model-pull forwarding (STATUS.md's P2 model distribution
+// subtask two, the control plane forwarding layer)
+// -----------------------------------------------------------------------
+
+// triggerModelPull asks node_id, wherever it is connected among the
+// configured Gateway replicas, to start pulling names — the write half of
+// forwarding STATUS.md's P2 model distribution subtask two.
+//
+// triggerModelPull 要求 node_id（无论它连在哪个已配置 Gateway 副本上）开始
+// 拉取 names——转发 STATUS.md P2 模型分发子任务二的写入那一半。
+func triggerModelPull(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.ModelPullTriggerRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if len(req.Names) == 0 {
+			writeError(w, http.StatusBadRequest, "names must not be empty")
+			return
+		}
+		result, err := ctx.Logic.TriggerModelPull(r.Context(), actor, nodeID, req.Names)
+		recordModelPullRouterCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, types.ModelPullTriggerResponse{Replicas: renderModelPullReplicas(result.Replicas)})
+	}
+}
+
+// modelPullStatus returns node_id's last-reported pull status from
+// whichever configured Gateway replica currently holds its connection — the
+// read half of forwarding STATUS.md's P2 model distribution subtask two.
+//
+// It calls ctx.ModelPullRouter directly rather than going through
+// ctx.Logic, the same split Fleet's own listFleetNodes uses: a read has no
+// audit entry and no actor-scoped rule beyond the session guard the route
+// already carries — see logic.ModelPullRouter's doc comment for why.
+//
+// modelPullStatus 返回 node_id 最后上报的拉取状态，来自当前持有其连接的
+// 那个已配置 Gateway 副本——转发 STATUS.md P2 模型分发子任务二的读取那一半。
+//
+// 它直接调用 ctx.ModelPullRouter 而不经过 ctx.Logic，与 Fleet 自己的
+// listFleetNodes 是同一种切分：一次读取除了路由本身已经带着的会话守卫之外，
+// 没有审计记录，也没有按行为人限定范围的规则——原因见 logic.ModelPullRouter
+// 的文档注释。
+func modelPullStatus(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		result, err := ctx.ModelPullRouter.Status(r.Context(), nodeID)
+		recordModelPullRouterCall(ctx, err)
+		if err != nil {
+			respondModelPullRouterErr(w, err)
+			return
+		}
+		if !result.Connected {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, types.ModelPullStatusResponse{
+			Pulls:    renderModelPullStatuses(result.Pulls),
+			Replicas: renderModelPullReplicas(result.Replicas),
+		})
+	}
+}
+
+func renderModelPullReplicas(replicas []modelpullrouter.ReplicaStatus) []types.ModelPullReplicaStatus {
+	out := make([]types.ModelPullReplicaStatus, len(replicas))
+	for i, r := range replicas {
+		out[i] = types.ModelPullReplicaStatus{Endpoint: r.Endpoint, Connected: r.Connected, Error: r.Error}
+	}
+	return out
+}
+
+func renderModelPullStatuses(pulls []modelpullrouter.PullStatus) []types.ModelPullStatus {
+	out := make([]types.ModelPullStatus, len(pulls))
+	for i, p := range pulls {
+		out[i] = types.ModelPullStatus{
+			Name:            p.Name,
+			State:           p.State,
+			BytesDownloaded: p.BytesDownloaded,
+			BytesTotal:      p.BytesTotal,
+			Reason:          p.Reason,
+			UpdatedAt:       p.UpdatedAt,
+		}
+	}
+	return out
+}
+
+// respondModelPullRouterErr handles a direct ctx.ModelPullRouter call's
+// error — in practice only modelpullrouter.ErrDisabled, since the route
+// this serves is mounted only when ctx.ModelPullRouter is configured (the
+// same "no config, no route" rule respondFleetErr documents).
+//
+// respondModelPullRouterErr 处理一次直接 ctx.ModelPullRouter 调用的错误——
+// 实践中只会是 modelpullrouter.ErrDisabled，因为本函数所服务的路由只在
+// ctx.ModelPullRouter 已配置时才会挂载（respondFleetErr 文档所述的"没配置就
+// 没有路由"同一规则）。
+func respondModelPullRouterErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, modelpullrouter.ErrDisabled) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal error")
+}
+
 // renderPlatformOperator converts a stored platform operator to its wire
 // form. The digest has no field to land in, mirroring renderUser.
 //
@@ -1515,6 +1637,171 @@ func listRequestLogsOperator(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// MaxUsageRecordsBodyBytes bounds the body of POST /internal/v1/usagerecords.
+// It reuses MaxRequestLogsBodyBytes's own sizing logic: a usage record has
+// three extra integer fields and one shorter one (endpoint vs
+// outcome/status_code combined) than a request-log record, so the two
+// constants stay close; this one keeps its own value rather than aliasing
+// MaxRequestLogsBodyBytes so the two batches' sizes can be tuned
+// independently without a shared-constant surprise.
+//
+// MaxUsageRecordsBodyBytes 限定 POST /internal/v1/usagerecords 请求体的
+// 大小。它沿用 MaxRequestLogsBodyBytes 自己的定量逻辑：一条用量记录比一条
+// 请求日志记录多三个整数字段、少一个字段(endpoint 对比
+// outcome/status_code 合计)，两个常量因此接近；这里保留自己的取值而不是
+// 直接别名 MaxRequestLogsBodyBytes，好让两个批次的大小能够独立调整，而不会
+// 共享常量带来意外。
+const MaxUsageRecordsBodyBytes = 256 << 10
+
+// decodeUsageRecords allows a bounded batch of usage records — mirroring
+// decodeRequestLogs exactly, for the same reason (see
+// MaxUsageRecordsBodyBytes).
+//
+// decodeUsageRecords 接受一批有界的用量记录——与 decodeRequestLogs 完全
+// 对应，理由相同（见 MaxUsageRecordsBodyBytes）。
+func decodeUsageRecords(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxUsageRecordsBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "usage record batch exceeds limit")
+		} else {
+			writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
+		}
+		return false
+	}
+	return true
+}
+
+// createUsageRecords handles POST /internal/v1/usagerecords: a Gateway
+// replica reports a batch of billable requests' token usage it just
+// finished serving, per STATUS.md's P2 usage ledger. Like createRequestLogs,
+// this call must never sit on an inference request's own critical path —
+// that discipline belongs to the Gateway's own bounded background pusher,
+// not to this handler, which only does the write it is asked to do.
+//
+// createUsageRecords 处理 POST /internal/v1/usagerecords：一个 Gateway 副本
+// 报告一批它刚服务完的、可计费请求的 token 用量，对应 STATUS.md 的 P2 用量
+// 账本。与 createRequestLogs 一样，这次调用绝不能出现在推理请求自己的关键
+// 路径上——那份纪律属于 Gateway 自己的有界后台推送器，不属于这个只负责完成
+// 被要求的写入的 handler。
+func createUsageRecords(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateUsageRecordsRequest
+		if !decodeUsageRecords(w, r, &req) {
+			return
+		}
+		batch := make([]logic.CreateUsageRecordParams, len(req.Records))
+		for i, rec := range req.Records {
+			batch[i] = logic.CreateUsageRecordParams{
+				RequestID: rec.RequestID, TenantID: rec.TenantID, Model: rec.Model, Endpoint: rec.Endpoint,
+				PromptTokens: rec.PromptTokens, CompletionTokens: rec.CompletionTokens, TotalTokens: rec.TotalTokens,
+				CreatedAt: rec.CreatedAt,
+			}
+		}
+		accepted, err := ctx.Logic.CreateUsageRecords(r.Context(), batch)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.CreateUsageRecordsResponse{Accepted: accepted})
+	}
+}
+
+// usageSummaryFilterFrom reads the query parameters both settlement
+// endpoints share.
+//
+// usageSummaryFilterFrom 读取两个结算端点共用的查询参数。
+func usageSummaryFilterFrom(query url.Values) (store.UsageRecordFilter, bool) {
+	since, sinceOK := timeParam(query.Get("since"))
+	until, untilOK := timeParam(query.Get("until"))
+	if !sinceOK || !untilOK {
+		return store.UsageRecordFilter{}, false
+	}
+	return store.UsageRecordFilter{Since: since, Until: until}, true
+}
+
+// renderUsageSummary converts one aggregated group to its wire form.
+// includeTenant is false on the tenant-scoped endpoint, the same convention
+// renderRequestLog already follows.
+//
+// renderUsageSummary 把一个聚合分组转换成线上形式。includeTenant 在按租户
+// 限定的端点上为 false，与 renderRequestLog 已经遵循的同一种约定。
+func renderUsageSummary(u store.UsageSummary, includeTenant bool) types.UsageSummaryEntryResponse {
+	out := types.UsageSummaryEntryResponse{
+		Model: u.Model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+		TotalTokens: u.TotalTokens, RequestCount: u.RequestCount,
+	}
+	if includeTenant {
+		out.TenantID = u.TenantID
+	}
+	return out
+}
+
+// summarizeUsageTenant handles GET /admin/v1/usage/summary, scoped to the
+// caller's own tenant — STATUS.md's P2 usage ledger tenant self-service
+// settlement view.
+//
+// summarizeUsageTenant 处理 GET /admin/v1/usage/summary，限定在调用方自己
+// 的租户范围内——STATUS.md P2 用量账本的租户自助结算视角。
+func summarizeUsageTenant(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		filter, ok := usageSummaryFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = actor.TenantID
+		summary, err := ctx.Logic.SummarizeUsage(r.Context(), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.UsageSummaryEntryResponse, len(summary))
+		for i, u := range summary {
+			out[i] = renderUsageSummary(u, false)
+		}
+		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
+	}
+}
+
+// summarizeUsageOperator handles GET /operator/v1/usage/summary —
+// STATUS.md's P2 usage ledger platform cross-tenant settlement view. An
+// absent tenant_id summarizes every tenant; a present one narrows to it —
+// the same optional-scope shape listRequestLogsOperator already has.
+//
+// summarizeUsageOperator 处理 GET /operator/v1/usage/summary——STATUS.md
+// P2 用量账本的平台跨租户结算视角。缺席的 tenant_id 会汇总每一个租户；
+// 给出时则收窄到该租户——与 listRequestLogsOperator 已经采用的同一种可选
+// 范围形状。
+func summarizeUsageOperator(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, ok := usageSummaryFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = r.URL.Query().Get("tenant_id")
+		summary, err := ctx.Logic.SummarizeUsage(r.Context(), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.UsageSummaryEntryResponse, len(summary))
+		for i, u := range summary {
+			out[i] = renderUsageSummary(u, true)
+		}
+		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
+	}
+}
+
 // listActiveJobsForRoute handles GET /internal/v1/jobs/active. It answers a
 // recovering Gateway replica's question "what do I owe this route binding"
 // (STATUS.md's J06): node_id and runtime_id are query parameters and there
@@ -1660,6 +1947,48 @@ func listJobArtifacts(ctx *svc.ServiceContext) http.HandlerFunc {
 			out[i] = renderJobArtifact(a)
 		}
 		writeJSON(w, http.StatusOK, types.ListJobArtifactsResponse{Items: out})
+	}
+}
+
+// getArtifactRoute handles GET /internal/v1/artifacts/:artifact_id. It
+// exists for STATUS.md's Gateway 故障切换收尾: downloadArtifact addresses an
+// artifact by its bare public id, with no job id in the URL, so a replica
+// recovering one it has no local record of has nothing else to ask the
+// control plane by. tenant_id is a query parameter for the same reason it is
+// on getJob — there is no session here, only the Gateway's own assertion of
+// which caller is downloading.
+//
+// getArtifactRoute 处理 GET /internal/v1/artifacts/:artifact_id。它为
+// STATUS.md 的「Gateway 故障切换收尾」而存在：downloadArtifact 只用产物自己的
+// 公开 id 寻址，URL 里没有 job id，因此一个正在恢复一份本地毫无记录的产物的
+// 副本，没有别的东西可以拿去问控制面。tenant_id 是查询参数，理由与 getJob
+// 相同——这里没有会话，只有 Gateway 自己对「是哪个调用方在下载」的断言。
+func getArtifactRoute(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := pathvar.Vars(r)["artifact_id"]
+		tenantID := r.URL.Query().Get("tenant_id")
+		if artifactID == "" || tenantID == "" {
+			writeError(w, http.StatusBadRequest, "an artifact id and tenant_id are required")
+			return
+		}
+		artifact, job, err := ctx.Logic.GetArtifactRoute(r.Context(), tenantID, artifactID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.ArtifactRouteResponse{
+			ArtifactID:  artifact.ID,
+			JobID:       artifact.JobID,
+			TenantID:    artifact.TenantID,
+			Filename:    artifact.Filename,
+			Subfolder:   artifact.Subfolder,
+			Type:        artifact.Type,
+			ContentType: artifact.ContentType,
+			SizeBytes:   artifact.SizeBytes,
+			StorageKey:  artifact.StorageKey,
+			NodeID:      job.NodeID,
+			RuntimeID:   job.RuntimeID,
+		})
 	}
 }
 

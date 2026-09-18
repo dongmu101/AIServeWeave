@@ -156,6 +156,66 @@ func TestCreateJobArtifactIsIdempotentOnADuplicateID(t *testing.T) {
 	}
 }
 
+func TestGetArtifactRouteReturnsTheArtifactAndItsJobsRouteBinding(t *testing.T) {
+	f := newFixture(t)
+	mustCreateJob(t, f, "job_1")
+	created, err := f.svc.CreateJobArtifact(context.Background(), logic.CreateJobArtifactParams{
+		ArtifactID: "art_1", JobID: "job_1", TenantID: f.tenant.ID,
+		Filename: "out.png", StorageKey: "objects/out.png",
+	})
+	if err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	artifact, job, err := f.svc.GetArtifactRoute(context.Background(), f.tenant.ID, "art_1")
+	if err != nil {
+		t.Fatalf("GetArtifactRoute: %v", err)
+	}
+	if artifact.ID != created.ID || artifact.StorageKey != "objects/out.png" {
+		t.Errorf("GetArtifactRoute artifact = %+v, want the created row with its StorageKey", artifact)
+	}
+	// mustCreateJob binds job_1 to node-1/comfy-1 — a recovering Gateway
+	// replica needs exactly this pair to pull the artifact live if no
+	// StorageKey copy exists.
+	//
+	// mustCreateJob 把 job_1 绑定到 node-1/comfy-1——一个正在恢复的 Gateway
+	// 副本，在没有 StorageKey 副本可用时，正需要这一对信息来实时拉取产物。
+	if job.NodeID != "node-1" || job.RuntimeID != "comfy-1" {
+		t.Errorf("GetArtifactRoute job = %+v, want NodeID=node-1 RuntimeID=comfy-1", job)
+	}
+}
+
+func TestGetArtifactRouteOfAnUnknownIDIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	if _, _, err := f.svc.GetArtifactRoute(context.Background(), f.tenant.ID, "art_missing"); !errors.Is(err, logic.ErrNotFound) {
+		t.Errorf("GetArtifactRoute(unknown id) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestGetArtifactRouteUnderTheWrongTenantIsNotFound(t *testing.T) {
+	f := newFixture(t)
+	mustCreateJob(t, f, "job_1")
+	if _, err := f.svc.CreateJobArtifact(context.Background(), logic.CreateJobArtifactParams{
+		ArtifactID: "art_1", JobID: "job_1", TenantID: f.tenant.ID, Filename: "out.png",
+	}); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	otherTenant, _, err := f.svc.CreateTenant(context.Background(), "Other", "owner3@example.com", testPassword, "10.0.0.1")
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+	// An artifact that exists but belongs to a different tenant must answer
+	// exactly like one that does not exist at all — the two must be
+	// indistinguishable to a caller asserting the wrong tenant.
+	//
+	// 一个存在但属于别的租户的产物，必须与一个根本不存在的产物给出完全相同的
+	// 答复——对一个断言了错误租户的调用方而言，两者必须无法区分。
+	if _, _, err := f.svc.GetArtifactRoute(context.Background(), otherTenant.ID, "art_1"); !errors.Is(err, logic.ErrNotFound) {
+		t.Errorf("GetArtifactRoute(wrong tenant) = %v, want ErrNotFound", err)
+	}
+}
+
 func TestListExpiredJobArtifactsAndDeleteJobArtifact(t *testing.T) {
 	f := newFixture(t)
 	mustCreateJob(t, f, "job_1")

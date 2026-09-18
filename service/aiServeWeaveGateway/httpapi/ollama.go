@@ -286,7 +286,7 @@ func (h *handlers) ollamaChatOnce(w http.ResponseWriter, r *http.Request, canoni
 	h.logTTFT(r, canonical.Model, candidate.NodeID, start, false)
 	// Same reasoning as chatNonStream (chat.go): a non-streamed response's
 	// first byte is its last, so only the total response time is recorded.
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointOllamaChat, canonical.Model)
 }
 
 // ollamaChatStream serves POST /api/chat with stream true (Ollama's
@@ -330,7 +330,7 @@ func (h *handlers) ollamaChatStream(w http.ResponseWriter, r *http.Request, cano
 				EvalCount:       usage.CompletionTokens,
 			})
 			flusher.Flush()
-			h.recordUsage(r.Context(), usage, time.Since(start))
+			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointOllamaChat, canonical.Model)
 			return
 		}
 		if err != nil {
@@ -488,7 +488,7 @@ func (h *handlers) ollamaGenerateOnce(w http.ResponseWriter, r *http.Request, ca
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
 	h.logTTFT(r, canonical.Model, candidate.NodeID, start, false)
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointOllamaGenerate, canonical.Model)
 }
 
 func (h *handlers) ollamaGenerateStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
@@ -524,7 +524,7 @@ func (h *handlers) ollamaGenerateStream(w http.ResponseWriter, r *http.Request, 
 				EvalCount:       usage.CompletionTokens,
 			})
 			flusher.Flush()
-			h.recordUsage(r.Context(), usage, time.Since(start))
+			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointOllamaGenerate, canonical.Model)
 			return
 		}
 		if err != nil {
@@ -605,5 +605,5 @@ func (h *handlers) ollamaEmbeddings(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(ollamaEmbeddingsResponse{Embedding: vector})
 	// Same reasoning as embeddings.go's embeddings: prompt tokens only, no
 	// output stream to have a rate.
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointOllamaEmbeddings, req.Model)
 }

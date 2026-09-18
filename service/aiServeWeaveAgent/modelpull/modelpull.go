@@ -9,11 +9,18 @@
 //
 // This is subtask 1 of STATUS.md's P2 "模型分发" item (see
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md): a
-// generic checksum-verified downloader, not a Gateway-triggered distribution
-// system and not an Ollama-native puller (Ollama has its own manifest/blob
-// store format this package does not understand; pulling into Ollama itself
-// is left to a future subtask that shells out to `ollama pull`, the same way
-// hostresources shells out to nvidia-smi).
+// generic checksum-verified downloader, not an Ollama-native puller (Ollama
+// has its own manifest/blob store format this package does not understand;
+// pulling into Ollama itself is left to a future subtask that shells out to
+// `ollama pull`, the same way hostresources shells out to nvidia-smi).
+//
+// Puller (puller.go) is subtask 2 (see
+// docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md):
+// it lets a Gateway trigger a pull on demand, by name only — never a URL,
+// which the manifest loaded here still supplies exclusively. Every download
+// still runs through pullOne in this file; Puller only adds on-demand
+// triggering, sequential queuing, and per-name progress on top of what
+// RunManifest already does at startup.
 //
 // modelpull 把运维配置的外部来源的模型制品下载到本地磁盘，校验其校验和，并
 // 支持续传中断的下载。它是纯 Agent 本地、配置驱动的：清单和白名单都来自本地
@@ -24,10 +31,16 @@
 //
 // 这是 STATUS.md P2「模型分发」条目的子任务一（见
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md）：一个
-// 通用的、校验和驱动的下载器，不是 Gateway 触发的分发系统，也不理解 Ollama
-// 自己的 manifest/blob 存储格式（真正把文件交给 Ollama 使用留给未来子任务，
-// 经由 shell out 到 `ollama pull`，与 hostresources shell out 到 nvidia-smi
-// 同一先例）。
+// 通用的、校验和驱动的下载器，不理解 Ollama 自己的 manifest/blob 存储格式
+// （真正把文件交给 Ollama 使用留给未来子任务，经由 shell out 到
+// `ollama pull`，与 hostresources shell out 到 nvidia-smi 同一先例）。
+//
+// Puller（puller.go）是子任务二（见
+// docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md）：
+// 让 Gateway 可以按需触发一次拉取，只能按名字——从不是 URL，这里加载的清单
+// 仍然是 URL 的唯一来源。每一次下载仍然经由本文件的 pullOne 执行；Puller
+// 只是在 RunManifest 启动时已有的行为之上，加了按需触发、顺序排队与逐名字
+// 进度。
 package modelpull
 
 import (
@@ -56,6 +69,46 @@ const sha256HexLen = 64
 // errQuotaExceeded 在本次 RunManifest 调用共享的字节预算耗尽时由 quotaWriter
 // 返回。
 var errQuotaExceeded = errors.New("modelpull: quota exceeded")
+
+// The sentinel errors below classify a pullOne failure without leaking its
+// detail. Puller.runOne (puller.go) maps each one to a
+// common/modelpullstatus.FailureReason via errors.Is before a Status ever
+// crosses the tunnel; RunManifest's own Result.Failed keeps the full wrapped
+// error, detail and all, for a caller that only ever logs it locally.
+//
+// pullOne 失败时用下面这些哨兵错误分类，不泄漏细节。Puller.runOne
+// （puller.go）在一个 Status 跨隧道之前，用 errors.Is 把它们逐一映射到
+// common/modelpullstatus.FailureReason；RunManifest 自己的 Result.Failed
+// 仍然保留完整的被包裹错误（含细节），供只在本地打日志的调用方使用。
+var (
+	// errFetchFailed classifies a transport-level failure: DNS, dial, TLS,
+	// a canceled context, or the HTTP response body failing mid-read. Go's
+	// http.Client embeds the full request URL in a *url.Error's text, which
+	// is exactly the detail that must never cross the tunnel (see the
+	// package doc and modelpullstatus's doc for why).
+	//
+	// errFetchFailed 归类一次传输层失败：DNS、拨号、TLS、被取消的
+	// context，或 HTTP 响应体读到一半失败。Go 的 http.Client 会把完整请求
+	// URL 编进 *url.Error 的文本里，而这正是绝不能跨隧道的细节（原因见本
+	// 包文档与 modelpullstatus 的文档）。
+	errFetchFailed = errors.New("modelpull: fetch failed")
+	// errUnexpectedStatus classifies a response whose status code is
+	// neither 200 nor 206.
+	//
+	// errUnexpectedStatus 归类一个既不是 200 也不是 206 的响应状态码。
+	errUnexpectedStatus = errors.New("modelpull: unexpected http status")
+	// errChecksumMismatch classifies a completed download whose SHA256
+	// does not match Spec.SHA256.
+	//
+	// errChecksumMismatch 归类一次已完成下载的 SHA256 与 Spec.SHA256 不符。
+	errChecksumMismatch = errors.New("modelpull: checksum mismatch")
+	// errStorageFailed classifies a local filesystem failure: stat,
+	// mkdir, open, or rename.
+	//
+	// errStorageFailed 归类一次本地文件系统失败：stat、mkdir、open 或
+	// rename。
+	errStorageFailed = errors.New("modelpull: storage error")
+)
 
 // Spec describes one model artifact to fetch and verify.
 //
@@ -206,7 +259,7 @@ func RunManifest(ctx context.Context, cfg Config, specs []Spec) Result {
 			result.Failed[spec.Name] = fmt.Errorf("modelpull: source not allowlisted for %q: %s", spec.Name, spec.SourceURL)
 			continue
 		}
-		if err := pullOne(ctx, client, spec, budget); err != nil {
+		if err := pullOne(ctx, client, spec, budget, nil); err != nil {
 			result.Failed[spec.Name] = err
 			continue
 		}
@@ -312,32 +365,51 @@ func sha256File(path string) (string, error) {
 // pullOne resumes or starts spec's download into "<TargetPath>.part",
 // verifies the checksum on completion, and atomically renames it into place
 // on success. budget, when non-nil, is the shared byte counter for this
-// RunManifest call; pullOne decrements it as bytes are written and aborts
-// once it would go negative, leaving the partial file for a later run.
+// RunManifest call (or, from Puller, this worker session); pullOne
+// decrements it as bytes are written and aborts once it would go negative,
+// leaving the partial file for a later run. onProgress, when non-nil, is
+// called after every chunk written with the file's total size so far
+// (resumed bytes plus this call's own); RunManifest passes nil since it has
+// no per-name status to update.
+//
+// Every error returned wraps one of the package's sentinel errors so a
+// caller that needs to classify the failure (Puller.runOne) can use
+// errors.Is instead of matching on message text — the message text itself
+// may embed spec.SourceURL (a *url.Error does), which must never leave this
+// package once a caller starts forwarding it across the tunnel.
 //
 // pullOne 续传或开始把 spec 下载到 "<TargetPath>.part"，完成后校验校验和，
-// 成功则原子改名到位。budget 非 nil 时是本次 RunManifest 调用共享的字节计数
-// 器；pullOne 随写入递减它，一旦会变为负数就中止，把部分文件留给以后的运行。
-func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64) error {
+// 成功则原子改名到位。budget 非 nil 时是本次 RunManifest 调用（或者，从
+// Puller 调用时，是这次 worker session）共享的字节计数器；pullOne 随写入
+// 递减它，一旦会变为负数就中止，把部分文件留给以后的运行。onProgress 非
+// nil 时，每写入一个分块后都会被调用一次，参数是文件当前的总大小（续传
+// 部分加上本次调用自己写入的部分）；RunManifest 传 nil，因为它没有需要更新
+// 的逐名字状态。
+//
+// 返回的每一个错误都包裹了本包的某个哨兵错误，这样需要对失败分类的调用方
+// （Puller.runOne）可以用 errors.Is 而不是匹配消息文本——消息文本本身可能
+// 带有 spec.SourceURL（*url.Error 就会），一旦调用方开始把它转发过隧道，这
+// 个细节绝不能离开本包。
+func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64, onProgress func(downloaded int64)) error {
 	partPath := spec.TargetPath + ".part"
 
 	var resumeFrom int64
 	if fi, err := os.Stat(partPath); err == nil {
 		resumeFrom = fi.Size()
 	} else if !errors.Is(err, os.ErrNotExist) {
-		return fmt.Errorf("modelpull: stat partial file for %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: stat partial file for %q: %v", errStorageFailed, spec.Name, err)
 	}
 
 	if budget != nil && spec.SizeBytes > 0 {
 		remainingNeeded := spec.SizeBytes - resumeFrom
 		if remainingNeeded > 0 && remainingNeeded > *budget {
-			return fmt.Errorf("modelpull: quota exceeded before starting %q: need %d bytes, %d remaining", spec.Name, remainingNeeded, *budget)
+			return fmt.Errorf("%w: before starting %q: need %d bytes, %d remaining", errQuotaExceeded, spec.Name, remainingNeeded, *budget)
 		}
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.SourceURL, nil)
 	if err != nil {
-		return fmt.Errorf("modelpull: build request for %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: build request for %q: %v", errFetchFailed, spec.Name, err)
 	}
 	if resumeFrom > 0 {
 		req.Header.Set("Range", "bytes="+strconv.FormatInt(resumeFrom, 10)+"-")
@@ -345,7 +417,7 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("modelpull: fetch %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: fetch %q: %v", errFetchFailed, spec.Name, err)
 	}
 	defer resp.Body.Close()
 
@@ -355,11 +427,11 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64)
 	case resp.StatusCode == http.StatusOK:
 		resumeFrom = 0
 	default:
-		return fmt.Errorf("modelpull: unexpected status %d fetching %q", resp.StatusCode, spec.Name)
+		return fmt.Errorf("%w: status %d fetching %q", errUnexpectedStatus, resp.StatusCode, spec.Name)
 	}
 
 	if err := os.MkdirAll(filepath.Dir(partPath), 0o755); err != nil {
-		return fmt.Errorf("modelpull: create target directory for %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: create target directory for %q: %v", errStorageFailed, spec.Name, err)
 	}
 
 	flags := os.O_CREATE | os.O_WRONLY
@@ -370,35 +442,68 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64)
 	}
 	f, err := os.OpenFile(partPath, flags, 0o644)
 	if err != nil {
-		return fmt.Errorf("modelpull: open partial file for %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: open partial file for %q: %v", errStorageFailed, spec.Name, err)
 	}
 
 	var writer io.Writer = f
 	if budget != nil {
-		writer = &quotaWriter{w: f, remaining: budget}
+		writer = &quotaWriter{w: writer, remaining: budget}
+	}
+	if onProgress != nil {
+		writer = &progressWriter{w: writer, base: resumeFrom, onProgress: onProgress}
 	}
 
 	_, copyErr := io.Copy(writer, resp.Body)
 	closeErr := f.Close()
 	if copyErr != nil {
-		return fmt.Errorf("modelpull: download %q: %w", spec.Name, copyErr)
+		if errors.Is(copyErr, errQuotaExceeded) {
+			return copyErr
+		}
+		return fmt.Errorf("%w: download %q: %v", errFetchFailed, spec.Name, copyErr)
 	}
 	if closeErr != nil {
-		return fmt.Errorf("modelpull: flush partial file for %q: %w", spec.Name, closeErr)
+		return fmt.Errorf("%w: flush partial file for %q: %v", errStorageFailed, spec.Name, closeErr)
 	}
 
 	sum, err := sha256File(partPath)
 	if err != nil {
-		return fmt.Errorf("modelpull: checksum %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: checksum %q: %v", errStorageFailed, spec.Name, err)
 	}
 	if !strings.EqualFold(sum, spec.SHA256) {
 		os.Remove(partPath)
-		return fmt.Errorf("modelpull: checksum mismatch for %q: want %s, got %s", spec.Name, spec.SHA256, sum)
+		return fmt.Errorf("%w: for %q: want %s, got %s", errChecksumMismatch, spec.Name, spec.SHA256, sum)
 	}
 	if err := os.Rename(partPath, spec.TargetPath); err != nil {
-		return fmt.Errorf("modelpull: finalize %q: %w", spec.Name, err)
+		return fmt.Errorf("%w: finalize %q: %v", errStorageFailed, spec.Name, err)
 	}
 	return nil
+}
+
+// progressWriter reports the file's cumulative size — base (bytes resumed
+// from a previous run) plus everything written through it this call — after
+// every successful Write. It wraps whatever writer sits beneath it (a
+// quotaWriter when a budget applies, otherwise the file directly), so
+// progress only ever reflects bytes actually accepted, never bytes a
+// quotaWriter rejected.
+//
+// progressWriter 在每次成功 Write 之后上报文件的累计大小——base（从上一次
+// 运行续传的字节数）加上本次调用通过它写入的一切。它包裹在下层 writer 之
+// 外（有预算时是 quotaWriter，否则直接是文件），因此进度只反映实际被接受
+// 的字节，从不包括被 quotaWriter 拒绝的字节。
+type progressWriter struct {
+	w          io.Writer
+	base       int64
+	written    int64
+	onProgress func(downloaded int64)
+}
+
+func (p *progressWriter) Write(b []byte) (int, error) {
+	n, err := p.w.Write(b)
+	p.written += int64(n)
+	if n > 0 {
+		p.onProgress(p.base + p.written)
+	}
+	return n, err
 }
 
 // quotaWriter enforces a shared byte budget across every Spec processed by

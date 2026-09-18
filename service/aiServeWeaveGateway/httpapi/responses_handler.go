@@ -120,7 +120,7 @@ func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req res
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start))
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointResponses, resp.Model)
 }
 
 // persistResponseTurn asynchronously persists one turn's contribution —
@@ -365,7 +365,7 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 	obj.Status, obj.IncompleteDetails = statusFor(finishReason)
 	obj.Usage = usageFor(usage)
 	em.event("response.completed", map[string]any{"response": obj})
-	h.recordUsage(r.Context(), usage, time.Since(start))
+	h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointResponses, obj.Model)
 
 	// opened guards this the same way it guards obj.Output above: a stream
 	// that never produced a content delta has nothing worth persisting as

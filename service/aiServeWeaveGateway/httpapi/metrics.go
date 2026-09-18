@@ -129,6 +129,24 @@ const (
 	// 意味着检索表正在悄悄丢失最近的请求，但原因不同：是推送在控制面一侧、
 	// 而不是本副本自己的缓冲跟不上。
 	MetricRequestLogPushFailedTotal = "gateway_request_log_push_failed_total"
+	// MetricUsageLedgerDroppedTotal counts usage records dropped because the
+	// bounded push buffer was full (STATUS.md's P2 usage ledger). A non-zero
+	// slope means the ledger is silently missing recent usage, not that
+	// anything about serving the request failed — mirrors
+	// MetricRequestLogDroppedTotal exactly.
+	//
+	// MetricUsageLedgerDroppedTotal 统计因有界推送缓冲已满而被丢弃的用量记录
+	// (STATUS.md 的 P2 用量账本)。斜率非零意味着账本正在悄悄丢失最近的用量，
+	// 而不是服务这次请求本身出了问题——与 MetricRequestLogDroppedTotal 完全
+	// 对应。
+	MetricUsageLedgerDroppedTotal = "gateway_usage_ledger_dropped_total"
+	// MetricUsageLedgerPushFailedTotal counts batches that reached
+	// PushUsageRecords but failed to reach the control plane or were refused
+	// by it — mirrors MetricRequestLogPushFailedTotal exactly.
+	//
+	// MetricUsageLedgerPushFailedTotal 统计已经到达 PushUsageRecords、却未能
+	// 送达或被控制面拒绝的批次——与 MetricRequestLogPushFailedTotal 完全对应。
+	MetricUsageLedgerPushFailedTotal = "gateway_usage_ledger_push_failed_total"
 	// MetricWorkflowJobsTotal counts workflow jobs by their terminal result,
 	// recorded exactly once per job at the moment it first reaches a
 	// terminal state (STATUS.md's A06) — a job repeatedly polled after it
@@ -347,6 +365,14 @@ func Descriptions() metrics.Descriptions {
 			Kind: metrics.KindCounter,
 			Help: "Request-log batches that reached the control plane call but failed (network error or non-200 status).",
 		},
+		MetricUsageLedgerDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Usage-ledger records dropped because the push buffer was full.",
+		},
+		MetricUsageLedgerPushFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Usage-ledger batches that reached the control plane call but failed (network error or non-200 status).",
+		},
 		MetricWorkflowJobsTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Workflow jobs, by terminal result, counted once per job at its first terminal observation.",
@@ -557,6 +583,23 @@ func (r *recorder) RequestLogDropped() {
 // 网络错误，或控制面返回了非 200 状态码。
 func (r *recorder) RequestLogPushFailed() {
 	r.sink.Counter(MetricRequestLogPushFailedTotal, nil).Add(1)
+}
+
+// UsageLedgerDropped records one usage record dropped because the push
+// buffer was full.
+//
+// UsageLedgerDropped 记录一条因推送缓冲已满而被丢弃的用量记录。
+func (r *recorder) UsageLedgerDropped() {
+	r.sink.Counter(MetricUsageLedgerDroppedTotal, nil).Add(1)
+}
+
+// UsageLedgerPushFailed records one batch that reached PushUsageRecords but
+// failed — a network error or a non-200 status from the control plane.
+//
+// UsageLedgerPushFailed 记录一个已经到达 PushUsageRecords 却失败的批次——
+// 一次网络错误，或控制面返回了非 200 状态码。
+func (r *recorder) UsageLedgerPushFailed() {
+	r.sink.Counter(MetricUsageLedgerPushFailedTotal, nil).Add(1)
 }
 
 // ResponsePersistDropped records one Responses API turn dropped because the

@@ -270,9 +270,9 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, oll
 	)
 
 	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
-	modelPullDone := startModelPull(ctx, logger, mpOpts)
+	puller := newModelPuller(ctx, logger, mpOpts)
 
-	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts)
+	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller)
 	if err != nil {
 		return err
 	}
@@ -296,7 +296,6 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, oll
 	}
 
 	<-discoveryDone // wait for the last scan's Manager.Add calls to finish before Close starts tearing instances down
-	<-modelPullDone // ctx is already canceled by now, so any in-flight fetch unwinds quickly
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
@@ -376,47 +375,63 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 	return done
 }
 
-// startModelPull runs modelpull.RunManifest in the background and returns a
-// channel that is closed once it has finished. Unlike startLocalDiscovery,
-// this never blocks the Hello handshake or the tunnel connection on purpose:
-// a model download can take arbitrarily long, and an agent that looked
-// "hung" because it was still fetching a multi-gigabyte file before ever
-// reaching the gateway would be worse than one that connects immediately and
-// fetches in parallel. A missing or empty manifest disables the feature
-// entirely, and any failure is logged rather than treated as fatal — this is
-// best-effort, the same restraint hostresources uses for its own probing.
+// newModelPuller builds the Agent-local Puller from opts (STATUS.md's P2
+// 「模型分发」子任务一：manifest/allowlist/quota) and, when a manifest is
+// configured, kicks off pulling every entry in the background — the same
+// non-blocking behavior startModelPull had before Puller existed. It never
+// returns nil: an empty or unloadable manifest yields a Puller that knows no
+// names, so a Gateway-triggered pull for any name is simply rejected as
+// unknown (子任务二, tunnel.ClientConfig.ModelPuller) instead of needing a
+// separate "feature disabled" code path. A manifest that fails to load is
+// logged, not fatal — the same restraint hostresources uses for its own
+// probing.
 //
-// startModelPull 在后台跑 modelpull.RunManifest，返回一个它结束后就会关闭的
-// channel。与 startLocalDiscovery 不同，这里故意不阻塞 Hello 握手或隧道连接：
-// 模型下载耗时可能无上限，一个因为还在下载几个 GB 的文件、连 Gateway 都没连上
-// 就"看起来卡死"的 Agent，比一个立刻接入、下载并行进行的 Agent 要糟糕得多。
-// 清单为空时功能整体关闭，任何失败都只记日志、不当作致命错误——这是与
-// hostresources 自己探测时同一种"尽力而为"的克制。
-func startModelPull(ctx context.Context, logger *slog.Logger, opts *modelPullOptions) <-chan struct{} {
-	done := make(chan struct{})
-	if opts.manifest == "" {
-		close(done)
-		return done
-	}
-	go func() {
-		defer close(done)
-		specs, err := modelpull.LoadManifest(opts.manifest)
+// Unlike the old startModelPull, this does not return a "done" channel to
+// wait on at shutdown: RunManifest was a single bounded operation, so
+// waiting for it kept shutdown logging orderly. Puller's work now spans the
+// tunnel connection's whole lifetime and can be re-armed by a Gateway
+// trigger at any moment, so "wait until idle" would be racing a Trigger that
+// could arrive during the wait. ctx is still what every download runs
+// under, so cancelling it still unwinds any in-flight fetch quickly — a
+// partial ".part" file left behind by that is the same fully-supported
+// resumable state a killed process already leaves today.
+//
+// newModelPuller 基于 opts（STATUS.md P2「模型分发」子任务一：manifest/
+// allowlist/quota）构造 Agent 本地的 Puller，清单配置了的话，会在后台开始拉
+// 取每一条——与 Puller 出现之前 startModelPull 同样的非阻塞行为。它从不返回
+// nil：清单为空或加载失败时，返回的 Puller 就是一个不认识任何名字的
+// Puller，因此 Gateway 触发任意名字的拉取都会被直接拒绝为未知（子任务二，
+// tunnel.ClientConfig.ModelPuller），不需要一条单独的"功能关闭"代码路径。
+// 清单加载失败只记日志，不算致命——与 hostresources 自己探测时同一种克制。
+//
+// 与旧的 startModelPull 不同，这里不再返回一个供关闭时等待的 channel：
+// RunManifest 曾经是一次有界操作，等待它能让关闭时的日志顺序整洁。Puller
+// 的工作现在跨越隧道连接的整个生命周期，随时可能被 Gateway 的一次触发重新
+// 激活，"等到空闲"天然是在和一个可能随时到达的 Trigger 竞态。ctx 仍然是每
+// 一次下载运行所在的 context，取消它依然能让任何进行中的获取很快 unwind
+// ——由此留下的部分 ".part" 文件，与今天进程被杀死留下的完全是同一种、被
+// 完整支持的可续传状态。
+func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOptions) *modelpull.Puller {
+	var specs []modelpull.Spec
+	if opts.manifest != "" {
+		var err error
+		specs, err = modelpull.LoadManifest(opts.manifest)
 		if err != nil {
 			logger.Error("model pull manifest not loaded", slog.Any("error", err))
-			return
+			specs = nil
 		}
-		cfg := modelpull.Config{Allowlist: opts.allowlistPrefixes(), QuotaBytes: opts.quotaBytes}
-		result := modelpull.RunManifest(ctx, cfg, specs)
-		for name, err := range result.Failed {
-			logger.Error("model pull failed", slog.String("name", name), slog.Any("error", err))
+	}
+	cfg := modelpull.Config{Allowlist: opts.allowlistPrefixes(), QuotaBytes: opts.quotaBytes}
+	puller := modelpull.NewPuller(ctx, cfg, specs, runtime.NewSystemClock())
+	if len(specs) > 0 {
+		names := make([]string, len(specs))
+		for i, spec := range specs {
+			names[i] = spec.Name
 		}
-		logger.Info("model pull finished",
-			slog.Int("pulled", len(result.Pulled)),
-			slog.Int("skipped", len(result.Skipped)),
-			slog.Int("failed", len(result.Failed)),
-		)
-	}()
-	return done
+		puller.Trigger(names)
+		logger.Info("model pull started at startup", slog.Int("count", len(names)))
+	}
+	return puller
 }
 
 // startTunnel wires the connection table and runs it in the background,
@@ -431,7 +446,11 @@ func startModelPull(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 // metrics is the same sink the runtime layer records against: a node has one
 // metrics backend, not one per layer. Today it discards, so wiring a real one
 // is a change in exactly one place.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions) (<-chan error, error) {
+//
+// puller drives STATUS.md's P2 model distribution subtask two: it lets the
+// tunnel's Control stream honor a Gateway-triggered pull and report status
+// back. newModelPuller never returns nil, so this is never nil either.
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller) (<-chan error, error) {
 	if !opts.enabled() {
 		return nil, nil
 	}
@@ -487,6 +506,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			Labels:          opts.nodeLabels(),
 			Resources:       hostresources.Detect(ctx, logger),
 			Handler:         dispatcher,
+			ModelPuller:     puller,
 			Metrics:         metrics,
 			Logger:          logger,
 		},

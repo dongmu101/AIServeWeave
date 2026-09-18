@@ -25,6 +25,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -74,6 +75,12 @@ var (
 	// ErrRegistryUnconfigured 在没有通过 WithRegistryClient 向 New 提供
 	// RegistryClient 时，由每一个平台节点操作方法返回。
 	ErrRegistryUnconfigured = errors.New("logic: the Registry client is not configured")
+	// ErrModelPullRouterUnconfigured is returned by TriggerModelPull when no
+	// ModelPullRouter was given to New — see WithModelPullRouter.
+	//
+	// ErrModelPullRouterUnconfigured 在没有通过 WithModelPullRouter 向 New
+	// 提供 ModelPullRouter 时，由 TriggerModelPull 返回。
+	ErrModelPullRouterUnconfigured = errors.New("logic: the model-pull router is not configured")
 )
 
 // bcryptCost is the work factor for user passwords. It applies to passwords
@@ -125,15 +132,41 @@ type RegistryClient interface {
 	ListNodeStates(ctx context.Context) ([]registryclient.NodeState, error)
 }
 
+// ModelPullRouter forwards STATUS.md's P2 model distribution subtask two's
+// per-node pull trigger to whichever Gateway replica currently holds
+// node_id's connection. It is an interface, implemented by
+// modelpullrouter.Router, for the same reason RegistryClient is: this
+// layer's tests substitute a fake and stay free of a real Gateway replica.
+//
+// Unlike RegistryClient this layer only forwards the write (Trigger); the
+// read (Status) is served straight from ctx.ModelPullRouter in the handler
+// package, the same split Fleet's own Nodes/Models reads already use —
+// there is no audit entry or actor-scoped rule for reading back a status
+// that a write's own audit trail does not already need.
+//
+// ModelPullRouter 把 STATUS.md P2 模型分发子任务二里针对单个节点的拉取触发，
+// 转发给当前持有 node_id 连接的那个 Gateway 副本。它在这里是一个接口、由
+// modelpullrouter.Router 实现，理由与 RegistryClient 相同：本层的测试可以
+// 替换一个假件，从而无需一个真实的 Gateway 副本。
+//
+// 与 RegistryClient 不同，本层只转发写操作（Trigger）；读操作（Status）直接
+// 由 handler 包从 ctx.ModelPullRouter 提供服务，与 Fleet 自己的 Nodes/Models
+// 读取采用的是同一种切分——回读一个状态不需要审计记录，也没有比写操作自己
+// 的审计线索更多的、按行为人限定范围的规则。
+type ModelPullRouter interface {
+	Trigger(ctx context.Context, nodeID string, names []string) (modelpullrouter.Result, error)
+}
+
 // Service is the business layer. Construct one with New.
 //
 // Service 是业务层。用 New 构造。
 type Service struct {
-	store          store.Store
-	clock          runtime.Clock
-	invalidator    Invalidator
-	sessions       session.Store
-	registryClient RegistryClient
+	store           store.Store
+	clock           runtime.Clock
+	invalidator     Invalidator
+	sessions        session.Store
+	registryClient  RegistryClient
+	modelPullRouter ModelPullRouter
 }
 
 // Option configures a Service.
@@ -171,6 +204,18 @@ func WithSessions(sessions session.Store) Option {
 // 服务够到 Registry，而这些方法必须说明这一点，而不是空指针 panic。
 func WithRegistryClient(client RegistryClient) Option {
 	return func(s *Service) { s.registryClient = client }
+}
+
+// WithModelPullRouter gives the Service a way to forward model-pull
+// triggers to the Gateway replicas. Without one, TriggerModelPull returns
+// ErrModelPullRouterUnconfigured, the same "say so, don't nil-panic" rule
+// WithRegistryClient documents.
+//
+// WithModelPullRouter 为 Service 提供一条向 Gateway 副本转发模型拉取触发的
+// 路径。没有它，TriggerModelPull 会返回 ErrModelPullRouterUnconfigured——与
+// WithRegistryClient 文档所述"必须说明，而不是空指针 panic"同一条规则。
+func WithModelPullRouter(router ModelPullRouter) Option {
+	return func(s *Service) { s.modelPullRouter = router }
 }
 
 // New returns a Service over st. A nil clock uses the system clock; tests

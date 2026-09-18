@@ -38,6 +38,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 	if err := sess.report(true); err != nil {
 		return c.streamError("initial status report", err)
 	}
+	if err := sess.forceReportModelPull(); err != nil {
+		return c.streamError("initial model pull report", err)
+	}
 
 	heartbeat := newRearmingTimer(c.clock, c.cfg.HeartbeatInterval)
 	defer heartbeat.stop()
@@ -69,6 +72,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.report(false); err != nil {
 				return c.streamError("status report", err)
 			}
+			if err := sess.reportModelPull(false); err != nil {
+				return c.streamError("model pull report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -90,6 +96,12 @@ type controlSession struct {
 	// reported maps runtime id to the material part of the last reported
 	// snapshot, so a report is only sent when something actually changed.
 	reported map[string][]byte
+	// reportedModelPull is the deterministic encoding of the last
+	// ModelPullReport sent, so reportModelPull only sends again once
+	// something in it actually changed (STATUS.md's P2 model distribution
+	// subtask 2). nil before the first report, which always differs from
+	// any real encoding and so is always sent.
+	reportedModelPull []byte
 }
 
 // handle dispatches one frame from the replica.
@@ -110,6 +122,15 @@ func (s *controlSession) handle(ctx context.Context, frame *tunnelv1.GatewayCont
 		// Success or failure is observed through the status report rather
 		// than a dedicated ack frame, so one always follows.
 		return s.forceReport()
+
+	case *tunnelv1.GatewayControl_ModelPullTrigger:
+		if c.cfg.ModelPuller != nil {
+			c.cfg.ModelPuller.Trigger(tunnelwire.ModelPullTriggerFromProto(body.ModelPullTrigger))
+		}
+		// Same rule as GatewayControl_Config: no dedicated ack, the next
+		// status report (forced here) is how the Gateway observes an
+		// unknown name being rejected or a known one starting to move.
+		return s.forceReportModelPull()
 
 	case *tunnelv1.GatewayControl_Roster:
 		if c.cfg.OnRoster != nil {
@@ -255,6 +276,53 @@ func (s *controlSession) sendStatus(snaps []*tunnelv1.RuntimeSnapshot, full bool
 		Full:       full,
 		ReportedAt: timestamppb.New(s.client.clock.Now()),
 	}}}, "runtime status")
+}
+
+// reportModelPull sends a ModelPullReport when the ModelPuller's snapshot has
+// changed since the last one sent (or force is true). Unlike report/
+// sendStatus there is no full/partial split: a manifest is operator-authored
+// and small, so the whole known set is always sent, and "changed" is decided
+// by comparing a deterministic encoding of that whole set rather than
+// tracking each name's material part separately — the complexity
+// materialSnapshotKey needs to stay a busy loop free of noisy timestamp
+// churn does not pay for itself at this size (STATUS.md's P2 model
+// distribution subtask 2).
+//
+// reportModelPull 在 ModelPuller 的快照自上次发送后发生变化（或 force 为
+// true）时发送一次 ModelPullReport。与 report/sendStatus 不同，这里不做
+// full/partial 拆分：清单是运维手写的、条目数量有限，所以总是发送完整的
+// 已知集合，"是否变化"靠比较整个集合的确定性编码，而不是像 materialSnapshotKey
+// 那样逐条追踪——那份复杂度是为了避免时间戳噪声造成忙循环，在这个规模上不
+// 值得（STATUS.md P2 模型分发子任务二）。
+func (s *controlSession) reportModelPull(force bool) error {
+	puller := s.client.cfg.ModelPuller
+	if puller == nil {
+		return nil
+	}
+	report := tunnelwire.ModelPullReportToProto(puller.Snapshot())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a model pull report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedModelPull) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_ModelPull{ModelPull: report}}, "model pull report"); err != nil {
+		return err
+	}
+	s.reportedModelPull = key
+	return nil
+}
+
+// forceReportModelPull sends a ModelPullReport regardless of what changed,
+// the ModelPuller counterpart to forceReport.
+func (s *controlSession) forceReportModelPull() error {
+	return s.reportModelPull(true)
 }
 
 // applyConfig installs one control-plane configuration change. Failures are
@@ -548,6 +616,8 @@ func controlFrameName(frame *tunnelv1.GatewayControl) string {
 		return "Shutdown"
 	case *tunnelv1.GatewayControl_Ping:
 		return "Ping"
+	case *tunnelv1.GatewayControl_ModelPullTrigger:
+		return "ModelPullTrigger"
 	case nil:
 		return "empty frame"
 	default:

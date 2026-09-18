@@ -214,6 +214,28 @@ Registry:
 
 全部由 `requirePlatformSession` 守卫，且只在 Registry 调用成功后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`ActorID` 是平台运维的 id）——失败的调用不留痕迹，理由与 `Service.audit` 的既有约定相同：一个没发生的动作不该被记成发生过。`internal/registryclient` 是本服务第一个说 gRPC 的包，鉴权方式（纯 TLS + metadata 里的 Bearer admin token）照抄 Registry 自己 CLI 客户端已经在用的写法，不引入 mTLS。
 
+## 模型拉取转发（P2 模型分发子任务二的控制面转发层）
+
+按名字触发/查询一个节点模型拉取的两个 Gateway 端点（`docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md` 交付的 `-model-pull-addr`）只在触发到达它连接的那个 Gateway 副本时才有效——隧道设计"每个副本只服务连到自己身上的节点"的既有约束同样适用于它。运维不该需要事先知道某个 `node_id` 连在哪个副本上，因此本服务在此基础上加了一层转发：
+
+```yaml
+ModelPull:
+  Gateways: ["http://gateway-1:8092", "http://gateway-2:8092"]
+  GatewayToken: "${AISW_GATEWAY_MODEL_PULL_TOKEN}"   # 与各 Gateway 的同名变量一致
+  Timeout: 3s
+```
+
+`ModelPull` 独立于 `Fleet` 与 `Registry`：它指向的是 Gateway 另一个独立的写监听器（不是 `Fleet.Gateways` 指向的只读 `-admin-addr`），只在 `ModelPull.Gateways`/`GatewayToken` 都配置时才挂载：
+
+| 端点 | 行为 |
+| --- | --- |
+| `POST /operator/v1/nodes/:id/model-pulls` | 并发向每个已配置副本的 `-model-pull-addr` 下发一次按名字触发；只要有一个副本报告该 `node_id` 已连接就算下发成功（202），Agent 的 `Puller.Trigger` 对同一个名字是幂等的，所以一个连到多个副本的节点收到两次触发是无害的——这也是本层选择"并发下发给全部副本"而不是"先找出是哪个副本再单独下发"的原因：前者不需要一次额外的查找往返 |
+| `GET /operator/v1/nodes/:id/model-pulls` | 并发向每个已配置副本读取状态；节点连到多个副本时，取其中更新时间最新的那一份回复——与机群清单"心跳更新的胜出"是同一条"最新证据胜出"规则，见下 |
+
+两个端点在没有任何已配置副本报告该 `node_id` 已连接时都答 404；未配置 `ModelPull` 的部署根本没有这两条路由，不是有两条回答"未配置"的路由——与机群清单、节点写路径同一先例。触发端点由 `requirePlatformSession` 守卫，且只在确有副本报告已连接、成功下发后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`Detail` 记录本次触发的名字列表）；状态查询端点是纯读取，直接调用 `ctx.ModelPullRouter`、不经过 `logic.Service`、不写审计——与机群清单的 `listFleetNodes` 是同一种切分，一次读取除了路由自身已带的会话守卫之外没有更多需要记录的东西。
+
+**实现在 `internal/modelpullrouter`，不是 `internal/fleet` 的扩展。** 机群清单聚合器解决的是"合并 N 个副本各自的完整清单"；这里要解决的是"一个具体 `node_id` 归哪个副本管"，且答案可能同时是好几个副本（Agent 为冗余同时维持到多个副本的连接）。与其为此在 `fleet.Aggregator` 现有的按 `-admin-addr` 索引的账本之外，再穿一份按 `-model-pull-addr` 索引的映射，不如让每个副本在同一次往返里各自回答"我这里有没有这个节点"（404 表示没有）——`modelpullrouter.Router` 就是做这件事的一个独立、结构对称的小组件，`Trigger`/`Status` 都是"并发问全部副本、按结果合并"的同一种形状。副本级失败（不可达/超时/未授权/响应畸形）同样收敛成固定代号，从不透传传输层文本，与机群清单的 `ReplicaStatus.Error` 同一纪律。
+
 ## 平台运维身份（P01）
 
 平台运维与租户用户是两张分开的表（`platform_operators`，不是 `TenantID` 留空的 `users`）与两条分开的登录入口：
@@ -360,6 +382,14 @@ Gateway 侧的客户端是 `service/aiServeWeaveGateway/controlplaneclient/jobs.
 Gateway 侧的消费者是 `httpapi/jobrecover.go` 的 `jobRecoverer`，与 `jobPersister`（J05）、`jobSyncer`（J02）同构的第三个后台循环：周期性地就 `scheduler.WorkflowCapableCandidates()` 报告的每一个当前已连接节点/runtime 发问，把本副本尚不知道的非终态 job 用 `jobStore.recoverIfMissing` 补回内存表——精确找回 `job.Candidate`（`NodeID`/`RuntimeID`）与 `job.RunID`（`BackendRunID`），取消、产物访问与状态查询所需要的正是这份路由绑定，且从不序列化任何连接对象：Gateway 的 `NodeRuntime` 本就在每次调用时按 `(nodeID, runtimeID)` 重新解析节点，恢复回来的 `Candidate` 不过是它一直以来的那两个字符串。恢复时会把 `ObservedSeq`/`persisted`/`persistedSeq` 播种为控制面已有的值而不是从零开始——否则 `jobPersister` 对一个刚恢复的 job 做出的头几次真实观测，会因本地序号"看起来更旧"而被这里的 `observed_seq` 单调门槛无声拒绝。
 
 **恢复的执行权刻意不是排他的。** 一个节点/runtime 可能同时连接到不止一个 Gateway 副本（STATUS.md 的 P2 就提到这一点），此设计不为它们选出一个"负责"的副本，也没有认领或租约机制。多个副本各自独立地同步、持久化同一个 job，在构造上就是安全的：本节前面「状态更新：幂等、单调，拒绝无条件覆盖」定义的 `observed_seq` 门槛，无需协调即可化解并发写入——这与它已经化解单个副本上一次前台轮询与一次后台同步的竞争，是同一条机制。**一个再也没有重新连接到任何副本的节点不被当作失败处理**：没有任何东西会为一个够不着的 job 主动编造终态，它的持久化记录只会停在最后观测到的状态，与 Gateway README 一贯的立场一致。
+
+### 已实现的跨副本产物恢复（Gateway 故障切换收尾）
+
+J06 的 `GET /internal/v1/jobs/active` 只回答非终态 job，且按路由绑定（node/runtime）批量恢复，从不涉及产物——一个已完成的 job 从跑它之外的 Gateway 副本被访问，或原副本自己重启后被问起，此前无法恢复它的产物列表与下载路由。`internal/handler` 新增第七个内部端点，同样由 `InternalToken` 守卫：`GET /internal/v1/artifacts/:artifact_id?tenant_id=…`。它与 J06 的端点、`/internal/v1/job-artifacts/expired`（P04）是同一类"内部 API 不为常规按 job 查询而设计"——一次下载请求携带的唯一标识符是产物自己的裸公开 id，没有 job id 可供 `ListJobArtifacts` 限定范围，因此新增 `store.JobArtifacts.GetJobArtifact(ctx, id)` 按主键裸读一整行（不限定租户，像读取版的 `DeleteJobArtifact`），`internal/logic/jobs.go` 的 `GetArtifactRoute` 拿到这一行后自行比对其 `TenantID` 与调用方断言的是否一致——不一致时答复 `ErrNotFound`，与 `GetJob` 对属于错误租户的 job 已经采用的做法相同，两种情形对调用方而言必须无法区分。
+
+响应类型 `types.ArtifactRouteResponse` 是继 `ExpiredJobArtifact` 之后第二个携带 `StorageKey` 的内部专用类型，并额外带上所属 job 的 `NodeID`/`RuntimeID`（`GetArtifactRoute` 顺带用 `artifact.JobID` 查一次 `store.Jobs.GetJob` 拼出来）——这两项与 `types.JobArtifactResponse`（被 `listJobArtifacts` 与租户历史详情共用）刻意分开，绝不会合并进那个类型：`JobArtifactResponse` 的文档注释已经明确排除了 `StorageKey`，理由是对象存储的内部寻址与节点 id 一样不该被租户看到。
+
+Gateway 侧的消费者是 `httpapi/artifacts.go` 新增的回退逻辑（`downloadArtifact` 用 `ArtifactRoute`、`listArtifacts` 用既有的 `GetJob`+`ListJobArtifacts` 通过新增的 `JobExists` 判断"job 不存在"与"job 存在但零产物"），只在本副本自己的内存表未命中时才触发，详见 [Gateway README「工作流 Job」第 18 条](../aiServeWeaveGateway/README.md#工作流-job)。`controlplaneclient.GatewayPersister` 新增第四个接口 `httpapi.ArtifactRecoveryClient`，与它已经满足的 `JobPersistClient`/`JobRecoveryClient`/`ArtifactCleanupClient` 是同一个适配器上追加的第四个。
 
 ### 已实现的产物保留期清理（P04）
 
@@ -546,6 +576,38 @@ CREATE INDEX idx_request_logs_tenant_outcome_created ON request_logs (tenant_id,
 - `GET /operator/v1/requests`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则返回全部租户，响应保留 `tenant_id` 字段。
 
 **保留期默认 30 天**（`config.DefaultRequestLogRetention`，`Config.RequestLogRetention` 可覆盖）——比 `metrics_history` 的 90 天短，因为这是逐请求明细而非 5 分钟聚合桶，同等时间窗口下行数级别不同。`internal/requestlogretention` 是一个独立的后台协程，每 24 小时运行一次，按创建时间批量删除过期行；与 `MetricsHistory` 需要显式配置才启动不同，这个清理协程**只要表已迁移就无条件运行**——填充这张表的内部推送 API 只要设置了 `InternalToken` 就已经挂载，不存在一个独立的「是否配置了」的问题。
+
+## 用量账本（STATUS.md 的 P2）
+
+`usage_records` 保存 Gateway 已派发成功的、按 token 计量的每一次请求（chat/embeddings/responses/anthropic_messages/ollama_chat/ollama_generate/ollama_embeddings 七个前门），供按租户/模型的结算查询使用，取代此前只能靠 `gateway_tokens_total`（副本重启即归零、无模型维度）估算用量的做法。与 `request_logs`/`response_turns` 同一先例，走 PostgreSQL/MySQL 双支持的固定版本 SQL 迁移（`gormstore/usagerecordmigrate.go`）。
+
+```sql
+usage_records(
+  id                 VARCHAR(64) PRIMARY KEY,  -- Gateway 侧 common/reqid 铸造的 request_id，即去重键本身
+  tenant_id          VARCHAR(32)  NOT NULL,
+  model              VARCHAR(128) NOT NULL,    -- 已解析的 modelroute 别名，不是客户端自由文本
+  endpoint           VARCHAR(24)  NOT NULL,    -- 封闭枚举，七个协议前门之一
+  prompt_tokens      BIGINT NOT NULL,
+  completion_tokens  BIGINT NOT NULL,
+  total_tokens       BIGINT NOT NULL,
+  created_at         TIMESTAMP NOT NULL  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
+);
+CREATE INDEX idx_usage_records_tenant_model_created ON usage_records (tenant_id, model, created_at);
+CREATE INDEX idx_usage_records_created              ON usage_records (created_at, id);
+```
+
+`POST /internal/v1/usagerecords`（`requireSharedSecret(ctx.Config.InternalToken, ...)` 守卫，与请求日志推送同一信任级别）接受一批记录，**去重规则就是主键本身**：`id` 唯一约束加 `clause.OnConflict{DoNothing: true}`，一次被重试的批量推送第二次到达时被静默跳过，不会让同一次请求的用量被计两次——不存在另一道独立的去重步骤。批内缺少必填字段（`request_id`/`tenant_id`/`model`/`endpoint`）的记录被跳过而不是让整批失败，响应用 `accepted` 计数报告实际写入条数。
+
+**结算规则是对这张只追加表的聚合读取，而不是另外存储的一张派生表**：`SummarizeUsage` 按 `(tenant_id, model)` 分组，在可选的 `since`/`until` 时间窗口内对 `prompt_tokens`/`completion_tokens`/`total_tokens` 求和、对行数计数，在数据库内聚合（`SUM`/`COUNT`/`GROUP BY`）而不是把整批行读到 Go 里再求和：
+
+- `GET /admin/v1/usage/summary`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，响应省略 `tenant_id` 字段。
+- `GET /operator/v1/usage/summary`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则汇总全部租户，响应保留 `tenant_id` 字段。
+
+**定价与发票生成不在这两个端点的范围内**：它们只回答「这个租户在这个窗口内，按这个模型，消耗了多少 token、发了多少次请求」，把单价、币种、账期这些属于计费策略而非用量记账的决定，留给消费这份汇总的外部计费流程。
+
+**保留期默认 400 天**（`config.DefaultUsageRecordRetention`，`Config.UsageRecordRetention` 可覆盖）——比 `request_logs` 的 30 天长得多，因为这里支撑的是结算而非诊断：几个月后的一次账单争议仍然需要这条账本记录。`internal/usageretention` 是一个独立的后台协程，每 24 小时运行一次，与 `internal/requestlogretention` 同一形状但不共享代码——两张表是互不相关的数据、互不相关的保留策略；与 `MetricsHistory` 不同，这个清理协程**只要表已迁移就无条件运行**。
+
+已知缺口：未做真实 PostgreSQL/MySQL live 测试验证双数据库迁移与聚合查询（默认测试套件——memstore 的等价聚合实现 + gormstore 的标准 GORM 分组求和写法——已通过即视为完成，与 P09 新增表同一先例）；Console 尚未接入结算页面。
 
 ## 告警评估与通知（P09/C29）
 

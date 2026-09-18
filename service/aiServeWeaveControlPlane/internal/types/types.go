@@ -431,6 +431,65 @@ type RequestLogListResponse struct {
 	NextCursor string               `json:"next_cursor,omitempty"`
 }
 
+// UsageRecordRequest is one record inside a POST /internal/v1/usagerecords
+// batch.
+//
+// UsageRecordRequest 是一次 POST /internal/v1/usagerecords 批量推送里的
+// 一条记录。
+type UsageRecordRequest struct {
+	RequestID        string    `json:"request_id"`
+	TenantID         string    `json:"tenant_id"`
+	Model            string    `json:"model"`
+	Endpoint         string    `json:"endpoint"`
+	PromptTokens     int64     `json:"prompt_tokens"`
+	CompletionTokens int64     `json:"completion_tokens"`
+	TotalTokens      int64     `json:"total_tokens"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// CreateUsageRecordsRequest is the body of POST /internal/v1/usagerecords.
+//
+// CreateUsageRecordsRequest 是 POST /internal/v1/usagerecords 的请求体。
+type CreateUsageRecordsRequest struct {
+	Records []UsageRecordRequest `json:"records"`
+}
+
+// CreateUsageRecordsResponse reports how many of the submitted records were
+// accepted, mirroring CreateRequestLogsResponse exactly.
+//
+// CreateUsageRecordsResponse 报告提交的记录中有多少条被接受，与
+// CreateRequestLogsResponse 完全对应。
+type CreateUsageRecordsResponse struct {
+	Accepted int `json:"accepted"`
+}
+
+// UsageSummaryEntryResponse is one (tenant, model) group's totals — the
+// settlement query's unit of output. TenantID is empty on the tenant
+// self-service endpoint, the same includeTenant convention
+// renderRequestLog already follows: the tenant is already implied by the
+// caller's own session there.
+//
+// UsageSummaryEntryResponse 是一个 (tenant, model) 分组的汇总——结算查询的
+// 输出单元。TenantID 在租户自助端点上为空，与 renderRequestLog 已经遵循的
+// 同一种 includeTenant 约定相同：那里租户已经由调用方自己的会话隐含。
+type UsageSummaryEntryResponse struct {
+	TenantID         string `json:"tenant_id,omitempty"`
+	Model            string `json:"model"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	RequestCount     int64  `json:"request_count"`
+}
+
+// UsageSummaryResponse is the settlement query's full result: one entry per
+// (tenant, model) group within the queried window.
+//
+// UsageSummaryResponse 是结算查询的完整结果：查询窗口内每个 (tenant,
+// model) 分组一条。
+type UsageSummaryResponse struct {
+	Items []UsageSummaryEntryResponse `json:"items"`
+}
+
 // CreateJobRequest is what a Gateway replica reports about a run it just
 // submitted, per STATUS.md's J01/J04 persistence contract. TenantID is what
 // the Gateway asserts about its own caller — this endpoint is guarded by the
@@ -609,6 +668,36 @@ type ExpiredJobArtifact struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// ArtifactRouteResponse is one artifact's full internal record, returned
+// only from the internal (Gateway-only) API — like ExpiredJobArtifact it
+// carries StorageKey and is never JobArtifactResponse, plus the owning job's
+// NodeID/RuntimeID, so a Gateway replica that has never seen this artifact
+// before (STATUS.md's Gateway 故障切换收尾: a terminal job's artifact
+// downloaded from a replica other than the one that ran it, or the same
+// replica after a restart) can reconstruct enough to serve it — from object
+// storage if StorageKey is set, or by pulling live from the node otherwise.
+//
+// ArtifactRouteResponse 是一条产物的完整内部记录，只从内部（仅 Gateway 可用）
+// API 返回——与 ExpiredJobArtifact 一样携带 StorageKey，绝不是
+// JobArtifactResponse，并额外带上所属 job 的 NodeID/RuntimeID，好让一个此前
+// 从未见过这个产物的 Gateway 副本（STATUS.md 的「Gateway 故障切换收尾」：
+// 一个终态 job 的产物从跑它之外的副本下载，或同一副本重启之后）能重建出
+// 足够的信息来提供它——StorageKey 非空时读对象存储，否则回退到从节点实时
+// 拉取。
+type ArtifactRouteResponse struct {
+	ArtifactID  string `json:"artifact_id"`
+	JobID       string `json:"job_id"`
+	TenantID    string `json:"tenant_id"`
+	Filename    string `json:"filename"`
+	Subfolder   string `json:"subfolder,omitempty"`
+	Type        string `json:"type,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	StorageKey  string `json:"storage_key,omitempty"`
+	NodeID      string `json:"node_id"`
+	RuntimeID   string `json:"runtime_id"`
+}
+
 // ListExpiredJobArtifactsResponse is one page of artifacts eligible for
 // cleanup.
 //
@@ -782,6 +871,59 @@ type NodeState struct {
 // ListNodeStatesResponse 是身份账本里有记录的每一个 node_id。
 type ListNodeStatesResponse struct {
 	Items []NodeState `json:"items"`
+}
+
+// ModelPullTriggerRequest is POST /operator/v1/nodes/:id/model-pulls's body
+// (STATUS.md's P2 model distribution subtask two).
+//
+// ModelPullTriggerRequest 是 POST /operator/v1/nodes/:id/model-pulls 的请求体
+// （STATUS.md 的 P2 模型分发子任务二）。
+type ModelPullTriggerRequest struct {
+	Names []string `json:"names"`
+}
+
+// ModelPullReplicaStatus is one configured Gateway replica's answer to a
+// model-pull trigger or status call, as modelpullrouter.ReplicaStatus
+// reports it.
+//
+// ModelPullReplicaStatus 是某个已配置 Gateway 副本对模型拉取触发或状态查询
+// 的作答，即 modelpullrouter.ReplicaStatus 所报告的内容。
+type ModelPullReplicaStatus struct {
+	Endpoint  string `json:"endpoint"`
+	Connected bool   `json:"connected"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ModelPullTriggerResponse confirms a trigger reached at least one
+// connected replica; it never confirms a name was accepted by the Agent's
+// manifest — see modelpullapi's own triggerResponse for why.
+//
+// ModelPullTriggerResponse 确认触发已经到达至少一个已连接副本；它从不确认
+// 某个名字被 Agent 的清单接受——原因见 modelpullapi 自己的 triggerResponse。
+type ModelPullTriggerResponse struct {
+	Replicas []ModelPullReplicaStatus `json:"replicas"`
+}
+
+// ModelPullStatus is one named pull's status, as GET
+// /operator/v1/nodes/:id/model-pulls reports it.
+//
+// ModelPullStatus 是某一个命名拉取的状态，即 GET
+// /operator/v1/nodes/:id/model-pulls 所报告的内容。
+type ModelPullStatus struct {
+	Name            string    `json:"name"`
+	State           string    `json:"state"`
+	BytesDownloaded int64     `json:"bytes_downloaded"`
+	BytesTotal      int64     `json:"bytes_total"`
+	Reason          string    `json:"reason,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// ModelPullStatusResponse is GET /operator/v1/nodes/:id/model-pulls's body.
+//
+// ModelPullStatusResponse 是 GET /operator/v1/nodes/:id/model-pulls 的响应体。
+type ModelPullStatusResponse struct {
+	Pulls    []ModelPullStatus        `json:"pulls"`
+	Replicas []ModelPullReplicaStatus `json:"replicas"`
 }
 
 // MetricsHistoryPoint is one bucket of a MetricsHistorySeries (P08, Console C27).

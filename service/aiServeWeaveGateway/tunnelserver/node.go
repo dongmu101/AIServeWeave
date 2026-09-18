@@ -2,6 +2,7 @@ package tunnelserver
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
 	"sort"
@@ -11,7 +12,9 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/tunnelwire"
 )
 
 // node is everything this replica knows about one connected Agent: its Control
@@ -54,6 +57,18 @@ type node struct {
 	// an instance that stopped changing is not forgotten between full
 	// reconciliations.
 	snapshots map[string]runtime.Snapshot
+	// modelPulls is this node's last-reported model pull status, keyed by
+	// name (STATUS.md's P2 model distribution subtask 2). Unlike snapshots
+	// this is always replaced wholesale on every report: the Agent's
+	// manifest is small and operator-authored, so there is no incremental-
+	// merge case worth the complexity RuntimeStatus's full/partial split
+	// carries.
+	//
+	// modelPulls 是该节点最后一次上报的模型拉取状态，按名字索引（STATUS.md
+	// P2 模型分发子任务二）。与 snapshots 不同，它每次上报都整份替换：
+	// Agent 的清单是运维手写的、体量有限，不值得为它承担 RuntimeStatus
+	// full/partial 拆分那份复杂度。
+	modelPulls map[string]modelpullstatus.Status
 
 	lastHeartbeat time.Time
 	inflight      int
@@ -96,6 +111,7 @@ func newNode(id string, srv *Server) *node {
 		metrics:     srv.metrics.forNode(id),
 		controls:    make(map[*controlSession]struct{}),
 		snapshots:   make(map[string]runtime.Snapshot),
+		modelPulls:  make(map[string]modelpullstatus.Status),
 		idle:        make(map[tunnelv1.SlotClass][]*slot),
 		liveByClass: make(map[tunnelv1.SlotClass]int),
 		revoked:     make(chan struct{}),
@@ -217,6 +233,48 @@ func (s *Server) Node(nodeID string) (NodeInfo, bool) {
 	return n.info(s.clock.Now(), s.cfg.HeartbeatTimeout), true
 }
 
+// TriggerModelPull asks nodeID to start pulling names, if it holds an active
+// Control stream to this replica (STATUS.md's P2 model distribution subtask
+// 2). It returns an error otherwise — including when the node is connected
+// only to a sibling replica — per the tunnelserver package's "no forwarding"
+// boundary (README's 四条约束第四条): a caller that does not already know
+// which replica a node is on has to be told by whatever tracks roster
+// membership, the same limitation the admin listener's per-replica views
+// already carry.
+//
+// A successful call only means the trigger reached the Agent over the wire;
+// per GatewayControl_Config's existing precedent there is no dedicated ack,
+// so whether a name was known to the Agent's manifest is only observable
+// from the ModelPullReport that follows (ModelPullStatus, below).
+func (s *Server) TriggerModelPull(nodeID string, names []string) error {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("tunnelserver: node %q is not connected to this replica", nodeID)
+	}
+	n.mu.Lock()
+	connected := len(n.controls) > 0
+	n.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("tunnelserver: node %q has no active control stream on this replica", nodeID)
+	}
+	n.broadcast(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ModelPullTrigger{
+		ModelPullTrigger: tunnelwire.ModelPullTriggerToProto(names),
+	}})
+	return nil
+}
+
+// ModelPullStatus returns this replica's last-known model pull status for
+// nodeID, and whether the node is known to this replica at all. A known node
+// with no reports yet (no manifest configured, Agent predates this feature,
+// or no report has arrived) returns an empty, true result.
+func (s *Server) ModelPullStatus(nodeID string) ([]modelpullstatus.Status, bool) {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return nil, false
+	}
+	return n.modelPullSnapshot(), true
+}
+
 func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -295,6 +353,31 @@ func (n *node) applyStatus(status *tunnelv1.RuntimeStatus, snaps []runtime.Snaps
 	for _, snap := range snaps {
 		n.snapshots[snap.Descriptor.ID] = snap
 	}
+}
+
+// applyModelPullReport replaces the node's model pull status wholesale with
+// the Agent's latest report (STATUS.md's P2 model distribution subtask 2).
+func (n *node) applyModelPullReport(statuses []modelpullstatus.Status) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	next := make(map[string]modelpullstatus.Status, len(statuses))
+	for _, st := range statuses {
+		next[st.Name] = st
+	}
+	n.modelPulls = next
+}
+
+// modelPullSnapshot returns this replica's last-known model pull status for
+// the node, sorted by name.
+func (n *node) modelPullSnapshot() []modelpullstatus.Status {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]modelpullstatus.Status, 0, len(n.modelPulls))
+	for _, st := range n.modelPulls {
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
 }
 
 // park puts a slot back into the idle set. It reports false when the node is

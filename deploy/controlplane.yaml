@@ -98,3 +98,18 @@ Registry:
 Fleet:
   Gateways: ["http://gateway:8091"]
   GatewayToken: "${AISW_GATEWAY_ADMIN_TOKEN}"
+
+# 模型拉取转发（STATUS.md 的 P2 模型分发子任务二）：把针对单个节点的拉取触发/状态查询
+# 转发给持有该节点连接的那个 Gateway 副本。指向的是 gateway 服务另一个独立的
+# -model-pull-addr 监听器（不是 Fleet 用的 -admin-addr），GatewayToken 须与 gateway 服务的
+# AISW_GATEWAY_MODEL_PULL_TOKEN 一致——两个监听器绝不能共用 token。
+#
+# Model-pull forwarding (STATUS.md's P2 model distribution subtask two):
+# forwards a per-node pull trigger/status call to whichever Gateway replica
+# holds that node's connection. It points at the gateway service's other,
+# separate -model-pull-addr listener (not Fleet's -admin-addr); GatewayToken
+# must match the gateway service's AISW_GATEWAY_MODEL_PULL_TOKEN — the two
+# listeners must never share a token.
+ModelPull:
+  Gateways: ["http://gateway:8092"]
+  GatewayToken: "${AISW_GATEWAY_MODEL_PULL_TOKEN}"

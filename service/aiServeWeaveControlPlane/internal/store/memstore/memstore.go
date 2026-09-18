@@ -51,6 +51,7 @@ type Store struct {
 	responseTurns     map[string]model.ResponseTurn
 	metricsHistory    []model.MetricsHistoryPoint
 	requestLogs       map[string]model.RequestLog
+	usageRecords      map[string]model.UsageRecord
 	alertRules        map[string]model.AlertRule
 	alertInstances    map[string]model.AlertInstance
 }
@@ -68,6 +69,7 @@ func New() *Store {
 		artifacts:         map[string]model.JobArtifact{},
 		responseTurns:     map[string]model.ResponseTurn{},
 		requestLogs:       map[string]model.RequestLog{},
+		usageRecords:      map[string]model.UsageRecord{},
 		alertRules:        map[string]model.AlertRule{},
 		alertInstances:    map[string]model.AlertInstance{},
 	}
@@ -775,6 +777,21 @@ func (s *Store) ListJobArtifacts(_ context.Context, tenantID, jobID string) ([]m
 	}
 	sortNewestFirst(out, func(a model.JobArtifact) (time.Time, string) { return a.CreatedAt, a.ID })
 	return out, nil
+}
+
+// GetJobArtifact reads one artifact by its bare id, with no tenant scope —
+// see gormstore's own GetJobArtifact for why.
+//
+// GetJobArtifact 按裸 id 读取一个产物，不限定租户——理由见 gormstore 自己的
+// GetJobArtifact。
+func (s *Store) GetJobArtifact(_ context.Context, id string) (model.JobArtifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	artifact, ok := s.artifacts[id]
+	if !ok {
+		return model.JobArtifact{}, store.ErrNotFound
+	}
+	return artifact, nil
 }
 
 // ListJobArtifactsBefore returns up to store.MaxExpiredJobArtifacts

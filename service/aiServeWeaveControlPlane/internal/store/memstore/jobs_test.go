@@ -246,6 +246,30 @@ func TestListJobArtifactsIsScopedToTenantAndJob(t *testing.T) {
 	}
 }
 
+func TestGetJobArtifactReadsByBareIDWithNoTenantScope(t *testing.T) {
+	s := memstore.New()
+	ctx := context.Background()
+	artifact := &model.JobArtifact{ID: "art_1", JobID: "job_1", TenantID: "tenant-a", Filename: "out.png", StorageKey: "objects/out.png"}
+	if err := s.CreateJobArtifact(ctx, artifact); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	got, err := s.GetJobArtifact(ctx, "art_1")
+	if err != nil {
+		t.Fatalf("GetJobArtifact: %v", err)
+	}
+	if got.TenantID != "tenant-a" || got.StorageKey != "objects/out.png" {
+		t.Errorf("GetJobArtifact = %+v, want the tenant-a row with its StorageKey — the caller (a recovering Gateway replica) needs both to reconstruct a download", got)
+	}
+}
+
+func TestGetJobArtifactOfAnUnknownIDIsNotFound(t *testing.T) {
+	s := memstore.New()
+	if _, err := s.GetJobArtifact(context.Background(), "art_missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetJobArtifact(unknown id) = %v, want ErrNotFound", err)
+	}
+}
+
 func TestListJobArtifactsBeforeFiltersByTypeAgeAndAcrossTenants(t *testing.T) {
 	s := memstore.New()
 	ctx := context.Background()

@@ -37,6 +37,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/modelpullapi"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
@@ -118,6 +119,8 @@ func run() error {
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	adminAddr := flag.String("admin-addr", "",
 		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
+	modelPullAddr := flag.String("model-pull-addr", "",
+		"address the model-pull trigger/status listener binds, e.g. 127.0.0.1:8092 (STATUS.md's P2 model distribution subtask 2); empty disables it. Unlike -admin-addr this listener accepts writes, so it has its own token: AISW_GATEWAY_MODEL_PULL_TOKEN")
 	artifactStorageKind := flag.String("artifact-storage", "",
 		"generated artifact storage backend (STATUS.md's P04): local, s3, webdav, or empty to disable byte persistence — artifacts then remain pull-only from the node that produced them, today's pre-P04 behavior")
 	artifactStorageLocalDir := flag.String("artifact-storage-local-dir", "", "directory for -artifact-storage=local")
@@ -248,6 +251,22 @@ func run() error {
 		return err
 	}
 
+	// The usage-ledger client shares the same -control-plane-addr and token as
+	// everything else above — this replica pushing its own per-tenant/model
+	// token usage to the control plane it already talks to (STATUS.md's P2
+	// usage ledger). A deployment with no control plane configured gets no
+	// durable usage records, the same degrade requestLogClientAdapter already
+	// returns nil for.
+	//
+	// 用量账本客户端与上面的一切共用同一个 -control-plane-addr 与 token——
+	// 本副本把自己按租户/模型的 token 用量推送给它本已在对话的那个控制面
+	// （STATUS.md 的 P2 用量账本）。未配置控制面的部署得不到持久化的用量
+	// 记录，与 requestLogClientAdapter 已经为此返回 nil 的退化相同。
+	usageLedgerClient, err := usageLedgerClientAdapter(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
 	// The response-turn persistence client shares the same -control-plane-addr
 	// and token as everything else above — this replica persisting and
 	// continuing Responses API conversations against the control plane it
@@ -364,6 +383,7 @@ func run() error {
 		httpCfg.JobPersistClient = jobPersistence
 		httpCfg.JobRecoveryClient = jobPersistence
 		httpCfg.ArtifactCleanupClient = jobPersistence
+		httpCfg.ArtifactRecoveryClient = jobPersistence
 	}
 	// Same guard, same reason: requestLogClient is a concrete
 	// *controlplaneclient.RequestLogsClient, and httpCfg.RequestLogClient is
@@ -377,6 +397,19 @@ func run() error {
 	// requestLogClientAdapter 的文档注释。
 	if requestLogClient != nil {
 		httpCfg.RequestLogClient = requestLogClient
+	}
+	// Same guard, same reason: usageLedgerClient is a concrete
+	// *controlplaneclient.UsageLedgerClient, and httpCfg.UsageLedgerClient is
+	// an interface field, so a bare assignment of a nil pointer would box a
+	// non-nil interface holding nil — see usageLedgerClientAdapter's doc
+	// comment.
+	//
+	// 同样的防护，同样的理由：usageLedgerClient 是一个具体的
+	// *controlplaneclient.UsageLedgerClient，而 httpCfg.UsageLedgerClient 是
+	// 接口字段，裸赋值一个 nil 指针会装箱出一个「非 nil 接口持有 nil」——见
+	// usageLedgerClientAdapter 的文档注释。
+	if usageLedgerClient != nil {
+		httpCfg.UsageLedgerClient = usageLedgerClient
 	}
 	// Same guard, same reason: responsesPersist is a concrete
 	// *controlplaneclient.ResponsesPersister, and httpCfg.ResponsesClient is
@@ -457,6 +490,41 @@ func run() error {
 			}
 		}()
 		logger.Info("operator inventory listening", slog.String("admin_addr", adminListener.Addr().String()))
+	}
+
+	// The model-pull listener is a second, separate operator port (STATUS.md's
+	// P2 model distribution subtask 2): unlike -admin-addr it accepts writes
+	// — a trigger makes a connected node start downloading — so it gets its
+	// own token and its own bind failure, same reasoning as -admin-addr's,
+	// with a strictly higher bar because the abuse it gates is a write.
+	//
+	// 模型拉取监听器是第二个、独立的运维端口（STATUS.md P2 模型分发子任务
+	// 二）：与 -admin-addr 不同，它接受写操作——一次触发会让已连接节点开始下
+	// 载——因此它有自己的 token、自己的绑定失败处理，理由与 -admin-addr 相
+	// 同，但门槛更高，因为它挡住的是一次写操作的滥用。
+	var modelPullServer *http.Server
+	if *modelPullAddr == "" {
+		logger.Info("no -model-pull-addr; this replica accepts no model-pull triggers")
+	} else {
+		modelPullHandler, err := modelpullapi.New(modelpullapi.Config{
+			Token:   os.Getenv("AISW_GATEWAY_MODEL_PULL_TOKEN"),
+			Trigger: server.TriggerModelPull,
+			Status:  server.ModelPullStatus,
+		})
+		if err != nil {
+			return err
+		}
+		modelPullListener, err := net.Listen("tcp", *modelPullAddr)
+		if err != nil {
+			return err
+		}
+		modelPullServer = &http.Server{Handler: modelPullHandler}
+		go func() {
+			if err := modelPullServer.Serve(modelPullListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("model-pull listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("model-pull listening", slog.String("model_pull_addr", modelPullListener.Addr().String()))
 	}
 
 	// The metrics listener's failure is logged rather than returned: losing
@@ -607,6 +675,9 @@ func run() error {
 	if adminServer != nil {
 		_ = adminServer.Close()
 	}
+	if modelPullServer != nil {
+		_ = modelPullServer.Close()
+	}
 
 	logger.Info("gateway stopped")
 	return nil
@@ -716,6 +787,37 @@ func requestLogClientAdapter(addr, token string, logger *slog.Logger) (*controlp
 		return nil, err
 	}
 	logger.Info("pushing request logs to the control plane", slog.String("control_plane_addr", addr))
+	return client, nil
+}
+
+// usageLedgerClientAdapter builds the Gateway's side of the control plane's
+// usage-ledger push API (STATUS.md's P2 usage ledger), or returns nil when
+// no control plane is configured — mirroring requestLogClientAdapter's own
+// degrade path and its "return the concrete type" reasoning: see that
+// function's doc comment for why a nil
+// *controlplaneclient.UsageLedgerClient must never be assigned directly
+// into an httpapi.Config interface field.
+//
+// usageLedgerClientAdapter 构建 Gateway 一侧的控制面用量账本推送 API 客户端
+// （STATUS.md 的 P2 用量账本），或在未配置控制面时返回 nil——与
+// requestLogClientAdapter 自己的退化路径及其"返回具体类型"的理由相同：为
+// 什么一个 nil 的 *controlplaneclient.UsageLedgerClient 绝不能被直接赋给
+// httpapi.Config 的接口字段，见该函数的文档注释。
+func usageLedgerClientAdapter(addr, token string, logger *slog.Logger) (*controlplaneclient.UsageLedgerClient, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewUsageLedgerClient(controlplaneclient.UsageLedgerClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("pushing usage records to the control plane", slog.String("control_plane_addr", addr))
 	return client, nil
 }
 

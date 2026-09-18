@@ -68,6 +68,28 @@ func recordRegistryClientCall(ctx *svc.ServiceContext, err error) {
 	ctx.MetricsRegistry.Counter(cpmetrics.MetricRegistryClientCallsTotal, map[string]string{"result": result}).Add(1)
 }
 
+// recordModelPullRouterCall is recordFleetCall for calls that reach
+// ctx.ModelPullRouter or ctx.Logic.TriggerModelPull (STATUS.md's P2 model
+// distribution, the control plane forwarding layer). Like
+// recordRegistryClientCall — whose one call site records a forbidden actor
+// exactly like a Registry failure — it collapses every outcome the handler
+// saw, actor checks included, into success/error, rather than trying to
+// reproduce the router's own per-replica taxonomy here.
+//
+// recordModelPullRouterCall 是 recordFleetCall 面向经 ctx.ModelPullRouter
+// 或 ctx.Logic.TriggerModelPull（STATUS.md 的 P2 模型分发，控制面转发层）
+// 到达的调用版本。与 recordRegistryClientCall——它唯一的调用点把一次被拒绝的
+// actor 与一次 Registry 失败同等记录——一样，它把 handler 看到的每一种结果
+// （包括 actor 检查）都收敛成 success/error，而不是试图在这里还原路由器自己
+// 那套逐副本分类。
+func recordModelPullRouterCall(ctx *svc.ServiceContext, err error) {
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	ctx.MetricsRegistry.Counter(cpmetrics.MetricModelPullRouterCallsTotal, map[string]string{"result": result}).Add(1)
+}
+
 // statusRecorder captures the status code a handler writes, mirroring
 // Gateway httpapi's statusWriter.
 //

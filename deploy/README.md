@@ -21,8 +21,8 @@
 cd deploy
 cp .env.example .env
 
-# 生成六个独立密钥并写回 .env
-for var in AISW_ACCESS_SECRET AISW_INTERNAL_TOKEN AISW_BOOTSTRAP_TOKEN AISW_REGISTRY_ADMIN_TOKEN AISW_GATEWAY_ADMIN_TOKEN; do
+# 生成七个独立密钥并写回 .env
+for var in AISW_ACCESS_SECRET AISW_INTERNAL_TOKEN AISW_BOOTSTRAP_TOKEN AISW_REGISTRY_ADMIN_TOKEN AISW_GATEWAY_ADMIN_TOKEN AISW_GATEWAY_MODEL_PULL_TOKEN; do
   sed -i.bak "s#^${var}=#${var}=$(openssl rand -base64 32)#" .env
 done
 sed -i.bak "s#^AISW_CONSOLE_SESSION_SECRET=#AISW_CONSOLE_SESSION_SECRET=$(openssl rand -base64 48)#" .env

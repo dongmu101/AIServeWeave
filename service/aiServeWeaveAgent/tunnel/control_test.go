@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel/internal/tunneltest"
@@ -611,5 +613,138 @@ func TestControlForwardsRosterAndSlotHint(t *testing.T) {
 
 	if got := f.client.State(); got != tunnel.StateConnected {
 		t.Errorf("state = %s, want %s", got, tunnel.StateConnected)
+	}
+}
+
+// -----------------------------------------------------------------------
+// Model pull (STATUS.md's P2 model distribution subtask 2)
+// -----------------------------------------------------------------------
+
+// fakeModelPuller is a tunnel.ModelPuller test double. It decouples what was
+// requested (recorded in triggered, for assertions) from what Snapshot
+// returns (set directly by the test), because the real Puller's state
+// transitions are already covered by modelpull's own tests — this fixture
+// only needs to prove the Control session dispatches and reports correctly.
+type fakeModelPuller struct {
+	mu        sync.Mutex
+	triggered [][]string
+	snapshot  []modelpullstatus.Status
+}
+
+func (f *fakeModelPuller) Trigger(names []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggered = append(f.triggered, append([]string(nil), names...))
+}
+
+func (f *fakeModelPuller) Snapshot() []modelpullstatus.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]modelpullstatus.Status(nil), f.snapshot...)
+}
+
+func (f *fakeModelPuller) setSnapshot(s []modelpullstatus.Status) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshot = s
+}
+
+func (f *fakeModelPuller) triggeredCalls() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.triggered...)
+}
+
+func TestControlModelPullTriggerForwardsAndReportsImmediately(t *testing.T) {
+	puller := &fakeModelPuller{snapshot: []modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StateUnspecified}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ModelPuller = puller
+	})
+	f.start()
+	sess := f.connect()
+
+	// connect() only drains the RuntimeStatus report; the initial
+	// ModelPullReport control.go sends right after it is still sitting on
+	// the stream.
+	initial := f.recv(sess).GetModelPull()
+	if initial == nil {
+		t.Fatal("no initial ModelPullReport right after connecting")
+	}
+	if len(initial.GetPulls()) != 1 || initial.GetPulls()[0].GetName() != "m1" {
+		t.Fatalf("initial report = %v, want one pull named m1", initial)
+	}
+
+	// Simulate what a real Puller.Trigger would have done to its own
+	// Snapshot by the time the Control session reads it back.
+	puller.setSnapshot([]modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StatePending}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ModelPullTrigger{ModelPullTrigger: &tunnelv1.ModelPullTrigger{
+		Names: []string{"m1"},
+	}}})
+
+	report := f.recv(sess).GetModelPull()
+	if report == nil {
+		t.Fatal("no ModelPullReport followed the trigger")
+	}
+	if len(report.GetPulls()) != 1 || report.GetPulls()[0].GetState() != tunnelv1.ModelPullState_MODEL_PULL_STATE_PENDING {
+		t.Fatalf("report = %v, want one pull in PENDING", report)
+	}
+
+	calls := puller.triggeredCalls()
+	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0] != "m1" {
+		t.Fatalf("Trigger calls = %v, want exactly one call with [m1]", calls)
+	}
+}
+
+func TestControlModelPullUnknownNameNeverTouchesTheRealPuller(t *testing.T) {
+	// A nil ModelPuller (the default when no manifest is configured) must
+	// leave GatewayControl_ModelPullTrigger a harmless no-op: no report is
+	// ever sent, matching a node with no manifest at all.
+	f := newClientFixture(t, isolateStatus)
+	f.start()
+	sess := f.connect()
+
+	marker := int64(4242)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ModelPullTrigger{ModelPullTrigger: &tunnelv1.ModelPullTrigger{
+		Names: []string{"anything"},
+	}}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+
+	frame := f.recv(sess)
+	if pong := frame.GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatalf("expected only a Pong, got %v: a nil ModelPuller must never send a report", frame)
+	}
+}
+
+func TestControlModelPullReportsOnChangeOnly(t *testing.T) {
+	puller := &fakeModelPuller{snapshot: []modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StateUnspecified}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ModelPuller = puller
+	})
+	f.start()
+	sess := f.connect()
+	if f.recv(sess).GetModelPull() == nil {
+		t.Fatal("no initial ModelPullReport right after connecting")
+	}
+
+	// Unchanged: the periodic poll must stay quiet, same proof technique as
+	// expectNoStatus — a marker Ping's Pong must be the very next frame.
+	f.advance(2*time.Second, 1)
+	marker := int64(1)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+	if pong := f.recv(sess).GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatal("an unchanged model pull snapshot must not be reported on the periodic poll")
+	}
+
+	// Changed: the next poll must carry it.
+	puller.setSnapshot([]modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StateDownloading, BytesDownloaded: 512}})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetModelPull()
+	if report == nil {
+		t.Fatal("a changed model pull snapshot must be reported on the next periodic poll")
+	}
+	if len(report.GetPulls()) != 1 || report.GetPulls()[0].GetBytesDownloaded() != 512 {
+		t.Fatalf("report = %v, want bytes_downloaded = 512", report)
 	}
 }

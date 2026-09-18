@@ -161,6 +161,16 @@ func (s *Store) ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([
 	return out, translate(err)
 }
 
+// GetJobArtifact reads one artifact by its bare id, with no tenant scope —
+// see store.JobArtifacts for why.
+//
+// GetJobArtifact 按裸 id 读取一个产物，不限定租户——理由见 store.JobArtifacts。
+func (s *Store) GetJobArtifact(ctx context.Context, id string) (model.JobArtifact, error) {
+	var out model.JobArtifact
+	err := s.db.WithContext(ctx).Where("id = ?", id).Take(&out).Error
+	return out, translate(err)
+}
+
 // ListJobArtifactsBefore returns up to store.MaxExpiredJobArtifacts
 // artifacts of artifactType older than cutoff, across every tenant.
 //

@@ -38,6 +38,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/handler"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/memstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
@@ -64,6 +65,15 @@ const (
 	accessSecret   = "access-secret-that-is-long-enough-for-validation"
 	ownerPassword  = "correct-horse-battery"
 	gatewayToken   = "gateway-token-that-is-long-enough-for-validation"
+	// modelPullToken authenticates the control plane to a stand-in
+	// -model-pull-addr listener (STATUS.md's P2 model distribution subtask
+	// two), distinct from gatewayToken the way the two listeners' own
+	// tokens must never be shared in a real deployment.
+	//
+	// modelPullToken 用于控制面向替身 -model-pull-addr 监听器（STATUS.md
+	// 的 P2 模型分发子任务二）表明身份，与 gatewayToken 分开——与真实部署中
+	// 两个监听器的 token 绝不能共用一致。
+	modelPullToken = "model-pull-token-that-is-long-enough-for-validation"
 )
 
 // harness is one running control plane and the client calls a test makes
@@ -166,6 +176,36 @@ func newHarnessWith(t *testing.T, gateways []string) *harness {
 // newHarnessWithSessions 基于指定会话存储启动测试夹具，让多副本测试可以模拟生产环境
 // 共享的 Redis。
 func newHarnessWithSessions(t *testing.T, gateways []string, sessions session.Store) *harness {
+	return buildHarness(t, harnessOpts{gateways: gateways, sessions: sessions})
+}
+
+// newHarnessWithModelPull starts a harness whose model-pull forwarding
+// (STATUS.md's P2 model distribution subtask two) points at the given
+// -model-pull-addr endpoints. Passing none leaves it unconfigured, the
+// ordinary case every other test here runs against.
+//
+// newHarnessWithModelPull 启动一个控制面，其模型拉取转发（STATUS.md 的 P2
+// 模型分发子任务二）指向给定的 -model-pull-addr endpoint。不传则未配置，
+// 那是这里其他每个测试所面对的常态。
+func newHarnessWithModelPull(t *testing.T, modelPullGateways []string) *harness {
+	return buildHarness(t, harnessOpts{modelPullGateways: modelPullGateways})
+}
+
+// harnessOpts is buildHarness's configuration. It exists so the several
+// newHarness* convenience constructors above can each set only the one
+// thing their tests care about, without every combination needing its own
+// named function.
+//
+// harnessOpts 是 buildHarness 的配置。它的存在是为了让上面几个 newHarness*
+// 便捷构造函数各自只设置自己测试关心的那一项，而不必为每种组合都各写一个
+// 具名函数。
+type harnessOpts struct {
+	gateways          []string
+	modelPullGateways []string
+	sessions          session.Store
+}
+
+func buildHarness(t *testing.T, opts harnessOpts) *harness {
 	t.Helper()
 
 	port := freePort(t)
@@ -182,16 +222,24 @@ func newHarnessWithSessions(t *testing.T, gateways []string, sessions session.St
 		InternalToken:  internalToken,
 		BootstrapToken: bootstrapToken,
 	}
-	if len(gateways) > 0 {
+	if len(opts.gateways) > 0 {
 		cfg.Fleet = config.FleetConf{
-			Gateways:     gateways,
+			Gateways:     opts.gateways,
 			GatewayToken: gatewayToken,
+			Timeout:      2 * time.Second,
+		}
+	}
+	if len(opts.modelPullGateways) > 0 {
+		cfg.ModelPull = config.ModelPullConf{
+			Gateways:     opts.modelPullGateways,
+			GatewayToken: modelPullToken,
 			Timeout:      2 * time.Second,
 		}
 	}
 
 	st := memstore.New()
 	clock := runtime.NewSystemClock()
+	sessions := opts.sessions
 	if sessions == nil {
 		sessions = session.NewMemory(clock)
 	}
@@ -199,6 +247,15 @@ func newHarnessWithSessions(t *testing.T, gateways []string, sessions session.St
 	issuer, err := token.NewIssuer(accessSecret, time.Hour, clock)
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
+	}
+	modelPullRouter := modelpullrouter.New(modelpullrouter.Config{
+		Gateways: opts.modelPullGateways,
+		Token:    modelPullToken,
+		Timeout:  2 * time.Second,
+	})
+	logicOpts := []logic.Option{logic.WithInvalidator(revocations), logic.WithSessions(sessions)}
+	if modelPullRouter != nil {
+		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))
 	}
 	// The ServiceContext is built field by field rather than through
 	// NewServiceContext, which would dial a database. Everything the handlers
@@ -208,15 +265,16 @@ func newHarnessWithSessions(t *testing.T, gateways []string, sessions session.St
 	// handler 触及的一切都是真实的；只有 store 接口背后那部分不是。
 	svcCtx := &svc.ServiceContext{
 		Config:      cfg,
-		Logic:       logic.New(st, clock, logic.WithInvalidator(revocations), logic.WithSessions(sessions)),
+		Logic:       logic.New(st, clock, logicOpts...),
 		Issuer:      issuer,
 		Revocations: revocations,
 		Sessions:    sessions,
 		Fleet: fleet.New(fleet.Config{
-			Gateways: gateways,
+			Gateways: opts.gateways,
 			Token:    gatewayToken,
 			Timeout:  2 * time.Second,
 		}),
+		ModelPullRouter: modelPullRouter,
 	}
 
 	server, err := rest.NewServer(cfg.RestConf)

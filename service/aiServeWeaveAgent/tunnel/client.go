@@ -16,8 +16,29 @@ import (
 	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 )
+
+// ModelPuller is implemented by *modelpull.Puller (STATUS.md's P2 model
+// distribution subtask 2). It is declared here as an interface, not a
+// concrete dependency on the modelpull package, so control_test.go can fake
+// it without touching real HTTP downloads.
+//
+// ModelPuller 由 *modelpull.Puller 实现（STATUS.md P2 模型分发子任务二）。
+// 这里声明成接口而不是直接依赖 modelpull 包的具体类型，好让 control_test.go
+// 能用假实现替换，不必触碰真实 HTTP 下载。
+type ModelPuller interface {
+	// Trigger asks the puller to start pulling names; it never blocks.
+	//
+	// Trigger 请求 puller 开始拉取 names；它从不阻塞。
+	Trigger(names []string)
+	// Snapshot returns the current status of every name the puller knows
+	// about, sorted by name.
+	//
+	// Snapshot 返回 puller 已知的每一个名字的当前状态，按名字排序。
+	Snapshot() []modelpullstatus.Status
+}
 
 // This file assembles one tunnel — one Agent to one Gateway replica — as a
 // state machine over a single Control stream, plus the exponential-backoff
@@ -183,6 +204,19 @@ type ClientConfig struct {
 	// configuration that names one, rather than silently installing a runtime
 	// with no credential.
 	Secrets SecretResolver
+	// ModelPuller drives STATUS.md's P2 model distribution subtask 2: a
+	// Gateway-triggered, by-name-only pull of a local manifest entry. Nil is
+	// a legitimate value — the same "optional hook" shape as OnRoster and
+	// OnSlotHint — and means a GatewayControl_ModelPullTrigger frame is
+	// silently ignored and no ModelPullReport is ever sent, matching a node
+	// with no manifest configured.
+	//
+	// ModelPuller 驱动 STATUS.md P2 模型分发子任务二：一次 Gateway 触发的、
+	// 只按名字进行的本地清单条目拉取。nil 是一个合法取值——与 OnRoster、
+	// OnSlotHint 同一种"可选钩子"形状——意味着 GatewayControl_ModelPullTrigger
+	// 帧被静默忽略、也从不发送 ModelPullReport，与一个没有配置清单的节点
+	// 表现一致。
+	ModelPuller ModelPuller
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and
 	// HeartbeatFailureThreshold the number of unanswered heartbeats that

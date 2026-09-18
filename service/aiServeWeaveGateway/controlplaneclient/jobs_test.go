@@ -173,6 +173,45 @@ func TestListJobArtifactsSendsTenantAsAQueryParameter(t *testing.T) {
 	}
 }
 
+func TestArtifactRouteSendsTenantAsAQueryParameterAndDecodesTheRouteBinding(t *testing.T) {
+	cp := newFakeJobsControlPlane(t)
+	cp.respond = func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"artifact_id": "art_1", "job_id": "job_1", "tenant_id": "tenant-a",
+			"filename": "out.png", "type": "output", "storage_key": "tenant-a/job_1/art_1",
+			"node_id": "node-1", "runtime_id": "comfy-1",
+		})
+	}
+	client := newJobsClient(t, cp)
+
+	route, err := client.ArtifactRoute(context.Background(), "tenant-a", "art_1")
+	if err != nil {
+		t.Fatalf("ArtifactRoute: %v", err)
+	}
+	if route.JobID != "job_1" || route.StorageKey != "tenant-a/job_1/art_1" {
+		t.Errorf("ArtifactRoute = %+v, want job_id=job_1 and the StorageKey from the response", route)
+	}
+	if route.NodeID != "node-1" || route.RuntimeID != "comfy-1" {
+		t.Errorf("ArtifactRoute route binding = {node_id: %q, runtime_id: %q}, want node-1, comfy-1", route.NodeID, route.RuntimeID)
+	}
+	if cp.lastMethod != http.MethodGet || cp.lastPath != "/internal/v1/artifacts/art_1?tenant_id=tenant-a" {
+		t.Errorf("request = %s %s, want GET /internal/v1/artifacts/art_1?tenant_id=tenant-a", cp.lastMethod, cp.lastPath)
+	}
+}
+
+func TestArtifactRouteOnA404IsErrNotFound(t *testing.T) {
+	cp := newFakeJobsControlPlane(t)
+	cp.respond = func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}
+	client := newJobsClient(t, cp)
+
+	if _, err := client.ArtifactRoute(context.Background(), "tenant-a", "art_missing"); !errors.Is(err, controlplaneclient.ErrNotFound) {
+		t.Errorf("ArtifactRoute = %v, want ErrNotFound", err)
+	}
+}
+
 func TestCreateJobArtifactUsesTheJobIDInThePath(t *testing.T) {
 	cp := newFakeJobsControlPlane(t)
 	cp.respond = func(w http.ResponseWriter, r *http.Request) {

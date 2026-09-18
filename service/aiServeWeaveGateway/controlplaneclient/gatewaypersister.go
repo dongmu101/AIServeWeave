@@ -2,6 +2,7 @@ package controlplaneclient
 
 import (
 	"context"
+	"errors"
 	"time"
 
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
@@ -130,8 +131,52 @@ func (g *GatewayPersister) DeleteJobArtifact(ctx context.Context, jobID, artifac
 	return g.client.DeleteJobArtifact(ctx, jobID, artifactID)
 }
 
+// JobExists implements httpapi.ArtifactRecoveryClient. A control-plane
+// ErrNotFound is not this method's own error — it is the answer to the
+// question asked, false rather than a failure.
+//
+// JobExists 实现 httpapi.ArtifactRecoveryClient。控制面的 ErrNotFound 不是
+// 本方法自己的错误——它就是所问问题的答案，是 false 而不是一次失败。
+func (g *GatewayPersister) JobExists(ctx context.Context, tenantID, jobID string) (bool, error) {
+	_, err := g.client.GetJob(ctx, tenantID, jobID)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return false, nil
+		}
+		return false, err
+	}
+	return true, nil
+}
+
+// ListPersistedArtifacts implements httpapi.ArtifactRecoveryClient.
+func (g *GatewayPersister) ListPersistedArtifacts(ctx context.Context, tenantID, jobID string) ([]httpapi.PersistedArtifact, error) {
+	artifacts, err := g.client.ListJobArtifacts(ctx, tenantID, jobID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]httpapi.PersistedArtifact, len(artifacts))
+	for i, a := range artifacts {
+		out[i] = httpapi.PersistedArtifact{ArtifactID: a.ArtifactID, Filename: a.Filename, Type: a.Type}
+	}
+	return out, nil
+}
+
+// ArtifactRoute implements httpapi.ArtifactRecoveryClient.
+func (g *GatewayPersister) ArtifactRoute(ctx context.Context, tenantID, artifactID string) (httpapi.ArtifactRoute, error) {
+	route, err := g.client.ArtifactRoute(ctx, tenantID, artifactID)
+	if err != nil {
+		return httpapi.ArtifactRoute{}, err
+	}
+	return httpapi.ArtifactRoute{
+		JobID: route.JobID, TenantID: route.TenantID, Filename: route.Filename, Subfolder: route.Subfolder,
+		Type: route.Type, ContentType: route.ContentType, SizeBytes: route.SizeBytes, StorageKey: route.StorageKey,
+		NodeID: route.NodeID, RuntimeID: route.RuntimeID,
+	}, nil
+}
+
 var (
-	_ httpapi.JobPersistClient      = (*GatewayPersister)(nil)
-	_ httpapi.JobRecoveryClient     = (*GatewayPersister)(nil)
-	_ httpapi.ArtifactCleanupClient = (*GatewayPersister)(nil)
+	_ httpapi.JobPersistClient       = (*GatewayPersister)(nil)
+	_ httpapi.JobRecoveryClient      = (*GatewayPersister)(nil)
+	_ httpapi.ArtifactCleanupClient  = (*GatewayPersister)(nil)
+	_ httpapi.ArtifactRecoveryClient = (*GatewayPersister)(nil)
 )

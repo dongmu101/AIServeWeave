@@ -302,6 +302,46 @@ func TestLiveMySQLListActiveJobsForRouteAcrossTenants(t *testing.T) {
 	}
 }
 
+// TestLiveMySQLGetJobArtifactByBareID is the Gateway 故障切换收尾 fallback's
+// coverage against a real engine: a Gateway replica recovering a download
+// asks by the artifact's bare public id alone, with no job id to scope a
+// WHERE clause by, so this confirms the primary-key lookup gormstore's
+// GetJobArtifact issues actually returns the full row — StorageKey included —
+// regardless of which tenant created it, exactly as store.JobArtifacts
+// documents.
+//
+// TestLiveMySQLGetJobArtifactByBareID 是「Gateway 故障切换收尾」这个回退针对
+// 真实引擎的覆盖：一个正在恢复下载的 Gateway 副本只用产物自己的裸公开 id 发问，
+// 没有 job id 可供 WHERE 子句限定范围，因此这里确认 gormstore 的
+// GetJobArtifact 所发出的主键查询确实会返回完整的一行——包括 StorageKey——
+// 无论是哪个租户创建的，与 store.JobArtifacts 的文档完全一致。
+func TestLiveMySQLGetJobArtifactByBareID(t *testing.T) {
+	st := liveMySQLStore(t)
+	ctx := context.Background()
+	if err := st.CreateJob(ctx, testJob("job_art_route", "tenant-a")); err != nil {
+		t.Fatalf("CreateJob: %v", err)
+	}
+	artifact := &model.JobArtifact{
+		ID: "art_route", JobID: "job_art_route", TenantID: "tenant-a",
+		Filename: "out.png", StorageKey: "objects/out.png", SizeBytes: 1024,
+	}
+	if err := st.CreateJobArtifact(ctx, artifact); err != nil {
+		t.Fatalf("CreateJobArtifact: %v", err)
+	}
+
+	got, err := st.GetJobArtifact(ctx, "art_route")
+	if err != nil {
+		t.Fatalf("GetJobArtifact: %v", err)
+	}
+	if got.TenantID != "tenant-a" || got.JobID != "job_art_route" || got.StorageKey != "objects/out.png" {
+		t.Errorf("GetJobArtifact = %+v, want the full tenant-a row with its StorageKey", got)
+	}
+
+	if _, err := st.GetJobArtifact(ctx, "art_missing"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetJobArtifact(unknown id) = %v, want ErrNotFound", err)
+	}
+}
+
 // TestLiveMySQLUnreachableDatabaseFailsFastNotHangs is J08's coverage for
 // "数据库中断": a Store pointed at a database that refuses connections must
 // return an error within its context deadline, never hang indefinitely —
