@@ -349,6 +349,29 @@ test("operator request log route resolves and forwards tenant_id", () => {
   assert.equal(result?.search, "?tenant_id=tnt_1");
 });
 
+test("tenant usage summary route forwards since/until only", () => {
+  const result = resolve(
+    "GET",
+    "/admin/v1/usage/summary",
+    "since=2026-09-11T00:00:00Z&until=2026-09-12T00:00:00Z&tenant_id=tnt_1"
+  );
+  assert.equal(result?.path, "/admin/v1/usage/summary");
+  assert.equal(result?.search, "?since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z");
+});
+
+test("operator usage summary route forwards since/until/tenant_id", () => {
+  const result = resolveOperatorUpstream(
+    "GET",
+    ["operator", "v1", "usage", "summary"],
+    new URLSearchParams("since=2026-09-11T00:00:00Z&until=2026-09-12T00:00:00Z&tenant_id=tnt_1&bogus=1")
+  );
+  assert.equal(result?.path, "/operator/v1/usage/summary");
+  assert.equal(
+    result?.search,
+    "?since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z&tenant_id=tnt_1"
+  );
+});
+
 test("all seven alerting routes resolve", () => {
   const operatorResolve = (method: string, path: string) =>
     resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams());
