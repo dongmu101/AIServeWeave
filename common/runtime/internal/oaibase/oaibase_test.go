@@ -82,6 +82,40 @@ func TestChatCapabilitiesCoverOnlyTheFeaturesTheRequestUses(t *testing.T) {
 			req:  runtime.ChatRequest{Model: "m", Tools: []runtime.Tool{}},
 			want: []runtime.Capability{runtime.CapabilityChat},
 		},
+		{
+			// STATUS.md's P2 ChatMessage.Content structured rework: an
+			// image_url part requires CapabilityVision so a model whose
+			// vision support is unknown or unsupported is rejected locally
+			// rather than assumed to work.
+			name: "with an image content part",
+			req: runtime.ChatRequest{
+				Model: "m",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "text", Text: "what is this"},
+						{Type: "image_url", ImageURL: &runtime.ContentImageURL{URL: "https://example.com/cat.png"}},
+					},
+				}},
+			},
+			want: []runtime.Capability{runtime.CapabilityChat, runtime.CapabilityVision},
+		},
+		{
+			// A text-only ContentParts message (no image) must not require
+			// vision — a text-mixed-with-text array collapses to Content in
+			// every front door today, but ChatCapabilities itself should not
+			// assume that and must judge by part type, not by ContentParts
+			// being non-empty.
+			name: "with a text-only content part is not a vision request",
+			req: runtime.ChatRequest{
+				Model: "m",
+				Messages: []runtime.ChatMessage{{
+					Role:         "user",
+					ContentParts: []runtime.ContentPart{{Type: "text", Text: "hi"}},
+				}},
+			},
+			want: []runtime.Capability{runtime.CapabilityChat},
+		},
 	}
 
 	for _, tt := range tests {

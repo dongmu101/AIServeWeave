@@ -742,6 +742,29 @@ message ChatMessage {
   string name = 3;
   string tool_call_id = 4;
   repeated ToolCall tool_calls = 5;
+
+  // content_parts carries a multi-part message body (text mixed with
+  // images) for the vision-capable OpenAI-compatible content-array shape
+  // (STATUS.md's P2 ChatMessage.Content structured rework). Empty for a
+  // text-only message, which stays in content above — the two are never
+  // both non-empty on the same message.
+  repeated ContentPart content_parts = 6;
+}
+
+// ContentPart is one piece of ChatMessage.content_parts: either a text run
+// or an image reference.
+message ContentPart {
+  string type = 1;                      // "text" or "image_url"
+  string text = 2;                      // set when type == "text"
+  ContentImageURL image_url = 3;        // set when type == "image_url"
+}
+
+// ContentImageURL is an image content part's source. url may be an http(s)
+// URL or a data: URI carrying inline base64 image bytes; this contract does
+// not distinguish them, the backend does.
+message ContentImageURL {
+  string url = 1;
+  string detail = 2;                    // optional: "auto" | "low" | "high"
 }
 
 message ToolCall {

@@ -168,6 +168,23 @@ func TestConvertChatRequestRoundTrip(t *testing.T) {
 				ResponseFormat: &runtime.ResponseFormat{Type: "json_object"},
 			},
 		},
+		{
+			// STATUS.md's P2 ChatMessage.Content structured rework: a
+			// message with ContentParts (mixed text and image_url) round
+			// trips across the tunnel proto, with Content left empty per
+			// ChatMessage's documented "never both" contract.
+			name: "message with content parts",
+			req: runtime.ChatRequest{
+				Model: "llama3",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "text", Text: "what is this"},
+						{Type: "image_url", ImageURL: &runtime.ContentImageURL{URL: "https://example.com/cat.png", Detail: "low"}},
+					},
+				}},
+			},
+		},
 	}
 
 	for _, tt := range tests {

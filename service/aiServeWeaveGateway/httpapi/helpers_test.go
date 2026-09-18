@@ -116,6 +116,46 @@ func chatHandler(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnel
 	return errors.New("unsupported operation")
 }
 
+// chatHandlerEchoingParts answers Chat like chatHandler, but its echoed text
+// also names every image_url part it received (STATUS.md's P2
+// ChatMessage.Content structured rework) — so a test can prove an image sent
+// through a front door actually crossed the whole tunnel round trip
+// (httpapi → runtime.ChatMessage → tunnelwire marshal → tunnel proto →
+// tunnelwire unmarshal on this fake node) rather than merely asserting on a
+// wire shape closer to the front door.
+func chatHandlerEchoingParts(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+	if req.GetOperation() != tunnelv1.Operation_OPERATION_CHAT {
+		return errors.New("unsupported operation")
+	}
+	in, err := tunnelwire.UnmarshalChatRequest(req.GetPayload())
+	if err != nil {
+		return err
+	}
+	msg := in.Messages[0]
+	answer := "text=" + msg.Content
+	for _, p := range msg.ContentParts {
+		switch p.Type {
+		case "text":
+			answer += " text=" + p.Text
+		case "image_url":
+			if p.ImageURL != nil {
+				answer += " image=" + p.ImageURL.URL
+			}
+		}
+	}
+	payload, err := tunnelwire.MarshalChatResponse(runtime.ChatResponse{
+		ID:           "chat-1",
+		Model:        in.Model,
+		Message:      runtime.ChatMessage{Role: "assistant", Content: answer},
+		FinishReason: "stop",
+		Usage:        runtime.Usage{PromptTokens: 3, CompletionTokens: 5, TotalTokens: 8},
+	})
+	if err != nil {
+		return err
+	}
+	return reply(gatewaytest.DataFrame(payload))
+}
+
 // blockingStreamHandler sends one event, signals started, then blocks on
 // further replies. Because gatewaytest's Agent-to-server frame channel is
 // unbuffered and the front door only calls Recv() once per SSE flush, this

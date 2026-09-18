@@ -3,9 +3,11 @@ package httpapi
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"AIServeWeave/common/runtime"
@@ -16,11 +18,109 @@ import (
 // -----------------------------------------------------------------------
 
 type chatMessageJSON struct {
-	Role       string         `json:"role"`
-	Content    string         `json:"content"`
-	Name       string         `json:"name,omitempty"`
-	ToolCallID string         `json:"tool_call_id,omitempty"`
-	ToolCalls  []toolCallJSON `json:"tool_calls,omitempty"`
+	Role       string          `json:"role"`
+	Content    chatContentJSON `json:"content"`
+	Name       string          `json:"name,omitempty"`
+	ToolCallID string          `json:"tool_call_id,omitempty"`
+	ToolCalls  []toolCallJSON  `json:"tool_calls,omitempty"`
+}
+
+// chatContentJSON accepts OpenAI's "content" as either a plain string or an
+// array of content parts (text and image_url) — the same string-or-array
+// pattern stopField below uses for "stop". A pure-text array collapses to
+// Text with Parts left nil, so the overwhelmingly common text-only case
+// produces the exact runtime.ChatMessage.Content behavior this type had
+// before ContentParts existed (STATUS.md's P2 ChatMessage.Content
+// structured rework). MarshalJSON is the mirror: it renders Text as a plain
+// string, which is all a response ever carries — no backend adapter emits
+// image content back.
+//
+// chatContentJSON 把 OpenAI 的 "content" 接受为裸字符串或内容片段数组——与下方
+// stopField 处理 "stop" 的字符串-或-数组模式相同。纯文本数组会收敛为 Text，
+// Parts 留空，因此绝大多数的纯文本情形与本类型加入 ContentParts 之前的
+// runtime.ChatMessage.Content 行为完全一致（STATUS.md 的 P2 ChatMessage.Content
+// 结构化改造）。MarshalJSON 是镜像操作：把 Text 渲染成纯字符串，因为响应永远
+// 只携带文本——没有任何适配器会把图片内容传回来。
+type chatContentJSON struct {
+	Text  string
+	Parts []chatContentPartJSON
+}
+
+type chatContentPartJSON struct {
+	Type     string            `json:"type"`
+	Text     string            `json:"text,omitempty"`
+	ImageURL *chatImageURLJSON `json:"image_url,omitempty"`
+}
+
+type chatImageURLJSON struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+func (c *chatContentJSON) UnmarshalJSON(b []byte) error {
+	var s string
+	if err := json.Unmarshal(b, &s); err == nil {
+		c.Text, c.Parts = s, nil
+		return nil
+	}
+	var parts []chatContentPartJSON
+	if err := json.Unmarshal(b, &parts); err != nil {
+		return errors.New("content must be a string or an array of content parts")
+	}
+	allText := true
+	for _, p := range parts {
+		if p.Type != "text" {
+			allText = false
+			break
+		}
+	}
+	if allText {
+		var sb strings.Builder
+		for _, p := range parts {
+			sb.WriteString(p.Text)
+		}
+		c.Text, c.Parts = sb.String(), nil
+		return nil
+	}
+	c.Text, c.Parts = "", parts
+	return nil
+}
+
+func (c chatContentJSON) MarshalJSON() ([]byte, error) {
+	if len(c.Parts) == 0 {
+		return json.Marshal(c.Text)
+	}
+	return json.Marshal(c.Parts)
+}
+
+// toRuntimeContentParts converts content parts already known to contain
+// something other than pure text (chatContentJSON.UnmarshalJSON only
+// leaves Parts set in that case) into runtime.ContentPart, rejecting any
+// part type this Gateway does not carry through to a backend — an
+// OpenAI-shaped "input_audio" part, for instance, has nowhere to go today,
+// and silently dropping it would answer a request the caller never sent.
+func toRuntimeContentParts(parts []chatContentPartJSON) ([]runtime.ContentPart, error) {
+	if len(parts) == 0 {
+		return nil, nil
+	}
+	out := make([]runtime.ContentPart, len(parts))
+	for i, p := range parts {
+		switch p.Type {
+		case "text":
+			out[i] = runtime.ContentPart{Type: "text", Text: p.Text}
+		case "image_url":
+			if p.ImageURL == nil || p.ImageURL.URL == "" {
+				return nil, fmt.Errorf(`messages content part %d of type "image_url" requires "image_url.url"`, i)
+			}
+			out[i] = runtime.ContentPart{
+				Type:     "image_url",
+				ImageURL: &runtime.ContentImageURL{URL: p.ImageURL.URL, Detail: p.ImageURL.Detail},
+			}
+		default:
+			return nil, fmt.Errorf("content part type %q is not supported", p.Type)
+		}
+	}
+	return out, nil
 }
 
 type toolCallJSON struct {
@@ -90,7 +190,7 @@ type chatCompletionRequest struct {
 	ResponseFormat *responseFormatJSON `json:"response_format,omitempty"`
 }
 
-func (req chatCompletionRequest) toRuntime() runtime.ChatRequest {
+func (req chatCompletionRequest) toRuntime() (runtime.ChatRequest, error) {
 	out := runtime.ChatRequest{
 		Model:       req.Model,
 		Temperature: req.Temperature,
@@ -101,12 +201,17 @@ func (req chatCompletionRequest) toRuntime() runtime.ChatRequest {
 	}
 	out.Messages = make([]runtime.ChatMessage, len(req.Messages))
 	for i, m := range req.Messages {
+		parts, err := toRuntimeContentParts(m.Content.Parts)
+		if err != nil {
+			return runtime.ChatRequest{}, fmt.Errorf("messages[%d]: %w", i, err)
+		}
 		out.Messages[i] = runtime.ChatMessage{
-			Role:       m.Role,
-			Content:    m.Content,
-			Name:       m.Name,
-			ToolCallID: m.ToolCallID,
-			ToolCalls:  toRuntimeToolCalls(m.ToolCalls),
+			Role:         m.Role,
+			Content:      m.Content.Text,
+			ContentParts: parts,
+			Name:         m.Name,
+			ToolCallID:   m.ToolCallID,
+			ToolCalls:    toRuntimeToolCalls(m.ToolCalls),
 		}
 	}
 	if len(req.Tools) > 0 {
@@ -136,7 +241,7 @@ func (req chatCompletionRequest) toRuntime() runtime.ChatRequest {
 		}
 		out.ResponseFormat = rf
 	}
-	return out
+	return out, nil
 }
 
 // decodeToolChoice reduces OpenAI's tool_choice — a bare string ("auto",
@@ -244,16 +349,21 @@ func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model and a non-empty messages array are required")
 		return
 	}
-
-	if req.Stream {
-		h.chatStream(w, r, req, start)
+	canonical, err := req.toRuntime()
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
-	h.chatNonStream(w, r, req, start)
+
+	if req.Stream {
+		h.chatStream(w, r, canonical, start)
+		return
+	}
+	h.chatNonStream(w, r, canonical, start)
 }
 
-func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, req chatCompletionRequest, start time.Time) {
-	resp, candidate, err := h.sched.Chat(r.Context(), req.toRuntime())
+func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
+	resp, candidate, err := h.sched.Chat(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
@@ -268,7 +378,7 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, req cha
 			Index: 0,
 			Message: chatMessageJSON{
 				Role:      resp.Message.Role,
-				Content:   resp.Message.Content,
+				Content:   chatContentJSON{Text: resp.Message.Content},
 				ToolCalls: fromRuntimeToolCalls(resp.Message.ToolCalls),
 			},
 			FinishReason: resp.FinishReason,
@@ -282,18 +392,18 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, req cha
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
-	h.logTTFT(r, req.Model, candidate.NodeID, start, false)
+	h.logTTFT(r, canonical.Model, candidate.NodeID, start, false)
 	// A non-streamed response's first byte is its last: TTFT and total
 	// response time are the same number, and only the latter is recorded, so
 	// the TTFT distribution stays a statement about streaming.
 	//
 	// 非流式响应的首字节就是它的末字节：TTFT 与总响应时间是同一个数字，因此只记录
 	// 后者，好让 TTFT 分布始终是关于流式的陈述。
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointChat, req.Model)
+	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointChat, canonical.Model)
 }
 
-func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCompletionRequest, start time.Time) {
-	stream, candidate, err := h.sched.ChatStream(r.Context(), req.toRuntime())
+func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
+	stream, candidate, err := h.sched.ChatStream(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
@@ -344,7 +454,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 		if errors.Is(err, io.EOF) {
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			flusher.Flush()
-			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointChat, req.Model)
+			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointChat, canonical.Model)
 			return
 		}
 		if err != nil {
@@ -389,7 +499,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, req chatCo
 		flusher.Flush()
 		if !loggedTTFT {
 			loggedTTFT = true
-			h.logTTFT(r, req.Model, candidate.NodeID, start, true)
+			h.logTTFT(r, canonical.Model, candidate.NodeID, start, true)
 			// Measured after Flush, not before: a chunk still sitting in a
 			// buffer has not reached anyone, and the whole point of this
 			// figure is what the client actually experienced.

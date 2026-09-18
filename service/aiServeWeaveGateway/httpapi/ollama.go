@@ -191,7 +191,13 @@ func (req ollamaChatRequest) wantsStream() bool {
 
 // toRuntime converts req into the canonical chat request every front door
 // produces. It rejects tools, format and per-message images by name rather
-// than silently dropping them — see this file's package doc comment.
+// than silently dropping them — see this file's package doc comment. Images
+// now has a home in the canonical type (runtime.ChatMessage.ContentParts,
+// STATUS.md's P2 ChatMessage.Content structured rework) but Ollama's
+// "images" field is a per-message base64 array, a different shape from the
+// content-array parts Chat Completions/Anthropic Messages/Responses now
+// accept — wiring it in is a deliberate scope decision left for later, not
+// a structural impossibility.
 func (req ollamaChatRequest) toRuntime() (runtime.ChatRequest, error) {
 	if len(req.Tools) > 0 {
 		return runtime.ChatRequest{}, errors.New("tools is not supported by this Ollama-compatible endpoint")
@@ -396,8 +402,9 @@ func (req ollamaGenerateRequest) wantsStream() bool {
 
 // toRuntime converts req into the canonical chat request every front door
 // produces, reducing prompt/system to a two-message exchange. It rejects
-// format, images, context, raw, template and suffix by name: none of them
-// has a home in the canonical request, and this Gateway has no per-request
+// format, images, context, raw, template and suffix by name — images is a
+// scope decision (see the chat handler's toRuntime), the rest have no home
+// in the canonical request, and this Gateway has no per-request
 // continuation state to honor "context" against — see this file's package
 // doc comment.
 func (req ollamaGenerateRequest) toRuntime() (runtime.ChatRequest, error) {

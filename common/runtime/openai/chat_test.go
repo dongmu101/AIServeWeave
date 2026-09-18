@@ -66,6 +66,86 @@ func TestChatSendsRequestAndDecodesResponse(t *testing.T) {
 	}
 }
 
+// TestChatSendsImageContentAsAnArray proves a message with ContentParts
+// marshals its "content" as the OpenAI-compatible content-array shape
+// (STATUS.md's P2 ChatMessage.Content structured rework), while a
+// plain-text message on the same request still marshals as a bare string —
+// the two shapes coexist on one request, matching what a real
+// vision-capable OpenAI-compatible backend accepts.
+func TestChatSendsImageContentAsAnArray(t *testing.T) {
+	var gotBody struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte(`{
+			"id": "chatcmpl-1", "model": "llama-3", "created": 1700000000,
+			"choices": [{"message": {"role":"assistant","content":"ok"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+		}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(ClientConfig{BaseURL: srv.URL, Kind: runtime.KindVLLM, RuntimeID: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := runtime.ChatRequest{
+		Model: "llama-3",
+		Messages: []runtime.ChatMessage{
+			{Role: "system", Content: "be terse"},
+			{Role: "user", ContentParts: []runtime.ContentPart{
+				{Type: "text", Text: "what is this"},
+				{Type: "image_url", ImageURL: &runtime.ContentImageURL{URL: "data:image/png;base64,Zm9v", Detail: "low"}},
+			}},
+		},
+	}
+	if _, err := Chat(context.Background(), c, req); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(gotBody.Messages) != 2 {
+		t.Fatalf("messages = %d, want 2", len(gotBody.Messages))
+	}
+
+	var systemMsg struct {
+		Content string `json:"content"`
+	}
+	if err := json.Unmarshal(gotBody.Messages[0], &systemMsg); err != nil {
+		t.Fatalf("system message content did not decode as a plain string: %v (%s)", err, gotBody.Messages[0])
+	}
+	if systemMsg.Content != "be terse" {
+		t.Errorf("system content = %q, want %q", systemMsg.Content, "be terse")
+	}
+
+	var userMsg struct {
+		Content []struct {
+			Type     string `json:"type"`
+			Text     string `json:"text"`
+			ImageURL *struct {
+				URL    string `json:"url"`
+				Detail string `json:"detail"`
+			} `json:"image_url"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(gotBody.Messages[1], &userMsg); err != nil {
+		t.Fatalf("user message content did not decode as an array: %v (%s)", err, gotBody.Messages[1])
+	}
+	if len(userMsg.Content) != 2 {
+		t.Fatalf("user content parts = %d, want 2", len(userMsg.Content))
+	}
+	if userMsg.Content[0].Type != "text" || userMsg.Content[0].Text != "what is this" {
+		t.Errorf("content[0] = %+v, want text %q", userMsg.Content[0], "what is this")
+	}
+	img := userMsg.Content[1]
+	if img.Type != "image_url" || img.ImageURL == nil || img.ImageURL.URL != "data:image/png;base64,Zm9v" || img.ImageURL.Detail != "low" {
+		t.Errorf("content[1] = %+v, want image_url with url=data:image/png;base64,Zm9v detail=low", img)
+	}
+}
+
 func TestChatToolCallsRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any

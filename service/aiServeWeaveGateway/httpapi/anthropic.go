@@ -1,18 +1,22 @@
-// anthropic.go implements a v1, text-only subset of Anthropic's POST
-// /v1/messages, translated at the boundary into the same canonical chat
-// request every other front door produces (STATUS.md's P2 "Anthropic
-// Messages 前门" — see docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md
-// §四). Tool calls and non-text content blocks are refused by name rather
-// than silently dropped, matching responses.go's "unsupported 字段" pattern;
-// full functional parity (structured content blocks, tool_use) needs a
-// core-type change shared with the OpenAI front doors and is deliberately
-// out of scope here (design doc §四.3).
+// anthropic.go implements Anthropic's POST /v1/messages, translated at the
+// boundary into the same canonical chat request every other front door
+// produces (STATUS.md's P2 "Anthropic Messages 前门" — see
+// docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md §四).
+// Text and image content blocks are supported (STATUS.md's P2
+// ChatMessage.Content structured rework, design doc §四.3/§九.3); tool
+// calls and any other content block type (tool_use, tool_result, document,
+// …) are refused by name rather than silently dropped, matching
+// responses.go's "unsupported 字段" pattern — the tool-interaction shape
+// gap design doc §四.3's second bullet describes is still unsolved and out
+// of scope here.
 //
-// anthropic.go 实现 POST /v1/messages 的 v1、纯文本子集，在边界处转换成与其他
-// 每个前门相同的 canonical 聊天请求（STATUS.md 的「Anthropic Messages 前门」
-// ——见设计文档§四）。工具调用与非文本内容块按名字拒绝而非静默丢弃，与
-// responses.go 的「unsupported 字段」模式一致；追求完整功能对等需要一次与
-// OpenAI 前门共用的核心类型改动，本项刻意不做（设计文档§四.3）。
+// anthropic.go 实现 POST /v1/messages，在边界处转换成与其他每个前门相同的
+// canonical 聊天请求（STATUS.md 的「Anthropic Messages 前门」——见设计文档
+// §四）。文本与图片内容块均已支持（STATUS.md 的 P2 ChatMessage.Content
+// 结构化改造，设计文档§四.3/§九.3）；工具调用与其他任何内容块类型
+// （tool_use、tool_result、document……）按名字拒绝而非静默丢弃，与
+// responses.go 的「unsupported 字段」模式一致——设计文档§四.3 第二条描述的
+// 工具交互形状缺口仍未解决，本项不涉及。
 package httpapi
 
 import (
@@ -59,25 +63,65 @@ type anthropicMessageJSON struct {
 	Content json.RawMessage `json:"content"`
 }
 
-// anthropicContentBlockJSON is one element of a "content" array. "text" is
-// the only block type v1 accepts on input; anthropicText rejects any other
-// type by name. The same struct doubles as the output content block shape,
-// where Type is always "text".
+// anthropicContentBlockJSON is one element of a "content" array. "text" and
+// "image" are the only block types accepted on input; anthropicMessageContent
+// rejects any other type by name. The same struct doubles as the output
+// content block shape, where Type is always "text" — a response is never
+// constructed with an image block.
 type anthropicContentBlockJSON struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
+	Type   string                    `json:"type"`
+	Text   string                    `json:"text,omitempty"`
+	Source *anthropicImageSourceJSON `json:"source,omitempty"`
+}
+
+// anthropicImageSourceJSON is an "image" content block's source. Anthropic
+// defines two shapes: inline base64 bytes ("base64", with media_type and
+// data) and a fetchable URL ("url"). Both translate to
+// runtime.ContentImageURL.URL — see toImageURL.
+type anthropicImageSourceJSON struct {
+	Type      string `json:"type"`
+	MediaType string `json:"media_type,omitempty"`
+	Data      string `json:"data,omitempty"`
+	URL       string `json:"url,omitempty"`
+}
+
+// toImageURL reduces an Anthropic image source to the single URL string
+// runtime.ContentImageURL carries: a base64 source becomes a data: URI
+// (the same inline form OpenAI's own image_url.url accepts), a url source
+// passes through unchanged.
+func (s *anthropicImageSourceJSON) toImageURL() (string, error) {
+	if s == nil {
+		return "", errors.New(`an "image" content block requires "source"`)
+	}
+	switch s.Type {
+	case "base64":
+		if s.MediaType == "" || s.Data == "" {
+			return "", errors.New(`image source of type "base64" requires "media_type" and "data"`)
+		}
+		return "data:" + s.MediaType + ";base64," + s.Data, nil
+	case "url":
+		if s.URL == "" {
+			return "", errors.New(`image source of type "url" requires "url"`)
+		}
+		return s.URL, nil
+	default:
+		return "", fmt.Errorf("image source type %q is not supported", s.Type)
+	}
 }
 
 // anthropicText reduces an Anthropic "content" field — a bare string or an
 // array of content blocks — to the plain text runtime.ChatMessage.Content
-// carries. A block whose type is not "text" (image, tool_use, tool_result,
-// document, …) is rejected by name: v1 has nowhere to put it, and silently
-// dropping it would answer a request the caller never actually sent.
+// carries. Any non-"text" block is rejected by name. It is used only for
+// "system", which Anthropic defines as text-only — never images — so it
+// keeps its own narrower contract rather than reusing
+// anthropicMessageContent's image handling for a field that can never carry
+// one.
 //
 // anthropicText 把 Anthropic 的 "content" 字段——一个裸字符串或一个内容块
-// 数组——归约成 runtime.ChatMessage.Content 承载的纯文本。类型不是 "text"
-// 的块（image、tool_use、tool_result、document……）按名字拒绝：v1 没有地方
-// 安放它，静默丢弃等于在回答一个调用方从未真正发出的请求。
+// 数组——归约成 runtime.ChatMessage.Content 承载的纯文本。任何非 "text" 的块
+// 都按名字拒绝。它只用于 "system"——Anthropic 把它定义为纯文本、绝不含图片
+// ——因此保留自己更窄的契约，而不是为一个永远不会携带图片的字段复用
+// anthropicMessageContent 的图片处理逻辑。
 func anthropicText(raw json.RawMessage) (string, error) {
 	if len(raw) == 0 {
 		return "", nil
@@ -93,11 +137,72 @@ func anthropicText(raw json.RawMessage) (string, error) {
 	var sb strings.Builder
 	for _, b := range blocks {
 		if b.Type != "text" {
-			return "", fmt.Errorf("content block type %q is not supported by this v1 Anthropic Messages endpoint", b.Type)
+			return "", fmt.Errorf("content block type %q is not supported for \"system\"", b.Type)
 		}
 		sb.WriteString(b.Text)
 	}
 	return sb.String(), nil
+}
+
+// anthropicMessageContent converts a message's "content" field into the
+// canonical chat message content (STATUS.md's P2 ChatMessage.Content
+// structured rework): a bare string, or an array of content blocks that are
+// all "text", collapses to plain text — byte-identical to
+// anthropicText's behavior, so the overwhelmingly common text-only case is
+// unaffected by this function existing. An array containing an "image"
+// block builds ContentParts instead; any block type that is neither "text"
+// nor "image" (tool_use, tool_result, document, …) is rejected by name —
+// there is still nowhere in the canonical type to put it.
+//
+// anthropicMessageContent 把一条消息的 "content" 字段转换成 canonical 聊天
+// 消息内容（STATUS.md 的 P2 ChatMessage.Content 结构化改造）：裸字符串，或者
+// 全部由 "text" 组成的内容块数组，都会收敛为纯文本——与 anthropicText 的行为
+// 逐字节一致，因此绝大多数的纯文本情形不受本函数存在的影响。含 "image" 块的
+// 数组则改为构建 ContentParts；既非 "text" 也非 "image" 的块类型（tool_use、
+// tool_result、document……）按名字拒绝——canonical 类型里仍然没有地方安放它。
+func anthropicMessageContent(raw json.RawMessage) (text string, parts []runtime.ContentPart, err error) {
+	if len(raw) == 0 {
+		return "", nil, nil
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s, nil, nil
+	}
+	var blocks []anthropicContentBlockJSON
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		return "", nil, errors.New("content must be a string or an array of content blocks")
+	}
+
+	allText := true
+	for _, b := range blocks {
+		if b.Type != "text" {
+			allText = false
+			break
+		}
+	}
+	if allText {
+		var sb strings.Builder
+		for _, b := range blocks {
+			sb.WriteString(b.Text)
+		}
+		return sb.String(), nil, nil
+	}
+
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			parts = append(parts, runtime.ContentPart{Type: "text", Text: b.Text})
+		case "image":
+			url, err := b.Source.toImageURL()
+			if err != nil {
+				return "", nil, err
+			}
+			parts = append(parts, runtime.ContentPart{Type: "image_url", ImageURL: &runtime.ContentImageURL{URL: url}})
+		default:
+			return "", nil, fmt.Errorf("content block type %q is not supported by this Anthropic Messages endpoint", b.Type)
+		}
+	}
+	return "", parts, nil
 }
 
 // toRuntime converts req into the canonical chat request every front door
@@ -133,11 +238,11 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 		if m.Role != "user" && m.Role != "assistant" {
 			return runtime.ChatRequest{}, fmt.Errorf(`messages[%d].role must be "user" or "assistant"`, i)
 		}
-		text, err := anthropicText(m.Content)
+		text, parts, err := anthropicMessageContent(m.Content)
 		if err != nil {
 			return runtime.ChatRequest{}, fmt.Errorf("messages[%d]: %w", i, err)
 		}
-		out.Messages = append(out.Messages, runtime.ChatMessage{Role: m.Role, Content: text})
+		out.Messages = append(out.Messages, runtime.ChatMessage{Role: m.Role, Content: text, ContentParts: parts})
 	}
 	return out, nil
 }

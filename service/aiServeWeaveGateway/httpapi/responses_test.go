@@ -30,7 +30,18 @@ func echoMessagesHandler(req *tunnelv1.RequestHeaders, body [][]byte, reply func
 	}
 	var lines []string
 	for _, m := range in.Messages {
-		lines = append(lines, m.Role+":"+m.Content)
+		line := m.Role + ":" + m.Content
+		for _, p := range m.ContentParts {
+			switch p.Type {
+			case "text":
+				line += "[text:" + p.Text + "]"
+			case "image_url":
+				if p.ImageURL != nil {
+					line += "[image:" + p.ImageURL.URL + "]"
+				}
+			}
+		}
+		lines = append(lines, line)
 	}
 	payload, err := tunnelwire.MarshalChatResponse(runtime.ChatResponse{
 		ID:           "chat-1",
@@ -161,6 +172,20 @@ func TestResponsesTranslatesInput(t *testing.T) {
 			body: `{"model":"qwen3:8b","input":[{"role":"assistant","content":[{"type":"output_text","text":"prior"}]},{"role":"user","content":"next"}]}`,
 			want: "assistant:prior\nuser:next",
 		},
+		{
+			// STATUS.md's P2 ChatMessage.Content structured rework: an
+			// "input_image" part reaches the backend as a ContentParts
+			// image_url part (proven by echoMessagesHandler, which only
+			// renders ContentParts, never runtime.ChatMessage.Content, for
+			// this line — an empty Content confirms the mixed-part branch
+			// ran, not the pure-text collapse).
+			name: "an input_image part builds ContentParts",
+			body: `{"model":"qwen3:8b","input":[{"role":"user","content":[
+				{"type":"input_text","text":"what is this"},
+				{"type":"input_image","image_url":"https://example.com/cat.png","detail":"low"}
+			]}]}`,
+			want: "user:[text:what is this][image:https://example.com/cat.png]",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -214,6 +239,11 @@ func TestResponsesRejectsUnsupportedFields(t *testing.T) {
 			name:   "a built-in tool this gateway does not run",
 			body:   `{"model":"qwen3:8b","input":"hi","tools":[{"type":"web_search"}]}`,
 			wantIn: "web_search",
+		},
+		{
+			name:   "an input content part type with nowhere to go",
+			body:   `{"model":"qwen3:8b","input":[{"role":"user","content":[{"type":"input_audio","input_audio":{"data":"...","format":"wav"}}]}]}`,
+			wantIn: "input_audio",
 		},
 	}
 	for _, tt := range tests {

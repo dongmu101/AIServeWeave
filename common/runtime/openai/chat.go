@@ -9,12 +9,55 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
+// chatMessageDTO's Content marshals as a plain string when Parts is empty
+// and as the content-array form when it is not — see MarshalJSON. Parts is
+// never populated on a decoded response: no backend these adapters talk to
+// returns array-form content in a chat completion.
 type chatMessageDTO struct {
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Parts      []contentPartDTO `json:"-"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []toolCallDTO    `json:"tool_calls,omitempty"`
+}
+
+// chatMessageDTOWire mirrors chatMessageDTO's JSON shape with Content typed
+// as any, so MarshalJSON can substitute either a string or []contentPartDTO
+// without hand-writing the rest of the object's fields twice.
+type chatMessageDTOWire struct {
 	Role       string        `json:"role"`
-	Content    string        `json:"content"`
+	Content    any           `json:"content"`
 	Name       string        `json:"name,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	ToolCalls  []toolCallDTO `json:"tool_calls,omitempty"`
+}
+
+// MarshalJSON emits Content as an array of content parts (mirroring the
+// OpenAI-compatible vision content-array shape vLLM/SGLang/Ollama's
+// OpenAI-compatible endpoints accept) when Parts is set, or as the plain
+// string every existing caller and test already expects otherwise.
+func (m chatMessageDTO) MarshalJSON() ([]byte, error) {
+	wire := chatMessageDTOWire{
+		Role: m.Role, Name: m.Name, ToolCallID: m.ToolCallID, ToolCalls: m.ToolCalls,
+	}
+	if len(m.Parts) > 0 {
+		wire.Content = m.Parts
+	} else {
+		wire.Content = m.Content
+	}
+	return json.Marshal(wire)
+}
+
+type contentPartDTO struct {
+	Type     string           `json:"type"`
+	Text     string           `json:"text,omitempty"`
+	ImageURL *imageURLPartDTO `json:"image_url,omitempty"`
+}
+
+type imageURLPartDTO struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
 }
 
 type toolCallDTO struct {
@@ -103,6 +146,7 @@ func toMessageDTO(m runtime.ChatMessage) chatMessageDTO {
 	dto := chatMessageDTO{
 		Role:       m.Role,
 		Content:    m.Content,
+		Parts:      toContentPartDTOs(m.ContentParts),
 		Name:       m.Name,
 		ToolCallID: m.ToolCallID,
 	}
@@ -137,6 +181,21 @@ func fromMessageDTO(dto chatMessageDTO) runtime.ChatMessage {
 		})
 	}
 	return m
+}
+
+func toContentPartDTOs(parts []runtime.ContentPart) []contentPartDTO {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]contentPartDTO, len(parts))
+	for i, p := range parts {
+		dto := contentPartDTO{Type: p.Type, Text: p.Text}
+		if p.ImageURL != nil {
+			dto.ImageURL = &imageURLPartDTO{URL: p.ImageURL.URL, Detail: p.ImageURL.Detail}
+		}
+		out[i] = dto
+	}
+	return out
 }
 
 func toToolDTO(t runtime.Tool) toolDTO {

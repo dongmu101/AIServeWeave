@@ -181,11 +181,64 @@ type JSONSchemaFormat struct {
 }
 
 type ChatMessage struct {
-	Role       string
-	Content    string
-	Name       string
-	ToolCallID string
-	ToolCalls  []ToolCall
+	Role string
+	// Content is the message's text. For a multi-part message that mixes
+	// text with images, ContentParts is set instead and Content stays
+	// empty — see ContentParts. This is the overwhelmingly common case, so
+	// every existing caller that only ever sets Content is unaffected by
+	// ContentParts existing.
+	//
+	// Content 是消息的文本。混合文本与图片的多部分消息改用 ContentParts 承载，
+	// 此时 Content 留空——见 ContentParts。纯文本是绝大多数情况，因此只设置
+	// Content 的既有调用方不受 ContentParts 存在的影响。
+	Content string
+	// ContentParts carries a multi-part message body (STATUS.md's P2
+	// ChatMessage.Content structured rework): ordered text and image
+	// parts, mirroring the content-array shape OpenAI and the
+	// OpenAI-compatible vLLM/SGLang/Ollama endpoints for vision models all
+	// accept. Nil for a text-only message — see Content.
+	//
+	// ContentParts 承载多部分消息体（STATUS.md 的 P2 ChatMessage.Content
+	// 结构化改造）：有序的文本与图片片段，对应 OpenAI 以及面向视觉模型的
+	// vLLM/SGLang/Ollama OpenAI 兼容端点共同接受的 content 数组形状。纯文本
+	// 消息留空——见 Content。
+	ContentParts []ContentPart
+	Name         string
+	ToolCallID   string
+	ToolCalls    []ToolCall
+}
+
+// ContentPart is one piece of a multi-part ChatMessage.ContentParts: either
+// a text run or an image reference, the two part types this codebase's
+// front doors and adapters support.
+//
+// ContentPart 是 ChatMessage.ContentParts 的一个片段：文本或图片引用，是本
+// 代码库前门与适配器所支持的两种片段类型。
+type ContentPart struct {
+	// Type is "text" or "image_url".
+	Type string
+	// Text is set when Type == "text".
+	Text string
+	// ImageURL is set when Type == "image_url".
+	ImageURL *ContentImageURL
+}
+
+// ContentImageURL is an image content part's source, mirroring the
+// OpenAI-compatible image_url object. URL may be an http(s) URL or a data:
+// URI carrying inline base64 image bytes — this package does not
+// distinguish them; the backend does.
+//
+// ContentImageURL 是图片内容片段的来源，对应 OpenAI 兼容的 image_url 对象。
+// URL 既可以是 http(s) 地址，也可以是内联 base64 图片字节的 data: URI——本包
+// 不区分两者，交给后端处理。
+type ContentImageURL struct {
+	URL string
+	// Detail is optional and mirrors OpenAI's image_url.detail ("auto",
+	// "low", "high"); empty means the backend's own default.
+	//
+	// Detail 可选，对应 OpenAI 的 image_url.detail（"auto"、"low"、
+	// "high"）；留空表示交给后端自己的默认值。
+	Detail string
 }
 
 type ChatResponse struct {

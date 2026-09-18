@@ -789,11 +789,12 @@ func chatMessagesFromProto(pbs []*tunnelv1.ChatMessage) []runtime.ChatMessage {
 
 func chatMessageToProto(m runtime.ChatMessage) *tunnelv1.ChatMessage {
 	return &tunnelv1.ChatMessage{
-		Role:       m.Role,
-		Content:    m.Content,
-		Name:       m.Name,
-		ToolCallId: m.ToolCallID,
-		ToolCalls:  toolCallsToProto(m.ToolCalls),
+		Role:         m.Role,
+		Content:      m.Content,
+		Name:         m.Name,
+		ToolCallId:   m.ToolCallID,
+		ToolCalls:    toolCallsToProto(m.ToolCalls),
+		ContentParts: contentPartsToProto(m.ContentParts),
 	}
 }
 
@@ -802,12 +803,43 @@ func chatMessageFromProto(pb *tunnelv1.ChatMessage) runtime.ChatMessage {
 		return runtime.ChatMessage{}
 	}
 	return runtime.ChatMessage{
-		Role:       pb.GetRole(),
-		Content:    pb.GetContent(),
-		Name:       pb.GetName(),
-		ToolCallID: pb.GetToolCallId(),
-		ToolCalls:  toolCallsFromProto(pb.GetToolCalls()),
+		Role:         pb.GetRole(),
+		Content:      pb.GetContent(),
+		Name:         pb.GetName(),
+		ToolCallID:   pb.GetToolCallId(),
+		ToolCalls:    toolCallsFromProto(pb.GetToolCalls()),
+		ContentParts: contentPartsFromProto(pb.GetContentParts()),
 	}
+}
+
+func contentPartsToProto(parts []runtime.ContentPart) []*tunnelv1.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]*tunnelv1.ContentPart, len(parts))
+	for i, p := range parts {
+		pb := &tunnelv1.ContentPart{Type: p.Type, Text: p.Text}
+		if p.ImageURL != nil {
+			pb.ImageUrl = &tunnelv1.ContentImageURL{Url: p.ImageURL.URL, Detail: p.ImageURL.Detail}
+		}
+		out[i] = pb
+	}
+	return out
+}
+
+func contentPartsFromProto(pbs []*tunnelv1.ContentPart) []runtime.ContentPart {
+	if len(pbs) == 0 {
+		return nil
+	}
+	out := make([]runtime.ContentPart, len(pbs))
+	for i, pb := range pbs {
+		p := runtime.ContentPart{Type: pb.GetType(), Text: pb.GetText()}
+		if img := pb.GetImageUrl(); img != nil {
+			p.ImageURL = &runtime.ContentImageURL{URL: img.GetUrl(), Detail: img.GetDetail()}
+		}
+		out[i] = p
+	}
+	return out
 }
 
 func toolCallsToProto(calls []runtime.ToolCall) []*tunnelv1.ToolCall {

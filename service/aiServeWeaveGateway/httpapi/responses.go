@@ -213,7 +213,7 @@ func (req responsesRequest) messages() ([]runtime.ChatMessage, error) {
 			// 并未实现。指名拒绝，好过把其中一半翻译成一条意思已经变了的消息。
 			return nil, fmt.Errorf("input item type %q is not supported", item.Type)
 		}
-		text, err := inputItemText(item.Content)
+		text, parts, err := inputItemContent(item.Content)
 		if err != nil {
 			return nil, err
 		}
@@ -221,47 +221,88 @@ func (req responsesRequest) messages() ([]runtime.ChatMessage, error) {
 		if role == "" {
 			role = "user"
 		}
-		out = append(out, runtime.ChatMessage{Role: role, Content: text})
+		out = append(out, runtime.ChatMessage{Role: role, Content: text, ContentParts: parts})
 	}
 	return out, nil
 }
 
-// inputItemText flattens an item's content to text, accepting both the bare
-// string form and the typed-part array.
+// responsesContentPartJSON is one element of an input item's typed-part
+// content array. ImageURL is a bare string on this API — unlike Chat
+// Completions' nested image_url.url — matching the real Responses API's
+// "input_image" shape.
+type responsesContentPartJSON struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+}
+
+// inputItemContent converts one input item's "content" field into the
+// canonical chat message content (STATUS.md's P2 ChatMessage.Content
+// structured rework): a bare string, or an array of parts that are all
+// text-shaped ("input_text"/"output_text"/"text"/""), collapses to plain
+// text — byte-identical to this function's pre-ContentParts behavior, so
+// the overwhelmingly common text-only case is unaffected by images
+// existing. An array containing an "input_image" part builds ContentParts
+// instead; any other part type (input_audio, input_file, …) is still
+// rejected by name: accepting it as empty text would silently answer a
+// question nobody asked, and there is still nowhere in the canonical type
+// to put it.
 //
-// inputItemText 把一个项目的内容压平为文本，两种形式都接受：裸字符串与带类型的部件
-// 数组。
-func inputItemText(raw json.RawMessage) (string, error) {
+// inputItemContent 把一个输入项目的 "content" 字段转换成 canonical 聊天消息
+// 内容（STATUS.md 的 P2 ChatMessage.Content 结构化改造）：裸字符串，或者全部由
+// 文本形状部件（"input_text"/"output_text"/"text"/空）组成的数组，都会收敛为
+// 纯文本——与本函数加入 ContentParts 之前的行为逐字节一致，因此绝大多数的
+// 纯文本情形不受图片存在的影响。含 "input_image" 部件的数组则改为构建
+// ContentParts；其他任何部件类型（input_audio、input_file……）仍按名字拒绝：
+// 把它当作空文本接受，等于默默回答一个没人问过的问题，且 canonical 类型里
+// 仍然没有地方安放它。
+func inputItemContent(raw json.RawMessage) (text string, parts []runtime.ContentPart, err error) {
 	if len(raw) == 0 {
-		return "", fmt.Errorf("an input item has no content")
+		return "", nil, fmt.Errorf("an input item has no content")
 	}
 	var single string
 	if err := json.Unmarshal(raw, &single); err == nil {
-		return single, nil
+		return single, nil, nil
 	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+	var items []responsesContentPartJSON
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return "", nil, fmt.Errorf("an input item's content must be a string or an array of parts")
 	}
-	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", fmt.Errorf("an input item's content must be a string or an array of parts")
-	}
-	var b strings.Builder
-	for _, p := range parts {
+
+	allText := true
+	for _, p := range items {
 		switch p.Type {
 		case "input_text", "output_text", "text", "":
-			b.WriteString(p.Text)
 		default:
-			// Images, audio and file parts need a canonical representation
-			// this repository does not have yet; accepting them as empty text
-			// would silently answer a question nobody asked.
-			//
-			// 图像、音频与文件部件需要一种本仓库尚不具备的 canonical 表示；把它们当作
-			// 空文本接受，等于默默回答一个没人问过的问题。
-			return "", fmt.Errorf("input content part type %q is not supported", p.Type)
+			allText = false
 		}
 	}
-	return b.String(), nil
+	if allText {
+		var b strings.Builder
+		for _, p := range items {
+			b.WriteString(p.Text)
+		}
+		return b.String(), nil, nil
+	}
+
+	for _, p := range items {
+		switch p.Type {
+		case "input_text", "output_text", "text", "":
+			parts = append(parts, runtime.ContentPart{Type: "text", Text: p.Text})
+		case "input_image":
+			if p.ImageURL == "" {
+				return "", nil, fmt.Errorf(`an "input_image" content part requires "image_url"`)
+			}
+			parts = append(parts, runtime.ContentPart{
+				Type:     "image_url",
+				ImageURL: &runtime.ContentImageURL{URL: p.ImageURL, Detail: p.Detail},
+			})
+		default:
+			return "", nil, fmt.Errorf("input content part type %q is not supported", p.Type)
+		}
+	}
+	return "", parts, nil
 }
 
 // toRuntime builds the canonical request. It is the same type chat.go produces,

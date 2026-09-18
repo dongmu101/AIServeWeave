@@ -19,6 +19,44 @@ func postMessages(t *testing.T, url, body string) *http.Response {
 	return resp
 }
 
+// TestAnthropicMessagesAcceptsImageBlocks proves an Anthropic "image"
+// content block (base64 source) crosses the whole pipeline — httpapi's
+// anthropicMessageContent, runtime.ChatMessage.ContentParts,
+// tunnelwire's proto codec, and back out through a fake node's own
+// tunnelwire decode (STATUS.md's P2 ChatMessage.Content structured
+// rework) — rather than only asserting on a wire shape near the front
+// door.
+func TestAnthropicMessagesAcceptsImageBlocks(t *testing.T) {
+	srv, h := newServer(t, httpapi.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandlerEchoingParts)
+
+	resp := postMessages(t, srv.URL, `{"model":"qwen3:8b","max_tokens":256,"messages":[{"role":"user","content":[
+		{"type":"text","text":"what is this"},
+		{"type":"image","source":{"type":"base64","media_type":"image/png","data":"Zm9v"}}
+	]}]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(body.Content) != 1 {
+		t.Fatalf("content = %+v, want one text block", body.Content)
+	}
+	want := "text= text=what is this image=data:image/png;base64,Zm9v"
+	if body.Content[0].Text != want {
+		t.Errorf("content text = %q, want %q", body.Content[0].Text, want)
+	}
+}
+
 func TestAnthropicMessagesNonStreaming(t *testing.T) {
 	srv, h := newServer(t, httpapi.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler)
@@ -168,9 +206,17 @@ func TestAnthropicMessagesRejectsToolsAndUnsupportedBlocks(t *testing.T) {
 				"tool_choice":{"type":"auto"}}`,
 		},
 		{
-			name: "a non-text content block",
+			// "image" is supported (TestAnthropicMessagesAcceptsImageBlocks);
+			// "tool_use" still has nowhere to go in the canonical type
+			// (design doc §四.3's second bullet), so it stays rejected.
+			name: "a tool_use content block",
 			body: `{"model":"qwen3:8b","max_tokens":256,"messages":[{"role":"user","content":[
-				{"type":"image","source":{"type":"base64","media_type":"image/png","data":"..."}}]}]}`,
+				{"type":"tool_use","id":"toolu_1","name":"get_weather","input":{}}]}]}`,
+		},
+		{
+			name: "an image block with an unsupported source type",
+			body: `{"model":"qwen3:8b","max_tokens":256,"messages":[{"role":"user","content":[
+				{"type":"image","source":{"type":"file","file_id":"file_1"}}]}]}`,
 		},
 		{
 			name: "an invalid message role",

@@ -227,7 +227,7 @@ aiserveweave-gateway \
 
 `POST /v1/responses` **在前门转换成内部 canonical 请求**，不新增隧道操作——这是 README「外部协议只存在于系统边界」的字面落实，并且换来一件具体的好处：只会 Chat Completions 的后端（Ollama 就是）在不知道这个 API 存在的情况下也能服务 Responses 请求。vLLM 自己的 `/v1/responses` 因此没有被使用。
 
-转换规则：`instructions` → 打头的 system 消息；`input` 的三种形式（裸字符串、`{role, content}` 数组、带 `input_text`/`output_text` 部件的数组）→ 同一份消息列表；`max_output_tokens` → `MaxTokens`；`text.format` → `ResponseFormat`；工具定义从 Responses 的扁平形状转成 Chat 的嵌套形状。
+转换规则：`instructions` → 打头的 system 消息；`input` 的三种形式（裸字符串、`{role, content}` 数组、带 `input_text`/`output_text`/`input_image` 部件的数组）→ 同一份消息列表；`max_output_tokens` → `MaxTokens`；`text.format` → `ResponseFormat`；工具定义从 Responses 的扁平形状转成 Chat 的嵌套形状。**`input_image` 部件已支持**（STATUS.md 的 P2 ChatMessage.Content 结构化改造，`inputItemContent`）：`image_url`（裸字符串，不像 Chat Completions 那样嵌套在对象里）与可选 `detail` 映射进 `runtime.ChatMessage.ContentParts`；一个纯文本部件数组仍然收敛成普通字符串 `Content`，与加入这项之前逐字节一致。
 
 **不支持的字段被指名拒绝（400），不是静默忽略**，对应 README「不能静默丢弃参数」：
 
@@ -236,7 +236,7 @@ aiserveweave-gateway \
 | `previous_response_id` / `store` | 仅在配置了持久化会话历史的控制面时才被兑现（STATUS.md 的 P2「Responses 持久会话」，见下一节）；未配置控制面、或调用方未认证到真实租户时仍被指名拒绝——续接一段对话既需要 Gateway 持有它，又需要一个可供限定范围的租户 |
 | `background` | 需要跨请求的服务端异步任务，本 Gateway 没有近似的东西 |
 | 内置工具（`web_search`、`file_search`、`code_interpreter`、`mcp`） | 由 OpenAI 自己的服务执行。本 Gateway 只把请求转给模型、不运行任何东西 |
-| 图像/音频/文件输入部件 | 需要一种本仓库尚不具备的 canonical 表示 |
+| 音频/文件输入部件（`input_audio`、`input_file`） | 需要一种本仓库尚不具备的 canonical 表示——`input_image` 已经有了（见上），这两种仍然没有 |
 
 **流式的事件嵌套是自己造出来的。** 下游隧道递上来的始终是一串扁平 delta，而 Responses 客户端的状态机建立在 `response` → `output_item` → `content_part` 的边界上，因此前门按那个顺序发：`response.created` → `in_progress` → `output_item.added` → `content_part.added` → `output_text.delta`×N → `output_text.done` → `content_part.done` → `output_item.done` → `completed`。`sequence_number` 在整条流上严格递增，那是客户端用来发现丢帧的东西。中途断流发 `response.failed`——响应头已经出去了，失败无法再表现为状态码。
 
@@ -352,11 +352,12 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 ## Anthropic Messages
 
-`POST /v1/messages`（STATUS.md 的 P2）是 Anthropic Messages 协议的 v1、纯文本子集，边界设计见 [P2 设计文档「Anthropic Messages 兼容边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)。实现见 `httpapi/anthropic.go`。
+`POST /v1/messages`（STATUS.md 的 P2）是 Anthropic Messages 协议的纯文本+图片子集，边界设计见 [P2 设计文档「Anthropic Messages 兼容边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)；图片支持是该文档§九.3 列为独立后续任务的 ChatMessage.Content 结构化改造。实现见 `httpapi/anthropic.go`。
 
 - **架构与 Responses 相同：在边界处转换，不新增调度路径。** 请求在 `toRuntime()` 里被转换成与 `chat.go`/`responses.go` 完全同一个 canonical `runtime.ChatRequest`，经同一个 `Scheduler.Chat`/`ChatStream` 派发，因此一个只会 Chat Completions 的后端在不知道 Anthropic 协议存在的情况下就能服务这个端点；不改动 `common/runtime` 核心类型或调度逻辑。
-- **v1 范围：纯文本，无工具，无图片/文档内容块。** `tools`、`tool_choice` 字段一旦出现即按名字拒绝（400），不静默忽略；`content` 数组里出现非 `"text"` 类型的块（`image`、`tool_use`、`tool_result` 等）同样按名字拒绝。原因是结构性的，不是尚未实现：今天的 `runtime.ChatMessage.Content` 是单一字符串，没有地方安放结构化内容块或工具调用，做到完整功能对等需要一次跨 OpenAI/Anthropic 两个前门共用的核心类型改动，设计文档§四.3 把它列为独立后续任务，不在本项范围内。
-- **`system` 字段与 `content` 数组的归约规则相同**：顶层 `system`（字符串，或全为 `"text"` 块的数组）映射成一条前置的 `Role: "system"` 消息；每条 `messages[i].content`（字符串，或全为 `"text"` 块的数组）拼接成纯文本，多个文本块之间不插入分隔符。`messages[i].role` 只接受 `"user"`/`"assistant"`，其余角色（含 Anthropic 协议里不存在于 `messages` 数组的 `"system"`）按名字拒绝。
+- **范围：纯文本 + 图片，无工具，无文档内容块。** `tools`、`tool_choice` 字段一旦出现即按名字拒绝（400），不静默忽略；`content` 数组里出现非 `"text"`/`"image"` 类型的块（`tool_use`、`tool_result`、`document` 等）同样按名字拒绝。工具调用的拒绝是结构性的：Anthropic 把 `tool_use`/`tool_result` 表达成消息内容的一部分而非独立字段，今天的 `ToolCall`/`ToolCallID` 字段能否表达这种模式仍待验证（设计文档§四.3 第二条），这是独立后续任务，不在本项范围内。
+- **`image` 内容块已支持**（STATUS.md 的 P2 ChatMessage.Content 结构化改造，`anthropicMessageContent`）：`source.type` 为 `"base64"`（`media_type`+`data`）转换成 `data:` URI，`"url"` 直接透传，两者都落进 `runtime.ChatMessage.ContentParts` 的 `image_url` 部件——与 `common/runtime/openai` 后端 DTO 及 Chat Completions 前门共用同一个 `runtime.ContentPart`/`ContentImageURL` 类型，三个前门（Chat Completions、Responses、Anthropic Messages）产出的候选消息在到达调度器时已经是同一个形状。一条消息的 `content` 若全部由 `"text"` 块组成（或本身是裸字符串），仍然收敛成普通字符串 `Content`，与加入这项之前逐字节一致——只有真的出现 `"image"` 块时才会用到 `ContentParts`。
+- **`system` 字段的归约规则不变，仍是纯文本**：顶层 `system`（字符串，或全为 `"text"` 块的数组）映射成一条前置的 `Role: "system"` 消息——Anthropic 协议本身把 `system` 定义为纯文本，从不携带图片，因此它复用的是更窄的 `anthropicText`，不是 `anthropicMessageContent`。每条 `messages[i].content` 走 `anthropicMessageContent`：纯文本（字符串或全 `"text"` 块）收敛成字符串，含 `"image"` 块则构建 `ContentParts`。`messages[i].role` 只接受 `"user"`/`"assistant"`，其余角色（含 Anthropic 协议里不存在于 `messages` 数组的 `"system"`）按名字拒绝。
 - **`max_tokens` 是必填字段**，Anthropic 协议本身如此要求；缺失或非正数答 400，不像 OpenAI 前门那样是可选参数。
 - **流式响应是 Anthropic 自己的具名 SSE 帧**（`event: <name>\ndata: <json>\n\n`），不是 OpenAI 前门 `chat.go` 用的裸 `data:` 帧；两者共用底层 `runtime.Stream[runtime.ChatEvent]`，只是 `httpapi/anthropic.go` 另有一套 `writeAnthropicSSE`。`message_start`/`content_block_start` 在第一次 `Recv` 之前就无条件写出（不像 OpenAI 前门那样懒等首个 delta），这样即使一次生成完全没有产出内容，事件序列依然完整；结束时依次写出 `content_block_stop`/`message_delta`（携带 `stop_reason` 与 `usage`）/`message_stop`。
 - **`stop_reason` 由后端不透明的 finish reason（OpenAI 风格：`"stop"`/`"length"`/`"tool_calls"`……）映射到 Anthropic 封闭词汇**（`anthropicStopReason`）：`"length"` → `"max_tokens"`，`"tool_calls"` → `"tool_use"`，其余（含空字符串）→ `"end_turn"`。

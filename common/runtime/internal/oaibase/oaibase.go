@@ -252,7 +252,25 @@ func ChatCapabilities(req runtime.ChatRequest) []runtime.Capability {
 	if req.ResponseFormat != nil {
 		caps = append(caps, runtime.CapabilityStructuredOutput)
 	}
+	if requestHasImage(req) {
+		caps = append(caps, runtime.CapabilityVision)
+	}
 	return caps
+}
+
+// requestHasImage reports whether any message carries an image content
+// part, so ChatCapabilities can require CapabilityVision only when a
+// request actually needs it — a text-only request must not be rejected on
+// a model whose vision support is unknown or unsupported.
+func requestHasImage(req runtime.ChatRequest) bool {
+	for _, m := range req.Messages {
+		for _, p := range m.ContentParts {
+			if p.Type == "image_url" {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // BeginRequest runs the shared request-path preamble: closed check,
