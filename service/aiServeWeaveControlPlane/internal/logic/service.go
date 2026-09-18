@@ -23,7 +23,9 @@ import (
 
 	"golang.org/x/crypto/bcrypt"
 
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
@@ -81,6 +83,14 @@ var (
 	// ErrModelPullRouterUnconfigured 在没有通过 WithModelPullRouter 向 New
 	// 提供 ModelPullRouter 时，由 TriggerModelPull 返回。
 	ErrModelPullRouterUnconfigured = errors.New("logic: the model-pull router is not configured")
+	// ErrComfyUIManagedRouterUnconfigured is returned by
+	// TriggerComfyUIManagedAction when no ComfyUIManagedRouter was given to
+	// New — see WithComfyUIManagedRouter.
+	//
+	// ErrComfyUIManagedRouterUnconfigured 在没有通过
+	// WithComfyUIManagedRouter 向 New 提供 ComfyUIManagedRouter 时，由
+	// TriggerComfyUIManagedAction 返回。
+	ErrComfyUIManagedRouterUnconfigured = errors.New("logic: the comfyui-managed router is not configured")
 )
 
 // bcryptCost is the work factor for user passwords. It applies to passwords
@@ -157,16 +167,40 @@ type ModelPullRouter interface {
 	Trigger(ctx context.Context, nodeID string, names []string) (modelpullrouter.Result, error)
 }
 
+// ComfyUIManagedRouter forwards STATUS.md's P2 ComfyUI Managed Docker
+// deployment subtask two's per-node lifecycle action trigger to whichever
+// Gateway replica currently holds node_id's connection. It is an interface,
+// implemented by comfyuimanagedrouter.Router, for the same reason
+// ModelPullRouter is: this layer's tests substitute a fake and stay free of
+// a real Gateway replica.
+//
+// Like ModelPullRouter this layer only forwards the write (Trigger); the
+// read (Status) is served straight from ctx.ComfyUIManagedRouter in the
+// handler package — the same split.
+//
+// ComfyUIManagedRouter 把 STATUS.md P2 ComfyUI Managed Docker 部署子任务二
+// 里针对单个节点的生命周期动作触发，转发给当前持有 node_id 连接的那个
+// Gateway 副本。它在这里是一个接口、由 comfyuimanagedrouter.Router 实现，
+// 理由与 ModelPullRouter 相同：本层的测试可以替换一个假件，从而无需一个
+// 真实的 Gateway 副本。
+//
+// 与 ModelPullRouter 相同，本层只转发写操作（Trigger）；读操作（Status）
+// 直接由 handler 包从 ctx.ComfyUIManagedRouter 提供服务——同一种切分。
+type ComfyUIManagedRouter interface {
+	Trigger(ctx context.Context, nodeID string, action comfyuimanagedstatus.Action) (comfyuimanagedrouter.Result, error)
+}
+
 // Service is the business layer. Construct one with New.
 //
 // Service 是业务层。用 New 构造。
 type Service struct {
-	store           store.Store
-	clock           runtime.Clock
-	invalidator     Invalidator
-	sessions        session.Store
-	registryClient  RegistryClient
-	modelPullRouter ModelPullRouter
+	store                store.Store
+	clock                runtime.Clock
+	invalidator          Invalidator
+	sessions             session.Store
+	registryClient       RegistryClient
+	modelPullRouter      ModelPullRouter
+	comfyUIManagedRouter ComfyUIManagedRouter
 }
 
 // Option configures a Service.
@@ -216,6 +250,19 @@ func WithRegistryClient(client RegistryClient) Option {
 // WithRegistryClient 文档所述"必须说明，而不是空指针 panic"同一条规则。
 func WithModelPullRouter(router ModelPullRouter) Option {
 	return func(s *Service) { s.modelPullRouter = router }
+}
+
+// WithComfyUIManagedRouter gives the Service a way to forward ComfyUI
+// Managed lifecycle action triggers to the Gateway replicas. Without one,
+// TriggerComfyUIManagedAction returns ErrComfyUIManagedRouterUnconfigured,
+// the same "say so, don't nil-panic" rule WithModelPullRouter documents.
+//
+// WithComfyUIManagedRouter 为 Service 提供一条向 Gateway 副本转发 ComfyUI
+// Managed 生命周期动作触发的路径。没有它，TriggerComfyUIManagedAction 会
+// 返回 ErrComfyUIManagedRouterUnconfigured——与 WithModelPullRouter 文档
+// 所述"必须说明，而不是空指针 panic"同一条规则。
+func WithComfyUIManagedRouter(router ComfyUIManagedRouter) Option {
+	return func(s *Service) { s.comfyUIManagedRouter = router }
 }
 
 // New returns a Service over st. A nil clock uses the system clock; tests

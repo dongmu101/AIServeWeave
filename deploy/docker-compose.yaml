@@ -195,10 +195,10 @@ services:
     restart: unless-stopped
     command: ["-f", "/etc/aiserveweave/controlplane.yaml"]
     environment:
-      # 这六个是密钥。compose 在这里提供默认值，配置文件里只有 ${VAR}
+      # 这七个是密钥。compose 在这里提供默认值，配置文件里只有 ${VAR}
       # ——conf.UseEnv 不支持带默认值的形式，见 controlplane.yaml 的注释。
       #
-      # These six are secrets. Compose supplies the defaults here and the
+      # These seven are secrets. Compose supplies the defaults here and the
       # config file carries only ${VAR}: conf.UseEnv has no default-value form,
       # as controlplane.yaml notes.
       AISW_ACCESS_SECRET: ${AISW_ACCESS_SECRET:?set it in deploy/.env — openssl rand -base64 32}
@@ -207,6 +207,7 @@ services:
       AISW_REGISTRY_ADMIN_TOKEN: ${AISW_REGISTRY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_ADMIN_TOKEN: ${AISW_GATEWAY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_MODEL_PULL_TOKEN: ${AISW_GATEWAY_MODEL_PULL_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_GATEWAY_COMFYUI_MANAGED_TOKEN: ${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       MYSQL_USER: ${MYSQL_USER:-aiserveweave}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
@@ -413,14 +414,28 @@ services:
       # heavier leak consequence than reading the inventory, see the Gateway
       # README's "模型拉取触发".
       - -model-pull-addr=:8092
+      # 对本地已声明的 Managed ComfyUI 实例下发启停/重启动作的写监听器（STATUS.md 的
+      # P2 ComfyUI Managed Docker 部署子任务二）；同样不发布到宿主机端口，且用与
+      # -model-pull-addr 不同的独立 token——两者都是写操作，但控制的是不同的能力，
+      # 泄漏后果的爆炸半径不同，见 Gateway README「ComfyUI Managed 触发」。
+      #
+      # The write listener that applies a start/stop/restart action to a
+      # node's one locally-declared Managed ComfyUI instance (STATUS.md's P2
+      # ComfyUI Managed Docker deployment subtask two); likewise not
+      # published to a host port, and uses its own token distinct from
+      # -model-pull-addr's — both are writes, but they gate different
+      # capabilities with different leak blast radii, see the Gateway
+      # README's "ComfyUI Managed 触发".
+      - -comfyui-managed-addr=:8093
       - -log-level=${LOG_LEVEL:-info}
     environment:
-      # flag 在 ps 输出里可见，因此这三个令牌都走环境变量。
-      # A flag is visible in ps output, so all three tokens go through the
+      # flag 在 ps 输出里可见，因此这四个令牌都走环境变量。
+      # A flag is visible in ps output, so all four tokens go through the
       # environment.
       AISW_CONTROL_PLANE_TOKEN: ${AISW_INTERNAL_TOKEN:?set it in deploy/.env}
       AISW_GATEWAY_ADMIN_TOKEN: ${AISW_GATEWAY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_MODEL_PULL_TOKEN: ${AISW_GATEWAY_MODEL_PULL_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_GATEWAY_COMFYUI_MANAGED_TOKEN: ${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
     volumes:
       # 只读挂载：Gateway 出示这些材料，从不写它们。私钥是 0600，而两个镜像用的是
       # 同一个 uid，因此读得到。

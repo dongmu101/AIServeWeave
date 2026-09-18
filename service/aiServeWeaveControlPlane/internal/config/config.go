@@ -91,6 +91,18 @@ type Config struct {
 	// 模型拉取，且两者指向不同的 Gateway 监听器、使用不同的 token。
 	ModelPull ModelPullConf `json:",optional"`
 
+	// ComfyUIManaged configures forwarding STATUS.md's P2 ComfyUI Managed
+	// Docker deployment subtask two's per-node lifecycle action trigger and
+	// status calls to whichever Gateway replica currently holds that
+	// node's connection. It is optional and independent of ModelPull and
+	// Fleet — it reaches a fourth, separately tokened Gateway listener.
+	//
+	// ComfyUIManaged 配置把 STATUS.md P2 ComfyUI Managed Docker 部署子任务二
+	// 里针对单个节点的生命周期动作触发与状态查询，转发给当前持有该节点连接
+	// 的那个 Gateway 副本。它是可选的，且与 ModelPull、Fleet 相互独立——它
+	// 够到的是第四个、带着自己 token 的独立 Gateway 监听器。
+	ComfyUIManaged ComfyUIManagedConf `json:",optional"`
+
 	// Registry configures this service's client to the Registry's TokenAdmin
 	// service (STATUS.md's P01): node approval, disable/enable and
 	// maintenance. Like Fleet, it is optional — a deployment with no
@@ -291,6 +303,55 @@ type ModelPullConf struct {
 // FleetConf.Enabled 相同。
 func (m ModelPullConf) Enabled() bool {
 	return len(m.Gateways) > 0 || m.GatewayToken != ""
+}
+
+// ComfyUIManagedConf configures forwarding STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask two's per-node lifecycle action trigger and
+// status calls.
+//
+// It deliberately does not reuse ModelPullConf, the same reasoning
+// ModelPullConf's own doc comment gives for not reusing FleetConf: each
+// points at a different Gateway listener (-comfyui-managed-addr here, not
+// -model-pull-addr) with its own token.
+//
+// ComfyUIManagedConf 配置转发 STATUS.md P2 ComfyUI Managed Docker 部署子任务
+// 二里针对单个节点的生命周期动作触发与状态查询。
+//
+// 它刻意不复用 ModelPullConf，理由与 ModelPullConf 自己文档注释里不复用
+// FleetConf 的理由相同：两者指向不同的 Gateway 监听器（这里是
+// -comfyui-managed-addr，不是 -model-pull-addr），各自带自己的 token。
+type ComfyUIManagedConf struct {
+	// Gateways are the base URLs of each Gateway replica's
+	// -comfyui-managed-addr listener, e.g. http://gateway-1:8093. A
+	// replica not listed here is simply never asked, and node_id
+	// connected only to it cannot be triggered or queried through this
+	// service.
+	//
+	// Gateways 是各 Gateway 副本 -comfyui-managed-addr 监听器的基础 URL，
+	// 例如 http://gateway-1:8093。没有列在这里的副本不会被询问，只连到它
+	// 上面的 node_id 也就无法经本服务被触发或查询。
+	Gateways []string `json:",optional"`
+	// GatewayToken authenticates this service to those listeners. It must
+	// match each Gateway's AISW_GATEWAY_COMFYUI_MANAGED_TOKEN.
+	//
+	// GatewayToken 用于本服务向那些监听器表明身份。它必须与各 Gateway 的
+	// AISW_GATEWAY_COMFYUI_MANAGED_TOKEN 一致。
+	GatewayToken string `json:",optional"`
+	// Timeout bounds one call to one replica. Every configured replica is
+	// asked concurrently, so a slow one delays only itself.
+	//
+	// Timeout 限制对单个副本的单次调用。每个已配置副本都被并发询问，因此
+	// 一个慢副本只会拖延它自己。
+	Timeout time.Duration `json:",default=3s"`
+}
+
+// Enabled reports whether ComfyUI Managed forwarding is configured. Both
+// parts are required together, the same reasoning as ModelPullConf.Enabled.
+//
+// Enabled 报告 ComfyUI Managed 转发是否已配置。两部分必须同时具备，理由与
+// ModelPullConf.Enabled 相同。
+func (c ComfyUIManagedConf) Enabled() bool {
+	return len(c.Gateways) > 0 || c.GatewayToken != ""
 }
 
 // RegistryConf configures the Registry TokenAdmin client (STATUS.md's P01).
@@ -523,6 +584,14 @@ func (c Config) Validate() error {
 		}
 		if len(c.ModelPull.GatewayToken) < minSecretLen {
 			return errors.New("config: ModelPull.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.ComfyUIManaged.Enabled() {
+		if len(c.ComfyUIManaged.Gateways) == 0 {
+			return errors.New("config: ComfyUIManaged.Gateways is required once comfyui-managed forwarding is configured")
+		}
+		if len(c.ComfyUIManaged.GatewayToken) < minSecretLen {
+			return errors.New("config: ComfyUIManaged.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
 		}
 	}
 	if c.Registry.Enabled() {

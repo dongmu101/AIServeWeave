@@ -35,6 +35,7 @@ import (
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
+	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 	"AIServeWeave/service/aiServeWeaveGateway/modelpullapi"
@@ -121,6 +122,8 @@ func run() error {
 		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
 	modelPullAddr := flag.String("model-pull-addr", "",
 		"address the model-pull trigger/status listener binds, e.g. 127.0.0.1:8092 (STATUS.md's P2 model distribution subtask 2); empty disables it. Unlike -admin-addr this listener accepts writes, so it has its own token: AISW_GATEWAY_MODEL_PULL_TOKEN")
+	comfyUIManagedAddr := flag.String("comfyui-managed-addr", "",
+		"address the ComfyUI Managed action/status listener binds, e.g. 127.0.0.1:8093 (STATUS.md's P2 ComfyUI Managed Docker deployment subtask 2); empty disables it. It is a separate write listener from -model-pull-addr with its own token: AISW_GATEWAY_COMFYUI_MANAGED_TOKEN")
 	artifactStorageKind := flag.String("artifact-storage", "",
 		"generated artifact storage backend (STATUS.md's P04): local, s3, webdav, or empty to disable byte persistence — artifacts then remain pull-only from the node that produced them, today's pre-P04 behavior")
 	artifactStorageLocalDir := flag.String("artifact-storage-local-dir", "", "directory for -artifact-storage=local")
@@ -527,6 +530,51 @@ func run() error {
 		logger.Info("model-pull listening", slog.String("model_pull_addr", modelPullListener.Addr().String()))
 	}
 
+	// The ComfyUI Managed listener is a third, separate operator port
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment subtask 2): it also
+	// accepts writes — an action can stop or restart a connected node's
+	// container — but controls a different capability from -model-pull-addr,
+	// so it gets its own token rather than sharing one; a leaked token's
+	// blast radius should match the one capability it unlocks, not both.
+	// HasActiveJob wires in front's own job routing table (built above at
+	// line 430) so a RESTART can be refused while this replica still has a
+	// non-terminal job bound to the target node (STATUS.md's P2 "排空升级检
+	// 查") — the drain check comfyuimanagedapi's own doc comment describes.
+	//
+	// ComfyUI Managed 监听器是第三个、独立的运维端口（STATUS.md P2 ComfyUI
+	// Managed Docker 部署子任务二）：它同样接受写操作——一个动作能停止或重启
+	// 已连接节点的容器——但控制的是与 -model-pull-addr 不同的能力，因此它有
+	// 自己的 token 而不是共用一个；一个泄漏的 token，其爆炸半径应该只对应
+	// 它解锁的那一种能力，而不是两种都算上。HasActiveJob 接上了 front 自己
+	// 的 job 路由表（上面第 430 行构造），这样本副本仍有非终态 job 绑定在
+	// 目标节点上时，RESTART 就能被拒绝（STATUS.md 的 P2「排空升级检
+	// 查」）——细节见 comfyuimanagedapi 自己的文档注释。
+	var comfyUIManagedServer *http.Server
+	if *comfyUIManagedAddr == "" {
+		logger.Info("no -comfyui-managed-addr; this replica accepts no comfyui managed actions")
+	} else {
+		comfyUIManagedHandler, err := comfyuimanagedapi.New(comfyuimanagedapi.Config{
+			Token:        os.Getenv("AISW_GATEWAY_COMFYUI_MANAGED_TOKEN"),
+			Trigger:      server.TriggerComfyUIManagedAction,
+			Status:       server.ComfyUIManagedStatus,
+			HasActiveJob: front.HasActiveJobOnNode,
+		})
+		if err != nil {
+			return err
+		}
+		comfyUIManagedListener, err := net.Listen("tcp", *comfyUIManagedAddr)
+		if err != nil {
+			return err
+		}
+		comfyUIManagedServer = &http.Server{Handler: comfyUIManagedHandler}
+		go func() {
+			if err := comfyUIManagedServer.Serve(comfyUIManagedListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("comfyui managed listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("comfyui managed listening", slog.String("comfyui_managed_addr", comfyUIManagedListener.Addr().String()))
+	}
+
 	// The metrics listener's failure is logged rather than returned: losing
 	// observability is bad, and taking a serving Gateway down over it would
 	// be worse.
@@ -677,6 +725,9 @@ func run() error {
 	}
 	if modelPullServer != nil {
 		_ = modelPullServer.Close()
+	}
+	if comfyUIManagedServer != nil {
+		_ = comfyUIManagedServer.Close()
 	}
 
 	logger.Info("gateway stopped")

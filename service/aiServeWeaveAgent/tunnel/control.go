@@ -41,6 +41,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 	if err := sess.forceReportModelPull(); err != nil {
 		return c.streamError("initial model pull report", err)
 	}
+	if err := sess.forceReportComfyUIManaged(); err != nil {
+		return c.streamError("initial comfyui managed report", err)
+	}
 
 	heartbeat := newRearmingTimer(c.clock, c.cfg.HeartbeatInterval)
 	defer heartbeat.stop()
@@ -75,6 +78,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.reportModelPull(false); err != nil {
 				return c.streamError("model pull report", err)
 			}
+			if err := sess.reportComfyUIManaged(false); err != nil {
+				return c.streamError("comfyui managed report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -102,6 +108,10 @@ type controlSession struct {
 	// subtask 2). nil before the first report, which always differs from
 	// any real encoding and so is always sent.
 	reportedModelPull []byte
+	// reportedComfyUIManaged is reportedModelPull's counterpart for
+	// ComfyUIManagedReport (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment, subtask 2).
+	reportedComfyUIManaged []byte
 }
 
 // handle dispatches one frame from the replica.
@@ -131,6 +141,15 @@ func (s *controlSession) handle(ctx context.Context, frame *tunnelv1.GatewayCont
 		// status report (forced here) is how the Gateway observes an
 		// unknown name being rejected or a known one starting to move.
 		return s.forceReportModelPull()
+
+	case *tunnelv1.GatewayControl_ComfyuiManagedAction:
+		if c.cfg.ComfyUIManaged != nil {
+			c.cfg.ComfyUIManaged.Trigger(tunnelwire.ComfyUIManagedActionFromProto(body.ComfyuiManagedAction))
+		}
+		// Same rule as GatewayControl_ModelPullTrigger: no dedicated ack,
+		// the next report (forced here) is how the Gateway observes the
+		// action taking effect.
+		return s.forceReportComfyUIManaged()
 
 	case *tunnelv1.GatewayControl_Roster:
 		if c.cfg.OnRoster != nil {
@@ -323,6 +342,50 @@ func (s *controlSession) reportModelPull(force bool) error {
 // the ModelPuller counterpart to forceReport.
 func (s *controlSession) forceReportModelPull() error {
 	return s.reportModelPull(true)
+}
+
+// reportComfyUIManaged sends a ComfyUIManagedReport when the Supervisor's
+// snapshot has changed since the last one sent (or force is true) —
+// reportModelPull's counterpart for STATUS.md's P2 ComfyUI Managed Docker
+// deployment, subtask 2. There is always at most one entry (an Agent
+// manages at most one Managed instance today), so the same
+// "whole-set deterministic encoding" comparison reportModelPull uses applies
+// unchanged.
+//
+// reportComfyUIManaged 在 Supervisor 的快照自上次发送后发生变化（或 force 为
+// true）时发送一次 ComfyUIManagedReport——是 reportModelPull 在 STATUS.md P2
+// ComfyUI Managed Docker 部署子任务二里的对应物。今天一个 Agent 最多管理一个
+// Managed 实例，因此总是最多一个条目，reportModelPull 那套"整个集合的确定性
+// 编码"比较方式原样适用。
+func (s *controlSession) reportComfyUIManaged(force bool) error {
+	manager := s.client.cfg.ComfyUIManaged
+	if manager == nil {
+		return nil
+	}
+	report := tunnelwire.ComfyUIManagedReportToProto(manager.Snapshot())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a comfyui managed report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedComfyUIManaged) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_ComfyuiManaged{ComfyuiManaged: report}}, "comfyui managed report"); err != nil {
+		return err
+	}
+	s.reportedComfyUIManaged = key
+	return nil
+}
+
+// forceReportComfyUIManaged sends a ComfyUIManagedReport regardless of what
+// changed, the Supervisor counterpart to forceReportModelPull.
+func (s *controlSession) forceReportComfyUIManaged() error {
+	return s.reportComfyUIManaged(true)
 }
 
 // applyConfig installs one control-plane configuration change. Failures are

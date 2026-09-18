@@ -398,6 +398,7 @@ message AgentControl {
     Draining draining = 4;              // graceful shutdown notice
     Pong pong = 5;
     ModelPullReport model_pull = 6;     // STATUS.md P2 model distribution subtask 2
+    ComfyUIManagedReport comfyui_managed = 7; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
   }
 }
 
@@ -411,6 +412,7 @@ message GatewayControl {
     Shutdown shutdown = 6;
     Ping ping = 7;
     ModelPullTrigger model_pull_trigger = 8; // STATUS.md P2 model distribution subtask 2
+    ComfyUIManagedAction comfyui_managed_action = 9; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
   }
 }
 
@@ -613,6 +615,66 @@ message ModelPullStatus {
   int64 bytes_total = 4;                 // 0 when unknown (Spec.SizeBytes was 0)
   ModelPullFailureReason reason = 5;     // set only when state == FAILED
   int64 updated_unix_ms = 6;
+}
+
+// ComfyUIManagedAction asks the Agent to apply a lifecycle action to the one
+// Managed ComfyUI instance it already declared via its own local flags
+// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask one). It never
+// carries an image, mount path, or any other spec field — those stay
+// entirely local to the Agent, the same load-bearing reason ModelPullTrigger
+// never carries a URL: an operator who wants a new image version pinned
+// still edits this node's own flags and triggers RESTART, never hands the
+// image name to the Gateway to relay.
+//
+// ComfyUIManagedAction 要求 Agent 对它已经通过本地 flag 声明的那一个 Managed
+// ComfyUI 实例（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务一）施加一个
+// 生命周期动作。它永远不携带镜像名、挂载路径或任何其他 spec 字段——这些完全
+// 留在 Agent 本地，与 ModelPullTrigger 从不携带 URL 是同一条 load-bearing 理
+// 由：运维想固定新的镜像版本，仍然要改本节点自己的 flag 再触发 RESTART，从不
+// 是把镜像名交给 Gateway 转发。
+message ComfyUIManagedAction {
+  ComfyUIManagedActionType action = 1;
+}
+
+enum ComfyUIManagedActionType {
+  COMFYUI_MANAGED_ACTION_UNSPECIFIED = 0;
+  COMFYUI_MANAGED_ACTION_START = 1;
+  COMFYUI_MANAGED_ACTION_STOP = 2;
+  COMFYUI_MANAGED_ACTION_RESTART = 3;
+}
+
+// ComfyUIManagedReport mirrors the Agent-local Supervisor's current view of
+// its one Managed ComfyUI container: empty when Managed mode is disabled on
+// this Agent. It reports container-lifecycle state only — ComfyUI protocol
+// health for an already-registered instance keeps flowing through the
+// existing RuntimeStatus/RuntimeSnapshot path (runtime.Manager.Add
+// registers a Managed instance exactly like an External one); this message
+// covers only the gap RuntimeStatus cannot see: before the container is
+// ever registered, or after it has been deregistered.
+//
+// ComfyUIManagedReport 镜像 Agent 本地 Supervisor 对它那一个 Managed ComfyUI
+// 容器的当前视图：本 Agent 未启用 Managed 模式时为空。它只报告容器生命周期状
+// 态——一个已注册实例的 ComfyUI 协议健康状况仍然经既有的
+// RuntimeStatus/RuntimeSnapshot 通道汇报（runtime.Manager.Add 注册 Managed
+// 实例的方式与 External 实例完全相同）；这条消息只覆盖 RuntimeStatus 看不到
+// 的空档：容器从未被注册之前，或被取消注册之后。
+message ComfyUIManagedReport {
+  repeated ComfyUIManagedStatus instances = 1;
+}
+
+message ComfyUIManagedStatus {
+  string container_name = 1;
+  ComfyUIManagedState state = 2;
+  int64 updated_unix_ms = 3;
+}
+
+enum ComfyUIManagedState {
+  COMFYUI_MANAGED_STATE_UNSPECIFIED = 0;
+  COMFYUI_MANAGED_STATE_PENDING = 1;
+  COMFYUI_MANAGED_STATE_STARTING = 2;
+  COMFYUI_MANAGED_STATE_RUNNING = 3;
+  COMFYUI_MANAGED_STATE_STOPPED = 4;
+  COMFYUI_MANAGED_STATE_FAILED = 5;
 }
 
 // RuntimeSpec mirrors runtime.Config with one deliberate difference: there is

@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"time"
 
+	"AIServeWeave/common/comfyuimanagedstatus"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
@@ -1172,6 +1174,137 @@ func renderModelPullStatuses(pulls []modelpullrouter.PullStatus) []types.ModelPu
 // 没有路由"同一规则）。
 func respondModelPullRouterErr(w http.ResponseWriter, err error) {
 	if errors.Is(err, modelpullrouter.ErrDisabled) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal error")
+}
+
+// -----------------------------------------------------------------------
+// Operator: ComfyUI Managed forwarding (STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask two, the control plane forwarding layer)
+// -----------------------------------------------------------------------
+
+// triggerComfyUIManagedAction asks node_id, wherever it is connected among
+// the configured Gateway replicas, to apply action to its one
+// locally-declared Managed instance — the write half of forwarding
+// STATUS.md's P2 ComfyUI Managed Docker deployment subtask two.
+//
+// triggerComfyUIManagedAction 要求 node_id（无论它连在哪个已配置 Gateway
+// 副本上）对它本地已声明的那一个 Managed 实例施加 action——转发 STATUS.md
+// P2 ComfyUI Managed Docker 部署子任务二的写入那一半。
+func triggerComfyUIManagedAction(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.ComfyUIManagedTriggerRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		action, ok := parseComfyUIManagedAction(req.Action)
+		if !ok {
+			writeError(w, http.StatusBadRequest, `action must be one of "start", "stop", "restart"`)
+			return
+		}
+		result, err := ctx.Logic.TriggerComfyUIManagedAction(r.Context(), actor, nodeID, action)
+		recordComfyUIManagedRouterCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, types.ComfyUIManagedTriggerResponse{Replicas: renderComfyUIManagedReplicas(result.Replicas)})
+	}
+}
+
+// parseComfyUIManagedAction renders comfyuimanagedstatus.Action's closed
+// vocabulary as the lowercase strings this endpoint accepts on the wire,
+// mirroring comfyuimanagedapi's own parseAction.
+func parseComfyUIManagedAction(s string) (comfyuimanagedstatus.Action, bool) {
+	switch s {
+	case "start":
+		return comfyuimanagedstatus.ActionStart, true
+	case "stop":
+		return comfyuimanagedstatus.ActionStop, true
+	case "restart":
+		return comfyuimanagedstatus.ActionRestart, true
+	default:
+		return comfyuimanagedstatus.ActionUnspecified, false
+	}
+}
+
+// comfyUIManagedStatus returns node_id's last-reported Managed instance
+// status from whichever configured Gateway replica currently holds its
+// connection — the read half of forwarding STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask two.
+//
+// It calls ctx.ComfyUIManagedRouter directly rather than going through
+// ctx.Logic, the same split modelPullStatus uses.
+//
+// comfyUIManagedStatus 返回 node_id 最后上报的 Managed 实例状态，来自当前
+// 持有其连接的那个已配置 Gateway 副本——转发 STATUS.md P2 ComfyUI Managed
+// Docker 部署子任务二的读取那一半。
+//
+// 它直接调用 ctx.ComfyUIManagedRouter 而不经过 ctx.Logic，与
+// modelPullStatus 是同一种切分。
+func comfyUIManagedStatus(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		result, err := ctx.ComfyUIManagedRouter.Status(r.Context(), nodeID)
+		recordComfyUIManagedRouterCall(ctx, err)
+		if err != nil {
+			respondComfyUIManagedRouterErr(w, err)
+			return
+		}
+		if !result.Connected {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, types.ComfyUIManagedStatusResponse{
+			Instances: renderComfyUIManagedInstances(result.Instances),
+			Replicas:  renderComfyUIManagedReplicas(result.Replicas),
+		})
+	}
+}
+
+func renderComfyUIManagedReplicas(replicas []comfyuimanagedrouter.ReplicaStatus) []types.ComfyUIManagedReplicaStatus {
+	out := make([]types.ComfyUIManagedReplicaStatus, len(replicas))
+	for i, r := range replicas {
+		out[i] = types.ComfyUIManagedReplicaStatus{Endpoint: r.Endpoint, Connected: r.Connected, Error: r.Error}
+	}
+	return out
+}
+
+func renderComfyUIManagedInstances(instances []comfyuimanagedrouter.InstanceStatus) []types.ComfyUIManagedInstanceStatus {
+	out := make([]types.ComfyUIManagedInstanceStatus, len(instances))
+	for i, inst := range instances {
+		out[i] = types.ComfyUIManagedInstanceStatus{
+			ContainerName: inst.ContainerName,
+			State:         inst.State,
+			UpdatedAt:     inst.UpdatedAt,
+		}
+	}
+	return out
+}
+
+// respondComfyUIManagedRouterErr handles a direct ctx.ComfyUIManagedRouter
+// call's error, mirroring respondModelPullRouterErr.
+//
+// respondComfyUIManagedRouterErr 处理一次直接 ctx.ComfyUIManagedRouter
+// 调用的错误，与 respondModelPullRouterErr 一致。
+func respondComfyUIManagedRouterErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, comfyuimanagedrouter.ErrDisabled) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}

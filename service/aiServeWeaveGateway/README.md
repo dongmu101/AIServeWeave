@@ -84,6 +84,29 @@ go run ./service/aiServeWeaveGateway -model-pull-addr 127.0.0.1:8092 ...
 - **没有 token 时拒绝启动**，与 `-admin-addr` 同一克制：一个能让节点开始下载的入口不该以未认证方式提供。
 - **范围边界**：控制面转发层已交付，Console 可见性（子任务五）仍未排期；`common/modelroute.Target` 不新增"这个模型别名对应哪个制品名字"的映射，调用方（运维，无论是直接调用本节点端点还是经控制面转发）自己决定触发哪个名字。
 
+## ComfyUI Managed 触发（STATUS.md 的 P2「ComfyUI Managed Docker 部署」子任务二）
+
+`-comfyui-managed-addr` 打开另一个独立的写入口，供运维对一个已连接节点本地已声明的那一个 Managed ComfyUI 实例施加 start/stop/restart 生命周期动作、并查询它的容器状态；不给地址就不启用，设计文档见 [`docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md`](../../docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md)。
+
+```bash
+AISW_GATEWAY_COMFYUI_MANAGED_TOKEN=$(openssl rand -base64 32) \
+go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
+```
+
+| 端点 | 内容 |
+| --- | --- |
+| `POST /internal/v1/nodes/{node_id}/comfyui-managed` | body `{"action":"start"\|"stop"\|"restart"}`，触发节点对其 Managed 实例施加该动作；202 只确认已下发到隧道，不确认动作是否已在 Agent 上生效；`action="restart"` 且本副本仍追踪着路由到该节点的非终态 job 时答 409，不下发 |
+| `GET /internal/v1/nodes/{node_id}/comfyui-managed` | 本副本对该节点最后已知的 Managed ComfyUI 容器状态：容器名、生命周期状态（pending/starting/running/stopped/failed）、更新时间 |
+
+- **与 `-model-pull-addr` 刻意分处不同监听器、不同 token，尽管两者都是写操作。** 两者控制的是不同的能力、泄漏后果的爆炸半径不同——`-model-pull-addr` 泄漏的是能让节点下载它本地清单已经批准的一切，这一个泄漏的是能停止或重启一个正在运行的容器，与 `-model-pull-addr` 自己不并入 `-admin-addr` 的理由相同：没有理由共用一把 token。
+- **动作从不携带镜像名、挂载路径或任何其他 spec 字段，只有一个封闭动作。** 镜像、GPU、挂载路径永远是 Agent 本地 flag 配置的（`-comfyui-managed-image` 等），运维想换镜像版本仍要先改本机 flag 再触发 RESTART，从不是把镜像名交给 Gateway 转发——即使这个监听器的 token 被盗，能做的也只是对已声明的实例喊 start/stop/restart，不能让 Agent 跑任意镜像；这是 `tunnel.proto` 头部「不得表达 run this command」红线在这一层的延续，完整论证见隧道 README「ComfyUI Managed 的生命周期动作触发」一节与上述设计文档。
+- **动作不携带容器名。** 一个 Agent 进程今天最多管理一个 Managed 实例，动作总是针对 Agent 本地已声明的那一个 Spec；一台机器上想管理多个 Managed 实例是子任务二之后仍未排期的已知缺口。
+- **触发是异步的，HTTP 响应不携带执行结果。** 202 只表示这次触发已经发到隧道的 Control 流上；容器实际状态只能从随后的 `GET` 观察——Control 流"不设专门 ack 帧"是既有设计（`GatewayControl_Config`/模型拉取触发同一先例），本端点不为了让响应更即时而破坏它。
+- **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/comfyuimanagedrouter`（与 `internal/modelpullrouter` 形状对称：并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/comfyui-managed`，详见 [ControlPlane README「ComfyUI Managed 转发（P2 ComfyUI Managed Docker 部署子任务三的控制面转发层）」](../aiServeWeaveControlPlane/README.md#comfyui-managed-转发p2-comfyui-managed-docker-部署子任务三控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
+- **没有 token 时拒绝启动**，与 `-admin-addr`/`-model-pull-addr` 同一克制：一个能启停容器的入口不该以未认证方式提供。
+- **排空升级检查已交付，但只覆盖本副本的路由表。** `HasActiveJob`（`httpapi.Server.HasActiveJobOnNode`，注入方式与 `Trigger`/`Status` 相同）只把关 `action="restart"`：本副本仍有非终态 job 的 `Candidate.NodeID` 等于该节点时答 409，不下发到隧道；START/STOP 不受影响。这只是"本副本自己知道的 job"，不是全局真相——一个同时连到多个副本的节点，其活跃 job 可能只被另一个副本追踪，本检查看不到那种情况；也不会自动等待排空，调用方需要在 job 结束后自行重试。
+- **范围边界**：单实例、无自定义节点管理、无 Console 可见性——均是设计文档拆分出的后续子任务。
+
 ## API Key 鉴权
 
 鉴权有三种模式，按真实部署应当采用的优先级排列（实现在 `httpapi/auth.go`）：

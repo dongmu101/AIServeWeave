@@ -113,3 +113,22 @@ Fleet:
 ModelPull:
   Gateways: ["http://gateway:8092"]
   GatewayToken: "${AISW_GATEWAY_MODEL_PULL_TOKEN}"
+
+# ComfyUI Managed 转发（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务二，控制面
+# 转发层）：把针对单个节点的生命周期动作触发（start/stop/restart）/状态查询转发给
+# 持有该节点连接的那个 Gateway 副本。指向的是 gateway 服务另一个独立的
+# -comfyui-managed-addr 监听器（既不是 Fleet 的 -admin-addr，也不是 ModelPull 的
+# -model-pull-addr），GatewayToken 须与 gateway 服务的
+# AISW_GATEWAY_COMFYUI_MANAGED_TOKEN 一致——三个监听器绝不能共用 token。
+#
+# ComfyUI Managed forwarding (STATUS.md's P2 ComfyUI Managed Docker
+# deployment subtask two, the control plane forwarding layer): forwards a
+# per-node lifecycle action trigger (start/stop/restart) or status call to
+# whichever Gateway replica holds that node's connection. It points at the
+# gateway service's other, separate -comfyui-managed-addr listener (neither
+# Fleet's -admin-addr nor ModelPull's -model-pull-addr); GatewayToken must
+# match the gateway service's AISW_GATEWAY_COMFYUI_MANAGED_TOKEN — the three
+# listeners must never share a token.
+ComfyUIManaged:
+  Gateways: ["http://gateway:8093"]
+  GatewayToken: "${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN}"

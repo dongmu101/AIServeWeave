@@ -30,6 +30,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
@@ -92,6 +93,18 @@ type ServiceContext struct {
 	// 配置时它为 nil，与 Fleet 自己的规则相同，理由也相同：一个没有配置它的
 	// 部署，是根本没有模型拉取端点，而不是有一个回答「未配置」的端点。
 	ModelPullRouter *modelpullrouter.Router
+
+	// ComfyUIManagedRouter forwards STATUS.md's P2 ComfyUI Managed Docker
+	// deployment subtask two's per-node lifecycle action trigger and status
+	// calls to whichever Gateway replica currently holds that node's
+	// connection. It is nil when the deployment did not configure one,
+	// mirroring ModelPullRouter's own rule and for the same reason.
+	//
+	// ComfyUIManagedRouter 把 STATUS.md P2 ComfyUI Managed Docker 部署子任务
+	// 二里针对单个节点的生命周期动作触发与状态查询，转发给当前持有该节点
+	// 连接的那个 Gateway 副本。部署未配置时它为 nil，与 ModelPullRouter 自己
+	// 的规则相同，理由也相同。
+	ComfyUIManagedRouter *comfyuimanagedrouter.Router
 
 	// RegistryClient calls the Registry's TokenAdmin service on behalf of a
 	// platform operator (STATUS.md's P01). It is nil when the deployment did
@@ -269,6 +282,14 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	if modelPullRouter != nil {
 		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))
 	}
+	comfyUIManagedRouter := comfyuimanagedrouter.New(comfyuimanagedrouter.Config{
+		Gateways: cfg.ComfyUIManaged.Gateways,
+		Token:    cfg.ComfyUIManaged.GatewayToken,
+		Timeout:  cfg.ComfyUIManaged.Timeout,
+	})
+	if comfyUIManagedRouter != nil {
+		logicOpts = append(logicOpts, logic.WithComfyUIManagedRouter(comfyUIManagedRouter))
+	}
 
 	metricsRegistry := commonmetrics.New(cpmetrics.Descriptions())
 
@@ -361,6 +382,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Clock:    clock,
 		}),
 		ModelPullRouter:           modelPullRouter,
+		ComfyUIManagedRouter:      comfyUIManagedRouter,
 		RegistryClient:            registryClient,
 		MetricsRegistry:           metricsRegistry,
 		db:                        db,

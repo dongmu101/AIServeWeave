@@ -34,6 +34,7 @@ import (
 	"github.com/zeromicro/go-zero/rest"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/handler"
@@ -74,6 +75,15 @@ const (
 	// 的 P2 模型分发子任务二）表明身份，与 gatewayToken 分开——与真实部署中
 	// 两个监听器的 token 绝不能共用一致。
 	modelPullToken = "model-pull-token-that-is-long-enough-for-validation"
+	// comfyUIManagedToken authenticates the control plane to a stand-in
+	// -comfyui-managed-addr listener (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment subtask two), distinct from the other tokens for the same
+	// reason modelPullToken is.
+	//
+	// comfyUIManagedToken 用于控制面向替身 -comfyui-managed-addr 监听器
+	// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务二）表明身份，与
+	// 其他 token 分开，理由与 modelPullToken 相同。
+	comfyUIManagedToken = "comfyui-managed-token-that-is-long-enough-for-validation"
 )
 
 // harness is one running control plane and the client calls a test makes
@@ -191,6 +201,19 @@ func newHarnessWithModelPull(t *testing.T, modelPullGateways []string) *harness 
 	return buildHarness(t, harnessOpts{modelPullGateways: modelPullGateways})
 }
 
+// newHarnessWithComfyUIManaged starts a harness whose ComfyUI Managed
+// forwarding (STATUS.md's P2 ComfyUI Managed Docker deployment subtask two)
+// points at the given -comfyui-managed-addr endpoints. Passing none leaves
+// it unconfigured, the ordinary case every other test here runs against.
+//
+// newHarnessWithComfyUIManaged 启动一个控制面，其 ComfyUI Managed 转发
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务二）指向给定的
+// -comfyui-managed-addr endpoint。不传则未配置，那是这里其他每个测试所面对
+// 的常态。
+func newHarnessWithComfyUIManaged(t *testing.T, comfyUIManagedGateways []string) *harness {
+	return buildHarness(t, harnessOpts{comfyUIManagedGateways: comfyUIManagedGateways})
+}
+
 // harnessOpts is buildHarness's configuration. It exists so the several
 // newHarness* convenience constructors above can each set only the one
 // thing their tests care about, without every combination needing its own
@@ -200,9 +223,10 @@ func newHarnessWithModelPull(t *testing.T, modelPullGateways []string) *harness 
 // 便捷构造函数各自只设置自己测试关心的那一项，而不必为每种组合都各写一个
 // 具名函数。
 type harnessOpts struct {
-	gateways          []string
-	modelPullGateways []string
-	sessions          session.Store
+	gateways               []string
+	modelPullGateways      []string
+	comfyUIManagedGateways []string
+	sessions               session.Store
 }
 
 func buildHarness(t *testing.T, opts harnessOpts) *harness {
@@ -236,6 +260,13 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 			Timeout:      2 * time.Second,
 		}
 	}
+	if len(opts.comfyUIManagedGateways) > 0 {
+		cfg.ComfyUIManaged = config.ComfyUIManagedConf{
+			Gateways:     opts.comfyUIManagedGateways,
+			GatewayToken: comfyUIManagedToken,
+			Timeout:      2 * time.Second,
+		}
+	}
 
 	st := memstore.New()
 	clock := runtime.NewSystemClock()
@@ -253,9 +284,17 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 		Token:    modelPullToken,
 		Timeout:  2 * time.Second,
 	})
+	comfyUIManagedRouter := comfyuimanagedrouter.New(comfyuimanagedrouter.Config{
+		Gateways: opts.comfyUIManagedGateways,
+		Token:    comfyUIManagedToken,
+		Timeout:  2 * time.Second,
+	})
 	logicOpts := []logic.Option{logic.WithInvalidator(revocations), logic.WithSessions(sessions)}
 	if modelPullRouter != nil {
 		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))
+	}
+	if comfyUIManagedRouter != nil {
+		logicOpts = append(logicOpts, logic.WithComfyUIManagedRouter(comfyUIManagedRouter))
 	}
 	// The ServiceContext is built field by field rather than through
 	// NewServiceContext, which would dial a database. Everything the handlers
@@ -274,7 +313,8 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 			Token:    gatewayToken,
 			Timeout:  2 * time.Second,
 		}),
-		ModelPullRouter: modelPullRouter,
+		ModelPullRouter:      modelPullRouter,
+		ComfyUIManagedRouter: comfyUIManagedRouter,
 	}
 
 	server, err := rest.NewServer(cfg.RestConf)

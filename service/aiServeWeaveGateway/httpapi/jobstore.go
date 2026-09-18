@@ -870,6 +870,29 @@ func (s *jobStore) syncFailed(id string, now time.Time, backoff func(failures in
 // 逐出标志说的不是这个租户：这张表由所有租户共享且有上限，因此一个繁忙的邻居可以把本
 // 租户较早的运行挤出去。一个看到短列表却没有这个标志的调用方，会把它读成「没有别的运行
 // 过」——而那恰恰是一张进程内、有上限、且每副本各自持有的表最无法支撑的结论。
+// hasActiveJobOnNode reports whether this replica is tracking any
+// non-terminal job routed to nodeID — the query ComfyUI Managed's
+// drain-before-restart check (STATUS.md's P2 "排空升级检查") needs. It only
+// sees jobs this replica itself routed and is tracking: a node connected to
+// several replicas can have an active job known only to a different one,
+// which this check cannot see.
+//
+// hasActiveJobOnNode 报告本副本是否在追踪任何路由到 nodeID 的非终态
+// job——这正是 ComfyUI Managed 重启前排空检查（STATUS.md 的 P2「排空升级
+// 检查」）所需要的查询。它只能看到本副本自己路由并追踪的 job：一个同时连到
+// 多个副本的节点，其活跃 job 可能只被另一个副本知道，本检查看不到那种情况。
+func (s *jobStore) hasActiveJobOnNode(nodeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	for _, j := range s.byID {
+		if j.Candidate.NodeID == nodeID && !j.terminal() {
+			return true
+		}
+	}
+	return false
+}
+
 func (s *jobStore) forTenant(tenantID string) ([]workflowview.Job, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

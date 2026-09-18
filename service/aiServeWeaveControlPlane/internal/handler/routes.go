@@ -450,4 +450,29 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			},
 		})
 	}
+
+	// ComfyUI Managed forwarding (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment subtask two, the control plane forwarding layer) is
+	// mounted independently of Fleet, RegistryClient and ModelPullRouter:
+	// it reaches a fourth Gateway listener (-comfyui-managed-addr) with its
+	// own token.
+	//
+	// ComfyUI Managed 转发（STATUS.md 的 P2 ComfyUI Managed Docker 部署
+	// 子任务二，控制面转发层）与 Fleet、RegistryClient、ModelPullRouter 都
+	// 分开挂载：它够到的是第四个、带着自己 token 的 Gateway 监听器
+	// （-comfyui-managed-addr）。
+	if ctx.ComfyUIManagedRouter != nil {
+		server.AddRoutes([]rest.Route{
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/nodes/:id/comfyui-managed",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed", requirePlatformSession(ctx, triggerComfyUIManagedAction(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/nodes/:id/comfyui-managed",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed", requirePlatformSession(ctx, comfyUIManagedStatus(ctx))),
+			},
+		})
+	}
 }

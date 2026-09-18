@@ -705,6 +705,18 @@ func (s *Server) JobsFor(tenantID string) ([]workflowview.Job, bool) {
 	return s.handlers.jobs.forTenant(tenantID)
 }
 
+// HasActiveJobOnNode reports whether this replica is tracking any
+// non-terminal job routed to nodeID. comfyuimanagedapi's drain-before-restart
+// check (STATUS.md's P2) uses this to refuse a RESTART while a job is still
+// running on that node.
+//
+// HasActiveJobOnNode 报告本副本是否在追踪任何路由到 nodeID 的非终态 job。
+// comfyuimanagedapi 的重启前排空检查（STATUS.md 的 P2）用它在该节点仍有 job
+// 在跑时拒绝 RESTART。
+func (s *Server) HasActiveJobOnNode(nodeID string) bool {
+	return s.handlers.jobs.hasActiveJobOnNode(nodeID)
+}
+
 // Templates returns the registered workflow catalogue, without the graphs.
 //
 // Templates 返回已注册的工作流目录，不含图。

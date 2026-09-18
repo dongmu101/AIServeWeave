@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 )
@@ -38,6 +39,30 @@ type ModelPuller interface {
 	//
 	// Snapshot 返回 puller 已知的每一个名字的当前状态，按名字排序。
 	Snapshot() []modelpullstatus.Status
+}
+
+// ComfyUIManager is implemented by *comfyuimanaged.Supervisor (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask 2). It is declared here as
+// an interface, not a concrete dependency on the comfyuimanaged package, the
+// same reason ModelPuller is: control_test.go can fake it without shelling
+// out to a real docker CLI.
+//
+// ComfyUIManager 由 *comfyuimanaged.Supervisor 实现（STATUS.md 的 P2 ComfyUI
+// Managed Docker 部署子任务二）。这里声明成接口而不是直接依赖 comfyuimanaged
+// 包的具体类型，与 ModelPuller 同一个理由：control_test.go 能用假实现替换，不
+// 必真的 shell out 到 docker CLI。
+type ComfyUIManager interface {
+	// Trigger asks the Supervisor to apply action to its one
+	// locally-declared Managed instance; it never blocks.
+	//
+	// Trigger 请求 Supervisor 对它本地已声明的那一个 Managed 实例施加
+	// action；它从不阻塞。
+	Trigger(action comfyuimanagedstatus.Action)
+	// Snapshot returns the current status of the one Managed instance this
+	// Agent declared locally.
+	//
+	// Snapshot 返回本 Agent 本地声明的那一个 Managed 实例的当前状态。
+	Snapshot() []comfyuimanagedstatus.Status
 }
 
 // This file assembles one tunnel — one Agent to one Gateway replica — as a
@@ -217,6 +242,20 @@ type ClientConfig struct {
 	// 帧被静默忽略、也从不发送 ModelPullReport，与一个没有配置清单的节点
 	// 表现一致。
 	ModelPuller ModelPuller
+	// ComfyUIManaged drives STATUS.md's P2 ComfyUI Managed Docker deployment
+	// subtask 2: a Gateway-triggered start/stop/restart of this node's one
+	// locally-declared Managed ComfyUI instance. Nil is a legitimate value —
+	// the same "optional hook" shape as ModelPuller — and means a
+	// GatewayControl_ComfyuiManagedAction frame is silently ignored and no
+	// ComfyUIManagedReport is ever sent, matching a node with Managed mode
+	// disabled.
+	//
+	// ComfyUIManaged 驱动 STATUS.md P2 ComfyUI Managed Docker 部署子任务二：一
+	// 次 Gateway 触发的、对本节点本地已声明的那一个 Managed ComfyUI 实例的
+	// start/stop/restart。nil 是一个合法取值——与 ModelPuller 同一种"可选钩子"
+	// 形状——意味着 GatewayControl_ComfyuiManagedAction 帧被静默忽略、也从不
+	// 发送 ComfyUIManagedReport，与一个未启用 Managed 模式的节点表现一致。
+	ComfyUIManaged ComfyUIManager
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and
 	// HeartbeatFailureThreshold the number of unanswered heartbeats that

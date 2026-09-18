@@ -33,6 +33,8 @@ func TestFleetAndRegistryClientCallResultsAreBounded(t *testing.T) {
 	recordRegistryClientCall(ctx, errors.New("unreachable"))
 	recordModelPullRouterCall(ctx, nil)
 	recordModelPullRouterCall(ctx, errors.New("unreachable"))
+	recordComfyUIManagedRouterCall(ctx, nil)
+	recordComfyUIManagedRouterCall(ctx, errors.New("unreachable"))
 
 	var buf strings.Builder
 	if err := registry.Render(&buf); err != nil {
@@ -46,7 +48,7 @@ func TestFleetAndRegistryClientCallResultsAreBounded(t *testing.T) {
 	allowed := map[string]bool{"success": true, "error": true}
 	found := map[string]bool{}
 	for _, s := range samples {
-		if s.Name != cpmetrics.MetricFleetCallsTotal && s.Name != cpmetrics.MetricRegistryClientCallsTotal && s.Name != cpmetrics.MetricModelPullRouterCallsTotal {
+		if s.Name != cpmetrics.MetricFleetCallsTotal && s.Name != cpmetrics.MetricRegistryClientCallsTotal && s.Name != cpmetrics.MetricModelPullRouterCallsTotal && s.Name != cpmetrics.MetricComfyUIManagedRouterCallsTotal {
 			continue
 		}
 		result := s.Labels["result"]
@@ -59,6 +61,7 @@ func TestFleetAndRegistryClientCallResultsAreBounded(t *testing.T) {
 		cpmetrics.MetricFleetCallsTotal + "/success", cpmetrics.MetricFleetCallsTotal + "/error",
 		cpmetrics.MetricRegistryClientCallsTotal + "/success", cpmetrics.MetricRegistryClientCallsTotal + "/error",
 		cpmetrics.MetricModelPullRouterCallsTotal + "/success", cpmetrics.MetricModelPullRouterCallsTotal + "/error",
+		cpmetrics.MetricComfyUIManagedRouterCallsTotal + "/success", cpmetrics.MetricComfyUIManagedRouterCallsTotal + "/error",
 	} {
 		if !found[want] {
 			t.Errorf("expected to find a recorded series for %s, found none", want)

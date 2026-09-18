@@ -236,6 +236,28 @@ ModelPull:
 
 **实现在 `internal/modelpullrouter`，不是 `internal/fleet` 的扩展。** 机群清单聚合器解决的是"合并 N 个副本各自的完整清单"；这里要解决的是"一个具体 `node_id` 归哪个副本管"，且答案可能同时是好几个副本（Agent 为冗余同时维持到多个副本的连接）。与其为此在 `fleet.Aggregator` 现有的按 `-admin-addr` 索引的账本之外，再穿一份按 `-model-pull-addr` 索引的映射，不如让每个副本在同一次往返里各自回答"我这里有没有这个节点"（404 表示没有）——`modelpullrouter.Router` 就是做这件事的一个独立、结构对称的小组件，`Trigger`/`Status` 都是"并发问全部副本、按结果合并"的同一种形状。副本级失败（不可达/超时/未授权/响应畸形）同样收敛成固定代号，从不透传传输层文本，与机群清单的 `ReplicaStatus.Error` 同一纪律。
 
+## ComfyUI Managed 转发（P2 ComfyUI Managed Docker 部署子任务三，控制面转发层）
+
+对一个节点本地已声明的那一个 Managed ComfyUI 实例施加 start/stop/restart 生命周期动作、并读回其容器状态的两个 Gateway 端点（`docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md` 交付的 `-comfyui-managed-addr`），与模型拉取的 `-model-pull-addr` 同一约束：只在触发到达它连接的那个 Gateway 副本时才有效。这里补的是与模型拉取完全对称的一层转发：
+
+```yaml
+ComfyUIManaged:
+  Gateways: ["http://gateway-1:8093", "http://gateway-2:8093"]
+  GatewayToken: "${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN}"   # 与各 Gateway 的同名变量一致
+  Timeout: 3s
+```
+
+`ComfyUIManaged` 独立于 `Fleet`、`Registry` 与 `ModelPull`：它指向的是 Gateway 第四个独立的写监听器，只在 `ComfyUIManaged.Gateways`/`GatewayToken` 都配置时才挂载：
+
+| 端点 | 行为 |
+| --- | --- |
+| `POST /operator/v1/nodes/:id/comfyui-managed` | 并发向每个已配置副本的 `-comfyui-managed-addr` 下发一次动作触发（`{"action": "start"\|"stop"\|"restart"}`）；只要有一个副本报告该 `node_id` 已连接就算下发成功（202）——一个 Agent 进程今天最多管理一个 Managed 实例，因此这里同样选择"并发下发给全部副本"而不是"先找出是哪个副本再单独下发" |
+| `GET /operator/v1/nodes/:id/comfyui-managed` | 并发向每个已配置副本读取状态；节点连到多个副本时，取其中更新时间最新的那一份回复——与模型拉取、机群清单同一条"最新证据胜出"规则 |
+
+两个端点在没有任何已配置副本报告该 `node_id` 已连接时都答 404；未配置 `ComfyUIManaged` 的部署根本没有这两条路由，不是有两条回答"未配置"的路由——与模型拉取、机群清单、节点写路径同一先例。触发端点由 `requirePlatformSession` 守卫，且只在确有副本报告已连接、成功下发后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`Detail` 记录本次触发的动作名）；状态查询端点是纯读取，直接调用 `ctx.ComfyUIManagedRouter`、不经过 `logic.Service`、不写审计——与模型拉取的读取端点同一种切分。
+
+**实现在 `internal/comfyuimanagedrouter`，与 `internal/modelpullrouter` 形状对称但不共用代码。** 两者要解决的问题相同（一个具体 `node_id` 归哪个副本管），但线上请求/响应格式不同——一个是封闭的 `Action` 字符串，另一个是名字列表；一个报告容器实例，另一个报告命名拉取——这层差异让共用代码的收益小于维护一层泛化抽象的代价，因此按仓库一贯的"重复优于早熟抽象"选择独立实现。
+
 ## 平台运维身份（P01）
 
 平台运维与租户用户是两张分开的表（`platform_operators`，不是 `TenantID` 留空的 `users`）与两条分开的登录入口：

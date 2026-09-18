@@ -83,3 +83,28 @@ func TestModelPullConfDisabledByDefault(t *testing.T) {
 		t.Error("Enabled() = true, want false for the zero value")
 	}
 }
+
+func TestComfyUIManagedConfValidation(t *testing.T) {
+	cfg := validConfig()
+	cfg.ComfyUIManaged = config.ComfyUIManagedConf{Gateways: []string{"http://gateway-1:8093"}, GatewayToken: strings.Repeat("c", 32)}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil for a fully configured ComfyUIManaged", err)
+	}
+
+	cfg.ComfyUIManaged.GatewayToken = "too-short"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ComfyUIManaged.GatewayToken") {
+		t.Errorf("Validate error = %v, want one naming ComfyUIManaged.GatewayToken", err)
+	}
+
+	cfg.ComfyUIManaged = config.ComfyUIManagedConf{GatewayToken: strings.Repeat("c", 32)}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ComfyUIManaged.Gateways") {
+		t.Errorf("Validate error = %v, want one naming ComfyUIManaged.Gateways for a token with no endpoints", err)
+	}
+}
+
+func TestComfyUIManagedConfDisabledByDefault(t *testing.T) {
+	var c config.ComfyUIManagedConf
+	if c.Enabled() {
+		t.Error("Enabled() = true, want false for the zero value")
+	}
+}

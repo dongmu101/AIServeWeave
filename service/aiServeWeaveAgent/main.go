@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net"
 	"net/http"
@@ -22,6 +23,7 @@ import (
 	"AIServeWeave/common/runtime/sglang"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
@@ -56,6 +58,7 @@ func main() {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	opts := registerTunnelFlags()
 	mpOpts := registerModelPullFlags()
+	cmOpts := registerComfyUIManagedFlags()
 	ollamaURL := flag.String("ollama-url", "",
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
@@ -80,7 +83,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, mpOpts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -221,6 +224,103 @@ func (o *modelPullOptions) allowlistPrefixes() []string {
 	return prefixes
 }
 
+// comfyuiManagedOptions is the configuration for comfyuimanaged (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask one: see
+// docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-design.md). It
+// comes from flags, is entirely local to this node, and is never accepted
+// from the Gateway or control plane. An empty image disables Managed mode
+// entirely, leaving today's External-only behavior unchanged.
+//
+// comfyuiManagedOptions 是 comfyuimanaged 的配置（STATUS.md 的 P2 ComfyUI Managed
+// Docker 部署子任务一，见
+// docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-design.md）。它来自
+// flag，完全是本节点本地的，从不接受 Gateway 或控制面下发。镜像为空时 Managed 模式
+// 整体关闭，不影响今天的 External-only 行为。
+type comfyuiManagedOptions struct {
+	image        string
+	container    string
+	port         int
+	gpuDevices   string
+	modelPaths   string
+	storagePaths string
+	memoryLimit  string
+	startTimeout time.Duration
+}
+
+func registerComfyUIManagedFlags() *comfyuiManagedOptions {
+	opts := &comfyuiManagedOptions{}
+	flag.StringVar(&opts.image, "comfyui-managed-image", "",
+		"pinned image:tag for a ComfyUI container this agent starts and manages via docker; empty disables Managed mode entirely")
+	flag.StringVar(&opts.container, "comfyui-managed-container", "aiserveweave-comfyui",
+		"docker container name for the Managed ComfyUI instance")
+	flag.IntVar(&opts.port, "comfyui-managed-port", 18188,
+		"host port bound to 127.0.0.1 and mapped to the container's ComfyUI port")
+	flag.StringVar(&opts.gpuDevices, "comfyui-managed-gpu-devices", "",
+		"comma-separated GPU device ids passed to docker run --gpus; empty omits GPU passthrough entirely")
+	flag.StringVar(&opts.modelPaths, "comfyui-managed-model-paths", "",
+		"comma-separated container=hostpath pairs mounted read-only, e.g. checkpoints=/models/checkpoints,loras=/models/loras")
+	flag.StringVar(&opts.storagePaths, "comfyui-managed-storage-paths", "",
+		"comma-separated container=hostpath pairs mounted read-write, e.g. input=/data/input,output=/data/output")
+	flag.StringVar(&opts.memoryLimit, "comfyui-managed-memory-limit", "",
+		"docker --memory value for the container, e.g. 32g; empty is unlimited")
+	flag.DurationVar(&opts.startTimeout, "comfyui-managed-start-timeout", 5*time.Minute,
+		"how long Start waits for the Managed container's port to accept connections before failing")
+	return opts
+}
+
+// enabled reports whether the operator asked for a Managed ComfyUI instance.
+func (o *comfyuiManagedOptions) enabled() bool { return o.image != "" }
+
+// spec builds the comfyuimanaged.Spec this node's flags describe.
+func (o *comfyuiManagedOptions) spec() comfyuimanaged.Spec {
+	return comfyuimanaged.Spec{
+		ContainerName: o.container,
+		Image:         o.image,
+		Port:          o.port,
+		GPUDevices:    splitNonEmpty(o.gpuDevices),
+		ModelPaths:    parseComfyUIManagedMounts(o.modelPaths),
+		StoragePaths:  parseComfyUIManagedMounts(o.storagePaths),
+		MemoryLimit:   o.memoryLimit,
+	}
+}
+
+// splitNonEmpty parses a comma-separated list, the same way
+// modelPullOptions.allowlistPrefixes parses -model-pull-allowlist.
+func splitNonEmpty(raw string) []string {
+	var out []string
+	for _, v := range strings.Split(raw, ",") {
+		if v = strings.TrimSpace(v); v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// parseComfyUIManagedMounts parses -comfyui-managed-model-paths and
+// -comfyui-managed-storage-paths the same way tunnelOptions.nodeLabels
+// parses -labels: a malformed entry is dropped rather than fatal, since a
+// typo in one mount should not be a reason to refuse starting Managed mode
+// altogether.
+func parseComfyUIManagedMounts(raw string) map[string]string {
+	out := make(map[string]string)
+	for _, pair := range strings.Split(raw, ",") {
+		pair = strings.TrimSpace(pair)
+		if pair == "" {
+			continue
+		}
+		containerPath, hostPath, ok := strings.Cut(pair, "=")
+		containerPath, hostPath = strings.TrimSpace(containerPath), strings.TrimSpace(hostPath)
+		if !ok || containerPath == "" || hostPath == "" {
+			continue
+		}
+		out[containerPath] = hostPath
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // run wires the runtime registry and manager, then blocks until the process is
 // signalled to stop. It returns the first error that prevents a clean start or
 // a clean shutdown.
@@ -229,7 +329,7 @@ func (o *modelPullOptions) allowlistPrefixes() []string {
 // config file described in tunnel/README.md: until that file lands, this is
 // the only way to give the agent a real backend to dispatch to. An empty
 // ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -255,7 +355,44 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, oll
 		if err := manager.Add(ctx, runtime.Config{ID: ollamaID, Kind: runtime.KindOllama, BaseURL: ollamaURL}); err != nil {
 			return err
 		}
-		configuredRuntimes = 1
+		configuredRuntimes++
+	}
+
+	// Managed ComfyUI (STATUS.md's P2 ComfyUI Managed Docker deployment,
+	// subtask one boot path + subtask two's remote lifecycle actions): bring
+	// the container up first, wait for its port to accept connections, then
+	// register it exactly like an External instance so comfyui.Runtime's
+	// existing Probe/Discover — not this block — perform the
+	// ComfyUI-specific identity check. A configured Managed instance that
+	// fails to start or never becomes reachable fails agent startup, the
+	// same failure semantics as ollamaURL above: the operator explicitly
+	// opted into Managed mode, so a fast, visible failure beats silently
+	// running a node that never serves requests. The Supervisor built here
+	// is reused after boot to react to a Gateway-triggered
+	// start/stop/restart (subtask two) — see startTunnel's ComfyUIManaged
+	// wiring — so this sequence exists exactly once instead of once for
+	// boot and once inside Supervisor.Start.
+	//
+	// Managed ComfyUI（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务一的启动
+	// 路径 + 子任务二的远程生命周期动作）：先把容器带起来，等它的端口能接受连接，
+	// 再按 External 实例同样的方式注册——真正的 ComfyUI 身份校验交给既有的
+	// comfyui.Runtime 的 Probe/Discover，不是这段代码。配置了 Managed 但启动失败或
+	// 从未可达时让 Agent 启动失败，与上面 ollamaURL 同样的失败语义：运维显式选择了
+	// Managed 模式，快速可见的失败好过悄悄跑一个从不服务请求的节点。这里构造的
+	// Supervisor 在启动之后会被复用来响应 Gateway 触发的 start/stop/restart（子任务
+	// 二，见 startTunnel 的 ComfyUIManaged 接线），因此这段顺序只存在一份，而不是启动
+	// 时一份、Supervisor.Start 内部再一份。
+	var comfyUIManagedSupervisor *comfyuimanaged.Supervisor
+	if cmOpts.enabled() {
+		spec := cmOpts.spec()
+		launcher := comfyuimanaged.NewLauncher(deps.Clock, logger)
+		comfyUIManagedSupervisor = comfyuimanaged.NewSupervisor(ctx, launcher, manager, spec, cmOpts.startTimeout, deps.Clock, logger)
+		if err := comfyUIManagedSupervisor.Start(ctx); err != nil {
+			return fmt.Errorf("comfyui managed: %w", err)
+		}
+		configuredRuntimes++
+		logger.Info("comfyui managed instance registered", slog.String("container", spec.ContainerName),
+			slog.String("base_url", fmt.Sprintf("http://127.0.0.1:%d", spec.Port)))
 	}
 
 	// Runtime configuration is not loaded from disk yet, so beyond the
@@ -272,7 +409,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, oll
 	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
 	puller := newModelPuller(ctx, logger, mpOpts)
 
-	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller)
+	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor)
 	if err != nil {
 		return err
 	}
@@ -450,7 +587,17 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 // puller drives STATUS.md's P2 model distribution subtask two: it lets the
 // tunnel's Control stream honor a Gateway-triggered pull and report status
 // back. newModelPuller never returns nil, so this is never nil either.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller) (<-chan error, error) {
+//
+// comfyUIManaged drives STATUS.md's P2 ComfyUI Managed Docker deployment
+// subtask two: it lets the tunnel's Control stream honor a
+// Gateway-triggered start/stop/restart and report container-lifecycle
+// status back. Unlike puller, this is nil whenever Managed mode is not
+// configured on this node (run's cmOpts.enabled() was false) — wrapping a
+// nil *comfyuimanaged.Supervisor in the tunnel.ComfyUIManager interface
+// here would produce a non-nil interface value holding a nil pointer, so
+// the interface field itself is only ever set when comfyUIManaged is
+// actually non-nil.
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor) (<-chan error, error) {
 	if !opts.enabled() {
 		return nil, nil
 	}
@@ -497,6 +644,15 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		return nil, err
 	}
 
+	// See startTunnel's doc comment: only assign the interface field when
+	// comfyUIManaged is actually non-nil, so a disabled Managed mode leaves
+	// ClientConfig.ComfyUIManaged as a true nil interface rather than a
+	// non-nil interface wrapping a nil *comfyuimanaged.Supervisor.
+	var comfyUIManagedClient tunnel.ComfyUIManager
+	if comfyUIManaged != nil {
+		comfyUIManagedClient = comfyUIManaged
+	}
+
 	tunnels, err := tunnel.NewManager(tunnel.ManagerConfig{
 		Client: tunnel.ClientConfig{
 			NodeID:          identity.NodeID,
@@ -507,6 +663,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			Resources:       hostresources.Detect(ctx, logger),
 			Handler:         dispatcher,
 			ModelPuller:     puller,
+			ComfyUIManaged:  comfyUIManagedClient,
 			Metrics:         metrics,
 			Logger:          logger,
 		},

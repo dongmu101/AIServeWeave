@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
@@ -69,6 +70,17 @@ type node struct {
 	// Agent 的清单是运维手写的、体量有限，不值得为它承担 RuntimeStatus
 	// full/partial 拆分那份复杂度。
 	modelPulls map[string]modelpullstatus.Status
+	// comfyUIManaged is this node's last-reported Managed ComfyUI container
+	// status, keyed by container name (STATUS.md's P2 ComfyUI Managed
+	// Docker deployment subtask 2). Like modelPulls, it is always replaced
+	// wholesale on every report — an Agent manages at most one Managed
+	// instance today, so there is nothing to merge incrementally.
+	//
+	// comfyUIManaged 是该节点最后一次上报的 Managed ComfyUI 容器状态，按容
+	// 器名索引（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务二）。与
+	// modelPulls 一样，它每次上报都整份替换——今天一个 Agent 最多管理一个
+	// Managed 实例，没有什么需要增量合并。
+	comfyUIManaged map[string]comfyuimanagedstatus.Status
 
 	lastHeartbeat time.Time
 	inflight      int
@@ -106,15 +118,16 @@ type node struct {
 
 func newNode(id string, srv *Server) *node {
 	return &node{
-		id:          id,
-		srv:         srv,
-		metrics:     srv.metrics.forNode(id),
-		controls:    make(map[*controlSession]struct{}),
-		snapshots:   make(map[string]runtime.Snapshot),
-		modelPulls:  make(map[string]modelpullstatus.Status),
-		idle:        make(map[tunnelv1.SlotClass][]*slot),
-		liveByClass: make(map[tunnelv1.SlotClass]int),
-		revoked:     make(chan struct{}),
+		id:             id,
+		srv:            srv,
+		metrics:        srv.metrics.forNode(id),
+		controls:       make(map[*controlSession]struct{}),
+		snapshots:      make(map[string]runtime.Snapshot),
+		modelPulls:     make(map[string]modelpullstatus.Status),
+		comfyUIManaged: make(map[string]comfyuimanagedstatus.Status),
+		idle:           make(map[tunnelv1.SlotClass][]*slot),
+		liveByClass:    make(map[tunnelv1.SlotClass]int),
+		revoked:        make(chan struct{}),
 	}
 }
 
@@ -275,6 +288,47 @@ func (s *Server) ModelPullStatus(nodeID string) ([]modelpullstatus.Status, bool)
 	return n.modelPullSnapshot(), true
 }
 
+// TriggerComfyUIManagedAction asks nodeID to apply action to its one
+// locally-declared Managed ComfyUI instance, if it holds an active Control
+// stream to this replica (STATUS.md's P2 ComfyUI Managed Docker deployment,
+// subtask 2). It returns an error otherwise — including when the node is
+// connected only to a sibling replica — the same "no forwarding" boundary
+// TriggerModelPull observes.
+//
+// A successful call only means the action reached the Agent over the wire;
+// per GatewayControl_ModelPullTrigger's existing precedent there is no
+// dedicated ack, so its effect is only observable from the
+// ComfyUIManagedReport that follows (ComfyUIManagedStatus, below).
+func (s *Server) TriggerComfyUIManagedAction(nodeID string, action comfyuimanagedstatus.Action) error {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("tunnelserver: node %q is not connected to this replica", nodeID)
+	}
+	n.mu.Lock()
+	connected := len(n.controls) > 0
+	n.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("tunnelserver: node %q has no active control stream on this replica", nodeID)
+	}
+	n.broadcast(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedAction{
+		ComfyuiManagedAction: tunnelwire.ComfyUIManagedActionToProto(action),
+	}})
+	return nil
+}
+
+// ComfyUIManagedStatus returns this replica's last-known Managed ComfyUI
+// status for nodeID, and whether the node is known to this replica at all. A
+// known node with no reports yet (Managed mode not configured, Agent
+// predates this feature, or no report has arrived) returns an empty, true
+// result.
+func (s *Server) ComfyUIManagedStatus(nodeID string) ([]comfyuimanagedstatus.Status, bool) {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return nil, false
+	}
+	return n.comfyUIManagedSnapshot(), true
+}
+
 func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -377,6 +431,32 @@ func (n *node) modelPullSnapshot() []modelpullstatus.Status {
 		out = append(out, st)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// applyComfyUIManagedReport replaces the node's Managed ComfyUI status
+// wholesale with the Agent's latest report (STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask 2).
+func (n *node) applyComfyUIManagedReport(statuses []comfyuimanagedstatus.Status) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	next := make(map[string]comfyuimanagedstatus.Status, len(statuses))
+	for _, st := range statuses {
+		next[st.ContainerName] = st
+	}
+	n.comfyUIManaged = next
+}
+
+// comfyUIManagedSnapshot returns this replica's last-known Managed ComfyUI
+// status for the node, sorted by container name.
+func (n *node) comfyUIManagedSnapshot() []comfyuimanagedstatus.Status {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]comfyuimanagedstatus.Status, 0, len(n.comfyUIManaged))
+	for _, st := range n.comfyUIManaged {
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ContainerName < out[j].ContainerName })
 	return out
 }
 

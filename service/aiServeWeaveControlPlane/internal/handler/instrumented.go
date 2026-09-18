@@ -90,6 +90,23 @@ func recordModelPullRouterCall(ctx *svc.ServiceContext, err error) {
 	ctx.MetricsRegistry.Counter(cpmetrics.MetricModelPullRouterCallsTotal, map[string]string{"result": result}).Add(1)
 }
 
+// recordComfyUIManagedRouterCall is recordModelPullRouterCall for calls that
+// reach ctx.ComfyUIManagedRouter or ctx.Logic.TriggerComfyUIManagedAction
+// (STATUS.md's P2 ComfyUI Managed Docker deployment, the control plane
+// forwarding layer).
+//
+// recordComfyUIManagedRouterCall 是 recordModelPullRouterCall 面向经
+// ctx.ComfyUIManagedRouter 或 ctx.Logic.TriggerComfyUIManagedAction
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署，控制面转发层）到达的调用
+// 版本。
+func recordComfyUIManagedRouterCall(ctx *svc.ServiceContext, err error) {
+	result := "success"
+	if err != nil {
+		result = "error"
+	}
+	ctx.MetricsRegistry.Counter(cpmetrics.MetricComfyUIManagedRouterCallsTotal, map[string]string{"result": result}).Add(1)
+}
+
 // statusRecorder captures the status code a handler writes, mirroring
 // Gateway httpapi's statusWriter.
 //

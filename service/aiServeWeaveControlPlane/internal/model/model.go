@@ -328,10 +328,15 @@ const (
 	// layer). Like the node-ops actions above it uses PlatformScope: a
 	// node_id has no tenant.
 	ActionModelPullTrigger = "node.model_pull.trigger"
-	ActionAlertRuleCreate  = "alert_rule.create"
-	ActionAlertRuleUpdate  = "alert_rule.update"
-	ActionAlertRuleDelete  = "alert_rule.delete"
-	ActionAlertAcknowledge = "alert.acknowledge"
+	// ActionComfyUIManagedTrigger records a forwarded ComfyUI Managed
+	// lifecycle action trigger (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment, the control plane forwarding layer). Like
+	// ActionModelPullTrigger it uses PlatformScope.
+	ActionComfyUIManagedTrigger = "node.comfyui_managed.trigger"
+	ActionAlertRuleCreate       = "alert_rule.create"
+	ActionAlertRuleUpdate       = "alert_rule.update"
+	ActionAlertRuleDelete       = "alert_rule.delete"
+	ActionAlertAcknowledge      = "alert.acknowledge"
 )
 
 // AuditLog is one administrative action, recorded for the README's

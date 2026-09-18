@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
@@ -746,5 +747,140 @@ func TestControlModelPullReportsOnChangeOnly(t *testing.T) {
 	}
 	if len(report.GetPulls()) != 1 || report.GetPulls()[0].GetBytesDownloaded() != 512 {
 		t.Fatalf("report = %v, want bytes_downloaded = 512", report)
+	}
+}
+
+// -----------------------------------------------------------------------
+// ComfyUI Managed (STATUS.md's P2 ComfyUI Managed Docker deployment,
+// subtask 2)
+// -----------------------------------------------------------------------
+
+// fakeComfyUIManager is a tunnel.ComfyUIManager test double, mirroring
+// fakeModelPuller: what was requested (triggered) is decoupled from what
+// Snapshot returns (set directly by the test), since the real Supervisor's
+// state transitions are already covered by comfyuimanaged's own tests — this
+// fixture only needs to prove the Control session dispatches and reports
+// correctly.
+type fakeComfyUIManager struct {
+	mu        sync.Mutex
+	triggered []comfyuimanagedstatus.Action
+	snapshot  []comfyuimanagedstatus.Status
+}
+
+func (f *fakeComfyUIManager) Trigger(action comfyuimanagedstatus.Action) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggered = append(f.triggered, action)
+}
+
+func (f *fakeComfyUIManager) Snapshot() []comfyuimanagedstatus.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]comfyuimanagedstatus.Status(nil), f.snapshot...)
+}
+
+func (f *fakeComfyUIManager) setSnapshot(s []comfyuimanagedstatus.Status) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshot = s
+}
+
+func (f *fakeComfyUIManager) triggeredCalls() []comfyuimanagedstatus.Action {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]comfyuimanagedstatus.Action(nil), f.triggered...)
+}
+
+func TestControlComfyUIManagedActionForwardsAndReportsImmediately(t *testing.T) {
+	manager := &fakeComfyUIManager{snapshot: []comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StatePending}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ComfyUIManaged = manager
+	})
+	f.start()
+	sess := f.connect()
+
+	// connect() only drains the RuntimeStatus report; the initial
+	// ComfyUIManagedReport control.go sends right after it is still sitting
+	// on the stream.
+	initial := f.recv(sess).GetComfyuiManaged()
+	if initial == nil {
+		t.Fatal("no initial ComfyUIManagedReport right after connecting")
+	}
+	if len(initial.GetInstances()) != 1 || initial.GetInstances()[0].GetContainerName() != "aiserveweave-comfyui" {
+		t.Fatalf("initial report = %v, want one instance named aiserveweave-comfyui", initial)
+	}
+
+	// Simulate what a real Supervisor.Trigger would have done to its own
+	// Snapshot by the time the Control session reads it back.
+	manager.setSnapshot([]comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StateStarting}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedAction{ComfyuiManagedAction: &tunnelv1.ComfyUIManagedAction{
+		Action: tunnelv1.ComfyUIManagedActionType_COMFYUI_MANAGED_ACTION_START,
+	}}})
+
+	report := f.recv(sess).GetComfyuiManaged()
+	if report == nil {
+		t.Fatal("no ComfyUIManagedReport followed the action")
+	}
+	if len(report.GetInstances()) != 1 || report.GetInstances()[0].GetState() != tunnelv1.ComfyUIManagedState_COMFYUI_MANAGED_STATE_STARTING {
+		t.Fatalf("report = %v, want one instance in STARTING", report)
+	}
+
+	calls := manager.triggeredCalls()
+	if len(calls) != 1 || calls[0] != comfyuimanagedstatus.ActionStart {
+		t.Fatalf("Trigger calls = %v, want exactly one ActionStart", calls)
+	}
+}
+
+func TestControlComfyUIManagedActionNeverTouchesRealManagerWhenNil(t *testing.T) {
+	// A nil ComfyUIManaged (the default when Managed mode is not configured)
+	// must leave GatewayControl_ComfyuiManagedAction a harmless no-op: no
+	// report is ever sent, matching a node with Managed mode disabled.
+	f := newClientFixture(t, isolateStatus)
+	f.start()
+	sess := f.connect()
+
+	marker := int64(4242)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedAction{ComfyuiManagedAction: &tunnelv1.ComfyUIManagedAction{
+		Action: tunnelv1.ComfyUIManagedActionType_COMFYUI_MANAGED_ACTION_START,
+	}}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+
+	frame := f.recv(sess)
+	if pong := frame.GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatalf("expected only a Pong, got %v: a nil ComfyUIManaged must never send a report", frame)
+	}
+}
+
+func TestControlComfyUIManagedReportsOnChangeOnly(t *testing.T) {
+	manager := &fakeComfyUIManager{snapshot: []comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StatePending}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ComfyUIManaged = manager
+	})
+	f.start()
+	sess := f.connect()
+	if f.recv(sess).GetComfyuiManaged() == nil {
+		t.Fatal("no initial ComfyUIManagedReport right after connecting")
+	}
+
+	// Unchanged: the periodic poll must stay quiet, same proof technique as
+	// expectNoStatus — a marker Ping's Pong must be the very next frame.
+	f.advance(2*time.Second, 1)
+	marker := int64(1)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+	if pong := f.recv(sess).GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatal("an unchanged comfyui managed snapshot must not be reported on the periodic poll")
+	}
+
+	// Changed: the next poll must carry it.
+	manager.setSnapshot([]comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StateRunning}})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetComfyuiManaged()
+	if report == nil {
+		t.Fatal("a changed comfyui managed snapshot must be reported on the next periodic poll")
+	}
+	if len(report.GetInstances()) != 1 || report.GetInstances()[0].GetState() != tunnelv1.ComfyUIManagedState_COMFYUI_MANAGED_STATE_RUNNING {
+		t.Fatalf("report = %v, want one instance in RUNNING", report)
 	}
 }

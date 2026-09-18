@@ -926,6 +926,63 @@ type ModelPullStatusResponse struct {
 	Replicas []ModelPullReplicaStatus `json:"replicas"`
 }
 
+// ComfyUIManagedTriggerRequest is POST
+// /operator/v1/nodes/:id/comfyui-managed's body (STATUS.md's P2 ComfyUI
+// Managed Docker deployment subtask two). Action must be one of "start",
+// "stop", "restart".
+//
+// ComfyUIManagedTriggerRequest 是 POST
+// /operator/v1/nodes/:id/comfyui-managed 的请求体（STATUS.md 的 P2 ComfyUI
+// Managed Docker 部署子任务二）。Action 必须是 "start"、"stop"、"restart"
+// 之一。
+type ComfyUIManagedTriggerRequest struct {
+	Action string `json:"action"`
+}
+
+// ComfyUIManagedReplicaStatus is one configured Gateway replica's answer to
+// a ComfyUI Managed trigger or status call, as
+// comfyuimanagedrouter.ReplicaStatus reports it.
+//
+// ComfyUIManagedReplicaStatus 是某个已配置 Gateway 副本对 ComfyUI Managed
+// 触发或状态查询的作答，即 comfyuimanagedrouter.ReplicaStatus 所报告的内容。
+type ComfyUIManagedReplicaStatus struct {
+	Endpoint  string `json:"endpoint"`
+	Connected bool   `json:"connected"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ComfyUIManagedTriggerResponse confirms a trigger reached at least one
+// connected replica; it never confirms the Agent actually applied the
+// action — see comfyuimanagedapi's own triggerResponse for why.
+//
+// ComfyUIManagedTriggerResponse 确认触发已经到达至少一个已连接副本；它从不
+// 确认 Agent 真的执行了这个动作——原因见 comfyuimanagedapi 自己的
+// triggerResponse。
+type ComfyUIManagedTriggerResponse struct {
+	Replicas []ComfyUIManagedReplicaStatus `json:"replicas"`
+}
+
+// ComfyUIManagedInstanceStatus is the one Managed instance's status, as GET
+// /operator/v1/nodes/:id/comfyui-managed reports it.
+//
+// ComfyUIManagedInstanceStatus 是那一个 Managed 实例的状态，即 GET
+// /operator/v1/nodes/:id/comfyui-managed 所报告的内容。
+type ComfyUIManagedInstanceStatus struct {
+	ContainerName string    `json:"container_name"`
+	State         string    `json:"state"`
+	UpdatedAt     time.Time `json:"updated_at"`
+}
+
+// ComfyUIManagedStatusResponse is GET
+// /operator/v1/nodes/:id/comfyui-managed's body.
+//
+// ComfyUIManagedStatusResponse 是 GET /operator/v1/nodes/:id/comfyui-managed
+// 的响应体。
+type ComfyUIManagedStatusResponse struct {
+	Instances []ComfyUIManagedInstanceStatus `json:"instances"`
+	Replicas  []ComfyUIManagedReplicaStatus  `json:"replicas"`
+}
+
 // MetricsHistoryPoint is one bucket of a MetricsHistorySeries (P08, Console C27).
 //
 // MetricsHistoryPoint 是 MetricsHistorySeries 的一个 bucket(P08，Console C27)。
