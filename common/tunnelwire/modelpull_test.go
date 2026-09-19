@@ -20,6 +20,8 @@ func TestModelPullReportRoundTrip_Reasons(t *testing.T) {
 		modelpullstatus.ReasonStorageError,
 		modelpullstatus.ReasonOllamaUnconfigured,
 		modelpullstatus.ReasonOllamaPullFailed,
+		modelpullstatus.ReasonLedgerQuotaExceeded,
+		modelpullstatus.ReasonDiskSpaceLow,
 	}
 
 	for _, reason := range tests {

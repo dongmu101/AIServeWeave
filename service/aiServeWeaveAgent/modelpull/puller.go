@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
@@ -50,12 +51,12 @@ type Puller struct {
 
 	byName map[string]Spec
 
-	mu      sync.Mutex
-	status  map[string]modelpullstatus.Status
-	queue   []string
-	queued  map[string]struct{}
-	running bool
-	budget  *int64
+	mu            sync.Mutex
+	status        map[string]modelpullstatus.Status
+	queue         []string
+	queued        map[string]struct{}
+	activeWorkers int
+	budget        *atomic.Int64
 }
 
 // NewPuller builds a Puller over specs. Every name in specs is recorded with
@@ -101,17 +102,23 @@ func NewPuller(ctx context.Context, cfg Config, specs []Spec, clock runtime.Cloc
 // never queued — it never touches the network. A name already pending,
 // downloading, queued, or done is left alone: Trigger is idempotent for a
 // name that is in flight or finished, not a request to restart it. Trigger
-// itself never blocks; it starts a worker goroutine only when the queue was
-// empty before this call.
+// itself never blocks; it starts worker goroutines only when the queue was
+// empty before this call, up to min(Config.MaxConcurrency, len(queue)) of
+// them (subtask 4 — see Config.MaxConcurrency's doc). A Trigger arriving
+// while workers are already running joins the same queue and shares its
+// budget rather than spawning more workers than that first session started.
 //
 // Trigger 请求 Puller 开始拉取 names。清单里没有的名字立即记为
 // StateFailed/ReasonUnknownName，从不入队——也从不触碰网络。已经是
 // pending、downloading、已排队或已完成的名字保持不变：对一个在途或已完成
 // 的名字调用 Trigger 是幂等的，不是要求重新开始。Trigger 本身从不阻塞；只
-// 有在这次调用之前队列为空时，它才会启动一个 worker goroutine。
+// 有在这次调用之前队列为空时，它才会启动最多 min(Config.MaxConcurrency,
+// len(queue)) 个 worker goroutine（子任务四，见 Config.MaxConcurrency 的文
+// 档）。worker 已经在跑时到达的 Trigger 加入同一个队列、共享它的预算，而
+// 不会比第一次 session 启动时多起 worker。
 func (p *Puller) Trigger(names []string) {
 	p.mu.Lock()
-	var startWorker bool
+	var workersToStart int
 	for _, name := range names {
 		spec, ok := p.byName[name]
 		if !ok {
@@ -128,19 +135,25 @@ func (p *Puller) Trigger(names []string) {
 		p.queued[name] = struct{}{}
 		p.queue = append(p.queue, name)
 	}
-	if !p.running && len(p.queue) > 0 {
-		p.running = true
-		startWorker = true
+	if p.activeWorkers == 0 && len(p.queue) > 0 {
 		if p.cfg.QuotaBytes > 0 {
-			b := p.cfg.QuotaBytes
-			p.budget = &b
+			p.budget = new(atomic.Int64)
+			p.budget.Store(p.cfg.QuotaBytes)
 		} else {
 			p.budget = nil
 		}
+		workersToStart = p.cfg.MaxConcurrency
+		if workersToStart < 1 {
+			workersToStart = 1
+		}
+		if workersToStart > len(p.queue) {
+			workersToStart = len(p.queue)
+		}
+		p.activeWorkers = workersToStart
 	}
 	p.mu.Unlock()
 
-	if startWorker {
+	for i := 0; i < workersToStart; i++ {
 		go p.worker()
 	}
 }
@@ -165,20 +178,25 @@ func (p *Puller) Snapshot() []modelpullstatus.Status {
 }
 
 // worker drains the queue one name at a time until it is empty, then exits.
-// A later Trigger that finds the queue non-empty relies on p.running to
-// decide whether a new worker is needed; this goroutine is always the one
-// that clears it, right before returning, under the same lock a concurrent
-// Trigger takes — so the two never race on whether a worker is live.
+// Multiple workers (up to Config.MaxConcurrency, subtask 4) drain the same
+// queue concurrently — each iteration pops under p.mu, so two workers never
+// take the same name. A later Trigger that finds the queue non-empty relies
+// on p.activeWorkers to decide whether new workers are needed; each worker
+// decrements it, right before returning, under the same lock a concurrent
+// Trigger takes — so Trigger and every worker never race on how many workers
+// are live.
 //
-// worker 一次一个地清空队列，直到队列为空后退出。之后如果 Trigger 发现队
-// 列非空，靠 p.running 判断是否需要一个新 worker；清掉这个标志的永远是这
-// 个 goroutine 自己、就在返回之前，用的是并发 Trigger 会用到的同一把锁
-// ——因此两者永远不会在"worker 是否存活"这件事上竞态。
+// worker 一次一个地清空队列，直到队列为空后退出。多个 worker（最多
+// Config.MaxConcurrency 个，子任务四）会并发清空同一个队列——每次取值都在
+// p.mu 之下，因此两个 worker 不会取到同一个名字。之后如果 Trigger 发现队
+// 列非空，靠 p.activeWorkers 判断是否需要新的 worker；每个 worker 递减它
+// 的时机都在自己返回之前、用的是并发 Trigger 会用到的同一把锁——因此
+// Trigger 与每个 worker 永远不会在"有多少个 worker 存活"这件事上竞态。
 func (p *Puller) worker() {
 	for {
 		p.mu.Lock()
 		if len(p.queue) == 0 {
-			p.running = false
+			p.activeWorkers--
 			p.mu.Unlock()
 			return
 		}
@@ -201,7 +219,7 @@ func (p *Puller) worker() {
 // runOne 拉取一个命名 spec 并把结果记入 p.status。它从不返回错误：一个名
 // 字走到这里时早已离开了 Trigger 的同步路径，已经没有调用方可以接收错误
 // ——无论成功还是失败，结果都变成一次状态更新。
-func (p *Puller) runOne(name string, spec Spec, budget *int64) {
+func (p *Puller) runOne(name string, spec Spec, budget *atomic.Int64) {
 	if err := validateSpec(spec); err != nil {
 		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateFailed, Reason: modelpullstatus.ReasonInvalidSpec, UpdatedAt: p.clock.Now()})
 		return
@@ -225,8 +243,14 @@ func (p *Puller) runOne(name string, spec Spec, budget *int64) {
 	if client == nil {
 		client = http.DefaultClient
 	}
-	err := pullOne(p.ctx, client, spec, budget, func(downloaded int64) {
-		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDownloading, BytesTotal: spec.SizeBytes, BytesDownloaded: downloaded, UpdatedAt: p.clock.Now()})
+	err := pullOne(p.ctx, client, spec, pullOpts{
+		Budget:              budget,
+		Ledger:              p.cfg.Ledger,
+		LedgerQuotaBytes:    p.cfg.LedgerQuotaBytes,
+		DiskFreeMarginBytes: p.cfg.DiskFreeMarginBytes,
+		OnProgress: func(downloaded int64) {
+			p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDownloading, BytesTotal: spec.SizeBytes, BytesDownloaded: downloaded, UpdatedAt: p.clock.Now()})
+		},
 	})
 	if err != nil {
 		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateFailed, Reason: classifyPullError(err), UpdatedAt: p.clock.Now()})
@@ -292,6 +316,10 @@ func classifyPullError(err error) modelpullstatus.FailureReason {
 		return modelpullstatus.ReasonOllamaUnconfigured
 	case errors.Is(err, errOllamaPullFailed):
 		return modelpullstatus.ReasonOllamaPullFailed
+	case errors.Is(err, errLedgerQuotaExceeded):
+		return modelpullstatus.ReasonLedgerQuotaExceeded
+	case errors.Is(err, errDiskSpaceLow):
+		return modelpullstatus.ReasonDiskSpaceLow
 	default:
 		// errFetchFailed and any error pullOne did not wrap in a sentinel
 		// (there should be none) both land here: a transport failure is the

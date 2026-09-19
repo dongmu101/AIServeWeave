@@ -111,6 +111,10 @@ func (r FailureReason) String() string {
 		return "ollama_unconfigured"
 	case ReasonOllamaPullFailed:
 		return "ollama_pull_failed"
+	case ReasonLedgerQuotaExceeded:
+		return "ledger_quota_exceeded"
+	case ReasonDiskSpaceLow:
+		return "disk_space_low"
 	default:
 		return "unspecified"
 	}
@@ -180,6 +184,20 @@ const (
 	// 错误（例如未知的模型 tag）。原始错误文本只留在 Agent 自己的日志里，
 	// 从不会传到这里，与 ReasonFetchFailed 同一种克制。
 	ReasonOllamaPullFailed
+	// ReasonLedgerQuotaExceeded means the cross-restart cumulative ledger
+	// (subtask 4, not the single-call Config.QuotaBytes budget) has no room
+	// left for this pull's bytes.
+	//
+	// ReasonLedgerQuotaExceeded 表示跨重启的累计账本（子任务四，不是单次调
+	// 用的 Config.QuotaBytes 预算）已经没有余量容纳这次拉取的字节。
+	ReasonLedgerQuotaExceeded
+	// ReasonDiskSpaceLow means the target filesystem's free space fell below
+	// Config.DiskFreeMarginBytes (subtask 4's secondary defense beyond any
+	// quota).
+	//
+	// ReasonDiskSpaceLow 表示目标文件系统的剩余空间低于
+	// Config.DiskFreeMarginBytes（子任务四在配额之外的二次防线）。
+	ReasonDiskSpaceLow
 )
 
 // Status is one named pull's current state, as the Agent reports it and the

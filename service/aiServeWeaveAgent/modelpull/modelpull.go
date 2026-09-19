@@ -71,6 +71,10 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
+	"sync/atomic"
+
+	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 )
 
 // sha256HexLen is the length of a hex-encoded SHA-256 digest.
@@ -256,6 +260,55 @@ type Config struct {
 	// 目，只要这个 Agent 没配置 Ollama 运行时，它们就永远不会成功，直到配
 	// 置上为止。
 	OllamaBaseURL string
+
+	// MaxConcurrency bounds how many Specs RunManifest (or one Puller worker
+	// session) fetches at once. <= 1 (including the zero value) keeps the
+	// original sequential behavior subtask 1/2/3's tests already depend on.
+	// A single Spec's own download is never split further — concurrency
+	// only happens across different Specs. See
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md
+	// 第 2.1 节.
+	//
+	// MaxConcurrency 限定 RunManifest（或一次 Puller worker session）同一时
+	// 间获取多少个 Spec。<= 1（含零值）保持子任务一/二/三测试已经依赖的原
+	// 始顺序行为。单个 Spec 自己的下载从不被进一步拆分——并发只发生在不同
+	// Spec 之间。见
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md
+	// 第 2.1 节。
+	MaxConcurrency int
+
+	// Ledger, when non-nil, enforces LedgerQuotaBytes as a total that
+	// persists across Agent restarts, unlike QuotaBytes which resets every
+	// call. See Ledger's doc and
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md
+	// 第 2.2 节.
+	//
+	// Ledger 非 nil 时，把 LedgerQuotaBytes 作为一个跨 Agent 重启持久化的总
+	// 量强制执行，这与每次调用都重新计满的 QuotaBytes 不同。见 Ledger 的文
+	// 档与
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md
+	// 第 2.2 节。
+	Ledger *Ledger
+
+	// LedgerQuotaBytes bounds Ledger's cumulative total. <= 0 means the
+	// ledger itself imposes no limit (only meaningful together with a
+	// non-nil Ledger).
+	//
+	// LedgerQuotaBytes 限定 Ledger 的累计总量。<= 0 表示账本本身不设限（只
+	// 在 Ledger 非 nil 时才有意义）。
+	LedgerQuotaBytes int64
+
+	// DiskFreeMarginBytes, when > 0, aborts a KindHTTP download once the
+	// target filesystem's free space (hostresources.DiskFreeBytes) falls
+	// below it — a secondary defense beyond QuotaBytes/Ledger, since both
+	// are policy ceilings, not a measurement of real remaining disk space.
+	// Does not apply to KindOllama.
+	//
+	// DiskFreeMarginBytes > 0 时，一旦目标文件系统的剩余空间
+	// （hostresources.DiskFreeBytes）低于它，就中止一次 KindHTTP 下载——这
+	// 是 QuotaBytes/Ledger 之外的二次防线，因为两者都只是策略上限，不是对
+	// 真实剩余磁盘空间的度量。不适用于 KindOllama。
+	DiskFreeMarginBytes int64
 }
 
 // Result reports the outcome of one RunManifest call.
@@ -316,45 +369,72 @@ func RunManifest(ctx context.Context, cfg Config, specs []Spec) Result {
 		client = http.DefaultClient
 	}
 
-	var budget *int64
+	var budget *atomic.Int64
 	if cfg.QuotaBytes > 0 {
-		b := cfg.QuotaBytes
-		budget = &b
+		budget = new(atomic.Int64)
+		budget.Store(cfg.QuotaBytes)
 	}
+
+	maxConcurrency := cfg.MaxConcurrency
+	if maxConcurrency < 1 {
+		maxConcurrency = 1
+	}
+
+	var mu sync.Mutex
+	sem := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
 
 	for _, spec := range specs {
 		if err := validateSpec(spec); err != nil {
+			mu.Lock()
 			result.Failed[specKey(spec)] = err
+			mu.Unlock()
 			continue
 		}
-		if spec.Kind == KindOllama {
-			// Ollama's own pull is already idempotent (an already-present
-			// model answers quickly with "success"), so there is no
-			// separate "already satisfied" skip here the way KindHTTP has
-			// one, and no allowlist or quota check — neither concept
-			// applies to a spec with no SourceURL (see Config's doc and
-			// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md).
-			if err := pullOllama(ctx, client, cfg.OllamaBaseURL, spec, nil); err != nil {
-				result.Failed[spec.Name] = err
-				continue
+
+		sem <- struct{}{}
+		wg.Add(1)
+		go func(spec Spec) {
+			defer wg.Done()
+			defer func() { <-sem }()
+
+			var pullErr error
+			skipped := false
+			switch {
+			case spec.Kind == KindOllama:
+				// Ollama's own pull is already idempotent (an already-present
+				// model answers quickly with "success"), so there is no
+				// separate "already satisfied" skip here the way KindHTTP has
+				// one, and no allowlist or quota check — neither concept
+				// applies to a spec with no SourceURL (see Config's doc and
+				// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md).
+				pullErr = pullOllama(ctx, client, cfg.OllamaBaseURL, spec, nil)
+			case alreadySatisfied(spec):
+				skipped = true
+			case !sourceAllowed(spec.SourceURL, cfg.Allowlist):
+				pullErr = fmt.Errorf("modelpull: source not allowlisted for %q: %s", spec.Name, spec.SourceURL)
+			default:
+				pullErr = pullOne(ctx, client, spec, pullOpts{
+					Budget:              budget,
+					Ledger:              cfg.Ledger,
+					LedgerQuotaBytes:    cfg.LedgerQuotaBytes,
+					DiskFreeMarginBytes: cfg.DiskFreeMarginBytes,
+				})
 			}
-			result.Pulled = append(result.Pulled, spec.Name)
-			continue
-		}
-		if alreadySatisfied(spec) {
-			result.Skipped = append(result.Skipped, spec.Name)
-			continue
-		}
-		if !sourceAllowed(spec.SourceURL, cfg.Allowlist) {
-			result.Failed[spec.Name] = fmt.Errorf("modelpull: source not allowlisted for %q: %s", spec.Name, spec.SourceURL)
-			continue
-		}
-		if err := pullOne(ctx, client, spec, budget, nil); err != nil {
-			result.Failed[spec.Name] = err
-			continue
-		}
-		result.Pulled = append(result.Pulled, spec.Name)
+
+			mu.Lock()
+			defer mu.Unlock()
+			switch {
+			case skipped:
+				result.Skipped = append(result.Skipped, spec.Name)
+			case pullErr != nil:
+				result.Failed[spec.Name] = pullErr
+			default:
+				result.Pulled = append(result.Pulled, spec.Name)
+			}
+		}(spec)
 	}
+	wg.Wait()
 
 	return result
 }
@@ -462,15 +542,48 @@ func sha256File(path string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
+// pullOpts bundles pullOne's cross-cutting, optional concerns: the
+// session/call-scoped byte budget, the cross-restart ledger (subtask 4), the
+// disk-space secondary defense (subtask 4), and a per-chunk progress
+// callback. Grouping them keeps pullOne's signature from growing a parameter
+// per subtask.
+//
+// pullOpts 打包 pullOne 的横切、可选关注点：session/调用范围的字节预算、
+// 跨重启账本（子任务四）、磁盘空间二次防线（子任务四），以及逐块进度回
+// 调。打包在一起是为了不让 pullOne 的签名随每个子任务多长一个参数。
+type pullOpts struct {
+	// Budget, when non-nil, is the shared byte counter for this RunManifest
+	// call (or, from Puller, this worker session); pullOne decrements it as
+	// bytes are written and aborts once it would go negative, leaving the
+	// partial file for a later run. atomic.Int64 rather than a plain int64
+	// because MaxConcurrency > 1 means multiple Specs share it concurrently.
+	//
+	// Budget 非 nil 时是本次 RunManifest 调用（或者，从 Puller 调用时，是
+	// 这次 worker session）共享的字节计数器；pullOne 随写入递减它，一旦会
+	// 变为负数就中止，把部分文件留给以后的运行。用 atomic.Int64 而不是普
+	// 通 int64，因为 MaxConcurrency > 1 时多个 Spec 会并发共享它。
+	Budget *atomic.Int64
+	// Ledger, when non-nil, is consulted (and updated) before every chunk
+	// write, on top of Budget — see Config.Ledger's doc.
+	//
+	// Ledger 非 nil 时，在每次分块写入之前都会被查询（并更新），叠加在
+	// Budget 之上——见 Config.Ledger 的文档。
+	Ledger              *Ledger
+	LedgerQuotaBytes    int64
+	DiskFreeMarginBytes int64
+	// OnProgress, when non-nil, is called after every chunk written with the
+	// file's total size so far (resumed bytes plus this call's own).
+	// RunManifest leaves it nil since it has no per-name status to update.
+	//
+	// OnProgress 非 nil 时，每写入一个分块后都会被调用一次，参数是文件当
+	// 前的总大小（续传部分加上本次调用自己写入的部分）。RunManifest 留空，
+	// 因为它没有需要更新的逐名字状态。
+	OnProgress func(downloaded int64)
+}
+
 // pullOne resumes or starts spec's download into "<TargetPath>.part",
 // verifies the checksum on completion, and atomically renames it into place
-// on success. budget, when non-nil, is the shared byte counter for this
-// RunManifest call (or, from Puller, this worker session); pullOne
-// decrements it as bytes are written and aborts once it would go negative,
-// leaving the partial file for a later run. onProgress, when non-nil, is
-// called after every chunk written with the file's total size so far
-// (resumed bytes plus this call's own); RunManifest passes nil since it has
-// no per-name status to update.
+// on success.
 //
 // Every error returned wraps one of the package's sentinel errors so a
 // caller that needs to classify the failure (Puller.runOne) can use
@@ -479,19 +592,15 @@ func sha256File(path string) (string, error) {
 // package once a caller starts forwarding it across the tunnel.
 //
 // pullOne 续传或开始把 spec 下载到 "<TargetPath>.part"，完成后校验校验和，
-// 成功则原子改名到位。budget 非 nil 时是本次 RunManifest 调用（或者，从
-// Puller 调用时，是这次 worker session）共享的字节计数器；pullOne 随写入
-// 递减它，一旦会变为负数就中止，把部分文件留给以后的运行。onProgress 非
-// nil 时，每写入一个分块后都会被调用一次，参数是文件当前的总大小（续传
-// 部分加上本次调用自己写入的部分）；RunManifest 传 nil，因为它没有需要更新
-// 的逐名字状态。
+// 成功则原子改名到位。
 //
 // 返回的每一个错误都包裹了本包的某个哨兵错误，这样需要对失败分类的调用方
 // （Puller.runOne）可以用 errors.Is 而不是匹配消息文本——消息文本本身可能
 // 带有 spec.SourceURL（*url.Error 就会），一旦调用方开始把它转发过隧道，这
 // 个细节绝不能离开本包。
-func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64, onProgress func(downloaded int64)) error {
+func pullOne(ctx context.Context, client *http.Client, spec Spec, opts pullOpts) error {
 	partPath := spec.TargetPath + ".part"
+	budget := opts.Budget
 
 	var resumeFrom int64
 	if fi, err := os.Stat(partPath); err == nil {
@@ -502,8 +611,8 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64,
 
 	if budget != nil && spec.SizeBytes > 0 {
 		remainingNeeded := spec.SizeBytes - resumeFrom
-		if remainingNeeded > 0 && remainingNeeded > *budget {
-			return fmt.Errorf("%w: before starting %q: need %d bytes, %d remaining", errQuotaExceeded, spec.Name, remainingNeeded, *budget)
+		if remainingNeeded > 0 && remainingNeeded > budget.Load() {
+			return fmt.Errorf("%w: before starting %q: need %d bytes, %d remaining", errQuotaExceeded, spec.Name, remainingNeeded, budget.Load())
 		}
 	}
 
@@ -549,14 +658,20 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, budget *int64,
 	if budget != nil {
 		writer = &quotaWriter{w: writer, remaining: budget}
 	}
-	if onProgress != nil {
-		writer = &progressWriter{w: writer, base: resumeFrom, onProgress: onProgress}
+	if opts.Ledger != nil {
+		writer = &ledgerWriter{w: writer, ledger: opts.Ledger, quotaBytes: opts.LedgerQuotaBytes}
+	}
+	if opts.DiskFreeMarginBytes > 0 {
+		writer = &diskCheckWriter{w: writer, dir: filepath.Dir(partPath), marginBytes: opts.DiskFreeMarginBytes}
+	}
+	if opts.OnProgress != nil {
+		writer = &progressWriter{w: writer, base: resumeFrom, onProgress: opts.OnProgress}
 	}
 
 	_, copyErr := io.Copy(writer, resp.Body)
 	closeErr := f.Close()
 	if copyErr != nil {
-		if errors.Is(copyErr, errQuotaExceeded) {
+		if errors.Is(copyErr, errQuotaExceeded) || errors.Is(copyErr, errLedgerQuotaExceeded) || errors.Is(copyErr, errDiskSpaceLow) {
 			return copyErr
 		}
 		return fmt.Errorf("%w: download %q: %v", errFetchFailed, spec.Name, copyErr)
@@ -607,23 +722,88 @@ func (p *progressWriter) Write(b []byte) (int, error) {
 }
 
 // quotaWriter enforces a shared byte budget across every Spec processed by
-// one RunManifest call. A Write that would exceed the remaining budget
-// writes nothing and returns errQuotaExceeded, leaving whatever was already
-// written on disk for a later, better-funded run.
+// one RunManifest call (or Puller worker session). A Write that would exceed
+// the remaining budget writes nothing and returns errQuotaExceeded, leaving
+// whatever was already written on disk for a later, better-funded run.
+// remaining is an atomic.Int64, not a plain int64, because
+// Config.MaxConcurrency > 1 (subtask 4) lets multiple Specs share it from
+// different goroutines at once; the check-then-decrement below is a CAS loop
+// so two concurrent downloads can never both pass the check and jointly
+// overspend the remaining budget.
 //
-// quotaWriter 在一次 RunManifest 调用处理的所有 Spec 之间强制一个共享字节
-// 预算。一次会超出剩余预算的 Write 什么都不写，返回 errQuotaExceeded，把
-// 已经写到磁盘上的部分留给以后预算更充足的一次运行。
+// quotaWriter 在一次 RunManifest 调用（或 Puller worker session）处理的所
+// 有 Spec 之间强制一个共享字节预算。一次会超出剩余预算的 Write 什么都不
+// 写，返回 errQuotaExceeded，把已经写到磁盘上的部分留给以后预算更充足的
+// 一次运行。remaining 是 atomic.Int64 而不是普通 int64，因为
+// Config.MaxConcurrency > 1（子任务四）允许多个 Spec 从不同 goroutine 同时
+// 共享它；下面的"先检查再扣减"用 CAS 循环实现，这样两次并发下载不会都通
+// 过检查、合计透支剩余预算。
 type quotaWriter struct {
 	w         io.Writer
-	remaining *int64
+	remaining *atomic.Int64
 }
 
 func (q *quotaWriter) Write(p []byte) (int, error) {
-	if int64(len(p)) > *q.remaining {
-		return 0, errQuotaExceeded
+	n := int64(len(p))
+	for {
+		cur := q.remaining.Load()
+		if n > cur {
+			return 0, errQuotaExceeded
+		}
+		if q.remaining.CompareAndSwap(cur, cur-n) {
+			break
+		}
 	}
-	n, err := q.w.Write(p)
-	*q.remaining -= int64(n)
-	return n, err
+	written, err := q.w.Write(p)
+	if int64(written) != n {
+		q.remaining.Add(n - int64(written))
+	}
+	return written, err
+}
+
+// ledgerWriter reserves every chunk's bytes against a cross-restart Ledger
+// (subtask 4) before passing the write through, and returns the unused
+// portion of a short write back to the ledger — see Ledger.Reserve's doc.
+//
+// ledgerWriter 在每个分块的写入通过之前，先向跨重启的 Ledger（子任务四）预
+// 留其字节数，并把一次没写完的差额还回账本——见 Ledger.Reserve 的文档。
+type ledgerWriter struct {
+	w          io.Writer
+	ledger     *Ledger
+	quotaBytes int64
+}
+
+func (l *ledgerWriter) Write(p []byte) (int, error) {
+	rollback, err := l.ledger.Reserve(int64(len(p)), l.quotaBytes)
+	if err != nil {
+		return 0, err
+	}
+	n, werr := l.w.Write(p)
+	if int64(n) < int64(len(p)) {
+		rollback(int64(len(p) - n))
+	}
+	return n, werr
+}
+
+// diskCheckWriter is subtask 4's secondary defense beyond any byte quota: it
+// re-checks the target filesystem's free space before every chunk write and
+// aborts once it drops below marginBytes. A platform where
+// hostresources.DiskFreeBytes is unsupported never blocks a write — the
+// check is best-effort, not load-bearing (see hostresources' doc).
+//
+// diskCheckWriter 是子任务四在任何字节配额之外的二次防线：在每次分块写入
+// 之前重新检查目标文件系统的剩余空间，一旦低于 marginBytes 就中止。在
+// hostresources.DiskFreeBytes 不支持的平台上，这项检查从不阻塞写入——它是
+// 尽力而为的，不是强依赖（见 hostresources 的文档）。
+type diskCheckWriter struct {
+	w           io.Writer
+	dir         string
+	marginBytes int64
+}
+
+func (d *diskCheckWriter) Write(p []byte) (int, error) {
+	if free, err := hostresources.DiskFreeBytes(d.dir); err == nil && free < d.marginBytes {
+		return 0, errDiskSpaceLow
+	}
+	return d.w.Write(p)
 }

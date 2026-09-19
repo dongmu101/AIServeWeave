@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -404,5 +405,166 @@ func TestLoadManifest(t *testing.T) {
 func TestLoadManifest_MissingFile(t *testing.T) {
 	if _, err := LoadManifest(filepath.Join(t.TempDir(), "does-not-exist.json")); err == nil {
 		t.Fatalf("LoadManifest on a missing file: want an error, got nil")
+	}
+}
+
+func TestRunManifest_ConcurrentDownloadsAllSucceed(t *testing.T) {
+	const n = 8
+	dir := t.TempDir()
+
+	var requests atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		w.Write([]byte(r.URL.Path))
+	}))
+	defer srv.Close()
+
+	specs := make([]Spec, n)
+	for i := range specs {
+		name := fmt.Sprintf("m%d", i)
+		content := []byte("/" + name)
+		specs[i] = Spec{
+			Name:       name,
+			SourceURL:  srv.URL + "/" + name,
+			SHA256:     sha256Hex(content),
+			TargetPath: filepath.Join(dir, name+".bin"),
+		}
+	}
+
+	cfg := Config{Allowlist: []string{srv.URL}, MaxConcurrency: 4}
+	result := RunManifest(context.Background(), cfg, specs)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none", result.Failed)
+	}
+	if len(result.Pulled) != n {
+		t.Fatalf("Pulled = %v, want %d entries", result.Pulled, n)
+	}
+	if got := requests.Load(); got != n {
+		t.Fatalf("requests = %d, want %d", got, n)
+	}
+	for i := range specs {
+		got, err := os.ReadFile(specs[i].TargetPath)
+		if err != nil {
+			t.Fatalf("read target %d: %v", i, err)
+		}
+		if string(got) != "/"+specs[i].Name {
+			t.Fatalf("target %d content = %q, want %q", i, got, "/"+specs[i].Name)
+		}
+	}
+}
+
+func TestRunManifest_ConcurrentDownloadsShareQuotaWithoutOverspending(t *testing.T) {
+	const n = 6
+	const perFile = 100
+	dir := t.TempDir()
+
+	content := make([]byte, perFile)
+	for i := range content {
+		content[i] = byte(i)
+	}
+	digest := sha256Hex(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	specs := make([]Spec, n)
+	for i := range specs {
+		name := fmt.Sprintf("m%d", i)
+		specs[i] = Spec{Name: name, SourceURL: srv.URL, SHA256: digest, SizeBytes: perFile, TargetPath: filepath.Join(dir, name+".bin")}
+	}
+
+	// Budget only covers 3 of the 6 files; concurrency must not let the
+	// shared atomic budget be overspent across goroutines.
+	cfg := Config{Allowlist: []string{srv.URL}, MaxConcurrency: n, QuotaBytes: perFile * 3}
+	result := RunManifest(context.Background(), cfg, specs)
+
+	if len(result.Pulled) != 3 {
+		t.Fatalf("Pulled = %v, want exactly 3 entries (budget covers 3 of %d files)", result.Pulled, n)
+	}
+	if len(result.Failed) != n-3 {
+		t.Fatalf("Failed = %v, want %d entries", result.Failed, n-3)
+	}
+}
+
+func TestPullOne_LedgerAcrossRestarts(t *testing.T) {
+	content := []byte("model bytes for the ledger test")
+	digest := sha256Hex(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	ledgerPath := filepath.Join(dir, "ledger.json")
+	spec1 := Spec{Name: "m1", SourceURL: srv.URL, SHA256: digest, TargetPath: filepath.Join(dir, "m1.bin")}
+	spec2 := Spec{Name: "m2", SourceURL: srv.URL, SHA256: digest, TargetPath: filepath.Join(dir, "m2.bin")}
+
+	// A fresh Ledger per RunManifest call simulates an Agent restart: the
+	// in-memory Config.QuotaBytes budget resets, but the on-disk ledger
+	// state does not.
+	quota := int64(len(content)) // only room for one file total
+	cfg1 := Config{Allowlist: []string{srv.URL}, Ledger: &Ledger{Path: ledgerPath}, LedgerQuotaBytes: quota}
+	result1 := RunManifest(context.Background(), cfg1, []Spec{spec1})
+	if len(result1.Failed) != 0 {
+		t.Fatalf("first pull Failed = %v, want none", result1.Failed)
+	}
+
+	cfg2 := Config{Allowlist: []string{srv.URL}, Ledger: &Ledger{Path: ledgerPath}, LedgerQuotaBytes: quota}
+	result2 := RunManifest(context.Background(), cfg2, []Spec{spec2})
+	if _, ok := result2.Failed["m2"]; !ok {
+		t.Fatalf("second pull (after a simulated restart): want m2 to fail against the persisted ledger, got Pulled=%v Failed=%v", result2.Pulled, result2.Failed)
+	}
+}
+
+func TestPullOne_DiskFreeMarginAbortsWhenUnsupported(t *testing.T) {
+	// hostresources.DiskFreeBytes is unsupported on some platforms; the
+	// disk check must then be a no-op rather than blocking every download.
+	// This test only asserts the config plumbs through without breaking a
+	// normal download; the platform-specific enforcement itself is covered
+	// by hostresources' own tests.
+	content := []byte("small file")
+	digest := sha256Hex(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "model.bin")
+	cfg := Config{Allowlist: []string{srv.URL}, DiskFreeMarginBytes: 1} // 1 byte margin: any real disk clears it
+	specs := []Spec{{Name: "m1", SourceURL: srv.URL, SHA256: digest, TargetPath: target}}
+
+	result := RunManifest(context.Background(), cfg, specs)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none with a trivially small margin", result.Failed)
+	}
+}
+
+func TestPullOne_DiskFreeMarginAbortsWhenBelowThreshold(t *testing.T) {
+	content := []byte("small file")
+	digest := sha256Hex(content)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	target := filepath.Join(dir, "model.bin")
+	// An impossibly large margin: no real filesystem clears it, so the
+	// write must abort with ReasonDiskSpaceLow via errDiskSpaceLow.
+	cfg := Config{Allowlist: []string{srv.URL}, DiskFreeMarginBytes: 1 << 62}
+	specs := []Spec{{Name: "m1", SourceURL: srv.URL, SHA256: digest, TargetPath: target}}
+
+	result := RunManifest(context.Background(), cfg, specs)
+
+	if _, ok := result.Failed["m1"]; !ok {
+		t.Fatalf("expected m1 to fail under an impossible disk margin, got Pulled=%v Failed=%v", result.Pulled, result.Failed)
 	}
 }

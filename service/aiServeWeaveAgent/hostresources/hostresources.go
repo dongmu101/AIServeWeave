@@ -11,6 +11,20 @@
 // （Linux 的 /proc/meminfo 与 nvidia-smi、macOS 的 sysctl），而不是引入
 // gopsutil 一类的库或 NVML binding，这样 Agent 的依赖线就仍是 AGENTS.md 要求的
 // 「Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 coder/websocket」。
+//
+// DiskFreeBytes (diskfree_unix.go / diskfree_other.go) is a separate,
+// deliberately un-wired probe: NodeResources is a static capacity snapshot
+// taken once at Hello, while free disk space is volatile runtime state, so it
+// is not added as a NodeResources field. It exists for modelpull's subtask 4
+// (docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md)
+// to call directly as a secondary defense beyond its own byte quotas.
+//
+// DiskFreeBytes（diskfree_unix.go / diskfree_other.go）是一个刻意不接入握手
+// 的独立探测：NodeResources 是 Hello 时刻的一份静态容量快照，而剩余磁盘空
+// 间是易变的运行时状态，因此不作为 NodeResources 的字段。它的存在是为了让
+// modelpull 子任务四
+// （docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md）
+// 在自己的字节配额之外直接调用，作为一道二次防线。
 package hostresources
 
 import (

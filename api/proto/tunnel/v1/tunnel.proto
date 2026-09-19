@@ -609,6 +609,8 @@ enum ModelPullFailureReason {
   MODEL_PULL_FAILURE_REASON_STORAGE_ERROR = 8;       // local disk write/rename failure
   MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED = 9; // kind=ollama spec, no -ollama-url configured
   MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED = 10; // the Ollama server itself reported an error
+  MODEL_PULL_FAILURE_REASON_LEDGER_QUOTA_EXCEEDED = 11; // cross-restart cumulative ledger has no room left
+  MODEL_PULL_FAILURE_REASON_DISK_SPACE_LOW = 12;        // target filesystem free space below the configured margin
 }
 
 message ModelPullStatus {

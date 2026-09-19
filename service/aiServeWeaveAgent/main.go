@@ -196,9 +196,14 @@ func (o *tunnelOptions) runtimeIDs() []string {
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md）。它来自
 // flag，完全是本节点本地的，从不接受 Gateway 或控制面下发。清单为空时功能关闭。
 type modelPullOptions struct {
-	manifest   string
-	allowlist  string
-	quotaBytes int64
+	manifest            string
+	allowlist           string
+	quotaBytes          int64
+	maxConcurrency      int
+	ledgerPath          string
+	ledgerQuotaBytes    int64
+	ledgerPeriod        time.Duration
+	diskFreeMarginBytes int64
 }
 
 func registerModelPullFlags() *modelPullOptions {
@@ -209,6 +214,16 @@ func registerModelPullFlags() *modelPullOptions {
 		"comma-separated URL prefixes models may be pulled from; empty rejects every pull")
 	flag.Int64Var(&opts.quotaBytes, "model-pull-quota-bytes", 0,
 		"byte budget for this run's model pulls; <=0 means unlimited")
+	flag.IntVar(&opts.maxConcurrency, "model-pull-max-concurrency", 1,
+		"maximum number of model pulls to run at once (subtask 4); <=1 pulls one at a time")
+	flag.StringVar(&opts.ledgerPath, "model-pull-ledger-path", "",
+		"path to a JSON file tracking cumulative model pull bytes across Agent restarts (subtask 4); empty disables the cross-restart quota ledger")
+	flag.Int64Var(&opts.ledgerQuotaBytes, "model-pull-ledger-quota-bytes", 0,
+		"cumulative byte budget the ledger enforces across restarts; <=0 means unlimited (only meaningful with -model-pull-ledger-path)")
+	flag.DurationVar(&opts.ledgerPeriod, "model-pull-ledger-period", 0,
+		"rolling window after which the ledger resets to zero; <=0 means it never resets on its own (only meaningful with -model-pull-ledger-path)")
+	flag.Int64Var(&opts.diskFreeMarginBytes, "model-pull-disk-free-margin-bytes", 0,
+		"abort a model pull once the target filesystem's free space falls below this many bytes (subtask 4's secondary defense); <=0 disables the check")
 	return opts
 }
 
@@ -614,7 +629,17 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 			specs = nil
 		}
 	}
-	cfg := modelpull.Config{Allowlist: opts.allowlistPrefixes(), QuotaBytes: opts.quotaBytes, OllamaBaseURL: ollamaURL}
+	cfg := modelpull.Config{
+		Allowlist:           opts.allowlistPrefixes(),
+		QuotaBytes:          opts.quotaBytes,
+		OllamaBaseURL:       ollamaURL,
+		MaxConcurrency:      opts.maxConcurrency,
+		LedgerQuotaBytes:    opts.ledgerQuotaBytes,
+		DiskFreeMarginBytes: opts.diskFreeMarginBytes,
+	}
+	if opts.ledgerPath != "" {
+		cfg.Ledger = &modelpull.Ledger{Path: opts.ledgerPath, Period: opts.ledgerPeriod, Clock: runtime.NewSystemClock()}
+	}
 	puller := modelpull.NewPuller(ctx, cfg, specs, runtime.NewSystemClock())
 	if len(specs) > 0 {
 		names := make([]string, len(specs))

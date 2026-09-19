@@ -121,6 +121,10 @@ func modelPullReasonToProto(r modelpullstatus.FailureReason) tunnelv1.ModelPullF
 		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED
 	case modelpullstatus.ReasonOllamaPullFailed:
 		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED
+	case modelpullstatus.ReasonLedgerQuotaExceeded:
+		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_LEDGER_QUOTA_EXCEEDED
+	case modelpullstatus.ReasonDiskSpaceLow:
+		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_DISK_SPACE_LOW
 	default:
 		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNSPECIFIED
 	}
@@ -148,6 +152,10 @@ func modelPullReasonFromProto(pb tunnelv1.ModelPullFailureReason) modelpullstatu
 		return modelpullstatus.ReasonOllamaUnconfigured
 	case tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED:
 		return modelpullstatus.ReasonOllamaPullFailed
+	case tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_LEDGER_QUOTA_EXCEEDED:
+		return modelpullstatus.ReasonLedgerQuotaExceeded
+	case tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_DISK_SPACE_LOW:
+		return modelpullstatus.ReasonDiskSpaceLow
 	default:
 		return modelpullstatus.ReasonUnspecified
 	}

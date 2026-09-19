@@ -3,6 +3,7 @@ package modelpull
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -35,6 +36,15 @@ func (c *fakeClock) Now() time.Time {
 
 func (c *fakeClock) NewTimer(d time.Duration) (<-chan time.Time, func() bool) {
 	panic("modelpull: Puller does not use Clock.NewTimer")
+}
+
+// advance moves the clock forward by d, for tests that need to cross a
+// Ledger's Period boundary (ledger_test.go) rather than rely on Now()'s
+// per-call millisecond drift.
+func (c *fakeClock) advance(d time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.now = c.now.Add(d)
 }
 
 func statusOf(t *testing.T, p *Puller, name string) modelpullstatus.Status {
@@ -331,6 +341,59 @@ func TestPuller_TriggerOllamaKindServerError(t *testing.T) {
 	got := waitForState(t, p, "ghost:latest", modelpullstatus.StateFailed)
 	if got.Reason != modelpullstatus.ReasonOllamaPullFailed {
 		t.Fatalf("Reason = %v, want ReasonOllamaPullFailed", got.Reason)
+	}
+}
+
+func TestPuller_MaxConcurrencyRunsDownloadsInParallel(t *testing.T) {
+	const n = 3
+	content := []byte("bytes")
+	digest := sha256Hex(content)
+
+	var mu sync.Mutex
+	inFlight := 0
+	maxInFlight := 0
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		inFlight++
+		if inFlight > maxInFlight {
+			maxInFlight = inFlight
+		}
+		mu.Unlock()
+
+		<-release
+
+		mu.Lock()
+		inFlight--
+		mu.Unlock()
+		w.Write(content)
+	}))
+	defer srv.Close()
+
+	dir := t.TempDir()
+	specs := make([]Spec, n)
+	names := make([]string, n)
+	for i := range specs {
+		name := fmt.Sprintf("m%d", i)
+		names[i] = name
+		specs[i] = Spec{Name: name, SourceURL: srv.URL, SHA256: digest, SizeBytes: int64(len(content)), TargetPath: filepath.Join(dir, name+".bin")}
+	}
+
+	p := NewPuller(context.Background(), Config{Allowlist: []string{srv.URL}, MaxConcurrency: n}, specs, newFakeClock())
+	p.Trigger(names)
+
+	for _, name := range names {
+		waitForState(t, p, name, modelpullstatus.StateDownloading)
+	}
+	close(release)
+	for _, name := range names {
+		waitForState(t, p, name, modelpullstatus.StateDone)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if maxInFlight != n {
+		t.Fatalf("maxInFlight = %d, want %d: MaxConcurrency should let all %d downloads run at once", maxInFlight, n, n)
 	}
 }
 
