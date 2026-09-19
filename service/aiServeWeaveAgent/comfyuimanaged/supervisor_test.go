@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -91,6 +92,12 @@ func (m *fakeManager) isRegistered(id string) bool {
 func testSupervisor(t *testing.T, clock aiswruntime.Clock, manager aiswruntime.Manager) *Supervisor {
 	t.Helper()
 	return NewSupervisor(context.Background(), testLauncher(clock), manager, testSpec(), 5*time.Second, clock, slog.New(slog.DiscardHandler))
+}
+
+func testSupervisorWithCustomNodes(t *testing.T, clock aiswruntime.Clock, manager aiswruntime.Manager, allowlist map[string]NodeSpec) *Supervisor {
+	t.Helper()
+	return NewSupervisorWithCustomNodes(context.Background(), testLauncher(clock), manager, testSpec(), 5*time.Second, clock, slog.New(slog.DiscardHandler),
+		"/comfyui/custom_nodes", allowlist)
 }
 
 // listenOnTestSpecPort binds a real, empty listener on testSpec()'s port, so
@@ -215,6 +222,76 @@ func TestSupervisorTriggerDropsOverlappingAction(t *testing.T) {
 
 	if addCalls := mgr.addCallCount(); addCalls != 0 {
 		t.Errorf("Trigger() while busy should be dropped, but Add was called %d times", addCalls)
+	}
+}
+
+func TestSupervisorInstallCustomNodeUnknownNameLogsAndReturns(t *testing.T) {
+	newFakeDocker(t, fakeDockerConfig{})
+	sup := testSupervisorWithCustomNodes(t, newFakeClock(), newFakeManager(), map[string]NodeSpec{
+		"known-node": {RepoURL: "https://example.com/known.git", Ref: "v1"},
+	})
+
+	done := make(chan struct{})
+	sup.onIdle = func() { close(done) }
+	sup.TriggerCustomNodeInstall("unknown-node")
+	<-done
+	// No assertion beyond "it returns and does not panic": an unknown name
+	// is refused inside Launcher.InstallCustomNode and only logged here,
+	// mirroring Trigger's own "no dedicated ack" contract.
+}
+
+func TestSupervisorInstallCustomNodeDropsWhenBusy(t *testing.T) {
+	newFakeDocker(t, fakeDockerConfig{execOutput: ""})
+	sup := testSupervisorWithCustomNodes(t, newFakeClock(), newFakeManager(), map[string]NodeSpec{
+		"my-node": {RepoURL: "https://example.com/my-node.git", Ref: "v1"},
+	})
+
+	sup.mu.Lock()
+	sup.busy = true // simulate an action already in flight
+	sup.mu.Unlock()
+
+	sup.TriggerCustomNodeInstall("my-node")
+
+	sup.mu.Lock()
+	busy := sup.busy
+	sup.mu.Unlock()
+	if !busy {
+		t.Errorf("InstallCustomNode() while busy should leave busy untouched by the dropped call")
+	}
+}
+
+func TestSupervisorInstallCustomNodeSuccess(t *testing.T) {
+	calls := newFakeDocker(t, fakeDockerConfig{execOutput: ""})
+	sup := testSupervisorWithCustomNodes(t, newFakeClock(), newFakeManager(), map[string]NodeSpec{
+		"my-node": {RepoURL: "https://example.com/my-node.git", Ref: "v1"},
+	})
+
+	done := make(chan struct{})
+	sup.onIdle = func() { close(done) }
+	sup.TriggerCustomNodeInstall("my-node")
+	<-done
+
+	found := false
+	for _, c := range calls() {
+		if strings.Contains(c, "exec") && strings.Contains(c, "my-node.git") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("InstallCustomNode() did not issue a docker exec install for my-node; calls = %v", calls())
+	}
+}
+
+func TestSupervisorSnapshotIncludesCustomNodes(t *testing.T) {
+	newFakeDocker(t, fakeDockerConfig{inspectOutput: "running|0", execOutput: "my-node\tv1\n"})
+	sup := testSupervisorWithCustomNodes(t, newFakeClock(), newFakeManager(), nil)
+
+	got := sup.Snapshot()
+	if len(got) != 1 {
+		t.Fatalf("Snapshot() returned %d entries, want 1", len(got))
+	}
+	if len(got[0].CustomNodes) != 1 || got[0].CustomNodes[0].Name != "my-node" || got[0].CustomNodes[0].Version != "v1" {
+		t.Errorf("Snapshot() custom nodes = %+v, want [{my-node v1}]", got[0].CustomNodes)
 	}
 }
 

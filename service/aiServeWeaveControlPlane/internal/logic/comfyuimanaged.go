@@ -51,3 +51,37 @@ func (s *Service) TriggerComfyUIManagedAction(ctx context.Context, actor Actor, 
 	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionComfyUIManagedTrigger, nodeID, "action "+action.String(), actor.IP)
 	return result, nil
 }
+
+// InstallComfyUICustomNode asks nodeID, wherever it is currently connected
+// among the configured Gateway replicas, to install name into its one
+// locally-declared Managed ComfyUI instance's custom-nodes directory
+// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask four's control
+// plane forwarding layer). Same forward-not-execute reasoning as
+// TriggerComfyUIManagedAction: it never carries a repository URL, only
+// name, and the Agent's own local allowlist decides whether it is known.
+//
+// InstallComfyUICustomNode 要求 nodeID（无论它当前连在哪个已配置副本上）把
+// name 安装进它本地已声明的那一个 Managed ComfyUI 实例的自定义节点目录
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四的控制面转发层）。与
+// TriggerComfyUIManagedAction 同一"只转发、不执行"理由：它从不携带仓库
+// URL，只有 name，是否已知由 Agent 自己本地的允许列表决定。
+func (s *Service) InstallComfyUICustomNode(ctx context.Context, actor Actor, nodeID, name string) (comfyuimanagedrouter.Result, error) {
+	if err := s.requirePlatformActor(actor); err != nil {
+		return comfyuimanagedrouter.Result{}, err
+	}
+	if s.comfyUIManagedRouter == nil {
+		return comfyuimanagedrouter.Result{}, ErrComfyUIManagedRouterUnconfigured
+	}
+	if nodeID == "" || name == "" {
+		return comfyuimanagedrouter.Result{}, ErrInvalidInput
+	}
+	result, err := s.comfyUIManagedRouter.InstallCustomNode(ctx, nodeID, name)
+	if err != nil {
+		return comfyuimanagedrouter.Result{}, err
+	}
+	if !result.Connected {
+		return result, ErrNotFound
+	}
+	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionComfyUIManagedCustomNodeInstall, nodeID, "custom node "+name, actor.IP)
+	return result, nil
+}

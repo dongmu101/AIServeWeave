@@ -79,6 +79,53 @@ func TestComfyUIManagedReportRoundTrip(t *testing.T) {
 	}
 }
 
+func TestComfyUIManagedCustomNodeInstallTriggerRoundTrip(t *testing.T) {
+	cases := []string{"", "my-node"}
+	for _, name := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := ComfyUIManagedCustomNodeInstallTriggerFromProto(ComfyUIManagedCustomNodeInstallTriggerToProto(name))
+			if got != name {
+				t.Fatalf("round trip: want %q, got %q", name, got)
+			}
+		})
+	}
+}
+
+func TestComfyUIManagedCustomNodeInstallTriggerFromProtoNil(t *testing.T) {
+	got := ComfyUIManagedCustomNodeInstallTriggerFromProto(nil)
+	if got != "" {
+		t.Fatalf("nil proto: want empty string, got %q", got)
+	}
+}
+
+func TestComfyUIManagedReportRoundTripCustomNodes(t *testing.T) {
+	statuses := []comfyuimanagedstatus.Status{
+		{
+			ContainerName: "aiserveweave-comfyui",
+			State:         comfyuimanagedstatus.StateRunning,
+			UpdatedAt:     time.UnixMilli(1_700_000_000_000).UTC(),
+			CustomNodes: []comfyuimanagedstatus.CustomNodeStatus{
+				{Name: "zeta-node", Version: "v2"},
+				{Name: "alpha-node", Version: "v1"},
+			},
+		},
+	}
+	got := ComfyUIManagedReportFromProto(ComfyUIManagedReportToProto(statuses))
+	if len(got) != 1 {
+		t.Fatalf("length: want 1, got %d", len(got))
+	}
+	customNodes := got[0].CustomNodes
+	if len(customNodes) != 2 {
+		t.Fatalf("custom nodes length: want 2, got %d", len(customNodes))
+	}
+	if customNodes[0].Name != "alpha-node" || customNodes[1].Name != "zeta-node" {
+		t.Fatalf("custom nodes not sorted by name: %+v", customNodes)
+	}
+	if customNodes[0].Version != "v1" || customNodes[1].Version != "v2" {
+		t.Fatalf("custom node versions not preserved: %+v", customNodes)
+	}
+}
+
 func TestComfyUIManagedStateRoundTrip(t *testing.T) {
 	states := []comfyuimanagedstatus.State{
 		comfyuimanagedstatus.StateUnspecified,

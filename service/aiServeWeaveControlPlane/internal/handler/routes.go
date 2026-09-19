@@ -473,6 +473,11 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 				Path:    "/operator/v1/nodes/:id/comfyui-managed",
 				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed", requirePlatformSession(ctx, comfyUIManagedStatus(ctx))),
 			},
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/nodes/:id/comfyui-managed/custom-nodes",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed/custom-nodes", requirePlatformSession(ctx, installComfyUICustomNode(ctx))),
+			},
 		})
 	}
 }

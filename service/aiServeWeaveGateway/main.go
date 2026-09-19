@@ -461,13 +461,14 @@ func run() error {
 		logger.Info("no -admin-addr; this replica serves no operator inventory")
 	} else {
 		adminHandler, err := adminapi.New(adminapi.Config{
-			Token:     os.Getenv("AISW_GATEWAY_ADMIN_TOKEN"),
-			Routes:    routeStatus,
-			Workflows: workflowStatus,
-			Nodes:     server.Nodes,
-			Jobs:      front.JobsFor,
-			Templates: front.Templates,
-			ReplicaID: id,
+			Token:                os.Getenv("AISW_GATEWAY_ADMIN_TOKEN"),
+			Routes:               routeStatus,
+			Workflows:            workflowStatus,
+			Nodes:                server.Nodes,
+			Jobs:                 front.JobsFor,
+			Templates:            front.Templates,
+			ComfyUIManagedStatus: server.ComfyUIManagedStatus,
+			ReplicaID:            id,
 		})
 		if err != nil {
 			return err
@@ -554,10 +555,11 @@ func run() error {
 		logger.Info("no -comfyui-managed-addr; this replica accepts no comfyui managed actions")
 	} else {
 		comfyUIManagedHandler, err := comfyuimanagedapi.New(comfyuimanagedapi.Config{
-			Token:        os.Getenv("AISW_GATEWAY_COMFYUI_MANAGED_TOKEN"),
-			Trigger:      server.TriggerComfyUIManagedAction,
-			Status:       server.ComfyUIManagedStatus,
-			HasActiveJob: front.HasActiveJobOnNode,
+			Token:                    os.Getenv("AISW_GATEWAY_COMFYUI_MANAGED_TOKEN"),
+			Trigger:                  server.TriggerComfyUIManagedAction,
+			Status:                   server.ComfyUIManagedStatus,
+			HasActiveJob:             front.HasActiveJobOnNode,
+			TriggerCustomNodeInstall: server.TriggerComfyUIManagedCustomNodeInstall,
 		})
 		if err != nil {
 			return err

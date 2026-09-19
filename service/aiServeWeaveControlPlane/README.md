@@ -252,9 +252,10 @@ ComfyUIManaged:
 | 端点 | 行为 |
 | --- | --- |
 | `POST /operator/v1/nodes/:id/comfyui-managed` | 并发向每个已配置副本的 `-comfyui-managed-addr` 下发一次动作触发（`{"action": "start"\|"stop"\|"restart"}`）；只要有一个副本报告该 `node_id` 已连接就算下发成功（202）——一个 Agent 进程今天最多管理一个 Managed 实例，因此这里同样选择"并发下发给全部副本"而不是"先找出是哪个副本再单独下发" |
-| `GET /operator/v1/nodes/:id/comfyui-managed` | 并发向每个已配置副本读取状态；节点连到多个副本时，取其中更新时间最新的那一份回复——与模型拉取、机群清单同一条"最新证据胜出"规则 |
+| `POST /operator/v1/nodes/:id/comfyui-managed/custom-nodes` | 并发向每个已配置副本下发一次按名字的自定义节点安装触发（`{"name": "..."}`，STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）；同一"任一副本报告已连接即算下发"规则，不携带仓库 URL |
+| `GET /operator/v1/nodes/:id/comfyui-managed` | 并发向每个已配置副本读取状态；节点连到多个副本时，取其中更新时间最新的那一份回复——与模型拉取、机群清单同一条"最新证据胜出"规则；响应的每个实例新增 `custom_nodes`（该实例上报已安装的自定义节点名+版本） |
 
-两个端点在没有任何已配置副本报告该 `node_id` 已连接时都答 404；未配置 `ComfyUIManaged` 的部署根本没有这两条路由，不是有两条回答"未配置"的路由——与模型拉取、机群清单、节点写路径同一先例。触发端点由 `requirePlatformSession` 守卫，且只在确有副本报告已连接、成功下发后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`Detail` 记录本次触发的动作名）；状态查询端点是纯读取，直接调用 `ctx.ComfyUIManagedRouter`、不经过 `logic.Service`、不写审计——与模型拉取的读取端点同一种切分。
+三个端点在没有任何已配置副本报告该 `node_id` 已连接时都答 404；未配置 `ComfyUIManaged` 的部署根本没有这几条路由，不是有几条回答"未配置"的路由——与模型拉取、机群清单、节点写路径同一先例。两个写端点均由 `requirePlatformSession` 守卫，且只在确有副本报告已连接、成功下发后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`Detail` 分别记录本次触发的动作名或安装的节点名，审计代号分别为 `model.ActionComfyUIManagedTrigger`、`model.ActionComfyUIManagedCustomNodeInstall`）；状态查询端点是纯读取，直接调用 `ctx.ComfyUIManagedRouter`、不经过 `logic.Service`、不写审计——与模型拉取的读取端点同一种切分。
 
 **实现在 `internal/comfyuimanagedrouter`，与 `internal/modelpullrouter` 形状对称但不共用代码。** 两者要解决的问题相同（一个具体 `node_id` 归哪个副本管），但线上请求/响应格式不同——一个是封闭的 `Action` 字符串，另一个是名字列表；一个报告容器实例，另一个报告命名拉取——这层差异让共用代码的收益小于维护一层泛化抽象的代价，因此按仓库一贯的"重复优于早熟抽象"选择独立实现。
 

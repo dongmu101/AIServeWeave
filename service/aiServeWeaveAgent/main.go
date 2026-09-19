@@ -245,6 +245,17 @@ type comfyuiManagedOptions struct {
 	storagePaths string
 	memoryLimit  string
 	startTimeout time.Duration
+	// customNodes and customNodesDir configure InstallCustomNode (STATUS.
+	// md's P2 ComfyUI Managed Docker deployment, subtask 4): a local
+	// allowlist of custom node install sources, never accepted from the
+	// Gateway or control plane — see comfyuimanaged.NodeSpec's doc comment.
+	//
+	// customNodes 与 customNodesDir 配置 InstallCustomNode（STATUS.md 的 P2
+	// ComfyUI Managed Docker 部署子任务四）：一个本地的自定义节点安装源允许
+	// 列表，从不接受 Gateway 或控制面下发——见 comfyuimanaged.NodeSpec 的文
+	// 档注释。
+	customNodes    string
+	customNodesDir string
 }
 
 func registerComfyUIManagedFlags() *comfyuiManagedOptions {
@@ -265,6 +276,10 @@ func registerComfyUIManagedFlags() *comfyuiManagedOptions {
 		"docker --memory value for the container, e.g. 32g; empty is unlimited")
 	flag.DurationVar(&opts.startTimeout, "comfyui-managed-start-timeout", 5*time.Minute,
 		"how long Start waits for the Managed container's port to accept connections before failing")
+	flag.StringVar(&opts.customNodes, "comfyui-managed-custom-nodes", "",
+		"comma-separated name=repourl@ref allowlist entries the Gateway may trigger installing by name, e.g. my-node=https://example.com/my-node.git@v1.0.0")
+	flag.StringVar(&opts.customNodesDir, "comfyui-managed-custom-nodes-dir", "/comfyui/custom_nodes",
+		"the Managed container's custom_nodes directory; the default assumes a common ComfyUI image layout and may need overriding for others")
 	return opts
 }
 
@@ -292,6 +307,42 @@ func splitNonEmpty(raw string) []string {
 		if v = strings.TrimSpace(v); v != "" {
 			out = append(out, v)
 		}
+	}
+	return out
+}
+
+// customNodeAllowlist parses -comfyui-managed-custom-nodes into the
+// allowlist comfyuimanaged.Supervisor.TriggerCustomNodeInstall consults
+// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4). Each entry
+// is "name=repourl@ref"; a malformed entry is dropped rather than fatal,
+// the same tolerance parseComfyUIManagedMounts applies to a mount typo.
+//
+// customNodeAllowlist 解析 -comfyui-managed-custom-nodes 成
+// comfyuimanaged.Supervisor.TriggerCustomNodeInstall 要查阅的允许列表
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）。每条形如
+// "name=repourl@ref"；格式错误的条目被丢弃而不是致命错误，与
+// parseComfyUIManagedMounts 对一处挂载配置排版失误的容忍度相同。
+func (o *comfyuiManagedOptions) customNodeAllowlist() map[string]comfyuimanaged.NodeSpec {
+	out := make(map[string]comfyuimanaged.NodeSpec)
+	for _, entry := range strings.Split(o.customNodes, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		name, source, ok := strings.Cut(entry, "=")
+		name = strings.TrimSpace(name)
+		if !ok || name == "" {
+			continue
+		}
+		repoURL, ref, ok := strings.Cut(source, "@")
+		repoURL, ref = strings.TrimSpace(repoURL), strings.TrimSpace(ref)
+		if !ok || repoURL == "" || ref == "" {
+			continue
+		}
+		out[name] = comfyuimanaged.NodeSpec{RepoURL: repoURL, Ref: ref}
+	}
+	if len(out) == 0 {
+		return nil
 	}
 	return out
 }
@@ -386,7 +437,8 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	if cmOpts.enabled() {
 		spec := cmOpts.spec()
 		launcher := comfyuimanaged.NewLauncher(deps.Clock, logger)
-		comfyUIManagedSupervisor = comfyuimanaged.NewSupervisor(ctx, launcher, manager, spec, cmOpts.startTimeout, deps.Clock, logger)
+		comfyUIManagedSupervisor = comfyuimanaged.NewSupervisorWithCustomNodes(ctx, launcher, manager, spec, cmOpts.startTimeout, deps.Clock, logger,
+			cmOpts.customNodesDir, cmOpts.customNodeAllowlist())
 		if err := comfyUIManagedSupervisor.Start(ctx); err != nil {
 			return fmt.Errorf("comfyui managed: %w", err)
 		}

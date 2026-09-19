@@ -413,6 +413,7 @@ message GatewayControl {
     Ping ping = 7;
     ModelPullTrigger model_pull_trigger = 8; // STATUS.md P2 model distribution subtask 2
     ComfyUIManagedAction comfyui_managed_action = 9; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
+    ComfyUIManagedCustomNodeInstallTrigger comfyui_managed_custom_node_install = 10; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 4
   }
 }
 
@@ -666,6 +667,7 @@ message ComfyUIManagedStatus {
   string container_name = 1;
   ComfyUIManagedState state = 2;
   int64 updated_unix_ms = 3;
+  repeated ComfyUIManagedCustomNode custom_nodes = 4; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 4
 }
 
 enum ComfyUIManagedState {
@@ -675,6 +677,33 @@ enum ComfyUIManagedState {
   COMFYUI_MANAGED_STATE_RUNNING = 3;
   COMFYUI_MANAGED_STATE_STOPPED = 4;
   COMFYUI_MANAGED_STATE_FAILED = 5;
+}
+
+// ComfyUIManagedCustomNodeInstallTrigger asks the Agent to install one
+// custom node it already knows about from its local allowlist (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask 4), referenced only by
+// name. It can never carry a git repository URL: the load-bearing rule at
+// the top of this file forbids a message that expresses "fetch this URL",
+// the same reason ModelPullTrigger never carries one.
+//
+// ComfyUIManagedCustomNodeInstallTrigger 要求 Agent 安装它本地允许列表
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）里已经认识的一个
+// 自定义节点，只按名字引用。它永远不能携带 git 仓库 URL：本文件头部的
+// load-bearing 规则禁止表达"fetch this URL"的消息，与 ModelPullTrigger 从不
+// 携带 URL 同一条理由。
+message ComfyUIManagedCustomNodeInstallTrigger {
+  string name = 1;
+}
+
+// ComfyUIManagedCustomNode is one custom node this Agent found installed
+// under its Managed container's custom-nodes directory, as read back from
+// the container rather than from the allowlist that named it.
+//
+// ComfyUIManagedCustomNode 是本 Agent 在其 Managed 容器自定义节点目录下发现
+// 的一个已安装节点，是从容器里读回的，而不是来自点名它的允许列表。
+message ComfyUIManagedCustomNode {
+  string name = 1;
+  string version = 2;
 }
 
 // RuntimeSpec mirrors runtime.Config with one deliberate difference: there is

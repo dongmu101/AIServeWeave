@@ -151,6 +151,15 @@ func (s *controlSession) handle(ctx context.Context, frame *tunnelv1.GatewayCont
 		// action taking effect.
 		return s.forceReportComfyUIManaged()
 
+	case *tunnelv1.GatewayControl_ComfyuiManagedCustomNodeInstall:
+		if c.cfg.ComfyUIManaged != nil {
+			c.cfg.ComfyUIManaged.TriggerCustomNodeInstall(tunnelwire.ComfyUIManagedCustomNodeInstallTriggerFromProto(body.ComfyuiManagedCustomNodeInstall))
+		}
+		// Same rule as GatewayControl_ComfyuiManagedAction: no dedicated
+		// ack, the next report (forced here) is how the Gateway observes
+		// the install taking effect.
+		return s.forceReportComfyUIManaged()
+
 	case *tunnelv1.GatewayControl_Roster:
 		if c.cfg.OnRoster != nil {
 			c.cfg.OnRoster(body.Roster)

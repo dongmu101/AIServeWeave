@@ -57,6 +57,8 @@ type fakeDockerConfig struct {
 	runFail       bool
 	stopNotFound  bool
 	rmNotFound    bool
+	execOutput    string // stdout for `docker exec` (customnodes_test.go); execFail forces a nonzero exit instead
+	execFail      bool
 }
 
 // newFakeDocker writes a POSIX shell script named "docker" into a temp
@@ -95,6 +97,11 @@ func newFakeDocker(t *testing.T, cfg fakeDockerConfig) func() []string {
 	if cfg.rmNotFound {
 		rmBody = `echo "No such container: $*" >&2; exit 1`
 	}
+	execExit := 0
+	if cfg.execFail {
+		execExit = 1
+	}
+	execBody := fmt.Sprintf(`printf '%%b' %q; exit %d`, cfg.execOutput, execExit)
 
 	script := fmt.Sprintf(`#!/bin/sh
 echo "$*" >> %q
@@ -105,9 +112,10 @@ case "$1" in
   run) %s ;;
   stop) %s ;;
   rm) %s ;;
+  exec) %s ;;
   *) echo "fake docker: unrecognized subcommand $1" >&2; exit 1 ;;
 esac
-`, logPath, inspectBody, imageBody, pullBody, runBody, stopBody, rmBody)
+`, logPath, inspectBody, imageBody, pullBody, runBody, stopBody, rmBody, execBody)
 
 	scriptPath := filepath.Join(dir, "docker")
 	if err := os.WriteFile(scriptPath, []byte(script), 0o755); err != nil {

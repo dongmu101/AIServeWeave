@@ -78,6 +78,59 @@ func TestComfyUIManagedForwardingRoundTrip(t *testing.T) {
 	}
 }
 
+// TestComfyUIManagedCustomNodeInstallRoundTrip drives the full HTTP stack
+// for the custom node install endpoint (STATUS.md's P2 ComfyUI Managed
+// Docker deployment, subtask 4), against a node connected to one of two
+// configured replicas.
+//
+// TestComfyUIManagedCustomNodeInstallRoundTrip 驱动完整的 HTTP 栈，覆盖自
+// 定义节点安装端点（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务
+// 四），针对一个连到两个已配置副本之一的节点。
+func TestComfyUIManagedCustomNodeInstallRoundTrip(t *testing.T) {
+	elsewhere := stubComfyUIManagedGateway(t, false, nil)
+	here := stubComfyUIManagedGateway(t, true, nil)
+
+	h := newHarnessWithComfyUIManaged(t, []string{elsewhere, here})
+	platform := bootstrapPlatformOperator(h, "operator@example.com")
+
+	var resp types.ComfyUIManagedTriggerResponse
+	status := h.call(http.MethodPost, "/operator/v1/nodes/node-a/comfyui-managed/custom-nodes", platform,
+		types.ComfyUIManagedCustomNodeInstallRequest{Name: "my-node"}, &resp)
+	if status != http.StatusAccepted {
+		t.Fatalf("install status = %d, want 202", status)
+	}
+	if len(resp.Replicas) != 2 {
+		t.Fatalf("install reported %d replicas, want 2", len(resp.Replicas))
+	}
+}
+
+// TestComfyUIManagedCustomNodeInstallRejectsAnEmptyName asserts an empty
+// name is a 400 before ever reaching the router, mirroring the action
+// endpoint's own "reject before forwarding" shape.
+func TestComfyUIManagedCustomNodeInstallRejectsAnEmptyName(t *testing.T) {
+	here := stubComfyUIManagedGateway(t, true, nil)
+	h := newHarnessWithComfyUIManaged(t, []string{here})
+	platform := bootstrapPlatformOperator(h, "operator@example.com")
+
+	if status := h.call(http.MethodPost, "/operator/v1/nodes/node-a/comfyui-managed/custom-nodes", platform,
+		types.ComfyUIManagedCustomNodeInstallRequest{Name: ""}, nil); status != http.StatusBadRequest {
+		t.Errorf("install status = %d, want 400 for an empty name", status)
+	}
+}
+
+// TestComfyUIManagedCustomNodeInstallUnknownNodeIs404 asserts a node
+// connected to none of the configured replicas is reported as not found.
+func TestComfyUIManagedCustomNodeInstallUnknownNodeIs404(t *testing.T) {
+	nowhere := stubComfyUIManagedGateway(t, false, nil)
+	h := newHarnessWithComfyUIManaged(t, []string{nowhere})
+	platform := bootstrapPlatformOperator(h, "operator@example.com")
+
+	if status := h.call(http.MethodPost, "/operator/v1/nodes/node-a/comfyui-managed/custom-nodes", platform,
+		types.ComfyUIManagedCustomNodeInstallRequest{Name: "my-node"}, nil); status != http.StatusNotFound {
+		t.Errorf("install status = %d, want 404 for an unconnected node", status)
+	}
+}
+
 // TestComfyUIManagedForwardingRejectsAnInvalidAction asserts a malformed
 // action is a 400 before ever reaching the router — modelpullapi's own
 // empty-names check has the same "reject before forwarding" shape.
@@ -145,5 +198,9 @@ func TestComfyUIManagedForwardingNotMountedWhenUnconfigured(t *testing.T) {
 
 	if status := h.call(http.MethodGet, "/operator/v1/nodes/node-a/comfyui-managed", platform, nil, nil); status != http.StatusNotFound {
 		t.Errorf("status status = %d, want 404 for an unmounted route", status)
+	}
+	if status := h.call(http.MethodPost, "/operator/v1/nodes/node-a/comfyui-managed/custom-nodes", platform,
+		types.ComfyUIManagedCustomNodeInstallRequest{Name: "my-node"}, nil); status != http.StatusNotFound {
+		t.Errorf("install status = %d, want 404 for an unmounted route", status)
 	}
 }

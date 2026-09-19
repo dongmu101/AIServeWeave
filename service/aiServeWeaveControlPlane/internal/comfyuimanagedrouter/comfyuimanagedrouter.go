@@ -134,6 +134,25 @@ type InstanceStatus struct {
 	ContainerName string
 	State         string
 	UpdatedAt     time.Time
+	// CustomNodes is every custom node this instance reports installed
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4).
+	//
+	// CustomNodes 是该实例上报的每一个已安装自定义节点（STATUS.md 的 P2
+	// ComfyUI Managed Docker 部署子任务四）。
+	CustomNodes []CustomNodeStatus
+}
+
+// CustomNodeStatus mirrors comfyuimanagedstatus.CustomNodeStatus on the wire
+// this router speaks — its own type rather than a direct reuse, the same
+// "each layer decodes into its own shape" precedent ReplicaStatus already
+// follows relative to comfyuimanagedapi's wire types.
+//
+// CustomNodeStatus 与 comfyuimanagedstatus.CustomNodeStatus 在本 router 所讲
+// 的线上格式里同构——是自己的类型而不是直接复用，与 ReplicaStatus 相对
+// comfyuimanagedapi 线上类型已有的"每一层解码成自己的形状"先例相同。
+type CustomNodeStatus struct {
+	Name    string
+	Version string
 }
 
 // Result is the answer to Trigger or Status.
@@ -181,6 +200,33 @@ func (r *Router) Trigger(ctx context.Context, nodeID string, action comfyuimanag
 	}
 	outcomes := r.fanOut(ctx, func(ctx context.Context, endpoint string) replicaOutcome {
 		return r.triggerOne(ctx, endpoint, nodeID, payload)
+	})
+	return buildResult(outcomes), nil
+}
+
+// InstallCustomNode asks node_id, wherever it is connected among the
+// configured replicas, to install name into its one locally-declared
+// Managed instance's custom-nodes directory (STATUS.md's P2 ComfyUI Managed
+// Docker deployment, subtask 4). It never carries a repository URL — only
+// name, which a Gateway replica forwards verbatim to the Agent's own
+// Control stream, where the Agent's own local allowlist decides whether it
+// is known.
+//
+// InstallCustomNode 要求 node_id（无论它连在哪个已配置副本上）把 name 安装
+// 进它本地已声明的那一个 Managed 实例的自定义节点目录（STATUS.md 的 P2
+// ComfyUI Managed Docker 部署子任务四）。它从不携带仓库 URL——只有
+// name，由某个 Gateway 副本原样转发进 Agent 自己的 Control 流，是否已知由
+// Agent 自己本地的允许列表决定。
+func (r *Router) InstallCustomNode(ctx context.Context, nodeID, name string) (Result, error) {
+	if r == nil {
+		return Result{}, ErrDisabled
+	}
+	payload, err := json.Marshal(customNodeInstallRequestWire{Name: name})
+	if err != nil {
+		return Result{}, fmt.Errorf("comfyuimanagedrouter: encoding custom node install request: %w", err)
+	}
+	outcomes := r.fanOut(ctx, func(ctx context.Context, endpoint string) replicaOutcome {
+		return r.installCustomNodeOne(ctx, endpoint, nodeID, payload)
 	})
 	return buildResult(outcomes), nil
 }
@@ -272,6 +318,49 @@ func (r *Router) triggerOne(ctx context.Context, endpoint, nodeID string, payloa
 	}
 }
 
+// customNodeInstallRequestWire mirrors comfyuimanagedapi's
+// customNodeInstallRequest.
+//
+// customNodeInstallRequestWire 与 comfyuimanagedapi 的 customNodeInstallRequest
+// 形状一致。
+type customNodeInstallRequestWire struct {
+	Name string `json:"name"`
+}
+
+// installCustomNodeOne posts to one replica's ComfyUI Managed custom-node
+// install endpoint, logically identical to triggerOne except for the path
+// and payload shape.
+//
+// installCustomNodeOne 向单个副本的 ComfyUI Managed 自定义节点安装端点发起
+// POST，除了路径与负载形状之外，与 triggerOne 逻辑相同。
+func (r *Router) installCustomNodeOne(ctx context.Context, endpoint, nodeID string, payload []byte) replicaOutcome {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint+comfyUIManagedPath(nodeID)+"/custom-nodes", bytes.NewReader(payload))
+	if err != nil {
+		return replicaOutcome{endpoint: endpoint, failure: "unreachable"}
+	}
+	req.Header.Set("Authorization", "Bearer "+r.token)
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := r.client.Do(req)
+	if err != nil {
+		return replicaOutcome{endpoint: endpoint, failure: classifyTransportErr(err)}
+	}
+	defer func() { _ = resp.Body.Close() }()
+	drain(resp.Body)
+
+	switch resp.StatusCode {
+	case http.StatusAccepted:
+		return replicaOutcome{endpoint: endpoint, connected: true}
+	case http.StatusNotFound:
+		return replicaOutcome{endpoint: endpoint}
+	case http.StatusUnauthorized:
+		return replicaOutcome{endpoint: endpoint, failure: "unauthorized"}
+	default:
+		return replicaOutcome{endpoint: endpoint, failure: "unreachable"}
+	}
+}
+
 // wireStatusResponse mirrors comfyuimanagedapi's statusResponse.
 //
 // wireStatusResponse 与 comfyuimanagedapi 的 statusResponse 形状一致。
@@ -284,9 +373,18 @@ type wireStatusResponse struct {
 //
 // wireInstanceStatus 与 comfyuimanagedapi 的 instanceStatusJSON 形状一致。
 type wireInstanceStatus struct {
-	ContainerName string `json:"container_name"`
-	State         string `json:"state"`
-	UpdatedAt     string `json:"updated_at"`
+	ContainerName string           `json:"container_name"`
+	State         string           `json:"state"`
+	UpdatedAt     string           `json:"updated_at"`
+	CustomNodes   []wireCustomNode `json:"custom_nodes"`
+}
+
+// wireCustomNode mirrors comfyuimanagedapi's customNodeJSON.
+//
+// wireCustomNode 与 comfyuimanagedapi 的 customNodeJSON 形状一致。
+type wireCustomNode struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 // statusOne reads one replica's ComfyUI Managed listener.
@@ -338,7 +436,11 @@ func renderInstances(wire wireStatusResponse) ([]InstanceStatus, time.Time) {
 	var freshest time.Time
 	for i, inst := range wire.Instances {
 		updatedAt, _ := time.Parse(time.RFC3339, inst.UpdatedAt)
-		instances[i] = InstanceStatus{ContainerName: inst.ContainerName, State: inst.State, UpdatedAt: updatedAt}
+		customNodes := make([]CustomNodeStatus, len(inst.CustomNodes))
+		for j, cn := range inst.CustomNodes {
+			customNodes[j] = CustomNodeStatus{Name: cn.Name, Version: cn.Version}
+		}
+		instances[i] = InstanceStatus{ContainerName: inst.ContainerName, State: inst.State, UpdatedAt: updatedAt, CustomNodes: customNodes}
 		if updatedAt.After(freshest) {
 			freshest = updatedAt
 		}

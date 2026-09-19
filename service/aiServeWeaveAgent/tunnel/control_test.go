@@ -762,15 +762,22 @@ func TestControlModelPullReportsOnChangeOnly(t *testing.T) {
 // fixture only needs to prove the Control session dispatches and reports
 // correctly.
 type fakeComfyUIManager struct {
-	mu        sync.Mutex
-	triggered []comfyuimanagedstatus.Action
-	snapshot  []comfyuimanagedstatus.Status
+	mu                  sync.Mutex
+	triggered           []comfyuimanagedstatus.Action
+	customNodeTriggered []string
+	snapshot            []comfyuimanagedstatus.Status
 }
 
 func (f *fakeComfyUIManager) Trigger(action comfyuimanagedstatus.Action) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.triggered = append(f.triggered, action)
+}
+
+func (f *fakeComfyUIManager) TriggerCustomNodeInstall(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.customNodeTriggered = append(f.customNodeTriggered, name)
 }
 
 func (f *fakeComfyUIManager) Snapshot() []comfyuimanagedstatus.Status {
@@ -789,6 +796,12 @@ func (f *fakeComfyUIManager) triggeredCalls() []comfyuimanagedstatus.Action {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]comfyuimanagedstatus.Action(nil), f.triggered...)
+}
+
+func (f *fakeComfyUIManager) customNodeTriggeredCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.customNodeTriggered...)
 }
 
 func TestControlComfyUIManagedActionForwardsAndReportsImmediately(t *testing.T) {
@@ -829,6 +842,43 @@ func TestControlComfyUIManagedActionForwardsAndReportsImmediately(t *testing.T) 
 	calls := manager.triggeredCalls()
 	if len(calls) != 1 || calls[0] != comfyuimanagedstatus.ActionStart {
 		t.Fatalf("Trigger calls = %v, want exactly one ActionStart", calls)
+	}
+}
+
+func TestControlComfyUIManagedCustomNodeInstallForwardsAndReportsImmediately(t *testing.T) {
+	manager := &fakeComfyUIManager{snapshot: []comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StateRunning}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ComfyUIManaged = manager
+	})
+	f.start()
+	sess := f.connect()
+
+	if f.recv(sess).GetComfyuiManaged() == nil {
+		t.Fatal("no initial ComfyUIManagedReport right after connecting")
+	}
+
+	manager.setSnapshot([]comfyuimanagedstatus.Status{{
+		ContainerName: "aiserveweave-comfyui",
+		State:         comfyuimanagedstatus.StateRunning,
+		CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "my-node", Version: "v1"}},
+	}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedCustomNodeInstall{
+		ComfyuiManagedCustomNodeInstall: &tunnelv1.ComfyUIManagedCustomNodeInstallTrigger{Name: "my-node"},
+	}})
+
+	report := f.recv(sess).GetComfyuiManaged()
+	if report == nil {
+		t.Fatal("no ComfyUIManagedReport followed the custom node install trigger")
+	}
+	if len(report.GetInstances()) != 1 || len(report.GetInstances()[0].GetCustomNodes()) != 1 ||
+		report.GetInstances()[0].GetCustomNodes()[0].GetName() != "my-node" {
+		t.Fatalf("report = %v, want one instance reporting custom node my-node", report)
+	}
+
+	calls := manager.customNodeTriggeredCalls()
+	if len(calls) != 1 || calls[0] != "my-node" {
+		t.Fatalf("TriggerCustomNodeInstall calls = %v, want exactly one call for my-node", calls)
 	}
 }
 

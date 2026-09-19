@@ -968,9 +968,31 @@ type ComfyUIManagedTriggerResponse struct {
 // ComfyUIManagedInstanceStatus 是那一个 Managed 实例的状态，即 GET
 // /operator/v1/nodes/:id/comfyui-managed 所报告的内容。
 type ComfyUIManagedInstanceStatus struct {
-	ContainerName string    `json:"container_name"`
-	State         string    `json:"state"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ContainerName string                     `json:"container_name"`
+	State         string                     `json:"state"`
+	UpdatedAt     time.Time                  `json:"updated_at"`
+	CustomNodes   []ComfyUIManagedCustomNode `json:"custom_nodes,omitempty"`
+}
+
+// ComfyUIManagedCustomNode is one custom node a Managed instance reports
+// installed (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4).
+//
+// ComfyUIManagedCustomNode 是一个 Managed 实例上报已安装的自定义节点
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）。
+type ComfyUIManagedCustomNode struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ComfyUIManagedCustomNodeInstallRequest is POST
+// /operator/v1/nodes/:id/comfyui-managed/custom-nodes's body (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask 4).
+//
+// ComfyUIManagedCustomNodeInstallRequest 是 POST
+// /operator/v1/nodes/:id/comfyui-managed/custom-nodes 的请求体（STATUS.md
+// 的 P2 ComfyUI Managed Docker 部署子任务四）。
+type ComfyUIManagedCustomNodeInstallRequest struct {
+	Name string `json:"name"`
 }
 
 // ComfyUIManagedStatusResponse is GET

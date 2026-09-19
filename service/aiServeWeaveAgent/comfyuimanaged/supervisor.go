@@ -35,6 +35,21 @@ type Supervisor struct {
 	logger           *slog.Logger
 	ctx              context.Context // outlives any single Trigger call, for its background goroutine
 
+	// customNodesDir and customNodeAllowlist configure InstallCustomNode
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4).
+	// customNodeAllowlist is nil when the Agent has no
+	// -comfyui-managed-custom-nodes entries configured — InstallCustomNode
+	// then refuses every name, the same "no half-built object" answer an
+	// empty map would give, just without allocating one.
+	//
+	// customNodesDir 与 customNodeAllowlist 配置 InstallCustomNode
+	// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）。本 Agent 未配
+	// 置任何 -comfyui-managed-custom-nodes 条目时 customNodeAllowlist 为
+	// nil——InstallCustomNode 因此拒绝每一个名字，与一个空 map 给出的答案相
+	// 同，只是不必分配一个。
+	customNodesDir      string
+	customNodeAllowlist map[string]NodeSpec
+
 	mu   sync.Mutex
 	busy bool
 
@@ -60,6 +75,20 @@ type Supervisor struct {
 // context——Trigger 的后台工作在它之下运行，与 modelpull.NewPuller 在构造时
 // 而不是每次调用时接受长生命周期 ctx 是同一种做法。
 func NewSupervisor(ctx context.Context, launcher *Launcher, manager runtime.Manager, spec Spec, waitReadyTimeout time.Duration, clock runtime.Clock, logger *slog.Logger) *Supervisor {
+	return NewSupervisorWithCustomNodes(ctx, launcher, manager, spec, waitReadyTimeout, clock, logger, "", nil)
+}
+
+// NewSupervisorWithCustomNodes is NewSupervisor plus the custom-node
+// allowlist InstallCustomNode consults (STATUS.md's P2 ComfyUI Managed
+// Docker deployment, subtask 4). customNodesDir and allowlist come from
+// this node's own local flags, never from the Gateway or control plane —
+// see NodeSpec's doc comment.
+//
+// NewSupervisorWithCustomNodes 是 NewSupervisor 再加上 InstallCustomNode 要
+// 查阅的自定义节点允许列表（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任
+// 务四）。customNodesDir 与 allowlist 来自本节点自己的本地 flag，从不来自
+// Gateway 或控制面——见 NodeSpec 的文档注释。
+func NewSupervisorWithCustomNodes(ctx context.Context, launcher *Launcher, manager runtime.Manager, spec Spec, waitReadyTimeout time.Duration, clock runtime.Clock, logger *slog.Logger, customNodesDir string, allowlist map[string]NodeSpec) *Supervisor {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
@@ -67,13 +96,15 @@ func NewSupervisor(ctx context.Context, launcher *Launcher, manager runtime.Mana
 		logger = slog.Default()
 	}
 	return &Supervisor{
-		launcher:         launcher,
-		manager:          manager,
-		spec:             spec,
-		waitReadyTimeout: waitReadyTimeout,
-		clock:            clock,
-		logger:           logger,
-		ctx:              ctx,
+		launcher:            launcher,
+		manager:             manager,
+		spec:                spec,
+		waitReadyTimeout:    waitReadyTimeout,
+		clock:               clock,
+		logger:              logger,
+		ctx:                 ctx,
+		customNodesDir:      customNodesDir,
+		customNodeAllowlist: allowlist,
 	}
 }
 
@@ -135,11 +166,65 @@ func (s *Supervisor) Stop(ctx context.Context) error {
 // 容器，把 Stop 排在一个在途 Start 之后（或反过来）只是在重演 Docker 自己都会
 // 拒绝的同一种不可组合的竞争。
 func (s *Supervisor) Trigger(action comfyuimanagedstatus.Action) {
+	s.runExclusive("action "+action.String(), func() error {
+		switch action {
+		case comfyuimanagedstatus.ActionStart:
+			return s.Start(s.ctx)
+		case comfyuimanagedstatus.ActionStop:
+			return s.Stop(s.ctx)
+		case comfyuimanagedstatus.ActionRestart:
+			if err := s.Stop(s.ctx); err != nil {
+				return err
+			}
+			return s.Start(s.ctx)
+		default:
+			s.logger.Warn("comfyui managed: ignoring unrecognized action", slog.String("action", action.String()))
+			return nil
+		}
+	})
+}
+
+// InstallCustomNode installs name — looked up in the allowlist this
+// Supervisor was constructed with, never accepted as a literal URL — into
+// the one Managed container's custom-nodes directory (STATUS.md's P2
+// ComfyUI Managed Docker deployment, subtask 4). It shares Trigger's
+// single-flight busy guard: a name-install and a lifecycle action both
+// operate on the same one container, and the concurrency reasoning against
+// queuing overlapping work is identical (Trigger's doc comment).
+//
+// A successful install does not restart the container — ComfyUI only scans
+// its custom-nodes directory at process start, so the newly installed node
+// takes effect only after a subsequent Trigger(ActionRestart), which an
+// operator applies separately once they are ready (this package's doc and
+// the subtask 4 design doc's "no auto-cascading restart" section explain
+// why installing and taking effect stay two independently observable
+// steps).
+//
+// InstallCustomNode 把 name（在本 Supervisor 构造时给定的允许列表里查找，从
+// 不接受字面 URL）安装进那一个 Managed 容器的自定义节点目录（STATUS.md 的
+// P2 ComfyUI Managed Docker 部署子任务四）。它与 Trigger 共用同一把单飞忙碌
+// 互斥锁：一次按名字安装与一次生命周期动作操作的是同一个容器，反对排队重
+// 叠工作的并发理由完全相同（见 Trigger 的文档注释）。
+//
+// 一次成功的安装不会重启容器——ComfyUI 只在进程启动时扫描自定义节点目
+// 录，因此新装的节点要生效，需要运维之后另外触发一次
+// Trigger(ActionRestart)（本包文档与子任务四设计文档"不自动级联重启"一节
+// 说明了原因：安装与生效被刻意留成两个可独立观察的步骤）。
+func (s *Supervisor) TriggerCustomNodeInstall(name string) {
+	s.runExclusive("install custom node "+name, func() error {
+		return s.launcher.InstallCustomNode(s.ctx, s.spec.ContainerName, s.customNodesDir, name, s.customNodeAllowlist)
+	})
+}
+
+// runExclusive runs work in the background under the Supervisor's own
+// long-lived context, dropping the request with a log line rather than
+// queuing it if another exclusive operation is already in flight — see
+// Trigger's doc comment for why. label only appears in log output.
+func (s *Supervisor) runExclusive(label string, work func() error) {
 	s.mu.Lock()
 	if s.busy {
 		s.mu.Unlock()
-		s.logger.Warn("comfyui managed: dropping action, another action is already in flight",
-			slog.String("action", action.String()))
+		s.logger.Warn("comfyui managed: dropping request, another action is already in flight", slog.String("request", label))
 		return
 	}
 	s.busy = true
@@ -156,23 +241,9 @@ func (s *Supervisor) Trigger(action comfyuimanagedstatus.Action) {
 			}
 		}()
 
-		var err error
-		switch action {
-		case comfyuimanagedstatus.ActionStart:
-			err = s.Start(s.ctx)
-		case comfyuimanagedstatus.ActionStop:
-			err = s.Stop(s.ctx)
-		case comfyuimanagedstatus.ActionRestart:
-			if err = s.Stop(s.ctx); err == nil {
-				err = s.Start(s.ctx)
-			}
-		default:
-			s.logger.Warn("comfyui managed: ignoring unrecognized action", slog.String("action", action.String()))
-			return
-		}
-		if err != nil {
-			s.logger.Error("comfyui managed: action failed",
-				slog.String("action", action.String()), slog.String("container", s.spec.ContainerName), slog.Any("error", err))
+		if err := work(); err != nil {
+			s.logger.Error("comfyui managed: request failed",
+				slog.String("request", label), slog.String("container", s.spec.ContainerName), slog.Any("error", err))
 		}
 	}()
 }
@@ -197,9 +268,20 @@ func (s *Supervisor) Snapshot() []comfyuimanagedstatus.Status {
 		s.logger.Warn("comfyui managed: status check failed", slog.String("container", s.spec.ContainerName), slog.Any("error", err))
 		state = comfyuimanagedstatus.StateUnspecified
 	}
+
+	var customNodes []comfyuimanagedstatus.CustomNodeStatus
+	if s.customNodesDir != "" {
+		customNodes, err = s.launcher.ListCustomNodes(ctx, s.spec.ContainerName, s.customNodesDir)
+		if err != nil {
+			s.logger.Warn("comfyui managed: custom node listing failed", slog.String("container", s.spec.ContainerName), slog.Any("error", err))
+			customNodes = nil
+		}
+	}
+
 	return []comfyuimanagedstatus.Status{{
 		ContainerName: s.spec.ContainerName,
 		State:         state,
 		UpdatedAt:     now,
+		CustomNodes:   customNodes,
 	}}
 }

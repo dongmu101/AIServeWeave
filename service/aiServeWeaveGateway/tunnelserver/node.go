@@ -316,6 +316,37 @@ func (s *Server) TriggerComfyUIManagedAction(nodeID string, action comfyuimanage
 	return nil
 }
 
+// TriggerComfyUIManagedCustomNodeInstall asks nodeID to install name — its
+// own local allowlist decides whether name is known, never a URL this call
+// carries — into its one locally-declared Managed ComfyUI instance's
+// custom-nodes directory (STATUS.md's P2 ComfyUI Managed Docker deployment,
+// subtask 4). Same "connected to this replica or refused" boundary as
+// TriggerComfyUIManagedAction; same "no dedicated ack" contract — a
+// ComfyUIManagedReport is how the caller observes what happened.
+//
+// TriggerComfyUIManagedCustomNodeInstall 要求 nodeID 把 name（是否已知由它
+// 自己本地的允许列表决定，本调用从不携带 URL）安装进它本地已声明的那一个
+// Managed ComfyUI 实例的自定义节点目录（STATUS.md 的 P2 ComfyUI Managed
+// Docker 部署子任务四）。与 TriggerComfyUIManagedAction 同一"连到本副本才
+// 转发，否则拒绝"边界；同一"不设专门 ack"约定——调用方经由
+// ComfyUIManagedReport 观察发生了什么。
+func (s *Server) TriggerComfyUIManagedCustomNodeInstall(nodeID, name string) error {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("tunnelserver: node %q is not connected to this replica", nodeID)
+	}
+	n.mu.Lock()
+	connected := len(n.controls) > 0
+	n.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("tunnelserver: node %q has no active control stream on this replica", nodeID)
+	}
+	n.broadcast(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedCustomNodeInstall{
+		ComfyuiManagedCustomNodeInstall: tunnelwire.ComfyUIManagedCustomNodeInstallTriggerToProto(name),
+	}})
+	return nil
+}
+
 // ComfyUIManagedStatus returns this replica's last-known Managed ComfyUI
 // status for nodeID, and whether the node is known to this replica at all. A
 // known node with no reports yet (Managed mode not configured, Agent

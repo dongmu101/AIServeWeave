@@ -56,11 +56,13 @@ var generatedAt = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 // fakeServer stands in for tunnelserver.Server, so this package's tests
 // never need a real tunnel.
 type fakeServer struct {
-	triggerErr    error
-	triggered     map[string]comfyuimanagedstatus.Action
-	statusByID    map[string][]comfyuimanagedstatus.Status
-	knownByID     map[string]bool
-	activeJobByID map[string]bool
+	triggerErr             error
+	triggered              map[string]comfyuimanagedstatus.Action
+	statusByID             map[string][]comfyuimanagedstatus.Status
+	knownByID              map[string]bool
+	activeJobByID          map[string]bool
+	customNodeInstallErr   error
+	customNodeInstallCalls map[string]string
 }
 
 func (f *fakeServer) trigger(nodeID string, action comfyuimanagedstatus.Action) error {
@@ -85,14 +87,26 @@ func (f *fakeServer) hasActiveJob(nodeID string) bool {
 	return f.activeJobByID[nodeID]
 }
 
+func (f *fakeServer) triggerCustomNodeInstall(nodeID, name string) error {
+	if f.customNodeInstallErr != nil {
+		return f.customNodeInstallErr
+	}
+	if f.customNodeInstallCalls == nil {
+		f.customNodeInstallCalls = map[string]string{}
+	}
+	f.customNodeInstallCalls[nodeID] = name
+	return nil
+}
+
 func serve(t *testing.T, fs *fakeServer) http.Handler {
 	t.Helper()
 	handler, err := comfyuimanagedapi.New(comfyuimanagedapi.Config{
-		Token:        token,
-		Clock:        fixedClock{now: generatedAt},
-		Trigger:      fs.trigger,
-		Status:       fs.status,
-		HasActiveJob: fs.hasActiveJob,
+		Token:                    token,
+		Clock:                    fixedClock{now: generatedAt},
+		Trigger:                  fs.trigger,
+		Status:                   fs.status,
+		HasActiveJob:             fs.hasActiveJob,
+		TriggerCustomNodeInstall: fs.triggerCustomNodeInstall,
 	})
 	if err != nil {
 		t.Fatalf("comfyuimanagedapi.New: %v", err)
@@ -106,10 +120,11 @@ func TestTheListenerRefusesToStartUnconfigured(t *testing.T) {
 		name string
 		cfg  comfyuimanagedapi.Config
 	}{
-		{"no token", comfyuimanagedapi.Config{Trigger: fs.trigger, Status: fs.status, HasActiveJob: fs.hasActiveJob}},
-		{"no trigger", comfyuimanagedapi.Config{Token: token, Status: fs.status, HasActiveJob: fs.hasActiveJob}},
-		{"no status", comfyuimanagedapi.Config{Token: token, Trigger: fs.trigger, HasActiveJob: fs.hasActiveJob}},
-		{"no active job checker", comfyuimanagedapi.Config{Token: token, Trigger: fs.trigger, Status: fs.status}},
+		{"no token", comfyuimanagedapi.Config{Trigger: fs.trigger, Status: fs.status, HasActiveJob: fs.hasActiveJob, TriggerCustomNodeInstall: fs.triggerCustomNodeInstall}},
+		{"no trigger", comfyuimanagedapi.Config{Token: token, Status: fs.status, HasActiveJob: fs.hasActiveJob, TriggerCustomNodeInstall: fs.triggerCustomNodeInstall}},
+		{"no status", comfyuimanagedapi.Config{Token: token, Trigger: fs.trigger, HasActiveJob: fs.hasActiveJob, TriggerCustomNodeInstall: fs.triggerCustomNodeInstall}},
+		{"no active job checker", comfyuimanagedapi.Config{Token: token, Trigger: fs.trigger, Status: fs.status, TriggerCustomNodeInstall: fs.triggerCustomNodeInstall}},
+		{"no custom node installer", comfyuimanagedapi.Config{Token: token, Trigger: fs.trigger, Status: fs.status, HasActiveJob: fs.hasActiveJob}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -299,6 +314,111 @@ func TestStatusRendersStatesAndTimestamps(t *testing.T) {
 	}
 	if got.Instances[0].ContainerName != "aiserveweave-comfyui" || got.Instances[0].State != "running" {
 		t.Errorf("instance = %+v, want container_name=aiserveweave-comfyui state=running", got.Instances[0])
+	}
+}
+
+func TestStatusRendersCustomNodes(t *testing.T) {
+	fs := &fakeServer{
+		knownByID: map[string]bool{"node-a": true},
+		statusByID: map[string][]comfyuimanagedstatus.Status{
+			"node-a": {
+				{
+					ContainerName: "aiserveweave-comfyui",
+					State:         comfyuimanagedstatus.StateRunning,
+					UpdatedAt:     generatedAt,
+					CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "my-node", Version: "v1"}},
+				},
+			},
+		},
+	}
+	handler := serve(t, fs)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/nodes/node-a/comfyui-managed", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	var got struct {
+		Instances []struct {
+			CustomNodes []struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"custom_nodes"`
+		} `json:"instances"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(got.Instances) != 1 || len(got.Instances[0].CustomNodes) != 1 {
+		t.Fatalf("instances = %+v, want one instance with one custom node", got.Instances)
+	}
+	if got.Instances[0].CustomNodes[0].Name != "my-node" || got.Instances[0].CustomNodes[0].Version != "v1" {
+		t.Errorf("custom node = %+v, want name=my-node version=v1", got.Instances[0].CustomNodes[0])
+	}
+}
+
+func TestCustomNodeInstallDispatchesAndAnswersAccepted(t *testing.T) {
+	fs := &fakeServer{knownByID: map[string]bool{"node-a": true}}
+	handler := serve(t, fs)
+
+	body, _ := json.Marshal(map[string]string{"name": "my-node"})
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/nodes/node-a/comfyui-managed/custom-nodes", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d, body = %s", rec.Code, http.StatusAccepted, rec.Body.String())
+	}
+	if got := fs.customNodeInstallCalls["node-a"]; got != "my-node" {
+		t.Errorf("TriggerCustomNodeInstall called with %q, want %q", got, "my-node")
+	}
+}
+
+func TestCustomNodeInstallRejectsEmptyName(t *testing.T) {
+	fs := &fakeServer{knownByID: map[string]bool{"node-a": true}}
+	handler := serve(t, fs)
+
+	body, _ := json.Marshal(map[string]string{"name": ""})
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/nodes/node-a/comfyui-managed/custom-nodes", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusBadRequest)
+	}
+}
+
+func TestCustomNodeInstallOnADisconnectedNodeIs404(t *testing.T) {
+	fs := &fakeServer{customNodeInstallErr: errors.New("tunnelserver: node is not connected to this replica")}
+	handler := serve(t, fs)
+
+	body, _ := json.Marshal(map[string]string{"name": "my-node"})
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/nodes/node-a/comfyui-managed/custom-nodes", bytes.NewReader(body))
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusNotFound)
+	}
+}
+
+func TestCustomNodeInstallRequiresTheToken(t *testing.T) {
+	fs := &fakeServer{knownByID: map[string]bool{"node-a": true}}
+	handler := serve(t, fs)
+
+	body, _ := json.Marshal(map[string]string{"name": "my-node"})
+	req := httptest.NewRequest(http.MethodPost, "/internal/v1/nodes/node-a/comfyui-managed/custom-nodes", bytes.NewReader(body))
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("status = %d, want %d", rec.Code, http.StatusUnauthorized)
 	}
 }
 

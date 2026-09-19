@@ -22,6 +22,20 @@ func ComfyUIManagedActionFromProto(pb *tunnelv1.ComfyUIManagedAction) comfyuiman
 	return comfyUIManagedActionTypeFromProto(pb.GetAction())
 }
 
+// ComfyUIManagedCustomNodeInstallTriggerToProto encodes a request to install
+// one allowlisted custom node by name (STATUS.md's P2 ComfyUI Managed
+// Docker deployment, subtask 4). There is deliberately no field for a
+// repository URL: see this file's package doc and comfyuimanagedstatus's.
+func ComfyUIManagedCustomNodeInstallTriggerToProto(name string) *tunnelv1.ComfyUIManagedCustomNodeInstallTrigger {
+	return &tunnelv1.ComfyUIManagedCustomNodeInstallTrigger{Name: name}
+}
+
+// ComfyUIManagedCustomNodeInstallTriggerFromProto restores the requested
+// custom node's name.
+func ComfyUIManagedCustomNodeInstallTriggerFromProto(pb *tunnelv1.ComfyUIManagedCustomNodeInstallTrigger) string {
+	return pb.GetName()
+}
+
 // ComfyUIManagedReportToProto encodes an Agent's current known Managed
 // ComfyUI status (zero or one entry — an Agent manages at most one instance
 // today). The caller is expected to have sorted statuses already
@@ -49,18 +63,30 @@ func ComfyUIManagedReportFromProto(pb *tunnelv1.ComfyUIManagedReport) []comfyuim
 }
 
 func comfyUIManagedStatusToProto(st comfyuimanagedstatus.Status) *tunnelv1.ComfyUIManagedStatus {
+	customNodes := make([]*tunnelv1.ComfyUIManagedCustomNode, len(st.CustomNodes))
+	for i, cn := range st.CustomNodes {
+		customNodes[i] = &tunnelv1.ComfyUIManagedCustomNode{Name: cn.Name, Version: cn.Version}
+	}
 	return &tunnelv1.ComfyUIManagedStatus{
 		ContainerName: st.ContainerName,
 		State:         comfyUIManagedStateToProto(st.State),
 		UpdatedUnixMs: st.UpdatedAt.UnixMilli(),
+		CustomNodes:   customNodes,
 	}
 }
 
 func comfyUIManagedStatusFromProto(pb *tunnelv1.ComfyUIManagedStatus) comfyuimanagedstatus.Status {
+	pbNodes := pb.GetCustomNodes()
+	customNodes := make([]comfyuimanagedstatus.CustomNodeStatus, len(pbNodes))
+	for i, cn := range pbNodes {
+		customNodes[i] = comfyuimanagedstatus.CustomNodeStatus{Name: cn.GetName(), Version: cn.GetVersion()}
+	}
+	sort.Slice(customNodes, func(i, j int) bool { return customNodes[i].Name < customNodes[j].Name })
 	return comfyuimanagedstatus.Status{
 		ContainerName: pb.GetContainerName(),
 		State:         comfyUIManagedStateFromProto(pb.GetState()),
 		UpdatedAt:     time.UnixMilli(pb.GetUpdatedUnixMs()).UTC(),
+		CustomNodes:   customNodes,
 	}
 }
 

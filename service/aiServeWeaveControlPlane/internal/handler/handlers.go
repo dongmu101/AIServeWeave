@@ -1240,6 +1240,46 @@ func parseComfyUIManagedAction(s string) (comfyuimanagedstatus.Action, bool) {
 	}
 }
 
+// installComfyUICustomNode asks node_id, wherever it is connected among the
+// configured Gateway replicas, to install name into its one
+// locally-declared Managed instance's custom-nodes directory — the write
+// half of forwarding STATUS.md's P2 ComfyUI Managed Docker deployment
+// subtask four, the same split triggerComfyUIManagedAction uses.
+//
+// installComfyUICustomNode 要求 node_id（无论它连在哪个已配置 Gateway 副本
+// 上）把 name 安装进它本地已声明的那一个 Managed 实例的自定义节点目
+// 录——转发 STATUS.md P2 ComfyUI Managed Docker 部署子任务四的写入那一
+// 半，与 triggerComfyUIManagedAction 同一种切分。
+func installComfyUICustomNode(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.ComfyUIManagedCustomNodeInstallRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		result, err := ctx.Logic.InstallComfyUICustomNode(r.Context(), actor, nodeID, req.Name)
+		recordComfyUIManagedRouterCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, types.ComfyUIManagedTriggerResponse{Replicas: renderComfyUIManagedReplicas(result.Replicas)})
+	}
+}
+
 // comfyUIManagedStatus returns node_id's last-reported Managed instance
 // status from whichever configured Gateway replica currently holds its
 // connection — the read half of forwarding STATUS.md's P2 ComfyUI Managed
@@ -1293,7 +1333,19 @@ func renderComfyUIManagedInstances(instances []comfyuimanagedrouter.InstanceStat
 			ContainerName: inst.ContainerName,
 			State:         inst.State,
 			UpdatedAt:     inst.UpdatedAt,
+			CustomNodes:   renderComfyUIManagedCustomNodes(inst.CustomNodes),
 		}
+	}
+	return out
+}
+
+func renderComfyUIManagedCustomNodes(nodes []comfyuimanagedrouter.CustomNodeStatus) []types.ComfyUIManagedCustomNode {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]types.ComfyUIManagedCustomNode, len(nodes))
+	for i, n := range nodes {
+		out[i] = types.ComfyUIManagedCustomNode{Name: n.Name, Version: n.Version}
 	}
 	return out
 }

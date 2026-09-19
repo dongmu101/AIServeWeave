@@ -112,6 +112,54 @@ func TestTriggerReportsNotConnectedWhenNoReplicaHasTheNode(t *testing.T) {
 	}
 }
 
+func TestInstallCustomNodeReportsConnectedWhenAnyReplicaHasTheNode(t *testing.T) {
+	elsewhere := managed(t, false, nil)
+	here := managed(t, true, nil)
+
+	result, err := router(t, elsewhere, here).InstallCustomNode(context.Background(), "node-a", "my-node")
+	if err != nil {
+		t.Fatalf("InstallCustomNode: %v", err)
+	}
+	if !result.Connected {
+		t.Fatalf("Connected = false, want true when one replica has the node")
+	}
+}
+
+func TestInstallCustomNodeReportsNotConnectedWhenNoReplicaHasTheNode(t *testing.T) {
+	a := managed(t, false, nil)
+	b := managed(t, false, nil)
+
+	result, err := router(t, a, b).InstallCustomNode(context.Background(), "node-a", "my-node")
+	if err != nil {
+		t.Fatalf("InstallCustomNode: %v", err)
+	}
+	if result.Connected {
+		t.Fatalf("Connected = true, want false when no replica has the node")
+	}
+}
+
+func TestStatusReturnsTheInstanceFromTheConnectedReplicaWithCustomNodes(t *testing.T) {
+	here := managed(t, true, []map[string]any{
+		{
+			"container_name": "aisw-comfyui-managed",
+			"state":          "running",
+			"updated_at":     time.Now().UTC().Format(time.RFC3339),
+			"custom_nodes":   []map[string]any{{"name": "my-node", "version": "v1"}},
+		},
+	})
+
+	result, err := router(t, here).Status(context.Background(), "node-a")
+	if err != nil {
+		t.Fatalf("Status: %v", err)
+	}
+	if len(result.Instances) != 1 || len(result.Instances[0].CustomNodes) != 1 {
+		t.Fatalf("Instances = %+v, want one entry with one custom node", result.Instances)
+	}
+	if result.Instances[0].CustomNodes[0].Name != "my-node" || result.Instances[0].CustomNodes[0].Version != "v1" {
+		t.Errorf("CustomNodes[0] = %+v, want name=my-node version=v1", result.Instances[0].CustomNodes[0])
+	}
+}
+
 func TestStatusReturnsTheInstanceFromTheConnectedReplica(t *testing.T) {
 	here := managed(t, true, []map[string]any{
 		{"container_name": "aisw-comfyui-managed", "state": "running", "updated_at": time.Now().UTC().Format(time.RFC3339)},
@@ -262,6 +310,9 @@ func TestUnconfiguredRouterIsDisabled(t *testing.T) {
 	}
 	if _, err := r.Status(context.Background(), "node-a"); err != comfyuimanagedrouter.ErrDisabled {
 		t.Errorf("Status() error = %v, want ErrDisabled", err)
+	}
+	if _, err := r.InstallCustomNode(context.Background(), "node-a", "my-node"); err != comfyuimanagedrouter.ErrDisabled {
+		t.Errorf("InstallCustomNode() error = %v, want ErrDisabled", err)
 	}
 }
 

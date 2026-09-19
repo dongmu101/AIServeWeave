@@ -333,10 +333,19 @@ const (
 	// deployment, the control plane forwarding layer). Like
 	// ActionModelPullTrigger it uses PlatformScope.
 	ActionComfyUIManagedTrigger = "node.comfyui_managed.trigger"
-	ActionAlertRuleCreate       = "alert_rule.create"
-	ActionAlertRuleUpdate       = "alert_rule.update"
-	ActionAlertRuleDelete       = "alert_rule.delete"
-	ActionAlertAcknowledge      = "alert.acknowledge"
+	// ActionComfyUIManagedCustomNodeInstall records a forwarded ComfyUI
+	// Managed custom node install trigger (STATUS.md's P2 ComfyUI Managed
+	// Docker deployment, subtask 4), the same shape and trust boundary as
+	// ActionComfyUIManagedTrigger.
+	//
+	// ActionComfyUIManagedCustomNodeInstall 记录一次转发的 ComfyUI Managed
+	// 自定义节点安装触发（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任
+	// 务四），与 ActionComfyUIManagedTrigger 同一形状与信任边界。
+	ActionComfyUIManagedCustomNodeInstall = "node.comfyui_managed.custom_node_install"
+	ActionAlertRuleCreate                 = "alert_rule.create"
+	ActionAlertRuleUpdate                 = "alert_rule.update"
+	ActionAlertRuleDelete                 = "alert_rule.delete"
+	ActionAlertAcknowledge                = "alert.acknowledge"
 )
 
 // AuditLog is one administrative action, recorded for the README's

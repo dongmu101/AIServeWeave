@@ -105,7 +105,19 @@ type Config struct {
 	// 看得到本副本自己的路由：一个同时连到多个副本的节点，其 job 可能只被
 	// 另一个副本知道，本检查看不到那种情况。
 	HasActiveJob func(nodeID string) bool
-	Clock        runtime.Clock
+	// TriggerCustomNodeInstall asks nodeID to install name — its own local
+	// allowlist decides whether it is known, never a URL this call carries
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4). It is
+	// tunnelserver.Server.TriggerComfyUIManagedCustomNodeInstall, injected
+	// the same way Trigger is.
+	//
+	// TriggerCustomNodeInstall 请求 nodeID 安装 name——是否已知由它自己本
+	// 地的允许列表决定，本调用从不携带 URL（STATUS.md 的 P2 ComfyUI
+	// Managed Docker 部署子任务四）。它就是
+	// tunnelserver.Server.TriggerComfyUIManagedCustomNodeInstall，以与
+	// Trigger 相同的方式注入。
+	TriggerCustomNodeInstall func(nodeID, name string) error
+	Clock                    runtime.Clock
 }
 
 // New builds the ComfyUI Managed handler, or reports why it cannot.
@@ -115,7 +127,7 @@ func New(cfg Config) (http.Handler, error) {
 	if cfg.Token == "" {
 		return nil, errNoToken
 	}
-	if cfg.Trigger == nil || cfg.Status == nil || cfg.HasActiveJob == nil {
+	if cfg.Trigger == nil || cfg.Status == nil || cfg.HasActiveJob == nil || cfg.TriggerCustomNodeInstall == nil {
 		return nil, errNoSource
 	}
 	clock := cfg.Clock
@@ -171,6 +183,30 @@ func New(cfg Config) (http.Handler, error) {
 		writeJSON(w, http.StatusAccepted, triggerResponse{Status: "dispatched"})
 	})
 
+	mux.HandleFunc("POST /internal/v1/nodes/{node_id}/comfyui-managed/custom-nodes", func(w http.ResponseWriter, r *http.Request) {
+		if !authorized(r, cfg.Token) {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var body customNodeInstallRequest
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			writeError(w, http.StatusBadRequest, "invalid request body")
+			return
+		}
+		if body.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		// Not gated by HasActiveJob: an install only writes files into the
+		// container's custom-nodes directory, it does not touch the running
+		// ComfyUI process — see this package's doc comment.
+		if err := cfg.TriggerCustomNodeInstall(r.PathValue("node_id"), body.Name); err != nil {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusAccepted, triggerResponse{Status: "dispatched"})
+	})
+
 	mux.HandleFunc("GET /internal/v1/nodes/{node_id}/comfyui-managed", func(w http.ResponseWriter, r *http.Request) {
 		if !authorized(r, cfg.Token) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -195,6 +231,15 @@ func New(cfg Config) (http.Handler, error) {
 // triggerRequest 是 POST /internal/v1/nodes/{node_id}/comfyui-managed 的请求体。
 type triggerRequest struct {
 	Action string `json:"action"`
+}
+
+// customNodeInstallRequest is POST
+// /internal/v1/nodes/{node_id}/comfyui-managed/custom-nodes's body.
+//
+// customNodeInstallRequest 是 POST
+// /internal/v1/nodes/{node_id}/comfyui-managed/custom-nodes 的请求体。
+type customNodeInstallRequest struct {
+	Name string `json:"name"`
 }
 
 // parseAction renders comfyuimanagedstatus.Action's closed vocabulary as the
@@ -248,9 +293,21 @@ type statusResponse struct {
 // comfyuimanagedstatus.State 的 Stringer 输出、而不是它的裸整数值，出现在
 // 这个 API 上——与 modelpullapi.pullStatusJSON 同一种允许列表渲染纪律。
 type instanceStatusJSON struct {
-	ContainerName string `json:"container_name"`
-	State         string `json:"state"`
-	UpdatedAt     string `json:"updated_at"`
+	ContainerName string           `json:"container_name"`
+	State         string           `json:"state"`
+	UpdatedAt     string           `json:"updated_at"`
+	CustomNodes   []customNodeJSON `json:"custom_nodes,omitempty"`
+}
+
+// customNodeJSON is one custom node this Agent found installed, as read
+// back from the container (STATUS.md's P2 ComfyUI Managed Docker
+// deployment, subtask 4).
+//
+// customNodeJSON 是本 Agent 从容器里读回发现的一个已安装自定义节点
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）。
+type customNodeJSON struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
 }
 
 func renderStatuses(statuses []comfyuimanagedstatus.Status) []instanceStatusJSON {
@@ -260,7 +317,19 @@ func renderStatuses(statuses []comfyuimanagedstatus.Status) []instanceStatusJSON
 			ContainerName: st.ContainerName,
 			State:         st.State.String(),
 			UpdatedAt:     st.UpdatedAt.UTC().Format(rfc3339Millis),
+			CustomNodes:   renderCustomNodes(st.CustomNodes),
 		}
+	}
+	return out
+}
+
+func renderCustomNodes(nodes []comfyuimanagedstatus.CustomNodeStatus) []customNodeJSON {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]customNodeJSON, len(nodes))
+	for i, n := range nodes {
+		out[i] = customNodeJSON{Name: n.Name, Version: n.Version}
 	}
 	return out
 }

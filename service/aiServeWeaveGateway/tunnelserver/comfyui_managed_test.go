@@ -92,6 +92,57 @@ func TestTriggerComfyUIManagedActionUnknownNode(t *testing.T) {
 	}
 }
 
+func TestTriggerComfyUIManagedCustomNodeInstallSendsGatewayControlFrame(t *testing.T) {
+	h := newHarness(t, tunnelserver.Config{})
+	c := h.connect("mac-mini-01")
+
+	if err := h.srv.TriggerComfyUIManagedCustomNodeInstall("mac-mini-01", "my-node"); err != nil {
+		t.Fatalf("TriggerComfyUIManagedCustomNodeInstall: %v", err)
+	}
+
+	frame := c.expect(t)
+	trigger := frame.GetComfyuiManagedCustomNodeInstall()
+	if trigger == nil {
+		t.Fatalf("frame = %T, want ComfyUIManagedCustomNodeInstallTrigger", frame.GetBody())
+	}
+	if got := trigger.GetName(); got != "my-node" {
+		t.Fatalf("name = %q, want %q", got, "my-node")
+	}
+}
+
+func TestTriggerComfyUIManagedCustomNodeInstallUnknownNode(t *testing.T) {
+	h := newHarness(t, tunnelserver.Config{})
+	if err := h.srv.TriggerComfyUIManagedCustomNodeInstall("ghost", "my-node"); err == nil {
+		t.Fatal("TriggerComfyUIManagedCustomNodeInstall on an unknown node did not error")
+	}
+}
+
+func TestComfyUIManagedReportCarriesCustomNodes(t *testing.T) {
+	h := newHarness(t, tunnelserver.Config{})
+	c := h.connect("mac-mini-01")
+
+	want := []comfyuimanagedstatus.Status{
+		{
+			ContainerName: "aiserveweave-comfyui",
+			State:         comfyuimanagedstatus.StateRunning,
+			CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "my-node", Version: "v1"}},
+		},
+	}
+	c.send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_ComfyuiManaged{
+		ComfyuiManaged: tunnelwire.ComfyUIManagedReportToProto(want),
+	}})
+
+	waitFor(t, "comfyui managed report with custom nodes to be applied", func() bool {
+		got, ok := h.srv.ComfyUIManagedStatus("mac-mini-01")
+		return ok && len(got) == 1 && len(got[0].CustomNodes) == 1
+	})
+
+	got, _ := h.srv.ComfyUIManagedStatus("mac-mini-01")
+	if got[0].CustomNodes[0].Name != "my-node" || got[0].CustomNodes[0].Version != "v1" {
+		t.Fatalf("CustomNodes = %+v, want [{my-node v1}]", got[0].CustomNodes)
+	}
+}
+
 func TestComfyUIManagedStatusUnknownNode(t *testing.T) {
 	h := newHarness(t, tunnelserver.Config{})
 	got, ok := h.srv.ComfyUIManagedStatus("ghost")

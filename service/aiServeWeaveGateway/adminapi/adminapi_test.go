@@ -10,8 +10,10 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/nodeview"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/workflowtemplate"
 	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
@@ -470,13 +472,156 @@ func TestTheTemplateCatalogueNeverCarriesTheGraph(t *testing.T) {
 // 空的 job 列表。「报告没有运行」与「根本无从知晓」是两个不同的答案。
 func TestTheOptionalEndpointsAreAbsentWhenUnconfigured(t *testing.T) {
 	handler := serve(t, nil)
-	for _, path := range []string{"/internal/v1/jobs?tenant_id=tnt_1", "/internal/v1/workflows"} {
+	for _, path := range []string{"/internal/v1/jobs?tenant_id=tnt_1", "/internal/v1/workflows", "/internal/v1/comfyui-managed/reconcile?node_id=n&template_id=t"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s: status = %d, want 404 when the source is not configured", path, rec.Code)
+		}
+	}
+}
+
+// STATUS.md's P2 ComfyUI Managed Docker deployment subtask 4: a read-only
+// diagnostic comparing a template's declared custom-node dependencies
+// against what one node's Managed instance actually reports installed.
+
+func comfyUIManagedReconcileHandler(t *testing.T, statusByID map[string][]comfyuimanagedstatus.Status, templates []workflowview.Template) http.Handler {
+	t.Helper()
+	handler, err := adminapi.New(adminapi.Config{
+		Token:     token,
+		ReplicaID: "replica-1",
+		Clock:     fixedClock{now: probedAt},
+		Nodes:     func() []tunnelserver.NodeInfo { return nil },
+		Templates: func() []workflowview.Template { return templates },
+		ComfyUIManagedStatus: func(nodeID string) ([]comfyuimanagedstatus.Status, bool) {
+			statuses, ok := statusByID[nodeID]
+			return statuses, ok
+		},
+	})
+	if err != nil {
+		t.Fatalf("adminapi.New: %v", err)
+	}
+	return handler
+}
+
+func TestComfyUIManagedReconcileReportsMismatches(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t,
+		map[string][]comfyuimanagedstatus.Status{
+			"node-a": {{
+				ContainerName: "aiserveweave-comfyui",
+				CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "node-x", Version: "v1"}},
+			}},
+		},
+		[]workflowview.Template{{
+			ID: "portrait",
+			Dependencies: workflowtemplate.Dependencies{
+				CustomNodes: []workflowtemplate.NodeDependency{
+					{Name: "node-x", Version: "v1"},
+					{Name: "node-y"},
+				},
+			},
+		}},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=node-a&template_id=portrait", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		NodeID     string                                    `json:"node_id"`
+		TemplateID string                                    `json:"template_id"`
+		Satisfied  bool                                      `json:"satisfied"`
+		Mismatches []comfyuimanagedstatus.CustomNodeMismatch `json:"mismatches"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Satisfied {
+		t.Error("Satisfied = true, want false: node-y is declared but not installed")
+	}
+	if len(got.Mismatches) != 1 || got.Mismatches[0].Name != "node-y" || got.Mismatches[0].Reason != "missing" {
+		t.Errorf("Mismatches = %+v, want exactly one missing node-y", got.Mismatches)
+	}
+}
+
+func TestComfyUIManagedReconcileSatisfiedWhenEverythingInstalled(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t,
+		map[string][]comfyuimanagedstatus.Status{
+			"node-a": {{
+				ContainerName: "aiserveweave-comfyui",
+				CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "node-x", Version: "v1"}},
+			}},
+		},
+		[]workflowview.Template{{
+			ID:           "portrait",
+			Dependencies: workflowtemplate.Dependencies{CustomNodes: []workflowtemplate.NodeDependency{{Name: "node-x"}}},
+		}},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=node-a&template_id=portrait", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var got struct {
+		Satisfied  bool                                      `json:"satisfied"`
+		Mismatches []comfyuimanagedstatus.CustomNodeMismatch `json:"mismatches"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.Satisfied || len(got.Mismatches) != 0 {
+		t.Errorf("got satisfied=%v mismatches=%v, want satisfied with no mismatches", got.Satisfied, got.Mismatches)
+	}
+}
+
+func TestComfyUIManagedReconcileUnknownNodeIs404(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t, nil, []workflowview.Template{{ID: "portrait"}})
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=ghost&template_id=portrait", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestComfyUIManagedReconcileUnknownTemplateIs404(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t,
+		map[string][]comfyuimanagedstatus.Status{"node-a": nil}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=node-a&template_id=ghost", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestComfyUIManagedReconcileRequiresBothParams(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t, nil, nil)
+
+	for _, path := range []string{
+		"/internal/v1/comfyui-managed/reconcile?template_id=portrait",
+		"/internal/v1/comfyui-managed/reconcile?node_id=node-a",
+		"/internal/v1/comfyui-managed/reconcile",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", path, rec.Code)
 		}
 	}
 }

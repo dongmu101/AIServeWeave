@@ -143,4 +143,85 @@ type Status struct {
 	ContainerName string
 	State         State
 	UpdatedAt     time.Time
+	// CustomNodes is every custom node subdirectory this Agent found under
+	// the container's custom-nodes directory the last time it looked (STATUS.
+	// md's P2 ComfyUI Managed Docker deployment, subtask 4). Empty when
+	// Managed mode is disabled, the container has no custom_nodes directory
+	// yet, or nothing has been installed through this package.
+	//
+	// CustomNodes 是本 Agent 上次查看容器自定义节点目录时找到的每一个子目录
+	// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）。未启用 Managed
+	// 模式、容器尚无 custom_nodes 目录，或从未经本包安装过任何节点时为空。
+	CustomNodes []CustomNodeStatus
+}
+
+// CustomNodeStatus is one installed custom node, as read back from the
+// container rather than from the Agent's local allowlist — Version is the
+// pinned ref actually present on disk, which can lag or diverge from the
+// allowlist's declared ref if an install failed partway or was performed by
+// something other than this package.
+//
+// CustomNodeStatus 是从容器里读回的一个已安装自定义节点，而不是来自 Agent
+// 本地允许列表——Version 是磁盘上实际存在的固定版本，如果一次安装中途失败，
+// 或是被本包以外的东西安装的，它可能落后于或不同于允许列表声明的版本。
+type CustomNodeStatus struct {
+	Name    string
+	Version string // "unknown" when the directory exists but this package's version marker does not
+}
+
+// DeclaredCustomNode is one workflow template's declared custom-node
+// dependency, in the shape ReconcileCustomNodes compares against — callers
+// convert their own workflowtemplate.NodeDependency into this local type
+// rather than this package importing workflowtemplate, keeping the two
+// packages' concerns apart.
+//
+// DeclaredCustomNode 是一个工作流模板声明的自定义节点依赖，是
+// ReconcileCustomNodes 用来比较的形状——调用方自己把
+// workflowtemplate.NodeDependency 转换成这个本地类型，而不是让本包导入
+// workflowtemplate，让两个包的关注点保持分离。
+type DeclaredCustomNode struct {
+	Name    string
+	Version string // empty means "any version is acceptable"
+}
+
+// CustomNodeMismatch is one declared dependency ReconcileCustomNodes found
+// unsatisfied.
+//
+// CustomNodeMismatch 是 ReconcileCustomNodes 发现的一个未满足的已声明依赖。
+type CustomNodeMismatch struct {
+	Name   string
+	Reason string // "missing" or "version_mismatch"
+}
+
+// ReconcileCustomNodes compares a workflow template's declared custom-node
+// dependencies against what one Managed instance actually reports installed
+// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4), and
+// reports every declared dependency that is not satisfied. It is a pure
+// function with no consumer wired into scheduling — see the subtask 4
+// design doc's known-gaps section for why: a workflow template's model
+// dependencies get no such hard check today either, so custom nodes should
+// not be singled out for one.
+//
+// ReconcileCustomNodes 把一个工作流模板声明的自定义节点依赖，与一个 Managed
+// 实例实际上报已安装的东西做比较（STATUS.md 的 P2 ComfyUI Managed Docker
+// 部署子任务四），报告每一个未被满足的已声明依赖。它是一个没有接入调度决策
+// 的纯函数——原因见子任务四设计文档的已知缺口一节：工作流模板的模型依赖今
+// 天也没有这层硬校验，自定义节点不该被特殊对待。
+func ReconcileCustomNodes(declared []DeclaredCustomNode, installed []CustomNodeStatus) []CustomNodeMismatch {
+	byName := make(map[string]string, len(installed))
+	for _, st := range installed {
+		byName[st.Name] = st.Version
+	}
+	var mismatches []CustomNodeMismatch
+	for _, d := range declared {
+		version, ok := byName[d.Name]
+		if !ok {
+			mismatches = append(mismatches, CustomNodeMismatch{Name: d.Name, Reason: "missing"})
+			continue
+		}
+		if d.Version != "" && d.Version != version {
+			mismatches = append(mismatches, CustomNodeMismatch{Name: d.Name, Reason: "version_mismatch"})
+		}
+	}
+	return mismatches
 }

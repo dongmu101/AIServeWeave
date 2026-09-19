@@ -43,6 +43,7 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelroute"
 	"AIServeWeave/common/nodeview"
 	"AIServeWeave/common/runtime"
@@ -85,6 +86,19 @@ type Config struct {
 	//
 	// Templates 报告本副本注册的工作流目录。
 	Templates func() []workflowview.Template
+	// ComfyUIManagedStatus reports this replica's last-known Managed ComfyUI
+	// status for a node_id, and whether it is known to this replica at all
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4's
+	// reconcile endpoint). It is tunnelserver.Server.ComfyUIManagedStatus.
+	// Nil leaves the reconcile endpoint unmounted, the same "no source, no
+	// route" pattern Jobs and Templates already follow.
+	//
+	// ComfyUIManagedStatus 报告本副本对某个 node_id 最后已知的 Managed
+	// ComfyUI 状态，以及本副本是否知道这个节点（STATUS.md 的 P2 ComfyUI
+	// Managed Docker 部署子任务四的对账端点）。它就是
+	// tunnelserver.Server.ComfyUIManagedStatus。为 nil 时不挂载对账端点，与
+	// Jobs、Templates 已有的"没有数据源就没有路由"同一种模式。
+	ComfyUIManagedStatus func(nodeID string) ([]comfyuimanagedstatus.Status, bool)
 	// Workflows reports the effective workflow-template bundle status
 	// (P03) — mode, count and bundle digest — mirroring what Routes reports
 	// for routing. It is separate from Templates because the two answer
@@ -186,7 +200,82 @@ func New(cfg Config) (http.Handler, error) {
 			})
 		})
 	}
+	if cfg.ComfyUIManagedStatus != nil && cfg.Templates != nil {
+		mux.HandleFunc("GET /internal/v1/comfyui-managed/reconcile", func(w http.ResponseWriter, r *http.Request) {
+			if !authorized(r, cfg.Token) {
+				writeError(w, http.StatusUnauthorized, "unauthorized")
+				return
+			}
+			nodeID := r.URL.Query().Get("node_id")
+			templateID := r.URL.Query().Get("template_id")
+			if nodeID == "" || templateID == "" {
+				writeError(w, http.StatusBadRequest, "node_id and template_id are both required")
+				return
+			}
+			statuses, ok := cfg.ComfyUIManagedStatus(nodeID)
+			if !ok {
+				writeError(w, http.StatusNotFound, "node is not connected to this replica")
+				return
+			}
+			tmpl, ok := findTemplate(cfg.Templates(), templateID)
+			if !ok {
+				writeError(w, http.StatusNotFound, "template is not in this replica's catalogue")
+				return
+			}
+			writeJSON(w, http.StatusOK, reconcileComfyUICustomNodes(nodeID, templateID, tmpl.Dependencies.CustomNodes, statuses))
+		})
+	}
+
 	return mux, nil
+}
+
+// findTemplate looks up id in templates, the same linear scan cfg.Templates()
+// callers already accept for a catalogue this small (P03's own precedent).
+func findTemplate(templates []workflowview.Template, id string) (workflowview.Template, bool) {
+	for _, t := range templates {
+		if t.ID == id {
+			return t, true
+		}
+	}
+	return workflowview.Template{}, false
+}
+
+// reconcileComfyUICustomNodesResponse is GET
+// /internal/v1/comfyui-managed/reconcile's body (STATUS.md's P2 ComfyUI
+// Managed Docker deployment, subtask 4). It is a read-only diagnostic: see
+// the subtask 4 design doc's known-gaps section for why this is never wired
+// into scheduling.
+//
+// reconcileComfyUICustomNodesResponse 是 GET
+// /internal/v1/comfyui-managed/reconcile 的响应体（STATUS.md 的 P2 ComfyUI
+// Managed Docker 部署子任务四）。它只是一个只读诊断：为什么从不接入调度决
+// 策，见子任务四设计文档的已知缺口一节。
+type reconcileComfyUICustomNodesResponse struct {
+	NodeID     string                                    `json:"node_id"`
+	TemplateID string                                    `json:"template_id"`
+	Satisfied  bool                                      `json:"satisfied"`
+	Mismatches []comfyuimanagedstatus.CustomNodeMismatch `json:"mismatches,omitempty"`
+}
+
+// reconcileComfyUICustomNodes finds the one Managed instance's reported
+// custom nodes among statuses (an Agent runs at most one instance today —
+// comfyuimanaged's own doc) and compares them against declared.
+func reconcileComfyUICustomNodes(nodeID, templateID string, declared []workflowtemplate.NodeDependency, statuses []comfyuimanagedstatus.Status) reconcileComfyUICustomNodesResponse {
+	var installed []comfyuimanagedstatus.CustomNodeStatus
+	if len(statuses) > 0 {
+		installed = statuses[0].CustomNodes
+	}
+	declaredLocal := make([]comfyuimanagedstatus.DeclaredCustomNode, len(declared))
+	for i, d := range declared {
+		declaredLocal[i] = comfyuimanagedstatus.DeclaredCustomNode{Name: d.Name, Version: d.Version}
+	}
+	mismatches := comfyuimanagedstatus.ReconcileCustomNodes(declaredLocal, installed)
+	return reconcileComfyUICustomNodesResponse{
+		NodeID:     nodeID,
+		TemplateID: templateID,
+		Satisfied:  len(mismatches) == 0,
+		Mismatches: mismatches,
+	}
 }
 
 // snapshot renders one replica's answer.

@@ -188,6 +188,14 @@ type ModelPullRouter interface {
 // 直接由 handler 包从 ctx.ComfyUIManagedRouter 提供服务——同一种切分。
 type ComfyUIManagedRouter interface {
 	Trigger(ctx context.Context, nodeID string, action comfyuimanagedstatus.Action) (comfyuimanagedrouter.Result, error)
+	// InstallCustomNode forwards a by-name custom node install trigger
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4), the
+	// same forward-only split Trigger documents.
+	//
+	// InstallCustomNode 转发一次按名字触发的自定义节点安装（STATUS.md 的
+	// P2 ComfyUI Managed Docker 部署子任务四），与 Trigger 文档所述同一种
+	// 只转发的切分。
+	InstallCustomNode(ctx context.Context, nodeID, name string) (comfyuimanagedrouter.Result, error)
 }
 
 // Service is the business layer. Construct one with New.

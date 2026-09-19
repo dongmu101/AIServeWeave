@@ -12,5 +12,5 @@ import "errors"
 // 指向任何东西时启动。
 var (
 	errNoToken  = errors.New("comfyuimanagedapi: a token is required; set AISW_GATEWAY_COMFYUI_MANAGED_TOKEN")
-	errNoSource = errors.New("comfyuimanagedapi: Trigger, Status and HasActiveJob are all required")
+	errNoSource = errors.New("comfyuimanagedapi: Trigger, Status, HasActiveJob and TriggerCustomNodeInstall are all required")
 )

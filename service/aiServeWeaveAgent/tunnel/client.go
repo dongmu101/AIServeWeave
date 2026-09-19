@@ -58,6 +58,15 @@ type ComfyUIManager interface {
 	// Trigger 请求 Supervisor 对它本地已声明的那一个 Managed 实例施加
 	// action；它从不阻塞。
 	Trigger(action comfyuimanagedstatus.Action)
+	// TriggerCustomNodeInstall asks the Supervisor to install name — looked
+	// up in its own local allowlist, never accepted as a literal URL — into
+	// its one Managed instance (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment, subtask 4); it never blocks.
+	//
+	// TriggerCustomNodeInstall 请求 Supervisor 把 name（在它自己本地的允许
+	// 列表里查找，从不接受字面 URL）安装进它的那一个 Managed 实例
+	// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）；它从不阻塞。
+	TriggerCustomNodeInstall(name string)
 	// Snapshot returns the current status of the one Managed instance this
 	// Agent declared locally.
 	//
