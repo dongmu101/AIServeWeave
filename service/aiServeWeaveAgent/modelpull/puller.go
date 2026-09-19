@@ -202,12 +202,16 @@ func (p *Puller) worker() {
 // 字走到这里时早已离开了 Trigger 的同步路径，已经没有调用方可以接收错误
 // ——无论成功还是失败，结果都变成一次状态更新。
 func (p *Puller) runOne(name string, spec Spec, budget *int64) {
-	if alreadySatisfied(spec) {
-		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDone, BytesTotal: spec.SizeBytes, BytesDownloaded: spec.SizeBytes, UpdatedAt: p.clock.Now()})
-		return
-	}
 	if err := validateSpec(spec); err != nil {
 		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateFailed, Reason: modelpullstatus.ReasonInvalidSpec, UpdatedAt: p.clock.Now()})
+		return
+	}
+	if spec.Kind == KindOllama {
+		p.runOllama(name, spec)
+		return
+	}
+	if alreadySatisfied(spec) {
+		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDone, BytesTotal: spec.SizeBytes, BytesDownloaded: spec.SizeBytes, UpdatedAt: p.clock.Now()})
 		return
 	}
 	if !sourceAllowed(spec.SourceURL, p.cfg.Allowlist) {
@@ -229,6 +233,36 @@ func (p *Puller) runOne(name string, spec Spec, budget *int64) {
 		return
 	}
 	p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDone, BytesTotal: spec.SizeBytes, BytesDownloaded: spec.SizeBytes, UpdatedAt: p.clock.Now()})
+}
+
+// runOllama pulls a KindOllama spec via pullOllama and records its outcome,
+// the Ollama-native counterpart to runOne's KindHTTP branch. It skips
+// p.cfg.Allowlist and budget entirely — neither concept applies to a spec
+// with no SourceURL and no byte count this process controls (see pullOllama's
+// doc and docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md).
+//
+// runOllama 经由 pullOllama 拉取一个 KindOllama 的 spec 并记录结果，是
+// runOne 的 KindHTTP 分支在 Ollama 原生一侧的对应实现。它完全跳过
+// p.cfg.Allowlist 与配额——两者都不适用于一个没有 SourceURL、也没有这个进
+// 程能控制的字节数的 spec（见 pullOllama 的文档与
+// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md）。
+func (p *Puller) runOllama(name string, spec Spec) {
+	p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDownloading, UpdatedAt: p.clock.Now()})
+
+	client := p.cfg.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	var lastDownloaded, lastTotal int64
+	err := pullOllama(p.ctx, client, p.cfg.OllamaBaseURL, spec, func(downloaded, total int64) {
+		lastDownloaded, lastTotal = downloaded, total
+		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDownloading, BytesDownloaded: downloaded, BytesTotal: total, UpdatedAt: p.clock.Now()})
+	})
+	if err != nil {
+		p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateFailed, Reason: classifyPullError(err), UpdatedAt: p.clock.Now()})
+		return
+	}
+	p.setStatus(name, modelpullstatus.Status{Name: name, State: modelpullstatus.StateDone, BytesDownloaded: lastDownloaded, BytesTotal: lastTotal, UpdatedAt: p.clock.Now()})
 }
 
 func (p *Puller) setStatus(name string, st modelpullstatus.Status) {
@@ -254,6 +288,10 @@ func classifyPullError(err error) modelpullstatus.FailureReason {
 		return modelpullstatus.ReasonChecksumMismatch
 	case errors.Is(err, errStorageFailed):
 		return modelpullstatus.ReasonStorageError
+	case errors.Is(err, errOllamaUnconfigured):
+		return modelpullstatus.ReasonOllamaUnconfigured
+	case errors.Is(err, errOllamaPullFailed):
+		return modelpullstatus.ReasonOllamaPullFailed
 	default:
 		// errFetchFailed and any error pullOne did not wrap in a sentinel
 		// (there should be none) both land here: a transport failure is the

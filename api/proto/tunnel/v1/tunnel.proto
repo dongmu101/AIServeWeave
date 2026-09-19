@@ -607,6 +607,8 @@ enum ModelPullFailureReason {
   MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS = 6;   // non-200/206 HTTP response
   MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH = 7;
   MODEL_PULL_FAILURE_REASON_STORAGE_ERROR = 8;       // local disk write/rename failure
+  MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED = 9; // kind=ollama spec, no -ollama-url configured
+  MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED = 10; // the Ollama server itself reported an error
 }
 
 message ModelPullStatus {

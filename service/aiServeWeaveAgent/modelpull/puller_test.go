@@ -2,6 +2,7 @@ package modelpull
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -279,6 +280,57 @@ func TestPuller_SnapshotSortedByName(t *testing.T) {
 	snap := p.Snapshot()
 	if len(snap) != 2 || snap[0].Name != "alpha" || snap[1].Name != "zeta" {
 		t.Fatalf("Snapshot() = %+v, want [alpha, zeta]", snap)
+	}
+}
+
+func TestPuller_TriggerOllamaKind(t *testing.T) {
+	var gotBody map[string]any
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		json.NewDecoder(r.Body).Decode(&gotBody)
+		writeNDJSON(t, w, []map[string]any{
+			{"status": "downloading", "total": int64(10), "completed": int64(5)},
+			{"status": "success"},
+		})
+	}))
+	defer srv.Close()
+
+	specs := []Spec{{Name: "qwen3-coder:30b", Kind: KindOllama}}
+	p := NewPuller(context.Background(), Config{OllamaBaseURL: srv.URL}, specs, newFakeClock())
+	p.Trigger([]string{"qwen3-coder:30b"})
+
+	got := waitForState(t, p, "qwen3-coder:30b", modelpullstatus.StateDone)
+	if got.BytesDownloaded != 5 || got.BytesTotal != 10 {
+		t.Fatalf("status = %+v, want BytesDownloaded=5 BytesTotal=10", got)
+	}
+	if gotBody["model"] != "qwen3-coder:30b" {
+		t.Fatalf("request body model = %v, want qwen3-coder:30b", gotBody["model"])
+	}
+}
+
+func TestPuller_TriggerOllamaKindUnconfigured(t *testing.T) {
+	specs := []Spec{{Name: "qwen3-coder:30b", Kind: KindOllama}}
+	p := NewPuller(context.Background(), Config{}, specs, newFakeClock())
+	p.Trigger([]string{"qwen3-coder:30b"})
+
+	got := waitForState(t, p, "qwen3-coder:30b", modelpullstatus.StateFailed)
+	if got.Reason != modelpullstatus.ReasonOllamaUnconfigured {
+		t.Fatalf("Reason = %v, want ReasonOllamaUnconfigured", got.Reason)
+	}
+}
+
+func TestPuller_TriggerOllamaKindServerError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeNDJSON(t, w, []map[string]any{{"error": "model not found"}})
+	}))
+	defer srv.Close()
+
+	specs := []Spec{{Name: "ghost:latest", Kind: KindOllama}}
+	p := NewPuller(context.Background(), Config{OllamaBaseURL: srv.URL}, specs, newFakeClock())
+	p.Trigger([]string{"ghost:latest"})
+
+	got := waitForState(t, p, "ghost:latest", modelpullstatus.StateFailed)
+	if got.Reason != modelpullstatus.ReasonOllamaPullFailed {
+		t.Fatalf("Reason = %v, want ReasonOllamaPullFailed", got.Reason)
 	}
 }
 

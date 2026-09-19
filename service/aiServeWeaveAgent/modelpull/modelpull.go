@@ -10,9 +10,17 @@
 // This is subtask 1 of STATUS.md's P2 "模型分发" item (see
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md): a
 // generic checksum-verified downloader, not an Ollama-native puller (Ollama
-// has its own manifest/blob store format this package does not understand;
-// pulling into Ollama itself is left to a future subtask that shells out to
-// `ollama pull`, the same way hostresources shells out to nvidia-smi).
+// has its own manifest/blob store format this package does not understand).
+//
+// Subtask 3 (ollamapull.go, see
+// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md)
+// adds a second Spec.Kind, KindOllama, for exactly that case: it calls the
+// target Ollama server's own POST /api/pull instead of reimplementing its
+// storage format, the same restraint that made subtask 1's design doc
+// originally point at shelling out to `ollama pull` (hostresources' os/exec
+// precedent) — the design doc for subtask 3 reconsiders that and uses
+// Ollama's HTTP API instead, still stdlib net/http, for structured progress
+// without depending on the `ollama` CLI binary being on the Agent's PATH.
 //
 // Puller (puller.go) is subtask 2 (see
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md):
@@ -31,9 +39,16 @@
 //
 // 这是 STATUS.md P2「模型分发」条目的子任务一（见
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md）：一个
-// 通用的、校验和驱动的下载器，不理解 Ollama 自己的 manifest/blob 存储格式
-// （真正把文件交给 Ollama 使用留给未来子任务，经由 shell out 到
-// `ollama pull`，与 hostresources shell out 到 nvidia-smi 同一先例）。
+// 通用的、校验和驱动的下载器，不理解 Ollama 自己的 manifest/blob 存储格式。
+//
+// 子任务三（ollamapull.go，见
+// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md）
+// 为这种情况新增第二种 Spec.Kind——KindOllama：它调用目标 Ollama 服务器自己
+// 的 POST /api/pull，而不是重新实现它的存储格式，与子任务一设计文档当初设
+// 想的 shell out 到 `ollama pull`（hostresources 的 os/exec 先例）是同一种
+// 克制——子任务三的设计文档重新权衡后改用 Ollama 的 HTTP API，同样只用标准
+// 库 net/http，换来结构化进度，且不依赖 Agent 的 PATH 上要有 `ollama` 这个
+// CLI 二进制。
 //
 // Puller（puller.go）是子任务二（见
 // docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md）：
@@ -110,10 +125,42 @@ var (
 	errStorageFailed = errors.New("modelpull: storage error")
 )
 
+// Kind selects how a Spec is fetched. See Spec.Kind.
+//
+// Kind 选择一个 Spec 用什么方式获取，见 Spec.Kind。
+type Kind string
+
+const (
+	// KindHTTP is the zero value: the generic checksum-verified downloader
+	// (subtask 1). SourceURL, SHA256 and TargetPath are required.
+	//
+	// KindHTTP 是零值：通用的校验和驱动下载器（子任务一）。SourceURL、
+	// SHA256 与 TargetPath 均为必填。
+	KindHTTP Kind = ""
+	// KindOllama pulls spec.Name as a model tag from the Ollama server at
+	// Config.OllamaBaseURL via its own POST /api/pull (subtask 3, see
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md).
+	// SourceURL, SHA256 and TargetPath do not apply and must be left empty
+	// — Ollama's own manifest/blob store decides where the bytes land.
+	//
+	// KindOllama 经由 Ollama 服务器（地址在 Config.OllamaBaseURL）自己的
+	// POST /api/pull，把 spec.Name 当作模型 tag 拉取（子任务三，见
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md）。
+	// SourceURL、SHA256、TargetPath 均不适用，必须留空——字节最终落在哪
+	// 由 Ollama 自己的 manifest/blob 存储决定。
+	KindOllama Kind = "ollama"
+)
+
 // Spec describes one model artifact to fetch and verify.
 //
 // Spec 描述一个要获取并校验的模型制品。
 type Spec struct {
+	// Kind selects the fetch mechanism. The zero value, KindHTTP, is
+	// subtask 1's generic downloader.
+	//
+	// Kind 选择获取方式。零值 KindHTTP 是子任务一的通用下载器。
+	Kind Kind `json:"kind,omitempty"`
+
 	// Name identifies this entry in logs and in Result.
 	//
 	// Name 是这一条在日志和 Result 里的标识。
@@ -121,17 +168,21 @@ type Spec struct {
 
 	// SourceURL is fetched with a plain HTTP(S) GET. It must match a prefix
 	// in Config.Allowlist or the entry is rejected before any request.
+	// KindHTTP only — a KindOllama spec must leave this empty.
 	//
 	// SourceURL 用一次普通的 HTTP(S) GET 获取。它必须命中 Config.Allowlist
-	// 里的某个前缀，否则这一条在发起任何请求前就会被拒绝。
-	SourceURL string `json:"source_url"`
+	// 里的某个前缀，否则这一条在发起任何请求前就会被拒绝。仅用于
+	// KindHTTP——KindOllama 的 spec 必须留空。
+	SourceURL string `json:"source_url,omitempty"`
 
 	// SHA256 is the required, hex-encoded expected digest of the fetched
-	// file. There is no way to skip verification.
+	// file. There is no way to skip verification. KindHTTP only — a
+	// KindOllama spec must leave this empty; Ollama verifies its own blobs.
 	//
 	// SHA256 是获取到的文件的期望摘要，十六进制编码，必填。没有跳过校验的
-	// 途径。
-	SHA256 string `json:"sha256"`
+	// 途径。仅用于 KindHTTP——KindOllama 的 spec 必须留空，Ollama 自己校验
+	// 它的 blob。
+	SHA256 string `json:"sha256,omitempty"`
 
 	// SizeBytes is the artifact's known size, used to pre-check the quota
 	// before any request is made. Zero means unknown; the quota is still
@@ -143,11 +194,15 @@ type Spec struct {
 
 	// TargetPath is the absolute path the verified file is atomically
 	// renamed to. An existing file at this path with a matching digest
-	// causes the entry to be skipped without any network access.
+	// causes the entry to be skipped without any network access. KindHTTP
+	// only — a KindOllama spec must leave this empty; Ollama decides where
+	// its own blobs live.
 	//
 	// TargetPath 是校验通过后原子改名到的绝对路径。如果该路径已经有文件且
-	// 摘要匹配，这一条会被直接跳过，不发起任何网络访问。
-	TargetPath string `json:"target_path"`
+	// 摘要匹配，这一条会被直接跳过，不发起任何网络访问。仅用于
+	// KindHTTP——KindOllama 的 spec 必须留空，它的 blob 存在哪由 Ollama 自
+	// 己决定。
+	TargetPath string `json:"target_path,omitempty"`
 }
 
 // Config controls how RunManifest fetches and verifies every Spec in one
@@ -169,17 +224,38 @@ type Config struct {
 	Allowlist []string
 
 	// QuotaBytes bounds the total bytes this RunManifest call may write
-	// across every Spec combined. A value <= 0 means unlimited. This is a
-	// per-call budget, not a cumulative ledger across Agent restarts.
+	// across every KindHTTP Spec combined. A value <= 0 means unlimited.
+	// This is a per-call budget, not a cumulative ledger across Agent
+	// restarts. It does not apply to KindOllama specs — see OllamaBaseURL
+	// and docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md
+	// 第五节 for why.
 	//
-	// QuotaBytes 限定这一次 RunManifest 调用在所有 Spec 上总共能写入的字节
-	// 数。<=0 表示不限。这是单次调用的预算，不是跨 Agent 重启的累计账本。
+	// QuotaBytes 限定这一次 RunManifest 调用在所有 KindHTTP Spec 上总共能写
+	// 入的字节数。<=0 表示不限。这是单次调用的预算，不是跨 Agent 重启的累
+	// 计账本。它不适用于 KindOllama 的 spec——原因见 OllamaBaseURL 与
+	// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md
+	// 第五节。
 	QuotaBytes int64
 
-	// HTTPClient issues the GET requests. nil uses http.DefaultClient.
+	// HTTPClient issues every request, KindHTTP's GET and KindOllama's
+	// POST /api/pull alike. nil uses http.DefaultClient.
 	//
-	// HTTPClient 用于发起 GET 请求。为 nil 时使用 http.DefaultClient。
+	// HTTPClient 用于发起每一次请求，KindHTTP 的 GET 与 KindOllama 的
+	// POST /api/pull 皆是。为 nil 时使用 http.DefaultClient。
 	HTTPClient *http.Client
+
+	// OllamaBaseURL is the target for KindOllama specs' POST /api/pull
+	// calls, e.g. http://127.0.0.1:11434. Empty rejects every KindOllama
+	// spec with ReasonOllamaUnconfigured before any request — the manifest
+	// may list KindOllama entries even when this Agent has no Ollama
+	// runtime configured; they simply never succeed until it does.
+	//
+	// OllamaBaseURL 是 KindOllama spec 的 POST /api/pull 请求目标，例如
+	// http://127.0.0.1:11434。为空时，任何 KindOllama 的 spec 在发起请求前
+	// 就会被拒绝为 ReasonOllamaUnconfigured——清单里即使列了 KindOllama 条
+	// 目，只要这个 Agent 没配置 Ollama 运行时，它们就永远不会成功，直到配
+	// 置上为止。
+	OllamaBaseURL string
 }
 
 // Result reports the outcome of one RunManifest call.
@@ -251,6 +327,20 @@ func RunManifest(ctx context.Context, cfg Config, specs []Spec) Result {
 			result.Failed[specKey(spec)] = err
 			continue
 		}
+		if spec.Kind == KindOllama {
+			// Ollama's own pull is already idempotent (an already-present
+			// model answers quickly with "success"), so there is no
+			// separate "already satisfied" skip here the way KindHTTP has
+			// one, and no allowlist or quota check — neither concept
+			// applies to a spec with no SourceURL (see Config's doc and
+			// docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md).
+			if err := pullOllama(ctx, client, cfg.OllamaBaseURL, spec, nil); err != nil {
+				result.Failed[spec.Name] = err
+				continue
+			}
+			result.Pulled = append(result.Pulled, spec.Name)
+			continue
+		}
 		if alreadySatisfied(spec) {
 			result.Skipped = append(result.Skipped, spec.Name)
 			continue
@@ -280,14 +370,24 @@ func specKey(spec Spec) string {
 	return spec.SourceURL
 }
 
-// validateSpec rejects a Spec that is missing required fields before any
-// network access or filesystem check is attempted.
+// validateSpec rejects a Spec that is missing required fields, or that sets
+// a field its Kind does not use, before any network access or filesystem
+// check is attempted.
 //
-// validateSpec 在发起任何网络访问或文件系统检查之前，拒绝缺少必填字段的
-// Spec。
+// validateSpec 在发起任何网络访问或文件系统检查之前，拒绝缺少必填字段、或
+// 设置了其 Kind 不适用字段的 Spec。
 func validateSpec(spec Spec) error {
 	if spec.Name == "" {
 		return errors.New("modelpull: spec missing name")
+	}
+	if spec.Kind == KindOllama {
+		if spec.SourceURL != "" || spec.SHA256 != "" || spec.TargetPath != "" {
+			return fmt.Errorf("modelpull: spec %q is kind ollama and must not set source_url/sha256/target_path", spec.Name)
+		}
+		return nil
+	}
+	if spec.Kind != KindHTTP {
+		return fmt.Errorf("modelpull: spec %q has unknown kind %q", spec.Name, spec.Kind)
 	}
 	if spec.SourceURL == "" {
 		return fmt.Errorf("modelpull: spec %q missing source_url", spec.Name)

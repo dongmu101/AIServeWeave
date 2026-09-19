@@ -333,40 +333,46 @@ func (ModelPullState) EnumDescriptor() ([]byte, []int) {
 type ModelPullFailureReason int32
 
 const (
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNSPECIFIED       ModelPullFailureReason = 0
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME      ModelPullFailureReason = 1 // not in the Agent's local manifest
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_INVALID_SPEC      ModelPullFailureReason = 2 // manifest entry itself malformed
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED   ModelPullFailureReason = 3 // source_url outside -model-pull-allowlist
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED    ModelPullFailureReason = 4
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_FETCH_FAILED      ModelPullFailureReason = 5 // transport error, detail stays in the Agent's own log
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS ModelPullFailureReason = 6 // non-200/206 HTTP response
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH ModelPullFailureReason = 7
-	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_STORAGE_ERROR     ModelPullFailureReason = 8 // local disk write/rename failure
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNSPECIFIED         ModelPullFailureReason = 0
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME        ModelPullFailureReason = 1 // not in the Agent's local manifest
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_INVALID_SPEC        ModelPullFailureReason = 2 // manifest entry itself malformed
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED     ModelPullFailureReason = 3 // source_url outside -model-pull-allowlist
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED      ModelPullFailureReason = 4
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_FETCH_FAILED        ModelPullFailureReason = 5 // transport error, detail stays in the Agent's own log
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS   ModelPullFailureReason = 6 // non-200/206 HTTP response
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH   ModelPullFailureReason = 7
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_STORAGE_ERROR       ModelPullFailureReason = 8  // local disk write/rename failure
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED ModelPullFailureReason = 9  // kind=ollama spec, no -ollama-url configured
+	ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED  ModelPullFailureReason = 10 // the Ollama server itself reported an error
 )
 
 // Enum value maps for ModelPullFailureReason.
 var (
 	ModelPullFailureReason_name = map[int32]string{
-		0: "MODEL_PULL_FAILURE_REASON_UNSPECIFIED",
-		1: "MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME",
-		2: "MODEL_PULL_FAILURE_REASON_INVALID_SPEC",
-		3: "MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED",
-		4: "MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED",
-		5: "MODEL_PULL_FAILURE_REASON_FETCH_FAILED",
-		6: "MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS",
-		7: "MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH",
-		8: "MODEL_PULL_FAILURE_REASON_STORAGE_ERROR",
+		0:  "MODEL_PULL_FAILURE_REASON_UNSPECIFIED",
+		1:  "MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME",
+		2:  "MODEL_PULL_FAILURE_REASON_INVALID_SPEC",
+		3:  "MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED",
+		4:  "MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED",
+		5:  "MODEL_PULL_FAILURE_REASON_FETCH_FAILED",
+		6:  "MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS",
+		7:  "MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH",
+		8:  "MODEL_PULL_FAILURE_REASON_STORAGE_ERROR",
+		9:  "MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED",
+		10: "MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED",
 	}
 	ModelPullFailureReason_value = map[string]int32{
-		"MODEL_PULL_FAILURE_REASON_UNSPECIFIED":       0,
-		"MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME":      1,
-		"MODEL_PULL_FAILURE_REASON_INVALID_SPEC":      2,
-		"MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED":   3,
-		"MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED":    4,
-		"MODEL_PULL_FAILURE_REASON_FETCH_FAILED":      5,
-		"MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS": 6,
-		"MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH": 7,
-		"MODEL_PULL_FAILURE_REASON_STORAGE_ERROR":     8,
+		"MODEL_PULL_FAILURE_REASON_UNSPECIFIED":         0,
+		"MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME":        1,
+		"MODEL_PULL_FAILURE_REASON_INVALID_SPEC":        2,
+		"MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED":     3,
+		"MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED":      4,
+		"MODEL_PULL_FAILURE_REASON_FETCH_FAILED":        5,
+		"MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS":   6,
+		"MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH":   7,
+		"MODEL_PULL_FAILURE_REASON_STORAGE_ERROR":       8,
+		"MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED": 9,
+		"MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED":  10,
 	}
 )
 
@@ -7608,7 +7614,7 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x18MODEL_PULL_STATE_PENDING\x10\x01\x12 \n" +
 	"\x1cMODEL_PULL_STATE_DOWNLOADING\x10\x02\x12\x19\n" +
 	"\x15MODEL_PULL_STATE_DONE\x10\x03\x12\x1b\n" +
-	"\x17MODEL_PULL_STATE_FAILED\x10\x04*\xb3\x03\n" +
+	"\x17MODEL_PULL_STATE_FAILED\x10\x04*\x98\x04\n" +
 	"\x16ModelPullFailureReason\x12)\n" +
 	"%MODEL_PULL_FAILURE_REASON_UNSPECIFIED\x10\x00\x12*\n" +
 	"&MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME\x10\x01\x12*\n" +
@@ -7618,7 +7624,10 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"&MODEL_PULL_FAILURE_REASON_FETCH_FAILED\x10\x05\x12/\n" +
 	"+MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS\x10\x06\x12/\n" +
 	"+MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH\x10\a\x12+\n" +
-	"'MODEL_PULL_FAILURE_REASON_STORAGE_ERROR\x10\b*\xa9\x01\n" +
+	"'MODEL_PULL_FAILURE_REASON_STORAGE_ERROR\x10\b\x121\n" +
+	"-MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED\x10\t\x120\n" +
+	",MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED\x10\n" +
+	"*\xa9\x01\n" +
 	"\x18ComfyUIManagedActionType\x12&\n" +
 	"\"COMFYUI_MANAGED_ACTION_UNSPECIFIED\x10\x00\x12 \n" +
 	"\x1cCOMFYUI_MANAGED_ACTION_START\x10\x01\x12\x1f\n" +

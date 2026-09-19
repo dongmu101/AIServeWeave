@@ -117,6 +117,10 @@ func modelPullReasonToProto(r modelpullstatus.FailureReason) tunnelv1.ModelPullF
 		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH
 	case modelpullstatus.ReasonStorageError:
 		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_STORAGE_ERROR
+	case modelpullstatus.ReasonOllamaUnconfigured:
+		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED
+	case modelpullstatus.ReasonOllamaPullFailed:
+		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED
 	default:
 		return tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_UNSPECIFIED
 	}
@@ -140,6 +144,10 @@ func modelPullReasonFromProto(pb tunnelv1.ModelPullFailureReason) modelpullstatu
 		return modelpullstatus.ReasonChecksumMismatch
 	case tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_STORAGE_ERROR:
 		return modelpullstatus.ReasonStorageError
+	case tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED:
+		return modelpullstatus.ReasonOllamaUnconfigured
+	case tunnelv1.ModelPullFailureReason_MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED:
+		return modelpullstatus.ReasonOllamaPullFailed
 	default:
 		return modelpullstatus.ReasonUnspecified
 	}

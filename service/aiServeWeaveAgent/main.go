@@ -459,7 +459,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	)
 
 	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
-	puller := newModelPuller(ctx, logger, mpOpts)
+	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 
 	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor)
 	if err != nil {
@@ -565,9 +565,11 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 }
 
 // newModelPuller builds the Agent-local Puller from opts (STATUS.md's P2
-// 「模型分发」子任务一：manifest/allowlist/quota) and, when a manifest is
-// configured, kicks off pulling every entry in the background — the same
-// non-blocking behavior startModelPull had before Puller existed. It never
+// 「模型分发」子任务一：manifest/allowlist/quota) and ollamaURL (子任务三：
+// KindOllama specs pull from the same Ollama instance -ollama-url already
+// registers as a runtime; there is no separate flag for it), and, when a
+// manifest is configured, kicks off pulling every entry in the background —
+// the same non-blocking behavior startModelPull had before Puller existed. It never
 // returns nil: an empty or unloadable manifest yields a Puller that knows no
 // names, so a Gateway-triggered pull for any name is simply rejected as
 // unknown (子任务二, tunnel.ClientConfig.ModelPuller) instead of needing a
@@ -586,7 +588,9 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 // resumable state a killed process already leaves today.
 //
 // newModelPuller 基于 opts（STATUS.md P2「模型分发」子任务一：manifest/
-// allowlist/quota）构造 Agent 本地的 Puller，清单配置了的话，会在后台开始拉
+// allowlist/quota）与 ollamaURL（子任务三：KindOllama 的 spec 从
+// -ollama-url 已经注册为运行时的同一个 Ollama 实例拉取，没有为此单独开一
+// 个 flag）构造 Agent 本地的 Puller，清单配置了的话，会在后台开始拉
 // 取每一条——与 Puller 出现之前 startModelPull 同样的非阻塞行为。它从不返回
 // nil：清单为空或加载失败时，返回的 Puller 就是一个不认识任何名字的
 // Puller，因此 Gateway 触发任意名字的拉取都会被直接拒绝为未知（子任务二，
@@ -600,7 +604,7 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 // 一次下载运行所在的 context，取消它依然能让任何进行中的获取很快 unwind
 // ——由此留下的部分 ".part" 文件，与今天进程被杀死留下的完全是同一种、被
 // 完整支持的可续传状态。
-func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOptions) *modelpull.Puller {
+func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOptions, ollamaURL string) *modelpull.Puller {
 	var specs []modelpull.Spec
 	if opts.manifest != "" {
 		var err error
@@ -610,7 +614,7 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 			specs = nil
 		}
 	}
-	cfg := modelpull.Config{Allowlist: opts.allowlistPrefixes(), QuotaBytes: opts.quotaBytes}
+	cfg := modelpull.Config{Allowlist: opts.allowlistPrefixes(), QuotaBytes: opts.quotaBytes, OllamaBaseURL: ollamaURL}
 	puller := modelpull.NewPuller(ctx, cfg, specs, runtime.NewSystemClock())
 	if len(specs) > 0 {
 		names := make([]string, len(specs))

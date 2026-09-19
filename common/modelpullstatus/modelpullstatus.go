@@ -107,6 +107,10 @@ func (r FailureReason) String() string {
 		return "checksum_mismatch"
 	case ReasonStorageError:
 		return "storage_error"
+	case ReasonOllamaUnconfigured:
+		return "ollama_unconfigured"
+	case ReasonOllamaPullFailed:
+		return "ollama_pull_failed"
 	default:
 		return "unspecified"
 	}
@@ -159,6 +163,23 @@ const (
 	//
 	// ReasonStorageError 表示本地文件系统操作（创建、写入、改名）失败。
 	ReasonStorageError
+	// ReasonOllamaUnconfigured means a kind=ollama spec was triggered with
+	// no Ollama base URL configured (the Agent's -ollama-url flag is
+	// empty), so there is no server to ask for the pull.
+	//
+	// ReasonOllamaUnconfigured 表示一个 kind=ollama 的 spec 被触发时没有配置
+	// Ollama base URL（Agent 的 -ollama-url flag 为空），因而没有可询问的
+	// 服务器。
+	ReasonOllamaUnconfigured
+	// ReasonOllamaPullFailed means the Ollama server itself reported an
+	// error partway through the pull (e.g. an unknown model tag). The raw
+	// error text stays in the Agent's own log and never crosses here, the
+	// same restraint ReasonFetchFailed uses.
+	//
+	// ReasonOllamaPullFailed 表示 Ollama 服务器自己在拉取过程中报告了一个
+	// 错误（例如未知的模型 tag）。原始错误文本只留在 Agent 自己的日志里，
+	// 从不会传到这里，与 ReasonFetchFailed 同一种克制。
+	ReasonOllamaPullFailed
 )
 
 // Status is one named pull's current state, as the Agent reports it and the

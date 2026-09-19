@@ -322,6 +322,36 @@ func TestRunManifest_OneFailureDoesNotStopTheRest(t *testing.T) {
 	}
 }
 
+func TestRunManifest_OllamaKind(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		writeNDJSON(t, w, []map[string]any{{"status": "success"}})
+	}))
+	defer srv.Close()
+
+	cfg := Config{OllamaBaseURL: srv.URL}
+	specs := []Spec{{Name: "qwen3-coder:30b", Kind: KindOllama}}
+
+	result := RunManifest(context.Background(), cfg, specs)
+
+	if len(result.Failed) != 0 {
+		t.Fatalf("Failed = %v, want none", result.Failed)
+	}
+	if len(result.Pulled) != 1 || result.Pulled[0] != "qwen3-coder:30b" {
+		t.Fatalf("Pulled = %v, want [qwen3-coder:30b]", result.Pulled)
+	}
+}
+
+func TestRunManifest_OllamaKindUnconfigured(t *testing.T) {
+	cfg := Config{}
+	specs := []Spec{{Name: "qwen3-coder:30b", Kind: KindOllama}}
+
+	result := RunManifest(context.Background(), cfg, specs)
+
+	if _, ok := result.Failed["qwen3-coder:30b"]; !ok {
+		t.Fatalf("expected qwen3-coder:30b to fail with no OllamaBaseURL configured")
+	}
+}
+
 func TestValidateSpec(t *testing.T) {
 	validDigest := sha256Hex([]byte("x"))
 
@@ -337,6 +367,11 @@ func TestValidateSpec(t *testing.T) {
 		{name: "non-hex sha256", spec: Spec{Name: "m1", SourceURL: "https://example.invalid/m1", SHA256: strings.Repeat("z", 64), TargetPath: "/abs/m1.bin"}, wantErr: true},
 		{name: "missing target_path", spec: Spec{Name: "m1", SourceURL: "https://example.invalid/m1", SHA256: validDigest}, wantErr: true},
 		{name: "relative target_path", spec: Spec{Name: "m1", SourceURL: "https://example.invalid/m1", SHA256: validDigest, TargetPath: "relative/m1.bin"}, wantErr: true},
+		{name: "valid ollama", spec: Spec{Name: "qwen3-coder:30b", Kind: KindOllama}, wantErr: false},
+		{name: "ollama with source_url", spec: Spec{Name: "qwen3-coder:30b", Kind: KindOllama, SourceURL: "https://example.invalid/m1"}, wantErr: true},
+		{name: "ollama with sha256", spec: Spec{Name: "qwen3-coder:30b", Kind: KindOllama, SHA256: validDigest}, wantErr: true},
+		{name: "ollama with target_path", spec: Spec{Name: "qwen3-coder:30b", Kind: KindOllama, TargetPath: "/abs/m1.bin"}, wantErr: true},
+		{name: "unknown kind", spec: Spec{Name: "m1", Kind: Kind("bogus")}, wantErr: true},
 	}
 
 	for _, tt := range tests {
