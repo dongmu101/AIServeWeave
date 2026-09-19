@@ -227,6 +227,8 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed"), literal("custom-nodes")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("model-pulls")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("model-pulls")], query: [] },
 
   {
     method: "GET",
