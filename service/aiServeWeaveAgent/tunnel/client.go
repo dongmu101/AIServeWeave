@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/agentupgradestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
@@ -72,6 +73,27 @@ type ComfyUIManager interface {
 	//
 	// Snapshot 返回本 Agent 本地声明的那一个 Managed 实例的当前状态。
 	Snapshot() []comfyuimanagedstatus.Status
+}
+
+// AgentUpgrader is implemented by *agentupgrade.Checker (STATUS.md's P2
+// Agent auto-upgrade subtask 1). It is declared here as an interface, not a
+// concrete dependency on the agentupgrade package, the same reason
+// ModelPuller is: control_test.go can fake it without a real manifest file.
+//
+// AgentUpgrader 由 *agentupgrade.Checker 实现（STATUS.md 的 P2 Agent 自动
+// 升级子任务一）。这里声明成接口而不是直接依赖 agentupgrade 包的具体类型，
+// 与 ModelPuller 同一个理由：control_test.go 能用假实现替换，不需要真实的
+// 清单文件。
+type AgentUpgrader interface {
+	// Trigger asks the Checker to apply action against targetVersion; it
+	// never blocks.
+	//
+	// Trigger 请求 Checker 对 targetVersion 施加 action；它从不阻塞。
+	Trigger(action agentupgradestatus.Action, targetVersion string)
+	// Status returns the Checker's current status.
+	//
+	// Status 返回 Checker 当前的状态。
+	Status() agentupgradestatus.Status
 }
 
 // This file assembles one tunnel — one Agent to one Gateway replica — as a
@@ -265,6 +287,22 @@ type ClientConfig struct {
 	// 形状——意味着 GatewayControl_ComfyuiManagedAction 帧被静默忽略、也从不
 	// 发送 ComfyUIManagedReport，与一个未启用 Managed 模式的节点表现一致。
 	ComfyUIManaged ComfyUIManager
+	// AgentUpgrader drives STATUS.md's P2 Agent auto-upgrade subtask 1: a
+	// Gateway-triggered CHECK of this Agent's own local manifest against its
+	// running version (UPGRADE and ROLLBACK are accepted but always answered
+	// with FAILED/NOT_IMPLEMENTED, see agentupgrade's package doc). Nil is a
+	// legitimate value — the same "optional hook" shape as ModelPuller — and
+	// means a GatewayControl_AgentUpgradeAction frame is silently ignored and
+	// no AgentUpgradeReport is ever sent, matching a node with no upgrade
+	// manifest configured.
+	//
+	// AgentUpgrader 驱动 STATUS.md P2 Agent 自动升级子任务一：一次 Gateway
+	// 触发的、对本 Agent 自己本地清单与运行版本的 CHECK（UPGRADE 与
+	// ROLLBACK 被接受，但一律回答 FAILED/NOT_IMPLEMENTED，见 agentupgrade 包
+	// 文档）。nil 是一个合法取值——与 ModelPuller 同一种"可选钩子"形
+	// 状——意味着 GatewayControl_AgentUpgradeAction 帧被静默忽略、也从不发送
+	// AgentUpgradeReport，与一个未配置升级清单的节点表现一致。
+	AgentUpgrader AgentUpgrader
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and
 	// HeartbeatFailureThreshold the number of unanswered heartbeats that

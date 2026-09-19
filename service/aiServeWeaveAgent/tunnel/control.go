@@ -44,6 +44,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 	if err := sess.forceReportComfyUIManaged(); err != nil {
 		return c.streamError("initial comfyui managed report", err)
 	}
+	if err := sess.forceReportAgentUpgrade(); err != nil {
+		return c.streamError("initial agent upgrade report", err)
+	}
 
 	heartbeat := newRearmingTimer(c.clock, c.cfg.HeartbeatInterval)
 	defer heartbeat.stop()
@@ -81,6 +84,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.reportComfyUIManaged(false); err != nil {
 				return c.streamError("comfyui managed report", err)
 			}
+			if err := sess.reportAgentUpgrade(false); err != nil {
+				return c.streamError("agent upgrade report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -112,6 +118,9 @@ type controlSession struct {
 	// ComfyUIManagedReport (STATUS.md's P2 ComfyUI Managed Docker
 	// deployment, subtask 2).
 	reportedComfyUIManaged []byte
+	// reportedAgentUpgrade is reportedModelPull's counterpart for
+	// AgentUpgradeReport (STATUS.md's P2 Agent auto-upgrade subtask 1).
+	reportedAgentUpgrade []byte
 }
 
 // handle dispatches one frame from the replica.
@@ -159,6 +168,16 @@ func (s *controlSession) handle(ctx context.Context, frame *tunnelv1.GatewayCont
 		// ack, the next report (forced here) is how the Gateway observes
 		// the install taking effect.
 		return s.forceReportComfyUIManaged()
+
+	case *tunnelv1.GatewayControl_AgentUpgradeAction:
+		if c.cfg.AgentUpgrader != nil {
+			action, targetVersion := tunnelwire.AgentUpgradeActionFromProto(body.AgentUpgradeAction)
+			c.cfg.AgentUpgrader.Trigger(action, targetVersion)
+		}
+		// Same rule as GatewayControl_ModelPullTrigger: no dedicated ack,
+		// the next report (forced here) is how the Gateway observes an
+		// unknown target version being rejected or a CHECK's result.
+		return s.forceReportAgentUpgrade()
 
 	case *tunnelv1.GatewayControl_Roster:
 		if c.cfg.OnRoster != nil {
@@ -395,6 +414,51 @@ func (s *controlSession) reportComfyUIManaged(force bool) error {
 // changed, the Supervisor counterpart to forceReportModelPull.
 func (s *controlSession) forceReportComfyUIManaged() error {
 	return s.reportComfyUIManaged(true)
+}
+
+// reportAgentUpgrade sends an AgentUpgradeReport when the Checker's status
+// has changed since the last one sent (or force is true) —
+// reportModelPull's counterpart for STATUS.md's P2 Agent auto-upgrade
+// subtask 1. There is always exactly one Status (an Agent has one running
+// version, not one per named thing), so the same deterministic-encoding
+// comparison reportModelPull/reportComfyUIManaged use applies unchanged,
+// just over a single message instead of a repeated field.
+//
+// reportAgentUpgrade 在 Checker 的状态自上次发送后发生变化（或 force 为
+// true）时发送一次 AgentUpgradeReport——是 reportModelPull 在 STATUS.md P2
+// Agent 自动升级子任务一里的对应物。一个 Agent 只有一个正在运行的版本，不
+// 是按名字各一份，因此总是恰好一个 Status，reportModelPull/
+// reportComfyUIManaged 那套确定性编码比较方式原样适用，只是作用在单条消息
+// 而不是 repeated 字段上。
+func (s *controlSession) reportAgentUpgrade(force bool) error {
+	upgrader := s.client.cfg.AgentUpgrader
+	if upgrader == nil {
+		return nil
+	}
+	report := tunnelwire.AgentUpgradeReportToProto(upgrader.Status())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode an agent upgrade report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedAgentUpgrade) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_AgentUpgrade{AgentUpgrade: report}}, "agent upgrade report"); err != nil {
+		return err
+	}
+	s.reportedAgentUpgrade = key
+	return nil
+}
+
+// forceReportAgentUpgrade sends an AgentUpgradeReport regardless of what
+// changed, the Checker counterpart to forceReportModelPull.
+func (s *controlSession) forceReportAgentUpgrade() error {
+	return s.reportAgentUpgrade(true)
 }
 
 // applyConfig installs one control-plane configuration change. Failures are
@@ -690,6 +754,8 @@ func controlFrameName(frame *tunnelv1.GatewayControl) string {
 		return "Ping"
 	case *tunnelv1.GatewayControl_ModelPullTrigger:
 		return "ModelPullTrigger"
+	case *tunnelv1.GatewayControl_AgentUpgradeAction:
+		return "AgentUpgradeAction"
 	case nil:
 		return "empty frame"
 	default:

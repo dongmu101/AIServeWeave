@@ -23,6 +23,7 @@ import (
 	"AIServeWeave/common/runtime/sglang"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
@@ -59,6 +60,7 @@ func main() {
 	opts := registerTunnelFlags()
 	mpOpts := registerModelPullFlags()
 	cmOpts := registerComfyUIManagedFlags()
+	auOpts := registerAgentUpgradeFlags()
 	ollamaURL := flag.String("ollama-url", "",
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
@@ -83,7 +85,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, mpOpts, cmOpts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, auOpts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -224,6 +226,29 @@ func registerModelPullFlags() *modelPullOptions {
 		"rolling window after which the ledger resets to zero; <=0 means it never resets on its own (only meaningful with -model-pull-ledger-path)")
 	flag.Int64Var(&opts.diskFreeMarginBytes, "model-pull-disk-free-margin-bytes", 0,
 		"abort a model pull once the target filesystem's free space falls below this many bytes (subtask 4's secondary defense); <=0 disables the check")
+	return opts
+}
+
+// agentUpgradeOptions is agentupgrade's configuration (STATUS.md's P2 Agent
+// auto-upgrade subtask 1: see
+// docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md). It
+// comes from a flag, is entirely local to this node, and is never accepted
+// from the Gateway or control plane. An empty manifest disables the
+// feature.
+//
+// agentUpgradeOptions 是 agentupgrade 的配置（STATUS.md P2 Agent 自动升级
+// 子任务一，见
+// docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md）。它来
+// 自 flag，完全是本节点本地的，从不接受 Gateway 或控制面下发。清单为空时
+// 功能关闭。
+type agentUpgradeOptions struct {
+	manifest string
+}
+
+func registerAgentUpgradeFlags() *agentUpgradeOptions {
+	opts := &agentUpgradeOptions{}
+	flag.StringVar(&opts.manifest, "agent-upgrade-manifest", "",
+		"path to a JSON manifest of known Agent versions (download URL, SHA256, Ed25519 signature); empty disables the upgrade check. Only CHECK is implemented (STATUS.md P2 Agent auto-upgrade subtask 1); UPGRADE/ROLLBACK always report NOT_IMPLEMENTED")
 	return opts
 }
 
@@ -395,7 +420,7 @@ func parseComfyUIManagedMounts(raw string) map[string]string {
 // config file described in tunnel/README.md: until that file lands, this is
 // the only way to give the agent a real backend to dispatch to. An empty
 // ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -475,8 +500,9 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 
 	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
+	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 
-	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor)
+	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker)
 	if err != nil {
 		return err
 	}
@@ -652,6 +678,34 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 	return puller
 }
 
+// newAgentUpgradeChecker builds the Agent-local Checker from opts (STATUS.md's
+// P2 Agent auto-upgrade subtask 1), comparing against this Agent's own
+// version. It never returns nil, the same "always-present, empty manifest
+// means no known updates" shape newModelPuller uses: a Gateway-triggered
+// CHECK/UPGRADE/ROLLBACK against an empty manifest is simply answered as
+// unknown/not-implemented instead of needing a separate "feature disabled"
+// code path. A manifest that fails to load is logged, not fatal — the same
+// restraint newModelPuller uses for its own manifest.
+//
+// newAgentUpgradeChecker 基于 opts（STATUS.md P2 Agent 自动升级子任务一）构
+// 造 Agent 本地的 Checker，比较对象是本 Agent 自己的版本。它从不返回
+// nil，与 newModelPuller 同一种"始终存在、清单为空就意味着没有已知更新"的
+// 形状：对一份空清单触发 CHECK/UPGRADE/ROLLBACK 只是被直接答复为未知/未实
+// 现，不需要一条单独的"功能关闭"代码路径。清单加载失败只记日志，不算致
+// 命——与 newModelPuller 对自己清单的同一种克制。
+func newAgentUpgradeChecker(logger *slog.Logger, opts *agentUpgradeOptions) *agentupgrade.Checker {
+	var entries []agentupgrade.Entry
+	if opts.manifest != "" {
+		var err error
+		entries, err = agentupgrade.LoadManifest(opts.manifest)
+		if err != nil {
+			logger.Error("agent upgrade manifest not loaded", slog.Any("error", err))
+			entries = nil
+		}
+	}
+	return agentupgrade.NewChecker(entries, version, runtime.NewSystemClock())
+}
+
 // startTunnel wires the connection table and runs it in the background,
 // returning the channel its outcome arrives on. A nil channel is returned
 // when no gateway is configured, which blocks forever in the select above and
@@ -678,7 +732,13 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 // here would produce a non-nil interface value holding a nil pointer, so
 // the interface field itself is only ever set when comfyUIManaged is
 // actually non-nil.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor) (<-chan error, error) {
+//
+// upgradeChecker drives STATUS.md's P2 Agent auto-upgrade subtask one: it
+// lets the tunnel's Control stream honor a Gateway-triggered CHECK (and
+// accept, but not execute, UPGRADE/ROLLBACK) and report status back.
+// newAgentUpgradeChecker never returns nil, so this is never nil either —
+// the same shape puller uses.
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker) (<-chan error, error) {
 	if !opts.enabled() {
 		return nil, nil
 	}
@@ -745,6 +805,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			Handler:         dispatcher,
 			ModelPuller:     puller,
 			ComfyUIManaged:  comfyUIManagedClient,
+			AgentUpgrader:   upgradeChecker,
 			Metrics:         metrics,
 			Logger:          logger,
 		},

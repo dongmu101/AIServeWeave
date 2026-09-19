@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/proto"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/agentupgradestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
@@ -932,5 +933,146 @@ func TestControlComfyUIManagedReportsOnChangeOnly(t *testing.T) {
 	}
 	if len(report.GetInstances()) != 1 || report.GetInstances()[0].GetState() != tunnelv1.ComfyUIManagedState_COMFYUI_MANAGED_STATE_RUNNING {
 		t.Fatalf("report = %v, want one instance in RUNNING", report)
+	}
+}
+
+// -----------------------------------------------------------------------
+// Agent upgrade (STATUS.md's P2 Agent auto-upgrade subtask 1)
+// -----------------------------------------------------------------------
+
+// agentUpgradeTrigger is one recorded fakeAgentUpgrader.Trigger call.
+type agentUpgradeTrigger struct {
+	action        agentupgradestatus.Action
+	targetVersion string
+}
+
+// fakeAgentUpgrader is a tunnel.AgentUpgrader test double, mirroring
+// fakeModelPuller: what was requested (triggered) is decoupled from what
+// Status returns (set directly by the test), since the real Checker's
+// behavior is already covered by agentupgrade's own tests — this fixture
+// only needs to prove the Control session dispatches and reports correctly.
+type fakeAgentUpgrader struct {
+	mu        sync.Mutex
+	triggered []agentUpgradeTrigger
+	status    agentupgradestatus.Status
+}
+
+func (f *fakeAgentUpgrader) Trigger(action agentupgradestatus.Action, targetVersion string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggered = append(f.triggered, agentUpgradeTrigger{action: action, targetVersion: targetVersion})
+}
+
+func (f *fakeAgentUpgrader) Status() agentupgradestatus.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status
+}
+
+func (f *fakeAgentUpgrader) setStatus(st agentupgradestatus.Status) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status = st
+}
+
+func (f *fakeAgentUpgrader) triggeredCalls() []agentUpgradeTrigger {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]agentUpgradeTrigger(nil), f.triggered...)
+}
+
+func TestControlAgentUpgradeActionForwardsAndReportsImmediately(t *testing.T) {
+	upgrader := &fakeAgentUpgrader{status: agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateIdle}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.AgentUpgrader = upgrader
+	})
+	f.start()
+	sess := f.connect()
+
+	// connect() only drains the RuntimeStatus report; the initial
+	// AgentUpgradeReport control.go sends right after it is still sitting
+	// on the stream.
+	initial := f.recv(sess).GetAgentUpgrade()
+	if initial == nil {
+		t.Fatal("no initial AgentUpgradeReport right after connecting")
+	}
+	if initial.GetCurrentVersion() != "v1.0.0" {
+		t.Fatalf("initial report = %v, want current_version v1.0.0", initial)
+	}
+
+	// Simulate what a real Checker.Trigger would have done to its own
+	// Status by the time the Control session reads it back.
+	upgrader.setStatus(agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateFailed, Reason: agentupgradestatus.ReasonUnknownVersion})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_AgentUpgradeAction{AgentUpgradeAction: &tunnelv1.AgentUpgradeAction{
+		Action:        tunnelv1.AgentUpgradeActionType_AGENT_UPGRADE_ACTION_UPGRADE,
+		TargetVersion: "v9.9.9",
+	}}})
+
+	report := f.recv(sess).GetAgentUpgrade()
+	if report == nil {
+		t.Fatal("no AgentUpgradeReport followed the action")
+	}
+	if report.GetState() != tunnelv1.AgentUpgradeState_AGENT_UPGRADE_STATE_FAILED ||
+		report.GetReason() != tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION {
+		t.Fatalf("report = %v, want FAILED/UNKNOWN_VERSION", report)
+	}
+
+	calls := upgrader.triggeredCalls()
+	if len(calls) != 1 || calls[0].action != agentupgradestatus.ActionUpgrade || calls[0].targetVersion != "v9.9.9" {
+		t.Fatalf("Trigger calls = %v, want exactly one ActionUpgrade for v9.9.9", calls)
+	}
+}
+
+func TestControlAgentUpgradeActionNeverTouchesRealUpgraderWhenNil(t *testing.T) {
+	// A nil AgentUpgrader (the default when no manifest is configured) must
+	// leave GatewayControl_AgentUpgradeAction a harmless no-op: no report is
+	// ever sent, matching a node with no upgrade manifest at all.
+	f := newClientFixture(t, isolateStatus)
+	f.start()
+	sess := f.connect()
+
+	marker := int64(4242)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_AgentUpgradeAction{AgentUpgradeAction: &tunnelv1.AgentUpgradeAction{
+		Action: tunnelv1.AgentUpgradeActionType_AGENT_UPGRADE_ACTION_CHECK,
+	}}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+
+	frame := f.recv(sess)
+	if pong := frame.GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatalf("expected only a Pong, got %v: a nil AgentUpgrader must never send a report", frame)
+	}
+}
+
+func TestControlAgentUpgradeReportsOnChangeOnly(t *testing.T) {
+	upgrader := &fakeAgentUpgrader{status: agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateIdle}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.AgentUpgrader = upgrader
+	})
+	f.start()
+	sess := f.connect()
+	if f.recv(sess).GetAgentUpgrade() == nil {
+		t.Fatal("no initial AgentUpgradeReport right after connecting")
+	}
+
+	// Unchanged: the periodic poll must stay quiet, same proof technique as
+	// expectNoStatus — a marker Ping's Pong must be the very next frame.
+	f.advance(2*time.Second, 1)
+	marker := int64(1)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+	if pong := f.recv(sess).GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatal("an unchanged agent upgrade status must not be reported on the periodic poll")
+	}
+
+	// Changed: the next poll must carry it.
+	upgrader.setStatus(agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateFailed, Reason: agentupgradestatus.ReasonNotImplemented})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetAgentUpgrade()
+	if report == nil {
+		t.Fatal("a changed agent upgrade status must be reported on the next periodic poll")
+	}
+	if report.GetState() != tunnelv1.AgentUpgradeState_AGENT_UPGRADE_STATE_FAILED {
+		t.Fatalf("report = %v, want FAILED", report)
 	}
 }
