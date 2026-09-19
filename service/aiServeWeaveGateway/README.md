@@ -252,7 +252,7 @@ aiserveweave-gateway \
 
 `POST /v1/responses` **在前门转换成内部 canonical 请求**，不新增隧道操作——这是 README「外部协议只存在于系统边界」的字面落实，并且换来一件具体的好处：只会 Chat Completions 的后端（Ollama 就是）在不知道这个 API 存在的情况下也能服务 Responses 请求。vLLM 自己的 `/v1/responses` 因此没有被使用。
 
-转换规则：`instructions` → 打头的 system 消息；`input` 的三种形式（裸字符串、`{role, content}` 数组、带 `input_text`/`output_text`/`input_image` 部件的数组）→ 同一份消息列表；`max_output_tokens` → `MaxTokens`；`text.format` → `ResponseFormat`；工具定义从 Responses 的扁平形状转成 Chat 的嵌套形状。**`input_image` 部件已支持**（STATUS.md 的 P2 ChatMessage.Content 结构化改造，`inputItemContent`）：`image_url`（裸字符串，不像 Chat Completions 那样嵌套在对象里）与可选 `detail` 映射进 `runtime.ChatMessage.ContentParts`；一个纯文本部件数组仍然收敛成普通字符串 `Content`，与加入这项之前逐字节一致。
+转换规则：`instructions` → 打头的 system 消息；`input` 的三种形式（裸字符串、`{role, content}` 数组、带 `input_text`/`output_text`/`input_image`/`input_file` 部件的数组）→ 同一份消息列表；`max_output_tokens` → `MaxTokens`；`text.format` → `ResponseFormat`；工具定义从 Responses 的扁平形状转成 Chat 的嵌套形状。**`input_image` 部件已支持**（STATUS.md 的 P2 ChatMessage.Content 结构化改造，`inputItemContent`）：`image_url`（裸字符串，不像 Chat Completions 那样嵌套在对象里）与可选 `detail` 映射进 `runtime.ChatMessage.ContentParts`；一个纯文本部件数组仍然收敛成普通字符串 `Content`，与加入这项之前逐字节一致。**`input_file` 部件也已支持**（STATUS.md 的 P2 多模态输入，紧接图片支持之后交付）：内联的 `file_data`（data: URI）与可选 `filename` 映射进 `runtime.ContentPart` 的 `"file"` 部件（`runtime.ContentFile`）；指名 `file_id`（引用 OpenAI 自己 Files API 已上传的文件）而非内联携带 `file_data` 的按名字拒绝，本 Gateway 没有那个 Files API 可用来解析这个引用。
 
 **不支持的字段被指名拒绝（400），不是静默忽略**，对应 README「不能静默丢弃参数」：
 
@@ -261,7 +261,12 @@ aiserveweave-gateway \
 | `previous_response_id` / `store` | 仅在配置了持久化会话历史的控制面时才被兑现（STATUS.md 的 P2「Responses 持久会话」，见下一节）；未配置控制面、或调用方未认证到真实租户时仍被指名拒绝——续接一段对话既需要 Gateway 持有它，又需要一个可供限定范围的租户 |
 | `background` | 需要跨请求的服务端异步任务，本 Gateway 没有近似的东西 |
 | 内置工具（`web_search`、`file_search`、`code_interpreter`、`mcp`） | 由 OpenAI 自己的服务执行。本 Gateway 只把请求转给模型、不运行任何东西 |
-| 音频/文件输入部件（`input_audio`、`input_file`） | 需要一种本仓库尚不具备的 canonical 表示——`input_image` 已经有了（见上），这两种仍然没有 |
+| 音频输入部件（`input_audio`） | Responses API 的标准多模态输入部件里没有这个形状（`input_text`/`input_image`/`input_file` 三种，不含音频）；`POST /v1/chat/completions`（`chat.go`）已支持同名部件——见下一段 |
+| 指名 `file_id` 的 `input_file` | 需要一个 OpenAI Files API，本 Gateway 没有 |
+
+**`POST /v1/chat/completions`（`chat.go`）额外支持 `input_audio` 部件**（STATUS.md 的 P2 多模态输入）：内联的 `input_audio.data`（base64）与 `input_audio.format` 映射进 `runtime.ContentPart` 的 `"input_audio"` 部件（`runtime.ContentAudio`），与该端点已有的 `image_url` 支持同一形状；Chat Completions 本身未定义文件/文档块，因此这个前门不接受 `input_file`（见 Responses 与 Anthropic Messages 两节）。
+
+**多模态部件的能力门禁**：`image_url`/`input_audio`/`file` 部件分别要求 `runtime.CapabilityVision`/`CapabilityAudioInput`/`CapabilityDocumentInput`（`oaibase.ChatCapabilities`，三个前门共用同一份判定），本仓库当前没有任何适配器发布后两项——协议已经在三个前门、隧道 proto（`ContentAudio`/`ContentFile` 消息）与 `common/runtime/openai` 的出站 DTO（`input_audio`/`file` 内容部件）之间全程打通，但在真正支持音频输入或文档理解的后端接入之前，携带这两种部件的请求会被本地拒绝为能力不支持而不是假定可行——与音频转录、Rerank 同一先例。
 
 **流式的事件嵌套是自己造出来的。** 下游隧道递上来的始终是一串扁平 delta，而 Responses 客户端的状态机建立在 `response` → `output_item` → `content_part` 的边界上，因此前门按那个顺序发：`response.created` → `in_progress` → `output_item.added` → `content_part.added` → `output_text.delta`×N → `output_text.done` → `content_part.done` → `output_item.done` → `completed`。`sequence_number` 在整条流上严格递增，那是客户端用来发现丢帧的东西。中途断流发 `response.failed`——响应头已经出去了，失败无法再表现为状态码。
 
@@ -367,11 +372,12 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 `POST /v1/images/generations`（STATUS.md 的 P2）把 OpenAI-compatible 图像生成请求映射到管理员指定的单一 ComfyUI 工作流模板，边界设计见 [P2 设计文档「图像生成映射到 ComfyUI」](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md)。
 
 - **`-images-workflow-id` 未配置时该路由照常挂载但答 404**，与其余工作流路由「路由总是挂载、由配置决定行为」的既有模式一致。配置了但对应模板在启动期缺少必填 `prompt` 字符串输入、或没有至少一个 `Type == "image"` 的 `Output`，进程直接启动失败（`main.go` 的 `validateImagesWorkflow`）——这是一次性静态检查，**不会**在 `-workflow-source=controlplane` 热替换目录时重新触发；一次剥离了所需字段的重新发布，只会在下一次请求时表现为 400/500，不是启动失败。
-- **约定优于配置**：调用方的 `prompt` 绑定到模板声明的 `prompt` 输入，`size`（`"WIDTHxHEIGHT"`）仅在模板同时声明了 `width`/`height` 整数输入时才被接受，否则按名字拒绝。没有单独的输入名映射配置——这样模板经控制面热替换时，映射关系不会与它的 `Inputs` 声明脱节。
+- **约定优于配置**：调用方的 `prompt` 绑定到模板声明的 `prompt` 输入，`size`（`"WIDTHxHEIGHT"`）仅在模板同时声明了 `width`/`height` 整数输入时才被接受，`quality`/`style` 同理仅在模板分别声明了同名字符串输入时才被接受，否则均按名字拒绝。没有单独的输入名映射配置——这样模板经控制面热替换时，映射关系不会与它的 `Inputs` 声明脱节。
 - **全程同步**：内部经 `scheduler.SubmitWorkflow`（与 `/v1/workflows/{id}/runs` 共用同一个入口，因此正确参与 P2 有界排队）提交后，以注入的 `runtime.Clock` 驱动的 500ms 固定间隔轮询 `WorkflowStatus` 直到终态或 `-images-generation-timeout`（默认 120s）超时；超时答 504，运行本身在节点上继续、不被取消，job 记录早于轮询循环写入，因此仍可用 `GET /v1/jobs/{job_id}` 查询。
 - **产物筛选是运行期的扩展名约定，不是结构化的图判定**：`runtime.ArtifactRef` 不携带节点身份，因此无法把一次产物与模板声明的哪个 `Output.Node` 关联；实现上，`WorkflowArtifacts()` 结果里 `Type == "output"` 且文件名后缀属于已知图片扩展名（`.png .jpg .jpeg .webp .gif .bmp`）的才被当作生成图像，其余（包括模板作者自己保存的非图像调试产物）静默跳过。零个合格产物答 500。
 - **`response_format=b64_json`（默认）** 经 `OpenArtifact` 有界读取（`MaxImageResponseBytes` 32 MiB，刻意远小于产物传输本身的 512 MiB 上限——把一个足尺寸产物 base64 膨胀进一个 JSON 响应体不是同步处理器该做的事）后 base64 编码；**`response_format=url`** 直接返回既有的 `GET /v1/artifacts/{artifact_id}` 路径，不新增同步持久化，靠该路径本就有的「优先读持久副本、失败回退实时节点拉取」覆盖异步持久化器还没赶上的窗口。
-- **`n` 目前只接受 1**，`quality`/`style` 未实现，均按名字拒绝而不是静默忽略。
+- **`n` 目前只接受 1**，按名字拒绝而不是静默忽略。
+- **`quality`/`style` 与 `size` 同一约定**：调用方给出的 `quality`/`style` 只有在已配置模板同时声明了名为 `quality`/`style` 的输入时才会被兑现，否则按名字拒绝；本端点不解析或校验它们的取值（OpenAI 自己的 `"standard"/"hd"`、`"vivid"/"natural"` 枚举是 DALL-E-3 专属的，而这里的模板是任意一张 ComfyUI 图），原始字符串直接绑定给模板，与 `prompt` 相同。
 - 本项实现过程中发现并修复了一处独立于本功能之外的既有缺陷：`runtime.WorkflowStatus.OutOfMemory` 此前从未真正跨隧道传输（`tunnel.proto`/`common/tunnelwire` 都缺这个字段），意味着 A06 的 `gateway_workflow_job_oom_total` 指标在生产环境里从未被真正观测到过 true，详见设计文档 2.5 节。
 - 本机无真实 ComfyUI/GPU 环境验证，与 A06 同一先例，默认测试套件（假节点）作为交付依据。
 
@@ -384,7 +390,8 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **工具调用（`tools`/`tool_choice`/`tool_use`/`tool_result`）已支持，复用既有 `ToolCalls`/`ToolCallID` 字段，不新增核心类型**：设计文档§四.3 原本把这层交互形状列为独立缺口，本轮核实后发现今天的 `runtime.ChatMessage.ToolCalls`/`ToolCallID`——OpenAI 前门早已使用的同一对字段——足够表达它。`tools`（Anthropic 扁平的 `{name, description, input_schema}` 形状，无 `"function"` 包装）映射成 `runtime.Tool{Type:"function", ...}`；`tool_choice` 的 `"auto"`/`"none"` 原样传递，`"any"`（至少调用一个工具）映射到 OpenAI 词汇里最接近的 `"required"`，`"tool"`（指名一个工具）重新编码成 OpenAI 具名工具选择的对象形状；`disable_parallel_tool_use` 没有对应的逐请求旋钮，被静默忽略——与 `ollama.go` 对 `keep_alive` 的处理同一先例。一条 assistant 消息里的 `"tool_use"` 块变成该消息的 `ToolCalls`（可以与同一回合的文本块共存，就像 OpenAI 的 assistant 消息能同时携带 `Content` 和 `ToolCalls` 一样）；一条 user 消息里的 `"tool_result"` 块被拆分成一条独立的合成 `"tool"` 角色消息（`ToolCallID` + 结果文本），因为 Anthropic 把工具结果嵌在 user 回合的内容块里，而其余每个前门的 canonical 形状都要求它是一条独立消息——原始块顺序在拆分后的消息切片里保持不变。`tool_result.content` 里的图片块目前按名字拒绝：还没有任何前门的 `"tool"` 角色消息携带 `ContentParts`。
 - **流式响应里的工具调用遵循 Anthropic 自己的顺序纪律**：内容块严格顺序化，一次只开一个——收到第一个工具调用增量时，若开头的文本块（index 0）尚未关闭就先关闭它，再为该工具调用开一个新的 `tool_use` 块（`content_block_start` 携带 `id`/`name`，`input` 先给空对象）；后续参数片段以 `input_json_delta.partial_json` 逐段追加，从不在服务端拼接解析。这依赖一个未强制校验的假设：本仓库目前对接的 OpenAI 兼容后端都是把一次工具调用完整流完再开始下一次，不会把两个调用的参数片段交替发送——真交替到达时，本实现会在收到新索引时把上一个块关闭、开一个新块，仍能产出合法但更琐碎的分块序列，而不是缓冲重排（AGENTS.md「任何一跳都不得无界缓冲」）。
 - **`system` 字段的归约规则不变，仍是纯文本**：顶层 `system`（字符串，或全为 `"text"` 块的数组）映射成一条前置的 `Role: "system"` 消息——Anthropic 协议本身把 `system` 定义为纯文本，从不携带图片或工具块，因此它复用的是更窄的 `anthropicText`，与 `messages[i].content` 走的 `anthropicMessageToRuntime` 分开维护。`messages[i].role` 只接受 `"user"`/`"assistant"`，其余角色（含 Anthropic 协议里不存在于 `messages` 数组的 `"system"`）按名字拒绝。
-- **仍按名字拒绝的内容块：`document`、`thinking`/`redacted_thinking` 等**——canonical 类型里没有地方安放它们，与不支持的图片来源类型（如 `"file"`）同一处理方式。
+- **`document` 内容块已支持**（STATUS.md 的 P2 多模态输入，紧接图片支持之后交付）：`source.type` 为 `"base64"`（`media_type`+`data`）转换成 `data:` URI、`"url"` 直接透传——与 `image` 块共用同一个来源归约逻辑（`anthropicImageSourceJSON.toURL`），只是落进 `runtime.ContentPart` 的 `"file"` 部件（`runtime.ContentFile{URL, Filename}`）而不是 `image_url`；可选的 `title` 字段透传为 `Filename`。一个含 `document`（与含 `image` 同理）的内容块运行不再把 `text` 块收敛成纯字符串，而是各自渲染成 `ContentPart`。
+- **仍按名字拒绝的内容块：`thinking`/`redacted_thinking` 等**——canonical 类型里没有地方安放它们；`document`/`image` 来源里指名 `"file"`（引用 Anthropic 自己 Files API 已上传的文件）同样按名字拒绝，本 Gateway 没有那个 Files API 可用来解析这个引用。
 - **`max_tokens` 是必填字段**，Anthropic 协议本身如此要求；缺失或非正数答 400，不像 OpenAI 前门那样是可选参数。
 - **流式响应是 Anthropic 自己的具名 SSE 帧**（`event: <name>\ndata: <json>\n\n`），不是 OpenAI 前门 `chat.go` 用的裸 `data:` 帧；两者共用底层 `runtime.Stream[runtime.ChatEvent]`，只是 `httpapi/anthropic.go` 另有一套 `writeAnthropicSSE`。`message_start`/`content_block_start` 在第一次 `Recv` 之前就无条件写出（不像 OpenAI 前门那样懒等首个 delta），这样即使一次生成完全没有产出内容，事件序列依然完整；结束时依次写出 `content_block_stop`/`message_delta`（携带 `stop_reason` 与 `usage`）/`message_stop`。
 - **`stop_reason` 由后端不透明的 finish reason（OpenAI 风格：`"stop"`/`"length"`/`"tool_calls"`……）映射到 Anthropic 封闭词汇**（`anthropicStopReason`）：`"length"` → `"max_tokens"`，`"tool_calls"` → `"tool_use"`，其余（含空字符串）→ `"end_turn"`。

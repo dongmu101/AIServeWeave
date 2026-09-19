@@ -145,15 +145,21 @@ type anthropicMessageJSON struct {
 }
 
 // anthropicContentBlockJSON is one element of a "content" array: "text",
-// "image", "tool_use" and "tool_result" are the block types accepted on
-// input; anthropicMessageToRuntime rejects any other type by name. The same
-// struct doubles as the output content block shape, where Type is "text" or
-// "tool_use" — a response is never constructed with an image or tool_result
-// block.
+// "image", "document", "tool_use" and "tool_result" are the block types
+// accepted on input; anthropicMessageToRuntime rejects any other type by
+// name. The same struct doubles as the output content block shape, where
+// Type is "text" or "tool_use" — a response is never constructed with an
+// image, document or tool_result block.
 type anthropicContentBlockJSON struct {
 	Type   string                    `json:"type"`
 	Text   string                    `json:"text,omitempty"`
 	Source *anthropicImageSourceJSON `json:"source,omitempty"`
+	// Title is a "document" block's optional caption, carried through as
+	// runtime.ContentFile.Filename; images carry no equivalent field.
+	//
+	// Title 是 "document" 块的可选说明文字，透传为 runtime.ContentFile.Filename；
+	// 图片没有对应的字段。
+	Title string `json:"title,omitempty"`
 
 	// ID, Name and Input are set on a "tool_use" block (both directions):
 	// input carries the assistant's arguments as a JSON object, mirroring
@@ -171,10 +177,10 @@ type anthropicContentBlockJSON struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 }
 
-// anthropicImageSourceJSON is an "image" content block's source. Anthropic
-// defines two shapes: inline base64 bytes ("base64", with media_type and
-// data) and a fetchable URL ("url"). Both translate to
-// runtime.ContentImageURL.URL — see toImageURL.
+// anthropicImageSourceJSON is an "image" or "document" content block's
+// source. Anthropic defines two shapes for both block types: inline base64
+// bytes ("base64", with media_type and data) and a fetchable URL ("url").
+// Both translate to a single URL string — see toURL.
 type anthropicImageSourceJSON struct {
 	Type      string `json:"type"`
 	MediaType string `json:"media_type,omitempty"`
@@ -182,27 +188,29 @@ type anthropicImageSourceJSON struct {
 	URL       string `json:"url,omitempty"`
 }
 
-// toImageURL reduces an Anthropic image source to the single URL string
-// runtime.ContentImageURL carries: a base64 source becomes a data: URI
-// (the same inline form OpenAI's own image_url.url accepts), a url source
-// passes through unchanged.
-func (s *anthropicImageSourceJSON) toImageURL() (string, error) {
+// toURL reduces an Anthropic image or document source to the single URL
+// string runtime.ContentImageURL.URL / runtime.ContentFile.URL carries: a
+// base64 source becomes a data: URI (the same inline form OpenAI's own
+// image_url.url accepts), a url source passes through unchanged. blockType
+// names the calling content block ("image" or "document") for its error
+// messages.
+func (s *anthropicImageSourceJSON) toURL(blockType string) (string, error) {
 	if s == nil {
-		return "", errors.New(`an "image" content block requires "source"`)
+		return "", fmt.Errorf("an %q content block requires \"source\"", blockType)
 	}
 	switch s.Type {
 	case "base64":
 		if s.MediaType == "" || s.Data == "" {
-			return "", errors.New(`image source of type "base64" requires "media_type" and "data"`)
+			return "", errors.New(`source of type "base64" requires "media_type" and "data"`)
 		}
 		return "data:" + s.MediaType + ";base64," + s.Data, nil
 	case "url":
 		if s.URL == "" {
-			return "", errors.New(`image source of type "url" requires "url"`)
+			return "", errors.New(`source of type "url" requires "url"`)
 		}
 		return s.URL, nil
 	default:
-		return "", fmt.Errorf("image source type %q is not supported", s.Type)
+		return "", fmt.Errorf("source type %q is not supported", s.Type)
 	}
 }
 
@@ -280,20 +288,21 @@ func anthropicToolResultContent(raw json.RawMessage) (string, error) {
 // anthropicContentRun converts one uninterrupted run of content blocks
 // (never containing a "tool_result" — anthropicMessageToRuntime splits on
 // those before calling this) into a single canonical message's
-// Content/ContentParts/ToolCalls. A run with no "image" block collapses its
-// "text" blocks into one concatenated string, matching anthropicText's
-// plain-text behavior; a run containing at least one "image" instead
-// renders every text/image block as its own ContentPart, in order — the
-// same two-mode split anthropicMessageContent used before tool blocks
-// existed. "tool_use" blocks accumulate into ToolCalls regardless of mode,
-// since Anthropic freely mixes a text block and one or more tool_use blocks
-// in the same assistant turn, exactly like an OpenAI assistant message
-// carrying both Content and ToolCalls.
+// Content/ContentParts/ToolCalls. A run with no "image" or "document" block
+// collapses its "text" blocks into one concatenated string, matching
+// anthropicText's plain-text behavior; a run containing at least one
+// "image" or "document" instead renders every text/image/document block as
+// its own ContentPart, in order — the same two-mode split
+// anthropicMessageContent used before tool blocks existed. "tool_use"
+// blocks accumulate into ToolCalls regardless of mode, since Anthropic
+// freely mixes a text block and one or more tool_use blocks in the same
+// assistant turn, exactly like an OpenAI assistant message carrying both
+// Content and ToolCalls.
 func anthropicContentRun(blocks []anthropicContentBlockJSON) (text string, parts []runtime.ContentPart, calls []runtime.ToolCall, err error) {
-	hasImage := false
+	hasMultimodal := false
 	for _, b := range blocks {
-		if b.Type == "image" {
-			hasImage = true
+		if b.Type == "image" || b.Type == "document" {
+			hasMultimodal = true
 			break
 		}
 	}
@@ -301,17 +310,23 @@ func anthropicContentRun(blocks []anthropicContentBlockJSON) (text string, parts
 	for _, b := range blocks {
 		switch b.Type {
 		case "text":
-			if hasImage {
+			if hasMultimodal {
 				parts = append(parts, runtime.ContentPart{Type: "text", Text: b.Text})
 			} else {
 				sb.WriteString(b.Text)
 			}
 		case "image":
-			url, err := b.Source.toImageURL()
+			url, err := b.Source.toURL("image")
 			if err != nil {
 				return "", nil, nil, err
 			}
 			parts = append(parts, runtime.ContentPart{Type: "image_url", ImageURL: &runtime.ContentImageURL{URL: url}})
+		case "document":
+			url, err := b.Source.toURL("document")
+			if err != nil {
+				return "", nil, nil, err
+			}
+			parts = append(parts, runtime.ContentPart{Type: "file", File: &runtime.ContentFile{URL: url, Filename: b.Title}})
 		case "tool_use":
 			if b.ID == "" || b.Name == "" {
 				return "", nil, nil, errors.New(`a "tool_use" content block requires "id" and "name"`)
@@ -329,7 +344,7 @@ func anthropicContentRun(blocks []anthropicContentBlockJSON) (text string, parts
 			return "", nil, nil, fmt.Errorf("content block type %q is not supported by this Anthropic Messages endpoint", b.Type)
 		}
 	}
-	if !hasImage {
+	if !hasMultimodal {
 		text = sb.String()
 	}
 	return text, parts, calls, nil

@@ -255,6 +255,12 @@ func ChatCapabilities(req runtime.ChatRequest) []runtime.Capability {
 	if requestHasImage(req) {
 		caps = append(caps, runtime.CapabilityVision)
 	}
+	if requestHasContentPart(req, "input_audio") {
+		caps = append(caps, runtime.CapabilityAudioInput)
+	}
+	if requestHasContentPart(req, "file") {
+		caps = append(caps, runtime.CapabilityDocumentInput)
+	}
 	return caps
 }
 
@@ -263,9 +269,18 @@ func ChatCapabilities(req runtime.ChatRequest) []runtime.Capability {
 // request actually needs it — a text-only request must not be rejected on
 // a model whose vision support is unknown or unsupported.
 func requestHasImage(req runtime.ChatRequest) bool {
+	return requestHasContentPart(req, "image_url")
+}
+
+// requestHasContentPart reports whether any message carries a content part
+// of the given type, so ChatCapabilities can require the matching
+// capability (CapabilityAudioInput, CapabilityDocumentInput, …) only when a
+// request actually uses that part type — the same judge-by-part-type
+// discipline requestHasImage already follows for vision.
+func requestHasContentPart(req runtime.ChatRequest, partType string) bool {
 	for _, m := range req.Messages {
 		for _, p := range m.ContentParts {
-			if p.Type == "image_url" {
+			if p.Type == partType {
 				return true
 			}
 		}

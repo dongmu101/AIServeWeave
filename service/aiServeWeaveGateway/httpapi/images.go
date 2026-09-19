@@ -35,14 +35,28 @@ import (
 // two in lockstep by construction. See main.go's startup validation and the
 // Gateway README's 图像生成 section.
 //
+// Only prompt is required at startup (validateImagesWorkflow). width/
+// height/quality/style are all optional by the same convention: a caller's
+// size/quality/style is honoured only when the configured template declares
+// the matching input name (see templateDeclares), and rejected by name
+// otherwise — this endpoint never invents a template-specific meaning for a
+// value the template itself did not ask for.
+//
 // 本端点按约定（而非逐部署配置）绑定到已配置模板上的这些输入名。一个从控制面
 // 同步来的模板（P03）可以独立于 Gateway 重启被热替换；一张静态的名字映射 flag
 // 会与重新发布后模板声明的 Inputs 悄悄失步，而一个固定、写进文档的约定能从结构上
 // 让两者保持一致。见 main.go 的启动期校验与 Gateway README「图像生成」一节。
+//
+// 启动期只有 prompt 是必需的（validateImagesWorkflow）。width/height/
+// quality/style 都按同一个约定可选：调用方的 size/quality/style 只有在已配置
+// 模板声明了对应输入名时才会被兑现（见 templateDeclares），否则按名字拒绝——
+// 本端点从不替一个模板本身没有要求的值臆造出模板特定的含义。
 const (
-	imagesInputPrompt = "prompt"
-	imagesInputWidth  = "width"
-	imagesInputHeight = "height"
+	imagesInputPrompt  = "prompt"
+	imagesInputWidth   = "width"
+	imagesInputHeight  = "height"
+	imagesInputQuality = "quality"
+	imagesInputStyle   = "style"
 )
 
 // DefaultImagesGenerationTimeout bounds imagesGenerations' whole synchronous
@@ -114,23 +128,37 @@ type imagesRequest struct {
 	// unsupported 拒绝。
 	ResponseFormat string `json:"response_format,omitempty"`
 
-	// Refused below. Each one needs something this endpoint does not have —
-	// see unsupported.
+	// Quality and Style, like Size, are honoured only when the configured
+	// template declares a matching input name (checked by the handler via
+	// templateDeclares, not here — unlike Size this endpoint does not parse
+	// or validate their values, since OpenAI's own "standard"/"hd" and
+	// "vivid"/"natural" enums are DALL-E-3-specific and this endpoint's
+	// template is an arbitrary ComfyUI graph, not DALL-E-3; the raw string
+	// is passed straight to the template, same as prompt).
 	//
-	// 以下字段会被拒绝。每一个都需要本端点不具备的东西——见 unsupported。
-	N       *int   `json:"n,omitempty"`
+	// Quality 与 Style，和 Size 一样，只有在已配置模板声明了对应输入名时才会
+	// 被兑现（由处理器经 templateDeclares 检查，不在这里）——与 Size 不同，
+	// 本端点不解析或校验它们的取值，因为 OpenAI 自己的 "standard"/"hd" 与
+	// "vivid"/"natural" 枚举是 DALL-E-3 专属的，而本端点的模板是任意一张
+	// ComfyUI 图，不是 DALL-E-3；原始字符串直接传给模板，与 prompt 相同。
 	Quality string `json:"quality,omitempty"`
 	Style   string `json:"style,omitempty"`
+
+	// Refused below. It needs something this endpoint does not have — see
+	// unsupported.
+	//
+	// 以下字段会被拒绝。它需要本端点不具备的东西——见 unsupported。
+	N *int `json:"n,omitempty"`
 }
 
 // unsupported names the field this endpoint cannot honour, or empty when the
-// request only asks for things it can do. size is checked separately by the
-// caller, since whether it can be honoured depends on the configured
-// template's declared inputs, not on this request alone.
+// request only asks for things it can do. size/quality/style are checked
+// separately by the caller, since whether each can be honoured depends on
+// the configured template's declared inputs, not on this request alone.
 //
 // unsupported 指出本端点无法兑现的那个字段；请求只要求它做得到的事情时返回
-// 空。size 由调用方另行检查，因为它能否被兑现取决于已配置模板声明的输入，
-// 而不只取决于这一个请求本身。
+// 空。size/quality/style 由调用方另行检查，因为它们能否被兑现取决于已配置
+// 模板声明的输入，而不只取决于这一个请求本身。
 func (req imagesRequest) unsupported() string {
 	switch {
 	case req.N != nil && *req.N != 1:
@@ -146,10 +174,6 @@ func (req imagesRequest) unsupported() string {
 		// 按名字拒绝让首版保持简单；STATUS.md 把这记作收窄范围的首版，不是
 		// 永久上限。
 		return "n"
-	case req.Quality != "":
-		return "quality"
-	case req.Style != "":
-		return "style"
 	}
 	switch req.ResponseFormat {
 	case "", "b64_json", "url":
@@ -249,7 +273,7 @@ func selectImageArtifacts(refs []runtime.ArtifactRef) []runtime.ArtifactRef {
 //
 // promptInputs 从一个已校验的请求构造 tpl.Bind 接受的标量输入映射。把它拆成
 // 一个小函数，只是为了让 imagesGenerations 本身保持可读。
-func promptInputs(prompt string, width, height int, hasSize bool) (map[string]json.RawMessage, error) {
+func promptInputs(prompt string, width, height int, hasSize bool, quality, style string) (map[string]json.RawMessage, error) {
 	promptJSON, err := json.Marshal(prompt)
 	if err != nil {
 		return nil, err
@@ -266,6 +290,20 @@ func promptInputs(prompt string, width, height int, hasSize bool) (map[string]js
 		}
 		inputs[imagesInputWidth] = widthJSON
 		inputs[imagesInputHeight] = heightJSON
+	}
+	if quality != "" {
+		qualityJSON, err := json.Marshal(quality)
+		if err != nil {
+			return nil, err
+		}
+		inputs[imagesInputQuality] = qualityJSON
+	}
+	if style != "" {
+		styleJSON, err := json.Marshal(style)
+		if err != nil {
+			return nil, err
+		}
+		inputs[imagesInputStyle] = styleJSON
 	}
 	return inputs, nil
 }

@@ -229,34 +229,45 @@ func (req responsesRequest) messages() ([]runtime.ChatMessage, error) {
 // responsesContentPartJSON is one element of an input item's typed-part
 // content array. ImageURL is a bare string on this API — unlike Chat
 // Completions' nested image_url.url — matching the real Responses API's
-// "input_image" shape.
+// "input_image" shape. FileData/Filename mirror the real "input_file"
+// shape's inline form; FileID mirrors its other form (a reference to a file
+// already uploaded to OpenAI's own Files API) which this Gateway has no way
+// to resolve and rejects by name — see inputItemContent.
 type responsesContentPartJSON struct {
 	Type     string `json:"type"`
 	Text     string `json:"text,omitempty"`
 	ImageURL string `json:"image_url,omitempty"`
 	Detail   string `json:"detail,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
 }
 
 // inputItemContent converts one input item's "content" field into the
 // canonical chat message content (STATUS.md's P2 ChatMessage.Content
-// structured rework): a bare string, or an array of parts that are all
-// text-shaped ("input_text"/"output_text"/"text"/""), collapses to plain
-// text — byte-identical to this function's pre-ContentParts behavior, so
-// the overwhelmingly common text-only case is unaffected by images
-// existing. An array containing an "input_image" part builds ContentParts
-// instead; any other part type (input_audio, input_file, …) is still
-// rejected by name: accepting it as empty text would silently answer a
-// question nobody asked, and there is still nowhere in the canonical type
-// to put it.
+// structured rework and its multimodal-input follow-on): a bare string, or
+// an array of parts that are all text-shaped
+// ("input_text"/"output_text"/"text"/""), collapses to plain text —
+// byte-identical to this function's pre-ContentParts behavior, so the
+// overwhelmingly common text-only case is unaffected by images or files
+// existing. An array containing an "input_image" or "input_file" part
+// builds ContentParts instead; any other part type (input_audio, …) is
+// still rejected by name: accepting it as empty text would silently answer
+// a question nobody asked, and there is still nowhere in the canonical type
+// to put it. An "input_file" naming file_id rather than carrying file_data
+// inline is also rejected by name — this Gateway has no OpenAI Files API of
+// its own to resolve that reference against.
 //
 // inputItemContent 把一个输入项目的 "content" 字段转换成 canonical 聊天消息
-// 内容（STATUS.md 的 P2 ChatMessage.Content 结构化改造）：裸字符串，或者全部由
-// 文本形状部件（"input_text"/"output_text"/"text"/空）组成的数组，都会收敛为
-// 纯文本——与本函数加入 ContentParts 之前的行为逐字节一致，因此绝大多数的
-// 纯文本情形不受图片存在的影响。含 "input_image" 部件的数组则改为构建
-// ContentParts；其他任何部件类型（input_audio、input_file……）仍按名字拒绝：
-// 把它当作空文本接受，等于默默回答一个没人问过的问题，且 canonical 类型里
-// 仍然没有地方安放它。
+// 内容（STATUS.md 的 P2 ChatMessage.Content 结构化改造及其多模态输入后续）：
+// 裸字符串，或者全部由文本形状部件（"input_text"/"output_text"/"text"/空）
+// 组成的数组，都会收敛为纯文本——与本函数加入 ContentParts 之前的行为逐字节
+// 一致，因此绝大多数的纯文本情形不受图片或文件存在的影响。含 "input_image"
+// 或 "input_file" 部件的数组则改为构建 ContentParts；其他任何部件类型
+// （input_audio……）仍按名字拒绝：把它当作空文本接受，等于默默回答一个没人
+// 问过的问题，且 canonical 类型里仍然没有地方安放它。一个指名 file_id 而非
+// 内联携带 file_data 的 "input_file" 同样按名字拒绝——本 Gateway 没有自己的
+// OpenAI Files API 可用来解析这个引用。
 func inputItemContent(raw json.RawMessage) (text string, parts []runtime.ContentPart, err error) {
 	if len(raw) == 0 {
 		return "", nil, fmt.Errorf("an input item has no content")
@@ -290,6 +301,17 @@ func inputItemContent(raw json.RawMessage) (text string, parts []runtime.Content
 		switch p.Type {
 		case "input_text", "output_text", "text", "":
 			parts = append(parts, runtime.ContentPart{Type: "text", Text: p.Text})
+		case "input_file":
+			if p.FileID != "" {
+				return "", nil, fmt.Errorf(`an "input_file" content part naming "file_id" is not supported; supply "file_data" inline`)
+			}
+			if p.FileData == "" {
+				return "", nil, fmt.Errorf(`an "input_file" content part requires "file_data"`)
+			}
+			parts = append(parts, runtime.ContentPart{
+				Type: "file",
+				File: &runtime.ContentFile{URL: p.FileData, Filename: p.Filename},
+			})
 		case "input_image":
 			if p.ImageURL == "" {
 				return "", nil, fmt.Errorf(`an "input_image" content part requires "image_url"`)

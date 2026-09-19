@@ -185,6 +185,24 @@ func TestConvertChatRequestRoundTrip(t *testing.T) {
 				}},
 			},
 		},
+		{
+			// STATUS.md's P2 multimodal input: an "input_audio" and a "file"
+			// content part must both round trip across the tunnel proto,
+			// exercising the two fields contentPartsToProto/FromProto added
+			// alongside image_url.
+			name: "message with audio and file content parts",
+			req: runtime.ChatRequest{
+				Model: "llama3",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "text", Text: "summarize these"},
+						{Type: "input_audio", Audio: &runtime.ContentAudio{Data: "YmFzZTY0LWF1ZGlv", Format: "wav"}},
+						{Type: "file", File: &runtime.ContentFile{URL: "data:application/pdf;base64,cGRm", Filename: "report.pdf"}},
+					},
+				}},
+			},
+		},
 	}
 
 	for _, tt := range tests {

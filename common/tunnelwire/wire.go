@@ -822,6 +822,12 @@ func contentPartsToProto(parts []runtime.ContentPart) []*tunnelv1.ContentPart {
 		if p.ImageURL != nil {
 			pb.ImageUrl = &tunnelv1.ContentImageURL{Url: p.ImageURL.URL, Detail: p.ImageURL.Detail}
 		}
+		if p.Audio != nil {
+			pb.InputAudio = &tunnelv1.ContentAudio{Data: p.Audio.Data, Format: p.Audio.Format}
+		}
+		if p.File != nil {
+			pb.File = &tunnelv1.ContentFile{Url: p.File.URL, Filename: p.File.Filename}
+		}
 		out[i] = pb
 	}
 	return out
@@ -836,6 +842,12 @@ func contentPartsFromProto(pbs []*tunnelv1.ContentPart) []runtime.ContentPart {
 		p := runtime.ContentPart{Type: pb.GetType(), Text: pb.GetText()}
 		if img := pb.GetImageUrl(); img != nil {
 			p.ImageURL = &runtime.ContentImageURL{URL: img.GetUrl(), Detail: img.GetDetail()}
+		}
+		if audio := pb.GetInputAudio(); audio != nil {
+			p.Audio = &runtime.ContentAudio{Data: audio.GetData(), Format: audio.GetFormat()}
+		}
+		if file := pb.GetFile(); file != nil {
+			p.File = &runtime.ContentFile{URL: file.GetUrl(), Filename: file.GetFilename()}
 		}
 		out[i] = p
 	}

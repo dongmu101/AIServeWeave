@@ -383,6 +383,54 @@ func TestImagesGenerationsRejectsBadRequests(t *testing.T) {
 	}
 }
 
+// TestImagesGenerationsAcceptsQualityAndStyleWhenTemplateDeclaresThem proves
+// quality/style follow the same template-gated convention as size
+// (STATUS.md's P2 images quality/style parameters): a template that
+// declares matching input names accepts them and the run still succeeds,
+// unlike TestImagesGenerationsRejectsBadRequests' template, which declares
+// neither and rejects quality by name.
+func TestImagesGenerationsAcceptsQualityAndStyleWhenTemplateDeclaresThem(t *testing.T) {
+	// A local graph variant, not the shared textToImageGraph fixture: an
+	// Input can only bind to a field the graph's node already has (unlike
+	// SetGraphField's later, request-time fill-in), so node "9" needs
+	// placeholder "quality"/"style" keys other tests' graphs have no reason
+	// to carry.
+	//
+	// 一个本地的图变体，不是共享的 textToImageGraph 固件：一个 Input 只能绑定
+	// 到图里该节点已经拥有的字段（不同于 SetGraphField 那种请求期才补完的
+	// 写入），因此节点 "9" 需要占位的 "quality"/"style" 键，其他测试的图没有
+	// 理由携带它们。
+	const graphWithQualityStyle = `{
+	  "5": {"class_type": "EmptyLatentImage", "inputs": {"width": 512, "height": 512}},
+	  "6": {"class_type": "CLIPTextEncode", "inputs": {"text": ""}},
+	  "9": {"class_type": "SaveImage", "inputs": {"images": ["8", 0], "quality": "", "style": ""}}
+	}`
+	handle := loadOneTemplate(t, workflow.Template{
+		ID: "text-to-image",
+		Inputs: []workflow.Input{
+			{Name: "prompt", Node: "6", Field: "text", Type: workflow.InputString, Required: true},
+			{Name: "quality", Node: "9", Field: "quality", Type: workflow.InputString},
+			{Name: "style", Node: "9", Field: "style", Type: workflow.InputString},
+		},
+		Outputs: []workflow.Output{{Name: "image", Node: "9", Type: "image"}},
+		Graph:   json.RawMessage(graphWithQualityStyle),
+	})
+	srv, h := newImagesServer(t, httpapi.Config{
+		Workflows: handle, ImagesWorkflowID: "text-to-image",
+	})
+	const imageBytes = "PNG-BYTES-PRETENDING-TO-BE-AN-IMAGE"
+	connectImagesNode(t, h, "node-comfy", "comfy-1",
+		imagesNodeHandler(0, runtime.WorkflowSucceeded, false, "ComfyUI_00001_.png", []byte(imageBytes)))
+
+	resp, body := postImages(t, srv.URL, `{"prompt":"a red fox","quality":"hd","style":"vivid"}`)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+	if len(body.Data) != 1 || body.Data[0].B64JSON == "" {
+		t.Fatalf("data = %+v, want exactly one b64_json image", body.Data)
+	}
+}
+
 func TestImagesGenerationsFailedRunReturnsAGenerationError(t *testing.T) {
 	srv, h := newImagesServer(t, httpapi.Config{
 		Workflows: imagesTemplate(t), ImagesWorkflowID: "text-to-image",

@@ -921,12 +921,15 @@ message ChatMessage {
   repeated ContentPart content_parts = 6;
 }
 
-// ContentPart is one piece of ChatMessage.content_parts: either a text run
-// or an image reference.
+// ContentPart is one piece of ChatMessage.content_parts: a text run, an
+// image reference, an inline audio payload, or an inline file/document
+// reference.
 message ContentPart {
-  string type = 1;                      // "text" or "image_url"
+  string type = 1;                      // "text", "image_url", "input_audio", or "file"
   string text = 2;                      // set when type == "text"
   ContentImageURL image_url = 3;        // set when type == "image_url"
+  ContentAudio input_audio = 4;         // set when type == "input_audio"
+  ContentFile file = 5;                 // set when type == "file"
 }
 
 // ContentImageURL is an image content part's source. url may be an http(s)
@@ -935,6 +938,21 @@ message ContentPart {
 message ContentImageURL {
   string url = 1;
   string detail = 2;                    // optional: "auto" | "low" | "high"
+}
+
+// ContentAudio is an "input_audio" content part's inline payload: base64
+// bytes plus a format string, mirroring OpenAI's own input_audio shape.
+message ContentAudio {
+  string data = 1;
+  string format = 2;                    // e.g. "wav" or "mp3"
+}
+
+// ContentFile is a "file" content part's source: an inline document. url may
+// be an http(s) URL or a data: URI, the same convention as
+// ContentImageURL.url.
+message ContentFile {
+  string url = 1;
+  string filename = 2;                  // optional
 }
 
 message ToolCall {

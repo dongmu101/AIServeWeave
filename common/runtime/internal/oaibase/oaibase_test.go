@@ -116,6 +116,37 @@ func TestChatCapabilitiesCoverOnlyTheFeaturesTheRequestUses(t *testing.T) {
 			},
 			want: []runtime.Capability{runtime.CapabilityChat},
 		},
+		{
+			// STATUS.md's P2 multimodal input: an input_audio part requires
+			// CapabilityAudioInput, the same judge-by-part-type discipline
+			// the image case above already exercises for vision.
+			name: "with an audio content part",
+			req: runtime.ChatRequest{
+				Model: "m",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "input_audio", Audio: &runtime.ContentAudio{Data: "YQ==", Format: "wav"}},
+					},
+				}},
+			},
+			want: []runtime.Capability{runtime.CapabilityChat, runtime.CapabilityAudioInput},
+		},
+		{
+			// STATUS.md's P2 multimodal input: a file part requires
+			// CapabilityDocumentInput.
+			name: "with a file content part",
+			req: runtime.ChatRequest{
+				Model: "m",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "file", File: &runtime.ContentFile{URL: "data:application/pdf;base64,cGRm", Filename: "report.pdf"}},
+					},
+				}},
+			},
+			want: []runtime.Capability{runtime.CapabilityChat, runtime.CapabilityDocumentInput},
+		},
 	}
 
 	for _, tt := range tests {

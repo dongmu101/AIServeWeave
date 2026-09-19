@@ -26,35 +26,45 @@ type chatMessageJSON struct {
 }
 
 // chatContentJSON accepts OpenAI's "content" as either a plain string or an
-// array of content parts (text and image_url) — the same string-or-array
-// pattern stopField below uses for "stop". A pure-text array collapses to
-// Text with Parts left nil, so the overwhelmingly common text-only case
-// produces the exact runtime.ChatMessage.Content behavior this type had
-// before ContentParts existed (STATUS.md's P2 ChatMessage.Content
-// structured rework). MarshalJSON is the mirror: it renders Text as a plain
-// string, which is all a response ever carries — no backend adapter emits
-// image content back.
+// array of content parts (text, image_url, and input_audio) — the same
+// string-or-array pattern stopField below uses for "stop". A pure-text
+// array collapses to Text with Parts left nil, so the overwhelmingly common
+// text-only case produces the exact runtime.ChatMessage.Content behavior
+// this type had before ContentParts existed (STATUS.md's P2
+// ChatMessage.Content structured rework). MarshalJSON is the mirror: it
+// renders Text as a plain string, which is all a response ever carries —
+// no backend adapter emits image content back.
 //
-// chatContentJSON 把 OpenAI 的 "content" 接受为裸字符串或内容片段数组——与下方
-// stopField 处理 "stop" 的字符串-或-数组模式相同。纯文本数组会收敛为 Text，
-// Parts 留空，因此绝大多数的纯文本情形与本类型加入 ContentParts 之前的
-// runtime.ChatMessage.Content 行为完全一致（STATUS.md 的 P2 ChatMessage.Content
-// 结构化改造）。MarshalJSON 是镜像操作：把 Text 渲染成纯字符串，因为响应永远
-// 只携带文本——没有任何适配器会把图片内容传回来。
+// chatContentJSON 把 OpenAI 的 "content" 接受为裸字符串或内容片段数组（文本、
+// image_url 与 input_audio）——与下方 stopField 处理 "stop" 的字符串-或-数组
+// 模式相同。纯文本数组会收敛为 Text，Parts 留空，因此绝大多数的纯文本情形与
+// 本类型加入 ContentParts 之前的 runtime.ChatMessage.Content 行为完全一致
+// （STATUS.md 的 P2 ChatMessage.Content 结构化改造）。MarshalJSON 是镜像操作：
+// 把 Text 渲染成纯字符串，因为响应永远只携带文本——没有任何适配器会把图片
+// 内容传回来。
 type chatContentJSON struct {
 	Text  string
 	Parts []chatContentPartJSON
 }
 
 type chatContentPartJSON struct {
-	Type     string            `json:"type"`
-	Text     string            `json:"text,omitempty"`
-	ImageURL *chatImageURLJSON `json:"image_url,omitempty"`
+	Type       string              `json:"type"`
+	Text       string              `json:"text,omitempty"`
+	ImageURL   *chatImageURLJSON   `json:"image_url,omitempty"`
+	InputAudio *chatInputAudioJSON `json:"input_audio,omitempty"`
 }
 
 type chatImageURLJSON struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"`
+}
+
+// chatInputAudioJSON mirrors OpenAI Chat Completions' input_audio content
+// part (STATUS.md's P2 multimodal input): inline base64 audio bytes plus a
+// format string, for an audio-capable model.
+type chatInputAudioJSON struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
 }
 
 func (c *chatContentJSON) UnmarshalJSON(b []byte) error {
@@ -97,8 +107,10 @@ func (c chatContentJSON) MarshalJSON() ([]byte, error) {
 // something other than pure text (chatContentJSON.UnmarshalJSON only
 // leaves Parts set in that case) into runtime.ContentPart, rejecting any
 // part type this Gateway does not carry through to a backend — an
-// OpenAI-shaped "input_audio" part, for instance, has nowhere to go today,
-// and silently dropping it would answer a request the caller never sent.
+// OpenAI-shaped "input_file" part, for instance, has nowhere to go on this
+// endpoint (Chat Completions itself defines no such block; see responses.go
+// for the front door that does), and silently dropping it would answer a
+// request the caller never sent.
 func toRuntimeContentParts(parts []chatContentPartJSON) ([]runtime.ContentPart, error) {
 	if len(parts) == 0 {
 		return nil, nil
@@ -115,6 +127,14 @@ func toRuntimeContentParts(parts []chatContentPartJSON) ([]runtime.ContentPart, 
 			out[i] = runtime.ContentPart{
 				Type:     "image_url",
 				ImageURL: &runtime.ContentImageURL{URL: p.ImageURL.URL, Detail: p.ImageURL.Detail},
+			}
+		case "input_audio":
+			if p.InputAudio == nil || p.InputAudio.Data == "" {
+				return nil, fmt.Errorf(`messages content part %d of type "input_audio" requires "input_audio.data"`, i)
+			}
+			out[i] = runtime.ContentPart{
+				Type:  "input_audio",
+				Audio: &runtime.ContentAudio{Data: p.InputAudio.Data, Format: p.InputAudio.Format},
 			}
 		default:
 			return nil, fmt.Errorf("content part type %q is not supported", p.Type)

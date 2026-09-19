@@ -19,8 +19,13 @@ func TestImagesRequestUnsupported(t *testing.T) {
 		{name: "n omitted is supported", req: imagesRequest{Prompt: "a fox"}, want: ""},
 		{name: "n=1 is supported", req: imagesRequest{Prompt: "a fox", N: &one}, want: ""},
 		{name: "n=2 is rejected by name", req: imagesRequest{Prompt: "a fox", N: &two}, want: "n"},
-		{name: "quality is rejected by name", req: imagesRequest{Prompt: "a fox", Quality: "hd"}, want: "quality"},
-		{name: "style is rejected by name", req: imagesRequest{Prompt: "a fox", Style: "vivid"}, want: "style"},
+		// quality/style are no longer rejected here — unsupported() defers
+		// to templateDeclares in the handler, the same as size; see
+		// TestImagesGenerationsRejectsBadRequests for the template-gated
+		// rejection and TestPromptInputsIncludesQualityAndStyleWhenSet for
+		// the accepted path.
+		{name: "quality is accepted at this layer", req: imagesRequest{Prompt: "a fox", Quality: "hd"}, want: ""},
+		{name: "style is accepted at this layer", req: imagesRequest{Prompt: "a fox", Style: "vivid"}, want: ""},
 		{name: "response_format b64_json is supported", req: imagesRequest{Prompt: "a fox", ResponseFormat: "b64_json"}, want: ""},
 		{name: "response_format url is supported", req: imagesRequest{Prompt: "a fox", ResponseFormat: "url"}, want: ""},
 		{name: "an unknown response_format is rejected by name", req: imagesRequest{Prompt: "a fox", ResponseFormat: "gif"}, want: "response_format"},
@@ -64,6 +69,34 @@ func TestParseImageSize(t *testing.T) {
 					tt.size, width, height, ok, tt.wantWidth, tt.wantHeight, tt.wantOK)
 			}
 		})
+	}
+}
+
+// TestPromptInputsIncludesQualityAndStyleWhenSet proves promptInputs only
+// adds the quality/style entries when the caller actually supplied them —
+// the handler has already decided, via templateDeclares, that doing so is
+// safe against the configured template before calling this.
+func TestPromptInputsIncludesQualityAndStyleWhenSet(t *testing.T) {
+	inputs, err := promptInputs("a fox", 0, 0, false, "hd", "vivid")
+	if err != nil {
+		t.Fatalf("promptInputs() error = %v", err)
+	}
+	if got := string(inputs[imagesInputQuality]); got != `"hd"` {
+		t.Errorf("inputs[quality] = %s, want %q", got, `"hd"`)
+	}
+	if got := string(inputs[imagesInputStyle]); got != `"vivid"` {
+		t.Errorf("inputs[style] = %s, want %q", got, `"vivid"`)
+	}
+
+	inputs, err = promptInputs("a fox", 0, 0, false, "", "")
+	if err != nil {
+		t.Fatalf("promptInputs() error = %v", err)
+	}
+	if _, ok := inputs[imagesInputQuality]; ok {
+		t.Errorf("inputs = %+v, want no quality entry when unset", inputs)
+	}
+	if _, ok := inputs[imagesInputStyle]; ok {
+		t.Errorf("inputs = %+v, want no style entry when unset", inputs)
 	}
 }
 

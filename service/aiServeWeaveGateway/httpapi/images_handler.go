@@ -84,13 +84,23 @@ func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 			"size is not supported by this gateway's configured template")
 		return
 	}
+	if req.Quality != "" && !templateDeclares(tpl, imagesInputQuality) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_parameter",
+			"quality is not supported by this gateway's configured template")
+		return
+	}
+	if req.Style != "" && !templateDeclares(tpl, imagesInputStyle) {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_parameter",
+			"style is not supported by this gateway's configured template")
+		return
+	}
 	if field := req.unsupported(); field != "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_parameter",
 			field+" is not supported by this gateway")
 		return
 	}
 
-	inputs, err := promptInputs(req.Prompt, width, height, hasSize)
+	inputs, err := promptInputs(req.Prompt, width, height, hasSize, req.Quality, req.Style)
 	if err != nil {
 		h.logger.Error("encoding image generation inputs failed", slog.Any("error", err))
 		writeOpenAIError(w, http.StatusInternalServerError, "api_error", "internal_error", "internal error")

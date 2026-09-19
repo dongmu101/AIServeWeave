@@ -47,6 +47,34 @@ const (
 	// 请求/响应类型、接口新增方法，以及一个让全部既有适配器保持可编译的
 	// oaibase 共享默认实现。
 	CapabilityRerank Capability = "rerank"
+	// CapabilityDocumentInput gates a chat request whose message content
+	// includes a "file" content part (STATUS.md's P2 multimodal input: an
+	// inline document such as a PDF, mirroring Anthropic's "document"
+	// content block and the OpenAI Responses "input_file" part). No adapter
+	// in this repository publishes it yet — see CapabilityRerank's note on
+	// shipping a capability's protocol plumbing ahead of any backend that
+	// grants it.
+	//
+	// CapabilityDocumentInput 为一次聊天请求内容中含有 "file" 内容片段的情形
+	// 门禁（STATUS.md 的 P2 多模态输入：内联附带一份 PDF 等文档，对应
+	// Anthropic 的 "document" 内容块与 OpenAI Responses 的 "input_file"
+	// 部件）。本仓库目前没有任何适配器发布这项能力——协议先于任何授予它的
+	// 后端交付的先例见 CapabilityRerank 的说明。
+	CapabilityDocumentInput Capability = "document_input"
+	// CapabilityAudioInput gates a chat request whose message content
+	// includes an "input_audio" content part (STATUS.md's P2 multimodal
+	// input, mirroring OpenAI Chat Completions' inline audio input for an
+	// audio-capable model). It is distinct from CapabilityAudioTranscription,
+	// which gates the separate /v1/audio/transcriptions endpoint rather than
+	// inline chat content; no adapter in this repository publishes either
+	// yet.
+	//
+	// CapabilityAudioInput 为一次聊天请求内容中含有 "input_audio" 内容片段的
+	// 情形门禁（STATUS.md 的 P2 多模态输入，对应 OpenAI Chat Completions
+	// 面向具备音频能力模型的内联音频输入）。它与 CapabilityAudioTranscription
+	// 不同——后者为独立的 /v1/audio/transcriptions 端点门禁，而不是内联聊天
+	// 内容；本仓库目前对这两项能力都没有任何适配器发布。
+	CapabilityAudioInput Capability = "audio_input"
 )
 
 // CapabilitySource records how a piece of capability evidence was obtained,

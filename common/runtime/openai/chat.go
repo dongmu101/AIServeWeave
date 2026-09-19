@@ -50,14 +50,42 @@ func (m chatMessageDTO) MarshalJSON() ([]byte, error) {
 }
 
 type contentPartDTO struct {
-	Type     string           `json:"type"`
-	Text     string           `json:"text,omitempty"`
-	ImageURL *imageURLPartDTO `json:"image_url,omitempty"`
+	Type       string           `json:"type"`
+	Text       string           `json:"text,omitempty"`
+	ImageURL   *imageURLPartDTO `json:"image_url,omitempty"`
+	InputAudio *inputAudioDTO   `json:"input_audio,omitempty"`
+	// File carries a "file" part's source (STATUS.md's P2 multimodal
+	// input). Unlike image_url/input_audio, this is not a literal OpenAI
+	// Chat Completions wire shape — OpenAI defines no chat-completions file
+	// block, only the Responses API's differently-shaped "input_file". This
+	// repository's own convention stands in, same as Rerank's non-OpenAI
+	// endpoint; no adapter today actually sends it, since nothing publishes
+	// CapabilityDocumentInput yet.
+	//
+	// File 承载一个 "file" 部件的来源（STATUS.md 的 P2 多模态输入）。与
+	// image_url/input_audio 不同，这不是 OpenAI Chat Completions 的字面 wire
+	// 形状——OpenAI 未定义 chat completions 的文件块，只有形状不同的
+	// Responses API "input_file"。本仓库自己的约定在此代为承载，与 Rerank
+	// 那个非 OpenAI 端点同一先例；今天没有任何适配器会真的发出它，因为还
+	// 没有谁发布 CapabilityDocumentInput。
+	File *filePartDTO `json:"file,omitempty"`
 }
 
 type imageURLPartDTO struct {
 	URL    string `json:"url"`
 	Detail string `json:"detail,omitempty"`
+}
+
+// inputAudioDTO mirrors OpenAI Chat Completions' input_audio shape exactly:
+// base64 data plus a format string.
+type inputAudioDTO struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
+}
+
+type filePartDTO struct {
+	FileData string `json:"file_data"`
+	Filename string `json:"filename,omitempty"`
 }
 
 type toolCallDTO struct {
@@ -192,6 +220,12 @@ func toContentPartDTOs(parts []runtime.ContentPart) []contentPartDTO {
 		dto := contentPartDTO{Type: p.Type, Text: p.Text}
 		if p.ImageURL != nil {
 			dto.ImageURL = &imageURLPartDTO{URL: p.ImageURL.URL, Detail: p.ImageURL.Detail}
+		}
+		if p.Audio != nil {
+			dto.InputAudio = &inputAudioDTO{Data: p.Audio.Data, Format: p.Audio.Format}
+		}
+		if p.File != nil {
+			dto.File = &filePartDTO{FileData: p.File.URL, Filename: p.File.Filename}
 		}
 		out[i] = dto
 	}

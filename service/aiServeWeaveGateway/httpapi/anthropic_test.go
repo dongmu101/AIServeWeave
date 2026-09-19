@@ -300,6 +300,42 @@ func TestAnthropicMessagesAcceptsImageBlocks(t *testing.T) {
 	}
 }
 
+// TestAnthropicMessagesAcceptsDocumentBlocks proves an Anthropic "document"
+// content block (base64 source, with an optional title) crosses the whole
+// pipeline the same way TestAnthropicMessagesAcceptsImageBlocks already
+// proves for "image" (STATUS.md's P2 multimodal input, following on the
+// earlier image delivery).
+func TestAnthropicMessagesAcceptsDocumentBlocks(t *testing.T) {
+	srv, h := newServer(t, httpapi.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandlerEchoingParts)
+
+	resp := postMessages(t, srv.URL, `{"model":"qwen3:8b","max_tokens":256,"messages":[{"role":"user","content":[
+		{"type":"text","text":"summarize this"},
+		{"type":"document","title":"report.pdf","source":{"type":"base64","media_type":"application/pdf","data":"cGRm"}}
+	]}]}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Content []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		} `json:"content"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if len(body.Content) != 1 {
+		t.Fatalf("content = %+v, want one text block", body.Content)
+	}
+	want := "text= text=summarize this file=data:application/pdf;base64,cGRm/report.pdf"
+	if body.Content[0].Text != want {
+		t.Errorf("content text = %q, want %q", body.Content[0].Text, want)
+	}
+}
+
 func TestAnthropicMessagesNonStreaming(t *testing.T) {
 	srv, h := newServer(t, httpapi.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler)
@@ -444,9 +480,9 @@ func TestAnthropicMessagesRejectsUnsupportedBlocks(t *testing.T) {
 				{"type":"image","source":{"type":"file","file_id":"file_1"}}]}]}`,
 		},
 		{
-			name: "a document content block",
+			name: "a document block with an unsupported source type",
 			body: `{"model":"qwen3:8b","max_tokens":256,"messages":[{"role":"user","content":[
-				{"type":"document","source":{"type":"url","url":"https://example.com/a.pdf"}}]}]}`,
+				{"type":"document","source":{"type":"file","file_id":"file_1"}}]}]}`,
 		},
 		{
 			name: "a tool_use content block missing id",

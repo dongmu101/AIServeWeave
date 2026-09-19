@@ -208,19 +208,25 @@ type ChatMessage struct {
 	ToolCalls    []ToolCall
 }
 
-// ContentPart is one piece of a multi-part ChatMessage.ContentParts: either
-// a text run or an image reference, the two part types this codebase's
-// front doors and adapters support.
+// ContentPart is one piece of a multi-part ChatMessage.ContentParts: a text
+// run, an image reference, an inline audio payload, or an inline file/
+// document reference — the four part types this codebase's front doors and
+// adapters support.
 //
-// ContentPart 是 ChatMessage.ContentParts 的一个片段：文本或图片引用，是本
-// 代码库前门与适配器所支持的两种片段类型。
+// ContentPart 是 ChatMessage.ContentParts 的一个片段：文本、图片引用、内联
+// 音频负载，或内联文件/文档引用——是本代码库前门与适配器所支持的四种片段
+// 类型。
 type ContentPart struct {
-	// Type is "text" or "image_url".
+	// Type is "text", "image_url", "input_audio", or "file".
 	Type string
 	// Text is set when Type == "text".
 	Text string
 	// ImageURL is set when Type == "image_url".
 	ImageURL *ContentImageURL
+	// Audio is set when Type == "input_audio".
+	Audio *ContentAudio
+	// File is set when Type == "file".
+	File *ContentFile
 }
 
 // ContentImageURL is an image content part's source, mirroring the
@@ -239,6 +245,49 @@ type ContentImageURL struct {
 	// Detail 可选，对应 OpenAI 的 image_url.detail（"auto"、"low"、
 	// "high"）；留空表示交给后端自己的默认值。
 	Detail string
+}
+
+// ContentAudio is an "input_audio" content part's inline payload, mirroring
+// OpenAI Chat Completions' audio input shape for an audio-capable model
+// (STATUS.md's P2 multimodal input). Unlike ContentImageURL/ContentFile it
+// is never a URL — OpenAI defines this part as raw base64 bytes plus a
+// format string, so this package preserves that shape rather than wrapping
+// it in a data: URI.
+//
+// ContentAudio 是 "input_audio" 内容片段的内联负载，对应 OpenAI Chat
+// Completions 面向具备音频能力模型的音频输入形状（STATUS.md 的 P2 多模态
+// 输入）。与 ContentImageURL/ContentFile 不同，它从不是 URL——OpenAI 把这个
+// 部件定义为原始 base64 字节加一个格式字符串，因此本包保留这个形状，而不是
+// 把它包进 data: URI。
+type ContentAudio struct {
+	// Data is base64-encoded audio bytes, mirroring OpenAI's
+	// input_audio.data.
+	//
+	// Data 是 base64 编码的音频字节，对应 OpenAI 的 input_audio.data。
+	Data string
+	// Format is e.g. "wav" or "mp3", mirroring OpenAI's input_audio.format.
+	//
+	// Format 例如 "wav" 或 "mp3"，对应 OpenAI 的 input_audio.format。
+	Format string
+}
+
+// ContentFile is a "file" content part's source: an inline document such as
+// a PDF, mirroring Anthropic's "document" content block and the OpenAI
+// Responses "input_file" part (STATUS.md's P2 multimodal input). URL
+// follows the same http(s)-URL-or-data:-URI convention as
+// ContentImageURL.URL.
+//
+// ContentFile 是 "file" 内容片段的来源：一份内联文档（例如 PDF），对应
+// Anthropic 的 "document" 内容块与 OpenAI Responses 的 "input_file" 部件
+// （STATUS.md 的 P2 多模态输入）。URL 遵循与 ContentImageURL.URL 相同的
+// http(s) 地址或 data: URI 约定。
+type ContentFile struct {
+	URL string
+	// Filename is optional, carried through for a backend that wants to
+	// show or log it; this package does not interpret it.
+	//
+	// Filename 可选，透传给可能想展示或记录它的后端；本包不解读它。
+	Filename string
 }
 
 type ChatResponse struct {

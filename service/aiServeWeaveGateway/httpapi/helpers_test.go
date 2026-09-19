@@ -117,12 +117,13 @@ func chatHandler(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnel
 }
 
 // chatHandlerEchoingParts answers Chat like chatHandler, but its echoed text
-// also names every image_url part it received (STATUS.md's P2
-// ChatMessage.Content structured rework) — so a test can prove an image sent
-// through a front door actually crossed the whole tunnel round trip
-// (httpapi → runtime.ChatMessage → tunnelwire marshal → tunnel proto →
-// tunnelwire unmarshal on this fake node) rather than merely asserting on a
-// wire shape closer to the front door.
+// also names every image_url, input_audio and file part it received
+// (STATUS.md's P2 ChatMessage.Content structured rework and its follow-on
+// multimodal input) — so a test can prove a part sent through a front door
+// actually crossed the whole tunnel round trip (httpapi → runtime.ChatMessage
+// → tunnelwire marshal → tunnel proto → tunnelwire unmarshal on this fake
+// node) rather than merely asserting on a wire shape closer to the front
+// door.
 func chatHandlerEchoingParts(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
 	if req.GetOperation() != tunnelv1.Operation_OPERATION_CHAT {
 		return errors.New("unsupported operation")
@@ -140,6 +141,14 @@ func chatHandlerEchoingParts(req *tunnelv1.RequestHeaders, body [][]byte, reply 
 		case "image_url":
 			if p.ImageURL != nil {
 				answer += " image=" + p.ImageURL.URL
+			}
+		case "input_audio":
+			if p.Audio != nil {
+				answer += " audio=" + p.Audio.Data + "/" + p.Audio.Format
+			}
+		case "file":
+			if p.File != nil {
+				answer += " file=" + p.File.URL + "/" + p.File.Filename
 			}
 		}
 	}

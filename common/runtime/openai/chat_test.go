@@ -146,6 +146,83 @@ func TestChatSendsImageContentAsAnArray(t *testing.T) {
 	}
 }
 
+// TestChatSendsAudioAndFileContentAsAnArray proves that "input_audio" and
+// "file" content parts (STATUS.md's P2 multimodal input) marshal into the
+// same content-array shape TestChatSendsImageContentAsAnArray already
+// exercises for image_url, each rendered as its own wire shape:
+// input_audio mirrors OpenAI's own {data, format} object exactly, while
+// file uses this repository's own {file_data, filename} convention (there
+// is no OpenAI Chat Completions file block to mirror — see filePartDTO's
+// doc comment).
+func TestChatSendsAudioAndFileContentAsAnArray(t *testing.T) {
+	var gotBody struct {
+		Messages []json.RawMessage `json:"messages"`
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := json.NewDecoder(r.Body).Decode(&gotBody); err != nil {
+			t.Fatal(err)
+		}
+		w.Write([]byte(`{
+			"id": "chatcmpl-1", "model": "llama-3", "created": 1700000000,
+			"choices": [{"message": {"role":"assistant","content":"ok"}, "finish_reason": "stop"}],
+			"usage": {"prompt_tokens": 5, "completion_tokens": 2, "total_tokens": 7}
+		}`))
+	}))
+	defer srv.Close()
+
+	c, err := NewClient(ClientConfig{BaseURL: srv.URL, Kind: runtime.KindVLLM, RuntimeID: "r1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	req := runtime.ChatRequest{
+		Model: "llama-3",
+		Messages: []runtime.ChatMessage{
+			{Role: "user", ContentParts: []runtime.ContentPart{
+				{Type: "text", Text: "summarize these"},
+				{Type: "input_audio", Audio: &runtime.ContentAudio{Data: "YmFzZTY0LWF1ZGlv", Format: "wav"}},
+				{Type: "file", File: &runtime.ContentFile{URL: "data:application/pdf;base64,cGRm", Filename: "report.pdf"}},
+			}},
+		},
+	}
+	if _, err := Chat(context.Background(), c, req); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(gotBody.Messages) != 1 {
+		t.Fatalf("messages = %d, want 1", len(gotBody.Messages))
+	}
+
+	var userMsg struct {
+		Content []struct {
+			Type       string `json:"type"`
+			Text       string `json:"text"`
+			InputAudio *struct {
+				Data   string `json:"data"`
+				Format string `json:"format"`
+			} `json:"input_audio"`
+			File *struct {
+				FileData string `json:"file_data"`
+				Filename string `json:"filename"`
+			} `json:"file"`
+		} `json:"content"`
+	}
+	if err := json.Unmarshal(gotBody.Messages[0], &userMsg); err != nil {
+		t.Fatalf("user message content did not decode as an array: %v (%s)", err, gotBody.Messages[0])
+	}
+	if len(userMsg.Content) != 3 {
+		t.Fatalf("user content parts = %d, want 3", len(userMsg.Content))
+	}
+	audio := userMsg.Content[1]
+	if audio.Type != "input_audio" || audio.InputAudio == nil || audio.InputAudio.Data != "YmFzZTY0LWF1ZGlv" || audio.InputAudio.Format != "wav" {
+		t.Errorf("content[1] = %+v, want input_audio with data=YmFzZTY0LWF1ZGlv format=wav", audio)
+	}
+	file := userMsg.Content[2]
+	if file.Type != "file" || file.File == nil || file.File.FileData != "data:application/pdf;base64,cGRm" || file.File.Filename != "report.pdf" {
+		t.Errorf("content[2] = %+v, want file with file_data=data:application/pdf;base64,cGRm filename=report.pdf", file)
+	}
+}
+
 func TestChatToolCallsRoundTrip(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
