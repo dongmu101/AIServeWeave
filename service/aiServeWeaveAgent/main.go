@@ -5,6 +5,8 @@ package main
 
 import (
 	"context"
+	"crypto/ed25519"
+	"encoding/hex"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +15,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
@@ -40,6 +43,28 @@ import (
 // -ldflags="-X main.version=..." 注入，见根 Dockerfile 与
 // scripts/build-release.sh；直接 `go build` 得到的就是 "dev"。
 var version = "dev"
+
+// agentUpgradePublicKeyHex is the hex-encoded Ed25519 public key (64 hex
+// characters) that authenticates -agent-upgrade-manifest (STATUS.md's P2
+// Agent auto-upgrade subtask 2). Stamped at build time via
+// -ldflags="-X main.agentUpgradePublicKeyHex=...", the same mechanism as
+// version; empty (the `go build` default) disables the feature entirely —
+// agentupgrade.LoadManifest refuses to trust any manifest without a
+// correctly sized public key, so a node built without this flag can never
+// execute a downloaded binary no matter what a manifest file on disk says.
+// The matching private key's custody is a maintainer decision this
+// codebase does not make (design doc section 六): it must never be
+// reachable from any Agent's runtime environment.
+//
+// agentUpgradePublicKeyHex 是为 -agent-upgrade-manifest 做身份验证的十六进
+// 制编码 Ed25519 公钥（64 个十六进制字符，STATUS.md P2 Agent 自动升级子任
+// 务二）。构建时通过 -ldflags="-X main.agentUpgradePublicKeyHex=..." 注
+// 入，与 version 同一种机制；留空（`go build` 的默认值）会彻底关闭这个功
+// 能——agentupgrade.LoadManifest 拒绝信任任何没有正确长度公钥的清单，因此
+// 一个没带这个 flag 构建出来的节点，无论磁盘上的清单文件写了什么，都永远
+// 不可能执行任何下载到的二进制。对应私钥归谁保管是本代码库不代为决定的维
+// 护者裁决（设计文档第六节）：它绝不能被任何 Agent 的运行环境触及。
+var agentUpgradePublicKeyHex = ""
 
 const (
 	// shutdownTimeout bounds how long the agent waits for in-flight runtime
@@ -230,25 +255,31 @@ func registerModelPullFlags() *modelPullOptions {
 }
 
 // agentUpgradeOptions is agentupgrade's configuration (STATUS.md's P2 Agent
-// auto-upgrade subtask 1: see
+// auto-upgrade: see
 // docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md). It
-// comes from a flag, is entirely local to this node, and is never accepted
-// from the Gateway or control plane. An empty manifest disables the
-// feature.
+// comes from flags, is entirely local to this node, and is never accepted
+// from the Gateway or control plane. An empty manifest, or a node built
+// without agentUpgradePublicKeyHex, disables the feature.
 //
-// agentUpgradeOptions 是 agentupgrade 的配置（STATUS.md P2 Agent 自动升级
-// 子任务一，见
+// agentUpgradeOptions 是 agentupgrade 的配置（STATUS.md P2 Agent 自动升
+// 级，见
 // docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md）。它来
-// 自 flag，完全是本节点本地的，从不接受 Gateway 或控制面下发。清单为空时
-// 功能关闭。
+// 自 flag，完全是本节点本地的，从不接受 Gateway 或控制面下发。清单为空，
+// 或者构建时没带 agentUpgradePublicKeyHex，都会关闭这个功能。
 type agentUpgradeOptions struct {
-	manifest string
+	manifest     string
+	workDir      string
+	drainTimeout time.Duration
 }
 
 func registerAgentUpgradeFlags() *agentUpgradeOptions {
 	opts := &agentUpgradeOptions{}
 	flag.StringVar(&opts.manifest, "agent-upgrade-manifest", "",
-		"path to a JSON manifest of known Agent versions (download URL, SHA256, Ed25519 signature); empty disables the upgrade check. Only CHECK is implemented (STATUS.md P2 Agent auto-upgrade subtask 1); UPGRADE/ROLLBACK always report NOT_IMPLEMENTED")
+		"path to a JSON manifest of known Agent versions (download URL, SHA256, and one Ed25519 signature over the whole list), signed by the key matching -ldflags=\"-X main.agentUpgradePublicKeyHex=...\"; empty disables the upgrade check. UPGRADE downloads/verifies/drains/execs; ROLLBACK always reports NOT_IMPLEMENTED (STATUS.md P2 Agent auto-upgrade subtask 3)")
+	flag.StringVar(&opts.workDir, "agent-upgrade-work-dir", "",
+		"directory an UPGRADE downloads and executes the new binary from; empty defaults to the directory the running binary lives in")
+	flag.DurationVar(&opts.drainTimeout, "agent-upgrade-drain-timeout", 0,
+		"how long an UPGRADE waits for this Agent's in-flight requests, across every Gateway connection, to drain before replacing the process anyway; <=0 defaults to 30s")
 	return opts
 }
 
@@ -679,31 +710,90 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 }
 
 // newAgentUpgradeChecker builds the Agent-local Checker from opts (STATUS.md's
-// P2 Agent auto-upgrade subtask 1), comparing against this Agent's own
-// version. It never returns nil, the same "always-present, empty manifest
-// means no known updates" shape newModelPuller uses: a Gateway-triggered
+// P2 Agent auto-upgrade), comparing against this Agent's own version. It
+// never returns nil, the same "always-present, empty manifest means no
+// known updates" shape newModelPuller uses: a Gateway-triggered
 // CHECK/UPGRADE/ROLLBACK against an empty manifest is simply answered as
 // unknown/not-implemented instead of needing a separate "feature disabled"
-// code path. A manifest that fails to load is logged, not fatal — the same
-// restraint newModelPuller uses for its own manifest.
+// code path. A manifest that fails to load — including one that fails
+// signature verification — is logged, not fatal, and yields no entries; the
+// same restraint newModelPuller uses for its own manifest.
 //
-// newAgentUpgradeChecker 基于 opts（STATUS.md P2 Agent 自动升级子任务一）构
-// 造 Agent 本地的 Checker，比较对象是本 Agent 自己的版本。它从不返回
-// nil，与 newModelPuller 同一种"始终存在、清单为空就意味着没有已知更新"的
-// 形状：对一份空清单触发 CHECK/UPGRADE/ROLLBACK 只是被直接答复为未知/未实
-// 现，不需要一条单独的"功能关闭"代码路径。清单加载失败只记日志，不算致
-// 命——与 newModelPuller 对自己清单的同一种克制。
+// Real UPGRADE execution (subtask 2) is enabled only when
+// agentUpgradePublicKeyHex was compiled in: without it, LoadManifest
+// already refuses to trust any manifest, but EnableExecution is skipped
+// too, so the Checker stays in the safe-by-construction "not implemented"
+// shape Checker's package doc describes rather than calling EnableExecution
+// with a work directory it would never have a verified entry to act on.
+// opts.workDir empty resolves to the running binary's own directory, so a
+// downloaded version lands and executes next to the one that fetched it.
+//
+// newAgentUpgradeChecker 基于 opts（STATUS.md P2 Agent 自动升级）构造 Agent
+// 本地的 Checker，比较对象是本 Agent 自己的版本。它从不返回 nil，与
+// newModelPuller 同一种"始终存在、清单为空就意味着没有已知更新"的形状：对
+// 一份空清单触发 CHECK/UPGRADE/ROLLBACK 只是被直接答复为未知/未实现，不需
+// 要一条单独的"功能关闭"代码路径。清单加载失败——包括签名校验不通过——只记
+// 日志、不算致命，且不产生任何条目；与 newModelPuller 对自己清单的同一种
+// 克制。
+//
+// 真正的 UPGRADE 执行（子任务二）只在编译时带了
+// agentUpgradePublicKeyHex 才会打开：没带它时，LoadManifest 本来就会拒绝
+// 信任任何清单，但这里也跳过 EnableExecution，让 Checker 保持它包文档描述
+// 的、构造上就安全的"未实现"形状，而不是拿着一个永远不会有已校验条目可执
+// 行的工作目录去调用 EnableExecution。opts.workDir 为空时解析为运行中二进
+// 制自己所在的目录，这样下载到的版本会落在获取它的那个二进制旁边并从那里
+// 执行。
 func newAgentUpgradeChecker(logger *slog.Logger, opts *agentUpgradeOptions) *agentupgrade.Checker {
+	pubKey, pubKeyErr := parseAgentUpgradePublicKey(agentUpgradePublicKeyHex)
+	if pubKeyErr != nil {
+		logger.Error("agent upgrade public key not usable; upgrade execution stays disabled", slog.Any("error", pubKeyErr))
+	}
+
 	var entries []agentupgrade.Entry
-	if opts.manifest != "" {
+	if opts.manifest != "" && pubKeyErr == nil {
 		var err error
-		entries, err = agentupgrade.LoadManifest(opts.manifest)
+		entries, err = agentupgrade.LoadManifest(opts.manifest, pubKey)
 		if err != nil {
 			logger.Error("agent upgrade manifest not loaded", slog.Any("error", err))
 			entries = nil
 		}
 	}
-	return agentupgrade.NewChecker(entries, version, runtime.NewSystemClock())
+
+	checker := agentupgrade.NewChecker(entries, version, runtime.NewSystemClock())
+	if pubKeyErr == nil {
+		workDir := opts.workDir
+		if workDir == "" {
+			if exe, err := os.Executable(); err == nil {
+				workDir = filepath.Dir(exe)
+			} else {
+				logger.Error("cannot resolve the running binary's directory; upgrade execution stays disabled", slog.Any("error", err))
+				return checker
+			}
+		}
+		checker.EnableExecution(workDir, nil, opts.drainTimeout)
+	}
+	return checker
+}
+
+// parseAgentUpgradePublicKey decodes hexKey into an Ed25519 public key. An
+// empty string (the default when agentUpgradePublicKeyHex was never stamped
+// in at build time) is reported as an error like any other invalid key —
+// there is no separate "feature disabled" return value, because the caller
+// treats every error here identically: leave upgrade execution off.
+//
+// parseAgentUpgradePublicKey 把 hexKey 解码成一个 Ed25519 公钥。空字符串
+// （构建时从未注入 agentUpgradePublicKeyHex 时的默认值）与任何其他无效的
+// 密钥一样被报告为错误——这里没有单独的"功能关闭"返回值，因为调用方对这
+// 里的每一种错误都做同一件事：不打开升级执行。
+func parseAgentUpgradePublicKey(hexKey string) (ed25519.PublicKey, error) {
+	raw, err := hex.DecodeString(hexKey)
+	if err != nil {
+		return nil, fmt.Errorf("agent upgrade public key is not valid hex: %w", err)
+	}
+	if len(raw) != ed25519.PublicKeySize {
+		return nil, fmt.Errorf("agent upgrade public key must be %d bytes, got %d", ed25519.PublicKeySize, len(raw))
+	}
+	return ed25519.PublicKey(raw), nil
 }
 
 // startTunnel wires the connection table and runs it in the background,
@@ -817,6 +907,19 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 	if err != nil {
 		return nil, err
 	}
+	// upgradeChecker's Drainer is wired here rather than through
+	// ClientConfig: *tunnel.Manager (tunnels) does not exist until
+	// tunnel.NewManager has already consumed upgradeChecker as a config
+	// field, so this is the earliest point a Drainer can be installed —
+	// well before tunnels.Run starts accepting any Gateway-triggered
+	// AgentUpgradeAction frame. See agentupgrade.Checker.SetDrainer's doc.
+	//
+	// upgradeChecker 的 Drainer 在这里接入，而不是通过 ClientConfig：
+	// *tunnel.Manager（tunnels）要到 tunnel.NewManager 已经把
+	// upgradeChecker 当作配置字段消费完之后才存在，因此这是能安装 Drainer
+	// 的最早时机——早于 tunnels.Run 开始接受任何 Gateway 触发的
+	// AgentUpgradeAction 帧。见 agentupgrade.Checker.SetDrainer 的文档。
+	upgradeChecker.SetDrainer(tunnels)
 
 	done := make(chan error, 1)
 	go func() { done <- tunnels.Run(ctx) }()

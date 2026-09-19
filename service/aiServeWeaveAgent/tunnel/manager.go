@@ -318,6 +318,44 @@ func (m *Manager) SlotStats(endpoint string) (PoolStats, bool) {
 // accepted at all.
 func (m *Manager) RosterVersion() (int64, bool) { return m.roster.Version() }
 
+// DrainAll asks every held Client to stop accepting newly dispatched work and
+// waits, up to timeout applied independently to each, for its in-flight
+// requests to reach zero — so this Agent can locally decide to cut over to a
+// new binary (STATUS.md's P2 Agent auto-upgrade subtask 2) without depending
+// on any single Gateway replica's permission. It is the mirror of the
+// Gateway-initiated single-Client drain in control.go's Shutdown handling:
+// same SetDraining/waitInFlight primitive, aggregated across the whole
+// roster instead of tied to one Control session. A replica that does not
+// drain within timeout is left running and logged by Client.DrainLocal
+// itself; DrainAll always returns once every Client has had its turn.
+//
+// DrainAll 要求每一个持有的 Client 停止接受新派发的工作，并（对每一个都独
+// 立套用 timeout）等待其在途请求归零——这样 Agent 才能自己本地决定切换到新
+// 二进制（STATUS.md P2 Agent 自动升级子任务二），而不需要依赖任何一个
+// Gateway 副本的许可。这与 control.go 里 Gateway 触发的单 Client 排空是同
+// 一套 SetDraining/waitInFlight 原语的镜像，只是这里跨整个 roster 聚合，而
+// 不是绑定在某一次 Control 会话上。一个没能在 timeout 内排空的副本会被
+// Client.DrainLocal 自己记日志、继续运行；DrainAll 在每个 Client 都轮到之
+// 后必定返回。
+func (m *Manager) DrainAll(timeout time.Duration) {
+	m.mu.Lock()
+	clients := make([]*Client, 0, len(m.tunnels))
+	for _, entry := range m.tunnels {
+		clients = append(clients, entry.client)
+	}
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			c.DrainLocal(timeout)
+		}(c)
+	}
+	wg.Wait()
+}
+
 // -----------------------------------------------------------------------
 // Reconciliation
 // -----------------------------------------------------------------------

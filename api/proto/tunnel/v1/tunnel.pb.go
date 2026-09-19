@@ -576,10 +576,10 @@ type AgentUpgradeState int32
 const (
 	AgentUpgradeState_AGENT_UPGRADE_STATE_UNSPECIFIED AgentUpgradeState = 0 // maps to StateIdle
 	AgentUpgradeState_AGENT_UPGRADE_STATE_CHECKING    AgentUpgradeState = 1
-	AgentUpgradeState_AGENT_UPGRADE_STATE_DOWNLOADING AgentUpgradeState = 2 // no code path in subtask 1 produces this
-	AgentUpgradeState_AGENT_UPGRADE_STATE_VERIFYING   AgentUpgradeState = 3 // no code path in subtask 1 produces this
-	AgentUpgradeState_AGENT_UPGRADE_STATE_DRAINING    AgentUpgradeState = 4 // no code path in subtask 1 produces this
-	AgentUpgradeState_AGENT_UPGRADE_STATE_RESTARTING  AgentUpgradeState = 5 // no code path in subtask 1 produces this
+	AgentUpgradeState_AGENT_UPGRADE_STATE_DOWNLOADING AgentUpgradeState = 2
+	AgentUpgradeState_AGENT_UPGRADE_STATE_VERIFYING   AgentUpgradeState = 3
+	AgentUpgradeState_AGENT_UPGRADE_STATE_DRAINING    AgentUpgradeState = 4
+	AgentUpgradeState_AGENT_UPGRADE_STATE_RESTARTING  AgentUpgradeState = 5 // reported just before exec; a successful exec never reports again, it replaces this process
 	AgentUpgradeState_AGENT_UPGRADE_STATE_FAILED      AgentUpgradeState = 6
 )
 
@@ -635,9 +635,12 @@ func (AgentUpgradeState) EnumDescriptor() ([]byte, []int) {
 type AgentUpgradeFailureReason int32
 
 const (
-	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED     AgentUpgradeFailureReason = 0
-	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION AgentUpgradeFailureReason = 1 // target_version not in the Agent's local manifest
-	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED AgentUpgradeFailureReason = 2 // action is UPGRADE/ROLLBACK, subtask 1 has no execution path
+	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED         AgentUpgradeFailureReason = 0
+	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION     AgentUpgradeFailureReason = 1 // target_version not in the Agent's local manifest
+	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED     AgentUpgradeFailureReason = 2 // action is ROLLBACK, which has no execution path yet
+	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED     AgentUpgradeFailureReason = 3 // fetching or storing the binary failed; raw error text never leaves the Agent
+	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED AgentUpgradeFailureReason = 4 // downloaded bytes' SHA256 does not match the signed manifest entry
+	AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED         AgentUpgradeFailureReason = 5 // syscall.Exec itself failed; the old process is still running
 )
 
 // Enum value maps for AgentUpgradeFailureReason.
@@ -646,11 +649,17 @@ var (
 		0: "AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED",
 		1: "AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION",
 		2: "AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED",
+		3: "AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED",
+		4: "AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED",
+		5: "AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED",
 	}
 	AgentUpgradeFailureReason_value = map[string]int32{
-		"AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED":     0,
-		"AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION": 1,
-		"AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED": 2,
+		"AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED":         0,
+		"AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION":     1,
+		"AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED":     2,
+		"AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED":     3,
+		"AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED": 4,
+		"AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED":         5,
 	}
 )
 
@@ -4273,24 +4282,29 @@ func (x *ComfyUIManagedCustomNodeInstallTrigger) GetName() string {
 
 // AgentUpgradeAction asks the Agent to CHECK, UPGRADE, or ROLLBACK against a
 // version it already knows about from its local manifest (STATUS.md's P2
-// Agent auto-upgrade subtask 1), referenced only by version string. It can
-// never carry a download URL, a signature, or anything else that would let
-// it be read as "fetch this URL" or "run this command": the load-bearing
-// rule at the top of this file forbids both, and this message's eventual
-// payload — for UPGRADE/ROLLBACK, once a later subtask implements them — is
+// Agent auto-upgrade), referenced only by version string. It can never
+// carry a download URL, a signature, or anything else that would let it be
+// read as "fetch this URL" or "run this command": the load-bearing rule at
+// the top of this file forbids both, and this message's eventual payload is
 // code that will be exec'd, which makes that rule harder here than for
-// ModelPullTrigger or ComfyUIManagedAction. Subtask 1 only implements
-// CHECK: UPGRADE and ROLLBACK are accepted on the wire but always answered
-// with FAILED/NOT_IMPLEMENTED.
+// ModelPullTrigger or ComfyUIManagedAction — the Agent resolves
+// target_version against its own manifest (download URL, SHA256, and the
+// manifest-wide signature all stay local) and never asks the Gateway or
+// control plane where to fetch anything. Subtask 1 implemented CHECK only;
+// subtask 2 adds UPGRADE's full chain (download, verify, drain, self-exec).
+// ROLLBACK is still accepted on the wire but always answered with
+// FAILED/NOT_IMPLEMENTED until a later subtask.
 //
 // AgentUpgradeAction 要求 Agent 针对它本地清单（STATUS.md 的 P2 Agent 自动
-// 升级子任务一）里已经认识的一个版本执行 CHECK、UPGRADE 或 ROLLBACK，只按
-// 版本号引用。它永远不能携带下载 URL、签名或任何可能被读作"fetch this
-// URL"或"run this command"的字段：本文件头部的 load-bearing 规则同时禁止
-// 这两者，而这条消息最终的载荷——一旦后续子任务实现 UPGRADE/ROLLBACK——是会
-// 被 exec 的代码本身，这让这条规则在这里比 ModelPullTrigger 或
-// ComfyUIManagedAction 更硬。子任务一只实现了 CHECK：UPGRADE 与 ROLLBACK 在
-// 协议上被接受，但永远只会得到 FAILED/NOT_IMPLEMENTED 的回答。
+// 升级）里已经认识的一个版本执行 CHECK、UPGRADE 或 ROLLBACK，只按版本号引
+// 用。它永远不能携带下载 URL、签名或任何可能被读作"fetch this URL"或"run
+// this command"的字段：本文件头部的 load-bearing 规则同时禁止这两者，而这
+// 条消息最终的载荷是会被 exec 的代码本身，这让这条规则在这里比
+// ModelPullTrigger 或 ComfyUIManagedAction 更硬——Agent 自己拿 target_version
+// 去对本地清单解析（下载 URL、SHA256、整份清单的签名都留在本地），从不向
+// Gateway 或控制面询问该去哪里获取。子任务一只实现了 CHECK；子任务二补上
+// UPGRADE 的完整链路（下载、校验、排空、自我替换）。ROLLBACK 在协议上仍被
+// 接受，但要到后续子任务前都只会得到 FAILED/NOT_IMPLEMENTED 的回答。
 type AgentUpgradeAction struct {
 	state  protoimpl.MessageState `protogen:"open.v1"`
 	Action AgentUpgradeActionType `protobuf:"varint,1,opt,name=action,proto3,enum=tunnel.v1.AgentUpgradeActionType" json:"action,omitempty"`
@@ -8014,11 +8028,14 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x1dAGENT_UPGRADE_STATE_VERIFYING\x10\x03\x12 \n" +
 	"\x1cAGENT_UPGRADE_STATE_DRAINING\x10\x04\x12\"\n" +
 	"\x1eAGENT_UPGRADE_STATE_RESTARTING\x10\x05\x12\x1e\n" +
-	"\x1aAGENT_UPGRADE_STATE_FAILED\x10\x06*\xad\x01\n" +
+	"\x1aAGENT_UPGRADE_STATE_FAILED\x10\x06*\xc3\x02\n" +
 	"\x19AgentUpgradeFailureReason\x12,\n" +
 	"(AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED\x10\x00\x120\n" +
 	",AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION\x10\x01\x120\n" +
-	",AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED\x10\x02*\\\n" +
+	",AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED\x10\x02\x120\n" +
+	",AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED\x10\x03\x124\n" +
+	"0AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED\x10\x04\x12,\n" +
+	"(AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED\x10\x05*\\\n" +
 	"\tAudioTask\x12\x1a\n" +
 	"\x16AUDIO_TASK_UNSPECIFIED\x10\x00\x12\x19\n" +
 	"\x15AUDIO_TASK_TRANSCRIBE\x10\x01\x12\x18\n" +

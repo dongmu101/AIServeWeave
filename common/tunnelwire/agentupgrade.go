@@ -8,9 +8,9 @@ import (
 )
 
 // AgentUpgradeActionToProto encodes the action a Gateway asks an Agent to
-// apply to its own upgrade process (STATUS.md's P2 Agent auto-upgrade
-// subtask 1). There is deliberately no field for a download URL or
-// signature: see agentupgradestatus's package doc for why.
+// apply to its own upgrade process (STATUS.md's P2 Agent auto-upgrade).
+// There is deliberately no field for a download URL or signature: see
+// agentupgradestatus's package doc for why.
 func AgentUpgradeActionToProto(a agentupgradestatus.Action, targetVersion string) *tunnelv1.AgentUpgradeAction {
 	return &tunnelv1.AgentUpgradeAction{
 		Action:        agentUpgradeActionTypeToProto(a),
@@ -116,6 +116,12 @@ func agentUpgradeReasonToProto(r agentupgradestatus.FailureReason) tunnelv1.Agen
 		return tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION
 	case agentupgradestatus.ReasonNotImplemented:
 		return tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED
+	case agentupgradestatus.ReasonDownloadFailed:
+		return tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED
+	case agentupgradestatus.ReasonVerificationFailed:
+		return tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED
+	case agentupgradestatus.ReasonExecFailed:
+		return tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED
 	default:
 		return tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED
 	}
@@ -127,6 +133,12 @@ func agentUpgradeReasonFromProto(pb tunnelv1.AgentUpgradeFailureReason) agentupg
 		return agentupgradestatus.ReasonUnknownVersion
 	case tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED:
 		return agentupgradestatus.ReasonNotImplemented
+	case tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED:
+		return agentupgradestatus.ReasonDownloadFailed
+	case tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED:
+		return agentupgradestatus.ReasonVerificationFailed
+	case tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED:
+		return agentupgradestatus.ReasonExecFailed
 	default:
 		return agentupgradestatus.ReasonUnspecified
 	}

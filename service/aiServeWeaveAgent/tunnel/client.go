@@ -723,6 +723,25 @@ func (c *Client) SetDraining(draining bool) {
 	}
 }
 
+// DrainLocal stops this tunnel from accepting newly dispatched work and
+// blocks until its in-flight requests reach zero or timeout passes,
+// whichever comes first. Unlike drain (control.go), it is triggered by this
+// Agent's own code (STATUS.md's P2 Agent auto-upgrade subtask 2) rather than
+// a Gateway-sent Shutdown frame, so it neither announces Draining over the
+// stream nor half-closes it — the tunnel keeps running, just with dispatch
+// paused, so the Agent can decide afterward whether to actually replace
+// itself or resume normally.
+//
+// DrainLocal 让这条隧道停止接受新派发的工作，并阻塞直到在途请求归零或
+// timeout 用尽，以先到者为准。与 drain（control.go）不同，它是由本 Agent
+// 自己的代码触发的（STATUS.md P2 Agent 自动升级子任务二），而不是 Gateway
+// 下发的 Shutdown 帧，因此既不通过流公告 Draining，也不半关闭它——隧道本身
+// 继续运行，只是暂停派发，让 Agent 之后再决定是真的替换自己还是恢复正常。
+func (c *Client) DrainLocal(timeout time.Duration) {
+	c.SetDraining(true)
+	c.waitInFlight(c.clock.Now().Add(timeout))
+}
+
 // SlotStats reports this tunnel's slot occupancy, zero when no pool is up.
 func (c *Client) SlotStats() PoolStats {
 	if pool := c.currentPool(); pool != nil {

@@ -703,24 +703,29 @@ message ComfyUIManagedCustomNodeInstallTrigger {
 
 // AgentUpgradeAction asks the Agent to CHECK, UPGRADE, or ROLLBACK against a
 // version it already knows about from its local manifest (STATUS.md's P2
-// Agent auto-upgrade subtask 1), referenced only by version string. It can
-// never carry a download URL, a signature, or anything else that would let
-// it be read as "fetch this URL" or "run this command": the load-bearing
-// rule at the top of this file forbids both, and this message's eventual
-// payload — for UPGRADE/ROLLBACK, once a later subtask implements them — is
+// Agent auto-upgrade), referenced only by version string. It can never
+// carry a download URL, a signature, or anything else that would let it be
+// read as "fetch this URL" or "run this command": the load-bearing rule at
+// the top of this file forbids both, and this message's eventual payload is
 // code that will be exec'd, which makes that rule harder here than for
-// ModelPullTrigger or ComfyUIManagedAction. Subtask 1 only implements
-// CHECK: UPGRADE and ROLLBACK are accepted on the wire but always answered
-// with FAILED/NOT_IMPLEMENTED.
+// ModelPullTrigger or ComfyUIManagedAction — the Agent resolves
+// target_version against its own manifest (download URL, SHA256, and the
+// manifest-wide signature all stay local) and never asks the Gateway or
+// control plane where to fetch anything. Subtask 1 implemented CHECK only;
+// subtask 2 adds UPGRADE's full chain (download, verify, drain, self-exec).
+// ROLLBACK is still accepted on the wire but always answered with
+// FAILED/NOT_IMPLEMENTED until a later subtask.
 //
 // AgentUpgradeAction 要求 Agent 针对它本地清单（STATUS.md 的 P2 Agent 自动
-// 升级子任务一）里已经认识的一个版本执行 CHECK、UPGRADE 或 ROLLBACK，只按
-// 版本号引用。它永远不能携带下载 URL、签名或任何可能被读作"fetch this
-// URL"或"run this command"的字段：本文件头部的 load-bearing 规则同时禁止
-// 这两者，而这条消息最终的载荷——一旦后续子任务实现 UPGRADE/ROLLBACK——是会
-// 被 exec 的代码本身，这让这条规则在这里比 ModelPullTrigger 或
-// ComfyUIManagedAction 更硬。子任务一只实现了 CHECK：UPGRADE 与 ROLLBACK 在
-// 协议上被接受，但永远只会得到 FAILED/NOT_IMPLEMENTED 的回答。
+// 升级）里已经认识的一个版本执行 CHECK、UPGRADE 或 ROLLBACK，只按版本号引
+// 用。它永远不能携带下载 URL、签名或任何可能被读作"fetch this URL"或"run
+// this command"的字段：本文件头部的 load-bearing 规则同时禁止这两者，而这
+// 条消息最终的载荷是会被 exec 的代码本身，这让这条规则在这里比
+// ModelPullTrigger 或 ComfyUIManagedAction 更硬——Agent 自己拿 target_version
+// 去对本地清单解析（下载 URL、SHA256、整份清单的签名都留在本地），从不向
+// Gateway 或控制面询问该去哪里获取。子任务一只实现了 CHECK；子任务二补上
+// UPGRADE 的完整链路（下载、校验、排空、自我替换）。ROLLBACK 在协议上仍被
+// 接受，但要到后续子任务前都只会得到 FAILED/NOT_IMPLEMENTED 的回答。
 message AgentUpgradeAction {
   AgentUpgradeActionType action = 1;
   // target_version must name an entry in the Agent's local manifest for
@@ -753,17 +758,20 @@ message AgentUpgradeReport {
 enum AgentUpgradeState {
   AGENT_UPGRADE_STATE_UNSPECIFIED = 0; // maps to StateIdle
   AGENT_UPGRADE_STATE_CHECKING = 1;
-  AGENT_UPGRADE_STATE_DOWNLOADING = 2; // no code path in subtask 1 produces this
-  AGENT_UPGRADE_STATE_VERIFYING = 3;   // no code path in subtask 1 produces this
-  AGENT_UPGRADE_STATE_DRAINING = 4;    // no code path in subtask 1 produces this
-  AGENT_UPGRADE_STATE_RESTARTING = 5;  // no code path in subtask 1 produces this
+  AGENT_UPGRADE_STATE_DOWNLOADING = 2;
+  AGENT_UPGRADE_STATE_VERIFYING = 3;
+  AGENT_UPGRADE_STATE_DRAINING = 4;
+  AGENT_UPGRADE_STATE_RESTARTING = 5; // reported just before exec; a successful exec never reports again, it replaces this process
   AGENT_UPGRADE_STATE_FAILED = 6;
 }
 
 enum AgentUpgradeFailureReason {
   AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED = 0;
-  AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION = 1;   // target_version not in the Agent's local manifest
-  AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED = 2;   // action is UPGRADE/ROLLBACK, subtask 1 has no execution path
+  AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION = 1;    // target_version not in the Agent's local manifest
+  AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED = 2;    // action is ROLLBACK, which has no execution path yet
+  AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED = 3;    // fetching or storing the binary failed; raw error text never leaves the Agent
+  AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED = 4; // downloaded bytes' SHA256 does not match the signed manifest entry
+  AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED = 5;        // syscall.Exec itself failed; the old process is still running
 }
 
 // ComfyUIManagedCustomNode is one custom node this Agent found installed

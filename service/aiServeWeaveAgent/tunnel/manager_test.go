@@ -436,6 +436,100 @@ func TestManagerStopsRefillingADrainingReplica(t *testing.T) {
 	})
 }
 
+// TestManagerDrainAllStopsDispatchAndWaitsForInFlight exercises DrainAll
+// (STATUS.md's P2 Agent auto-upgrade subtask 2): unlike the roster-driven
+// draining above, DrainAll is triggered locally, with no Gateway involved,
+// and must reach every connected replica at once — including gw2, which has
+// no in-flight work of its own.
+func TestManagerDrainAllStopsDispatchAndWaitsForInFlight(t *testing.T) {
+	handler := newScriptedHandler()
+	release := make(chan struct{})
+	releaseRequest := sync.OnceFunc(func() { close(release) })
+	handler.set(func(ctx context.Context, _ *tunnel.Request, _ tunnel.ResponseSink) error {
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	})
+	defer releaseRequest()
+
+	f := newManagerFixture(t, []string{gw1, gw2}, func(cfg *tunnel.ManagerConfig) {
+		cfg.Client.Handler = handler
+		cfg.Client.Slots = tunnel.SlotConfig{MinSlots: 1, LowWatermark: 1, BulkSlots: -1, NodeTotalSlots: 4}
+	})
+	f.start()
+
+	f.handshakeAll(gw1, gw2)
+	ctx, cancel := context.WithTimeout(context.Background(), testTimeout)
+	defer cancel()
+
+	busy := f.acceptWarmSlot(ctx, gw1)
+	if err := busy.SendToAgent(&tunnelv1.GatewayFrame{
+		RequestId: "req-1",
+		Body: &tunnelv1.GatewayFrame_Headers{Headers: &tunnelv1.RequestHeaders{
+			RuntimeId: testRuntimeID,
+			Operation: tunnelv1.Operation_OPERATION_CHAT,
+		}},
+	}); err != nil {
+		t.Fatalf("dispatch: %v", err)
+	}
+	handler.waitCall(t)
+	idle2 := f.acceptWarmSlot(ctx, gw2)
+
+	done := make(chan struct{})
+	go func() {
+		f.mgr.DrainAll(testTimeout)
+		close(done)
+	}()
+
+	// DrainAll must stop refilling immediately on every replica, not just
+	// the one with in-flight work.
+	f.waitSlots("gw1 has no idle slot while draining", gw1, func(s tunnel.PoolStats) bool {
+		return s.Inference.Idle == 0 && s.Inference.Busy == 1
+	})
+	f.waitClosed("gw2's idle slot while draining", idle2)
+
+	select {
+	case <-done:
+		t.Fatal("DrainAll returned before the in-flight request finished")
+	case <-time.After(10 * time.Millisecond):
+	}
+
+	releaseRequest()
+	for {
+		frame, err := busy.RecvFromAgent(ctx)
+		if err != nil {
+			t.Fatalf("the in-flight request did not finish while draining: %v", err)
+		}
+		if frame.GetEnd() != nil {
+			break
+		}
+	}
+
+	// waitInFlight's poll loop runs on the injected clock; nudge it past one
+	// interval so it notices the tally has reached zero, the same reason the
+	// certificate-rotation tests above advance it.
+	f.clock.Advance(time.Hour)
+
+	select {
+	case <-done:
+	case <-time.After(testTimeout):
+		t.Fatal("DrainAll did not return after the in-flight request finished")
+	}
+
+	// Draining took effect and stayed in effect: neither replica has an idle
+	// slot after the in-flight request finished and DrainAll returned,
+	// which would not hold if either pool had resumed refilling.
+	if stats, ok := f.mgr.SlotStats(gw1); !ok || stats.Inference.Idle != 0 {
+		t.Errorf("gw1 inference idle = %+v, want 0: draining must not resume refilling", stats.Inference)
+	}
+	if stats, ok := f.mgr.SlotStats(gw2); !ok || stats.Inference.Idle != 0 {
+		t.Errorf("gw2 inference idle = %+v, want 0: draining must not resume refilling", stats.Inference)
+	}
+}
+
 // acceptWarmSlot takes the next slot a tunnel opens and consumes its Ready.
 func (f *managerFixture) acceptWarmSlot(ctx context.Context, endpoint string) *tunneltest.ServeSession {
 	f.t.Helper()

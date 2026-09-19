@@ -99,6 +99,9 @@ func TestAgentUpgradeReasonRoundTrip(t *testing.T) {
 		agentupgradestatus.ReasonUnspecified,
 		agentupgradestatus.ReasonUnknownVersion,
 		agentupgradestatus.ReasonNotImplemented,
+		agentupgradestatus.ReasonDownloadFailed,
+		agentupgradestatus.ReasonVerificationFailed,
+		agentupgradestatus.ReasonExecFailed,
 	}
 	for _, r := range reasons {
 		t.Run(r.String(), func(t *testing.T) {
