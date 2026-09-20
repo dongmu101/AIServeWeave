@@ -1,13 +1,12 @@
 gateway:
   endpoints:
-    - gw-1.example.com:8443
-    - gw-2.example.com:8443
-  registry: registry.example.com:9443
+    - 127.0.0.1:18443
+  registry: 127.0.0.1:19090
   node_id: node-mac-01               # 留空则由 Registry 分配
-  cert_file: /etc/aisw/agent-cert.pem
-  key_file: /etc/aisw/agent-key.pem
-  ca_file: /etc/aisw/registry-ca.pem
-  bootstrap_token_file: /etc/aisw/bootstrap-token   # 仅首次注册用，用后即删
+  cert_file: ./data/agent-cert.pem
+  key_file: ./data/agent-key.pem
+  ca_file: ../aiServeWeaveRegistry/data/registry/ca/ca-cert.pem
+  bootstrap_token_file: ./data/bootstrap-token   # 仅首次注册用，用后即删
   allowed_runtimes:                  # 留空表示放行本节点全部已配置的运行时
     - ollama-local
   labels:

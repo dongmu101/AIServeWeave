@@ -6,3 +6,5 @@ dist/
 
 # local git worktrees for isolated implementation work
 .worktrees/
+*.log
+*.pem
