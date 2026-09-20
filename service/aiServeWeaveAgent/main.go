@@ -26,8 +26,10 @@ import (
 	"AIServeWeave/common/runtime/sglang"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
+	"AIServeWeave/service/aiServeWeaveAgent/configui"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
@@ -96,11 +98,64 @@ func main() {
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",
 		"address the Prometheus /metrics listener binds; loopback by default because the agent never listens on a public port, empty disables it")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	configPath := flag.String("config", "",
+		"path to a YAML config file for the gateway connection and local runtime declarations (see the agentconfig package doc); "+
+			"a flag explicitly passed on the command line always overrides the same setting from this file; "+
+			"if left empty, the agent looks for \""+defaultConfigPath+"\" in the working directory and loads it if present, otherwise runs on flags alone")
+	configUI := flag.Bool("config-ui", false,
+		"instead of starting the agent, serve a local setup page (see -config-ui-addr) for editing -config")
+	configUIAddr := flag.String("config-ui-addr", defaultConfigUIAddr,
+		"loopback address the local setup page listens on when -config-ui is set; must be a loopback address, only takes effect together with -config-ui")
 	flag.Parse()
 
 	if *showVersion {
 		os.Stdout.WriteString("aiserveweave-agent " + version + "\n")
 		return
+	}
+
+	explicit := explicitFlagNames()
+	resolvedConfigPath := resolveConfigPath(*configPath, explicit["config"], defaultConfigPath)
+
+	autoConfigUI := shouldAutoOpenConfigUI(*configUI, explicit, resolvedConfigPath)
+
+	if *configUI || autoConfigUI {
+		logger, err := newLogger(*logLevel)
+		if err != nil {
+			os.Stderr.WriteString("agent: " + err.Error() + "\n")
+			os.Exit(2)
+		}
+		uiConfigPath := *configPath
+		if !explicit["config"] {
+			uiConfigPath = defaultConfigPath
+		}
+		if autoConfigUI {
+			logger.Info("no -gateway and no config file found; opening the local setup page instead of running with the tunnel disabled",
+				slog.String("addr", *configUIAddr), slog.String("config_path", uiConfigPath))
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := configui.Serve(ctx, logger, *configUIAddr, uiConfigPath); err != nil {
+			logger.Error("config setup page exited with error", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return
+	}
+
+	var declaredRuntimes []runtime.Config
+	if resolvedConfigPath != "" {
+		cfg, err := agentconfig.Load(resolvedConfigPath)
+		if err != nil {
+			os.Stderr.WriteString("agent: config: " + err.Error() + "\n")
+			os.Exit(2)
+		}
+		if err := applyConfig(cfg, explicit, opts, autoDiscover, autoDiscoverInterval, metricsAddr, logLevel); err != nil {
+			os.Stderr.WriteString("agent: config: " + err.Error() + "\n")
+			os.Exit(2)
+		}
+		declaredRuntimes = runtimesFromConfig(cfg.Runtimes)
+	}
+	if *ollamaURL != "" {
+		declaredRuntimes = append(declaredRuntimes, runtime.Config{ID: *ollamaID, Kind: runtime.KindOllama, BaseURL: *ollamaURL})
 	}
 
 	logger, err := newLogger(*logLevel)
@@ -110,10 +165,198 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, mpOpts, cmOpts, auOpts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
+}
+
+// explicitFlagNames is the flag names the operator actually passed on the
+// command line, as opposed to every flag's own default. applyConfig
+// consults it so a flag explicitly given always wins over the same setting
+// from -config, while a flag left at its default lets the file speak.
+//
+// explicitFlagNames 是操作者在命令行上实际传入的 flag 名字集合，与每个
+// flag 自己的默认值区分开。applyConfig 靠它保证显式传入的 flag 永远优先于
+// -config 里的同名设置，而留在默认值的 flag 则由配置文件说了算。
+func explicitFlagNames() map[string]bool {
+	explicit := make(map[string]bool)
+	flag.Visit(func(f *flag.Flag) { explicit[f.Name] = true })
+	return explicit
+}
+
+// defaultConfigPath is what resolveConfigPath falls back to when -config is
+// never mentioned on the command line: "config.yaml" in the process's
+// current working directory. This is the same name and location an
+// operator gets by using -config-ui-addr without also passing -config (see
+// main's configUIAddr branch), so the two features agree on where a config
+// file lives without the operator having to say so twice.
+//
+// defaultConfigPath 是命令行上完全没提 -config 时 resolveConfigPath 落回的
+// 默认值：进程当前工作目录下的 "config.yaml"。这与只传 -config-ui-addr、不
+// 传 -config 时（见 main 里 configUIAddr 分支）落地的文件同名同地，两个功
+// 能因此在"配置文件放哪"这件事上达成一致，不需要运维说两遍。
+const defaultConfigPath = "config.yaml"
+
+// defaultConfigUIAddr is -config-ui-addr's default value: a loopback
+// address the operator does not have to remember or type out. It only ever
+// takes effect when -config-ui is also set — unlike -metrics-addr, this
+// flag's default must never by itself decide whether a listener opens,
+// because doing so would make a plain, flagless run of the agent silently
+// start a page able to repoint it at a different Gateway. See -config-ui's
+// help text and the configUI branch below for the actual gate.
+//
+// defaultConfigUIAddr 是 -config-ui-addr 的默认值：一个不用运维记住或敲出
+// 来的回环地址。它只在同时设置了 -config-ui 时才生效——与 -metrics-addr 不
+// 同，这个 flag 的默认值绝不能单独决定要不要开监听，因为那会让一次什么
+// flag 都没传的普通启动，悄悄带起一个能把 Agent 改去连接不同 Gateway 的页
+// 面。真正的开关见 -config-ui 的帮助文本与下面的 configUI 分支。
+const defaultConfigUIAddr = "127.0.0.1:8899"
+
+// shouldAutoOpenConfigUI decides whether main should drop a first-time
+// operator into the local setup page instead of running with the tunnel
+// disabled: no -gateway on the command line and no config file on disk
+// means there is nothing this run could usefully do besides local runtime
+// bookkeeping, and a brand-new checkout with nothing configured yet is
+// exactly who this page is for (see the configui package doc). Any of
+// -config-ui, -config-ui-addr, -config or -gateway being explicitly
+// passed — even -gateway="" — opts out: that is the operator deliberately
+// saying what they want, not having wandered in with nothing set up.
+//
+// shouldAutoOpenConfigUI 决定 main 该不该把一次全新的启动带进本地设置页
+// 面，而不是悄悄以隧道关闭的状态跑起来：命令行没有 -gateway，磁盘上也没
+// 有配置文件，这次运行除了本地运行时记账之外做不了任何有用的事，而一次
+// 全新、什么都没配置过的检出，正是这个页面（见 configui 包文档）存在的理
+// 由。-config-ui、-config-ui-addr、-config 或 -gateway 里任何一个被显式传
+// 入——哪怕是 -gateway=""——都会退出这条自动路径：那是操作者在明确表达自
+// 己想要什么，而不是两手空空地走进来。
+func shouldAutoOpenConfigUI(configUI bool, explicit map[string]bool, resolvedConfigPath string) bool {
+	if configUI || explicit["config-ui"] || explicit["config-ui-addr"] || explicit["config"] || explicit["gateway"] {
+		return false
+	}
+	return resolvedConfigPath == ""
+}
+
+// resolveConfigPath decides which file, if any, main should load as
+// -config. An explicitly passed path always wins verbatim — including when
+// it points at nothing, so Load's error surfaces as a hard failure the
+// operator sees immediately, the same as any other typo'd flag value. Only
+// when -config was never mentioned does it fall back to defaultPath, and
+// even then only when that file is actually present: a fresh checkout or a
+// fresh deployment with no config file yet must keep behaving exactly like
+// this feature never shipped, driven by flags alone. A defaultPath that
+// exists but fails to parse is not silently skipped, though — main still
+// calls agentconfig.Load on whatever this function returns, and a malformed
+// file the operator did leave there is a real mistake worth seeing, not one
+// to paper over by pretending it was never found. main always passes
+// defaultConfigPath here; the parameter exists so tests can point it at a
+// temp directory instead of depending on the real working directory's
+// contents.
+//
+// resolveConfigPath 决定 main 该加载哪份文件作为 -config（如果有的话）。显
+// 式传入的路径永远原样优先——即使它指向不存在的文件，也要让 Load 的错误立
+// 刻暴露给操作者，与任何其他敲错的 flag 值一样。只有命令行完全没提到
+// -config 时才会落回 defaultPath，而且只在那份文件真实存在时才用：一次全
+// 新的检出、或者一次还没放配置文件的全新部署，行为必须与这个功能从未上线
+// 时完全一样，只靠 flag 驱动。defaultPath 存在但解析失败并不会被悄悄跳
+// 过——main 仍然会对这个函数返回的路径调用 agentconfig.Load，运维真的放了
+// 一份格式错误的文件在那里，是值得被看见的真实失误，不该假装没找到它。
+// main 总是把 defaultConfigPath 传进来；这个参数存在是为了让测试能指向一
+// 个临时目录，而不必依赖真实工作目录里恰好有什么文件。
+func resolveConfigPath(flagValue string, explicit bool, defaultPath string) string {
+	if explicit {
+		return flagValue
+	}
+	if _, err := os.Stat(defaultPath); err == nil {
+		return defaultPath
+	}
+	return ""
+}
+
+// applyConfig merges cfg (loaded from -config) into the already-parsed flag
+// values named in explicit. Runtimes are handled separately by
+// runtimesFromConfig: a declared runtime is additive to -ollama-url rather
+// than something a flag can override field-by-field, so there is no
+// per-field precedence to apply for it.
+//
+// applyConfig 把 cfg（从 -config 加载）合并进已经解析好的 flag 值，
+// explicit 记录了哪些 flag 被显式传入。Runtimes 由 runtimesFromConfig 单
+// 独处理：一个声明的运行时是 -ollama-url 之外的叠加项，而不是某个 flag 能
+// 逐字段覆盖的东西，因此这里不涉及它的优先级。
+func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnelOptions, autoDiscover *bool, autoDiscoverInterval *time.Duration, metricsAddr, logLevel *string) error {
+	gw := cfg.Gateway
+	if !explicit["gateway"] && len(gw.Endpoints) > 0 {
+		opts.gateway = strings.Join(gw.Endpoints, ",")
+	}
+	if !explicit["registry"] && gw.Registry != "" {
+		opts.registry = gw.Registry
+	}
+	if !explicit["node-id"] && gw.NodeID != "" {
+		opts.nodeID = gw.NodeID
+	}
+	if !explicit["cert-file"] && gw.CertFile != "" {
+		opts.certFile = gw.CertFile
+	}
+	if !explicit["key-file"] && gw.KeyFile != "" {
+		opts.keyFile = gw.KeyFile
+	}
+	if !explicit["ca-file"] && gw.CAFile != "" {
+		opts.caFile = gw.CAFile
+	}
+	if !explicit["bootstrap-token-file"] && gw.BootstrapTokenFile != "" {
+		opts.bootstrapToken = gw.BootstrapTokenFile
+	}
+	if !explicit["allowed-runtimes"] && len(gw.AllowedRuntimes) > 0 {
+		opts.allowedRuntimes = strings.Join(gw.AllowedRuntimes, ",")
+	}
+	if !explicit["labels"] && len(gw.Labels) > 0 {
+		pairs := make([]string, 0, len(gw.Labels))
+		for k, v := range gw.Labels {
+			pairs = append(pairs, k+"="+v)
+		}
+		opts.labels = strings.Join(pairs, ",")
+	}
+	if !explicit["max-gateways"] && gw.MaxGateways > 0 {
+		opts.maxGateways = gw.MaxGateways
+	}
+
+	if !explicit["auto-discover"] && cfg.AutoDiscover != nil {
+		*autoDiscover = *cfg.AutoDiscover
+	}
+	if !explicit["auto-discover-interval"] && cfg.AutoDiscoverInterval != "" {
+		d, err := time.ParseDuration(cfg.AutoDiscoverInterval)
+		if err != nil {
+			return fmt.Errorf("auto_discover_interval: %w", err)
+		}
+		*autoDiscoverInterval = d
+	}
+	if !explicit["metrics-addr"] && cfg.MetricsAddr != nil {
+		*metricsAddr = *cfg.MetricsAddr
+	}
+	if !explicit["log-level"] && cfg.LogLevel != "" {
+		*logLevel = cfg.LogLevel
+	}
+	return nil
+}
+
+// runtimesFromConfig converts a config file's declared runtimes into the
+// runtime.Config values manager.Add expects. It performs no validation of
+// its own: an unrecognized Kind surfaces from manager.Add as
+// runtime.ErrRuntimeKindUnsupported, the same way any other bad -kind would.
+//
+// runtimesFromConfig 把配置文件里声明的运行时转换成 manager.Add 所需的
+// runtime.Config。它自己不做任何校验：一个不认识的 Kind 会从 manager.Add
+// 那里以 runtime.ErrRuntimeKindUnsupported 的形式暴露出来，与任何其他错误
+// 的 -kind 一样。
+func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
+	if len(declared) == 0 {
+		return nil
+	}
+	out := make([]runtime.Config, len(declared))
+	for i, rc := range declared {
+		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL}
+	}
+	return out
 }
 
 // tunnelOptions is the tunnel's configuration. It comes from flags because
@@ -447,11 +690,16 @@ func parseComfyUIManagedMounts(raw string) map[string]string {
 // signalled to stop. It returns the first error that prevents a clean start or
 // a clean shutdown.
 //
-// ollamaURL and ollamaID are a stand-in for the runtime section of the agent
-// config file described in tunnel/README.md: until that file lands, this is
-// the only way to give the agent a real backend to dispatch to. An empty
-// ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
+// declaredRuntimes is main's merged view of -ollama-url/-ollama-id plus
+// whatever -config's runtimes: list adds — see runtimesFromConfig. A
+// declared runtime that fails to register fails agent startup, since the
+// operator explicitly asked for it to be there.
+//
+// ollamaURL is passed again, separately, only because newModelPuller needs
+// to know which single Ollama instance a Kind:"ollama" model-pull spec
+// targets; modelpull stays -ollama-url-only and does not consult
+// declaredRuntimes, matching its documented "纯本地 flag" contract.
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -473,9 +721,9 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	manager := runtime.NewManager(registry, deps)
 
 	configuredRuntimes := 0
-	if ollamaURL != "" {
-		if err := manager.Add(ctx, runtime.Config{ID: ollamaID, Kind: runtime.KindOllama, BaseURL: ollamaURL}); err != nil {
-			return err
+	for _, rc := range declaredRuntimes {
+		if err := manager.Add(ctx, rc); err != nil {
+			return fmt.Errorf("declared runtime %q (%s): %w", rc.ID, rc.Kind, err)
 		}
 		configuredRuntimes++
 	}
@@ -518,10 +766,9 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 			slog.String("base_url", fmt.Sprintf("http://127.0.0.1:%d", spec.Port)))
 	}
 
-	// Runtime configuration is not loaded from disk yet, so beyond the
-	// Ollama instance above the manager starts with no instances until
-	// auto-discovery (below) or the tunnel's config delivery adds one.
-	// Declared runtimes will be added here once the agent config file lands.
+	// Beyond declaredRuntimes above, the manager starts with no instances
+	// until auto-discovery (below) or the tunnel's config delivery adds
+	// one.
 	logger.Info("agent started",
 		slog.Any("supported_kinds", registry.Kinds()),
 		slog.Int("configured_runtimes", configuredRuntimes),

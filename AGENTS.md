@@ -27,7 +27,7 @@
 | `common/workflowview/` | 工作流模板目录与实时 job 视图的契约，Gateway 与控制面共用。模板不含图、job 不含运行位置（节点/运行时/解析后的模型），两者都是刻意的 |
 | `common/modelroute/` | 模型别名与目标、路由快照/摘要、生效状态和容量校验的共享契约；控制面发布与 Gateway 应用共用 |
 | `common/nodeview/` | 机群清单的契约：Gateway 报告已连接节点、控制面聚合后交给运维控制台的形状。渲染采用允许列表——只输出这里点名的字段，不序列化 `NodeInfo` 或 `Descriptor` 碰巧持有的一切 |
-| `service/aiServeWeaveAgent/` | `tunnel/`（隧道）、`localdiscovery/`（本机 Ollama/vLLM 自动发现）与 `hostresources/`（Hello 握手前的 CPU/内存/GPU 静态容量探测，STATUS.md P2）已实现；`workflow/` 四个文件目前只有 package 声明，是空壳 |
+| `service/aiServeWeaveAgent/` | `tunnel/`（隧道）、`localdiscovery/`（本机 Ollama/vLLM 自动发现）、`hostresources/`（Hello 握手前的 CPU/内存/GPU 静态容量探测，STATUS.md P2）、`agentconfig/`（`-config` 的 YAML 契约：远程 Gateway 连接 + 本地运行时声明）与 `configui/`（`-config-ui-addr` 的本地设置页面，回环地址专用）已实现；`workflow/` 四个文件目前只有 package 声明，是空壳 |
 | `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）、`routesync/`（控制面路由拉取、缓存与热切换）、`adminapi/`（`-admin-addr` 上只读的机群清单、工作流目录与按租户的 job 端点，供控制面聚合）均已落地；`controlplaneclient/` 提供 Key 校验与 Job 持久化客户端，`httpapi/` 已接入有界后台同步、旁路持久化与非终态恢复；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）、`GatewayDirectory`（副本名册）与 `TokenAdmin`（令牌签发/撤销、节点禁用/启用）已落地，详见其 README |
 | `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户用户与平台运维生命周期、Redis 权威会话、API Key、审计、配额均已落地；禁用用户在数据库事务内吊销其 Key，Key 缓存以 generation 常数时间失效；列表为游标分页 + 服务端筛选。另有 Fleet 聚合、发布管理、Job 历史与内部写 API，详见其 README |
@@ -79,7 +79,7 @@ go test -race ./service/...
 - 协程泄漏在各包 `main_test.go` 的 `TestMain` 里统一断言，**不要**在单个测试里手写检查。
 - 默认测试不依赖真实 Gateway、GPU 或外部网络；需要真实后端的测试单独隔离（参考 `runtime/ollama/live_test.go`）。
 - 包内测试辅助放 `internal/`（如 `runtime/internal/runtimetest/`），不外泄给使用方。
-- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。**Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 `coder/websocket`，这条线要守住。** Gateway 在此之外多一个 `go-redis`：跨副本限流需要一份共享计数，而本地计数在 N 个副本下会放行 N 倍额度——这是一次经过评估的例外，`-redis-addr` 留空时退回副本内执行，代价记录在 Gateway README。go-zero、gorm、golang-jwt、x/crypto 仍只属于控制面，理由见控制面 README 的「为什么这个服务用 go-zero，而数据面不用」；Gateway 的 `controlplaneclient` 依旧只用标准库 `net/http`。
+- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。**Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 `coder/websocket`，这条线要守住。** Gateway 在此之外多一个 `go-redis`：跨副本限流需要一份共享计数，而本地计数在 N 个副本下会放行 N 倍额度——这是一次经过评估的例外，`-redis-addr` 留空时退回副本内执行，代价记录在 Gateway README。go-zero、gorm、golang-jwt、x/crypto 仍只属于控制面，理由见控制面 README 的「为什么这个服务用 go-zero，而数据面不用」；Gateway 的 `controlplaneclient` 依旧只用标准库 `net/http`。**Agent 在此之外另有一个记录在案的例外：`agentconfig` 包用 `github.com/spf13/viper` 解析 `-config` 文件。** 这是一次分量比 Gateway 的 `go-redis` 更重的例外，如实记录：viper 本身没有直接解决"YAML 转 struct"之外的任何本包需求，却带进 13 个额外模块（`spf13/afero`、`spf13/pflag`、`spf13/cast`、`fsnotify`、`sagikazarmark/locafero`、`subosito/gotenv`、`go-viper/mapstructure/v2` 等），其中 `spf13/pflag` 与 Agent 本来就在用的标准库 `flag` 功能重叠，但 `agentconfig` 从不使用 viper 的 flag/env/文件热监听能力，只用它的 `SetConfigFile`/`ReadInConfig`/`Unmarshal`/`Set`/`WriteConfigAs` 五个函数读写一份本地 YAML 文件。换成零依赖的标准库 `encoding/json`、或零依赖的 `github.com/goccy/go-yaml`，同样能做到"YAML 转 struct"，viper 是团队明确要求使用的选择，不是技术上必要的选择。它只用于本地文件解析，不涉及隧道协议，不改变隧道协议解码路径仍然只用 `common/tunnelwire` 这条既有约束。
 
 ## 安全红线
 

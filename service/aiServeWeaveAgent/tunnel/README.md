@@ -878,7 +878,7 @@ go test -race ./service/aiServeWeaveAgent/...
 - **`Committed` 之后的错误一律清掉 `Retryable`。** 正文说"已向用户发出首个 token 的流不得重试"，但没说在哪一层保证。分发器在流已提交时把 `RuntimeError.Retryable` 改成 false 再返回，产物流也一样（第一块字节发出即算提交）。这样即使 Gateway 侧调度器忘了检查，重试也不会发生。
 - **产物边读边发，读缓冲就是 `max_frame_bytes`。** 500MB 的产物只占一个缓冲区，不做整体读入；每块发送前都检查帧上限，请求体（工作流模板）在收集过程中就按 `max_request_bytes` 判超，而不是先攒完再拒。
 - **`RequestHeaders.trace` 不进日志。** 协议允许携带 `tenant_id` 等固定键，但日志白名单里没有它们，分发器因此完全不读 trace——它是副本自己做关联用的。
-- **`main.go` 的隧道参数走 flag。** Agent 还没有配置文件（runtime 实例同样尚未从磁盘加载），因此 `-gateway`、`-registry`、证书三件套与 `-allowed-runtimes` 暂时用 flag 表达，命名与 README 配置段的键一一对应，配置文件落地后整体替换。不传 `-gateway` 时隧道不启动，Agent 行为与之前一致。（阶段 6 起 `-gateway` 接受逗号分隔的种子列表，并由连接表接管。）
+- **`main.go` 的隧道参数走 flag。** Agent 还没有配置文件（runtime 实例同样尚未从磁盘加载），因此 `-gateway`、`-registry`、证书三件套与 `-allowed-runtimes` 暂时用 flag 表达，命名与 README 配置段的键一一对应，配置文件落地后整体替换。不传 `-gateway` 时隧道不启动，Agent 行为与之前一致。（阶段 6 起 `-gateway` 接受逗号分隔的种子列表，并由连接表接管。）**这段是阶段 5 的历史记录，此后 `-config`（`agentconfig` 包，见 [Agent README](../README.md)）已落地，覆盖这里列出的每一个 flag 加上运行时声明，但不是"整体替换"——两者可以同时给，命令行显式传入的 flag 始终优先于文件里的同名设置（`main.go` 的 `applyConfig`），文件只填补 flag 留在默认值上的空白。**
 
 **验收：** 对着 fake Gateway 可以完成全部九个 Operation；`runtime` 层的错误语义无损跨隧道传递。全部测试用假 Runtime 与假时钟，不依赖真实后端或网络。
 
@@ -956,7 +956,7 @@ go test -race ./service/aiServeWeaveAgent/...
 - **`service/aiServeWeaveGateway/e2e` 是唯一同时依赖两个服务的包。** 两个服务谁也不 import 谁，把连接它们的测试放在两者之外正是维持这一点的办法。它自己签一个 CA、把节点证书按 0600 写到临时目录，走的正是本文件说的"离线签发"路径——证书是真的、名字是对的，只是没有拿 bootstrap token 换过。后端是脚本化的 `runtime.InferenceRuntime`，因为需要 GPU 的测试等于不会跑；后端协议由各适配器自己的测试负责。
 - **实测：loopback + mTLS 单跳的 TTFT 开销约 0.3ms**（`TestTunnelSegmentLatency`，20 次采样，与同进程直连对比）。这个数字只说明"一跳 TLS gRPC 不是延迟来源"，真实链路的数字要等真实部署。测试断言的是 100ms 上限，因为回归到那个量级就是流式体验的分水岭，而不是因为 0.3ms 有什么可保证的。
 - **Gateway 的调度器与 OpenAI 前门落在 `service/aiServeWeaveGateway/scheduler` 与 `service/aiServeWeaveGateway/httpapi`。** 这是清单第一项真正的阻塞点：Gateway 此前只有隧道服务端，没有任何调用方能触发一次真实推理。`scheduler.Scheduler` 直接读 `tunnelserver.Server.Nodes()`（不额外记状态），按空闲槽数与在途请求数选节点，`ChatStream` 自己读一次首帧来判定 `Committed()`，只在首帧之前重试——这是正文"流式请求只有在返回第一个 token 之前可以安全重试"在调度层的落地。`httpapi` 当前已支持 chat/completions、embeddings、models、responses（含 SSE）与工作流 Job API；Responses 在前门转换成 canonical 请求，不要求新增 Responses 隧道枚举，`store` / `previous_response_id` 被明确拒绝，详见 [Gateway README](../../aiServeWeaveGateway/README.md)。
-- **`-ollama-url`/`-ollama-id` 最初用于真实链路验收，当前仍可显式注册 Ollama。** Agent 默认还启用本机 Ollama/vLLM 自动发现（`-auto-discover`）；留空 `-ollama-url` 不再等于不注册任何 runtime。运行时配置文件加载仍未交付，配置下发应用和本地白名单约束见阶段 3/5。
+- **`-ollama-url`/`-ollama-id` 最初用于真实链路验收，当前仍可显式注册 Ollama。** Agent 默认还启用本机 Ollama/vLLM 自动发现（`-auto-discover`）；留空 `-ollama-url` 不再等于不注册任何 runtime。运行时配置文件加载已由 `-config`（`agentconfig` 包的 `runtimes:` 列表）落地，作为 `-ollama-url` 之外的补充——两者叠加生效，不是互斥关系，声明多个、任意受支持种类（ollama/vllm/sglang/comfyui）的本地运行时不再需要单独一个 flag；配置下发应用和本地白名单约束仍见阶段 3/5。
 - **实测：真实 Ollama + 真实 mTLS 隧道 + Gateway HTTP 前门的端到端 TTFT。** 本机（Apple Silicon Mac，Ollama 0.x，模型 `gemma4:26b`，19GB，Q4 量化）离线签发一次性 CA 和证书（手法与 `e2e/pki_test.go` 相同），起一个 Gateway 副本和一个连到真实 Ollama 的 Agent，用真实 TCP + 真实 mTLS 连接，`curl` 打 `/v1/chat/completions`：
   - 非流式，模型冷启动（首次加载进内存）：总耗时约 10.0s——这个数字基本是 Ollama 把 19GB 模型读进内存的时间，不是本链路的开销；非流式端点的"TTFT"定义上等于总耗时，所以这一项本身不能反映前门开销。
   - 流式，模型已热（同一模型第二次及以后请求）：从 Gateway 收到 HTTP 请求到第一个 SSE chunk `Flush()`，三次采样为 165ms、293ms、129ms。这个量级由 Ollama 生成首个 token 的真实推理延迟主导；与隧道段单跳 0.3ms 的开销相比，Gateway 前门 + 隧道往返在其中可忽略不计——**多副本、多一跳 mTLS 网络请求没有引入可观测的额外延迟**，验证了阶段 6/7 一直依赖的假设。

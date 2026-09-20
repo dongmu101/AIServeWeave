@@ -7,7 +7,7 @@
 # 起步：
 #
 #   cd deploy
-#   cp .env.example .env && $EDITOR .env      # four independent secrets / 四个独立密钥
+#   cp .env.example .env && $EDITOR .env      # eight independent secrets / 八个独立密钥
 #   docker compose up -d
 #
 # 证书链：Registry 首次启动时生成自己的 CA，Gateway 的隧道证书由它签发
@@ -25,7 +25,7 @@
 # Getting started:
 #
 #   cd deploy
-#   cp .env.example .env && $EDITOR .env      # four independent secrets / 四个独立密钥
+#   cp .env.example .env && $EDITOR .env      # eight independent secrets / 八个独立密钥
 #   docker compose up -d
 #
 # The certificate chain: the Registry generates its own CA on first start, and

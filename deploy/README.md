@@ -299,7 +299,9 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 
 - **`controlplane`/`gateway`/`console`/`bootstrap` 反复 `Restarting` 或直接
   `Exited (1)`，日志里有一行 `set it in deploy/.env`。** 检查 `deploy/.env`（不是
-  `.env.example`）里四个密钥是否都已填上；改完 `.env` 后必须让容器重新读取环境，仅
+  `.env.example`）里「起步」一节生成的八个密钥是否都已填上——从旧部署升级时尤其要看
+  `AISW_GATEWAY_MODEL_PULL_TOKEN` 与 `AISW_GATEWAY_COMFYUI_MANAGED_TOKEN` 这两个较新
+  加入的变量，旧 `.env` 里可能没有；改完 `.env` 后必须让容器重新读取环境，仅
   保存文件不够：
 
   ```bash

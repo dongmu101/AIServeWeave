@@ -1,0 +1,27 @@
+gateway:
+  endpoints:
+    - gw-1.example.com:8443
+    - gw-2.example.com:8443
+  registry: registry.example.com:9443
+  node_id: node-mac-01               # 留空则由 Registry 分配
+  cert_file: /etc/aisw/agent-cert.pem
+  key_file: /etc/aisw/agent-key.pem
+  ca_file: /etc/aisw/registry-ca.pem
+  bootstrap_token_file: /etc/aisw/bootstrap-token   # 仅首次注册用，用后即删
+  allowed_runtimes:                  # 留空表示放行本节点全部已配置的运行时
+    - ollama-local
+  labels:
+    region: home-mac
+    gpu: 4090
+  max_gateways: 4
+runtimes:
+  - id: ollama-local
+    kind: ollama
+    base_url: http://127.0.0.1:11434
+  - id: vllm-local
+    kind: vllm
+    base_url: http://127.0.0.1:8000
+auto_discover: true                  # 额外探测本机 Ollama/vLLM 常见端口
+auto_discover_interval: 30s
+metrics_addr: 127.0.0.1:9091         # 留空关闭 /metrics
+log_level: info
