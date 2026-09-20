@@ -18,10 +18,7 @@ runtimes:
   - id: ollama-local
     kind: ollama
     base_url: http://127.0.0.1:11434
-  - id: vllm-local
-    kind: vllm
-    base_url: http://127.0.0.1:8000
 auto_discover: true                  # 额外探测本机 Ollama/vLLM 常见端口
 auto_discover_interval: 30s
-metrics_addr: 127.0.0.1:9091         # 留空关闭 /metrics
+metrics_addr: 127.0.0.1:9092         # 9091 被本机 Docker Desktop 占用，换一个空闲端口；留空关闭 /metrics
 log_level: info
