@@ -2,7 +2,7 @@
 
 日期：2026-09-30。
 
-状态：待维护者审阅。已确认目标及“先验证 CLI 工具往返、通过后接入”的范围；本文不是已实现说明，也不代表桥接已验证可用。本次仅编写设计文档及 Agent README 中的设计入口。
+状态：维护者已确认范围并要求开始实现。第一阶段独立 CLI/MCP 验证器已落地，见 [实验说明](../../../experiments/claude-code-bridge/README.md)。CLI/MCP 合成工具实验与完整 Messages/Gateway 兼容分别验收；后者尚未实现，不能通过现有 Agent 配置启用。
 
 ## 一、已确认的目标
 
@@ -39,7 +39,7 @@ Agent：本地声明的 CLI 桥接实例、进程与会话管理
 
 `--bare` 明确不读取 OAuth 和系统钥匙串，不能作为本项目订阅登录方案的启动模式。上一次通过 shell 包装函数查询版本时出现钥匙串解锁报错；直接执行 CLI 的 `--help` 无此报错，但也不会验证登录。验证程序应直接调用已配置的可执行文件，不调用交互 shell 包装函数。
 
-尚未执行任何真实模型请求，也未读取、导出或改写登录凭据。
+上述为设计时的只读基线。后续已在正常本机权限下确认 `claude.ai` / Max 登录并执行真实合成工具实验，结果见实验报告；初始沙箱内 `loggedIn=false` 不能代表普通本机权限下的登录状态。没有读取、导出或改写登录凭据。
 
 ## 三、方案选择
 
@@ -145,7 +145,7 @@ CLI 重新组织 system、tools 或历史时，不能声称保留 Anthropic 原�
 
 | 阶段 | 范围 | 约束 |
 | --- | --- | --- |
-| 当前 | 本设计文件及 Agent README 的设计入口 | 不更改生产代码和配置行为 |
+| 设计阶段 | 本设计文件及 Agent README 的设计入口 | 不更改生产代码和配置行为 |
 | 可行性实验 | `experiments/claude-code-bridge/` 的独立程序、离线 fixture、live 测试和报告 | 不注册生产 runtime；不是已交付功能 |
 | 后续 Agent 接入 | Agent `claudecode/`、`agentconfig/`、`main.go` 及对应测试 | 本地声明才启用；配置 UI 若未支持需阻止保存时丢失配置 |
 | 后续共享契约 | `common/runtime`、`common/tunnelwire`、proto 及生成代码 | 明确版本兼容和能力门禁，不手改生成代码 |
@@ -172,4 +172,5 @@ CLI 重新组织 system、tools 或历史时，不能声称保留 Anthropic 原�
 - [Claude Code CLI 参数](https://code.claude.com/docs/en/cli-reference)：参数语义；实际可用性还需与安装版本核对。
 - [Claude Code MCP 接入](https://code.claude.com/docs/en/mcp)：候选工具通道；远端工具结果续接仍需实验。
 - [Claude Code 网关兼容要求](https://code.claude.com/docs/en/llm-gateway-protocol)：Messages、流式事件及扩展字段约束。
+- [DBX Claude CLI 实现](https://github.com/t8y2/dbx/blob/9192af28aefb434fb90d27dad78831961ce0f1e8/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：用户补充的参考项目；临时目录、MCP 和 JSON 流模式已核对，但其文本历史回放不能代替本项目要求的完整工具历史。
 - 仓库依据：`service/aiServeWeaveAgent/README.md`、`service/aiServeWeaveAgent/tunnel/README.md`、`service/aiServeWeaveControlPlane/README.md`、`common/runtime/types.go`、`api/proto/tunnel/v1/tunnel.proto`、`service/aiServeWeaveGateway/httpapi/anthropic.go`、`service/aiServeWeaveGateway/httpapi/auth.go`。
