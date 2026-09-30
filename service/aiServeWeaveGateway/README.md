@@ -260,7 +260,8 @@ aiserveweave-gateway \
 | --- | --- |
 | `previous_response_id` / `store` | 仅在配置了持久化会话历史的控制面时才被兑现（STATUS.md 的 P2「Responses 持久会话」，见下一节）；未配置控制面、或调用方未认证到真实租户时仍被指名拒绝——续接一段对话既需要 Gateway 持有它，又需要一个可供限定范围的租户 |
 | `background` | 需要跨请求的服务端异步任务，本 Gateway 没有近似的东西 |
-| 内置工具（`web_search`、`file_search`、`code_interpreter`、`mcp`） | 由 OpenAI 自己的服务执行。本 Gateway 只把请求转给模型、不运行任何东西 |
+| 内置工具（`file_search`、`code_interpreter`、`mcp`） | 由 OpenAI 自己的服务执行。本 Gateway 只把请求转给模型、不运行任何东西。唯一的例外是 `web_search`：见下一节「工具循环与 Codex CLI 接入」 |
+| 无法映射的输入项类型（`compaction`、`web_search_call` 等） | 属于本端点没有实现的那一部分 API，指名拒绝而不是翻译一半 |
 | 音频输入部件（`input_audio`） | Responses API 的标准多模态输入部件里没有这个形状（`input_text`/`input_image`/`input_file` 三种，不含音频）；`POST /v1/chat/completions`（`chat.go`）已支持同名部件——见下一段 |
 | 指名 `file_id` 的 `input_file` | 需要一个 OpenAI Files API，本 Gateway 没有 |
 
@@ -268,7 +269,47 @@ aiserveweave-gateway \
 
 **多模态部件的能力门禁**：`image_url`/`input_audio`/`file` 部件分别要求 `runtime.CapabilityVision`/`CapabilityAudioInput`/`CapabilityDocumentInput`（`oaibase.ChatCapabilities`，三个前门共用同一份判定），本仓库当前没有任何适配器发布后两项——协议已经在三个前门、隧道 proto（`ContentAudio`/`ContentFile` 消息）与 `common/runtime/openai` 的出站 DTO（`input_audio`/`file` 内容部件）之间全程打通，但在真正支持音频输入或文档理解的后端接入之前，携带这两种部件的请求会被本地拒绝为能力不支持而不是假定可行——与音频转录、Rerank 同一先例。
 
-**流式的事件嵌套是自己造出来的。** 下游隧道递上来的始终是一串扁平 delta，而 Responses 客户端的状态机建立在 `response` → `output_item` → `content_part` 的边界上，因此前门按那个顺序发：`response.created` → `in_progress` → `output_item.added` → `content_part.added` → `output_text.delta`×N → `output_text.done` → `content_part.done` → `output_item.done` → `completed`。`sequence_number` 在整条流上严格递增，那是客户端用来发现丢帧的东西。中途断流发 `response.failed`——响应头已经出去了，失败无法再表现为状态码。
+### 工具循环与 Codex CLI 接入
+
+Codex CLI 只走 Responses（新版已弃用 `wire_api = "chat"`），并把整个 agent 循环建立在工具调用之上，所以这个前门除了文本还要完整承载工具循环。以下行为由 `httpapi/responses_tools.go`（工具定义与输入项翻译）与 `httpapi/responses_stream.go`（流式事件状态机）实现，已用 codex-cli 0.156.1 对着真实 Gateway 联调过：模型调用 `exec_command`、Codex 本地执行、结果以 `function_call_output` 回传、模型据此收尾。
+
+| 方向 | Responses 一侧 | 后端（Chat）看到的 |
+| --- | --- | --- |
+| 工具定义 | `function` | 原样 function 工具 |
+| 工具定义 | `custom`（自由文本，如 `apply_patch`） | 只有一个字符串参数 `input` 的 function；模型的调用被拆开外壳，以 `custom_tool_call` 项、`input` 为原文返回 |
+| 工具定义 | `local_shell` | 名为 `local_shell`、带 `command` 数组的 function；返回 `local_shell_call` 项（`action.type = "exec"`）。单个字符串形式的 `command` 交给 `bash -lc` |
+| 工具定义 | `namespace`（内含若干 function） | 展平成 `<namespace>__<name>` 的 function（namespace 末尾下划线被裁掉，所以 MCP 的 `mcp__srv__` 仍是 `mcp__srv__tool`）；返回时还原本名并带上 `namespace` 字段。namespace 属于标识的一部分，不同 namespace 的同名工具不会冲突 |
+| 工具定义 | `web_search*` | **被略去而不是拒绝**：Codex 默认每个请求都带 `{"type":"web_search"}`，拒绝它等于拒绝 Codex。模型不会被告知这个工具存在，被略去的类型在响应头 `X-Gateway-Ignored-Tools` 里列出 |
+| `tool_choice` | `{"type":"function","name":"x"}` | 改写成 Chat 的嵌套形状 `{"type":"function","function":{"name":"x"}}`；`custom`/`local_shell` 同样指向对应的 function，其他对象类型指名拒绝 |
+| 输入项 | `function_call` / `custom_tool_call` / `local_shell_call` | assistant 消息的 `tool_calls`；紧接的连续调用、以及紧跟在 assistant 文本之后的调用共用同一条 assistant 消息 |
+| 输入项 | `function_call_output` / `custom_tool_call_output` / `local_shell_call_output` | `role: "tool"` 消息，`tool_call_id` 取 `call_id`；`output` 可以是字符串、内容部件数组（返回图片的工具）或旧版的 `{content, success}` 对象 |
+| 输入项 | `reasoning` | **不转发**：那是模型自己此前的思考链，往往已加密，只对写下它的 OpenAI 模型有意义，聊天后端没有地方接收 |
+| 消息角色 | `developer` | `system`：极少有聊天模板认得 `developer` |
+
+流式输出里，文本消息与每个工具调用各是一个带自己 `output_index` 的输出项：打开着的 message 会在第一个工具调用被宣告之前关闭；调用在名字已知时才宣告（更早到的参数先扣住）；所有调用在流末尾一并关闭，因为后端会交错发出并行调用的片段。后端不给 `call_id` 时由 Gateway 生成一个（客户端要靠它把结果配对回来）；同一下标上出现不同 id 视为新调用（有些后端把每个调用都编号为 0）。截断的回复（`finish_reason = length`）以 `response.incomplete` 收尾而不是 `response.completed`，Codex 据此停下，而不是把半截工具调用当成一个完成的回合。
+
+**接入 Codex CLI**：在 `~/.codex/config.toml` 里声明一个 provider，Key 走环境变量，`base_url` 指向 Gateway 的 `/v1`：
+
+```toml
+model = "qwen3-coder"          # 必须是路由里存在的模型别名
+model_provider = "aiserveweave"
+
+[model_providers.aiserveweave]
+name = "AIServeWeave"
+base_url = "http://gateway.example:8080/v1"
+env_key = "AISERVEWEAVE_API_KEY"   # 控制面铸造的 API Key
+wire_api = "responses"
+```
+
+已知限制（都是 Codex 一侧的现象，Gateway 没有可以修补的地方）：
+
+- Codex 会打印 `Model metadata for <model> not found`：它不认识自定义模型名，走通用元数据，不影响功能。
+- 模型看不到 `web_search`，且 `reasoning` 项不会回传给后端，所以 Codex 的「联网搜索」和跨回合推理链不可用。
+- Codex 的远程压缩会发送 `compaction` 项，本端点不实现，会被指名拒绝；上下文超限时应换更长上下文的模型，或缩短会话。
+- Codex 每个请求都带工具，因此目标模型必须被 Agent 探测为支持工具调用（`tools` 能力），否则请求会被能力门禁拒绝为「不支持」，而不是让模型对着它用不了的工具作答。
+- 工具调用质量取决于后端模型：Codex 的 `instructions` 约 17 KB，加上十余个工具定义，小模型可能无法稳定产出合法的工具参数。这一层 Gateway 不做修复，畸形参数会原样交给 Codex，由它把错误反馈给模型。
+
+**流式的事件嵌套是自己造出来的。** 下游隧道递上来的始终是一串扁平 delta，而 Responses 客户端的状态机建立在 `response` → `output_item` → `content_part` 的边界上，因此前门按那个顺序发：`response.created` → `in_progress` → `output_item.added` → `content_part.added` → `output_text.delta`×N → `output_text.done` → `content_part.done` → `output_item.done` → `completed`；有工具调用时，每个调用在其后追加 `output_item.added` → `function_call_arguments.delta`×N → `function_call_arguments.done` → `output_item.done`（`custom`/`local_shell` 调用没有 arguments 事件，因为它们的项里携带的是由完整参数派生的值）。`sequence_number` 在整条流上严格递增，那是客户端用来发现丢帧的东西。中途断流发 `response.failed`——响应头已经出去了，失败无法再表现为状态码。
 
 **后端没上报 usage 时 `usage` 字段被省略，不发 `0/0/0`。**「这次不花钱」与「没人说过它花了多少」是两个不同的断言，而前者正是那种会出现在成本看板上的数字。
 

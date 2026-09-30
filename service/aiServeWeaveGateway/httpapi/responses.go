@@ -74,6 +74,10 @@ type responsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	// Tools is set on a "namespace" tool, whose members are function tools.
+	//
+	// Tools 用于 "namespace" 工具，其成员是 function 工具。
+	Tools []responsesTool `json:"tools,omitempty"`
 }
 
 type responsesText struct {
@@ -126,9 +130,19 @@ type responseOutputRaw struct {
 	Role    string                `json:"role,omitempty"`
 	Content []responseContentPart `json:"content,omitempty"`
 
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	// Arguments, Input and Action are pointers or maps so a present-but-empty
+	// value still serialises: a function_call whose arguments are "" must say
+	// so, because Responses clients treat the field as required on that type.
+	//
+	// Arguments、Input 与 Action 用指针或 map，使「存在但为空」的值依旧被序列化：
+	// arguments 为 "" 的 function_call 必须如实写出，因为 Responses 客户端把该字段
+	// 视为这个类型的必填项。
+	CallID    string         `json:"call_id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Namespace string         `json:"namespace,omitempty"`
+	Arguments *string        `json:"arguments,omitempty"`
+	Input     *string        `json:"input,omitempty"`
+	Action    map[string]any `json:"action,omitempty"`
 }
 
 type responseContentPart struct {
@@ -162,10 +176,26 @@ type incompleteDetails struct {
 //
 // responsesInputItem 是 "input" 数组的一个元素。Content 要么是裸字符串，要么是一组
 // 带类型的部件；把文本取出来之后，两种形式表达的是同一件事。
+//
+// The remaining fields belong to the tool-loop item types (function_call,
+// custom_tool_call, local_shell_call and their outputs); see
+// appendResponsesItem.
+//
+// 其余字段属于工具循环的各个项类型（function_call、custom_tool_call、
+// local_shell_call 及它们的输出）；见 appendResponsesItem。
 type responsesInputItem struct {
 	Type    string          `json:"type,omitempty"`
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+
+	ID        string          `json:"id,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Namespace string          `json:"namespace,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	Input     string          `json:"input,omitempty"`
+	Action    json.RawMessage `json:"action,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
 }
 
 // messages converts the request's input into the canonical message list,
@@ -203,25 +233,10 @@ func (req responsesRequest) messages() ([]runtime.ChatMessage, error) {
 		return nil, fmt.Errorf("input must not be empty")
 	}
 	for _, item := range items {
-		if item.Type != "" && item.Type != "message" {
-			// Function call outputs and the other item types belong to the
-			// stateful, tool-running half of this API, which this endpoint
-			// does not implement. Refusing by name beats translating half of
-			// one into a message that means something else.
-			//
-			// 函数调用输出以及其他项目类型属于本 API 中有状态、跑工具的那一半，本端点
-			// 并未实现。指名拒绝，好过把其中一半翻译成一条意思已经变了的消息。
-			return nil, fmt.Errorf("input item type %q is not supported", item.Type)
-		}
-		text, parts, err := inputItemContent(item.Content)
-		if err != nil {
+		var err error
+		if out, err = appendResponsesItem(out, item); err != nil {
 			return nil, err
 		}
-		role := item.Role
-		if role == "" {
-			role = "user"
-		}
-		out = append(out, runtime.ChatMessage{Role: role, Content: text, ContentParts: parts})
 	}
 	return out, nil
 }
@@ -333,10 +348,17 @@ func inputItemContent(raw json.RawMessage) (text string, parts []runtime.Content
 //
 // toRuntime 构造 canonical 请求。它与 chat.go 产出的是同一个类型，而这正是关键：过了
 // 本函数之后，下游没有任何东西知道这次请求是从哪个公开 API 进来的。
-func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
+//
+// The returned responsesToolset also carries what only the response side
+// needs: which tools were declared as something other than a plain function,
+// and which hosted tools were left out.
+//
+// 返回的 responsesToolset 还携带只有响应一侧才用得到的东西：哪些工具被声明成普通
+// function 之外的类型，以及哪些托管工具被略去。
+func (req responsesRequest) toRuntime() (runtime.ChatRequest, responsesToolset, error) {
 	messages, err := req.messages()
 	if err != nil {
-		return runtime.ChatRequest{}, err
+		return runtime.ChatRequest{}, responsesToolset{}, err
 	}
 	out := runtime.ChatRequest{
 		Model:       req.Model,
@@ -345,28 +367,16 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxOutputTokens,
 	}
-	for _, t := range req.Tools {
-		if t.Type != "function" {
-			// Built-in tools (web_search, file_search, code_interpreter, mcp)
-			// are executed by OpenAI's own service. This Gateway forwards to a
-			// model and runs nothing, so accepting one would promise a
-			// capability that does not exist here.
-			//
-			// 内置工具（web_search、file_search、code_interpreter、mcp）由 OpenAI 自己
-			// 的服务执行。本 Gateway 只把请求转给模型、不运行任何东西，因此接受它等于
-			// 承诺一项这里并不存在的能力。
-			return runtime.ChatRequest{}, fmt.Errorf("tool type %q is not supported by this gateway", t.Type)
-		}
-		out.Tools = append(out.Tools, runtime.Tool{
-			Type: "function",
-			Function: runtime.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
-		})
+	toolset, err := responsesTools(req.Tools)
+	if err != nil {
+		return runtime.ChatRequest{}, responsesToolset{}, err
 	}
-	if choice, ok := decodeToolChoice(req.ToolChoice); ok {
+	out.Tools = toolset.tools
+	choice, ok, err := responsesToolChoice(req.ToolChoice)
+	if err != nil {
+		return runtime.ChatRequest{}, responsesToolset{}, err
+	}
+	if ok {
 		out.ToolChoice = choice
 	}
 	if req.Text != nil && req.Text.Format != nil {
@@ -380,7 +390,7 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
 		}
 		out.ResponseFormat = format
 	}
-	return out, nil
+	return out, toolset, nil
 }
 
 // unsupported names the field this Gateway can never honour, regardless of

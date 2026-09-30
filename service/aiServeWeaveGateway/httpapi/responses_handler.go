@@ -61,10 +61,13 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 		tenantID = identity.TenantID
 	}
 
-	canonical, err := req.toRuntime()
+	canonical, toolset, err := req.toRuntime()
 	if err != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
 		return
+	}
+	if len(toolset.ignored) > 0 {
+		w.Header().Set(ignoredToolsHeader, strings.Join(toolset.ignored, ","))
 	}
 	// ownMessages is what this one turn contributes — captured before a
 	// previous_response_id's prefix is prepended below, so persisting it
@@ -93,16 +96,16 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 
 	responseID := newResponseID()
 	if req.Stream {
-		h.responsesStream(w, r, req, canonical, start, responseID, tenantID, ownMessages)
+		h.responsesStream(w, r, req, canonical, toolset, start, responseID, tenantID, ownMessages)
 		return
 	}
-	h.responsesOnce(w, r, req, canonical, start, responseID, tenantID, ownMessages)
+	h.responsesOnce(w, r, req, canonical, toolset, start, responseID, tenantID, ownMessages)
 }
 
 // responsesOnce serves a non-streaming response.
 //
 // responsesOnce 服务一次非流式响应。
-func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
+func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, toolset responsesToolset, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
 	resp, _, err := h.sched.Chat(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
@@ -111,7 +114,7 @@ func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req res
 
 	body := req.render(responseID, resp.Model, h.clock.Now())
 	body.Status, body.IncompleteDetails = statusFor(resp.FinishReason)
-	body.Output = outputItemsFor(resp.Message)
+	body.Output = outputItemsFor(resp.Message, toolset)
 	body.Usage = usageFor(resp.Usage)
 
 	if req.Store != nil && *req.Store {
@@ -211,39 +214,34 @@ func usageFor(usage runtime.Usage) *responsesUsage {
 	}
 }
 
-// outputItemsFor renders an assistant message as Responses output items. A
-// message with tool calls produces one function_call item each and no message
+// outputItemsFor renders an assistant message as Responses output items: a
+// message item for its text when it has any, then one item per tool call in the
+// type its tool was declared as. A reply that is only tool calls has no message
 // item: the model chose to call rather than to answer.
 //
-// outputItemsFor 把一条 assistant 消息渲染成 Responses 的输出项。带工具调用的消息
-// 会产出每个调用一个 function_call 项、且不产出 message 项：模型选择的是调用而不是
-// 作答。
-func outputItemsFor(msg runtime.ChatMessage) []responseOutputRaw {
-	if len(msg.ToolCalls) > 0 {
-		items := make([]responseOutputRaw, len(msg.ToolCalls))
-		for i, call := range msg.ToolCalls {
-			items[i] = responseOutputRaw{
-				Type:      "function_call",
-				ID:        newItemID("fc"),
-				Status:    "completed",
-				CallID:    call.ID,
-				Name:      call.Function.Name,
-				Arguments: call.Function.Arguments,
-			}
-		}
-		return items
+// outputItemsFor 把一条 assistant 消息渲染成 Responses 的输出项：有文本时先是一个承载
+// 文本的 message 项，随后每个工具调用一项，类型为其工具当初声明的类型。只有工具调用的
+// 回复没有 message 项：模型选择的是调用而不是作答。
+func outputItemsFor(msg runtime.ChatMessage, toolset responsesToolset) []responseOutputRaw {
+	var items []responseOutputRaw
+	if msg.Content != "" || len(msg.ToolCalls) == 0 {
+		items = append(items, responseOutputRaw{
+			Type:   "message",
+			ID:     newItemID("msg"),
+			Status: "completed",
+			Role:   "assistant",
+			Content: []responseContentPart{{
+				Type:        "output_text",
+				Text:        msg.Content,
+				Annotations: []any{},
+			}},
+		})
 	}
-	return []responseOutputRaw{{
-		Type:   "message",
-		ID:     newItemID("msg"),
-		Status: "completed",
-		Role:   "assistant",
-		Content: []responseContentPart{{
-			Type:        "output_text",
-			Text:        msg.Content,
-			Annotations: []any{},
-		}},
-	}}
+	for _, call := range msg.ToolCalls {
+		items = append(items, toolset.callItem(newItemID(toolset.itemPrefix(call.Function.Name)),
+			call.ID, call.Function.Name, call.Function.Arguments, "completed"))
+	}
+	return items
 }
 
 // -----------------------------------------------------------------------
@@ -260,7 +258,7 @@ func outputItemsFor(msg runtime.ChatMessage) []responseOutputRaw {
 // 把文本包在一层嵌套的生命周期里——先 response、再 item、再 content part——而客户端的
 // 状态机正是建立在这些边界上的。因此即便下面的后端始终只递上来一串扁平的 delta，事件
 // 也要按那个顺序发出。
-func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
+func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, toolset responsesToolset, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
 	stream, candidate, err := h.sched.ChatStream(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
@@ -283,11 +281,9 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 	em.event("response.created", map[string]any{"response": obj})
 	em.event("response.in_progress", map[string]any{"response": obj})
 
-	itemID := newItemID("msg")
-	var text strings.Builder
+	items := newResponseItems(em, toolset)
 	var usage runtime.Usage
 	var finishReason string
-	opened := false
 	loggedTTFT := false
 
 	for {
@@ -309,73 +305,41 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 		if ev.FinishReason != "" {
 			finishReason = ev.FinishReason
 		}
-		if ev.Delta.Content == "" {
+		if ev.Delta.Content == "" && len(ev.Delta.ToolCalls) == 0 {
 			continue
 		}
-		if !opened {
-			opened = true
-			// The item and its content part are announced before the first
-			// delta, because a delta names the item it belongs to and a client
-			// that has not seen that item yet has nowhere to put it.
-			//
-			// 项目与它的内容部件在第一个 delta 之前宣告，因为 delta 会点名它所属的
-			// 项目，而尚未见过该项目的客户端无处安放它。
-			em.event("response.output_item.added", map[string]any{
-				"output_index": 0,
-				"item": responseOutputRaw{
-					Type: "message", ID: itemID, Status: "in_progress", Role: "assistant",
-					Content: []responseContentPart{},
-				},
-			})
-			em.event("response.content_part.added", map[string]any{
-				"item_id": itemID, "output_index": 0, "content_index": 0,
-				"part": responseContentPart{Type: "output_text", Text: "", Annotations: []any{}},
-			})
+		items.text(ev.Delta.Content)
+		for _, call := range ev.Delta.ToolCalls {
+			items.toolCall(call)
 		}
-		text.WriteString(ev.Delta.Content)
-		em.event("response.output_text.delta", map[string]any{
-			"item_id": itemID, "output_index": 0, "content_index": 0, "delta": ev.Delta.Content,
-		})
 		if !loggedTTFT {
 			loggedTTFT = true
 			h.metrics.TTFT(EndpointResponses, time.Since(start))
 		}
 	}
 
-	if opened {
-		final := responseContentPart{Type: "output_text", Text: text.String(), Annotations: []any{}}
-		em.event("response.output_text.done", map[string]any{
-			"item_id": itemID, "output_index": 0, "content_index": 0, "text": text.String(),
-		})
-		em.event("response.content_part.done", map[string]any{
-			"item_id": itemID, "output_index": 0, "content_index": 0, "part": final,
-		})
-		em.event("response.output_item.done", map[string]any{
-			"output_index": 0,
-			"item": responseOutputRaw{
-				Type: "message", ID: itemID, Status: "completed", Role: "assistant",
-				Content: []responseContentPart{final},
-			},
-		})
-		obj.Output = []responseOutputRaw{{
-			Type: "message", ID: itemID, Status: "completed", Role: "assistant",
-			Content: []responseContentPart{final},
-		}}
-	}
+	obj.Output = items.finish()
 	obj.Status, obj.IncompleteDetails = statusFor(finishReason)
 	obj.Usage = usageFor(usage)
-	em.event("response.completed", map[string]any{"response": obj})
+	// A truncated answer is announced as response.incomplete rather than
+	// response.completed: an agent client such as Codex stops on it instead of
+	// treating half a tool call as a finished turn.
+	//
+	// 被截断的答案以 response.incomplete 而不是 response.completed 宣告：Codex 之类的
+	// agent 客户端会据此停下，而不是把半截工具调用当成一个完成的回合。
+	terminal := "response.completed"
+	if obj.Status == "incomplete" {
+		terminal = "response.incomplete"
+	}
+	em.event(terminal, map[string]any{"response": obj})
 	h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointResponses, obj.Model)
 
-	// opened guards this the same way it guards obj.Output above: a stream
-	// that never produced a content delta has nothing worth persisting as
-	// this turn's assistant reply.
+	// An assistant reply is only worth persisting when the stream produced
+	// something: text or a tool call.
 	//
-	// opened 在这里的作用与它在上面守护 obj.Output 时相同：一次从未产出过
-	// 内容 delta 的流，没有什么值得作为这一轮 assistant 回复持久化的东西。
-	if opened && req.Store != nil && *req.Store {
-		h.persistResponseTurn(responseID, tenantID, req.PreviousResponseID, obj.Model,
-			ownMessages, runtime.ChatMessage{Role: "assistant", Content: text.String()})
+	// 只有流产出了东西——文本或工具调用——时，一条 assistant 回复才值得持久化。
+	if reply, produced := items.assistantMessage(); produced && req.Store != nil && *req.Store {
+		h.persistResponseTurn(responseID, tenantID, req.PreviousResponseID, obj.Model, ownMessages, reply)
 	}
 }
 

@@ -253,8 +253,8 @@ func TestResponsesRejectsUnsupportedFields(t *testing.T) {
 		},
 		{
 			name:   "a built-in tool this gateway does not run",
-			body:   `{"model":"qwen3:8b","input":"hi","tools":[{"type":"web_search"}]}`,
-			wantIn: "web_search",
+			body:   `{"model":"qwen3:8b","input":"hi","tools":[{"type":"file_search"}]}`,
+			wantIn: "file_search",
 		},
 		{
 			name:   "an input content part type with nowhere to go",
