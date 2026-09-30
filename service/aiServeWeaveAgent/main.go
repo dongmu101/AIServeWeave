@@ -78,8 +78,13 @@ const (
 	// the transport rather than as http.Client.Timeout on purpose: a client
 	// deadline also covers reading the body, which would truncate long-lived
 	// SSE streams. Per-request deadlines come from the caller's context.
+	//
+	// responseHeaderTimeout is 5 minutes because a large local model may queue
+	// behind another request or load from disk before its first byte.
+	// responseHeaderTimeout 取 5 分钟：大模型在本机可能要排队或从磁盘加载，
+	// 之后才会吐出第一个字节。
 	dialTimeout           = 10 * time.Second
-	responseHeaderTimeout = 60 * time.Second
+	responseHeaderTimeout = 5 * time.Minute
 )
 
 func main() {
