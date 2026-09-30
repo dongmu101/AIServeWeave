@@ -301,9 +301,24 @@ env_key = "AISERVEWEAVE_API_KEY"   # 控制面铸造的 API Key
 wire_api = "responses"
 ```
 
+**再生成一份模型目录（推荐）。** Codex 按名字在自己的目录里查模型，不认识的名字会走通用兜底元数据：打印 `Model metadata for … not found`，并假定一个不是该模型真实的上下文窗口，自动压缩因此在错误的时点触发。Codex 不会为此去问 provider 的 `/v1/models`，所以这件事只能在运行 Codex 的机器上解决——用 [`scripts/codex-model-catalog.sh`](../../scripts/codex-model-catalog.sh) 生成一份目录文件：
+
+```bash
+# 第二个参数是后端实际提供的上下文窗口（token 数），默认 128000
+scripts/codex-model-catalog.sh qwen3-coder 65536 > ~/.codex/aiserveweave-models.json
+```
+
+```toml
+model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
+```
+
+脚本取的是已安装 Codex 自带的目录（`codex debug models --bundled`），而不是手写一份，因为目录 schema 随 Codex 版本变化；它去掉了所有专属于 OpenAI 托管模型的字段（推理档位、服务档位、升级提示、verbosity、托管 web search、图片输入）。换了模型别名或升级 Codex 后重新生成即可。它还有一个附带效果：目录里 `apply_patch_tool_type` 为 `freeform`，Codex 会把 `apply_patch` 声明成 `custom` 工具，即上表 `custom` 那一行的真实用例——已用真实 Codex 验证过完整往返（模型产出补丁、Codex 应用、结果回传）。
+
+`web_search` 不由目录控制，要关掉它在 `config.toml` 里设 `web_search = "disabled"`；不设也能用，只是每个请求都会带上一个被 Gateway 略去的工具。
+
 已知限制（都是 Codex 一侧的现象，Gateway 没有可以修补的地方）：
 
-- Codex 会打印 `Model metadata for <model> not found`：它不认识自定义模型名，走通用元数据，不影响功能。
+- 不生成模型目录时，Codex 会打印 `Model metadata for <model> not found` 并使用通用元数据（见上）；功能不受影响，但上下文窗口是猜的。
 - 模型看不到 `web_search`，且 `reasoning` 项不会回传给后端，所以 Codex 的「联网搜索」和跨回合推理链不可用。
 - Codex 的远程压缩会发送 `compaction` 项，本端点不实现，会被指名拒绝；上下文超限时应换更长上下文的模型，或缩短会话。
 - Codex 每个请求都带工具，因此目标模型必须被 Agent 探测为支持工具调用（`tools` 能力），否则请求会被能力门禁拒绝为「不支持」，而不是让模型对着它用不了的工具作答。
