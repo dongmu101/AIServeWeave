@@ -22,6 +22,12 @@
 
 独立的 [CLI/MCP 验证器](../../experiments/claude-code-bridge/README.md) 已实现，支持合成工具往返、两个隔离 CLI 会话及受控并行工具场景；它不提供 `/v1/messages`，也未注册到 Agent。正式接入仍以客户端工具往返、多用户隔离和原版客户端联调通过为前提，详见 [接入设计与可行性门槛](../../docs/superpowers/specs/2026-09-30-claude-code-cli-bridge-design.md)。
 
+## Codex CLI 接入（实验阶段）
+
+新增 `codexcli/`，使用本机已登录的 `codex app-server` 经 stdio 管理线程和动态工具回调，作为与 Claude 并列的 CLI 接入方向。包提供隔离的 `Probe` 验证入口，详见 [Codex 包说明](codexcli/README.md) 和 [实验命令](../../experiments/codex-cli-bridge/README.md)。
+
+该包尚未注册到运行时工厂，也没有接通 Gateway Responses 前门，当前 `runtimes` 配置不能启用 Codex。完整接入仍需验证调用方工具执行、Responses 历史与事件转换、鉴权和隧道端到端行为。
+
 ## 配置文件示例
 
 一份完整的 `-config` 文件（字段说明见上面的 `agentconfig/` 小节）：
