@@ -271,6 +271,9 @@ aiserveweave-gateway \
 
 ### 工具循环与 Codex CLI 接入
 
+**本机 Codex 作为推理后端：** Agent 已支持本地声明 `kind: codex`，凭据留在 Agent，客户端工具仍由调用方执行，见 [Agent Codex 接入](../aiServeWeaveAgent/README.md#codex-cli-接入)。新版 Codex 的 developer-role `additional_tools` 输入项也可声明工具，前门把这些定义与顶层 tools 合并并转换为同一套客户端工具；它们在当前生成中立即可用，不保留声明的历史位置或实现 tool_search 延迟发现。内置托管工具仍按既有允许/拒绝规则处理。
+
+
 Codex CLI 只走 Responses（新版已弃用 `wire_api = "chat"`），并把整个 agent 循环建立在工具调用之上，所以这个前门除了文本还要完整承载工具循环。以下行为由 `httpapi/responses_tools.go`（工具定义与输入项翻译）与 `httpapi/responses_stream.go`（流式事件状态机）实现，已用 codex-cli 0.156.1 对着真实 Gateway 联调过：模型调用 `exec_command`、Codex 本地执行、结果以 `function_call_output` 回传、模型据此收尾。
 
 | 方向 | Responses 一侧 | 后端（Chat）看到的 |

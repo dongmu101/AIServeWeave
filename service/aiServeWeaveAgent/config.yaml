@@ -1,23 +1,23 @@
-gateway:
-  endpoints:
-    - 127.0.0.1:8443
-  registry: 127.0.0.1:9443
-  node_id: node-mac-01               # 留空则由 Registry 分配
-  cert_file: ./data/agent-cert.pem
-  key_file: ./data/agent-key.pem
-  ca_file: ./data/compose-ca-cert.pem
-  bootstrap_token_file: ./data/bootstrap-token   # 仅首次注册用，用后即删
-  allowed_runtimes:                  # 留空表示放行本节点全部已配置的运行时
-    - ollama-local
-  labels:
-    region: home-mac
-    gpu: 4090
-  max_gateways: 4
-runtimes:
-  - id: ollama-local
-    kind: ollama
-    base_url: http://127.0.0.1:11434
-auto_discover: true                  # 额外探测本机 Ollama/vLLM 常见端口
+auto_discover: true
 auto_discover_interval: 30s
-metrics_addr: 127.0.0.1:9092         # 9091 被本机 Docker Desktop 占用，换一个空闲端口；留空关闭 /metrics
+gateway:
+    allowed_runtimes:
+        - codex-local
+    bootstrap_token_file: ./data/bootstrap-token
+    ca_file: ./data/compose-ca-cert.pem
+    cert_file: ./data/agent-cert.pem
+    endpoints:
+        - 127.0.0.1:8443
+    key_file: ./data/agent-key.pem
+    labels:
+        gpu: "4090"
+        region: home-mac
+    max_gateways: 4
+    node_id: node-mac-01
+    registry: 127.0.0.1:9443
 log_level: info
+metrics_addr: 127.0.0.1:9092
+runtimes:
+    - base_url: ""
+      id: codex-local
+      kind: codex

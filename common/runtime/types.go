@@ -13,9 +13,17 @@ const (
 	KindSGLang  Kind = "sglang"
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
+	// KindCodex names the Agent-local Codex app-server adapter.
+	// KindCodex 表示 Agent 本地的 Codex app-server 适配器。
+	KindCodex Kind = "codex"
 )
 
 type Config struct {
+	// AllowUnavailable keeps failed initial probes as unhealthy instances and retries them.
+	// AllowUnavailable 允许初始探测失败时保留未就绪实例，并定期重试。
+	// This is a local startup policy and is never accepted over the tunnel.
+	// 此字段仅控制本地启动策略，不通过隧道接收。
+	AllowUnavailable    bool
 	ID                  string
 	Kind                Kind
 	BaseURL             string

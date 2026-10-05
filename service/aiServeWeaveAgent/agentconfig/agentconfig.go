@@ -72,12 +72,12 @@ type Config struct {
 	// Runtimes declares local inference backends to register at startup,
 	// in addition to whatever -ollama-url/-ollama-id and auto-discovery
 	// already add. Unlike those two, a declared runtime here may be any
-	// kind common/runtime's registry knows (ollama, vllm, sglang, comfyui).
+	// kind common/runtime's registry knows (ollama, vllm, sglang, comfyui, codex).
 	//
 	// Runtimes 声明启动时要注册的本地推理后端，是 -ollama-url/-ollama-id
 	// 与自动发现之外的补充。与那两者不同，这里声明的运行时可以是
 	// common/runtime 注册表认识的任意种类（ollama、vllm、sglang、
-	// comfyui）。
+	// comfyui、codex）。
 	Runtimes []RuntimeConfig `yaml:"runtimes,omitempty"`
 
 	// AutoDiscover overrides -auto-discover when set. A nil value leaves
@@ -167,19 +167,21 @@ type GatewayConfig struct {
 
 // RuntimeConfig declares one local inference backend to register at
 // startup. Kind must name a kind common/runtime's registry knows (ollama,
-// vllm, sglang, comfyui); an unrecognized value is not validated here — it
+// vllm, sglang, comfyui, codex); an unrecognized value is not validated here — it
 // surfaces as runtime.ErrRuntimeKindUnsupported from manager.Add, the same
 // error an unrecognized -kind would produce anywhere else in this codebase.
 //
 // RuntimeConfig 声明一个启动时要注册的本地推理后端。Kind 必须是
-// common/runtime 注册表认识的种类（ollama、vllm、sglang、comfyui）；这里不
+// common/runtime 注册表认识的种类（ollama、vllm、sglang、comfyui、codex）；这里不
 // 校验未知取值——它会从 manager.Add 那里以
 // runtime.ErrRuntimeKindUnsupported 的形式暴露出来，与本代码库其他地方一
 // 个不认识的 -kind 产生的错误相同。
 type RuntimeConfig struct {
-	ID      string `yaml:"id"`
-	Kind    string `yaml:"kind"`
-	BaseURL string `yaml:"base_url"`
+	ID   string `yaml:"id"`
+	Kind string `yaml:"kind"`
+	// BaseURL is empty for Codex, which uses the local CLI login.
+	// BaseURL 对 Codex 留空，该后端使用本机 CLI 登录。
+	BaseURL string `yaml:"base_url,omitempty"`
 }
 
 // Load reads and parses a -config file at path. A parse error is wrapped

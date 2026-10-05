@@ -1,6 +1,6 @@
 # Codex CLI 桥接实验
 
-与 Claude CLI 实验并列，通过 Agent 的 `codexcli` 包验证本机 ChatGPT 登录、动态工具往返和隔离进程。当前没有提供 `/v1/responses`，不是可部署的共享 Gateway。
+与 Claude CLI 实验并列，通过 Agent 的 `codexcli` 包验证本机 ChatGPT 登录、动态工具往返和隔离进程。本实验命令不提供 `/v1/responses`；正式 Gateway → Agent 接入已单独实现，启用方式与验收见 [Agent 包说明](../../service/aiServeWeaveAgent/codexcli/README.md)。
 
 默认只显示帮助，不使用订阅：
 
@@ -21,7 +21,7 @@ go run ./experiments/codex-cli-bridge -live -codex /absolute/path/to/codex -sess
 
 输出的 `stage`、`turn_status`、`failure_code` 用于定位阶段性失败，`instruction_files` 记录本机账户通用指令的加载数量。`codex_probe_passed` 要求两个实际工具请求、随机结果校验和成功终态。任一会话失败即返回非零退出码。
 
-`responses_api_compatibility` 固定为 `not_tested`：工具由实验宿主提供结果，尚未完成原版客户端 → Gateway → Agent 的请求与历史转换。所有当前结果都应按此范围理解，不能把正常结束但未调用工具的回合算作通过。
+本实验的 `responses_api_compatibility` 固定为 `not_tested`：工具由实验宿主提供结果，这个命令自身不验证原版客户端 → Gateway → Agent 的转换。正式链路由 Gateway 的独立端到端测试验证。实验结果应按此范围理解，不能把正常结束但未调用工具的回合算作通过。
 
 更详细的本机指令继承与进程边界见 [Agent 包说明](../../service/aiServeWeaveAgent/codexcli/README.md)。
 

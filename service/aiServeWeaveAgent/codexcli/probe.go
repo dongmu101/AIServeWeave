@@ -1,5 +1,5 @@
-// Package codexcli probes a locally authenticated Codex app-server over stdio.
-// Package codexcli 通过 stdio 验证本机已登录的 Codex app-server。
+// Package codexcli serves inference and probes a locally authenticated Codex app-server over stdio.
+// Package codexcli 通过 stdio 提供本机已登录的 Codex app-server 推理及接入验证。
 package codexcli
 
 import (

@@ -44,6 +44,11 @@ func (c Config) Normalize() Config {
 
 	if n.ProbeTimeout == 0 {
 		n.ProbeTimeout = defaultProbeTimeout
+		if n.Kind == KindCodex {
+			// Cold CLI startup and account discovery need more time than an HTTP probe.
+			// CLI 冷启动和账户发现比 HTTP 探测需要更长时间。
+			n.ProbeTimeout = 15 * time.Second
+		}
 	}
 	if n.RequestTimeout == 0 {
 		n.RequestTimeout = defaultRequestTimeout
@@ -80,7 +85,10 @@ func normalizeBaseURL(raw string) string {
 
 // Validate checks a Normalize'd Config and reports every problem found
 // (not just the first), joined into one *RuntimeError with Code
-// ErrorInvalidConfig.
+// ErrorInvalidConfig. Codex uses local CLI authentication instead of HTTP.
+//
+// Validate 校验规范化后的配置，以 ErrorInvalidConfig 聚合报告全部问题。
+// Codex 使用本机 CLI，不接受 HTTP 地址或凭据。
 func (c Config) Validate() error {
 	var problems []string
 
@@ -89,12 +97,16 @@ func (c Config) Validate() error {
 	}
 
 	switch c.Kind {
-	case KindVLLM, KindSGLang, KindOllama, KindComfyUI:
+	case KindVLLM, KindSGLang, KindOllama, KindComfyUI, KindCodex:
 	default:
 		problems = append(problems, fmt.Sprintf("kind %q is not a registered runtime kind", c.Kind))
 	}
 
 	switch {
+	case c.Kind == KindCodex:
+		if c.BaseURL != "" || c.APIKey != "" || len(c.Headers) != 0 || c.TLS != (TLSConfig{}) {
+			problems = append(problems, "codex uses local CLI authentication; base_url, api_key, headers and TLS must be empty")
+		}
 	case c.BaseURL == "":
 		problems = append(problems, "base_url must not be empty")
 	default:

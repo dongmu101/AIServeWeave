@@ -1,12 +1,14 @@
 package main
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"slices"
 	"testing"
 	"time"
 
+	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
@@ -302,11 +304,11 @@ func TestResolveConfigPath(t *testing.T) {
 	})
 }
 
-// TestShouldAutoOpenConfigUI pins the one rule that keeps a first-time
-// operator's setup page from turning into a trap for everyone else: it only
-// fires when nothing at all points anywhere, and any explicit signal —
-// including a deliberate -gateway="" — turns it off, even when a resolved
-// config path would otherwise say "nothing found".
+// TestShouldAutoOpenConfigUI checks when startup falls back to the standalone
+// setup mode. Normal service startup also serves the page.
+//
+// TestShouldAutoOpenConfigUI 检查何时启动会退回独立设置模式。
+// 正常服务启动同样提供设置页面。
 func TestShouldAutoOpenConfigUI(t *testing.T) {
 	tests := []struct {
 		name               string
@@ -335,7 +337,7 @@ func TestShouldAutoOpenConfigUI(t *testing.T) {
 			want:               false,
 		},
 		{
-			name:               "explicit -config-ui-addr opts out even without -config-ui",
+			name:               "explicit -config-ui-addr selects normal service mode",
 			explicit:           map[string]bool{"config-ui-addr": true},
 			resolvedConfigPath: "",
 			want:               false,
@@ -359,6 +361,34 @@ func TestShouldAutoOpenConfigUI(t *testing.T) {
 			if got := shouldAutoOpenConfigUI(tt.configUI, tt.explicit, tt.resolvedConfigPath); got != tt.want {
 				t.Errorf("shouldAutoOpenConfigUI(%v, %v, %q) = %v, want %v",
 					tt.configUI, tt.explicit, tt.resolvedConfigPath, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCodexFactoryRequiresLocalDeclaration rejects Gateway-created Codex IDs.
+// TestCodexFactoryRequiresLocalDeclaration 拒绝 Gateway 擅自创建的 Codex ID。
+func TestCodexFactoryRequiresLocalDeclaration(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		declared []runtime.Config
+		allowed  bool
+	}{
+		{"absent", nil, false},
+		{"other kind", []runtime.Config{{ID: "codex-local", Kind: runtime.KindOllama}}, false},
+		{"declared", []runtime.Config{{ID: "codex-local", Kind: runtime.KindCodex}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := newRegistry(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := registry.Create(runtime.Config{ID: "codex-local", Kind: runtime.KindCodex}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("error=%v, want allowed=%v", err, tc.allowed)
+			}
+			if rt != nil {
+				_ = rt.Close()
 			}
 		})
 	}

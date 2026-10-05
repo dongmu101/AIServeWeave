@@ -28,6 +28,7 @@ import (
 	"AIServeWeave/common/runtime/workflow/comfyui"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
+	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
@@ -110,7 +111,7 @@ func main() {
 	configUI := flag.Bool("config-ui", false,
 		"instead of starting the agent, serve a local setup page (see -config-ui-addr) for editing -config")
 	configUIAddr := flag.String("config-ui-addr", defaultConfigUIAddr,
-		"loopback address the local setup page listens on when -config-ui is set; must be a loopback address, only takes effect together with -config-ui")
+		"loopback address the local setup page listens on; the page starts alongside the agent by default, -config-ui runs only the page")
 	flag.Parse()
 
 	if *showVersion {
@@ -120,6 +121,10 @@ func main() {
 
 	explicit := explicitFlagNames()
 	resolvedConfigPath := resolveConfigPath(*configPath, explicit["config"], defaultConfigPath)
+	uiConfigPath := *configPath
+	if !explicit["config"] {
+		uiConfigPath = defaultConfigPath
+	}
 
 	autoConfigUI := shouldAutoOpenConfigUI(*configUI, explicit, resolvedConfigPath)
 
@@ -128,10 +133,6 @@ func main() {
 		if err != nil {
 			os.Stderr.WriteString("agent: " + err.Error() + "\n")
 			os.Exit(2)
-		}
-		uiConfigPath := *configPath
-		if !explicit["config"] {
-			uiConfigPath = defaultConfigPath
 		}
 		if autoConfigUI {
 			logger.Info("no -gateway and no config file found; opening the local setup page instead of running with the tunnel disabled",
@@ -170,7 +171,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr, *configUIAddr, uiConfigPath); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -190,32 +191,18 @@ func explicitFlagNames() map[string]bool {
 	return explicit
 }
 
-// defaultConfigPath is what resolveConfigPath falls back to when -config is
-// never mentioned on the command line: "config.yaml" in the process's
-// current working directory. This is the same name and location an
-// operator gets by using -config-ui-addr without also passing -config (see
-// main's configUIAddr branch), so the two features agree on where a config
-// file lives without the operator having to say so twice.
+// defaultConfigPath is the config file in the working directory used by both
+// normal startup and the local setup page when -config is not explicitly passed.
 //
-// defaultConfigPath 是命令行上完全没提 -config 时 resolveConfigPath 落回的
-// 默认值：进程当前工作目录下的 "config.yaml"。这与只传 -config-ui-addr、不
-// 传 -config 时（见 main 里 configUIAddr 分支）落地的文件同名同地，两个功
-// 能因此在"配置文件放哪"这件事上达成一致，不需要运维说两遍。
+// defaultConfigPath 是未显式传入 -config 时，正常启动与本地设置页面
+// 共用的当前工作目录下的配置文件。
 const defaultConfigPath = "config.yaml"
 
-// defaultConfigUIAddr is -config-ui-addr's default value: a loopback
-// address the operator does not have to remember or type out. It only ever
-// takes effect when -config-ui is also set — unlike -metrics-addr, this
-// flag's default must never by itself decide whether a listener opens,
-// because doing so would make a plain, flagless run of the agent silently
-// start a page able to repoint it at a different Gateway. See -config-ui's
-// help text and the configUI branch below for the actual gate.
+// defaultConfigUIAddr is the local setup page's loopback address, used during
+// normal startup and in the standalone -config-ui mode.
 //
-// defaultConfigUIAddr 是 -config-ui-addr 的默认值：一个不用运维记住或敲出
-// 来的回环地址。它只在同时设置了 -config-ui 时才生效——与 -metrics-addr 不
-// 同，这个 flag 的默认值绝不能单独决定要不要开监听，因为那会让一次什么
-// flag 都没传的普通启动，悄悄带起一个能把 Agent 改去连接不同 Gateway 的页
-// 面。真正的开关见 -config-ui 的帮助文本与下面的 configUI 分支。
+// defaultConfigUIAddr 是本地设置页面的回环地址，正常启动与独立的
+// -config-ui 模式均使用此默认值。
 const defaultConfigUIAddr = "127.0.0.1:8899"
 
 // shouldAutoOpenConfigUI decides whether main should drop a first-time
@@ -691,24 +678,31 @@ func parseComfyUIManagedMounts(raw string) map[string]string {
 	return out
 }
 
-// run wires the runtime registry and manager, then blocks until the process is
-// signalled to stop. It returns the first error that prevents a clean start or
-// a clean shutdown.
+// run serves the local setup page alongside the runtime manager and tunnel
+// until shutdown. An unavailable page or declared backend does not prevent
+// startup; unhealthy backends are retried. Invalid configuration remains fatal.
+// declaredRuntimes merges YAML declarations with -ollama-url/-ollama-id;
+// model pulls use only ollamaURL, matching their local flag contract.
 //
-// declaredRuntimes is main's merged view of -ollama-url/-ollama-id plus
-// whatever -config's runtimes: list adds — see runtimesFromConfig. A
-// declared runtime that fails to register fails agent startup, since the
-// operator explicitly asked for it to be there.
-//
-// ollamaURL is passed again, separately, only because newModelPuller needs
-// to know which single Ollama instance a Kind:"ollama" model-pull spec
-// targets; modelpull stays -ollama-url-only and does not consult
-// declaredRuntimes, matching its documented "纯本地 flag" contract.
-func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
+// run 同时运行本地设置页面、运行时管理器和隧道，直到关闭。
+// 页面或已声明的后端暂时不可用不阻止启动；未就绪的后端会定期重试。
+// 无效配置仍使启动失败。declaredRuntimes 合并 YAML 与 -ollama-url/-ollama-id
+// 的声明；模型拉取仅使用 ollamaURL，保持其纯本地 flag 契约。
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
+	uiDone := make(chan struct{})
+	go func() {
+		defer close(uiDone)
+		if err := configui.Serve(ctx, logger, configUIAddr, configPath); err != nil {
+			logger.Error("config setup page unavailable; Agent will keep running / 配置页面不可用，Agent 继续运行", slog.Any("error", err))
+		}
+	}()
+	defer func() {
+		stop()
+		<-uiDone
+	}()
 
-	registry, err := newRegistry()
+	registry, err := newRegistry(declaredRuntimes)
 	if err != nil {
 		return err
 	}
@@ -724,13 +718,28 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 
 	deps := newDependencies(logger, metricsRegistry)
 	manager := runtime.NewManager(registry, deps)
+	defer func() {
+		stop()
+		_ = manager.Close(context.Background())
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
+	}()
 
 	configuredRuntimes := 0
 	for _, rc := range declaredRuntimes {
+		rc.AllowUnavailable = true
 		if err := manager.Add(ctx, rc); err != nil {
 			return fmt.Errorf("declared runtime %q (%s): %w", rc.ID, rc.Kind, err)
 		}
 		configuredRuntimes++
+	}
+	for _, snapshot := range manager.Snapshot() {
+		if snapshot.State != runtime.StateHealthy {
+			logger.Warn("runtime not ready; Agent will keep running and retry / 运行时未就绪，Agent 继续运行并重试",
+				slog.String("runtime_id", snapshot.Descriptor.ID), slog.String("kind", string(snapshot.Descriptor.Kind)),
+				slog.String("state", string(snapshot.State)))
+		}
 	}
 
 	// Managed ComfyUI (STATUS.md's P2 ComfyUI Managed Docker deployment,
@@ -739,9 +748,8 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	// register it exactly like an External instance so comfyui.Runtime's
 	// existing Probe/Discover — not this block — perform the
 	// ComfyUI-specific identity check. A configured Managed instance that
-	// fails to start or never becomes reachable fails agent startup, the
-	// same failure semantics as ollamaURL above: the operator explicitly
-	// opted into Managed mode, so a fast, visible failure beats silently
+	// fails to start or never becomes reachable fails agent startup: the operator
+	// explicitly opted into Managed mode, so a fast, visible failure beats silently
 	// running a node that never serves requests. The Supervisor built here
 	// is reused after boot to react to a Gateway-triggered
 	// start/stop/restart (subtask two) — see startTunnel's ComfyUIManaged
@@ -752,7 +760,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	// 路径 + 子任务二的远程生命周期动作）：先把容器带起来，等它的端口能接受连接，
 	// 再按 External 实例同样的方式注册——真正的 ComfyUI 身份校验交给既有的
 	// comfyui.Runtime 的 Probe/Discover，不是这段代码。配置了 Managed 但启动失败或
-	// 从未可达时让 Agent 启动失败，与上面 ollamaURL 同样的失败语义：运维显式选择了
+	// 从未可达时让 Agent 启动失败：运维显式选择了
 	// Managed 模式，快速可见的失败好过悄悄跑一个从不服务请求的节点。这里构造的
 	// Supervisor 在启动之后会被复用来响应 Gateway 触发的 start/stop/restart（子任务
 	// 二，见 startTunnel 的 ComfyUIManaged 接线），因此这段顺序只存在一份，而不是启动
@@ -1179,14 +1187,29 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 }
 
 // newRegistry returns a runtime registry with every supported inference
-// backend registered.
-func newRegistry() (runtime.Registry, error) {
+// backend registered. Codex IDs must be declared locally before they can be created.
+//
+// newRegistry 注册所有支持的后端；Codex ID 必须先在本地声明才允许创建。
+func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 	registry := runtime.NewRegistry()
+	localCodexIDs := make(map[string]bool)
+	for _, cfg := range declared {
+		if cfg.Kind == runtime.KindCodex {
+			localCodexIDs[cfg.ID] = true
+		}
+	}
 	factories := map[runtime.Kind]runtime.Factory{
 		runtime.KindOllama:  ollama.New,
 		runtime.KindVLLM:    vllm.New,
 		runtime.KindSGLang:  sglang.New,
 		runtime.KindComfyUI: comfyui.New,
+		runtime.KindCodex: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+			if !localCodexIDs[cfg.ID] {
+				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
+					Message: "Codex runtime must be declared in the local Agent configuration"}
+			}
+			return codexcli.New(cfg, deps)
+		},
 	}
 	for kind, factory := range factories {
 		if err := registry.Register(kind, factory); err != nil {

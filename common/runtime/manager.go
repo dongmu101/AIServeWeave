@@ -15,6 +15,10 @@ import (
 // visible, and keeps them refreshed with periodic Health and Discover
 // calls. Manager does not select instances by capability or proxy
 // inference/workflow requests — that is the upper-layer scheduler's job.
+// With Config.AllowUnavailable, failed initial checks remain visible as unhealthy.
+//
+// Manager 通过 Registry 创建并探测运行时，维护周期健康检查和模型发现；不代理或调度请求。
+// AllowUnavailable 使初始检查失败的实例保留为未就绪。
 type Manager interface {
 	Add(ctx context.Context, cfg Config) error
 	Replace(ctx context.Context, cfg Config) error
@@ -62,6 +66,7 @@ type managedInstance struct {
 	consecutiveFailures  int
 	consecutiveSuccesses int
 	closed               bool
+	pending              bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -96,8 +101,11 @@ func NewManager(registry Registry, deps Dependencies) Manager {
 
 // Add normalizes and validates cfg, creates a Runtime through the Registry,
 // and runs Probe then Discover before the instance becomes visible through
-// Get/Snapshot. If Probe or Discover fails, the Runtime is closed and never
-// registered — Add does not leave a "registering" placeholder behind.
+// Get/Snapshot. By default, a failed check closes the Runtime without registering it.
+// AllowUnavailable retains it as unhealthy and retries full initialization instead.
+//
+// Add 先校验配置并完成探测与发现；默认失败会关闭实例。
+// AllowUnavailable 开启时保留未就绪实例，并定期重试完整初始化。
 func (m *manager) Add(ctx context.Context, cfg Config) error {
 	normalized := cfg.Normalize()
 	if err := normalized.Validate(); err != nil {
@@ -138,42 +146,60 @@ func (m *manager) reserveID(cfg Config) error {
 }
 
 // createAndValidate builds a Runtime and runs Probe then Discover. On any
-// failure it closes the Runtime and returns that failure as-is (Probe and
-// Discover already return *RuntimeError).
+// failure it closes the Runtime unless local startup allows unavailable backends.
+//
+// createAndValidate 创建并探测运行时；本地允许未就绪时保留实例，其他失败仍关闭。
 func (m *manager) createAndValidate(ctx context.Context, cfg Config) (*managedInstance, error) {
 	rt, err := m.registry.Create(cfg, m.deps)
 	if err != nil {
 		return nil, err
 	}
 
-	probeResult, err := rt.Probe(ctx)
-	if err != nil {
-		rt.Close()
-		return nil, err
-	}
-
-	discovery, err := rt.Discover(ctx)
-	if err != nil {
+	probeResult, discovery, err := initializeRuntime(ctx, rt)
+	var runtimeErr *RuntimeError
+	invalid := errors.As(err, &runtimeErr) && (runtimeErr.Code == ErrorInvalidConfig || runtimeErr.Code == ErrorClosed)
+	if err != nil && (!cfg.AllowUnavailable || ctx.Err() != nil || invalid) {
 		rt.Close()
 		return nil, err
 	}
 
 	now := m.clock.Now()
+	state := StateHealthy
+	health := HealthReport{State: state, CheckedAt: now}
+	if err != nil {
+		state = StateUnhealthy
+		health.State, health.ErrorSummary = state, "runtime not ready; retrying probe and discovery"
+		// Do not publish partial evidence or models before both checks succeed.
+		// 两项检查都成功前，不发布部分证据或模型。
+		probeResult, discovery = ProbeResult{Kind: cfg.Kind}, Discovery{}
+	}
 	instCtx, cancel := context.WithCancel(context.Background())
 	return &managedInstance{
 		runtime:    rt,
 		cfg:        cfg,
 		descriptor: rt.Descriptor(),
-		state:      StateHealthy,
+		state:      state,
 		probe:      probeResult,
-		health:     HealthReport{State: StateHealthy, CheckedAt: now},
+		health:     health,
 		discovery:  discovery,
 		degraded:   append([]string(nil), discovery.Warnings...),
 		updatedAt:  now,
 		ctx:        instCtx,
 		cancel:     cancel,
 		done:       make(chan struct{}),
+		pending:    err != nil,
 	}, nil
+}
+
+// initializeRuntime requires both identity probing and model discovery to succeed.
+// initializeRuntime 要求身份探测和模型发现都成功。
+func initializeRuntime(ctx context.Context, rt Runtime) (ProbeResult, Discovery, error) {
+	probe, err := rt.Probe(ctx)
+	if err != nil {
+		return ProbeResult{}, Discovery{}, err
+	}
+	discovery, err := rt.Discover(ctx)
+	return probe, discovery, err
 }
 
 // register inserts inst into the instance table, re-checking for a closed
@@ -414,7 +440,17 @@ func (m *manager) scheduleLoop(id string, inst *managedInstance) {
 // threshold state machine. It reports whether this call just brought the
 // instance back from unhealthy to healthy, so the caller can trigger an
 // immediate Discover refresh.
+// Pending local backends retry Probe and Discover before becoming healthy.
+//
+// doHealthCheck 更新健康状态；本地未就绪实例先重新完成 Probe 与 Discover。
 func (m *manager) doHealthCheck(inst *managedInstance) (recovered bool) {
+	inst.mu.Lock()
+	pending := inst.pending
+	inst.mu.Unlock()
+	if pending {
+		m.retryInitialization(inst)
+		return false
+	}
 	ctx, cancel := context.WithTimeout(inst.ctx, inst.cfg.ProbeTimeout)
 	defer cancel()
 	report, err := inst.runtime.Health(ctx)
@@ -450,7 +486,44 @@ func (m *manager) doHealthCheck(inst *managedInstance) (recovered bool) {
 	return recovered
 }
 
+// retryInitialization keeps a backend unschedulable until full initialization succeeds.
+// retryInitialization 在完整初始化成功前保持后端不可调度。
+func (m *manager) retryInitialization(inst *managedInstance) {
+	ctx, cancel := context.WithTimeout(inst.ctx, inst.cfg.RequestTimeout)
+	defer cancel()
+	probe, discovery, err := initializeRuntime(ctx, inst.runtime)
+	inst.mu.Lock()
+	if inst.closed {
+		inst.mu.Unlock()
+		return
+	}
+	now := m.clock.Now()
+	inst.updatedAt = now
+	inst.health.CheckedAt = now
+	if err != nil {
+		inst.mu.Unlock()
+		return
+	}
+	inst.pending, inst.state = false, StateHealthy
+	inst.probe, inst.discovery = probe, discovery
+	inst.descriptor = inst.runtime.Descriptor()
+	inst.degraded = append([]string(nil), discovery.Warnings...)
+	inst.health = HealthReport{State: StateHealthy, CheckedAt: now}
+	inst.mu.Unlock()
+	if m.deps.Logger != nil {
+		m.deps.Logger.Info("runtime ready / 运行时已就绪", "runtime_id", inst.cfg.ID, "kind", inst.cfg.Kind)
+	}
+}
+
+// doDiscoverRefresh updates models only after initial identity verification succeeds.
+// doDiscoverRefresh 只在首次身份验证成功后更新模型目录。
 func (m *manager) doDiscoverRefresh(inst *managedInstance) {
+	inst.mu.Lock()
+	pending := inst.pending
+	inst.mu.Unlock()
+	if pending {
+		return
+	}
 	timeout := inst.cfg.RequestTimeout
 	ctx, cancel := context.WithTimeout(inst.ctx, timeout)
 	defer cancel()

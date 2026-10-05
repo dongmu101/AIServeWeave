@@ -596,3 +596,29 @@ func TestResponsesStreamReportsATruncatedReplyAsIncomplete(t *testing.T) {
 		t.Errorf("status = %v, want incomplete", resp["status"])
 	}
 }
+
+// TestResponsesAdditionalTools merges inline declarations into caller-executed tools.
+// TestResponsesAdditionalTools 将内联声明合并为调用方执行的工具。
+func TestResponsesAdditionalTools(t *testing.T) {
+	got, _ := backendSaw(t, `{"model":"qwen3:8b","tools":[{"type":"function","name":"top","parameters":{"type":"object"}}],"input":[
+  {"type":"additional_tools","role":"developer","tools":[{"type":"namespace","name":"functions","tools":[{"type":"function","name":"shell","parameters":{"type":"object"}}]},{"type":"custom","name":"apply_patch"}]},
+  {"role":"user","content":"hi"}
+ ]}`)
+	want := []string{"user:hi", "tool:top", "tool:functions__shell", "tool:apply_patch"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("backend=%q, want %q", got, want)
+	}
+	for _, tc := range []struct{ name, inline string }{
+		{"wrong role", `{"type":"additional_tools","role":"user","tools":[{"type":"function","name":"shell"}]}`},
+		{"empty", `{"type":"additional_tools","role":"developer","tools":[]}`},
+		{"hosted", `{"type":"additional_tools","role":"developer","tools":[{"type":"file_search"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, _ := newServer(t, httpapi.Config{})
+			resp, _ := postResponses(t, srv.URL, `{"model":"qwen3:8b","input":[`+tc.inline+`,{"role":"user","content":"hi"}]}`)
+			if resp.StatusCode != http.StatusBadRequest {
+				t.Fatalf("status=%d, want 400", resp.StatusCode)
+			}
+		})
+	}
+}

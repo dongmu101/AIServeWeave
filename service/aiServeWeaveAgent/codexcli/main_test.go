@@ -15,6 +15,10 @@ import (
 // TestMain 提供离线 app-server 测试桩并统一检查协程回收。
 func TestMain(m *testing.M) {
 	if mode := os.Getenv("AISW_CODEX_FIXTURE"); mode != "" {
+		if mode == "runtime" {
+			runtimeFixture()
+			os.Exit(0)
+		}
 		fakeServer(mode)
 		os.Exit(0)
 	}

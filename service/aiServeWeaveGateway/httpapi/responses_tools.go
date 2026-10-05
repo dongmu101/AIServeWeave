@@ -475,6 +475,14 @@ func appendResponsesItem(out []runtime.ChatMessage, item responsesInputItem) ([]
 		}
 		return append(out, runtime.ChatMessage{Role: role, Content: text, ContentParts: parts}), nil
 
+	case "additional_tools":
+		// Tool declarations are merged for the current generation by toRuntime.
+		// 工具声明由 toRuntime 合并，用于当前这次生成。
+		if item.Role != "developer" || len(item.Tools) == 0 {
+			return nil, fmt.Errorf("additional_tools requires developer role and a nonempty tools array")
+		}
+		return out, nil
+
 	case "reasoning":
 		// A reasoning item is the model's own prior chain of thought, often
 		// encrypted and meaningful only to the OpenAI model that wrote it. A

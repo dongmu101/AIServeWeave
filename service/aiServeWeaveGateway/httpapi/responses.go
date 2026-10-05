@@ -196,6 +196,7 @@ type responsesInputItem struct {
 	Input     string          `json:"input,omitempty"`
 	Action    json.RawMessage `json:"action,omitempty"`
 	Output    json.RawMessage `json:"output,omitempty"`
+	Tools     []responsesTool `json:"tools,omitempty"`
 }
 
 // messages converts the request's input into the canonical message list,
@@ -367,7 +368,16 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, responsesToolset, 
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxOutputTokens,
 	}
-	toolset, err := responsesTools(req.Tools)
+	tools := append([]responsesTool(nil), req.Tools...)
+	var items []responsesInputItem
+	if json.Unmarshal(req.Input, &items) == nil {
+		for _, item := range items {
+			if item.Type == "additional_tools" {
+				tools = append(tools, item.Tools...)
+			}
+		}
+	}
+	toolset, err := responsesTools(tools)
 	if err != nil {
 		return runtime.ChatRequest{}, responsesToolset{}, err
 	}

@@ -58,15 +58,23 @@ type fleet struct {
 	tunnelWG  sync.WaitGroup
 	tunnelErr chan error
 
-	cancel context.CancelFunc
+	cancel  context.CancelFunc
+	backend runtime.Kind
+	factory runtime.Factory
 }
 
 // newFleet starts replicaCount replicas and one Agent connected to all of
 // them, with one runtime instance registered and healthy.
 func newFleet(t *testing.T, replicaCount int) *fleet {
+	return newFleetWithBackend(t, replicaCount, backendKind, newBackend)
+}
+
+// newFleetWithBackend connects a concrete adapter to real mTLS tunnel replicas.
+// newFleetWithBackend 将具体适配器连接到真实 mTLS 隧道副本。
+func newFleetWithBackend(t *testing.T, replicaCount int, kind runtime.Kind, factory runtime.Factory) *fleet {
 	t.Helper()
 	p := newPKI(t)
-	f := &fleet{t: t, pki: p, tunnelErr: make(chan error, 1)}
+	f := &fleet{t: t, pki: p, tunnelErr: make(chan error, 1), backend: kind, factory: factory}
 
 	for i := range replicaCount {
 		f.replicas = append(f.replicas, f.startReplica(fmt.Sprintf("replica-%d", i)))
@@ -137,7 +145,7 @@ func (f *fleet) startAgent(seeds []string) {
 		Metrics:    discardMetrics{},
 	}
 	registry := runtime.NewRegistry()
-	if err := registry.Register(backendKind, newBackend); err != nil {
+	if err := registry.Register(f.backend, f.factory); err != nil {
 		f.t.Fatalf("registering the scripted backend: %v", err)
 	}
 	f.manager = runtime.NewManager(registry, deps)
@@ -145,10 +153,14 @@ func (f *fleet) startAgent(seeds []string) {
 	ctx, cancel := context.WithCancel(context.Background())
 	f.cancel = cancel
 
+	backendURL := "http://127.0.0.1:1"
+	if f.backend == runtime.KindCodex {
+		backendURL = ""
+	}
 	if err := f.manager.Add(ctx, runtime.Config{
 		ID:            "backend-1",
-		Kind:          backendKind,
-		BaseURL:       "http://127.0.0.1:1",
+		Kind:          f.backend,
+		BaseURL:       backendURL,
 		MaxConcurrent: 8,
 	}); err != nil {
 		f.t.Fatalf("adding the backend: %v", err)

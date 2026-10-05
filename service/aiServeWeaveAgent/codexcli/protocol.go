@@ -22,9 +22,10 @@ type frame struct {
 }
 
 type protocol struct {
-	scanner *bufio.Scanner
-	output  io.Writer
-	report  Report
+	scanner  *bufio.Scanner
+	output   io.Writer
+	report   Report
+	activity func()
 }
 
 func (p *protocol) write(v any) error {
@@ -45,6 +46,9 @@ func (p *protocol) read() (frame, error) {
 		return frame{}, ErrProtocol
 	}
 	p.report.Events++
+	if p.activity != nil {
+		p.activity()
+	}
 	data := p.scanner.Bytes()
 	var msg frame
 	if len(data) > maxFrameBytes || json.Unmarshal(data, &msg) != nil || (msg.Method == "" && len(msg.ID) == 0) {

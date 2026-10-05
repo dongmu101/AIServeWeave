@@ -1,8 +1,12 @@
 package configui
 
 import (
+	"bufio"
+	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -10,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
@@ -52,6 +57,80 @@ func TestServeRejectsNonLoopback(t *testing.T) {
 func TestServeRejectsEmptyConfigPath(t *testing.T) {
 	if err := Serve(t.Context(), discardLogger(), "127.0.0.1:0", ""); err == nil {
 		t.Fatal("Serve with an empty configPath returned no error")
+	}
+}
+
+func TestServeLifecycle(t *testing.T) {
+	tests := []struct {
+		name            string
+		cancelBeforeRun bool
+	}{
+		{name: "serves the page until canceled"},
+		{name: "canceled before startup", cancelBeforeRun: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			if tt.cancelBeforeRun {
+				cancel()
+			}
+			logReader, logWriter := io.Pipe()
+			defer logReader.Close()
+			logger := slog.New(slog.NewJSONHandler(logWriter, nil))
+			done := make(chan error, 1)
+			configPath := filepath.Join(t.TempDir(), "agent.yaml")
+			go func() {
+				done <- Serve(ctx, logger, "127.0.0.1:0", configPath)
+				_ = logWriter.Close()
+			}()
+			var entry struct{ Addr string }
+			line, err := bufio.NewReader(logReader).ReadBytes('\n')
+			if err != nil {
+				t.Fatalf("listening log read error = %v, want nil", err)
+			}
+			if err := json.Unmarshal(line, &entry); err != nil {
+				t.Fatalf("listening log decode error = %v, want nil", err)
+			}
+			if !tt.cancelBeforeRun {
+				client := &http.Client{Timeout: 5 * time.Second}
+				defer client.CloseIdleConnections()
+				res, err := client.Get("http://" + entry.Addr + "/")
+				if err != nil {
+					t.Fatalf("GET page error = %v, want nil", err)
+				}
+				_ = res.Body.Close()
+				if res.StatusCode != http.StatusOK {
+					t.Errorf("GET status = %d, want %d", res.StatusCode, http.StatusOK)
+				}
+				cancel()
+			}
+			if err := <-done; err != nil {
+				t.Fatalf("Serve after cancellation error = %v, want nil", err)
+			}
+			listener, err := net.Listen("tcp", entry.Addr)
+			if err != nil {
+				t.Fatalf("rebind after shutdown error = %v, want nil", err)
+			}
+			_ = listener.Close()
+		})
+	}
+}
+
+func TestServeOccupiedPort(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	var logs strings.Builder
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	err = Serve(t.Context(), logger, listener.Addr().String(), filepath.Join(t.TempDir(), "agent.yaml"))
+	if err == nil {
+		t.Fatal("Serve error = nil, want occupied-port error")
+	}
+	if logs.Len() != 0 {
+		t.Errorf("failed listener logs = %q, want empty", logs.String())
 	}
 }
 
@@ -99,14 +178,15 @@ func TestIndexHandlerSaveAndReload(t *testing.T) {
 	}
 
 	form := url.Values{
-		"endpoints":     {"gw-1.example.com:8443, gw-2.example.com:8443"},
-		"registry":      {"registry.example.com:9443"},
-		"node_id":       {"node-a"},
-		"labels":        {"region=local\ngpu=4090"},
-		"runtimes":      {"ollama-local,ollama,http://127.0.0.1:11434"},
-		"auto_discover": {"1"},
-		"metrics_addr":  {"127.0.0.1:9091"},
-		"log_level":     {"debug"},
+		"endpoints":        {"gw-1.example.com:8443, gw-2.example.com:8443"},
+		"registry":         {"registry.example.com:9443"},
+		"node_id":          {"node-a"},
+		"labels":           {"region=local\ngpu=4090"},
+		"runtimes":         {"ollama-local,ollama,http://127.0.0.1:11434\ncodex-local,codex,"},
+		"allowed_runtimes": {"ollama-local,codex-local"},
+		"auto_discover":    {"1"},
+		"metrics_addr":     {"127.0.0.1:9091"},
+		"log_level":        {"debug"},
 	}
 	postReq := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(form.Encode()))
 	postReq.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -129,14 +209,20 @@ func TestIndexHandlerSaveAndReload(t *testing.T) {
 	if saved.Gateway.NodeID != "node-a" {
 		t.Errorf("saved NodeID = %q, want %q", saved.Gateway.NodeID, "node-a")
 	}
-	if len(saved.Runtimes) != 1 || saved.Runtimes[0].ID != "ollama-local" {
-		t.Errorf("saved Runtimes = %v, want one ollama-local entry", saved.Runtimes)
+	if len(saved.Runtimes) != 2 || saved.Runtimes[0].ID != "ollama-local" || saved.Runtimes[1] != (agentconfig.RuntimeConfig{ID: "codex-local", Kind: "codex"}) {
+		t.Errorf("saved Runtimes = %v, want ollama-local and local-only codex-local", saved.Runtimes)
+	}
+	if got := strings.Join(saved.Gateway.AllowedRuntimes, ","); got != "ollama-local,codex-local" {
+		t.Errorf("saved allowed runtimes = %q, want ollama-local,codex-local", got)
 	}
 
 	reGetRec := httptest.NewRecorder()
 	handler(reGetRec, httptest.NewRequest(http.MethodGet, "/", nil))
 	if !strings.Contains(reGetRec.Body.String(), "node-a") {
 		t.Errorf("reloaded form does not show the saved node_id: %s", reGetRec.Body.String())
+	}
+	if !strings.Contains(reGetRec.Body.String(), "codex-local,codex,") {
+		t.Error("reloaded form omitted Codex runtime, want codex-local,codex,")
 	}
 }
 
@@ -146,5 +232,15 @@ func TestIndexHandlerRejectsOtherMethods(t *testing.T) {
 	handler(rec, httptest.NewRequest(http.MethodDelete, "/", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
 		t.Errorf("DELETE status = %d, want %d", rec.Code, http.StatusMethodNotAllowed)
+	}
+}
+
+// TestParseCodexRuntime accepts a local CLI declaration with no HTTP address.
+// TestParseCodexRuntime 接受不含 HTTP 地址的本地 CLI 声明。
+func TestParseCodexRuntime(t *testing.T) {
+	got := parseRuntimes("codex-local,codex,\ninvalid-http,ollama,")
+	want := []agentconfig.RuntimeConfig{{ID: "codex-local", Kind: "codex"}}
+	if len(got) != len(want) || got[0] != want[0] {
+		t.Fatalf("runtimes=%+v, want %+v", got, want)
 	}
 }

@@ -8,5 +8,5 @@ dist/
 .worktrees/
 *.log
 *.pem
-aiServeWeaveAgent
+/aiServeWeaveAgent
 .cache

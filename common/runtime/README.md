@@ -230,9 +230,11 @@ const (
 	KindSGLang  Kind = "sglang"
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
+	KindCodex   Kind = "codex"
 )
 
 type Config struct {
+	AllowUnavailable    bool // local admission only / 本地未就绪策略，不通过隧道接收
 	ID                  string
 	Kind                Kind
 	BaseURL             string
@@ -494,7 +496,7 @@ runtimes:
 
 - `id` 非空且在单个 Agent 内唯一。
 - `kind` 只能是四个已注册值之一。
-- `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。
+- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。`kind: codex` 是 Agent 本地 CLI 后端，`base_url`、API Key、Headers 和 TLS 均必须为空；实现位于 `service/aiServeWeaveAgent/codexcli`，不会链入 Gateway。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
 - 自定义 Header 禁止覆盖 `Host`、`Content-Length`、hop-by-hop headers 和 Agent 链路追踪头。
 - 生产配置通过 Secret 引用提供密钥；`Config` 的格式化方法必须脱敏。
@@ -519,7 +521,7 @@ func (c Config) LogValue() slog.Value
 
 `Normalize` 必须在 `Validate` 之前调用，Registry 的 `Create` 内部按此顺序执行，调用方无需自行拼装。URL 拼接统一走 `url.URL.JoinPath`，保留配置中的路径前缀。
 
-建议默认值：探测和健康检查超时 `3s`，发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
+建议默认值：探测和健康检查超时 `3s`（本地 Codex CLI 为 `15s`，覆盖冷启动），发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
 
 ## 后端接入矩阵
 
@@ -689,7 +691,7 @@ type Snapshot struct {
 }
 ```
 
-`Add` 内部串行执行「创建 → Probe → Discover → 注册 → 启动调度」；Probe 失败时实例不进入实例表并被立即 `Close`，不留 `registering` 僵尸条目。`Get` 返回接口值，调用方通过类型断言取得 `InferenceRuntime` 或 `WorkflowRuntime`；Manager 不提供按能力选择实例的调度方法，那属于上层调度器。
+`Add` 默认串行执行「创建 → Probe → Discover → 注册 → 启动调度」；Probe 或 Discover 失败时关闭实例且不注册。Agent 对本地已声明的后端设置 `Config.AllowUnavailable=true`：配置和 Factory 校验仍必须成功，首次可用性检查失败时保留 `unhealthy` 实例、空模型目录和固定未就绪说明；按健康检查间隔重试完整 Probe + Discover，两项都成功后才发布模型并转为 `healthy`。这项本地启动策略不通过隧道接收，不改变远程配置下发的默认严格校验。`Get` 返回接口值，调用方通过类型断言取得 `InferenceRuntime` 或 `WorkflowRuntime`；Manager 不提供按能力选择实例的调度方法，那属于上层调度器。
 
 Manager 使用互斥锁保护实例表，但任何网络调用都不能持锁执行：先在锁内取出实例引用，再释放锁发起请求。读取方获得不可变 `Snapshot`，不能拿到 Manager 内部可修改对象。
 
@@ -706,9 +708,11 @@ registering
 任意状态 ── Remove/Close ──► closed
 ```
 
+本地 `AllowUnavailable` 模式另有一条初始化路径：首次 Probe/Discover 失败 → `unhealthy`（尚未初始化）→ 完整 Probe + Discover 重试成功 → `healthy`。这条路径在身份与模型都确认前不会发布任何模型。
+
 - 健康检查默认每 `10s` 执行一次，并加入最多 `10%` 抖动，避免所有实例同时请求。
 - Discover 默认每 `5m` 刷新；健康恢复后立即刷新一次。
-- 同一实例最多一个 Health 和一个 Discover 在途；慢请求不会堆积。
+- 同一实例的周期检查串行执行，慢请求不会堆积。尚未初始化的本地实例先重试 Probe + Discover，不单靠 Health 成功判断就绪；关闭时取消重试并回收实例。
 - 配置替换采用“新实例 Probe 成功后原子替换，最后关闭旧实例”。
 - `Manager.Close` 先停止调度，再取消在途检查，最后关闭全部实例并汇总错误。
 
@@ -991,7 +995,7 @@ go test -race ./common/runtime/...
 实现说明：
 
 - `registry_test.go`、`manager_test.go` 按 README 约定写成黑盒测试（`package runtime_test`），因为它们需要 `internal/runtimetest`，而 `runtimetest` 反过来又 import `runtime` 做接口断言——放进包内测试会直接构成 import cycle。包内细节（SSE、URL 拼接等）仍留在 `package runtime`/`package openai`。
-- `Manager.Add`/`Replace` 里 Probe 和 Discover 都在“进入实例表之前”同步执行；Discover 失败和 Probe 失败一样会 `Close` 掉新建的 Runtime 且不注册，不会遗留 `registering` 僵尸条目（状态图上 `registering → healthy` 那条边本身就要求两者都成功）。
+- 默认严格模式下，`Manager.Add`/`Replace` 里 Probe 和 Discover 都在“进入实例表之前”同步执行；Discover 失败和 Probe 失败一样会 `Close` 掉新建的 Runtime 且不注册，不会遗留 `registering` 僵尸条目（状态图上 `registering → healthy` 那条边本身就要求两者都成功）。
 - 每个实例一个调度协程，用 `select` 在同一个 goroutine 里轮流处理 Health 定时器、Discover 定时器和取消信号；Health/Discover 网络调用是同步执行的，天然保证“同一实例最多一个在途”，慢请求只是推迟下一次定时器的创建时间，不会排队堆积。
 - 取消通过每实例的 `context.CancelFunc` 实现，Health/Discover 的调用 Context 都是这个 cancel context 的子 Context——`Remove`/`Replace`/`Close` 一 cancel，正在进行中的检查立刻收到 `ctx.Done()`，不必等它自然超时。
 - `Snapshot.Inflight` 暂时恒为 `0`：README 没有说明上层如何把请求路径的 `Limiter` 获取/释放接回 Manager（`Get` 只返回裸 `Runtime`），这段留给阶段 8 的集成工作，此处不臆造一套接口。
