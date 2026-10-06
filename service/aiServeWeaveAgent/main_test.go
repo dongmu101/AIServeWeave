@@ -393,3 +393,31 @@ func TestCodexFactoryRequiresLocalDeclaration(t *testing.T) {
 		})
 	}
 }
+
+// TestClaudeFactoryRequiresLocalDeclaration rejects Gateway-created Claude IDs.
+// TestClaudeFactoryRequiresLocalDeclaration 拒绝 Gateway 擅自创建的 Claude ID。
+func TestClaudeFactoryRequiresLocalDeclaration(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		declared []runtime.Config
+		allowed  bool
+	}{
+		{"absent", nil, false},
+		{"other kind", []runtime.Config{{ID: "claude-local", Kind: runtime.KindOllama}}, false},
+		{"declared", []runtime.Config{{ID: "claude-local", Kind: runtime.KindClaude}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := newRegistry(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := registry.Create(runtime.Config{ID: "claude-local", Kind: runtime.KindClaude}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("error=%v, want allowed=%v", err, tc.allowed)
+			}
+			if rt != nil {
+				_ = rt.Close()
+			}
+		})
+	}
+}

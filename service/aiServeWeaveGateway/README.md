@@ -6,7 +6,7 @@
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
-| `tunnelserver/` | 已实现 | 隧道终结：mTLS 认证、节点表、槽池、十二个 Operation 的分发、`NodeRuntime` |
+| `tunnelserver/` | 已实现 | 隧道终结：mTLS 认证、节点表、槽池、共享 Operation 的分发、`NodeRuntime` |
 | `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
 | `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
@@ -603,3 +603,17 @@ aiserveweave-gateway \
 4. 配置内容回滚应在 Console 选择历史版本并发布为新版本。若需退出控制面模式，先导出选定版本的 `routes` 数组到文件、校验后显式切回 file 并重启；不得把包含 revision 等元数据的缓存文件直接当作旧路由数组使用。
 
 公开契约见 `common/modelroute`；带宽/内存/历史容量上限和控制面 API 见 [ControlPlane README](../aiServeWeaveControlPlane/README.md#模型路由发布p02)。
+
+## Claude Code 原生 Messages
+
+模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。其他模型仍使用既有 Chat 转换。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 端点接受 `x-api-key` 或既有 Bearer 认证，其他端点仍要求 Bearer；凭据不进入隧道。
+
+Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定两分钟到期，已投递或结果不确定时拒绝重放。续接不会换节点，节点失联、Agent 重启或等待超时后需开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
+
+CLI 后端发布 `sonnet`。原版 Claude Code 的已验证模型名可用以下路由（文件格式，或在控制面发布同样的路由）：
+
+```json
+[{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"sonnet"}]}]
+```
+
+Agent 与 Gateway 必须同时升级到支持 `OPERATION_MESSAGES` 的版本。客户端配置、支持范围和真实联调见 [Claude 运行时说明](../aiServeWeaveAgent/claudecode/README.md)。原生请求最多 1 MiB、单事件最多 1 MiB、单回合响应最多 8 MiB；流中失败发送明确错误，非流式只在完整成功结束后返回结果。

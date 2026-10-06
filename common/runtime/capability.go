@@ -8,6 +8,9 @@ import "fmt"
 type Capability string
 
 const (
+	// CapabilityMessages gates the native Anthropic Messages interface.
+	// CapabilityMessages 为原生 Anthropic Messages 接口提供能力门禁。
+	CapabilityMessages          Capability = "anthropic_messages"
 	CapabilityChat              Capability = "chat"
 	CapabilityChatStream        Capability = "chat_stream"
 	CapabilityCompletions       Capability = "completions"

@@ -256,6 +256,21 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		}
 		return forwardStream(d, sink, stream, tunnelwire.MarshalChatEvent)
 
+	case tunnelv1.Operation_OPERATION_MESSAGES:
+		mr, ok := rt.(runtime.MessagesRuntime)
+		if !ok {
+			return &runtime.RuntimeError{Code: runtime.ErrorCapability, RuntimeID: id, Message: "native Messages capability unavailable"}
+		}
+		messageReq, err := tunnelwire.UnmarshalMessagesRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		stream, err := mr.Messages(ctx, messageReq)
+		if err != nil {
+			return err
+		}
+		return forwardStream(d, sink, stream, tunnelwire.MarshalMessagesEvent)
+
 	case tunnelv1.Operation_OPERATION_EMBED:
 		ir, err := inferenceRuntime(rt, id)
 		if err != nil {

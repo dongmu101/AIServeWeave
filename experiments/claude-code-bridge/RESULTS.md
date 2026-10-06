@@ -1,3 +1,43 @@
+# 正式接入验证记录（2026-10-05）
+
+Go `1.27.1`、macOS arm64、Claude Code `2.1.289`，使用 CLI 原生订阅登录；未提取或转发登录凭据。后端已注册 `kind: claude`，配置页可选择，Agent 与 Gateway 通过新增的原生 Messages 操作连接。上游固定 `claude-sonnet-4-6`，对外发布 `sonnet`，客户端完整模型名通过路由映射。
+
+## 已运行的证据
+
+| 检查 | 结果与范围 |
+| --- | --- |
+| 真实 Messages 前门 | 单独 HTTP 工具请求/结果往返通过，最终结果包含仅调用方持有的随机值 |
+| 原版 CLI 客户端 | 不修改客户端代码，Read 读取临时文件、Edit 追加验证标记、最终回复保留原内容；通过 |
+| 双用户完整链路 | 两个原版客户端同时使用不同 Key，经轮流选择的两个 Gateway 副本、共享真实 Redis、真实 Agent mTLS 隧道，分别完成 Read/Edit；最终复跑两用户均成功，总用时约 10.5 秒 |
+| 默认离线全链路 | 假 CLI + 真实 mTLS，首轮 Gateway 0、工具续接 Gateway 1，JSON/SSE 都通过；认证后的 `/v1/models` 发布原生模型 |
+| Redis 续接 | 两个独立 Redis 客户端：不同租户/Key/模型、缺失结果集合、重复发布、并发认领、回滚、一次性消费及 TTL 检查通过；只操作随机测试 key |
+| 归属与历史 | 假事件测试拒绝串用户、改历史/模型/工具、未知/重复结果；两用户同名工具不同结果不串线 |
+| CLI 生命周期 | 注入时钟过期、未消费流关闭、完成工具回合后原请求关闭仍可续接、驻留容量最多两个：离线测试通过 |
+| 参数默认值 | 原版客户端给 Edit 参数补 schema 声明的默认值时允许续接；修改显式参数或补未声明字段被拒绝 |
+| 扩展边界 | thinking、cache_control、未知字段及超限请求明确拒绝；真实客户端采用关闭 thinking/缓存/实验 beta 的限定配置 |
+
+真实联调命令：
+
+```bash
+AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run TestLiveMessages -count=1 -v
+AISW_MESSAGES_REDIS_ADDR=127.0.0.1:6379 go test ./service/aiServeWeaveGateway/messagesession -count=1 -v
+AISW_CLAUDE_LIVE_TEST=1 AISW_MESSAGES_REDIS_ADDR=127.0.0.1:6379 go test ./service/aiServeWeaveGateway/e2e -run TestLiveClaudeClientsThroughTunnel -count=1 -v
+```
+
+最初使用浮动 `sonnet` 上游别名时，首轮成功，续接产生未支持的内容块，严格校验中止；重试被已消费续接保护拒绝。固定至已验证的 Sonnet 4.6 后，双用户全链路两次成功。不得把未支持内容块丢掉后继续报告成功。
+
+## 质量检查和剩余边界
+
+`go vet ./...`、`go build ./...` 通过。新增 Claude、Gateway e2e/httpapi、Redis 续接包的 `go test -race` 通过。gofmt 与 `git diff --check` 无输出；使用 protoc `35.0` 重新生成两次，生成文件逐字节一致，没有手工修改 pb.go。
+
+全仓普通测试仍会遇到既有图片测试偶发返回 429：`TestImagesGenerationsURLModeIsDownloadable` 与 `TestImagesGenerationsNoQualifyingArtifactsIsAnError`。用所有修改还原到 HEAD、所有新增 Go 文件隐藏的只读 Go overlay 连跑 30 次，同样复现。全服务 `go test -race -p 1 ./service/...` 的控制面与 Gateway 包通过，但既有 `TestManagerDrainAllStopsDispatchAndWaitsForInFlight` 仍出现排空后 `Idle:1`；旧实现覆盖测试和下方历史记录也出现失败。全仓普通/race 检查不能报告为全部通过，本次不提交代码。
+
+本次证明的是限定客户端配置下的文本编程任务与工具循环，不是完整 Anthropic API 或交互式 Claude Code 兼容。真实等待工具超时/外部进程取消尚未单独全链路验收；thinking、缓存、图片/文件、任意历史、多轮新增提问、同轮同名同参数工具、长稳与跨网络部署均不在已验证支持范围。实际部署的 Agent/Gateway 未自动重启或改写配置。启用说明见 [运行时 README](../../service/aiServeWeaveAgent/claudecode/README.md)。
+
+---
+
+以下保留第一阶段的历史证据，结论只适用于 2026-09-30 的实现。
+
 # CLI/MCP 实验记录（2026-09-30）
 
 ## 环境与结论

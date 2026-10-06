@@ -37,8 +37,12 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 	sessions := flags.Int("sessions", 1, "simultaneous isolated sessions (1 or 2)")
 	scenario := flags.String("scenario", "sequential", "tool pattern: sequential or parallel")
 	limit := flags.Duration("timeout", 90*time.Second, "overall live deadline (maximum 2m)")
+	serve := flags.String("serve", "", "experimental Messages listener (loopback only; requires -live and AISW_CLAUDE_BRIDGE_KEY)")
 	if err := flags.Parse(args); err != nil {
 		return err
+	}
+	if *serve != "" && !*live {
+		return errProbeOptions
 	}
 	if !*live {
 		flags.PrintDefaults()
@@ -54,6 +58,9 @@ func runCommand(ctx context.Context, args []string, out io.Writer) error {
 	program, err = filepath.Abs(program)
 	if err != nil {
 		return errCLIStart
+	}
+	if *serve != "" {
+		return serveMessages(ctx, program, *model, *serve, out)
 	}
 	ctx, cancel := context.WithTimeout(ctx, *limit)
 	defer cancel()

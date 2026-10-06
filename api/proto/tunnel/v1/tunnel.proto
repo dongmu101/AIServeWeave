@@ -329,6 +329,22 @@ enum Operation {
   OPERATION_INPUT_UPLOAD = 11;
   OPERATION_AUDIO_TRANSCRIBE = 12;       // transcription and translation share one operation; AudioTranscriptionRequest.task selects
   OPERATION_RERANK = 13;
+  OPERATION_MESSAGES = 14;             // native Anthropic Messages events, not HTTP proxying
+}
+
+// MessagesRequest preserves the native inference document, validated by the
+// local Messages adapter. It cannot carry an endpoint, headers or CLI settings.
+// tenant_id/key_id are identifiers from Gateway authentication, never credentials.
+message MessagesRequest {
+  string model = 1;
+  string tenant_id = 2;
+  string key_id = 3;
+  bytes messages_json = 4;
+}
+
+// MessagesEvent contains exactly one bounded native SSE data document.
+message MessagesEvent {
+  bytes event_json = 1;
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose

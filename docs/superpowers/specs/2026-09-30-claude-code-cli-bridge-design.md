@@ -2,7 +2,7 @@
 
 日期：2026-09-30。
 
-状态：维护者已确认范围并要求开始实现。第一阶段独立 CLI/MCP 验证器已落地，见 [实验说明](../../../experiments/claude-code-bridge/README.md)。CLI/MCP 合成工具实验与完整 Messages/Gateway 兼容分别验收；后者尚未实现，不能通过现有 Agent 配置启用。
+状态（2026-10-05）：维护者要求继续完善接入代码，现已实现本地 Claude 运行时、原生 Messages 隧道和 Redis 跨副本续接。支持范围收敛为关闭 thinking/缓存/实验 beta 的文本与调用方工具流程；未支持字段明确拒绝，不能宣称完整 Claude Code/API 兼容。当前说明见 [运行时 README](../../../service/aiServeWeaveAgent/claudecode/README.md)，逐项验证证据见 [实验记录](../../../experiments/claude-code-bridge/RESULTS.md)。下文第一阶段范围和只读基线保留为历史设计依据。
 
 ## 一、已确认的目标
 

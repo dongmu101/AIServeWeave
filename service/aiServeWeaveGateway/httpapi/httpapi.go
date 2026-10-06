@@ -9,6 +9,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/workflowview"
+	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
@@ -17,6 +18,9 @@ import (
 
 // Config configures the HTTP front door.
 type Config struct {
+	// MessagesSessions supplies shared, one-shot Claude continuation affinity.
+	// MessagesSessions 提供共享且一次性的 Claude 续接定位。
+	MessagesSessions messagesession.Store
 	// Verifier resolves API keys against the control plane. When set it is
 	// the authority and APIKeys is ignored; see auth.go for the three modes.
 	//
@@ -401,6 +405,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	}
 
 	h := &handlers{
+		messagesSessions:        cfg.MessagesSessions,
 		sched:                   sched,
 		logger:                  logger,
 		metrics:                 newRecorder(cfg.Metrics),
@@ -725,13 +730,14 @@ func (s *Server) Templates() []workflowview.Template {
 }
 
 type handlers struct {
-	sched     *scheduler.Scheduler
-	logger    *slog.Logger
-	metrics   *recorder
-	workflows *workflow.Handle
-	jobs      *jobStore
-	clock     runtime.Clock
-	limiter   ratelimit.Limiter
+	messagesSessions messagesession.Store
+	sched            *scheduler.Scheduler
+	logger           *slog.Logger
+	metrics          *recorder
+	workflows        *workflow.Handle
+	jobs             *jobStore
+	clock            runtime.Clock
+	limiter          ratelimit.Limiter
 	// persister is nil when no JobPersistClient is configured. Its nudge
 	// method is nil-receiver-safe, so call sites never need to check this
 	// for nil themselves — see jobpersist.go.

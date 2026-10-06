@@ -351,9 +351,9 @@ func parseLabels(s string) map[string]string {
 
 // parseRuntimes parses one "id,kind,base_url" declaration per line into
 // agentconfig.RuntimeConfig. A line missing any of the three fields is
-// dropped rather than failing the whole save; Codex has no base_url.
+// dropped rather than failing the whole save; CLI runtimes have no base_url.
 //
-// parseRuntimes 解析每行的运行时声明；缺失字段时略过，Codex 的 base_url 留空。
+// parseRuntimes 解析每行的运行时声明；缺失字段时略过，CLI 运行时的 base_url 留空。
 func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 	var out []agentconfig.RuntimeConfig
 	for _, line := range strings.Split(s, "\n") {
@@ -366,7 +366,7 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 			continue
 		}
 		id, kind, baseURL := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
-		if id == "" || kind == "" || (baseURL == "" && kind != "codex") {
+		if id == "" || kind == "" || (baseURL == "" && kind != "codex" && kind != "claude") {
 			continue
 		}
 		out = append(out, agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: baseURL})
@@ -528,16 +528,16 @@ button:hover { background: #1d4ed8; }
 <p class="hint">可以同时配置多个后端，每个运行时 ID 必须唯一。CLI 使用本机已登录的账户。</p>
 </div>
 <textarea id="runtime_declarations" name="runtimes" placeholder="ollama-local,ollama,http://127.0.0.1:11434&#10;codex-local,codex,">{{.Runtimes}}</textarea>
-<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url；支持 ollama / vllm / sglang / comfyui / codex，codex 的地址留空。</p>
+<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url；支持 ollama / vllm / sglang / comfyui / codex / claude，CLI 的地址留空。</p>
 <template id="runtime-card-template">
 <section class="runtime-card">
 <div class="runtime-heading"><strong>本地 AI 连接</strong><button type="button" class="secondary runtime-remove">移除</button></div>
 <div class="fields">
 <div class="field"><label>运行时 ID <span>Runtime ID</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
 <div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
-<option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option><option value="codex">Codex CLI</option><option value="claude" disabled>Claude Code CLI（尚未接入）</option>
+<option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option>
 </select></label></div>
-<div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>Codex CLI 无需服务地址；请先在本机执行 codex login。</p></div>
+<div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址；请先在运行 Agent 的账户下登录。</p></div>
 </div>
 </section>
 </template>
@@ -616,7 +616,7 @@ function addRuntime(id = '', kind = 'ollama', url = '') {
   kindInput.value = kind;
   urlInput.value = url;
   function updateKind() {
-    const cli = kindInput.value === 'codex';
+    const cli = kindInput.value === 'codex' || kindInput.value === 'claude';
     urlInput.disabled = cli;
     urlInput.required = !cli;
     urlInput.closest('label').hidden = cli;

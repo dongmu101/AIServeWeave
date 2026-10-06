@@ -154,7 +154,7 @@ func (f *fleet) startAgent(seeds []string) {
 	f.cancel = cancel
 
 	backendURL := "http://127.0.0.1:1"
-	if f.backend == runtime.KindCodex {
+	if f.backend == runtime.KindCodex || f.backend == runtime.KindClaude {
 		backendURL = ""
 	}
 	if err := f.manager.Add(ctx, runtime.Config{

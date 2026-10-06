@@ -28,6 +28,7 @@ import (
 	"AIServeWeave/common/runtime/workflow/comfyui"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
+	"AIServeWeave/service/aiServeWeaveAgent/claudecode"
 	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
@@ -1187,15 +1188,19 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 }
 
 // newRegistry returns a runtime registry with every supported inference
-// backend registered. Codex IDs must be declared locally before they can be created.
+// backend registered. CLI IDs must be declared locally before they can be created.
 //
-// newRegistry 注册所有支持的后端；Codex ID 必须先在本地声明才允许创建。
+// newRegistry 注册所有支持的后端；CLI ID 必须先在本地声明才允许创建。
 func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 	registry := runtime.NewRegistry()
 	localCodexIDs := make(map[string]bool)
+	localClaudeIDs := make(map[string]bool)
 	for _, cfg := range declared {
 		if cfg.Kind == runtime.KindCodex {
 			localCodexIDs[cfg.ID] = true
+		}
+		if cfg.Kind == runtime.KindClaude {
+			localClaudeIDs[cfg.ID] = true
 		}
 	}
 	factories := map[runtime.Kind]runtime.Factory{
@@ -1203,6 +1208,12 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 		runtime.KindVLLM:    vllm.New,
 		runtime.KindSGLang:  sglang.New,
 		runtime.KindComfyUI: comfyui.New,
+		runtime.KindClaude: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+			if !localClaudeIDs[cfg.ID] {
+				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind, Message: "Claude runtime must be declared in the local Agent configuration"}
+			}
+			return claudecode.New(cfg, deps)
+		},
 		runtime.KindCodex: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
 			if !localCodexIDs[cfg.ID] {
 				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,

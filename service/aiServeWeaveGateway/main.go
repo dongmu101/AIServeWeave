@@ -38,6 +38,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/modelpullapi"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
@@ -426,6 +427,11 @@ func run() error {
 	// responsesPersistAdapter 的文档注释。
 	if responsesPersist != nil {
 		httpCfg.ResponsesClient = responsesPersist
+	}
+	if *redisAddr != "" {
+		messageRedis := redis.NewClient(&redis.Options{Addr: *redisAddr})
+		defer messageRedis.Close()
+		httpCfg.MessagesSessions = messagesession.NewRedis(messageRedis)
 	}
 	front := httpapi.New(sched, httpCfg)
 

@@ -44,7 +44,7 @@ func (c Config) Normalize() Config {
 
 	if n.ProbeTimeout == 0 {
 		n.ProbeTimeout = defaultProbeTimeout
-		if n.Kind == KindCodex {
+		if n.Kind == KindCodex || n.Kind == KindClaude {
 			// Cold CLI startup and account discovery need more time than an HTTP probe.
 			// CLI 冷启动和账户发现比 HTTP 探测需要更长时间。
 			n.ProbeTimeout = 15 * time.Second
@@ -97,15 +97,15 @@ func (c Config) Validate() error {
 	}
 
 	switch c.Kind {
-	case KindVLLM, KindSGLang, KindOllama, KindComfyUI, KindCodex:
+	case KindVLLM, KindSGLang, KindOllama, KindComfyUI, KindCodex, KindClaude:
 	default:
 		problems = append(problems, fmt.Sprintf("kind %q is not a registered runtime kind", c.Kind))
 	}
 
 	switch {
-	case c.Kind == KindCodex:
+	case c.Kind == KindCodex || c.Kind == KindClaude:
 		if c.BaseURL != "" || c.APIKey != "" || len(c.Headers) != 0 || c.TLS != (TLSConfig{}) {
-			problems = append(problems, "codex uses local CLI authentication; base_url, api_key, headers and TLS must be empty")
+			problems = append(problems, "CLI runtimes use local authentication; base_url, api_key, headers and TLS must be empty")
 		}
 	case c.BaseURL == "":
 		problems = append(problems, "base_url must not be empty")

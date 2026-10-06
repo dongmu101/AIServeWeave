@@ -400,7 +400,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	if routes.Len() > 0 {
 		var out []ModelInfo
 		for _, alias := range routes.Models() {
-			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 {
+			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(routes, alias, runtime.CapabilityMessages)) > 0 {
 				out = append(out, ModelInfo{ID: alias})
 			}
 		}
@@ -422,7 +422,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 					continue
 				}
 				effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
-				if effective.Require(runtime.CapabilityChat) != nil {
+				if effective.Require(runtime.CapabilityChat) != nil && effective.Require(runtime.CapabilityMessages) != nil {
 					continue
 				}
 				seen[m.ID] = struct{}{}

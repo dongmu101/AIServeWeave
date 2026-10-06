@@ -152,7 +152,7 @@ Manager
 
 **实现文件：**
 
-- `common/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`。
+- `common/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`、`MessagesRuntime`。
 - `common/runtime/stream.go`：`Stream[T]` 及通用关闭语义。
 
 接口名称和签名在第一阶段通过编译期断言及契约测试固定。后续适配器不得绕过这些接口向 `Manager` 塞入后端私有状态。
@@ -231,6 +231,7 @@ const (
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
 	KindCodex   Kind = "codex"
+	KindClaude  Kind = "claude"
 )
 
 type Config struct {
@@ -429,7 +430,7 @@ func (s CapabilitySet) Require(c Capability) error
 
 | 文件 | 职责 |
 | --- | --- |
-| `runtime.go` | `Runtime`、`InferenceRuntime`、`WorkflowRuntime` 接口及编译期约束 |
+| `runtime.go` | `Runtime`、`InferenceRuntime`、`WorkflowRuntime`、`MessagesRuntime` 接口及编译期约束 |
 | `types.go` | Kind、Config、Descriptor、Probe、Health、Discovery、模型和请求结果类型 |
 | `config.go` | `Config.Normalize`、`Validate`、`LogValue` 及 URL/Header 规则 |
 | `deps.go` | `Dependencies`、`Clock`、`WSDialer`、`WSConn`、`Metrics` 协作者接口 |
@@ -496,7 +497,7 @@ runtimes:
 
 - `id` 非空且在单个 Agent 内唯一。
 - `kind` 只能是四个已注册值之一。
-- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。`kind: codex` 是 Agent 本地 CLI 后端，`base_url`、API Key、Headers 和 TLS 均必须为空；实现位于 `service/aiServeWeaveAgent/codexcli`，不会链入 Gateway。
+- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。`kind: codex` 和 `kind: claude` 是 Agent 本地 CLI 后端，`base_url`、API Key、Headers 和 TLS 均必须为空；实现分别位于 `service/aiServeWeaveAgent/codexcli` 和 `service/aiServeWeaveAgent/claudecode`，不会链入 Gateway。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
 - 自定义 Header 禁止覆盖 `Host`、`Content-Length`、hop-by-hop headers 和 Agent 链路追踪头。
 - 生产配置通过 Secret 引用提供密钥；`Config` 的格式化方法必须脱敏。
@@ -521,7 +522,7 @@ func (c Config) LogValue() slog.Value
 
 `Normalize` 必须在 `Validate` 之前调用，Registry 的 `Create` 内部按此顺序执行，调用方无需自行拼装。URL 拼接统一走 `url.URL.JoinPath`，保留配置中的路径前缀。
 
-建议默认值：探测和健康检查超时 `3s`（本地 Codex CLI 为 `15s`，覆盖冷启动），发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
+建议默认值：探测和健康检查超时 `3s`（本地 Codex/Claude CLI 为 `15s`，覆盖冷启动），发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
 
 ## 后端接入矩阵
 
@@ -1252,3 +1253,7 @@ go test -race ./common/runtime/...
 6. 基于 GPU、队列、TTFT、吞吐和历史错误的跨节点调度。
 
 这些能力不得提前塞入首期接口；确需扩展时优先新增窄接口，避免扩大基础 `Runtime`。
+
+## 原生 Anthropic Messages 契约
+
+`messages.go` 定义 `MessagesRuntime`、`MessagesRequest` 和 `MessagesEvent`，与通用 Chat 接口分开。`CapabilityMessages` 的值为 `anthropic_messages`；它只用于原生 Messages 调度，不能据此允许 Chat/Responses。请求只携带目标模型、已认证归属及有界推理 JSON，不接受 HTTP 地址、请求头、凭据或 CLI 配置。事件为单条原生数据 JSON，不含 HTTP 帧。跨隧道编解码统一由 `common/tunnelwire`，Agent 的 Claude 实现严格拒绝未知语义字段及未支持的内容块。

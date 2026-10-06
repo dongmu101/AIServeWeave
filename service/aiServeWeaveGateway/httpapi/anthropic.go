@@ -578,7 +578,9 @@ func handleAnthropicDispatchError(w http.ResponseWriter, logger *slog.Logger, er
 func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var req anthropicMessagesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	var raw json.RawMessage
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
+	if err := decoder.Decode(&raw); err != nil || decoder.Decode(new(any)) != io.EOF || json.Unmarshal(raw, &req) != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
 		return
 	}
@@ -588,6 +590,10 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.MaxTokens <= 0 {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "max_tokens is required and must be greater than zero")
+		return
+	}
+	if h.useNativeMessages(req) {
+		h.nativeMessages(w, r, req, raw, start)
 		return
 	}
 	canonical, err := req.toRuntime()

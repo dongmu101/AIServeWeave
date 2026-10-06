@@ -16,6 +16,9 @@ const (
 	// KindCodex names the Agent-local Codex app-server adapter.
 	// KindCodex 表示 Agent 本地的 Codex app-server 适配器。
 	KindCodex Kind = "codex"
+	// KindClaude names the locally declared Claude Code Messages adapter.
+	// KindClaude 表示本地声明的 Claude Code Messages 适配器。
+	KindClaude Kind = "claude"
 )
 
 type Config struct {

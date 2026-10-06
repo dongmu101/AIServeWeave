@@ -34,6 +34,12 @@ const convertOperation = "tunnel_convert"
 type PayloadKind string
 
 const (
+	// PayloadMessagesRequest carries a native inference document with ownership identifiers.
+	// PayloadMessagesRequest 携带原生推理文档与归属标识。
+	PayloadMessagesRequest PayloadKind = "messages_request"
+	// PayloadMessagesEvent carries one native SSE data document.
+	// PayloadMessagesEvent 携带一条原生 SSE 数据文档。
+	PayloadMessagesEvent PayloadKind = "messages_event"
 	// PayloadNone means no payload is carried at all.
 	PayloadNone PayloadKind = "none"
 	// PayloadChatRequest carries a marshalled runtime.ChatRequest.
@@ -148,6 +154,10 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Request:   PayloadChatRequest,
 		Response:  PayloadChatEvent,
 		Shape:     ShapeStream,
+	},
+	tunnelv1.Operation_OPERATION_MESSAGES: {
+		Operation: tunnelv1.Operation_OPERATION_MESSAGES,
+		Request:   PayloadMessagesRequest, Response: PayloadMessagesEvent, Shape: ShapeStream,
 	},
 	tunnelv1.Operation_OPERATION_EMBED: {
 		Operation: tunnelv1.Operation_OPERATION_EMBED,

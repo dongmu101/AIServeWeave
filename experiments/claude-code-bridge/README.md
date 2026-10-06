@@ -2,7 +2,7 @@
 
 独立的第一阶段验证程序，验证本机已登录的 Claude Code 能否调用桥接工具并消费调用方返回的结果。支持 macOS 和 Linux，使用 Go 标准库，无新增模块依赖。
 
-当前实现覆盖 CLI 进程、受认证的回环 MCP 端点、有界工具关联及事件检查。模拟调用方返回合成结果；程序没有实现 `/v1/messages`，也没有注册到 Agent/Gateway。完整接入的验收范围见 [设计](../../docs/superpowers/specs/2026-09-30-claude-code-cli-bridge-design.md)。
+原有验证模式覆盖 CLI 进程、受认证的回环 MCP 端点、有界工具关联及事件检查。新增 `-live -serve 127.0.0.1:18080` 模式提供隔离实验 Messages 前门，需要 `AISW_CLAUDE_BRIDGE_KEY` 环境变量（可选不同的 `AISW_CLAUDE_BRIDGE_SECOND_KEY`）。正式接入已迁入 [Agent claudecode](../../service/aiServeWeaveAgent/claudecode/README.md)，实验前门不用于部署。完整接入的验收范围见 [设计](../../docs/superpowers/specs/2026-09-30-claude-code-cli-bridge-design.md)。
 
 ## 运行
 

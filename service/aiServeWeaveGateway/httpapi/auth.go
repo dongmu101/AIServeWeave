@@ -137,6 +137,12 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 		}
 
 		key, ok := bearerToken(r.Header.Get("Authorization"))
+		// Messages clients use x-api-key; credentials stop at this HTTP boundary.
+		// Messages 客户端使用 x-api-key；凭据仅在此 HTTP 边界校验。
+		if r.URL.Path == "/v1/messages" && r.Header.Get("Authorization") == "" {
+			key = strings.TrimSpace(r.Header.Get("X-Api-Key"))
+			ok = key != ""
+		}
 		if !ok {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key", "missing or invalid API key")
 			return

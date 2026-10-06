@@ -224,6 +224,7 @@ enum Operation {
   OPERATION_INPUT_UPLOAD       = 11;  // STATUS.md P04：输入文件上传，晚于首期落地
   OPERATION_AUDIO_TRANSCRIBE   = 12;  // STATUS.md P2：音频转录/翻译共用一个 operation，AudioTranscriptionRequest.task 选择
   OPERATION_RERANK             = 13;  // STATUS.md P2：与 OPERATION_EMBED 同形状，无二进制体
+  OPERATION_MESSAGES           = 14;  // 原生 Anthropic Messages 推理语义与事件
 }
 
 message ResponseHeaders {
@@ -1027,3 +1028,9 @@ go test -race ./service/aiServeWeaveAgent/...
 7. **隧道级限速与优先级**，让高优先级租户的 token 流优先于批量产物传输。
 
 这些能力不得提前塞进首期协议；确需扩展时优先新增 Operation 或独立 RPC，避免改动已有帧结构。~~原第 8 条「Agent 自动升级，通过 Control 流下发版本并灰度」~~ 已实现（见上文「Control 流」一节 `agent_upgrade_action`/`agent_upgrade`）：CHECK/UPGRADE 已交付，灰度仍是运维手动按 `node_id` 批量触发，不是协议层概念（子任务四待实现）。
+
+## 原生 Messages 操作
+
+`OPERATION_MESSAGES` 使用共享 `MessagesRequest`（解析后的目标模型、已认证 `tenant_id`/`key_id`、有界 Messages JSON）及 `MessagesEvent`（单条原生事件 JSON）。归属标识不是鉴权凭据；它们来自 Gateway 本次请求的认证结果，不能由外部请求自报。所有编解码只在 `common/tunnelwire`。
+
+这是封闭的推理语义操作：没有 URL、Host、Authorization 或 CLI 命令字段；Agent 的 Claude 适配器严格拒绝未知 Messages 字段和未支持内容块。它不提供通用 HTTP 代理。执行仍要求命中本地 runtime 白名单，事件逐条转发，槽池和 gRPC 施加背压；跨 HTTP 请求等待工具的 CLI 会话另有最多两个的驻留限制与超时。新增操作要求两端同步升级，旧 Agent 不会执行未知操作。

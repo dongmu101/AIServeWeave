@@ -22,9 +22,13 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
-// TestMain supplies an offline Codex subprocess and verifies package goroutine cleanup.
-// TestMain 提供离线 Codex 子进程，并统一验证包的协程回收。
+// TestMain supplies offline CLI subprocesses and verifies package goroutine cleanup.
+// TestMain 提供离线 CLI 子进程，并统一验证包的协程回收。
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && (os.Args[1] == "auth" || os.Args[1] == "--print") {
+		claudeProcessFixture()
+		os.Exit(0)
+	}
 	if len(os.Args) > 1 && os.Args[1] == "app-server" {
 		codexServerFixture()
 		os.Exit(0)

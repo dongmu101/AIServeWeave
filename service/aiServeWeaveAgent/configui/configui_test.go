@@ -238,9 +238,9 @@ func TestIndexHandlerRejectsOtherMethods(t *testing.T) {
 // TestParseCodexRuntime accepts a local CLI declaration with no HTTP address.
 // TestParseCodexRuntime 接受不含 HTTP 地址的本地 CLI 声明。
 func TestParseCodexRuntime(t *testing.T) {
-	got := parseRuntimes("codex-local,codex,\ninvalid-http,ollama,")
-	want := []agentconfig.RuntimeConfig{{ID: "codex-local", Kind: "codex"}}
-	if len(got) != len(want) || got[0] != want[0] {
+	got := parseRuntimes("codex-local,codex,\nclaude-local,claude,\ninvalid-http,ollama,")
+	want := []agentconfig.RuntimeConfig{{ID: "codex-local", Kind: "codex"}, {ID: "claude-local", Kind: "claude"}}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
 		t.Fatalf("runtimes=%+v, want %+v", got, want)
 	}
 }

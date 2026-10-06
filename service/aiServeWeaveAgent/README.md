@@ -5,8 +5,8 @@
 ## 当前实现
 
 - `main.go` 装配运行时管理器、后端工厂、自动发现、隧道和可选指标监听；`-version` 输出构建版本。
-- `agentconfig/`：`-config` 指向一份 YAML 文件，覆盖远程 Gateway 连接（`gateway:` 段，对应 `-gateway`/`-registry`/证书三件套/`-allowed-runtimes`/`-labels`/`-max-gateways`）与本地运行时声明（`runtimes:` 列表，任意 `ollama`/`vllm`/`sglang`/`comfyui`/`codex` 种类，是 `-ollama-url` 之外的补充而非替代）以及 `auto_discover`/`metrics_addr`/`log_level`。命令行显式传入的 flag 始终优先于文件里的同名设置（`main.go` 的 `applyConfig`），文件只填补 flag 留在默认值上的空白，两者可以同时使用。**不传 `-config` 时，`main.go` 的 `resolveConfigPath` 会在当前工作目录下找 `config.yaml`，存在就加载，不存在就照常只靠 flag 运行**——一次全新检出或全新部署，行为与这个功能从未上线时完全一样；文件存在但解析失败仍然是致命错误，不会被当成"没找到"悄悄跳过。`-config-ui`（见下）不带 `-config` 时也落到同一个默认路径。YAML 经由 `github.com/spf13/viper` 解码——这是 Agent 依赖红线上一次记录在案的例外，理由见 AGENTS.md 对应小节；这份文件是给人手改或由 `configui` 生成的，因此与本代码库其余纯 JSON 本地清单（`modelpull`/`agentupgrade`）不同源。
-- `configui/`：**正常启动 Agent 时默认同时启动本地 Web 设置页面，无需传 `-config-ui`**，访问 `http://127.0.0.1:8899`。`-config-ui-addr` 可覆盖监听地址，只接受回环地址（`127.0.0.1`/`::1`/`localhost`）。页面左侧菜单分为 Gateway 连接、节点与认证、本地 AI、日志与指标四组；切换保留输入，保存按钮统一保存全部分组。本地 AI 使用可添加、移除的多条配置，逐条选择后端类型和填写唯一运行时 ID；Codex CLI 不填写服务地址，Claude Code CLI 当前显示为尚未接入的禁用选项。禁用 JavaScript 时仍可通过锚点导航编辑所有分组。页面把 YAML 字段变成表单，保存到 `-config` 指向的文件；未指定时使用当前目录的 `config.yaml`。保存后需要重启 Agent 生效，不做热加载、不展示实时连接状态。正常运行时页面启动失败（如端口被占用）会记录错误，Agent 继续运行。`-config-ui` 保留为只运行设置页面的独立模式，不启动隧道或运行时；该模式下页面启动失败则退出。首次启动没有配置文件且未显式传入 `-config-ui`、`-config-ui-addr`、`-config`、`-gateway` 中任何一个时，仍自动进入只运行设置页面的模式，便于完成初始配置。
+- `agentconfig/`：`-config` 指向一份 YAML 文件，覆盖远程 Gateway 连接（`gateway:` 段，对应 `-gateway`/`-registry`/证书三件套/`-allowed-runtimes`/`-labels`/`-max-gateways`）与本地运行时声明（`runtimes:` 列表，任意 `ollama`/`vllm`/`sglang`/`comfyui`/`codex`/`claude` 种类，是 `-ollama-url` 之外的补充而非替代）以及 `auto_discover`/`metrics_addr`/`log_level`。命令行显式传入的 flag 始终优先于文件里的同名设置（`main.go` 的 `applyConfig`），文件只填补 flag 留在默认值上的空白，两者可以同时使用。**不传 `-config` 时，`main.go` 的 `resolveConfigPath` 会在当前工作目录下找 `config.yaml`，存在就加载，不存在就照常只靠 flag 运行**——一次全新检出或全新部署，行为与这个功能从未上线时完全一样；文件存在但解析失败仍然是致命错误，不会被当成"没找到"悄悄跳过。`-config-ui`（见下）不带 `-config` 时也落到同一个默认路径。YAML 经由 `github.com/spf13/viper` 解码——这是 Agent 依赖红线上一次记录在案的例外，理由见 AGENTS.md 对应小节；这份文件是给人手改或由 `configui` 生成的，因此与本代码库其余纯 JSON 本地清单（`modelpull`/`agentupgrade`）不同源。
+- `configui/`：**正常启动 Agent 时默认同时启动本地 Web 设置页面，无需传 `-config-ui`**，访问 `http://127.0.0.1:8899`。`-config-ui-addr` 可覆盖监听地址，只接受回环地址（`127.0.0.1`/`::1`/`localhost`）。页面左侧菜单分为 Gateway 连接、节点与认证、本地 AI、日志与指标四组；切换保留输入，保存按钮统一保存全部分组。本地 AI 使用可添加、移除的多条配置，逐条选择后端类型和填写唯一运行时 ID；Codex CLI 和 Claude Code CLI 均不填写服务地址。禁用 JavaScript 时仍可通过锚点导航编辑所有分组。页面把 YAML 字段变成表单，保存到 `-config` 指向的文件；未指定时使用当前目录的 `config.yaml`。保存后需要重启 Agent 生效，不做热加载、不展示实时连接状态。正常运行时页面启动失败（如端口被占用）会记录错误，Agent 继续运行。`-config-ui` 保留为只运行设置页面的独立模式，不启动隧道或运行时；该模式下页面启动失败则退出。首次启动没有配置文件且未显式传入 `-config-ui`、`-config-ui-addr`、`-config`、`-gateway` 中任何一个时，仍自动进入只运行设置页面的模式，便于完成初始配置。
 - `localdiscovery/` 默认探测本机 Ollama/vLLM，可用 `-auto-discover=false` 关闭；`-ollama-url` 可显式注册 Ollama。
 - `tunnel/` 已实现身份注册/续期、多副本连接、槽池、心跳、运行时配置应用和流式请求/产物转发。执行 runtime 必须命中本地白名单。
 - 后端适配在共享的 `common/runtime`，支持 Ollama、vLLM、SGLang 和 ComfyUI；ComfyUI 适配位于 `common/runtime/workflow/comfyui`。ComfyUI 适配器新增 `comfyui_queue_running`/`comfyui_queue_pending`（`runtime_id` 标签）两个队列深度量表（STATUS.md 的 A06），复用 `Status`/`Cancel` 本就会发起的 `GET /queue`，不产生额外请求；与隧道共用同一个 `metrics.Registry`，未配置 `-metrics-addr` 时安全丢弃。ComfyUI 的失败历史同时被分类为是否显存/内存耗尽（`runtime.WorkflowStatus.OutOfMemory`），供 Gateway 侧统计使用，见 [Gateway README](../aiServeWeaveGateway/README.md) 的相应小节。
@@ -16,11 +16,21 @@
 - `modelpull/`（STATUS.md P2「模型分发」待办，子任务一见 [P2 模型分发设计文档](../../docs/superpowers/specs/2026-09-17-p2-model-distribution-design.md)，子任务二见 [子任务二设计文档](../../docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md)，子任务三见 [子任务三设计文档](../../docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask3-design.md)）：一个纯 Agent 本地、标准库实现（`net/http` + `crypto/sha256`，不新增依赖）的清单驱动下载器，覆盖校验和、断点续传（HTTP Range 到 `<TargetPath>.part`，完成后原子改名）、来源白名单四项要求。`-model-pull-manifest` 指向一份本地 JSON 清单（`[]modelpull.Spec`），`-model-pull-allowlist`/`-model-pull-quota-bytes` 控制白名单与预算；三者均为纯本地 flag，从不接受 Gateway 或控制面下发。清单为空（默认）时功能整体关闭。来源白名单默认方向是「空=拒绝全部」，刻意不照搬 `AllowedRuntimes` 的「空=放行」，理由见子任务一设计文档第三节。**子任务一**：`RunManifest` 是同步、一次性处理整份清单的下载器，字节配额是单次调用共享的预算。**子任务二（`puller.go`）**：`Puller` 让 Gateway 可以经隧道 Control 流按名字触发一次按需拉取——只能按名字，从不是 URL，Agent 对着自己本地清单解析；启动时仍自动对整份清单触发一次（保留子任务一的既有行为），运行期间在后台以最多一个 worker 顺序处理排队的名字，逐名字的进度（`BytesDownloaded`/`BytesTotal`/状态）经 `ModelPullReport` 回报给 Gateway，失败原因是封闭枚举（`common/modelpullstatus.FailureReason`），从不携带原始错误文本——`SourceURL` 可能是带签名 token 的预签名 URL，这条边界防止它经由 Go 网络错误文本泄漏出 Agent。字节配额语义从"单次 `RunManifest` 调用"扩展为"单次 worker session"：一批一起触发的名字共享一份预算，session 处理完（队列清空）后下一次触发拿到全新预算。整个 Puller 的工作跨越隧道连接的生命周期，Agent 关闭时靠取消 ctx 中止在途下载，留下的 `.part` 文件与进程被杀死时完全同一种可续传状态。**子任务三（`ollamapull.go`）已交付**：清单条目新增 `Kind: "ollama"`（`Spec.Kind`，零值 `KindHTTP` 是子任务一/二的通用下载器），此类条目的 `Name` 直接是 Ollama 模型 tag，`SourceURL`/`SHA256`/`TargetPath` 必须留空；`pullOllama` 调用 Ollama 服务器自己的 `POST /api/pull`（NDJSON 流式响应），不重新实现其 manifest/blob 存储格式，也不 shell out 到 `ollama` CLI——核实并偏离了子任务一设计文档原先设想的 `os/exec` 路径，理由见子任务三设计文档第一节。目标服务器地址复用已有的 `-ollama-url`（不新增 flag），为空时新增的 `ReasonOllamaUnconfigured` 拒绝该条目。`-model-pull-allowlist`/`-model-pull-quota-bytes` 均不适用于 `Kind: "ollama"` 条目（无 `SourceURL` 可比对，字节也不是 Agent 自己写入的），子任务二已有的 Gateway 触发/状态回传/控制面转发/Console 可见性对 Ollama 原生条目天然可用，不需要为此改动 Gateway 或控制面。**子任务四（`ledger.go`，设计文档见 [`2026-09-19-p2-model-distribution-subtask4-design.md`](../../docs/superpowers/specs/2026-09-19-p2-model-distribution-subtask4-design.md)）已交付**：`-model-pull-max-concurrency`（默认 1，保持子任务一/二/三既有的顺序行为）让 `RunManifest`/`Puller` 同一时间处理多个 Spec，单个 Spec 自己的下载仍是一条 HTTP 请求、不做分片；`Config.QuotaBytes` 的共享预算随之改为 `atomic.Int64`，用 CAS 循环防止并发下载合计透支。`Ledger`（`-model-pull-ledger-path`/`-model-pull-ledger-quota-bytes`/`-model-pull-ledger-period`）把字节预算持久化到一个 JSON 文件，跨 Agent 重启累计，与每次调用都重新计满的 `QuotaBytes` 是两把独立生效的闸门；`Period` 到期前拒绝、到期后账本自动清零重新计算。`-model-pull-disk-free-margin-bytes`（配合新增的 `hostresources.DiskFreeBytes`，标准库 `syscall.Statfs`，不新增依赖）是配额之外的二次防线——目标文件系统剩余空间低于阈值即中止，尽力而为，不是强一致的资源预留。`Kind: "ollama"` 条目不受三者中任何一个约束，理由与子任务三记录的一致。
 - `agentupgrade/`（STATUS.md P2「Agent 自动升级」，设计文档见 [`2026-09-19-p2-agent-auto-upgrade-design.md`](../../docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md)）：一份本地已签名的已知 Agent 版本清单，以及一个 `Checker`——按需把清单与 Agent 自己运行版本（`main.version`）比较，并执行 UPGRADE 的完整链路。`-agent-upgrade-manifest` 指向一份本地 JSON `Manifest`（`{entries: []agentupgrade.Entry, signature}`，`Entry` 结构类比 `modelpull.Spec`），从不接受 Gateway 或控制面下发；清单为空、或节点构建时没带 `-ldflags="-X main.agentUpgradePublicKeyHex=..."`，功能整体关闭。`Manifest.Signature` 是对整组 `(Version, SHA256)` 的一次 Ed25519 签名——不是每条各签一次——这样一个条目被悄悄删除或哈希被替换都会让签名校验失败，而不只是造成一次下载不匹配；`agentupgrade.LoadManifest` 在返回任何条目之前先校验这个签名，签名不过或没配置公钥都直接拒绝整份清单。经隧道 Control 流触发（`GatewayControl.agent_upgrade_action`/`AgentControl.agent_upgrade`，详见 [隧道 README](tunnel/README.md) 对应小节）：**子任务一**只实现 CHECK：`Checker.Trigger` 比较清单与当前版本，`HasUpdate` 报告是否存在已知更新。**子任务二**补上了 UPGRADE 的完整链路——`target_version` 未命中清单直接报告 `ReasonUnknownVersion`（不发起网络请求）；命中则下载到 `-agent-upgrade-work-dir`（默认是运行中二进制自己所在目录）、对照清单已验证的 `SHA256` 校验下载结果（`ReasonVerificationFailed`）、通过新增的 `tunnel.Manager.DrainAll` 排空本 Agent 持有的**每一条**隧道连接（方向与 Gateway 主动下发的单连接排空相反，`-agent-upgrade-drain-timeout` 限定等待多久，默认 30s）、最后 `syscall.Exec` 自替换进程镜像（`ReasonExecFailed`）。一次 UPGRADE 进行中收到的第二次触发被静默忽略。ROLLBACK 仍一律报告 `StateFailed`/`ReasonNotImplemented`（子任务三范围）。签名私钥保管在维护者本机离线、二进制托管在 GitHub Releases，是设计文档第六节记录的维护者裁决（详见该文档的后续记录）。
 
-## Claude Code CLI 接入（实验阶段）
+## Claude Code CLI 接入
 
-计划通过 Agent 本机已登录的 Claude Code CLI，为连接 Gateway 的其他 Claude Code 客户端提供推理能力，工具仍在各调用方电脑执行。当前尚无 Claude CLI 后端实现，不能通过现有 `runtimes` 配置启用。
+`claudecode/` 已注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`。工具在调用方电脑执行，Agent 的 CLI 仅调用隔离的 MCP 桥接工具；登录凭据留在 Agent。当前配置支持文本和调用方工具循环，不代表完整 Anthropic API 兼容。
 
-独立的 [CLI/MCP 验证器](../../experiments/claude-code-bridge/README.md) 已实现，支持合成工具往返、两个隔离 CLI 会话及受控并行工具场景；它不提供 `/v1/messages`，也未注册到 Agent。正式接入仍以客户端工具往返、多用户隔离和原版客户端联调通过为前提，详见 [接入设计与可行性门槛](../../docs/superpowers/specs/2026-09-30-claude-code-cli-bridge-design.md)。
+先以运行 Agent 的同一账户执行 `claude auth login`，确保 `claude` 可执行文件在 Agent 的 PATH 中，然后在本地 YAML 添加：
+
+```yaml
+runtimes:
+  - id: claude-local
+    kind: claude
+```
+
+不填写 `base_url`、API Key 或认证文件。若设置了 `gateway.allowed_runtimes`，同时加入 `claude-local`。设置页面现已可选择 Claude Code CLI；保存后重启 Agent 生效。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
+
+发布模型为 `sonnet`，CLI 上游固定使用已验证的 `claude-sonnet-4-6`。原版客户端使用这个完整模型名时，将其路由到 `sonnet`。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
 
 ## Codex CLI 接入
 
@@ -48,7 +58,7 @@ go run ./service/aiServeWeaveAgent -config service/aiServeWeaveAgent/config.yaml
 
 ## 后端未就绪时的启动行为
 
-Ollama、vLLM、SGLang、ComfyUI 或 Codex 本地声明的后端暂时不可用时，Agent 继续启动，日志提示「运行时未就绪」，状态快照上报 `unhealthy` 及未就绪说明。此时模型目录为空，Gateway 不会调度到这个后端；其他已就绪后端可以正常服务。
+Ollama、vLLM、SGLang、ComfyUI、Codex 或 Claude 本地声明的后端暂时不可用时，Agent 继续启动，日志提示「运行时未就绪」，状态快照上报 `unhealthy` 及未就绪说明。此时模型目录为空，Gateway 不会调度到这个后端；其他已就绪后端可以正常服务。
 
 Agent 默认每 10～11 秒重新执行身份探测和模型发现；两项都成功后自动标记为 `healthy` 并发布模型，不需要重启 Agent。此策略同样适用于 `-ollama-url`。无效配置、重复运行时 ID、未注册类型或本地白名单拒绝仍会使启动失败；显式 Managed 容器启动失败仍按原有行为报错。
 
@@ -77,7 +87,7 @@ gateway:
   max_gateways: 4
 
 # 本地推理后端声明，是 -ollama-url 之外的补充：可以声明任意数量、任意受支持种类
-# （ollama/vllm/sglang/comfyui/codex；codex 不配置 base_url）。
+# （ollama/vllm/sglang/comfyui/codex/claude；CLI 不配置 base_url）。
 runtimes:
   - id: ollama-local
     kind: ollama
