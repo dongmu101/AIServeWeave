@@ -34,6 +34,7 @@ func modelProcessFixture() {
 		"subtype": "success", "request_id": request.RequestID, "response": map[string]any{"models": []any{
 			map[string]string{"value": "sonnet", "resolvedModel": "claude-sonnet-4-6", "displayName": "Sonnet 4.6"},
 			map[string]string{"value": "opus", "resolvedModel": "fixture-opus", "displayName": "Opus fixture"},
+			map[string]string{"value": "default", "resolvedModel": "fixture-opus", "displayName": "Default"},
 		}},
 	}})
 }
@@ -46,18 +47,16 @@ func TestParseModels(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, data string
-		want       []discoveredModel
+		want       []string
 	}{
-		{"aliases and IDs", wrap(`[{"value":" sonnet ","resolvedModel":"claude-sonnet-4-6","displayName":" Sonnet 4.6 "},{"id":"custom","display_name":"Custom model"},{"value":"sonnet","resolvedModel":"duplicate"},{"value":""}]`), []discoveredModel{{"sonnet", "claude-sonnet-4-6", "Sonnet 4.6"}, {"custom", "custom", "Custom model"}}},
-		{"unrelated event", "{bad-json}\n{\"type\":\"system\"}\n" + wrap(`[{"value":"opus"}]`), []discoveredModel{{"opus", "opus", ""}}},
-		{"wrong request", strings.ReplaceAll(wrap(`[{"value":"sonnet"}]`), modelDiscoveryID, "other"), nil},
-		{"failed response", strings.ReplaceAll(wrap(`[{"value":"sonnet"}]`), "success", "error"), nil},
+		{"resolved IDs and duplicate aliases", wrap(`[{"value":"default","resolvedModel":" claude-opus-5-5 ","displayName":"Default"},{"value":"opus","resolvedModel":"claude-opus-5-5"},{"value":"sonnet","resolvedModel":"claude-sonnet-5-5"},{"value":"claude-opus-5-5","resolvedModel":"claude-opus-5-5"},{"id":"unresolved"}]`), []string{"claude-opus-5-5", "claude-sonnet-5-5"}},
+		{"unrelated event", "{bad-json}\n{\"type\":\"system\"}\n" + wrap(`[{"value":"opus","resolvedModel":"claude-opus-5-5"}]`), []string{"claude-opus-5-5"}},
+		{"wrong request", strings.ReplaceAll(wrap(`[{"resolvedModel":"claude-sonnet-4-6"}]`), modelDiscoveryID, "other"), nil},
+		{"failed response", strings.ReplaceAll(wrap(`[{"resolvedModel":"claude-sonnet-4-6"}]`), "success", "error"), nil},
 		{"empty", wrap(`[]`), nil},
-		{"missing IDs", wrap(`[{"displayName":"Sonnet"}]`), nil},
-		{"oversized ID", wrap(`[{"value":"` + strings.Repeat("m", 257) + `"}]`), nil},
+		{"unresolved aliases", wrap(`[{"value":"sonnet"},{"id":"haiku"},{"resolvedModel":" "}]`), nil},
+		{"oversized ID", wrap(`[{"resolvedModel":"` + strings.Repeat("m", 257) + `"}]`), nil},
 		{"control character", wrap(`[{"value":"sonnet","resolvedModel":"bad\nmodel"}]`), nil},
-		{"oversized display name", wrap(`[{"value":"sonnet","displayName":"` + strings.Repeat("m", 257) + `"}]`), nil},
-		{"display name control character", wrap(`[{"value":"sonnet","displayName":"bad\nname"}]`), nil},
 		{"too many models", wrap(`[` + strings.Repeat(`{"value":"sonnet"},`, 256) + `{"value":"sonnet"}]`), nil},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -86,17 +85,19 @@ func TestModelDiscovery(t *testing.T) {
 	for _, model := range discovery.Models {
 		ids = append(ids, model.ID)
 	}
-	if !slices.Equal(ids, []string{"sonnet", "opus"}) {
-		t.Fatalf("models=%v, want [sonnet opus]", ids)
+	if !slices.Equal(ids, []string{"claude-sonnet-4-6", "fixture-opus"}) {
+		t.Fatalf("models=%v, want [claude-sonnet-4-6 fixture-opus]", ids)
 	}
-	for i, want := range []string{"Sonnet 4.6", "Opus fixture"} {
+	for i, want := range ids {
 		if got := discovery.Models[i]; got.DisplayName != want || got.DisplayOrder != uint32(i+1) {
 			t.Fatalf("model=%+v, want name=%q, order=%d", got, want, i+1)
 		}
 	}
 	r.bridge.start = fixtureStart
 	for _, tc := range []struct{ name, model, upstream string }{
-		{"discovered alias", "opus", "fixture-opus"},
+		{"discovered real ID", "fixture-opus", "fixture-opus"},
+		{"CLI alias rejected", "opus", ""},
+		{"default alias rejected", "default", ""},
 		{"unknown model", "unlisted", ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

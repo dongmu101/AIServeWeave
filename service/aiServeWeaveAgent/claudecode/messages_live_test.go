@@ -43,8 +43,12 @@ func TestLiveModelDiscovery(t *testing.T) {
 	for _, model := range discovery.Models {
 		ids = append(ids, model.ID)
 	}
-	if !slices.IsSorted(ids) {
-		t.Fatalf("models=%v, want sorted IDs", ids)
+	seen := make(map[string]bool)
+	for _, id := range ids {
+		if seen[id] || slices.Contains([]string{"default", "sonnet", "opus", "fable", "haiku"}, id) {
+			t.Fatalf("models=%v, want unique resolved IDs without CLI aliases", ids)
+		}
+		seen[id] = true
 	}
 	t.Logf("CLI model IDs: %v", ids)
 }

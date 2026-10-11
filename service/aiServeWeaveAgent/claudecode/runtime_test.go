@@ -19,13 +19,13 @@ func TestRuntimeMessages(t *testing.T) {
 	}
 	r := rt.(*Runtime)
 	r.bridge.start = fixtureStart
-	r.models = map[string]string{"sonnet": "claude-sonnet-4-6"}
+	r.models = map[string]struct{}{"claude-sonnet-4-6": {}}
 	defer r.Close()
 	req := testMessagesRequest()
 	round := func(parent context.Context, req messagesRequest) []messageBlock {
 		t.Helper()
 		data, _ := json.Marshal(req)
-		stream, err := r.Messages(parent, runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", JSON: data})
+		stream, err := r.Messages(parent, runtime.MessagesRequest{Model: "claude-sonnet-4-6", TenantID: "tenant", KeyID: "key", JSON: data})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -118,7 +118,7 @@ func TestNativeOwnership(t *testing.T) {
 		{"missing tenant", "", "key"}, {"missing key", "tenant", ""}, {"oversized key", "tenant", strings.Repeat("k", 257)},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := r.Messages(t.Context(), runtime.MessagesRequest{Model: "sonnet", TenantID: tc.tenant, KeyID: tc.key, JSON: json.RawMessage(`{}`)})
+			_, err := r.Messages(t.Context(), runtime.MessagesRequest{Model: "claude-sonnet-4-6", TenantID: tc.tenant, KeyID: tc.key, JSON: json.RawMessage(`{}`)})
 			if err == nil {
 				t.Fatal("error=nil, want invalid config")
 			}
@@ -135,9 +135,9 @@ func TestRuntimeCloseUnconsumedStream(t *testing.T) {
 	}
 	r := rt.(*Runtime)
 	r.bridge.start = fixtureStart
-	r.models = map[string]string{"sonnet": "claude-sonnet-4-6"}
+	r.models = map[string]struct{}{"claude-sonnet-4-6": {}}
 	data, _ := json.Marshal(testMessagesRequest())
-	stream, err := r.Messages(t.Context(), runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", JSON: data})
+	stream, err := r.Messages(t.Context(), runtime.MessagesRequest{Model: "claude-sonnet-4-6", TenantID: "tenant", KeyID: "key", JSON: data})
 	if err != nil {
 		t.Fatal(err)
 	}

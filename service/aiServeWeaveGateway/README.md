@@ -117,6 +117,10 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 2. **`-api-keys`** —— 静态明文列表，靠重启轮换。留给本地开发，以及控制面尚未部署时先把数据面跑起来。两者都配置时控制面胜出，并在启动时告警。
 3. **两者皆无** —— 放行一切，仅在监听回环时才谈得上合适，启动时有告警。
 
+`POST /v1/messages` 和 `GET /v1/models` 同时接受 `x-api-key: <API Key>` 与 `Authorization: Bearer <API Key>`，兼容 Anthropic 客户端的推理与模型列表检查；其他端点仍要求 Bearer。存在 `Authorization` 时优先校验它，即使无效也不回退到 `x-api-key`。两种请求头共用相同的控制面校验、吊销和租户身份逻辑。
+
+**客户端 Base URL 统一填写 `http://127.0.0.1:8080/v1`**，OpenAI Chat Completions 与 Anthropic Messages 相同，DeepSeek Harness 也使用这一地址。标准端点仍为 `/v1/chat/completions`、`/v1/messages` 和 `/v1/models`。Anthropic SDK 若自动再追加 `/v1`，Gateway 在认证、配额和观测之前将 `/v1/v1/messages`、`/v1/v1/models` 归一为对应标准端点；直接处理 POST 与 SSE，不发送重定向，不改变消息体、模型 ID 或凭据优先级。旧的 Anthropic 根地址配置仍可用。这一兼容仅限上述两个精确路径，不对任意重复前缀做通用改写。
+
 **Gateway 发给控制面的是哈希，不是调用方的 key。** SHA-256 在这里算完，因此用户的凭据从不进入控制面的内存、它的请求日志，或两者之间的抓包。哈希足以查到一个 key，却无法用来在别处冒充它。
 
 **校验结果在进程内缓存 `-key-cache-ttl`（默认 30s），吊销由 generation 长轮询主动失效。** Gateway 用同一把 `InternalToken` 持续调用 `GET /internal/v1/apikeys/revocations/watch?after=<generation>`；健康链路上，Redis generation 的变化在 1 秒内清空每个副本的正向缓存。长轮询每 2 秒心跳，客户端 5 秒硬超时；传输、超时、鉴权、状态码或响应格式任何一处失败，都会同步清空并禁用本地缓存，之后每次请求直接问控制面，控制面不可达仍返回 503。漏掉的 Pub/Sub 消息与切换控制面副本由 Redis 当前 generation 补偿，generation 回退则按 Redis epoch 重置先清缓存再接管新值。
@@ -606,13 +610,17 @@ aiserveweave-gateway \
 
 ## Claude Code 原生 Messages
 
-模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。其他模型仍使用既有 Chat 转换。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 端点接受 `x-api-key` 或既有 Bearer 认证，其他端点仍要求 Bearer；凭据不进入隧道。
+Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：Gateway 将文本、前置 system/developer 和 function 工具转换为 Messages 语义，沿用下述身份校验、Redis 认领与原节点绑定。`finish_reason` 映射为 `stop`、`length` 或 `tool_calls`；流式包含工具索引与参数增量，成功结束发送 `[DONE]`，`stream_options.include_usage` 可请求末尾用量帧。其他 Chat 后端（包括 Codex）仍走原来的 Chat 隧道。
+
+普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、范围 1–64000，同时提供必须一致；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 1 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent；Claude 的 `/v1/responses` 尚未实现。
+
+模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。其他模型仍使用既有 Chat 转换。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
 
 Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定两分钟到期，已投递或结果不确定时拒绝重放。续接不会换节点，节点失联、Agent 重启或等待超时后需开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 
-CLI 后端通过 `initialize` 动态发布本机 CLI 返回的模型 ID、显示名称和顺序，`/v1/models` 汇总健康运行时的目录；启用别名路由时只展示具有可用目标的公共别名。
+Claude CLI 后端通过 `initialize` 动态发布 `resolvedModel` 中去重后的真实模型 ID，并保留首次出现的顺序，`/v1/models` 汇总健康运行时的目录；启用别名路由时只展示具有可用目标的公共别名。
 
-`GET /v1/models` 保留 OpenAI 形状的 `id`、`object`、`owned_by`，增加相同内容的 `name` / `display_name` 显示名称字段，例如 `{"id":"haiku","object":"model","owned_by":"aiserveweave","name":"Haiku 5.5","display_name":"Haiku 5.5"}`。名称来自当前 CLI，不能用它替代请求中的 `model` ID。无名称时两字段均回退为 ID。未启用别名路由时，有后端目录位置的模型先按位置排序，同位置按 ID 排序，未指定位置的模型随后按 ID 排序；同一 ID 去重时优先采用更早的目录位置，同位置优先非空名称，再按名称字典序选择，避免节点遍历顺序影响结果。CLI 单后端的列表因此与 DBX 的 CLI 顺序一致。别名路由仍按公共别名排序并用别名作显示名称，不暴露目标模型的元数据。第三方客户端需要读取 `name` 或 `display_name` 并保留数组顺序，重新获取/导入模型后才能体现这些信息。真实工具流程验收过的 `claude-sonnet-4-6` 可用以下路由（要求 CLI 目录包含该 ID；文件格式，或在控制面发布同样的路由）：
+`GET /v1/models` 保留 OpenAI 形状的 `id`、`object`、`owned_by`，增加相同内容的 `name` / `display_name` 显示名称字段，Claude 模型的三个名称字段均为真实 ID，例如 `{"id":"claude-haiku-5-5","object":"model","owned_by":"aiserveweave","name":"claude-haiku-5-5","display_name":"claude-haiku-5-5"}`，请求中的 `model` 直接使用这个 ID。`default`、`opus`、`haiku` 等 CLI 简称不发布、不接受，也不做简称到真实 ID 的映射。无名称时两字段均回退为 ID。未启用别名路由时，有后端目录位置的模型先按位置排序，同位置按 ID 排序，未指定位置的模型随后按 ID 排序；同一 ID 去重时优先采用更早的目录位置，同位置优先非空名称，再按名称字典序选择，避免节点遍历顺序影响结果。Claude 列表按真实 ID 去重，保留 CLI 首次返回该 ID 的顺序。别名路由仍按公共别名排序并用别名作显示名称，不暴露目标模型的元数据。客户端需重新获取/导入模型并移除旧简称条目，才能采用新的真实 ID 目录。真实工具流程验收过的 `claude-sonnet-4-6` 可用以下路由（要求 CLI 目录包含该 ID；文件格式，或在控制面发布同样的路由）：
 
 ```json
 [{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"claude-sonnet-4-6"}]}]

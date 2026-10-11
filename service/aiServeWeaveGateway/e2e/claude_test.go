@@ -39,6 +39,7 @@ func claudeProcessFixture() {
 			"subtype": "success", "request_id": request.RequestID, "response": map[string]any{"models": []any{
 				map[string]string{"value": "sonnet", "resolvedModel": "claude-sonnet-4-6", "displayName": "Sonnet 4.6"},
 				map[string]string{"value": "opus", "resolvedModel": "fixture-opus", "display_name": "Opus fixture"},
+				map[string]string{"value": "default", "resolvedModel": "fixture-opus", "displayName": "Default"},
 			}},
 		}})
 		return
@@ -186,10 +187,10 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 	for _, model := range catalog.Data {
 		ids = append(ids, model.ID)
 	}
-	if err != nil || models.StatusCode != 200 || !slices.Equal(ids, []string{"sonnet", "opus"}) {
-		t.Fatalf("model catalog=%v, status=%d, error=%v; want [sonnet opus], 200, nil", ids, models.StatusCode, err)
+	if err != nil || models.StatusCode != 200 || !slices.Equal(ids, []string{"claude-sonnet-4-6", "fixture-opus"}) {
+		t.Fatalf("model catalog=%v, status=%d, error=%v; want [claude-sonnet-4-6 fixture-opus], 200, nil", ids, models.StatusCode, err)
 	}
-	for i, want := range []string{"Sonnet 4.6", "Opus fixture"} {
+	for i, want := range ids {
 		if got := catalog.Data[i]; got.Name != want || got.DisplayName != want {
 			t.Fatalf("model=%+v, want name and display_name=%q", got, want)
 		}
@@ -198,13 +199,23 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 		name   string
 		model  string
 		stream bool
-	}{{"JSON sonnet", "sonnet", false}, {"SSE opus", "opus", true}} {
+		path   string
+	}{
+		{"JSON sonnet", "claude-sonnet-4-6", false, "/v1/messages"},
+		{"SSE opus", "fixture-opus", true, "/v1/messages"},
+		{"unified base JSON", "claude-sonnet-4-6", false, "/v1/v1/messages"},
+		{"unified base SSE", "fixture-opus", true, "/v1/v1/messages"},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := []any{map[string]any{"role": "user", "content": "use caller tool " + tc.model}}
 			tools := []any{map[string]any{"name": "read_file", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}}}}
 			post := func(index int, stream bool) []byte {
 				body, _ := json.Marshal(map[string]any{"model": tc.model, "max_tokens": 1024, "messages": messages, "tools": tools, "stream": stream})
-				req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, servers[index].URL+"/v1/messages", bytes.NewReader(body))
+				path := tc.path
+				if index == 1 {
+					path = "/v1/messages"
+				}
+				req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, servers[index].URL+path, bytes.NewReader(body))
 				req.Header.Set("X-Api-Key", "claude-live-first")
 				req.Header.Set("Content-Type", "application/json")
 				resp, err := http.DefaultClient.Do(req)

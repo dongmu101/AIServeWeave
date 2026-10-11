@@ -377,6 +377,7 @@ func TestCodexFactoryRequiresLocalDeclaration(t *testing.T) {
 		{"absent", nil, false},
 		{"other kind", []runtime.Config{{ID: "codex-local", Kind: runtime.KindOllama}}, false},
 		{"declared", []runtime.Config{{ID: "codex-local", Kind: runtime.KindCodex}}, true},
+		{"alongside Claude", []runtime.Config{{ID: "claude-local", Kind: runtime.KindClaude}, {ID: "codex-local", Kind: runtime.KindCodex}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry, err := newRegistry(tc.declared)
@@ -405,6 +406,7 @@ func TestClaudeFactoryRequiresLocalDeclaration(t *testing.T) {
 		{"absent", nil, false},
 		{"other kind", []runtime.Config{{ID: "claude-local", Kind: runtime.KindOllama}}, false},
 		{"declared", []runtime.Config{{ID: "claude-local", Kind: runtime.KindClaude}}, true},
+		{"alongside Codex", []runtime.Config{{ID: "codex-local", Kind: runtime.KindCodex}, {ID: "claude-local", Kind: runtime.KindClaude}}, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			registry, err := newRegistry(tc.declared)

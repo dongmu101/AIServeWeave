@@ -25,7 +25,9 @@ runtimes:
 ```bash
 go test ./service/aiServeWeaveAgent/codexcli ./service/aiServeWeaveGateway/e2e
 go test -race ./service/aiServeWeaveAgent/codexcli ./service/aiServeWeaveGateway/e2e
-# 显式真实测试，会使用本机账户额度
+# 仅查询模型目录，不执行推理
+AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveAgent/codexcli -run '^TestLiveModelDiscovery$' -v -count=1
+# 其余显式真实测试会使用本机账户额度
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveAgent/codexcli -run TestLiveCallerToolRoundTrip -v
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveGateway/e2e -run TestLiveCodexClientThroughTunnel -v
 ```

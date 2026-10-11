@@ -44,17 +44,38 @@ func (h *handlers) useNativeMessages(req anthropicMessagesRequest) bool {
 // nativeMessages preserves native block order and authenticates every continuation.
 // nativeMessages 保留原生块顺序，并对每次续接重新认证。
 func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time) {
+	h.nativeMessagesOutput(w, r, req, raw, start, nil)
+}
+
+// nativeMessagesOutput shares ownership, affinity and limits between public protocols.
+// nativeMessagesOutput 在不同公开协议之间共用归属校验、节点绑定和容量限制。
+func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time, chat *nativeChatOutput) {
+	started := false
+	fail := func(status int, errType, code, message string) {
+		if chat != nil {
+			chat.fail(status, errType, code, message)
+		} else if started {
+			_ = writeAnthropicSSE(w, "error", map[string]any{"type": "error", "error": map[string]string{"type": errType, "message": message}})
+			_ = http.NewResponseController(w).Flush()
+		} else {
+			writeAnthropicError(w, status, errType, message)
+		}
+	}
+	dispatchError := func(err error) {
+		status, errType, code, message := dispatchErrorDetails(h.logger, err)
+		fail(status, errType, code, message)
+	}
 	identity, ok := IdentityFrom(r.Context())
 	if !ok || identity.TenantID == "" || identity.KeyID == "" {
-		writeAnthropicError(w, 401, "authentication_error", "native Messages requires authenticated API keys")
+		fail(401, "authentication_error", "authentication_error", "native Messages requires authenticated API keys")
 		return
 	}
 	if h.messagesSessions == nil {
-		writeAnthropicError(w, 503, "api_error", "native Messages requires shared Redis session coordination")
+		fail(503, "api_error", "session_unavailable", "native Messages requires shared Redis session coordination")
 		return
 	}
 	if len(raw) > 1<<20 {
-		writeAnthropicError(w, 413, "invalid_request_error", "native Messages request size limit exceeded")
+		fail(413, "invalid_request_error", "request_too_large", "native Messages request size limit exceeded")
 		return
 	}
 	ids := nativeResultIDs(req)
@@ -65,12 +86,12 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 		var err error
 		record, finish, err = h.messagesSessions.Claim(r.Context(), ids, identity.TenantID, identity.KeyID, req.Model)
 		if err != nil {
-			writeAnthropicError(w, 409, "invalid_request_error", "Messages continuation unavailable")
+			fail(409, "invalid_request_error", "continuation_unavailable", "Messages continuation unavailable")
 			return
 		}
 	} else {
 		if len(candidates) == 0 {
-			writeAnthropicError(w, 503, "api_error", "native Messages node unavailable")
+			fail(503, "api_error", "node_unavailable", "native Messages node unavailable")
 			return
 		}
 		record = messagesession.Record{TenantID: identity.TenantID, KeyID: identity.KeyID, Model: req.Model, Candidate: candidates[0]}
@@ -86,7 +107,7 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 	stream, err := h.sched.Messages(r.Context(), record.Candidate, runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw})
 	if err != nil {
 		committed = !messagesNotApplied(err)
-		handleAnthropicDispatchError(w, h.logger, err)
+		dispatchError(err)
 		return
 	}
 	defer stream.Close()
@@ -94,14 +115,10 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 	var content []anthropicContentBlockJSON
 	var calls []string
 	var usage runtime.Usage
-	started, stopped := false, false
+	stopped := false
 	total := 0
-	fail := func(status int, message string) {
-		if started {
-			_ = writeAnthropicSSE(w, "error", map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": message}})
-		} else {
-			writeAnthropicError(w, status, "api_error", message)
-		}
+	protocolError := func(message string) {
+		fail(502, "api_error", "upstream_protocol", message)
 	}
 	for {
 		item, err := stream.Recv()
@@ -109,27 +126,31 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			if !stopped {
 				err = errors.New("Messages stream ended before message_stop")
 			} else {
-				if !req.Stream {
+				endpoint := UsageEndpointAnthropicMessages
+				if chat != nil {
+					chat.finish(response, content, usage, req.Stream)
+					endpoint = UsageEndpointChat
+				} else if !req.Stream {
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(response)
 				}
-				h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointAnthropicMessages, req.Model)
+				h.recordUsage(r.Context(), usage, time.Since(start), endpoint, req.Model)
 				return
 			}
 		}
 		if err != nil {
 			if !started {
 				committed = committed || !messagesNotApplied(err)
-				handleAnthropicDispatchError(w, h.logger, err)
+				dispatchError(err)
 			} else {
-				_ = writeAnthropicSSE(w, "error", map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": "native Messages stream failed"}})
+				protocolError("native Messages stream failed")
 			}
 			return
 		}
 		committed = true
 		total += len(item.JSON)
 		if total > 8<<20 {
-			fail(502, "native Messages response size limit exceeded")
+			protocolError("native Messages response size limit exceeded")
 			return
 		}
 		var event struct {
@@ -145,14 +166,14 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			Usage map[string]any `json:"usage"`
 		}
 		if json.Unmarshal(item.JSON, &event) != nil || stopped {
-			fail(502, "invalid native Messages event")
+			protocolError("invalid native Messages event")
 			return
 		}
 		data := item.JSON
 		switch event.Type {
 		case "message_start":
 			if event.Message == nil || len(response) != 0 {
-				fail(502, "invalid native Messages event")
+				protocolError("invalid native Messages event")
 				return
 			}
 			response = event.Message
@@ -168,7 +189,7 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			}
 		case "content_block_start":
 			if event.Index != len(content) {
-				fail(502, "invalid native Messages block index")
+				protocolError("invalid native Messages block index")
 				return
 			}
 			content = append(content, event.Block)
@@ -177,7 +198,7 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			}
 		case "content_block_delta":
 			if event.Index < 0 || event.Index >= len(content) {
-				fail(502, "invalid native Messages block index")
+				protocolError("invalid native Messages block index")
 				return
 			}
 			if event.Delta.Type == "text_delta" {
@@ -194,7 +215,7 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			response["stop_reason"] = event.Delta.StopReason
 			prior, _ := response["usage"].(map[string]any)
 			if prior == nil {
-				fail(502, "invalid native Messages usage")
+				protocolError("invalid native Messages usage")
 				return
 			}
 			for k, v := range event.Usage {
@@ -209,24 +230,31 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			if len(calls) > 0 {
 				record.IDs = calls
 				if h.messagesSessions.Publish(r.Context(), record) != nil {
-					if started {
-						_ = writeAnthropicSSE(w, "error", map[string]any{"type": "error", "error": map[string]string{"type": "api_error", "message": "Messages continuation storage unavailable"}})
-					} else {
-						writeAnthropicError(w, 503, "api_error", "Messages continuation storage unavailable")
-					}
+					fail(503, "api_error", "session_unavailable", "Messages continuation storage unavailable")
 					return
 				}
 			}
 			stopped = true
 			response["content"] = content
 		case "error":
-			fail(502, "native Messages stream failed")
+			protocolError("native Messages stream failed")
 			return
 		default:
-			fail(502, "unsupported native Messages event")
+			protocolError("unsupported native Messages event")
 			return
 		}
 		if req.Stream {
+			if chat != nil {
+				if err := chat.event(data); err != nil {
+					return
+				}
+				if !started && chat.started {
+					h.logTTFT(r, req.Model, record.Candidate.NodeID, start, true)
+					h.metrics.TTFT(EndpointChatCompletions, time.Since(start))
+				}
+				started = chat.started
+				continue
+			}
 			if !started {
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")

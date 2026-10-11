@@ -13,6 +13,26 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
+// TestLiveModelDiscovery checks the local Codex catalogue without inference.
+// TestLiveModelDiscovery 不执行推理，检查本机 Codex 模型目录。
+func TestLiveModelDiscovery(t *testing.T) {
+	if os.Getenv("AISW_CODEX_LIVE") != "1" {
+		t.Skip("set AISW_CODEX_LIVE=1 to query the local CLI catalogue without inference")
+	}
+	rt, err := New(runtime.Config{ID: "codex-live", Kind: runtime.KindCodex}, runtime.Dependencies{Clock: runtime.NewSystemClock()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	discovery, err := rt.Discover(t.Context())
+	if err != nil || len(discovery.Models) == 0 {
+		t.Fatalf("models=%d error=%v, want nonempty models and nil error", len(discovery.Models), err)
+	}
+	for _, model := range discovery.Models {
+		t.Logf("Codex model ID=%s", model.ID)
+	}
+}
+
 // TestLiveCallerToolRoundTrip uses the existing local ChatGPT login only when opted in.
 // TestLiveCallerToolRoundTrip 仅在显式启用时使用本机现有 ChatGPT 登录。
 func TestLiveCallerToolRoundTrip(t *testing.T) {

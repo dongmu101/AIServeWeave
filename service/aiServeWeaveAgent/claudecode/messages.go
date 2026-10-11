@@ -378,6 +378,38 @@ func historyHash(messages []bridgeMessage, toolSets ...[]bridgeTool) [32]byte {
 	return canonical(normalized)
 }
 
+// historyHash matches Chat's separate text/tool fields without weakening native block ordering.
+// historyHash 按 Chat 分离的文本和工具字段匹配历史，原生协议仍保留块顺序校验。
+func (s *messagesSession) historyHash(messages []bridgeMessage) [32]byte {
+	var metadata struct {
+		Chat bool `json:"aisw_chat_completions"`
+	}
+	_ = json.Unmarshal(s.request.Metadata, &metadata)
+	if metadata.Chat {
+		messages = append([]bridgeMessage(nil), messages...)
+		for i, message := range messages {
+			if message.Role != "assistant" {
+				continue
+			}
+			list, _ := blocks(message.Content)
+			var text string
+			var calls []messageBlock
+			for _, block := range list {
+				if block.Type == "text" {
+					text += block.Text
+				} else {
+					calls = append(calls, block)
+				}
+			}
+			if text != "" {
+				calls = append([]messageBlock{{Type: "text", Text: text}}, calls...)
+			}
+			messages[i].Content, _ = json.Marshal(calls)
+		}
+	}
+	return historyHash(messages, s.request.Tools)
+}
+
 // acquire atomically validates all tool results before advancing a session.
 // acquire 原子校验全部工具结果后才推进会话。
 func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*messagesSession, error) {
@@ -400,7 +432,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	if len(results) > 0 {
 		for s := range b.sessions {
 			s.mu.Lock()
-			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && historyHash(req.Messages[:len(req.Messages)-1], s.request.Tools) == s.history && len(results) == len(s.pending) && len(last) == len(results)
+			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
 			if matches {
 				for id := range results {
 					if s.pending[id] == nil || s.pending[id].delivered {
@@ -579,7 +611,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					}
 					body, _ := json.Marshal(content)
 					history := append(append([]bridgeMessage(nil), s.messages...), bridgeMessage{Role: "assistant", Content: body})
-					s.history = historyHash(history, s.request.Tools)
+					s.history = s.historyHash(history)
 				}
 				s.mu.Unlock()
 				if waiting {

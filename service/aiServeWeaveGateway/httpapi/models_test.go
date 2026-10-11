@@ -17,35 +17,44 @@ import (
 )
 
 // TestModelsFromMultipleLocalBackends checks the client catalogue for one Agent
-// with HTTP and CLI runtimes, including multiple CLI models and readiness filtering.
+// with HTTP, Claude and Codex runtimes, including independent readiness filtering.
 //
 // TestModelsFromMultipleLocalBackends 验证同一 Agent 的 HTTP 与 CLI 多后端模型目录，
-// 包括 CLI 的多个模型和未就绪运行时过滤。
+// 包括 Claude/Codex 同时存在以及彼此独立的未就绪过滤。
 func TestModelsFromMultipleLocalBackends(t *testing.T) {
 	for _, tc := range []struct {
-		name  string
-		state runtime.State
-		want  []string
+		name                    string
+		codexState, claudeState runtime.State
+		want                    []string
 	}{
-		{name: "all ready", state: runtime.StateHealthy, want: []string{"codex-model-a", "codex-model-b", "ollama-model"}},
-		{name: "CLI not ready", state: runtime.StateUnhealthy, want: []string{"ollama-model"}},
+		{name: "all ready", codexState: runtime.StateHealthy, claudeState: runtime.StateHealthy, want: []string{"claude-sonnet-4-6", "codex-model-a", "codex-model-b", "ollama-model"}},
+		{name: "Codex not ready", codexState: runtime.StateUnhealthy, claudeState: runtime.StateHealthy, want: []string{"claude-sonnet-4-6", "ollama-model"}},
+		{name: "Claude not ready", codexState: runtime.StateHealthy, claudeState: runtime.StateUnhealthy, want: []string{"codex-model-a", "codex-model-b", "ollama-model"}},
+		{name: "both CLIs not ready", codexState: runtime.StateUnhealthy, claudeState: runtime.StateUnhealthy, want: []string{"ollama-model"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			server, harness := newServer(t, httpapi.Config{})
 			ollama := chatCapableSnapshot("ollama-local", "ollama-model")
 			cli := chatCapableSnapshot("codex-local", "codex-model-a")
-			cli.Descriptor.Kind, cli.Descriptor.BaseURL, cli.State = runtime.KindCodex, "", tc.state
+			cli.Descriptor.Kind, cli.Descriptor.BaseURL, cli.State = runtime.KindCodex, "", tc.codexState
 			cli.Discovery.Models = append(cli.Discovery.Models,
 				runtime.Model{ID: "codex-model-b", Capabilities: cli.Discovery.Models[0].Capabilities},
 				runtime.Model{ID: "ollama-model", Capabilities: cli.Discovery.Models[0].Capabilities})
-			control := harness.Connect("multi-backend-node", "ollama-local", "codex-local")
+			claude := runtime.Snapshot{
+				Descriptor: runtime.Descriptor{ID: "claude-local", Kind: runtime.KindClaude}, State: tc.claudeState,
+				Discovery: runtime.Discovery{
+					Capabilities: runtime.CapabilitySet{runtime.CapabilityMessages: {Level: runtime.SupportSupported}},
+					Models:       []runtime.Model{{ID: "claude-sonnet-4-6", DisplayName: "claude-sonnet-4-6", DisplayOrder: 1}},
+				},
+			}
+			control := harness.Connect("multi-backend-node", "ollama-local", "codex-local", "claude-local")
 			control.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
 				Full: true, ReportedAt: timestamppb.New(harness.Clock.Now()),
-				Snapshots: tunnelwire.SnapshotsToProto([]runtime.Snapshot{ollama, cli}),
+				Snapshots: tunnelwire.SnapshotsToProto([]runtime.Snapshot{ollama, cli, claude}),
 			}}})
-			gatewaytest.WaitFor(t, "both local backends to be reported", func() bool {
+			gatewaytest.WaitFor(t, "all local backends to be reported", func() bool {
 				node, _ := harness.Srv.Node("multi-backend-node")
-				return len(node.Runtimes) == 2
+				return len(node.Runtimes) == 3
 			})
 			response, err := server.Client().Get(server.URL + "/v1/models")
 			if err != nil {

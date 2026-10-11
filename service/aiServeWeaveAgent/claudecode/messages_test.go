@@ -19,6 +19,35 @@ func testMessagesRequest() messagesRequest {
 	return messagesRequest{Model: "sonnet", MaxTokens: 1024, Messages: []bridgeMessage{{Role: "user", Content: json.RawMessage(`"use the caller tool"`)}}, Tools: []bridgeTool{{Name: "read_file", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)}}}
 }
 
+// TestChatHistoryKeepsTextAndTools checks Chat equivalence without relaxing native history checks.
+// TestChatHistoryKeepsTextAndTools 验证 Chat 历史等价性，同时保持原生历史的严格校验。
+func TestChatHistoryKeepsTextAndTools(t *testing.T) {
+	original := []bridgeMessage{{Role: "assistant", Content: json.RawMessage(`[{"type":"text","text":"before"},{"type":"tool_use","id":"call","name":"read_file","input":{"path":"a"}},{"type":"text","text":"after"}]`)}}
+	for _, tc := range []struct {
+		name    string
+		chat    bool
+		content string
+		want    bool
+	}{
+		{"Chat fields", true, `[{"type":"text","text":"beforeafter"},{"type":"tool_use","id":"call","name":"read_file","input":{"path":"a"}}]`, true},
+		{"native order", false, `[{"type":"text","text":"beforeafter"},{"type":"tool_use","id":"call","name":"read_file","input":{"path":"a"}}]`, false},
+		{"changed text", true, `[{"type":"text","text":"changed"},{"type":"tool_use","id":"call","name":"read_file","input":{"path":"a"}}]`, false},
+		{"changed arguments", true, `[{"type":"text","text":"beforeafter"},{"type":"tool_use","id":"call","name":"read_file","input":{"path":"b"}}]`, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := testMessagesRequest()
+			if tc.chat {
+				req.Metadata = json.RawMessage(`{"aisw_chat_completions":true}`)
+			}
+			s := &messagesSession{request: req}
+			got := s.historyHash(original) == s.historyHash([]bridgeMessage{{Role: "assistant", Content: json.RawMessage(tc.content)}})
+			if got != tc.want {
+				t.Fatalf("history matches=%t, want %t", got, tc.want)
+			}
+		})
+	}
+}
+
 func sendMessages(b *messagesBridge, req messagesRequest, key string) *httptest.ResponseRecorder {
 	data, _ := json.Marshal(req)
 	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/v1/messages", strings.NewReader(string(data)))

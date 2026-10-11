@@ -1,10 +1,18 @@
 # Claude Code CLI 运行时
 
-Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。仅通过 Gateway 的原生 `/v1/messages` 服务，发布 `anthropic_messages` 能力，不提供 Chat/Responses/嵌入接口。
+Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。发布 `anthropic_messages` 能力，通过 Gateway 的原生 `/v1/messages` 和兼容 `/v1/chat/completions` 服务。Chat 在 Gateway 边界转换，仍使用 Messages 隧道；不提供 Responses/嵌入接口。
 
-模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models` 读取并去重模型 ID，保留 CLI 原始顺序及 `displayName`（兼容 `display_name`）显示名称。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。
+模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models[].resolvedModel` 读取真实模型 ID，按真实 ID 去重并保留首次出现的顺序。CLI 的 `value` / `id` 简称及友好名称不作为公开模型名；没有 `resolvedModel` 的条目不发布。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。
 
-请求只能选择最近一次成功发现的模型；CLI 返回 `resolvedModel` 时，会话使用该具体模型，否则使用 CLI 返回的 ID。工具续接保持原会话的上游模型。`default`、`sonnet`、`opus` 等别名及具体模型名是否出现取决于本机 CLI，不能据模型名称推断完整 API 兼容性；真实工具流程目前只验收过 `claude-sonnet-4-6`。
+请求只能选择最近一次成功发现的真实模型 ID，传给 CLI 的 `--model` 与请求 ID 完全一致。`default`、`sonnet`、`opus`、`fable`、`haiku` 等简称不进入目录，也不能直接用于请求；同一真实模型经多个简称返回时只发布一次。工具续接保持原会话模型。不能据模型名称推断完整 API 兼容性；原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。
+
+## OpenAI Chat Completions 兼容
+
+客户端可保留 OpenAI Chat Completions 类型，Base URL 为 Gateway 地址（通常为 `http://127.0.0.1:8080/v1`），使用控制面签发的 Bearer Key，模型 ID 原样使用目录中的 `claude-sonnet-5-5` 等真实 ID。支持 JSON、SSE、`stream_options.include_usage`、文本、前置 system/developer、function 工具及工具结果续接。Gateway 同样要求身份校验和共享 Redis，工具仍由调用方执行。
+
+普通多轮聊天以带角色标记的 JSON 历史文本作为新 CLI 回合上下文，不伪造 CLI 的 assistant 消息，也不重放历史工具。当前工具链保留原进程，并校验身份、完整历史、全部工具结果和原节点绑定。Chat 将 assistant 文本和工具分别存放，Agent 仅对带内部 `metadata.aisw_chat_completions` 标记的会话按这两个字段校验等价性；文本、工具顺序、ID 和参数仍必须一致。原生 Messages 保持块顺序校验。升级本兼容层后需要同时更新 Gateway 和重启 Agent。
+
+支持 `max_tokens` 或 `max_completion_tokens`（1–64000，默认 4096；同时指定必须相同）、`temperature`（0–1）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `reasoning_effort`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
 
 ## 启用
 
@@ -18,16 +26,16 @@ runtimes:
 
 `base_url` 省略或为空，不配置 API Key、请求头、TLS 或认证文件。设置了 `gateway.allowed_runtimes` 时加入 `claude-local`。Gateway 下发配置不能创建未在本地声明的 Claude ID。配置页面可选择 Claude Code CLI，保存后仍需重启 Agent。
 
-所有 Gateway 副本连接同一 Redis（`-redis-addr`），并启用控制面 API Key 校验。调用方使用控制面签发的 Key；静态 `-api-keys` 没有租户/Key 归属，不能用于此运行时。未启用模型别名路由时，`/v1/models` 保留 CLI 顺序列出发现的模型，并以 `name` 和 `display_name` 返回显示名称；`id` 始终保留 CLI 模型 ID，用于发起请求。客户端需要读取名称字段并保留返回顺序才能显示成 DBX 的列表；自行按 ID 排序或忽略名称的客户端需要调整其导入/显示逻辑。启用路由时只列出具有可用目标的公共别名。例如，将公共模型 `claude-sonnet-4-6` 路由到目录中的同名具体模型：
+所有 Gateway 副本连接同一 Redis（`-redis-addr`），并启用控制面 API Key 校验。调用方使用控制面签发的 Key；静态 `-api-keys` 没有租户/Key 归属，不能用于此运行时。未启用模型别名路由时，`/v1/models` 保留 CLI 顺序列出发现的模型，其中 `id`、`name` 和 `display_name` 均为同一个真实模型 ID，例如 `claude-haiku-5-5`，不使用 `Haiku 5.5` 等友好名称替代。启用路由时只列出具有可用目标的公共别名。例如，将公共模型 `claude-sonnet-4-6` 路由到目录中的同名具体模型：
 
 ```json
 [{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"claude-sonnet-4-6"}]}]
 ```
 
-已验证的原版客户端配置：
+客户端 Base URL 统一使用 Gateway 的 `/v1` 地址，OpenAI Chat Completions、Anthropic Messages 和 DeepSeek Harness 均相同。Anthropic SDK 额外追加的 `/v1` 由 Gateway 兼容；旧的根地址配置仍可用。以下配置要求部署支持统一基础路径的新版 Gateway：
 
 ```bash
-export ANTHROPIC_BASE_URL="https://your-gateway.example"
+export ANTHROPIC_BASE_URL="https://your-gateway.example/v1"
 # ANTHROPIC_API_KEY 设置为控制面签发的调用方 Key。
 export MAX_THINKING_TOKENS=0
 export CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1
@@ -77,6 +85,7 @@ AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveGateway/e2e -run '^TestLiv
 AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run TestLiveMessages -v -count=1
 AISW_MESSAGES_REDIS_ADDR=127.0.0.1:6379 go test ./service/aiServeWeaveGateway/messagesession -v -count=1
 AISW_CLAUDE_LIVE_TEST=1 AISW_MESSAGES_REDIS_ADDR=127.0.0.1:6379 go test ./service/aiServeWeaveGateway/e2e -run TestLiveClaudeClientsThroughTunnel -v -count=1
+AISW_CLAUDE_LIVE_TEST=1 AISW_CLAUDE_MODEL=claude-sonnet-5-5 AISW_MESSAGES_REDIS_ADDR=127.0.0.1:6379 go test ./service/aiServeWeaveGateway/e2e -run '^TestLiveClaudeChatThroughTunnel$' -v -count=1
 ```
 
 `AISW_CLAUDE_PATH` 可为测试指定本地可执行文件；生产程序仅从可信 Agent PATH 解析 `claude`，外部请求不能设置程序路径、命令、环境变量或目标地址。运行证据与尚未验证的范围见 [RESULTS.md](../../../experiments/claude-code-bridge/RESULTS.md)。

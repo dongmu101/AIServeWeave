@@ -144,6 +144,7 @@ func toRuntimeContentParts(parts []chatContentPartJSON) ([]runtime.ContentPart, 
 }
 
 type toolCallJSON struct {
+	Index    *int             `json:"index,omitempty"`
 	ID       string           `json:"id"`
 	Type     string           `json:"type"`
 	Function functionCallJSON `json:"function"`
@@ -197,12 +198,16 @@ func (f *stopField) UnmarshalJSON(b []byte) error {
 }
 
 type chatCompletionRequest struct {
-	Model          string              `json:"model"`
-	Messages       []chatMessageJSON   `json:"messages"`
-	Stream         bool                `json:"stream,omitempty"`
-	Temperature    *float64            `json:"temperature,omitempty"`
-	TopP           *float64            `json:"top_p,omitempty"`
-	MaxTokens      *int                `json:"max_tokens,omitempty"`
+	Model               string            `json:"model"`
+	Messages            []chatMessageJSON `json:"messages"`
+	Stream              bool              `json:"stream,omitempty"`
+	Temperature         *float64          `json:"temperature,omitempty"`
+	TopP                *float64          `json:"top_p,omitempty"`
+	MaxTokens           *int              `json:"max_tokens,omitempty"`
+	MaxCompletionTokens *int              `json:"max_completion_tokens,omitempty"`
+	StreamOptions       *struct {
+		IncludeUsage bool `json:"include_usage"`
+	} `json:"stream_options,omitempty"`
 	Stop           stopField           `json:"stop,omitempty"`
 	Seed           *int64              `json:"seed,omitempty"`
 	Tools          []toolJSON          `json:"tools,omitempty"`
@@ -358,16 +363,25 @@ type chatMessageDeltaJSON struct {
 
 // chatCompletions implements POST /v1/chat/completions, dispatching to
 // chatNonStream or chatStream depending on the "stream" field.
+// chatCompletions 实现 Chat Completions；原生 Messages 模型走兼容转换，其他模型按 stream 分派。
 func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	var raw json.RawMessage
 	var req chatCompletionRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil || json.Unmarshal(raw, &req) != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
 		return
 	}
 	if req.Model == "" || len(req.Messages) == 0 {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model and a non-empty messages array are required")
 		return
+	}
+	if h.useNativeChat(req) {
+		h.nativeChat(w, r, req, raw, start)
+		return
+	}
+	if req.MaxTokens == nil {
+		req.MaxTokens = req.MaxCompletionTokens
 	}
 	canonical, err := req.toRuntime()
 	if err != nil {

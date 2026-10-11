@@ -46,6 +46,7 @@ type anthropicMessagesRequest struct {
 	Model         string                 `json:"model"`
 	Messages      []anthropicMessageJSON `json:"messages"`
 	System        json.RawMessage        `json:"system,omitempty"`
+	Metadata      json.RawMessage        `json:"metadata,omitempty"`
 	MaxTokens     int                    `json:"max_tokens"`
 	Temperature   *float64               `json:"temperature,omitempty"`
 	TopP          *float64               `json:"top_p,omitempty"`

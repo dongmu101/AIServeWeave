@@ -18,7 +18,7 @@
 
 ## Claude Code CLI 接入
 
-`claudecode/` 已注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`。工具在调用方电脑执行，Agent 的 CLI 仅调用隔离的 MCP 桥接工具；登录凭据留在 Agent。当前配置支持文本和调用方工具循环，不代表完整 Anthropic API 兼容。
+`claudecode/` 已注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，以及 Gateway 转换的 OpenAI `/v1/chat/completions`。工具在调用方电脑执行，Agent 的 CLI 仅调用隔离的 MCP 桥接工具；登录凭据留在 Agent。当前配置支持文本和调用方工具循环，不代表完整 Anthropic API 兼容。Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链仍保持原会话，详细边界见 [Claude 包说明](claudecode/README.md#openai-chat-completions-兼容)。
 
 先以运行 Agent 的同一账户执行 `claude auth login`，确保 `claude` 可执行文件在 Agent 的 PATH 中，然后在本地 YAML 添加：
 
@@ -30,7 +30,25 @@ runtimes:
 
 不填写 `base_url`、API Key 或认证文件。若设置了 `gateway.allowed_runtimes`，同时加入 `claude-local`。设置页面现已可选择 Claude Code CLI；保存后重启 Agent 生效。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
 
-模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；发布 CLI 返回的别名及具体模型 ID，包含哪些模型取决于本机 CLI。请求仅接受发现到的模型，CLI 提供 `resolvedModel` 时会话固定使用对应的具体上游模型。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。真实工具流程目前只验收过 `claude-sonnet-4-6`，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
+模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；仅发布 CLI `resolvedModel` 返回的真实模型 ID，并按真实 ID 去重；不发布 `default`、`sonnet`、`opus`、`fable`、`haiku` 等简称。请求仅接受发现到的真实 ID，并原样传给 CLI 的 `--model`，不做简称映射。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
+
+## 多个 AI CLI 同时接入
+
+Claude Code CLI 和 Codex CLI 可以由同一个 Agent 同时提供，各自使用独立的本地运行时 ID、登录状态、健康检查和模型目录。配置 `gateway.allowed_runtimes` 时必须同时包含两个 ID；它是执行白名单，不能只列当前调试的 CLI。示例：
+
+```yaml
+gateway:
+  allowed_runtimes:
+    - claude-code-local
+    - codex-local
+runtimes:
+  - id: claude-code-local
+    kind: claude
+  - id: codex-local
+    kind: codex
+```
+
+Gateway `/v1/models` 合并所有就绪运行时的模型；一个 CLI 未就绪只影响它自己的模型，不会隐藏另一个 CLI。Claude 通过 Messages 或 Chat 调用，Codex 通过 Chat/Responses 调用。修改白名单后重启 Agent。若 Codex 没有模型，先在启动 Agent 的同一终端执行 `codex --version`，确认平台可执行依赖完整，再检查 CLI 登录和运行时状态；重新构建 Gateway 不会修复损坏的本机 CLI 安装。
 
 ## Codex CLI 接入
 

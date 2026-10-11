@@ -31,6 +31,52 @@ import (
 
 type claudeLiveVerifier struct{}
 
+// TestLiveClaudeChatThroughTunnel verifies text, SSE, history and cross-replica caller tools.
+// TestLiveClaudeChatThroughTunnel 验证真实文本、SSE、历史上下文与跨副本调用方工具。
+func TestLiveClaudeChatThroughTunnel(t *testing.T) {
+	if os.Getenv("AISW_CLAUDE_LIVE_TEST") != "1" || os.Getenv("AISW_MESSAGES_REDIS_ADDR") == "" {
+		t.Skip("set AISW_CLAUDE_LIVE_TEST=1 and AISW_MESSAGES_REDIS_ADDR to use local subscription and Redis")
+	}
+	program := os.Getenv("AISW_CLAUDE_PATH")
+	if program == "" {
+		program = "claude"
+	}
+	model := os.Getenv("AISW_CLAUDE_MODEL")
+	if model == "" {
+		model = "claude-sonnet-4-6"
+	}
+	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(program))
+	f.awaitReady(f.replicas...)
+	var urls []string
+	for _, replica := range f.replicas {
+		client := redis.NewClient(&redis.Options{Addr: os.Getenv("AISW_MESSAGES_REDIS_ADDR")})
+		t.Cleanup(func() { _ = client.Close() })
+		api := httpapi.New(scheduler.New(replica.server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}, MessagesSessions: messagesession.NewRedis(client)})
+		t.Cleanup(api.Close)
+		server := httptest.NewServer(api)
+		t.Cleanup(server.Close)
+		urls = append(urls, server.URL)
+	}
+	for _, tc := range []struct {
+		name   string
+		stream bool
+	}{{"JSON", false}, {"SSE", true}} {
+		t.Run(tc.name, func(t *testing.T) {
+			messages := []claudeChatMessage{{Role: "user", Content: "Reply exactly OK."}}
+			message, finish := postClaudeChat(t, urls[0], "claude-live-first", model, messages, nil, tc.stream, 200)
+			if strings.TrimSpace(message.Content) != "OK" || finish != "stop" {
+				t.Fatalf("text=%q finish=%q, want OK and stop", message.Content, finish)
+			}
+			messages = []claudeChatMessage{{Role: "user", Content: "Remember the code AISW-5729."}, {Role: "assistant", Content: "I will remember it."}, {Role: "user", Content: "Reply with only the code from our earlier conversation."}}
+			message, finish = postClaudeChat(t, urls[1], "claude-live-first", model, messages, nil, tc.stream, 200)
+			if !strings.Contains(message.Content, "AISW-5729") || finish != "stop" {
+				t.Fatalf("history text=%q finish=%q, want AISW-5729 and stop", message.Content, finish)
+			}
+			runClaudeChatTools(t, urls, model, tc.stream, false)
+		})
+	}
+}
+
 // TestLiveClaudeModelCatalogueThroughTunnel checks CLI display metadata without inference.
 // TestLiveClaudeModelCatalogueThroughTunnel 不执行推理，验证真实 CLI 目录元数据经过隧道。
 func TestLiveClaudeModelCatalogueThroughTunnel(t *testing.T) {
@@ -89,8 +135,8 @@ func (claudeLiveVerifier) Verify(_ context.Context, key string) (httpapi.Identit
 	}
 }
 
-// TestLiveClaudeClientsThroughTunnel verifies two original clients across Redis and mTLS replicas.
-// TestLiveClaudeClientsThroughTunnel 验证两个原版客户端跨 Redis 与 mTLS 副本完成任务。
+// TestLiveClaudeClientsThroughTunnel verifies /v1 and legacy root base URLs across Redis and mTLS replicas.
+// TestLiveClaudeClientsThroughTunnel 验证 /v1 和旧根地址的原版客户端跨 Redis 与 mTLS 副本完成任务。
 func TestLiveClaudeClientsThroughTunnel(t *testing.T) {
 	if os.Getenv("AISW_CLAUDE_LIVE_TEST") != "1" || os.Getenv("AISW_MESSAGES_REDIS_ADDR") == "" {
 		t.Skip("set AISW_CLAUDE_LIVE_TEST=1 and AISW_MESSAGES_REDIS_ADDR to use local subscription and Redis")
@@ -101,7 +147,7 @@ func TestLiveClaudeClientsThroughTunnel(t *testing.T) {
 	}
 	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(program))
 	f.awaitReady(f.replicas...)
-	table, err := routing.New([]routing.Route{{Model: "claude-sonnet-4-6", Targets: []routing.Target{{RuntimeModel: "sonnet"}}}})
+	table, err := routing.New([]routing.Route{{Model: "claude-sonnet-4-6", Targets: []routing.Target{{RuntimeModel: "claude-sonnet-4-6"}}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,9 +181,9 @@ func TestLiveClaudeClientsThroughTunnel(t *testing.T) {
 	front := httptest.NewServer(proxy)
 	defer front.Close()
 	var wg sync.WaitGroup
-	for _, key := range []string{"claude-live-first", "claude-live-second"} {
+	for _, tc := range []struct{ key, basePath string }{{"claude-live-first", "/v1"}, {"claude-live-second", ""}} {
 		wg.Go(func() {
-			t.Run(key, func(t *testing.T) { runClaudeClient(t, program, front.URL, key) })
+			t.Run(tc.key, func(t *testing.T) { runClaudeClient(t, program, front.URL+tc.basePath, tc.key) })
 		})
 	}
 	wg.Wait()

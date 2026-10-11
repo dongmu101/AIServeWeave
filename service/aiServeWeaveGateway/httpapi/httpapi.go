@@ -612,7 +612,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
 	return &Server{
-		Handler:           h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))),
+		Handler:           withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux)))))),
 		handlers:          h,
 		syncer:            syncer,
 		persister:         persister,

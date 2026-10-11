@@ -14,13 +14,9 @@ import (
 
 const modelDiscoveryID = "aisw_model_discovery"
 
-type discoveredModel struct {
-	id, resolved, displayName string
-}
-
 // discoverModels initializes an isolated CLI without submitting a user turn.
 // discoverModels 初始化隔离的 CLI，不提交用户回合。
-func discoverModels(ctx context.Context, program string, env []string) ([]discoveredModel, error) {
+func discoverModels(ctx context.Context, program string, env []string) ([]string, error) {
 	dir, err := os.MkdirTemp("", "aisw-claude-models-")
 	if err != nil {
 		return nil, errProbeSetup
@@ -45,9 +41,9 @@ func discoverModels(ctx context.Context, program string, env []string) ([]discov
 	return parseModels(output.buffer.Bytes())
 }
 
-// parseModels accepts only the matching successful initialize response.
-// parseModels 只接受请求 ID 匹配且成功的 initialize 响应。
-func parseModels(data []byte) ([]discoveredModel, error) {
+// parseModels publishes deduplicated resolved IDs from the matching initialize response.
+// parseModels 从匹配的 initialize 响应中发布去重后的真实模型 ID。
+func parseModels(data []byte) ([]string, error) {
 	scanner := bufio.NewScanner(bytes.NewReader(data))
 	scanner.Buffer(make([]byte, 4096), maxEventBytes+1)
 	for scanner.Scan() {
@@ -67,45 +63,27 @@ func parseModels(data []byte) ([]discoveredModel, error) {
 		}
 		var result struct {
 			Models []struct {
-				Value         string `json:"value"`
-				ID            string `json:"id"`
 				ResolvedModel string `json:"resolvedModel"`
-				DisplayName   string `json:"displayName"`
-				DisplaySnake  string `json:"display_name"`
 			} `json:"models"`
 		}
 		if json.Unmarshal(event.Response.Response, &result) != nil || len(result.Models) == 0 || len(result.Models) > 256 {
 			return nil, errCLIProtocol
 		}
-		models := make([]discoveredModel, 0, len(result.Models))
+		models := make([]string, 0, len(result.Models))
 		seen := make(map[string]bool, len(result.Models))
 		for _, model := range result.Models {
-			id := strings.TrimSpace(model.Value)
-			if id == "" {
-				id = strings.TrimSpace(model.ID)
-			}
+			id := strings.TrimSpace(model.ResolvedModel)
 			if id == "" {
 				continue
 			}
-			resolved := strings.TrimSpace(model.ResolvedModel)
-			if resolved == "" {
-				resolved = id
-			}
-			if len(id) > 256 || len(resolved) > 256 || strings.ContainsAny(id+resolved, "\r\n\x00") {
+			if len(id) > 256 || strings.ContainsAny(id, "\r\n\x00") {
 				return nil, errCLIProtocol
 			}
 			if seen[id] {
 				continue
 			}
-			name := strings.TrimSpace(model.DisplayName)
-			if name == "" {
-				name = strings.TrimSpace(model.DisplaySnake)
-			}
-			if len(name) > 256 || strings.ContainsAny(name, "\r\n\x00") {
-				return nil, errCLIProtocol
-			}
 			seen[id] = true
-			models = append(models, discoveredModel{id: id, resolved: resolved, displayName: name})
+			models = append(models, id)
 		}
 		if len(models) == 0 {
 			return nil, errCLIProtocol

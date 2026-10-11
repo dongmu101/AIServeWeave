@@ -57,6 +57,7 @@ func TestVerifierAuthentication(t *testing.T) {
 	tests := []struct {
 		name       string
 		header     string
+		apiKey     string
 		verifier   *fakeVerifier
 		wantStatus int
 		wantCalls  int64
@@ -73,6 +74,37 @@ func TestVerifierAuthentication(t *testing.T) {
 			header:     "Bearer " + badKey,
 			verifier:   acceptingVerifier(),
 			wantStatus: http.StatusUnauthorized,
+			wantCalls:  1,
+		},
+		{
+			name:       "Anthropic model listing verifies the key",
+			apiKey:     goodKey,
+			verifier:   acceptingVerifier(),
+			wantStatus: http.StatusOK,
+			wantCalls:  1,
+		},
+		{
+			name:       "Anthropic model listing rejects a bad key",
+			apiKey:     badKey,
+			verifier:   acceptingVerifier(),
+			wantStatus: http.StatusUnauthorized,
+			wantCalls:  1,
+		},
+		{
+			name:       "Anthropic model listing does not override invalid bearer",
+			header:     "Bearer " + badKey,
+			apiKey:     goodKey,
+			verifier:   acceptingVerifier(),
+			wantStatus: http.StatusUnauthorized,
+			wantCalls:  1,
+		},
+		{
+			name:   "Anthropic model listing preserves verification unavailable",
+			apiKey: goodKey,
+			verifier: &fakeVerifier{answer: func(string) (httpapi.Identity, error) {
+				return httpapi.Identity{}, errors.New("control plane unavailable")
+			}},
+			wantStatus: http.StatusServiceUnavailable,
 			wantCalls:  1,
 		},
 		{
@@ -122,6 +154,9 @@ func TestVerifierAuthentication(t *testing.T) {
 			}
 			if tt.header != "" {
 				req.Header.Set("Authorization", tt.header)
+			}
+			if tt.apiKey != "" {
+				req.Header.Set("X-Api-Key", tt.apiKey)
 			}
 			resp, err := http.DefaultClient.Do(req)
 			if err != nil {

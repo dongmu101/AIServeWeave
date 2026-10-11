@@ -23,7 +23,7 @@ type Runtime struct {
 	root     context.Context
 	cancel   context.CancelFunc
 	modelsMu sync.RWMutex
-	models   map[string]string
+	models   map[string]struct{}
 }
 
 var _ runtime.MessagesRuntime = (*Runtime)(nil)
@@ -71,7 +71,7 @@ func (r *Runtime) Descriptor() runtime.Descriptor {
 // Close 取消并回收全部会话及认证检查。
 func (r *Runtime) Close() error { r.cancel(); r.bridge.close(); return nil }
 
-func (r *Runtime) inspect(parent context.Context, discover bool) ([]discoveredModel, error) {
+func (r *Runtime) inspect(parent context.Context, discover bool) ([]string, error) {
 	r.bridge.mu.Lock()
 	if r.bridge.closed {
 		r.bridge.mu.Unlock()
@@ -136,15 +136,15 @@ func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 		return runtime.Discovery{}, err
 	}
 	r.modelsMu.Lock()
-	r.models = make(map[string]string, len(models))
-	for _, model := range models {
-		r.models[model.id] = model.resolved
+	r.models = make(map[string]struct{}, len(models))
+	for _, id := range models {
+		r.models[id] = struct{}{}
 	}
 	r.modelsMu.Unlock()
 	caps := claudeCapabilities()
 	list := make([]runtime.Model, 0, len(models))
-	for i, model := range models {
-		list = append(list, runtime.Model{ID: model.id, DisplayName: model.displayName, DisplayOrder: uint32(i + 1), Capabilities: caps})
+	for i, id := range models {
+		list = append(list, runtime.Model{ID: id, DisplayName: id, DisplayOrder: uint32(i + 1), Capabilities: caps})
 	}
 	return runtime.Discovery{Capabilities: caps, Models: list, DiscoveredAt: r.bridge.clock.Now()}, nil
 }
@@ -175,11 +175,12 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 	}
 	parsed.Model = req.Model
 	r.modelsMu.RLock()
-	parsed.cliModel = r.models[req.Model]
+	_, known := r.models[req.Model]
 	r.modelsMu.RUnlock()
-	if parsed.cliModel == "" || parsed.validate(req.Model) != nil {
+	if !known || parsed.validate(req.Model) != nil {
 		return nil, claudeError(runtime.ErrorCapability)
 	}
+	parsed.cliModel = req.Model
 	s, err := r.bridge.acquire(principal{req.TenantID, req.KeyID}, parsed)
 	if err != nil {
 		code := runtime.ErrorInvalidConfig
