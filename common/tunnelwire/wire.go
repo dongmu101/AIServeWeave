@@ -1236,6 +1236,8 @@ func modelToProto(m runtime.Model) *tunnelv1.Model {
 	return &tunnelv1.Model{
 		Id:           m.ID,
 		Capabilities: capabilitySetToProto(m.Capabilities),
+		DisplayName:  m.DisplayName,
+		DisplayOrder: m.DisplayOrder,
 	}
 }
 
@@ -1246,6 +1248,8 @@ func modelFromProto(pb *tunnelv1.Model) runtime.Model {
 	return runtime.Model{
 		ID:           pb.GetId(),
 		Capabilities: capabilitySetFromProto(pb.GetCapabilities()),
+		DisplayName:  pb.GetDisplayName(),
+		DisplayOrder: pb.GetDisplayOrder(),
 	}
 }
 

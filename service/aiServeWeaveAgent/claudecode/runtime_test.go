@@ -19,6 +19,7 @@ func TestRuntimeMessages(t *testing.T) {
 	}
 	r := rt.(*Runtime)
 	r.bridge.start = fixtureStart
+	r.models = map[string]string{"sonnet": "claude-sonnet-4-6"}
 	defer r.Close()
 	req := testMessagesRequest()
 	round := func(parent context.Context, req messagesRequest) []messageBlock {
@@ -134,6 +135,7 @@ func TestRuntimeCloseUnconsumedStream(t *testing.T) {
 	}
 	r := rt.(*Runtime)
 	r.bridge.start = fixtureStart
+	r.models = map[string]string{"sonnet": "claude-sonnet-4-6"}
 	data, _ := json.Marshal(testMessagesRequest())
 	stream, err := r.Messages(t.Context(), runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", JSON: data})
 	if err != nil {

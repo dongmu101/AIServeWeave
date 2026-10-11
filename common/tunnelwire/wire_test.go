@@ -1093,7 +1093,7 @@ func TestConvertSnapshotRoundTrip(t *testing.T) {
 		},
 		Discovery: runtime.Discovery{
 			Version:   "0.32.14",
-			Models:    []runtime.Model{{ID: "llama3"}},
+			Models:    []runtime.Model{{ID: "llama3", DisplayName: "Llama 3", DisplayOrder: 1}},
 			NodeTypes: []string{"KSampler"},
 			Capabilities: runtime.CapabilitySet{
 				runtime.CapabilityChat: {

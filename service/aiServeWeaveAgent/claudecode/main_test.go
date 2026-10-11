@@ -11,6 +11,10 @@ import (
 // TestMain checks goroutine cleanup for the entire package.
 // TestMain 统一检查整个包的协程回收。
 func TestMain(m *testing.M) {
+	if len(os.Args) > 1 && (os.Args[1] == "auth" || os.Args[1] == "--print") {
+		modelProcessFixture()
+		os.Exit(0)
+	}
 	baseline := runtime.NumGoroutine()
 	code := m.Run()
 	deadline := time.Now().Add(2 * time.Second)

@@ -347,7 +347,8 @@ func deepCopyDiscovery(d Discovery) Discovery {
 	if d.Models != nil {
 		cp.Models = make([]Model, len(d.Models))
 		for i, model := range d.Models {
-			cp.Models[i] = Model{ID: model.ID, Capabilities: copyCapabilitySet(model.Capabilities)}
+			cp.Models[i] = model
+			cp.Models[i].Capabilities = copyCapabilitySet(model.Capabilities)
 		}
 	}
 	cp.NodeTypes = append([]string(nil), d.NodeTypes...)

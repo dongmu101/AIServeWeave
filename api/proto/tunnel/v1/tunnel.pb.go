@@ -5318,9 +5318,12 @@ func (x *CapabilityEvidence) GetDetail() string {
 }
 
 type Model struct {
-	state         protoimpl.MessageState         `protogen:"open.v1"`
-	Id            string                         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
-	Capabilities  map[string]*CapabilityEvidence `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	state        protoimpl.MessageState         `protogen:"open.v1"`
+	Id           string                         `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Capabilities map[string]*CapabilityEvidence `protobuf:"bytes,2,rep,name=capabilities,proto3" json:"capabilities,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
+	DisplayName  string                         `protobuf:"bytes,3,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
+	// One-based backend catalogue position; zero preserves ID ordering.
+	DisplayOrder  uint32 `protobuf:"varint,4,opt,name=display_order,json=displayOrder,proto3" json:"display_order,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -5367,6 +5370,20 @@ func (x *Model) GetCapabilities() map[string]*CapabilityEvidence {
 		return x.Capabilities
 	}
 	return nil
+}
+
+func (x *Model) GetDisplayName() string {
+	if x != nil {
+		return x.DisplayName
+	}
+	return ""
+}
+
+func (x *Model) GetDisplayOrder() uint32 {
+	if x != nil {
+		return x.DisplayOrder
+	}
+	return 0
 }
 
 // ModelList is the LIST_MODELS response payload; protobuf has no top-level
@@ -8021,10 +8038,12 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"capability\x12\x14\n" +
 	"\x05level\x18\x02 \x01(\tR\x05level\x12\x16\n" +
 	"\x06source\x18\x03 \x01(\tR\x06source\x12\x16\n" +
-	"\x06detail\x18\x04 \x01(\tR\x06detail\"\xbf\x01\n" +
+	"\x06detail\x18\x04 \x01(\tR\x06detail\"\x87\x02\n" +
 	"\x05Model\x12\x0e\n" +
 	"\x02id\x18\x01 \x01(\tR\x02id\x12F\n" +
-	"\fcapabilities\x18\x02 \x03(\v2\".tunnel.v1.Model.CapabilitiesEntryR\fcapabilities\x1a^\n" +
+	"\fcapabilities\x18\x02 \x03(\v2\".tunnel.v1.Model.CapabilitiesEntryR\fcapabilities\x12!\n" +
+	"\fdisplay_name\x18\x03 \x01(\tR\vdisplayName\x12#\n" +
+	"\rdisplay_order\x18\x04 \x01(\rR\fdisplayOrder\x1a^\n" +
 	"\x11CapabilitiesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x123\n" +
 	"\x05value\x18\x02 \x01(\v2\x1d.tunnel.v1.CapabilityEvidenceR\x05value:\x028\x01\"5\n" +

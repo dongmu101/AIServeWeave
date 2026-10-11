@@ -892,6 +892,9 @@ message CapabilityEvidence {
 message Model {
   string id = 1;
   map<string, CapabilityEvidence> capabilities = 2;
+  string display_name = 3;
+  // One-based backend catalogue position; zero preserves ID ordering.
+  uint32 display_order = 4;
 }
 
 // ModelList is the LIST_MODELS response payload; protobuf has no top-level

@@ -2,7 +2,7 @@ auto_discover: true
 auto_discover_interval: 30s
 gateway:
     allowed_runtimes:
-        - codex-local
+        - claude-code-local
     bootstrap_token_file: ./data/bootstrap-token
     ca_file: ./data/compose-ca-cert.pem
     cert_file: ./data/agent-cert.pem
@@ -18,6 +18,9 @@ gateway:
 log_level: info
 metrics_addr: 127.0.0.1:9092
 runtimes:
+    - base_url: ""
+      id: claude-code-local
+      kind: claude
     - base_url: ""
       id: codex-local
       kind: codex

@@ -18,10 +18,12 @@ import (
 // Runtime owns bounded CLI sessions; callers execute all requested tools.
 // Runtime 管理有界的 CLI 会话；所有请求的工具均由调用方执行。
 type Runtime struct {
-	cfg    runtime.Config
-	bridge *messagesBridge
-	root   context.Context
-	cancel context.CancelFunc
+	cfg      runtime.Config
+	bridge   *messagesBridge
+	root     context.Context
+	cancel   context.CancelFunc
+	modelsMu sync.RWMutex
+	models   map[string]string
 }
 
 var _ runtime.MessagesRuntime = (*Runtime)(nil)
@@ -69,11 +71,11 @@ func (r *Runtime) Descriptor() runtime.Descriptor {
 // Close 取消并回收全部会话及认证检查。
 func (r *Runtime) Close() error { r.cancel(); r.bridge.close(); return nil }
 
-func (r *Runtime) inspect(parent context.Context) error {
+func (r *Runtime) inspect(parent context.Context, discover bool) ([]discoveredModel, error) {
 	r.bridge.mu.Lock()
 	if r.bridge.closed {
 		r.bridge.mu.Unlock()
-		return claudeError(runtime.ErrorClosed)
+		return nil, claudeError(runtime.ErrorClosed)
 	}
 	r.bridge.wg.Add(1)
 	r.bridge.mu.Unlock()
@@ -92,9 +94,16 @@ func (r *Runtime) inspect(parent context.Context) error {
 	}()
 	defer func() { cancel(); stopRoot(); stopTimer(); <-done }()
 	if checkAuth(ctx, r.bridge.program, probeEnv(os.Environ())) != nil {
-		return claudeError(runtime.ErrorUnauthorized)
+		return nil, claudeError(runtime.ErrorUnauthorized)
 	}
-	return nil
+	if !discover {
+		return nil, nil
+	}
+	models, err := discoverModels(ctx, r.bridge.program, probeEnv(os.Environ()))
+	if err != nil {
+		return nil, claudeError(runtime.ErrorProtocol)
+	}
+	return models, nil
 }
 
 func claudeCapabilities() runtime.CapabilitySet {
@@ -104,14 +113,14 @@ func claudeCapabilities() runtime.CapabilitySet {
 // Probe verifies native subscription login without spending model quota.
 // Probe 验证原生订阅登录，不消耗模型额度。
 func (r *Runtime) Probe(ctx context.Context) (runtime.ProbeResult, error) {
-	err := r.inspect(ctx)
+	_, err := r.inspect(ctx, false)
 	return runtime.ProbeResult{Kind: runtime.KindClaude, IdentityVerified: err == nil, ProbedAt: r.bridge.clock.Now()}, err
 }
 
 // Health verifies that the local subscription login remains available.
 // Health 验证本机订阅登录仍可用。
 func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
-	err := r.inspect(ctx)
+	_, err := r.inspect(ctx, false)
 	state := runtime.StateHealthy
 	if err != nil {
 		state = runtime.StateUnhealthy
@@ -119,14 +128,25 @@ func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 	return runtime.HealthReport{State: state, CheckedAt: r.bridge.clock.Now()}, err
 }
 
-// Discover publishes the locally allowed sonnet alias and native Messages capability.
-// Discover 发布本地允许的 sonnet 别名与原生 Messages 能力。
+// Discover reads the CLI model catalogue without inference and publishes Messages capability.
+// Discover 不执行推理，读取 CLI 模型目录并发布 Messages 能力。
 func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
-	if err := r.inspect(ctx); err != nil {
+	models, err := r.inspect(ctx, true)
+	if err != nil {
 		return runtime.Discovery{}, err
 	}
+	r.modelsMu.Lock()
+	r.models = make(map[string]string, len(models))
+	for _, model := range models {
+		r.models[model.id] = model.resolved
+	}
+	r.modelsMu.Unlock()
 	caps := claudeCapabilities()
-	return runtime.Discovery{Capabilities: caps, Models: []runtime.Model{{ID: "sonnet", Capabilities: caps}}, DiscoveredAt: r.bridge.clock.Now()}, nil
+	list := make([]runtime.Model, 0, len(models))
+	for i, model := range models {
+		list = append(list, runtime.Model{ID: model.id, DisplayName: model.displayName, DisplayOrder: uint32(i + 1), Capabilities: caps})
+	}
+	return runtime.Discovery{Capabilities: caps, Models: list, DiscoveredAt: r.bridge.clock.Now()}, nil
 }
 
 type nativeItem struct {
@@ -154,7 +174,10 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		return nil, claudeError(runtime.ErrorCapability)
 	}
 	parsed.Model = req.Model
-	if parsed.validate("sonnet") != nil {
+	r.modelsMu.RLock()
+	parsed.cliModel = r.models[req.Model]
+	r.modelsMu.RUnlock()
+	if parsed.cliModel == "" || parsed.validate(req.Model) != nil {
 		return nil, claudeError(runtime.ErrorCapability)
 	}
 	s, err := r.bridge.acquire(principal{req.TenantID, req.KeyID}, parsed)

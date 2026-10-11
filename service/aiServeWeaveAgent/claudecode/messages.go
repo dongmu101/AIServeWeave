@@ -44,6 +44,7 @@ type bridgeTool struct {
 }
 
 type messagesRequest struct {
+	cliModel     string
 	Model        string              `json:"model"`
 	MaxTokens    int                 `json:"max_tokens"`
 	Stream       bool                `json:"stream,omitempty"`

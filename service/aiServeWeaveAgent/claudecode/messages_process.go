@@ -53,9 +53,12 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if os.WriteFile(systemPath, []byte(system), 0600) != nil {
 		return errProbeSetup
 	}
-	model := b.model
-	if model == "sonnet" {
-		model = "claude-sonnet-4-6"
+	model := s.request.cliModel
+	if model == "" {
+		model = b.model
+		if model == "sonnet" {
+			model = "claude-sonnet-4-6"
+		}
 	}
 	args := probeArgs(model, configPath)
 	allowed := make([]string, len(s.request.Tools))

@@ -12,12 +12,42 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
 	"AIServeWeave/common/runtime"
 )
+
+// TestLiveModelDiscovery checks the local CLI catalogue without submitting inference.
+// TestLiveModelDiscovery 不提交推理，检查本机 CLI 模型目录。
+func TestLiveModelDiscovery(t *testing.T) {
+	if os.Getenv("AISW_CLAUDE_LIVE_TEST") != "1" {
+		t.Skip("set AISW_CLAUDE_LIVE_TEST=1 to inspect the local CLI")
+	}
+	program := os.Getenv("AISW_CLAUDE_PATH")
+	if program == "" {
+		program = "claude"
+	}
+	rt, err := NewFactory(program)(runtime.Config{ID: "live", Kind: runtime.KindClaude}, runtime.Dependencies{Clock: runtime.NewSystemClock()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	discovery, err := rt.Discover(t.Context())
+	if err != nil || len(discovery.Models) == 0 {
+		t.Fatalf("models=%d, error=%v; want non-empty models, nil error", len(discovery.Models), err)
+	}
+	var ids []string
+	for _, model := range discovery.Models {
+		ids = append(ids, model.ID)
+	}
+	if !slices.IsSorted(ids) {
+		t.Fatalf("models=%v, want sorted IDs", ids)
+	}
+	t.Logf("CLI model IDs: %v", ids)
+}
 
 func liveMessagesBridge(t *testing.T, model string) *messagesBridge {
 	t.Helper()

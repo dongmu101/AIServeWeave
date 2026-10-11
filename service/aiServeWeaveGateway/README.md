@@ -610,10 +610,12 @@ aiserveweave-gateway \
 
 Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定两分钟到期，已投递或结果不确定时拒绝重放。续接不会换节点，节点失联、Agent 重启或等待超时后需开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 
-CLI 后端发布 `sonnet`。原版 Claude Code 的已验证模型名可用以下路由（文件格式，或在控制面发布同样的路由）：
+CLI 后端通过 `initialize` 动态发布本机 CLI 返回的模型 ID、显示名称和顺序，`/v1/models` 汇总健康运行时的目录；启用别名路由时只展示具有可用目标的公共别名。
+
+`GET /v1/models` 保留 OpenAI 形状的 `id`、`object`、`owned_by`，增加相同内容的 `name` / `display_name` 显示名称字段，例如 `{"id":"haiku","object":"model","owned_by":"aiserveweave","name":"Haiku 5.5","display_name":"Haiku 5.5"}`。名称来自当前 CLI，不能用它替代请求中的 `model` ID。无名称时两字段均回退为 ID。未启用别名路由时，有后端目录位置的模型先按位置排序，同位置按 ID 排序，未指定位置的模型随后按 ID 排序；同一 ID 去重时优先采用更早的目录位置，同位置优先非空名称，再按名称字典序选择，避免节点遍历顺序影响结果。CLI 单后端的列表因此与 DBX 的 CLI 顺序一致。别名路由仍按公共别名排序并用别名作显示名称，不暴露目标模型的元数据。第三方客户端需要读取 `name` 或 `display_name` 并保留数组顺序，重新获取/导入模型后才能体现这些信息。真实工具流程验收过的 `claude-sonnet-4-6` 可用以下路由（要求 CLI 目录包含该 ID；文件格式，或在控制面发布同样的路由）：
 
 ```json
-[{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"sonnet"}]}]
+[{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"claude-sonnet-4-6"}]}]
 ```
 
 Agent 与 Gateway 必须同时升级到支持 `OPERATION_MESSAGES` 的版本。客户端配置、支持范围和真实联调见 [Claude 运行时说明](../aiServeWeaveAgent/claudecode/README.md)。原生请求最多 1 MiB、单事件最多 1 MiB、单回合响应最多 8 MiB；流中失败发送明确错误，非流式只在完整成功结束后返回结果。

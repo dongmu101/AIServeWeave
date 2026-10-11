@@ -31,6 +31,55 @@ import (
 
 type claudeLiveVerifier struct{}
 
+// TestLiveClaudeModelCatalogueThroughTunnel checks CLI display metadata without inference.
+// TestLiveClaudeModelCatalogueThroughTunnel 不执行推理，验证真实 CLI 目录元数据经过隧道。
+func TestLiveClaudeModelCatalogueThroughTunnel(t *testing.T) {
+	if os.Getenv("AISW_CLAUDE_LIVE_TEST") != "1" {
+		t.Skip("set AISW_CLAUDE_LIVE_TEST=1 to query the local CLI catalogue without inference")
+	}
+	program := os.Getenv("AISW_CLAUDE_PATH")
+	if program == "" {
+		program = "claude"
+	}
+	f := newFleetWithBackend(t, 1, runtime.KindClaude, claudecode.NewFactory(program))
+	f.awaitReady(f.replicas...)
+	api := httpapi.New(scheduler.New(f.replicas[0].server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}})
+	defer api.Close()
+	server := httptest.NewServer(api)
+	defer server.Close()
+	req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, server.URL+"/v1/models", nil)
+	req.Header.Set("Authorization", "Bearer claude-live-first")
+	resp, err := server.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var catalog struct {
+		Data []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+		}
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&catalog); err != nil {
+		t.Fatal(err)
+	}
+	want := f.manager.Snapshot()[0].Discovery.Models
+	if resp.StatusCode != http.StatusOK || len(want) == 0 || len(catalog.Data) != len(want) {
+		t.Fatalf("status=%d models=%d, want 200 and %d nonempty models", resp.StatusCode, len(catalog.Data), len(want))
+	}
+	for i, model := range catalog.Data {
+		name := want[i].DisplayName
+		if name == "" {
+			name = want[i].ID
+		}
+		if model.ID != want[i].ID || model.Name != name || model.DisplayName != name {
+			t.Fatalf("position=%d model=%+v, want ID=%q name=%q", i, model, want[i].ID, name)
+		}
+		t.Logf("position=%d id=%s display_name=%s", i+1, model.ID, model.DisplayName)
+	}
+}
+
 func (claudeLiveVerifier) Verify(_ context.Context, key string) (httpapi.Identity, error) {
 	switch key {
 	case "claude-live-first", "claude-live-second":

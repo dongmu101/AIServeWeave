@@ -116,9 +116,16 @@ type Discovery struct {
 
 // Model describes a backend model and the capabilities supported by that
 // specific model. Unknown capabilities remain explicitly unknown.
+// Model 描述后端模型及其能力；未知能力保持未知。
 type Model struct {
 	ID           string
 	Capabilities CapabilitySet
+	// DisplayName is an optional backend-provided label; ID remains the request identifier.
+	// DisplayName 是后端提供的可选显示名称；请求仍使用 ID。
+	DisplayName string
+	// DisplayOrder is a one-based backend catalogue position; zero keeps ID ordering.
+	// DisplayOrder 是从 1 开始的后端目录位置；零值保持按 ID 排序。
+	DisplayOrder uint32
 }
 
 // ChatRequest is the protocol-neutral request Chat and ChatStream accept.

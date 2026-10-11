@@ -30,7 +30,7 @@ runtimes:
 
 不填写 `base_url`、API Key 或认证文件。若设置了 `gateway.allowed_runtimes`，同时加入 `claude-local`。设置页面现已可选择 Claude Code CLI；保存后重启 Agent 生效。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
 
-发布模型为 `sonnet`，CLI 上游固定使用已验证的 `claude-sonnet-4-6`。原版客户端使用这个完整模型名时，将其路由到 `sonnet`。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
+模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；发布 CLI 返回的别名及具体模型 ID，包含哪些模型取决于本机 CLI。请求仅接受发现到的模型，CLI 提供 `resolvedModel` 时会话固定使用对应的具体上游模型。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。真实工具流程目前只验收过 `claude-sonnet-4-6`，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
 
 ## Codex CLI 接入
 

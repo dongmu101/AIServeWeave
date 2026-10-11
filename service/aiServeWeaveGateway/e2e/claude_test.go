@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -27,14 +28,38 @@ func claudeProcessFixture() {
 		fmt.Println(`{"loggedIn":true,"authMethod":"claude.ai"}`)
 		return
 	}
+	if slices.Contains(os.Args, "--input-format") {
+		var request struct {
+			RequestID string `json:"request_id"`
+		}
+		if json.NewDecoder(os.Stdin).Decode(&request) != nil {
+			os.Exit(3)
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "control_response", "response": map[string]any{
+			"subtype": "success", "request_id": request.RequestID, "response": map[string]any{"models": []any{
+				map[string]string{"value": "sonnet", "resolvedModel": "claude-sonnet-4-6", "displayName": "Sonnet 4.6"},
+				map[string]string{"value": "opus", "resolvedModel": "fixture-opus", "display_name": "Opus fixture"},
+			}},
+		}})
+		return
+	}
 	var path string
+	var model string
 	for i := 1; i+1 < len(os.Args); i++ {
 		if os.Args[i] == "--mcp-config" {
 			path = os.Args[i+1]
 		}
-		if os.Args[i] == "--model" && os.Args[i+1] != "claude-sonnet-4-6" {
-			os.Exit(3)
+		if os.Args[i] == "--model" {
+			model = os.Args[i+1]
 		}
+	}
+	prompt, _ := io.ReadAll(os.Stdin)
+	wantModel := "claude-sonnet-4-6"
+	if strings.HasSuffix(string(prompt), "opus") {
+		wantModel = "fixture-opus"
+	}
+	if model != wantModel {
+		os.Exit(3)
 	}
 	data, _ := os.ReadFile(path)
 	var config struct {
@@ -148,21 +173,37 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var catalog struct{ Data []struct{ ID string } }
+	var catalog struct {
+		Data []struct {
+			ID          string `json:"id"`
+			Name        string `json:"name"`
+			DisplayName string `json:"display_name"`
+		}
+	}
 	err = json.NewDecoder(models.Body).Decode(&catalog)
 	_ = models.Body.Close()
-	if err != nil || models.StatusCode != 200 || len(catalog.Data) != 1 || catalog.Data[0].ID != "sonnet" {
-		t.Fatal("model catalog must publish the native sonnet runtime")
+	var ids []string
+	for _, model := range catalog.Data {
+		ids = append(ids, model.ID)
+	}
+	if err != nil || models.StatusCode != 200 || !slices.Equal(ids, []string{"sonnet", "opus"}) {
+		t.Fatalf("model catalog=%v, status=%d, error=%v; want [sonnet opus], 200, nil", ids, models.StatusCode, err)
+	}
+	for i, want := range []string{"Sonnet 4.6", "Opus fixture"} {
+		if got := catalog.Data[i]; got.Name != want || got.DisplayName != want {
+			t.Fatalf("model=%+v, want name and display_name=%q", got, want)
+		}
 	}
 	for _, tc := range []struct {
 		name   string
+		model  string
 		stream bool
-	}{{"JSON", false}, {"SSE", true}} {
+	}{{"JSON sonnet", "sonnet", false}, {"SSE opus", "opus", true}} {
 		t.Run(tc.name, func(t *testing.T) {
-			messages := []any{map[string]any{"role": "user", "content": "use caller tool"}}
+			messages := []any{map[string]any{"role": "user", "content": "use caller tool " + tc.model}}
 			tools := []any{map[string]any{"name": "read_file", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}}}}
 			post := func(index int, stream bool) []byte {
-				body, _ := json.Marshal(map[string]any{"model": "sonnet", "max_tokens": 1024, "messages": messages, "tools": tools, "stream": stream})
+				body, _ := json.Marshal(map[string]any{"model": tc.model, "max_tokens": 1024, "messages": messages, "tools": tools, "stream": stream})
 				req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, servers[index].URL+"/v1/messages", bytes.NewReader(body))
 				req.Header.Set("X-Api-Key", "claude-live-first")
 				req.Header.Set("Content-Type", "application/json")

@@ -49,10 +49,12 @@ type Candidate struct {
 	Model string
 }
 
-// ModelInfo is one model advertised, with chat capability, by at least one
-// connected node.
+// ModelInfo is an available Chat or Messages model with optional display metadata.
+// ModelInfo 是可用的 Chat 或 Messages 模型及其可选显示信息。
 type ModelInfo struct {
-	ID string
+	ID           string
+	DisplayName  string
+	DisplayOrder uint32
 }
 
 // Scheduler selects a node for a request and applies the retry policy from
@@ -386,6 +388,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 //
 // Without a routing table it lists what the nodes advertise, so a deployment
 // that never writes one is unaffected.
+// Backend display positions precede unranked models; equal positions use ID order.
 //
 // Models 是公开目录：客户端此刻可以请求什么。
 //
@@ -394,6 +397,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // 一个用起来就 404 的目录条目，比一个缺失的条目更糟。
 //
 // 没有路由表时它列出节点声明的内容，因此从不编写路由表的部署不受影响。
+// 后端显示位置排在未指定位置的模型之前；相同位置按 ID 排序。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	_ = ctx
 	routes := s.routes.Load()
@@ -407,7 +411,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 		return out
 	}
 
-	seen := make(map[string]struct{})
+	seen := make(map[string]ModelInfo)
 	var out []ModelInfo
 	for _, node := range s.server.Nodes() {
 		if !node.Live || node.Draining || node.Maintenance {
@@ -418,20 +422,40 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 				continue
 			}
 			for _, m := range snap.Discovery.Models {
-				if _, ok := seen[m.ID]; ok {
-					continue
-				}
 				effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
 				if effective.Require(runtime.CapabilityChat) != nil && effective.Require(runtime.CapabilityMessages) != nil {
 					continue
 				}
-				seen[m.ID] = struct{}{}
-				out = append(out, ModelInfo{ID: m.ID})
+				info := ModelInfo{ID: m.ID, DisplayName: m.DisplayName, DisplayOrder: m.DisplayOrder}
+				if prior, ok := seen[m.ID]; !ok || modelInfoLess(info, prior) {
+					seen[m.ID] = info
+				}
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	for _, info := range seen {
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return modelInfoLess(out[i], out[j]) })
 	return out
+}
+
+// modelInfoLess keeps backend positions first and resolves ties deterministically.
+// modelInfoLess 优先采用后端目录位置，并以确定性规则处理相同位置。
+func modelInfoLess(a, b ModelInfo) bool {
+	if (a.DisplayOrder == 0) != (b.DisplayOrder == 0) {
+		return a.DisplayOrder != 0
+	}
+	if a.DisplayOrder != b.DisplayOrder {
+		return a.DisplayOrder < b.DisplayOrder
+	}
+	if a.ID != b.ID {
+		return a.ID < b.ID
+	}
+	if (a.DisplayName == "") != (b.DisplayName == "") {
+		return a.DisplayName != ""
+	}
+	return a.DisplayName < b.DisplayName
 }
 
 // candidates resolves the requested model through the routing table and

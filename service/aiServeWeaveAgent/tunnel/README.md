@@ -45,6 +45,8 @@
 
 阶段 1 新增两项第三方依赖：`google.golang.org/protobuf`（proto 运行时，转换层必需）和 `google.golang.org/grpc`（服务桩代码，阶段 3 起使用）。两者都在本文件「技术栈」中列出。
 
+模型目录的 `Model` 除 ID 和能力外，还携带可选 `display_name` 与从 1 开始的 `display_order`；零位置表示沿用按 ID 排序。它们仅用于目录显示，不参与能力判断或请求模型改写。`common/tunnelwire` 是这些字段在运行时类型与 proto 之间的唯一转换处；旧版本忽略新增字段仍可互通，但名称和顺序需要 Agent/Gateway 同时升级才能完整传递。
+
 ## 全局约束
 
 - Agent 只主动出站建连，从不监听公网端口；不要求用户配置端口映射、DDNS 或 UPnP。

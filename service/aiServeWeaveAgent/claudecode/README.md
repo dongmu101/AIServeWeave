@@ -1,6 +1,10 @@
 # Claude Code CLI 运行时
 
-Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。仅通过 Gateway 的原生 `/v1/messages` 服务，发布 `anthropic_messages` 能力和 `sonnet` 模型，不提供 Chat/Responses/嵌入接口。上游固定为 `claude-sonnet-4-6`，避免浮动模型别名改变已验证协议行为。
+Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。仅通过 Gateway 的原生 `/v1/messages` 服务，发布 `anthropic_messages` 能力，不提供 Chat/Responses/嵌入接口。
+
+模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models` 读取并去重模型 ID，保留 CLI 原始顺序及 `displayName`（兼容 `display_name`）显示名称。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。
+
+请求只能选择最近一次成功发现的模型；CLI 返回 `resolvedModel` 时，会话使用该具体模型，否则使用 CLI 返回的 ID。工具续接保持原会话的上游模型。`default`、`sonnet`、`opus` 等别名及具体模型名是否出现取决于本机 CLI，不能据模型名称推断完整 API 兼容性；真实工具流程目前只验收过 `claude-sonnet-4-6`。
 
 ## 启用
 
@@ -14,10 +18,10 @@ runtimes:
 
 `base_url` 省略或为空，不配置 API Key、请求头、TLS 或认证文件。设置了 `gateway.allowed_runtimes` 时加入 `claude-local`。Gateway 下发配置不能创建未在本地声明的 Claude ID。配置页面可选择 Claude Code CLI，保存后仍需重启 Agent。
 
-所有 Gateway 副本连接同一 Redis（`-redis-addr`），并启用控制面 API Key 校验。调用方使用控制面签发的 Key；静态 `-api-keys` 没有租户/Key 归属，不能用于此运行时。将公共模型 `claude-sonnet-4-6` 路由到 `sonnet`：
+所有 Gateway 副本连接同一 Redis（`-redis-addr`），并启用控制面 API Key 校验。调用方使用控制面签发的 Key；静态 `-api-keys` 没有租户/Key 归属，不能用于此运行时。未启用模型别名路由时，`/v1/models` 保留 CLI 顺序列出发现的模型，并以 `name` 和 `display_name` 返回显示名称；`id` 始终保留 CLI 模型 ID，用于发起请求。客户端需要读取名称字段并保留返回顺序才能显示成 DBX 的列表；自行按 ID 排序或忽略名称的客户端需要调整其导入/显示逻辑。启用路由时只列出具有可用目标的公共别名。例如，将公共模型 `claude-sonnet-4-6` 路由到目录中的同名具体模型：
 
 ```json
-[{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"sonnet"}]}]
+[{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"claude-sonnet-4-6"}]}]
 ```
 
 已验证的原版客户端配置：
@@ -58,7 +62,16 @@ Redis 原子保存工具 ID 的完整集合、租户/Key、公共模型及原节
 go test ./service/aiServeWeaveAgent/claudecode ./service/aiServeWeaveGateway/messagesession ./common/tunnelwire
 ```
 
-真实测试显式使用本机订阅额度；Redis 测试仅使用随机测试 key，不清空数据库：
+真实模型发现测试仅查询本机 CLI，不执行推理：
+
+```bash
+AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestLiveModelDiscovery$' -v -count=1
+AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveGateway/e2e -run '^TestLiveClaudeModelCatalogueThroughTunnel$' -v -count=1
+```
+
+若在 macOS 沙箱中查询出现未登录，先在正常终端以同一账户执行 `claude auth status --json`，确认是否因沙箱无法访问系统钥匙串；不要导出 token 绕过认证。
+
+其余真实测试显式使用本机订阅额度；Redis 测试仅使用随机测试 key，不清空数据库：
 
 ```bash
 AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run TestLiveMessages -v -count=1
