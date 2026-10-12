@@ -8,7 +8,8 @@
 // a first-time node operator; a form the Agent itself serves is the lowest
 // operation cost available without adding a whole separate UI project.
 //
-// The page edits the file, without live connection state or hot reload.
+// The page edits the file and lists models from the running Agent's snapshots,
+// without live connection state or hot reload.
 // Saving a change requires restarting the Agent to take effect. The standalone
 // -config-ui mode never starts the tunnel or any runtime (see main.go).
 //
@@ -27,7 +28,7 @@
 // 实存在的门槛；由 Agent 自己提供一个表单，是不额外起一个独立 UI 项目情况
 // 下能做到的最低操作成本。
 //
-// 页面只编辑文件，不展示实时连接状态、不做热加载，保存改动后需要重启 Agent
+// 页面编辑文件并列出运行中 Agent 的快照模型，不展示实时连接状态、不做热加载，保存改动后需要重启 Agent
 // 才会生效。独立的 -config-ui 模式不启动隧道或任何运行时（见 main.go）。
 //
 // 绑定到回环地址之外的地址会被直接拒绝，而不只是在 flag 的帮助文本里劝
@@ -49,6 +50,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
 
@@ -66,6 +68,7 @@ const shutdownTimeout = 5 * time.Second
 // rejected: the whole point of this mode is to produce a file the Agent's
 // normal run will later load with -config, so there must be somewhere to
 // put it.
+// snapshots supplies the running Agent's model catalogue; nil means setup-only mode.
 //
 // Serve 在 addr 上运行本地设置页面，直到 ctx 被取消后优雅关闭。addr 必须
 // 是回环地址（见 validateLoopback）；其他地址在开监听之前就会被拒绝。
@@ -73,7 +76,8 @@ const shutdownTimeout = 5 * time.Second
 // configPath 是表单当前值的读取来源（如果文件存在且能解析）以及保存的写
 // 入目标。configPath 为空会被拒绝：这个模式存在的全部意义就是产出一份
 // Agent 正常运行时会用 -config 加载的文件，因此必须有地方可写。
-func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string) error {
+// snapshots 提供运行中 Agent 的模型目录；nil 表示仅运行设置页面。
+func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, snapshots func() []runtime.Snapshot) error {
 	if configPath == "" {
 		return errors.New("configui: a config path is required; there is nothing to save to otherwise")
 	}
@@ -87,7 +91,7 @@ func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string) er
 	defer listener.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", newIndexHandler(logger, configPath))
+	mux.HandleFunc("/", newIndexHandler(logger, configPath, snapshots))
 	server := &http.Server{Addr: addr, Handler: mux}
 	defer server.Close()
 
@@ -169,29 +173,35 @@ type formValues struct {
 	LogLevel             string
 	Message              string
 	Error                string
+	Models               modelCatalogue
 }
 
 // newIndexHandler builds the "/" handler: GET renders the form (pre-filled
 // from configPath when it already exists and parses), POST parses and saves
 // it, re-rendering the same form with a confirmation or an error.
-func newIndexHandler(logger *slog.Logger, configPath string) http.HandlerFunc {
+// newIndexHandler 渲染或保存配置，同时展示当前 Agent 的只读模型目录。
+func newIndexHandler(logger *slog.Logger, configPath string, snapshots func() []runtime.Snapshot) http.HandlerFunc {
+	render := func(w http.ResponseWriter, values formValues) {
+		values.Models = availableModels(snapshots)
+		renderForm(w, values)
+	}
 	return func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
 			values := formValuesFromFile(configPath)
-			renderForm(w, values)
+			render(w, values)
 		case http.MethodPost:
 			values := formValuesFromRequest(r)
 			cfg := values.toConfig()
 			if err := agentconfig.Save(configPath, cfg); err != nil {
 				logger.Error("config not saved", slog.Any("error", err))
 				values.Error = "保存失败 / save failed: " + err.Error()
-				renderForm(w, values)
+				render(w, values)
 				return
 			}
 			logger.Info("config saved", slog.String("config_path", configPath))
 			values.Message = "已保存。重启不带 -config-ui 的 Agent 以生效。 / Saved. Restart the Agent without -config-ui for this to take effect."
-			renderForm(w, values)
+			render(w, values)
 		default:
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -430,6 +440,10 @@ button:hover { background: #1d4ed8; }
 .secondary { padding: 7px 12px; border: 1px solid #cbd5e1; background: #fff; color: #475569; font-size: 13px; }
 .secondary:hover { background: #f1f5f9; }
 .runtime-add { margin-top: 16px; }
+.model-catalogue { margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+.model-catalogue h2 { margin: 0; font-size: 17px; }
+.model-ids { margin: 12px 0 0; padding-left: 24px; overflow-wrap: anywhere; }
+.model-ids code { font-size: 13px; }
 @media (max-width: 760px) {
   .layout { display: block; }
   .sidebar { position: static; height: auto; padding: 20px; border-right: 0; border-bottom: 1px solid #e2e8f0; }
@@ -556,6 +570,25 @@ button:hover { background: #1d4ed8; }
 <p class="hint">例如 30s、2m。</p>
 </div>
 </div>
+<section class="model-catalogue" aria-labelledby="models-title">
+<div class="runtime-heading"><h2 id="models-title">可用模型</h2><button type="button" class="secondary" id="models-refresh">刷新模型</button></div>
+<p class="hint">来自当前运行的 Agent，按运行时分组显示真实模型 ID。配置修改需重启生效；Gateway 是否可调度还取决于连接与运行时白名单。</p>
+<p class="hint" id="models-refresh-status" role="status"></p>
+<div id="available-models">
+{{if .Models.Live}}
+<p>共 {{.Models.Count}} 个可用模型（按 ID 去重）</p>
+<div class="runtime-list">
+{{range .Models.Runtimes}}
+<section class="runtime-card">
+<strong>{{.ID}} · {{.Kind}}</strong>
+<p class="hint">状态：{{.State}} · {{len .IDs}} 个可用模型</p>
+{{if .IDs}}<ul class="model-ids">{{range .IDs}}<li><code>{{.}}</code></li>{{end}}</ul>{{else}}<p class="hint">暂无可用模型。</p>{{end}}
+</section>
+{{else}}<p class="hint">尚未注册运行时，等待 Agent 完成发现后刷新。</p>{{end}}
+</div>
+{{else}}<p class="hint">当前仅运行配置页面。正常启动 Agent 后可查看发现的模型。</p>{{end}}
+</div>
+</section>
 </fieldset>
 <fieldset id="observability">
 <legend>日志与指标 / Observability</legend>
@@ -581,6 +614,25 @@ button:hover { background: #1d4ed8; }
 </main>
 </div>
 <script>
+document.getElementById('models-refresh').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const status = document.getElementById('models-refresh-status');
+  button.disabled = true;
+  status.textContent = '正在刷新模型…';
+  try {
+    const response = await fetch(window.location.pathname, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error('refresh failed');
+    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const models = page.getElementById('available-models');
+    if (!models) throw new Error('missing catalogue');
+    document.getElementById('available-models').replaceWith(document.importNode(models, true));
+    status.textContent = '模型列表已刷新。';
+  } catch {
+    status.textContent = '刷新失败，请稍后重试。';
+  } finally {
+    button.disabled = false;
+  }
+});
 const groups = Array.from(document.querySelectorAll('form fieldset'));
 const menu = Array.from(document.querySelectorAll('nav a'));
 function selectGroup() {
@@ -660,5 +712,6 @@ document.querySelector('form').addEventListener('invalid', event => {
 // can fail.
 func renderForm(w http.ResponseWriter, v formValues) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-store")
 	_ = formTemplate.Execute(w, v)
 }

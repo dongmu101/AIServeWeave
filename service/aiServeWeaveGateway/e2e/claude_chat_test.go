@@ -148,7 +148,7 @@ func postClaudeChat(t *testing.T, url, key, model string, messages []claudeChatM
 func runClaudeChatTools(t *testing.T, urls []string, model string, stream, negativeChecks bool) {
 	t.Helper()
 	messages := []claudeChatMessage{{Role: "user", Content: "Use read_file to read caller-only.txt. After the tool result, reply with its exact content. Do not guess the content."}}
-	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "read_file", "parameters": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}, "required": []string{"path"}}}}}
+	tools := []any{map[string]any{"type": "function", "function": map[string]any{"name": "read_file", "strict": false, "parameters": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}, "required": []string{"path"}}}}}
 	first, finish := postClaudeChat(t, urls[0], "claude-live-first", model, messages, tools, stream, 200)
 	if finish != "tool_calls" || len(first.ToolCalls) != 1 || first.ToolCalls[0].Function.Name != "read_file" || !json.Valid([]byte(first.ToolCalls[0].Function.Arguments)) {
 		t.Fatalf("first=%+v finish=%q, want one read_file call and tool_calls", first, finish)

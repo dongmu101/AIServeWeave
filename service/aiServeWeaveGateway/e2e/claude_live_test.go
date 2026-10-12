@@ -31,6 +31,75 @@ import (
 
 type claudeLiveVerifier struct{}
 
+// TestLiveOpenCodeChatThroughTunnel verifies the installed client completes caller-side file tools.
+// TestLiveOpenCodeChatThroughTunnel 验证已安装的客户端通过调用方文件工具完成任务。
+func TestLiveOpenCodeChatThroughTunnel(t *testing.T) {
+	program := os.Getenv("AISW_OPENCODE_PATH")
+	if os.Getenv("AISW_CLAUDE_LIVE_TEST") != "1" || os.Getenv("AISW_MESSAGES_REDIS_ADDR") == "" || program == "" {
+		t.Skip("set AISW_CLAUDE_LIVE_TEST, AISW_MESSAGES_REDIS_ADDR and AISW_OPENCODE_PATH for real-client validation")
+	}
+	claude := os.Getenv("AISW_CLAUDE_PATH")
+	if claude == "" {
+		claude = "claude"
+	}
+	model := os.Getenv("AISW_CLAUDE_MODEL")
+	if model == "" {
+		model = "claude-sonnet-4-6"
+	}
+	f := newFleetWithBackend(t, 1, runtime.KindClaude, claudecode.NewFactory(claude))
+	f.awaitReady(f.replicas...)
+	client := redis.NewClient(&redis.Options{Addr: os.Getenv("AISW_MESSAGES_REDIS_ADDR")})
+	t.Cleanup(func() { _ = client.Close() })
+	api := httpapi.New(scheduler.New(f.replicas[0].server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}, MessagesSessions: messagesession.NewRedis(client)})
+	t.Cleanup(api.Close)
+	server := httptest.NewServer(api)
+	t.Cleanup(server.Close)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "fixture.txt")
+	if err := os.WriteFile(path, []byte("AISW_BEFORE_7361\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	config, _ := json.Marshal(map[string]any{
+		"provider": map[string]any{"aiswtest": map[string]any{
+			"npm": "@ai-sdk/openai-compatible", "name": "AISW test",
+			"options": map[string]string{"baseURL": server.URL + "/v1", "apiKey": "claude-live-first"},
+			"models":  map[string]any{model: map[string]any{"name": model, "limit": map[string]int{"context": 200000, "output": 4096}}},
+		}},
+		"permission": map[string]string{"*": "deny", "read": "allow", "edit": "allow"},
+	})
+	ctx, cancel := context.WithTimeout(t.Context(), 120*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, program, "run", "--standalone", "--format", "json", "-m", "aiswtest/"+model, "Read fixture.txt with the read tool. Replace BEFORE with AFTER with the edit tool. Read it again and respond exactly OPENCODE_TOOL_OK. Do not inspect or change any other files.")
+	cmd.Dir, cmd.Stderr, cmd.WaitDelay = dir, io.Discard, 2*time.Second
+	for _, entry := range os.Environ() {
+		name, _, _ := strings.Cut(entry, "=")
+		switch name {
+		case "PATH", "HOME", "USER", "LOGNAME", "LANG", "LC_ALL", "TMPDIR":
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, "PWD="+dir, "XDG_DATA_HOME="+filepath.Join(dir, "data"), "XDG_CACHE_HOME="+filepath.Join(dir, "cache"), "XDG_STATE_HOME="+filepath.Join(dir, "state"), "XDG_CONFIG_HOME="+filepath.Join(dir, "config"), "OPENCODE_CONFIG_CONTENT="+string(config))
+	output := &liveClientOutput{}
+	cmd.Stdout = output
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("OpenCode failed: %T; subprocess output withheld", err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil || string(data) != "AISW_AFTER_7361\n" || !bytes.Contains(output.Bytes(), []byte("OPENCODE_TOOL_OK")) {
+		t.Fatalf("file/final response matched=%t/%t, want true/true", string(data) == "AISW_AFTER_7361\n", bytes.Contains(output.Bytes(), []byte("OPENCODE_TOOL_OK")))
+	}
+	for _, line := range bytes.Split(output.Bytes(), []byte("\n")) {
+		var event struct{ Type string }
+		_ = json.Unmarshal(line, &event)
+		if event.Type == "error" {
+			t.Fatal("OpenCode emitted an error, want successful caller-tool completion")
+		}
+	}
+}
+
 // TestLiveClaudeChatThroughTunnel verifies text, SSE, history and cross-replica caller tools.
 // TestLiveClaudeChatThroughTunnel 验证真实文本、SSE、历史上下文与跨副本调用方工具。
 func TestLiveClaudeChatThroughTunnel(t *testing.T) {

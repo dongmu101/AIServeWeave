@@ -141,7 +141,7 @@ func main() {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := configui.Serve(ctx, logger, *configUIAddr, uiConfigPath); err != nil {
+		if err := configui.Serve(ctx, logger, *configUIAddr, uiConfigPath, nil); err != nil {
 			logger.Error("config setup page exited with error", slog.Any("error", err))
 			os.Exit(1)
 		}
@@ -691,17 +691,7 @@ func parseComfyUIManagedMounts(raw string) map[string]string {
 // 的声明；模型拉取仅使用 ollamaURL，保持其纯本地 flag 契约。
 func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	uiDone := make(chan struct{})
-	go func() {
-		defer close(uiDone)
-		if err := configui.Serve(ctx, logger, configUIAddr, configPath); err != nil {
-			logger.Error("config setup page unavailable; Agent will keep running / 配置页面不可用，Agent 继续运行", slog.Any("error", err))
-		}
-	}()
-	defer func() {
-		stop()
-		<-uiDone
-	}()
+	defer stop()
 
 	registry, err := newRegistry(declaredRuntimes)
 	if err != nil {
@@ -725,6 +715,17 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		if metricsServer != nil {
 			_ = metricsServer.Close()
 		}
+	}()
+	uiDone := make(chan struct{})
+	go func() {
+		defer close(uiDone)
+		if err := configui.Serve(ctx, logger, configUIAddr, configPath, manager.Snapshot); err != nil {
+			logger.Error("config setup page unavailable; Agent will keep running / 配置页面不可用，Agent 继续运行", slog.Any("error", err))
+		}
+	}()
+	defer func() {
+		stop()
+		<-uiDone
 	}()
 
 	configuredRuntimes := 0

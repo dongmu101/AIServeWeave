@@ -114,8 +114,8 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	return s.send(final, nil)
 }
 
-// bridgeEvents uses message_stop rather than silence to delimit model rounds.
-// bridgeEvents 使用 message_stop 划分模型回合，不使用静默时间猜测边界。
+// bridgeEvents delimits rounds with message_stop and omits CLI-internal thinking blocks.
+// bridgeEvents 使用 message_stop 划分回合，并过滤 CLI 内部思考块。
 func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes+1)
@@ -124,7 +124,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	var arguments string
 	var stopReason string
 	finished, active, blockActive := false, false, false
-	index, tools := 0, 0
+	index, publicIndex, tools := 0, 0, 0
 	seenIDs := make(map[string]bool)
 	for count := 0; scanner.Scan(); count++ {
 		line := scanner.Bytes()
@@ -184,7 +184,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if active || len(final) > 0 {
 					return nil, errCLIProtocol
 				}
-				active, stopReason, index = true, "", 0
+				active, stopReason, index, publicIndex = true, "", 0, 0
 			case "content_block_start":
 				if !active || blockActive || event.Index != index {
 					return nil, errCLIProtocol
@@ -211,7 +211,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					_ = json.Unmarshal(envelope.Event, &obj)
 					obj["content_block"], _ = json.Marshal(current)
 					envelope.Event, _ = json.Marshal(obj)
-				} else if current.Type != "text" {
+				} else if current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
 					return nil, errCLIProtocol
 				}
 			case "content_block_delta":
@@ -223,7 +223,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					if len(arguments) > maxEventBytes {
 						return nil, errCapacity
 					}
-				} else if current.Type != "text" || event.Delta.Type != "text_delta" {
+				} else if !(current.Type == "text" && event.Delta.Type == "text_delta") && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) {
 					return nil, errCLIProtocol
 				}
 			case "content_block_stop":
@@ -276,6 +276,23 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				continue
 			default:
 				return nil, errCLIProtocol
+			}
+			switch event.Type {
+			case "content_block_start", "content_block_delta", "content_block_stop":
+				// The retained CLI owns thinking history; public content indices stay contiguous.
+				// 保留的 CLI 负责思考历史，对外内容索引保持连续。
+				if current.Type == "thinking" || current.Type == "redacted_thinking" {
+					continue
+				}
+				if event.Index != publicIndex {
+					var obj map[string]json.RawMessage
+					_ = json.Unmarshal(envelope.Event, &obj)
+					obj["index"], _ = json.Marshal(publicIndex)
+					envelope.Event, _ = json.Marshal(obj)
+				}
+				if event.Type == "content_block_stop" {
+					publicIndex++
+				}
 			}
 			if err := s.send(envelope.Event, nil); err != nil {
 				return nil, err

@@ -33,14 +33,19 @@ func (h *handlers) nativeChat(w http.ResponseWriter, r *http.Request, req chatCo
 	var options struct {
 		chatCompletionRequest
 		Store *bool `json:"store,omitempty"`
+		Tools []struct {
+			Type     string `json:"type"`
+			Function struct {
+				functionDefJSON
+				Strict *bool `json:"strict,omitempty"`
+			} `json:"function"`
+		} `json:"tools,omitempty"`
 	}
 	if err := decoder.Decode(&options); err != nil {
 		message := "unsupported Claude CLI Chat parameter"
 		// Name recognized API fields only; arbitrary keys may contain sensitive input.
 		// 仅点名已知 API 字段，任意字段名可能包含敏感输入。
 		switch err.Error() {
-		case `json: unknown field "strict"`:
-			message = "Claude CLI Chat does not support tools[].function.strict"
 		case `json: unknown field "parallel_tool_calls"`:
 			message = "Claude CLI Chat does not support parallel_tool_calls"
 		case `json: unknown field "reasoning_effort"`:
@@ -56,6 +61,13 @@ func (h *handlers) nativeChat(w http.ResponseWriter, r *http.Request, req chatCo
 		return
 	}
 	req = options.chatCompletionRequest
+	for _, tool := range options.Tools {
+		if tool.Function.Strict != nil && *tool.Function.Strict {
+			writeOpenAIError(w, 400, "invalid_request_error", "unsupported_parameter", "Claude CLI Chat supports only tools[].function.strict=false; strict schema enforcement is unavailable")
+			return
+		}
+		req.Tools = append(req.Tools, toolJSON{Type: tool.Type, Function: tool.Function.functionDefJSON})
+	}
 	native, err := req.toNativeMessages()
 	if err != nil {
 		writeOpenAIError(w, 400, "invalid_request_error", "unsupported_parameter", err.Error())

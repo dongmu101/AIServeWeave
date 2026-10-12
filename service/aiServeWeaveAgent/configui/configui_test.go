@@ -49,13 +49,13 @@ func TestValidateLoopback(t *testing.T) {
 }
 
 func TestServeRejectsNonLoopback(t *testing.T) {
-	if err := Serve(t.Context(), discardLogger(), "0.0.0.0:0", filepath.Join(t.TempDir(), "agent.yaml")); err == nil {
+	if err := Serve(t.Context(), discardLogger(), "0.0.0.0:0", filepath.Join(t.TempDir(), "agent.yaml"), nil); err == nil {
 		t.Fatal("Serve on a non-loopback address returned no error")
 	}
 }
 
 func TestServeRejectsEmptyConfigPath(t *testing.T) {
-	if err := Serve(t.Context(), discardLogger(), "127.0.0.1:0", ""); err == nil {
+	if err := Serve(t.Context(), discardLogger(), "127.0.0.1:0", "", nil); err == nil {
 		t.Fatal("Serve with an empty configPath returned no error")
 	}
 }
@@ -81,7 +81,7 @@ func TestServeLifecycle(t *testing.T) {
 			done := make(chan error, 1)
 			configPath := filepath.Join(t.TempDir(), "agent.yaml")
 			go func() {
-				done <- Serve(ctx, logger, "127.0.0.1:0", configPath)
+				done <- Serve(ctx, logger, "127.0.0.1:0", configPath, nil)
 				_ = logWriter.Close()
 			}()
 			var entry struct{ Addr string }
@@ -125,7 +125,7 @@ func TestServeOccupiedPort(t *testing.T) {
 	defer listener.Close()
 	var logs strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	err = Serve(t.Context(), logger, listener.Addr().String(), filepath.Join(t.TempDir(), "agent.yaml"))
+	err = Serve(t.Context(), logger, listener.Addr().String(), filepath.Join(t.TempDir(), "agent.yaml"), nil)
 	if err == nil {
 		t.Fatal("Serve error = nil, want occupied-port error")
 	}
@@ -169,7 +169,7 @@ func TestParseLabelsDropsMalformedLines(t *testing.T) {
 // 者实际使用的 HTTP handler。
 func TestIndexHandlerSaveAndReload(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "agent.yaml")
-	handler := newIndexHandler(discardLogger(), configPath)
+	handler := newIndexHandler(discardLogger(), configPath, nil)
 
 	getRec := httptest.NewRecorder()
 	handler(getRec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -227,7 +227,7 @@ func TestIndexHandlerSaveAndReload(t *testing.T) {
 }
 
 func TestIndexHandlerRejectsOtherMethods(t *testing.T) {
-	handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"))
+	handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"), nil)
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodDelete, "/", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
