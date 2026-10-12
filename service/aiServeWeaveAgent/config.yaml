@@ -3,7 +3,6 @@ auto_discover_interval: 30s
 gateway:
     allowed_runtimes:
         - codex-local
-        - claude-code-local
     bootstrap_token_file: ./data/bootstrap-token
     ca_file: ./data/compose-ca-cert.pem
     cert_file: ./data/agent-cert.pem
