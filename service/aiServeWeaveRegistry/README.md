@@ -25,7 +25,7 @@
 
 根证书首次启动时自动生成（ECDSA P-256，10 年有效期）；之后每次启动直接加载同一份。节点证书由 `internal/ca.CA.Sign` 签发，`URIs` 携带 `aiserveweave://node/<node_id>` SAN（`common/nodeid.URI`），`ExtKeyUsageClientAuth`，30 天有效期——这个签发逻辑照抄自 `tunnel/identity_test.go` 里 `fakeRegistry` 的做法，因为那段代码本来就是"Registry 该怎么签"的规范说明；`internal/registryserver` 的测试直接把 `tunnel.IdentityManager`（Agent 的真实客户端代码）当客户端跑一遍完整流程，而不是自造一个假客户端，为的是证明这里签出来的证书确实能被 Agent 现有代码验证通过。
 
-Registry 自己的 gRPC 监听默认也用这同一个根证书自签一张服务端证书（`-tls-host` 指定 SAN，默认取 `-addr` 的 host 部分），生产环境可以用 `-tls-cert`/`-tls-key` 换成外部签发的证书。
+Registry 自己的 gRPC 监听默认也用这同一个根证书自签一张服务端证书（`-tls-host` 指定 SAN，默认取 `-addr` 的 host 部分）。服务端证书最长有效十年，实际到期时间不超过根证书的到期时间；已到期的根证书不能签发服务端证书。生产环境可以用 `-tls-cert`/`-tls-key` 换成外部签发的证书，其有效期由外部签发方决定。
 
 ## `TokenAdmin`：受控签发、撤销与 node_id 绑定（S02）
 
@@ -63,6 +63,8 @@ aiserveweave-registry -data-dir ./data/registry -issue-server-cert \
 ```
 
 写出 `server-cert.pem`（0644）与 `server-key.pem`（0600），`ExtKeyUsageServerAuth`，SAN 取 `-tls-host`。这条命令直接访问本地 CA 文件，不走 RPC；`-mint-token`/`-revoke-token` 则是 RPC 客户端。区别在于：这是部署时执行一次的运维动作，执行者本来就对 CA 有文件系统访问权。`deploy/docker-compose.yaml` 的 `registry-init` 就是这条命令。
+
+Gateway 服务端证书同样最长有效十年，且不超过根证书到期时间；Agent 节点证书仍为三十天并自动续期。已有的三十天服务端证书不会因升级自动延长，需用同一个 CA 重新执行签发命令，再重启 Gateway 加载。Registry 默认自签的服务端证书在重启时重新签发；通过 `-tls-cert`/`-tls-key` 指定的文件则需另行更新。Compose 升级命令见 [部署说明](../../deploy/README.md#服务端证书有效期与旧部署升级)。
 
 ## `GatewayDirectory`：Gateway 副本怎么拿到名册
 

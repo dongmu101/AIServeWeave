@@ -165,6 +165,27 @@ aiserveweave-registry -data-dir /data -issue-server-cert \
 
 与 `-mint-token` 一样，这是部署时执行一次的运维动作。
 
+### 服务端证书有效期与旧部署升级
+
+Registry 默认自签证书与 `registry-init` 签发的 Gateway 服务端证书最长有效十年，
+实际到期时间不超过现有 CA 的到期时间。CA 首次生成时有效十年，沿用旧 CA 不会延长
+它的有效期；Agent 节点证书仍有效三十天，由 Agent 自动续期。
+
+已有的三十天服务端证书需要重新签发才能采用新有效期。在 `deploy` 目录执行：
+
+```bash
+# 构建新版本并让 Registry 重新签发自己的服务端证书。
+docker compose build registry registry-init gateway
+docker compose up -d --no-deps --force-recreate registry
+# 用现有 CA 重新签发 Gateway 证书，然后重建 Gateway 加载。
+docker compose run --rm --no-deps registry-init
+docker compose up -d --no-deps --force-recreate gateway
+```
+
+上述操作保留 `registry-data` 中的 CA，Agent 继续信任同一个根，无需重新注册。
+重启 Gateway 会断开其现有隧道，Agent 随后自动重连；请在维护窗口执行。
+若自行指定服务端证书文件，其有效期与更新流程由签发方负责。
+
 ## 接一个 Agent
 
 Agent **不在** compose 里——它要连本机的 Ollama / vLLM / ComfyUI，装进容器反而多一层

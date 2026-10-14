@@ -137,6 +137,56 @@ func TestIssueServerCertChainsWithServerAuth(t *testing.T) {
 	}
 }
 
+func TestIssueServerCertLifetime(t *testing.T) {
+	root, err := ca.LoadOrCreate(t.TempDir())
+	if err != nil {
+		t.Fatalf("LoadOrCreate() error = %v, want nil", err)
+	}
+	der, _ := pemDecode(t, root.Bundle())
+	rootCert, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatalf("parse root error = %v, want nil", err)
+	}
+	issuedAt := rootCert.NotBefore.Add(time.Minute)
+	for _, tc := range []struct {
+		name    string
+		now     time.Time
+		wantErr bool
+	}{
+		{name: "fresh root", now: issuedAt},
+		{name: "root already two years old", now: issuedAt.Add(2 * 365 * 24 * time.Hour)},
+		{name: "root expires in one hour", now: rootCert.NotAfter.Add(-time.Hour)},
+		{name: "root expires now", now: rootCert.NotAfter, wantErr: true},
+		{name: "expired root", now: rootCert.NotAfter.Add(time.Hour), wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			certPEM, _, notAfter, err := root.IssueServerCert([]string{"gateway"}, tc.now)
+			if (err != nil) != tc.wantErr {
+				t.Fatalf("IssueServerCert() error = %v, want error presence %v", err, tc.wantErr)
+			}
+			if tc.wantErr {
+				return
+			}
+			der, _ := pemDecode(t, certPEM)
+			leaf, err := x509.ParseCertificate(der)
+			if err != nil {
+				t.Fatalf("parse server certificate error = %v, want nil", err)
+			}
+			if !notAfter.Equal(rootCert.NotAfter) || !leaf.NotAfter.Equal(notAfter) {
+				t.Fatalf("expiry: returned %v, certificate %v, want root expiry %v", notAfter, leaf.NotAfter, rootCert.NotAfter)
+			}
+			for _, checkAt := range []time.Time{tc.now, rootCert.NotAfter.Add(-time.Second)} {
+				if _, err := leaf.Verify(x509.VerifyOptions{
+					Roots: root.Pool(), DNSName: "gateway", CurrentTime: checkAt,
+					KeyUsages: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+				}); err != nil {
+					t.Errorf("verify at %v error = %v, want nil", checkAt, err)
+				}
+			}
+		})
+	}
+}
+
 func newCSR(t *testing.T, nodeID string) ([]byte, *ecdsa.PrivateKey) {
 	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)

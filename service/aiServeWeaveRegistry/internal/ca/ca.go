@@ -36,6 +36,13 @@ const NodeCertLifetime = 30 * 24 * time.Hour
 // which this Registry has no tooling for yet.
 const rootCertLifetime = 10 * 365 * 24 * time.Hour
 
+// serverCertLifetime keeps Registry and Gateway listeners valid for ten years,
+// bounded by the signing root's expiry.
+//
+// serverCertLifetime 让 Registry 与 Gateway 监听器证书长期有效（十年），
+// 但不超过签发根证书的到期时间。
+const serverCertLifetime = 10 * 365 * 24 * time.Hour
+
 // clockSkew backdates NotBefore on every certificate this CA issues, so a
 // node or peer whose clock runs slightly behind the Registry's does not see
 // a not-yet-valid certificate.
@@ -205,12 +212,22 @@ func (c *CA) Sign(csrDER []byte, nodeID string, now time.Time) (certPEM []byte, 
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), notAfter, nil
 }
 
-// IssueServerCert mints a server-auth certificate for this Registry's own
-// gRPC listener, signed by the same root CA. It exists so a first deployment
-// can start without an operator-supplied certificate: the ca-cert.pem this
-// CA writes to disk is the bundle Agents and Gateway replicas are configured
-// to trust.
+// IssueServerCert mints a server-auth certificate for a Registry or Gateway
+// listener, valid for ten years or until the signing root expires, whichever
+// comes first. It rejects an expired root. Agents and Gateways trust the
+// ca-cert.pem this CA writes to disk.
+//
+// IssueServerCert 为 Registry 或 Gateway 监听器签发服务端证书，有效期为十年，
+// 且不超过签发根证书的到期时间；根证书已到期时拒绝签发。
+// Agent 与 Gateway 信任本 CA 写入磁盘的 ca-cert.pem。
 func (c *CA) IssueServerCert(hosts []string, now time.Time) (certPEM, keyPEM []byte, notAfter time.Time, err error) {
+	notAfter = now.Add(serverCertLifetime).Truncate(time.Second)
+	if c.cert.NotAfter.Before(notAfter) {
+		notAfter = c.cert.NotAfter
+	}
+	if !notAfter.After(now) {
+		return nil, nil, time.Time{}, errors.New("ca: signing root certificate has expired")
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return nil, nil, time.Time{}, fmt.Errorf("ca: cannot generate server key: %w", err)
@@ -219,7 +236,6 @@ func (c *CA) IssueServerCert(hosts []string, now time.Time) (certPEM, keyPEM []b
 	if err != nil {
 		return nil, nil, time.Time{}, err
 	}
-	notAfter = now.Add(NodeCertLifetime).Truncate(time.Second)
 	tmpl := &x509.Certificate{
 		SerialNumber:          serial,
 		Subject:               pkix.Name{CommonName: "aiserveweave-registry"},
