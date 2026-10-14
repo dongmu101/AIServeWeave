@@ -8,8 +8,8 @@
 // a first-time node operator; a form the Agent itself serves is the lowest
 // operation cost available without adding a whole separate UI project.
 //
-// The page edits the file and lists models from the running Agent's snapshots,
-// without live connection state or hot reload.
+// The page edits the file and shows model and live Gateway connection snapshots
+// from the running Agent, without hot reload.
 // Saving a change requires restarting the Agent to take effect. The standalone
 // -config-ui mode never starts the tunnel or any runtime (see main.go).
 //
@@ -28,7 +28,7 @@
 // 实存在的门槛；由 Agent 自己提供一个表单，是不额外起一个独立 UI 项目情况
 // 下能做到的最低操作成本。
 //
-// 页面编辑文件并列出运行中 Agent 的快照模型，不展示实时连接状态、不做热加载，保存改动后需要重启 Agent
+// 页面编辑文件并列出运行中 Agent 的快照模型与实时 Gateway 连接状态，不做热加载，保存改动后需要重启 Agent
 // 才会生效。独立的 -config-ui 模式不启动隧道或任何运行时（见 main.go）。
 //
 // 绑定到回环地址之外的地址会被直接拒绝，而不只是在 flag 的帮助文本里劝
@@ -50,7 +50,6 @@ import (
 	"strings"
 	"time"
 
-	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
 
@@ -68,7 +67,8 @@ const shutdownTimeout = 5 * time.Second
 // rejected: the whole point of this mode is to produce a file the Agent's
 // normal run will later load with -config, so there must be somewhere to
 // put it.
-// snapshots supplies the running Agent's model catalogue; nil means setup-only mode.
+// sources supplies the running Agent's runtime and Gateway snapshots;
+// empty sources mean setup-only mode.
 //
 // Serve 在 addr 上运行本地设置页面，直到 ctx 被取消后优雅关闭。addr 必须
 // 是回环地址（见 validateLoopback）；其他地址在开监听之前就会被拒绝。
@@ -76,8 +76,8 @@ const shutdownTimeout = 5 * time.Second
 // configPath 是表单当前值的读取来源（如果文件存在且能解析）以及保存的写
 // 入目标。configPath 为空会被拒绝：这个模式存在的全部意义就是产出一份
 // Agent 正常运行时会用 -config 加载的文件，因此必须有地方可写。
-// snapshots 提供运行中 Agent 的模型目录；nil 表示仅运行设置页面。
-func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, snapshots func() []runtime.Snapshot) error {
+// sources 提供当前运行时与 Gateway 快照；空来源表示仅运行设置页面。
+func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, sources Sources) error {
 	if configPath == "" {
 		return errors.New("configui: a config path is required; there is nothing to save to otherwise")
 	}
@@ -91,7 +91,8 @@ func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, sn
 	defer listener.Close()
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/", newIndexHandler(logger, configPath, snapshots))
+	mux.HandleFunc("/status/gateway", newGatewayHandler(sources.Gateway))
+	mux.HandleFunc("/", newIndexHandler(logger, configPath, sources))
 	server := &http.Server{Addr: addr, Handler: mux}
 	defer server.Close()
 
@@ -174,15 +175,18 @@ type formValues struct {
 	Message              string
 	Error                string
 	Models               modelCatalogue
+	Gateway              gatewayView
 }
 
 // newIndexHandler builds the "/" handler: GET renders the form (pre-filled
 // from configPath when it already exists and parses), POST parses and saves
 // it, re-rendering the same form with a confirmation or an error.
-// newIndexHandler 渲染或保存配置，同时展示当前 Agent 的只读模型目录。
-func newIndexHandler(logger *slog.Logger, configPath string, snapshots func() []runtime.Snapshot) http.HandlerFunc {
+// It also renders the Agent's read-only runtime and Gateway snapshots.
+// newIndexHandler 渲染或保存配置，同时展示当前 Agent 的只读模型目录与 Gateway 快照。
+func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) http.HandlerFunc {
 	render := func(w http.ResponseWriter, values formValues) {
-		values.Models = availableModels(snapshots)
+		values.Models = availableModels(sources.Runtimes)
+		values.Gateway = currentGateway(sources.Gateway)
 		renderForm(w, values)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -444,6 +448,16 @@ button:hover { background: #1d4ed8; }
 .model-catalogue h2 { margin: 0; font-size: 17px; }
 .model-ids { margin: 12px 0 0; padding-left: 24px; overflow-wrap: anywhere; }
 .model-ids code { font-size: 13px; }
+.gateway-status { margin-bottom: 24px; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+.connection-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.status-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+.status-online { background: #dcfce7; color: #166534; }
+.status-offline { background: #fee2e2; color: #991b1b; }
+.status-pending { background: #fef3c7; color: #92400e; }
+.status-neutral { background: #e2e8f0; color: #475569; }
+.connection-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.connection-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.connection-list code { overflow-wrap: anywhere; }
 @media (max-width: 760px) {
   .layout { display: block; }
   .sidebar { position: static; height: auto; padding: 20px; border-right: 0; border-bottom: 1px solid #e2e8f0; }
@@ -481,6 +495,9 @@ button:hover { background: #1d4ed8; }
 <fieldset id="gateway">
 <legend>Gateway 连接 / Connection</legend>
 <p class="group-hint">设置 Agent 连接的远程服务。</p>
+<div class="runtime-heading"><strong>当前连接状态</strong><button type="button" class="secondary" id="gateway-refresh">刷新状态</button></div>
+{{template "gateway-status" .Gateway}}
+<p class="hint" id="gateway-refresh-status" role="status">每 5 秒自动刷新。显示正在运行的连接，配置修改需重启生效。</p>
 <div class="fields">
 <div class="field wide">
 <label for="endpoints">Gateway 地址 <span>Gateway endpoints</span></label>
@@ -614,6 +631,37 @@ button:hover { background: #1d4ed8; }
 </main>
 </div>
 <script>
+let gatewayRefreshPending = false;
+async function refreshGateway() {
+  if (gatewayRefreshPending || document.hidden) return;
+  gatewayRefreshPending = true;
+  const button = document.getElementById('gateway-refresh');
+  const status = document.getElementById('gateway-refresh-status');
+  button.disabled = true;
+  try {
+    const response = await fetch('/status/gateway', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+    if (!response.ok) throw new Error('refresh failed');
+    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const connections = page.getElementById('gateway-status');
+    if (!connections) throw new Error('missing status');
+    document.getElementById('gateway-status').replaceWith(document.importNode(connections, true));
+    status.textContent = '已更新 · 每 5 秒自动刷新。配置修改需重启生效。';
+  } catch {
+    const current = document.getElementById('gateway-status');
+    current.replaceChildren();
+    const message = document.createElement('p');
+    message.className = 'error';
+    message.textContent = '无法获取当前连接状态';
+    current.append(message);
+    status.textContent = 'Agent 可能已停止或正在重启，请稍后刷新。';
+  } finally {
+    button.disabled = false;
+    gatewayRefreshPending = false;
+  }
+}
+document.getElementById('gateway-refresh').addEventListener('click', refreshGateway);
+setInterval(refreshGateway, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshGateway(); });
 document.getElementById('models-refresh').addEventListener('click', async event => {
   const button = event.currentTarget;
   const status = document.getElementById('models-refresh-status');
@@ -703,6 +751,12 @@ document.querySelector('form').addEventListener('invalid', event => {
 </script>
 </body>
 </html>
+{{define "gateway-status"}}
+<div id="gateway-status" class="gateway-status" role="status" aria-live="polite">
+<div class="connection-summary"><span class="status-badge status-{{.Tone}}">{{.Summary}}</span><span>已连接 {{.Connected}} / {{.Total}} 个 Gateway</span></div>
+{{if .Connections}}<ul class="connection-list">{{range .Connections}}<li><code>{{.Endpoint}}</code><span class="status-badge status-{{.Tone}}">{{.Label}}</span></li>{{end}}</ul>{{end}}
+</div>
+{{end}}
 `))
 
 // renderForm executes formTemplate. A template execution error only ever

@@ -3,12 +3,12 @@ auto_discover_interval: 30s
 gateway:
     allowed_runtimes:
         - codex-local
-    bootstrap_token_file: ./data/bootstrap-token
-    ca_file: ./data/compose-ca-cert.pem
-    cert_file: ./data/agent-cert.pem
+    bootstrap_token_file: ./data/compose-current/bootstrap-token
+    ca_file: ./data/compose-current/ca.pem
+    cert_file: ./data/compose-current/cert.pem
     endpoints:
         - 127.0.0.1:8443
-    key_file: ./data/agent-key.pem
+    key_file: ./data/compose-current/key.pem
     labels:
         gpu: "4090"
         region: home-mac

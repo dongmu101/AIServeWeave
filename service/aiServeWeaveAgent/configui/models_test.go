@@ -52,9 +52,9 @@ func TestModelCatalogueUsesCurrentSnapshotAndEscapesIDs(t *testing.T) {
 		State:      runtime.StateHealthy,
 		Discovery:  runtime.Discovery{Models: []runtime.Model{{ID: "<script>model</script>", DisplayName: "secret-display-name"}}},
 	}
-	handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"), func() []runtime.Snapshot {
+	handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"), Sources{Runtimes: func() []runtime.Snapshot {
 		return []runtime.Snapshot{snapshot}
-	})
+	}})
 	for _, tt := range []struct {
 		name  string
 		state runtime.State

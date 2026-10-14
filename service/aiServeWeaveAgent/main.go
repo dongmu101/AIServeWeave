@@ -17,6 +17,7 @@ import (
 	"os/signal"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -141,7 +142,7 @@ func main() {
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		if err := configui.Serve(ctx, logger, *configUIAddr, uiConfigPath, nil); err != nil {
+		if err := configui.Serve(ctx, logger, *configUIAddr, uiConfigPath, configui.Sources{}); err != nil {
 			logger.Error("config setup page exited with error", slog.Any("error", err))
 			os.Exit(1)
 		}
@@ -716,10 +717,25 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 			_ = metricsServer.Close()
 		}
 	}()
+	var activeTunnels atomic.Pointer[tunnel.Manager]
+	uiSources := configui.Sources{
+		Runtimes: manager.Snapshot,
+		Gateway: func() configui.GatewaySnapshot {
+			current := activeTunnels.Load()
+			snapshot := configui.GatewaySnapshot{Enabled: opts.enabled(), Started: current != nil}
+			if current != nil {
+				snapshot.States = make(map[string]string)
+				for endpoint, state := range current.TunnelStates() {
+					snapshot.States[endpoint] = state.String()
+				}
+			}
+			return snapshot
+		},
+	}
 	uiDone := make(chan struct{})
 	go func() {
 		defer close(uiDone)
-		if err := configui.Serve(ctx, logger, configUIAddr, configPath, manager.Snapshot); err != nil {
+		if err := configui.Serve(ctx, logger, configUIAddr, configPath, uiSources); err != nil {
 			logger.Error("config setup page unavailable; Agent will keep running / 配置页面不可用，Agent 继续运行", slog.Any("error", err))
 		}
 	}()
@@ -795,10 +811,12 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 
-	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker)
+	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker)
 	if err != nil {
 		return err
 	}
+
+	activeTunnels.Store(tunnelManager)
 
 	// Whichever comes first: the operator stopping the agent, or the tunnel
 	// giving up for a reason no reconnect can fix. Either way the runtimes are
@@ -1059,9 +1077,13 @@ func parseAgentUpgradePublicKey(hexKey string) (ed25519.PublicKey, error) {
 }
 
 // startTunnel wires the connection table and runs it in the background,
-// returning the channel its outcome arrives on. A nil channel is returned
+// returning its manager for read-only status and the channel its outcome arrives
+// on. A nil channel is returned
 // when no gateway is configured, which blocks forever in the select above and
 // leaves the agent running its runtimes only.
+//
+// startTunnel 装配连接表并在后台运行，返回供只读状态查询的管理器及结果通道。
+// 未配置 Gateway 时返回 nil 管理器与 nil 通道，Agent 仅运行本地运行时。
 //
 // The seed endpoints only have to get the agent to one reachable replica: the
 // roster that comes back over that tunnel supplies the rest, so scaling the
@@ -1090,18 +1112,18 @@ func parseAgentUpgradePublicKey(hexKey string) (ed25519.PublicKey, error) {
 // accept, but not execute, UPGRADE/ROLLBACK) and report status back.
 // newAgentUpgradeChecker never returns nil, so this is never nil either —
 // the same shape puller uses.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker) (<-chan error, error) {
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker) (<-chan error, *tunnel.Manager, error) {
 	if !opts.enabled() {
-		return nil, nil
+		return nil, nil, nil
 	}
 
 	caPEM, err := os.ReadFile(opts.caFile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	connector, err := tunnel.NewGRPCRegistryConnector(opts.registry, caPEM)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	identities, err := tunnel.NewIdentityManager(tunnel.IdentityConfig{
 		NodeID:             opts.nodeID,
@@ -1114,7 +1136,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		Logger:             logger,
 	}, connector)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// The identity is obtained before the first dial: a node with no valid
@@ -1123,7 +1145,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 	// connection table keeps it rotated from then on.
 	identity, err := identities.Ensure(ctx)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	dispatcher, err := tunnel.NewDispatcher(tunnel.DispatchConfig{
@@ -1134,7 +1156,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		Logger:          logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	// See startTunnel's doc comment: only assign the interface field when
@@ -1167,7 +1189,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		Logger:        logger,
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	// upgradeChecker's Drainer is wired here rather than through
 	// ClientConfig: *tunnel.Manager (tunnels) does not exist until
@@ -1185,7 +1207,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 
 	done := make(chan error, 1)
 	go func() { done <- tunnels.Run(ctx) }()
-	return done, nil
+	return done, tunnels, nil
 }
 
 // newRegistry returns a runtime registry with every supported inference

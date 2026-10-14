@@ -49,13 +49,13 @@ func TestValidateLoopback(t *testing.T) {
 }
 
 func TestServeRejectsNonLoopback(t *testing.T) {
-	if err := Serve(t.Context(), discardLogger(), "0.0.0.0:0", filepath.Join(t.TempDir(), "agent.yaml"), nil); err == nil {
+	if err := Serve(t.Context(), discardLogger(), "0.0.0.0:0", filepath.Join(t.TempDir(), "agent.yaml"), Sources{}); err == nil {
 		t.Fatal("Serve on a non-loopback address returned no error")
 	}
 }
 
 func TestServeRejectsEmptyConfigPath(t *testing.T) {
-	if err := Serve(t.Context(), discardLogger(), "127.0.0.1:0", "", nil); err == nil {
+	if err := Serve(t.Context(), discardLogger(), "127.0.0.1:0", "", Sources{}); err == nil {
 		t.Fatal("Serve with an empty configPath returned no error")
 	}
 }
@@ -81,7 +81,7 @@ func TestServeLifecycle(t *testing.T) {
 			done := make(chan error, 1)
 			configPath := filepath.Join(t.TempDir(), "agent.yaml")
 			go func() {
-				done <- Serve(ctx, logger, "127.0.0.1:0", configPath, nil)
+				done <- Serve(ctx, logger, "127.0.0.1:0", configPath, Sources{})
 				_ = logWriter.Close()
 			}()
 			var entry struct{ Addr string }
@@ -102,6 +102,27 @@ func TestServeLifecycle(t *testing.T) {
 				_ = res.Body.Close()
 				if res.StatusCode != http.StatusOK {
 					t.Errorf("GET status = %d, want %d", res.StatusCode, http.StatusOK)
+				}
+				statusURL := "http://" + entry.Addr + "/status/gateway"
+				status, err := client.Get(statusURL)
+				if err != nil {
+					t.Fatalf("GET Gateway status error = %v, want nil", err)
+				}
+				body, err := io.ReadAll(status.Body)
+				_ = status.Body.Close()
+				if err != nil || status.StatusCode != http.StatusOK || !strings.Contains(string(body), "仅配置模式") {
+					t.Errorf("Gateway status/body/error = %d/%s/%v, want 200 containing setup mode and nil", status.StatusCode, body, err)
+				}
+				post, err := client.Post(statusURL, "application/x-www-form-urlencoded", strings.NewReader("endpoints=unexpected:8443"))
+				if err != nil {
+					t.Fatalf("POST Gateway status error = %v, want nil", err)
+				}
+				_ = post.Body.Close()
+				if post.StatusCode != http.StatusMethodNotAllowed {
+					t.Errorf("POST Gateway status = %d, want %d", post.StatusCode, http.StatusMethodNotAllowed)
+				}
+				if _, err := os.Stat(configPath); !os.IsNotExist(err) {
+					t.Errorf("status requests created configuration, stat error = %v, want not exist", err)
 				}
 				cancel()
 			}
@@ -125,7 +146,7 @@ func TestServeOccupiedPort(t *testing.T) {
 	defer listener.Close()
 	var logs strings.Builder
 	logger := slog.New(slog.NewTextHandler(&logs, nil))
-	err = Serve(t.Context(), logger, listener.Addr().String(), filepath.Join(t.TempDir(), "agent.yaml"), nil)
+	err = Serve(t.Context(), logger, listener.Addr().String(), filepath.Join(t.TempDir(), "agent.yaml"), Sources{})
 	if err == nil {
 		t.Fatal("Serve error = nil, want occupied-port error")
 	}
@@ -169,7 +190,7 @@ func TestParseLabelsDropsMalformedLines(t *testing.T) {
 // 者实际使用的 HTTP handler。
 func TestIndexHandlerSaveAndReload(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "agent.yaml")
-	handler := newIndexHandler(discardLogger(), configPath, nil)
+	handler := newIndexHandler(discardLogger(), configPath, Sources{})
 
 	getRec := httptest.NewRecorder()
 	handler(getRec, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -227,7 +248,7 @@ func TestIndexHandlerSaveAndReload(t *testing.T) {
 }
 
 func TestIndexHandlerRejectsOtherMethods(t *testing.T) {
-	handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"), nil)
+	handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"), Sources{})
 	rec := httptest.NewRecorder()
 	handler(rec, httptest.NewRequest(http.MethodDelete, "/", nil))
 	if rec.Code != http.StatusMethodNotAllowed {
