@@ -456,22 +456,9 @@ services:
       redis:
         condition: service_healthy
 
-# Agent 在宿主机上跑，因为它要连本机的推理后端：
-#
-#   TOKEN=$(docker compose exec -T registry /usr/local/bin/service \
-#             -data-dir /data -mint-token)
-#   echo "$TOKEN" > /tmp/aisw-token
-#   docker compose cp registry:/data/ca/ca-cert.pem /tmp/aisw-ca.pem
-#   go run ./service/aiServeWeaveAgent \
-#     -registry 127.0.0.1:9443 -ca-file /tmp/aisw-ca.pem \
-#     -bootstrap-token-file /tmp/aisw-token \
-#     -cert-file ./data/agent/cert.pem -key-file ./data/agent/key.pem \
-#     -gateway 127.0.0.1:8443 \
-#     -ollama-url http://127.0.0.1:11434 \
-#     -labels region=local
-#
-# The Agent runs on the host because it reaches this machine's own inference
-# backends; the commands above are the same on any host.
+# The Agent runs on the host to reach local inference backends.
+# See README.md's "接一个 Agent" for token issuance and startup commands.
+# Agent 在宿主机上连接本地推理后端；令牌签发与启动命令统一见 README.md「接一个 Agent」。
 
 volumes:
   postgres-data:
