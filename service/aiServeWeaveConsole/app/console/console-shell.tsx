@@ -31,6 +31,7 @@ const NAV_ITEMS: readonly { href: string; label: string }[] = [
   { href: "/console/requests", label: "请求检索" },
   { href: "/console/quota", label: "配额" },
   { href: "/console/usage", label: "用量" },
+  { href: "/console/models", label: "AI 服务与模型" },
   { href: "/console/workflows", label: "工作流" },
   { href: "/console/jobs", label: "运行" },
   { href: "/console/jobs/history", label: "运行历史" },

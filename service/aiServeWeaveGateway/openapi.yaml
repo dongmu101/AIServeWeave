@@ -768,6 +768,11 @@ components:
       properties:
         replica_id: { type: string }
         generated_at: { type: string, format: date-time }
+        local_runtimes:
+          type: array
+          description: Backends discovered on this Gateway's loopback interface; inventory only.
+          items:
+            $ref: "#/components/schemas/Runtime"
         nodes:
           type: array
           items:

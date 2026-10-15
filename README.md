@@ -557,6 +557,7 @@ audit_logs
 | --- | --- |
 | `api/proto/tunnel/v1/` | Agent、Gateway、Registry 共用的 gRPC 契约与生成代码 |
 | `common/runtime/` | 运行时语义、能力门禁、后端适配与并发控制 |
+| `common/localdiscovery/` | Agent 与 Gateway 共用的回环 Ollama/vLLM 服务发现；Gateway 本机清单经控制面在模型页单独展示 |
 | `common/tunnelwire/` | runtime 与隧道 proto 的唯一转换边界 |
 | `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
 | `common/modelroute/` | 模型路由发布契约：别名/目标、CAS 版本化快照与生效状态（P02） |

@@ -101,6 +101,17 @@ unset AISW_API_KEY
 
 没有 Agent 时模型列表为空。接入带模型的 Agent 后再次查询，应能看到模型目录。
 
+租户控制台的“AI 服务与模型”（`/console/models`）展示 **Agent 连接上来后上报的 AI 服务和模型**，
+包括 Agent 在线/离线状态、服务类型、健康状态、后端版本、模型 ID 与能力；不展示 Gateway
+本机发现结果。租户页面无需平台运维登录，详细内部地址仅在运维页面展示。
+
+平台运维 `/operator/models` 还保留独立的 Gateway 本机发现区域。Compose 默认通过
+`host.docker.internal:11434` 和 `host.docker.internal:8000` 读取宿主机 Ollama/vLLM 清单，
+无需 Agent 即可显示服务地址、健康状态、版本与模型；这份发现清单不会直接加入推理调度。
+可在 `deploy/.env` 设置 `GATEWAY_LOCAL_OLLAMA_URL` / `GATEWAY_LOCAL_VLLM_URL` 为容器
+可达地址，设为空字符串跳过该类型。Docker Desktop 提供 `host.docker.internal`；其他
+Docker 环境需自行配置该名称或覆盖地址。通过 Gateway API 调用模型仍按下一节接入 Agent。
+
 ## 接一个 Agent
 
 以下示例适用于 Agent 与 Compose 位于同一台机器，且本机 Ollama 已在 `11434` 端口运行。

@@ -74,6 +74,9 @@ type Config struct {
 	// Nodes 报告本副本当前看到的东西。它是一个函数而不是 Server 本身，这样测试无需
 	// 隧道即可驱动 handler，也让本包够不到 Server 上的其他任何东西。
 	Nodes func() []tunnelserver.NodeInfo
+	// LocalRuntimes reports this Gateway's local backend inventory.
+	// LocalRuntimes 报告本 Gateway 的本机后端清单。
+	LocalRuntimes func() []runtime.Snapshot
 	// Jobs reports one tenant's runs on this replica, and whether the job
 	// table has evicted anything. Nil leaves the job endpoint unmounted,
 	// which is how a replica with no front door says it has no runs to
@@ -147,7 +150,13 @@ func New(cfg Config) (http.Handler, error) {
 			writeError(w, http.StatusUnauthorized, "unauthorized")
 			return
 		}
-		writeJSON(w, http.StatusOK, snapshot(cfg.ReplicaID, clock.Now(), cfg.Nodes()))
+		view := snapshot(cfg.ReplicaID, clock.Now(), cfg.Nodes())
+		if cfg.LocalRuntimes != nil {
+			for _, entry := range cfg.LocalRuntimes() {
+				view.LocalRuntimes = append(view.LocalRuntimes, nodeview.FromSnapshot(entry))
+			}
+		}
+		writeJSON(w, http.StatusOK, view)
 	})
 
 	if cfg.Templates != nil {

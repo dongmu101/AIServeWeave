@@ -110,6 +110,44 @@ func TestScanOnceRegistersAnAnsweringCandidate(t *testing.T) {
 	}
 }
 
+// TestDiscoveryRetainsModelInventory checks the shared scanner's model and health evidence.
+// TestDiscoveryRetainsModelInventory 验证共享扫描器保留模型清单与健康证据。
+func TestDiscoveryRetainsModelInventory(t *testing.T) {
+	for _, tt := range []struct {
+		name                                string
+		kind                                runtime.Kind
+		versionPath, modelsPath, modelsJSON string
+	}{
+		{name: "Ollama models", kind: runtime.KindOllama, versionPath: "/api/version", modelsPath: "/api/tags", modelsJSON: `{"models":[{"name":"gateway-model"}]}`},
+		{name: "vLLM models", kind: runtime.KindVLLM, versionPath: "/version", modelsPath: "/v1/models", modelsJSON: `{"data":[{"id":"gateway-model"}]}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			mux := http.NewServeMux()
+			mux.HandleFunc(tt.versionPath, func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, map[string]string{"version": "1.0.0"}) })
+			mux.HandleFunc(tt.modelsPath, func(w http.ResponseWriter, _ *http.Request) {
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tt.modelsJSON))
+			})
+			server := httptest.NewServer(mux)
+			t.Cleanup(server.Close)
+			manager := newTestManager(t)
+			scanner, err := New(Config{Manager: manager, Candidates: []Candidate{{Kind: tt.kind, BaseURL: server.URL}}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			scanner.scanOnce(context.Background())
+			snaps := manager.Snapshot()
+			if len(snaps) != 1 {
+				t.Fatalf("snapshots = %+v, want one discovered backend", snaps)
+			}
+			got := snaps[0]
+			if got.State != runtime.StateHealthy || got.Probe.Version != "1.0.0" || len(got.Discovery.Models) != 1 || got.Discovery.Models[0].ID != "gateway-model" {
+				t.Errorf("snapshot = %+v, want healthy backend version 1.0.0 with gateway-model", got)
+			}
+		})
+	}
+}
+
 func TestScanOnceSkipsACandidateWithNothingListening(t *testing.T) {
 	// A loopback port nothing is listening on: httptest.NewServer picks one
 	// and Close releases it immediately, so the address is guaranteed free

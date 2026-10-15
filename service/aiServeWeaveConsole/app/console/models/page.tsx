@@ -1,4 +1,5 @@
-import { redirect } from "next/navigation";
+import { TenantModelsView } from "./tenant-models-view";
 
-/** LegacyPage moves the former inventory route to platform authentication. / LegacyPage 将旧清单路由迁移到平台认证入口。 */
-export default function LegacyPage() { redirect("/operator/models"); }
+/** TenantModelsPage shows Agent-reported services using the tenant session.
+ * TenantModelsPage 使用租户会话展示 Agent 上报的服务。 */
+export default function TenantModelsPage() { return <TenantModelsView />; }

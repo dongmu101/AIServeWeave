@@ -32,6 +32,39 @@ export interface ReplicaStatus {
    * error 在副本作答时为 null，否则是控制面给出的四个固定代号之一。 */
   error: string | null;
   nodeCount: number;
+  /** Local backends on this Gateway. / 本 Gateway 的本机后端。 */
+  localRuntimes: NodeRuntime[];
+}
+
+/** TenantModelCatalog identifies Agent reports without addresses or diagnostics.
+ * TenantModelCatalog 标识 Agent 上报来源，不含地址或诊断信息。 */
+export interface TenantModelCatalog {
+  collectedAt: string;
+  partial: boolean;
+  services: { agentId: string; serviceId: string; nodeOnline: boolean; kind: string; state: string; version: string; models: RuntimeModel[] }[];
+}
+
+/** parseTenantModels validates the tenant-facing Agent service catalog.
+ * parseTenantModels 校验面向租户的 Agent 服务目录。 */
+export function parseTenantModels(value: unknown): TenantModelCatalog {
+  const source = record(value);
+  if (!Array.isArray(source.services)) fail();
+  return {
+    collectedAt: timestamp(source, "collected_at"),
+    partial: flag(source, "partial"),
+    services: list(source.services, entry => {
+      const service = record(entry);
+      return {
+        agentId: required(service, "agent_id"), serviceId: required(service, "service_id"),
+        nodeOnline: typeof service.node_online === "boolean" ? service.node_online : fail(),
+        kind: required(service, "kind"), state: required(service, "state"), version: text(service, "version"),
+        models: list(service.models, entry => {
+          const model = record(entry);
+          return { id: required(model, "id"), capabilities: stringMap(model, "capabilities") };
+        }),
+      };
+    }),
+  };
 }
 
 /** RuntimeModel is one model a runtime serves.
@@ -273,6 +306,7 @@ function parseReplica(value: unknown): ReplicaStatus {
     generatedAt: optionalTimestamp(source, "generated_at"),
     error: text(source, "error") || null,
     nodeCount: count(source, "node_count"),
+    localRuntimes: list(source.local_runtimes, parseRuntime),
   };
 }
 
@@ -358,6 +392,14 @@ export function parseFleetSnapshot(value: unknown): FleetSnapshot {
     nodes: list(source.nodes, parseNode),
     partial: flag(source, "partial"),
   };
+}
+
+/** parseGatewaySnapshot refuses a fleet-wide answer for a single Gateway view.
+ * parseGatewaySnapshot 拒绝用整个机群的响应呈现单个 Gateway 视图。 */
+export function parseGatewaySnapshot(value: unknown): FleetSnapshot {
+  const snapshot = parseFleetSnapshot(value);
+  if (snapshot.replicas.length !== 1) fail();
+  return snapshot;
 }
 
 /**

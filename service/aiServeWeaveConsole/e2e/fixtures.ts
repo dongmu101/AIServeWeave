@@ -60,7 +60,7 @@ async function installFixtures(page: Page, unexpected: string[]) {
       else if (path === "/admin/v1/jobs/history/job_p10") json = history;
       else if (path === "/operator/v1/operators") json = { items: ["op_p10", "op_peer"].map(id => ({ id, name: LONG_TEXT, email: `${id}@example.invalid`, status: "active", created_at: at })), next_cursor: "" };
       else if (path === "/operator/v1/nodes/states") json = { items: [{ node_id: LONG_TEXT, pending_approval: true, disabled: false, maintenance: false, first_seen_at: at, last_seen_at: at }] };
-      else if (path === "/operator/v1/nodes") json = { ...observed, nodes: [{ node_id: LONG_TEXT, live: true, maintenance: false, observed_at: at, labels: { region: LONG_TEXT }, runtimes: [] }] };
+      else if (path === "/operator/v1/nodes") json = { ...observed, replicas: [{ endpoint: "http://gateway-fixture:8091", replica_id: "gateway-fixture", generated_at: at, node_count: 1 }], nodes: [{ node_id: LONG_TEXT, live: true, maintenance: false, observed_at: at, labels: { region: LONG_TEXT }, runtimes: [] }] };
       else if (path === "/operator/v1/models") json = { ...observed, models: [{ id: LONG_TEXT, available_deployments: 0, deployments: [] }] };
       else if (path === "/operator/v1/routes") json = routeSnapshot;
       else if (path === "/operator/v1/routes/history") json = { items: [] };

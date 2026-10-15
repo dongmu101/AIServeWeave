@@ -30,6 +30,14 @@
 3. **不缓冲。** 响应帧一帧一交给调用方，调用方不读就阻塞，背压顺着 gRPC 流控传回 Agent。没有队列可以涨，也就没有队列需要限长。
 4. **不转发。** 每个副本只服务连到自己身上的节点。请求路径上没有副本间跳转，这是多副本设计的前提，不是优化。
 
+## Gateway 本机 AI 服务清单
+
+启用 `-admin-addr` 后，Gateway 默认也会发现自身运行环境内的 Ollama（`127.0.0.1:11434`）与 vLLM（`127.0.0.1:8000`），使用与 Agent 共用的 `common/localdiscovery` 和运行时适配器。启动后立即扫描，每 30 秒寻找新服务；已发现服务由 `runtime.Manager` 定期更新健康状态与模型。`-auto-discover=false` 关闭，`-auto-discover-interval` 调整扫描间隔；未启用运维监听器时不启动发现。
+
+`GET /internal/v1/nodes` 的 `local_runtimes` 单独列出本机后端，不伪装成 Agent 节点；服务地址、健康状态、版本、模型与能力仍经 `common/nodeview.FromSnapshot` 允许列表输出，沿用运维 token 认证。控制面保留在各副本的 `local_runtimes` 中，Console `/operator/models` 在“Gateway 本机 AI 服务”区域展示，未连接任何 Agent 时也可见。这是发现清单；推理请求仍经 Agent 调度，若要通过 Gateway API 调用这些模型，需在同机运行并接入 Agent。
+
+容器内的回环地址指容器自身。`-local-ollama-url` / `-local-vllm-url` 可显式指定容器可达的宿主机服务地址，空字符串跳过该类型；Compose 默认配置 `http://host.docker.internal:11434` 与 `http://host.docker.internal:8000`，可分别用 `GATEWAY_LOCAL_OLLAMA_URL` / `GATEWAY_LOCAL_VLLM_URL` 覆盖。只探测这两个已配置端点，不跟随 HTTP 重定向、不扫描子网，也不启用通用代理。通过 Gateway API 推理仍按 [部署说明](../../deploy/README.md#接一个-agent) 接入 Agent。
+
 ## 名册来源
 
 `Server.SetRoster` 是名册的唯一注入点，`registryclient.Run` 是它现在的调用方：启动时向 `-registry-addr` 指定的 Registry 发起 `GatewayDirectory.Join`，上报 `-replica-id`（默认取 hostname）和 `-tunnel-advertise-addr`（未设置则退回 `-tunnel-addr`，NAT/负载均衡场景下必须显式设置成 Agent 真正能拨通的地址），把收到的每一份名册转发给 `SetRoster`；连接断开按全抖动指数退避重连；收到关闭信号时先发一条 `DRAINING` 状态再断开，让还没连上这个副本的 Agent 提前知道不用再连。`-registry-addr` 留空则完全跳过订阅，等价于旧行为（名册需要调用方手工调用 `SetRoster` 注入），方便本地单副本调试不必起 Registry。

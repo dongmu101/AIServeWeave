@@ -64,6 +64,7 @@ const param = (): Segment => ({ param: true });
  * route handler 就能读出来。
  */
 const ROUTES: readonly UpstreamRoute[] = [
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("models")], query: [] },
   {
     method: "GET",
     segments: [literal("admin"), literal("v1"), literal("users")],
@@ -233,7 +234,7 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   {
     method: "GET",
     segments: [literal("operator"), literal("v1"), literal("nodes")],
-    query: [],
+    query: ["gateway"],
   },
   {
     method: "GET",

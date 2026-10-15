@@ -136,6 +136,9 @@ type ReplicaStatus struct {
 	//
 	// NodeCount 是该副本报告的节点数。
 	NodeCount int `json:"node_count"`
+	// LocalRuntimes belongs to this Gateway, never to a merged Agent node.
+	// LocalRuntimes 属于本 Gateway，绝不并入 Agent 节点。
+	LocalRuntimes []nodeview.Runtime `json:"local_runtimes,omitempty"`
 }
 
 // Node is one node as the fleet sees it: the merged view, plus which replicas
@@ -212,6 +215,7 @@ func (a *Aggregator) Nodes(ctx context.Context) (Snapshot, error) {
 				status.ReplicaID = replica.ReplicaID
 				status.GeneratedAt = &generated
 				status.NodeCount = len(replica.Nodes)
+				status.LocalRuntimes = replica.LocalRuntimes
 			}
 			results[i] = result{status: status, replica: replica}
 		}()

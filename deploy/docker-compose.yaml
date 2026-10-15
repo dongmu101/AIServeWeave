@@ -403,6 +403,10 @@ services:
       # compose-internal network needs to reach it, see the Gateway README's
       # "运维只读端点".
       - -admin-addr=:8091
+      # Discover only these configured host endpoints; never scan the host network.
+      # 只发现这两个已配置的宿主机端点，绝不扫描宿主机网络。
+      - -local-ollama-url=${GATEWAY_LOCAL_OLLAMA_URL-http://host.docker.internal:11434}
+      - -local-vllm-url=${GATEWAY_LOCAL_VLLM_URL-http://host.docker.internal:8000}
       # 按名字触发模型拉取的写监听器（STATUS.md 的 P2 模型分发子任务二）；同样不发布到
       # 宿主机端口，且刻意与上面的只读 -admin-addr 分开监听、分开 token——触发拉取是写
       # 操作，泄漏后果比读到清单更重，见 Gateway README「模型拉取触发」。

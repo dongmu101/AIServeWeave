@@ -15,6 +15,20 @@ function resolve(method: string, path: string, query = "") {
   );
 }
 
+test("Gateway selection is forwarded only by the platform node read", () => {
+  const query = new URLSearchParams("gateway=default&url=http%3A%2F%2Fother.invalid");
+  const route = resolveOperatorUpstream("GET", ["operator", "v1", "nodes"], query);
+  assert.equal(route?.search, "?gateway=default");
+  assert.equal(resolveUpstream("GET", ["operator", "v1", "nodes"], query), null);
+  assert.equal(resolveOperatorUpstream("POST", ["operator", "v1", "nodes"], query), null);
+});
+
+test("tenant model reads use only the tenant allowlist and drop selectors", () => {
+  assert.deepEqual(resolve("GET", "/admin/v1/models", "gateway=default&tenant_id=other"), { path: "/admin/v1/models", search: "" });
+  assert.equal(resolve("POST", "/admin/v1/models"), null);
+  assert.equal(resolveOperatorUpstream("GET", ["admin", "v1", "models"], new URLSearchParams()), null);
+});
+
 test("the allowlist admits exactly the calls the Console makes", () => {
   const cases: {
     name: string;

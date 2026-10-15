@@ -375,6 +375,11 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			},
 			{
 				Method:  http.MethodGet,
+				Path:    "/admin/v1/models",
+				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/models", requireSession(ctx, listTenantModels(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
 				Path:    "/admin/v1/jobs",
 				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs", requireSession(ctx, listJobs(ctx))),
 			},

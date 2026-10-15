@@ -58,6 +58,9 @@ type Replica struct {
 	ReplicaID   string    `json:"replica_id"`
 	GeneratedAt time.Time `json:"generated_at"`
 	Nodes       []Node    `json:"nodes"`
+	// LocalRuntimes lists backends discovered on this Gateway, separately from Agents.
+	// LocalRuntimes 列出本 Gateway 发现的本机后端，与 Agent 清单分开。
+	LocalRuntimes []Runtime `json:"local_runtimes,omitempty"`
 }
 
 // Node is one Agent as a Gateway replica sees it.

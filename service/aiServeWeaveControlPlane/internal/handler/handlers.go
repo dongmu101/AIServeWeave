@@ -1390,9 +1390,8 @@ func renderPlatformOperator(operator model.PlatformOperator) types.PlatformOpera
 // to, because the aggregation reads the same shape from the Gateway — and a
 // second declaration here would be a second thing to keep in step with it.
 //
-// The response is deliberately not filtered by anything: there is no tenant
-// dimension on a node to filter by, which is exactly why this endpoint is
-// behind the operator token instead of a session.
+// The optional gateway selector reads one configured replica's own observations.
+// There is no tenant dimension on a node; this endpoint requires a platform session.
 //
 // listFleetNodes 返回已配置的各 Gateway 副本所报告的全部节点。
 //
@@ -1400,11 +1399,17 @@ func renderPlatformOperator(operator model.PlatformOperator) types.PlatformOpera
 // 的 JSON 标签——它们必须带，因为聚合正是从 Gateway 读取同一种形状——在这里再声明一遍，
 // 只会多出一样需要与之保持同步的东西。
 //
-// 该响应刻意不做任何过滤：节点身上没有可供过滤的租户维度，而这恰恰就是本端点由运维
-// token 而不是会话守卫的原因。
+// 可选的 gateway 选择值仅读取一个已配置副本自己的观测。
+// 节点没有租户维度，因此本端点要求平台会话。
 func listFleetNodes(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		snapshot, err := ctx.Fleet.Nodes(r.Context())
+		var snapshot fleet.Snapshot
+		var err error
+		if gateway := r.URL.Query().Get("gateway"); gateway != "" {
+			snapshot, err = ctx.Fleet.GatewayNodes(r.Context(), gateway)
+		} else {
+			snapshot, err = ctx.Fleet.Nodes(r.Context())
+		}
 		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
@@ -1555,7 +1560,7 @@ func listJobs(ctx *svc.ServiceContext) http.HandlerFunc {
 // respondFleetErr 映射一次聚合失败。某个副本没有作答不属于这里的情形——那是部分成功，
 // 它在文档内部报告而不是用状态码报告，因为已经作答的那些节点依然值得展示。
 func respondFleetErr(w http.ResponseWriter, err error) {
-	if errors.Is(err, fleet.ErrDisabled) {
+	if errors.Is(err, fleet.ErrDisabled) || errors.Is(err, fleet.ErrUnknownGateway) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}

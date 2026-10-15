@@ -109,6 +109,54 @@ func serve(t *testing.T, nodes []tunnelserver.NodeInfo) http.Handler {
 	return handler
 }
 
+// TestLocalInventoryStaysSeparateFromAgents checks local rendering and authentication.
+// TestLocalInventoryStaysSeparateFromAgents 验证本机清单独立于 Agent 且受认证保护。
+func TestLocalInventoryStaysSeparateFromAgents(t *testing.T) {
+	for _, tt := range []struct {
+		name, auth string
+		want       int
+	}{
+		{name: "operator can inspect local services", auth: "Bearer " + token, want: http.StatusOK},
+		{name: "unauthenticated caller cannot inspect", want: http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reads := 0
+			handler, err := adminapi.New(adminapi.Config{
+				Token: token, ReplicaID: "gateway-local", Clock: fixedClock{now: probedAt},
+				Nodes:         func() []tunnelserver.NodeInfo { return nil },
+				LocalRuntimes: func() []runtime.Snapshot { reads++; return connectedNode().Runtimes },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/internal/v1/nodes", nil)
+			req.Header.Set("Authorization", tt.auth)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.want != http.StatusOK {
+				if reads != 0 {
+					t.Errorf("local inventory reads = %d, want 0", reads)
+				}
+				return
+			}
+			var got nodeview.Replica
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Nodes) != 0 || len(got.LocalRuntimes) != 1 {
+				t.Fatalf("inventory = %+v, want no Agent nodes and one local runtime", got)
+			}
+			rt := got.LocalRuntimes[0]
+			if rt.BaseURL != "http://127.0.0.1:8000" || rt.State != "healthy" || len(rt.Models) != 2 {
+				t.Errorf("local runtime = %+v, want healthy loopback vLLM with two models", rt)
+			}
+		})
+	}
+}
+
 // TestInventoryRequiresTheOperatorToken asserts the listener authenticates,
 // which is the whole reason it may exist on its own port.
 //

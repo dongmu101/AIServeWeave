@@ -33,6 +33,7 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/localdiscovery"
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
@@ -121,6 +122,14 @@ func run() error {
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	adminAddr := flag.String("admin-addr", "",
 		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
+	autoDiscover := flag.Bool("auto-discover", true,
+		"discover configured local Ollama/vLLM services for the operator inventory; inference still uses connected Agents")
+	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
+		"interval between scans for local AI services")
+	localOllamaURL := flag.String("local-ollama-url", "http://127.0.0.1:11434",
+		"Ollama inventory endpoint; set a container-reachable host address when needed, empty skips Ollama")
+	localVLLMURL := flag.String("local-vllm-url", "http://127.0.0.1:8000",
+		"vLLM inventory endpoint; set a container-reachable host address when needed, empty skips vLLM")
 	modelPullAddr := flag.String("model-pull-addr", "",
 		"address the model-pull trigger/status listener binds, e.g. 127.0.0.1:8092 (STATUS.md's P2 model distribution subtask 2); empty disables it. Unlike -admin-addr this listener accepts writes, so it has its own token: AISW_GATEWAY_MODEL_PULL_TOKEN")
 	comfyUIManagedAddr := flag.String("comfyui-managed-addr", "",
@@ -205,6 +214,12 @@ func run() error {
 	if err != nil {
 		return err
 	}
+
+	localRuntimes, stopLocalInventory, err := startLocalInventory(ctx, logger, registry, *autoDiscover && *adminAddr != "", *autoDiscoverInterval, *localOllamaURL, *localVLLMURL)
+	if err != nil {
+		return err
+	}
+	defer stopLocalInventory()
 
 	verifier, err := keyVerifier(*controlPlaneAddr, *controlPlaneToken, *keyCacheTTL, logger)
 	if err != nil {
@@ -471,6 +486,7 @@ func run() error {
 			Routes:               routeStatus,
 			Workflows:            workflowStatus,
 			Nodes:                server.Nodes,
+			LocalRuntimes:        localRuntimes,
 			Jobs:                 front.JobsFor,
 			Templates:            front.Templates,
 			ComfyUIManagedStatus: server.ComfyUIManagedStatus,

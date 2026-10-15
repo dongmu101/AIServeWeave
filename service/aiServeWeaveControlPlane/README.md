@@ -172,6 +172,8 @@ go run ./service/aiServeWeaveGateway \
 
 `GET /operator/v1/nodes` 与 `GET /operator/v1/models` 返回整个机群的节点与模型部署。它们**只在配置了 `Fleet` 时才挂载**——没有配置的部署是根本没有这两条路由，而不是有两条回答「未配置」的路由。
 
+`GET /operator/v1/nodes?gateway=default` 仅读取 `Fleet.Gateways` 中第一个 Gateway 的节点、运行时与模型观测，供 Console 当前 Gateway 模型页使用；也可将 `gateway` 设置为清单中的一个完整地址。选择值严格匹配已配置地址，未知值返回 404，不请求任意 URL。`replicas` 只含所选 Gateway，并在各副本的 `local_runtimes` 中保留该 Gateway 本机发现的服务、健康状态与模型，不并入 Agent 节点；未支持此字段的旧 Gateway 仍可读取。读取失败时 `partial=true`，节点列表为空，不能当作“没有连接”。省略参数仍合并整个机群，其他接口不变。
+
 ```yaml
 Fleet:
   Gateways: ["http://gateway-1:8091", "http://gateway-2:8091"]
@@ -702,3 +704,7 @@ response_turns(
 Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，与 `JobsClient` 同构：`ErrNotFound`/`ErrConflict`/`ErrInvalidRequest`/`ErrOutcomeUnknown` 同一套词汇）+ `ResponsesPersister` 适配器满足 `httpapi` 自己声明的窄接口 `ResponsesPersistClient`（打破导入环，与 `GatewayPersister` 之于 Jobs 同理）。`store:true` 的写入侧是有界异步（信号量限流的 fire-and-forget，默认并发 8，绝不阻塞调用方正在等待的响应，掉线时计入 `gateway_response_persist_dropped_total`/`gateway_response_persist_failed_total`）；`previous_response_id` 的读取侧是同步的——调用方点名了一段具体对话，必须在这次请求内得到确切答案（未知 id 答 400，控制面不可达答 503），而不能因为一次后台写入还在路上就悄悄给出一段更短的历史。详见 [Gateway README「Responses 持久会话」](../aiServeWeaveGateway/README.md#responses-持久会话p2)。
 
 未配置本控制面（`-control-plane-addr` 为空）时，`store`/`previous_response_id` 的行为与本功能存在之前完全一样：均被拒绝。已知缺口：无自动保留期清理（`response_turns` 会话内容可能包含长期 Prompt，目前无过期回收，与 `request_logs`/产物保留期清理不同）；未接入真实 PostgreSQL/MySQL 的 live 测试验证双数据库迁移（默认测试套件与 `memstore` 等价单元测试已通过即视为完成，与 P09 新增表同一先例）。
+
+## 租户 Agent AI 服务与模型目录
+
+`GET /admin/v1/models` 使用租户会话认证，允许 owner/admin/member 读取连接到 `Fleet.Gateways` 第一个 Gateway 的 Agent 所上报的服务与模型，不使用 Gateway 的 `local_runtimes`。接口与平台机群 API 分开，显式投影为 `{collected_at, partial, services: [{agent_id, service_id, node_online, kind, state, version, models: [{id, capabilities}]}]}`；仅公开 Agent 标识与其服务 ID 来区分上报来源；不返回 Gateway 副本标识、内部地址、凭据或自由诊断文本，也不读取任何租户的 Job/用量数据。`node_online` 表示 Agent 连接状态；离线 Agent 保留最近一次上报，并由 Console 标注为历史观测。目录共享给所有已登录租户；它不是租户可调度模型的授权目录。Gateway 读取失败保留 `partial=true` 并返回空 services，Console 将其显示为读取失败；未配置 Fleet 时不挂载端点。客户端不能选择其他 Gateway 或指定租户。平台令牌不能代替租户会话读取此接口，原 `/operator/v1/nodes` 仍只对平台运维开放。
