@@ -380,6 +380,13 @@ func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		h.nativeChat(w, r, req, raw, start)
 		return
 	}
+	var limitParameters []string
+	if req.MaxTokens != nil {
+		limitParameters = append(limitParameters, "max_tokens")
+	}
+	if req.MaxCompletionTokens != nil {
+		limitParameters = append(limitParameters, "max_completion_tokens")
+	}
 	if req.MaxTokens == nil {
 		req.MaxTokens = req.MaxCompletionTokens
 	}
@@ -390,18 +397,19 @@ func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if req.Stream {
-		h.chatStream(w, r, canonical, start)
+		h.chatStream(w, r, canonical, start, limitParameters)
 		return
 	}
-	h.chatNonStream(w, r, canonical, start)
+	h.chatNonStream(w, r, canonical, start, limitParameters)
 }
 
-func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
+func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time, limitParameters []string) {
 	resp, candidate, err := h.sched.Chat(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
 	}
+	writeOutputLimitWarning(w, candidate, limitParameters...)
 
 	body := chatCompletionResponse{
 		ID:      resp.ID,
@@ -436,13 +444,14 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, canonic
 	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointChat, canonical.Model)
 }
 
-func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
+func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time, limitParameters []string) {
 	stream, candidate, err := h.sched.ChatStream(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
 	}
 	defer stream.Close()
+	writeOutputLimitWarning(w, candidate, limitParameters...)
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

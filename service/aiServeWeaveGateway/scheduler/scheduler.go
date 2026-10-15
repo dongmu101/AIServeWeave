@@ -34,10 +34,14 @@ const (
 )
 
 // Candidate is the (node, runtime instance) pair a request was dispatched
-// to, kept around so a caller can log or attribute the response to it.
+// to, kept around so a caller can attribute the response and identify backend compatibility.
+// Candidate 记录实际派发的节点与运行时，供调用方归属响应并识别后端兼容行为。
 type Candidate struct {
 	NodeID    string
 	RuntimeID string
+	// Kind identifies the selected backend, including after a retry to another node.
+	// Kind 标识实际选中的后端类型，包括重试切换节点后的类型。
+	Kind runtime.Kind
 	// Model is the runtime model id this candidate serves the request as. It
 	// differs from what the client asked for whenever a routing alias was
 	// resolved, and it is what the request is rewritten to before dispatch —
@@ -585,7 +589,7 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 			if !eligible(snap) {
 				continue
 			}
-			candidate := Candidate{NodeID: node.NodeID, RuntimeID: snap.Descriptor.ID, Model: target.RuntimeModel}
+			candidate := Candidate{NodeID: node.NodeID, RuntimeID: snap.Descriptor.ID, Kind: snap.Descriptor.Kind, Model: target.RuntimeModel}
 			if !s.breakers.eligible(candidate, now) {
 				continue
 			}

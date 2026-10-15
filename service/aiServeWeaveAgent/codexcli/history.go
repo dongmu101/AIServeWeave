@@ -18,13 +18,18 @@ type chatInput struct {
 }
 
 // prepareChat preserves ordered message and tool history without prompt flattening.
+// Positive output limits are advisory: app-server cannot enforce them.
 // prepareChat 保留有序消息及工具历史，不把工具结果拼成普通提示词。
+// 正数输出上限仅作兼容接收：app-server 无法执行该上限。
 func prepareChat(req runtime.ChatRequest) (chatInput, error) {
 	out := chatInput{allowed: map[string]bool{}, tools: []any{}}
 	if len(req.Messages) == 0 || len(req.Messages) > 2048 || len(req.Tools) > 128 || len(req.Model) > 256 {
 		return out, ErrConfig
 	}
-	if req.Temperature != nil || req.TopP != nil || req.MaxTokens != nil || req.Seed != nil || len(req.Stop) > 0 || len(req.Extra) > 0 {
+	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
+		return out, ErrConfig
+	}
+	if req.Temperature != nil || req.TopP != nil || req.Seed != nil || len(req.Stop) > 0 || len(req.Extra) > 0 {
 		return out, errUnsupported
 	}
 	if req.ToolChoice != "" && req.ToolChoice != "auto" && req.ToolChoice != "none" {

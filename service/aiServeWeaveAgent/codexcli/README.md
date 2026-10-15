@@ -16,7 +16,22 @@ runtimes:
 
 每个请求启动独立临时进程和 ephemeral thread，经公开 `thread/inject_items` 保留消息角色、function_call 的 call_id 和 function_call_output 的结果，不把工具结果伪装成用户提示词。历史完整注入后以空 input 启动回合；首次动态工具回调转换成 runtime.ToolCall，返回调用方后终止整个进程组。下一轮重新注入完整历史继续，Agent 不保存跨请求线程映射。
 
-支持文本 Chat、ChatStream、Responses SSE、客户端工具及 JSON Schema 输出。工具声明和历史由 Gateway 统一转换，包含 namespace/custom 工具；additional_tools 的定义合并后在当前生成中立即可用，其历史位置和延迟加载不保留。每次响应最多一个工具调用，不声明并行工具能力。图片/音频/文件输入、嵌入、重排、采样/最大输出 token 参数、强制工具选择和原生托管工具均明确拒绝。沿用 Gateway 的 store/previous_response_id 边界：需配置控制面，否则客户端必须携带完整历史。
+支持文本 Chat、ChatStream、Responses SSE、客户端工具及 JSON Schema 输出。工具声明和历史由 Gateway 统一转换，包含 namespace/custom 工具；additional_tools 的定义合并后在当前生成中立即可用，其历史位置和延迟加载不保留。每次响应最多一个工具调用，不声明并行工具能力。图片/音频/文件输入、嵌入、重排、采样参数、强制工具选择和原生托管工具均明确拒绝。最大输出 token 参数的兼容行为见下节。沿用 Gateway 的 store/previous_response_id 边界：需配置控制面，否则客户端必须携带完整历史。
+
+## Harness 与输出上限兼容
+
+DeepSeek Harness 可以直接使用 `http://127.0.0.1:8080/v1`、OpenAI Chat Completions 和 Agent 上报的真实模型 ID，无需切换 Responses 或关闭客户端自动添加的输出上限。Codex app-server 不提供最大输出 token 控制，AIServeWeave 因此将正数输出上限作为兼容参数接收，**不执行该上限，也不保证输出或计费 token 数不超过请求值**；零或负数仍返回 400。
+
+Gateway 在 Codex 成功响应（JSON、SSE 或 NDJSON）的首部中明确报告：
+
+```http
+X-Gateway-Ignored-Parameters: max_completion_tokens
+Warning: 299 AIServeWeave "Codex compatibility mode: output token limit is not enforced"
+```
+
+被忽略参数名称使用调用方的实际字段：Chat 的 `max_tokens` / `max_completion_tokens`（同时提供则都列出）、Responses 的 `max_output_tokens`、Anthropic Messages 的 `max_tokens`、Ollama 的 `options.num_predict`。未发送上限时不添加提示。提示取决于实际派发成功的后端，不通过模型名前缀猜测；其他后端继续收到原有上限，不添加 Codex 提示。Agent 同时记录不含请求内容的固定警告；生成的结束原因与用量保持真实后端结果，不伪造 `length` 或截断工具参数。
+
+需要严格输出 token 上限的客户端应选择能够执行该限制的后端。本兼容不放开 `temperature`、`top_p`、`seed`、`stop` 等参数。更新此行为需要同时部署新版 Gateway（HTTP 提示）和 Agent（参数接收）；仅重启旧二进制不会生效。上游限制见 [OpenAI 官方说明](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。
 
 单帧、注入历史及生成文本各最多 1 MiB，每请求最多 2048 条消息、128 个工具、10000 个 RPC 帧；模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制；流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
 
@@ -30,6 +45,8 @@ AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveAgent/codexcli -run '^TestLiveMo
 # 其余显式真实测试会使用本机账户额度
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveAgent/codexcli -run TestLiveCallerToolRoundTrip -v
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveGateway/e2e -run TestLiveCodexClientThroughTunnel -v
+# Harness 原始 Chat 参数与真实 Codex 推理，验证输出上限兼容提示
+AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveGateway/e2e -run '^TestLiveCodexOutputLimitCompatibility$' -v -count=1
 ```
 
 离线测试覆盖有界 stdio、跨线程/回合拒绝、禁止本机工具与审批、文本 SSE、工具结果续接、Gateway 鉴权、真实回环 mTLS、并发用户隔离、注入时钟期限、并发限额及进程回收。旧实验记录只证明其合成场景。

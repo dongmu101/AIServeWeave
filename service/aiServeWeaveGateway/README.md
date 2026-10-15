@@ -616,6 +616,10 @@ aiserveweave-gateway \
 
 公开契约见 `common/modelroute`；带宽/内存/历史容量上限和控制面 API 见 [ControlPlane README](../aiServeWeaveControlPlane/README.md#模型路由发布p02)。
 
+## Codex CLI 输出上限兼容
+
+Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Responses 的 `max_output_tokens` 会被接收，但 Codex 不执行该上限。成功响应通过 `X-Gateway-Ignored-Parameters` 和 `Warning` 首部明确提示；JSON 与流式响应一致，未提供上限或实际选中其他后端时不添加提示。其他后端的上限照常传递，采样参数仍按后端能力校验。完整范围、其他前门字段及升级要求见 [Codex 输出上限兼容](../aiServeWeaveAgent/codexcli/README.md#harness-与输出上限兼容)。
+
 ## Claude Code 原生 Messages
 
 Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：Gateway 将文本、前置 system/developer 和 function 工具转换为 Messages 语义，沿用下述身份校验、Redis 认领与原节点绑定。`finish_reason` 映射为 `stop`、`length` 或 `tool_calls`；流式包含工具索引与参数增量，成功结束发送 `[DONE]`，`stream_options.include_usage` 可请求末尾用量帧。其他 Chat 后端（包括 Codex）仍走原来的 Chat 隧道。

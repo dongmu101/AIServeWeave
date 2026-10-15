@@ -106,10 +106,13 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 //
 // responsesOnce 服务一次非流式响应。
 func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req responsesRequest, canonical runtime.ChatRequest, toolset responsesToolset, start time.Time, responseID, tenantID string, ownMessages []runtime.ChatMessage) {
-	resp, _, err := h.sched.Chat(r.Context(), canonical)
+	resp, candidate, err := h.sched.Chat(r.Context(), canonical)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
+	}
+	if req.MaxOutputTokens != nil {
+		writeOutputLimitWarning(w, candidate, "max_output_tokens")
 	}
 
 	body := req.render(responseID, resp.Model, h.clock.Now())
@@ -265,6 +268,9 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 		return
 	}
 	defer stream.Close()
+	if req.MaxOutputTokens != nil {
+		writeOutputLimitWarning(w, candidate, "max_output_tokens")
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
