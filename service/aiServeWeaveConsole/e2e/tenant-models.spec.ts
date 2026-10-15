@@ -66,12 +66,12 @@ test("many Agents use bounded service and model pages with full-snapshot search"
   } }));
   await page.goto("/console/models");
   const table = page.getByRole("table", { name: "Agent AI 服务列表" });
-  await expect(table.getByRole("row")).toHaveCount(26);
-  await page.getByRole("navigation", { name: "AI 服务分页" }).getByRole("button", { name: "下一页" }).click();
+  await expect(table.locator(":scope > tbody > tr")).toHaveCount(25);
+  await page.getByRole("navigation", { name: "Agent 分页" }).getByRole("button", { name: "下一页" }).click();
   await expect(table.getByText("agent-0025", { exact: true })).toBeVisible();
   const search = page.getByRole("textbox", { name: "搜索 AI 服务或模型" });
   await search.fill("agent-0999");
-  await expect(table.getByRole("row")).toHaveCount(2);
+  await expect(table.locator(":scope > tbody > tr")).toHaveCount(1);
   await page.getByRole("button", { name: "查看模型", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByRole("listitem")).toHaveCount(25);
@@ -83,4 +83,45 @@ test("many Agents use bounded service and model pages with full-snapshot search"
   await page.keyboard.press("Escape");
   await page.getByLabel("仅显示在线 Agent").check();
   await expect(page.getByText("没有符合搜索条件的服务或模型", { exact: true })).toBeVisible();
+});
+
+for (const width of [1440, 390, 320]) {
+  test(`one parent row per Agent with service subtables at ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await page.route("**/api/admin/admin/v1/models", route => route.fulfill({ json: {
+      ...catalog, services: [catalog.services[0],
+        { ...catalog.services[0], service_id: "vllm-8000", kind: "vllm", models: [{ id: "second-service-model", capabilities: {} }] },
+        { ...catalog.services[0], agent_id: "agent-02", service_id: "ollama-remote", models: [] },
+      ],
+    } }));
+    await page.goto("/console/models");
+    const parent = page.getByRole("table", { name: "Agent AI 服务列表", exact: true });
+    await expect(parent.locator(":scope > tbody > tr")).toHaveCount(2);
+    await expect(parent.getByText("agent-01", { exact: true })).toHaveCount(1);
+    const child = page.getByRole("table", { name: "agent-01 的 AI 服务", exact: true });
+    await expect(child.locator(":scope > tbody > tr")).toHaveCount(2);
+    await expect(child.getByText("ollama-11434", { exact: true })).toBeVisible();
+    await expect(child.getByText("vllm-8000", { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
+    await page.screenshot({ path: test.info().outputPath(`agent-subtables-${width}.png`), fullPage: true });
+    await page.getByRole("textbox", { name: "搜索 AI 服务或模型" }).fill("second-service-model");
+    await expect(parent.locator(":scope > tbody > tr")).toHaveCount(1);
+    await expect(child.locator(":scope > tbody > tr")).toHaveCount(1);
+    await expect(child.getByText("vllm-8000", { exact: true })).toBeVisible();
+  });
+}
+
+test("one Agent's service pagination never duplicates its parent row", async ({ page }) => {
+  await page.route("**/api/admin/admin/v1/models", route => route.fulfill({ json: {
+    ...catalog, services: Array.from({ length: 30 }, (_, index) => ({ ...catalog.services[0], service_id: `service-${index}` })),
+  } }));
+  await page.goto("/console/models");
+  const parent = page.getByRole("table", { name: "Agent AI 服务列表", exact: true });
+  const child = page.getByRole("table", { name: "agent-01 的 AI 服务", exact: true });
+  await expect(parent.locator(":scope > tbody > tr")).toHaveCount(1);
+  await expect(child.locator(":scope > tbody > tr")).toHaveCount(25);
+  await page.getByRole("navigation", { name: "agent-01 的服务分页" }).getByRole("button", { name: "下一页" }).click();
+  await expect(parent.locator(":scope > tbody > tr")).toHaveCount(1);
+  await expect(child.locator(":scope > tbody > tr")).toHaveCount(5);
+  await expect(child.getByText("service-25", { exact: true })).toBeVisible();
 });
