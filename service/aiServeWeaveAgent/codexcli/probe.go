@@ -157,6 +157,16 @@ func probeWithEnv(ctx context.Context, cfg Config, env []string) (Report, error)
 }
 
 func accountInstructions(env []string) []string {
+	codexDir := codexHomeDir(env)
+	if !filepath.IsAbs(codexDir) {
+		return nil
+	}
+	return []string{filepath.Join(codexDir, "AGENTS.md"), filepath.Join(codexDir, "AGENTS.override.md")}
+}
+
+// codexHomeDir resolves the account directory the CLI uses: CODEX_HOME, else HOME/.codex.
+// codexHomeDir 解析 CLI 使用的账户目录：优先 CODEX_HOME，否则为 HOME/.codex。
+func codexHomeDir(env []string) string {
 	var home, codexDir string
 	for _, entry := range env {
 		key, value, ok := strings.Cut(entry, "=")
@@ -173,17 +183,23 @@ func accountInstructions(env []string) []string {
 	if codexDir == "" && home != "" {
 		codexDir = filepath.Join(home, ".codex")
 	}
-	if !filepath.IsAbs(codexDir) {
-		return nil
-	}
-	return []string{filepath.Join(codexDir, "AGENTS.md"), filepath.Join(codexDir, "AGENTS.override.md")}
+	return codexDir
 }
 
-func appServerArgs(dir string) []string {
+func appServerArgs(dir string) []string { return serverArgs(dir, false) }
+
+// serverArgs builds the isolated app-server command line. image leaves only
+// the hosted image_generation tool enabled; every other host tool stays off.
+// serverArgs 构造隔离的 app-server 命令行。image 只额外保留托管的
+// image_generation 工具，其余宿主工具一律关闭。
+func serverArgs(dir string, image bool) []string {
 	args := []string{"app-server", "--listen", "stdio://"}
 	// Keep code_mode_host available: disabling it also hides client dynamic tools.
 	// 保留 code_mode_host：关闭它也会让客户端动态工具不可见。
 	for _, feature := range []string{"shell_tool", "unified_exec", "shell_snapshot", "multi_agent", "apps", "plugins", "hooks", "skill_search", "skill_mcp_dependency_install", "image_generation", "view_image", "code_mode"} {
+		if image && feature == "image_generation" {
+			continue
+		}
 		args = append(args, "--disable", feature)
 	}
 	args = append(args, "--enable", "skip_host_skill_discovery")

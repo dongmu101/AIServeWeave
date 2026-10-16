@@ -15,6 +15,7 @@ const navigation = [
   { href: "/operator/routes", label: "模型路由" },
   { href: "/operator/workflow-templates", label: "工作流模板" },
   { href: "/operator/workflows", label: "发布状态" },
+  { href: "/operator/api-docs", label: "API 文档" },
   { href: "/operator/comfyui-managed", label: "ComfyUI Managed" },
   { href: "/operator/model-pulls", label: "模型拉取" },
   { href: "/operator/audit", label: "运维审计" },

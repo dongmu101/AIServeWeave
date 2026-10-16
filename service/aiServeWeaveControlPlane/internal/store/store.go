@@ -761,6 +761,48 @@ type AlertRuleUpdate struct {
 	Enabled            bool
 }
 
+// APIDocs persists the tenant-facing API reference. Every operator write is a
+// compare-and-set on Version committed in one transaction with its audit
+// row; seed refreshes are idempotent single statements, safe for several
+// replicas starting at once.
+//
+// APIDocs 持久化面向租户的 API 参考文档。每次运维写入都是对 Version 的 CAS，与其
+// 审计行在同一事务内提交；种子刷新是幂等的单条语句，多个副本同时启动也安全。
+type APIDocs interface {
+	// ListAPIDocs reads every document without its ContentJSON, optionally
+	// only published ones. The table is a small catalogue, not request
+	// volume, so it is not paginated.
+	//
+	// ListAPIDocs 读取全部文档（不含 ContentJSON），可选只读已发布的。这张表是
+	// 一份小型目录而非请求量级的数据，因此不分页。
+	ListAPIDocs(ctx context.Context, publishedOnly bool) ([]model.APIDoc, error)
+	// GetAPIDoc reads one document whole. / GetAPIDoc 完整读取一份文档。
+	GetAPIDoc(ctx context.Context, slug string) (model.APIDoc, error)
+	// CreateAPIDoc inserts doc; ErrConflict if the slug exists.
+	// / CreateAPIDoc 插入 doc；slug 已存在时返回 ErrConflict。
+	CreateAPIDoc(ctx context.Context, doc *model.APIDoc, audit *model.AuditLog) error
+	// UpdateAPIDoc replaces every mutable column of doc.Slug if its Version
+	// is still expected, setting Version to expected+1. ErrNotFound if the
+	// slug is gone, ErrConflict if the version moved.
+	//
+	// UpdateAPIDoc 在 doc.Slug 的 Version 仍为 expected 时替换其全部可变列，并把
+	// Version 置为 expected+1。slug 不存在返回 ErrNotFound，版本已变返回 ErrConflict。
+	UpdateAPIDoc(ctx context.Context, doc *model.APIDoc, expected int64, audit *model.AuditLog) error
+	// DeleteAPIDoc removes slug if its Version is still expected, with the
+	// same error vocabulary as UpdateAPIDoc.
+	//
+	// DeleteAPIDoc 在 slug 的 Version 仍为 expected 时删除它，错误语义与
+	// UpdateAPIDoc 相同。
+	DeleteAPIDoc(ctx context.Context, slug string, expected int64, audit *model.AuditLog) error
+	// SeedAPIDoc inserts doc if the slug is absent, or refreshes it if the
+	// stored row is still seed-sourced with an older SeedRevision. It
+	// reports whether a row changed. A refresh never touches status.
+	//
+	// SeedAPIDoc 在 slug 不存在时插入 doc；若已存储行仍来源于种子且 SeedRevision
+	// 更旧，则刷新它。返回是否有行发生变化。它从不改动 status。
+	SeedAPIDoc(ctx context.Context, doc *model.APIDoc) (bool, error)
+}
+
 // Store is every persistence capability the service has, for wiring at
 // startup. Handlers and logic take the narrow interfaces above, never this.
 //
@@ -781,4 +823,5 @@ type Store interface {
 	RequestLogs
 	UsageRecords
 	Alerting
+	APIDocs
 }

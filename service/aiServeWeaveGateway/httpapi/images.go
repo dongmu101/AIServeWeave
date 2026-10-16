@@ -149,6 +149,18 @@ type imagesRequest struct {
 	//
 	// 以下字段会被拒绝。它需要本端点不具备的东西——见 unsupported。
 	N *int `json:"n,omitempty"`
+
+	// Output controls the inference path cannot pass to its backend, so it
+	// refuses them by name; the ComfyUI path keeps ignoring them as before.
+	//
+	// 推理路径无法把这些输出控制传给后端，因此按名字拒绝；ComfyUI 路径仍像以前
+	// 一样忽略它们。
+	Background        string `json:"background,omitempty"`
+	OutputFormat      string `json:"output_format,omitempty"`
+	OutputCompression *int   `json:"output_compression,omitempty"`
+	Moderation        string `json:"moderation,omitempty"`
+	PartialImages     *int   `json:"partial_images,omitempty"`
+	Stream            bool   `json:"stream,omitempty"`
 }
 
 // unsupported names the field this endpoint cannot honour, or empty when the
@@ -190,8 +202,9 @@ type imagesResponse struct {
 }
 
 type imagesDataJSON struct {
-	B64JSON string `json:"b64_json,omitempty"`
-	URL     string `json:"url,omitempty"`
+	B64JSON       string `json:"b64_json,omitempty"`
+	URL           string `json:"url,omitempty"`
+	RevisedPrompt string `json:"revised_prompt,omitempty"`
 }
 
 // templateDeclares reports whether tpl declares an input named name, for

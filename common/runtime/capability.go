@@ -78,6 +78,13 @@ const (
 	// 不同——后者为独立的 /v1/audio/transcriptions 端点门禁，而不是内联聊天
 	// 内容；本仓库目前对这两项能力都没有任何适配器发布。
 	CapabilityAudioInput Capability = "audio_input"
+	// CapabilityImageGeneration gates ImageRuntime.GenerateImage. A model
+	// that carries it is an image model and carries no chat capability, so
+	// chat routing and image routing never select each other's models.
+	//
+	// CapabilityImageGeneration 为 ImageRuntime.GenerateImage 门禁。带有它的模型
+	// 是图像模型，不带任何聊天能力，因此聊天路由与图像路由永远不会选中对方的模型。
+	CapabilityImageGeneration Capability = "image_generation"
 )
 
 // CapabilitySource records how a piece of capability evidence was obtained,

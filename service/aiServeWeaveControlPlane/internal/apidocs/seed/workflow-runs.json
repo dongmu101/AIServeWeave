@@ -1,0 +1,226 @@
+{
+  "slug": "workflow-runs",
+  "category": "工作流与任务",
+  "category_order": 50,
+  "sort_order": 10,
+  "title": "提交工作流运行",
+  "method": "POST",
+  "path": "/v1/workflows/{workflow_id}/runs",
+  "summary": "按已发布的工作流模板绑定输入并异步提交执行，受理后立即返回 202 与任务对象。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "异步执行：受理即返回 202 和 job_id，初始状态为 queued，之后通过状态查询或 SSE 事件流跟踪进度",
+      "只需提供模板声明的输入，按名称绑定；未声明的输入名会被拒绝，而不是被静默忽略",
+      "string / integer / number / boolean 输入按模板声明的类型与上下限严格校验，未提供时使用模板默认值",
+      "支持 multipart/form-data 在同一次请求里上传图片、视频、音频等文件输入",
+      "对本租户不可见的工作流与不存在的工作流一样返回 404"
+    ],
+    "notice": "JSON 请求体上限 1 MiB；multipart 请求整体（含全部文件）上限 200 MiB。带文件输入的请求在一次调用内完成上传与提交，失败时请整体重新提交。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。API Key 在控制台创建，只能访问本租户的工作流与任务。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": false,
+        "default": "application/json",
+        "description": "application/json（仅标量输入）或 multipart/form-data（含文件输入）。缺失或为其他值时按 JSON 解析。",
+        "enum": [
+          "application/json",
+          "multipart/form-data"
+        ]
+      }
+    ],
+    "path_params": [
+      {
+        "name": "workflow_id",
+        "type": "string",
+        "required": true,
+        "description": "要运行的工作流 ID，即控制台工作流页面中显示的模板 ID。"
+      }
+    ],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "inputs",
+        "type": "object",
+        "required": false,
+        "description": "输入名到取值的映射，只能包含模板声明过的非文件输入。未提供的输入使用模板默认值；必填且没有默认值的输入缺失时返回 400。",
+        "children": [
+          {
+            "name": "{input_name}",
+            "type": "string | integer | number | boolean",
+            "required": false,
+            "description": "取值必须与模板声明的类型一致：string 为 JSON 字符串，长度不超过模板声明的 max_length（未声明时 8192 字节）；integer 为 JSON 整数；number 为有限数值（不接受 NaN / Infinity）；boolean 为 true / false。integer 与 number 还需落在模板声明的 min / max 范围内（含端点）。file 类型输入不能出现在这里，须以文件上传。"
+          }
+        ]
+      },
+      {
+        "name": "idempotency_key",
+        "type": "string",
+        "required": false,
+        "description": "可选的去重键。同一键的重复提交若被分配到同一执行端，会复用已有的运行而不再执行一次；每次请求仍会返回新的 job_id。去重为尽力而为，不保证跨执行端生效。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true,
+        "description": "任务 ID，以 `job_` 开头，由网关生成。"
+      },
+      {
+        "name": "workflow_id",
+        "type": "string",
+        "required": true,
+        "description": "提交时使用的工作流 ID。"
+      },
+      {
+        "name": "status",
+        "type": "string",
+        "required": true,
+        "description": "任务状态。succeeded / failed / cancelled 为终态，到达后不再变化。",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ]
+      },
+      {
+        "name": "created_at",
+        "type": "string",
+        "required": true,
+        "description": "任务创建时间，RFC 3339 格式（UTC）。"
+      },
+      {
+        "name": "updated_at",
+        "type": "string",
+        "required": true,
+        "description": "任务状态最近一次更新的时间，RFC 3339 格式（UTC）。"
+      },
+      {
+        "name": "queue_position",
+        "type": "integer",
+        "required": false,
+        "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+      },
+      {
+        "name": "error",
+        "type": "string",
+        "required": false,
+        "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl -X POST \"{{BASE_URL}}/v1/workflows/txt2img-basic/runs\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"inputs\": {\n      \"prompt\": \"a lighthouse on a cliff at sunset, oil painting\",\n      \"seed\": 42,\n      \"steps\": 30\n    },\n    \"idempotency_key\": \"order-20261016-0001\"\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\n\nresp = requests.post(\n    f\"{BASE_URL}/v1/workflows/txt2img-basic/runs\",\n    headers={\"Authorization\": f\"Bearer {API_KEY}\"},\n    json={\n        \"inputs\": {\n            \"prompt\": \"a lighthouse on a cliff at sunset, oil painting\",\n            \"seed\": 42,\n            \"steps\": 30,\n        },\n        \"idempotency_key\": \"order-20261016-0001\",\n    },\n    timeout=60,\n)\nresp.raise_for_status()  # 成功为 202\njob = resp.json()\nprint(job[\"job_id\"], job[\"status\"])\n\n# 带文件输入时改用 multipart/form-data：\n# import json\n# with open(\"photo.png\", \"rb\") as f:\n#     resp = requests.post(\n#         f\"{BASE_URL}/v1/workflows/img2img-basic/runs\",\n#         headers={\"Authorization\": f\"Bearer {API_KEY}\"},\n#         data={\"inputs\": json.dumps({\"inputs\": {\"prompt\": \"turn it into a watercolor\"}})},\n#         files={\"init_image\": (\"photo.png\", f, \"image/png\")},\n#     )"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\n\nconst resp = await fetch(`${BASE_URL}/v1/workflows/txt2img-basic/runs`, {\n  method: \"POST\",\n  headers: {\n    Authorization: `Bearer ${API_KEY}`,\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    inputs: {\n      prompt: \"a lighthouse on a cliff at sunset, oil painting\",\n      seed: 42,\n      steps: 30,\n    },\n    idempotency_key: \"order-20261016-0001\",\n  }),\n});\nif (resp.status !== 202) throw new Error(JSON.stringify(await resp.json()));\nconst job = await resp.json();\nconsole.log(job.job_id, job.status);\n\n// 带文件输入时改用 FormData（不要手动设置 Content-Type）：\n// const form = new FormData();\n// form.append(\"inputs\", JSON.stringify({ inputs: { prompt: \"turn it into a watercolor\" } }));\n// form.append(\"init_image\", fileInput.files[0]);\n// await fetch(`${BASE_URL}/v1/workflows/img2img-basic/runs`, {\n//   method: \"POST\", headers: { Authorization: `Bearer ${API_KEY}` }, body: form,\n// });"
+      },
+      {
+        "lang": "curl",
+        "label": "cURL（文件输入）",
+        "code": "# 文件输入：表单字段 inputs 放 JSON 请求体，文件分片的字段名就是模板里的文件输入名\ncurl -X POST \"{{BASE_URL}}/v1/workflows/img2img-basic/runs\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -F 'inputs={\"inputs\":{\"prompt\":\"turn it into a watercolor\",\"denoise\":0.6}}' \\\n  -F \"init_image=@./photo.png\""
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 202,
+        "label": "已受理",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\"\n}"
+      },
+      {
+        "status": 400,
+        "label": "输入校验失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"input steps must be at most 50\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_input\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "请求体无法解析",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the request body is not valid JSON, or is over the size limit\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "工作流不存在",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested workflow is not registered on this deployment\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"workflow_not_found\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "暂无可用执行端",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no connected node can run workflows right now\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"workflow_backend_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出租户配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "执行端不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "输入绑定规则",
+        "body": "每个工作流模板声明一组具名输入，类型为 string、integer、number、boolean 或 file 之一，并可声明是否必填、默认值、字符串最大长度（max_length）和数值上下限（min / max）。可用的工作流及其输入声明可在控制台的工作流页面查看。\n\ninputs 里出现模板未声明的名字时整个请求被拒绝；同一个输入名只能出现在 JSON 取值或文件分片其中一处。\n\nstring 的长度按字节计算；integer 必须是整数，传 3.5 会被拒绝；数值范围两端都是闭区间。\n\nfile 类型输入没有默认值：非必填且未上传时保持模板原样，必填且未上传时返回 400。"
+      },
+      {
+        "title": "文件输入（multipart/form-data）",
+        "body": "模板包含 file 类型输入时，用 multipart/form-data 提交：\n\n表单字段 inputs：值是一段 JSON 文本，结构与 JSON 请求体完全相同，即 {\"inputs\": {...}, \"idempotency_key\": \"...\"}，而不是只放输入映射。没有标量输入时可以省略。\n\n文件分片：字段名就是模板中 file 类型输入的名称，必须带文件名；同一字段名有多个文件时只使用第一个。除 inputs 外的其他非文件表单字段会被忽略。\n\n文件扩展名须在允许列表内（不区分大小写），默认允许 .png .jpg .jpeg .webp .gif .bmp .mp4 .webm .mov .mp3 .wav .ogg .flac，具体以部署配置为准；扩展名不允许时返回 400 invalid_request。\n\n网关还会检查文件开头的实际内容是否与扩展名的类别（图片 / 视频 / 音频）一致，例如改名为 .png 的非图片文件会返回 400 invalid_input。",
+        "code": "# 文件输入：表单字段 inputs 放 JSON 请求体，文件分片的字段名就是模板里的文件输入名\ncurl -X POST \"{{BASE_URL}}/v1/workflows/img2img-basic/runs\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -F 'inputs={\"inputs\":{\"prompt\":\"turn it into a watercolor\",\"denoise\":0.6}}' \\\n  -F \"init_image=@./photo.png\"",
+        "code_lang": "bash"
+      },
+      {
+        "title": "获取结果的完整流程",
+        "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时，提交请求可能会短暂等待后才返回；若仍无空闲容量则返回 429，稍后重试即可。"
+      },
+      {
+        "title": "错误码",
+        "body": "400 invalid_request：请求体不是合法 JSON、超出大小限制、multipart 格式错误、inputs 表单字段不是合法 JSON，或文件扩展名不在允许列表内。\n\n400 invalid_input：输入未声明、类型不符、超出长度或数值范围、必填输入缺失，或文件内容与扩展名不符。message 形如 \"input <名称> <原因>\"。\n\n404 workflow_not_found：工作流不存在或对本租户不可见。\n\n404 workflow_backend_not_found：当前没有可运行工作流的执行端在线。\n\n429 rate_limited / backpressure：执行端容量已满，请稍后重试。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+      },
+      {
+        "title": "任务状态",
+        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+      },
+      {
+        "title": "错误格式",
+        "body": "所有错误都以 OpenAI 兼容的 JSON 结构返回，error.type 表示错误大类，error.code 是可用于程序判断的错误码，error.message 为面向开发者的英文说明。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请一并提供。",
+        "code": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}",
+        "code_lang": "json"
+      }
+    ]
+  }
+}

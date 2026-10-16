@@ -42,6 +42,19 @@ import (
 // /v1/workflows/{id}/runs Job 正确竞争、排队（STATUS.md 的 P2 有界排队），
 // 而不是插到它们前面。
 func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
+	// The body is decoded before the ComfyUI checks so a model some node
+	// published as an image model can take the inference path. A decode
+	// failure is still reported exactly where the ComfyUI path always did.
+	//
+	// 请求体在 ComfyUI 检查之前解码，使某个节点作为图像模型发布的 model 能走推理
+	// 路径。解码失败仍在 ComfyUI 路径原来的位置报告。
+	var req imagesRequest
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRunRequestBytes)
+	decodeErr := json.NewDecoder(r.Body).Decode(&req)
+	if decodeErr == nil && req.Model != "" && len(h.sched.ImageCandidates(req.Model)) > 0 {
+		h.inferenceImages(w, r, req)
+		return
+	}
 	if h.imagesWorkflowID == "" {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "endpoint_not_configured",
 			"image generation is not configured on this deployment")
@@ -63,9 +76,7 @@ func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var req imagesRequest
-	r.Body = http.MaxBytesReader(w, r.Body, MaxRunRequestBytes)
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if decodeErr != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json",
 			"the request body is not valid JSON, or is over the size limit")
 		return

@@ -1,0 +1,287 @@
+{
+  "slug": "ollama-generate",
+  "category": "Ollama 兼容",
+  "category_order": 60,
+  "sort_order": 20,
+  "title": "Ollama 文本生成",
+  "method": "POST",
+  "path": "/api/generate",
+  "summary": "兼容 Ollama /api/generate 的单轮生成接口，默认以 NDJSON 流式返回。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 Ollama 原生 /api/generate 的请求与响应格式",
+      "prompt 与可选的 system 组成一次单轮对话",
+      "与 Ollama 一致，stream 缺省为 true，流式响应为 NDJSON",
+      "不支持 format、images、context、raw、template、suffix，传入即返回 400；响应也不返回 context",
+      "需要 Bearer API Key 鉴权"
+    ],
+    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "鉴权头，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型 ID，可通过 GET /v1/models 查看。"
+      },
+      {
+        "name": "prompt",
+        "type": "string",
+        "required": true,
+        "description": "输入提示词，不能为空。"
+      },
+      {
+        "name": "system",
+        "type": "string",
+        "required": false,
+        "description": "系统提示词，作为一条 system 消息放在 prompt 之前。"
+      },
+      {
+        "name": "stream",
+        "type": "boolean",
+        "required": false,
+        "default": "true",
+        "description": "是否流式返回。与 Ollama 一致，字段缺省时为 true；显式传 false 时一次性返回完整结果。"
+      },
+      {
+        "name": "options",
+        "type": "object",
+        "required": false,
+        "description": "采样参数。只识别下列字段，其余字段（如 num_ctx、num_gpu、mirostat 等）会被忽略。",
+        "children": [
+          {
+            "name": "temperature",
+            "type": "number",
+            "required": false,
+            "description": "采样温度。"
+          },
+          {
+            "name": "top_p",
+            "type": "number",
+            "required": false,
+            "description": "核采样概率阈值。"
+          },
+          {
+            "name": "num_predict",
+            "type": "integer",
+            "required": false,
+            "description": "最多生成的 Token 数。"
+          },
+          {
+            "name": "seed",
+            "type": "integer",
+            "required": false,
+            "description": "随机种子。"
+          },
+          {
+            "name": "stop",
+            "type": "string | array",
+            "required": false,
+            "description": "停止序列，可以是单个字符串或字符串数组。"
+          }
+        ]
+      },
+      {
+        "name": "keep_alive",
+        "type": "string | number",
+        "required": false,
+        "description": "为兼容 Ollama 客户端而接受，但不起作用。"
+      },
+      {
+        "name": "format",
+        "type": "string | object",
+        "required": false,
+        "description": "不支持，传入即返回 400。"
+      },
+      {
+        "name": "images",
+        "type": "array",
+        "required": false,
+        "description": "不支持，传入即返回 400。"
+      },
+      {
+        "name": "context",
+        "type": "array",
+        "required": false,
+        "description": "不支持（平台不保存续写上下文），传入即返回 400。"
+      },
+      {
+        "name": "raw",
+        "type": "boolean",
+        "required": false,
+        "description": "不支持，为 true 时返回 400。"
+      },
+      {
+        "name": "template",
+        "type": "string",
+        "required": false,
+        "description": "不支持，非空时返回 400。"
+      },
+      {
+        "name": "suffix",
+        "type": "string",
+        "required": false,
+        "description": "不支持，非空时返回 400。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型名称。"
+      },
+      {
+        "name": "created_at",
+        "type": "string",
+        "required": true,
+        "description": "响应生成时间，RFC 3339 格式（UTC，含纳秒）。"
+      },
+      {
+        "name": "response",
+        "type": "string",
+        "required": true,
+        "description": "生成的文本。流式时为本段增量，最后一行为空字符串。"
+      },
+      {
+        "name": "done",
+        "type": "boolean",
+        "required": true,
+        "description": "是否为最后一条。非流式响应恒为 true；流式时只有最后一行为 true。"
+      },
+      {
+        "name": "done_reason",
+        "type": "string",
+        "required": false,
+        "description": "结束原因，缺省为 stop。仅在 done 为 true 时出现。"
+      },
+      {
+        "name": "prompt_eval_count",
+        "type": "integer",
+        "required": false,
+        "description": "输入 Token 数。仅在 done 为 true 且有用量数据时出现。"
+      },
+      {
+        "name": "eval_count",
+        "type": "integer",
+        "required": false,
+        "description": "输出 Token 数。仅在 done 为 true 且有用量数据时出现。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/api/generate \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"system\": \"你是一名科普作者，回答简洁。\",\n    \"prompt\": \"为什么天空是蓝色的？\",\n    \"stream\": false\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import json\nimport requests\n\nwith requests.post(\n    \"{{BASE_URL}}/api/generate\",\n    headers={\"Authorization\": \"Bearer {{API_KEY}}\"},\n    json={\"model\": \"{{MODEL}}\", \"prompt\": \"为什么天空是蓝色的？\"},\n    stream=True,\n) as resp:\n    resp.raise_for_status()\n    for line in resp.iter_lines():\n        if not line:\n            continue\n        chunk = json.loads(line)\n        if \"error\" in chunk:\n            raise RuntimeError(chunk[\"error\"])\n        print(chunk[\"response\"], end=\"\", flush=True)\n        if chunk[\"done\"]:\n            print()\n            break"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const resp = await fetch(\"{{BASE_URL}}/api/generate\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    prompt: \"为什么天空是蓝色的？\",\n    stream: false,\n    options: { temperature: 0.3, num_predict: 200 },\n  }),\n});\nconst body = await resp.json();\nif (!resp.ok) throw new Error(typeof body.error === \"string\" ? body.error : body.error.message);\nconsole.log(body.response);"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功（stream=false）",
+        "content_type": "application/json",
+        "body": "{\n  \"model\": \"{{MODEL}}\",\n  \"created_at\": \"2026-10-16T08:30:12.345678901Z\",\n  \"response\": \"因为大气分子对短波长的蓝光散射更强（瑞利散射）。\",\n  \"done\": true,\n  \"done_reason\": \"stop\",\n  \"prompt_eval_count\": 26,\n  \"eval_count\": 24\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（流式，NDJSON）",
+        "content_type": "application/x-ndjson",
+        "body": "{\"model\": \"{{MODEL}}\", \"created_at\": \"2026-10-16T08:30:12.101Z\", \"response\": \"因为大气分子\", \"done\": false}\n{\"model\": \"{{MODEL}}\", \"created_at\": \"2026-10-16T08:30:12.150Z\", \"response\": \"对蓝光散射更强。\", \"done\": false}\n{\"model\": \"{{MODEL}}\", \"created_at\": \"2026-10-16T08:30:12.190Z\", \"response\": \"\", \"done\": true, \"done_reason\": \"stop\", \"prompt_eval_count\": 26, \"eval_count\": 12}"
+      },
+      {
+        "status": 400,
+        "label": "缺少 model 或 prompt",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"model and prompt are required\"\n}"
+      },
+      {
+        "status": 400,
+        "label": "传入了不支持的字段",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"context is not supported by this Ollama-compatible endpoint\"\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 缺失或无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the requested model is not available on any connected node\"\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出租户配额（响应带 Retry-After 头）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "暂无可用容量",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"no node had capacity for this request; retry shortly\"\n}"
+      },
+      {
+        "status": 502,
+        "label": "后端返回错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the backend returned an error\"\n}"
+      },
+      {
+        "status": 504,
+        "label": "请求超时",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the request timed out\"\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "流式响应",
+        "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，response 为本段增量文本；最后一行 done 为 true，response 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n流式过程中若发生错误，会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。"
+      },
+      {
+        "title": "与原生 Ollama 的差异",
+        "body": "1. 每次请求都是独立的单轮对话：不支持 context 续写，响应中也不返回 context 字段。需要多轮对话请使用 /api/chat。\n2. format、images、raw、template、suffix 不支持，传入时返回 400，错误信息会指出具体字段。\n3. 响应不含各类 *_duration 耗时字段；done_reason、prompt_eval_count、eval_count 没有值时整体省略。\n4. options 只识别 temperature、top_p、num_predict、seed、stop，其他选项被忽略；keep_alive 被接受但不起作用。\n5. 需要 Bearer API Key 鉴权。模型管理类端点（/api/tags、/api/pull 等）不支持，详见「Ollama 对话」页。"
+      },
+      {
+        "title": "错误码一览",
+        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+      },
+      {
+        "title": "鉴权与配额",
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+      }
+    ]
+  }
+}

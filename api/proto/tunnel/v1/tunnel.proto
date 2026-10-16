@@ -330,6 +330,7 @@ enum Operation {
   OPERATION_AUDIO_TRANSCRIBE = 12;       // transcription and translation share one operation; AudioTranscriptionRequest.task selects
   OPERATION_RERANK = 13;
   OPERATION_MESSAGES = 14;             // native Anthropic Messages events, not HTTP proxying
+  OPERATION_IMAGE_GENERATE = 15;       // one generated image: ImageGenerateEvent meta first, then bounded byte chunks
 }
 
 // MessagesRequest preserves the native inference document, validated by the
@@ -1201,4 +1202,35 @@ message RerankResponse {
 message RerankResult {
   int64 index = 1;
   double score = 2;
+}
+
+// ImageGenerateRequest is the OPERATION_IMAGE_GENERATE request payload. It
+// carries only a model ID and a prompt: no URL, path, header or credential,
+// so it cannot make an Agent read or fetch anything it was not configured
+// to. tenant_id/key_id are identifiers from Gateway authentication, never
+// credentials.
+message ImageGenerateRequest {
+  string model = 1;
+  string prompt = 2;
+  string tenant_id = 3;
+  string key_id = 4;
+}
+
+// ImageGenerateEvent is one OPERATION_IMAGE_GENERATE stream event. The first
+// event of a response carries meta and nothing else; every later event
+// carries one bounded chunk of the image bytes, in order.
+message ImageGenerateEvent {
+  oneof body {
+    ImageGenerateMeta meta = 1;
+    bytes data = 2;
+  }
+}
+
+// ImageGenerateMeta describes the image whose bytes follow. size is the
+// exact byte count the data events add up to.
+message ImageGenerateMeta {
+  string content_type = 1;
+  int64 size = 2;
+  string revised_prompt = 3;
+  Usage usage = 4;
 }

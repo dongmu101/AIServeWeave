@@ -1,0 +1,145 @@
+{
+  "slug": "job-artifacts",
+  "category": "工作流与任务",
+  "category_order": 50,
+  "sort_order": 50,
+  "title": "获取任务产物列表",
+  "method": "GET",
+  "path": "/v1/jobs/{job_id}/artifacts",
+  "summary": "列出一次工作流运行生成的文件，并为每个文件分配用于下载的 artifact_id。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "artifact_id 由本接口生成，下载产物前必须先调用本接口",
+      "同一产物在多次列举之间 artifact_id 保持不变，可放心重复调用",
+      "任务尚未结束时通常返回空列表，请在任务 succeeded 后再列举",
+      "type 区分最终产物（output）、临时预览（temp）与输入文件（input）",
+      "只能列举本租户任务的产物"
+    ],
+    "notice": "产物 ID 只在列举时生成：从未被列举过的产物没有 artifact_id，也就无法下载。任务成功后请及时调用本接口。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。API Key 在控制台创建，只能访问本租户的工作流与任务。"
+      }
+    ],
+    "path_params": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true,
+        "description": "提交工作流时返回的任务 ID，以 `job_` 开头。"
+      }
+    ],
+    "query_params": [],
+    "body_type": "none",
+    "body_params": [],
+    "response_fields": [
+      {
+        "name": "object",
+        "type": "string",
+        "required": true,
+        "description": "固定为 list。"
+      },
+      {
+        "name": "data",
+        "type": "array",
+        "required": true,
+        "description": "产物列表，没有产物时为空数组。",
+        "children": [
+          {
+            "name": "artifact_id",
+            "type": "string",
+            "required": true,
+            "description": "产物 ID，以 `art_` 开头，用于 GET /v1/artifacts/{artifact_id} 下载。"
+          },
+          {
+            "name": "filename",
+            "type": "string",
+            "required": true,
+            "description": "执行端生成的文件名。"
+          },
+          {
+            "name": "type",
+            "type": "string",
+            "required": false,
+            "description": "产物类别：output 为最终产物，temp 为临时预览，input 为输入文件。",
+            "enum": [
+              "output",
+              "temp",
+              "input"
+            ]
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl \"{{BASE_URL}}/v1/jobs/job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58/artifacts\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\""
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\njob_id = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\"\n\nresp = requests.get(\n    f\"{BASE_URL}/v1/jobs/{job_id}/artifacts\",\n    headers={\"Authorization\": f\"Bearer {API_KEY}\"},\n    timeout=30,\n)\nresp.raise_for_status()\nfor a in resp.json()[\"data\"]:\n    if a.get(\"type\") == \"output\":\n        print(a[\"artifact_id\"], a[\"filename\"])"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\nconst resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}/artifacts`, {\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\nconst { data } = await resp.json();\nconst outputs = data.filter((a) => a.type === \"output\");\nconsole.log(outputs.map((a) => `${a.artifact_id} ${a.filename}`));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"object\": \"list\",\n  \"data\": [\n    {\n      \"artifact_id\": \"art_9b1e4d7c2a6f48e3b5c0d1a2e3f4b5c6\",\n      \"filename\": \"txt2img_00001_.png\",\n      \"type\": \"output\"\n    },\n    {\n      \"artifact_id\": \"art_0c7d2e9f1a3b4c5d8e6f7a1b2c3d4e5f\",\n      \"filename\": \"txt2img_temp_00001_.png\",\n      \"type\": \"temp\"\n    }\n  ]\n}"
+      },
+      {
+        "status": 200,
+        "label": "暂无产物",
+        "content_type": "application/json",
+        "body": "{\n  \"object\": \"list\",\n  \"data\": []\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "任务不存在",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "执行端不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "产物类别",
+        "body": "output：工作流保存的最终结果，通常就是需要的生成文件。\n\ntemp：执行过程中的临时预览文件，保留时间通常短于最终产物。\n\ninput：本次运行使用的输入文件。\n\ntype 字段可能缺省，此时请按 filename 判断用途。"
+      },
+      {
+        "title": "错误码",
+        "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+      },
+      {
+        "title": "错误格式",
+        "body": "所有错误都以 OpenAI 兼容的 JSON 结构返回，error.type 表示错误大类，error.code 是可用于程序判断的错误码，error.message 为面向开发者的英文说明。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请一并提供。",
+        "code": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}",
+        "code_lang": "json"
+      }
+    ]
+  }
+}

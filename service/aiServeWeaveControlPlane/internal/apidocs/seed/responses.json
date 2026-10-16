@@ -1,0 +1,614 @@
+{
+  "slug": "responses",
+  "category": "文本对话",
+  "category_order": 10,
+  "sort_order": 30,
+  "title": "Responses",
+  "method": "POST",
+  "path": "/v1/responses",
+  "summary": "兼容 OpenAI Responses API 的对话接口，支持流式事件、工具调用与基于 previous_response_id 的多轮续接。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 OpenAI Responses API，可直接使用 OpenAI 官方 SDK 的 responses 接口",
+      "input 支持字符串或输入项数组，可混合文本、图片（input_image）与内联文件（input_file）",
+      "支持 function / custom / local_shell / namespace 工具，适配 Codex 等 Agent 客户端",
+      "stream=true 时按 Responses 事件序列（response.created → … → response.completed）推送",
+      "store=true 保存对话后，可用 previous_response_id 续接多轮"
+    ],
+    "notice": "本接口只实现了 Responses API 的一个子集：background 不支持；file_search、code_interpreter、mcp 等内置工具会返回 400，web_search 类工具会被忽略（响应头 X-Gateway-Ignored-Tools 列出被忽略的工具）；input_file 只支持内联 file_data，不支持 file_id。未在下表列出的参数不会生效。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型 ID，可通过 GET /v1/models 获取。"
+      },
+      {
+        "name": "input",
+        "type": "string | array",
+        "required": true,
+        "description": "输入：字符串（视为一条 user 消息），或输入项数组。不能为空。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": false,
+            "description": "输入项类型，省略时为 message。reasoning 项会被忽略；其他类型返回 400。",
+            "enum": [
+              "message",
+              "function_call",
+              "function_call_output",
+              "custom_tool_call",
+              "custom_tool_call_output",
+              "local_shell_call",
+              "local_shell_call_output",
+              "reasoning",
+              "additional_tools"
+            ]
+          },
+          {
+            "name": "role",
+            "type": "string",
+            "required": false,
+            "description": "message 项的角色，省略时为 user；developer 等同于 system。additional_tools 项必须为 developer。",
+            "enum": [
+              "user",
+              "assistant",
+              "system",
+              "developer"
+            ]
+          },
+          {
+            "name": "content",
+            "type": "string | array",
+            "required": false,
+            "description": "message 项的内容：字符串，或内容片段数组。",
+            "children": [
+              {
+                "name": "type",
+                "type": "string",
+                "required": true,
+                "description": "片段类型。",
+                "enum": [
+                  "input_text",
+                  "output_text",
+                  "input_image",
+                  "input_file"
+                ]
+              },
+              {
+                "name": "text",
+                "type": "string",
+                "required": false,
+                "description": "文本片段内容。"
+              },
+              {
+                "name": "image_url",
+                "type": "string",
+                "required": false,
+                "description": "input_image 必填：图片 URL 或 data URI。"
+              },
+              {
+                "name": "detail",
+                "type": "string",
+                "required": false,
+                "description": "input_image 的细节级别。"
+              },
+              {
+                "name": "file_data",
+                "type": "string",
+                "required": false,
+                "description": "input_file 必填：内联文件数据（data URI）。不支持 file_id 引用。"
+              },
+              {
+                "name": "filename",
+                "type": "string",
+                "required": false,
+                "description": "input_file 的文件名。"
+              }
+            ]
+          },
+          {
+            "name": "call_id",
+            "type": "string",
+            "required": false,
+            "description": "工具调用 ID。function_call / custom_tool_call / 各类 *_output 项必填。"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false,
+            "description": "function_call / custom_tool_call 的工具名，必填。"
+          },
+          {
+            "name": "namespace",
+            "type": "string",
+            "required": false,
+            "description": "工具所属的 namespace。"
+          },
+          {
+            "name": "arguments",
+            "type": "string",
+            "required": false,
+            "description": "function_call 的参数（JSON 字符串）。"
+          },
+          {
+            "name": "input",
+            "type": "string",
+            "required": false,
+            "description": "custom_tool_call 的输入文本。"
+          },
+          {
+            "name": "action",
+            "type": "object",
+            "required": false,
+            "description": "local_shell_call 的动作：command（字符串数组）、timeout_ms、working_directory。"
+          },
+          {
+            "name": "output",
+            "type": "string | array",
+            "required": false,
+            "description": "*_output 项的工具执行结果。"
+          },
+          {
+            "name": "tools",
+            "type": "array",
+            "required": false,
+            "description": "additional_tools 项追加的工具定义，格式同顶层 tools，不能为空。"
+          }
+        ]
+      },
+      {
+        "name": "instructions",
+        "type": "string",
+        "required": false,
+        "description": "系统指令，作为对话开头的 system 消息。"
+      },
+      {
+        "name": "max_output_tokens",
+        "type": "integer",
+        "required": false,
+        "description": "最多生成的 token 数。"
+      },
+      {
+        "name": "temperature",
+        "type": "number",
+        "required": false,
+        "description": "采样温度。"
+      },
+      {
+        "name": "top_p",
+        "type": "number",
+        "required": false,
+        "description": "核采样概率阈值。"
+      },
+      {
+        "name": "stream",
+        "type": "boolean",
+        "required": false,
+        "description": "是否以 SSE 事件流返回。",
+        "default": "false"
+      },
+      {
+        "name": "tools",
+        "type": "array",
+        "required": false,
+        "description": "可供模型调用的工具。web_search 类工具会被忽略并通过响应头 X-Gateway-Ignored-Tools 告知；file_search、code_interpreter、mcp 等其他内置工具返回 400。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": true,
+            "description": "工具类型。",
+            "enum": [
+              "function",
+              "custom",
+              "local_shell",
+              "namespace"
+            ]
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false,
+            "description": "工具名。custom 与 namespace 必填。"
+          },
+          {
+            "name": "description",
+            "type": "string",
+            "required": false,
+            "description": "工具说明。"
+          },
+          {
+            "name": "parameters",
+            "type": "object",
+            "required": false,
+            "description": "function 工具的 JSON Schema 参数定义。"
+          },
+          {
+            "name": "strict",
+            "type": "boolean",
+            "required": false,
+            "description": "是否严格遵循参数 Schema。"
+          },
+          {
+            "name": "tools",
+            "type": "array",
+            "required": false,
+            "description": "namespace 工具下的成员工具，不能再嵌套 namespace。"
+          }
+        ]
+      },
+      {
+        "name": "tool_choice",
+        "type": "string | object",
+        "required": false,
+        "description": "工具选择策略：\"auto\"、\"none\"、\"required\"，或指定工具的对象 {\"type\": \"function\" | \"custom\" | \"local_shell\", \"name\": \"...\"}（function / custom 需带 name）。"
+      },
+      {
+        "name": "text",
+        "type": "object",
+        "required": false,
+        "description": "文本输出设置。",
+        "children": [
+          {
+            "name": "format",
+            "type": "object",
+            "required": false,
+            "description": "输出格式。",
+            "children": [
+              {
+                "name": "type",
+                "type": "string",
+                "required": true,
+                "description": "格式类型，如 json_schema。"
+              },
+              {
+                "name": "name",
+                "type": "string",
+                "required": false,
+                "description": "type 为 json_schema 时的 Schema 名称。"
+              },
+              {
+                "name": "strict",
+                "type": "boolean",
+                "required": false,
+                "description": "是否严格遵循 Schema。"
+              },
+              {
+                "name": "schema",
+                "type": "object",
+                "required": false,
+                "description": "type 为 json_schema 时的 JSON Schema。"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "store",
+        "type": "boolean",
+        "required": false,
+        "description": "为 true 时保存本轮对话，之后可用返回的 id 作为 previous_response_id 续接。部署未开启会话存储时返回 400。"
+      },
+      {
+        "name": "previous_response_id",
+        "type": "string",
+        "required": false,
+        "description": "上一轮响应的 id（该轮须以 store=true 发起），服务端会自动拼接此前的对话历史。id 不存在时返回 400。"
+      },
+      {
+        "name": "background",
+        "type": "boolean",
+        "required": false,
+        "description": "不支持后台模式，传 true 返回 400。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "id",
+        "type": "string",
+        "required": true,
+        "description": "响应 ID，形如 resp_xxx。"
+      },
+      {
+        "name": "object",
+        "type": "string",
+        "required": true,
+        "description": "固定为 response。"
+      },
+      {
+        "name": "created_at",
+        "type": "integer",
+        "required": true,
+        "description": "创建时间（Unix 秒）。"
+      },
+      {
+        "name": "status",
+        "type": "string",
+        "required": true,
+        "description": "响应状态。达到 max_output_tokens 被截断时为 incomplete。",
+        "enum": [
+          "completed",
+          "incomplete",
+          "in_progress",
+          "failed"
+        ]
+      },
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "实际使用的模型。"
+      },
+      {
+        "name": "output",
+        "type": "array",
+        "required": true,
+        "description": "输出项列表。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": true,
+            "description": "输出项类型。",
+            "enum": [
+              "message",
+              "function_call",
+              "custom_tool_call",
+              "local_shell_call"
+            ]
+          },
+          {
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "输出项 ID。"
+          },
+          {
+            "name": "status",
+            "type": "string",
+            "required": false,
+            "description": "输出项状态。"
+          },
+          {
+            "name": "role",
+            "type": "string",
+            "required": false,
+            "description": "message 项为 assistant。"
+          },
+          {
+            "name": "content",
+            "type": "array",
+            "required": false,
+            "description": "message 项的内容，元素为 {type: \"output_text\", text, annotations}。"
+          },
+          {
+            "name": "call_id",
+            "type": "string",
+            "required": false,
+            "description": "工具调用 ID，回传结果时使用。"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false,
+            "description": "调用的工具名。"
+          },
+          {
+            "name": "namespace",
+            "type": "string",
+            "required": false,
+            "description": "工具所属 namespace。"
+          },
+          {
+            "name": "arguments",
+            "type": "string",
+            "required": false,
+            "description": "function_call 的参数（JSON 字符串）。"
+          },
+          {
+            "name": "input",
+            "type": "string",
+            "required": false,
+            "description": "custom_tool_call 的输入。"
+          },
+          {
+            "name": "action",
+            "type": "object",
+            "required": false,
+            "description": "local_shell_call 的动作（type、command、timeout_ms、working_directory）。"
+          }
+        ]
+      },
+      {
+        "name": "usage",
+        "type": "object",
+        "required": false,
+        "description": "用量统计；模型未上报用量时省略。",
+        "children": [
+          {
+            "name": "input_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "输入 token 数。"
+          },
+          {
+            "name": "output_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "输出 token 数。"
+          },
+          {
+            "name": "total_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "总 token 数。"
+          }
+        ]
+      },
+      {
+        "name": "error",
+        "type": "object | null",
+        "required": true,
+        "description": "失败时的错误信息（code、message），成功为 null。"
+      },
+      {
+        "name": "incomplete_details",
+        "type": "object | null",
+        "required": true,
+        "description": "status 为 incomplete 时为 {\"reason\": \"max_output_tokens\"}。"
+      },
+      {
+        "name": "instructions",
+        "type": "string | null",
+        "required": true,
+        "description": "回显请求中的 instructions。"
+      },
+      {
+        "name": "max_output_tokens",
+        "type": "integer",
+        "required": false,
+        "description": "回显请求参数。"
+      },
+      {
+        "name": "temperature",
+        "type": "number",
+        "required": false,
+        "description": "回显请求参数。"
+      },
+      {
+        "name": "top_p",
+        "type": "number",
+        "required": false,
+        "description": "回显请求参数。"
+      },
+      {
+        "name": "parallel_tool_calls",
+        "type": "boolean",
+        "required": true,
+        "description": "固定为 true。"
+      },
+      {
+        "name": "tools",
+        "type": "array",
+        "required": true,
+        "description": "回显请求中的 tools。"
+      },
+      {
+        "name": "tool_choice",
+        "type": "string",
+        "required": true,
+        "description": "固定为 auto。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/responses \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"instructions\": \"你是一个乐于助人的助手。\",\n    \"input\": \"用一句话介绍你自己\",\n    \"max_output_tokens\": 512\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{{BASE_URL}}/v1\", api_key=\"{{API_KEY}}\")\n\nresp = client.responses.create(\n    model=\"{{MODEL}}\",\n    instructions=\"你是一个乐于助人的助手。\",\n    input=\"用一句话介绍你自己\",\n    max_output_tokens=512,\n)\nprint(resp.output_text)\n\n# 流式\nstream = client.responses.create(model=\"{{MODEL}}\", input=\"写一首四行短诗\", stream=True)\nfor event in stream:\n    if event.type == \"response.output_text.delta\":\n        print(event.delta, end=\"\", flush=True)"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/responses\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    instructions: \"你是一个乐于助人的助手。\",\n    input: \"用一句话介绍你自己\",\n    max_output_tokens: 512,\n  }),\n});\n\nconst data = await res.json();\nif (!res.ok) throw new Error(data.error?.message);\nconst text = data.output\n  .filter((item) => item.type === \"message\")\n  .flatMap((item) => item.content)\n  .map((part) => part.text)\n  .join(\"\");\nconsole.log(text);"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"id\": \"resp_8f3a2c\",\n  \"object\": \"response\",\n  \"created_at\": 1760572800,\n  \"status\": \"completed\",\n  \"model\": \"{{MODEL}}\",\n  \"output\": [\n    {\n      \"type\": \"message\",\n      \"id\": \"msg_1b2c3d\",\n      \"status\": \"completed\",\n      \"role\": \"assistant\",\n      \"content\": [\n        {\n          \"type\": \"output_text\",\n          \"text\": \"你好，我是一个 AI 助手。\",\n          \"annotations\": []\n        }\n      ]\n    }\n  ],\n  \"usage\": {\n    \"input_tokens\": 25,\n    \"output_tokens\": 9,\n    \"total_tokens\": 34\n  },\n  \"error\": null,\n  \"incomplete_details\": null,\n  \"instructions\": \"你是一个乐于助人的助手。\",\n  \"max_output_tokens\": 512,\n  \"parallel_tool_calls\": true,\n  \"tools\": [],\n  \"tool_choice\": \"auto\"\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（stream=true，SSE 事件流，已省略部分字段）",
+        "content_type": "text/event-stream",
+        "body": "event: response.created\ndata: {\"type\":\"response.created\",\"sequence_number\":0,\"response\":{\"id\":\"resp_8f3a2c\",\"object\":\"response\",\"status\":\"in_progress\",\"output\":[],\"...\":\"...\"}}\n\nevent: response.in_progress\ndata: {\"type\":\"response.in_progress\",\"sequence_number\":1,\"response\":{\"id\":\"resp_8f3a2c\",\"status\":\"in_progress\",\"...\":\"...\"}}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"sequence_number\":2,\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1b2c3d\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}\n\nevent: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"sequence_number\":3,\"item_id\":\"msg_1b2c3d\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"\",\"annotations\":[]}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"sequence_number\":4,\"item_id\":\"msg_1b2c3d\",\"output_index\":0,\"content_index\":0,\"delta\":\"你好，\"}\n\nevent: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"sequence_number\":5,\"item_id\":\"msg_1b2c3d\",\"output_index\":0,\"content_index\":0,\"text\":\"你好，\"}\n\nevent: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"sequence_number\":6,\"item_id\":\"msg_1b2c3d\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"你好，\",\"annotations\":[]}}\n\nevent: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"sequence_number\":7,\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_1b2c3d\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"你好，\",\"annotations\":[]}]}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"sequence_number\":8,\"response\":{\"id\":\"resp_8f3a2c\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"...\":\"...\"}],\"usage\":{\"input_tokens\":25,\"output_tokens\":3,\"total_tokens\":28},\"...\":\"...\"}}\n"
+      },
+      {
+        "status": 400,
+        "label": "参数不支持",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"background is not supported by this gateway\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"unsupported_parameter\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "previous_response_id 不存在",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"unknown previous_response_id\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "认证失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "无法加载历史对话",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"could not load the referenced conversation\",\n    \"type\": \"api_error\",\n    \"code\": \"server_error\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "流式事件说明",
+        "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>，JSON 中带 type 与递增的 sequence_number。没有 [DONE] 标记，以终止事件结束。\n\n事件顺序：response.created → response.in_progress → 每个输出项的 response.output_item.added → 文本的 response.content_part.added / response.output_text.delta / response.output_text.done / response.content_part.done，或函数调用的 response.function_call_arguments.delta / response.function_call_arguments.done → response.output_item.done → 终止事件。\n\n终止事件：正常结束为 response.completed；因 max_output_tokens 截断为 response.incomplete；生成中途失败为 response.failed（response.error.code 为 server_error）。"
+      },
+      {
+        "title": "使用示例：多轮续接",
+        "body": "第一轮请求带上 store=true，记下返回的 id；下一轮把它作为 previous_response_id，并只在 input 中放本轮的新内容。若希望继续向后续接，本轮同样需要 store=true。",
+        "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"previous_response_id\": \"resp_8f3a2c\",\n  \"store\": true,\n  \"input\": \"再详细一点\"\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "使用示例：函数调用",
+        "body": "模型调用函数时，output 中出现 type 为 function_call 的项（含 call_id、name、arguments）。执行后把该项与 function_call_output 一起放入下一轮 input。",
+        "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"tools\": [\n    {\n      \"type\": \"function\",\n      \"name\": \"get_weather\",\n      \"description\": \"查询城市天气\",\n      \"parameters\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"city\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"city\"\n        ]\n      }\n    }\n  ],\n  \"input\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"上海天气如何？\"\n    },\n    {\n      \"type\": \"function_call\",\n      \"call_id\": \"call_abc123\",\n      \"name\": \"get_weather\",\n      \"arguments\": \"{\\\"city\\\":\\\"上海\\\"}\"\n    },\n    {\n      \"type\": \"function_call_output\",\n      \"call_id\": \"call_abc123\",\n      \"output\": \"{\\\"temp\\\":22,\\\"condition\\\":\\\"多云\\\"}\"\n    }\n  ]\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "错误码说明",
+        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+      }
+    ]
+  }
+}

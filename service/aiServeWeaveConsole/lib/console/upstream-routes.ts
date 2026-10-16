@@ -65,6 +65,8 @@ const param = (): Segment => ({ param: true });
  */
 const ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("models")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs"), param()], query: [] },
   {
     method: "GET",
     segments: [literal("admin"), literal("v1"), literal("users")],
@@ -211,6 +213,12 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), literal("states")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("audit")], query: ["limit", "cursor", "action", "actor_id", "since", "until"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("metrics"), literal("history")], query: ["since", "until"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("api-docs")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("api-docs")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("api-docs"), param()], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("api-docs"), param()], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("api-docs"), param()], query: ["expected_version"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("api-docs"), param(), literal("reset")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("alert-rules")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("alert-rules")], query: ["limit", "cursor", "enabled"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("alert-rules"), param()], query: [] },

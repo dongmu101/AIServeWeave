@@ -291,6 +291,18 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		logicOpts = append(logicOpts, logic.WithComfyUIManagedRouter(comfyUIManagedRouter))
 	}
 
+	svcLogic := logic.New(st, clock, logicOpts...)
+	// Compiled-in API reference pages are inserted or refreshed on every
+	// start, never overwriting a page an operator has edited. A failure here
+	// is a broken seed or an unreachable table, both of which a deployment
+	// must see before it serves.
+	//
+	// 每次启动都会插入或刷新编译内置的 API 参考页面，从不覆盖运维编辑过的页面。这里
+	// 失败意味着种子损坏或表不可用，两者都必须在部署开始提供服务之前被看见。
+	if _, err := svcLogic.SyncAPIDocSeeds(ctx); err != nil {
+		return nil, errors.Join(errors.New("syncing compiled-in API doc seeds"), err)
+	}
+
 	metricsRegistry := commonmetrics.New(cpmetrics.Descriptions())
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
@@ -370,7 +382,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	ready = true
 	return &ServiceContext{
 		Config:      cfg,
-		Logic:       logic.New(st, clock, logicOpts...),
+		Logic:       svcLogic,
 		Issuer:      issuer,
 		Cache:       verifications,
 		Revocations: verifications,

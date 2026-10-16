@@ -271,6 +271,21 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		}
 		return forwardStream(d, sink, stream, tunnelwire.MarshalMessagesEvent)
 
+	case tunnelv1.Operation_OPERATION_IMAGE_GENERATE:
+		ir, ok := rt.(runtime.ImageRuntime)
+		if !ok {
+			return &runtime.RuntimeError{Code: runtime.ErrorCapability, RuntimeID: id, Message: "image generation capability unavailable", Cause: runtime.ErrCapabilityUnsupported}
+		}
+		imageReq, err := tunnelwire.UnmarshalImageRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		stream, err := ir.GenerateImage(ctx, imageReq)
+		if err != nil {
+			return err
+		}
+		return forwardStream(d, sink, stream, tunnelwire.MarshalImageEvent)
+
 	case tunnelv1.Operation_OPERATION_EMBED:
 		ir, err := inferenceRuntime(rt, id)
 		if err != nil {

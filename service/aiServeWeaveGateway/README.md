@@ -10,7 +10,7 @@
 | `routing/` | 已实现 | 逻辑模型到部署的映射：别名、节点选择器、优先级与权重；共享 `common/modelroute` 契约，调度器按不可变快照热切换 |
 | `routesync/` | 已实现 | 控制面版本的有界拉取、校验、持久化最近有效快照与生效状态（P02） |
 | `scheduler/` | 已实现 | 按模型与能力从节点表选节点，处理背压与重试语义，读 Agent 上报的健康状态并维护每候选的熔断器；工作流按 runtime 层能力选节点，见 `workflow.go` |
-| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/audio/transcriptions`/`POST /v1/audio/translations`（P2，见「音频转录与翻译」）、`POST /v1/rerank`（P2，见「Rerank」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
+| `httpapi/` | 已实现 | `GET /v1/models`、`POST /v1/chat/completions`（含 SSE）、`POST /v1/embeddings`、`POST /v1/responses`（含 SSE）、`POST /v1/images/generations`（P2，ComfyUI 模板或节点发布的图像模型，见「图像生成」）、`POST /v1/messages`（P2，Anthropic Messages v1，见「Anthropic Messages」）、`POST /api/chat`/`POST /api/generate`/`POST /api/embeddings`（P2，Ollama 原生 API，纯推理端点，见「Ollama 原生 API」）、`POST /v1/audio/transcriptions`/`POST /v1/audio/translations`（P2，见「音频转录与翻译」）、`POST /v1/rerank`（P2，见「Rerank」）、`POST /v1/workflows/{workflow_id}/runs`、`GET /v1/jobs/{job_id}`、`GET /v1/jobs/{job_id}/events`（SSE）、`POST /v1/jobs/{job_id}/cancel`、`GET /v1/jobs/{job_id}/artifacts`、`GET /v1/artifacts/{artifact_id}`；鉴权见下面「API Key 鉴权」，工作流见「工作流 Job」 |
 | `workflow/` | 已实现 | 管理员注册的 ComfyUI 工作流模板目录：文件或控制面来源（P03）、声明式输入/输出/依赖、绑定与校验；`Handle` 原子持有当前生效目录 |
 | `workflowsync/` | 已实现 | 控制面版本的有界拉取、逐模板校验、持久化最近有效整包与生效状态（P03） |
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
@@ -440,7 +440,25 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 ## 图像生成
 
-`POST /v1/images/generations`（STATUS.md 的 P2）把 OpenAI-compatible 图像生成请求映射到管理员指定的单一 ComfyUI 工作流模板，边界设计见 [P2 设计文档「图像生成映射到 ComfyUI」](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md)。
+`POST /v1/images/generations` 有两条路径，按请求的 `model` 分流（`images_handler.go`）：
+
+| 请求 | 走向 |
+| --- | --- |
+| `model` 精确等于某个节点发布的图像模型（带 `runtime.CapabilityImageGeneration`），或经模型路由别名解析到这样的模型 | 推理路径（`images_inference.go`） |
+| `model` 为空，或不是任何已发布的图像模型 | 下面的 ComfyUI 模板路径，行为不变；未配置 `-images-workflow-id` 时仍答 404 `endpoint_not_configured` |
+
+按模型 ID 调度，不同图像模型互不替代。请求里的模型没有就绪节点时，落到 ComfyUI 路径或 404，不会悄悄换成另一个模型。`GET /v1/models` 会列出图像模型。
+
+**推理路径**目前唯一的后端是 Agent 的 Codex CLI 运行时（模型 `codex-image`，见 [Codex 包说明「图像生成」](../aiServeWeaveAgent/codexcli/README.md#图像生成)）：
+
+- 经 `Scheduler.GenerateImage` 派发隧道操作 `OPERATION_IMAGE_GENERATE`。读到元数据之前的可重试失败换下一个候选；读到元数据之后不再重试，因为节点已经消耗了账户的生图额度。
+- 后端只接受提示词：`n` 只能是 1，`response_format` 只能是 `b64_json`，`size`、`quality`、`background` 只接受 `auto`，`style`、`output_format`、`output_compression`、`moderation`、`partial_images`、`stream` 一律按名字拒绝。
+- 图像经有界缓冲读取（`MaxImageResponseBytes`，32 MiB），字节数必须与元数据完全一致，再以 `b64_json` 返回；`data[0].revised_prompt` 带回后端实际使用的提示词。
+- 超时沿用 `-images-generation-timeout`（默认 120s），超时答 504；账户生图额度耗尽答 429。
+- 不需要 API Key 也能用；有 Key 时把 `tenant_id`/`key_id` 作为归属标识带过隧道，它们不是凭据。提示词不写日志。
+- 不要在模型路由里把 `gpt-image-2.5-flare` 之类的 OpenAI API 模型 ID 设成指向 `codex-image` 的别名：Codex 无法指定上游图像模型，这样做等于给输出标错型号。
+
+**ComfyUI 模板路径**（STATUS.md 的 P2）把 OpenAI-compatible 图像生成请求映射到管理员指定的单一 ComfyUI 工作流模板，边界设计见 [P2 设计文档「图像生成映射到 ComfyUI」](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md)。
 
 - **`-images-workflow-id` 未配置时该路由照常挂载但答 404**，与其余工作流路由「路由总是挂载、由配置决定行为」的既有模式一致。配置了但对应模板在启动期缺少必填 `prompt` 字符串输入、或没有至少一个 `Type == "image"` 的 `Output`，进程直接启动失败（`main.go` 的 `validateImagesWorkflow`）——这是一次性静态检查，**不会**在 `-workflow-source=controlplane` 热替换目录时重新触发；一次剥离了所需字段的重新发布，只会在下一次请求时表现为 400/500，不是启动失败。
 - **约定优于配置**：调用方的 `prompt` 绑定到模板声明的 `prompt` 输入，`size`（`"WIDTHxHEIGHT"`）仅在模板同时声明了 `width`/`height` 整数输入时才被接受，`quality`/`style` 同理仅在模板分别声明了同名字符串输入时才被接受，否则均按名字拒绝。没有单独的输入名映射配置——这样模板经控制面热替换时，映射关系不会与它的 `Inputs` 声明脱节。

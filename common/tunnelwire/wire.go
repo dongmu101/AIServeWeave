@@ -40,6 +40,12 @@ const (
 	// PayloadMessagesEvent carries one native SSE data document.
 	// PayloadMessagesEvent 携带一条原生 SSE 数据文档。
 	PayloadMessagesEvent PayloadKind = "messages_event"
+	// PayloadImageGenerateRequest carries a marshalled runtime.ImageRequest.
+	// PayloadImageGenerateRequest 携带编码后的 runtime.ImageRequest。
+	PayloadImageGenerateRequest PayloadKind = "image_generate_request"
+	// PayloadImageGenerateEvent carries exactly one runtime.ImageEvent.
+	// PayloadImageGenerateEvent 携带恰好一个 runtime.ImageEvent。
+	PayloadImageGenerateEvent PayloadKind = "image_generate_event"
 	// PayloadNone means no payload is carried at all.
 	PayloadNone PayloadKind = "none"
 	// PayloadChatRequest carries a marshalled runtime.ChatRequest.
@@ -158,6 +164,18 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 	tunnelv1.Operation_OPERATION_MESSAGES: {
 		Operation: tunnelv1.Operation_OPERATION_MESSAGES,
 		Request:   PayloadMessagesRequest, Response: PayloadMessagesEvent, Shape: ShapeStream,
+	},
+	// Image generation is a stream of one meta event then bounded byte
+	// chunks, on an inference slot: one image is capped at
+	// runtime.MaxImageBytes, unlike the caller-sized files on bulk slots.
+	//
+	// 图像生成是一个元数据事件加若干有界字节分块组成的流，跑在推理槽上：单张图像
+	// 受 runtime.MaxImageBytes 限制，不同于走批量槽、大小由调用方决定的文件。
+	tunnelv1.Operation_OPERATION_IMAGE_GENERATE: {
+		Operation: tunnelv1.Operation_OPERATION_IMAGE_GENERATE,
+		Request:   PayloadImageGenerateRequest,
+		Response:  PayloadImageGenerateEvent,
+		Shape:     ShapeStream,
 	},
 	tunnelv1.Operation_OPERATION_EMBED: {
 		Operation: tunnelv1.Operation_OPERATION_EMBED,

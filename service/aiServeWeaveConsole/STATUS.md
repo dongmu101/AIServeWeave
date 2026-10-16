@@ -296,6 +296,16 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 
 详见根 STATUS 的 P09 行与 [ControlPlane README「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/README.md#告警评估与通知p09c29)、设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
 
+### API 文档（租户）实现位置
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | 控制面 `internal/apidocs`（文档结构、校验规则、内置种子）与 `logic.APIDocSummary`/`APIDocDetail`/`OperatorAPIDoc*`；Console `lib/console/api-docs.ts`（解析、分组、占位符替换、写入体积上限） |
+| 控制面 | 新表 `api_docs`（固定版本迁移）、启动时 `SyncAPIDocSeeds` 填充 19 份内置文档；租户 2 个只读端点、平台 6 个管理端点，见 [ControlPlane README「API 参考文档（租户）」](../aiServeWeaveControlPlane/README.md#api-参考文档租户) |
+| Console | 租户 `/console/docs`（快速开始 + 端点索引）与 `/console/docs/[slug]`（左侧分组导航、参数表、多语言请求示例与按状态码的响应示例，`app/console/docs/`）；运维 `/operator/api-docs`（JSON 编辑 + 实时预览、恢复内置版本、删除）；渲染部件 `components/console/api-doc-article.tsx` 两侧共用；`lib/console/upstream-routes.ts` 新增 8 条转发白名单 |
+
+示例中的基地址取 `AISW_CONSOLE_PUBLIC_GATEWAY_URL`（租户可访问的公开 Gateway 地址，可带路径前缀），未设置时退回 `AISW_CONSOLE_GATEWAY_URL`。
+
 ## 测试、文档与交付门禁
 
 密码策略变更：已取消初始密码的长度、字符与非空限制，创建租户、创建用户和登录保持一致；

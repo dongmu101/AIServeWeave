@@ -72,7 +72,7 @@ go run ./service/aiServeWeaveAgent -config service/aiServeWeaveAgent/config.yaml
 
 按上面的命令正常启动后，即可访问 `http://127.0.0.1:8899`，在本地运行时中添加一行 `codex-local,codex,`，在运行时白名单中加入 `codex-local`，保存后重启 Agent。也可以加 `-config-ui` 只运行设置页面。
 
-每次请求使用独立临时目录和 ephemeral thread，通过公开 `thread/inject_items` 注入完整的文本及工具历史；在首次工具回调处结束响应并回收进程，下一轮由调用方回传历史继续。支持文本、SSE、function/custom/namespace 工具循环及 JSON Schema 输出；一次响应最多返回一个工具调用。不支持图片/音频/文件输入、嵌入、重排、采样参数、强制工具选择或远程压缩。默认 1 MiB 帧/历史/文本上限及 10000 帧上限；超时、关闭和背压均有界。更多边界、客户端配置和验收见 [Codex 包说明](codexcli/README.md) 与 [Gateway 工具循环](../aiServeWeaveGateway/README.md#工具循环与-codex-cli-接入)。原有 [实验命令](../../experiments/codex-cli-bridge/README.md) 保留为独立合成验证器。
+每次请求使用独立临时目录和 ephemeral thread，通过公开 `thread/inject_items` 注入完整的文本及工具历史；在首次工具回调处结束响应并回收进程，下一轮由调用方回传历史继续。支持文本、SSE、function/custom/namespace 工具循环及 JSON Schema 输出；一次响应最多返回一个工具调用。不支持图片/音频/文件输入、嵌入、重排、采样参数、强制工具选择或远程压缩。账户能生图时额外发布图像模型 `codex-image`，经 Gateway 的 `/v1/images/generations` 每次生成一张图，只接受提示词，见 [Codex 包说明「图像生成」](codexcli/README.md#图像生成)。默认 1 MiB 帧/历史/文本上限及 10000 帧上限；超时、关闭和背压均有界。更多边界、客户端配置和验收见 [Codex 包说明](codexcli/README.md) 与 [Gateway 工具循环](../aiServeWeaveGateway/README.md#工具循环与-codex-cli-接入)。原有 [实验命令](../../experiments/codex-cli-bridge/README.md) 保留为独立合成验证器。
 
 ## 后端未就绪时的启动行为
 

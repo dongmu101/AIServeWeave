@@ -227,6 +227,7 @@ enum Operation {
   OPERATION_AUDIO_TRANSCRIBE   = 12;  // STATUS.md P2：音频转录/翻译共用一个 operation，AudioTranscriptionRequest.task 选择
   OPERATION_RERANK             = 13;  // STATUS.md P2：与 OPERATION_EMBED 同形状，无二进制体
   OPERATION_MESSAGES           = 14;  // 原生 Anthropic Messages 推理语义与事件
+  OPERATION_IMAGE_GENERATE     = 15;  // 一张生成图像：先一个元数据事件，再若干有界字节分块
 }
 
 message ResponseHeaders {
@@ -273,6 +274,8 @@ message TunnelError {
 | `INPUT_UPLOAD` | `InputUploadRequest`（文件字节另走 `DataChunk`） | 单个 `DataChunk`（`InputUploadResult`） |
 | `AUDIO_TRANSCRIBE` | `AudioTranscriptionRequest`（音频字节另走 `DataChunk`） | 单个 `DataChunk`（`AudioTranscriptionResponse`） |
 | `RERANK` | `RerankRequest` | 单个 `DataChunk`（`RerankResponse`） |
+| `MESSAGES` | `MessagesRequest` | N 个 `DataChunk`，每个一个 `MessagesEvent` |
+| `IMAGE_GENERATE` | `ImageGenerateRequest` | N 个 `DataChunk`，每个一个 `ImageGenerateEvent`：第一个只带 `meta`，之后每个只带一段 `data`（≤ 256 KiB） |
 
 payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`；`INPUT_UPLOAD` 与 `AUDIO_TRANSCRIBE` 的文件/音频字节同理，且体积比模板更没有上限保证。
 
@@ -1036,3 +1039,9 @@ go test -race ./service/aiServeWeaveAgent/...
 `OPERATION_MESSAGES` 使用共享 `MessagesRequest`（解析后的目标模型、已认证 `tenant_id`/`key_id`、有界 Messages JSON）及 `MessagesEvent`（单条原生事件 JSON）。归属标识不是鉴权凭据；它们来自 Gateway 本次请求的认证结果，不能由外部请求自报。所有编解码只在 `common/tunnelwire`。
 
 这是封闭的推理语义操作：没有 URL、Host、Authorization 或 CLI 命令字段；Agent 的 Claude 适配器严格拒绝未知 Messages 字段和未支持内容块。它不提供通用 HTTP 代理。执行仍要求命中本地 runtime 白名单，事件逐条转发，槽池和 gRPC 施加背压；跨 HTTP 请求等待工具的 CLI 会话另有最多两个的驻留限制与超时。新增操作要求两端同步升级，旧 Agent 不会执行未知操作。
+
+## 图像生成操作
+
+`OPERATION_IMAGE_GENERATE` 的请求是 `ImageGenerateRequest`：只有模型 ID、提示词，以及可选的 `tenant_id`/`key_id` 归属标识，没有任何 URL、路径或请求头字段，所以不能用它让 Agent 去读或去取未声明的东西。响应形状是 `ShapeStream`，但事件不是 token：第一个 `ImageGenerateEvent` 只带 `ImageGenerateMeta`（`content_type`、精确 `size`、`revised_prompt`、`usage`），之后每个事件只带一段字节，单段不超过 `runtime.MaxImageChunkBytes`（256 KiB），整张图不超过 `runtime.MaxImageBytes`（32 MiB）。两端都在 `common/tunnelwire` 里校验这些上限。
+
+这个操作跑在推理槽，不走批量槽。单张图有硬上限，而批量槽是给大小由调用方决定的文件准备的。Agent 侧复用 `forwardStream`，Gateway 侧复用 `newResponseStream`，同一时刻最多持有一个分块。后端没有实现 `runtime.ImageRuntime` 时，Agent 答 `ErrorCapability`（包装 `ErrCapabilityUnsupported`）。新增操作要求两端同步升级，旧 Agent 会把未知操作当作协议错误拒绝。

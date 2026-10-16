@@ -8,6 +8,7 @@ import (
 
 	"AIServeWeave/common/modelroute"
 	"AIServeWeave/common/workflowtemplate"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/apidocs"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
@@ -68,6 +69,25 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/validate", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/validate", requirePlatformSession(ctx, validateWorkflowTemplate(ctx)))},
 		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/publish", requirePlatformSession(ctx, publishWorkflowTemplate(ctx)))},
 	}, rest.WithMaxBytes(workflowtemplate.MaxContentBytes))
+
+	// The tenant-facing API reference: any tenant session reads published
+	// pages; platform operators manage them. Writes take whole pages, hence
+	// their own body bound.
+	//
+	// 面向租户的 API 参考文档：任何租户会话都可读取已发布页面，平台运维负责管理。
+	// 写入接收的是整页内容，因此单独设置请求体上限。
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/admin/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs", requireSession(ctx, listAPIDocs(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs/:slug", requireSession(ctx, getAPIDoc(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs", requirePlatformSession(ctx, operatorListAPIDocs(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, operatorGetAPIDoc(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/api-docs/:slug/reset", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug/reset", requirePlatformSession(ctx, resetAPIDoc(ctx)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, deleteAPIDoc(ctx)))},
+	})
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodPost, Path: "/operator/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs", requirePlatformSession(ctx, createAPIDoc(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, updateAPIDoc(ctx)))},
+	}, rest.WithMaxBytes(apidocs.MaxRequestBytes))
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/login", login(ctx))},
 		// The platform operator login (STATUS.md's P01) is public the same

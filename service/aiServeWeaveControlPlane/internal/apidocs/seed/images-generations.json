@@ -1,0 +1,245 @@
+{
+  "slug": "images-generations",
+  "category": "图像生成",
+  "category_order": 20,
+  "sort_order": 10,
+  "title": "图像生成",
+  "method": "POST",
+  "path": "/v1/images/generations",
+  "summary": "OpenAI 兼容的文生图接口，同步返回生成的图像（默认 base64）。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "同步接口：一次请求直接返回图像，没有轮询或流式变体",
+      "兼容 OpenAI Images API 的请求与响应格式，可直接使用 OpenAI SDK",
+      "两种生成方式：model 指定平台发布的图像模型时由该模型直接出图；否则使用平台预设的图像工作流",
+      "默认以 b64_json 返回图像；单张图像上限 32 MiB",
+      "生成超时默认 120 秒（以平台配置为准），超时返回 504",
+      "n 目前只支持 1；不支持的参数会按名字报错，不会被静默忽略"
+    ],
+    "notice": "图像生成耗时较长，请把客户端读超时设得比平台生成超时更长（建议 ≥ 150 秒）。请求体大小上限 1 MiB。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "鉴权头，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "prompt",
+        "type": "string",
+        "required": true,
+        "description": "图像描述，不能为空或全为空白。使用图像模型时长度上限 32 KiB（32768 字节），且必须是合法 UTF-8。"
+      },
+      {
+        "name": "model",
+        "type": "string",
+        "required": false,
+        "description": "图像模型 ID（例如 codex-image，可通过 GET /v1/models 查看）。填写平台已发布的图像模型时由该模型出图；留空或填写的不是图像模型时，改用平台预设的图像工作流，此时 model 不影响结果。"
+      },
+      {
+        "name": "n",
+        "type": "integer",
+        "required": false,
+        "default": "1",
+        "description": "生成数量，目前只支持 1，其他值返回 400 unsupported_parameter。"
+      },
+      {
+        "name": "response_format",
+        "type": "string",
+        "required": false,
+        "default": "b64_json",
+        "description": "返回格式。b64_json 在响应中直接返回图像的 base64；url 返回一个下载路径（仅预设工作流方式支持，图像模型方式只支持 b64_json）。",
+        "enum": [
+          "b64_json",
+          "url"
+        ]
+      },
+      {
+        "name": "size",
+        "type": "string",
+        "required": false,
+        "description": "图像尺寸。预设工作流方式：格式为 `宽x高` 的正整数（如 `1024x1024`），仅当平台工作流支持自定义尺寸时可用，否则返回 400。图像模型方式：只接受 `auto`（等同于不传）。"
+      },
+      {
+        "name": "quality",
+        "type": "string",
+        "required": false,
+        "description": "图像质量。预设工作流方式：原样传给工作流，仅当工作流支持该参数时可用。图像模型方式：只接受 `auto`。"
+      },
+      {
+        "name": "style",
+        "type": "string",
+        "required": false,
+        "description": "图像风格。预设工作流方式：原样传给工作流，仅当工作流支持该参数时可用。图像模型方式：不支持。"
+      },
+      {
+        "name": "background",
+        "type": "string",
+        "required": false,
+        "description": "背景设置。图像模型方式只接受 `auto`；预设工作流方式下忽略。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "created",
+        "type": "integer",
+        "required": true,
+        "description": "生成完成时间，Unix 时间戳（秒）。"
+      },
+      {
+        "name": "data",
+        "type": "array",
+        "required": true,
+        "description": "生成的图像列表。图像模型方式固定 1 项；预设工作流方式下工作流若产出多张图，会返回多项。",
+        "children": [
+          {
+            "name": "b64_json",
+            "type": "string",
+            "required": false,
+            "description": "图像的 base64 编码（标准编码，含填充）。response_format 为 b64_json 时返回。"
+          },
+          {
+            "name": "url",
+            "type": "string",
+            "required": false,
+            "description": "图像下载路径，形如 `/v1/artifacts/art_xxx`，为相对路径，需拼接在 {{BASE_URL}} 之后，并使用同一租户的 API Key 以 GET 下载。response_format 为 url 时返回。"
+          },
+          {
+            "name": "revised_prompt",
+            "type": "string",
+            "required": false,
+            "description": "模型实际使用的提示词。仅图像模型方式且模型返回了该值时出现。"
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/images/generations \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  --max-time 180 \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"prompt\": \"一只在雪地里奔跑的柴犬，水彩风格\"\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import base64\nimport requests\n\nresp = requests.post(\n    \"{{BASE_URL}}/v1/images/generations\",\n    headers={\"Authorization\": \"Bearer {{API_KEY}}\"},\n    json={\n        \"model\": \"{{MODEL}}\",\n        \"prompt\": \"一只在雪地里奔跑的柴犬，水彩风格\",\n    },\n    timeout=180,\n)\nresp.raise_for_status()\nimage = resp.json()[\"data\"][0]\nwith open(\"output.png\", \"wb\") as f:\n    f.write(base64.b64decode(image[\"b64_json\"]))\nprint(image.get(\"revised_prompt\"))"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "import { writeFile } from \"node:fs/promises\";\n\nconst resp = await fetch(\"{{BASE_URL}}/v1/images/generations\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    prompt: \"一只在雪地里奔跑的柴犬，水彩风格\",\n  }),\n  signal: AbortSignal.timeout(180_000),\n});\nconst body = await resp.json();\nif (!resp.ok) throw new Error(`${body.error.code}: ${body.error.message}`);\nawait writeFile(\"output.png\", Buffer.from(body.data[0].b64_json, \"base64\"));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功（图像模型，b64_json）",
+        "content_type": "application/json",
+        "body": "{\n  \"created\": 1760600000,\n  \"data\": [\n    {\n      \"b64_json\": \"iVBORw0KGgoAAAANSUhEUgAA...\",\n      \"revised_prompt\": \"A shiba inu running through snow, watercolor style\"\n    }\n  ]\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（预设工作流，response_format=url）",
+        "content_type": "application/json",
+        "body": "{\n  \"created\": 1760600000,\n  \"data\": [\n    {\n      \"url\": \"/v1/artifacts/art_3f9c2a7e5b1d4c8a9e6f0b2d7a1c5e3f\"\n    }\n  ]\n}"
+      },
+      {
+        "status": 400,
+        "label": "缺少 prompt",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"prompt is required\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "参数不受支持",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"size is not supported for model codex-image\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"unsupported_parameter\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "请求体不是合法 JSON 或超过 1 MiB",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the request body is not valid JSON, or is over the size limit\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_json\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 缺失或无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "未开通图像生成",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"image generation is not configured on this deployment\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"endpoint_not_configured\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "当前没有可用的出图服务",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no connected node can generate images right now\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"workflow_backend_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出租户配额（响应带 Retry-After 头）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 500,
+        "label": "生成失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"image generation did not succeed\",\n    \"type\": \"api_error\",\n    \"code\": \"generation_failed\"\n  }\n}"
+      },
+      {
+        "status": 502,
+        "label": "返回的图像异常（图像模型）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the node returned a truncated image\",\n    \"type\": \"api_error\",\n    \"code\": \"upstream_protocol\"\n  }\n}"
+      },
+      {
+        "status": 504,
+        "label": "生成超时",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"image generation did not finish before the configured timeout\",\n    \"type\": \"timeout_error\",\n    \"code\": \"timeout\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "两种生成方式",
+        "body": "平台按请求中的 model 决定出图方式：\n\n1. model 是平台已发布的图像模型（如 codex-image，可在 GET /v1/models 中看到）：由该模型直接出图，只接受提示词。n 只能为 1，response_format 只能为 b64_json，size、quality、background 只接受 auto（等同于不传），style、output_format、output_compression、moderation、partial_images、stream（为 true 时）一律返回 400 unsupported_parameter。响应中的 revised_prompt 是模型实际使用的提示词。\n\n2. model 留空或不是图像模型：使用平台预设的图像工作流。prompt 绑定到工作流，size/quality/style 仅在工作流支持时可用，否则返回 400 unsupported_parameter；支持 response_format=url。background、output_format 等其余 OpenAI 字段在此方式下被忽略。若平台未配置图像工作流，返回 404 endpoint_not_configured。\n\n填写了某个图像模型 ID 但该模型当前没有可用实例时，请求会落到第 2 种方式，不会被悄悄替换为另一个图像模型。"
+      },
+      {
+        "title": "超时与结果查询",
+        "body": "整个生成过程在一次请求内同步完成，平台默认最多等待 120 秒（具体以平台配置为准），超时返回 504 timeout。\n\n预设工作流方式下，超时后生成任务不会被取消，会在后台继续运行；504 响应中不返回任务 ID。图像模型方式下超时即失败。"
+      },
+      {
+        "title": "使用 url 返回格式",
+        "body": "response_format=url 时，data[].url 是一个相对路径（如 /v1/artifacts/art_xxx）。请把它拼接在 {{BASE_URL}} 之后，用同一租户的 API Key 发起 GET 请求下载图像字节；其他租户的 Key 访问会得到 404 artifact_not_found。",
+        "code": "curl -o output.png {{BASE_URL}}/v1/artifacts/art_xxx \\\n  -H \"Authorization: Bearer {{API_KEY}}\"",
+        "code_lang": "bash"
+      },
+      {
+        "title": "错误码一览",
+        "body": "400 invalid_json：请求体不是合法 JSON 或超过 1 MiB\n400 invalid_request：prompt 为空；size 格式不是「宽x高」正整数；图像模型方式下 prompt 超过 32 KiB 或不是合法 UTF-8\n400 unsupported_parameter：n 不为 1、response_format 取值不支持，或某参数在当前出图方式下不可用\n400 invalid_input：参数值未通过预设工作流的输入校验\n404 endpoint_not_configured：平台未开通图像生成\n404 workflow_backend_not_found：当前没有可用的出图服务\n404 model_not_found：所选图像模型当前不可用\n500 generation_failed / cancelled / out_of_memory：生成失败、被取消或显存不足\n500 no_image_produced：工作流运行完成但没有产出图像\n502 response_too_large：生成的图像超过 32 MiB（图像模型方式）\n502 upstream_protocol：返回的图像数据不完整或格式异常（图像模型方式）\n413 response_too_large：生成的图像超过 32 MiB（预设工作流方式，b64_json）\n504 timeout：生成超时\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+      },
+      {
+        "title": "鉴权与配额",
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+      }
+    ]
+  }
+}

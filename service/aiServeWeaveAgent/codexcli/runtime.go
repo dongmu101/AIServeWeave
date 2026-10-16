@@ -147,12 +147,20 @@ func (r *Runtime) wrap(operation string, err error) error {
 		code = runtime.ErrorInvalidConfig
 	case errors.Is(err, errUnsupported):
 		code = runtime.ErrorCapability
-	case errors.Is(err, ErrRPC), errors.Is(err, ErrTurn):
+	case errors.Is(err, errRateLimited):
+		code = runtime.ErrorRateLimited
+	case errors.Is(err, ErrRPC), errors.Is(err, ErrTurn), errors.Is(err, errNoImage):
 		code = runtime.ErrorUpstream
 	}
 	return &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: runtime.KindCodex, Operation: operation, Message: "Codex operation failed: " + string(code), Cause: err}
 }
 
+// inspect reads the model catalog and whether the account may generate
+// images, without running inference. An image-capable account adds the one
+// image model ImageModelID.
+//
+// inspect 读取模型目录及账户能否生图，不执行推理。账户可以生图时，额外加入
+// 唯一的图像模型 ImageModelID。
 func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	ctx, finish, touch, err := r.operation(ctx, r.cfg.ProbeTimeout, 0)
 	if err != nil {
@@ -186,6 +194,15 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 				if len(models) == 0 {
 					return ErrProtocol
 				}
+				var caps struct {
+					ImageGeneration bool `json:"imageGeneration"`
+				}
+				if err := p.request(3+page+1, "modelProvider/capabilities/read", map[string]any{}, &caps); err != nil {
+					return err
+				}
+				if caps.ImageGeneration {
+					models = append(models, runtime.Model{ID: ImageModelID, Capabilities: imageCapabilities()})
+				}
 				return nil
 			}
 			cursor = list.NextCursor
@@ -198,11 +215,56 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	return models, r.wrap("discover", err)
 }
 
+// chatCapabilities is what every Codex chat model supports.
+// chatCapabilities 是每个 Codex 对话模型支持的能力。
+var chatCapabilities = []runtime.Capability{runtime.CapabilityChat, runtime.CapabilityChatStream, runtime.CapabilityResponses, runtime.CapabilityTools, runtime.CapabilityStructuredOutput}
+
+func evidence(c runtime.Capability, level runtime.SupportLevel, source runtime.CapabilitySource, detail string) runtime.CapabilityEvidence {
+	return runtime.CapabilityEvidence{Capability: c, Level: level, Source: source, Detail: detail}
+}
+
+// imageCapabilities is the image model's set. A model inherits any capability
+// it does not mention from the runtime-level set (runtime.Intersect), so the
+// chat capabilities are marked unsupported explicitly rather than omitted.
+//
+// imageCapabilities 是图像模型的能力集。模型未提及的能力会从运行时级别继承
+// （runtime.Intersect），因此聊天能力被显式标为不支持，而不是省略。
+func imageCapabilities() runtime.CapabilitySet {
+	result := runtime.CapabilitySet{}
+	for _, c := range chatCapabilities {
+		result[c] = evidence(c, runtime.SupportUnsupported, runtime.SourceRuntimeProfile, "image model")
+	}
+	c := runtime.CapabilityImageGeneration
+	result[c] = evidence(c, runtime.SupportSupported, runtime.SourceEndpoint, "app-server modelProvider/capabilities/read")
+	return result
+}
+
+// runtimeCapabilities is the runtime-level set: chat always, image generation
+// only when the image model was published.
+// runtimeCapabilities 是运行时级别的能力集：聊天始终具备，图像生成仅在发布了
+// 图像模型时具备。
+func runtimeCapabilities(models []runtime.Model) runtime.CapabilitySet {
+	result := capabilities()
+	for _, model := range models {
+		if model.ID == ImageModelID {
+			c := runtime.CapabilityImageGeneration
+			result[c] = evidence(c, runtime.SupportSupported, runtime.SourceEndpoint, "app-server modelProvider/capabilities/read")
+		}
+	}
+	return result
+}
+
+// capabilities is a chat model's set; image generation is marked unsupported
+// so a chat model never inherits it from the runtime level.
+// capabilities 是对话模型的能力集；图像生成被标为不支持，使对话模型永远不会从
+// 运行时级别继承它。
 func capabilities() runtime.CapabilitySet {
 	result := runtime.CapabilitySet{}
-	for _, c := range []runtime.Capability{runtime.CapabilityChat, runtime.CapabilityChatStream, runtime.CapabilityResponses, runtime.CapabilityTools, runtime.CapabilityStructuredOutput} {
-		result[c] = runtime.CapabilityEvidence{Capability: c, Level: runtime.SupportSupported, Source: runtime.SourceRuntimeProfile, Detail: "isolated Codex app-server adapter"}
+	for _, c := range chatCapabilities {
+		result[c] = evidence(c, runtime.SupportSupported, runtime.SourceRuntimeProfile, "isolated Codex app-server adapter")
 	}
+	c := runtime.CapabilityImageGeneration
+	result[c] = evidence(c, runtime.SupportUnsupported, runtime.SourceRuntimeProfile, "chat model")
 	return result
 }
 
@@ -230,7 +292,7 @@ func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 // Discover 发布本机已登录账户的模型目录。
 func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 	models, err := r.inspect(ctx)
-	return runtime.Discovery{Models: models, Capabilities: capabilities(), DiscoveredAt: r.deps.Clock.Now()}, err
+	return runtime.Discovery{Models: models, Capabilities: runtimeCapabilities(models), DiscoveredAt: r.deps.Clock.Now()}, err
 }
 
 // ListModels reads models using the local app-server, without inference.

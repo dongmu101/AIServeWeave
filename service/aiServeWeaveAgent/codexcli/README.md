@@ -16,9 +16,25 @@ runtimes:
 
 每个请求启动独立临时进程和 ephemeral thread，经公开 `thread/inject_items` 保留消息角色、function_call 的 call_id 和 function_call_output 的结果，不把工具结果伪装成用户提示词。历史完整注入后以空 input 启动回合；首次动态工具回调转换成 runtime.ToolCall，返回调用方后终止整个进程组。下一轮重新注入完整历史继续，Agent 不保存跨请求线程映射。
 
-支持文本 Chat、ChatStream、Responses SSE、客户端工具及 JSON Schema 输出。工具声明和历史由 Gateway 统一转换，包含 namespace/custom 工具；additional_tools 的定义合并后在当前生成中立即可用，其历史位置和延迟加载不保留。每次响应最多一个工具调用，不声明并行工具能力。图片/音频/文件输入、嵌入、重排、采样/最大输出 token 参数、强制工具选择和原生托管工具均明确拒绝。沿用 Gateway 的 store/previous_response_id 边界：需配置控制面，否则客户端必须携带完整历史。
+支持文本 Chat、ChatStream、Responses SSE、客户端工具、JSON Schema 输出，以及经 `/v1/images/generations` 的单张图像生成（见下文「图像生成」）。工具声明和历史由 Gateway 统一转换，包含 namespace/custom 工具；additional_tools 的定义合并后在当前生成中立即可用，其历史位置和延迟加载不保留。每次响应最多一个工具调用，不声明并行工具能力。图片/音频/文件输入、嵌入、重排、采样/最大输出 token 参数、强制工具选择，以及 Chat 回合里的原生托管工具（包括生图工具）均明确拒绝。沿用 Gateway 的 store/previous_response_id 边界：需配置控制面，否则客户端必须携带完整历史。
 
 单帧、注入历史及生成文本各最多 1 MiB，每请求最多 2048 条消息、128 个工具、10000 个 RPC 帧；模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制；流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
+
+## 图像生成
+
+账户能生图时（`modelProvider/capabilities/read` 返回 `imageGeneration: true`），模型目录额外发布一个图像模型 `codex-image`。它只带 `image_generation` 能力，各项聊天能力显式标为不支持；对话模型则把 `image_generation` 显式标为不支持，所以 Chat 和生图路由永远不会选中对方的模型。Probe/Health/Discover 仍然不调用推理。
+
+`Runtime.GenerateImage` 实现 `runtime.ImageRuntime`：
+
+- 每次请求一个独立的临时进程。只有这个进程不带 `--disable image_generation`，shell、MCP、插件、`view_image` 等其余宿主工具照旧关闭；Chat 进程的参数不变，Chat 回合里出现 `imageGeneration` 条目仍会被拒绝。
+- 不注册动态工具，固定的 `baseInstructions` 要求只生成一张图，调用方提示词作为 `turn/start` 的唯一用户输入。出现工具回调、审批请求或未声明的指令文件即失败。
+- 收到第一个完成的 `imageGeneration` 条目就停止并回收进程组，一次请求不会产出两张图。图像取自 `result` 的 base64，按魔数判定格式，只接受 PNG/JPEG/WebP/GIF，解码后不超过 32 MiB。
+- 只有生图进程的 `imageGeneration` 完成帧可以放宽到 48 MiB（一张 1024² PNG 的 base64 就约 2.2 MB），其余帧仍受 1 MiB 限制。
+- Codex 会另存一份到 `CODEX_HOME/generated_images/<thread_id>/`。进程回收后，Agent 删除这个目录。目录由校验过的线程 ID（只允许 `[A-Za-z0-9_-]`）拼出来，不使用 app-server 报回的 `savedPath`，因此不可能删到别处。
+- 生图期间 app-server 可能静默二三十秒，所以只受 `RequestTimeout`（默认 5 分钟）和 Gateway 下发的期限约束，不使用流空闲期限。与 Chat 共用并发限额。
+- 账户生图额度耗尽（`usageLimitExceeded`）映射为 `rate_limited`；回合结束仍没有图映射为 `upstream_error`；格式、大小或关联校验失败映射为 `protocol_error`。错误文本不含提示词。
+
+Codex 内置生图工具不允许调用方选择上游图像模型。`codex-cli 0.162.1` 的 `thread/start`、`turn/start` 都没有相关字段，`image_generation.model`、`tools.image_generation.model` 等候选配置键也都被 CLI 判为无法识别。所以这里只发布一个不标版本的 ID，不发布 `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` 这类 API 模型 ID，也不要在 Gateway 路由里把它们设成指向 `codex-image` 的别名。尺寸、质量、背景、输出格式等参数同理，由 Gateway 按名字拒绝。设计与实测记录见 [设计文档](../../../docs/superpowers/specs/2026-10-16-codex-image-generation-design.md)。
 
 ## 验证
 
@@ -31,6 +47,8 @@ AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveAgent/codexcli -run '^TestLiveMo
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveAgent/codexcli -run TestLiveCallerToolRoundTrip -v
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveGateway/e2e -run TestLiveCodexClientThroughTunnel -v
 ```
+
+生图没有自动化的真实测试，因为每跑一次都会消耗账户的生图额度。真实验收记录见设计文档第五节。
 
 离线测试覆盖有界 stdio、跨线程/回合拒绝、禁止本机工具与审批、文本 SSE、工具结果续接、Gateway 鉴权、真实回环 mTLS、并发用户隔离、注入时钟期限、并发限额及进程回收。旧实验记录只证明其合成场景。
 

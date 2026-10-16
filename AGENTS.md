@@ -30,8 +30,8 @@
 | `service/aiServeWeaveAgent/` | `tunnel/`（隧道）、`localdiscovery/`（本机 Ollama/vLLM 自动发现）、`hostresources/`（Hello 握手前的 CPU/内存/GPU 静态容量探测，STATUS.md P2）、`agentconfig/`（`-config` 的 YAML 契约：远程 Gateway 连接 + 本地运行时声明）与 `configui/`（`-config-ui-addr` 的本地设置页面，回环地址专用）已实现；`workflow/` 四个文件目前只有 package 声明，是空壳 |
 | `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）、`routesync/`（控制面路由拉取、缓存与热切换）、`adminapi/`（`-admin-addr` 上只读的机群清单、工作流目录与按租户的 job 端点，供控制面聚合）均已落地；`controlplaneclient/` 提供 Key 校验与 Job 持久化客户端，`httpapi/` 已接入有界后台同步、旁路持久化与非终态恢复；`e2e/`（与 Agent 的联调测试） |
 | `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）、`GatewayDirectory`（副本名册）与 `TokenAdmin`（令牌签发/撤销、节点禁用/启用）已落地，详见其 README |
-| `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户用户与平台运维生命周期、Redis 权威会话、API Key、审计、配额均已落地；禁用用户在数据库事务内吊销其 Key，Key 缓存以 generation 常数时间失效；列表为游标分页 + 服务端筛选。另有 Fleet 聚合、发布管理、Job 历史与内部写 API，详见其 README |
-| `service/aiServeWeaveConsole/` | Next.js 16 + React 19 + Tailwind 4 + shadcn/ui。已落地登录、服务端会话（AES-256-GCM 密封 HttpOnly Cookie + ControlPlane Redis 撤销）、租户用户/账户安全、平台运维账户管理、API Key、审计、配额、机群、工作流与 Job 页面；租户和平台 Cookie/白名单相互隔离。Job 取消和产物访问仍是服务端直连 Gateway 的唯一例外，凭据边界见 Console AGENTS。TypeScript 走 6/7 双版本并存，测试用 Node 内置 runner |
+| `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户用户与平台运维生命周期、Redis 权威会话、API Key、审计、配额均已落地；禁用用户在数据库事务内吊销其 Key，Key 缓存以 generation 常数时间失效；列表为游标分页 + 服务端筛选。另有 Fleet 聚合、发布管理、Job 历史、租户 API 参考文档（`api_docs` 表 + 编译内置种子）与内部写 API，详见其 README |
+| `service/aiServeWeaveConsole/` | Next.js 16 + React 19 + Tailwind 4 + shadcn/ui。已落地登录、服务端会话（AES-256-GCM 密封 HttpOnly Cookie + ControlPlane Redis 撤销）、租户用户/账户安全、平台运维账户管理、API Key、审计、配额、机群、工作流、Job 与 API 文档页面；租户和平台 Cookie/白名单相互隔离。Job 取消和产物访问仍是服务端直连 Gateway 的唯一例外，凭据边界见 Console AGENTS。TypeScript 走 6/7 双版本并存，测试用 Node 内置 runner |
 
 动手前先确认目标服务是否已有实现，不要在骨架服务里凭空假设已有的包。
 

@@ -26,6 +26,11 @@ type protocol struct {
 	output   io.Writer
 	report   Report
 	activity func()
+	// image admits imageGeneration items, and only their completion frame may
+	// exceed maxFrameBytes, up to maxImageFrameBytes.
+	// image 放行 imageGeneration 条目，且只有其完成帧可以超过 maxFrameBytes，
+	// 上限为 maxImageFrameBytes。
+	image bool
 }
 
 func (p *protocol) write(v any) error {
@@ -50,10 +55,15 @@ func (p *protocol) read() (frame, error) {
 		p.activity()
 	}
 	data := p.scanner.Bytes()
+	limit := maxFrameBytes
+	if p.image {
+		limit = maxImageFrameBytes
+	}
 	var msg frame
-	if len(data) > maxFrameBytes || json.Unmarshal(data, &msg) != nil || (msg.Method == "" && len(msg.ID) == 0) {
+	if len(data) > limit || json.Unmarshal(data, &msg) != nil || (msg.Method == "" && len(msg.ID) == 0) {
 		return frame{}, ErrProtocol
 	}
+	itemType := ""
 	if msg.Method == "item/started" || msg.Method == "item/completed" {
 		var n struct {
 			Item struct {
@@ -63,11 +73,19 @@ func (p *protocol) read() (frame, error) {
 		if json.Unmarshal(msg.Params, &n) != nil {
 			return frame{}, ErrProtocol
 		}
-		switch n.Item.Type {
-		case "userMessage", "agentMessage", "reasoning", "plan", "dynamicToolCall", "contextCompaction":
+		itemType = n.Item.Type
+		switch {
+		case itemType == "userMessage", itemType == "agentMessage", itemType == "reasoning", itemType == "plan",
+			itemType == "dynamicToolCall", itemType == "contextCompaction":
+		case itemType == "imageGeneration" && p.image:
 		default:
 			return frame{}, ErrUnexpectedTool
 		}
+	}
+	// Only a finished image may be large; every other frame keeps the text bound.
+	// 只有已完成的图像可以很大，其余所有帧仍受文本上限约束。
+	if len(data) > maxFrameBytes && (msg.Method != "item/completed" || itemType != "imageGeneration") {
+		return frame{}, ErrProtocol
 	}
 	return msg, nil
 }

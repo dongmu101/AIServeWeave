@@ -1,0 +1,560 @@
+{
+  "slug": "chat-completions-nostream",
+  "category": "文本对话",
+  "category_order": 10,
+  "sort_order": 20,
+  "title": "Chat Completions（非流式）",
+  "method": "POST",
+  "path": "/v1/chat/completions",
+  "summary": "兼容 OpenAI Chat Completions 的对话接口，stream 为 false 或省略时一次性返回完整结果。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 OpenAI Chat Completions，可直接使用 OpenAI 官方 SDK",
+      "生成完成后一次性返回完整 JSON，适合不需要逐字显示的场景",
+      "支持多轮对话、工具调用（function calling）、图片与音频输入（取决于模型）",
+      "响应中包含 usage 用量统计"
+    ],
+    "notice": "非流式请求需要等待模型完整生成后才返回，长文本生成耗时较长，请适当调大客户端超时；需要实时展示时请改用流式（stream=true）。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型 ID，可通过 GET /v1/models 获取。"
+      },
+      {
+        "name": "messages",
+        "type": "array",
+        "required": true,
+        "description": "对话消息列表，不能为空。",
+        "children": [
+          {
+            "name": "role",
+            "type": "string",
+            "required": true,
+            "description": "消息角色。Claude 系列模型另接受 developer（等同 system），且 system / developer 消息必须位于对话开头。",
+            "enum": [
+              "system",
+              "user",
+              "assistant",
+              "tool"
+            ]
+          },
+          {
+            "name": "content",
+            "type": "string | array",
+            "required": true,
+            "description": "消息内容。可为字符串，或内容片段数组；数组全部为 text 片段时等价于拼接后的字符串。不支持的片段类型会返回 400。",
+            "children": [
+              {
+                "name": "type",
+                "type": "string",
+                "required": true,
+                "description": "片段类型。",
+                "enum": [
+                  "text",
+                  "image_url",
+                  "input_audio"
+                ]
+              },
+              {
+                "name": "text",
+                "type": "string",
+                "required": false,
+                "description": "type 为 text 时的文本。"
+              },
+              {
+                "name": "image_url",
+                "type": "object",
+                "required": false,
+                "description": "type 为 image_url 时必填。",
+                "children": [
+                  {
+                    "name": "url",
+                    "type": "string",
+                    "required": true,
+                    "description": "图片地址，可为 http(s) URL 或 data:image/...;base64,... 形式。"
+                  },
+                  {
+                    "name": "detail",
+                    "type": "string",
+                    "required": false,
+                    "description": "图片细节级别，原样传给模型。"
+                  }
+                ]
+              },
+              {
+                "name": "input_audio",
+                "type": "object",
+                "required": false,
+                "description": "type 为 input_audio 时必填。",
+                "children": [
+                  {
+                    "name": "data",
+                    "type": "string",
+                    "required": true,
+                    "description": "Base64 编码的音频数据。"
+                  },
+                  {
+                    "name": "format",
+                    "type": "string",
+                    "required": false,
+                    "description": "音频格式，如 wav、mp3。"
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false,
+            "description": "参与者名称。"
+          },
+          {
+            "name": "tool_call_id",
+            "type": "string",
+            "required": false,
+            "description": "role 为 tool 时，对应的工具调用 ID。"
+          },
+          {
+            "name": "tool_calls",
+            "type": "array",
+            "required": false,
+            "description": "role 为 assistant 时，该轮模型发起的工具调用（多轮工具调用时回传）。",
+            "children": [
+              {
+                "name": "id",
+                "type": "string",
+                "required": true,
+                "description": "工具调用 ID。"
+              },
+              {
+                "name": "type",
+                "type": "string",
+                "required": true,
+                "description": "固定为 function。",
+                "enum": [
+                  "function"
+                ]
+              },
+              {
+                "name": "function",
+                "type": "object",
+                "required": true,
+                "description": "调用的函数。",
+                "children": [
+                  {
+                    "name": "name",
+                    "type": "string",
+                    "required": true,
+                    "description": "函数名。"
+                  },
+                  {
+                    "name": "arguments",
+                    "type": "string",
+                    "required": true,
+                    "description": "JSON 字符串形式的参数。"
+                  }
+                ]
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "stream",
+        "type": "boolean",
+        "required": false,
+        "description": "是否以 SSE 流式返回。本页场景为 false 或省略，一次性返回完整 JSON。",
+        "default": "false"
+      },
+      {
+        "name": "stream_options",
+        "type": "object",
+        "required": false,
+        "description": "流式选项，仅在 stream=true 时有意义。",
+        "children": [
+          {
+            "name": "include_usage",
+            "type": "boolean",
+            "required": false,
+            "description": "Claude 系列模型：为 true 时在 [DONE] 之前额外发送一个 choices 为空数组、只含 usage 的 chunk。其他模型：模型上报用量时，usage 会附在对应 chunk 上返回，不受此开关影响。",
+            "default": "false"
+          }
+        ]
+      },
+      {
+        "name": "temperature",
+        "type": "number",
+        "required": false,
+        "description": "采样温度。Claude 系列模型要求 0 ~ 1。"
+      },
+      {
+        "name": "top_p",
+        "type": "number",
+        "required": false,
+        "description": "核采样概率阈值。Claude 系列模型不支持。"
+      },
+      {
+        "name": "max_tokens",
+        "type": "integer",
+        "required": false,
+        "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，取值范围 1 ~ 64000。"
+      },
+      {
+        "name": "max_completion_tokens",
+        "type": "integer",
+        "required": false,
+        "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
+      },
+      {
+        "name": "stop",
+        "type": "string | array",
+        "required": false,
+        "description": "停止序列，单个字符串或字符串数组。Claude 系列模型不支持。"
+      },
+      {
+        "name": "seed",
+        "type": "integer",
+        "required": false,
+        "description": "随机种子。Claude 系列模型不支持。"
+      },
+      {
+        "name": "tools",
+        "type": "array",
+        "required": false,
+        "description": "可供模型调用的工具列表。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": true,
+            "description": "工具类型，Claude 系列模型只支持 function。",
+            "enum": [
+              "function"
+            ]
+          },
+          {
+            "name": "function",
+            "type": "object",
+            "required": true,
+            "description": "函数定义。",
+            "children": [
+              {
+                "name": "name",
+                "type": "string",
+                "required": true,
+                "description": "函数名。"
+              },
+              {
+                "name": "description",
+                "type": "string",
+                "required": false,
+                "description": "函数说明。"
+              },
+              {
+                "name": "parameters",
+                "type": "object",
+                "required": false,
+                "description": "JSON Schema 形式的参数定义。"
+              },
+              {
+                "name": "strict",
+                "type": "boolean",
+                "required": false,
+                "description": "Claude 系列模型只接受 false。"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "tool_choice",
+        "type": "string | object",
+        "required": false,
+        "description": "工具选择策略：\"auto\"、\"none\"、\"required\"，或指定某个函数的对象 {\"type\":\"function\",\"function\":{\"name\":\"...\"}}。Claude 系列模型只支持 \"auto\"。"
+      },
+      {
+        "name": "response_format",
+        "type": "object",
+        "required": false,
+        "description": "输出格式约束。Claude 系列模型不支持。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": true,
+            "description": "格式类型，如 json_object、json_schema。"
+          },
+          {
+            "name": "json_schema",
+            "type": "object",
+            "required": false,
+            "description": "type 为 json_schema 时的结构定义。",
+            "children": [
+              {
+                "name": "name",
+                "type": "string",
+                "required": true,
+                "description": "Schema 名称。"
+              },
+              {
+                "name": "strict",
+                "type": "boolean",
+                "required": false,
+                "description": "是否严格遵循 Schema。"
+              },
+              {
+                "name": "schema",
+                "type": "object",
+                "required": true,
+                "description": "JSON Schema。"
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "id",
+        "type": "string",
+        "required": true,
+        "description": "本次补全的 ID。"
+      },
+      {
+        "name": "object",
+        "type": "string",
+        "required": true,
+        "description": "固定为 chat.completion。"
+      },
+      {
+        "name": "created",
+        "type": "integer",
+        "required": true,
+        "description": "创建时间（Unix 秒）。"
+      },
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "实际使用的模型。"
+      },
+      {
+        "name": "choices",
+        "type": "array",
+        "required": true,
+        "description": "生成结果，目前始终只有一个元素。",
+        "children": [
+          {
+            "name": "index",
+            "type": "integer",
+            "required": true,
+            "description": "固定为 0。"
+          },
+          {
+            "name": "message",
+            "type": "object",
+            "required": true,
+            "description": "模型回复。",
+            "children": [
+              {
+                "name": "role",
+                "type": "string",
+                "required": true,
+                "description": "assistant。"
+              },
+              {
+                "name": "content",
+                "type": "string",
+                "required": true,
+                "description": "回复文本；仅发起工具调用时可能为空字符串。"
+              },
+              {
+                "name": "tool_calls",
+                "type": "array",
+                "required": false,
+                "description": "模型发起的工具调用。",
+                "children": [
+                  {
+                    "name": "id",
+                    "type": "string",
+                    "required": true,
+                    "description": "工具调用 ID，回传结果时作为 tool_call_id。"
+                  },
+                  {
+                    "name": "type",
+                    "type": "string",
+                    "required": true,
+                    "description": "function。"
+                  },
+                  {
+                    "name": "function",
+                    "type": "object",
+                    "required": true,
+                    "description": "函数调用。",
+                    "children": [
+                      {
+                        "name": "name",
+                        "type": "string",
+                        "required": true,
+                        "description": "函数名。"
+                      },
+                      {
+                        "name": "arguments",
+                        "type": "string",
+                        "required": true,
+                        "description": "JSON 字符串形式的参数。"
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "name": "finish_reason",
+            "type": "string",
+            "required": true,
+            "description": "结束原因，常见值：stop、length、tool_calls。"
+          }
+        ]
+      },
+      {
+        "name": "usage",
+        "type": "object",
+        "required": true,
+        "description": "用量统计。",
+        "children": [
+          {
+            "name": "prompt_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "输入 token 数。"
+          },
+          {
+            "name": "completion_tokens",
+            "type": "integer",
+            "required": false,
+            "description": "输出 token 数，为 0 时省略。"
+          },
+          {
+            "name": "total_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "总 token 数。"
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/chat/completions \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"messages\": [\n      {\"role\": \"system\", \"content\": \"你是一个乐于助人的助手。\"},\n      {\"role\": \"user\", \"content\": \"用一句话介绍你自己\"}\n    ],\n    \"temperature\": 0.7,\n    \"max_tokens\": 512\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{{BASE_URL}}/v1\", api_key=\"{{API_KEY}}\")\n\nresp = client.chat.completions.create(\n    model=\"{{MODEL}}\",\n    messages=[\n        {\"role\": \"system\", \"content\": \"你是一个乐于助人的助手。\"},\n        {\"role\": \"user\", \"content\": \"用一句话介绍你自己\"},\n    ],\n    temperature=0.7,\n    max_tokens=512,\n)\n\nprint(resp.choices[0].message.content)\nprint(resp.usage)"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/chat/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    messages: [\n      { role: \"system\", content: \"你是一个乐于助人的助手。\" },\n      { role: \"user\", content: \"用一句话介绍你自己\" },\n    ],\n    temperature: 0.7,\n    max_tokens: 512,\n  }),\n});\n\nconst data = await res.json();\nif (!res.ok) throw new Error(data.error?.message);\nconsole.log(data.choices[0].message.content);"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"id\": \"chatcmpl-123\",\n  \"object\": \"chat.completion\",\n  \"created\": 1760572800,\n  \"model\": \"{{MODEL}}\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\": \"assistant\",\n        \"content\": \"你好，我是一个 AI 助手，可以回答问题、写作和编程。\"\n      },\n      \"finish_reason\": \"stop\"\n    }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 25,\n    \"completion_tokens\": 18,\n    \"total_tokens\": 43\n  }\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（工具调用）",
+        "content_type": "application/json",
+        "body": "{\n  \"id\": \"chatcmpl-456\",\n  \"object\": \"chat.completion\",\n  \"created\": 1760572800,\n  \"model\": \"{{MODEL}}\",\n  \"choices\": [\n    {\n      \"index\": 0,\n      \"message\": {\n        \"role\": \"assistant\",\n        \"content\": \"\",\n        \"tool_calls\": [\n          {\n            \"id\": \"call_abc123\",\n            \"type\": \"function\",\n            \"function\": {\n              \"name\": \"get_weather\",\n              \"arguments\": \"{\\\"city\\\":\\\"上海\\\"}\"\n            }\n          }\n        ]\n      },\n      \"finish_reason\": \"tool_calls\"\n    }\n  ],\n  \"usage\": {\n    \"prompt_tokens\": 80,\n    \"completion_tokens\": 20,\n    \"total_tokens\": 100\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "参数错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"model and a non-empty messages array are required\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "认证失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 504,
+        "label": "请求超时",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the request timed out\",\n    \"type\": \"timeout_error\",\n    \"code\": \"timeout\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "使用示例：多轮对话",
+        "body": "接口本身不保存上下文。多轮对话时，把历史的 user 与 assistant 消息按顺序放入 messages，最后追加本轮的 user 消息。",
+        "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"你是一个乐于助人的助手。\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"推荐一本科幻小说\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"推荐《三体》。\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": \"它讲了什么？\"\n    }\n  ]\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "使用示例：工具调用",
+        "body": "在 tools 中声明函数。模型决定调用时，finish_reason 为 tool_calls，message.tool_calls 给出函数名与参数。执行函数后，把模型的 assistant 消息（含 tool_calls）和 role 为 tool、带 tool_call_id 的结果消息一起追加到 messages 再次请求。",
+        "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"上海现在天气怎么样？\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": \"\",\n      \"tool_calls\": [\n        {\n          \"id\": \"call_abc123\",\n          \"type\": \"function\",\n          \"function\": {\n            \"name\": \"get_weather\",\n            \"arguments\": \"{\\\"city\\\":\\\"上海\\\"}\"\n          }\n        }\n      ]\n    },\n    {\n      \"role\": \"tool\",\n      \"tool_call_id\": \"call_abc123\",\n      \"content\": \"{\\\"temp\\\":22,\\\"condition\\\":\\\"多云\\\"}\"\n    }\n  ],\n  \"tools\": [\n    {\n      \"type\": \"function\",\n      \"function\": {\n        \"name\": \"get_weather\",\n        \"description\": \"查询城市天气\",\n        \"parameters\": {\n          \"type\": \"object\",\n          \"properties\": {\n            \"city\": {\n              \"type\": \"string\"\n            }\n          },\n          \"required\": [\n            \"city\"\n          ]\n        }\n      }\n    }\n  ]\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "使用示例：图片输入",
+        "body": "content 可以是内容片段数组，混合 text 与 image_url。所选模型不支持图片输入时返回 400（capability_unsupported）。",
+        "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"text\",\n          \"text\": \"描述这张图片\"\n        },\n        {\n          \"type\": \"image_url\",\n          \"image_url\": {\n            \"url\": \"https://example.com/cat.png\"\n          }\n        }\n      ]\n    }\n  ]\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "Claude 系列模型的参数限制",
+        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、reasoning_effort、prompt_cache_key）会被拒绝；store 只能为 false。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+      },
+      {
+        "title": "错误码说明",
+        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+      }
+    ]
+  }
+}

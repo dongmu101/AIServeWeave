@@ -1,0 +1,152 @@
+{
+  "slug": "rerank",
+  "category": "向量与重排",
+  "category_order": 30,
+  "sort_order": 20,
+  "title": "Rerank",
+  "method": "POST",
+  "path": "/v1/rerank",
+  "summary": "按与查询的相关性对候选文档打分排序，接口形状与 Cohere / Jina 风格的 rerank 接口一致。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "Cohere / Jina 风格的重排接口，常用于 RAG 检索结果精排",
+      "结果按相关性从高到低排列，index 指向 documents 中的原始位置",
+      "top_n 可只返回得分最高的前 N 条"
+    ],
+    "notice": "OpenAI 没有官方 rerank 接口，请使用 HTTP 直接调用。documents 只接受字符串数组；响应不包含原文与 usage，如需原文请按 index 回查。仅支持重排的模型不会出现在 GET /v1/models 列表中，请使用平台提供的模型 ID。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "重排模型 ID。"
+      },
+      {
+        "name": "query",
+        "type": "string",
+        "required": true,
+        "description": "查询文本，不能为空。"
+      },
+      {
+        "name": "documents",
+        "type": "array",
+        "required": true,
+        "description": "待排序的候选文档（字符串数组），不能为空。"
+      },
+      {
+        "name": "top_n",
+        "type": "integer",
+        "required": false,
+        "description": "只返回得分最高的前 N 条；省略时返回全部。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "实际使用的模型。"
+      },
+      {
+        "name": "results",
+        "type": "array",
+        "required": true,
+        "description": "排序结果，按相关性从高到低。",
+        "children": [
+          {
+            "name": "index",
+            "type": "integer",
+            "required": true,
+            "description": "该结果在 documents 中的位置（从 0 开始）。"
+          },
+          {
+            "name": "relevance_score",
+            "type": "number",
+            "required": true,
+            "description": "相关性得分，越大越相关。"
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/rerank \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"query\": \"如何保持健康的作息？\",\n    \"documents\": [\n      \"每天保证 7 到 8 小时睡眠。\",\n      \"Python 是一种编程语言。\",\n      \"规律运动有助于改善睡眠质量。\"\n    ],\n    \"top_n\": 2\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nresp = requests.post(\n    \"{{BASE_URL}}/v1/rerank\",\n    headers={\"Authorization\": \"Bearer {{API_KEY}}\"},\n    json={\n        \"model\": \"{{MODEL}}\",\n        \"query\": \"如何保持健康的作息？\",\n        \"documents\": [\n            \"每天保证 7 到 8 小时睡眠。\",\n            \"Python 是一种编程语言。\",\n            \"规律运动有助于改善睡眠质量。\",\n        ],\n        \"top_n\": 2,\n    },\n    timeout=60,\n)\nresp.raise_for_status()\nfor r in resp.json()[\"results\"]:\n    print(r[\"index\"], r[\"relevance_score\"])"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/rerank\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    query: \"如何保持健康的作息？\",\n    documents: [\n      \"每天保证 7 到 8 小时睡眠。\",\n      \"Python 是一种编程语言。\",\n      \"规律运动有助于改善睡眠质量。\",\n    ],\n    top_n: 2,\n  }),\n});\n\nconst data = await res.json();\nif (!res.ok) throw new Error(data.error?.message);\ndata.results.forEach((r) => console.log(r.index, r.relevance_score));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"model\": \"{{MODEL}}\",\n  \"results\": [\n    {\n      \"index\": 0,\n      \"relevance_score\": 0.9312\n    },\n    {\n      \"index\": 2,\n      \"relevance_score\": 0.7125\n    }\n  ]\n}"
+      },
+      {
+        "status": 400,
+        "label": "参数错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"model, query and a non-empty documents array are required\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "认证失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "暂时无法校验密钥",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"cannot verify the API key right now\",\n    \"type\": \"api_error\",\n    \"code\": \"verification_unavailable\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "错误码说明",
+        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+      }
+    ]
+  }
+}

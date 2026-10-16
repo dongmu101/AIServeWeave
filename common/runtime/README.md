@@ -153,6 +153,7 @@ Manager
 **实现文件：**
 
 - `common/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`、`MessagesRuntime`。
+- `common/runtime/image.go`：可选接口 `ImageRuntime` 及 `ImageRequest`/`ImageMeta`/`ImageEvent`。
 - `common/runtime/stream.go`：`Stream[T]` 及通用关闭语义。
 
 接口名称和签名在第一阶段通过编译期断言及契约测试固定。后续适配器不得绕过这些接口向 `Manager` 塞入后端私有状态。
@@ -431,6 +432,7 @@ func (s CapabilitySet) Require(c Capability) error
 | 文件 | 职责 |
 | --- | --- |
 | `runtime.go` | `Runtime`、`InferenceRuntime`、`WorkflowRuntime`、`MessagesRuntime` 接口及编译期约束 |
+| `image.go` | 可选的 `ImageRuntime` 接口、图像请求与流事件类型、跨跳共用的大小上限 |
 | `types.go` | Kind、Config、Descriptor、Probe、Health、Discovery、模型和请求结果类型 |
 | `config.go` | `Config.Normalize`、`Validate`、`LogValue` 及 URL/Header 规则 |
 | `deps.go` | `Dependencies`、`Clock`、`WSDialer`、`WSConn`、`Metrics` 协作者接口 |
@@ -1257,3 +1259,12 @@ go test -race ./common/runtime/...
 ## 原生 Anthropic Messages 契约
 
 `messages.go` 定义 `MessagesRuntime`、`MessagesRequest` 和 `MessagesEvent`，与通用 Chat 接口分开。`CapabilityMessages` 的值为 `anthropic_messages`；它只用于原生 Messages 调度，不能据此允许 Chat/Responses。请求只携带目标模型、已认证归属及有界推理 JSON，不接受 HTTP 地址、请求头、凭据或 CLI 配置。事件为单条原生数据 JSON，不含 HTTP 帧。跨隧道编解码统一由 `common/tunnelwire`，Agent 的 Claude 实现严格拒绝未知语义字段及未支持的内容块。
+
+## 图像生成契约
+
+`image.go` 定义可选接口 `ImageRuntime`，写法与 `MessagesRuntime` 相同：不具备该能力的后端不需要实现空方法，Agent 的 dispatch 在运行时做类型断言。`GenerateImage` 一次只生成一张图，返回 `Stream[ImageEvent]`：第一个事件只带 `ImageMeta`（按字节内容判定的 `ContentType`、精确的 `Size`、可选的 `RevisedPrompt`），之后每个事件只带一个字节分块。
+
+- `ImageRequest` 只有模型 ID、提示词和可选的归属标识（`TenantID`/`KeyID`），没有 URL、路径、请求头或凭据字段。提示词不得写入日志。
+- `MaxImagePromptBytes`（32 KiB）、`MaxImageBytes`（32 MiB）、`MaxImageChunkBytes`（256 KiB）是契约值，Agent 拒绝产出更多，Gateway 拒绝接收更多。
+- `CapabilityImageGeneration`（`image_generation`）为它门禁。图像模型必须把各项聊天能力**显式**标为 `unsupported`，对话模型也必须把 `image_generation` 显式标为 `unsupported`。原因是 `Intersect` 会用运行时级别的能力补齐模型没提到的项，只省略不写，就会让图像模型继承运行时级别的聊天能力。
+- 当前唯一的实现是 Agent 的 `codexcli`，见 [Codex 包说明](../../service/aiServeWeaveAgent/codexcli/README.md#图像生成)。

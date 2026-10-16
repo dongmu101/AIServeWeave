@@ -124,7 +124,7 @@ go run ./service/aiServeWeaveGateway \
 | 守卫 | 路由 |
 | --- | --- |
 | 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login` |
-| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*` |
+| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读） |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径），见「机群清单」与「节点写路径」两节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
@@ -708,3 +708,43 @@ Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，�
 ## 租户 Agent AI 服务与模型目录
 
 `GET /admin/v1/models` 使用租户会话认证，允许 owner/admin/member 读取连接到 `Fleet.Gateways` 第一个 Gateway 的 Agent 所上报的服务与模型，不使用 Gateway 的 `local_runtimes`。接口与平台机群 API 分开，显式投影为 `{collected_at, partial, services: [{agent_id, service_id, node_online, kind, state, version, models: [{id, capabilities}]}]}`；仅公开 Agent 标识与其服务 ID 来区分上报来源；不返回 Gateway 副本标识、内部地址、凭据或自由诊断文本，也不读取任何租户的 Job/用量数据。`node_online` 表示 Agent 连接状态；离线 Agent 保留最近一次上报，并由 Console 标注为历史观测。目录共享给所有已登录租户；它不是租户可调度模型的授权目录。Gateway 读取失败保留 `partial=true` 并返回空 services，Console 将其显示为读取失败；未配置 Fleet 时不挂载端点。客户端不能选择其他 Gateway 或指定租户。平台令牌不能代替租户会话读取此接口，原 `/operator/v1/nodes` 仍只对平台运维开放。
+
+## API 参考文档（租户）
+
+租户控制台「API 文档」页面的内容存放在 `api_docs` 表里，而不是写死在 Console：新增一个模型或能力只需加一份文档，不必发布 Console。PostgreSQL/MySQL 双支持的固定版本迁移（命名空间 `api_docs`，`gormstore/apidocs.go`）。
+
+```sql
+api_docs(
+  slug           VARCHAR(128) PRIMARY KEY,   -- 文档键，小写字母/数字/连字符
+  category, category_order, sort_order,     -- 导航分组与排序
+  title, method, path, summary,             -- 导航列表所需字段，列表读取不加载正文
+  content_json   MEDIUMTEXT / TEXT,         -- 整页正文（参数表、示例、附加段落），上限 256 KiB
+  status         'published' | 'draft',     -- 草稿对租户不可见，按不存在处理
+  source         'seed' | 'operator',
+  seed_revision, version,                   -- version 是运维写入的 CAS 令牌
+  updated_by, updated_at
+)
+```
+
+**初始化填充。** `internal/apidocs/seed/*.json` 编译进二进制，每份对应一个 Gateway 端点（当前 19 份：chat/responses/messages/embeddings/rerank/models、图像、语音、Ollama 兼容、工作流与 Job）。控制面每次启动都调用 `logic.SyncAPIDocSeeds`：缺失的插入，仍是 `source=seed` 且 `seed_revision` 更旧的刷新，其余不动。两条语句都是带条件的单条语句，多个副本同时启动也不会互相覆盖；种子格式错误会让启动失败——它与损坏的内嵌迁移同属构建缺陷。
+
+**更新文档的两条路：**
+
+- 开发者随代码一起改：在 `seed/` 下新增 `<slug>.json`，或编辑已有文件并把 `revision` 加一。下次启动时，没被运维动过的行自动更新。文件名必须等于 `slug`，未知字段会被拒绝。
+- 运维在线改：Console `/operator/api-docs` 以 JSON 编辑并实时预览。任何一次运维写入都把该行改为 `source=operator`，此后种子更新不再覆盖它；「恢复内置版本」把它交还给种子。有种子的文档不能删除（下次启动会被重新建出），要隐藏就改为草稿。
+
+示例代码与正文里的 `{{BASE_URL}}`、`{{API_KEY}}`、`{{MODEL}}` 由 Console 渲染时替换；`{{API_KEY}}` 永远替换成固定的 `YOUR_API_KEY`，页面不接触真实 Key。
+
+| 方法 | 路径 | 守卫 | 说明 |
+| --- | --- | --- | --- |
+| GET | `/admin/v1/api-docs` | 租户会话 | 已发布文档的导航条目（不含正文） |
+| GET | `/admin/v1/api-docs/:slug` | 租户会话 | 单页完整内容；草稿与不存在一样返回 404 |
+| GET | `/operator/v1/api-docs`、`/operator/v1/api-docs/:slug` | 平台会话 | 含草稿、来源、版本与 `seeded` |
+| POST | `/operator/v1/api-docs` | 平台会话 | 新建，slug 已存在返回 409 |
+| PUT | `/operator/v1/api-docs/:slug` | 平台会话 | 整页替换，须带 `expected_version`，版本不符返回 409 |
+| POST | `/operator/v1/api-docs/:slug/reset` | 平台会话 | 恢复内置版本，须带 `expected_version` |
+| DELETE | `/operator/v1/api-docs/:slug?expected_version=N` | 平台会话 | 仅限无种子的文档，有种子返回 409 |
+
+写入请求体上限 512 KiB（`apidocs.MaxRequestBytes`），超出返回 413；每次运维写入与审计行（`api_doc.create/update/reset/delete`）在同一事务提交；启动时的种子刷新没有操作者，不记审计。
+
+已知缺口：未接入真实 PostgreSQL/MySQL 跑 live 测试（与 P09 新增表同一先例）；文档内容由人维护，与 Gateway 代码之间没有自动一致性校验——改 Gateway 端点时须同步改对应种子并提高 `revision`。

@@ -346,6 +346,17 @@ const (
 	ActionAlertRuleUpdate                 = "alert_rule.update"
 	ActionAlertRuleDelete                 = "alert_rule.delete"
 	ActionAlertAcknowledge                = "alert.acknowledge"
+	// ActionAPIDocCreate, ActionAPIDocUpdate, ActionAPIDocReset and
+	// ActionAPIDocDelete record platform writes to the tenant-facing API
+	// reference. Seed refreshes at startup have no actor and are not audited.
+	//
+	// ActionAPIDocCreate、ActionAPIDocUpdate、ActionAPIDocReset 与
+	// ActionAPIDocDelete 记录平台对面向租户 API 参考文档的写入。启动时的种子刷新
+	// 没有操作者，不记审计。
+	ActionAPIDocCreate = "api_doc.create"
+	ActionAPIDocUpdate = "api_doc.update"
+	ActionAPIDocReset  = "api_doc.reset"
+	ActionAPIDocDelete = "api_doc.delete"
 )
 
 // AuditLog is one administrative action, recorded for the README's

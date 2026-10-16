@@ -1,0 +1,303 @@
+{
+  "slug": "ollama-chat",
+  "category": "Ollama 兼容",
+  "category_order": 60,
+  "sort_order": 10,
+  "title": "Ollama 对话",
+  "method": "POST",
+  "path": "/api/chat",
+  "summary": "兼容 Ollama /api/chat 的多轮对话接口，默认以 NDJSON 流式返回。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 Ollama 原生 /api/chat 的请求与响应格式",
+      "与 Ollama 一致，stream 缺省为 true，流式响应为 NDJSON（application/x-ndjson），每行一个 JSON 对象",
+      "支持 options 中的 temperature、top_p、num_predict、seed、stop",
+      "不支持工具调用（tools）、结构化输出（format）与图片输入（messages[].images），传入即返回 400",
+      "需要 Bearer API Key 鉴权"
+    ],
+    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "鉴权头，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型 ID，可通过 GET /v1/models 查看。"
+      },
+      {
+        "name": "messages",
+        "type": "array",
+        "required": true,
+        "description": "对话消息列表，不能为空。",
+        "children": [
+          {
+            "name": "role",
+            "type": "string",
+            "required": true,
+            "description": "消息角色，例如 system、user、assistant。"
+          },
+          {
+            "name": "content",
+            "type": "string",
+            "required": true,
+            "description": "消息文本。"
+          },
+          {
+            "name": "images",
+            "type": "array",
+            "required": false,
+            "description": "不支持。任意一条消息带非空 images 时返回 400。"
+          }
+        ]
+      },
+      {
+        "name": "stream",
+        "type": "boolean",
+        "required": false,
+        "default": "true",
+        "description": "是否流式返回。与 Ollama 一致，字段缺省时为 true；显式传 false 时一次性返回完整结果。"
+      },
+      {
+        "name": "options",
+        "type": "object",
+        "required": false,
+        "description": "采样参数。只识别下列字段，其余字段（如 num_ctx、num_gpu、mirostat 等）会被忽略。",
+        "children": [
+          {
+            "name": "temperature",
+            "type": "number",
+            "required": false,
+            "description": "采样温度。"
+          },
+          {
+            "name": "top_p",
+            "type": "number",
+            "required": false,
+            "description": "核采样概率阈值。"
+          },
+          {
+            "name": "num_predict",
+            "type": "integer",
+            "required": false,
+            "description": "最多生成的 Token 数。"
+          },
+          {
+            "name": "seed",
+            "type": "integer",
+            "required": false,
+            "description": "随机种子。"
+          },
+          {
+            "name": "stop",
+            "type": "string | array",
+            "required": false,
+            "description": "停止序列，可以是单个字符串或字符串数组。"
+          }
+        ]
+      },
+      {
+        "name": "keep_alive",
+        "type": "string | number",
+        "required": false,
+        "description": "为兼容 Ollama 客户端而接受，但不起作用。"
+      },
+      {
+        "name": "tools",
+        "type": "array",
+        "required": false,
+        "description": "不支持，传入即返回 400。"
+      },
+      {
+        "name": "format",
+        "type": "string | object",
+        "required": false,
+        "description": "不支持，传入即返回 400。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型名称。"
+      },
+      {
+        "name": "created_at",
+        "type": "string",
+        "required": true,
+        "description": "响应生成时间，RFC 3339 格式（UTC，含纳秒）。"
+      },
+      {
+        "name": "message",
+        "type": "object",
+        "required": true,
+        "description": "模型回复。流式时每行携带一段增量文本，最后一行 content 为空字符串。",
+        "children": [
+          {
+            "name": "role",
+            "type": "string",
+            "required": true,
+            "description": "固定为 assistant。"
+          },
+          {
+            "name": "content",
+            "type": "string",
+            "required": true,
+            "description": "回复文本（流式时为本段增量）。"
+          }
+        ]
+      },
+      {
+        "name": "done",
+        "type": "boolean",
+        "required": true,
+        "description": "是否为最后一条。非流式响应恒为 true；流式时只有最后一行为 true。"
+      },
+      {
+        "name": "done_reason",
+        "type": "string",
+        "required": false,
+        "description": "结束原因，缺省为 stop。仅在 done 为 true 时出现。"
+      },
+      {
+        "name": "prompt_eval_count",
+        "type": "integer",
+        "required": false,
+        "description": "输入 Token 数。仅在 done 为 true 且有用量数据时出现。"
+      },
+      {
+        "name": "eval_count",
+        "type": "integer",
+        "required": false,
+        "description": "输出 Token 数。仅在 done 为 true 且有用量数据时出现。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/api/chat \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"messages\": [{\"role\": \"user\", \"content\": \"用一句话介绍你自己\"}],\n    \"stream\": false,\n    \"options\": {\"temperature\": 0.7, \"num_predict\": 256}\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import json\nimport requests\n\n# 流式（stream 缺省即为 true）\nwith requests.post(\n    \"{{BASE_URL}}/api/chat\",\n    headers={\"Authorization\": \"Bearer {{API_KEY}}\"},\n    json={\n        \"model\": \"{{MODEL}}\",\n        \"messages\": [{\"role\": \"user\", \"content\": \"用一句话介绍你自己\"}],\n    },\n    stream=True,\n) as resp:\n    resp.raise_for_status()\n    for line in resp.iter_lines():\n        if not line:\n            continue\n        chunk = json.loads(line)\n        if \"error\" in chunk:\n            raise RuntimeError(chunk[\"error\"])\n        print(chunk[\"message\"][\"content\"], end=\"\", flush=True)\n        if chunk[\"done\"]:\n            print()\n            break"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const resp = await fetch(\"{{BASE_URL}}/api/chat\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    messages: [{ role: \"user\", content: \"用一句话介绍你自己\" }],\n    stream: false,\n  }),\n});\nconst body = await resp.json();\nif (!resp.ok) throw new Error(typeof body.error === \"string\" ? body.error : body.error.message);\nconsole.log(body.message.content);"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功（stream=false）",
+        "content_type": "application/json",
+        "body": "{\n  \"model\": \"{{MODEL}}\",\n  \"created_at\": \"2026-10-16T08:30:12.345678901Z\",\n  \"message\": {\n    \"role\": \"assistant\",\n    \"content\": \"我是一个通用 AI 助手，可以回答问题、写作和编程。\"\n  },\n  \"done\": true,\n  \"done_reason\": \"stop\",\n  \"prompt_eval_count\": 14,\n  \"eval_count\": 21\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（流式，NDJSON）",
+        "content_type": "application/x-ndjson",
+        "body": "{\"model\": \"{{MODEL}}\", \"created_at\": \"2026-10-16T08:30:12.101Z\", \"message\": {\"role\": \"assistant\", \"content\": \"我是\"}, \"done\": false}\n{\"model\": \"{{MODEL}}\", \"created_at\": \"2026-10-16T08:30:12.152Z\", \"message\": {\"role\": \"assistant\", \"content\": \"一个通用 AI 助手。\"}, \"done\": false}\n{\"model\": \"{{MODEL}}\", \"created_at\": \"2026-10-16T08:30:12.198Z\", \"message\": {\"role\": \"assistant\", \"content\": \"\"}, \"done\": true, \"done_reason\": \"stop\", \"prompt_eval_count\": 14, \"eval_count\": 9}"
+      },
+      {
+        "status": 400,
+        "label": "缺少 model 或 messages",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"model and a non-empty messages array are required\"\n}"
+      },
+      {
+        "status": 400,
+        "label": "传入了不支持的字段",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"tools is not supported by this Ollama-compatible endpoint\"\n}"
+      },
+      {
+        "status": 400,
+        "label": "消息带图片",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"messages[0].images is not supported by this Ollama-compatible endpoint\"\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 缺失或无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the requested model is not available on any connected node\"\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出租户配额（响应带 Retry-After 头）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "暂无可用容量",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"no node had capacity for this request; retry shortly\"\n}"
+      },
+      {
+        "status": 502,
+        "label": "后端返回错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the backend returned an error\"\n}"
+      },
+      {
+        "status": 504,
+        "label": "请求超时",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the request timed out\"\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "流式响应",
+        "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，message.content 是本段增量文本；最后一行 done 为 true，message.content 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n流式过程中若发生错误，状态码已经是 200，错误会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。客户端应逐行检查是否含 error 字段。"
+      },
+      {
+        "title": "与原生 Ollama 的差异",
+        "body": "1. 响应不含 total_duration、load_duration、prompt_eval_duration、eval_duration 等耗时字段。\n2. done_reason、prompt_eval_count、eval_count 没有值时整体省略，而不是返回 0。\n3. options 只识别 temperature、top_p、num_predict、seed、stop，其他选项被忽略；keep_alive 被接受但不起作用。\n4. tools、format、messages[].images 不支持，传入时返回 400，错误信息会指出具体字段。\n5. 需要 Bearer API Key 鉴权。"
+      },
+      {
+        "title": "不支持的 Ollama 端点",
+        "body": "平台不管理模型文件，以下模型管理类端点固定返回 501，错误体为 Ollama 格式：\n\nPOST /api/create、POST /api/pull、POST /api/push、DELETE /api/delete、POST /api/copy、POST /api/show、GET /api/tags、GET /api/ps\n\n需要查看可用模型时请改用 GET /v1/models。批量向量接口 /api/embed 及其他未列出的路径未实现（返回 404），向量请使用 POST /api/embeddings 或 POST /v1/embeddings。以上端点同样需要先通过鉴权，未携带有效 Key 时先得到 401。",
+        "code": "{\n  \"error\": \"this gateway does not manage node-local models; model management endpoints are not supported (each node manages its own models independently)\"\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "错误码一览",
+        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+      },
+      {
+        "title": "鉴权与配额",
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+      }
+    ]
+  }
+}

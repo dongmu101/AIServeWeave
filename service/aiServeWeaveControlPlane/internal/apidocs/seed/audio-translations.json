@@ -1,0 +1,194 @@
+{
+  "slug": "audio-translations",
+  "category": "语音",
+  "category_order": 40,
+  "sort_order": 20,
+  "title": "语音翻译",
+  "method": "POST",
+  "path": "/v1/audio/translations",
+  "summary": "把音频翻译成英文文本，兼容 OpenAI /v1/audio/translations。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 OpenAI Audio API，可直接使用 OpenAI SDK",
+      "将音频内容翻译为英文文本，输出语言固定为英文",
+      "请求为 multipart/form-data，整个请求不超过 25 MiB",
+      "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频",
+      "response_format 支持 json（默认）与 text",
+      "不接受 language 参数，传入即返回 400"
+    ],
+    "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前可被稳定识别为音频的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；文件头无法识别为音频时返回 400。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "鉴权头，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "multipart/form-data（由 HTTP 客户端自动生成并附带 boundary）。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "multipart",
+    "body_params": [
+      {
+        "name": "file",
+        "type": "file",
+        "required": true,
+        "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容。整个请求（含音频）不超过 25 MiB。"
+      },
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "语音识别模型 ID。"
+      },
+      {
+        "name": "prompt",
+        "type": "string",
+        "required": false,
+        "description": "可选的提示文本，用于引导识别风格或专有名词。"
+      },
+      {
+        "name": "temperature",
+        "type": "number",
+        "required": false,
+        "description": "采样温度，须为数字，否则返回 400。"
+      },
+      {
+        "name": "response_format",
+        "type": "string",
+        "required": false,
+        "default": "json",
+        "description": "返回格式。json 返回 `{\"text\": ...}`；text 直接返回纯文本。srt、vtt、verbose_json 不支持。",
+        "enum": [
+          "json",
+          "text"
+        ]
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "text",
+        "type": "string",
+        "required": true,
+        "description": "翻译结果文本。response_format=text 时响应体直接是该文本（text/plain; charset=utf-8）。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/audio/translations \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -F file=@audio.wav \\\n  -F model={{MODEL}} \\\n  -F response_format=json"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nwith open(\"audio.wav\", \"rb\") as f:\n    resp = requests.post(\n        \"{{BASE_URL}}/v1/audio/translations\",\n        headers={\"Authorization\": \"Bearer {{API_KEY}}\"},\n        files={\"file\": (\"audio.wav\", f, \"audio/wav\")},\n        data={\n            \"model\": \"{{MODEL}}\",\n            \"response_format\": \"json\",\n        },\n    )\nresp.raise_for_status()\nprint(resp.json()[\"text\"])"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "import { readFile } from \"node:fs/promises\";\n\nconst form = new FormData();\nform.append(\"file\", new Blob([await readFile(\"audio.wav\")], { type: \"audio/wav\" }), \"audio.wav\");\nform.append(\"model\", \"{{MODEL}}\");\nform.append(\"response_format\", \"json\");\n\nconst resp = await fetch(\"{{BASE_URL}}/v1/audio/translations\", {\n  method: \"POST\",\n  headers: { \"Authorization\": \"Bearer {{API_KEY}}\" },\n  body: form,\n});\nconst body = await resp.json();\nif (!resp.ok) throw new Error(`${body.error.code}: ${body.error.message}`);\nconsole.log(body.text);"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功（response_format=json）",
+        "content_type": "application/json",
+        "body": "{\n  \"text\": \"Hello, welcome to today's product briefing.\"\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（response_format=text）",
+        "content_type": "text/plain; charset=utf-8",
+        "body": "Hello, welcome to today's product briefing."
+      },
+      {
+        "status": 400,
+        "label": "缺少 model",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"model is required\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "缺少 file",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"a file part named \\\"file\\\" is required\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "扩展名不支持",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"unsupported file extension \\\".m4a\\\"; supported: .mp3, .wav, .ogg, .flac\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "不是 multipart 请求",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the request body must be multipart/form-data\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "传入了 language",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"language is not accepted for translation; its output language is always English\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 缺失或无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出租户配额（响应带 Retry-After 头）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 502,
+        "label": "后端返回错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the backend returned an error\",\n    \"type\": \"api_error\",\n    \"code\": \"upstream_error\"\n  }\n}"
+      },
+      {
+        "status": 504,
+        "label": "请求超时",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the request timed out\",\n    \"type\": \"timeout_error\",\n    \"code\": \"timeout\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "文件要求",
+        "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400，错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
+      },
+      {
+        "title": "参数校验",
+        "body": "model 为必填；response_format 只能是 json 或 text，其余取值返回 400：`response_format must be \"json\" or \"text\"; srt, vtt and verbose_json are not supported`；temperature 无法解析为数字时返回 400：`temperature must be a number`。\n\n翻译接口的输出语言固定为英文，因此不接受 language 字段，传入非空值即返回 400。"
+      },
+      {
+        "title": "错误码一览",
+        "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+      },
+      {
+        "title": "鉴权与配额",
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+      }
+    ]
+  }
+}

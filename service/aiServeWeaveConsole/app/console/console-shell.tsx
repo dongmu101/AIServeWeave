@@ -33,6 +33,7 @@ const NAV_ITEMS: readonly { href: string; label: string }[] = [
   { href: "/console/usage", label: "用量" },
   { href: "/console/models", label: "AI 服务与模型" },
   { href: "/console/workflows", label: "工作流" },
+  { href: "/console/docs", label: "API 文档" },
   { href: "/console/jobs", label: "运行" },
   { href: "/console/jobs/history", label: "运行历史" },
   { href: "/console/settings", label: "设置" },
@@ -132,7 +133,12 @@ export function ConsoleShell({
           </div>
         </div>
       </header>
-      <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 wrap-anywhere px-4 py-6">
+      {/* The API reference is a three-column page and gets a wider frame. / API 参考文档是三栏页面，使用更宽的框架。 */}
+      <main
+        className={`mx-auto w-full min-w-0 flex-1 wrap-anywhere px-4 py-6 ${
+          pathname === "/console/docs" || pathname.startsWith("/console/docs/") ? "max-w-[96rem]" : "max-w-6xl"
+        }`}
+      >
         {children}
       </main>
     </div>
