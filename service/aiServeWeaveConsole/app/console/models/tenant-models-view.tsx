@@ -99,7 +99,7 @@ function AgentServices({ agent, onSelect }: { agent: AgentGroup; onSelect: (serv
     helper.accessor("serviceId", { header: "服务 ID / 类型", cell: info => <div className="max-w-48 whitespace-normal break-all"><code className="text-xs">{info.getValue()}</code><div className="text-xs text-muted-foreground">{info.row.original.kind}</div></div> }),
     helper.accessor("state", { header: "健康状态", cell: info => <Badge variant="outline">{STATES[info.getValue()] ?? info.getValue()}</Badge> }),
     helper.accessor("version", { header: "版本", cell: info => <span className="inline-block max-w-32 whitespace-normal break-all">{info.getValue() || "未上报"}</span> }),
-    helper.accessor("models", { header: "模型", cell: info => <div className="max-w-64 whitespace-normal break-all text-xs"><span>{info.getValue().length} 个模型</span><p className="mt-1 text-muted-foreground">{info.getValue().slice(0, 3).map(model => model.id).join("、") || "尚未发现模型"}{info.getValue().length > 3 ? " …" : ""}</p></div> }),
+    helper.accessor("models", { header: "模型", cell: info => <span className="text-xs">{info.getValue().length} 个模型</span> }),
     helper.display({ id: "details", header: "详情", cell: info => <Button variant="outline" size="sm" onClick={() => onSelect(info.row.original)}>查看模型</Button> }),
   ]), [onSelect]);
   const table = useTable({ features, columns, data: agent.services.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE), getRowId: service => service.serviceId });
