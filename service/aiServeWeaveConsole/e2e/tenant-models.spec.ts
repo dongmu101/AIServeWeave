@@ -2,7 +2,12 @@ import { test, expect } from "./fixtures.ts";
 import { OPERATOR_COOKIE } from "../lib/console/operator-session.ts";
 
 const catalog = { collected_at: "2026-10-15T00:00:00Z", partial: false, services: [
-  { agent_id: "agent-01", service_id: "ollama-11434", kind: "ollama", node_online: true, state: "healthy", version: "1.0", models: [{ id: "tenant-agent-model", capabilities: { chat: "supported" } }] },
+  { agent_id: "agent-01", service_id: "ollama-11434", kind: "ollama", node_online: true, state: "healthy", version: "1.0", models: [
+    { id: "tenant-agent-model", capabilities: { chat: "supported" } },
+    { id: "second-model", capabilities: { chat: "supported" } },
+    { id: "third-model", capabilities: { chat: "supported" } },
+    { id: "fourth-model-with-a-complete-long-model-id", capabilities: { chat: "supported" } },
+  ] },
 ] };
 
 for (const width of [1440, 390, 320]) {
@@ -16,7 +21,8 @@ for (const width of [1440, 390, 320]) {
     await page.getByRole("navigation", { name: "控制台导航" }).getByRole("link", { name: "AI 服务与模型", exact: true }).click();
     await expect(page).toHaveURL(/\/console\/models$/);
     await expect(page.getByRole("heading", { name: "Agent AI 服务与模型", exact: true })).toBeVisible();
-    await expect(page.getByText("tenant-agent-model", { exact: true })).toBeVisible();
+    await expect(page.getByText("4 个模型", { exact: true })).toBeVisible();
+    await expect(page.getByText("tenant-agent-model", { exact: true })).toHaveCount(0);
     await expect(page.getByText("Agent 在线", { exact: true })).toBeVisible();
     await expect(page.getByRole("table", { name: "Agent AI 服务列表" })).toBeVisible();
     await expect(page.getByText("agent-01", { exact: true })).toBeVisible();
@@ -25,7 +31,7 @@ for (const width of [1440, 390, 320]) {
     await page.screenshot({ path: test.info().outputPath(`tenant-models-${width}.png`), fullPage: true });
     await page.getByRole("button", { name: "查看模型", exact: true }).click();
     await expect(page.getByRole("dialog")).toBeVisible();
-    await expect(page.getByText("chat · 支持", { exact: true })).toBeVisible();
+    await expect(page.getByRole("dialog").getByText("chat · 支持", { exact: true })).toHaveCount(4);
     await page.keyboard.press("Escape");
     await page.getByRole("textbox", { name: "搜索 AI 服务或模型" }).fill("missing-model");
     await expect(page.getByText("没有符合搜索条件的服务或模型", { exact: true })).toBeVisible();
@@ -36,14 +42,14 @@ test("tenant model refresh reports failure and retry restores models", async ({ 
   let partial = false;
   await page.route("**/api/admin/admin/v1/models", route => route.fulfill({ json: partial ? { ...catalog, partial: true, services: [] } : catalog }));
   await page.goto("/console/models");
-  await expect(page.getByText("tenant-agent-model", { exact: true })).toBeVisible();
+  await expect(page.getByText("4 个模型", { exact: true })).toBeVisible();
   partial = true;
   await page.getByRole("button", { name: "刷新服务与模型", exact: true }).click();
   await expect(page.locator("main").getByRole("alert")).toContainText("暂时无法读取 Agent AI 服务与模型");
-  await expect(page.getByText("tenant-agent-model", { exact: true })).toHaveCount(0);
+  await expect(page.getByText("4 个模型", { exact: true })).toHaveCount(0);
   partial = false;
   await page.getByRole("button", { name: "重试", exact: true }).click();
-  await expect(page.getByText("tenant-agent-model", { exact: true })).toBeVisible();
+  await expect(page.getByText("4 个模型", { exact: true })).toBeVisible();
 });
 
 test("offline Agent reports remain distinguishable from live services", async ({ page }) => {
@@ -81,6 +87,10 @@ test("many Agents use bounded service and model pages with full-snapshot search"
   await expect(dialog.getByRole("listitem")).toHaveCount(1);
   await expect(dialog.getByText("model-59", { exact: true })).toBeVisible();
   await page.keyboard.press("Escape");
+  await search.fill("model-59");
+  await expect(table.locator(":scope > tbody > tr")).toHaveCount(25);
+  await expect(table.getByText("model-59", { exact: true })).toHaveCount(0);
+  await search.fill("agent-0999");
   await page.getByLabel("仅显示在线 Agent").check();
   await expect(page.getByText("没有符合搜索条件的服务或模型", { exact: true })).toBeVisible();
 });

@@ -371,6 +371,9 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 	if err != nil {
 		return nil, r.wrap("chat_stream", err)
 	}
+	if req.MaxTokens != nil && r.deps.Logger != nil {
+		r.deps.Logger.Warn("Codex compatibility mode: output token limit is not enforced / Codex 兼容模式：输出 token 上限不生效")
+	}
 	release, err := r.limiter.Acquire()
 	if err != nil {
 		return nil, err

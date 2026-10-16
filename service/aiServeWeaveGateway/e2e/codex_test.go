@@ -55,6 +55,7 @@ func codexServerFixture() {
 		}
 	}
 	var output string
+	var hasTools bool
 	for {
 		var msg struct {
 			ID     json.RawMessage `json:"id"`
@@ -72,6 +73,13 @@ func codexServerFixture() {
 		case "model/list":
 			send(map[string]any{"id": msg.ID, "result": map[string]any{"data": []any{map[string]string{"model": "codex-fixture"}}, "nextCursor": nil}})
 		case "thread/start":
+			var params struct {
+				DynamicTools []json.RawMessage `json:"dynamicTools"`
+			}
+			if json.Unmarshal(msg.Params, &params) != nil {
+				os.Exit(2)
+			}
+			hasTools = len(params.DynamicTools) > 0
 			send(map[string]any{"id": msg.ID, "result": map[string]any{"thread": map[string]string{"id": "thread1"}, "model": "codex-fixture", "instructionSources": []string{}}})
 		case "thread/inject_items":
 			var p struct {
@@ -89,9 +97,12 @@ func codexServerFixture() {
 			send(map[string]any{"id": msg.ID, "result": map[string]any{}})
 		case "turn/start":
 			send(map[string]any{"id": msg.ID, "result": map[string]any{"turn": map[string]string{"id": "turn1"}}})
-			if output == "" {
+			if output == "" && hasTools {
 				send(map[string]any{"id": "request1", "method": "item/tool/call", "params": map[string]any{"threadId": "thread1", "turnId": "turn1", "callId": "call1", "tool": "echo", "arguments": map[string]any{}}})
 				continue
+			}
+			if output == "" {
+				output = "Hello world"
 			}
 			send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "thread1", "turnId": "turn1", "itemId": "message1", "delta": output}})
 			send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread1", "turn": map[string]string{"id": "turn1", "status": "completed"}}})

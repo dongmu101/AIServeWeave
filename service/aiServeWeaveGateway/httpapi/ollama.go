@@ -272,6 +272,9 @@ func (h *handlers) ollamaChatOnce(w http.ResponseWriter, r *http.Request, canoni
 		handleOllamaDispatchError(w, h.logger, err)
 		return
 	}
+	if canonical.MaxTokens != nil {
+		writeOutputLimitWarning(w, candidate, "options.num_predict")
+	}
 
 	role := resp.Message.Role
 	if role == "" {
@@ -298,6 +301,7 @@ func (h *handlers) ollamaChatOnce(w http.ResponseWriter, r *http.Request, canoni
 // ollamaChatStream serves POST /api/chat with stream true (Ollama's
 // default), writing newline-delimited JSON chat responses ending in one
 // with "done":true — Ollama's own streaming shape.
+// ollamaChatStream 以 Ollama 默认的 NDJSON 流返回 Chat，末条响应携带 done=true。
 func (h *handlers) ollamaChatStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
 	stream, candidate, err := h.sched.ChatStream(r.Context(), canonical)
 	if err != nil {
@@ -305,6 +309,9 @@ func (h *handlers) ollamaChatStream(w http.ResponseWriter, r *http.Request, cano
 		return
 	}
 	defer stream.Close()
+	if canonical.MaxTokens != nil {
+		writeOutputLimitWarning(w, candidate, "options.num_predict")
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -481,6 +488,9 @@ func (h *handlers) ollamaGenerateOnce(w http.ResponseWriter, r *http.Request, ca
 		handleOllamaDispatchError(w, h.logger, err)
 		return
 	}
+	if canonical.MaxTokens != nil {
+		writeOutputLimitWarning(w, candidate, "options.num_predict")
+	}
 
 	body := ollamaGenerateResponse{
 		Model:           resp.Model,
@@ -505,6 +515,9 @@ func (h *handlers) ollamaGenerateStream(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	defer stream.Close()
+	if canonical.MaxTokens != nil {
+		writeOutputLimitWarning(w, candidate, "options.num_predict")
+	}
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

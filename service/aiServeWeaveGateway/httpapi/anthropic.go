@@ -616,6 +616,7 @@ func (h *handlers) anthropicMessagesOnce(w http.ResponseWriter, r *http.Request,
 		handleAnthropicDispatchError(w, h.logger, err)
 		return
 	}
+	writeOutputLimitWarning(w, candidate, "max_tokens")
 
 	role := resp.Message.Role
 	if role == "" {
@@ -750,6 +751,7 @@ func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	defer stream.Close()
+	writeOutputLimitWarning(w, candidate, "max_tokens")
 
 	flusher, ok := w.(http.Flusher)
 	if !ok {

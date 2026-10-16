@@ -76,7 +76,13 @@ func TestPrepareChat(t *testing.T) {
 		want   error
 	}{
 		{"plain", func(*runtime.ChatRequest) {}, nil},
+		{"advisory output limit", func(r *runtime.ChatRequest) { v := 32768; r.MaxTokens = &v }, nil},
+		{"zero output limit", func(r *runtime.ChatRequest) { v := 0; r.MaxTokens = &v }, ErrConfig},
+		{"negative output limit", func(r *runtime.ChatRequest) { v := -1; r.MaxTokens = &v }, ErrConfig},
 		{"temperature", func(r *runtime.ChatRequest) { v := 0.0; r.Temperature = &v }, errUnsupported},
+		{"top_p with output limit", func(r *runtime.ChatRequest) { v, n := 1.0, 32768; r.TopP, r.MaxTokens = &v, &n }, errUnsupported},
+		{"seed", func(r *runtime.ChatRequest) { v := int64(1); r.Seed = &v }, errUnsupported},
+		{"stop", func(r *runtime.ChatRequest) { r.Stop = []string{"stop"} }, errUnsupported},
 		{"forced tool", func(r *runtime.ChatRequest) { r.ToolChoice = "required" }, errUnsupported},
 		{"duplicate tool", func(r *runtime.ChatRequest) { r.Tools = append(r.Tools, r.Tools[0]) }, ErrConfig},
 		{"invalid schema", func(r *runtime.ChatRequest) { r.Tools[0].Function.Parameters = json.RawMessage(`null`) }, ErrConfig},
