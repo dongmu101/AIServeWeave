@@ -636,7 +636,7 @@ aiserveweave-gateway \
 
 ## Codex CLI 输出上限兼容
 
-Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Responses 的 `max_output_tokens` 会被接收，但 Codex 不执行该上限。成功响应通过 `X-Gateway-Ignored-Parameters` 和 `Warning` 首部明确提示；JSON 与流式响应一致，未提供上限或实际选中其他后端时不添加提示。其他后端的上限照常传递，采样参数仍按后端能力校验。完整范围、其他前门字段及升级要求见 [Codex 输出上限兼容](../aiServeWeaveAgent/codexcli/README.md#harness-与输出上限兼容)。
+Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Responses 的 `max_output_tokens` 会被接收，但 Codex 不执行该上限（Grok CLI 后端同理，提示文本中的后端名为 Grok）。成功响应通过 `X-Gateway-Ignored-Parameters` 和 `Warning` 首部明确提示；JSON 与流式响应一致，未提供上限或实际选中其他后端时不添加提示。其他后端的上限照常传递，采样参数仍按后端能力校验。完整范围、其他前门字段及升级要求见 [Codex 输出上限兼容](../aiServeWeaveAgent/codexcli/README.md#harness-与输出上限兼容)。
 
 ## Claude Code 原生 Messages
 

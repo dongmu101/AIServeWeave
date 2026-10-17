@@ -33,6 +33,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
+	"AIServeWeave/service/aiServeWeaveAgent/grokcli"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
@@ -1218,12 +1219,16 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 	registry := runtime.NewRegistry()
 	localCodexIDs := make(map[string]bool)
 	localClaudeIDs := make(map[string]bool)
+	localGrokIDs := make(map[string]bool)
 	for _, cfg := range declared {
 		if cfg.Kind == runtime.KindCodex {
 			localCodexIDs[cfg.ID] = true
 		}
 		if cfg.Kind == runtime.KindClaude {
 			localClaudeIDs[cfg.ID] = true
+		}
+		if cfg.Kind == runtime.KindGrok {
+			localGrokIDs[cfg.ID] = true
 		}
 	}
 	factories := map[runtime.Kind]runtime.Factory{
@@ -1243,6 +1248,13 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 					Message: "Codex runtime must be declared in the local Agent configuration"}
 			}
 			return codexcli.New(cfg, deps)
+		},
+		runtime.KindGrok: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+			if !localGrokIDs[cfg.ID] {
+				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
+					Message: "Grok runtime must be declared in the local Agent configuration"}
+			}
+			return grokcli.New(cfg, deps)
 		},
 	}
 	for kind, factory := range factories {

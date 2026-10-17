@@ -19,7 +19,19 @@ const (
 	// KindClaude names the locally declared Claude Code Messages adapter.
 	// KindClaude 表示本地声明的 Claude Code Messages 适配器。
 	KindClaude Kind = "claude"
+	// KindGrok names the Agent-local Grok CLI headless text adapter.
+	// KindGrok 表示 Agent 本地的 Grok CLI headless 文本适配器。
+	KindGrok Kind = "grok"
 )
+
+// IsLocalCLI reports whether k is an Agent-local CLI backend that uses the
+// CLI's own sign-in rather than an HTTP address or credentials.
+//
+// IsLocalCLI 报告 k 是否为 Agent 本地 CLI 后端：使用 CLI 自身的登录，而不是
+// HTTP 地址或凭据。
+func (k Kind) IsLocalCLI() bool {
+	return k == KindCodex || k == KindClaude || k == KindGrok
+}
 
 type Config struct {
 	// AllowUnavailable keeps failed initial probes as unhealthy instances and retries them.

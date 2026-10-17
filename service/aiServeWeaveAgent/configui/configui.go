@@ -50,6 +50,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
 
@@ -380,7 +381,7 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 			continue
 		}
 		id, kind, baseURL := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
-		if id == "" || kind == "" || (baseURL == "" && kind != "codex" && kind != "claude") {
+		if id == "" || kind == "" || (baseURL == "" && !runtime.Kind(kind).IsLocalCLI()) {
 			continue
 		}
 		out = append(out, agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: baseURL})
@@ -559,14 +560,14 @@ button:hover { background: #1d4ed8; }
 <p class="hint">可以同时配置多个后端，每个运行时 ID 必须唯一。CLI 使用本机已登录的账户。</p>
 </div>
 <textarea id="runtime_declarations" name="runtimes" placeholder="ollama-local,ollama,http://127.0.0.1:11434&#10;codex-local,codex,">{{.Runtimes}}</textarea>
-<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url；支持 ollama / vllm / sglang / comfyui / codex / claude，CLI 的地址留空。</p>
+<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url；支持 ollama / vllm / sglang / comfyui / codex / claude / grok，CLI 的地址留空。</p>
 <template id="runtime-card-template">
 <section class="runtime-card">
 <div class="runtime-heading"><strong>本地 AI 连接</strong><button type="button" class="secondary runtime-remove">移除</button></div>
 <div class="fields">
 <div class="field"><label>运行时 ID <span>Runtime ID</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
 <div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
-<option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option>
+<option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option><option value="grok">Grok CLI</option>
 </select></label></div>
 <div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址；请先在运行 Agent 的账户下登录。</p></div>
 </div>
@@ -716,7 +717,7 @@ function addRuntime(id = '', kind = 'ollama', url = '') {
   kindInput.value = kind;
   urlInput.value = url;
   function updateKind() {
-    const cli = kindInput.value === 'codex' || kindInput.value === 'claude';
+    const cli = kindInput.value === 'codex' || kindInput.value === 'claude' || kindInput.value === 'grok';
     urlInput.disabled = cli;
     urlInput.required = !cli;
     urlInput.closest('label').hidden = cli;
