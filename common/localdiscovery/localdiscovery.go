@@ -1,10 +1,10 @@
-// Package localdiscovery finds Ollama and vLLM instances already running on
-// this machine and registers them with runtime.Manager, so an operator does
-// not have to hand-configure a backend that is already sitting on its
-// well-known port.
+// Package localdiscovery finds Ollama, vLLM and SGLang instances already
+// running on this machine and registers them with runtime.Manager, so an
+// operator does not have to hand-configure a backend that is already sitting
+// on its well-known port.
 //
 // It defaults to probing only 127.0.0.1: this machine's own loopback
-// interface, on the two default ports. Nothing here scans a subnet or
+// interface, on the three default ports. Nothing here scans a subnet or
 // speaks mDNS — an Agent that started reaching out to arbitrary hosts on its
 // own would be exactly the kind of "general-purpose proxy" behavior
 // AGENTS.md's security rules rule out for the tunnel, and the same
@@ -12,8 +12,8 @@
 // host is a job for an operator explicitly configuring its address, not for
 // this package.
 //
-// Package localdiscovery 为 Agent 与 Gateway 发现本机 Ollama/vLLM，并向
-// runtime.Manager 注册。默认只探测两个已知回环端点，不扫描其他主机。
+// Package localdiscovery 为 Agent 与 Gateway 发现本机 Ollama/vLLM/SGLang，并向
+// runtime.Manager 注册。默认只探测三个已知回环端点，不扫描其他主机。
 package localdiscovery
 
 import (
@@ -39,12 +39,23 @@ type Candidate struct {
 	BaseURL string
 }
 
-// DefaultCandidates returns the two well-known local endpoints this feature
-// targets: Ollama and vLLM on their default ports, loopback only.
+// DefaultCandidates returns the three well-known local endpoints this
+// feature targets: Ollama, vLLM and SGLang on their default ports, loopback
+// only. SGLang's probe cannot verify identity (its OpenAI-compatible
+// responses look exactly like vLLM's), so whatever answers on 30000 is
+// registered as SGLang with IdentityVerified=false; that port is SGLang's
+// launch_server default and not one vLLM uses unless told to.
+//
+// DefaultCandidates 返回本功能探测的三个已知本机端点：Ollama、vLLM 与 SGLang
+// 各自的默认端口，仅限回环地址。SGLang 的探测无法核实身份（它的 OpenAI 兼容
+// 响应与 vLLM 完全一致），因此 30000 端口上应答的服务一律按 SGLang 注册，
+// 快照里 IdentityVerified=false；30000 是 SGLang launch_server 的默认端口，
+// vLLM 除非被显式指定否则不会用它。
 func DefaultCandidates() []Candidate {
 	return []Candidate{
 		{Kind: runtime.KindOllama, BaseURL: "http://127.0.0.1:11434"},
 		{Kind: runtime.KindVLLM, BaseURL: "http://127.0.0.1:8000"},
+		{Kind: runtime.KindSGLang, BaseURL: "http://127.0.0.1:30000"},
 	}
 }
 
@@ -55,7 +66,7 @@ type Config struct {
 
 	// Candidates is what each scan probes. Nil uses DefaultCandidates(); a
 	// test overrides it with an httptest.Server URL, since that server picks
-	// a random port and a fixed 11434/8000 cannot be bound reliably in a
+	// a random port and a fixed 11434/8000/30000 cannot be bound reliably in a
 	// test process (it may already be held by a real Ollama on the
 	// developer's machine, or collide across parallel test runs).
 	Candidates []Candidate

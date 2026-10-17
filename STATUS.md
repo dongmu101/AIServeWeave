@@ -23,7 +23,7 @@ R01/R02 可与 Job 主线并行。P07 与 J03 共用迁移框架；P04 依赖 J0
 ## 当前已完成
 
 - [x] Registry 节点证书签发与续期、Gateway 副本名册；Agent 主动出站建立 mTLS 隧道、多副本连接与槽池。
-- [x] Ollama、vLLM、SGLang、ComfyUI 运行时适配；本机 Ollama/vLLM 自动发现。
+- [x] Ollama、vLLM、SGLang、ComfyUI 运行时适配；本机 Ollama/vLLM/SGLang 自动发现。
 - [x] OpenAI Chat Completions、Responses、Embeddings、Models 前门，支持相应流式接口；Responses 不支持持久会话续接。
 - [x] 模型别名、节点标签、优先级与权重路由，以及健康过滤、熔断、恢复和受限重试；路由支持文件配置与控制面版本管理/热更新（P02）。
 - [x] 工作流模板加载与输入绑定、Job 提交、状态查询、SSE 事件、取消、产物列举与流式下载。

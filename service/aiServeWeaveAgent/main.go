@@ -105,7 +105,7 @@ func main() {
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
 	autoDiscover := flag.Bool("auto-discover", true,
-		"probe 127.0.0.1's well-known Ollama/vLLM ports and register whatever answers; never touches any other host")
+		"probe 127.0.0.1's well-known Ollama/vLLM/SGLang ports and register whatever answers; never touches any other host")
 	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
 		"how often auto-discovery looks for a newly appeared local instance")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",

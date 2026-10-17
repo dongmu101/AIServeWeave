@@ -604,7 +604,7 @@ button:hover { background: #1d4ed8; }
 <p class="hint">多个 ID 用逗号分隔，留空放行全部。</p>
 </div>
 <div class="field wide">
-<label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}>自动发现本机 Ollama / vLLM</label>
+<label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}>自动发现本机 Ollama / vLLM / SGLang</label>
 </div>
 <div class="field wide">
 <label for="auto_discover_interval">自动发现间隔 <span>Auto-discover interval</span></label>
