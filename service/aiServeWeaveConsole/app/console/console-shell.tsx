@@ -3,11 +3,18 @@
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { LogOutIcon } from "lucide-react";
+import { CheckIcon, ChevronDownIcon, LogOutIcon, MenuIcon, SettingsIcon, ShieldCheckIcon, UserRoundIcon } from "lucide-react";
 import { toast } from "sonner";
 
 import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
+import { Button, buttonVariants } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { signOut } from "@/lib/console/api-client";
 import { ROLE_LABELS, type Role } from "@/lib/console/contract";
 import { describe } from "@/lib/console/errors";
@@ -65,9 +72,11 @@ export function ConsoleShell({
   const router = useRouter();
   const pathname = usePathname();
   const [leaving, setLeaving] = React.useState(false);
-  const activeHref = NAV_ITEMS.findLast(
+  const activeItem = NAV_ITEMS.findLast(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`)
-  )?.href;
+  );
+  const displayName = user.name || user.email;
+  const initial = Array.from(displayName.trim())[0]?.toUpperCase() || "U";
 
   async function leave() {
     setLeaving(true);
@@ -89,57 +98,97 @@ export function ConsoleShell({
   }
 
   return (
-    <div className="flex min-h-full flex-1 flex-col">
-      <header className="border-b">
-        <div className="mx-auto flex w-full max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-          <span className="font-heading text-sm font-semibold">
-            AIServeWeave 控制台
-          </span>
-          <nav aria-label="控制台导航" className="flex flex-wrap items-center gap-1">
-            {NAV_ITEMS.map((item) => {
-              const active = item.href === activeHref;
-              return (
-                <Button
-                  key={item.href}
-                  variant={active ? "secondary" : "ghost"}
-                  size="sm"
-                  render={<Link href={item.href} />}
-                  aria-current={active ? "page" : undefined}
-                >
-                  {item.label}
-                </Button>
-              );
-            })}
-          </nav>
-          <Link href="/operator" className="text-sm underline">平台运维</Link>
-          <div className="ml-auto flex min-w-0 max-w-full items-center gap-3">
-            <div className="min-w-0 break-all text-right text-xs leading-tight">
-              <div className="font-medium">{user.name || user.email}</div>
-              <div className="text-muted-foreground">
-                租户 <code className="font-mono">{user.tenantId}</code>
-              </div>
+    <div className="flex h-dvh shrink-0 flex-col overflow-hidden">
+      <header className="h-14 shrink-0 border-b bg-background">
+        <div className="mx-auto flex h-full w-full max-w-[96rem] items-center gap-3 px-4">
+          <Link href="/console" className="shrink-0 whitespace-nowrap font-heading text-sm font-semibold">
+            AIServeWeave<span className="hidden sm:inline"> 控制台</span>
+          </Link>
+          <nav aria-label="控制台导航" className="flex min-w-0 flex-1 items-center justify-end sm:justify-start">
+            <div className="hidden items-center gap-0.5 xl:flex">
+              {NAV_ITEMS.map((item) => {
+                const active = item.href === activeItem?.href;
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    className={buttonVariants({ variant: active ? "secondary" : "ghost", size: "sm", className: "px-2" })}
+                    aria-current={active ? "page" : undefined}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
             </div>
-            <Badge variant="outline">{roleLabel(user.role)}</Badge>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={leave}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label="打开控制台导航"
+                render={<Button variant="ghost" className="min-w-0 shrink xl:hidden" />}
+              >
+                <MenuIcon />
+                <span className="truncate">{activeItem?.label ?? "导航"}</span>
+                <ChevronDownIcon className="size-3 text-muted-foreground" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent className="w-56" aria-label="控制台导航">
+                {NAV_ITEMS.map((item) => (
+                  <DropdownMenuItem
+                    key={item.href}
+                    render={<Link href={item.href} />}
+                    aria-current={item.href === activeItem?.href ? "page" : undefined}
+                    className="min-h-9"
+                  >
+                    {item.label}
+                    {item.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </nav>
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              aria-label="账户菜单"
               disabled={leaving}
-              aria-busy={leaving}
+              render={<Button variant="outline" size="icon" className="rounded-full bg-muted text-xs" />}
             >
-              <LogOutIcon />
-              退出
-            </Button>
-          </div>
+              <span aria-hidden="true">{initial}</span>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="w-72 max-w-[calc(100vw-2rem)]" aria-label="账户菜单">
+              <div className="space-y-2 px-3 py-2 text-xs">
+                <p className="break-all text-sm font-medium">{displayName}</p>
+                <p className="break-all text-muted-foreground">{user.email}</p>
+                <Badge variant="outline">{roleLabel(user.role)}</Badge>
+                <p className="break-all text-muted-foreground">
+                  租户 <code className="font-mono">{user.tenantId}</code>
+                </p>
+              </div>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem render={<Link href="/console/account" />} className="min-h-9">
+                <UserRoundIcon />账户安全
+              </DropdownMenuItem>
+              <DropdownMenuItem render={<Link href="/console/settings" />} className="min-h-9">
+                <SettingsIcon />设置
+              </DropdownMenuItem>
+              <DropdownMenuItem render={<Link href="/operator" />} className="min-h-9">
+                <ShieldCheckIcon />平台运维
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={leave} disabled={leaving} aria-busy={leaving} closeOnClick={false} className="min-h-9">
+                <LogOutIcon />{leaving ? "正在退出…" : "退出"}
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
         </div>
       </header>
-      {/* The API reference is a three-column page and gets a wider frame. / API 参考文档是三栏页面，使用更宽的框架。 */}
-      <main
-        className={`mx-auto w-full min-w-0 flex-1 wrap-anywhere px-4 py-6 ${
-          pathname === "/console/docs" || pathname.startsWith("/console/docs/") ? "max-w-[96rem]" : "max-w-6xl"
-        }`}
-      >
-        {children}
+      {/* Only the content scrolls beneath the compact fixed-height menu. / 仅正文在紧凑的固定高度菜单下方滚动。 */}
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto">
+        {/* The API reference is a three-column page and gets a wider frame. / API 参考文档是三栏页面，使用更宽的框架。 */}
+        <div
+          className={`mx-auto w-full min-w-0 wrap-anywhere px-4 py-6 ${
+            pathname === "/console/docs" || pathname.startsWith("/console/docs/") ? "max-w-[96rem]" : "max-w-6xl"
+          }`}
+        >
+          {children}
+        </div>
       </main>
     </div>
   );
