@@ -296,6 +296,33 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 
 详见根 STATUS 的 P09 行与 [ControlPlane README「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/README.md#告警评估与通知p09c29)、设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
 
+### 工作流模板的节点图预览（P03 后续）
+
+`/operator/workflow-templates` 在图 JSON 文本框下方实时渲染只读节点图，历史比较区可在「节点图 / JSON」之间切换，两侧并排并标出差异节点（黄框：两侧都有但内容不同；蓝框：只在一侧）。图的唯一编辑入口仍是文本框，本阶段**不做**画布编辑。
+
+| 层 | 落点 |
+| --- | --- |
+| 纯逻辑 | `lib/console/comfy-graph.ts`：API Format → 节点/连线、左到右最长路径分层布局（自写，不引布局库）、模板输入/输出绑定叠加、按排序键比较的节点差异；格式问题（缺 `class_type`/`inputs`、悬空引用、环、绑定未命中）记为问题列表而不抛异常；超过 `MAX_PREVIEW_NODES`（500）直接拒绝预览 |
+| 画布 | `components/console/comfy-graph-preview.tsx`：`@xyflow/react` 渲染，只读（不可拖拽/连线），点击节点在下方查看完整取值 |
+| 页面 | `app/operator/(protected)/workflow-templates/workflow-templates-view.tsx`：草稿区预览读 `useDeferredValue` 副本，避免大图在输入路径上重算 |
+
+已知限制：API Format 不含坐标，布局是重建的，不等于作者在 ComfyUI 里的摆放；没有节点定义（`/object_info`），输出槽只能显示序号而不是 `IMAGE`/`LATENT` 这类名称，字段也不区分 widget 种类。可视化编辑见下一节。图只出现在运维页面，组件注释写明不得用于租户页面。
+
+### 工作流模板的可视化编辑（P03 后续）
+
+同一页面新增可折叠的「可视化编辑器」区：以 `wujie` 同源挂载官方 ComfyUI_frontend 1.55.17，后端是控制面的只编辑桩（见 [ControlPlane STATUS「工作流可视化编辑器」](../aiServeWeaveControlPlane/STATUS.md#工作流可视化编辑器p03-后续)）。打开时自动载入草稿（有一致的布局就载入布局，否则让编辑器排布 API 图）；「导出到草稿」把编辑器的 API 图写回文本框、把 UI 工作流作为布局写进草稿，发布时一并保存；「切换 App 模式」调用前端自己的 App 模式。布局变化即新版本。
+
+| 层 | 落点 |
+| --- | --- |
+| 纯逻辑 | `lib/console/comfy-editor.ts`：编辑器路径、上游解析（逐段重编码，拒绝 `.`/`..`/控制字符，方法限 GET/HEAD/POST/DELETE）、子应用网络允许列表、导出校验（`parseEditorExport`）、假 WebSocket 脚本；`lib/console/workflow-templates.ts` 新增 `workflow` 字段、`MAX_WORKFLOW_BYTES`，`MAX_CONTENT_BYTES` 改为 8 MiB + 256 KiB |
+| 转发 | `app/api/operator/comfy-editor/[...path]/route.ts` + `lib/server/control-plane.ts` 的 `streamControlPlane`（流式、只回传固定响应头、写请求体有界读取后丢弃） |
+| 宿主 | `components/console/comfy-editor.tsx`：动态加载 wujie，`load`/`exportGraph`/`toggleAppMode` 句柄；程序化载入后 1 秒内的变更事件不算作运维编辑 |
+| 页面 | `workflow-templates-view.tsx`：布局只在与文本框图文本一致时随发布提交，手改 JSON 后提示布局失效；导出含目录外节点时拒绝并列出节点类型 |
+
+验证：Node 测试新增 `lib/console/comfy-editor.test.ts`（上游解析、允许列表、导出校验、`workflow` 字段、假 WebSocket）；用真实控制面桩（Go）+ 真实前端发布包 + 本仓库 `bridge.js` + 真实节点目录在专用 Chrome 里端到端验证了 API 图载入、连线保留、文件下拉清空后已有取值保留、二次载入 UI 工作流后导出一致、目录外节点被列入 `missing`、外连（huggingface）被允许列表拦下。**未验证**：经 Next.js 转发路由与真实平台会话的整页交互（需要可登录的控制面与 Console 构建），以及 `pnpm build` 下 wujie 的动态导入。
+
+已知限制：含自定义节点的模板只能继续用 JSON 编辑；模型/LoRA/图片等文件下拉为空（已有取值保留）；同源嵌入是已接受的风险（见 AGENTS「ComfyUI 编辑器」）；编辑器里的「运行」按钮会得到 403。
+
 ### API 文档（租户）实现位置
 
 | 层 | 落点 |

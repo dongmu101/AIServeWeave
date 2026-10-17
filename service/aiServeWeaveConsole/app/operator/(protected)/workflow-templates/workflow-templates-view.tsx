@@ -4,6 +4,9 @@ import * as React from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
+import { ComfyGraphPreview } from "@/components/console/comfy-graph-preview";
+import { ComfyEditor, type ComfyEditorHandle } from "@/components/console/comfy-editor";
+import { parseGraphText, type GraphBindings, type ParsedGraphText } from "@/lib/console/comfy-graph";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { createRouteReadGate } from "@/lib/console/route-read-gate";
 import { ApiError, describe } from "@/lib/console/errors";
@@ -60,6 +63,28 @@ export function WorkflowTemplatesView() {
   const [busy, setBusy] = React.useState(false);
   const [confirm, setConfirm] = React.useState<"publish" | "rollback" | "replace" | null>(null);
   const [compareDraft, setCompareDraft] = React.useState(true);
+  const [compareView, setCompareView] = React.useState<"graph" | "json">("graph");
+  // workflowGraphText is the graph text draft.workflow was saved or exported
+  // together with. Once the textarea no longer matches it, the layout
+  // describes a different graph and is left out of the publication.
+  // workflowGraphText 是 draft.workflow 被保存或导出时配套的图文本。文本框一旦与之
+  // 不再一致，布局描述的就是另一张图，发布时不再携带它。
+  const [workflowGraphText, setWorkflowGraphText] = React.useState<string | null>(null);
+  const [editorOpen, setEditorOpen] = React.useState(false);
+  const [editorEdited, setEditorEdited] = React.useState(false);
+  const editor = React.useRef<ComfyEditorHandle>(null);
+  const layoutCurrent = draft.workflow !== undefined && workflowGraphText === graphText;
+
+  // The preview reads a deferred copy of the textarea, so a 4 MiB graph is re-parsed and re-laid-out off the typing path.
+  // 预览读取文本框的延迟副本，使 4 MiB 的图在输入路径之外重新解析与布局。
+  const deferredGraphText = React.useDeferredValue(graphText);
+  const draftGraph = React.useMemo(() => parseGraphText(deferredGraphText), [deferredGraphText]);
+  const draftBindings = React.useMemo<GraphBindings>(() => ({ inputs: draft.inputs, outputs: draft.outputs ?? [] }), [draft.inputs, draft.outputs]);
+  const selectedGraph = React.useMemo<ParsedGraphText | null>(() => selected ? { ok: true, graph: selected.graph } : null, [selected]);
+  const selectedBindings = React.useMemo<GraphBindings>(() => ({ inputs: selected?.inputs ?? [], outputs: selected?.outputs ?? [] }), [selected]);
+  const currentGraph = React.useMemo<ParsedGraphText>(() => current ? { ok: true, graph: current.graph } : { ok: true, graph: {} }, [current]);
+  const currentBindings = React.useMemo<GraphBindings>(() => ({ inputs: current?.inputs ?? [], outputs: current?.outputs ?? [] }), [current]);
+  const compareGraph = compareDraft ? draftGraph : currentGraph;
 
   const refreshList = React.useCallback(async () => {
     try {
@@ -91,14 +116,44 @@ export function WorkflowTemplatesView() {
   }
 
   function loadDraftFrom(snapshot: TemplateSnapshot) {
-    setDraft({ description: snapshot.description, inputs: snapshot.inputs, outputs: snapshot.outputs ?? [], dependencies: snapshot.dependencies ?? {}, graph: snapshot.graph });
-    setGraphText(JSON.stringify(snapshot.graph, null, 2));
+    setDraftContent(snapshot);
     setVisibleTenantsText((snapshot.visible_tenant_ids ?? []).join(", "));
+  }
+  function setDraftContent(content: TemplateContent) {
+    const text = JSON.stringify(content.graph, null, 2);
+    setDraft({ description: content.description ?? "", inputs: content.inputs, outputs: content.outputs ?? [], dependencies: content.dependencies ?? {}, graph: content.graph, ...(content.workflow ? { workflow: content.workflow } : {}) });
+    setGraphText(text);
+    setWorkflowGraphText(content.workflow ? text : null);
+    setEditorEdited(false);
+    if (editorOpen) void loadEditor(content.workflow ? { kind: "workflow", text: JSON.stringify(content.workflow) } : { kind: "api", text: JSON.stringify(content.graph) });
+  }
+  async function loadEditor(source?: Parameters<ComfyEditorHandle["load"]>[0]) {
+    const handle = editor.current;
+    if (!handle) return;
+    try {
+      await handle.load(source ?? (layoutCurrent ? { kind: "workflow", text: JSON.stringify(draft.workflow) } : { kind: "api", text: graphText }));
+      setEditorEdited(false);
+    } catch { setError("无法把草稿载入编辑器：图 JSON 无法解析，或其中有编辑器不认识的结构。"); }
+  }
+  async function exportEditor() {
+    const handle = editor.current;
+    if (!handle) return;
+    const exported = await handle.exportGraph();
+    if (exported.missing.length) {
+      setError(`图中有编辑器目录之外的节点（${exported.missing.slice(0, 10).join("、")}${exported.missing.length > 10 ? " 等" : ""}），编辑器无法导出它们的参数，草稿未改动。含自定义节点的模板请继续用上方 JSON 编辑。`);
+      return;
+    }
+    const text = JSON.stringify(exported.graph, null, 2);
+    setDraft({ ...draft, graph: exported.graph, workflow: exported.workflow });
+    setGraphText(text);
+    setWorkflowGraphText(text);
+    setEditorEdited(false);
+    setVerdict(null);
   }
 
   async function selectTemplate(id: string) {
     setTemplateID(id); setCurrent(null); setNotFound(false); setSelected(null); setStatus(null); setStatusError(false); setVerdict(null); setError(null);
-    setDraft(emptyDraft); setGraphText("{}"); setVisibleTenantsText("");
+    setDraft(emptyDraft); setGraphText("{}"); setWorkflowGraphText(null); setEditorEdited(false); setVisibleTenantsText("");
     if (!id.trim()) return;
     reads.current.invalidate();
     const acceptCurrent = reads.current.begin("current"), acceptHistory = reads.current.begin("history"), acceptStatus = reads.current.begin("status");
@@ -129,7 +184,7 @@ export function WorkflowTemplatesView() {
   function currentContentForValidation(): TemplateContent {
     let graph: unknown;
     try { graph = JSON.parse(graphText); } catch { throw new ApiError("invalid"); }
-    return parseTemplateContent({ ...draft, graph });
+    return parseTemplateContent({ ...draft, graph, workflow: layoutCurrent ? draft.workflow : undefined });
   }
   async function write() {
     setBusy(true); setError(null);
@@ -181,15 +236,29 @@ export function WorkflowTemplatesView() {
             <input type="file" accept=".json,application/json" onChange={(event) => {
               const file = event.target.files?.[0]; event.target.value = "";
               if (file) void action(async () => {
-                const imported = await importTemplateManifestFile(file);
-                setDraft({ description: imported.description ?? "", inputs: imported.inputs, outputs: imported.outputs ?? [], dependencies: imported.dependencies ?? {}, graph: imported.graph });
-                setGraphText(JSON.stringify(imported.graph, null, 2));
+                setDraftContent(await importTemplateManifestFile(file));
               });
             }} />
           </label>
           <label className="grid gap-1 text-sm">ComfyUI 图（API Format JSON；绝不外传到租户或运维目录，仅用于编辑与发布）
             <textarea className="min-h-48 w-full rounded-lg border border-input bg-transparent px-2.5 py-1.5 font-mono text-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50" value={graphText} onChange={(e) => setGraphText(e.target.value)} />
           </label>
+          {draft.workflow !== undefined && !layoutCurrent && <p className="text-sm text-amber-700 dark:text-amber-400">图 JSON 已在文本框里改过，与保存的编辑器布局不再对应：发布时不会携带布局。在可视化编辑器里载入并导出一次即可恢复。</p>}
+          <details className="space-y-2" open={editorOpen} onToggle={(e) => setEditorOpen(e.currentTarget.open)}><summary className="cursor-pointer text-sm font-medium">可视化编辑器（ComfyUI 官方前端；仅编辑，不能运行）</summary>
+            {editorOpen && <>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button type="button" variant="outline" onClick={() => void loadEditor()}>从草稿载入</Button>
+                <Button type="button" onClick={() => void action(exportEditor)}>导出到草稿</Button>
+                <Button type="button" variant="outline" onClick={() => void action(async () => { await editor.current?.toggleAppMode(); })}>切换 App 模式</Button>
+                <span className="text-xs text-muted-foreground">{editorEdited ? "编辑器里有尚未导出的修改。" : layoutCurrent ? "草稿带有与图一致的布局，发布时一并保存。" : "草稿没有布局；导出后布局随下一版本保存。"}</span>
+              </div>
+              <ComfyEditor ref={editor} onReady={() => void loadEditor()} onEdit={() => setEditorEdited(true)} />
+              <p className="text-xs text-muted-foreground">节点目录只含 ComfyUI 核心节点，模型等文件下拉为空；自定义节点会显示为缺失但仍保留在图中。编辑器里的设置与“保存”不会持久化，以“导出到草稿”后的发布为准。</p>
+            </>}
+          </details>
+          <details open className="space-y-2"><summary className="cursor-pointer text-sm font-medium">节点图预览（只读，随上方 JSON 与输入/输出声明实时更新）</summary>
+            <ComfyGraphPreview graph={draftGraph} bindings={draftBindings} />
+          </details>
           <div className="space-y-2"><h3 className="font-medium">输入</h3>
             {draft.inputs.map((input, index) => <div key={index} className="grid gap-2 rounded bg-muted/30 p-3 md:grid-cols-3">
               <label className="grid gap-1 text-xs">名称<Input value={input.name} onChange={(e) => updateInput(index, { ...input, name: e.target.value })} /></label>
@@ -225,8 +294,15 @@ export function WorkflowTemplatesView() {
         {history.items.length === 0 && <p className="text-sm text-muted-foreground">暂无已读取的历史版本。</p>}
         <div className="flex flex-wrap gap-2">{history.items.map((item) => <Button key={item.revision} variant={selected?.revision === item.revision ? "default" : "outline"} disabled={busy} onClick={() => void action(async () => setSelected(await call({ method: "GET", surface: "operator", path: `${base}/${encodeURIComponent(templateID)}/revisions/${item.revision}`, parse: parseTemplateSnapshot })))}>v{item.revision} · {item.created_at}{item.rollback_of ? ` · 回滚自 v${item.rollback_of}` : ""}</Button>)}</div>
         {history.next_before && <Button variant="outline" disabled={busy} onClick={() => void action(() => loadHistory(history.next_before))}>更早版本</Button>}
-        {selected && <><div className="flex flex-wrap items-center gap-3"><p>选中 v{selected.revision} · {selected.actor_id}</p><label className="text-sm"><input type="checkbox" checked={compareDraft} onChange={(e) => setCompareDraft(e.target.checked)} /> 与草稿比较（取消勾选：当前发布）</label><Button variant="outline" disabled={busy || !current} onClick={() => setConfirm("rollback")}>回滚到 v{selected.revision}</Button></div>
-          <div className="grid gap-3 md:grid-cols-2"><div><h3>历史 v{selected.revision}</h3><pre className="max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify({ description: selected.description, inputs: selected.inputs, outputs: selected.outputs, dependencies: selected.dependencies, visible_tenant_ids: selected.visible_tenant_ids, graph: selected.graph }, null, 2)}</pre></div><div><h3>{compareDraft ? "本地草稿" : `当前 v${current?.revision ?? "—"}`}</h3><pre className="max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(compareDraft ? draft : current, null, 2)}</pre></div></div></>}
+        {selected && <><div className="flex flex-wrap items-center gap-3"><p>选中 v{selected.revision} · {selected.actor_id}</p><label className="text-sm"><input type="checkbox" checked={compareDraft} onChange={(e) => setCompareDraft(e.target.checked)} /> 与草稿比较（取消勾选：当前发布）</label><Button variant="outline" disabled={busy || !current} onClick={() => setConfirm("rollback")}>回滚到 v{selected.revision}</Button>
+            <div className="flex gap-1"><Button variant={compareView === "graph" ? "default" : "outline"} onClick={() => setCompareView("graph")}>节点图</Button><Button variant={compareView === "json" ? "default" : "outline"} onClick={() => setCompareView("json")}>JSON</Button></div></div>
+          {compareView === "graph" && selectedGraph
+            ? <div className="grid gap-3 md:grid-cols-2">
+                <div className="min-w-0 space-y-1"><h3>历史 v{selected.revision}</h3><ComfyGraphPreview graph={selectedGraph} bindings={selectedBindings} compareTo={compareGraph.ok ? compareGraph.graph : undefined} height={440} /></div>
+                <div className="min-w-0 space-y-1"><h3>{compareDraft ? "本地草稿" : `当前 v${current?.revision ?? "—"}`}</h3><ComfyGraphPreview graph={compareGraph} bindings={compareDraft ? draftBindings : currentBindings} compareTo={selected.graph} height={440} /></div>
+                <p className="text-xs text-muted-foreground md:col-span-2">黄框：两侧都有但内容不同；蓝框：只在这一侧存在。描述、依赖与可见范围的差异请切到 JSON 查看。</p>
+              </div>
+            : <div className="grid gap-3 md:grid-cols-2"><div><h3>历史 v{selected.revision}</h3><pre className="max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify({ description: selected.description, inputs: selected.inputs, outputs: selected.outputs, dependencies: selected.dependencies, visible_tenant_ids: selected.visible_tenant_ids, layout: selected.workflow ? "有" : "无", graph: selected.graph }, null, 2)}</pre></div><div><h3>{compareDraft ? "本地草稿" : `当前 v${current?.revision ?? "—"}`}</h3><pre className="max-h-96 overflow-auto rounded bg-muted p-3 text-xs">{JSON.stringify(compareDraft ? { ...draft, workflow: undefined, layout: layoutCurrent ? "有" : "无", graph: draftGraph.ok ? draftGraph.graph : "（图 JSON 无法解析）" } : current && { ...current, workflow: undefined, layout: current.workflow ? "有" : "无" }, null, 2)}</pre></div></div>}</>}
       </section>
       <section className="space-y-3 rounded-lg border p-4"><div className="flex items-center justify-between"><h2 className="font-semibold">副本应用状态（整包）</h2><Button variant="outline" disabled={busy} onClick={() => void action(refreshStatus)}>实时刷新</Button></div>
         <p>{statusError ? "无法确认副本状态，未完成。" : status ? status.complete ? "本次检查：全部副本已应用期望整包。" : "尚未确认全部副本应用；缺少机群配置、连接失败或整包不一致均不算完成。" : "尚无实时确认。"}</p>

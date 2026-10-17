@@ -111,7 +111,7 @@ func run() error {
 		logger.Warn("AutoMigrate is on; this process applies embedded versioned SQL at startup")
 	}
 
-	server, err := rest.NewServer(cfg.RestConf)
+	server, err := rest.NewServer(cfg.RestConf, rest.WithNotFoundHandler(handler.NotFoundHandler(svcCtx)))
 	if err != nil {
 		return err
 	}

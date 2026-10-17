@@ -30,6 +30,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyeditor"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
@@ -127,6 +128,14 @@ type ServiceContext struct {
 	// MetricsRegistry 是本副本进程级的 common/metrics 汇点。永不为 nil：无论
 	// 是否配置 -metrics-addr 来导出它，main.go 都会构造一个。
 	MetricsRegistry *commonmetrics.Registry
+
+	// ComfyEditor serves the embedded workflow editor and its stub backend. It
+	// is nil unless Config.ComfyEditor.DistDir is set, and the editor prefix
+	// then answers 404.
+	//
+	// ComfyEditor 提供嵌入式工作流编辑器及其桩后端。除非设置了
+	// Config.ComfyEditor.DistDir，否则它为 nil，编辑器前缀此时回答 404。
+	ComfyEditor *comfyeditor.Server
 
 	db          *gorm.DB
 	redisClient *redis.Client
@@ -303,6 +312,16 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		return nil, errors.Join(errors.New("syncing compiled-in API doc seeds"), err)
 	}
 
+	// The editor is checked before any background loop starts, so a bad
+	// DistDir fails start-up without leaving goroutines behind.
+	// 编辑器在任何后台循环启动之前检查，DistDir 有误时启动失败，不会留下协程。
+	var editor *comfyeditor.Server
+	if cfg.ComfyEditor.DistDir != "" {
+		if editor, err = comfyeditor.New(cfg.ComfyEditor.DistDir); err != nil {
+			return nil, err
+		}
+	}
+
 	metricsRegistry := commonmetrics.New(cpmetrics.Descriptions())
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
@@ -381,6 +400,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 
 	ready = true
 	return &ServiceContext{
+		ComfyEditor: editor,
 		Config:      cfg,
 		Logic:       svcLogic,
 		Issuer:      issuer,

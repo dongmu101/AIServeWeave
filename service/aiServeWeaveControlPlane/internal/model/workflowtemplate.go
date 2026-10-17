@@ -20,6 +20,7 @@ type WorkflowTemplateRevision struct {
 	DependenciesJSON   string `gorm:"column:dependencies_json"`
 	VisibleTenantsJSON string `gorm:"column:visible_tenants_json"`
 	GraphJSON          string `gorm:"column:graph_json"`
+	WorkflowJSON       string `gorm:"column:workflow_json"` // optional UI-format workflow, "" when absent / 可选的 UI 格式工作流，缺省为 ""
 	ActorID            string
 	CreatedAt          time.Time
 	RollbackOf         int64

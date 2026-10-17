@@ -176,6 +176,27 @@ type Config struct {
 	// 30 天，因为 usage_records 支撑的是结算而非诊断：几个月后的一次账单
 	// 争议仍然需要这条账本记录，而不只是那个时间窗口内的 Prometheus 计数器。
 	UsageRecordRetention time.Duration `json:",optional"`
+
+	// ComfyEditor configures the embedded ComfyUI workflow editor served under
+	// /operator/v1/comfy-editor/ for the Console's template page. Optional:
+	// left unset, the prefix answers 404 like any unknown path.
+	//
+	// ComfyEditor 配置挂在 /operator/v1/comfy-editor/ 之下、供 Console 模板页使用的
+	// 嵌入式 ComfyUI 工作流编辑器。它是可选的：不设置时，该前缀与任何未知路径一样
+	// 回答 404。
+	ComfyEditor ComfyEditorConf `json:",optional"`
+}
+
+// ComfyEditorConf points at an unpacked ComfyUI_frontend release, fetched at
+// deploy time by scripts/fetch-comfyui-frontend.sh rather than vendored: the
+// frontend is GPL-3.0 and some 35 MB, and it is served unmodified.
+//
+// ComfyEditorConf 指向一份已解压的 ComfyUI_frontend 发布包，由
+// scripts/fetch-comfyui-frontend.sh 在部署时获取而不是放进仓库：前端是 GPL-3.0 且约
+// 35 MB，并且原样提供、不做修改。
+type ComfyEditorConf struct {
+	// DistDir is the release directory containing index.html. / DistDir 是包含 index.html 的发布目录。
+	DistDir string `json:",optional"`
 }
 
 // DefaultRequestLogRetention is how long a request_logs row is kept when

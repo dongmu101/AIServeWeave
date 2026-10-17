@@ -21,6 +21,8 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 | 组件 | shadcn/ui（源码在 `components/ui/`，属于本仓库代码，可直接改） |
 | 表格 | TanStack Table + TanStack Virtual（审计日志、Job 队列可能上万行，必须虚拟滚动） |
 | 图表 | ECharts（`echarts-for-react`），指标时序曲线用 `dataZoom` |
+| 节点图 | `@xyflow/react`（MIT），仅用于运维模板页的只读 ComfyUI 图预览。选它而不是 ComfyUI 官方前端或 `@comfyorg/litegraph`：前者是 GPL-3.0 的 Vue 整站且要直连 ComfyUI 后端，后者自 2025-08 起不再单独发版且只接受带坐标的 UI 格式。布局算法在 `lib/console/comfy-graph.ts` 自写，不再引入 dagre/elk |
+| 工作流编辑器 | `wujie` 2.1.0（MIT），以同源微前端挂载官方 ComfyUI_frontend（GPL-3.0，控制面部署时获取、原样提供，不进本仓库、不进 Console 打包）。只用于运维模板页的可视化编辑；只读预览仍用上一行的 `@xyflow/react`，两者互不替代：预览不依赖控制面配置编辑器，编辑器要求 `ComfyEditor.DistDir`。约束见下文「ComfyUI 编辑器」 |
 
 `cn` 工具函数来自 shadcn 官方的 [`cn`](https://github.com/shadcn-ui/cn) 包，不是 `clsx` + `tailwind-merge` 的手写组合，也不是同名抢注包。
 
@@ -74,6 +76,18 @@ pnpm build        # Next.js 构建，内部 TS 6
 Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直连 Agent。根仓库 [AGENTS.md](../../AGENTS.md) 的安全红线同样适用：API Key 明文、完整 Prompt、工作流 JSON 不得进日志或错误提示，前端展示 API Key 一律用后端返回的展示形式（`common/apikey` 定义），不要自己拼。
 
 **唯一的例外：实时 Job 与历史详情页面的取消与产物访问，Console 服务端直连 Gateway 数据面。** 取消（`POST /v1/jobs/{id}/cancel`）与产物下载（`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}`）在 Gateway 数据面认的是租户自己的 API Key，控制面从不持有、也不该持有它，因此这两个操作没有办法走"经控制面转发"这条唯一路径——详细取舍见 [ControlPlane README「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#已实现的持久化历史查询与-console-接入j07)。做法是：owner/admin 用已有的"创建 API Key"功能生成一把该租户的 Key，粘贴进 Console 一个专门的设置页，由 Console 服务端加密存储，仅用于代表已登录会话调用上述取消、产物列举与下载端点；这把 Key **不做 scope 收紧**，与用户自己创建的 Key 权限完全相同，被拿到后不只能取消/读产物，也能拿去跑推理烧配额——这是当前没有真实租户在生产环境运行阶段的刻意权衡，不是遗漏，真有生产租户后应重新评估是否收紧。除这些端点外，其余一切仍然只走控制面；这把 Key **不向浏览器 JavaScript 返回明文**；设置时由用户输入，随后只以密封的 HttpOnly 会话 Cookie 保存，服务端解密使用。
+
+### ComfyUI 编辑器：同源微前端（已接受的风险）
+
+```text
+浏览器（wujie 子应用）→ /api/operator/comfy-editor/*（Console 服务端）→ ControlPlane /operator/v1/comfy-editor/*
+```
+
+- 这是 Console 里**唯一一条按前缀转发**、而不是按白名单逐行列举的路由：发布包有几百个带哈希的文件名。收窄它的是另外几件事——上游钉死在控制面的编辑器前缀上（`lib/console/comfy-editor.ts` 的 `resolveEditorUpstream` 逐段重新编码并拒绝 `.`/`..`），只附加平台会话，只转发 `If-Modified-Since`/`Range` 两个请求头与一张固定的响应头列表，写请求体在 Console 有界读取后**直接丢弃**、不带往上游，响应体以流转交（`lib/server/control-plane.ts` 的 `streamControlPlane`，它与 `callControlPlane` 一样是仅有的连接控制面的地方）。新增其他端点不要套用这条路由的做法。
+- **同源是一项经评估后接受的风险，不是遗漏。** wujie 把子应用放在同源 iframe 里，ComfyUI_frontend 的代码因此能以运维身份发出同源请求，并能经 `window.parent` 触及宿主页面。之所以接受：前端版本固定并校验 SHA-256（`scripts/fetch-comfyui-frontend.sh`），控制面的 `/api/extensions` 只列发布包自带的核心扩展与内嵌桥接，**永远不提供自定义节点的 JavaScript**——能在这个 iframe 里运行的只有这一份固定的第一方代码。升级前端版本时把它当作一次依赖升级来审查。
+- 子应用的 `fetch` 由 wujie 替换为宿主提供的版本，只放行 `/api/operator/comfy-editor/` 下的同源请求与 `data:`/`blob:` URL（`isEditorRequestAllowed`）；这是纵深防御，拦得住前端自己对注册表、遥测、模型下载站的外连（实测拦下过对 huggingface 的请求），但它**不是边界**——XHR 与 `window.parent` 都绕得过。WebSocket 被换成只汇报「队列空闲」的本地替身（`FAKE_WEBSOCKET_SCRIPT`），编辑器不会连出任何 socket。
+- 跨边界只传字符串（控制面 `internal/comfyeditor/bridge.js`）。不要改成直接传对象：宿主对象属于另一个 realm，ComfyUI 用 `instanceof Array` 判断连线，按引用传进去的图会丢掉全部连线。编辑器的导出先经 `parseEditorExport` 校验；`missing` 非空（图里有目录外节点）时拒绝写入草稿。
+- 草稿里的布局（`workflow`）只在它与文本框里的图文本一致时随发布提交；文本框被手动改过后布局不再对应那张图，发布时省略它，页面给出提示。
 
 ### 管理请求使用统一的受限入口
 

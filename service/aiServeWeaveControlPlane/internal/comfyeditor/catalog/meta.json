@@ -1,0 +1,10 @@
+{
+  "comfyui_version": "0.41.2",
+  "frontend_version": "1.55.17",
+  "generated": true,
+  "node_count": 678,
+  "modules": {
+    "comfy_extras": 613,
+    "nodes": 65
+  }
+}

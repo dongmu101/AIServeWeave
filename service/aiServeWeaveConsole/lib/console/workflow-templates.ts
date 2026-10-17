@@ -3,9 +3,12 @@ import { ApiError, describe } from "./errors.ts";
 /** MAX_GRAPH_BYTES bounds one template's imported ComfyUI graph, mirroring common/workflowtemplate.MaxGraphBytes.
  * MAX_GRAPH_BYTES 限制单个模板导入的 ComfyUI 图，与 common/workflowtemplate.MaxGraphBytes 对齐。 */
 export const MAX_GRAPH_BYTES = 4 << 20;
-/** MAX_CONTENT_BYTES allows bounded metadata around the graph, mirroring common/workflowtemplate.MaxContentBytes.
- * MAX_CONTENT_BYTES 为图之外的元数据预留有界空间，与 common/workflowtemplate.MaxContentBytes 对齐。 */
-export const MAX_CONTENT_BYTES = MAX_GRAPH_BYTES + 256 * 1024;
+/** MAX_WORKFLOW_BYTES bounds the optional UI-format workflow, mirroring common/workflowtemplate.MaxWorkflowBytes.
+ * MAX_WORKFLOW_BYTES 限制可选的 UI 格式工作流，与 common/workflowtemplate.MaxWorkflowBytes 对齐。 */
+export const MAX_WORKFLOW_BYTES = 4 << 20;
+/** MAX_CONTENT_BYTES allows bounded metadata around the graph and workflow, mirroring common/workflowtemplate.MaxContentBytes.
+ * MAX_CONTENT_BYTES 为图与工作流之外的元数据预留有界空间，与 common/workflowtemplate.MaxContentBytes 对齐。 */
+export const MAX_CONTENT_BYTES = MAX_GRAPH_BYTES + MAX_WORKFLOW_BYTES + 256 * 1024;
 const MAX_INPUTS = 100;
 const MAX_OUTPUTS = 20;
 const MAX_CUSTOM_NODE_DEPS = 100;
@@ -39,6 +42,9 @@ export interface TemplateContent {
   outputs?: TemplateOutput[];
   dependencies?: Dependencies;
   graph: unknown;
+  /** workflow is the optional UI-format document (positions, groups, App Mode) the visual editor saved.
+   * workflow 是可视化编辑器保存的可选 UI 格式文档（坐标、分组、App 模式）。 */
+  workflow?: Record<string, unknown>;
 }
 /** TemplateRevisionInfo mirrors common/workflowtemplate.RevisionInfo. / TemplateRevisionInfo 与 common/workflowtemplate.RevisionInfo 对齐。 */
 export interface TemplateRevisionInfo {
@@ -157,7 +163,7 @@ function parseDependencies(value: unknown): Dependencies {
  */
 export function parseTemplateContent(value: unknown): TemplateContent {
   const source = object(value);
-  known(source, ["description", "inputs", "outputs", "dependencies", "graph"]);
+  known(source, ["description", "inputs", "outputs", "dependencies", "graph", "workflow"]);
   if (source.graph === undefined || source.graph === null) throw new ApiError("invalid");
   if (!Array.isArray(source.inputs) || source.inputs.length > MAX_INPUTS) throw new ApiError("invalid");
   const outputsRaw = source.outputs === undefined ? [] : source.outputs;
@@ -168,8 +174,16 @@ export function parseTemplateContent(value: unknown): TemplateContent {
   const dependencies = parseDependencies(source.dependencies);
   if (dependencies.custom_nodes || dependencies.models) result.dependencies = dependencies;
   if (source.description !== undefined) result.description = string(source.description);
+  if (source.workflow !== undefined) result.workflow = parseWorkflow(source.workflow);
   if (byteLength(result) > MAX_CONTENT_BYTES) throw new ApiError("invalid");
   return result;
+}
+/** parseWorkflow checks the UI-format workflow only structurally, as common/workflowtemplate does: an object with a nodes array, within MAX_WORKFLOW_BYTES.
+ * parseWorkflow 与 common/workflowtemplate 一样只做结构性检查：一个带 nodes 数组、不超过 MAX_WORKFLOW_BYTES 的对象。 */
+export function parseWorkflow(value: unknown): Record<string, unknown> {
+  const source = object(value);
+  if (!Array.isArray(source.nodes) || byteLength(source) > MAX_WORKFLOW_BYTES) throw new ApiError("invalid");
+  return source;
 }
 /** parseVisibleTenantIDs validates a template's tenant allow list. Empty means every tenant may see and run it.
  * parseVisibleTenantIDs 校验一个模板的租户允许列表。空列表意味着所有租户都能看到并运行它。 */
@@ -194,15 +208,15 @@ function revisionInfo(value: unknown): TemplateRevisionInfo {
  * parseTemplateSnapshot 校验一份含图的完整发布响应。 */
 export function parseTemplateSnapshot(value: unknown): TemplateSnapshot {
   const source = object(value);
-  // parseTemplateContent rejects any key outside its own five, so it is
+  // parseTemplateContent rejects any key outside its own six, so it is
   // handed a content-only view rather than the whole envelope — the
   // revision fields (template_id, revision, digest, created_at, actor_id)
   // live alongside content in the wire response but are not part of it.
   //
-  // parseTemplateContent 会拒绝除自己那五个键之外的任何键，因此这里递给它的是
+  // parseTemplateContent 会拒绝除自己那六个键之外的任何键，因此这里递给它的是
   // 一份只含内容的视图，而不是整个信封——版本字段（template_id、revision、
   // digest、created_at、actor_id）在响应里与内容并列，但不属于内容本身。
-  const content = parseTemplateContent({ description: source.description, inputs: source.inputs, outputs: source.outputs, dependencies: source.dependencies, graph: source.graph });
+  const content = parseTemplateContent({ description: source.description, inputs: source.inputs, outputs: source.outputs, dependencies: source.dependencies, graph: source.graph, workflow: source.workflow });
   return { ...revisionInfo(source), ...content, visible_tenant_ids: parseVisibleTenantIDs(source.visible_tenant_ids) };
 }
 /** parseTemplateSummaries validates the graph-free catalogue listing.

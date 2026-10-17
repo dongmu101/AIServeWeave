@@ -52,13 +52,23 @@ import (
 // 几百 KB，更大的是发布时就值得拒绝的错误。
 const MaxGraphBytes = 4 << 20
 
-// MaxContentBytes bounds the whole publication document — graph plus
-// description, inputs, outputs and dependencies — leaving headroom over
-// MaxGraphBytes for that metadata.
+// MaxWorkflowBytes bounds one template's optional UI-format ComfyUI workflow
+// (Content.Workflow). The UI format repeats every widget value and adds node
+// positions, links and subgraph definitions, so it is allowed the same budget
+// as the API-format graph it compiles to rather than a fraction of it.
 //
-// MaxContentBytes 限制整份发布文档——图加上描述、输入、输出与依赖——在
-// MaxGraphBytes 之外为这些元数据留出空间。
-const MaxContentBytes = MaxGraphBytes + 256*1024
+// MaxWorkflowBytes 限制单个模板可选的 UI 格式 ComfyUI 工作流（Content.Workflow）。
+// UI 格式会重复每个 widget 取值，并额外携带节点坐标、连线与子图定义，因此给它与
+// 其编译产物 API Format 图相同的预算，而不是一小部分。
+const MaxWorkflowBytes = 4 << 20
+
+// MaxContentBytes bounds the whole publication document — graph, optional UI
+// workflow, description, inputs, outputs and dependencies — leaving headroom
+// over the two JSON documents for that metadata.
+//
+// MaxContentBytes 限制整份发布文档——图、可选的 UI 工作流、描述、输入、输出与
+// 依赖——在两份 JSON 文档之外为这些元数据留出空间。
+const MaxContentBytes = MaxGraphBytes + MaxWorkflowBytes + 256*1024
 
 // MaxInputs caps declared inputs per template. / MaxInputs 限制每个模板的已声明输入数。
 const MaxInputs = 100
@@ -215,6 +225,20 @@ type Content struct {
 	Outputs      []Output        `json:"outputs,omitempty"`
 	Dependencies Dependencies    `json:"dependencies,omitempty"`
 	Graph        json.RawMessage `json:"graph"`
+	// Workflow is the optional UI-format ComfyUI workflow the operator edited
+	// in the visual editor — node positions, links, groups, subgraph
+	// definitions — from which Graph was exported. Nothing executes it: the
+	// Gateway runs Graph alone. It is the same class of secret as Graph and
+	// must never reach a catalogue listing either. It is part of Digest, so a
+	// layout-only edit is a new revision; omitempty keeps the digest of every
+	// template published before this field existed unchanged.
+	//
+	// Workflow 是运维在可视化编辑器中编辑的可选 UI 格式 ComfyUI 工作流——节点坐标、
+	// 连线、分组、子图定义——Graph 就是从它导出的。没有任何东西执行它：Gateway 只运行
+	// Graph。它与 Graph 属于同一类机密，同样绝不能出现在任何目录列表里。它参与
+	// Digest，因此只改布局也是一个新版本；omitempty 保证本字段出现之前发布的每个模板
+	// 摘要不变。
+	Workflow json.RawMessage `json:"workflow,omitempty"`
 }
 
 // Validate reports whether id and content are internally consistent: id is
@@ -255,6 +279,9 @@ func Validate(id string, content Content) error {
 
 	g, err := parseGraph(content.Graph)
 	if err != nil {
+		return fmt.Errorf("workflowtemplate: template %q: %w", id, err)
+	}
+	if err := validateWorkflow(content.Workflow); err != nil {
 		return fmt.Errorf("workflowtemplate: template %q: %w", id, err)
 	}
 
@@ -436,6 +463,30 @@ func parseGraph(raw json.RawMessage) (graph, error) {
 		g.inputs[id] = withInputs.Inputs
 	}
 	return g, nil
+}
+
+// validateWorkflow checks the optional UI-format workflow only structurally:
+// bounded, and a JSON object whose "nodes" is an array. Its node contents are
+// not checked against Graph — only the visual editor that produced both can
+// relate them — and the error never quotes the document.
+//
+// validateWorkflow 只对可选的 UI 格式工作流做结构性检查：大小有界，且是一个
+// "nodes" 为数组的 JSON 对象。其节点内容不与 Graph 交叉核对——只有同时产出两者的
+// 可视化编辑器才能把它们对应起来——错误文本也从不引用文档内容。
+func validateWorkflow(raw json.RawMessage) error {
+	if len(raw) == 0 {
+		return nil
+	}
+	if len(raw) > MaxWorkflowBytes {
+		return fmt.Errorf("workflow exceeds %d bytes", MaxWorkflowBytes)
+	}
+	var doc struct {
+		Nodes []json.RawMessage `json:"nodes"`
+	}
+	if err := json.Unmarshal(raw, &doc); err != nil || doc.Nodes == nil {
+		return errors.New("workflow is not a UI-format object with a nodes array")
+	}
+	return nil
 }
 
 // Canonical returns deterministic JSON for content plus its visibility list,

@@ -132,3 +132,17 @@ ModelPull:
 ComfyUIManaged:
   Gateways: ["http://gateway:8093"]
   GatewayToken: "${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN}"
+
+# 工作流可视化编辑器（P03 后续）：指向一份由 scripts/fetch-comfyui-frontend.sh 解压的
+# ComfyUI_frontend 发布包。默认关闭——启用后目录缺失或不完整会让控制面启动失败，
+# 因此先把目录挂进容器（例如 ./comfy-editor:/opt/aiserveweave/comfy-editor:ro）再取消注释。
+# 升级时先升级 Gateway，再升级控制面，原因见 ControlPlane STATUS「工作流可视化编辑器」。
+#
+# Visual workflow editor (P03 follow-up): points at a ComfyUI_frontend release
+# unpacked by scripts/fetch-comfyui-frontend.sh. Off by default — once enabled,
+# a missing or incomplete directory stops the control plane from starting, so
+# mount it into the container first (for example
+# ./comfy-editor:/opt/aiserveweave/comfy-editor:ro), then uncomment. Upgrade
+# Gateways before the control plane; see ControlPlane STATUS, "工作流可视化编辑器".
+# ComfyEditor:
+#   DistDir: /opt/aiserveweave/comfy-editor

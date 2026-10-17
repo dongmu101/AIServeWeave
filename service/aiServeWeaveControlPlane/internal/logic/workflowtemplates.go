@@ -269,6 +269,7 @@ func encodeWorkflowTemplateRow(content workflowtemplate.Content, visibleTenantID
 		DependenciesJSON:   string(deps),
 		VisibleTenantsJSON: string(tenants),
 		GraphJSON:          string(content.Graph),
+		WorkflowJSON:       string(content.Workflow),
 	}, nil
 }
 
@@ -280,10 +281,13 @@ func encodeWorkflowTemplateRow(content workflowtemplate.Content, visibleTenantID
 // 一份不知何故被损坏存储的行——与 routeSnapshot 对 RoutesJSON 施加的同一种完整性
 // 检查。
 func workflowTemplateSnapshot(row model.WorkflowTemplateRevision) (workflowtemplate.Snapshot, error) {
-	if len(row.GraphJSON) > workflowtemplate.MaxGraphBytes {
+	if len(row.GraphJSON) > workflowtemplate.MaxGraphBytes || len(row.WorkflowJSON) > workflowtemplate.MaxWorkflowBytes {
 		return workflowtemplate.Snapshot{}, errors.New("logic: invalid stored workflow template size")
 	}
 	content := workflowtemplate.Content{Description: row.Description, Graph: []byte(row.GraphJSON)}
+	if row.WorkflowJSON != "" {
+		content.Workflow = []byte(row.WorkflowJSON)
+	}
 	if err := json.Unmarshal([]byte(row.InputsJSON), &content.Inputs); err != nil {
 		return workflowtemplate.Snapshot{}, errors.New("logic: invalid stored workflow template inputs")
 	}

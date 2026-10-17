@@ -75,7 +75,7 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 
 API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveControlPlane/internal/types/types.go)、[路由](../aiServeWeaveControlPlane/internal/handler/routes.go) 和业务逻辑为准。用户、Key 与审计列表均返回上述分页信封，吊销成功返回 `204`，错误体为 `{ "error": "..." }`。
 
-节点和模型只读目录、工作流与 Job 页面已有接口；模板发布与监控仍需补齐管理 API。Gateway 已有推理和 Job API，并不代表这些功能已经具备 Console 管理入口；具体依赖见 [STATUS.md](STATUS.md)。
+节点和模型只读目录、工作流与 Job 页面、模板发布（含只读节点图预览与基于官方 ComfyUI 前端的可视化编辑）与指标/告警页面均已接入管理 API。Gateway 已有推理和 Job API，并不代表这些功能已经具备 Console 管理入口；具体依赖见 [STATUS.md](STATUS.md)。
 
 ### 准备后端联调环境
 

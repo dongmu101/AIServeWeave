@@ -515,7 +515,7 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 
 ## 工作流模板发布契约（P03）
 
-平台运维创建、发布与回滚工作流模板，草稿留在 Console 页面，发布后成为不可变版本。与 P02 路由的核心差异只有一处：路由是单一全局表，模板是**多份各自独立版本化的文档**，因此每个方法都以 `template_id` 为键，而不是单一的 `id=1` 单例指针。共享结构和校验唯一源为 `common/workflowtemplate`，包括输入（节点/字段/类型/范围）、输出（节点/种类）、依赖（自定义节点/模型及其版本）与图（API Format ComfyUI 工作流）；限额为每模板最多 100 个输入、20 个输出、100 个自定义节点依赖、100 个模型依赖，图不超过 4 MiB，整份发布文档不超过 4 MiB + 256 KiB，平台最多发布 500 个不同模板 id，单个模板最多保留 1000 个历史版本。
+平台运维创建、发布与回滚工作流模板，草稿留在 Console 页面，发布后成为不可变版本。与 P02 路由的核心差异只有一处：路由是单一全局表，模板是**多份各自独立版本化的文档**，因此每个方法都以 `template_id` 为键，而不是单一的 `id=1` 单例指针。共享结构和校验唯一源为 `common/workflowtemplate`，包括输入（节点/字段/类型/范围）、输出（节点/种类）、依赖（自定义节点/模型及其版本）、图（API Format ComfyUI 工作流）与可选的 UI 格式工作流（可视化编辑器保存的布局，见下文「工作流可视化编辑器」）；限额为每模板最多 100 个输入、20 个输出、100 个自定义节点依赖、100 个模型依赖，图不超过 4 MiB，UI 工作流不超过 4 MiB，整份发布文档不超过 8 MiB + 256 KiB，平台最多发布 500 个不同模板 id，单个模板最多保留 1000 个历史版本。
 
 **图从不进入任何目录响应。** 与 Job 的完整 Prompt、API Key 同属安全红线内的东西：`/operator/v1/workflow-templates`（列表）与 Fleet 聚合出的 `/admin/v1/workflows`、`/operator/v1/workflows` 均不携带图，只有 `GET /operator/v1/workflow-templates/:id`、`GET .../revisions/:revision`（平台会话，编辑/对比用）与 `GET /internal/v1/workflow-templates/current`（InternalToken，供 Gateway 同步）这两类端点会带图，因为调用方分别是模板的作者与本就需要执行它的 Gateway。
 
@@ -533,7 +533,7 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 
 发布和回滚在同一个数据库事务里完成该模板指针的 CAS、不可变历史插入与平台审计（`workflow_templates.publish` / `workflow_templates.rollback`）。**首次发布（创建）没有可预先播种的单例行**——这是与 P02 路由唯一的结构性差异：一次真实 MySQL 并发测试就抓到过由此产生的一类真实缺陷：许多事务并发对同一个从未见过的模板 id 做普通 `INSERT`，不是简单地败于重复键，而是在 InnoDB 默认隔离级别下因两阶段的"发现不存在、再插入"彼此交错成一个锁等待环，被 MySQL 判为 1213 死锁杀掉，而不是 `translate()` 认识的重复键错误。修复是把"确保指针行存在"从普通 INSERT 换成 `INSERT ... ON CONFLICT DO NOTHING` 式的 upsert，让它成为单条语句而不是两步——详见 `internal/store/gormstore/workflowtemplates.go` 的 `PublishWorkflowTemplateRevision` 文档注释。回滚不改写旧版本，也不降低版本号；单模板历史达到 1000 版容量时拒绝新发布/回滚（409）。创建新模板（`expected_revision=0` 且该 id 此前不存在）额外检查平台已发布的不同模板总数，达到 500 时拒绝；重新发布一个已存在的模板不受此上限影响。
 
-`workflow_template_revisions` 以 `(template_id, revision)` 复合主键存正文（`description`/`inputs_json`/`outputs_json`/`dependencies_json`/`visible_tenants_json`/`graph_json` 六列）和版本元数据，`workflow_template_actives` 以 `template_id` 为主键、每个模板一行指针（无需预先播种，首次发布时惰性创建）。JSON 各自作为 PostgreSQL TEXT / MySQL MEDIUMTEXT 保存,不使用方言相关 JSON 查询。迁移位于 `internal/store/gormstore/migrations/workflowtemplates/{postgres,mysql}`，`MigrateWorkflowTemplates` 在 `Database.AutoMigrate` 显式启用时调用，独立记录 `schema_migrations_workflow_templates`，与 `MigrateRoutes` 同一时机、同一模式。
+`workflow_template_revisions` 以 `(template_id, revision)` 复合主键存正文（`description`/`inputs_json`/`outputs_json`/`dependencies_json`/`visible_tenants_json`/`graph_json`/`workflow_json` 七列，`workflow_json` 由迁移 0003 追加、默认空串）和版本元数据，`workflow_template_actives` 以 `template_id` 为主键、每个模板一行指针（无需预先播种，首次发布时惰性创建）。JSON 各自作为 PostgreSQL TEXT / MySQL MEDIUMTEXT 保存,不使用方言相关 JSON 查询。迁移位于 `internal/store/gormstore/migrations/workflowtemplates/{postgres,mysql}`，`MigrateWorkflowTemplates` 在 `Database.AutoMigrate` 显式启用时调用，独立记录 `schema_migrations_workflow_templates`，与 `MigrateRoutes` 同一时机、同一模式。
 
 **租户可见范围随版本一起不可变。** `VisibleTenantIDs` 是发布请求的一部分，落在同一份不可变历史行里；回滚到旧版本时，恢复的是那个版本自己的可见范围，而不只是它的图——这是刻意的简化：可见范围变更走的是与内容变更同一条发布/审计路径，不另设一条无审计轨迹的"仅改可见范围"旁路。空列表表示对所有租户可见；租户可见范围过滤只发生在 Gateway 的运行提交路径（`POST /v1/workflows/{workflow_id}/runs`）与本服务聚合出的租户菜单（`/admin/v1/workflows`）两处，各自独立生效，互不依赖。
 
@@ -542,6 +542,49 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 生效查询（`/operator/v1/workflow-templates/status`）与 P02 路由的 `/operator/v1/routes/status` 同构：最多并发 8 个 Gateway，每个调用受超时与 16 KiB 响应上限约束；结果包含所有 `Fleet.Gateways` 端点，缺失或失败不会被丢弃。只有非空端点集合、唯一副本身份、controlplane 模式、完全匹配的模板数量和整包摘要、无同步错误且时间有效，complete 才为 true。读取期间发生新的发布会将 complete 降为 false。
 
 验证：`TestLiveWorkflowTemplates` 使用 `AISW_POSTGRES_TEST_DSN` / `AISW_MYSQL_TEST_DSN` 按需启用，在独立 PostgreSQL 17 与 MySQL 9.7 上以 race 验证重复迁移、20 个并发首次创建（含上述死锁修复的回归验证）、两个独立模板 id 各自独立版本化、原子审计失败回滚与历史容量；默认测试不需要外部数据库，本轮已在真实 MySQL 9.7 与 PostgreSQL 17 上分别跑通验证过。HTTP 测试（`e2e/workflowtemplates_test.go`）覆盖守卫隔离、验证/发布/回滚、独立模板互不干扰、`/status` 与 `/:id` 路径不互相遮蔽、分页及大小限制；租户菜单可见范围过滤借用 `e2e/fleet_test.go` 已有的桩 Gateway 基础设施验证——过滤发生在 Fleet 聚合出的菜单上，与本服务自己的模板存储是两回事（见上方"图从不进入任何目录响应"一段的端点划分）。
+
+## 工作流可视化编辑器（P03 后续）
+
+运维页面 `/operator/workflow-templates` 嵌入官方 [ComfyUI_frontend](https://github.com/Comfy-Org/ComfyUI_frontend)（GPL-3.0）作为图编辑器。前端由 Console 以 wujie 同源挂载（宿主侧约定与已接受的风险见 Console AGENTS「ComfyUI 编辑器」），它需要的后端由本服务的 `internal/comfyeditor` 以「只编辑」的桩来扮演：能画图、能导出，绝不能运行。
+
+**存储与摘要。** `common/workflowtemplate.Content` 新增可选字段 `Workflow`（UI 格式：节点坐标、分组、子图定义、App 模式的 `extra.linearData`），与 `Graph`（API Format，Gateway 执行用的唯一依据）并存。`Workflow` 只做结构性校验（不超过 `MaxWorkflowBytes` = 4 MiB，是带 `nodes` 数组的对象），不与 `Graph` 交叉核对；它以 `omitempty` 参与摘要，所以**没有布局的既有版本摘要不变**，而只挪动节点位置也会产生新摘要、新版本——这是有意的：布局属于作者的工作成果，与内容走同一条发布/审计路径。列表、Fleet 聚合与租户菜单都不携带它，Gateway 的 `workflow.FromBundle` 逐字段拷贝，也不把它交给数据面任何响应。
+
+**升级顺序：先 Gateway，后控制面。** `/internal/v1/workflow-templates/current` 整包里的每个快照都带着 `workflow`，Gateway 的 `workflowsync` 会用快照内容重算摘要再与 `digest` 比对。旧 Gateway 不认识这个字段，解码时把它丢掉，重算出的摘要就对不上，于是拒绝整包、继续使用上一份缓存——不会执行错误的图，但新发布在 Gateway 升级前不会生效。`MaxContentBytes` 随之从 4 MiB + 256 KiB 增至 8 MiB + 256 KiB，Gateway 的 `MaxBundleBytes`（= `MaxContentBytes` × 500）理论上限同比放大；实际整包大小由真实模板决定，远小于此。
+
+**编辑器服务。** 配置 `ComfyEditor.DistDir` 指向一份解压后的 ComfyUI_frontend 发布包时启用，留空则整个前缀返回 404：
+
+```yaml
+ComfyEditor:
+  DistDir: /opt/aiserveweave/comfy-editor   # scripts/fetch-comfyui-frontend.sh 的输出目录
+```
+
+`New` 在启动时校验目录（必须有 `index.html` 与 `extensions/`，且不得自带 `extensions/aiserveweave/bridge.js` 遮蔽内嵌桥接），失败即启动失败，而不是带着一个残缺的编辑器运行。所有请求位于 `/operator/v1/comfy-editor/` 之下，与其他运维路由一样经 `requirePlatformSession` 守卫。go-zero 路由没有通配，发布包又有几百个深度不一的带哈希文件名，所以这一前缀挂在 `rest.WithNotFoundHandler` 上（`handler.NotFoundHandler`），其余未匹配路径仍是原来的 404。
+
+| 请求 | 桩的回答 |
+| --- | --- |
+| 静态文件 | 发布包原样提供；`assets/` 下带哈希的文件 `immutable` 长缓存，其余 `no-cache`；`*.map`、任一段以 `.` 开头、越界路径一律 404；`index.html/…` 视为发布包根目录（wujie 下少数相对请求会以入口文件为基准解析） |
+| `GET /api/object_info` | 编译进二进制的核心节点目录（见下） |
+| `GET /api/extensions` | 只列发布包自带的核心扩展加本包的 `bridge.js`。Console 同源嵌入编辑器，这里列出的任何脚本都会带着运维会话运行，因此**自定义节点的 JavaScript 永远不提供** |
+| `GET /api/settings` | 固定设置：语言锁定 `zh`（`_meta.title` 进入摘要，不锁定会让同一张图因浏览器语言不同而摘要不同）、关闭工作流持久化（不在浏览器存储里把一名运维的图恢复给另一名） |
+| 设置与 userdata 的写入 | 接受后丢弃，返回 200；编辑器里的「保存」不持久化任何东西 |
+| `/api/prompt`、`/queue`、`/interrupt`、`/free`、`/upload/*` 等写操作 | 403：编辑器从不执行、上传或释放任何东西 |
+| 其他启动期读取（`system_stats`、`queue`、`history`、`embeddings`、`models` …） | 固定的空值 |
+| 请求体 | 先以 `MaxWriteBytes`（1 MiB）为界读完再分派（未读完的请求体会让保持连接上的下一个请求错位），超限 413 |
+
+WebSocket 不经过这里：Console 在子应用里换上一个只汇报「队列空闲」的本地替身。
+
+**桥接扩展 `bridge.js`**（Apache-2.0，内嵌）是宿主与编辑器之间唯一的接口：`loadWorkflow`/`loadApi`/`exportGraph`/`toggleAppMode`，跨边界**只传字符串**——宿主对象属于另一个 JavaScript realm，ComfyUI 用 `instanceof Array` 判断连线，按引用传进来的图会悄无声息地丢掉全部连线（实现前原型验证时实测到）。`exportGraph` 返回 `{workflow, output, missing}`，`missing` 列出目录之外的节点类型：编辑器叫不出它们的输入名（导出时连 `class_type` 都没有，参数名变成 `UNKNOWN`），Console 见到非空 `missing` 就拒绝把这次导出写进草稿。
+
+**节点目录。** `internal/comfyeditor/catalog/core.json` 由 `go run ./service/aiServeWeaveControlPlane/internal/comfyeditor/gen -in object_info.json -comfyui <版本> -frontend <版本>` 从一份原始 `/object_info` 导出生成（导出可来自装了自定义节点的实例）。`TrimCatalog` 只保留核心节点——`python_module` 不在 `custom_nodes` 之下，且默认排除 `comfy_api_nodes`（Comfy 的付费托管 API 节点，本平台上没有东西能运行它们，`-include-api-nodes` 可保留）——递归删除 `tooltip`/`description`/`output_tooltips` 等自由文本（V3 动态输入会把整组输入嵌在规格里），并清空每个选项是导出机器上文件的 COMBO（按扩展名判断），使第三方节点与任何人的本地文件名都不会编译进二进制。当前目录取自 ComfyUI 0.41.2（要求前端 1.55.17）：保留 678 个节点（`nodes` 65、`comfy_extras` 613），排除 `comfy_api_nodes` 308 个、自定义节点 1 个；来源记在 `catalog/meta.json`。升级时前端版本、`scripts/fetch-comfyui-frontend.sh` 里的版本与 SHA-256、节点目录三者一起换。
+
+**前端发布包不进仓库。** 它是 GPL-3.0，本仓库是 Apache-2.0：`scripts/fetch-comfyui-frontend.sh <目录>` 在部署时下载固定版本、校验 SHA-256、删除 source map，原样提供，不做修改。
+
+**已知限制：**
+
+- 含自定义节点的模板无法在编辑器里导出（会被拒绝，草稿不变），只能继续用 JSON 文本编辑；目录是平台级的一份，不随节点实际安装情况变化。
+- 模型、LoRA、输入图片等文件下拉为空。已有取值会被保留并原样导出（实测），只是不能在下拉里选新值，需要在 JSON 里改。
+- 编辑器界面仍显示「运行」按钮，点了会得到 403；编辑器的标签栏会积累「未保存的工作流」标签，不影响导出。
+- 同源嵌入意味着前端代码能拿到运维会话下的同源请求能力；这是经评估后接受的风险，靠固定版本、校验和与「不提供任何第三方扩展」来收窄，详见 Console AGENTS。
 
 ## 指标与历史监控（P08）
 
