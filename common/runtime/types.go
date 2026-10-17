@@ -19,9 +19,30 @@ const (
 	// KindClaude names the locally declared Claude Code Messages adapter.
 	// KindClaude 表示本地声明的 Claude Code Messages 适配器。
 	KindClaude Kind = "claude"
-	// KindGrok names the Agent-local Grok CLI headless text adapter.
-	// KindGrok 表示 Agent 本地的 Grok CLI headless 文本适配器。
-	KindGrok Kind = "grok"
+	// Agent-local headless CLI text adapters (service/aiServeWeaveAgent/cliagent).
+	// Agent 本地的 headless CLI 文本适配器（service/aiServeWeaveAgent/cliagent）。
+	KindGrok      Kind = "grok"
+	KindOpenCode  Kind = "opencode"
+	KindCursor    Kind = "cursor"
+	KindCodeBuddy Kind = "codebuddy"
+	KindQoder     Kind = "qoder"
+	KindPi        Kind = "pi"
+
+	// Hosted OpenAI-compatible providers (common/runtime/hosted).
+	// 托管的 OpenAI 兼容供应商（common/runtime/hosted）。
+	KindOpenAI           Kind = "openai"
+	KindGemini           Kind = "gemini"
+	KindDeepSeek         Kind = "deepseek"
+	KindKimi             Kind = "kimi"
+	KindQwen             Kind = "qwen"
+	KindZhipu            Kind = "zhipu"
+	KindMiniMax          Kind = "minimax"
+	KindOpenAICompatible Kind = "openai_compatible"
+
+	// Anthropic Messages providers (common/runtime/anthropic).
+	// Anthropic Messages 供应商（common/runtime/anthropic）。
+	KindAnthropic           Kind = "anthropic"
+	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 
 // IsLocalCLI reports whether k is an Agent-local CLI backend that uses the
@@ -30,8 +51,53 @@ const (
 // IsLocalCLI 报告 k 是否为 Agent 本地 CLI 后端：使用 CLI 自身的登录，而不是
 // HTTP 地址或凭据。
 func (k Kind) IsLocalCLI() bool {
-	return k == KindCodex || k == KindClaude || k == KindGrok
+	switch k {
+	case KindCodex, KindClaude, KindGrok, KindOpenCode, KindCursor, KindCodeBuddy, KindQoder, KindPi:
+		return true
+	}
+	return false
 }
+
+// IsHosted reports whether k is a hosted API provider reached over the
+// internet with an operator-held API key. Such runtimes must be declared
+// locally, because their credential must never be pointed at an address a
+// Gateway chose.
+//
+// IsHosted 报告 k 是否为经互联网访问、使用运维持有的 API 密钥的托管 API 供应商。
+// 这类运行时必须在本地声明，因为它们的凭据绝不能被指向 Gateway 选定的地址。
+func (k Kind) IsHosted() bool {
+	switch k {
+	case KindOpenAI, KindGemini, KindDeepSeek, KindKimi, KindQwen, KindZhipu, KindMiniMax, KindOpenAICompatible,
+		KindAnthropic, KindAnthropicCompatible:
+		return true
+	}
+	return false
+}
+
+// defaultBaseURLs are the documented API roots Normalize fills in when a
+// hosted runtime leaves base_url empty. OpenAI-compatible roots include the
+// version segment, as each provider documents for its SDK base_url; the
+// Anthropic root does not, matching ANTHROPIC_BASE_URL. The *_compatible
+// kinds have no default.
+//
+// defaultBaseURLs 是托管运行时未填写 base_url 时由 Normalize 填入的官方 API 根
+// 地址。OpenAI 兼容的根地址包含版本段，与各供应商为 SDK base_url 给出的写法一致；
+// Anthropic 根地址不含版本段，与 ANTHROPIC_BASE_URL 一致。*_compatible 种类没有
+// 默认值。
+var defaultBaseURLs = map[Kind]string{
+	KindOpenAI:    "https://api.openai.com/v1",
+	KindGemini:    "https://generativelanguage.googleapis.com/v1beta/openai",
+	KindDeepSeek:  "https://api.deepseek.com/v1",
+	KindKimi:      "https://api.moonshot.cn/v1",
+	KindQwen:      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	KindZhipu:     "https://open.bigmodel.cn/api/paas/v4",
+	KindMiniMax:   "https://api.minimaxi.com/v1",
+	KindAnthropic: "https://api.anthropic.com",
+}
+
+// DefaultBaseURL returns the documented API root for a hosted kind, or "".
+// DefaultBaseURL 返回托管种类的官方 API 根地址，没有则返回 ""。
+func DefaultBaseURL(k Kind) string { return defaultBaseURLs[k] }
 
 type Config struct {
 	// AllowUnavailable keeps failed initial probes as unhealthy instances and retries them.
@@ -53,6 +119,14 @@ type Config struct {
 	TLS                 TLSConfig
 	CapabilityOverrides map[Capability]SupportLevel
 	Exclusive           bool
+	// Models is an operator-declared model catalogue for an endpoint that
+	// cannot list its own models. When set, a hosted runtime publishes
+	// exactly these IDs instead of the endpoint's listing. Local only; it is
+	// never accepted over the tunnel.
+	//
+	// Models 是运维为无法列出自身模型的端点声明的模型目录。设置后，托管运行时
+	// 发布的正是这些 ID，而不是端点返回的列表。仅限本地，从不通过隧道接收。
+	Models []string
 }
 type TLSConfig struct {
 	CAFile             string

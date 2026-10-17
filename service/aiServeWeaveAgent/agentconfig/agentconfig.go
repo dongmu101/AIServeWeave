@@ -72,12 +72,13 @@ type Config struct {
 	// Runtimes declares local inference backends to register at startup,
 	// in addition to whatever -ollama-url/-ollama-id and auto-discovery
 	// already add. Unlike those two, a declared runtime here may be any
-	// kind common/runtime's registry knows (ollama, vllm, sglang, comfyui, codex, claude, grok).
+	// kind common/runtime's registry knows (local servers, local CLIs and
+	// hosted providers; see common/runtime.Kind).
 	//
 	// Runtimes 声明启动时要注册的本地推理后端，是 -ollama-url/-ollama-id
 	// 与自动发现之外的补充。与那两者不同，这里声明的运行时可以是
-	// common/runtime 注册表认识的任意种类（ollama、vllm、sglang、
-	// comfyui、codex、claude、grok）。
+	// common/runtime 注册表认识的任意种类（本地服务、本机 CLI 与托管供应商，
+	// 见 common/runtime.Kind）。
 	Runtimes []RuntimeConfig `yaml:"runtimes,omitempty"`
 
 	// AutoDiscover overrides -auto-discover when set. A nil value leaves
@@ -179,9 +180,24 @@ type GatewayConfig struct {
 type RuntimeConfig struct {
 	ID   string `yaml:"id"`
 	Kind string `yaml:"kind"`
-	// BaseURL is empty for Codex, which uses the local CLI login.
-	// BaseURL 对 Codex 留空，该后端使用本机 CLI 登录。
+	// BaseURL is empty for local CLI kinds, which use the CLI's own login,
+	// and optional for hosted providers, which default to the official
+	// endpoint.
+	// BaseURL 对本机 CLI 种类留空（使用 CLI 自己的登录），对托管供应商可选
+	// （默认使用官方端点）。
 	BaseURL string `yaml:"base_url,omitempty"`
+	// APIKeyEnv names the environment variable holding a hosted provider's
+	// API key. The file stores only that name, never the key itself.
+	// APIKeyEnv 指定保存托管供应商 API Key 的环境变量名。文件只保存变量名，
+	// 从不保存 Key 本身。
+	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+	// Models declares, space- or comma-separated, the catalogue for an
+	// endpoint that cannot list its own models; when set it is
+	// authoritative. It is a string rather than a list so RuntimeConfig
+	// stays comparable.
+	// Models 以空格或逗号分隔，为无法列出自身模型的端点声明模型目录；设置后以它
+	// 为准。用字符串而不是列表，是为了让 RuntimeConfig 保持可比较。
+	Models string `yaml:"models,omitempty"`
 }
 
 // Load reads and parses a -config file at path. A parse error is wrapped
@@ -234,7 +250,14 @@ func Save(path string, cfg *Config) error {
 
 	runtimes := make([]map[string]any, len(cfg.Runtimes))
 	for i, rc := range cfg.Runtimes {
-		runtimes[i] = map[string]any{"id": rc.ID, "kind": rc.Kind, "base_url": rc.BaseURL}
+		entry := map[string]any{"id": rc.ID, "kind": rc.Kind, "base_url": rc.BaseURL}
+		if rc.APIKeyEnv != "" {
+			entry["api_key_env"] = rc.APIKeyEnv
+		}
+		if rc.Models != "" {
+			entry["models"] = rc.Models
+		}
+		runtimes[i] = entry
 	}
 	v.Set("runtimes", runtimes)
 

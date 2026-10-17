@@ -1,9 +1,17 @@
-// Package grokcli serves text inference through a locally authenticated Grok
-// CLI, running one isolated headless process per request.
+// Package cliagent serves text inference through locally signed-in coding
+// agent CLIs (Grok, OpenCode, Cursor, CodeBuddy, Qoder, Pi), running one
+// isolated headless process per request. Everything that is the same for
+// every CLI — process lifecycle, deadlines, backpressure, bounds, prompt
+// rendering and error categories — lives here once; each CLI contributes a
+// Spec with its command line, environment, output dialect and model
+// discovery.
 //
-// Package grokcli 通过本机已登录的 Grok CLI 提供文本推理，每个请求运行一个
-// 隔离的 headless 进程。
-package grokcli
+// Package cliagent 通过本机已登录的编程智能体 CLI（Grok、OpenCode、Cursor、
+// CodeBuddy、Qoder、Pi）提供文本推理，每个请求运行一个隔离的 headless 进程。
+// 所有 CLI 都相同的部分——进程生命周期、期限、背压、上限、提示词渲染与错误
+// 类别——在这里只实现一次；每个 CLI 提供一份 Spec，描述它的命令行、环境变量、
+// 输出方言与模型发现。
+package cliagent
 
 import (
 	"context"
@@ -21,15 +29,16 @@ import (
 // errFinished marks an operation that ended normally, so its context cause is
 // never mistaken for a failure.
 // errFinished 标记正常结束的操作，避免把它的 context cause 误认为失败。
-var errFinished = errors.New("grokcli: operation finished")
+var errFinished = errors.New("cliagent: operation finished")
 
 // errConsumerGone means the stream consumer closed the stream mid-turn.
 // errConsumerGone 表示流的消费方在回合中途关闭了流。
-var errConsumerGone = errors.New("grokcli: stream consumer closed")
+var errConsumerGone = errors.New("cliagent: stream consumer closed")
 
-// Runtime serves remote inference using an isolated local Grok process per call.
-// Runtime 为每次远程推理创建独立的本地 Grok 进程。
+// Runtime serves remote inference using an isolated local CLI process per call.
+// Runtime 为每次远程推理创建独立的本地 CLI 进程。
 type Runtime struct {
+	spec       *Spec
 	cfg        runtime.Config
 	deps       runtime.Dependencies
 	executable string
@@ -46,32 +55,42 @@ type Runtime struct {
 
 var _ runtime.InferenceRuntime = (*Runtime)(nil)
 
-// New constructs the Agent-local Grok adapter without starting a process.
-// New 创建 Agent 本地 Grok 适配器，不启动进程。
+// Kinds lists every CLI kind this package serves, for registry wiring.
+// Kinds 列出本包服务的全部 CLI 种类，供注册表接线使用。
+func Kinds() []runtime.Kind {
+	kinds := make([]runtime.Kind, 0, len(specs))
+	for kind := range specs {
+		kinds = append(kinds, kind)
+	}
+	return kinds
+}
+
+// New constructs the adapter for cfg.Kind without starting a process.
+// New 按 cfg.Kind 创建适配器，不启动进程。
 func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-	return NewFactory("grok")(cfg, deps)
+	return NewFactory("")(cfg, deps)
 }
 
 // NewFactory binds a trusted executable locally; its path never comes from a
-// request. A bare name is resolved on the Agent's PATH, then in
-// $HOME/.grok/bin, when each process starts.
+// request. An empty executable uses the Spec's own candidate names, looked up
+// on the Agent's PATH and then in the Spec's install directory under $HOME
+// each time a process starts.
 //
-// NewFactory 绑定可信的本地可执行文件，路径从不取自推理请求。裸名称在每次
-// 启动进程时先在 Agent 的 PATH 中查找，再查找 $HOME/.grok/bin。
+// NewFactory 绑定可信的本地可执行文件，路径从不取自推理请求。executable 为空
+// 时使用 Spec 自带的候选名称，每次启动进程时先在 Agent 的 PATH 中查找，再查找
+// $HOME 下 Spec 声明的安装目录。
 func NewFactory(executable string) runtime.Factory {
 	return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-		if cfg.Kind == "" {
-			cfg.Kind = runtime.KindGrok
+		spec, ok := specs[cfg.Kind]
+		if !ok || deps.Clock == nil {
+			return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, Kind: cfg.Kind, RuntimeID: cfg.ID, Message: "invalid local CLI configuration"}
 		}
 		cfg = cfg.Normalize()
 		if err := cfg.Validate(); err != nil {
 			return nil, err
 		}
-		if cfg.Kind != runtime.KindGrok || deps.Clock == nil || executable == "" {
-			return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, Kind: cfg.Kind, RuntimeID: cfg.ID, Message: "invalid local Grok configuration"}
-		}
 		root, cancel := context.WithCancel(context.Background())
-		return &Runtime{cfg: cfg, deps: deps, executable: executable, env: os.Environ(), root: root, cancel: cancel,
+		return &Runtime{spec: spec, cfg: cfg, deps: deps, executable: executable, env: os.Environ(), root: root, cancel: cancel,
 			limiter: runtime.NewLimiter(cfg.MaxConcurrent)}, nil
 	}
 }
@@ -79,7 +98,7 @@ func NewFactory(executable string) runtime.Factory {
 // Descriptor returns non-secret runtime identity and capacity.
 // Descriptor 返回不含凭据的运行时标识与容量。
 func (r *Runtime) Descriptor() runtime.Descriptor {
-	return runtime.Descriptor{ID: r.cfg.ID, Kind: runtime.KindGrok, MaxConcurrent: r.cfg.MaxConcurrent}
+	return runtime.Descriptor{ID: r.cfg.ID, Kind: r.spec.Kind, MaxConcurrent: r.cfg.MaxConcurrent}
 }
 
 // Close cancels and reaps all owned processes before returning.
@@ -177,7 +196,7 @@ func (r *Runtime) wrap(operation string, err error) error {
 	case errors.Is(err, ErrTurn), errors.Is(err, ErrRPC):
 		code = runtime.ErrorUpstream
 	}
-	return &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: runtime.KindGrok, Operation: operation, Message: "Grok operation failed: " + string(code), Cause: err}
+	return &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: r.spec.Kind, Operation: operation, Message: r.spec.Label + " CLI operation failed: " + string(code), Cause: err}
 }
 
 // inspect reads the model catalogue without running inference and remembers
@@ -190,7 +209,22 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 		return nil, err
 	}
 	defer finish()
-	ids, err := discoverModels(ctx, r.executable, r.env, touch)
+	var ids []string
+	err = withHome(r.spec, r.executable, r.env, func(c *call) error {
+		c.ctx, c.touch = ctx, touch
+		raw, err := r.spec.Discover(c)
+		if err != nil {
+			return err
+		}
+		catalogue := modelSet{aliases: r.spec.Aliases}
+		for _, id := range raw {
+			if err := catalogue.add(id); err != nil {
+				return err
+			}
+		}
+		ids, err = catalogue.result()
+		return err
+	})
 	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, errFinished) {
 		err = cause
 	}
@@ -200,7 +234,7 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	models := make([]runtime.Model, 0, len(ids))
 	known := make(map[string]bool, len(ids))
 	for _, id := range ids {
-		models = append(models, runtime.Model{ID: id, Capabilities: capabilities()})
+		models = append(models, runtime.Model{ID: id, Capabilities: capabilities(r.spec.Label)})
 		known[id] = true
 	}
 	r.mu.Lock()
@@ -215,33 +249,29 @@ func (r *Runtime) knownModel(id string) bool {
 	return r.models[id]
 }
 
-func evidence(c runtime.Capability, level runtime.SupportLevel, detail string) runtime.CapabilityEvidence {
-	return runtime.CapabilityEvidence{Capability: c, Level: level, Source: runtime.SourceRuntimeProfile, Detail: detail}
-}
-
-// capabilities is every Grok model's set: text chat only. Features the
-// headless CLI cannot provide safely are marked unsupported explicitly rather
-// than left unknown.
+// capabilities is every CLI model's set: text chat only. Features a headless
+// CLI cannot provide safely are marked unsupported explicitly rather than
+// left unknown.
 //
-// capabilities 是每个 Grok 模型的能力集：仅文本聊天。headless CLI 无法安全
-// 提供的功能显式标为不支持，而不是留作未知。
-func capabilities() runtime.CapabilitySet {
+// capabilities 是每个 CLI 模型的能力集：仅文本聊天。headless CLI 无法安全提供
+// 的功能显式标为不支持，而不是留作未知。
+func capabilities(label string) runtime.CapabilitySet {
 	result := runtime.CapabilitySet{}
 	for _, c := range []runtime.Capability{runtime.CapabilityChat, runtime.CapabilityChatStream} {
-		result[c] = evidence(c, runtime.SupportSupported, "isolated Grok CLI headless adapter")
+		result[c] = runtime.CapabilityEvidence{Capability: c, Level: runtime.SupportSupported, Source: runtime.SourceRuntimeProfile, Detail: "isolated " + label + " CLI headless adapter"}
 	}
 	for _, c := range []runtime.Capability{runtime.CapabilityTools, runtime.CapabilityParallelToolCalls, runtime.CapabilityStructuredOutput,
 		runtime.CapabilityVision, runtime.CapabilityEmbeddings, runtime.CapabilityImageGeneration} {
-		result[c] = evidence(c, runtime.SupportUnsupported, "Grok CLI headless text adapter")
+		result[c] = runtime.CapabilityEvidence{Capability: c, Level: runtime.SupportUnsupported, Source: runtime.SourceRuntimeProfile, Detail: label + " CLI headless text adapter"}
 	}
 	return result
 }
 
-// Probe verifies the local Grok CLI can report its model catalogue.
-// Probe 验证本地 Grok CLI 能够报告模型目录。
+// Probe verifies the local CLI can report its model catalogue.
+// Probe 验证本地 CLI 能够报告模型目录。
 func (r *Runtime) Probe(ctx context.Context) (runtime.ProbeResult, error) {
 	_, err := r.inspect(ctx)
-	return runtime.ProbeResult{Kind: runtime.KindGrok, IdentityVerified: err == nil, Evidence: "local Grok CLI model catalogue", ProbedAt: r.deps.Clock.Now()}, err
+	return runtime.ProbeResult{Kind: r.spec.Kind, IdentityVerified: err == nil, Evidence: "local " + r.spec.Label + " CLI model catalogue", ProbedAt: r.deps.Clock.Now()}, err
 }
 
 // Health checks the CLI without issuing a model inference request.
@@ -252,16 +282,16 @@ func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 	report := runtime.HealthReport{State: runtime.StateHealthy, CheckedAt: r.deps.Clock.Now(), Latency: r.deps.Clock.Now().Sub(start)}
 	if err != nil {
 		report.State = runtime.StateUnhealthy
-		report.ErrorSummary = "local Grok CLI unavailable"
+		report.ErrorSummary = "local " + r.spec.Label + " CLI unavailable"
 	}
 	return report, err
 }
 
-// Discover publishes the locally authenticated model catalogue.
+// Discover publishes the locally signed-in model catalogue.
 // Discover 发布本机已登录账户的模型目录。
 func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 	models, err := r.inspect(ctx)
-	return runtime.Discovery{Models: models, Capabilities: capabilities(), DiscoveredAt: r.deps.Clock.Now()}, err
+	return runtime.Discovery{Models: models, Capabilities: capabilities(r.spec.Label), DiscoveredAt: r.deps.Clock.Now()}, err
 }
 
 // ListModels reads models from the local CLI, without inference.
@@ -285,11 +315,11 @@ func (s *chatStream) Close() error {
 }
 
 // ChatStream streams text deltas with synchronous backpressure; the final
-// event is sent only after the CLI has exited successfully.
+// event is sent only after the CLI has finished successfully.
 //
-// ChatStream 以同步背压流式发送文本增量；最终事件只在 CLI 成功退出后发送。
+// ChatStream 以同步背压流式发送文本增量；最终事件只在 CLI 成功结束后发送。
 func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], error) {
-	prompt, err := buildPrompt(req)
+	prompt, err := buildPrompt(r.spec.Label, req)
 	if err != nil {
 		return nil, r.wrap("chat_stream", err)
 	}
@@ -297,7 +327,7 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 		return nil, r.wrap("chat_stream", ErrRequest)
 	}
 	if req.MaxTokens != nil && r.deps.Logger != nil {
-		r.deps.Logger.Warn("Grok compatibility mode: output token limit is not enforced / Grok 兼容模式：输出 token 上限不生效")
+		r.deps.Logger.Warn(r.spec.Label + " compatibility mode: output token limit is not enforced / 兼容模式：输出 token 上限不生效")
 	}
 	release, err := r.limiter.Acquire()
 	if err != nil {
@@ -311,7 +341,7 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 		return nil, err
 	}
 	s := &chatStream{ChanStream: runtime.NewChanStream[runtime.ChatEvent](0), cancel: cancel, done: make(chan struct{})}
-	id := "grok-" + randomHex()
+	id := string(r.spec.Kind) + "-" + randomHex()
 	go func() {
 		defer close(s.done)
 		defer release()
@@ -328,7 +358,10 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 			}
 			return nil
 		}
-		err := runTurn(ctx, r.executable, r.env, req.Model, prompt, touch, emit)
+		err := withHome(r.spec, r.executable, r.env, func(c *call) error {
+			c.ctx, c.touch = ctx, touch
+			return runTurn(c, req.Model, prompt, emit)
+		})
 		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, errFinished) {
 			err = cause
 		}
@@ -368,19 +401,19 @@ func (r *Runtime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.Ch
 	}
 }
 
-// Embed rejects embeddings because Grok CLI is a conversational backend.
-// Embed 拒绝嵌入请求，Grok CLI 是对话型后端。
+// Embed rejects embeddings because these CLIs are conversational backends.
+// Embed 拒绝嵌入请求，这些 CLI 是对话型后端。
 func (r *Runtime) Embed(context.Context, runtime.EmbeddingRequest) (runtime.EmbeddingResponse, error) {
 	return runtime.EmbeddingResponse{}, r.wrap("embed", errUnsupported)
 }
 
-// Transcribe rejects audio transcription, which the CLI does not expose.
+// Transcribe rejects audio transcription, which the CLIs do not expose.
 // Transcribe 拒绝 CLI 未提供的音频转录。
 func (r *Runtime) Transcribe(context.Context, runtime.AudioTranscriptionRequest, io.Reader) (runtime.AudioTranscriptionResponse, error) {
 	return runtime.AudioTranscriptionResponse{}, r.wrap("transcribe", errUnsupported)
 }
 
-// Rerank rejects reranking, which the CLI does not expose.
+// Rerank rejects reranking, which the CLIs do not expose.
 // Rerank 拒绝 CLI 未提供的重排。
 func (r *Runtime) Rerank(context.Context, runtime.RerankRequest) (runtime.RerankResponse, error) {
 	return runtime.RerankResponse{}, r.wrap("rerank", errUnsupported)

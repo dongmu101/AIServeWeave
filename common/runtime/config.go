@@ -44,11 +44,19 @@ func (c Config) Normalize() Config {
 
 	if n.ProbeTimeout == 0 {
 		n.ProbeTimeout = defaultProbeTimeout
-		if n.Kind.IsLocalCLI() {
+		switch {
+		case n.Kind.IsLocalCLI():
 			// Cold CLI startup and account discovery need more time than an HTTP probe.
 			// CLI 冷启动和账户发现比 HTTP 探测需要更长时间。
 			n.ProbeTimeout = 15 * time.Second
+		case n.Kind.IsHosted():
+			// A hosted API is across the internet, often behind a proxy.
+			// 托管 API 位于互联网另一端，往往还经过代理。
+			n.ProbeTimeout = 10 * time.Second
 		}
+	}
+	if n.BaseURL == "" {
+		n.BaseURL = DefaultBaseURL(n.Kind)
 	}
 	if n.RequestTimeout == 0 {
 		n.RequestTimeout = defaultRequestTimeout
@@ -97,8 +105,9 @@ func (c Config) Validate() error {
 		problems = append(problems, "id must not be empty")
 	}
 
-	switch c.Kind {
-	case KindVLLM, KindSGLang, KindOllama, KindComfyUI, KindCodex, KindClaude, KindGrok:
+	switch {
+	case c.Kind == KindVLLM, c.Kind == KindSGLang, c.Kind == KindOllama, c.Kind == KindComfyUI:
+	case c.Kind.IsLocalCLI(), c.Kind.IsHosted():
 	default:
 		problems = append(problems, fmt.Sprintf("kind %q is not a registered runtime kind", c.Kind))
 	}
@@ -128,6 +137,15 @@ func (c Config) Validate() error {
 		if u.Fragment != "" {
 			problems = append(problems, "base_url must not contain a fragment")
 		}
+	}
+
+	seenModels := make(map[string]bool, len(c.Models))
+	for _, model := range c.Models {
+		if strings.TrimSpace(model) == "" || len(model) > 256 || seenModels[model] {
+			problems = append(problems, "models entries must be non-empty, at most 256 bytes and unique")
+			break
+		}
+		seenModels[model] = true
 	}
 
 	for name := range c.Headers {

@@ -20,9 +20,12 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode"
 
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/runtime/anthropic"
+	"AIServeWeave/common/runtime/hosted"
 	"AIServeWeave/common/runtime/ollama"
 	"AIServeWeave/common/runtime/sglang"
 	"AIServeWeave/common/runtime/vllm"
@@ -30,10 +33,10 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
 	"AIServeWeave/service/aiServeWeaveAgent/claudecode"
+	"AIServeWeave/service/aiServeWeaveAgent/cliagent"
 	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
-	"AIServeWeave/service/aiServeWeaveAgent/grokcli"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
@@ -343,13 +346,24 @@ func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnel
 // runtime.Config。它自己不做任何校验：一个不认识的 Kind 会从 manager.Add
 // 那里以 runtime.ErrRuntimeKindUnsupported 的形式暴露出来，与任何其他错误
 // 的 -kind 一样。
+//
+// A hosted provider's key is read from the environment variable named by
+// api_key_env at this point; an unset variable leaves the key empty, which
+// the provider then rejects as unauthorized rather than failing startup.
+//
+// 托管供应商的 Key 在此处从 api_key_env 指定的环境变量读取；变量未设置时 Key
+// 为空，由供应商以未授权拒绝，而不是让启动失败。
 func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 	if len(declared) == 0 {
 		return nil
 	}
 	out := make([]runtime.Config, len(declared))
 	for i, rc := range declared {
-		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL}
+		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL,
+			Models: strings.FieldsFunc(rc.Models, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })}
+		if rc.APIKeyEnv != "" {
+			out[i].APIKey = os.Getenv(rc.APIKeyEnv)
+		}
 	}
 	return out
 }
@@ -1212,50 +1226,67 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 }
 
 // newRegistry returns a runtime registry with every supported inference
-// backend registered. CLI IDs must be declared locally before they can be created.
+// backend registered. Local CLI and hosted provider IDs must be declared
+// locally before they can be created. A hosted provider additionally keeps
+// its local endpoint and credentials: a configuration pushed by a Gateway
+// may tune timeouts but never redirect a local key to another URL.
 //
-// newRegistry 注册所有支持的后端；CLI ID 必须先在本地声明才允许创建。
+// newRegistry 注册所有支持的后端。本机 CLI 与托管供应商的 ID 必须先在本地声明
+// 才允许创建。托管供应商还始终保留本地声明的端点与凭据：Gateway 下发的配置
+// 可以调整超时，但绝不能把本地 Key 转发到别的 URL。
 func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 	registry := runtime.NewRegistry()
-	localCodexIDs := make(map[string]bool)
-	localClaudeIDs := make(map[string]bool)
-	localGrokIDs := make(map[string]bool)
+	local := make(map[string]runtime.Config)
 	for _, cfg := range declared {
-		if cfg.Kind == runtime.KindCodex {
-			localCodexIDs[cfg.ID] = true
+		if cfg.Kind.IsLocalCLI() || cfg.Kind.IsHosted() {
+			local[cfg.ID] = cfg
 		}
-		if cfg.Kind == runtime.KindClaude {
-			localClaudeIDs[cfg.ID] = true
+	}
+	// localOnly admits only IDs declared locally with the same kind.
+	// localOnly 只接受在本地以相同种类声明过的 ID。
+	localOnly := func(build runtime.Factory) runtime.Factory {
+		return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+			if own, ok := local[cfg.ID]; !ok || own.Kind != cfg.Kind {
+				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
+					Message: "runtime kind must be declared in the local Agent configuration"}
+			}
+			return build(cfg, deps)
 		}
-		if cfg.Kind == runtime.KindGrok {
-			localGrokIDs[cfg.ID] = true
-		}
+	}
+	// hostedLocal also pins endpoint, key, headers, TLS and, when the
+	// request declares none, the model catalogue to the local declaration.
+	// hostedLocal 还把端点、Key、Headers、TLS 以及（请求未声明时的）模型目录
+	// 固定为本地声明的值。
+	hostedLocal := func(build runtime.Factory) runtime.Factory {
+		return localOnly(func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+			own := local[cfg.ID]
+			if strings.TrimRight(cfg.Normalize().BaseURL, "/") != strings.TrimRight(own.Normalize().BaseURL, "/") {
+				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
+					Message: "hosted runtime base_url must match the local Agent configuration"}
+			}
+			cfg.BaseURL, cfg.APIKey, cfg.Headers, cfg.TLS = own.BaseURL, own.APIKey, own.Headers, own.TLS
+			if len(cfg.Models) == 0 {
+				cfg.Models = own.Models
+			}
+			return build(cfg, deps)
+		})
 	}
 	factories := map[runtime.Kind]runtime.Factory{
 		runtime.KindOllama:  ollama.New,
 		runtime.KindVLLM:    vllm.New,
 		runtime.KindSGLang:  sglang.New,
 		runtime.KindComfyUI: comfyui.New,
-		runtime.KindClaude: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-			if !localClaudeIDs[cfg.ID] {
-				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind, Message: "Claude runtime must be declared in the local Agent configuration"}
-			}
-			return claudecode.New(cfg, deps)
-		},
-		runtime.KindCodex: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-			if !localCodexIDs[cfg.ID] {
-				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
-					Message: "Codex runtime must be declared in the local Agent configuration"}
-			}
-			return codexcli.New(cfg, deps)
-		},
-		runtime.KindGrok: func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-			if !localGrokIDs[cfg.ID] {
-				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
-					Message: "Grok runtime must be declared in the local Agent configuration"}
-			}
-			return grokcli.New(cfg, deps)
-		},
+		runtime.KindClaude:  localOnly(claudecode.New),
+		runtime.KindCodex:   localOnly(codexcli.New),
+	}
+	for _, kind := range cliagent.Kinds() {
+		factories[kind] = localOnly(cliagent.New)
+	}
+	for _, kind := range hosted.Kinds() {
+		factories[kind] = hostedLocal(hosted.New)
+	}
+	for _, kind := range []runtime.Kind{runtime.KindAnthropic, runtime.KindAnthropicCompatible} {
+		factories[kind] = hostedLocal(anthropic.New)
 	}
 	for kind, factory := range factories {
 		if err := registry.Register(kind, factory); err != nil {

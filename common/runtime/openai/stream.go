@@ -85,7 +85,7 @@ func (s *chatEventStream) Close() error {
 // caller; closing it cancels the underlying HTTP request.
 func ChatStream(ctx context.Context, c *Client, req runtime.ChatRequest, idleTimeout time.Duration) (runtime.Stream[runtime.ChatEvent], error) {
 	dtoReq := chatStreamRequestDTO{
-		chatCompletionRequest: buildChatCompletionRequest(req),
+		chatCompletionRequest: c.chatRequest(req),
 		Stream:                true,
 		StreamOptions:         &streamOptionsDTO{IncludeUsage: true},
 	}

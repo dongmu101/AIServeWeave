@@ -32,9 +32,13 @@ runtimes:
 
 模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；仅发布 CLI `resolvedModel` 返回的真实模型 ID，并按真实 ID 去重；不发布 `default`、`sonnet`、`opus`、`fable`、`haiku` 等简称。请求仅接受发现到的真实 ID，并原样传给 CLI 的 `--model`，不做简称映射。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
 
-## Grok CLI 接入
+## 编程智能体 CLI 接入（Grok / OpenCode / Cursor / CodeBuddy / Qoder / Pi）
 
-`grokcli/` 已注册本地 `kind: grok`，以本机已登录的 Grok CLI（`grok login`）为纯文本推理后端，经现有 Chat/ChatStream 隧道服务 Gateway `/v1/chat/completions`。每个请求在隔离的临时 `HOME`/`GROK_HOME` 中启动一次 headless 进程，全部内建工具禁用、不配置 MCP，出现工具事件即终止；多轮历史以带角色的 JSON 文本作为上下文。模型目录经 ACP `initialize`（失败时退回 `grok models`）获取，不执行推理，只发布真实 ID。不支持工具、图片、采样参数与结构化输出；输出 token 上限只作兼容接收、不执行。本地 YAML 增加 `- id: grok-local` / `kind: grok`，设置了 `gateway.allowed_runtimes` 时同时加入。尚未用真实 Grok CLI 实机验收，参数与边界见 [Grok 包说明](grokcli/README.md)。
+`cliagent/` 已注册本地 `kind: grok`、`opencode`、`cursor`、`codebuddy`、`qoder`、`pi`，以本机已登录的对应 CLI 为纯文本推理后端，经现有 Chat/ChatStream 隧道服务 Gateway `/v1/chat/completions`。进程生命周期、期限、背压、上限、提示词渲染与错误类别只实现一次，每种 CLI 只提供命令行、环境变量、输出方言与模型发现（参照 dbx 的适配器）。每个请求在新建的临时目录中启动一次 headless 进程，内建工具与 MCP 按各 CLI 能力关闭，出现任何工具事件即终止进程组；多轮历史以带角色的 JSON 文本作为上下文。模型目录由 CLI 自身的列表命令或 RPC 获取，不执行推理，只发布真实 ID。不支持工具、图片、采样参数与结构化输出；输出 token 上限只作兼容接收、不执行。ID 必须在本地 YAML 声明，设置了 `gateway.allowed_runtimes` 时同时加入。尚未用真实 CLI 实机验收，参数与边界见 [CLI 包说明](cliagent/README.md)。
+
+## 托管模型供应商接入
+
+Agent 可在本地 YAML 声明 `kind: openai` / `gemini` / `deepseek` / `kimi` / `qwen` / `zhipu` / `minimax` / `openai_compatible` / `anthropic` / `anthropic_compatible`。`base_url` 留空使用官方端点（两种 compatible 必填），`api_key_env` 指定保存 Key 的环境变量名（文件只存变量名），`models` 可声明模型目录（空格或逗号分隔）。这些 ID 只能在本地声明；Gateway 下发同 ID 配置时 `base_url` 必须与本地一致，端点、Key、Headers、TLS 始终取本地值，Gateway 无法把本机 Key 指向其他地址。设置页面已提供全部选项。实现见 [托管供应商说明](../../common/runtime/hosted/README.md) 与 [Anthropic 说明](../../common/runtime/anthropic/README.md)；尚未用真实 Key 实机验收。
 
 ## 多个 AI CLI 同时接入
 

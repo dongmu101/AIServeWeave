@@ -51,6 +51,26 @@ type Base struct {
 // network I/O. kind must be the Kind the calling adapter serves, and cfg's
 // Kind must agree with it.
 func New(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependencies) (*Base, error) {
+	return NewWithOptions(cfg, kind, deps, Options{})
+}
+
+// Options adjusts how Base talks to its backend beyond what Config carries.
+// Options 调整 Base 与后端通信的方式，补充 Config 未承载的部分。
+type Options struct {
+	// VersionedBaseURL is passed to openai.ClientConfig: Config.BaseURL is
+	// a hosted provider's API root that already includes the version segment.
+	// VersionedBaseURL 透传给 openai.ClientConfig：Config.BaseURL 是已含版本段的
+	// 托管供应商 API 根地址。
+	VersionedBaseURL bool
+	// AuthHeader and MaxCompletionTokens are passed to openai.ClientConfig.
+	// AuthHeader 与 MaxCompletionTokens 透传给 openai.ClientConfig。
+	AuthHeader          string
+	MaxCompletionTokens bool
+}
+
+// NewWithOptions is New with explicit Options.
+// NewWithOptions 是带显式 Options 的 New。
+func NewWithOptions(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependencies, opts Options) (*Base, error) {
 	if cfg.Kind == "" {
 		cfg.Kind = kind
 	}
@@ -71,6 +91,10 @@ func New(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependencies) (*Bas
 		HTTPClient: deps.HTTPClient,
 		Kind:       kind,
 		RuntimeID:  cfg.ID,
+
+		VersionedBaseURL:    opts.VersionedBaseURL,
+		AuthHeader:          opts.AuthHeader,
+		MaxCompletionTokens: opts.MaxCompletionTokens,
 	})
 	if err != nil {
 		return nil, &runtime.RuntimeError{

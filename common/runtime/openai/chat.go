@@ -139,6 +139,7 @@ type chatCompletionRequest struct {
 	Temperature    *float64           `json:"temperature,omitempty"`
 	TopP           *float64           `json:"top_p,omitempty"`
 	MaxTokens      *int               `json:"max_tokens,omitempty"`
+	MaxCompletion  *int               `json:"max_completion_tokens,omitempty"`
 	Stop           []string           `json:"stop,omitempty"`
 	Seed           *int64             `json:"seed,omitempty"`
 	Tools          []toolDTO          `json:"tools,omitempty"`
@@ -258,6 +259,23 @@ func toResponseFormatDTO(rf *runtime.ResponseFormat) *responseFormatDTO {
 	return dto
 }
 
+// chatRequest builds the wire DTO and applies the client's token-limit
+// field name. An Extra "max_completion_tokens" wins, so the field is never
+// sent twice.
+//
+// chatRequest 构造线上 DTO 并应用客户端的 token 上限字段名。Extra 中的
+// "max_completion_tokens" 优先，因此该字段不会被发送两次。
+func (c *Client) chatRequest(req runtime.ChatRequest) chatCompletionRequest {
+	dto := buildChatCompletionRequest(req)
+	if c.maxCompl {
+		if _, set := req.Extra["max_completion_tokens"]; !set {
+			dto.MaxCompletion = dto.MaxTokens
+		}
+		dto.MaxTokens = nil
+	}
+	return dto
+}
+
 // buildChatCompletionRequest converts req's modeled fields into the wire
 // DTO shared by Chat and ChatStream. It does not touch req.Extra — callers
 // merge that separately via Client.mergeExtraFields, after any
@@ -287,7 +305,7 @@ func buildChatCompletionRequest(req runtime.ChatRequest) chatCompletionRequest {
 // the backend responds with no choices, and with Code ErrorInvalidConfig if
 // req.Extra collides with a modeled field name.
 func Chat(ctx context.Context, c *Client, req runtime.ChatRequest) (runtime.ChatResponse, error) {
-	dtoReq := buildChatCompletionRequest(req)
+	dtoReq := c.chatRequest(req)
 	body, err := c.mergeExtraFields("chat", dtoReq, req.Extra, modeledChatFields)
 	if err != nil {
 		return runtime.ChatResponse{}, err

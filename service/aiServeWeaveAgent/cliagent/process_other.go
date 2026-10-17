@@ -1,6 +1,6 @@
 //go:build !darwin && !linux
 
-package grokcli
+package cliagent
 
 import "os/exec"
 

@@ -233,11 +233,36 @@ const (
 	KindComfyUI Kind = "comfyui"
 	KindCodex   Kind = "codex"
 	KindClaude  Kind = "claude"
-	KindGrok    Kind = "grok"
+
+	// Agent 本地 CLI（cliagent 包）
+	KindGrok      Kind = "grok"
+	KindOpenCode  Kind = "opencode"
+	KindCursor    Kind = "cursor"
+	KindCodeBuddy Kind = "codebuddy"
+	KindQoder     Kind = "qoder"
+	KindPi        Kind = "pi"
+
+	// 托管供应商（hosted 与 anthropic 包）
+	KindOpenAI              Kind = "openai"
+	KindGemini              Kind = "gemini"
+	KindDeepSeek            Kind = "deepseek"
+	KindKimi                Kind = "kimi"
+	KindQwen                Kind = "qwen"
+	KindZhipu               Kind = "zhipu"
+	KindMiniMax             Kind = "minimax"
+	KindOpenAICompatible    Kind = "openai_compatible"
+	KindAnthropic           Kind = "anthropic"
+	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 
-// IsLocalCLI 为 codex / claude / grok 返回 true。
+// IsLocalCLI 为 codex / claude 及 cliagent 的六种 CLI 返回 true。
 func (k Kind) IsLocalCLI() bool
+
+// IsHosted 为上面十种托管供应商返回 true。
+func (k Kind) IsHosted() bool
+
+// DefaultBaseURL 返回托管供应商的官方端点；两种 compatible 没有默认值。
+func DefaultBaseURL(k Kind) string
 
 type Config struct {
 	AllowUnavailable    bool // local admission only / 本地未就绪策略，不通过隧道接收
@@ -502,8 +527,9 @@ runtimes:
 校验要求：
 
 - `id` 非空且在单个 Agent 内唯一。
-- `kind` 只能是已注册值之一（vllm、sglang、ollama、comfyui、codex、claude、grok）。
-- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。`kind: codex`、`kind: claude` 和 `kind: grok` 是 Agent 本地 CLI 后端（`Kind.IsLocalCLI`），`base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode` 和 `service/aiServeWeaveAgent/grokcli`，不会链入 Gateway。
+- `kind` 只能是已注册值之一：本地服务（vllm、sglang、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
+- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode` 和 `service/aiServeWeaveAgent/cliagent`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
+- `models` 是可选的本地模型目录声明：每项非空、不超过 256 字节且不重复；设置后以它为准，端点没有模型列表路由（404/405）时也能发布。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
 - 自定义 Header 禁止覆盖 `Host`、`Content-Length`、hop-by-hop headers 和 Agent 链路追踪头。
 - 生产配置通过 Secret 引用提供密钥；`Config` 的格式化方法必须脱敏。

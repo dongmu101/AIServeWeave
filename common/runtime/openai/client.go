@@ -50,6 +50,29 @@ type ClientConfig struct {
 	MaxResponseBytes int64
 	Kind             runtime.Kind
 	RuntimeID        string
+	// VersionedBaseURL means BaseURL already ends at the API version root
+	// (https://api.openai.com/v1, https://open.bigmodel.cn/api/paas/v4), as
+	// hosted providers document it, so every request path drops its leading
+	// "/v1" before being joined on.
+	//
+	// VersionedBaseURL 表示 BaseURL 已经包含 API 版本根路径（如
+	// https://api.openai.com/v1、https://open.bigmodel.cn/api/paas/v4），与托管
+	// 供应商文档的写法一致；拼接前每个请求路径都会去掉开头的 "/v1"。
+	VersionedBaseURL bool
+	// AuthHeader, when set, carries APIKey verbatim in that header (for
+	// example "x-api-key") instead of "Authorization: Bearer". The key is
+	// still redacted from errors either way.
+	//
+	// AuthHeader 非空时以该请求头原样携带 APIKey（例如 "x-api-key"），而不是
+	// "Authorization: Bearer"。两种方式下密钥都会从错误中脱敏。
+	AuthHeader string
+	// MaxCompletionTokens sends ChatRequest.MaxTokens as
+	// "max_completion_tokens", the name OpenAI's reasoning models and
+	// MiniMax require, instead of "max_tokens".
+	//
+	// MaxCompletionTokens 把 ChatRequest.MaxTokens 以 "max_completion_tokens"
+	// 发送（OpenAI 推理模型与 MiniMax 要求的字段名），而不是 "max_tokens"。
+	MaxCompletionTokens bool
 }
 
 // Client is the shared OpenAI-compatible HTTP client. It is safe for
@@ -62,6 +85,9 @@ type Client struct {
 	maxRespBytes int64
 	kind         runtime.Kind
 	runtimeID    string
+	versioned    bool
+	authHeader   string
+	maxCompl     bool
 }
 
 // NewClient validates cfg and builds a Client. It performs no network I/O.
@@ -108,15 +134,28 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		maxRespBytes: maxBytes,
 		kind:         cfg.Kind,
 		runtimeID:    cfg.RuntimeID,
+		versioned:    cfg.VersionedBaseURL,
+		authHeader:   cfg.AuthHeader,
+		maxCompl:     cfg.MaxCompletionTokens,
 	}, nil
 }
 
 // resolve joins path onto the client's base URL, preserving any path prefix
-// on BaseURL instead of overwriting it.
+// on BaseURL instead of overwriting it. With VersionedBaseURL the path's
+// leading "/v1" is dropped, because BaseURL already carries the version.
+//
+// resolve 把 path 拼接到客户端的基础 URL 上，保留 BaseURL 的路径前缀而不是覆盖
+// 它。启用 VersionedBaseURL 时去掉 path 开头的 "/v1"，因为 BaseURL 已含版本段。
 func (c *Client) resolve(path string) *url.URL {
+	if c.versioned {
+		if rest, ok := strings.CutPrefix(path, "/v1/"); ok {
+			path = "/" + rest
+		}
+	}
+	path, query, _ := strings.Cut(path, "?") // a query is the caller's, never the base URL's / 查询串只来自调用方，从不来自基础 URL
 	resolved := *c.baseURL
 	resolved.Path = strings.TrimSuffix(c.baseURL.Path, "/") + path
-	resolved.RawQuery = ""
+	resolved.RawQuery = query
 	return &resolved
 }
 
@@ -134,13 +173,35 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body []byt
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
+	c.setAuth(req.Header)
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
 	return req, nil
+}
+
+// setAuth attaches the API key, if any, in the configured header.
+// setAuth 按配置的请求头附加 API 密钥（若有）。
+func (c *Client) setAuth(h http.Header) {
+	switch {
+	case c.apiKey == "":
+	case c.authHeader != "":
+		h.Set(c.authHeader, c.apiKey)
+	default:
+		h.Set("Authorization", "Bearer "+c.apiKey)
+	}
+}
+
+// DoStream sends operation and returns the raw 2xx response with its body
+// open for the caller to read and close, for streaming formats other than
+// OpenAI's chat chunks. Non-2xx responses become *runtime.RuntimeError
+// exactly as in Do.
+//
+// DoStream 发送 operation 并返回原始 2xx 响应，响应体保持打开，由调用方读取并
+// 关闭，用于 OpenAI 聊天分片之外的流式格式。非 2xx 响应与 Do 一样转换为
+// *runtime.RuntimeError。
+func (c *Client) DoStream(ctx context.Context, operation, method, path string, reqBody any) (*http.Response, error) {
+	return c.doRaw(ctx, operation, method, path, reqBody)
 }
 
 // Do sends operation as an HTTP request. If reqBody is non-nil, it is
@@ -264,9 +325,7 @@ func (c *Client) doMultipart(ctx context.Context, operation, path string, fields
 	}
 	req.Header.Set("Content-Type", mw.FormDataContentType())
 	req.Header.Set("Accept", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
+	c.setAuth(req.Header)
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}

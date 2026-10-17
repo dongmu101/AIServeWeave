@@ -262,7 +262,11 @@ func formValuesFromConfig(cfg *agentconfig.Config) formValues {
 	v.Labels = strings.Join(labelLines, "\n")
 	runtimeLines := make([]string, 0, len(cfg.Runtimes))
 	for _, rc := range cfg.Runtimes {
-		runtimeLines = append(runtimeLines, rc.ID+","+rc.Kind+","+rc.BaseURL)
+		line := rc.ID + "," + rc.Kind + "," + rc.BaseURL
+		if rc.APIKeyEnv != "" || rc.Models != "" {
+			line += "," + rc.APIKeyEnv + "," + strings.Join(strings.FieldsFunc(rc.Models, func(r rune) bool { return r == ',' || r == ' ' }), " ")
+		}
+		runtimeLines = append(runtimeLines, line)
 	}
 	v.Runtimes = strings.Join(runtimeLines, "\n")
 	return v
@@ -364,11 +368,15 @@ func parseLabels(s string) map[string]string {
 	return out
 }
 
-// parseRuntimes parses one "id,kind,base_url" declaration per line into
-// agentconfig.RuntimeConfig. A line missing any of the three fields is
-// dropped rather than failing the whole save; CLI runtimes have no base_url.
+// parseRuntimes parses one "id,kind,base_url[,api_key_env[,models]]"
+// declaration per line into agentconfig.RuntimeConfig, models being
+// space-separated. A line missing a required field is dropped rather than
+// failing the whole save. CLI runtimes have no base_url; hosted providers
+// may leave it empty for the official endpoint.
 //
-// parseRuntimes 解析每行的运行时声明；缺失字段时略过，CLI 运行时的 base_url 留空。
+// parseRuntimes 解析每行一条的 "id,kind,base_url[,api_key_env[,models]]"
+// 声明，models 以空格分隔。缺失必填字段的行被略过，而不是让整次保存失败。
+// CLI 运行时没有 base_url；托管供应商可留空以使用官方端点。
 func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 	var out []agentconfig.RuntimeConfig
 	for _, line := range strings.Split(s, "\n") {
@@ -376,15 +384,23 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ",", 3)
-		if len(parts) != 3 {
+		parts := strings.SplitN(line, ",", 5)
+		if len(parts) < 3 {
 			continue
+		}
+		for len(parts) < 5 {
+			parts = append(parts, "")
 		}
 		id, kind, baseURL := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
-		if id == "" || kind == "" || (baseURL == "" && !runtime.Kind(kind).IsLocalCLI()) {
+		k := runtime.Kind(kind)
+		if id == "" || kind == "" || (baseURL == "" && !k.IsLocalCLI() && !k.IsHosted()) {
 			continue
 		}
-		out = append(out, agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: baseURL})
+		rc := agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: baseURL}
+		if k.IsHosted() {
+			rc.APIKeyEnv, rc.Models = strings.TrimSpace(parts[3]), strings.Join(strings.Fields(parts[4]), " ")
+		}
+		out = append(out, rc)
 	}
 	return out
 }
@@ -560,16 +576,20 @@ button:hover { background: #1d4ed8; }
 <p class="hint">可以同时配置多个后端，每个运行时 ID 必须唯一。CLI 使用本机已登录的账户。</p>
 </div>
 <textarea id="runtime_declarations" name="runtimes" placeholder="ollama-local,ollama,http://127.0.0.1:11434&#10;codex-local,codex,">{{.Runtimes}}</textarea>
-<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url；支持 ollama / vllm / sglang / comfyui / codex / claude / grok，CLI 的地址留空。</p>
+<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url[,api_key_env[,模型 模型]]；CLI 的地址留空，托管供应商的地址留空即用官方端点，api_key_env 填保存 Key 的环境变量名。</p>
 <template id="runtime-card-template">
 <section class="runtime-card">
 <div class="runtime-heading"><strong>本地 AI 连接</strong><button type="button" class="secondary runtime-remove">移除</button></div>
 <div class="fields">
 <div class="field"><label>运行时 ID <span>Runtime ID</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
 <div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
-<option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option><option value="codex">Codex CLI</option><option value="claude">Claude Code CLI</option><option value="grok">Grok CLI</option>
+<optgroup label="本地服务"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option></optgroup>
+<optgroup label="本机 CLI"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
+<optgroup label="托管供应商"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted">Anthropic Compatible</option><option value="openai_compatible" data-group="hosted">OpenAI Compatible / Custom</option></optgroup>
 </select></label></div>
 <div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址；请先在运行 Agent 的账户下登录。</p></div>
+<div class="field runtime-hosted" hidden><label>Key 环境变量 <span>API key env</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
+<div class="field runtime-hosted" hidden><label>模型（可选，空格分隔）<span>Models</span><input type="text" class="runtime-models" placeholder="留空则向端点查询" pattern="[^,]*"></label></div>
 </div>
 </section>
 </template>
@@ -702,10 +722,14 @@ function syncRuntimes() {
   declarations.value = rows.map((row, index) => {
     const id = row.querySelector('.runtime-id');
     id.setCustomValidity(ids[index] && ids.indexOf(ids[index]) !== index ? '运行时 ID 不能重复' : '');
-    return [ids[index], row.querySelector('.runtime-kind').value, row.querySelector('.runtime-url').value.trim()].join(',');
+    const fields = [ids[index], row.querySelector('.runtime-kind').value, row.querySelector('.runtime-url').value.trim()];
+    const keyEnv = row.querySelector('.runtime-key-env').value.trim();
+    const models = row.querySelector('.runtime-models').value.trim().split(/\s+/).filter(Boolean).join(' ');
+    if (keyEnv || models) fields.push(keyEnv, models);
+    return fields.join(',');
   }).join('\n');
 }
-function addRuntime(id = '', kind = 'ollama', url = '') {
+function addRuntime(id = '', kind = 'ollama', url = '', keyEnv = '', models = '') {
   const row = document.getElementById('runtime-card-template').content.firstElementChild.cloneNode(true);
   const idInput = row.querySelector('.runtime-id');
   const kindInput = row.querySelector('.runtime-kind');
@@ -716,13 +740,22 @@ function addRuntime(id = '', kind = 'ollama', url = '') {
   }
   kindInput.value = kind;
   urlInput.value = url;
+  row.querySelector('.runtime-key-env').value = keyEnv;
+  row.querySelector('.runtime-models').value = models;
   function updateKind() {
-    const cli = kindInput.value === 'codex' || kindInput.value === 'claude' || kindInput.value === 'grok';
+    const group = (kindInput.selectedOptions[0] || {}).dataset?.group;
+    const cli = group === 'cli', hosted = group === 'hosted';
     urlInput.disabled = cli;
-    urlInput.required = !cli;
+    urlInput.required = !cli && !hosted;
+    urlInput.placeholder = hosted ? '留空使用官方端点' : 'http://127.0.0.1:11434';
     urlInput.closest('label').hidden = cli;
     row.querySelector('.runtime-auth').hidden = !cli;
+    row.querySelectorAll('.runtime-hosted').forEach(field => { field.hidden = !hosted; });
     if (cli) urlInput.value = '';
+    if (!hosted) {
+      row.querySelector('.runtime-key-env').value = '';
+      row.querySelector('.runtime-models').value = '';
+    }
     syncRuntimes();
   }
   row.addEventListener('input', syncRuntimes);
@@ -735,7 +768,7 @@ function addRuntime(id = '', kind = 'ollama', url = '') {
 const initialRuntimes = declarations.value.split('\n').filter(line => line.trim());
 initialRuntimes.forEach(line => {
   const parts = line.split(',');
-  addRuntime((parts[0] || '').trim(), (parts[1] || '').trim(), (parts.slice(2).join(',') || '').trim());
+  addRuntime((parts[0] || '').trim(), (parts[1] || '').trim(), (parts[2] || '').trim(), (parts[3] || '').trim(), (parts.slice(4).join(',') || '').trim());
 });
 document.getElementById('runtime-add').addEventListener('click', () => { addRuntime().focus(); });
 declarations.hidden = true;
