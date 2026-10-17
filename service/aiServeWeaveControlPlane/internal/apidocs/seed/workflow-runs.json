@@ -7,12 +7,13 @@
   "method": "POST",
   "path": "/v1/workflows/{workflow_id}/runs",
   "summary": "按已发布的工作流模板绑定输入并异步提交执行，受理后立即返回 202 与任务对象。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
+      "工作流由平台运维在 ComfyUI 编辑器中搭建、发布为模板；调用方只传模板声明的输入，不需要、也无法提交 ComfyUI 工作流 JSON",
       "异步执行：受理即返回 202 和 job_id，初始状态为 queued，之后通过状态查询或 SSE 事件流跟踪进度",
       "只需提供模板声明的输入，按名称绑定；未声明的输入名会被拒绝，而不是被静默忽略",
-      "string / integer / number / boolean 输入按模板声明的类型与上下限严格校验，未提供时使用模板默认值",
+      "string / integer / number / boolean 输入按模板声明的类型与上下限严格校验；未提供时依次使用模板默认值、模板中保存的原值",
       "支持 multipart/form-data 在同一次请求里上传图片、视频、音频等文件输入",
       "对本租户不可见的工作流与不存在的工作流一样返回 404"
     ],
@@ -52,7 +53,7 @@
         "name": "inputs",
         "type": "object",
         "required": false,
-        "description": "输入名到取值的映射，只能包含模板声明过的非文件输入。未提供的输入使用模板默认值；必填且没有默认值的输入缺失时返回 400。",
+        "description": "输入名到取值的映射，只能包含模板声明过的非文件输入。未提供的输入：有默认值时使用默认值；没有默认值且非必填时保留模板中保存的原值；必填且没有默认值时返回 400。",
         "children": [
           {
             "name": "{input_name}",
@@ -194,8 +195,20 @@
     ],
     "sections": [
       {
+        "title": "工作流从哪里来：模板与调用的关系",
+        "body": "平台运维在控制台的 ComfyUI 编辑器里搭建工作流，选定其中哪些节点参数开放给调用方，把它们声明为具名输入（例如把正向提示词节点的 text 字段声明为输入 prompt），然后发布为一个模板。模板 ID 就是本接口路径里的 workflow_id。\n\n调用方看到的只有模板 ID、描述、输入声明与产出声明；ComfyUI 工作流本身（节点、连线、模型选择、采样参数等）留在平台内部，不会经由任何接口交出，也不能由调用方覆盖。没有声明为输入的参数一律按模板保存的值运行。\n\n因此需要调整某个当前固定的参数（例如换模型、开放分辨率）时，请联系平台运维把它声明为输入并发布新版本，而不是尝试在请求里传入 ComfyUI JSON。"
+      },
+      {
+        "title": "如何找到 workflow_id 与可用输入",
+        "body": "登录控制台，打开「工作流」页面：每个本租户可见的模板显示其 ID、描述、产出，以及每个输入的名称、类型、是否必填、默认值和取值范围。请求里的 inputs 键名与该页面的「输入」列一一对应。\n\n页面上没有出现的模板对本租户不可见，提交时会得到与不存在的模板相同的 404 workflow_not_found。"
+      },
+      {
+        "title": "版本与生效时间",
+        "body": "模板每次发布都会产生一个新版本。新版本在网关同步到之后才对新提交生效（网关默认每 30 秒同步一次，因此发布后最多约半分钟）；已经提交的任务始终按提交那一刻的版本执行，不受之后发布或回滚的影响。\n\n运维只调整编辑器里的节点摆放、分组等布局时也会产生新版本，但不改变输入声明与执行结果，对调用方没有影响。输入声明发生变化（新增、改名、改类型或范围）时，旧请求可能开始返回 400 invalid_input，请以「工作流」页面的当前声明为准。"
+      },
+      {
         "title": "输入绑定规则",
-        "body": "每个工作流模板声明一组具名输入，类型为 string、integer、number、boolean 或 file 之一，并可声明是否必填、默认值、字符串最大长度（max_length）和数值上下限（min / max）。可用的工作流及其输入声明可在控制台的工作流页面查看。\n\ninputs 里出现模板未声明的名字时整个请求被拒绝；同一个输入名只能出现在 JSON 取值或文件分片其中一处。\n\nstring 的长度按字节计算；integer 必须是整数，传 3.5 会被拒绝；数值范围两端都是闭区间。\n\nfile 类型输入没有默认值：非必填且未上传时保持模板原样，必填且未上传时返回 400。"
+        "body": "每个工作流模板声明一组具名输入，类型为 string、integer、number、boolean 或 file 之一，并可声明是否必填、默认值、字符串最大长度（max_length）和数值上下限（min / max）。\n\ninputs 里出现模板未声明的名字时整个请求被拒绝；同一个输入名只能出现在 JSON 取值或文件分片其中一处。\n\n未提供的输入按以下顺序处理：模板声明了默认值时使用默认值；没有默认值且非必填时保留模板中保存的原值（即运维发布时节点上的取值）；必填且没有默认值时返回 400。\n\nstring 的长度按字节计算；integer 必须是整数，传 3.5 会被拒绝；数值范围两端都是闭区间。\n\nfile 类型输入没有默认值：非必填且未上传时保持模板原样，必填且未上传时返回 400。"
       },
       {
         "title": "文件输入（multipart/form-data）",
@@ -205,7 +218,9 @@
       },
       {
         "title": "获取结果的完整流程",
-        "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时，提交请求可能会短暂等待后才返回；若仍无空闲容量则返回 429，稍后重试即可。"
+        "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id；type 为 output 的是最终结果。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时，提交请求可能会短暂等待后才返回；若仍无空闲容量则返回 429，稍后重试即可。下面是完整的 Python 示例。",
+        "code": "import os\nimport time\n\nimport requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\nHEADERS = {\"Authorization\": f\"Bearer {API_KEY}\"}\n\n# 1. 提交：workflow_id 是模板 ID，inputs 只放模板声明过的输入\nresp = requests.post(\n    f\"{BASE_URL}/v1/workflows/txt2img-basic/runs\",\n    headers=HEADERS,\n    json={\"inputs\": {\"prompt\": \"a lighthouse on a cliff at sunset\", \"seed\": 42}},\n    timeout=60,\n)\nresp.raise_for_status()  # 成功为 202\njob_id = resp.json()[\"job_id\"]\n\n# 2. 等待终态（也可以订阅 GET /v1/jobs/{job_id}/events 的 SSE 事件流）\nwhile True:\n    job = requests.get(f\"{BASE_URL}/v1/jobs/{job_id}\", headers=HEADERS, timeout=30).json()\n    if job[\"status\"] in (\"succeeded\", \"failed\", \"cancelled\"):\n        break\n    time.sleep(2)\nif job[\"status\"] != \"succeeded\":\n    raise RuntimeError(f\"{job_id} {job['status']}: {job.get('error', '')}\")\n\n# 3. 列出产物，跳过临时预览与输入文件，下载最终结果\nartifacts = requests.get(f\"{BASE_URL}/v1/jobs/{job_id}/artifacts\", headers=HEADERS, timeout=30).json()[\"data\"]\nfor art in artifacts:\n    if art.get(\"type\") in (\"temp\", \"input\"):\n        continue\n    name = os.path.basename(art[\"filename\"])\n    with requests.get(f\"{BASE_URL}/v1/artifacts/{art['artifact_id']}\", headers=HEADERS, stream=True, timeout=300) as r:\n        r.raise_for_status()\n        with open(name, \"wb\") as f:\n            for chunk in r.iter_content(chunk_size=1 << 16):\n                f.write(chunk)\n    print(\"saved\", name)",
+        "code_lang": "python"
       },
       {
         "title": "错误码",

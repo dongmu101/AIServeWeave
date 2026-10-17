@@ -72,8 +72,10 @@ export function WorkflowsView({ operator }: { operator: boolean }) {
       <div>
         <h1 className="font-heading text-lg font-semibold">工作流</h1>
         <p className="text-sm text-muted-foreground">
-          可以提交的工作流模板及其输入声明。模板是网关的文件配置，对所有租户相同；工作流的
-          图不在这里，也不会经由任何接口交出。提交与取消运行走网关数据面，用本租户的 API Key。
+          本租户可以提交的工作流模板及其输入声明。模板由平台运维发布，请求里的 inputs 键名
+          对应下表的「输入」列，未开放为输入的参数按模板保存的值运行；工作流的图不在这里，也
+          不会经由任何接口交出。提交与取消运行走网关数据面，用本租户的 API Key，调用方式见
+          API 文档「提交工作流运行」。
         </p>
       </div>
 
