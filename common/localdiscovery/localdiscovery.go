@@ -39,22 +39,36 @@ type Candidate struct {
 	BaseURL string
 }
 
-// DefaultCandidates returns the three well-known local endpoints this
-// feature targets: Ollama, vLLM and SGLang on their default ports, loopback
-// only. SGLang's probe cannot verify identity (its OpenAI-compatible
-// responses look exactly like vLLM's), so whatever answers on 30000 is
-// registered as SGLang with IdentityVerified=false; that port is SGLang's
-// launch_server default and not one vLLM uses unless told to.
+// DefaultCandidates returns the well-known local endpoints this feature
+// targets, loopback only: Ollama on 11434, SGLang on 30000, and vLLM,
+// TensorRT-LLM and TokenSpeed, which all default to 8000. SGLang's probe
+// cannot verify identity (its OpenAI-compatible responses look exactly like
+// vLLM's), so whatever answers on 30000 is registered as SGLang with
+// IdentityVerified=false; that port is SGLang's launch_server default and
+// not one vLLM uses unless told to.
 //
-// DefaultCandidates 返回本功能探测的三个已知本机端点：Ollama、vLLM 与 SGLang
-// 各自的默认端口，仅限回环地址。SGLang 的探测无法核实身份（它的 OpenAI 兼容
-// 响应与 vLLM 完全一致），因此 30000 端口上应答的服务一律按 SGLang 注册，
-// 快照里 IdentityVerified=false；30000 是 SGLang launch_server 的默认端口，
-// vLLM 除非被显式指定否则不会用它。
+// The three 8000 candidates are tried in order and are mutually exclusive:
+// vLLM's probe needs /version and rejects TensorRT-LLM's owned_by,
+// TensorRT-LLM's needs /version plus its own owned_by, and TokenSpeed's
+// needs SMG's /readiness, which neither of the others serves. Once one of
+// them registers the address, scanOnce skips the rest.
+//
+// DefaultCandidates 返回本功能探测的已知本机端点，仅限回环地址：Ollama 在 11434，
+// SGLang 在 30000，vLLM、TensorRT-LLM 与 TokenSpeed 的默认端口都是 8000。SGLang
+// 的探测无法核实身份（它的 OpenAI 兼容响应与 vLLM 完全一致），因此 30000 端口上应答
+// 的服务一律按 SGLang 注册，快照里 IdentityVerified=false；30000 是 SGLang
+// launch_server 的默认端口，vLLM 除非被显式指定否则不会用它。
+//
+// 8000 上的三个候选按顺序尝试且互斥：vLLM 的探测需要 /version 并拒绝 TensorRT-LLM
+// 的 owned_by，TensorRT-LLM 的探测需要 /version 加它自己的 owned_by，TokenSpeed 的
+// 探测需要 SMG 的 /readiness，另外两者都不提供。其中一个注册了该地址后，scanOnce
+// 跳过其余候选。
 func DefaultCandidates() []Candidate {
 	return []Candidate{
 		{Kind: runtime.KindOllama, BaseURL: "http://127.0.0.1:11434"},
 		{Kind: runtime.KindVLLM, BaseURL: "http://127.0.0.1:8000"},
+		{Kind: runtime.KindTRTLLM, BaseURL: "http://127.0.0.1:8000"},
+		{Kind: runtime.KindTokenSpeed, BaseURL: "http://127.0.0.1:8000"},
 		{Kind: runtime.KindSGLang, BaseURL: "http://127.0.0.1:30000"},
 	}
 }
@@ -144,21 +158,33 @@ func (s *Scanner) Run(ctx context.Context) error {
 	}
 }
 
-// scanOnce probes every candidate not already registered under a matching
-// (Kind, BaseURL) and registers whichever ones answer. It reads
+// scanOnce probes every candidate whose address is not already registered,
+// under any kind, and registers whichever ones answer. It reads
 // Manager.Snapshot() fresh each time rather than remembering what it added
 // itself: that way a manually configured instance is skipped for the same
 // reason a previously discovered one is, and an instance someone removed by
 // hand gets picked back up on the next scan, which is exactly what
 // "discovery" should mean.
+//
+// The key is the address alone because one address is one server: several
+// kinds share port 8000, and a server an operator declared as trtllm must
+// not also be registered as vllm by discovery.
+//
+// scanOnce 探测每一个地址尚未以任何种类注册的候选，并注册应答者。它每次都重新读取
+// Manager.Snapshot()，而不是记住自己加过什么：这样手工配置的实例与之前发现的实例
+// 出于同一理由被跳过，被人手工移除的实例会在下一轮扫描被重新发现，这正是「发现」
+// 应有的含义。
+//
+// 只以地址为键，是因为一个地址就是一台服务器：多个种类共用 8000 端口，运维声明为
+// trtllm 的服务器不能再被发现流程注册成 vllm。
 func (s *Scanner) scanOnce(ctx context.Context) {
-	known := make(map[Candidate]struct{})
+	known := make(map[string]struct{})
 	for _, snap := range s.manager.Snapshot() {
-		known[Candidate{Kind: snap.Descriptor.Kind, BaseURL: snap.Descriptor.BaseURL}] = struct{}{}
+		known[snap.Descriptor.BaseURL] = struct{}{}
 	}
 
 	for _, c := range s.candidates {
-		if _, ok := known[c]; ok {
+		if _, ok := known[c.BaseURL]; ok {
 			continue
 		}
 		id := candidateID(c)
@@ -171,6 +197,7 @@ func (s *Scanner) scanOnce(ctx context.Context) {
 				slog.String("kind", string(c.Kind)), slog.String("base_url", c.BaseURL), slog.String("error", err.Error()))
 			continue
 		}
+		known[c.BaseURL] = struct{}{} // later candidates for this address are now taken / 该地址后续的候选就此跳过
 		s.logger.Info("auto-discovered a local runtime instance",
 			slog.String("id", id), slog.String("kind", string(c.Kind)), slog.String("base_url", c.BaseURL))
 	}

@@ -98,6 +98,10 @@ func run() error {
 		"initial cooldown a tripped breaker stays open before its next probe attempt; zero uses scheduler's built-in default (5s)")
 	breakerMaxCooldown := flag.Duration("breaker-max-cooldown", 0,
 		"cap on cooldown growth after repeated trips (doubles per trip until this cap); zero uses scheduler's built-in default (2m)")
+	schedulerPolicy := flag.String("scheduler-policy", string(scheduler.PolicyLeastLoad),
+		"how candidates inside one routing target are ordered for inference requests: least_load (most idle slots first, the default), power_of_two (better of two random picks, spreads load across replicas reading the same stale heartbeat), or prefix_hash (requests sharing a prompt prefix go to the same node so its prompt/prefix cache is reused); priority and weight still apply first, and workflows always use least_load")
+	schedulerPrefixBytes := flag.Int("scheduler-prefix-bytes", 0,
+		"with -scheduler-policy=prefix_hash, how many bytes of a chat request's leading messages (up to and including the first user message) are fingerprinted; zero uses scheduler's built-in default (4096)")
 	workflowQueueMaxWait := flag.Duration("workflow-queue-max-wait", 0,
 		"STATUS.md's P2 bounded task queueing: how long a workflow submission waits, re-polling candidates, once every workflow-capable node is busy in a retryable way, before the failure is returned; zero disables queueing, which fails such a submission immediately (today's behavior, and the default)")
 	workflowQueueRetryInterval := flag.Duration("workflow-queue-retry-interval", 0,
@@ -337,12 +341,18 @@ func run() error {
 		return err
 	}
 
+	policy, err := scheduler.ParsePolicy(*schedulerPolicy)
+	if err != nil {
+		return err
+	}
 	sched := scheduler.New(server, scheduler.Config{
 		Metrics:            registry,
 		Logger:             logger,
 		FailureThreshold:   *breakerFailureThreshold,
 		BaseCooldown:       *breakerBaseCooldown,
 		MaxCooldown:        *breakerMaxCooldown,
+		Policy:             policy,
+		PrefixBytes:        *schedulerPrefixBytes,
 		QueueMaxWait:       *workflowQueueMaxWait,
 		QueueRetryInterval: *workflowQueueRetryInterval,
 		QueueMaxWaiters:    *workflowQueueMaxWaiters,

@@ -15,7 +15,7 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 ## 项目目标
 
 - 集中管理本地设备、内网设备和 GPU 服务器等推理节点
-- 统一接入 Ollama、vLLM、ComfyUI 和其他推理后端
+- 统一接入 Ollama、vLLM、SGLang、TensorRT-LLM、TokenSpeed、ComfyUI 和其他推理后端
 - 管理 ComfyUI 工作流、异步生成任务及图片、视频、音频等产物
 - 对外提供 OpenAI、Anthropic 等兼容 API
 - 支持普通响应和 SSE 流式响应
@@ -463,7 +463,7 @@ qwen-coder
 - 节点优先级
 - 节点标签路由，例如 `region=local`
 - 租户绑定节点或节点池
-- 会话亲和，以便复用 KV Cache
+- 会话亲和，以便复用 KV Cache（基于提示前缀的内容亲和已实现：Gateway `-scheduler-policy=prefix_hash`，见 Gateway STATUS「模型别名与节点标签」第 6 条；基于会话标识的亲和仍属规划）
 - 连续失败熔断和自动恢复
 
 流式请求只有在返回第一个 token 之前可以安全重试。一旦已经向客户端发送内容，不应自动切换节点，否则可能产生重复或不连续的输出。
@@ -557,7 +557,7 @@ audit_logs
 | --- | --- |
 | `api/proto/tunnel/v1/` | Agent、Gateway、Registry 共用的 gRPC 契约与生成代码 |
 | `common/runtime/` | 运行时语义、能力门禁、后端适配与并发控制 |
-| `common/localdiscovery/` | Agent 与 Gateway 共用的回环服务发现（Agent 默认探测 Ollama/vLLM/SGLang，Gateway 只探测显式配置的 Ollama/vLLM）；Gateway 本机清单经控制面在模型页单独展示 |
+| `common/localdiscovery/` | Agent 与 Gateway 共用的回环服务发现（Agent 默认探测 Ollama/vLLM/TensorRT-LLM/TokenSpeed/SGLang，后三者与 vLLM 共用 8000 端口时靠探测互斥区分；Gateway 只探测显式配置的 Ollama/vLLM）；Gateway 本机清单经控制面在模型页单独展示 |
 | `common/tunnelwire/` | runtime 与隧道 proto 的唯一转换边界 |
 | `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
 | `common/modelroute/` | 模型路由发布契约：别名/目标、CAS 版本化快照与生效状态（P02） |

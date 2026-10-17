@@ -308,6 +308,17 @@ func submitRetryable(err error) bool {
 // 带到 pickBy，与一个有路由的模型经 Target.MinGPUMemoryBytes 对 Chat/Embed/Rerank
 // 所做的完全一样；零值（今天的常见情形，因为还没有调用方有这个数字的来源）不做任何
 // 过滤。
+//
+// Workflows always order by PolicyLeastLoad, whatever Config.Policy says. A
+// ComfyUI job holds its one GPU for seconds to minutes and the fleet behind it
+// is small, so the precise "idle, then queue occupancy" ranking is worth more
+// than PolicyPowerOfTwo's spreading, which could pick a busy instance while
+// an idle one exists; and a workflow has no prompt prefix to pin.
+//
+// 无论 Config.Policy 如何配置，工作流始终按 PolicyLeastLoad 排序。一个 ComfyUI 任务会
+// 独占它唯一的 GPU 数秒到数分钟，背后的机群也小，因此精确的「空闲槽、再队列占用」排序
+// 比 PolicyPowerOfTwo 的分散效果更有价值——后者可能在存在空闲实例时选中一个忙碌的；
+// 而工作流也没有可供固定的提示前缀。
 func (s *Scheduler) workflowCandidates(cap runtime.Capability, minGPUMemoryBytes int64) []Candidate {
 	// An empty target matches every node: a workflow request carries no model
 	// to route, so there is nothing for a routing rule to select on beyond
@@ -315,7 +326,7 @@ func (s *Scheduler) workflowCandidates(cap runtime.Capability, minGPUMemoryBytes
 	//
 	// 空 target 匹配所有节点：工作流请求不携带可路由的模型，因此除了
 	// minGPUMemoryBytes 可能带来的容量过滤外，路由规则无从选择。
-	return s.pickBy(routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, func(snap runtime.Snapshot) bool {
+	return s.pickBy(routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, PolicyLeastLoad, affinity{}, func(snap runtime.Snapshot) bool {
 		return snap.Discovery.Capabilities.Require(cap) == nil
 	})
 }

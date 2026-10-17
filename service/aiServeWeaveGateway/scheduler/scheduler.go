@@ -80,6 +80,16 @@ type Scheduler struct {
 	logger   *slog.Logger
 	routes   atomic.Pointer[routing.Table]
 
+	// policy and prefixBytes order candidates inside one target; see Policy.
+	// intn is the randomness PolicyPowerOfTwo draws from, a field so tests
+	// can pin it.
+	//
+	// policy 与 prefixBytes 决定同一 target 内候选的排序，见 Policy。intn 是
+	// PolicyPowerOfTwo 取随机数的来源，做成字段以便测试固定它。
+	policy      Policy
+	prefixBytes int
+	intn        func(int) int
+
 	// queueMaxWait, queueRetryInterval and queueSlots implement STATUS.md's
 	// P2 bounded task queueing for workflow submissions (see workflow.go's
 	// queueSubmitWorkflow). queueSlots is nil, and queueing disabled, unless
@@ -127,6 +137,23 @@ type Config struct {
 	// 时，模型 id 按节点声明的原样使用——从不编写路由表的部署，行为与此前完全一致。
 	Routes *routing.Table
 
+	// Policy orders the candidates inside one routing target for inference
+	// requests. The zero value means PolicyLeastLoad, the behavior that
+	// predates this field. Workflow submissions always use PolicyLeastLoad:
+	// see workflowCandidates for why.
+	//
+	// Policy 决定推理请求在同一个路由 target 内部的候选排序。零值表示
+	// PolicyLeastLoad，即此字段出现之前的行为。工作流提交始终使用 PolicyLeastLoad，
+	// 原因见 workflowCandidates。
+	Policy Policy
+	// PrefixBytes caps how much of a chat request's leading messages
+	// PolicyPrefixHash fingerprints. Zero uses defaultPrefixBytes (4096).
+	// Ignored by every other policy.
+	//
+	// PrefixBytes 限定 PolicyPrefixHash 对聊天请求开头消息取指纹的最大字节数。零值使用
+	// defaultPrefixBytes（4096）。其他策略忽略此字段。
+	PrefixBytes int
+
 	// QueueMaxWait bounds STATUS.md's P2 bounded task queueing for
 	// SubmitWorkflow: once every currently connected workflow-capable
 	// candidate has answered one submission attempt with a retryable
@@ -170,12 +197,23 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 		logger = slog.New(slog.DiscardHandler)
 	}
 	rec := newRecorder(cfg.Metrics)
+	policy := cfg.Policy
+	if policy == "" {
+		policy = PolicyLeastLoad
+	}
+	prefixBytes := cfg.PrefixBytes
+	if prefixBytes <= 0 {
+		prefixBytes = defaultPrefixBytes
+	}
 	s := &Scheduler{
-		server:   server,
-		clock:    clock,
-		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
-		metrics:  rec,
-		logger:   logger,
+		server:      server,
+		clock:       clock,
+		breakers:    newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
+		metrics:     rec,
+		logger:      logger,
+		policy:      policy,
+		prefixBytes: prefixBytes,
+		intn:        rand.Intn,
 	}
 	s.routes.Store(cfg.Routes)
 
@@ -218,7 +256,7 @@ func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candid
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable.
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
-	candidates := s.candidates(req.Model, runtime.CapabilityChat)
+	candidates := s.chatCandidates(req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.ChatResponse{}, Candidate{}, ErrNoCapableNode
@@ -330,7 +368,7 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 // the caller exactly as the underlying Stream reports it, with no further
 // node switch.
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
-	candidates := s.candidates(req.Model, runtime.CapabilityChatStream)
+	candidates := s.chatCandidates(req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, ErrNoCapableNode
@@ -484,11 +522,34 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 	return s.candidatesWith(s.routes.Load(), model, cap)
 }
 
+// chatCandidates is candidates for a chat request, which alone carries a
+// prompt prefix for PolicyPrefixHash to pin. The fingerprint is only computed
+// when that policy is active, so the other policies pay nothing for it.
+//
+// chatCandidates 是聊天请求版的 candidates：只有聊天请求携带可供 PolicyPrefixHash
+// 固定的提示前缀。指纹只在该策略生效时才计算，其他策略不为此付出任何代价。
+func (s *Scheduler) chatCandidates(req runtime.ChatRequest, cap runtime.Capability) []Candidate {
+	var key affinity
+	if s.policy == PolicyPrefixHash {
+		key = prefixAffinity(req, s.prefixBytes)
+	}
+	return s.candidatesKeyed(s.routes.Load(), req.Model, cap, key, rand.Float64)
+}
+
 func (s *Scheduler) candidatesWith(routes *routing.Table, model string, cap runtime.Capability) []Candidate {
 	return s.candidatesWithRandom(routes, model, cap, rand.Float64)
 }
 
 func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, cap runtime.Capability, draw func() float64) []Candidate {
+	return s.candidatesKeyed(routes, model, cap, affinity{}, draw)
+}
+
+// candidatesKeyed is the shared body of every candidates variant: key is the
+// request's prefix fingerprint, empty for requests that have none.
+//
+// candidatesKeyed 是各 candidates 变体共用的实现：key 是请求的前缀指纹，没有前缀的
+// 请求传空值。
+func (s *Scheduler) candidatesKeyed(routes *routing.Table, model string, cap runtime.Capability, key affinity, draw func() float64) []Candidate {
 	targets, routed := routes.Resolve(model)
 	if !routed {
 		// An unrouted model is used exactly as the node advertises it. A
@@ -500,22 +561,22 @@ func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, ca
 
 	groups := make([]targetCandidates, 0, len(targets))
 	for _, target := range targets {
-		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(target, cap)})
+		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(target, cap, key)})
 	}
 	return weightedCandidates(groups, draw)
 }
 
 // pick returns every (node, runtime) pair that can serve target with cap,
-// ordered best first: most idle inference slots, then fewest in-flight
-// requests, matching README's "最少正在执行请求" strategy. Nodes are shuffled
-// before that sort so requests do not all pile onto the same node whenever
-// several are tied.
+// ordered best first by the configured Policy — by default most idle
+// inference slots, then fewest in-flight requests, matching README's
+// "最少正在执行请求" strategy. Nodes are shuffled before that sort so requests
+// do not all pile onto the same node whenever several are tied.
 //
-// pick 返回每一个能以 cap 服务 target 的 (node, runtime) 对，最优的在前：空闲推理槽
-// 最多的优先，其次是在途请求最少的，对应 README 的「最少正在执行请求」策略。排序前先
-// 打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
-func (s *Scheduler) pick(target routing.Target, cap runtime.Capability) []Candidate {
-	return s.pickBy(target, func(snap runtime.Snapshot) bool {
+// pick 返回每一个能以 cap 服务 target 的 (node, runtime) 对，按配置的 Policy 最优的
+// 在前——默认是空闲推理槽最多的优先，其次是在途请求最少的，对应 README 的「最少正在
+// 执行请求」策略。排序前先打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
+func (s *Scheduler) pick(target routing.Target, cap runtime.Capability, key affinity) []Candidate {
+	return s.pickBy(target, s.policy, key, func(snap runtime.Snapshot) bool {
 		for _, m := range snap.Discovery.Models {
 			if m.ID != target.RuntimeModel {
 				continue
@@ -531,7 +592,7 @@ func (s *Scheduler) pick(target routing.Target, cap runtime.Capability) []Candid
 
 // pickBy is the shared selection walk: node health, the target's node
 // selector, the caller's own eligibility test, and the circuit breaker, then
-// the load ordering.
+// the ordering policy names (see orderCandidates).
 //
 // What "eligible" means is the caller's to define — a model plus a capability
 // for inference, a runtime-level capability for workflows — so that the two
@@ -539,18 +600,11 @@ func (s *Scheduler) pick(target routing.Target, cap runtime.Capability) []Candid
 // growing two copies that drift.
 //
 // pickBy 是共用的选择流程：节点健康、target 的节点选择器、调用方自己的资格判定、
-// 熔断器，然后是负载排序。
+// 熔断器，然后按 policy 指定的方式排序（见 orderCandidates）。
 //
 // 「有资格」的含义由调用方定义——推理是模型加能力，工作流是 runtime 层的能力——这样
 // 两者共用同一套健康过滤、同一次熔断检查与同一套排序，而不是长出两份会各自漂移的拷贝。
-func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot) bool) []Candidate {
-	type scored struct {
-		Candidate
-		idle     int
-		queued   int
-		inflight int
-	}
-
+func (s *Scheduler) pickBy(target routing.Target, policy Policy, key affinity, eligible func(runtime.Snapshot) bool) []Candidate {
 	nodes := s.server.Nodes()
 	rand.Shuffle(len(nodes), func(i, j int) { nodes[i], nodes[j] = nodes[j], nodes[i] })
 	now := s.clock.Now()
@@ -604,30 +658,7 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 		}
 	}
 
-	// queued (STATUS.md's P2 realtime-utilization signal) breaks ties inside
-	// an idle tier, before inflight: idle is a software slot count that a
-	// single-job-at-a-time backend like ComfyUI can report as high even
-	// while its one GPU is saturated (the necessity assessment in
-	// docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md
-	// documents why), so idle alone cannot distinguish two such candidates.
-	// It is 0 for every runtime kind that does not report it, which sorts
-	// the same as "confirmed empty" — never a penalty for not reporting.
-	//
-	// queued（STATUS.md P2 的实时利用率信号）在同一个 idle 档位内、排在 inflight
-	// 之前打破平局：idle 是一个软件层面的槽位计数，像 ComfyUI 这种同一时间只跑一个
-	// 任务的后端即便唯一的 GPU 已经跑满也能上报很高的 idle（必要性评估文档
-	// docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md
-	// 记录了原因），所以单靠 idle 无法区分这样两个候选。对不上报该信号的运行时
-	// 种类它恒为 0，排序上等同于"确认空闲"——不上报这件事本身从不被当作惩罚。
-	sort.SliceStable(found, func(i, j int) bool {
-		if found[i].idle != found[j].idle {
-			return found[i].idle > found[j].idle
-		}
-		if found[i].queued != found[j].queued {
-			return found[i].queued < found[j].queued
-		}
-		return found[i].inflight < found[j].inflight
-	})
+	orderCandidates(found, policy, key, s.intn)
 
 	candidates := make([]Candidate, len(found))
 	for i, f := range found {

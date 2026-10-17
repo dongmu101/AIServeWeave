@@ -112,7 +112,8 @@ func (c Config) Validate() error {
 	}
 
 	switch {
-	case c.Kind == KindVLLM, c.Kind == KindSGLang, c.Kind == KindOllama, c.Kind == KindComfyUI:
+	case c.Kind == KindVLLM, c.Kind == KindSGLang, c.Kind == KindOllama, c.Kind == KindComfyUI,
+		c.Kind == KindTRTLLM, c.Kind == KindTokenSpeed:
 	case c.Kind.IsLocalCLI(), c.Kind.IsHosted():
 	default:
 		problems = append(problems, fmt.Sprintf("kind %q is not a registered runtime kind", c.Kind))

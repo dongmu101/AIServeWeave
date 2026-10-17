@@ -587,7 +587,7 @@ button:hover { background: #1d4ed8; }
 <div class="fields">
 <div class="field"><label>运行时 ID <span>Runtime ID</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
 <div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
-<optgroup label="本地服务"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option></optgroup>
+<optgroup label="本地服务"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TensorRT-LLM</option><option value="tokenspeed">TokenSpeed</option><option value="comfyui">ComfyUI</option></optgroup>
 <optgroup label="本机 CLI"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
 <optgroup label="托管供应商"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted" data-url-required="1">Anthropic Compatible</option><option value="openai_compatible" data-group="hosted" data-url-required="1">OpenAI Compatible / Custom</option></optgroup>
 </select></label></div>
@@ -604,7 +604,7 @@ button:hover { background: #1d4ed8; }
 <p class="hint">多个 ID 用逗号分隔，留空放行全部。</p>
 </div>
 <div class="field wide">
-<label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}>自动发现本机 Ollama / vLLM / SGLang</label>
+<label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}>自动发现本机 Ollama / vLLM / TensorRT-LLM / TokenSpeed / SGLang</label>
 </div>
 <div class="field wide">
 <label for="auto_discover_interval">自动发现间隔 <span>Auto-discover interval</span></label>

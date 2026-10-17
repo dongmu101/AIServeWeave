@@ -44,6 +44,8 @@
 | `ollama/` | 已实现 | 原生发现 + OpenAI-compatible 推理；已用真实后端（0.32.14）验证 |
 | `vllm/` | 已实现 | `/version`+`/v1/models` 探测、`/health`、保守能力表；未接真实后端 |
 | `sglang/` | 已实现 | `/v1/models` 探测（身份不强验证）、`/health` 缺失降级、可选 `/get_server_info`；未接真实后端 |
+| `trtllm/` | 已实现 | `trtllm-serve`：`/version`+`/v1/models` 的 `owned_by="tensorrt_llm"` 核实身份、`/health`、`/server_info` 判定主 LLM 角色；未接真实后端 |
+| `tokenspeed/` | 已实现 | `tokenspeed serve`（前端为 SMG）：`/readiness` 探测与健康检查（身份不强验证）、`/v1/models`；未接真实后端 |
 | `workflow/comfyui/` | 已实现 | `client.go`/`events.go`/`runtime.go`/`wsdial.go`：HTTP 客户端、单连接事件复用器、WorkflowRuntime、安全取消、产物流式下载；未接真实后端 |
 
 已有文件布局：
@@ -66,6 +68,8 @@ runtime/
 ├── openai/
 ├── vllm/
 ├── sglang/
+├── trtllm/
+├── tokenspeed/
 ├── ollama/
 └── workflow/comfyui/
 ```
@@ -231,6 +235,8 @@ const (
 	KindSGLang  Kind = "sglang"
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
+	KindTRTLLM     Kind = "trtllm"
+	KindTokenSpeed Kind = "tokenspeed"
 	KindCodex   Kind = "codex"
 	KindClaude  Kind = "claude"
 
@@ -528,7 +534,7 @@ runtimes:
 校验要求：
 
 - `id` 非空且在单个 Agent 内唯一。
-- `kind` 只能是已注册值之一：本地服务（vllm、sglang、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
+- `kind` 只能是已注册值之一：本地服务（vllm、sglang、trtllm、tokenspeed、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
 - HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode` 和 `service/aiServeWeaveAgent/cliagent`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
 - `models` 是可选的本地模型目录声明：每项非空、不超过 256 字节且不重复；设置后以它为准，端点没有模型列表路由（404/405）时也能发布。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
@@ -593,6 +599,40 @@ OpenAI-compatible server 与该路由注册在同一 server 上），而不像 v
 证据 `Detail` 中，便于评审时直接看到依据。
 
 SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两套生成协议。参考 [SGLang Bench Serving Guide](https://docs.sglang.ai/developer_guide/bench_serving) 与 [SGLang Observability](https://docs.sglang.ai/advanced_features/observability.html)。
+
+### TensorRT-LLM
+
+**实现文件：** `common/runtime/trtllm/runtime.go`
+
+| 动作 | 首选端点 | 说明 |
+| --- | --- | --- |
+| Probe | `GET /version`、`GET /v1/models` | 至少一张模型卡的 `owned_by` 为 `"tensorrt_llm"` 才算核实身份；只有 `/version` 不够，vLLM 也提供它，两者默认端口都是 8000 |
+| Health | `GET /health` | 执行器存活时空 body 200，致命错误后 503；不执行推理 |
+| Discover | `GET /version`、`GET /v1/models`、`GET /server_info` | `/server_info` 只在主 LLM 角色注册，应答即作为 chat/chat_stream/completions 的端点证据；404 表示 embeddings 或多模态编码器角色，Chat 保持 `unknown` 并给出警告 |
+| Chat | `POST /v1/chat/completions` | 普通响应和 SSE |
+| Embedding | 仅 `trtllm-serve embeddings` 角色提供 | 默认 `unknown`，经 `CapabilityOverrides` 声明 |
+
+不使用版本能力表：tools 取决于 `--tool_parser`，structured output 取决于 `guided_decoding_backend`，vision/reasoning 取决于模型与 chat template，没有端点报告这些启动参数，一律保持 `unknown`。`trtllm-serve` 还提供 `/v1/responses`、Anthropic `/v1/messages` 和显存释放、权重更新、profiling 等路由，首期都不接入，管理类路由永不调用。
+
+SMG 改走 `trtllm-serve --grpc` 的原型 gRPC 协议接入 TensorRT-LLM。那条路径要求调用方自己分词（tokenizer），Agent 不做分词，所以这里走 OpenAI 兼容 HTTP。vLLM 的 Probe 同步增加一条拒绝：模型卡 `owned_by` 为 `"tensorrt_llm"` 时判为类型不匹配。参考 [trtllm-serve](https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve/trtllm-serve.html)。
+
+### TokenSpeed
+
+**实现文件：** `common/runtime/tokenspeed/runtime.go`
+
+`tokenspeed serve` 自己不实现 HTTP：它在 gRPC servicer 后面跑 TokenSpeed 引擎，前面起一个 SMG 网关，客户端访问的端口（默认 8000）属于 SMG。
+
+| 动作 | 首选端点 | 说明 |
+| --- | --- | --- |
+| Probe | `GET /readiness`、`GET /v1/models` | `/readiness` 必须是 SMG 的 JSON 且 `status` 为 `"ready"`；503（未就绪或排空）按上游失败传出，由 Manager 重试 |
+| Health | `GET /readiness` | 不用 `/health`：SMG 在排空、无健康 worker 时 `/health` 仍返回 200，`/readiness` 恰好在这些状态返回 503 |
+| Discover | `GET /v1/models` | SMG 为每个 worker 注册 chat/completions 路由，作为端点证据；没有版本 |
+| Chat | `POST /v1/chat/completions` | 普通响应和 SSE |
+| Embedding | 默认 `unknown` | SMG 无论后端是什么都注册 `/v1/embeddings`，路由存在不说明模型 |
+
+**身份不强验证：** 主端口能核实的只有「这里是一个 SMG 网关」，SMG 同样可以代理 vLLM、SGLang、TensorRT-LLM 的 gRPC worker；TokenSpeed 自己的版本（`tokenspeed_version`）只由旁路控制服务器的 `/get_server_info` 报告，而该端口默认随机。因此种类取自配置，`IdentityVerified=false`，与 SGLang 同一处理。tools 与 structured output 取决于启动参数（TokenSpeed 的 `--grammar-backend` 默认 none），保持 `unknown`。参考 [TokenSpeed 启动服务](https://lightseek.org/tokenspeed/guides/launching)。
+
+**本机自动发现：** vLLM、TensorRT-LLM、TokenSpeed 默认都在 8000。`localdiscovery` 按这个顺序探测，三者的 Probe 互斥（vLLM 要 `/version` 且拒绝 TensorRT-LLM 的 `owned_by`；TensorRT-LLM 要 `/version` 加自己的 `owned_by`；TokenSpeed 要 `/readiness`），且扫描按地址去重：一个地址只要已以任何种类注册（包括运维手工声明的），就不再注册别的种类。
 
 ### Ollama
 
@@ -898,6 +938,8 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 | --- | --- | --- | --- |
 | vLLM | 待定 | 待填写 | `/version` 字段名随版本变化；Responses 端点仅新版存在 |
 | SGLang | 待定 | 待填写 | 早期版本无 `/health`；`/get_server_info` 为私有响应且不稳定 |
+| TensorRT-LLM | 待定 | 待填写 | 能力不按版本推断（见下方「TensorRT-LLM」）；`/v1/models` 只返回一张模型卡；embeddings 与多模态编码器角色不注册 `/server_info` 与 Chat |
+| TokenSpeed | 待定 | 待填写 | 主端口是 SMG，没有版本端点；版本只在随机端口的控制服务器上 |
 | Ollama | 0.1.24 | 0.32.14 | OpenAI-compatible 层支持的字段逐版本增加；`capabilities` 内联进 `/api/tags` 是较新行为，旧版需 `/api/show` 兜底 |
 | ComfyUI | 待定 | 待填写 | `/features`、`/models/{folder}` 为较新增接口；事件字段有增删 |
 

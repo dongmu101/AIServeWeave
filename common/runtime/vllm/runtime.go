@@ -25,6 +25,10 @@ const (
 	versionPath = "/version"
 	healthPath  = "/health"
 	modelsPath  = "/v1/models"
+
+	// trtllmOwnedBy is the owned_by value trtllm-serve puts on its model
+	// cards; see Probe. / trtllmOwnedBy 是 trtllm-serve 在模型卡上填写的 owned_by 值，见 Probe。
+	trtllmOwnedBy = "tensorrt_llm"
 )
 
 // Runtime is the vLLM adapter. It is safe for concurrent use; the
@@ -102,13 +106,22 @@ func (r *Runtime) Close() error { return r.base.Close() }
 
 // Probe verifies the endpoint is a vLLM server by requiring both GET
 // /version — which vLLM serves and a bare OpenAI-compatible server such as
-// SGLang does not — and GET /v1/models.
+// SGLang does not — and GET /v1/models, and rejects a server whose model
+// cards name TensorRT-LLM as their owner (it serves /version too).
 //
 // A /version response without a version field still verifies identity: the
 // route answering at all is the vLLM-specific evidence, and vLLM has
 // changed that payload's shape before. The version is reported empty
 // instead, which leaves the capability profile unapplied and is surfaced by
 // Discover as a warning rather than silently assumed away.
+//
+// Probe 同时要求 GET /version（vLLM 提供、而 SGLang 这类纯 OpenAI 兼容服务器不提供）
+// 与 GET /v1/models 应答，以核实端点是 vLLM 服务器；模型卡把 TensorRT-LLM 写作 owner
+// 的服务器会被拒绝（它也提供 /version）。
+//
+// 不带 version 字段的 /version 响应仍算核实身份：路由能应答本身就是 vLLM 特有的证据，
+// 而 vLLM 以前改过该响应的形状。此时版本报告为空，能力表因此不生效，并由 Discover
+// 以警告形式暴露，而不是悄悄假设过去。
 func (r *Runtime) Probe(ctx context.Context) (runtime.ProbeResult, error) {
 	if err := r.base.CheckOpen("probe"); err != nil {
 		return runtime.ProbeResult{}, err
@@ -120,9 +133,25 @@ func (r *Runtime) Probe(ctx context.Context) (runtime.ProbeResult, error) {
 	if err != nil {
 		return runtime.ProbeResult{}, r.base.ProbeMismatch(err, "probe", versionPath)
 	}
-	models, err := openai.ListModels(ctx, r.base.Client())
+	models, err := openai.ListModelCards(ctx, r.base.Client())
 	if err != nil {
 		return runtime.ProbeResult{}, r.base.ProbeMismatch(err, "probe", modelsPath)
+	}
+	// TensorRT-LLM's trtllm-serve also answers /version and also defaults to
+	// port 8000, so /version alone would adopt it as vLLM. Its model cards
+	// say owned_by "tensorrt_llm", which vLLM never reports. Any other value,
+	// including none, is still accepted: only an explicit foreign owner is
+	// evidence against vLLM.
+	//
+	// TensorRT-LLM 的 trtllm-serve 同样应答 /version，默认端口同样是 8000，单靠
+	// /version 会把它当成 vLLM 采纳。它的模型卡写着 owned_by "tensorrt_llm"，vLLM
+	// 从不这样报告。其他任何值（包括缺省）仍被接受：只有明确的外来 owner 才构成
+	// 「不是 vLLM」的证据。
+	for _, m := range models {
+		if m.OwnedBy == trtllmOwnedBy {
+			return runtime.ProbeResult{}, r.base.Errorf(runtime.ErrorProbeMismatch, "probe",
+				"%s listed model %q owned by %q, which is a TensorRT-LLM server, not vLLM", modelsPath, m.ID, m.OwnedBy)
+		}
 	}
 
 	return runtime.ProbeResult{

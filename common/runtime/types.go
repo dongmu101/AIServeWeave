@@ -13,6 +13,12 @@ const (
 	KindSGLang  Kind = "sglang"
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
+	// KindTRTLLM names an NVIDIA TensorRT-LLM `trtllm-serve` OpenAI-compatible server.
+	// KindTRTLLM 表示 NVIDIA TensorRT-LLM 的 `trtllm-serve` OpenAI 兼容服务。
+	KindTRTLLM Kind = "trtllm"
+	// KindTokenSpeed names a `tokenspeed serve` deployment, whose HTTP front end is an SMG gateway.
+	// KindTokenSpeed 表示 `tokenspeed serve` 部署，其 HTTP 前端是一个 SMG 网关。
+	KindTokenSpeed Kind = "tokenspeed"
 	// KindCodex names the Agent-local Codex app-server adapter.
 	// KindCodex 表示 Agent 本地的 Codex app-server 适配器。
 	KindCodex Kind = "codex"

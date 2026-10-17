@@ -1,6 +1,7 @@
 // Command aiserveweave-agent runs the node-side agent: it manages the local
-// inference runtimes (Ollama, vLLM, SGLang, ComfyUI) and will dial out to the
-// Gateway over the tunnel. The agent never listens on a public port.
+// inference runtimes (Ollama, vLLM, SGLang, TensorRT-LLM, TokenSpeed,
+// ComfyUI) and will dial out to the Gateway over the tunnel. The agent never
+// listens on a public port.
 package main
 
 import (
@@ -29,6 +30,8 @@ import (
 	"AIServeWeave/common/runtime/hosted"
 	"AIServeWeave/common/runtime/ollama"
 	"AIServeWeave/common/runtime/sglang"
+	"AIServeWeave/common/runtime/tokenspeed"
+	"AIServeWeave/common/runtime/trtllm"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
@@ -105,7 +108,7 @@ func main() {
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
 	autoDiscover := flag.Bool("auto-discover", true,
-		"probe 127.0.0.1's well-known Ollama/vLLM/SGLang ports and register whatever answers; never touches any other host")
+		"probe 127.0.0.1's well-known Ollama/vLLM/TensorRT-LLM/TokenSpeed/SGLang ports and register whatever answers; never touches any other host")
 	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
 		"how often auto-discovery looks for a newly appeared local instance")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",
@@ -1284,12 +1287,14 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 		})
 	}
 	factories := map[runtime.Kind]runtime.Factory{
-		runtime.KindOllama:  ollama.New,
-		runtime.KindVLLM:    vllm.New,
-		runtime.KindSGLang:  sglang.New,
-		runtime.KindComfyUI: comfyui.New,
-		runtime.KindClaude:  localOnly(claudecode.New),
-		runtime.KindCodex:   localOnly(codexcli.New),
+		runtime.KindOllama:     ollama.New,
+		runtime.KindVLLM:       vllm.New,
+		runtime.KindSGLang:     sglang.New,
+		runtime.KindTRTLLM:     trtllm.New,
+		runtime.KindTokenSpeed: tokenspeed.New,
+		runtime.KindComfyUI:    comfyui.New,
+		runtime.KindClaude:     localOnly(claudecode.New),
+		runtime.KindCodex:      localOnly(codexcli.New),
 	}
 	for _, kind := range cliagent.Kinds() {
 		factories[kind] = localOnly(cliagent.New)
