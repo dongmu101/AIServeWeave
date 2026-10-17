@@ -10,7 +10,7 @@ import (
 const codeBuddyRPCID = "aisw_model_discovery"
 
 func init() {
-	register(&Spec{
+	register(&cliSpec{
 		Kind:            runtime.KindCodeBuddy,
 		Label:           "CodeBuddy",
 		Executables:     []string{"codebuddy", "cbc"},
@@ -44,7 +44,7 @@ func codeBuddyDiscover(c *call) ([]string, error) {
 	var ids []string
 	answered := false
 	diag, err := c.rpc([]string{"--print", "--output-format", "stream-json", "--input-format", "stream-json", "--verbose",
-		"--no-session-persistence", "--setting-sources", "user"}, append(request, '\n'), func(line []byte) (bool, error) {
+		"--no-session-persistence", "--setting-sources", "user", "--strict-mcp-config"}, append(request, '\n'), func(line []byte) (bool, error) {
 		obj := object(line)
 		if str(obj, "type") != "control_response" {
 			return false, nil
@@ -72,6 +72,9 @@ func codeBuddyDiscover(c *call) ([]string, error) {
 		return nil, ErrAuthentication
 	}
 	if err == nil && !answered {
+		if c.signedOut(diag) {
+			return nil, ErrAuthentication
+		}
 		return nil, ErrProtocol
 	}
 	return ids, err

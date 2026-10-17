@@ -3,13 +3,13 @@
 // isolated headless process per request. Everything that is the same for
 // every CLI — process lifecycle, deadlines, backpressure, bounds, prompt
 // rendering and error categories — lives here once; each CLI contributes a
-// Spec with its command line, environment, output dialect and model
+// cliSpec with its command line, environment, output dialect and model
 // discovery.
 //
 // Package cliagent 通过本机已登录的编程智能体 CLI（Grok、OpenCode、Cursor、
 // CodeBuddy、Qoder、Pi）提供文本推理，每个请求运行一个隔离的 headless 进程。
 // 所有 CLI 都相同的部分——进程生命周期、期限、背压、上限、提示词渲染与错误
-// 类别——在这里只实现一次；每个 CLI 提供一份 Spec，描述它的命令行、环境变量、
+// 类别——在这里只实现一次；每个 CLI 提供一份 cliSpec，描述它的命令行、环境变量、
 // 输出方言与模型发现。
 package cliagent
 
@@ -38,7 +38,7 @@ var errConsumerGone = errors.New("cliagent: stream consumer closed")
 // Runtime serves remote inference using an isolated local CLI process per call.
 // Runtime 为每次远程推理创建独立的本地 CLI 进程。
 type Runtime struct {
-	spec       *Spec
+	spec       *cliSpec
 	cfg        runtime.Config
 	deps       runtime.Dependencies
 	executable string
@@ -72,13 +72,13 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 }
 
 // NewFactory binds a trusted executable locally; its path never comes from a
-// request. An empty executable uses the Spec's own candidate names, looked up
-// on the Agent's PATH and then in the Spec's install directory under $HOME
+// request. An empty executable uses the cliSpec's own candidate names, looked up
+// on the Agent's PATH and then in the cliSpec's install directory under $HOME
 // each time a process starts.
 //
 // NewFactory 绑定可信的本地可执行文件，路径从不取自推理请求。executable 为空
-// 时使用 Spec 自带的候选名称，每次启动进程时先在 Agent 的 PATH 中查找，再查找
-// $HOME 下 Spec 声明的安装目录。
+// 时使用 cliSpec 自带的候选名称，每次启动进程时先在 Agent 的 PATH 中查找，再查找
+// $HOME 下 cliSpec 声明的安装目录。
 func NewFactory(executable string) runtime.Factory {
 	return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
 		spec, ok := specs[cfg.Kind]
@@ -225,7 +225,9 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 		ids, err = catalogue.result()
 		return err
 	})
-	if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, errFinished) {
+	// A cancellation only explains a failure; it never overrides success.
+	// 取消只用来解释失败，从不推翻已经成功的结果。
+	if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, errFinished) {
 		err = cause
 	}
 	if err != nil {
@@ -353,7 +355,14 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 				event.Delta.Role = "assistant"
 				first = false
 			}
-			if !s.Send(event) {
+			// SendContext, not Send: a consumer that stops reading must not
+			// keep the process alive past a deadline or Runtime.Close.
+			// 用 SendContext 而不是 Send：停止读取的消费方不能让进程在期限到达
+			// 或 Runtime.Close 之后仍然存活。
+			if !s.SendContext(ctx, event) {
+				if ctx.Err() != nil {
+					return context.Cause(ctx)
+				}
 				return errConsumerGone
 			}
 			return nil
@@ -362,7 +371,7 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 			c.ctx, c.touch = ctx, touch
 			return runTurn(c, req.Model, prompt, emit)
 		})
-		if cause := context.Cause(ctx); cause != nil && !errors.Is(cause, errFinished) {
+		if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, errFinished) {
 			err = cause
 		}
 		if errors.Is(err, errConsumerGone) || errors.Is(err, runtime.ErrStreamClosed) {

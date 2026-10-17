@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"errors"
 	"io"
 	"sync"
@@ -62,6 +63,29 @@ func (s *ChanStream[T]) Send(item T) bool {
 		s.mu.Unlock()
 		return true
 	case <-s.done:
+		return false
+	}
+}
+
+// SendContext is Send that also gives up when ctx ends, so a producer whose
+// consumer has stopped reading can still be cancelled. It returns false when
+// the consumer closed the stream or ctx ended; the producer distinguishes the
+// two with ctx.Err and, either way, must not call Send again. After a ctx
+// end it may still call CloseWithError once.
+//
+// SendContext 是同时感知 ctx 的 Send：消费方停止读取时，生产方仍能被取消。
+// 消费方关闭流或 ctx 结束时返回 false；生产方用 ctx.Err 区分两者，无论哪种都
+// 不得再调用 Send。因 ctx 结束而返回时，生产方仍可调用一次 CloseWithError。
+func (s *ChanStream[T]) SendContext(ctx context.Context, item T) bool {
+	select {
+	case s.items <- item:
+		s.mu.Lock()
+		s.committed = true
+		s.mu.Unlock()
+		return true
+	case <-s.done:
+		return false
+	case <-ctx.Done():
 		return false
 	}
 }

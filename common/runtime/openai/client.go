@@ -1,8 +1,14 @@
 // Package openai implements the shared HTTP transport used by the vLLM,
-// SGLang and Ollama runtime adapters to talk to an OpenAI-compatible
-// backend. It owns URL construction, authentication headers, response size
-// limits and error normalization; adapters only add their own endpoints and
-// DTOs on top of Client.
+// SGLang, Ollama, hosted-provider and Anthropic runtime adapters to talk to
+// an OpenAI-compatible (or, for Anthropic, Messages) backend. It owns URL
+// construction, authentication headers, response size limits and error
+// normalization; adapters only add their own endpoints and DTOs on top of
+// Client.
+//
+// Package openai 实现 vLLM、SGLang、Ollama、托管供应商与 Anthropic 运行时适配器
+// 共用的 HTTP 传输层，用于访问 OpenAI 兼容后端（Anthropic 则为 Messages 后端）。
+// 它负责 URL 构造、认证请求头、响应大小上限与错误归一化；适配器只在 Client 之上
+// 添加各自的端点与 DTO。
 package openai
 
 import (
@@ -73,6 +79,16 @@ type ClientConfig struct {
 	// MaxCompletionTokens 把 ChatRequest.MaxTokens 以 "max_completion_tokens"
 	// 发送（OpenAI 推理模型与 MiniMax 要求的字段名），而不是 "max_tokens"。
 	MaxCompletionTokens bool
+	// RefuseRedirects returns a redirect response as a protocol_error
+	// ("redirect not followed") instead of following it. Go forwards custom headers such as x-api-key
+	// across hosts on redirect, so a remote endpoint must never be able to
+	// steer a credential to an address the operator did not declare.
+	//
+	// RefuseRedirects 把重定向响应作为 protocol_error（"redirect not followed"）
+	// 返回，而不是跟随它。Go 在跨主机
+	// 重定向时会转发 x-api-key 这类自定义请求头，因此绝不能让远端端点把凭据
+	// 引到运维未声明的地址。
+	RefuseRedirects bool
 }
 
 // Client is the shared OpenAI-compatible HTTP client. It is safe for
@@ -120,6 +136,11 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	httpClient := cfg.HTTPClient
 	if httpClient == nil {
 		httpClient = &http.Client{}
+	}
+	if cfg.RefuseRedirects {
+		refusing := *httpClient
+		refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		httpClient = &refusing
 	}
 	maxBytes := cfg.MaxResponseBytes
 	if maxBytes <= 0 {
@@ -396,6 +417,11 @@ func (c *Client) transportError(ctx context.Context, operation string, err error
 func (c *Client) errorFromResponse(operation string, status int, body []byte) *runtime.RuntimeError {
 	code := runtime.ErrorCodeFromStatus(status)
 	msg := runtime.Redact(parseErrorMessage(body), c.apiKey)
+	if status >= 300 && status < 400 {
+		// A refused redirect: its body and target are not worth surfacing.
+		// 被拒绝的重定向：其正文与目标地址不对外暴露。
+		msg = fmt.Sprintf("redirect not followed (HTTP %d)", status)
+	}
 	return &runtime.RuntimeError{
 		Code:       code,
 		RuntimeID:  c.runtimeID,

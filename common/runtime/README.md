@@ -280,6 +280,7 @@ type Config struct {
 	TLS                 TLSConfig
 	CapabilityOverrides map[Capability]SupportLevel
 	Exclusive           bool
+	Models              []string // local declaration only / 仅本地声明，不通过隧道接收
 }
 
 type TLSConfig struct {

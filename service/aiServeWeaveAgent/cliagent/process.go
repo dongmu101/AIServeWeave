@@ -45,34 +45,36 @@ var (
 )
 
 const (
-	maxLineBytes = 1 << 20
-	maxLines     = 10000
-	maxTextBytes = 1 << 20
-	maxListBytes = 1 << 20
-	maxModels    = 256
-	maxDiagBytes = 64 << 10
+	maxLineBytes   = 1 << 20
+	maxOutputBytes = 64 << 20 // whole stdout of one run; text itself is capped by maxTextBytes / 单次运行的全部 stdout；文本另有 maxTextBytes 上限
+	maxTextBytes   = 1 << 20
+	maxListBytes   = 1 << 20
+	maxModels      = 256
+	maxRawModels   = 16 * maxModels // raw listing entries kept before filtering / 过滤前保留的原始列表条目数
+	maxDiagBytes   = 64 << 10
 )
 
-// Spec is everything one CLI contributes. Every function runs inside a fresh
+// cliSpec is everything one CLI contributes. Every function runs inside a fresh
 // isolated working directory that is removed afterwards.
 //
-// Spec 是单个 CLI 提供的全部内容。每个函数都在一个新建的隔离工作目录中运行，
+// cliSpec 是单个 CLI 提供的全部内容。每个函数都在一个新建的隔离工作目录中运行，
 // 结束后该目录被删除。
-type Spec struct {
+type cliSpec struct {
 	// Kind and Label identify the CLI in descriptors and fixed error text.
 	// Kind 与 Label 在描述符与固定错误文本中标识该 CLI。
 	Kind  runtime.Kind
 	Label string
-	// Executables are candidate names, tried in order on PATH and then in
-	// HomeBin under $HOME (when set).
-	// Executables 是候选名称，依次在 PATH 中查找，然后在 $HOME 下的 HomeBin
-	// （若设置）中查找。
+	// Executables are candidate names in order of preference; each is looked
+	// up on PATH and then in HomeBin under $HOME (when set) before the next.
+	// Executables 是按优先级排列的候选名称；每个名称先在 PATH 中查找，再在
+	// $HOME 下的 HomeBin（若设置）中查找，然后才轮到下一个。
 	Executables []string
 	HomeBin     string
-	// PassEnv lists extra variables passed through, and PassEnvPrefixes
-	// whole families (for example "CODEBUDDY_").
-	// PassEnv 列出额外透传的变量，PassEnvPrefixes 透传整组变量（例如
-	// "CODEBUDDY_"）。
+	// PassEnv lists extra variables passed through; PassEnvPrefixes and
+	// PassEnvSuffixes pass whole families (for example "CODEBUDDY_" or
+	// "_API_KEY").
+	// PassEnv 列出额外透传的变量；PassEnvPrefixes 与 PassEnvSuffixes 按前缀或
+	// 后缀透传整组变量（例如 "CODEBUDDY_" 或 "_API_KEY"）。
 	PassEnv         []string
 	PassEnvPrefixes []string
 	PassEnvSuffixes []string
@@ -83,16 +85,23 @@ type Spec struct {
 	// SignIn lists lower-case phrases meaning the CLI is not signed in.
 	// SignIn 列出表示 CLI 未登录的小写措辞。
 	SignIn []string
-	// Aliases are catalogue entries that name no concrete model (such as
-	// "auto"); "default" is always dropped.
-	// Aliases 是不指向具体模型的目录条目（例如 "auto"）；"default" 总是被去掉。
+	// Aliases are catalogue entries the CLI does not accept as a --model
+	// value (such as CodeBuddy's "default-model"); "default" is always dropped.
+	// Aliases 是 CLI 不接受作为 --model 取值的目录条目（例如 CodeBuddy 的
+	// "default-model"）；"default" 总是被去掉。
 	Aliases []string
 	// Discover returns raw model IDs in CLI order without running inference.
 	// Discover 不执行推理，按 CLI 顺序返回原始模型 ID。
 	Discover func(c *call) ([]string, error)
-	// Turn returns the command line and stdin for one turn; promptFile
-	// already holds prompt.
-	// Turn 返回一次回合的命令行与 stdin；promptFile 中已写入 prompt。
+	// PromptFile writes the prompt to a 0600 file in the working directory
+	// before Turn runs; only CLIs that read the prompt from a file set it.
+	// PromptFile 让 Turn 运行前把提示词写入工作目录中权限为 0600 的文件；只有
+	// 从文件读取提示词的 CLI 才设置它。
+	PromptFile bool
+	// Turn returns the command line and stdin for one turn; promptFile holds
+	// the prompt when PromptFile is set and is empty otherwise.
+	// Turn 返回一次回合的命令行与 stdin；设置了 PromptFile 时 promptFile 中已
+	// 写入提示词，否则为空串。
 	Turn func(dir, promptFile, prompt, model string) (args []string, stdin []byte)
 	// TurnRPC keeps a turn's stdin open until the parser reports done, for
 	// dialects that read commands rather than one prompt ending at EOF.
@@ -117,16 +126,16 @@ type parser interface {
 	finish() (*runtime.Usage, error)
 }
 
-var specs = map[runtime.Kind]*Spec{}
+var specs = map[runtime.Kind]*cliSpec{}
 
-func register(s *Spec) { specs[s.Kind] = s }
+func register(s *cliSpec) { specs[s.Kind] = s }
 
-// call bundles one isolated run's context and lets a Spec start processes.
-// call 汇集一次隔离运行的上下文，并让 Spec 启动进程。
+// call bundles one isolated run's context and lets a cliSpec start processes.
+// call 汇集一次隔离运行的上下文，并让 cliSpec 启动进程。
 type call struct {
 	ctx    context.Context
 	touch  func()
-	spec   *Spec
+	spec   *cliSpec
 	exe    string
 	env    []string
 	dir    string
@@ -156,8 +165,8 @@ func (c *call) start(args []string, stdin []byte, keepOpen bool, onLine func([]b
 	})
 }
 
-// signedOut reports whether output carries one of the Spec's sign-in phrases.
-// signedOut 报告 output 是否包含 Spec 的未登录措辞。
+// signedOut reports whether output carries one of the cliSpec's sign-in phrases.
+// signedOut 报告 output 是否包含 cliSpec 的未登录措辞。
 func (c *call) signedOut(output []byte) bool { return mentions(output, c.spec.SignIn) }
 
 func mentions(output []byte, phrases []string) bool {
@@ -187,10 +196,13 @@ func (h *headCapture) Write(p []byte) (int, error) {
 }
 
 // resolveExecutable finds the trusted CLI: an explicit path as-is, else each
-// candidate on the Agent's PATH, else in $HOME/<HomeBin>.
-// resolveExecutable 查找可信 CLI：显式路径原样使用，否则依次在 Agent 的 PATH
-// 中查找各候选名，再查找 $HOME/<HomeBin>。
-func resolveExecutable(spec *Spec, explicit string, env []string) (string, error) {
+// candidate in order, first on the Agent's PATH and then in $HOME/<HomeBin>,
+// so a preferred name installed only under $HOME beats a generic fallback
+// name that happens to be on PATH.
+// resolveExecutable 查找可信 CLI：显式路径原样使用；否则按顺序处理各候选名，
+// 每个名称先查 Agent 的 PATH，再查 $HOME/<HomeBin>。这样只装在 $HOME 下的首选
+// 名称，优先于恰好位于 PATH 上的通用备选名称。
+func resolveExecutable(spec *cliSpec, explicit string, env []string) (string, error) {
 	if explicit != "" && strings.ContainsRune(explicit, filepath.Separator) {
 		abs, err := filepath.Abs(explicit)
 		if err != nil {
@@ -202,19 +214,19 @@ func resolveExecutable(spec *Spec, explicit string, env []string) (string, error
 	if explicit != "" {
 		names = []string{explicit}
 	}
+	home := envValue(env, "HOME")
 	for _, name := range names {
 		if found, err := exec.LookPath(name); err == nil {
 			if abs, err := filepath.Abs(found); err == nil {
 				return abs, nil
 			}
 		}
-	}
-	if home := envValue(env, "HOME"); home != "" && spec.HomeBin != "" {
-		for _, name := range names {
-			found := filepath.Join(home, spec.HomeBin, name)
-			if info, err := os.Stat(found); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
-				return found, nil
-			}
+		if home == "" || spec.HomeBin == "" {
+			continue
+		}
+		found := filepath.Join(home, spec.HomeBin, name)
+		if info, err := os.Stat(found); err == nil && !info.IsDir() && info.Mode()&0o111 != 0 {
+			return found, nil
 		}
 	}
 	return "", ErrProcess
@@ -243,14 +255,14 @@ func setEnv(env []string, key, value string) []string {
 	return append(out, key+"="+value)
 }
 
-// baseEnv builds the child environment from an allowlist plus the Spec's
+// baseEnv builds the child environment from an allowlist plus the cliSpec's
 // extra names, with the executable's directory first on PATH. HOME is kept so
-// the CLI finds its own sign-in; a Spec that isolates HOME overrides it.
+// the CLI finds its own sign-in; a cliSpec that isolates HOME overrides it.
 //
-// baseEnv 按允许列表加上 Spec 额外声明的名称构造子进程环境，并把可执行文件所在
+// baseEnv 按允许列表加上 cliSpec 额外声明的名称构造子进程环境，并把可执行文件所在
 // 目录放在 PATH 最前。HOME 保持不变，以便 CLI 找到自己的登录；需要隔离 HOME 的
-// Spec 自行覆盖它。
-func baseEnv(spec *Spec, source []string, executable string) []string {
+// cliSpec 自行覆盖它。
+func baseEnv(spec *cliSpec, source []string, executable string) []string {
 	allowed := map[string]bool{"HOME": true, "USER": true, "LOGNAME": true, "LANG": true, "LC_ALL": true, "TMPDIR": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true,
 		"SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "NODE_EXTRA_CA_CERTS": true}
@@ -285,7 +297,7 @@ func baseEnv(spec *Spec, source []string, executable string) []string {
 // afterwards. The caller fills in ctx and touch.
 // withHome 在新建的隔离工作目录中运行 fn，结束后删除该目录。调用方负责填入
 // ctx 与 touch。
-func withHome(spec *Spec, executable string, source []string, fn func(c *call) error) error {
+func withHome(spec *cliSpec, executable string, source []string, fn func(c *call) error) error {
 	exe, err := resolveExecutable(spec, executable, source)
 	if err != nil {
 		return err
@@ -379,11 +391,16 @@ func runCLI(ctx context.Context, exe string, env []string, dir string, args []st
 	return diag.buffer.Bytes(), nil
 }
 
+// readLines bounds each line and the whole output by bytes rather than by
+// line count: token-level dialects print one line per delta, so a long but
+// legitimate reply can span far more lines than its size suggests.
+// readLines 按字节而非行数限制单行与全部输出：逐 token 输出的方言每个增量
+// 一行，合法的长回复行数可能远超其大小所暗示的数量。
 func readLines(output io.Reader, onLine func([]byte) (bool, error)) (bool, error) {
 	scanner := bufio.NewScanner(output)
 	scanner.Buffer(make([]byte, 0, 64<<10), maxLineBytes)
-	for lines := 0; scanner.Scan(); {
-		if lines++; lines > maxLines {
+	for total := 0; scanner.Scan(); {
+		if total += len(scanner.Bytes()) + 1; total > maxOutputBytes {
 			return false, ErrProtocol
 		}
 		stop, err := onLine(scanner.Bytes())
@@ -440,9 +457,12 @@ func object(raw json.RawMessage) map[string]json.RawMessage {
 var modelID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/@+\[\]-]{0,255}$`)
 
 // modelSet collects real model IDs in CLI order, dropping aliases,
-// duplicates and IDs unsafe to pass as an argument.
+// duplicates and IDs unsafe to pass as an argument, and keeping at most
+// maxModels of them: a catalogue longer than that is truncated, not refused,
+// so a CLI with a large provider catalogue still serves its first models.
 // modelSet 按 CLI 顺序收集真实模型 ID，去掉别名、重复项以及不能安全作为参数
-// 传递的 ID。
+// 传递的 ID，最多保留 maxModels 个：更长的目录被截断而不是拒绝，供应商目录
+// 很大的 CLI 仍能提供其中靠前的模型。
 type modelSet struct {
 	aliases []string
 	ids     []string
@@ -460,7 +480,7 @@ func (s *modelSet) add(id string) error {
 		}
 	}
 	if len(s.ids) >= maxModels {
-		return ErrProtocol
+		return nil
 	}
 	if s.seen == nil {
 		s.seen = map[string]bool{}
@@ -477,16 +497,20 @@ func (s *modelSet) result() ([]string, error) {
 	return s.ids, nil
 }
 
-// runTurn runs one headless turn: it writes the prompt file, starts the CLI,
-// forwards reply text through emit as it arrives and sends the terminal stop
-// event only after the parser confirms a clean end.
+// runTurn runs one headless turn: it writes the prompt file when the CLI
+// needs one, starts the CLI, forwards reply text through emit as it arrives
+// and sends the terminal stop event only after the parser confirms a clean
+// end.
 //
-// runTurn 运行一次 headless 回合：写入提示词文件、启动 CLI、随到随经 emit 转发
-// 回复文本，并且只在解析器确认正常结束后才发送终止事件。
+// runTurn 运行一次 headless 回合：CLI 需要时写入提示词文件，启动 CLI，随到随经
+// emit 转发回复文本，并且只在解析器确认正常结束后才发送终止事件。
 func runTurn(c *call, model, prompt string, emit func(runtime.ChatEvent) error) error {
-	promptFile := filepath.Join(c.dir, "prompt.txt")
-	if os.WriteFile(promptFile, []byte(prompt), 0o600) != nil {
-		return ErrProcess
+	promptFile := ""
+	if c.spec.PromptFile {
+		promptFile = filepath.Join(c.dir, "prompt.txt")
+		if os.WriteFile(promptFile, []byte(prompt), 0o600) != nil {
+			return ErrProcess
+		}
 	}
 	args, stdin := c.spec.Turn(c.dir, promptFile, prompt, model)
 	p := c.spec.Parser()
@@ -514,8 +538,9 @@ func runTurn(c *call, model, prompt string, emit func(runtime.ChatEvent) error) 
 		}
 		return done, err
 	})
+	signedOut := func() bool { return c.signedOut(diag) || c.signedOut(noise.buffer.Bytes()) }
 	if errors.Is(err, errExit) {
-		if c.signedOut(diag) || c.signedOut(noise.buffer.Bytes()) {
+		if signedOut() {
 			return ErrAuthentication
 		}
 		return ErrTurn
@@ -525,6 +550,11 @@ func runTurn(c *call, model, prompt string, emit func(runtime.ChatEvent) error) 
 	}
 	usage, err := p.finish()
 	if err != nil {
+		// A clean exit without a terminal event may still be a sign-in prompt.
+		// 正常退出却没有终止事件，也可能是在提示登录。
+		if signedOut() {
+			return ErrAuthentication
+		}
 		return err
 	}
 	return emit(runtime.ChatEvent{FinishReason: "stop", Usage: usage})
@@ -537,6 +567,22 @@ func tokenUsage(input, output int) *runtime.Usage {
 		return nil
 	}
 	return &runtime.Usage{PromptTokens: max(input, 0), CompletionTokens: max(output, 0), TotalTokens: max(input, 0) + max(output, 0)}
+}
+
+// sumCounts adds one count per group, each group naming alternative
+// spellings of the same field, for example uncached and cached input tokens.
+// sumCounts 对每组取一个计数后相加，每组列出同一字段的不同写法，例如未命中缓存
+// 与命中缓存的输入 token。
+func sumCounts(obj map[string]json.RawMessage, groups ...[]string) (int, error) {
+	total := 0
+	for _, keys := range groups {
+		n, err := count(obj, keys...)
+		if err != nil {
+			return 0, err
+		}
+		total += n
+	}
+	return total, nil
 }
 
 // count decodes the first present key of obj as a non-negative integer.

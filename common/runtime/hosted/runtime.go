@@ -2,18 +2,21 @@
 // Gemini, DeepSeek, Kimi, Qwen, Zhipu, MiniMax and any OpenAI-compatible
 // endpoint) to the runtime.InferenceRuntime contract.
 //
-// The adapter touches two endpoints and no others: GET {root}/models to
-// prove the key works and list models, and POST {root}/chat/completions to
-// serve requests. {root} is the provider's documented SDK base URL, which
-// already carries the API version segment.
+// By default the adapter touches two endpoints: GET {root}/models to prove
+// the key works and list models, and POST {root}/chat/completions to serve
+// requests. Embeddings, transcription and rerank reach their own endpoints
+// only after an operator declares those capabilities. {root} is the
+// provider's documented SDK base URL, which already carries the API version
+// segment. Redirects are refused, so the key never leaves the declared host.
 //
 // Package hosted 把托管的 OpenAI 兼容 API 供应商（OpenAI、Gemini、DeepSeek、
 // Kimi、Qwen、智谱、MiniMax 以及任意 OpenAI 兼容端点）适配为
 // runtime.InferenceRuntime 契约。
 //
-// 适配器只访问两个端点：GET {root}/models 用于证明密钥可用并列出模型，
-// POST {root}/chat/completions 用于服务请求。{root} 是供应商文档给出的 SDK
-// base URL，已包含 API 版本段。
+// 适配器默认只访问两个端点：GET {root}/models 用于证明密钥可用并列出模型，
+// POST {root}/chat/completions 用于服务请求。嵌入、转录与重排只有在运维声明了
+// 相应能力后才会访问各自的端点。{root} 是供应商文档给出的 SDK base URL，已包含
+// API 版本段。重定向一律拒绝，密钥不会离开已声明的主机。
 package hosted
 
 import (
@@ -83,7 +86,7 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	base, err := oaibase.NewWithOptions(cfg, cfg.Kind, deps, oaibase.Options{VersionedBaseURL: true, MaxCompletionTokens: p.maxCompletionTokens})
+	base, err := oaibase.NewWithOptions(cfg, cfg.Kind, deps, oaibase.Options{VersionedBaseURL: true, MaxCompletionTokens: p.maxCompletionTokens, RefuseRedirects: true})
 	if err != nil {
 		return nil, err
 	}
@@ -105,8 +108,11 @@ func (r *Runtime) listModels(ctx context.Context) (ids []string, listed bool, er
 	ids, err = openai.ListModels(ctx, r.base.Client())
 	if err != nil {
 		var rerr *runtime.RuntimeError
-		if len(declared) > 0 && errors.As(err, &rerr) && (rerr.StatusCode == http.StatusNotFound || rerr.StatusCode == http.StatusMethodNotAllowed) {
-			return declared, false, nil
+		if errors.As(err, &rerr) && (rerr.StatusCode == http.StatusNotFound || rerr.StatusCode == http.StatusMethodNotAllowed) {
+			if len(declared) > 0 {
+				return declared, false, nil
+			}
+			return nil, false, r.base.Errorf(runtime.ErrorUpstream, "list_models", "models endpoint unavailable (HTTP %d); declare models in the runtime configuration", rerr.StatusCode)
 		}
 		return nil, false, err
 	}

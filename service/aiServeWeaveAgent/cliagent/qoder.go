@@ -11,7 +11,7 @@ import (
 )
 
 func init() {
-	register(&Spec{
+	register(&cliSpec{
 		Kind:            runtime.KindQoder,
 		Label:           "Qoder",
 		Executables:     []string{"qodercli"},
@@ -63,9 +63,20 @@ func qoderDiscover(c *call) ([]string, error) {
 		if obj := object(raw); obj != nil {
 			raw = lookup(obj, "models", "data", "items")
 		}
-		return claudeModels(raw, "id", "value", "model")
+		ids, err := claudeModels(raw, "id", "value", "model")
+		return qoderEmpty(c, diag, ids, err)
 	}
-	return tableModels(output.String(), "model"), nil
+	return qoderEmpty(c, diag, tableModels(output.String(), "model"), nil)
+}
+
+// qoderEmpty reports an empty listing after a clean exit as signed out when
+// stderr says so.
+// qoderEmpty 在正常退出却列表为空、且 stderr 提示未登录时，报告为未登录。
+func qoderEmpty(c *call, diag []byte, ids []string, err error) ([]string, error) {
+	if err == nil && len(ids) == 0 && c.signedOut(diag) {
+		return nil, ErrAuthentication
+	}
+	return ids, err
 }
 
 // tableModels reads the first column of a │, | or tab separated table,
@@ -83,7 +94,7 @@ func tableModels(output, header string) []string {
 		if len(fields) != 1 || strings.EqualFold(fields[0], header) || !modelID.MatchString(fields[0]) {
 			continue
 		}
-		if len(ids) < maxModels {
+		if len(ids) < maxRawModels {
 			ids = append(ids, fields[0])
 		}
 	}

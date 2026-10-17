@@ -8,7 +8,7 @@ import (
 )
 
 func init() {
-	register(&Spec{
+	register(&cliSpec{
 		Kind:            runtime.KindOpenCode,
 		Label:           "OpenCode",
 		Executables:     []string{"opencode"},
@@ -53,12 +53,14 @@ func openCodeDiscover(c *call) ([]string, error) {
 		if text == "" || text[0] == ' ' || text[0] == '\t' || !strings.Contains(text, "/") || !modelID.MatchString(strings.TrimSpace(text)) {
 			return false, nil
 		}
-		if len(ids) < maxModels {
+		if len(ids) < maxRawModels {
 			ids = append(ids, strings.TrimSpace(text))
 		}
 		return false, nil
 	})
-	if signedOut || (errors.Is(err, errExit) && c.signedOut(diag)) {
+	// An empty listing after a clean exit may be a sign-in message on stderr.
+	// 正常退出却列表为空，可能是 stderr 上的未登录提示。
+	if signedOut || ((errors.Is(err, errExit) || (err == nil && len(ids) == 0)) && c.signedOut(diag)) {
 		return nil, ErrAuthentication
 	}
 	if errors.Is(err, errExit) {
@@ -87,15 +89,24 @@ func (p *openCodeParser) line(event []byte, text func(string) error) (bool, erro
 	case "tool_use", "tool":
 		return false, ErrUnexpectedTool
 	case "step_finish":
+		// Cached input and reasoning output are reported apart from input
+		// and output; both count toward quota.
+		// 缓存输入与推理输出独立于 input、output 报告，两者都计入配额。
 		tokens := object(part["tokens"])
-		input, err := count(tokens, "input")
+		cache := object(tokens["cache"])
+		input, err := sumCounts(tokens, []string{"input"})
 		if err != nil {
 			return false, err
 		}
-		output, err := count(tokens, "output")
+		cached, err := sumCounts(cache, []string{"read"}, []string{"write"})
 		if err != nil {
 			return false, err
 		}
+		output, err := sumCounts(tokens, []string{"output"}, []string{"reasoning"})
+		if err != nil {
+			return false, err
+		}
+		input += cached
 		p.input, p.output = p.input+input, p.output+output
 	case "error":
 		return false, ErrTurn

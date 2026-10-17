@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"AIServeWeave/common/runtime"
@@ -143,8 +144,28 @@ type chatCompletionRequest struct {
 	Stop           []string           `json:"stop,omitempty"`
 	Seed           *int64             `json:"seed,omitempty"`
 	Tools          []toolDTO          `json:"tools,omitempty"`
-	ToolChoice     string             `json:"tool_choice,omitempty"`
+	ToolChoice     json.RawMessage    `json:"tool_choice,omitempty"`
 	ResponseFormat *responseFormatDTO `json:"response_format,omitempty"`
+}
+
+// toolChoiceJSON encodes runtime.ChatRequest.ToolChoice for the wire. A mode
+// ("auto", "none", "required") is a JSON string; a named-tool choice already
+// arrives as the OpenAI object's JSON text and is sent as that object, not
+// as a string containing it, which every OpenAI-compatible server rejects.
+//
+// toolChoiceJSON 把 runtime.ChatRequest.ToolChoice 编码为线上格式。模式值
+// （"auto"、"none"、"required"）编码为 JSON 字符串；指名工具的选择到达时已是
+// OpenAI 对象的 JSON 文本，按对象原样发送，而不是包成字符串——那样会被所有
+// OpenAI 兼容服务拒绝。
+func toolChoiceJSON(choice string) json.RawMessage {
+	if choice == "" {
+		return nil
+	}
+	if trimmed := strings.TrimSpace(choice); strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
+	}
+	data, _ := json.Marshal(choice)
+	return data
 }
 
 // modeledChatFields is the fixed set of wire field names the request DTOs
@@ -288,7 +309,7 @@ func buildChatCompletionRequest(req runtime.ChatRequest) chatCompletionRequest {
 		MaxTokens:      req.MaxTokens,
 		Stop:           req.Stop,
 		Seed:           req.Seed,
-		ToolChoice:     req.ToolChoice,
+		ToolChoice:     toolChoiceJSON(req.ToolChoice),
 		ResponseFormat: toResponseFormatDTO(req.ResponseFormat),
 	}
 	for _, m := range req.Messages {

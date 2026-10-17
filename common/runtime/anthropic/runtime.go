@@ -19,7 +19,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
 	"strings"
@@ -62,15 +61,19 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 	if err := cfg.Validate(); err != nil {
 		return nil, err
 	}
-	headers := maps.Clone(cfg.Headers)
-	if headers == nil {
-		headers = map[string]string{}
+	// Canonical keys, so an operator's "Anthropic-Version" or "authorization"
+	// replaces the default instead of racing it in map iteration order.
+	// 使用规范化的键名，运维写的 "Anthropic-Version" 或 "authorization" 会替换
+	// 默认值，而不是与它按 map 遍历顺序随机竞争。
+	headers := make(map[string]string, len(cfg.Headers)+2)
+	for key, value := range cfg.Headers {
+		headers[http.CanonicalHeaderKey(key)] = value
 	}
-	if _, set := headers["anthropic-version"]; !set {
-		headers["anthropic-version"] = apiVersion
+	if _, set := headers["Anthropic-Version"]; !set {
+		headers["Anthropic-Version"] = apiVersion
 	}
 	official := cfg.Kind == runtime.KindAnthropic
-	if !official && cfg.APIKey != "" {
+	if _, set := headers["Authorization"]; !set && !official && cfg.APIKey != "" {
 		headers["Authorization"] = "Bearer " + cfg.APIKey
 	}
 	cfg.Headers = headers
@@ -79,7 +82,7 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 		return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind, Operation: "create_runtime", Message: "invalid base_url"}
 	}
 	versioned := strings.HasSuffix(strings.TrimSuffix(u.Path, "/"), "/v1")
-	base, err := oaibase.NewWithOptions(cfg, cfg.Kind, deps, oaibase.Options{VersionedBaseURL: versioned, AuthHeader: "x-api-key"})
+	base, err := oaibase.NewWithOptions(cfg, cfg.Kind, deps, oaibase.Options{VersionedBaseURL: versioned, AuthHeader: "x-api-key", RefuseRedirects: true})
 	if err != nil {
 		return nil, err
 	}
@@ -114,8 +117,11 @@ func (r *Runtime) listModels(ctx context.Context) (ids []string, listed bool, er
 		var resp modelsPage
 		if err := r.base.Client().Do(ctx, "list_models", http.MethodGet, path, nil, &resp); err != nil {
 			var rerr *runtime.RuntimeError
-			if len(declared) > 0 && errors.As(err, &rerr) && (rerr.StatusCode == http.StatusNotFound || rerr.StatusCode == http.StatusMethodNotAllowed) {
-				return declared, false, nil
+			if errors.As(err, &rerr) && (rerr.StatusCode == http.StatusNotFound || rerr.StatusCode == http.StatusMethodNotAllowed) {
+				if len(declared) > 0 {
+					return declared, false, nil
+				}
+				return nil, false, r.base.Errorf(runtime.ErrorUpstream, "list_models", "models endpoint unavailable (HTTP %d); declare models in the runtime configuration", rerr.StatusCode)
 			}
 			return nil, false, err
 		}

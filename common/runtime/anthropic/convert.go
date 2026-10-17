@@ -86,6 +86,9 @@ func buildRequest(req runtime.ChatRequest, stream bool) (map[string]json.RawMess
 	if req.Seed != nil {
 		return nil, errRequest("seed is not supported by Anthropic Messages")
 	}
+	if req.ResponseFormat != nil && req.ResponseFormat.Type != "text" {
+		return nil, errRequest("structured output is not supported by Anthropic Messages")
+	}
 	out := messagesRequest{Model: req.Model, MaxTokens: defaultMaxTokens, Temperature: req.Temperature, TopP: req.TopP, StopSequences: req.Stop, Stream: stream}
 	if req.MaxTokens != nil {
 		if *req.MaxTokens <= 0 {
@@ -164,9 +167,30 @@ func buildRequest(req runtime.ChatRequest, stream bool) (map[string]json.RawMess
 	case "required":
 		out.ToolChoice = &toolChoice{Type: "any"}
 	default:
-		out.ToolChoice = &toolChoice{Type: "tool", Name: req.ToolChoice}
+		name, err := namedTool(req.ToolChoice)
+		if err != nil {
+			return nil, err
+		}
+		out.ToolChoice = &toolChoice{Type: "tool", Name: name}
 	}
 	return mergeExtra(out, req.Extra)
+}
+
+// namedTool reads the tool name from a named-tool choice, which the Gateway
+// front doors pass as the OpenAI object {"type":"function","function":{"name":...}}.
+// namedTool 从指名工具的选择中读取工具名；Gateway 各前门以 OpenAI 对象
+// {"type":"function","function":{"name":...}} 的形式传递它。
+func namedTool(choice string) (string, error) {
+	var obj struct {
+		Type     string `json:"type"`
+		Function struct {
+			Name string `json:"name"`
+		} `json:"function"`
+	}
+	if json.Unmarshal([]byte(choice), &obj) != nil || obj.Type != "function" || obj.Function.Name == "" {
+		return "", errRequest("tool_choice must be auto, none, required or a named function")
+	}
+	return obj.Function.Name, nil
 }
 
 // contentBlocks turns a message's text and content parts into blocks.

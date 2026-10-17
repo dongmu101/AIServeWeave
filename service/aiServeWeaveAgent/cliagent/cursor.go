@@ -15,10 +15,13 @@ import (
 const cursorPermissions = `{"permissions":{"allow":[],"deny":["Shell(*)","Read(*)","Write(*)","WebFetch(*)"]}}`
 
 func init() {
-	register(&Spec{
-		Kind:        runtime.KindCursor,
-		Label:       "Cursor",
-		Executables: []string{"agent", "cursor-agent"},
+	register(&cliSpec{
+		Kind:  runtime.KindCursor,
+		Label: "Cursor",
+		// cursor-agent first: "agent" is a generic name that an unrelated
+		// program on PATH may also use.
+		// cursor-agent 优先："agent" 是通用名称，PATH 上的无关程序也可能使用它。
+		Executables: []string{"cursor-agent", "agent"},
 		HomeBin:     ".local/bin",
 		PassEnv:     []string{"CURSOR_API_KEY"},
 		SignIn:      []string{"not logged in", "not authenticated", "authentication required", "please log in", "please login", "unauthorized"},
@@ -55,12 +58,14 @@ func cursorDiscover(c *call) ([]string, error) {
 		if !found || strings.HasPrefix(strings.ToLower(text), "available models") {
 			return false, nil
 		}
-		if id = strings.TrimSpace(strings.TrimSuffix(id, " (current)")); id != "" && len(ids) < maxModels {
+		if id = strings.TrimSpace(strings.TrimSuffix(id, " (current)")); id != "" && len(ids) < maxRawModels {
 			ids = append(ids, id)
 		}
 		return false, nil
 	})
-	if signedOut || (errors.Is(err, errExit) && c.signedOut(diag)) {
+	// An empty listing after a clean exit may be a sign-in message on stderr.
+	// 正常退出却列表为空，可能是 stderr 上的未登录提示。
+	if signedOut || ((errors.Is(err, errExit) || (err == nil && len(ids) == 0)) && c.signedOut(diag)) {
 		return nil, ErrAuthentication
 	}
 	if errors.Is(err, errExit) {
@@ -122,7 +127,9 @@ func (p *cursorParser) line(event []byte, text func(string) error) (bool, error)
 			}
 		}
 		var err error
-		p.usage, err = usageFrom(object(obj["usage"]), "inputTokens", "input_tokens")
+		p.usage, err = usageFrom(object(obj["usage"]),
+			[][]string{{"inputTokens", "input_tokens"}, {"cacheReadTokens", "cache_read_input_tokens"}, {"cacheWriteTokens", "cache_creation_input_tokens"}},
+			[][]string{{"outputTokens", "output_tokens"}})
 		p.done = err == nil
 		return p.done, err
 	case "error":

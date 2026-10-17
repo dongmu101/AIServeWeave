@@ -94,7 +94,8 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 		decoder := openai.NewSSEDecoder(resp.Body, maxSSELineBytes, maxSSEEventBytes)
 		var id, model string
 		var input usage
-		tools := map[int]int{} // content block index -> tool call ordinal / 内容块下标 -> 工具调用序号
+		tools := map[int]int{}    // content block index -> tool call ordinal / 内容块下标 -> 工具调用序号
+		hasArgs := map[int]bool{} // tool blocks that received input / 已收到参数的工具块
 		for {
 			_, data, err := decoder.Next()
 			if s.idle != nil {
@@ -103,7 +104,9 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 			if err != nil {
 				switch {
 				case errors.Is(err, openai.ErrSSEDone), errors.Is(err, io.EOF):
-					fail(runtime.ErrorProtocol, "stream ended before message_stop", err)
+					// Not wrapped: consumers test errors.Is(err, io.EOF) for a normal end.
+					// 不包装原错误：消费方用 errors.Is(err, io.EOF) 判断正常结束。
+					fail(runtime.ErrorProtocol, "stream ended before message_stop", io.ErrUnexpectedEOF)
 				case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 					fail(runtime.ErrorTimeout, "stream interrupted", err)
 				default:
@@ -144,19 +147,32 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 					out.Delta.Content = ev.Delta.Text
 				case "input_json_delta":
 					n, ok := tools[ev.Index]
-					if !ok {
-						fail(runtime.ErrorProtocol, "tool input delta for an unknown block", nil)
-						return
+					if !ok || ev.Delta.PartialJSON == "" {
+						continue // server-side tool blocks are not client tool calls / 服务端工具块不是客户端工具调用
 					}
+					hasArgs[ev.Index] = true
 					out.Delta.ToolCalls = []runtime.ToolCallDelta{{Index: n, Function: runtime.FunctionCallDelta{Arguments: ev.Delta.PartialJSON}}}
 				default:
 					continue
 				}
+			case "content_block_stop":
+				n, ok := tools[ev.Index]
+				if !ok || hasArgs[ev.Index] {
+					continue
+				}
+				// A tool called without input streams no delta; send "{}" so the
+				// arguments match the non-streaming response.
+				// 无参工具调用不会流式发送任何增量；补发 "{}"，使参数与非流式响应一致。
+				hasArgs[ev.Index] = true
+				out.Delta.ToolCalls = []runtime.ToolCallDelta{{Index: n, Function: runtime.FunctionCallDelta{Arguments: "{}"}}}
 			case "message_delta":
 				out.FinishReason = finishReason(ev.Delta.StopReason)
 				output := 0
 				if ev.Usage != nil {
 					output = ev.Usage.OutputTokens
+					if ev.Usage.prompt() > 0 {
+						input = *ev.Usage // cumulative counts supersede message_start / 累计值取代 message_start 中的值
+					}
 				}
 				out.Usage = &runtime.Usage{PromptTokens: input.prompt(), CompletionTokens: output, TotalTokens: input.prompt() + output}
 			case "message_stop":
@@ -170,7 +186,7 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 				fail(runtime.ErrorUpstream, message, nil)
 				return
 			default:
-				continue // ping, content_block_stop and future types / ping、content_block_stop 及未来新增类型
+				continue // ping and future types / ping 及未来新增类型
 			}
 			if !s.Send(out) {
 				return

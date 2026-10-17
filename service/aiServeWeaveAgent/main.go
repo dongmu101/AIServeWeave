@@ -13,14 +13,15 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"syscall"
 	"time"
-	"unicode"
 
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
@@ -350,19 +351,31 @@ func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnel
 // A hosted provider's key is read from the environment variable named by
 // api_key_env at this point; an unset variable leaves the key empty, which
 // the provider then rejects as unauthorized rather than failing startup.
+// api_key_env and models apply to hosted kinds only, the same rule the
+// setup page follows, so a CLI's start-up never depends on whether some
+// environment variable happens to be set. Duplicate model IDs are dropped.
 //
 // 托管供应商的 Key 在此处从 api_key_env 指定的环境变量读取；变量未设置时 Key
-// 为空，由供应商以未授权拒绝，而不是让启动失败。
+// 为空，由供应商以未授权拒绝，而不是让启动失败。api_key_env 与 models 只对托管
+// 种类生效（与设置页面的规则相同），本机 CLI 能否启动从不取决于某个环境变量
+// 是否碰巧存在。重复的模型 ID 会被去掉。
 func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 	if len(declared) == 0 {
 		return nil
 	}
 	out := make([]runtime.Config, len(declared))
 	for i, rc := range declared {
-		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL,
-			Models: strings.FieldsFunc(rc.Models, func(r rune) bool { return r == ',' || unicode.IsSpace(r) })}
+		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL}
+		if !out[i].Kind.IsHosted() {
+			continue
+		}
 		if rc.APIKeyEnv != "" {
 			out[i].APIKey = os.Getenv(rc.APIKeyEnv)
+		}
+		for _, id := range rc.Models.IDs() {
+			if !slices.Contains(out[i].Models, id) {
+				out[i].Models = append(out[i].Models, id)
+			}
 		}
 	}
 	return out
@@ -1253,21 +1266,20 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 			return build(cfg, deps)
 		}
 	}
-	// hostedLocal also pins endpoint, key, headers, TLS and, when the
-	// request declares none, the model catalogue to the local declaration.
-	// hostedLocal 还把端点、Key、Headers、TLS 以及（请求未声明时的）模型目录
-	// 固定为本地声明的值。
+	// hostedLocal also pins endpoint, key, headers, TLS and the model
+	// catalogue to the local declaration; a pushed configuration may still
+	// tune timeouts, concurrency and capability overrides, which cannot move
+	// a request off the declared host.
+	// hostedLocal 还把端点、Key、Headers、TLS 与模型目录固定为本地声明的值；
+	// 下发的配置仍可调整超时、并发与能力覆盖，这些都无法让请求离开已声明的主机。
 	hostedLocal := func(build runtime.Factory) runtime.Factory {
 		return localOnly(func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
 			own := local[cfg.ID]
-			if strings.TrimRight(cfg.Normalize().BaseURL, "/") != strings.TrimRight(own.Normalize().BaseURL, "/") {
+			if !sameEndpoint(cfg.Normalize().BaseURL, own.Normalize().BaseURL) {
 				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
 					Message: "hosted runtime base_url must match the local Agent configuration"}
 			}
-			cfg.BaseURL, cfg.APIKey, cfg.Headers, cfg.TLS = own.BaseURL, own.APIKey, own.Headers, own.TLS
-			if len(cfg.Models) == 0 {
-				cfg.Models = own.Models
-			}
+			cfg.BaseURL, cfg.APIKey, cfg.Headers, cfg.TLS, cfg.Models = own.BaseURL, own.APIKey, own.Headers, own.TLS, own.Models
 			return build(cfg, deps)
 		})
 	}
@@ -1294,6 +1306,35 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 		}
 	}
 	return registry, nil
+}
+
+// sameEndpoint compares two base URLs ignoring scheme and host case, a
+// default port and a trailing slash. Unparsable URLs never match. The result
+// only decides whether a pushed configuration is refused; the URL actually
+// used is always the local one.
+//
+// sameEndpoint 比较两个 base URL，忽略协议与主机名的大小写、默认端口以及末尾
+// 斜杠。无法解析的 URL 永不相等。结果只决定是否拒绝下发的配置；实际使用的 URL
+// 始终是本地声明的那一个。
+func sameEndpoint(a, b string) bool {
+	canonical := func(raw string) (string, bool) {
+		u, err := url.Parse(raw)
+		if err != nil || u.Host == "" {
+			return "", false
+		}
+		scheme, port := strings.ToLower(u.Scheme), u.Port()
+		if (scheme == "https" && port == "443") || (scheme == "http" && port == "80") {
+			port = ""
+		}
+		host := strings.ToLower(u.Hostname())
+		if port != "" {
+			host = net.JoinHostPort(host, port)
+		}
+		return scheme + "://" + host + strings.TrimRight(u.EscapedPath(), "/"), true
+	}
+	ca, okA := canonical(a)
+	cb, okB := canonical(b)
+	return okA && okB && ca == cb
 }
 
 // newDependencies builds the production dependency set: the real wall clock,

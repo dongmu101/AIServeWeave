@@ -20,7 +20,7 @@ var piArgs = []string{"--mode", "rpc", "--no-session", "--no-extensions", "--no-
 	"--no-context-files", "--no-builtin-tools", "--no-approve"}
 
 func init() {
-	register(&Spec{
+	register(&cliSpec{
 		Kind:            runtime.KindPi,
 		Label:           "Pi",
 		Executables:     []string{"pi"},
@@ -79,8 +79,10 @@ func piDiscover(c *call) ([]string, error) {
 			return true, ErrProtocol
 		}
 		for _, model := range list {
+			// Each half becomes its own argv value, so each must be safe alone.
+			// 两段各自成为独立的 argv 值，因此每段都必须单独安全。
 			provider, id := str(model, "provider"), str(model, "id")
-			if provider != "" && id != "" {
+			if modelID.MatchString(provider) && modelID.MatchString(id) && !strings.Contains(provider, "/") {
 				ids = append(ids, provider+"/"+id)
 			}
 		}
@@ -90,15 +92,21 @@ func piDiscover(c *call) ([]string, error) {
 		return nil, ErrAuthentication
 	}
 	if err == nil && !answered {
+		if c.signedOut(diag) {
+			return nil, ErrAuthentication
+		}
 		return nil, ErrProtocol
 	}
 	return ids, err
 }
 
-// piParser reads the RPC event stream. agent_settled ends the turn;
-// agent_end is not final because a retry may follow it.
-// piParser 读取 RPC 事件流。agent_settled 结束回合；agent_end 不是最终事件，
-// 之后可能还会重试。
+// piParser reads the RPC event stream. agent_settled ends the turn; agent_end
+// does not, following dbx. A failed attempt (an error event or stopReason
+// "error") aborts the turn at once rather than waiting for a retry, because
+// a retry would repeat text already forwarded.
+// piParser 读取 RPC 事件流。按 dbx 的做法，agent_settled 结束回合，agent_end
+// 不结束。一次失败的尝试（error 事件或 stopReason 为 "error"）立即中止回合，
+// 不等待重试，因为重试会重复已经转发出去的文本。
 type piParser struct {
 	input, output int
 	settled       bool
@@ -134,7 +142,7 @@ func (p *piParser) line(event []byte, text func(string) error) (bool, error) {
 			return false, ErrTurn
 		}
 		usage := object(message["usage"])
-		input, err := count(usage, "input", "inputTokens", "input_tokens")
+		input, err := sumCounts(usage, []string{"input", "inputTokens", "input_tokens"}, []string{"cacheRead"}, []string{"cacheWrite"})
 		if err != nil {
 			return false, err
 		}

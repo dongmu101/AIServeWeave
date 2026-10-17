@@ -44,6 +44,9 @@ package agentconfig
 
 import (
 	"fmt"
+	"reflect"
+	"strings"
+	"unicode"
 
 	"github.com/go-viper/mapstructure/v2"
 	"github.com/spf13/viper"
@@ -167,13 +170,15 @@ type GatewayConfig struct {
 }
 
 // RuntimeConfig declares one local inference backend to register at
-// startup. Kind must name a kind common/runtime's registry knows (ollama,
-// vllm, sglang, comfyui, codex, claude, grok); an unrecognized value is not validated here — it
+// startup. Kind must name a kind common/runtime's registry knows (a local
+// server, a local CLI or a hosted provider; see common/runtime.Kind); an
+// unrecognized value is not validated here — it
 // surfaces as runtime.ErrRuntimeKindUnsupported from manager.Add, the same
 // error an unrecognized -kind would produce anywhere else in this codebase.
 //
 // RuntimeConfig 声明一个启动时要注册的本地推理后端。Kind 必须是
-// common/runtime 注册表认识的种类（ollama、vllm、sglang、comfyui、codex、claude、grok）；这里不
+// common/runtime 注册表认识的种类（本地服务、本机 CLI 或托管供应商，见
+// common/runtime.Kind）；这里不
 // 校验未知取值——它会从 manager.Add 那里以
 // runtime.ErrRuntimeKindUnsupported 的形式暴露出来，与本代码库其他地方一
 // 个不认识的 -kind 产生的错误相同。
@@ -187,17 +192,54 @@ type RuntimeConfig struct {
 	// （默认使用官方端点）。
 	BaseURL string `yaml:"base_url,omitempty"`
 	// APIKeyEnv names the environment variable holding a hosted provider's
-	// API key. The file stores only that name, never the key itself.
+	// API key. The file stores only that name, never the key itself. It is
+	// read for hosted kinds only.
 	// APIKeyEnv 指定保存托管供应商 API Key 的环境变量名。文件只保存变量名，
-	// 从不保存 Key 本身。
+	// 从不保存 Key 本身。只对托管种类读取。
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
-	// Models declares, space- or comma-separated, the catalogue for an
-	// endpoint that cannot list its own models; when set it is
-	// authoritative. It is a string rather than a list so RuntimeConfig
-	// stays comparable.
-	// Models 以空格或逗号分隔，为无法列出自身模型的端点声明模型目录；设置后以它
-	// 为准。用字符串而不是列表，是为了让 RuntimeConfig 保持可比较。
-	Models string `yaml:"models,omitempty"`
+	// Models declares the catalogue for a hosted endpoint that cannot list
+	// its own models; when set it is authoritative. See ModelList for the
+	// accepted spellings.
+	// Models 为无法列出自身模型的托管端点声明模型目录；设置后以它为准。可接受的
+	// 写法见 ModelList。
+	Models ModelList `yaml:"models,omitempty"`
+}
+
+// ModelList is a model catalogue written either as one space- or
+// comma-separated string or as a YAML list; Load turns a list into the
+// string form. It is a string rather than a slice so RuntimeConfig stays
+// comparable with ==, which callers rely on.
+//
+// ModelList 是模型目录，既可以写成一个以空格或逗号分隔的字符串，也可以写成
+// YAML 列表；Load 会把列表转成字符串形式。它用字符串而不是切片，是为了让
+// RuntimeConfig 仍可用 == 比较，调用方依赖这一点。
+type ModelList string
+
+// IDs splits the list on spaces and commas.
+// IDs 按空格与逗号拆分列表。
+func (m ModelList) IDs() []string {
+	return strings.FieldsFunc(string(m), func(r rune) bool { return r == ',' || unicode.IsSpace(r) })
+}
+
+// modelListHook decodes a YAML list into a ModelList.
+// modelListHook 把 YAML 列表解码为 ModelList。
+func modelListHook(from, to reflect.Type, data any) (any, error) {
+	if to != reflect.TypeOf(ModelList("")) || from.Kind() != reflect.Slice {
+		return data, nil
+	}
+	items, ok := data.([]any)
+	if !ok {
+		return data, nil
+	}
+	parts := make([]string, 0, len(items))
+	for _, item := range items {
+		s, ok := item.(string)
+		if !ok {
+			return nil, fmt.Errorf("models entries must be strings")
+		}
+		parts = append(parts, s)
+	}
+	return strings.Join(parts, " "), nil
 }
 
 // Load reads and parses a -config file at path. A parse error is wrapped
@@ -255,7 +297,7 @@ func Save(path string, cfg *Config) error {
 			entry["api_key_env"] = rc.APIKeyEnv
 		}
 		if rc.Models != "" {
-			entry["models"] = rc.Models
+			entry["models"] = string(rc.Models)
 		}
 		runtimes[i] = entry
 	}
@@ -282,9 +324,17 @@ func Save(path string, cfg *Config) error {
 
 // withYAMLTags is the viper.DecoderConfigOption that makes Load's
 // v.Unmarshal read Config's "yaml" struct tags (see structTagName) instead
-// of viper's own default "mapstructure" tag.
+// of viper's own default "mapstructure" tag, and adds modelListHook in front
+// of viper's own decode hooks.
 //
 // withYAMLTags 是让 Load 的 v.Unmarshal 读取 Config 的 "yaml" 结构体标签
 // （见 structTagName）、而不是 viper 自己默认的 "mapstructure" 标签的
-// viper.DecoderConfigOption。
-func withYAMLTags(dc *mapstructure.DecoderConfig) { dc.TagName = structTagName }
+// viper.DecoderConfigOption，并在 viper 自带的解码钩子之前加上 modelListHook。
+func withYAMLTags(dc *mapstructure.DecoderConfig) {
+	dc.TagName = structTagName
+	if dc.DecodeHook == nil {
+		dc.DecodeHook = modelListHook
+		return
+	}
+	dc.DecodeHook = mapstructure.ComposeDecodeHookFunc(modelListHook, dc.DecodeHook)
+}

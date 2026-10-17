@@ -1,6 +1,7 @@
 package cliagent
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 
@@ -44,13 +45,19 @@ func (p *claudeParser) line(event []byte, text func(string) error) (bool, error)
 		return false, nil
 	case "assistant", "user":
 		var message struct {
-			Content []map[string]json.RawMessage `json:"content"`
+			Content json.RawMessage `json:"content"`
 		}
 		if raw := obj["message"]; raw != nil && json.Unmarshal(raw, &message) != nil {
 			return false, ErrProtocol
 		}
+		// A plain-string content (an echoed user prompt) carries no blocks.
+		// 字符串形式的 content（回显的用户提示词）不含任何块。
+		var blocks []map[string]json.RawMessage
+		if trimmed := bytes.TrimSpace(message.Content); len(trimmed) > 0 && trimmed[0] == '[' && json.Unmarshal(trimmed, &blocks) != nil {
+			return false, ErrProtocol
+		}
 		var full strings.Builder
-		for _, block := range message.Content {
+		for _, block := range blocks {
 			switch str(block, "type") {
 			case "tool_use", "tool_result", "server_tool_use", "mcp_tool_use":
 				return false, ErrUnexpectedTool
@@ -58,8 +65,8 @@ func (p *claudeParser) line(event []byte, text func(string) error) (bool, error)
 				full.WriteString(str(block, "text"))
 			}
 		}
-		if str(obj, "type") == "user" {
-			return false, nil
+		if str(obj, "type") == "user" || full.Len() == 0 {
+			return false, nil // keep streamed deltas for the next text message / 保留已流出的增量给下一条文本消息比对
 		}
 		streamed := p.streamed.String()
 		p.streamed.Reset()
@@ -83,7 +90,9 @@ func (p *claudeParser) line(event []byte, text func(string) error) (bool, error)
 			}
 		}
 		var err error
-		p.usage, err = usageFrom(object(obj["usage"]), "input_tokens", "inputTokens")
+		p.usage, err = usageFrom(object(obj["usage"]),
+			[][]string{{"input_tokens", "inputTokens"}, {"cache_read_input_tokens", "cacheReadInputTokens"}, {"cache_creation_input_tokens", "cacheCreationInputTokens"}},
+			[][]string{{"output_tokens", "outputTokens"}})
 		p.done = err == nil
 		return p.done, err
 	case "error":

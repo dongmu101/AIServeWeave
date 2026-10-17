@@ -19,29 +19,68 @@ const (
 	// KindClaude names the locally declared Claude Code Messages adapter.
 	// KindClaude 表示本地声明的 Claude Code Messages 适配器。
 	KindClaude Kind = "claude"
-	// Agent-local headless CLI text adapters (service/aiServeWeaveAgent/cliagent).
-	// Agent 本地的 headless CLI 文本适配器（service/aiServeWeaveAgent/cliagent）。
-	KindGrok      Kind = "grok"
-	KindOpenCode  Kind = "opencode"
-	KindCursor    Kind = "cursor"
-	KindCodeBuddy Kind = "codebuddy"
-	KindQoder     Kind = "qoder"
-	KindPi        Kind = "pi"
 
-	// Hosted OpenAI-compatible providers (common/runtime/hosted).
-	// 托管的 OpenAI 兼容供应商（common/runtime/hosted）。
-	KindOpenAI           Kind = "openai"
-	KindGemini           Kind = "gemini"
-	KindDeepSeek         Kind = "deepseek"
-	KindKimi             Kind = "kimi"
-	KindQwen             Kind = "qwen"
-	KindZhipu            Kind = "zhipu"
-	KindMiniMax          Kind = "minimax"
+	// Agent-local headless CLI text adapters live in
+	// service/aiServeWeaveAgent/cliagent.
+	// Agent 本地的 headless CLI 文本适配器位于 service/aiServeWeaveAgent/cliagent。
+
+	// KindGrok names the Agent-local Grok CLI adapter.
+	// KindGrok 表示 Agent 本地的 Grok CLI 适配器。
+	KindGrok Kind = "grok"
+	// KindOpenCode names the Agent-local OpenCode CLI adapter.
+	// KindOpenCode 表示 Agent 本地的 OpenCode CLI 适配器。
+	KindOpenCode Kind = "opencode"
+	// KindCursor names the Agent-local Cursor Agent CLI adapter.
+	// KindCursor 表示 Agent 本地的 Cursor Agent CLI 适配器。
+	KindCursor Kind = "cursor"
+	// KindCodeBuddy names the Agent-local CodeBuddy Code CLI adapter.
+	// KindCodeBuddy 表示 Agent 本地的 CodeBuddy Code CLI 适配器。
+	KindCodeBuddy Kind = "codebuddy"
+	// KindQoder names the Agent-local Qoder CLI adapter.
+	// KindQoder 表示 Agent 本地的 Qoder CLI 适配器。
+	KindQoder Kind = "qoder"
+	// KindPi names the Agent-local Pi Coding Agent CLI adapter.
+	// KindPi 表示 Agent 本地的 Pi Coding Agent CLI 适配器。
+	KindPi Kind = "pi"
+
+	// Hosted OpenAI-compatible providers live in common/runtime/hosted.
+	// 托管的 OpenAI 兼容供应商位于 common/runtime/hosted。
+
+	// KindOpenAI names the OpenAI API.
+	// KindOpenAI 表示 OpenAI API。
+	KindOpenAI Kind = "openai"
+	// KindGemini names the Gemini API through Google's OpenAI-compatible endpoint.
+	// KindGemini 表示经 Google OpenAI 兼容端点访问的 Gemini API。
+	KindGemini Kind = "gemini"
+	// KindDeepSeek names the DeepSeek API.
+	// KindDeepSeek 表示 DeepSeek API。
+	KindDeepSeek Kind = "deepseek"
+	// KindKimi names the Moonshot Kimi API.
+	// KindKimi 表示月之暗面 Kimi API。
+	KindKimi Kind = "kimi"
+	// KindQwen names the Alibaba Cloud DashScope Qwen API in compatible mode.
+	// KindQwen 表示阿里云百炼通义千问兼容模式 API。
+	KindQwen Kind = "qwen"
+	// KindZhipu names the Zhipu GLM API.
+	// KindZhipu 表示智谱 GLM API。
+	KindZhipu Kind = "zhipu"
+	// KindMiniMax names the MiniMax API.
+	// KindMiniMax 表示 MiniMax API。
+	KindMiniMax Kind = "minimax"
+	// KindOpenAICompatible names any OpenAI-compatible endpoint; base_url is
+	// required.
+	// KindOpenAICompatible 表示任意 OpenAI 兼容端点，必须填写 base_url。
 	KindOpenAICompatible Kind = "openai_compatible"
 
-	// Anthropic Messages providers (common/runtime/anthropic).
-	// Anthropic Messages 供应商（common/runtime/anthropic）。
-	KindAnthropic           Kind = "anthropic"
+	// Anthropic Messages providers live in common/runtime/anthropic.
+	// Anthropic Messages 供应商位于 common/runtime/anthropic。
+
+	// KindAnthropic names the official Anthropic Claude API.
+	// KindAnthropic 表示 Anthropic 官方 Claude API。
+	KindAnthropic Kind = "anthropic"
+	// KindAnthropicCompatible names any Anthropic Messages-compatible endpoint;
+	// base_url is required.
+	// KindAnthropicCompatible 表示任意 Anthropic Messages 兼容端点，必须填写 base_url。
 	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 

@@ -16,7 +16,7 @@ Agent 本地 `kind: grok` / `opencode` / `cursor` / `codebuddy` / `qoder` / `pi`
 - 提示词渲染；
 - 错误类别。
 
-每种 CLI 在自己的文件里登记一份 `Spec`，内容包括：
+每种 CLI 在自己的文件里登记一份 `cliSpec`，内容包括：
 
 - 候选可执行文件名，以及 `$HOME` 下的安装目录；
 - 额外透传的环境变量；
@@ -30,8 +30,8 @@ CodeBuddy 与 Qoder 共用 Claude Code 风格的 `stream-json` 解析器，见 `
 
 ## 启用
 
-1. 以运行 Agent 的同一系统账户登录对应 CLI（例如 `grok login`、`opencode auth login`、`agent login`）。
-2. 确认可执行文件在 Agent 的 PATH 中，或位于下表的 `$HOME` 安装目录。
+1. 以运行 Agent 的同一系统账户登录对应 CLI（例如 `grok login`、`opencode auth login`、`cursor-agent login`）。
+2. 确认可执行文件在 Agent 的 PATH 中，或位于下表的 `$HOME` 安装目录。候选名按表中顺序逐个查找，每个名字先查 PATH、再查安装目录。
 3. 在本地配置中添加运行时，然后重启 Agent：
 
 ```yaml
@@ -52,7 +52,7 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 | --- | --- | --- | --- |
 | `grok` | `grok` | `.grok/bin` | `XAI_API_KEY` |
 | `opencode` | `opencode` | `.opencode/bin` | `XDG_*_HOME`、所有 `*_API_KEY` |
-| `cursor` | `agent`，其次 `cursor-agent` | `.local/bin` | `CURSOR_API_KEY` |
+| `cursor` | `cursor-agent`，其次 `agent`（通用名字，放在后面） | `.local/bin` | `CURSOR_API_KEY` |
 | `codebuddy` | `codebuddy`，其次 `cbc` | — | `CODEBUDDY_*` |
 | `qoder` | `qodercli` | — | `QODER_*` |
 | `pi` | `pi` | — | `PI_CODING_AGENT_DIR`、所有 `*_API_KEY` |
@@ -71,6 +71,17 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 - 上表中各 CLI 额外透传的变量。
 
 `CLAUDECODE` 这类变量自然不会传入。
+
+OpenCode 与 Pi 透传所有 `*_API_KEY`，这同样包括托管供应商用的变量。托管运行时的 `api_key_env` 应使用 Agent 专用的名字（例如 `AISW_OPENAI_KEY`），不要用 `OPENAI_API_KEY` 这类通用名字，否则这两个 CLI 也会拿到这把 Key。
+
+### 用户级配置仍会加载
+
+临时目录只隔离项目级配置。除 Grok 之外，CLI 仍以运维账户的 `HOME` 运行，所以该账户的用户级设置、hooks、记忆文件等仍可能被加载：
+
+- CodeBuddy、Qoder 显式使用 `--setting-sources user`；
+- Cursor、OpenCode、Pi 读取各自的用户配置目录。
+
+建议用一个专用系统账户运行 Agent，该账户下只做 CLI 登录，不放个人配置。
 
 ### 各 CLI 的隔离方式
 
@@ -120,11 +131,11 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 
 | CLI | 提示词传递方式 |
 | --- | --- |
-| Grok | 写入临时文件，以 `--prompt-file` 传入 |
+| Grok | 写入临时目录中的 `prompt.txt`（`0600`），以 `--prompt-file` 传入，随目录一起删除 |
 | Pi | 作为一条 RPC `prompt` 命令发送 |
 | 其余 CLI | 写入 stdin 后关闭管道 |
 
-提示词从不出现在 argv 或进程列表里。stdin 在独立协程中写入，大提示词不会与未读的 stdout 互相等待。
+提示词从不出现在 argv 或进程列表里，只有 Grok 会把它写到磁盘。stdin 在独立协程中写入，大提示词不会与未读的 stdout 互相等待。
 
 ## 模型发现
 
@@ -153,7 +164,7 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 - 输出格式异常；
 - CLI 报告未登录。
 
-每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，最多 256 个模型。
+每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，列表输出最多 1 MiB。过滤前最多保留 4096 个原始条目；过滤去重后最多发布 256 个模型，更长的目录被截断而不是拒绝。
 
 请求只能选择最近一次成功发现的模型 ID，并原样传给 `--model`。Pi 例外：在第一个 `/` 处拆成 `--provider` 与 `--model`。
 
@@ -164,7 +175,7 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 | Grok | 进程以零状态退出 |
 | OpenCode | 进程以零状态退出，且输出了非空文本（没有结束事件） |
 | Cursor、CodeBuddy、Qoder | 出现 `subtype: success`、`is_error` 不为真的 `result` 事件；之后立即结束进程，不等它自行退出 |
-| Pi | 出现 `agent_settled`（`agent_end` 不算，之后可能还有重试） |
+| Pi | 出现 `agent_settled`（`agent_end` 不算）。任何一次尝试失败（`error` 事件或 `stopReason: error`）都立即中止回合，不等待 Pi 的自动重试，因为重试会重复已经转发的文本 |
 
 各 CLI 的用量来源：
 
@@ -173,13 +184,15 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 - Cursor / CodeBuddy / Qoder：`result.usage`；
 - Pi：assistant 的 `message_end`，按消息累加。
 
+输入用量包含缓存读取与缓存写入的 token，输出用量包含推理 token（CLI 给出时）。只统计未缓存部分会少算用量，租户配额就能被绕过。
+
 文本按以下规则提取：
 
 - Cursor 只把带 `timestamp_ms` 的 assistant 事件当作增量，整条消息不重复输出。
 - Qoder 先流式发送的 `text_delta` 与之后的完整 assistant 文本按前缀去重。
 - Cursor / CodeBuddy / Qoder 若在 `result` 之前没有任何文本，就使用 `result` 中的文本。
 
-非零退出即使已经输出了部分文本，也按失败处理。
+非零退出即使已经输出了部分文本，也按失败处理。进程以零状态退出、却没有给出成功条件时，如果输出中出现了未登录措辞，按 `unauthorized` 处理，否则按协议错误处理。
 
 ## 支持范围
 
@@ -217,9 +230,11 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 - 超时；
 - Agent 关闭。
 
-单行事件与提示词各最多 1 MiB；每个回合的文本最多 1 MiB、最多 10000 行。
+单行事件与提示词各最多 1 MiB；每个回合的文本最多 1 MiB，进程的全部 stdout 最多 64 MiB。
 
-文本增量逐条同步转发，不预读。
+文本增量逐条同步转发，不预读。消费者读得慢时，转发会阻塞在背压上，但仍响应客户端断开、超时与 Agent 关闭。
+
+逐条转发只对流式输出增量的方言成立。CodeBuddy、Qoder 与 OpenCode 可能只在消息结束时输出整段文本，这期间流上没有任何事件；回复较长时，可能需要调大 `stream_idle_timeout`。
 
 错误只含固定类别，不包含 CLI 输出、提示词或路径：
 
@@ -229,6 +244,10 @@ Gateway 下发的配置不能创建未在本地声明的 ID，也不能把已声
 | 找不到可执行文件 | `connection_error` |
 | 回合失败 | `upstream_error` |
 | 输出异常或工具事件 | `protocol_error` |
+
+## 平台
+
+只支持 darwin 与 linux：需要进程组来终止 CLI 派生的子进程。在其他系统上，每次启动 CLI 进程都会直接失败，运行时不会就绪。
 
 ## 验证
 

@@ -25,10 +25,11 @@ const grokDisallowedTools = "run_terminal_command,read_file,search_replace,list_
 	"workflow,enter_plan_mode,exit_plan_mode,ask_user_question,image_gen,image_edit,image_to_video,reference_to_video,write,bash,shell,edit,Glob,Grep"
 
 func init() {
-	register(&Spec{
+	register(&cliSpec{
 		Kind:        runtime.KindGrok,
 		Label:       "Grok",
 		Executables: []string{"grok"},
+		PromptFile:  true,
 		HomeBin:     ".grok/bin",
 		PassEnv:     []string{"XAI_API_KEY"},
 		SignIn:      []string{"not signed in", "not authenticated", "not logged", "please login", "login required", "authentication required"},
@@ -127,6 +128,9 @@ func grokDiscoverACP(c *call) ([]string, error) {
 		return nil, ErrAuthentication
 	}
 	if err == nil && !answered {
+		if c.signedOut(diag) {
+			return nil, ErrAuthentication
+		}
 		return nil, ErrProtocol
 	}
 	return ids, err
@@ -183,12 +187,14 @@ func grokDiscoverListing(c *call) ([]string, error) {
 		if !ok {
 			return false, nil
 		}
-		if fields := strings.Fields(rest); len(fields) > 0 && len(ids) < maxModels {
+		if fields := strings.Fields(rest); len(fields) > 0 && len(ids) < maxRawModels {
 			ids = append(ids, strings.Trim(fields[0], "(),"))
 		}
 		return false, nil
 	})
-	if signedOut || (errors.Is(err, errExit) && c.signedOut(diag)) {
+	// An empty listing after a clean exit may be a sign-in message on stderr.
+	// 正常退出却列表为空，可能是 stderr 上的未登录提示。
+	if signedOut || ((errors.Is(err, errExit) || (err == nil && len(ids) == 0)) && c.signedOut(diag)) {
 		return nil, ErrAuthentication
 	}
 	if errors.Is(err, errExit) {
@@ -216,7 +222,8 @@ func (p *grokParser) line(event []byte, text func(string) error) (bool, error) {
 		return false, ErrUnexpectedTool
 	case "end":
 		var err error
-		p.usage, err = usageFrom(object(obj["usage"]), "input_tokens", "prompt_tokens", "inputTokens")
+		p.usage, err = usageFrom(object(obj["usage"]), [][]string{{"input_tokens", "prompt_tokens", "inputTokens"}},
+			[][]string{{"output_tokens", "completion_tokens", "outputTokens"}})
 		return false, err
 	case "error":
 		return false, ErrTurn
@@ -228,26 +235,24 @@ func (p *grokParser) line(event []byte, text func(string) error) (bool, error) {
 
 func (p *grokParser) finish() (*runtime.Usage, error) { return p.usage, nil }
 
-// usageFrom reads input tokens from inputKeys and output tokens from the
-// matching output spellings; nil obj means no usage.
-// usageFrom 从 inputKeys 读取输入 token，从对应的输出写法读取输出 token；
-// obj 为 nil 表示没有用量。
-func usageFrom(obj map[string]json.RawMessage, inputKeys ...string) (*runtime.Usage, error) {
+// usageFrom sums the input groups into prompt tokens and the output groups
+// into completion tokens (see sumCounts); nil obj means no usage. Dialects
+// that report cached input separately list it as its own input group, so
+// cache hits still count toward quota.
+// usageFrom 把各输入组相加为 prompt token，各输出组相加为 completion token
+// （见 sumCounts）；obj 为 nil 表示没有用量。单独报告缓存输入的方言把它列为独立
+// 的输入组，使缓存命中同样计入配额。
+func usageFrom(obj map[string]json.RawMessage, input, output [][]string) (*runtime.Usage, error) {
 	if obj == nil {
 		return nil, nil
 	}
-	outputKeys := make([]string, 0, len(inputKeys))
-	for _, key := range inputKeys {
-		key = strings.Replace(strings.Replace(key, "input", "output", 1), "prompt", "completion", 1)
-		outputKeys = append(outputKeys, key)
-	}
-	input, err := count(obj, inputKeys...)
+	in, err := sumCounts(obj, input...)
 	if err != nil {
 		return nil, err
 	}
-	output, err := count(obj, outputKeys...)
+	out, err := sumCounts(obj, output...)
 	if err != nil {
 		return nil, err
 	}
-	return tokenUsage(input, output), nil
+	return tokenUsage(in, out), nil
 }

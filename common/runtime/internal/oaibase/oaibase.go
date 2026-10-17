@@ -66,6 +66,9 @@ type Options struct {
 	// AuthHeader 与 MaxCompletionTokens 透传给 openai.ClientConfig。
 	AuthHeader          string
 	MaxCompletionTokens bool
+	// RefuseRedirects is passed to openai.ClientConfig; remote providers set it.
+	// RefuseRedirects 透传给 openai.ClientConfig；远程供应商设置它。
+	RefuseRedirects bool
 }
 
 // NewWithOptions is New with explicit Options.
@@ -95,6 +98,7 @@ func NewWithOptions(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependen
 		VersionedBaseURL:    opts.VersionedBaseURL,
 		AuthHeader:          opts.AuthHeader,
 		MaxCompletionTokens: opts.MaxCompletionTokens,
+		RefuseRedirects:     opts.RefuseRedirects,
 	})
 	if err != nil {
 		return nil, &runtime.RuntimeError{

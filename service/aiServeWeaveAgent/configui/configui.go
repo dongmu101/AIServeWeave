@@ -263,8 +263,8 @@ func formValuesFromConfig(cfg *agentconfig.Config) formValues {
 	runtimeLines := make([]string, 0, len(cfg.Runtimes))
 	for _, rc := range cfg.Runtimes {
 		line := rc.ID + "," + rc.Kind + "," + rc.BaseURL
-		if rc.APIKeyEnv != "" || rc.Models != "" {
-			line += "," + rc.APIKeyEnv + "," + strings.Join(strings.FieldsFunc(rc.Models, func(r rune) bool { return r == ',' || r == ' ' }), " ")
+		if runtime.Kind(rc.Kind).IsHosted() && (rc.APIKeyEnv != "" || rc.Models != "") {
+			line += "," + rc.APIKeyEnv + "," + strings.Join(rc.Models.IDs(), " ")
 		}
 		runtimeLines = append(runtimeLines, line)
 	}
@@ -368,15 +368,20 @@ func parseLabels(s string) map[string]string {
 	return out
 }
 
-// parseRuntimes parses one "id,kind,base_url[,api_key_env[,models]]"
-// declaration per line into agentconfig.RuntimeConfig, models being
+// parseRuntimes parses one declaration per line into
+// agentconfig.RuntimeConfig: "id,kind,base_url" for every kind, where
+// base_url is the rest of the line as before, and
+// "id,kind,base_url[,api_key_env[,models]]" for hosted kinds, models being
 // space-separated. A line missing a required field is dropped rather than
 // failing the whole save. CLI runtimes have no base_url; hosted providers
-// may leave it empty for the official endpoint.
+// may leave it empty for the official endpoint, except the two compatible
+// kinds, which have none.
 //
-// parseRuntimes 解析每行一条的 "id,kind,base_url[,api_key_env[,models]]"
-// 声明，models 以空格分隔。缺失必填字段的行被略过，而不是让整次保存失败。
-// CLI 运行时没有 base_url；托管供应商可留空以使用官方端点。
+// parseRuntimes 每行解析一条声明：所有种类都是 "id,kind,base_url"，base_url 与
+// 以往一样取该行剩余部分；托管种类为 "id,kind,base_url[,api_key_env[,models]]"，
+// models 以空格分隔。缺失必填字段的行被略过，而不是让整次保存失败。CLI 运行时
+// 没有 base_url；托管供应商可留空以使用官方端点，但两种 compatible 没有官方端点，
+// 必须填写。
 func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 	var out []agentconfig.RuntimeConfig
 	for _, line := range strings.Split(s, "\n") {
@@ -384,21 +389,20 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 		if line == "" {
 			continue
 		}
-		parts := strings.SplitN(line, ",", 5)
-		if len(parts) < 3 {
+		parts := strings.SplitN(line, ",", 3)
+		if len(parts) != 3 {
 			continue
 		}
-		for len(parts) < 5 {
-			parts = append(parts, "")
-		}
-		id, kind, baseURL := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), strings.TrimSpace(parts[2])
+		id, kind, rest := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), parts[2]
 		k := runtime.Kind(kind)
-		if id == "" || kind == "" || (baseURL == "" && !k.IsLocalCLI() && !k.IsHosted()) {
-			continue
-		}
-		rc := agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: baseURL}
+		rc := agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: strings.TrimSpace(rest)}
 		if k.IsHosted() {
-			rc.APIKeyEnv, rc.Models = strings.TrimSpace(parts[3]), strings.Join(strings.Fields(parts[4]), " ")
+			fields := append(strings.SplitN(rest, ",", 3), "", "")
+			rc.BaseURL, rc.APIKeyEnv = strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
+			rc.Models = agentconfig.ModelList(strings.Join(agentconfig.ModelList(fields[2]).IDs(), " "))
+		}
+		if id == "" || kind == "" || (rc.BaseURL == "" && !k.IsLocalCLI() && runtime.DefaultBaseURL(k) == "") {
+			continue
 		}
 		out = append(out, rc)
 	}
@@ -585,7 +589,7 @@ button:hover { background: #1d4ed8; }
 <div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
 <optgroup label="本地服务"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="comfyui">ComfyUI</option></optgroup>
 <optgroup label="本机 CLI"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
-<optgroup label="托管供应商"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted">Anthropic Compatible</option><option value="openai_compatible" data-group="hosted">OpenAI Compatible / Custom</option></optgroup>
+<optgroup label="托管供应商"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted" data-url-required="1">Anthropic Compatible</option><option value="openai_compatible" data-group="hosted" data-url-required="1">OpenAI Compatible / Custom</option></optgroup>
 </select></label></div>
 <div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址；请先在运行 Agent 的账户下登录。</p></div>
 <div class="field runtime-hosted" hidden><label>Key 环境变量 <span>API key env</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
@@ -729,7 +733,7 @@ function syncRuntimes() {
     return fields.join(',');
   }).join('\n');
 }
-function addRuntime(id = '', kind = 'ollama', url = '', keyEnv = '', models = '') {
+function addRuntime(id = '', kind = 'ollama', rest = '') {
   const row = document.getElementById('runtime-card-template').content.firstElementChild.cloneNode(true);
   const idInput = row.querySelector('.runtime-id');
   const kindInput = row.querySelector('.runtime-kind');
@@ -739,15 +743,22 @@ function addRuntime(id = '', kind = 'ollama', url = '', keyEnv = '', models = ''
     kindInput.add(new Option(kind + '（未知类型）', kind));
   }
   kindInput.value = kind;
-  urlInput.value = url;
-  row.querySelector('.runtime-key-env').value = keyEnv;
-  row.querySelector('.runtime-models').value = models;
+  // Hosted kinds append ",api_key_env,models"; for other kinds the rest of
+  // the line is the URL, as before. / 托管种类在后面追加 ",api_key_env,models"；
+  // 其他种类与以往一样，行的剩余部分就是 URL。
+  const option = kindInput.selectedOptions[0];
+  const fields = option && option.dataset.group === 'hosted' ? rest.split(',') : [rest];
+  urlInput.value = (fields[0] || '').trim();
+  row.querySelector('.runtime-key-env').value = (fields[1] || '').trim();
+  row.querySelector('.runtime-models').value = fields.slice(2).join(' ').trim();
   function updateKind() {
-    const group = (kindInput.selectedOptions[0] || {}).dataset?.group;
+    const option = kindInput.selectedOptions[0];
+    const group = option ? option.dataset.group : undefined;
     const cli = group === 'cli', hosted = group === 'hosted';
+    const urlRequired = !cli && (!hosted || (option && option.dataset.urlRequired === '1'));
     urlInput.disabled = cli;
-    urlInput.required = !cli && !hosted;
-    urlInput.placeholder = hosted ? '留空使用官方端点' : 'http://127.0.0.1:11434';
+    urlInput.required = urlRequired;
+    urlInput.placeholder = hosted ? (urlRequired ? 'https://llm.example.com/v1' : '留空使用官方端点') : 'http://127.0.0.1:11434';
     urlInput.closest('label').hidden = cli;
     row.querySelector('.runtime-auth').hidden = !cli;
     row.querySelectorAll('.runtime-hosted').forEach(field => { field.hidden = !hosted; });
@@ -768,7 +779,7 @@ function addRuntime(id = '', kind = 'ollama', url = '', keyEnv = '', models = ''
 const initialRuntimes = declarations.value.split('\n').filter(line => line.trim());
 initialRuntimes.forEach(line => {
   const parts = line.split(',');
-  addRuntime((parts[0] || '').trim(), (parts[1] || '').trim(), (parts[2] || '').trim(), (parts[3] || '').trim(), (parts.slice(4).join(',') || '').trim());
+  addRuntime((parts[0] || '').trim(), (parts[1] || '').trim(), parts.slice(2).join(','));
 });
 document.getElementById('runtime-add').addEventListener('click', () => { addRuntime().focus(); });
 declarations.hidden = true;

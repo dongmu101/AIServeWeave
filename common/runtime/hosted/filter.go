@@ -29,7 +29,11 @@ func openAINonChat(id string) bool {
 	return matches(id,
 		[]string{"babbage-002", "chatgpt-image", "computer-use", "dall-e", "davinci-002", "gpt-image", "omni-moderation", "sora",
 			"text-embedding", "text-moderation", "tts", "whisper"},
-		[]string{"-audio", "-realtime", "-transcribe", "-tts"})
+		// "-pro", "codex" and "deep-research" models are Responses-only and
+		// fail on chat/completions.
+		// "-pro"、"codex" 与 "deep-research" 模型只支持 Responses 接口，调用
+		// chat/completions 会失败。
+		[]string{"-audio", "-realtime", "-transcribe", "-tts", "-pro", "codex", "deep-research"})
 }
 
 func geminiNonChat(id string) bool {

@@ -34,11 +34,17 @@ var forbiddenConfigHeaders = map[string]bool{
 }
 
 // Normalize returns a copy of c with zero-value duration and concurrency
-// fields filled in with their documented defaults, and BaseURL's trailing
-// slash trimmed. It does not modify c. An explicit negative value on a
-// duration or MaxConcurrent is preserved as-is (the documented opt-out of a
-// default), and an invalid BaseURL is left unchanged for Validate to
-// reject with a clear error rather than normalized away.
+// fields filled in with their documented defaults, an empty BaseURL of a
+// hosted kind set to DefaultBaseURL, and BaseURL's trailing slash trimmed.
+// It does not modify c. An explicit negative value on a duration or
+// MaxConcurrent is preserved as-is (the documented opt-out of a default),
+// and an invalid BaseURL is left unchanged for Validate to reject with a
+// clear error rather than normalized away.
+//
+// Normalize 返回 c 的副本：零值的期限与并发字段填入文档给出的默认值，托管种类
+// 为空的 BaseURL 填入 DefaultBaseURL，并去掉 BaseURL 末尾的斜杠。它不修改 c。
+// 期限或 MaxConcurrent 上显式的负值原样保留（这是文档约定的关闭默认值方式）；
+// 无效的 BaseURL 保持不变，交给 Validate 以清晰的错误拒绝，而不是被规整掉。
 func (c Config) Normalize() Config {
 	n := c
 

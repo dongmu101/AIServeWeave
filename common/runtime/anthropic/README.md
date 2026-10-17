@@ -18,7 +18,9 @@ Gateway 的原生 `/v1/messages` 通道与 Claude Code CLI 会话绑定，依赖
 | `anthropic` | `https://api.anthropic.com` | `x-api-key` |
 | `anthropic_compatible` | 无，必填 | `x-api-key` + `Authorization: Bearer`（兼容端点做法不一，两种都发） |
 
-每个请求都携带 `anthropic-version: 2023-06-01`，可以在 Headers 里用其他值覆盖。
+每个请求都携带 `anthropic-version: 2023-06-01`，可以在 Headers 里用其他值覆盖（请求头名称不区分大小写）。
+
+重定向一律不跟随，以 `protocol_error`（"redirect not followed"）返回：Go 跨主机重定向时会转发 `x-api-key` 这类自定义请求头，跟随重定向就可能把 Key 带到未声明的地址。
 
 `base_url` 末尾带不带 `/v1` 都可以，不会拼出重复的 `/v1`。
 
@@ -58,17 +60,18 @@ Messages 要求角色交替，所以相邻的同角色消息会被合并。
 | --- | --- |
 | `auto` / `none` | 原样传递 |
 | `required` | `any` |
-| 其他值 | 按工具名指定 |
+| 指名工具 `{"type":"function","function":{"name":"x"}}`（Gateway 各前门统一传递的形状） | `{"type":"tool","name":"x"}` |
+| 其他值 | 拒绝 |
 
 **输出上限与采样参数**
 
 - `max_tokens` 缺省为 4096（Messages 要求必填）。
-- `temperature`、`top_p` 和 `stop`（作为 `stop_sequences`）照常传递。
-- `seed` 不被支持，拒绝。
+- `temperature`、`top_p` 和 `stop`（作为 `stop_sequences`）照常传递。部分新模型不接受同时设置 `temperature` 与 `top_p`，这类 400 会原样作为上游错误返回。
+- `seed` 和 `text` 以外的 `response_format`（结构化输出）不被支持，拒绝，即使运维通过能力覆盖声明了结构化输出也不会被静默丢弃。
 
 **扩展字段**
 
-`Extra` 可以追加顶层字段（例如 `metadata`、`thinking`），但不能覆盖本包已写入的字段。
+`Extra` 可以追加顶层字段（例如 `metadata`），但不能覆盖本包已写入的字段。不建议通过 `Extra` 开启 `thinking`：响应中的 thinking 块会被丢弃，多轮工具调用回传历史时无法重建，上游会拒绝；默认的 4096 输出上限也可能小于 `budget_tokens`。
 
 **错误文本**
 
@@ -100,12 +103,15 @@ Messages 要求角色交替，所以相邻的同角色消息会被合并。
 另有几条规则：
 
 - 在 `message_stop` 之前断流，报协议错误，不当作正常结束。
+- 服务端工具块（如 `server_tool_use`、`mcp_tool_use`）的参数增量被忽略，它们不是客户端工具调用。
+- 没有参数的工具调用在 `content_block_stop` 时补发 `{}`，与非流式响应一致。
+- 输入用量取自 `message_start`；`message_delta` 携带非零的累计输入用量时以它为准。
 - 上游的 `error` 事件报 `upstream_error`，消息中的 Key 会被脱敏。
 - 空闲超过 `stream_idle_timeout` 时中止。
 
 ## 模型目录与能力
 
-模型目录翻页读取 `GET /v1/models?limit=1000&after_id=…`，最多 16 页。声明了 `models` 时以声明为准，端点没有该路由（404/405）时也接受声明。
+模型目录翻页读取 `GET /v1/models?limit=1000&after_id=…`，最多 16 页。声明了 `models` 时以声明为准，端点没有该路由（404/405）时也接受声明；没有声明时报上游错误，并提示声明 `models`。
 
 | 能力 | `anthropic` | `anthropic_compatible` |
 | --- | --- | --- |

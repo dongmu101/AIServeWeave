@@ -30,7 +30,7 @@ dbx 界面上的「Custom」对应 `openai_compatible`；如果端点是 Message
 | `minimax` | `https://api.minimaxi.com/v1` | 国际站可改为 `https://api.minimax.io/v1`；输出上限以 `max_completion_tokens` 发送 |
 | `openai_compatible` | 无，必填 | |
 
-Key 以 `Authorization: Bearer` 发送。
+Key 以 `Authorization: Bearer` 发送。重定向一律不跟随，以 `protocol_error`（"redirect not followed"）返回，Key 不会被带到未声明的主机。
 
 ## 声明
 
@@ -40,7 +40,7 @@ Key 以 `Authorization: Bearer` 发送。
 runtimes:
   - id: openai
     kind: openai
-    api_key_env: OPENAI_API_KEY      # 只存环境变量名
+    api_key_env: AISW_OPENAI_KEY     # 只存环境变量名
   - id: my-gateway
     kind: openai_compatible
     base_url: https://llm.example.com/v1
@@ -50,11 +50,15 @@ runtimes:
 
 ### Key 只留在 Agent 本机
 
-Key 只在 Agent 启动时从 `api_key_env` 指定的环境变量读取，不写进配置文件，也不过隧道。环境变量没有设置时 Key 为空：供应商会以 `unauthorized` 拒绝，Agent 本身照常启动。
+Key 只在 Agent 启动时从 `api_key_env` 指定的环境变量读取，不写进配置文件，也不过隧道。环境变量没有设置时 Key 为空：供应商会以 `unauthorized` 拒绝，Agent 本身照常启动。`api_key_env` 与 `models` 只对托管种类生效，写在其他种类上会被忽略。
+
+建议给这些变量起 Agent 专用的名字（例如 `AISW_OPENAI_KEY`），不要直接用 `OPENAI_API_KEY`：本机 CLI 中的 OpenCode 与 Pi 会透传所有 `*_API_KEY` 变量，用通用名字会让它们也拿到这把 Key。
+
+`models` 可以写成空格或逗号分隔的字符串，也可以写成 YAML 列表；重复项会被去掉。
 
 这些 ID 只能在本地声明，Gateway 下发的配置不能新建它们。
 
-Gateway 下发同一个 ID 时，`base_url` 归一化后必须与本地声明一致，否则拒绝创建。端点、Key、Headers 与 TLS 始终取本地值，所以即使 Gateway 被攻破，也无法把本机 Key 发到其他地址。
+Gateway 下发同一个 ID 时，`base_url` 必须与本地声明指向同一地址（协议与主机名不区分大小写，忽略默认端口与末尾斜杠），否则拒绝创建。端点、Key、Headers、TLS 与模型目录始终取本地值，所以即使 Gateway 被攻破，也无法把本机 Key 发到其他地址；下发的配置只能调整超时、并发与能力覆盖。
 
 ## 模型目录
 
@@ -63,11 +67,11 @@ Gateway 下发同一个 ID 时，`base_url` 归一化后必须与本地声明一
 - 保持供应商的顺序；
 - 去掉重复项；
 - 按 dbx 的规则去掉非聊天模型：
-  - OpenAI：嵌入、图像、语音、审核、实时等；
+  - OpenAI：嵌入、图像、语音、审核、实时等，另外去掉只支持 Responses 接口的 `-pro`、`codex`、`deep-research` 模型；
   - Gemini：嵌入、图像、Live、TTS 等；
   - Qwen：语音、图像、OCR、重排等。
 
-声明了 `models` 时，以声明为准。端点没有模型列表路由（404/405）时也接受声明，Probe 会以 `IdentityVerified=false` 标出这一点。认证失败（401/403）从不被掩盖。
+声明了 `models` 时，以声明为准。端点没有模型列表路由（404/405）时也接受声明，Probe 会以 `IdentityVerified=false` 标出这一点；没有声明时报上游错误，并提示声明 `models`。认证失败（401/403）从不被掩盖。
 
 列表为空时，Discover 会给出警告，提示声明 `models`。
 
