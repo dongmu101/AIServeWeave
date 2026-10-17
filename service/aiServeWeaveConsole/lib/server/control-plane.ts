@@ -142,13 +142,22 @@ export async function streamControlPlane(call: StreamedCall): Promise<StreamedRe
   const url = `${config.controlPlaneUrl}${call.path}${call.search ?? ""}`;
   const headers = new Headers(call.requestHeaders);
   headers.set("Authorization", `Bearer ${call.token}`);
+  // The deadline covers reaching the control plane and receiving its headers,
+  // not the body: a multi-megabyte bundle to a slow browser legitimately takes
+  // longer than any request timeout, and AbortSignal.timeout would cut it off
+  // mid-stream. A client that goes away cancels the body instead.
+  // 截止时间只覆盖连上控制面并收到响应头，不覆盖响应体：几兆的打包文件送往慢速浏览器
+  // 本来就会超过任何请求超时，AbortSignal.timeout 会把它从中间截断。客户端离开时
+  // 取消的是响应体本身。
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("upstream headers timed out", "TimeoutError")), config.timeoutMs);
   try {
     const response = await fetch(url, {
       method: call.method,
       headers,
       cache: "no-store",
       redirect: "manual",
-      signal: AbortSignal.timeout(config.timeoutMs),
+      signal: controller.signal,
     });
     const passed = new Headers();
     for (const name of call.responseHeaders) {
@@ -158,5 +167,7 @@ export async function streamControlPlane(call: StreamedCall): Promise<StreamedRe
     return { kind: "response", status: response.status, headers: passed, body: response.body };
   } catch (error) {
     return isTimeout(error) ? { kind: "timeout" } : { kind: "unreachable" };
+  } finally {
+    clearTimeout(timer);
   }
 }

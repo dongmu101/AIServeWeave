@@ -153,7 +153,9 @@ export function WorkflowTemplatesView() {
 
   async function selectTemplate(id: string) {
     setTemplateID(id); setCurrent(null); setNotFound(false); setSelected(null); setStatus(null); setStatusError(false); setVerdict(null); setError(null);
-    setDraft(emptyDraft); setGraphText("{}"); setWorkflowGraphText(null); setEditorEdited(false); setVisibleTenantsText("");
+    // The editor is closed rather than left showing the previous template, whose graph an export would otherwise copy into this one.
+    // 关闭编辑器而不是让它继续显示上一个模板——否则一次导出会把那张图复制进这个模板。
+    setDraft(emptyDraft); setGraphText("{}"); setWorkflowGraphText(null); setEditorEdited(false); setEditorOpen(false); setVisibleTenantsText("");
     if (!id.trim()) return;
     reads.current.invalidate();
     const acceptCurrent = reads.current.begin("current"), acceptHistory = reads.current.begin("history"), acceptStatus = reads.current.begin("status");

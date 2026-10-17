@@ -314,10 +314,10 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 
 | 层 | 落点 |
 | --- | --- |
-| 纯逻辑 | `lib/console/comfy-editor.ts`：编辑器路径、上游解析（逐段重编码，拒绝 `.`/`..`/控制字符，方法限 GET/HEAD/POST/DELETE）、子应用网络允许列表、导出校验（`parseEditorExport`）、假 WebSocket 脚本；`lib/console/workflow-templates.ts` 新增 `workflow` 字段、`MAX_WORKFLOW_BYTES`，`MAX_CONTENT_BYTES` 改为 8 MiB + 256 KiB |
+| 纯逻辑 | `lib/console/comfy-editor.ts`：编辑器路径、上游解析（逐段重编码，拒绝 `.`/`..`/控制字符，方法限 GET/HEAD/POST/DELETE）、子应用网络允许列表、导出校验（`parseEditorExport`，剥离画布视口 `extra.ds`）、假 WebSocket 脚本；`lib/console/workflow-templates.ts` 新增 `workflow` 字段、`MAX_WORKFLOW_BYTES`，`MAX_CONTENT_BYTES` 改为 8 MiB + 256 KiB |
 | 转发 | `app/api/operator/comfy-editor/[...path]/route.ts` + `lib/server/control-plane.ts` 的 `streamControlPlane`（流式、只回传固定响应头、写请求体有界读取后丢弃） |
-| 宿主 | `components/console/comfy-editor.tsx`：动态加载 wujie，`load`/`exportGraph`/`toggleAppMode` 句柄；程序化载入后 1 秒内的变更事件不算作运维编辑 |
-| 页面 | `workflow-templates-view.tsx`：布局只在与文本框图文本一致时随发布提交，手改 JSON 后提示布局失效；导出含目录外节点时拒绝并列出节点类型 |
+| 宿主 | `components/console/comfy-editor.tsx`：动态加载 wujie（每次挂载使用独立实例名，避免异步销毁误拆新实例），`load`/`exportGraph`/`toggleAppMode` 句柄；程序化载入后 1 秒内的变更事件不算作运维编辑 |
+| 页面 | `workflow-templates-view.tsx`：布局只在与文本框图文本一致时随发布提交，手改 JSON 后提示布局失效；切换模板时关闭编辑器，避免把上一个模板的图导出进当前草稿；导出含目录外节点时拒绝并列出节点类型 |
 
 验证：Node 测试新增 `lib/console/comfy-editor.test.ts`（上游解析、允许列表、导出校验、`workflow` 字段、假 WebSocket）；用真实控制面桩（Go）+ 真实前端发布包 + 本仓库 `bridge.js` + 真实节点目录在专用 Chrome 里端到端验证了 API 图载入、连线保留、文件下拉清空后已有取值保留、二次载入 UI 工作流后导出一致、目录外节点被列入 `missing`、外连（huggingface）被允许列表拦下。**未验证**：经 Next.js 转发路由与真实平台会话的整页交互（需要可登录的控制面与 Console 构建），以及 `pnpm build` 下 wujie 的动态导入。
 

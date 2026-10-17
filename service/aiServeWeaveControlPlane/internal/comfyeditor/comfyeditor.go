@@ -58,18 +58,18 @@ const bridgePath = "extensions/aiserveweave/bridge.js"
 //go:embed bridge.js
 var bridgeJS []byte
 
-// Settings is the fixed settings document every editor session starts from.
+// editorSettings is the fixed settings document every editor session starts from.
 // The locale is pinned so node titles exported into _meta.title do not depend
 // on which operator's browser published the template — otherwise the same
 // graph would digest differently per browser language. Workflow persistence
 // is off so one operator's last graph is never restored into another's
 // session from browser storage.
 //
-// Settings 是每个编辑器会话起步时固定的设置文档。语言被锁定，使导出到
+// editorSettings 是每个编辑器会话起步时固定的设置文档。语言被锁定，使导出到
 // _meta.title 的节点标题不取决于是哪位运维的浏览器发布了模板——否则同一张图会因
 // 浏览器语言不同而得到不同摘要。工作流持久化被关闭，使一名运维最后编辑的图永远不会
 // 经浏览器存储恢复到另一名运维的会话里。
-var Settings = map[string]any{
+var editorSettings = map[string]any{
 	"Comfy.Locale":                           "zh",
 	"Comfy.TutorialCompleted":                true,
 	"Comfy.Workflow.Persist":                 false,
@@ -95,12 +95,25 @@ type Server struct {
 //
 // New 校验 distDir 是一份已解压的 ComfyUI_frontend 发布包，并一次性索引其核心扩展。
 // 它宁可失败也不提供一个残缺的编辑器：配置了却为空的目录是值得停下来的部署错误。
-func New(distDir string) (*Server, error) {
+func New(distDir string) (_ *Server, err error) {
 	if distDir == "" {
 		return nil, errors.New("comfyeditor: dist directory is empty")
 	}
-	dist := os.DirFS(distDir)
-	if _, err := fs.Stat(dist, "index.html"); err != nil {
+	// os.Root, not os.DirFS: a symlink inside the release can never resolve
+	// to a file outside it. The root stays open for the server's lifetime.
+	// 用 os.Root 而不是 os.DirFS：发布包里的符号链接永远无法解析到包外的文件。
+	// root 在服务器的整个生命周期内保持打开。
+	root, err := os.OpenRoot(distDir)
+	if err != nil {
+		return nil, fmt.Errorf("comfyeditor: %s is not an unpacked ComfyUI_frontend release (no index.html)", distDir)
+	}
+	defer func() {
+		if err != nil {
+			_ = root.Close()
+		}
+	}()
+	dist := root.FS()
+	if _, err = fs.Stat(dist, "index.html"); err != nil {
 		return nil, fmt.Errorf("comfyeditor: %s is not an unpacked ComfyUI_frontend release (no index.html)", distDir)
 	}
 	// Every .js under extensions/, as ComfyUI's own server lists them; the
@@ -108,7 +121,7 @@ func New(distDir string) (*Server, error) {
 	// 与 ComfyUI 自己的服务端一样列出 extensions/ 下的每个 .js；发布包只带核心扩展，
 	// 因此这里不可能出现第三方脚本。
 	var exts []string
-	err := fs.WalkDir(dist, "extensions", func(p string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(dist, "extensions", func(p string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
@@ -140,7 +153,7 @@ func New(distDir string) (*Server, error) {
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return nil, err
 	}
-	if s.settings, err = json.Marshal(Settings); err != nil {
+	if s.settings, err = json.Marshal(editorSettings); err != nil {
 		return nil, err
 	}
 	stats := map[string]any{
@@ -215,7 +228,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, route string) {
 	case route == "/settings" && read:
 		writeBody(w, http.StatusOK, "application/json", s.settings, "no-store")
 	case strings.HasPrefix(route, "/settings/") && read:
-		writeJSON(w, http.StatusOK, Settings[strings.TrimPrefix(route, "/settings/")])
+		writeJSON(w, http.StatusOK, editorSettings[strings.TrimPrefix(route, "/settings/")])
 	case route == "/settings" || strings.HasPrefix(route, "/settings/"):
 		writeJSON(w, http.StatusOK, map[string]any{}) // accepted, not persisted / 接受但不持久化
 	case route == "/users" && read:

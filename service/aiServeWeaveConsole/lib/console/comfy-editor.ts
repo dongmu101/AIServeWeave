@@ -113,8 +113,27 @@ export function parseEditorExport(text: unknown): EditorExport {
   if (!Array.isArray(missing) || missing.length > 1000 || !missing.every((t) => typeof t === "string")) throw new ApiError("invalid");
   if (!workflow || typeof workflow !== "object" || Array.isArray(workflow) || !Array.isArray((workflow as { nodes?: unknown }).nodes)) throw new ApiError("invalid");
   if (!output || typeof output !== "object" || Array.isArray(output) || Object.keys(output).length === 0) throw new ApiError("invalid");
-  if (byteLength(JSON.stringify(workflow)) > MAX_WORKFLOW_BYTES || byteLength(JSON.stringify(output)) > MAX_GRAPH_BYTES) throw new ApiError("invalid");
-  return { workflow: workflow as Record<string, unknown>, graph: output as Record<string, unknown>, missing: missing as string[] };
+  const saved = withoutViewport(workflow as Record<string, unknown>);
+  if (byteLength(JSON.stringify(saved)) > MAX_WORKFLOW_BYTES || byteLength(JSON.stringify(output)) > MAX_GRAPH_BYTES) throw new ApiError("invalid");
+  return { workflow: saved, graph: output as Record<string, unknown>, missing: missing as string[] };
+}
+
+/**
+ * withoutViewport drops extra.ds, the canvas pan and zoom at export time. It
+ * is where the operator happened to be looking, not part of the layout, and
+ * keeping it would turn every export after a scroll into a new digest and a
+ * new revision. Loading a workflow without it makes the editor fit the view.
+ *
+ * withoutViewport 去掉 extra.ds，即导出时画布的平移与缩放。它只是运维当时看向哪里，
+ * 不属于布局；保留它会让每次滚动之后的导出都变成新摘要、新版本。载入不带它的工作流时，
+ * 编辑器会自动适应视图。
+ */
+function withoutViewport(workflow: Record<string, unknown>): Record<string, unknown> {
+  const extra = workflow.extra;
+  if (!extra || typeof extra !== "object" || Array.isArray(extra) || !("ds" in extra)) return workflow;
+  const rest = { ...(extra as Record<string, unknown>) };
+  delete rest.ds;
+  return { ...workflow, extra: rest };
 }
 
 /**

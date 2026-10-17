@@ -28,7 +28,12 @@ interface Bridge {
   toggleAppMode(): Promise<void>;
 }
 
-const APP_NAME = "aiserveweave-comfy-editor";
+// Every mount gets its own wujie name: destroyApp is asynchronous, and
+// reusing one name would let a late destroy from the previous mount tear
+// down the instance that replaced it.
+// 每次挂载使用独立的 wujie 名称：destroyApp 是异步的，复用同一个名称会让上一次挂载
+// 迟到的销毁拆掉接替它的实例。
+let mounts = 0;
 // Loading a graph fires the editor's own change events; for this long after a
 // programmatic load they are not reported as operator edits.
 // 加载一张图会触发编辑器自己的变更事件；程序化加载之后的这段时间内，它们不被当作运维的编辑上报。
@@ -65,13 +70,14 @@ export function ComfyEditor({ ref, onReady, onEdit, height = 640 }: {
 
   React.useEffect(() => {
     let cancelled = false;
+    const name = `aiserveweave-comfy-editor-${++mounts}`;
     const el = host.current;
     if (!el) return;
     void import("wujie").then(({ startApp }) => {
       if (cancelled) return;
       const origin = window.location.origin;
       return startApp({
-        name: APP_NAME,
+        name,
         url: origin + COMFY_EDITOR_ENTRY,
         el,
         alive: false,
@@ -101,7 +107,7 @@ export function ComfyEditor({ ref, onReady, onEdit, height = 640 }: {
     return () => {
       cancelled = true;
       bridge.current = null;
-      void import("wujie").then(({ destroyApp }) => destroyApp(APP_NAME)).catch(() => {});
+      void import("wujie").then(({ destroyApp }) => destroyApp(name)).catch(() => {});
     };
   }, []);
 

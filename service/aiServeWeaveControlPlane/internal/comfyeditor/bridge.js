@@ -24,6 +24,8 @@ function parse(text) {
   return JSON.parse(text);
 }
 
+let defs = null;
+
 app.registerExtension({
   name: "aiserveweave.bridge",
   async setup() {
@@ -47,7 +49,9 @@ app.registerExtension({
        */
       async exportGraph() {
         const p = await app.graphToPrompt();
-        const defs = await api.getNodeDefs();
+        // The catalogue is fixed for the life of this binary; fetch it once.
+        // 目录在本二进制的生命周期内固定不变，只取一次。
+        defs = defs || (await api.getNodeDefs());
         // A node outside the catalogue is exported without even a class_type,
         // so it is named from the workflow node with the same id.
         // 目录之外的节点导出时连 class_type 都没有，因此按相同 id 的工作流节点取名。
@@ -56,10 +60,6 @@ app.registerExtension({
           .filter(([, n]) => typeof n.class_type !== "string" || !Object.hasOwn(defs, n.class_type))
           .map(([id, n]) => String(n.class_type || types.get(id) || (n._meta && n._meta.title) || id)))].sort();
         return JSON.stringify({ workflow: p.workflow, output: p.output, missing });
-      },
-      setReadOnly(value) {
-        app.canvas.read_only = value === true;
-        app.canvas.setDirty(true, true);
       },
       async toggleAppMode() {
         await app.extensionManager.command.execute("Comfy.ToggleLinear");

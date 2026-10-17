@@ -547,7 +547,7 @@ Console 已用独立平台会话接入 `/operator/*`，不再使用共享的 Con
 
 运维页面 `/operator/workflow-templates` 嵌入官方 [ComfyUI_frontend](https://github.com/Comfy-Org/ComfyUI_frontend)（GPL-3.0）作为图编辑器。前端由 Console 以 wujie 同源挂载（宿主侧约定与已接受的风险见 Console AGENTS「ComfyUI 编辑器」），它需要的后端由本服务的 `internal/comfyeditor` 以「只编辑」的桩来扮演：能画图、能导出，绝不能运行。
 
-**存储与摘要。** `common/workflowtemplate.Content` 新增可选字段 `Workflow`（UI 格式：节点坐标、分组、子图定义、App 模式的 `extra.linearData`），与 `Graph`（API Format，Gateway 执行用的唯一依据）并存。`Workflow` 只做结构性校验（不超过 `MaxWorkflowBytes` = 4 MiB，是带 `nodes` 数组的对象），不与 `Graph` 交叉核对；它以 `omitempty` 参与摘要，所以**没有布局的既有版本摘要不变**，而只挪动节点位置也会产生新摘要、新版本——这是有意的：布局属于作者的工作成果，与内容走同一条发布/审计路径。列表、Fleet 聚合与租户菜单都不携带它，Gateway 的 `workflow.FromBundle` 逐字段拷贝，也不把它交给数据面任何响应。
+**存储与摘要。** `common/workflowtemplate.Content` 新增可选字段 `Workflow`（UI 格式：节点坐标、分组、子图定义、App 模式的 `extra.linearData`），与 `Graph`（API Format，Gateway 执行用的唯一依据）并存。`Workflow` 只做结构性校验（不超过 `MaxWorkflowBytes` = 4 MiB，是带 `nodes` 数组的对象），不与 `Graph` 交叉核对；画布视口（`extra.ds`）由 Console 在导出时剥离，平移、缩放不算布局变化；它以 `omitempty` 参与摘要，所以**没有布局的既有版本摘要不变**，而只挪动节点位置也会产生新摘要、新版本——这是有意的：布局属于作者的工作成果，与内容走同一条发布/审计路径。列表、Fleet 聚合与租户菜单都不携带它，Gateway 的 `workflow.FromBundle` 逐字段拷贝，也不把它交给数据面任何响应。
 
 **升级顺序：先 Gateway，后控制面。** `/internal/v1/workflow-templates/current` 整包里的每个快照都带着 `workflow`，Gateway 的 `workflowsync` 会用快照内容重算摘要再与 `digest` 比对。旧 Gateway 不认识这个字段，解码时把它丢掉，重算出的摘要就对不上，于是拒绝整包、继续使用上一份缓存——不会执行错误的图，但新发布在 Gateway 升级前不会生效。`MaxContentBytes` 随之从 4 MiB + 256 KiB 增至 8 MiB + 256 KiB，Gateway 的 `MaxBundleBytes`（= `MaxContentBytes` × 500）理论上限同比放大；实际整包大小由真实模板决定，远小于此。
 
@@ -562,7 +562,7 @@ ComfyEditor:
 
 | 请求 | 桩的回答 |
 | --- | --- |
-| 静态文件 | 发布包原样提供；`assets/` 下带哈希的文件 `immutable` 长缓存，其余 `no-cache`；`*.map`、任一段以 `.` 开头、越界路径一律 404；`index.html/…` 视为发布包根目录（wujie 下少数相对请求会以入口文件为基准解析） |
+| 静态文件 | 发布包经 `os.Root` 打开后原样提供（包内符号链接无法解析到包外）；`assets/` 下带哈希的文件 `immutable` 长缓存，其余 `no-cache`；`*.map`、任一段以 `.` 开头、越界路径一律 404；`index.html/…` 视为发布包根目录（wujie 下少数相对请求会以入口文件为基准解析） |
 | `GET /api/object_info` | 编译进二进制的核心节点目录（见下） |
 | `GET /api/extensions` | 只列发布包自带的核心扩展加本包的 `bridge.js`。Console 同源嵌入编辑器，这里列出的任何脚本都会带着运维会话运行，因此**自定义节点的 JavaScript 永远不提供** |
 | `GET /api/settings` | 固定设置：语言锁定 `zh`（`_meta.title` 进入摘要，不锁定会让同一张图因浏览器语言不同而摘要不同）、关闭工作流持久化（不在浏览器存储里把一名运维的图恢复给另一名） |

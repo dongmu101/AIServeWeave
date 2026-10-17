@@ -83,10 +83,10 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 浏览器（wujie 子应用）→ /api/operator/comfy-editor/*（Console 服务端）→ ControlPlane /operator/v1/comfy-editor/*
 ```
 
-- 这是 Console 里**唯一一条按前缀转发**、而不是按白名单逐行列举的路由：发布包有几百个带哈希的文件名。收窄它的是另外几件事——上游钉死在控制面的编辑器前缀上（`lib/console/comfy-editor.ts` 的 `resolveEditorUpstream` 逐段重新编码并拒绝 `.`/`..`），只附加平台会话，只转发 `If-Modified-Since`/`Range` 两个请求头与一张固定的响应头列表，写请求体在 Console 有界读取后**直接丢弃**、不带往上游，响应体以流转交（`lib/server/control-plane.ts` 的 `streamControlPlane`，它与 `callControlPlane` 一样是仅有的连接控制面的地方）。新增其他端点不要套用这条路由的做法。
+- 这是 Console 里**唯一一条按前缀转发**、而不是按白名单逐行列举的路由：发布包有几百个带哈希的文件名。收窄它的是另外几件事——上游钉死在控制面的编辑器前缀上（`lib/console/comfy-editor.ts` 的 `resolveEditorUpstream` 逐段重新编码并拒绝 `.`/`..`），只附加平台会话，只转发 `If-Modified-Since`/`Range` 两个请求头与一张固定的响应头列表，写请求体在 Console 有界读取后**直接丢弃**、不带往上游，响应体以流转交、上游超时只覆盖到收到响应头为止（几兆的打包文件送往慢速浏览器不能被请求超时截断）（`lib/server/control-plane.ts` 的 `streamControlPlane`，它与 `callControlPlane` 一样是仅有的连接控制面的地方）。新增其他端点不要套用这条路由的做法。
 - **同源是一项经评估后接受的风险，不是遗漏。** wujie 把子应用放在同源 iframe 里，ComfyUI_frontend 的代码因此能以运维身份发出同源请求，并能经 `window.parent` 触及宿主页面。之所以接受：前端版本固定并校验 SHA-256（`scripts/fetch-comfyui-frontend.sh`），控制面的 `/api/extensions` 只列发布包自带的核心扩展与内嵌桥接，**永远不提供自定义节点的 JavaScript**——能在这个 iframe 里运行的只有这一份固定的第一方代码。升级前端版本时把它当作一次依赖升级来审查。
 - 子应用的 `fetch` 由 wujie 替换为宿主提供的版本，只放行 `/api/operator/comfy-editor/` 下的同源请求与 `data:`/`blob:` URL（`isEditorRequestAllowed`）；这是纵深防御，拦得住前端自己对注册表、遥测、模型下载站的外连（实测拦下过对 huggingface 的请求），但它**不是边界**——XHR 与 `window.parent` 都绕得过。WebSocket 被换成只汇报「队列空闲」的本地替身（`FAKE_WEBSOCKET_SCRIPT`），编辑器不会连出任何 socket。
-- 跨边界只传字符串（控制面 `internal/comfyeditor/bridge.js`）。不要改成直接传对象：宿主对象属于另一个 realm，ComfyUI 用 `instanceof Array` 判断连线，按引用传进去的图会丢掉全部连线。编辑器的导出先经 `parseEditorExport` 校验；`missing` 非空（图里有目录外节点）时拒绝写入草稿。
+- 跨边界只传字符串（控制面 `internal/comfyeditor/bridge.js`）。不要改成直接传对象：宿主对象属于另一个 realm，ComfyUI 用 `instanceof Array` 判断连线，按引用传进去的图会丢掉全部连线。编辑器的导出先经 `parseEditorExport` 校验并剥离画布视口 `extra.ds`（否则每次滚动后的导出都是新摘要、新版本）；`missing` 非空（图里有目录外节点）时拒绝写入草稿。
 - 草稿里的布局（`workflow`）只在它与文本框里的图文本一致时随发布提交；文本框被手动改过后布局不再对应那张图，发布时省略它，页面给出提示。
 
 ### 管理请求使用统一的受限入口

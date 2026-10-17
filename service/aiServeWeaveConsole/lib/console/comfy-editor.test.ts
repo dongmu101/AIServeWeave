@@ -93,6 +93,22 @@ test("editor export parsing", () => {
   }
 });
 
+test("editor export drops the viewport so panning never makes a new revision", () => {
+  const output = { "6": { class_type: "CLIPTextEncode", inputs: { text: "a" } } };
+  const base = { id: "w", nodes: [{ id: 6, pos: [0, 0] }], links: [] };
+  const at = (ds: unknown) => parseEditorExport(JSON.stringify({ workflow: { ...base, extra: { ds, frontendVersion: "1.55.17" } }, output, missing: [] })).workflow;
+  const a = at({ scale: 1, offset: [0, 0] }), b = at({ scale: 0.7, offset: [137, -20] });
+  assert.deepEqual(a, b);
+  assert.deepEqual(a.extra, { frontendVersion: "1.55.17" });
+  for (const [name, workflow] of [
+    ["no extra", base],
+    ["extra without ds", { ...base, extra: { linearData: { inputs: [] } } }],
+    ["extra not an object", { ...base, extra: "x" }],
+  ] as const) {
+    assert.deepEqual(parseEditorExport(JSON.stringify({ workflow, output, missing: [] })).workflow, workflow, name);
+  }
+});
+
 test("template content carries an optional UI workflow", () => {
   const graph = { "6": { class_type: "CLIPTextEncode", inputs: { text: "a" } } };
   const workflow = { nodes: [{ id: 6 }], extra: { linearData: {} } };
