@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 
 import { FormError } from "@/components/console/states";
@@ -20,7 +21,13 @@ import { describe } from "@/lib/console/errors";
  * 唯一会收到控制面令牌的端点。这一侧不保留关于这次尝试的任何东西：密码在组件状态中
  * 只存活于一次提交期间，无论结果如何，尘埃落定即清除。
  */
-export function LoginForm({ next }: { next: string }) {
+export function LoginForm({
+  next,
+  signupEnabled,
+}: {
+  next: string;
+  signupEnabled: boolean;
+}) {
   const router = useRouter();
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
@@ -86,9 +93,19 @@ export function LoginForm({ next }: { next: string }) {
       <SubmitButton pending={pending} size="lg">
         登录
       </SubmitButton>
-      <p className="text-xs text-muted-foreground">
-        忘记密码或尚未获得账号，请联系部署管理员。
-      </p>
+      {signupEnabled ? (
+        <p className="text-xs text-muted-foreground">
+          还没有账号？
+          <Link href="/signup" className="underline underline-offset-4">
+            注册租户
+          </Link>
+          。忘记密码请联系部署管理员。
+        </p>
+      ) : (
+        <p className="text-xs text-muted-foreground">
+          忘记密码或尚未获得账号，请联系部署管理员。
+        </p>
+      )}
     </form>
   );
 }

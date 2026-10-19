@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/zeromicro/go-zero/rest"
+
+	"AIServeWeave/common/quota"
 )
 
 // Config is the whole of this service's configuration.
@@ -57,14 +59,15 @@ type Config struct {
 	// 什么情况下值得把它升级。
 	InternalToken string
 
-	// BootstrapToken authorizes tenant creation, which is the one operation
-	// with no signed-in user behind it. It stands in for the Console's
-	// eventual sign-up flow, the way the Registry's -mint-token stands in for
-	// node onboarding.
+	// BootstrapToken authorizes operator-driven tenant creation, an operation
+	// with no signed-in user behind it. It stays required even when Signup is
+	// enabled: it is how an operator creates a tenant on a deployment that
+	// keeps self-service sign-up off, and how one bypasses Signup's hourly
+	// bound.
 	//
-	// BootstrapToken 授权创建租户，那是唯一一个背后没有已登录用户的操作。它是
-	// Console 将来注册流程的临时替身，正如 Registry 的 -mint-token 是节点纳管的
-	// 临时替身。
+	// BootstrapToken 授权由运维发起的租户创建，那是一个背后没有已登录用户的操作。即使
+	// 开启了 Signup 它也仍然必填：在关闭自助注册的部署上，运维靠它创建租户；需要绕过
+	// Signup 的每小时上限时，也靠它。
 	BootstrapToken string
 
 	// Fleet configures the operator inventory: which Gateway replicas to ask
@@ -185,6 +188,60 @@ type Config struct {
 	// 嵌入式 ComfyUI 工作流编辑器。它是可选的：不设置时，该前缀与任何未知路径一样
 	// 回答 404。
 	ComfyEditor ComfyEditorConf `json:",optional"`
+
+	// Signup configures self-service tenant sign-up at
+	// POST /admin/v1/auth/signup. Optional and off by default: an
+	// unauthenticated write endpoint is something a deployment opts into,
+	// not something an upgrade switches on.
+	//
+	// Signup 配置 POST /admin/v1/auth/signup 上的租户自助注册。它是可选的，默认关闭：
+	// 一个无需认证的写端点应当由部署主动开启，而不是被一次升级悄悄打开。
+	Signup SignupConf `json:",optional"`
+}
+
+// SignupConf configures self-service tenant sign-up. Registration is open
+// once enabled: a new tenant is active immediately, with no approval step and
+// no invitation. What bounds abuse is MaxPerHour and the starting quota.
+//
+// SignupConf 配置租户自助注册。一经开启即完全开放：新租户立即生效，没有审批，也不需要
+// 邀请码。约束滥用的是 MaxPerHour 与初始配额。
+type SignupConf struct {
+	// Enabled mounts the sign-up route. Left false, the route does not
+	// exist and answers 404 like any unknown path.
+	//
+	// Enabled 挂载注册路由。为 false 时该路由不存在，与任何未知路径一样回答 404。
+	Enabled bool `json:",default=false"`
+	// MaxPerHour bounds sign-up attempts across the whole deployment in one
+	// clock hour, counted in the shared Redis whether or not each attempt
+	// succeeds. Zero removes the bound. It is deployment-wide rather than
+	// per address for the reason the signupgate package gives.
+	//
+	// MaxPerHour 限定整个部署在一个整点小时内的注册尝试次数，在共享 Redis 中计数，
+	// 无论每次尝试成功与否都计入。零表示不设上限。它是全部署范围而非按地址，理由见
+	// signupgate 包。
+	MaxPerHour int `json:",default=30"`
+	// RequestsPerMinute, TokensPerMinute and MaxConcurrent are the quota a
+	// self-registered tenant starts with, in common/quota's meaning (zero is
+	// unlimited). An owner or admin can change them afterwards like any
+	// other tenant's.
+	//
+	// RequestsPerMinute、TokensPerMinute 与 MaxConcurrent 是自助注册的租户起步时的
+	// 配额，含义同 common/quota（零表示不限制）。之后 owner 或 admin 可以像其他任何
+	// 租户一样修改它们。
+	RequestsPerMinute int `json:",default=60"`
+	TokensPerMinute   int `json:",default=100000"`
+	MaxConcurrent     int `json:",default=4"`
+}
+
+// Limits returns the starting quota as common/quota's type.
+//
+// Limits 以 common/quota 的类型返回起步配额。
+func (s SignupConf) Limits() quota.Limits {
+	return quota.Limits{
+		RequestsPerMinute: s.RequestsPerMinute,
+		TokensPerMinute:   s.TokensPerMinute,
+		MaxConcurrent:     s.MaxConcurrent,
+	}
 }
 
 // ComfyEditorConf points at an unpacked ComfyUI_frontend release, fetched at
@@ -639,6 +696,14 @@ func (c Config) Validate() error {
 	}
 	if c.UsageRecordRetention < 0 {
 		return errors.New("config: UsageRecordRetention must not be negative")
+	}
+	if c.Signup.Enabled {
+		if c.Signup.MaxPerHour < 0 {
+			return errors.New("config: Signup.MaxPerHour must not be negative")
+		}
+		if err := c.Signup.Limits().Validate(); err != nil {
+			return errors.New("config: Signup starting quota is invalid: " + err.Error())
+		}
 	}
 	return nil
 }

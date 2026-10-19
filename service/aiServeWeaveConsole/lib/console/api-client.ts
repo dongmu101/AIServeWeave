@@ -1,5 +1,7 @@
 import { ApiError, isRetryable, kindForStatus } from "./errors.ts";
 import type { ApiErrorKind } from "./errors.ts";
+import { signupErrorKind } from "./signup.ts";
+import type { SignupCredentials } from "./signup.ts";
 
 /**
  * This is the browser's only way to reach the control plane, and it reaches it
@@ -36,6 +38,11 @@ const OPERATOR_BASE = "/api/operator";
  *
  * SESSION_ENDPOINT 是登录与退出发生的地方。 */
 const SESSION_ENDPOINT = "/api/session";
+
+/** SIGNUP_ENDPOINT is where self-service sign-up happens.
+ *
+ * SIGNUP_ENDPOINT 是自助注册发生的地方。 */
+const SIGNUP_ENDPOINT = "/api/signup";
 
 /** MAX_READ_ATTEMPTS bounds a read's total tries. Three is enough to ride out a
  * dropped connection or one restarting replica, and small enough that a user
@@ -155,6 +162,35 @@ export async function signIn(
     // 登录被拒绝表示凭据不正确，不表示已有会话过期。
     throw new ApiError(
       response.status === 401 ? "invalid_credentials" : kindForStatus(response.status),
+      response.status
+    );
+  }
+  return parseSessionUser(await readJson(response));
+}
+
+/**
+ * signUp creates a tenant with its owner and, on success, leaves the new owner
+ * signed in, the same way signIn does. Like every write it is never retried:
+ * a lost response may still have created the tenant, and a repeat would only
+ * come back as "email taken".
+ *
+ * signUp 创建一个租户及其 owner，成功后像 signIn 一样让新 owner 处于登录状态。与所有
+ * 写请求一样它绝不重试：响应丢了时租户可能已经建好，重发只会得到「邮箱已注册」。
+ */
+export async function signUp(
+  credentials: SignupCredentials,
+  deps: RequestDeps = {}
+): Promise<SessionUserView> {
+  const doFetch = deps.fetchImpl ?? globalThis.fetch;
+  const response = await send(
+    doFetch,
+    SIGNUP_ENDPOINT,
+    { method: "POST", body: credentials },
+    undefined
+  );
+  if (!response.ok) {
+    throw new ApiError(
+      signupErrorKind(response.status, kindForStatus),
       response.status
     );
   }

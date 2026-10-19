@@ -294,6 +294,7 @@ func (k APIKey) Usable(now time.Time) bool {
 // 词汇来写，而不是去猜过去的代码碰巧传了什么。
 const (
 	ActionTenantCreate       = "tenant.create"
+	ActionTenantSignup       = "tenant.signup"
 	ActionUserCreate         = "user.create"
 	ActionUserLogin          = "user.login"
 	ActionUserUpdate         = "user.update"

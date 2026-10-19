@@ -17,6 +17,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/signupgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
@@ -137,6 +138,51 @@ func createTenant(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		tenant, owner, err := ctx.Logic.CreateTenant(r.Context(), req.Name, req.OwnerEmail, req.OwnerPassword, clientIP(r))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, types.CreateTenantResponse{
+			Tenant: types.Tenant{
+				ID:        tenant.ID,
+				Name:      tenant.Name,
+				Status:    tenant.Status,
+				CreatedAt: tenant.CreatedAt,
+			},
+			Owner: renderUser(owner),
+		})
+	}
+}
+
+// signup creates a tenant and its owner for whoever asks, within the
+// deployment's hourly bound. It is mounted only when Signup is enabled. The
+// bound is checked right after the body decodes, before anything else, and a
+// failure to reach Redis refuses the attempt: an unbounded open write
+// endpoint is the outcome this gate exists to prevent.
+//
+// signup 为任何发起请求的人创建租户及其 owner，受部署的每小时上限约束。它只在开启
+// Signup 时挂载。上限在解码请求体之后、做任何其他事之前检查；连不上 Redis 时拒绝本次
+// 尝试：一个没有上限的开放写端点，正是这道闸门要防止的结果。
+func signup(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.SignupRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if ctx.SignupGate != nil {
+			admitted, err := ctx.SignupGate.Admit(r.Context())
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "service unavailable")
+				return
+			}
+			if !admitted {
+				w.Header().Set("Retry-After", strconv.Itoa(int(signupgate.Window/time.Second)))
+				writeError(w, http.StatusTooManyRequests, "too many sign-ups; try again later")
+				return
+			}
+		}
+
+		tenant, owner, err := ctx.Logic.SignUpTenant(r.Context(), req.TenantName, req.Email, req.Password, clientIP(r), ctx.Config.Signup.Limits())
 		if err != nil {
 			respondErr(w, err)
 			return

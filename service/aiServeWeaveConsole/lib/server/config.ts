@@ -49,7 +49,15 @@ export interface ServerConfig {
    * Console 走的是明文 HTTP。 */
   cookieSecure: boolean;
   timeoutMs: number;
-
+  /** signupEnabled shows the self-service sign-up page and its link on the
+   * sign-in page. It must agree with the control plane's Signup.Enabled:
+   * this flag only decides what the Console offers, and a sign-up the
+   * control plane has not enabled still fails there with 404.
+   *
+   * signupEnabled 决定是否提供自助注册页及登录页上的注册入口。它必须与控制面的
+   * Signup.Enabled 一致：本开关只决定 Console 展示什么，控制面未开启时注册仍会在
+   * 那里以 404 失败。 */
+  signupEnabled: boolean;
 }
 
 /** cached holds the resolved configuration for the life of the process.
@@ -87,6 +95,7 @@ export function serverConfig(): ServerConfig {
       process.env.AISW_CONSOLE_UPSTREAM_TIMEOUT_MS,
       DEFAULT_TIMEOUT_MS
     ),
+    signupEnabled: flag(process.env.AISW_CONSOLE_SIGNUP_ENABLED, false),
   };
   return cached;
 }

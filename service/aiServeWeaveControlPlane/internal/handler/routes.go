@@ -18,7 +18,8 @@ import (
 // are visible in one screen on purpose: an endpoint's protection should be
 // readable without following it into its handler.
 //
-//   - Public: sign-in only, tenant and platform operator alike.
+//   - Public: sign-in, tenant and platform operator alike, plus tenant
+//     self-service sign-up when Config.Signup enables it.
 //   - Tenant session: everything the Console does on behalf of a signed-in
 //     tenant user.
 //   - Platform session (STATUS.md's P01): the fleet inventory and node-ops
@@ -34,7 +35,7 @@ import (
 // 这些守卫组就是本服务全部的授权面，而且它们被刻意放在一屏之内：一个端点受什么保护，
 // 应当无需追进它的 handler 就能读出来。
 //
-//   - 公开：仅登录，租户与平台运维皆然。
+//   - 公开：登录，租户与平台运维皆然；Config.Signup 开启时另有租户自助注册。
 //   - 租户会话：Console 代表已登录租户用户所做的一切。
 //   - 平台会话（STATUS.md 的 P01）：机群清单与节点操作写入，代表一名已登录的平台
 //     运维——与任何租户都不同的一种身份，由 requirePlatformSession 守卫，
@@ -102,6 +103,17 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// bug 而被彼此混淆。
 		{Method: http.MethodPost, Path: "/admin/v1/platform/auth/login", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/platform/auth/login", platformLogin(ctx))},
 	})
+	// Self-service sign-up is public too, and mounted only when the
+	// deployment enables it: a deployment that keeps it off has no such
+	// route at all, not one that answers "disabled".
+	//
+	// 自助注册同样公开，且只在部署开启它时才挂载：保持关闭的部署根本没有这条路由，
+	// 而不是有一条回答「已关闭」的路由。
+	if ctx.Config.Signup.Enabled {
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodPost, Path: "/admin/v1/auth/signup", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/signup", signup(ctx))},
+		})
+	}
 
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session", requireSession(ctx, sessionAction(ctx.Logic.Logout)))},

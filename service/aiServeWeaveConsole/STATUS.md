@@ -6,7 +6,7 @@
 
 首版面向单个租户内的 owner、admin、member，完成登录、用户列表与创建、API Key 生命周期、管理审计的真实接口闭环。配额读取与编辑已交付。节点、模型、路由、工作流和监控按后端 Admin API 的成熟度逐步接入。
 
-Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产物访问是已实现的例外，由 Console 服务端持有租户 Gateway Key 直连数据面，见 [AGENTS.md](AGENTS.md#与后端的边界)。不直连 Registry、Agent、推理后端或数据库。租户引导由运维完成，首版不提供持有 BootstrapToken 的注册页、跨租户管理或租户切换。
+Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产物访问是已实现的例外，由 Console 服务端持有租户 Gateway Key 直连数据面，见 [AGENTS.md](AGENTS.md#与后端的边界)。不直连 Registry、Agent、推理后端或数据库。租户可由运维经 BootstrapToken 引导，也可在部署开启后经 `/signup` 自助注册（Console 从不持有 BootstrapToken）；不提供跨租户管理或租户切换。
 
 ## 当前状态
 
@@ -38,6 +38,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 租户配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | 全部登录角色可读；owner/admin 可整组写入，零表示不限制 |
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
+| 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 
 用户、Key 与审计列表返回 `{items, next_cursor}` 信封，支持游标分页与服务端筛选；吊销成功返回 `204`，错误体为 `{ "error": "..." }`。Job 历史另有 `/admin/v1/jobs/history` 与详情端点，不依赖 Fleet 配置。

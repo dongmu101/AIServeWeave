@@ -17,7 +17,10 @@ export type ApiErrorKind =
   | "network"
   | "timeout"
   | "canceled"
-  | "contract";
+  | "contract"
+  | "email_taken"
+  | "rate_limited"
+  | "signup_disabled";
 
 /**
  * MESSAGES is the fixed copy shown for each kind. Upstream error text is never
@@ -39,6 +42,9 @@ const MESSAGES: Record<ApiErrorKind, string> = {
   timeout: "请求超时，请稍后重试。",
   canceled: "请求已取消。",
   contract: "服务端返回的数据格式无法识别。",
+  email_taken: "该邮箱已注册，请直接登录。",
+  rate_limited: "注册请求过于频繁，请稍后再试。",
+  signup_disabled: "当前部署未开放自助注册，请联系部署管理员。",
 };
 
 /**

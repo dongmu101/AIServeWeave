@@ -42,6 +42,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/signupgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/usageretention"
@@ -136,6 +137,14 @@ type ServiceContext struct {
 	// ComfyEditor 提供嵌入式工作流编辑器及其桩后端。除非设置了
 	// Config.ComfyEditor.DistDir，否则它为 nil，编辑器前缀此时回答 404。
 	ComfyEditor *comfyeditor.Server
+
+	// SignupGate bounds self-service sign-ups per hour. It is nil when
+	// Signup is disabled or its MaxPerHour is zero, and the sign-up handler
+	// then admits every attempt.
+	//
+	// SignupGate 限定每小时的自助注册次数。Signup 关闭或其 MaxPerHour 为零时它为
+	// nil，注册 handler 此时放行每一次尝试。
+	SignupGate signupgate.Gate
 
 	db          *gorm.DB
 	redisClient *redis.Client
@@ -398,8 +407,20 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		usageretention.New(st, usageRecordRetention, nil, nil).Run(urCtx, usageRecordRetentionInterval)
 	}()
 
+	// The gate is assigned through a guard rather than directly: a nil
+	// *signupgate.Redis stored in the interface field would be a non-nil
+	// Gate holding a nil pointer.
+	//
+	// gate 经一道判断再赋值而不是直接赋值：把一个 nil 的 *signupgate.Redis 存进接口
+	// 字段，会得到一个持有 nil 指针的非 nil Gate。
+	var signupGate signupgate.Gate
+	if cfg.Signup.Enabled && cfg.Signup.MaxPerHour > 0 {
+		signupGate = signupgate.NewRedis(redisClient, clock, cfg.Signup.MaxPerHour)
+	}
+
 	ready = true
 	return &ServiceContext{
+		SignupGate:  signupGate,
 		ComfyEditor: editor,
 		Config:      cfg,
 		Logic:       svcLogic,

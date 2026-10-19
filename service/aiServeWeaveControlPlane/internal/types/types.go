@@ -90,6 +90,18 @@ type CreateTenantRequest struct {
 	OwnerPassword string `json:"owner_password"`
 }
 
+// SignupRequest is a self-service sign-up: a new tenant and the person who
+// will own it. The response is a CreateTenantResponse; it carries no session,
+// so the caller signs in afterwards with the same credentials.
+//
+// SignupRequest 是一次自助注册：一个新租户，以及将拥有它的那个人。响应是
+// CreateTenantResponse；它不携带会话，调用方随后用同一组凭据登录。
+type SignupRequest struct {
+	TenantName string `json:"tenant_name"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
+}
+
 // CreateTenantResponse is the created tenant and owner.
 //
 // CreateTenantResponse 是已创建的租户与 owner。

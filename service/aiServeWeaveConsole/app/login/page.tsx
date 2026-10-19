@@ -2,6 +2,7 @@ import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/app/login/login-form";
 import { internalPath } from "@/lib/console/internal-path";
+import { serverConfig } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -34,10 +35,10 @@ export default async function LoginPage({
             AIServeWeave 控制台
           </h1>
           <p className="text-sm text-muted-foreground">
-            使用管理员提供的邮箱和密码登录。
+            使用你的邮箱和密码登录。
           </p>
         </div>
-        <LoginForm next={target} />
+        <LoginForm next={target} signupEnabled={serverConfig().signupEnabled} />
       </div>
     </main>
   );

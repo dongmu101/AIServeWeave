@@ -71,7 +71,22 @@ Auth:
 # The Gateway presents this to /internal/v1/apikeys/verify.
 InternalToken: "${AISW_INTERNAL_TOKEN}"
 
-# 授权创建租户。它是 Console 将来注册流程的临时替身。
-# Authorizes tenant creation. It stands in for the Console's eventual sign-up
-# flow.
+# 授权由运维创建租户。即使开启了下面的 Signup 也必填。
+# Authorizes operator-driven tenant creation. Required even when Signup below
+# is enabled.
 BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"
+
+# 租户自助注册（POST /admin/v1/auth/signup）。默认关闭；开启后完全开放，新租户立即
+# 可用。MaxPerHour 是全部署每小时的尝试上限（0 不设上限），其余三项是新租户的起步
+# 配额（0 为不限制）。Console 需同时设置 AISW_CONSOLE_SIGNUP_ENABLED=true。
+# Self-service tenant sign-up. Off by default; once on it is fully open and a
+# new tenant is usable immediately. MaxPerHour bounds attempts per hour across
+# the deployment (0 removes the bound); the other three are a new tenant's
+# starting quota (0 is unlimited). The Console also needs
+# AISW_CONSOLE_SIGNUP_ENABLED=true.
+# Signup:
+#   Enabled: true
+#   MaxPerHour: 30
+#   RequestsPerMinute: 60
+#   TokensPerMinute: 100000
+#   MaxConcurrent: 4

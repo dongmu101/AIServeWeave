@@ -123,7 +123,7 @@ go run ./service/aiServeWeaveGateway \
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login` |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」） |
 | 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读） |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径），见「机群清单」与「节点写路径」两节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
@@ -132,6 +132,22 @@ go run ./service/aiServeWeaveGateway \
 租户会话（`requireSession`）与平台会话（`requirePlatformSession`）虽然共用同一个 `token.Issuer`，却互相拒绝对方的令牌——见「平台运维身份」一节 `Claims.TenantID` 哨兵值的说明；一次路由配置失误不会让某个会话跨界生效。
 
 `GET /admin/v1/tenants/current` 返回调用方自己所属的租户及其配额，任何已登录角色都可读；`PUT /admin/v1/tenants/limits` 设置该配额，仅 owner 与 admin 可写。两者的请求里都没有租户 id：租户来自会话，因此管理员无法通过改请求体把它指向别人的租户。读写权限刻意不对称——member 无法调高限制，但一个正在被限流的 member 需要看得到是哪条限制在起作用；而能调高自己租户限制的角色，绕过限制最省事的办法就是调高它。
+
+### 租户自助注册
+
+`POST /admin/v1/auth/signup` 让任何人创建一个租户及其 owner，请求体 `{"tenant_name","email","password"}`，成功返回 `201` 与 `CreateTenantResponse`（不含会话，调用方随后用同一组凭据登录）。它只在配置 `Signup.Enabled: true` 时挂载；默认关闭，关闭时路由不存在、回答 `404`。开启后完全开放：新租户立即为 active，没有审批也没有邀请码。
+
+| 配置 | 默认 | 含义 |
+| --- | --- | --- |
+| `Signup.Enabled` | `false` | 是否挂载注册路由 |
+| `Signup.MaxPerHour` | `30` | 全部署每个整点小时的注册尝试上限，在共享 Redis 中计数（`aisw:signup:window:<小时序号>`），成功与否都计入；`0` 不设上限 |
+| `Signup.RequestsPerMinute` / `TokensPerMinute` / `MaxConcurrent` | `60` / `100000` / `4` | 新租户的起步配额，含义同 `common/quota`（零为不限制）；之后 owner/admin 可自行调整 |
+
+比 BootstrapToken 路径多出的校验：租户名 1–128 字符；邮箱必须是不带显示名的单个地址（`net/mail`），不超过 255 字节；密码至少 8 个字符（`logic.MinSignupPasswordLength`，只约束自助注册）。邮箱已被占用时在写租户行**之前**返回 `409`，陌生人无法靠重放别人的地址堆出无 owner 的租户；检查与插入不是原子的，同一地址的并发注册仍可能留下一个惰性的孤立租户。审计动作为 `tenant.signup`，行为人是新 owner。
+
+状态码：`201` 成功、`400` 输入不合法或请求体有未知字段、`409` 邮箱已注册、`429` 超过每小时上限（带 `Retry-After: 3600`）、`503` 连不上 Redis（拒绝而不是放行）。
+
+**已知取舍。** 上限是全部署范围而不是按来源地址：`clientIP` 只信任 TCP 对端，而经 Console 注册时对端永远是 Console 自己，按地址限流只会是同一个全局上限换个名字。代价是攻击者可以用垃圾注册耗尽当小时的额度，让真实用户暂时注册不了；按人限流需要先引入可信代理清单。`409` 会告诉调用方该邮箱已注册，这是注册表单说明失败原因的代价，用它枚举账户的速度同样受每小时上限约束。BootstrapToken 路径（`POST /admin/v1/tenants`）不受上限影响，起步配额仍为不限制。
 
 ### 角色能做什么
 

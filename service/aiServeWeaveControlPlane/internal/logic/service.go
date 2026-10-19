@@ -18,12 +18,15 @@ package logic
 import (
 	"context"
 	"errors"
+	"net/mail"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"golang.org/x/crypto/bcrypt"
 
 	"AIServeWeave/common/comfyuimanagedstatus"
+	"AIServeWeave/common/quota"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
@@ -340,12 +343,129 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 		return model.Tenant{}, model.User{}, ErrInvalidInput
 	}
 
+	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, quota.Limits{})
+	if err != nil {
+		return model.Tenant{}, model.User{}, err
+	}
+	s.audit(ctx, tenant.ID, "", model.ActionTenantCreate, tenant.ID, "tenant created with owner "+owner.ID, ip)
+	return tenant, owner, nil
+}
+
+// SignUpTenant is the self-service counterpart of CreateTenant: anyone may
+// call it, so it checks what the bootstrap path leaves to a trusted operator.
+// The tenant name must fit its column, the email must be a bare address, and
+// the password must be at least MinSignupPasswordLength characters. The new
+// tenant starts with limits rather than unlimited, because nobody has looked
+// at it yet.
+//
+// An email already in use is refused before the tenant row is written, so a
+// stranger cannot fill the table with ownerless tenants by replaying someone
+// else's address. The check and the insert are not atomic; two concurrent
+// sign-ups with one address can still leave an orphan, which is inert for the
+// reason CreateTenant gives.
+//
+// The conflict answer does tell the caller the address is registered. That
+// is the price of a sign-up form telling a person why it failed, and the
+// handler's rate limit is what bounds using it as an enumeration oracle.
+//
+// SignUpTenant 是 CreateTenant 的自助版：任何人都能调用，因此它要检查引导路径交给
+// 可信运维把关的东西。租户名必须放得进它的列，邮箱必须是不带显示名的纯地址，密码至少
+// MinSignupPasswordLength 个字符。新租户带着 limits 起步而不是不限制，因为还没有人
+// 看过它。
+//
+// 已被占用的邮箱在写租户行之前就被拒绝，这样陌生人无法靠重放别人的地址把表塞满没有
+// owner 的租户。检查与插入不是原子的：同一地址的两次并发注册仍可能留下一个孤立租户，
+// 它是惰性的，理由同 CreateTenant。
+//
+// 冲突的回答确实会告诉调用方这个地址已注册。这是注册表单向人说明失败原因的代价，而
+// 把它当作枚举工具使用的上限，由 handler 层的限流来约束。
+func (s *Service) SignUpTenant(ctx context.Context, name, ownerEmail, ownerPassword, ip string, limits quota.Limits) (model.Tenant, model.User, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > maxTenantNameLength {
+		return model.Tenant{}, model.User{}, ErrInvalidInput
+	}
+	ownerEmail, ok := bareEmail(ownerEmail)
+	if !ok {
+		return model.Tenant{}, model.User{}, ErrInvalidInput
+	}
+	if utf8.RuneCountInString(ownerPassword) < MinSignupPasswordLength {
+		return model.Tenant{}, model.User{}, ErrInvalidInput
+	}
+	if err := limits.Validate(); err != nil {
+		return model.Tenant{}, model.User{}, ErrInvalidInput
+	}
+
+	switch _, err := s.store.GetUserByEmail(ctx, ownerEmail); {
+	case err == nil:
+		return model.Tenant{}, model.User{}, ErrConflict
+	case !errors.Is(err, store.ErrNotFound):
+		return model.Tenant{}, model.User{}, err
+	}
+
+	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, limits)
+	if err != nil {
+		return model.Tenant{}, model.User{}, err
+	}
+	s.audit(ctx, tenant.ID, owner.ID, model.ActionTenantSignup, tenant.ID, "tenant self-registered with owner "+owner.ID, ip)
+	return tenant, owner, nil
+}
+
+// MinSignupPasswordLength is the shortest password SignUpTenant accepts,
+// counted in characters. It applies to self-service sign-up only: the other
+// paths are driven by an operator or a signed-in owner, and tightening them
+// is a separate decision.
+//
+// MinSignupPasswordLength 是 SignUpTenant 接受的最短密码长度，按字符计。它只约束
+// 自助注册：其他路径由运维或已登录的 owner 发起，收紧它们是另一项决定。
+const MinSignupPasswordLength = 8
+
+// maxTenantNameLength matches model.Tenant.Name's column size, so an
+// over-long name is refused here as invalid input rather than failing in
+// the database as an internal error.
+//
+// maxTenantNameLength 与 model.Tenant.Name 的列宽一致，这样过长的名字在这里就作为
+// 非法输入被拒绝，而不是在数据库里以内部错误的形式失败。
+const maxTenantNameLength = 128
+
+// maxEmailLength matches model.User.Email's column size.
+//
+// maxEmailLength 与 model.User.Email 的列宽一致。
+const maxEmailLength = 255
+
+// bareEmail normalizes email and reports whether it is a single bare address.
+// A display name ("Ann <ann@example.com>") is refused rather than stripped:
+// the stored value is what the person will type into the sign-in form.
+//
+// bareEmail 规范化 email，并报告它是否是一个单独的纯地址。带显示名的写法
+// （"Ann <ann@example.com>"）被拒绝而不是被剥掉：存下来的值就是这个人以后要在登录
+// 表单里输入的东西。
+func bareEmail(email string) (string, bool) {
+	email = normalizeEmail(email)
+	if email == "" || len(email) > maxEmailLength {
+		return "", false
+	}
+	parsed, err := mail.ParseAddress(email)
+	if err != nil || parsed.Name != "" || parsed.Address != email {
+		return "", false
+	}
+	return email, true
+}
+
+// createTenantWithOwner is the insert path CreateTenant and SignUpTenant
+// share. It writes no audit record: the two callers record different actions.
+//
+// createTenantWithOwner 是 CreateTenant 与 SignUpTenant 共用的插入路径。它不写审计：
+// 两个调用方记录的动作不同。
+func (s *Service) createTenantWithOwner(ctx context.Context, name, ownerEmail, ownerPassword string, limits quota.Limits) (model.Tenant, model.User, error) {
 	now := s.clock.Now()
 	tenant := model.Tenant{
-		ID:        model.NewID(model.PrefixTenant),
-		Name:      name,
-		Status:    model.StatusActive,
-		CreatedAt: now,
+		ID:                model.NewID(model.PrefixTenant),
+		Name:              name,
+		Status:            model.StatusActive,
+		RequestsPerMinute: limits.RequestsPerMinute,
+		TokensPerMinute:   limits.TokensPerMinute,
+		MaxConcurrent:     limits.MaxConcurrent,
+		CreatedAt:         now,
 	}
 	if err := s.store.CreateTenant(ctx, &tenant); err != nil {
 		return model.Tenant{}, model.User{}, translate(err)
@@ -362,8 +482,6 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 		// 任何东西能认证进去——反之在这里再做一次删除，只是又一次同样可能失败的写入。
 		return model.Tenant{}, model.User{}, err
 	}
-
-	s.audit(ctx, tenant.ID, "", model.ActionTenantCreate, tenant.ID, "tenant created with owner "+owner.ID, ip)
 	return tenant, owner, nil
 }
 

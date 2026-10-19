@@ -59,6 +59,7 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 功能 | 接口 | Console 页面 | 当前边界 |
 | --- | --- | --- | --- |
 | 登录与账户安全 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | `/login`、`/console/account` | 退出会先撤销服务端会话；改密与撤销全部会话后重新登录 |
+| 租户自助注册 | `POST /admin/v1/auth/signup`，随后 `POST /admin/v1/auth/login` | `/signup` | 需同时开启控制面 `Signup.Enabled` 与 Console `AISW_CONSOLE_SIGNUP_ENABLED`；未开启时页面与 `/api/signup` 均为 404。经 Console 自己的 `/api/signup` 路由，不在转发白名单内；成功后自动以新 owner 登录 |
 | 用户 | `GET/POST /admin/v1/users`、`PUT/POST /admin/v1/users/:id/*` | `/console/users` | owner 可重置密码、改角色、禁用/启用和撤销会话；禁用永久吊销该用户创建的 Key |
 | 平台运维账户 | `/operator/v1/operators*`、`/operator/v1/auth/*` | `/operator/operators`、`/operator/account` | 平台会话独立；不能禁用自己或最后一名有效运维 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
@@ -80,7 +81,7 @@ API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveCon
 ### 准备后端联调环境
 
 1. 按 [ControlPlane README](../aiServeWeaveControlPlane/README.md) 启动数据库、启用 AOF 持久化的 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
-2. 由运维按部署说明创建第一个租户及 owner。租户引导使用 BootstrapToken，常规 Console 会话不持有它。
+2. 由运维按部署说明创建第一个租户及 owner。租户引导使用 BootstrapToken，常规 Console 会话不持有它。若控制面开启了 `Signup.Enabled` 且 Console 设置了 `AISW_CONSOLE_SIGNUP_ENABLED=true`，也可以直接在 `/signup` 自助注册。
 3. 以该 owner 登录 Console，走完「创建用户 → 创建 Key → 关闭一次性明文 → 吊销 → 查询审计 → 退出」。
 
 一次可复制的本地联调必须包含 Redis；P05 后控制面不会退回只验 JWT：

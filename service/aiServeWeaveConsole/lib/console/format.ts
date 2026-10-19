@@ -184,6 +184,7 @@ export const AUDIT_ACTIONS: readonly { value: string; label: string }[] = [
   { value: "apikey.revoke", label: "吊销 API Key" },
   { value: "tenant.limits", label: "修改配额" },
   { value: "tenant.create", label: "创建租户" },
+  { value: "tenant.signup", label: "自助注册租户" },
 ];
 
 /**
