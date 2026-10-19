@@ -1,6 +1,6 @@
 # AIServeWeave 开发状态与待办
 
-更新日期：2026-09-19。
+更新日期：2026-10-19。
 
 本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
 
@@ -22,6 +22,7 @@ R01/R02 可与 Job 主线并行。P07 与 J03 共用迁移框架；P04 依赖 J0
 
 ## 当前已完成
 
+- [x] Agent Gemini CLI 仅图片生成接入（2026-10-19）：本地 `kind: gemini-cli` 使用官方 Nano Banana 扩展，发布 `gemini-image` 并复用 `/v1/images/generations` 与既有图像流；本地设置页、白名单、隔离与离线子进程测试已覆盖，官方扩展 1.0.12 的真实 MCP 握手/模型发现已验证。未用有效 Key 执行付费生图；安装和边界见 [Gemini CLI 说明](service/aiServeWeaveAgent/geminicli/README.md)。
 - [x] Registry 节点证书签发与续期、Gateway 副本名册；Agent 主动出站建立 mTLS 隧道、多副本连接与槽池。
 - [x] Ollama、vLLM、SGLang、ComfyUI 运行时适配；本机 Ollama/vLLM/SGLang 自动发现。
 - [x] OpenAI Chat Completions、Responses、Embeddings、Models 前门，支持相应流式接口；Responses 不支持持久会话续接。

@@ -48,6 +48,9 @@ const (
 	// KindPi names the Agent-local Pi Coding Agent CLI adapter.
 	// KindPi 表示 Agent 本地的 Pi Coding Agent CLI 适配器。
 	KindPi Kind = "pi"
+	// KindGeminiCLI names the local Gemini CLI Nano Banana image extension.
+	// KindGeminiCLI 表示本地 Gemini CLI 的 Nano Banana 生图扩展。
+	KindGeminiCLI Kind = "gemini-cli"
 
 	// Hosted OpenAI-compatible providers live in common/runtime/hosted.
 	// 托管的 OpenAI 兼容供应商位于 common/runtime/hosted。
@@ -90,14 +93,15 @@ const (
 	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 
-// IsLocalCLI reports whether k is an Agent-local CLI backend that uses the
-// CLI's own sign-in rather than an HTTP address or credentials.
+// IsLocalCLI reports whether k is an Agent-local CLI backend with local
+// authentication rather than an HTTP address or forwarded credentials.
+// The Gemini CLI image extension reads its API key from the local environment.
 //
-// IsLocalCLI 报告 k 是否为 Agent 本地 CLI 后端：使用 CLI 自身的登录，而不是
-// HTTP 地址或凭据。
+// IsLocalCLI 报告 k 是否为 Agent 本地 CLI 后端：仅在本机鉴权，不接受 HTTP
+// 地址或转发凭据。Gemini CLI 生图扩展使用本机环境变量中的 API Key。
 func (k Kind) IsLocalCLI() bool {
 	switch k {
-	case KindCodex, KindClaude, KindGrok, KindOpenCode, KindCursor, KindCodeBuddy, KindQoder, KindPi:
+	case KindCodex, KindClaude, KindGrok, KindOpenCode, KindCursor, KindCodeBuddy, KindQoder, KindPi, KindGeminiCLI:
 		return true
 	}
 	return false

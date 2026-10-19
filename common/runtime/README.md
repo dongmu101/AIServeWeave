@@ -239,6 +239,9 @@ const (
 	KindTokenSpeed Kind = "tokenspeed"
 	KindCodex   Kind = "codex"
 	KindClaude  Kind = "claude"
+	// KindGeminiCLI names the local image-only Nano Banana extension.
+	// KindGeminiCLI 表示本地仅支持生图的 Nano Banana 扩展。
+	KindGeminiCLI Kind = "gemini-cli"
 
 	// Agent 本地 CLI（cliagent 包）
 	KindGrok      Kind = "grok"
@@ -261,7 +264,8 @@ const (
 	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 
-// IsLocalCLI 为 codex / claude 及 cliagent 的六种 CLI 返回 true。
+// IsLocalCLI includes codex, claude, six cliagent kinds and the gemini-cli image extension.
+// IsLocalCLI 包含 codex、claude、cliagent 的六种 CLI 与 gemini-cli 生图扩展。
 func (k Kind) IsLocalCLI() bool
 
 // IsHosted 为上面十种托管供应商返回 true。
@@ -534,8 +538,8 @@ runtimes:
 校验要求：
 
 - `id` 非空且在单个 Agent 内唯一。
-- `kind` 只能是已注册值之一：本地服务（vllm、sglang、trtllm、tokenspeed、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
-- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode` 和 `service/aiServeWeaveAgent/cliagent`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
+- `kind` 只能是已注册值之一：本地服务（vllm、sglang、trtllm、tokenspeed、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi、gemini-cli）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
+- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode`、`service/aiServeWeaveAgent/cliagent` 和 `service/aiServeWeaveAgent/geminicli`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
 - `models` 是可选的本地模型目录声明：每项非空、不超过 256 字节且不重复；设置后以它为准，端点没有模型列表路由（404/405）时也能发布。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
 - 自定义 Header 禁止覆盖 `Host`、`Content-Length`、hop-by-hop headers 和 Agent 链路追踪头。
@@ -1339,5 +1343,6 @@ go test -race ./common/runtime/...
 
 - `ImageRequest` 只有模型 ID、提示词和可选的归属标识（`TenantID`/`KeyID`），没有 URL、路径、请求头或凭据字段。提示词不得写入日志。
 - `MaxImagePromptBytes`（32 KiB）、`MaxImageBytes`（32 MiB）、`MaxImageChunkBytes`（256 KiB）是契约值，Agent 拒绝产出更多，Gateway 拒绝接收更多。
+- 后端交付完整成品图像时（当前 Codex CLI 与 Gemini CLI 扩展均如此），适配器允许有界持有最多 32 MiB 再拆分事件；隧道两端仍逐个事件转发、每次最多一个分块。所有路径都须遵守上述硬上限。
 - `CapabilityImageGeneration`（`image_generation`）为它门禁。图像模型必须把各项聊天能力**显式**标为 `unsupported`，对话模型也必须把 `image_generation` 显式标为 `unsupported`。原因是 `Intersect` 会用运行时级别的能力补齐模型没提到的项，只省略不写，就会让图像模型继承运行时级别的聊天能力。
-- 当前唯一的实现是 Agent 的 `codexcli`，见 [Codex 包说明](../../service/aiServeWeaveAgent/codexcli/README.md#图像生成)。
+- Agent 的 `codexcli` 发布 `codex-image`；`geminicli` 通过 Gemini CLI 官方 Nano Banana 扩展发布 `gemini-image`，后者只实现 `ImageRuntime`，不实现聊天接口。见 [Codex 包说明](../../service/aiServeWeaveAgent/codexcli/README.md#图像生成) 与 [Gemini CLI 包说明](../../service/aiServeWeaveAgent/geminicli/README.md)。

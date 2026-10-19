@@ -577,7 +577,7 @@ button:hover { background: #1d4ed8; }
 <div id="runtime-editor" hidden>
 <div class="runtime-list" id="runtime-list"></div>
 <button type="button" class="secondary runtime-add" id="runtime-add">+ 添加本地 AI</button>
-<p class="hint">可以同时配置多个后端，每个运行时 ID 必须唯一。CLI 使用本机已登录的账户。</p>
+<p class="hint">可以同时配置多个后端，每个运行时 ID 必须唯一。聊天 CLI 使用本机已登录的账户；Gemini CLI 生图使用本机 API Key。</p>
 </div>
 <textarea id="runtime_declarations" name="runtimes" placeholder="ollama-local,ollama,http://127.0.0.1:11434&#10;codex-local,codex,">{{.Runtimes}}</textarea>
 <p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url[,api_key_env[,模型 模型]]；CLI 的地址留空，托管供应商的地址留空即用官方端点，api_key_env 填保存 Key 的环境变量名。</p>
@@ -588,10 +588,10 @@ button:hover { background: #1d4ed8; }
 <div class="field"><label>运行时 ID <span>Runtime ID</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
 <div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
 <optgroup label="本地服务"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TensorRT-LLM</option><option value="tokenspeed">TokenSpeed</option><option value="comfyui">ComfyUI</option></optgroup>
-<optgroup label="本机 CLI"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
+<optgroup label="本机 CLI"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="gemini-cli" data-group="cli">Gemini CLI（Nano Banana 生图）</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
 <optgroup label="托管供应商"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted" data-url-required="1">Anthropic Compatible</option><option value="openai_compatible" data-group="hosted" data-url-required="1">OpenAI Compatible / Custom</option></optgroup>
 </select></label></div>
-<div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址；请先在运行 Agent 的账户下登录。</p></div>
+<div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址。聊天 CLI 请先登录；Gemini CLI 生图需安装 Nano Banana 扩展并配置 NANOBANANA_API_KEY。</p></div>
 <div class="field runtime-hosted" hidden><label>Key 环境变量 <span>API key env</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
 <div class="field runtime-hosted" hidden><label>模型（可选，空格分隔）<span>Models</span><input type="text" class="runtime-models" placeholder="留空则向端点查询" pattern="[^,]*"></label></div>
 </div>

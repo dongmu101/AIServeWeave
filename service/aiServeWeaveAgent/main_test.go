@@ -423,3 +423,38 @@ func TestClaudeFactoryRequiresLocalDeclaration(t *testing.T) {
 		})
 	}
 }
+
+// TestGeminiImageFactoryRequiresLocalDeclaration checks the image-only backend's local boundary.
+// TestGeminiImageFactoryRequiresLocalDeclaration 检查仅生图后端的本地声明边界。
+func TestGeminiImageFactoryRequiresLocalDeclaration(t *testing.T) {
+	kind := runtime.Kind("gemini-cli")
+	for _, tc := range []struct {
+		name     string
+		declared []runtime.Config
+		allowed  bool
+	}{
+		{name: "absent"},
+		{name: "hosted Gemini is a different kind", declared: []runtime.Config{{ID: "gemini-local", Kind: runtime.KindGemini}}},
+		{name: "locally declared", declared: []runtime.Config{{ID: "gemini-local", Kind: kind}}, allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := newRegistry(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := registry.Create(runtime.Config{ID: "gemini-local", Kind: kind}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("Create error=%v, want allowed=%v", err, tc.allowed)
+			}
+			if rt != nil {
+				defer rt.Close()
+				if _, ok := rt.(runtime.ImageRuntime); !ok {
+					t.Fatalf("runtime type=%T, want ImageRuntime", rt)
+				}
+				if _, ok := rt.(runtime.InferenceRuntime); ok {
+					t.Fatalf("runtime type=%T, want image-only backend", rt)
+				}
+			}
+		})
+	}
+}

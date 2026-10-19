@@ -41,6 +41,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
+	"AIServeWeave/service/aiServeWeaveAgent/geminicli"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
@@ -1295,6 +1296,7 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 		runtime.KindComfyUI:    comfyui.New,
 		runtime.KindClaude:     localOnly(claudecode.New),
 		runtime.KindCodex:      localOnly(codexcli.New),
+		runtime.KindGeminiCLI:  localOnly(geminicli.New),
 	}
 	for _, kind := range cliagent.Kinds() {
 		factories[kind] = localOnly(cliagent.New)

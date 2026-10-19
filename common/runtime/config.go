@@ -99,11 +99,11 @@ func normalizeBaseURL(raw string) string {
 
 // Validate checks a Normalize'd Config and reports every problem found
 // (not just the first), joined into one *RuntimeError with Code
-// ErrorInvalidConfig. Local CLI kinds (Kind.IsLocalCLI) use the CLI's own
-// sign-in instead of HTTP.
+// ErrorInvalidConfig. Local CLI kinds (Kind.IsLocalCLI) keep authentication
+// local and accept no forwarded HTTP address or credentials.
 //
 // Validate 校验规范化后的配置，以 ErrorInvalidConfig 聚合报告全部问题。
-// 本地 CLI 种类（Kind.IsLocalCLI）使用 CLI 自身登录，不接受 HTTP 地址或凭据。
+// 本地 CLI 种类（Kind.IsLocalCLI）只在本机鉴权，不接受转发的 HTTP 地址或凭据。
 func (c Config) Validate() error {
 	var problems []string
 

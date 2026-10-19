@@ -265,3 +265,24 @@ func TestParseCodexRuntime(t *testing.T) {
 		t.Fatalf("runtimes=%+v, want %+v", got, want)
 	}
 }
+
+// TestGeminiImageConfigRoundTrip keeps the image backend local and address-free when saved.
+// TestGeminiImageConfigRoundTrip 确保保存生图后端时保留本地类型与空地址。
+func TestGeminiImageConfigRoundTrip(t *testing.T) {
+	cfg := (formValues{Runtimes: "gemini-local,gemini-cli,"}).toConfig()
+	path := filepath.Join(t.TempDir(), "agent.yaml")
+	if err := agentconfig.Save(path, cfg); err != nil {
+		t.Fatal(err)
+	}
+	loaded, err := agentconfig.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := agentconfig.RuntimeConfig{ID: "gemini-local", Kind: "gemini-cli"}
+	if len(loaded.Runtimes) != 1 || loaded.Runtimes[0] != want {
+		t.Fatalf("saved runtimes=%+v, want %+v", loaded.Runtimes, want)
+	}
+	if got := formValuesFromConfig(loaded).Runtimes; got != "gemini-local,gemini-cli," {
+		t.Fatalf("reloaded declaration=%q, want gemini-local,gemini-cli,", got)
+	}
+}

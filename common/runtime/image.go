@@ -74,10 +74,12 @@ type ImageEvent struct {
 type ImageRuntime interface {
 	Runtime
 	// GenerateImage streams one image as a Meta event followed by bounded Data
-	// events. The stream never holds more than one chunk beyond what the
-	// caller has read.
+	// events. Each event is bounded by MaxImageChunkBytes. A backend that
+	// receives a completed image may retain up to MaxImageBytes before
+	// slicing it into events; tunnel forwarding holds only one event at a time.
 	//
 	// GenerateImage 以一个 Meta 事件加若干有界 Data 事件流式返回一张图像。
-	// 流在调用方已读取的部分之外，最多只持有一个分块。
+	// 每个事件受 MaxImageChunkBytes 限制。后端接收完整成品图像时，可在拆分事件前
+	// 保留最多 MaxImageBytes；隧道转发每次只持有一个事件。
 	GenerateImage(ctx context.Context, req ImageRequest) (Stream[ImageEvent], error)
 }
