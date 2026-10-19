@@ -165,7 +165,7 @@ function CodeBlock({ code, lang }: { code: string; lang?: string }) {
       <div className="absolute top-1.5 right-1.5">
         <CopyButton text={code} />
       </div>
-      <pre className="max-h-[32rem] overflow-auto p-3 pr-10 font-mono text-xs leading-relaxed" data-lang={lang}>
+      <pre className="overflow-x-auto p-3 pr-10 font-mono text-xs leading-relaxed" data-lang={lang}>
         <code>{code}</code>
       </pre>
     </div>
@@ -220,7 +220,7 @@ export function ExamplePanel({
         id={`${id}-panel`}
         role="tabpanel"
         aria-labelledby={`${id}-tab-${active}`}
-        className="max-h-[36rem] overflow-auto p-3 font-mono text-xs leading-relaxed"
+        className="overflow-x-auto p-3 font-mono text-xs leading-relaxed"
       >
         <code>{current.code}</code>
       </pre>
@@ -387,7 +387,7 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
         ))}
       </article>
 
-      <aside className="flex min-w-0 flex-col gap-4 xl:sticky xl:top-4 xl:max-h-[calc(100vh-2rem)] xl:self-start xl:overflow-y-auto">
+      <aside className="flex min-w-0 flex-col gap-4">
         <ExamplePanel title="请求示例" tabs={requestTabs(c.request_examples, values)} />
         <ExamplePanel title="响应示例" tabs={responseTabs(c.response_examples, values)} />
       </aside>

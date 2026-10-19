@@ -18,7 +18,14 @@ for (const width of [1440, 390, 320]) {
     await page.context().addCookies(cookies.filter(cookie => cookie.name !== OPERATOR_COOKIE));
     await page.route("**/api/admin/admin/v1/models", route => route.fulfill({ json: catalog }));
     await page.goto("/console");
-    await page.getByRole("navigation", { name: "控制台导航" }).getByRole("link", { name: "AI 服务与模型", exact: true }).click();
+    const navigation = page.getByRole("navigation", { name: "控制台导航" });
+    const collapsed = navigation.getByRole("button", { name: "打开控制台导航" });
+    if (await collapsed.isVisible()) {
+      await collapsed.click();
+      await page.getByRole("menuitem", { name: "AI 服务与模型", exact: true }).click();
+    } else {
+      await navigation.getByRole("link", { name: "AI 服务与模型", exact: true }).click();
+    }
     await expect(page).toHaveURL(/\/console\/models$/);
     await expect(page.getByRole("heading", { name: "Agent AI 服务与模型", exact: true })).toBeVisible();
     await expect(page.getByText("4 个模型", { exact: true })).toBeVisible();

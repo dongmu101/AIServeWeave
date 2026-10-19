@@ -812,6 +812,48 @@ func (f *managerFixture) acceptRedial(done map[string]bool) string {
 	}
 }
 
+func TestManagerRedialsAReplicaThatSentShutdown(t *testing.T) {
+	tests := []struct {
+		name        string
+		advance     time.Duration
+		wantRedials int
+	}{
+		{name: "after the retry interval", advance: 10 * time.Second, wantRedials: 2},
+		{name: "not before the retry interval", advance: 9 * time.Second, wantRedials: 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newManagerFixture(t, []string{gw1}, nil)
+			f.start()
+
+			// A restarting Gateway ends its tunnels with Shutdown. With one
+			// replica no other tunnel is left to carry a roster, so only the
+			// manager's own retry can bring the node back.
+			conn := f.handshake(gw1)
+			if err := conn.sess.SendToAgent(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Shutdown{
+				Shutdown: &tunnelv1.Shutdown{Reason: "restart"},
+			}}); err != nil {
+				t.Fatalf("send shutdown: %v", err)
+			}
+			f.waitStates("no tunnel after Shutdown", func(states map[string]tunnel.State) bool {
+				return len(states) == 0
+			})
+
+			f.clock.Advance(tt.advance)
+
+			if tt.wantRedials > 1 {
+				f.handshake(gw1)
+				f.waitConnected(1)
+			} else {
+				time.Sleep(20 * time.Millisecond)
+			}
+			if got := f.fleet.Dials(gw1); got != tt.wantRedials {
+				t.Errorf("dials after %v = %d, want %d", tt.advance, got, tt.wantRedials)
+			}
+		})
+	}
+}
+
 func TestManagerKeepsRunningWhenTheRegistryIsUnreachable(t *testing.T) {
 	f := newManagerFixture(t, []string{gw1}, func(cfg *tunnel.ManagerConfig) {
 		cfg.IdentityInterval = time.Hour
