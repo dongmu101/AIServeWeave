@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import type { ApiKeySummary } from "./contract.ts";
 
 /**
@@ -19,7 +21,7 @@ import type { ApiKeySummary } from "./contract.ts";
  * 省略它们，而值的缺席本身是一个事实——「这个 key 从未被使用过」——不是格式化的意外。
  * 它绝不会被渲染成纪元时间，或一个可能被误认为日期的短横线。
  */
-export const UNKNOWN_TIME = "无记录";
+export const UNKNOWN_TIME = coreTranslator()("common.noRecord");
 
 /**
  * NEVER_EXPIRES is how a key with no expiry reads. The control plane stores no
@@ -29,7 +31,7 @@ export const UNKNOWN_TIME = "无记录";
  * NEVER_EXPIRES 是没有过期时间的 key 的读法。控制面对以负 TTL 创建的 key 不存过期时间，
  * 那是显式的「永不」——与一个它单纯不知道的值不同。
  */
-export const NEVER_EXPIRES = "永不过期";
+export const NEVER_EXPIRES = coreTranslator()("common.neverExpires");
 
 /**
  * formatDateTime renders an RFC 3339 timestamp in the viewer's local time.
@@ -38,16 +40,17 @@ export const NEVER_EXPIRES = "永不过期";
  */
 export function formatDateTime(
   value: string | null,
-  fallback: string = UNKNOWN_TIME
+  fallback: string | undefined = undefined,
+  locale: Locale = DEFAULT_LOCALE
 ): string {
   if (value === null) {
-    return fallback;
+    return fallback ?? coreTranslator(locale)("common.noRecord");
   }
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) {
-    return fallback;
+    return fallback ?? coreTranslator(locale)("common.noRecord");
   }
-  return parsed.toLocaleString("zh-CN", {
+  return parsed.toLocaleString(locale, {
     year: "numeric",
     month: "2-digit",
     day: "2-digit",
@@ -80,16 +83,17 @@ export interface KeyState {
  */
 export function apiKeyState(
   key: Pick<ApiKeySummary, "status" | "expiresAt" | "revokedAt">,
-  now: Date
+  now: Date, locale: Locale = DEFAULT_LOCALE
 ): KeyState {
+  const t = coreTranslator(locale);
   if (key.status === "revoked" || key.revokedAt !== null) {
-    return { kind: "revoked", label: "已吊销" };
+    return { kind: "revoked", label: t("tenant.revoked") };
   }
   if (key.expiresAt !== null && Date.parse(key.expiresAt) <= now.getTime()) {
-    return { kind: "expired", label: "已过期" };
+    return { kind: "expired", label: t("common.expired") };
   }
   if (key.status === "active") {
-    return { kind: "active", label: "生效中" };
+    return { kind: "active", label: t("common.active") };
   }
   // An unfamiliar status is shown as it arrived. This build not recognizing a
   // value is something to see, not something to round off to "active".
@@ -100,7 +104,7 @@ export function apiKeyState(
 }
 
 /**
- * TTL_CHOICES is what the key creation form offers, in seconds.
+ * ttlChoices returns what the key creation form offers, in seconds.
  *
  * Zero is not among them: the API reads zero as "use the service default",
  * and a form that sent it would be asking for whatever the deployment happens
@@ -108,19 +112,24 @@ export function apiKeyState(
  * choice here is explicit, and "never" is the negative value the API reserves
  * for exactly that — not a hundred years.
  *
- * TTL_CHOICES 是创建 key 表单提供的选项，单位为秒。
+ * ttlChoices 返回创建 key 表单提供的选项，单位为秒。
  *
  * 零不在其中：API 把零读作「使用服务默认值」，而一个发送零的表单，等于在向部署索取它
  * 碰巧被配置成的那个值，却对当事人显示一个具体的数字。这里每个选项都是显式的，而
  * 「永不过期」用的是 API 为此保留的负值——不是一百年。
  */
-export const TTL_CHOICES: readonly { value: string; label: string; seconds: number }[] = [
-  { value: "30d", label: "30 天", seconds: 30 * 24 * 60 * 60 },
-  { value: "90d", label: "90 天（默认）", seconds: 90 * 24 * 60 * 60 },
-  { value: "180d", label: "180 天", seconds: 180 * 24 * 60 * 60 },
-  { value: "365d", label: "365 天（上限）", seconds: 365 * 24 * 60 * 60 },
-  { value: "never", label: "永不过期", seconds: -1 },
+export function ttlChoices(locale: Locale = DEFAULT_LOCALE): readonly { value: string; label: string; seconds: number }[] {
+  const t = coreTranslator(locale);
+  return [
+  { value: "30d", label: t("common.30Days"), seconds: 30 * 24 * 60 * 60 },
+  { value: "90d", label: t("common.90DaysDefault"), seconds: 90 * 24 * 60 * 60 },
+  { value: "180d", label: t("common.180Days"), seconds: 180 * 24 * 60 * 60 },
+  { value: "365d", label: t("common.365DaysMaximum"), seconds: 365 * 24 * 60 * 60 },
+  { value: "never", label: t("common.neverExpires"), seconds: -1 },
 ];
+}
+/** TTL_CHOICES preserves default-language compatibility. / TTL_CHOICES 保留默认语言的兼容接口。 */
+export const TTL_CHOICES = ttlChoices();
 
 /**
  * DEFAULT_TTL_CHOICE matches the control plane's own default lifetime.
@@ -161,7 +170,7 @@ export function matchesQuery(fields: readonly string[], query: string): boolean 
 }
 
 /**
- * AUDIT_ACTIONS is the set of actions the control plane writes, mirroring
+ * auditActions returns the set of actions the control plane writes, mirroring
  * `model.Action*`.
  *
  * The filter offers these rather than a free-text box because the API matches
@@ -170,25 +179,30 @@ export function matchesQuery(fields: readonly string[], query: string): boolean 
  * action outside this list can still appear in the table; the list bounds what
  * can be filtered for, not what can be shown.
  *
- * AUDIT_ACTIONS 是控制面会写入的动作集合，镜像 `model.Action*`。
+ * auditActions 返回控制面会写入的动作集合，镜像 `model.Action*`。
  *
  * 筛选提供的是这些选项而不是一个自由文本框，因为 API 对动作做精确匹配：手打的
  * "apikey.revok" 会返回空页，而那读起来像「没有任何东西被吊销过」——一个错误的答案，
  * 而不是没有答案。这个列表之外的动作依然可能出现在表格里；它限定的是可供筛选的范围，
  * 不是可供展示的范围。
  */
-export const AUDIT_ACTIONS: readonly { value: string; label: string }[] = [
-  { value: "user.login", label: "登录" },
-  { value: "user.create", label: "创建用户" },
-  { value: "apikey.create", label: "创建 API Key" },
-  { value: "apikey.revoke", label: "吊销 API Key" },
-  { value: "tenant.limits", label: "修改配额" },
-  { value: "tenant.create", label: "创建租户" },
-  { value: "tenant.signup", label: "自助注册租户" },
+export function auditActions(locale: Locale = DEFAULT_LOCALE): readonly { value: string; label: string }[] {
+  const t = coreTranslator(locale);
+  return [
+  { value: "user.login", label: t("auth.signIn") },
+  { value: "user.create", label: t("tenant.createUser") },
+  { value: "apikey.create", label: t("tenant.createApiKey") },
+  { value: "apikey.revoke", label: t("tenant.revokeApiKey") },
+  { value: "tenant.limits", label: t("common.changeQuotas") },
+  { value: "tenant.create", label: t("common.createTenant") },
+  { value: "tenant.signup", label: t("common.selfRegisterTenant") },
 ];
+}
+/** AUDIT_ACTIONS preserves default-language compatibility. / AUDIT_ACTIONS 保留默认语言的兼容接口。 */
+export const AUDIT_ACTIONS = auditActions();
 
 /**
- * QUOTA_DIMENSIONS describes the three limits a tenant has, so the form and
+ * quotaDimensions describes the three limits a tenant has, so the form and
  * its copy come from one place.
  *
  * Zero is not "unset" — quota.Limits documents it as unlimited, and every
@@ -197,32 +211,37 @@ export const AUDIT_ACTIONS: readonly { value: string; label: string }[] = [
  * were filling in a blank, when they would be adding a limit that was not
  * there before.
  *
- * QUOTA_DIMENSIONS 描述一个租户的三项限制，好让表单与它的文案出自同一处。
+ * quotaDimensions 描述一个租户的三项限制，好让表单与它的文案出自同一处。
  *
  * 零不是「未设置」——quota.Limits 把它记载为不限制，而且这几列被加上时，所有既有租户
  * 得到的都是零。一个把零显示成空白输入框的表单，会诱使人以为自己在填一个空缺而输入
  * 数字，实际上他是在添加一条原本不存在的限制。
  */
-export const QUOTA_DIMENSIONS = [
+export function quotaDimensions(locale: Locale = DEFAULT_LOCALE) {
+  const t = coreTranslator(locale);
+  return [
   {
     field: "requestsPerMinute" as const,
     wire: "requests_per_minute",
-    label: "每分钟请求数",
-    help: "限制调用频率。令牌桶连续补充，不按整分钟重置。",
+    label: t("common.requestsPerMinute"),
+    help: t("common.limitsCallFrequencyTheTokenBucketRefillsContinuously"),
   },
   {
     field: "tokensPerMinute" as const,
     wire: "tokens_per_minute",
-    label: "每分钟 Token 数",
-    help: "限制工作量。在响应完成后扣减，因此超大的单次请求会被放行，超支由其后的请求偿付。",
+    label: t("common.tokensPerMinute"),
+    help: t("common.limitsWorkloadTokensAreDeductedAfterAResponse"),
   },
   {
     field: "maxConcurrent" as const,
     wire: "max_concurrent",
-    label: "最大并发数",
-    help: "限制同时进行的请求数，保护容量而不是公平性。",
+    label: t("common.maximumConcurrency"),
+    help: t("common.limitsSimultaneousRequestsToProtectCapacityNotTo"),
   },
 ] as const;
+}
+/** QUOTA_DIMENSIONS preserves default-language compatibility. / QUOTA_DIMENSIONS 保留默认语言的兼容接口。 */
+export const QUOTA_DIMENSIONS = quotaDimensions();
 
 /**
  * formatLimit renders one quota dimension. Zero is spelled out as unlimited
@@ -232,8 +251,9 @@ export const QUOTA_DIMENSIONS = [
  * formatLimit 渲染一个配额维度。零会被写成「不限制」而不是显示为 "0"，否则读者会把它
  * 理解成「一次请求都不允许」——与它的实际含义正好相反。
  */
-export function formatLimit(value: number): string {
-  return value === 0 ? "不限制" : value.toLocaleString("zh-CN");
+export function formatLimit(value: number, locale: Locale = DEFAULT_LOCALE): string {
+  const t = coreTranslator(locale);
+  return value === 0 ? t("common.unlimited") : value.toLocaleString(locale);
 }
 
 /**
@@ -251,16 +271,17 @@ export function formatLimit(value: number): string {
  * 会移除一条当事人从未打算碰的限制——而且这个端点是整组一次性写入的，所以每一个空白都
  * 会连同他确实改过的那个字段一起被提交。
  */
-export function limitProblem(raw: string): string | null {
+export function limitProblem(raw: string, locale: Locale = DEFAULT_LOCALE): string | null {
+  const t = coreTranslator(locale);
   const trimmed = raw.trim();
   if (trimmed === "") {
-    return "请填写数值；不限制请填 0。";
+    return t("common.enterANumberOr0ForUnlimited");
   }
   if (!/^\d+$/.test(trimmed)) {
-    return "只能填写非负整数。";
+    return t("common.onlyNonnegativeIntegersAreAllowed");
   }
   if (!Number.isSafeInteger(Number(trimmed))) {
-    return "数值超出可表示范围。";
+    return t("common.theNumberIsOutsideTheSupportedRange");
   }
   return null;
 }
@@ -312,22 +333,23 @@ export function isTerminalJobState(state: string): boolean {
  */
 export function observationAge(
   observedAt: string,
-  now: Date
+  now: Date, locale: Locale = DEFAULT_LOCALE
 ): { minutes: number; label: string } | null {
+  const t = coreTranslator(locale);
   const observed = Date.parse(observedAt);
   if (Number.isNaN(observed)) {
     return null;
   }
   const minutes = Math.floor((now.getTime() - observed) / 60_000);
   if (minutes < 1) {
-    return { minutes: 0, label: "刚刚" };
+    return { minutes: 0, label: t("common.justNow") };
   }
   if (minutes < 60) {
-    return { minutes, label: `${minutes} 分钟前` };
+    return { minutes, label: t("common.minAgo", { minutes: minutes }) };
   }
   const hours = Math.floor(minutes / 60);
   if (hours < 24) {
-    return { minutes, label: `${hours} 小时前` };
+    return { minutes, label: t("common.hrAgo", { hours: hours }) };
   }
-  return { minutes, label: `${Math.floor(hours / 24)} 天前` };
+  return { minutes, label: t("common.dAgo", { value: Math.floor(hours / 24) }) };
 }

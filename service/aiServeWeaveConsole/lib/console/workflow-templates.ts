@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import { ApiError, describe } from "./errors.ts";
 
 /** MAX_GRAPH_BYTES bounds one template's imported ComfyUI graph, mirroring common/workflowtemplate.MaxGraphBytes.
@@ -314,8 +316,9 @@ export async function importTemplateManifestFile(file: Pick<Blob, "size" | "stre
 }
 /** templateWriteMessage explains conflicts without discarding the draft, the same wording routeWriteMessage uses.
  * templateWriteMessage 解释冲突且不丢弃草稿，与 routeWriteMessage 相同的措辞。 */
-export function templateWriteMessage(error: unknown): string {
-  return error instanceof ApiError && error.kind === "conflict" ? "当前版本已变化，草稿已保留。请重新读取当前版本，比较后再次确认发布。" : `${describe(error)} 草稿已保留；请刷新当前版本核对结果。`;
+export function templateWriteMessage(error: unknown, locale: Locale = DEFAULT_LOCALE): string {
+  const t = coreTranslator(locale);
+  return error instanceof ApiError && error.kind === "conflict" ? t("common.theCurrentVersionHasChangedYourDraftHas") : t("common.yourDraftHasBeenKeptRefreshTheCurrent", { value: describe(error, locale) });
 }
 /** templateBodyLimit raises the bound only for matched bundle-writing paths, the same scoping routeBodyLimit applies.
  * templateBodyLimit 仅对已匹配的整包写入路径提高上限，与 routeBodyLimit 相同的范围收紧。 */

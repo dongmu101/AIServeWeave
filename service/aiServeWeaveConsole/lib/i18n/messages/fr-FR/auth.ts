@@ -1,6 +1,5 @@
 const auth = {
   "auth.password": "Mot de passe",
-  "auth.signIn": "Se connecter",
   "auth.donTHaveAnAccount": "Pas encore de compte ?",
   "auth.registerTenant": "Inscrire un locataire",
   "auth.ifYouForgotYourPasswordContactYourDeployment": ". Si vous avez oublié votre mot de passe, contactez l’administrateur du déploiement.",

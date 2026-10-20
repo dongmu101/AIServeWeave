@@ -1,5 +1,5 @@
 import type { Locale } from "./locale.ts";
-import type { MessageKey, Messages } from "./messages.ts";
+import type { MessageEntry, MessageKey } from "./messages.ts";
 
 /** MessageValues supplies named phrase parameters. / MessageValues 提供句子的具名参数。 */
 export type MessageValues = Readonly<Record<string, string | number>>;
@@ -8,7 +8,7 @@ export type Translator = (key: MessageKey, values?: MessageValues) => string;
 
 /** createTranslator binds a catalogue without global active-language state.
  * createTranslator 绑定词典，不使用全局的当前语言状态。 */
-export function createTranslator(locale: Locale, messages: Messages, options: { strict?: boolean } = {}): Translator {
+export function createTranslator(locale: Locale, messages: Readonly<Record<string, MessageEntry>>, options: { strict?: boolean } = {}): Translator {
   const strict = options.strict ?? process.env.NODE_ENV !== "production";
   const plural = new Intl.PluralRules(locale);
   const unavailable = String(messages["common.unavailable"]);

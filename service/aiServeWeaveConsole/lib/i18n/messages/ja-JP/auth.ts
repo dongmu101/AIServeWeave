@@ -1,6 +1,5 @@
 const auth = {
   "auth.password": "パスワード",
-  "auth.signIn": "ログイン",
   "auth.donTHaveAnAccount": "アカウントをお持ちでない場合",
   "auth.registerTenant": "テナントを登録",
   "auth.ifYouForgotYourPasswordContactYourDeployment": "。パスワードを忘れた場合は、デプロイ管理者にお問い合わせください。",

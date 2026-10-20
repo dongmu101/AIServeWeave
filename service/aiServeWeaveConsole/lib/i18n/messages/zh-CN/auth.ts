@@ -1,6 +1,5 @@
 const auth = {
   "auth.password": "密码",
-  "auth.signIn": "登录",
   "auth.donTHaveAnAccount": "还没有账号？",
   "auth.registerTenant": "注册租户",
   "auth.ifYouForgotYourPasswordContactYourDeployment": "。忘记密码请联系部署管理员。",

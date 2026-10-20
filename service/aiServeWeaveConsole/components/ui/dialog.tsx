@@ -1,5 +1,7 @@
 "use client"
 
+import { Message } from "@/components/i18n/message"
+
 import * as React from "react"
 import { Dialog as DialogPrimitive } from "@base-ui/react/dialog"
 import { cn } from "cn"
@@ -72,7 +74,7 @@ function DialogContent({
           >
             <XIcon
             />
-            <span className="sr-only">Close</span>
+            <span className="sr-only"><Message id="common.close" /></span>
           </DialogPrimitive.Close>
         )}
       </DialogPrimitive.Popup>
@@ -110,7 +112,7 @@ function DialogFooter({
       {children}
       {showCloseButton && (
         <DialogPrimitive.Close render={<Button variant="outline" />}>
-          Close
+          <Message id="common.close" />
         </DialogPrimitive.Close>
       )}
     </div>

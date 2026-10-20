@@ -21,5 +21,5 @@ export function Message({ id, values = {} }: { id: MessageKey; values?: MessageV
     }
   }
   return <>{t(id, plain).split(/(\uE000\d+\uE001)/g).map((part, position) =>
-    <React.Fragment key={position}>{nodes.has(part) ? nodes.get(part) : part}</React.Fragment>)}</>;
+    <React.Fragment key={nodes.has(part) ? part : `text-${position}`}>{nodes.has(part) ? nodes.get(part) : part}</React.Fragment>)}</>;
 }

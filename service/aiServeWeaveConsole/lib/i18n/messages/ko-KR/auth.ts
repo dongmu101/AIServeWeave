@@ -1,6 +1,5 @@
 const auth = {
   "auth.password": "비밀번호",
-  "auth.signIn": "로그인",
   "auth.donTHaveAnAccount": "아직 계정이 없나요?",
   "auth.registerTenant": "테넌트 등록",
   "auth.ifYouForgotYourPasswordContactYourDeployment": ". 비밀번호를 잊으셨다면 배포 관리자에게 문의하세요.",

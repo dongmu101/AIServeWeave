@@ -1,4 +1,6 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
 
 import { Message } from "@/components/i18n/message";
 
@@ -10,7 +12,6 @@ import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
 import { operatorSignIn } from "@/lib/console/operator-client";
-import { describe } from "@/lib/console/errors";
 
 /**
  * OperatorLoginForm posts credentials to the Console's own session route, which is the
@@ -28,7 +29,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -49,7 +50,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
       router.refresh();
     } catch (failure) {
       setPassword("");
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
   }

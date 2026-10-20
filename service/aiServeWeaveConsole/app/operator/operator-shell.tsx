@@ -1,4 +1,6 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
 
 import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
@@ -12,7 +14,6 @@ import { usePathname, useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { FormError } from "@/components/console/states";
 import { operatorSignOut } from "@/lib/console/operator-client";
-import { describe } from "@/lib/console/errors";
 import type { OperatorIdentity } from "@/lib/console/operator-session";
 
 function navigationItems(t: Translator) { return [
@@ -41,7 +42,7 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
   const router = useRouter();
   const pathname = usePathname();
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
   async function leave() {
     setPending(true);
     setError(null);
@@ -49,7 +50,7 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
       await operatorSignOut();
       router.replace("/operator/login");
       router.refresh();
-    } catch (failure) { setError(describe(failure)); setPending(false); }
+    } catch (failure) { setError(<ErrorMessage error={failure} />); setPending(false); }
   }
   return <div className="flex min-h-full flex-1 flex-col">
     <header className="border-b"><div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">

@@ -1,4 +1,6 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
 
 import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
@@ -23,7 +25,6 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { signOut } from "@/lib/console/api-client";
 import { type Role } from "@/lib/console/contract";
-import { describe } from "@/lib/console/errors";
 import type { SessionUser } from "@/lib/console/session-payload";
 
 /**
@@ -91,7 +92,7 @@ export function ConsoleShell({
     try {
       await signOut();
     } catch (failure) {
-      toast.error(describe(failure));
+      toast.error(<ErrorMessage error={failure} />);
       setLeaving(false);
       return;
     }

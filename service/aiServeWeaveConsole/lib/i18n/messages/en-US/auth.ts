@@ -1,6 +1,5 @@
 const auth = {
   "auth.password": "Password",
-  "auth.signIn": "Sign in",
   "auth.donTHaveAnAccount": "Don't have an account?",
   "auth.registerTenant": "Register tenant",
   "auth.ifYouForgotYourPasswordContactYourDeployment": ". If you forgot your password, contact your deployment administrator.",

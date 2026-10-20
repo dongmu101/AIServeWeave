@@ -1,6 +1,5 @@
 const auth = {
   "auth.password": "Passwort",
-  "auth.signIn": "Anmelden",
   "auth.donTHaveAnAccount": "Noch kein Konto?",
   "auth.registerTenant": "Mandanten registrieren",
   "auth.ifYouForgotYourPasswordContactYourDeployment": ". Bei vergessenem Passwort wenden Sie sich an den Bereitstellungsadministrator.",

@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import { ApiError } from "./errors.ts";
 
 /**
@@ -35,16 +37,17 @@ export type Role = "owner" | "admin" | "member";
 export const ROLES: readonly Role[] = ["owner", "admin", "member"];
 
 /**
- * ROLE_LABELS is the Chinese label for each role. Values sent to the API are
+ * roleLabels returns display labels for each role. Values sent to the API are
  * always the raw role, never the label.
  *
- * ROLE_LABELS 是每个角色的中文标签。发往 API 的一律是原始角色值，绝不是标签。
+ * roleLabels 返回每个角色的显示标签。发往 API 的一律是原始角色值，绝不是标签。
  */
-export const ROLE_LABELS: Record<Role, string> = {
-  owner: "所有者",
-  admin: "管理员",
-  member: "成员",
-};
+export function roleLabels(locale: Locale = DEFAULT_LOCALE): Record<Role, string> {
+  const t = coreTranslator(locale);
+  return { owner: t("common.owner"), admin: t("common.administrator"), member: t("common.member") };
+}
+/** ROLE_LABELS provides default-language labels for compatibility. / ROLE_LABELS 提供兼容的默认语言标签。 */
+export const ROLE_LABELS = roleLabels();
 
 /**
  * Page is one slice of a list, mirroring the envelope the Admin API returns.

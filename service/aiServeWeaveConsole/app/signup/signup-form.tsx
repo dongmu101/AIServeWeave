@@ -1,4 +1,6 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
 
 import { Message } from "@/components/i18n/message";
 
@@ -10,12 +12,11 @@ import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
 import { signUp } from "@/lib/console/api-client";
-import { describe } from "@/lib/console/errors";
 import { DEFAULT_LANDING } from "@/lib/console/internal-path";
 import {
   MAX_TENANT_NAME_LENGTH,
   MIN_SIGNUP_PASSWORD_LENGTH,
-  localSignupProblem,
+  signupProblem,
 } from "@/lib/console/signup";
 
 /**
@@ -35,21 +36,21 @@ export function SignupForm() {
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) {
       return;
     }
-    const problem = localSignupProblem({
+    const problem = signupProblem({
       tenantName,
       email,
       password,
       confirmPassword,
     });
     if (problem) {
-      setError(problem);
+      setError(<ErrorMessage error={problem} />);
       return;
     }
     setPending(true);
@@ -67,7 +68,7 @@ export function SignupForm() {
     } catch (failure) {
       setPassword("");
       setConfirmPassword("");
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
   }

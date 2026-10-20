@@ -1,4 +1,10 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -11,7 +17,6 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { signOut } from "@/lib/console/api-client";
 import { parseNoContent } from "@/lib/console/contract";
-import { describe } from "@/lib/console/errors";
 import { operatorSignOut } from "@/lib/console/operator-client";
 
 /** AccountSecurity renders self-service password and session revocation for
@@ -19,12 +24,13 @@ import { operatorSignOut } from "@/lib/console/operator-client";
  *
  * AccountSecurity 为一个隔离的认证入口渲染自助改密与会话吊销。 */
 export function AccountSecurity({ surface }: { surface: "admin" | "operator" }) {
+  const { t } = useI18n();
   const run = useConsoleRequest();
   const router = useRouter();
   const [currentPassword, setCurrentPassword] = React.useState("");
   const [newPassword, setNewPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
   const prefix = surface === "operator" ? "/operator/v1" : "/admin/v1";
   const login = surface === "operator" ? "/operator/login" : "/login";
 
@@ -50,39 +56,39 @@ export function AccountSecurity({ surface }: { surface: "admin" | "operator" }) 
     } catch (failure) {
       setCurrentPassword("");
       setNewPassword("");
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
     } finally {
       setPending(false);
     }
   }
 
   async function revokeAll() {
-    if (pending || !window.confirm("撤销此账户的全部会话并重新登录？")) return;
+    if (pending || !window.confirm(t("common.revokeAllSessionsForThisAccountAndSign"))) return;
     setPending(true);
     setError(null);
     try {
       await run({ method: "POST", surface, path: `${prefix}/auth/sessions/revoke`, parse: parseNoContent });
       await leave();
     } catch (failure) {
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
     } finally {
       setPending(false);
     }
   }
 
   return <div className="grid gap-4">
-    <div><h1 className="font-heading text-lg font-semibold">账户安全</h1><p className="text-sm text-muted-foreground">改密或撤销全部会话后，需要重新登录。</p></div>
-    <Card><CardHeader><CardTitle>修改密码</CardTitle></CardHeader><CardContent>
+    <div><h1 className="font-heading text-lg font-semibold"><Message id="tenant.accountSecurity" /></h1><p className="text-sm text-muted-foreground"><Message id="common.afterChangingYourPasswordOrRevokingAllSessions" /></p></div>
+    <Card><CardHeader><CardTitle><Message id="common.changePassword" /></CardTitle></CardHeader><CardContent>
       <form className="grid max-w-md gap-3" onSubmit={changePassword}>
-        <label className="grid gap-1 text-sm">当前密码<Input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} disabled={pending} /></label>
-        <label className="grid gap-1 text-sm">新密码<Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} disabled={pending} /></label>
-        <p className="text-xs text-muted-foreground">密码规则保持现状，可以为空；输入不会写入 URL、日志或浏览器存储。</p>
-        <FormError message={error} /><SubmitButton pending={pending}>修改并重新登录</SubmitButton>
+        <label className="grid gap-1 text-sm"><Message id="common.currentPassword_1dc575" values={{ content: <Input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} disabled={pending} /> }} /></label>
+        <label className="grid gap-1 text-sm"><Message id="common.newPassword_862631" values={{ content: <Input type="password" autoComplete="new-password" value={newPassword} onChange={(event) => setNewPassword(event.target.value)} disabled={pending} /> }} /></label>
+        <p className="text-xs text-muted-foreground"><Message id="common.passwordRulesAreUnchangedThePasswordMayBe" /></p>
+        <FormError message={error} /><SubmitButton pending={pending}><Message id="common.changePasswordSignInAgain" /></SubmitButton>
       </form>
     </CardContent></Card>
-    <Card><CardHeader><CardTitle>撤销全部会话</CardTitle></CardHeader><CardContent className="grid gap-3">
-      <p className="text-sm text-muted-foreground">立即结束该账户在所有浏览器中的会话，包括当前会话。</p>
-      <Button variant="destructive" className="w-fit" disabled={pending} onClick={revokeAll}>撤销全部会话</Button>
+    <Card><CardHeader><CardTitle><Message id="common.revokeAllSessions" /></CardTitle></CardHeader><CardContent className="grid gap-3">
+      <p className="text-sm text-muted-foreground"><Message id="common.immediatelyEndThisAccountSSessionsInAll" /></p>
+      <Button variant="destructive" className="w-fit" disabled={pending} onClick={revokeAll}><Message id="common.revokeAllSessions" /></Button>
     </CardContent></Card>
   </div>;
 }

@@ -1,3 +1,6 @@
+import { MessageError } from "../i18n/problem.ts";
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import type { ApiErrorKind } from "./errors.ts";
 
 /**
@@ -89,22 +92,29 @@ export interface SignupForm extends SignupCredentials {
  * localSignupProblem 返回页面无需询问控制面就能指出的第一个问题；表单值得提交时
  * 返回 null。
  */
-export function localSignupProblem(form: SignupForm): string | null {
+export function localSignupProblem(form: SignupForm, locale: Locale = DEFAULT_LOCALE): string | null {
+  const problem = signupProblem(form);
+  return problem ? coreTranslator(locale)(problem.key, problem.values) : null;
+}
+
+/** signupProblem retains a fixed reason so open validation feedback can change language.
+ * signupProblem 保留固定原因，使已显示的校验提示可随语言切换。 */
+export function signupProblem(form: SignupForm): MessageError | null {
   const name = form.tenantName.trim();
   if (name === "") {
-    return "请填写租户名称。";
+    return new MessageError("common.enterATenantName");
   }
   if ([...name].length > MAX_TENANT_NAME_LENGTH) {
-    return `租户名称不能超过 ${MAX_TENANT_NAME_LENGTH} 个字符。`;
+    return new MessageError("common.tenantNameMustNotExceedCharacters", { MAX_TENANT_NAME_LENGTH: MAX_TENANT_NAME_LENGTH });
   }
   if (form.email.trim() === "") {
-    return "请填写邮箱。";
+    return new MessageError("tenant.enterAnEmailAddress");
   }
   if ([...form.password].length < MIN_SIGNUP_PASSWORD_LENGTH) {
-    return `密码至少 ${MIN_SIGNUP_PASSWORD_LENGTH} 个字符。`;
+    return new MessageError("common.passwordMustContainAtLeastCharacters", { MIN_SIGNUP_PASSWORD_LENGTH: MIN_SIGNUP_PASSWORD_LENGTH });
   }
   if (form.password !== form.confirmPassword) {
-    return "两次输入的密码不一致。";
+    return new MessageError("common.thePasswordsDoNotMatch");
   }
   return null;
 }
