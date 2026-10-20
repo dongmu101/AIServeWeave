@@ -1,5 +1,8 @@
 "use client";
 
+import { Message } from "@/components/i18n/message";
+
+
 import * as React from "react";
 import { useRouter } from "next/navigation";
 
@@ -55,8 +58,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
     <form onSubmit={submit} className="grid gap-4" noValidate>
       <div className="grid gap-2">
         <label htmlFor="email" className="text-sm font-medium">
-          邮箱
-        </label>
+          <Message id="tenant.email" /></label>
         <Input
           id="email"
           name="email"
@@ -70,8 +72,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
       </div>
       <div className="grid gap-2">
         <label htmlFor="password" className="text-sm font-medium">
-          密码
-        </label>
+          <Message id="auth.password" /></label>
         <Input
           id="password"
           name="password"
@@ -84,11 +85,9 @@ export function OperatorLoginForm({ next }: { next: string }) {
       </div>
       <FormError message={error} />
       <SubmitButton pending={pending} size="lg">
-        登录
-      </SubmitButton>
+        <Message id="auth.signIn" /></SubmitButton>
       <p className="text-xs text-muted-foreground">
-        忘记密码或尚未获得账号，请联系部署管理员。
-      </p>
+        <Message id="auth.ifYouForgotYourPasswordOrDoNot" /></p>
     </form>
   );
 }

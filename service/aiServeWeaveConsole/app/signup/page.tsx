@@ -1,3 +1,5 @@
+import { Message } from "@/components/i18n/message";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
@@ -26,19 +28,15 @@ export default async function SignupPage() {
   return (
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm">
+        <div className="mb-6 flex justify-end"><LanguageSwitcher /></div>
         <div className="mb-6 space-y-1">
-          <h1 className="font-heading text-xl font-semibold">注册租户</h1>
+          <h1 className="font-heading text-xl font-semibold"><Message id="auth.registerTenant" /></h1>
           <p className="text-sm text-muted-foreground">
-            创建一个新租户，你将成为它的 owner。注册后立即可用。
-          </p>
+            <Message id="auth.createANewTenantAndBecomeItsOwner" /></p>
         </div>
         <SignupForm />
-        <p className="mt-4 text-xs text-muted-foreground">
-          已有账号？
-          <Link href="/login" className="underline underline-offset-4">
-            登录
-          </Link>
-        </p>
+        <p className="mt-4 text-xs text-muted-foreground"><Message id="auth.alreadyHaveAnAccount_e11670" values={{ link: <Link href="/login" className="underline underline-offset-4">
+            <Message id="auth.signIn" /></Link> }} /></p>
       </div>
     </main>
   );

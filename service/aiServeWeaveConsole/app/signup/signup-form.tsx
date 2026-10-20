@@ -1,5 +1,8 @@
 "use client";
 
+import { Message } from "@/components/i18n/message";
+
+
 import * as React from "react";
 import { useRouter } from "next/navigation";
 
@@ -73,8 +76,7 @@ export function SignupForm() {
     <form onSubmit={submit} className="grid gap-4" noValidate>
       <div className="grid gap-2">
         <label htmlFor="tenant-name" className="text-sm font-medium">
-          租户名称
-        </label>
+          <Message id="auth.tenantName" /></label>
         <Input
           id="tenant-name"
           name="tenant-name"
@@ -88,8 +90,7 @@ export function SignupForm() {
       </div>
       <div className="grid gap-2">
         <label htmlFor="email" className="text-sm font-medium">
-          邮箱
-        </label>
+          <Message id="tenant.email" /></label>
         <Input
           id="email"
           name="email"
@@ -103,8 +104,7 @@ export function SignupForm() {
       </div>
       <div className="grid gap-2">
         <label htmlFor="password" className="text-sm font-medium">
-          密码
-        </label>
+          <Message id="auth.password" /></label>
         <Input
           id="password"
           name="password"
@@ -115,14 +115,11 @@ export function SignupForm() {
           onChange={(event) => setPassword(event.target.value)}
           disabled={pending}
         />
-        <p id="password-hint" className="text-xs text-muted-foreground">
-          至少 {MIN_SIGNUP_PASSWORD_LENGTH} 个字符。
-        </p>
+        <p id="password-hint" className="text-xs text-muted-foreground"><Message id="auth.atLeastCharacters" values={{ MIN_SIGNUP_PASSWORD_LENGTH: MIN_SIGNUP_PASSWORD_LENGTH }} /></p>
       </div>
       <div className="grid gap-2">
         <label htmlFor="confirm-password" className="text-sm font-medium">
-          确认密码
-        </label>
+          <Message id="auth.confirmPassword" /></label>
         <Input
           id="confirm-password"
           name="confirm-password"
@@ -135,8 +132,7 @@ export function SignupForm() {
       </div>
       <FormError message={error} />
       <SubmitButton pending={pending} size="lg">
-        注册
-      </SubmitButton>
+        <Message id="auth.register" /></SubmitButton>
     </form>
   );
 }
