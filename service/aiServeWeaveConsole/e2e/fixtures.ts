@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { test as base, expect, type Page } from "@playwright/test";
 import { deriveSessionKey, seal, SESSION_COOKIE } from "../lib/console/session-payload.ts";
 import { sealOperator, OPERATOR_COOKIE } from "../lib/console/operator-session.ts";
@@ -5,6 +7,10 @@ import { sealOperator, OPERATOR_COOKIE } from "../lib/console/operator-session.t
 /** LONG_TEXT exercises unbroken identifiers and names within a bounded fixture.
  * LONG_TEXT 用有上限的样本覆盖不含空格的长标识符与名称。 */
 export const LONG_TEXT = "P10_" + "LongIdentifier".repeat(12);
+const docsDirectory = path.resolve(__dirname, "../../aiServeWeaveControlPlane/internal/apidocs/seed/");
+/** API_DOCS provides the same compiled-in originals without a live control plane.
+ * API_DOCS 无需真实控制面便提供相同的编译内置原文。 */
+export const API_DOCS = fs.readdirSync(docsDirectory).filter(name => name.endsWith(".json")).map(name => ({ ...JSON.parse(fs.readFileSync(path.join(docsDirectory, name), "utf8")), updated_at: "2026-09-12T00:00:00Z" }));
 const at = "2026-09-12T00:00:00Z";
 const user = { id: "usr_p10", tenant_id: "tnt_p10", name: LONG_TEXT, email: "p10@example.invalid", role: "owner", status: "active", created_at: at };
 const key = { id: "key_p10", tenant_id: user.tenant_id, name: LONG_TEXT, display: "aisw_test12345", status: "active", created_by: user.id, created_at: at };
@@ -47,6 +53,8 @@ async function installFixtures(page: Page, unexpected: string[]) {
     let json: unknown;
     if (method === "GET") {
       if (path.endsWith("/audit")) json = auditPage(url);
+      else if (path === "/admin/v1/api-docs") json = { items: API_DOCS };
+      else if (path.startsWith("/admin/v1/api-docs/")) json = API_DOCS.find(doc => doc.slug === path.split("/").at(-1));
       else if (path === "/admin/v1/users") json = { items: [user, { ...user, id: "usr_peer", email: "peer@example.invalid", role: "member" }], next_cursor: "" };
       else if (path === "/admin/v1/apikeys") json = { items: [key], next_cursor: "" };
       else if (path === "/admin/v1/models") json = { collected_at: at, partial: false, services: [{ agent_id: "agent-fixture", service_id: "ollama-fixture", kind: "ollama", node_online: true, state: "healthy", models: [{ id: "fixture-model", capabilities: { chat: "supported" } }] }] };

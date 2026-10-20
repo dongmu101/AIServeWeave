@@ -7,7 +7,7 @@ import { loadMessages, type Messages } from "@/lib/i18n/messages";
 import { createLocaleSelection } from "@/lib/i18n/selection";
 import { createTranslator, type Translator } from "@/lib/i18n/translate";
 
-type Context = { locale: Locale; t: Translator; setLocale(locale: Locale): Promise<void>; changing: boolean };
+type Context = { locale: Locale; messages: Messages; t: Translator; setLocale(locale: Locale): Promise<void>; changing: boolean };
 const I18nContext = React.createContext<Context | null>(null);
 
 /** I18nProvider keeps display preferences independent of sessions and form state.
@@ -36,7 +36,7 @@ export function I18nProvider({ initialLocale, initialMessages, children }: {
     finally { if (current === operation.current) setChanging(false); }
   }, [selection]);
   const t = React.useMemo(() => createTranslator(display.locale, display.messages), [display]);
-  const value = React.useMemo(() => ({ locale: display.locale, t, setLocale, changing }), [display.locale, t, setLocale, changing]);
+  const value = React.useMemo(() => ({ locale: display.locale, messages: display.messages, t, setLocale, changing }), [display.locale, display.messages, t, setLocale, changing]);
   return <I18nContext value={value}>{children}</I18nContext>;
 }
 

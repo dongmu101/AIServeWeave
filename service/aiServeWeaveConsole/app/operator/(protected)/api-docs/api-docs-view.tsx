@@ -1,6 +1,7 @@
 "use client";
 import { ErrorMessage } from "@/components/i18n/error-message";
 
+import { localizeApiDoc } from "@/lib/i18n/docs/localize";
 import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
 
@@ -169,7 +170,7 @@ function DocEditor({
   onSaved: (doc: OperatorApiDocDetail) => void;
   onDeleted: () => void;
 }) {
-  const { locale, t } = useI18n();
+  const { locale, messages, t } = useI18n();
   const existing = editing.kind === "existing" ? editing.doc : null;
   const [slug, setSlug] = React.useState("");
   const [text, setText] = React.useState(() =>
@@ -316,7 +317,7 @@ function DocEditor({
               <p className="text-sm text-muted-foreground"><Message id="operator.aPreviewWillAppearOnceTheJsonIs" /></p>
             ) : (
               <ApiDocArticle
-                doc={parsed.input}
+                doc={existing ? localizeApiDoc({ ...existing, ...parsed.input, categoryOrder: parsed.input.category_order, sortOrder: parsed.input.sort_order }, locale, messages) : parsed.input}
                 values={{ baseUrl, apiKey: "YOUR_API_KEY", model: "your-model" }}
               />
             )}

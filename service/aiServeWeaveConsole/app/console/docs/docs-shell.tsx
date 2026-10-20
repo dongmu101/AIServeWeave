@@ -1,5 +1,10 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
+import { localizeApiDocSummary } from "@/lib/i18n/docs/localize";
+
 import * as React from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
@@ -40,7 +45,9 @@ export function useDocs(): DocsContextValue {
  * DocsShell 持有导航列表与每个页面替换示例所用的值，并渲染左侧导航。
  */
 export function DocsShell({ baseUrl, children }: { baseUrl: string; children: React.ReactNode }) {
-  const list = useResource<ApiDocSummary[]>({ method: "GET", path: "/admin/v1/api-docs", parse: parseApiDocList });
+  const { locale, messages } = useI18n();
+  const rawList = useResource<ApiDocSummary[]>({ method: "GET", path: "/admin/v1/api-docs", parse: parseApiDocList });
+  const list = React.useMemo(() => ({ ...rawList, data: rawList.data?.map(doc => localizeApiDocSummary(doc, locale, messages)) ?? null }), [rawList, locale, messages]);
   const [model, setModel] = React.useState(DEFAULT_MODEL);
   const values = React.useMemo<ExampleValues>(
     () => ({ baseUrl, apiKey: EXAMPLE_KEY, model: model.trim() || DEFAULT_MODEL }),
@@ -59,6 +66,7 @@ export function DocsShell({ baseUrl, children }: { baseUrl: string; children: Re
 }
 
 function DocsNav({ list }: { list: Resource<ApiDocSummary[]> }) {
+  const {t } = useI18n();
   const pathname = usePathname();
   const [query, setQuery] = React.useState("");
   const groups = React.useMemo(
@@ -69,9 +77,9 @@ function DocsNav({ list }: { list: Resource<ApiDocSummary[]> }) {
   const body = list.error ? (
     <ErrorState message={list.error} onRetry={list.reload} />
   ) : list.loading && !list.data ? (
-    <LoadingState label="正在加载文档目录" rows={6} />
+    <LoadingState label={t("tenant.loadingDocumentationIndex")} rows={6} />
   ) : (
-    <nav aria-label="API 文档目录" className="flex flex-col gap-4">
+    <nav aria-label={t("tenant.apiDocumentationIndex")} className="flex flex-col gap-4">
       <Link
         href="/console/docs"
         aria-current={pathname === "/console/docs" ? "page" : undefined}
@@ -80,8 +88,7 @@ function DocsNav({ list }: { list: Resource<ApiDocSummary[]> }) {
           pathname === "/console/docs" ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"
         )}
       >
-        快速开始
-      </Link>
+        <Message id="tenant.quickStart" /></Link>
       {groups.map((group) => (
         <div key={group.category} className="flex flex-col gap-0.5">
           <p className="px-2 pb-1 text-xs font-semibold text-foreground">{group.category}</p>
@@ -105,21 +112,21 @@ function DocsNav({ list }: { list: Resource<ApiDocSummary[]> }) {
           })}
         </div>
       ))}
-      {groups.length === 0 ? <p className="px-2 text-sm text-muted-foreground">没有匹配的文档</p> : null}
+      {groups.length === 0 ? <p className="px-2 text-sm text-muted-foreground"><Message id="tenant.noMatchingDocumentation" /></p> : null}
     </nav>
   );
 
   return (
     <aside className="min-w-0 lg:sticky lg:top-4 lg:max-h-[calc(100vh-2rem)] lg:self-start lg:overflow-y-auto">
       <details className="group rounded-xl border p-3 lg:border-0 lg:p-0" open>
-        <summary className="cursor-pointer text-sm font-medium select-none lg:hidden">文档目录</summary>
+        <summary className="cursor-pointer text-sm font-medium select-none lg:hidden"><Message id="tenant.documentationIndex" /></summary>
         <div className="mt-3 flex flex-col gap-3 lg:mt-0">
           <Input
             type="search"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
-            placeholder="搜索接口"
-            aria-label="搜索接口"
+            placeholder={t("tenant.searchApis")}
+            aria-label={t("tenant.searchApis")}
           />
           {body}
         </div>
