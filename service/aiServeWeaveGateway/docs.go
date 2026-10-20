@@ -1,7 +1,10 @@
 package main
 
 import (
+	"AIServeWeave/common/browserlang"
 	"embed"
+	"encoding/json"
+	"html/template"
 	"io/fs"
 	"net/http"
 )
@@ -25,7 +28,7 @@ var openAPISpec []byte
 // docsUI 是随包分发的 Swagger UI 构建产物。它被嵌入而不是从 CDN 加载，好让 /docs 在
 // 一个隔离网络的部署上也能用，并且从不依赖请求发生时某个第三方是否可达。
 //
-//go:embed docsui
+//go:embed docsui/index.html docsui/*.js docsui/*.css docsui/i18n.mjs docsui/swagger-i18n.mjs docsui/controlled-components.mjs docsui/source.mjs docsui/i18n/*.json
 var docsUI embed.FS
 
 // mountDocs registers the API documentation routes on mux: GET /openapi.yaml
@@ -50,6 +53,50 @@ func mountDocs(mux *http.ServeMux) error {
 	mux.HandleFunc("GET /docs", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/docs/", http.StatusMovedPermanently)
 	})
-	mux.Handle("GET /docs/", http.StripPrefix("/docs/", http.FileServer(http.FS(sub))))
+	assets := http.StripPrefix("/docs/", http.FileServer(http.FS(sub)))
+	mux.HandleFunc("GET /docs/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/docs/" && r.URL.Path != "/docs/index.html" {
+			assets.ServeHTTP(w, r)
+			return
+		}
+		saved := ""
+		if cookie, err := r.Cookie("aisw_docs_locale"); err == nil {
+			saved = cookie.Value
+		}
+		locale := browserlang.Resolve(saved, r.Header.Get("Accept-Language"))
+		data, _ := docsUI.ReadFile("docsui/i18n/" + string(locale) + ".json")
+		var catalog map[string]string
+		if err := json.Unmarshal(data, &catalog); err != nil {
+			http.Error(w, "documentation unavailable", http.StatusInternalServerError)
+			return
+		}
+		initial, _ := json.Marshal(struct {
+			Locale  browserlang.Locale `json:"locale"`
+			Catalog map[string]string  `json:"catalog"`
+		}{locale, catalog})
+		options := []docsLocaleOption{{"zh-CN", "简体中文"}, {"zh-TW", "繁體中文"}, {"en-US", "English"}, {"ja-JP", "日本語"}, {"ko-KR", "한국어"}, {"de-DE", "Deutsch"}, {"fr-FR", "Français"}, {"es-ES", "Español"}}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Content-Language", string(locale))
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Vary", "Cookie, Accept-Language")
+		if r.Method == http.MethodHead {
+			return
+		}
+		_ = docsPage.Execute(w, struct {
+			Locale          browserlang.Locale
+			Title, Language string
+			Options         []docsLocaleOption
+			Bootstrap       template.JS
+		}{locale, catalog["oas/info/title"], catalog["ui.language"], options, template.JS(initial)})
+	})
 	return nil
 }
+
+// docsLocaleOption keeps option values canonical while showing native language names.
+// docsLocaleOption 保留规范的选项值，同时显示语言自称。
+type docsLocaleOption struct {
+	Locale browserlang.Locale
+	Label  string
+}
+
+var docsPage = template.Must(template.New("index.html").ParseFS(docsUI, "docsui/index.html"))
