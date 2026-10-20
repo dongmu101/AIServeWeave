@@ -1,0 +1,152 @@
+{
+  "schema_version": 1,
+  "frontend_version": "1.55.17",
+  "source": {
+    "tag": "v1.55.17",
+    "commit": "7ab461f170c2bba8916faae4cda606278fa367a4",
+    "archive_url": "https://codeload.github.com/Comfy-Org/ComfyUI_frontend/tar.gz/refs/tags/v1.55.17",
+    "archive_sha256": "8379438eae61e068ecf4dcd258a18d71c30515f4b106f0cdc43c764902e69fc0",
+    "files": {
+      "package.json": "63ed60bf51701b947aaa500e5c03aca2b25ede8c7b1dca01c2e8ba3b46740d22",
+      "pnpm-lock.yaml": "6eee2e3afc3235235b810e20e3a455b57c2cc8280ab07bc6cbe0bfa88d1089c2",
+      "pnpm-workspace.yaml": "955055a666fb9c43ab0b8397dcd592ea227792beff0fb29e46a6a1e1c7dc19f5",
+      "src/locales/localeConfig.ts": "665804a10487763c2a05e4193ddaaf310121ba44d9a201b117c80886a5d9cba9",
+      "src/locales/zh/main.json": "d3b2ba90bb3dfc5234abf4d15602bc82c974171324553ebec419a456e3b90158",
+      "src/locales/zh/nodeDefs.json": "189694a45b9ebcf542045803f6ff7aa59d55704f1ce41973af5576cc6931022a",
+      "src/locales/zh/commands.json": "6ac12bb2e049adb1d0171c16df6f8a7c33ce38d06170a475c0fd83d9a98f1226",
+      "src/locales/zh/settings.json": "938deab536b11c85b3b71fb5d467fbb675912145cdffebc1b06f5dd54a2419ba",
+      "src/locales/zh-TW/main.json": "a863afe44e860e0a4210588f1f6d3165ffc5ff6617d56917ba1d4fe8c58f75fd",
+      "src/locales/zh-TW/nodeDefs.json": "7e20e2d5fa4274858669e467a843c0c80b1b1ed14d24b1a8b87e7921c3510627",
+      "src/locales/zh-TW/commands.json": "fe578d2e5e22629ff1c539c3df902a62d720b2b7257a9f1af251bfbe2635d5d2",
+      "src/locales/zh-TW/settings.json": "4f683a7fb9e7b1bc922ca6936f83bc9173abd4fbda52a22266f643064c576a72",
+      "src/locales/en/main.json": "b9125b3ff34bcb0b38fcfea5cbc8b604d31738fc91b767c7f011f15946dd0629",
+      "src/locales/en/nodeDefs.json": "ae30802943a30bd340ae6392201d49c097f88f11c3fade50f9b1c96f254f6df1",
+      "src/locales/en/commands.json": "6c6ed6ddf7f7abd6aef7e1fab87ea87866e90424d9794bdd51495322a8017aa6",
+      "src/locales/en/settings.json": "7a36bd373f0511eda471ff532fd8e602190258b4f8fcbbd33e2bd88533776be6",
+      "src/locales/ja/main.json": "1cbbe1af325811d67db939a4dab09fe8e132578bcd177955e9e8927632b0c2c2",
+      "src/locales/ja/nodeDefs.json": "b6b2bb39610b0de33bc3cc5c14f26215280d591784102927edcdf59690e3fdbe",
+      "src/locales/ja/commands.json": "8d53d6ea344ac931664fe621bb4ebc7ea7cb88b70527266ad56c306cb5047b26",
+      "src/locales/ja/settings.json": "962adef77ca31cf4ff4eca53506473d1a8849cb05c39b1291f9f590a23ad9ce6",
+      "src/locales/ko/main.json": "4b2314734087839ee68db4b72ca1156f0bb28ec8199baa6af95cad916274e1cf",
+      "src/locales/ko/nodeDefs.json": "8d20d4838f1bec57c4cd54f9db273484169c08be387c2694dfe77a335110242e",
+      "src/locales/ko/commands.json": "09498b8651cddeb40556e97e7c081e2f869640ef6735a7a34aae92de23179485",
+      "src/locales/ko/settings.json": "7227e6e66d550dafb57e3f9daeb2442aba3dc154ca01775bc4b58a87d57ff55a",
+      "src/locales/de/main.json": "983f320b98758e0ed1c5169a06ef0f5373b4d4e57c1141e7966e4f1ff2cb97d2",
+      "src/locales/de/nodeDefs.json": "71c4e9f41997282970796885740ad153555620cbe41676662273fac16fb0c6a5",
+      "src/locales/de/commands.json": "b6f5553e4461b2cd7ea4ea8a363a776b082f5412a2c68dd7c9af530998b5973f",
+      "src/locales/de/settings.json": "1a4e87630df9b7ca9a00abd36be9d0721932689e59e21eca148265ab1f34fcf6",
+      "src/locales/fr/main.json": "2551a5780e4b9b94b50c2600b47480732734542382bf3aa4c56e0b0cbe624794",
+      "src/locales/fr/nodeDefs.json": "ab9857e79bd92abd769abbfbfa4812812056d368c3dcbc43a8c658596d9b8f90",
+      "src/locales/fr/commands.json": "9ec7585627d5abddd8ac4751c87441138d3d6472da34ceafbff38995259f9692",
+      "src/locales/fr/settings.json": "7d5cb1c0b6359dd3e36b92dec8b5ffc1fac77307e1b9651e2aa73c8d06946c32",
+      "src/locales/es/main.json": "c7291b2d1e2d84beb1d68332d26065c17eb6a8f4ab67f1f6d1efd29630944508",
+      "src/locales/es/nodeDefs.json": "aad6213fe6d13dd1ee3d8fb0cb6b7cc5ad1ae3129f03a3142e410ea4fef5dd1f",
+      "src/locales/es/commands.json": "fec349cb71edb6b010c91a4601d7f2de7dda3b7d6da9709123a2d59afef00b31",
+      "src/locales/es/settings.json": "90a95af28c38e0cf0ff532963c9d24de6cf14511cb57a2d157e8109ba7be7d23"
+    }
+  },
+  "toolchain": {
+    "node": "v26.8.2",
+    "pnpm": "11.13.1"
+  },
+  "locales": {
+    "zh-CN": "zh",
+    "zh-TW": "zh-TW",
+    "en-US": "en",
+    "ja-JP": "ja",
+    "ko-KR": "ko",
+    "de-DE": "de",
+    "fr-FR": "fr",
+    "es-ES": "es"
+  },
+  "groups": [
+    "main",
+    "nodeDefs",
+    "commands",
+    "settings"
+  ],
+  "patches": [
+    "locale-config.patch"
+  ],
+  "supplements": [
+    {
+      "locale": "en",
+      "group": "main",
+      "file": "supplements/en/main.json"
+    },
+    {
+      "locale": "es",
+      "group": "main",
+      "file": "supplements/es/main.json"
+    },
+    {
+      "locale": "es",
+      "group": "settings",
+      "file": "supplements/es/settings.json"
+    },
+    {
+      "locale": "fr",
+      "group": "main",
+      "file": "supplements/fr/main.json"
+    },
+    {
+      "locale": "fr",
+      "group": "settings",
+      "file": "supplements/fr/settings.json"
+    },
+    {
+      "locale": "ja",
+      "group": "main",
+      "file": "supplements/ja/main.json"
+    },
+    {
+      "locale": "ja",
+      "group": "settings",
+      "file": "supplements/ja/settings.json"
+    },
+    {
+      "locale": "ko",
+      "group": "main",
+      "file": "supplements/ko/main.json"
+    },
+    {
+      "locale": "ko",
+      "group": "settings",
+      "file": "supplements/ko/settings.json"
+    },
+    {
+      "locale": "zh",
+      "group": "main",
+      "file": "supplements/zh/main.json"
+    },
+    {
+      "locale": "zh-TW",
+      "group": "main",
+      "file": "supplements/zh-TW/main.json"
+    },
+    {
+      "locale": "zh-TW",
+      "group": "settings",
+      "file": "supplements/zh-TW/settings.json"
+    }
+  ],
+  "resources": {
+    "de/main.json": "1012027206355a0335089f6661cf50588568ee3fab184581e024a3516d49a5b8",
+    "de/nodeDefs.json": "56169f2b73639402272651080cffef4bf2f51dd836ba69956bbf4e4c0bed55cd",
+    "de/commands.json": "4d8a39947d32793f6bd6edb97c0622d026ca6666a69441050791a434d9dca468",
+    "de/settings.json": "dd69d6213d9e0f3c4c79808b93212853c5c5fbaed8c9095aa21fd2b13af969b5",
+    "supplements/en/main.json": "b1164f869484a5ec3837b78d5333cdb4c1c6b22e20c80081e41d278801406fe4",
+    "supplements/es/main.json": "8f0155a6f787c3088d4a3239caee2af98073cf9a85ab4cc18ad9e083ad574e5a",
+    "supplements/es/settings.json": "6cab511969cdb6d7f04fac0fcceb73edb675efa4aaddff104f81300f6d20b03e",
+    "supplements/fr/main.json": "f521bca1d61607afabb94e61e2d1f2c0f6853eaef7ac1a8c328f09530b2af20f",
+    "supplements/fr/settings.json": "ca1c4b3b9167d2c4e7c48b292e98e795cfa67775b04462ab2fd60d651edb5920",
+    "supplements/ja/main.json": "d1022994f9d480481e594b7dbe3b09c4808db71f398b9a86753b1e291e7c0d91",
+    "supplements/ja/settings.json": "02599d7bec31f1b21bbfeb6209af0c4de1e57842b5bb5ec2263a358a0f28072d",
+    "supplements/ko/main.json": "dad7c73fdb1141efe93c62ad8b70483c295e07dd11907808a83149585a436e7d",
+    "supplements/ko/settings.json": "4e23f48436e061363814a72e8d57b6c62cfb0d18088daf546d68457f9cc5f49e",
+    "supplements/zh/main.json": "73f0a5650dc474a9bdc8777cc0e5e0f3a9bf85ab0672d852fd416c9c964ffb15",
+    "supplements/zh-TW/main.json": "03be70336f14f57cf23a8fcaee1e3f22dc0833ef00589812e0980957dc94a186",
+    "supplements/zh-TW/settings.json": "556de57afc8afee4afc13c16cfe6e56d17776e9b49b0fe49237965da997783b7",
+    "locale-config.patch": "e9c97445fec0187f6ad9a4b1f2cb819d4a8add7b571d83a39ead6f42edd473f7"
+  }
+}

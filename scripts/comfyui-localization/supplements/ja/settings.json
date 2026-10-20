@@ -1,0 +1,9 @@
+{
+  "Comfy_Execution_PreviewMethod": {
+    "options": {
+      "default": "デフォルト",
+      "none": "なし",
+      "auto": "自動"
+    }
+  }
+}

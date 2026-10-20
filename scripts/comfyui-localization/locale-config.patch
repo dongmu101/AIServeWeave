@@ -1,0 +1,11 @@
+diff --git a/src/locales/localeConfig.ts b/src/locales/localeConfig.ts
+--- a/src/locales/localeConfig.ts
++++ b/src/locales/localeConfig.ts
+@@ -39,6 +39,7 @@
+   fr: { text: 'Français', loaders: loadersFor('fr') },
+   es: { text: 'Español', loaders: loadersFor('es') },
++  de: { text: 'Deutsch', loaders: loadersFor('de') },
+   ar: { text: 'عربي', loaders: loadersFor('ar') },
+   tr: { text: 'Türkçe', loaders: loadersFor('tr') },
+   'pt-BR': { text: 'Português (BR)', loaders: loadersFor('pt-BR') },
+   fa: { text: 'فارسی', loaders: loadersFor('fa') },

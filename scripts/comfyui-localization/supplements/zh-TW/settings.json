@@ -1,0 +1,15 @@
+{
+  "Comfy_Execution_PreviewMethod": {
+    "options": {
+      "default": "預設",
+      "none": "無",
+      "auto": "自動"
+    }
+  },
+  "Comfy_ModelLibrary_NameFormat": {
+    "options": {
+      "filename": "檔案名稱",
+      "title": "標題"
+    }
+  }
+}

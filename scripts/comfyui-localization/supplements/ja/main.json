@@ -1,0 +1,34 @@
+{
+  "menuLabels": {
+    "linearMode_appModeToolbar_apps": "アプリ"
+  },
+  "settingsCategories": {
+    "Nodes 2_0": "ノード 2.0"
+  },
+  "cloudOnboarding": {
+    "authTimeout": {
+      "causes": [
+        "企業のファイアウォールやプロキシによる認証サービスのブロック",
+        "VPNまたはネットワークの制限",
+        "ブラウザー拡張機能によるリクエストへの干渉",
+        "地域によるネットワーク制限",
+        "別のブラウザーまたはネットワークをお試しください"
+      ]
+    }
+  },
+  "errorDialog": {
+    "accessRestrictedTitle": "アクセス制限",
+    "accessRestrictedMessage": "このアカウントには、この機能を使用する権限がありません。"
+  },
+  "helpCenter": {
+    "managerExtension": "Manager拡張機能"
+  },
+  "nodeCategories": {
+    "shader": "シェーダー"
+  },
+  "workspacePanel": {
+    "partnerNodes": {
+      "matchedModelCount": "{total} 件中 {matched} 件一致"
+    }
+  }
+}

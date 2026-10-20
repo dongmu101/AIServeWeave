@@ -1,0 +1,14 @@
+{
+  "menuLabels": {
+    "linearMode_appModeToolbar_apps": "應用程式"
+  },
+  "settingsCategories": {
+    "Nodes 2_0": "節點 2.0",
+    "3DViewer": "3D 檢視器"
+  },
+  "credits": {
+    "topUp": {
+      "minimumPurchase": "最低購買 ${amount}（{credits} 點）"
+    }
+  }
+}

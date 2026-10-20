@@ -116,6 +116,9 @@ func New(distDir string) (_ *Server, err error) {
 	if _, err = fs.Stat(dist, "index.html"); err != nil {
 		return nil, fmt.Errorf("comfyeditor: %s is not an unpacked ComfyUI_frontend release (no index.html)", distDir)
 	}
+	if err = validateLocalization(dist); err != nil {
+		return nil, err
+	}
 	// Every .js under extensions/, as ComfyUI's own server lists them; the
 	// release ships only core ones, so nothing third-party can appear here.
 	// 与 ComfyUI 自己的服务端一样列出 extensions/ 下的每个 .js；发布包只带核心扩展，

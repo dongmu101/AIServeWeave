@@ -1,0 +1,33 @@
+{
+  "menuLabels": {
+    "linearMode_appModeToolbar_apps": "앱"
+  },
+  "settingsCategories": {
+    "Nodes 2_0": "노드 2.0"
+  },
+  "cloudOnboarding": {
+    "authTimeout": {
+      "causes": [
+        "회사 방화벽이나 프록시가 인증 서비스를 차단함",
+        "VPN 또는 네트워크 제한",
+        "브라우저 확장 프로그램이 요청을 방해함",
+        "지역별 네트워크 제한",
+        "다른 브라우저나 네트워크를 사용해 보세요"
+      ]
+    }
+  },
+  "errorDialog": {
+    "accessRestrictedTitle": "접근 제한",
+    "accessRestrictedMessage": "이 계정에는 이 기능을 사용할 권한이 없습니다."
+  },
+  "templateWorkflows": {
+    "paidTemplate": {
+      "badgeLabel": "파트너 API"
+    }
+  },
+  "nodeCategories": {
+    "partner": "파트너",
+    "shader": "셰이더",
+    "patch": "패치"
+  }
+}
