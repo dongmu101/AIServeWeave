@@ -1,4 +1,5 @@
 const common = {
+  "common.fieldProblem": "{field}：{problem}",
   "common.notifications": "通知",
   "common.scrollUp": "上へスクロール",
   "common.scrollDown": "下へスクロール",

@@ -1,4 +1,10 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { CopyIcon } from "lucide-react";
@@ -26,8 +32,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { parseCreatedApiKey } from "@/lib/console/contract";
-import { describe } from "@/lib/console/errors";
-import { DEFAULT_TTL_CHOICE, TTL_CHOICES, ttlSeconds } from "@/lib/console/format";
+
+import { DEFAULT_TTL_CHOICE, ttlChoices, ttlSeconds } from "@/lib/console/format";
 
 /**
  * Creating a key produces the only plaintext credential this system will ever
@@ -48,12 +54,13 @@ import { DEFAULT_TTL_CHOICE, TTL_CHOICES, ttlSeconds } from "@/lib/console/forma
  * 任何地方都没有能再次产出它的读取路径。
  */
 export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
+  const { locale, t } = useI18n();
   const run = useConsoleRequest();
   const [open, setOpen] = React.useState(false);
   const [name, setName] = React.useState("");
   const [ttl, setTtl] = React.useState(DEFAULT_TTL_CHOICE);
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   // revealed holds the plaintext for exactly as long as its dialog is open.
   //
@@ -69,12 +76,12 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
     }
     const trimmed = name.trim();
     if (trimmed === "") {
-      setError("请填写 Key 名称。");
+      setError(<Message id={"tenant.enterAKeyName"} />);
       return;
     }
     const seconds = ttlSeconds(ttl);
     if (seconds === null) {
-      setError("请选择有效期。");
+      setError(<Message id={"tenant.selectAnExpirationPeriod"} />);
       return;
     }
 
@@ -97,7 +104,7 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
       });
       onCreated();
     } catch (failure) {
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
     } finally {
       setPending(false);
     }
@@ -106,14 +113,14 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
   async function copy(plaintext: string) {
     try {
       await navigator.clipboard.writeText(plaintext);
-      toast.success("已复制到剪贴板");
+      toast.success(<Message id={"tenant.copiedToClipboard"} />);
     } catch {
       // Clipboard access needs a secure context and the person's permission.
       // Failing here is ordinary, and the answer is to let them select it.
       //
       // 剪贴板访问需要安全上下文与当事人的授权。这里失败很常见，应对办法是让他们
       // 自己选中复制。
-      toast.error("复制失败，请手动选中并复制。");
+      toast.error(<Message id={"tenant.copyFailedSelectAndCopyTheTextManually"} />);
     }
   }
 
@@ -131,34 +138,31 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
           setOpen(next);
         }}
       >
-        <DialogTrigger render={<Button />}>创建 Key</DialogTrigger>
+        <DialogTrigger render={<Button />}><Message id="tenant.createKey" /></DialogTrigger>
         <DialogContent className="sm:max-w-md">
           <form onSubmit={submit} className="grid gap-4" noValidate>
             <DialogHeader>
-              <DialogTitle>创建 API Key</DialogTitle>
+              <DialogTitle><Message id="tenant.createApiKey" /></DialogTitle>
               <DialogDescription>
-                明文只在创建成功后显示一次，关闭后无法再次获取。
-              </DialogDescription>
+                <Message id="tenant.thePlaintextIsShownOnlyOnceAfterCreation" /></DialogDescription>
             </DialogHeader>
 
             <div className="grid gap-2">
               <label htmlFor="new-key-name" className="text-sm font-medium">
-                名称
-              </label>
+                <Message id="tenant.name" /></label>
               <Input
                 id="new-key-name"
                 required
                 value={name}
                 onChange={(event) => setName(event.target.value)}
                 disabled={pending}
-                placeholder="例如 生产环境网关"
+                placeholder={t("tenant.eGProductionGateway")}
               />
             </div>
 
             <div className="grid gap-2">
               <label htmlFor="new-key-ttl" className="text-sm font-medium">
-                有效期
-              </label>
+                <Message id="tenant.expirationPeriod" /></label>
               <Select
                 value={ttl}
                 onValueChange={(next) => {
@@ -172,7 +176,7 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  {TTL_CHOICES.map((choice) => (
+                  {ttlChoices(locale).map((choice) => (
                     <SelectItem key={choice.value} value={choice.value}>
                       {choice.label}
                     </SelectItem>
@@ -180,8 +184,7 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
                 </SelectContent>
               </Select>
               <p className="text-xs text-muted-foreground">
-                控制面上限为 365 天；「永不过期」是显式选择，会创建一个不会自动失效的 Key。
-              </p>
+                <Message id="tenant.theControlPlaneAllowsUpTo365Days" /></p>
             </div>
 
             <FormError message={error} />
@@ -193,9 +196,8 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
                 disabled={pending}
                 onClick={() => setOpen(false)}
               >
-                取消
-              </Button>
-              <SubmitButton pending={pending}>创建</SubmitButton>
+                <Message id="common.cancel" /></Button>
+              <SubmitButton pending={pending}><Message id="common.create" /></SubmitButton>
             </DialogFooter>
           </form>
         </DialogContent>
@@ -211,12 +213,8 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
       >
         <DialogContent className="sm:max-w-lg" showCloseButton={false}>
           <DialogHeader>
-            <DialogTitle>已创建 {revealed?.name}</DialogTitle>
-            <DialogDescription>
-              这是该 Key 的明文，只显示这一次。关闭本窗口后，列表与审计中都只保留展示
-              形式 <code className="font-mono">{revealed?.display}</code>，系统无法再次
-              取回明文。
-            </DialogDescription>
+            <DialogTitle><Message id="tenant.created_c6762b" values={{ name: revealed?.name }} /></DialogTitle>
+            <DialogDescription><Message id="tenant.thisIsTheKeySPlaintextShownOnly_8ea4e9" values={{ code: <code className="font-mono">{revealed?.display}</code> }} /></DialogDescription>
           </DialogHeader>
 
           <div className="flex items-center gap-2 rounded-lg border bg-muted/40 p-3">
@@ -226,7 +224,7 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
             <Button
               variant="outline"
               size="icon-sm"
-              aria-label="复制明文"
+              aria-label={t("tenant.copyPlaintext")}
               onClick={() => revealed && copy(revealed.plaintext)}
             >
               <CopyIcon />
@@ -234,7 +232,7 @@ export function CreateKeyDialog({ onCreated }: { onCreated: () => void }) {
           </div>
 
           <DialogFooter>
-            <Button onClick={() => setRevealed(null)}>我已保存，关闭</Button>
+            <Button onClick={() => setRevealed(null)}><Message id="tenant.iVeSavedItClose" /></Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

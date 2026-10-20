@@ -1,5 +1,11 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+
+
 import * as React from "react";
 import {
   createColumnHelper,
@@ -71,17 +77,17 @@ const NO_ENTRIES: RequestLogEntry[] = [];
  * 选项，绝不是自由文本框，因为 API 对结果做精确匹配，集合之外的手打值会返回一个
  * 空页，读起来像「什么都没发生」而不是「没有这个取值」。
  */
-const OUTCOMES: readonly { value: string; label: string }[] = [
-  { value: "ok", label: "成功" },
-  { value: "invalid_request", label: "请求无效" },
-  { value: "unauthorized", label: "未鉴权" },
-  { value: "forbidden", label: "无权限" },
-  { value: "not_found", label: "未找到" },
-  { value: "rate_limited", label: "限流" },
-  { value: "internal", label: "内部错误" },
-  { value: "upstream_unavailable", label: "上游不可用" },
-  { value: "error", label: "其它错误" },
-];
+const OUTCOMES = (t: Translator): readonly { value: string; label: string }[] => ([
+  { value: "ok", label: t("tenant.succeeded") },
+  { value: "invalid_request", label: t("tenant.invalidRequest") },
+  { value: "unauthorized", label: t("tenant.unauthenticated") },
+  { value: "forbidden", label: t("tenant.forbidden") },
+  { value: "not_found", label: t("tenant.notFound_df5cca") },
+  { value: "rate_limited", label: t("tenant.rateLimited") },
+  { value: "internal", label: t("tenant.internalError") },
+  { value: "upstream_unavailable", label: t("tenant.upstreamUnavailable") },
+  { value: "error", label: t("tenant.otherErrors") },
+]);
 
 /** outcomeLabel resolves the display label for an outcome value, falling
  * back to the raw value so a build that does not yet know a newer outcome
@@ -89,8 +95,8 @@ const OUTCOMES: readonly { value: string; label: string }[] = [
  *
  * outcomeLabel 求解一个 outcome 取值对应的展示标签；找不到时回退为原始值，
  * 好让一个尚不认识某个较新取值的构建仍能显示点什么，而不是什么都不显示。 */
-function outcomeLabel(value: string): string {
-  return OUTCOMES.find((outcome) => outcome.value === value)?.label ?? value;
+function outcomeLabel(value: string, t: Translator): string {
+  return OUTCOMES(t).find((outcome) => outcome.value === value)?.label ?? value;
 }
 
 /** GRID_TENANT and GRID_OPERATOR are the shared column geometry for the
@@ -108,6 +114,7 @@ const GRID_OPERATOR = `${GRID_TENANT} minmax(8rem,9rem)`;
  *
  * RequestLogView 在租户与运维两个请求检索入口之间共用分页与虚拟滚动。 */
 export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "operator" }) {
+  const { locale, t } = useI18n();
   const [filters, setFilters] = useUrlFilters([
     "since",
     "until",
@@ -167,23 +174,23 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
   const columns = React.useMemo(() => {
     const base = [
       helper.accessor("createdAt", {
-        header: "时间",
-        cell: (info) => formatDateTime(info.getValue()),
+        header: t("tenant.time"),
+        cell: (info) => formatDateTime(info.getValue(), undefined, locale),
       }),
       helper.accessor("statusCode", {
-        header: "状态码",
+        header: t("tenant.statusCode"),
         cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
       }),
       helper.accessor("outcome", {
-        header: "结果",
-        cell: (info) => outcomeLabel(info.getValue()),
+        header: t("tenant.result"),
+        cell: (info) => outcomeLabel(info.getValue(), t),
       }),
       helper.accessor("endpoint", {
-        header: "接口",
+        header: t("tenant.endpoint"),
         cell: (info) => info.getValue(),
       }),
       helper.accessor("durationMs", {
-        header: "耗时",
+        header: t("tenant.duration"),
         cell: (info) => `${info.getValue()} ms`,
       }),
       helper.accessor("keyDisplay", {
@@ -197,11 +204,11 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
     return helper.columns([
       ...base,
       helper.accessor("tenantId", {
-        header: "租户",
+        header: t("tenant.tenant"),
         cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
       }),
     ]);
-  }, [surface]);
+  }, [surface, t, locale]);
 
   const table = useTable({ features, columns, data: rows });
   const modelRows = table.getRowModel().rows;
@@ -228,19 +235,18 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">请求检索</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.requestSearch" /></h1>
         <p className="text-sm text-muted-foreground">
           {surface === "operator"
-            ? "跨租户的请求检索，用于排查与客户支持。"
-            : "当前租户已通过鉴权的 chat/responses/embeddings/models 请求，脱敏元数据，仅覆盖最近 30 天。"}
+            ? t("tenant.searchRequestsAcrossTenantsForTroubleshootingAndCustomer")
+            : t("tenant.redactedMetadataForThisTenantSAuthenticatedChat")}
         </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1">
           <label htmlFor="requests-status" className="text-xs text-muted-foreground">
-            结果
-          </label>
+            <Message id="tenant.result" /></label>
           <Select
             value={filters.status === "" ? "all" : filters.status}
             onValueChange={(next) => {
@@ -250,11 +256,11 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
             }}
           >
             <SelectTrigger id="requests-status">
-              <SelectValue>{filters.status === "" ? "全部状态" : outcomeLabel(filters.status)}</SelectValue>
+              <SelectValue>{filters.status === "" ? t("tenant.allStatuses") : outcomeLabel(filters.status, t)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
-              {OUTCOMES.map((outcome) => (
+              <SelectItem value="all"><Message id="tenant.allStatuses" /></SelectItem>
+              {OUTCOMES(t).map((outcome) => (
                 <SelectItem key={outcome.value} value={outcome.value}>
                   {outcome.label}
                 </SelectItem>
@@ -265,8 +271,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
 
         <div className="grid gap-1">
           <label htmlFor="requests-request-id" className="text-xs text-muted-foreground">
-            请求 ID
-          </label>
+            <Message id="tenant.requestId" /></label>
           <Input
             id="requests-request-id"
             className="w-56 font-mono text-xs"
@@ -279,12 +284,11 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
         {surface === "operator" ? (
           <div className="grid gap-1">
             <label htmlFor="requests-tenant-id" className="text-xs text-muted-foreground">
-              租户 ID
-            </label>
+              <Message id="tenant.tenantId" /></label>
             <Input
               id="requests-tenant-id"
               className="w-56 font-mono text-xs"
-              placeholder="全部租户"
+              placeholder={t("tenant.allTenants")}
               value={filters.tenant_id}
               onChange={(event) => setFilters({ tenant_id: event.target.value })}
             />
@@ -293,8 +297,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
 
         <div className="grid gap-1">
           <label htmlFor="requests-since" className="text-xs text-muted-foreground">
-            起始日期（含）
-          </label>
+            <Message id="tenant.startDateInclusive" /></label>
           <Input
             id="requests-since"
             type="date"
@@ -306,8 +309,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
 
         <div className="grid gap-1">
           <label htmlFor="requests-until" className="text-xs text-muted-foreground">
-            结束日期（含）
-          </label>
+            <Message id="tenant.endDateInclusive" /></label>
           <Input
             id="requests-until"
             type="date"
@@ -319,8 +321,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
 
         <div className="grid gap-1">
           <label htmlFor="requests-size" className="text-xs text-muted-foreground">
-            每页
-          </label>
+            <Message id="tenant.perPage" /></label>
           <Select
             value={String(pageSize)}
             onValueChange={(next) => {
@@ -330,13 +331,11 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
             }}
           >
             <SelectTrigger id="requests-size">
-              <SelectValue>{pageSize} 条 / 页</SelectValue>
+              <SelectValue><Message id="tenant.perPage_9dfa4c" values={{ pageSize: pageSize }} /></SelectValue>
             </SelectTrigger>
             <SelectContent>
               {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={size}>
-                  {size} 条
-                </SelectItem>
+                <SelectItem key={size} value={size}><Message id="tenant.records_09f864" values={{ size: size }} /></SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -350,17 +349,16 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
               setFilters({ status: "", request_id: "", tenant_id: "", since: "", until: "" })
             }
           >
-            清除筛选
-          </Button>
+            <Message id="tenant.clearFilters" /></Button>
         ) : null}
       </div>
 
       {requests.error ? (
         <ErrorState message={requests.error} onRetry={requests.reload} />
       ) : requests.loading ? (
-        <LoadingState label="正在加载请求记录" rows={6} />
+        <LoadingState label={t("tenant.loadingRequestRecords")} rows={6} />
       ) : (
-        <div className="rounded-xl border" role="table" aria-label="请求检索记录">
+        <div className="rounded-xl border" role="table" aria-label={t("tenant.requestSearchResults")}>
           <div className="overflow-x-auto">
             <div className="min-w-[64rem]">
               {table.getHeaderGroups().map((group) => (
@@ -383,15 +381,15 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
               {modelRows.length === 0 ? (
                 <p className="px-3 py-8 text-center text-sm text-muted-foreground">
                   {hasFilters(filters, surface)
-                    ? "没有符合筛选条件的记录"
-                    : surface === "operator" ? "平台还没有请求记录" : "该租户还没有请求记录"}
+                    ? t("tenant.noRecordsMatchTheFilters")
+                    : surface === "operator" ? t("tenant.noPlatformRequestRecordsYet") : t("tenant.noRequestRecordsForThisTenantYet")}
                 </p>
               ) : (
                 <div
                   ref={scrollRef}
                   className="max-h-[32rem] overflow-y-auto"
                   tabIndex={0}
-                  aria-label="请求记录列表，可滚动"
+                  aria-label={t("tenant.scrollableRequestRecordList")}
                 >
                   <div
                     className="relative"
@@ -438,10 +436,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
         <Pager resource={requests} loadedCount={rows.length} />
       )}
 
-      <p className="text-xs text-muted-foreground">
-        筛选与翻页由控制面执行，覆盖{surface === "operator" ? "平台的全部请求记录" : "当前租户最近 30 天的全部记录"}；
-        接口不提供总数，因此这里只显示页码而不显示总页数。
-      </p>
+      <p className="text-xs text-muted-foreground"><Message id="tenant.filteringAndPaginationAreHandledByTheControl_d6754f" values={{ value: surface === "operator" ? t("tenant.allPlatformRequestRecords") : t("tenant.allRecordsForTheCurrentTenantFromThe") }} /></p>
     </div>
   );
 }

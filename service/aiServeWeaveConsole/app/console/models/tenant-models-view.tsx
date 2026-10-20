@@ -1,5 +1,12 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+
+
+
 import * as React from "react";
 import { createColumnHelper, tableFeatures, useTable } from "@tanstack/react-table";
 import { DataTable } from "@/components/console/data-table";
@@ -14,8 +21,8 @@ import { formatDateTime, matchesQuery } from "@/lib/console/format";
 
 type Service = TenantModelCatalog["services"][number];
 const PAGE_SIZE = 25;
-const STATES: Record<string, string> = { healthy: "健康", unhealthy: "异常", registering: "注册中", unknown: "未知", closed: "已关闭" };
-const SUPPORT: Record<string, string> = { supported: "支持", unsupported: "不支持", unknown: "未知" };
+const STATES = (t: Translator): Record<string, string> => ({ healthy: t("tenant.healthy"), unhealthy: t("tenant.unhealthy"), registering: t("tenant.registering"), unknown: t("tenant.unknown"), closed: t("tenant.closed") });
+const SUPPORT = (t: Translator): Record<string, string> => ({ supported: t("tenant.supported"), unsupported: t("tenant.notSupported"), unknown: t("tenant.unknown") });
 const features = tableFeatures({});
 type AgentGroup = { agentId: string; services: Service[] };
 const helper = createColumnHelper<typeof features, Service>();
@@ -24,6 +31,7 @@ const agentHelper = createColumnHelper<typeof features, AgentGroup>();
 /** TenantModelsView groups Agent reports into parent rows with service subtables.
  * TenantModelsView 按 Agent 主行和服务子表分组展示上报清单。 */
 export function TenantModelsView() {
+  const { locale, t } = useI18n();
   const catalog = useResource({ method: "GET", path: "/admin/v1/models", parse: parseTenantModels });
   const [query, setQuery] = React.useState("");
   const [onlineOnly, setOnlineOnly] = React.useState(false);
@@ -57,31 +65,31 @@ export function TenantModelsView() {
       header: "Agent",
       cell: info => <div className="grid max-w-48 gap-2 whitespace-normal">
         <code className="break-all text-xs">{info.getValue()}</code>
-        <Badge className="w-fit" variant={info.row.original.services[0].nodeOnline ? "secondary" : "outline"}>{info.row.original.services[0].nodeOnline ? "Agent 在线" : "Agent 离线"}</Badge>
-        <span className="text-xs text-muted-foreground">{info.row.original.services.length} 个 AI 服务</span>
+        <Badge className="w-fit" variant={info.row.original.services[0].nodeOnline ? "secondary" : "outline"}>{info.row.original.services[0].nodeOnline ? t("tenant.agentOnline") : t("tenant.agentOffline")}</Badge>
+        <span className="text-xs text-muted-foreground"><Message id="tenant.aiServices_3f8e07" values={{ count: info.row.original.services.length }} /></span>
       </div>,
     }),
-    agentHelper.display({ id: "services", header: "AI 服务", cell: info => <AgentServices agent={info.row.original} onSelect={setSelected} /> }),
-  ]), []);
+    agentHelper.display({ id: "services", header: t("tenant.aiServices_a7836c"), cell: info => <AgentServices agent={info.row.original} onSelect={setSelected} /> }),
+  ]), [t]);
   const table = useTable({ features, columns, data: rows, getRowId: agent => agent.agentId });
 
   return <div className="grid gap-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h1 className="font-heading text-lg font-semibold">Agent AI 服务与模型</h1><p className="text-sm text-muted-foreground">每个 Agent 一条记录，AI 服务和模型信息在对应子表中展示。</p></div>
-      <Button variant="outline" disabled={loading} onClick={refresh}>刷新服务与模型</Button>
+      <div><h1 className="font-heading text-lg font-semibold"><Message id="tenant.agentAiServicesModels" /></h1><p className="text-sm text-muted-foreground"><Message id="tenant.oneRecordPerAgentWithAiServicesAnd" /></p></div>
+      <Button variant="outline" disabled={loading} onClick={refresh}><Message id="tenant.refreshServicesModels" /></Button>
     </div>
-    <p className="text-xs text-muted-foreground">每 15 秒自动刷新，后台标签页或查看模型详情时暂停刷新。离线 Agent 的数据为最近一次上报；API 调用名称与可调度范围取决于模型路由。</p>
+    <p className="text-xs text-muted-foreground"><Message id="tenant.refreshesEvery15SecondsPausingInBackgroundTabs_e8c2ce" /></p>
     {catalog.error ? <ErrorState message={catalog.error} onRetry={refresh} /> : loading || !catalog.data ?
-      <LoadingState label="正在读取 Agent AI 服务与模型" rows={3} /> : catalog.data.partial ?
-      <ErrorState message="暂时无法读取 Agent AI 服务与模型，请稍后重试。" onRetry={refresh} /> : <>
-      <p className="text-xs text-muted-foreground">采集于 {formatDateTime(catalog.data.collectedAt)} · {new Set(services.map(service => service.agentId)).size} 个已上报服务的 Agent · {services.length} 个 AI 服务 · {new Set(services.flatMap(service => service.models.map(model => model.id))).size} 个模型（ID 去重）</p>
+      <LoadingState label={t("tenant.loadingAgentAiServicesAndModels")} rows={3} /> : catalog.data.partial ?
+      <ErrorState message={t("tenant.unableToLoadAgentAiServicesAndModels")} onRetry={refresh} /> : <>
+      <p className="text-xs text-muted-foreground"><Message id="tenant.collectedAtAgentsReportingServicesAiServicesModels" values={{ value: formatDateTime(catalog.data.collectedAt, undefined, locale), size: new Set(services.map(service => service.agentId)).size, count: services.length, size2: new Set(services.flatMap(service => service.models.map(model => model.id))).size }} /></p>
       <div className="flex flex-wrap items-center gap-3">
-        <Input className="max-w-sm" aria-label="搜索 AI 服务或模型" placeholder="搜索 Agent、服务 ID、类型或模型" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
-        <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={onlineOnly} onChange={event => { setOnlineOnly(event.target.checked); setPage(0); }} />仅显示在线 Agent</label>
+        <Input className="max-w-sm" aria-label={t("tenant.searchAiServicesOrModels")} placeholder={t("tenant.searchAgentsServiceIdsTypesOrModels")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
+        <label className="flex items-center gap-2 text-sm"><Message id="tenant.showOnlineAgentsOnly_56e957" values={{ content: <input type="checkbox" checked={onlineOnly} onChange={event => { setOnlineOnly(event.target.checked); setPage(0); }} /> }} /></label>
       </div>
-      {shown.length === 0 ? <EmptyState title={services.length === 0 ? "尚无 Agent 上报 AI 服务" : "没有符合搜索条件的服务或模型"} description={services.length === 0 ? "请确认 Agent 已连接到 Gateway，并已配置或发现本地 AI 后端。" : undefined} /> : <>
-        <DataTable table={table} caption="Agent AI 服务列表" />
-        <ListPager page={currentPage} count={agents.length} onChange={setPage} label="Agent 分页" />
+      {shown.length === 0 ? <EmptyState title={services.length === 0 ? t("tenant.noAgentsHaveReportedAiServicesYet") : t("tenant.noServicesOrModelsMatchYourSearch")} description={services.length === 0 ? t("tenant.checkThatTheAgentIsConnectedToA") : undefined} /> : <>
+        <DataTable table={table} caption={t("tenant.agentAiServiceList")} />
+        <ListPager page={currentPage} count={agents.length} onChange={setPage} label={t("tenant.agentPagination")} />
       </>}
     </>}
     <Dialog open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
@@ -93,38 +101,40 @@ export function TenantModelsView() {
 /** AgentServices renders a bounded subtable owned by one Agent row.
  * AgentServices 在一个 Agent 主行内展示有界的服务子表。 */
 function AgentServices({ agent, onSelect }: { agent: AgentGroup; onSelect: (service: Service) => void }) {
+  const { t } = useI18n();
   const [page, setPage] = React.useState(0);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(agent.services.length / PAGE_SIZE) - 1));
   const columns = React.useMemo(() => helper.columns([
-    helper.accessor("serviceId", { header: "服务 ID / 类型", cell: info => <div className="max-w-48 whitespace-normal break-all"><code className="text-xs">{info.getValue()}</code><div className="text-xs text-muted-foreground">{info.row.original.kind}</div></div> }),
-    helper.accessor("state", { header: "健康状态", cell: info => <Badge variant="outline">{STATES[info.getValue()] ?? info.getValue()}</Badge> }),
-    helper.accessor("version", { header: "版本", cell: info => <span className="inline-block max-w-32 whitespace-normal break-all">{info.getValue() || "未上报"}</span> }),
-    helper.accessor("models", { header: "模型", cell: info => <span className="text-xs">{info.getValue().length} 个模型</span> }),
-    helper.display({ id: "details", header: "详情", cell: info => <Button variant="outline" size="sm" onClick={() => onSelect(info.row.original)}>查看模型</Button> }),
-  ]), [onSelect]);
+    helper.accessor("serviceId", { header: t("tenant.serviceIdType"), cell: info => <div className="max-w-48 whitespace-normal break-all"><code className="text-xs">{info.getValue()}</code><div className="text-xs text-muted-foreground">{info.row.original.kind}</div></div> }),
+    helper.accessor("state", { header: t("tenant.healthStatus"), cell: info => <Badge variant="outline">{STATES(t)[info.getValue()] ?? info.getValue()}</Badge> }),
+    helper.accessor("version", { header: t("tenant.version"), cell: info => <span className="inline-block max-w-32 whitespace-normal break-all">{info.getValue() || t("tenant.notReported")}</span> }),
+    helper.accessor("models", { header: t("tenant.models_98fd0c"), cell: info => <span className="text-xs"><Message id="tenant.models_4678e8" values={{ count: info.getValue().length }} /></span> }),
+    helper.display({ id: "details", header: t("tenant.details"), cell: info => <Button variant="outline" size="sm" onClick={() => onSelect(info.row.original)}><Message id="tenant.viewModels" /></Button> }),
+  ]), [onSelect, t]);
   const table = useTable({ features, columns, data: agent.services.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE), getRowId: service => service.serviceId });
   return <div className="grid min-w-0 gap-2">
-    <DataTable table={table} caption={`${agent.agentId} 的 AI 服务`} />
-    {agent.services.length > PAGE_SIZE ? <ListPager page={currentPage} count={agent.services.length} onChange={setPage} label={`${agent.agentId} 的服务分页`} /> : null}
+    <DataTable table={table} caption={t("tenant.aiServicesOn", { agentId: agent.agentId })} />
+    {agent.services.length > PAGE_SIZE ? <ListPager page={currentPage} count={agent.services.length} onChange={setPage} label={t("tenant.servicePaginationFor", { agentId: agent.agentId })} /> : null}
   </div>;
 }
 
 /** ServiceModels paginates one service's models in a separate detail window.
  * ServiceModels 在独立详情窗口中分页展示一个服务的模型。 */
 function ServiceModels({ service }: { service: Service }) {
+  const {t } = useI18n();
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
   const models = service.models.filter(model => matchesQuery([model.id], query));
   const currentPage = Math.min(page, Math.max(0, Math.ceil(models.length / PAGE_SIZE) - 1));
   return <DialogContent className="sm:max-w-2xl">
-    <DialogHeader><DialogTitle>模型详情</DialogTitle><DialogDescription className="break-all">Agent {service.agentId} · {service.serviceId} · {service.kind}</DialogDescription></DialogHeader>
-    {!service.nodeOnline ? <p className="text-xs text-muted-foreground">Agent 已离线，以下为最近一次上报的服务与模型信息。</p> : null}
-    <Input aria-label="搜索服务内模型" placeholder="搜索模型 ID" value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
-    {models.length === 0 ? <p className="text-sm text-muted-foreground">{service.models.length === 0 ? "尚未发现模型。" : "没有符合搜索条件的模型。"}</p> : <ul className="grid gap-2">{models.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map(model => <li key={model.id} className="min-w-0 rounded-md bg-muted/40 p-3">
+    <DialogHeader><DialogTitle><Message id="tenant.modelDetails" /></DialogTitle><DialogDescription className="break-all">Agent {service.agentId} · {service.serviceId} · {service.kind}</DialogDescription></DialogHeader>
+    {!service.nodeOnline ? <p className="text-xs text-muted-foreground"><Message id="tenant.thisAgentIsOfflineTheFollowingServiceAnd" /></p> : null}
+    <Input aria-label={t("tenant.searchModelsInThisService")} placeholder={t("tenant.searchModelIds")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
+    {models.length === 0 ? <p className="text-sm text-muted-foreground">{service.models.length === 0 ? t("tenant.noModelsDiscoveredYet") : t("tenant.noModelsMatchYourSearch")}</p> : <ul className="grid gap-2">{models.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map(model => <li key={model.id} className="min-w-0 rounded-md bg-muted/40 p-3">
       <code className="break-all text-sm">{model.id}</code>
-      <div className="mt-2 flex flex-wrap gap-1">{Object.entries(model.capabilities).map(([capability, support]) => <Badge key={capability} variant="outline" className="h-auto max-w-full whitespace-normal break-all text-xs">{capability} · {SUPPORT[support] ?? support}</Badge>)}</div>
+      <div className="mt-2 flex flex-wrap gap-1">{Object.entries(model.capabilities).map(([capability, support]) => <Badge key={capability} variant="outline" className="h-auto max-w-full whitespace-normal break-all text-xs">{capability} · {SUPPORT(t)[support] ?? support}</Badge>)}</div>
     </li>)}</ul>}
-    <ListPager page={currentPage} count={models.length} onChange={setPage} label="模型分页" />
+    <ListPager page={currentPage} count={models.length} onChange={setPage} label={t("tenant.modelPagination")} />
   </DialogContent>;
 }
 
@@ -133,7 +143,7 @@ function ServiceModels({ service }: { service: Service }) {
 function ListPager({ page, count, onChange, label }: { page: number; count: number; onChange: (page: number) => void; label: string }) {
   const pages = Math.max(1, Math.ceil(count / PAGE_SIZE));
   return <nav aria-label={label} className="flex flex-wrap items-center justify-between gap-3">
-    <p className="text-xs text-muted-foreground">第 {page + 1} / {pages} 页 · 筛选结果 {count} 条 · 每页 {PAGE_SIZE} 条</p>
-    <div className="flex gap-2"><Button variant="outline" size="sm" disabled={page === 0} onClick={() => onChange(page - 1)}>上一页</Button><Button variant="outline" size="sm" disabled={page + 1 >= pages} onClick={() => onChange(page + 1)}>下一页</Button></div>
+    <p className="text-xs text-muted-foreground"><Message id="tenant.pageOfMatchingRecordsPerPage" values={{ value: page + 1, pages: pages, count: count, PAGE_SIZE: PAGE_SIZE }} /></p>
+    <div className="flex gap-2"><Button variant="outline" size="sm" disabled={page === 0} onClick={() => onChange(page - 1)}><Message id="tenant.previousPage" /></Button><Button variant="outline" size="sm" disabled={page + 1 >= pages} onClick={() => onChange(page + 1)}><Message id="tenant.nextPage" /></Button></div>
   </nav>;
 }

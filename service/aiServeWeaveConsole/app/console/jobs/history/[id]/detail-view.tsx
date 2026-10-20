@@ -1,5 +1,12 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+
+
+
 import Link from "next/link";
 
 import { CancelButton } from "@/app/console/jobs/jobs-view";
@@ -31,13 +38,13 @@ import { formatDateTime, isTerminalJobState } from "@/lib/console/format";
  * 产物 id 都上报给控制面（`jobPersister.persistArtifacts`），但一个副本在
  * 上报发出之前就重启过的 job，这里显示的产物仍可能比实时视图当初看到的更少。
  */
-const STATE_LABELS: Record<string, string> = {
-  pending: "排队中",
-  running: "运行中",
-  succeeded: "成功",
-  failed: "失败",
-  cancelled: "已取消",
-};
+const STATE_LABELS = (t: Translator): Record<string, string> => ({
+  pending: t("tenant.queued"),
+  running: t("tenant.running"),
+  succeeded: t("tenant.succeeded"),
+  failed: t("tenant.failed"),
+  cancelled: t("tenant.canceled"),
+});
 
 export function DetailView({
   jobId,
@@ -46,6 +53,7 @@ export function DetailView({
   jobId: string;
   hasGatewayKey: boolean;
 }) {
+  const { locale, t } = useI18n();
   const job = useResource<JobHistoryEntry>({
     method: "GET",
     path: `/admin/v1/jobs/history/${encodeURIComponent(jobId)}`,
@@ -59,8 +67,7 @@ export function DetailView({
           href="/console/jobs/history"
           className="text-sm text-muted-foreground underline underline-offset-2"
         >
-          ← 返回运行历史
-        </Link>
+          <Message id="tenant.backToRunHistory" /></Link>
         <h1 className="mt-1 font-heading text-lg font-semibold">
           <span className="font-mono">{jobId}</span>
         </h1>
@@ -69,45 +76,45 @@ export function DetailView({
       {job.error ? (
         <ErrorState message={job.error} onRetry={job.reload} />
       ) : job.loading || !job.data ? (
-        <LoadingState label="正在加载 job 详情" rows={4} />
+        <LoadingState label={t("tenant.loadingJobDetails")} rows={4} />
       ) : (
         <>
           <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl border p-4 text-sm sm:grid-cols-3">
             <div>
-              <dt className="text-xs text-muted-foreground">工作流</dt>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.workflows" /></dt>
               <dd className="font-mono text-xs">
                 {job.data.workflowId}
                 {job.data.workflowVersion ? `@${job.data.workflowVersion}` : ""}
               </dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">状态</dt>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.status" /></dt>
               <dd>
                 <Badge
                   variant={job.data.state === "succeeded" ? "secondary" : "outline"}
                   className={job.data.state === "failed" ? "text-destructive" : undefined}
                 >
-                  {STATE_LABELS[job.data.state] ?? job.data.state}
+                  {STATE_LABELS(t)[job.data.state] ?? job.data.state}
                 </Badge>
               </dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">提交时间</dt>
-              <dd className="text-xs">{formatDateTime(job.data.createdAt)}</dd>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.submittedAt" /></dt>
+              <dd className="text-xs">{formatDateTime(job.data.createdAt, undefined, locale)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">最后更新</dt>
-              <dd className="text-xs">{formatDateTime(job.data.updatedAt)}</dd>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.lastUpdated" /></dt>
+              <dd className="text-xs">{formatDateTime(job.data.updatedAt, undefined, locale)}</dd>
             </div>
             <div>
-              <dt className="text-xs text-muted-foreground">结束时间</dt>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.finishedAt" /></dt>
               <dd className="text-xs">
-                {job.data.terminalAt ? formatDateTime(job.data.terminalAt) : "尚未结束"}
+                {job.data.terminalAt ? formatDateTime(job.data.terminalAt, undefined, locale) : t("tenant.notFinishedYet")}
               </dd>
             </div>
             {job.data.errorSummary ? (
               <div className="col-span-full">
-                <dt className="text-xs text-muted-foreground">错误摘要</dt>
+                <dt className="text-xs text-muted-foreground"><Message id="tenant.errorSummary" /></dt>
                 <dd className="text-xs text-destructive">{job.data.errorSummary}</dd>
               </div>
             ) : null}
@@ -118,23 +125,18 @@ export function DetailView({
               {hasGatewayKey ? (
                 <CancelButton jobId={jobId} onCancelled={job.reload} />
               ) : (
-                <p className="text-xs text-muted-foreground">
-                  该运行尚未结束，但未配置 Gateway Key，无法在此取消；前往
-                  <Link href="/console/settings" className="underline underline-offset-2">
-                    设置
-                  </Link>
-                  页配置。
-                </p>
+                <p className="text-xs text-muted-foreground"><Message id="tenant.thisRunHasNotFinishedButNoGateway_2df060" values={{ link: <Link href="/console/settings" className="underline underline-offset-2">
+                    <Message id="tenant.settings" /></Link> }} /></p>
               )}
             </div>
           )}
 
           <div>
-            <h2 className="text-sm font-semibold">产物</h2>
+            <h2 className="text-sm font-semibold"><Message id="tenant.artifacts" /></h2>
             {job.data.artifacts === null || job.data.artifacts.length === 0 ? (
               <EmptyState
-                title="没有已记录的产物"
-                description="控制面的 job_artifacts 表里还没有这个 job 的记录——它可能确实没有产出，也可能是持久化尚未追上（见上方页面顶部的说明）。"
+                title={t("tenant.noRecordedArtifacts")}
+                description={t("tenant.theControlPlaneSJobArtifactsTableHas")}
               />
             ) : hasGatewayKey ? (
               <div className="mt-2 grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4">
@@ -143,13 +145,8 @@ export function DetailView({
                 ))}
               </div>
             ) : (
-              <p className="mt-2 text-xs text-muted-foreground">
-                共 {job.data.artifacts.length} 个产物；预览与下载走网关数据面，需要先在
-                <Link href="/console/settings" className="underline underline-offset-2">
-                  设置
-                </Link>
-                页配置 Gateway Key。
-              </p>
+              <p className="mt-2 text-xs text-muted-foreground"><Message id="tenant.totalArtifactsPreviewsAndDownloadsUseTheGateway" values={{ count: job.data.artifacts.length, link: <Link href="/console/settings" className="underline underline-offset-2">
+                  <Message id="tenant.settings" /></Link> }} /></p>
             )}
           </div>
         </>
@@ -210,8 +207,7 @@ function ArtifactPreview({ artifact }: { artifact: JobArtifact }) {
         <video src={href} controls className="aspect-square rounded object-cover" />
       ) : (
         <div className="flex aspect-square items-center justify-center rounded bg-muted text-muted-foreground">
-          下载
-        </div>
+          <Message id="tenant.download" /></div>
       )}
       <span className="truncate font-mono">{artifact.filename}</span>
     </a>

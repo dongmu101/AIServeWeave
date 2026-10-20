@@ -49,6 +49,8 @@ async function installFixtures(page: Page, unexpected: string[]) {
       if (path.endsWith("/audit")) json = auditPage(url);
       else if (path === "/admin/v1/users") json = { items: [user, { ...user, id: "usr_peer", email: "peer@example.invalid", role: "member" }], next_cursor: "" };
       else if (path === "/admin/v1/apikeys") json = { items: [key], next_cursor: "" };
+      else if (path === "/admin/v1/models") json = { collected_at: at, partial: false, services: [{ agent_id: "agent-fixture", service_id: "ollama-fixture", kind: "ollama", node_online: true, state: "healthy", models: [{ id: "fixture-model", capabilities: { chat: "supported" } }] }] };
+      else if (path.endsWith("/usage/summary")) json = { items: [{ tenant_id: user.tenant_id, model: "fixture-model", prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, request_count: 2 }] };
       else if (path.endsWith("/requests")) {
         const data = auditPage(url);
         json = { ...data, items: data.items.map(row => ({ request_id: row.id.replace("audit_", "req_"), key_display: key.display, endpoint: "chat", outcome: "ok", status_code: 200, duration_ms: 42, created_at: at })) };
