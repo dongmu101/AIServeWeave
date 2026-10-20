@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "Steuerung der Graphvorschau",
+  "flow.zoomIn": "Vergrößern",
+  "flow.zoomOut": "Verkleinern",
+  "flow.fitView": "Ansicht einpassen",
+  "flow.toggleInteractive": "Interaktion aktivieren oder deaktivieren",
+  "flow.minimap": "Minikarte der Graphvorschau",
+  "flow.handle": "Verbindungsanschluss des Knotens",
+  "flow.nodeHelp": "Drücken Sie die Eingabetaste oder die Leertaste, um einen Knoten auszuwählen. Mit Escape heben Sie die Auswahl auf. Dieser Graph dient nur der Vorschau.",
+  "flow.edgeHelp": "Verbindung zwischen Workflow-Knoten, nur zur Ansicht.",
   "common.fieldProblem": "{field}: {problem}",
   "common.notifications": "Benachrichtigungen",
   "common.scrollUp": "Nach oben scrollen",

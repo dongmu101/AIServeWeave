@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "Commandes de l’aperçu du graphe",
+  "flow.zoomIn": "Agrandir",
+  "flow.zoomOut": "Réduire",
+  "flow.fitView": "Ajuster la vue",
+  "flow.toggleInteractive": "Activer ou désactiver les interactions",
+  "flow.minimap": "Minicarte de l’aperçu du graphe",
+  "flow.handle": "Port de connexion du nœud",
+  "flow.nodeHelp": "Appuyez sur Entrée ou Espace pour sélectionner un nœud, puis sur Escape pour le désélectionner. Ce graphe est réservé à l’aperçu.",
+  "flow.edgeHelp": "Connexion entre les nœuds du workflow, en lecture seule.",
   "common.fieldProblem": "{field} : {problem}",
   "common.notifications": "Notifications",
   "common.scrollUp": "Défiler vers le haut",

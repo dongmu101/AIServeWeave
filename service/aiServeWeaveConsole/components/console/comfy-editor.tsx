@@ -1,5 +1,7 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+
 import * as React from "react";
 import {
   COMFY_EDITOR_ENTRY,
@@ -60,6 +62,7 @@ export function ComfyEditor({ ref, onReady, onEdit, height = 640 }: {
   onEdit?: () => void;
   height?: number;
 }) {
+  const { t } = useI18n();
   const host = React.useRef<HTMLDivElement>(null);
   const bridge = React.useRef<Bridge | null>(null);
   const quietUntil = React.useRef(0);
@@ -132,7 +135,7 @@ export function ComfyEditor({ ref, onReady, onEdit, height = 640 }: {
   return <div className="relative overflow-hidden rounded-lg border" style={{ height }}>
     <div ref={host} className="h-full w-full" />
     {state !== "ready" && <div className="absolute inset-0 grid place-items-center bg-background/80 text-sm text-muted-foreground">
-      {state === "loading" ? "正在加载 ComfyUI 编辑器…" : "编辑器加载失败：控制面可能未配置 ComfyEditor.DistDir，或会话已过期。"}
+      {state === "loading" ? t("common.loadingComfyuiEditor") : t("common.editorFailedToLoadComfyeditorDistdirMayNot")}
     </div>}
   </div>;
 }

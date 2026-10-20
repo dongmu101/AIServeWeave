@@ -3,7 +3,6 @@ import { useI18n } from "@/components/i18n/provider";
 
 import { Message } from "@/components/i18n/message";
 
-
 import type * as React from "react";
 
 import { Button } from "@/components/ui/button";
@@ -38,7 +37,7 @@ export function LoadingState({
   label,
   rows = 3,
 }: {
-  label?: string;
+  label?: React.ReactNode;
   rows?: number;
 }) {
   const { t } = useI18n();

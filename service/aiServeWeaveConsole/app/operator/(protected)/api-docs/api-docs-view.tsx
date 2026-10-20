@@ -1,4 +1,8 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
 
 import * as React from "react";
 import { PlusIcon } from "lucide-react";
@@ -26,7 +30,7 @@ import {
   type OperatorApiDocDetail,
   type OperatorApiDocSummary,
 } from "@/lib/console/api-docs";
-import { describe } from "@/lib/console/errors";
+
 import { formatDateTime } from "@/lib/console/format";
 import { parseNoContent } from "@/lib/console/contract";
 
@@ -52,6 +56,7 @@ type Editing = { kind: "existing"; doc: OperatorApiDocDetail } | { kind: "new" }
  * 重新读取而不是假定结果。
  */
 export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
+  const { t } = useI18n();
   const run = useConsoleRequest();
   const list = useResource<OperatorApiDocSummary[]>({
     method: "GET",
@@ -70,7 +75,7 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
       const doc = await run({ method: "GET", surface: "operator", path: `${BASE}/${slug}`, parse: parseOperatorApiDocDetail });
       setEditing({ kind: "existing", doc });
     } catch (failure) {
-      toast.error(describe(failure));
+      toast.error(<ErrorMessage error={failure} />);
     } finally {
       setLoadingSlug(null);
     }
@@ -80,18 +85,10 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
     <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="font-heading text-lg font-semibold">API 文档</h1>
-          <p className="max-w-3xl text-sm text-muted-foreground">
-            租户控制台「API 文档」页面的内容。内置文档随控制面启动自动写入并随版本更新；一旦在这里编辑，该文档即归运维所有，
-            之后的内置更新不再覆盖，可用「恢复内置版本」交还。草稿对租户不可见。示例中可用占位符{" "}
-            <code className="font-mono">{"{{BASE_URL}}"}</code>、<code className="font-mono">{"{{API_KEY}}"}</code>、
-            <code className="font-mono">{"{{MODEL}}"}</code>。
-          </p>
+          <h1 className="font-heading text-lg font-semibold"><Message id="tenant.apiDocumentation" /></h1>
+          <p className="max-w-3xl text-sm text-muted-foreground"><Message id="operator.contentForTheTenantConsoleSApiDocumentation_ee5c4b" values={{ code: <code className="font-mono">{"{{BASE_URL}}"}</code>, code2: <code className="font-mono">{"{{API_KEY}}"}</code>, code3: <code className="font-mono">{"{{MODEL}}"}</code> }} /></p>
         </div>
-        <Button size="sm" onClick={() => setEditing({ kind: "new" })}>
-          <PlusIcon />
-          新建文档
-        </Button>
+        <Button size="sm" onClick={() => setEditing({ kind: "new" })}><Message id="operator.newDocument_76182b" values={{ content: <PlusIcon /> }} /></Button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
@@ -99,11 +96,11 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
           {list.error ? (
             <ErrorState message={list.error} onRetry={list.reload} />
           ) : !list.data ? (
-            <LoadingState label="正在加载文档列表" rows={8} />
+            <LoadingState label={t("operator.loadingDocumentList")} rows={8} />
           ) : list.data.length === 0 ? (
-            <EmptyState title="还没有文档" />
+            <EmptyState title={t("operator.noDocumentsYet")} />
           ) : (
-            <nav aria-label="文档列表" className="flex flex-col gap-3">
+            <nav aria-label={t("operator.documentList")} className="flex flex-col gap-3">
               {groups.map((group) => (
                 <div key={group.category} className="flex flex-col gap-0.5">
                   <p className="px-2 py-1 text-xs font-semibold">{group.category}</p>
@@ -123,8 +120,8 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
                       >
                         <MethodBadge method={doc.method} className="w-12 justify-center" />
                         <span className="min-w-0 flex-1 truncate">{doc.title}</span>
-                        {doc.status === "draft" ? <Badge variant="outline">草稿</Badge> : null}
-                        {doc.source === "operator" && doc.seeded ? <Badge variant="secondary">已编辑</Badge> : null}
+                        {doc.status === "draft" ? <Badge variant="outline"><Message id="operator.draft" /></Badge> : null}
+                        {doc.source === "operator" && doc.seeded ? <Badge variant="secondary"><Message id="operator.edited" /></Badge> : null}
                       </button>
                     );
                   })}
@@ -151,7 +148,7 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
               }}
             />
           ) : (
-            <EmptyState title="选择左侧的文档进行编辑" description="或新建一份文档，为新接入的模型或能力补充说明。" />
+            <EmptyState title={t("operator.selectADocumentOnTheLeftToEdit")} description={t("operator.orCreateADocumentForNewlyAddedModels")} />
           )}
         </div>
       </div>
@@ -172,13 +169,14 @@ function DocEditor({
   onSaved: (doc: OperatorApiDocDetail) => void;
   onDeleted: () => void;
 }) {
+  const { locale, t } = useI18n();
   const existing = editing.kind === "existing" ? editing.doc : null;
   const [slug, setSlug] = React.useState("");
   const [text, setText] = React.useState(() =>
     JSON.stringify(existing ? toApiDocInput(existing) : blankApiDocInput(), null, 2)
   );
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
   const [confirm, setConfirm] = React.useState<"reset" | "delete" | null>(null);
   const [preview, setPreview] = React.useState(true);
 
@@ -196,11 +194,11 @@ function DocEditor({
   async function save(event: React.FormEvent) {
     event.preventDefault();
     if ("error" in parsed) {
-      setError("JSON 格式或字段不符合文档结构，请检查后再保存");
+      setError(<Message id={"operator.theJsonFormatOrFieldsDoNotMatch"} />);
       return;
     }
     if (!existing && !isValidApiDocSlug(slug)) {
-      setError("标识只能包含小写字母、数字与连字符，且以字母或数字开头");
+      setError(<Message id={"operator.theIdentifierMayContainOnlyLowercaseLettersDigits"} />);
       return;
     }
     setPending(true);
@@ -221,10 +219,10 @@ function DocEditor({
             body: { slug, ...parsed.input },
             parse: parseOperatorApiDocDetail,
           });
-      toast.success(existing ? `已保存 ${doc.title}` : `已创建 ${doc.title}`);
+      toast.success(existing ? <Message id={"operator.saved"} values={{ title: doc.title }} /> : <Message id={"operator.created"} values={{ title: doc.title }} />);
       onSaved(doc);
     } catch (failure) {
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
     } finally {
       setPending(false);
     }
@@ -239,7 +237,7 @@ function DocEditor({
       body: { expected_version: existing.version },
       parse: parseOperatorApiDocDetail,
     });
-    toast.success(`已恢复内置版本 ${doc.title}`);
+    toast.success(<Message id={"operator.restoredBuiltInVersionOf"} values={{ title: doc.title }} />);
     setConfirm(null);
     onSaved(doc);
   }
@@ -253,7 +251,7 @@ function DocEditor({
       query: { expected_version: String(existing.version) },
       parse: parseNoContent,
     });
-    toast.success(`已删除 ${existing.title}`);
+    toast.success(<Message id={"operator.deleted"} values={{ title: existing.title }} />);
     setConfirm(null);
     onDeleted();
   }
@@ -266,44 +264,36 @@ function DocEditor({
             <code className="font-mono">{existing.slug}</code>
             <Badge variant="outline">v{existing.version}</Badge>
             <Badge variant={existing.status === "published" ? "default" : "outline"}>
-              {existing.status === "published" ? "已发布" : "草稿"}
+              {existing.status === "published" ? t("operator.published") : t("operator.draft")}
             </Badge>
-            <Badge variant="secondary">{existing.source === "seed" ? "内置" : "运维编辑"}</Badge>
-            <span className="text-xs text-muted-foreground">
-              更新于 {formatDateTime(existing.updatedAt)}
-              {existing.updatedBy ? ` · ${existing.updatedBy}` : ""}
-            </span>
+            <Badge variant="secondary">{existing.source === "seed" ? t("operator.builtIn") : t("operator.operatorEdited")}</Badge>
+            <span className="text-xs text-muted-foreground"><Message id="operator.updated" values={{ value: formatDateTime(existing.updatedAt, undefined, locale), value2: existing.updatedBy ? ` · ${existing.updatedBy}` : "" }} /></span>
           </>
         ) : (
-          <label className="flex flex-wrap items-center gap-2">
-            标识（slug）
-            <Input
+          <label className="flex flex-wrap items-center gap-2"><Message id="operator.identifierSlug_6191ef" values={{ content: <Input
               value={slug}
               onChange={(event) => setSlug(event.target.value.trim())}
-              placeholder="例如 video-generations"
+              placeholder={t("operator.eGVideoGenerations")}
               className="h-8 w-64 font-mono"
               maxLength={128}
               spellCheck={false}
               required
-            />
-          </label>
+            /> }} /></label>
         )}
         <div className="ml-auto flex flex-wrap gap-2">
           <Button type="button" variant="outline" size="sm" onClick={() => setPreview((v) => !v)}>
-            {preview ? "隐藏预览" : "显示预览"}
+            {preview ? t("operator.hidePreview") : t("operator.showPreview")}
           </Button>
           {existing?.seeded && existing.source === "operator" ? (
             <Button type="button" variant="outline" size="sm" onClick={() => setConfirm("reset")}>
-              恢复内置版本
-            </Button>
+              <Message id="operator.restoreBuiltInVersion" /></Button>
           ) : null}
           {existing && !existing.seeded ? (
             <Button type="button" variant="destructive" size="sm" onClick={() => setConfirm("delete")}>
-              删除
-            </Button>
+              <Message id="common.delete" /></Button>
           ) : null}
           <SubmitButton pending={pending} size="sm" disabled={pending || "error" in parsed}>
-            {existing ? "保存" : "创建"}
+            {existing ? t("common.save") : t("common.create")}
           </SubmitButton>
         </div>
       </div>
@@ -311,10 +301,7 @@ function DocEditor({
 
       <div className={cn("grid grid-cols-1 gap-4", preview && "2xl:grid-cols-2")}>
         <label className="flex min-w-0 flex-col gap-1 text-sm">
-          <span className="flex items-center gap-2">
-            文档 JSON
-            {"error" in parsed ? <span className="text-xs text-destructive">格式有误</span> : null}
-          </span>
+          <span className="flex items-center gap-2"><Message id="operator.documentJson_04cddd" values={{ value: "error" in parsed ? <span className="text-xs text-destructive"><Message id="operator.invalidFormat" /></span> : null }} /></span>
           <textarea
             value={text}
             onChange={(event) => setText(event.target.value)}
@@ -326,7 +313,7 @@ function DocEditor({
         {preview ? (
           <div className="min-w-0 rounded-xl border p-4">
             {"error" in parsed ? (
-              <p className="text-sm text-muted-foreground">JSON 修正后显示预览。</p>
+              <p className="text-sm text-muted-foreground"><Message id="operator.aPreviewWillAppearOnceTheJsonIs" /></p>
             ) : (
               <ApiDocArticle
                 doc={parsed.input}
@@ -341,13 +328,13 @@ function DocEditor({
         <ConfirmDialog
           open={confirm !== null}
           onOpenChange={(next) => setConfirm(next ? confirm : null)}
-          title={confirm === "reset" ? "恢复内置版本" : "删除文档"}
+          title={confirm === "reset" ? t("operator.restoreBuiltInVersion") : t("operator.deleteDocument")}
           description={
             confirm === "reset"
-              ? `「${existing.title}」将恢复为当前内置版本，运维的编辑会被丢弃，之后的内置更新会自动应用。发布状态保持不变。`
-              : `「${existing.title}」（${existing.slug}）将被永久删除，租户无法再看到它。`
+              ? t("operator.willBeRestoredToTheCurrentBuiltIn", { title: existing.title })
+              : t("operator.willBePermanentlyDeletedAndWillNoLonger", { title: existing.title, slug: existing.slug })
           }
-          confirmLabel={confirm === "reset" ? "恢复" : "删除"}
+          confirmLabel={confirm === "reset" ? t("operator.restore") : t("common.delete")}
           destructive
           onConfirm={confirm === "reset" ? reset : remove}
         />

@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "Controles de la vista previa del grafo",
+  "flow.zoomIn": "Acercar",
+  "flow.zoomOut": "Alejar",
+  "flow.fitView": "Ajustar la vista",
+  "flow.toggleInteractive": "Activar o desactivar la interacción",
+  "flow.minimap": "Minimapa de la vista previa del grafo",
+  "flow.handle": "Puerto de conexión del nodo",
+  "flow.nodeHelp": "Pulsa Intro o Espacio para seleccionar un nodo y Escape para deseleccionarlo. Este grafo es solo una vista previa.",
+  "flow.edgeHelp": "Conexión entre los nodos del flujo de trabajo, solo para visualización.",
   "common.fieldProblem": "{field}: {problem}",
   "common.notifications": "Notificaciones",
   "common.scrollUp": "Desplazar hacia arriba",

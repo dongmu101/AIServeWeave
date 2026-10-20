@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "グラフプレビューの操作",
+  "flow.zoomIn": "拡大",
+  "flow.zoomOut": "縮小",
+  "flow.fitView": "表示領域に合わせる",
+  "flow.toggleInteractive": "操作の有効・無効を切り替え",
+  "flow.minimap": "グラフプレビューのミニマップ",
+  "flow.handle": "ノードの接続ポート",
+  "flow.nodeHelp": "Enterキーまたはスペースキーでノードを選択し、Escapeキーで選択を解除します。このグラフはプレビュー専用です。",
+  "flow.edgeHelp": "ワークフローのノード間の接続です。表示専用です。",
   "common.fieldProblem": "{field}：{problem}",
   "common.notifications": "通知",
   "common.scrollUp": "上へスクロール",

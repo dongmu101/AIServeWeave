@@ -1,9 +1,8 @@
 "use client";
-
+import { MessageError } from "@/lib/i18n/problem";
 
 import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
-
 
 import * as React from "react";
 import {
@@ -184,7 +183,7 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
       // 三者无法区分，因此诚实的做法是重新读取，并只说确实知道的事。
       if (failure instanceof ApiError && failure.kind === "not_found") {
         keys.reload();
-        throw new Error(t("tenant.thisKeyCanNoLongerBeRevokedSomeone"));
+        throw new MessageError("tenant.thisKeyCanNoLongerBeRevokedSomeone");
       }
       throw failure;
     }

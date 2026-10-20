@@ -197,3 +197,214 @@ export const saveText = {
   "fr-FR": "Enregistrer",
   "es-ES": "Guardar"
 } as const;
+
+export const operatorEntries = [
+  {
+    "path": "/operator/fleet",
+    "headings": {
+      "zh-CN": "节点管理",
+      "zh-TW": "節點管理",
+      "en-US": "Node management",
+      "ja-JP": "ノード管理",
+      "ko-KR": "노드 관리",
+      "de-DE": "Knotenverwaltung",
+      "fr-FR": "Gestion des nœuds",
+      "es-ES": "Gestión de nodos"
+    }
+  },
+  {
+    "path": "/operator/models",
+    "headings": {
+      "zh-CN": "当前 Gateway 的本地 AI 模型",
+      "zh-TW": "目前 Gateway 的本機 AI 模型",
+      "en-US": "Local AI models on the current Gateway",
+      "ja-JP": "現在の Gateway のローカル AI モデル",
+      "ko-KR": "현재 Gateway의 로컬 AI 모델",
+      "de-DE": "Lokale KI-Modelle des aktuellen Gateways",
+      "fr-FR": "Modèles d’IA locaux de la passerelle actuelle",
+      "es-ES": "Modelos de IA locales del Gateway actual"
+    }
+  },
+  {
+    "path": "/operator/routes",
+    "headings": {
+      "zh-CN": "模型路由",
+      "zh-TW": "模型路由",
+      "en-US": "Model routes",
+      "ja-JP": "モデルルーティング",
+      "ko-KR": "모델 라우팅",
+      "de-DE": "Modellrouting",
+      "fr-FR": "Routage des modèles",
+      "es-ES": "Enrutamiento de modelos"
+    }
+  },
+  {
+    "path": "/operator/workflow-templates",
+    "headings": {
+      "zh-CN": "工作流模板",
+      "zh-TW": "工作流程範本",
+      "en-US": "Workflow templates",
+      "ja-JP": "ワークフローテンプレート",
+      "ko-KR": "워크플로 템플릿",
+      "de-DE": "Workflow-Vorlagen",
+      "fr-FR": "Modèles de workflows",
+      "es-ES": "Plantillas de flujos de trabajo"
+    }
+  },
+  {
+    "path": "/operator/workflows",
+    "headings": {
+      "zh-CN": "工作流发布状态",
+      "zh-TW": "工作流程發布狀態",
+      "en-US": "Workflow release status",
+      "ja-JP": "ワークフローの公開状況",
+      "ko-KR": "워크플로 게시 상태",
+      "de-DE": "Workflow-Veröffentlichungsstatus",
+      "fr-FR": "État de publication des workflows",
+      "es-ES": "Estado de publicación de flujos de trabajo"
+    }
+  },
+  {
+    "path": "/operator/api-docs",
+    "headings": {
+      "zh-CN": "API 文档",
+      "zh-TW": "API 文件",
+      "en-US": "API documentation",
+      "ja-JP": "API ドキュメント",
+      "ko-KR": "API 문서",
+      "de-DE": "API-Dokumentation",
+      "fr-FR": "Documentation API",
+      "es-ES": "Documentación de la API"
+    }
+  },
+  {
+    "path": "/operator/comfyui-managed",
+    "headings": {
+      "zh-CN": "ComfyUI Managed",
+      "zh-TW": "ComfyUI Managed",
+      "en-US": "ComfyUI Managed",
+      "ja-JP": "ComfyUI Managed",
+      "ko-KR": "ComfyUI Managed",
+      "de-DE": "ComfyUI Managed",
+      "fr-FR": "ComfyUI Managed",
+      "es-ES": "ComfyUI Managed"
+    }
+  },
+  {
+    "path": "/operator/model-pulls",
+    "headings": {
+      "zh-CN": "模型拉取",
+      "zh-TW": "模型拉取",
+      "en-US": "Model pulls",
+      "ja-JP": "モデルの取得",
+      "ko-KR": "모델 가져오기",
+      "de-DE": "Modelle herunterladen",
+      "fr-FR": "Téléchargement de modèles",
+      "es-ES": "Descarga de modelos"
+    }
+  },
+  {
+    "path": "/operator/audit",
+    "headings": {
+      "zh-CN": "平台审计",
+      "zh-TW": "平台稽核",
+      "en-US": "Platform audit",
+      "ja-JP": "プラットフォーム監査",
+      "ko-KR": "플랫폼 감사",
+      "de-DE": "Plattform-Audit",
+      "fr-FR": "Audit de la plateforme",
+      "es-ES": "Auditoría de la plataforma"
+    }
+  },
+  {
+    "path": "/operator/requests",
+    "headings": {
+      "zh-CN": "请求检索",
+      "zh-TW": "請求查詢",
+      "en-US": "Request search",
+      "ja-JP": "リクエスト検索",
+      "ko-KR": "요청 검색",
+      "de-DE": "Anfragesuche",
+      "fr-FR": "Recherche de requêtes",
+      "es-ES": "Buscar solicitudes"
+    }
+  },
+  {
+    "path": "/operator/metrics",
+    "headings": {
+      "zh-CN": "指标",
+      "zh-TW": "指標",
+      "en-US": "Metrics",
+      "ja-JP": "メトリクス",
+      "ko-KR": "지표",
+      "de-DE": "Metriken",
+      "fr-FR": "Métriques",
+      "es-ES": "Métricas"
+    }
+  },
+  {
+    "path": "/operator/usage",
+    "headings": {
+      "zh-CN": "用量",
+      "zh-TW": "用量",
+      "en-US": "Usage",
+      "ja-JP": "使用量",
+      "ko-KR": "사용량",
+      "de-DE": "Nutzung",
+      "fr-FR": "Utilisation",
+      "es-ES": "Uso"
+    }
+  },
+  {
+    "path": "/operator/alert-rules",
+    "headings": {
+      "zh-CN": "告警规则",
+      "zh-TW": "警示規則",
+      "en-US": "Alert rules",
+      "ja-JP": "アラートルール",
+      "ko-KR": "알림 규칙",
+      "de-DE": "Alarmregeln",
+      "fr-FR": "Règles d’alerte",
+      "es-ES": "Reglas de alerta"
+    }
+  },
+  {
+    "path": "/operator/alerts",
+    "headings": {
+      "zh-CN": "告警",
+      "zh-TW": "警示",
+      "en-US": "Alerts",
+      "ja-JP": "アラート",
+      "ko-KR": "알림",
+      "de-DE": "Alarme",
+      "fr-FR": "Alertes",
+      "es-ES": "Alertas"
+    }
+  },
+  {
+    "path": "/operator/operators",
+    "headings": {
+      "zh-CN": "平台运维账户",
+      "zh-TW": "平台維運帳號",
+      "en-US": "Platform operator accounts",
+      "ja-JP": "プラットフォーム運用アカウント",
+      "ko-KR": "플랫폼 운영 계정",
+      "de-DE": "Plattform-Betriebskonten",
+      "fr-FR": "Comptes d’exploitation de la plateforme",
+      "es-ES": "Cuentas de operaciones de la plataforma"
+    }
+  },
+  {
+    "path": "/operator/account",
+    "headings": {
+      "zh-CN": "账户安全",
+      "zh-TW": "帳號安全",
+      "en-US": "Account security",
+      "ja-JP": "アカウントのセキュリティ",
+      "ko-KR": "계정 보안",
+      "de-DE": "Kontosicherheit",
+      "fr-FR": "Sécurité du compte",
+      "es-ES": "Seguridad de la cuenta"
+    }
+  }
+] as const;

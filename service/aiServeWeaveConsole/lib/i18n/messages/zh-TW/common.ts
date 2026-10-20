@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "圖形預覽控制項",
+  "flow.zoomIn": "放大",
+  "flow.zoomOut": "縮小",
+  "flow.fitView": "符合檢視範圍",
+  "flow.toggleInteractive": "切換互動",
+  "flow.minimap": "圖形預覽縮圖",
+  "flow.handle": "節點連接埠",
+  "flow.nodeHelp": "按 Enter 或空白鍵選取節點，按 Escape 取消選取。此圖僅供預覽。",
+  "flow.edgeHelp": "工作流程節點之間的連線，僅供檢視。",
   "common.fieldProblem": "{field}：{problem}",
   "common.notifications": "通知",
   "common.scrollUp": "向上捲動",

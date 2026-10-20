@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "Graph preview controls",
+  "flow.zoomIn": "Zoom in",
+  "flow.zoomOut": "Zoom out",
+  "flow.fitView": "Fit view",
+  "flow.toggleInteractive": "Toggle interactivity",
+  "flow.minimap": "Graph preview minimap",
+  "flow.handle": "Node connection port",
+  "flow.nodeHelp": "Press Enter or Space to select a node, and Escape to deselect it. This graph is for preview only.",
+  "flow.edgeHelp": "Connection between workflow nodes, for viewing only.",
   "common.fieldProblem": "{field}: {problem}",
   "common.notifications": "Notifications",
   "common.scrollUp": "Scroll up",

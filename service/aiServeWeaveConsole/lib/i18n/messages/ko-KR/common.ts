@@ -1,4 +1,13 @@
 const common = {
+  "flow.controls": "그래프 미리보기 컨트롤",
+  "flow.zoomIn": "확대",
+  "flow.zoomOut": "축소",
+  "flow.fitView": "화면에 맞추기",
+  "flow.toggleInteractive": "상호작용 전환",
+  "flow.minimap": "그래프 미리보기 미니맵",
+  "flow.handle": "노드 연결 포트",
+  "flow.nodeHelp": "Enter 또는 스페이스 키를 눌러 노드를 선택하고 Escape 키를 눌러 선택을 해제하세요. 이 그래프는 미리보기 전용입니다.",
+  "flow.edgeHelp": "워크플로 노드 사이의 연결로, 보기 전용입니다.",
   "common.fieldProblem": "{field}: {problem}",
   "common.notifications": "알림",
   "common.scrollUp": "위로 스크롤",

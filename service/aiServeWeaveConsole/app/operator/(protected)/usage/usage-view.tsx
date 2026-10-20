@@ -1,4 +1,9 @@
 "use client";
+import type { Locale } from "@/lib/i18n/locale";
+import type { Translator } from "@/lib/i18n/translate";
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
 
 import * as React from "react";
 import ReactECharts from "echarts-for-react";
@@ -52,13 +57,13 @@ function byModel(items: UsageSummaryEntry[]): { model: string; totalTokens: numb
     .sort((a, b) => b.totalTokens - a.totalTokens);
 }
 
-function tokensByModelOption(rows: { model: string; totalTokens: number }[]) {
+function tokensByModelOption(rows: { model: string; totalTokens: number }[], t: Translator, locale: Locale) {
   return {
-    tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
+    tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: unknown) => new Intl.NumberFormat(locale).format(Number(value)) },
     grid: { left: 140, right: 24, top: 16, bottom: 24 },
-    xAxis: { type: "value", name: "token" },
+    xAxis: { type: "value", name: "token", axisLabel: { formatter: (value: number) => new Intl.NumberFormat(locale).format(value) } },
     yAxis: { type: "category", data: rows.map((row) => row.model), inverse: true },
-    series: [{ type: "bar", name: "总 token", data: rows.map((row) => row.totalTokens) }],
+    series: [{ type: "bar", name: t("tenant.totalTokens"), data: rows.map((row) => row.totalTokens) }],
   };
 }
 
@@ -74,6 +79,7 @@ function tokensByModelOption(rows: { model: string; totalTokens: number }[]) {
  * 自行算出按租户的拆分，因为控制面已经在数据库里做了这次分组。
  */
 export function UsageView() {
+  const { t } = useI18n();
   const [sinceInput, setSinceInput] = React.useState("");
   const [untilInput, setUntilInput] = React.useState("");
   const [tenantInput, setTenantInput] = React.useState("");
@@ -104,25 +110,24 @@ export function UsageView() {
   return (
     <div className="grid gap-6">
       <div>
-        <h1 className="font-heading text-lg font-semibold">用量</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.usage" /></h1>
         <p className="text-sm text-muted-foreground">
-          跨租户、按模型统计的 token 消耗，来自持久化用量账本。这里只回答用了多少，不涉及计价或账单。
-        </p>
+          <Message id="operator.tokenConsumptionByModelAcrossTenantsFromThe" /></p>
       </div>
 
       <form onSubmit={applyFilters} className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1">
-          <label htmlFor="usage-tenant" className="text-xs text-muted-foreground">租户 ID(可选)</label>
+          <label htmlFor="usage-tenant" className="text-xs text-muted-foreground"><Message id="operator.tenantIdOptional" /></label>
           <Input
             id="usage-tenant"
             className="w-56"
-            placeholder="留空表示全部租户"
+            placeholder={t("operator.leaveBlankForAllTenants")}
             value={tenantInput}
             onChange={(event) => setTenantInput(event.target.value)}
           />
         </div>
         <div className="grid gap-1">
-          <label htmlFor="usage-since" className="text-xs text-muted-foreground">起始时间(可选)</label>
+          <label htmlFor="usage-since" className="text-xs text-muted-foreground"><Message id="tenant.startTimeOptional" /></label>
           <Input
             id="usage-since"
             type="datetime-local"
@@ -131,7 +136,7 @@ export function UsageView() {
           />
         </div>
         <div className="grid gap-1">
-          <label htmlFor="usage-until" className="text-xs text-muted-foreground">结束时间(可选)</label>
+          <label htmlFor="usage-until" className="text-xs text-muted-foreground"><Message id="tenant.endTimeOptional" /></label>
           <Input
             id="usage-until"
             type="datetime-local"
@@ -139,7 +144,7 @@ export function UsageView() {
             onChange={(event) => setUntilInput(event.target.value)}
           />
         </div>
-        <Button type="submit" variant="outline">应用筛选</Button>
+        <Button type="submit" variant="outline"><Message id="operator.applyFilters" /></Button>
         {since || until || tenantId ? (
           <Button
             type="button"
@@ -153,17 +158,16 @@ export function UsageView() {
               setTenantId("");
             }}
           >
-            清除
-          </Button>
+            <Message id="tenant.clear_7b15e5" /></Button>
         ) : null}
       </form>
 
       {resource.error ? (
         <ErrorState message={resource.error} onRetry={resource.reload} />
       ) : resource.loading || !resource.data ? (
-        <LoadingState label="正在加载用量" rows={5} />
+        <LoadingState label={t("tenant.loadingUsage")} rows={5} />
       ) : resource.data.items.length === 0 ? (
-        <EmptyState title="所选条件下没有用量记录" description="换一个时间窗口或租户 ID，或确认机群是否已有推理调用。" />
+        <EmptyState title={t("operator.noUsageRecordsMatchTheSelectedCriteria")} description={t("operator.tryADifferentTimeRangeOrTenantId")} />
       ) : (
         <UsageSummaryBody items={resource.data.items} showTenant={!tenantId} />
       )}
@@ -172,6 +176,7 @@ export function UsageView() {
 }
 
 function UsageSummaryBody({ items, showTenant }: { items: UsageSummaryEntry[]; showTenant: boolean }) {
+  const { locale, t } = useI18n();
   const totals = totalsOf(items);
   const sorted = [...items].sort((a, b) => b.totalTokens - a.totalTokens);
   const modelTotals = byModel(items);
@@ -179,25 +184,25 @@ function UsageSummaryBody({ items, showTenant }: { items: UsageSummaryEntry[]; s
     <>
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">合计</CardTitle>
+          <CardTitle className="text-sm font-medium"><Message id="tenant.total_92bcbf" /></CardTitle>
         </CardHeader>
         <CardContent>
           <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-4">
             <div className="grid gap-1">
               <dt className="text-xs text-muted-foreground">Prompt token</dt>
-              <dd className="text-sm">{totals.promptTokens.toLocaleString()}</dd>
+              <dd className="text-sm">{totals.promptTokens.toLocaleString(locale)}</dd>
             </div>
             <div className="grid gap-1">
               <dt className="text-xs text-muted-foreground">Completion token</dt>
-              <dd className="text-sm">{totals.completionTokens.toLocaleString()}</dd>
+              <dd className="text-sm">{totals.completionTokens.toLocaleString(locale)}</dd>
             </div>
             <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">总 token</dt>
-              <dd className="text-sm">{totals.totalTokens.toLocaleString()}</dd>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.totalTokens" /></dt>
+              <dd className="text-sm">{totals.totalTokens.toLocaleString(locale)}</dd>
             </div>
             <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">请求数</dt>
-              <dd className="text-sm">{totals.requestCount.toLocaleString()}</dd>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.requests" /></dt>
+              <dd className="text-sm">{totals.requestCount.toLocaleString(locale)}</dd>
             </div>
           </dl>
         </CardContent>
@@ -205,22 +210,22 @@ function UsageSummaryBody({ items, showTenant }: { items: UsageSummaryEntry[]; s
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-medium">按模型的总 token</CardTitle>
+          <CardTitle className="text-sm font-medium"><Message id="tenant.totalTokensByModel" /></CardTitle>
         </CardHeader>
         <CardContent>
-          <ReactECharts option={tokensByModelOption(modelTotals)} style={{ height: Math.max(160, modelTotals.length * 36) }} notMerge />
+          <ReactECharts option={tokensByModelOption(modelTotals, t, locale)} style={{ height: Math.max(160, modelTotals.length * 36) }} notMerge />
         </CardContent>
       </Card>
 
       <Table>
         <TableHeader>
           <TableRow>
-            {showTenant ? <TableHead>租户</TableHead> : null}
-            <TableHead>模型</TableHead>
+            {showTenant ? <TableHead><Message id="tenant.tenant" /></TableHead> : null}
+            <TableHead><Message id="tenant.models_98fd0c" /></TableHead>
             <TableHead>Prompt token</TableHead>
             <TableHead>Completion token</TableHead>
-            <TableHead>总 token</TableHead>
-            <TableHead>请求数</TableHead>
+            <TableHead><Message id="tenant.totalTokens" /></TableHead>
+            <TableHead><Message id="tenant.requests" /></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -228,10 +233,10 @@ function UsageSummaryBody({ items, showTenant }: { items: UsageSummaryEntry[]; s
             <TableRow key={`${item.tenantId}:${item.model}`}>
               {showTenant ? <TableCell><code className="text-xs">{item.tenantId}</code></TableCell> : null}
               <TableCell><code className="text-xs">{item.model}</code></TableCell>
-              <TableCell>{item.promptTokens.toLocaleString()}</TableCell>
-              <TableCell>{item.completionTokens.toLocaleString()}</TableCell>
-              <TableCell>{item.totalTokens.toLocaleString()}</TableCell>
-              <TableCell>{item.requestCount.toLocaleString()}</TableCell>
+              <TableCell>{item.promptTokens.toLocaleString(locale)}</TableCell>
+              <TableCell>{item.completionTokens.toLocaleString(locale)}</TableCell>
+              <TableCell>{item.totalTokens.toLocaleString(locale)}</TableCell>
+              <TableCell>{item.requestCount.toLocaleString(locale)}</TableCell>
             </TableRow>
           ))}
         </TableBody>

@@ -1,4 +1,9 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
 
 import * as React from "react";
 import {
@@ -25,7 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { parseAlertInstances, parseNoContent, type AlertInstance } from "@/lib/console/contract";
-import { ApiError, describe } from "@/lib/console/errors";
+import {ApiError } from "@/lib/console/errors";
 import { formatDateTime } from "@/lib/console/format";
 
 /**
@@ -63,11 +68,11 @@ const PAGE_SIZE = 50;
  *
  * STATUS_LABELS 镜像 model.AlertStatus* ——一条实例经历的三种状态，从 firing
  * 到 acknowledged，或直接到 resolved。 */
-const STATUS_LABELS: Record<string, string> = {
-  firing: "触发中",
-  acknowledged: "已确认",
-  resolved: "已解决",
-};
+const STATUS_LABELS = (t: Translator): Record<string, string> => ({
+  firing: t("operator.firing"),
+  acknowledged: t("operator.acknowledged"),
+  resolved: t("operator.resolved"),
+});
 
 const STATUSES = ["firing", "acknowledged", "resolved"] as const;
 
@@ -76,12 +81,12 @@ const STATUSES = ["firing", "acknowledged", "resolved"] as const;
  *
  * NOTIFY_STATUS_LABELS 镜像 model.NotifyStatus* ——一条实例的 Webhook 投递
  * 结果，与实例自身的状态无关。 */
-const NOTIFY_STATUS_LABELS: Record<string, string> = {
-  pending: "待发送",
-  sent: "已发送",
-  failed: "发送失败",
-  skipped: "已跳过",
-};
+const NOTIFY_STATUS_LABELS = (t: Translator): Record<string, string> => ({
+  pending: t("operator.pending"),
+  sent: t("operator.sent"),
+  failed: t("operator.deliveryFailed"),
+  skipped: t("operator.skipped"),
+});
 
 /** statusLabel and notifyStatusLabel fall back to the raw wire value for
  * anything this build does not yet recognize — an unknown value is a fact
@@ -91,12 +96,12 @@ const NOTIFY_STATUS_LABELS: Record<string, string> = {
  * statusLabel 与 notifyStatusLabel 对本次构建尚不认识的取值回退展示线上原始
  * 值——一个未知值是值得展示出来的事实，不该被占位符藏起来，与 `AlertRulesView`
  * 的 `metricLabel` 遵循同一条规则。 */
-function statusLabel(status: string): string {
-  return STATUS_LABELS[status] ?? status;
+function statusLabel(status: string, t: Translator): string {
+  return STATUS_LABELS(t)[status] ?? status;
 }
 
-function notifyStatusLabel(status: string): string {
-  return NOTIFY_STATUS_LABELS[status] ?? status;
+function notifyStatusLabel(status: string, t: Translator): string {
+  return NOTIFY_STATUS_LABELS(t)[status] ?? status;
 }
 
 /** statusBadgeVariant gives firing/acknowledged/resolved distinct visual
@@ -140,10 +145,11 @@ const GRID =
  *
  * AlertsView 列出已触发的告警实例，并允许运维确认处理一条仍在触发中的实例。 */
 export function AlertsView() {
+  const { locale, t } = useI18n();
   const run = useConsoleRequest();
   const [filters, setFilters] = useUrlFilters(["status", "rule_id", "since", "until"] as const);
   const [acknowledgingId, setAcknowledgingId] = React.useState<string | null>(null);
-  const [ackErrors, setAckErrors] = React.useState<Record<string, string>>({});
+  const [ackErrors, setAckErrors] = React.useState<Record<string, React.ReactNode>>({});
 
   const alerts = usePagedResource<AlertInstance>({
     path: PATH,
@@ -185,7 +191,7 @@ export function AlertsView() {
         });
       } catch (failure) {
         setAcknowledgingId(null);
-        const message = describe(failure);
+        const message = <ErrorMessage error={failure} />;
         setAckErrors((previous) => ({ ...previous, [instance.id]: message }));
         // A conflict means the instance's status already changed server-side
         // — e.g. it resolved between page load and this click — so the row
@@ -217,7 +223,7 @@ export function AlertsView() {
         return;
       }
       setAcknowledgingId(null);
-      toast.success(`已确认处理 ${instance.ruleName || instance.ruleId}`);
+      toast.success(<Message id={"operator.acknowledged_4e0696"} values={{ value: instance.ruleName || instance.ruleId }} />);
       alerts.reload();
     },
     [run, alerts]
@@ -227,40 +233,40 @@ export function AlertsView() {
     () =>
       helper.columns([
         helper.accessor("status", {
-          header: "状态",
+          header: t("tenant.status"),
           cell: (info) => (
             <Badge variant={statusBadgeVariant(info.getValue())}>
-              {statusLabel(info.getValue())}
+              {statusLabel(info.getValue(), t)}
             </Badge>
           ),
         }),
         helper.accessor("ruleName", {
-          header: "规则",
+          header: t("operator.rule"),
           cell: (info) => info.getValue() || info.row.original.ruleId,
         }),
         helper.accessor("valueAtFire", {
-          header: "触发值",
+          header: t("operator.triggerValue"),
           cell: (info) => info.getValue(),
         }),
         helper.accessor("createdAt", {
-          header: "首次触发",
-          cell: (info) => formatDateTime(info.getValue()),
+          header: t("operator.firstTriggered"),
+          cell: (info) => formatDateTime(info.getValue(), undefined, locale),
         }),
         helper.accessor("lastEvaluatedAt", {
-          header: "最近评估",
-          cell: (info) => formatDateTime(info.getValue()),
+          header: t("operator.lastEvaluated"),
+          cell: (info) => formatDateTime(info.getValue(), undefined, locale),
         }),
         helper.accessor("resolvedAt", {
-          header: "解决时间",
-          cell: (info) => formatDateTime(info.getValue()),
+          header: t("operator.resolvedAt"),
+          cell: (info) => formatDateTime(info.getValue(), undefined, locale),
         }),
         helper.accessor("notifyStatus", {
-          header: "通知状态",
-          cell: (info) => notifyStatusLabel(info.getValue()),
+          header: t("operator.notificationStatus"),
+          cell: (info) => notifyStatusLabel(info.getValue(), t),
         }),
         helper.display({
           id: "actions",
-          header: "操作",
+          header: t("tenant.actions"),
           cell: (info) => {
             const instance = info.row.original;
             const rowError = ackErrors[instance.id];
@@ -277,15 +283,14 @@ export function AlertsView() {
                   disabled={pending}
                   aria-busy={pending}
                 >
-                  确认处理
-                </Button>
+                  <Message id="operator.acknowledge" /></Button>
                 {rowError ? <p className="text-xs text-destructive">{rowError}</p> : null}
               </div>
             );
           },
         }),
       ]),
-    [acknowledge, acknowledgingId, ackErrors]
+    [acknowledge, acknowledgingId, ackErrors, t, locale]
   );
 
   const table = useTable({ features, columns, data: rows });
@@ -303,18 +308,15 @@ export function AlertsView() {
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">告警</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="operator.alerts" /></h1>
         <p className="text-sm text-muted-foreground">
-          告警规则触发出的实例，跨平台全部规则。仍在触发中的实例可以就地确认处理；创建、
-          续期与解除由评估循环完成，这里不提供。
-        </p>
+          <Message id="operator.alertInstancesTriggeredByAllPlatformRulesActive" /></p>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1">
           <label htmlFor="alerts-status" className="text-xs text-muted-foreground">
-            状态
-          </label>
+            <Message id="tenant.status" /></label>
           <Select
             value={filters.status === "" ? "all" : filters.status}
             onValueChange={(next) => {
@@ -324,13 +326,13 @@ export function AlertsView() {
             }}
           >
             <SelectTrigger id="alerts-status">
-              <SelectValue>{filters.status === "" ? "全部状态" : statusLabel(filters.status)}</SelectValue>
+              <SelectValue>{filters.status === "" ? t("tenant.allStatuses") : statusLabel(filters.status, t)}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
+              <SelectItem value="all"><Message id="tenant.allStatuses" /></SelectItem>
               {STATUSES.map((status) => (
                 <SelectItem key={status} value={status}>
-                  {STATUS_LABELS[status]}
+                  {STATUS_LABELS(t)[status]}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -339,12 +341,11 @@ export function AlertsView() {
 
         <div className="grid gap-1">
           <label htmlFor="alerts-rule-id" className="text-xs text-muted-foreground">
-            规则 ID
-          </label>
+            <Message id="operator.ruleId" /></label>
           <Input
             id="alerts-rule-id"
             className="w-56 font-mono text-xs"
-            placeholder="全部规则"
+            placeholder={t("operator.allRules")}
             value={filters.rule_id}
             onChange={(event) => setFilters({ rule_id: event.target.value })}
           />
@@ -352,8 +353,7 @@ export function AlertsView() {
 
         <div className="grid gap-1">
           <label htmlFor="alerts-since" className="text-xs text-muted-foreground">
-            起始日期（含）
-          </label>
+            <Message id="tenant.startDateInclusive" /></label>
           <Input
             id="alerts-since"
             type="date"
@@ -365,8 +365,7 @@ export function AlertsView() {
 
         <div className="grid gap-1">
           <label htmlFor="alerts-until" className="text-xs text-muted-foreground">
-            结束日期（含）
-          </label>
+            <Message id="tenant.endDateInclusive" /></label>
           <Input
             id="alerts-until"
             type="date"
@@ -382,17 +381,16 @@ export function AlertsView() {
             size="sm"
             onClick={() => setFilters({ status: "", rule_id: "", since: "", until: "" })}
           >
-            清除筛选
-          </Button>
+            <Message id="tenant.clearFilters" /></Button>
         ) : null}
       </div>
 
       {alerts.error ? (
         <ErrorState message={alerts.error} onRetry={alerts.reload} />
       ) : alerts.loading ? (
-        <LoadingState label="正在加载告警" rows={6} />
+        <LoadingState label={t("operator.loadingAlerts")} rows={6} />
       ) : (
-        <div className="rounded-xl border" role="table" aria-label="告警列表">
+        <div className="rounded-xl border" role="table" aria-label={t("operator.alertList")}>
           <div className="overflow-x-auto">
             <div className="min-w-[64rem]">
               {table.getHeaderGroups().map((group) => (
@@ -412,14 +410,14 @@ export function AlertsView() {
 
               {modelRows.length === 0 ? (
                 <p className="px-3 py-8 text-center text-sm text-muted-foreground">
-                  {hasFilters(filters) ? "没有符合筛选条件的告警" : "平台还没有告警实例"}
+                  {hasFilters(filters) ? t("operator.noAlertsMatchTheFilters") : t("operator.noPlatformAlertInstancesYet")}
                 </p>
               ) : (
                 <div
                   ref={scrollRef}
                   className="max-h-[32rem] overflow-y-auto"
                   tabIndex={0}
-                  aria-label="告警列表，可滚动"
+                  aria-label={t("operator.scrollableAlertList")}
                 >
                   <div className="relative" style={{ height: virtualizer.getTotalSize() }}>
                     {virtualizer.getVirtualItems().map((item) => {
@@ -458,8 +456,7 @@ export function AlertsView() {
       {alerts.error || alerts.loading ? null : <Pager resource={alerts} loadedCount={rows.length} />}
 
       <p className="text-xs text-muted-foreground">
-        筛选与翻页由控制面执行；接口不提供总数，因此这里只显示页码而不显示总页数。
-      </p>
+        <Message id="operator.filteringAndPaginationAreHandledByTheControl" /></p>
     </div>
   );
 }
