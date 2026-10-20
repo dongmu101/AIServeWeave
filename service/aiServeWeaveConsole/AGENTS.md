@@ -87,6 +87,7 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 - **同源是一项经评估后接受的风险，不是遗漏。** wujie 把子应用放在同源 iframe 里，ComfyUI_frontend 的代码因此能以运维身份发出同源请求，并能经 `window.parent` 触及宿主页面。之所以接受：前端版本固定，源码归档、受控补丁、语言资源和逐文件产物均校验 SHA-256（`scripts/fetch-comfyui-frontend.sh --localized`、`scripts/comfyui-localization/manifest.json`）。控制面拒绝缺少八语言清单、配置版本不符或文件摘要不符的已配置资源目录；升级服务前先替换对应制品。控制面的 `/api/extensions` 只列构建自带的核心扩展与内嵌桥接，**永远不提供自定义节点的 JavaScript**。升级前端版本或本地补丁时把它当作一次依赖升级来审查。
 - 子应用的 `fetch` 由 wujie 替换为宿主提供的版本，只放行 `/api/operator/comfy-editor/` 下的同源请求与 `data:`/`blob:` URL（`isEditorRequestAllowed`）；这是纵深防御，拦得住前端自己对注册表、遥测、模型下载站的外连（实测拦下过对 huggingface 的请求），但它**不是边界**——XHR 与 `window.parent` 都绕得过。WebSocket 被换成只汇报「队列空闲」的本地替身（`FAKE_WEBSOCKET_SCRIPT`），编辑器不会连出任何 socket。
 - 跨边界只传字符串（控制面 `internal/comfyeditor/bridge.js`）。不要改成直接传对象：宿主对象属于另一个 realm，ComfyUI 用 `instanceof Array` 判断连线，按引用传进去的图会丢掉全部连线。编辑器的导出先经 `parseEditorExport` 校验并剥离画布视口 `extra.ds`（否则每次滚动后的导出都是新摘要、新版本）；`missing` 非空（图里有目录外节点）时拒绝写入草稿。
+- 语言通过 `setLocale` 字符串桥接与图操作串行执行，等待真实语言资源就绪后才报告 ready；不因语言变化重挂载或重载图。受控前端分别维护默认持久化标题、明确作者标题与显示标题，来源标记只在运行时使用。启动脚本对齐 `Response` 与宿主受限 fetch 的 realm，使 WebAssembly 加载器可以继续流式读取，不扩大网络允许列表。
 - 草稿里的布局（`workflow`）只在它与文本框里的图文本一致时随发布提交；文本框被手动改过后布局不再对应那张图，发布时省略它，页面给出提示。
 
 ### 管理请求使用统一的受限入口

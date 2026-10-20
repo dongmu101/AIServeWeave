@@ -4,7 +4,7 @@ package comfyeditor
 
 const localizedSourceCommit = "7ab461f170c2bba8916faae4cda606278fa367a4"
 const localizedSourceArchiveSHA256 = "8379438eae61e068ecf4dcd258a18d71c30515f4b106f0cdc43c764902e69fc0"
-const localizedConfigurationSHA256 = "76081a626ea39da478cdab84f4169ec31b3616d94a2258bc722385431db385e8"
+const localizedConfigurationSHA256 = "656b596311d040f9c8c3e9812854188c192023108443e28a2fd116431735fe1b"
 
 var localizedLocales = map[string]string{
 	"zh-CN": "zh",

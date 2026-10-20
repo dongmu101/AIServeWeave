@@ -158,3 +158,10 @@ export const FAKE_WEBSOCKET_SCRIPT = `(function(){
   FakeWS.prototype.close=function(){ if(this.readyState===3) return; this.readyState=3; this._emit('close',{code:1000,reason:'',wasClean:true}); };
   window.WebSocket = FakeWS;
 })();`;
+
+/** EDITOR_BOOTSTRAP_SCRIPT fixes startup realms before any editor modules run.
+ * The restricted fetch belongs to the host; wasm-bindgen checks instanceof
+ * Response before streaming, so its constructor must come from that realm.
+ * EDITOR_BOOTSTRAP_SCRIPT 在编辑器模块启动前对齐运行环境。受限 fetch 属于宿主，
+ * wasm-bindgen 先判断 Response 类型再流式加载，因此构造函数须来自相同 realm。 */
+export const EDITOR_BOOTSTRAP_SCRIPT = "window.__AISW_EDITOR_ONLY__ = true;\nwindow.Response = window.parent.Response;\n" + FAKE_WEBSOCKET_SCRIPT;

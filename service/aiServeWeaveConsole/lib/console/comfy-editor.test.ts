@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   COMFY_EDITOR_ENTRY,
+  EDITOR_BOOTSTRAP_SCRIPT,
   EDITOR_FORWARDED_REQUEST_HEADERS,
   FAKE_WEBSOCKET_SCRIPT,
   isEditorRequestAllowed,
@@ -9,6 +10,14 @@ import {
   resolveEditorUpstream,
 } from "./comfy-editor.ts";
 import { MAX_CONTENT_BYTES, MAX_GRAPH_BYTES, MAX_WORKFLOW_BYTES, parseTemplateContent, parseTemplateSnapshot, parseWorkflow } from "./workflow-templates.ts";
+
+test("editor bootstrap aligns Response with the realm that owns restricted fetch", () => {
+  class HostResponse {}
+  const child: Record<string, unknown> = {parent: {Response: HostResponse}};
+  new Function("window", "setTimeout", EDITOR_BOOTSTRAP_SCRIPT)(child, () => 0);
+  assert.equal(child.Response, HostResponse);
+  assert.equal(child.__AISW_EDITOR_ONLY__, true);
+});
 
 test("editor upstream resolution stays inside the editor prefix", () => {
   for (const [name, method, segments, search, want] of [

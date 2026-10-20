@@ -42,7 +42,16 @@
       "src/locales/es/main.json": "c7291b2d1e2d84beb1d68332d26065c17eb6a8f4ab67f1f6d1efd29630944508",
       "src/locales/es/nodeDefs.json": "aad6213fe6d13dd1ee3d8fb0cb6b7cc5ad1ae3129f03a3142e410ea4fef5dd1f",
       "src/locales/es/commands.json": "fec349cb71edb6b010c91a4601d7f2de7dda3b7d6da9709123a2d59afef00b31",
-      "src/locales/es/settings.json": "90a95af28c38e0cf0ff532963c9d24de6cf14511cb57a2d157e8109ba7be7d23"
+      "src/locales/es/settings.json": "90a95af28c38e0cf0ff532963c9d24de6cf14511cb57a2d157e8109ba7be7d23",
+      "src/types/nodeState.ts": "23cafb8b9a168a15ddd6d92931115e092032455261a42cadc64cbc0501b76e17",
+      "src/core/graph/nodeShell/nodeShellState.ts": "49ac40a2472e4ab7a7bc964c860ed32b0eb7f33fa2da0ddf3ea437347f7c181d",
+      "src/utils/nodeTitleUtil.ts": "f52c0558a4e7e0c14bff0b7e5aaef37adffb5d58b299634d88d4c2ef15b3a675",
+      "src/lib/litegraph/src/LGraphNode.ts": "7a410e0647e904a1b597b595323729273721fcef75ea1ff83f031cb6cb909b3e",
+      "src/lib/litegraph/src/LiteGraphGlobal.ts": "937aa68984bf2c3c0a79e7f9d2c9b666a7d616079fbe985722b830793d0e91f5",
+      "src/services/litegraphService.ts": "5b786332f2e0b8c4f136a7a11e57b94dc60bbd274854c3b9ff3d5e3436f016d6",
+      "src/components/graph/GraphCanvas.vue": "8004edbc950bb6235c7823a768a95a1bf0d4ae8266bfb075cd5a045e33cf9b86",
+      "src/i18n.ts": "d78f358ba0ee81c5f618a3ccf1365aa017133284e9bf725e203573ef106a0803",
+      "src/scripts/app.ts": "43e6483ceda45205aad8788dd1aa5ab80e2fa9a5ba9cd6917e5b82a4cf54d5f8"
     }
   },
   "toolchain": {
@@ -66,7 +75,8 @@
     "settings"
   ],
   "patches": [
-    "locale-config.patch"
+    "locale-config.patch",
+    "editor-state.patch"
   ],
   "supplements": [
     {
@@ -147,6 +157,7 @@
     "supplements/zh/main.json": "73f0a5650dc474a9bdc8777cc0e5e0f3a9bf85ab0672d852fd416c9c964ffb15",
     "supplements/zh-TW/main.json": "03be70336f14f57cf23a8fcaee1e3f22dc0833ef00589812e0980957dc94a186",
     "supplements/zh-TW/settings.json": "556de57afc8afee4afc13c16cfe6e56d17776e9b49b0fe49237965da997783b7",
-    "locale-config.patch": "e9c97445fec0187f6ad9a4b1f2cb819d4a8add7b571d83a39ead6f42edd473f7"
+    "locale-config.patch": "e9c97445fec0187f6ad9a4b1f2cb819d4a8add7b571d83a39ead6f42edd473f7",
+    "editor-state.patch": "b705943b7cfbbb59d9a0f415d7d73e6ed7bbc8b41bf529a946106122a2643a9e"
   }
 }

@@ -48,6 +48,7 @@ async function installFixtures(page: Page, unexpected: string[]) {
   await page.context().addCookies(cookies.map(cookie => ({ ...cookie, url: "http://127.0.0.1:3100", httpOnly: true, sameSite: "Lax" as const })));
   await page.route("**/api/**", async route => {
     const url = new URL(route.request().url());
+    if (url.pathname.startsWith("/api/operator/comfy-editor/")) { await route.continue(); return; }
     const path = url.pathname.replace(/^\/api\/(admin|operator)/, "");
     const method = route.request().method();
     let json: unknown;

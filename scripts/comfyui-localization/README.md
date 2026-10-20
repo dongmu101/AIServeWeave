@@ -8,6 +8,8 @@
 
 德文四组资源在 `de/`；其余语言只在 `supplements/` 记录需要补齐的叶节点。`apply.mjs` 在写入任何源文件前检查八语言结构、非空值、数组、null 和插值参数；未知键、版本或摘要直接失败。Vue-i18n 复数分支数允许随语言变化，参数集合保持一致。
 
+`editor-state.patch` 限于嵌入场景的语言就绪协调、跳过换语时重载图，以及节点默认持久化标题与显示标题分离。显式 `title` / `_meta.title`（即使等于默认值）始终保留为作者值；仅运行时来源标记不进入工作流 JSON。Canvas 与 Vue 头部共用显示解析。初始显示设置使用上游默认的 `Comfy.UseNewMenu=Top`，避免启用未本地化的旧菜单。
+
 修改资源后重新计算 `manifest.json` 对应资源摘要，执行 `node scripts/comfyui-localization/sync-metadata.mjs` 和 `gofmt`。`--check` 检查控制面接收的配置摘要与此清单一致。升级上游版本需要同时审查源补丁、归档、锁文件和核心节点目录，重新完成真实构建及编辑器浏览器验收。不要提交下载源码、node_modules 或 dist。
 
-语言 JSON 派生于上游 GPL-3.0-only 资源，适用本目录的 `LICENSE`；新增及修订译文随相同许可提供。官方来源为 <https://github.com/Comfy-Org/ComfyUI_frontend/tree/v1.55.17/src/locales>。分发修改后的编辑器时，同时保留上游许可、归档来源及本目录的补丁和语言资源，以提供对应源码。
+语言 JSON 与上游补丁派生于 GPL-3.0-only 资源，适用本目录的 `LICENSE`；新增及修订译文随相同许可提供。官方来源为 <https://github.com/Comfy-Org/ComfyUI_frontend/tree/v1.55.17/src/locales>。分发修改后的编辑器时，同时保留上游许可、归档来源及本目录的补丁和语言资源，以提供对应源码。

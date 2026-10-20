@@ -1,0 +1,257 @@
+diff --git a/src/types/nodeState.ts b/src/types/nodeState.ts
+index dbdd898..bccf80e 100644
+--- a/src/types/nodeState.ts
++++ b/src/types/nodeState.ts
+@@ -29,6 +29,8 @@ export interface NodeState {
+   outputs: INodeOutputSlot[]
+   properties: Record<string, NodeProperty | undefined>
+   title: string
++  /** Runtime-only title provenance; never serialized. / 仅运行时使用的标题来源，不序列化。 */
++  aiswTitleExplicit?: boolean
+   type: string
+   bgcolor?: string
+   boxcolor?: string
+diff --git a/src/core/graph/nodeShell/nodeShellState.ts b/src/core/graph/nodeShell/nodeShellState.ts
+index 2d25ddf..5200d54 100644
+--- a/src/core/graph/nodeShell/nodeShellState.ts
++++ b/src/core/graph/nodeShell/nodeShellState.ts
+@@ -59,7 +59,8 @@ export function createNodeShellState(
+     mode: LGraphEventMode.ALWAYS,
+     outputs: shallowReactive<INodeOutputSlot[]>([]),
+     properties: {},
+-    title: title || 'Unnamed',
++    title: title ?? 'Unnamed',
++    aiswTitleExplicit: false,
+     type: type ?? '',
+     titleMode
+   }
+@@ -161,6 +162,7 @@ function transferNodeState(node: LGraphNode, replacement: LGraphNode): void {
+   const detachedState = { ...registeredState }
+   const { graphId: _graphId, id: _id, ...replacementState } = replacement._state
+   Object.assign(registeredState, {
++    aiswTitleExplicit: undefined,
+     bgcolor: undefined,
+     boxcolor: undefined,
+     color: undefined,
+diff --git a/src/utils/nodeTitleUtil.ts b/src/utils/nodeTitleUtil.ts
+index aa6e9d7..fcd5f79 100644
+--- a/src/utils/nodeTitleUtil.ts
++++ b/src/utils/nodeTitleUtil.ts
+@@ -1,6 +1,7 @@
+ import { resolveNodeDefText } from '@/i18n'
+ 
+ type NodeTitleInfo = {
++  aiswTitleExplicit?: boolean
+   title?: string | number | null
+   type?: string | number | null
+ }
+@@ -15,6 +16,8 @@ export function resolveNodeDisplayName(
+   options: ResolveNodeDisplayNameOptions
+ ): string {
+   if (!node) return options.emptyLabel
++  if (node.aiswTitleExplicit === true) return String(node.title ?? '')
++  if (node.aiswTitleExplicit === false) return resolveNodeDefText('display_name', String(node.type ?? ''), String(node.title ?? ''))
+ 
+   const title = (node.title ?? '').toString().trim()
+   if (title.length > 0) return title
+diff --git a/src/lib/litegraph/src/LGraphNode.ts b/src/lib/litegraph/src/LGraphNode.ts
+index 3ef1df9..4ba929c 100644
+--- a/src/lib/litegraph/src/LGraphNode.ts
++++ b/src/lib/litegraph/src/LGraphNode.ts
+@@ -1,4 +1,5 @@
+ import { toValue } from 'vue'
++import { resolveNodeDisplayName } from '@/utils/nodeTitleUtil'
+ 
+ import {
+   createNodeShellState,
+@@ -373,7 +374,8 @@ export class LGraphNode
+   }
+ 
+   set title(value: string) {
+-    if (setTrackedNodeState(this, 'title', value))
++    const explicitChanged = setTrackedNodeState(this, 'aiswTitleExplicit', true)
++    if (setTrackedNodeState(this, 'title', value) || explicitChanged)
+       emitNodeFieldWrite(this, { field: 'title', value })
+   }
+   /**
+@@ -1104,7 +1106,7 @@ export class LGraphNode
+         continue
+       }
+ 
+-      if (j === 'type') continue
++      if (j === 'type' || j === 'title') continue
+ 
+       if (j === 'id') {
+         // Once registered, the owning graph owns the id — it may have
+@@ -1136,9 +1138,9 @@ export class LGraphNode
+       }
+     }
+ 
+-    if (!info.title) {
+-      this.title = this.constructor.title ?? ''
+-    }
++    const explicitTitle = Object.hasOwn(info, 'title') && typeof info.title === 'string'
++    this._state.aiswTitleExplicit = explicitTitle
++    this._state.title = explicitTitle ? info.title! : this.constructor.title ?? ''
+ 
+     this.inputs = this.inputs.map((input) =>
+       toClass(NodeInputSlot, input, this)
+@@ -1277,7 +1279,7 @@ export class LGraphNode
+       outputAsSerialisable(output, this, i)
+     )
+ 
+-    if (state.title && state.title != this.constructor.title)
++    if (state.aiswTitleExplicit === true || (state.title && state.title != this.constructor.title))
+       o.title = state.title
+ 
+     o.properties = LiteGraph.cloneObject(state.properties)
+@@ -1353,7 +1355,7 @@ export class LGraphNode
+    * get the title string
+    */
+   getTitle(): string | undefined {
+-    return this.title || this.constructor.title
++    return resolveNodeDisplayName(this._state, { emptyLabel: '', untitledLabel: this.constructor.title ?? '' })
+   }
+ 
+   /**
+diff --git a/src/lib/litegraph/src/LiteGraphGlobal.ts b/src/lib/litegraph/src/LiteGraphGlobal.ts
+index ac310a6..086b689 100644
+--- a/src/lib/litegraph/src/LiteGraphGlobal.ts
++++ b/src/lib/litegraph/src/LiteGraphGlobal.ts
+@@ -559,20 +559,22 @@ export class LiteGraphGlobal {
+       return null
+     }
+ 
+-    title = title || base_class.title || type
++    const explicitTitle = typeof title === 'string'
++    title = title ?? base_class.title ?? type
+ 
+     let node: LGraphNode
+ 
+     try {
+       node = new base_class(title)
+       node._state.type = type
++      node._state.aiswTitleExplicit = explicitTitle
+     } catch (error) {
+       if (!this.catch_exceptions) throw error
+       console.error(error)
+       return null
+     }
+ 
+-    if (!node.title && title) node.title = title
++    if (!node.title && title && !explicitTitle) node._state.title = title
+     // call onresize?
+     node.mode ||= LGraphEventMode.ALWAYS
+ 
+diff --git a/src/services/litegraphService.ts b/src/services/litegraphService.ts
+index ba7491d..ed4ae70 100644
+--- a/src/services/litegraphService.ts
++++ b/src/services/litegraphService.ts
+@@ -526,7 +526,7 @@ export const useLitegraphService = () => {
+     // because `registerNodeType` will overwrite the assignments.
+     node.category = nodeDef.category
+     node.skip_list = true
+-    node.title = nodeDef.display_name || nodeDef.name
++    node.title = nodeDefV1.display_name || nodeDefV1.name
+   }
+ 
+   async function registerNodeDef(nodeId: string, nodeDefV1: ComfyNodeDefV1) {
+@@ -633,7 +633,7 @@ export const useLitegraphService = () => {
+     // Note: Do not following assignments before `LiteGraph.registerNodeType`
+     // because `registerNodeType` will overwrite the assignments.
+     node.category = nodeDef.category
+-    node.title = nodeDef.display_name || nodeDef.name
++    node.title = nodeDefV1.display_name || nodeDefV1.name
+ 
+     // Set skip_list for dev-only nodes based on current DevMode setting
+     // This ensures nodes registered after initial load respect the current setting
+diff --git a/src/components/graph/GraphCanvas.vue b/src/components/graph/GraphCanvas.vue
+index 4ac4856..a65fbe9 100644
+--- a/src/components/graph/GraphCanvas.vue
++++ b/src/components/graph/GraphCanvas.vue
+@@ -502,7 +502,7 @@ useWorkflowAutoSave()
+ watch(
+   () => settingStore.get('Comfy.Locale'),
+   async (_newLocale, oldLocale) => {
+-    if (!oldLocale) return
++    if (Reflect.get(window, '__AISW_EDITOR_ONLY__') === true || !oldLocale) return
+     await Promise.all([
+       until(() => isSettingsReady.value || !!settingsError.value).toBe(true),
+       until(() => isI18nReady.value || !!i18nError.value).toBe(true)
+diff --git a/src/i18n.ts b/src/i18n.ts
+index 38341ef..d0a4a08 100644
+--- a/src/i18n.ts
++++ b/src/i18n.ts
+@@ -1,3 +1,4 @@
++import { nextTick } from 'vue'
+ import { createI18n } from 'vue-i18n'
+ 
+ import {
+@@ -101,7 +102,10 @@ export async function loadLocale(locale: SupportedLocale): Promise<void> {
+  * Returns the resolved tag so callers can detect a clamp (e.g. a stale stored
+  * `Comfy.Locale` from an older build) and self-heal persisted state.
+  */
+-export async function setActiveLocale(
++let activationVersion = 0
++let activation: { locale: SupportedLocale; promise: Promise<SupportedLocale> } | undefined
++
++export function setActiveLocale(
+   input: string | readonly string[] | null | undefined
+ ): Promise<SupportedLocale> {
+   const resolved = resolveSupportedLocale(input)
+@@ -110,9 +114,17 @@ export async function setActiveLocale(
+     // stale stored locales surface in logs without re-introducing #1867's spam.
+     console.warn(`Locale "${input}" not shipped; using "${resolved}"`)
+   }
+-  await loadLocale(resolved)
+-  i18n.global.locale.value = resolved
+-  return resolved
++  if (activation?.locale === resolved) return activation.promise
++  const version = ++activationVersion
++  const promise = (async () => {
++    await loadLocale(resolved)
++    if (version === activationVersion) i18n.global.locale.value = resolved
++    await nextTick()
++    return resolved
++  })()
++  activation = { locale: resolved, promise }
++  void promise.finally(() => { if (activation?.promise === promise) activation = undefined }).catch(() => {})
++  return promise
+ }
+ 
+ /**
+diff --git a/src/scripts/app.ts b/src/scripts/app.ts
+index f03dcf0..1096c59 100644
+--- a/src/scripts/app.ts
++++ b/src/scripts/app.ts
+@@ -13,7 +13,7 @@ import { useCanvasScheduler } from '@/renderer/core/canvas/useCanvasScheduler'
+ 
+ import { promotedInputSource } from '@/core/graph/subgraph/promotedInputWidget'
+ import { resolveConcretePromotedWidget } from '@/core/graph/subgraph/resolveConcretePromotedWidget'
+-import { setBackendNodeText, st, t } from '@/i18n'
++import { setActiveLocale, setBackendNodeText, st, t } from '@/i18n'
+ import { normalizeI18nKey } from '@/utils/formatUtil'
+ import { ChangeTracker } from '@/scripts/changeTracker'
+ import type { IContextMenuValue } from '@/lib/litegraph/src/interfaces'
+@@ -2545,7 +2545,7 @@ export class ComfyApp {
+           missingNodeTypes.push(placeholderEntry)
+         }
+         node.id = nodeId
+-        node.title = data._meta?.title ?? node.title
++        if (data._meta && Object.hasOwn(data._meta, 'title') && typeof data._meta.title === 'string') node.title = data._meta.title
+         app.rootGraph.add(node)
+         if (placeholderEntry && node.last_serialization) {
+           node.last_serialization.id = node.id
+@@ -2821,3 +2821,12 @@ export class ComfyApp {
+ }
+ 
+ export const app = new ComfyApp()
++
++/** setEditorLocale activates resources before redrawing without changing the graph.
++ * setEditorLocale 等待资源就绪后重绘，不修改图。 */
++export async function setEditorLocale(locale: string): Promise<string> {
++  const active = await setActiveLocale(locale)
++  document.documentElement.lang = active
++  app.canvas?.setDirty(true, true)
++  return active
++}

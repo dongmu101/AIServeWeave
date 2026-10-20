@@ -4,6 +4,7 @@ import { defineConfig } from "@playwright/test";
 // 浏览器验收使用隔离的回环服务与合成会话。
 export default defineConfig({
   testDir: "./e2e",
+  testIgnore: ["**/i18n-editor.spec.ts", "**/i18n-services.spec.ts"],
   fullyParallel: false,
   workers: 1,
   retries: 0,

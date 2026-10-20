@@ -44,6 +44,39 @@ func TestBuiltLocalizedEditor(t *testing.T) {
 	}
 }
 
+// TestEditorSettingsSelectLocalizedMenu keeps the untranslated legacy menu out of the editor.
+// TestEditorSettingsSelectLocalizedMenu 保证编辑器不启用未本地化的旧版菜单。
+func TestEditorSettingsSelectLocalizedMenu(t *testing.T) {
+	if got, want := editorSettings["Comfy.UseNewMenu"], "Top"; got != want {
+		t.Fatalf("menu = %v, want %v", got, want)
+	}
+	if got, want := editorSettings["Comfy.Workflow.Persist"], false; got != want {
+		t.Fatalf("workflow persistence = %v, want %v", got, want)
+	}
+}
+
+// TestEmptyEditorJobs matches the pinned frontend's empty pagination contract.
+// TestEmptyEditorJobs 匹配固定版本前端要求的空任务分页契约。
+func TestEmptyEditorJobs(t *testing.T) {
+	w := httptest.NewRecorder()
+	(&Server{}).ServeHTTP(w, httptest.NewRequest("GET", Prefix+"api/jobs", nil))
+	var body struct {
+		Jobs       []any `json:"jobs"`
+		Pagination *struct {
+			Offset  int  `json:"offset"`
+			Limit   int  `json:"limit"`
+			Total   int  `json:"total"`
+			HasMore bool `json:"has_more"`
+		} `json:"pagination"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+		t.Fatal(err)
+	}
+	if body.Pagination == nil || len(body.Jobs) != 0 || body.Pagination.Total != 0 || body.Pagination.HasMore || body.Pagination.Limit <= 0 {
+		t.Fatalf("empty jobs envelope = %+v, want empty paginated list", body)
+	}
+}
+
 func localizedFixture(t *testing.T) (string, localizationManifest) {
 	t.Helper()
 	dir := t.TempDir()
