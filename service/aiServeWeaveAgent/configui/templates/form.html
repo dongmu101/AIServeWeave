@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="{{.Locale}}">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title data-i18n="a0000">{{$.Text.Text "a0000"}}</title>
+<style>
+* { box-sizing: border-box; }
+body { margin: 0; background: #f5f7fb; color: #1e293b; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+.layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
+.sidebar { position: sticky; top: 0; height: 100vh; padding: 32px 20px; background: #fff; border-right: 1px solid #e2e8f0; }
+.brand { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.5px; }
+.subtitle, .hint { color: #64748b; font-size: 13px; }
+.subtitle { margin: 4px 0 28px; }
+nav { display: grid; gap: 8px; }
+nav a { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; color: #475569; text-decoration: none; }
+nav a:hover { background: #f1f5f9; }
+nav a[aria-current="page"] { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
+.menu-index { font-size: 12px; opacity: .65; }
+.sidebar-note { margin-top: 32px; padding-top: 20px; border-top: 1px solid #e2e8f0; }
+main { width: 100%; max-width: 1040px; padding: 36px 48px; }
+h1 { margin: 0; font-size: 28px; }
+.intro { margin: 6px 0 28px; color: #64748b; }
+fieldset { min-width: 0; margin: 0 0 24px; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
+[hidden] { display: none !important; }
+legend { padding: 0 8px; font-size: 18px; font-weight: 600; }
+.group-hint { margin: 0 0 20px; color: #64748b; }
+.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
+.field { min-width: 0; }
+.wide { grid-column: 1 / -1; }
+label { display: block; margin-bottom: 6px; font-weight: 600; }
+label span { display: block; color: #64748b; font-size: 12px; font-weight: 400; }
+input[type=text], input[type=url], select, textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
+textarea { min-height: 100px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
+input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, button:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 2px; border-color: #3b82f6; }
+.checkbox { display: flex; align-items: center; gap: 10px; margin: 0; }
+input[type=checkbox] { width: 18px; height: 18px; accent-color: #2563eb; }
+.hint { margin: 6px 0 0; overflow-wrap: anywhere; }
+.message, .error { padding: 12px 16px; border-radius: 8px; overflow-wrap: anywhere; }
+.message { background: #ecfdf5; color: #047857; }
+.error { background: #fef2f2; color: #b91c1c; }
+.actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+.actions .hint { margin: 0; }
+.language-selector { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 20px; }
+.language-selector select { width: auto; max-width: 100%; }
+button { flex-shrink: 0; padding: 11px 22px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
+button:hover { background: #1d4ed8; }
+.runtime-list { display: grid; gap: 16px; }
+.runtime-card { padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; }
+.runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
+.secondary { padding: 7px 12px; border: 1px solid #cbd5e1; background: #fff; color: #475569; font-size: 13px; }
+.secondary:hover { background: #f1f5f9; }
+.runtime-add { margin-top: 16px; }
+.model-catalogue { margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
+.model-catalogue h2 { margin: 0; font-size: 17px; }
+.model-ids { margin: 12px 0 0; padding-left: 24px; overflow-wrap: anywhere; }
+.model-ids code { font-size: 13px; }
+.gateway-status { margin-bottom: 24px; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
+.connection-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.status-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; }
+.status-online { background: #dcfce7; color: #166534; }
+.status-offline { background: #fee2e2; color: #991b1b; }
+.status-pending { background: #fef3c7; color: #92400e; }
+.status-neutral { background: #e2e8f0; color: #475569; }
+.connection-list { list-style: none; padding: 0; margin: 12px 0 0; }
+.connection-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; }
+.connection-list code { overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .layout { display: block; }
+  .sidebar { position: static; height: auto; padding: 20px; border-right: 0; border-bottom: 1px solid #e2e8f0; }
+  .subtitle { margin-bottom: 16px; }
+  nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  nav a { padding: 10px; }
+  .sidebar-note { display: none; }
+  main { padding: 24px 20px; }
+  fieldset { padding: 20px 16px; }
+  .fields { grid-template-columns: minmax(0, 1fr); }
+  .actions { align-items: flex-start; flex-direction: column; }
+  button { width: 100%; }
+}
+</style>
+</head>
+<body>
+<div class="layout">
+<aside class="sidebar">
+<p class="brand">AIServeWeave</p>
+<p class="subtitle"><span data-i18n="a0001">{{$.Text.Text "a0001"}}</span></p>
+<nav data-i18n-aria-label="a0002" aria-label="{{$.Text.Text "a0002"}}">
+<a href="#gateway"><span class="menu-index" aria-hidden="true">01</span><span data-i18n="a0003">{{$.Text.Text "a0003"}}</span></a>
+<a href="#identity"><span class="menu-index" aria-hidden="true">02</span><span data-i18n="a0004">{{$.Text.Text "a0004"}}</span></a>
+<a href="#runtimes"><span class="menu-index" aria-hidden="true">03</span><span data-i18n="a0005">{{$.Text.Text "a0005"}}</span></a>
+<a href="#observability"><span class="menu-index" aria-hidden="true">04</span><span data-i18n="a0006">{{$.Text.Text "a0006"}}</span></a>
+</nav>
+<p class="hint sidebar-note"><span data-i18n="a0007">{{$.Text.Text "a0007"}}</span><br><span data-i18n="a0008">{{$.Text.Text "a0008"}}</span></p>
+</aside>
+<main>
+<h1><span data-i18n="a0009">{{$.Text.Text "a0009"}}</span></h1>
+<p class="intro"><span data-i18n="a0010">{{$.Text.Text "a0010"}}</span></p>
+{{if .Message}}<p class="message" role="status"><span data-i18n="a0084">{{.Message}}</span></p>{{end}}
+{{if .Error}}<p class="error" role="alert"><span data-i18n="a0083">{{.Error}}</span></p>{{end}}
+<form method="post">
+<div class="language-selector"><label for="aisw-locale"><span data-i18n="a0103">{{.Text.Text "a0103"}}</span></label><select id="aisw-locale" name="locale">{{range .Text.Options}}<option value="{{.Locale}}"{{if eq .Locale $.Locale}} selected{{end}}>{{.Label}}</option>{{end}}</select><span id="locale-status" role="status"></span><button type="submit" name="action" value="locale" formnovalidate><span data-i18n="a0104">{{.Text.Text "a0104"}}</span></button></div>
+<fieldset id="gateway">
+<legend><span data-i18n="a0011">{{$.Text.Text "a0011"}}</span></legend>
+<p class="group-hint"><span data-i18n="a0012">{{$.Text.Text "a0012"}}</span></p>
+<div class="runtime-heading"><strong><span data-i18n="a0013">{{$.Text.Text "a0013"}}</span></strong><button type="button" class="secondary" id="gateway-refresh"><span data-i18n="a0014">{{$.Text.Text "a0014"}}</span></button></div>
+{{template "gateway-status" .Gateway}}
+<p class="hint" id="gateway-refresh-status" role="status"><span data-i18n="a0015">{{$.Text.Text "a0015"}}</span></p>
+<div class="fields">
+<div class="field wide">
+<label for="endpoints"><span data-i18n="a0016">{{$.Text.Text "a0016"}}</span></label>
+<input type="text" id="endpoints" name="endpoints" value="{{.Endpoints}}" placeholder="127.0.0.1:8443">
+<p class="hint"><span data-i18n="a0017">{{$.Text.Text "a0017"}}</span></p>
+</div>
+<div class="field">
+<label for="registry"><span data-i18n="a0018">{{$.Text.Text "a0018"}}</span></label>
+<input type="text" id="registry" name="registry" value="{{.Registry}}">
+</div>
+<div class="field">
+<label for="max_gateways"><span data-i18n="a0019">{{$.Text.Text "a0019"}}</span></label>
+<input type="text" id="max_gateways" name="max_gateways" value="{{.MaxGateways}}" inputmode="numeric">
+<p class="hint"><span data-i18n="a0020">{{$.Text.Text "a0020"}}</span></p>
+</div>
+</div>
+</fieldset>
+<fieldset id="identity">
+<legend><span data-i18n="a0021">{{$.Text.Text "a0021"}}</span></legend>
+<p class="group-hint"><span data-i18n="a0022">{{$.Text.Text "a0022"}}</span></p>
+<div class="fields">
+<div class="field wide">
+<label for="node_id"><span data-i18n="a0023">{{$.Text.Text "a0023"}}</span></label>
+<input type="text" id="node_id" name="node_id" value="{{.NodeID}}">
+<p class="hint"><span data-i18n="a0024">{{$.Text.Text "a0024"}}</span></p>
+</div>
+<div class="field">
+<label for="cert_file"><span data-i18n="a0025">{{$.Text.Text "a0025"}}</span></label>
+<input type="text" id="cert_file" name="cert_file" value="{{.CertFile}}">
+</div>
+<div class="field">
+<label for="key_file"><span data-i18n="a0026">{{$.Text.Text "a0026"}}</span></label>
+<input type="text" id="key_file" name="key_file" value="{{.KeyFile}}">
+</div>
+<div class="field">
+<label for="ca_file"><span data-i18n="a0027">{{$.Text.Text "a0027"}}</span></label>
+<input type="text" id="ca_file" name="ca_file" value="{{.CAFile}}">
+</div>
+<div class="field">
+<label for="bootstrap_token_file"><span data-i18n="a0028">{{$.Text.Text "a0028"}}</span></label>
+<input type="text" id="bootstrap_token_file" name="bootstrap_token_file" value="{{.BootstrapTokenFile}}">
+</div>
+<div class="field wide">
+<label for="labels"><span data-i18n="a0029">{{$.Text.Text "a0029"}}</span></label>
+<textarea id="labels" name="labels" placeholder="region=local">{{.Labels}}</textarea>
+<p class="hint"><span data-i18n="a0030">{{$.Text.Text "a0030"}}</span></p>
+</div>
+</div>
+</fieldset>
+<fieldset id="runtimes">
+<legend><span data-i18n="a0031">{{$.Text.Text "a0031"}}</span></legend>
+<p class="group-hint"><span data-i18n="a0032">{{$.Text.Text "a0032"}}</span></p>
+<div class="fields">
+<div class="field wide">
+<label for="runtime_declarations"><span data-i18n="a0033">{{$.Text.Text "a0033"}}</span></label>
+<div id="runtime-editor" hidden>
+<div class="runtime-list" id="runtime-list"></div>
+<button type="button" class="secondary runtime-add" id="runtime-add"><span data-i18n="a0034">{{$.Text.Text "a0034"}}</span></button>
+<p class="hint"><span data-i18n="a0035">{{$.Text.Text "a0035"}}</span></p>
+</div>
+<textarea id="runtime_declarations" name="runtimes" placeholder="ollama-local,ollama,http://127.0.0.1:11434&#10;codex-local,codex,">{{.Runtimes}}</textarea>
+<p class="hint" id="runtime-format-hint"><span data-i18n="a0036">{{$.Text.Text "a0036"}}</span></p>
+<template id="runtime-card-template">
+<section class="runtime-card">
+<div class="runtime-heading"><strong><span data-i18n="a0037">{{$.Text.Text "a0037"}}</span></strong><button type="button" class="secondary runtime-remove"><span data-i18n="a0038">{{$.Text.Text "a0038"}}</span></button></div>
+<div class="fields">
+<div class="field"><label><span data-i18n="a0039">{{$.Text.Text "a0039"}}</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
+<div class="field"><label><span data-i18n="a0040">{{$.Text.Text "a0040"}}</span><select class="runtime-kind">
+<optgroup data-i18n-label="a0041" label="{{$.Text.Text "a0041"}}"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TensorRT-LLM</option><option value="tokenspeed">TokenSpeed</option><option value="comfyui">ComfyUI</option></optgroup>
+<optgroup data-i18n-label="a0042" label="{{$.Text.Text "a0042"}}"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="gemini-cli" data-group="cli" data-i18n="a0043">{{$.Text.Text "a0043"}}</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
+<optgroup data-i18n-label="a0044" label="{{$.Text.Text "a0044"}}"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted" data-url-required="1" data-i18n="a0045">{{$.Text.Text "a0045"}}</option><option value="openai_compatible" data-group="hosted" data-url-required="1" data-i18n="a0046">{{$.Text.Text "a0046"}}</option></optgroup>
+</select></label></div>
+<div class="field wide"><label><span data-i18n="a0047">{{$.Text.Text "a0047"}}</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden><span data-i18n="a0048">{{$.Text.Text "a0048"}}</span></p></div>
+<div class="field runtime-hosted" hidden><label><span data-i18n="a0049">{{$.Text.Text "a0049"}}</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
+<div class="field runtime-hosted" hidden><label><span data-i18n="a0050">{{$.Text.Text "a0050"}}</span><input type="text" class="runtime-models" data-i18n-placeholder="a0051" placeholder="{{$.Text.Text "a0051"}}" pattern="[^,]*"></label></div>
+</div>
+</section>
+</template>
+</div>
+<div class="field wide">
+<label for="allowed_runtimes"><span data-i18n="a0052">{{$.Text.Text "a0052"}}</span></label>
+<input type="text" id="allowed_runtimes" name="allowed_runtimes" value="{{.AllowedRuntimes}}">
+<p class="hint"><span data-i18n="a0053">{{$.Text.Text "a0053"}}</span></p>
+</div>
+<div class="field wide">
+<label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}><span data-i18n="a0054">{{$.Text.Text "a0054"}}</span></label>
+</div>
+<div class="field wide">
+<label for="auto_discover_interval"><span data-i18n="a0055">{{$.Text.Text "a0055"}}</span></label>
+<input type="text" id="auto_discover_interval" name="auto_discover_interval" value="{{.AutoDiscoverInterval}}" placeholder="30s">
+<p class="hint"><span data-i18n="a0056">{{$.Text.Text "a0056"}}</span></p>
+</div>
+</div>
+<section class="model-catalogue" aria-labelledby="models-title">
+<div class="runtime-heading"><h2 id="models-title"><span data-i18n="a0057">{{$.Text.Text "a0057"}}</span></h2><button type="button" class="secondary" id="models-refresh"><span data-i18n="a0058">{{$.Text.Text "a0058"}}</span></button></div>
+<p class="hint"><span data-i18n="a0059">{{$.Text.Text "a0059"}}</span></p>
+<p class="hint" id="models-refresh-status" role="status"></p>
+<div id="available-models">
+{{if .Models.Live}}
+<p><span data-i18n="a0060" data-i18n-values='{{json (dict "count" .Models.Count)}}' >{{$.Text.Format "a0060" (dict "count" .Models.Count)}}</span></p>
+<div class="runtime-list">
+{{range .Models.Runtimes}}
+<section class="runtime-card">
+<strong>{{.ID}} · {{.Kind}}</strong>
+<p class="hint"><span data-i18n="a0061" data-i18n-values='{{json (dict "state" (stateText $.Text .State) "count" (len .IDs))}}' data-runtime-state="{{.State}}">{{$.Text.Format "a0061" (dict "state" (stateText $.Text .State) "count" (len .IDs))}}</span></p>
+{{if .IDs}}<ul class="model-ids">{{range .IDs}}<li><code>{{.}}</code></li>{{end}}</ul>{{else}}<p class="hint"><span data-i18n="a0062">{{$.Text.Text "a0062"}}</span></p>{{end}}
+</section>
+{{else}}<p class="hint"><span data-i18n="a0063">{{$.Text.Text "a0063"}}</span></p>{{end}}
+</div>
+{{else}}<p class="hint"><span data-i18n="a0064">{{$.Text.Text "a0064"}}</span></p>{{end}}
+</div>
+</section>
+</fieldset>
+<fieldset id="observability">
+<legend><span data-i18n="a0065">{{$.Text.Text "a0065"}}</span></legend>
+<p class="group-hint"><span data-i18n="a0066">{{$.Text.Text "a0066"}}</span></p>
+<div class="fields">
+<div class="field wide">
+<label for="metrics_addr"><span data-i18n="a0067">{{$.Text.Text "a0067"}}</span></label>
+<input type="text" id="metrics_addr" name="metrics_addr" value="{{.MetricsAddr}}" placeholder="127.0.0.1:9091">
+<p class="hint"><span data-i18n="a0068">{{$.Text.Text "a0068"}}</span></p>
+</div>
+<div class="field wide">
+<label for="log_level"><span data-i18n="a0069">{{$.Text.Text "a0069"}}</span></label>
+<input type="text" id="log_level" name="log_level" value="{{.LogLevel}}">
+<p class="hint"><span data-i18n="a0070">{{$.Text.Text "a0070"}}</span></p>
+</div>
+</div>
+</fieldset>
+<div class="actions">
+<p class="hint"><span data-i18n="a0071">{{$.Text.Text "a0071"}}</span></p>
+<button type="submit"><span data-i18n="a0072">{{$.Text.Text "a0072"}}</span></button>
+</div>
+</form>
+</main>
+</div>
+<script id="aisw-i18n-state" type="application/json">{{.Text.Bootstrap}}</script>
+<script src="/assets/i18n.js"></script>
+<script>
+let gatewayRefreshPending = false;
+async function refreshGateway() {
+  if (gatewayRefreshPending || document.hidden) return;
+  gatewayRefreshPending = true;
+  const button = document.getElementById('gateway-refresh');
+  const status = document.getElementById('gateway-refresh-status');
+  button.disabled = true;
+  try {
+    const response = await fetch('/status/gateway', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
+    if (!response.ok) throw new Error('refresh failed');
+    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const connections = page.getElementById('gateway-status');
+    if (!connections) throw new Error('missing status');
+    document.getElementById('gateway-status').replaceWith(document.importNode(connections, true));
+    AISWI18n.apply(document.getElementById('gateway-status')); 
+    AISWI18n.message(status, 'a0073');
+  } catch {
+    const current = document.getElementById('gateway-status');
+    current.replaceChildren();
+    const message = document.createElement('p');
+    message.className = 'error';
+    AISWI18n.message(message, 'a0074');
+    current.append(message);
+    AISWI18n.message(status, 'a0075');
+  } finally {
+    button.disabled = false;
+    gatewayRefreshPending = false;
+  }
+}
+document.getElementById('gateway-refresh').addEventListener('click', refreshGateway);
+setInterval(refreshGateway, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshGateway(); });
+document.getElementById('models-refresh').addEventListener('click', async event => {
+  const button = event.currentTarget;
+  const status = document.getElementById('models-refresh-status');
+  button.disabled = true;
+  AISWI18n.message(status, 'a0076');
+  try {
+    const response = await fetch(window.location.pathname, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
+    if (!response.ok) throw new Error('refresh failed');
+    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const models = page.getElementById('available-models');
+    if (!models) throw new Error('missing catalogue');
+    document.getElementById('available-models').replaceWith(document.importNode(models, true));
+    AISWI18n.apply(document.getElementById('available-models')); 
+    AISWI18n.message(status, 'a0077');
+  } catch {
+    AISWI18n.message(status, 'a0078');
+  } finally {
+    button.disabled = false;
+  }
+});
+const groups = Array.from(document.querySelectorAll('form fieldset'));
+const menu = Array.from(document.querySelectorAll('nav a'));
+function selectGroup() {
+  const active = groups.find(group => '#' + group.id === window.location.hash) || groups[0];
+  groups.forEach(group => { group.hidden = group !== active; });
+  menu.forEach(link => {
+    if (link.hash === '#' + active.id) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  });
+}
+window.addEventListener('hashchange', selectGroup);
+selectGroup();
+const declarations = document.getElementById('runtime_declarations');
+const runtimeList = document.getElementById('runtime-list');
+function syncRuntimes() {
+  const rows = Array.from(runtimeList.children);
+  const ids = rows.map(row => row.querySelector('.runtime-id').value.trim());
+  declarations.value = rows.map((row, index) => {
+    const id = row.querySelector('.runtime-id');
+    id.setCustomValidity(ids[index] && ids.indexOf(ids[index]) !== index ? AISWI18n.text('a0079') : '');
+    const fields = [ids[index], row.querySelector('.runtime-kind').value, row.querySelector('.runtime-url').value.trim()];
+    const keyEnv = row.querySelector('.runtime-key-env').value.trim();
+    const models = row.querySelector('.runtime-models').value.trim().split(/\s+/).filter(Boolean).join(' ');
+    if (keyEnv || models) fields.push(keyEnv, models);
+    return fields.join(',');
+  }).join('\n');
+}
+function addRuntime(id = '', kind = 'ollama', rest = '') {
+  const row = document.getElementById('runtime-card-template').content.firstElementChild.cloneNode(true);
+  const idInput = row.querySelector('.runtime-id');
+  const kindInput = row.querySelector('.runtime-kind');
+  const urlInput = row.querySelector('.runtime-url');
+  idInput.value = id;
+  if (!Array.from(kindInput.options).some(option => option.value === kind)) {
+    const unknown = new Option(AISWI18n.text('a0080', { kind }), kind);
+    unknown.dataset.i18n = 'a0080'; unknown.dataset.i18nValues = JSON.stringify({ kind });
+    kindInput.add(unknown);
+  }
+  kindInput.value = kind;
+  // Hosted kinds append ",api_key_env,models"; for other kinds the rest of
+  // the line is the URL, as before. / 托管种类在后面追加 ",api_key_env,models"；
+  // 其他种类与以往一样，行的剩余部分就是 URL。
+  const option = kindInput.selectedOptions[0];
+  const fields = option && option.dataset.group === 'hosted' ? rest.split(',') : [rest];
+  urlInput.value = (fields[0] || '').trim();
+  row.querySelector('.runtime-key-env').value = (fields[1] || '').trim();
+  row.querySelector('.runtime-models').value = fields.slice(2).join(' ').trim();
+  function updateKind() {
+    const option = kindInput.selectedOptions[0];
+    const group = option ? option.dataset.group : undefined;
+    const cli = group === 'cli', hosted = group === 'hosted';
+    const urlRequired = !cli && (!hosted || (option && option.dataset.urlRequired === '1'));
+    urlInput.disabled = cli;
+    urlInput.required = urlRequired;
+    urlInput.placeholder = hosted ? (urlRequired ? 'https://llm.example.com/v1' : AISWI18n.text('a0081')) : 'http://127.0.0.1:11434';
+    urlInput.closest('label').hidden = cli;
+    row.querySelector('.runtime-auth').hidden = !cli;
+    row.querySelectorAll('.runtime-hosted').forEach(field => { field.hidden = !hosted; });
+    if (cli) urlInput.value = '';
+    if (!hosted) {
+      row.querySelector('.runtime-key-env').value = '';
+      row.querySelector('.runtime-models').value = '';
+    }
+    syncRuntimes();
+  }
+  row.addEventListener('input', syncRuntimes);
+  kindInput.addEventListener('change', updateKind);
+  row.querySelector('.runtime-remove').addEventListener('click', () => { row.remove(); syncRuntimes(); });
+  runtimeList.append(row);
+  updateKind();
+  return idInput;
+}
+const initialRuntimes = declarations.value.split('\n').filter(line => line.trim());
+initialRuntimes.forEach(line => {
+  const parts = line.split(',');
+  addRuntime((parts[0] || '').trim(), (parts[1] || '').trim(), parts.slice(2).join(','));
+});
+document.getElementById('runtime-add').addEventListener('click', () => { addRuntime().focus(); });
+declarations.hidden = true;
+document.getElementById('runtime-format-hint').hidden = true;
+document.getElementById('runtime-editor').hidden = false;
+document.querySelector('form').addEventListener('submit', syncRuntimes);
+document.querySelector('form').addEventListener('invalid', event => {
+  const group = event.target.closest('fieldset');
+  if (group && group.hidden) {
+    window.location.hash = group.id;
+    selectGroup();
+  }
+}, true);
+
+document.addEventListener('aisw:locale', () => {
+  syncRuntimes();
+  runtimeList.querySelectorAll('.runtime-card').forEach(row => {
+    const option = row.querySelector('.runtime-kind').selectedOptions[0];
+    const input = row.querySelector('.runtime-url');
+    if (option?.dataset.group === 'hosted' && !input.required) input.placeholder = AISWI18n.text('a0081');
+  });
+});
+</script>
+</body>
+</html>
+{{define "gateway-status"}}
+<div id="gateway-status" class="gateway-status" role="status" aria-live="polite">
+<div class="connection-summary"><span class="status-badge status-{{.Tone}}"><span data-i18n="{{.SummaryKey}}">{{.Summary}}</span></span><span><span data-i18n="a0082" data-i18n-values='{{json (dict "connected" .Connected "total" .Total)}}' >{{$.Text.Format "a0082" (dict "connected" .Connected "total" .Total)}}</span></span></div>
+{{if .Connections}}<ul class="connection-list">{{range .Connections}}<li><code>{{.Endpoint}}</code><span class="status-badge status-{{.Tone}}"><span data-i18n="{{.LabelKey}}">{{.Label}}</span></span></li>{{end}}</ul>{{end}}
+</div>
+{{end}}
