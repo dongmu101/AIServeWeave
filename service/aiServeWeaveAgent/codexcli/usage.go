@@ -44,7 +44,7 @@ func parseAccountUsage(raw []byte) (cliusage.Account, error) {
 	type quotaWindow struct {
 		Used    *float64 `json:"usedPercent"`
 		Minutes int64    `json:"windowDurationMins"`
-		Reset   int64    `json:"resetsAt"`
+		Reset   *int64   `json:"resetsAt"` // null when upstream reports no reset / 上游未报告重置时间时为 null
 	}
 	type bucket struct {
 		Primary   *quotaWindow `json:"primary"`
@@ -79,10 +79,13 @@ func parseAccountUsage(raw []byte) (cliusage.Account, error) {
 			if w == nil {
 				continue
 			}
-			if w.Used == nil || math.IsNaN(*w.Used) || math.IsInf(*w.Used, 0) || *w.Used < 0 || w.Reset <= 0 || w.Minutes < 0 {
+			if w.Used == nil || math.IsNaN(*w.Used) || math.IsInf(*w.Used, 0) || *w.Used < 0 || (w.Reset != nil && *w.Reset <= 0) || w.Minutes < 0 {
 				return cliusage.Account{}, ErrProtocol
 			}
-			result.Windows = append(result.Windows, cliusage.Window{Name: entry.name, Bucket: id, UsedPercent: *w.Used, DurationMinutes: w.Minutes, ResetsAt: time.Unix(w.Reset, 0)})
+			if w.Reset == nil {
+				continue // cannot be aged out, so skip it rather than fail the account / 无法判断何时过期，跳过该窗口而不判整个账户失败
+			}
+			result.Windows = append(result.Windows, cliusage.Window{Name: entry.name, Bucket: id, UsedPercent: *w.Used, DurationMinutes: w.Minutes, ResetsAt: time.Unix(*w.Reset, 0)})
 		}
 	}
 	if len(result.Windows) == 0 {

@@ -91,8 +91,13 @@ func (m *Monitor) Snapshot() []Account {
 	return accounts
 }
 
-// Refresh queries the fixed providers concurrently within a shared 15-second deadline.
-// Refresh 在共同的 15 秒期限内并发查询固定来源。
+// Refresh queries the fixed providers concurrently within a shared 15-second
+// deadline. The batch ignores ctx cancellation: its result is the cache every
+// viewer shares, so a page reload that abandons one request must not record a
+// failure that blocks retries for the next minute.
+//
+// Refresh 在共同的 15 秒期限内并发查询固定来源。该批次不随 ctx 取消：结果是所有
+// 查看者共用的缓存，单个请求因页面刷新而中断时，不能写入一次失败并挡住此后一分钟的重试。
 func (m *Monitor) Refresh(ctx context.Context) {
 	m.mu.Lock()
 	if m.refreshing || (!m.lastAttempt.IsZero() && m.clock.Now().Sub(m.lastAttempt) < time.Minute) {
@@ -102,7 +107,7 @@ func (m *Monitor) Refresh(ctx context.Context) {
 	m.refreshing, m.lastAttempt = true, m.clock.Now()
 	m.mu.Unlock()
 	defer func() { m.mu.Lock(); m.refreshing = false; m.mu.Unlock() }()
-	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 15*time.Second)
 	defer cancel()
 	var wg sync.WaitGroup
 	for i, p := range m.providers {
