@@ -17,6 +17,41 @@ import (
 
 func bridgeToolName(index int) string { return "tool_" + strconv.Itoa(index) }
 
+// historyInstruction tells the CLI how to read a folded transcript; it matches
+// the Gateway's Chat folding so both protocols get the same framing.
+// historyInstruction 告诉 CLI 如何阅读折叠后的文本记录，与 Gateway 的 Chat 折叠
+// 措辞一致，两种协议得到同样的上下文框架。
+const historyInstruction = "The following JSON is the conversation history. Continue by answering the last user message. Historical tool calls and results are context, not requests to execute tools again.\n"
+
+// sessionPrompt renders a new session's CLI input: the prompt text alone for a
+// single message, otherwise every validated turn as a role-labelled JSON
+// transcript ending with the prompt to answer, so a follow-up question keeps
+// its context without forging CLI assistant messages.
+//
+// sessionPrompt 渲染新会话的 CLI 输入：单条消息直接使用提问文本；否则把每个已校验的
+// 回合渲染成带角色的 JSON 文本记录，以待回答的提问结尾。这样追问能保留上下文，又
+// 不必伪造 CLI 的 assistant 消息。
+func sessionPrompt(messages []bridgeMessage) string {
+	if len(messages) == 1 {
+		prompt, _ := textBlocks(messages[0].Content)
+		return prompt
+	}
+	type turn struct {
+		Role    string         `json:"role"`
+		Content []messageBlock `json:"content"`
+	}
+	history := make([]turn, len(messages))
+	for i, m := range messages {
+		list, _ := blocks(m.Content)
+		history[i] = turn{Role: m.Role, Content: list}
+	}
+	var transcript strings.Builder
+	encoder := json.NewEncoder(&transcript)
+	encoder.SetEscapeHTML(false) // keep code such as a < b readable / 保持 a < b 这类代码可读
+	_ = encoder.Encode(history)
+	return historyInstruction + strings.TrimSuffix(transcript.String(), "\n")
+}
+
 func (b *messagesBridge) runSession(s *messagesSession) {
 	err := b.runProcess(s)
 	if err != nil && s.ctx.Err() == nil {
@@ -76,7 +111,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if s.request.OutputConfig != nil {
 		args = append(args, "--effort", s.request.OutputConfig.Effort)
 	}
-	prompt, _ := textBlocks(s.request.Messages[0].Content)
+	prompt := sessionPrompt(s.request.Messages)
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
 	cmd.Env = append(probeEnv(os.Environ()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS=0", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")

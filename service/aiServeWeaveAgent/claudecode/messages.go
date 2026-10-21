@@ -430,8 +430,12 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		return nil, errClosed
 	}
 	if len(results) > 0 {
+		held := false
 		for s := range b.sessions {
 			s.mu.Lock()
+			for id := range results {
+				held = held || s.pending[id] != nil
+			}
 			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
 			if matches {
 				for id := range results {
@@ -453,11 +457,21 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 			}
 			s.mu.Unlock()
 		}
+		// A session that still holds an ID saw a mismatched request; no holder
+		// at all means the round is unrecoverable on this node.
+		// 仍有会话持有某个 ID，说明是请求与会话不匹配；完全没有持有者，说明该回合
+		// 在本节点上已无法恢复。
+		if !held {
+			return nil, errSessionGone
+		}
 		return nil, errCallRejected
 	}
-	// Public CLI input cannot faithfully inject arbitrary assistant history.
-	// 公开 CLI 输入无法保真注入任意 assistant 历史。
-	if len(req.Messages) != 1 || req.Messages[0].Role != "user" {
+	// Public CLI input cannot faithfully inject assistant history, so a new
+	// session must end with a user prompt; earlier turns reach the CLI only as
+	// the role-labelled transcript sessionPrompt renders.
+	// 公开 CLI 输入无法保真注入 assistant 历史，因此新会话必须以一条用户提问结尾；
+	// 此前的回合只以 sessionPrompt 渲染的带角色文本记录交给 CLI。
+	if req.Messages[len(req.Messages)-1].Role != "user" {
 		return nil, errMessages
 	}
 	for _, block := range last {

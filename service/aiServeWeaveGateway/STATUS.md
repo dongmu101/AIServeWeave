@@ -650,9 +650,11 @@ Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：
 
 普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、范围 1–64000，同时提供必须一致；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 1 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent；Claude 的 `/v1/responses` 尚未实现。
 
-模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。其他模型仍使用既有 Chat 转换。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
+模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。以 user 文本结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录，原样转发、不在 Gateway 改写。其他模型仍使用既有 Chat 转换。
 
-Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定两分钟到期，已投递或结果不确定时拒绝重放。续接不会换节点，节点失联、Agent 重启或等待超时后需开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
+新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接仍经 `Scheduler.Messages` 只发往绑定的节点。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
+
+Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定两分钟到期，已投递或结果不确定时拒绝重放。续接不会换节点。Agent 重启或等待超时后，节点答复 `runtime_closed`，Gateway 消费绑定，返回与绑定过期相同的 409 `continuation_unavailable`；节点失联时返回 503，同样消费绑定。两种情况都需要开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 
 Claude CLI 后端通过 `initialize` 动态发布 `resolvedModel` 中去重后的真实模型 ID，并保留首次出现的顺序，`/v1/models` 汇总健康运行时的目录；启用别名路由时只展示具有可用目标的公共别名。
 

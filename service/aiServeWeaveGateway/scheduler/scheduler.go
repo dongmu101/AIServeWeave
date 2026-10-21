@@ -393,7 +393,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
-			return &prefetchStream{first: first, hasFirst: true, underlying: stream}, c, nil
+			return &prefetchStream[runtime.ChatEvent]{first: first, hasFirst: true, underlying: stream}, c, nil
 		}
 		stream.Close()
 		if err == io.EOF {
@@ -402,7 +402,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
-			return &prefetchStream{eof: true}, c, nil
+			return &prefetchStream[runtime.ChatEvent]{eof: true}, c, nil
 		}
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
@@ -758,34 +758,38 @@ func retryable(err error) bool {
 }
 
 // prefetchStream replays an already-received first event before delegating
-// to the underlying Stream, so ChatStream can peek at the first event to
-// decide whether to retry without losing it.
-type prefetchStream struct {
-	first      runtime.ChatEvent
+// to the underlying Stream, so ChatStream and MessagesStart can peek at the
+// first event to decide whether to retry without losing it.
+//
+// prefetchStream 先重放已收到的首个事件，再交给底层 Stream，使 ChatStream 与
+// MessagesStart 能先看首个事件来决定是否重试，又不丢失该事件。
+type prefetchStream[T any] struct {
+	first      T
 	hasFirst   bool
 	eof        bool
-	underlying runtime.Stream[runtime.ChatEvent]
+	underlying runtime.Stream[T]
 }
 
-func (p *prefetchStream) Recv() (runtime.ChatEvent, error) {
+func (p *prefetchStream[T]) Recv() (T, error) {
 	if p.hasFirst {
 		p.hasFirst = false
 		return p.first, nil
 	}
 	if p.eof {
-		return runtime.ChatEvent{}, io.EOF
+		var zero T
+		return zero, io.EOF
 	}
 	return p.underlying.Recv()
 }
 
-func (p *prefetchStream) Committed() bool {
+func (p *prefetchStream[T]) Committed() bool {
 	if p.underlying == nil {
 		return false
 	}
 	return p.underlying.Committed()
 }
 
-func (p *prefetchStream) Close() error {
+func (p *prefetchStream[T]) Close() error {
 	if p.underlying == nil {
 		return nil
 	}

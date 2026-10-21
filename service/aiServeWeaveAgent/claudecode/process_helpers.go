@@ -27,6 +27,11 @@ var (
 	errCapacity      = errors.New("CLI session capacity exceeded")
 	errClosed        = errors.New("CLI session closed")
 	errCallRejected  = errors.New("CLI tool result rejected")
+	// errSessionGone means no retained session holds any submitted tool ID,
+	// so the CLI that asked for them has exited, expired or never ran here.
+	// errSessionGone 表示没有任何保留中的会话持有所提交的工具 ID：发起这些调用的
+	// CLI 已退出、已过期，或从未在本进程中运行过。
+	errSessionGone = errors.New("CLI tool session no longer exists")
 )
 
 const (

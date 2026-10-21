@@ -48,13 +48,15 @@ export CLAUDE_CODE_SIMPLE=1
 claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools Read,Edit --permission-mode acceptEdits "你的任务"
 ```
 
-客户端工具权限由调用方管理。上述 `--bare` 用于连接 Gateway 的客户端；Agent 后端采用 `--restricted`，保留原生订阅登录读取能力。客户端若继续使用本机订阅或其他认证配置，应先隔离客户端配置，避免与 Gateway Key 混用。此配置验证了单次编程任务的连续工具流程，交互式多轮聊天和完整客户端功能没有验收。
+客户端工具权限由调用方管理。上述 `--bare` 用于连接 Gateway 的客户端；Agent 后端采用 `--restricted`，保留原生订阅登录读取能力。客户端若继续使用本机订阅或其他认证配置，应先隔离客户端配置，避免与 Gateway Key 混用。此配置验证了单次编程任务的连续工具流程。原生 Messages 的多轮追问目前只有离线测试（假 CLI 进程经真实 mTLS 隧道）覆盖，原版客户端的交互式多轮聊天和完整客户端功能尚未实机验收。
 
 ## 支持范围
 
-支持初始单条 user 文本、system 文本、调用方定义的工具及其 JSON Schema、文本工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。后续请求必须携带未改动的完整历史和本回合全部 `tool_result`。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
+支持以 user 文本结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
 
-支持 `max_tokens`（1–64000）、`temperature`（0–1）、`thinking: {"type":"disabled"}`、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持 thinking 内容、缓存控制、图片/文件/音频、多轮新增 user 提问、任意预填 assistant 历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史仍按同一套严格规则校验，图片等不支持的块照旧拒绝。代价是模型只能以引用文本的形式看到此前的回合，内部 thinking 也不跨会话保留。
+
+支持 `max_tokens`（1–64000）、`temperature`（0–1）、`thinking: {"type":"disabled"}`、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持 thinking 内容、缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
 
 部分新模型仍会生成内部 `thinking` / `redacted_thinking` 块。这些块由保留的 CLI 管理，不对外输出；文本与工具块的公开索引重新连续编号，确保后续工具回合可以正常续接。这不提供客户端 thinking 内容或开启 thinking 的请求参数。
 
@@ -64,7 +66,17 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 每个运行时最多两个独立 CLI 会话，所有 Gateway 副本共用该 Agent 限额。等待工具和生成阶段均最多两分钟，会话总寿命十分钟；每会话最多 64 次工具调用、同时最多 8 个待决工具。原生请求最多 1 MiB、CLI 单事件 1 MiB、最多 10000 行、每回合输出最多 8 MiB。流式事件逐条传递，使用同步背压。
 
-Redis 原子保存工具 ID 的完整集合、租户/Key、公共模型及原节点/runtime/实际模型，TTL 两分钟，不保存消息或工具结果。每次续接重新认证，不允许换节点或自动重试；已应用或结果不确定的工具结果不可重放。HTTP 断开取消未完成回合；正常完成的工具回合保留进程等待下一请求。Agent 关闭、会话超时及 CLI 退出会清理进程组、MCP 监听和临时文件。Agent 重启或节点失联后开始新任务，不恢复旧 CLI。
+新会话的首轮可以换节点。Gateway 的候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话名额，所以首个事件到达之前，如果节点答复会话已满（`backpressure`）、运行时正在关闭（`runtime_closed`）或带可重试标志的错误，调度器会依次尝试下一个候选。请求格式不合法等错误不换节点。续接从不换节点。
+
+Redis 原子保存工具 ID 的完整集合、租户/Key、公共模型及原节点/runtime/实际模型，TTL 两分钟，不保存消息或工具结果。每次续接重新认证，不允许换节点或自动重试；已应用或结果不确定的工具结果不可重放。HTTP 断开取消未完成回合；正常完成的工具回合保留进程等待下一请求。Agent 关闭、会话超时及 CLI 退出会清理进程组、MCP 监听和临时文件。
+
+续接失败按原因区分：
+
+- Agent 重启、会话超时或 CLI 已退出：没有任何会话还持有这些工具 ID，Agent 答复 `runtime_closed`。Gateway 消费租约，返回 409 `continuation_unavailable`，与租约过期时相同，不恢复旧 CLI。客户端可以去掉未完成的工具链，以用户提问结尾重新发送，开始新会话。
+- 会话还在，但历史、工具或归属不匹配：返回 400，租约保留，客户端修正后可以重试。
+- 节点失联：返回 503，租约同样被消费。
+
+以上行为需要同时升级 Gateway 和 Agent。只升级 Gateway 时，旧 Agent 仍拒绝多轮追问，重启后的续接仍是 400；只升级 Agent 时，多轮追问可用，但重启后的续接会被旧 Gateway 报成 503。
 
 ## 验证
 

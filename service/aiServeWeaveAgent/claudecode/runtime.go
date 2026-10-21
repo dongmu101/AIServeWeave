@@ -184,8 +184,14 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 	s, err := r.bridge.acquire(principal{req.TenantID, req.KeyID}, parsed)
 	if err != nil {
 		code := runtime.ErrorInvalidConfig
-		if errors.Is(err, errCapacity) {
+		switch {
+		case errors.Is(err, errCapacity):
 			code = runtime.ErrorBackpressure
+		case errors.Is(err, errSessionGone), errors.Is(err, errClosed):
+			// Gone is not a caller mistake: the Gateway reports it as an
+			// unavailable continuation, and a new session may try another node.
+			// 会话不存在不是调用方的错误：Gateway 据此报告续接不可用，新会话则可换节点。
+			code = runtime.ErrorClosed
 		}
 		return nil, claudeError(code)
 	}

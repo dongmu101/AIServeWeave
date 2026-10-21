@@ -12,6 +12,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
+	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
 func nativeResultIDs(req anthropicMessagesRequest) []string {
@@ -61,7 +62,18 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			writeAnthropicError(w, status, errType, message)
 		}
 	}
+	ids := nativeResultIDs(req)
+	continuationUnavailable := func() {
+		fail(409, "invalid_request_error", "continuation_unavailable", "Messages continuation unavailable")
+	}
 	dispatchError := func(err error) {
+		// A continuation whose node no longer holds the CLI cannot resume
+		// anywhere, so it reads as an expired lease, not a node outage.
+		// 节点已不再持有 CLI 的续接在哪里都无法恢复，因此按租约失效报告，而不是节点故障。
+		if len(ids) > 0 && continuationLost(err) {
+			continuationUnavailable()
+			return
+		}
 		status, errType, code, message := dispatchErrorDetails(h.logger, err)
 		fail(status, errType, code, message)
 	}
@@ -78,33 +90,33 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		fail(413, "invalid_request_error", "request_too_large", "native Messages request size limit exceeded")
 		return
 	}
-	ids := nativeResultIDs(req)
-	candidates := h.sched.MessagesCandidates(req.Model)
+	native := runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw}
 	var record messagesession.Record
 	var finish func(context.Context, bool) error
+	var stream runtime.Stream[runtime.MessagesEvent]
+	var err error
+	committed := false
 	if len(ids) > 0 {
-		var err error
 		record, finish, err = h.messagesSessions.Claim(r.Context(), ids, identity.TenantID, identity.KeyID, req.Model)
 		if err != nil {
-			fail(409, "invalid_request_error", "continuation_unavailable", "Messages continuation unavailable")
+			continuationUnavailable()
 			return
 		}
-	} else {
-		if len(candidates) == 0 {
-			fail(503, "api_error", "node_unavailable", "native Messages node unavailable")
-			return
-		}
-		record = messagesession.Record{TenantID: identity.TenantID, KeyID: identity.KeyID, Model: req.Model, Candidate: candidates[0]}
-	}
-	committed := false
-	if finish != nil {
 		defer func() {
 			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
 			defer cancel()
 			_ = finish(ctx, committed)
 		}()
+		stream, err = h.sched.Messages(r.Context(), record.Candidate, native)
+	} else {
+		var candidate scheduler.Candidate
+		stream, candidate, err = h.sched.MessagesStart(r.Context(), native)
+		if errors.Is(err, scheduler.ErrNoCapableNode) {
+			fail(503, "api_error", "node_unavailable", "native Messages node unavailable")
+			return
+		}
+		record = messagesession.Record{TenantID: identity.TenantID, KeyID: identity.KeyID, Model: req.Model, Candidate: candidate}
 	}
-	stream, err := h.sched.Messages(r.Context(), record.Candidate, runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw})
 	if err != nil {
 		committed = !messagesNotApplied(err)
 		dispatchError(err)
@@ -274,4 +286,15 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 func messagesNotApplied(err error) bool {
 	var failure *runtime.RuntimeError
 	return errors.As(err, &failure) && (failure.Code == runtime.ErrorInvalidConfig || failure.Code == runtime.ErrorCapability || failure.Code == runtime.ErrorBackpressure)
+}
+
+// continuationLost reports whether a continuation's node answered that it no
+// longer holds the CLI session — the Agent restarted, the session expired, or
+// the runtime is shutting down. The lease is then consumed, never restored.
+//
+// continuationLost 判断续接所在节点是否答复已不再持有该 CLI 会话——Agent 重启、会话
+// 过期或运行时正在关闭。此时租约被消费，不会恢复。
+func continuationLost(err error) bool {
+	var failure *runtime.RuntimeError
+	return errors.As(err, &failure) && failure.Code == runtime.ErrorClosed
 }
