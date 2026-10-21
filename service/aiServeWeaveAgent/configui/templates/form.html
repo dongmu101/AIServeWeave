@@ -99,7 +99,7 @@ button:hover { background: #1d4ed8; }
 {{if .Message}}<p class="message" role="status"><span data-i18n="a0084">{{.Message}}</span></p>{{end}}
 {{if .Error}}<p class="error" role="alert"><span data-i18n="a0083">{{.Error}}</span></p>{{end}}
 <form method="post">
-<div class="language-selector"><label for="aisw-locale"><span data-i18n="a0103">{{.Text.Text "a0103"}}</span></label><select id="aisw-locale" name="locale">{{range .Text.Options}}<option value="{{.Locale}}"{{if eq .Locale $.Locale}} selected{{end}}>{{.Label}}</option>{{end}}</select><span id="locale-status" role="status"></span><button type="submit" name="action" value="locale" formnovalidate><span data-i18n="a0104">{{.Text.Text "a0104"}}</span></button></div>
+<div class="language-selector"><label for="aisw-locale"><span data-i18n="a0103">{{.Text.Text "a0103"}}</span></label><select id="aisw-locale" name="locale">{{range .Text.Options}}<option value="{{.Locale}}"{{if eq .Locale $.Locale}} selected{{end}}>{{.Label}}</option>{{end}}</select><span id="locale-status" role="status"></span></div>
 <fieldset id="gateway">
 <legend><span data-i18n="a0011">{{$.Text.Text "a0011"}}</span></legend>
 <p class="group-hint"><span data-i18n="a0012">{{$.Text.Text "a0012"}}</span></p>
@@ -238,6 +238,7 @@ button:hover { background: #1d4ed8; }
 <div class="actions">
 <p class="hint"><span data-i18n="a0071">{{$.Text.Text "a0071"}}</span></p>
 <button type="submit"><span data-i18n="a0072">{{$.Text.Text "a0072"}}</span></button>
+<button type="submit" class="secondary" name="action" value="locale" formnovalidate><span data-i18n="a0104">{{.Text.Text "a0104"}}</span></button>
 </div>
 </form>
 </main>
@@ -259,7 +260,7 @@ async function refreshGateway() {
     const connections = page.getElementById('gateway-status');
     if (!connections) throw new Error('missing status');
     document.getElementById('gateway-status').replaceWith(document.importNode(connections, true));
-    AISWI18n.apply(document.getElementById('gateway-status')); 
+    AISWI18n.apply(document.getElementById('gateway-status'));
     AISWI18n.message(status, 'a0073');
   } catch {
     const current = document.getElementById('gateway-status');
@@ -289,7 +290,7 @@ document.getElementById('models-refresh').addEventListener('click', async event 
     const models = page.getElementById('available-models');
     if (!models) throw new Error('missing catalogue');
     document.getElementById('available-models').replaceWith(document.importNode(models, true));
-    AISWI18n.apply(document.getElementById('available-models')); 
+    AISWI18n.apply(document.getElementById('available-models'));
     AISWI18n.message(status, 'a0077');
   } catch {
     AISWI18n.message(status, 'a0078');

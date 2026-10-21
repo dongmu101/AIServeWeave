@@ -66,6 +66,11 @@ export function localizeElementTree(React, tree, state, allowExplanation = false
   if (!React.isValidElement(tree)) return tree;
   const props = tree.props;
   if (["pre","code"].includes(tree.type)) return tree;
+  // Response headers and scope metadata belong to the API author, even if
+  // their literal values happen to match a fixed control label.
+  // 响应头和 scope 元数据属于 API 作者，即使原值恰好与固定控件文字相同也不翻译。
+  if ((componentName === "headers" && tree.type === "td") ||
+      (componentName === "oauth2" && tree.type === "p" && /(?:^|\s)(?:name|description)(?:\s|$)/.test(props.className ?? ""))) return tree;
   protectText ||= protectedClasses.test(props.className ?? "") || (tree.type === "option" && props.children === props.value);
   const next = {};
   for (const attr of ["title","aria-label","placeholder","ariaLabel"]) if (typeof props[attr] === "string") next[attr] = fixedText(props[attr],state,false);

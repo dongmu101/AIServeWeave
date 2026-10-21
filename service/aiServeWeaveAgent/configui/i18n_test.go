@@ -17,6 +17,27 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
+// TestSaveRemainsDefaultSubmit preserves Enter-to-save independently of locale.
+// TestSaveRemainsDefaultSubmit 保证各语言的 Enter 默认动作仍是保存。
+func TestSaveRemainsDefaultSubmit(t *testing.T) {
+	for _, locale := range browserlang.All() {
+		t.Run(string(locale), func(t *testing.T) {
+			handler := newIndexHandler(discardLogger(), filepath.Join(t.TempDir(), "agent.yaml"), Sources{})
+			r := httptest.NewRequest(http.MethodGet, "/", nil)
+			r.Header.Set("Accept-Language", string(locale))
+			w := httptest.NewRecorder()
+			handler(w, r)
+			buttons := regexp.MustCompile(`<button\b[^>]*type="submit"[^>]*>`).FindAllString(w.Body.String(), -1)
+			if len(buttons) < 2 {
+				t.Fatalf("submit buttons = %v, want save and explicit locale action", buttons)
+			}
+			if strings.Contains(buttons[0], `value="locale"`) || strings.Contains(buttons[0], "formnovalidate") {
+				t.Fatalf("default submit = %q, want validating save action", buttons[0])
+			}
+		})
+	}
+}
+
 // TestPageLocaleNegotiation checks request isolation, language headers and HEAD.
 // TestPageLocaleNegotiation 检查请求隔离、语言响应头及 HEAD。
 func TestPageLocaleNegotiation(t *testing.T) {

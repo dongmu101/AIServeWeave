@@ -91,3 +91,21 @@ test("bare registered components receive the same stable adapter as wrapped regi
  assert.equal(typeof installed.components.authorizeBtn,"function");
  assert.equal(new installed.components.authorizeBtn().render().props.children,"授权");
 });
+
+test("response header data and OAuth scopes retain literal control-like names", async () => {
+ const {localizeElementTree}=await import("./swagger-i18n.mjs");
+ const React={isValidElement:element=>!!element?.props,cloneElement:(element,props)=>({...element,props:{...element.props,...props}})};
+ const state={locale:"zh-CN",catalog:read("zh-CN")};
+ for (const name of ["Name","Type","Authorize"]) {
+  const header={type:"td",props:{className:"header-col",children:name}};
+  assert.deepEqual(localizeElementTree(React,header,state,false,false,false,"headers"),header,`header ${name}`);
+  for(const className of ["name","description"]){
+   const scope={type:"p",props:{className,children:name}};
+   assert.deepEqual(localizeElementTree(React,scope,state,false,false,false,"oauth2"),scope,`scope ${className} ${name}`);
+  }
+ }
+ const button={type:"button",props:{children:"Authorize"}};
+ assert.equal(localizeElementTree(React,button,state,false,false,false,"oauth2").props.children,"授权");
+ const heading={type:"th",props:{className:"header-col",children:"Name"}};
+ assert.notEqual(localizeElementTree(React,heading,state,false,false,false,"headers").props.children,"Name");
+});
