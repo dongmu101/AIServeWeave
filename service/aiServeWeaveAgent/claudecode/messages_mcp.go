@@ -33,6 +33,10 @@ func (s *messagesSession) callTool(ctx context.Context, name string, input json.
 					s.mu.Unlock()
 					return result, nil
 				case <-ctx.Done():
+					s.mu.Lock()
+					p.claimed = false // a retried MCP call may claim the result again / 允许重试的 MCP 调用重新认领结果
+					s.signalLocked()
+					s.mu.Unlock()
 					return toolResult{}, ctx.Err()
 				case <-s.ctx.Done():
 					return toolResult{}, errClosed

@@ -448,7 +448,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 				}
 				s.signalLocked()
 				s.mu.Unlock()
-				s.activity <- false
+				s.touch()
 				return s, nil
 			}
 			s.mu.Unlock()
@@ -486,6 +486,18 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 }
 
 func (s *messagesSession) signalLocked() { close(s.changed); s.changed = make(chan struct{}) }
+
+// touch asks expire to restart the phase timer without ever blocking: a signal
+// already buffered covers this one, and once expire has returned nobody reads.
+//
+// touch 请求 expire 重启阶段计时器，且永不阻塞：缓冲中已有未读信号时本次可以丢弃，
+// expire 返回后不再有读方，阻塞发送会让调用方永久挂起。
+func (s *messagesSession) touch() {
+	select {
+	case s.activity <- true:
+	default:
+	}
+}
 
 func (b *messagesBridge) expire(s *messagesSession) {
 	life, stopLife := b.clock.NewTimer(10 * time.Minute)
@@ -615,7 +627,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				}
 				s.mu.Unlock()
 				if waiting {
-					s.activity <- true
+					s.touch()
 				}
 				response["content"] = content
 			}
