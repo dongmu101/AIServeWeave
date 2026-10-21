@@ -1,5 +1,7 @@
 # Codex CLI 后端接入
 
+账户订阅用量与余量可在 Agent 本地配置页面查看；查询使用 app-server 的 `account/rateLimits/read`，不执行推理，详见 [Agent 账户额度说明](../README.md#本地-cli-账户额度)。
+
 `codexcli.New` 已实现 `runtime.InferenceRuntime`；Agent 通过本机已登录的 `codex app-server` 和 stdio JSON-RPC 提供共享推理。`main.go` 注册 `kind: codex`，仅接受本地 YAML 明确声明的运行时 ID。可执行文件由 Agent 的 PATH 提供，模型请求不能携带路径、命令、URL 或凭据。
 
 登录凭据留在 Agent，客户端工具在各用户自己的电脑执行。Gateway 复用已有鉴权、模型路由、配额和 Chat/ChatStream 隧道，Responses 工具与历史在前门转换成共享 runtime 类型。

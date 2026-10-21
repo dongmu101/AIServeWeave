@@ -81,6 +81,8 @@ func fakeServer(mode string) {
 				account = nil
 			}
 			send(map[string]any{"id": msg.ID, "result": map[string]any{"account": account}})
+		case "account/rateLimits/read":
+			send(map[string]any{"id": msg.ID, "result": map[string]any{"rateLimits": map[string]any{"primary": map[string]any{"usedPercent": 25, "windowDurationMins": 300, "resetsAt": 1800003600}}}})
 		case "thread/start":
 			if mode == "rpc-error" {
 				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32000, "message": "SECRET"}})

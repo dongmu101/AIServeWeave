@@ -97,6 +97,7 @@ func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, so
 	mux.Handle("/assets/", http.FileServer(http.FS(pageAssets)))
 	mux.HandleFunc("/i18n/", serveLanguageResource)
 	mux.HandleFunc("/status/gateway", newGatewayHandler(sources.Gateway))
+	mux.HandleFunc("/status/cli-usage", newUsageHandler(sources.CLIUsage))
 	mux.HandleFunc("/", newIndexHandler(logger, configPath, sources))
 	server := &http.Server{Addr: addr, Handler: mux}
 	defer server.Close()
@@ -183,6 +184,7 @@ type formValues struct {
 	Error                string
 	Models               modelCatalogue
 	Gateway              gatewayView
+	CLIUsage             cliUsageView
 }
 
 // newIndexHandler builds the "/" handler: GET renders the form (pre-filled
@@ -194,6 +196,7 @@ func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) ht
 	render := func(w http.ResponseWriter, values formValues) {
 		values.Models = availableModels(sources.Runtimes)
 		values.Gateway = currentGateway(sources.Gateway, values.Locale)
+		values.CLIUsage = currentCLIUsage(sources.CLIUsage, values.Locale)
 		renderForm(w, values)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {

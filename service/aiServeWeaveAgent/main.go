@@ -752,6 +752,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	var activeTunnels atomic.Pointer[tunnel.Manager]
 	uiSources := configui.Sources{
 		Runtimes: manager.Snapshot,
+		CLIUsage: newCLIUsageMonitor(declaredRuntimes, deps.Clock),
 		Gateway: func() configui.GatewaySnapshot {
 			current := activeTunnels.Load()
 			snapshot := configui.GatewaySnapshot{Enabled: opts.enabled(), Started: current != nil}

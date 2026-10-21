@@ -1,5 +1,7 @@
 # Claude Code CLI 运行时
 
+账户订阅用量与余量可在 Agent 本地配置页面查看；查询使用 CLI 实验性的 `get_usage` 控制请求，不执行推理，未提供额度时明确显示暂不可用，详见 [Agent 账户额度说明](../README.md#本地-cli-账户额度)。
+
 Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。发布 `anthropic_messages` 能力，通过 Gateway 的原生 `/v1/messages` 和兼容 `/v1/chat/completions` 服务。Chat 在 Gateway 边界转换，仍使用 Messages 隧道；不提供 Responses/嵌入接口。
 
 模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models[].resolvedModel` 读取真实模型 ID，按真实 ID 去重并保留首次出现的顺序。CLI 的 `value` / `id` 简称及友好名称不作为公开模型名；没有 `resolvedModel` 的条目不发布。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。

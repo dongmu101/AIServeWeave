@@ -6,6 +6,7 @@ import (
 
 	"AIServeWeave/common/browserlang"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/cliusage"
 )
 
 // Sources supplies read-only snapshots of the running Agent to the setup page.
@@ -17,6 +18,9 @@ type Sources struct {
 	// Gateway reports the active connection table, independently of edited settings.
 	// Gateway 返回实际运行的连接表，与正在编辑的配置相互独立。
 	Gateway func() GatewaySnapshot
+	// CLIUsage caches account-level subscription limits for locally declared CLIs.
+	// CLIUsage 缓存本地声明 CLI 的账户级订阅额度。
+	CLIUsage *cliusage.Monitor
 }
 
 // GatewaySnapshot describes the running tunnel manager without credentials.

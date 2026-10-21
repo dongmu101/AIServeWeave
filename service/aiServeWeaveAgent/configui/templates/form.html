@@ -65,6 +65,10 @@ button:hover { background: #1d4ed8; }
 .connection-list { list-style: none; padding: 0; margin: 12px 0 0; }
 .connection-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; }
 .connection-list code { overflow-wrap: anywhere; }
+.quota-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; }
+.quota-window { margin-top: 16px; padding-top: 12px; border-top: 1px solid #e2e8f0; }
+.quota-values { display: flex; flex-wrap: wrap; gap: 8px 24px; margin: 8px 0; }
+.quota-values strong { font-size: 21px; }
 @media (max-width: 760px) {
   .layout { display: block; }
   .sidebar { position: static; height: auto; padding: 20px; border-right: 0; border-bottom: 1px solid #e2e8f0; }
@@ -218,6 +222,12 @@ button:hover { background: #1d4ed8; }
 {{else}}<p class="hint"><span data-i18n="a0064">{{$.Text.Text "a0064"}}</span></p>{{end}}
 </div>
 </section>
+<section class="model-catalogue" aria-labelledby="cli-usage-title">
+<div class="runtime-heading"><h2 id="cli-usage-title"><span data-i18n="u.title">{{$.Text.Text "u.title"}}</span></h2><button type="button" class="secondary" id="cli-usage-refresh"><span data-i18n="a0014">{{$.Text.Text "a0014"}}</span></button></div>
+<p class="hint"><span data-i18n="u.note">{{$.Text.Text "u.note"}}</span></p>
+{{template "cli-usage" .CLIUsage}}
+<p class="hint" id="cli-usage-refresh-status" role="status"></p>
+</section>
 </fieldset>
 <fieldset id="observability">
 <legend><span data-i18n="a0065">{{$.Text.Text "a0065"}}</span></legend>
@@ -246,6 +256,56 @@ button:hover { background: #1d4ed8; }
 <script id="aisw-i18n-state" type="application/json">{{.Text.Bootstrap}}</script>
 <script src="/assets/i18n.js"></script>
 <script>
+let cliUsagePending = false;
+function expireCLIUsage() {
+  const now = Date.now();
+  for (const card of document.querySelectorAll('[data-usage-checked]')) {
+    const checked = Date.parse(card.dataset.usageChecked);
+    if (Number.isFinite(checked) && now - checked > 120000) card.querySelector('[data-usage-stale]').hidden = false;
+  }
+  for (const window of document.querySelectorAll('[data-usage-reset]')) {
+    const reset = Date.parse(window.dataset.usageReset);
+    if (Number.isFinite(reset) && now >= reset) {
+      window.querySelectorAll('[data-quota-value]').forEach(value => { value.textContent = '—'; });
+      window.querySelector('[data-usage-expired]').hidden = false;
+    }
+  }
+}
+async function refreshCLIUsage() {
+  expireCLIUsage();
+  if (cliUsagePending || document.hidden) return;
+  cliUsagePending = true;
+  const button = document.getElementById('cli-usage-refresh');
+  const status = document.getElementById('cli-usage-refresh-status');
+  button.disabled = true;
+  AISWI18n.message(status, 'u.loading');
+  try {
+    const response = await fetch('/status/cli-usage', { cache: 'no-store', signal: AbortSignal.timeout(20000) });
+    if (!response.ok) throw new Error('quota refresh failed');
+    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+    const usage = page.getElementById('cli-usage');
+    if (!usage) throw new Error('missing quota snapshot');
+    document.getElementById('cli-usage').replaceWith(document.importNode(usage, true));
+    AISWI18n.apply(document.getElementById('cli-usage'));
+    expireCLIUsage();
+    AISWI18n.message(status, 'u.cached');
+  } catch {
+    const current = document.getElementById('cli-usage');
+    const message = document.createElement('p');
+    message.className = 'error';
+    AISWI18n.message(message, 'u.error');
+    current.replaceChildren(message);
+    AISWI18n.message(status, 'u.error');
+  } finally {
+    button.disabled = false;
+    cliUsagePending = false;
+  }
+}
+document.getElementById('cli-usage-refresh').addEventListener('click', refreshCLIUsage);
+setInterval(refreshCLIUsage, 60000);
+setInterval(expireCLIUsage, 5000);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) void refreshCLIUsage(); });
+void refreshCLIUsage();
 let gatewayRefreshPending = false;
 async function refreshGateway() {
   if (gatewayRefreshPending || document.hidden) return;
@@ -403,5 +463,28 @@ document.addEventListener('aisw:locale', () => {
 <div id="gateway-status" class="gateway-status" role="status" aria-live="polite">
 <div class="connection-summary"><span class="status-badge status-{{.Tone}}"><span data-i18n="{{.SummaryKey}}">{{.Summary}}</span></span><span><span data-i18n="a0082" data-i18n-values='{{json (dict "connected" .Connected "total" .Total)}}' >{{$.Text.Format "a0082" (dict "connected" .Connected "total" .Total)}}</span></span></div>
 {{if .Connections}}<ul class="connection-list">{{range .Connections}}<li><code>{{.Endpoint}}</code><span class="status-badge status-{{.Tone}}"><span data-i18n="{{.LabelKey}}">{{.Label}}</span></span></li>{{end}}</ul>{{end}}
+</div>
+{{end}}
+{{define "cli-usage"}}
+<div id="cli-usage" role="status" aria-live="polite">
+<div class="quota-grid">
+{{range .Accounts}}
+<section class="runtime-card" data-usage-checked="{{.CheckedAt}}">
+<strong>{{.Name}}</strong>
+<p class="hint"><span data-i18n="{{.StatusKey}}">{{$.Text.Text .StatusKey}}</span></p>
+<p class="error" data-usage-stale{{if not .Stale}} hidden{{end}}><span data-i18n="u.stale">{{$.Text.Text "u.stale"}}</span></p>
+{{range .Windows}}
+<div class="quota-window" data-usage-reset="{{.Reset}}">
+<span data-i18n="{{.NameKey}}">{{$.Text.Text .NameKey}}</span>{{if .Bucket}} · <code>{{.Bucket}}</code>{{end}}
+{{if .Minutes}}<p class="hint"><span data-i18n="u.duration" data-i18n-values='{{json (dict "minutes" .Minutes)}}'>{{$.Text.Format "u.duration" (dict "minutes" .Minutes)}}</span></p>{{end}}
+<div class="quota-values"><span><span data-i18n="u.used">{{$.Text.Text "u.used"}}</span> <strong data-quota-value>{{.Used}}</strong></span><span><span data-i18n="u.remaining">{{$.Text.Text "u.remaining"}}</span> <strong data-quota-value>{{.Remaining}}</strong></span></div>
+<p class="hint"><span data-i18n="u.reset">{{$.Text.Text "u.reset"}}</span> <time datetime="{{.Reset}}">{{.Reset}}</time></p>
+<p class="hint" data-usage-expired{{if not .Expired}} hidden{{end}}><span data-i18n="u.expired">{{$.Text.Text "u.expired"}}</span></p>
+</div>
+{{end}}
+{{if .CheckedAt}}<p class="hint"><span data-i18n="u.checked">{{$.Text.Text "u.checked"}}</span> <time datetime="{{.CheckedAt}}">{{.CheckedAt}}</time></p>{{end}}
+</section>
+{{else}}<p class="hint"><span data-i18n="u.empty">{{$.Text.Text "u.empty"}}</span></p>{{end}}
+</div>
 </div>
 {{end}}
