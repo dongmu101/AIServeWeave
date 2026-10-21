@@ -40,6 +40,7 @@ package configui
 
 import (
 	"context"
+	_ "embed"
 	"errors"
 	"fmt"
 	"html/template"
@@ -50,6 +51,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/browserlang"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
@@ -92,6 +94,8 @@ func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, so
 	defer listener.Close()
 
 	mux := http.NewServeMux()
+	mux.Handle("/assets/", http.FileServer(http.FS(pageAssets)))
+	mux.HandleFunc("/i18n/", serveLanguageResource)
 	mux.HandleFunc("/status/gateway", newGatewayHandler(sources.Gateway))
 	mux.HandleFunc("/", newIndexHandler(logger, configPath, sources))
 	server := &http.Server{Addr: addr, Handler: mux}
@@ -158,6 +162,8 @@ func validateLoopback(addr string) error {
 // 格式错误的字段（解析不了的时长、非数字的 max_gateways）可以带着其余输
 // 入原样回显给操作者，而不会因为一个笔误丢掉整份表单。
 type formValues struct {
+	Locale               browserlang.Locale
+	Text                 pageText
 	Endpoints            string
 	Registry             string
 	NodeID               string
@@ -187,28 +193,46 @@ type formValues struct {
 func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) http.HandlerFunc {
 	render := func(w http.ResponseWriter, values formValues) {
 		values.Models = availableModels(sources.Runtimes)
-		values.Gateway = currentGateway(sources.Gateway)
+		values.Gateway = currentGateway(sources.Gateway, values.Locale)
 		renderForm(w, values)
 	}
 	return func(w http.ResponseWriter, r *http.Request) {
+		locale := requestLocale(r)
+		w.Header().Set("Content-Language", string(locale))
+		w.Header().Set("Vary", "Cookie, Accept-Language")
+		w.Header().Set("Cache-Control", "no-store")
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		switch r.Method {
+		case http.MethodHead:
+			return
 		case http.MethodGet:
 			values := formValuesFromFile(configPath)
+			values.Locale, values.Text = locale, newPageText(locale)
 			render(w, values)
 		case http.MethodPost:
 			values := formValuesFromRequest(r)
+			if selected, ok := browserlang.Parse(r.FormValue("locale")); ok {
+				locale = selected
+				http.SetCookie(w, browserlang.PreferenceCookie(localeCookie, locale, r.TLS != nil))
+			}
+			values.Locale, values.Text = locale, newPageText(locale)
+			w.Header().Set("Content-Language", string(locale))
+			if r.FormValue("action") == "locale" {
+				render(w, values)
+				return
+			}
 			cfg := values.toConfig()
 			if err := agentconfig.Save(configPath, cfg); err != nil {
-				logger.Error("config not saved", slog.Any("error", err))
-				values.Error = "保存失败 / save failed: " + err.Error()
+				logger.Error("config not saved", slog.String("error_kind", "save_failed"))
+				values.Error = values.Text.Format("a0083", map[string]any{"error": values.Text.Text("a0102")})
 				render(w, values)
 				return
 			}
 			logger.Info("config saved", slog.String("config_path", configPath))
-			values.Message = "已保存。重启不带 -config-ui 的 Agent 以生效。 / Saved. Restart the Agent without -config-ui for this to take effect."
+			values.Message = values.Text.Text("a0084")
 			render(w, values)
 		default:
-			w.Header().Set("Allow", http.MethodGet+", "+http.MethodPost)
+			w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead+", "+http.MethodPost)
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		}
 	}
@@ -414,402 +438,25 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 //
 // formTemplate 将同一表单按左侧菜单分组，不依赖外部资源。
 // 禁用 JavaScript 时，导航链接滚动到保持可见的对应分组。
-var formTemplate = template.Must(template.New("form").Parse(`<!DOCTYPE html>
-<html lang="zh-Hans">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>AIServeWeave Agent 设置 / Setup</title>
-<style>
-* { box-sizing: border-box; }
-body { margin: 0; background: #f5f7fb; color: #1e293b; font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-.layout { display: grid; grid-template-columns: 240px minmax(0, 1fr); min-height: 100vh; }
-.sidebar { position: sticky; top: 0; height: 100vh; padding: 32px 20px; background: #fff; border-right: 1px solid #e2e8f0; }
-.brand { margin: 0; font-size: 20px; font-weight: 700; letter-spacing: -.5px; }
-.subtitle, .hint { color: #64748b; font-size: 13px; }
-.subtitle { margin: 4px 0 28px; }
-nav { display: grid; gap: 8px; }
-nav a { display: flex; align-items: center; gap: 12px; padding: 12px; border-radius: 8px; color: #475569; text-decoration: none; }
-nav a:hover { background: #f1f5f9; }
-nav a[aria-current="page"] { background: #eff6ff; color: #1d4ed8; font-weight: 600; }
-.menu-index { font-size: 12px; opacity: .65; }
-.sidebar-note { margin-top: 32px; padding-top: 20px; border-top: 1px solid #e2e8f0; }
-main { width: 100%; max-width: 1040px; padding: 36px 48px; }
-h1 { margin: 0; font-size: 28px; }
-.intro { margin: 6px 0 28px; color: #64748b; }
-fieldset { min-width: 0; margin: 0 0 24px; padding: 24px; border: 1px solid #e2e8f0; border-radius: 12px; background: #fff; }
-[hidden] { display: none !important; }
-legend { padding: 0 8px; font-size: 18px; font-weight: 600; }
-.group-hint { margin: 0 0 20px; color: #64748b; }
-.fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; }
-.field { min-width: 0; }
-.wide { grid-column: 1 / -1; }
-label { display: block; margin-bottom: 6px; font-weight: 600; }
-label span { display: block; color: #64748b; font-size: 12px; font-weight: 400; }
-input[type=text], input[type=url], select, textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
-textarea { min-height: 100px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
-input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, button:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 2px; border-color: #3b82f6; }
-.checkbox { display: flex; align-items: center; gap: 10px; margin: 0; }
-input[type=checkbox] { width: 18px; height: 18px; accent-color: #2563eb; }
-.hint { margin: 6px 0 0; overflow-wrap: anywhere; }
-.message, .error { padding: 12px 16px; border-radius: 8px; overflow-wrap: anywhere; }
-.message { background: #ecfdf5; color: #047857; }
-.error { background: #fef2f2; color: #b91c1c; }
-.actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.actions .hint { margin: 0; }
-button { flex-shrink: 0; padding: 11px 22px; border: 0; border-radius: 8px; background: #2563eb; color: #fff; font: inherit; font-weight: 600; cursor: pointer; }
-button:hover { background: #1d4ed8; }
-.runtime-list { display: grid; gap: 16px; }
-.runtime-card { padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; }
-.runtime-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 16px; }
-.secondary { padding: 7px 12px; border: 1px solid #cbd5e1; background: #fff; color: #475569; font-size: 13px; }
-.secondary:hover { background: #f1f5f9; }
-.runtime-add { margin-top: 16px; }
-.model-catalogue { margin-top: 24px; border-top: 1px solid #e2e8f0; padding-top: 20px; }
-.model-catalogue h2 { margin: 0; font-size: 17px; }
-.model-ids { margin: 12px 0 0; padding-left: 24px; overflow-wrap: anywhere; }
-.model-ids code { font-size: 13px; }
-.gateway-status { margin-bottom: 24px; padding: 16px; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; }
-.connection-summary { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-.status-badge { display: inline-block; padding: 3px 10px; border-radius: 999px; font-weight: 600; font-size: 13px; }
-.status-online { background: #dcfce7; color: #166534; }
-.status-offline { background: #fee2e2; color: #991b1b; }
-.status-pending { background: #fef3c7; color: #92400e; }
-.status-neutral { background: #e2e8f0; color: #475569; }
-.connection-list { list-style: none; padding: 0; margin: 12px 0 0; }
-.connection-list li { display: flex; justify-content: space-between; gap: 12px; padding: 8px 0; }
-.connection-list code { overflow-wrap: anywhere; }
-@media (max-width: 760px) {
-  .layout { display: block; }
-  .sidebar { position: static; height: auto; padding: 20px; border-right: 0; border-bottom: 1px solid #e2e8f0; }
-  .subtitle { margin-bottom: 16px; }
-  nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  nav a { padding: 10px; }
-  .sidebar-note { display: none; }
-  main { padding: 24px 20px; }
-  fieldset { padding: 20px 16px; }
-  .fields { grid-template-columns: minmax(0, 1fr); }
-  .actions { align-items: flex-start; flex-direction: column; }
-  button { width: 100%; }
-}
-</style>
-</head>
-<body>
-<div class="layout">
-<aside class="sidebar">
-<p class="brand">AIServeWeave</p>
-<p class="subtitle">Agent · 本地配置</p>
-<nav aria-label="配置分组 / Configuration groups">
-<a href="#gateway"><span class="menu-index" aria-hidden="true">01</span>Gateway 连接</a>
-<a href="#identity"><span class="menu-index" aria-hidden="true">02</span>节点与认证</a>
-<a href="#runtimes"><span class="menu-index" aria-hidden="true">03</span>本地 AI</a>
-<a href="#observability"><span class="menu-index" aria-hidden="true">04</span>日志与指标</a>
-</nav>
-<p class="hint sidebar-note">配置保存到本机文件。<br>重启 Agent 后生效。</p>
-</aside>
-<main>
-<h1>Agent 配置</h1>
-<p class="intro">连接 Gateway，配置本地推理后端。</p>
-{{if .Message}}<p class="message" role="status">{{.Message}}</p>{{end}}
-{{if .Error}}<p class="error" role="alert">{{.Error}}</p>{{end}}
-<form method="post">
-<fieldset id="gateway">
-<legend>Gateway 连接 / Connection</legend>
-<p class="group-hint">设置 Agent 连接的远程服务。</p>
-<div class="runtime-heading"><strong>当前连接状态</strong><button type="button" class="secondary" id="gateway-refresh">刷新状态</button></div>
-{{template "gateway-status" .Gateway}}
-<p class="hint" id="gateway-refresh-status" role="status">每 5 秒自动刷新。显示正在运行的连接，配置修改需重启生效。</p>
-<div class="fields">
-<div class="field wide">
-<label for="endpoints">Gateway 地址 <span>Gateway endpoints</span></label>
-<input type="text" id="endpoints" name="endpoints" value="{{.Endpoints}}" placeholder="127.0.0.1:8443">
-<p class="hint">使用 host:port，多个地址用逗号分隔。</p>
-</div>
-<div class="field">
-<label for="registry">Registry 地址 <span>Registry endpoint</span></label>
-<input type="text" id="registry" name="registry" value="{{.Registry}}">
-</div>
-<div class="field">
-<label for="max_gateways">最大 Gateway 连接数 <span>Max simultaneous gateway replicas</span></label>
-<input type="text" id="max_gateways" name="max_gateways" value="{{.MaxGateways}}" inputmode="numeric">
-<p class="hint">填 0 或留空使用默认值。</p>
-</div>
-</div>
-</fieldset>
-<fieldset id="identity">
-<legend>节点与认证 / Identity</legend>
-<p class="group-hint">配置节点身份、标签和连接所需的证书文件。</p>
-<div class="fields">
-<div class="field wide">
-<label for="node_id">节点 ID <span>Node ID</span></label>
-<input type="text" id="node_id" name="node_id" value="{{.NodeID}}">
-<p class="hint">留空由 Registry 分配。</p>
-</div>
-<div class="field">
-<label for="cert_file">证书文件路径 <span>Cert file path</span></label>
-<input type="text" id="cert_file" name="cert_file" value="{{.CertFile}}">
-</div>
-<div class="field">
-<label for="key_file">私钥文件路径 <span>Key file path</span></label>
-<input type="text" id="key_file" name="key_file" value="{{.KeyFile}}">
-</div>
-<div class="field">
-<label for="ca_file">CA 证书路径 <span>CA file path</span></label>
-<input type="text" id="ca_file" name="ca_file" value="{{.CAFile}}">
-</div>
-<div class="field">
-<label for="bootstrap_token_file">一次性注册令牌文件路径 <span>Bootstrap token file path</span></label>
-<input type="text" id="bootstrap_token_file" name="bootstrap_token_file" value="{{.BootstrapTokenFile}}">
-</div>
-<div class="field wide">
-<label for="labels">节点标签 <span>Node labels</span></label>
-<textarea id="labels" name="labels" placeholder="region=local">{{.Labels}}</textarea>
-<p class="hint">每行一条 key=value。</p>
-</div>
-</div>
-</fieldset>
-<fieldset id="runtimes">
-<legend>本地 AI / Local AI</legend>
-<p class="group-hint">声明本机推理后端，并设置自动发现。</p>
-<div class="fields">
-<div class="field wide">
-<label for="runtime_declarations">本地运行时 <span>Local runtimes</span></label>
-<div id="runtime-editor" hidden>
-<div class="runtime-list" id="runtime-list"></div>
-<button type="button" class="secondary runtime-add" id="runtime-add">+ 添加本地 AI</button>
-<p class="hint">可以同时配置多个后端，每个运行时 ID 必须唯一。聊天 CLI 使用本机已登录的账户；Gemini CLI 生图使用本机 API Key。</p>
-</div>
-<textarea id="runtime_declarations" name="runtimes" placeholder="ollama-local,ollama,http://127.0.0.1:11434&#10;codex-local,codex,">{{.Runtimes}}</textarea>
-<p class="hint" id="runtime-format-hint">每行一条 id,kind,base_url[,api_key_env[,模型 模型]]；CLI 的地址留空，托管供应商的地址留空即用官方端点，api_key_env 填保存 Key 的环境变量名。</p>
-<template id="runtime-card-template">
-<section class="runtime-card">
-<div class="runtime-heading"><strong>本地 AI 连接</strong><button type="button" class="secondary runtime-remove">移除</button></div>
-<div class="fields">
-<div class="field"><label>运行时 ID <span>Runtime ID</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
-<div class="field"><label>后端类型 <span>Backend</span><select class="runtime-kind">
-<optgroup label="本地服务"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TensorRT-LLM</option><option value="tokenspeed">TokenSpeed</option><option value="comfyui">ComfyUI</option></optgroup>
-<optgroup label="本机 CLI"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="gemini-cli" data-group="cli">Gemini CLI（Nano Banana 生图）</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
-<optgroup label="托管供应商"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted" data-url-required="1">Anthropic Compatible</option><option value="openai_compatible" data-group="hosted" data-url-required="1">OpenAI Compatible / Custom</option></optgroup>
-</select></label></div>
-<div class="field wide"><label>服务地址 <span>Base URL</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden>CLI 无需服务地址。聊天 CLI 请先登录；Gemini CLI 生图需安装 Nano Banana 扩展并配置 NANOBANANA_API_KEY。</p></div>
-<div class="field runtime-hosted" hidden><label>Key 环境变量 <span>API key env</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
-<div class="field runtime-hosted" hidden><label>模型（可选，空格分隔）<span>Models</span><input type="text" class="runtime-models" placeholder="留空则向端点查询" pattern="[^,]*"></label></div>
-</div>
-</section>
-</template>
-</div>
-<div class="field wide">
-<label for="allowed_runtimes">允许调度的运行时 ID <span>Allowed runtime IDs</span></label>
-<input type="text" id="allowed_runtimes" name="allowed_runtimes" value="{{.AllowedRuntimes}}">
-<p class="hint">多个 ID 用逗号分隔，留空放行全部。</p>
-</div>
-<div class="field wide">
-<label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}>自动发现本机 Ollama / vLLM / TensorRT-LLM / TokenSpeed / SGLang</label>
-</div>
-<div class="field wide">
-<label for="auto_discover_interval">自动发现间隔 <span>Auto-discover interval</span></label>
-<input type="text" id="auto_discover_interval" name="auto_discover_interval" value="{{.AutoDiscoverInterval}}" placeholder="30s">
-<p class="hint">例如 30s、2m。</p>
-</div>
-</div>
-<section class="model-catalogue" aria-labelledby="models-title">
-<div class="runtime-heading"><h2 id="models-title">可用模型</h2><button type="button" class="secondary" id="models-refresh">刷新模型</button></div>
-<p class="hint">来自当前运行的 Agent，按运行时分组显示真实模型 ID。配置修改需重启生效；Gateway 是否可调度还取决于连接与运行时白名单。</p>
-<p class="hint" id="models-refresh-status" role="status"></p>
-<div id="available-models">
-{{if .Models.Live}}
-<p>共 {{.Models.Count}} 个可用模型（按 ID 去重）</p>
-<div class="runtime-list">
-{{range .Models.Runtimes}}
-<section class="runtime-card">
-<strong>{{.ID}} · {{.Kind}}</strong>
-<p class="hint">状态：{{.State}} · {{len .IDs}} 个可用模型</p>
-{{if .IDs}}<ul class="model-ids">{{range .IDs}}<li><code>{{.}}</code></li>{{end}}</ul>{{else}}<p class="hint">暂无可用模型。</p>{{end}}
-</section>
-{{else}}<p class="hint">尚未注册运行时，等待 Agent 完成发现后刷新。</p>{{end}}
-</div>
-{{else}}<p class="hint">当前仅运行配置页面。正常启动 Agent 后可查看发现的模型。</p>{{end}}
-</div>
-</section>
-</fieldset>
-<fieldset id="observability">
-<legend>日志与指标 / Observability</legend>
-<p class="group-hint">配置本机监控入口与日志输出。</p>
-<div class="fields">
-<div class="field wide">
-<label for="metrics_addr">指标监听地址 <span>Metrics listen address</span></label>
-<input type="text" id="metrics_addr" name="metrics_addr" value="{{.MetricsAddr}}" placeholder="127.0.0.1:9091">
-<p class="hint">留空关闭指标监听。</p>
-</div>
-<div class="field wide">
-<label for="log_level">日志级别 <span>Log level</span></label>
-<input type="text" id="log_level" name="log_level" value="{{.LogLevel}}">
-<p class="hint">debug、info、warn 或 error。</p>
-</div>
-</div>
-</fieldset>
-<div class="actions">
-<p class="hint">统一保存全部分组的配置，重启 Agent 后生效。</p>
-<button type="submit">保存配置 / Save</button>
-</div>
-</form>
-</main>
-</div>
-<script>
-let gatewayRefreshPending = false;
-async function refreshGateway() {
-  if (gatewayRefreshPending || document.hidden) return;
-  gatewayRefreshPending = true;
-  const button = document.getElementById('gateway-refresh');
-  const status = document.getElementById('gateway-refresh-status');
-  button.disabled = true;
-  try {
-    const response = await fetch('/status/gateway', { cache: 'no-store', signal: AbortSignal.timeout(4000) });
-    if (!response.ok) throw new Error('refresh failed');
-    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
-    const connections = page.getElementById('gateway-status');
-    if (!connections) throw new Error('missing status');
-    document.getElementById('gateway-status').replaceWith(document.importNode(connections, true));
-    status.textContent = '已更新 · 每 5 秒自动刷新。配置修改需重启生效。';
-  } catch {
-    const current = document.getElementById('gateway-status');
-    current.replaceChildren();
-    const message = document.createElement('p');
-    message.className = 'error';
-    message.textContent = '无法获取当前连接状态';
-    current.append(message);
-    status.textContent = 'Agent 可能已停止或正在重启，请稍后刷新。';
-  } finally {
-    button.disabled = false;
-    gatewayRefreshPending = false;
-  }
-}
-document.getElementById('gateway-refresh').addEventListener('click', refreshGateway);
-setInterval(refreshGateway, 5000);
-document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshGateway(); });
-document.getElementById('models-refresh').addEventListener('click', async event => {
-  const button = event.currentTarget;
-  const status = document.getElementById('models-refresh-status');
-  button.disabled = true;
-  status.textContent = '正在刷新模型…';
-  try {
-    const response = await fetch(window.location.pathname, { cache: 'no-store', signal: AbortSignal.timeout(10000) });
-    if (!response.ok) throw new Error('refresh failed');
-    const page = new DOMParser().parseFromString(await response.text(), 'text/html');
-    const models = page.getElementById('available-models');
-    if (!models) throw new Error('missing catalogue');
-    document.getElementById('available-models').replaceWith(document.importNode(models, true));
-    status.textContent = '模型列表已刷新。';
-  } catch {
-    status.textContent = '刷新失败，请稍后重试。';
-  } finally {
-    button.disabled = false;
-  }
-});
-const groups = Array.from(document.querySelectorAll('form fieldset'));
-const menu = Array.from(document.querySelectorAll('nav a'));
-function selectGroup() {
-  const active = groups.find(group => '#' + group.id === window.location.hash) || groups[0];
-  groups.forEach(group => { group.hidden = group !== active; });
-  menu.forEach(link => {
-    if (link.hash === '#' + active.id) link.setAttribute('aria-current', 'page');
-    else link.removeAttribute('aria-current');
-  });
-}
-window.addEventListener('hashchange', selectGroup);
-selectGroup();
-const declarations = document.getElementById('runtime_declarations');
-const runtimeList = document.getElementById('runtime-list');
-function syncRuntimes() {
-  const rows = Array.from(runtimeList.children);
-  const ids = rows.map(row => row.querySelector('.runtime-id').value.trim());
-  declarations.value = rows.map((row, index) => {
-    const id = row.querySelector('.runtime-id');
-    id.setCustomValidity(ids[index] && ids.indexOf(ids[index]) !== index ? '运行时 ID 不能重复' : '');
-    const fields = [ids[index], row.querySelector('.runtime-kind').value, row.querySelector('.runtime-url').value.trim()];
-    const keyEnv = row.querySelector('.runtime-key-env').value.trim();
-    const models = row.querySelector('.runtime-models').value.trim().split(/\s+/).filter(Boolean).join(' ');
-    if (keyEnv || models) fields.push(keyEnv, models);
-    return fields.join(',');
-  }).join('\n');
-}
-function addRuntime(id = '', kind = 'ollama', rest = '') {
-  const row = document.getElementById('runtime-card-template').content.firstElementChild.cloneNode(true);
-  const idInput = row.querySelector('.runtime-id');
-  const kindInput = row.querySelector('.runtime-kind');
-  const urlInput = row.querySelector('.runtime-url');
-  idInput.value = id;
-  if (!Array.from(kindInput.options).some(option => option.value === kind)) {
-    kindInput.add(new Option(kind + '（未知类型）', kind));
-  }
-  kindInput.value = kind;
-  // Hosted kinds append ",api_key_env,models"; for other kinds the rest of
-  // the line is the URL, as before. / 托管种类在后面追加 ",api_key_env,models"；
-  // 其他种类与以往一样，行的剩余部分就是 URL。
-  const option = kindInput.selectedOptions[0];
-  const fields = option && option.dataset.group === 'hosted' ? rest.split(',') : [rest];
-  urlInput.value = (fields[0] || '').trim();
-  row.querySelector('.runtime-key-env').value = (fields[1] || '').trim();
-  row.querySelector('.runtime-models').value = fields.slice(2).join(' ').trim();
-  function updateKind() {
-    const option = kindInput.selectedOptions[0];
-    const group = option ? option.dataset.group : undefined;
-    const cli = group === 'cli', hosted = group === 'hosted';
-    const urlRequired = !cli && (!hosted || (option && option.dataset.urlRequired === '1'));
-    urlInput.disabled = cli;
-    urlInput.required = urlRequired;
-    urlInput.placeholder = hosted ? (urlRequired ? 'https://llm.example.com/v1' : '留空使用官方端点') : 'http://127.0.0.1:11434';
-    urlInput.closest('label').hidden = cli;
-    row.querySelector('.runtime-auth').hidden = !cli;
-    row.querySelectorAll('.runtime-hosted').forEach(field => { field.hidden = !hosted; });
-    if (cli) urlInput.value = '';
-    if (!hosted) {
-      row.querySelector('.runtime-key-env').value = '';
-      row.querySelector('.runtime-models').value = '';
-    }
-    syncRuntimes();
-  }
-  row.addEventListener('input', syncRuntimes);
-  kindInput.addEventListener('change', updateKind);
-  row.querySelector('.runtime-remove').addEventListener('click', () => { row.remove(); syncRuntimes(); });
-  runtimeList.append(row);
-  updateKind();
-  return idInput;
-}
-const initialRuntimes = declarations.value.split('\n').filter(line => line.trim());
-initialRuntimes.forEach(line => {
-  const parts = line.split(',');
-  addRuntime((parts[0] || '').trim(), (parts[1] || '').trim(), parts.slice(2).join(','));
-});
-document.getElementById('runtime-add').addEventListener('click', () => { addRuntime().focus(); });
-declarations.hidden = true;
-document.getElementById('runtime-format-hint').hidden = true;
-document.getElementById('runtime-editor').hidden = false;
-document.querySelector('form').addEventListener('submit', syncRuntimes);
-document.querySelector('form').addEventListener('invalid', event => {
-  const group = event.target.closest('fieldset');
-  if (group && group.hidden) {
-    window.location.hash = group.id;
-    selectGroup();
-  }
-}, true);
-</script>
-</body>
-</html>
-{{define "gateway-status"}}
-<div id="gateway-status" class="gateway-status" role="status" aria-live="polite">
-<div class="connection-summary"><span class="status-badge status-{{.Tone}}">{{.Summary}}</span><span>已连接 {{.Connected}} / {{.Total}} 个 Gateway</span></div>
-{{if .Connections}}<ul class="connection-list">{{range .Connections}}<li><code>{{.Endpoint}}</code><span class="status-badge status-{{.Tone}}">{{.Label}}</span></li>{{end}}</ul>{{end}}
-</div>
-{{end}}
-`))
+//
+//go:embed templates/form.html
+var formSource string
+
+var formTemplate = template.Must(template.New("form").Funcs(template.FuncMap{"dict": templateValues, "json": jsonText, "stateText": runtimeStateText}).Parse(formSource))
 
 // renderForm executes formTemplate. A template execution error only ever
 // indicates a bug in formTemplate itself (every field is a plain string or
 // bool), so it is logged rather than surfaced through the response, which
 // has likely already been partially written by the time template.Execute
 // can fail.
+//
+// renderForm 执行请求作用域的表单模板，并设置不缓存的 HTML 响应头。
+// 模板执行失败只可能来自实现缺陷，不向响应写入内部错误。
 func renderForm(w http.ResponseWriter, v formValues) {
+	if v.Locale == "" {
+		v.Locale = browserlang.Default
+		v.Text = newPageText(v.Locale)
+	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-store")
 	_ = formTemplate.Execute(w, v)

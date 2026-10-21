@@ -1,0 +1,20 @@
+{
+  "Comfy_Execution_PreviewMethod": {
+    "options": {
+      "default": "기본값",
+      "none": "없음",
+      "auto": "자동"
+    }
+  },
+  "Comfy_Load3D_CameraType": {
+    "options": {
+      "perspective": "원근",
+      "orthographic": "직교"
+    }
+  },
+  "Comfy_NodeSearchBoxImpl": {
+    "options": {
+      "v1 (legacy)": "v1 (이전 버전)"
+    }
+  }
+}

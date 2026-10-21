@@ -1,3 +1,6 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
+import type { MessageKey } from "../i18n/messages.ts";
 /**
  * ApiErrorKind is the classification every Console request failure collapses
  * into. The set is closed on purpose: the UI decides what to show from the
@@ -23,28 +26,28 @@ export type ApiErrorKind =
   | "signup_disabled";
 
 /**
- * MESSAGES is the fixed copy shown for each kind. Upstream error text is never
+ * MESSAGE_KEYS identifies the fixed copy shown for each kind. Upstream error text is never
  * rendered: it is written for operators, may name internals, and the repository
  * treats leaking it as a defect rather than a wording problem.
  *
- * MESSAGES 是每个 kind 对应的固定文案。上游的错误文本一律不渲染：那是写给运维看的，
+ * MESSAGE_KEYS 标识每个 kind 对应的固定文案。上游的错误文本一律不渲染：那是写给运维看的，
  * 可能点出内部实现，而本仓库把泄漏它当作缺陷而非措辞问题。
  */
-const MESSAGES: Record<ApiErrorKind, string> = {
-  invalid_credentials: "邮箱或密码不正确，请检查后重试。",
-  unauthorized: "登录状态已失效，请重新登录。",
-  forbidden: "当前角色没有执行该操作的权限。",
-  not_found: "目标不存在，或不属于当前租户。",
-  conflict: "已存在同名或同一标识的记录。",
-  invalid: "提交的内容不符合要求，请检查后重试。",
-  server: "服务端处理失败，请稍后重试。",
-  network: "无法连接服务端，请检查网络后重试。",
-  timeout: "请求超时，请稍后重试。",
-  canceled: "请求已取消。",
-  contract: "服务端返回的数据格式无法识别。",
-  email_taken: "该邮箱已注册，请直接登录。",
-  rate_limited: "注册请求过于频繁，请稍后再试。",
-  signup_disabled: "当前部署未开放自助注册，请联系部署管理员。",
+const MESSAGE_KEYS: Record<ApiErrorKind, MessageKey> = {
+  invalid_credentials: "common.incorrectEmailOrPasswordCheckThemAndTry",
+  unauthorized: "common.yourSignInSessionHasExpiredSignIn",
+  forbidden: "common.yourCurrentRoleDoesNotHavePermissionTo",
+  not_found: "common.theTargetDoesNotExistOrDoesNot",
+  conflict: "common.aRecordWithThisNameOrIdentifierAlready",
+  invalid: "tenant.theSubmittedDataDoesNotMeetTheRequirements",
+  server: "common.theServerCouldNotProcessTheRequestPlease",
+  network: "tenant.unableToConnectToTheServerCheckYour",
+  timeout: "common.theRequestTimedOutPleaseTryAgainLater",
+  canceled: "common.theRequestWasCanceled",
+  contract: "common.theServerReturnedAnUnrecognizedDataFormat",
+  email_taken: "common.thisEmailAddressIsAlreadyRegisteredSignIn",
+  rate_limited: "common.tooManyRegistrationRequestsPleaseTryAgainLater",
+  signup_disabled: "common.selfRegistrationIsDisabledForThisDeploymentContact",
 };
 
 /**
@@ -65,7 +68,7 @@ export class ApiError extends Error {
   readonly status: number;
 
   constructor(kind: ApiErrorKind, status = 0) {
-    super(MESSAGES[kind]);
+    super(coreTranslator()(MESSAGE_KEYS[kind]));
     this.name = "ApiError";
     this.kind = kind;
     this.status = status;
@@ -116,6 +119,6 @@ export function isRetryable(kind: ApiErrorKind): boolean {
  * describe 返回任意被抛出的值所对应的展示文案。非 ApiError 的值得到的是通用的服务端
  * 文案，而不是它自己的文本：调用栈或打包器的错误字符串不该出现在屏幕上。
  */
-export function describe(error: unknown): string {
-  return error instanceof ApiError ? error.message : MESSAGES.server;
+export function describe(error: unknown, locale: Locale = DEFAULT_LOCALE): string {
+  return coreTranslator(locale)(MESSAGE_KEYS[error instanceof ApiError ? error.kind : "server"]);
 }

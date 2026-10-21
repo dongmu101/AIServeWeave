@@ -1,5 +1,8 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+
+
 import type * as React from "react";
 import type {
   ReactTable,
@@ -41,7 +44,7 @@ export function DataTable<
   TSelected = TableState<TFeatures>,
 >({
   table,
-  emptyMessage = "没有记录",
+  emptyMessage,
   caption,
 }: {
   table: ReactTable<TFeatures, TData, TSelected>;
@@ -53,6 +56,7 @@ export function DataTable<
   emptyMessage?: React.ReactNode;
   caption?: string;
 }) {
+  const { t } = useI18n();
   const rows = table.getRowModel().rows;
   const columnCount = table.getAllLeafColumns().length;
 
@@ -80,7 +84,7 @@ export function DataTable<
                 colSpan={columnCount}
                 className="py-8 text-center text-muted-foreground"
               >
-                {emptyMessage}
+                {emptyMessage ?? t("common.noRecords")}
               </TableCell>
             </TableRow>
           ) : (

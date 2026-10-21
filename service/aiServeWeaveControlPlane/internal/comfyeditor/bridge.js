@@ -14,10 +14,20 @@
 // 字符串而不传对象是刻意的：宿主对象属于另一个 JavaScript realm，而 ComfyUI 用
 // `instanceof Array` 判断「这个输入是不是连线」，宿主的数组在这里会被判为否——按引用
 // 传进来的图会悄无声息地丢掉全部连线。在本 realm 内解析就避开了这个问题。
-import { app } from "../../scripts/app.js";
+import { app, setEditorLocale } from "../../scripts/app.js";
 import { api } from "../../scripts/api.js";
 
 const MAX_DOCUMENT_CHARS = 8 * 1024 * 1024;
+const LOCALES = new Set(["zh", "zh-TW", "en", "ja", "ko", "de", "fr", "es"]);
+
+// Graph operations and language activation share one serial operation queue.
+// 图操作与语言激活共用同一条串行操作队列。
+let operations = Promise.resolve();
+function enqueue(operation) {
+  const result = operations.then(operation);
+  operations = result.catch(() => {});
+  return result;
+}
 
 function parse(text) {
   if (typeof text !== "string" || text.length > MAX_DOCUMENT_CHARS) throw new Error("document must be a bounded JSON string");
@@ -31,13 +41,22 @@ app.registerExtension({
   async setup() {
     const props = (window.$wujie && window.$wujie.props) || {};
     const bridge = Object.freeze({
+      /** setLocale waits for the real language bundles without reloading the graph.
+       * setLocale 等待实际语言包就绪，不重新加载图。 */
+      async setLocale(locale) {
+        if (typeof locale !== "string" || !LOCALES.has(locale)) throw new Error("unsupported editor locale");
+        return enqueue(async () => {
+          await app.ui.settings.setSettingValueAsync("Comfy.Locale", locale);
+          await setEditorLocale(locale);
+        });
+      },
       /** Load a UI-format workflow JSON string. / 加载 UI 格式工作流 JSON 字符串。 */
       async loadWorkflow(text) {
-        await app.loadGraphData(parse(text), true, true, null);
+        return enqueue(() => app.loadGraphData(parse(text), true, true, null));
       },
       /** Load an API-format graph JSON string (templates published before the editor existed). / 加载 API Format 图 JSON 字符串。 */
       async loadApi(text) {
-        await app.loadApiJson(parse(text), "template.json");
+        return enqueue(() => app.loadApiJson(parse(text), "template.json"));
       },
       /**
        * Export {workflow, output, missing} as one JSON string. missing lists
@@ -48,6 +67,7 @@ app.registerExtension({
        * 节点类型：编辑器叫不出它们的输入名，因此 output 里它们的取值不可信。
        */
       async exportGraph() {
+        return enqueue(async () => {
         const p = await app.graphToPrompt();
         // The catalogue is fixed for the life of this binary; fetch it once.
         // 目录在本二进制的生命周期内固定不变，只取一次。
@@ -60,9 +80,10 @@ app.registerExtension({
           .filter(([, n]) => typeof n.class_type !== "string" || !Object.hasOwn(defs, n.class_type))
           .map(([id, n]) => String(n.class_type || types.get(id) || (n._meta && n._meta.title) || id)))].sort();
         return JSON.stringify({ workflow: p.workflow, output: p.output, missing });
+        });
       },
       async toggleAppMode() {
-        await app.extensionManager.command.execute("Comfy.ToggleLinear");
+        return enqueue(() => app.extensionManager.command.execute("Comfy.ToggleLinear"));
       },
     });
     let pending = 0;
@@ -71,6 +92,12 @@ app.registerExtension({
       clearTimeout(pending);
       pending = setTimeout(() => props.onChange(), 250);
     });
+    try {
+      await bridge.setLocale(LOCALES.has(props.locale) ? props.locale : "zh");
+    } catch {
+      if (typeof props.onError === "function") props.onError();
+      return;
+    }
     if (typeof props.onReady === "function") props.onReady(bridge);
   },
 });

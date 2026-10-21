@@ -1,5 +1,10 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
+import type { Locale } from "@/lib/i18n/locale";
+
 import * as React from "react";
 import ReactECharts from "echarts-for-react";
 
@@ -38,15 +43,16 @@ function seriesFor(history: MetricsHistory, metric: string): MetricsHistorySerie
 function lineOption(
   title: string,
   unit: string,
-  lines: { name: string; points: { bucketAt: string; value: number }[] }[]
+  lines: { name: string; points: { bucketAt: string; value: number }[] }[],
+  locale: Locale,
 ) {
   return {
     title: { text: title, textStyle: { fontSize: 13 } },
-    tooltip: { trigger: "axis" },
+    tooltip: { trigger: "axis", valueFormatter: (value: unknown) => new Intl.NumberFormat(locale).format(Number(value)) },
     legend: { top: 24, textStyle: { fontSize: 11 } },
     grid: { top: 64, left: 48, right: 24, bottom: 48 },
-    xAxis: { type: "time" },
-    yAxis: { type: "value", name: unit },
+    xAxis: { type: "time", axisLabel: { formatter: (value: number) => new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(value) }, axisPointer: { label: { formatter: ({ value }: { value: number }) => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) } } },
+    yAxis: { type: "value", name: unit, axisLabel: { formatter: (value: number) => new Intl.NumberFormat(locale).format(value) } },
     dataZoom: [{ type: "inside" }, { type: "slider", height: 16 }],
     series: lines.map((l) => ({
       name: l.name,
@@ -71,6 +77,7 @@ function ChartPanel({ title, option }: { title: string; option: ReturnType<typeo
 }
 
 export function MetricsView() {
+  const { locale, t } = useI18n();
   const { since, until } = React.useMemo(() => windowBounds(), []);
   const resource = useResource<MetricsHistory>({
     method: "GET",
@@ -84,14 +91,14 @@ export function MetricsView() {
     return <ErrorState message={resource.error} onRetry={resource.reload} />;
   }
   if (resource.loading || !resource.data) {
-    return <LoadingState label="正在加载指标历史" rows={5} />;
+    return <LoadingState label={t("operator.loadingMetricHistory")} rows={5} />;
   }
   const history = resource.data;
   if (history.series.length === 0) {
     return (
       <EmptyState
-        title="暂无指标历史"
-        description="采集器尚未产生任何数据点，或所选时间窗口内没有流量。"
+        title={t("operator.noMetricHistoryYet")}
+        description={t("operator.theCollectorHasNotProducedAnyDataPoints")}
       />
     );
   }
@@ -107,7 +114,7 @@ export function MetricsView() {
   }));
   const successSeries = requests.filter((s) => s.labels.status === "200");
   const errorSeries = requests.filter((s) => s.labels.status && s.labels.status !== "200");
-  const successRate = successSeries.map((s) => ({ name: "成功", points: deltaByBucket(s) }));
+  const successRate = successSeries.map((s) => ({ name: t("tenant.succeeded"), points: deltaByBucket(s) }));
   const tokenLines = tokens.map((s) => ({ name: s.labels.direction ?? "?", points: deltaByBucket(s) }));
   const capacityLines = capacity.map((s) => ({
     name: `${s.labels.class ?? "?"} ${s.labels.state ?? "?"}`,
@@ -127,25 +134,24 @@ export function MetricsView() {
   return (
     <div className="flex flex-col gap-6">
       <div>
-        <h1 className="font-heading text-lg font-semibold">指标</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="operator.metrics" /></h1>
         <p className="text-sm text-muted-foreground">
-          机群级别的历史曲线：请求量、成功率、延迟、Token 用量与容量，窗口为过去 24 小时。
-          这是平台运维视角，不按租户拆分——Gateway 指标按设计不带租户维度。
-        </p>
+          <Message id="operator.fleetWideHistoricalChartsForRequestsSuccessRate" /></p>
       </div>
       <div className="grid gap-6 md:grid-cols-2">
-        <ChartPanel title="请求量(按端点/状态)" option={lineOption("请求量(按端点/状态)", "req/窗口", byEndpointStatus)} />
-        <ChartPanel title="成功请求数" option={lineOption("成功请求数", "req/窗口", successRate)} />
-        <ChartPanel title="延迟 p95 近似值" option={lineOption("延迟 p95 近似值", "秒", p95Lines)} />
-        <ChartPanel title="Token 用量" option={lineOption("Token 用量", "token/窗口", tokenLines)} />
-        <ChartPanel title="容量(槽位数)" option={lineOption("容量(槽位数)", "槽位", capacityLines)} />
+        <ChartPanel title={t("operator.requestsByEndpointStatus")} option={lineOption(t("operator.requestsByEndpointStatus"), t("operator.reqWindow") , byEndpointStatus, locale)} />
+        <ChartPanel title={t("operator.successfulRequests")} option={lineOption(t("operator.successfulRequests"), t("operator.reqWindow") , successRate, locale)} />
+        <ChartPanel title={t("operator.approximateP95Latency")} option={lineOption(t("operator.approximateP95Latency"), t("operator.seconds") , p95Lines, locale)} />
+        <ChartPanel title={t("operator.tokenUsage")} option={lineOption(t("operator.tokenUsage"), t("operator.tokensWindow") , tokenLines, locale)} />
+        <ChartPanel title={t("operator.capacitySlots")} option={lineOption(t("operator.capacitySlots"), t("operator.slots") , capacityLines, locale)} />
         {errorSeries.length === 0 ? null : (
           <ChartPanel
-            title="非 200 请求"
+            title={t("operator.non200Requests")}
             option={lineOption(
-              "非 200 请求",
-              "req/窗口",
-              errorSeries.map((s) => ({ name: s.labels.status ?? "?", points: deltaByBucket(s) }))
+              t("operator.non200Requests"),
+              t("operator.reqWindow"),
+              errorSeries.map((s) => ({ name: s.labels.status ?? "?", points: deltaByBucket(s) })),
+              locale,
             )}
           />
         )}

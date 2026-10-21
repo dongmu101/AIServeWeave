@@ -1,5 +1,8 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 import * as React from "react";
 import Link from "next/link";
 
@@ -67,6 +70,7 @@ const ERROR_EXAMPLE = `{
  * 只需讲那个端点本身。
  */
 export function DocsOverview() {
+  const {t } = useI18n();
   const { list, values } = useDocs();
   const groups = React.useMemo(() => groupApiDocs(list.data ?? []), [list.data]);
   const tabs = QUICK_START.map((tab) => ({ ...tab, code: fillPlaceholders(tab.code, values) }));
@@ -74,70 +78,50 @@ export function DocsOverview() {
   return (
     <div className="flex max-w-5xl flex-col gap-8">
       <header className="flex flex-col gap-2">
-        <h1 className="font-heading text-2xl font-semibold tracking-tight">API 文档</h1>
+        <h1 className="font-heading text-2xl font-semibold tracking-tight"><Message id="tenant.apiDocumentation" /></h1>
         <p className="text-muted-foreground">
-          网关兼容 OpenAI、Anthropic 与 Ollama 的接口格式，现有 SDK 只需替换基地址与 API Key 即可接入。
-          下列文档覆盖当前已接入的全部能力，新增模型或能力时会同步更新。
-        </p>
+          <Message id="tenant.theGatewaySupportsOpenaiAnthropicAndOllamaApi" /></p>
       </header>
 
       <section className="grid gap-4 md:grid-cols-2">
         <div className="flex flex-col gap-2 rounded-xl border p-4">
-          <h2 className="font-heading font-semibold">基地址</h2>
+          <h2 className="font-heading font-semibold"><Message id="tenant.baseUrl" /></h2>
           <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-sm">{values.baseUrl}</code>
-            <CopyButton text={values.baseUrl} label="复制基地址" />
+            <CopyButton text={values.baseUrl} label={t("tenant.copyBaseUrl")} />
           </div>
-          <p className="text-sm text-muted-foreground">
-            OpenAI SDK 的 <code className="font-mono">base_url</code> 设为{" "}
-            <code className="font-mono">{values.baseUrl}/v1</code>；Ollama 客户端直接使用基地址。
-          </p>
+          <p className="text-sm text-muted-foreground"><Message id="tenant.setTheOpenaiSdkSToOllamaClients" values={{ code: <code className="font-mono">base_url</code>, code2: <code className="font-mono">{values.baseUrl}/v1</code> }} /></p>
         </div>
         <div className="flex flex-col gap-2 rounded-xl border p-4">
-          <h2 className="font-heading font-semibold">认证</h2>
+          <h2 className="font-heading font-semibold"><Message id="tenant.authentication" /></h2>
           <code className="rounded-lg bg-muted/40 px-3 py-2 font-mono text-sm">Authorization: Bearer YOUR_API_KEY</code>
-          <p className="text-sm text-muted-foreground">
-            在{" "}
-            <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
-              API Key 管理页面
-            </Link>{" "}
-            创建密钥。<code className="font-mono">/v1/messages</code> 与 <code className="font-mono">/v1/models</code>{" "}
-            另外接受 <code className="font-mono">x-api-key</code> 请求头。
-          </p>
+          <p className="text-sm text-muted-foreground"><Message id="tenant.createAKeyOnAndAlsoAcceptThe" values={{ link: <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
+              <Message id="tenant.apiKeyManagementPage" /></Link>, code: <code className="font-mono">/v1/messages</code>, code2: <code className="font-mono">/v1/models</code>, code3: <code className="font-mono">x-api-key</code> }} /></p>
         </div>
       </section>
 
       <section className="flex flex-col gap-3">
-        <h2 className="font-heading text-lg font-semibold">快速开始</h2>
+        <h2 className="font-heading text-lg font-semibold"><Message id="tenant.quickStart" /></h2>
         <ExampleModelField />
-        <ExamplePanel title="快速开始示例" tabs={tabs} />
+        <ExamplePanel title={t("tenant.quickStartExample")} tabs={tabs} />
       </section>
 
       <section className="grid gap-4 md:grid-cols-2">
         <div className="flex flex-col gap-2">
-          <h2 className="font-heading text-lg font-semibold">错误格式</h2>
-          <p className="text-sm text-muted-foreground">
-            除 Anthropic 与 Ollama 兼容端点使用各自协议的错误格式外，错误响应统一为 OpenAI 格式。
-            每个响应都带 <code className="font-mono">X-Request-Id</code> 头，排查问题时请一并提供。
-          </p>
+          <h2 className="font-heading text-lg font-semibold"><Message id="tenant.errorFormat" /></h2>
+          <p className="text-sm text-muted-foreground"><Message id="tenant.errorResponsesUseTheOpenaiFormatExceptFor_819019" values={{ code: <code className="font-mono">X-Request-Id</code> }} /></p>
           <ul className="ml-5 list-disc space-y-1 text-sm text-muted-foreground">
-            <li>
-              <code className="font-mono">401</code> API Key 缺失或无效
-            </li>
-            <li>
-              <code className="font-mono">429</code> 超出租户配额，按 <code className="font-mono">Retry-After</code> 头等待后重试
-            </li>
-            <li>
-              <code className="font-mono">503</code> 暂时无法校验 Key 或后端不可用，可稍后重试
-            </li>
+            <li><Message id="tenant.apiKeyIsMissingOrInvalid_37b2d2" values={{ code: <code className="font-mono">401</code> }} /></li>
+            <li><Message id="tenant.tenantQuotaExceededWaitAsSpecifiedByThe_d633ee" values={{ code: <code className="font-mono">429</code>, code2: <code className="font-mono">Retry-After</code> }} /></li>
+            <li><Message id="tenant.keyValidationIsTemporarilyUnavailableOrTheBackend_404b62" values={{ code: <code className="font-mono">503</code> }} /></li>
           </ul>
         </div>
-        <ExamplePanel title="错误响应示例" tabs={[{ key: "429", label: "429", code: ERROR_EXAMPLE, tone: "error" }]} />
+        <ExamplePanel title={t("tenant.exampleErrorResponse")} tabs={[{ key: "429", label: "429", code: ERROR_EXAMPLE, tone: "error" }]} />
       </section>
 
       <section className="flex flex-col gap-4">
-        <h2 className="font-heading text-lg font-semibold">全部接口</h2>
-        {list.data && groups.length === 0 ? <EmptyState title="暂无已发布的文档" /> : null}
+        <h2 className="font-heading text-lg font-semibold"><Message id="tenant.allApis" /></h2>
+        {list.data && groups.length === 0 ? <EmptyState title={t("tenant.noDocumentationHasBeenPublishedYet")} /> : null}
         <div className="grid gap-4 md:grid-cols-2">
           {groups.map((group) => (
             <div key={group.category} className="flex flex-col gap-1 rounded-xl border p-4">

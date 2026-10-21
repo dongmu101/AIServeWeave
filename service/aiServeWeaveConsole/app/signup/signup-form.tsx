@@ -1,4 +1,9 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -7,12 +12,11 @@ import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
 import { signUp } from "@/lib/console/api-client";
-import { describe } from "@/lib/console/errors";
 import { DEFAULT_LANDING } from "@/lib/console/internal-path";
 import {
   MAX_TENANT_NAME_LENGTH,
   MIN_SIGNUP_PASSWORD_LENGTH,
-  localSignupProblem,
+  signupProblem,
 } from "@/lib/console/signup";
 
 /**
@@ -32,21 +36,21 @@ export function SignupForm() {
   const [password, setPassword] = React.useState("");
   const [confirmPassword, setConfirmPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) {
       return;
     }
-    const problem = localSignupProblem({
+    const problem = signupProblem({
       tenantName,
       email,
       password,
       confirmPassword,
     });
     if (problem) {
-      setError(problem);
+      setError(<ErrorMessage error={problem} />);
       return;
     }
     setPending(true);
@@ -64,7 +68,7 @@ export function SignupForm() {
     } catch (failure) {
       setPassword("");
       setConfirmPassword("");
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
   }
@@ -73,8 +77,7 @@ export function SignupForm() {
     <form onSubmit={submit} className="grid gap-4" noValidate>
       <div className="grid gap-2">
         <label htmlFor="tenant-name" className="text-sm font-medium">
-          租户名称
-        </label>
+          <Message id="auth.tenantName" /></label>
         <Input
           id="tenant-name"
           name="tenant-name"
@@ -88,8 +91,7 @@ export function SignupForm() {
       </div>
       <div className="grid gap-2">
         <label htmlFor="email" className="text-sm font-medium">
-          邮箱
-        </label>
+          <Message id="tenant.email" /></label>
         <Input
           id="email"
           name="email"
@@ -103,8 +105,7 @@ export function SignupForm() {
       </div>
       <div className="grid gap-2">
         <label htmlFor="password" className="text-sm font-medium">
-          密码
-        </label>
+          <Message id="auth.password" /></label>
         <Input
           id="password"
           name="password"
@@ -115,14 +116,11 @@ export function SignupForm() {
           onChange={(event) => setPassword(event.target.value)}
           disabled={pending}
         />
-        <p id="password-hint" className="text-xs text-muted-foreground">
-          至少 {MIN_SIGNUP_PASSWORD_LENGTH} 个字符。
-        </p>
+        <p id="password-hint" className="text-xs text-muted-foreground"><Message id="auth.atLeastCharacters" values={{ MIN_SIGNUP_PASSWORD_LENGTH: MIN_SIGNUP_PASSWORD_LENGTH }} /></p>
       </div>
       <div className="grid gap-2">
         <label htmlFor="confirm-password" className="text-sm font-medium">
-          确认密码
-        </label>
+          <Message id="auth.confirmPassword" /></label>
         <Input
           id="confirm-password"
           name="confirm-password"
@@ -135,8 +133,7 @@ export function SignupForm() {
       </div>
       <FormError message={error} />
       <SubmitButton pending={pending} size="lg">
-        注册
-      </SubmitButton>
+        <Message id="auth.register" /></SubmitButton>
     </form>
   );
 }

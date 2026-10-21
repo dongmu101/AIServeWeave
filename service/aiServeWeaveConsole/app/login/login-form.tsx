@@ -1,4 +1,9 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import Link from "next/link";
@@ -8,7 +13,6 @@ import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
 import { signIn } from "@/lib/console/api-client";
-import { describe } from "@/lib/console/errors";
 
 /**
  * LoginForm posts credentials to the Console's own session route, which is the
@@ -32,7 +36,7 @@ export function LoginForm({
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -53,7 +57,7 @@ export function LoginForm({
       router.refresh();
     } catch (failure) {
       setPassword("");
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
   }
@@ -62,8 +66,7 @@ export function LoginForm({
     <form onSubmit={submit} className="grid gap-4" noValidate>
       <div className="grid gap-2">
         <label htmlFor="email" className="text-sm font-medium">
-          邮箱
-        </label>
+          <Message id="tenant.email" /></label>
         <Input
           id="email"
           name="email"
@@ -77,8 +80,7 @@ export function LoginForm({
       </div>
       <div className="grid gap-2">
         <label htmlFor="password" className="text-sm font-medium">
-          密码
-        </label>
+          <Message id="auth.password" /></label>
         <Input
           id="password"
           name="password"
@@ -91,20 +93,13 @@ export function LoginForm({
       </div>
       <FormError message={error} />
       <SubmitButton pending={pending} size="lg">
-        登录
-      </SubmitButton>
+        <Message id="auth.signIn" /></SubmitButton>
       {signupEnabled ? (
-        <p className="text-xs text-muted-foreground">
-          还没有账号？
-          <Link href="/signup" className="underline underline-offset-4">
-            注册租户
-          </Link>
-          。忘记密码请联系部署管理员。
-        </p>
+        <p className="text-xs text-muted-foreground"><Message id="auth.donTHaveAnAccountIfYouForgot" values={{ link: <Link href="/signup" className="underline underline-offset-4">
+            <Message id="auth.registerTenant" /></Link> }} /></p>
       ) : (
         <p className="text-xs text-muted-foreground">
-          忘记密码或尚未获得账号，请联系部署管理员。
-        </p>
+          <Message id="auth.ifYouForgotYourPasswordOrDoNot" /></p>
       )}
     </form>
   );

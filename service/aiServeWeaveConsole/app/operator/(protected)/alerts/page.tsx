@@ -1,3 +1,4 @@
+import { Message } from "@/components/i18n/message";
 import { Suspense } from "react";
 import { AlertsView } from "@/app/operator/alerts/alerts-view";
 import { LoadingState } from "@/components/console/states";
@@ -9,7 +10,7 @@ import { LoadingState } from "@/components/console/states";
  * 对应页面。 */
 export default function AlertsPage() {
   return (
-    <Suspense fallback={<LoadingState label="正在加载告警" />}>
+    <Suspense fallback={<LoadingState label={<Message id="operator.loadingAlerts" />} />}>
       <AlertsView />
     </Suspense>
   );

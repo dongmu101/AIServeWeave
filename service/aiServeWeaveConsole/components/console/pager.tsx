@@ -1,5 +1,9 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
+
 import { Button } from "@/components/ui/button";
 import type { PagedResource } from "@/components/console/use-paged-resource";
 
@@ -24,13 +28,10 @@ export function Pager<T>({
   resource: PagedResource<T>;
   loadedCount: number;
 }) {
+  const { t } = useI18n();
   return (
     <div className="flex flex-wrap items-center justify-between gap-3">
-      <p className="text-xs text-muted-foreground">
-        第 {resource.pageNumber} 页 · 本页 {loadedCount} 条
-        {resource.hasNext ? "" : " · 已到末页"}
-        {resource.atHistoryLimit ? " · 已达可回退的页数上限" : ""}
-      </p>
+      <p className="text-xs text-muted-foreground"><Message id="common.pageRecordsOnThisPage" values={{ pageNumber: resource.pageNumber, loadedCount: loadedCount, value: resource.hasNext ? "" : t("common.lastPage"), value2: resource.atHistoryLimit ? t("common.backNavigationPageLimitReached") : "" }} /></p>
       <div className="flex items-center gap-2">
         <Button
           variant="outline"
@@ -38,16 +39,14 @@ export function Pager<T>({
           onClick={resource.previous}
           disabled={!resource.hasPrevious || resource.loading}
         >
-          上一页
-        </Button>
+          <Message id="tenant.previousPage" /></Button>
         <Button
           variant="outline"
           size="sm"
           onClick={resource.next}
           disabled={!resource.hasNext || resource.loading}
         >
-          下一页
-        </Button>
+          <Message id="tenant.nextPage" /></Button>
       </div>
     </div>
   );

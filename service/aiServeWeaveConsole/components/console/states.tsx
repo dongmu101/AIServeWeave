@@ -1,4 +1,7 @@
 "use client";
+import { useI18n } from "@/components/i18n/provider";
+
+import { Message } from "@/components/i18n/message";
 
 import type * as React from "react";
 
@@ -31,12 +34,13 @@ import { Skeleton } from "@/components/ui/skeleton";
  * LoadingState 把一块区域标记为加载中，而不假装知道最终会到达多少内容。
  */
 export function LoadingState({
-  label = "正在加载",
+  label,
   rows = 3,
 }: {
-  label?: string;
+  label?: React.ReactNode;
   rows?: number;
 }) {
+  const { t } = useI18n();
   return (
     <div
       className="flex flex-col gap-2 py-2"
@@ -44,7 +48,7 @@ export function LoadingState({
       aria-live="polite"
       aria-busy="true"
     >
-      <span className="sr-only">{label}</span>
+      <span className="sr-only">{label ?? t("common.loading")}</span>
       {Array.from({ length: rows }, (_, index) => (
         <Skeleton key={index} className="h-8 w-full" />
       ))}
@@ -62,8 +66,8 @@ export function EmptyState({
   description,
   action,
 }: {
-  title: string;
-  description?: string;
+  title: React.ReactNode;
+  description?: React.ReactNode;
   action?: React.ReactNode;
 }) {
   return (
@@ -86,7 +90,7 @@ export function ErrorState({
   message,
   onRetry,
 }: {
-  message: string;
+  message: React.ReactNode;
   onRetry?: () => void;
 }) {
   return (
@@ -97,8 +101,7 @@ export function ErrorState({
       <p className="text-sm text-destructive">{message}</p>
       {onRetry ? (
         <Button variant="outline" size="sm" onClick={onRetry}>
-          重试
-        </Button>
+          <Message id="common.retry" /></Button>
       ) : null}
     </div>
   );
@@ -111,7 +114,7 @@ export function ErrorState({
  * FormError 说明一次提交为何被拒绝。它会被朗读而不只是被着色，好让原因也能传达给
  * 并未在看着它的人。
  */
-export function FormError({ message }: { message: string | null }) {
+export function FormError({ message }: { message: React.ReactNode }) {
   if (!message) {
     return null;
   }

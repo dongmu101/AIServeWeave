@@ -1,4 +1,10 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { toast } from "sonner";
@@ -17,8 +23,8 @@ import {
   type TenantLimits,
   type TenantProfile,
 } from "@/lib/console/contract";
-import { describe } from "@/lib/console/errors";
-import { formatDateTime, formatLimit, limitProblem, QUOTA_DIMENSIONS } from "@/lib/console/format";
+
+import { formatDateTime, formatLimit, limitProblem, quotaDimensions } from "@/lib/console/format";
 import { canEditTenantLimits } from "@/lib/console/permissions";
 
 /**
@@ -42,6 +48,7 @@ import { canEditTenantLimits } from "@/lib/console/permissions";
  * 会让一次保存把「我读不到你的配额」变成「你的租户不受限制」。
  */
 export function QuotaView({ role }: { role: string }) {
+  const {t } = useI18n();
   const run = useConsoleRequest();
   const profile = useResource<TenantProfile>({
     method: "GET",
@@ -53,7 +60,7 @@ export function QuotaView({ role }: { role: string }) {
     return <ErrorState message={profile.error} onRetry={profile.reload} />;
   }
   if (profile.loading || !profile.data) {
-    return <LoadingState label="正在加载租户配额" rows={5} />;
+    return <LoadingState label={t("tenant.loadingTenantQuotas")} rows={5} />;
   }
 
   return (
@@ -88,26 +95,27 @@ function QuotaEditor({
   onSaved: () => void;
   run: ReturnType<typeof useConsoleRequest>;
 }) {
+  const { locale, t } = useI18n();
   const [draft, setDraft] = React.useState<Record<string, string>>(() =>
     Object.fromEntries(
-      QUOTA_DIMENSIONS.map((dimension) => [
+      quotaDimensions(locale).map((dimension) => [
         dimension.field,
         String(profile.limits[dimension.field]),
       ])
     )
   );
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (pending) {
       return;
     }
-    for (const dimension of QUOTA_DIMENSIONS) {
+    for (const dimension of quotaDimensions(locale)) {
       const problem = limitProblem(draft[dimension.field] ?? "");
       if (problem) {
-        setError(`${dimension.label}：${problem}`);
+        setError(<QuotaProblem field={dimension.field} raw={draft[dimension.field] ?? ""} />);
         return;
       }
     }
@@ -126,14 +134,14 @@ function QuotaEditor({
         method: "PUT",
         path: "/admin/v1/tenants/limits",
         body: Object.fromEntries(
-          QUOTA_DIMENSIONS.map((dimension) => [
+          quotaDimensions(locale).map((dimension) => [
             dimension.wire,
             Number(draft[dimension.field]),
           ])
         ),
         parse: parseTenantLimits,
       });
-      toast.success("配额已保存");
+      toast.success(<Message id={"tenant.quotasSaved"} />);
       // The server's answer is what gets shown, and the profile is re-read so
       // the page reflects the stored row rather than the request that was sent.
       //
@@ -141,7 +149,7 @@ function QuotaEditor({
       // 而不是刚刚发出的那个请求。
       setDraft(
         Object.fromEntries(
-          QUOTA_DIMENSIONS.map((dimension) => [
+          quotaDimensions(locale).map((dimension) => [
             dimension.field,
             String(saved[dimension.field]),
           ])
@@ -149,7 +157,7 @@ function QuotaEditor({
       );
       onSaved();
     } catch (failure) {
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
     } finally {
       setPending(false);
     }
@@ -158,36 +166,35 @@ function QuotaEditor({
   return (
     <div className="grid gap-6">
       <div>
-        <h1 className="font-heading text-lg font-semibold">配额</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.quotas" /></h1>
         <p className="text-sm text-muted-foreground">
-          限制适用于整个租户，本租户的所有 API Key 共用同一份额度；不是按 Key 计算的。
-        </p>
+          <Message id="tenant.limitsApplyToTheEntireTenantAllOf" /></p>
       </div>
 
       <Card>
         <CardHeader>
-          <CardTitle>租户</CardTitle>
+          <CardTitle><Message id="tenant.tenant" /></CardTitle>
         </CardHeader>
         <CardContent>
           <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-3">
             <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">名称</dt>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.name" /></dt>
               <dd className="text-sm">{profile.tenant.name}</dd>
             </div>
             <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">状态</dt>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.status" /></dt>
               <dd className="text-sm">
                 <Badge variant="outline">
-                  {profile.tenant.status === "active" ? "正常" : profile.tenant.status}
+                  {profile.tenant.status === "active" ? t("tenant.normal") : profile.tenant.status}
                 </Badge>
               </dd>
             </div>
             <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">创建时间</dt>
-              <dd className="text-sm">{formatDateTime(profile.tenant.createdAt)}</dd>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.createdAt" /></dt>
+              <dd className="text-sm">{formatDateTime(profile.tenant.createdAt, undefined, locale)}</dd>
             </div>
             <div className="grid gap-1 sm:col-span-3">
-              <dt className="text-xs text-muted-foreground">租户 ID</dt>
+              <dt className="text-xs text-muted-foreground"><Message id="tenant.tenantId" /></dt>
               <dd className="font-mono text-sm break-all">{profile.tenant.id}</dd>
             </div>
           </dl>
@@ -196,11 +203,11 @@ function QuotaEditor({
 
       <Card>
         <CardHeader>
-          <CardTitle>当前生效的限制</CardTitle>
+          <CardTitle><Message id="tenant.currentEffectiveLimits" /></CardTitle>
         </CardHeader>
         <CardContent>
           <form onSubmit={submit} className="grid gap-5" noValidate>
-            {QUOTA_DIMENSIONS.map((dimension) => (
+            {quotaDimensions(locale).map((dimension) => (
               <div key={dimension.field} className="grid gap-2">
                 <label
                   htmlFor={`quota-${dimension.field}`}
@@ -223,16 +230,12 @@ function QuotaEditor({
                     disabled={!editable || pending}
                     aria-describedby={`quota-${dimension.field}-help`}
                   />
-                  <span className="text-xs text-muted-foreground">
-                    服务端当前值：{formatLimit(profile.limits[dimension.field])}
-                  </span>
+                  <span className="text-xs text-muted-foreground"><Message id="tenant.currentServerValue_6ec373" values={{ value: formatLimit(profile.limits[dimension.field], locale) }} /></span>
                 </div>
                 <p
                   id={`quota-${dimension.field}-help`}
                   className="text-xs text-muted-foreground"
-                >
-                  {dimension.help} 填 0 表示不限制。
-                </p>
+                ><Message id="tenant.enter0ForUnlimited_9eba06" values={{ help: dimension.help }} /></p>
               </div>
             ))}
 
@@ -240,24 +243,28 @@ function QuotaEditor({
 
             {editable ? (
               <div className="flex flex-wrap items-center gap-3">
-                <SubmitButton pending={pending}>保存全部三项</SubmitButton>
+                <SubmitButton pending={pending}><Message id="tenant.saveAllThreeLimits" /></SubmitButton>
                 <span className="text-xs text-muted-foreground">
-                  保存会整组覆盖：三项都会按上面填写的值写入，包括没有修改的那些。
-                </span>
+                  <Message id="tenant.savingReplacesTheEntireSetAllThreeValues" /></span>
               </div>
             ) : (
               <p className="text-sm text-muted-foreground">
-                只有所有者与管理员可以修改配额。
-              </p>
+                <Message id="tenant.onlyOwnersAndAdministratorsCanChangeQuotas" /></p>
             )}
           </form>
         </CardContent>
       </Card>
 
       <p className="text-xs text-muted-foreground">
-        限制由网关执行。网关会缓存租户身份与配额，因此一次修改可能在其配置的缓存有效期内
-        才完全生效；默认部署为 30 秒，实际时长以该网关的配置为准。
-      </p>
+        <Message id="tenant.limitsAreEnforcedByTheGatewayWhichCaches" /></p>
     </div>
   );
+}
+
+/** QuotaProblem retains the submitted field and value while translating feedback.
+ * QuotaProblem 保留已提交的字段和值，并按当前语言翻译校验提示。 */
+function QuotaProblem({ field, raw }: { field: string; raw: string }) {
+  const { locale, t } = useI18n();
+  const label = quotaDimensions(locale).find(dimension => dimension.field === field)?.label ?? field;
+  return t("common.fieldProblem", { field: label, problem: limitProblem(raw, locale) ?? "" });
 }

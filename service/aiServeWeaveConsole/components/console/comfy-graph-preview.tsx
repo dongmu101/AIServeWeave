@@ -1,5 +1,8 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 import * as React from "react";
 import {
   Background,
@@ -34,6 +37,7 @@ const MAX_ISSUES_SHOWN = 20;
 /** ComfyNodeCard draws one ComfyUI node: consumed output slots on the right, input fields on the left, template bindings highlighted.
  * ComfyNodeCard 绘制一个 ComfyUI 节点：右侧是被消费的输出槽，左侧是输入字段，模板绑定高亮显示。 */
 function ComfyNodeCard({ data, selected }: NodeProps<ComfyFlowNode>) {
+  const { t } = useI18n();
   const { node } = data;
   return <div
     style={{ width: NODE_WIDTH, paddingBlock: NODE_PADDING }}
@@ -48,20 +52,17 @@ function ComfyNodeCard({ data, selected }: NodeProps<ComfyFlowNode>) {
     <div style={{ height: NODE_HEADER_HEIGHT }} className="flex flex-col justify-center border-b px-2">
       <div className="flex items-center gap-1 text-sm font-semibold">
         <span className="truncate">{node.title ?? node.classType}</span>
-        {node.diff === "changed" && <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] font-normal text-amber-700">有差异</span>}
-        {node.diff === "only-here" && <span className="shrink-0 rounded bg-sky-500/15 px-1 text-[10px] font-normal text-sky-700">仅此侧</span>}
-        {node.outputs.length > 0 && <span className="shrink-0 truncate rounded bg-emerald-500/15 px-1 text-[10px] font-normal text-emerald-700">输出 {node.outputs.join(", ")}</span>}
+        {node.diff === "changed" && <span className="shrink-0 rounded bg-amber-500/15 px-1 text-[10px] font-normal text-amber-700"><Message id="common.different" /></span>}
+        {node.diff === "only-here" && <span className="shrink-0 rounded bg-sky-500/15 px-1 text-[10px] font-normal text-sky-700"><Message id="common.thisSideOnly" /></span>}
+        {node.outputs.length > 0 && <span className="shrink-0 truncate rounded bg-emerald-500/15 px-1 text-[10px] font-normal text-emerald-700"><Message id="common.output_32484b" values={{ value: node.outputs.join(", ") }} /></span>}
       </div>
       <div className="truncate text-[11px] text-muted-foreground">#{node.id}{node.title ? ` · ${node.classType}` : ""}</div>
     </div>
-    {node.outputSlots.map((slot) => <div key={`out-${slot}`} style={{ height: NODE_ROW_HEIGHT }} className="relative flex items-center justify-end px-2 text-[11px] text-muted-foreground">
-      输出槽 {slot}
-      <Handle type="source" position={Position.Right} id={`out-${slot}`} isConnectable={false} />
-    </div>)}
+    {node.outputSlots.map((slot) => <div key={`out-${slot}`} style={{ height: NODE_ROW_HEIGHT }} className="relative flex items-center justify-end px-2 text-[11px] text-muted-foreground"><Message id="common.outputSlot_36cf1a" values={{ slot: slot, content: <Handle type="source" position={Position.Right} id={`out-${slot}`} isConnectable={false} /> }} /></div>)}
     {node.fields.map((field) => <div
       key={field.name}
       style={{ height: NODE_ROW_HEIGHT }}
-      title={field.bound.length > 0 ? `模板输入 ${field.bound.join(", ")} 写入此字段` : undefined}
+      title={field.bound.length > 0 ? t("common.templateInputWritesToThisField", { value: field.bound.join(", ") }) : undefined}
       className={cn("relative flex items-center gap-2 px-2 text-[11px]", field.bound.length > 0 && "bg-primary/10 font-medium")}
     >
       {field.kind === "link" && !field.dangling && <Handle type="target" position={Position.Left} id={`in-${field.name}`} isConnectable={false} />}
@@ -102,9 +103,10 @@ export interface ComfyGraphPreviewProps {
  *
  * 这里展示的图只属于运维视角：本组件不得用在租户页面上。 */
 export function ComfyGraphPreview({ graph, bindings, compareTo, height = 520 }: ComfyGraphPreviewProps) {
+  const { locale, t } = useI18n();
   const preview = React.useMemo(
-    () => graph.ok ? buildGraphPreview(graph.graph, bindings, compareTo) : { ok: false as const, reason: "invalid_json" as const },
-    [graph, bindings, compareTo],
+    () => graph.ok ? buildGraphPreview(graph.graph, bindings, compareTo, locale) : { ok: false as const, reason: "invalid_json" as const },
+    [graph, bindings, compareTo, locale],
   );
   const [selectedID, setSelectedID] = React.useState<string | null>(null);
 
@@ -117,10 +119,10 @@ export function ComfyGraphPreview({ graph, bindings, compareTo, height = 520 }: 
 
   if (!preview.ok) {
     const message = {
-      invalid_json: "图 JSON 尚无法解析，修正后这里会显示节点图。",
-      not_object: "图必须是以节点 id 为键的对象（API Format），无法预览。",
-      empty: "图为空，暂无可预览的节点。",
-      too_many_nodes: `图有 ${preview.count ?? "过多"} 个节点，超过预览上限，请直接查看 JSON。`,
+      invalid_json: t("common.theGraphJsonCannotBeParsedYetA"),
+      not_object: t("common.theGraphMustBeAnObjectKeyedBy"),
+      empty: t("common.theGraphIsEmptyNoNodesToPreview"),
+      too_many_nodes: t("common.theGraphHasANodeCountOfExceeding", { value: preview.count ?? t("common.tooMany") }),
     }[preview.reason];
     return <div style={{ height: 120 }} className="flex items-center justify-center rounded-lg border border-dashed text-sm text-muted-foreground">{message}</div>;
   }
@@ -140,6 +142,19 @@ export function ComfyGraphPreview({ graph, bindings, compareTo, height = 520 }: 
           minZoom={0.1}
           fitView
           colorMode="light"
+          ariaLabelConfig={{
+            "node.a11yDescription.default": t("flow.nodeHelp"),
+            "node.a11yDescription.keyboardDisabled": t("flow.nodeHelp"),
+            "node.a11yDescription.ariaLiveMessage": () => t("flow.nodeHelp"),
+            "edge.a11yDescription.default": t("flow.edgeHelp"),
+            "controls.ariaLabel": t("flow.controls"),
+            "controls.zoomIn.ariaLabel": t("flow.zoomIn"),
+            "controls.zoomOut.ariaLabel": t("flow.zoomOut"),
+            "controls.fitView.ariaLabel": t("flow.fitView"),
+            "controls.interactive.ariaLabel": t("flow.toggleInteractive"),
+            "minimap.ariaLabel": t("flow.minimap"),
+            "handle.ariaLabel": t("flow.handle"),
+          }}
           onNodeClick={(_, node) => setSelectedID(node.id)}
           onPaneClick={() => setSelectedID(null)}
         >
@@ -150,18 +165,18 @@ export function ComfyGraphPreview({ graph, bindings, compareTo, height = 520 }: 
         </ReactFlow>
       </ReactFlowProvider>
     </div>
-    <p className="text-xs text-muted-foreground">布局按连线自动重建（API Format 不含坐标），与作者在 ComfyUI 中的摆放不同。高亮字段是模板输入的写入点，绿框节点声明了输出；点击节点查看完整取值。</p>
-    {preview.missingHere.length > 0 && <p className="text-xs text-sky-700">比较对象中有、此侧没有的节点：{preview.missingHere.join(", ")}</p>}
+    <p className="text-xs text-muted-foreground"><Message id="common.layoutIsRebuiltAutomaticallyFromConnectionsApiFormat" /></p>
+    {preview.missingHere.length > 0 && <p className="text-xs text-sky-700"><Message id="common.nodesPresentInTheComparisonButMissingOn_3f3379" values={{ value: preview.missingHere.join(", ") }} /></p>}
     {preview.issues.length > 0 && <ul className="list-disc space-y-0.5 pl-5 text-xs text-destructive">
       {preview.issues.slice(0, MAX_ISSUES_SHOWN).map((issue, i) => <li key={i}>{issue}</li>)}
-      {preview.issues.length > MAX_ISSUES_SHOWN && <li>另有 {preview.issues.length - MAX_ISSUES_SHOWN} 条问题未列出</li>}
+      {preview.issues.length > MAX_ISSUES_SHOWN && <li><Message id="common.additionalIssuesNotShown" values={{ value: preview.issues.length - MAX_ISSUES_SHOWN }} /></li>}
     </ul>}
     {selected && <div className="space-y-1 rounded-lg border p-3 text-xs">
       <p className="font-semibold">#{selected.id} · {selected.classType}{selected.title ? ` · ${selected.title}` : ""}</p>
-      {selected.fields.length === 0 && <p className="text-muted-foreground">该节点没有输入字段。</p>}
+      {selected.fields.length === 0 && <p className="text-muted-foreground"><Message id="common.thisNodeHasNoInputFields" /></p>}
       <dl className="grid grid-cols-[max-content_1fr] gap-x-3 gap-y-1">
         {selected.fields.map((field) => <React.Fragment key={field.name}>
-          <dt className="text-muted-foreground">{field.name}{field.bound.length > 0 ? `（输入 ${field.bound.join(", ")}）` : ""}</dt>
+          <dt className="text-muted-foreground">{field.name}{field.bound.length > 0 ? t("common.input", { value: field.bound.join(", ") }) : ""}</dt>
           <dd className="max-h-40 overflow-auto whitespace-pre-wrap break-all font-mono">{field.full}</dd>
         </React.Fragment>)}
       </dl>

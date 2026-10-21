@@ -59,18 +59,17 @@ const bridgePath = "extensions/aiserveweave/bridge.js"
 var bridgeJS []byte
 
 // editorSettings is the fixed settings document every editor session starts from.
-// The locale is pinned so node titles exported into _meta.title do not depend
-// on which operator's browser published the template — otherwise the same
-// graph would digest differently per browser language. Workflow persistence
-// is off so one operator's last graph is never restored into another's
-// session from browser storage.
+// The locale starts at zh, then the bridge activates the host preference.
+// The controlled frontend keeps canonical persisted titles independently of
+// display text. Workflow persistence is off so another operator's last graph
+// is never restored from browser storage.
 //
-// editorSettings 是每个编辑器会话起步时固定的设置文档。语言被锁定，使导出到
-// _meta.title 的节点标题不取决于是哪位运维的浏览器发布了模板——否则同一张图会因
-// 浏览器语言不同而得到不同摘要。工作流持久化被关闭，使一名运维最后编辑的图永远不会
-// 经浏览器存储恢复到另一名运维的会话里。
+// editorSettings 是每个编辑器会话起步时固定的设置文档。以 zh 初始化后，由桥接激活
+// 宿主偏好；受控前端把持久化标题与显示文字分开。工作流持久化被关闭，使另一名运维
+// 最后编辑的图不会经浏览器存储恢复。
 var editorSettings = map[string]any{
 	"Comfy.Locale":                           "zh",
+	"Comfy.UseNewMenu":                       "Top",
 	"Comfy.TutorialCompleted":                true,
 	"Comfy.Workflow.Persist":                 false,
 	"Comfy.Workflow.ShowMissingNodesWarning": true,
@@ -88,12 +87,12 @@ type Server struct {
 	stats      []byte
 }
 
-// New validates distDir as an unpacked ComfyUI_frontend release and indexes
-// its core extensions once. It fails rather than serving a half-present
+// New validates distDir as a manifested localized ComfyUI_frontend build and
+// indexes its core extensions once. It fails rather than serving a half-present
 // editor: a configured but empty directory is a deployment error worth
 // stopping on.
 //
-// New 校验 distDir 是一份已解压的 ComfyUI_frontend 发布包，并一次性索引其核心扩展。
+// New 校验 distDir 是有清单的 ComfyUI_frontend 本地化构建，并一次性索引其核心扩展。
 // 它宁可失败也不提供一个残缺的编辑器：配置了却为空的目录是值得停下来的部署错误。
 func New(distDir string) (_ *Server, err error) {
 	if distDir == "" {
@@ -115,6 +114,9 @@ func New(distDir string) (_ *Server, err error) {
 	dist := root.FS()
 	if _, err = fs.Stat(dist, "index.html"); err != nil {
 		return nil, fmt.Errorf("comfyeditor: %s is not an unpacked ComfyUI_frontend release (no index.html)", distDir)
+	}
+	if err = validateLocalization(dist); err != nil {
+		return nil, err
 	}
 	// Every .js under extensions/, as ComfyUI's own server lists them; the
 	// release ships only core ones, so nothing third-party can appear here.
@@ -250,7 +252,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request, route string) {
 	case route == "/queue" && read:
 		writeJSON(w, http.StatusOK, map[string]any{"queue_running": []any{}, "queue_pending": []any{}})
 	case strings.HasPrefix(route, "/jobs") && read:
-		writeJSON(w, http.StatusOK, map[string]any{"jobs": []any{}})
+		writeJSON(w, http.StatusOK, map[string]any{"jobs": []any{}, "pagination": map[string]any{"offset": 0, "limit": 100, "total": 0, "has_more": false}})
 	case route == "/prompt" && read:
 		writeJSON(w, http.StatusOK, map[string]any{"exec_info": map[string]any{"queue_remaining": 0}})
 	case read:

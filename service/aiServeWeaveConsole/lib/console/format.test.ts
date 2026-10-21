@@ -121,6 +121,17 @@ test("zero is unlimited, and is never shown as a bare 0", () => {
   }
 });
 
+test("locale changes display labels while preserving quota and expiry semantics", () => {
+  assert.equal(formatLimit(0, "en-US"), "Unlimited");
+  assert.equal(formatLimit(1234, "de-DE"), "1.234");
+  assert.equal(formatDateTime(null, undefined, "en-US"), "No record");
+  assert.equal(apiKeyState({ status: "active", expiresAt: "2020-01-01", revokedAt: null }, new Date("2026-01-01"), "en-US").label, "Expired");
+  assert.equal(apiKeyState({ status: "unfamiliar", expiresAt: null, revokedAt: null }, new Date("2026-01-01"), "en-US").label, "unfamiliar");
+  assert.match(limitProblem("", "en-US") ?? "", /0/);
+  assert.match(limitProblem("-1", "en-US") ?? "", /nonnegative/);
+  assert.match(limitProblem("99999999999999999999", "en-US") ?? "", /range/);
+});
+
 test("a quota input is refused unless it is a non-negative integer", () => {
   const cases: { name: string; input: string; ok: boolean }[] = [
     { name: "zero, meaning unlimited", input: "0", ok: true },

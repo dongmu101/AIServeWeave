@@ -4,6 +4,7 @@ import (
 	"net/http"
 	"sort"
 
+	"AIServeWeave/common/browserlang"
 	"AIServeWeave/common/runtime"
 )
 
@@ -35,11 +36,14 @@ type GatewaySnapshot struct {
 type gatewayConnection struct {
 	Endpoint string
 	Label    string
+	LabelKey string
 	Tone     string
 }
 
 type gatewayView struct {
 	Summary     string
+	SummaryKey  string
+	Text        pageText
 	Tone        string
 	Connected   int
 	Total       int
@@ -48,48 +52,58 @@ type gatewayView struct {
 
 // currentGateway renders a single connection-table snapshot in endpoint order.
 // currentGateway 按地址排序呈现一次连接表快照。
-func currentGateway(source func() GatewaySnapshot) gatewayView {
-	view := gatewayView{Summary: "仅配置模式", Tone: "neutral"}
+func currentGateway(source func() GatewaySnapshot, locales ...browserlang.Locale) (view gatewayView) {
+	locale := browserlang.Default
+	if len(locales) > 0 {
+		locale = locales[0]
+	}
+	view = gatewayView{SummaryKey: "a0085", Tone: "neutral", Text: newPageText(locale)}
+	defer func() {
+		view.Summary = view.Text.Text(view.SummaryKey)
+		for i := range view.Connections {
+			view.Connections[i].Label = view.Text.Text(view.Connections[i].LabelKey)
+		}
+	}()
 	if source == nil {
 		return view
 	}
 	snapshot := source()
 	if !snapshot.Enabled {
-		view.Summary = "隧道未启用"
+		view.SummaryKey = "a0086"
 		return view
 	}
 	if !snapshot.Started {
-		view.Summary = "正在初始化"
+		view.SummaryKey = "a0087"
 		return view
 	}
 	for endpoint, state := range snapshot.States {
-		connection := gatewayConnection{Endpoint: endpoint, Label: "未知状态", Tone: "neutral"}
+		connection := gatewayConnection{Endpoint: endpoint, LabelKey: "a0088", Tone: "neutral"}
 		switch state {
 		case "connected", "serving":
-			connection.Label, connection.Tone = "已连接", "online"
+			connection.LabelKey, connection.Tone = "a0089", "online"
 			view.Connected++
 		case "connecting":
-			connection.Label, connection.Tone = "连接中", "pending"
+			connection.LabelKey, connection.Tone = "a0090", "pending"
 		case "reconnecting":
-			connection.Label, connection.Tone = "重连中", "pending"
+			connection.LabelKey, connection.Tone = "a0091", "pending"
 		case "draining":
-			connection.Label, connection.Tone = "正在下线", "pending"
+			connection.LabelKey, connection.Tone = "a0092", "pending"
 		case "failed":
-			connection.Label, connection.Tone = "连接失败", "offline"
+			connection.LabelKey, connection.Tone = "a0093", "offline"
 		case "retired":
-			connection.Label = "已移除"
+			connection.LabelKey = "a0094"
 		case "disconnected":
-			connection.Label, connection.Tone = "未连接", "offline"
+			connection.LabelKey, connection.Tone = "a0095", "offline"
 		}
 		view.Connections = append(view.Connections, connection)
 	}
 	sort.Slice(view.Connections, func(i, j int) bool { return view.Connections[i].Endpoint < view.Connections[j].Endpoint })
 	view.Total = len(view.Connections)
-	view.Summary, view.Tone = "未连接", "offline"
+	view.SummaryKey, view.Tone = "a0095", "offline"
 	if view.Connected > 0 {
-		view.Summary, view.Tone = "已连接", "online"
+		view.SummaryKey, view.Tone = "a0089", "online"
 		if view.Connected < view.Total {
-			view.Summary, view.Tone = "部分连接", "pending"
+			view.SummaryKey, view.Tone = "a0096", "pending"
 		}
 	}
 	return view
@@ -104,8 +118,14 @@ func newGatewayHandler(source func() GatewaySnapshot) http.HandlerFunc {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
+		locale := requestLocale(r)
+		w.Header().Set("Content-Language", string(locale))
+		w.Header().Set("Vary", "Cookie, Accept-Language")
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
-		_ = formTemplate.ExecuteTemplate(w, "gateway-status", currentGateway(source))
+		if r.Method == http.MethodHead {
+			return
+		}
+		_ = formTemplate.ExecuteTemplate(w, "gateway-status", currentGateway(source, locale))
 	}
 }

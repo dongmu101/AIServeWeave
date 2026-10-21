@@ -1,5 +1,8 @@
 "use client";
 
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 import * as React from "react";
 import Link from "next/link";
 import { CheckIcon, CopyIcon, InfoIcon } from "lucide-react";
@@ -52,7 +55,9 @@ export function MethodBadge({ method, className }: { method: string; className?:
 
 /** CopyButton copies text to the clipboard and confirms briefly.
  * CopyButton 把文本复制到剪贴板并短暂确认。 */
-export function CopyButton({ text, label = "复制" }: { text: string; label?: string }) {
+export function CopyButton({ text, label: inputLabel }: { text: string; label?: string }) {
+  const {t } = useI18n();
+  const label = inputLabel ?? t("common.copy");
   const [copied, setCopied] = React.useState(false);
   React.useEffect(() => {
     if (!copied) return;
@@ -70,7 +75,7 @@ export function CopyButton({ text, label = "复制" }: { text: string; label?: s
           await navigator.clipboard.writeText(text);
           setCopied(true);
         } catch {
-          toast.error("复制失败，请手动选择文本");
+          toast.error(<Message id={"common.copyFailedSelectTheTextManually"} />);
         }
       }}
     >
@@ -82,6 +87,7 @@ export function CopyButton({ text, label = "复制" }: { text: string; label?: s
 /** EndpointBar shows the method and the full URL of an endpoint.
  * EndpointBar 展示端点的方法与完整 URL。 */
 export function EndpointBar({ method, path, baseUrl }: { method: string; path: string; baseUrl: string }) {
+  const {t } = useI18n();
   const url = `${baseUrl}${path}`;
   return (
     <div className="flex min-w-0 items-center gap-2 rounded-xl border bg-muted/30 px-3 py-2">
@@ -90,7 +96,7 @@ export function EndpointBar({ method, path, baseUrl }: { method: string; path: s
         <span className="text-muted-foreground">{baseUrl}</span>
         {path}
       </code>
-      <CopyButton text={url} label="复制地址" />
+      <CopyButton text={url} label={t("common.copyAddress")} />
     </div>
   );
 }
@@ -102,32 +108,25 @@ function ParamItem({ param }: { param: ApiDocParam }) {
         <code className="font-mono text-sm font-semibold text-primary">{param.name}</code>
         <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{param.type}</span>
         {param.required ? (
-          <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive">必填</span>
+          <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive"><Message id="tenant.required" /></span>
         ) : null}
         {param.default ? (
-          <span className="text-xs text-muted-foreground">
-            默认值 <code className="font-mono">{param.default}</code>
-          </span>
+          <span className="text-xs text-muted-foreground"><Message id="common.default" values={{ code: <code className="font-mono">{param.default}</code> }} /></span>
         ) : null}
       </div>
       {param.description ? (
         <p className="mt-1 whitespace-pre-line text-sm text-muted-foreground">{param.description}</p>
       ) : null}
       {param.enum ? (
-        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground">
-          可选值
-          {param.enum.map((value) => (
+        <div className="mt-1.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground"><Message id="common.allowedValues_06b8d9" values={{ value: param.enum.map((value) => (
             <code key={value} className="rounded border px-1.5 py-0.5 font-mono text-foreground">
               {value}
             </code>
-          ))}
-        </div>
+          )) }} /></div>
       ) : null}
       {param.children ? (
         <details className="mt-2 rounded-lg border px-3">
-          <summary className="cursor-pointer py-2 text-xs text-muted-foreground select-none">
-            子字段（{param.children.length}）
-          </summary>
+          <summary className="cursor-pointer py-2 text-xs text-muted-foreground select-none"><Message id="common.childFields_832fa2" values={{ count: param.children.length }} /></summary>
           <ParamList params={param.children} />
         </details>
       ) : null}
@@ -269,6 +268,7 @@ export interface ApiDocPage {
  * 的示例一栏。
  */
 export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: ExampleValues }) {
+  const {t } = useI18n();
   const c = doc.content;
   const responseLabels = c.response_examples
     .filter((ex) => ex.label)
@@ -298,7 +298,7 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
           </div>
         ) : null}
 
-        <DocSection title="认证">
+        <DocSection title={t("tenant.authentication")}>
           {c.auth === "bearer" ? (
             <ParamList
               params={[
@@ -306,42 +306,37 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
                   name: "Authorization",
                   type: "string",
                   required: true,
-                  description: "所有接口使用 Bearer Token 认证，请求头格式为 Authorization: Bearer YOUR_API_KEY。",
+                  description: t("common.allApisUseBearerTokenAuthenticationWithThe"),
                 },
               ]}
             />
           ) : (
-            <p className="text-sm text-muted-foreground">该端点无需认证。</p>
+            <p className="text-sm text-muted-foreground"><Message id="common.thisEndpointDoesNotRequireAuthentication" /></p>
           )}
           {c.auth === "bearer" ? (
-            <p className="text-sm text-muted-foreground">
-              在{" "}
-              <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
-                API Key 管理页面
-              </Link>{" "}
-              创建密钥。密钥只在创建时完整展示一次，请妥善保存。
-            </p>
+            <p className="text-sm text-muted-foreground"><Message id="common.createAKeyOnTheCompleteKeyIs" values={{ link: <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
+                <Message id="tenant.apiKeyManagementPage" /></Link> }} /></p>
           ) : null}
         </DocSection>
 
         {c.headers.length > 0 ? (
-          <DocSection title="请求头">
+          <DocSection title={t("common.headers")}>
             <ParamList params={c.headers} />
           </DocSection>
         ) : null}
         {c.path_params.length > 0 ? (
-          <DocSection title="路径参数">
+          <DocSection title={t("common.pathParameters")}>
             <ParamList params={c.path_params} />
           </DocSection>
         ) : null}
         {c.query_params.length > 0 ? (
-          <DocSection title="查询参数">
+          <DocSection title={t("common.queryParameters")}>
             <ParamList params={c.query_params} />
           </DocSection>
         ) : null}
         {c.body_params.length > 0 ? (
           <DocSection
-            title="请求体"
+            title={t("common.requestBody")}
             aside={
               BODY_TYPE_LABEL[c.body_type] ? (
                 <code className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">
@@ -354,12 +349,12 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
           </DocSection>
         ) : null}
         {c.response_fields.length > 0 ? (
-          <DocSection title="响应">
+          <DocSection title={t("common.response")}>
             <ParamList params={c.response_fields} />
           </DocSection>
         ) : null}
         {responseLabels.length > 0 ? (
-          <DocSection title="状态码">
+          <DocSection title={t("tenant.statusCode")}>
             <ul className="grid gap-1 text-sm sm:grid-cols-2">
               {c.response_examples.map((ex, index) => (
                 <li key={index} className="flex gap-2">
@@ -388,8 +383,8 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
       </article>
 
       <aside className="flex min-w-0 flex-col gap-4">
-        <ExamplePanel title="请求示例" tabs={requestTabs(c.request_examples, values)} />
-        <ExamplePanel title="响应示例" tabs={responseTabs(c.response_examples, values)} />
+        <ExamplePanel title={t("common.exampleRequest")} tabs={requestTabs(c.request_examples, values)} />
+        <ExamplePanel title={t("common.exampleResponse")} tabs={responseTabs(c.response_examples, values)} />
       </aside>
     </div>
   );

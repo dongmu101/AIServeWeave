@@ -5,6 +5,13 @@ Agent 在推理节点宿主机上运行，连接本机 Ollama / vLLM / ComfyUI�
 
 下文默认保留 `.env.example` 中的端口。除明确标注外，命令均在仓库的 `deploy` 目录执行。
 
+启用 `ComfyEditor.DistDir` 的部署，须先在仓库根目录使用
+`scripts/fetch-comfyui-frontend.sh --localized <空目录>` 构建对应八语言制品，
+再将目录挂载给控制面并升级服务。工具链与校验规则见
+[本地化构建说明](../scripts/comfyui-localization/README.md)。已配置目录缺少
+`aisw-i18n-manifest.json`、配置版本或逐文件摘要不符时，控制面启动失败；
+不要将原始 release zip 与本地化制品混用。未配置 `DistDir` 时编辑器继续关闭。
+
 ## 环境要求
 
 - Docker Engine 24+、Docker Compose v2 或更新版本，使用 `docker compose` 命令。

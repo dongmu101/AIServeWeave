@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 /** MAX_PREVIEW_NODES bounds how many nodes the graph preview lays out. A
  * ComfyUI workflow is typically tens of nodes; past this the canvas would be
  * unreadable anyway, so the preview declines instead of freezing the tab.
@@ -130,7 +132,8 @@ export function nodeHeight(outputSlotRows: number, fieldRows: number): number {
  * buildGraphPreview 把 API Format 的 ComfyUI 图转换为只读画布所需的已布局节点与连线。它从不抛异常：格式不对的条目记为问题，整图层面的问题记为原因。
  *
  * 布局自左向右分层：节点所在列是从任一源节点出发的最长连线路径，同列内按上游节点平均行号排序。API Format 不携带坐标，所以这是重建的布局，不是作者原本的摆放。 */
-export function buildGraphPreview(graph: unknown, bindings: GraphBindings, compareTo?: unknown): GraphPreview {
+export function buildGraphPreview(graph: unknown, bindings: GraphBindings, compareTo?: unknown, locale: Locale = DEFAULT_LOCALE): GraphPreview {
+  const t = coreTranslator(locale);
   if (!isRecord(graph)) return { ok: false, reason: "not_object" };
   const ids = Object.keys(graph).sort(compareIDs);
   if (ids.length === 0) return { ok: false, reason: "empty" };
@@ -140,12 +143,12 @@ export function buildGraphPreview(graph: unknown, bindings: GraphBindings, compa
   const nodes = new Map<string, GraphNode>();
   for (const id of ids) {
     const raw = graph[id];
-    if (!isRecord(raw)) { issues.push(`节点 ${id} 不是对象，已跳过`); continue; }
+    if (!isRecord(raw)) { issues.push(t("common.nodeIsNotAnObjectSkipped", { id: id })); continue; }
     const classType = typeof raw.class_type === "string" && raw.class_type !== "" ? raw.class_type : "?";
-    if (classType === "?") issues.push(`节点 ${id} 缺少 class_type`);
+    if (classType === "?") issues.push(t("common.nodeIsMissingClassType", { id: id }));
     const meta = isRecord(raw._meta) ? raw._meta : undefined;
     const title = meta && typeof meta.title === "string" && meta.title !== "" && meta.title !== classType ? meta.title : undefined;
-    if (!isRecord(raw.inputs)) issues.push(`节点 ${id} 没有 inputs 对象，发布验证会拒绝`);
+    if (!isRecord(raw.inputs)) issues.push(t("common.nodeHasNoInputsObjectPublicationValidationWill", { id: id }));
     const inputs = isRecord(raw.inputs) ? raw.inputs : {};
     const fields: GraphField[] = Object.keys(inputs).map((name) => {
       const value = inputs[name];
@@ -163,9 +166,9 @@ export function buildGraphPreview(graph: unknown, bindings: GraphBindings, compa
       if (field.kind !== "link") continue;
       const [source, slot] = JSON.parse(field.full) as [string, number];
       const from = nodes.get(source);
-      if (!from) { field.dangling = true; issues.push(`节点 ${node.id} 的 ${field.name} 引用了不存在的节点 ${source}`); continue; }
+      if (!from) { field.dangling = true; issues.push(t("common.nodeSReferencesNonexistentNode", { id: node.id, name: field.name, source: source })); continue; }
       if (!from.outputSlots.includes(slot)) from.outputSlots.push(slot);
-      if (source === node.id) issues.push(`节点 ${node.id} 的 ${field.name} 连回了自身；ComfyUI 无法执行有环的图`);
+      if (source === node.id) issues.push(t("common.nodeSLinksBackToItselfComfyuiCannot", { id: node.id, name: field.name }));
       else upstream.get(node.id)!.add(source);
       edges.push({ id: `${source}:${slot}->${node.id}.${field.name}`, source, sourceSlot: slot, target: node.id, targetField: field.name });
     }
@@ -174,13 +177,13 @@ export function buildGraphPreview(graph: unknown, bindings: GraphBindings, compa
 
   for (const input of bindings.inputs) {
     const field = nodes.get(input.node)?.fields.find((f) => f.name === input.field);
-    if (field) field.bound.push(input.name || "(未命名)");
-    else issues.push(`输入 ${input.name || "(未命名)"} 绑定的 ${input.node || "?"}.${input.field || "?"} 不在图中，发布验证会拒绝`);
+    if (field) field.bound.push(input.name || t("common.unnamed"));
+    else issues.push(t("common.inputIsBoundToWhichIsNotIn", { value: input.name || t("common.unnamed"), value2: input.node || "?", value3: input.field || "?" }));
   }
   for (const output of bindings.outputs) {
     const node = nodes.get(output.node);
-    if (node) node.outputs.push(output.name || "(未命名)");
-    else issues.push(`输出 ${output.name || "(未命名)"} 指向的节点 ${output.node || "?"} 不在图中，发布验证会拒绝`);
+    if (node) node.outputs.push(output.name || t("common.unnamed"));
+    else issues.push(t("common.outputPointsToNodeWhichIsNotIn", { value: output.name || t("common.unnamed"), value2: output.node || "?" }));
   }
 
   // Longest-path layering via Kahn's algorithm; whatever is left belongs to a cycle.
@@ -204,7 +207,7 @@ export function buildGraphPreview(graph: unknown, bindings: GraphBindings, compa
   }
   const cyclic = [...nodes.keys()].filter((id) => !rank.has(id));
   if (cyclic.length > 0) {
-    issues.push(`图中存在环，涉及节点 ${cyclic.join(", ")}；ComfyUI 无法执行有环的图`);
+    issues.push(t("common.theGraphContainsACycleInvolvingNodesComfyui", { value: cyclic.join(", ") }));
     const last = Math.max(0, ...rank.values()) + 1;
     for (const id of cyclic) rank.set(id, last);
   }

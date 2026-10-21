@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import { ApiError, describe } from "./errors.ts";
 
 /** MAX_ROUTES_BYTES bounds imported bundles. / MAX_ROUTES_BYTES 限制导入集合大小。 */
@@ -93,8 +95,9 @@ export async function importRouteFile(file: Pick<Blob, "size" | "stream">): Prom
   } catch { throw new ApiError("invalid"); } finally { reader.releaseLock(); }
 }
 /** routeWriteMessage explains conflicts without discarding the draft. / routeWriteMessage 解释冲突且不丢弃草稿。 */
-export function routeWriteMessage(error: unknown): string {
-  return error instanceof ApiError && error.kind === "conflict" ? "当前版本已变化，草稿已保留。请重新读取当前版本，比较后再次确认发布。" : `${describe(error)} 草稿已保留；请刷新当前版本核对结果。`;
+export function routeWriteMessage(error: unknown, locale: Locale = DEFAULT_LOCALE): string {
+  const t = coreTranslator(locale);
+  return error instanceof ApiError && error.kind === "conflict" ? t("common.theCurrentVersionHasChangedYourDraftHas") : t("common.yourDraftHasBeenKeptRefreshTheCurrent", { value: describe(error, locale) });
 }
 
 /** routeBodyLimit raises the bound only for matched bundle-writing paths. / routeBodyLimit 仅对已匹配的集合写入路径提高上限。 */

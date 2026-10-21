@@ -1,5 +1,12 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+
+
+
 import * as React from "react";
 import Link from "next/link";
 
@@ -48,13 +55,13 @@ import { formatDateTime } from "@/lib/console/format";
  * 筛选与翻页归控制面，与 `/console/audit` 相同的分工：这里的一次搜索回答的是
  * 关于整个租户历史的问题，而不是关于已经下载到的那些行。
  */
-const STATE_LABELS: Record<string, string> = {
-  pending: "排队中",
-  running: "运行中",
-  succeeded: "成功",
-  failed: "失败",
-  cancelled: "已取消",
-};
+const STATE_LABELS = (t: Translator): Record<string, string> => ({
+  pending: t("tenant.queued"),
+  running: t("tenant.running"),
+  succeeded: t("tenant.succeeded"),
+  failed: t("tenant.failed"),
+  cancelled: t("tenant.canceled"),
+});
 
 const STATES = ["pending", "running", "succeeded", "failed", "cancelled"] as const;
 
@@ -63,6 +70,7 @@ const PAGE_SIZES = ["50", "100", "200"] as const;
 const NO_ENTRIES: JobHistoryEntry[] = [];
 
 export function HistoryView() {
+  const { locale, t } = useI18n();
   const [filters, setFilters] = useUrlFilters([
     "state",
     "workflow_id",
@@ -110,19 +118,15 @@ export function HistoryView() {
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">运行历史</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.runHistory" /></h1>
         <p className="text-sm text-muted-foreground">
-          本租户已持久化的 job 记录，来自控制面的 jobs 表。与「运行」页的实时视图不同，
-          这里的记录不会因为网关副本重启或内存表满而消失；但状态仍是最后一次被网关观测
-          到的快照,不代表后端此刻的真实状态。
-        </p>
+          <Message id="tenant.persistedJobRecordsForThisTenantFromThe" /></p>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1">
           <label htmlFor="history-state" className="text-xs text-muted-foreground">
-            状态
-          </label>
+            <Message id="tenant.status" /></label>
           <Select
             value={filters.state === "" ? "all" : filters.state}
             onValueChange={(next) => {
@@ -135,10 +139,10 @@ export function HistoryView() {
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部状态</SelectItem>
+              <SelectItem value="all"><Message id="tenant.allStatuses" /></SelectItem>
               {STATES.map((state) => (
                 <SelectItem key={state} value={state}>
-                  {STATE_LABELS[state]}
+                  {STATE_LABELS(t)[state]}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -147,8 +151,7 @@ export function HistoryView() {
 
         <div className="grid gap-1">
           <label htmlFor="history-workflow" className="text-xs text-muted-foreground">
-            工作流 ID
-          </label>
+            <Message id="tenant.workflowId" /></label>
           <Input
             id="history-workflow"
             className="w-56 font-mono text-xs"
@@ -160,8 +163,7 @@ export function HistoryView() {
 
         <div className="grid gap-1">
           <label htmlFor="history-since" className="text-xs text-muted-foreground">
-            起始日期（含）
-          </label>
+            <Message id="tenant.startDateInclusive" /></label>
           <Input
             id="history-since"
             type="date"
@@ -173,8 +175,7 @@ export function HistoryView() {
 
         <div className="grid gap-1">
           <label htmlFor="history-until" className="text-xs text-muted-foreground">
-            结束日期（含）
-          </label>
+            <Message id="tenant.endDateInclusive" /></label>
           <Input
             id="history-until"
             type="date"
@@ -186,8 +187,7 @@ export function HistoryView() {
 
         <div className="grid gap-1">
           <label htmlFor="history-size" className="text-xs text-muted-foreground">
-            每页
-          </label>
+            <Message id="tenant.perPage" /></label>
           <Select
             value={String(pageSize)}
             onValueChange={(next) => {
@@ -201,9 +201,7 @@ export function HistoryView() {
             </SelectTrigger>
             <SelectContent>
               {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={size}>
-                  {size} 条
-                </SelectItem>
+                <SelectItem key={size} value={size}><Message id="tenant.records_09f864" values={{ size: size }} /></SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -218,18 +216,17 @@ export function HistoryView() {
               setFilters({ state: "", workflow_id: "", since: "", until: "" });
             }}
           >
-            清除筛选
-          </Button>
+            <Message id="tenant.clearFilters" /></Button>
         ) : null}
       </div>
 
       {history.error ? (
         <ErrorState message={history.error} onRetry={history.reload} />
       ) : history.loading ? (
-        <LoadingState label="正在加载运行历史" rows={6} />
+        <LoadingState label={t("tenant.loadingRunHistory")} rows={6} />
       ) : rows.length === 0 ? (
         <EmptyState
-          title={hasFilters ? "没有符合筛选条件的记录" : "该租户还没有已持久化的运行"}
+          title={hasFilters ? t("tenant.noRecordsMatchTheFilters") : t("tenant.noPersistedRunsForThisTenantYet")}
         />
       ) : (
         <div className="rounded-xl border">
@@ -237,11 +234,11 @@ export function HistoryView() {
             <TableHeader>
               <TableRow>
                 <TableHead>Job ID</TableHead>
-                <TableHead>工作流</TableHead>
-                <TableHead>状态</TableHead>
-                <TableHead>提交时间</TableHead>
-                <TableHead>最后更新</TableHead>
-                <TableHead>结束时间</TableHead>
+                <TableHead><Message id="tenant.workflows" /></TableHead>
+                <TableHead><Message id="tenant.status" /></TableHead>
+                <TableHead><Message id="tenant.submittedAt" /></TableHead>
+                <TableHead><Message id="tenant.lastUpdated" /></TableHead>
+                <TableHead><Message id="tenant.finishedAt" /></TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -261,16 +258,16 @@ export function HistoryView() {
                       variant={job.state === "succeeded" ? "secondary" : "outline"}
                       className={job.state === "failed" ? "text-destructive" : undefined}
                     >
-                      {STATE_LABELS[job.state] ?? job.state}
+                      {STATE_LABELS(t)[job.state] ?? job.state}
                     </Badge>
                     {job.errorSummary ? (
                       <p className="mt-1 text-xs text-destructive">{job.errorSummary}</p>
                     ) : null}
                   </TableCell>
-                  <TableCell className="text-xs">{formatDateTime(job.createdAt)}</TableCell>
-                  <TableCell className="text-xs">{formatDateTime(job.updatedAt)}</TableCell>
+                  <TableCell className="text-xs">{formatDateTime(job.createdAt, undefined, locale)}</TableCell>
+                  <TableCell className="text-xs">{formatDateTime(job.updatedAt, undefined, locale)}</TableCell>
                   <TableCell className="text-xs">
-                    {job.terminalAt ? formatDateTime(job.terminalAt) : "—"}
+                    {job.terminalAt ? formatDateTime(job.terminalAt, undefined, locale) : "—"}
                   </TableCell>
                 </TableRow>
               ))}

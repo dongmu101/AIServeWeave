@@ -1,4 +1,13 @@
 "use client";
+import { MessageError } from "@/lib/i18n/problem";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -40,12 +49,13 @@ export function SettingsView({
   role: string;
   hasGatewayKey: boolean;
 }) {
+  const {t } = useI18n();
   const router = useRouter();
   const editable = canManageGatewayKey(role);
   const [configured, setConfigured] = React.useState(hasGatewayKey);
   const [value, setValue] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function save(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -54,7 +64,7 @@ export function SettingsView({
     }
     const trimmed = value.trim();
     if (trimmed === "") {
-      setError("请粘贴一把该租户的 API Key。");
+      setError(<Message id={"tenant.pasteAnApiKeyForThisTenant"} />);
       return;
     }
     setPending(true);
@@ -70,7 +80,7 @@ export function SettingsView({
         return;
       }
       if (!response.ok) {
-        setError(await describeSettingsError(response));
+        setError(<ErrorMessage error={settingsFailure(response)} />);
         return;
       }
       setValue("");
@@ -84,9 +94,9 @@ export function SettingsView({
       // 的那次服务端会话读取决定的。refresh() 重新跑一遍那次服务端读取，好让
       // 那些决定跟上刚刚保存的结果，而不必整页重新加载。
       router.refresh();
-      toast.success("已保存");
+      toast.success(<Message id={"tenant.saved"} />);
     } catch {
-      setError("无法连接服务端，请检查网络后重试。");
+      setError(<Message id={"tenant.unableToConnectToTheServerCheckYour"} />);
     } finally {
       setPending(false);
     }
@@ -105,14 +115,14 @@ export function SettingsView({
         return;
       }
       if (!response.ok) {
-        setError(await describeSettingsError(response));
+        setError(<ErrorMessage error={settingsFailure(response)} />);
         return;
       }
       setConfigured(false);
       router.refresh();
-      toast.success("已清空");
+      toast.success(<Message id={"tenant.cleared"} />);
     } catch {
-      setError("无法连接服务端，请检查网络后重试。");
+      setError(<Message id={"tenant.unableToConnectToTheServerCheckYour"} />);
     } finally {
       setPending(false);
     }
@@ -121,10 +131,9 @@ export function SettingsView({
   return (
     <div className="grid gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">设置</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.settings" /></h1>
         <p className="text-sm text-muted-foreground">
-          目前只有一项：Gateway API Key。
-        </p>
+          <Message id="tenant.currentlyTheOnlySettingIsTheGatewayApi" /></p>
       </div>
 
       <Card>
@@ -132,33 +141,23 @@ export function SettingsView({
           <CardTitle className="flex items-center gap-2">
             Gateway API Key
             <Badge variant={configured ? "secondary" : "outline"}>
-              {configured ? "已配置" : "未配置"}
+              {configured ? t("tenant.configured") : t("tenant.notConfigured")}
             </Badge>
           </CardTitle>
         </CardHeader>
         <CardContent className="grid gap-4">
           <div className="grid gap-1 text-sm text-muted-foreground">
             <p>
-              「运行」页面的取消与产物下载，走的是 Gateway 数据面而不是控制面——那两个
-              端点认的是租户自己的 API Key，控制面从不持有它，本控制台也不该持有。
-            </p>
-            <p>
-              配置方法：在「API Key」页创建一把该租户的 Key，把明文粘贴到下面。这把
-              key 会被加密保存在你当前的会话里，<strong>不会下发到浏览器</strong>，
-              仅由本控制台的服务端用来调用取消与下载这两个操作。
-            </p>
-            <p className="text-destructive">
-              这把 key 目前<strong>没有做权限收紧</strong>：它与你在「API Key」页创建的
-              任何一把 key 权限完全相同，除了取消/下载，也能被拿去调用推理接口、消耗
-              租户配额。请只粘贴你确实信任本控制台代为使用的 key。
-            </p>
+              <Message id="tenant.cancellationAndArtifactDownloadsOnTheRunsPage" /></p>
+            <p><Message id="tenant.toConfigureItCreateAKeyForThis_695fe7" values={{ strong: <strong><Message id="tenant.isNeverSentToTheBrowser" /></strong> }} /></p>
+            <p className="text-destructive"><Message id="tenant.thisKeyCurrentlyItHasExactlyTheSame" values={{ strong: <strong><Message id="tenant.hasNoRestrictedScope" /></strong> }} /></p>
           </div>
 
           {editable ? (
             <form onSubmit={save} className="grid gap-3" noValidate>
               <div className="grid gap-2">
                 <label htmlFor="gateway-key-input" className="text-sm font-medium">
-                  {configured ? "替换为新的 Key" : "粘贴 Key"}
+                  {configured ? t("tenant.replaceWithANewKey") : t("tenant.pasteKey")}
                 </label>
                 <Input
                   id="gateway-key-input"
@@ -168,7 +167,7 @@ export function SettingsView({
                   value={value}
                   onChange={(event) => setValue(event.target.value)}
                   disabled={pending}
-                  placeholder="以 aisw_ 开头的 API Key 明文"
+                  placeholder={t("tenant.apiKeyPlaintextStartingWithAisw")}
                 />
               </div>
 
@@ -176,7 +175,7 @@ export function SettingsView({
 
               <div className="flex flex-wrap items-center gap-2">
                 <SubmitButton pending={pending}>
-                  {configured ? "替换" : "保存"}
+                  {configured ? t("tenant.replace") : t("common.save")}
                 </SubmitButton>
                 {configured ? (
                   <Button
@@ -185,16 +184,13 @@ export function SettingsView({
                     disabled={pending}
                     onClick={clear}
                   >
-                    清空
-                  </Button>
+                    <Message id="tenant.clear" /></Button>
                 ) : null}
               </div>
             </form>
           ) : (
             <p className="text-sm text-muted-foreground">
-              只有 owner 或 admin 可以配置这把 key——它能做的事和一把新建的 key
-              完全一样，配置它就是在授予同等的权限。
-            </p>
+              <Message id="tenant.onlyOwnerOrAdminCanConfigureThisKey" /></p>
           )}
         </CardContent>
       </Card>
@@ -202,20 +198,20 @@ export function SettingsView({
   );
 }
 
-/** describeSettingsError turns a failed response into on-screen text. This
+/** settingsFailure turns a failed response into on-screen text. This
  * view does not go through lib/console/api-client.ts, so it does not reuse
  * ApiErrorKind — the endpoint behind it is Console's own state, not an
  * upstream forward, and its failure modes are a smaller, different set.
  *
- * describeSettingsError 把一个失败的响应转换成屏幕上的文案。本视图不经由
+ * settingsFailure 把一个失败的响应转换成屏幕上的文案。本视图不经由
  * lib/console/api-client.ts，因此不复用 ApiErrorKind——它背后的端点是 Console
  * 自己的状态，不是一次上游转发，失败模式是另一套更小的集合。 */
-async function describeSettingsError(response: Response): Promise<string> {
+function settingsFailure(response: Response): MessageError {
   if (response.status === 403) {
-    return "当前角色没有配置这把 key 的权限。";
+    return new MessageError("tenant.yourCurrentRoleCannotConfigureThisKey");
   }
   if (response.status === 400 || response.status === 413) {
-    return "提交的内容不符合要求，请检查后重试。";
+    return new MessageError("tenant.theSubmittedDataDoesNotMeetTheRequirements");
   }
-  return "保存失败，请稍后重试。";
+  return new MessageError("tenant.unableToSavePleaseTryAgainLater");
 }

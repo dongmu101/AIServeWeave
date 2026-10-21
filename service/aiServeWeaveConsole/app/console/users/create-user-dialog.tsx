@@ -1,4 +1,10 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { toast } from "sonner";
@@ -24,8 +30,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { parseUser, ROLE_LABELS, type Role } from "@/lib/console/contract";
-import { ApiError, describe } from "@/lib/console/errors";
+import { parseUser, roleLabels, type Role } from "@/lib/console/contract";
+import {ApiError } from "@/lib/console/errors";
 import { assignableRoles } from "@/lib/console/permissions";
 
 /**
@@ -40,6 +46,7 @@ import { assignableRoles } from "@/lib/console/permissions";
  * 通知，或随后的列表里。
  */
 export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
+  const {locale } = useI18n();
   const run = useConsoleRequest();
   const [open, setOpen] = React.useState(false);
   const [email, setEmail] = React.useState("");
@@ -47,7 +54,7 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
   const [name, setName] = React.useState("");
   const [role, setRole] = React.useState<Role>("member");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   function reset() {
     setEmail("");
@@ -64,7 +71,7 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
     }
     const trimmedEmail = email.trim();
     if (trimmedEmail === "") {
-      setError("请填写邮箱。");
+      setError(<Message id={"tenant.enterAnEmailAddress"} />);
       return;
     }
     setPending(true);
@@ -77,16 +84,14 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
         parse: parseUser,
       });
       setPassword("");
-      toast.success(`已创建用户 ${created.email}`);
+      toast.success(<Message id={"tenant.createdUser"} values={{ email: created.email }} />);
       reset();
       setOpen(false);
       onCreated();
     } catch (failure) {
       setPassword("");
       setError(
-        failure instanceof ApiError && failure.kind === "conflict"
-          ? "该邮箱在本租户已存在。"
-          : describe(failure)
+        failure instanceof ApiError && failure.kind === "conflict" ? <Message id={"tenant.thisEmailAddressAlreadyExistsInThisTenant"} /> : <ErrorMessage error={failure} />
       );
     } finally {
       setPending(false);
@@ -106,20 +111,18 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
         setOpen(next);
       }}
     >
-      <DialogTrigger render={<Button />}>创建用户</DialogTrigger>
+      <DialogTrigger render={<Button />}><Message id="tenant.createUser" /></DialogTrigger>
       <DialogContent className="sm:max-w-md">
         <form onSubmit={submit} className="grid gap-4" noValidate>
           <DialogHeader>
-            <DialogTitle>创建用户</DialogTitle>
+            <DialogTitle><Message id="tenant.createUser" /></DialogTitle>
             <DialogDescription>
-              新用户属于当前租户，创建后即可用该邮箱与密码登录。
-            </DialogDescription>
+              <Message id="tenant.theNewUserBelongsToTheCurrentTenant" /></DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-2">
             <label htmlFor="new-user-email" className="text-sm font-medium">
-              邮箱
-            </label>
+              <Message id="tenant.email" /></label>
             <Input
               id="new-user-email"
               type="email"
@@ -133,8 +136,7 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
 
           <div className="grid gap-2">
             <label htmlFor="new-user-name" className="text-sm font-medium">
-              名称
-            </label>
+              <Message id="tenant.name" /></label>
             <Input
               id="new-user-name"
               autoComplete="off"
@@ -146,8 +148,7 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
 
           <div className="grid gap-2">
             <label htmlFor="new-user-password" className="text-sm font-medium">
-              初始密码
-            </label>
+              <Message id="tenant.initialPassword" /></label>
             <Input
               id="new-user-password"
               type="password"
@@ -157,14 +158,12 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
               disabled={pending}
             />
             <p className="text-xs text-muted-foreground">
-              不限制长度或字符，可以留空。
-            </p>
+              <Message id="tenant.noLengthOrCharacterRestrictionsMayBeLeft" /></p>
           </div>
 
           <div className="grid gap-2">
             <label htmlFor="new-user-role" className="text-sm font-medium">
-              角色
-            </label>
+              <Message id="tenant.role" /></label>
             <Select
               value={role}
               onValueChange={(next) => {
@@ -180,7 +179,7 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
               <SelectContent>
                 {assignableRoles.map((item) => (
                   <SelectItem key={item} value={item}>
-                    {ROLE_LABELS[item]}
+                    {roleLabels(locale)[item]}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -196,9 +195,8 @@ export function CreateUserDialog({ onCreated }: { onCreated: () => void }) {
               disabled={pending}
               onClick={() => setOpen(false)}
             >
-              取消
-            </Button>
-            <SubmitButton pending={pending}>创建</SubmitButton>
+              <Message id="common.cancel" /></Button>
+            <SubmitButton pending={pending}><Message id="common.create" /></SubmitButton>
           </DialogFooter>
         </form>
       </DialogContent>

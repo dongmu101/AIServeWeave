@@ -1,5 +1,7 @@
 "use client";
 
+import { Message } from "@/components/i18n/message";
+
 import * as React from "react";
 
 import { useDocs } from "@/app/console/docs/docs-shell";
@@ -14,8 +16,7 @@ export function ExampleModelField() {
   return (
     <div className="flex flex-wrap items-center gap-2 text-sm">
       <label htmlFor={id} className="text-muted-foreground">
-        示例模型
-      </label>
+        <Message id="tenant.exampleModel" /></label>
       <Input
         id={id}
         value={model}
@@ -25,8 +26,7 @@ export function ExampleModelField() {
         spellCheck={false}
       />
       <span className="text-xs text-muted-foreground">
-        填入后所有示例中的模型名随之替换，可用模型见「AI 服务与模型」。
-      </span>
+        <Message id="tenant.enterAModelNameToReplaceItIn" /></span>
     </div>
   );
 }

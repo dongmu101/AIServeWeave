@@ -1,0 +1,40 @@
+{
+  "menuLabels": {
+    "linearMode_appModeToolbar_apps": "Aplicaciones"
+  },
+  "settingsCategories": {
+    "Nodes 2_0": "Nodos 2.0",
+    "3DViewer": "Visor 3D",
+    "RerouteBeta": "Redirección (beta)"
+  },
+  "cloudOnboarding": {
+    "authTimeout": {
+      "causes": [
+        "Un cortafuegos o proxy corporativo bloquea los servicios de autenticación",
+        "Restricciones de la VPN o de la red",
+        "Extensiones del navegador que interfieren con las solicitudes",
+        "Restricciones de red regionales",
+        "Prueba con otro navegador o red"
+      ]
+    }
+  },
+  "errorDialog": {
+    "accessRestrictedTitle": "Acceso restringido",
+    "accessRestrictedMessage": "Tu cuenta no tiene autorización para usar esta función."
+  },
+  "shape": {
+    "default": "Predeterminada",
+    "CARD": "Tarjeta"
+  },
+  "sideToolbar": {
+    "queueProgressOverlay": {
+      "stubClipTextEncode": "Codificar texto CLIP:"
+    }
+  },
+  "nodeCategories": {
+    "latent": "latente",
+    "mask": "máscara",
+    "patch": "parche",
+    "partner": "socios"
+  }
+}

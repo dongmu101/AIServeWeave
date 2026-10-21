@@ -1,4 +1,11 @@
 "use client";
+import { MessageError } from "@/lib/i18n/problem";
+
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
 
 import * as React from "react";
 import {
@@ -34,7 +41,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { parseAlertRule, parseAlertRules, parseNoContent, type AlertRule } from "@/lib/console/contract";
-import { ApiError, describe } from "@/lib/console/errors";
+import {ApiError } from "@/lib/console/errors";
 import { formatDateTime } from "@/lib/console/format";
 
 const PATH = "/operator/v1/alert-rules";
@@ -49,14 +56,14 @@ const PAGE_SIZE = 50;
  * METRIC_LABELS 把 model.AlertRule 的五个指标标识映射到列表与创建/编辑下拉框
  * 展示的中文标签——线上值是控制面存储与匹配所用的值，标签只是一种呈现。
  */
-const METRIC_LABELS: Record<string, string> = {
-  request_rate: "请求量",
-  success_rate: "成功率",
-  latency_p95: "延迟 P95",
-  token_usage: "token 用量",
-  capacity: "容量",
-};
-const METRIC_OPTIONS = Object.keys(METRIC_LABELS) as (keyof typeof METRIC_LABELS)[];
+const METRIC_LABELS = (t: Translator): Record<string, string> => ({
+  request_rate: t("operator.requestVolume"),
+  success_rate: t("operator.successRate"),
+  latency_p95: t("operator.p95Latency"),
+  token_usage: t("operator.tokenUsage_1493f4"),
+  capacity: t("operator.capacity"),
+});
+const METRIC_OPTIONS = ["request_rate", "success_rate", "latency_p95", "token_usage", "capacity"] as const;
 
 /**
  * OPERATOR_SYMBOLS maps model.AlertRule's four comparison operators onto the
@@ -82,8 +89,8 @@ const DEFAULT_CONSECUTIVE_BUCKETS = 3;
  *
  * metricLabel 渲染一个指标的中文标签；遇到本 Console 尚不认识的值，回退展示线上原始
  * 值——一个未知值是值得展示出来的事实，不该被占位符藏起来。 */
-function metricLabel(metric: string): string {
-  return METRIC_LABELS[metric] ?? metric;
+function metricLabel(metric: string, t: Translator): string {
+  return METRIC_LABELS(t)[metric] ?? metric;
 }
 
 /** thresholdPhrase merges operator and threshold into one human phrase, e.g.
@@ -107,7 +114,7 @@ function thresholdPhrase(rule: AlertRule): string {
  * 形状——纯 http(s)、且不带内嵌凭据的 URL。这只是体验上的便利，不是安全边界：
  * 提交并不会绕过控制面上的任何东西，真正生效的是控制面重新执行的同一项检查。
  */
-function validateWebhookUrl(raw: string): string | null {
+function validateWebhookUrl(raw: string): MessageError | null {
   if (raw.trim() === "") {
     return null;
   }
@@ -115,13 +122,13 @@ function validateWebhookUrl(raw: string): string | null {
   try {
     parsed = new URL(raw);
   } catch {
-    return "Webhook URL 不是合法的 URL。";
+    return new MessageError("operator.webhookUrlIsNotAValidUrl");
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    return "Webhook URL 必须使用 http 或 https。";
+    return new MessageError("operator.webhookUrlMustUseHttpOrHttps");
   }
   if (parsed.username !== "" || parsed.password !== "") {
-    return "Webhook URL 不能包含内嵌凭据。";
+    return new MessageError("operator.webhookUrlCannotContainEmbeddedCredentials");
   }
   return null;
 }
@@ -205,11 +212,12 @@ const NO_RULES: AlertRule[] = [];
  * 表单总是发送全部字段，而不只是当事人改动过的那些。
  */
 export function AlertRulesView() {
+  const { locale, t } = useI18n();
   const run = useConsoleRequest();
   const [formOpen, setFormOpen] = React.useState(false);
   const [editing, setEditing] = React.useState<AlertRule | null>(null);
   const [deleteTarget, setDeleteTarget] = React.useState<AlertRule | null>(null);
-  const [toggleError, setToggleError] = React.useState<string | null>(null);
+  const [toggleError, setToggleError] = React.useState<React.ReactNode>(null);
 
   const rules = usePagedResource<AlertRule>({
     path: PATH,
@@ -253,10 +261,10 @@ export function AlertRulesView() {
           parse: parseAlertRule,
         });
       } catch (failure) {
-        setToggleError(describe(failure));
+        setToggleError(<ErrorMessage error={failure} />);
         return;
       }
-      toast.success(rule.enabled ? `已停用 ${rule.name}` : `已启用 ${rule.name}`);
+      toast.success(rule.enabled ? <Message id={"operator.disabled_ae3f74"} values={{ name: rule.name }} /> : <Message id={"operator.enabled_27282f"} values={{ name: rule.name }} />);
       rules.reload();
     },
     [run, rules]
@@ -273,11 +281,11 @@ export function AlertRulesView() {
     } catch (failure) {
       if (failure instanceof ApiError && failure.kind === "not_found") {
         rules.reload();
-        throw new Error("该规则已不存在，可能已被他人删除。列表已刷新。");
+        throw new MessageError("operator.thisRuleNoLongerExistsSomeoneElseMay");
       }
       throw failure;
     }
-    toast.success(`已删除 ${rule.name}`);
+    toast.success(<Message id={"operator.deleted_5bad4a"} values={{ name: rule.name }} />);
     rules.reload();
   }
 
@@ -290,19 +298,19 @@ export function AlertRulesView() {
             <span className="font-mono text-xs">{info.getValue()}</span>
           ),
         }),
-        helper.accessor("name", { header: "名称" }),
+        helper.accessor("name", { header: t("tenant.name") }),
         helper.accessor("metric", {
-          header: "指标",
-          cell: (info) => metricLabel(info.getValue()),
+          header: t("operator.metrics"),
+          cell: (info) => metricLabel(info.getValue(), t),
         }),
         helper.display({
           id: "threshold",
-          header: "阈值",
+          header: t("operator.threshold"),
           cell: (info) => thresholdPhrase(info.row.original),
         }),
-        helper.accessor("consecutiveBuckets", { header: "连续窗口数" }),
+        helper.accessor("consecutiveBuckets", { header: t("operator.consecutiveWindows") }),
         helper.accessor("enabled", {
-          header: "启用",
+          header: t("tenant.enable"),
           cell: (info) => {
             const rule = info.row.original;
             return (
@@ -311,7 +319,7 @@ export function AlertRulesView() {
                 size="sm"
                 onClick={() => toggleEnabled(rule)}
               >
-                {rule.enabled ? "已启用" : "已停用"}
+                {rule.enabled ? t("operator.enabled") : t("operator.disabled_6c7dcb")}
               </Button>
             );
           },
@@ -320,41 +328,39 @@ export function AlertRulesView() {
           header: "Webhook",
           cell: (info) => (
             <Badge variant={info.getValue() !== "" ? "secondary" : "outline"}>
-              {info.getValue() !== "" ? "已配置" : "未配置"}
+              {info.getValue() !== "" ? t("tenant.configured") : t("tenant.notConfigured")}
             </Badge>
           ),
         }),
         helper.accessor("createdAt", {
-          header: "创建时间",
-          cell: (info) => formatDateTime(info.getValue()),
+          header: t("tenant.createdAt"),
+          cell: (info) => formatDateTime(info.getValue(), undefined, locale),
         }),
         helper.accessor("updatedAt", {
-          header: "更新时间",
-          cell: (info) => formatDateTime(info.getValue()),
+          header: t("operator.updatedAt"),
+          cell: (info) => formatDateTime(info.getValue(), undefined, locale),
         }),
         helper.display({
           id: "actions",
-          header: "操作",
+          header: t("tenant.actions"),
           cell: (info) => {
             const rule = info.row.original;
             return (
               <div className="flex gap-2">
                 <Button variant="outline" size="sm" onClick={() => openEdit(rule)}>
-                  编辑
-                </Button>
+                  <Message id="common.edit" /></Button>
                 <Button
                   variant="destructive"
                   size="sm"
                   onClick={() => setDeleteTarget(rule)}
                 >
-                  删除
-                </Button>
+                  <Message id="common.delete" /></Button>
               </div>
             );
           },
         }),
       ]),
-    [toggleEnabled]
+    [toggleEnabled, t, locale]
   );
 
   const table = useTable({ features, columns, data: rows });
@@ -363,13 +369,11 @@ export function AlertRulesView() {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-lg font-semibold">告警规则</h1>
+          <h1 className="font-heading text-lg font-semibold"><Message id="operator.alertRules" /></h1>
           <p className="text-sm text-muted-foreground">
-            基于 metrics_history 派生指标的阈值规则；每条规则在连续多个窗口越过阈值时
-            触发一次告警实例。停用的规则不参与评估，也不会重新触发已打开的实例。
-          </p>
+            <Message id="operator.thresholdRulesBasedOnMetricsDerivedFromMetrics" /></p>
         </div>
-        <Button onClick={openCreate}>创建规则</Button>
+        <Button onClick={openCreate}><Message id="operator.createRule" /></Button>
       </div>
 
       <FormError message={toggleError} />
@@ -377,13 +381,13 @@ export function AlertRulesView() {
       {rules.error ? (
         <ErrorState message={rules.error} onRetry={rules.reload} />
       ) : rules.loading ? (
-        <LoadingState label="正在加载告警规则" rows={4} />
+        <LoadingState label={t("operator.loadingAlertRules")} rows={4} />
       ) : (
         <>
           <DataTable
             table={table}
-            caption="全部告警规则"
-            emptyMessage="还没有告警规则"
+            caption={t("operator.allAlertRules")}
+            emptyMessage={t("operator.noAlertRulesYet")}
           />
           <Pager resource={rules} loadedCount={rows.length} />
         </>
@@ -404,15 +408,12 @@ export function AlertRulesView() {
             setDeleteTarget(null);
           }
         }}
-        title="删除告警规则"
+        title={t("operator.deleteAlertRule")}
         destructive
-        confirmLabel="删除"
+        confirmLabel={t("common.delete")}
         description={
           deleteTarget ? (
-            <span>
-              将删除规则 <strong>{deleteTarget.name}</strong>。此操作不可撤销；该规则
-              已打开的告警实例不会被一并删除。
-            </span>
+            <span><Message id="operator.deleteRuleThisActionIsIrreversibleOpenAlert" values={{ strong: <strong>{deleteTarget.name}</strong> }} /></span>
           ) : (
             ""
           )
@@ -452,9 +453,10 @@ function AlertRuleFormDialog({
   run: ReturnType<typeof useConsoleRequest>;
   onSaved: () => void;
 }) {
+  const { t } = useI18n();
   const [form, setForm] = React.useState<FormState>(() => formFor(editing));
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   // Re-seed the draft whenever a fresh dialog opens for a (possibly
   // different) target, rather than in an effect — the first paint of a
@@ -484,12 +486,12 @@ function AlertRuleFormDialog({
     }
     const name = form.name.trim();
     if (name === "") {
-      setError("请填写规则名称。");
+      setError(<Message id={"operator.enterARuleName"} />);
       return;
     }
     const threshold = Number(form.threshold);
     if (form.threshold.trim() === "" || !Number.isFinite(threshold)) {
-      setError("请填写有效的阈值。");
+      setError(<Message id={"operator.enterAValidThreshold"} />);
       return;
     }
     const consecutiveBuckets = Number(form.consecutiveBuckets);
@@ -497,13 +499,13 @@ function AlertRuleFormDialog({
       !Number.isInteger(consecutiveBuckets) ||
       consecutiveBuckets < 1
     ) {
-      setError("连续窗口数必须是不小于 1 的整数。");
+      setError(<Message id={"operator.consecutiveWindowsMustBeAnIntegerOfAt"} />);
       return;
     }
     const webhookUrl = form.webhookUrl.trim();
     const webhookError = validateWebhookUrl(webhookUrl);
     if (webhookError !== null) {
-      setError(webhookError);
+      setError(<ErrorMessage error={webhookError} />);
       return;
     }
 
@@ -528,7 +530,7 @@ function AlertRuleFormDialog({
           body,
           parse: parseAlertRule,
         });
-        toast.success(`已创建规则 ${name}`);
+        toast.success(<Message id={"operator.createdRule"} values={{ name: name }} />);
       } else {
         await run({
           method: "PATCH",
@@ -537,12 +539,12 @@ function AlertRuleFormDialog({
           body,
           parse: parseAlertRule,
         });
-        toast.success(`已更新规则 ${name}`);
+        toast.success(<Message id={"operator.updatedRule"} values={{ name: name }} />);
       }
       onOpenChange(false);
       onSaved();
     } catch (failure) {
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
     } finally {
       setPending(false);
     }
@@ -561,32 +563,28 @@ function AlertRuleFormDialog({
       <DialogContent className="sm:max-w-lg">
         <form onSubmit={submit} className="grid gap-4" noValidate>
           <DialogHeader>
-            <DialogTitle>{editing === null ? "创建告警规则" : `编辑 ${editing.name}`}</DialogTitle>
+            <DialogTitle>{editing === null ? t("operator.createAlertRule") : t("operator.edit_feaeda", { name: editing.name })}</DialogTitle>
             <DialogDescription>
-              规则在连续 N 个 5 分钟窗口内越过阈值时触发一次告警实例；停用的规则不参与
-              评估。
-            </DialogDescription>
+              <Message id="operator.aRuleTriggersOneAlertInstanceWhenThe" /></DialogDescription>
           </DialogHeader>
 
           <div className="grid gap-2">
             <label htmlFor="rule-name" className="text-sm font-medium">
-              名称
-            </label>
+              <Message id="tenant.name" /></label>
             <Input
               id="rule-name"
               required
               value={form.name}
               onChange={(event) => setForm({ ...form, name: event.target.value })}
               disabled={pending}
-              placeholder="例如 网关成功率过低"
+              placeholder={t("operator.eGGatewaySuccessRateTooLow")}
             />
           </div>
 
           <div className="grid gap-4 sm:grid-cols-2">
             <div className="grid gap-2">
               <label htmlFor="rule-metric" className="text-sm font-medium">
-                指标
-              </label>
+                <Message id="operator.metrics" /></label>
               <Select
                 value={form.metric}
                 onValueChange={(next) => {
@@ -602,7 +600,7 @@ function AlertRuleFormDialog({
                 <SelectContent>
                   {METRIC_OPTIONS.map((metric) => (
                     <SelectItem key={metric} value={metric}>
-                      {METRIC_LABELS[metric]}
+                      {METRIC_LABELS(t)[metric]}
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -611,8 +609,7 @@ function AlertRuleFormDialog({
 
             <div className="grid gap-2">
               <label htmlFor="rule-operator" className="text-sm font-medium">
-                比较方式
-              </label>
+                <Message id="operator.comparison" /></label>
               <Select
                 value={form.operator}
                 onValueChange={(next) => {
@@ -637,8 +634,7 @@ function AlertRuleFormDialog({
 
             <div className="grid gap-2">
               <label htmlFor="rule-threshold" className="text-sm font-medium">
-                阈值
-              </label>
+                <Message id="operator.threshold" /></label>
               <Input
                 id="rule-threshold"
                 type="number"
@@ -652,8 +648,7 @@ function AlertRuleFormDialog({
 
             <div className="grid gap-2">
               <label htmlFor="rule-buckets" className="text-sm font-medium">
-                连续窗口数
-              </label>
+                <Message id="operator.consecutiveWindows" /></label>
               <Input
                 id="rule-buckets"
                 type="number"
@@ -671,8 +666,7 @@ function AlertRuleFormDialog({
 
           <div className="grid gap-2">
             <label htmlFor="rule-webhook" className="text-sm font-medium">
-              Webhook URL（可选）
-            </label>
+              <Message id="operator.webhookUrlOptional" /></label>
             <Input
               id="rule-webhook"
               type="text"
@@ -682,20 +676,15 @@ function AlertRuleFormDialog({
               placeholder="https://example.com/hooks/alert"
             />
             <p className="text-xs text-muted-foreground">
-              必须是 http 或 https 且不含内嵌凭据；留空表示该规则不发送 Webhook 通知。
-              这里的校验只是镜像控制面的检查，实际生效以控制面重新校验为准。
-            </p>
+              <Message id="operator.mustUseHttpOrHttpsAndContainNo" /></p>
           </div>
 
-          <label className="flex items-center gap-2 text-sm font-medium">
-            <input
+          <label className="flex items-center gap-2 text-sm font-medium"><Message id="operator.enable" values={{ content: <input
               type="checkbox"
               checked={form.enabled}
               onChange={(event) => setForm({ ...form, enabled: event.target.checked })}
               disabled={pending}
-            />
-            启用
-          </label>
+            /> }} /></label>
 
           <FormError message={error} />
 
@@ -706,10 +695,9 @@ function AlertRuleFormDialog({
               disabled={pending}
               onClick={() => onOpenChange(false)}
             >
-              取消
-            </Button>
+              <Message id="common.cancel" /></Button>
             <SubmitButton pending={pending}>
-              {editing === null ? "创建" : "保存"}
+              {editing === null ? t("common.create") : t("common.save")}
             </SubmitButton>
           </DialogFooter>
         </form>
