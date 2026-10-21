@@ -123,25 +123,17 @@ func imagesNodeHandler(statusRunningCalls int, finalState runtime.WorkflowState,
 	}
 }
 
-// connectImagesNode parks two inference slots and one bulk slot, matching a
-// realistically provisioned ComfyUI node (the real Gateway's tunnel SlotHint
-// defaults to MinSlots: 2 in main.go). imagesGenerations dispatches Submit,
-// Status and Artifacts back-to-back on the inference class within a single
-// HTTP request, with none of the natural gap separate polling calls from a
-// real client would leave for one lone slot to re-park in time — connectNode
-// (jobs_test.go) opens only one and is fine for tests that space their calls
-// across separate HTTP round trips, but this endpoint's own inline loop
-// needs a second one. OpenArtifact needs its own bulk slot, exactly as
-// artifacts_test.go's connectArtifactNode already sets up.
+// connectImagesNode parks three inference slots and one bulk slot. A successful
+// imagesGenerations request dispatches Submit, Status and Artifacts back-to-back
+// on the inference class. Each operation needs a parked slot even if the
+// previous operation's slot has not asynchronously re-parked yet; two slots
+// make artifact assertions intermittently fail with a capacity error instead.
+// OpenArtifact uses the separate bulk slot, as in connectArtifactNode.
 //
-// connectImagesNode 停靠两个推理槽和一个批量槽，匹配一个按现实配置的 ComfyUI
-// 节点（真实 Gateway 的隧道 SlotHint 在 main.go 里默认 MinSlots: 2）。
-// imagesGenerations 在一次 HTTP 请求内，于推理这一类别上背靠背派发 Submit、
-// Status 与 Artifacts，不像真实客户端分开的轮询调用那样天然留有让孤零零
-// 一个槽来得及重新停靠的间隙——connectNode（jobs_test.go）只开一个，对那些
-// 把调用分散在不同 HTTP 往返里的测试够用，但本端点自己的内联循环需要第二个。
-// OpenArtifact 需要它自己的批量槽，与 artifacts_test.go 的
-// connectArtifactNode 已经搭好的方式相同。
+// connectImagesNode 停靠三个推理槽和一个批量槽。成功的 imagesGenerations 请求
+// 会在推理类别上背靠背派发 Submit、Status 与 Artifacts。前一步使用的槽可能还未
+// 异步重新停靠，因此每一步都需要预留一个槽；只准备两个会让产物断言偶发先遇到
+// 容量错误。OpenArtifact 使用独立的批量槽，与 connectArtifactNode 相同。
 func connectImagesNode(t *testing.T, h *gatewaytest.Harness, nodeID, runtimeID string, handle gatewaytest.SlotHandler) {
 	t.Helper()
 	c := h.Connect(nodeID, runtimeID)
@@ -152,8 +144,9 @@ func connectImagesNode(t *testing.T, h *gatewaytest.Harness, nodeID, runtimeID s
 	}}})
 	h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, nodeID+"-slot-1", handle)
 	h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, nodeID+"-slot-2", handle)
+	h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, nodeID+"-slot-3", handle)
 	h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_BULK, nodeID+"-bulk-1", handle)
-	gatewaytest.WaitFor(t, "both inference slots to park on "+nodeID, func() bool { return gatewaytest.IdleCount(h, nodeID) == 2 })
+	gatewaytest.WaitFor(t, "all three inference slots to park on "+nodeID, func() bool { return gatewaytest.IdleCount(h, nodeID) == 3 })
 	gatewaytest.WaitFor(t, "the bulk slot to park on "+nodeID, func() bool {
 		info, _ := h.Srv.Node(nodeID)
 		return info.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_BULK] == 1
