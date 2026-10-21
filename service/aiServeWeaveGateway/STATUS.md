@@ -1,8 +1,8 @@
 # aiserveweave-gateway
 
-数据面。对外终结 OpenAI 兼容 API、Anthropic Messages v1（纯文本）、Ollama 原生推理 API（纯推理端点）、音频转录/翻译端点与工作流 Job API，对内通过隧道把请求派给节点。
+数据面。对外终结 OpenAI 兼容 API（含图像生成）、Anthropic Messages v1（文本、图片、文档与调用方工具）、Ollama 原生推理 API（纯推理端点）、音频转录/翻译、Rerank 与工作流 Job API，对内通过隧道把请求派给节点。
 
-**当前进度：隧道服务端、调度器、OpenAI 前门、ComfyUI 工作流的提交与状态查询、Registry 名册订阅、指标导出与只读的运维清单端点均已落地。** 这个二进制现在能接住 Agent、知道每个节点能服务什么、把 HTTP 请求路由过去，自己的副本身份会同步给 Registry 维护的名册，并在 `-metrics-addr` 上导出 Prometheus 文本格式的指标。
+**当前进度：隧道服务端、调度器、各协议前门、工作流 Job 全链路（提交、状态、事件流、取消、产物列举与下载、对象存储）、控制面路由与模板同步、Job 旁路持久化与恢复、Registry 名册订阅、指标导出、只读运维清单，以及模型拉取与 ComfyUI Managed 的触发端点均已落地。** 这个二进制现在能接住 Agent、知道每个节点能服务什么、把 HTTP 请求路由过去，自己的副本身份会同步给 Registry 维护的名册，并在 `-metrics-addr` 上导出 Prometheus 文本格式的指标。
 
 | 目录 | 状态 | 内容 |
 | --- | --- | --- |
@@ -16,8 +16,14 @@
 | `ratelimit/` | 已实现 | 租户配额执行：连续补充的令牌桶，`Memory`（副本内）与 `Redis`（集群级）两个实现 |
 | `registryclient/` | 已实现 | 向 Registry 的 `GatewayDirectory` 报到，把收到的名册转发给 `tunnelserver.Server.SetRoster` |
 | `controlplaneclient/` | 已实现 | `Verifier` 对着控制面校验 API Key，进程内缓存，发出的是哈希而不是调用方的 key；`JobsClient`（STATUS.md 的 J04）是控制面 Job 持久化内部 API 的客户端，与 `Verifier` 刻意分开——它不缓存、不重试；`GatewayPersister` 把它同时适配成 `httpapi.JobPersistClient`（J05，写入）与 `httpapi.JobRecoveryClient`（J06，重启后按路由绑定读回非终态 job），分别接入 `httpapi/jobpersist.go` 与 `httpapi/jobrecover.go` 的两个后台循环 |
+| `adminapi/` | 已实现 | `-admin-addr` 上只读的运维端点：机群清单、路由与工作流目录及其生效状态、按租户的 job 列表、ComfyUI Managed 自定义节点对账，供控制面聚合；不接受写操作，见「运维清单监听器」 |
+| `modelpullapi/` | 已实现 | 按名字触发节点本地模型拉取并读回状态（P2 模型分发子任务二）；独立监听器与 token，见「模型拉取触发」 |
+| `comfyuimanagedapi/` | 已实现 | 对节点本地声明的唯一 Managed ComfyUI 实例触发 start/stop/restart 与按名字安装自定义节点，读回容器状态（P2 ComfyUI Managed 子任务二、四）；见「ComfyUI Managed 触发」 |
+| `messagesession/` | 已实现 | 经共享 `-redis-addr` 跨副本协调调用方工具续接，供 Claude Code 原生 Messages 使用；见「Claude Code 原生 Messages」 |
+| `objectstore/` | 已实现 | 产物与输入文件字节的存储后端：`local`、`s3`、`webdav` 三个实现，由 `-artifact-storage` 选择，留空关闭（P04）；见「工作流 Job」第十二条 |
+| `internal/gatewaytest/` | 测试辅助 | 内存 gRPC 流与节点证书，测试逐帧扮演 Agent，不需要监听端口 |
 | `e2e/` | 已实现 | 真实 TCP + mTLS 下三副本与真实 Agent 的联调测试 |
-| `main.go` | 已实现 | 装配隧道监听、HTTP 监听、Registry 名册订阅、`/metrics` 监听 |
+| `main.go` | 已实现 | 装配隧道监听、HTTP 监听、Registry 名册订阅、`/metrics` 监听；`routes.go`/`workflows.go` 选择路由表与工作流模板的来源（文件或控制面），`local_inventory.go` 为运维清单发现本机后端，`docs.go` 在公开监听器上提供嵌入的 `GET /openapi.yaml` 与 Swagger UI `GET /docs/`（`docsui/`），不需要 API Key |
 
 隧道协议本身定义在 [../aiServeWeaveAgent/tunnel/README.md](../aiServeWeaveAgent/tunnel/README.md)，改这里的代码前先读那份。两端共用 `common/runtime`（类型与接口）与 `common/tunnelwire`（proto 编解码），不允许任一侧另写一份等价转换。
 
@@ -88,9 +94,9 @@ go run ./service/aiServeWeaveGateway -model-pull-addr 127.0.0.1:8092 ...
 - **与 `-admin-addr` 刻意分处不同监听器、不同 token。** `-admin-addr` 一节的文档明文写着它"都不接受写操作"，触发一次拉取是写操作，塞进那个监听器会让那句话变成假话；两者 token 泄漏的滥用后果也不同——一个泄漏读到机群清单，这一个泄漏能让任意已连接节点开始下载它本地清单已经批准的一切，爆炸半径更大，因此没有理由比 `-admin-addr` 更宽松。
 - **触发从不携带 URL，只有名字。** Agent 对着自己本地清单（`-model-pull-manifest`）解析，Gateway 只能从 Agent 已经批准的名字集合里选——即使这个监听器的 token 被盗，能做的也只是"从节点已批准的名字里选"，不能让节点访问任意地址；协议层的完整论证见隧道 README「模型拉取的按名字触发」一节与上述设计文档。
 - **触发是异步的，HTTP 响应不携带名字级结果。** 202 只表示这次触发已经发到隧道的 Control 流上；未知名字、已在下载中等情况只能从随后的 `GET` 观察——Control 流"不设专门 ack 帧"是既有设计（`GatewayControl_Config` 同一先例），本端点不为了让响应更即时而破坏它。
-- **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/modelpullrouter`（并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/model-pulls`，详见 [ControlPlane README「模型拉取转发（P2 模型分发子任务二的控制面转发层）」](../aiServeWeaveControlPlane/README.md#模型拉取转发p2-模型分发子任务二的控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
+- **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/modelpullrouter`（并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/model-pulls`，详见 [ControlPlane STATUS「模型拉取转发（P2 模型分发子任务二的控制面转发层）」](../aiServeWeaveControlPlane/STATUS.md#模型拉取转发p2-模型分发子任务二的控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
 - **没有 token 时拒绝启动**，与 `-admin-addr` 同一克制：一个能让节点开始下载的入口不该以未认证方式提供。
-- **范围边界**：控制面转发层已交付，Console 可见性（子任务五）仍未排期；`common/modelroute.Target` 不新增"这个模型别名对应哪个制品名字"的映射，调用方（运维，无论是直接调用本节点端点还是经控制面转发）自己决定触发哪个名字。
+- **范围边界**：控制面转发层与 Console 可见性（子任务五，Console 运维端的 `app/operator/(protected)/model-pulls` 页面）均已交付；`common/modelroute.Target` 不新增"这个模型别名对应哪个制品名字"的映射，调用方（运维，无论是直接调用本节点端点还是经控制面转发）自己决定触发哪个名字。
 
 ## ComfyUI Managed 触发（STATUS.md 的 P2「ComfyUI Managed Docker 部署」子任务二）
 
@@ -111,11 +117,11 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 - **动作从不携带镜像名、挂载路径或任何其他 spec 字段，只有一个封闭动作。** 镜像、GPU、挂载路径永远是 Agent 本地 flag 配置的（`-comfyui-managed-image` 等），运维想换镜像版本仍要先改本机 flag 再触发 RESTART，从不是把镜像名交给 Gateway 转发——即使这个监听器的 token 被盗，能做的也只是对已声明的实例喊 start/stop/restart，不能让 Agent 跑任意镜像；这是 `tunnel.proto` 头部「不得表达 run this command」红线在这一层的延续，完整论证见隧道 README「ComfyUI Managed 的生命周期动作触发」一节与上述设计文档。
 - **动作不携带容器名。** 一个 Agent 进程今天最多管理一个 Managed 实例，动作总是针对 Agent 本地已声明的那一个 Spec；一台机器上想管理多个 Managed 实例是子任务二之后仍未排期的已知缺口。
 - **触发是异步的，HTTP 响应不携带执行结果。** 202 只表示这次触发已经发到隧道的 Control 流上；容器实际状态只能从随后的 `GET` 观察——Control 流"不设专门 ack 帧"是既有设计（`GatewayControl_Config`/模型拉取触发同一先例），本端点不为了让响应更即时而破坏它。
-- **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/comfyuimanagedrouter`（与 `internal/modelpullrouter` 形状对称：并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/comfyui-managed`，详见 [ControlPlane README「ComfyUI Managed 转发（P2 ComfyUI Managed Docker 部署子任务三的控制面转发层）」](../aiServeWeaveControlPlane/README.md#comfyui-managed-转发p2-comfyui-managed-docker-部署子任务三控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
+- **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/comfyuimanagedrouter`（与 `internal/modelpullrouter` 形状对称：并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/comfyui-managed`，详见 [ControlPlane STATUS「ComfyUI Managed 转发（P2 ComfyUI Managed Docker 部署子任务三的控制面转发层）」](../aiServeWeaveControlPlane/STATUS.md#comfyui-managed-转发p2-comfyui-managed-docker-部署子任务三控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
 - **没有 token 时拒绝启动**，与 `-admin-addr`/`-model-pull-addr` 同一克制：一个能启停容器的入口不该以未认证方式提供。
 - **排空升级检查已交付，但只覆盖本副本的路由表。** `HasActiveJob`（`httpapi.Server.HasActiveJobOnNode`，注入方式与 `Trigger`/`Status` 相同）只把关 `action="restart"`：本副本仍有非终态 job 的 `Candidate.NodeID` 等于该节点时答 409，不下发到隧道；START/STOP 不受影响。这只是"本副本自己知道的 job"，不是全局真相——一个同时连到多个副本的节点，其活跃 job 可能只被另一个副本追踪，本检查看不到那种情况；也不会自动等待排空，调用方需要在 job 结束后自行重试。
 - **自定义节点安装已交付（子任务四）**：`-comfyui-managed-addr` 新增 `POST .../comfyui-managed/custom-nodes`，安装源（仓库 URL + 固定 ref）100% 留在 Agent 本地 `-comfyui-managed-custom-nodes` 允许列表，本端点只传一个名字，理由与生命周期动作不携带镜像名同一条 `tunnel.proto` 红线；`GET` 响应同时携带该实例上报的已安装节点清单。`-admin-addr` 新增只读诊断 `GET /internal/v1/comfyui-managed/reconcile?node_id=&template_id=`，把工作流模板声明的自定义节点依赖与该节点实际安装的对账，纯读取、不写审计、不接入调度决策——`common/comfyuimanagedstatus.ReconcileCustomNodes` 的调用方之一，设计文档见 [`docs/superpowers/specs/2026-09-19-p2-comfyui-managed-docker-subtask4-design.md`](../../docs/superpowers/specs/2026-09-19-p2-comfyui-managed-docker-subtask4-design.md)。
-- **范围边界**：单实例、无 Console 可见性——是设计文档拆分出的最后一项后续子任务（子任务五）。
+- **范围边界**：单实例，见上文「动作不携带容器名」。Console 可见性（设计文档拆分出的最后一项子任务五）已交付，见 Console 运维端的 `app/operator/(protected)/comfyui-managed` 页面。
 
 ## API Key 鉴权
 
@@ -170,7 +176,7 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 5. **取消是请求，不是结论。** ComfyUI 的中断是异步的，因此 `cancel` 返回 202 后 job 仍是后端最后报告的那个状态，直到状态查询或事件流带回真正的结果——在这里就把它标成 `cancelled`，是 Gateway 在编造一个没人告诉过它的结果。已结束的 job 返回 409（请求与状态冲突），节点不具备中断能力时返回 501（`cancel_unsupported`），而不是笼统的 500——后者会让调用方跑到我们这边找问题。
 6. **产物的公开 id 与后端路径无关。** 后端用 `filename`+`subfolder`+`type` 三元组定位产物，那是通往它自己磁盘布局的一条路径。这个三元组绝不作为标识符抵达调用方：`artifact_id` 在列举时铸造、经由存储解回，因此调用方无法伪造一个指向本次运行没有产出的文件的 id。id 在多次列举之间稳定——每次调用铸一套新的，会让每轮轮询都把存储撑大一点。
 7. **产物下载走批量槽，且不落地。** `OPERATION_ARTIFACT_LIST` 是有界回复，走推理槽；`OPERATION_ARTIFACT_OPEN` 流出整个响应体，走批量槽，两类槽在隧道里物理隔离，一次大的下载挤不掉推理。前门用 `io.Copy` 直通转发，本进程从不完整持有一个产物，背压经由同一次读取抵达 Agent。回显进 `Content-Disposition` 的文件名先被清洗：目录部分、CR、LF、引号与控制字符一律移除而不是转义——那个名字来自后端，并经由工作流自己的保存节点前缀最终来自调用方。
-8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；内存条目在副本重启时丢失，内存表不跨副本共享；配置控制面持久化后，已落库历史保留，非终态路由绑定可由后台恢复器读回（第十一条）。持久化属于控制面的 `jobs` 表，写入时机、失败语义与状态机的设计见 [ControlPlane README 的「Job 持久化契约」](../aiServeWeaveControlPlane/README.md#job-持久化契约j01j08-实现与边界)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖，第十条约束是这条原则的具体落实。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
+8. **job 表在内存里，且有界。** 上限 `httpapi.DefaultMaxJobs`（10000），超出逐出最旧的一条；内存条目在副本重启时丢失，内存表不跨副本共享；配置控制面持久化后，已落库历史保留，非终态路由绑定可由后台恢复器读回（第十一条）。持久化属于控制面的 `jobs` 表，写入时机、失败语义与状态机的设计见 [ControlPlane STATUS 的「Job 持久化契约」](../aiServeWeaveControlPlane/STATUS.md#job-持久化契约j01j08-实现与边界)——核心原则是这条持久化链路是旁路记录，不能让控制面变成推理请求路径上的同步依赖，第十条约束是这条原则的具体落实。job 按租户隔离：不属于本租户的 job id 与不存在的 job id 得到同一个 404，产物 id 同理——产物就是生成出来的图像本身，那是这整个界面里最要紧的一处泄露。逐出一个 job 时，解析到它的产物 id 一并删除，否则被逐出的 job 的产物会留在一张不再受任何东西约束的表里继续可下载。
 9. **后台同步器代替不再轮询的调用方推进 job。** `httpapi/jobsync.go` 的 `jobSyncer` 周期性向每个非终态 job 的节点问一次状态，实现在 `jobStore.dueForSync`/`syncSucceeded`/`syncFailed` 上；没有它，一次没人继续轮询、也没人挂着 SSE 的运行会永远停在最后被观测到的状态，即便后端早已跑完。它在三个维度上同时有界：`SyncBatchSize`（默认 200）限定一轮问多少个 job，`SyncConcurrency`（默认 8）限定同时问多少个，`SyncCallTimeout`（默认 10s）限定单次询问能挂多久；一轮必须跑完才安排下一轮的计时器（默认间隔 `SyncInterval` 5s），因此从不重叠、慢一轮只会推迟下一轮而不会堆积。节点消失时 `NodeRuntime.snapshot` 返回 `*runtime.RuntimeError{Code: ErrorConnection}`，这是预期内的失败，不当错误记日志、也不改 job 状态——README「state 是最后观测状态」在这里必须继续成立，一个节点短暂不可达不是运行本身发生变化的证据；连续失败会按 `syncFailures` 翻倍退避（上限 `SyncMaxBackoff`，默认 5 分钟），一个持续消失的节点因此被越问越少，而不是每轮都问。任何一次前台观测（状态轮询或 SSE 事件，两者共用 `jobStore.update`）都会清空这份退避：既然确实有什么触达到了它，此前的惩罚期就不再成立。`Server.Close` 停止这个后台循环并等待正在进行的一轮跑完——本身已被批次、并发与超时三重限定，因此这个等待有界，main.go 在 HTTP 监听器停止、隧道被拆除之前调用它，避免对着一条正在有意关闭的隧道打出一串「node is not connected」告警。
 10. **后台持久化器把 job 记录写进控制面，且从不与推理路径同步。** `httpapi/jobpersist.go` 的 `jobPersister`（STATUS.md 的 J05）在 `submitRun`、`jobStatus` 轮询与 SSE 终态写入这三处观测点之后被非阻塞地 `nudge()` 提醒，但它自己的写入永远在另一个协程里进行——202、轮询响应、SSE 帧都在持久化调用返回之前就已经发给调用方。一个 job 需要持久化的条件是 `job.needsPersist()`：`persisted` 为 false（从未确认过 `CreateJob`），或 `persistedSeq < ObservedSeq`（已确认的落后于本副本最新的观测）；`ObservedSeq` 只在 `jobStore.update()` 里因 State 或 ErrorSummary 真正变化才自增，一次只确认同一状态的轮询不会触发一次白白的持久化写入。**结果不明时的重试只会针对同一个 job id 与同一份路由绑定再问一次控制面，绝不重新提交给节点、也绝不铸造新 job id**——`jobPersister` 唯一一个形似 `scheduler` 的依赖是 `artifactOpener`（P04 起为把产物字节复制进对象存储而存在），已经收窄到 `OpenArtifact` 这一个方法，类型里没有任何地方能发起 `Submit` 或派发，架构上就做不到重新提交，这正是 STATUS.md「结果未知时不盲目重提」在代码里的落实。批次、并发与超时的三重有界与退避机制与 `jobSyncer`同构，但用独立的 `persistFailures`/`nextPersistAt` 记账：控制面不可达与节点不可达是两个互不相关的故障域，合用一套退避会让一处故障拖住另一处本该继续的重试。`dueForPersist` 刻意不排除终态 job——一次运行的最终状态恰恰是最不该丢失的记录，也是 `jobSyncer` 自己的轮询在 job 到达终态那一刻起就不再覆盖的情形。**这是尽力而为的旁路，不是可靠队列**：重试状态存在 `jobStore` 自己的记账里，与内存 job 表其余部分同样在进程重启时丢失、同样受 `DefaultMaxJobs` 逐出上限约束——一个还没来得及持久化就被逐出的 job，这次持久化机会随之消失，这是已知且如实记录的限制，不是靠着承诺"不会丢"蒙混过去的隐患。
 11. **后台恢复器在重启后找回非终态 job 的路由绑定，且从不发明结果。** `httpapi/jobrecover.go` 的 `jobRecoverer`（STATUS.md 的 J06）周期性地就 `scheduler.WorkflowCapableCandidates()` 报告的每一个当前已连接节点/runtime，向控制面问一句「我欠这个路由绑定什么」（`JobRecoveryClient.ListActiveJobsForRoute`），并用 `jobStore.recoverIfMissing` 把本副本尚不知道的 job 补回内存表——这正是重启后 `job.Candidate`（节点/运行时标识）与 `job.RunID`（后端运行标识）失而复得的地方，且从不序列化任何连接对象：`NodeRuntime` 本就在每次调用时重新按 (nodeID, runtimeID) 解析节点（见隧道那边的 `node_runtime.go`），恢复回来的 `Candidate` 不过是它一直以来的那两个字符串。恢复到的 job 会把 `ObservedSeq`/`persisted`/`persistedSeq` 播种为控制面已有的值，而不是从零开始——否则 `jobPersister` 头几次真实观测会因为本地序号"看起来更旧"而被控制面无声丢弃。**恢复的执行权刻意不是排他的**：这个节点/runtime 连接到的任何副本都可以恢复并操作同一个 job，多个副本各自独立同步或持久化同一个 job 在构造上就是安全的——控制面的 `observed_seq` 单调门槛（见 ControlPlane README「Job 持久化契约」）本就无需协调即可化解并发写入，这里没有锁要拿，因为没有什么需要锁来保护。**一个再也没有重新连接到任何副本的节点不会被当作失败处理**：本恢复器从不主动为一个够不着的 job 编造状态，该 job 只会停在最后观测到的记录上，与本 README 一贯反对"编造一个没人告诉过它的结果"的立场一致。
@@ -197,7 +203,7 @@ data: {"job_id":"job_…","type":"progress","node":"3","data":{"value":5,"max":2
 README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产物列表这一步顺带扩了隧道契约：新增 `OPERATION_ARTIFACT_LIST`（`RunRef` 进、`ArtifactList` 出，走推理槽），`runtime.WorkflowRuntime` 相应新增 `Artifacts` 方法——ComfyUI 适配器早有这个实现，此前停在适配器里过不了隧道。
 
 16. **任务时长/成功率/OOM/产物传输四项指标各只有一个记录点，不在多个调用方重复统计（STATUS.md 的 A06）。** `jobStore.update` 是 `jobSyncer`、`jobStatus` 轮询与 SSE 终态写入三条路径共用的唯一写入口，且早已用 `ObservedSeq`（第十条）分辨"真实变化"与"重复轮询"——`gateway_workflow_jobs_total`/`gateway_workflow_job_duration_seconds`/`gateway_workflow_job_oom_total` 就利用这同一个判断，只在一个 job **从非终态第一次转入终态**的那一次 `update` 调用里记录，此前所有非终态 `update` 与此后所有重复报告同一终态的 `update` 都不再记。时长取 `now - job.CreatedAt`（提交到终态的墙钟时间），不是后端自己上报的 `StartedAt`/`FinishedAt`——ComfyUI 适配器目前从不填充这两个字段，取 Gateway 自己记录的提交时间是唯一可靠的起点。OOM 计数完全依赖 `runtime.WorkflowStatus.OutOfMemory`，该字段由 ComfyUI 适配器对 history 的 `exception_type`/`exception_message` 做文本匹配设置（`common/runtime/workflow/comfyui/runtime.go` 的 `looksLikeOutOfMemory`），Gateway 侧只负责在终态转换时读取、从不重新判断。产物传输的两个指标记在 `jobpersist.go` 的 `persistArtifactBytes` 里，与它本就在做的 `countingReader` 字节计数共用同一次读取，不为指标多读一遍产物。三者的记录器都通过 `*recorder`（`jobPersistConfig.Metrics`/`jobStore.metrics`）注入，为 `nil` 时安全退化为不记录——多数测试与任何未接入 `-metrics-addr` 的部署都是这个状态。
-17. **ComfyUI 队列深度记在 Agent 侧，不在 Gateway 这份目录里；对象存储用量记在控制面。** 队列深度只有持有真实隧道连接、能直接问 ComfyUI `GET /queue` 的那一侧才知道，因此 `comfyui_queue_running`/`comfyui_queue_pending`（`runtime_id` 标签）由 `common/runtime/workflow/comfyui` 适配器记录，复用 `Status`/`Cancel` 本就会发起的 `GET /queue`，不为指标新增任何请求——见 [Agent README](../aiServeWeaveAgent/README.md)。对象存储用量故意不做成 Gateway 侧的运行时累加计数器：Gateway 的 job/产物状态是有界内存、副本重启即丢（第八条），一个"上传 +size、清理 -size"的计数器会在每次重启后静默归零，却不影响对象存储里真实躺着的字节——因此改为控制面按 STATUS.md 的 A06 定期对 `job_artifacts` 表做 `SUM(size_bytes)`（只算 `storage_key` 非空的行），产物元数据本就持久化在那里，是这个数字唯一权威的来源；见 [ControlPlane README](../aiServeWeaveControlPlane/README.md)。
+17. **ComfyUI 队列深度记在 Agent 侧，不在 Gateway 这份目录里；对象存储用量记在控制面。** 队列深度只有持有真实隧道连接、能直接问 ComfyUI `GET /queue` 的那一侧才知道，因此 `comfyui_queue_running`/`comfyui_queue_pending`（`runtime_id` 标签）由 `common/runtime/workflow/comfyui` 适配器记录，复用 `Status`/`Cancel` 本就会发起的 `GET /queue`，不为指标新增任何请求——见 [Agent STATUS](../aiServeWeaveAgent/STATUS.md#当前实现)。对象存储用量故意不做成 Gateway 侧的运行时累加计数器：Gateway 的 job/产物状态是有界内存、副本重启即丢（第八条），一个"上传 +size、清理 -size"的计数器会在每次重启后静默归零，却不影响对象存储里真实躺着的字节——因此改为控制面按 STATUS.md 的 A06 定期对 `job_artifacts` 表做 `SUM(size_bytes)`（只算 `storage_key` 非空的行），产物元数据本就持久化在那里，是这个数字唯一权威的来源；见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md)。
 18. **`listArtifacts`/`downloadArtifact` 在本地未命中时回退到控制面（STATUS.md 的「Gateway 故障切换收尾」）。** J06 的 `jobRecoverer`（第十一条）只恢复非终态 job 的路由绑定，从不触及产物；一个终态 job 从跑它之外的副本被访问，或本副本重启后被问起，此前会直接 404——即使控制面早已持久化了这个 job 与它的产物。`httpapi/artifacts.go` 新增的回退不改变本地命中路径的任何行为，只在 `h.jobs.get`/`h.jobs.artifact` 未命中、且配置了 `Config.ArtifactRecoveryClient` 时才生效：`downloadArtifact` 按产物的裸公开 id（下载请求携带的唯一标识符，没有 job id）向控制面新增的 `GET /internal/v1/artifacts/{artifact_id}` 发问（`ArtifactRoute`），拿回 `StorageKey` 与所属 job 的 `NodeID`/`RuntimeID` 后照旧走"先试对象存储、失败再实时拉取"的既有逻辑；`listArtifacts` 先用 `JobExists` 确认 job 存在（用于把"job 不存在"与"job 存在但零产物"分开），再用既有的 `ListJobArtifacts`/`GetJob` 读回此前某次列举已经铸造、控制面已确认的产物 id——**绝不重新铸造一套新 id**，也绝不为此直接联系节点，因为这条路径存在的意义正是本副本可能压根没有通向该节点的活路由。恢复到的记录**不缓存进 `h.jobs`**：它在 `h.jobs.byID` 里没有可供一同逐出的所属条目，缓存会让它无边界地活得比这张表自己的逐出机制所能追踪的任何东西都久，代价是同一个"外来"产物每次下载都会再问一次控制面。一次从未被 `listArtifacts` 列举过的 job（异步 Job API 的调用方从未主动列举过产物）在任何副本上都无法恢复——这不是本条修的缺口，产物 id 本就只在列举那一刻铸造。`controlplaneclient.GatewayPersister` 新增第四个接口 `httpapi.ArtifactRecoveryClient`，与它已经满足的 `JobPersistClient`/`JobRecoveryClient`/`ArtifactCleanupClient` 是同一个适配器上追加的第四个。**已知边界**：终态 job 的产物下载依赖它此前确实被某个副本列举并成功持久化过（`persistArtifacts`，第十条/十二条）；一个刚完成、尚未轮到下一轮 `jobPersister.tick` 或复制仍在失败重试窗口内的产物，切换副本后依旧会短暂拿不到。
 
 ## 请求日志中间件与推送（P09/C28）
@@ -222,7 +228,7 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
 3. **有界缓冲、批量异步推送，从不重试。** `requestLogPusher` 用一个容量 10000（`DefaultRequestLogBufferSize`）的有界 channel 承接中间件产生的记录；后台协程按攒够 500 条（`DefaultRequestLogBatchSize`）或每 5 秒（`DefaultRequestLogFlushInterval`）——以先到者为准——把一批推给控制面的 `POST /internal/v1/requestlogs`（`controlplaneclient.RequestLogsClient`）。**channel 满时丢弃新记录，同时对指标 `gateway_request_log_dropped_total` 自增，不阻塞正在处理的推理请求**——这是 AGENTS.md 安全红线「任何一跳都不得无界缓冲」的落实，请求记录是诊断性数据，允许极端负载下的少量丢失。一批推送失败（网络层错误）时整批本地丢弃，不重试——重试请求记录只会造成无界的本地积压。Gateway 优雅停止时对现有缓冲做一次尽力而为的 flush，不保证清空。
 4. **上报字段不含任何需要脱敏的内容。** 记录只有 `request_id`（`common/reqid` 铸造，同时是控制面 `request_logs` 表的主键，天然防重）、`tenant_id`、`apikey.Display(key)` 的展示形式（前缀 + 明文前 8 位，不存完整 key 或哈希）、封闭 `endpoint` 枚举、原始状态码、`Outcome`、耗时毫秒数与创建时间；不记录请求体、响应体、模型名、node_id、Prompt 片段或鉴权头。
 
-设计与验证细节见 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)；控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane README「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/README.md#请求日志检索p09c28)。
+设计与验证细节见 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)；控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)。
 
 ## 按租户/模型的持久化用量账本（STATUS.md 的 P2）
 
@@ -234,7 +240,7 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
 4. **去重规则是主键本身。** `RequestID`（`common/reqid` 铸造）既是控制面 `usage_records` 表的主键，也是幂等写入的依据（`ON CONFLICT DO NOTHING`）——一次被重试的批量推送，第二次到达时被静默跳过，不会让同一次请求的用量被计两次。
 5. **复用与请求日志相同的控制面连接。** `-control-plane-addr`/`-control-plane-token`（或 `AISW_CONTROLPLANE_TOKEN` 环境变量）驱动 `controlplaneclient.UsageLedgerClient` 推送到 `POST /internal/v1/usagerecords`；未配置控制面的部署，账本整体关闭（`h.usageLedger` 为 `nil`），不新增独立的地址/令牌配置项。
 
-控制面侧的表结构、内部推送端点幂等性、两个结算查询端点（`/admin/v1/usage/summary`、`/operator/v1/usage/summary`）与保留期见 [ControlPlane README「用量账本（STATUS.md 的 P2）」](../aiServeWeaveControlPlane/README.md#用量账本status-md-的-p2)。已知缺口：定价/发票生成不在范围内——账本只给出按 (租户, 模型) 分组的 token 求和与请求计数，结算金额需要一个外部计费流程消费这份汇总；Console 尚未接入结算页面。
+控制面侧的表结构、内部推送端点幂等性、两个结算查询端点（`/admin/v1/usage/summary`、`/operator/v1/usage/summary`）与保留期见 [ControlPlane STATUS「用量账本（STATUS.md 的 P2）」](../aiServeWeaveControlPlane/STATUS.md#用量账本statusmd-的-p2)。已知缺口：定价/发票生成不在范围内——账本只给出按 (租户, 模型) 分组的 token 求和与请求计数，结算金额需要一个外部计费流程消费这份汇总；Console 尚未接入结算页面。
 
 ## 工作流模板版本与发布（P03）
 
@@ -258,7 +264,7 @@ aiserveweave-gateway \
 
 **依赖检查仅做结构性声明校验，不核对节点实际能力。** 模板作者可以声明 `Dependencies{CustomNodes, Models}`（自定义节点包与模型 checkpoint 及其版本），发布时只检查非空、去重与数量上限，从不与任何已连接节点实际上报的已装列表交叉核对——因为目前没有节点上报这类信息，跨这条边界属于超出本轮范围的新协议设计。`Outputs` 同理：声明的是产出该结果的节点与种类，仅结构性校验该节点存在于图中，不核实运行后是否真的产出了声明种类的产物。
 
-公开契约见 `common/workflowtemplate`；限额、控制面存储与 CAS 语义见 [ControlPlane README「工作流模板发布契约（P03）」](../aiServeWeaveControlPlane/README.md#工作流模板发布契约p03)。
+公开契约见 `common/workflowtemplate`；限额、控制面存储与 CAS 语义见 [ControlPlane STATUS「工作流模板发布契约（P03）」](../aiServeWeaveControlPlane/STATUS.md#工作流模板发布契约p03)。
 
 ## Responses API
 
@@ -283,7 +289,7 @@ aiserveweave-gateway \
 
 ### 工具循环与 Codex CLI 接入
 
-**本机 Codex 作为推理后端：** Agent 已支持本地声明 `kind: codex`，凭据留在 Agent，客户端工具仍由调用方执行，见 [Agent Codex 接入](../aiServeWeaveAgent/README.md#codex-cli-接入)。新版 Codex 的 developer-role `additional_tools` 输入项也可声明工具，前门把这些定义与顶层 tools 合并并转换为同一套客户端工具；它们在当前生成中立即可用，不保留声明的历史位置或实现 tool_search 延迟发现。内置托管工具仍按既有允许/拒绝规则处理。
+**本机 Codex 作为推理后端：** Agent 已支持本地声明 `kind: codex`，凭据留在 Agent，客户端工具仍由调用方执行，见 [Agent Codex 接入](../aiServeWeaveAgent/STATUS.md#codex-cli-接入)。新版 Codex 的 developer-role `additional_tools` 输入项也可声明工具，前门把这些定义与顶层 tools 合并并转换为同一套客户端工具；它们在当前生成中立即可用，不保留声明的历史位置或实现 tool_search 延迟发现。内置托管工具仍按既有允许/拒绝规则处理。
 
 
 Codex CLI 只走 Responses（新版已弃用 `wire_api = "chat"`），并把整个 agent 循环建立在工具调用之上，所以这个前门除了文本还要完整承载工具循环。以下行为由 `httpapi/responses_tools.go`（工具定义与输入项翻译）与 `httpapi/responses_stream.go`（流式事件状态机）实现，已用 codex-cli 0.156.1 对着真实 Gateway 联调过：模型调用 `exec_command`、Codex 本地执行、结果以 `function_call_output` 回传、模型据此收尾。
@@ -347,7 +353,7 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 
 ### Responses 持久会话（P2）
 
-`-control-plane-addr` 配置了控制面时，`store`/`previous_response_id` 从「指名拒绝」变成生效，沿用 Job 持久化（J01–J08）已确立的控制面表 + 内部 API + Gateway 客户端形状；控制面一侧的存储契约见 [ControlPlane README「Responses 持久会话（P2）」](../aiServeWeaveControlPlane/README.md#responses-持久会话p2)，设计见 [`docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md`](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md) 第三节。
+`-control-plane-addr` 配置了控制面时，`store`/`previous_response_id` 从「指名拒绝」变成生效，沿用 Job 持久化（J01–J08）已确立的控制面表 + 内部 API + Gateway 客户端形状；控制面一侧的存储契约见 [ControlPlane STATUS「Responses 持久会话（P2）」](../aiServeWeaveControlPlane/STATUS.md#responses-持久会话p2)，设计见 [`docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md`](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md) 第三节。
 
 - **写入侧是有界异步的（`httpapi/responsespersist.go` 的 `responsePersister`）**：`store:true` 时，这一轮自己的输入加上 assistant 的回复被编码成不透明 JSON，交给一个信号量限流的后台写入（默认并发 8，`-control-plane-addr`/`-control-plane-token` 复用），绝不阻塞调用方正在等待的响应——并发已满时丢弃并计入 `gateway_response_persist_dropped_total`，写入失败计入 `gateway_response_persist_failed_total`，均不重试、不入持久队列，与请求日志推送同一纪律。
 - **读取侧是同步的**：`previous_response_id` 非空时，Gateway 在派发请求之前先沿它逐跳调用控制面的 `GetResponseTurn` 走到根轮次，按时间顺序拼接每一跳自己的消息，作为前缀拼在这一轮自己的输入之前再发给后端——这一步是调用方请求路径的一部分，因为调用方点名了一段具体对话，需要一个确切答案而不是一段可能残缺的历史。链路深度有界（默认 50 跳，`maxResponseChainDepth`），超出时拒绝（503）而不是静默截断；未知或不属于该租户的 `previous_response_id` 答 400，不是编造一段更短的历史，也不是看起来像本 Gateway 自身故障的 500。
@@ -409,7 +415,7 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 1. **排序有两层，外层属于运维。** target 按 priority 依次尝试（数值小的在前，与 Kubernetes 一致），同优先级的可用 target 按权重随机排列（0 等同 1），再在各 target 内部按「空闲槽最多、上报队列占用最低、在途最少」三级选择候选（第二级见下方第 5 条；这是默认的 `least_load` 策略，可换成其他目标内排序策略，见下方第 6 条）。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个声明的偏好，不会被一台一时更空闲的机器推翻。优先级是排序不是排除——首选匹配不到节点时会落到次选。
 2. **节点选择器是「与」。** 声明的每个标签都必须匹配；空选择器匹配所有节点。一条意为「其中任意一个」的规则根本无法表达「本地那台 4090」，而那正是运维实际会写的规则。
 3. **别名在离开 Gateway 之前被改写成真实模型名**，客户端始终不会得知后者。`GET /v1/models` 因此在有路由表时只列别名——两者都公布等于邀请客户端绑定到某个运行时模型，而那正是别名要防止的事。没有活节点能服务的别名会被略去：一个用起来就 404 的目录条目，比一个缺失的条目更糟。
-4. **`min_gpu_memory_bytes` 是准入门槛，不是排序维度**（STATUS.md 的 P2）。target 可选声明一个最小 GPU 显存总量；候选节点声明的显存（Agent 在 Hello 握手时上报的 `NodeResources.GpuMemoryBytes`，见 [Agent README](../aiServeWeaveAgent/README.md) 的 `hostresources/`）低于这个值就在候选阶段被整体排除，不参与后续任何排序。零值（默认）不做任何过滤。**未上报硬件、或上报零显存的节点永远不被此字段排除**——未声明的容量不是容量不足的证据，这样才能保证某个 target 第一次设置这个字段的那天，不会把所有还没升级 Agent 版本的节点一并挡在外面。详见 [P2 设计文档](../../docs/superpowers/specs/2026-09-15-p2-resource-aware-scheduling-design.md)。
+4. **`min_gpu_memory_bytes` 是准入门槛，不是排序维度**（STATUS.md 的 P2）。target 可选声明一个最小 GPU 显存总量；候选节点声明的显存（Agent 在 Hello 握手时上报的 `NodeResources.GpuMemoryBytes`，见 [Agent STATUS](../aiServeWeaveAgent/STATUS.md#当前实现) 的 `hostresources/`）低于这个值就在候选阶段被整体排除，不参与后续任何排序。零值（默认）不做任何过滤。**未上报硬件、或上报零显存的节点永远不被此字段排除**——未声明的容量不是容量不足的证据，这样才能保证某个 target 第一次设置这个字段的那天，不会把所有还没升级 Agent 版本的节点一并挡在外面。详见 [P2 设计文档](../../docs/superpowers/specs/2026-09-15-p2-resource-aware-scheduling-design.md)。
 5. **队列占用是排序维度，不是准入门槛，且只对 ComfyUI 有意义**（STATUS.md 的 P2 实时利用率子任务）。ComfyUI 同一时间只渲染一个任务，但它的软件并发上限与其他运行时共用同一个默认值——这意味着一个正在渲染的 ComfyUI 实例，空闲槽读数照样可以很高，「空闲槽最多」这一级排序因此分不清它和一个真正空闲的实例。`common/runtime/workflow/comfyui.Runtime.Health` 在存活性检查之外顺带查一次 `GET /queue`，写进 `HealthReport.QueueRunning`/`QueuePending`（`tunnel.proto` 的 `HealthReport` 消息新增字段，随 `RuntimeSnapshot` 一起到达 Gateway）；`pickBy` 在「空闲槽」相同的候选之间，优先选这两个数之和更低的一个，再退回「在途最少」。其余运行时种类这两个字段恒为 0，排序上等同于「确认空闲」——不上报这件事本身从不被当作惩罚，也不影响 Ollama/vLLM/SGLang 现有的排序结果。查询失败不影响健康检查本身，只是把这两个字段留在零值。必要性评估与范围收窄见 [必要性评估文档](../../docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md)。
 6. **目标内排序策略由 `-scheduler-policy` 选择，只作用于同一个 target 内部**（`scheduler/policy.go`）。优先级与权重仍先生效，策略只决定同等偏好的候选先试哪个；其余候选按最少负载顺序排在后面，作为重试回退。可选值：
    - `least_load`（默认）：即第 1 条的三级排序，与引入此 flag 之前的行为完全一致。
@@ -577,7 +583,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 | `gateway_artifact_transfer_bytes_total` | — | 已成功复制进对象存储的产物字节数，与上一行同一次调用产生，只在成功时累加 |
 | `gateway_artifact_transfer_duration_seconds` | — | 单次产物字节复制耗时，无论成败 |
 
-ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_queue_pending`，`runtime_id` 标签）记在 Agent 侧，不在这份表里——见 [Agent README](../aiServeWeaveAgent/README.md) 的对应小节；控制面侦测的存储用量指标（`controlplane_artifact_storage_bytes`）同理，见 [ControlPlane README](../aiServeWeaveControlPlane/README.md)。三者合起来是 STATUS.md A06 要求的"队列长度、任务时长、成功率、OOM、产物传输与存储用量"六项观测。
+ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_queue_pending`，`runtime_id` 标签）记在 Agent 侧，不在这份表里——见 [Agent STATUS](../aiServeWeaveAgent/STATUS.md#当前实现) 的对应小节；控制面侦测的存储用量指标（`controlplane_artifact_storage_bytes`）同理，见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md)。三者合起来是 STATUS.md A06 要求的"队列长度、任务时长、成功率、OOM、产物传输与存储用量"六项观测。
 
 **模型名不进任何标签，请求路径也不进。** 两者都是调用方在公开 API 的请求体/URL 里给的自由文本，进了标签就等于让单个客户端决定指标后端里有多少条序列。按模型记账属于用量记录，那里由本部署实际拥有的模型目录来约束。这条规则有可执行版本：`scheduler` 与 `tunnelserver` 各有一个标签基数测试，任何记录点开始传模型名都会当场失败。
 
@@ -592,7 +598,7 @@ ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_
 1. **OpenTelemetry**：`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器。P08 已经把 Gateway 前门铸造的 `request_id`（`common/reqid`）一路带到 Scheduler 派发决策、Tunnel 分发/完成与 Agent 后端调用，落地为可按 `request_id` 关联的结构化日志，但仍是日志而非独立的 trace 存储——接入真正的 span/trace 后端是独立的一步，见 STATUS.md 的 P08。
 2. **Gateway↔Registry 双向认证**：目前 Gateway 只校验 Registry 的服务端证书，不向 Registry 出示客户端证书；要不要让 Gateway 也进入 Registry 签发的 mTLS 体系，等控制面需要更强隔离时再评估。
 
-Registry 侧指标已在 P08 落地，见 [Registry README](../aiServeWeaveRegistry/README.md#指标)。
+Registry 侧指标已在 P08 落地，见 [Registry STATUS](../aiServeWeaveRegistry/STATUS.md#指标)。
 
 ## 质量门禁
 
@@ -606,7 +612,11 @@ go test -race ./service/aiServeWeaveGateway/...
 
 ## 持久化与访问的现有限制
 
-R04 对照 `httpapi/jobs.go`、`jobrecover.go` 与 `artifacts.go` 核实：公开 Job 响应尚未输出 J01 设计的 `durability` 字段；202 只表示后端提交成功，不确认落库。后台恢复仅扫描非终态 Job，下载只查本副本内存中的产物映射，不会按历史产物 ID 从控制面恢复映射。因此历史元数据可查不保证终态 Job 或原产物 ID 在重启/切换副本后仍能通过数据面访问；原节点离线也会影响文件可用性。
+对照 `httpapi/jobs.go`、`jobevents.go`、`jobrecover.go` 与 `artifacts.go` 核实（R04 初次核实之后，「Gateway 故障切换收尾」补上了产物回退，本节已按现状改写）：
+
+- 公开 Job 响应尚未输出 J01 设计的 `durability` 字段；202 只表示后端提交成功，不确认落库。
+- `GET /v1/jobs/{job_id}` 与 `GET /v1/jobs/{job_id}/events` 只查本副本内存表。后台恢复器只找回非终态 Job 的路由绑定（「工作流 Job」第十一条），因此终态 Job 在副本重启或切换后从数据面查询得到 404，历史只能经控制面的 Job 历史接口查看。
+- 产物列举与下载在本地未命中时回退到控制面（第十八条），有 `StorageKey` 时优先从对象存储读取（第十二条）。仍有三处缺口：产物 ID 只在调用方列举时铸造，从未被列举过的 Job 没有可恢复的产物 ID；刚完成、尚未被下一轮 `jobPersister` 持久化的产物，切换副本后会短暂拿不到；未配置 `-artifact-storage` 时下载只能从原节点实时拉取，原节点离线即不可用。
 
 ## 控制面管理路由（P02）
 
@@ -638,7 +648,7 @@ aiserveweave-gateway \
 3. 逐个将 Gateway 改为控制面模式，移除 `-model-routes`，为每个副本挂载独立持久缓存；在 Console 逐个检查实际版本与摘要。滚动接管期间新旧模式可能并存，显示未完成。
 4. 配置内容回滚应在 Console 选择历史版本并发布为新版本。若需退出控制面模式，先导出选定版本的 `routes` 数组到文件、校验后显式切回 file 并重启；不得把包含 revision 等元数据的缓存文件直接当作旧路由数组使用。
 
-公开契约见 `common/modelroute`；带宽/内存/历史容量上限和控制面 API 见 [ControlPlane README](../aiServeWeaveControlPlane/README.md#模型路由发布p02)。
+公开契约见 `common/modelroute`；带宽/内存/历史容量上限和控制面 API 见 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md#模型路由发布p02)。
 
 ## Codex CLI 输出上限兼容
 

@@ -231,7 +231,7 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 | [x] C28 请求与错误检索 | `/console/requests`、`/operator/requests`：按时间、状态、request ID 查询脱敏元数据，共享 `app/console/requests/request-log-view.tsx` 列表/分页/筛选视图；运维视角额外多一个 `tenant_id` 筛选框 | 控制面 `POST /internal/v1/requestlogs`（Gateway 异步批量上报）、`GET /admin/v1/requests`、`GET /operator/v1/requests`（P09）：新表 `request_logs`，保留期默认 30 天；不展示或记录完整 Prompt、鉴权头 |
 | [x] C29 告警 | `/operator/alert-rules`（规则列表 + 创建/编辑/启停表单，`app/operator/alert-rules/alert-rules-view.tsx`）、`/operator/alerts`（实例列表，展示状态/触发时间/确认时间/通知发送状态，`firing` 实例提供"确认处理"按钮，`app/operator/alerts/alerts-view.tsx`），均挂在既有 `/operator` 导航、与 `/operator/metrics`（C27）相邻 | 控制面 5 个规则 CRUD 端点（`/operator/v1/alert-rules`）与 2 个实例端点（`GET /operator/v1/alerts`、`POST /operator/v1/alerts/:id/acknowledge`），均 `requirePlatformSession`（P09）：新表 `alert_rules`/`alert_instances`，评估循环无条件运行、默认 60 秒一轮；告警判定在服务端计算，浏览器只做展示与手动确认 |
 
-Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。Gateway 实时视图来自有界内存；已落库的历史记录由控制面查询。非终态恢复与产物下载边界见 [Gateway README](../aiServeWeaveGateway/README.md#持久化与访问的现有限制)。
+Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。Gateway 实时视图来自有界内存；已落库的历史记录由控制面查询。非终态恢复与产物下载边界见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#持久化与访问的现有限制)。
 
 ### M5 的两个前置决定
 
@@ -285,7 +285,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | 控制面 | 新表 `request_logs`（`internal/store/gormstore/requestlogmigrate.go` 固定版本迁移）、`internal/store` 的 `RequestLogs` 接口（gormstore/memstore 两个实现）、`internal/logic.CreateRequestLogs`/`ListRequestLogs`、`internal/handler` 的 `POST /internal/v1/requestlogs`、`GET /admin/v1/requests`、`GET /operator/v1/requests`、`internal/requestlogretention`（保留期清理，默认 30 天） |
 | Console | `app/console/requests/request-log-view.tsx`（租户/运维共享的列表/分页/筛选视图）、`app/console/requests/page.tsx`（`/console/requests`）、`app/operator/(protected)/requests/page.tsx`（`/operator/requests`，多一个 `tenant_id` 筛选框）、`lib/console/upstream-routes.ts` 新增两条转发白名单 |
 
-详见根 STATUS 的 P09 行、[Gateway README「请求日志中间件与推送（P09/C28）」](../aiServeWeaveGateway/README.md#请求日志中间件与推送p09c28)、[ControlPlane README「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/README.md#请求日志检索p09c28)与设计文档 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（149 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，详见根 STATUS 的 P09 行。
+详见根 STATUS 的 P09 行、[Gateway STATUS「请求日志中间件与推送（P09/C28）」](../aiServeWeaveGateway/STATUS.md#请求日志中间件与推送p09c28)、[ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)与设计文档 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（149 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，详见根 STATUS 的 P09 行。
 
 ### C29（告警）实现位置
 
@@ -295,7 +295,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | 控制面 | 新表 `alert_rules`/`alert_instances`（`internal/store/gormstore/alertingmigrate.go` 固定版本迁移）、`internal/alertengine`（评估循环 `evaluator.go`、派生指标算法 `metrics.go`、Webhook 发送 `webhook.go`）、`internal/store` 的对应接口（gormstore/memstore 两个实现）、`internal/logic/alertrules.go`/`alertinstances.go`、`internal/handler` 的 5 个规则 CRUD 端点与 2 个实例端点（均在 `/operator/v1/alert-rules`、`/operator/v1/alerts` 下） |
 | Console | `app/operator/alert-rules/alert-rules-view.tsx` + `app/operator/(protected)/alert-rules/page.tsx`（`/operator/alert-rules`）、`app/operator/alerts/alerts-view.tsx` + `app/operator/(protected)/alerts/page.tsx`（`/operator/alerts`）、`lib/console/upstream-routes.ts` 新增 7 条转发白名单 |
 
-详见根 STATUS 的 P09 行与 [ControlPlane README「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/README.md#告警评估与通知p09c29)、设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
+详见根 STATUS 的 P09 行与 [ControlPlane STATUS「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/STATUS.md#告警评估与通知p09c29)、设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
 
 ### 工作流模板的节点图预览（P03 后续）
 
@@ -329,7 +329,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | 层 | 落点 |
 | --- | --- |
 | 契约 | 控制面 `internal/apidocs`（文档结构、校验规则、内置种子）与 `logic.APIDocSummary`/`APIDocDetail`/`OperatorAPIDoc*`；Console `lib/console/api-docs.ts`（解析、分组、占位符替换、写入体积上限） |
-| 控制面 | 新表 `api_docs`（固定版本迁移）、启动时 `SyncAPIDocSeeds` 填充 19 份内置文档；租户 2 个只读端点、平台 6 个管理端点，见 [ControlPlane README「API 参考文档（租户）」](../aiServeWeaveControlPlane/README.md#api-参考文档租户) |
+| 控制面 | 新表 `api_docs`（固定版本迁移）、启动时 `SyncAPIDocSeeds` 填充 19 份内置文档；租户 2 个只读端点、平台 6 个管理端点，见 [ControlPlane STATUS「API 参考文档（租户）」](../aiServeWeaveControlPlane/STATUS.md#api-参考文档租户) |
 | Console | 租户 `/console/docs`（快速开始 + 端点索引）与 `/console/docs/[slug]`（左侧分组导航、参数表、多语言请求示例与按状态码的响应示例，`app/console/docs/`）；运维 `/operator/api-docs`（JSON 编辑 + 实时预览、恢复内置版本、删除）；渲染部件 `components/console/api-doc-article.tsx` 两侧共用；`lib/console/upstream-routes.ts` 新增 8 条转发白名单 |
 
 示例中的基地址取 `AISW_CONSOLE_PUBLIC_GATEWAY_URL`（租户可访问的公开 Gateway 地址，可带路径前缀），未设置时退回 `AISW_CONSOLE_GATEWAY_URL`。

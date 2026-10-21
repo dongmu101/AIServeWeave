@@ -10,3 +10,6 @@ dist/
 *.pem
 /aiServeWeaveAgent
 .cache
+
+# go test -c / dlv test binaries
+*.test

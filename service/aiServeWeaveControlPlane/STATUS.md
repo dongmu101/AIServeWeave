@@ -430,7 +430,7 @@ J06 的 `GET /internal/v1/jobs/active` 只回答非终态 job，且按路由绑�
 
 响应类型 `types.ArtifactRouteResponse` 是继 `ExpiredJobArtifact` 之后第二个携带 `StorageKey` 的内部专用类型，并额外带上所属 job 的 `NodeID`/`RuntimeID`（`GetArtifactRoute` 顺带用 `artifact.JobID` 查一次 `store.Jobs.GetJob` 拼出来）——这两项与 `types.JobArtifactResponse`（被 `listJobArtifacts` 与租户历史详情共用）刻意分开，绝不会合并进那个类型：`JobArtifactResponse` 的文档注释已经明确排除了 `StorageKey`，理由是对象存储的内部寻址与节点 id 一样不该被租户看到。
 
-Gateway 侧的消费者是 `httpapi/artifacts.go` 新增的回退逻辑（`downloadArtifact` 用 `ArtifactRoute`、`listArtifacts` 用既有的 `GetJob`+`ListJobArtifacts` 通过新增的 `JobExists` 判断"job 不存在"与"job 存在但零产物"），只在本副本自己的内存表未命中时才触发，详见 [Gateway README「工作流 Job」第 18 条](../aiServeWeaveGateway/README.md#工作流-job)。`controlplaneclient.GatewayPersister` 新增第四个接口 `httpapi.ArtifactRecoveryClient`，与它已经满足的 `JobPersistClient`/`JobRecoveryClient`/`ArtifactCleanupClient` 是同一个适配器上追加的第四个。
+Gateway 侧的消费者是 `httpapi/artifacts.go` 新增的回退逻辑（`downloadArtifact` 用 `ArtifactRoute`、`listArtifacts` 用既有的 `GetJob`+`ListJobArtifacts` 通过新增的 `JobExists` 判断"job 不存在"与"job 存在但零产物"），只在本副本自己的内存表未命中时才触发，详见 [Gateway STATUS「工作流 Job」第 18 条](../aiServeWeaveGateway/STATUS.md#工作流-job)。`controlplaneclient.GatewayPersister` 新增第四个接口 `httpapi.ArtifactRecoveryClient`，与它已经满足的 `JobPersistClient`/`JobRecoveryClient`/`ArtifactCleanupClient` 是同一个适配器上追加的第四个。
 
 ### 已实现的产物保留期清理（P04）
 
@@ -760,7 +760,7 @@ response_turns(
 - `POST /internal/v1/responses`：`CreateResponseTurn`，同一租户下重复的 `response_id` 是幂等成功（返回已有行），不是冲突——与 `CreateJob` 相同的「提交结果未知」窗口处理方式。
 - `GET /internal/v1/responses/:id?tenant_id=...`：`GetResponseTurn`，`tenant_id` 是查询参数而非从会话推断——这里没有会话，只有 Gateway 自己的断言，与 `GET /internal/v1/jobs/:id` 相同。
 
-Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，与 `JobsClient` 同构：`ErrNotFound`/`ErrConflict`/`ErrInvalidRequest`/`ErrOutcomeUnknown` 同一套词汇）+ `ResponsesPersister` 适配器满足 `httpapi` 自己声明的窄接口 `ResponsesPersistClient`（打破导入环，与 `GatewayPersister` 之于 Jobs 同理）。`store:true` 的写入侧是有界异步（信号量限流的 fire-and-forget，默认并发 8，绝不阻塞调用方正在等待的响应，掉线时计入 `gateway_response_persist_dropped_total`/`gateway_response_persist_failed_total`）；`previous_response_id` 的读取侧是同步的——调用方点名了一段具体对话，必须在这次请求内得到确切答案（未知 id 答 400，控制面不可达答 503），而不能因为一次后台写入还在路上就悄悄给出一段更短的历史。详见 [Gateway README「Responses 持久会话」](../aiServeWeaveGateway/README.md#responses-持久会话p2)。
+Gateway 侧：`controlplaneclient.ResponsesClient`（`CreateTurn`/`GetTurn`，与 `JobsClient` 同构：`ErrNotFound`/`ErrConflict`/`ErrInvalidRequest`/`ErrOutcomeUnknown` 同一套词汇）+ `ResponsesPersister` 适配器满足 `httpapi` 自己声明的窄接口 `ResponsesPersistClient`（打破导入环，与 `GatewayPersister` 之于 Jobs 同理）。`store:true` 的写入侧是有界异步（信号量限流的 fire-and-forget，默认并发 8，绝不阻塞调用方正在等待的响应，掉线时计入 `gateway_response_persist_dropped_total`/`gateway_response_persist_failed_total`）；`previous_response_id` 的读取侧是同步的——调用方点名了一段具体对话，必须在这次请求内得到确切答案（未知 id 答 400，控制面不可达答 503），而不能因为一次后台写入还在路上就悄悄给出一段更短的历史。详见 [Gateway STATUS「Responses 持久会话」](../aiServeWeaveGateway/STATUS.md#responses-持久会话p2)。
 
 未配置本控制面（`-control-plane-addr` 为空）时，`store`/`previous_response_id` 的行为与本功能存在之前完全一样：均被拒绝。已知缺口：无自动保留期清理（`response_turns` 会话内容可能包含长期 Prompt，目前无过期回收，与 `request_logs`/产物保留期清理不同）；未接入真实 PostgreSQL/MySQL 的 live 测试验证双数据库迁移（默认测试套件与 `memstore` 等价单元测试已通过即视为完成，与 P09 新增表同一先例）。
 

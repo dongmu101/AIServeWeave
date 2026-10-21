@@ -8,7 +8,7 @@
 
 - [README.md](README.md) —— 架构、协议兼容、数据模型、路线图。
 - [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md) —— 隧道协议定义、连接状态机、槽池、实施阶段。改隧道相关代码前必读。
-- [service/aiServeWeaveControlPlane/README.md](service/aiServeWeaveControlPlane/README.md) —— 控制面为什么用 go-zero 而数据面不用、三种凭据的三种存法、吊销的生效路径。改控制面或 Gateway 鉴权前必读。
+- [service/aiServeWeaveControlPlane/STATUS.md](service/aiServeWeaveControlPlane/STATUS.md) —— 控制面为什么用 go-zero 而数据面不用、三种凭据的三种存法、吊销的生效路径。改控制面或 Gateway 鉴权前必读。
 
 **README 与代码不一致视为缺陷。** 改公共 API 时同步更新对应文档，不要留到"以后补"。
 

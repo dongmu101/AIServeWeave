@@ -9,7 +9,7 @@
 // TokenAdmin service (STATUS.md's S02), not direct file access: minting and
 // revocation both need to observe and update the same mutex-guarded state
 // Register consumes, which only the server process can do safely — see
-// service/aiServeWeaveRegistry/README.md.
+// service/aiServeWeaveRegistry/STATUS.md.
 package main
 
 import (

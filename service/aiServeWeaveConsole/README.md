@@ -72,7 +72,7 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 取消与产物 | `POST /v1/jobs/{id}/cancel`、`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}` | 实时 Job 与历史详情 | Console 服务端使用租户 Key 直连 Gateway，需在 `/console/settings` 配置 |
 | 发布状态 | `GET /operator/v1/workflows` | `/operator/workflows` | 同一份目录，保留「哪些副本注册了它、是否一致」 |
 
-三个列表端点返回 `{ "items": [...], "next_cursor": "..." }` 信封而不是裸数组：`next_cursor` 缺席表示末页，**接口不提供总数**。分页是基于 `(created_at, id)` 倒序的 keyset 游标，`limit` 默认 50、上限 200。契约细节见 [控制面 README](../aiServeWeaveControlPlane/README.md#列表分页)。
+三个列表端点返回 `{ "items": [...], "next_cursor": "..." }` 信封而不是裸数组：`next_cursor` 缺席表示末页，**接口不提供总数**。分页是基于 `(created_at, id)` 倒序的 keyset 游标，`limit` 默认 50、上限 200。契约细节见 [控制面 STATUS](../aiServeWeaveControlPlane/STATUS.md#列表分页)。
 
 API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveControlPlane/internal/types/types.go)、[路由](../aiServeWeaveControlPlane/internal/handler/routes.go) 和业务逻辑为准。用户、Key 与审计列表均返回上述分页信封，吊销成功返回 `204`，错误体为 `{ "error": "..." }`。
 
@@ -82,7 +82,7 @@ API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveCon
 
 ### 准备后端联调环境
 
-1. 按 [ControlPlane README](../aiServeWeaveControlPlane/README.md) 启动数据库、启用 AOF 持久化的 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
+1. 按 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md) 启动数据库、启用 AOF 持久化的 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
 2. 由运维按部署说明创建第一个租户及 owner。租户引导使用 BootstrapToken，常规 Console 会话不持有它。若控制面开启了 `Signup.Enabled` 且 Console 设置了 `AISW_CONSOLE_SIGNUP_ENABLED=true`，也可以直接在 `/signup` 自助注册。
 3. 以该 owner 登录 Console，走完「创建用户 → 创建 Key → 关闭一次性明文 → 吊销 → 查询审计 → 退出」。
 

@@ -8,7 +8,7 @@ AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、�
 
 ## 当前能力与规划边界
 
-当前实现支持 OpenAI Chat Completions、Responses（含 SSE 与完整的工具循环，可接入 Codex CLI，见 Gateway README「工具循环与 Codex CLI 接入」；`store` / `previous_response_id` 仅在配置控制面时可用）、Embeddings、Models、图像生成，Anthropic Messages（含 SSE，纯文本+图片子集，不支持工具调用与文档内容块），Ollama 原生 API（`/api/chat`/`/api/generate`/`/api/embeddings`，纯推理端点，不支持工具调用与模型管理；每消息 `images` 字段是独立的 Ollama 专有形状，尚未接入），以及经 Agent Tunnel 执行的受控工作流 Job API。Agent 还可通过本地声明 `kind: codex` 使用本机已登录的 Codex CLI 作为文本/客户端工具推理后端，账户能生图时还经 `/v1/images/generations` 提供图像模型 `codex-image`（每次一张、只接受提示词），凭据留在 Agent，工具在调用方执行，边界见 [Agent README](service/aiServeWeaveAgent/README.md#codex-cli-接入)。OpenAI Chat Completions/Responses 与 Anthropic Messages 三个前门共用同一套结构化消息内容（文本+图片，`common/runtime.ChatMessage.ContentParts`）。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。Claude Code CLI 已接入本地声明的 `kind: claude`，通过原生 Messages 隧道与 Redis 续接定位提供文本、多轮追问及调用方工具循环，同时支持 Gateway 转换的 OpenAI Chat Completions（JSON/SSE，含工具续接）；两种协议的此前回合都作为带角色的文本上下文交给新的 CLI 会话，边界见 [Agent Claude 说明](service/aiServeWeaveAgent/claudecode/README.md)。Grok、OpenCode、Cursor、CodeBuddy Code、Qoder、Pi Coding Agent 六种编程智能体 CLI 已接入本地声明的同名 `kind`，作为纯文本 Chat 后端（不支持工具与图片，输出上限不执行），边界见 [Agent CLI 说明](service/aiServeWeaveAgent/cliagent/README.md)。托管模型供应商（OpenAI、Gemini、DeepSeek、Kimi、Qwen、Zhipu、MiniMax、OpenAI Compatible / Custom 与 Claude 官方 API、Anthropic Compatible）可在 Agent 本地声明为运行时，Key 只经 `api_key_env` 从 Agent 所在机器的环境变量读取、不过隧道，见 [托管供应商说明](common/runtime/hosted/README.md) 与 [Anthropic 说明](common/runtime/anthropic/README.md)。接口限制以服务 README 为准。
+当前实现支持 OpenAI Chat Completions、Responses（含 SSE 与完整的工具循环，可接入 Codex CLI，见 Gateway README「工具循环与 Codex CLI 接入」；`store` / `previous_response_id` 仅在配置控制面时可用）、Embeddings、Models、图像生成，Anthropic Messages（含 SSE，纯文本+图片子集，不支持工具调用与文档内容块），Ollama 原生 API（`/api/chat`/`/api/generate`/`/api/embeddings`，纯推理端点，不支持工具调用与模型管理；每消息 `images` 字段是独立的 Ollama 专有形状，尚未接入），以及经 Agent Tunnel 执行的受控工作流 Job API。Agent 还可通过本地声明 `kind: codex` 使用本机已登录的 Codex CLI 作为文本/客户端工具推理后端，账户能生图时还经 `/v1/images/generations` 提供图像模型 `codex-image`（每次一张、只接受提示词），凭据留在 Agent，工具在调用方执行，边界见 [Agent STATUS](service/aiServeWeaveAgent/STATUS.md#codex-cli-接入)。OpenAI Chat Completions/Responses 与 Anthropic Messages 三个前门共用同一套结构化消息内容（文本+图片，`common/runtime.ChatMessage.ContentParts`）。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。Claude Code CLI 已接入本地声明的 `kind: claude`，通过原生 Messages 隧道与 Redis 续接定位提供文本、多轮追问及调用方工具循环，同时支持 Gateway 转换的 OpenAI Chat Completions（JSON/SSE，含工具续接）；两种协议的此前回合都作为带角色的文本上下文交给新的 CLI 会话，边界见 [Agent Claude 说明](service/aiServeWeaveAgent/claudecode/README.md)。Grok、OpenCode、Cursor、CodeBuddy Code、Qoder、Pi Coding Agent 六种编程智能体 CLI 已接入本地声明的同名 `kind`，作为纯文本 Chat 后端（不支持工具与图片，输出上限不执行），边界见 [Agent CLI 说明](service/aiServeWeaveAgent/cliagent/README.md)。托管模型供应商（OpenAI、Gemini、DeepSeek、Kimi、Qwen、Zhipu、MiniMax、OpenAI Compatible / Custom 与 Claude 官方 API、Anthropic Compatible）可在 Agent 本地声明为运行时，Key 只经 `api_key_env` 从 Agent 所在机器的环境变量读取、不过隧道，见 [托管供应商说明](common/runtime/hosted/README.md) 与 [Anthropic 说明](common/runtime/anthropic/README.md)。接口限制以服务 README 为准。
 
 Agent 本地声明 `kind: gemini-cli` 后，还可通过 Gemini CLI 官方 Nano Banana 扩展发布仅支持生图的 `gemini-image` 模型，经 `/v1/images/generations` 返回单张图片。实现直接调用扩展的固定 MCP 工具，不启动聊天模型；需要 Agent 本机环境变量中的 Gemini API Key，现有 `kind: gemini` 继续用于托管 API 聊天。安装、配置与验证边界见 [Gemini CLI 生图说明](service/aiServeWeaveAgent/geminicli/README.md)。
 
@@ -196,19 +196,19 @@ type InferEvent struct {
 }
 ```
 
-已实现的基础兼容 API（参数与限制见 [Gateway README](service/aiServeWeaveGateway/README.md)）：
+已实现的基础兼容 API（参数与限制见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md)）：
 
-OpenAI Chat Completions 与 Anthropic Messages 的客户端 Base URL 统一填写 `http://127.0.0.1:8080/v1`。Gateway 兼容 Anthropic SDK 额外追加的 `/v1`，原有标准端点和 Anthropic 根地址配置继续可用，详见 [Gateway 接入说明](service/aiServeWeaveGateway/README.md#api-key-鉴权)。
+OpenAI Chat Completions 与 Anthropic Messages 的客户端 Base URL 统一填写 `http://127.0.0.1:8080/v1`。Gateway 兼容 Anthropic SDK 额外追加的 `/v1`，原有标准端点和 Anthropic 根地址配置继续可用，详见 [Gateway 接入说明](service/aiServeWeaveGateway/STATUS.md#api-key-鉴权)。
 
 - `POST /v1/chat/completions`（含 SSE）
 - `POST /v1/responses`（含 SSE）
 - `POST /v1/embeddings`
 - `GET /v1/models`
-- `POST /v1/messages`（Anthropic Messages，**纯文本+图片子集**：图片内容块已支持，工具调用与文档内容块仍按名字拒绝而非静默丢弃；追求完整功能对等还需要解决工具交互的形状差异，见 [Gateway README「Anthropic Messages」](service/aiServeWeaveGateway/README.md#anthropic-messages)）
-- `POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（Ollama 原生 API **纯推理端点**：不支持工具调用、`format`、视觉输入与模型管理类端点，均按名字拒绝或明确答「不支持」而非静默忽略/404，见 [Gateway README「Ollama 原生 API」](service/aiServeWeaveGateway/README.md#ollama-原生-api)）
-- `POST /v1/images/generations`（OpenAI-compatible 图像生成，映射到管理员指定的单一 ComfyUI 模板，见 [Gateway README「图像生成」](service/aiServeWeaveGateway/README.md#图像生成)）
-- `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（协议与传输层已实现：固定扩展名允许列表、`response_format` 仅 `text`/`json`；但没有任何适配器的 `Discover` 报告支持，接一个真实语音后端仍是独立待办，见 [Gateway README「音频转录与翻译」](service/aiServeWeaveGateway/README.md#音频转录与翻译)）
-- `POST /v1/rerank`（Cohere/Jina 风格 rerank 契约，vLLM 等自托管 OpenAI 生态服务器的事实约定；协议与传输层已实现，但没有任何适配器的 `Discover` 报告 `CapabilityRerank`，接一个真实后端仍是独立待办，见 [Gateway README「Rerank」](service/aiServeWeaveGateway/README.md#rerank)）
+- `POST /v1/messages`（Anthropic Messages，**纯文本+图片子集**：图片内容块已支持，工具调用与文档内容块仍按名字拒绝而非静默丢弃；追求完整功能对等还需要解决工具交互的形状差异，见 [Gateway STATUS「Anthropic Messages」](service/aiServeWeaveGateway/STATUS.md#anthropic-messages)）
+- `POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（Ollama 原生 API **纯推理端点**：不支持工具调用、`format`、视觉输入与模型管理类端点，均按名字拒绝或明确答「不支持」而非静默忽略/404，见 [Gateway STATUS「Ollama 原生 API」](service/aiServeWeaveGateway/STATUS.md#ollama-原生-api)）
+- `POST /v1/images/generations`（OpenAI-compatible 图像生成，映射到管理员指定的单一 ComfyUI 模板，见 [Gateway STATUS「图像生成」](service/aiServeWeaveGateway/STATUS.md#图像生成)）
+- `POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（协议与传输层已实现：固定扩展名允许列表、`response_format` 仅 `text`/`json`；但没有任何适配器的 `Discover` 报告支持，接一个真实语音后端仍是独立待办，见 [Gateway STATUS「音频转录与翻译」](service/aiServeWeaveGateway/STATUS.md#音频转录与翻译)）
+- `POST /v1/rerank`（Cohere/Jina 风格 rerank 契约，vLLM 等自托管 OpenAI 生态服务器的事实约定；协议与传输层已实现，但没有任何适配器的 `Discover` 报告 `CapabilityRerank`，接一个真实后端仍是独立待办，见 [Gateway STATUS「Rerank」](service/aiServeWeaveGateway/STATUS.md#rerank)）
 
 ComfyUI 工作流和异步任务 API 已实现，见下方「ComfyUI 任务 API」。
 
@@ -390,7 +390,7 @@ queued → running → succeeded
 
 ComfyUI 的 `prompt_id` 是后端任务 ID，不能直接作为公开 ID。AIServeWeave 应生成自己的 `job_id`，保存二者映射，并使用租户权限保护状态、事件和产物。
 
-对于简单的文生图场景，`POST /v1/images/generations` 已实现，把 OpenAI-compatible 请求映射到管理员通过 `-images-workflow-id` 指定的 ComfyUI 工作流模板；复杂工作流仍使用 AIServeWeave Workflow API，以免丢失 ComfyUI 的图结构、视频输出和自定义参数能力。配置约定、同步执行模型与已知限制见 [Gateway README「图像生成」](service/aiServeWeaveGateway/README.md#图像生成) 与 [STATUS.md 的 P2](STATUS.md#p2后续扩展)。
+对于简单的文生图场景，`POST /v1/images/generations` 已实现，把 OpenAI-compatible 请求映射到管理员通过 `-images-workflow-id` 指定的 ComfyUI 工作流模板；复杂工作流仍使用 AIServeWeave Workflow API，以免丢失 ComfyUI 的图结构、视频输出和自定义参数能力。配置约定、同步执行模型与已知限制见 [Gateway STATUS「图像生成」](service/aiServeWeaveGateway/STATUS.md#图像生成) 与 [STATUS.md 的 P2](STATUS.md#p2后续扩展)。
 
 ### 文件与产物
 
@@ -547,7 +547,7 @@ audit_logs
 
 观测范围包括节点连接与心跳、部署健康、请求量与并发、TTFT、总时长、token 用量、吞吐、错误与重试、ComfyUI 队列及任务时长、GPU OOM、产物传输与存储用量。
 
-指标端点应处于受控网络；节点标识涉及资产信息。标签来源必须受控且基数有界，模型名、请求路径、request ID、Prompt、工作流 JSON 和任意错误文本不能直接成为标签。具体指标、端点配置与实现边界见 [Gateway README](service/aiServeWeaveGateway/README.md)、[Registry README](service/aiServeWeaveRegistry/README.md#指标)、[控制面 README](service/aiServeWeaveControlPlane/README.md#指标与历史监控p08) 和 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md)。Registry 与控制面均已接入 `common/metrics`，各自的 `-metrics-addr` 与 Gateway 同构。
+指标端点应处于受控网络；节点标识涉及资产信息。标签来源必须受控且基数有界，模型名、请求路径、request ID、Prompt、工作流 JSON 和任意错误文本不能直接成为标签。具体指标、端点配置与实现边界见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md)、[Registry STATUS](service/aiServeWeaveRegistry/STATUS.md#指标)、[控制面 STATUS](service/aiServeWeaveControlPlane/STATUS.md#指标与历史监控p08) 和 [隧道 README](service/aiServeWeaveAgent/tunnel/README.md)。Registry 与控制面均已接入 `common/metrics`，各自的 `-metrics-addr` 与 Gateway 同构。
 
 历史曲线、告警、请求检索和用量账本具有不同的数据保留与授权需求（P08 完成前者，P09 完成后两者）。历史时序不是独立的 TSDB：控制面定时抓取 Gateway/Registry 的 `/metrics` 文本（`common/metrics.ParseExposition`，零新依赖），按标签白名单聚合后落地到既有关系库的 `metrics_history_points` 表，`GET /operator/v1/metrics/history` 经平台会话授权查询，供 Console `/operator/metrics`（C27）绘制曲线——Console 不能把副本的实时指标当作历史统计。跨服务 trace 目前只做到结构化日志：`common/reqid` 把 Gateway 前门铸造的 request_id 带到 Scheduler、Tunnel 与 Agent 的关键节点，可据此在日志里拼接一次请求的跨服务时间线，尚无独立的 trace 存储或查询入口。可用性、延迟、恢复时间与可接受数据丢失范围应有量化验收口径，数值在容量与故障测试后确定。
 
@@ -573,7 +573,7 @@ audit_logs
 | `service/aiServeWeaveConsole/` | Next.js 管理界面及受限的服务端转发入口 |
 | `deploy/` | 部署配置与操作说明 |
 
-模块路径为 `AIServeWeave`。依赖边界、编码和质量门禁见 [AGENTS.md](AGENTS.md)；隧道状态机见 [隧道设计](service/aiServeWeaveAgent/tunnel/README.md)，控制面凭据与授权设计见 [控制面 README](service/aiServeWeaveControlPlane/README.md)。
+模块路径为 `AIServeWeave`。依赖边界、编码和质量门禁见 [AGENTS.md](AGENTS.md)；隧道状态机见 [隧道设计](service/aiServeWeaveAgent/tunnel/README.md)，控制面凭据与授权设计见 [控制面 STATUS](service/aiServeWeaveControlPlane/STATUS.md)。
 
 ## 核心业务链路
 

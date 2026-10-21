@@ -287,5 +287,5 @@ go run ./service/aiServeWeaveGateway -model-pull-addr 127.0.0.1:8092 ...
 
 - [隧道 README](../../../service/aiServeWeaveAgent/tunnel/README.md)：Operation 计数与 Control 流一节补充 `ModelPullTrigger`/`ModelPullReport`。
 - [Agent README](../../../service/aiServeWeaveAgent/README.md)「当前实现」/模型拉取一节：补充子任务二的按名字触发能力与 `Puller` 的行为边界。
-- [Gateway README](../../../service/aiServeWeaveGateway/README.md)：新增「模型拉取触发（P2 子任务二）」一节，与「运维清单监听器」一节平行，明确写操作与只读清单是两个不同监听器、不同 token。
+- [Gateway STATUS](../../../service/aiServeWeaveGateway/STATUS.md)：新增「模型拉取触发（P2 子任务二）」一节，与「运维清单监听器」一节平行，明确写操作与只读清单是两个不同监听器、不同 token。
 - STATUS.md「模型分发」条目：补充子任务二已交付的说明与范围边界，条目整体仍不打勾（子任务三/四/五未排期）。

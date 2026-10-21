@@ -201,7 +201,7 @@ docker compose up -d --no-deps --force-recreate -t 45 gateway
 
 Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
 自行提供的证书文件按签发方的有效期更新。证书细节见
-[Registry README](../service/aiServeWeaveRegistry/README.md)。
+[Registry STATUS](../service/aiServeWeaveRegistry/STATUS.md)。
 
 ## 对外部署与已知限制
 
@@ -256,4 +256,4 @@ curl --fail-with-body --connect-timeout 5 --max-time 15 \
 
 手动创建平台运维使用 `POST /admin/v1/platform/operators`，同样携带 bootstrap token，
 JSON 字段为 `email`、`password`、`name`。其余接口见
-[ControlPlane README](../service/aiServeWeaveControlPlane/README.md)。
+[ControlPlane STATUS](../service/aiServeWeaveControlPlane/STATUS.md)。
