@@ -5868,6 +5868,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
           },
           {
+            "name": "durability",
+            "type": "string",
+            "required": true,
+            "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+            "enum": [
+              "memory_only",
+              "persisted"
+            ]
+          },
+          {
             "name": "error",
             "type": "string",
             "required": false,
@@ -5896,7 +5906,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "status": 202,
             "label": "取消请求已送达",
             "content_type": "application/json",
-            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\"\n}"
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
           },
           {
             "status": 401,
@@ -5947,7 +5957,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "764ba101fa1dcaf2f44393a7bd0974def732a01f64112360364ca09769a6d44b",
+    "fingerprint": "14bb4a4ab13e63f90da5ed40b0483dd4f13a856b5e74fd05116954a0ea0812e6",
     "fields": [
       {
         "path": [
@@ -6091,6 +6101,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "response_fields",
           6,
+          "description"
+        ],
+        "key": "docs.d0553"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          7,
           "description"
         ],
         "key": "docs.d0255"
@@ -6754,6 +6773,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
           },
           {
+            "name": "durability",
+            "type": "string",
+            "required": true,
+            "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+            "enum": [
+              "memory_only",
+              "persisted"
+            ]
+          },
+          {
             "name": "error",
             "type": "string",
             "required": false,
@@ -6782,19 +6811,19 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "status": 200,
             "label": "排队中",
             "content_type": "application/json",
-            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"queue_position\": 2\n}"
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"queue_position\": 2,\n  \"durability\": \"persisted\"\n}"
           },
           {
             "status": 200,
             "label": "执行成功",
             "content_type": "application/json",
-            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\"\n}"
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
           },
           {
             "status": 200,
             "label": "执行失败",
             "content_type": "application/json",
-            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
           },
           {
             "status": 401,
@@ -6833,7 +6862,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "a473c1c94b885879a3620afccab83294395648e1b9c3e83a779e1ac606635e9c",
+    "fingerprint": "dbe9dce0795ca4072b47db8ce2fa3b9c33a9aff92e3acb355d1657497aba3717",
     "fields": [
       {
         "path": [
@@ -6969,6 +6998,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "response_fields",
           6,
+          "description"
+        ],
+        "key": "docs.d0553"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          7,
           "description"
         ],
         "key": "docs.d0255"
@@ -11542,13 +11580,17 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "code_lang": "json"
           },
           {
+            "title": "Claude 系列模型的参数限制",
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。"
+          },
+          {
             "title": "错误码说明",
             "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "36a6d86a8a94f5d70e33069f2544cb77ddb73a04528cec65f56977e69db769ba",
+    "fingerprint": "43846986121e1c1a15c597c209466bd5e9d38e543cedfeca78238e7adc86c424",
     "fields": [
       {
         "path": [
@@ -12503,13 +12545,31 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "title"
         ],
-        "key": "docs.d0146"
+        "key": "docs.d0144"
       },
       {
         "path": [
           "content",
           "sections",
           3,
+          "body"
+        ],
+        "key": "docs.d0554"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          4,
+          "title"
+        ],
+        "key": "docs.d0146"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          4,
           "body"
         ],
         "key": "docs.d0147"
@@ -12634,6 +12694,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
           },
           {
+            "name": "durability",
+            "type": "string",
+            "required": true,
+            "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+            "enum": [
+              "memory_only",
+              "persisted"
+            ]
+          },
+          {
             "name": "error",
             "type": "string",
             "required": false,
@@ -12667,7 +12737,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "status": 202,
             "label": "已受理",
             "content_type": "application/json",
-            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\"\n}"
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"durability\": \"memory_only\"\n}"
           },
           {
             "status": 400,
@@ -12758,7 +12828,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "bf2271d25f240b39d315d71b9d67ecba597197ff8ca232d0e5336dbf44484c95",
+    "fingerprint": "3c0b2452d381db8f714ce19e0cbf683d0eb04a8885339a75e1604af09445f2f7",
     "fields": [
       {
         "path": [
@@ -12948,6 +13018,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "response_fields",
           6,
+          "description"
+        ],
+        "key": "docs.d0553"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          7,
           "description"
         ],
         "key": "docs.d0255"

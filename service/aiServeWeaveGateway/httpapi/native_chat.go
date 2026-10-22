@@ -259,6 +259,12 @@ func (o *nativeChatOutput) event(data []byte) error {
 	return nil
 }
 
+func (o *nativeChatOutput) streaming() bool { return o.started }
+
+func (o *nativeChatOutput) endpoints() (string, string) {
+	return UsageEndpointChat, EndpointChatCompletions
+}
+
 func (o *nativeChatOutput) fail(status int, errType, code, message string) {
 	if o.started {
 		_ = writeSSE(o.w, openAIErrorBody{Error: openAIError{Type: errType, Code: code, Message: message}})

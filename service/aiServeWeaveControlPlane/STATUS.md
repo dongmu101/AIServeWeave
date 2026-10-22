@@ -336,7 +336,7 @@ Redis 现在是会话的权威来源而不是可选缓存：JWT 必须带随机 
 
 "提交结果未知"不是第四个 job 状态，不出现在 `runtime.WorkflowState` 或对外的 `queued/running/succeeded/failed/cancelled` 词汇表里——它是持久化记录这一层的元状态，用一个独立的 `durability` 字段承载（见下）。job 本身该是什么运行状态，仍由后端汇报决定，与这次记录有没有落库是两条正交的轴。
 
-**设计与实现差异（R04 核对）：** 下述公开 `durability` 字段仍是设计，当前 Gateway 的 `jobJSON`/`renderJob` 未输出它。J03–J08 的存储、同步和页面实现已落地，但不代表 J01 每项设计均已交付。恢复器只读非终态 Job，产物下载只查副本内存映射；历史记录存在不等于任意副本可下载原产物 ID。
+**设计与实现差异（R04 核对，此后已部分补齐）：** 下述公开 `durability` 字段现已由 Gateway 的 `renderJob` 输出（提交、状态、取消三个响应；取值由本副本 `CreateJob` 是否已获确认决定，单向）。Console 的实时 Job 视图走 `workflowview.Job` 契约，尚未携带它。J03–J08 的存储、同步和页面实现已落地，但不代表 J01 每项设计均已交付。恢复器只读非终态 Job，因此 `persisted` 意味着记录在控制面历史里查得到，不意味着终态 Job 能从任意副本的数据面查到；产物下载在本地未命中时会回退控制面，限制见 [Gateway STATUS「持久化与访问的现有限制」](../aiServeWeaveGateway/STATUS.md#持久化与访问的现有限制)。
 
 ### 何时向客户端确认持久化受理
 
@@ -634,14 +634,14 @@ MetricsHistory:
 
 ## 请求日志检索（P09/C28）
 
-`request_logs` 保存 Gateway 已通过鉴权的 chat/responses/embeddings/models 四个前门端点的每一次请求，供 Console C28（`/console/requests`、`/operator/requests`）检索。与 `metrics_history_points` 同构：都是「高频追加、按时间清理」的时序数据，因此同样走 PostgreSQL/MySQL 双支持的固定版本 SQL 迁移（`gormstore/requestlogmigrate.go`），而不跟随 `jobs` 那种带状态机的 MySQL-only 先例。
+`request_logs` 保存 Gateway 已通过鉴权的推理前门（OpenAI chat/responses/embeddings/models/images、Anthropic Messages、Ollama chat/generate/embeddings、音频转录/翻译、rerank）的每一次请求，供 Console C28（`/console/requests`、`/operator/requests`）检索。与 `metrics_history_points` 同构：都是「高频追加、按时间清理」的时序数据，因此同样走 PostgreSQL/MySQL 双支持的固定版本 SQL 迁移（`gormstore/requestlogmigrate.go`），而不跟随 `jobs` 那种带状态机的 MySQL-only 先例。
 
 ```sql
 request_logs(
   id           VARCHAR(64) PRIMARY KEY,  -- Gateway 侧 common/reqid 铸造的 request_id，不是代理键
   tenant_id    VARCHAR(32) NOT NULL,
   key_display  VARCHAR(64) NOT NULL,     -- apikey.Display 的展示形式，不是完整 key 或哈希
-  endpoint     VARCHAR(16) NOT NULL,     -- 封闭枚举：chat/responses/embeddings/models
+  endpoint     VARCHAR(16) NOT NULL,     -- 封闭枚举，Gateway requestLogEndpoint 的短名：models/chat/embeddings/responses/images/messages/transcriptions/translations/rerank/ollama_chat/ollama_generate/ollama_embed
   status_code  SMALLINT NOT NULL,
   outcome      VARCHAR(24) NOT NULL,     -- 封闭枚举，Gateway 侧从状态码纯推导，不存自由文本错误
   duration_ms  BIGINT NOT NULL,

@@ -7,7 +7,7 @@
   "method": "GET",
   "path": "/v1/jobs/{job_id}",
   "summary": "查询一次工作流运行的当前状态、排队位置与失败原因。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "返回与提交接口相同结构的任务对象",
@@ -81,6 +81,16 @@
         "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
       },
       {
+        "name": "durability",
+        "type": "string",
+        "required": true,
+        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "enum": [
+          "memory_only",
+          "persisted"
+        ]
+      },
+      {
         "name": "error",
         "type": "string",
         "required": false,
@@ -109,19 +119,19 @@
         "status": 200,
         "label": "排队中",
         "content_type": "application/json",
-        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"queue_position\": 2\n}"
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"queue_position\": 2,\n  \"durability\": \"persisted\"\n}"
       },
       {
         "status": 200,
         "label": "执行成功",
         "content_type": "application/json",
-        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\"\n}"
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
       },
       {
         "status": 200,
         "label": "执行失败",
         "content_type": "application/json",
-        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
       },
       {
         "status": 401,

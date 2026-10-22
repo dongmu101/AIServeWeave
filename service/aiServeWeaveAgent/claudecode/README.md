@@ -2,7 +2,7 @@
 
 账户订阅用量与余量可在 Agent 本地配置页面查看；查询使用 CLI 实验性的 `get_usage` 控制请求，不执行推理，未提供额度时明确显示暂不可用，详见 [Agent 账户额度说明](../README.md#本地-cli-账户额度)。
 
-Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。发布 `anthropic_messages` 能力，通过 Gateway 的原生 `/v1/messages` 和兼容 `/v1/chat/completions` 服务。Chat 在 Gateway 边界转换，仍使用 Messages 隧道；不提供 Responses/嵌入接口。
+Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使用同一系统账户的 `claude.ai` 登录，CLI 自行管理认证；不读取、导出或转发 token。发布 `anthropic_messages` 能力，通过 Gateway 的原生 `/v1/messages` 以及兼容的 `/v1/chat/completions`、`/v1/responses` 服务。Chat 与 Responses 在 Gateway 边界转换，仍使用 Messages 隧道；不提供嵌入接口。
 
 模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models[].resolvedModel` 读取真实模型 ID，按真实 ID 去重并保留首次出现的顺序。CLI 的 `value` / `id` 简称及友好名称不作为公开模型名；没有 `resolvedModel` 的条目不发布。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。
 
@@ -15,6 +15,10 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 普通多轮聊天以带角色标记的 JSON 历史文本作为新 CLI 回合上下文，不伪造 CLI 的 assistant 消息，也不重放历史工具。当前工具链保留原进程，并校验身份、完整历史、全部工具结果和原节点绑定。Chat 将 assistant 文本和工具分别存放，Agent 仅对带内部 `metadata.aisw_chat_completions` 标记的会话按这两个字段校验等价性；文本、工具顺序、ID 和参数仍必须一致。原生 Messages 保持块顺序校验。升级本兼容层后需要同时更新 Gateway 和重启 Agent。
 
 支持 `max_tokens` 或 `max_completion_tokens`（1–64000，默认 4096；同时指定必须相同）、`temperature`（0–1）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `reasoning_effort`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
+
+## OpenAI Responses 兼容
+
+Gateway 先把 Responses 请求还原为 Chat 形式，再走上一节的转换。Agent 收到的仍是带 `metadata.aisw_chat_completions` 标记的 Messages 请求，因此无需为此升级 Agent。同一回合的 assistant 文本和工具调用在 Responses 中是独立的项，Gateway 会合并回一条后再做等价校验。每轮须在 `input` 中携带完整对话，并保持 `store: false`（或省略）；续接时原样回放上一轮输出的调用项，以及对应的 `function_call_output`。参数限制与 Chat 相同，只是字段名换成 Responses 的 `max_output_tokens` 和 `text.format`；另外不支持 `previous_response_id`。与 Chat 不同，未知字段不会被拒绝（与普通 Responses 一致，也不生效）。完整范围见 [Gateway STATUS](../../aiServeWeaveGateway/STATUS.md#claude-code-原生-messages)。目前只做过离线端到端验证，尚未用真实 CLI 联调。
 
 ## 启用
 

@@ -48,13 +48,27 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 	h.nativeMessagesOutput(w, r, req, raw, start, nil)
 }
 
+// nativeOutput renders the native Messages stream in another public protocol.
+// nativeOutput 以另一种公开协议渲染原生 Messages 流。
+type nativeOutput interface {
+	fail(status int, errType, code, message string)
+	event(data []byte) error
+	finish(response map[string]any, content []anthropicContentBlockJSON, usage runtime.Usage, stream bool)
+	// streaming reports whether response headers are already sent.
+	// streaming 报告响应头是否已经发出。
+	streaming() bool
+	// endpoints names the usage ledger and metrics endpoints of the protocol.
+	// endpoints 给出该协议在用量账本与指标中的端点名。
+	endpoints() (usage, metric string)
+}
+
 // nativeMessagesOutput shares ownership, affinity and limits between public protocols.
 // nativeMessagesOutput 在不同公开协议之间共用归属校验、节点绑定和容量限制。
-func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time, chat *nativeChatOutput) {
+func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time, out nativeOutput) {
 	started := false
 	fail := func(status int, errType, code, message string) {
-		if chat != nil {
-			chat.fail(status, errType, code, message)
+		if out != nil {
+			out.fail(status, errType, code, message)
 		} else if started {
 			_ = writeAnthropicSSE(w, "error", map[string]any{"type": "error", "error": map[string]string{"type": errType, "message": message}})
 			_ = http.NewResponseController(w).Flush()
@@ -139,9 +153,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				err = errors.New("Messages stream ended before message_stop")
 			} else {
 				endpoint := UsageEndpointAnthropicMessages
-				if chat != nil {
-					chat.finish(response, content, usage, req.Stream)
-					endpoint = UsageEndpointChat
+				if out != nil {
+					out.finish(response, content, usage, req.Stream)
+					endpoint, _ = out.endpoints()
 				} else if !req.Stream {
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(response)
@@ -256,15 +270,16 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		if req.Stream {
-			if chat != nil {
-				if err := chat.event(data); err != nil {
+			if out != nil {
+				if err := out.event(data); err != nil {
 					return
 				}
-				if !started && chat.started {
+				if !started && out.streaming() {
+					_, metric := out.endpoints()
 					h.logTTFT(r, req.Model, record.Candidate.NodeID, start, true)
-					h.metrics.TTFT(EndpointChatCompletions, time.Since(start))
+					h.metrics.TTFT(metric, time.Since(start))
 				}
-				started = chat.started
+				started = out.streaming()
 				continue
 			}
 			if !started {

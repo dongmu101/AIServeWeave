@@ -210,7 +210,7 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
 
 `httpapi/requestlog.go` 与 `httpapi/requestlogpush.go` 是 Gateway 一侧对 STATUS.md P09/C28（请求与错误检索）的实现：把一次已完成、已鉴权的前门请求，采集成可检索的脱敏元数据，异步批量推送给控制面。
 
-1. **中间件插在鉴权之后、限流之前。** 完整链路是 `observe → withLogging → auth.middleware → requestLogMiddleware → rateLimit → mux`。放在 `auth.middleware` 之后，使 `IdentityFrom(ctx)` 已经就绪，不需要跨中间件共享指针；中间件包裹 `rateLimit` 与 `mux`，因此限流拒绝与业务 handler 的最终状态码都能被捕获。只对四个已知路径生效——`/v1/models`、`/v1/chat/completions`、`/v1/embeddings`、`/v1/responses`；其余路径（工作流 Job、产物下载等）直接跳过，不占用缓冲区容量。`h.requestLogs` 为 `nil`（未配置控制面推送）时中间件是纯粹透传。
+1. **中间件插在鉴权之后、限流之前。** 完整链路是 `observe → withLogging → auth.middleware → requestLogMiddleware → rateLimit → mux`。放在 `auth.middleware` 之后，使 `IdentityFrom(ctx)` 已经就绪，不需要跨中间件共享指针；中间件包裹 `rateLimit` 与 `mux`，因此限流拒绝与业务 handler 的最终状态码都能被捕获。只对推理前门生效，`requestLogEndpoint` 把路径映射成封闭短名：`/v1/models`→`models`、`/v1/chat/completions`→`chat`、`/v1/embeddings`→`embeddings`、`/v1/responses`→`responses`、`/v1/images/generations`→`images`、`/v1/messages`→`messages`、`/v1/audio/transcriptions`→`transcriptions`、`/v1/audio/translations`→`translations`、`/v1/rerank`→`rerank`、`/api/chat`→`ollama_chat`、`/api/generate`→`ollama_generate`、`/api/embeddings`→`ollama_embed`。取值刻意不照搬指标或用量账本的名字：控制面 `request_logs.endpoint` 是 `VARCHAR(16)`，`anthropic_messages` 放不下，用短名就不需要迁移。其余路径（工作流 Job、产物下载、从不派发的 Ollama 模型管理路由等）直接跳过，不占用缓冲区容量。key 的展示形式与鉴权取同一把 key（`requestKey`），因此 `/v1/messages` 与 `GET /v1/models` 经 `x-api-key` 认证的请求同样带展示形式。`h.requestLogs` 为 `nil`（未配置控制面推送）时中间件是纯粹透传。
 2. **状态码到 outcome 的封闭映射。** `outcomeForStatus` 是只依赖状态码的纯函数，不读取、不拼接任何业务错误文本，因此 `chat.go`/`responses.go`/`embeddings.go`/`models.go` 都不需要为支持请求检索而改动：
 
    | 状态码 | Outcome |
@@ -359,7 +359,7 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 - **读取侧是同步的**：`previous_response_id` 非空时，Gateway 在派发请求之前先沿它逐跳调用控制面的 `GetResponseTurn` 走到根轮次，按时间顺序拼接每一跳自己的消息，作为前缀拼在这一轮自己的输入之前再发给后端——这一步是调用方请求路径的一部分，因为调用方点名了一段具体对话，需要一个确切答案而不是一段可能残缺的历史。链路深度有界（默认 50 跳，`maxResponseChainDepth`），超出时拒绝（503）而不是静默截断；未知或不属于该租户的 `previous_response_id` 答 400，不是编造一段更短的历史，也不是看起来像本 Gateway 自身故障的 500。
 - **一轮只存自己的贡献**：持久化的 `messages` 是这一轮自己的 system 指示/用户输入加上 assistant 回复，不是从根到这一轮的完整对话——存储量与对话轮数成正比而非平方，代价是续接一段长对话需要多次控制面往返而非一次（已被 `maxResponseChainDepth` 有界）。
 - **`store`/`previous_response_id` 都需要一个真实租户**：未配置 `Verifier`（静态 key 列表或完全不鉴权）意味着没有可供限定范围的租户，两个字段依旧被拒绝，即便控制面本身已经配置。
-- 未接入 P09/C28 请求检索，与图像生成前门同一先例（`request_logs.endpoint` 是绑定数据库列的封闭枚举）。
+- 请求本身照常以 `responses` 记入 P09/C28 请求检索；持久化的轮次内容（`response_turns`）不与请求检索关联。
 
 ## 配额与限流
 
@@ -496,7 +496,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **`max_tokens` 是必填字段**，Anthropic 协议本身如此要求；缺失或非正数答 400，不像 OpenAI 前门那样是可选参数。
 - **流式响应是 Anthropic 自己的具名 SSE 帧**（`event: <name>\ndata: <json>\n\n`），不是 OpenAI 前门 `chat.go` 用的裸 `data:` 帧；两者共用底层 `runtime.Stream[runtime.ChatEvent]`，只是 `httpapi/anthropic.go` 另有一套 `writeAnthropicSSE`。`message_start`/`content_block_start` 在第一次 `Recv` 之前就无条件写出（不像 OpenAI 前门那样懒等首个 delta），这样即使一次生成完全没有产出内容，事件序列依然完整；结束时依次写出 `content_block_stop`/`message_delta`（携带 `stop_reason` 与 `usage`）/`message_stop`。
 - **`stop_reason` 由后端不透明的 finish reason（OpenAI 风格：`"stop"`/`"length"`/`"tool_calls"`……）映射到 Anthropic 封闭词汇**（`anthropicStopReason`）：`"length"` → `"max_tokens"`，`"tool_calls"` → `"tool_use"`，其余（含空字符串）→ `"end_turn"`。
-- **未接入 P09/C28 请求检索**：`request_logs.endpoint` 是绑定数据库列的封闭枚举，新增取值需要评估迁移，超出本轮范围，与 P2 图像生成一节的既有先例相同——`requestLogEndpoint` 未识别的路径会被中间件跳过，不记录也不报错。
+- **已接入 P09/C28 请求检索**，取值 `messages`；经 `x-api-key` 认证的请求同样记录 key 展示形式。
 - 错误体是 Anthropic 自己的 `{"type":"error","error":{"type":...,"message":...}}` 形状（`writeAnthropicError`），与 OpenAI 前门的 `openAIErrorBody` 分开；调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）两边共用，同一次失败在两个协议下报告一致的状态码。
 
 ## Ollama 原生 API
@@ -511,7 +511,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **不编造未测量的计时字段**：真实 Ollama 的响应还带 `total_duration`/`load_duration`/`prompt_eval_duration`/`eval_duration` 这类计时字段，本 Gateway 不追踪，因此整体不输出（而不是发送一个有误导性的零值）；`prompt_eval_count`/`eval_count` 映射到后端真实上报的 `resp.Usage.PromptTokens`/`CompletionTokens`，是可信数字。
 - **模型管理端点明确答「不支持」，不是 404 或误导性的成功**：`/api/create`、`/api/pull`、`/api/push`、`/api/delete`、`/api/copy`、`/api/show`、`/api/tags`、`/api/ps` 统一挂载到 `ollamaUnsupported`，答 501 与 `{"error": "..."}` 说明——Gateway 从不管理任何节点上的本地模型文件，那是每个节点与自己后端之间的事，设计文档§五.3 把这条边界列为实现前必须明确声明的事项。
 - **`/api/embeddings` 是单条 prompt 的旧版端点**，不是批量输入的新版 `/api/embed`——本 v1 前门不实现后者。
-- **未接入 P09/C28 请求检索**：与 Anthropic 前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，`requestLogEndpoint` 未识别的路径会被中间件跳过，不记录也不报错。
+- **已接入 P09/C28 请求检索**：三个推理端点分别记为 `ollama_chat`、`ollama_generate`、`ollama_embed`；上面的模型管理路由不派发，不记录。
 - 错误体是 Ollama 自己的 `{"error": "..."}` 形状（`writeOllamaError`），调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
 
 ## 音频转录与翻译
@@ -523,7 +523,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **音频体从不整体缓冲**：Gateway 收到的是 `multipart/form-data`（`r.ParseMultipartForm` 把过大的分片溢写到磁盘临时文件，与 `submitWithFiles` 对工作流 InputFile 分片的处理相同），文件部分随隧道消费而读取；隧道上新增的 `OPERATION_AUDIO_TRANSCRIBE` 复用 `OPERATION_INPUT_UPLOAD` 的「headers 之后跟 DataChunk」框架，并同样跑在 `SLOT_CLASS_BULK`（`tunnelserver.classFor`），与产物下载、输入上传物理隔离于推理之外。
 - **不是 Chat/Embed 那样的多候选重试循环**：`Scheduler.Transcribe` 只接受调用方已经选定的一个 `Candidate`，`httpapi.audioTranscriptions`/`audioTranslations` 经 `Scheduler.TranscriptionCandidates(model)` 取候选、只用第一个——字节一旦开始流向某个节点，换节点重试就需要调用方从头重新读一遍整个文件，与 `UploadInput` 不跨节点重试的既有理由相同。
 - **v1 范围**：`response_format` 只接受 `"text"`/`"json"`（默认 `"json"`，只含 `text` 字段），OpenAI 的 `srt`/`vtt`/`verbose_json` 按名字拒绝而非静默降级；`language` 字段只对转录有意义，翻译请求携带它会被拒绝（翻译的输出语言恒为英文）；固定、不可配置的扩展名允许列表（`.mp3`/`.wav`/`.ogg`/`.flac`）叠加与工作流上传共用的字节嗅探（`uploadformat.go` 的 `validateUploadContent`），拦下扩展名与实际字节不符的上传。
-- **未接入 P09/C28 请求检索**：与 Anthropic/Ollama 前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，加值超出本轮范围。
+- **已接入 P09/C28 请求检索**，分别记为 `transcriptions`、`translations`；指标的 `endpoint` 标签相应为 `audio_transcriptions`、`audio_translations`，此前两者都落在 `other`。
 - 错误体是 OpenAI 前门共用的 `openAIErrorBody` 形状，调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
 
 ## Rerank
@@ -534,7 +534,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **没有任何适配器的 `Discover` 会发布这项能力**：三个适配器都只是把调用委托给 `oaibase.Base.Rerank`，而 `Base` 的能力门禁只认从 `Discover` 收到的证据（或运维经 `Config.CapabilityOverrides` 手工声明），因此在为某个部署确认后端支持之前，每一次调用都会被本地拒绝为不支持——与音频转录同一先例。
 - **请求体是纯文本 JSON，不涉及二进制流**：`RerankRequest{Model, Query, Documents, TopN}`/`RerankResponse{Model, Results []RerankResult{Index, Score}}` 走与 Chat/Embed 同款的「wire 解析 → runtime 类型 → `Scheduler.Rerank` → 适配器」路径；隧道上新增的 `OPERATION_RERANK` 与 `OPERATION_EMBED` 同形状（`ShapeSingle`，无 `RequestBody`），跑在 `SLOT_CLASS_INFERENCE`，不是 `OPERATION_AUDIO_TRANSCRIBE` 那种 bulk 槽。
 - **是 Chat/Embed 那样的多候选重试循环**：`Scheduler.Rerank` 与 `Scheduler.Embed` 同构，对可重试失败换下一个候选——与音频转录的单候选、不换节点重试不同，因为这里没有已经开始流向某个节点的字节需要担心。
-- **未接入 P09/C28 请求检索**：与 Anthropic/Ollama/音频前门同一先例，`request_logs.endpoint` 是绑定数据库列的封闭枚举，加值超出本轮范围。
+- **已接入 P09/C28 请求检索**，取值 `rerank`；指标的 `endpoint` 标签同为 `rerank`，此前落在 `other`。
 - 错误体是 OpenAI 前门共用的 `openAIErrorBody` 形状，调度失败的分类逻辑与其余前门共用。
 
 ## 指标
@@ -614,7 +614,7 @@ go test -race ./service/aiServeWeaveGateway/...
 
 对照 `httpapi/jobs.go`、`jobevents.go`、`jobrecover.go` 与 `artifacts.go` 核实（R04 初次核实之后，「Gateway 故障切换收尾」补上了产物回退，本节已按现状改写）：
 
-- 公开 Job 响应尚未输出 J01 设计的 `durability` 字段；202 只表示后端提交成功，不确认落库。
+- 公开 Job 响应（提交、状态、取消）输出 J01 设计的 `durability`：`memory_only` 表示只在本副本内存里（未配置控制面，或 `CreateJob` 尚未确认），`persisted` 表示控制面已确认落库，变化单向。202 时总是 `memory_only`，因为提交从不等待持久化。Console 的实时 Job 视图经 `adminapi` 的 `workflowview.Job` 契约渲染，尚未携带这个字段。
 - `GET /v1/jobs/{job_id}` 与 `GET /v1/jobs/{job_id}/events` 只查本副本内存表。后台恢复器只找回非终态 Job 的路由绑定（「工作流 Job」第十一条），因此终态 Job 在副本重启或切换后从数据面查询得到 404，历史只能经控制面的 Job 历史接口查看。
 - 产物列举与下载在本地未命中时回退到控制面（第十八条），有 `StorageKey` 时优先从对象存储读取（第十二条）。仍有三处缺口：产物 ID 只在调用方列举时铸造，从未被列举过的 Job 没有可恢复的产物 ID；刚完成、尚未被下一轮 `jobPersister` 持久化的产物，切换副本后会短暂拿不到；未配置 `-artifact-storage` 时下载只能从原节点实时拉取，原节点离线即不可用。
 
@@ -658,7 +658,11 @@ Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Re
 
 Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：Gateway 将文本、前置 system/developer 和 function 工具转换为 Messages 语义，沿用下述身份校验、Redis 认领与原节点绑定。`finish_reason` 映射为 `stop`、`length` 或 `tool_calls`；流式包含工具索引与参数增量，成功结束发送 `[DONE]`，`stream_options.include_usage` 可请求末尾用量帧。其他 Chat 后端（包括 Codex）仍走原来的 Chat 隧道。
 
-普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、范围 1–64000，同时提供必须一致；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 1 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent；Claude 的 `/v1/responses` 尚未实现。
+普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、范围 1–64000，同时提供必须一致；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 1 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent。
+
+Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按普通 Responses 的规则把 `input` 还原为 canonical 消息，再交给上面的 Chat 转换，因此续接沿用 Chat 的身份、完整历史与原节点绑定校验，Agent 无需升级。同一回合的 assistant 文本和工具调用在 Responses 中是独立的项，转换时合并回一条，与 Agent 对 Chat 历史的等价校验保持一致。`function`、`custom`、`local_shell`、`namespace` 工具按普通 Responses 的规则还原类型；`web_search` 类工具照旧略去，并在 `X-Gateway-Ignored-Tools` 中列出。流式按 Responses 生命周期从 `response.created` 输出到 `response.completed`：`max_tokens` 截断以 `response.incomplete` 收尾，会话或上游在发出响应头后失败则以 `response.failed` 收尾。
+
+`max_output_tokens` 默认 4096，范围 1–64000；`temperature` 范围 0–1。以下情况明确返回 400：`store: true`、`previous_response_id`、`top_p`、`text` 以外的 `text.format`、非 `auto` 的 `tool_choice`、`strict: true` 的工具，以及图片或文件内容。每轮须在 `input` 中携带完整对话。与普通 Responses 一样，Codex 等客户端附带的其他字段不会被拒绝，但也不生效。转换前后的请求均限制为 1 MiB，用量账本与指标都记为 `responses`。目前只做过离线端到端验证（真实 Agent 加模拟 CLI，跨副本 JSON/SSE 工具续接），尚未用真实 Claude CLI 或 Codex 客户端联调。
 
 模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。以 user 文本结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录，原样转发、不在 Gateway 改写。其他模型仍使用既有 Chat 转换。
 

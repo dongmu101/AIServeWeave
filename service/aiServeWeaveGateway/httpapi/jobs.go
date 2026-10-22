@@ -64,6 +64,29 @@ const (
 	StatusCancelled = "cancelled"
 )
 
+// Public durability values, the J01 design's answer to "would this job still
+// be found if this Gateway replica died now". It is a separate axis from
+// Status: whether the run succeeded and whether the control plane has a
+// record of it are unrelated facts.
+//
+// DurabilityMemoryOnly means only this replica's memory holds the job: no
+// control plane is configured, or it has not yet confirmed CreateJob.
+// DurabilityPersisted means the control plane confirmed the record. The
+// change is one-way, because a later failed state update makes the record
+// stale, not absent.
+//
+// 公开的 durability 取值，是 J01 设计对「如果这个 Gateway 副本现在挂了，这个 job
+// 还找得到吗」的回答。它与 Status 是两条独立的轴：运行是否成功，与控制面有没有
+// 它的记录，是互不相关的两件事。
+//
+// DurabilityMemoryOnly 表示只有本副本的内存里有这个 job：没有配置控制面，或者
+// 控制面尚未确认 CreateJob。DurabilityPersisted 表示控制面已确认这条记录。这个
+// 变化是单向的，因为之后某次状态更新写入失败只会让记录变旧，不会让它消失。
+const (
+	DurabilityMemoryOnly = "memory_only"
+	DurabilityPersisted  = "persisted"
+)
+
 // runRequest is the body of POST /v1/workflows/{workflow_id}/runs. Inputs is
 // only the values the template declared; there is no field through which a
 // caller could supply a graph.
@@ -87,6 +110,10 @@ type jobJSON struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	QueuePosition int       `json:"queue_position,omitempty"`
+	// Durability is DurabilityMemoryOnly or DurabilityPersisted.
+	//
+	// Durability 取 DurabilityMemoryOnly 或 DurabilityPersisted。
+	Durability string `json:"durability"`
 	// Error is the backend's own failure summary, already bounded and
 	// structured by the ComfyUI adapter. It reaches only the tenant that
 	// submitted the run, and without it a failed generation is unactionable.
@@ -409,6 +436,10 @@ func writeJobBody(w http.ResponseWriter, j job) {
 }
 
 func renderJob(j job) jobJSON {
+	durability := DurabilityMemoryOnly
+	if j.persisted {
+		durability = DurabilityPersisted
+	}
 	return jobJSON{
 		JobID:         j.ID,
 		WorkflowID:    j.WorkflowID,
@@ -416,6 +447,7 @@ func renderJob(j job) jobJSON {
 		CreatedAt:     j.CreatedAt,
 		UpdatedAt:     j.UpdatedAt,
 		QueuePosition: j.QueuePosition,
+		Durability:    durability,
 		Error:         j.ErrorSummary,
 	}
 }

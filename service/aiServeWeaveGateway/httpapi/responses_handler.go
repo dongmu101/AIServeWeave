@@ -17,8 +17,9 @@ import (
 // responses 实现 POST /v1/responses。
 func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
+	var raw json.RawMessage
 	var req responsesRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil || json.Unmarshal(raw, &req) != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
 		return
 	}
@@ -29,6 +30,10 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 	if field := req.unsupported(); field != "" {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "unsupported_parameter",
 			field+" is not supported by this gateway")
+		return
+	}
+	if h.useNativeResponses(req) {
+		h.nativeResponses(w, r, req, raw, start)
 		return
 	}
 

@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/jobs/{job_id}/cancel",
   "summary": "请求中断一个尚未结束的任务，返回 202 与最后已知的任务对象。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "取消是异步请求：返回 202 只表示中断请求已送达执行端，不代表任务已经取消",
@@ -82,6 +82,16 @@
         "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
       },
       {
+        "name": "durability",
+        "type": "string",
+        "required": true,
+        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "enum": [
+          "memory_only",
+          "persisted"
+        ]
+      },
+      {
         "name": "error",
         "type": "string",
         "required": false,
@@ -110,7 +120,7 @@
         "status": 202,
         "label": "取消请求已送达",
         "content_type": "application/json",
-        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\"\n}"
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
       },
       {
         "status": 401,

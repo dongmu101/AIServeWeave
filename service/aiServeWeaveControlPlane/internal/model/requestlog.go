@@ -7,8 +7,10 @@ package model
 
 import "time"
 
-// RequestLog is one authenticated chat/responses/embeddings/models request,
-// as a Gateway replica reported it. ID is the request-correlation id
+// RequestLog is one authenticated inference front-door request (OpenAI,
+// Anthropic Messages, Ollama, audio, rerank or model listing; Endpoint holds
+// the Gateway's closed short name for it, at most 16 characters), as a
+// Gateway replica reported it. ID is the request-correlation id
 // common/reqid minted for it on the Gateway side, not a surrogate key — the
 // same choice Job.ID already makes, and for the same reason: the id is
 // already globally unique and is what every caller already refers to the
@@ -20,8 +22,9 @@ import "time"
 // Gateway before this row ever exists; no free-text error message is ever
 // stored here.
 //
-// RequestLog 是一次已通过鉴权的 chat/responses/embeddings/models 请求，由
-// Gateway 副本上报。ID 是 Gateway 一侧 common/reqid 为它铸造的请求关联
+// RequestLog 是一次已通过鉴权的推理前门请求(OpenAI、Anthropic Messages、
+// Ollama、音频、rerank 或模型列表；Endpoint 存 Gateway 为它定的封闭短名，最长
+// 16 个字符)，由 Gateway 副本上报。ID 是 Gateway 一侧 common/reqid 为它铸造的请求关联
 // id，不是代理键——与 Job.ID 相同的选择，理由也相同：这个 id 本就全局唯一，
 // 也是每个调用方已经用来指代这次请求的东西，因此重复上报（一次被重试的批量
 // 推送）天然会被这同一个唯一性拒绝——这里的表现是被悄悄跳过。

@@ -267,6 +267,15 @@ const (
 	EndpointOllamaChat        = "ollama_chat"
 	EndpointOllamaGenerate    = "ollama_generate"
 	EndpointOllamaEmbeddings  = "ollama_embeddings"
+	// EndpointAudioTranscriptions, EndpointAudioTranslations and
+	// EndpointRerank are separate from each other and from chat because each
+	// is its own backend call with its own latency profile.
+	//
+	// EndpointAudioTranscriptions、EndpointAudioTranslations 与 EndpointRerank
+	// 彼此分开、也与 chat 分开，因为每一个都是独立的后端调用，延迟特征各不相同。
+	EndpointAudioTranscriptions = "audio_transcriptions"
+	EndpointAudioTranslations   = "audio_translations"
+	EndpointRerank              = "rerank"
 	// EndpointOllamaUnsupported covers every Ollama model-management route
 	// (create/pull/push/delete/copy/show/tags/ps) under one label: they all
 	// answer the same fixed "not supported" body (ollama.go's
@@ -436,6 +445,12 @@ func endpointFor(path string) string {
 		return EndpointOllamaGenerate
 	case "/api/embeddings":
 		return EndpointOllamaEmbeddings
+	case "/v1/audio/transcriptions":
+		return EndpointAudioTranscriptions
+	case "/v1/audio/translations":
+		return EndpointAudioTranslations
+	case "/v1/rerank":
+		return EndpointRerank
 	case "/api/create", "/api/pull", "/api/push", "/api/delete", "/api/copy", "/api/show", "/api/tags", "/api/ps":
 		return EndpointOllamaUnsupported
 	}

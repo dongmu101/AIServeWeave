@@ -56,7 +56,7 @@ runtimes:
     kind: codex
 ```
 
-Gateway `/v1/models` 合并所有就绪运行时的模型；一个 CLI 未就绪只影响它自己的模型，不会隐藏另一个 CLI。Claude 通过 Messages 或 Chat 调用，Codex 通过 Chat/Responses 调用。修改白名单后重启 Agent。若 Codex 没有模型，先在启动 Agent 的同一终端执行 `codex --version`，确认平台可执行依赖完整，再检查 CLI 登录和运行时状态；重新构建 Gateway 不会修复损坏的本机 CLI 安装。
+Gateway `/v1/models` 合并所有就绪运行时的模型；一个 CLI 未就绪只影响它自己的模型，不会隐藏另一个 CLI。Claude 通过 Messages、Chat 或 Responses 调用，Codex 通过 Chat/Responses 调用。修改白名单后重启 Agent。若 Codex 没有模型，先在启动 Agent 的同一终端执行 `codex --version`，确认平台可执行依赖完整，再检查 CLI 登录和运行时状态；重新构建 Gateway 不会修复损坏的本机 CLI 安装。
 
 ## Codex CLI 接入
 

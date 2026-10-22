@@ -42,18 +42,33 @@ const (
 )
 
 // requestLogEndpoint values, the closed set request_logs.endpoint accepts —
-// a narrower vocabulary than httpapi's own endpointFor, which also covers
-// job-related routes that STATUS.md's P09/C28 explicitly excludes (they
-// already have J07's persisted history).
+// one per inference front door. It is narrower than httpapi's own
+// endpointFor, which also covers job-related routes that STATUS.md's P09/C28
+// explicitly excludes (they already have J07's persisted history) and the
+// Ollama model-management routes, which never dispatch. Values are short
+// rather than copied from endpointFor or the usage ledger because the column
+// is VARCHAR(16): anthropic_messages would not fit, and widening it is a
+// migration this vocabulary does not need.
 //
-// requestLogEndpoint 取值，是 request_logs.endpoint 所接受的封闭集合——比
-// httpapi 自己的 endpointFor 更窄，后者还覆盖了 STATUS.md P09/C28 明确排除
-// 的 job 相关路由(它们已经有 J07 的持久化历史)。
+// requestLogEndpoint 取值，是 request_logs.endpoint 所接受的封闭集合——每个
+// 推理前门一个。它比 httpapi 自己的 endpointFor 更窄，后者还覆盖了 STATUS.md
+// P09/C28 明确排除的 job 相关路由(它们已经有 J07 的持久化历史)，以及从不派发
+// 的 Ollama 模型管理路由。取值刻意写短，而不是照搬 endpointFor 或用量账本的
+// 名字，因为该列是 VARCHAR(16)：anthropic_messages 放不下，而为这份词汇表
+// 加宽列是一次不必要的迁移。
 const (
-	requestLogEndpointModels     = "models"
-	requestLogEndpointChat       = "chat"
-	requestLogEndpointEmbeddings = "embeddings"
-	requestLogEndpointResponses  = "responses"
+	requestLogEndpointModels         = "models"
+	requestLogEndpointChat           = "chat"
+	requestLogEndpointEmbeddings     = "embeddings"
+	requestLogEndpointResponses      = "responses"
+	requestLogEndpointImages         = "images"
+	requestLogEndpointMessages       = "messages"
+	requestLogEndpointTranscriptions = "transcriptions"
+	requestLogEndpointTranslations   = "translations"
+	requestLogEndpointRerank         = "rerank"
+	requestLogEndpointOllamaChat     = "ollama_chat"
+	requestLogEndpointOllamaGenerate = "ollama_generate"
+	requestLogEndpointOllamaEmbed    = "ollama_embed"
 )
 
 // outcomeForStatus maps an HTTP status code onto the closed Outcome
@@ -90,13 +105,14 @@ func outcomeForStatus(status int) string {
 }
 
 // requestLogEndpoint reports the closed endpoint value for path, and
-// whether path is one of the four routes STATUS.md's P09/C28 covers at all.
-// Every other path — job routes, artifact routes, anything unrecognized —
-// returns ok=false, which is the middleware's signal to record nothing.
+// whether path is one of the inference front doors request search covers at
+// all. Every other path — job routes, artifact routes, Ollama model
+// management, anything unrecognized — returns ok=false, which is the
+// middleware's signal to record nothing.
 //
 // requestLogEndpoint 报告 path 对应的封闭 endpoint 取值，以及 path 是否属于
-// STATUS.md P09/C28 覆盖的四条路由之一。其余任何路径——job 路由、产物路由、
-// 任何无法识别的路径——都返回 ok=false，这是中间件"不记录"的信号。
+// 请求检索覆盖的推理前门之一。其余任何路径——job 路由、产物路由、Ollama 模型
+// 管理路由、任何无法识别的路径——都返回 ok=false，这是中间件"不记录"的信号。
 func requestLogEndpoint(path string) (string, bool) {
 	switch path {
 	case "/v1/models":
@@ -107,6 +123,22 @@ func requestLogEndpoint(path string) (string, bool) {
 		return requestLogEndpointEmbeddings, true
 	case "/v1/responses":
 		return requestLogEndpointResponses, true
+	case "/v1/images/generations":
+		return requestLogEndpointImages, true
+	case "/v1/messages":
+		return requestLogEndpointMessages, true
+	case "/v1/audio/transcriptions":
+		return requestLogEndpointTranscriptions, true
+	case "/v1/audio/translations":
+		return requestLogEndpointTranslations, true
+	case "/v1/rerank":
+		return requestLogEndpointRerank, true
+	case "/api/chat":
+		return requestLogEndpointOllamaChat, true
+	case "/api/generate":
+		return requestLogEndpointOllamaGenerate, true
+	case "/api/embeddings":
+		return requestLogEndpointOllamaEmbed, true
 	default:
 		return "", false
 	}
@@ -152,7 +184,7 @@ type requestLogSink interface {
 
 // requestLogMiddleware records one RequestLogRecord per finished request
 // that both resolved a tenant identity (auth.middleware already ran) and
-// matches one of the four routes STATUS.md's P09/C28 covers. It is placed
+// matches one of the front doors requestLogEndpoint covers. It is placed
 // after auth.middleware in the chain specifically so IdentityFrom(ctx) is
 // already populated when this code runs — see the design doc's "采集链路"
 // section for why that ordering avoids any cross-middleware context-sharing
@@ -163,7 +195,7 @@ type requestLogSink interface {
 // other background feature in this package already follows.
 //
 // requestLogMiddleware 为每一个既解析出了租户身份(auth.middleware 已经跑过)
-// 又匹配 STATUS.md P09/C28 覆盖的四条路由之一的、已完成的请求，记录一条
+// 又匹配 requestLogEndpoint 覆盖的前门之一的、已完成的请求，记录一条
 // RequestLogRecord。它被特意放在链路中 auth.middleware 之后，好让这段代码
 // 运行时 IdentityFrom(ctx) 已经就绪——为什么这个顺序能避免任何跨中间件的
 // context 共享机制，见设计文档「采集链路」一节。
@@ -193,7 +225,7 @@ func (h *handlers) requestLogMiddleware(next http.Handler) http.Handler {
 		status := statusOf(sw)
 
 		var keyDisplay string
-		if key, ok := bearerToken(r.Header.Get("Authorization")); ok {
+		if key, ok := requestKey(r); ok {
 			keyDisplay = apikey.Display(key)
 		}
 		accepted := h.requestLogs.enqueue(RequestLogRecord{
