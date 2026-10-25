@@ -522,6 +522,23 @@ const tenant = {
   "tenant.deleteApiKey": "API Key を削除",
   "tenant.deleteKeyIrreversible": "{strong}（{code}）を完全に削除します。この操作は取り消せず、Key は一覧から消えて復元できません。",
   "tenant.deletedKey": "{name} を削除しました",
-  "tenant.thisKeyCanNoLongerBeDeleted": "この Key は既に存在しません。他のユーザーが削除した可能性があります。一覧を更新しました。"
+  "tenant.thisKeyCanNoLongerBeDeleted": "この Key は既に存在しません。他のユーザーが削除した可能性があります。一覧を更新しました。",
+  "tenant.cliQuota": "サブスクリプション枠",
+  "tenant.cliQuotaNote": "共有の CLI サブスクリプション枠で、テナント割当や 1 回ごとの token 使用量とは独立しています。残りは上流が報告した使用率から算出した値で、token 数ではありません。",
+  "tenant.cliQuotaFiveHour": "5 時間ウィンドウ",
+  "tenant.cliQuotaSevenDay": "7 日ウィンドウ",
+  "tenant.cliQuotaSevenDaySonnet": "7 日 Sonnet ウィンドウ",
+  "tenant.cliQuotaSevenDayOpus": "7 日 Opus ウィンドウ",
+  "tenant.cliQuotaPrimary": "メインウィンドウ",
+  "tenant.cliQuotaSecondary": "サブウィンドウ",
+  "tenant.cliQuotaUsedRemaining": "使用 {used} · 残り {remaining}",
+  "tenant.cliQuotaResets": "リセット：{time}",
+  "tenant.cliQuotaChecked": "確認：{time}",
+  "tenant.cliQuotaWaitingNextCheck": "リセット時刻を過ぎました。次回の確認待ちです",
+  "tenant.cliQuotaPending": "確認待ち",
+  "tenant.cliQuotaUnauthorized": "サブスクリプションにログインしていません",
+  "tenant.cliQuotaUnavailable": "CLI が枠を提供していません",
+  "tenant.cliQuotaError": "枠の取得に失敗しました",
+  "tenant.cliQuotaMinutesWindow": "ウィンドウ長：{minutes} 分"
 } as const;
 export default tenant;

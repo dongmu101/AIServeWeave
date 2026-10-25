@@ -111,3 +111,58 @@ func TestMonitorExpiredWindowsRemainUnknown(t *testing.T) {
 		t.Fatalf("window=%+v, want expired with last reported usage preserved", got)
 	}
 }
+
+// tickClock hands out timers the test fires by hand, so Run is driven without
+// real waiting.
+// tickClock 发放由测试手动触发的定时器，让 Run 不必真实等待。
+type tickClock struct {
+	runtime.Clock
+	now    time.Time
+	timers chan chan time.Time
+}
+
+func (c *tickClock) Now() time.Time { return c.now }
+
+func (c *tickClock) NewTimer(time.Duration) (<-chan time.Time, func() bool) {
+	ch := make(chan time.Time, 1)
+	c.timers <- ch
+	return ch, func() bool { return true }
+}
+
+// TestMonitorRunRefreshesImmediatelyAndOnEveryTick checks Run's first pass is
+// immediate, later passes follow the timer, and cancellation ends it.
+// TestMonitorRunRefreshesImmediatelyAndOnEveryTick 验证 Run 首轮立即执行，之后随定时器
+// 触发，取消后结束。
+func TestMonitorRunRefreshesImmediatelyAndOnEveryTick(t *testing.T) {
+	clock := &tickClock{now: time.Unix(1800000000, 0), timers: make(chan chan time.Time)}
+	var calls atomic.Int32
+	m := NewMonitor(clock, []Provider{{Kind: runtime.KindCodex, Read: func(context.Context) (Account, error) {
+		calls.Add(1)
+		return Account{Windows: []Window{{UsedPercent: 25, ResetsAt: clock.now.Add(time.Hour)}}}, nil
+	}}})
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); m.Run(ctx, 5*time.Minute) }()
+
+	first := <-clock.timers
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("queries after start = %d, want 1", got)
+	}
+	clock.now = clock.now.Add(5 * time.Minute)
+	first <- clock.now
+	second := <-clock.timers
+	if got := calls.Load(); got != 2 {
+		t.Fatalf("queries after one tick = %d, want 2", got)
+	}
+	cancel()
+	<-done
+	_ = second
+}
+
+// TestMonitorRunReturnsWithoutProviders checks a node with no declared CLI
+// never starts a refresh loop.
+// TestMonitorRunReturnsWithoutProviders 验证没有声明 CLI 的节点不会启动刷新循环。
+func TestMonitorRunReturnsWithoutProviders(t *testing.T) {
+	m := NewMonitor(&usageClock{now: time.Unix(1800000000, 0)}, nil)
+	m.Run(t.Context(), time.Minute)
+}

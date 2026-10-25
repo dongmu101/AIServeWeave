@@ -10,6 +10,7 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/nodeview"
 	"AIServeWeave/common/runtime"
@@ -294,6 +295,38 @@ func TestInventoryRendersWhatAConsoleNeeds(t *testing.T) {
 	// 尚未完成过健康检查，因此耗时是缺席而不是零：零毫秒是一个测量结果，在这里会是谎言。
 	if rt.LatencyMillis != nil || rt.CheckedAt != nil {
 		t.Errorf("latency = %v checked = %v, want both absent", rt.LatencyMillis, rt.CheckedAt)
+	}
+}
+
+// TestInventoryRendersCLIUsageWithoutCredentials checks the CLI quota crosses
+// as bounded percentages and timestamps, and an unsupported kind does not.
+//
+// TestInventoryRendersCLIUsageWithoutCredentials 检查 CLI 额度只以有界的百分比与时间戳
+// 外传，而不受支持的 kind 不会外传。
+func TestInventoryRendersCLIUsageWithoutCredentials(t *testing.T) {
+	resets := probedAt.Add(5 * time.Hour)
+	node := connectedNode()
+	node.CLIUsage = []cliusagestatus.Account{
+		{Kind: runtime.KindClaude, Status: "ready", CheckedAt: probedAt, Windows: []cliusagestatus.Window{
+			{Name: "five_hour", UsedPercent: 6, ResetsAt: resets},
+		}},
+		{Kind: runtime.KindOllama, Status: "ready"},
+	}
+	handler := serve(t, []tunnelserver.NodeInfo{node})
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/nodes", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var got nodeview.Replica
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding the inventory: %v", err)
+	}
+	usage := got.Nodes[0].CLIUsage
+	if len(usage) != 1 || usage[0].Kind != "claude" || usage[0].Status != "ready" ||
+		len(usage[0].Windows) != 1 || usage[0].Windows[0].UsedPercent != 6 ||
+		usage[0].Windows[0].ResetsAt == nil || !usage[0].Windows[0].ResetsAt.Equal(resets) {
+		t.Fatalf("CLIUsage = %+v, want one ready claude account with a 6%% window resetting at %v", usage, resets)
 	}
 }
 

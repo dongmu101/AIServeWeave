@@ -522,6 +522,23 @@ const tenant = {
   "tenant.deleteApiKey": "删除 API Key",
   "tenant.deleteKeyIrreversible": "将永久删除 {strong}（{code}）。此操作不可撤销，该 Key 的记录将从列表中移除，无法恢复。",
   "tenant.deletedKey": "已删除 {name}",
-  "tenant.thisKeyCanNoLongerBeDeleted": "该 Key 已不存在，可能已被他人删除。列表已刷新。"
+  "tenant.thisKeyCanNoLongerBeDeleted": "该 Key 已不存在，可能已被他人删除。列表已刷新。",
+  "tenant.cliQuota": "订阅额度",
+  "tenant.cliQuotaNote": "共享的 CLI 订阅额度，与租户配额及单次请求 token 用量无关；剩余比例由上游报告的已用比例计算，不代表可用 token 数。",
+  "tenant.cliQuotaFiveHour": "5 小时窗口",
+  "tenant.cliQuotaSevenDay": "7 天窗口",
+  "tenant.cliQuotaSevenDaySonnet": "7 天 Sonnet 窗口",
+  "tenant.cliQuotaSevenDayOpus": "7 天 Opus 窗口",
+  "tenant.cliQuotaPrimary": "主额度窗口",
+  "tenant.cliQuotaSecondary": "次额度窗口",
+  "tenant.cliQuotaUsedRemaining": "已用 {used} · 剩余 {remaining}",
+  "tenant.cliQuotaResets": "重置：{time}",
+  "tenant.cliQuotaChecked": "查询：{time}",
+  "tenant.cliQuotaWaitingNextCheck": "已到重置时间，等待下次查询",
+  "tenant.cliQuotaPending": "待查询",
+  "tenant.cliQuotaUnauthorized": "未登录订阅账户",
+  "tenant.cliQuotaUnavailable": "CLI 未提供额度",
+  "tenant.cliQuotaError": "额度查询失败",
+  "tenant.cliQuotaMinutesWindow": "窗口时长：{minutes} 分钟"
 } as const;
 export default tenant;

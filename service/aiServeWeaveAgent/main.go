@@ -38,6 +38,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
 	"AIServeWeave/service/aiServeWeaveAgent/claudecode"
 	"AIServeWeave/service/aiServeWeaveAgent/cliagent"
+	"AIServeWeave/service/aiServeWeaveAgent/cliusage"
 	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
@@ -750,9 +751,17 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		}
 	}()
 	var activeTunnels atomic.Pointer[tunnel.Manager]
+	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
+	if opts.enabled() {
+		// Only a node with a tunnel has anywhere to report the quota to; the
+		// settings page refreshes the cache on its own when it is viewed.
+		//
+		// 只有带隧道的节点才有地方上报额度；设置页被查看时自己会刷新缓存。
+		go cliUsage.Run(ctx, cliUsageRefreshInterval)
+	}
 	uiSources := configui.Sources{
 		Runtimes: manager.Snapshot,
-		CLIUsage: newCLIUsageMonitor(declaredRuntimes, deps.Clock),
+		CLIUsage: cliUsage,
 		Gateway: func() configui.GatewaySnapshot {
 			current := activeTunnels.Load()
 			snapshot := configui.GatewaySnapshot{Enabled: opts.enabled(), Started: current != nil}
@@ -844,7 +853,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 
-	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker)
+	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker, cliUsage)
 	if err != nil {
 		return err
 	}
@@ -1145,7 +1154,7 @@ func parseAgentUpgradePublicKey(hexKey string) (ed25519.PublicKey, error) {
 // accept, but not execute, UPGRADE/ROLLBACK) and report status back.
 // newAgentUpgradeChecker never returns nil, so this is never nil either —
 // the same shape puller uses.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker) (<-chan error, *tunnel.Manager, error) {
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker, cliUsage *cliusage.Monitor) (<-chan error, *tunnel.Manager, error) {
 	if !opts.enabled() {
 		return nil, nil, nil
 	}
@@ -1213,6 +1222,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			ModelPuller:     puller,
 			ComfyUIManaged:  comfyUIManagedClient,
 			AgentUpgrader:   upgradeChecker,
+			CLIUsage:        cliUsageSource(cliUsage),
 			Metrics:         metrics,
 			Logger:          logger,
 		},

@@ -522,6 +522,23 @@ const tenant = {
   "tenant.deleteApiKey": "刪除 API Key",
   "tenant.deleteKeyIrreversible": "將永久刪除 {strong}（{code}）。此操作無法復原，該 Key 的紀錄將從清單中移除，無法恢復。",
   "tenant.deletedKey": "已刪除 {name}",
-  "tenant.thisKeyCanNoLongerBeDeleted": "此 Key 已不存在，可能已被其他人刪除。清單已重新整理。"
+  "tenant.thisKeyCanNoLongerBeDeleted": "此 Key 已不存在，可能已被其他人刪除。清單已重新整理。",
+  "tenant.cliQuota": "訂閱額度",
+  "tenant.cliQuotaNote": "共用的 CLI 訂閱額度，與租戶配額及單次請求 token 用量無關；剩餘比例由上游回報的已用比例計算，不代表可用 token 數。",
+  "tenant.cliQuotaFiveHour": "5 小時視窗",
+  "tenant.cliQuotaSevenDay": "7 天視窗",
+  "tenant.cliQuotaSevenDaySonnet": "7 天 Sonnet 視窗",
+  "tenant.cliQuotaSevenDayOpus": "7 天 Opus 視窗",
+  "tenant.cliQuotaPrimary": "主額度視窗",
+  "tenant.cliQuotaSecondary": "次額度視窗",
+  "tenant.cliQuotaUsedRemaining": "已用 {used} · 剩餘 {remaining}",
+  "tenant.cliQuotaResets": "重置：{time}",
+  "tenant.cliQuotaChecked": "查詢：{time}",
+  "tenant.cliQuotaWaitingNextCheck": "已到重置時間，等待下次查詢",
+  "tenant.cliQuotaPending": "待查詢",
+  "tenant.cliQuotaUnauthorized": "未登入訂閱帳戶",
+  "tenant.cliQuotaUnavailable": "CLI 未提供額度",
+  "tenant.cliQuotaError": "額度查詢失敗",
+  "tenant.cliQuotaMinutesWindow": "視窗時長：{minutes} 分鐘"
 } as const;
 export default tenant;

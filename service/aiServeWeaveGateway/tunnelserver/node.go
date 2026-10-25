@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -12,6 +13,7 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
@@ -81,6 +83,16 @@ type node struct {
 	// modelPulls 一样，它每次上报都整份替换——今天一个 Agent 最多管理一个
 	// Managed 实例，没有什么需要增量合并。
 	comfyUIManaged map[string]comfyuimanagedstatus.Status
+	// cliUsage is this node's last-reported CLI subscription quota. Like
+	// modelPulls it is replaced wholesale on every report, and it is held as
+	// the Agent sent it: bounding and vocabulary checks happen where it is
+	// rendered (nodeview.CLIUsageFromAccounts), the one allowlist every
+	// console-facing view passes through.
+	//
+	// cliUsage 是该节点最后一次上报的 CLI 订阅额度。与 modelPulls 一样，每次上报都整份
+	// 替换，并按 Agent 发来的原样保存：数量与词表检查发生在渲染处
+	// （nodeview.CLIUsageFromAccounts），那是所有面向控制台的视图都要经过的唯一允许列表。
+	cliUsage []cliusagestatus.Account
 
 	lastHeartbeat time.Time
 	inflight      int
@@ -215,6 +227,12 @@ type NodeInfo struct {
 	// Live reports whether a Control stream is established and the last
 	// heartbeat is recent enough.
 	Live bool
+	// CLIUsage is the last-reported CLI subscription quota, sorted by kind.
+	// It is untrusted Agent input, bounded when rendered.
+	//
+	// CLIUsage 是最后一次上报的 CLI 订阅额度，按 kind 排序。它是不受信任的 Agent
+	// 输入，渲染时再做限制。
+	CLIUsage []cliusagestatus.Account
 }
 
 // Nodes returns a view of every node connected to this replica, sorted by
@@ -398,7 +416,34 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		Draining:         n.draining,
 		Maintenance:      n.maintenance,
 		Live:             live,
+		CLIUsage:         cloneCLIUsage(n.cliUsage),
 	}
+}
+
+// cloneCLIUsage copies accounts and their windows, so a NodeInfo never aliases
+// the node's own slices.
+//
+// cloneCLIUsage 复制账户及其窗口，让 NodeInfo 不与节点自己的切片共用内存。
+func cloneCLIUsage(accounts []cliusagestatus.Account) []cliusagestatus.Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	out := make([]cliusagestatus.Account, len(accounts))
+	for i, account := range accounts {
+		out[i] = account
+		out[i].Windows = slices.Clone(account.Windows)
+	}
+	return out
+}
+
+// applyCLIUsageReport replaces the node's CLI quota wholesale with the Agent's
+// latest report.
+//
+// applyCLIUsageReport 用 Agent 的最新上报整份替换该节点的 CLI 额度。
+func (n *node) applyCLIUsageReport(accounts []cliusagestatus.Account) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.cliUsage = accounts
 }
 
 // isEmpty reports whether the entry holds neither a Control stream nor a slot,

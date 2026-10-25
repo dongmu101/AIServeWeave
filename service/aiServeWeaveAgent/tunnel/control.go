@@ -47,6 +47,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 	if err := sess.forceReportAgentUpgrade(); err != nil {
 		return c.streamError("initial agent upgrade report", err)
 	}
+	if err := sess.reportCLIUsage(true); err != nil {
+		return c.streamError("initial cli usage report", err)
+	}
 
 	heartbeat := newRearmingTimer(c.clock, c.cfg.HeartbeatInterval)
 	defer heartbeat.stop()
@@ -87,6 +90,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.reportAgentUpgrade(false); err != nil {
 				return c.streamError("agent upgrade report", err)
 			}
+			if err := sess.reportCLIUsage(false); err != nil {
+				return c.streamError("cli usage report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -121,6 +127,8 @@ type controlSession struct {
 	// reportedAgentUpgrade is reportedModelPull's counterpart for
 	// AgentUpgradeReport (STATUS.md's P2 Agent auto-upgrade subtask 1).
 	reportedAgentUpgrade []byte
+	// reportedCLIUsage is reportedModelPull's counterpart for CLIUsageReport.
+	reportedCLIUsage []byte
 }
 
 // handle dispatches one frame from the replica.
@@ -459,6 +467,45 @@ func (s *controlSession) reportAgentUpgrade(force bool) error {
 // changed, the Checker counterpart to forceReportModelPull.
 func (s *controlSession) forceReportAgentUpgrade() error {
 	return s.reportAgentUpgrade(true)
+}
+
+// reportCLIUsage sends a CLIUsageReport when the cached quota has changed since
+// the last one sent (or force is true) — reportModelPull's counterpart for the
+// CLI subscription quota. The wire form leaves out the flags derived from the
+// moment of reading, so an idle quota encodes identically poll after poll and
+// is sent only when a query actually changed something.
+//
+// reportCLIUsage 在缓存的额度自上次发送后发生变化（或 force 为 true）时发送一次
+// CLIUsageReport——是 reportModelPull 在 CLI 订阅额度上的对应物。线上形式不含取决于
+// 读取时刻的派生标志，因此额度没动时每次轮询的编码完全相同，只有真正有查询结果变化时
+// 才会发送。
+func (s *controlSession) reportCLIUsage(force bool) error {
+	source := s.client.cfg.CLIUsage
+	if source == nil {
+		return nil
+	}
+	accounts := source.Snapshot()
+	if len(accounts) == 0 {
+		return nil
+	}
+	report := tunnelwire.CLIUsageReportToProto(accounts)
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a cli usage report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedCLIUsage) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_CliUsage{CliUsage: report}}, "cli usage report"); err != nil {
+		return err
+	}
+	s.reportedCLIUsage = key
+	return nil
 }
 
 // applyConfig installs one control-plane configuration change. Failures are

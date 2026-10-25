@@ -321,6 +321,7 @@ func renderNode(info tunnelserver.NodeInfo) nodeview.Node {
 		Labels:             copyLabels(info.Labels),
 		InflightRequests:   info.InflightRequests,
 		DeclaredRuntimeIDs: append([]string(nil), info.RuntimeIDs...),
+		CLIUsage:           nodeview.CLIUsageFromAccounts(info.CLIUsage),
 	}
 	if !info.LastHeartbeat.IsZero() {
 		heartbeat := info.LastHeartbeat.UTC()

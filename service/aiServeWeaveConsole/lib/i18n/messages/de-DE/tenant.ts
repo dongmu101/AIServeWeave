@@ -534,6 +534,23 @@ const tenant = {
   "tenant.deleteApiKey": "API Key löschen",
   "tenant.deleteKeyIrreversible": "{strong} ({code}) wird endgültig gelöscht. Diese Aktion ist unwiderruflich; der Key wird aus der Liste entfernt und kann nicht wiederhergestellt werden.",
   "tenant.deletedKey": "{name} gelöscht",
-  "tenant.thisKeyCanNoLongerBeDeleted": "Dieser Key existiert nicht mehr. Möglicherweise hat ihn jemand anderes gelöscht. Die Liste wurde aktualisiert."
+  "tenant.thisKeyCanNoLongerBeDeleted": "Dieser Key existiert nicht mehr. Möglicherweise hat ihn jemand anderes gelöscht. Die Liste wurde aktualisiert.",
+  "tenant.cliQuota": "Abo-Kontingent",
+  "tenant.cliQuotaNote": "Gemeinsames CLI-Abo-Kontingent, unabhängig vom Mandantenkontingent und vom Token-Verbrauch einzelner Anfragen. Der Restwert wird aus dem vom Upstream gemeldeten Verbrauchsanteil berechnet und ist keine Token-Anzahl.",
+  "tenant.cliQuotaFiveHour": "5-Stunden-Fenster",
+  "tenant.cliQuotaSevenDay": "7-Tage-Fenster",
+  "tenant.cliQuotaSevenDaySonnet": "7-Tage-Sonnet-Fenster",
+  "tenant.cliQuotaSevenDayOpus": "7-Tage-Opus-Fenster",
+  "tenant.cliQuotaPrimary": "Primäres Fenster",
+  "tenant.cliQuotaSecondary": "Sekundäres Fenster",
+  "tenant.cliQuotaUsedRemaining": "Verbraucht {used} · Übrig {remaining}",
+  "tenant.cliQuotaResets": "Zurücksetzung: {time}",
+  "tenant.cliQuotaChecked": "Abgefragt: {time}",
+  "tenant.cliQuotaWaitingNextCheck": "Zurücksetzungszeit erreicht; warte auf die nächste Abfrage",
+  "tenant.cliQuotaPending": "Ausstehend",
+  "tenant.cliQuotaUnauthorized": "Abo-Konto nicht angemeldet",
+  "tenant.cliQuotaUnavailable": "CLI liefert kein Kontingent",
+  "tenant.cliQuotaError": "Kontingentabfrage fehlgeschlagen",
+  "tenant.cliQuotaMinutesWindow": "Fensterlänge: {minutes} Min."
 } as const;
 export default tenant;

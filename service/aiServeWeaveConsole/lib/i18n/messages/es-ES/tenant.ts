@@ -522,6 +522,23 @@ const tenant = {
   "tenant.deleteApiKey": "Eliminar API Key",
   "tenant.deleteKeyIrreversible": "Se eliminará definitivamente {strong} ({code}). Esta acción es irreversible; la Key se quita de la lista y no se podrá recuperar.",
   "tenant.deletedKey": "Se eliminó {name}",
-  "tenant.thisKeyCanNoLongerBeDeleted": "Esta Key ya no existe. Es posible que otra persona la haya eliminado. La lista se ha actualizado."
+  "tenant.thisKeyCanNoLongerBeDeleted": "Esta Key ya no existe. Es posible que otra persona la haya eliminado. La lista se ha actualizado.",
+  "tenant.cliQuota": "Cuota de suscripción",
+  "tenant.cliQuotaNote": "Cuota de suscripción de CLI compartida, independiente de la cuota del inquilino y del uso de tokens por solicitud. El restante se calcula a partir del porcentaje usado que informa el upstream y no es un número de tokens.",
+  "tenant.cliQuotaFiveHour": "Ventana de 5 horas",
+  "tenant.cliQuotaSevenDay": "Ventana de 7 días",
+  "tenant.cliQuotaSevenDaySonnet": "Ventana Sonnet de 7 días",
+  "tenant.cliQuotaSevenDayOpus": "Ventana Opus de 7 días",
+  "tenant.cliQuotaPrimary": "Ventana principal",
+  "tenant.cliQuotaSecondary": "Ventana secundaria",
+  "tenant.cliQuotaUsedRemaining": "Usado {used} · Restante {remaining}",
+  "tenant.cliQuotaResets": "Se restablece: {time}",
+  "tenant.cliQuotaChecked": "Consultado: {time}",
+  "tenant.cliQuotaWaitingNextCheck": "Se superó la hora de restablecimiento; esperando la próxima consulta",
+  "tenant.cliQuotaPending": "Pendiente",
+  "tenant.cliQuotaUnauthorized": "Cuenta de suscripción sin iniciar sesión",
+  "tenant.cliQuotaUnavailable": "La CLI no proporciona cuota",
+  "tenant.cliQuotaError": "Error al consultar la cuota",
+  "tenant.cliQuotaMinutesWindow": "Duración de la ventana: {minutes} min"
 } as const;
 export default tenant;

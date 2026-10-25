@@ -534,6 +534,23 @@ const tenant = {
   "tenant.deleteApiKey": "Delete API Key",
   "tenant.deleteKeyIrreversible": "Permanently delete {strong} ({code}). This action is irreversible; the Key is removed from the list and cannot be restored.",
   "tenant.deletedKey": "Deleted {name}",
-  "tenant.thisKeyCanNoLongerBeDeleted": "This Key no longer exists. Someone else may have deleted it. The list has been refreshed."
+  "tenant.thisKeyCanNoLongerBeDeleted": "This Key no longer exists. Someone else may have deleted it. The list has been refreshed.",
+  "tenant.cliQuota": "Subscription quota",
+  "tenant.cliQuotaNote": "Shared CLI subscription quota, independent of the tenant quota and per-request token usage. Remaining is computed from the used percentage the upstream reports and is not a token count.",
+  "tenant.cliQuotaFiveHour": "5-hour window",
+  "tenant.cliQuotaSevenDay": "7-day window",
+  "tenant.cliQuotaSevenDaySonnet": "7-day Sonnet window",
+  "tenant.cliQuotaSevenDayOpus": "7-day Opus window",
+  "tenant.cliQuotaPrimary": "Primary window",
+  "tenant.cliQuotaSecondary": "Secondary window",
+  "tenant.cliQuotaUsedRemaining": "Used {used} · Remaining {remaining}",
+  "tenant.cliQuotaResets": "Resets: {time}",
+  "tenant.cliQuotaChecked": "Checked: {time}",
+  "tenant.cliQuotaWaitingNextCheck": "Reset time passed; waiting for the next check",
+  "tenant.cliQuotaPending": "Pending",
+  "tenant.cliQuotaUnauthorized": "Subscription account not signed in",
+  "tenant.cliQuotaUnavailable": "CLI did not provide quota",
+  "tenant.cliQuotaError": "Quota query failed",
+  "tenant.cliQuotaMinutesWindow": "Window length: {minutes} min"
 } as const;
 export default tenant;

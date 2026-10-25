@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/runtime"
 )
 
@@ -22,24 +23,11 @@ var ErrUnavailable = errors.New("CLI subscription usage unavailable")
 
 // Window contains one upstream-reported quota window, never a token estimate.
 // Window 保存一个上游报告的额度窗口，不包含 token 推算值。
-type Window struct {
-	Name            string    // fixed window identifier / 固定窗口标识
-	Bucket          string    // validated Codex metering bucket / 经校验的 Codex 计量桶
-	UsedPercent     float64   // reported usage, including a real zero / 上报的已用比例，包括真实零值
-	DurationMinutes int64     // zero means the duration was not reported / 零表示未报告窗口时长
-	ResetsAt        time.Time // upstream reset timestamp / 上游重置时间
-	Expired         bool      // snapshot time has reached the reset boundary / 快照时间已到重置边界
-}
+type Window = cliusagestatus.Window
 
 // Account is a safe projection of one CLI account's subscription quota.
 // Account 是一个 CLI 账户订阅额度的安全投影。
-type Account struct {
-	Kind      runtime.Kind // locally declared provider / 本地声明的供应方
-	Status    string       // pending, ready, unauthorized, unavailable or error / 待查询、可用、未登录、未提供或失败
-	Windows   []Window     // bounded upstream quota windows / 有界的上游额度窗口
-	CheckedAt time.Time    // time of the latest query attempt / 最近查询时间
-	Stale     bool         // cached data is older than two minutes / 缓存数据已超过两分钟
-}
+type Account = cliusagestatus.Account
 
 // Provider reads one locally declared CLI without submitting an inference turn.
 // Provider 查询一个本地声明的 CLI，不提交推理回合。
@@ -89,6 +77,31 @@ func (m *Monitor) Snapshot() []Account {
 		accounts[i].Stale = !accounts[i].CheckedAt.IsZero() && m.clock.Now().Sub(accounts[i].CheckedAt) > 2*time.Minute
 	}
 	return accounts
+}
+
+// Run refreshes the cache once immediately and then every interval until ctx
+// is cancelled, so the tunnel has a current snapshot to report even when
+// nobody is looking at the local settings page. Each pass still goes through
+// Refresh and so keeps its one-batch-per-minute bound. Run returns at once when
+// no provider is declared.
+//
+// Run 立即刷新一次缓存，此后每隔 interval 刷新一次，直到 ctx 被取消，这样即使没有
+// 人在看本地设置页，隧道也有一份最新快照可以上报。每一轮仍经过 Refresh，因此继续
+// 受「每分钟一批」的限制。没有声明任何来源时，Run 立即返回。
+func (m *Monitor) Run(ctx context.Context, interval time.Duration) {
+	if len(m.providers) == 0 {
+		return
+	}
+	for {
+		m.Refresh(ctx)
+		timer, stop := m.clock.NewTimer(interval)
+		select {
+		case <-timer:
+		case <-ctx.Done():
+			stop()
+			return
+		}
+	}
 }
 
 // Refresh queries the fixed providers concurrently within a shared 15-second

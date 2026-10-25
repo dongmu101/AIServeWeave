@@ -22,6 +22,13 @@ type TenantModelService struct {
 	State      string           `json:"state"`
 	Version    string           `json:"version"`
 	Models     []nodeview.Model `json:"models"`
+	// CLIUsage is the subscription quota of the CLI this service runs, present
+	// only for a codex or claude service whose Agent has reported one. It is the
+	// CLI account's shared quota, not a per-tenant figure.
+	//
+	// CLIUsage 是该服务所运行 CLI 的订阅额度，仅当 codex 或 claude 服务的 Agent 上报过
+	// 才存在。它是 CLI 账户的共享额度，不是按租户划分的数字。
+	CLIUsage *nodeview.CLIUsage `json:"cli_usage,omitempty"`
 }
 
 // TenantModelCatalog exposes Agent-reported service and model facts to authenticated tenants.
@@ -56,9 +63,27 @@ func (a *Aggregator) TenantModels(ctx context.Context) (TenantModelCatalog, erro
 				AgentID: node.NodeID, ServiceID: backend.ID,
 				NodeOnline: node.Live,
 				Kind:       backend.Kind, State: backend.State, Version: backend.Version,
-				Models: backend.Models,
+				Models:   backend.Models,
+				CLIUsage: cliUsageFor(node.CLIUsage, backend.Kind),
 			})
 		}
 	}
 	return out, nil
+}
+
+// cliUsageFor returns the quota reported for kind, or nil when the Agent
+// reported none. Services of the same kind on one node share one CLI account,
+// so they share one entry; the copy keeps a response from aliasing the snapshot.
+//
+// cliUsageFor 返回为 kind 上报的额度，Agent 没有上报时返回 nil。同一节点上同类型的服务
+// 共用一个 CLI 账户，因此共用同一条记录；复制一份是为了不让响应与快照共用内存。
+func cliUsageFor(usage []nodeview.CLIUsage, kind string) *nodeview.CLIUsage {
+	for _, entry := range usage {
+		if entry.Kind == kind {
+			copied := entry
+			copied.Windows = append([]nodeview.CLIUsageWindow(nil), entry.Windows...)
+			return &copied
+		}
+	}
+	return nil
 }

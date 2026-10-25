@@ -34,9 +34,12 @@
 package nodeview
 
 import (
+	"math"
 	"sort"
+	"strings"
 	"time"
 
+	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/runtime"
 )
 
@@ -124,6 +127,13 @@ type Node struct {
 	// Runtimes 中的运行时，是 Agent 声明过但尚未上报清单的那些。
 	DeclaredRuntimeIDs []string  `json:"declared_runtime_ids,omitempty"`
 	Runtimes           []Runtime `json:"runtimes,omitempty"`
+	// CLIUsage is the subscription quota of the Codex / Claude Code CLIs this
+	// Agent runs, as it last reported it. It is the CLI's own account quota,
+	// shared by every request that CLI serves, and not a per-tenant figure.
+	//
+	// CLIUsage 是该 Agent 所运行的 Codex / Claude Code CLI 的订阅额度，取自它最近一次
+	// 的上报。它是 CLI 自身账户的额度，由该 CLI 服务的所有请求共用，不是按租户划分的数字。
+	CLIUsage []CLIUsage `json:"cli_usage,omitempty"`
 }
 
 // Resources is the hardware the Agent reported at Hello.
@@ -285,4 +295,120 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+// Limits on what one node may report as CLI quota. The data is untrusted Agent
+// input on its way to a browser, so it is bounded and checked against a closed
+// vocabulary here rather than rendered as received.
+//
+// 一个节点可上报的 CLI 额度的上限。这些数据是前往浏览器途中的、不受信任的 Agent 输入，
+// 因此在这里做数量限制并对照封闭词表检查，而不是原样渲染。
+const (
+	maxCLIUsageAccounts = 4
+	maxCLIUsageWindows  = 8
+	maxCLIUsageLabel    = 64
+)
+
+// cliUsageStatuses is the closed set of account states a console may show.
+//
+// cliUsageStatuses 是控制台可以显示的账户状态的封闭集合。
+var cliUsageStatuses = map[string]bool{
+	"pending": true, "ready": true, "unauthorized": true, "unavailable": true, "error": true,
+}
+
+// CLIUsage is one CLI's subscription quota. Kind is the runtime kind it belongs
+// to ("codex" or "claude"), which is how a console pairs it with a service.
+//
+// CLIUsage 是一个 CLI 的订阅额度。Kind 是它所属的运行时类型（"codex" 或
+// "claude"），控制台据此把它与某个服务配对。
+type CLIUsage struct {
+	Kind    string           `json:"kind"`
+	Status  string           `json:"status"`
+	Windows []CLIUsageWindow `json:"windows,omitempty"`
+	// CheckedAt is when the Agent last queried the CLI. Absent before the first
+	// query, and absent is not "a long time ago".
+	//
+	// CheckedAt 是 Agent 最近一次查询该 CLI 的时刻。首次查询之前缺席，而缺席不等于
+	// 「很久以前」。
+	CheckedAt *time.Time `json:"checked_at,omitempty"`
+}
+
+// CLIUsageWindow is one upstream-reported quota window. UsedPercent is what the
+// upstream reported, a real zero included; it is not derived from token counts.
+//
+// CLIUsageWindow 是上游报告的一个额度窗口。UsedPercent 是上游报告的值，真实的零也包括
+// 在内；它不是由 token 数量推算出来的。
+type CLIUsageWindow struct {
+	Name            string     `json:"name"`
+	Bucket          string     `json:"bucket,omitempty"`
+	UsedPercent     float64    `json:"used_percent"`
+	DurationMinutes int64      `json:"duration_minutes,omitempty"`
+	ResetsAt        *time.Time `json:"resets_at,omitempty"`
+}
+
+// CLIUsageFromAccounts renders the Agent-reported quota through the allowlist:
+// only the two supported kinds and the known statuses survive, counts and label
+// lengths are capped, and a percentage outside 0–100 (or not a number) is
+// clamped. The result is sorted by kind.
+//
+// CLIUsageFromAccounts 经由允许列表渲染 Agent 上报的额度：只有两种受支持的 kind 与已知
+// 状态能保留，数量与标签长度有上限，超出 0–100（或不是数字）的百分比会被夹住。结果按
+// kind 排序。
+func CLIUsageFromAccounts(accounts []cliusagestatus.Account) []CLIUsage {
+	var out []CLIUsage
+	for _, account := range accounts {
+		if len(out) == maxCLIUsageAccounts {
+			break
+		}
+		if account.Kind != runtime.KindCodex && account.Kind != runtime.KindClaude {
+			continue
+		}
+		view := CLIUsage{Kind: string(account.Kind), Status: "error"}
+		if cliUsageStatuses[account.Status] {
+			view.Status = account.Status
+		}
+		if !account.CheckedAt.IsZero() {
+			checked := account.CheckedAt.UTC()
+			view.CheckedAt = &checked
+		}
+		for _, window := range account.Windows {
+			if len(view.Windows) == maxCLIUsageWindows {
+				break
+			}
+			item := CLIUsageWindow{
+				Name:            truncateLabel(window.Name),
+				Bucket:          truncateLabel(window.Bucket),
+				UsedPercent:     clampPercent(window.UsedPercent),
+				DurationMinutes: max(window.DurationMinutes, 0),
+			}
+			if !window.ResetsAt.IsZero() {
+				resets := window.ResetsAt.UTC()
+				item.ResetsAt = &resets
+			}
+			view.Windows = append(view.Windows, item)
+		}
+		out = append(out, view)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	return out
+}
+
+// truncateLabel caps a label at maxCLIUsageLabel bytes on a rune boundary.
+//
+// truncateLabel 把标签截断到 maxCLIUsageLabel 字节以内，并落在 rune 边界上。
+func truncateLabel(label string) string {
+	if len(label) <= maxCLIUsageLabel {
+		return label
+	}
+	return strings.ToValidUTF8(label[:maxCLIUsageLabel], "")
+}
+
+// clampPercent maps NaN to 0 and bounds the value to [0, 100].
+//
+// clampPercent 把 NaN 映射为 0，并把数值限制在 [0, 100]。
+func clampPercent(value float64) float64 {
+	if math.IsNaN(value) {
+		return 0
+	}
+	return min(max(value, 0), 100)
 }

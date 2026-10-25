@@ -12,6 +12,7 @@ import (
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/agentupgradestatus"
+	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
@@ -933,6 +934,77 @@ func TestControlComfyUIManagedReportsOnChangeOnly(t *testing.T) {
 	}
 	if len(report.GetInstances()) != 1 || report.GetInstances()[0].GetState() != tunnelv1.ComfyUIManagedState_COMFYUI_MANAGED_STATE_RUNNING {
 		t.Fatalf("report = %v, want one instance in RUNNING", report)
+	}
+}
+
+// -----------------------------------------------------------------------
+// CLI subscription quota
+// -----------------------------------------------------------------------
+
+// fakeCLIUsage is a tunnel.CLIUsageSource test double.
+type fakeCLIUsage struct {
+	mu       sync.Mutex
+	accounts []cliusagestatus.Account
+}
+
+func (f *fakeCLIUsage) Snapshot() []cliusagestatus.Account {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]cliusagestatus.Account(nil), f.accounts...)
+}
+
+func (f *fakeCLIUsage) set(accounts []cliusagestatus.Account) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accounts = accounts
+}
+
+func TestControlCLIUsageReportsOnChangeOnly(t *testing.T) {
+	usage := &fakeCLIUsage{accounts: []cliusagestatus.Account{{Kind: runtime.KindClaude, Status: "pending"}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.CLIUsage = usage
+	})
+	f.start()
+	sess := f.connect()
+	initial := f.recv(sess).GetCliUsage()
+	if initial == nil || len(initial.GetAccounts()) != 1 || initial.GetAccounts()[0].GetStatus() != "pending" {
+		t.Fatalf("initial report = %v, want one pending account right after connecting", initial)
+	}
+
+	// Unchanged quota: the periodic poll stays quiet.
+	f.advance(2*time.Second, 1)
+	expectNoStatus(f, sess, 1)
+
+	// Changed quota: the next poll carries it.
+	usage.set([]cliusagestatus.Account{{Kind: runtime.KindClaude, Status: "ready", Windows: []cliusagestatus.Window{{Name: "five_hour", UsedPercent: 6}}}})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetCliUsage()
+	if report == nil || len(report.GetAccounts()) != 1 ||
+		report.GetAccounts()[0].GetStatus() != "ready" ||
+		report.GetAccounts()[0].GetWindows()[0].GetUsedPercent() != 6 {
+		t.Fatalf("report = %v, want one ready account with a 6%% window", report)
+	}
+}
+
+func TestControlCLIUsageNeverReportsWhenNilOrEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage tunnel.CLIUsageSource
+	}{
+		{"nil source", nil},
+		{"no declared CLI", &fakeCLIUsage{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+				isolateStatus(cfg)
+				cfg.CLIUsage = tc.usage
+			})
+			f.start()
+			sess := f.connect()
+			f.advance(2*time.Second, 1)
+			expectNoStatus(f, sess, 1)
+		})
 	}
 }
 
