@@ -40,6 +40,7 @@ const tenant = {
   "tenant.aiServicesModels": "AI 服务与模型",
   "tenant.workflows": "工作流",
   "tenant.apiDocumentation": "API 文档",
+  "tenant.workflowTemplates": "模板",
   "tenant.runs": "运行",
   "tenant.runHistory": "运行历史",
   "tenant.settings": "设置",
