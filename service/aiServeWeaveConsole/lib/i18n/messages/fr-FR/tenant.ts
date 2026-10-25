@@ -530,6 +530,10 @@ const tenant = {
   "tenant.inconsistentTemplates": {
     "one": "{count} modèle divergent",
     "other": "{count} modèles divergents"
-  }
+  },
+  "tenant.deleteApiKey": "Supprimer la clé API",
+  "tenant.deleteKeyIrreversible": "{strong} ({code}) sera définitivement supprimée. Cette action est irréversible ; la clé est retirée de la liste et ne peut pas être restaurée.",
+  "tenant.deletedKey": "{name} supprimée",
+  "tenant.thisKeyCanNoLongerBeDeleted": "Cette clé n’existe plus. Quelqu’un d’autre l’a peut-être supprimée. La liste a été actualisée."
 } as const;
 export default tenant;

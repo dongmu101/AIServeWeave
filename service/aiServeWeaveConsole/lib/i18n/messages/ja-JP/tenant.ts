@@ -518,6 +518,10 @@ const tenant = {
   "tenant.outputs_64e199": "出力：{value}",
   "tenant.dependenciesDeclaredByTheTemplateAuthorNotChecked": "依存関係：{value}（テンプレート作者の申告値であり、ノードに実際にインストール済みの機能とは照合していません）",
   "tenant.maximumLengthBytes": "最大 {maxLength} バイト",
-  "tenant.inconsistentTemplates": "{count} 件のテンプレートが不一致"
+  "tenant.inconsistentTemplates": "{count} 件のテンプレートが不一致",
+  "tenant.deleteApiKey": "API Key を削除",
+  "tenant.deleteKeyIrreversible": "{strong}（{code}）を完全に削除します。この操作は取り消せず、Key は一覧から消えて復元できません。",
+  "tenant.deletedKey": "{name} を削除しました",
+  "tenant.thisKeyCanNoLongerBeDeleted": "この Key は既に存在しません。他のユーザーが削除した可能性があります。一覧を更新しました。"
 } as const;
 export default tenant;

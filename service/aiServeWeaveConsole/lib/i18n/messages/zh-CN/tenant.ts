@@ -518,6 +518,10 @@ const tenant = {
   "tenant.outputs_64e199": "产出：{value}",
   "tenant.dependenciesDeclaredByTheTemplateAuthorNotChecked": "依赖： {value} （模板作者声明，未与节点实际已装能力核对）",
   "tenant.maximumLengthBytes": "最长 {maxLength} 字节",
-  "tenant.inconsistentTemplates": "{count} 个模板不一致"
+  "tenant.inconsistentTemplates": "{count} 个模板不一致",
+  "tenant.deleteApiKey": "删除 API Key",
+  "tenant.deleteKeyIrreversible": "将永久删除 {strong}（{code}）。此操作不可撤销，该 Key 的记录将从列表中移除，无法恢复。",
+  "tenant.deletedKey": "已删除 {name}",
+  "tenant.thisKeyCanNoLongerBeDeleted": "该 Key 已不存在，可能已被他人删除。列表已刷新。"
 } as const;
 export default tenant;

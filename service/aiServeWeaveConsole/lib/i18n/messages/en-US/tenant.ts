@@ -530,6 +530,10 @@ const tenant = {
   "tenant.inconsistentTemplates": {
     "one": "{count} inconsistent template",
     "other": "{count} inconsistent templates"
-  }
+  },
+  "tenant.deleteApiKey": "Delete API Key",
+  "tenant.deleteKeyIrreversible": "Permanently delete {strong} ({code}). This action is irreversible; the Key is removed from the list and cannot be restored.",
+  "tenant.deletedKey": "Deleted {name}",
+  "tenant.thisKeyCanNoLongerBeDeleted": "This Key no longer exists. Someone else may have deleted it. The list has been refreshed."
 } as const;
 export default tenant;

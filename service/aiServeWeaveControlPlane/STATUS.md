@@ -66,6 +66,8 @@ DELETE /admin/v1/apikeys/:id
 
 `GET /internal/v1/apikeys/revocations/watch?after=<generation>` 与校验端点共用 `InternalToken`。处理器先确认 Redis Pub/Sub 订阅，再读当前 generation，并最多等待 2 秒；Pub/Sub 只负责即时唤醒，持久 generation 才负责断线、漏通知、重连和控制面副本切换后的补偿。Gateway 侧 5 秒检测静默断线；通知不健康时清空并停用本地缓存，逐请求调用本服务，无法验证就保持既有 503 语义。
 
+永久删除（`DELETE /admin/v1/apikeys/:id/permanent`）走同一条路径：任意状态的 key 都可删除，行在事务内被移除；若删除时该 key 仍是 active，同一事务内同样递增 outbox generation，对 Gateway 等同一次吊销。已吊销的 key 在吊销时已经递增过，不再重复递增。删除之后只剩审计记录（`apikey.delete`，用 `display` 指代）；第二次删除与跨租户、他人 key 同样返回 404。
+
 P07 使用 `key_revocation_outbox` 的一行合并待发通知：Key 吊销或用户禁用与 `generation + 1` 同事务提交；请求随后同步尝试发布，后台启动时立即补发并每秒重试，单次尝试最多 5 秒。发送者锁定该行，Redis 成功后才确认 `delivered_generation`。提交后通知前崩溃会留下持久待发状态，重启或其他控制面副本继续发送；发布后确认前崩溃可能重复通知，语义为至少一次，重复清缓存无害。该行不保存凭据或哈希，存储容量恒定。数据库与 Redis 故障期间仍依赖 TTL 作为纵深防御，不承诺零秒失效或已鉴权推理中断。
 
 ## 数据库
@@ -161,6 +163,7 @@ go run ./service/aiServeWeaveGateway \
 | 修改自己密码、撤销自己全部会话、退出当前会话 | 可以 | 可以 | 可以 |
 | 创建 API Key | 可以 | 可以 | 否（403） |
 | 吊销 API Key | 本租户任意 | 本租户任意 | 仅自己创建的（其余 404） |
+| 永久删除 API Key（`DELETE /admin/v1/apikeys/:id/permanent`） | 本租户任意 | 本租户任意 | 仅自己创建的（其余 404） |
 | 读 Key 列表 | 可以 | 可以 | 可以（本租户全部的展示信息） |
 | 读配额 | 可以 | 可以 | 可以 |
 | 写配额 | 可以 | 可以 | 否（403） |

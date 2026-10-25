@@ -518,6 +518,10 @@ const tenant = {
   "tenant.outputs_64e199": "Salidas: {value}",
   "tenant.dependenciesDeclaredByTheTemplateAuthorNotChecked": "Dependencias: {value} (declaradas por el autor de la plantilla, sin contrastar con las capacidades instaladas en los nodos)",
   "tenant.maximumLengthBytes": "Máximo {maxLength} bytes",
-  "tenant.inconsistentTemplates": "Plantillas incoherentes: {count}"
+  "tenant.inconsistentTemplates": "Plantillas incoherentes: {count}",
+  "tenant.deleteApiKey": "Eliminar API Key",
+  "tenant.deleteKeyIrreversible": "Se eliminará definitivamente {strong} ({code}). Esta acción es irreversible; la Key se quita de la lista y no se podrá recuperar.",
+  "tenant.deletedKey": "Se eliminó {name}",
+  "tenant.thisKeyCanNoLongerBeDeleted": "Esta Key ya no existe. Es posible que otra persona la haya eliminado. La lista se ha actualizado."
 } as const;
 export default tenant;

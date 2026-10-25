@@ -385,3 +385,95 @@ func TestKeyOperationsAreAudited(t *testing.T) {
 		}
 	}
 }
+
+// TestDeleteAPIKey asserts a key of any status can be deleted, that it stops
+// verifying and leaves the listing, that a second delete reports not-found,
+// and that the audit record names the key without carrying its secret.
+//
+// TestDeleteAPIKey 断言任意状态的 key 都能被删除，删除后既无法通过校验也不再出现在
+// 列表里，第二次删除报 not-found，且审计记录指代该 key 但不携带其密文。
+func TestDeleteAPIKey(t *testing.T) {
+	tests := []struct {
+		name    string
+		revoked bool
+	}{
+		{name: "an active key"},
+		{name: "a revoked key", revoked: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t)
+			created := f.mustCreateKey(f.ownerAt, "to delete")
+			if tt.revoked {
+				if err := f.svc.RevokeAPIKey(context.Background(), f.ownerAt, created.Key.ID); err != nil {
+					t.Fatalf("RevokeAPIKey: %v", err)
+				}
+			}
+
+			if err := f.svc.DeleteAPIKey(context.Background(), f.ownerAt, created.Key.ID); err != nil {
+				t.Fatalf("DeleteAPIKey: %v", err)
+			}
+			if _, err := f.svc.VerifyKeyHash(context.Background(), apikey.Hash(created.Plaintext)); !errors.Is(err, logic.ErrNotFound) {
+				t.Errorf("VerifyKeyHash after delete error = %v, want ErrNotFound", err)
+			}
+			page, err := f.svc.ListAPIKeys(context.Background(), f.ownerAt, store.ListQuery{}, store.APIKeyFilter{})
+			if err != nil {
+				t.Fatalf("ListAPIKeys: %v", err)
+			}
+			if len(page.Items) != 0 {
+				t.Errorf("listing has %d keys after delete, want 0", len(page.Items))
+			}
+			if err := f.svc.DeleteAPIKey(context.Background(), f.ownerAt, created.Key.ID); !errors.Is(err, logic.ErrNotFound) {
+				t.Errorf("second delete error = %v, want ErrNotFound", err)
+			}
+
+			audit, err := f.svc.ListAudit(context.Background(), f.ownerAt, store.ListQuery{}, store.AuditFilter{Action: model.ActionAPIKeyDelete})
+			if err != nil {
+				t.Fatalf("ListAudit: %v", err)
+			}
+			if len(audit.Items) != 1 {
+				t.Fatalf("got %d %s records, want 1", len(audit.Items), model.ActionAPIKeyDelete)
+			}
+			if got, want := audit.Items[0].Detail, "deleted "+created.Key.Display; got != want {
+				t.Errorf("audit detail = %q, want %q", got, want)
+			}
+			if strings.Contains(audit.Items[0].Detail, strings.TrimPrefix(created.Plaintext, apikey.Prefix)) {
+				t.Errorf("the audit record carries the key's secret: %q", audit.Items[0].Detail)
+			}
+		})
+	}
+}
+
+// TestDeleteAPIKeyHonoursTenantAndMemberScope asserts deletion is no wider than
+// revocation: another tenant's owner and a member deleting someone else's key
+// both get not-found, and the key keeps working.
+//
+// TestDeleteAPIKeyHonoursTenantAndMemberScope 断言删除的范围不比吊销更宽：别的租户
+// 的 owner、以及删除他人 key 的 member 都得到 not-found，且该 key 继续可用。
+func TestDeleteAPIKeyHonoursTenantAndMemberScope(t *testing.T) {
+	f := newFixture(t)
+	victim := f.mustCreateKey(f.ownerAt, "victim")
+
+	otherTenant, otherOwner, err := f.svc.CreateTenant(context.Background(), "Other", "other@example.com", testPassword, "10.0.0.9")
+	if err != nil {
+		t.Fatalf("CreateTenant: %v", err)
+	}
+	tests := []struct {
+		name  string
+		actor logic.Actor
+	}{
+		{name: "another tenant's owner", actor: logic.Actor{UserID: otherOwner.ID, TenantID: otherTenant.ID, Role: model.RoleOwner}},
+		{name: "a member who did not create it", actor: f.actorWithRole(model.RoleMember)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := f.svc.DeleteAPIKey(context.Background(), tt.actor, victim.Key.ID); !errors.Is(err, logic.ErrNotFound) {
+				t.Errorf("DeleteAPIKey error = %v, want ErrNotFound", err)
+			}
+			if _, err := f.svc.VerifyKeyHash(context.Background(), apikey.Hash(victim.Plaintext)); err != nil {
+				t.Errorf("the key stopped working after a refused delete: %v", err)
+			}
+		})
+	}
+}

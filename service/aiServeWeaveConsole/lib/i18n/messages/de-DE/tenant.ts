@@ -530,6 +530,10 @@ const tenant = {
   "tenant.inconsistentTemplates": {
     "one": "{count} abweichende Vorlage",
     "other": "{count} abweichende Vorlagen"
-  }
+  },
+  "tenant.deleteApiKey": "API Key löschen",
+  "tenant.deleteKeyIrreversible": "{strong} ({code}) wird endgültig gelöscht. Diese Aktion ist unwiderruflich; der Key wird aus der Liste entfernt und kann nicht wiederhergestellt werden.",
+  "tenant.deletedKey": "{name} gelöscht",
+  "tenant.thisKeyCanNoLongerBeDeleted": "Dieser Key existiert nicht mehr. Möglicherweise hat ihn jemand anderes gelöscht. Die Liste wurde aktualisiert."
 } as const;
 export default tenant;

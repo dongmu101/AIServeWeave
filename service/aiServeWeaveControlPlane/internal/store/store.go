@@ -317,6 +317,16 @@ type APIKeys interface {
 	GetAPIKey(ctx context.Context, tenantID, id string) (model.APIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID string, query ListQuery, filter APIKeyFilter) (Page[model.APIKey], error)
 	RevokeAPIKey(ctx context.Context, tenantID, id string, at time.Time) error
+	// DeleteAPIKey removes one key row of any status, scoped to its tenant, and
+	// reports ErrNotFound when no such row exists. Removing a still-active key
+	// is also a revocation as far as the Gateway is concerned, so the
+	// implementation must enqueue the same revocation generation RevokeAPIKey
+	// does, in the same transaction.
+	//
+	// DeleteAPIKey 删除一个任意状态的 key 行，并限定在其租户范围内；不存在这样的行时
+	// 报 ErrNotFound。对 Gateway 而言，删除一个仍处于 active 的 key 同样等于吊销，因此
+	// 实现必须在同一事务里递增 RevokeAPIKey 所递增的那个吊销 generation。
+	DeleteAPIKey(ctx context.Context, tenantID, id string) error
 	// MarkAPIKeyUsed records a coarse last-used timestamp. Callers must rate
 	// limit it themselves; see the gorm implementation for why this is not
 	// written on every request.

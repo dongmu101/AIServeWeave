@@ -541,6 +541,20 @@ func (s *Store) RevokeAPIKey(_ context.Context, tenantID, id string, at time.Tim
 	return nil
 }
 
+// DeleteAPIKey removes one key of any status, scoped to its tenant.
+//
+// DeleteAPIKey 删除一个任意状态的 key，并限定在其租户范围内。
+func (s *Store) DeleteAPIKey(_ context.Context, tenantID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.keys[id]
+	if !ok || key.TenantID != tenantID {
+		return store.ErrNotFound
+	}
+	delete(s.keys, id)
+	return nil
+}
+
 // MarkAPIKeyUsed records a coarse last-used timestamp.
 //
 // MarkAPIKeyUsed 记录一个粗粒度的最后使用时间。

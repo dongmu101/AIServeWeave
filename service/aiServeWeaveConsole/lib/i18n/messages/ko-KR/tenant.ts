@@ -518,6 +518,10 @@ const tenant = {
   "tenant.outputs_64e199": "출력: {value}",
   "tenant.dependenciesDeclaredByTheTemplateAuthorNotChecked": "의존성: {value}(템플릿 작성자가 선언한 값이며 노드에 실제 설치된 기능과 대조하지 않았습니다)",
   "tenant.maximumLengthBytes": "최대 {maxLength}바이트",
-  "tenant.inconsistentTemplates": "템플릿 {count}개 불일치"
+  "tenant.inconsistentTemplates": "템플릿 {count}개 불일치",
+  "tenant.deleteApiKey": "API Key 삭제",
+  "tenant.deleteKeyIrreversible": "{strong}({code})을(를) 영구 삭제합니다. 이 작업은 되돌릴 수 없으며 해당 Key는 목록에서 제거되고 복구할 수 없습니다.",
+  "tenant.deletedKey": "{name}을(를) 삭제했습니다",
+  "tenant.thisKeyCanNoLongerBeDeleted": "이 Key는 더 이상 존재하지 않습니다. 다른 사용자가 삭제했을 수 있습니다. 목록을 새로 고쳤습니다."
 } as const;
 export default tenant;
