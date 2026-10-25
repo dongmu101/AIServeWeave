@@ -17,6 +17,8 @@ import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { parseTenantModels, type TenantModelCatalog } from "@/lib/console/fleet";
+import { parseUsageSummary, type UsageSummary, type UsageSummaryEntry } from "@/lib/console/usage";
+import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
 
 type Service = TenantModelCatalog["services"][number];
@@ -33,12 +35,15 @@ const agentHelper = createColumnHelper<typeof features, AgentGroup>();
 export function TenantModelsView() {
   const { locale, t } = useI18n();
   const catalog = useResource({ method: "GET", path: "/admin/v1/models", parse: parseTenantModels });
+  const usage = useResource<UsageSummary>({ method: "GET", path: "/admin/v1/usage/summary", parse: parseUsageSummary });
+  const usageByModel = React.useMemo(() => new Map((usage.data?.items ?? []).map(item => [item.model, item])), [usage.data]);
   const [query, setQuery] = React.useState("");
   const [onlineOnly, setOnlineOnly] = React.useState(false);
   const [page, setPage] = React.useState(0);
   const [selected, setSelected] = React.useState<Service | null>(null);
   const { loading, reload } = catalog;
-  const refresh = React.useCallback(() => { setSelected(null); reload(); }, [reload]);
+  const { reload: reloadUsage } = usage;
+  const refresh = React.useCallback(() => { setSelected(null); reload(); reloadUsage(); }, [reload, reloadUsage]);
   React.useEffect(() => {
     if (loading || selected) return;
     const timer = window.setInterval(() => { if (!document.hidden) refresh(); }, 15_000);
@@ -91,9 +96,10 @@ export function TenantModelsView() {
         <DataTable table={table} caption={t("tenant.agentAiServiceList")} />
         <ListPager page={currentPage} count={agents.length} onChange={setPage} label={t("tenant.agentPagination")} />
       </>}
+      <UsageSection usage={usage} />
     </>}
     <Dialog open={selected !== null} onOpenChange={open => { if (!open) setSelected(null); }}>
-      {selected ? <ServiceModels key={JSON.stringify([selected.agentId, selected.serviceId])} service={selected} /> : null}
+      {selected ? <ServiceModels key={JSON.stringify([selected.agentId, selected.serviceId])} service={selected} usageByModel={usageByModel} /> : null}
     </Dialog>
   </div>;
 }
@@ -120,8 +126,8 @@ function AgentServices({ agent, onSelect }: { agent: AgentGroup; onSelect: (serv
 
 /** ServiceModels paginates one service's models in a separate detail window.
  * ServiceModels 在独立详情窗口中分页展示一个服务的模型。 */
-function ServiceModels({ service }: { service: Service }) {
-  const {t } = useI18n();
+function ServiceModels({ service, usageByModel }: { service: Service; usageByModel: Map<string, UsageSummaryEntry> }) {
+  const { locale, t } = useI18n();
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
   const models = service.models.filter(model => matchesQuery([model.id], query));
@@ -132,10 +138,39 @@ function ServiceModels({ service }: { service: Service }) {
     <Input aria-label={t("tenant.searchModelsInThisService")} placeholder={t("tenant.searchModelIds")} value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} />
     {models.length === 0 ? <p className="text-sm text-muted-foreground">{service.models.length === 0 ? t("tenant.noModelsDiscoveredYet") : t("tenant.noModelsMatchYourSearch")}</p> : <ul className="grid gap-2">{models.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE).map(model => <li key={model.id} className="min-w-0 rounded-md bg-muted/40 p-3">
       <code className="break-all text-sm">{model.id}</code>
+      {usageByModel.get(model.id) ? <p className="mt-1 text-xs text-muted-foreground">{t("tenant.usage")}: {usageByModel.get(model.id)!.totalTokens.toLocaleString(locale)} token · {t("tenant.requests")} {usageByModel.get(model.id)!.requestCount.toLocaleString(locale)}</p> : null}
       <div className="mt-2 flex flex-wrap gap-1">{Object.entries(model.capabilities).map(([capability, support]) => <Badge key={capability} variant="outline" className="h-auto max-w-full whitespace-normal break-all text-xs">{capability} · {SUPPORT(t)[support] ?? support}</Badge>)}</div>
     </li>)}</ul>}
     <ListPager page={currentPage} count={models.length} onChange={setPage} label={t("tenant.modelPagination")} />
   </DialogContent>;
+}
+
+/** UsageSection shows this tenant's all-time token usage per model. A usage
+ * failure stays inside this section so it cannot hide the Agent catalogue.
+ * UsageSection 展示本租户各模型的累计 token 用量；用量读取失败只影响本区块，
+ * 不会遮住 Agent 清单。 */
+function UsageSection({ usage }: { usage: ReturnType<typeof useResource<UsageSummary>> }) {
+  const { locale, t } = useI18n();
+  const items = [...(usage.data?.items ?? [])].sort((a, b) => b.totalTokens - a.totalTokens);
+  return <section className="grid gap-2">
+    <h2 className="font-heading text-base font-semibold">{t("tenant.totalTokensByModel")}</h2>
+    {usage.error ? <ErrorState message={usage.error} onRetry={usage.reload} /> : usage.loading || !usage.data ?
+      <LoadingState label={t("tenant.loadingUsage")} rows={2} /> : items.length === 0 ?
+      <p className="text-sm text-muted-foreground">{t("tenant.noUsageRecordsInTheSelectedTimeRange")}</p> :
+      <Table>
+        <TableHeader><TableRow>
+          <TableHead>{t("tenant.models_98fd0c")}</TableHead><TableHead>Prompt token</TableHead><TableHead>Completion token</TableHead>
+          <TableHead>{t("tenant.totalTokens")}</TableHead><TableHead>{t("tenant.requests")}</TableHead>
+        </TableRow></TableHeader>
+        <TableBody>{items.map(item => <TableRow key={item.model}>
+          <TableCell><code className="text-xs">{item.model}</code></TableCell>
+          <TableCell>{item.promptTokens.toLocaleString(locale)}</TableCell>
+          <TableCell>{item.completionTokens.toLocaleString(locale)}</TableCell>
+          <TableCell>{item.totalTokens.toLocaleString(locale)}</TableCell>
+          <TableCell>{item.requestCount.toLocaleString(locale)}</TableCell>
+        </TableRow>)}</TableBody>
+      </Table>}
+  </section>;
 }
 
 /** ListPager bounds rendered rows within the collected snapshot.
