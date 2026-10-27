@@ -6,7 +6,8 @@
 
 本文件只写跨仓库的通用约定，细节以专门文档为准，不在此复述：
 
-- [README.md](README.md) —— 架构、协议兼容、数据模型、路线图。
+- [README.md](README.md) —— 项目简介、快速开始与文档索引。
+- [docs/architecture.md](docs/architecture.md) —— 架构、协议兼容、ComfyUI、调度、数据模型、安全与可观测性设计。
 - [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md) —— 隧道协议定义、连接状态机、槽池、实施阶段。改隧道相关代码前必读。
 - [service/aiServeWeaveControlPlane/STATUS.md](service/aiServeWeaveControlPlane/STATUS.md) —— 控制面为什么用 go-zero 而数据面不用、三种凭据的三种存法、吊销的生效路径。改控制面或 Gateway 鉴权前必读。
 
@@ -14,7 +15,7 @@
 
 ## 代码地图
 
-布局是 `service/<服务名>/`，完整结构见 README「代码结构」一节。各服务当前进度：
+布局是 `service/<服务名>/`，完整结构见 [架构设计「代码结构」](docs/architecture.md#代码结构)一节。各服务当前进度：
 
 | 路径 | 状态 |
 | --- | --- |

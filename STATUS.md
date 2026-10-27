@@ -2,11 +2,11 @@
 
 更新日期：2026-10-19。
 
-本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [README](README.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
+本文记录当前能力、待开发任务和验收目标。未勾选项均尚未完成；优先级用于安排实施顺序，不表示已经启动开发。架构与协议边界见 [架构设计](docs/architecture.md)，Console 的细分任务与历史验收见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。R04 更新按源码核对文档，不代表重新执行过测试或部署验收。
 
 ## 文档分工与里程碑
 
-根 README 维护项目规划与架构，不维护完成标记或排期。根 STATUS 是跨服务任务安排的唯一入口；服务 README 保留接口、配置与实际限制，Console STATUS 保留子任务与验收证据，本文引用其编号。
+根 README 只做项目简介与文档索引，规划与架构维护在 [docs/architecture.md](docs/architecture.md)，两者都不维护完成标记或排期。根 STATUS 是跨服务任务安排的唯一入口；服务 README 保留接口、配置与实际限制，Console STATUS 保留子任务与验收证据，本文引用其编号。
 
 原 README 的三阶段路线在此统一安排。里程碑是交付门槛，不承诺未经评估的日期；P0 表示下一轮主线或发布前门槛，不要求全部同时开工。
 

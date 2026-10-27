@@ -109,7 +109,7 @@ func imageTag(image string) (tag string, ok bool) {
 // package-local enum, so this package's values cross the tunnel without a
 // conversion step — the same "State is defined once, in common/" precedent
 // modelpull follows by using common/modelpullstatus.State directly. It is a
-// subset of the seven states README.md's Managed deployment sketch names
+// subset of the seven states docs/architecture.md's Managed deployment sketch names
 // (pending/installing/starting/ready/degraded/stopped/failed): this package
 // never returns "installing" (Start's image pull is logged, not exported as
 // a state — see Start's doc comment) or "ready"/"degraded", which would
@@ -122,7 +122,7 @@ func imageTag(image string) (tag string, ok bool) {
 // （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务二）的类型别名，而不是本包
 // 另定义的一套枚举——这样本包的取值跨隧道时不需要转换，与 modelpull 直接使用
 // common/modelpullstatus.State 是同一种"State 只在 common 里定义一次"的先例。
-// 它是 README.md Managed 部署草图七个状态
+// 它是 docs/architecture.md Managed 部署草图七个状态
 // （pending/installing/starting/ready/degraded/stopped/failed）的子集：本包从不
 // 返回 "installing"（Start 拉取镜像只记日志，不导出成状态，见 Start 的文档注释）或
 // "ready"/"degraded"——后两者需要把本包的容器级视图与已注册 comfyui.Runtime 的
