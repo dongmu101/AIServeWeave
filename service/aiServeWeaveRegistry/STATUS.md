@@ -7,8 +7,8 @@
 | 目录/文件 | 状态 | 内容 |
 | --- | --- | --- |
 | `internal/ca` | 已实现 | Registry 自己的证书颁发机构：加载或生成根证书、签发节点证书与 Registry 自己的服务端证书 |
-| `internal/tokenstore` | 已实现 | 一次性 bootstrap token 的存储：铸造（含可选 node_id 绑定）、消费、撤销、过期与重放校验 |
-| `internal/identitystore` | 已实现 | `node_id` 唯一性账本（S01）：记录每个 `node_id` 最近绑定的公钥指纹，供 `Register` 分辨新注册、无害重连与身份冲突；S02 之后，一枚 node_id 绑定的令牌可以让 `Register` 跳过冲突检查，直接覆盖账本；S03 之后同一条记录还携带禁用标记，供 `Disable`/`Enable`/`IsDisabled`/`DisabledNodeIDs` 使用 |
+| `internal/tokenstore` | 已实现 | 一次性 bootstrap token 的存储：铸造（含可选 node_id 绑定）、不消耗的校验（`Peek`）、待审批期间固定到某个 node_id（`Claim`）、消费、撤销、过期与重放校验 |
+| `internal/identitystore` | 已实现 | `node_id` 唯一性账本（S01）：记录每个 `node_id` 最近绑定的公钥指纹，供 `Register` 分辨新注册、无害重连与身份冲突；S02 之后，一枚 node_id 绑定的令牌可以让 `Register` 跳过冲突检查，直接覆盖账本；S03 之后同一条记录还携带禁用标记，供 `Disable`/`Enable`/`IsDisabled`/`DisabledNodeIDs` 使用；P01 之后还携带待审批、已批准（`Approved`）与维护标记 |
 | `internal/registryserver` | 已实现 | `NodeIdentity`（`Register`/`RenewCertificate`）、`GatewayDirectory`（`Join`，配置 `-gateway-token-file` 时要求认证，留空仍未认证）与 `TokenAdmin`（`MintToken`/`RevokeToken`/`DisableNode`/`EnableNode`）三个 gRPC 服务的实现 |
 | `main.go` | 已实现 | 装配 gRPC 监听 + `-mint-token`/`-revoke-token`/`-disable-node`/`-enable-node`（`TokenAdmin` 的 gRPC 客户端）CLI 工具 |
 
@@ -124,8 +124,8 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 **严格审批：一个从未被批准过的 `node_id`，`Register` 会直接拒绝，而不是照常签发。** 具体规则见 `identity.go` 的 `Register`：
 
-- 使用**未绑定** node_id 的引导令牌时，`Register` 在 `IsDisabled` 检查之后、签发证书之前，先查这个 `node_id` 的账本记录是否 `Approved`，未批准一律拒绝（`PermissionDenied`）。拒绝时调用 `identitystore.Store.RecordPending` 记下这次尝试：只记 `node_id` 与观测时间，**不**绑定这次呈递的公钥指纹，原因见下一段。运维用 `ApproveNode` 批准后，Agent 的下一次重试就会走到签发那一步。
-- **因待审批被拒绝时，令牌不会被消耗。** Agent 在 `Register` 失败后会保留令牌文件，并用同一个值重试。所以 `Register` 只在开头 `Peek` 校验令牌，等禁用、CSR、审批、签发都通过之后才 `Consume`。以下拒绝都不会花掉令牌：待审批、节点已禁用、CSR 无法解析或签名无效、绑定令牌与请求的 `node_id` 不一致。只有 S01 的指纹冲突仍然消耗令牌，因为冲突靠重试解决不了。待审批期间，令牌会通过 `tokenstore.Store.Claim` 固定到这个 `node_id` 名下：同一枚未消耗的令牌不能再替别的 `node_id` 注册或写待审批记录（`PermissionDenied`），否则一枚令牌就能往账本里刷任意多条待审批记录。令牌的有效期照常计算：如果运维审批时令牌已经过期，就需要重新铸造一枚。
+- 使用**未绑定** node_id 的引导令牌时，`Register` 在 `IsDisabled` 检查之后、签发证书之前，先查这个 `node_id` 的账本记录是否 `Approved`，未批准一律拒绝（`PermissionDenied`）。拒绝时调用 `identitystore.Store.RecordPending` 记下这次尝试：只记 `node_id` 与观测时间，**不**绑定这次呈递的公钥指纹，原因见下一段。运维用 `ApproveNode` 批准后，Agent 下一次启动就会走到签发那一步。
+- **因待审批被拒绝时，令牌不会被消耗。** `PermissionDenied` 对 Agent 是致命错误（`tunnel/identity.go` 的 `registryCallError`），进程会退出，但保留令牌文件；由 systemd 或容器的重启策略拉起后，它会再递交同一个值。所以 `Register` 只在开头 `Peek` 校验令牌，等禁用、CSR、审批、签发都通过之后才 `Consume`。以下拒绝都不会花掉令牌：待审批、节点已禁用、CSR 无法解析或签名无效、绑定令牌与请求的 `node_id` 不一致。只有 S01 的指纹冲突仍然消耗令牌，因为冲突靠重试解决不了。待审批期间，令牌会通过 `tokenstore.Store.Claim` 固定到这个 `node_id` 名下：同一枚未消耗的令牌不能再替别的 `node_id` 注册或写待审批记录（`PermissionDenied`），否则一枚令牌就能往账本里刷任意多条待审批记录。令牌的有效期照常计算：如果运维审批时令牌已经过期，就需要重新铸造一枚。
 - **只有 `Approved` 字段代表"已批准"。** 它只在两种情况下置为 true：运维调用了 `ApproveNode`，或者该节点确实被签发过证书（`Reserve`/`Set`）。`DisableNode`、`SetMaintenance` 对一个从未出现过的 `node_id` 也会建记录，但这些记录的 `Approved` 为 false，所以这些管理操作**不会**顺带批准节点。旧账本文件里没有 `approved` 键的记录，按 `!pending_approval` 推导，与此前对这类记录的判断一致，升级不需要迁移。
 - 消耗的是**绑定了 node_id** 的令牌时，这条门槛完全不适用：铸造这枚令牌本身就是运维的授权动作，与它已经跳过 S01 冲突检查的既有逻辑是同一个理由。
 - **不区分"待审批"与"拒绝"两种动作**：运维不想放行的待审批节点，直接用既有的 `DisableNode` 处理即可——`Register` 里 `IsDisabled` 检查发生在待审批检查之前，天然生效，不必再多一个"拒绝"的概念。

@@ -241,7 +241,8 @@ func (s *Store) Peek(token string, now time.Time) (Grant, error) {
 
 // Claim pins a still-consumable token to nodeID without consuming it, for a
 // registration refused only because nodeID awaits operator approval: the
-// Agent keeps its token file and retries with the same value, so the token
+// Agent keeps its token file and presents the same value on its next start,
+// so the token
 // must survive the refusal, but it must not go on to speak for some other
 // node_id. Claiming again for the same nodeID is a no-op; claiming for a
 // different one returns ErrClaimed, as does claiming a token bound to a
@@ -249,7 +250,7 @@ func (s *Store) Peek(token string, now time.Time) (Grant, error) {
 // conditions as Consume.
 //
 // Claim 在不消耗令牌的前提下把它固定到 nodeID 上，供「只因 nodeID 待审批而被
-// 拒绝」的注册使用：Agent 会保留令牌文件并用同一个值重试，所以令牌必须在这次
+// 拒绝」的注册使用：Agent 会保留令牌文件，下次启动时递交同一个值，所以令牌必须在这次
 // 拒绝后依然可用，但又不能转而替别的 node_id 说话。对同一个 nodeID 再次 Claim
 // 不做任何事；对另一个 nodeID Claim，或令牌铸造时已绑定到别的 node_id，都返回
 // ErrClaimed。返回 ErrInvalidToken 的条件与 Consume 相同。

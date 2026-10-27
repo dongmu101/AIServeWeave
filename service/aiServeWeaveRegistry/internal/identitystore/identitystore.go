@@ -242,26 +242,28 @@ func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, err
 		}
 		return OutcomeNew, nil
 	}
-	if r.Fingerprint == "" {
-		prevFingerprint, prevSeen := r.Fingerprint, r.LastSeenAt
-		r.Fingerprint = fingerprint
-		r.LastSeenAt = now
-		if err := s.persistLocked(); err != nil {
-			r.Fingerprint, r.LastSeenAt = prevFingerprint, prevSeen
-			return 0, err
-		}
-		return OutcomeNew, nil
-	}
-	if r.Fingerprint != fingerprint {
+	if r.Fingerprint != "" && r.Fingerprint != fingerprint {
 		return OutcomeConflict, nil
 	}
-	prevSeen := r.LastSeenAt
+	outcome := OutcomeMatch
+	if r.Fingerprint == "" {
+		outcome = OutcomeNew
+	}
+	// A certificate is being issued, so the node_id is approved and no longer
+	// pending — including a pending mark a RecordPending racing ApproveNode
+	// left on an already approved record.
+	// 证书即将签发，node_id 因此已批准、不再待审批——包括 RecordPending 与
+	// ApproveNode 竞争时留在已批准记录上的待审批标记。
+	prev := *r
+	r.Fingerprint = fingerprint
 	r.LastSeenAt = now
+	r.Approved = true
+	r.PendingApproval = false
 	if err := s.persistLocked(); err != nil {
-		r.LastSeenAt = prevSeen
+		*r = prev
 		return 0, err
 	}
-	return OutcomeMatch, nil
+	return outcome, nil
 }
 
 // Set unconditionally records nodeID's current fingerprint, for a caller
@@ -442,6 +444,12 @@ func (s *Store) RecordPending(nodeID string, now time.Time) error {
 	defer s.mu.Unlock()
 
 	r, ok := s.records[nodeID]
+	if ok && r.Approved {
+		// ApproveNode won a race with the caller's IsApproved check; marking
+		// the record pending now would contradict the approval.
+		// ApproveNode 抢在了调用方的 IsApproved 检查之后；此时再标记待审批会与批准矛盾。
+		return nil
+	}
 	if !ok {
 		r = &record{NodeID: nodeID, FirstSeenAt: now}
 		s.records[nodeID] = r

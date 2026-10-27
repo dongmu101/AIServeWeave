@@ -25,7 +25,9 @@ import (
 // against a Peek, and Consume happens only once a certificate is in hand. A
 // refusal the Agent can recover from by retrying, above all "pending operator
 // approval", therefore leaves the token usable: the Agent keeps its token
-// file after a failed Register and retries with the same value. While a
+// file after a failed Register — PermissionDenied is fatal to it, so it exits
+// — and its next start, by systemd or the container runtime, presents the
+// same value again. While a
 // node_id awaits approval the unbound token is Claimed for it, so the
 // unspent token cannot go on to file pending records for other node_ids.
 //
@@ -50,7 +52,8 @@ import (
 // 令牌最先校验、最后消耗。所有可能拒绝请求的检查——node_id、禁用、CSR、运维
 // 审批、签发——都基于一次 Peek 进行，只有拿到证书之后才 Consume。因此 Agent
 // 靠重试就能走出来的拒绝，首先是「待运维审批」，不会花掉令牌：Agent 在
-// Register 失败后保留令牌文件，并用同一个值重试。node_id 等待审批期间，这枚
+// Register 失败后保留令牌文件——PermissionDenied 对它是致命错误，进程随之退出
+// ——下次由 systemd 或容器运行时拉起时再次递交同一个值。node_id 等待审批期间，这枚
 // 未绑定令牌会被 Claim 到它名下，未花掉的令牌因此不能再替其他 node_id 写待审批
 // 记录。
 //
@@ -129,7 +132,7 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	// the same reasoning that already lets the bound-token branch below
 	// bypass Reserve's conflict check. The attempt is recorded so an
 	// operator finds it in TokenAdmin.ListNodeStates, and the token is
-	// claimed rather than consumed, so the Agent's retry after approval
+	// claimed rather than consumed, so the Agent's next start after approval
 	// still holds a valid one.
 	if boundNodeID == "" && !s.identities.IsApproved(nodeID) {
 		if err := s.tokens.Claim(token, nodeID, now); err != nil {

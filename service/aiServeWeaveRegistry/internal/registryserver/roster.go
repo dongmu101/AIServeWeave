@@ -168,9 +168,37 @@ func (s *Server) Join(stream tunnelv1.GatewayDirectory_JoinServer) error {
 		return err
 	}
 
-	first, err := stream.Recv()
-	if err != nil {
+	// Recv runs on its own goroutine from the very first message, so every
+	// wait below — including the one for that first message — also observes
+	// Shutdown. It ends once this handler returns: gRPC cancels the stream
+	// context, Recv fails, and the error lands in the buffered channel.
+	// Recv 从第一条消息起就放在独立协程里，下面的每一次等待——包括等第一条消息
+	// ——都能同时响应 Shutdown。处理函数返回后它随之结束：gRPC 取消流上下文，
+	// Recv 失败，错误落进带缓冲的 channel。
+	requests := make(chan *tunnelv1.JoinRequest)
+	recvErr := make(chan error, 1)
+	go func() {
+		for {
+			req, err := stream.Recv()
+			if err != nil {
+				recvErr <- err
+				return
+			}
+			select {
+			case requests <- req:
+			case <-stream.Context().Done():
+				return
+			}
+		}
+	}()
+
+	var first *tunnelv1.JoinRequest
+	select {
+	case <-s.shutdown:
+		return errShuttingDown
+	case err := <-recvErr:
 		return err
+	case first = <-requests:
 	}
 	replicaID := first.GetReplicaId()
 	endpoint := first.GetEndpoint()
@@ -206,28 +234,6 @@ func (s *Server) Join(stream tunnelv1.GatewayDirectory_JoinServer) error {
 
 	s.logger.Info("gateway replica joined", slog.String("replica_id", replicaID), slog.String("endpoint", endpoint))
 	defer s.logger.Info("gateway replica left", slog.String("replica_id", replicaID))
-
-	// Recv runs on its own goroutine so the loop below can also wait on
-	// Shutdown. It ends once this handler returns: gRPC cancels the stream
-	// context, Recv fails, and the error lands in the buffered channel.
-	// Recv 放在独立协程里，好让下面的循环同时等待 Shutdown。处理函数返回后它随之
-	// 结束：gRPC 取消流上下文，Recv 失败，错误落进带缓冲的 channel。
-	requests := make(chan *tunnelv1.JoinRequest)
-	recvErr := make(chan error, 1)
-	go func() {
-		for {
-			req, err := stream.Recv()
-			if err != nil {
-				recvErr <- err
-				return
-			}
-			select {
-			case requests <- req:
-			case <-stream.Context().Done():
-				return
-			}
-		}
-	}()
 
 	for {
 		select {
