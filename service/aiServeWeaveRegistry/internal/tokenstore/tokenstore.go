@@ -29,6 +29,33 @@ import (
 // would let them probe for tokens that exist but are merely expired or spent.
 var ErrInvalidToken = errors.New("tokenstore: token is invalid or expired")
 
+// ErrClaimed is returned by Claim for a token that was already presented for
+// a different node_id. One unbound token speaks for one node_id: without this,
+// a single token held back from consumption by the approval gate could file a
+// pending-approval record for any number of node_ids.
+//
+// ErrClaimed 由 Claim 返回，表示这枚令牌此前已经替另一个 node_id 递交过。一枚
+// 未绑定令牌只能代表一个 node_id：否则一枚因审批门槛而未被消耗的令牌，可以替
+// 任意多个 node_id 写下待审批记录。
+var ErrClaimed = errors.New("tokenstore: token was already presented for a different node_id")
+
+// Grant is what Peek reports about a still-consumable token.
+//
+// Grant 是 Peek 对一枚仍可消耗的令牌给出的信息。
+type Grant struct {
+	// NodeID is the node_id the token was bound to at mint time, empty for
+	// an unbound token.
+	//
+	// NodeID 是铸造时绑定的 node_id；未绑定令牌为空。
+	NodeID string
+	// ClaimedNodeID is the node_id an unbound token was first presented for
+	// (see Claim), empty if it has not been presented yet.
+	//
+	// ClaimedNodeID 是一枚未绑定令牌第一次被递交时所代表的 node_id（见
+	// Claim）；尚未递交过则为空。
+	ClaimedNodeID string
+}
+
 // record is one minted token, as stored on disk.
 type record struct {
 	Token     string    `json:"token"`
@@ -39,6 +66,12 @@ type record struct {
 	// NodeID binds this token to one node identity, empty for an unbound
 	// token. See Store.MintForNode.
 	NodeID string `json:"node_id,omitempty"`
+	// ClaimedNodeID pins an unbound token to the first node_id it was
+	// presented for while that node_id awaited approval. See Store.Claim.
+	//
+	// ClaimedNodeID 把一枚未绑定令牌固定到它在等待审批时第一次代表的
+	// node_id 上。见 Store.Claim。
+	ClaimedNodeID string `json:"claimed_node_id,omitempty"`
 	// Revoked and RevokedAt let an admin invalidate a token before it is
 	// ever consumed. See Store.Revoke.
 	Revoked   bool      `json:"revoked,omitempty"`
@@ -165,8 +198,8 @@ func (s *Store) Consume(token string, now time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	r, ok := s.records[token]
-	if !ok || r.Used || r.Revoked || now.After(r.ExpiresAt) {
+	r, ok := s.consumableLocked(token, now)
+	if !ok {
 		return "", ErrInvalidToken
 	}
 	r.Used = true
@@ -178,6 +211,88 @@ func (s *Store) Consume(token string, now time.Time) (string, error) {
 		return "", err
 	}
 	return r.NodeID, nil
+}
+
+// Peek reports what token grants without consuming it, so a caller can run
+// every check that might refuse the request first and only spend the token
+// once the request is going to succeed. It returns ErrInvalidToken under the
+// same conditions, and with the same deliberate vagueness, as Consume. A
+// successful Peek is not a reservation: a concurrent Consume can still win,
+// so the caller must Consume before treating the token as spent.
+//
+// Peek 在不消耗令牌的前提下报告它授予了什么，好让调用方先跑完所有可能拒绝这次
+// 请求的检查，只在请求确定会成功时才花掉令牌。它返回 ErrInvalidToken 的条件与
+// 刻意的含糊程度都与 Consume 相同。Peek 成功并不代表预留：并发的 Consume 仍可能
+// 抢先，因此调用方必须真正 Consume 成功后才能把令牌视为已花掉。
+func (s *Store) Peek(token string, now time.Time) (Grant, error) {
+	if token == "" {
+		return Grant{}, ErrInvalidToken
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.consumableLocked(token, now)
+	if !ok {
+		return Grant{}, ErrInvalidToken
+	}
+	return Grant{NodeID: r.NodeID, ClaimedNodeID: r.ClaimedNodeID}, nil
+}
+
+// Claim pins a still-consumable token to nodeID without consuming it, for a
+// registration refused only because nodeID awaits operator approval: the
+// Agent keeps its token file and retries with the same value, so the token
+// must survive the refusal, but it must not go on to speak for some other
+// node_id. Claiming again for the same nodeID is a no-op; claiming for a
+// different one returns ErrClaimed, as does claiming a token bound to a
+// different node_id at mint time. It returns ErrInvalidToken under the same
+// conditions as Consume.
+//
+// Claim 在不消耗令牌的前提下把它固定到 nodeID 上，供「只因 nodeID 待审批而被
+// 拒绝」的注册使用：Agent 会保留令牌文件并用同一个值重试，所以令牌必须在这次
+// 拒绝后依然可用，但又不能转而替别的 node_id 说话。对同一个 nodeID 再次 Claim
+// 不做任何事；对另一个 nodeID Claim，或令牌铸造时已绑定到别的 node_id，都返回
+// ErrClaimed。返回 ErrInvalidToken 的条件与 Consume 相同。
+func (s *Store) Claim(token, nodeID string, now time.Time) error {
+	if token == "" || nodeID == "" {
+		return ErrInvalidToken
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.consumableLocked(token, now)
+	if !ok {
+		return ErrInvalidToken
+	}
+	if r.NodeID != "" && r.NodeID != nodeID {
+		return ErrClaimed
+	}
+	switch r.ClaimedNodeID {
+	case nodeID:
+		return nil
+	case "":
+	default:
+		return ErrClaimed
+	}
+	r.ClaimedNodeID = nodeID
+	if err := s.persistLocked(); err != nil {
+		r.ClaimedNodeID = ""
+		return err
+	}
+	return nil
+}
+
+// consumableLocked returns token's record if it can still be consumed at now.
+// Callers must hold s.mu.
+//
+// consumableLocked 在 token 于 now 时刻仍可消耗时返回它的记录。调用方必须持有 s.mu。
+func (s *Store) consumableLocked(token string, now time.Time) (*record, bool) {
+	r, ok := s.records[token]
+	if !ok || r.Used || r.Revoked || now.After(r.ExpiresAt) {
+		return nil, false
+	}
+	return r, true
 }
 
 // Revoke marks token so it can never be consumed, regardless of whether it

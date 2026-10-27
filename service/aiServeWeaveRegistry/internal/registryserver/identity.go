@@ -20,13 +20,22 @@ import (
 // the whole contract that accepts a connection with no client certificate:
 // authentication here comes entirely from the one-time bootstrap token.
 //
+// The token is validated first but consumed last. Every check that can refuse
+// the request — node_id, disable, CSR, operator approval, signing — runs
+// against a Peek, and Consume happens only once a certificate is in hand. A
+// refusal the Agent can recover from by retrying, above all "pending operator
+// approval", therefore leaves the token usable: the Agent keeps its token
+// file after a failed Register and retries with the same value. While a
+// node_id awaits approval the unbound token is Claimed for it, so the
+// unspent token cannot go on to file pending records for other node_ids.
+//
 // Signing happens before the identity ledger is checked, not after: the
 // alternative order would let a conflicting request reserve nodeID and then
 // fail signing, leaving the ledger pointing at a key nobody ever proved they
-// hold. With this order, a request that turns out to conflict has merely
-// spent its already-consumed bootstrap token on a certificate this handler
-// never returns — a wasted signature, not a corrupted ledger (STATUS.md's
-// S01).
+// hold. With this order, a request that turns out to conflict has spent its
+// bootstrap token on a certificate this handler never returns — a wasted
+// signature, not a corrupted ledger (STATUS.md's S01). A conflict is not
+// retryable, so spending the token there is deliberate.
 //
 // A node_id-bound token (minted via TokenAdmin.MintToken, STATUS.md's S02)
 // changes the ledger step: the bound node_id overrides whatever the request
@@ -38,11 +47,18 @@ import (
 // Register 实现 tunnelv1.NodeIdentityServer。它是整个契约里唯一一个接受无
 // 客户端证书连接的方法：这里的认证完全来自一次性引导令牌。
 //
+// 令牌最先校验、最后消耗。所有可能拒绝请求的检查——node_id、禁用、CSR、运维
+// 审批、签发——都基于一次 Peek 进行，只有拿到证书之后才 Consume。因此 Agent
+// 靠重试就能走出来的拒绝，首先是「待运维审批」，不会花掉令牌：Agent 在
+// Register 失败后保留令牌文件，并用同一个值重试。node_id 等待审批期间，这枚
+// 未绑定令牌会被 Claim 到它名下，未花掉的令牌因此不能再替其他 node_id 写待审批
+// 记录。
+//
 // 签发发生在检查身份账本之前，而不是之后：反过来的顺序会让一次冲突的请求先
 // 占住 nodeID，再在签发上失败，把账本指向一把从没人证明持有过的 key。按现在
-// 这个顺序，一次事后判定为冲突的请求，代价只是把已经消耗掉的引导令牌，换成
-// 了一张本方法从不交回去的证书——是一次白白的签名，而不是一份被弄脏的账本
-// （STATUS.md 的 S01）。
+// 这个顺序，一次事后判定为冲突的请求，代价是把引导令牌换成了一张本方法从不
+// 交回去的证书——是一次白白的签名，而不是一份被弄脏的账本（STATUS.md 的
+// S01）。冲突无法靠重试解决，所以在那里花掉令牌是刻意的。
 //
 // 一枚绑定了 node_id 的令牌（通过 TokenAdmin.MintToken 铸造，STATUS.md 的
 // S02）会改变账本这一步：绑定的 node_id 会覆盖请求里提出的任何值，账本写入
@@ -53,16 +69,12 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	// The token is never logged, on success or failure: it is a bearer
 	// credential until consumed, exactly like the API keys AGENTS.md's
 	// security rules cover.
-	boundNodeID, err := s.tokens.Consume(req.GetBootstrapToken(), now)
+	token := req.GetBootstrapToken()
+	grant, err := s.tokens.Peek(token, now)
 	if err != nil {
-		if errors.Is(err, tokenstore.ErrInvalidToken) {
-			s.metrics.Register(ResultUnauthorized)
-			return nil, status.Error(codes.Unauthenticated, "bootstrap token is invalid or expired")
-		}
-		s.logger.Error("bootstrap token store failed", slog.String("error", err.Error()))
-		s.metrics.Register(ResultInternal)
-		return nil, status.Error(codes.Internal, "cannot validate bootstrap token")
+		return nil, s.tokenError(err)
 	}
+	boundNodeID := grant.NodeID
 
 	nodeID := req.GetNodeId()
 	switch {
@@ -86,6 +98,10 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		s.metrics.Register(ResultInvalid)
 		return nil, status.Error(codes.InvalidArgument,
 			"node_id is required: an unbound bootstrap token can no longer self-assign one, since it would have nothing stable for an operator to approve")
+	case grant.ClaimedNodeID != "" && nodeID != grant.ClaimedNodeID:
+		s.metrics.Register(ResultUnauthorized)
+		return nil, status.Errorf(codes.PermissionDenied,
+			"bootstrap token was already presented for node_id %q, not %q", grant.ClaimedNodeID, nodeID)
 	}
 
 	// A disabled node_id (TokenAdmin.DisableNode, STATUS.md's S03) is refused
@@ -93,7 +109,9 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	// fresh token does not undo a disable, only TokenAdmin.EnableNode does —
 	// the two are independent admin actions on purpose, so an operator can
 	// revoke a compromised node without also having to hunt down and revoke
-	// every bootstrap token that might still let it back in.
+	// every bootstrap token that might still let it back in. The ledger write
+	// below re-checks under its own lock, closing the race with a concurrent
+	// DisableNode.
 	if s.identities.IsDisabled(nodeID) {
 		s.metrics.Register(ResultUnauthorized)
 		return nil, status.Errorf(codes.PermissionDenied, "node_id %q is disabled", nodeID)
@@ -109,31 +127,25 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	// by an operator before Register will sign anything for it (STATUS.md's
 	// P01). A bound token skips this: minting it was itself the approval,
 	// the same reasoning that already lets the bound-token branch below
-	// bypass Reserve's conflict check. A node_id with no ledger entry at all
-	// is exactly as unapproved as one explicitly marked pending, so both
-	// collapse into the same refusal — the attempt is recorded either way,
-	// which is what lets an operator find it in TokenAdmin.ListNodeStates
-	// and approve it for the Agent's next retry.
-	if boundNodeID == "" {
-		approved := true
-		if s.identities.IsPending(nodeID) {
-			approved = false
-		} else if !s.identities.HasRecord(nodeID) {
-			approved = false
+	// bypass Reserve's conflict check. The attempt is recorded so an
+	// operator finds it in TokenAdmin.ListNodeStates, and the token is
+	// claimed rather than consumed, so the Agent's retry after approval
+	// still holds a valid one.
+	if boundNodeID == "" && !s.identities.IsApproved(nodeID) {
+		if err := s.tokens.Claim(token, nodeID, now); err != nil {
+			return nil, s.tokenError(err)
 		}
-		if !approved {
-			if err := s.identities.RecordPending(nodeID, now); err != nil {
-				s.logger.Error("identity store failed", slog.String("error", err.Error()))
-				s.metrics.Register(ResultInternal)
-				return nil, status.Error(codes.Internal, "cannot record node identity")
-			}
-			s.logger.Warn("node registration pending operator approval",
-				slog.String("node_id", nodeID),
-				slog.String("agent_version", req.GetAgentVersion()))
-			s.metrics.Register(ResultPendingApproval)
-			return nil, status.Errorf(codes.PermissionDenied,
-				"node_id %q is pending operator approval; an operator must approve it before registration can proceed", nodeID)
+		if err := s.identities.RecordPending(nodeID, now); err != nil {
+			s.logger.Error("identity store failed", slog.String("error", err.Error()))
+			s.metrics.Register(ResultInternal)
+			return nil, status.Error(codes.Internal, "cannot record node identity")
 		}
+		s.logger.Warn("node registration pending operator approval",
+			slog.String("node_id", nodeID),
+			slog.String("agent_version", req.GetAgentVersion()))
+		s.metrics.Register(ResultPendingApproval)
+		return nil, status.Errorf(codes.PermissionDenied,
+			"node_id %q is pending operator approval; an operator must approve it before registration can proceed", nodeID)
 	}
 
 	certPEM, notAfter, err := s.ca.Sign(req.GetCsr(), nodeID, now)
@@ -142,32 +154,36 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		return nil, status.Errorf(codes.InvalidArgument, "cannot issue a node certificate: %v", err)
 	}
 
+	// Every refusal the Agent could retry past is behind us; from here the
+	// token is spent. A concurrent Register holding the same token may have
+	// consumed it since Peek, in which case this one loses.
+	if _, err := s.tokens.Consume(token, now); err != nil {
+		return nil, s.tokenError(err)
+	}
+	resp := &tunnelv1.RegisterResponse{
+		NodeId:         nodeID,
+		CertificatePem: certPEM,
+		CaBundlePem:    s.ca.Bundle(),
+		NotAfter:       timestamppb.New(notAfter),
+	}
+
 	if boundNodeID != "" {
 		// Set, not Reserve: see this method's doc comment. A node-bound
 		// token authorizes exactly one reinstall, so there is nothing left
 		// to check the ledger against.
 		if err := s.identities.Set(nodeID, fingerprint, now); err != nil {
-			s.logger.Error("identity store failed", slog.String("error", err.Error()))
-			s.metrics.Register(ResultInternal)
-			return nil, status.Error(codes.Internal, "cannot record node identity")
+			return nil, s.registerLedgerError(nodeID, err)
 		}
 		s.logger.Info("node registered via a node-bound bootstrap token (authorized reinstall)",
 			slog.String("node_id", nodeID),
 			slog.String("agent_version", req.GetAgentVersion()))
 		s.metrics.Register(ResultSuccess)
-		return &tunnelv1.RegisterResponse{
-			NodeId:         nodeID,
-			CertificatePem: certPEM,
-			CaBundlePem:    s.ca.Bundle(),
-			NotAfter:       timestamppb.New(notAfter),
-		}, nil
+		return resp, nil
 	}
 
 	outcome, err := s.identities.Reserve(nodeID, fingerprint, now)
 	if err != nil {
-		s.logger.Error("identity store failed", slog.String("error", err.Error()))
-		s.metrics.Register(ResultInternal)
-		return nil, status.Error(codes.Internal, "cannot record node identity")
+		return nil, s.registerLedgerError(nodeID, err)
 	}
 	if outcome == identitystore.OutcomeConflict {
 		// This is deliberately one bucket, not two: telling "reinstall" and
@@ -207,12 +223,44 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 	} else {
 		s.metrics.Register(ResultReconnect)
 	}
-	return &tunnelv1.RegisterResponse{
-		NodeId:         nodeID,
-		CertificatePem: certPEM,
-		CaBundlePem:    s.ca.Bundle(),
-		NotAfter:       timestamppb.New(notAfter),
-	}, nil
+	return resp, nil
+}
+
+// tokenError maps a tokenstore failure inside Register to its gRPC status and
+// records the matching metric. The token value never reaches the log.
+//
+// tokenError 把 Register 里 tokenstore 的失败映射为 gRPC 状态并记录对应指标。
+// 令牌值永远不进日志。
+func (s *Server) tokenError(err error) error {
+	switch {
+	case errors.Is(err, tokenstore.ErrInvalidToken):
+		s.metrics.Register(ResultUnauthorized)
+		return status.Error(codes.Unauthenticated, "bootstrap token is invalid or expired")
+	case errors.Is(err, tokenstore.ErrClaimed):
+		s.metrics.Register(ResultUnauthorized)
+		return status.Error(codes.PermissionDenied, "bootstrap token was already presented for a different node_id")
+	default:
+		s.logger.Error("bootstrap token store failed", slog.String("error", err.Error()))
+		s.metrics.Register(ResultInternal)
+		return status.Error(codes.Internal, "cannot validate bootstrap token")
+	}
+}
+
+// registerLedgerError maps an identitystore write failure inside Register to
+// its gRPC status and records the matching metric. ErrDisabled means a
+// DisableNode landed after Register's own IsDisabled check.
+//
+// registerLedgerError 把 Register 里 identitystore 写入失败映射为 gRPC 状态并记录
+// 对应指标。ErrDisabled 表示有一次 DisableNode 落在了 Register 自己的 IsDisabled
+// 检查之后。
+func (s *Server) registerLedgerError(nodeID string, err error) error {
+	if errors.Is(err, identitystore.ErrDisabled) {
+		s.metrics.Register(ResultUnauthorized)
+		return status.Errorf(codes.PermissionDenied, "node_id %q is disabled", nodeID)
+	}
+	s.logger.Error("identity store failed", slog.String("error", err.Error()))
+	s.metrics.Register(ResultInternal)
+	return status.Error(codes.Internal, "cannot record node identity")
 }
 
 // RenewCertificate implements tunnelv1.NodeIdentityServer. It requires the
@@ -260,6 +308,12 @@ func (s *Server) RenewCertificate(ctx context.Context, req *tunnelv1.RenewReques
 	// 调用方持有 nodeID 当前的私钥，而一次续期常规地会呈递一把新生成的
 	// key——用 Reserve 处理，会把它当作与在案的 key 冲突而拒绝。
 	if err := s.identities.Set(req.GetNodeId(), fingerprint, now); err != nil {
+		// ErrDisabled: a DisableNode landed after the IsDisabled check above.
+		// ErrDisabled：有一次 DisableNode 落在了上面的 IsDisabled 检查之后。
+		if errors.Is(err, identitystore.ErrDisabled) {
+			s.metrics.CertRenewal(ResultUnauthorized)
+			return nil, status.Errorf(codes.PermissionDenied, "node_id %q is disabled", req.GetNodeId())
+		}
 		s.logger.Error("identity store failed", slog.String("error", err.Error()))
 		s.metrics.CertRenewal(ResultInternal)
 		return nil, status.Error(codes.Internal, "cannot record node identity")

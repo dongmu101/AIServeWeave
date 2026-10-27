@@ -86,6 +86,30 @@ func LoadOrCreate(dir string) (*CA, error) {
 	}
 }
 
+// LoadBundle reads only the root certificate from dir, PEM-encoded, for a
+// client that verifies the Registry's listener and must neither need the root
+// private key nor create a new root when dir is empty — unlike LoadOrCreate,
+// a missing file is an error here.
+//
+// LoadBundle 只从 dir 读取根证书（PEM 编码），供验证 Registry 监听器的客户端
+// 使用：它既不应需要根私钥，也不应在 dir 为空时生成一套新的根——与 LoadOrCreate
+// 不同，这里文件缺失就是错误。
+func LoadBundle(dir string) ([]byte, error) {
+	certPath := filepath.Join(dir, "ca-cert.pem")
+	certPEM, err := os.ReadFile(certPath)
+	if err != nil {
+		return nil, fmt.Errorf("ca: cannot read %s: %w", certPath, err)
+	}
+	block, _ := pem.Decode(certPEM)
+	if block == nil {
+		return nil, fmt.Errorf("ca: %s contains no PEM block", certPath)
+	}
+	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
+		return nil, fmt.Errorf("ca: cannot parse %s: %w", certPath, err)
+	}
+	return certPEM, nil
+}
+
 func loadCA(keyPEM, certPEM []byte) (*CA, error) {
 	keyBlock, _ := pem.Decode(keyPEM)
 	if keyBlock == nil {

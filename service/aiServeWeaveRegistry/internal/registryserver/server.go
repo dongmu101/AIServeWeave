@@ -8,6 +8,10 @@ package registryserver
 
 import (
 	"log/slog"
+	"sync"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/runtime"
@@ -34,6 +38,40 @@ type Server struct {
 	gatewayToken string
 
 	roster rosterState
+
+	shutdown     chan struct{} // closed by Shutdown / 由 Shutdown 关闭
+	shutdownOnce sync.Once
+}
+
+// errShuttingDown is what an open or new Join receives once Shutdown runs; a
+// Gateway replica treats it like any other stream failure and reconnects
+// with backoff.
+//
+// errShuttingDown 是 Shutdown 之后已打开或新到的 Join 收到的错误；Gateway 副本
+// 把它当作普通的流失败处理，带退避重连。
+var errShuttingDown = status.Error(codes.Unavailable, "registry is shutting down")
+
+// Shutdown ends every open GatewayDirectory.Join stream and refuses new ones.
+// Join streams are long-lived by design and never finish on their own, so
+// without this grpc.Server.GracefulStop would wait on them forever; call
+// Shutdown first, then GracefulStop to let in-flight unary RPCs such as
+// Register complete. It is safe to call more than once.
+//
+// Shutdown 结束所有打开着的 GatewayDirectory.Join 流并拒绝新的 Join。Join 流
+// 按设计是长连接，从不会自行结束，没有这一步 grpc.Server.GracefulStop 会一直
+// 等下去；先调用 Shutdown，再调用 GracefulStop，让 Register 这类在途一元 RPC
+// 正常完成。可以重复调用。
+func (s *Server) Shutdown() {
+	s.shutdownOnce.Do(func() { close(s.shutdown) })
+}
+
+func (s *Server) shuttingDown() bool {
+	select {
+	case <-s.shutdown:
+		return true
+	default:
+		return false
+	}
 }
 
 // Config supplies Server's dependencies.
@@ -111,8 +149,20 @@ func New(cfg Config) (*Server, error) {
 		metrics:      newRecorder(cfg.Metrics),
 		adminToken:   cfg.AdminToken,
 		gatewayToken: cfg.GatewayToken,
+		shutdown:     make(chan struct{}),
 	}
 	s.roster.replicas = make(map[string]*tunnelv1.GatewayReplica)
+	// Agents ignore a roster version they have already passed
+	// (tunnel/roster.go's Apply), so a restarted Registry counting from zero
+	// again would be ignored until it caught up. Starting from the wall clock in milliseconds keeps
+	// versions increasing across restarts, given fewer roster changes per run
+	// than milliseconds between runs, while staying exact as a float64
+	// gauge on the Gateway side.
+	// Agent 会忽略已越过的名册版本（tunnel/roster.go 的 Apply），重启后又从零计数的 Registry 会被
+	// 一直忽略，直到追上旧版本。以毫秒级挂钟时间起步，只要单次运行的名册变化次数
+	// 少于两次运行之间相隔的毫秒数，版本号跨重启依然递增；同时在 Gateway 一侧作为
+	// float64 量表也能精确表示。
+	s.roster.version = clock.Now().UnixMilli()
 	// Seed the revoked set from what was already disabled in a prior run, so
 	// the first roster this process broadcasts already reflects it instead
 	// of a freshly started Registry looking like it forgot every disable

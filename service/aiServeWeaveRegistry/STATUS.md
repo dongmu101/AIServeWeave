@@ -40,7 +40,11 @@ aiserveweave-registry -data-dir ./data/registry -admin-token-file ./data/registr
   -mint-token -ttl 15m -registry-addr 127.0.0.1:9090
 ```
 
-打印一个 token 到标准输出，运维把它写进新节点的 `bootstrap-token-file`（配合 Agent 的 `-registry`/`-ca-file`/`-bootstrap-token-file` 三个 flag，见 `service/aiServeWeaveAgent/main.go`）。`-registry-addr` 留空时从 `-addr` 推导（同机同端口的默认情形）。撤销同理：
+打印一个 token 到标准输出，运维把它写进新节点的 `bootstrap-token-file`（配合 Agent 的 `-registry`/`-ca-file`/`-bootstrap-token-file` 三个 flag，见 `service/aiServeWeaveAgent/main.go`）。`-registry-addr` 留空时从 `-addr` 推导（同机同端口的默认情形）。
+
+CLI 客户端只读取 `<data-dir>/ca/ca-cert.pem` 来校验 Registry 的服务端证书，不需要根私钥；在另一台主机上运行时，把 Registry 的 `ca-cert.pem` 复制到该路径即可。文件缺失时直接报错，**不会**在本地生成一套新的根 CA。`-mint-token`、`-revoke-token`、`-disable-node`、`-enable-node`、`-issue-server-cert` 五种模式互斥，同时给出多个直接报错。
+
+撤销同理：
 
 ```bash
 aiserveweave-registry -data-dir ./data/registry -admin-token-file ./data/registry/admin-token \
@@ -69,6 +73,14 @@ Gateway 服务端证书同样最长有效十年，且不超过根证书到期时
 ## `GatewayDirectory`：Gateway 副本怎么拿到名册
 
 Gateway 副本启动时用 `service/aiServeWeaveGateway/registryclient` 拨号 `GatewayDirectory.Join`（一条双向流），报告自己的 `replica_id`/`endpoint`；Registry 把当前所有在线副本的名册广播给每一条打开的流，副本集合或状态变化时重新广播一次，版本号单调递增。副本优雅关闭前会在流上多发一条 `state: DRAINING` 的消息，再关闭连接；连接断开（无论是否发过 DRAINING）都会让该副本立刻从名册里消失并触发一次广播——不保留"已标记 removed 但还留着"的中间态。
+
+**同一个 `replica_id` 以最新的流为准。** `replica_id` 默认取主机名，副本重启后不变，而新流可能在 Registry 察觉旧流断开之前就到了。`rosterState` 记录每个 `replica_id` 当前由哪条流持有：新流接管条目；旧流之后发来的状态变化被忽略，旧流退出时也不会删除条目。只有持有条目的那条流断开，副本才会离开名册。
+
+**每条流一个发送协程，名册按版本单调送达。** 广播不在改动名册的协程里直接调用 `Send`，而是把快照交给每条流自己的发送协程。这个协程只发出比上次更新的版本，积压的多份合并为最新一份（名册本身是完整快照）。这样即使两次变化并发广播，同一条流也不会先收到新版本再收到旧版本——Gateway 的 `SetRoster` 不比较版本，乱序会把旧的吊销/维护名单装回去。一个不读数据的副本也只会卡住自己的发送协程，不会卡住其他副本的广播，也不会卡住触发广播的 `DisableNode` 等管理 RPC。
+
+**版本号跨重启递增。** 进程启动时，版本号从当前时间的毫秒值开始计数。Agent 会忽略不比当前更新的版本（`tunnel/roster.go` 的 `Apply`），如果重启后从 0 重新计数，新名册会一直被忽略，直到追上旧值。前提是单次运行的名册变化次数少于两次启动之间相隔的毫秒数，并且系统时钟没有大幅回拨。
+
+**停机。** `Join` 是长连接，不会自行结束，`GracefulStop` 会一直等下去。收到 SIGTERM 后，`main.go` 先调用 `Server.Shutdown()`：所有打开的 `Join` 以 `Unavailable` 结束，新的 `Join` 直接被拒绝。然后用 `GracefulStop` 让在途的 `Register` 等一元调用完成，超过 5 秒仍未结束就调用 `Stop()` 强制关闭。Gateway 把 `Unavailable` 当作普通的流失败处理，按退避重连。
 
 这条链路的传输层是单向 TLS：Gateway 校验 Registry 的服务端证书（`-registry-ca`），但不向 Registry 出示客户端证书——Gateway 目前不在 Registry 签发的 mTLS 体系里，这是本次特意收窄的范围；应用层的调用方认证见下一节。
 
@@ -112,7 +124,9 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 **严格审批：一个从未被批准过的 `node_id`，`Register` 会直接拒绝，而不是照常签发。** 具体规则见 `identity.go` 的 `Register`：
 
-- 消耗的是**未绑定** node_id 的引导令牌时，`Register` 在 `IsDisabled` 检查之后、签发证书之前，先查这个 `node_id` 是否已有账本记录且未被标记待审批——没有记录，或记录里 `PendingApproval=true`，一律拒绝（`PermissionDenied`），并调用 `identitystore.Store.RecordPending` 把这次尝试记下来（只记 `node_id` 与观测时间，**不**绑定这次呈递的公钥指纹——见下一段为什么）。运维用 `ApproveNode` 批准后，Agent 的下一次重试才会真正走到签发那一步。
+- 使用**未绑定** node_id 的引导令牌时，`Register` 在 `IsDisabled` 检查之后、签发证书之前，先查这个 `node_id` 的账本记录是否 `Approved`，未批准一律拒绝（`PermissionDenied`）。拒绝时调用 `identitystore.Store.RecordPending` 记下这次尝试：只记 `node_id` 与观测时间，**不**绑定这次呈递的公钥指纹，原因见下一段。运维用 `ApproveNode` 批准后，Agent 的下一次重试就会走到签发那一步。
+- **因待审批被拒绝时，令牌不会被消耗。** Agent 在 `Register` 失败后会保留令牌文件，并用同一个值重试。所以 `Register` 只在开头 `Peek` 校验令牌，等禁用、CSR、审批、签发都通过之后才 `Consume`。以下拒绝都不会花掉令牌：待审批、节点已禁用、CSR 无法解析或签名无效、绑定令牌与请求的 `node_id` 不一致。只有 S01 的指纹冲突仍然消耗令牌，因为冲突靠重试解决不了。待审批期间，令牌会通过 `tokenstore.Store.Claim` 固定到这个 `node_id` 名下：同一枚未消耗的令牌不能再替别的 `node_id` 注册或写待审批记录（`PermissionDenied`），否则一枚令牌就能往账本里刷任意多条待审批记录。令牌的有效期照常计算：如果运维审批时令牌已经过期，就需要重新铸造一枚。
+- **只有 `Approved` 字段代表"已批准"。** 它只在两种情况下置为 true：运维调用了 `ApproveNode`，或者该节点确实被签发过证书（`Reserve`/`Set`）。`DisableNode`、`SetMaintenance` 对一个从未出现过的 `node_id` 也会建记录，但这些记录的 `Approved` 为 false，所以这些管理操作**不会**顺带批准节点。旧账本文件里没有 `approved` 键的记录，按 `!pending_approval` 推导，与此前对这类记录的判断一致，升级不需要迁移。
 - 消耗的是**绑定了 node_id** 的令牌时，这条门槛完全不适用：铸造这枚令牌本身就是运维的授权动作，与它已经跳过 S01 冲突检查的既有逻辑是同一个理由。
 - **不区分"待审批"与"拒绝"两种动作**：运维不想放行的待审批节点，直接用既有的 `DisableNode` 处理即可——`Register` 里 `IsDisabled` 检查发生在待审批检查之前，天然生效，不必再多一个"拒绝"的概念。
 
@@ -138,6 +152,8 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 **并发注册按 `node_id` 序列化。** `identitystore.Store.Reserve` 全程持有一把互斥锁，两个并发的 `Register` 调用即便都携带同一个 `node_id`，也不会让账本产生一次"看到了旧值"的竞态——`internal/identitystore/identitystore_test.go` 与 `internal/registryserver/identity_test.go` 分别在账本层与真实 gRPC 层验证了「同一把 key 并发重连全部成功」与「不同 key 并发抢注恰好一个成功、其余全部拒绝」。
 
 `RenewCertificate` 不走这条检查：它自己的认证（`nodeid.FromPeer` 必须等于请求里的 `node_id`）已经证明调用方持有该 `node_id` 当前的私钥，因此续期时账本用 `identitystore.Store.Set` 无条件覆盖指纹——一次续期常规地会带来一把新生成的 key，若也用 `Reserve` 处理会被误判为冲突。
+
+`Set` 只改指纹与观测时间，**保留**维护标记——否则节点每次自动续期都会悄悄退出维护，下一次任何节点的维护变更或 Registry 重启后，它就会重新接到新任务。`Set` 与 `Reserve` 都在账本锁内再查一次禁用标记，命中时返回 `identitystore.ErrDisabled`，账本不变，调用方回 `PermissionDenied`，签好的证书不交出去。这一步堵住了 `DisableNode` 恰好落在 handler 自己的 `IsDisabled` 检查与账本写入之间时的竞态：如果没有这次复查，那次禁用会被续期写入覆盖掉。
 
 ## 指标
 

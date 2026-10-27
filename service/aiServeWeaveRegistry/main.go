@@ -48,6 +48,12 @@ import (
 // admin-shared-secret convention, so the two do not drift apart.
 const minAdminTokenLen = 32
 
+// shutdownGrace bounds how long shutdown waits for gRPC handlers to return
+// before closing every connection outright.
+//
+// shutdownGrace 限定停机时等待 gRPC 处理函数返回的时长，超时后直接关闭所有连接。
+const shutdownGrace = 5 * time.Second
+
 // version is stamped at build time via -ldflags="-X main.version=...", see
 // the root Dockerfile and scripts/build-release.sh; "dev" is what a plain
 // `go build` produces.
@@ -99,6 +105,16 @@ func run() error {
 		return err
 	}
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl}))
+
+	modes := 0
+	for _, on := range []bool{*mintToken, *revokeToken != "", *disableNode != "", *enableNode != "", *issueServerCert} {
+		if on {
+			modes++
+		}
+	}
+	if modes > 1 {
+		return errors.New("-mint-token, -revoke-token, -disable-node, -enable-node and -issue-server-cert are mutually exclusive")
+	}
 
 	if *mintToken || *revokeToken != "" || *disableNode != "" || *enableNode != "" {
 		return runTokenAdminClient(os.Stdout, *dataDir, *registryAddr, *addr, *adminTokenFile, tokenAdminAction{
@@ -189,7 +205,24 @@ func run() error {
 		}
 	}
 
-	grpcServer.GracefulStop()
+	// Join streams never end on their own, so they are ended first; then
+	// GracefulStop lets in-flight unary RPCs finish, bounded by
+	// shutdownGrace in case a stuck peer keeps a handler from returning.
+	// Join 流从不自行结束，所以先结束它们；再由 GracefulStop 让在途一元 RPC
+	// 完成，并以 shutdownGrace 为上限，防止某个卡住的对端让处理函数迟迟不返回。
+	server.Shutdown()
+	stopped := make(chan struct{})
+	go func() {
+		grpcServer.GracefulStop()
+		close(stopped)
+	}()
+	select {
+	case <-stopped:
+	case <-time.After(shutdownGrace):
+		logger.Warn("gRPC handlers did not finish within the grace period; closing connections")
+		grpcServer.Stop()
+		<-stopped
+	}
 	// Closed last, after the gRPC listener has drained, so a scrape mid-drain
 	// still sees the connected-replica gauge go to zero rather than reporting
 	// stale capacity for a replica that is already gone.
@@ -283,16 +316,21 @@ func runTokenAdminClient(out io.Writer, dataDir, registryAddr, listenAddr, admin
 		return errors.New("-mint-token/-revoke-token/-disable-node/-enable-node needs -admin-token-file")
 	}
 
-	root, err := ca.LoadOrCreate(filepath.Join(dataDir, "ca"))
+	// Only the root certificate: this may run on a host other than the
+	// Registry's, which must not need the root key, and must not mint a
+	// fresh root just because <data-dir>/ca is empty there.
+	// 只读根证书：这条命令可能运行在 Registry 以外的主机上，那里不应需要根私钥，
+	// 也不应因为 <data-dir>/ca 为空就生成一套新的根。
+	bundle, err := ca.LoadBundle(filepath.Join(dataDir, "ca"))
 	if err != nil {
-		return err
+		return fmt.Errorf("%w (copy the Registry's ca-cert.pem into <data-dir>/ca/ on this host)", err)
 	}
 	target := registryAddr
 	if target == "" {
 		target = defaultRegistryAddr(listenAddr)
 	}
 	pool := x509.NewCertPool()
-	if !pool.AppendCertsFromPEM(root.Bundle()) {
+	if !pool.AppendCertsFromPEM(bundle) {
 		return errors.New("registry: CA bundle contains no usable certificate")
 	}
 	conn, err := grpc.NewClient(target, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{

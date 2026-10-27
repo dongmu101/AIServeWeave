@@ -53,12 +53,23 @@ import (
 	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
 )
+
+// ErrDisabled is returned by Reserve and Set for a node_id that is disabled at
+// the moment of the write. Callers check IsDisabled earlier as well, but only
+// this check — made under the same lock as the write — closes the window in
+// which a concurrent Disable would otherwise be overwritten or ignored.
+//
+// ErrDisabled 由 Reserve 与 Set 返回，表示写入那一刻该 node_id 处于禁用状态。
+// 调用方更早也会检查 IsDisabled，但只有这一次——与写入在同一把锁下完成——才能
+// 堵住并发的 Disable 被覆盖或被忽略的那个窗口。
+var ErrDisabled = errors.New("identitystore: node_id is disabled")
 
 // Outcome reports what Reserve found for one node_id.
 //
@@ -105,13 +116,27 @@ type record struct {
 	Disabled bool `json:"disabled,omitempty"`
 	// PendingApproval marks a node_id as having attempted registration with
 	// an unbound bootstrap token without an operator's prior approval
-	// (STATUS.md's P01): Register refuses to sign a certificate for it. The
-	// field is named for its blocking value rather than its opposite so a
-	// ledger file written before this field existed decodes every prior
-	// record as approved (Go's zero value for a missing bool is false) —
-	// nodes that registered before P01 shipped keep working without a
-	// migration step.
+	// (STATUS.md's P01), so the attempt surfaces in ListNodeStates. It is
+	// informational: whether Register may sign is decided by Approved.
+	//
+	// PendingApproval 标记某个 node_id 曾在未经运维批准的情况下用未绑定的引导
+	// 令牌尝试注册（STATUS.md 的 P01），好让这次尝试出现在 ListNodeStates 里。
+	// 它只是信息性的：Register 能否签发由 Approved 决定。
 	PendingApproval bool `json:"pending_approval,omitempty"`
+	// Approved records that Register may sign for this node_id under an
+	// unbound bootstrap token: set by Approve, or by a certificate actually
+	// having been issued (Reserve/Set). Records created only to carry a
+	// Disable or SetMaintenance flag leave it false, so those admin actions do
+	// not approve a node_id as a side effect. A record written before this
+	// field existed has no "approved" key; Open derives it as
+	// !PendingApproval, which is exactly how such a record was judged before.
+	//
+	// Approved 记录在未绑定引导令牌下 Register 能否为这个 node_id 签发：由
+	// Approve 设置，或在真正签发过证书时（Reserve/Set）设置。仅为承载 Disable 或
+	// SetMaintenance 标记而创建的记录保持 false，这些管理动作因此不会顺带批准
+	// node_id。此字段出现之前写入的记录没有 "approved" 键，Open 按
+	// !PendingApproval 推导——这正是此前判断这类记录的方式。
+	Approved bool `json:"approved"`
 	// Maintenance marks a node_id as under operator-forced maintenance
 	// (STATUS.md's P01): the Registry broadcasts it to every joined Gateway
 	// replica the same way Disabled is, but it does not revoke the node_id's
@@ -154,7 +179,19 @@ func Open(path string) (*Store, error) {
 	if err := json.Unmarshal(data, &recs); err != nil {
 		return nil, fmt.Errorf("identitystore: cannot parse %s: %w", path, err)
 	}
-	for _, r := range recs {
+	// A second, narrow decode tells "approved": false apart from a missing
+	// key, which only a ledger written before Approved existed lacks.
+	// 第二次窄解码用来分辨 "approved": false 与键缺失——只有 Approved 出现前写入的账本才缺这个键。
+	var presence []struct {
+		Approved *bool `json:"approved"`
+	}
+	if err := json.Unmarshal(data, &presence); err != nil {
+		return nil, fmt.Errorf("identitystore: cannot parse %s: %w", path, err)
+	}
+	for i, r := range recs {
+		if presence[i].Approved == nil {
+			r.Approved = !r.PendingApproval
+		}
 		s.records[r.NodeID] = r
 	}
 	return s, nil
@@ -173,6 +210,9 @@ func Open(path string) (*Store, error) {
 // registration must bind it, not be refused as conflicting with an empty
 // string nobody ever proved they hold.
 //
+// A node_id disabled at the moment of the call returns ErrDisabled and leaves
+// the ledger unchanged; every other flag on an existing record is preserved.
+//
 // Reserve 检查 nodeID 相对于账本的状态，除非发生冲突，否则把 fingerprint
 // 记录为它当前的绑定。Register 在签发已经准备就绪、只差把响应交回去之前调用
 // 本方法，因此一次冲突不会让调用方额外损失什么——它在到这一步之前已经花掉的
@@ -181,14 +221,20 @@ func Open(path string) (*Store, error) {
 // 一条尚无指纹的记录，与完全没有记录同等对待：Disable 与 Approve 都会在一个
 // node_id 从未注册过的情况下管理性地创建记录，且把 Fingerprint 留空——第一次
 // 真正的注册必须绑定它，而不应被当作与一个从没人证明持有过的空字符串冲突而拒绝。
+//
+// 调用那一刻已被禁用的 node_id 返回 ErrDisabled，账本保持不变；已有记录上的
+// 其他标记一律保留。
 func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	r, ok := s.records[nodeID]
+	if ok && r.Disabled {
+		return 0, ErrDisabled
+	}
 	if !ok {
 		s.records[nodeID] = &record{
-			NodeID: nodeID, Fingerprint: fingerprint, FirstSeenAt: now, LastSeenAt: now,
+			NodeID: nodeID, Fingerprint: fingerprint, FirstSeenAt: now, LastSeenAt: now, Approved: true,
 		}
 		if err := s.persistLocked(); err != nil {
 			delete(s.records, nodeID)
@@ -229,21 +275,36 @@ func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, err
 // 它自己的认证已经通过持有 nodeID 当前私钥证明了这次请求确实代表 nodeID，
 // 因此无需与历史比对；而一次续期常规地会为一把新生成的 key 签发证书，若用
 // Reserve 处理，反而会被当作冲突拒绝。
+//
+// Set only rebinds the fingerprint: Maintenance survives it, and a certificate
+// having been issued marks the node_id approved and no longer pending. A
+// node_id disabled at the moment of the call returns ErrDisabled and leaves
+// the ledger unchanged, so a renewal racing DisableNode cannot erase the
+// disable.
+//
+// Set 只重新绑定指纹：Maintenance 标记原样保留；既然证书已经签发，node_id 随之
+// 标记为已批准、不再待审批。调用那一刻已被禁用的 node_id 返回 ErrDisabled，
+// 账本保持不变——与 DisableNode 竞争的续期因此抹不掉那次禁用。
 func (s *Store) Set(nodeID, fingerprint string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	firstSeen := now
-	if prev, ok := s.records[nodeID]; ok {
-		firstSeen = prev.FirstSeenAt
+	r, ok := s.records[nodeID]
+	if ok && r.Disabled {
+		return ErrDisabled
 	}
-	prev := s.records[nodeID]
-	s.records[nodeID] = &record{
-		NodeID: nodeID, Fingerprint: fingerprint, FirstSeenAt: firstSeen, LastSeenAt: now,
+	if !ok {
+		r = &record{NodeID: nodeID, FirstSeenAt: now}
+		s.records[nodeID] = r
 	}
+	prev := *r
+	r.Fingerprint = fingerprint
+	r.LastSeenAt = now
+	r.Approved = true
+	r.PendingApproval = false
 	if err := s.persistLocked(); err != nil {
-		if prev != nil {
-			s.records[nodeID] = prev
+		if ok {
+			*r = prev
 		} else {
 			delete(s.records, nodeID)
 		}
@@ -327,11 +388,12 @@ func (s *Store) DisabledNodeIDs() []string {
 	return ids
 }
 
-// IsPending reports whether nodeID is currently blocked on operator approval
-// (STATUS.md's P01). A node_id with no record at all is not pending in the
-// sense this method answers — RecordPending is what Register calls to create
-// that record in the first place, so a caller deciding whether to refuse
-// Register checks the absence of a record and this method together.
+// IsPending reports whether nodeID has attempted registration and is waiting
+// on operator approval (STATUS.md's P01). It describes the queue
+// ListNodeStates shows; whether Register may sign is IsApproved's question.
+//
+// IsPending 报告 nodeID 是否尝试过注册、正在等待运维批准（STATUS.md 的 P01）。
+// 它描述的是 ListNodeStates 展示的那个队列；Register 能否签发由 IsApproved 回答。
 func (s *Store) IsPending(nodeID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -339,15 +401,30 @@ func (s *Store) IsPending(nodeID string) bool {
 	return ok && r.PendingApproval
 }
 
-// HasRecord reports whether nodeID has any ledger entry at all. Register
-// uses it alongside IsPending: a node_id that has never been seen before is
-// exactly as unapproved as one explicitly marked pending, since approval
-// (Approve) always creates a record the same way Disable does.
+// HasRecord reports whether nodeID has any ledger entry at all. Having one
+// does not imply approval — Disable and SetMaintenance create records too;
+// Register asks IsApproved instead.
+//
+// HasRecord 报告 nodeID 在账本里是否有任何条目。有条目并不意味着已批准——
+// Disable 与 SetMaintenance 同样会建记录；Register 改问 IsApproved。
 func (s *Store) HasRecord(nodeID string) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	_, ok := s.records[nodeID]
 	return ok
+}
+
+// IsApproved reports whether Register may sign for nodeID under an unbound
+// bootstrap token (STATUS.md's P01): an operator approved it, or it was
+// already issued a certificate. A node_id with no record is not approved.
+//
+// IsApproved 报告在未绑定引导令牌下 Register 能否为 nodeID 签发（STATUS.md 的
+// P01）：运维批准过它，或它已经被签发过证书。没有记录的 node_id 视为未批准。
+func (s *Store) IsApproved(nodeID string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	r, ok := s.records[nodeID]
+	return ok && r.Approved
 }
 
 // RecordPending upserts nodeID's ledger entry as pending approval, so an
@@ -397,14 +474,15 @@ func (s *Store) Approve(nodeID string, now time.Time) error {
 		r = &record{NodeID: nodeID, FirstSeenAt: now}
 		s.records[nodeID] = r
 	}
-	prevPending, prevSeen := r.PendingApproval, r.LastSeenAt
+	prevPending, prevApproved, prevSeen := r.PendingApproval, r.Approved, r.LastSeenAt
 	r.PendingApproval = false
+	r.Approved = true
 	r.LastSeenAt = now
 	if err := s.persistLocked(); err != nil {
 		if !ok {
 			delete(s.records, nodeID)
 		} else {
-			r.PendingApproval, r.LastSeenAt = prevPending, prevSeen
+			r.PendingApproval, r.Approved, r.LastSeenAt = prevPending, prevApproved, prevSeen
 		}
 		return err
 	}
