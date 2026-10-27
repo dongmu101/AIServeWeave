@@ -555,6 +555,7 @@ Workflow API → 受控模板绑定 → Job 提交与确认
 | `common/runtime/` | 运行时语义、能力门禁、后端适配与并发控制 |
 | `common/localdiscovery/` | Agent 与 Gateway 共用的回环服务发现（Agent 默认探测 Ollama/vLLM/TensorRT-LLM/TokenSpeed/SGLang，后三者与 vLLM 共用 8000 端口时靠探测互斥区分；Gateway 只探测显式配置的 Ollama/vLLM）；Gateway 本机清单经控制面在模型页单独展示 |
 | `common/tunnelwire/` | runtime 与隧道 proto 的唯一转换边界 |
+| `common/cliusagestatus/` | 本机 CLI 订阅额度的不含凭据形状，随 `cli_usage` 帧上报并显示在租户模型页 |
 | `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
 | `common/modelroute/` | 模型路由发布契约：别名/目标、CAS 版本化快照与生效状态（P02） |
 | `common/workflowtemplate/` | 工作流模板发布契约：内容、版本化快照与生效状态（P03），图仅在此契约与 Gateway 内部流转 |

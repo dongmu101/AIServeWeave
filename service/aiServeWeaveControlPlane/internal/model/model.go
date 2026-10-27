@@ -307,6 +307,7 @@ const (
 	ActionSessionLogout      = "session.logout"
 	ActionAPIKeyCreate       = "apikey.create"
 	ActionAPIKeyRevoke       = "apikey.revoke"
+	ActionAPIKeyDelete       = "apikey.delete"
 	ActionTenantLimits       = "tenant.limits"
 
 	// Platform actions (STATUS.md's P01) are recorded with TenantID set to

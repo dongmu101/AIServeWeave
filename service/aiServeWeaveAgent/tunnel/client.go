@@ -17,6 +17,7 @@ import (
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/agentupgradestatus"
+	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
@@ -73,6 +74,21 @@ type ComfyUIManager interface {
 	//
 	// Snapshot 返回本 Agent 本地声明的那一个 Managed 实例的当前状态。
 	Snapshot() []comfyuimanagedstatus.Status
+}
+
+// CLIUsageSource is implemented by *cliusage.Monitor. It is declared here as
+// an interface, not a dependency on the cliusage package, the same reason
+// ModelPuller is: tests can fake it without running a CLI. Snapshot must
+// return cached data without starting a process.
+//
+// CLIUsageSource 由 *cliusage.Monitor 实现。这里声明成接口而不是依赖 cliusage 包，
+// 与 ModelPuller 同一个理由：测试可以用假实现替换，不必运行 CLI。Snapshot 必须只
+// 返回缓存数据，不启动任何进程。
+type CLIUsageSource interface {
+	// Snapshot returns the cached, credential-free quota of every declared CLI.
+	//
+	// Snapshot 返回每个已声明 CLI 的缓存、不含凭据的额度。
+	Snapshot() []cliusagestatus.Account
 }
 
 // AgentUpgrader is implemented by *agentupgrade.Checker (STATUS.md's P2
@@ -303,6 +319,16 @@ type ClientConfig struct {
 	// 状——意味着 GatewayControl_AgentUpgradeAction 帧被静默忽略、也从不发送
 	// AgentUpgradeReport，与一个未配置升级清单的节点表现一致。
 	AgentUpgrader AgentUpgrader
+	// CLIUsage supplies the credential-free subscription quota of the locally
+	// declared Codex / Claude Code CLIs, which the tunnel reports to each
+	// replica so the console can show it next to the service. Nil is a
+	// legitimate value — the same "optional hook" shape as ModelPuller — and
+	// means no CLIUsageReport is ever sent.
+	//
+	// CLIUsage 提供本地已声明的 Codex / Claude Code CLI 不含凭据的订阅额度，隧道把它
+	// 上报给每个副本，好让控制台把它显示在对应服务旁。nil 是一个合法取值——与
+	// ModelPuller 同一种"可选钩子"形状——意味着从不发送 CLIUsageReport。
+	CLIUsage CLIUsageSource
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and
 	// HeartbeatFailureThreshold the number of unanswered heartbeats that

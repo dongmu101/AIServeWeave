@@ -16,7 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { parseTenantModels, type TenantModelCatalog } from "@/lib/console/fleet";
+import { parseTenantModels, type CliUsage, type CliUsageWindow, type TenantModelCatalog } from "@/lib/console/fleet";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
 
 type Service = TenantModelCatalog["services"][number];
@@ -69,8 +69,8 @@ export function TenantModelsView() {
         <span className="text-xs text-muted-foreground"><Message id="tenant.aiServices_3f8e07" values={{ count: info.row.original.services.length }} /></span>
       </div>,
     }),
-    agentHelper.display({ id: "services", header: t("tenant.aiServices_a7836c"), cell: info => <AgentServices agent={info.row.original} onSelect={setSelected} /> }),
-  ]), [t]);
+    agentHelper.display({ id: "services", header: t("tenant.aiServices_a7836c"), cell: info => <AgentServices agent={info.row.original} collectedAt={catalog.data?.collectedAt ?? ""} onSelect={setSelected} /> }),
+  ]), [catalog.data?.collectedAt, t]);
   const table = useTable({ features, columns, data: rows, getRowId: agent => agent.agentId });
 
   return <div className="grid gap-4">
@@ -100,21 +100,66 @@ export function TenantModelsView() {
 
 /** AgentServices renders a bounded subtable owned by one Agent row.
  * AgentServices 在一个 Agent 主行内展示有界的服务子表。 */
-function AgentServices({ agent, onSelect }: { agent: AgentGroup; onSelect: (service: Service) => void }) {
+function AgentServices({ agent, collectedAt, onSelect }: { agent: AgentGroup; collectedAt: string; onSelect: (service: Service) => void }) {
   const { t } = useI18n();
   const [page, setPage] = React.useState(0);
   const currentPage = Math.min(page, Math.max(0, Math.ceil(agent.services.length / PAGE_SIZE) - 1));
+  // The catalogue's own collection time, so "already reset" is judged against the data and not the render clock.
+  // 使用目录自己的采集时间，让「已重置」依据数据而不是渲染时的时钟来判断。
+  const now = Date.parse(collectedAt);
   const columns = React.useMemo(() => helper.columns([
     helper.accessor("serviceId", { header: t("tenant.serviceIdType"), cell: info => <div className="max-w-48 whitespace-normal break-all"><code className="text-xs">{info.getValue()}</code><div className="text-xs text-muted-foreground">{info.row.original.kind}</div></div> }),
     helper.accessor("state", { header: t("tenant.healthStatus"), cell: info => <Badge variant="outline">{STATES(t)[info.getValue()] ?? info.getValue()}</Badge> }),
     helper.accessor("version", { header: t("tenant.version"), cell: info => <span className="inline-block max-w-32 whitespace-normal break-all">{info.getValue() || t("tenant.notReported")}</span> }),
     helper.accessor("models", { header: t("tenant.models_98fd0c"), cell: info => <span className="text-xs"><Message id="tenant.models_4678e8" values={{ count: info.getValue().length }} /></span> }),
+    helper.accessor("cliUsage", { header: t("tenant.cliQuota"), cell: info => <CliQuota usage={info.getValue()} now={now} /> }),
     helper.display({ id: "details", header: t("tenant.details"), cell: info => <Button variant="outline" size="sm" onClick={() => onSelect(info.row.original)}><Message id="tenant.viewModels" /></Button> }),
-  ]), [onSelect, t]);
+  ]), [onSelect, now, t]);
   const table = useTable({ features, columns, data: agent.services.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE), getRowId: service => service.serviceId });
   return <div className="grid min-w-0 gap-2">
     <DataTable table={table} caption={t("tenant.aiServicesOn", { agentId: agent.agentId })} />
+    {agent.services.some(service => service.cliUsage) ? <p className="text-xs text-muted-foreground">{t("tenant.cliQuotaNote")}</p> : null}
     {agent.services.length > PAGE_SIZE ? <ListPager page={currentPage} count={agent.services.length} onChange={setPage} label={t("tenant.servicePaginationFor", { agentId: agent.agentId })} /> : null}
+  </div>;
+}
+
+const WINDOW_NAMES: Record<string, Parameters<Translator>[0]> = {
+  five_hour: "tenant.cliQuotaFiveHour", seven_day: "tenant.cliQuotaSevenDay",
+  seven_day_sonnet: "tenant.cliQuotaSevenDaySonnet", seven_day_opus: "tenant.cliQuotaSevenDayOpus",
+  primary: "tenant.cliQuotaPrimary", secondary: "tenant.cliQuotaSecondary",
+};
+const STATUS_TEXT: Record<string, Parameters<Translator>[0]> = {
+  pending: "tenant.cliQuotaPending", unauthorized: "tenant.cliQuotaUnauthorized",
+  unavailable: "tenant.cliQuotaUnavailable", error: "tenant.cliQuotaError",
+};
+
+/** CliQuota shows the subscription quota of the CLI a service runs: used and
+ * remaining percentages per window, when each resets, and when it was checked.
+ * A service without a reported quota shows a dash, never a zero.
+ * CliQuota 展示服务所运行 CLI 的订阅额度：每个窗口的已用与剩余比例、重置时间与查询时间。
+ * 没有上报额度的服务显示破折号，绝不显示零。 */
+function CliQuota({ usage, now }: { usage: CliUsage | null; now: number }) {
+  const { locale, t } = useI18n();
+  if (!usage) return <span className="text-xs text-muted-foreground">—</span>;
+  if (usage.status !== "ready" || usage.windows.length === 0) {
+    const key = STATUS_TEXT[usage.status] ?? "tenant.cliQuotaError";
+    return <span className="text-xs text-muted-foreground">{t(key)}</span>;
+  }
+  const percent = (value: number) => `${value.toLocaleString(locale, { maximumFractionDigits: 1 })}%`;
+  const render = (window: CliUsageWindow) => {
+    const expired = window.resetsAt !== null && Date.parse(window.resetsAt) <= now;
+    const key = WINDOW_NAMES[window.name];
+    return <li key={`${window.bucket}/${window.name}`} className="grid gap-0.5">
+      <span className="font-medium">{key ? t(key) : window.name}{window.bucket ? ` · ${window.bucket}` : ""}</span>
+      {window.durationMinutes > 0 ? <span className="text-muted-foreground">{t("tenant.cliQuotaMinutesWindow", { minutes: window.durationMinutes.toLocaleString(locale) })}</span> : null}
+      {expired ? <span className="text-muted-foreground">{t("tenant.cliQuotaWaitingNextCheck")}</span> :
+        <span>{t("tenant.cliQuotaUsedRemaining", { used: percent(window.usedPercent), remaining: percent(Math.max(0, 100 - window.usedPercent)) })}</span>}
+      {window.resetsAt ? <span className="text-muted-foreground">{t("tenant.cliQuotaResets", { time: formatDateTime(window.resetsAt, undefined, locale) })}</span> : null}
+    </li>;
+  };
+  return <div className="grid min-w-40 gap-2 whitespace-normal text-xs">
+    <ul className="grid gap-2">{usage.windows.map(render)}</ul>
+    {usage.checkedAt ? <span className="text-muted-foreground">{t("tenant.cliQuotaChecked", { time: formatDateTime(usage.checkedAt, undefined, locale) })}</span> : null}
   </div>;
 }
 

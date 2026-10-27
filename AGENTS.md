@@ -22,6 +22,7 @@
 | `api/proto/` | 三边共享的 gRPC 契约，已生成 |
 | `common/runtime/` | 推理后端抽象：能力探测、配额、流式转换。Agent 与 Gateway 共用；`hosted/`（OpenAI 兼容的托管供应商）与 `anthropic/`（Claude 官方 API 与 Anthropic 兼容端点，经 Chat 适配）只由 Agent 注册 |
 | `common/tunnelwire/` | `common/runtime` 类型与隧道 proto 之间的双向编解码，隧道两端共用；结果标签的六值约定也在这里 |
+| `common/cliusagestatus/` | 本机 Codex / Claude Code CLI 订阅额度的不含凭据形状（百分比、窗口名、时间戳）。Agent 读取、隧道上报，Gateway 经 `nodeview` 允许列表输出给控制面与租户模型页 |
 | `common/metrics/` | `runtime.Metrics` 的实现与 Prometheus 文本导出，Agent/Gateway 使用同一注册表实现（各进程独立实例），ControlPlane 尚未接入；`metricstest/` 是各服务测试用的内存收集器 |
 | `common/apikey/` | API Key 的格式、哈希与展示形式。控制面铸造、Gateway 校验，两边必须算出同一个哈希，因此它是契约而非任一方的内部实现 |
 | `common/quota/` | 租户限制值及其含义。控制面存储与下发、Gateway 执行，两边必须按同一套规则解释同一份数据，因此同样是契约 |

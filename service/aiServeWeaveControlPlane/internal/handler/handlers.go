@@ -434,6 +434,30 @@ func revokeAPIKey(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// deleteAPIKey permanently removes one of the caller's tenant's keys.
+//
+// deleteAPIKey 永久删除调用方所属租户的一个 key。
+func deleteAPIKey(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		keyID := pathvar.Vars(r)["id"]
+		if keyID == "" {
+			writeError(w, http.StatusBadRequest, "a key id is required")
+			return
+		}
+
+		if err := ctx.Logic.DeleteAPIKey(r.Context(), actor, keyID); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
 // -----------------------------------------------------------------------
 // Audit
 // -----------------------------------------------------------------------

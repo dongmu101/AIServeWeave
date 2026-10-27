@@ -77,6 +77,7 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
   const [draftQuery, setDraftQuery] = React.useState(filters.q);
   const debouncedQuery = useDebouncedValue(draftQuery);
   const [target, setTarget] = React.useState<ApiKeySummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<ApiKeySummary | null>(null);
 
   React.useEffect(() => {
     if (debouncedQuery !== filters.q) {
@@ -144,17 +145,28 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
           header: t("tenant.actions"),
           cell: (info) => {
             const key = info.row.original;
-            const state = apiKeyState(key, new Date(), locale);
-            if (state.kind === "revoked" || !canRevokeApiKey(role, userId, key)) {
+            if (!canRevokeApiKey(role, userId, key)) {
               return null;
             }
+            const state = apiKeyState(key, new Date(), locale);
             return (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setTarget(key)}
-              >
-                <Message id="tenant.revoke" /></Button>
+              <div className="flex gap-2">
+                {state.kind === "revoked" ? null : (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setTarget(key)}
+                  >
+                    <Message id="tenant.revoke" /></Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive"
+                  onClick={() => setDeleteTarget(key)}
+                >
+                  <Message id="common.delete" /></Button>
+              </div>
             );
           },
         }),
@@ -194,6 +206,29 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
     //
     // 列表是重新读取而不是就地打补丁：一次只被本 Console 假定了结果的写入，就是一次
     // 未经确认的写入，而作数的是服务端那一份。
+    keys.reload();
+  }
+
+  async function remove(key: ApiKeySummary) {
+    try {
+      await run({
+        method: "DELETE",
+        path: `/admin/v1/apikeys/${encodeURIComponent(key.id)}/permanent`,
+        parse: parseNoContent,
+      });
+    } catch (failure) {
+      // As with revocation, 404 covers "already deleted", "another tenant's
+      // key" and "never existed" alike, so re-read and say only what is known.
+      //
+      // 与吊销相同，404 同时涵盖「已被删除」「别的租户的 key」与「从不存在」，因此重新
+      // 读取，并只说确实知道的事。
+      if (failure instanceof ApiError && failure.kind === "not_found") {
+        keys.reload();
+        throw new MessageError("tenant.thisKeyCanNoLongerBeDeleted");
+      }
+      throw failure;
+    }
+    toast.success(<Message id={"tenant.deletedKey"} values={{ name: key.name }} />);
     keys.reload();
   }
 
@@ -285,6 +320,34 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
         onConfirm={async () => {
           if (target) {
             await revoke(target);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+          }
+        }}
+        title={t("tenant.deleteApiKey")}
+        destructive
+        confirmLabel={t("common.delete")}
+        description={
+          deleteTarget ? (
+            <span className="grid gap-2">
+              <span><Message id="tenant.deleteKeyIrreversible" values={{ strong: <strong>{deleteTarget.name}</strong>, code: <code className="font-mono">{deleteTarget.display}</code> }} /></span>
+              <span className="text-xs">
+                <Message id="tenant.revocationIsWrittenToTheControlPlaneImmediately" /></span>
+            </span>
+          ) : (
+            ""
+          )
+        }
+        onConfirm={async () => {
+          if (deleteTarget) {
+            await remove(deleteTarget);
           }
         }}
       />

@@ -40,6 +40,7 @@ const tenant = {
   "tenant.aiServicesModels": "Services et modèles d’IA",
   "tenant.workflows": "Workflows",
   "tenant.apiDocumentation": "Documentation API",
+  "tenant.workflowTemplates": "Modèles",
   "tenant.runs": "Exécutions",
   "tenant.runHistory": "Historique des exécutions",
   "tenant.settings": "Paramètres",
@@ -530,6 +531,27 @@ const tenant = {
   "tenant.inconsistentTemplates": {
     "one": "{count} modèle divergent",
     "other": "{count} modèles divergents"
-  }
+  },
+  "tenant.deleteApiKey": "Supprimer la clé API",
+  "tenant.deleteKeyIrreversible": "{strong} ({code}) sera définitivement supprimée. Cette action est irréversible ; la clé est retirée de la liste et ne peut pas être restaurée.",
+  "tenant.deletedKey": "{name} supprimée",
+  "tenant.thisKeyCanNoLongerBeDeleted": "Cette clé n’existe plus. Quelqu’un d’autre l’a peut-être supprimée. La liste a été actualisée.",
+  "tenant.cliQuota": "Quota d’abonnement",
+  "tenant.cliQuotaNote": "Quota d’abonnement CLI partagé, indépendant du quota du locataire et de la consommation de tokens par requête. Le reste est calculé à partir du pourcentage utilisé signalé par l’amont et n’est pas un nombre de tokens.",
+  "tenant.cliQuotaFiveHour": "Fenêtre de 5 heures",
+  "tenant.cliQuotaSevenDay": "Fenêtre de 7 jours",
+  "tenant.cliQuotaSevenDaySonnet": "Fenêtre Sonnet de 7 jours",
+  "tenant.cliQuotaSevenDayOpus": "Fenêtre Opus de 7 jours",
+  "tenant.cliQuotaPrimary": "Fenêtre principale",
+  "tenant.cliQuotaSecondary": "Fenêtre secondaire",
+  "tenant.cliQuotaUsedRemaining": "Utilisé {used} · Restant {remaining}",
+  "tenant.cliQuotaResets": "Réinitialisation : {time}",
+  "tenant.cliQuotaChecked": "Vérifié : {time}",
+  "tenant.cliQuotaWaitingNextCheck": "Heure de réinitialisation passée ; en attente de la prochaine vérification",
+  "tenant.cliQuotaPending": "En attente",
+  "tenant.cliQuotaUnauthorized": "Compte d’abonnement non connecté",
+  "tenant.cliQuotaUnavailable": "Le CLI ne fournit pas de quota",
+  "tenant.cliQuotaError": "Échec de la requête de quota",
+  "tenant.cliQuotaMinutesWindow": "Durée de la fenêtre : {minutes} min"
 } as const;
 export default tenant;

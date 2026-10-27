@@ -417,6 +417,7 @@ message AgentControl {
     ModelPullReport model_pull = 6;     // STATUS.md P2 model distribution subtask 2
     ComfyUIManagedReport comfyui_managed = 7; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
     AgentUpgradeReport agent_upgrade = 8; // STATUS.md P2 Agent auto-upgrade subtask 1
+    CLIUsageReport cli_usage = 9;       // credential-free CLI subscription quota snapshot
   }
 }
 
@@ -789,6 +790,36 @@ enum AgentUpgradeFailureReason {
   AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED = 3;    // fetching or storing the binary failed; raw error text never leaves the Agent
   AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED = 4; // downloaded bytes' SHA256 does not match the signed manifest entry
   AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED = 5;        // syscall.Exec itself failed; the old process is still running
+}
+
+// CLIUsageReport is the Agent's credential-free view of the subscription
+// quota of the locally declared Codex / Claude Code CLIs. It carries only the
+// percentages and timestamps the upstream reported: no account name, token or
+// credential, and no token-count estimate.
+//
+// CLIUsageReport 是 Agent 对本机已声明的 Codex / Claude Code CLI 订阅额度的
+// 不含凭据视图，只携带上游报告的百分比与时间戳：不含账户名、token 或任何凭据，
+// 也不含 token 数量推算值。
+message CLIUsageReport {
+  repeated CLIUsageAccount accounts = 1;
+}
+
+// CLIUsageAccount is one CLI's quota. kind is the runtime kind ("codex" or
+// "claude"); status is one of pending, ready, unauthorized, unavailable, error.
+message CLIUsageAccount {
+  string kind = 1;
+  string status = 2;
+  repeated CLIUsageWindow windows = 3;
+  int64 checked_unix_ms = 4; // 0 until the first query attempt
+}
+
+// CLIUsageWindow is one upstream-reported quota window.
+message CLIUsageWindow {
+  string name = 1;
+  string bucket = 2;
+  double used_percent = 3;
+  int64 duration_minutes = 4; // 0 means the upstream did not report it
+  int64 resets_unix_ms = 5;
 }
 
 // ComfyUIManagedCustomNode is one custom node this Agent found installed

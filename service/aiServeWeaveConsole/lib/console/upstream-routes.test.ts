@@ -54,6 +54,12 @@ test("the allowlist admits exactly the calls the Console makes", () => {
       want: "/admin/v1/apikeys/key-123",
     },
     {
+      name: "delete key",
+      method: "DELETE",
+      path: "/admin/v1/apikeys/key-123/permanent",
+      want: "/admin/v1/apikeys/key-123/permanent",
+    },
+    {
       name: "set limits",
       method: "PUT",
       path: "/admin/v1/tenants/limits",
@@ -77,6 +83,8 @@ test("the allowlist admits exactly the calls the Console makes", () => {
     { name: "unknown resource", method: "GET", path: "/admin/v1/nodes", want: null },
     { name: "extra segment", method: "GET", path: "/admin/v1/users/u-1", want: null },
     { name: "empty key id", method: "DELETE", path: "/admin/v1/apikeys/", want: null },
+    { name: "delete key with POST", method: "POST", path: "/admin/v1/apikeys/key-123/permanent", want: null },
+    { name: "traversal as deleted key id", method: "DELETE", path: "/admin/v1/apikeys/../permanent", want: null },
     { name: "traversal as key id", method: "DELETE", path: "/admin/v1/apikeys/..", want: null },
     {
       name: "encoded traversal as key id",

@@ -100,6 +100,11 @@ const ROUTES: readonly UpstreamRoute[] = [
     query: [],
   },
   {
+    method: "DELETE",
+    segments: [literal("admin"), literal("v1"), literal("apikeys"), param(), literal("permanent")],
+    query: [],
+  },
+  {
     method: "GET",
     segments: [
       literal("admin"),

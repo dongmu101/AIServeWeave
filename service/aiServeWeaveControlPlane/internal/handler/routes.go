@@ -138,6 +138,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, listAPIKeys(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, createAPIKey(ctx)))},
 		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys/:id", requireSession(ctx, revokeAPIKey(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id/permanent", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys/:id/permanent", requireSession(ctx, deleteAPIKey(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/current", requireSession(ctx, currentTenant(ctx)))},
 		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/limits", requireSession(ctx, setTenantLimits(ctx)))},
 		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/audit", requireSession(ctx, listAudit(ctx)))},

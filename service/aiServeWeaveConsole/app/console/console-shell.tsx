@@ -31,6 +31,9 @@ import { signOut } from "@/lib/console/api-client";
 import { type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
 
+type NavLeaf = { href: string; label: string };
+type NavEntry = NavLeaf | { label: string; children: readonly NavLeaf[] };
+
 /**
  * NAV_ITEMS is the tenant navigation: the views every signed-in role reaches,
  * each with a real Admin API behind it. A menu entry for a page with no data
@@ -41,7 +44,7 @@ import type { SessionUser } from "@/lib/console/session-payload";
  * 没有数据来源的页面挂菜单项，等于许下后端兑现不了的承诺，这正是指标不在其中的
  * 原因——它没有 Admin API，那个 API 背后也没有存储。
  */
-function navigationItems(t: Translator): readonly { href: string; label: string }[] { return [
+function navigationItems(t: Translator): readonly NavEntry[] { return [
   { href: "/console", label: t("tenant.overview") },
   { href: "/console/users", label: t("tenant.users") },
   { href: "/console/keys", label: "API Key" },
@@ -50,10 +53,15 @@ function navigationItems(t: Translator): readonly { href: string; label: string 
   { href: "/console/quota", label: t("tenant.quotas") },
   { href: "/console/usage", label: t("tenant.usage") },
   { href: "/console/models", label: t("tenant.aiServicesModels") },
-  { href: "/console/workflows", label: t("tenant.workflows") },
+  {
+    label: t("tenant.workflows"),
+    children: [
+      { href: "/console/workflows", label: t("tenant.workflowTemplates") },
+      { href: "/console/jobs", label: t("tenant.runs") },
+      { href: "/console/jobs/history", label: t("tenant.runHistory") },
+    ],
+  },
   { href: "/console/docs", label: t("tenant.apiDocumentation") },
-  { href: "/console/jobs", label: t("tenant.runs") },
-  { href: "/console/jobs/history", label: t("tenant.runHistory") },
   { href: "/console/settings", label: t("tenant.settings") },
   { href: "/console/account", label: t("tenant.accountSecurity") },
 ]; }
@@ -82,10 +90,11 @@ export function ConsoleShell({
 }) {
   const { t } = useI18n();
   const NAV_ITEMS = navigationItems(t);
+  const LEAVES = NAV_ITEMS.flatMap((entry) => ("children" in entry ? entry.children : [entry]));
   const router = useRouter();
   const pathname = usePathname();
   const [leaving, setLeaving] = React.useState(false);
-  const activeItem = NAV_ITEMS.findLast(
+  const activeItem = LEAVES.findLast(
     (item) => pathname === item.href || pathname.startsWith(`${item.href}/`)
   );
   const displayName = user.name || user.email;
@@ -120,6 +129,32 @@ export function ConsoleShell({
           <nav aria-label={t("tenant.consoleNavigation")} className="flex min-w-0 flex-1 items-center justify-end sm:justify-start">
             <div className="hidden items-center gap-0.5 xl:flex">
               {NAV_ITEMS.map((item) => {
+                if ("children" in item) {
+                  const groupActive = item.children.some((child) => child.href === activeItem?.href);
+                  return (
+                    <DropdownMenu key={item.label}>
+                      <DropdownMenuTrigger
+                        render={<Button variant={groupActive ? "secondary" : "ghost"} size="sm" className="px-2" />}
+                      >
+                        {item.label}
+                        <ChevronDownIcon className="size-3 text-muted-foreground" />
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent className="w-44" aria-label={item.label}>
+                        {item.children.map((child) => (
+                          <DropdownMenuItem
+                            key={child.href}
+                            render={<Link href={child.href} />}
+                            aria-current={child.href === activeItem?.href ? "page" : undefined}
+                            className="min-h-9"
+                          >
+                            {child.label}
+                            {child.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
+                          </DropdownMenuItem>
+                        ))}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  );
+                }
                 const active = item.href === activeItem?.href;
                 return (
                   <Link
@@ -143,17 +178,20 @@ export function ConsoleShell({
                 <ChevronDownIcon className="size-3 text-muted-foreground" />
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56" aria-label={t("tenant.consoleNavigation")}>
-                {NAV_ITEMS.map((item) => (
-                  <DropdownMenuItem
-                    key={item.href}
-                    render={<Link href={item.href} />}
-                    aria-current={item.href === activeItem?.href ? "page" : undefined}
-                    className="min-h-9"
-                  >
-                    {item.label}
-                    {item.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
-                  </DropdownMenuItem>
-                ))}
+                {NAV_ITEMS.map((entry) => {
+                  const nested = "children" in entry;
+                  return (nested ? entry.children : [entry]).map((item) => (
+                    <DropdownMenuItem
+                      key={item.href}
+                      render={<Link href={item.href} />}
+                      aria-current={item.href === activeItem?.href ? "page" : undefined}
+                      className={nested ? "min-h-9 pl-6" : "min-h-9"}
+                    >
+                      {nested ? `${entry.label} / ${item.label}` : item.label}
+                      {item.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
+                    </DropdownMenuItem>
+                  ));
+                })}
               </DropdownMenuContent>
             </DropdownMenu>
           </nav>
