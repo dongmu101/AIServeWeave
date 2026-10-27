@@ -392,6 +392,25 @@ const operator = {
   "operator.updatedRule": "Règle {name} mise à jour",
   "operator.edit_feaeda": "Modifier {name}",
   "operator.enable": "{content} Activer",
-  "operator.acknowledged_4e0696": "{value} acquittée"
+  "operator.acknowledged_4e0696": "{value} acquittée",
+  "operator.modelAccess": "Accès aux modèles",
+  "operator.modelAccessDescription": "Contrôle, par alias de route de modèle, les modèles que les locataires peuvent voir et appeler. La liste de la plateforme est le plafond et une liste de locataire ne peut que la restreindre ; une liste vide signifie aucune restriction à ce niveau. Les modifications s’appliquent à toutes les Gateways dès l’enregistrement.",
+  "operator.platformModelAccess": "Modèles disponibles sur toute la plateforme",
+  "operator.tenantModelAccess": "Modèles disponibles par locataire",
+  "operator.searchTenants": "Rechercher un locataire par ID ou nom",
+  "operator.loadingTenants": "Chargement des locataires…",
+  "operator.noTenants": "Aucun locataire ne correspond.",
+  "operator.selectedTenant": "Locataire : {name} ({id})",
+  "operator.selectATenantFirst": "Sélectionnez d’abord un locataire à gauche.",
+  "operator.unrestricted": "Aucune restriction",
+  "operator.restrictedCount": "Limité à {count} modèle(s)",
+  "operator.lastUpdated": "Dernière modification par {actor} le {time}",
+  "operator.modelListHint": "Un alias de modèle par ligne ; laisser vide pour aucune restriction.",
+  "operator.knownAliases": "Alias de route publiés (cliquer pour ajouter)",
+  "operator.noPublishedAliases": "Aucun alias de route n’est publié ; les ID de modèles signalés par les nœuds peuvent être saisis directement.",
+  "operator.saveModelAccess": "Enregistrer",
+  "operator.discardModelAccessChanges": "Annuler les modifications",
+  "operator.modelAccessSaved": "Accès aux modèles enregistré",
+  "operator.clearModelAccessConfirm": "Enregistrer une liste vide supprime la restriction à ce niveau. Continuer ?"
 } as const;
 export default operator;

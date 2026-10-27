@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/apikey"
+	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -221,6 +222,16 @@ type Verification struct {
 	// Gateway 缓存的是整个校验结果，因此一次限制变更的生效窗口，与一次吊销的相同
 	// ——见 README「吊销的生效路径」。
 	Limits quota.Limits
+	// Models is the model access that applies to the tenant: the platform
+	// list and the tenant's own. It rides the verification for the reason
+	// Limits does, and SetModelAccess drops every cached verification so a
+	// change does not wait for them to expire. It is nil when neither level
+	// restricts anything, which keeps Verification comparable.
+	//
+	// Models 是作用于该租户的模型授权：平台列表与租户自己的列表。它随校验结果一起
+	// 下发，理由与 Limits 相同；SetModelAccess 会丢弃全部已缓存的校验结果，使变更
+	// 不必等它们过期。两级都不做限制时它为 nil，这让 Verification 保持可比较。
+	Models *modelaccess.Policy
 }
 
 // VerifyKeyHash resolves a key hash to the tenant it authenticates, or
@@ -276,7 +287,15 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	if tenant.Status != model.StatusActive {
 		return Verification{}, ErrNotFound
 	}
-	return Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits()}, nil
+	policy, err := s.modelPolicy(ctx, tenant.ID)
+	if err != nil {
+		return Verification{}, err
+	}
+	verification := Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits()}
+	if !policy.Unrestricted() {
+		verification.Models = &policy
+	}
+	return verification, nil
 }
 
 // SetTenantLimits writes a tenant's quota. Only an owner or admin may call it:

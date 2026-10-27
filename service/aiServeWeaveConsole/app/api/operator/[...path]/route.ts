@@ -1,5 +1,6 @@
 import { apiDocBodyLimit } from "@/lib/console/api-docs";
 import { MAX_ROUTE_DOCUMENT_BYTES, routeBodyLimit } from "@/lib/console/model-routes";
+import { modelAccessBodyLimit } from "@/lib/console/model-access";
 import { isTrustedWrite } from "@/lib/console/request-origin";
 import { MAX_CONTENT_BYTES, templateBodyLimit } from "@/lib/console/workflow-templates";
 import { resolveOperatorUpstream } from "@/lib/console/upstream-routes";
@@ -103,7 +104,7 @@ async function forward(
 
   let body: string | undefined;
   if (request.method !== "GET") {
-    const raw = await readBoundedText(request, routeBodyLimit(upstream.path) ?? templateBodyLimit(upstream.path) ?? apiDocBodyLimit(upstream.path));
+    const raw = await readBoundedText(request, routeBodyLimit(upstream.path) ?? modelAccessBodyLimit(upstream.path) ?? templateBodyLimit(upstream.path) ?? apiDocBodyLimit(upstream.path));
     if (raw === null) {
       return errorResponse(413, "body_too_large");
     }

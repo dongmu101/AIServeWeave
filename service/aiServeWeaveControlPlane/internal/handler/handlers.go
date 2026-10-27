@@ -1663,7 +1663,7 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 
 		cached, ok, generation := ctx.Cache.Get(r.Context(), req.Hash)
 		if ok {
-			writeJSON(w, http.StatusOK, types.VerifyResponse{TenantID: cached.TenantID, KeyID: cached.KeyID, Limits: cached.Limits})
+			writeJSON(w, http.StatusOK, renderVerification(cached))
 			return
 		}
 
@@ -1673,12 +1673,21 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		ctx.Cache.Put(r.Context(), req.Hash, verification, generation)
-		writeJSON(w, http.StatusOK, types.VerifyResponse{
-			TenantID: verification.TenantID,
-			KeyID:    verification.KeyID,
-			Limits:   verification.Limits,
-		})
+		writeJSON(w, http.StatusOK, renderVerification(verification))
 	}
+}
+
+// renderVerification writes a verification in the Gateway's wire form, where
+// an unrestricted model policy is two absent lists rather than a null.
+//
+// renderVerification 把一次校验结果写成 Gateway 的线上形式：不受限制的模型授权表现
+// 为两份缺席的列表，而不是 null。
+func renderVerification(verification logic.Verification) types.VerifyResponse {
+	out := types.VerifyResponse{TenantID: verification.TenantID, KeyID: verification.KeyID, Limits: verification.Limits}
+	if verification.Models != nil {
+		out.Models = *verification.Models
+	}
+	return out
 }
 
 // -----------------------------------------------------------------------

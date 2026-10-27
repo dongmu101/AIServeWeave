@@ -71,6 +71,31 @@ func (a *Aggregator) TenantModels(ctx context.Context) (TenantModelCatalog, erro
 	return out, nil
 }
 
+// Filter keeps only the models visible reports true for, and drops a service
+// left with none: a tenant that may not use anything a service offers has no
+// reason to learn that service exists.
+//
+// Filter 只保留 visible 返回 true 的模型，并去掉过滤后一个模型都不剩的服务：一个
+// 不能使用某服务任何模型的租户，没有理由得知这个服务的存在。
+func (c TenantModelCatalog) Filter(visible func(string) bool) TenantModelCatalog {
+	out := c
+	out.Services = make([]TenantModelService, 0, len(c.Services))
+	for _, service := range c.Services {
+		var models []nodeview.Model
+		for _, model := range service.Models {
+			if visible(model.ID) {
+				models = append(models, model)
+			}
+		}
+		if len(models) == 0 {
+			continue
+		}
+		service.Models = models
+		out.Services = append(out.Services, service)
+	}
+	return out
+}
+
 // cliUsageFor returns the quota reported for kind, or nil when the Agent
 // reported none. Services of the same kind on one node share one CLI account,
 // so they share one entry; the copy keeps a response from aliasing the snapshot.

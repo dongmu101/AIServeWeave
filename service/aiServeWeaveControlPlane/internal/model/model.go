@@ -359,6 +359,15 @@ const (
 	ActionAPIDocUpdate = "api_doc.update"
 	ActionAPIDocReset  = "api_doc.reset"
 	ActionAPIDocDelete = "api_doc.delete"
+	// ActionModelAccessUpdate records an operator replacing a
+	// common/modelaccess list. Its TenantID is PlatformScope like the other
+	// platform actions, and its target is the scope that changed: either
+	// PlatformScope or the tenant id whose list was set.
+	//
+	// ActionModelAccessUpdate 记录一次运维替换 common/modelaccess 列表的操作。它的
+	// TenantID 与其他平台动作一样是 PlatformScope，目标是发生变化的 scope：要么是
+	// PlatformScope，要么是被设置列表的那个租户 id。
+	ActionModelAccessUpdate = "model_access.update"
 )
 
 // AuditLog is one administrative action, recorded for the README's
@@ -399,3 +408,26 @@ type AuditLog struct {
 //
 // TableName 钉死表名，理由见 Tenant.TableName。
 func (AuditLog) TableName() string { return "audit_logs" }
+
+// ModelAccess is one stored common/modelaccess list. Scope is PlatformScope
+// for the deployment-wide list, or a tenant id for that tenant's own list;
+// the two never collide for the reason PlatformScope gives. A scope with no
+// row is unrestricted at that level, so clearing a list deletes its row
+// rather than storing an empty array — there is exactly one way to say "no
+// restriction".
+//
+// ModelAccess 是一份已存储的 common/modelaccess 列表。Scope 为 PlatformScope 时是
+// 全部署的列表，为租户 id 时是该租户自己的列表；两者不会相撞，理由见 PlatformScope。
+// 没有行的 scope 在这一级不受限制，因此清空一份列表是删除它的行，而不是存一个空数组
+// ——「不限制」只有一种写法。
+type ModelAccess struct {
+	Scope      string    `gorm:"primaryKey;size:64"`
+	ModelsJSON string    `gorm:"column:models_json;not null"`
+	UpdatedBy  string    `gorm:"size:32;not null"`
+	UpdatedAt  time.Time `gorm:"not null"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (ModelAccess) TableName() string { return "model_access" }

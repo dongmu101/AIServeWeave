@@ -125,7 +125,13 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	} else {
 		var candidate scheduler.Candidate
 		stream, candidate, err = h.sched.MessagesStart(r.Context(), native)
-		if errors.Is(err, scheduler.ErrNoCapableNode) {
+		// A model the caller may not use falls through to dispatchError's
+		// not-found, like any other front door; only a missing native node is
+		// an outage.
+		//
+		// 调用方不能使用的模型与其他前门一样落到 dispatchError 的 not-found；只有缺少
+		// 原生节点才算故障。
+		if errors.Is(err, scheduler.ErrNoCapableNode) && !errors.Is(err, scheduler.ErrModelNotAllowed) {
 			fail(503, "api_error", "node_unavailable", "native Messages node unavailable")
 			return
 		}

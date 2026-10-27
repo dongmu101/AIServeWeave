@@ -389,6 +389,25 @@ const operator = {
   "operator.updatedRule": "已更新規則 {name}",
   "operator.edit_feaeda": "編輯 {name}",
   "operator.enable": "{content} 啟用",
-  "operator.acknowledged_4e0696": "已確認處理 {value}"
+  "operator.acknowledged_4e0696": "已確認處理 {value}",
+  "operator.modelAccess": "模型授權",
+  "operator.modelAccessDescription": "控制商戶能看到和呼叫哪些模型（依模型路由別名）。全平台清單是上限，商戶清單只能在其範圍內收窄；任一清單為空表示該層不限制。儲存後立即對所有 Gateway 生效。",
+  "operator.platformModelAccess": "全平台可用模型",
+  "operator.tenantModelAccess": "依商戶設定可用模型",
+  "operator.searchTenants": "依商戶 ID 或名稱搜尋",
+  "operator.loadingTenants": "正在載入商戶…",
+  "operator.noTenants": "沒有符合的商戶。",
+  "operator.selectedTenant": "商戶：{name}（{id}）",
+  "operator.selectATenantFirst": "請先在左側選擇一個商戶。",
+  "operator.unrestricted": "不限制",
+  "operator.restrictedCount": "限制為 {count} 個模型",
+  "operator.lastUpdated": "最後由 {actor} 於 {time} 修改",
+  "operator.modelListHint": "每行一個模型別名；留空表示不限制。",
+  "operator.knownAliases": "已發布的路由別名（點擊加入）",
+  "operator.noPublishedAliases": "目前沒有已發布的路由別名，可以直接填寫節點回報的模型 ID。",
+  "operator.saveModelAccess": "儲存",
+  "operator.discardModelAccessChanges": "放棄修改",
+  "operator.modelAccessSaved": "模型授權已儲存",
+  "operator.clearModelAccessConfirm": "儲存空清單會解除這一層的限制，確定繼續嗎？"
 } as const;
 export default operator;

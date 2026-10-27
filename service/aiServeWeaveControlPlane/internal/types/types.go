@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/quota"
 )
 
@@ -291,10 +292,48 @@ type VerifyRequest struct {
 //
 // Limits 是唯一配得上位置的新增项：配额由 Gateway 执行，把它放在这里，意味着执行不必
 // 自己付出一次往返。它与身份共用缓存生命期，因此一次限制变更的落地窗口与一次吊销相同。
+//
+// Models follows the same reasoning: the Gateway decides per request whether
+// a model may be listed or called, so the lists it decides by travel here.
+//
+// Models 出于同样的理由：Gateway 逐个请求判断一个模型能否被列出或调用，因此它据以
+// 判断的列表也随这里下发。
 type VerifyResponse struct {
-	TenantID string       `json:"tenant_id"`
-	KeyID    string       `json:"key_id"`
-	Limits   quota.Limits `json:"limits"`
+	TenantID string             `json:"tenant_id"`
+	KeyID    string             `json:"key_id"`
+	Limits   quota.Limits       `json:"limits"`
+	Models   modelaccess.Policy `json:"models"`
+}
+
+// TenantListResponse is one page of tenants for a platform operator.
+//
+// TenantListResponse 是给平台运维的一页租户。
+type TenantListResponse struct {
+	Items      []Tenant `json:"items"`
+	NextCursor string   `json:"next_cursor,omitempty"`
+}
+
+// ModelAccessResponse is one common/modelaccess list. Scope is "platform" or
+// a tenant id; an empty Models means that level is unrestricted, and the
+// updated_* fields are absent for a list nobody has set.
+//
+// ModelAccessResponse 是一份 common/modelaccess 列表。Scope 为 "platform" 或某个
+// 租户 id；Models 为空表示这一级不受限制；从未被设置过的列表不带 updated_* 字段。
+type ModelAccessResponse struct {
+	Scope     string     `json:"scope"`
+	Models    []string   `json:"models"`
+	UpdatedBy string     `json:"updated_by,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// SetModelAccessRequest replaces one list wholesale. An empty array removes
+// the restriction at that level; there is no partial update, for the reason
+// SetLimitsRequest gives.
+//
+// SetModelAccessRequest 整体替换一份列表。空数组表示解除这一级的限制；不支持部分
+// 更新，理由与 SetLimitsRequest 相同。
+type SetModelAccessRequest struct {
+	Models []string `json:"models"`
 }
 
 // RevocationGenerationResponse is one notification cursor or heartbeat.

@@ -20,6 +20,9 @@ func (s *Scheduler) MessagesCandidates(model string) []Candidate {
 // Messages 仅向所选节点分派一次。工具续接使用它，因为续接必须回到持有其 CLI 的节点；
 // 新会话改走 MessagesStart。
 func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
+	if !modelAllowed(ctx, req.Model) {
+		return nil, ErrModelNotAllowed
+	}
 	req.Model = c.Model
 	return s.server.Runtime(c.NodeID, c.RuntimeID).Messages(ctx, req)
 }
@@ -38,6 +41,9 @@ func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.Messa
 // 按隧道槽位排序，看不到 Agent 的 CLI 会话上限，正是这层换节点避免了一个节点已满、
 // 另一个节点空闲时仍返回 429。
 func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], Candidate, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return nil, Candidate{}, ErrModelNotAllowed
+	}
 	candidates := s.MessagesCandidates(req.Model)
 	s.metrics.Selection(runtime.CapabilityMessages, len(candidates))
 	if len(candidates) == 0 {

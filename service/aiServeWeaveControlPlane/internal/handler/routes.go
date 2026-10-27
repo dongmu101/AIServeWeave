@@ -6,6 +6,7 @@ import (
 
 	"github.com/zeromicro/go-zero/rest"
 
+	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/modelroute"
 	"AIServeWeave/common/workflowtemplate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/apidocs"
@@ -56,6 +57,19 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodPost, Path: "/operator/v1/routes/validate", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/validate", requirePlatformSession(ctx, validateRoutes(ctx)))},
 		{Method: http.MethodPost, Path: "/operator/v1/routes/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/publish", requirePlatformSession(ctx, publishRoutes(ctx)))},
 	}, rest.WithMaxBytes(modelroute.MaxDocumentBytes))
+	// Model access (which aliases tenants may see and call) is platform-only:
+	// a tenant able to edit its own list could grant itself any model. The
+	// write sits in its own group for the bigger body, like route publishing.
+	//
+	// 模型授权（租户可以看到并调用哪些别名）只对平台开放：能编辑自己列表的租户，可以
+	// 给自己开放任何模型。写入与路由发布一样，为更大的请求体单独成组。
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/operator/v1/tenants", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/tenants", requirePlatformSession(ctx, listTenants(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/model-access/:scope", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/model-access/:scope", requirePlatformSession(ctx, getModelAccess(ctx)))},
+	})
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodPut, Path: "/operator/v1/model-access/:scope", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/model-access/:scope", requirePlatformSession(ctx, setModelAccess(ctx)))},
+	}, rest.WithMaxBytes(modelaccess.MaxDocumentBytes))
 
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates", requirePlatformSession(ctx, listWorkflowTemplates(ctx)))},

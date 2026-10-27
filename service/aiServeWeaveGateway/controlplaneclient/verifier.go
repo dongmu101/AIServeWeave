@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/apikey"
+	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
@@ -351,9 +352,10 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 	switch resp.StatusCode {
 	case http.StatusOK:
 		var decoded struct {
-			TenantID string       `json:"tenant_id"`
-			KeyID    string       `json:"key_id"`
-			Limits   quota.Limits `json:"limits"`
+			TenantID string             `json:"tenant_id"`
+			KeyID    string             `json:"key_id"`
+			Limits   quota.Limits       `json:"limits"`
+			Models   modelaccess.Policy `json:"models"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 			return httpapi.Identity{}, fmt.Errorf("controlplaneclient: decoding the verification: %w", err)
@@ -366,7 +368,11 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			// 只差一次 join。
 			return httpapi.Identity{}, errors.New("controlplaneclient: the control plane returned no tenant")
 		}
-		return httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, Limits: decoded.Limits}, nil
+		identity := httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, Limits: decoded.Limits}
+		if !decoded.Models.Unrestricted() {
+			identity.Models = &decoded.Models
+		}
+		return identity, nil
 
 	case http.StatusNotFound:
 		return httpapi.Identity{}, httpapi.ErrKeyRejected

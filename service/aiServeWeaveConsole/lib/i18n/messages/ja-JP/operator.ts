@@ -389,6 +389,25 @@ const operator = {
   "operator.updatedRule": "ルール {name} を更新しました",
   "operator.edit_feaeda": "{name} を編集",
   "operator.enable": "{content} 有効化",
-  "operator.acknowledged_4e0696": "{value} の対応を確認しました"
+  "operator.acknowledged_4e0696": "{value} の対応を確認しました",
+  "operator.modelAccess": "モデルアクセス",
+  "operator.modelAccessDescription": "テナントが参照・呼び出しできるモデルをモデルルートのエイリアス単位で制御します。プラットフォームの一覧が上限で、テナントの一覧はその範囲内で絞り込むことしかできません。一覧が空の場合、その階層では制限しません。保存するとすべての Gateway に直ちに反映されます。",
+  "operator.platformModelAccess": "プラットフォーム全体で利用可能なモデル",
+  "operator.tenantModelAccess": "テナントごとの利用可能なモデル",
+  "operator.searchTenants": "テナント ID または名前で検索",
+  "operator.loadingTenants": "テナントを読み込んでいます…",
+  "operator.noTenants": "一致するテナントはありません。",
+  "operator.selectedTenant": "テナント: {name}（{id}）",
+  "operator.selectATenantFirst": "先に左側でテナントを選択してください。",
+  "operator.unrestricted": "制限なし",
+  "operator.restrictedCount": "{count} 個のモデルに制限",
+  "operator.lastUpdated": "{time} に {actor} が最終変更",
+  "operator.modelListHint": "1 行に 1 つのモデルエイリアス。空欄の場合は制限なし。",
+  "operator.knownAliases": "公開済みのルートエイリアス（クリックで追加）",
+  "operator.noPublishedAliases": "公開済みのルートエイリアスはありません。ノードが報告したモデル ID を直接入力できます。",
+  "operator.saveModelAccess": "保存",
+  "operator.discardModelAccessChanges": "変更を破棄",
+  "operator.modelAccessSaved": "モデルアクセスを保存しました",
+  "operator.clearModelAccessConfirm": "空の一覧を保存すると、この階層の制限が解除されます。続行しますか？"
 } as const;
 export default operator;

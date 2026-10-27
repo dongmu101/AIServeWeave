@@ -389,6 +389,25 @@ const operator = {
   "operator.updatedRule": "규칙 {name} 업데이트 완료",
   "operator.edit_feaeda": "{name} 편집",
   "operator.enable": "{content} 활성화",
-  "operator.acknowledged_4e0696": "{value} 처리 확인 완료"
+  "operator.acknowledged_4e0696": "{value} 처리 확인 완료",
+  "operator.modelAccess": "모델 접근 권한",
+  "operator.modelAccessDescription": "테넌트가 보고 호출할 수 있는 모델을 모델 라우트 별칭 단위로 제어합니다. 플랫폼 목록이 상한이며 테넌트 목록은 그 범위 안에서만 좁힐 수 있습니다. 목록이 비어 있으면 해당 단계는 제한하지 않습니다. 저장하면 모든 Gateway에 즉시 적용됩니다.",
+  "operator.platformModelAccess": "플랫폼 전체 사용 가능 모델",
+  "operator.tenantModelAccess": "테넌트별 사용 가능 모델",
+  "operator.searchTenants": "테넌트 ID 또는 이름으로 검색",
+  "operator.loadingTenants": "테넌트를 불러오는 중…",
+  "operator.noTenants": "일치하는 테넌트가 없습니다.",
+  "operator.selectedTenant": "테넌트: {name} ({id})",
+  "operator.selectATenantFirst": "먼저 왼쪽에서 테넌트를 선택하세요.",
+  "operator.unrestricted": "제한 없음",
+  "operator.restrictedCount": "모델 {count}개로 제한",
+  "operator.lastUpdated": "{time}에 {actor}이(가) 마지막으로 변경",
+  "operator.modelListHint": "한 줄에 모델 별칭 하나; 비워 두면 제한하지 않습니다.",
+  "operator.knownAliases": "게시된 라우트 별칭(클릭하여 추가)",
+  "operator.noPublishedAliases": "게시된 라우트 별칭이 없습니다. 노드가 보고한 모델 ID를 직접 입력할 수 있습니다.",
+  "operator.saveModelAccess": "저장",
+  "operator.discardModelAccessChanges": "변경 취소",
+  "operator.modelAccessSaved": "모델 접근 권한을 저장했습니다",
+  "operator.clearModelAccessConfirm": "빈 목록을 저장하면 이 단계의 제한이 해제됩니다. 계속하시겠습니까?"
 } as const;
 export default operator;

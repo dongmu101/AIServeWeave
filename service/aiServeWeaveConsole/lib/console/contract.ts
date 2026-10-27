@@ -497,6 +497,14 @@ export function parsePlatformOperators(value: unknown): Page<PlatformOperator> {
   return parsePage(value, parsePlatformOperator);
 }
 
+/** parseTenants validates one operator page of tenants. / parseTenants 校验运维视角的一页租户。 */
+export function parseTenants(value: unknown): Page<Tenant> {
+  return parsePage(value, (item) => {
+    const source = record(item);
+    return { id: text(source, "id"), name: text(source, "name"), status: text(source, "status"), createdAt: timestamp(source, "created_at") };
+  });
+}
+
 /** parsePlatformOperator validates one platform operator. / parsePlatformOperator 校验一名平台运维。 */
 export function parsePlatformOperator(value: unknown): PlatformOperator {
   const source = record(value);

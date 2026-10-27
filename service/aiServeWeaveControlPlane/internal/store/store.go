@@ -260,6 +260,49 @@ type Tenants interface {
 	// UpdateTenantLimits 写入租户的配额。它接受整组而不是单个维度：部分更新需要一种
 	// 区别于「设为不限制」的方式来表达「这个不动」，而零已经表示不限制了。
 	UpdateTenantLimits(ctx context.Context, id string, limits quota.Limits) error
+	// ListTenants reads every tenant, newest first. It is the one list in this
+	// package that is not scoped by tenant, because its only caller is a
+	// platform operator choosing which tenant to act on.
+	//
+	// ListTenants 读取全部租户，最新的在前。它是本包中唯一不按租户限定范围的列表，
+	// 因为它唯一的调用方是正在挑选要操作哪个租户的平台运维。
+	ListTenants(ctx context.Context, query ListQuery, filter TenantFilter) (Page[model.Tenant], error)
+}
+
+// TenantFilter narrows a tenant list.
+//
+// TenantFilter 收窄租户列表。
+type TenantFilter struct {
+	Status string
+	// Query matches a tenant id or name, case-insensitively, as a substring.
+	//
+	// Query 以不区分大小写的子串匹配租户 id 或名称。
+	Query string
+}
+
+// ModelAccess persists common/modelaccess lists, one row per scope. It speaks
+// rows rather than decoded lists so the encoding stays in one place — the
+// logic layer — for both implementations.
+//
+// ModelAccess 持久化 common/modelaccess 列表，每个 scope 一行。它以行而不是解码后
+// 的列表交换数据，使编码只在一处——logic 层——完成，两个实现都不必各写一遍。
+type ModelAccess interface {
+	// GetModelAccess reads the rows stored under scopes. A scope with no row
+	// is simply absent from the result, which is how "unrestricted" reads.
+	//
+	// GetModelAccess 读取 scopes 下存储的行。没有行的 scope 在结果里直接缺席，
+	// 「不限制」读出来就是这个样子。
+	GetModelAccess(ctx context.Context, scopes ...string) ([]model.ModelAccess, error)
+	// PutModelAccess inserts or replaces the row for row.Scope.
+	//
+	// PutModelAccess 插入或替换 row.Scope 对应的行。
+	PutModelAccess(ctx context.Context, row *model.ModelAccess) error
+	// DeleteModelAccess removes the row for scope. Deleting a scope with no
+	// row is not an error: the result, "unrestricted", is what was asked for.
+	//
+	// DeleteModelAccess 删除 scope 对应的行。删除一个本来就没有行的 scope 不算错误：
+	// 结果「不限制」正是调用方想要的。
+	DeleteModelAccess(ctx context.Context, scope string) error
 }
 
 // Users persists the people who sign in to the Console.
@@ -822,6 +865,7 @@ type Store interface {
 	Routes
 	WorkflowTemplates
 	Tenants
+	ModelAccess
 	Users
 	PlatformOperators
 	APIKeys

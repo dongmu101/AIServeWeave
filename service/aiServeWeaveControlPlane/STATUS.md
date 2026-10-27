@@ -127,13 +127,29 @@ go run ./service/aiServeWeaveGateway \
 | --- | --- |
 | 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」） |
 | 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读） |
-| 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径），见「机群清单」与「节点写路径」两节 |
+| 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权），见「机群清单」「节点写路径」「模型授权」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
 
 租户会话（`requireSession`）与平台会话（`requirePlatformSession`）虽然共用同一个 `token.Issuer`，却互相拒绝对方的令牌——见「平台运维身份」一节 `Claims.TenantID` 哨兵值的说明；一次路由配置失误不会让某个会话跨界生效。
 
 `GET /admin/v1/tenants/current` 返回调用方自己所属的租户及其配额，任何已登录角色都可读；`PUT /admin/v1/tenants/limits` 设置该配额，仅 owner 与 admin 可写。两者的请求里都没有租户 id：租户来自会话，因此管理员无法通过改请求体把它指向别人的租户。读写权限刻意不对称——member 无法调高限制，但一个正在被限流的 member 需要看得到是哪条限制在起作用；而能调高自己租户限制的角色，绕过限制最省事的办法就是调高它。
+
+### 模型授权
+
+控制商户能看到和调用哪些模型，契约在 `common/modelaccess`，只由平台运维配置——能编辑自己列表的租户可以给自己开放任何模型。
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /operator/v1/tenants` | 全部租户（`limit`、`cursor`、`status`、`q` 按 id/名称子串），供运维挑选；游标分页信封同其他列表 |
+| `GET /operator/v1/model-access/:scope` | 读一份列表。`scope` 为 `platform` 或租户 id；未知租户 `404`；从未设置时返回 `models: []` 且不带 `updated_*` |
+| `PUT /operator/v1/model-access/:scope` | 整体替换，请求体 `{"models": [...]}`（`null` 或缺字段为 `400`）；空数组解除这一级限制。单独路由组，请求体上限 `modelaccess.MaxDocumentBytes`（同路由文档 1 MiB + 64 KiB） |
+
+- **两级求交**：平台列表是上限，租户列表只能在其内收窄，永远不能放宽；任一级空列表表示这一级不限制。名字是 `common/modelroute` 的别名；没有路由表时节点上报的模型 ID 即别名。列表经 `modelaccess.Normalize` 去空白、去重、排序，最多 1000 项、每项 256 字节。
+- **存储**：`model_access` 表（基础迁移 `0010_model_access.sql`），每个 scope 一行，`scope` 为 `platform` 或租户 id（租户 id 恒以 `tnt_` 开头，不会相撞）。清空即删行，「不限制」只有一种写法。损坏的行在读取与 Key 校验时报错而不是放开。
+- **下发**：`POST /internal/v1/apikeys/verify` 的响应新增 `models: {platform, tenant}`，两级都不限制时两份列表缺席。写入后调用 `InvalidateAll` 推进 generation，Gateway 立即清空校验缓存，不必等 TTL；Redis 不可用时退化为按 TTL 过期。
+- **租户模型页**：`GET /admin/v1/models` 按调用方租户的授权过滤 Agent 清单。清单列的是节点上报的模型 ID，而授权按别名给出，因此一个上报模型在「本身被允许」或「是某个被允许别名在当前路由发布中的目标」时可见；过滤后一个模型都不剩的服务整体隐藏。
+- **审计**：`model_access.update`，`TenantID` 为 `platform`，目标为被修改的 scope，详情只记数量 `models=N`。
 
 ### 租户自助注册
 

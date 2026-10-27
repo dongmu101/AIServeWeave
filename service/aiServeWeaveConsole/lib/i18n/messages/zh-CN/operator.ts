@@ -389,6 +389,25 @@ const operator = {
   "operator.updatedRule": "已更新规则 {name}",
   "operator.edit_feaeda": "编辑 {name}",
   "operator.enable": "{content} 启用",
-  "operator.acknowledged_4e0696": "已确认处理 {value}"
+  "operator.acknowledged_4e0696": "已确认处理 {value}",
+  "operator.modelAccess": "模型授权",
+  "operator.modelAccessDescription": "控制商户能看到和调用哪些模型（按模型路由别名）。全平台列表是上限，商户列表只能在其范围内收窄；任一列表为空表示该级不限制。保存后立即对所有 Gateway 生效。",
+  "operator.platformModelAccess": "全平台可用模型",
+  "operator.tenantModelAccess": "按商户设置可用模型",
+  "operator.searchTenants": "按商户 ID 或名称搜索",
+  "operator.loadingTenants": "正在加载商户…",
+  "operator.noTenants": "没有匹配的商户。",
+  "operator.selectedTenant": "商户：{name}（{id}）",
+  "operator.selectATenantFirst": "先在左侧选择一个商户。",
+  "operator.unrestricted": "不限制",
+  "operator.restrictedCount": "限制为 {count} 个模型",
+  "operator.lastUpdated": "最后由 {actor} 于 {time} 修改",
+  "operator.modelListHint": "每行一个模型别名；留空表示不限制。",
+  "operator.knownAliases": "已发布的路由别名（点击加入）",
+  "operator.noPublishedAliases": "当前没有已发布的路由别名，可以直接填写节点上报的模型 ID。",
+  "operator.saveModelAccess": "保存",
+  "operator.discardModelAccessChanges": "放弃修改",
+  "operator.modelAccessSaved": "模型授权已保存",
+  "operator.clearModelAccessConfirm": "保存空列表会解除这一级的限制，确定继续吗？"
 } as const;
 export default operator;

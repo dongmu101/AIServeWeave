@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"strings"
 
+	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/quota"
+	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
 // Identity is who a verified API key belongs to. It is attached to the request
@@ -27,6 +29,16 @@ type Identity struct {
 	// Limits 是租户的配额，与确立身份的那次校验一同得知。它随身份一起传递而不是单独
 	// 拉取，好让执行不给请求路径增加任何往返。
 	Limits quota.Limits
+	// Models is the tenant's model access, learned from the same verification.
+	// It is nil when nothing is restricted, which is also what the static-key
+	// and unauthenticated modes leave it as. The middleware hands it to the
+	// scheduler, which is where every model is resolved and so where it is
+	// enforced.
+	//
+	// Models 是租户的模型授权，与同一次校验一同得知。没有任何限制时它为 nil，静态
+	// key 与免认证两种模式下它也保持为 nil。中间件把它交给调度器——每个模型都在那里
+	// 被解析，因此也在那里执行。
+	Models *modelaccess.Policy
 }
 
 // ErrKeyRejected is what a verifier returns for a key that does not
@@ -169,7 +181,11 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 				"cannot verify the API key right now")
 			return
 		}
-		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), identityKey{}, identity)))
+		ctx := context.WithValue(r.Context(), identityKey{}, identity)
+		if identity.Models != nil {
+			ctx = scheduler.WithModelAccess(ctx, *identity.Models)
+		}
+		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }
 

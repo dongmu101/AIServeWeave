@@ -87,6 +87,21 @@ func (s *Store) UpdateTenantLimits(ctx context.Context, id string, limits quota.
 	return nil
 }
 
+// ListTenants reads every tenant, newest first.
+//
+// ListTenants 读取全部租户，最新的在前。
+func (s *Store) ListTenants(ctx context.Context, query store.ListQuery, filter store.TenantFilter) (store.Page[model.Tenant], error) {
+	db := s.db.WithContext(ctx).Model(&model.Tenant{})
+	if filter.Status != "" {
+		db = db.Where("status = ?", filter.Status)
+	}
+	if filter.Query != "" {
+		like := likePattern(filter.Query)
+		db = db.Where("LOWER(id) LIKE ? OR LOWER(name) LIKE ?", like, like)
+	}
+	return readPage(db, query, func(t model.Tenant) (time.Time, string) { return t.CreatedAt, t.ID })
+}
+
 // -----------------------------------------------------------------------
 // Users
 // -----------------------------------------------------------------------

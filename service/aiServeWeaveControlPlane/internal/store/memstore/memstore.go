@@ -42,6 +42,7 @@ type Store struct {
 	routes            []model.RouteRevision
 	workflowTemplates []model.WorkflowTemplateRevision
 	tenants           map[string]model.Tenant
+	modelAccess       map[string]model.ModelAccess
 	users             map[string]model.User
 	platformOperators map[string]model.PlatformOperator
 	keys              map[string]model.APIKey
@@ -63,6 +64,7 @@ type Store struct {
 func New() *Store {
 	return &Store{
 		tenants:           map[string]model.Tenant{},
+		modelAccess:       map[string]model.ModelAccess{},
 		users:             map[string]model.User{},
 		platformOperators: map[string]model.PlatformOperator{},
 		keys:              map[string]model.APIKey{},
@@ -118,6 +120,61 @@ func (s *Store) PutTenant(tenant model.Tenant) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.tenants[tenant.ID] = tenant
+}
+
+// ListTenants reads every tenant, newest first.
+//
+// ListTenants 读取全部租户，最新的在前。
+func (s *Store) ListTenants(_ context.Context, query store.ListQuery, filter store.TenantFilter) (store.Page[model.Tenant], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.Tenant
+	for _, tenant := range s.tenants {
+		if filter.Status != "" && tenant.Status != filter.Status {
+			continue
+		}
+		if !matches(filter.Query, tenant.ID, tenant.Name) {
+			continue
+		}
+		out = append(out, tenant)
+	}
+	sortNewestFirst(out, func(t model.Tenant) (time.Time, string) { return t.CreatedAt, t.ID })
+	return paginate(out, query, func(t model.Tenant) (time.Time, string) { return t.CreatedAt, t.ID })
+}
+
+// GetModelAccess reads the rows stored under scopes.
+//
+// GetModelAccess 读取 scopes 下存储的行。
+func (s *Store) GetModelAccess(_ context.Context, scopes ...string) ([]model.ModelAccess, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows := []model.ModelAccess{}
+	for _, scope := range scopes {
+		if row, ok := s.modelAccess[scope]; ok {
+			rows = append(rows, row)
+		}
+	}
+	return rows, nil
+}
+
+// PutModelAccess inserts or replaces one scope's row.
+//
+// PutModelAccess 插入或替换某个 scope 的行。
+func (s *Store) PutModelAccess(_ context.Context, row *model.ModelAccess) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.modelAccess[row.Scope] = *row
+	return nil
+}
+
+// DeleteModelAccess removes one scope's row, if there is one.
+//
+// DeleteModelAccess 删除某个 scope 的行（如果存在）。
+func (s *Store) DeleteModelAccess(_ context.Context, scope string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.modelAccess, scope)
+	return nil
 }
 
 // UpdateTenantLimits writes the tenant's quota.

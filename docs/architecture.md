@@ -557,6 +557,7 @@ Workflow API → 受控模板绑定 → Job 提交与确认
 | `common/tunnelwire/` | runtime 与隧道 proto 的唯一转换边界 |
 | `common/cliusagestatus/` | 本机 CLI 订阅额度的不含凭据形状，随 `cli_usage` 帧上报并显示在租户模型页 |
 | `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
+| `common/modelaccess/` | 商户模型白名单契约：平台列表 ∩ 租户列表，按模型路由别名匹配，空列表为不限制 |
 | `common/modelroute/` | 模型路由发布契约：别名/目标、CAS 版本化快照与生效状态（P02） |
 | `common/workflowtemplate/` | 工作流模板发布契约：内容、版本化快照与生效状态（P03），图仅在此契约与 Gateway 内部流转 |
 | `common/nodeview/`、`common/workflowview/` | 允许列表约束的机群、模板和 Job 展示契约，不含图 |

@@ -25,6 +25,7 @@
 | `common/cliusagestatus/` | 本机 Codex / Claude Code CLI 订阅额度的不含凭据形状（百分比、窗口名、时间戳）。Agent 读取、隧道上报，Gateway 经 `nodeview` 允许列表输出给控制面与租户模型页 |
 | `common/metrics/` | `runtime.Metrics` 的实现与 Prometheus 文本导出，Agent/Gateway 使用同一注册表实现（各进程独立实例），ControlPlane 尚未接入；`metricstest/` 是各服务测试用的内存收集器 |
 | `common/apikey/` | API Key 的格式、哈希与展示形式。控制面铸造、Gateway 校验，两边必须算出同一个哈希，因此它是契约而非任一方的内部实现 |
+| `common/modelaccess/` | 商户可见/可调用的模型别名白名单契约：平台列表为上限、租户列表只能收窄，任一级空列表表示不限制。控制面存储与下发（随 Key 校验结果）、Gateway 在调度器入口执行，两边按同一套规则解释 |
 | `common/quota/` | 租户限制值及其含义。控制面存储与下发、Gateway 执行，两边必须按同一套规则解释同一份数据，因此同样是契约 |
 | `common/workflowview/` | 工作流模板目录与实时 job 视图的契约，Gateway 与控制面共用。模板不含图、job 不含运行位置（节点/运行时/解析后的模型），两者都是刻意的 |
 | `common/modelroute/` | 模型别名与目标、路由快照/摘要、生效状态和容量校验的共享契约；控制面发布与 Gateway 应用共用 |

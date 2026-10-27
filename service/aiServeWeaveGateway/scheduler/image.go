@@ -26,6 +26,9 @@ func (s *Scheduler) ImageCandidates(model string) []Candidate {
 // 元数据到达前的失败在 Retryable 时换下一个候选重试；元数据一旦读到就不再重试，
 // 因为该节点已经消耗了账户的生图额度。
 func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest) (runtime.ImageMeta, runtime.Stream[runtime.ImageEvent], Candidate, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return runtime.ImageMeta{}, nil, Candidate{}, ErrModelNotAllowed
+	}
 	candidates := s.ImageCandidates(req.Model)
 	s.metrics.Selection(runtime.CapabilityImageGeneration, len(candidates))
 	if len(candidates) == 0 {

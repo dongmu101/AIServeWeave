@@ -110,4 +110,6 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 
 平台会话实现位于 `lib/console/operator-session.ts` 与 `lib/server/operator-session.ts`，AES-256-GCM 使用独立 HKDF 用途与认证版本。平台审计 `/operator/v1/audit` 与租户审计使用不同会话范围。首个平台账户由部署管理员经 BootstrapToken 引导创建；登录后的平台运维可在 `/operator/operators` 创建和管理其他运维，Console 始终不持有 BootstrapToken。
 
+模型授权位于 `/operator/model-access`：全平台列表与按商户列表各一个编辑器，整组 `PUT /operator/v1/model-access/:scope`，不自动重试；仅该写入路径的请求体放宽到 1 MiB + 64 KiB（`modelAccessBodyLimit`）。后端公共校验源是 `common/modelaccess`，前端 `lib/console/model-access.ts` 的镜像需同步测试。
+
 路由管理（P02）位于 `/operator/routes`，草稿只在页面保留。平台发布/回滚须携带 expected_revision，不自动重试；读请求须防止过期响应覆盖新的草稿或生效状态。仅匹配路由验证/发布的请求体允许 1 MiB + 64 KiB，不能全局放宽普通管理端点。后端公共校验源是 `common/modelroute`，前端镜像需同步测试。

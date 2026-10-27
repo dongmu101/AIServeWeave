@@ -361,6 +361,14 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 - **`store`/`previous_response_id` 都需要一个真实租户**：未配置 `Verifier`（静态 key 列表或完全不鉴权）意味着没有可供限定范围的租户，两个字段依旧被拒绝，即便控制面本身已经配置。
 - 请求本身照常以 `responses` 记入 P09/C28 请求检索；持久化的轮次内容（`response_turns`）不与请求检索关联。
 
+## 模型授权
+
+商户可见/可调用的模型白名单（契约 `common/modelaccess`，由控制面运维配置）随 API Key 校验结果下发到 `Identity.Models`，鉴权中间件用 `scheduler.WithModelAccess` 把它挂到请求 context 上；没有限制、静态 key 或免认证模式下不挂。
+
+- **在调度器入口执行**：`Chat`、`ChatStream`、`Embed`、`Rerank`、`MessagesStart`、`Messages`（续接）、`GenerateImage`、`Transcribe` 在解析候选之前检查请求的模型名（即调用方发送的别名），被排除时返回 `ErrModelNotAllowed`。它包装 `ErrNoCapableNode`，因此各前门一律按「模型不存在」回答 `404 model_not_found`——拒绝本身不泄露部署了什么。原生 Messages 路径单独区分它与「缺少原生节点」的 503。
+- **模型列表**：`GET /v1/models` 由 `Scheduler.Models(ctx)` 产出，有路由表时列别名、没有时列节点上报的模型，两种情况都过滤掉被排除的项。
+- **生效**：控制面写入后推进 generation，本副本的校验缓存随吊销监听一起清空；控制面 Redis 不可用时按 `-key-cache-ttl` 自然过期。工作流（`/v1/runs`、`/v1/jobs`）按模板而不是模型提交，不受此约束。
+
 ## 配额与限流
 
 三个维度，刻意是三个不同的问题（定义在 `common/quota`，由 `ratelimit/` 执行）：
@@ -373,7 +381,7 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 
 **零表示不限制**，未配置的租户得到的也是这个：一个升级到本功能的部署，绝不能突然开始拒绝它昨天还接受的流量。
 
-**限制值随 API Key 校验结果下发**，不单独拉取——执行因此不给请求路径增加任何往返。P06 的 generation 通知只由 Key 吊销与用户禁用触发，单纯修改限制不会主动推送；旧限制仍按控制面 Redis TTL 与 Gateway `-key-cache-ttl` 自然过期。
+**限制值随 API Key 校验结果下发**，不单独拉取——执行因此不给请求路径增加任何往返。P06 的 generation 通知由 Key 吊销、用户禁用与模型授权变更触发，单纯修改限制不会主动推送；旧限制仍按控制面 Redis TTL 与 Gateway `-key-cache-ttl` 自然过期。
 
 **桶是连续补充的，不是每分钟计数器。** 固定窗口允许调用方在 0:59 花掉一整分钟的额度、在 1:01 再花掉下一分钟的，两秒之内跑出两倍于配置的速率。token 维度允许透支：一次超大的响应把它后面的请求恰好延迟它所耗费的那么多，欠账靠补充偿还而不是一笔勾销。
 

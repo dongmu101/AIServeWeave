@@ -395,6 +395,25 @@ const operator = {
   "operator.updatedRule": "Updated rule {name}",
   "operator.edit_feaeda": "Edit {name}",
   "operator.enable": "{content} Enable",
-  "operator.acknowledged_4e0696": "Acknowledged {value}"
+  "operator.acknowledged_4e0696": "Acknowledged {value}",
+  "operator.modelAccess": "Model access",
+  "operator.modelAccessDescription": "Control which models tenants can see and call, by model route alias. The platform list is the ceiling and a tenant list can only narrow it; an empty list means no restriction at that level. Changes apply to every Gateway as soon as they are saved.",
+  "operator.platformModelAccess": "Platform-wide models",
+  "operator.tenantModelAccess": "Models per tenant",
+  "operator.searchTenants": "Search tenants by ID or name",
+  "operator.loadingTenants": "Loading tenants…",
+  "operator.noTenants": "No tenants match.",
+  "operator.selectedTenant": "Tenant: {name} ({id})",
+  "operator.selectATenantFirst": "Select a tenant on the left first.",
+  "operator.unrestricted": "Unrestricted",
+  "operator.restrictedCount": {"one": "Restricted to {count} model", "other": "Restricted to {count} models"},
+  "operator.lastUpdated": "Last changed by {actor} at {time}",
+  "operator.modelListHint": "One model alias per line; leave empty for no restriction.",
+  "operator.knownAliases": "Published route aliases (click to add)",
+  "operator.noPublishedAliases": "No route aliases are published; node-reported model IDs can be entered directly.",
+  "operator.saveModelAccess": "Save",
+  "operator.discardModelAccessChanges": "Discard changes",
+  "operator.modelAccessSaved": "Model access saved",
+  "operator.clearModelAccessConfirm": "Saving an empty list removes the restriction at this level. Continue?"
 } as const;
 export default operator;

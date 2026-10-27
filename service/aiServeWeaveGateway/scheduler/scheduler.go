@@ -256,6 +256,9 @@ func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candid
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable.
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return runtime.ChatResponse{}, Candidate{}, ErrModelNotAllowed
+	}
 	candidates := s.chatCandidates(req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
@@ -281,6 +284,9 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 
 // Embed dispatches req the same way Chat does.
 func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, Candidate, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return runtime.EmbeddingResponse{}, Candidate{}, ErrModelNotAllowed
+	}
 	candidates := s.candidates(req.Model, runtime.CapabilityEmbeddings)
 	s.metrics.Selection(runtime.CapabilityEmbeddings, len(candidates))
 	if len(candidates) == 0 {
@@ -306,6 +312,9 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 
 // Rerank dispatches req the same way Chat and Embed do.
 func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, Candidate, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return runtime.RerankResponse{}, Candidate{}, ErrModelNotAllowed
+	}
 	candidates := s.candidates(req.Model, runtime.CapabilityRerank)
 	s.metrics.Selection(runtime.CapabilityRerank, len(candidates))
 	if len(candidates) == 0 {
@@ -354,6 +363,9 @@ func (s *Scheduler) TranscriptionCandidates(model string) []Candidate {
 // 重试就需要调用方从头重新读一遍整个文件——与 UploadInput 文档注释里「不跨
 // 节点重试一次上传」给出的理由相同。
 func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return runtime.AudioTranscriptionResponse{}, ErrModelNotAllowed
+	}
 	resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Transcribe(ctx, req, audio)
 	s.breakers.record(c, err, s.clock.Now())
 	s.metrics.Dispatch(c, err)
@@ -368,6 +380,9 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 // the caller exactly as the underlying Stream reports it, with no further
 // node switch.
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
+	if !modelAllowed(ctx, req.Model) {
+		return nil, Candidate{}, ErrModelNotAllowed
+	}
 	candidates := s.chatCandidates(req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
@@ -431,6 +446,8 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // Without a routing table it lists what the nodes advertise, so a deployment
 // that never writes one is unaffected.
 // Backend display positions precede unranked models; equal positions use ID order.
+// Either way a model ctx's WithModelAccess policy excludes is left out, so the
+// catalogue a tenant sees is exactly what it may call.
 //
 // Models 是公开目录：客户端此刻可以请求什么。
 //
@@ -440,12 +457,16 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 //
 // 没有路由表时它列出节点声明的内容，因此从不编写路由表的部署不受影响。
 // 后端显示位置排在未指定位置的模型之前；相同位置按 ID 排序。
+// 两种情况下，被 ctx 上 WithModelAccess 授权排除的模型都会略去，使租户看到的目录
+// 恰好就是它能调用的内容。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
-	_ = ctx
 	routes := s.routes.Load()
 	if routes.Len() > 0 {
 		var out []ModelInfo
 		for _, alias := range routes.Models() {
+			if !modelAllowed(ctx, alias) {
+				continue
+			}
 			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(routes, alias, runtime.CapabilityMessages)) > 0 ||
 				len(s.candidatesWith(routes, alias, runtime.CapabilityImageGeneration)) > 0 {
 				out = append(out, ModelInfo{ID: alias})
@@ -465,6 +486,9 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 				continue
 			}
 			for _, m := range snap.Discovery.Models {
+				if !modelAllowed(ctx, m.ID) {
+					continue
+				}
 				effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
 				if effective.Require(runtime.CapabilityChat) != nil && effective.Require(runtime.CapabilityMessages) != nil &&
 					effective.Require(runtime.CapabilityImageGeneration) != nil {

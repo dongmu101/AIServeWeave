@@ -392,6 +392,25 @@ const operator = {
   "operator.updatedRule": "Regel {name} aktualisiert",
   "operator.edit_feaeda": "{name} bearbeiten",
   "operator.enable": "{content} Aktivieren",
-  "operator.acknowledged_4e0696": "Bearbeitung von {value} bestätigt"
+  "operator.acknowledged_4e0696": "Bearbeitung von {value} bestätigt",
+  "operator.modelAccess": "Modellzugriff",
+  "operator.modelAccessDescription": "Legt nach Modellrouten-Alias fest, welche Modelle Mandanten sehen und aufrufen können. Die Plattformliste ist die Obergrenze, eine Mandantenliste kann sie nur einschränken; eine leere Liste bedeutet keine Einschränkung auf dieser Ebene. Änderungen gelten sofort nach dem Speichern für alle Gateways.",
+  "operator.platformModelAccess": "Plattformweit verfügbare Modelle",
+  "operator.tenantModelAccess": "Verfügbare Modelle pro Mandant",
+  "operator.searchTenants": "Mandanten nach ID oder Name suchen",
+  "operator.loadingTenants": "Mandanten werden geladen…",
+  "operator.noTenants": "Keine passenden Mandanten.",
+  "operator.selectedTenant": "Mandant: {name} ({id})",
+  "operator.selectATenantFirst": "Wählen Sie zuerst links einen Mandanten aus.",
+  "operator.unrestricted": "Keine Einschränkung",
+  "operator.restrictedCount": "Auf {count} Modelle beschränkt",
+  "operator.lastUpdated": "Zuletzt geändert von {actor} am {time}",
+  "operator.modelListHint": "Ein Modell-Alias pro Zeile; leer lassen für keine Einschränkung.",
+  "operator.knownAliases": "Veröffentlichte Routen-Aliase (zum Hinzufügen klicken)",
+  "operator.noPublishedAliases": "Es sind keine Routen-Aliase veröffentlicht; von Knoten gemeldete Modell-IDs können direkt eingegeben werden.",
+  "operator.saveModelAccess": "Speichern",
+  "operator.discardModelAccessChanges": "Änderungen verwerfen",
+  "operator.modelAccessSaved": "Modellzugriff gespeichert",
+  "operator.clearModelAccessConfirm": "Das Speichern einer leeren Liste hebt die Einschränkung auf dieser Ebene auf. Fortfahren?"
 } as const;
 export default operator;

@@ -389,6 +389,25 @@ const operator = {
   "operator.updatedRule": "Regla {name} actualizada",
   "operator.edit_feaeda": "Editar {name}",
   "operator.enable": "{content} Habilitar",
-  "operator.acknowledged_4e0696": "Se ha reconocido {value}"
+  "operator.acknowledged_4e0696": "Se ha reconocido {value}",
+  "operator.modelAccess": "Acceso a modelos",
+  "operator.modelAccessDescription": "Controla, por alias de ruta de modelo, qué modelos pueden ver y llamar los inquilinos. La lista de la plataforma es el límite superior y la lista de un inquilino solo puede restringirla; una lista vacía significa sin restricción en ese nivel. Los cambios se aplican a todos los Gateways en cuanto se guardan.",
+  "operator.platformModelAccess": "Modelos disponibles en toda la plataforma",
+  "operator.tenantModelAccess": "Modelos disponibles por inquilino",
+  "operator.searchTenants": "Buscar inquilinos por ID o nombre",
+  "operator.loadingTenants": "Cargando inquilinos…",
+  "operator.noTenants": "No hay inquilinos que coincidan.",
+  "operator.selectedTenant": "Inquilino: {name} ({id})",
+  "operator.selectATenantFirst": "Primero seleccione un inquilino a la izquierda.",
+  "operator.unrestricted": "Sin restricción",
+  "operator.restrictedCount": "Limitado a {count} modelo(s)",
+  "operator.lastUpdated": "Último cambio por {actor} el {time}",
+  "operator.modelListHint": "Un alias de modelo por línea; déjelo vacío para no restringir.",
+  "operator.knownAliases": "Alias de ruta publicados (haga clic para añadir)",
+  "operator.noPublishedAliases": "No hay alias de ruta publicados; se pueden introducir directamente los ID de modelo informados por los nodos.",
+  "operator.saveModelAccess": "Guardar",
+  "operator.discardModelAccessChanges": "Descartar cambios",
+  "operator.modelAccessSaved": "Acceso a modelos guardado",
+  "operator.clearModelAccessConfirm": "Guardar una lista vacía elimina la restricción en este nivel. ¿Continuar?"
 } as const;
 export default operator;

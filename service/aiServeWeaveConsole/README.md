@@ -64,6 +64,7 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 平台运维账户 | `/operator/v1/operators*`、`/operator/v1/auth/*` | `/operator/operators`、`/operator/account` | 平台会话独立；不能禁用自己或最后一名有效运维 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
 | 配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | `/console/quota` | 任何登录角色可读租户资料与配额；仅 owner/admin 可整组写入。零表示不限制 |
+| 模型授权 | `GET /operator/v1/tenants`、`GET/PUT /operator/v1/model-access/:scope` | `/operator/model-access` | **平台运维接口**：编辑全平台与按商户的模型别名白名单。平台列表是上限、商户列表只能收窄，空列表不限制；写请求体上限与路由发布相同（1 MiB + 64 KiB），不自动重试 |
 | 审计 | `GET /admin/v1/audit` | `/console/audit` | 支持 `action`、`actor_id`、`since`、`until` 筛选与游标分页 |
 | 机群清单 | `GET /operator/v1/nodes`、`GET /operator/v1/models` | `/operator/fleet`、`/operator/models` | **不是租户接口**：节点是所有租户共用的基础设施，由平台会话守卫；清单依赖控制面 Fleet 配置，节点写操作依赖 Registry 配置 |
 | 工作流菜单 | `GET /admin/v1/workflows` | `/console/workflows` | 租户接口，返回模板与输入声明；**不含工作流的图**。控制面在返回前清空副本 id 与内部 endpoint |
