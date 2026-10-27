@@ -1,5 +1,7 @@
 # AIServeWeave
 
+简体中文 | [English](README.en.md)
+
 把分散在 Mac、内网工作站和 GPU 服务器上的推理服务编织成一个统一入口：一套 OpenAI / Anthropic 兼容 API，背后自动调度到 Ollama、vLLM、ComfyUI 等任意节点。
 
 节点不需要公网地址——Agent 主动出站，经 mTLS 隧道接入平台。
