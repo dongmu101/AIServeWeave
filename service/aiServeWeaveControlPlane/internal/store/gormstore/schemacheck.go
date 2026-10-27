@@ -17,7 +17,7 @@ import (
 func checkSchemaObjects(db *gorm.DB, all bool) error {
 	models := []any{&model.Tenant{}, &model.User{}, &model.PlatformOperator{}, &model.APIKey{}, &model.AuditLog{}, &revocationOutbox{}}
 	if all {
-		models = append(models, &model.RouteRevision{}, &model.RouteActive{}, &model.WorkflowTemplateRevision{}, &model.WorkflowTemplateActive{})
+		models = append(models, &model.RouteRevision{}, &model.RouteActive{}, &model.WorkflowTemplateRevision{}, &model.WorkflowTemplateActive{}, &model.APIDoc{})
 		if db.Name() == "mysql" {
 			models = append(models, &model.Job{}, &model.JobArtifact{})
 		}
@@ -111,7 +111,7 @@ func checkModelSchema(db *gorm.DB, value any) error {
 			// 这些由固定 SQL 管理的模型刻意省略了大部分 GORM DDL 标签。
 			required := field.NotNull || field.PrimaryKey || table == "key_revocation_outbox" ||
 				strings.HasPrefix(table, "route_") || strings.HasPrefix(table, "workflow_template_") ||
-				(table == "jobs" && field.DBName != "terminal_at") || table == "job_artifacts"
+				(table == "jobs" && field.DBName != "terminal_at") || table == "job_artifacts" || table == "api_docs"
 			if nullable, ok := column.Nullable(); ok && nullable && required {
 				compatible = false
 			}

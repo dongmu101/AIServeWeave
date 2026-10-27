@@ -104,6 +104,8 @@ func (s *Server) Join(stream tunnelv1.GatewayDirectory_JoinServer) error {
 
 	js := &joinStream{replicaID: replicaID, grpcStream: stream}
 	s.roster.join(js, endpoint, state)
+	s.metrics.GatewayJoined()
+	defer s.metrics.GatewayLeft() // deferred before leave(js) so LIFO runs leave() first, mirroring join-then-count above
 	defer s.roster.leave(js)
 
 	s.logger.Info("gateway replica joined", slog.String("replica_id", replicaID), slog.String("endpoint", endpoint))

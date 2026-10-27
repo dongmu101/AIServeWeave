@@ -1,4 +1,9 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+
+
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 import { useRouter } from "next/navigation";
@@ -7,7 +12,6 @@ import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
 import { Input } from "@/components/ui/input";
 import { operatorSignIn } from "@/lib/console/operator-client";
-import { describe } from "@/lib/console/errors";
 
 /**
  * OperatorLoginForm posts credentials to the Console's own session route, which is the
@@ -25,7 +29,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
   const [email, setEmail] = React.useState("");
   const [password, setPassword] = React.useState("");
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<React.ReactNode>(null);
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -46,7 +50,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
       router.refresh();
     } catch (failure) {
       setPassword("");
-      setError(describe(failure));
+      setError(<ErrorMessage error={failure} />);
       setPending(false);
     }
   }
@@ -55,8 +59,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
     <form onSubmit={submit} className="grid gap-4" noValidate>
       <div className="grid gap-2">
         <label htmlFor="email" className="text-sm font-medium">
-          邮箱
-        </label>
+          <Message id="tenant.email" /></label>
         <Input
           id="email"
           name="email"
@@ -70,8 +73,7 @@ export function OperatorLoginForm({ next }: { next: string }) {
       </div>
       <div className="grid gap-2">
         <label htmlFor="password" className="text-sm font-medium">
-          密码
-        </label>
+          <Message id="auth.password" /></label>
         <Input
           id="password"
           name="password"
@@ -84,11 +86,9 @@ export function OperatorLoginForm({ next }: { next: string }) {
       </div>
       <FormError message={error} />
       <SubmitButton pending={pending} size="lg">
-        登录
-      </SubmitButton>
+        <Message id="auth.signIn" /></SubmitButton>
       <p className="text-xs text-muted-foreground">
-        忘记密码或尚未获得账号，请联系部署管理员。
-      </p>
+        <Message id="auth.ifYouForgotYourPasswordOrDoNot" /></p>
     </form>
   );
 }

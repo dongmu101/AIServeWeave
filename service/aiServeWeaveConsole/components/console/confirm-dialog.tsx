@@ -1,5 +1,8 @@
 "use client";
 
+import { Message } from "@/components/i18n/message";
+
+
 import * as React from "react";
 
 import { Button } from "@/components/ui/button";
@@ -13,6 +16,8 @@ import {
 } from "@/components/ui/dialog";
 import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
+import { ErrorMessage } from "@/components/i18n/error-message";
+import { useI18n } from "@/components/i18n/provider";
 
 /**
  * ConfirmDialog is the shared confirmation for an action that cannot be
@@ -34,15 +39,15 @@ export function ConfirmDialog({
   onOpenChange,
   title,
   description,
-  confirmLabel = "确认",
+  confirmLabel,
   destructive = false,
   onConfirm,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  title: string;
+  title: React.ReactNode;
   description: React.ReactNode;
-  confirmLabel?: string;
+  confirmLabel?: React.ReactNode;
   destructive?: boolean;
   /** onConfirm runs the action and resolves when it is settled. Rejecting
    * keeps the dialog open and shows the message.
@@ -51,8 +56,9 @@ export function ConfirmDialog({
    * 相应文案。 */
   onConfirm: () => Promise<void>;
 }) {
+  const { t } = useI18n();
   const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<string | null>(null);
+  const [error, setError] = React.useState<unknown>(null);
 
   // Reset during render rather than in an effect: the failure of a previous
   // attempt must be gone the first time the reopened dialog paints, not one
@@ -74,9 +80,7 @@ export function ConfirmDialog({
       await onConfirm();
       onOpenChange(false);
     } catch (failure) {
-      setError(
-        failure instanceof Error ? failure.message : "操作失败，请稍后重试。"
-      );
+      setError(failure);
     } finally {
       setPending(false);
     }
@@ -101,7 +105,7 @@ export function ConfirmDialog({
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
-          <FormError message={error} />
+          <FormError message={error === null ? null : <ErrorMessage error={error} />} />
           <DialogFooter>
             <Button
               type="button"
@@ -109,13 +113,12 @@ export function ConfirmDialog({
               disabled={pending}
               onClick={() => onOpenChange(false)}
             >
-              取消
-            </Button>
+              <Message id="common.cancel" /></Button>
             <SubmitButton
               pending={pending}
               variant={destructive ? "destructive" : "default"}
             >
-              {confirmLabel}
+              {confirmLabel ?? t("common.confirm")}
             </SubmitButton>
           </DialogFooter>
         </form>

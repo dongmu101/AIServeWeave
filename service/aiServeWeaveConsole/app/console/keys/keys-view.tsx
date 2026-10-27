@@ -1,4 +1,8 @@
 "use client";
+import { MessageError } from "@/lib/i18n/problem";
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
 
 import * as React from "react";
 import {
@@ -67,11 +71,13 @@ const NO_KEYS: ApiKeySummary[] = [];
 const PAGE_SIZE = 50;
 
 export function KeysView({ role, userId }: { role: string; userId: string }) {
+  const { locale, t } = useI18n();
   const run = useConsoleRequest();
   const [filters, setFilters] = useUrlFilters(["q", "status"] as const);
   const [draftQuery, setDraftQuery] = React.useState(filters.q);
   const debouncedQuery = useDebouncedValue(draftQuery);
   const [target, setTarget] = React.useState<ApiKeySummary | null>(null);
+  const [deleteTarget, setDeleteTarget] = React.useState<ApiKeySummary | null>(null);
 
   React.useEffect(() => {
     if (debouncedQuery !== filters.q) {
@@ -91,7 +97,7 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
   const columns = React.useMemo(
     () =>
       helper.columns([
-        helper.accessor("name", { header: "名称" }),
+        helper.accessor("name", { header: t("tenant.name") }),
         helper.accessor("display", {
           header: "Key",
           cell: (info) => (
@@ -99,19 +105,19 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
           ),
         }),
         helper.accessor("createdBy", {
-          header: "创建者",
+          header: t("tenant.createdBy"),
           cell: (info) => (
             <span className="font-mono text-xs">
               {info.getValue()}
-              {info.getValue() === userId ? "（我）" : ""}
+              {info.getValue() === userId ? t("tenant.me") : ""}
             </span>
           ),
         }),
         helper.display({
           id: "state",
-          header: "状态",
+          header: t("tenant.status"),
           cell: (info) => {
-            const state = apiKeyState(info.row.original, new Date());
+            const state = apiKeyState(info.row.original, new Date(), locale);
             return (
               <Badge
                 variant={state.kind === "active" ? "secondary" : "outline"}
@@ -123,39 +129,49 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
           },
         }),
         helper.accessor("expiresAt", {
-          header: "过期时间",
-          cell: (info) => formatDateTime(info.getValue(), NEVER_EXPIRES),
+          header: t("tenant.expiresAt"),
+          cell: (info) => formatDateTime(info.getValue(), NEVER_EXPIRES, locale),
         }),
         helper.accessor("lastUsedAt", {
-          header: "最近使用",
-          cell: (info) => formatDateTime(info.getValue(), "从未使用"),
+          header: t("tenant.lastUsed"),
+          cell: (info) => formatDateTime(info.getValue(), t("tenant.neverUsed"), locale),
         }),
         helper.accessor("createdAt", {
-          header: "创建时间",
-          cell: (info) => formatDateTime(info.getValue()),
+          header: t("tenant.createdAt"),
+          cell: (info) => formatDateTime(info.getValue(), undefined, locale),
         }),
         helper.display({
           id: "actions",
-          header: "操作",
+          header: t("tenant.actions"),
           cell: (info) => {
             const key = info.row.original;
-            const state = apiKeyState(key, new Date());
-            if (state.kind === "revoked" || !canRevokeApiKey(role, userId, key)) {
+            if (!canRevokeApiKey(role, userId, key)) {
               return null;
             }
+            const state = apiKeyState(key, new Date(), locale);
             return (
-              <Button
-                variant="destructive"
-                size="sm"
-                onClick={() => setTarget(key)}
-              >
-                吊销
-              </Button>
+              <div className="flex gap-2">
+                {state.kind === "revoked" ? null : (
+                  <Button
+                    variant="destructive"
+                    size="sm"
+                    onClick={() => setTarget(key)}
+                  >
+                    <Message id="tenant.revoke" /></Button>
+                )}
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive"
+                  onClick={() => setDeleteTarget(key)}
+                >
+                  <Message id="common.delete" /></Button>
+              </div>
             );
           },
         }),
       ]),
-    [role, userId]
+    [role, userId, t, locale]
   );
 
   const table = useTable({ features, columns, data: rows });
@@ -179,11 +195,11 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
       // 三者无法区分，因此诚实的做法是重新读取，并只说确实知道的事。
       if (failure instanceof ApiError && failure.kind === "not_found") {
         keys.reload();
-        throw new Error("该 Key 已不在可吊销状态，可能已被他人吊销。列表已刷新。");
+        throw new MessageError("tenant.thisKeyCanNoLongerBeRevokedSomeone");
       }
       throw failure;
     }
-    toast.success(`已吊销 ${key.name}`);
+    toast.success(<Message id={"tenant.revoked_2b45c6"} values={{ name: key.name }} />);
     // The list is re-read rather than patched in place: a write whose result
     // this Console only assumes is a write it has not confirmed, and the
     // server's copy is the one that decides.
@@ -193,32 +209,52 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
     keys.reload();
   }
 
+  async function remove(key: ApiKeySummary) {
+    try {
+      await run({
+        method: "DELETE",
+        path: `/admin/v1/apikeys/${encodeURIComponent(key.id)}/permanent`,
+        parse: parseNoContent,
+      });
+    } catch (failure) {
+      // As with revocation, 404 covers "already deleted", "another tenant's
+      // key" and "never existed" alike, so re-read and say only what is known.
+      //
+      // 与吊销相同，404 同时涵盖「已被删除」「别的租户的 key」与「从不存在」，因此重新
+      // 读取，并只说确实知道的事。
+      if (failure instanceof ApiError && failure.kind === "not_found") {
+        keys.reload();
+        throw new MessageError("tenant.thisKeyCanNoLongerBeDeleted");
+      }
+      throw failure;
+    }
+    toast.success(<Message id={"tenant.deletedKey"} values={{ name: key.name }} />);
+    keys.reload();
+  }
+
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="font-heading text-lg font-semibold">API Key</h1>
           <p className="text-sm text-muted-foreground">
-            当前租户的 Key，按创建时间倒序分页。明文只在创建成功当次显示一次，之后
-            任何读取路径都无法再取回。
-          </p>
+            <Message id="tenant.keysForTheCurrentTenantPaginatedByCreation" /></p>
         </div>
         {canCreateApiKey(role) ? (
           <CreateKeyDialog onCreated={keys.reload} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            只有所有者与管理员可以创建 Key；成员可以吊销自己创建的 Key。
-          </p>
+            <Message id="tenant.onlyOwnersAndAdministratorsCanCreateKeysMembers" /></p>
         )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <Input
           className="max-w-xs"
-          placeholder="按名称或 Key 展示形式搜索"
+          placeholder={t("tenant.searchByNameOrKeyDisplayForm")}
           value={draftQuery}
           onChange={(event) => setDraftQuery(event.target.value)}
-          aria-label="按名称或展示形式搜索 Key"
+          aria-label={t("tenant.searchKeysByNameOrDisplayForm")}
         />
         <Select
           value={filters.status === "" ? "all" : filters.status}
@@ -228,34 +264,32 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
             }
           }}
         >
-          <SelectTrigger aria-label="按状态筛选">
+          <SelectTrigger aria-label={t("tenant.filterByStatus")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部状态</SelectItem>
-            <SelectItem value="active">未吊销</SelectItem>
-            <SelectItem value="revoked">已吊销</SelectItem>
+            <SelectItem value="all"><Message id="tenant.allStatuses" /></SelectItem>
+            <SelectItem value="active"><Message id="tenant.notRevoked" /></SelectItem>
+            <SelectItem value="revoked"><Message id="tenant.revoked" /></SelectItem>
           </SelectContent>
         </Select>
         <span className="text-xs text-muted-foreground">
-          状态按控制面存储的值筛选；已过期但未吊销的 Key 仍属「未吊销」，列表中的状态列
-          会把它显示为已过期。
-        </span>
+          <Message id="tenant.filtersUseTheStatusStoredInTheControl" /></span>
       </div>
 
       {keys.error ? (
         <ErrorState message={keys.error} onRetry={keys.reload} />
       ) : keys.loading ? (
-        <LoadingState label="正在加载 API Key" rows={4} />
+        <LoadingState label={t("tenant.loadingApiKeys")} rows={4} />
       ) : (
         <>
           <DataTable
             table={table}
-            caption="当前租户的 API Key"
+            caption={t("tenant.currentTenantSApiKeys")}
             emptyMessage={
               filters.q === "" && filters.status === ""
-                ? "该租户还没有 API Key"
-                : "没有符合筛选条件的 Key"
+                ? t("tenant.thisTenantHasNoApiKeysYet")
+                : t("tenant.noKeysMatchTheFilters")
             }
           />
           <Pager resource={keys} loadedCount={rows.length} />
@@ -269,21 +303,15 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
             setTarget(null);
           }
         }}
-        title="吊销 API Key"
+        title={t("tenant.revokeApiKey")}
         destructive
-        confirmLabel="吊销"
+        confirmLabel={t("tenant.revoke")}
         description={
           target ? (
             <span className="grid gap-2">
-              <span>
-                将吊销 <strong>{target.name}</strong>（
-                <code className="font-mono">{target.display}</code>）。此操作不可撤销，
-                该 Key 无法恢复。
-              </span>
+              <span><Message id="tenant.revokeThisActionIsIrreversibleTheKeyCannot" values={{ strong: <strong>{target.name}</strong>, code: <code className="font-mono">{target.display}</code> }} /></span>
               <span className="text-xs">
-                吊销会立即写入控制面，但网关会在其配置的 Key 缓存有效期内继续接受该
-                Key；默认部署为 30 秒，实际时长以该网关的配置为准。
-              </span>
+                <Message id="tenant.revocationIsWrittenToTheControlPlaneImmediately" /></span>
             </span>
           ) : (
             ""
@@ -292,6 +320,34 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
         onConfirm={async () => {
           if (target) {
             await revoke(target);
+          }
+        }}
+      />
+
+      <ConfirmDialog
+        open={deleteTarget !== null}
+        onOpenChange={(next) => {
+          if (!next) {
+            setDeleteTarget(null);
+          }
+        }}
+        title={t("tenant.deleteApiKey")}
+        destructive
+        confirmLabel={t("common.delete")}
+        description={
+          deleteTarget ? (
+            <span className="grid gap-2">
+              <span><Message id="tenant.deleteKeyIrreversible" values={{ strong: <strong>{deleteTarget.name}</strong>, code: <code className="font-mono">{deleteTarget.display}</code> }} /></span>
+              <span className="text-xs">
+                <Message id="tenant.revocationIsWrittenToTheControlPlaneImmediately" /></span>
+            </span>
+          ) : (
+            ""
+          )
+        }
+        onConfirm={async () => {
+          if (deleteTarget) {
+            await remove(deleteTarget);
           }
         }}
       />

@@ -125,10 +125,9 @@ func newAuthenticator(verifier KeyVerifier, keys []string, logger *slog.Logger) 
 	return &authenticator{verifier: verifier, keys: set, logger: logger}
 }
 
-// middleware rejects a request that does not carry a valid key as a Bearer
-// token.
+// middleware requires a valid Bearer key, or x-api-key for Messages and model listing.
 //
-// middleware 拒绝未以 Bearer token 形式携带有效 key 的请求。
+// middleware 要求有效的 Bearer key；Messages 和模型列表也支持 x-api-key。
 func (a *authenticator) middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.verifier == nil && len(a.keys) == 0 {
@@ -136,7 +135,7 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 			return
 		}
 
-		key, ok := bearerToken(r.Header.Get("Authorization"))
+		key, ok := requestKey(r)
 		if !ok {
 			writeOpenAIError(w, http.StatusUnauthorized, "invalid_request_error", "invalid_api_key", "missing or invalid API key")
 			return
@@ -191,6 +190,25 @@ func (a *authenticator) staticallyAuthorized(key string) bool {
 		}
 	}
 	return ok
+}
+
+// requestKey returns the API key r presents: the Bearer token, or, on the
+// two routes Anthropic clients call without one, the x-api-key header.
+// Authentication and request logging share it so a logged key display always
+// names the key that was actually verified.
+//
+// requestKey 返回 r 出示的 API Key：Bearer token；在 Anthropic 客户端不带
+// Bearer 调用的两条路由上，则取 x-api-key 头。鉴权与请求日志共用它，因此日志
+// 里记录的 key 展示形式总是对应真正被校验的那把 key。
+func requestKey(r *http.Request) (string, bool) {
+	key, ok := bearerToken(r.Header.Get("Authorization"))
+	// Anthropic clients also use x-api-key when fetching the model list.
+	// Anthropic 客户端获取模型列表时也使用 x-api-key。
+	if (r.URL.Path == "/v1/messages" || (r.Method == http.MethodGet && r.URL.Path == "/v1/models")) && r.Header.Get("Authorization") == "" {
+		key = strings.TrimSpace(r.Header.Get("X-Api-Key"))
+		ok = key != ""
+	}
+	return key, ok
 }
 
 func bearerToken(header string) (string, bool) {

@@ -34,6 +34,18 @@ const convertOperation = "tunnel_convert"
 type PayloadKind string
 
 const (
+	// PayloadMessagesRequest carries a native inference document with ownership identifiers.
+	// PayloadMessagesRequest 携带原生推理文档与归属标识。
+	PayloadMessagesRequest PayloadKind = "messages_request"
+	// PayloadMessagesEvent carries one native SSE data document.
+	// PayloadMessagesEvent 携带一条原生 SSE 数据文档。
+	PayloadMessagesEvent PayloadKind = "messages_event"
+	// PayloadImageGenerateRequest carries a marshalled runtime.ImageRequest.
+	// PayloadImageGenerateRequest 携带编码后的 runtime.ImageRequest。
+	PayloadImageGenerateRequest PayloadKind = "image_generate_request"
+	// PayloadImageGenerateEvent carries exactly one runtime.ImageEvent.
+	// PayloadImageGenerateEvent 携带恰好一个 runtime.ImageEvent。
+	PayloadImageGenerateEvent PayloadKind = "image_generate_event"
 	// PayloadNone means no payload is carried at all.
 	PayloadNone PayloadKind = "none"
 	// PayloadChatRequest carries a marshalled runtime.ChatRequest.
@@ -79,6 +91,23 @@ const (
 	PayloadInputUploadRequest PayloadKind = "input_upload_request"
 	// PayloadInputUploadResult carries a marshalled runtime.InputUploadResult.
 	PayloadInputUploadResult PayloadKind = "input_upload_result"
+	// PayloadAudioTranscriptionRequest carries a marshalled
+	// runtime.AudioTranscriptionRequest without its audio bytes; the audio
+	// itself follows as DataChunks, the same split PayloadInputUploadRequest
+	// makes for an upload's bytes.
+	//
+	// PayloadAudioTranscriptionRequest 携带序列化的
+	// runtime.AudioTranscriptionRequest，不含它的音频字节；音频本身作为
+	// DataChunk 跟在后面，与 PayloadInputUploadRequest 对一次上传字节所做的
+	// 拆分相同。
+	PayloadAudioTranscriptionRequest PayloadKind = "audio_transcription_request"
+	// PayloadAudioTranscriptionResponse carries a marshalled
+	// runtime.AudioTranscriptionResponse.
+	PayloadAudioTranscriptionResponse PayloadKind = "audio_transcription_response"
+	// PayloadRerankRequest carries a marshalled runtime.RerankRequest.
+	PayloadRerankRequest PayloadKind = "rerank_request"
+	// PayloadRerankResponse carries a marshalled runtime.RerankResponse.
+	PayloadRerankResponse PayloadKind = "rerank_response"
 )
 
 // ResponseShape describes how many DataChunks an Operation's response uses,
@@ -130,6 +159,22 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Operation: tunnelv1.Operation_OPERATION_CHAT_STREAM,
 		Request:   PayloadChatRequest,
 		Response:  PayloadChatEvent,
+		Shape:     ShapeStream,
+	},
+	tunnelv1.Operation_OPERATION_MESSAGES: {
+		Operation: tunnelv1.Operation_OPERATION_MESSAGES,
+		Request:   PayloadMessagesRequest, Response: PayloadMessagesEvent, Shape: ShapeStream,
+	},
+	// Image generation is a stream of one meta event then bounded byte
+	// chunks, on an inference slot: one image is capped at
+	// runtime.MaxImageBytes, unlike the caller-sized files on bulk slots.
+	//
+	// 图像生成是一个元数据事件加若干有界字节分块组成的流，跑在推理槽上：单张图像
+	// 受 runtime.MaxImageBytes 限制，不同于走批量槽、大小由调用方决定的文件。
+	tunnelv1.Operation_OPERATION_IMAGE_GENERATE: {
+		Operation: tunnelv1.Operation_OPERATION_IMAGE_GENERATE,
+		Request:   PayloadImageGenerateRequest,
+		Response:  PayloadImageGenerateEvent,
 		Shape:     ShapeStream,
 	},
 	tunnelv1.Operation_OPERATION_EMBED: {
@@ -193,6 +238,28 @@ var operationSpecs = map[tunnelv1.Operation]OperationSpec{
 		Response:    PayloadInputUploadResult,
 		Shape:       ShapeSingle,
 		RequestBody: true,
+	},
+	// Same "headers then DataChunks" shape as INPUT_UPLOAD: audio bytes are
+	// too large and too variable in size to fit in RequestHeaders.payload.
+	//
+	// 与 INPUT_UPLOAD 相同的「headers 之后跟 DataChunk」形状：音频字节太大、
+	// 大小也太不确定，装不进 RequestHeaders.payload。
+	tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE: {
+		Operation:   tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE,
+		Request:     PayloadAudioTranscriptionRequest,
+		Response:    PayloadAudioTranscriptionResponse,
+		Shape:       ShapeSingle,
+		RequestBody: true,
+	},
+	// Rerank's request body is a bounded list of strings, the same
+	// "everything fits in RequestHeaders.payload" shape EMBED already uses —
+	// unlike AUDIO_TRANSCRIBE/INPUT_UPLOAD/WORKFLOW_SUBMIT it carries no
+	// binary body.
+	tunnelv1.Operation_OPERATION_RERANK: {
+		Operation: tunnelv1.Operation_OPERATION_RERANK,
+		Request:   PayloadRerankRequest,
+		Response:  PayloadRerankResponse,
+		Shape:     ShapeSingle,
 	},
 }
 
@@ -480,6 +547,68 @@ func UnmarshalInputUploadResult(b []byte) (runtime.InputUploadResult, error) {
 	return InputUploadResultFromProto(&pb), nil
 }
 
+// MarshalAudioTranscriptionRequest encodes req as an AUDIO_TRANSCRIBE request
+// payload. req's audio bytes are not included: they travel as DataChunks, the
+// same split MarshalInputUploadRequest makes for an upload's bytes.
+func MarshalAudioTranscriptionRequest(req runtime.AudioTranscriptionRequest) ([]byte, error) {
+	return marshalPayload(AudioTranscriptionRequestToProto(req), "audio transcription request")
+}
+
+// UnmarshalAudioTranscriptionRequest decodes an AUDIO_TRANSCRIBE request
+// payload. The caller reads the audio's bytes from the DataChunks that
+// follow.
+func UnmarshalAudioTranscriptionRequest(b []byte) (runtime.AudioTranscriptionRequest, error) {
+	var pb tunnelv1.AudioTranscriptionRequest
+	if err := unmarshalPayload(b, &pb, "audio transcription request"); err != nil {
+		return runtime.AudioTranscriptionRequest{}, err
+	}
+	return AudioTranscriptionRequestFromProto(&pb), nil
+}
+
+// MarshalAudioTranscriptionResponse encodes resp as the single
+// AUDIO_TRANSCRIBE response chunk.
+func MarshalAudioTranscriptionResponse(resp runtime.AudioTranscriptionResponse) ([]byte, error) {
+	return marshalPayload(AudioTranscriptionResponseToProto(resp), "audio transcription response")
+}
+
+// UnmarshalAudioTranscriptionResponse decodes the single AUDIO_TRANSCRIBE
+// response chunk.
+func UnmarshalAudioTranscriptionResponse(b []byte) (runtime.AudioTranscriptionResponse, error) {
+	var pb tunnelv1.AudioTranscriptionResponse
+	if err := unmarshalPayload(b, &pb, "audio transcription response"); err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	return AudioTranscriptionResponseFromProto(&pb), nil
+}
+
+// MarshalRerankRequest encodes req as a RERANK request payload.
+func MarshalRerankRequest(req runtime.RerankRequest) ([]byte, error) {
+	return marshalPayload(RerankRequestToProto(req), "rerank request")
+}
+
+// UnmarshalRerankRequest decodes a RERANK request payload.
+func UnmarshalRerankRequest(b []byte) (runtime.RerankRequest, error) {
+	var pb tunnelv1.RerankRequest
+	if err := unmarshalPayload(b, &pb, "rerank request"); err != nil {
+		return runtime.RerankRequest{}, err
+	}
+	return RerankRequestFromProto(&pb), nil
+}
+
+// MarshalRerankResponse encodes resp as the single RERANK response chunk.
+func MarshalRerankResponse(resp runtime.RerankResponse) ([]byte, error) {
+	return marshalPayload(RerankResponseToProto(resp), "rerank response")
+}
+
+// UnmarshalRerankResponse decodes the single RERANK response chunk.
+func UnmarshalRerankResponse(b []byte) (runtime.RerankResponse, error) {
+	var pb tunnelv1.RerankResponse
+	if err := unmarshalPayload(b, &pb, "rerank response"); err != nil {
+		return runtime.RerankResponse{}, err
+	}
+	return RerankResponseFromProto(&pb), nil
+}
+
 // -----------------------------------------------------------------------
 // Errors
 // -----------------------------------------------------------------------
@@ -688,11 +817,12 @@ func chatMessagesFromProto(pbs []*tunnelv1.ChatMessage) []runtime.ChatMessage {
 
 func chatMessageToProto(m runtime.ChatMessage) *tunnelv1.ChatMessage {
 	return &tunnelv1.ChatMessage{
-		Role:       m.Role,
-		Content:    m.Content,
-		Name:       m.Name,
-		ToolCallId: m.ToolCallID,
-		ToolCalls:  toolCallsToProto(m.ToolCalls),
+		Role:         m.Role,
+		Content:      m.Content,
+		Name:         m.Name,
+		ToolCallId:   m.ToolCallID,
+		ToolCalls:    toolCallsToProto(m.ToolCalls),
+		ContentParts: contentPartsToProto(m.ContentParts),
 	}
 }
 
@@ -701,12 +831,55 @@ func chatMessageFromProto(pb *tunnelv1.ChatMessage) runtime.ChatMessage {
 		return runtime.ChatMessage{}
 	}
 	return runtime.ChatMessage{
-		Role:       pb.GetRole(),
-		Content:    pb.GetContent(),
-		Name:       pb.GetName(),
-		ToolCallID: pb.GetToolCallId(),
-		ToolCalls:  toolCallsFromProto(pb.GetToolCalls()),
+		Role:         pb.GetRole(),
+		Content:      pb.GetContent(),
+		Name:         pb.GetName(),
+		ToolCallID:   pb.GetToolCallId(),
+		ToolCalls:    toolCallsFromProto(pb.GetToolCalls()),
+		ContentParts: contentPartsFromProto(pb.GetContentParts()),
 	}
+}
+
+func contentPartsToProto(parts []runtime.ContentPart) []*tunnelv1.ContentPart {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]*tunnelv1.ContentPart, len(parts))
+	for i, p := range parts {
+		pb := &tunnelv1.ContentPart{Type: p.Type, Text: p.Text}
+		if p.ImageURL != nil {
+			pb.ImageUrl = &tunnelv1.ContentImageURL{Url: p.ImageURL.URL, Detail: p.ImageURL.Detail}
+		}
+		if p.Audio != nil {
+			pb.InputAudio = &tunnelv1.ContentAudio{Data: p.Audio.Data, Format: p.Audio.Format}
+		}
+		if p.File != nil {
+			pb.File = &tunnelv1.ContentFile{Url: p.File.URL, Filename: p.File.Filename}
+		}
+		out[i] = pb
+	}
+	return out
+}
+
+func contentPartsFromProto(pbs []*tunnelv1.ContentPart) []runtime.ContentPart {
+	if len(pbs) == 0 {
+		return nil
+	}
+	out := make([]runtime.ContentPart, len(pbs))
+	for i, pb := range pbs {
+		p := runtime.ContentPart{Type: pb.GetType(), Text: pb.GetText()}
+		if img := pb.GetImageUrl(); img != nil {
+			p.ImageURL = &runtime.ContentImageURL{URL: img.GetUrl(), Detail: img.GetDetail()}
+		}
+		if audio := pb.GetInputAudio(); audio != nil {
+			p.Audio = &runtime.ContentAudio{Data: audio.GetData(), Format: audio.GetFormat()}
+		}
+		if file := pb.GetFile(); file != nil {
+			p.File = &runtime.ContentFile{URL: file.GetUrl(), Filename: file.GetFilename()}
+		}
+		out[i] = p
+	}
+	return out
 }
 
 func toolCallsToProto(calls []runtime.ToolCall) []*tunnelv1.ToolCall {
@@ -1001,6 +1174,56 @@ func EmbeddingResponseFromProto(pb *tunnelv1.EmbeddingResponse) runtime.Embeddin
 	return resp
 }
 
+// RerankRequestToProto mirrors a rerank request onto the wire.
+func RerankRequestToProto(req runtime.RerankRequest) *tunnelv1.RerankRequest {
+	return &tunnelv1.RerankRequest{
+		Model:     req.Model,
+		Query:     req.Query,
+		Documents: req.Documents,
+		TopN:      intPtrToProto(req.TopN),
+	}
+}
+
+// RerankRequestFromProto restores a rerank request.
+func RerankRequestFromProto(pb *tunnelv1.RerankRequest) runtime.RerankRequest {
+	if pb == nil {
+		return runtime.RerankRequest{}
+	}
+	return runtime.RerankRequest{
+		Model:     pb.GetModel(),
+		Query:     pb.GetQuery(),
+		Documents: pb.GetDocuments(),
+		TopN:      intPtrFromProto(pb.TopN),
+	}
+}
+
+// RerankResponseToProto mirrors a rerank result onto the wire.
+func RerankResponseToProto(resp runtime.RerankResponse) *tunnelv1.RerankResponse {
+	pb := &tunnelv1.RerankResponse{Model: resp.Model}
+	if len(resp.Results) > 0 {
+		pb.Results = make([]*tunnelv1.RerankResult, len(resp.Results))
+		for i, r := range resp.Results {
+			pb.Results[i] = &tunnelv1.RerankResult{Index: int64(r.Index), Score: r.Score}
+		}
+	}
+	return pb
+}
+
+// RerankResponseFromProto restores a rerank result.
+func RerankResponseFromProto(pb *tunnelv1.RerankResponse) runtime.RerankResponse {
+	if pb == nil {
+		return runtime.RerankResponse{}
+	}
+	resp := runtime.RerankResponse{Model: pb.GetModel()}
+	if results := pb.GetResults(); len(results) > 0 {
+		resp.Results = make([]runtime.RerankResult, len(results))
+		for i, r := range results {
+			resp.Results[i] = runtime.RerankResult{Index: int(r.GetIndex()), Score: r.GetScore()}
+		}
+	}
+	return resp
+}
+
 // ModelsToProto wraps a model list for the wire; protobuf has no top-level
 // repeated field, so the slice needs an envelope message.
 func ModelsToProto(models []runtime.Model) *tunnelv1.ModelList {
@@ -1031,6 +1254,8 @@ func modelToProto(m runtime.Model) *tunnelv1.Model {
 	return &tunnelv1.Model{
 		Id:           m.ID,
 		Capabilities: capabilitySetToProto(m.Capabilities),
+		DisplayName:  m.DisplayName,
+		DisplayOrder: m.DisplayOrder,
 	}
 }
 
@@ -1041,6 +1266,8 @@ func modelFromProto(pb *tunnelv1.Model) runtime.Model {
 	return runtime.Model{
 		ID:           pb.GetId(),
 		Capabilities: capabilitySetFromProto(pb.GetCapabilities()),
+		DisplayName:  pb.GetDisplayName(),
+		DisplayOrder: pb.GetDisplayOrder(),
 	}
 }
 
@@ -1158,6 +1385,7 @@ func WorkflowStatusToProto(status runtime.WorkflowStatus) *tunnelv1.WorkflowStat
 		StartedAt:     timePtrToProto(status.StartedAt),
 		FinishedAt:    timePtrToProto(status.FinishedAt),
 		ErrorSummary:  status.ErrorSummary,
+		OutOfMemory:   status.OutOfMemory,
 	}
 }
 
@@ -1172,6 +1400,7 @@ func WorkflowStatusFromProto(pb *tunnelv1.WorkflowStatus) runtime.WorkflowStatus
 		StartedAt:     timePtrFromProto(pb.GetStartedAt()),
 		FinishedAt:    timePtrFromProto(pb.GetFinishedAt()),
 		ErrorSummary:  pb.GetErrorSummary(),
+		OutOfMemory:   pb.GetOutOfMemory(),
 	}
 }
 
@@ -1267,6 +1496,89 @@ func InputUploadResultFromProto(pb *tunnelv1.InputUploadResult) runtime.InputUpl
 	return runtime.InputUploadResult{InputRef: pb.GetInputRef()}
 }
 
+// audioTaskToProto and audioTaskFromProto convert runtime.AudioTask, the one
+// field distinguishing AudioTranscriptionRequest's two OpenAI-compatible
+// backends, without letting an unrecognized value silently become one or the
+// other on this build.
+func audioTaskToProto(task runtime.AudioTask) tunnelv1.AudioTask {
+	switch task {
+	case runtime.AudioTaskTranscribe:
+		return tunnelv1.AudioTask_AUDIO_TASK_TRANSCRIBE
+	case runtime.AudioTaskTranslate:
+		return tunnelv1.AudioTask_AUDIO_TASK_TRANSLATE
+	default:
+		return tunnelv1.AudioTask_AUDIO_TASK_UNSPECIFIED
+	}
+}
+
+func audioTaskFromProto(task tunnelv1.AudioTask) runtime.AudioTask {
+	switch task {
+	case tunnelv1.AudioTask_AUDIO_TASK_TRANSCRIBE:
+		return runtime.AudioTaskTranscribe
+	case tunnelv1.AudioTask_AUDIO_TASK_TRANSLATE:
+		return runtime.AudioTaskTranslate
+	default:
+		return ""
+	}
+}
+
+// AudioTranscriptionRequestToProto mirrors an audio transcription request's
+// metadata onto the wire without its bytes, which travel separately as
+// DataChunks — the same split InputUploadMetaToProto makes for an upload.
+func AudioTranscriptionRequestToProto(req runtime.AudioTranscriptionRequest) *tunnelv1.AudioTranscriptionRequest {
+	pb := &tunnelv1.AudioTranscriptionRequest{
+		Model:          req.Model,
+		Filename:       req.Filename,
+		Task:           audioTaskToProto(req.Task),
+		Language:       req.Language,
+		Prompt:         req.Prompt,
+		ResponseFormat: req.ResponseFormat,
+	}
+	if req.Temperature != nil {
+		pb.Temperature = req.Temperature
+	}
+	return pb
+}
+
+// AudioTranscriptionRequestFromProto restores an audio transcription
+// request's metadata.
+func AudioTranscriptionRequestFromProto(pb *tunnelv1.AudioTranscriptionRequest) runtime.AudioTranscriptionRequest {
+	if pb == nil {
+		return runtime.AudioTranscriptionRequest{}
+	}
+	return runtime.AudioTranscriptionRequest{
+		Model:          pb.GetModel(),
+		Filename:       pb.GetFilename(),
+		Task:           audioTaskFromProto(pb.GetTask()),
+		Language:       pb.Language,
+		Prompt:         pb.Prompt,
+		Temperature:    pb.Temperature,
+		ResponseFormat: pb.GetResponseFormat(),
+	}
+}
+
+// AudioTranscriptionResponseToProto mirrors an audio transcription result
+// onto the wire.
+func AudioTranscriptionResponseToProto(resp runtime.AudioTranscriptionResponse) *tunnelv1.AudioTranscriptionResponse {
+	return &tunnelv1.AudioTranscriptionResponse{
+		Text:     resp.Text,
+		Language: resp.Language,
+		Duration: resp.Duration,
+	}
+}
+
+// AudioTranscriptionResponseFromProto restores an audio transcription result.
+func AudioTranscriptionResponseFromProto(pb *tunnelv1.AudioTranscriptionResponse) runtime.AudioTranscriptionResponse {
+	if pb == nil {
+		return runtime.AudioTranscriptionResponse{}
+	}
+	return runtime.AudioTranscriptionResponse{
+		Text:     pb.GetText(),
+		Language: pb.GetLanguage(),
+		Duration: pb.Duration,
+	}
+}
+
 // -----------------------------------------------------------------------
 // Snapshot and Config
 // -----------------------------------------------------------------------
@@ -1296,6 +1608,8 @@ func SnapshotToProto(s runtime.Snapshot) *tunnelv1.RuntimeSnapshot {
 			Latency:      durationToProto(s.Health.Latency),
 			CheckedAt:    timeToProto(s.Health.CheckedAt),
 			ErrorSummary: s.Health.ErrorSummary,
+			QueueRunning: int32(s.Health.QueueRunning),
+			QueuePending: int32(s.Health.QueuePending),
 		},
 		Discovery: &tunnelv1.Discovery{
 			Version:      s.Discovery.Version,
@@ -1341,6 +1655,8 @@ func SnapshotFromProto(pb *tunnelv1.RuntimeSnapshot) runtime.Snapshot {
 			Latency:      durationFromProto(health.GetLatency()),
 			CheckedAt:    timeFromProto(health.GetCheckedAt()),
 			ErrorSummary: health.GetErrorSummary(),
+			QueueRunning: int(health.GetQueueRunning()),
+			QueuePending: int(health.GetQueuePending()),
 		},
 		Discovery: runtime.Discovery{
 			Version:      disc.GetVersion(),

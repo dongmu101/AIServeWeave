@@ -1,8 +1,16 @@
 package main
 
 import (
+	"log/slog"
+	"os"
+	"path/filepath"
 	"slices"
 	"testing"
+	"time"
+
+	"AIServeWeave/common/metrics"
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
 
 // The agent's own wiring has one decision worth testing on its own: how the
@@ -149,6 +157,302 @@ func TestTunnelOptionsNodeLabels(t *testing.T) {
 			for k, w := range tt.want {
 				if got[k] != w {
 					t.Errorf("nodeLabels()[%q] = %q, want %q", k, got[k], w)
+				}
+			}
+		})
+	}
+}
+
+// TestApplyConfigFillsGapsWithoutOverridingExplicitFlags pins the one rule
+// applyConfig exists to enforce: a flag the operator actually typed always
+// wins, and -config only ever fills in what a flag left at its default.
+// Getting the direction backwards would mean the file silently overrides a
+// deliberate command-line choice, which is the opposite of what
+// "explicitFlags" is for.
+//
+// TestApplyConfigFillsGapsWithoutOverridingExplicitFlags 钉住 applyConfig
+// 存在的唯一规则：操作者实际敲过的 flag 永远优先，-config 只填补 flag 留在
+// 默认值上的空白。方向反了就意味着这份文件会悄悄覆盖一次刻意的命令行选
+// 择，与 explicitFlags 存在的目的正相反。
+func TestApplyConfigFillsGapsWithoutOverridingExplicitFlags(t *testing.T) {
+	cfg := &agentconfig.Config{
+		Gateway: agentconfig.GatewayConfig{
+			Endpoints:   []string{"gw-1.example.com:8443", "gw-2.example.com:8443"},
+			Registry:    "registry.example.com:9443",
+			NodeID:      "node-from-file",
+			MaxGateways: 8,
+			Labels:      map[string]string{"region": "local"},
+		},
+		AutoDiscoverInterval: "45s",
+		LogLevel:             "debug",
+	}
+	autoDiscover := true
+	autoDiscoverInterval := 30 * time.Second
+	metricsAddr := "127.0.0.1:9091"
+	logLevel := "info"
+	opts := &tunnelOptions{nodeID: "node-from-flag"}
+	explicit := map[string]bool{"node-id": true}
+
+	if err := applyConfig(cfg, explicit, opts, &autoDiscover, &autoDiscoverInterval, &metricsAddr, &logLevel); err != nil {
+		t.Fatalf("applyConfig: %v", err)
+	}
+
+	if opts.nodeID != "node-from-flag" {
+		t.Errorf("nodeID = %q, want the explicitly-passed flag value %q", opts.nodeID, "node-from-flag")
+	}
+	if opts.gateway != "gw-1.example.com:8443,gw-2.example.com:8443" {
+		t.Errorf("gateway = %q, want the config file's endpoints joined", opts.gateway)
+	}
+	if opts.registry != "registry.example.com:9443" {
+		t.Errorf("registry = %q, want %q", opts.registry, "registry.example.com:9443")
+	}
+	if opts.maxGateways != 8 {
+		t.Errorf("maxGateways = %d, want 8", opts.maxGateways)
+	}
+	if opts.labels != "region=local" {
+		t.Errorf("labels = %q, want %q", opts.labels, "region=local")
+	}
+	if autoDiscoverInterval != 45*time.Second {
+		t.Errorf("autoDiscoverInterval = %v, want 45s", autoDiscoverInterval)
+	}
+	if logLevel != "debug" {
+		t.Errorf("logLevel = %q, want %q", logLevel, "debug")
+	}
+	if metricsAddr != "127.0.0.1:9091" {
+		t.Errorf("metricsAddr = %q, want it left untouched at its default", metricsAddr)
+	}
+}
+
+// TestApplyConfigRejectsBadDuration pins that a malformed
+// auto_discover_interval fails startup rather than silently keeping the
+// flag's default: unlike a single bad -labels entry, this setting controls
+// how often the agent scans for local backends, and a typo here should be
+// visible immediately, not discovered later from unexpected scan behavior.
+func TestApplyConfigRejectsBadDuration(t *testing.T) {
+	cfg := &agentconfig.Config{AutoDiscoverInterval: "not-a-duration"}
+	autoDiscover := true
+	autoDiscoverInterval := 30 * time.Second
+	metricsAddr := ""
+	logLevel := "info"
+
+	err := applyConfig(cfg, map[string]bool{}, &tunnelOptions{}, &autoDiscover, &autoDiscoverInterval, &metricsAddr, &logLevel)
+	if err == nil {
+		t.Fatal("applyConfig with a malformed auto_discover_interval returned no error")
+	}
+}
+
+// TestRuntimesFromConfig pins the conversion runtimesFromConfig performs:
+// declared runtimes become manager.Add-ready runtime.Config values in the
+// same order they were declared, and an empty declaration yields nil rather
+// than an empty-but-non-nil slice.
+func TestRuntimesFromConfig(t *testing.T) {
+	if got := runtimesFromConfig(nil); got != nil {
+		t.Errorf("runtimesFromConfig(nil) = %v, want nil", got)
+	}
+
+	declared := []agentconfig.RuntimeConfig{
+		{ID: "ollama-local", Kind: "ollama", BaseURL: "http://127.0.0.1:11434"},
+		{ID: "vllm-local", Kind: "vllm", BaseURL: "http://127.0.0.1:8000"},
+	}
+	want := []runtime.Config{
+		{ID: "ollama-local", Kind: runtime.KindOllama, BaseURL: "http://127.0.0.1:11434"},
+		{ID: "vllm-local", Kind: runtime.KindVLLM, BaseURL: "http://127.0.0.1:8000"},
+	}
+	got := runtimesFromConfig(declared)
+	if len(got) != len(want) {
+		t.Fatalf("runtimesFromConfig() = %v, want %v", got, want)
+	}
+	for i := range want {
+		if got[i].ID != want[i].ID || got[i].Kind != want[i].Kind || got[i].BaseURL != want[i].BaseURL {
+			t.Errorf("runtimesFromConfig()[%d] = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+// TestResolveConfigPath pins the two things that matter about -config's
+// default lookup: an explicit -config always wins verbatim even when the
+// file behind it does not exist (so a typo surfaces as a hard failure, not
+// a silent fallback), and the default path is only used when it is
+// actually there — a fresh checkout with no config.yaml must behave
+// exactly like this feature never shipped.
+func TestResolveConfigPath(t *testing.T) {
+	dir := t.TempDir()
+	defaultPath := filepath.Join(dir, "config.yaml")
+
+	t.Run("explicit flag wins even over a missing file", func(t *testing.T) {
+		got := resolveConfigPath("/no/such/file.yaml", true, defaultPath)
+		if got != "/no/such/file.yaml" {
+			t.Errorf("resolveConfigPath() = %q, want the explicit path unchanged", got)
+		}
+	})
+
+	t.Run("no flag and no default file present yields nothing", func(t *testing.T) {
+		got := resolveConfigPath("", false, defaultPath)
+		if got != "" {
+			t.Errorf("resolveConfigPath() = %q, want empty when the default file does not exist", got)
+		}
+	})
+
+	t.Run("no flag but the default file exists falls back to it", func(t *testing.T) {
+		if err := os.WriteFile(defaultPath, []byte("gateway: {}\n"), 0o600); err != nil {
+			t.Fatalf("WriteFile: %v", err)
+		}
+		got := resolveConfigPath("", false, defaultPath)
+		if got != defaultPath {
+			t.Errorf("resolveConfigPath() = %q, want %q", got, defaultPath)
+		}
+	})
+}
+
+// TestShouldAutoOpenConfigUI checks when startup falls back to the standalone
+// setup mode. Normal service startup also serves the page.
+//
+// TestShouldAutoOpenConfigUI 检查何时启动会退回独立设置模式。
+// 正常服务启动同样提供设置页面。
+func TestShouldAutoOpenConfigUI(t *testing.T) {
+	tests := []struct {
+		name               string
+		configUI           bool
+		explicit           map[string]bool
+		resolvedConfigPath string
+		want               bool
+	}{
+		{
+			name:               "nothing configured at all triggers the fallback",
+			explicit:           map[string]bool{},
+			resolvedConfigPath: "",
+			want:               true,
+		},
+		{
+			name:               "a resolved config file suppresses it",
+			explicit:           map[string]bool{},
+			resolvedConfigPath: "config.yaml",
+			want:               false,
+		},
+		{
+			name:               "explicit -config-ui already covers it, so no need to auto-trigger",
+			configUI:           true,
+			explicit:           map[string]bool{"config-ui": true},
+			resolvedConfigPath: "",
+			want:               false,
+		},
+		{
+			name:               "explicit -config-ui-addr selects normal service mode",
+			explicit:           map[string]bool{"config-ui-addr": true},
+			resolvedConfigPath: "",
+			want:               false,
+		},
+		{
+			name:               "explicit -config opts out",
+			explicit:           map[string]bool{"config": true},
+			resolvedConfigPath: "",
+			want:               false,
+		},
+		{
+			name:               "explicit -gateway opts out even when empty",
+			explicit:           map[string]bool{"gateway": true},
+			resolvedConfigPath: "",
+			want:               false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := shouldAutoOpenConfigUI(tt.configUI, tt.explicit, tt.resolvedConfigPath); got != tt.want {
+				t.Errorf("shouldAutoOpenConfigUI(%v, %v, %q) = %v, want %v",
+					tt.configUI, tt.explicit, tt.resolvedConfigPath, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestCodexFactoryRequiresLocalDeclaration rejects Gateway-created Codex IDs.
+// TestCodexFactoryRequiresLocalDeclaration 拒绝 Gateway 擅自创建的 Codex ID。
+func TestCodexFactoryRequiresLocalDeclaration(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		declared []runtime.Config
+		allowed  bool
+	}{
+		{"absent", nil, false},
+		{"other kind", []runtime.Config{{ID: "codex-local", Kind: runtime.KindOllama}}, false},
+		{"declared", []runtime.Config{{ID: "codex-local", Kind: runtime.KindCodex}}, true},
+		{"alongside Claude", []runtime.Config{{ID: "claude-local", Kind: runtime.KindClaude}, {ID: "codex-local", Kind: runtime.KindCodex}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := newRegistry(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := registry.Create(runtime.Config{ID: "codex-local", Kind: runtime.KindCodex}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("error=%v, want allowed=%v", err, tc.allowed)
+			}
+			if rt != nil {
+				_ = rt.Close()
+			}
+		})
+	}
+}
+
+// TestClaudeFactoryRequiresLocalDeclaration rejects Gateway-created Claude IDs.
+// TestClaudeFactoryRequiresLocalDeclaration 拒绝 Gateway 擅自创建的 Claude ID。
+func TestClaudeFactoryRequiresLocalDeclaration(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		declared []runtime.Config
+		allowed  bool
+	}{
+		{"absent", nil, false},
+		{"other kind", []runtime.Config{{ID: "claude-local", Kind: runtime.KindOllama}}, false},
+		{"declared", []runtime.Config{{ID: "claude-local", Kind: runtime.KindClaude}}, true},
+		{"alongside Codex", []runtime.Config{{ID: "codex-local", Kind: runtime.KindCodex}, {ID: "claude-local", Kind: runtime.KindClaude}}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := newRegistry(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := registry.Create(runtime.Config{ID: "claude-local", Kind: runtime.KindClaude}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("error=%v, want allowed=%v", err, tc.allowed)
+			}
+			if rt != nil {
+				_ = rt.Close()
+			}
+		})
+	}
+}
+
+// TestGeminiImageFactoryRequiresLocalDeclaration checks the image-only backend's local boundary.
+// TestGeminiImageFactoryRequiresLocalDeclaration 检查仅生图后端的本地声明边界。
+func TestGeminiImageFactoryRequiresLocalDeclaration(t *testing.T) {
+	kind := runtime.Kind("gemini-cli")
+	for _, tc := range []struct {
+		name     string
+		declared []runtime.Config
+		allowed  bool
+	}{
+		{name: "absent"},
+		{name: "hosted Gemini is a different kind", declared: []runtime.Config{{ID: "gemini-local", Kind: runtime.KindGemini}}},
+		{name: "locally declared", declared: []runtime.Config{{ID: "gemini-local", Kind: kind}}, allowed: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			registry, err := newRegistry(tc.declared)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rt, err := registry.Create(runtime.Config{ID: "gemini-local", Kind: kind}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+			if (err == nil) != tc.allowed {
+				t.Fatalf("Create error=%v, want allowed=%v", err, tc.allowed)
+			}
+			if rt != nil {
+				defer rt.Close()
+				if _, ok := rt.(runtime.ImageRuntime); !ok {
+					t.Fatalf("runtime type=%T, want ImageRuntime", rt)
+				}
+				if _, ok := rt.(runtime.InferenceRuntime); ok {
+					t.Fatalf("runtime type=%T, want image-only backend", rt)
 				}
 			}
 		})

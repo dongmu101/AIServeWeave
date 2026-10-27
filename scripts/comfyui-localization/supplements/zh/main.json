@@ -1,0 +1,37 @@
+{
+  "menuLabels": {
+    "linearMode_appModeToolbar_apps": "应用"
+  },
+  "settingsCategories": {
+    "Nodes 2_0": "节点 2.0",
+    "Vue Nodes": "节点 2.0",
+    "VueNodes": "节点 2.0"
+  },
+  "cloudOnboarding": {
+    "authTimeout": {
+      "causes": [
+        "企业防火墙或代理阻止了身份验证服务",
+        "VPN 或网络限制",
+        "浏览器扩展程序干扰了请求",
+        "所在地区的网络限制",
+        "尝试使用其他浏览器或网络"
+      ]
+    }
+  },
+  "g": {
+    "nothingToDuplicate": "没有可复制的内容"
+  },
+  "notSupported": {
+    "illustrationAlt": "悲伤女孩插画"
+  },
+  "subscription": {
+    "comfyCloudLogo": "Comfy Cloud 标志",
+    "usdPerMonth": "USD / 月"
+  },
+  "whatsNewPopup": {
+    "later": "稍后"
+  },
+  "nodeCategories": {
+    "shader": "着色器"
+  }
+}

@@ -1,4 +1,12 @@
 "use client";
+import type { Translator } from "@/lib/i18n/translate";
+
+
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
 
 import * as React from "react";
 
@@ -48,6 +56,7 @@ import { matchesQuery } from "@/lib/console/format";
 const NO_TEMPLATES: WorkflowTemplate[] = [];
 
 export function WorkflowsView({ operator }: { operator: boolean }) {
+  const {t } = useI18n();
   const menu = useResource<WorkflowCatalogue>({
     method: "GET",
     path: "/admin/v1/workflows",
@@ -68,19 +77,17 @@ export function WorkflowsView({ operator }: { operator: boolean }) {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">工作流</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.workflows" /></h1>
         <p className="text-sm text-muted-foreground">
-          可以提交的工作流模板及其输入声明。模板是网关的文件配置，对所有租户相同；工作流的
-          图不在这里，也不会经由任何接口交出。提交与取消运行走网关数据面，用本租户的 API Key。
-        </p>
+          <Message id="tenant.workflowTemplatesAvailableToThisTenantAndTheir" /></p>
       </div>
 
       {menu.error ? (
         <ErrorState message={menu.error} onRetry={menu.reload} />
       ) : menu.loading || !menu.data ? (
-        <LoadingState label="正在采集工作流目录" rows={4} />
+        <LoadingState label={t("tenant.collectingWorkflowCatalog")} rows={4} />
       ) : (
         <>
           <FleetFreshness
@@ -92,27 +99,25 @@ export function WorkflowsView({ operator }: { operator: boolean }) {
           <div className="flex flex-wrap items-center gap-3">
             <Input
               className="max-w-xs"
-              placeholder="筛选模板或输入名"
+              placeholder={t("tenant.filterByTemplateOrInputName")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              aria-label="筛选已采集的工作流"
+              aria-label={t("tenant.filterCollectedWorkflows")}
             />
-            <span className="text-xs text-muted-foreground">
-              显示 {shown.length} / 已采集 {templates.length} 个模板。
-            </span>
+            <span className="text-xs text-muted-foreground"><Message id="tenant.templatesShownCollected" values={{ count: shown.length, count2: templates.length }} /></span>
           </div>
 
           {shown.length === 0 ? (
             <EmptyState
-              title={templates.length === 0 ? "没有已注册的工作流模板" : "没有符合筛选条件的模板"}
+              title={templates.length === 0 ? t("tenant.noWorkflowTemplatesRegistered") : t("tenant.noTemplatesMatchTheFilters")}
               description={
                 templates.length === 0
-                  ? "模板由运维通过网关的 -workflow-templates 注册；没有模板时，工作流接口对任何 id 都返回 404。"
+                  ? t("tenant.operatorsRegisterTemplatesThroughTheGatewaySWorkflow")
                   : undefined
               }
             />
           ) : (
-            <div className="grid gap-3">
+            <div className="grid grid-cols-1 gap-3">
               {shown.map((template) => (
                 <TemplateCard key={template.id} template={template} operator={operator} />
               ))}
@@ -136,18 +141,18 @@ function TemplateCard({
   template: WorkflowTemplate;
   operator: boolean;
 }) {
+  const {t } = useI18n();
   return (
     <div className="rounded-xl border">
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <code className="font-mono text-sm">{template.id}</code>
         {template.valid ? null : (
           <Badge variant="outline" className="text-destructive">
-            校验未通过
-          </Badge>
+            <Message id="tenant.validationFailed" /></Badge>
         )}
         {template.divergent ? (
           <Badge variant="outline" className="text-destructive">
-            {operator ? "副本间不一致" : "可用性不一致"}
+            {operator ? t("tenant.inconsistentAcrossReplicas") : t("tenant.inconsistentAvailability")}
           </Badge>
         ) : null}
         {template.description ? (
@@ -160,16 +165,12 @@ function TemplateCard({
       {template.outputs.length > 0 || template.customNodeDependencies.length > 0 || template.modelDependencies.length > 0 ? (
         <div className="space-y-1 px-3 pt-2 text-xs text-muted-foreground">
           {template.outputs.length > 0 ? (
-            <p>产出：{template.outputs.map((output) => `${output.name}（${output.type}）`).join("、")}</p>
+            <p><Message id="tenant.outputs_64e199" values={{ value: template.outputs.map((output) => `${output.name}（${output.type}）`).join("、") }} /></p>
           ) : null}
           {template.customNodeDependencies.length > 0 || template.modelDependencies.length > 0 ? (
-            <p>
-              依赖：
-              {[...template.customNodeDependencies, ...template.modelDependencies]
+            <p><Message id="tenant.dependenciesDeclaredByTheTemplateAuthorNotChecked" values={{ value: [...template.customNodeDependencies, ...template.modelDependencies]
                 .map((dep) => (dep.version ? `${dep.name}@${dep.version}` : dep.name))
-                .join("、")}
-              （模板作者声明，未与节点实际已装能力核对）
-            </p>
+                .join("、") }} /></p>
           ) : null}
         </div>
       ) : null}
@@ -183,23 +184,20 @@ function TemplateCard({
         // 不同。那是发布状态，属于运维面。什么都不说，则会把「时好时坏的 404」留给他们
         // 自己去解释。
         <p className="px-3 pt-2 text-xs text-muted-foreground">
-          该模板在部分网关副本上不可用或声明不同，同一次提交可能因落到哪个副本而表现不同。
-          这通常意味着一次尚未完成的发布，请联系运维。
-        </p>
+          <Message id="tenant.thisTemplateIsUnavailableOrHasDifferentDeclarations" /></p>
       ) : null}
       {template.inputs.length === 0 ? (
         <p className="px-3 py-3 text-sm text-muted-foreground">
-          该模板没有声明可替换的输入，提交时不接受参数。
-        </p>
+          <Message id="tenant.thisTemplateDeclaresNoReplaceableInputsAndAccepts" /></p>
       ) : (
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead>输入</TableHead>
-              <TableHead>类型</TableHead>
-              <TableHead>必填</TableHead>
-              <TableHead>默认值</TableHead>
-              <TableHead>约束</TableHead>
+              <TableHead><Message id="tenant.inputs" /></TableHead>
+              <TableHead><Message id="tenant.type" /></TableHead>
+              <TableHead><Message id="tenant.required" /></TableHead>
+              <TableHead><Message id="tenant.default" /></TableHead>
+              <TableHead><Message id="tenant.constraints" /></TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -207,12 +205,12 @@ function TemplateCard({
               <TableRow key={input.name}>
                 <TableCell className="font-mono text-xs">{input.name}</TableCell>
                 <TableCell>{input.type}</TableCell>
-                <TableCell>{input.required ? "是" : "否"}</TableCell>
+                <TableCell>{input.required ? t("tenant.yes") : t("tenant.no")}</TableCell>
                 <TableCell className="font-mono text-xs break-all">
-                  {input.defaultValue ?? <span className="text-muted-foreground">无</span>}
+                  {input.defaultValue ?? <span className="text-muted-foreground"><Message id="tenant.none" /></span>}
                 </TableCell>
                 <TableCell className="text-xs text-muted-foreground">
-                  {describeBounds(input.maxLength, input.min, input.max)}
+                  {describeBounds(input.maxLength, input.min, input.max, t)}
                 </TableCell>
               </TableRow>
             ))}
@@ -230,11 +228,12 @@ function TemplateCard({
 function describeBounds(
   maxLength: number | null,
   min: number | null,
-  max: number | null
+  max: number | null,
+  t: Translator
 ): string {
   const parts: string[] = [];
   if (maxLength !== null) {
-    parts.push(`最长 ${maxLength} 字节`);
+    parts.push(t("tenant.maximumLengthBytes", { maxLength: maxLength }));
   }
   if (min !== null) {
     parts.push(`≥ ${min}`);
@@ -242,7 +241,7 @@ function describeBounds(
   if (max !== null) {
     parts.push(`≤ ${max}`);
   }
-  return parts.length === 0 ? "不限" : parts.join(" · ");
+  return parts.length === 0 ? t("tenant.unlimited") : parts.join(" · ");
 }
 
 /**
@@ -261,6 +260,7 @@ function describeBounds(
  * 时坏的失败。
  */
 function RolloutSection() {
+  const {t } = useI18n();
   const rollout = useResource<WorkflowCatalogue>({
     method: "GET",
     surface: "operator",
@@ -272,25 +272,25 @@ function RolloutSection() {
     return <ErrorState message={rollout.error} onRetry={rollout.reload} />;
   }
   if (rollout.loading || !rollout.data) {
-    return <LoadingState label="正在采集副本一致性" rows={2} />;
+    return <LoadingState label={t("tenant.collectingReplicaConsistencyData")} rows={2} />;
   }
 
   const divergent = rollout.data.templates.filter((template) => template.divergent);
   return (
     <div className="grid gap-2 rounded-xl border p-3">
       <div className="flex flex-wrap items-center gap-2">
-        <h2 className="font-heading text-sm font-semibold">副本一致性（运维）</h2>
+        <h2 className="font-heading text-sm font-semibold"><Message id="tenant.replicaConsistencyOperations" /></h2>
         <Badge variant={divergent.length === 0 ? "secondary" : "outline"}
           className={divergent.length === 0 ? undefined : "text-destructive"}>
-          {divergent.length === 0 ? "各副本一致" : `${divergent.length} 个模板不一致`}
+          {divergent.length === 0 ? t("tenant.consistentAcrossReplicas") : t("tenant.inconsistentTemplates", { count: divergent.length })}
         </Badge>
       </div>
       <Table>
         <TableHeader>
           <TableRow>
-            <TableHead>模板</TableHead>
-            <TableHead>已注册的副本</TableHead>
-            <TableHead>一致性</TableHead>
+            <TableHead><Message id="tenant.template" /></TableHead>
+            <TableHead><Message id="tenant.registeredReplicas" /></TableHead>
+            <TableHead><Message id="tenant.consistency" /></TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -298,15 +298,14 @@ function RolloutSection() {
             <TableRow key={template.id}>
               <TableCell className="font-mono text-xs">{template.id}</TableCell>
               <TableCell className="text-xs">
-                {template.replicas.length === 0 ? "未知" : template.replicas.join("、")}
+                {template.replicas.length === 0 ? t("tenant.unknown") : template.replicas.join("、")}
               </TableCell>
               <TableCell>
                 {template.divergent ? (
                   <span className="text-xs text-destructive">
-                    副本之间不同：请求会因落在哪个副本而表现不同
-                  </span>
+                    <Message id="tenant.differsAcrossReplicasRequestBehaviorDependsOnWhich" /></span>
                 ) : (
-                  <span className="text-xs text-muted-foreground">一致</span>
+                  <span className="text-xs text-muted-foreground"><Message id="tenant.consistent" /></span>
                 )}
               </TableCell>
             </TableRow>
@@ -314,9 +313,7 @@ function RolloutSection() {
         </TableBody>
       </Table>
       <p className="text-xs text-muted-foreground">
-        这里比较的是调用方可观察的部分：描述与输入声明。工作流的图不离开网关，因此「同一个
-        id 下图不同」是本视图看不见的一种不一致。
-      </p>
+        <Message id="tenant.thisComparesOnlyWhatCallersCanObserveDescriptions" /></p>
     </div>
   );
 }

@@ -99,3 +99,75 @@ export async function callControlPlane(
 function isTimeout(error: unknown): boolean {
   return error instanceof DOMException && error.name === "TimeoutError";
 }
+
+/**
+ * StreamedResult is one streamed call's outcome: status, the allow-listed
+ * response headers and the body as it arrives. / StreamedResult 是一次流式调用的产出：
+ * 状态码、允许列表内的响应头，以及按到达顺序的响应体。
+ */
+export type StreamedResult =
+  | { kind: "response"; status: number; headers: Headers; body: ReadableStream<Uint8Array> | null }
+  | { kind: "unreachable" }
+  | { kind: "timeout" };
+
+/**
+ * StreamedCall is one body-less call whose response is passed on without
+ * buffering. / StreamedCall 是一次不带请求体、响应不经缓冲直接转交的调用。
+ */
+export interface StreamedCall {
+  method: string;
+  path: string;
+  search?: string;
+  token: string;
+  /** requestHeaders are copied upstream; the caller already restricted them. / requestHeaders 原样带往上游，调用方已限制其范围。 */
+  requestHeaders?: Headers;
+  /** responseHeaders names the response headers passed back. / responseHeaders 指明回传哪些响应头。 */
+  responseHeaders: readonly string[];
+}
+
+/**
+ * streamControlPlane performs one call and hands its body on as a stream,
+ * for the embedded workflow editor's static release, whose bundles are
+ * megabytes each: buffering them as text would hold every one in memory and
+ * mangle the binary ones. The same rule as callControlPlane applies — the
+ * address comes from configuration and nothing about the call is logged.
+ *
+ * streamControlPlane 执行一次调用，并把响应体作为流转交出去，服务于嵌入式工作流
+ * 编辑器的静态发布包——其中每个打包文件都有若干兆：把它们当文本缓冲，会把每一个都
+ * 留在内存里，并损坏其中的二进制文件。与 callControlPlane 相同的规则适用：地址来自
+ * 配置，调用的任何部分都不写日志。
+ */
+export async function streamControlPlane(call: StreamedCall): Promise<StreamedResult> {
+  const config = serverConfig();
+  const url = `${config.controlPlaneUrl}${call.path}${call.search ?? ""}`;
+  const headers = new Headers(call.requestHeaders);
+  headers.set("Authorization", `Bearer ${call.token}`);
+  // The deadline covers reaching the control plane and receiving its headers,
+  // not the body: a multi-megabyte bundle to a slow browser legitimately takes
+  // longer than any request timeout, and AbortSignal.timeout would cut it off
+  // mid-stream. A client that goes away cancels the body instead.
+  // 截止时间只覆盖连上控制面并收到响应头，不覆盖响应体：几兆的打包文件送往慢速浏览器
+  // 本来就会超过任何请求超时，AbortSignal.timeout 会把它从中间截断。客户端离开时
+  // 取消的是响应体本身。
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException("upstream headers timed out", "TimeoutError")), config.timeoutMs);
+  try {
+    const response = await fetch(url, {
+      method: call.method,
+      headers,
+      cache: "no-store",
+      redirect: "manual",
+      signal: controller.signal,
+    });
+    const passed = new Headers();
+    for (const name of call.responseHeaders) {
+      const value = response.headers.get(name);
+      if (value !== null) passed.set(name, value);
+    }
+    return { kind: "response", status: response.status, headers: passed, body: response.body };
+  } catch (error) {
+    return isTimeout(error) ? { kind: "timeout" } : { kind: "unreachable" };
+  } finally {
+    clearTimeout(timer);
+  }
+}

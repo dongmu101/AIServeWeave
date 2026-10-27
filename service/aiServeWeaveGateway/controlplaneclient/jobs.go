@@ -418,6 +418,45 @@ func (c *JobsClient) ListJobArtifacts(ctx context.Context, tenantID, jobID strin
 	return out, nil
 }
 
+// ArtifactRoute is the control plane's full internal record of one
+// artifact — its filename/subfolder/type triple, its object storage key if
+// bytes were ever persisted there, and its owning job's NodeID/RuntimeID.
+// Unlike JobArtifact it is read by bare artifact id with no job id needed,
+// for STATUS.md's Gateway 故障切换收尾: a download request names only the
+// artifact, and a replica recovering one it has never seen has nothing else
+// to ask by.
+//
+// ArtifactRoute 是控制面对一个产物的完整内部记录——它的 filename/subfolder/
+// type 三元组、字节曾被持久化时的对象存储键，以及所属 job 的
+// NodeID/RuntimeID。与 JobArtifact 不同，它按裸产物 id 读取，无需 job id，
+// 对应 STATUS.md 的「Gateway 故障切换收尾」：一次下载请求只携带产物本身的
+// 名字，而一个正在恢复一个自己从未见过的产物的副本，没有别的东西可以拿去问。
+type ArtifactRoute struct {
+	JobID       string
+	TenantID    string
+	Filename    string
+	Subfolder   string
+	Type        string
+	ContentType string
+	SizeBytes   int64
+	StorageKey  string
+	NodeID      string
+	RuntimeID   string
+}
+
+// ArtifactRoute reads one artifact's full record by its bare public id,
+// scoped to tenantID.
+//
+// ArtifactRoute 按裸公开 id 读取一个产物的完整记录，限定在 tenantID 范围内。
+func (c *JobsClient) ArtifactRoute(ctx context.Context, tenantID, artifactID string) (ArtifactRoute, error) {
+	var wire artifactRouteWire
+	path := "/internal/v1/artifacts/" + url.PathEscape(artifactID) + "?tenant_id=" + url.QueryEscape(tenantID)
+	if err := c.call(ctx, http.MethodGet, path, nil, &wire); err != nil {
+		return ArtifactRoute{}, err
+	}
+	return wire.toArtifactRoute(), nil
+}
+
 // ExpiredJobArtifact is one artifact record a cleanup sweep (STATUS.md's
 // P04) may reap. Unlike JobArtifact it carries StorageKey: the caller here
 // is exactly the party that needs it, to delete the object storage bytes
@@ -519,6 +558,28 @@ type jobArtifactWire struct {
 	SizeBytes   int64     `json:"size_bytes,omitempty"`
 	ContentType string    `json:"content_type,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
+}
+
+type artifactRouteWire struct {
+	ArtifactID  string `json:"artifact_id"`
+	JobID       string `json:"job_id"`
+	TenantID    string `json:"tenant_id"`
+	Filename    string `json:"filename"`
+	Subfolder   string `json:"subfolder,omitempty"`
+	Type        string `json:"type,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	StorageKey  string `json:"storage_key,omitempty"`
+	NodeID      string `json:"node_id"`
+	RuntimeID   string `json:"runtime_id"`
+}
+
+func (a artifactRouteWire) toArtifactRoute() ArtifactRoute {
+	return ArtifactRoute{
+		JobID: a.JobID, TenantID: a.TenantID, Filename: a.Filename, Subfolder: a.Subfolder,
+		Type: a.Type, ContentType: a.ContentType, SizeBytes: a.SizeBytes, StorageKey: a.StorageKey,
+		NodeID: a.NodeID, RuntimeID: a.RuntimeID,
+	}
 }
 
 type expiredJobArtifactWire struct {

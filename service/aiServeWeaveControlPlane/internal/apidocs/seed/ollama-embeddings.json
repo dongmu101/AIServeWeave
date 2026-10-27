@@ -1,0 +1,147 @@
+{
+  "slug": "ollama-embeddings",
+  "category": "Ollama 兼容",
+  "category_order": 60,
+  "sort_order": 30,
+  "title": "Ollama 文本向量",
+  "method": "POST",
+  "path": "/api/embeddings",
+  "summary": "兼容 Ollama 旧版 /api/embeddings 的单条文本向量接口。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 Ollama 旧版单条文本的 /api/embeddings 接口",
+      "每次请求对一段 prompt 生成一个向量",
+      "批量接口 /api/embed 未实现，批量请使用 POST /v1/embeddings",
+      "需要 Bearer API Key 鉴权"
+    ],
+    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "鉴权头，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "向量模型 ID，可通过 GET /v1/models 查看。"
+      },
+      {
+        "name": "prompt",
+        "type": "string",
+        "required": true,
+        "description": "要生成向量的文本，不能为空。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "embedding",
+        "type": "array",
+        "required": true,
+        "description": "向量，浮点数数组。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/api/embeddings \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"prompt\": \"AIServeWeave 是一个分布式推理平台\"\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nresp = requests.post(\n    \"{{BASE_URL}}/api/embeddings\",\n    headers={\"Authorization\": \"Bearer {{API_KEY}}\"},\n    json={\"model\": \"{{MODEL}}\", \"prompt\": \"AIServeWeave 是一个分布式推理平台\"},\n)\nresp.raise_for_status()\nvector = resp.json()[\"embedding\"]\nprint(len(vector))"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const resp = await fetch(\"{{BASE_URL}}/api/embeddings\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({ model: \"{{MODEL}}\", prompt: \"AIServeWeave 是一个分布式推理平台\" }),\n});\nconst body = await resp.json();\nif (!resp.ok) throw new Error(typeof body.error === \"string\" ? body.error : body.error.message);\nconsole.log(body.embedding.length);"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"embedding\": [\n    0.0123,\n    -0.0456,\n    0.0789,\n    0.0012,\n    -0.0345\n  ]\n}"
+      },
+      {
+        "status": 400,
+        "label": "缺少 model 或 prompt",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"model and prompt are required\"\n}"
+      },
+      {
+        "status": 400,
+        "label": "请求体不是合法 JSON",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the request body is not valid JSON\"\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 缺失或无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the requested model is not available on any connected node\"\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出租户配额（响应带 Retry-After 头）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "暂无可用容量",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"no node had capacity for this request; retry shortly\"\n}"
+      },
+      {
+        "status": 502,
+        "label": "后端返回错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the backend returned an error\"\n}"
+      },
+      {
+        "status": 504,
+        "label": "请求超时",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": \"the request timed out\"\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "与原生 Ollama 的差异",
+        "body": "1. 只识别 model 与 prompt 两个字段，options、keep_alive 等其他字段会被忽略。\n2. 只实现旧版单条接口 /api/embeddings；新版批量接口 /api/embed 未实现。需要批量向量时请使用 OpenAI 兼容的 POST /v1/embeddings。\n3. 需要 Bearer API Key 鉴权。"
+      },
+      {
+        "title": "错误码一览",
+        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+      },
+      {
+        "title": "鉴权与配额",
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+      }
+    ]
+  }
+}

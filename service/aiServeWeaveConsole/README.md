@@ -14,7 +14,7 @@ AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模�
 | 图表 | ECharts + `echarts-for-react` |
 | 包管理 | pnpm，版本以 `package.json` 的 `packageManager` 为准（当前为 12.3.4） |
 | 类型检查 | TypeScript 6 / 7 并存，分别服务 ESLint/构建与日常类型检查 |
-| 测试 | Node 24 内置 `node:test`，无额外依赖 |
+| 测试 | 单元测试用 Node 24 内置 `node:test`；Q03 浏览器验收另用 Playwright 开发依赖 |
 
 TanStack Table 用于三张列表，TanStack Virtual 用于审计长列表；ECharts 已安装但尚无指标接口可画。版本与脚本以 [package.json](package.json) 为准。
 
@@ -59,6 +59,7 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 功能 | 接口 | Console 页面 | 当前边界 |
 | --- | --- | --- | --- |
 | 登录与账户安全 | `POST /admin/v1/auth/login`、`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}` | `/login`、`/console/account` | 退出会先撤销服务端会话；改密与撤销全部会话后重新登录 |
+| 租户自助注册 | `POST /admin/v1/auth/signup`，随后 `POST /admin/v1/auth/login` | `/signup` | 需同时开启控制面 `Signup.Enabled` 与 Console `AISW_CONSOLE_SIGNUP_ENABLED`；未开启时页面与 `/api/signup` 均为 404。经 Console 自己的 `/api/signup` 路由，不在转发白名单内；成功后自动以新 owner 登录 |
 | 用户 | `GET/POST /admin/v1/users`、`PUT/POST /admin/v1/users/:id/*` | `/console/users` | owner 可重置密码、改角色、禁用/启用和撤销会话；禁用永久吊销该用户创建的 Key |
 | 平台运维账户 | `/operator/v1/operators*`、`/operator/v1/auth/*` | `/operator/operators`、`/operator/account` | 平台会话独立；不能禁用自己或最后一名有效运维 |
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
@@ -71,16 +72,18 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | 取消与产物 | `POST /v1/jobs/{id}/cancel`、`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}` | 实时 Job 与历史详情 | Console 服务端使用租户 Key 直连 Gateway，需在 `/console/settings` 配置 |
 | 发布状态 | `GET /operator/v1/workflows` | `/operator/workflows` | 同一份目录，保留「哪些副本注册了它、是否一致」 |
 
-三个列表端点返回 `{ "items": [...], "next_cursor": "..." }` 信封而不是裸数组：`next_cursor` 缺席表示末页，**接口不提供总数**。分页是基于 `(created_at, id)` 倒序的 keyset 游标，`limit` 默认 50、上限 200。契约细节见 [控制面 README](../aiServeWeaveControlPlane/README.md#列表分页)。
+三个列表端点返回 `{ "items": [...], "next_cursor": "..." }` 信封而不是裸数组：`next_cursor` 缺席表示末页，**接口不提供总数**。分页是基于 `(created_at, id)` 倒序的 keyset 游标，`limit` 默认 50、上限 200。契约细节见 [控制面 STATUS](../aiServeWeaveControlPlane/STATUS.md#列表分页)。
 
 API 的字段与状态码以控制面的 [请求响应结构](../aiServeWeaveControlPlane/internal/types/types.go)、[路由](../aiServeWeaveControlPlane/internal/handler/routes.go) 和业务逻辑为准。用户、Key 与审计列表均返回上述分页信封，吊销成功返回 `204`，错误体为 `{ "error": "..." }`。
 
-节点和模型只读目录、工作流与 Job 页面已有接口；模板发布与监控仍需补齐管理 API。Gateway 已有推理和 Job API，并不代表这些功能已经具备 Console 管理入口；具体依赖见 [STATUS.md](STATUS.md)。
+节点和模型只读目录、工作流与 Job 页面、模板发布（含只读节点图预览与基于官方 ComfyUI 前端的可视化编辑）与指标/告警页面均已接入管理 API。Gateway 已有推理和 Job API，并不代表这些功能已经具备 Console 管理入口；具体依赖见 [STATUS.md](STATUS.md)。
+
+租户控制台的顶部菜单固定为 56px，正文在菜单下方独立滚动；宽屏显示单行导航，窄屏通过显示当前页面的下拉菜单切换，导航不换行。账户名称、租户和角色位于右侧头像菜单内，账户安全、设置、平台运维和退出也可从这里进入。API 文档的正文与请求、响应示例共用正文滚动区域，代码只在横向溢出时内部滚动，避免滚轮在示例与页面之间切换。
 
 ### 准备后端联调环境
 
-1. 按 [ControlPlane README](../aiServeWeaveControlPlane/README.md) 启动数据库、启用 AOF 持久化的 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
-2. 由运维按部署说明创建第一个租户及 owner。租户引导使用 BootstrapToken，常规 Console 会话不持有它。
+1. 按 [ControlPlane STATUS](../aiServeWeaveControlPlane/STATUS.md) 启动数据库、启用 AOF 持久化的 Redis 与控制面，或按 [部署说明](../../deploy/README.md) 启动完整后端编排。
+2. 由运维按部署说明创建第一个租户及 owner。租户引导使用 BootstrapToken，常规 Console 会话不持有它。若控制面开启了 `Signup.Enabled` 且 Console 设置了 `AISW_CONSOLE_SIGNUP_ENABLED=true`，也可以直接在 `/signup` 自助注册。
 3. 以该 owner 登录 Console，走完「创建用户 → 创建 Key → 关闭一次性明文 → 吊销 → 查询审计 → 退出」。
 
 一次可复制的本地联调必须包含 Redis；P05 后控制面不会退回只验 JWT：
@@ -124,7 +127,7 @@ app/console/quota/   租户资料与配额读写
 app/operator/login/ 平台运维登录（独立 Cookie）
 app/operator/(protected)/ 平台会话布局、机群/发布/运维账户/账户安全页面
 app/console/fleet/   旧节点入口，跳转到 /operator/fleet
-app/console/models/  旧模型入口，跳转到 /operator/models
+app/console/models/  租户 AI 服务与模型：连接到 Gateway 的 Agent 上报目录
 app/console/workflows/ 工作流菜单（租户）
 app/console/jobs/    当前运行（租户，实时视图）
 app/console/jobs/history/ 持久化历史与详情、图片/视频产物预览
@@ -165,7 +168,7 @@ pnpm build
 
 `pnpm typecheck` 使用 TS 7；ESLint 与 Next.js 构建内部使用 TS 6。因此类型检查通过不等于构建通过，不能删掉其中一道门禁。双版本的原因和维护方式见 [AGENTS.md](AGENTS.md)。
 
-`pnpm test` 走 Node 24 内置的 `node:test`，不引入测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面属于人工验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。
+`pnpm test` 走 Node 24 内置的 `node:test`，不引入单元测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面另走下方 P10/Q03 浏览器验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。
 
 构建成功后，可在同一目录启动生产模式服务：
 
@@ -206,6 +209,12 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 - 读取失败不得画成「零条记录」，两者用 `components/console/states.tsx` 中不同的状态组件表达。
 - 业务实现、接口变化和验收结果同步更新本 README 与 [STATUS.md](STATUS.md)，区分已完成能力和规划任务。
 
+## 界面验收（P10 / Q03）
+
+`pnpm test:e2e` 独立运行浏览器验收。先执行生产构建，再运行 `pnpm exec playwright install chromium` 准备浏览器；已有 Chrome 时使用 `AISW_BROWSER_CHANNEL=chrome pnpm test:e2e`。测试启动独立回环端口 3100，以合成会话和有上限的数据覆盖窄屏、长文本、键盘、焦点、错误恢复与万条记录分页；不依赖真实 ControlPlane。`pnpm test` 的纯逻辑边界不变。
+
+Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏页面还保存成功截图。覆盖范围、内存测量方法与归档要求见 [P10 验收手册](../../deploy/p10-acceptance.md)，本轮结果见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)。
+
 ## 平台运维（P01 / C22）
 
 访问 `/operator/login`，使用部署管理员通过控制面的 `POST /admin/v1/platform/operators` 引导创建的平台账户；租户 owner/admin 不自动获得平台权限。旧 `AISW_CONSOLE_OPERATOR_TOKEN` / `AISW_CONSOLE_OPERATOR_EMAILS` 已移除，不再读取。
@@ -218,6 +227,8 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 
 ## 模型与路由管理（C24 / P02）
 
+`/operator/models` 直接展示当前 Gateway 上报的本地 AI 模型与后端连接，使用 `GET /operator/v1/nodes?gateway=default`，对应控制面 `Fleet.Gateways` 中第一个 Gateway（默认 Compose 中只有一个 Gateway）。“Gateway 本机 AI 服务”区域显示各副本 `local_runtimes` 中的 Ollama/vLLM 服务，即使未连接 Agent 也可见；本机服务支持搜索，与 Agent 清单单独展示。本机发现仅提供清单，通过 Gateway API 推理仍需接入 Agent；容器回环地址指容器自身，Compose 显式配置宿主机发现端点，可通过 `GATEWAY_LOCAL_OLLAMA_URL` / `GATEWAY_LOCAL_VLLM_URL` 覆盖。页面显示 Gateway 标识与地址、节点在线状态、Agent 版本和心跳，以及后端类型、服务地址、健康状态、版本、检查延迟、发现时间、模型 ID 和上报能力。支持搜索、在线节点筛选、手动刷新和每 15 秒自动刷新，后台标签页暂停刷新。仅查询此 Gateway 的观测，不混入其他副本的节点、模型或健康状态；该 Gateway 不可读时显示错误并移除旧数据，不将失败显示为零连接。平台页沿用现有“模型”导航与平台会话；租户另有独立的裁剪目录入口。后端健康与模型存在不代表已配置路由或可调度；调用名称与范围仍以模型路由为准。
+
 `/operator/routes` 提供平台路由编辑。编辑别名、目标模型、节点选择器、优先级和权重，或导入原有 JSON 数组文件（每个及合并后不超过 1 MiB）；导入按流计数，失败保留原草稿。草稿只保存在当前页面，离开会丢失。服务端验证通过后才能确认发布；发布带当前版本条件，冲突不会覆盖他人版本或丢弃本地草稿。
 
 历史版本按页读取，可并排比较选中历史与草稿/当前发布；回滚复制历史内容为新版本，本地草稿保留。重新读取当前版本也保留草稿，只有明确选择“用当前版本替换草稿”并确认才丢弃修改。异步读取有世代检查，慢初始响应或发布前的旧状态响应不会覆盖新草稿/观测。
@@ -225,3 +236,7 @@ docker build -t aisw-console ./service/aiServeWeaveConsole
 下方状态展示期望版本和每个配置 Gateway 的实际版本、摘要、时间与读取结果。文件模式、缺失副本和任何失败都不算全部完成；成功发布本身也不代表已在所有副本生效。此处的模型是逻辑别名，不是后端部署生命周期管理，也不新增租户节点池权限。
 
 所有路由调用仍走平台会话与显式白名单。仅路由验证/发布请求放宽至 1 MiB + 64 KiB，其他管理请求维持 64 KiB；这些路由响应也有独立大小限制。发布/回滚不自动重试，故障结果不明时先刷新核对。
+
+租户导航的“AI 服务与模型”（`/console/models`）使用租户会话调用 `GET /admin/v1/models`，无需平台运维登录。所有已登录租户角色均可查看连接到默认 Gateway 的 Agent 所上报的服务类型、健康状态、版本、模型 ID 与能力，并区分 Agent 在线与离线；离线数据明确标示为最近一次上报，不混入 Gateway 本机发现结果；控制面按字段允许列表返回，明确返回 `agent_id` 与 `service_id` 以区分不同 Agent 的服务，不携带 Gateway 标识、内部地址、凭据或自由诊断文本。页面支持搜索、手动刷新与每 15 秒自动刷新；失败时显示错误，不将失败当作空目录。这份目录是共享服务发现信息，并非某租户的可调用模型授权清单，推理仍取决于 Agent 与路由配置。平台模型页保留原有详细运维视图。
+
+租户模型目录以 TanStack Table 列表展示，每个 Agent 只占一条主记录：Agent 列显示标识与连接状态，AI 服务列内使用子表列出该 Agent 的服务 ID、类型、健康、版本与模型数量；列表不展示模型 ID，需点“查看模型”在弹窗中查看。同一 Agent 的多个服务不会重复主记录。Agent 主表、服务子表和模型详情分别在当前已采集快照内每页显示 25 条，限制 DOM 行数。搜索覆盖当前快照的全部 Agent/服务/模型，不限于当前页，支持只看在线 Agent。完整模型 ID 与能力通过“查看模型”弹窗按需展示，详情打开时暂停自动刷新。计数与页数仅描述这次已采集快照，不是跨时间的机群总量。

@@ -19,6 +19,18 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- 请求检索（C28）覆盖全部推理前门：Gateway 的请求日志除 chat/responses/embeddings/models 外，新增记录 `images`、`messages`（Anthropic Messages，经 `x-api-key` 认证的请求同样带 key 展示形式）、`transcriptions`、`translations`、`rerank`、`ollama_chat`、`ollama_generate`、`ollama_embed`。取值不超过 `request_logs.endpoint` 的 16 字符，无需数据库迁移；Job 路由与 Ollama 模型管理路由仍不记录。Gateway 指标的 `endpoint` 标签新增 `audio_transcriptions`、`audio_translations`、`rerank`，三者此前落在 `other`。
+- Claude CLI 模型支持 `POST /v1/responses`（JSON 与 SSE）。Gateway 先按普通 Responses 的规则还原 `input`，再复用原生 Chat 转换与 Messages 会话协调；续接沿用身份、完整历史与原节点绑定校验，Agent 无需升级。同一回合被拆开的 assistant 文本项与调用项会合并回一条；`function`/`custom`/`local_shell`/`namespace` 工具按原类型还原。`store: true`、`previous_response_id`、`top_p`、非 `text` 的 `text.format`、非 `auto` 的 `tool_choice`、`strict: true` 工具和图片/文件内容明确返回 400。用量与指标记为 `responses`。租户 API 参考 `responses` 种子新增「Claude 系列模型的参数限制」一节（revision 2），8 种语言译文同步。内部重构：`nativeMessagesOutput` 的输出适配改为 `nativeOutput` 接口，Chat 行为不变。
+- 公开 Job 响应（提交、状态、取消）新增 J01 设计的 `durability` 字段：`memory_only` 表示只在受理副本的内存里，`persisted` 表示控制面已确认落库，只会单向变化。租户 API 参考文档（`workflow-runs`、`job-status`、`job-cancel` 三个种子，revision 递增）与 8 种语言的译文同步更新。
+
+- Agent 新增 TensorRT-LLM（`kind: trtllm`，`trtllm-serve`）与 TokenSpeed（`kind: tokenspeed`，`tokenspeed serve`，前端为 SMG）两种本地推理后端，均走 OpenAI 兼容 HTTP。TensorRT-LLM 以 `/v1/models` 的 `owned_by="tensorrt_llm"` 核实身份，`/server_info` 判定是否为主 LLM 角色；TokenSpeed 以 SMG 的 `/readiness` 探测与健康检查，身份不强验证（`IdentityVerified=false`）。`-auto-discover` 在 8000 端口依次探测 vLLM、TensorRT-LLM、TokenSpeed，三者探测互斥；vLLM 的 Probe 现在会拒绝 `owned_by` 为 `tensorrt_llm` 的服务。**行为变化**：本机自动发现改为按地址去重，一个地址已以任何种类注册（含手工声明）时不再注册其他种类。本地设置页的后端下拉框同步新增两项。
+- Gateway 新增 `-scheduler-policy`（`least_load` 默认 / `power_of_two` / `prefix_hash`）与 `-scheduler-prefix-bytes`：只改变同一路由 target 内的候选顺序。`prefix_hash` 按「直到第一条 user 消息」的提示前缀做 rendezvous 哈希，让同一对话落到同一节点以复用提示缓存；工作流始终用 `least_load`。
+- 工作流模板可视化编辑（P03 后续）：Console `/operator/workflow-templates` 以 `wujie` 同源挂载官方 ComfyUI_frontend 1.55.17，可在画布上编辑模板图、切换 App 模式并导出回草稿；控制面新增 `internal/comfyeditor` 只编辑桩后端（`ComfyEditor.DistDir` 启用，编译内置 678 个 ComfyUI 核心节点，自定义节点 JS 永不提供，执行与上传一律 403）与 `scripts/fetch-comfyui-frontend.sh`（固定版本、SHA-256 校验，GPL-3.0 发布包不进仓库）。`common/workflowtemplate.Content` 新增可选 UI 工作流 `workflow`（迁移 0003 追加 `workflow_json` 列），`MaxContentBytes` 增至 8 MiB + 256 KiB。**升级须先 Gateway 后控制面**：旧 Gateway 不认识该字段，会拒绝含布局的整包并继续使用上一份缓存。
+- Agent 本机自动发现新增 SGLang：`-auto-discover` 除 Ollama（11434）、vLLM（8000）外，还探测 `127.0.0.1:30000`（SGLang `launch_server` 默认端口），应答即按 `sglang` 注册。SGLang 无法从 OpenAI 兼容响应核实身份，快照中 `IdentityVerified=false`；Gateway 本机清单不受影响，仍只探测显式配置的 Ollama/vLLM 地址。
+- Codex CLI 接入：Gateway 的 `POST /v1/responses` 现在完整承载工具循环——流式输出 `function_call` 项与参数事件，接受 `function_call`/`function_call_output`/`custom_tool_call`/`local_shell_call` 及其输出、`reasoning`（丢弃）作为输入项，接受 `custom`、`local_shell`、`namespace` 工具并按各自类型还原，`developer` 角色映射为 `system`，`tool_choice` 对象改写成 Chat 形状；`web_search` 工具被略去并在 `X-Gateway-Ignored-Tools` 响应头中列出；截断的流式回复以 `response.incomplete` 收尾。同时修复了 message 项的 `output_item.added` 因空 `content` 被省略、导致 Codex 报 `OutputTextDelta without active item` 的旧缺陷。已用 codex-cli 0.156.1 对真实 Gateway 联调；配置见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md) 的「工具循环与 Codex CLI 接入」。 新增 `scripts/codex-model-catalog.sh`：基于已安装 Codex 自带目录为自建模型生成 `model_catalog_json`，消除 `Model metadata … not found` 警告并让 Codex 按真实上下文窗口压缩。
+- P09b 告警（C29）：控制面新增 `alert_rules`/`alert_instances` 两张表（PostgreSQL/MySQL 双支持，固定版本 SQL 迁移），新增 `internal/alertengine` 后台评估循环——随服务启动无条件运行，默认每 60 秒一轮，把 `metrics_history` 的原始 Prometheus 计数器/直方图汇总行折算成 `request_rate`/`success_rate`/`latency_p95`/`token_usage`/`capacity` 五个派生指标（`success_rate`/`latency_p95` 是把此前只存在于 Console 前端 `lib/console/metrics-charts.ts` 的近似算法移植成 Go 实现），在规则的连续桶窗口内比较阈值，按去抖动规则创建/维持/自动解除告警实例；新增 Webhook 发送器，固定 3 次尝试、指数退避、无持久投递队列；控制面新增 5 个规则 CRUD 端点（`/operator/v1/alert-rules`）与 2 个实例端点（`GET /operator/v1/alerts`、`POST /operator/v1/alerts/:id/acknowledge`）；Console 新增 `/operator/alert-rules`、`/operator/alerts` 两个页面。
+- P09a 请求与错误检索（C28）：控制面新增 `request_logs` 表（PostgreSQL/MySQL 双支持，固定版本 SQL 迁移，默认保留 30 天，独立协程每日清理），Gateway 新增请求日志中间件与有界后台推送器——对已鉴权的 chat/responses/embeddings/models 四个前门端点按状态码分类进封闭 outcome 枚举，异步批量上报，缓冲满时丢弃并计入 `gateway_request_log_dropped_total`；控制面新增 `POST /internal/v1/requestlogs`（按主键幂等）、`GET /admin/v1/requests`（租户）、`GET /operator/v1/requests`（运维，跨租户）；Console 新增 `/console/requests`、`/operator/requests` 两个只读检索页。不记录请求体、响应体、模型名、node_id、Prompt 或鉴权头。
+- P08 指标、追踪与历史监控：Registry 与控制面接入 `common/metrics`（新增 `-metrics-addr`、指标目录与标签基数测试）；控制面新增 `internal/metricshistory` 定时抓取 Gateway/Registry 的 Prometheus 文本、聚合后写入固定版本 SQL 落地的 `metrics_history_points` 表（复用现有关系库，不引入独立时序数据库）与保留期清理；`GET /operator/v1/metrics/history` 与 Console `/operator/metrics`（C27，ECharts `dataZoom`）；新增共享 `common/reqid` 包，把 Gateway 前门的 request_id 带到 Scheduler/Tunnel/Agent 的结构化日志，实现最轻量的跨服务请求关联。
 - P07 数据库升级与恢复：双引擎固定版本 SQL、锁与校验和/dirty 账本、独立 up/status/resume 命令、已有数据升级及原生备份恢复测试；事务 outbox 跨崩溃补发 Key 吊销。
 - P05 用户与会话生命周期：Redis 权威可吊销会话、租户用户与平台运维改密/重置/禁用/启用/角色及会话管理，以及对应 Console 页面。
 - P06 Key 吊销通知：ControlPlane 以 Redis generation 长轮询唤醒 Gateway；健康链路 1 秒内清缓存，通知异常时 Gateway 立即停用正向缓存并逐请求校验。
@@ -28,6 +40,10 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 - Redis 成为 ControlPlane 必需依赖，Compose 使用 AOF `appendfsync always`；无 `sid` 的旧 JWT 升级后失效。
 - 禁用租户用户会在同一数据库事务中吊销其创建的 active API Key；ControlPlane Key 缓存改用 generation 防止并发旧读取回填。
 - Gateway 的 `-key-cache-ttl` 保留为纵深防御；提交后通知前崩溃由 P07 outbox 重试，漏通知、断线重连和控制面副本切换由持久 generation 补偿。
+
+### Fixed
+
+- `common/metrics.Registry` 的 `Counter`/`Gauge`/`Histogram` 此前对 nil 接收者 panic——一个未初始化的 `*Registry` 字段被装进 `runtime.Metrics` 接口后不再是 nil 接口，调用方常见的 `== nil` 判断拦不住它；现在与其余记录点一致，返回丢弃仪器。
 
 ## [0.1.0] - 2026-09-07
 

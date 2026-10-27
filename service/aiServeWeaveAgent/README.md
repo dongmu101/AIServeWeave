@@ -1,15 +1,25 @@
-# aiserveweave-agent
+# Agent
 
-节点侧 Agent 主动出站连接 Gateway，通过 mTLS 隧道执行运行时语义请求，不监听公网推理入口。协议、连接状态机、配置下发与验收记录见 [隧道 README](tunnel/README.md)，启动和部署见 [部署说明](../../deploy/README.md)。
+## 本地 CLI 账户额度
 
-## 当前实现
+正常运行的 Agent 在本地配置页面（`-config-ui-addr`）的「推理后端」中显示「CLI 账户额度」。只查询本地配置中已声明的 `kind: codex` / `kind: claude`；同一种 CLI 的多个运行时共用同一系统账户额度，只显示一份。仅配置模式尚未启动运行时，不执行账户查询。
 
-- `main.go` 装配运行时管理器、后端工厂、自动发现、隧道和可选指标监听；`-version` 输出构建版本。
-- `localdiscovery/` 默认探测本机 Ollama/vLLM，可用 `-auto-discover=false` 关闭；`-ollama-url` 可显式注册 Ollama。
-- `tunnel/` 已实现身份注册/续期、多副本连接、槽池、心跳、运行时配置应用和流式请求/产物转发。执行 runtime 必须命中本地白名单。
-- 后端适配在共享的 `common/runtime`，支持 Ollama、vLLM、SGLang 和 ComfyUI；ComfyUI 适配位于 `common/runtime/workflow/comfyui`。
-- `workflow/` 仍是占位包。受控模板目录与输入绑定已在 Gateway 的 `workflow/` 实现，不能据此目录重复建设。
+- Codex 使用原生 app-server 的 `account/rateLimits/read`，读取计量桶的主/次窗口、已用比例、窗口时长与重置时间；多桶响应优先于兼容单桶响应。上游未报告重置时间的窗口无法判断何时过期，不显示，其余窗口照常展示。
+- Claude Code 使用原生 stream-json 控制请求 `get_usage`（`skip_behaviors: true`），读取 5 小时、7 天及可用的 Sonnet/Opus 周窗口。该接口是 CLI 的实验能力，旧版本或账户权限可能不提供；可缺失窗口不显示，所有窗口都缺失时显示暂不可用，不推算额度。
+- 剩余比例为 `max(0, 100 - 已用比例)`，不是可用 token 数或余额金额；平台租户配额、每次推理 token 与 CLI 共享账户的订阅窗口相互独立。
+- 页面渲染只读缓存，异步查询每分钟最多一批、两种 CLI 并发执行，共享 15 秒超时。查询不随发起它的页面请求取消，刷新或关闭页面不会把本轮记为失败。点击刷新也遵守一分钟缓存。查询时间和重置时间以 UTC 显示；超过两分钟标记旧数据，窗口到重置时刻后隐藏比例，等待重新查询。
+- 未登录、未提供额度、查询失败分别显示提示。失败会清除上一轮额度，避免把旧结果当作当前余量。查询不提交提示词、不执行模型推理，不读取或导出 token、钥匙串秘密；仍由 CLI 自行管理登录，原始输出和错误不进入页面或日志。
 
-## 尚未交付的范围
+Agent 必须与 `codex login` / `claude auth login` 使用相同系统账户和账户目录；页面只监听回环地址。离线验证：
 
-运行时配置文件加载、Managed 后端安装/升级、GPU/系统资源采集、模型分发和 Agent 自动升级仍属规划。本机自动发现不等于进程生命周期管理；已有隧道文件转发不等于对象存储或原节点离线后的文件可用性。跨服务任务与验收统一见 [根 STATUS](../../STATUS.md)。
+```bash
+go test ./service/aiServeWeaveAgent/cliusage ./service/aiServeWeaveAgent/codexcli ./service/aiServeWeaveAgent/claudecode ./service/aiServeWeaveAgent/configui
+```
+
+上游参考：[Codex app-server 账户额度](https://learn.chatgpt.com/docs/app-server#6-rate-limits-chatgpt)、[Claude Code 订阅窗口说明](https://code.claude.com/docs/en/statusline#rate-limit-usage)。真实账户查询与离线解析测试应分别验收，离线通过不代表本机已登录或已获取额度。
+
+## Gemini CLI 图片生成
+
+在本地声明 `kind: gemini-cli`，通过 Gemini CLI 官方 Nano Banana 扩展提供 `gemini-image` 图片模型，复用 Gateway 的 `/v1/images/generations` 与既有图像流隧道。该后端仅支持单张文生图，直接调用扩展的固定 MCP 工具；凭据只从 Agent 本机环境读取。现有 `kind: gemini` 的托管聊天用途不变。
+
+安装、YAML、API 示例、隔离规则与实机验收边界见 [geminicli/README.md](geminicli/README.md)。

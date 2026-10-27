@@ -1,0 +1,26 @@
+auto_discover: true
+auto_discover_interval: 30s
+gateway:
+    allowed_runtimes:
+        - codex-local
+    bootstrap_token_file: ./data/compose-current/bootstrap-token
+    ca_file: ./data/compose-current/ca.pem
+    cert_file: ./data/compose-current/cert.pem
+    endpoints:
+        - 127.0.0.1:8443
+    key_file: ./data/compose-current/key.pem
+    labels:
+        gpu: "4090"
+        region: home-mac
+    max_gateways: 4
+    node_id: node-mac-01
+    registry: 127.0.0.1:9443
+log_level: info
+metrics_addr: 127.0.0.1:9092
+runtimes:
+    - base_url: ""
+      id: claude-code-local
+      kind: claude
+    - base_url: ""
+      id: codex-local
+      kind: codex

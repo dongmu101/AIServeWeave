@@ -317,6 +317,16 @@ type APIKeys interface {
 	GetAPIKey(ctx context.Context, tenantID, id string) (model.APIKey, error)
 	ListAPIKeys(ctx context.Context, tenantID string, query ListQuery, filter APIKeyFilter) (Page[model.APIKey], error)
 	RevokeAPIKey(ctx context.Context, tenantID, id string, at time.Time) error
+	// DeleteAPIKey removes one key row of any status, scoped to its tenant, and
+	// reports ErrNotFound when no such row exists. Removing a still-active key
+	// is also a revocation as far as the Gateway is concerned, so the
+	// implementation must enqueue the same revocation generation RevokeAPIKey
+	// does, in the same transaction.
+	//
+	// DeleteAPIKey 删除一个任意状态的 key 行，并限定在其租户范围内；不存在这样的行时
+	// 报 ErrNotFound。对 Gateway 而言，删除一个仍处于 active 的 key 同样等于吊销，因此
+	// 实现必须在同一事务里递增 RevokeAPIKey 所递增的那个吊销 generation。
+	DeleteAPIKey(ctx context.Context, tenantID, id string) error
 	// MarkAPIKeyUsed records a coarse last-used timestamp. Callers must rate
 	// limit it themselves; see the gorm implementation for why this is not
 	// written on every request.
@@ -471,6 +481,19 @@ type JobArtifacts interface {
 	//
 	// ListJobArtifacts 读取一个 job 的产物，并限定在其租户范围内。
 	ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([]model.JobArtifact, error)
+	// GetJobArtifact reads one artifact by its bare public id, with no tenant
+	// scope — like DeleteJobArtifact, but for a read. It exists for a Gateway
+	// replica recovering a download it has no local record of (STATUS.md's
+	// Gateway 故障切换收尾): the request carries only the artifact id, with
+	// no job id to scope ListJobArtifacts by, so the caller must fetch the
+	// row first and compare its own TenantID against what it asserted.
+	//
+	// GetJobArtifact 按裸 id 读取一个产物，不限定租户——像 DeleteJobArtifact，
+	// 但用于读取。它为一个正在恢复一次本地毫无记录的下载的 Gateway 副本而存在
+	// （STATUS.md 的「Gateway 故障切换收尾」）：请求只携带产物 id，没有 job id
+	// 可供 ListJobArtifacts 限定范围，因此调用方必须先取回这一行，再自行比对
+	// 它的 TenantID 与自己断言的是否一致。
+	GetJobArtifact(ctx context.Context, id string) (model.JobArtifact, error)
 	// ListJobArtifactsBefore returns up to MaxExpiredJobArtifacts artifacts
 	// of artifactType created before cutoff, across every tenant — the
 	// second read in this package with no tenant to scope by, for the same
@@ -493,6 +516,23 @@ type JobArtifacts interface {
 	// 调用它的清理扫描想要的始终只是「这一行不在了」，而一次更早、被中断的
 	// 扫描如果已经删过它，这件事本就已经成立。
 	DeleteJobArtifact(ctx context.Context, id string) error
+	// SumArtifactStorageBytes totals size_bytes across every artifact whose
+	// bytes actually reached object storage (storage_key non-empty),
+	// regardless of tenant or type — the read behind MetricArtifactStorageBytes
+	// (STATUS.md's A06). An artifact never copied to storage (no
+	// -artifact-storage configured, or copy skipped for another reason)
+	// contributes nothing, matching what an operator watching the gauge
+	// actually wants to know: how many bytes this deployment's object
+	// storage is holding, not how many bytes every produced image happened
+	// to be.
+	//
+	// SumArtifactStorageBytes 对每个字节确已抵达对象存储（storage_key 非空）
+	// 的产物累加 size_bytes，不分租户或类型——这是 MetricArtifactStorageBytes
+	// 背后的读取（STATUS.md 的 A06）。一个从未被复制进存储的产物（未配置
+	// -artifact-storage，或因其他原因跳过复制）不计入其中，这与一个盯着这个
+	// 量表的运维真正想知道的事情一致：这个部署的对象存储里躺着多少字节，
+	// 而不是每一张产出的图本身有多大。
+	SumArtifactStorageBytes(ctx context.Context) (int64, error)
 }
 
 // MaxExpiredJobArtifacts bounds ListJobArtifactsBefore, the same way
@@ -506,6 +546,272 @@ type JobArtifacts interface {
 // 是让一次清理扫描的一轮做有界的工作。超出上限的产物并未丢失：下一轮扫描会
 // 回收它们，届时它们只是又老了一些。
 const MaxExpiredJobArtifacts = 200
+
+// ResponseTurns persists one turn of a Responses API conversation a Gateway
+// replica asked this service to remember, per STATUS.md's P2 "Responses
+// 持久会话". See model.ResponseTurn's doc comment for why Messages is opaque
+// JSON this package never inspects, and why PreviousResponseID is a plain
+// column rather than a foreign key.
+//
+// ResponseTurns 持久化一个 Gateway 副本请求本服务代为记住的 Responses API
+// 会话中的一轮，对应 STATUS.md 的 P2「Responses 持久会话」。为什么 Messages
+// 是本包从不检视的不透明 JSON、为什么 PreviousResponseID 是普通列而非外键，
+// 见 model.ResponseTurn 的文档注释。
+type ResponseTurns interface {
+	// CreateResponseTurn inserts one turn. A duplicate ID returns
+	// ErrConflict rather than overwriting the existing row — the same
+	// idempotent-retry shape CreateJob already gives a Gateway replica
+	// unsure whether an earlier call landed.
+	//
+	// CreateResponseTurn 插入一轮。重复的 ID 返回 ErrConflict 而不是覆盖已有
+	// 的行——与 CreateJob 已经给出的形状相同，供一个不确定此前调用是否成功
+	// 的 Gateway 副本幂等重试。
+	CreateResponseTurn(ctx context.Context, turn *model.ResponseTurn) error
+	// GetResponseTurn reads one turn by id, scoped to its tenant.
+	//
+	// GetResponseTurn 按 id 读取一轮，并限定在其租户范围内。
+	GetResponseTurn(ctx context.Context, tenantID, id string) (model.ResponseTurn, error)
+}
+
+// RequestLogFilter narrows a RequestLogs listing. An empty TenantID means
+// every tenant — the operator cross-tenant search path (STATUS.md's P09/C28)
+// — while every tenant-scoped caller sets it to the caller's own tenant.
+//
+// RequestLogFilter 收窄一次 RequestLogs 列举。TenantID 为空表示不限租户——对应
+// STATUS.md P09/C28 的运维跨租户检索路径——而每个按租户限定的调用方都会把它
+// 设为调用方自己的租户。
+type RequestLogFilter struct {
+	TenantID  string
+	RequestID string
+	Outcome   string
+	Since     time.Time
+	Until     time.Time
+}
+
+// RequestLogs persists the control plane's record of one authenticated
+// OpenAI front-door request, per STATUS.md's P09/C28 and the design doc's
+// request-search contract. Unlike Jobs, a row here is a one-shot append: no
+// update method exists because a request's outcome is already final by the
+// time the Gateway reports it.
+//
+// RequestLogs 持久化控制面对一次已通过鉴权的 OpenAI 前门请求的记录，对应
+// STATUS.md 的 P09/C28 与设计文档的请求检索契约。与 Jobs 不同，这里的一行是
+// 一次性追加：不存在更新方法，因为 Gateway 上报时这次请求的结果已经是终态。
+type RequestLogs interface {
+	// CreateRequestLogs inserts a batch of records, silently skipping any
+	// whose id already exists — the batch push's own idempotency, since the
+	// Gateway may report the same record more than once across retries of
+	// an ambiguous earlier push.
+	//
+	// CreateRequestLogs 插入一批记录，静默跳过任何 id 已存在的记录——这就是
+	// 批量推送自身的幂等性，因为 Gateway 可能会在一次结果不明的早先推送之后
+	// 重复上报同一条记录。
+	CreateRequestLogs(ctx context.Context, records []model.RequestLog) error
+	// ListRequestLogs reads one page, newest first.
+	//
+	// ListRequestLogs 读取一页，最新的在前。
+	ListRequestLogs(ctx context.Context, query ListQuery, filter RequestLogFilter) (Page[model.RequestLog], error)
+	// DeleteRequestLogsBefore removes every row older than before, for the
+	// retention sweeper.
+	//
+	// DeleteRequestLogsBefore 删除每一行早于 before 的记录，供保留期清理协程
+	// 使用。
+	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (int64, error)
+}
+
+// UsageRecordFilter narrows a SummarizeUsage call. An empty TenantID means
+// every tenant — the operator cross-tenant view (STATUS.md's P2 usage
+// ledger) — while the tenant self-service view always sets it to the
+// caller's own tenant, the same shape RequestLogFilter already has.
+//
+// UsageRecordFilter 收窄一次 SummarizeUsage 调用。TenantID 为空表示不限
+// 租户——对应 STATUS.md P2 用量账本的运维跨租户视角——而租户自助视角总是
+// 把它设为调用方自己的租户，与 RequestLogFilter 相同的形状。
+type UsageRecordFilter struct {
+	TenantID string
+	Since    time.Time
+	Until    time.Time
+}
+
+// UsageSummary is one (tenant, model) group's totals over the queried
+// window — the settlement query's own unit of output (STATUS.md's P2 "结算
+// 规则"): usage_records rows are immutable, one-shot ledger entries, and
+// settlement is this aggregation read over them, not a separately stored
+// derived table. RequestCount is included because a settlement process
+// reconciling against an external invoice needs the request count as often
+// as it needs the token sums.
+//
+// UsageSummary 是查询窗口内一个 (tenant, model) 分组的汇总——结算查询自身
+// 的输出单元（STATUS.md 的 P2「结算规则」）：usage_records 的行是不可变的、
+// 一次性追加的账本条目，结算就是对它们的这次聚合读取，而不是另外存储的一张
+// 派生表。包含 RequestCount，是因为一个对着外部账单核对的结算流程，对请求
+// 计数的需要不亚于对 token 汇总的需要。
+type UsageSummary struct {
+	TenantID         string
+	Model            string
+	PromptTokens     int64
+	CompletionTokens int64
+	TotalTokens      int64
+	RequestCount     int64
+}
+
+// UsageRecords persists the control plane's durable per-tenant/model token
+// usage ledger, per STATUS.md's P2 usage ledger. Like RequestLogs, a row
+// here is a one-shot append: no update method exists because a request's
+// usage is already final by the time the Gateway reports it.
+//
+// UsageRecords 持久化控制面按租户/模型的持久化 token 用量账本，对应
+// STATUS.md 的 P2 用量账本。与 RequestLogs 相同，这里的一行是一次性追加：
+// 不存在更新方法，因为 Gateway 上报时这次请求的用量已经是终态。
+type UsageRecords interface {
+	// CreateUsageRecords inserts a batch of records, silently skipping any
+	// whose id already exists — the batch push's own idempotency and this
+	// table's stated dedup rule, mirroring CreateRequestLogs.
+	//
+	// CreateUsageRecords 插入一批记录，静默跳过任何 id 已存在的记录——这就是
+	// 批量推送自身的幂等性，也是这张表所声明的去重规则，与 CreateRequestLogs
+	// 相同。
+	CreateUsageRecords(ctx context.Context, records []model.UsageRecord) error
+	// SummarizeUsage aggregates usage_records into one row per (tenant,
+	// model) group within filter's window — the settlement query.
+	//
+	// SummarizeUsage 把 usage_records 聚合成 filter 窗口内每个 (tenant,
+	// model) 分组一行——即结算查询。
+	SummarizeUsage(ctx context.Context, filter UsageRecordFilter) ([]UsageSummary, error)
+	// DeleteUsageRecordsBefore removes every row older than before, for the
+	// retention sweeper.
+	//
+	// DeleteUsageRecordsBefore 删除每一行早于 before 的记录，供保留期清理
+	// 协程使用。
+	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (int64, error)
+}
+
+// AlertRuleFilter narrows a ListAlertRules call. An empty Enabled means no
+// filter on that field.
+//
+// AlertRuleFilter 收窄一次 ListAlertRules 调用。Enabled 为 nil 表示不按该
+// 字段过滤。
+type AlertRuleFilter struct {
+	Enabled *bool
+}
+
+// AlertInstanceFilter narrows a ListAlertInstances call.
+//
+// AlertInstanceFilter 收窄一次 ListAlertInstances 调用。
+type AlertInstanceFilter struct {
+	Status string
+	RuleID string
+	Since  time.Time
+	Until  time.Time
+}
+
+// Alerting persists alert rules and their fired instances (STATUS.md's
+// P09/C29). Platform-wide, not tenant-scoped, matching the metrics it
+// evaluates.
+//
+// Alerting 持久化告警规则及其触发实例（STATUS.md 的 P09/C29）。平台级，不
+// 分租户，与它所评估的指标一致。
+type Alerting interface {
+	CreateAlertRule(ctx context.Context, rule *model.AlertRule) error
+	GetAlertRule(ctx context.Context, id string) (model.AlertRule, error)
+	ListAlertRules(ctx context.Context, query ListQuery, filter AlertRuleFilter) (Page[model.AlertRule], error)
+	// ListEnabledAlertRules returns every enabled rule, unpaginated — this
+	// table is operator-authored configuration, not request volume, and
+	// the evaluation loop needs the whole set on every tick.
+	//
+	// ListEnabledAlertRules 返回全部已启用的规则，不分页——这张表是运维
+	// 编写的配置，不是请求量级的数据，评估循环每一轮都需要完整集合。
+	ListEnabledAlertRules(ctx context.Context) ([]model.AlertRule, error)
+	// UpdateAlertRule replaces the named mutable fields of one rule.
+	// ErrNotFound if no such rule exists.
+	//
+	// UpdateAlertRule 替换一条规则指定的可变字段。规则不存在时返回
+	// ErrNotFound。
+	UpdateAlertRule(ctx context.Context, id string, update AlertRuleUpdate) (model.AlertRule, error)
+	DeleteAlertRule(ctx context.Context, id string) error
+
+	CreateAlertInstance(ctx context.Context, instance *model.AlertInstance) error
+	// GetOpenAlertInstance returns the most recent alert_instances row for
+	// ruleID whose Status is firing or acknowledged, and whether one
+	// exists. At most one such row can exist per rule at a time — the
+	// evaluation loop enforces that invariant, this method just reads it.
+	//
+	// GetOpenAlertInstance 返回 ruleID 下最近一条状态为 firing 或
+	// acknowledged 的实例行，以及它是否存在。同一时刻每条规则至多存在一行
+	// 这样的记录——这个不变式由评估循环维护，本方法只负责读取。
+	GetOpenAlertInstance(ctx context.Context, ruleID string) (model.AlertInstance, bool, error)
+	TouchAlertInstance(ctx context.Context, id string, lastEvaluatedAt time.Time) error
+	ResolveAlertInstance(ctx context.Context, id string, resolvedAt time.Time) error
+	// AcknowledgeAlertInstance transitions a firing instance to
+	// acknowledged. ErrConflict if the instance is already resolved — an
+	// operator cannot acknowledge a closed alert.
+	//
+	// AcknowledgeAlertInstance 把一个 firing 的实例转为 acknowledged。实例
+	// 已经是 resolved 时返回 ErrConflict——运维不能确认一个已经关闭的告警。
+	AcknowledgeAlertInstance(ctx context.Context, id, actorID string, at time.Time) (model.AlertInstance, error)
+	SetAlertInstanceNotifyResult(ctx context.Context, id, status string, attempts int) error
+	ListAlertInstances(ctx context.Context, query ListQuery, filter AlertInstanceFilter) (Page[model.AlertInstance], error)
+}
+
+// AlertRuleUpdate is the set of AlertRule fields UpdateAlertRule may
+// change — every mutable field, since this resource is small operator
+// configuration where a full-replace PATCH is simpler than partial-field
+// semantics.
+//
+// AlertRuleUpdate 是 UpdateAlertRule 可以修改的 AlertRule 字段集合——覆盖
+// 每一个可变字段，因为这是一份小体量的运维配置，整体替换式的 PATCH 比
+// 局部字段语义更简单。
+type AlertRuleUpdate struct {
+	Name               string
+	Metric             string
+	Operator           string
+	Threshold          float64
+	ConsecutiveBuckets int
+	WebhookURL         string
+	Enabled            bool
+}
+
+// APIDocs persists the tenant-facing API reference. Every operator write is a
+// compare-and-set on Version committed in one transaction with its audit
+// row; seed refreshes are idempotent single statements, safe for several
+// replicas starting at once.
+//
+// APIDocs 持久化面向租户的 API 参考文档。每次运维写入都是对 Version 的 CAS，与其
+// 审计行在同一事务内提交；种子刷新是幂等的单条语句，多个副本同时启动也安全。
+type APIDocs interface {
+	// ListAPIDocs reads every document without its ContentJSON, optionally
+	// only published ones. The table is a small catalogue, not request
+	// volume, so it is not paginated.
+	//
+	// ListAPIDocs 读取全部文档（不含 ContentJSON），可选只读已发布的。这张表是
+	// 一份小型目录而非请求量级的数据，因此不分页。
+	ListAPIDocs(ctx context.Context, publishedOnly bool) ([]model.APIDoc, error)
+	// GetAPIDoc reads one document whole. / GetAPIDoc 完整读取一份文档。
+	GetAPIDoc(ctx context.Context, slug string) (model.APIDoc, error)
+	// CreateAPIDoc inserts doc; ErrConflict if the slug exists.
+	// / CreateAPIDoc 插入 doc；slug 已存在时返回 ErrConflict。
+	CreateAPIDoc(ctx context.Context, doc *model.APIDoc, audit *model.AuditLog) error
+	// UpdateAPIDoc replaces every mutable column of doc.Slug if its Version
+	// is still expected, setting Version to expected+1. ErrNotFound if the
+	// slug is gone, ErrConflict if the version moved.
+	//
+	// UpdateAPIDoc 在 doc.Slug 的 Version 仍为 expected 时替换其全部可变列，并把
+	// Version 置为 expected+1。slug 不存在返回 ErrNotFound，版本已变返回 ErrConflict。
+	UpdateAPIDoc(ctx context.Context, doc *model.APIDoc, expected int64, audit *model.AuditLog) error
+	// DeleteAPIDoc removes slug if its Version is still expected, with the
+	// same error vocabulary as UpdateAPIDoc.
+	//
+	// DeleteAPIDoc 在 slug 的 Version 仍为 expected 时删除它，错误语义与
+	// UpdateAPIDoc 相同。
+	DeleteAPIDoc(ctx context.Context, slug string, expected int64, audit *model.AuditLog) error
+	// SeedAPIDoc inserts doc if the slug is absent, or refreshes it if the
+	// stored row is still seed-sourced with an older SeedRevision. It
+	// reports whether a row changed. A refresh never touches status.
+	//
+	// SeedAPIDoc 在 slug 不存在时插入 doc；若已存储行仍来源于种子且 SeedRevision
+	// 更旧，则刷新它。返回是否有行发生变化。它从不改动 status。
+	SeedAPIDoc(ctx context.Context, doc *model.APIDoc) (bool, error)
+}
 
 // Store is every persistence capability the service has, for wiring at
 // startup. Handlers and logic take the narrow interfaces above, never this.
@@ -522,4 +828,10 @@ type Store interface {
 	Audit
 	Jobs
 	JobArtifacts
+	ResponseTurns
+	MetricsHistory
+	RequestLogs
+	UsageRecords
+	Alerting
+	APIDocs
 }

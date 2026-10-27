@@ -1,3 +1,4 @@
+import { apiDocBodyLimit } from "@/lib/console/api-docs";
 import { MAX_ROUTE_DOCUMENT_BYTES, routeBodyLimit } from "@/lib/console/model-routes";
 import { isTrustedWrite } from "@/lib/console/request-origin";
 import { MAX_CONTENT_BYTES, templateBodyLimit } from "@/lib/console/workflow-templates";
@@ -39,6 +40,16 @@ export async function POST(request: Request, context: RouteContext) {
  *
  * PUT 转发一次整体替换。 */
 export async function PUT(request: Request, context: RouteContext) {
+  return forward(request, context);
+}
+
+/** PATCH forwards a full-replace update (e.g. an alert rule edit — the
+ * control plane treats this PATCH as a full replacement, not a partial
+ * merge, see types.AlertRuleRequest's doc comment).
+ *
+ * PATCH 转发一次整体替换式更新（例如告警规则编辑——控制面把这个 PATCH 当作整体
+ * 替换而非局部合并，见 types.AlertRuleRequest 的文档注释）。 */
+export async function PATCH(request: Request, context: RouteContext) {
   return forward(request, context);
 }
 
@@ -92,7 +103,7 @@ async function forward(
 
   let body: string | undefined;
   if (request.method !== "GET") {
-    const raw = await readBoundedText(request, routeBodyLimit(upstream.path) ?? templateBodyLimit(upstream.path));
+    const raw = await readBoundedText(request, routeBodyLimit(upstream.path) ?? templateBodyLimit(upstream.path) ?? apiDocBodyLimit(upstream.path));
     if (raw === null) {
       return errorResponse(413, "body_too_large");
     }

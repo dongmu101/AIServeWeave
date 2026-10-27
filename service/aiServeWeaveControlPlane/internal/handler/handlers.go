@@ -10,10 +10,14 @@ import (
 	"strconv"
 	"time"
 
+	"AIServeWeave/common/comfyuimanagedstatus"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/signupgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
@@ -134,6 +138,51 @@ func createTenant(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		tenant, owner, err := ctx.Logic.CreateTenant(r.Context(), req.Name, req.OwnerEmail, req.OwnerPassword, clientIP(r))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, types.CreateTenantResponse{
+			Tenant: types.Tenant{
+				ID:        tenant.ID,
+				Name:      tenant.Name,
+				Status:    tenant.Status,
+				CreatedAt: tenant.CreatedAt,
+			},
+			Owner: renderUser(owner),
+		})
+	}
+}
+
+// signup creates a tenant and its owner for whoever asks, within the
+// deployment's hourly bound. It is mounted only when Signup is enabled. The
+// bound is checked right after the body decodes, before anything else, and a
+// failure to reach Redis refuses the attempt: an unbounded open write
+// endpoint is the outcome this gate exists to prevent.
+//
+// signup 为任何发起请求的人创建租户及其 owner，受部署的每小时上限约束。它只在开启
+// Signup 时挂载。上限在解码请求体之后、做任何其他事之前检查；连不上 Redis 时拒绝本次
+// 尝试：一个没有上限的开放写端点，正是这道闸门要防止的结果。
+func signup(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.SignupRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if ctx.SignupGate != nil {
+			admitted, err := ctx.SignupGate.Admit(r.Context())
+			if err != nil {
+				writeError(w, http.StatusServiceUnavailable, "service unavailable")
+				return
+			}
+			if !admitted {
+				w.Header().Set("Retry-After", strconv.Itoa(int(signupgate.Window/time.Second)))
+				writeError(w, http.StatusTooManyRequests, "too many sign-ups; try again later")
+				return
+			}
+		}
+
+		tenant, owner, err := ctx.Logic.SignUpTenant(r.Context(), req.TenantName, req.Email, req.Password, clientIP(r), ctx.Config.Signup.Limits())
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -378,6 +427,30 @@ func revokeAPIKey(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		if err := ctx.Logic.RevokeAPIKey(r.Context(), actor, keyID); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// deleteAPIKey permanently removes one of the caller's tenant's keys.
+//
+// deleteAPIKey 永久删除调用方所属租户的一个 key。
+func deleteAPIKey(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		keyID := pathvar.Vars(r)["id"]
+		if keyID == "" {
+			writeError(w, http.StatusBadRequest, "a key id is required")
+			return
+		}
+
+		if err := ctx.Logic.DeleteAPIKey(r.Context(), actor, keyID); err != nil {
 			respondErr(w, err)
 			return
 		}
@@ -713,6 +786,234 @@ func platformOperatorLifecycleAction(action func(context.Context, logic.Actor, s
 	}
 }
 
+// -----------------------------------------------------------------------
+// Alert rules (STATUS.md's P09/C29)
+// -----------------------------------------------------------------------
+
+// renderAlertRule converts one model.AlertRule into its wire form.
+//
+// renderAlertRule 把一条 model.AlertRule 转换成它的线上表示形式。
+func renderAlertRule(r model.AlertRule) types.AlertRuleResponse {
+	return types.AlertRuleResponse{
+		ID: r.ID, Name: r.Name, Metric: r.Metric, Operator: r.Operator, Threshold: r.Threshold,
+		ConsecutiveBuckets: r.ConsecutiveBuckets, WebhookURL: r.WebhookURL, Enabled: r.Enabled,
+		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+	}
+}
+
+// alertRuleParamsFrom converts one AlertRuleRequest into logic.CreateAlertRuleParams,
+// which logic.UpdateAlertRuleParams is a type alias of — the same params shape
+// serves both create and full-replace update.
+//
+// alertRuleParamsFrom 把一个 AlertRuleRequest 转换成 logic.CreateAlertRuleParams
+// ——logic.UpdateAlertRuleParams 是它的类型别名，同一套参数形状同时服务创建与
+// 整体替换式更新。
+func alertRuleParamsFrom(req types.AlertRuleRequest) logic.CreateAlertRuleParams {
+	return logic.CreateAlertRuleParams{
+		Name: req.Name, Metric: req.Metric, Operator: req.Operator, Threshold: req.Threshold,
+		ConsecutiveBuckets: req.ConsecutiveBuckets, WebhookURL: req.WebhookURL, Enabled: req.Enabled,
+	}
+}
+
+// createAlertRule handles POST /operator/v1/alert-rules.
+//
+// createAlertRule 处理 POST /operator/v1/alert-rules。
+func createAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.AlertRuleRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		rule, err := ctx.Logic.CreateAlertRule(r.Context(), actor, alertRuleParamsFrom(req))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderAlertRule(rule))
+	}
+}
+
+// listAlertRules handles GET /operator/v1/alert-rules, optionally filtered by
+// the ?enabled= query parameter.
+//
+// listAlertRules 处理 GET /operator/v1/alert-rules，可选按 ?enabled= 查询参数过滤。
+func listAlertRules(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var filter store.AlertRuleFilter
+		if v := r.URL.Query().Get("enabled"); v != "" {
+			enabled := v == "true"
+			filter.Enabled = &enabled
+		}
+		page, err := ctx.Logic.ListAlertRules(r.Context(), actor, listQuery(r.URL.Query()), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.AlertRuleResponse, len(page.Items))
+		for i, rule := range page.Items {
+			out[i] = renderAlertRule(rule)
+		}
+		writeJSON(w, http.StatusOK, types.AlertRuleListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// getAlertRule handles GET /operator/v1/alert-rules/:id.
+//
+// getAlertRule 处理 GET /operator/v1/alert-rules/:id。
+func getAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		rule, err := ctx.Logic.GetAlertRule(r.Context(), actor, pathvar.Vars(r)["id"])
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderAlertRule(rule))
+	}
+}
+
+// updateAlertRule handles PATCH /operator/v1/alert-rules/:id, a full-replace
+// update — see store.AlertRuleUpdate's doc comment for why.
+//
+// updateAlertRule 处理 PATCH /operator/v1/alert-rules/:id，是一次整体替换式
+// 更新——原因见 store.AlertRuleUpdate 的文档注释。
+func updateAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.AlertRuleRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		rule, err := ctx.Logic.UpdateAlertRule(r.Context(), actor, pathvar.Vars(r)["id"], alertRuleParamsFrom(req))
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderAlertRule(rule))
+	}
+}
+
+// deleteAlertRule handles DELETE /operator/v1/alert-rules/:id.
+//
+// deleteAlertRule 处理 DELETE /operator/v1/alert-rules/:id。
+func deleteAlertRule(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		if err := ctx.Logic.DeleteAlertRule(r.Context(), actor, pathvar.Vars(r)["id"]); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
+}
+
+// listAlerts handles GET /operator/v1/alerts.
+//
+// listAlerts 处理 GET /operator/v1/alerts。
+func listAlerts(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		query := r.URL.Query()
+		since, sinceOK := timeParam(query.Get("since"))
+		until, untilOK := timeParam(query.Get("until"))
+		if !sinceOK || !untilOK {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		page, err := ctx.Logic.ListAlertInstances(r.Context(), actor, listQuery(query), store.AlertInstanceFilter{
+			Status: query.Get("status"), RuleID: query.Get("rule_id"), Since: since, Until: until,
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		// Enrich with rule names in one pass — this table is small
+		// (operator-authored rules), so a full ListEnabledAlertRules-style
+		// fetch per response is cheap; here we fetch each referenced rule
+		// once via a small id->name cache built as we go, avoiding a
+		// second round trip per row without needing a JOIN this store
+		// layer doesn't expose.
+		//
+		// 在一次遍历里补上规则名——这张表很小（运维手写的规则），所以像
+		// ListEnabledAlertRules 那样整表抓取的代价可以忽略；这里按 id 建一个
+		// 小缓存，每条被引用的规则只查一次，不需要这层 store 没提供的 JOIN，
+		// 就能避免每一行都多发一次请求。
+		names := map[string]string{}
+		out := make([]types.AlertInstanceResponse, len(page.Items))
+		for i, inst := range page.Items {
+			name, ok := names[inst.RuleID]
+			if !ok {
+				if rule, err := ctx.Logic.GetAlertRule(r.Context(), actor, inst.RuleID); err == nil {
+					name = rule.Name
+				}
+				names[inst.RuleID] = name
+			}
+			out[i] = renderAlertInstance(inst, name)
+		}
+		writeJSON(w, http.StatusOK, types.AlertInstanceListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// renderAlertInstance converts one model.AlertInstance into its wire form,
+// with ruleName filled in by the caller (see listAlerts and
+// acknowledgeAlert for the two ways that name is obtained).
+//
+// renderAlertInstance 把一条 model.AlertInstance 转换成它的线上表示形式，
+// ruleName 由调用方填入（获取方式见 listAlerts 与 acknowledgeAlert 两处）。
+func renderAlertInstance(a model.AlertInstance, ruleName string) types.AlertInstanceResponse {
+	return types.AlertInstanceResponse{
+		ID: a.ID, RuleID: a.RuleID, RuleName: ruleName, Status: a.Status, ValueAtFire: a.ValueAtFire,
+		CreatedAt: a.CreatedAt, LastEvaluatedAt: a.LastEvaluatedAt, ResolvedAt: a.ResolvedAt,
+		AcknowledgedBy: a.AcknowledgedBy, AcknowledgedAt: a.AcknowledgedAt,
+		NotifyStatus: a.NotifyStatus, NotifyAttempts: a.NotifyAttempts,
+	}
+}
+
+// acknowledgeAlert handles POST /operator/v1/alerts/:id/acknowledge.
+//
+// acknowledgeAlert 处理 POST /operator/v1/alerts/:id/acknowledge。
+func acknowledgeAlert(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		instance, err := ctx.Logic.AcknowledgeAlert(r.Context(), actor, pathvar.Vars(r)["id"])
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderAlertInstance(instance, ""))
+	}
+}
+
 // platformLogin authenticates a platform operator and issues a session
 // token scoped to model.PlatformScope (requirePlatformSession checks it).
 //
@@ -770,7 +1071,7 @@ func platformLogin(ctx *svc.ServiceContext) http.HandlerFunc {
 // nodeOpsHandler 为五个节点操作写端点中的一个构造 handler，它们共用同一种
 // 形状：读出 actor 与 node_id，解码一个空请求体，调用 Service 的一个方法，
 // 应答 204。
-func nodeOpsHandler(action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
+func nodeOpsHandler(ctx *svc.ServiceContext, action func(context.Context, logic.Actor, string) error) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, ok := actorFrom(r.Context())
 		if !ok {
@@ -786,7 +1087,9 @@ func nodeOpsHandler(action func(context.Context, logic.Actor, string) error) htt
 		if !decode(w, r, &req) {
 			return
 		}
-		if err := action(r.Context(), actor, nodeID); err != nil {
+		err := action(r.Context(), actor, nodeID)
+		recordRegistryClientCall(ctx, err)
+		if err != nil {
 			respondErr(w, err)
 			return
 		}
@@ -806,6 +1109,7 @@ func listNodeStates(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		states, err := ctx.Logic.ListNodeStates(r.Context(), actor)
+		recordRegistryClientCall(ctx, err)
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -823,6 +1127,310 @@ func listNodeStates(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, types.ListNodeStatesResponse{Items: out})
 	}
+}
+
+// -----------------------------------------------------------------------
+// Operator: model-pull forwarding (STATUS.md's P2 model distribution
+// subtask two, the control plane forwarding layer)
+// -----------------------------------------------------------------------
+
+// triggerModelPull asks node_id, wherever it is connected among the
+// configured Gateway replicas, to start pulling names — the write half of
+// forwarding STATUS.md's P2 model distribution subtask two.
+//
+// triggerModelPull 要求 node_id（无论它连在哪个已配置 Gateway 副本上）开始
+// 拉取 names——转发 STATUS.md P2 模型分发子任务二的写入那一半。
+func triggerModelPull(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.ModelPullTriggerRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if len(req.Names) == 0 {
+			writeError(w, http.StatusBadRequest, "names must not be empty")
+			return
+		}
+		result, err := ctx.Logic.TriggerModelPull(r.Context(), actor, nodeID, req.Names)
+		recordModelPullRouterCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, types.ModelPullTriggerResponse{Replicas: renderModelPullReplicas(result.Replicas)})
+	}
+}
+
+// modelPullStatus returns node_id's last-reported pull status from
+// whichever configured Gateway replica currently holds its connection — the
+// read half of forwarding STATUS.md's P2 model distribution subtask two.
+//
+// It calls ctx.ModelPullRouter directly rather than going through
+// ctx.Logic, the same split Fleet's own listFleetNodes uses: a read has no
+// audit entry and no actor-scoped rule beyond the session guard the route
+// already carries — see logic.ModelPullRouter's doc comment for why.
+//
+// modelPullStatus 返回 node_id 最后上报的拉取状态，来自当前持有其连接的
+// 那个已配置 Gateway 副本——转发 STATUS.md P2 模型分发子任务二的读取那一半。
+//
+// 它直接调用 ctx.ModelPullRouter 而不经过 ctx.Logic，与 Fleet 自己的
+// listFleetNodes 是同一种切分：一次读取除了路由本身已经带着的会话守卫之外，
+// 没有审计记录，也没有按行为人限定范围的规则——原因见 logic.ModelPullRouter
+// 的文档注释。
+func modelPullStatus(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		result, err := ctx.ModelPullRouter.Status(r.Context(), nodeID)
+		recordModelPullRouterCall(ctx, err)
+		if err != nil {
+			respondModelPullRouterErr(w, err)
+			return
+		}
+		if !result.Connected {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, types.ModelPullStatusResponse{
+			Pulls:    renderModelPullStatuses(result.Pulls),
+			Replicas: renderModelPullReplicas(result.Replicas),
+		})
+	}
+}
+
+func renderModelPullReplicas(replicas []modelpullrouter.ReplicaStatus) []types.ModelPullReplicaStatus {
+	out := make([]types.ModelPullReplicaStatus, len(replicas))
+	for i, r := range replicas {
+		out[i] = types.ModelPullReplicaStatus{Endpoint: r.Endpoint, Connected: r.Connected, Error: r.Error}
+	}
+	return out
+}
+
+func renderModelPullStatuses(pulls []modelpullrouter.PullStatus) []types.ModelPullStatus {
+	out := make([]types.ModelPullStatus, len(pulls))
+	for i, p := range pulls {
+		out[i] = types.ModelPullStatus{
+			Name:            p.Name,
+			State:           p.State,
+			BytesDownloaded: p.BytesDownloaded,
+			BytesTotal:      p.BytesTotal,
+			Reason:          p.Reason,
+			UpdatedAt:       p.UpdatedAt,
+		}
+	}
+	return out
+}
+
+// respondModelPullRouterErr handles a direct ctx.ModelPullRouter call's
+// error — in practice only modelpullrouter.ErrDisabled, since the route
+// this serves is mounted only when ctx.ModelPullRouter is configured (the
+// same "no config, no route" rule respondFleetErr documents).
+//
+// respondModelPullRouterErr 处理一次直接 ctx.ModelPullRouter 调用的错误——
+// 实践中只会是 modelpullrouter.ErrDisabled，因为本函数所服务的路由只在
+// ctx.ModelPullRouter 已配置时才会挂载（respondFleetErr 文档所述的"没配置就
+// 没有路由"同一规则）。
+func respondModelPullRouterErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, modelpullrouter.ErrDisabled) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal error")
+}
+
+// -----------------------------------------------------------------------
+// Operator: ComfyUI Managed forwarding (STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask two, the control plane forwarding layer)
+// -----------------------------------------------------------------------
+
+// triggerComfyUIManagedAction asks node_id, wherever it is connected among
+// the configured Gateway replicas, to apply action to its one
+// locally-declared Managed instance — the write half of forwarding
+// STATUS.md's P2 ComfyUI Managed Docker deployment subtask two.
+//
+// triggerComfyUIManagedAction 要求 node_id（无论它连在哪个已配置 Gateway
+// 副本上）对它本地已声明的那一个 Managed 实例施加 action——转发 STATUS.md
+// P2 ComfyUI Managed Docker 部署子任务二的写入那一半。
+func triggerComfyUIManagedAction(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.ComfyUIManagedTriggerRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		action, ok := parseComfyUIManagedAction(req.Action)
+		if !ok {
+			writeError(w, http.StatusBadRequest, `action must be one of "start", "stop", "restart"`)
+			return
+		}
+		result, err := ctx.Logic.TriggerComfyUIManagedAction(r.Context(), actor, nodeID, action)
+		recordComfyUIManagedRouterCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, types.ComfyUIManagedTriggerResponse{Replicas: renderComfyUIManagedReplicas(result.Replicas)})
+	}
+}
+
+// parseComfyUIManagedAction renders comfyuimanagedstatus.Action's closed
+// vocabulary as the lowercase strings this endpoint accepts on the wire,
+// mirroring comfyuimanagedapi's own parseAction.
+func parseComfyUIManagedAction(s string) (comfyuimanagedstatus.Action, bool) {
+	switch s {
+	case "start":
+		return comfyuimanagedstatus.ActionStart, true
+	case "stop":
+		return comfyuimanagedstatus.ActionStop, true
+	case "restart":
+		return comfyuimanagedstatus.ActionRestart, true
+	default:
+		return comfyuimanagedstatus.ActionUnspecified, false
+	}
+}
+
+// installComfyUICustomNode asks node_id, wherever it is connected among the
+// configured Gateway replicas, to install name into its one
+// locally-declared Managed instance's custom-nodes directory — the write
+// half of forwarding STATUS.md's P2 ComfyUI Managed Docker deployment
+// subtask four, the same split triggerComfyUIManagedAction uses.
+//
+// installComfyUICustomNode 要求 node_id（无论它连在哪个已配置 Gateway 副本
+// 上）把 name 安装进它本地已声明的那一个 Managed 实例的自定义节点目
+// 录——转发 STATUS.md P2 ComfyUI Managed Docker 部署子任务四的写入那一
+// 半，与 triggerComfyUIManagedAction 同一种切分。
+func installComfyUICustomNode(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		var req types.ComfyUIManagedCustomNodeInstallRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		if req.Name == "" {
+			writeError(w, http.StatusBadRequest, "name is required")
+			return
+		}
+		result, err := ctx.Logic.InstallComfyUICustomNode(r.Context(), actor, nodeID, req.Name)
+		recordComfyUIManagedRouterCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusAccepted, types.ComfyUIManagedTriggerResponse{Replicas: renderComfyUIManagedReplicas(result.Replicas)})
+	}
+}
+
+// comfyUIManagedStatus returns node_id's last-reported Managed instance
+// status from whichever configured Gateway replica currently holds its
+// connection — the read half of forwarding STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask two.
+//
+// It calls ctx.ComfyUIManagedRouter directly rather than going through
+// ctx.Logic, the same split modelPullStatus uses.
+//
+// comfyUIManagedStatus 返回 node_id 最后上报的 Managed 实例状态，来自当前
+// 持有其连接的那个已配置 Gateway 副本——转发 STATUS.md P2 ComfyUI Managed
+// Docker 部署子任务二的读取那一半。
+//
+// 它直接调用 ctx.ComfyUIManagedRouter 而不经过 ctx.Logic，与
+// modelPullStatus 是同一种切分。
+func comfyUIManagedStatus(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		nodeID := pathvar.Vars(r)["id"]
+		if nodeID == "" {
+			writeError(w, http.StatusBadRequest, "a node id is required")
+			return
+		}
+		result, err := ctx.ComfyUIManagedRouter.Status(r.Context(), nodeID)
+		recordComfyUIManagedRouterCall(ctx, err)
+		if err != nil {
+			respondComfyUIManagedRouterErr(w, err)
+			return
+		}
+		if !result.Connected {
+			writeError(w, http.StatusNotFound, "not found")
+			return
+		}
+		writeJSON(w, http.StatusOK, types.ComfyUIManagedStatusResponse{
+			Instances: renderComfyUIManagedInstances(result.Instances),
+			Replicas:  renderComfyUIManagedReplicas(result.Replicas),
+		})
+	}
+}
+
+func renderComfyUIManagedReplicas(replicas []comfyuimanagedrouter.ReplicaStatus) []types.ComfyUIManagedReplicaStatus {
+	out := make([]types.ComfyUIManagedReplicaStatus, len(replicas))
+	for i, r := range replicas {
+		out[i] = types.ComfyUIManagedReplicaStatus{Endpoint: r.Endpoint, Connected: r.Connected, Error: r.Error}
+	}
+	return out
+}
+
+func renderComfyUIManagedInstances(instances []comfyuimanagedrouter.InstanceStatus) []types.ComfyUIManagedInstanceStatus {
+	out := make([]types.ComfyUIManagedInstanceStatus, len(instances))
+	for i, inst := range instances {
+		out[i] = types.ComfyUIManagedInstanceStatus{
+			ContainerName: inst.ContainerName,
+			State:         inst.State,
+			UpdatedAt:     inst.UpdatedAt,
+			CustomNodes:   renderComfyUIManagedCustomNodes(inst.CustomNodes),
+		}
+	}
+	return out
+}
+
+func renderComfyUIManagedCustomNodes(nodes []comfyuimanagedrouter.CustomNodeStatus) []types.ComfyUIManagedCustomNode {
+	if len(nodes) == 0 {
+		return nil
+	}
+	out := make([]types.ComfyUIManagedCustomNode, len(nodes))
+	for i, n := range nodes {
+		out[i] = types.ComfyUIManagedCustomNode{Name: n.Name, Version: n.Version}
+	}
+	return out
+}
+
+// respondComfyUIManagedRouterErr handles a direct ctx.ComfyUIManagedRouter
+// call's error, mirroring respondModelPullRouterErr.
+//
+// respondComfyUIManagedRouterErr 处理一次直接 ctx.ComfyUIManagedRouter
+// 调用的错误，与 respondModelPullRouterErr 一致。
+func respondComfyUIManagedRouterErr(w http.ResponseWriter, err error) {
+	if errors.Is(err, comfyuimanagedrouter.ErrDisabled) {
+		writeError(w, http.StatusNotFound, "not found")
+		return
+	}
+	writeError(w, http.StatusInternalServerError, "internal error")
 }
 
 // renderPlatformOperator converts a stored platform operator to its wire
@@ -852,9 +1460,8 @@ func renderPlatformOperator(operator model.PlatformOperator) types.PlatformOpera
 // to, because the aggregation reads the same shape from the Gateway — and a
 // second declaration here would be a second thing to keep in step with it.
 //
-// The response is deliberately not filtered by anything: there is no tenant
-// dimension on a node to filter by, which is exactly why this endpoint is
-// behind the operator token instead of a session.
+// The optional gateway selector reads one configured replica's own observations.
+// There is no tenant dimension on a node; this endpoint requires a platform session.
 //
 // listFleetNodes 返回已配置的各 Gateway 副本所报告的全部节点。
 //
@@ -862,11 +1469,18 @@ func renderPlatformOperator(operator model.PlatformOperator) types.PlatformOpera
 // 的 JSON 标签——它们必须带，因为聚合正是从 Gateway 读取同一种形状——在这里再声明一遍，
 // 只会多出一样需要与之保持同步的东西。
 //
-// 该响应刻意不做任何过滤：节点身上没有可供过滤的租户维度，而这恰恰就是本端点由运维
-// token 而不是会话守卫的原因。
+// 可选的 gateway 选择值仅读取一个已配置副本自己的观测。
+// 节点没有租户维度，因此本端点要求平台会话。
 func listFleetNodes(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		snapshot, err := ctx.Fleet.Nodes(r.Context())
+		var snapshot fleet.Snapshot
+		var err error
+		if gateway := r.URL.Query().Get("gateway"); gateway != "" {
+			snapshot, err = ctx.Fleet.GatewayNodes(r.Context(), gateway)
+		} else {
+			snapshot, err = ctx.Fleet.Nodes(r.Context())
+		}
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -881,6 +1495,7 @@ func listFleetNodes(ctx *svc.ServiceContext) http.HandlerFunc {
 func listFleetModels(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		catalog, err := ctx.Fleet.Models(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -920,6 +1535,7 @@ func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		catalogue, err := ctx.Fleet.Workflows(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -955,6 +1571,7 @@ func listWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 func listOperatorWorkflows(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		catalogue, err := ctx.Fleet.Workflows(r.Context())
+		recordFleetCall(ctx, err)
 		if err != nil {
 			respondFleetErr(w, err)
 			return
@@ -1013,7 +1630,7 @@ func listJobs(ctx *svc.ServiceContext) http.HandlerFunc {
 // respondFleetErr 映射一次聚合失败。某个副本没有作答不属于这里的情形——那是部分成功，
 // 它在文档内部报告而不是用状态码报告，因为已经作答的那些节点依然值得展示。
 func respondFleetErr(w http.ResponseWriter, err error) {
-	if errors.Is(err, fleet.ErrDisabled) {
+	if errors.Is(err, fleet.ErrDisabled) || errors.Is(err, fleet.ErrUnknownGateway) {
 		writeError(w, http.StatusNotFound, "not found")
 		return
 	}
@@ -1101,6 +1718,347 @@ func createJob(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, renderJob(job))
+	}
+}
+
+// MaxRequestLogsBodyBytes bounds the body of POST /internal/v1/requestlogs.
+// It is sized for httpapi.DefaultRequestLogBatchSize (500 records, see
+// requestlogpush.go in the Gateway) with real headroom: one serialized
+// record measures roughly 224 bytes, so 500 of them need roughly 112 KB —
+// this constant is more than double that. The two constants are a coupled
+// cross-service contract: this endpoint's own decodeRequestLogs (not the
+// package's shared decode, whose maxBodyBytes is far too small for a batch)
+// enforces this limit, so changing either constant without checking the
+// other risks silently truncating batches and dropping them the way the
+// original shared 64 KiB limit did.
+//
+// MaxRequestLogsBodyBytes 限定 POST /internal/v1/requestlogs 请求体的大小。
+// 它按 httpapi.DefaultRequestLogBatchSize（500 条记录，见 Gateway 的
+// requestlogpush.go）留有真实余量来设定：一条序列化记录约 224 字节，500 条约
+// 需 112 KB——这个常量是它的两倍还多。这两个常量是一份耦合的跨服务契约：本
+// 端点专用的 decodeRequestLogs（而不是本包共用的 decode——它的 maxBodyBytes
+// 对一个批次而言太小）负责执行这个上限，因此改动任一常量而不检查另一个，都
+// 有可能重演最初那个共用 64 KiB 限制曾经造成的批次静默截断与丢弃。
+const MaxRequestLogsBodyBytes = 256 << 10
+
+// decodeRequestLogs allows a bounded batch of request-log records — see
+// MaxRequestLogsBodyBytes for why this endpoint needs a larger limit than
+// the package's shared decode.
+//
+// decodeRequestLogs 接受一批有界的请求日志记录——为什么本端点需要一个比本包
+// 共用 decode 更大的上限，见 MaxRequestLogsBodyBytes。
+func decodeRequestLogs(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxRequestLogsBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "request log batch exceeds limit")
+		} else {
+			writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
+		}
+		return false
+	}
+	return true
+}
+
+// createRequestLogs handles POST /internal/v1/requestlogs: a Gateway
+// replica reports a batch of authenticated front-door requests it just
+// finished serving. Like createJob, this call must never sit on an
+// inference request's own critical path — that discipline belongs to the
+// Gateway's own bounded background pusher, not to this handler, which only
+// does the write it is asked to do.
+//
+// createRequestLogs 处理 POST /internal/v1/requestlogs：一个 Gateway 副本
+// 报告一批它刚服务完的、已通过鉴权的前门请求。与 createJob 一样，这次调用
+// 绝不能出现在推理请求自己的关键路径上——那份纪律属于 Gateway 自己的有界
+// 后台推送器，不属于这个只负责完成被要求的写入的 handler。
+func createRequestLogs(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateRequestLogsRequest
+		if !decodeRequestLogs(w, r, &req) {
+			return
+		}
+		batch := make([]logic.CreateRequestLogParams, len(req.Records))
+		for i, rec := range req.Records {
+			batch[i] = logic.CreateRequestLogParams{
+				RequestID: rec.RequestID, TenantID: rec.TenantID, KeyDisplay: rec.KeyDisplay,
+				Endpoint: rec.Endpoint, StatusCode: rec.StatusCode, Outcome: rec.Outcome,
+				DurationMS: rec.DurationMS, CreatedAt: rec.CreatedAt,
+			}
+		}
+		accepted, err := ctx.Logic.CreateRequestLogs(r.Context(), batch)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.CreateRequestLogsResponse{Accepted: accepted})
+	}
+}
+
+// renderRequestLog converts a persisted request record to its wire form.
+// includeTenant is false on the tenant-scoped endpoint, where the tenant is
+// already implied by the caller's own session and repeating it on every row
+// would be noise, not information.
+//
+// renderRequestLog 把一条持久化的请求记录转换成线上形式。includeTenant 在
+// 按租户限定的端点上为 false——那里租户已经由调用方自己的会话隐含，在每一行
+// 上重复它是噪音，不是信息。
+func renderRequestLog(r model.RequestLog, includeTenant bool) types.RequestLogResponse {
+	out := types.RequestLogResponse{
+		RequestID: r.ID, KeyDisplay: r.KeyDisplay, Endpoint: r.Endpoint,
+		StatusCode: r.StatusCode, Outcome: r.Outcome, DurationMS: r.DurationMS, CreatedAt: r.CreatedAt,
+	}
+	if includeTenant {
+		out.TenantID = r.TenantID
+	}
+	return out
+}
+
+// requestLogFilterFrom reads the query parameters both search endpoints
+// share.
+//
+// requestLogFilterFrom 读取两个检索端点共用的查询参数。
+func requestLogFilterFrom(query url.Values) (store.RequestLogFilter, bool) {
+	since, sinceOK := timeParam(query.Get("since"))
+	until, untilOK := timeParam(query.Get("until"))
+	if !sinceOK || !untilOK {
+		return store.RequestLogFilter{}, false
+	}
+	return store.RequestLogFilter{
+		RequestID: query.Get("request_id"),
+		Outcome:   query.Get("status"),
+		Since:     since,
+		Until:     until,
+	}, true
+}
+
+// listRequestLogsTenant handles GET /admin/v1/requests, scoped to the
+// caller's own tenant — STATUS.md's P09/C28 tenant self-service view.
+//
+// listRequestLogsTenant 处理 GET /admin/v1/requests，限定在调用方自己的
+// 租户范围内——STATUS.md P09/C28 的租户自助视角。
+func listRequestLogsTenant(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		filter, ok := requestLogFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = actor.TenantID
+		page, err := ctx.Logic.ListRequestLogs(r.Context(), listQuery(r.URL.Query()), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.RequestLogResponse, len(page.Items))
+		for i, rec := range page.Items {
+			out[i] = renderRequestLog(rec, false)
+		}
+		writeJSON(w, http.StatusOK, types.RequestLogListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// listRequestLogsOperator handles GET /operator/v1/requests — STATUS.md's
+// P09/C28 platform cross-tenant view. An absent tenant_id searches every
+// tenant; a present one narrows to it, the same optional-scope shape
+// listActiveJobsForRoute already has no equivalent of on the tenant side,
+// because only the platform surface is trusted to ask for everything at
+// once.
+//
+// listRequestLogsOperator 处理 GET /operator/v1/requests——STATUS.md
+// P09/C28 的平台跨租户视角。缺席的 tenant_id 会检索每一个租户；给出时则
+// 收窄到该租户。这种可选范围的形状，租户一侧没有对应物，因为只有平台入口
+// 才被信任可以一次性检索全部租户。
+func listRequestLogsOperator(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, ok := requestLogFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = r.URL.Query().Get("tenant_id")
+		page, err := ctx.Logic.ListRequestLogs(r.Context(), listQuery(r.URL.Query()), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.RequestLogResponse, len(page.Items))
+		for i, rec := range page.Items {
+			out[i] = renderRequestLog(rec, true)
+		}
+		writeJSON(w, http.StatusOK, types.RequestLogListResponse{Items: out, NextCursor: page.NextCursor})
+	}
+}
+
+// MaxUsageRecordsBodyBytes bounds the body of POST /internal/v1/usagerecords.
+// It reuses MaxRequestLogsBodyBytes's own sizing logic: a usage record has
+// three extra integer fields and one shorter one (endpoint vs
+// outcome/status_code combined) than a request-log record, so the two
+// constants stay close; this one keeps its own value rather than aliasing
+// MaxRequestLogsBodyBytes so the two batches' sizes can be tuned
+// independently without a shared-constant surprise.
+//
+// MaxUsageRecordsBodyBytes 限定 POST /internal/v1/usagerecords 请求体的
+// 大小。它沿用 MaxRequestLogsBodyBytes 自己的定量逻辑：一条用量记录比一条
+// 请求日志记录多三个整数字段、少一个字段(endpoint 对比
+// outcome/status_code 合计)，两个常量因此接近；这里保留自己的取值而不是
+// 直接别名 MaxRequestLogsBodyBytes，好让两个批次的大小能够独立调整，而不会
+// 共享常量带来意外。
+const MaxUsageRecordsBodyBytes = 256 << 10
+
+// decodeUsageRecords allows a bounded batch of usage records — mirroring
+// decodeRequestLogs exactly, for the same reason (see
+// MaxUsageRecordsBodyBytes).
+//
+// decodeUsageRecords 接受一批有界的用量记录——与 decodeRequestLogs 完全
+// 对应，理由相同（见 MaxUsageRecordsBodyBytes）。
+func decodeUsageRecords(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, MaxUsageRecordsBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "usage record batch exceeds limit")
+		} else {
+			writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
+		}
+		return false
+	}
+	return true
+}
+
+// createUsageRecords handles POST /internal/v1/usagerecords: a Gateway
+// replica reports a batch of billable requests' token usage it just
+// finished serving, per STATUS.md's P2 usage ledger. Like createRequestLogs,
+// this call must never sit on an inference request's own critical path —
+// that discipline belongs to the Gateway's own bounded background pusher,
+// not to this handler, which only does the write it is asked to do.
+//
+// createUsageRecords 处理 POST /internal/v1/usagerecords：一个 Gateway 副本
+// 报告一批它刚服务完的、可计费请求的 token 用量，对应 STATUS.md 的 P2 用量
+// 账本。与 createRequestLogs 一样，这次调用绝不能出现在推理请求自己的关键
+// 路径上——那份纪律属于 Gateway 自己的有界后台推送器，不属于这个只负责完成
+// 被要求的写入的 handler。
+func createUsageRecords(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateUsageRecordsRequest
+		if !decodeUsageRecords(w, r, &req) {
+			return
+		}
+		batch := make([]logic.CreateUsageRecordParams, len(req.Records))
+		for i, rec := range req.Records {
+			batch[i] = logic.CreateUsageRecordParams{
+				RequestID: rec.RequestID, TenantID: rec.TenantID, Model: rec.Model, Endpoint: rec.Endpoint,
+				PromptTokens: rec.PromptTokens, CompletionTokens: rec.CompletionTokens, TotalTokens: rec.TotalTokens,
+				CreatedAt: rec.CreatedAt,
+			}
+		}
+		accepted, err := ctx.Logic.CreateUsageRecords(r.Context(), batch)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.CreateUsageRecordsResponse{Accepted: accepted})
+	}
+}
+
+// usageSummaryFilterFrom reads the query parameters both settlement
+// endpoints share.
+//
+// usageSummaryFilterFrom 读取两个结算端点共用的查询参数。
+func usageSummaryFilterFrom(query url.Values) (store.UsageRecordFilter, bool) {
+	since, sinceOK := timeParam(query.Get("since"))
+	until, untilOK := timeParam(query.Get("until"))
+	if !sinceOK || !untilOK {
+		return store.UsageRecordFilter{}, false
+	}
+	return store.UsageRecordFilter{Since: since, Until: until}, true
+}
+
+// renderUsageSummary converts one aggregated group to its wire form.
+// includeTenant is false on the tenant-scoped endpoint, the same convention
+// renderRequestLog already follows.
+//
+// renderUsageSummary 把一个聚合分组转换成线上形式。includeTenant 在按租户
+// 限定的端点上为 false，与 renderRequestLog 已经遵循的同一种约定。
+func renderUsageSummary(u store.UsageSummary, includeTenant bool) types.UsageSummaryEntryResponse {
+	out := types.UsageSummaryEntryResponse{
+		Model: u.Model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
+		TotalTokens: u.TotalTokens, RequestCount: u.RequestCount,
+	}
+	if includeTenant {
+		out.TenantID = u.TenantID
+	}
+	return out
+}
+
+// summarizeUsageTenant handles GET /admin/v1/usage/summary, scoped to the
+// caller's own tenant — STATUS.md's P2 usage ledger tenant self-service
+// settlement view.
+//
+// summarizeUsageTenant 处理 GET /admin/v1/usage/summary，限定在调用方自己
+// 的租户范围内——STATUS.md P2 用量账本的租户自助结算视角。
+func summarizeUsageTenant(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		filter, ok := usageSummaryFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = actor.TenantID
+		summary, err := ctx.Logic.SummarizeUsage(r.Context(), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.UsageSummaryEntryResponse, len(summary))
+		for i, u := range summary {
+			out[i] = renderUsageSummary(u, false)
+		}
+		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
+	}
+}
+
+// summarizeUsageOperator handles GET /operator/v1/usage/summary —
+// STATUS.md's P2 usage ledger platform cross-tenant settlement view. An
+// absent tenant_id summarizes every tenant; a present one narrows to it —
+// the same optional-scope shape listRequestLogsOperator already has.
+//
+// summarizeUsageOperator 处理 GET /operator/v1/usage/summary——STATUS.md
+// P2 用量账本的平台跨租户结算视角。缺席的 tenant_id 会汇总每一个租户；
+// 给出时则收窄到该租户——与 listRequestLogsOperator 已经采用的同一种可选
+// 范围形状。
+func summarizeUsageOperator(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		filter, ok := usageSummaryFilterFrom(r.URL.Query())
+		if !ok {
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			return
+		}
+		filter.TenantID = r.URL.Query().Get("tenant_id")
+		summary, err := ctx.Logic.SummarizeUsage(r.Context(), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := make([]types.UsageSummaryEntryResponse, len(summary))
+		for i, u := range summary {
+			out[i] = renderUsageSummary(u, true)
+		}
+		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
 	}
 }
 
@@ -1252,6 +2210,48 @@ func listJobArtifacts(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// getArtifactRoute handles GET /internal/v1/artifacts/:artifact_id. It
+// exists for STATUS.md's Gateway 故障切换收尾: downloadArtifact addresses an
+// artifact by its bare public id, with no job id in the URL, so a replica
+// recovering one it has no local record of has nothing else to ask the
+// control plane by. tenant_id is a query parameter for the same reason it is
+// on getJob — there is no session here, only the Gateway's own assertion of
+// which caller is downloading.
+//
+// getArtifactRoute 处理 GET /internal/v1/artifacts/:artifact_id。它为
+// STATUS.md 的「Gateway 故障切换收尾」而存在：downloadArtifact 只用产物自己的
+// 公开 id 寻址，URL 里没有 job id，因此一个正在恢复一份本地毫无记录的产物的
+// 副本，没有别的东西可以拿去问控制面。tenant_id 是查询参数，理由与 getJob
+// 相同——这里没有会话，只有 Gateway 自己对「是哪个调用方在下载」的断言。
+func getArtifactRoute(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		artifactID := pathvar.Vars(r)["artifact_id"]
+		tenantID := r.URL.Query().Get("tenant_id")
+		if artifactID == "" || tenantID == "" {
+			writeError(w, http.StatusBadRequest, "an artifact id and tenant_id are required")
+			return
+		}
+		artifact, job, err := ctx.Logic.GetArtifactRoute(r.Context(), tenantID, artifactID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.ArtifactRouteResponse{
+			ArtifactID:  artifact.ID,
+			JobID:       artifact.JobID,
+			TenantID:    artifact.TenantID,
+			Filename:    artifact.Filename,
+			Subfolder:   artifact.Subfolder,
+			Type:        artifact.Type,
+			ContentType: artifact.ContentType,
+			SizeBytes:   artifact.SizeBytes,
+			StorageKey:  artifact.StorageKey,
+			NodeID:      job.NodeID,
+			RuntimeID:   job.RuntimeID,
+		})
+	}
+}
+
 // listExpiredJobArtifacts handles GET /internal/v1/job-artifacts/expired. It
 // answers a Gateway cleanup sweep's question "which artifacts of this type
 // are older than this cutoff" (STATUS.md's P04): type and before are query
@@ -1364,6 +2364,110 @@ func renderJobArtifact(a model.JobArtifact) types.JobArtifactResponse {
 		SizeBytes:   a.SizeBytes,
 		ContentType: a.ContentType,
 		CreatedAt:   a.CreatedAt,
+	}
+}
+
+// -----------------------------------------------------------------------
+// Response turns (STATUS.md's P2 "Responses 持久会话")
+// -----------------------------------------------------------------------
+
+// maxResponseTurnBodyBytes bounds POST /internal/v1/responses. It is larger
+// than the package's shared maxBodyBytes for the same reason
+// MaxRequestLogsBodyBytes is: a stored turn's Messages is a rendered
+// conversation, not a small metadata record, and the 64 KiB shared limit
+// that is generous for a Job row would be tight for a real multi-turn
+// exchange. 1 MiB matches the size this repository already accepts for one
+// route-publish body (STATUS.md's P02); a conversation this Gateway itself
+// sends to a model already fits comfortably under that.
+//
+// maxResponseTurnBodyBytes 限定 POST /internal/v1/responses 的请求体大小。
+// 它比本包共用的 maxBodyBytes 更大，理由与 MaxRequestLogsBodyBytes 相同：
+// 一轮持久化的 Messages 是渲染出的对话内容，不是一条小的元数据记录，对
+// Job 这样的一行而言宽裕的 64 KiB 上限，对一次真实的多轮对话而言会显得
+// 局促。1 MiB 与本仓库已经为单次路由发布请求体接受的大小一致（STATUS.md 的
+// P02）；一次本 Gateway 自己会发给模型的对话，早已舒适地落在这个上限之内。
+const maxResponseTurnBodyBytes = 1 << 20
+
+func decodeResponseTurn(w http.ResponseWriter, r *http.Request, out any) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, maxResponseTurnBodyBytes)
+	decoder := json.NewDecoder(r.Body)
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(out); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			writeError(w, http.StatusRequestEntityTooLarge, "response turn exceeds size limit")
+		} else {
+			writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
+		}
+		return false
+	}
+	return true
+}
+
+// createResponseTurn handles POST /internal/v1/responses: a Gateway replica
+// reports one Responses API turn a caller asked to persist. Like createJob,
+// this call must never sit on the Responses request's own critical path —
+// see httpapi's async persister for the discipline that keeps it off it.
+//
+// createResponseTurn 处理 POST /internal/v1/responses：一个 Gateway 副本
+// 报告调用方要求持久化的一轮 Responses API。与 createJob 一样，这次调用
+// 绝不能出现在 Responses 请求自己的关键路径上——让它保持在路径之外的纪律，
+// 见 httpapi 的异步持久化器。
+func createResponseTurn(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.CreateResponseTurnRequest
+		if !decodeResponseTurn(w, r, &req) {
+			return
+		}
+		turn, err := ctx.Logic.CreateResponseTurn(r.Context(), logic.CreateResponseTurnParams{
+			ResponseID:         req.ResponseID,
+			TenantID:           req.TenantID,
+			PreviousResponseID: req.PreviousResponseID,
+			Model:              req.Model,
+			Messages:           string(req.Messages),
+		})
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderResponseTurn(turn))
+	}
+}
+
+// getResponseTurn handles GET /internal/v1/responses/:id. tenant_id is a
+// query parameter for the same reason it is on getJob: there is no session
+// here to read it from, only the Gateway's own assertion.
+//
+// getResponseTurn 处理 GET /internal/v1/responses/:id。tenant_id 是查询
+// 参数，理由与 getJob 相同：这里没有会话可供读取，只有 Gateway 自己的断言。
+func getResponseTurn(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		responseID := pathvar.Vars(r)["id"]
+		tenantID := r.URL.Query().Get("tenant_id")
+		if responseID == "" || tenantID == "" {
+			writeError(w, http.StatusBadRequest, "a response id and tenant_id are required")
+			return
+		}
+		turn, err := ctx.Logic.GetResponseTurn(r.Context(), tenantID, responseID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderResponseTurn(turn))
+	}
+}
+
+// renderResponseTurn converts a stored turn to its internal wire form.
+//
+// renderResponseTurn 把存储的一轮转换成内部线上形式。
+func renderResponseTurn(turn model.ResponseTurn) types.ResponseTurnResponse {
+	return types.ResponseTurnResponse{
+		ResponseID:         turn.ID,
+		TenantID:           turn.TenantID,
+		PreviousResponseID: turn.PreviousResponseID,
+		Model:              turn.Model,
+		Messages:           json.RawMessage(turn.Messages),
+		CreatedAt:          turn.CreatedAt,
 	}
 }
 

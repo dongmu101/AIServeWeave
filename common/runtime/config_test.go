@@ -54,6 +54,26 @@ func TestNormalizeLeavesNegativeValuesAsExplicitOptOut(t *testing.T) {
 	}
 }
 
+// TestNormalizeCodexProbeTimeout allows cold startup while preserving overrides.
+// TestNormalizeCodexProbeTimeout 为冷启动预留时间，同时保留显式设置。
+func TestNormalizeCodexProbeTimeout(t *testing.T) {
+	for _, tc := range []struct {
+		name        string
+		input, want time.Duration
+	}{
+		{"cold startup default", 0, 15 * time.Second},
+		{"explicit timeout", time.Second, time.Second},
+		{"explicit unlimited", -1, -1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := (Config{Kind: KindCodex, ProbeTimeout: tc.input}).Normalize().ProbeTimeout
+			if got != tc.want {
+				t.Fatalf("ProbeTimeout = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeDoesNotMutateReceiver(t *testing.T) {
 	cfg := validConfig()
 	_ = cfg.Normalize()
@@ -152,5 +172,33 @@ func TestLogValueOmitsSecrets(t *testing.T) {
 	}
 	if !strings.Contains(out, cfg.ID) {
 		t.Fatalf("LogValue omitted the non-secret ID field: %s", out)
+	}
+}
+
+// TestCodexConfigIsLocalOnly rejects HTTP and credential configuration for Codex.
+// TestCodexConfigIsLocalOnly 拒绝 Codex 的 HTTP 地址和凭据配置。
+func TestCodexConfigIsLocalOnly(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		change func(*Config)
+		valid  bool
+	}{
+		{"local", func(*Config) {}, true},
+		{"URL", func(c *Config) { c.BaseURL = "http://gateway" }, false},
+		{"key", func(c *Config) { c.APIKey = "SECRET" }, false},
+		{"headers", func(c *Config) { c.Headers = map[string]string{"Authorization": "SECRET"} }, false},
+		{"TLS", func(c *Config) { c.TLS.CAFile = "private" }, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Config{ID: "codex-local", Kind: KindCodex}
+			tc.change(&cfg)
+			err := cfg.Normalize().Validate()
+			if (err == nil) != tc.valid {
+				t.Fatalf("error=%v, want valid=%v", err, tc.valid)
+			}
+			if err != nil && strings.Contains(err.Error(), "SECRET") {
+				t.Fatal("error contains secret, want fixed validation text")
+			}
+		})
 	}
 }

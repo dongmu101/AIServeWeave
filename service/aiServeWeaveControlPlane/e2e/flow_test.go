@@ -181,6 +181,52 @@ func TestKeyIssuedByTheConsoleAuthenticatesAtTheGateway(t *testing.T) {
 	}
 }
 
+// TestDeletedKeyStopsWorkingAtTheGateway asserts permanent deletion is a
+// revocation as far as the Gateway is concerned: the same generation advance
+// clears its cached positive result, and the listing no longer shows the key.
+//
+// TestDeletedKeyStopsWorkingAtTheGateway 断言永久删除对 Gateway 而言同样是一次吊销：
+// 同一次 generation 推进会清除其已缓存的正向结果，且列表不再展示该 key。
+func TestDeletedKeyStopsWorkingAtTheGateway(t *testing.T) {
+	h := newHarness(t)
+	_, session := bootstrap(h, "Acme", "owner@example.com")
+
+	var key types.CreateAPIKeyResponse
+	if status := h.call(http.MethodPost, "/admin/v1/apikeys", session,
+		types.CreateAPIKeyRequest{Name: "doomed"}, &key); status != http.StatusCreated {
+		t.Fatalf("creating a key: status %d", status)
+	}
+
+	clock := newSteppableClock()
+	verifier := gatewayVerifier(h, clock)
+	if _, err := verifier.Verify(context.Background(), key.Key); err != nil {
+		t.Fatalf("the key did not work before deletion: %v", err)
+	}
+
+	if status := h.call(http.MethodDelete, "/admin/v1/apikeys/"+key.APIKey.ID+"/permanent", session, nil, nil); status != http.StatusNoContent {
+		t.Fatalf("deleting the key: status %d", status)
+	}
+
+	deadline := time.Now().Add(time.Second)
+	for {
+		_, err := verifier.Verify(context.Background(), key.Key)
+		if errors.Is(err, httpapi.ErrKeyRejected) {
+			break
+		}
+		if err != nil {
+			t.Fatalf("verifying during deletion propagation: %v", err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the Gateway accepted a deleted key for longer than one second")
+		}
+		runtime.Gosched()
+	}
+
+	if status := h.call(http.MethodDelete, "/admin/v1/apikeys/"+key.APIKey.ID+"/permanent", session, nil, nil); status != http.StatusNotFound {
+		t.Errorf("deleting the key twice: status = %d, want 404", status)
+	}
+}
+
 // TestRevokedKeyStopsWorkingAtTheGateway covers the notification half of the
 // loop: revocation advances the generation and the Gateway clears its cached
 // positive result before the next authenticated call.

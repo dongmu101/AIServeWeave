@@ -1,27 +1,27 @@
 // Command aiserveweave-agent runs the node-side agent: it manages the local
-// inference runtimes (Ollama, vLLM, SGLang, ComfyUI) and will dial out to the
-// Gateway over the tunnel. The agent never listens on a public port.
+// inference runtimes (Ollama, vLLM, SGLang, TensorRT-LLM, TokenSpeed,
+// ComfyUI) and will dial out to the Gateway over the tunnel. The agent never
+// listens on a public port.
 package main
 
 import (
 	"context"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
-	"net"
-	"net/http"
 	"os"
 	"os/signal"
-	"strings"
+	"sync/atomic"
 	"syscall"
 	"time"
 
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
-	"AIServeWeave/common/runtime/ollama"
-	"AIServeWeave/common/runtime/sglang"
-	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
+	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
+	"AIServeWeave/service/aiServeWeaveAgent/configui"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
@@ -36,6 +36,28 @@ import (
 // scripts/build-release.sh；直接 `go build` 得到的就是 "dev"。
 var version = "dev"
 
+// agentUpgradePublicKeyHex is the hex-encoded Ed25519 public key (64 hex
+// characters) that authenticates -agent-upgrade-manifest (STATUS.md's P2
+// Agent auto-upgrade subtask 2). Stamped at build time via
+// -ldflags="-X main.agentUpgradePublicKeyHex=...", the same mechanism as
+// version; empty (the `go build` default) disables the feature entirely —
+// agentupgrade.LoadManifest refuses to trust any manifest without a
+// correctly sized public key, so a node built without this flag can never
+// execute a downloaded binary no matter what a manifest file on disk says.
+// The matching private key's custody is a maintainer decision this
+// codebase does not make (design doc section 六): it must never be
+// reachable from any Agent's runtime environment.
+//
+// agentUpgradePublicKeyHex 是为 -agent-upgrade-manifest 做身份验证的十六进
+// 制编码 Ed25519 公钥（64 个十六进制字符，STATUS.md P2 Agent 自动升级子任
+// 务二）。构建时通过 -ldflags="-X main.agentUpgradePublicKeyHex=..." 注
+// 入，与 version 同一种机制；留空（`go build` 的默认值）会彻底关闭这个功
+// 能——agentupgrade.LoadManifest 拒绝信任任何没有正确长度公钥的清单，因此
+// 一个没带这个 flag 构建出来的节点，无论磁盘上的清单文件写了什么，都永远
+// 不可能执行任何下载到的二进制。对应私钥归谁保管是本代码库不代为决定的维
+// 护者裁决（设计文档第六节）：它绝不能被任何 Agent 的运行环境触及。
+var agentUpgradePublicKeyHex = ""
+
 const (
 	// shutdownTimeout bounds how long the agent waits for in-flight runtime
 	// work to wind down before exiting anyway.
@@ -46,28 +68,89 @@ const (
 	// the transport rather than as http.Client.Timeout on purpose: a client
 	// deadline also covers reading the body, which would truncate long-lived
 	// SSE streams. Per-request deadlines come from the caller's context.
+	//
+	// responseHeaderTimeout is 5 minutes because a large local model may queue
+	// behind another request or load from disk before its first byte.
+	// responseHeaderTimeout 取 5 分钟：大模型在本机可能要排队或从磁盘加载，
+	// 之后才会吐出第一个字节。
 	dialTimeout           = 10 * time.Second
-	responseHeaderTimeout = 60 * time.Second
+	responseHeaderTimeout = 5 * time.Minute
 )
 
 func main() {
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	opts := registerTunnelFlags()
+	mpOpts := registerModelPullFlags()
+	cmOpts := registerComfyUIManagedFlags()
+	auOpts := registerAgentUpgradeFlags()
 	ollamaURL := flag.String("ollama-url", "",
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
 	autoDiscover := flag.Bool("auto-discover", true,
-		"probe 127.0.0.1's well-known Ollama/vLLM ports and register whatever answers; never touches any other host")
+		"probe 127.0.0.1's well-known Ollama/vLLM/TensorRT-LLM/TokenSpeed/SGLang ports and register whatever answers; never touches any other host")
 	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
 		"how often auto-discovery looks for a newly appeared local instance")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9091",
 		"address the Prometheus /metrics listener binds; loopback by default because the agent never listens on a public port, empty disables it")
 	showVersion := flag.Bool("version", false, "print the version and exit")
+	configPath := flag.String("config", "",
+		"path to a YAML config file for the gateway connection and local runtime declarations (see the agentconfig package doc); "+
+			"a flag explicitly passed on the command line always overrides the same setting from this file; "+
+			"if left empty, the agent looks for \""+defaultConfigPath+"\" in the working directory and loads it if present, otherwise runs on flags alone")
+	configUI := flag.Bool("config-ui", false,
+		"instead of starting the agent, serve a local setup page (see -config-ui-addr) for editing -config")
+	configUIAddr := flag.String("config-ui-addr", defaultConfigUIAddr,
+		"loopback address the local setup page listens on; the page starts alongside the agent by default, -config-ui runs only the page")
 	flag.Parse()
 
 	if *showVersion {
 		os.Stdout.WriteString("aiserveweave-agent " + version + "\n")
 		return
+	}
+
+	explicit := explicitFlagNames()
+	resolvedConfigPath := resolveConfigPath(*configPath, explicit["config"], defaultConfigPath)
+	uiConfigPath := *configPath
+	if !explicit["config"] {
+		uiConfigPath = defaultConfigPath
+	}
+
+	autoConfigUI := shouldAutoOpenConfigUI(*configUI, explicit, resolvedConfigPath)
+
+	if *configUI || autoConfigUI {
+		logger, err := newLogger(*logLevel)
+		if err != nil {
+			os.Stderr.WriteString("agent: " + err.Error() + "\n")
+			os.Exit(2)
+		}
+		if autoConfigUI {
+			logger.Info("no -gateway and no config file found; opening the local setup page instead of running with the tunnel disabled",
+				slog.String("addr", *configUIAddr), slog.String("config_path", uiConfigPath))
+		}
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := configui.Serve(ctx, logger, *configUIAddr, uiConfigPath, configui.Sources{}); err != nil {
+			logger.Error("config setup page exited with error", slog.Any("error", err))
+			os.Exit(1)
+		}
+		return
+	}
+
+	var declaredRuntimes []runtime.Config
+	if resolvedConfigPath != "" {
+		cfg, err := agentconfig.Load(resolvedConfigPath)
+		if err != nil {
+			os.Stderr.WriteString("agent: config: " + err.Error() + "\n")
+			os.Exit(2)
+		}
+		if err := applyConfig(cfg, explicit, opts, autoDiscover, autoDiscoverInterval, metricsAddr, logLevel); err != nil {
+			os.Stderr.WriteString("agent: config: " + err.Error() + "\n")
+			os.Exit(2)
+		}
+		declaredRuntimes = runtimesFromConfig(cfg.Runtimes)
+	}
+	if *ollamaURL != "" {
+		declaredRuntimes = append(declaredRuntimes, runtime.Config{ID: *ollamaID, Kind: runtime.KindOllama, BaseURL: *ollamaURL})
 	}
 
 	logger, err := newLogger(*logLevel)
@@ -77,122 +160,27 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, *ollamaURL, *ollamaID, *autoDiscover, *autoDiscoverInterval, *metricsAddr); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr, *configUIAddr, uiConfigPath); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
 }
 
-// tunnelOptions is the tunnel's configuration. It comes from flags because
-// the agent has no configuration file yet; the `tunnel` section of the file
-// described in tunnel/README.md replaces this wholesale once it lands, and
-// the flag names deliberately mirror that section's keys.
-type tunnelOptions struct {
-	gateway         string
-	registry        string
-	nodeID          string
-	certFile        string
-	keyFile         string
-	caFile          string
-	bootstrapToken  string
-	allowedRuntimes string
-	labels          string
-	maxGateways     int
-}
-
-func registerTunnelFlags() *tunnelOptions {
-	opts := &tunnelOptions{}
-	flag.StringVar(&opts.gateway, "gateway", "",
-		"comma-separated seed list of gateway replicas as host:port; empty disables the tunnel. "+
-			"Only one has to be reachable: the roster supplies the rest")
-	flag.IntVar(&opts.maxGateways, "max-gateways", 0, "upper bound on simultaneous gateway tunnels (default 16)")
-	flag.StringVar(&opts.registry, "registry", "", "registry endpoint for node certificate issuance, as host:port")
-	flag.StringVar(&opts.nodeID, "node-id", "", "node identity; empty lets the registry assign one")
-	flag.StringVar(&opts.certFile, "cert-file", "", "node certificate path, mode 0600")
-	flag.StringVar(&opts.keyFile, "key-file", "", "node private key path, mode 0600")
-	flag.StringVar(&opts.caFile, "ca-file", "", "registry CA bundle path")
-	flag.StringVar(&opts.bootstrapToken, "bootstrap-token-file", "", "one-time registration token path, deleted after use")
-	flag.StringVar(&opts.allowedRuntimes, "allowed-runtimes", "",
-		"comma-separated runtime ids the gateway may dispatch to; empty means every configured runtime")
-	flag.StringVar(&opts.labels, "labels", "",
-		"comma-separated key=value facts about this node for the gateway's routing rules, e.g. region=local,gpu=4090")
-	return opts
-}
-
-// nodeLabels parses -labels into the map Hello carries.
+// run serves the local setup page alongside the runtime manager and tunnel
+// until shutdown. An unavailable page or declared backend does not prevent
+// startup; unhealthy backends are retried. Invalid configuration remains fatal.
+// declaredRuntimes merges YAML declarations with -ollama-url/-ollama-id;
+// model pulls use only ollamaURL, matching their local flag contract.
 //
-// A malformed entry is dropped rather than fatal: labels express a routing
-// preference, and refusing to start over a typo in one would take a working
-// node offline for something that only affects where requests prefer to go.
-// The Agent logs what it parsed, so the typo is still visible.
-//
-// nodeLabels 把 -labels 解析成 Hello 所携带的映射。
-//
-// 格式错误的条目被丢弃而不是致命错误：标签表达的是路由偏好，为其中一个的笔误而拒绝
-// 启动，会为「只影响请求偏好去哪」的事情让一个本来能工作的节点下线。Agent 会记录它
-// 解析出了什么，因此那个笔误依然可见。
-func (o *tunnelOptions) nodeLabels() map[string]string {
-	out := make(map[string]string)
-	for _, pair := range strings.Split(o.labels, ",") {
-		pair = strings.TrimSpace(pair)
-		if pair == "" {
-			continue
-		}
-		key, value, ok := strings.Cut(pair, "=")
-		key, value = strings.TrimSpace(key), strings.TrimSpace(value)
-		if !ok || key == "" {
-			continue
-		}
-		out[key] = value
-	}
-	if len(out) == 0 {
-		return nil
-	}
-	return out
-}
-
-// enabled reports whether the operator asked for a tunnel at all.
-func (o *tunnelOptions) enabled() bool { return len(o.seeds()) > 0 }
-
-// seeds parses the seed endpoint list. The roster replaces it as soon as one
-// replica answers, so it only has to contain one address that works.
-func (o *tunnelOptions) seeds() []string {
-	var endpoints []string
-	for _, endpoint := range strings.Split(o.gateway, ",") {
-		if endpoint = strings.TrimSpace(endpoint); endpoint != "" {
-			endpoints = append(endpoints, endpoint)
-		}
-	}
-	return endpoints
-}
-
-// runtimeIDs parses the allowlist. An empty list means no local narrowing,
-// which is only safe because the agent currently configures no runtimes at
-// all; once runtimes are loaded from the config file, main must pass every
-// configured id here so the allowlist is a real allowlist.
-func (o *tunnelOptions) runtimeIDs() []string {
-	var ids []string
-	for _, id := range strings.Split(o.allowedRuntimes, ",") {
-		if id = strings.TrimSpace(id); id != "" {
-			ids = append(ids, id)
-		}
-	}
-	return ids
-}
-
-// run wires the runtime registry and manager, then blocks until the process is
-// signalled to stop. It returns the first error that prevents a clean start or
-// a clean shutdown.
-//
-// ollamaURL and ollamaID are a stand-in for the runtime section of the agent
-// config file described in tunnel/README.md: until that file lands, this is
-// the only way to give the agent a real backend to dispatch to. An empty
-// ollamaURL registers nothing, matching today's behavior.
-func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr string) error {
+// run 同时运行本地设置页面、运行时管理器和隧道，直到关闭。
+// 页面或已声明的后端暂时不可用不阻止启动；未就绪的后端会定期重试。
+// 无效配置仍使启动失败。declaredRuntimes 合并 YAML 与 -ollama-url/-ollama-id
+// 的声明；模型拉取仅使用 ollamaURL，保持其纯本地 flag 契约。
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	registry, err := newRegistry()
+	registry, err := newRegistry(declaredRuntimes)
 	if err != nil {
 		return err
 	}
@@ -203,24 +191,110 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 	//
 	// 整个节点共用一个指标注册表：运行时层与隧道记录进同一个下沉端，这才让「后端慢」
 	// 与「隧道慢」成为两个可以互相对照的数字，而不是两套说辞。
-	metricsRegistry := metrics.New(tunnel.Descriptions())
+	metricsRegistry := metrics.New(tunnel.Descriptions(), comfyui.Descriptions())
 	metricsServer := startMetricsEndpoint(logger, metricsRegistry, metricsAddr)
 
 	deps := newDependencies(logger, metricsRegistry)
 	manager := runtime.NewManager(registry, deps)
+	defer func() {
+		stop()
+		_ = manager.Close(context.Background())
+		if metricsServer != nil {
+			_ = metricsServer.Close()
+		}
+	}()
+	var activeTunnels atomic.Pointer[tunnel.Manager]
+	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
+	if opts.enabled() {
+		// Only a node with a tunnel has anywhere to report the quota to; the
+		// settings page refreshes the cache on its own when it is viewed.
+		//
+		// 只有带隧道的节点才有地方上报额度；设置页被查看时自己会刷新缓存。
+		go cliUsage.Run(ctx, cliUsageRefreshInterval)
+	}
+	uiSources := configui.Sources{
+		Runtimes: manager.Snapshot,
+		CLIUsage: cliUsage,
+		Gateway: func() configui.GatewaySnapshot {
+			current := activeTunnels.Load()
+			snapshot := configui.GatewaySnapshot{Enabled: opts.enabled(), Started: current != nil}
+			if current != nil {
+				snapshot.States = make(map[string]string)
+				for endpoint, state := range current.TunnelStates() {
+					snapshot.States[endpoint] = state.String()
+				}
+			}
+			return snapshot
+		},
+	}
+	uiDone := make(chan struct{})
+	go func() {
+		defer close(uiDone)
+		if err := configui.Serve(ctx, logger, configUIAddr, configPath, uiSources); err != nil {
+			logger.Error("config setup page unavailable; Agent will keep running / 配置页面不可用，Agent 继续运行", slog.Any("error", err))
+		}
+	}()
+	defer func() {
+		stop()
+		<-uiDone
+	}()
 
 	configuredRuntimes := 0
-	if ollamaURL != "" {
-		if err := manager.Add(ctx, runtime.Config{ID: ollamaID, Kind: runtime.KindOllama, BaseURL: ollamaURL}); err != nil {
-			return err
+	for _, rc := range declaredRuntimes {
+		rc.AllowUnavailable = true
+		if err := manager.Add(ctx, rc); err != nil {
+			return fmt.Errorf("declared runtime %q (%s): %w", rc.ID, rc.Kind, err)
 		}
-		configuredRuntimes = 1
+		configuredRuntimes++
+	}
+	for _, snapshot := range manager.Snapshot() {
+		if snapshot.State != runtime.StateHealthy {
+			logger.Warn("runtime not ready; Agent will keep running and retry / 运行时未就绪，Agent 继续运行并重试",
+				slog.String("runtime_id", snapshot.Descriptor.ID), slog.String("kind", string(snapshot.Descriptor.Kind)),
+				slog.String("state", string(snapshot.State)))
+		}
 	}
 
-	// Runtime configuration is not loaded from disk yet, so beyond the
-	// Ollama instance above the manager starts with no instances until
-	// auto-discovery (below) or the tunnel's config delivery adds one.
-	// Declared runtimes will be added here once the agent config file lands.
+	// Managed ComfyUI (STATUS.md's P2 ComfyUI Managed Docker deployment,
+	// subtask one boot path + subtask two's remote lifecycle actions): bring
+	// the container up first, wait for its port to accept connections, then
+	// register it exactly like an External instance so comfyui.Runtime's
+	// existing Probe/Discover — not this block — perform the
+	// ComfyUI-specific identity check. A configured Managed instance that
+	// fails to start or never becomes reachable fails agent startup: the operator
+	// explicitly opted into Managed mode, so a fast, visible failure beats silently
+	// running a node that never serves requests. The Supervisor built here
+	// is reused after boot to react to a Gateway-triggered
+	// start/stop/restart (subtask two) — see startTunnel's ComfyUIManaged
+	// wiring — so this sequence exists exactly once instead of once for
+	// boot and once inside Supervisor.Start.
+	//
+	// Managed ComfyUI（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务一的启动
+	// 路径 + 子任务二的远程生命周期动作）：先把容器带起来，等它的端口能接受连接，
+	// 再按 External 实例同样的方式注册——真正的 ComfyUI 身份校验交给既有的
+	// comfyui.Runtime 的 Probe/Discover，不是这段代码。配置了 Managed 但启动失败或
+	// 从未可达时让 Agent 启动失败：运维显式选择了
+	// Managed 模式，快速可见的失败好过悄悄跑一个从不服务请求的节点。这里构造的
+	// Supervisor 在启动之后会被复用来响应 Gateway 触发的 start/stop/restart（子任务
+	// 二，见 startTunnel 的 ComfyUIManaged 接线），因此这段顺序只存在一份，而不是启动
+	// 时一份、Supervisor.Start 内部再一份。
+	var comfyUIManagedSupervisor *comfyuimanaged.Supervisor
+	if cmOpts.enabled() {
+		spec := cmOpts.spec()
+		launcher := comfyuimanaged.NewLauncher(deps.Clock, logger)
+		comfyUIManagedSupervisor = comfyuimanaged.NewSupervisorWithCustomNodes(ctx, launcher, manager, spec, cmOpts.startTimeout, deps.Clock, logger,
+			cmOpts.customNodesDir, cmOpts.customNodeAllowlist())
+		if err := comfyUIManagedSupervisor.Start(ctx); err != nil {
+			return fmt.Errorf("comfyui managed: %w", err)
+		}
+		configuredRuntimes++
+		logger.Info("comfyui managed instance registered", slog.String("container", spec.ContainerName),
+			slog.String("base_url", fmt.Sprintf("http://127.0.0.1:%d", spec.Port)))
+	}
+
+	// Beyond declaredRuntimes above, the manager starts with no instances
+	// until auto-discovery (below) or the tunnel's config delivery adds
+	// one.
 	logger.Info("agent started",
 		slog.Any("supported_kinds", registry.Kinds()),
 		slog.Int("configured_runtimes", configuredRuntimes),
@@ -229,11 +303,15 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 	)
 
 	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
+	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
+	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 
-	tunnelErr, err := startTunnel(ctx, logger, manager, deps.Metrics, opts)
+	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker, cliUsage)
 	if err != nil {
 		return err
 	}
+
+	activeTunnels.Store(tunnelManager)
 
 	// Whichever comes first: the operator stopping the agent, or the tunnel
 	// giving up for a reason no reconnect can fix. Either way the runtimes are
@@ -273,186 +351,6 @@ func run(logger *slog.Logger, opts *tunnelOptions, ollamaURL, ollamaID string, a
 
 	logger.Info("agent stopped")
 	return nil
-}
-
-// startMetricsEndpoint serves the registry on addr, or returns nil when the
-// operator disabled it. A failure to listen is logged rather than returned:
-// an agent that refuses to start because its metrics port is taken is an
-// agent whose node is offline for a reason nobody would guess from the
-// symptom.
-//
-// startMetricsEndpoint 在 addr 上提供注册表内容；运维关闭该端点时返回 nil。监听失败
-// 只记录、不返回：一个因为指标端口被占用就拒绝启动的 Agent，会让整个节点因为一个
-// 从症状根本猜不到的原因而离线。
-func startMetricsEndpoint(logger *slog.Logger, registry *metrics.Registry, addr string) *http.Server {
-	if addr == "" {
-		logger.Warn("no -metrics-addr; this agent exports no metrics")
-		return nil
-	}
-	server := registry.Server(addr)
-	go func() {
-		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Error("metrics listener stopped", slog.Any("error", err))
-		}
-	}()
-	logger.Info("metrics listening", slog.String("metrics_addr", addr))
-	return server
-}
-
-// startLocalDiscovery starts localdiscovery.Scanner in the background and
-// returns a channel that is closed once its goroutine has exited — after ctx
-// is canceled, not before — so the caller can wait for any in-flight
-// Manager.Add call to finish before Close starts tearing instances down.
-// When autoDiscover is false the channel is returned already closed, so
-// waiting on it is always safe regardless of whether discovery is enabled.
-func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runtime.Manager, autoDiscover bool, interval time.Duration) <-chan struct{} {
-	done := make(chan struct{})
-	if !autoDiscover {
-		close(done)
-		return done
-	}
-	scanner, err := localdiscovery.New(localdiscovery.Config{
-		Manager:  manager,
-		Interval: interval,
-		Logger:   logger,
-	})
-	if err != nil {
-		// Config is entirely flag-derived and always valid, so this is not
-		// reachable in practice; closing done rather than panicking keeps a
-		// theoretical failure here from taking the rest of the agent down.
-		logger.Error("local discovery did not start", slog.Any("error", err))
-		close(done)
-		return done
-	}
-	go func() {
-		defer close(done)
-		if err := scanner.Run(ctx); err != nil {
-			logger.Error("local discovery stopped unexpectedly", slog.Any("error", err))
-		}
-	}()
-	return done
-}
-
-// startTunnel wires the connection table and runs it in the background,
-// returning the channel its outcome arrives on. A nil channel is returned
-// when no gateway is configured, which blocks forever in the select above and
-// leaves the agent running its runtimes only.
-//
-// The seed endpoints only have to get the agent to one reachable replica: the
-// roster that comes back over that tunnel supplies the rest, so scaling the
-// Gateway out never means restarting an agent.
-//
-// metrics is the same sink the runtime layer records against: a node has one
-// metrics backend, not one per layer. Today it discards, so wiring a real one
-// is a change in exactly one place.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions) (<-chan error, error) {
-	if !opts.enabled() {
-		return nil, nil
-	}
-
-	caPEM, err := os.ReadFile(opts.caFile)
-	if err != nil {
-		return nil, err
-	}
-	connector, err := tunnel.NewGRPCRegistryConnector(opts.registry, caPEM)
-	if err != nil {
-		return nil, err
-	}
-	identities, err := tunnel.NewIdentityManager(tunnel.IdentityConfig{
-		NodeID:             opts.nodeID,
-		RegistryEndpoint:   opts.registry,
-		CertFile:           opts.certFile,
-		KeyFile:            opts.keyFile,
-		CAFile:             opts.caFile,
-		BootstrapTokenFile: opts.bootstrapToken,
-		AgentVersion:       version,
-		Logger:             logger,
-	}, connector)
-	if err != nil {
-		return nil, err
-	}
-
-	// The identity is obtained before the first dial: a node with no valid
-	// certificate has nothing to say to a gateway, and failing here gives the
-	// operator a clear error instead of an authentication loop. The
-	// connection table keeps it rotated from then on.
-	identity, err := identities.Ensure(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	dispatcher, err := tunnel.NewDispatcher(tunnel.DispatchConfig{
-		Manager:         manager,
-		NodeID:          identity.NodeID,
-		AllowedRuntimes: opts.runtimeIDs(),
-		Metrics:         metrics,
-		Logger:          logger,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	tunnels, err := tunnel.NewManager(tunnel.ManagerConfig{
-		Client: tunnel.ClientConfig{
-			NodeID:          identity.NodeID,
-			AgentVersion:    version,
-			Manager:         manager,
-			AllowedRuntimes: opts.runtimeIDs(),
-			Labels:          opts.nodeLabels(),
-			Handler:         dispatcher,
-			Metrics:         metrics,
-			Logger:          logger,
-		},
-		SeedEndpoints: opts.seeds(),
-		MaxGateways:   opts.maxGateways,
-		Identities:    identities,
-		Logger:        logger,
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	done := make(chan error, 1)
-	go func() { done <- tunnels.Run(ctx) }()
-	return done, nil
-}
-
-// newRegistry returns a runtime registry with every supported inference
-// backend registered.
-func newRegistry() (runtime.Registry, error) {
-	registry := runtime.NewRegistry()
-	factories := map[runtime.Kind]runtime.Factory{
-		runtime.KindOllama:  ollama.New,
-		runtime.KindVLLM:    vllm.New,
-		runtime.KindSGLang:  sglang.New,
-		runtime.KindComfyUI: comfyui.New,
-	}
-	for kind, factory := range factories {
-		if err := registry.Register(kind, factory); err != nil {
-			return nil, err
-		}
-	}
-	return registry, nil
-}
-
-// newDependencies builds the production dependency set: the real wall clock,
-// a shared HTTP client, the WebSocket dialer the ComfyUI adapter needs, and
-// the metrics sink shared with the tunnel.
-//
-// newDependencies 构建生产用的依赖集合：真实墙钟、共享的 HTTP 客户端、ComfyUI 适配器
-// 所需的 WebSocket 拨号器，以及与隧道共用的指标下沉端。
-func newDependencies(logger *slog.Logger, sink runtime.Metrics) runtime.Dependencies {
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.DialContext = (&net.Dialer{Timeout: dialTimeout}).DialContext
-	transport.ResponseHeaderTimeout = responseHeaderTimeout
-	httpClient := &http.Client{Transport: transport}
-	return runtime.Dependencies{
-		HTTPClient: httpClient,
-		WSDialer:   comfyui.NewDialer(httpClient),
-		Clock:      runtime.NewSystemClock(),
-		Logger:     logger,
-		Metrics:    sink,
-	}
 }
 
 // newLogger returns a JSON logger at the requested level.

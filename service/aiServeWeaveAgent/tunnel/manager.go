@@ -37,6 +37,11 @@ const (
 	// defaultRotateTimeout bounds how long a certificate rotation waits for
 	// one replaced tunnel to come back before moving to the next.
 	defaultRotateTimeout = 30 * time.Second
+	// defaultShutdownRetryInterval is how long a tunnel that a replica sent
+	// away with Shutdown waits before being dialled again. A Gateway restart
+	// ends every tunnel this way, and the roster can never announce the
+	// replica's return when no other tunnel is left to carry it.
+	defaultShutdownRetryInterval = 10 * time.Second
 )
 
 // TransportFactory opens the transport for one replica. Production uses
@@ -75,6 +80,11 @@ type ManagerConfig struct {
 	// RotateTimeout bounds the wait for one rotated tunnel to reconnect
 	// before the rotation moves on. Default 30s.
 	RotateTimeout time.Duration
+	// ShutdownRetryInterval is how often a replica that sent this node away
+	// with Shutdown is dialled again. Without it a restarted Gateway would
+	// never be reconnected: the roster only travels over live tunnels, so a
+	// node with no tunnel left hears no news. Default 10s.
+	ShutdownRetryInterval time.Duration
 	// TransportFactory opens each replica's transport. Defaults to
 	// NewGRPCTransport with the README's keepalive parameters.
 	TransportFactory TransportFactory
@@ -108,6 +118,7 @@ func (c *ManagerConfig) validate() error {
 	}
 	setDefaultDuration(&c.IdentityInterval, defaultIdentityInterval)
 	setDefaultDuration(&c.RotateTimeout, defaultRotateTimeout)
+	setDefaultDuration(&c.ShutdownRetryInterval, defaultShutdownRetryInterval)
 	if c.Clock == nil {
 		c.Clock = runtime.NewSystemClock()
 	}
@@ -245,6 +256,8 @@ func (m *Manager) Run(ctx context.Context) error {
 
 	identityTick := newRearmingTimer(m.clock, m.cfg.IdentityInterval)
 	defer identityTick.stop()
+	retryTick := newRearmingTimer(m.clock, m.cfg.ShutdownRetryInterval)
+	defer retryTick.stop()
 
 	if err := m.reconcile(ctx); err != nil {
 		return err
@@ -266,6 +279,14 @@ func (m *Manager) Run(ctx context.Context) error {
 			identityTick.arm()
 			if err := m.reconcile(ctx); err != nil {
 				return err
+			}
+
+		case <-retryTick.C():
+			retryTick.arm()
+			if m.forgetShutdowns() {
+				if err := m.reconcile(ctx); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -317,6 +338,44 @@ func (m *Manager) SlotStats(endpoint string) (PoolStats, bool) {
 // RosterVersion reports the roster version in force and whether one has been
 // accepted at all.
 func (m *Manager) RosterVersion() (int64, bool) { return m.roster.Version() }
+
+// DrainAll asks every held Client to stop accepting newly dispatched work and
+// waits, up to timeout applied independently to each, for its in-flight
+// requests to reach zero — so this Agent can locally decide to cut over to a
+// new binary (STATUS.md's P2 Agent auto-upgrade subtask 2) without depending
+// on any single Gateway replica's permission. It is the mirror of the
+// Gateway-initiated single-Client drain in control.go's Shutdown handling:
+// same SetDraining/waitInFlight primitive, aggregated across the whole
+// roster instead of tied to one Control session. A replica that does not
+// drain within timeout is left running and logged by Client.DrainLocal
+// itself; DrainAll always returns once every Client has had its turn.
+//
+// DrainAll 要求每一个持有的 Client 停止接受新派发的工作，并（对每一个都独
+// 立套用 timeout）等待其在途请求归零——这样 Agent 才能自己本地决定切换到新
+// 二进制（STATUS.md P2 Agent 自动升级子任务二），而不需要依赖任何一个
+// Gateway 副本的许可。这与 control.go 里 Gateway 触发的单 Client 排空是同
+// 一套 SetDraining/waitInFlight 原语的镜像，只是这里跨整个 roster 聚合，而
+// 不是绑定在某一次 Control 会话上。一个没能在 timeout 内排空的副本会被
+// Client.DrainLocal 自己记日志、继续运行；DrainAll 在每个 Client 都轮到之
+// 后必定返回。
+func (m *Manager) DrainAll(timeout time.Duration) {
+	m.mu.Lock()
+	clients := make([]*Client, 0, len(m.tunnels))
+	for _, entry := range m.tunnels {
+		clients = append(clients, entry.client)
+	}
+	m.mu.Unlock()
+
+	var wg sync.WaitGroup
+	for _, c := range clients {
+		wg.Add(1)
+		go func(c *Client) {
+			defer wg.Done()
+			c.DrainLocal(timeout)
+		}(c)
+	}
+	wg.Wait()
+}
 
 // -----------------------------------------------------------------------
 // Reconciliation
@@ -393,6 +452,29 @@ func (m *Manager) reconcile(ctx context.Context) error {
 	m.metrics.ConnectedReplicas(m.ConnectedReplicas())
 
 	return m.fatalIfExhausted(desired)
+}
+
+// forgetShutdowns drops the stopped records of replicas that ended their
+// tunnel with Shutdown, so the next reconcile dials them again. It reports
+// whether there was any. A replica that is still shutting down just fails the
+// dial and the Client backs off; a rejected certificate is not touched, since
+// only a new certificate or roster can change that answer.
+//
+// forgetShutdowns 清除因 Shutdown 而结束隧道的副本的停止记录，让下一次
+// reconcile 重新拨号，并报告是否有这样的记录。仍在关闭中的副本只会让拨号失败，
+// 由 Client 退避；证书被拒的记录不动，因为只有新证书或新名册才能改变那个答案。
+func (m *Manager) forgetShutdowns() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	forgot := false
+	for endpoint, record := range m.stopped {
+		if errors.Is(record.err, ErrShutdownRequested) {
+			delete(m.stopped, endpoint)
+			forgot = true
+		}
+	}
+	return forgot
 }
 
 // applyStates pushes each replica's roster state and the shared slot budget

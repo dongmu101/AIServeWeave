@@ -1,0 +1,172 @@
+{
+  "slug": "embeddings",
+  "category": "向量与重排",
+  "category_order": 30,
+  "sort_order": 10,
+  "title": "Embeddings",
+  "method": "POST",
+  "path": "/v1/embeddings",
+  "summary": "兼容 OpenAI Embeddings 的文本向量化接口，支持单条或批量输入。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 OpenAI Embeddings，可直接使用 OpenAI 官方 SDK",
+      "input 支持单个字符串或字符串数组（批量）",
+      "返回 float 数组向量，data 中的 index 与输入顺序对应"
+    ],
+    "notice": "仅识别 model 与 input 两个参数；encoding_format、dimensions、user 等参数不会生效，向量维度由模型决定。仅支持向量化的模型不会出现在 GET /v1/models 列表中，请使用平台提供的模型 ID。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "向量模型 ID。"
+      },
+      {
+        "name": "input",
+        "type": "string | array",
+        "required": true,
+        "description": "待向量化的文本：单个字符串，或非空的字符串数组。"
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "object",
+        "type": "string",
+        "required": true,
+        "description": "固定为 list。"
+      },
+      {
+        "name": "data",
+        "type": "array",
+        "required": true,
+        "description": "向量结果。",
+        "children": [
+          {
+            "name": "object",
+            "type": "string",
+            "required": true,
+            "description": "固定为 embedding。"
+          },
+          {
+            "name": "index",
+            "type": "integer",
+            "required": true,
+            "description": "对应 input 中的位置。"
+          },
+          {
+            "name": "embedding",
+            "type": "array",
+            "required": true,
+            "description": "向量（float 数组）。"
+          }
+        ]
+      },
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "实际使用的模型。"
+      },
+      {
+        "name": "usage",
+        "type": "object",
+        "required": true,
+        "description": "用量统计。",
+        "children": [
+          {
+            "name": "prompt_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "输入 token 数。"
+          },
+          {
+            "name": "total_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "总 token 数。"
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/embeddings \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"input\": [\"今天天气很好\", \"明天会下雨吗\"]\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{{BASE_URL}}/v1\", api_key=\"{{API_KEY}}\")\n\nresp = client.embeddings.create(\n    model=\"{{MODEL}}\",\n    input=[\"今天天气很好\", \"明天会下雨吗\"],\n)\nfor item in resp.data:\n    print(item.index, len(item.embedding))"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/embeddings\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    input: [\"今天天气很好\", \"明天会下雨吗\"],\n  }),\n});\n\nconst data = await res.json();\nif (!res.ok) throw new Error(data.error?.message);\ndata.data.forEach((item) => console.log(item.index, item.embedding.length));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"object\": \"list\",\n  \"data\": [\n    {\n      \"object\": \"embedding\",\n      \"index\": 0,\n      \"embedding\": [\n        0.0123,\n        -0.0456,\n        0.0789\n      ]\n    },\n    {\n      \"object\": \"embedding\",\n      \"index\": 1,\n      \"embedding\": [\n        0.0234,\n        -0.0567,\n        0.0891\n      ]\n    }\n  ],\n  \"model\": \"{{MODEL}}\",\n  \"usage\": {\n    \"prompt_tokens\": 12,\n    \"total_tokens\": 12\n  }\n}"
+      },
+      {
+        "status": 400,
+        "label": "参数错误",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"model and input are required, and input must be a string or an array of strings\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "认证失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "暂时无法校验密钥",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"cannot verify the API key right now\",\n    \"type\": \"api_error\",\n    \"code\": \"verification_unavailable\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "错误码说明",
+        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+      }
+    ]
+  }
+}

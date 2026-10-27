@@ -1,0 +1,17 @@
+=== RUN   TestRollingUpgradeKeepsAtLeastOneTunnelAvailable
+    rollingupgrade_test.go:140: same-source rolling replacement: 3 replicas and stopped-replica probes completed, 140/141 monitor requests served, longest gap between successes 10.077209ms
+--- PASS: TestRollingUpgradeKeepsAtLeastOneTunnelAvailable (0.73s)
+=== RUN   TestRollingUpgradeKeepsAtLeastOneTunnelAvailable
+    rollingupgrade_test.go:140: same-source rolling replacement: 3 replicas and stopped-replica probes completed, 203/204 monitor requests served, longest gap between successes 10.2135ms
+--- PASS: TestRollingUpgradeKeepsAtLeastOneTunnelAvailable (3.04s)
+=== RUN   TestRollingUpgradeKeepsAtLeastOneTunnelAvailable
+    rollingupgrade_test.go:140: same-source rolling replacement: 3 replicas and stopped-replica probes completed, 410/412 monitor requests served, longest gap between successes 10.060458ms
+--- PASS: TestRollingUpgradeKeepsAtLeastOneTunnelAvailable (2.08s)
+=== RUN   TestRollingUpgradeKeepsAtLeastOneTunnelAvailable
+    rollingupgrade_test.go:140: same-source rolling replacement: 3 replicas and stopped-replica probes completed, 455/456 monitor requests served, longest gap between successes 10.54975ms
+--- PASS: TestRollingUpgradeKeepsAtLeastOneTunnelAvailable (2.30s)
+=== RUN   TestRollingUpgradeKeepsAtLeastOneTunnelAvailable
+    rollingupgrade_test.go:140: same-source rolling replacement: 3 replicas and stopped-replica probes completed, 374/375 monitor requests served, longest gap between successes 10.893667ms
+--- PASS: TestRollingUpgradeKeepsAtLeastOneTunnelAvailable (3.90s)
+PASS
+ok  	AIServeWeave/service/aiServeWeaveGateway/e2e	13.799s

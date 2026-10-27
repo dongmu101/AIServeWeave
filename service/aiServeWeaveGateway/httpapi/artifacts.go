@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -10,7 +11,9 @@ import (
 	"strconv"
 	"strings"
 
+	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
+	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
 // MaxArtifactFilenameInHeader bounds the filename echoed in
@@ -59,9 +62,10 @@ type artifactsResponse struct {
 // 也会让调用方手上还攥着的 id 失效。
 func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, ok := h.jobs.get(r.PathValue("job_id"), identity.TenantID)
+	jobID := r.PathValue("job_id")
+	j, ok := h.jobs.get(jobID, identity.TenantID)
 	if !ok {
-		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+		h.listPersistedArtifacts(w, r, identity.TenantID, jobID)
 		return
 	}
 
@@ -75,6 +79,48 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	data := make([]artifactJSON, 0, len(refs))
 	for i, ref := range refs {
 		data = append(data, artifactJSON{ArtifactID: ids[i], Filename: ref.Filename, Type: ref.Type})
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(artifactsResponse{Object: "list", Data: data})
+}
+
+// listPersistedArtifacts answers GET /v1/jobs/{job_id}/artifacts for a job
+// this replica has no local record of — a terminal job the J06 recovery
+// sweep never restored (that sweep only covers non-terminal jobs), one
+// submitted to a different replica, or one from before this replica's own
+// restart (STATUS.md's Gateway 故障切换收尾). Unlike the local-hit path
+// above it never asks a node directly: the whole point is this replica may
+// have no live route to one. It therefore only ever answers with artifacts a
+// previous listing already minted and the control plane confirmed — a job
+// whose artifacts were never listed anywhere answers an empty list here
+// exactly as it would on the replica that ran it.
+//
+// listPersistedArtifacts 为一个本副本毫无本地记录的 job 应答
+// GET /v1/jobs/{job_id}/artifacts——一个 J06 恢复扫描从未恢复过的终态 job
+// （那次扫描只覆盖非终态 job）、一个提交给了另一个副本的 job，或者本副本
+// 自己重启之前的 job（STATUS.md 的「Gateway 故障切换收尾」）。与上面的本地
+// 命中路径不同，它绝不会直接去问节点——这条路径存在的意义正是本副本可能
+// 压根没有通向该节点的活路由。因此它只会应答此前某次列举已经铸造、且控制
+// 面已确认的产物——一个从未在任何地方被列举过的 job，在这里得到的答复与在
+// 跑它的那个副本上被问起时一样，是一份空列表。
+func (h *handlers) listPersistedArtifacts(w http.ResponseWriter, r *http.Request, tenantID, jobID string) {
+	if h.artifactRecovery == nil {
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+		return
+	}
+	exists, err := h.artifactRecovery.JobExists(r.Context(), tenantID, jobID)
+	if err != nil || !exists {
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+		return
+	}
+	persisted, err := h.artifactRecovery.ListPersistedArtifacts(r.Context(), tenantID, jobID)
+	if err != nil {
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+		return
+	}
+	data := make([]artifactJSON, 0, len(persisted))
+	for _, a := range persisted {
+		data = append(data, artifactJSON{ArtifactID: a.ArtifactID, Filename: a.Filename, Type: a.Type})
 	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(artifactsResponse{Object: "list", Data: data})
@@ -104,7 +150,11 @@ func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 // 对象存储配置之前（或被关闭期间）记录的产物，本就没有 StorageKey 可以尝试。
 func (h *handlers) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	rec, ok := h.jobs.artifact(r.PathValue("artifact_id"), identity.TenantID)
+	artifactID := r.PathValue("artifact_id")
+	rec, ok := h.jobs.artifact(artifactID, identity.TenantID)
+	if !ok {
+		rec, ok = h.recoverArtifactRoute(r.Context(), artifactID, identity.TenantID)
+	}
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "artifact_not_found", "no such artifact")
 		return
@@ -138,6 +188,50 @@ func (h *handlers) downloadArtifact(w http.ResponseWriter, r *http.Request) {
 	}
 	defer artifact.Body.Close()
 	h.streamArtifact(w, rec, "node", artifact.Body, artifact.ContentType, artifact.Size)
+}
+
+// recoverArtifactRoute answers a download this replica has no local record
+// of by asking the control plane directly for the artifact's route binding
+// (STATUS.md's Gateway 故障切换收尾) — the fallback the J06 recovery sweep
+// does not itself provide, since that sweep only restores non-terminal jobs
+// and never touches artifacts. The record it returns is not cached into
+// h.jobs: unlike a job recovered by that sweep, it has no owning entry in
+// h.jobs.byID to be evicted alongside, and inserting it as a bare artifact
+// would leave it unboundedly outliving anything this store's own eviction
+// tracks.
+//
+// A miss here — no ArtifactRecoveryClient configured, or the control plane
+// has no record either — is reported exactly like any other unknown
+// artifact id: downloadArtifact cannot tell "never existed" apart from
+// "recovery found nothing", and should not try to.
+//
+// recoverArtifactRoute 为一次本副本毫无本地记录的下载作答，做法是直接向控制面
+// 询问这个产物的路由绑定（STATUS.md 的「Gateway 故障切换收尾」）——这是 J06
+// 恢复扫描自己不提供的回退，因为那次扫描只恢复非终态 job，从不触及产物。它
+// 返回的记录不会被缓存进 h.jobs：与那次扫描恢复的 job 不同，它在 h.jobs.byID
+// 里没有可供一同逐出的所属条目，若把它当作一条裸产物插入，会让它无边界地
+// 活得比这张表自己的逐出机制所能追踪的任何东西都久。
+//
+// 这里的未命中——未配置 ArtifactRecoveryClient，或控制面同样没有记录——会被
+// 汇报成与任何其他未知产物 id 完全相同的结果：downloadArtifact 无法区分
+// 「从未存在过」与「恢复也一无所获」，也不该去区分。
+func (h *handlers) recoverArtifactRoute(ctx context.Context, artifactID, tenantID string) (artifactRecord, bool) {
+	if h.artifactRecovery == nil {
+		return artifactRecord{}, false
+	}
+	route, err := h.artifactRecovery.ArtifactRoute(ctx, tenantID, artifactID)
+	if err != nil {
+		return artifactRecord{}, false
+	}
+	return artifactRecord{
+		JobID:       route.JobID,
+		TenantID:    route.TenantID,
+		Candidate:   scheduler.Candidate{NodeID: route.NodeID, RuntimeID: route.RuntimeID},
+		Ref:         runtime.ArtifactRef{Filename: route.Filename, Subfolder: route.Subfolder, Type: route.Type},
+		StorageKey:  route.StorageKey,
+		ContentType: route.ContentType,
+		Size:        route.SizeBytes,
+	}, true
 }
 
 // streamArtifact writes the common response headers and copies body to w,

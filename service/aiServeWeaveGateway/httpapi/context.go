@@ -1,14 +1,15 @@
 package httpapi
 
-import "context"
+import (
+	"context"
 
-type requestIDKey struct{}
+	"AIServeWeave/common/reqid"
+)
 
 func withRequestID(ctx context.Context, id string) context.Context {
-	return context.WithValue(ctx, requestIDKey{}, id)
+	return reqid.WithValue(ctx, id)
 }
 
 func requestIDFrom(ctx context.Context) string {
-	id, _ := ctx.Value(requestIDKey{}).(string)
-	return id
+	return reqid.FromContext(ctx)
 }

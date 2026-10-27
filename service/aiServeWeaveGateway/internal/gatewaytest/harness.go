@@ -139,6 +139,42 @@ func (h *Harness) ConnectWithLabels(t *testing.T, nodeID, runtimeID string, labe
 	})
 }
 
+// ConnectWithResources connects a node carrying declared hardware
+// (STATUS.md's P2), reports snap, and parks one slot per handler. It is the
+// resources counterpart of ConnectWithLabels, kept here for the same
+// reason: building a Hello with a particular field set is harness business,
+// not any one test's.
+//
+// ConnectWithResources 连接一个带有已声明硬件的节点（STATUS.md 的 P2），上报 snap，
+// 并为每个 handler park 一个槽。它是 ConnectWithLabels 的硬件对应物，出于同样的理由
+// 放在这里：构造一个带特定字段的 Hello 属于测试框架的事，而不是某一个测试的事。
+func (h *Harness) ConnectWithResources(t *testing.T, nodeID, runtimeID string, resources *tunnelv1.NodeResources, snap runtime.Snapshot, handlers ...SlotHandler) {
+	t.Helper()
+	c := h.StartControl(nodeID, &tunnelv1.Hello{
+		NodeId:       nodeID,
+		AgentVersion: "test",
+		RuntimeIds:   []string{runtimeID},
+		Resources:    resources,
+	})
+	frame := c.Expect(t)
+	if frame.GetAck() == nil {
+		t.Fatalf("first gateway frame = %T, want HelloAck", frame.GetBody())
+	}
+	c.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full:       true,
+		ReportedAt: timestamppb.New(h.Clock.Now()),
+		Snapshots:  tunnelwire.SnapshotsToProto([]runtime.Snapshot{snap}),
+	}}})
+	for i, handle := range handlers {
+		h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, fmt.Sprintf("%s-slot-%d", nodeID, i), handle)
+	}
+	WaitFor(t, "slots to park on "+nodeID, func() bool { return IdleCount(h, nodeID) == len(handlers) })
+	WaitFor(t, "inventory to arrive on "+nodeID, func() bool {
+		info, _ := h.Srv.Node(nodeID)
+		return len(info.Runtimes) == 1
+	})
+}
+
 // StartControl starts a Control handler and sends hello, without requiring
 // the handshake to succeed.
 func (h *Harness) StartControl(certNodeID string, hello *tunnelv1.Hello) *Control {

@@ -1,12 +1,12 @@
 # Console 开发状态与任务规划
 
-更新日期：2026-09-10。M1–M3 已完成；M4 完成 C21–C24，M5 完成 C25 与 C26，P05 用户与会话生命周期已接入（C27–C29 未做，理由见各节）。本文记录 `service/aiServeWeaveConsole` 的现状、实施顺序、后端依赖与验收标准；任务尚未实现时保持未勾选，不将依赖安装视为业务功能完成。
+更新日期：2026-09-12。M1–M3 已完成；M4 完成 C21–C24，M5 完成 C25、C26、C27（P08）、C28（P09a，请求检索）与 C29（P09b，告警，见 [根 STATUS 的 P09 行](../../STATUS.md)），P05 用户与会话生命周期已接入。本文记录 `service/aiServeWeaveConsole` 的现状、实施顺序、后端依赖与验收标准；任务尚未实现时保持未勾选，不将依赖安装视为业务功能完成。
 
 ## 目标与范围
 
 首版面向单个租户内的 owner、admin、member，完成登录、用户列表与创建、API Key 生命周期、管理审计的真实接口闭环。配额读取与编辑已交付。节点、模型、路由、工作流和监控按后端 Admin API 的成熟度逐步接入。
 
-Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产物访问是已实现的例外，由 Console 服务端持有租户 Gateway Key 直连数据面，见 [AGENTS.md](AGENTS.md#与后端的边界)。不直连 Registry、Agent、推理后端或数据库。租户引导由运维完成，首版不提供持有 BootstrapToken 的注册页、跨租户管理或租户切换。
+Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产物访问是已实现的例外，由 Console 服务端持有租户 Gateway Key 直连数据面，见 [AGENTS.md](AGENTS.md#与后端的边界)。不直连 Registry、Agent、推理后端或数据库。租户可由运维经 BootstrapToken 引导，也可在部署开启后经 `/signup` 自助注册（Console 从不持有 BootstrapToken）；不提供跨租户管理或租户切换。
 
 ## 当前状态
 
@@ -38,6 +38,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 租户配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | 全部登录角色可读；owner/admin 可整组写入，零表示不限制 |
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
+| 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 
 用户、Key 与审计列表返回 `{items, next_cursor}` 信封，支持游标分页与服务端筛选；吊销成功返回 `204`，错误体为 `{ "error": "..." }`。Job 历史另有 `/admin/v1/jobs/history` 与详情端点，不依赖 Fleet 配置。
@@ -58,7 +59,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | M4 推理资源管理 | P2 | 节点、运行时、模型、路由 | 对应控制面聚合与管理 API |
 | M5 工作流与可观测性 | P2 | 模板、Job、产物、指标 | Admin API、持久化与指标查询能力 |
 
-M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预览）已完成（见各节勾选项与验收记录），C27–C29 仍待后端能力，C24 的路由管理写路径已交付，见下方 P02 验收。M4/M5 不阻塞首版管理闭环；没有数据来源的菜单暂不开放，不用示例数据冒充运行状态。
+M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预览）已完成，C27 已随根 STATUS 的 P08 完成、C28 已随根 STATUS 的 P09a 完成、C29（告警）已随根 STATUS 的 P09b 完成（见各节勾选项与验收记录），C24 的路由管理写路径已交付，见下方 P02 验收。M4/M5 不阻塞首版管理闭环；没有数据来源的菜单暂不开放，不用示例数据冒充运行状态。
 
 ## M1：控制台基础与会话（P0）
 
@@ -226,11 +227,11 @@ M1–M3、M4 的只读部分与 M5 的 C25/C26（含持久化历史与产物预�
 | --- | --- | --- |
 | [x] C25 工作流模板（只读范围） | 模板目录、输入声明、校验状态与运维副本一致性 | Gateway 文件目录经控制面聚合；版本管理、依赖编辑与发布留给根 STATUS P03 |
 | [x] C26 Job 与产物（当前范围） | 实时列表、持久化历史与详情、状态快照、取消、产物预览/下载 | 历史走 ControlPlane；取消与产物走 Console 服务端 Gateway 例外路径；尚未接入 Console SSE，重启后的下载受 Gateway 映射恢复限制 |
-| [ ] C27 总览与指标 | 请求量、成功率、延迟、Token 与容量时序；ECharts 支持 `dataZoom` | 控制面授权聚合/查询 API，明确指标定义、时间窗口、单位、采样与租户范围；已有 Prometheus 导出不等于可直接绘制历史曲线 |
-| [ ] C28 请求与错误检索 | 按时间、状态、request ID 查询脱敏元数据 | 可检索存储、保留期、分页与权限接口；不得展示或记录完整 Prompt、鉴权头 |
-| [ ] C29 告警 | 告警列表、规则与处理状态 | 指标查询、告警计算、规则与通知管理 API；不在浏览器实现唯一的告警判定 |
+| [x] C27 总览与指标 | `/operator/metrics`：请求量（按端点/状态）、成功率、延迟 p95 近似值、Token 用量与容量五组 ECharts 曲线，`dataZoom` 可交互；空态与错误态分离 | 控制面 `GET /operator/v1/metrics/history`（P08）：`internal/metricshistory` 定时抓取 Gateway/Registry 的 `/metrics` 文本、按标签白名单聚合后落地到关系库的 `metrics_history_points` 表；是平台运维视角，不按租户拆分——现有 Gateway 指标按设计不带 `tenant_id` 标签 |
+| [x] C28 请求与错误检索 | `/console/requests`、`/operator/requests`：按时间、状态、request ID 查询脱敏元数据，共享 `app/console/requests/request-log-view.tsx` 列表/分页/筛选视图；运维视角额外多一个 `tenant_id` 筛选框 | 控制面 `POST /internal/v1/requestlogs`（Gateway 异步批量上报）、`GET /admin/v1/requests`、`GET /operator/v1/requests`（P09）：新表 `request_logs`，保留期默认 30 天；不展示或记录完整 Prompt、鉴权头 |
+| [x] C29 告警 | `/operator/alert-rules`（规则列表 + 创建/编辑/启停表单，`app/operator/alert-rules/alert-rules-view.tsx`）、`/operator/alerts`（实例列表，展示状态/触发时间/确认时间/通知发送状态，`firing` 实例提供"确认处理"按钮，`app/operator/alerts/alerts-view.tsx`），均挂在既有 `/operator` 导航、与 `/operator/metrics`（C27）相邻 | 控制面 5 个规则 CRUD 端点（`/operator/v1/alert-rules`）与 2 个实例端点（`GET /operator/v1/alerts`、`POST /operator/v1/alerts/:id/acknowledge`），均 `requirePlatformSession`（P09）：新表 `alert_rules`/`alert_instances`，评估循环无条件运行、默认 60 秒一轮；告警判定在服务端计算，浏览器只做展示与手动确认 |
 
-Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。Gateway 实时视图来自有界内存；已落库的历史记录由控制面查询。非终态恢复与产物下载边界见 [Gateway README](../aiServeWeaveGateway/README.md#持久化与访问的现有限制)。
+Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确的后端契约；历史事件数量有上限。产物采用授权流式下载或短期链接，避免整文件缓冲。Gateway 实时视图来自有界内存；已落库的历史记录由控制面查询。非终态恢复与产物下载边界见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#持久化与访问的现有限制)。
 
 ### M5 的两个前置决定
 
@@ -259,9 +260,79 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 
 **取消与产物下载已实现，走的是声明过的例外。** 见 Console `AGENTS.md`「与后端的边界」一节：本控制台服务端持有一把该租户的 Gateway API Key（owner/admin 在「设置」页粘贴，由本控制台加密存储在会话 cookie 里，从不下发到浏览器），未做 scope 收紧，取消（`app/api/gateway/jobs/[id]/cancel`）与产物下载（`app/api/gateway/artifacts/[id]`，边读边送、不缓冲）经由 `lib/server/gateway.ts` 直连 Gateway 数据面，授权判断（谁能配置这把 key）由 `lib/console/permissions.ts` 的 `canManageGatewayKey` 在服务端自己执行——这是本代码库里少数几个没有下游再检查一遍、本身就是唯一防线的权限判断。已知代价是这把 Key 权限与用户自建 Key 相同，被拿到后不只能取消/读产物、也能拿去跑推理烧配额——这是当前没有真实租户在生产环境运行阶段的刻意权衡，不是遗漏，有真实租户后应重新评估是否收紧。**同时接在 C25/C26 的实时视图与持久化历史详情页上。**
 
-**持久化历史列表页、Job 详情页与产物预览均已实现。** 后端 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（见根 STATUS 的 J07）已由 `app/console/jobs/history`（列表，`lib/console/contract.ts` 的 `parseJobHistoryEntries`）与 `app/console/jobs/history/[id]`（详情，`parseJobHistoryDetail`）接上；两个新端点加进了 `lib/console/upstream-routes.ts` 的转发白名单。详情页对图片/视频扩展名内联预览（`<img>`/`<video>` 直接指向 `app/api/gateway/artifacts/[id]`），其余产物退回下载链接——这与实时视图共用同一个下载路由，区别只是多了一层按扩展名的展示选择，猜不出媒体类型时不强行渲染。产物 id 能出现在详情页，前提是根仓库这一轮同时补上的一处后端缺口：Gateway 此前从未把 `listArtifacts` 铸造的产物 id 上报给控制面的 `job_artifacts` 表，`jobPersister` 现已新增 `persistArtifacts` 补上这条旁路（见 ControlPlane README「Job 持久化契约」）。C27–C29——需要时序库与可检索日志存储，仓库里都没有，Prometheus 文本导出不等于历史曲线。
+**持久化历史列表页、Job 详情页与产物预览均已实现。** 后端 `GET /admin/v1/jobs/history` 与 `GET /admin/v1/jobs/history/:id`（见根 STATUS 的 J07）已由 `app/console/jobs/history`（列表，`lib/console/contract.ts` 的 `parseJobHistoryEntries`）与 `app/console/jobs/history/[id]`（详情，`parseJobHistoryDetail`）接上；两个新端点加进了 `lib/console/upstream-routes.ts` 的转发白名单。详情页对图片/视频扩展名内联预览（`<img>`/`<video>` 直接指向 `app/api/gateway/artifacts/[id]`），其余产物退回下载链接——这与实时视图共用同一个下载路由，区别只是多了一层按扩展名的展示选择，猜不出媒体类型时不强行渲染。产物 id 能出现在详情页，前提是根仓库这一轮同时补上的一处后端缺口：Gateway 此前从未把 `listArtifacts` 铸造的产物 id 上报给控制面的 `job_artifacts` 表，`jobPersister` 现已新增 `persistArtifacts` 补上这条旁路（见 ControlPlane README「Job 持久化契约」）。C27 已随根 STATUS 的 P08 完成，见下方「C27（指标）实现位置」；C28（请求与错误检索）已随根 STATUS 的 P09a 完成，见下方「C28（请求检索）实现位置」；C29（告警）已随根 STATUS 的 P09b 完成，见下方「C29（告警）实现位置」。
 
-**验收**：事件流可取消且内存有界；产物受租户授权保护；图表能区分“无流量”和“数据不可用”，显示查询时间与数据新鲜度；完整工作流与 Prompt 不进入日志、异常或遥测。
+**验收**：事件流可取消且内存有界；产物受租户授权保护；C27 图表区分「加载失败」（`ErrorState`，带重试）与「无数据」（`EmptyState`），显示查询窗口；完整工作流与 Prompt 不进入日志、异常或遥测。
+
+**已知简化**：C27 的「无数据」态目前不再进一步区分"该窗口确实无流量"与"采集器尚未运行到/数据已过保留期"——Prometheus 计数器对从未出现过的标签组合(如从未发生过的某个 `status` 值)本就不产生序列，这两种情形在查询侧天然不可分辨，除非另加一个独立的"存活"信号；当前 `EmptyState` 的文案把两种可能都说明，而不是伪造一个无法可靠计算的区分。
+
+### C27（指标）实现位置
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | `internal/types.MetricsHistoryResponse`（控制面）、`lib/console/metrics.ts` 的 `parseMetricsHistory`（Console） |
+| 控制面 | `internal/metricshistory`（采集器 + 保留期清理）、`internal/store` 的 `MetricsHistory` 接口（gormstore/memstore 两个实现）、`internal/logic.ListMetricsHistory`、`internal/handler/metricshistory.go` 的 `GET /operator/v1/metrics/history` |
+| Console | `lib/console/metrics-charts.ts`（`deltaByBucket`/`approxP95` 纯逻辑）、`app/operator/(protected)/metrics`（`/operator/metrics` 页面与视图） |
+
+后端指标接入（Registry、控制面自身的 HTTP 请求量/耗时、吊销 outbox 滞后量、Fleet/Registry 客户端调用结果）与跨服务 trace（`common/reqid` 把 request_id 从 Gateway 前门带到 Scheduler/Tunnel/Agent 的结构化日志）不在 Console 范围内，实现位置见根 STATUS 的 P08 行与各服务 README。
+
+### C28（请求检索）实现位置
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | `internal/types.RequestLogResponse`/`RequestLogListResponse`（控制面）、`lib/console/contract.ts` 的 `RequestLogEntry`/`parseRequestLogEntries`（Console） |
+| Gateway | `httpapi/requestlog.go`（中间件、状态码→outcome 封闭映射）、`httpapi/requestlogpush.go`（有界 channel + 后台批量推送器）、`controlplaneclient` 的 `RequestLogsClient` |
+| 控制面 | 新表 `request_logs`（`internal/store/gormstore/requestlogmigrate.go` 固定版本迁移）、`internal/store` 的 `RequestLogs` 接口（gormstore/memstore 两个实现）、`internal/logic.CreateRequestLogs`/`ListRequestLogs`、`internal/handler` 的 `POST /internal/v1/requestlogs`、`GET /admin/v1/requests`、`GET /operator/v1/requests`、`internal/requestlogretention`（保留期清理，默认 30 天） |
+| Console | `app/console/requests/request-log-view.tsx`（租户/运维共享的列表/分页/筛选视图）、`app/console/requests/page.tsx`（`/console/requests`）、`app/operator/(protected)/requests/page.tsx`（`/operator/requests`，多一个 `tenant_id` 筛选框）、`lib/console/upstream-routes.ts` 新增两条转发白名单 |
+
+详见根 STATUS 的 P09 行、[Gateway STATUS「请求日志中间件与推送（P09/C28）」](../aiServeWeaveGateway/STATUS.md#请求日志中间件与推送p09c28)、[ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)与设计文档 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（149 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，详见根 STATUS 的 P09 行。
+
+### C29（告警）实现位置
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | `internal/types.AlertRuleResponse`/`AlertInstanceResponse` 等（控制面）、`lib/console/contract.ts` 的 `parseAlertRules`/`parseAlertInstances`（Console） |
+| 控制面 | 新表 `alert_rules`/`alert_instances`（`internal/store/gormstore/alertingmigrate.go` 固定版本迁移）、`internal/alertengine`（评估循环 `evaluator.go`、派生指标算法 `metrics.go`、Webhook 发送 `webhook.go`）、`internal/store` 的对应接口（gormstore/memstore 两个实现）、`internal/logic/alertrules.go`/`alertinstances.go`、`internal/handler` 的 5 个规则 CRUD 端点与 2 个实例端点（均在 `/operator/v1/alert-rules`、`/operator/v1/alerts` 下） |
+| Console | `app/operator/alert-rules/alert-rules-view.tsx` + `app/operator/(protected)/alert-rules/page.tsx`（`/operator/alert-rules`）、`app/operator/alerts/alerts-view.tsx` + `app/operator/(protected)/alerts/page.tsx`（`/operator/alerts`）、`lib/console/upstream-routes.ts` 新增 7 条转发白名单 |
+
+详见根 STATUS 的 P09 行与 [ControlPlane STATUS「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/STATUS.md#告警评估与通知p09c29)、设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
+
+### 工作流模板的节点图预览（P03 后续）
+
+`/operator/workflow-templates` 在图 JSON 文本框下方实时渲染只读节点图，历史比较区可在「节点图 / JSON」之间切换，两侧并排并标出差异节点（黄框：两侧都有但内容不同；蓝框：只在一侧）。图的唯一编辑入口仍是文本框，本阶段**不做**画布编辑。
+
+| 层 | 落点 |
+| --- | --- |
+| 纯逻辑 | `lib/console/comfy-graph.ts`：API Format → 节点/连线、左到右最长路径分层布局（自写，不引布局库）、模板输入/输出绑定叠加、按排序键比较的节点差异；格式问题（缺 `class_type`/`inputs`、悬空引用、环、绑定未命中）记为问题列表而不抛异常；超过 `MAX_PREVIEW_NODES`（500）直接拒绝预览 |
+| 画布 | `components/console/comfy-graph-preview.tsx`：`@xyflow/react` 渲染，只读（不可拖拽/连线），点击节点在下方查看完整取值 |
+| 页面 | `app/operator/(protected)/workflow-templates/workflow-templates-view.tsx`：草稿区预览读 `useDeferredValue` 副本，避免大图在输入路径上重算 |
+
+已知限制：API Format 不含坐标，布局是重建的，不等于作者在 ComfyUI 里的摆放；没有节点定义（`/object_info`），输出槽只能显示序号而不是 `IMAGE`/`LATENT` 这类名称，字段也不区分 widget 种类。可视化编辑见下一节。图只出现在运维页面，组件注释写明不得用于租户页面。
+
+### 工作流模板的可视化编辑（P03 后续）
+
+同一页面新增可折叠的「可视化编辑器」区：以 `wujie` 同源挂载官方 ComfyUI_frontend 1.55.17，后端是控制面的只编辑桩（见 [ControlPlane STATUS「工作流可视化编辑器」](../aiServeWeaveControlPlane/STATUS.md#工作流可视化编辑器p03-后续)）。打开时自动载入草稿（有一致的布局就载入布局，否则让编辑器排布 API 图）；「导出到草稿」把编辑器的 API 图写回文本框、把 UI 工作流作为布局写进草稿，发布时一并保存；「切换 App 模式」调用前端自己的 App 模式。布局变化即新版本。
+
+| 层 | 落点 |
+| --- | --- |
+| 纯逻辑 | `lib/console/comfy-editor.ts`：编辑器路径、上游解析（逐段重编码，拒绝 `.`/`..`/控制字符，方法限 GET/HEAD/POST/DELETE）、子应用网络允许列表、导出校验（`parseEditorExport`，剥离画布视口 `extra.ds`）、假 WebSocket 脚本；`lib/console/workflow-templates.ts` 新增 `workflow` 字段、`MAX_WORKFLOW_BYTES`，`MAX_CONTENT_BYTES` 改为 8 MiB + 256 KiB |
+| 转发 | `app/api/operator/comfy-editor/[...path]/route.ts` + `lib/server/control-plane.ts` 的 `streamControlPlane`（流式、只回传固定响应头、写请求体有界读取后丢弃） |
+| 宿主 | `components/console/comfy-editor.tsx`：动态加载 wujie（每次挂载使用独立实例名，避免异步销毁误拆新实例），`load`/`exportGraph`/`toggleAppMode` 句柄；程序化载入后 1 秒内的变更事件不算作运维编辑 |
+| 页面 | `workflow-templates-view.tsx`：布局只在与文本框图文本一致时随发布提交，手改 JSON 后提示布局失效；切换模板时关闭编辑器，避免把上一个模板的图导出进当前草稿；导出含目录外节点时拒绝并列出节点类型 |
+
+验证：Node 测试新增 `lib/console/comfy-editor.test.ts`（上游解析、允许列表、导出校验、`workflow` 字段、假 WebSocket）；用真实控制面桩（Go）+ 真实前端发布包 + 本仓库 `bridge.js` + 真实节点目录在专用 Chrome 里端到端验证了 API 图载入、连线保留、文件下拉清空后已有取值保留、二次载入 UI 工作流后导出一致、目录外节点被列入 `missing`、外连（huggingface）被允许列表拦下。**未验证**：经 Next.js 转发路由与真实平台会话的整页交互（需要可登录的控制面与 Console 构建），以及 `pnpm build` 下 wujie 的动态导入。
+
+已知限制：含自定义节点的模板只能继续用 JSON 编辑；模型/LoRA/图片等文件下拉为空（已有取值保留）；同源嵌入是已接受的风险（见 AGENTS「ComfyUI 编辑器」）；编辑器里的「运行」按钮会得到 403。
+
+### API 文档（租户）实现位置
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | 控制面 `internal/apidocs`（文档结构、校验规则、内置种子）与 `logic.APIDocSummary`/`APIDocDetail`/`OperatorAPIDoc*`；Console `lib/console/api-docs.ts`（解析、分组、占位符替换、写入体积上限） |
+| 控制面 | 新表 `api_docs`（固定版本迁移）、启动时 `SyncAPIDocSeeds` 填充 19 份内置文档；租户 2 个只读端点、平台 6 个管理端点，见 [ControlPlane STATUS「API 参考文档（租户）」](../aiServeWeaveControlPlane/STATUS.md#api-参考文档租户) |
+| Console | 租户 `/console/docs`（快速开始 + 端点索引）与 `/console/docs/[slug]`（左侧分组导航、参数表、多语言请求示例与按状态码的响应示例，`app/console/docs/`）；运维 `/operator/api-docs`（JSON 编辑 + 实时预览、恢复内置版本、删除）；渲染部件 `components/console/api-doc-article.tsx` 两侧共用；`lib/console/upstream-routes.ts` 新增 8 条转发白名单 |
+
+示例中的基地址取 `AISW_CONSOLE_PUBLIC_GATEWAY_URL`（租户可访问的公开 Gateway 地址，可带路径前缀），未设置时退回 `AISW_CONSOLE_GATEWAY_URL`。
 
 ## 测试、文档与交付门禁
 
@@ -287,9 +358,9 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
   - 控制面新增 Go 用例覆盖：同一时刻写入行的全序分页（不重不漏）、翻页途中并发写入不影响后续页、单页上限与默认值、无效游标、三类筛选与租户隔离、颠倒/空时间窗、未知角色筛选、配额读写回环。
   - 「分页响应乱序」在浏览器中验证：逐字符快速输入筛选词时旧请求被取消，页面只呈现最终查询的结果（见 M3 验收记录）。
 
-- [ ] **Q03 界面验收（随各阶段）**：检查桌面与窄屏、键盘操作、表单标签、焦点恢复、错误可读性和长文本；大表格使用有上限的模拟数据检查滚动、筛选及内存增长。
+- [x] **Q03 界面验收（随各阶段）**：P10 已补 Chromium 验收；检查桌面与窄屏、键盘操作、表单标签、焦点恢复、错误可读性和长文本；大表格使用有上限的模拟数据检查滚动、筛选及内存增长。
   - 已在无头 Chrome（CDP 驱动）中核对：审计虚拟滚动只渲染可见行、本地筛选生效、创建 Key 对话框与一次性明文、关闭后明文离开 DOM 与浏览器存储、吊销确认框内容与吊销后状态、401 转登录并保留返回地址。表单每个输入都有 `label`，筛选框有 `aria-label`，错误用 `role="alert"`。
-  - 未覆盖：窄屏布局、纯键盘操作路径、对话框关闭后的焦点恢复、以及万行量级数据下的内存增长。这些需要人工或引入浏览器测试工具，暂不勾选。
+  - 2026-09-12（P10）：新增独立 `pnpm test:e2e`（Playwright + 生产构建），22 个已登录页面 × 1440/390/320px，另有两个登录页、键盘/错误/焦点/短屏/导航用例，共 75 项。审计与请求列表各连续翻阅 10,000 条合成记录（200 条/页），检查虚拟行上界、末页、键盘滚动与筛选；CDP GC 后比较第 5/25/50 页堆，增长门槛为 8 MiB。修复网格/表格撑宽、节点标签被卡片裁切、长模板按钮、短屏弹窗与缺失表单标签；路由页等待真实数据加载后才测量。覆盖范围是 Chrome 的这些页面和代表性交互，不代表所有浏览器、辅助技术或每个弹窗；API 使用隔离样本，不替代真实控制面鉴权联调。复现方法与实测见 [P10 验收手册](../../deploy/p10-acceptance.md)、[归档记录](../../docs/acceptance/p10-2026-09-12/README.md)。
 - [x] **Q04 联调与使用文档（M2）**：将 Console README 改成实际启动、服务端配置、租户引导前置步骤、角色权限、测试和部署说明；新增环境变量时提供无密钥的示例，并区分服务端变量与可公开配置。
 - [x] **Q05 首版交付（M2）**：真实 Admin API 完成“登录 → 创建用户 → 创建 Key → 关闭明文展示 → 吊销 → 查询审计 → 退出”；记录 owner/admin/member 和两个租户的验证结果。Mock 演示不算接口接入完成。
 

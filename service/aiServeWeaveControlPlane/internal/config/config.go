@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/zeromicro/go-zero/rest"
+
+	"AIServeWeave/common/quota"
 )
 
 // Config is the whole of this service's configuration.
@@ -57,14 +59,15 @@ type Config struct {
 	// 什么情况下值得把它升级。
 	InternalToken string
 
-	// BootstrapToken authorizes tenant creation, which is the one operation
-	// with no signed-in user behind it. It stands in for the Console's
-	// eventual sign-up flow, the way the Registry's -mint-token stands in for
-	// node onboarding.
+	// BootstrapToken authorizes operator-driven tenant creation, an operation
+	// with no signed-in user behind it. It stays required even when Signup is
+	// enabled: it is how an operator creates a tenant on a deployment that
+	// keeps self-service sign-up off, and how one bypasses Signup's hourly
+	// bound.
 	//
-	// BootstrapToken 授权创建租户，那是唯一一个背后没有已登录用户的操作。它是
-	// Console 将来注册流程的临时替身，正如 Registry 的 -mint-token 是节点纳管的
-	// 临时替身。
+	// BootstrapToken 授权由运维发起的租户创建，那是一个背后没有已登录用户的操作。即使
+	// 开启了 Signup 它也仍然必填：在关闭自助注册的部署上，运维靠它创建租户；需要绕过
+	// Signup 的每小时上限时，也靠它。
 	BootstrapToken string
 
 	// Fleet configures the operator inventory: which Gateway replicas to ask
@@ -77,6 +80,31 @@ type Config struct {
 	// 它是可选的，且省略它才是常态——一个不运行运维控制台的部署，没有任何理由让本服务
 	// 去够数据面。
 	Fleet FleetConf `json:",optional"`
+
+	// ModelPull configures forwarding STATUS.md's P2 model distribution
+	// subtask two's per-node pull trigger and status calls to whichever
+	// Gateway replica currently holds that node's connection. It is
+	// optional and independent of Fleet — a deployment can trigger model
+	// pulls without ever configuring the read-only fleet inventory, and the
+	// two point at different Gateway listeners with different tokens.
+	//
+	// ModelPull 配置把 STATUS.md P2 模型分发子任务二里针对单个节点的拉取触发
+	// 与状态查询，转发给当前持有该节点连接的那个 Gateway 副本。它是可选的，
+	// 且与 Fleet 相互独立——一个部署可以在从未配置只读机群清单的情况下触发
+	// 模型拉取，且两者指向不同的 Gateway 监听器、使用不同的 token。
+	ModelPull ModelPullConf `json:",optional"`
+
+	// ComfyUIManaged configures forwarding STATUS.md's P2 ComfyUI Managed
+	// Docker deployment subtask two's per-node lifecycle action trigger and
+	// status calls to whichever Gateway replica currently holds that
+	// node's connection. It is optional and independent of ModelPull and
+	// Fleet — it reaches a fourth, separately tokened Gateway listener.
+	//
+	// ComfyUIManaged 配置把 STATUS.md P2 ComfyUI Managed Docker 部署子任务二
+	// 里针对单个节点的生命周期动作触发与状态查询，转发给当前持有该节点连接
+	// 的那个 Gateway 副本。它是可选的，且与 ModelPull、Fleet 相互独立——它
+	// 够到的是第四个、带着自己 token 的独立 Gateway 监听器。
+	ComfyUIManaged ComfyUIManagedConf `json:",optional"`
 
 	// Registry configures this service's client to the Registry's TokenAdmin
 	// service (STATUS.md's P01): node approval, disable/enable and
@@ -92,7 +120,164 @@ type Config struct {
 	// 它不依赖 Gateway 副本：节点身份操作不需要一条通往数据面的已配置读取
 	// 路径。
 	Registry RegistryConf `json:",optional"`
+
+	// MetricsHistory configures periodic scraping of Gateway/Registry
+	// Prometheus endpoints into rollup history for Console C27 (P08). Like
+	// Fleet and Registry, it is optional and off by default.
+	//
+	// MetricsHistory 配置定时抓取 Gateway/Registry 的 Prometheus 端点、为
+	// Console C27 落地汇总历史(P08)。与 Fleet、Registry 一样，它是可选的，
+	// 默认关闭。
+	MetricsHistory MetricsHistoryConf `json:",optional"`
+
+	// RequestLogRetention is how long a persisted request_logs row (STATUS.md's
+	// P09/C28) is kept before the retention sweeper reaps it. Zero uses
+	// DefaultRequestLogRetention. Unlike MetricsHistory, this sweeper always
+	// runs once the table is migrated — there is no separate "is it
+	// configured" question, since the internal push API that populates the
+	// table is mounted unconditionally whenever InternalToken is set.
+	//
+	// RequestLogRetention 是一条已持久化的 request_logs 行(STATUS.md 的
+	// P09/C28)在被保留期清理协程回收之前保留多久。为零时采用
+	// DefaultRequestLogRetention。与 MetricsHistory 不同，这个清理协程只要
+	// 表已迁移就总会运行——不存在一个独立的"是否配置了"的问题，因为填充这张
+	// 表的内部推送 API，只要设置了 InternalToken 就无条件挂载。
+	RequestLogRetention time.Duration `json:",optional"`
+
+	// AlertEvaluationInterval is how often the alert evaluation loop
+	// (STATUS.md's P09/C29) runs. Zero uses DefaultAlertEvaluationInterval.
+	// Like RequestLogRetention's sweeper, this loop always runs once the
+	// alerting tables are migrated — it only reads metrics_history, already
+	// present in the same database, so there is no "is it configured"
+	// question the way MetricsHistory.Enabled() has for its external
+	// Gateway/Registry addresses.
+	//
+	// AlertEvaluationInterval 是告警评估循环(STATUS.md 的 P09/C29)的运行
+	// 频率。为零时采用 DefaultAlertEvaluationInterval。与 RequestLogRetention
+	// 的清理协程一样，这个循环只要告警相关的表已迁移就总会运行——它只读取
+	// 同一个数据库里已经存在的 metrics_history，不存在 MetricsHistory.
+	// Enabled() 那种因为依赖外部 Gateway/Registry 地址而产生的"是否配置了"
+	// 的问题。
+	AlertEvaluationInterval time.Duration `json:",optional"`
+
+	// UsageRecordRetention is how long a persisted usage_records row
+	// (STATUS.md's P2 usage ledger) is kept before the retention sweeper
+	// reaps it. Zero uses DefaultUsageRecordRetention. Like
+	// RequestLogRetention's sweeper, this loop always runs once the table is
+	// migrated — the internal push API that populates it is mounted
+	// unconditionally whenever InternalToken is set. Its default exceeds
+	// RequestLogRetention's 30 days because usage_records underpins
+	// settlement, not diagnostics: a billing dispute months after the fact
+	// still needs the ledger entry, not just this window's Prometheus
+	// counters.
+	//
+	// UsageRecordRetention 是一条已持久化的 usage_records 行(STATUS.md 的
+	// P2 用量账本)在被保留期清理协程回收之前保留多久。为零时采用
+	// DefaultUsageRecordRetention。与 RequestLogRetention 的清理协程一样，
+	// 这个循环只要表已迁移就总会运行——填充这张表的内部推送 API，只要设置了
+	// InternalToken 就无条件挂载。它的默认值超过 RequestLogRetention 的
+	// 30 天，因为 usage_records 支撑的是结算而非诊断：几个月后的一次账单
+	// 争议仍然需要这条账本记录，而不只是那个时间窗口内的 Prometheus 计数器。
+	UsageRecordRetention time.Duration `json:",optional"`
+
+	// ComfyEditor configures the embedded ComfyUI workflow editor served under
+	// /operator/v1/comfy-editor/ for the Console's template page. Optional:
+	// left unset, the prefix answers 404 like any unknown path.
+	//
+	// ComfyEditor 配置挂在 /operator/v1/comfy-editor/ 之下、供 Console 模板页使用的
+	// 嵌入式 ComfyUI 工作流编辑器。它是可选的：不设置时，该前缀与任何未知路径一样
+	// 回答 404。
+	ComfyEditor ComfyEditorConf `json:",optional"`
+
+	// Signup configures self-service tenant sign-up at
+	// POST /admin/v1/auth/signup. Optional and off by default: an
+	// unauthenticated write endpoint is something a deployment opts into,
+	// not something an upgrade switches on.
+	//
+	// Signup 配置 POST /admin/v1/auth/signup 上的租户自助注册。它是可选的，默认关闭：
+	// 一个无需认证的写端点应当由部署主动开启，而不是被一次升级悄悄打开。
+	Signup SignupConf `json:",optional"`
 }
+
+// SignupConf configures self-service tenant sign-up. Registration is open
+// once enabled: a new tenant is active immediately, with no approval step and
+// no invitation. What bounds abuse is MaxPerHour and the starting quota.
+//
+// SignupConf 配置租户自助注册。一经开启即完全开放：新租户立即生效，没有审批，也不需要
+// 邀请码。约束滥用的是 MaxPerHour 与初始配额。
+type SignupConf struct {
+	// Enabled mounts the sign-up route. Left false, the route does not
+	// exist and answers 404 like any unknown path.
+	//
+	// Enabled 挂载注册路由。为 false 时该路由不存在，与任何未知路径一样回答 404。
+	Enabled bool `json:",default=false"`
+	// MaxPerHour bounds sign-up attempts across the whole deployment in one
+	// clock hour, counted in the shared Redis whether or not each attempt
+	// succeeds. Zero removes the bound. It is deployment-wide rather than
+	// per address for the reason the signupgate package gives.
+	//
+	// MaxPerHour 限定整个部署在一个整点小时内的注册尝试次数，在共享 Redis 中计数，
+	// 无论每次尝试成功与否都计入。零表示不设上限。它是全部署范围而非按地址，理由见
+	// signupgate 包。
+	MaxPerHour int `json:",default=30"`
+	// RequestsPerMinute, TokensPerMinute and MaxConcurrent are the quota a
+	// self-registered tenant starts with, in common/quota's meaning (zero is
+	// unlimited). An owner or admin can change them afterwards like any
+	// other tenant's.
+	//
+	// RequestsPerMinute、TokensPerMinute 与 MaxConcurrent 是自助注册的租户起步时的
+	// 配额，含义同 common/quota（零表示不限制）。之后 owner 或 admin 可以像其他任何
+	// 租户一样修改它们。
+	RequestsPerMinute int `json:",default=60"`
+	TokensPerMinute   int `json:",default=100000"`
+	MaxConcurrent     int `json:",default=4"`
+}
+
+// Limits returns the starting quota as common/quota's type.
+//
+// Limits 以 common/quota 的类型返回起步配额。
+func (s SignupConf) Limits() quota.Limits {
+	return quota.Limits{
+		RequestsPerMinute: s.RequestsPerMinute,
+		TokensPerMinute:   s.TokensPerMinute,
+		MaxConcurrent:     s.MaxConcurrent,
+	}
+}
+
+// ComfyEditorConf points at an unpacked ComfyUI_frontend release, fetched at
+// deploy time by scripts/fetch-comfyui-frontend.sh rather than vendored: the
+// frontend is GPL-3.0 and some 35 MB, and it is served unmodified.
+//
+// ComfyEditorConf 指向一份已解压的 ComfyUI_frontend 发布包，由
+// scripts/fetch-comfyui-frontend.sh 在部署时获取而不是放进仓库：前端是 GPL-3.0 且约
+// 35 MB，并且原样提供、不做修改。
+type ComfyEditorConf struct {
+	// DistDir is the release directory containing index.html. / DistDir 是包含 index.html 的发布目录。
+	DistDir string `json:",optional"`
+}
+
+// DefaultRequestLogRetention is how long a request_logs row is kept when
+// Config.RequestLogRetention is zero.
+//
+// DefaultRequestLogRetention 是 Config.RequestLogRetention 为零时，一条
+// request_logs 行被保留的时长。
+const DefaultRequestLogRetention = 30 * 24 * time.Hour
+
+// DefaultAlertEvaluationInterval is how often the alert evaluation loop
+// runs when Config.AlertEvaluationInterval is zero.
+//
+// DefaultAlertEvaluationInterval 是 Config.AlertEvaluationInterval 为零时，
+// 告警评估循环的运行频率。
+const DefaultAlertEvaluationInterval = 60 * time.Second
+
+// DefaultUsageRecordRetention is how long a usage_records row is kept when
+// Config.UsageRecordRetention is zero — 400 days, covering a full billing
+// year plus buffer for late dispute resolution.
+//
+// DefaultUsageRecordRetention 是 Config.UsageRecordRetention 为零时，一条
+// usage_records 行被保留的时长——400 天，覆盖完整的一个计费年度并留有
+// 处理迟到账单争议的余量。
+const DefaultUsageRecordRetention = 400 * 24 * time.Hour
 
 // FleetConf configures the fleet inventory.
 //
@@ -147,6 +332,106 @@ func (f FleetConf) Enabled() bool {
 	return len(f.Gateways) > 0 || f.GatewayToken != ""
 }
 
+// ModelPullConf configures forwarding STATUS.md's P2 model distribution
+// subtask two's per-node pull trigger and status calls.
+//
+// It deliberately does not reuse FleetConf: FleetConf.Gateways points at
+// each replica's -admin-addr, a read-only inventory listener, while this
+// points at each replica's separate -model-pull-addr — a write listener
+// with its own token (Gateway README's "两个不同的监听器、不同的 token").
+// Folding the two into one list would mean one config value serving two
+// listeners that must never share a token.
+//
+// ModelPullConf 配置转发 STATUS.md P2 模型分发子任务二里针对单个节点的拉取
+// 触发与状态查询。
+//
+// 它刻意不复用 FleetConf：FleetConf.Gateways 指向各副本的 -admin-addr（一个
+// 只读清单监听器），而这里指向各副本另一个独立的 -model-pull-addr——一个带
+// 自己 token 的写监听器（Gateway README 的"两个不同的监听器、不同的
+// token"）。把两者合并成一份清单，就意味着一个配置值要同时服务两个绝不能
+// 共用 token 的监听器。
+type ModelPullConf struct {
+	// Gateways are the base URLs of each Gateway replica's -model-pull-addr
+	// listener, e.g. http://gateway-1:8092. A replica not listed here is
+	// simply never asked, and node_id connected only to it cannot be
+	// triggered or queried through this service.
+	//
+	// Gateways 是各 Gateway 副本 -model-pull-addr 监听器的基础 URL，例如
+	// http://gateway-1:8092。没有列在这里的副本不会被询问，只连到它上面的
+	// node_id 也就无法经本服务被触发或查询。
+	Gateways []string `json:",optional"`
+	// GatewayToken authenticates this service to those listeners. It must
+	// match each Gateway's AISW_GATEWAY_MODEL_PULL_TOKEN.
+	//
+	// GatewayToken 用于本服务向那些监听器表明身份。它必须与各 Gateway 的
+	// AISW_GATEWAY_MODEL_PULL_TOKEN 一致。
+	GatewayToken string `json:",optional"`
+	// Timeout bounds one call to one replica. Every configured replica is
+	// asked concurrently, so a slow one delays only itself.
+	//
+	// Timeout 限制对单个副本的单次调用。每个已配置副本都被并发询问，因此一
+	// 个慢副本只会拖延它自己。
+	Timeout time.Duration `json:",default=3s"`
+}
+
+// Enabled reports whether model-pull forwarding is configured. Both parts
+// are required together, the same reasoning as FleetConf.Enabled.
+//
+// Enabled 报告模型拉取转发是否已配置。两部分必须同时具备，理由与
+// FleetConf.Enabled 相同。
+func (m ModelPullConf) Enabled() bool {
+	return len(m.Gateways) > 0 || m.GatewayToken != ""
+}
+
+// ComfyUIManagedConf configures forwarding STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask two's per-node lifecycle action trigger and
+// status calls.
+//
+// It deliberately does not reuse ModelPullConf, the same reasoning
+// ModelPullConf's own doc comment gives for not reusing FleetConf: each
+// points at a different Gateway listener (-comfyui-managed-addr here, not
+// -model-pull-addr) with its own token.
+//
+// ComfyUIManagedConf 配置转发 STATUS.md P2 ComfyUI Managed Docker 部署子任务
+// 二里针对单个节点的生命周期动作触发与状态查询。
+//
+// 它刻意不复用 ModelPullConf，理由与 ModelPullConf 自己文档注释里不复用
+// FleetConf 的理由相同：两者指向不同的 Gateway 监听器（这里是
+// -comfyui-managed-addr，不是 -model-pull-addr），各自带自己的 token。
+type ComfyUIManagedConf struct {
+	// Gateways are the base URLs of each Gateway replica's
+	// -comfyui-managed-addr listener, e.g. http://gateway-1:8093. A
+	// replica not listed here is simply never asked, and node_id
+	// connected only to it cannot be triggered or queried through this
+	// service.
+	//
+	// Gateways 是各 Gateway 副本 -comfyui-managed-addr 监听器的基础 URL，
+	// 例如 http://gateway-1:8093。没有列在这里的副本不会被询问，只连到它
+	// 上面的 node_id 也就无法经本服务被触发或查询。
+	Gateways []string `json:",optional"`
+	// GatewayToken authenticates this service to those listeners. It must
+	// match each Gateway's AISW_GATEWAY_COMFYUI_MANAGED_TOKEN.
+	//
+	// GatewayToken 用于本服务向那些监听器表明身份。它必须与各 Gateway 的
+	// AISW_GATEWAY_COMFYUI_MANAGED_TOKEN 一致。
+	GatewayToken string `json:",optional"`
+	// Timeout bounds one call to one replica. Every configured replica is
+	// asked concurrently, so a slow one delays only itself.
+	//
+	// Timeout 限制对单个副本的单次调用。每个已配置副本都被并发询问，因此
+	// 一个慢副本只会拖延它自己。
+	Timeout time.Duration `json:",default=3s"`
+}
+
+// Enabled reports whether ComfyUI Managed forwarding is configured. Both
+// parts are required together, the same reasoning as ModelPullConf.Enabled.
+//
+// Enabled 报告 ComfyUI Managed 转发是否已配置。两部分必须同时具备，理由与
+// ModelPullConf.Enabled 相同。
+func (c ComfyUIManagedConf) Enabled() bool {
+	return len(c.Gateways) > 0 || c.GatewayToken != ""
+}
+
 // RegistryConf configures the Registry TokenAdmin client (STATUS.md's P01).
 //
 // RegistryConf 配置 Registry TokenAdmin 客户端（STATUS.md 的 P01）。
@@ -182,6 +467,52 @@ type RegistryConf struct {
 // 理由与 FleetConf.Enabled 相同。
 func (r RegistryConf) Enabled() bool {
 	return r.Addr != "" || r.AdminToken != ""
+}
+
+// MetricsHistoryConf configures periodic scraping of Gateway/Registry
+// Prometheus text endpoints into rollup history for Console C27.
+// Unconfigured (the zero value), the background collector does not start and
+// GET /operator/v1/metrics/history is not mounted — the same "no config, no
+// route" convention Fleet and Registry already follow.
+//
+// MetricsHistoryConf 配置定时抓取 Gateway/Registry 的 Prometheus 文本端点、为
+// Console C27 落地汇总历史。未配置时(零值)后台采集器不启动，
+// GET /operator/v1/metrics/history 也不挂载——与 Fleet、Registry 现有的
+// "没配置就没有这条路由"约定一致。
+type MetricsHistoryConf struct {
+	// GatewayAddrs are Gateway replicas' -metrics-addr endpoints, e.g.
+	// "http://gateway-1:9090". Distinct from Fleet.Gateways, which points at
+	// adminapi on a different port.
+	//
+	// GatewayAddrs 是各 Gateway 副本 -metrics-addr 的端点，例如
+	// "http://gateway-1:9090"。与 Fleet.Gateways 不同——后者指向 adminapi，
+	// 端口不同。
+	GatewayAddrs []string `json:",optional"`
+	// RegistryAddr is the Registry's -metrics-addr endpoint.
+	//
+	// RegistryAddr 是 Registry 的 -metrics-addr 端点。
+	RegistryAddr string `json:",optional"`
+	// Interval is both the scrape cadence and the rollup bucket width:
+	// Gateway/Registry counters and gauges are already cumulative, so a
+	// scrape at the end of each window is the natural representative value —
+	// scraping more often would not improve accuracy, only cost more
+	// requests.
+	//
+	// Interval 既是抓取周期，也是落库的汇总粒度：Gateway/Registry 的计数器与
+	// 量表本就是累计值，每个窗口收尾时抓一次就是自然的代表值——抓得更频繁不会
+	// 提高准确度，只会多花请求。
+	Interval time.Duration `json:",default=5m"`
+	// Retention bounds how long a rollup row is kept before cleanup deletes it.
+	//
+	// Retention 限制一行汇总数据在被清理任务删除前保留多久。
+	Retention time.Duration `json:",default=2160h"`
+}
+
+// Enabled reports whether the metrics-history collector is configured.
+//
+// Enabled 报告指标历史采集器是否已配置。
+func (m MetricsHistoryConf) Enabled() bool {
+	return len(m.GatewayAddrs) > 0 || m.RegistryAddr != ""
 }
 
 // Supported database drivers.
@@ -325,12 +656,53 @@ func (c Config) Validate() error {
 			return errors.New("config: Fleet.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
 		}
 	}
+	if c.ModelPull.Enabled() {
+		if len(c.ModelPull.Gateways) == 0 {
+			return errors.New("config: ModelPull.Gateways is required once model-pull forwarding is configured")
+		}
+		if len(c.ModelPull.GatewayToken) < minSecretLen {
+			return errors.New("config: ModelPull.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.ComfyUIManaged.Enabled() {
+		if len(c.ComfyUIManaged.Gateways) == 0 {
+			return errors.New("config: ComfyUIManaged.Gateways is required once comfyui-managed forwarding is configured")
+		}
+		if len(c.ComfyUIManaged.GatewayToken) < minSecretLen {
+			return errors.New("config: ComfyUIManaged.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
 	if c.Registry.Enabled() {
 		if c.Registry.Addr == "" {
 			return errors.New("config: Registry.Addr is required once the Registry client is configured")
 		}
 		if len(c.Registry.AdminToken) < minSecretLen {
 			return errors.New("config: Registry.AdminToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.MetricsHistory.Enabled() {
+		if c.MetricsHistory.Interval <= 0 {
+			return errors.New("config: MetricsHistory.Interval must be positive once metrics history is configured")
+		}
+		if c.MetricsHistory.Retention <= 0 {
+			return errors.New("config: MetricsHistory.Retention must be positive once metrics history is configured")
+		}
+	}
+	if c.RequestLogRetention < 0 {
+		return errors.New("config: RequestLogRetention must not be negative")
+	}
+	if c.AlertEvaluationInterval < 0 {
+		return errors.New("config: AlertEvaluationInterval must not be negative")
+	}
+	if c.UsageRecordRetention < 0 {
+		return errors.New("config: UsageRecordRetention must not be negative")
+	}
+	if c.Signup.Enabled {
+		if c.Signup.MaxPerHour < 0 {
+			return errors.New("config: Signup.MaxPerHour must not be negative")
+		}
+		if err := c.Signup.Limits().Validate(); err != nil {
+			return errors.New("config: Signup starting quota is invalid: " + err.Error())
 		}
 	}
 	return nil

@@ -16,8 +16,101 @@ import (
 	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/agentupgradestatus"
+	"AIServeWeave/common/cliusagestatus"
+	"AIServeWeave/common/comfyuimanagedstatus"
+	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 )
+
+// ModelPuller is implemented by *modelpull.Puller (STATUS.md's P2 model
+// distribution subtask 2). It is declared here as an interface, not a
+// concrete dependency on the modelpull package, so control_test.go can fake
+// it without touching real HTTP downloads.
+//
+// ModelPuller 由 *modelpull.Puller 实现（STATUS.md P2 模型分发子任务二）。
+// 这里声明成接口而不是直接依赖 modelpull 包的具体类型，好让 control_test.go
+// 能用假实现替换，不必触碰真实 HTTP 下载。
+type ModelPuller interface {
+	// Trigger asks the puller to start pulling names; it never blocks.
+	//
+	// Trigger 请求 puller 开始拉取 names；它从不阻塞。
+	Trigger(names []string)
+	// Snapshot returns the current status of every name the puller knows
+	// about, sorted by name.
+	//
+	// Snapshot 返回 puller 已知的每一个名字的当前状态，按名字排序。
+	Snapshot() []modelpullstatus.Status
+}
+
+// ComfyUIManager is implemented by *comfyuimanaged.Supervisor (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask 2). It is declared here as
+// an interface, not a concrete dependency on the comfyuimanaged package, the
+// same reason ModelPuller is: control_test.go can fake it without shelling
+// out to a real docker CLI.
+//
+// ComfyUIManager 由 *comfyuimanaged.Supervisor 实现（STATUS.md 的 P2 ComfyUI
+// Managed Docker 部署子任务二）。这里声明成接口而不是直接依赖 comfyuimanaged
+// 包的具体类型，与 ModelPuller 同一个理由：control_test.go 能用假实现替换，不
+// 必真的 shell out 到 docker CLI。
+type ComfyUIManager interface {
+	// Trigger asks the Supervisor to apply action to its one
+	// locally-declared Managed instance; it never blocks.
+	//
+	// Trigger 请求 Supervisor 对它本地已声明的那一个 Managed 实例施加
+	// action；它从不阻塞。
+	Trigger(action comfyuimanagedstatus.Action)
+	// TriggerCustomNodeInstall asks the Supervisor to install name — looked
+	// up in its own local allowlist, never accepted as a literal URL — into
+	// its one Managed instance (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment, subtask 4); it never blocks.
+	//
+	// TriggerCustomNodeInstall 请求 Supervisor 把 name（在它自己本地的允许
+	// 列表里查找，从不接受字面 URL）安装进它的那一个 Managed 实例
+	// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）；它从不阻塞。
+	TriggerCustomNodeInstall(name string)
+	// Snapshot returns the current status of the one Managed instance this
+	// Agent declared locally.
+	//
+	// Snapshot 返回本 Agent 本地声明的那一个 Managed 实例的当前状态。
+	Snapshot() []comfyuimanagedstatus.Status
+}
+
+// CLIUsageSource is implemented by *cliusage.Monitor. It is declared here as
+// an interface, not a dependency on the cliusage package, the same reason
+// ModelPuller is: tests can fake it without running a CLI. Snapshot must
+// return cached data without starting a process.
+//
+// CLIUsageSource 由 *cliusage.Monitor 实现。这里声明成接口而不是依赖 cliusage 包，
+// 与 ModelPuller 同一个理由：测试可以用假实现替换，不必运行 CLI。Snapshot 必须只
+// 返回缓存数据，不启动任何进程。
+type CLIUsageSource interface {
+	// Snapshot returns the cached, credential-free quota of every declared CLI.
+	//
+	// Snapshot 返回每个已声明 CLI 的缓存、不含凭据的额度。
+	Snapshot() []cliusagestatus.Account
+}
+
+// AgentUpgrader is implemented by *agentupgrade.Checker (STATUS.md's P2
+// Agent auto-upgrade subtask 1). It is declared here as an interface, not a
+// concrete dependency on the agentupgrade package, the same reason
+// ModelPuller is: control_test.go can fake it without a real manifest file.
+//
+// AgentUpgrader 由 *agentupgrade.Checker 实现（STATUS.md 的 P2 Agent 自动
+// 升级子任务一）。这里声明成接口而不是直接依赖 agentupgrade 包的具体类型，
+// 与 ModelPuller 同一个理由：control_test.go 能用假实现替换，不需要真实的
+// 清单文件。
+type AgentUpgrader interface {
+	// Trigger asks the Checker to apply action against targetVersion; it
+	// never blocks.
+	//
+	// Trigger 请求 Checker 对 targetVersion 施加 action；它从不阻塞。
+	Trigger(action agentupgradestatus.Action, targetVersion string)
+	// Status returns the Checker's current status.
+	//
+	// Status 返回 Checker 当前的状态。
+	Status() agentupgradestatus.Status
+}
 
 // This file assembles one tunnel — one Agent to one Gateway replica — as a
 // state machine over a single Control stream, plus the exponential-backoff
@@ -183,6 +276,59 @@ type ClientConfig struct {
 	// configuration that names one, rather than silently installing a runtime
 	// with no credential.
 	Secrets SecretResolver
+	// ModelPuller drives STATUS.md's P2 model distribution subtask 2: a
+	// Gateway-triggered, by-name-only pull of a local manifest entry. Nil is
+	// a legitimate value — the same "optional hook" shape as OnRoster and
+	// OnSlotHint — and means a GatewayControl_ModelPullTrigger frame is
+	// silently ignored and no ModelPullReport is ever sent, matching a node
+	// with no manifest configured.
+	//
+	// ModelPuller 驱动 STATUS.md P2 模型分发子任务二：一次 Gateway 触发的、
+	// 只按名字进行的本地清单条目拉取。nil 是一个合法取值——与 OnRoster、
+	// OnSlotHint 同一种"可选钩子"形状——意味着 GatewayControl_ModelPullTrigger
+	// 帧被静默忽略、也从不发送 ModelPullReport，与一个没有配置清单的节点
+	// 表现一致。
+	ModelPuller ModelPuller
+	// ComfyUIManaged drives STATUS.md's P2 ComfyUI Managed Docker deployment
+	// subtask 2: a Gateway-triggered start/stop/restart of this node's one
+	// locally-declared Managed ComfyUI instance. Nil is a legitimate value —
+	// the same "optional hook" shape as ModelPuller — and means a
+	// GatewayControl_ComfyuiManagedAction frame is silently ignored and no
+	// ComfyUIManagedReport is ever sent, matching a node with Managed mode
+	// disabled.
+	//
+	// ComfyUIManaged 驱动 STATUS.md P2 ComfyUI Managed Docker 部署子任务二：一
+	// 次 Gateway 触发的、对本节点本地已声明的那一个 Managed ComfyUI 实例的
+	// start/stop/restart。nil 是一个合法取值——与 ModelPuller 同一种"可选钩子"
+	// 形状——意味着 GatewayControl_ComfyuiManagedAction 帧被静默忽略、也从不
+	// 发送 ComfyUIManagedReport，与一个未启用 Managed 模式的节点表现一致。
+	ComfyUIManaged ComfyUIManager
+	// AgentUpgrader drives STATUS.md's P2 Agent auto-upgrade subtask 1: a
+	// Gateway-triggered CHECK of this Agent's own local manifest against its
+	// running version (UPGRADE and ROLLBACK are accepted but always answered
+	// with FAILED/NOT_IMPLEMENTED, see agentupgrade's package doc). Nil is a
+	// legitimate value — the same "optional hook" shape as ModelPuller — and
+	// means a GatewayControl_AgentUpgradeAction frame is silently ignored and
+	// no AgentUpgradeReport is ever sent, matching a node with no upgrade
+	// manifest configured.
+	//
+	// AgentUpgrader 驱动 STATUS.md P2 Agent 自动升级子任务一：一次 Gateway
+	// 触发的、对本 Agent 自己本地清单与运行版本的 CHECK（UPGRADE 与
+	// ROLLBACK 被接受，但一律回答 FAILED/NOT_IMPLEMENTED，见 agentupgrade 包
+	// 文档）。nil 是一个合法取值——与 ModelPuller 同一种"可选钩子"形
+	// 状——意味着 GatewayControl_AgentUpgradeAction 帧被静默忽略、也从不发送
+	// AgentUpgradeReport，与一个未配置升级清单的节点表现一致。
+	AgentUpgrader AgentUpgrader
+	// CLIUsage supplies the credential-free subscription quota of the locally
+	// declared Codex / Claude Code CLIs, which the tunnel reports to each
+	// replica so the console can show it next to the service. Nil is a
+	// legitimate value — the same "optional hook" shape as ModelPuller — and
+	// means no CLIUsageReport is ever sent.
+	//
+	// CLIUsage 提供本地已声明的 Codex / Claude Code CLI 不含凭据的订阅额度，隧道把它
+	// 上报给每个副本，好让控制台把它显示在对应服务旁。nil 是一个合法取值——与
+	// ModelPuller 同一种"可选钩子"形状——意味着从不发送 CLIUsageReport。
+	CLIUsage CLIUsageSource
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and
 	// HeartbeatFailureThreshold the number of unanswered heartbeats that
@@ -601,6 +747,25 @@ func (c *Client) SetDraining(draining bool) {
 	if pool != nil {
 		pool.SetDraining(draining)
 	}
+}
+
+// DrainLocal stops this tunnel from accepting newly dispatched work and
+// blocks until its in-flight requests reach zero or timeout passes,
+// whichever comes first. Unlike drain (control.go), it is triggered by this
+// Agent's own code (STATUS.md's P2 Agent auto-upgrade subtask 2) rather than
+// a Gateway-sent Shutdown frame, so it neither announces Draining over the
+// stream nor half-closes it — the tunnel keeps running, just with dispatch
+// paused, so the Agent can decide afterward whether to actually replace
+// itself or resume normally.
+//
+// DrainLocal 让这条隧道停止接受新派发的工作，并阻塞直到在途请求归零或
+// timeout 用尽，以先到者为准。与 drain（control.go）不同，它是由本 Agent
+// 自己的代码触发的（STATUS.md P2 Agent 自动升级子任务二），而不是 Gateway
+// 下发的 Shutdown 帧，因此既不通过流公告 Draining，也不半关闭它——隧道本身
+// 继续运行，只是暂停派发，让 Agent 之后再决定是真的替换自己还是恢复正常。
+func (c *Client) DrainLocal(timeout time.Duration) {
+	c.SetDraining(true)
+	c.waitInFlight(c.clock.Now().Add(timeout))
 }
 
 // SlotStats reports this tunnel's slot occupancy, zero when no pool is up.

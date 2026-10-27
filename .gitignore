@@ -6,3 +6,10 @@ dist/
 
 # local git worktrees for isolated implementation work
 .worktrees/
+*.log
+*.pem
+/aiServeWeaveAgent
+.cache
+
+# go test -c / dlv test binaries
+*.test

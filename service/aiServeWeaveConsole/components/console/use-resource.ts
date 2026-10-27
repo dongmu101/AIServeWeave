@@ -5,6 +5,7 @@ import * as React from "react";
 import type { RequestSpec } from "@/lib/console/api-client";
 import { ApiError, describe } from "@/lib/console/errors";
 import { useConsoleRequest } from "@/components/console/use-console-request";
+import { useI18n } from "@/components/i18n/provider";
 
 /**
  * Resource is the state of one read, in the three shapes a view must be able
@@ -48,6 +49,7 @@ export interface Resource<T> {
  * 原因就是已经有更新的一次在路上了。
  */
 export function useResource<T>(spec: Omit<RequestSpec<T>, "signal">): Resource<T> {
+  const { locale } = useI18n();
   const run = useConsoleRequest();
   const [token, setToken] = React.useState(0);
 
@@ -69,7 +71,7 @@ export function useResource<T>(spec: Omit<RequestSpec<T>, "signal">): Resource<T
   const [settled, setSettled] = React.useState<{
     key: string;
     data: T | null;
-    error: string | null;
+    error: unknown;
   }>({ key: "", data: null, error: null });
 
   // The spec is held in a ref, updated after render: the parser is a function
@@ -107,7 +109,7 @@ export function useResource<T>(spec: Omit<RequestSpec<T>, "signal">): Resource<T
         if (!current || (failure instanceof ApiError && failure.kind === "canceled")) {
           return;
         }
-        setSettled({ key: requestKey, data: null, error: describe(failure) });
+        setSettled({ key: requestKey, data: null, error: failure instanceof ApiError ? failure : new ApiError("server") });
       });
     return () => {
       current = false;
@@ -119,7 +121,7 @@ export function useResource<T>(spec: Omit<RequestSpec<T>, "signal">): Resource<T
   const fresh = settled.key === requestKey;
   return {
     data: fresh ? settled.data : null,
-    error: fresh ? settled.error : null,
+    error: fresh && settled.error !== null ? describe(settled.error, locale) : null,
     loading: !fresh,
     reload,
   };

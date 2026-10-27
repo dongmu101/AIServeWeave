@@ -142,6 +142,13 @@ type jobPersistConfig struct {
 	// ArtifactCopyTimeout 限定单个产物「节点到存储」的字节复制时长。为何它
 	// 不是 CallTimeout，见 DefaultArtifactCopyTimeout。
 	ArtifactCopyTimeout time.Duration
+	// Metrics records artifact transfer duration/bytes/outcome (STATUS.md's
+	// A06). A nil value discards, same as newRecorder(nil) — most tests in
+	// this package leave it unset.
+	//
+	// Metrics 记录产物搬运的时长/字节数/结果（STATUS.md 的 A06）。为 nil 时
+	// 全部丢弃，与 newRecorder(nil) 同义——本包多数测试不设置它。
+	Metrics *recorder
 }
 
 // jobPersister is the bypass write path from this Gateway replica's in-memory
@@ -247,6 +254,9 @@ func newJobPersister(jobs *jobStore, client JobPersistClient, opener artifactOpe
 	}
 	if cfg.ArtifactCopyTimeout <= 0 {
 		cfg.ArtifactCopyTimeout = DefaultArtifactCopyTimeout
+	}
+	if cfg.Metrics == nil {
+		cfg.Metrics = newRecorder(nil)
 	}
 	return &jobPersister{
 		jobs:    jobs,
@@ -508,9 +518,12 @@ func (jp *jobPersister) persistArtifactBytes(candidate scheduler.Candidate, runI
 	key := path.Join(tenantID, jobID, a.ArtifactID)
 	hash := sha256.New()
 	counted := &countingReader{r: io.TeeReader(artifact.Body, hash)}
+	start := jp.clock.Now()
 	if err := jp.storage.Put(ctx, key, counted, artifact.Size); err != nil {
+		jp.cfg.Metrics.ArtifactTransfer(ResultFailed, 0, jp.clock.Now().Sub(start))
 		return "", "", "", 0, err
 	}
+	jp.cfg.Metrics.ArtifactTransfer(ResultSucceeded, counted.n, jp.clock.Now().Sub(start))
 	return hex.EncodeToString(hash.Sum(nil)), artifact.ContentType, key, counted.n, nil
 }
 

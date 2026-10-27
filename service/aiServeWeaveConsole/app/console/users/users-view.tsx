@@ -1,5 +1,12 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+import type { Locale } from "@/lib/i18n/locale";
+
+
 import * as React from "react";
 import {
   createColumnHelper,
@@ -26,7 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { parseUsers, ROLE_LABELS, ROLES, type Role, type User } from "@/lib/console/contract";
+import { parseUsers, roleLabels, ROLES, type Role, type User } from "@/lib/console/contract";
 import { formatDateTime } from "@/lib/console/format";
 import { canCreateUser, canManageUsers } from "@/lib/console/permissions";
 
@@ -46,40 +53,41 @@ import { canCreateUser, canManageUsers } from "@/lib/console/permissions";
 const features = tableFeatures({});
 const helper = createColumnHelper<typeof features, User>();
 
-const columns = helper.columns([
+const columns = (t: Translator, locale: Locale) => (helper.columns([
   helper.accessor("name", {
-    header: "名称",
-    cell: (info) => info.getValue() || <span className="text-muted-foreground">未填写</span>,
+    header: t("tenant.name"),
+    cell: (info) => info.getValue() || <span className="text-muted-foreground"><Message id="tenant.notProvided" /></span>,
   }),
   helper.accessor("email", {
-    header: "邮箱",
+    header: t("tenant.email"),
     cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
   }),
   helper.accessor("role", {
-    header: "角色",
+    header: t("tenant.role"),
     cell: (info) => {
       const role = info.getValue();
-      return <Badge variant="outline">{ROLE_LABELS[role as Role] ?? role}</Badge>;
+      return <Badge variant="outline">{roleLabels(locale)[role as Role] ?? role}</Badge>;
     },
   }),
   helper.accessor("status", {
-    header: "状态",
-    cell: (info) => (info.getValue() === "active" ? "正常" : info.getValue()),
+    header: t("tenant.status"),
+    cell: (info) => (info.getValue() === "active" ? t("tenant.normal") : info.getValue()),
   }),
   helper.accessor("lastLoginAt", {
-    header: "最近登录",
-    cell: (info) => formatDateTime(info.getValue(), "从未登录"),
+    header: t("tenant.lastSignedIn"),
+    cell: (info) => formatDateTime(info.getValue(), t("tenant.neverSignedIn"), locale),
   }),
   helper.accessor("createdAt", {
-    header: "创建时间",
-    cell: (info) => formatDateTime(info.getValue()),
+    header: t("tenant.createdAt"),
+    cell: (info) => formatDateTime(info.getValue(), undefined, locale),
   }),
-]);
+]));
 
 const PAGE_SIZE = 50;
 const NO_USERS: User[] = [];
 
 export function UsersView({ role, currentUserId }: { role: string; currentUserId: string }) {
+  const { locale, t } = useI18n();
   const [filters, setFilters] = useUrlFilters(["q", "role"] as const);
   const [draftQuery, setDraftQuery] = React.useState(filters.q);
   const debouncedQuery = useDebouncedValue(draftQuery);
@@ -98,33 +106,32 @@ export function UsersView({ role, currentUserId }: { role: string; currentUserId
   });
 
   const rows = users.items ?? NO_USERS;
-  const table = useTable({ features, columns, data: rows });
+  const localizedColumns = React.useMemo(() => columns(t, locale), [t, locale]);
+  const table = useTable({ features, columns: localizedColumns, data: rows });
 
   return (
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-lg font-semibold">用户</h1>
+          <h1 className="font-heading text-lg font-semibold"><Message id="tenant.users" /></h1>
           <p className="text-sm text-muted-foreground">
-            当前租户的用户，按创建时间倒序分页。角色、密码、会话与禁用状态由 owner 管理。
-          </p>
+            <Message id="tenant.usersInTheCurrentTenantPaginatedByCreation" /></p>
         </div>
         {canCreateUser(role) ? (
           <CreateUserDialog onCreated={users.reload} />
         ) : (
           <p className="text-sm text-muted-foreground">
-            只有所有者可以创建用户。
-          </p>
+            <Message id="tenant.onlyOwnersCanCreateUsers" /></p>
         )}
       </div>
 
       <div className="flex flex-wrap items-center gap-3">
         <Input
           className="max-w-xs"
-          placeholder="按邮箱或姓名搜索"
+          placeholder={t("tenant.searchByEmailOrName")}
           value={draftQuery}
           onChange={(event) => setDraftQuery(event.target.value)}
-          aria-label="按邮箱或姓名搜索用户"
+          aria-label={t("tenant.searchUsersByEmailOrName")}
         />
         <Select
           value={filters.role === "" ? "all" : filters.role}
@@ -134,14 +141,14 @@ export function UsersView({ role, currentUserId }: { role: string; currentUserId
             }
           }}
         >
-          <SelectTrigger aria-label="按角色筛选">
+          <SelectTrigger aria-label={t("tenant.filterByRole")}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value="all">全部角色</SelectItem>
+            <SelectItem value="all"><Message id="tenant.allRoles" /></SelectItem>
             {ROLES.map((item) => (
               <SelectItem key={item} value={item}>
-                {ROLE_LABELS[item]}
+                {roleLabels(locale)[item]}
               </SelectItem>
             ))}
           </SelectContent>
@@ -151,21 +158,21 @@ export function UsersView({ role, currentUserId }: { role: string; currentUserId
       {users.error ? (
         <ErrorState message={users.error} onRetry={users.reload} />
       ) : users.loading ? (
-        <LoadingState label="正在加载用户" rows={4} />
+        <LoadingState label={t("tenant.loadingUsers")} rows={4} />
       ) : (
         <>
           <DataTable
             table={table}
-            caption="当前租户的用户"
+            caption={t("tenant.currentTenantSUsers")}
             emptyMessage={
               filters.q === "" && filters.role === ""
-                ? "该租户还没有用户"
-                : "没有符合筛选条件的用户"
+                ? t("tenant.thisTenantHasNoUsersYet")
+                : t("tenant.noUsersMatchTheFilters")
             }
           />
           <Pager resource={users} loadedCount={rows.length} />
-          {canManageUsers(role) ? <section className="grid gap-3" aria-label="用户管理操作">
-            <h2 className="font-heading font-semibold">管理本页用户</h2>
+          {canManageUsers(role) ? <section className="grid gap-3" aria-label={t("tenant.userManagementActions")}>
+            <h2 className="font-heading font-semibold"><Message id="tenant.manageUsersOnThisPage" /></h2>
             {rows.filter((user) => user.id !== currentUserId).map((user) => <UserActions key={user.id} user={user} onChanged={users.reload} />)}
           </section> : null}
         </>

@@ -1,3 +1,5 @@
+import { Message } from "@/components/i18n/message";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { redirect } from "next/navigation";
 
 import { OperatorLoginForm } from "@/app/operator/login/login-form";
@@ -29,13 +31,12 @@ export default async function LoginPage({
   return (
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm">
+        <div className="mb-6 flex justify-end"><LanguageSwitcher /></div>
         <div className="mb-6 space-y-1">
           <h1 className="font-heading text-xl font-semibold">
-            AIServeWeave 平台运维
-          </h1>
+            <Message id="auth.aiserveweavePlatformOperations" /></h1>
           <p className="text-sm text-muted-foreground">
-            使用独立的平台运维账号登录；租户账号不授予运维权限。
-          </p>
+            <Message id="auth.signInWithASeparatePlatformOperatorAccount" /></p>
         </div>
         <OperatorLoginForm next={target} />
       </div>

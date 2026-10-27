@@ -1,0 +1,60 @@
+{
+  "stats": {
+    "startTime": "2026-09-12T09:42:59.545Z",
+    "duration": 41041.521,
+    "expected": 75,
+    "skipped": 0,
+    "unexpected": 0,
+    "flaky": 0
+  },
+  "browser": "Google Chrome 153.0.8010.37",
+  "playwright": "1.63.0",
+  "node": "v24.21.0",
+  "api_source": "bounded synthetic fixtures; isolated loopback Console production server",
+  "memory": [
+    {
+      "test": "/console/audit: 10000 records stay paged, virtualized and bounded in memory",
+      "records": 10000,
+      "pageSize": 200,
+      "samples": [
+        {
+          "page": 5,
+          "heap": 6719064,
+          "rows": 25
+        },
+        {
+          "page": 25,
+          "heap": 7106232,
+          "rows": 25
+        },
+        {
+          "page": 50,
+          "heap": 7262956,
+          "rows": 25
+        }
+      ]
+    },
+    {
+      "test": "/operator/requests: 10000 records stay paged, virtualized and bounded in memory",
+      "records": 10000,
+      "pageSize": 200,
+      "samples": [
+        {
+          "page": 5,
+          "heap": 6694236,
+          "rows": 25
+        },
+        {
+          "page": 25,
+          "heap": 7039496,
+          "rows": 25
+        },
+        {
+          "page": 50,
+          "heap": 7270308,
+          "rows": 25
+        }
+      ]
+    }
+  ]
+}

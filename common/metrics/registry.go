@@ -102,10 +102,20 @@ func (r *Registry) DescribedNames() []string {
 }
 
 // Counter returns the counter identified by name and labels, creating it on
-// first use.
+// first use. A nil *Registry — a typed nil boxed into a runtime.Metrics
+// interface, e.g. a caller that stores an unconstructed *Registry field and
+// passes it along without a nil check — answers with a discard instrument
+// instead of panicking: a caller that forgot to construct a registry has a
+// bug, but losing metrics is a smaller failure than crashing on it.
 //
-// Counter 返回由 name 与 labels 标识的计数器，首次使用时创建。
+// Counter 返回由 name 与 labels 标识的计数器，首次使用时创建。nil 的 *Registry
+// ——一个类型化的 nil 被装进 runtime.Metrics 接口，例如调用方存了一个未构造的
+// *Registry 字段、未判空就传了出去——会得到一个丢弃仪器而不是 panic：忘记构造
+// 注册表的调用方确实有缺陷，但丢失指标比因此崩溃是更小的失败。
 func (r *Registry) Counter(name string, labels map[string]string) runtime.Counter {
+	if r == nil {
+		return discardInstrument{}
+	}
 	s := r.series(name, KindCounter, labels)
 	if s == nil {
 		return discardInstrument{}
@@ -114,10 +124,14 @@ func (r *Registry) Counter(name string, labels map[string]string) runtime.Counte
 }
 
 // Gauge returns the gauge identified by name and labels, creating it on first
-// use.
+// use. See Counter's doc comment for the nil-receiver behavior.
 //
-// Gauge 返回由 name 与 labels 标识的量表，首次使用时创建。
+// Gauge 返回由 name 与 labels 标识的量表，首次使用时创建。nil 接收者的行为见
+// Counter 的文档注释。
 func (r *Registry) Gauge(name string, labels map[string]string) runtime.Gauge {
+	if r == nil {
+		return discardInstrument{}
+	}
 	s := r.series(name, KindGauge, labels)
 	if s == nil {
 		return discardInstrument{}
@@ -126,10 +140,14 @@ func (r *Registry) Gauge(name string, labels map[string]string) runtime.Gauge {
 }
 
 // Histogram returns the histogram identified by name and labels, creating it
-// on first use.
+// on first use. See Counter's doc comment for the nil-receiver behavior.
 //
-// Histogram 返回由 name 与 labels 标识的直方图，首次使用时创建。
+// Histogram 返回由 name 与 labels 标识的直方图，首次使用时创建。nil 接收者的
+// 行为见 Counter 的文档注释。
 func (r *Registry) Histogram(name string, labels map[string]string) runtime.Histogram {
+	if r == nil {
+		return discardInstrument{}
+	}
 	s := r.series(name, KindHistogram, labels)
 	if s == nil {
 		return discardInstrument{}

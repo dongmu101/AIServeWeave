@@ -168,6 +168,41 @@ func TestConvertChatRequestRoundTrip(t *testing.T) {
 				ResponseFormat: &runtime.ResponseFormat{Type: "json_object"},
 			},
 		},
+		{
+			// STATUS.md's P2 ChatMessage.Content structured rework: a
+			// message with ContentParts (mixed text and image_url) round
+			// trips across the tunnel proto, with Content left empty per
+			// ChatMessage's documented "never both" contract.
+			name: "message with content parts",
+			req: runtime.ChatRequest{
+				Model: "llama3",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "text", Text: "what is this"},
+						{Type: "image_url", ImageURL: &runtime.ContentImageURL{URL: "https://example.com/cat.png", Detail: "low"}},
+					},
+				}},
+			},
+		},
+		{
+			// STATUS.md's P2 multimodal input: an "input_audio" and a "file"
+			// content part must both round trip across the tunnel proto,
+			// exercising the two fields contentPartsToProto/FromProto added
+			// alongside image_url.
+			name: "message with audio and file content parts",
+			req: runtime.ChatRequest{
+				Model: "llama3",
+				Messages: []runtime.ChatMessage{{
+					Role: "user",
+					ContentParts: []runtime.ContentPart{
+						{Type: "text", Text: "summarize these"},
+						{Type: "input_audio", Audio: &runtime.ContentAudio{Data: "YmFzZTY0LWF1ZGlv", Format: "wav"}},
+						{Type: "file", File: &runtime.ContentFile{URL: "data:application/pdf;base64,cGRm", Filename: "report.pdf"}},
+					},
+				}},
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -478,6 +513,13 @@ func TestConvertOperationSpec(t *testing.T) {
 			wantShape:    tunnelwire.ShapeSingle,
 		},
 		{
+			name:         "rerank",
+			op:           tunnelv1.Operation_OPERATION_RERANK,
+			wantRequest:  tunnelwire.PayloadRerankRequest,
+			wantResponse: tunnelwire.PayloadRerankResponse,
+			wantShape:    tunnelwire.ShapeSingle,
+		},
+		{
 			name:         "workflow submit carries the template as body chunks",
 			op:           tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT,
 			wantRequest:  tunnelwire.PayloadWorkflowRequest,
@@ -772,6 +814,46 @@ func TestConvertPayloadRoundTrip(t *testing.T) {
 			},
 		},
 		{
+			name: "rerank request with top_n",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalRerankRequest(runtime.RerankRequest{
+					Model:     "rerank-1",
+					Query:     "what is a cat",
+					Documents: []string{"a", "b"},
+					TopN:      ptr(1),
+				})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalRerankRequest(b) },
+			want: runtime.RerankRequest{
+				Model:     "rerank-1",
+				Query:     "what is a cat",
+				Documents: []string{"a", "b"},
+				TopN:      ptr(1),
+			},
+		},
+		{
+			name: "rerank request without top_n",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalRerankRequest(runtime.RerankRequest{Model: "m", Query: "q", Documents: []string{"a"}})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalRerankRequest(b) },
+			want:   runtime.RerankRequest{Model: "m", Query: "q", Documents: []string{"a"}},
+		},
+		{
+			name: "rerank response",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalRerankResponse(runtime.RerankResponse{
+					Model:   "rerank-1",
+					Results: []runtime.RerankResult{{Index: 1, Score: 0.9}, {Index: 0, Score: 0.1}},
+				})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalRerankResponse(b) },
+			want: runtime.RerankResponse{
+				Model:   "rerank-1",
+				Results: []runtime.RerankResult{{Index: 1, Score: 0.9}, {Index: 0, Score: 0.1}},
+			},
+		},
+		{
 			name: "workflow run",
 			encode: func() ([]byte, error) {
 				return tunnelwire.MarshalWorkflowRun(runtime.WorkflowRun{
@@ -836,6 +918,34 @@ func TestConvertPayloadRoundTrip(t *testing.T) {
 			want: runtime.WorkflowStatus{
 				State:         runtime.WorkflowPending,
 				QueuePosition: 3,
+			},
+		},
+		{
+			// A06's gateway_workflow_job_oom_total metric (STATUS.md) reads
+			// this field off the status jobStore.update receives from exactly
+			// this wire decode, so a regression here would silently zero out
+			// that metric in production without any test elsewhere catching
+			// it — WorkflowStatusToProto/FromProto once dropped this field
+			// entirely.
+			//
+			// A06 的 gateway_workflow_job_oom_total 指标（STATUS.md）读取的
+			// 正是 jobStore.update 从这次隧道解码里拿到的这个字段，因此这里
+			// 一旦退化，会在生产环境里悄悄把那个指标清零，而不会被别处的任何
+			// 测试发现——WorkflowStatusToProto/FromProto 曾经完全丢弃过这个
+			// 字段。
+			name: "workflow status failed out of memory",
+			encode: func() ([]byte, error) {
+				return tunnelwire.MarshalWorkflowStatus(runtime.WorkflowStatus{
+					State:        runtime.WorkflowFailed,
+					ErrorSummary: "CUDA out of memory",
+					OutOfMemory:  true,
+				})
+			},
+			decode: func(b []byte) (any, error) { return tunnelwire.UnmarshalWorkflowStatus(b) },
+			want: runtime.WorkflowStatus{
+				State:        runtime.WorkflowFailed,
+				ErrorSummary: "CUDA out of memory",
+				OutOfMemory:  true,
 			},
 		},
 		{
@@ -932,6 +1042,8 @@ func TestConvertUnmarshalRejectsMalformedPayload(t *testing.T) {
 		{name: "workflow status", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalWorkflowStatus(b); return err }},
 		{name: "run ref", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalRunRef(b); return err }},
 		{name: "artifact ref", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalArtifactRef(b); return err }},
+		{name: "rerank request", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalRerankRequest(b); return err }},
+		{name: "rerank response", decode: func(b []byte) error { _, err := tunnelwire.UnmarshalRerankResponse(b); return err }},
 	}
 
 	for _, tt := range tests {
@@ -973,13 +1085,15 @@ func TestConvertSnapshotRoundTrip(t *testing.T) {
 			ProbedAt:         fixedTime,
 		},
 		Health: runtime.HealthReport{
-			State:     runtime.StateHealthy,
-			Latency:   3 * time.Millisecond,
-			CheckedAt: fixedTime,
+			State:        runtime.StateHealthy,
+			Latency:      3 * time.Millisecond,
+			CheckedAt:    fixedTime,
+			QueueRunning: 1,
+			QueuePending: 4,
 		},
 		Discovery: runtime.Discovery{
 			Version:   "0.32.14",
-			Models:    []runtime.Model{{ID: "llama3"}},
+			Models:    []runtime.Model{{ID: "llama3", DisplayName: "Llama 3", DisplayOrder: 1}},
 			NodeTypes: []string{"KSampler"},
 			Capabilities: runtime.CapabilitySet{
 				runtime.CapabilityChat: {

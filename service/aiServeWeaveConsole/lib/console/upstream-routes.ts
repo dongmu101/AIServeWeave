@@ -64,6 +64,9 @@ const param = (): Segment => ({ param: true });
  * route handler 就能读出来。
  */
 const ROUTES: readonly UpstreamRoute[] = [
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("models")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs"), param()], query: [] },
   {
     method: "GET",
     segments: [literal("admin"), literal("v1"), literal("users")],
@@ -94,6 +97,11 @@ const ROUTES: readonly UpstreamRoute[] = [
   {
     method: "DELETE",
     segments: [literal("admin"), literal("v1"), literal("apikeys"), param()],
+    query: [],
+  },
+  {
+    method: "DELETE",
+    segments: [literal("admin"), literal("v1"), literal("apikeys"), param(), literal("permanent")],
     query: [],
   },
   {
@@ -158,6 +166,16 @@ const ROUTES: readonly UpstreamRoute[] = [
     ],
     query: [],
   },
+  {
+    method: "GET",
+    segments: [literal("admin"), literal("v1"), literal("usage"), literal("summary")],
+    query: ["since", "until"],
+  },
+  {
+    method: "GET",
+    segments: [literal("admin"), literal("v1"), literal("requests")],
+    query: ["limit", "cursor", "since", "until", "status", "request_id"],
+  },
 ];
 
 /**
@@ -199,16 +217,37 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("workflow-templates"), param(), literal("rollback")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), literal("states")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("audit")], query: ["limit", "cursor", "action", "actor_id", "since", "until"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("metrics"), literal("history")], query: ["since", "until"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("api-docs")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("api-docs")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("api-docs"), param()], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("api-docs"), param()], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("api-docs"), param()], query: ["expected_version"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("api-docs"), param(), literal("reset")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("alert-rules")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("alert-rules")], query: ["limit", "cursor", "enabled"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("alert-rules"), param()], query: [] },
+  { method: "PATCH", segments: [literal("operator"), literal("v1"), literal("alert-rules"), param()], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("alert-rules"), param()], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("alerts")], query: ["limit", "cursor", "status", "rule_id", "since", "until"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("alerts"), param(), literal("acknowledge")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("requests")], query: ["limit", "cursor", "since", "until", "status", "request_id", "tenant_id"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("usage"), literal("summary")], query: ["since", "until", "tenant_id"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("approve")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("disable")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("enable")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("maintenance")], query: [] },
   { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("maintenance")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed"), literal("custom-nodes")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("model-pulls")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("model-pulls")], query: [] },
 
   {
     method: "GET",
     segments: [literal("operator"), literal("v1"), literal("nodes")],
-    query: [],
+    query: ["gateway"],
   },
   {
     method: "GET",

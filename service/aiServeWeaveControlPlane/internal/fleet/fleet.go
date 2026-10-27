@@ -136,6 +136,9 @@ type ReplicaStatus struct {
 	//
 	// NodeCount 是该副本报告的节点数。
 	NodeCount int `json:"node_count"`
+	// LocalRuntimes belongs to this Gateway, never to a merged Agent node.
+	// LocalRuntimes 属于本 Gateway，绝不并入 Agent 节点。
+	LocalRuntimes []nodeview.Runtime `json:"local_runtimes,omitempty"`
 }
 
 // Node is one node as the fleet sees it: the merged view, plus which replicas
@@ -212,6 +215,7 @@ func (a *Aggregator) Nodes(ctx context.Context) (Snapshot, error) {
 				status.ReplicaID = replica.ReplicaID
 				status.GeneratedAt = &generated
 				status.NodeCount = len(replica.Nodes)
+				status.LocalRuntimes = replica.LocalRuntimes
 			}
 			results[i] = result{status: status, replica: replica}
 		}()
@@ -409,12 +413,13 @@ func isTimeout(err error) bool {
 type Deployment struct {
 	NodeID    string `json:"node_id"`
 	RuntimeID string `json:"runtime_id"`
-	// Backend is the runtime kind — vllm, sglang, ollama, comfyui — which is
+	// Backend is the runtime kind — vllm, sglang, trtllm, tokenspeed, ollama,
+	// comfyui and the rest — which is
 	// what actually serves the model. Two deployments of one model on
 	// different backends are not interchangeable in capability, which is why
 	// this is on the deployment rather than on the model.
 	//
-	// Backend 是运行时种类——vllm、sglang、ollama、comfyui——真正提供该模型的东西。
+	// Backend 是运行时种类——vllm、sglang、trtllm、tokenspeed、ollama、comfyui 等——真正提供该模型的东西。
 	// 同一个模型在不同后端上的两处部署，在能力上并不等价，这正是它挂在部署上而不是
 	// 挂在模型上的原因。
 	Backend string `json:"backend,omitempty"`

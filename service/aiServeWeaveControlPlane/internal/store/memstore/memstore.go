@@ -48,6 +48,13 @@ type Store struct {
 	audit             []model.AuditLog
 	jobs              map[string]model.Job
 	artifacts         map[string]model.JobArtifact
+	responseTurns     map[string]model.ResponseTurn
+	metricsHistory    []model.MetricsHistoryPoint
+	requestLogs       map[string]model.RequestLog
+	usageRecords      map[string]model.UsageRecord
+	alertRules        map[string]model.AlertRule
+	alertInstances    map[string]model.AlertInstance
+	apiDocs           map[string]model.APIDoc
 }
 
 // New returns an empty store.
@@ -61,6 +68,12 @@ func New() *Store {
 		keys:              map[string]model.APIKey{},
 		jobs:              map[string]model.Job{},
 		artifacts:         map[string]model.JobArtifact{},
+		responseTurns:     map[string]model.ResponseTurn{},
+		requestLogs:       map[string]model.RequestLog{},
+		usageRecords:      map[string]model.UsageRecord{},
+		alertRules:        map[string]model.AlertRule{},
+		alertInstances:    map[string]model.AlertInstance{},
+		apiDocs:           map[string]model.APIDoc{},
 	}
 }
 
@@ -528,6 +541,20 @@ func (s *Store) RevokeAPIKey(_ context.Context, tenantID, id string, at time.Tim
 	return nil
 }
 
+// DeleteAPIKey removes one key of any status, scoped to its tenant.
+//
+// DeleteAPIKey 删除一个任意状态的 key，并限定在其租户范围内。
+func (s *Store) DeleteAPIKey(_ context.Context, tenantID, id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	key, ok := s.keys[id]
+	if !ok || key.TenantID != tenantID {
+		return store.ErrNotFound
+	}
+	delete(s.keys, id)
+	return nil
+}
+
 // MarkAPIKeyUsed records a coarse last-used timestamp.
 //
 // MarkAPIKeyUsed 记录一个粗粒度的最后使用时间。
@@ -768,6 +795,21 @@ func (s *Store) ListJobArtifacts(_ context.Context, tenantID, jobID string) ([]m
 	return out, nil
 }
 
+// GetJobArtifact reads one artifact by its bare id, with no tenant scope —
+// see gormstore's own GetJobArtifact for why.
+//
+// GetJobArtifact 按裸 id 读取一个产物，不限定租户——理由见 gormstore 自己的
+// GetJobArtifact。
+func (s *Store) GetJobArtifact(_ context.Context, id string) (model.JobArtifact, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	artifact, ok := s.artifacts[id]
+	if !ok {
+		return model.JobArtifact{}, store.ErrNotFound
+	}
+	return artifact, nil
+}
+
 // ListJobArtifactsBefore returns up to store.MaxExpiredJobArtifacts
 // artifacts of artifactType older than cutoff, across every tenant, oldest
 // first — the order a cleanup sweep wants, so the most-overdue artifacts are
@@ -802,6 +844,24 @@ func (s *Store) DeleteJobArtifact(_ context.Context, id string) error {
 	defer s.mu.Unlock()
 	delete(s.artifacts, id)
 	return nil
+}
+
+// SumArtifactStorageBytes totals SizeBytes across every artifact whose bytes
+// actually reached object storage (StorageKey non-empty), matching
+// gormstore's own SumArtifactStorageBytes.
+//
+// SumArtifactStorageBytes 对每个字节确已抵达对象存储（StorageKey 非空）的
+// 产物累加 SizeBytes，与 gormstore 自己的 SumArtifactStorageBytes 一致。
+func (s *Store) SumArtifactStorageBytes(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var total int64
+	for _, artifact := range s.artifacts {
+		if artifact.StorageKey != "" {
+			total += artifact.SizeBytes
+		}
+	}
+	return total, nil
 }
 
 // sortOldestFirst is sortNewestFirst's reverse, for the one list in this

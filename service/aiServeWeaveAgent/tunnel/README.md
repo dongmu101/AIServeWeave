@@ -12,7 +12,7 @@
 
 ## 当前状态
 
-阶段 1 到 7 的实现已落地；Ollama 联调、本机故障注入与逐副本替换已有历史记录，24h 长稳结果尚待核实归档，跨网络部署验收仍待补齐：`api/proto/tunnel/v1/tunnel.proto` 定义了完整线上契约（`Tunnel`、`NodeIdentity`、`GatewayDirectory` 与 `TokenAdmin` 四个服务、数据面帧、控制面帧、全部 `runtime` 类型镜像），`common/tunnelwire` 实现了双向转换与 payload 编解码（阶段 7 从 `tunnel/convert.go` 拆出，与 Gateway 共用），`tunnel/identity.go` 实现了本地密钥生成、向 Registry 换证与轮换、证书落盘与 mTLS 配置，`tunnel/client.go` + `control.go` + `backoff.go` 实现了单条隧道的连接状态机、Control 流与退避重连，`tunnel/pool.go` + `slot.go` 实现了单副本槽池的水位管理与单槽帧循环，`tunnel/dispatch.go` 把十一个 Operation 接到 `runtime.Manager` 上（第十一个 `INPUT_UPLOAD` 是 STATUS.md P04 的新增，晚于首期七个阶段落地，用的正是「后续演进」一节要求的方式——只加 Operation，不改既有帧结构），`tunnel/manager.go` + `roster.go` 实现了多副本连接表与名册处理，`tunnel/metrics.go` 接上了全部 13 个指标，`main.go` 完成装配。Gateway 侧的隧道服务端见 [service/aiServeWeaveGateway/README.md](../../aiServeWeaveGateway/README.md)，三副本端到端联调在 `service/aiServeWeaveGateway/e2e`；阶段 7 剩余项见该阶段的清单。
+阶段 1 到 7 的实现已落地；Ollama 联调、本机故障注入与逐副本替换已有历史记录，24h 长稳结果尚待核实归档，跨网络部署验收仍待补齐：`api/proto/tunnel/v1/tunnel.proto` 定义了完整线上契约（`Tunnel`、`NodeIdentity`、`GatewayDirectory` 与 `TokenAdmin` 四个服务、数据面帧、控制面帧、全部 `runtime` 类型镜像），`common/tunnelwire` 实现了双向转换与 payload 编解码（阶段 7 从 `tunnel/convert.go` 拆出，与 Gateway 共用），`tunnel/identity.go` 实现了本地密钥生成、向 Registry 换证与轮换、证书落盘与 mTLS 配置，`tunnel/client.go` + `control.go` + `backoff.go` 实现了单条隧道的连接状态机、Control 流与退避重连，`tunnel/pool.go` + `slot.go` 实现了单副本槽池的水位管理与单槽帧循环，`tunnel/dispatch.go` 把十一个 Operation 接到 `runtime.Manager` 上（第十一个 `INPUT_UPLOAD` 是 STATUS.md P04 的新增，晚于首期七个阶段落地，用的正是「后续演进」一节要求的方式——只加 Operation，不改既有帧结构），`tunnel/manager.go` + `roster.go` 实现了多副本连接表与名册处理，`tunnel/metrics.go` 接上了全部 13 个指标，`main.go` 完成装配。Gateway 侧的隧道服务端见 [service/aiServeWeaveGateway/STATUS.md](../../aiServeWeaveGateway/STATUS.md)，三副本端到端联调在 `service/aiServeWeaveGateway/e2e`；阶段 7 剩余项见该阶段的清单。
 
 | 文件 | 状态 | 说明 |
 | --- | --- | --- |
@@ -39,11 +39,13 @@
 | `runtime/openai` 共享客户端 | 已实现 | — |
 | `vllm`、`sglang`、`ollama`、`comfyui` 适配器 | 已实现 | 位于 `common/runtime/<kind>/` |
 | Gateway 侧隧道服务端 | 已实现 | `service/aiServeWeaveGateway/tunnelserver`，见该服务的 README；两侧共用同一份 proto 与 `common/tunnelwire` |
-| Registry 服务 | 已实现 | 节点证书签发/续期、令牌管理、身份绑定、禁用与名册推送，见 [Registry README](../../aiServeWeaveRegistry/README.md) |
+| Registry 服务 | 已实现 | 节点证书签发/续期、令牌管理、身份绑定、禁用与名册推送，见 [Registry STATUS](../../aiServeWeaveRegistry/STATUS.md) |
 
 因此隧道的阶段 1、3、4（协议、连接、槽池）**不依赖任何适配器**，可与 runtime 阶段 4 到 7 并行推进；阶段 2（身份）只依赖 proto 中的 `NodeIdentity` 接口形状，已完成。
 
 阶段 1 新增两项第三方依赖：`google.golang.org/protobuf`（proto 运行时，转换层必需）和 `google.golang.org/grpc`（服务桩代码，阶段 3 起使用）。两者都在本文件「技术栈」中列出。
+
+模型目录的 `Model` 除 ID 和能力外，还携带可选 `display_name` 与从 1 开始的 `display_order`；零位置表示沿用按 ID 排序。它们仅用于目录显示，不参与能力判断或请求模型改写。`common/tunnelwire` 是这些字段在运行时类型与 proto 之间的唯一转换处；旧版本忽略新增字段仍可互通，但名称和顺序需要 Agent/Gateway 同时升级才能完整传递。
 
 ## 全局约束
 
@@ -222,6 +224,10 @@ enum Operation {
   OPERATION_ARTIFACT_OPEN      = 9;
   OPERATION_ARTIFACT_LIST      = 10;
   OPERATION_INPUT_UPLOAD       = 11;  // STATUS.md P04：输入文件上传，晚于首期落地
+  OPERATION_AUDIO_TRANSCRIBE   = 12;  // STATUS.md P2：音频转录/翻译共用一个 operation，AudioTranscriptionRequest.task 选择
+  OPERATION_RERANK             = 13;  // STATUS.md P2：与 OPERATION_EMBED 同形状，无二进制体
+  OPERATION_MESSAGES           = 14;  // 原生 Anthropic Messages 推理语义与事件
+  OPERATION_IMAGE_GENERATE     = 15;  // 一张生成图像：先一个元数据事件，再若干有界字节分块
 }
 
 message ResponseHeaders {
@@ -266,10 +272,26 @@ message TunnelError {
 | `ARTIFACT_OPEN` | `ArtifactRef` | `ResponseHeaders` + N 个 `DataChunk`（字节流） |
 | `ARTIFACT_LIST` | `RunRef` | 单个 `DataChunk`（`ArtifactList`） |
 | `INPUT_UPLOAD` | `InputUploadRequest`（文件字节另走 `DataChunk`） | 单个 `DataChunk`（`InputUploadResult`） |
+| `AUDIO_TRANSCRIBE` | `AudioTranscriptionRequest`（音频字节另走 `DataChunk`） | 单个 `DataChunk`（`AudioTranscriptionResponse`） |
+| `RERANK` | `RerankRequest` | 单个 `DataChunk`（`RerankResponse`） |
+| `MESSAGES` | `MessagesRequest` | N 个 `DataChunk`，每个一个 `MessagesEvent` |
+| `IMAGE_GENERATE` | `ImageGenerateRequest` | N 个 `DataChunk`，每个一个 `ImageGenerateEvent`：第一个只带 `meta`，之后每个只带一段 `data`（≤ 256 KiB） |
 
-payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`；`INPUT_UPLOAD` 的文件字节同理，且体积比模板更没有上限保证。
+payload 统一使用 protobuf 消息，与 `runtime` 包的 Go 类型一一对应，转换集中在 `common/tunnelwire`，禁止在分发逻辑里内联字段拷贝。工作流模板 JSON 体积可观，走 `DataChunk` 而不是塞进 `RequestHeaders`，避免单帧超过 `MaxCallRecvMsgSize`；`INPUT_UPLOAD` 与 `AUDIO_TRANSCRIBE` 的文件/音频字节同理，且体积比模板更没有上限保证。
 
 `INPUT_UPLOAD`（STATUS.md 的 P04）是首期七个阶段完成后按「后续演进」一节要求的方式新增的：只加一个 Operation、复用既有帧结构，不改任何已有消息。`InputUploadRequest` 只携带 `filename`、`subfolder`、`size`、`sha256` 四个元数据字段，绝不携带目标 URL 或路径——文件落盘的具体位置完全由接收端的 runtime 适配器决定（例如 `common/runtime/workflow/comfyui` 转发到 ComfyUI 自己的 `/upload/image`），这是协议文件头部「不得表达 fetch 这个 URL」这条红线在新 Operation 上的延续。Agent 侧 `dispatch.go` 用 `chanReader` 把请求体 channel 适配成 `io.Reader`，直接流进 `WorkflowRuntime.UploadInput`，不像 `WORKFLOW_SUBMIT` 的 `readBody` 那样先整体收集——模板有 `MaxRequestBytes` 兜底的宽松上限，输入文件的体积没有那么宽松的保证，提前攒够整个文件正是「任何一跳都不得无界缓冲」要防的事。Gateway 侧与 `ARTIFACT_OPEN` 一样走批量槽（`tunnelserver.classFor`），避免一次大的上传挤占推理槽。
+
+`AUDIO_TRANSCRIBE`（STATUS.md 的 P2）复用 `INPUT_UPLOAD` 立下的同一套框架，而不是另起一套：转录与翻译共用这一个 Operation，`AudioTranscriptionRequest.task` 字段选择去哪个后端端点。Agent 侧同样用 `chanReader` 把音频体直接流进 `InferenceRuntime.Transcribe`，绝不整体缓冲；Gateway 侧同样走批量槽。与 `INPUT_UPLOAD` 服务的 `WorkflowRuntime` 不同，这次新增的方法在 `InferenceRuntime` 上，是一次影响所有推理适配器（`ollama`、`vllm`、`sglang`）的接口变更，但没有任何适配器的 `Discover` 会发布 `CapabilityAudioTranscription`，因此在为某个部署接入语音探测之前，这个 Operation 到达 Agent 后总是被能力门禁拒绝——协议已经打通，能力尚未打开。
+
+**模型拉取的按名字触发（STATUS.md P2「模型分发」子任务二）没有走 Operation/`Serve` 槽，走的是 Control 流。** 模型拉取不属于任何一个 `runtime_id`——它是节点级的本地文件操作，不是某个推理运行时实例的请求——而每一次 `Serve` 槽派发都要求 `RequestHeaders.runtime_id` 命中 Agent 本地白名单，勉强塞一个假的 `runtime_id` 只会让以 runtime 为单位的调度器、槽池、熔断器全部对不上语义。`GatewayControl` 新增 `model_pull_trigger`（`ModelPullTrigger{names}`），`AgentControl` 新增 `model_pull`（`ModelPullReport{pulls: []ModelPullStatus}`），与 `RuntimeConfig`/`RuntimeStatus` 走的是同一条已经存在的、节点级的信道。`ModelPullTrigger` 只携带名字，从不携带 URL——Agent 对着自己本地清单（`service/aiServeWeaveAgent/modelpull`，子任务一）解析，Gateway 只能从 Agent 已经批准的名字集合里选，这是本文件头部「不得表达 fetch 这个 URL」这条红线在 Control 流上的延续，也是子任务一文档已经论证过的、`runtime_id` 白名单同一威胁模型的延伸。`ModelPullStatus.reason` 是封闭枚举（`ModelPullFailureReason`），从不携带原始错误文本——`Spec.SourceURL` 可能是带签名 token 的预签名 URL，Go 的 `http.Client` 会把完整请求 URL 编进传输错误文本，原样转发就会把这个细节带出 Agent。触发遵循 `GatewayControl_Config` 的既有先例：不设专门 ack 帧，成功与失败都通过随后的 `ModelPullReport` 观察。详见设计文档 [`docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md`](../../../docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md)。
+
+**ComfyUI Managed 的生命周期动作触发（STATUS.md P2「ComfyUI Managed Docker 部署」子任务二）与模型拉取走同一种形状，但收窄的方式不同。** 子任务一原本设想"控制面下发部署规格"（镜像名、GPU 设备、挂载路径），但那正是本文件头部「不得表达 run this command」这条红线要挡住的东西——一个部署规格本质上就是"用这些参数跑这个镜像"的指令，比模型拉取子任务二当初设想的"下发 URL"更直接地撞线。因此收窄为与 `ModelPullTrigger` 同一种"只按名字/动作触发，规格留在本地"模式：`GatewayControl` 新增 `comfyui_managed_action`（`ComfyUIManagedAction{action}`，`action` 是 START/STOP/RESTART 三值封闭枚举），`AgentControl` 新增 `comfyui_managed`（`ComfyUIManagedReport{instances: []ComfyUIManagedStatus}`）。`ComfyUIManagedAction` 不携带容器名——今天一个 Agent 进程最多管理一个 Managed 实例，动作总是对着 Agent 本地已声明的那一个 Spec（`service/aiServeWeaveAgent/comfyuimanaged`，子任务一）执行，镜像、GPU、挂载路径永远不跨隧道；运维想换镜像版本，仍然要先改本机 flag 再触发 RESTART，从不是把镜像名交给 Gateway 转发。`ComfyUIManagedReport` 报告的是容器生命周期状态（pending/starting/running/stopped/failed），与已经通过既有 `RuntimeStatus`/`RuntimeSnapshot` 通道汇报的 ComfyUI 协议健康状况是两条互补而非重复的信道——一个 Managed 实例注册进 `runtime.Manager` 之后，它的健康状况走的仍然是 External 实例同一条既有路径，这条新信道只覆盖注册之前、或取消注册之后 `RuntimeStatus` 看不到的空档。触发同样遵循 `GatewayControl_Config`/`GatewayControl_ModelPullTrigger` 的既有先例：不设专门 ack 帧，成功与失败都通过随后的 `ComfyUIManagedReport` 观察。详见设计文档 [`docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md`](../../../docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md)。
+
+**Agent 自动升级的 CHECK/UPGRADE/ROLLBACK 触发（STATUS.md P2「Agent 自动升级」）与模型拉取、ComfyUI Managed 走同一种形状，且比两者都更硬地撞上本文件头部的两条红线。** 一次升级最终会替换 Agent 自己正在执行的二进制，这个载荷比模型文件或容器镜像更敏感——它是将来会被 exec 的代码本身，因此这条消息比 `ModelPullTrigger`/`ComfyUIManagedAction` 更不能表达"去这个 URL 下载"或"跑这段指令"。`GatewayControl` 新增 `agent_upgrade_action`（`AgentUpgradeAction{action, target_version}`，`action` 是 CHECK/UPGRADE/ROLLBACK 三值封闭枚举），`AgentControl` 新增 `agent_upgrade`（`AgentUpgradeReport{current_version, state, reason, updated_unix_ms}`，单条状态而非 `repeated`——一个 Agent 只有一个正在运行的版本）。`AgentUpgradeAction` 只携带目标版本号，从不携带下载地址或签名：Agent 对着自己本地已签名清单（`service/aiServeWeaveAgent/agentupgrade`，结构类比 `modelpull.Spec`）解析，版本号→URL→签名这条映射永远只活在 Agent 本地。**子任务一**实现了 CHECK：`agentupgrade.Checker` 把清单与自己的 `main.version` 比较。**子任务二**补上了 UPGRADE 的完整链路：`target_version` 未命中清单直接答复 `AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION`（不发起网络请求）；命中则依次经过 `AGENT_UPGRADE_STATE_DOWNLOADING`（下载到本地工作目录）→`AGENT_UPGRADE_STATE_VERIFYING`（对照清单签名已验证的 SHA256 校验，不过则 `AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED`）→`AGENT_UPGRADE_STATE_DRAINING`（新增 `tunnel.Manager.DrainAll`，跨这个 Agent 持有的**每一条**隧道连接排空，方向与 Gateway 主动下发的单连接排空相反）→`AGENT_UPGRADE_STATE_RESTARTING`（`syscall.Exec` 自替换进程镜像，失败报告 `AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED`；成功则进程镜像已经替换，不会再有旧进程发出的后续报告）。ROLLBACK 仍一律答复 `AGENT_UPGRADE_STATE_FAILED`/`AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED`——那是子任务三的范围。触发同样遵循 `GatewayControl_Config`/`GatewayControl_ModelPullTrigger` 的既有先例：不设专门 ack 帧，成功与失败都通过随后的 `AgentUpgradeReport` 观察；一次 UPGRADE 进行中收到的第二次触发被静默忽略。详见设计文档 [`docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md`](../../../docs/superpowers/specs/2026-09-19-p2-agent-auto-upgrade-design.md)。
+
+**CLI 订阅额度上报（`AgentControl.cli_usage`）是一条只上行、不带指令的帧。** `CLIUsageReport{accounts[]}` 镜像 Agent 本机 `cliusage.Monitor` 的缓存快照：每个账户只有 `kind`（`codex`/`claude`）、`status`（pending/ready/unauthorized/unavailable/error）、`checked_unix_ms` 与若干窗口（`name`/`bucket`/`used_percent`/`duration_minutes`/`resets_unix_ms`）——全是上游报告的百分比与时间戳，不含账户名、token 与任何凭据，也不含 token 数量推算值。`Expired`、`Stale` 取决于读取时刻，不上线，由接收方按时间戳推出，所以额度没变时相邻两次轮询的确定性编码相同，Agent 只在变化时重发（与 `model_pull` 同一套比较方式）。Agent 只在隧道启用且声明了 Codex/Claude CLI 时才上报，并由 `Monitor.Run` 每 5 分钟刷新一次缓存（每次刷新会启动 CLI 进程，故刻意慢于 Monitor「每分钟一批」的下限）。Gateway 把它原样存进节点，渲染时经 `common/nodeview.CLIUsageFromAccounts` 这条允许列表：只放行 `codex`/`claude` 两种 kind 与已知状态，限制账户/窗口数量与标签长度，百分比夹到 0–100；控制面租户模型目录再按服务的 `kind` 把对应额度挂到该服务上（`cli_usage`）。这是 CLI 账户的共享额度，不是按租户划分的数字。
+
+`RERANK`（STATUS.md 的 P2）是「新增 `InferenceRuntime` 方法」这套破坏性变更模式的试点，`AUDIO_TRANSCRIBE` 随后复用了同一套模式。但它请求体是纯文本 JSON（一个 query 加一组 documents），不携带任何二进制体，因此形状与 `EMBED` 相同——单个 `RequestHeaders.payload`、无 `DataChunk` 请求体、跑在推理槽而非批量槽。同样没有任何适配器的 `Discover` 会发布 `CapabilityRerank`，这个 Operation 到达 Agent 后同样总是被能力门禁拒绝，直到某个部署确认后端支持。
 
 **流式事件严禁聚合。** `CHAT_STREAM` 每收到一个 `ChatEvent` 就 `Send` 一帧；Gateway 每收到一帧就 flush。这条规则是 TTFT 的唯一保障，任何"攒够 N 条再发"的优化都必须先证明不影响首字延迟。
 
@@ -645,7 +667,7 @@ tunnel_cancel_total{node_id,replica_id,reason}
 
 同一个注册表也交给了 `runtime.Dependencies.Metrics`：节点只有一个指标后端，「后端慢」与「隧道慢」才是可以互相相减的数字。
 
-Gateway 侧有一份对称的服务端指标，前缀 `tunnel_server_`，刻意不与这里同名——两端从相反方向测量同一条链路，其分歧本身就有意义（这边数的是 Agent 执行了多少，那边数的是副本递交了多少，两者之差正是请求丢在哪里的答案）。清单见 [Gateway README「指标」](../../aiServeWeaveGateway/README.md#指标)。
+Gateway 侧有一份对称的服务端指标，前缀 `tunnel_server_`，刻意不与这里同名——两端从相反方向测量同一条链路，其分歧本身就有意义（这边数的是 Agent 执行了多少，那边数的是副本递交了多少，两者之差正是请求丢在哪里的答案）。清单见 [Gateway STATUS「指标」](../../aiServeWeaveGateway/STATUS.md#指标)。
 
 ## 首字延迟预算
 
@@ -864,7 +886,7 @@ go test -race ./service/aiServeWeaveAgent/...
 - **`Committed` 之后的错误一律清掉 `Retryable`。** 正文说"已向用户发出首个 token 的流不得重试"，但没说在哪一层保证。分发器在流已提交时把 `RuntimeError.Retryable` 改成 false 再返回，产物流也一样（第一块字节发出即算提交）。这样即使 Gateway 侧调度器忘了检查，重试也不会发生。
 - **产物边读边发，读缓冲就是 `max_frame_bytes`。** 500MB 的产物只占一个缓冲区，不做整体读入；每块发送前都检查帧上限，请求体（工作流模板）在收集过程中就按 `max_request_bytes` 判超，而不是先攒完再拒。
 - **`RequestHeaders.trace` 不进日志。** 协议允许携带 `tenant_id` 等固定键，但日志白名单里没有它们，分发器因此完全不读 trace——它是副本自己做关联用的。
-- **`main.go` 的隧道参数走 flag。** Agent 还没有配置文件（runtime 实例同样尚未从磁盘加载），因此 `-gateway`、`-registry`、证书三件套与 `-allowed-runtimes` 暂时用 flag 表达，命名与 README 配置段的键一一对应，配置文件落地后整体替换。不传 `-gateway` 时隧道不启动，Agent 行为与之前一致。（阶段 6 起 `-gateway` 接受逗号分隔的种子列表，并由连接表接管。）
+- **`main.go` 的隧道参数走 flag。** Agent 还没有配置文件（runtime 实例同样尚未从磁盘加载），因此 `-gateway`、`-registry`、证书三件套与 `-allowed-runtimes` 暂时用 flag 表达，命名与 README 配置段的键一一对应，配置文件落地后整体替换。不传 `-gateway` 时隧道不启动，Agent 行为与之前一致。（阶段 6 起 `-gateway` 接受逗号分隔的种子列表，并由连接表接管。）**这段是阶段 5 的历史记录，此后 `-config`（`agentconfig` 包，见 [Agent STATUS](../STATUS.md#当前实现)）已落地，覆盖这里列出的每一个 flag 加上运行时声明，但不是"整体替换"——两者可以同时给，命令行显式传入的 flag 始终优先于文件里的同名设置（`main.go` 的 `applyConfig`），文件只填补 flag 留在默认值上的空白。**
 
 **验收：** 对着 fake Gateway 可以完成全部九个 Operation；`runtime` 层的错误语义无损跨隧道传递。全部测试用假 Runtime 与假时钟，不依赖真实后端或网络。
 
@@ -889,7 +911,7 @@ go test -race ./service/aiServeWeaveAgent/...
 
 - **连接表以 `endpoint` 为键，不是 `replica_id`。** 正文两个字段都提到了，但只有 endpoint 在任何时刻都存在：种子只有地址，`replica_id` 要到 `HelloAck` 才知道，而拨号用的正是地址。`replica_id` 在名册或握手给出后记在条目上，只用于日志与指标。
 - **种子在第一份名册到达后即失效，包括名册没列出的种子。** 正文说「名册无、本地有 → 标记 retired 并关闭」，没说种子算不算「本地有」。这里算：名册是权威的，种子只是入口；否则一个写错的种子地址会被永远重拨。`Roster.Seed` 因此不设置「已接受」标记，第一份名册无论 version 多少都覆盖它。
-- **自行退出的隧道要等「新消息」才重建。** 副本发 `Shutdown` 让 Agent 离开、或证书被拒进 `failed` 之后，reconcile 若立刻重连就是死循环。连接表为此记一条 `stoppedRecord{version, generation}`，只有名册版本前进或证书轮换才重建——这正是正文「是否重连交给阶段 6 的名册决定」的落地方式。被连接表自己关掉的隧道不记录，否则轮换后就再也起不来。
+- **自行退出的隧道要等「新消息」才重建。** 副本发 `Shutdown` 让 Agent 离开、或证书被拒进 `failed` 之后，reconcile 若立刻重连就是死循环。连接表为此记一条 `stoppedRecord{version, generation}`，只有名册版本前进或证书轮换才重建——这正是正文「是否重连交给阶段 6 的名册决定」的落地方式。**例外：`ErrShutdownRequested` 不会永远等。** Gateway 重启时正是用 `Shutdown` 送走所有 Agent，而名册只能经由存活的隧道送达——单副本（或所有隧道都被送走）时没有任何新消息会来，节点就永远下线。连接表因此每 `ShutdownRetryInterval`（默认 10s）清掉这类记录并重拨；仍在关闭的副本拨号失败后由 Client 自己退避。证书被拒等致命记录不在此列，仍只等新名册或新证书。被连接表自己关掉的隧道不记录，否则轮换后就再也起不来。
 - **「全部副本失败」才让 `Run` 返回错误。** 不可达的副本永远不会让 `Client.Run` 返回（它自己退避重试），因此只有名册里每个副本都留下了 `IsFatal` 记录、且表里一条隧道都不剩时才向上报错。这样「三个种子挂了两个」不影响启动，而「证书被所有副本拒绝」会明确失败。
 - **证书轮换按 `generation` 计数逐条替换。** 身份是节点级的，一次轮换要换掉所有隧道；同时换会让节点对全部副本瞬时不可达，正是轮换要避免的事。连接表记录每条隧道建立时的证书代次，轮换时逐条 stop → open → 等它回到 `connected`（上限 `RotateTimeout`，超时就继续下一条而不是卡住全部）。判断「是否换了证书」用 `NodeID` + 有效期窗口，因为轮换必然连私钥一起换、必然产生新的有效期。
 - **Registry 不可达不下线，证书致命错误一次性上报。** `IdentityManager.Ensure` 已经把可重试的轮换失败吞掉并返回当前证书，连接表只需区分致命与否：致命就直接结束 `Run`（证书是节点级的，报一次而不是每副本报一次），非致命只记一条 WARN。
@@ -941,8 +963,8 @@ go test -race ./service/aiServeWeaveAgent/...
 - **认证只看 `VerifiedChains`，不看 `PeerCertificates`。** 后者是"对端发来的"，前者是"TLS 栈验过的"。读错一个，任何人自签一张证书就能声称自己是任意 `node_id`；没开客户端校验的副本因此认不出任何人，而不是认可所有人。
 - **`service/aiServeWeaveGateway/e2e` 是唯一同时依赖两个服务的包。** 两个服务谁也不 import 谁，把连接它们的测试放在两者之外正是维持这一点的办法。它自己签一个 CA、把节点证书按 0600 写到临时目录，走的正是本文件说的"离线签发"路径——证书是真的、名字是对的，只是没有拿 bootstrap token 换过。后端是脚本化的 `runtime.InferenceRuntime`，因为需要 GPU 的测试等于不会跑；后端协议由各适配器自己的测试负责。
 - **实测：loopback + mTLS 单跳的 TTFT 开销约 0.3ms**（`TestTunnelSegmentLatency`，20 次采样，与同进程直连对比）。这个数字只说明"一跳 TLS gRPC 不是延迟来源"，真实链路的数字要等真实部署。测试断言的是 100ms 上限，因为回归到那个量级就是流式体验的分水岭，而不是因为 0.3ms 有什么可保证的。
-- **Gateway 的调度器与 OpenAI 前门落在 `service/aiServeWeaveGateway/scheduler` 与 `service/aiServeWeaveGateway/httpapi`。** 这是清单第一项真正的阻塞点：Gateway 此前只有隧道服务端，没有任何调用方能触发一次真实推理。`scheduler.Scheduler` 直接读 `tunnelserver.Server.Nodes()`（不额外记状态），按空闲槽数与在途请求数选节点，`ChatStream` 自己读一次首帧来判定 `Committed()`，只在首帧之前重试——这是正文"流式请求只有在返回第一个 token 之前可以安全重试"在调度层的落地。`httpapi` 当前已支持 chat/completions、embeddings、models、responses（含 SSE）与工作流 Job API；Responses 在前门转换成 canonical 请求，不要求新增 Responses 隧道枚举，`store` / `previous_response_id` 被明确拒绝，详见 [Gateway README](../../aiServeWeaveGateway/README.md)。
-- **`-ollama-url`/`-ollama-id` 最初用于真实链路验收，当前仍可显式注册 Ollama。** Agent 默认还启用本机 Ollama/vLLM 自动发现（`-auto-discover`）；留空 `-ollama-url` 不再等于不注册任何 runtime。运行时配置文件加载仍未交付，配置下发应用和本地白名单约束见阶段 3/5。
+- **Gateway 的调度器与 OpenAI 前门落在 `service/aiServeWeaveGateway/scheduler` 与 `service/aiServeWeaveGateway/httpapi`。** 这是清单第一项真正的阻塞点：Gateway 此前只有隧道服务端，没有任何调用方能触发一次真实推理。`scheduler.Scheduler` 直接读 `tunnelserver.Server.Nodes()`（不额外记状态），按空闲槽数与在途请求数选节点，`ChatStream` 自己读一次首帧来判定 `Committed()`，只在首帧之前重试——这是正文"流式请求只有在返回第一个 token 之前可以安全重试"在调度层的落地。`httpapi` 当前已支持 chat/completions、embeddings、models、responses（含 SSE）与工作流 Job API；Responses 在前门转换成 canonical 请求，不要求新增 Responses 隧道枚举，`store` / `previous_response_id` 被明确拒绝，详见 [Gateway STATUS](../../aiServeWeaveGateway/STATUS.md)。
+- **`-ollama-url`/`-ollama-id` 最初用于真实链路验收，当前仍可显式注册 Ollama。** Agent 默认还启用本机 Ollama/vLLM/SGLang 自动发现（`-auto-discover`）；留空 `-ollama-url` 不再等于不注册任何 runtime。运行时配置文件加载已由 `-config`（`agentconfig` 包的 `runtimes:` 列表）落地，作为 `-ollama-url` 之外的补充——两者叠加生效，不是互斥关系，声明多个、任意受支持种类（ollama/vllm/sglang/comfyui）的本地运行时不再需要单独一个 flag；配置下发应用和本地白名单约束仍见阶段 3/5。
 - **实测：真实 Ollama + 真实 mTLS 隧道 + Gateway HTTP 前门的端到端 TTFT。** 本机（Apple Silicon Mac，Ollama 0.x，模型 `gemma4:26b`，19GB，Q4 量化）离线签发一次性 CA 和证书（手法与 `e2e/pki_test.go` 相同），起一个 Gateway 副本和一个连到真实 Ollama 的 Agent，用真实 TCP + 真实 mTLS 连接，`curl` 打 `/v1/chat/completions`：
   - 非流式，模型冷启动（首次加载进内存）：总耗时约 10.0s——这个数字基本是 Ollama 把 19GB 模型读进内存的时间，不是本链路的开销；非流式端点的"TTFT"定义上等于总耗时，所以这一项本身不能反映前门开销。
   - 流式，模型已热（同一模型第二次及以后请求）：从 Gateway 收到 HTTP 请求到第一个 SSE chunk `Flush()`，三次采样为 165ms、293ms、129ms。这个量级由 Ollama 生成首个 token 的真实推理延迟主导；与隧道段单跳 0.3ms 的开销相比，Gateway 前门 + 隧道往返在其中可忽略不计——**多副本、多一跳 mTLS 网络请求没有引入可观测的额外延迟**，验证了阶段 6/7 一直依赖的假设。
@@ -953,7 +975,7 @@ go test -race ./service/aiServeWeaveAgent/...
   - **kill 全部副本**（`TestFaultInjectionAllReplicasKilled`）：3 副本同时 `grpc.Stop()`。`tunnel.Client.Run` 按设计没有返回错误——不可达是可重试状态，不是致命状态——三边都不可达时用户请求只会在调度层看到"无可用节点"，不会有请求被静默丢弃。3 副本在原地址重新起进程后，全部重新变为 `Live` 共耗时 **1.41s**，此后请求立即恢复正常。
   - **证书过期**（`TestFaultInjectionCertificateExpiry`）：签发一张 6s 有效期的证书（`writeShortLivedIdentity`），`IdentityInterval` 调到 1s。证书过期后 **13.5ms** 内 `tunnel.Manager.Run` 返回致命错误（`unauthorized: ... expired ... no bootstrap token`），此时三个副本上该节点的路由同时消失，验证了 README:388 "证书失效对所有副本同时生效"。`tunnel.Manager.Run` 是一次性的——同一个 Manager 不能第二次 `Run`——所以恢复的形状和重启 Agent 进程一样：写入一张新证书到同样的三个文件，起一个新 Manager，**23.6ms** 后三个副本重新变为 `Live`。也就是说恢复时间几乎全部是"运维介入换证书"的等待时间，系统自身的探测和重连开销在这个场景里可以忽略。
   - **后端假死**（`TestFaultInjectionBackendHang`）：一个 Ollama 兼容 HTTP 服务器正常应答 `/api/version`、`/api/tags`（探测通过），但 `/v1/chat/completions` 收到请求后完全不回应（连接保持打开，只是不写字节）。`RequestTimeout=1s` 时请求在 **1.00s** 后失败，错误分类为 `runtime.ErrorTimeout` 且 `Retryable=true`——调度器可以安全地把它换到另一个节点重试。关键发现：这个超时完全来自后端适配器自己包一层 `context.WithTimeout`（`common/runtime/internal/oaibase`），不依赖隧道 `Dispatcher.run` 对 `ir.Chat` 的调用本身有任何超时包装——`dispatch.go` 里那一行是直接阻塞调用，如果适配器不主动尊重 `ctx`，这个调用会永远卡住（一个真实的运维风险，值得记在这里而不是留给下一次事故发现）。假死后端恢复应答后，同一节点上的下一个请求 **4.6ms** 内成功，说明前一个卡住的请求没有污染槽位或隧道状态。
-- **长稳测试：`TestSoak`（`service/aiServeWeaveGateway/e2e/soak_test.go`），时长和采样周期都由环境变量驱动而不是写死。** `AISW_SOAK_DURATION`（如 `24h`）控制运行多久，未设置则跳过；`AISW_SOAK_SAMPLE_INTERVAL`（默认 5m）控制采样周期；`AISW_SOAK_OUTPUT` 指定 CSV 报告路径（默认写到 `os.TempDir()` 下一个带时间戳的文件，运行开始时打日志说明路径，因为 24h 之后测试进程早就不在前台了）。真实运行时长远超 `go test` 默认的 10 分钟超时，必须带 `-timeout 0`。三副本 fleet 起来后，每个副本各有一个 goroutine 以 200ms 周期发真实 Chat 请求（保持槽位持续被借还，而不是停在下限空转），采样器每个周期读一次 `runtime.NumGoroutine()`、`runtime.MemStats.HeapAlloc`（采样前先 `runtime.GC()`，否则 GC 时机的噪声会在 24h 窗口里盖过真实趋势）、`Manager.ConnectedReplicas()`、三个副本上该节点空闲槽之和。判定用运行自己前四分之一采样的均值做基线，而不是写死的绝对值——机器和 `SlotHint` 配置会变，但"相对基线翻倍"这个信号不会：协程数或堆增长超过基线 100% 判失败，`connected_replicas` 全程必须等于副本数，请求失败率超过 1% 判失败。30s/20s 冒烟测试（`AISW_SOAK_DURATION=20s`）验证了工具本身：`go test -race` 无告警，goroutine/heap 在这个尺度上是持平或略降（噪声范围内），`connected_replicas` 全程为 3。**真实的 24h 数据仍在采集**，完成后把最终数字和 CSV 摘要补进这里。
+- **长稳测试：`TestSoak`（`service/aiServeWeaveGateway/e2e/soak_test.go`），时长与采样周期由环境变量驱动。** `AISW_SOAK_DURATION` 启用，`AISW_SOAK_SAMPLE_INTERVAL` 默认 5m，`AISW_SOAK_OUTPUT` 指定新的 CSV 路径，并生成 `.summary.json` 最终摘要。P10 已补正值与样本上限校验（最多 10,000）、失败清理、防覆盖、首尾采样与墙钟间隔检查；摘要记录后端来源、实际观测窗口、请求失败、资源增长和连接/槽范围。使用单进程三副本、真实回环 TCP/mTLS 与固定响应的**合成后端**，不是实际 Ollama 模型流量。前四分之一样本算术均值为资源基线，协程/堆末值增长上限仍为 100%，失败率上限仍为 1%；连接每次采样为 3、推理空闲槽合计在 `[1,12]`，采样间隔超过配置两倍判连续性不足。2026-09-12 的 2m/race 冒烟与 CSV/JSON 已归档，24h 冻结二进制运行已启动，须在结束后按退出码、日志和摘要核验，不能从启动记录推断已经通过或仍在运行。复现与完整边界见 [P10 验收手册](../../../deploy/p10-acceptance.md)、[本轮验收记录](../../../docs/acceptance/p10-2026-09-12/README.md)。
 - **滚动升级：一次替换一个副本，从未把可用隧道降到零。**（`TestRollingUpgradeKeepsAtLeastOneTunnelAvailable`）用常规 `newFleet`（3 副本、脚本化后端，不需要 `AISW_FAULT_INJECTION`——不涉及真实网络时钟，纯粹是"一次一个"的时序保证）依次 `stop()` 每个副本、在同一地址起替换进程、等它重新 `Live`，再换下一个；期间一个后台协程以 5ms 间隔轮询当前仍 `Live` 的副本并真的发一次 Chat。重复 5 次的实测：每次请求成功率均 ≥98%（181-314 次尝试里最多失败 2 次，都是替换进程尚未完全 `Live` 时的探测性失败，不是空窗期），连续成功请求之间最长间隔 12-18ms——远小于任何客户端重试超时。三副本一次换一个，任何时刻都至少有两个在服务，这与"kill 全部副本"（`TestFaultInjectionAllReplicasKilled`）故意制造的全体不可达窗口形成对照：滚动升级的安全性来自"一次一个"这个操作纪律，不是隧道协议本身的保证。
 
 **验收：** 指标部分已达成（全部 13 个指标有记录点、标签基数有测试、无 payload 内容进标签）。端到端联调已达成：三副本、真实 mTLS、每副本独立完成推理、无副本间转发。真实 Ollama 端到端 SSE 已达成：Gateway 调度器 + OpenAI 前门落地，真实链路验证多副本未引入额外延迟。剩余四场景故障注入已达成（本机单进程真实网络/真实证书时钟/真实 HTTP 超时，见上）。滚动升级演练已达成（本机单进程逐个替换，见上）。24h 长稳测试工具已落地（`TestSoak`），24h 结果尚待核实归档，保持未勾选（根 STATUS P10）。
@@ -992,11 +1014,11 @@ go test -race ./service/aiServeWeaveAgent/...
 
 待决问题：
 
-1. ~~**`runtime` 包的位置**~~ **已定：整棵 `runtime/` 下沉到 `common/runtime`，`convert.go` 拆出为 `common/tunnelwire`。** 决定于 Gateway 动工之前。两件事一起做的原因是它们是同一件事的两半：Gateway 要的不只是 `Stream`、`RuntimeError` 和九个 Operation 的类型，还有这些类型与 proto 之间的转换 —— 隧道两端做的是同一次转换的正反两向，各写一份必然漂移，而「凭据不过隧道」「nil 与显式零值不等价」这两条不变量正是靠这次转换保证的。适配器（`ollama/`、`vllm/`、`comfyui/` 等）跟着 `runtime` 一起走，因为它们依赖 `runtime/internal/`，Go 的 internal 规则不允许它们留在原地；Gateway 不 import 它们，也就不会链进去。隧道侧只有 `convert.go` 搬家、四个文件加 `tunnelwire.` 前缀，`operationName` 与 `classifyBareError` 因为跨文件使用而导出为 `OperationName`、`ClassifyBareError`。
-2. **已实现：Registry 的 `NodeIdentity`。** 注册与续期、一次性令牌、CA 文件管理及 S01–S03 身份管理均已有实现和测试，见 [Registry README](../../aiServeWeaveRegistry/README.md)。单实例、共享运维密钥与备份/轮换验收仍有边界，不能把服务落地视为高可用或灾备完成。
-3. ~~`node_id` 的分配方式：控制台预分配还是 Agent 提交候选后由 Registry 确认；`node_id` 冲突（同一 `node_id` 带着不同 key 再次出现）的运维口径。~~ **已定（STATUS.md 的 S01）：分配方式两种都支持**（配置留空即由 Registry 分配），响应中的 `node_id` 始终权威，配置与之不符时 Agent 拒绝启动；**冲突口径见 [Registry README「`node_id` 唯一性（S01）」](../../aiServeWeaveRegistry/README.md#node_id-唯一性s01)**——Registry 按公钥指纹分辨新注册、无害重连与冲突，无绑定令牌的冲突拒绝；S02 已支持由运维签发 node_id 绑定令牌授权重装、覆盖公钥绑定。授权来自令牌，不在协议层自动猜测"重装"与"冒用"。
+1. ~~**`runtime` 包的位置**~~ **已定：整棵 `runtime/` 下沉到 `common/runtime`，`convert.go` 拆出为 `common/tunnelwire`。** 决定于 Gateway 动工之前。两件事一起做的原因是它们是同一件事的两半：Gateway 要的不只是 `Stream`、`RuntimeError` 和九个 Operation 的类型，还有这些类型与 proto 之间的转换 —— 隧道两端做的是同一次转换的正反两向，各写一份必然漂移，而「凭据不过隧道」「nil 与显式零值不等价」这两条不变量正是靠这次转换保证的。适配器（`ollama/`、`vllm/`、`comfyui/` 等）跟着 `runtime` 一起走，因为它们依赖 `runtime/internal/`，Go 的 internal 规则不允许它们留在原地；Gateway 的推理调度仍只使用隧道 `NodeRuntime`；本机服务清单复用 Ollama/vLLM 适配器做发现与健康检查，因而这两个适配器现在也会链接进 Gateway，但不进入其推理调度。隧道侧只有 `convert.go` 搬家、四个文件加 `tunnelwire.` 前缀，`operationName` 与 `classifyBareError` 因为跨文件使用而导出为 `OperationName`、`ClassifyBareError`。
+2. **已实现：Registry 的 `NodeIdentity`。** 注册与续期、一次性令牌、CA 文件管理及 S01–S03 身份管理均已有实现和测试，见 [Registry STATUS](../../aiServeWeaveRegistry/STATUS.md)。单实例、共享运维密钥与备份/轮换验收仍有边界，不能把服务落地视为高可用或灾备完成。
+3. ~~`node_id` 的分配方式：控制台预分配还是 Agent 提交候选后由 Registry 确认；`node_id` 冲突（同一 `node_id` 带着不同 key 再次出现）的运维口径。~~ **已定（STATUS.md 的 S01）：分配方式两种都支持**（配置留空即由 Registry 分配），响应中的 `node_id` 始终权威，配置与之不符时 Agent 拒绝启动；**冲突口径见 [Registry STATUS「`node_id` 唯一性（S01）」](../../aiServeWeaveRegistry/STATUS.md#node_id-唯一性s01)**——Registry 按公钥指纹分辨新注册、无害重连与冲突，无绑定令牌的冲突拒绝；S02 已支持由运维签发 node_id 绑定令牌授权重装、覆盖公钥绑定。授权来自令牌，不在协议层自动猜测"重装"与"冒用"。
 4. Secret 引用 `api_key_ref` 的解析方式（本地文件、环境变量还是外部 Secret 管理器），需与 `runtime` 阶段 8 的结论保持一致。
-5. **已实现：名册通过 `GatewayDirectory.Join` 双向 gRPC 流推送。** Registry 广播变化，Gateway 经 `SetRoster` 下发给 Agent；没有固定 30s 轮询窗口。断线重连与推送延迟仍意味着最终一致，见 [Gateway README「名册来源」](../../aiServeWeaveGateway/README.md#名册来源)。
+5. **已实现：名册通过 `GatewayDirectory.Join` 双向 gRPC 流推送。** Registry 广播变化，Gateway 经 `SetRoster` 下发给 Agent；没有固定 30s 轮询窗口。断线重连与推送延迟仍意味着最终一致，见 [Gateway STATUS「名册来源」](../../aiServeWeaveGateway/STATUS.md#名册来源)。
 6. **`node_total` 的默认取值**：取各 Runtime `MaxConcurrent` 之和是否合理，还是应该更保守。压测（`stress_test.go`）已经能给出"这个 `node_total` 下会被硬配额拦下多少"的数字，但真实取值要等接上真实后端的吞吐才能定。
 7. ~~**背压错误的 `retryable` 标记两侧不一致。**~~ **已定：由 `runtime.Limiter` 给 `ErrorBackpressure` 置 `Retryable: true`。** 选择置位而不是在契约里写「背压看码不看标记」，因为标记的含义本来就是「这个请求可以再跑一次」，而背压恰恰是请求**根本没到后端**的那一类失败——它比大多数 `Retryable` 的错误更安全，让它独自成为例外只会给 Gateway 埋一个必须记住的特例。`ErrorClosed` 保持不可重试并加了对称断言：实例已经没了，重试它永远不会成功。码与标记因此各司其职——标记回答「能不能重试」，`code == "backpressure"` 回答「该换个节点而不是原地重试，且不计入熔断」。
 
@@ -1011,6 +1033,17 @@ go test -race ./service/aiServeWeaveAgent/...
 5. **跨地域副本的就近连接**，Agent 优先连接同地域副本，远端副本作为备份。需要名册携带地域标签。
 6. **在途请求续传**，为非流式和尚未 `Committed` 的流式请求提供跨连接恢复——多副本下还可以尝试跨副本恢复。
 7. **隧道级限速与优先级**，让高优先级租户的 token 流优先于批量产物传输。
-8. **Agent 自动升级**，通过 Control 流下发版本并灰度。
 
-这些能力不得提前塞进首期协议；确需扩展时优先新增 Operation 或独立 RPC，避免改动已有帧结构。
+这些能力不得提前塞进首期协议；确需扩展时优先新增 Operation 或独立 RPC，避免改动已有帧结构。~~原第 8 条「Agent 自动升级，通过 Control 流下发版本并灰度」~~ 已实现（见上文「Control 流」一节 `agent_upgrade_action`/`agent_upgrade`）：CHECK/UPGRADE 已交付，灰度仍是运维手动按 `node_id` 批量触发，不是协议层概念（子任务四待实现）。
+
+## 原生 Messages 操作
+
+`OPERATION_MESSAGES` 使用共享 `MessagesRequest`（解析后的目标模型、已认证 `tenant_id`/`key_id`、有界 Messages JSON）及 `MessagesEvent`（单条原生事件 JSON）。归属标识不是鉴权凭据；它们来自 Gateway 本次请求的认证结果，不能由外部请求自报。所有编解码只在 `common/tunnelwire`。
+
+这是封闭的推理语义操作：没有 URL、Host、Authorization 或 CLI 命令字段；Agent 的 Claude 适配器严格拒绝未知 Messages 字段和未支持内容块。它不提供通用 HTTP 代理。执行仍要求命中本地 runtime 白名单，事件逐条转发，槽池和 gRPC 施加背压；跨 HTTP 请求等待工具的 CLI 会话另有最多两个的驻留限制与超时。新增操作要求两端同步升级，旧 Agent 不会执行未知操作。
+
+## 图像生成操作
+
+`OPERATION_IMAGE_GENERATE` 的请求是 `ImageGenerateRequest`：只有模型 ID、提示词，以及可选的 `tenant_id`/`key_id` 归属标识，没有任何 URL、路径或请求头字段，所以不能用它让 Agent 去读或去取未声明的东西。响应形状是 `ShapeStream`，但事件不是 token：第一个 `ImageGenerateEvent` 只带 `ImageGenerateMeta`（`content_type`、精确 `size`、`revised_prompt`、`usage`），之后每个事件只带一段字节，单段不超过 `runtime.MaxImageChunkBytes`（256 KiB），整张图不超过 `runtime.MaxImageBytes`（32 MiB）。两端都在 `common/tunnelwire` 里校验这些上限。
+
+这个操作跑在推理槽，不走批量槽。单张图有硬上限，而批量槽是给大小由调用方决定的文件准备的。Agent 侧复用 `forwardStream`，Gateway 侧复用 `newResponseStream`，同一时刻最多持有一个分块。后端没有实现 `runtime.ImageRuntime` 时，Agent 答 `ErrorCapability`（包装 `ErrCapabilityUnsupported`）。新增操作要求两端同步升级，旧 Agent 会把未知操作当作协议错误拒绝。

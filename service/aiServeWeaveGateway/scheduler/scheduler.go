@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"math/rand"
 	"sort"
 	"sync/atomic"
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/routing"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
@@ -20,11 +22,26 @@ import (
 // capability.
 var ErrNoCapableNode = errors.New("scheduler: no node can serve this model")
 
+// defaultQueueRetryInterval and defaultQueueMaxWaiters are the defaults for
+// Config.QueueRetryInterval and Config.QueueMaxWaiters when queueing is
+// enabled (Config.QueueMaxWait > 0) but a caller leaves one of them unset.
+//
+// defaultQueueRetryInterval 与 defaultQueueMaxWaiters 是排队开启
+// （Config.QueueMaxWait > 0）但调用方未设置其中某项时使用的默认值。
+const (
+	defaultQueueRetryInterval = 500 * time.Millisecond
+	defaultQueueMaxWaiters    = 64
+)
+
 // Candidate is the (node, runtime instance) pair a request was dispatched
-// to, kept around so a caller can log or attribute the response to it.
+// to, kept around so a caller can attribute the response and identify backend compatibility.
+// Candidate 记录实际派发的节点与运行时，供调用方归属响应并识别后端兼容行为。
 type Candidate struct {
 	NodeID    string
 	RuntimeID string
+	// Kind identifies the selected backend, including after a retry to another node.
+	// Kind 标识实际选中的后端类型，包括重试切换节点后的类型。
+	Kind runtime.Kind
 	// Model is the runtime model id this candidate serves the request as. It
 	// differs from what the client asked for whenever a routing alias was
 	// resolved, and it is what the request is rewritten to before dispatch —
@@ -36,10 +53,12 @@ type Candidate struct {
 	Model string
 }
 
-// ModelInfo is one model advertised, with chat capability, by at least one
-// connected node.
+// ModelInfo is an available Chat or Messages model with optional display metadata.
+// ModelInfo 是可用的 Chat 或 Messages 模型及其可选显示信息。
 type ModelInfo struct {
-	ID string
+	ID           string
+	DisplayName  string
+	DisplayOrder uint32
 }
 
 // Scheduler selects a node for a request and applies the retry policy from
@@ -58,7 +77,26 @@ type Scheduler struct {
 	clock    runtime.Clock
 	breakers *breakerRegistry
 	metrics  *recorder
+	logger   *slog.Logger
 	routes   atomic.Pointer[routing.Table]
+
+	// policy and prefixBytes order candidates inside one target; see Policy.
+	// intn is the randomness PolicyPowerOfTwo draws from, a field so tests
+	// can pin it.
+	//
+	// policy 与 prefixBytes 决定同一 target 内候选的排序，见 Policy。intn 是
+	// PolicyPowerOfTwo 取随机数的来源，做成字段以便测试固定它。
+	policy      Policy
+	prefixBytes int
+	intn        func(int) int
+
+	// queueMaxWait, queueRetryInterval and queueSlots implement STATUS.md's
+	// P2 bounded task queueing for workflow submissions (see workflow.go's
+	// queueSubmitWorkflow). queueSlots is nil, and queueing disabled, unless
+	// Config.QueueMaxWait was positive at construction.
+	queueMaxWait       time.Duration
+	queueRetryInterval time.Duration
+	queueSlots         chan struct{}
 }
 
 // Config configures New. Every field is optional.
@@ -83,6 +121,13 @@ type Config struct {
 	// Metrics 接收调度器的仪器，其描述见 Descriptions。为 nil 时全部丢弃。
 	Metrics runtime.Metrics
 
+	// Logger receives one "dispatch decided" event per attempt, keyed by the
+	// request_id carried on ctx (see common/reqid). Nil discards them.
+	//
+	// Logger 接收每次尝试一条「派发决策」事件，以 ctx 上携带的 request_id
+	// (见 common/reqid)为键。为 nil 时丢弃。
+	Logger *slog.Logger
+
 	// Routes maps logical model names onto the deployments that serve them.
 	// Nil, or a table with no entry for the requested model, means the model
 	// id is used as the node advertises it — a deployment that never writes a
@@ -91,6 +136,53 @@ type Config struct {
 	// Routes 把逻辑模型名映射到服务它们的部署上。为 nil、或表中没有所请求模型的条目
 	// 时，模型 id 按节点声明的原样使用——从不编写路由表的部署，行为与此前完全一致。
 	Routes *routing.Table
+
+	// Policy orders the candidates inside one routing target for inference
+	// requests. The zero value means PolicyLeastLoad, the behavior that
+	// predates this field. Workflow submissions always use PolicyLeastLoad:
+	// see workflowCandidates for why.
+	//
+	// Policy 决定推理请求在同一个路由 target 内部的候选排序。零值表示
+	// PolicyLeastLoad，即此字段出现之前的行为。工作流提交始终使用 PolicyLeastLoad，
+	// 原因见 workflowCandidates。
+	Policy Policy
+	// PrefixBytes caps how much of a chat request's leading messages
+	// PolicyPrefixHash fingerprints. Zero uses defaultPrefixBytes (4096).
+	// Ignored by every other policy.
+	//
+	// PrefixBytes 限定 PolicyPrefixHash 对聊天请求开头消息取指纹的最大字节数。零值使用
+	// defaultPrefixBytes（4096）。其他策略忽略此字段。
+	PrefixBytes int
+
+	// QueueMaxWait bounds STATUS.md's P2 bounded task queueing for
+	// SubmitWorkflow: once every currently connected workflow-capable
+	// candidate has answered one submission attempt with a retryable
+	// backpressure-style failure, SubmitWorkflow waits up to this long,
+	// re-polling the candidate set, before giving up and returning that
+	// failure — instead of returning it immediately, which is what happens
+	// today and what the zero value (the default) still does. Queueing never
+	// applies when no candidate exists at all (ErrNoCapableNode) or when a
+	// failure is not retryable: see the P2 design doc's 有界任务排队 section
+	// for why those two cases must not wait.
+	//
+	// QueueMaxWait 限定 STATUS.md P2 的有界任务排队：当每一个当前已连接、具备工作流
+	// 能力的候选，在一轮提交尝试里都以可重试的背压类失败作答时，SubmitWorkflow 会
+	// 等待至多这么久、期间重新轮询候选集，而不是像今天（以及零值默认）这样立即把
+	// 失败返回给调用方。候选完全不存在（ErrNoCapableNode）或失败不可重试的情形永远
+	// 不排队：理由见 P2 设计文档的「有界任务排队」一节。
+	QueueMaxWait time.Duration
+	// QueueRetryInterval is how often a queued submission re-polls the
+	// candidate set while it waits. Zero (with QueueMaxWait positive) uses
+	// defaultQueueRetryInterval. Ignored when QueueMaxWait is zero.
+	QueueRetryInterval time.Duration
+	// QueueMaxWaiters bounds how many submissions may be waiting at once, so
+	// the queue itself cannot become the unbounded buffer AGENTS.md's
+	// security rules forbid ("任何一跳都不得无界缓冲"). A submission that
+	// finds the bound already reached is rejected immediately rather than
+	// becoming an unbounded third waiter axis. Zero (with QueueMaxWait
+	// positive) uses defaultQueueMaxWaiters. Ignored when QueueMaxWait is
+	// zero.
+	QueueMaxWaiters int
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
@@ -100,24 +192,71 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
+	logger := cfg.Logger
+	if logger == nil {
+		logger = slog.New(slog.DiscardHandler)
+	}
 	rec := newRecorder(cfg.Metrics)
+	policy := cfg.Policy
+	if policy == "" {
+		policy = PolicyLeastLoad
+	}
+	prefixBytes := cfg.PrefixBytes
+	if prefixBytes <= 0 {
+		prefixBytes = defaultPrefixBytes
+	}
 	s := &Scheduler{
-		server:   server,
-		clock:    clock,
-		breakers: newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
-		metrics:  rec,
+		server:      server,
+		clock:       clock,
+		breakers:    newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
+		metrics:     rec,
+		logger:      logger,
+		policy:      policy,
+		prefixBytes: prefixBytes,
+		intn:        rand.Intn,
 	}
 	s.routes.Store(cfg.Routes)
+
+	if cfg.QueueMaxWait > 0 {
+		interval := cfg.QueueRetryInterval
+		if interval <= 0 {
+			interval = defaultQueueRetryInterval
+		}
+		maxWaiters := cfg.QueueMaxWaiters
+		if maxWaiters <= 0 {
+			maxWaiters = defaultQueueMaxWaiters
+		}
+		s.queueMaxWait = cfg.QueueMaxWait
+		s.queueRetryInterval = interval
+		s.queueSlots = make(chan struct{}, maxWaiters)
+	}
 	return s
 }
 
 // SetRoutes atomically replaces routes for future requests. / SetRoutes 原子替换后续请求使用的路由。
 func (s *Scheduler) SetRoutes(table *routing.Table) { s.routes.Store(table) }
 
+// logDispatchDecision logs one dispatch attempt's outcome, keyed by the
+// request_id carried on ctx — the same one tunnelserver.Dispatch reads back
+// off ctx (common/reqid), so this line and the tunnel-side dispatch lines it
+// precedes share one correlation key across the hop.
+//
+// logDispatchDecision 记录一次派发尝试的结果，以 ctx 上携带的 request_id 为键
+// ——与 tunnelserver.Dispatch 从 ctx 读回的是同一个(common/reqid)，因此这一行
+// 与它之后隧道侧的分发日志，跨这一跳共用同一个关联键。
+func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candidate, err error) {
+	s.logger.Info("scheduler dispatch decided",
+		slog.String("request_id", reqid.FromContext(ctx)),
+		slog.String("operation", op),
+		slog.String("node_id", c.NodeID),
+		slog.String("runtime_id", c.RuntimeID),
+		slog.Bool("success", err == nil))
+}
+
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable.
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
-	candidates := s.candidates(req.Model, runtime.CapabilityChat)
+	candidates := s.chatCandidates(req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.ChatResponse{}, Candidate{}, ErrNoCapableNode
@@ -127,6 +266,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Chat(ctx, withModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "chat", c, err)
 		if err == nil {
 			return resp, c, nil
 		}
@@ -151,6 +291,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Embed(ctx, withEmbedModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "embed", c, err)
 		if err == nil {
 			return resp, c, nil
 		}
@@ -163,6 +304,62 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	return runtime.EmbeddingResponse{}, Candidate{}, lastErr
 }
 
+// Rerank dispatches req the same way Chat and Embed do.
+func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, Candidate, error) {
+	candidates := s.candidates(req.Model, runtime.CapabilityRerank)
+	s.metrics.Selection(runtime.CapabilityRerank, len(candidates))
+	if len(candidates) == 0 {
+		return runtime.RerankResponse{}, Candidate{}, ErrNoCapableNode
+	}
+	var lastErr error
+	for _, c := range candidates {
+		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Rerank(ctx, withRerankModel(req, c.Model))
+		s.breakers.record(c, err, s.clock.Now())
+		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "rerank", c, err)
+		if err == nil {
+			return resp, c, nil
+		}
+		lastErr = err
+		if !retryable(err) {
+			return runtime.RerankResponse{}, c, err
+		}
+		s.metrics.Retry(runtime.CapabilityRerank)
+	}
+	return runtime.RerankResponse{}, Candidate{}, lastErr
+}
+
+// TranscriptionCandidates ranks the nodes able to serve req.Model with
+// CapabilityAudioTranscription. It is exported, unlike Chat/Embed's own
+// candidates() call, because a caller must pick one candidate itself before
+// Transcribe starts streaming audio — see Transcribe's doc comment for why.
+//
+// TranscriptionCandidates 对能以 CapabilityAudioTranscription 服务 req.Model
+// 的节点排序。与 Chat/Embed 内部直接调用的 candidates() 不同，这里导出，是
+// 因为调用方必须在 Transcribe 开始流式发送音频之前自己选定一个候选——原因
+// 见 Transcribe 的文档注释。
+func (s *Scheduler) TranscriptionCandidates(model string) []Candidate {
+	return s.candidates(model, runtime.CapabilityAudioTranscription)
+}
+
+// Transcribe streams audio to a single, already-chosen candidate for a
+// transcription or translation task. Unlike Chat/Embed it is not a
+// multi-candidate retry loop: once bytes start flowing to c, retrying on a
+// different candidate would require the caller to re-read the whole file
+// from the start, the same reasoning UploadInput's doc comment gives for not
+// retrying an upload across nodes.
+//
+// Transcribe 把音频流式发送给一个已经选定的候选，用于一次转录或翻译任务。
+// 与 Chat/Embed 不同，它不是多候选重试循环：字节一旦开始流向 c，换一个候选
+// 重试就需要调用方从头重新读一遍整个文件——与 UploadInput 文档注释里「不跨
+// 节点重试一次上传」给出的理由相同。
+func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Transcribe(ctx, req, audio)
+	s.breakers.record(c, err, s.clock.Now())
+	s.metrics.Dispatch(c, err)
+	return resp, err
+}
+
 // ChatStream dispatches req and returns a stream already positioned to
 // deliver its first event (or io.EOF for a valid empty response). Whether a
 // request "has produced output yet" can only be answered by reading from the
@@ -171,7 +368,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 // the caller exactly as the underlying Stream reports it, with no further
 // node switch.
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
-	candidates := s.candidates(req.Model, runtime.CapabilityChatStream)
+	candidates := s.chatCandidates(req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, ErrNoCapableNode
@@ -182,6 +379,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		if err != nil {
 			s.breakers.record(c, err, s.clock.Now())
 			s.metrics.Dispatch(c, err)
+			s.logDispatchDecision(ctx, "chat_stream", c, err)
 			lastErr = err
 			if retryable(err) {
 				s.metrics.Retry(runtime.CapabilityChatStream)
@@ -194,7 +392,8 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		if err == nil {
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
-			return &prefetchStream{first: first, hasFirst: true, underlying: stream}, c, nil
+			s.logDispatchDecision(ctx, "chat_stream", c, nil)
+			return &prefetchStream[runtime.ChatEvent]{first: first, hasFirst: true, underlying: stream}, c, nil
 		}
 		stream.Close()
 		if err == io.EOF {
@@ -202,10 +401,12 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			// failed either. Do not retry a successful call.
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
-			return &prefetchStream{eof: true}, c, nil
+			s.logDispatchDecision(ctx, "chat_stream", c, nil)
+			return &prefetchStream[runtime.ChatEvent]{eof: true}, c, nil
 		}
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
+		s.logDispatchDecision(ctx, "chat_stream", c, err)
 		lastErr = err
 		// Committed() is defined to flip only once an event has been
 		// delivered, so it is necessarily still false here; the check
@@ -229,6 +430,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 //
 // Without a routing table it lists what the nodes advertise, so a deployment
 // that never writes one is unaffected.
+// Backend display positions precede unranked models; equal positions use ID order.
 //
 // Models 是公开目录：客户端此刻可以请求什么。
 //
@@ -237,20 +439,22 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // 一个用起来就 404 的目录条目，比一个缺失的条目更糟。
 //
 // 没有路由表时它列出节点声明的内容，因此从不编写路由表的部署不受影响。
+// 后端显示位置排在未指定位置的模型之前；相同位置按 ID 排序。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	_ = ctx
 	routes := s.routes.Load()
 	if routes.Len() > 0 {
 		var out []ModelInfo
 		for _, alias := range routes.Models() {
-			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 {
+			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(routes, alias, runtime.CapabilityMessages)) > 0 ||
+				len(s.candidatesWith(routes, alias, runtime.CapabilityImageGeneration)) > 0 {
 				out = append(out, ModelInfo{ID: alias})
 			}
 		}
 		return out
 	}
 
-	seen := make(map[string]struct{})
+	seen := make(map[string]ModelInfo)
 	var out []ModelInfo
 	for _, node := range s.server.Nodes() {
 		if !node.Live || node.Draining || node.Maintenance {
@@ -261,20 +465,41 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 				continue
 			}
 			for _, m := range snap.Discovery.Models {
-				if _, ok := seen[m.ID]; ok {
-					continue
-				}
 				effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
-				if effective.Require(runtime.CapabilityChat) != nil {
+				if effective.Require(runtime.CapabilityChat) != nil && effective.Require(runtime.CapabilityMessages) != nil &&
+					effective.Require(runtime.CapabilityImageGeneration) != nil {
 					continue
 				}
-				seen[m.ID] = struct{}{}
-				out = append(out, ModelInfo{ID: m.ID})
+				info := ModelInfo{ID: m.ID, DisplayName: m.DisplayName, DisplayOrder: m.DisplayOrder}
+				if prior, ok := seen[m.ID]; !ok || modelInfoLess(info, prior) {
+					seen[m.ID] = info
+				}
 			}
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	for _, info := range seen {
+		out = append(out, info)
+	}
+	sort.Slice(out, func(i, j int) bool { return modelInfoLess(out[i], out[j]) })
 	return out
+}
+
+// modelInfoLess keeps backend positions first and resolves ties deterministically.
+// modelInfoLess 优先采用后端目录位置，并以确定性规则处理相同位置。
+func modelInfoLess(a, b ModelInfo) bool {
+	if (a.DisplayOrder == 0) != (b.DisplayOrder == 0) {
+		return a.DisplayOrder != 0
+	}
+	if a.DisplayOrder != b.DisplayOrder {
+		return a.DisplayOrder < b.DisplayOrder
+	}
+	if a.ID != b.ID {
+		return a.ID < b.ID
+	}
+	if (a.DisplayName == "") != (b.DisplayName == "") {
+		return a.DisplayName != ""
+	}
+	return a.DisplayName < b.DisplayName
 }
 
 // candidates resolves the requested model through the routing table and
@@ -297,11 +522,34 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 	return s.candidatesWith(s.routes.Load(), model, cap)
 }
 
+// chatCandidates is candidates for a chat request, which alone carries a
+// prompt prefix for PolicyPrefixHash to pin. The fingerprint is only computed
+// when that policy is active, so the other policies pay nothing for it.
+//
+// chatCandidates 是聊天请求版的 candidates：只有聊天请求携带可供 PolicyPrefixHash
+// 固定的提示前缀。指纹只在该策略生效时才计算，其他策略不为此付出任何代价。
+func (s *Scheduler) chatCandidates(req runtime.ChatRequest, cap runtime.Capability) []Candidate {
+	var key affinity
+	if s.policy == PolicyPrefixHash {
+		key = prefixAffinity(req, s.prefixBytes)
+	}
+	return s.candidatesKeyed(s.routes.Load(), req.Model, cap, key, rand.Float64)
+}
+
 func (s *Scheduler) candidatesWith(routes *routing.Table, model string, cap runtime.Capability) []Candidate {
 	return s.candidatesWithRandom(routes, model, cap, rand.Float64)
 }
 
 func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, cap runtime.Capability, draw func() float64) []Candidate {
+	return s.candidatesKeyed(routes, model, cap, affinity{}, draw)
+}
+
+// candidatesKeyed is the shared body of every candidates variant: key is the
+// request's prefix fingerprint, empty for requests that have none.
+//
+// candidatesKeyed 是各 candidates 变体共用的实现：key 是请求的前缀指纹，没有前缀的
+// 请求传空值。
+func (s *Scheduler) candidatesKeyed(routes *routing.Table, model string, cap runtime.Capability, key affinity, draw func() float64) []Candidate {
 	targets, routed := routes.Resolve(model)
 	if !routed {
 		// An unrouted model is used exactly as the node advertises it. A
@@ -313,22 +561,22 @@ func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, ca
 
 	groups := make([]targetCandidates, 0, len(targets))
 	for _, target := range targets {
-		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(target, cap)})
+		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(target, cap, key)})
 	}
 	return weightedCandidates(groups, draw)
 }
 
 // pick returns every (node, runtime) pair that can serve target with cap,
-// ordered best first: most idle inference slots, then fewest in-flight
-// requests, matching README's "最少正在执行请求" strategy. Nodes are shuffled
-// before that sort so requests do not all pile onto the same node whenever
-// several are tied.
+// ordered best first by the configured Policy — by default most idle
+// inference slots, then fewest in-flight requests, matching README's
+// "最少正在执行请求" strategy. Nodes are shuffled before that sort so requests
+// do not all pile onto the same node whenever several are tied.
 //
-// pick 返回每一个能以 cap 服务 target 的 (node, runtime) 对，最优的在前：空闲推理槽
-// 最多的优先，其次是在途请求最少的，对应 README 的「最少正在执行请求」策略。排序前先
-// 打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
-func (s *Scheduler) pick(target routing.Target, cap runtime.Capability) []Candidate {
-	return s.pickBy(target, func(snap runtime.Snapshot) bool {
+// pick 返回每一个能以 cap 服务 target 的 (node, runtime) 对，按配置的 Policy 最优的
+// 在前——默认是空闲推理槽最多的优先，其次是在途请求最少的，对应 README 的「最少正在
+// 执行请求」策略。排序前先打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
+func (s *Scheduler) pick(target routing.Target, cap runtime.Capability, key affinity) []Candidate {
+	return s.pickBy(target, s.policy, key, func(snap runtime.Snapshot) bool {
 		for _, m := range snap.Discovery.Models {
 			if m.ID != target.RuntimeModel {
 				continue
@@ -344,7 +592,7 @@ func (s *Scheduler) pick(target routing.Target, cap runtime.Capability) []Candid
 
 // pickBy is the shared selection walk: node health, the target's node
 // selector, the caller's own eligibility test, and the circuit breaker, then
-// the load ordering.
+// the ordering policy names (see orderCandidates).
 //
 // What "eligible" means is the caller's to define — a model plus a capability
 // for inference, a runtime-level capability for workflows — so that the two
@@ -352,17 +600,11 @@ func (s *Scheduler) pick(target routing.Target, cap runtime.Capability) []Candid
 // growing two copies that drift.
 //
 // pickBy 是共用的选择流程：节点健康、target 的节点选择器、调用方自己的资格判定、
-// 熔断器，然后是负载排序。
+// 熔断器，然后按 policy 指定的方式排序（见 orderCandidates）。
 //
 // 「有资格」的含义由调用方定义——推理是模型加能力，工作流是 runtime 层的能力——这样
 // 两者共用同一套健康过滤、同一次熔断检查与同一套排序，而不是长出两份会各自漂移的拷贝。
-func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot) bool) []Candidate {
-	type scored struct {
-		Candidate
-		idle     int
-		inflight int
-	}
-
+func (s *Scheduler) pickBy(target routing.Target, policy Policy, key affinity, eligible func(runtime.Snapshot) bool) []Candidate {
 	nodes := s.server.Nodes()
 	rand.Shuffle(len(nodes), func(i, j int) { nodes[i], nodes[j] = nodes[j], nodes[i] })
 	now := s.clock.Now()
@@ -381,6 +623,20 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 		if !target.MatchesNode(node.Labels) {
 			continue
 		}
+		// STATUS.md's P2 admission-threshold filtering: a node whose
+		// declared GPU memory total cannot meet the target's requirement is
+		// excluded before either runtime on it is even looked at, the same
+		// way the node selector is. Checked once per node, not per runtime,
+		// because NodeResources describes the machine, not any one runtime
+		// instance on it.
+		//
+		// STATUS.md P2 的准入门槛过滤：一个声明的 GPU 显存总量达不到 target 要求的
+		// 节点，在其上任何一个 runtime 被看到之前就被排除，与节点选择器同一时机。
+		// 按节点而非按 runtime 检查一次，因为 NodeResources 描述的是这台机器，不是
+		// 它上面的某一个 runtime 实例。
+		if !nodeHasCapacity(node, target.MinGPUMemoryBytes) {
+			continue
+		}
 		idle := node.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_INFERENCE]
 		for _, snap := range node.Runtimes {
 			if !runtimeHealthy(snap.State) {
@@ -389,30 +645,44 @@ func (s *Scheduler) pickBy(target routing.Target, eligible func(runtime.Snapshot
 			if !eligible(snap) {
 				continue
 			}
-			candidate := Candidate{NodeID: node.NodeID, RuntimeID: snap.Descriptor.ID, Model: target.RuntimeModel}
+			candidate := Candidate{NodeID: node.NodeID, RuntimeID: snap.Descriptor.ID, Kind: snap.Descriptor.Kind, Model: target.RuntimeModel}
 			if !s.breakers.eligible(candidate, now) {
 				continue
 			}
 			found = append(found, scored{
 				Candidate: candidate,
 				idle:      idle,
+				queued:    snap.Health.QueueRunning + snap.Health.QueuePending,
 				inflight:  node.InflightRequests,
 			})
 		}
 	}
 
-	sort.SliceStable(found, func(i, j int) bool {
-		if found[i].idle != found[j].idle {
-			return found[i].idle > found[j].idle
-		}
-		return found[i].inflight < found[j].inflight
-	})
+	orderCandidates(found, policy, key, s.intn)
 
 	candidates := make([]Candidate, len(found))
 	for i, f := range found {
 		candidates[i] = f.Candidate
 	}
 	return candidates
+}
+
+// nodeHasCapacity reports whether node's declared GPU memory total meets
+// minBytes. minBytes <= 0 means the target set no requirement, which always
+// passes. A node that has not reported hardware, or reported zero GPU
+// memory, also always passes: an undeclared capacity is not evidence of
+// insufficient capacity — see modelroute.Target.MinGPUMemoryBytes's doc
+// comment for why this default-open behavior is deliberate.
+//
+// nodeHasCapacity 报告 node 声明的 GPU 显存总量是否达到 minBytes。minBytes <= 0
+// 表示 target 未设置要求，永远通过。一个尚未上报硬件、或上报零 GPU 显存的节点同样
+// 永远通过：未声明的容量不是容量不足的证据——这个默认放行的行为为何是刻意的，见
+// modelroute.Target.MinGPUMemoryBytes 的文档注释。
+func nodeHasCapacity(node tunnelserver.NodeInfo, minBytes int64) bool {
+	if minBytes <= 0 || node.Resources == nil || node.Resources.GpuMemoryBytes <= 0 {
+		return true
+	}
+	return node.Resources.GpuMemoryBytes >= minBytes
 }
 
 // withModel returns req rewritten to the runtime model a candidate serves.
@@ -434,6 +704,18 @@ func withModel(req runtime.ChatRequest, model string) runtime.ChatRequest {
 //
 // withEmbedModel 是嵌入请求版的 withModel。
 func withEmbedModel(req runtime.EmbeddingRequest, model string) runtime.EmbeddingRequest {
+	if model == "" || model == req.Model {
+		return req
+	}
+	out := req
+	out.Model = model
+	return out
+}
+
+// withRerankModel is withModel for rerank requests.
+//
+// withRerankModel 是 rerank 请求版的 withModel。
+func withRerankModel(req runtime.RerankRequest, model string) runtime.RerankRequest {
 	if model == "" || model == req.Model {
 		return req
 	}
@@ -476,34 +758,38 @@ func retryable(err error) bool {
 }
 
 // prefetchStream replays an already-received first event before delegating
-// to the underlying Stream, so ChatStream can peek at the first event to
-// decide whether to retry without losing it.
-type prefetchStream struct {
-	first      runtime.ChatEvent
+// to the underlying Stream, so ChatStream and MessagesStart can peek at the
+// first event to decide whether to retry without losing it.
+//
+// prefetchStream 先重放已收到的首个事件，再交给底层 Stream，使 ChatStream 与
+// MessagesStart 能先看首个事件来决定是否重试，又不丢失该事件。
+type prefetchStream[T any] struct {
+	first      T
 	hasFirst   bool
 	eof        bool
-	underlying runtime.Stream[runtime.ChatEvent]
+	underlying runtime.Stream[T]
 }
 
-func (p *prefetchStream) Recv() (runtime.ChatEvent, error) {
+func (p *prefetchStream[T]) Recv() (T, error) {
 	if p.hasFirst {
 		p.hasFirst = false
 		return p.first, nil
 	}
 	if p.eof {
-		return runtime.ChatEvent{}, io.EOF
+		var zero T
+		return zero, io.EOF
 	}
 	return p.underlying.Recv()
 }
 
-func (p *prefetchStream) Committed() bool {
+func (p *prefetchStream[T]) Committed() bool {
 	if p.underlying == nil {
 		return false
 	}
 	return p.underlying.Committed()
 }
 
-func (p *prefetchStream) Close() error {
+func (p *prefetchStream[T]) Close() error {
 	if p.underlying == nil {
 		return nil
 	}

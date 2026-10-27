@@ -49,7 +49,15 @@ export interface ServerConfig {
    * Console 走的是明文 HTTP。 */
   cookieSecure: boolean;
   timeoutMs: number;
-
+  /** signupEnabled shows the self-service sign-up page and its link on the
+   * sign-in page. It must agree with the control plane's Signup.Enabled:
+   * this flag only decides what the Console offers, and a sign-up the
+   * control plane has not enabled still fails there with 404.
+   *
+   * signupEnabled 决定是否提供自助注册页及登录页上的注册入口。它必须与控制面的
+   * Signup.Enabled 一致：本开关只决定 Console 展示什么，控制面未开启时注册仍会在
+   * 那里以 404 失败。 */
+  signupEnabled: boolean;
 }
 
 /** cached holds the resolved configuration for the life of the process.
@@ -87,6 +95,7 @@ export function serverConfig(): ServerConfig {
       process.env.AISW_CONSOLE_UPSTREAM_TIMEOUT_MS,
       DEFAULT_TIMEOUT_MS
     ),
+    signupEnabled: flag(process.env.AISW_CONSOLE_SIGNUP_ENABLED, false),
   };
   return cached;
 }
@@ -144,6 +153,38 @@ function gatewayUrl(): string {
     throw new Error("AISW_CONSOLE_GATEWAY_URL must use http or https");
   }
   return parsed.origin;
+}
+
+/** publicGatewayUrl is the base address the API reference shows tenants in
+ * its examples. The Console's own gatewayUrl is often a loopback or cluster
+ * address a tenant cannot reach, so AISW_CONSOLE_PUBLIC_GATEWAY_URL names the
+ * public one; unset, the reference falls back to gatewayUrl. Unlike the other
+ * readers it keeps a path prefix, since a public Gateway may sit behind one.
+ * A malformed value is not fatal here — it only decorates documentation — so
+ * it falls back too.
+ *
+ * publicGatewayUrl 是 API 参考文档在示例中向租户展示的基地址。Console 自己的
+ * gatewayUrl 往往是租户访问不到的回环或集群地址，因此由
+ * AISW_CONSOLE_PUBLIC_GATEWAY_URL 指定公开地址；未设置时退回 gatewayUrl。与其他
+ * 读取函数不同，它保留路径前缀，因为公开的 Gateway 可能挂在某个前缀之下。畸形的值在
+ * 这里不致命——它只用于装饰文档——同样退回。 */
+export function publicGatewayUrl(): string {
+  const raw = process.env.AISW_CONSOLE_PUBLIC_GATEWAY_URL?.trim();
+  if (raw) {
+    try {
+      const parsed = new URL(raw);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+      }
+    } catch {
+      // Fall through to the data-plane address. / 退回数据面地址。
+    }
+  }
+  try {
+    return gatewayUrl();
+  } catch {
+    return DEFAULT_GATEWAY_URL;
+  }
 }
 
 /**

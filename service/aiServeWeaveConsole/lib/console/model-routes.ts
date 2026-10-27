@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import { ApiError, describe } from "./errors.ts";
 
 /** MAX_ROUTES_BYTES bounds imported bundles. / MAX_ROUTES_BYTES 限制导入集合大小。 */
@@ -5,7 +7,7 @@ export const MAX_ROUTES_BYTES = 1 << 20;
 /** MAX_ROUTE_DOCUMENT_BYTES allows bounded snapshot metadata. / MAX_ROUTE_DOCUMENT_BYTES 为快照元数据预留有界空间。 */
 export const MAX_ROUTE_DOCUMENT_BYTES = MAX_ROUTES_BYTES + 64 * 1024;
 /** ModelTarget preserves Gateway target semantics. / ModelTarget 保留 Gateway 目标语义。 */
-export interface ModelTarget { runtime_model: string; node_selector?: Record<string, string>; priority?: number; weight?: number }
+export interface ModelTarget { runtime_model: string; node_selector?: Record<string, string>; priority?: number; weight?: number; min_gpu_memory_bytes?: number }
 /** ModelRoute maps an alias to targets. / ModelRoute 把别名映射到目标。 */
 export interface ModelRoute { model: string; targets: ModelTarget[] }
 /** RouteRevision describes an immutable publication. / RouteRevision 描述不可变发布。 */
@@ -37,11 +39,12 @@ export function parseRoutes(value: unknown): ModelRoute[] {
     if (!model.trim() || aliases.has(model) || !Array.isArray(route.targets) || route.targets.length < 1 || route.targets.length > 100) throw new ApiError("invalid");
     aliases.add(model);
     return { model, targets: route.targets.map((item) => {
-      const target = object(item); known(target, ["runtime_model", "node_selector", "priority", "weight"]);
+      const target = object(item); known(target, ["runtime_model", "node_selector", "priority", "weight", "min_gpu_memory_bytes"]);
       const result: ModelTarget = { runtime_model: string(target.runtime_model) };
       if (!result.runtime_model.trim()) throw new ApiError("invalid");
       if (target.priority !== undefined) result.priority = integer(target.priority, Number.MIN_SAFE_INTEGER);
       if (target.weight !== undefined) result.weight = integer(target.weight);
+      if (target.min_gpu_memory_bytes !== undefined) result.min_gpu_memory_bytes = integer(target.min_gpu_memory_bytes);
       if (target.node_selector !== undefined && target.node_selector !== null) result.node_selector = Object.fromEntries(Object.entries(object(target.node_selector)).map(([key, value]) => { if (!key.trim()) throw new ApiError("invalid"); return [key, string(value)]; }));
       return result;
     }) };
@@ -92,8 +95,9 @@ export async function importRouteFile(file: Pick<Blob, "size" | "stream">): Prom
   } catch { throw new ApiError("invalid"); } finally { reader.releaseLock(); }
 }
 /** routeWriteMessage explains conflicts without discarding the draft. / routeWriteMessage 解释冲突且不丢弃草稿。 */
-export function routeWriteMessage(error: unknown): string {
-  return error instanceof ApiError && error.kind === "conflict" ? "当前版本已变化，草稿已保留。请重新读取当前版本，比较后再次确认发布。" : `${describe(error)} 草稿已保留；请刷新当前版本核对结果。`;
+export function routeWriteMessage(error: unknown, locale: Locale = DEFAULT_LOCALE): string {
+  const t = coreTranslator(locale);
+  return error instanceof ApiError && error.kind === "conflict" ? t("common.theCurrentVersionHasChangedYourDraftHas") : t("common.yourDraftHasBeenKeptRefreshTheCurrent", { value: describe(error, locale) });
 }
 
 /** routeBodyLimit raises the bound only for matched bundle-writing paths. / routeBodyLimit 仅对已匹配的集合写入路径提高上限。 */

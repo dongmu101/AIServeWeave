@@ -1,0 +1,37 @@
+{
+  "menuLabels": {
+    "linearMode_appModeToolbar_apps": "Applications"
+  },
+  "settingsCategories": {
+    "Nodes 2_0": "Nœuds 2.0",
+    "3DViewer": "Visionneuse 3D",
+    "RerouteBeta": "Reroutage (bêta)"
+  },
+  "cloudOnboarding": {
+    "authTimeout": {
+      "causes": [
+        "Pare-feu ou proxy d’entreprise bloquant les services d’authentification",
+        "Restrictions du VPN ou du réseau",
+        "Extensions du navigateur perturbant les requêtes",
+        "Restrictions réseau régionales",
+        "Essayez un autre navigateur ou réseau"
+      ]
+    }
+  },
+  "errorDialog": {
+    "accessRestrictedTitle": "Accès restreint",
+    "accessRestrictedMessage": "Votre compte n’est pas autorisé à utiliser cette fonctionnalité."
+  },
+  "helpCenter": {
+    "managerExtension": "Extension Manager"
+  },
+  "nodeCategories": {
+    "guidance": "guidage",
+    "cond pair": "paire de conditionnements"
+  },
+  "load3d": {
+    "materialModes": {
+      "lineart": "Dessin au trait"
+    }
+  }
+}

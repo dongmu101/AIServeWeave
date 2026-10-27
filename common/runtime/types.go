@@ -13,9 +13,147 @@ const (
 	KindSGLang  Kind = "sglang"
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
+	// KindTRTLLM names an NVIDIA TensorRT-LLM `trtllm-serve` OpenAI-compatible server.
+	// KindTRTLLM 表示 NVIDIA TensorRT-LLM 的 `trtllm-serve` OpenAI 兼容服务。
+	KindTRTLLM Kind = "trtllm"
+	// KindTokenSpeed names a `tokenspeed serve` deployment, whose HTTP front end is an SMG gateway.
+	// KindTokenSpeed 表示 `tokenspeed serve` 部署，其 HTTP 前端是一个 SMG 网关。
+	KindTokenSpeed Kind = "tokenspeed"
+	// KindCodex names the Agent-local Codex app-server adapter.
+	// KindCodex 表示 Agent 本地的 Codex app-server 适配器。
+	KindCodex Kind = "codex"
+	// KindClaude names the locally declared Claude Code Messages adapter.
+	// KindClaude 表示本地声明的 Claude Code Messages 适配器。
+	KindClaude Kind = "claude"
+
+	// Agent-local headless CLI text adapters live in
+	// service/aiServeWeaveAgent/cliagent.
+	// Agent 本地的 headless CLI 文本适配器位于 service/aiServeWeaveAgent/cliagent。
+
+	// KindGrok names the Agent-local Grok CLI adapter.
+	// KindGrok 表示 Agent 本地的 Grok CLI 适配器。
+	KindGrok Kind = "grok"
+	// KindOpenCode names the Agent-local OpenCode CLI adapter.
+	// KindOpenCode 表示 Agent 本地的 OpenCode CLI 适配器。
+	KindOpenCode Kind = "opencode"
+	// KindCursor names the Agent-local Cursor Agent CLI adapter.
+	// KindCursor 表示 Agent 本地的 Cursor Agent CLI 适配器。
+	KindCursor Kind = "cursor"
+	// KindCodeBuddy names the Agent-local CodeBuddy Code CLI adapter.
+	// KindCodeBuddy 表示 Agent 本地的 CodeBuddy Code CLI 适配器。
+	KindCodeBuddy Kind = "codebuddy"
+	// KindQoder names the Agent-local Qoder CLI adapter.
+	// KindQoder 表示 Agent 本地的 Qoder CLI 适配器。
+	KindQoder Kind = "qoder"
+	// KindPi names the Agent-local Pi Coding Agent CLI adapter.
+	// KindPi 表示 Agent 本地的 Pi Coding Agent CLI 适配器。
+	KindPi Kind = "pi"
+	// KindGeminiCLI names the local Gemini CLI Nano Banana image extension.
+	// KindGeminiCLI 表示本地 Gemini CLI 的 Nano Banana 生图扩展。
+	KindGeminiCLI Kind = "gemini-cli"
+
+	// Hosted OpenAI-compatible providers live in common/runtime/hosted.
+	// 托管的 OpenAI 兼容供应商位于 common/runtime/hosted。
+
+	// KindOpenAI names the OpenAI API.
+	// KindOpenAI 表示 OpenAI API。
+	KindOpenAI Kind = "openai"
+	// KindGemini names the Gemini API through Google's OpenAI-compatible endpoint.
+	// KindGemini 表示经 Google OpenAI 兼容端点访问的 Gemini API。
+	KindGemini Kind = "gemini"
+	// KindDeepSeek names the DeepSeek API.
+	// KindDeepSeek 表示 DeepSeek API。
+	KindDeepSeek Kind = "deepseek"
+	// KindKimi names the Moonshot Kimi API.
+	// KindKimi 表示月之暗面 Kimi API。
+	KindKimi Kind = "kimi"
+	// KindQwen names the Alibaba Cloud DashScope Qwen API in compatible mode.
+	// KindQwen 表示阿里云百炼通义千问兼容模式 API。
+	KindQwen Kind = "qwen"
+	// KindZhipu names the Zhipu GLM API.
+	// KindZhipu 表示智谱 GLM API。
+	KindZhipu Kind = "zhipu"
+	// KindMiniMax names the MiniMax API.
+	// KindMiniMax 表示 MiniMax API。
+	KindMiniMax Kind = "minimax"
+	// KindOpenAICompatible names any OpenAI-compatible endpoint; base_url is
+	// required.
+	// KindOpenAICompatible 表示任意 OpenAI 兼容端点，必须填写 base_url。
+	KindOpenAICompatible Kind = "openai_compatible"
+
+	// Anthropic Messages providers live in common/runtime/anthropic.
+	// Anthropic Messages 供应商位于 common/runtime/anthropic。
+
+	// KindAnthropic names the official Anthropic Claude API.
+	// KindAnthropic 表示 Anthropic 官方 Claude API。
+	KindAnthropic Kind = "anthropic"
+	// KindAnthropicCompatible names any Anthropic Messages-compatible endpoint;
+	// base_url is required.
+	// KindAnthropicCompatible 表示任意 Anthropic Messages 兼容端点，必须填写 base_url。
+	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 
+// IsLocalCLI reports whether k is an Agent-local CLI backend with local
+// authentication rather than an HTTP address or forwarded credentials.
+// The Gemini CLI image extension reads its API key from the local environment.
+//
+// IsLocalCLI 报告 k 是否为 Agent 本地 CLI 后端：仅在本机鉴权，不接受 HTTP
+// 地址或转发凭据。Gemini CLI 生图扩展使用本机环境变量中的 API Key。
+func (k Kind) IsLocalCLI() bool {
+	switch k {
+	case KindCodex, KindClaude, KindGrok, KindOpenCode, KindCursor, KindCodeBuddy, KindQoder, KindPi, KindGeminiCLI:
+		return true
+	}
+	return false
+}
+
+// IsHosted reports whether k is a hosted API provider reached over the
+// internet with an operator-held API key. Such runtimes must be declared
+// locally, because their credential must never be pointed at an address a
+// Gateway chose.
+//
+// IsHosted 报告 k 是否为经互联网访问、使用运维持有的 API 密钥的托管 API 供应商。
+// 这类运行时必须在本地声明，因为它们的凭据绝不能被指向 Gateway 选定的地址。
+func (k Kind) IsHosted() bool {
+	switch k {
+	case KindOpenAI, KindGemini, KindDeepSeek, KindKimi, KindQwen, KindZhipu, KindMiniMax, KindOpenAICompatible,
+		KindAnthropic, KindAnthropicCompatible:
+		return true
+	}
+	return false
+}
+
+// defaultBaseURLs are the documented API roots Normalize fills in when a
+// hosted runtime leaves base_url empty. OpenAI-compatible roots include the
+// version segment, as each provider documents for its SDK base_url; the
+// Anthropic root does not, matching ANTHROPIC_BASE_URL. The *_compatible
+// kinds have no default.
+//
+// defaultBaseURLs 是托管运行时未填写 base_url 时由 Normalize 填入的官方 API 根
+// 地址。OpenAI 兼容的根地址包含版本段，与各供应商为 SDK base_url 给出的写法一致；
+// Anthropic 根地址不含版本段，与 ANTHROPIC_BASE_URL 一致。*_compatible 种类没有
+// 默认值。
+var defaultBaseURLs = map[Kind]string{
+	KindOpenAI:    "https://api.openai.com/v1",
+	KindGemini:    "https://generativelanguage.googleapis.com/v1beta/openai",
+	KindDeepSeek:  "https://api.deepseek.com/v1",
+	KindKimi:      "https://api.moonshot.cn/v1",
+	KindQwen:      "https://dashscope.aliyuncs.com/compatible-mode/v1",
+	KindZhipu:     "https://open.bigmodel.cn/api/paas/v4",
+	KindMiniMax:   "https://api.minimaxi.com/v1",
+	KindAnthropic: "https://api.anthropic.com",
+}
+
+// DefaultBaseURL returns the documented API root for a hosted kind, or "".
+// DefaultBaseURL 返回托管种类的官方 API 根地址，没有则返回 ""。
+func DefaultBaseURL(k Kind) string { return defaultBaseURLs[k] }
+
 type Config struct {
+	// AllowUnavailable keeps failed initial probes as unhealthy instances and retries them.
+	// AllowUnavailable 允许初始探测失败时保留未就绪实例，并定期重试。
+	// This is a local startup policy and is never accepted over the tunnel.
+	// 此字段仅控制本地启动策略，不通过隧道接收。
+	AllowUnavailable    bool
 	ID                  string
 	Kind                Kind
 	BaseURL             string
@@ -30,6 +168,14 @@ type Config struct {
 	TLS                 TLSConfig
 	CapabilityOverrides map[Capability]SupportLevel
 	Exclusive           bool
+	// Models is an operator-declared model catalogue for an endpoint that
+	// cannot list its own models. When set, a hosted runtime publishes
+	// exactly these IDs instead of the endpoint's listing. Local only; it is
+	// never accepted over the tunnel.
+	//
+	// Models 是运维为无法列出自身模型的端点声明的模型目录。设置后，托管运行时
+	// 发布的正是这些 ID，而不是端点返回的列表。仅限本地，从不通过隧道接收。
+	Models []string
 }
 type TLSConfig struct {
 	CAFile             string
@@ -73,12 +219,23 @@ type ProbeResult struct {
 
 // HealthReport is a point-in-time health snapshot. ErrorSummary contains a
 // sanitized diagnostic message and must not include credentials, headers, or
-// request payloads.
+// request payloads. QueueRunning and QueuePending are a ComfyUI-only
+// occupancy signal (STATUS.md's P2 realtime-utilization subtask): every
+// other runtime kind leaves both 0, and the scheduler treats that the same
+// as "not reported", so it never penalizes a runtime kind that has no queue
+// concept.
+//
+// HealthReport 是某一时刻的健康快照。ErrorSummary 是脱敏后的诊断信息，不得包含
+// 凭据、Header 或请求体。QueueRunning 与 QueuePending 是仅 ComfyUI 才有的占用信号
+// （STATUS.md P2 的实时利用率子任务）：其余运行时种类两者恒为 0，调度器把这与
+// "未上报"同等对待，因此不会惩罚本就没有队列概念的运行时种类。
 type HealthReport struct {
 	State        State
 	Latency      time.Duration
 	CheckedAt    time.Time
 	ErrorSummary string
+	QueueRunning int
+	QueuePending int
 }
 
 // Discovery is an immutable-by-convention snapshot of runtime metadata and
@@ -94,9 +251,16 @@ type Discovery struct {
 
 // Model describes a backend model and the capabilities supported by that
 // specific model. Unknown capabilities remain explicitly unknown.
+// Model 描述后端模型及其能力；未知能力保持未知。
 type Model struct {
 	ID           string
 	Capabilities CapabilitySet
+	// DisplayName is an optional backend-provided label; ID remains the request identifier.
+	// DisplayName 是后端提供的可选显示名称；请求仍使用 ID。
+	DisplayName string
+	// DisplayOrder is a one-based backend catalogue position; zero keeps ID ordering.
+	// DisplayOrder 是从 1 开始的后端目录位置；零值保持按 ID 排序。
+	DisplayOrder uint32
 }
 
 // ChatRequest is the protocol-neutral request Chat and ChatStream accept.
@@ -170,11 +334,113 @@ type JSONSchemaFormat struct {
 }
 
 type ChatMessage struct {
-	Role       string
-	Content    string
-	Name       string
-	ToolCallID string
-	ToolCalls  []ToolCall
+	Role string
+	// Content is the message's text. For a multi-part message that mixes
+	// text with images, ContentParts is set instead and Content stays
+	// empty — see ContentParts. This is the overwhelmingly common case, so
+	// every existing caller that only ever sets Content is unaffected by
+	// ContentParts existing.
+	//
+	// Content 是消息的文本。混合文本与图片的多部分消息改用 ContentParts 承载，
+	// 此时 Content 留空——见 ContentParts。纯文本是绝大多数情况，因此只设置
+	// Content 的既有调用方不受 ContentParts 存在的影响。
+	Content string
+	// ContentParts carries a multi-part message body (STATUS.md's P2
+	// ChatMessage.Content structured rework): ordered text and image
+	// parts, mirroring the content-array shape OpenAI and the
+	// OpenAI-compatible vLLM/SGLang/Ollama endpoints for vision models all
+	// accept. Nil for a text-only message — see Content.
+	//
+	// ContentParts 承载多部分消息体（STATUS.md 的 P2 ChatMessage.Content
+	// 结构化改造）：有序的文本与图片片段，对应 OpenAI 以及面向视觉模型的
+	// vLLM/SGLang/Ollama OpenAI 兼容端点共同接受的 content 数组形状。纯文本
+	// 消息留空——见 Content。
+	ContentParts []ContentPart
+	Name         string
+	ToolCallID   string
+	ToolCalls    []ToolCall
+}
+
+// ContentPart is one piece of a multi-part ChatMessage.ContentParts: a text
+// run, an image reference, an inline audio payload, or an inline file/
+// document reference — the four part types this codebase's front doors and
+// adapters support.
+//
+// ContentPart 是 ChatMessage.ContentParts 的一个片段：文本、图片引用、内联
+// 音频负载，或内联文件/文档引用——是本代码库前门与适配器所支持的四种片段
+// 类型。
+type ContentPart struct {
+	// Type is "text", "image_url", "input_audio", or "file".
+	Type string
+	// Text is set when Type == "text".
+	Text string
+	// ImageURL is set when Type == "image_url".
+	ImageURL *ContentImageURL
+	// Audio is set when Type == "input_audio".
+	Audio *ContentAudio
+	// File is set when Type == "file".
+	File *ContentFile
+}
+
+// ContentImageURL is an image content part's source, mirroring the
+// OpenAI-compatible image_url object. URL may be an http(s) URL or a data:
+// URI carrying inline base64 image bytes — this package does not
+// distinguish them; the backend does.
+//
+// ContentImageURL 是图片内容片段的来源，对应 OpenAI 兼容的 image_url 对象。
+// URL 既可以是 http(s) 地址，也可以是内联 base64 图片字节的 data: URI——本包
+// 不区分两者，交给后端处理。
+type ContentImageURL struct {
+	URL string
+	// Detail is optional and mirrors OpenAI's image_url.detail ("auto",
+	// "low", "high"); empty means the backend's own default.
+	//
+	// Detail 可选，对应 OpenAI 的 image_url.detail（"auto"、"low"、
+	// "high"）；留空表示交给后端自己的默认值。
+	Detail string
+}
+
+// ContentAudio is an "input_audio" content part's inline payload, mirroring
+// OpenAI Chat Completions' audio input shape for an audio-capable model
+// (STATUS.md's P2 multimodal input). Unlike ContentImageURL/ContentFile it
+// is never a URL — OpenAI defines this part as raw base64 bytes plus a
+// format string, so this package preserves that shape rather than wrapping
+// it in a data: URI.
+//
+// ContentAudio 是 "input_audio" 内容片段的内联负载，对应 OpenAI Chat
+// Completions 面向具备音频能力模型的音频输入形状（STATUS.md 的 P2 多模态
+// 输入）。与 ContentImageURL/ContentFile 不同，它从不是 URL——OpenAI 把这个
+// 部件定义为原始 base64 字节加一个格式字符串，因此本包保留这个形状，而不是
+// 把它包进 data: URI。
+type ContentAudio struct {
+	// Data is base64-encoded audio bytes, mirroring OpenAI's
+	// input_audio.data.
+	//
+	// Data 是 base64 编码的音频字节，对应 OpenAI 的 input_audio.data。
+	Data string
+	// Format is e.g. "wav" or "mp3", mirroring OpenAI's input_audio.format.
+	//
+	// Format 例如 "wav" 或 "mp3"，对应 OpenAI 的 input_audio.format。
+	Format string
+}
+
+// ContentFile is a "file" content part's source: an inline document such as
+// a PDF, mirroring Anthropic's "document" content block and the OpenAI
+// Responses "input_file" part (STATUS.md's P2 multimodal input). URL
+// follows the same http(s)-URL-or-data:-URI convention as
+// ContentImageURL.URL.
+//
+// ContentFile 是 "file" 内容片段的来源：一份内联文档（例如 PDF），对应
+// Anthropic 的 "document" 内容块与 OpenAI Responses 的 "input_file" 部件
+// （STATUS.md 的 P2 多模态输入）。URL 遵循与 ContentImageURL.URL 相同的
+// http(s) 地址或 data: URI 约定。
+type ContentFile struct {
+	URL string
+	// Filename is optional, carried through for a backend that wants to
+	// show or log it; this package does not interpret it.
+	//
+	// Filename 可选，透传给可能想展示或记录它的后端；本包不解读它。
+	Filename string
 }
 
 type ChatResponse struct {
@@ -246,6 +512,40 @@ type Embedding struct {
 	Vector []float32
 }
 
+// RerankRequest asks a backend to score Documents against Query and return
+// them ordered by relevance. TopN, when set, asks the backend to return only
+// the best-scoring TopN results rather than the whole list — a nil TopN
+// means "all of them."
+//
+// RerankRequest 请求后端把 Documents 相对 Query 打分并按相关性排序。TopN
+// 设置时，要求后端只返回打分最高的 TopN 条而非全部——TopN 为 nil 表示「全部」。
+type RerankRequest struct {
+	Model     string
+	Query     string
+	Documents []string
+	TopN      *int
+}
+
+// RerankResponse is what Rerank returns: Results ordered best-first,
+// each naming which original Documents entry it scored via Index.
+//
+// RerankResponse 是 Rerank 的返回值：Results 按最优先排序，每一项通过
+// Index 指明它为 Documents 中的哪一条打分。
+type RerankResponse struct {
+	Model   string
+	Results []RerankResult
+}
+
+// RerankResult scores one document from the original RerankRequest.Documents
+// slice. Index is the document's position in that slice, not a rank.
+//
+// RerankResult 为原始 RerankRequest.Documents 切片中的一条文档打分。Index 是
+// 该文档在切片中的位置，不是名次。
+type RerankResult struct {
+	Index int
+	Score float64
+}
+
 // WorkflowRequest submits an API Format ComfyUI workflow. Template must
 // already be validated and size-limited by the caller; the runtime does not
 // inspect node contents beyond what it needs for cancellation and event
@@ -254,6 +554,23 @@ type WorkflowRequest struct {
 	Template       json.RawMessage
 	ClientID       string
 	IdempotencyKey string
+	// MinGPUMemoryBytes is the smallest GPU memory total a candidate node must
+	// declare to run this workflow, mirroring modelroute.Target's field of the
+	// same name and the same default-open semantics: zero applies no filter,
+	// and a node that has not reported hardware is never excluded by it. It
+	// is the caller's to set — the scheduler has no notion of what a workflow
+	// graph requires — closing the gap where workflow submissions previously
+	// could never reach STATUS.md's P2 admission-threshold filtering at all,
+	// since it only ever flowed through modelroute.Target for the Chat/Embed/
+	// Rerank paths.
+	//
+	// MinGPUMemoryBytes 是候选节点必须声明的最小 GPU 显存总量才能运行本工作流，
+	// 与 modelroute.Target 同名字段及其默认放行语义一致：零值不做任何过滤，一个
+	// 尚未上报硬件的节点同样不会被它排除。它由调用方设置——调度器本身不理解某张
+	// 工作流图需要什么——补上此前的缺口：工作流提交此前完全无法触达 STATUS.md P2
+	// 的准入门槛过滤，因为该过滤只经由 modelroute.Target 流向 Chat/Embed/Rerank
+	// 路径。
+	MinGPUMemoryBytes int64
 }
 
 // WorkflowRun is the local handle for a submitted workflow. ID wraps the
@@ -313,6 +630,18 @@ type WorkflowStatus struct {
 	StartedAt     *time.Time
 	FinishedAt    *time.Time
 	ErrorSummary  string
+	// OutOfMemory is the adapter's best-effort classification of a Failed run
+	// as a backend out-of-memory error, from whatever structured evidence the
+	// backend's own failure report carries (STATUS.md's A06). It is never set
+	// for a State other than WorkflowFailed, and a false value means either
+	// success or a failure the adapter could not attribute to memory
+	// exhaustion — not proof memory was not the cause.
+	//
+	// OutOfMemory 是适配器对一次 Failed 运行的尽力而为分类：是否为后端显存/内存
+	// 不足，依据后端失败报告自身携带的结构化证据判断（STATUS.md 的 A06）。它
+	// 从不在 State 非 WorkflowFailed 时被置位；取值为 false 既可能是成功，也
+	// 可能是适配器无法归因到内存耗尽的失败——不是「确认不是内存问题」的证明。
+	OutOfMemory bool
 }
 
 // ArtifactRef identifies a single output artifact produced by a workflow
@@ -375,4 +704,71 @@ type InputUploadResult struct {
 	// 可能与请求的文件名不同。它只对产生它的适配器有意义；调用方不得解析
 	// 或自行构造它。
 	InputRef string
+}
+
+// AudioTask names which of the two OpenAI-compatible audio endpoints a
+// AudioTranscriptionRequest targets: transcription keeps the source language,
+// translation always answers in English. They share one Capability and one
+// request/response shape because the wire and backend contracts differ only
+// in this one field, not in how bytes flow.
+//
+// AudioTask 指明一次 AudioTranscriptionRequest 面向 OpenAI 兼容的两个音频端点中的
+// 哪一个：转录保留原语言，翻译始终以英文作答。两者共用一个 Capability 与一套
+// 请求/响应形状，因为 wire 层与后端契约的差异只在这一个字段上，不在字节如何流动上。
+type AudioTask string
+
+const (
+	AudioTaskTranscribe AudioTask = "transcribe"
+	AudioTaskTranslate  AudioTask = "translate"
+)
+
+// AudioTranscriptionRequest describes an audio transcription or translation
+// call, before any of the audio bytes — which travel separately as the
+// audio io.Reader InferenceRuntime.Transcribe takes, the same split
+// InputUploadMeta makes for an upload's bytes. Filename carries the source
+// extension a backend may need to pick a decoder; it is a label, never a
+// filesystem path.
+//
+// AudioTranscriptionRequest 描述一次音频转录或翻译调用，发生在任何音频字节之前
+// ——字节作为 InferenceRuntime.Transcribe 单独接受的 audio io.Reader 传输，与
+// InputUploadMeta 对一次上传字节所做的拆分相同。Filename 携带源文件扩展名，供
+// 后端据此选择解码器；它是一个标签，绝不是文件系统路径。
+type AudioTranscriptionRequest struct {
+	Model    string
+	Filename string
+	Task     AudioTask
+	// Language is a BCP-47/ISO-639-1 hint for AudioTaskTranscribe; a backend
+	// may ignore it. Meaningless for AudioTaskTranslate, whose output
+	// language is always English.
+	//
+	// Language 是 AudioTaskTranscribe 的 BCP-47/ISO-639-1 提示；后端可以忽略
+	// 它。对 AudioTaskTranslate 无意义——它的输出语言恒为英文。
+	Language *string
+	// Prompt steers the backend's decoding the way OpenAI's own transcription
+	// prompt parameter does; it is not a chat prompt.
+	//
+	// Prompt 按 OpenAI 自家转录接口 prompt 参数的方式引导后端解码；它不是
+	// 一个 chat 提示词。
+	Prompt      *string
+	Temperature *float64
+	// ResponseFormat is "text" or "json" (the default when empty). Other
+	// OpenAI values (srt, vtt, verbose_json) are out of v1's scope and are
+	// rejected by the caller before a request reaches this type.
+	//
+	// ResponseFormat 取 "text" 或 "json"（留空时默认为 "json"）。OpenAI 的其余
+	// 取值（srt、vtt、verbose_json）不在 v1 范围内，调用方在请求到达这个类型
+	// 之前就已拒绝。
+	ResponseFormat string
+}
+
+// AudioTranscriptionResponse is what Transcribe returns once the backend has
+// fully processed the audio. Language and Duration are best-effort: a
+// backend that does not report them leaves both zero.
+//
+// AudioTranscriptionResponse 是后端完整处理完音频之后 Transcribe 返回的结果。
+// Language 与 Duration 是尽力而为：不报告它们的后端会让两者都保持零值。
+type AudioTranscriptionResponse struct {
+	Text     string
+	Language string
+	Duration *float64
 }

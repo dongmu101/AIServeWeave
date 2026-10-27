@@ -14,6 +14,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"sort"
 	"strings"
@@ -50,6 +51,29 @@ type Base struct {
 // network I/O. kind must be the Kind the calling adapter serves, and cfg's
 // Kind must agree with it.
 func New(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependencies) (*Base, error) {
+	return NewWithOptions(cfg, kind, deps, Options{})
+}
+
+// Options adjusts how Base talks to its backend beyond what Config carries.
+// Options 调整 Base 与后端通信的方式，补充 Config 未承载的部分。
+type Options struct {
+	// VersionedBaseURL is passed to openai.ClientConfig: Config.BaseURL is
+	// a hosted provider's API root that already includes the version segment.
+	// VersionedBaseURL 透传给 openai.ClientConfig：Config.BaseURL 是已含版本段的
+	// 托管供应商 API 根地址。
+	VersionedBaseURL bool
+	// AuthHeader and MaxCompletionTokens are passed to openai.ClientConfig.
+	// AuthHeader 与 MaxCompletionTokens 透传给 openai.ClientConfig。
+	AuthHeader          string
+	MaxCompletionTokens bool
+	// RefuseRedirects is passed to openai.ClientConfig; remote providers set it.
+	// RefuseRedirects 透传给 openai.ClientConfig；远程供应商设置它。
+	RefuseRedirects bool
+}
+
+// NewWithOptions is New with explicit Options.
+// NewWithOptions 是带显式 Options 的 New。
+func NewWithOptions(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependencies, opts Options) (*Base, error) {
 	if cfg.Kind == "" {
 		cfg.Kind = kind
 	}
@@ -70,6 +94,11 @@ func New(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependencies) (*Bas
 		HTTPClient: deps.HTTPClient,
 		Kind:       kind,
 		RuntimeID:  cfg.ID,
+
+		VersionedBaseURL:    opts.VersionedBaseURL,
+		AuthHeader:          opts.AuthHeader,
+		MaxCompletionTokens: opts.MaxCompletionTokens,
+		RefuseRedirects:     opts.RefuseRedirects,
 	})
 	if err != nil {
 		return nil, &runtime.RuntimeError{
@@ -183,6 +212,52 @@ func (b *Base) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime
 	return openai.Embed(ctx, b.client, req)
 }
 
+// Transcribe runs an audio transcription or translation, gated on
+// CapabilityAudioTranscription. No adapter's Discover publishes this
+// capability today (STATUS.md's P2), so by default every call is rejected
+// locally as unsupported rather than assumed to work — the same "never
+// assume a backend supports it" principle Chat and Embed already apply via
+// CapabilitiesFor, here with no adapter yet on the other side of the gate.
+//
+// Transcribe 执行一次音频转录或翻译，受 CapabilityAudioTranscription 门禁。
+// 今天没有任何适配器的 Discover 会发布这项能力（STATUS.md 的 P2），因此默认
+// 情况下每次调用都在本地被判定为不支持而拒绝，而不是被假定可行——与 Chat、
+// Embed 已经通过 CapabilitiesFor 应用的「绝不假设后端支持」原则相同，只是
+// 门禁另一侧此刻还没有适配器。
+func (b *Base) Transcribe(ctx context.Context, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
+	release, err := b.BeginRequest("transcribe", req.Model, runtime.CapabilityAudioTranscription)
+	if err != nil {
+		return runtime.AudioTranscriptionResponse{}, err
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(ctx, b.cfg.RequestTimeout)
+	defer cancel()
+	return openai.Transcribe(ctx, b.client, req, audio)
+}
+
+// Rerank scores req.Documents against req.Query, gated on CapabilityRerank.
+// No adapter's Discover publishes this capability today (STATUS.md's P2), so
+// by default every call is rejected locally as unsupported — the same
+// pattern Transcribe already applies, with no adapter yet on the other side
+// of the gate.
+//
+// Rerank 把 req.Documents 相对 req.Query 打分，受 CapabilityRerank 门禁。今天
+// 没有任何适配器的 Discover 会发布这项能力（STATUS.md 的 P2），因此默认情况下
+// 每次调用都在本地被判定为不支持——与 Transcribe 已经应用的模式相同，只是
+// 门禁另一侧此刻还没有适配器。
+func (b *Base) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, error) {
+	release, err := b.BeginRequest("rerank", req.Model, runtime.CapabilityRerank)
+	if err != nil {
+		return runtime.RerankResponse{}, err
+	}
+	defer release()
+
+	ctx, cancel := context.WithTimeout(ctx, b.cfg.RequestTimeout)
+	defer cancel()
+	return openai.Rerank(ctx, b.client, req)
+}
+
 // Close releases the instance's concurrency budget and makes every
 // subsequent call fail with ErrorClosed. It is idempotent. Streams already
 // handed to callers are not closed here; their own Close still works.
@@ -205,7 +280,40 @@ func ChatCapabilities(req runtime.ChatRequest) []runtime.Capability {
 	if req.ResponseFormat != nil {
 		caps = append(caps, runtime.CapabilityStructuredOutput)
 	}
+	if requestHasImage(req) {
+		caps = append(caps, runtime.CapabilityVision)
+	}
+	if requestHasContentPart(req, "input_audio") {
+		caps = append(caps, runtime.CapabilityAudioInput)
+	}
+	if requestHasContentPart(req, "file") {
+		caps = append(caps, runtime.CapabilityDocumentInput)
+	}
 	return caps
+}
+
+// requestHasImage reports whether any message carries an image content
+// part, so ChatCapabilities can require CapabilityVision only when a
+// request actually needs it — a text-only request must not be rejected on
+// a model whose vision support is unknown or unsupported.
+func requestHasImage(req runtime.ChatRequest) bool {
+	return requestHasContentPart(req, "image_url")
+}
+
+// requestHasContentPart reports whether any message carries a content part
+// of the given type, so ChatCapabilities can require the matching
+// capability (CapabilityAudioInput, CapabilityDocumentInput, …) only when a
+// request actually uses that part type — the same judge-by-part-type
+// discipline requestHasImage already follows for vision.
+func requestHasContentPart(req runtime.ChatRequest, partType string) bool {
+	for _, m := range req.Messages {
+		for _, p := range m.ContentParts {
+			if p.Type == partType {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // BeginRequest runs the shared request-path preamble: closed check,

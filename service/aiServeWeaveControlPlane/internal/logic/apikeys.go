@@ -132,18 +132,9 @@ func (s *Service) ListAPIKeys(ctx context.Context, actor Actor, query store.List
 // RevokeAPIKey 吊销 actor 所属租户的一个 key。member 只能吊销自己创建的 key；owner
 // 与 admin 可以吊销该租户的任何 key。
 func (s *Service) RevokeAPIKey(ctx context.Context, actor Actor, keyID string) error {
-	target, err := s.store.GetAPIKey(ctx, actor.TenantID, keyID)
+	target, err := s.manageableKey(ctx, actor, keyID)
 	if err != nil {
-		return translate(err)
-	}
-	if !actor.canManageKeys() && target.CreatedBy != actor.UserID {
-		// Reported as not-found rather than forbidden: a member who can tell
-		// "exists but not yours" from "does not exist" can enumerate the
-		// tenant's keys.
-		//
-		// 报为 not-found 而不是 forbidden：能分辨「存在但不属于你」与「不存在」的
-		// member，可以据此枚举出该租户的全部 key。
-		return ErrNotFound
+		return err
 	}
 
 	if err := s.store.RevokeAPIKey(ctx, actor.TenantID, keyID, s.clock.Now()); err != nil {
@@ -162,6 +153,54 @@ func (s *Service) RevokeAPIKey(ctx context.Context, actor Actor, keyID string) e
 	}
 	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionAPIKeyRevoke, keyID, "revoked "+target.Display, actor.IP)
 	return nil
+}
+
+// DeleteAPIKey permanently removes one key belonging to the actor's tenant,
+// whatever its status. The same people may delete a key as may revoke it. The
+// row is gone afterwards, so the audit record is the only place that still
+// names it, by its display form.
+//
+// DeleteAPIKey 永久删除 actor 所属租户的一个 key，不论其状态。能删除的人与能吊销的
+// 人相同。删除之后该行不复存在，因此审计记录是仅剩的、以展示形式指代它的地方。
+func (s *Service) DeleteAPIKey(ctx context.Context, actor Actor, keyID string) error {
+	target, err := s.manageableKey(ctx, actor, keyID)
+	if err != nil {
+		return err
+	}
+
+	if err := s.store.DeleteAPIKey(ctx, actor.TenantID, keyID); err != nil {
+		return translate(err)
+	}
+	// Dropped after the write for the same reason as in RevokeAPIKey.
+	//
+	// 与 RevokeAPIKey 同样的理由，在写入之后才失效缓存。
+	if s.invalidator != nil {
+		s.invalidator.Invalidate(ctx, target.Hash)
+	}
+	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionAPIKeyDelete, keyID, "deleted "+target.Display, actor.IP)
+	return nil
+}
+
+// manageableKey loads a key of the actor's tenant that the actor may revoke or
+// delete. A member may act only on a key it created; owner and admin on any.
+//
+// manageableKey 读取 actor 所属租户中、actor 可以吊销或删除的一个 key。member 只能
+// 操作自己创建的 key；owner 与 admin 可以操作任何 key。
+func (s *Service) manageableKey(ctx context.Context, actor Actor, keyID string) (model.APIKey, error) {
+	target, err := s.store.GetAPIKey(ctx, actor.TenantID, keyID)
+	if err != nil {
+		return model.APIKey{}, translate(err)
+	}
+	if !actor.canManageKeys() && target.CreatedBy != actor.UserID {
+		// Reported as not-found rather than forbidden: a member who can tell
+		// "exists but not yours" from "does not exist" can enumerate the
+		// tenant's keys.
+		//
+		// 报为 not-found 而不是 forbidden：能分辨「存在但不属于你」与「不存在」的
+		// member，可以据此枚举出该租户的全部 key。
+		return model.APIKey{}, ErrNotFound
+	}
+	return target, nil
 }
 
 // Verification is what the Gateway learns about a key it presented. It carries

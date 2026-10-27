@@ -226,6 +226,15 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 			snaps := tunnelwire.SnapshotsFromProto(body.Status.GetSnapshots())
 			n.applyStatus(body.Status, snaps)
 
+		case *tunnelv1.AgentControl_ModelPull:
+			n.applyModelPullReport(tunnelwire.ModelPullReportFromProto(body.ModelPull))
+
+		case *tunnelv1.AgentControl_CliUsage:
+			n.applyCLIUsageReport(tunnelwire.CLIUsageReportFromProto(body.CliUsage))
+
+		case *tunnelv1.AgentControl_ComfyuiManaged:
+			n.applyComfyUIManagedReport(tunnelwire.ComfyUIManagedReportFromProto(body.ComfyuiManaged))
+
 		case *tunnelv1.AgentControl_Draining:
 			n.mu.Lock()
 			n.draining = true

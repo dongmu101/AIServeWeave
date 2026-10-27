@@ -48,6 +48,7 @@ type fakeComfy struct {
 	promptError   string
 	promptID      string
 	promptCalls   int
+	queueStatus   int
 	queueRunning  []string
 	queuePending  []string
 	history       map[string]any
@@ -178,8 +179,12 @@ func newFakeComfy(t *testing.T, opts ...func(*fakeComfy)) *fakeComfy {
 			return
 		}
 		f.mu.Lock()
-		running, pending := f.queueRunning, f.queuePending
+		status, running, pending := f.queueStatus, f.queueRunning, f.queuePending
 		f.mu.Unlock()
+		if status != 0 {
+			writeError(w, status, "unavailable")
+			return
+		}
 		writeJSON(w, map[string]any{
 			"queue_running": queueEntries(running),
 			"queue_pending": queueEntries(pending),
@@ -329,6 +334,12 @@ func (f *fakeComfy) setQueue(running, pending []string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.queueRunning, f.queuePending = running, pending
+}
+
+func (f *fakeComfy) failQueue(status int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.queueStatus = status
 }
 
 func (f *fakeComfy) setHistory(id string, entry any) {
@@ -668,6 +679,50 @@ func TestHealthReportsBothStates(t *testing.T) {
 	}
 	if report.State != runtime.StateUnhealthy || report.ErrorSummary == "" {
 		t.Errorf("Health = %+v, want unhealthy with a summary", report)
+	}
+}
+
+// TestHealthReportsQueueOccupancy covers the P2 realtime-utilization signal
+// (STATUS.md): Health reads GET /queue on top of the liveness check and
+// surfaces it as HealthReport.QueueRunning/QueuePending, the scheduler's
+// ranking input for a backend that runs one job at a time.
+//
+// TestHealthReportsQueueOccupancy 覆盖 P2 实时利用率信号（STATUS.md）：Health 在
+// 存活性检查之外还读取 GET /queue，并把结果暴露为 HealthReport 的
+// QueueRunning/QueuePending，供调度器为同一时间只跑一个任务的后端做排序。
+func TestHealthReportsQueueOccupancy(t *testing.T) {
+	f := newFakeComfy(t)
+	f.setQueue([]string{testRunID}, []string{otherRunID, "prompt-3"})
+	rt := newRuntime(t, f, newScriptedWS(1))
+
+	report, err := rt.Health(context.Background())
+	if err != nil {
+		t.Fatalf("Health: %v", err)
+	}
+	if report.QueueRunning != 1 || report.QueuePending != 2 {
+		t.Errorf("Health QueueRunning/QueuePending = %d/%d, want 1/2", report.QueueRunning, report.QueuePending)
+	}
+}
+
+// TestHealthQueueFailureDoesNotFailLiveness covers the case where /queue is
+// unreachable but /system_stats answered: liveness is already established,
+// so Health must still report healthy with the occupancy fields left at
+// their zero value, not propagate the queue error.
+//
+// TestHealthQueueFailureDoesNotFailLiveness 覆盖 /queue 不可达但 /system_stats
+// 已经应答的情况：存活性已经确立，Health 必须仍然报告健康、把占用字段留在零值，
+// 而不是把 queue 的错误传播出去。
+func TestHealthQueueFailureDoesNotFailLiveness(t *testing.T) {
+	f := newFakeComfy(t)
+	f.failQueue(http.StatusInternalServerError)
+	rt := newRuntime(t, f, newScriptedWS(1))
+
+	report, err := rt.Health(context.Background())
+	if err != nil || report.State != runtime.StateHealthy {
+		t.Fatalf("Health = %+v, err = %v; want healthy despite /queue failing", report, err)
+	}
+	if report.QueueRunning != 0 || report.QueuePending != 0 {
+		t.Errorf("Health QueueRunning/QueuePending = %d/%d, want 0/0 when /queue fails", report.QueueRunning, report.QueuePending)
 	}
 }
 
@@ -1123,10 +1178,11 @@ func TestStatusFromQueue(t *testing.T) {
 
 func TestStatusFromHistory(t *testing.T) {
 	tests := []struct {
-		name        string
-		entry       map[string]any
-		wantState   runtime.WorkflowState
-		wantSummary string
+		name            string
+		entry           map[string]any
+		wantState       runtime.WorkflowState
+		wantSummary     string
+		wantOutOfMemory bool
 	}{
 		{
 			name:      "success",
@@ -1134,7 +1190,7 @@ func TestStatusFromHistory(t *testing.T) {
 			wantState: runtime.WorkflowSucceeded,
 		},
 		{
-			name: "error carries the failing node",
+			name: "error carries the failing node and is classified out of memory from the exception message",
 			entry: map[string]any{"status": map[string]any{
 				"status_str": "error",
 				"completed":  false,
@@ -1145,8 +1201,44 @@ func TestStatusFromHistory(t *testing.T) {
 					}},
 				},
 			}},
-			wantState:   runtime.WorkflowFailed,
-			wantSummary: "CUDA out of memory",
+			wantState:       runtime.WorkflowFailed,
+			wantSummary:     "CUDA out of memory",
+			wantOutOfMemory: true,
+		},
+		{
+			// The exception type alone (torch's own OOM class) is also
+			// recognized, independent of what the message happens to say —
+			// STATUS.md's A06 wants either signal to classify the failure.
+			name: "out of memory classified from the exception type alone",
+			entry: map[string]any{"status": map[string]any{
+				"status_str": "error",
+				"completed":  false,
+				"messages": []any{
+					[]any{"execution_error", map[string]any{
+						"node_id": "5", "node_type": "VAEDecode",
+						"exception_type": "torch.cuda.OutOfMemoryError", "exception_message": "allocation failed",
+					}},
+				},
+			}},
+			wantState:       runtime.WorkflowFailed,
+			wantOutOfMemory: true,
+		},
+		{
+			// A failure unrelated to memory must not be misclassified: an
+			// operator paging on OOM must not chase a phantom.
+			name: "an ordinary failure is not classified out of memory",
+			entry: map[string]any{"status": map[string]any{
+				"status_str": "error",
+				"completed":  false,
+				"messages": []any{
+					[]any{"execution_error", map[string]any{
+						"node_id": "3", "node_type": "KSampler",
+						"exception_type": "ValueError", "exception_message": "invalid seed",
+					}},
+				},
+			}},
+			wantState:       runtime.WorkflowFailed,
+			wantOutOfMemory: false,
 		},
 		{
 			// ComfyUI records an interruption as a non-success run; only the
@@ -1184,6 +1276,9 @@ func TestStatusFromHistory(t *testing.T) {
 			}
 			if tt.wantSummary != "" && !strings.Contains(status.ErrorSummary, tt.wantSummary) {
 				t.Errorf("ErrorSummary = %q, want it to contain %q", status.ErrorSummary, tt.wantSummary)
+			}
+			if status.OutOfMemory != tt.wantOutOfMemory {
+				t.Errorf("OutOfMemory = %v, want %v", status.OutOfMemory, tt.wantOutOfMemory)
 			}
 		})
 	}

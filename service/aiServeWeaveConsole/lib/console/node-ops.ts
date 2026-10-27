@@ -1,3 +1,5 @@
+import { coreTranslator } from "../i18n/core.ts";
+import { DEFAULT_LOCALE, type Locale } from "../i18n/locale.ts";
 import type { RequestSpec } from "./api-client.ts";
 import { parseNoContent } from "./contract.ts";
 import { ApiError } from "./errors.ts";
@@ -17,11 +19,16 @@ export interface NodeState {
  * NodeAction 命名五种平台节点操作。 */
 export type NodeAction = "approve" | "disable" | "enable" | "maintenance" | "resume";
 
-/** NODE_ACTION_LABELS names operations without claiming propagation.
- * NODE_ACTION_LABELS 为操作提供名称，不声称已传播。 */
-export const NODE_ACTION_LABELS: Record<NodeAction, string> = {
-  approve: "审批通过", disable: "禁用节点", enable: "启用节点", maintenance: "进入维护", resume: "退出维护",
+/** nodeActionLabels names operations without claiming propagation.
+ * nodeActionLabels 为操作提供名称，不声称已传播。 */
+export function nodeActionLabels(locale: Locale = DEFAULT_LOCALE): Record<NodeAction, string> {
+  const t = coreTranslator(locale);
+  return {
+  approve: t("common.approved"), disable: t("tenant.disableNode"), enable: t("tenant.enableNode"), maintenance: t("tenant.enterMaintenance"), resume: t("tenant.exitMaintenance"),
 };
+}
+/** NODE_ACTION_LABELS preserves default-language compatibility. / NODE_ACTION_LABELS 保留默认语言的兼容接口。 */
+export const NODE_ACTION_LABELS = nodeActionLabels();
 
 /** parseNodeStates validates the Registry ledger response, including offline nodes.
  * parseNodeStates 校验 Registry 账本响应，其中包括离线节点。 */

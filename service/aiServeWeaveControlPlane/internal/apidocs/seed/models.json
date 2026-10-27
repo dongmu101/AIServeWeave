@@ -1,0 +1,139 @@
+{
+  "slug": "models",
+  "category": "通用",
+  "category_order": 0,
+  "sort_order": 10,
+  "title": "列出模型",
+  "method": "GET",
+  "path": "/v1/models",
+  "summary": "列出当前可调用的模型，兼容 OpenAI 与 Anthropic 客户端的模型列表请求。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 OpenAI Models 接口，可直接使用 OpenAI 官方 SDK",
+      "认证支持 Authorization: Bearer，也支持 Anthropic 风格的 x-api-key",
+      "返回的 id 即为其他接口 model 参数应填的值"
+    ],
+    "notice": "列表只包含当前可用于对话（Chat Completions / Responses / Messages）与图像生成的模型，且只反映当前在线可用的情况；仅支持向量或重排的模型不会出现在列表中。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": false,
+        "description": "`Bearer {{API_KEY}}`。携带此头时优先使用。"
+      },
+      {
+        "name": "x-api-key",
+        "type": "string",
+        "required": false,
+        "description": "API Key（Anthropic 风格）。未携带 Authorization 时使用此头。两者至少提供一个。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "none",
+    "body_params": [],
+    "response_fields": [
+      {
+        "name": "object",
+        "type": "string",
+        "required": true,
+        "description": "固定为 list。"
+      },
+      {
+        "name": "data",
+        "type": "array",
+        "required": true,
+        "description": "模型列表，按平台目录顺序排列。",
+        "children": [
+          {
+            "name": "id",
+            "type": "string",
+            "required": true,
+            "description": "模型 ID，调用其他接口时作为 model 参数。"
+          },
+          {
+            "name": "object",
+            "type": "string",
+            "required": true,
+            "description": "固定为 model。"
+          },
+          {
+            "name": "owned_by",
+            "type": "string",
+            "required": true,
+            "description": "固定为 aiserveweave。"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "description": "显示名称；未配置时与 id 相同。"
+          },
+          {
+            "name": "display_name",
+            "type": "string",
+            "required": true,
+            "description": "显示名称，与 name 相同。"
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/models \\\n  -H \"Authorization: Bearer {{API_KEY}}\""
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "from openai import OpenAI\n\nclient = OpenAI(base_url=\"{{BASE_URL}}/v1\", api_key=\"{{API_KEY}}\")\n\nfor model in client.models.list():\n    print(model.id)"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/models\", {\n  headers: { \"Authorization\": \"Bearer {{API_KEY}}\" },\n});\n\nconst data = await res.json();\nif (!res.ok) throw new Error(data.error?.message);\ndata.data.forEach((m) => console.log(m.id, m.display_name));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"object\": \"list\",\n  \"data\": [\n    {\n      \"id\": \"qwen3-32b\",\n      \"object\": \"model\",\n      \"owned_by\": \"aiserveweave\",\n      \"name\": \"Qwen3 32B\",\n      \"display_name\": \"Qwen3 32B\"\n    },\n    {\n      \"id\": \"llama3.1-8b\",\n      \"object\": \"model\",\n      \"owned_by\": \"aiserveweave\",\n      \"name\": \"llama3.1-8b\",\n      \"display_name\": \"llama3.1-8b\"\n    }\n  ]\n}"
+      },
+      {
+        "status": 200,
+        "label": "当前无可用模型",
+        "content_type": "application/json",
+        "body": "{\n  \"object\": \"list\",\n  \"data\": []\n}"
+      },
+      {
+        "status": 401,
+        "label": "认证失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "暂时无法校验密钥",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"cannot verify the API key right now\",\n    \"type\": \"api_error\",\n    \"code\": \"verification_unavailable\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "错误码说明",
+        "body": "401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n429：租户超出配额（requests_per_minute / max_concurrent 等），响应头 Retry-After 给出建议等待秒数。\n\n503：暂时无法校验 API Key（verification_unavailable），请稍后重试。"
+      }
+    ]
+  }
+}

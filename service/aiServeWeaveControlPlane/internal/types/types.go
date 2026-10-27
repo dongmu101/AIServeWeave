@@ -17,6 +17,7 @@
 package types
 
 import (
+	"encoding/json"
 	"time"
 
 	"AIServeWeave/common/quota"
@@ -87,6 +88,18 @@ type CreateTenantRequest struct {
 	Name          string `json:"name"`
 	OwnerEmail    string `json:"owner_email"`
 	OwnerPassword string `json:"owner_password"`
+}
+
+// SignupRequest is a self-service sign-up: a new tenant and the person who
+// will own it. The response is a CreateTenantResponse; it carries no session,
+// so the caller signs in afterwards with the same credentials.
+//
+// SignupRequest 是一次自助注册：一个新租户，以及将拥有它的那个人。响应是
+// CreateTenantResponse；它不携带会话，调用方随后用同一组凭据登录。
+type SignupRequest struct {
+	TenantName string `json:"tenant_name"`
+	Email      string `json:"email"`
+	Password   string `json:"password"`
 }
 
 // CreateTenantResponse is the created tenant and owner.
@@ -367,6 +380,128 @@ type JobHistoryListResponse struct {
 	NextCursor string               `json:"next_cursor,omitempty"`
 }
 
+// RequestLogRecordRequest is one record inside a POST /internal/v1/requestlogs
+// batch.
+//
+// RequestLogRecordRequest 是一次 POST /internal/v1/requestlogs 批量推送里的
+// 一条记录。
+type RequestLogRecordRequest struct {
+	RequestID  string    `json:"request_id"`
+	TenantID   string    `json:"tenant_id"`
+	KeyDisplay string    `json:"key_display,omitempty"`
+	Endpoint   string    `json:"endpoint"`
+	StatusCode int       `json:"status_code"`
+	Outcome    string    `json:"outcome"`
+	DurationMS int64     `json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// CreateRequestLogsRequest is the body of POST /internal/v1/requestlogs.
+//
+// CreateRequestLogsRequest 是 POST /internal/v1/requestlogs 的请求体。
+type CreateRequestLogsRequest struct {
+	Records []RequestLogRecordRequest `json:"records"`
+}
+
+// CreateRequestLogsResponse reports how many of the submitted records were
+// accepted, so a Gateway replica's own observability can tell a malformed
+// payload from a healthy one without the internal API ever needing to fail
+// the whole batch over one bad entry.
+//
+// CreateRequestLogsResponse 报告提交的记录中有多少条被接受，使 Gateway 副本
+// 自己的可观测性能够区分畸形负载与健康负载，而无需内部 API 因一条坏记录就
+// 让整个批次失败。
+type CreateRequestLogsResponse struct {
+	Accepted int `json:"accepted"`
+}
+
+// RequestLogResponse is one persisted request record, as both the tenant and
+// the operator search endpoints render it. It carries every field
+// request_logs stores — there is no route-binding-style internal-only data
+// to strip here, unlike JobResponse versus JobHistoryResponse.
+//
+// RequestLogResponse 是一条已持久化的请求记录，租户与运维两个检索端点都用
+// 这个形状渲染它。它携带 request_logs 存储的每一个字段——这里没有像
+// JobResponse 相对 JobHistoryResponse 那样需要剥离的、路由绑定式的内部专用
+// 数据。
+type RequestLogResponse struct {
+	RequestID  string    `json:"request_id"`
+	TenantID   string    `json:"tenant_id,omitempty"`
+	KeyDisplay string    `json:"key_display"`
+	Endpoint   string    `json:"endpoint"`
+	StatusCode int       `json:"status_code"`
+	Outcome    string    `json:"outcome"`
+	DurationMS int64     `json:"duration_ms"`
+	CreatedAt  time.Time `json:"created_at"`
+}
+
+// RequestLogListResponse is one page of request records.
+//
+// RequestLogListResponse 是请求记录的一页结果。
+type RequestLogListResponse struct {
+	Items      []RequestLogResponse `json:"items"`
+	NextCursor string               `json:"next_cursor,omitempty"`
+}
+
+// UsageRecordRequest is one record inside a POST /internal/v1/usagerecords
+// batch.
+//
+// UsageRecordRequest 是一次 POST /internal/v1/usagerecords 批量推送里的
+// 一条记录。
+type UsageRecordRequest struct {
+	RequestID        string    `json:"request_id"`
+	TenantID         string    `json:"tenant_id"`
+	Model            string    `json:"model"`
+	Endpoint         string    `json:"endpoint"`
+	PromptTokens     int64     `json:"prompt_tokens"`
+	CompletionTokens int64     `json:"completion_tokens"`
+	TotalTokens      int64     `json:"total_tokens"`
+	CreatedAt        time.Time `json:"created_at"`
+}
+
+// CreateUsageRecordsRequest is the body of POST /internal/v1/usagerecords.
+//
+// CreateUsageRecordsRequest 是 POST /internal/v1/usagerecords 的请求体。
+type CreateUsageRecordsRequest struct {
+	Records []UsageRecordRequest `json:"records"`
+}
+
+// CreateUsageRecordsResponse reports how many of the submitted records were
+// accepted, mirroring CreateRequestLogsResponse exactly.
+//
+// CreateUsageRecordsResponse 报告提交的记录中有多少条被接受，与
+// CreateRequestLogsResponse 完全对应。
+type CreateUsageRecordsResponse struct {
+	Accepted int `json:"accepted"`
+}
+
+// UsageSummaryEntryResponse is one (tenant, model) group's totals — the
+// settlement query's unit of output. TenantID is empty on the tenant
+// self-service endpoint, the same includeTenant convention
+// renderRequestLog already follows: the tenant is already implied by the
+// caller's own session there.
+//
+// UsageSummaryEntryResponse 是一个 (tenant, model) 分组的汇总——结算查询的
+// 输出单元。TenantID 在租户自助端点上为空，与 renderRequestLog 已经遵循的
+// 同一种 includeTenant 约定相同：那里租户已经由调用方自己的会话隐含。
+type UsageSummaryEntryResponse struct {
+	TenantID         string `json:"tenant_id,omitempty"`
+	Model            string `json:"model"`
+	PromptTokens     int64  `json:"prompt_tokens"`
+	CompletionTokens int64  `json:"completion_tokens"`
+	TotalTokens      int64  `json:"total_tokens"`
+	RequestCount     int64  `json:"request_count"`
+}
+
+// UsageSummaryResponse is the settlement query's full result: one entry per
+// (tenant, model) group within the queried window.
+//
+// UsageSummaryResponse 是结算查询的完整结果：查询窗口内每个 (tenant,
+// model) 分组一条。
+type UsageSummaryResponse struct {
+	Items []UsageSummaryEntryResponse `json:"items"`
+}
+
 // CreateJobRequest is what a Gateway replica reports about a run it just
 // submitted, per STATUS.md's J01/J04 persistence contract. TenantID is what
 // the Gateway asserts about its own caller — this endpoint is guarded by the
@@ -545,6 +680,36 @@ type ExpiredJobArtifact struct {
 	CreatedAt  time.Time `json:"created_at"`
 }
 
+// ArtifactRouteResponse is one artifact's full internal record, returned
+// only from the internal (Gateway-only) API — like ExpiredJobArtifact it
+// carries StorageKey and is never JobArtifactResponse, plus the owning job's
+// NodeID/RuntimeID, so a Gateway replica that has never seen this artifact
+// before (STATUS.md's Gateway 故障切换收尾: a terminal job's artifact
+// downloaded from a replica other than the one that ran it, or the same
+// replica after a restart) can reconstruct enough to serve it — from object
+// storage if StorageKey is set, or by pulling live from the node otherwise.
+//
+// ArtifactRouteResponse 是一条产物的完整内部记录，只从内部（仅 Gateway 可用）
+// API 返回——与 ExpiredJobArtifact 一样携带 StorageKey，绝不是
+// JobArtifactResponse，并额外带上所属 job 的 NodeID/RuntimeID，好让一个此前
+// 从未见过这个产物的 Gateway 副本（STATUS.md 的「Gateway 故障切换收尾」：
+// 一个终态 job 的产物从跑它之外的副本下载，或同一副本重启之后）能重建出
+// 足够的信息来提供它——StorageKey 非空时读对象存储，否则回退到从节点实时
+// 拉取。
+type ArtifactRouteResponse struct {
+	ArtifactID  string `json:"artifact_id"`
+	JobID       string `json:"job_id"`
+	TenantID    string `json:"tenant_id"`
+	Filename    string `json:"filename"`
+	Subfolder   string `json:"subfolder,omitempty"`
+	Type        string `json:"type,omitempty"`
+	ContentType string `json:"content_type,omitempty"`
+	SizeBytes   int64  `json:"size_bytes,omitempty"`
+	StorageKey  string `json:"storage_key,omitempty"`
+	NodeID      string `json:"node_id"`
+	RuntimeID   string `json:"runtime_id"`
+}
+
 // ListExpiredJobArtifactsResponse is one page of artifacts eligible for
 // cleanup.
 //
@@ -609,6 +774,82 @@ type PlatformLoginResponse struct {
 	Operator  PlatformOperator `json:"operator"`
 }
 
+// -----------------------------------------------------------------------
+// Alert rules (STATUS.md's P09/C29)
+// -----------------------------------------------------------------------
+
+// AlertRuleRequest is the body of both POST /operator/v1/alert-rules and
+// PATCH /operator/v1/alert-rules/:id — the latter is a full-replace update,
+// see store.AlertRuleUpdate's doc comment.
+//
+// AlertRuleRequest 是 POST /operator/v1/alert-rules 与
+// PATCH /operator/v1/alert-rules/:id 共用的请求体——后者是整体替换式更新，
+// 见 store.AlertRuleUpdate 的文档注释。
+type AlertRuleRequest struct {
+	Name               string  `json:"name"`
+	Metric             string  `json:"metric"`
+	Operator           string  `json:"operator"`
+	Threshold          float64 `json:"threshold"`
+	ConsecutiveBuckets int     `json:"consecutive_buckets"`
+	WebhookURL         string  `json:"webhook_url,omitempty"`
+	Enabled            bool    `json:"enabled"`
+}
+
+// AlertRuleResponse is one alert rule.
+//
+// AlertRuleResponse 是一条告警规则。
+type AlertRuleResponse struct {
+	ID                 string    `json:"id"`
+	Name               string    `json:"name"`
+	Metric             string    `json:"metric"`
+	Operator           string    `json:"operator"`
+	Threshold          float64   `json:"threshold"`
+	ConsecutiveBuckets int       `json:"consecutive_buckets"`
+	WebhookURL         string    `json:"webhook_url,omitempty"`
+	Enabled            bool      `json:"enabled"`
+	CreatedAt          time.Time `json:"created_at"`
+	UpdatedAt          time.Time `json:"updated_at"`
+}
+
+// AlertRuleListResponse is one page of alert rules.
+//
+// AlertRuleListResponse 是一页告警规则。
+type AlertRuleListResponse struct {
+	Items      []AlertRuleResponse `json:"items"`
+	NextCursor string              `json:"next_cursor,omitempty"`
+}
+
+// AlertInstanceResponse is one fired alert instance. RuleName is
+// denormalized in by the handler (a lookup against the small alert_rules
+// table, not stored redundantly) so the Console list doesn't need a
+// second round trip per row.
+//
+// AlertInstanceResponse 是一条已触发的告警实例。RuleName 由 handler 反查
+// 填入（查询的是很小的 alert_rules 表，而非冗余存储），这样 Console 的
+// 列表页每一行都不需要再多发一次请求。
+type AlertInstanceResponse struct {
+	ID              string     `json:"id"`
+	RuleID          string     `json:"rule_id"`
+	RuleName        string     `json:"rule_name"`
+	Status          string     `json:"status"`
+	ValueAtFire     float64    `json:"value_at_fire"`
+	CreatedAt       time.Time  `json:"created_at"`
+	LastEvaluatedAt time.Time  `json:"last_evaluated_at"`
+	ResolvedAt      *time.Time `json:"resolved_at,omitempty"`
+	AcknowledgedBy  string     `json:"acknowledged_by,omitempty"`
+	AcknowledgedAt  *time.Time `json:"acknowledged_at,omitempty"`
+	NotifyStatus    string     `json:"notify_status"`
+	NotifyAttempts  int        `json:"notify_attempts"`
+}
+
+// AlertInstanceListResponse is one page of alert instances.
+//
+// AlertInstanceListResponse 是一页告警实例。
+type AlertInstanceListResponse struct {
+	Items      []AlertInstanceResponse `json:"items"`
+	NextCursor string                  `json:"next_cursor,omitempty"`
+}
+
 // NodeOpsRequest is the body every node-ops write endpoint accepts: none of
 // them take any field beyond the node_id already in the path, so this is an
 // intentionally empty struct rather than an absent one — decode's
@@ -642,4 +883,201 @@ type NodeState struct {
 // ListNodeStatesResponse 是身份账本里有记录的每一个 node_id。
 type ListNodeStatesResponse struct {
 	Items []NodeState `json:"items"`
+}
+
+// ModelPullTriggerRequest is POST /operator/v1/nodes/:id/model-pulls's body
+// (STATUS.md's P2 model distribution subtask two).
+//
+// ModelPullTriggerRequest 是 POST /operator/v1/nodes/:id/model-pulls 的请求体
+// （STATUS.md 的 P2 模型分发子任务二）。
+type ModelPullTriggerRequest struct {
+	Names []string `json:"names"`
+}
+
+// ModelPullReplicaStatus is one configured Gateway replica's answer to a
+// model-pull trigger or status call, as modelpullrouter.ReplicaStatus
+// reports it.
+//
+// ModelPullReplicaStatus 是某个已配置 Gateway 副本对模型拉取触发或状态查询
+// 的作答，即 modelpullrouter.ReplicaStatus 所报告的内容。
+type ModelPullReplicaStatus struct {
+	Endpoint  string `json:"endpoint"`
+	Connected bool   `json:"connected"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ModelPullTriggerResponse confirms a trigger reached at least one
+// connected replica; it never confirms a name was accepted by the Agent's
+// manifest — see modelpullapi's own triggerResponse for why.
+//
+// ModelPullTriggerResponse 确认触发已经到达至少一个已连接副本；它从不确认
+// 某个名字被 Agent 的清单接受——原因见 modelpullapi 自己的 triggerResponse。
+type ModelPullTriggerResponse struct {
+	Replicas []ModelPullReplicaStatus `json:"replicas"`
+}
+
+// ModelPullStatus is one named pull's status, as GET
+// /operator/v1/nodes/:id/model-pulls reports it.
+//
+// ModelPullStatus 是某一个命名拉取的状态，即 GET
+// /operator/v1/nodes/:id/model-pulls 所报告的内容。
+type ModelPullStatus struct {
+	Name            string    `json:"name"`
+	State           string    `json:"state"`
+	BytesDownloaded int64     `json:"bytes_downloaded"`
+	BytesTotal      int64     `json:"bytes_total"`
+	Reason          string    `json:"reason,omitempty"`
+	UpdatedAt       time.Time `json:"updated_at"`
+}
+
+// ModelPullStatusResponse is GET /operator/v1/nodes/:id/model-pulls's body.
+//
+// ModelPullStatusResponse 是 GET /operator/v1/nodes/:id/model-pulls 的响应体。
+type ModelPullStatusResponse struct {
+	Pulls    []ModelPullStatus        `json:"pulls"`
+	Replicas []ModelPullReplicaStatus `json:"replicas"`
+}
+
+// ComfyUIManagedTriggerRequest is POST
+// /operator/v1/nodes/:id/comfyui-managed's body (STATUS.md's P2 ComfyUI
+// Managed Docker deployment subtask two). Action must be one of "start",
+// "stop", "restart".
+//
+// ComfyUIManagedTriggerRequest 是 POST
+// /operator/v1/nodes/:id/comfyui-managed 的请求体（STATUS.md 的 P2 ComfyUI
+// Managed Docker 部署子任务二）。Action 必须是 "start"、"stop"、"restart"
+// 之一。
+type ComfyUIManagedTriggerRequest struct {
+	Action string `json:"action"`
+}
+
+// ComfyUIManagedReplicaStatus is one configured Gateway replica's answer to
+// a ComfyUI Managed trigger or status call, as
+// comfyuimanagedrouter.ReplicaStatus reports it.
+//
+// ComfyUIManagedReplicaStatus 是某个已配置 Gateway 副本对 ComfyUI Managed
+// 触发或状态查询的作答，即 comfyuimanagedrouter.ReplicaStatus 所报告的内容。
+type ComfyUIManagedReplicaStatus struct {
+	Endpoint  string `json:"endpoint"`
+	Connected bool   `json:"connected"`
+	Error     string `json:"error,omitempty"`
+}
+
+// ComfyUIManagedTriggerResponse confirms a trigger reached at least one
+// connected replica; it never confirms the Agent actually applied the
+// action — see comfyuimanagedapi's own triggerResponse for why.
+//
+// ComfyUIManagedTriggerResponse 确认触发已经到达至少一个已连接副本；它从不
+// 确认 Agent 真的执行了这个动作——原因见 comfyuimanagedapi 自己的
+// triggerResponse。
+type ComfyUIManagedTriggerResponse struct {
+	Replicas []ComfyUIManagedReplicaStatus `json:"replicas"`
+}
+
+// ComfyUIManagedInstanceStatus is the one Managed instance's status, as GET
+// /operator/v1/nodes/:id/comfyui-managed reports it.
+//
+// ComfyUIManagedInstanceStatus 是那一个 Managed 实例的状态，即 GET
+// /operator/v1/nodes/:id/comfyui-managed 所报告的内容。
+type ComfyUIManagedInstanceStatus struct {
+	ContainerName string                     `json:"container_name"`
+	State         string                     `json:"state"`
+	UpdatedAt     time.Time                  `json:"updated_at"`
+	CustomNodes   []ComfyUIManagedCustomNode `json:"custom_nodes,omitempty"`
+}
+
+// ComfyUIManagedCustomNode is one custom node a Managed instance reports
+// installed (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask 4).
+//
+// ComfyUIManagedCustomNode 是一个 Managed 实例上报已安装的自定义节点
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）。
+type ComfyUIManagedCustomNode struct {
+	Name    string `json:"name"`
+	Version string `json:"version"`
+}
+
+// ComfyUIManagedCustomNodeInstallRequest is POST
+// /operator/v1/nodes/:id/comfyui-managed/custom-nodes's body (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask 4).
+//
+// ComfyUIManagedCustomNodeInstallRequest 是 POST
+// /operator/v1/nodes/:id/comfyui-managed/custom-nodes 的请求体（STATUS.md
+// 的 P2 ComfyUI Managed Docker 部署子任务四）。
+type ComfyUIManagedCustomNodeInstallRequest struct {
+	Name string `json:"name"`
+}
+
+// ComfyUIManagedStatusResponse is GET
+// /operator/v1/nodes/:id/comfyui-managed's body.
+//
+// ComfyUIManagedStatusResponse 是 GET /operator/v1/nodes/:id/comfyui-managed
+// 的响应体。
+type ComfyUIManagedStatusResponse struct {
+	Instances []ComfyUIManagedInstanceStatus `json:"instances"`
+	Replicas  []ComfyUIManagedReplicaStatus  `json:"replicas"`
+}
+
+// MetricsHistoryPoint is one bucket of a MetricsHistorySeries (P08, Console C27).
+//
+// MetricsHistoryPoint 是 MetricsHistorySeries 的一个 bucket(P08，Console C27)。
+type MetricsHistoryPoint struct {
+	BucketAt time.Time `json:"bucket_at"`
+	Value    float64   `json:"value"`
+}
+
+// MetricsHistorySeries is one (metric, labels) time series over the queried
+// window.
+//
+// MetricsHistorySeries 是查询窗口内一条 (metric, labels) 时间序列。
+type MetricsHistorySeries struct {
+	Metric string                `json:"metric"`
+	Labels map[string]string     `json:"labels"`
+	Points []MetricsHistoryPoint `json:"points"`
+}
+
+// MetricsHistoryResponse answers GET /operator/v1/metrics/history.
+//
+// MetricsHistoryResponse 回答 GET /operator/v1/metrics/history。
+type MetricsHistoryResponse struct {
+	Since  time.Time              `json:"since"`
+	Until  time.Time              `json:"until"`
+	Series []MetricsHistorySeries `json:"series"`
+}
+
+// CreateResponseTurnRequest is what a Gateway replica reports after
+// finishing one Responses API turn the caller asked to persist, per
+// STATUS.md's P2 "Responses 持久会话". TenantID is the Gateway's own
+// assertion about its caller, the same reason it is a body field on
+// CreateJobRequest rather than something read from a session.
+//
+// Messages is opaque JSON this service never parses — see
+// model.ResponseTurn's doc comment for why. It is what the Gateway must
+// send back unchanged when a later turn's previous_response_id points here.
+//
+// CreateResponseTurnRequest 是一个 Gateway 副本在完成调用方要求持久化的
+// 一轮 Responses API 之后所报告的内容，对应 STATUS.md 的 P2「Responses 持久
+// 会话」。TenantID 是 Gateway 对自己调用方所做的断言，理由与它是
+// CreateJobRequest 的请求体字段而非从会话读取相同。
+//
+// Messages 是本服务从不解析的不透明 JSON——为什么，见 model.ResponseTurn 的
+// 文档注释。它是当此后某一轮的 previous_response_id 指向这里时，Gateway
+// 必须原样取回的内容。
+type CreateResponseTurnRequest struct {
+	ResponseID         string          `json:"response_id"`
+	TenantID           string          `json:"tenant_id"`
+	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	Model              string          `json:"model,omitempty"`
+	Messages           json.RawMessage `json:"messages"`
+}
+
+// ResponseTurnResponse is the internal API's record of one persisted turn.
+//
+// ResponseTurnResponse 是内部 API 对一轮已持久化记录的呈现。
+type ResponseTurnResponse struct {
+	ResponseID         string          `json:"response_id"`
+	TenantID           string          `json:"tenant_id"`
+	PreviousResponseID string          `json:"previous_response_id,omitempty"`
+	Model              string          `json:"model,omitempty"`
+	Messages           json.RawMessage `json:"messages"`
+	CreatedAt          time.Time       `json:"created_at"`
 }

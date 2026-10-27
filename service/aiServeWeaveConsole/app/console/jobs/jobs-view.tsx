@@ -1,4 +1,14 @@
 "use client";
+import { ErrorMessage } from "@/components/i18n/error-message";
+import { MessageError } from "@/lib/i18n/problem";
+
+
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+
+
 
 import * as React from "react";
 import Link from "next/link";
@@ -53,15 +63,16 @@ const NO_JOBS: WorkflowJob[] = [];
  *
  * STATE_LABELS 镜像 runtime.Workflow* 的各状态。不认识的状态原样展示：本次构建不认识的
  * 状态是一件需要被看见的事。 */
-const STATE_LABELS: Record<string, string> = {
-  pending: "排队中",
-  running: "运行中",
-  succeeded: "成功",
-  failed: "失败",
-  cancelled: "已取消",
-};
+const STATE_LABELS = (t: Translator): Record<string, string> => ({
+  pending: t("tenant.queued"),
+  running: t("tenant.running"),
+  succeeded: t("tenant.succeeded"),
+  failed: t("tenant.failed"),
+  cancelled: t("tenant.canceled"),
+});
 
 export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
+  const { locale, t } = useI18n();
   const view = useResource<JobView>({
     method: "GET",
     path: "/admin/v1/jobs",
@@ -87,26 +98,14 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
   );
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">工作流运行</h1>
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.workflowRuns" /></h1>
         <p className="text-sm text-muted-foreground">
-          本租户当前的运行。这里有两条限制，都不是措辞而是事实：
-        </p>
+          <Message id="tenant.currentRunsForThisTenantThisViewHas" /></p>
         <ul className="mt-2 grid gap-1 text-sm text-muted-foreground">
-          <li>
-            <strong>这是实时视图，不是历史。</strong>
-            网关的 Job 表在进程内存里、有条数上限、且每个副本各自持有，因此副本重启、条数
-            超限，或某个副本没有作答，都会让运行从这里消失。控制面已经建好持久化的 Job
-            历史表与写入路径，但本控制台还没有读它的页面，因此这里暂时仍是唯一的运行视图。
-          </li>
-          <li>
-            <strong>状态是「最后观测状态」，不是此刻的状态。</strong>
-            网关只在提交方轮询 <code className="font-mono text-xs">GET /v1/jobs/&#123;id&#125;</code>
-            或挂着事件流时才得知运行有了进展，后台没有对账。因此提交方一旦停止查询，
-            即使后端已经完成，这里也会一直停在最后看到的那个状态——下面对未结束的运行标出
-            了观测时间，就是为了让这一点可见。
-          </li>
+          <li><Message id="tenant.eachGatewayReplicaKeepsItsOwnJobTable_ed5df5" values={{ strong: <strong><Message id="tenant.thisIsALiveViewNotAHistory" /></strong> }} /></li>
+          <li><Message id="tenant.theGatewayLearnsAboutProgressOnlyWhenThe_2ed359" values={{ strong: <strong><Message id="tenant.statusMeansLastObservedStatusNotCurrentStatus" /></strong>, code: <code className="font-mono text-xs">GET /v1/jobs/&#123;id&#125;</code> }} /></li>
         </ul>
         <p className="text-sm text-muted-foreground">
         </p>
@@ -115,7 +114,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
       {view.error ? (
         <ErrorState message={view.error} onRetry={view.reload} />
       ) : view.loading || !view.data ? (
-        <LoadingState label="正在采集运行列表" rows={5} />
+        <LoadingState label={t("tenant.collectingRunList")} rows={5} />
       ) : (
         <>
           <FleetFreshness
@@ -129,30 +128,26 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
               role="alert"
               className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
             >
-              有副本的 Job 表已达条数上限并丢弃过较早的运行。该表由本部署的所有租户共享，
-              因此这里缺少的运行不一定是本租户造成的。
-            </div>
+              <Message id="tenant.aReplicaSJobTableHasReachedIts" /></div>
           ) : null}
 
           <div className="flex flex-wrap items-center gap-3">
             <Input
               className="max-w-xs"
-              placeholder="筛选 Job ID、工作流或状态"
+              placeholder={t("tenant.filterByJobIdWorkflowOrStatus")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              aria-label="筛选已采集的运行"
+              aria-label={t("tenant.filterCollectedRuns")}
             />
-            <span className="text-xs text-muted-foreground">
-              显示 {shown.length} / 已采集 {jobs.length} 条；筛选只作用于本次采集到的内容。
-            </span>
+            <span className="text-xs text-muted-foreground"><Message id="tenant.recordsShownCollectedFiltersApplyOnlyToThe" values={{ count: shown.length, count2: jobs.length }} /></span>
           </div>
 
           {shown.length === 0 ? (
             <EmptyState
-              title={jobs.length === 0 ? "当前没有正在保留的运行" : "没有符合筛选条件的运行"}
+              title={jobs.length === 0 ? t("tenant.noRunsAreCurrentlyRetained") : t("tenant.noRunsMatchTheFilters")}
               description={
                 jobs.length === 0
-                  ? "这不等于本租户从未提交过工作流——已经结束并被表挤出的运行不在这里。"
+                  ? t("tenant.thisDoesNotMeanTheTenantHasNever")
                   : undefined
               }
             />
@@ -162,12 +157,12 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
                 <TableHeader>
                   <TableRow>
                     <TableHead>Job ID</TableHead>
-                    <TableHead>工作流</TableHead>
-                    <TableHead>最后观测状态</TableHead>
-                    <TableHead>提交时间</TableHead>
-                    <TableHead>观测时间</TableHead>
-                    <TableHead>产物</TableHead>
-                    <TableHead>操作</TableHead>
+                    <TableHead><Message id="tenant.workflows" /></TableHead>
+                    <TableHead><Message id="tenant.lastObservedStatus" /></TableHead>
+                    <TableHead><Message id="tenant.submittedAt" /></TableHead>
+                    <TableHead><Message id="tenant.observedAt" /></TableHead>
+                    <TableHead><Message id="tenant.artifacts" /></TableHead>
+                    <TableHead><Message id="tenant.actions" /></TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
@@ -181,7 +176,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
                             variant={job.state === "running" || job.state === "succeeded" ? "secondary" : "outline"}
                             className={job.state === "failed" ? "text-destructive" : undefined}
                           >
-                            {STATE_LABELS[job.state] ?? job.state}
+                            {STATE_LABELS(t)[job.state] ?? job.state}
                           </Badge>
                           {/* A non-terminal state is shown with its age,
                               because the Gateway stops learning about a run
@@ -192,9 +187,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
                               不再得知这次运行的进展。没有它，三小时前的「运行中」与三秒前
                               的「运行中」长得一模一样。 */}
                           {isTerminalJobState(job.state) ? null : (
-                            <span className="text-xs text-muted-foreground">
-                              观测于 {observationAge(job.updatedAt, now)?.label ?? "未知时间"}
-                            </span>
+                            <span className="text-xs text-muted-foreground"><Message id="tenant.observedAt_dcb238" values={{ value: observationAge(job.updatedAt, now, locale)?.label ?? t("tenant.unknownTime") }} /></span>
                           )}
                           {/* Shown whenever the backend reported one, not only
                               while pending: a position the backend sent is
@@ -205,26 +198,22 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
                               位置是数据，因为本次构建预期的是另一个状态就把它丢掉，等于
                               为了让一个猜测显得整齐而藏起一个事实。 */}
                           {job.queuePosition > 0 ? (
-                            <span className="text-xs text-muted-foreground">
-                              队列第 {job.queuePosition} 位
-                            </span>
+                            <span className="text-xs text-muted-foreground"><Message id="tenant.queuePosition" values={{ queuePosition: job.queuePosition }} /></span>
                           ) : null}
                         </div>
                         {job.errorSummary ? (
                           <p className="mt-1 text-xs text-destructive">{job.errorSummary}</p>
                         ) : null}
                       </TableCell>
-                      <TableCell className="text-xs">{formatDateTime(job.createdAt)}</TableCell>
-                      <TableCell className="text-xs">{formatDateTime(job.updatedAt)}</TableCell>
+                      <TableCell className="text-xs">{formatDateTime(job.createdAt, undefined, locale)}</TableCell>
+                      <TableCell className="text-xs">{formatDateTime(job.updatedAt, undefined, locale)}</TableCell>
                       <TableCell className="text-xs">
                         {job.artifactIds.length === 0 ? (
-                          <span className="text-muted-foreground">无</span>
+                          <span className="text-muted-foreground"><Message id="tenant.none" /></span>
                         ) : hasGatewayKey ? (
                           <ArtifactLinks artifactIds={job.artifactIds} />
                         ) : (
-                          <span title={job.artifactIds.join("\n")}>
-                            {job.artifactIds.length} 个
-                          </span>
+                          <span title={job.artifactIds.join("\n")}><Message id="tenant.items_e8aa60" values={{ count: job.artifactIds.length }} /></span>
                         )}
                       </TableCell>
                       <TableCell>
@@ -234,8 +223,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
                           <CancelButton jobId={job.id} onCancelled={view.reload} />
                         ) : (
                           <span className="text-xs text-muted-foreground">
-                            未配置 Key
-                          </span>
+                            <Message id="tenant.noKeyConfigured" /></span>
                         )}
                       </TableCell>
                     </TableRow>
@@ -245,20 +233,15 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
             </div>
           )}
 
-          <p className="text-xs text-muted-foreground">
-            {hasGatewayKey
-              ? "取消与产物下载走的是网关数据面，用的是「设置」页配置的那把 Key，不经过控制面。"
-              : "取消与产物下载走的是网关数据面，认的是租户自己的 API Key。前往「设置」页配置一把，才能在这里使用这两项操作；未配置前，产物仅列出 id。"}
-            运行落在哪个网关副本上属于基础设施信息，与节点清单一样不在租户视图中呈现。
-            {hasGatewayKey ? null : (
+          <p className="text-xs text-muted-foreground"><Message id="tenant.theGatewayReplicaRunningAJobIsInfrastructure_21a180" values={{ value: hasGatewayKey
+              ? t("tenant.cancellationAndArtifactDownloadsUseTheGatewayData")
+              : t("tenant.cancellationAndArtifactDownloadsUseTheGatewayData_292c9a"), value2: hasGatewayKey ? null : (
               <>
                 {" "}
                 <Link href="/console/settings" className="underline underline-offset-2">
-                  前往设置
-                </Link>
+                  <Message id="tenant.goToSettings" /></Link>
               </>
-            )}
-          </p>
+            ) }} /></p>
         </>
       )}
     </div>
@@ -287,6 +270,7 @@ export function CancelButton({
   jobId: string;
   onCancelled: () => void;
 }) {
+  const {t } = useI18n();
   const [pending, setPending] = React.useState(false);
 
   async function cancel() {
@@ -300,16 +284,16 @@ export function CancelButton({
         { method: "POST" }
       );
       if (response.ok) {
-        toast.success("已发送取消请求");
+        toast.success(<Message id={"tenant.cancellationRequestSent"} />);
         onCancelled();
         return;
       }
       const body = (await response.json().catch(() => null)) as
         | { error?: string }
         | null;
-      toast.error(describeGatewayError(body?.error, response.status));
+      toast.error(<ErrorMessage error={gatewayFailure(body?.error, response.status)} />);
     } catch {
-      toast.error("无法连接网关，请检查网络后重试。");
+      toast.error(<Message id={"tenant.unableToConnectToTheGatewayCheckYour"} />);
     } finally {
       setPending(false);
     }
@@ -323,7 +307,7 @@ export function CancelButton({
       disabled={pending}
       onClick={cancel}
     >
-      {pending ? "取消中…" : "取消"}
+      {pending ? t("tenant.canceling") : t("common.cancel")}
     </Button>
   );
 }
@@ -346,35 +330,34 @@ export function ArtifactLinks({ artifactIds }: { artifactIds: string[] }) {
           className="underline underline-offset-2"
           title={id}
         >
-          下载
-        </a>
+          <Message id="tenant.download" /></a>
       ))}
     </div>
   );
 }
 
-/** describeGatewayError turns the error code the two Gateway-proxy routes
+/** gatewayFailure turns the error code the two Gateway-proxy routes
  * report into on-screen text. These routes do not go through
  * lib/console/api-client.ts's ApiErrorKind, so the mapping lives here rather
  * than in lib/console/errors.ts — see describeSettingsError in
  * app/console/settings/settings-view.tsx for the same reasoning applied to
  * the Gateway Key form.
  *
- * describeGatewayError 把两个网关代理路由报告的错误代号转换成屏幕上的文案。这些
+ * gatewayFailure 把两个网关代理路由报告的错误代号转换成屏幕上的文案。这些
  * 路由不经由 lib/console/api-client.ts 的 ApiErrorKind，因此这份映射放在这里，
  * 而不是 lib/console/errors.ts——同样的推理用在了 Gateway Key 表单上，见
  * app/console/settings/settings-view.tsx 的 describeSettingsError。 */
-export function describeGatewayError(code: string | undefined, status: number): string {
+export function gatewayFailure(code: string | undefined, status: number): MessageError {
   switch (code) {
     case "gateway_key_missing":
-      return "尚未配置 Gateway Key，请前往「设置」页配置。";
+      return new MessageError("tenant.noGatewayKeyIsConfiguredConfigureOneOn");
     case "gateway_key_rejected":
-      return "配置的 Gateway Key 已失效，请前往「设置」页重新配置。";
+      return new MessageError("tenant.theConfiguredGatewayKeyIsNoLongerValid");
     case "forbidden_origin":
-      return "请求来源校验失败，请刷新页面后重试。";
+      return new MessageError("tenant.requestOriginValidationFailedRefreshThePageAnd");
     default:
       return status === 504 || status === 502
-        ? "无法连接网关，请稍后重试。"
-        : "操作失败，请稍后重试。";
+        ? new MessageError("tenant.unableToConnectToTheGatewayPleaseTry")
+        : new MessageError("tenant.theOperationFailedPleaseTryAgainLater");
   }
 }

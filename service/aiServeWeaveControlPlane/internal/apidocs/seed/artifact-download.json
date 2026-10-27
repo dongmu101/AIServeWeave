@@ -1,0 +1,121 @@
+{
+  "slug": "artifact-download",
+  "category": "工作流与任务",
+  "category_order": 50,
+  "sort_order": 60,
+  "title": "下载产物",
+  "method": "GET",
+  "path": "/v1/artifacts/{artifact_id}",
+  "summary": "按 artifact_id 下载工作流生成的文件，响应体为文件原始字节。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "响应体是文件原始字节，不是 JSON",
+      "边读边传，大文件不会在网关整体缓存，适合流式写盘",
+      "Content-Disposition 以附件形式给出文件名，Content-Type 与 Content-Length 在已知时返回",
+      "只能下载本租户任务的产物，其他 artifact_id 一律返回 404"
+    ],
+    "notice": "artifact_id 来自「获取任务产物列表」接口。传输中途出错时连接会提前结束（收到的字节少于 Content-Length），请校验长度并重新下载；本接口不支持 Range 分段续传。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。API Key 在控制台创建，只能访问本租户的工作流与任务。"
+      }
+    ],
+    "path_params": [
+      {
+        "name": "artifact_id",
+        "type": "string",
+        "required": true,
+        "description": "产物 ID，以 `art_` 开头，由 GET /v1/jobs/{job_id}/artifacts 返回。"
+      }
+    ],
+    "query_params": [],
+    "body_type": "none",
+    "body_params": [],
+    "response_fields": [
+      {
+        "name": "Content-Type",
+        "type": "header",
+        "required": false,
+        "description": "文件的媒体类型，例如 image/png、video/mp4；无法确定时不返回。"
+      },
+      {
+        "name": "Content-Length",
+        "type": "header",
+        "required": false,
+        "description": "文件字节数，已知时返回。"
+      },
+      {
+        "name": "Content-Disposition",
+        "type": "header",
+        "required": false,
+        "description": "形如 attachment; filename=\"txt2img_00001_.png\"。文件名已去除目录部分、引号与控制字符，最长 128 字节；无法得到安全文件名时不返回该头。"
+      },
+      {
+        "name": "body",
+        "type": "binary",
+        "required": true,
+        "description": "文件原始字节。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl -L \"{{BASE_URL}}/v1/artifacts/art_9b1e4d7c2a6f48e3b5c0d1a2e3f4b5c6\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\" \\\n  -o result.png"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\nartifact_id = \"art_9b1e4d7c2a6f48e3b5c0d1a2e3f4b5c6\"\n\nwith requests.get(\n    f\"{BASE_URL}/v1/artifacts/{artifact_id}\",\n    headers={\"Authorization\": f\"Bearer {API_KEY}\"},\n    stream=True,\n    timeout=(10, 300),\n) as resp:\n    resp.raise_for_status()\n    expected = resp.headers.get(\"Content-Length\")\n    written = 0\n    with open(\"result.png\", \"wb\") as f:\n        for chunk in resp.iter_content(chunk_size=1 << 16):\n            f.write(chunk)\n            written += len(chunk)\n    if expected is not None and written != int(expected):\n        raise IOError(\"下载不完整，请重试\")"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst artifactId = \"art_9b1e4d7c2a6f48e3b5c0d1a2e3f4b5c6\";\n\nconst resp = await fetch(`${BASE_URL}/v1/artifacts/${artifactId}`, {\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\nconst blob = await resp.blob();\nconsole.log(resp.headers.get(\"Content-Type\"), blob.size);\n// 浏览器中可用 URL.createObjectURL(blob) 预览或触发下载"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "下载成功",
+        "content_type": "image/png",
+        "body": "Content-Type: image/png\nContent-Length: 1482937\nContent-Disposition: attachment; filename=\"txt2img_00001_.png\"\n\n<文件二进制内容>"
+      },
+      {
+        "status": 401,
+        "label": "API Key 无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "产物不存在",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no such artifact\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"artifact_not_found\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "执行端不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "错误码",
+        "body": "404 artifact_not_found：artifact_id 不存在、不属于当前租户，或对应产物已不再可用。\n\n413 response_too_large：文件超出传输大小上限。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+      },
+      {
+        "title": "错误格式",
+        "body": "所有错误都以 OpenAI 兼容的 JSON 结构返回，error.type 表示错误大类，error.code 是可用于程序判断的错误码，error.message 为面向开发者的英文说明。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请一并提供。",
+        "code": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}",
+        "code_lang": "json"
+      }
+    ]
+  }
+}

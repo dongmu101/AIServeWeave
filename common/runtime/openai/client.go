@@ -1,8 +1,14 @@
 // Package openai implements the shared HTTP transport used by the vLLM,
-// SGLang and Ollama runtime adapters to talk to an OpenAI-compatible
-// backend. It owns URL construction, authentication headers, response size
-// limits and error normalization; adapters only add their own endpoints and
-// DTOs on top of Client.
+// SGLang, Ollama, hosted-provider and Anthropic runtime adapters to talk to
+// an OpenAI-compatible (or, for Anthropic, Messages) backend. It owns URL
+// construction, authentication headers, response size limits and error
+// normalization; adapters only add their own endpoints and DTOs on top of
+// Client.
+//
+// Package openai 实现 vLLM、SGLang、Ollama、托管供应商与 Anthropic 运行时适配器
+// 共用的 HTTP 传输层，用于访问 OpenAI 兼容后端（Anthropic 则为 Messages 后端）。
+// 它负责 URL 构造、认证请求头、响应大小上限与错误归一化；适配器只在 Client 之上
+// 添加各自的端点与 DTO。
 package openai
 
 import (
@@ -11,6 +17,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/url"
 	"strings"
@@ -49,6 +56,39 @@ type ClientConfig struct {
 	MaxResponseBytes int64
 	Kind             runtime.Kind
 	RuntimeID        string
+	// VersionedBaseURL means BaseURL already ends at the API version root
+	// (https://api.openai.com/v1, https://open.bigmodel.cn/api/paas/v4), as
+	// hosted providers document it, so every request path drops its leading
+	// "/v1" before being joined on.
+	//
+	// VersionedBaseURL 表示 BaseURL 已经包含 API 版本根路径（如
+	// https://api.openai.com/v1、https://open.bigmodel.cn/api/paas/v4），与托管
+	// 供应商文档的写法一致；拼接前每个请求路径都会去掉开头的 "/v1"。
+	VersionedBaseURL bool
+	// AuthHeader, when set, carries APIKey verbatim in that header (for
+	// example "x-api-key") instead of "Authorization: Bearer". The key is
+	// still redacted from errors either way.
+	//
+	// AuthHeader 非空时以该请求头原样携带 APIKey（例如 "x-api-key"），而不是
+	// "Authorization: Bearer"。两种方式下密钥都会从错误中脱敏。
+	AuthHeader string
+	// MaxCompletionTokens sends ChatRequest.MaxTokens as
+	// "max_completion_tokens", the name OpenAI's reasoning models and
+	// MiniMax require, instead of "max_tokens".
+	//
+	// MaxCompletionTokens 把 ChatRequest.MaxTokens 以 "max_completion_tokens"
+	// 发送（OpenAI 推理模型与 MiniMax 要求的字段名），而不是 "max_tokens"。
+	MaxCompletionTokens bool
+	// RefuseRedirects returns a redirect response as a protocol_error
+	// ("redirect not followed") instead of following it. Go forwards custom headers such as x-api-key
+	// across hosts on redirect, so a remote endpoint must never be able to
+	// steer a credential to an address the operator did not declare.
+	//
+	// RefuseRedirects 把重定向响应作为 protocol_error（"redirect not followed"）
+	// 返回，而不是跟随它。Go 在跨主机
+	// 重定向时会转发 x-api-key 这类自定义请求头，因此绝不能让远端端点把凭据
+	// 引到运维未声明的地址。
+	RefuseRedirects bool
 }
 
 // Client is the shared OpenAI-compatible HTTP client. It is safe for
@@ -61,6 +101,9 @@ type Client struct {
 	maxRespBytes int64
 	kind         runtime.Kind
 	runtimeID    string
+	versioned    bool
+	authHeader   string
+	maxCompl     bool
 }
 
 // NewClient validates cfg and builds a Client. It performs no network I/O.
@@ -94,6 +137,11 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	if httpClient == nil {
 		httpClient = &http.Client{}
 	}
+	if cfg.RefuseRedirects {
+		refusing := *httpClient
+		refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		httpClient = &refusing
+	}
 	maxBytes := cfg.MaxResponseBytes
 	if maxBytes <= 0 {
 		maxBytes = defaultMaxResponseBytes
@@ -107,15 +155,28 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		maxRespBytes: maxBytes,
 		kind:         cfg.Kind,
 		runtimeID:    cfg.RuntimeID,
+		versioned:    cfg.VersionedBaseURL,
+		authHeader:   cfg.AuthHeader,
+		maxCompl:     cfg.MaxCompletionTokens,
 	}, nil
 }
 
 // resolve joins path onto the client's base URL, preserving any path prefix
-// on BaseURL instead of overwriting it.
+// on BaseURL instead of overwriting it. With VersionedBaseURL the path's
+// leading "/v1" is dropped, because BaseURL already carries the version.
+//
+// resolve 把 path 拼接到客户端的基础 URL 上，保留 BaseURL 的路径前缀而不是覆盖
+// 它。启用 VersionedBaseURL 时去掉 path 开头的 "/v1"，因为 BaseURL 已含版本段。
 func (c *Client) resolve(path string) *url.URL {
+	if c.versioned {
+		if rest, ok := strings.CutPrefix(path, "/v1/"); ok {
+			path = "/" + rest
+		}
+	}
+	path, query, _ := strings.Cut(path, "?") // a query is the caller's, never the base URL's / 查询串只来自调用方，从不来自基础 URL
 	resolved := *c.baseURL
 	resolved.Path = strings.TrimSuffix(c.baseURL.Path, "/") + path
-	resolved.RawQuery = ""
+	resolved.RawQuery = query
 	return &resolved
 }
 
@@ -133,13 +194,35 @@ func (c *Client) newRequest(ctx context.Context, method, path string, body []byt
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Accept", "application/json")
-	if c.apiKey != "" {
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-	}
+	c.setAuth(req.Header)
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}
 	return req, nil
+}
+
+// setAuth attaches the API key, if any, in the configured header.
+// setAuth 按配置的请求头附加 API 密钥（若有）。
+func (c *Client) setAuth(h http.Header) {
+	switch {
+	case c.apiKey == "":
+	case c.authHeader != "":
+		h.Set(c.authHeader, c.apiKey)
+	default:
+		h.Set("Authorization", "Bearer "+c.apiKey)
+	}
+}
+
+// DoStream sends operation and returns the raw 2xx response with its body
+// open for the caller to read and close, for streaming formats other than
+// OpenAI's chat chunks. Non-2xx responses become *runtime.RuntimeError
+// exactly as in Do.
+//
+// DoStream 发送 operation 并返回原始 2xx 响应，响应体保持打开，由调用方读取并
+// 关闭，用于 OpenAI 聊天分片之外的流式格式。非 2xx 响应与 Do 一样转换为
+// *runtime.RuntimeError。
+func (c *Client) DoStream(ctx context.Context, operation, method, path string, reqBody any) (*http.Response, error) {
+	return c.doRaw(ctx, operation, method, path, reqBody)
 }
 
 // Do sends operation as an HTTP request. If reqBody is non-nil, it is
@@ -222,6 +305,70 @@ func (c *Client) doRaw(ctx context.Context, operation, method, path string, reqB
 	return resp, nil
 }
 
+// doMultipart streams a multipart/form-data request: fields as plain form
+// values, plus one file part named fileField whose bytes come from body.
+// The multipart envelope is written by a goroutine into an io.Pipe, so body
+// is read and forwarded as the transport consumes it — never buffered whole,
+// the same discipline doRaw's JSON path does not need because a ChatRequest
+// is already a bounded in-memory value.
+//
+// doMultipart 流式发送一个 multipart/form-data 请求：fields 作为普通表单字段，
+// 外加一个名为 fileField 的文件分片，其字节来自 body。multipart 信封由一个
+// goroutine 写入 io.Pipe，因此 body 随传输层的消费而被读取并转发——绝不整体
+// 缓冲，这是 doRaw 的 JSON 路径不需要的纪律，因为 ChatRequest 本就是一个有界
+// 的内存内值。
+func (c *Client) doMultipart(ctx context.Context, operation, path string, fields map[string]string, fileField, filename string, body io.Reader) (*http.Response, error) {
+	pr, pw := io.Pipe()
+	mw := multipart.NewWriter(pw)
+
+	go func() {
+		err := func() error {
+			for name, value := range fields {
+				if err := mw.WriteField(name, value); err != nil {
+					return err
+				}
+			}
+			part, err := mw.CreateFormFile(fileField, filename)
+			if err != nil {
+				return err
+			}
+			if _, err := io.Copy(part, body); err != nil {
+				return err
+			}
+			return mw.Close()
+		}()
+		_ = pw.CloseWithError(err)
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.resolve(path).String(), pr)
+	if err != nil {
+		return nil, c.localError(operation, runtime.ErrorInvalidConfig, fmt.Sprintf("build request: %v", err))
+	}
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Header.Set("Accept", "application/json")
+	c.setAuth(req.Header)
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, c.transportError(ctx, operation, err)
+	}
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		defer resp.Body.Close()
+		respBytes, truncated, err := readLimited(resp.Body, c.maxRespBytes)
+		if err != nil {
+			return nil, c.transportError(ctx, operation, err)
+		}
+		if truncated {
+			return nil, c.tooLargeError(operation, resp.StatusCode)
+		}
+		return nil, c.errorFromResponse(operation, resp.StatusCode, respBytes)
+	}
+	return resp, nil
+}
+
 func (c *Client) tooLargeError(operation string, statusCode int) *runtime.RuntimeError {
 	return &runtime.RuntimeError{
 		Code:       runtime.ErrorResponseTooLarge,
@@ -270,6 +417,11 @@ func (c *Client) transportError(ctx context.Context, operation string, err error
 func (c *Client) errorFromResponse(operation string, status int, body []byte) *runtime.RuntimeError {
 	code := runtime.ErrorCodeFromStatus(status)
 	msg := runtime.Redact(parseErrorMessage(body), c.apiKey)
+	if status >= 300 && status < 400 {
+		// A refused redirect: its body and target are not worth surfacing.
+		// 被拒绝的重定向：其正文与目标地址不对外暴露。
+		msg = fmt.Sprintf("redirect not followed (HTTP %d)", status)
+	}
 	return &runtime.RuntimeError{
 		Code:       code,
 		RuntimeID:  c.runtimeID,

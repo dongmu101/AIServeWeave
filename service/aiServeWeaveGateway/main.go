@@ -33,10 +33,14 @@ import (
 	"google.golang.org/grpc/keepalive"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/localdiscovery"
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
+	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
+	"AIServeWeave/service/aiServeWeaveGateway/modelpullapi"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
@@ -88,6 +92,22 @@ func run() error {
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
 	redisAddr := flag.String("redis-addr", "",
 		"Redis host:port for fleet-wide rate limiting; empty enforces per-replica, which admits the configured allowance once per replica")
+	breakerFailureThreshold := flag.Int("breaker-failure-threshold", 0,
+		"consecutive breaker-qualifying failures (connection/timeout/upstream errors only) before a candidate node trips open; zero uses scheduler's built-in default (5), which is unvalidated against real traffic as of P10 — see docs/acceptance/p10-breaker-calibration-2026-09-13")
+	breakerBaseCooldown := flag.Duration("breaker-base-cooldown", 0,
+		"initial cooldown a tripped breaker stays open before its next probe attempt; zero uses scheduler's built-in default (5s)")
+	breakerMaxCooldown := flag.Duration("breaker-max-cooldown", 0,
+		"cap on cooldown growth after repeated trips (doubles per trip until this cap); zero uses scheduler's built-in default (2m)")
+	schedulerPolicy := flag.String("scheduler-policy", string(scheduler.PolicyLeastLoad),
+		"how candidates inside one routing target are ordered for inference requests: least_load (most idle slots first, the default), power_of_two (better of two random picks, spreads load across replicas reading the same stale heartbeat), or prefix_hash (requests sharing a prompt prefix go to the same node so its prompt/prefix cache is reused); priority and weight still apply first, and workflows always use least_load")
+	schedulerPrefixBytes := flag.Int("scheduler-prefix-bytes", 0,
+		"with -scheduler-policy=prefix_hash, how many bytes of a chat request's leading messages (up to and including the first user message) are fingerprinted; zero uses scheduler's built-in default (4096)")
+	workflowQueueMaxWait := flag.Duration("workflow-queue-max-wait", 0,
+		"STATUS.md's P2 bounded task queueing: how long a workflow submission waits, re-polling candidates, once every workflow-capable node is busy in a retryable way, before the failure is returned; zero disables queueing, which fails such a submission immediately (today's behavior, and the default)")
+	workflowQueueRetryInterval := flag.Duration("workflow-queue-retry-interval", 0,
+		"how often a queued workflow submission re-polls candidates; zero uses scheduler's built-in default (500ms); ignored when -workflow-queue-max-wait is zero")
+	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", 0,
+		"maximum workflow submissions allowed to wait at once; one beyond this is rejected immediately rather than queueing; zero uses scheduler's built-in default (64); ignored when -workflow-queue-max-wait is zero")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
 	routeStateFile := flag.String("route-state-file", "", "durable last-good route snapshot; required in controlplane mode")
 	routeSyncInterval := flag.Duration("route-sync-interval", 30*time.Second, "managed route polling interval")
@@ -98,10 +118,26 @@ func run() error {
 	workflowSyncInterval := flag.Duration("workflow-sync-interval", 30*time.Second, "managed workflow template polling interval")
 	workflowTemplates := flag.String("workflow-templates", "",
 		"comma-separated files or directories of ComfyUI workflow template manifests; empty registers none, and every workflow submit then 404s")
+	imagesWorkflowID := flag.String("images-workflow-id", "",
+		"registered workflow template id POST /v1/images/generations binds a caller's prompt onto (STATUS.md's P2); empty disables the endpoint (404). The template must declare a required string input named \"prompt\" and at least one output typed \"image\", checked at startup; optional \"width\"/\"height\" integer inputs let a caller's size parameter through")
+	imagesGenerationTimeout := flag.Duration("images-generation-timeout", 0,
+		"bound on POST /v1/images/generations' whole synchronous submit-to-terminal wait; zero uses httpapi.DefaultImagesGenerationTimeout (120s)")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default because the exposition names every connected node, empty disables it")
 	adminAddr := flag.String("admin-addr", "",
 		"address the operator inventory listener binds, e.g. 127.0.0.1:8091; empty disables it. Its token comes from AISW_GATEWAY_ADMIN_TOKEN")
+	autoDiscover := flag.Bool("auto-discover", true,
+		"discover configured local Ollama/vLLM services for the operator inventory; inference still uses connected Agents")
+	autoDiscoverInterval := flag.Duration("auto-discover-interval", localdiscovery.DefaultInterval,
+		"interval between scans for local AI services")
+	localOllamaURL := flag.String("local-ollama-url", "http://127.0.0.1:11434",
+		"Ollama inventory endpoint; set a container-reachable host address when needed, empty skips Ollama")
+	localVLLMURL := flag.String("local-vllm-url", "http://127.0.0.1:8000",
+		"vLLM inventory endpoint; set a container-reachable host address when needed, empty skips vLLM")
+	modelPullAddr := flag.String("model-pull-addr", "",
+		"address the model-pull trigger/status listener binds, e.g. 127.0.0.1:8092 (STATUS.md's P2 model distribution subtask 2); empty disables it. Unlike -admin-addr this listener accepts writes, so it has its own token: AISW_GATEWAY_MODEL_PULL_TOKEN")
+	comfyUIManagedAddr := flag.String("comfyui-managed-addr", "",
+		"address the ComfyUI Managed action/status listener binds, e.g. 127.0.0.1:8093 (STATUS.md's P2 ComfyUI Managed Docker deployment subtask 2); empty disables it. It is a separate write listener from -model-pull-addr with its own token: AISW_GATEWAY_COMFYUI_MANAGED_TOKEN")
 	artifactStorageKind := flag.String("artifact-storage", "",
 		"generated artifact storage backend (STATUS.md's P04): local, s3, webdav, or empty to disable byte persistence — artifacts then remain pull-only from the node that produced them, today's pre-P04 behavior")
 	artifactStorageLocalDir := flag.String("artifact-storage-local-dir", "", "directory for -artifact-storage=local")
@@ -183,6 +219,12 @@ func run() error {
 		return err
 	}
 
+	localRuntimes, stopLocalInventory, err := startLocalInventory(ctx, logger, registry, *autoDiscover && *adminAddr != "", *autoDiscoverInterval, *localOllamaURL, *localVLLMURL)
+	if err != nil {
+		return err
+	}
+	defer stopLocalInventory()
+
 	verifier, err := keyVerifier(*controlPlaneAddr, *controlPlaneToken, *keyCacheTTL, logger)
 	if err != nil {
 		return err
@@ -216,6 +258,56 @@ func run() error {
 		return err
 	}
 
+	// The request-log client shares the same -control-plane-addr and token as
+	// everything else above — this replica pushing its own front-door request
+	// records to the control plane it already talks to (STATUS.md's P09/C28).
+	// A deployment with no control plane configured gets no searchable
+	// request history, the same degrade jobPersistenceAdapter already returns
+	// nil for.
+	//
+	// 请求日志客户端与上面的一切共用同一个 -control-plane-addr 与 token——
+	// 本副本把自己的前门请求记录推送给它本已在对话的那个控制面（STATUS.md 的
+	// P09/C28）。未配置控制面的部署得不到可检索的请求历史，与
+	// jobPersistenceAdapter 已经为此返回 nil 的退化相同。
+	requestLogClient, err := requestLogClientAdapter(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
+	// The usage-ledger client shares the same -control-plane-addr and token as
+	// everything else above — this replica pushing its own per-tenant/model
+	// token usage to the control plane it already talks to (STATUS.md's P2
+	// usage ledger). A deployment with no control plane configured gets no
+	// durable usage records, the same degrade requestLogClientAdapter already
+	// returns nil for.
+	//
+	// 用量账本客户端与上面的一切共用同一个 -control-plane-addr 与 token——
+	// 本副本把自己按租户/模型的 token 用量推送给它本已在对话的那个控制面
+	// （STATUS.md 的 P2 用量账本）。未配置控制面的部署得不到持久化的用量
+	// 记录，与 requestLogClientAdapter 已经为此返回 nil 的退化相同。
+	usageLedgerClient, err := usageLedgerClientAdapter(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
+	// The response-turn persistence client shares the same -control-plane-addr
+	// and token as everything else above — this replica persisting and
+	// continuing Responses API conversations against the control plane it
+	// already talks to (STATUS.md's P2 "Responses 持久会话"). A deployment
+	// with no control plane configured gets store and previous_response_id
+	// refused exactly as they were before this feature existed, the same
+	// degrade jobPersistenceAdapter already returns nil for.
+	//
+	// 轮次持久化客户端与上面的一切共用同一个 -control-plane-addr 与 token——
+	// 本副本对着它本已在对话的那个控制面持久化并续接 Responses API 对话
+	// （STATUS.md 的 P2「Responses 持久会话」）。未配置控制面的部署得到的
+	// store 与 previous_response_id 行为，与本功能存在之前完全一样，均被
+	// 拒绝——与 jobPersistenceAdapter 已经为此返回 nil 的退化相同。
+	responsesPersist, err := responsesPersistAdapter(*controlPlaneAddr, *controlPlaneToken, logger)
+	if err != nil {
+		return err
+	}
+
 	// Templates are loaded (file mode) or pulled from a validated cache
 	// (controlplane mode, P03) before anything starts serving: a manifest
 	// that binds an input to a node it does not have is an operator mistake,
@@ -231,6 +323,10 @@ func run() error {
 	}
 	logger.Info("workflow templates loaded", slog.Int("count", workflowHandle.Len()))
 
+	if err := validateImagesWorkflow(workflowHandle, *imagesWorkflowID); err != nil {
+		return err
+	}
+
 	// Which limiter this replica gets is a deployment question, not a code
 	// one: one replica enforces exactly either way, and several replicas only
 	// enforce the configured allowance when they share Redis. Without it each
@@ -245,7 +341,22 @@ func run() error {
 		return err
 	}
 
-	sched := scheduler.New(server, scheduler.Config{Metrics: registry})
+	policy, err := scheduler.ParsePolicy(*schedulerPolicy)
+	if err != nil {
+		return err
+	}
+	sched := scheduler.New(server, scheduler.Config{
+		Metrics:            registry,
+		Logger:             logger,
+		FailureThreshold:   *breakerFailureThreshold,
+		BaseCooldown:       *breakerBaseCooldown,
+		MaxCooldown:        *breakerMaxCooldown,
+		Policy:             policy,
+		PrefixBytes:        *schedulerPrefixBytes,
+		QueueMaxWait:       *workflowQueueMaxWait,
+		QueueRetryInterval: *workflowQueueRetryInterval,
+		QueueMaxWaiters:    *workflowQueueMaxWaiters,
+	})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {
 		return err
@@ -284,6 +395,8 @@ func run() error {
 		ArtifactRetention:        *artifactRetention,
 		ArtifactPreviewRetention: *artifactPreviewRetention,
 		AllowedUploadExtensions:  splitCommaList(*allowedUploadExtensions),
+		ImagesWorkflowID:         *imagesWorkflowID,
+		ImagesGenerationTimeout:  *imagesGenerationTimeout,
 	}
 	// jobPersistence is assigned to both interface-typed fields only when it
 	// is genuinely non-nil: httpapi.Config's fields are interfaces, and
@@ -299,6 +412,51 @@ func run() error {
 		httpCfg.JobPersistClient = jobPersistence
 		httpCfg.JobRecoveryClient = jobPersistence
 		httpCfg.ArtifactCleanupClient = jobPersistence
+		httpCfg.ArtifactRecoveryClient = jobPersistence
+	}
+	// Same guard, same reason: requestLogClient is a concrete
+	// *controlplaneclient.RequestLogsClient, and httpCfg.RequestLogClient is
+	// an interface field, so a bare assignment of a nil pointer would box a
+	// non-nil interface holding nil — see requestLogClientAdapter's doc
+	// comment.
+	//
+	// 同样的防护，同样的理由：requestLogClient 是一个具体的
+	// *controlplaneclient.RequestLogsClient，而 httpCfg.RequestLogClient 是
+	// 接口字段，裸赋值一个 nil 指针会装箱出一个「非 nil 接口持有 nil」——见
+	// requestLogClientAdapter 的文档注释。
+	if requestLogClient != nil {
+		httpCfg.RequestLogClient = requestLogClient
+	}
+	// Same guard, same reason: usageLedgerClient is a concrete
+	// *controlplaneclient.UsageLedgerClient, and httpCfg.UsageLedgerClient is
+	// an interface field, so a bare assignment of a nil pointer would box a
+	// non-nil interface holding nil — see usageLedgerClientAdapter's doc
+	// comment.
+	//
+	// 同样的防护，同样的理由：usageLedgerClient 是一个具体的
+	// *controlplaneclient.UsageLedgerClient，而 httpCfg.UsageLedgerClient 是
+	// 接口字段，裸赋值一个 nil 指针会装箱出一个「非 nil 接口持有 nil」——见
+	// usageLedgerClientAdapter 的文档注释。
+	if usageLedgerClient != nil {
+		httpCfg.UsageLedgerClient = usageLedgerClient
+	}
+	// Same guard, same reason: responsesPersist is a concrete
+	// *controlplaneclient.ResponsesPersister, and httpCfg.ResponsesClient is
+	// an interface field, so a bare assignment of a nil pointer would box a
+	// non-nil interface holding nil — see responsesPersistAdapter's doc
+	// comment.
+	//
+	// 同样的防护，同样的理由：responsesPersist 是一个具体的
+	// *controlplaneclient.ResponsesPersister，而 httpCfg.ResponsesClient 是
+	// 接口字段，裸赋值一个 nil 指针会装箱出一个「非 nil 接口持有 nil」——见
+	// responsesPersistAdapter 的文档注释。
+	if responsesPersist != nil {
+		httpCfg.ResponsesClient = responsesPersist
+	}
+	if *redisAddr != "" {
+		messageRedis := redis.NewClient(&redis.Options{Addr: *redisAddr})
+		defer messageRedis.Close()
+		httpCfg.MessagesSessions = messagesession.NewRedis(messageRedis)
 	}
 	front := httpapi.New(sched, httpCfg)
 
@@ -334,13 +492,15 @@ func run() error {
 		logger.Info("no -admin-addr; this replica serves no operator inventory")
 	} else {
 		adminHandler, err := adminapi.New(adminapi.Config{
-			Token:     os.Getenv("AISW_GATEWAY_ADMIN_TOKEN"),
-			Routes:    routeStatus,
-			Workflows: workflowStatus,
-			Nodes:     server.Nodes,
-			Jobs:      front.JobsFor,
-			Templates: front.Templates,
-			ReplicaID: id,
+			Token:                os.Getenv("AISW_GATEWAY_ADMIN_TOKEN"),
+			Routes:               routeStatus,
+			Workflows:            workflowStatus,
+			Nodes:                server.Nodes,
+			LocalRuntimes:        localRuntimes,
+			Jobs:                 front.JobsFor,
+			Templates:            front.Templates,
+			ComfyUIManagedStatus: server.ComfyUIManagedStatus,
+			ReplicaID:            id,
 		})
 		if err != nil {
 			return err
@@ -366,6 +526,87 @@ func run() error {
 			}
 		}()
 		logger.Info("operator inventory listening", slog.String("admin_addr", adminListener.Addr().String()))
+	}
+
+	// The model-pull listener is a second, separate operator port (STATUS.md's
+	// P2 model distribution subtask 2): unlike -admin-addr it accepts writes
+	// — a trigger makes a connected node start downloading — so it gets its
+	// own token and its own bind failure, same reasoning as -admin-addr's,
+	// with a strictly higher bar because the abuse it gates is a write.
+	//
+	// 模型拉取监听器是第二个、独立的运维端口（STATUS.md P2 模型分发子任务
+	// 二）：与 -admin-addr 不同，它接受写操作——一次触发会让已连接节点开始下
+	// 载——因此它有自己的 token、自己的绑定失败处理，理由与 -admin-addr 相
+	// 同，但门槛更高，因为它挡住的是一次写操作的滥用。
+	var modelPullServer *http.Server
+	if *modelPullAddr == "" {
+		logger.Info("no -model-pull-addr; this replica accepts no model-pull triggers")
+	} else {
+		modelPullHandler, err := modelpullapi.New(modelpullapi.Config{
+			Token:   os.Getenv("AISW_GATEWAY_MODEL_PULL_TOKEN"),
+			Trigger: server.TriggerModelPull,
+			Status:  server.ModelPullStatus,
+		})
+		if err != nil {
+			return err
+		}
+		modelPullListener, err := net.Listen("tcp", *modelPullAddr)
+		if err != nil {
+			return err
+		}
+		modelPullServer = &http.Server{Handler: modelPullHandler}
+		go func() {
+			if err := modelPullServer.Serve(modelPullListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("model-pull listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("model-pull listening", slog.String("model_pull_addr", modelPullListener.Addr().String()))
+	}
+
+	// The ComfyUI Managed listener is a third, separate operator port
+	// (STATUS.md's P2 ComfyUI Managed Docker deployment subtask 2): it also
+	// accepts writes — an action can stop or restart a connected node's
+	// container — but controls a different capability from -model-pull-addr,
+	// so it gets its own token rather than sharing one; a leaked token's
+	// blast radius should match the one capability it unlocks, not both.
+	// HasActiveJob wires in front's own job routing table (built above at
+	// line 430) so a RESTART can be refused while this replica still has a
+	// non-terminal job bound to the target node (STATUS.md's P2 "排空升级检
+	// 查") — the drain check comfyuimanagedapi's own doc comment describes.
+	//
+	// ComfyUI Managed 监听器是第三个、独立的运维端口（STATUS.md P2 ComfyUI
+	// Managed Docker 部署子任务二）：它同样接受写操作——一个动作能停止或重启
+	// 已连接节点的容器——但控制的是与 -model-pull-addr 不同的能力，因此它有
+	// 自己的 token 而不是共用一个；一个泄漏的 token，其爆炸半径应该只对应
+	// 它解锁的那一种能力，而不是两种都算上。HasActiveJob 接上了 front 自己
+	// 的 job 路由表（上面第 430 行构造），这样本副本仍有非终态 job 绑定在
+	// 目标节点上时，RESTART 就能被拒绝（STATUS.md 的 P2「排空升级检
+	// 查」）——细节见 comfyuimanagedapi 自己的文档注释。
+	var comfyUIManagedServer *http.Server
+	if *comfyUIManagedAddr == "" {
+		logger.Info("no -comfyui-managed-addr; this replica accepts no comfyui managed actions")
+	} else {
+		comfyUIManagedHandler, err := comfyuimanagedapi.New(comfyuimanagedapi.Config{
+			Token:                    os.Getenv("AISW_GATEWAY_COMFYUI_MANAGED_TOKEN"),
+			Trigger:                  server.TriggerComfyUIManagedAction,
+			Status:                   server.ComfyUIManagedStatus,
+			HasActiveJob:             front.HasActiveJobOnNode,
+			TriggerCustomNodeInstall: server.TriggerComfyUIManagedCustomNodeInstall,
+		})
+		if err != nil {
+			return err
+		}
+		comfyUIManagedListener, err := net.Listen("tcp", *comfyUIManagedAddr)
+		if err != nil {
+			return err
+		}
+		comfyUIManagedServer = &http.Server{Handler: comfyUIManagedHandler}
+		go func() {
+			if err := comfyUIManagedServer.Serve(comfyUIManagedListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("comfyui managed listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("comfyui managed listening", slog.String("comfyui_managed_addr", comfyUIManagedListener.Addr().String()))
 	}
 
 	// The metrics listener's failure is logged rather than returned: losing
@@ -516,6 +757,12 @@ func run() error {
 	if adminServer != nil {
 		_ = adminServer.Close()
 	}
+	if modelPullServer != nil {
+		_ = modelPullServer.Close()
+	}
+	if comfyUIManagedServer != nil {
+		_ = comfyUIManagedServer.Close()
+	}
 
 	logger.Info("gateway stopped")
 	return nil
@@ -596,6 +843,98 @@ func jobPersistenceAdapter(addr, token string, logger *slog.Logger) (*controlpla
 	}
 	logger.Info("persisting and recovering job records against the control plane", slog.String("control_plane_addr", addr))
 	return controlplaneclient.NewGatewayPersister(client), nil
+}
+
+// requestLogClientAdapter builds the Gateway's side of the control plane's
+// request-log push API, or returns nil when no control plane is configured
+// — mirroring jobPersistenceAdapter's own degrade path and its "return the
+// concrete type" reasoning: see that function's doc comment for why a nil
+// *controlplaneclient.RequestLogsClient must never be assigned directly
+// into an httpapi.Config interface field.
+//
+// requestLogClientAdapter 构建 Gateway 一侧的控制面请求日志推送 API 客户端，
+// 或在未配置控制面时返回 nil——与 jobPersistenceAdapter 自己的退化路径及其
+// "返回具体类型"的理由相同：为什么一个 nil 的
+// *controlplaneclient.RequestLogsClient 绝不能被直接赋给 httpapi.Config 的
+// 接口字段，见该函数的文档注释。
+func requestLogClientAdapter(addr, token string, logger *slog.Logger) (*controlplaneclient.RequestLogsClient, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewRequestLogsClient(controlplaneclient.RequestLogsClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("pushing request logs to the control plane", slog.String("control_plane_addr", addr))
+	return client, nil
+}
+
+// usageLedgerClientAdapter builds the Gateway's side of the control plane's
+// usage-ledger push API (STATUS.md's P2 usage ledger), or returns nil when
+// no control plane is configured — mirroring requestLogClientAdapter's own
+// degrade path and its "return the concrete type" reasoning: see that
+// function's doc comment for why a nil
+// *controlplaneclient.UsageLedgerClient must never be assigned directly
+// into an httpapi.Config interface field.
+//
+// usageLedgerClientAdapter 构建 Gateway 一侧的控制面用量账本推送 API 客户端
+// （STATUS.md 的 P2 用量账本），或在未配置控制面时返回 nil——与
+// requestLogClientAdapter 自己的退化路径及其"返回具体类型"的理由相同：为
+// 什么一个 nil 的 *controlplaneclient.UsageLedgerClient 绝不能被直接赋给
+// httpapi.Config 的接口字段，见该函数的文档注释。
+func usageLedgerClientAdapter(addr, token string, logger *slog.Logger) (*controlplaneclient.UsageLedgerClient, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewUsageLedgerClient(controlplaneclient.UsageLedgerClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("pushing usage records to the control plane", slog.String("control_plane_addr", addr))
+	return client, nil
+}
+
+// responsesPersistAdapter builds the Gateway's side of the control plane's
+// Response-turn persistence API (STATUS.md's P2 "Responses 持久会话"), or
+// returns nil when no control plane is configured — mirroring
+// jobPersistenceAdapter's own degrade path and its "return the concrete
+// type" reasoning: see that function's doc comment for why a nil
+// *controlplaneclient.ResponsesPersister must never be assigned directly
+// into an httpapi.Config interface field.
+//
+// responsesPersistAdapter 构建 Gateway 一侧的控制面 Response 轮次持久化 API
+// 客户端（STATUS.md 的 P2「Responses 持久会话」），或在未配置控制面时返回
+// nil——与 jobPersistenceAdapter 自己的退化路径及其"返回具体类型"的理由
+// 相同：为什么一个 nil 的 *controlplaneclient.ResponsesPersister 绝不能被
+// 直接赋给 httpapi.Config 的接口字段，见该函数的文档注释。
+func responsesPersistAdapter(addr, token string, logger *slog.Logger) (*controlplaneclient.ResponsesPersister, error) {
+	if addr == "" {
+		return nil, nil
+	}
+	if token == "" {
+		token = os.Getenv(controlPlaneTokenEnv)
+	}
+	client, err := controlplaneclient.NewResponsesClient(controlplaneclient.ResponsesClientConfig{
+		Endpoint: addr,
+		Token:    token,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("persisting Responses API conversation history against the control plane", slog.String("control_plane_addr", addr))
+	return controlplaneclient.NewResponsesPersister(client), nil
 }
 
 // splitCommaList parses a comma-separated flag value, trimming whitespace

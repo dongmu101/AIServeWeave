@@ -34,16 +34,35 @@ var forbiddenConfigHeaders = map[string]bool{
 }
 
 // Normalize returns a copy of c with zero-value duration and concurrency
-// fields filled in with their documented defaults, and BaseURL's trailing
-// slash trimmed. It does not modify c. An explicit negative value on a
-// duration or MaxConcurrent is preserved as-is (the documented opt-out of a
-// default), and an invalid BaseURL is left unchanged for Validate to
-// reject with a clear error rather than normalized away.
+// fields filled in with their documented defaults, an empty BaseURL of a
+// hosted kind set to DefaultBaseURL, and BaseURL's trailing slash trimmed.
+// It does not modify c. An explicit negative value on a duration or
+// MaxConcurrent is preserved as-is (the documented opt-out of a default),
+// and an invalid BaseURL is left unchanged for Validate to reject with a
+// clear error rather than normalized away.
+//
+// Normalize 返回 c 的副本：零值的期限与并发字段填入文档给出的默认值，托管种类
+// 为空的 BaseURL 填入 DefaultBaseURL，并去掉 BaseURL 末尾的斜杠。它不修改 c。
+// 期限或 MaxConcurrent 上显式的负值原样保留（这是文档约定的关闭默认值方式）；
+// 无效的 BaseURL 保持不变，交给 Validate 以清晰的错误拒绝，而不是被规整掉。
 func (c Config) Normalize() Config {
 	n := c
 
 	if n.ProbeTimeout == 0 {
 		n.ProbeTimeout = defaultProbeTimeout
+		switch {
+		case n.Kind.IsLocalCLI():
+			// Cold CLI startup and account discovery need more time than an HTTP probe.
+			// CLI 冷启动和账户发现比 HTTP 探测需要更长时间。
+			n.ProbeTimeout = 15 * time.Second
+		case n.Kind.IsHosted():
+			// A hosted API is across the internet, often behind a proxy.
+			// 托管 API 位于互联网另一端，往往还经过代理。
+			n.ProbeTimeout = 10 * time.Second
+		}
+	}
+	if n.BaseURL == "" {
+		n.BaseURL = DefaultBaseURL(n.Kind)
 	}
 	if n.RequestTimeout == 0 {
 		n.RequestTimeout = defaultRequestTimeout
@@ -80,7 +99,11 @@ func normalizeBaseURL(raw string) string {
 
 // Validate checks a Normalize'd Config and reports every problem found
 // (not just the first), joined into one *RuntimeError with Code
-// ErrorInvalidConfig.
+// ErrorInvalidConfig. Local CLI kinds (Kind.IsLocalCLI) keep authentication
+// local and accept no forwarded HTTP address or credentials.
+//
+// Validate 校验规范化后的配置，以 ErrorInvalidConfig 聚合报告全部问题。
+// 本地 CLI 种类（Kind.IsLocalCLI）只在本机鉴权，不接受转发的 HTTP 地址或凭据。
 func (c Config) Validate() error {
 	var problems []string
 
@@ -88,13 +111,19 @@ func (c Config) Validate() error {
 		problems = append(problems, "id must not be empty")
 	}
 
-	switch c.Kind {
-	case KindVLLM, KindSGLang, KindOllama, KindComfyUI:
+	switch {
+	case c.Kind == KindVLLM, c.Kind == KindSGLang, c.Kind == KindOllama, c.Kind == KindComfyUI,
+		c.Kind == KindTRTLLM, c.Kind == KindTokenSpeed:
+	case c.Kind.IsLocalCLI(), c.Kind.IsHosted():
 	default:
 		problems = append(problems, fmt.Sprintf("kind %q is not a registered runtime kind", c.Kind))
 	}
 
 	switch {
+	case c.Kind.IsLocalCLI():
+		if c.BaseURL != "" || c.APIKey != "" || len(c.Headers) != 0 || c.TLS != (TLSConfig{}) {
+			problems = append(problems, "CLI runtimes use local authentication; base_url, api_key, headers and TLS must be empty")
+		}
 	case c.BaseURL == "":
 		problems = append(problems, "base_url must not be empty")
 	default:
@@ -115,6 +144,15 @@ func (c Config) Validate() error {
 		if u.Fragment != "" {
 			problems = append(problems, "base_url must not contain a fragment")
 		}
+	}
+
+	seenModels := make(map[string]bool, len(c.Models))
+	for _, model := range c.Models {
+		if strings.TrimSpace(model) == "" || len(model) > 256 || seenModels[model] {
+			problems = append(problems, "models entries must be non-empty, at most 256 bytes and unique")
+			break
+		}
+		seenModels[model] = true
 	}
 
 	for name := range c.Headers {

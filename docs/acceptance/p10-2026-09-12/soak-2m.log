@@ -1,0 +1,9 @@
+=== RUN   TestSoak
+    soak_test.go:77: soak: synthetic backend, 2m0s observation, 5s sampling, CSV /private/tmp/aisw-p10-soak-2m.BUFMap/soak.csv, summary /private/tmp/aisw-p10-soak-2m.BUFMap/soak.csv.summary.json
+    soak_test.go:133: soak: t+0s goroutines=82 heap_alloc=1MB connected=3 idle_slots=4 requests=73 failures=0
+    soak_test.go:133: soak: t+55s goroutines=82 heap_alloc=1MB connected=3 idle_slots=6 requests=900 failures=2
+    soak_test.go:133: soak: t+1m55s goroutines=82 heap_alloc=1MB connected=3 idle_slots=6 requests=1800 failures=5
+    soak_test.go:71: soak summary: passed=true completed=true samples=25 observed=120.001s requests=1875 failures=5 goroutine_growth=0.000 heap_growth=0.085 connected=[3,3] idle=[4,6] max_gap=5.003s; /private/tmp/aisw-p10-soak-2m.BUFMap/soak.csv.summary.json
+--- PASS: TestSoak (125.04s)
+PASS
+ok  	AIServeWeave/service/aiServeWeaveGateway/e2e	134.470s

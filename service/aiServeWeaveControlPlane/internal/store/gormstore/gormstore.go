@@ -252,6 +252,31 @@ func (s *Store) RevokeAPIKey(ctx context.Context, tenantID, id string, at time.T
 	return translate(err)
 }
 
+// DeleteAPIKey removes one key row, scoped to its tenant. The row is read under
+// a lock first so the revocation generation is advanced only when the key was
+// still active: a key that was already revoked has already advanced it.
+//
+// DeleteAPIKey 删除一个 key 行，并限定在其租户范围内。先加锁读取该行，是为了只在
+// 该 key 仍处于 active 时才递增吊销 generation：已被吊销的 key 在吊销时已经递增过。
+func (s *Store) DeleteAPIKey(ctx context.Context, tenantID, id string) error {
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var key model.APIKey
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).
+			Where("id = ? AND tenant_id = ?", id, tenantID).
+			Take(&key).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&model.APIKey{}, "id = ?", key.ID).Error; err != nil {
+			return err
+		}
+		if key.Status != model.StatusActive {
+			return nil
+		}
+		return enqueueRevocation(tx)
+	})
+	return translate(err)
+}
+
 // MarkAPIKeyUsed records a coarse last-used timestamp.
 //
 // The Gateway must not call this on every request: it would turn a read-only

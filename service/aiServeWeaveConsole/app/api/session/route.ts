@@ -1,4 +1,3 @@
-import { parseLoginResult } from "@/lib/console/contract";
 import { isTrustedWrite } from "@/lib/console/request-origin";
 import { logoutDisposition } from "@/lib/console/session-revocation";
 import { callControlPlane } from "@/lib/server/control-plane";
@@ -7,18 +6,20 @@ import {
   jsonResponse,
   readBoundedText,
 } from "@/lib/server/responses";
-import { clearSession, readSession, writeSession } from "@/lib/server/session";
+import { clearSession, readSession } from "@/lib/server/session";
+import { exchangeCredentials } from "@/lib/server/sign-in";
 
 /**
- * This route owns the Console session, and it is the only place a control
- * plane token is ever obtained. Sign-in is deliberately not part of the
- * forwarding allowlist: keeping it here means the token has exactly one path
- * into a cookie and no path back out to the browser. The response says who
- * signed in; it does not carry the token, and neither does any later response.
+ * This route owns the Console session. Sign-in is deliberately not part of
+ * the forwarding allowlist: the token is obtained only in
+ * lib/server/sign-in.ts, which this route and the sign-up route share, so it
+ * has exactly one path into a cookie and no path back out to the browser. The
+ * response says who signed in; it does not carry the token, and neither does
+ * any later response.
  *
- * 本路由掌管 Console 会话，也是唯一取得控制面令牌的地方。登录刻意不属于转发白名单：
- * 把它留在这里，意味着令牌进入 cookie 只有一条路径，而回到浏览器则没有任何路径。响应
- * 说明谁登录了；它不携带令牌，之后的任何响应也不携带。
+ * 本路由掌管 Console 会话。登录刻意不属于转发白名单：令牌只在本路由与注册路由共用的
+ * lib/server/sign-in.ts 里取得，因此它进入 cookie 只有一条路径，而回到浏览器则没有
+ * 任何路径。响应说明谁登录了；它不携带令牌，之后的任何响应也不携带。
  */
 
 /**
@@ -39,61 +40,7 @@ export async function POST(request: Request): Promise<Response> {
   if (!credentials) {
     return errorResponse(400, "invalid_request");
   }
-
-  // The password is forwarded in this one body and is held nowhere else: not
-  // in a variable that outlives this call, not in a log line, not in the
-  // session that follows.
-  //
-  // 密码只在这一个请求体中被转发，别处一概不留：不留在活得比本次调用更久的变量里，
-  // 不留在日志行里，也不留在随后建立的会话里。
-  const result = await callControlPlane({
-    method: "POST",
-    path: "/admin/v1/auth/login",
-    body: JSON.stringify(credentials),
-  });
-  if (result.kind !== "response") {
-    return errorResponse(result.kind === "timeout" ? 504 : 502, "upstream");
-  }
-  if (result.status !== 200) {
-    // 401 is passed through as itself: a wrong password must not look like a
-    // Console failure the user should retry differently.
-    //
-    // 401 原样透传：密码错误不该看起来像是一个需要用户换个方式重试的 Console 故障。
-    return errorResponse(
-      result.status === 401 ? 401 : 502,
-      result.status === 401 ? "invalid_credentials" : "upstream"
-    );
-  }
-
-  let login;
-  try {
-    login = parseLoginResult(JSON.parse(result.text));
-  } catch {
-    return errorResponse(502, "upstream_contract");
-  }
-
-  await writeSession({
-    token: login.token,
-    expiresAt: login.expiresAt,
-    user: {
-      id: login.user.id,
-      tenantId: login.user.tenantId,
-      email: login.user.email,
-      name: login.user.name,
-      role: login.user.role,
-    },
-  });
-
-  return jsonResponse(200, {
-    user: {
-      id: login.user.id,
-      tenantId: login.user.tenantId,
-      email: login.user.email,
-      name: login.user.name,
-      role: login.user.role,
-    },
-    expiresAt: login.expiresAt,
-  });
+  return exchangeCredentials(credentials);
 }
 
 /**

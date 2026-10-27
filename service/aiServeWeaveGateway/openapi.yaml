@@ -732,6 +732,12 @@ components:
         created_at: { type: string, format: date-time }
         updated_at: { type: string, format: date-time }
         queue_position: { type: integer }
+        durability:
+          type: string
+          enum: [memory_only, persisted]
+          description: |
+            memory_only：只在受理请求的副本内存里，控制面尚未确认收到（或未配置控制面）；
+            persisted：控制面已确认落库。只会从 memory_only 变为 persisted。
         error: { type: string }
 
     JobEvent:
@@ -768,6 +774,11 @@ components:
       properties:
         replica_id: { type: string }
         generated_at: { type: string, format: date-time }
+        local_runtimes:
+          type: array
+          description: Backends discovered on this Gateway's loopback interface; inventory only.
+          items:
+            $ref: "#/components/schemas/Runtime"
         nodes:
           type: array
           items:

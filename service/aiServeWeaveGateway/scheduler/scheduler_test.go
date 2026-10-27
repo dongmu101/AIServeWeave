@@ -1,10 +1,13 @@
 package scheduler_test
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -12,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
@@ -97,6 +101,14 @@ func chatHandler(source string, count *atomic.Int32) gatewaytest.SlotHandler {
 				return err
 			}
 			return reply(gatewaytest.DataFrame(payload))
+		case tunnelv1.Operation_OPERATION_RERANK:
+			payload, err := tunnelwire.MarshalRerankResponse(runtime.RerankResponse{
+				Results: []runtime.RerankResult{{Index: 0, Score: 1}},
+			})
+			if err != nil {
+				return err
+			}
+			return reply(gatewaytest.DataFrame(payload))
 		}
 		return errors.New("unsupported operation")
 	}
@@ -169,6 +181,50 @@ func TestChatPicksTheMoreIdleNode(t *testing.T) {
 	}
 	if lessIdleCount.Load() != 0 {
 		t.Errorf("the less-idle node was contacted %d times, want 0", lessIdleCount.Load())
+	}
+}
+
+// TestChatPicksTheLessQueuedNodeWhenIdleTies covers the P2 realtime-
+// utilization ranking signal (STATUS.md): when two candidates report the
+// same idle slot count, pickBy prefers the one with less reported queue
+// occupancy instead of leaving the tie to inflight alone — this is the
+// signal a single-job-at-a-time backend like ComfyUI needs because its idle
+// count alone cannot tell a busy instance from a free one (see the
+// necessity assessment in
+// docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md).
+//
+// TestChatPicksTheLessQueuedNodeWhenIdleTies 覆盖 P2 实时利用率排序信号
+// （STATUS.md）：两个候选上报相同的空闲槽数时，pickBy 优先选择上报队列占用更低的
+// 那个，而不是把平局完全留给 inflight——这正是 ComfyUI 这种同一时间只跑一个任务的
+// 后端所需要的信号，因为单靠它的空闲槽数无法区分忙碌实例和空闲实例（详见必要性
+// 评估文档 docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md）。
+func TestChatPicksTheLessQueuedNodeWhenIdleTies(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	var busyCount, freeCount atomic.Int32
+
+	busySnap := chatCapableSnapshot("backend-1", "qwen3:8b")
+	busySnap.Health = runtime.HealthReport{QueueRunning: 1, QueuePending: 3}
+	freeSnap := chatCapableSnapshot("backend-1", "qwen3:8b")
+
+	connectNode(t, h, "node-busy", "backend-1", busySnap, chatHandler("node-busy", &busyCount))
+	connectNode(t, h, "node-free", "backend-1", freeSnap, chatHandler("node-free", &freeCount))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	resp, candidate, err := sched.Chat(context.Background(), runtime.ChatRequest{
+		Model:    "qwen3:8b",
+		Messages: []runtime.ChatMessage{{Role: "user", Content: "hi"}},
+	})
+	if err != nil {
+		t.Fatalf("Chat: %v", err)
+	}
+	if candidate.NodeID != "node-free" {
+		t.Errorf("candidate.NodeID = %q, want node-free (equal idle, lower queue occupancy)", candidate.NodeID)
+	}
+	if resp.Message.Content != "served by node-free" {
+		t.Errorf("content = %q, want %q", resp.Message.Content, "served by node-free")
+	}
+	if busyCount.Load() != 0 {
+		t.Errorf("the busier node was contacted %d times, want 0", busyCount.Load())
 	}
 }
 
@@ -338,6 +394,105 @@ func TestEmbedDispatches(t *testing.T) {
 	}
 	if len(resp.Data) != 1 {
 		t.Errorf("Data = %v, want one embedding", resp.Data)
+	}
+}
+
+func TestRerankDispatches(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	snap := chatCapableSnapshot("backend-1", "rerank-1")
+	snap.Discovery.Models[0].Capabilities[runtime.CapabilityRerank] = runtime.CapabilityEvidence{Level: runtime.SupportSupported}
+	connectNode(t, h, "node-a", "backend-1", snap, chatHandler("node-a", nil))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	resp, candidate, err := sched.Rerank(context.Background(), runtime.RerankRequest{Model: "rerank-1", Query: "q", Documents: []string{"a"}})
+	if err != nil {
+		t.Fatalf("Rerank: %v", err)
+	}
+	if candidate.NodeID != "node-a" {
+		t.Errorf("candidate.NodeID = %q, want node-a", candidate.NodeID)
+	}
+	if len(resp.Results) != 1 {
+		t.Errorf("Results = %v, want one result", resp.Results)
+	}
+}
+
+// transcribeHandler answers OPERATION_AUDIO_TRANSCRIBE with the audio bytes
+// it received, tagged with source, so a test can tell which node served the
+// request and that the bytes survived DataChunk framing.
+func transcribeHandler(source string) gatewaytest.SlotHandler {
+	return func(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+		if req.GetOperation() != tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE {
+			return errors.New("unsupported operation")
+		}
+		var joined []byte
+		for _, chunk := range body {
+			joined = append(joined, chunk...)
+		}
+		payload, err := tunnelwire.MarshalAudioTranscriptionResponse(runtime.AudioTranscriptionResponse{
+			Text: "served by " + source + ": " + string(joined),
+		})
+		if err != nil {
+			return err
+		}
+		return reply(gatewaytest.DataFrame(payload))
+	}
+}
+
+// connectTranscriptionNode wires up nodeID with a bulk slot, since
+// AUDIO_TRANSCRIBE travels on SLOT_CLASS_BULK (tunnelserver's classFor) —
+// unlike connectNode's inference-only slots, which a transcription request
+// would never be dispatched to.
+func connectTranscriptionNode(t *testing.T, h *gatewaytest.Harness, nodeID, runtimeID, model string) {
+	t.Helper()
+	snap := chatCapableSnapshot(runtimeID, model)
+	snap.Discovery.Models[0].Capabilities[runtime.CapabilityAudioTranscription] = runtime.CapabilityEvidence{Level: runtime.SupportSupported}
+
+	c := h.Connect(nodeID, runtimeID)
+	c.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full:       true,
+		ReportedAt: timestamppb.New(h.Clock.Now()),
+		Snapshots:  tunnelwire.SnapshotsToProto([]runtime.Snapshot{snap}),
+	}}})
+	h.OpenSlot(nodeID, tunnelv1.SlotClass_SLOT_CLASS_BULK, nodeID+"-bulk-0", transcribeHandler(nodeID))
+	gatewaytest.WaitFor(t, "bulk slot to park on "+nodeID, func() bool {
+		info, _ := h.Srv.Node(nodeID)
+		return info.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_BULK] == 1
+	})
+	gatewaytest.WaitFor(t, "inventory to arrive on "+nodeID, func() bool {
+		info, _ := h.Srv.Node(nodeID)
+		return len(info.Runtimes) == 1
+	})
+}
+
+func TestTranscribeDispatchesToACandidateAndStreamsTheAudio(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectTranscriptionNode(t, h, "node-a", "backend-1", "whisper-1")
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	candidates := sched.TranscriptionCandidates("whisper-1")
+	if len(candidates) != 1 {
+		t.Fatalf("TranscriptionCandidates = %v, want 1", candidates)
+	}
+
+	resp, err := sched.Transcribe(context.Background(), candidates[0],
+		runtime.AudioTranscriptionRequest{Model: "whisper-1", Filename: "clip.mp3", Task: runtime.AudioTaskTranscribe},
+		strings.NewReader("fake audio"))
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	if resp.Text != "served by node-a: fake audio" {
+		t.Errorf("Text = %q, want the Agent's echo tagged with node-a", resp.Text)
+	}
+}
+
+func TestTranscriptionCandidatesEmptyForAModelWithoutTheCapability(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	// chatCapableSnapshot's model never advertises CapabilityAudioTranscription.
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))
+
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	if candidates := sched.TranscriptionCandidates("qwen3:8b"); len(candidates) != 0 {
+		t.Errorf("TranscriptionCandidates = %v, want none for a model never discovered as transcription-capable", candidates)
 	}
 }
 
@@ -518,5 +673,23 @@ func TestCandidatesExcludeAnUnhealthyRuntimeAndReadmitItOnRecovery(t *testing.T)
 	}
 	if candidate.NodeID != "node-a" || resp.Message.Content != "served by node-a" {
 		t.Errorf("recovered call did not reach node-a: candidate=%+v content=%q", candidate, resp.Message.Content)
+	}
+}
+
+func TestChatLogsDispatchDecisionWithRequestID(t *testing.T) {
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&buf, nil))
+
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock, Logger: logger})
+
+	ctx := reqid.WithValue(context.Background(), "sched-req-id")
+	if _, _, err := sched.Chat(ctx, runtime.ChatRequest{Model: "qwen3:8b"}); err != nil {
+		t.Fatalf("Chat() error = %v", err)
+	}
+
+	if !strings.Contains(buf.String(), "sched-req-id") {
+		t.Errorf("scheduler log = %q, want it to contain the ctx request_id", buf.String())
 	}
 }

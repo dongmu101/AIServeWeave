@@ -4,12 +4,17 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
 	"google.golang.org/protobuf/proto"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/agentupgradestatus"
+	"AIServeWeave/common/cliusagestatus"
+	"AIServeWeave/common/comfyuimanagedstatus"
+	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel/internal/tunneltest"
@@ -611,5 +616,535 @@ func TestControlForwardsRosterAndSlotHint(t *testing.T) {
 
 	if got := f.client.State(); got != tunnel.StateConnected {
 		t.Errorf("state = %s, want %s", got, tunnel.StateConnected)
+	}
+}
+
+// -----------------------------------------------------------------------
+// Model pull (STATUS.md's P2 model distribution subtask 2)
+// -----------------------------------------------------------------------
+
+// fakeModelPuller is a tunnel.ModelPuller test double. It decouples what was
+// requested (recorded in triggered, for assertions) from what Snapshot
+// returns (set directly by the test), because the real Puller's state
+// transitions are already covered by modelpull's own tests — this fixture
+// only needs to prove the Control session dispatches and reports correctly.
+type fakeModelPuller struct {
+	mu        sync.Mutex
+	triggered [][]string
+	snapshot  []modelpullstatus.Status
+}
+
+func (f *fakeModelPuller) Trigger(names []string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggered = append(f.triggered, append([]string(nil), names...))
+}
+
+func (f *fakeModelPuller) Snapshot() []modelpullstatus.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]modelpullstatus.Status(nil), f.snapshot...)
+}
+
+func (f *fakeModelPuller) setSnapshot(s []modelpullstatus.Status) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshot = s
+}
+
+func (f *fakeModelPuller) triggeredCalls() [][]string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([][]string(nil), f.triggered...)
+}
+
+func TestControlModelPullTriggerForwardsAndReportsImmediately(t *testing.T) {
+	puller := &fakeModelPuller{snapshot: []modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StateUnspecified}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ModelPuller = puller
+	})
+	f.start()
+	sess := f.connect()
+
+	// connect() only drains the RuntimeStatus report; the initial
+	// ModelPullReport control.go sends right after it is still sitting on
+	// the stream.
+	initial := f.recv(sess).GetModelPull()
+	if initial == nil {
+		t.Fatal("no initial ModelPullReport right after connecting")
+	}
+	if len(initial.GetPulls()) != 1 || initial.GetPulls()[0].GetName() != "m1" {
+		t.Fatalf("initial report = %v, want one pull named m1", initial)
+	}
+
+	// Simulate what a real Puller.Trigger would have done to its own
+	// Snapshot by the time the Control session reads it back.
+	puller.setSnapshot([]modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StatePending}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ModelPullTrigger{ModelPullTrigger: &tunnelv1.ModelPullTrigger{
+		Names: []string{"m1"},
+	}}})
+
+	report := f.recv(sess).GetModelPull()
+	if report == nil {
+		t.Fatal("no ModelPullReport followed the trigger")
+	}
+	if len(report.GetPulls()) != 1 || report.GetPulls()[0].GetState() != tunnelv1.ModelPullState_MODEL_PULL_STATE_PENDING {
+		t.Fatalf("report = %v, want one pull in PENDING", report)
+	}
+
+	calls := puller.triggeredCalls()
+	if len(calls) != 1 || len(calls[0]) != 1 || calls[0][0] != "m1" {
+		t.Fatalf("Trigger calls = %v, want exactly one call with [m1]", calls)
+	}
+}
+
+func TestControlModelPullUnknownNameNeverTouchesTheRealPuller(t *testing.T) {
+	// A nil ModelPuller (the default when no manifest is configured) must
+	// leave GatewayControl_ModelPullTrigger a harmless no-op: no report is
+	// ever sent, matching a node with no manifest at all.
+	f := newClientFixture(t, isolateStatus)
+	f.start()
+	sess := f.connect()
+
+	marker := int64(4242)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ModelPullTrigger{ModelPullTrigger: &tunnelv1.ModelPullTrigger{
+		Names: []string{"anything"},
+	}}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+
+	frame := f.recv(sess)
+	if pong := frame.GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatalf("expected only a Pong, got %v: a nil ModelPuller must never send a report", frame)
+	}
+}
+
+func TestControlModelPullReportsOnChangeOnly(t *testing.T) {
+	puller := &fakeModelPuller{snapshot: []modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StateUnspecified}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ModelPuller = puller
+	})
+	f.start()
+	sess := f.connect()
+	if f.recv(sess).GetModelPull() == nil {
+		t.Fatal("no initial ModelPullReport right after connecting")
+	}
+
+	// Unchanged: the periodic poll must stay quiet, same proof technique as
+	// expectNoStatus — a marker Ping's Pong must be the very next frame.
+	f.advance(2*time.Second, 1)
+	marker := int64(1)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+	if pong := f.recv(sess).GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatal("an unchanged model pull snapshot must not be reported on the periodic poll")
+	}
+
+	// Changed: the next poll must carry it.
+	puller.setSnapshot([]modelpullstatus.Status{{Name: "m1", State: modelpullstatus.StateDownloading, BytesDownloaded: 512}})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetModelPull()
+	if report == nil {
+		t.Fatal("a changed model pull snapshot must be reported on the next periodic poll")
+	}
+	if len(report.GetPulls()) != 1 || report.GetPulls()[0].GetBytesDownloaded() != 512 {
+		t.Fatalf("report = %v, want bytes_downloaded = 512", report)
+	}
+}
+
+// -----------------------------------------------------------------------
+// ComfyUI Managed (STATUS.md's P2 ComfyUI Managed Docker deployment,
+// subtask 2)
+// -----------------------------------------------------------------------
+
+// fakeComfyUIManager is a tunnel.ComfyUIManager test double, mirroring
+// fakeModelPuller: what was requested (triggered) is decoupled from what
+// Snapshot returns (set directly by the test), since the real Supervisor's
+// state transitions are already covered by comfyuimanaged's own tests — this
+// fixture only needs to prove the Control session dispatches and reports
+// correctly.
+type fakeComfyUIManager struct {
+	mu                  sync.Mutex
+	triggered           []comfyuimanagedstatus.Action
+	customNodeTriggered []string
+	snapshot            []comfyuimanagedstatus.Status
+}
+
+func (f *fakeComfyUIManager) Trigger(action comfyuimanagedstatus.Action) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggered = append(f.triggered, action)
+}
+
+func (f *fakeComfyUIManager) TriggerCustomNodeInstall(name string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.customNodeTriggered = append(f.customNodeTriggered, name)
+}
+
+func (f *fakeComfyUIManager) Snapshot() []comfyuimanagedstatus.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]comfyuimanagedstatus.Status(nil), f.snapshot...)
+}
+
+func (f *fakeComfyUIManager) setSnapshot(s []comfyuimanagedstatus.Status) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.snapshot = s
+}
+
+func (f *fakeComfyUIManager) triggeredCalls() []comfyuimanagedstatus.Action {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]comfyuimanagedstatus.Action(nil), f.triggered...)
+}
+
+func (f *fakeComfyUIManager) customNodeTriggeredCalls() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.customNodeTriggered...)
+}
+
+func TestControlComfyUIManagedActionForwardsAndReportsImmediately(t *testing.T) {
+	manager := &fakeComfyUIManager{snapshot: []comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StatePending}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ComfyUIManaged = manager
+	})
+	f.start()
+	sess := f.connect()
+
+	// connect() only drains the RuntimeStatus report; the initial
+	// ComfyUIManagedReport control.go sends right after it is still sitting
+	// on the stream.
+	initial := f.recv(sess).GetComfyuiManaged()
+	if initial == nil {
+		t.Fatal("no initial ComfyUIManagedReport right after connecting")
+	}
+	if len(initial.GetInstances()) != 1 || initial.GetInstances()[0].GetContainerName() != "aiserveweave-comfyui" {
+		t.Fatalf("initial report = %v, want one instance named aiserveweave-comfyui", initial)
+	}
+
+	// Simulate what a real Supervisor.Trigger would have done to its own
+	// Snapshot by the time the Control session reads it back.
+	manager.setSnapshot([]comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StateStarting}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedAction{ComfyuiManagedAction: &tunnelv1.ComfyUIManagedAction{
+		Action: tunnelv1.ComfyUIManagedActionType_COMFYUI_MANAGED_ACTION_START,
+	}}})
+
+	report := f.recv(sess).GetComfyuiManaged()
+	if report == nil {
+		t.Fatal("no ComfyUIManagedReport followed the action")
+	}
+	if len(report.GetInstances()) != 1 || report.GetInstances()[0].GetState() != tunnelv1.ComfyUIManagedState_COMFYUI_MANAGED_STATE_STARTING {
+		t.Fatalf("report = %v, want one instance in STARTING", report)
+	}
+
+	calls := manager.triggeredCalls()
+	if len(calls) != 1 || calls[0] != comfyuimanagedstatus.ActionStart {
+		t.Fatalf("Trigger calls = %v, want exactly one ActionStart", calls)
+	}
+}
+
+func TestControlComfyUIManagedCustomNodeInstallForwardsAndReportsImmediately(t *testing.T) {
+	manager := &fakeComfyUIManager{snapshot: []comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StateRunning}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ComfyUIManaged = manager
+	})
+	f.start()
+	sess := f.connect()
+
+	if f.recv(sess).GetComfyuiManaged() == nil {
+		t.Fatal("no initial ComfyUIManagedReport right after connecting")
+	}
+
+	manager.setSnapshot([]comfyuimanagedstatus.Status{{
+		ContainerName: "aiserveweave-comfyui",
+		State:         comfyuimanagedstatus.StateRunning,
+		CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "my-node", Version: "v1"}},
+	}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedCustomNodeInstall{
+		ComfyuiManagedCustomNodeInstall: &tunnelv1.ComfyUIManagedCustomNodeInstallTrigger{Name: "my-node"},
+	}})
+
+	report := f.recv(sess).GetComfyuiManaged()
+	if report == nil {
+		t.Fatal("no ComfyUIManagedReport followed the custom node install trigger")
+	}
+	if len(report.GetInstances()) != 1 || len(report.GetInstances()[0].GetCustomNodes()) != 1 ||
+		report.GetInstances()[0].GetCustomNodes()[0].GetName() != "my-node" {
+		t.Fatalf("report = %v, want one instance reporting custom node my-node", report)
+	}
+
+	calls := manager.customNodeTriggeredCalls()
+	if len(calls) != 1 || calls[0] != "my-node" {
+		t.Fatalf("TriggerCustomNodeInstall calls = %v, want exactly one call for my-node", calls)
+	}
+}
+
+func TestControlComfyUIManagedActionNeverTouchesRealManagerWhenNil(t *testing.T) {
+	// A nil ComfyUIManaged (the default when Managed mode is not configured)
+	// must leave GatewayControl_ComfyuiManagedAction a harmless no-op: no
+	// report is ever sent, matching a node with Managed mode disabled.
+	f := newClientFixture(t, isolateStatus)
+	f.start()
+	sess := f.connect()
+
+	marker := int64(4242)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedAction{ComfyuiManagedAction: &tunnelv1.ComfyUIManagedAction{
+		Action: tunnelv1.ComfyUIManagedActionType_COMFYUI_MANAGED_ACTION_START,
+	}}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+
+	frame := f.recv(sess)
+	if pong := frame.GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatalf("expected only a Pong, got %v: a nil ComfyUIManaged must never send a report", frame)
+	}
+}
+
+func TestControlComfyUIManagedReportsOnChangeOnly(t *testing.T) {
+	manager := &fakeComfyUIManager{snapshot: []comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StatePending}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.ComfyUIManaged = manager
+	})
+	f.start()
+	sess := f.connect()
+	if f.recv(sess).GetComfyuiManaged() == nil {
+		t.Fatal("no initial ComfyUIManagedReport right after connecting")
+	}
+
+	// Unchanged: the periodic poll must stay quiet, same proof technique as
+	// expectNoStatus — a marker Ping's Pong must be the very next frame.
+	f.advance(2*time.Second, 1)
+	marker := int64(1)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+	if pong := f.recv(sess).GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatal("an unchanged comfyui managed snapshot must not be reported on the periodic poll")
+	}
+
+	// Changed: the next poll must carry it.
+	manager.setSnapshot([]comfyuimanagedstatus.Status{{ContainerName: "aiserveweave-comfyui", State: comfyuimanagedstatus.StateRunning}})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetComfyuiManaged()
+	if report == nil {
+		t.Fatal("a changed comfyui managed snapshot must be reported on the next periodic poll")
+	}
+	if len(report.GetInstances()) != 1 || report.GetInstances()[0].GetState() != tunnelv1.ComfyUIManagedState_COMFYUI_MANAGED_STATE_RUNNING {
+		t.Fatalf("report = %v, want one instance in RUNNING", report)
+	}
+}
+
+// -----------------------------------------------------------------------
+// CLI subscription quota
+// -----------------------------------------------------------------------
+
+// fakeCLIUsage is a tunnel.CLIUsageSource test double.
+type fakeCLIUsage struct {
+	mu       sync.Mutex
+	accounts []cliusagestatus.Account
+}
+
+func (f *fakeCLIUsage) Snapshot() []cliusagestatus.Account {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]cliusagestatus.Account(nil), f.accounts...)
+}
+
+func (f *fakeCLIUsage) set(accounts []cliusagestatus.Account) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.accounts = accounts
+}
+
+func TestControlCLIUsageReportsOnChangeOnly(t *testing.T) {
+	usage := &fakeCLIUsage{accounts: []cliusagestatus.Account{{Kind: runtime.KindClaude, Status: "pending"}}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.CLIUsage = usage
+	})
+	f.start()
+	sess := f.connect()
+	initial := f.recv(sess).GetCliUsage()
+	if initial == nil || len(initial.GetAccounts()) != 1 || initial.GetAccounts()[0].GetStatus() != "pending" {
+		t.Fatalf("initial report = %v, want one pending account right after connecting", initial)
+	}
+
+	// Unchanged quota: the periodic poll stays quiet.
+	f.advance(2*time.Second, 1)
+	expectNoStatus(f, sess, 1)
+
+	// Changed quota: the next poll carries it.
+	usage.set([]cliusagestatus.Account{{Kind: runtime.KindClaude, Status: "ready", Windows: []cliusagestatus.Window{{Name: "five_hour", UsedPercent: 6}}}})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetCliUsage()
+	if report == nil || len(report.GetAccounts()) != 1 ||
+		report.GetAccounts()[0].GetStatus() != "ready" ||
+		report.GetAccounts()[0].GetWindows()[0].GetUsedPercent() != 6 {
+		t.Fatalf("report = %v, want one ready account with a 6%% window", report)
+	}
+}
+
+func TestControlCLIUsageNeverReportsWhenNilOrEmpty(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		usage tunnel.CLIUsageSource
+	}{
+		{"nil source", nil},
+		{"no declared CLI", &fakeCLIUsage{}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+				isolateStatus(cfg)
+				cfg.CLIUsage = tc.usage
+			})
+			f.start()
+			sess := f.connect()
+			f.advance(2*time.Second, 1)
+			expectNoStatus(f, sess, 1)
+		})
+	}
+}
+
+// -----------------------------------------------------------------------
+// Agent upgrade (STATUS.md's P2 Agent auto-upgrade subtask 1)
+// -----------------------------------------------------------------------
+
+// agentUpgradeTrigger is one recorded fakeAgentUpgrader.Trigger call.
+type agentUpgradeTrigger struct {
+	action        agentupgradestatus.Action
+	targetVersion string
+}
+
+// fakeAgentUpgrader is a tunnel.AgentUpgrader test double, mirroring
+// fakeModelPuller: what was requested (triggered) is decoupled from what
+// Status returns (set directly by the test), since the real Checker's
+// behavior is already covered by agentupgrade's own tests — this fixture
+// only needs to prove the Control session dispatches and reports correctly.
+type fakeAgentUpgrader struct {
+	mu        sync.Mutex
+	triggered []agentUpgradeTrigger
+	status    agentupgradestatus.Status
+}
+
+func (f *fakeAgentUpgrader) Trigger(action agentupgradestatus.Action, targetVersion string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.triggered = append(f.triggered, agentUpgradeTrigger{action: action, targetVersion: targetVersion})
+}
+
+func (f *fakeAgentUpgrader) Status() agentupgradestatus.Status {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.status
+}
+
+func (f *fakeAgentUpgrader) setStatus(st agentupgradestatus.Status) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.status = st
+}
+
+func (f *fakeAgentUpgrader) triggeredCalls() []agentUpgradeTrigger {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]agentUpgradeTrigger(nil), f.triggered...)
+}
+
+func TestControlAgentUpgradeActionForwardsAndReportsImmediately(t *testing.T) {
+	upgrader := &fakeAgentUpgrader{status: agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateIdle}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.AgentUpgrader = upgrader
+	})
+	f.start()
+	sess := f.connect()
+
+	// connect() only drains the RuntimeStatus report; the initial
+	// AgentUpgradeReport control.go sends right after it is still sitting
+	// on the stream.
+	initial := f.recv(sess).GetAgentUpgrade()
+	if initial == nil {
+		t.Fatal("no initial AgentUpgradeReport right after connecting")
+	}
+	if initial.GetCurrentVersion() != "v1.0.0" {
+		t.Fatalf("initial report = %v, want current_version v1.0.0", initial)
+	}
+
+	// Simulate what a real Checker.Trigger would have done to its own
+	// Status by the time the Control session reads it back.
+	upgrader.setStatus(agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateFailed, Reason: agentupgradestatus.ReasonUnknownVersion})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_AgentUpgradeAction{AgentUpgradeAction: &tunnelv1.AgentUpgradeAction{
+		Action:        tunnelv1.AgentUpgradeActionType_AGENT_UPGRADE_ACTION_UPGRADE,
+		TargetVersion: "v9.9.9",
+	}}})
+
+	report := f.recv(sess).GetAgentUpgrade()
+	if report == nil {
+		t.Fatal("no AgentUpgradeReport followed the action")
+	}
+	if report.GetState() != tunnelv1.AgentUpgradeState_AGENT_UPGRADE_STATE_FAILED ||
+		report.GetReason() != tunnelv1.AgentUpgradeFailureReason_AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION {
+		t.Fatalf("report = %v, want FAILED/UNKNOWN_VERSION", report)
+	}
+
+	calls := upgrader.triggeredCalls()
+	if len(calls) != 1 || calls[0].action != agentupgradestatus.ActionUpgrade || calls[0].targetVersion != "v9.9.9" {
+		t.Fatalf("Trigger calls = %v, want exactly one ActionUpgrade for v9.9.9", calls)
+	}
+}
+
+func TestControlAgentUpgradeActionNeverTouchesRealUpgraderWhenNil(t *testing.T) {
+	// A nil AgentUpgrader (the default when no manifest is configured) must
+	// leave GatewayControl_AgentUpgradeAction a harmless no-op: no report is
+	// ever sent, matching a node with no upgrade manifest at all.
+	f := newClientFixture(t, isolateStatus)
+	f.start()
+	sess := f.connect()
+
+	marker := int64(4242)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_AgentUpgradeAction{AgentUpgradeAction: &tunnelv1.AgentUpgradeAction{
+		Action: tunnelv1.AgentUpgradeActionType_AGENT_UPGRADE_ACTION_CHECK,
+	}}})
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+
+	frame := f.recv(sess)
+	if pong := frame.GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatalf("expected only a Pong, got %v: a nil AgentUpgrader must never send a report", frame)
+	}
+}
+
+func TestControlAgentUpgradeReportsOnChangeOnly(t *testing.T) {
+	upgrader := &fakeAgentUpgrader{status: agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateIdle}}
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.AgentUpgrader = upgrader
+	})
+	f.start()
+	sess := f.connect()
+	if f.recv(sess).GetAgentUpgrade() == nil {
+		t.Fatal("no initial AgentUpgradeReport right after connecting")
+	}
+
+	// Unchanged: the periodic poll must stay quiet, same proof technique as
+	// expectNoStatus — a marker Ping's Pong must be the very next frame.
+	f.advance(2*time.Second, 1)
+	marker := int64(1)
+	f.send(sess, &tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_Ping{Ping: &tunnelv1.Ping{SentUnixMs: marker}}})
+	if pong := f.recv(sess).GetPong(); pong == nil || pong.GetSentUnixMs() != marker {
+		t.Fatal("an unchanged agent upgrade status must not be reported on the periodic poll")
+	}
+
+	// Changed: the next poll must carry it.
+	upgrader.setStatus(agentupgradestatus.Status{CurrentVersion: "v1.0.0", State: agentupgradestatus.StateFailed, Reason: agentupgradestatus.ReasonNotImplemented})
+	f.advance(2*time.Second, 1)
+	report := f.recv(sess).GetAgentUpgrade()
+	if report == nil {
+		t.Fatal("a changed agent upgrade status must be reported on the next periodic poll")
+	}
+	if report.GetState() != tunnelv1.AgentUpgradeState_AGENT_UPGRADE_STATE_FAILED {
+		t.Fatalf("report = %v, want FAILED", report)
 	}
 }

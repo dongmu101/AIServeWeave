@@ -31,3 +31,80 @@ func TestValidateAcceptsConfiguredRedis(t *testing.T) {
 		t.Errorf("Validate error = %v, want nil", err)
 	}
 }
+
+func TestMetricsHistoryConfValidation(t *testing.T) {
+	// conf.Load applies the `default=` struct tags at YAML-load time, not on
+	// a plain Go struct literal, so a test constructing one directly must set
+	// Interval/Retention itself to simulate what a loaded config would carry.
+	//
+	// conf.Load 在从 YAML 加载时才应用 `default=` 结构体标签，而不是在普通 Go
+	// 结构体字面量上，因此直接构造字面量的测试要自己设置 Interval/Retention，
+	// 模拟一份真正加载出来的配置会携带的值。
+	cfg := validConfig()
+	cfg.MetricsHistory = config.MetricsHistoryConf{RegistryAddr: "http://registry:9091", Interval: 5 * time.Minute, Retention: 2160 * time.Hour}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil for a MetricsHistory with only RegistryAddr set", err)
+	}
+
+	cfg.MetricsHistory.Interval = -time.Second
+	if err := cfg.Validate(); err == nil {
+		t.Fatal("Validate() error = nil, want error for a negative Interval")
+	}
+}
+
+func TestMetricsHistoryConfDisabledByDefault(t *testing.T) {
+	var m config.MetricsHistoryConf
+	if m.Enabled() {
+		t.Error("Enabled() = true, want false for the zero value")
+	}
+}
+
+func TestModelPullConfValidation(t *testing.T) {
+	cfg := validConfig()
+	cfg.ModelPull = config.ModelPullConf{Gateways: []string{"http://gateway-1:8092"}, GatewayToken: strings.Repeat("m", 32)}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil for a fully configured ModelPull", err)
+	}
+
+	cfg.ModelPull.GatewayToken = "too-short"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ModelPull.GatewayToken") {
+		t.Errorf("Validate error = %v, want one naming ModelPull.GatewayToken", err)
+	}
+
+	cfg.ModelPull = config.ModelPullConf{GatewayToken: strings.Repeat("m", 32)}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ModelPull.Gateways") {
+		t.Errorf("Validate error = %v, want one naming ModelPull.Gateways for a token with no endpoints", err)
+	}
+}
+
+func TestModelPullConfDisabledByDefault(t *testing.T) {
+	var m config.ModelPullConf
+	if m.Enabled() {
+		t.Error("Enabled() = true, want false for the zero value")
+	}
+}
+
+func TestComfyUIManagedConfValidation(t *testing.T) {
+	cfg := validConfig()
+	cfg.ComfyUIManaged = config.ComfyUIManagedConf{Gateways: []string{"http://gateway-1:8093"}, GatewayToken: strings.Repeat("c", 32)}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error = %v, want nil for a fully configured ComfyUIManaged", err)
+	}
+
+	cfg.ComfyUIManaged.GatewayToken = "too-short"
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ComfyUIManaged.GatewayToken") {
+		t.Errorf("Validate error = %v, want one naming ComfyUIManaged.GatewayToken", err)
+	}
+
+	cfg.ComfyUIManaged = config.ComfyUIManagedConf{GatewayToken: strings.Repeat("c", 32)}
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "ComfyUIManaged.Gateways") {
+		t.Errorf("Validate error = %v, want one naming ComfyUIManaged.Gateways for a token with no endpoints", err)
+	}
+}
+
+func TestComfyUIManagedConfDisabledByDefault(t *testing.T) {
+	var c config.ComfyUIManagedConf
+	if c.Enabled() {
+		t.Error("Enabled() = true, want false for the zero value")
+	}
+}

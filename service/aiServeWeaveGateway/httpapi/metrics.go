@@ -106,6 +106,114 @@ const (
 	// MetricLimiterUnavailableTotal 统计因限流器无法作答而被放行的请求。斜率非零意味着
 	// 配额正在悄悄失去执行，而这正是那种「直到有人收到账单才被发现」的退化。
 	MetricLimiterUnavailableTotal = "gateway_rate_limiter_unavailable_total"
+	// MetricRequestLogDroppedTotal counts request-log records dropped
+	// because the bounded push buffer was full (STATUS.md's P09/C28). A
+	// non-zero slope means the search table is silently missing recent
+	// requests, not that anything about serving them failed.
+	//
+	// MetricRequestLogDroppedTotal 统计因有界推送缓冲已满而被丢弃的请求记录
+	// (STATUS.md 的 P09/C28)。斜率非零意味着检索表正在悄悄丢失最近的请求，
+	// 而不是服务这些请求本身出了问题。
+	MetricRequestLogDroppedTotal = "gateway_request_log_dropped_total"
+	// MetricRequestLogPushFailedTotal counts batches that reached
+	// PushRequestLogs but failed to reach the control plane or were refused
+	// by it (STATUS.md's P09/C28) — a network error or a non-200 status, as
+	// distinct from MetricRequestLogDroppedTotal's buffer-full case. A
+	// non-zero slope means the search table is silently missing recent
+	// requests for a different reason: the control plane side of the push,
+	// not this replica's own buffer, could not keep up.
+	//
+	// MetricRequestLogPushFailedTotal 统计已经到达 PushRequestLogs、却未能
+	// 送达或被控制面拒绝的批次(STATUS.md 的 P09/C28)——网络错误或非 200
+	// 状态码，与 MetricRequestLogDroppedTotal 的缓冲已满情形不同。斜率非零
+	// 意味着检索表正在悄悄丢失最近的请求，但原因不同：是推送在控制面一侧、
+	// 而不是本副本自己的缓冲跟不上。
+	MetricRequestLogPushFailedTotal = "gateway_request_log_push_failed_total"
+	// MetricUsageLedgerDroppedTotal counts usage records dropped because the
+	// bounded push buffer was full (STATUS.md's P2 usage ledger). A non-zero
+	// slope means the ledger is silently missing recent usage, not that
+	// anything about serving the request failed — mirrors
+	// MetricRequestLogDroppedTotal exactly.
+	//
+	// MetricUsageLedgerDroppedTotal 统计因有界推送缓冲已满而被丢弃的用量记录
+	// (STATUS.md 的 P2 用量账本)。斜率非零意味着账本正在悄悄丢失最近的用量，
+	// 而不是服务这次请求本身出了问题——与 MetricRequestLogDroppedTotal 完全
+	// 对应。
+	MetricUsageLedgerDroppedTotal = "gateway_usage_ledger_dropped_total"
+	// MetricUsageLedgerPushFailedTotal counts batches that reached
+	// PushUsageRecords but failed to reach the control plane or were refused
+	// by it — mirrors MetricRequestLogPushFailedTotal exactly.
+	//
+	// MetricUsageLedgerPushFailedTotal 统计已经到达 PushUsageRecords、却未能
+	// 送达或被控制面拒绝的批次——与 MetricRequestLogPushFailedTotal 完全对应。
+	MetricUsageLedgerPushFailedTotal = "gateway_usage_ledger_push_failed_total"
+	// MetricWorkflowJobsTotal counts workflow jobs by their terminal result,
+	// recorded exactly once per job at the moment it first reaches a
+	// terminal state (STATUS.md's A06) — a job repeatedly polled after it
+	// finished is not counted again, which is what makes this a real rate
+	// rather than a multiple of however many times a caller happened to ask.
+	//
+	// MetricWorkflowJobsTotal 按终态结果统计工作流 job，在一个 job 首次到达
+	// 终态的那一刻恰好记一次（STATUS.md 的 A06）——一个结束后仍被反复轮询的
+	// job 不会被重复计数，这正是它是一个真实比率、而不是「调用方碰巧问了
+	// 几次」的倍数的原因。
+	MetricWorkflowJobsTotal = "gateway_workflow_jobs_total"
+	// MetricWorkflowJobDurationSeconds observes wall-clock time from a job's
+	// submission to its terminal state, recorded at the same single point as
+	// MetricWorkflowJobsTotal.
+	//
+	// MetricWorkflowJobDurationSeconds 观测从 job 提交到其到达终态的墙钟时间，
+	// 与 MetricWorkflowJobsTotal 在同一个唯一记录点上被观测。
+	MetricWorkflowJobDurationSeconds = "gateway_workflow_job_duration_seconds"
+	// MetricWorkflowJobOOMTotal counts jobs whose failure the backend
+	// adapter classified as an out-of-memory error (runtime.WorkflowStatus's
+	// OutOfMemory, STATUS.md's A06). It is a subset of the "failed" slice of
+	// MetricWorkflowJobsTotal, not a separate outcome.
+	//
+	// MetricWorkflowJobOOMTotal 统计后端适配器将其失败原因分类为显存/内存
+	// 耗尽的 job 数（runtime.WorkflowStatus 的 OutOfMemory，STATUS.md 的
+	// A06）。它是 MetricWorkflowJobsTotal 里「failed」那一部分的子集，不是
+	// 一个独立的结果分类。
+	MetricWorkflowJobOOMTotal = "gateway_workflow_job_oom_total"
+	// MetricArtifactTransferBytesTotal counts artifact bytes copied from a
+	// node into object storage (STATUS.md's P04/A06), summed across every
+	// transfer regardless of outcome label — see MetricArtifactTransfersTotal
+	// for the outcome split.
+	//
+	// MetricArtifactTransferBytesTotal 统计从节点复制进对象存储的产物字节数
+	// （STATUS.md 的 P04/A06），对全部搬运求和，不区分结果——结果的拆分见
+	// MetricArtifactTransfersTotal。
+	MetricArtifactTransferBytesTotal = "gateway_artifact_transfer_bytes_total"
+	// MetricArtifactTransferDurationSeconds observes how long one artifact's
+	// node-to-storage byte copy took.
+	//
+	// MetricArtifactTransferDurationSeconds 观测单次产物「节点到存储」字节
+	// 复制耗费的时长。
+	MetricArtifactTransferDurationSeconds = "gateway_artifact_transfer_duration_seconds"
+	// MetricArtifactTransfersTotal counts artifact byte copies by outcome.
+	//
+	// MetricArtifactTransfersTotal 按结果统计产物字节搬运次数。
+	MetricArtifactTransfersTotal = "gateway_artifact_transfers_total"
+	// MetricResponsePersistDroppedTotal counts Responses API turns opted into
+	// store:true that were dropped because the bounded async persister's
+	// concurrency limit was already full (STATUS.md's P2 "Responses 持久
+	// 会话"). A non-zero slope means a caller's stored conversation is
+	// silently missing a turn, not that serving that turn's response failed.
+	//
+	// MetricResponsePersistDroppedTotal 统计因有界异步持久化器的并发上限已满
+	// 而被丢弃的、选择了 store:true 的 Responses API 轮次（STATUS.md 的 P2
+	// 「Responses 持久会话」）。斜率非零意味着调用方存储的对话正在悄悄缺失
+	// 一轮，而不是服务这一轮的响应本身出了问题。
+	MetricResponsePersistDroppedTotal = "gateway_response_persist_dropped_total"
+	// MetricResponsePersistFailedTotal counts turns that reached the control
+	// plane's create-turn call but failed — a network error or a non-2xx
+	// status — as distinct from MetricResponsePersistDroppedTotal's
+	// concurrency-full case.
+	//
+	// MetricResponsePersistFailedTotal 统计已经发起了控制面创建调用、却失败
+	// 的轮次——网络错误或非 2xx 状态——与 MetricResponsePersistDroppedTotal 的
+	// 并发已满情形不同。
+	MetricResponsePersistFailedTotal = "gateway_response_persist_failed_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model
@@ -123,6 +231,26 @@ const (
 	// LabelReason 指出拒绝该请求的配额维度。它的取值来自 ratelimit 那个封闭的 Reason
 	// 集合——绝不来自租户 id，那会让这个指标每多一个客户就多一条序列。
 	LabelReason = "reason"
+	// LabelResult carries a closed outcome vocabulary distinct from
+	// LabelStatus's HTTP status codes: a workflow job's terminal state
+	// (ResultSucceeded/Failed/Cancelled) or an artifact transfer's outcome
+	// (ResultSucceeded/Failed), STATUS.md's A06.
+	//
+	// LabelResult 携带一套与 LabelStatus 的 HTTP 状态码不同的封闭结果词汇：
+	// 工作流 job 的终态（ResultSucceeded/Failed/Cancelled）或一次产物搬运的
+	// 结果（ResultSucceeded/Failed），STATUS.md 的 A06。
+	LabelResult = "result"
+)
+
+// Result label values on MetricWorkflowJobsTotal, MetricWorkflowJobDurationSeconds
+// and MetricArtifactTransfersTotal.
+//
+// MetricWorkflowJobsTotal、MetricWorkflowJobDurationSeconds 与
+// MetricArtifactTransfersTotal 上的 result 标签取值。
+const (
+	ResultSucceeded = "succeeded"
+	ResultFailed    = "failed"
+	ResultCancelled = "cancelled"
 )
 
 // Endpoint label values, one per route this package serves plus the catch-all
@@ -130,10 +258,36 @@ const (
 //
 // endpoint 标签取值，本包服务的每条路由各一个，外加一个把其余所有路径收拢进来的兜底值。
 const (
-	EndpointModels          = "models"
-	EndpointChatCompletions = "chat_completions"
-	EndpointEmbeddings      = "embeddings"
-	EndpointResponses       = "responses"
+	EndpointModels            = "models"
+	EndpointChatCompletions   = "chat_completions"
+	EndpointEmbeddings        = "embeddings"
+	EndpointResponses         = "responses"
+	EndpointImagesGenerations = "images_generations"
+	EndpointAnthropicMessages = "anthropic_messages"
+	EndpointOllamaChat        = "ollama_chat"
+	EndpointOllamaGenerate    = "ollama_generate"
+	EndpointOllamaEmbeddings  = "ollama_embeddings"
+	// EndpointAudioTranscriptions, EndpointAudioTranslations and
+	// EndpointRerank are separate from each other and from chat because each
+	// is its own backend call with its own latency profile.
+	//
+	// EndpointAudioTranscriptions、EndpointAudioTranslations 与 EndpointRerank
+	// 彼此分开、也与 chat 分开，因为每一个都是独立的后端调用，延迟特征各不相同。
+	EndpointAudioTranscriptions = "audio_transcriptions"
+	EndpointAudioTranslations   = "audio_translations"
+	EndpointRerank              = "rerank"
+	// EndpointOllamaUnsupported covers every Ollama model-management route
+	// (create/pull/push/delete/copy/show/tags/ps) under one label: they all
+	// answer the same fixed "not supported" body (ollama.go's
+	// ollamaUnsupported) and none of them dispatches to a backend, so a
+	// per-route breakdown would not distinguish any real behavior.
+	//
+	// EndpointOllamaUnsupported 把每一条 Ollama 模型管理路由
+	// （create/pull/push/delete/copy/show/tags/ps）归入同一个标签：它们答复
+	// 的都是同一个固定的「不支持」响应体（ollama.go 的
+	// ollamaUnsupported），也都不会派发给任何后端，按路由拆开并不能区分出
+	// 任何真实差异。
+	EndpointOllamaUnsupported = "ollama_unsupported"
 	// EndpointWorkflowRuns and EndpointJobs cover the two routes whose paths
 	// carry an identifier. Neither identifier becomes part of the label: a
 	// job id is minted per request, so letting it through would let one
@@ -212,6 +366,56 @@ func Descriptions() metrics.Descriptions {
 			Kind: metrics.KindCounter,
 			Help: "Requests let through because the rate limiter could not answer.",
 		},
+		MetricRequestLogDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Request-log records dropped because the push buffer was full.",
+		},
+		MetricRequestLogPushFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Request-log batches that reached the control plane call but failed (network error or non-200 status).",
+		},
+		MetricUsageLedgerDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Usage-ledger records dropped because the push buffer was full.",
+		},
+		MetricUsageLedgerPushFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Usage-ledger batches that reached the control plane call but failed (network error or non-200 status).",
+		},
+		MetricWorkflowJobsTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Workflow jobs, by terminal result, counted once per job at its first terminal observation.",
+		},
+		MetricWorkflowJobDurationSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Wall-clock time from a workflow job's submission to its terminal state.",
+			Buckets: metrics.SecondsBuckets(),
+		},
+		MetricWorkflowJobOOMTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Workflow jobs whose failure the backend adapter classified as an out-of-memory error.",
+		},
+		MetricArtifactTransferBytesTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Artifact bytes copied from a node into object storage.",
+		},
+		MetricArtifactTransferDurationSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "Time to copy one artifact's bytes from a node into object storage.",
+			Buckets: metrics.SecondsBuckets(),
+		},
+		MetricArtifactTransfersTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Artifact node-to-storage byte copies, by outcome.",
+		},
+		MetricResponsePersistDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Responses API turns opted into store:true, dropped because the async persister's concurrency limit was full.",
+		},
+		MetricResponsePersistFailedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Responses API turns whose control plane persist call reached the network but failed.",
+		},
 	}
 }
 
@@ -231,6 +435,24 @@ func endpointFor(path string) string {
 		return EndpointEmbeddings
 	case "/v1/responses":
 		return EndpointResponses
+	case "/v1/images/generations":
+		return EndpointImagesGenerations
+	case "/v1/messages":
+		return EndpointAnthropicMessages
+	case "/api/chat":
+		return EndpointOllamaChat
+	case "/api/generate":
+		return EndpointOllamaGenerate
+	case "/api/embeddings":
+		return EndpointOllamaEmbeddings
+	case "/v1/audio/transcriptions":
+		return EndpointAudioTranscriptions
+	case "/v1/audio/translations":
+		return EndpointAudioTranslations
+	case "/v1/rerank":
+		return EndpointRerank
+	case "/api/create", "/api/pull", "/api/push", "/api/delete", "/api/copy", "/api/show", "/api/tags", "/api/ps":
+		return EndpointOllamaUnsupported
 	}
 	// The two routes below carry an identifier in the path, so they are
 	// matched by shape rather than by equality. The shape is still a closed
@@ -359,6 +581,95 @@ func (r *recorder) RateLimited(reason ratelimit.Reason) {
 // LimiterUnavailable 记录一次因限流器无法作答而被放行的请求。
 func (r *recorder) LimiterUnavailable() {
 	r.sink.Counter(MetricLimiterUnavailableTotal, nil).Add(1)
+}
+
+// RequestLogDropped records one request-log record dropped because the
+// push buffer was full.
+//
+// RequestLogDropped 记录一条因推送缓冲已满而被丢弃的请求记录。
+func (r *recorder) RequestLogDropped() {
+	r.sink.Counter(MetricRequestLogDroppedTotal, nil).Add(1)
+}
+
+// RequestLogPushFailed records one batch that reached PushRequestLogs but
+// failed — a network error or a non-200 status from the control plane.
+//
+// RequestLogPushFailed 记录一个已经到达 PushRequestLogs 却失败的批次——一次
+// 网络错误，或控制面返回了非 200 状态码。
+func (r *recorder) RequestLogPushFailed() {
+	r.sink.Counter(MetricRequestLogPushFailedTotal, nil).Add(1)
+}
+
+// UsageLedgerDropped records one usage record dropped because the push
+// buffer was full.
+//
+// UsageLedgerDropped 记录一条因推送缓冲已满而被丢弃的用量记录。
+func (r *recorder) UsageLedgerDropped() {
+	r.sink.Counter(MetricUsageLedgerDroppedTotal, nil).Add(1)
+}
+
+// UsageLedgerPushFailed records one batch that reached PushUsageRecords but
+// failed — a network error or a non-200 status from the control plane.
+//
+// UsageLedgerPushFailed 记录一个已经到达 PushUsageRecords 却失败的批次——
+// 一次网络错误，或控制面返回了非 200 状态码。
+func (r *recorder) UsageLedgerPushFailed() {
+	r.sink.Counter(MetricUsageLedgerPushFailedTotal, nil).Add(1)
+}
+
+// ResponsePersistDropped records one Responses API turn dropped because the
+// async persister's concurrency limit was full.
+//
+// ResponsePersistDropped 记录一轮因异步持久化器并发上限已满而被丢弃的
+// Responses API 轮次。
+func (r *recorder) ResponsePersistDropped() {
+	r.sink.Counter(MetricResponsePersistDroppedTotal, nil).Add(1)
+}
+
+// ResponsePersistFailed records one turn whose control plane persist call
+// reached the network but failed.
+//
+// ResponsePersistFailed 记录一轮已发起控制面持久化调用、却失败的轮次。
+func (r *recorder) ResponsePersistFailed() {
+	r.sink.Counter(MetricResponsePersistFailedTotal, nil).Add(1)
+}
+
+// WorkflowJobFinished records one workflow job's first observed terminal
+// transition (STATUS.md's A06): the terminal result, the wall-clock time
+// since submission, and — only for a failed result — whether the backend
+// adapter classified the failure as out of memory. Callers must call this
+// at most once per job, at the transition into a terminal state; jobStore's
+// update already isolates that moment via job.terminal(), so this method
+// does not re-derive it.
+//
+// WorkflowJobFinished 记录一个工作流 job 首次被观测到的终态转换
+// （STATUS.md 的 A06）：终态结果、自提交以来的墙钟时间，以及——仅当结果为
+// failed 时——后端适配器是否将该失败分类为显存/内存耗尽。调用方对每个 job
+// 至多调用一次，且只在转入终态的那一刻调用；jobStore 的 update 已经通过
+// job.terminal() 隔离出这一时刻，本方法不重新推导它。
+func (r *recorder) WorkflowJobFinished(result string, d time.Duration, outOfMemory bool) {
+	labels := map[string]string{LabelResult: result}
+	r.sink.Counter(MetricWorkflowJobsTotal, labels).Add(1)
+	r.sink.Histogram(MetricWorkflowJobDurationSeconds, labels).Observe(d.Seconds())
+	if outOfMemory {
+		r.sink.Counter(MetricWorkflowJobOOMTotal, nil).Add(1)
+	}
+}
+
+// ArtifactTransfer records one artifact's node-to-storage byte copy
+// (STATUS.md's P04/A06). size is only meaningful for a succeeded transfer;
+// a failed one may not know how many bytes it managed before the error, so
+// callers pass 0 rather than guess.
+//
+// ArtifactTransfer 记录一次产物「节点到存储」的字节复制（STATUS.md 的
+// P04/A06）。size 只在搬运成功时才有意义；失败的一次搬运可能不知道出错前
+// 已经搬了多少字节，调用方此时传 0 而不是猜测。
+func (r *recorder) ArtifactTransfer(result string, size int64, d time.Duration) {
+	r.sink.Counter(MetricArtifactTransfersTotal, map[string]string{LabelResult: result}).Add(1)
+	r.sink.Histogram(MetricArtifactTransferDurationSeconds, nil).Observe(d.Seconds())
+	if size > 0 {
+		r.sink.Counter(MetricArtifactTransferBytesTotal, nil).Add(float64(size))
+	}
 }
 
 // statusOf reports the status a finished response carried, defaulting to 200

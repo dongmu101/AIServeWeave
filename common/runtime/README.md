@@ -44,6 +44,8 @@
 | `ollama/` | 已实现 | 原生发现 + OpenAI-compatible 推理；已用真实后端（0.32.14）验证 |
 | `vllm/` | 已实现 | `/version`+`/v1/models` 探测、`/health`、保守能力表；未接真实后端 |
 | `sglang/` | 已实现 | `/v1/models` 探测（身份不强验证）、`/health` 缺失降级、可选 `/get_server_info`；未接真实后端 |
+| `trtllm/` | 已实现 | `trtllm-serve`：`/version`+`/v1/models` 的 `owned_by="tensorrt_llm"` 核实身份、`/health`、`/server_info` 判定主 LLM 角色；未接真实后端 |
+| `tokenspeed/` | 已实现 | `tokenspeed serve`（前端为 SMG）：`/readiness` 探测与健康检查（身份不强验证）、`/v1/models`；未接真实后端 |
 | `workflow/comfyui/` | 已实现 | `client.go`/`events.go`/`runtime.go`/`wsdial.go`：HTTP 客户端、单连接事件复用器、WorkflowRuntime、安全取消、产物流式下载；未接真实后端 |
 
 已有文件布局：
@@ -66,6 +68,8 @@ runtime/
 ├── openai/
 ├── vllm/
 ├── sglang/
+├── trtllm/
+├── tokenspeed/
 ├── ollama/
 └── workflow/comfyui/
 ```
@@ -152,7 +156,8 @@ Manager
 
 **实现文件：**
 
-- `common/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`。
+- `common/runtime/runtime.go`：`Runtime`、`InferenceRuntime`、`WorkflowRuntime`、`MessagesRuntime`。
+- `common/runtime/image.go`：可选接口 `ImageRuntime` 及 `ImageRequest`/`ImageMeta`/`ImageEvent`。
 - `common/runtime/stream.go`：`Stream[T]` 及通用关闭语义。
 
 接口名称和签名在第一阶段通过编译期断言及契约测试固定。后续适配器不得绕过这些接口向 `Manager` 塞入后端私有状态。
@@ -172,6 +177,14 @@ type InferenceRuntime interface {
 	Chat(ctx context.Context, req ChatRequest) (ChatResponse, error)
 	ChatStream(ctx context.Context, req ChatRequest) (Stream[ChatEvent], error)
 	Embed(ctx context.Context, req EmbeddingRequest) (EmbeddingResponse, error)
+	// Transcribe runs audio transcription or translation (STATUS.md's P2).
+	// No adapter's Discover publishes CapabilityAudioTranscription today, so
+	// the shared oaibase.Base gate rejects every call as unsupported.
+	Transcribe(ctx context.Context, req AudioTranscriptionRequest, audio io.Reader) (AudioTranscriptionResponse, error)
+	// Rerank scores documents against a query (STATUS.md's P2). No adapter's
+	// Discover publishes CapabilityRerank today, so the shared oaibase.Base
+	// gate rejects every call as unsupported — the same pattern as Transcribe.
+	Rerank(ctx context.Context, req RerankRequest) (RerankResponse, error)
 }
 
 type WorkflowRuntime interface {
@@ -222,9 +235,47 @@ const (
 	KindSGLang  Kind = "sglang"
 	KindOllama  Kind = "ollama"
 	KindComfyUI Kind = "comfyui"
+	KindTRTLLM     Kind = "trtllm"
+	KindTokenSpeed Kind = "tokenspeed"
+	KindCodex   Kind = "codex"
+	KindClaude  Kind = "claude"
+	// KindGeminiCLI names the local image-only Nano Banana extension.
+	// KindGeminiCLI 表示本地仅支持生图的 Nano Banana 扩展。
+	KindGeminiCLI Kind = "gemini-cli"
+
+	// Agent 本地 CLI（cliagent 包）
+	KindGrok      Kind = "grok"
+	KindOpenCode  Kind = "opencode"
+	KindCursor    Kind = "cursor"
+	KindCodeBuddy Kind = "codebuddy"
+	KindQoder     Kind = "qoder"
+	KindPi        Kind = "pi"
+
+	// 托管供应商（hosted 与 anthropic 包）
+	KindOpenAI              Kind = "openai"
+	KindGemini              Kind = "gemini"
+	KindDeepSeek            Kind = "deepseek"
+	KindKimi                Kind = "kimi"
+	KindQwen                Kind = "qwen"
+	KindZhipu               Kind = "zhipu"
+	KindMiniMax             Kind = "minimax"
+	KindOpenAICompatible    Kind = "openai_compatible"
+	KindAnthropic           Kind = "anthropic"
+	KindAnthropicCompatible Kind = "anthropic_compatible"
 )
 
+// IsLocalCLI includes codex, claude, six cliagent kinds and the gemini-cli image extension.
+// IsLocalCLI 包含 codex、claude、cliagent 的六种 CLI 与 gemini-cli 生图扩展。
+func (k Kind) IsLocalCLI() bool
+
+// IsHosted 为上面十种托管供应商返回 true。
+func (k Kind) IsHosted() bool
+
+// DefaultBaseURL 返回托管供应商的官方端点；两种 compatible 没有默认值。
+func DefaultBaseURL(k Kind) string
+
 type Config struct {
+	AllowUnavailable    bool // local admission only / 本地未就绪策略，不通过隧道接收
 	ID                  string
 	Kind                Kind
 	BaseURL             string
@@ -239,6 +290,7 @@ type Config struct {
 	TLS                 TLSConfig
 	CapabilityOverrides map[Capability]SupportLevel
 	Exclusive           bool
+	Models              []string // local declaration only / 仅本地声明，不通过隧道接收
 }
 
 type TLSConfig struct {
@@ -270,6 +322,8 @@ type HealthReport struct {
 	Latency      time.Duration
 	CheckedAt    time.Time
 	ErrorSummary string
+	QueueRunning int
+	QueuePending int
 }
 
 type Discovery struct {
@@ -297,7 +351,7 @@ const (
 )
 ```
 
-`Descriptor` 保存稳定配置摘要：`ID` 和 `Kind` 标识实例，`BaseURL` 表示规范化后的后端地址，`MaxConcurrent` 和 `Exclusive` 提供调度约束。它不得包含 `APIKey`、自定义 Header 值或 TLS 凭据。`ProbeResult` 保存运行时类型、版本、身份验证强度和安全证据摘要；`HealthReport` 保存状态、延迟、检测时间和脱敏错误摘要；`Discovery` 保存版本、模型、节点类型、运行时能力、模型能力、降级告警及证据来源。所有时间字段由适配器写入 UTC 时间。
+`Descriptor` 保存稳定配置摘要：`ID` 和 `Kind` 标识实例，`BaseURL` 表示规范化后的后端地址，`MaxConcurrent` 和 `Exclusive` 提供调度约束。它不得包含 `APIKey`、自定义 Header 值或 TLS 凭据。`ProbeResult` 保存运行时类型、版本、身份验证强度和安全证据摘要；`HealthReport` 保存状态、延迟、检测时间和脱敏错误摘要，另有 `QueueRunning`/`QueuePending` 两个仅 ComfyUI 适配器填充的队列占用信号（STATUS.md 的 P2 实时利用率子任务，供 Gateway 调度排序使用），其余适配器恒为 0；`Discovery` 保存版本、模型、节点类型、运行时能力、模型能力、降级告警及证据来源。所有时间字段由适配器写入 UTC 时间。
 
 `ChatRequest` 等类型只表达 Runtime 层需要的协议中立字段。`openai` 子包定义线上 JSON DTO 并负责二者转换，从而避免把后端私有字段扩散到 Manager，也避免包循环依赖。
 
@@ -417,7 +471,8 @@ func (s CapabilitySet) Require(c Capability) error
 
 | 文件 | 职责 |
 | --- | --- |
-| `runtime.go` | `Runtime`、`InferenceRuntime`、`WorkflowRuntime` 接口及编译期约束 |
+| `runtime.go` | `Runtime`、`InferenceRuntime`、`WorkflowRuntime`、`MessagesRuntime` 接口及编译期约束 |
+| `image.go` | 可选的 `ImageRuntime` 接口、图像请求与流事件类型、跨跳共用的大小上限 |
 | `types.go` | Kind、Config、Descriptor、Probe、Health、Discovery、模型和请求结果类型 |
 | `config.go` | `Config.Normalize`、`Validate`、`LogValue` 及 URL/Header 规则 |
 | `deps.go` | `Dependencies`、`Clock`、`WSDialer`、`WSConn`、`Metrics` 协作者接口 |
@@ -483,8 +538,9 @@ runtimes:
 校验要求：
 
 - `id` 非空且在单个 Agent 内唯一。
-- `kind` 只能是四个已注册值之一。
-- `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。
+- `kind` 只能是已注册值之一：本地服务（vllm、sglang、trtllm、tokenspeed、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi、gemini-cli）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
+- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode`、`service/aiServeWeaveAgent/cliagent` 和 `service/aiServeWeaveAgent/geminicli`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
+- `models` 是可选的本地模型目录声明：每项非空、不超过 256 字节且不重复；设置后以它为准，端点没有模型列表路由（404/405）时也能发布。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
 - 自定义 Header 禁止覆盖 `Host`、`Content-Length`、hop-by-hop headers 和 Agent 链路追踪头。
 - 生产配置通过 Secret 引用提供密钥；`Config` 的格式化方法必须脱敏。
@@ -509,7 +565,7 @@ func (c Config) LogValue() slog.Value
 
 `Normalize` 必须在 `Validate` 之前调用，Registry 的 `Create` 内部按此顺序执行，调用方无需自行拼装。URL 拼接统一走 `url.URL.JoinPath`，保留配置中的路径前缀。
 
-建议默认值：探测和健康检查超时 `3s`，发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
+建议默认值：探测和健康检查超时 `3s`（本地 Codex/Claude CLI 为 `15s`，覆盖冷启动），发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
 
 ## 后端接入矩阵
 
@@ -547,6 +603,40 @@ OpenAI-compatible server 与该路由注册在同一 server 上），而不像 v
 证据 `Detail` 中，便于评审时直接看到依据。
 
 SGLang 同时提供原生 `/generate`，首期不接入，避免同时维护两套生成协议。参考 [SGLang Bench Serving Guide](https://docs.sglang.ai/developer_guide/bench_serving) 与 [SGLang Observability](https://docs.sglang.ai/advanced_features/observability.html)。
+
+### TensorRT-LLM
+
+**实现文件：** `common/runtime/trtllm/runtime.go`
+
+| 动作 | 首选端点 | 说明 |
+| --- | --- | --- |
+| Probe | `GET /version`、`GET /v1/models` | 至少一张模型卡的 `owned_by` 为 `"tensorrt_llm"` 才算核实身份；只有 `/version` 不够，vLLM 也提供它，两者默认端口都是 8000 |
+| Health | `GET /health` | 执行器存活时空 body 200，致命错误后 503；不执行推理 |
+| Discover | `GET /version`、`GET /v1/models`、`GET /server_info` | `/server_info` 只在主 LLM 角色注册，应答即作为 chat/chat_stream/completions 的端点证据；404 表示 embeddings 或多模态编码器角色，Chat 保持 `unknown` 并给出警告 |
+| Chat | `POST /v1/chat/completions` | 普通响应和 SSE |
+| Embedding | 仅 `trtllm-serve embeddings` 角色提供 | 默认 `unknown`，经 `CapabilityOverrides` 声明 |
+
+不使用版本能力表：tools 取决于 `--tool_parser`，structured output 取决于 `guided_decoding_backend`，vision/reasoning 取决于模型与 chat template，没有端点报告这些启动参数，一律保持 `unknown`。`trtllm-serve` 还提供 `/v1/responses`、Anthropic `/v1/messages` 和显存释放、权重更新、profiling 等路由，首期都不接入，管理类路由永不调用。
+
+SMG 改走 `trtllm-serve --grpc` 的原型 gRPC 协议接入 TensorRT-LLM。那条路径要求调用方自己分词（tokenizer），Agent 不做分词，所以这里走 OpenAI 兼容 HTTP。vLLM 的 Probe 同步增加一条拒绝：模型卡 `owned_by` 为 `"tensorrt_llm"` 时判为类型不匹配。参考 [trtllm-serve](https://nvidia.github.io/TensorRT-LLM/commands/trtllm-serve/trtllm-serve.html)。
+
+### TokenSpeed
+
+**实现文件：** `common/runtime/tokenspeed/runtime.go`
+
+`tokenspeed serve` 自己不实现 HTTP：它在 gRPC servicer 后面跑 TokenSpeed 引擎，前面起一个 SMG 网关，客户端访问的端口（默认 8000）属于 SMG。
+
+| 动作 | 首选端点 | 说明 |
+| --- | --- | --- |
+| Probe | `GET /readiness`、`GET /v1/models` | `/readiness` 必须是 SMG 的 JSON 且 `status` 为 `"ready"`；503（未就绪或排空）按上游失败传出，由 Manager 重试 |
+| Health | `GET /readiness` | 不用 `/health`：SMG 在排空、无健康 worker 时 `/health` 仍返回 200，`/readiness` 恰好在这些状态返回 503 |
+| Discover | `GET /v1/models` | SMG 为每个 worker 注册 chat/completions 路由，作为端点证据；没有版本 |
+| Chat | `POST /v1/chat/completions` | 普通响应和 SSE |
+| Embedding | 默认 `unknown` | SMG 无论后端是什么都注册 `/v1/embeddings`，路由存在不说明模型 |
+
+**身份不强验证：** 主端口能核实的只有「这里是一个 SMG 网关」，SMG 同样可以代理 vLLM、SGLang、TensorRT-LLM 的 gRPC worker；TokenSpeed 自己的版本（`tokenspeed_version`）只由旁路控制服务器的 `/get_server_info` 报告，而该端口默认随机。因此种类取自配置，`IdentityVerified=false`，与 SGLang 同一处理。tools 与 structured output 取决于启动参数（TokenSpeed 的 `--grammar-backend` 默认 none），保持 `unknown`。参考 [TokenSpeed 启动服务](https://lightseek.org/tokenspeed/guides/launching)。
+
+**本机自动发现：** vLLM、TensorRT-LLM、TokenSpeed 默认都在 8000。`localdiscovery` 按这个顺序探测，三者的 Probe 互斥（vLLM 要 `/version` 且拒绝 TensorRT-LLM 的 `owned_by`；TensorRT-LLM 要 `/version` 加自己的 `owned_by`；TokenSpeed 要 `/readiness`），且扫描按地址去重：一个地址只要已以任何种类注册（包括运维手工声明的），就不再注册别的种类。
 
 ### Ollama
 
@@ -679,7 +769,7 @@ type Snapshot struct {
 }
 ```
 
-`Add` 内部串行执行「创建 → Probe → Discover → 注册 → 启动调度」；Probe 失败时实例不进入实例表并被立即 `Close`，不留 `registering` 僵尸条目。`Get` 返回接口值，调用方通过类型断言取得 `InferenceRuntime` 或 `WorkflowRuntime`；Manager 不提供按能力选择实例的调度方法，那属于上层调度器。
+`Add` 默认串行执行「创建 → Probe → Discover → 注册 → 启动调度」；Probe 或 Discover 失败时关闭实例且不注册。Agent 对本地已声明的后端设置 `Config.AllowUnavailable=true`：配置和 Factory 校验仍必须成功，首次可用性检查失败时保留 `unhealthy` 实例、空模型目录和固定未就绪说明；按健康检查间隔重试完整 Probe + Discover，两项都成功后才发布模型并转为 `healthy`。这项本地启动策略不通过隧道接收，不改变远程配置下发的默认严格校验。`Get` 返回接口值，调用方通过类型断言取得 `InferenceRuntime` 或 `WorkflowRuntime`；Manager 不提供按能力选择实例的调度方法，那属于上层调度器。
 
 Manager 使用互斥锁保护实例表，但任何网络调用都不能持锁执行：先在锁内取出实例引用，再释放锁发起请求。读取方获得不可变 `Snapshot`，不能拿到 Manager 内部可修改对象。
 
@@ -696,9 +786,11 @@ registering
 任意状态 ── Remove/Close ──► closed
 ```
 
+本地 `AllowUnavailable` 模式另有一条初始化路径：首次 Probe/Discover 失败 → `unhealthy`（尚未初始化）→ 完整 Probe + Discover 重试成功 → `healthy`。这条路径在身份与模型都确认前不会发布任何模型。
+
 - 健康检查默认每 `10s` 执行一次，并加入最多 `10%` 抖动，避免所有实例同时请求。
 - Discover 默认每 `5m` 刷新；健康恢复后立即刷新一次。
-- 同一实例最多一个 Health 和一个 Discover 在途；慢请求不会堆积。
+- 同一实例的周期检查串行执行，慢请求不会堆积。尚未初始化的本地实例先重试 Probe + Discover，不单靠 Health 成功判断就绪；关闭时取消重试并回收实例。
 - 配置替换采用“新实例 Probe 成功后原子替换，最后关闭旧实例”。
 - `Manager.Close` 先停止调度，再取消在途检查，最后关闭全部实例并汇总错误。
 
@@ -850,6 +942,8 @@ Agent 接收到的 `request_id` 必须通过允许的 Header 或请求字段传�
 | --- | --- | --- | --- |
 | vLLM | 待定 | 待填写 | `/version` 字段名随版本变化；Responses 端点仅新版存在 |
 | SGLang | 待定 | 待填写 | 早期版本无 `/health`；`/get_server_info` 为私有响应且不稳定 |
+| TensorRT-LLM | 待定 | 待填写 | 能力不按版本推断（见下方「TensorRT-LLM」）；`/v1/models` 只返回一张模型卡；embeddings 与多模态编码器角色不注册 `/server_info` 与 Chat |
+| TokenSpeed | 待定 | 待填写 | 主端口是 SMG，没有版本端点；版本只在随机端口的控制服务器上 |
 | Ollama | 0.1.24 | 0.32.14 | OpenAI-compatible 层支持的字段逐版本增加；`capabilities` 内联进 `/api/tags` 是较新行为，旧版需 `/api/show` 兜底 |
 | ComfyUI | 待定 | 待填写 | `/features`、`/models/{folder}` 为较新增接口；事件字段有增删 |
 
@@ -981,7 +1075,7 @@ go test -race ./common/runtime/...
 实现说明：
 
 - `registry_test.go`、`manager_test.go` 按 README 约定写成黑盒测试（`package runtime_test`），因为它们需要 `internal/runtimetest`，而 `runtimetest` 反过来又 import `runtime` 做接口断言——放进包内测试会直接构成 import cycle。包内细节（SSE、URL 拼接等）仍留在 `package runtime`/`package openai`。
-- `Manager.Add`/`Replace` 里 Probe 和 Discover 都在“进入实例表之前”同步执行；Discover 失败和 Probe 失败一样会 `Close` 掉新建的 Runtime 且不注册，不会遗留 `registering` 僵尸条目（状态图上 `registering → healthy` 那条边本身就要求两者都成功）。
+- 默认严格模式下，`Manager.Add`/`Replace` 里 Probe 和 Discover 都在“进入实例表之前”同步执行；Discover 失败和 Probe 失败一样会 `Close` 掉新建的 Runtime 且不注册，不会遗留 `registering` 僵尸条目（状态图上 `registering → healthy` 那条边本身就要求两者都成功）。
 - 每个实例一个调度协程，用 `select` 在同一个 goroutine 里轮流处理 Health 定时器、Discover 定时器和取消信号；Health/Discover 网络调用是同步执行的，天然保证“同一实例最多一个在途”，慢请求只是推迟下一次定时器的创建时间，不会排队堆积。
 - 取消通过每实例的 `context.CancelFunc` 实现，Health/Discover 的调用 Context 都是这个 cancel context 的子 Context——`Remove`/`Replace`/`Close` 一 cancel，正在进行中的检查立刻收到 `ctx.Done()`，不必等它自然超时。
 - `Snapshot.Inflight` 暂时恒为 `0`：README 没有说明上层如何把请求路径的 `Limiter` 获取/释放接回 Manager（`Get` 只返回裸 `Runtime`），这段留给阶段 8 的集成工作，此处不臆造一套接口。
@@ -1230,7 +1324,7 @@ go test -race ./common/runtime/...
 
 首期稳定后再独立规划：
 
-1. OpenAI Responses、Completions、音频和 rerank 等更多能力。
+1. OpenAI Responses、Completions 等更多能力。音频转录/翻译与 rerank（STATUS.md 的 P2）已经在这里落地了 `InferenceRuntime.Transcribe`/`Rerank` 接口、`common/tunnelwire`/`tunnel.proto` 的传输层与 Gateway 的 `/v1/audio/transcriptions`/`/v1/audio/translations`/`/v1/rerank` 前门，但没有任何适配器的 `Discover` 报告 `CapabilityAudioTranscription`/`CapabilityRerank`——协议已经打通，真正接一个语音后端（如 Whisper 兼容服务）或声明一个后端确实支持 rerank 仍是独立待办。
 2. Agent Tunnel 上的普通、SSE、WebSocket 和 Artifact 多路复用。
 3. ComfyUI 工作流模板、输入绑定、Job 持久化和对象存储。
 4. 运行时自动发现与配置建议，但仍由用户确认 Kind 和地址。
@@ -1238,3 +1332,17 @@ go test -race ./common/runtime/...
 6. 基于 GPU、队列、TTFT、吞吐和历史错误的跨节点调度。
 
 这些能力不得提前塞入首期接口；确需扩展时优先新增窄接口，避免扩大基础 `Runtime`。
+
+## 原生 Anthropic Messages 契约
+
+`messages.go` 定义 `MessagesRuntime`、`MessagesRequest` 和 `MessagesEvent`，与通用 Chat 接口分开。`CapabilityMessages` 的值为 `anthropic_messages`；它只用于原生 Messages 调度，不能据此允许 Chat/Responses。请求只携带目标模型、已认证归属及有界推理 JSON，不接受 HTTP 地址、请求头、凭据或 CLI 配置。事件为单条原生数据 JSON，不含 HTTP 帧。跨隧道编解码统一由 `common/tunnelwire`，Agent 的 Claude 实现严格拒绝未知语义字段及未支持的内容块。
+
+## 图像生成契约
+
+`image.go` 定义可选接口 `ImageRuntime`，写法与 `MessagesRuntime` 相同：不具备该能力的后端不需要实现空方法，Agent 的 dispatch 在运行时做类型断言。`GenerateImage` 一次只生成一张图，返回 `Stream[ImageEvent]`：第一个事件只带 `ImageMeta`（按字节内容判定的 `ContentType`、精确的 `Size`、可选的 `RevisedPrompt`），之后每个事件只带一个字节分块。
+
+- `ImageRequest` 只有模型 ID、提示词和可选的归属标识（`TenantID`/`KeyID`），没有 URL、路径、请求头或凭据字段。提示词不得写入日志。
+- `MaxImagePromptBytes`（32 KiB）、`MaxImageBytes`（32 MiB）、`MaxImageChunkBytes`（256 KiB）是契约值，Agent 拒绝产出更多，Gateway 拒绝接收更多。
+- 后端交付完整成品图像时（当前 Codex CLI 与 Gemini CLI 扩展均如此），适配器允许有界持有最多 32 MiB 再拆分事件；隧道两端仍逐个事件转发、每次最多一个分块。所有路径都须遵守上述硬上限。
+- `CapabilityImageGeneration`（`image_generation`）为它门禁。图像模型必须把各项聊天能力**显式**标为 `unsupported`，对话模型也必须把 `image_generation` 显式标为 `unsupported`。原因是 `Intersect` 会用运行时级别的能力补齐模型没提到的项，只省略不写，就会让图像模型继承运行时级别的聊天能力。
+- Agent 的 `codexcli` 发布 `codex-image`；`geminicli` 通过 Gemini CLI 官方 Nano Banana 扩展发布 `gemini-image`，后者只实现 `ImageRuntime`，不实现聊天接口。见 [Codex 包说明](../../service/aiServeWeaveAgent/codexcli/README.md#图像生成) 与 [Gemini CLI 包说明](../../service/aiServeWeaveAgent/geminicli/README.md)。

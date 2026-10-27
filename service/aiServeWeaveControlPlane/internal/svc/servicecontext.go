@@ -16,6 +16,8 @@ import (
 	"context"
 	"errors"
 	"log"
+	"log/slog"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -24,16 +26,26 @@ import (
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
 
+	commonmetrics "AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyeditor"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/config"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/fleet"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
+	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/signupgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/token"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/usageretention"
 )
 
 // RevocationSource exposes the durable generation behind API Key cache
@@ -71,6 +83,31 @@ type ServiceContext struct {
 	// 而不是有一个回答「未配置」的端点。
 	Fleet *fleet.Aggregator
 
+	// ModelPullRouter forwards STATUS.md's P2 model distribution subtask
+	// two's per-node pull trigger and status calls to whichever Gateway
+	// replica currently holds that node's connection. It is nil when the
+	// deployment did not configure one, mirroring Fleet's own rule and for
+	// the same reason: a deployment without it has no model-pull endpoint
+	// at all, not one that answers "not configured".
+	//
+	// ModelPullRouter 把 STATUS.md P2 模型分发子任务二里针对单个节点的拉取
+	// 触发与状态查询，转发给当前持有该节点连接的那个 Gateway 副本。部署未
+	// 配置时它为 nil，与 Fleet 自己的规则相同，理由也相同：一个没有配置它的
+	// 部署，是根本没有模型拉取端点，而不是有一个回答「未配置」的端点。
+	ModelPullRouter *modelpullrouter.Router
+
+	// ComfyUIManagedRouter forwards STATUS.md's P2 ComfyUI Managed Docker
+	// deployment subtask two's per-node lifecycle action trigger and status
+	// calls to whichever Gateway replica currently holds that node's
+	// connection. It is nil when the deployment did not configure one,
+	// mirroring ModelPullRouter's own rule and for the same reason.
+	//
+	// ComfyUIManagedRouter 把 STATUS.md P2 ComfyUI Managed Docker 部署子任务
+	// 二里针对单个节点的生命周期动作触发与状态查询，转发给当前持有该节点
+	// 连接的那个 Gateway 副本。部署未配置时它为 nil，与 ModelPullRouter 自己
+	// 的规则相同，理由也相同。
+	ComfyUIManagedRouter *comfyuimanagedrouter.Router
+
 	// RegistryClient calls the Registry's TokenAdmin service on behalf of a
 	// platform operator (STATUS.md's P01). It is nil when the deployment did
 	// not configure one, and every handler that uses it is mounted only in
@@ -85,10 +122,102 @@ type ServiceContext struct {
 	// 「未配置」的端点。
 	RegistryClient *registryclient.Client
 
+	// MetricsRegistry is this replica's process-wide common/metrics sink.
+	// Never nil: main.go always constructs one, whether or not -metrics-addr
+	// is configured to export it.
+	//
+	// MetricsRegistry 是本副本进程级的 common/metrics 汇点。永不为 nil：无论
+	// 是否配置 -metrics-addr 来导出它，main.go 都会构造一个。
+	MetricsRegistry *commonmetrics.Registry
+
+	// ComfyEditor serves the embedded workflow editor and its stub backend. It
+	// is nil unless Config.ComfyEditor.DistDir is set, and the editor prefix
+	// then answers 404.
+	//
+	// ComfyEditor 提供嵌入式工作流编辑器及其桩后端。除非设置了
+	// Config.ComfyEditor.DistDir，否则它为 nil，编辑器前缀此时回答 404。
+	ComfyEditor *comfyeditor.Server
+
+	// SignupGate bounds self-service sign-ups per hour. It is nil when
+	// Signup is disabled or its MaxPerHour is zero, and the sign-up handler
+	// then admits every attempt.
+	//
+	// SignupGate 限定每小时的自助注册次数。Signup 关闭或其 MaxPerHour 为零时它为
+	// nil，注册 handler 此时放行每一次尝试。
+	SignupGate signupgate.Gate
+
 	db          *gorm.DB
 	redisClient *redis.Client
 	relayCancel context.CancelFunc
 	relayDone   chan struct{}
+	lagCancel   context.CancelFunc
+	lagDone     chan struct{}
+	// artifactStorageCancel/artifactStorageDone tear down
+	// runArtifactStorageGauge (STATUS.md's A06), started unconditionally the
+	// same way lagCancel/lagDone are — it only reads job_artifacts, so it
+	// needs no external address to be configured.
+	//
+	// artifactStorageCancel/artifactStorageDone 关停 runArtifactStorageGauge
+	// （STATUS.md 的 A06），与 lagCancel/lagDone 同样无条件启动——它只读取
+	// job_artifacts，不需要配置任何外部地址。
+	artifactStorageCancel context.CancelFunc
+	artifactStorageDone   chan struct{}
+
+	// metricsHistoryCancel/metricsHistoryDone tear down the collector and
+	// retention goroutines started below, only running at all when
+	// cfg.MetricsHistory.Enabled() — the same "no config, no goroutine"
+	// convention Fleet and Registry already follow for their own optional
+	// pieces.
+	//
+	// metricsHistoryCancel/metricsHistoryDone 关停下面启动的采集器与保留期
+	// 清理协程，只在 cfg.MetricsHistory.Enabled() 时才会真的启动——与 Fleet、
+	// Registry 自己那些可选部件遵循的"没配置就没有协程"约定相同。
+	metricsHistoryCancel context.CancelFunc
+	metricsHistoryDone   chan struct{}
+
+	// requestLogRetentionCancel/requestLogRetentionDone tear down the
+	// request_logs retention sweeper started below. Unlike
+	// metricsHistoryCancel/metricsHistoryDone, this goroutine always starts —
+	// there is no "enabled" gate, since the request_logs table always exists
+	// once migrated and the internal push API that populates it is mounted
+	// unconditionally whenever InternalToken is configured.
+	//
+	// requestLogRetentionCancel/requestLogRetentionDone 关停下面启动的
+	// request_logs 保留期清理协程。与 metricsHistoryCancel/metricsHistoryDone
+	// 不同，这个协程总是会启动——不存在"是否启用"的开关，因为 request_logs
+	// 表只要迁移过就总是存在，而填充它的内部推送 API 只要配置了 InternalToken
+	// 就无条件挂载。
+	requestLogRetentionCancel context.CancelFunc
+	requestLogRetentionDone   chan struct{}
+
+	// alertEvaluatorCancel/alertEvaluatorDone tear down the alert evaluation
+	// loop (STATUS.md's P09/C29) started below. Like
+	// requestLogRetentionCancel/requestLogRetentionDone, this goroutine
+	// always starts — it only reads metrics_history, already present in the
+	// same database once migrated, so there is no "enabled" gate.
+	//
+	// alertEvaluatorCancel/alertEvaluatorDone 关停下面启动的告警评估循环
+	// (STATUS.md 的 P09/C29)。与 requestLogRetentionCancel/
+	// requestLogRetentionDone 一样，这个协程总是会启动——它只读取同一个数据库
+	// 里迁移后已经存在的 metrics_history，不存在"是否启用"的开关。
+	alertEvaluatorCancel context.CancelFunc
+	alertEvaluatorDone   chan struct{}
+
+	// usageRetentionCancel/usageRetentionDone tear down the usage_records
+	// retention sweeper started below (STATUS.md's P2 usage ledger). Like
+	// requestLogRetentionCancel/requestLogRetentionDone, this goroutine
+	// always starts — there is no "enabled" gate, since the usage_records
+	// table always exists once migrated and the internal push API that
+	// populates it is mounted unconditionally whenever InternalToken is
+	// configured.
+	//
+	// usageRetentionCancel/usageRetentionDone 关停下面启动的 usage_records
+	// 保留期清理协程（STATUS.md 的 P2 用量账本）。与
+	// requestLogRetentionCancel/requestLogRetentionDone 一样，这个协程总是
+	// 会启动——不存在"是否启用"的开关，因为 usage_records 表只要迁移过就总是
+	// 存在，而填充它的内部推送 API 只要配置了 InternalToken 就无条件挂载。
+	usageRetentionCancel context.CancelFunc
+	usageRetentionDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -163,14 +292,138 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}
 		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
 	}
+	modelPullRouter := modelpullrouter.New(modelpullrouter.Config{
+		Gateways: cfg.ModelPull.Gateways,
+		Token:    cfg.ModelPull.GatewayToken,
+		Timeout:  cfg.ModelPull.Timeout,
+	})
+	if modelPullRouter != nil {
+		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))
+	}
+	comfyUIManagedRouter := comfyuimanagedrouter.New(comfyuimanagedrouter.Config{
+		Gateways: cfg.ComfyUIManaged.Gateways,
+		Token:    cfg.ComfyUIManaged.GatewayToken,
+		Timeout:  cfg.ComfyUIManaged.Timeout,
+	})
+	if comfyUIManagedRouter != nil {
+		logicOpts = append(logicOpts, logic.WithComfyUIManagedRouter(comfyUIManagedRouter))
+	}
+
+	svcLogic := logic.New(st, clock, logicOpts...)
+	// Compiled-in API reference pages are inserted or refreshed on every
+	// start, never overwriting a page an operator has edited. A failure here
+	// is a broken seed or an unreachable table, both of which a deployment
+	// must see before it serves.
+	//
+	// 每次启动都会插入或刷新编译内置的 API 参考页面，从不覆盖运维编辑过的页面。这里
+	// 失败意味着种子损坏或表不可用，两者都必须在部署开始提供服务之前被看见。
+	if _, err := svcLogic.SyncAPIDocSeeds(ctx); err != nil {
+		return nil, errors.Join(errors.New("syncing compiled-in API doc seeds"), err)
+	}
+
+	// The editor is checked before any background loop starts, so a bad
+	// DistDir fails start-up without leaving goroutines behind.
+	// 编辑器在任何后台循环启动之前检查，DistDir 有误时启动失败，不会留下协程。
+	var editor *comfyeditor.Server
+	if cfg.ComfyEditor.DistDir != "" {
+		if editor, err = comfyeditor.New(cfg.ComfyEditor.DistDir); err != nil {
+			return nil, err
+		}
+	}
+
+	metricsRegistry := commonmetrics.New(cpmetrics.Descriptions())
 
 	relayCtx, relayCancel := context.WithCancel(ctx)
 	relayDone := make(chan struct{})
 	go func() { defer close(relayDone); relay.Run(relayCtx) }()
+
+	lagCtx, lagCancel := context.WithCancel(ctx)
+	lagDone := make(chan struct{})
+	go func() { defer close(lagDone); runOutboxLagGauge(lagCtx, st, metricsRegistry) }()
+
+	artifactStorageCtx, artifactStorageCancel := context.WithCancel(ctx)
+	artifactStorageDone := make(chan struct{})
+	go func() {
+		defer close(artifactStorageDone)
+		runArtifactStorageGauge(artifactStorageCtx, st, metricsRegistry)
+	}()
+
+	var metricsHistoryCancel context.CancelFunc
+	var metricsHistoryDone chan struct{}
+	if cfg.MetricsHistory.Enabled() {
+		collector := metricshistory.New(metricshistory.Config{
+			GatewayAddrs: cfg.MetricsHistory.GatewayAddrs,
+			RegistryAddr: cfg.MetricsHistory.RegistryAddr,
+			Interval:     cfg.MetricsHistory.Interval,
+			Store:        st,
+		})
+		retention := metricshistory.NewRetention(st, cfg.MetricsHistory.Retention, nil, nil)
+
+		mhCtx, mhCancel := context.WithCancel(ctx)
+		mhDone := make(chan struct{})
+		go func() {
+			defer close(mhDone)
+			var wg sync.WaitGroup
+			wg.Add(2)
+			go func() { defer wg.Done(); collector.Run(mhCtx) }()
+			go func() { defer wg.Done(); retention.Run(mhCtx, metricsHistoryRetentionInterval) }()
+			wg.Wait()
+		}()
+		metricsHistoryCancel = mhCancel
+		metricsHistoryDone = mhDone
+	}
+
+	requestLogRetention := cfg.RequestLogRetention
+	if requestLogRetention <= 0 {
+		requestLogRetention = config.DefaultRequestLogRetention
+	}
+	rlCtx, rlCancel := context.WithCancel(ctx)
+	rlDone := make(chan struct{})
+	go func() {
+		defer close(rlDone)
+		requestlogretention.New(st, requestLogRetention, nil, nil).Run(rlCtx, requestLogRetentionInterval)
+	}()
+
+	alertInterval := cfg.AlertEvaluationInterval
+	if alertInterval <= 0 {
+		alertInterval = config.DefaultAlertEvaluationInterval
+	}
+	aeCtx, aeCancel := context.WithCancel(ctx)
+	aeDone := make(chan struct{})
+	go func() {
+		defer close(aeDone)
+		evaluator := alertengine.New(st, alertengine.NewSender(nil, nil), nil, nil)
+		evaluator.Run(aeCtx, alertInterval)
+	}()
+
+	usageRecordRetention := cfg.UsageRecordRetention
+	if usageRecordRetention <= 0 {
+		usageRecordRetention = config.DefaultUsageRecordRetention
+	}
+	urCtx, urCancel := context.WithCancel(ctx)
+	urDone := make(chan struct{})
+	go func() {
+		defer close(urDone)
+		usageretention.New(st, usageRecordRetention, nil, nil).Run(urCtx, usageRecordRetentionInterval)
+	}()
+
+	// The gate is assigned through a guard rather than directly: a nil
+	// *signupgate.Redis stored in the interface field would be a non-nil
+	// Gate holding a nil pointer.
+	//
+	// gate 经一道判断再赋值而不是直接赋值：把一个 nil 的 *signupgate.Redis 存进接口
+	// 字段，会得到一个持有 nil 指针的非 nil Gate。
+	var signupGate signupgate.Gate
+	if cfg.Signup.Enabled && cfg.Signup.MaxPerHour > 0 {
+		signupGate = signupgate.NewRedis(redisClient, clock, cfg.Signup.MaxPerHour)
+	}
+
 	ready = true
 	return &ServiceContext{
+		SignupGate:  signupGate,
+		ComfyEditor: editor,
 		Config:      cfg,
-		Logic:       logic.New(st, clock, logicOpts...),
+		Logic:       svcLogic,
 		Issuer:      issuer,
 		Cache:       verifications,
 		Revocations: verifications,
@@ -181,12 +434,157 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Timeout:  cfg.Fleet.Timeout,
 			Clock:    clock,
 		}),
-		RegistryClient: registryClient,
-		db:             db,
-		redisClient:    redisClient,
-		relayCancel:    relayCancel,
-		relayDone:      relayDone,
+		ModelPullRouter:           modelPullRouter,
+		ComfyUIManagedRouter:      comfyUIManagedRouter,
+		RegistryClient:            registryClient,
+		MetricsRegistry:           metricsRegistry,
+		db:                        db,
+		redisClient:               redisClient,
+		relayCancel:               relayCancel,
+		relayDone:                 relayDone,
+		lagCancel:                 lagCancel,
+		lagDone:                   lagDone,
+		artifactStorageCancel:     artifactStorageCancel,
+		artifactStorageDone:       artifactStorageDone,
+		metricsHistoryCancel:      metricsHistoryCancel,
+		metricsHistoryDone:        metricsHistoryDone,
+		requestLogRetentionCancel: rlCancel,
+		requestLogRetentionDone:   rlDone,
+		alertEvaluatorCancel:      aeCancel,
+		alertEvaluatorDone:        aeDone,
+		usageRetentionCancel:      urCancel,
+		usageRetentionDone:        urDone,
 	}, nil
+}
+
+// metricsHistoryRetentionInterval is how often the retention cleanup goroutine
+// runs — once a day is plenty for a job that only prunes rows past a
+// 90-day-scale window; it does not need to share MetricsHistoryConf.Interval,
+// which is the much finer collector cadence.
+//
+// metricsHistoryRetentionInterval 是保留期清理协程的运行频率——对一个只清理
+// 90 天量级窗口之外数据的任务，一天一次足够；它不需要与
+// MetricsHistoryConf.Interval(更细的采集节奏)共用同一个值。
+const metricsHistoryRetentionInterval = 24 * time.Hour
+
+// requestLogRetentionInterval is how often the request-log retention
+// cleanup goroutine runs — daily, the same cadence metricsHistoryRetentionInterval
+// already uses, for the same reason: a cleanup task has no reason to run
+// more often than once a day.
+//
+// requestLogRetentionInterval 是 request_logs 保留期清理协程的运行频率——
+// 每天一次，与 metricsHistoryRetentionInterval 相同的节奏，理由也相同：
+// 一个清理任务没有理由比一天一次更频繁地运行。
+const requestLogRetentionInterval = 24 * time.Hour
+
+// usageRecordRetentionInterval is how often the usage-record retention
+// cleanup goroutine runs — daily, the same cadence
+// requestLogRetentionInterval already uses, for the same reason: a cleanup
+// task has no reason to run more often than once a day.
+//
+// usageRecordRetentionInterval 是 usage_records 保留期清理协程的运行
+// 频率——每天一次，与 requestLogRetentionInterval 相同的节奏，理由也相同：
+// 一个清理任务没有理由比一天一次更频繁地运行。
+const usageRecordRetentionInterval = 24 * time.Hour
+
+// outboxLagStore is the read the outbox-lag gauge needs — a subset of
+// *gormstore.Store, named here so the poller does not depend on the whole
+// concrete store type.
+//
+// outboxLagStore 是滞后量表所需要的那次读取——*gormstore.Store 的一个子集，在
+// 此单独命名，好让这个轮询器不依赖整个具体的 store 类型。
+type outboxLagStore interface {
+	RevocationOutboxLag(ctx context.Context) (generation, delivered int64, err error)
+}
+
+// outboxLagPollInterval is how often runOutboxLagGauge refreshes the gauge. A
+// point-in-time gauge does not need to track every single generation bump —
+// it only has to be fresh enough that an operator staring at the C27 chart
+// sees a stuck relay within a few intervals, not immediately.
+//
+// outboxLagPollInterval 是 runOutboxLagGauge 刷新量表的频率。一个瞬时量表不需要
+// 追踪每一次 generation 的递增——只需要新鲜到让盯着 C27 图表的运维在几个周期内
+// 发现一个卡住的中继，而不必立刻发现。
+const outboxLagPollInterval = 5 * time.Second
+
+// runOutboxLagGauge sets controlplane_revocation_outbox_lag to
+// generation - delivered_generation once per outboxLagPollInterval, until ctx
+// is done. A read failure is logged and skipped rather than treated as a
+// zero lag — reporting "caught up" on a database error would hide the very
+// condition an operator relies on this gauge to catch.
+//
+// runOutboxLagGauge 每隔一个 outboxLagPollInterval 把
+// controlplane_revocation_outbox_lag 设为 generation - delivered_generation，
+// 直到 ctx 结束。读取失败只记日志并跳过，而不是当作零滞后处理——把一次数据库
+// 错误报告成"已追上"，恰好会掩盖运维依赖这个量表去发现的那种状况。
+func runOutboxLagGauge(ctx context.Context, st outboxLagStore, registry *commonmetrics.Registry) {
+	ticker := time.NewTicker(outboxLagPollInterval)
+	defer ticker.Stop()
+	for {
+		generation, delivered, err := st.RevocationOutboxLag(ctx)
+		if err != nil {
+			slog.Warn("outbox lag gauge read failed", slog.Any("error", err))
+		} else {
+			registry.Gauge(cpmetrics.MetricOutboxLagGeneration, nil).Set(float64(generation - delivered))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
+}
+
+// artifactStorageStore is the read the artifact-storage gauge needs
+// (STATUS.md's A06), named separately from outboxLagStore for the same
+// reason that one is named separately from the whole store type: a poller
+// should depend on exactly the one method it calls.
+//
+// artifactStorageStore 是产物存储量表所需要的那次读取（STATUS.md 的 A06），
+// 与 outboxLagStore 分开命名的理由相同：一个轮询器应当只依赖它调用的那一个
+// 方法。
+type artifactStorageStore interface {
+	SumArtifactStorageBytes(ctx context.Context) (int64, error)
+}
+
+// artifactStoragePollInterval matches outboxLagPollInterval's reasoning: a
+// gauge derived from a SUM over job_artifacts does not need sub-second
+// freshness, only freshness within a few intervals of an operator looking
+// at it.
+//
+// artifactStoragePollInterval 与 outboxLagPollInterval 的理由相同：一个从
+// job_artifacts 的 SUM 派生出的量表不需要亚秒级的新鲜度，只需要在运维查看
+// 它的几个周期之内保持新鲜。
+const artifactStoragePollInterval = 5 * time.Second
+
+// runArtifactStorageGauge sets controlplane_artifact_storage_bytes to the
+// current SUM(size_bytes) over job_artifacts rows whose bytes actually
+// reached object storage, once per artifactStoragePollInterval, until ctx is
+// done. It runs unconditionally, the same as runOutboxLagGauge: it reads
+// only job_artifacts, which already exists whether or not any deployment
+// feature that touches it is configured (STATUS.md's A06).
+//
+// runArtifactStorageGauge 每隔一个 artifactStoragePollInterval，把
+// controlplane_artifact_storage_bytes 设为 job_artifacts 中字节确已抵达对象
+// 存储的行上 SUM(size_bytes) 的当前值，直到 ctx 结束。它与 runOutboxLagGauge
+// 同样无条件运行：它只读取 job_artifacts，无论触及它的哪项部署功能是否配置，
+// 这张表本就存在（STATUS.md 的 A06）。
+func runArtifactStorageGauge(ctx context.Context, st artifactStorageStore, registry *commonmetrics.Registry) {
+	ticker := time.NewTicker(artifactStoragePollInterval)
+	defer ticker.Stop()
+	for {
+		total, err := st.SumArtifactStorageBytes(ctx)
+		if err != nil {
+			slog.Warn("artifact storage gauge read failed", slog.Any("error", err))
+		} else {
+			registry.Gauge(cpmetrics.MetricArtifactStorageBytes, nil).Set(float64(total))
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+	}
 }
 
 // Close releases the database and cache connections.
@@ -196,6 +594,30 @@ func (s *ServiceContext) Close() error {
 	if s.relayCancel != nil {
 		s.relayCancel()
 		<-s.relayDone
+	}
+	if s.lagCancel != nil {
+		s.lagCancel()
+		<-s.lagDone
+	}
+	if s.artifactStorageCancel != nil {
+		s.artifactStorageCancel()
+		<-s.artifactStorageDone
+	}
+	if s.metricsHistoryCancel != nil {
+		s.metricsHistoryCancel()
+		<-s.metricsHistoryDone
+	}
+	if s.requestLogRetentionCancel != nil {
+		s.requestLogRetentionCancel()
+		<-s.requestLogRetentionDone
+	}
+	if s.alertEvaluatorCancel != nil {
+		s.alertEvaluatorCancel()
+		<-s.alertEvaluatorDone
+	}
+	if s.usageRetentionCancel != nil {
+		s.usageRetentionCancel()
+		<-s.usageRetentionDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {

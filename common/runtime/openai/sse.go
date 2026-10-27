@@ -137,3 +137,29 @@ func splitSSEField(line string) (field, value string) {
 	value = strings.TrimPrefix(line[i+1:], " ")
 	return field, value
 }
+
+// SSEDecoder exposes the bounded SSE parser to adapters whose streams are
+// not OpenAI chat chunks (Anthropic Messages, for one).
+//
+// SSEDecoder 把有界 SSE 解析器提供给流格式不是 OpenAI 聊天分片的适配器（例如
+// Anthropic Messages）。
+type SSEDecoder struct{ r *sseReader }
+
+// NewSSEDecoder wraps r; maxLineBytes and maxEventBytes bound one field line
+// and one event's data, and 0 disables that check.
+//
+// NewSSEDecoder 包装 r；maxLineBytes 与 maxEventBytes 分别限制单行字段与单个
+// 事件的数据，0 表示不检查。
+func NewSSEDecoder(r io.Reader, maxLineBytes, maxEventBytes int) *SSEDecoder {
+	return &SSEDecoder{r: newSSEReader(r, maxLineBytes, maxEventBytes)}
+}
+
+// Next returns the next event's name and data. It returns io.EOF at the end
+// of the stream and ErrSSEDone for a "[DONE]" sentinel.
+//
+// Next 返回下一个事件的名称与数据。流结束时返回 io.EOF，遇到 "[DONE]" 哨兵时
+// 返回 ErrSSEDone。
+func (d *SSEDecoder) Next() (event, data string, err error) {
+	frame, err := d.r.readFrame()
+	return frame.Event, frame.Data, err
+}

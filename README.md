@@ -1,121 +1,93 @@
-
 # AIServeWeave
 
-AIServeWeave 是一个分布式 AI 推理节点管理平台，为本地 Mac、内网设备和 NVIDIA GPU 服务器上的推理服务提供统一接入、管理、调度和对外 API。
+把分散在 Mac、内网工作站和 GPU 服务器上的推理服务编织成一个统一入口：一套 OpenAI / Anthropic 兼容 API，背后自动调度到 Ollama、vLLM、ComfyUI 等任意节点。
 
-项目目标是构建一套“AI 推理控制平面 + 兼容 API 网关”，让应用只对接一个稳定入口，而底层可以运行 Ollama、vLLM、ComfyUI 或其他 AI 推理服务。
+节点不需要公网地址——Agent 主动出站，经 mTLS 隧道接入平台。
 
-## 项目目标
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+![Go](https://img.shields.io/badge/go-1.27-00ADD8.svg)
 
-- 集中管理本地设备、内网设备和 GPU 服务器等推理节点
-- 统一接入 Ollama、vLLM、ComfyUI 和其他推理后端
-- 管理 ComfyUI 工作流、异步生成任务及图片、视频、音频等产物
-- 对外提供 OpenAI、Anthropic 等兼容 API
-- 支持普通响应和 SSE 流式响应
-- 根据模型能力、节点状态、负载和策略自动调度请求
-- 支持 API Key、租户、配额、限流、审计和用量统计
-- 让没有公网入口的节点通过 Agent 主动连接平台
+## 特性
 
-## 当前能力与规划边界
+- **兼容 API**：OpenAI Chat Completions / Responses（含工具循环）/ Embeddings / Images，Anthropic Messages，Ollama 原生 API，统一支持 SSE。
+- **多种后端**：Ollama、vLLM、SGLang、TensorRT-LLM、TokenSpeed、ComfyUI；托管供应商（OpenAI、Claude、Gemini、DeepSeek、Qwen 等）；本机 CLI（Codex、Claude Code、Gemini CLI 等）。
+- **NAT 穿透**：Agent 只出站、不监听端口；运行时白名单保证 Gateway 失守也无法让节点访问未声明地址。
+- **调度与路由**：逻辑模型别名、节点标签、优先级与权重、健康过滤、熔断、首 token 前重试、前缀亲和。
+- **ComfyUI 工作流**：受控模板、异步 Job、SSE 进度、取消、产物持久化到对象存储。
+- **多租户**：API Key、配额与限流（可选 Redis 跨副本）、审计、可吊销会话。
+- **管理控制台**：机群、模型路由版本发布与回滚、模板、Job 历史、指标曲线。
 
-当前实现支持 OpenAI Chat Completions、Responses（含 SSE，不支持 `store` / `previous_response_id`）、Embeddings、Models，以及经 Agent Tunnel 执行的受控工作流 Job API。控制面已提供租户、用户与平台运维生命周期、Redis 可吊销会话、API Key、审计、配额与 MySQL Job 历史，并以 generation 长轮询向 Gateway 推送 Key 吊销失效；Console 已接入这些管理页面及只读机群、模板目录、Job 取消与产物预览/下载。模型路由已支持控制面版本发布、Gateway 热切换/生效查询与 Console 编辑回滚（P02）；文件配置模式保留。接口限制以服务 README 为准。
+## 架构
 
-[文档索引](#文档)中的架构与设计文档包含目标能力：Anthropic/Ollama 原生 API、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 的可交付范围待 A04 核实。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+```text
+Console ──► ControlPlane ──► MySQL / Redis
+                │  配置、Key 吊销、Job 历史
+                ▼
+Client ──► Gateway ──► 对象存储
+  (OpenAI /    │
+  Anthropic)   │ gRPC 双向流 + mTLS（Agent 主动出站）
+               ▼
+             Agent ──► Ollama / vLLM / ComfyUI / ...
 
-开发进度、优先级、依赖和验收统一见 [STATUS.md](STATUS.md)。
+Registry ◄── Agent 注册与证书续期、Gateway 副本名册
+```
+
+| 组件 | 职责 |
+| --- | --- |
+| [Gateway](service/aiServeWeaveGateway/README.md) | 兼容 API 前门、鉴权与配额、调度、隧道终结 |
+| [Agent](service/aiServeWeaveAgent/README.md) | 部署在算力节点，发现本地后端并经隧道执行请求 |
+| [Registry](service/aiServeWeaveRegistry/README.md) | 节点身份（一次性令牌换证书）与 Gateway 副本发现 |
+| [ControlPlane](service/aiServeWeaveControlPlane/README.md) | 租户、用户、Key、配额、路由与模板发布、审计、Job 历史 |
+| [Console](service/aiServeWeaveConsole/README.md) | Next.js 管理界面 |
+
+完整设计见 [docs/architecture.md](docs/architecture.md)。
 
 ## 快速开始
 
-用 Docker Compose 在一台机器上跑起整套服务：Console、依赖服务、Registry、控制面与 Gateway。需要 **Docker Engine 24+ 与 Compose v2**（`docker compose version` 能打印版本号），2 核 4G 内存足够试用，并且宿主机端口 `3000`、`8080`、`8443`、`9090`、`8090`、`9443`、`5432`、`6379` 空闲。
-
-### 1. 启动
-
-```bash
-git clone https://github.com/dongmu101/AIServeWeave.git
-cd AIServeWeave/deploy
-cp .env.example .env
-
-# 生成四个独立密钥并写回 .env
-for var in AISW_ACCESS_SECRET AISW_INTERNAL_TOKEN AISW_BOOTSTRAP_TOKEN; do
-  sed -i.bak "s#^${var}=#${var}=$(openssl rand -base64 32)#" .env
-done
-sed -i.bak "s#^AISW_CONSOLE_SESSION_SECRET=#AISW_CONSOLE_SESSION_SECRET=$(openssl rand -base64 48)#" .env
-rm -f .env.bak
-
-# 预置一个能登录 Console 的 owner 账号（密码只在这里打印一次，存好）
-sed -i.bak "s#^AISW_DEFAULT_OWNER_EMAIL=#AISW_DEFAULT_OWNER_EMAIL=owner@example.com#" .env
-sed -i.bak "s#^AISW_DEFAULT_OWNER_PASSWORD=#AISW_DEFAULT_OWNER_PASSWORD=$(openssl rand -base64 18)#" .env
-rm -f .env.bak
-grep '^AISW_DEFAULT_OWNER_' .env
-
-docker compose up -d --build
-```
-
-首次构建三个 Go 服务镜像 + Console 镜像需要几分钟。`docker compose ps` 应显示八个服务，其中 `registry-init` 与 `bootstrap` 跑完退出为 `Exited (0)` 是预期状态。
-
-起来之后：
-
-| 端点 | 地址 |
-| --- | --- |
-| Console 管理控制台 | `http://127.0.0.1:3000` |
-| OpenAI 兼容 API | `http://127.0.0.1:8080/v1/...` |
-| 控制面 Admin API | `http://127.0.0.1:8090/admin/v1/...` |
-| Gateway 指标 | `http://127.0.0.1:9090/metrics` |
-
-全部只绑宿主机回环。要对外提供服务，前面必须先有一层带鉴权的入口。
-
-### 2. 登录 Console
-
-浏览器打开 `http://127.0.0.1:3000`，用上一步 `.env` 里那个 owner 邮箱和密码登录，即可管理用户、API Key 和配额。
-
-### 3. 签发 API Key 并调一次
+需要 Docker Compose v2；本机运行 Agent 需要 Go 1.27。
 
 ```bash
 cd deploy
-
-SESSION_TOKEN=$(curl -sS -X POST http://127.0.0.1:8090/admin/v1/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{"email":"owner@example.com","password":"<上一步生成的密码>"}' | jq -r .token)
-
-# 明文只在这一次响应里出现，之后任何接口都读不回它
-API_KEY=$(curl -sS -X POST http://127.0.0.1:8090/admin/v1/apikeys \
-  -H "Authorization: Bearer $SESSION_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"name":"first-key","ttl_seconds":0}' | jq -r .key)
-
-curl http://127.0.0.1:8080/v1/models -H "Authorization: Bearer $API_KEY"
+cp .env.example .env    # 填写密钥与首个账户，见 deploy/README.md
+docker compose up -d --build
 ```
 
-还没有 Agent 连接时 `/v1/models` 返回 `{"object":"list","data":[]}`——空列表是预期结果，说明鉴权链路已经通了，只是还没有推理节点。
+打开 <http://127.0.0.1:3000> 登录并创建 API Key，然后按 [接一个 Agent](deploy/README.md#接一个-agent) 把本机 Ollama 接进来：
 
-### 4. 接一台推理节点
+```bash
+curl http://127.0.0.1:8080/v1/chat/completions \
+  -H "Authorization: Bearer $AISW_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "qwen3:8b", "messages": [{"role": "user", "content": "hello"}], "stream": true}'
+```
 
-在有 Ollama、vLLM 或 ComfyUI 的机器上运行 Agent，它会主动出站连接平台，不需要公网入口。完整步骤见 [deploy/README.md「接一个 Agent」](deploy/README.md#接一个-agent)。
+任何 OpenAI / Anthropic SDK 把 Base URL 指向 `http://127.0.0.1:8080/v1` 即可使用。
 
-**完整的部署说明、证书链、两份控制面配置、常见问题与已知限制见 [deploy/README.md](deploy/README.md)。**
+## API
+
+| 端点 | 说明 |
+| --- | --- |
+| `POST /v1/chat/completions` | OpenAI Chat，支持工具调用 |
+| `POST /v1/responses` | OpenAI Responses，可接入 Codex CLI |
+| `POST /v1/embeddings` · `GET /v1/models` | |
+| `POST /v1/images/generations` | 映射到 ComfyUI 模板或 CLI 生图后端 |
+| `POST /v1/messages` | Anthropic Messages（文本 + 图片） |
+| `POST /api/chat` · `/api/generate` · `/api/embeddings` | Ollama 原生推理端点 |
+| `POST /v1/workflows/{id}/runs` · `/v1/jobs/{id}/...` | 工作流 Job：提交、状态、事件、取消、产物 |
+
+不支持的参数按名字拒绝，不静默丢弃。各端点的完整限制见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md)。
 
 ## 文档
 
-| 文档 | 内容 |
-| --- | --- |
-| [deploy/README.md](deploy/README.md) | 部署与运维：Compose 编排、证书链、Console 配置、接 Agent、常见问题 |
-| [docs/architecture.md](docs/architecture.md) | 架构设计：控制面/数据面/节点面分层、四个服务的职责、代码结构、核心业务链路 |
-| [docs/protocol.md](docs/protocol.md) | 协议兼容与调度：外部协议收敛、能力矩阵、逻辑模型与部署抽象、调度流程 |
-| [docs/comfyui.md](docs/comfyui.md) | ComfyUI 接入与部署：External/Managed 两级接入、工作流模板、Job API、文件与产物 |
-| [docs/data-model.md](docs/data-model.md) | 逻辑数据模型与实体关系 |
-| [docs/observability.md](docs/observability.md) | 指标、追踪与标签基数约束 |
-| [SECURITY.md](SECURITY.md) | 安全设计原则、已知安全边界与漏洞报告流程 |
-| [STATUS.md](STATUS.md) | 开发里程碑、任务顺序、未完成项与验收记录 |
-| [AGENTS.md](AGENTS.md) | 开发约定：依赖边界、编码规范、质量门禁 |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | 贡献流程 |
+- [架构设计](docs/architecture.md)：协议兼容、ComfyUI、调度、数据模型、安全、可观测性
+- [部署](deploy/README.md) · [数据库升级与恢复](deploy/database-recovery.md)
+- [隧道协议](service/aiServeWeaveAgent/tunnel/README.md)
+- [开发进度与路线图](STATUS.md) · [变更日志](CHANGELOG.md)
 
-各服务的接口细节与运行限制见服务自己的 README：
-[Gateway](service/aiServeWeaveGateway/README.md)、
-[ControlPlane](service/aiServeWeaveControlPlane/README.md)、
-[Registry](service/aiServeWeaveRegistry/README.md)、
-[Agent](service/aiServeWeaveAgent/README.md)（[隧道协议](service/aiServeWeaveAgent/tunnel/README.md)）、
-[Console](service/aiServeWeaveConsole/README.md)。
+## 参与贡献
 
-## 许可
+欢迎 issue 与 PR。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)（代码约定与质量门禁）；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
-见 [LICENSE](LICENSE)。
+## 许可证
+
+[Apache License 2.0](LICENSE)

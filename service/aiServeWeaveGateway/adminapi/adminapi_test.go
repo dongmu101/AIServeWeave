@@ -10,8 +10,11 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/cliusagestatus"
+	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/nodeview"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/workflowtemplate"
 	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
@@ -105,6 +108,54 @@ func serve(t *testing.T, nodes []tunnelserver.NodeInfo) http.Handler {
 		t.Fatalf("adminapi.New: %v", err)
 	}
 	return handler
+}
+
+// TestLocalInventoryStaysSeparateFromAgents checks local rendering and authentication.
+// TestLocalInventoryStaysSeparateFromAgents 验证本机清单独立于 Agent 且受认证保护。
+func TestLocalInventoryStaysSeparateFromAgents(t *testing.T) {
+	for _, tt := range []struct {
+		name, auth string
+		want       int
+	}{
+		{name: "operator can inspect local services", auth: "Bearer " + token, want: http.StatusOK},
+		{name: "unauthenticated caller cannot inspect", want: http.StatusUnauthorized},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			reads := 0
+			handler, err := adminapi.New(adminapi.Config{
+				Token: token, ReplicaID: "gateway-local", Clock: fixedClock{now: probedAt},
+				Nodes:         func() []tunnelserver.NodeInfo { return nil },
+				LocalRuntimes: func() []runtime.Snapshot { reads++; return connectedNode().Runtimes },
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req := httptest.NewRequest(http.MethodGet, "/internal/v1/nodes", nil)
+			req.Header.Set("Authorization", tt.auth)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			if rec.Code != tt.want {
+				t.Fatalf("status = %d, want %d", rec.Code, tt.want)
+			}
+			if tt.want != http.StatusOK {
+				if reads != 0 {
+					t.Errorf("local inventory reads = %d, want 0", reads)
+				}
+				return
+			}
+			var got nodeview.Replica
+			if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			if len(got.Nodes) != 0 || len(got.LocalRuntimes) != 1 {
+				t.Fatalf("inventory = %+v, want no Agent nodes and one local runtime", got)
+			}
+			rt := got.LocalRuntimes[0]
+			if rt.BaseURL != "http://127.0.0.1:8000" || rt.State != "healthy" || len(rt.Models) != 2 {
+				t.Errorf("local runtime = %+v, want healthy loopback vLLM with two models", rt)
+			}
+		})
+	}
 }
 
 // TestInventoryRequiresTheOperatorToken asserts the listener authenticates,
@@ -244,6 +295,38 @@ func TestInventoryRendersWhatAConsoleNeeds(t *testing.T) {
 	// 尚未完成过健康检查，因此耗时是缺席而不是零：零毫秒是一个测量结果，在这里会是谎言。
 	if rt.LatencyMillis != nil || rt.CheckedAt != nil {
 		t.Errorf("latency = %v checked = %v, want both absent", rt.LatencyMillis, rt.CheckedAt)
+	}
+}
+
+// TestInventoryRendersCLIUsageWithoutCredentials checks the CLI quota crosses
+// as bounded percentages and timestamps, and an unsupported kind does not.
+//
+// TestInventoryRendersCLIUsageWithoutCredentials 检查 CLI 额度只以有界的百分比与时间戳
+// 外传，而不受支持的 kind 不会外传。
+func TestInventoryRendersCLIUsageWithoutCredentials(t *testing.T) {
+	resets := probedAt.Add(5 * time.Hour)
+	node := connectedNode()
+	node.CLIUsage = []cliusagestatus.Account{
+		{Kind: runtime.KindClaude, Status: "ready", CheckedAt: probedAt, Windows: []cliusagestatus.Window{
+			{Name: "five_hour", UsedPercent: 6, ResetsAt: resets},
+		}},
+		{Kind: runtime.KindOllama, Status: "ready"},
+	}
+	handler := serve(t, []tunnelserver.NodeInfo{node})
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/nodes", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var got nodeview.Replica
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decoding the inventory: %v", err)
+	}
+	usage := got.Nodes[0].CLIUsage
+	if len(usage) != 1 || usage[0].Kind != "claude" || usage[0].Status != "ready" ||
+		len(usage[0].Windows) != 1 || usage[0].Windows[0].UsedPercent != 6 ||
+		usage[0].Windows[0].ResetsAt == nil || !usage[0].Windows[0].ResetsAt.Equal(resets) {
+		t.Fatalf("CLIUsage = %+v, want one ready claude account with a 6%% window resetting at %v", usage, resets)
 	}
 }
 
@@ -470,13 +553,156 @@ func TestTheTemplateCatalogueNeverCarriesTheGraph(t *testing.T) {
 // 空的 job 列表。「报告没有运行」与「根本无从知晓」是两个不同的答案。
 func TestTheOptionalEndpointsAreAbsentWhenUnconfigured(t *testing.T) {
 	handler := serve(t, nil)
-	for _, path := range []string{"/internal/v1/jobs?tenant_id=tnt_1", "/internal/v1/workflows"} {
+	for _, path := range []string{"/internal/v1/jobs?tenant_id=tnt_1", "/internal/v1/workflows", "/internal/v1/comfyui-managed/reconcile?node_id=n&template_id=t"} {
 		req := httptest.NewRequest(http.MethodGet, path, nil)
 		req.Header.Set("Authorization", "Bearer "+token)
 		rec := httptest.NewRecorder()
 		handler.ServeHTTP(rec, req)
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("%s: status = %d, want 404 when the source is not configured", path, rec.Code)
+		}
+	}
+}
+
+// STATUS.md's P2 ComfyUI Managed Docker deployment subtask 4: a read-only
+// diagnostic comparing a template's declared custom-node dependencies
+// against what one node's Managed instance actually reports installed.
+
+func comfyUIManagedReconcileHandler(t *testing.T, statusByID map[string][]comfyuimanagedstatus.Status, templates []workflowview.Template) http.Handler {
+	t.Helper()
+	handler, err := adminapi.New(adminapi.Config{
+		Token:     token,
+		ReplicaID: "replica-1",
+		Clock:     fixedClock{now: probedAt},
+		Nodes:     func() []tunnelserver.NodeInfo { return nil },
+		Templates: func() []workflowview.Template { return templates },
+		ComfyUIManagedStatus: func(nodeID string) ([]comfyuimanagedstatus.Status, bool) {
+			statuses, ok := statusByID[nodeID]
+			return statuses, ok
+		},
+	})
+	if err != nil {
+		t.Fatalf("adminapi.New: %v", err)
+	}
+	return handler
+}
+
+func TestComfyUIManagedReconcileReportsMismatches(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t,
+		map[string][]comfyuimanagedstatus.Status{
+			"node-a": {{
+				ContainerName: "aiserveweave-comfyui",
+				CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "node-x", Version: "v1"}},
+			}},
+		},
+		[]workflowview.Template{{
+			ID: "portrait",
+			Dependencies: workflowtemplate.Dependencies{
+				CustomNodes: []workflowtemplate.NodeDependency{
+					{Name: "node-x", Version: "v1"},
+					{Name: "node-y"},
+				},
+			},
+		}},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=node-a&template_id=portrait", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body = %s", rec.Code, rec.Body.String())
+	}
+	var got struct {
+		NodeID     string                                    `json:"node_id"`
+		TemplateID string                                    `json:"template_id"`
+		Satisfied  bool                                      `json:"satisfied"`
+		Mismatches []comfyuimanagedstatus.CustomNodeMismatch `json:"mismatches"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if got.Satisfied {
+		t.Error("Satisfied = true, want false: node-y is declared but not installed")
+	}
+	if len(got.Mismatches) != 1 || got.Mismatches[0].Name != "node-y" || got.Mismatches[0].Reason != "missing" {
+		t.Errorf("Mismatches = %+v, want exactly one missing node-y", got.Mismatches)
+	}
+}
+
+func TestComfyUIManagedReconcileSatisfiedWhenEverythingInstalled(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t,
+		map[string][]comfyuimanagedstatus.Status{
+			"node-a": {{
+				ContainerName: "aiserveweave-comfyui",
+				CustomNodes:   []comfyuimanagedstatus.CustomNodeStatus{{Name: "node-x", Version: "v1"}},
+			}},
+		},
+		[]workflowview.Template{{
+			ID:           "portrait",
+			Dependencies: workflowtemplate.Dependencies{CustomNodes: []workflowtemplate.NodeDependency{{Name: "node-x"}}},
+		}},
+	)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=node-a&template_id=portrait", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	var got struct {
+		Satisfied  bool                                      `json:"satisfied"`
+		Mismatches []comfyuimanagedstatus.CustomNodeMismatch `json:"mismatches"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if !got.Satisfied || len(got.Mismatches) != 0 {
+		t.Errorf("got satisfied=%v mismatches=%v, want satisfied with no mismatches", got.Satisfied, got.Mismatches)
+	}
+}
+
+func TestComfyUIManagedReconcileUnknownNodeIs404(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t, nil, []workflowview.Template{{ID: "portrait"}})
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=ghost&template_id=portrait", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestComfyUIManagedReconcileUnknownTemplateIs404(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t,
+		map[string][]comfyuimanagedstatus.Status{"node-a": nil}, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/internal/v1/comfyui-managed/reconcile?node_id=node-a&template_id=ghost", nil)
+	req.Header.Set("Authorization", "Bearer "+token)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404", rec.Code)
+	}
+}
+
+func TestComfyUIManagedReconcileRequiresBothParams(t *testing.T) {
+	handler := comfyUIManagedReconcileHandler(t, nil, nil)
+
+	for _, path := range []string{
+		"/internal/v1/comfyui-managed/reconcile?template_id=portrait",
+		"/internal/v1/comfyui-managed/reconcile?node_id=node-a",
+		"/internal/v1/comfyui-managed/reconcile",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Header.Set("Authorization", "Bearer "+token)
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: status = %d, want 400", path, rec.Code)
 		}
 	}
 }

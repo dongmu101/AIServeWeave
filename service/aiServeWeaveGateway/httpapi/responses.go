@@ -48,9 +48,16 @@ type responsesRequest struct {
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	Text            *responsesText  `json:"text,omitempty"`
 
-	// Refused below. Each one needs something this Gateway does not have.
+	// PreviousResponseID and Store are honoured only when a control plane is
+	// configured to persist conversation history (STATUS.md's P2 "Responses
+	// 持久会话"); see responses_handler.go. Background is always refused —
+	// this Gateway has nothing resembling the asynchronous job this field
+	// asks for on the Responses API's own terms.
 	//
-	// 以下字段会被拒绝。每一个都需要本 Gateway 不具备的东西。
+	// PreviousResponseID 与 Store 只有在配置了持久化会话历史的控制面时才会被
+	// 兑现（STATUS.md 的 P2「Responses 持久会话」）；见 responses_handler.go。
+	// Background 始终被拒绝——本 Gateway 没有任何近似于这个字段在 Responses
+	// API 自己的语境里所要求的那种异步任务的东西。
 	PreviousResponseID string `json:"previous_response_id,omitempty"`
 	Store              *bool  `json:"store,omitempty"`
 	Background         *bool  `json:"background,omitempty"`
@@ -67,6 +74,10 @@ type responsesTool struct {
 	Description string          `json:"description,omitempty"`
 	Parameters  json.RawMessage `json:"parameters,omitempty"`
 	Strict      *bool           `json:"strict,omitempty"`
+	// Tools is set on a "namespace" tool, whose members are function tools.
+	//
+	// Tools 用于 "namespace" 工具，其成员是 function 工具。
+	Tools []responsesTool `json:"tools,omitempty"`
 }
 
 type responsesText struct {
@@ -119,9 +130,19 @@ type responseOutputRaw struct {
 	Role    string                `json:"role,omitempty"`
 	Content []responseContentPart `json:"content,omitempty"`
 
-	CallID    string `json:"call_id,omitempty"`
-	Name      string `json:"name,omitempty"`
-	Arguments string `json:"arguments,omitempty"`
+	// Arguments, Input and Action are pointers or maps so a present-but-empty
+	// value still serialises: a function_call whose arguments are "" must say
+	// so, because Responses clients treat the field as required on that type.
+	//
+	// Arguments、Input 与 Action 用指针或 map，使「存在但为空」的值依旧被序列化：
+	// arguments 为 "" 的 function_call 必须如实写出，因为 Responses 客户端把该字段
+	// 视为这个类型的必填项。
+	CallID    string         `json:"call_id,omitempty"`
+	Name      string         `json:"name,omitempty"`
+	Namespace string         `json:"namespace,omitempty"`
+	Arguments *string        `json:"arguments,omitempty"`
+	Input     *string        `json:"input,omitempty"`
+	Action    map[string]any `json:"action,omitempty"`
 }
 
 type responseContentPart struct {
@@ -155,10 +176,27 @@ type incompleteDetails struct {
 //
 // responsesInputItem 是 "input" 数组的一个元素。Content 要么是裸字符串，要么是一组
 // 带类型的部件；把文本取出来之后，两种形式表达的是同一件事。
+//
+// The remaining fields belong to the tool-loop item types (function_call,
+// custom_tool_call, local_shell_call and their outputs); see
+// appendResponsesItem.
+//
+// 其余字段属于工具循环的各个项类型（function_call、custom_tool_call、
+// local_shell_call 及它们的输出）；见 appendResponsesItem。
 type responsesInputItem struct {
 	Type    string          `json:"type,omitempty"`
 	Role    string          `json:"role"`
 	Content json.RawMessage `json:"content"`
+
+	ID        string          `json:"id,omitempty"`
+	CallID    string          `json:"call_id,omitempty"`
+	Name      string          `json:"name,omitempty"`
+	Namespace string          `json:"namespace,omitempty"`
+	Arguments string          `json:"arguments,omitempty"`
+	Input     string          `json:"input,omitempty"`
+	Action    json.RawMessage `json:"action,omitempty"`
+	Output    json.RawMessage `json:"output,omitempty"`
+	Tools     []responsesTool `json:"tools,omitempty"`
 }
 
 // messages converts the request's input into the canonical message list,
@@ -196,65 +234,113 @@ func (req responsesRequest) messages() ([]runtime.ChatMessage, error) {
 		return nil, fmt.Errorf("input must not be empty")
 	}
 	for _, item := range items {
-		if item.Type != "" && item.Type != "message" {
-			// Function call outputs and the other item types belong to the
-			// stateful, tool-running half of this API, which this endpoint
-			// does not implement. Refusing by name beats translating half of
-			// one into a message that means something else.
-			//
-			// 函数调用输出以及其他项目类型属于本 API 中有状态、跑工具的那一半，本端点
-			// 并未实现。指名拒绝，好过把其中一半翻译成一条意思已经变了的消息。
-			return nil, fmt.Errorf("input item type %q is not supported", item.Type)
-		}
-		text, err := inputItemText(item.Content)
-		if err != nil {
+		var err error
+		if out, err = appendResponsesItem(out, item); err != nil {
 			return nil, err
 		}
-		role := item.Role
-		if role == "" {
-			role = "user"
-		}
-		out = append(out, runtime.ChatMessage{Role: role, Content: text})
 	}
 	return out, nil
 }
 
-// inputItemText flattens an item's content to text, accepting both the bare
-// string form and the typed-part array.
+// responsesContentPartJSON is one element of an input item's typed-part
+// content array. ImageURL is a bare string on this API — unlike Chat
+// Completions' nested image_url.url — matching the real Responses API's
+// "input_image" shape. FileData/Filename mirror the real "input_file"
+// shape's inline form; FileID mirrors its other form (a reference to a file
+// already uploaded to OpenAI's own Files API) which this Gateway has no way
+// to resolve and rejects by name — see inputItemContent.
+type responsesContentPartJSON struct {
+	Type     string `json:"type"`
+	Text     string `json:"text,omitempty"`
+	ImageURL string `json:"image_url,omitempty"`
+	Detail   string `json:"detail,omitempty"`
+	FileData string `json:"file_data,omitempty"`
+	Filename string `json:"filename,omitempty"`
+	FileID   string `json:"file_id,omitempty"`
+}
+
+// inputItemContent converts one input item's "content" field into the
+// canonical chat message content (STATUS.md's P2 ChatMessage.Content
+// structured rework and its multimodal-input follow-on): a bare string, or
+// an array of parts that are all text-shaped
+// ("input_text"/"output_text"/"text"/""), collapses to plain text —
+// byte-identical to this function's pre-ContentParts behavior, so the
+// overwhelmingly common text-only case is unaffected by images or files
+// existing. An array containing an "input_image" or "input_file" part
+// builds ContentParts instead; any other part type (input_audio, …) is
+// still rejected by name: accepting it as empty text would silently answer
+// a question nobody asked, and there is still nowhere in the canonical type
+// to put it. An "input_file" naming file_id rather than carrying file_data
+// inline is also rejected by name — this Gateway has no OpenAI Files API of
+// its own to resolve that reference against.
 //
-// inputItemText 把一个项目的内容压平为文本，两种形式都接受：裸字符串与带类型的部件
-// 数组。
-func inputItemText(raw json.RawMessage) (string, error) {
+// inputItemContent 把一个输入项目的 "content" 字段转换成 canonical 聊天消息
+// 内容（STATUS.md 的 P2 ChatMessage.Content 结构化改造及其多模态输入后续）：
+// 裸字符串，或者全部由文本形状部件（"input_text"/"output_text"/"text"/空）
+// 组成的数组，都会收敛为纯文本——与本函数加入 ContentParts 之前的行为逐字节
+// 一致，因此绝大多数的纯文本情形不受图片或文件存在的影响。含 "input_image"
+// 或 "input_file" 部件的数组则改为构建 ContentParts；其他任何部件类型
+// （input_audio……）仍按名字拒绝：把它当作空文本接受，等于默默回答一个没人
+// 问过的问题，且 canonical 类型里仍然没有地方安放它。一个指名 file_id 而非
+// 内联携带 file_data 的 "input_file" 同样按名字拒绝——本 Gateway 没有自己的
+// OpenAI Files API 可用来解析这个引用。
+func inputItemContent(raw json.RawMessage) (text string, parts []runtime.ContentPart, err error) {
 	if len(raw) == 0 {
-		return "", fmt.Errorf("an input item has no content")
+		return "", nil, fmt.Errorf("an input item has no content")
 	}
 	var single string
 	if err := json.Unmarshal(raw, &single); err == nil {
-		return single, nil
+		return single, nil, nil
 	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
+	var items []responsesContentPartJSON
+	if err := json.Unmarshal(raw, &items); err != nil {
+		return "", nil, fmt.Errorf("an input item's content must be a string or an array of parts")
 	}
-	if err := json.Unmarshal(raw, &parts); err != nil {
-		return "", fmt.Errorf("an input item's content must be a string or an array of parts")
-	}
-	var b strings.Builder
-	for _, p := range parts {
+
+	allText := true
+	for _, p := range items {
 		switch p.Type {
 		case "input_text", "output_text", "text", "":
-			b.WriteString(p.Text)
 		default:
-			// Images, audio and file parts need a canonical representation
-			// this repository does not have yet; accepting them as empty text
-			// would silently answer a question nobody asked.
-			//
-			// 图像、音频与文件部件需要一种本仓库尚不具备的 canonical 表示；把它们当作
-			// 空文本接受，等于默默回答一个没人问过的问题。
-			return "", fmt.Errorf("input content part type %q is not supported", p.Type)
+			allText = false
 		}
 	}
-	return b.String(), nil
+	if allText {
+		var b strings.Builder
+		for _, p := range items {
+			b.WriteString(p.Text)
+		}
+		return b.String(), nil, nil
+	}
+
+	for _, p := range items {
+		switch p.Type {
+		case "input_text", "output_text", "text", "":
+			parts = append(parts, runtime.ContentPart{Type: "text", Text: p.Text})
+		case "input_file":
+			if p.FileID != "" {
+				return "", nil, fmt.Errorf(`an "input_file" content part naming "file_id" is not supported; supply "file_data" inline`)
+			}
+			if p.FileData == "" {
+				return "", nil, fmt.Errorf(`an "input_file" content part requires "file_data"`)
+			}
+			parts = append(parts, runtime.ContentPart{
+				Type: "file",
+				File: &runtime.ContentFile{URL: p.FileData, Filename: p.Filename},
+			})
+		case "input_image":
+			if p.ImageURL == "" {
+				return "", nil, fmt.Errorf(`an "input_image" content part requires "image_url"`)
+			}
+			parts = append(parts, runtime.ContentPart{
+				Type:     "image_url",
+				ImageURL: &runtime.ContentImageURL{URL: p.ImageURL, Detail: p.Detail},
+			})
+		default:
+			return "", nil, fmt.Errorf("input content part type %q is not supported", p.Type)
+		}
+	}
+	return "", parts, nil
 }
 
 // toRuntime builds the canonical request. It is the same type chat.go produces,
@@ -263,10 +349,17 @@ func inputItemText(raw json.RawMessage) (string, error) {
 //
 // toRuntime 构造 canonical 请求。它与 chat.go 产出的是同一个类型，而这正是关键：过了
 // 本函数之后，下游没有任何东西知道这次请求是从哪个公开 API 进来的。
-func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
+//
+// The returned responsesToolset also carries what only the response side
+// needs: which tools were declared as something other than a plain function,
+// and which hosted tools were left out.
+//
+// 返回的 responsesToolset 还携带只有响应一侧才用得到的东西：哪些工具被声明成普通
+// function 之外的类型，以及哪些托管工具被略去。
+func (req responsesRequest) toRuntime() (runtime.ChatRequest, responsesToolset, error) {
 	messages, err := req.messages()
 	if err != nil {
-		return runtime.ChatRequest{}, err
+		return runtime.ChatRequest{}, responsesToolset{}, err
 	}
 	out := runtime.ChatRequest{
 		Model:       req.Model,
@@ -275,28 +368,25 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxOutputTokens,
 	}
-	for _, t := range req.Tools {
-		if t.Type != "function" {
-			// Built-in tools (web_search, file_search, code_interpreter, mcp)
-			// are executed by OpenAI's own service. This Gateway forwards to a
-			// model and runs nothing, so accepting one would promise a
-			// capability that does not exist here.
-			//
-			// 内置工具（web_search、file_search、code_interpreter、mcp）由 OpenAI 自己
-			// 的服务执行。本 Gateway 只把请求转给模型、不运行任何东西，因此接受它等于
-			// 承诺一项这里并不存在的能力。
-			return runtime.ChatRequest{}, fmt.Errorf("tool type %q is not supported by this gateway", t.Type)
+	tools := append([]responsesTool(nil), req.Tools...)
+	var items []responsesInputItem
+	if json.Unmarshal(req.Input, &items) == nil {
+		for _, item := range items {
+			if item.Type == "additional_tools" {
+				tools = append(tools, item.Tools...)
+			}
 		}
-		out.Tools = append(out.Tools, runtime.Tool{
-			Type: "function",
-			Function: runtime.FunctionDefinition{
-				Name:        t.Name,
-				Description: t.Description,
-				Parameters:  t.Parameters,
-			},
-		})
 	}
-	if choice, ok := decodeToolChoice(req.ToolChoice); ok {
+	toolset, err := responsesTools(tools)
+	if err != nil {
+		return runtime.ChatRequest{}, responsesToolset{}, err
+	}
+	out.Tools = toolset.tools
+	choice, ok, err := responsesToolChoice(req.ToolChoice)
+	if err != nil {
+		return runtime.ChatRequest{}, responsesToolset{}, err
+	}
+	if ok {
 		out.ToolChoice = choice
 	}
 	if req.Text != nil && req.Text.Format != nil {
@@ -310,27 +400,24 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, error) {
 		}
 		out.ResponseFormat = format
 	}
-	return out, nil
+	return out, toolset, nil
 }
 
-// unsupported names the field this Gateway cannot honour, or empty when the
-// request only asks for things it can do.
+// unsupported names the field this Gateway can never honour, regardless of
+// configuration, or empty when the request only asks for things it can do.
+// store and previous_response_id are not here: whether this Gateway can
+// honour them depends on whether a control plane is configured to persist
+// conversation history (STATUS.md's P2 "Responses 持久会话"), which this
+// pure method has no way to know — see responses_handler.go's own check,
+// gated on h.responsePersist.
 //
-// unsupported 指出本 Gateway 无法兑现的那个字段；请求只要求它做得到的事情时返回空。
+// unsupported 指出本 Gateway 无论如何配置都无法兑现的字段；请求只要求它做得到
+// 的事情时返回空。store 与 previous_response_id 不在此列：本 Gateway 能否
+// 兑现它们，取决于是否配置了持久化会话历史的控制面（STATUS.md 的 P2
+// 「Responses 持久会话」），而这个纯函数无从得知——判断见 responses_handler.go
+// 自己的检查，以 h.responsePersist 为条件。
 func (req responsesRequest) unsupported() string {
-	switch {
-	case req.PreviousResponseID != "":
-		// Continuing a stored conversation requires the Gateway to hold that
-		// conversation and to send the follow-up to the same node. It holds
-		// neither: responses are not stored, and the scheduler picks a node
-		// per request.
-		//
-		// 续接一次已存储的会话，要求 Gateway 既持有那次会话，又把后续请求发给同一个
-		// 节点。两者它都没有：响应不被存储，而调度器是按请求选节点的。
-		return "previous_response_id"
-	case req.Store != nil && *req.Store:
-		return "store"
-	case req.Background != nil && *req.Background:
+	if req.Background != nil && *req.Background {
 		return "background"
 	}
 	return ""

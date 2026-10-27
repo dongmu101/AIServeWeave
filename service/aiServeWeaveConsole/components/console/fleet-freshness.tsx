@@ -1,4 +1,8 @@
 "use client";
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+
 
 import { Badge } from "@/components/ui/badge";
 import type { ReplicaStatus } from "@/lib/console/fleet";
@@ -10,12 +14,12 @@ import { formatDateTime } from "@/lib/console/format";
  *
  * REPLICA_ERRORS 是控制面给出的固定集合的中文说法。不认识的代号原样展示而不是笼统写成
  * 「失败」：本次构建不认识的代号是一件需要被看见的事。 */
-const REPLICA_ERRORS: Record<string, string> = {
-  unreachable: "连不上",
-  timeout: "超时",
-  unauthorized: "凭据被拒",
-  malformed: "响应无法解析",
-};
+function replicaErrors(t: Translator): Record<string, string> { return {
+  unreachable: t("common.connectionFailed"),
+  timeout: t("common.timedOut"),
+  unauthorized: t("common.credentialsRejected"),
+  malformed: t("common.responseCannotBeParsed"),
+}; }
 
 /**
  * FleetFreshness says how old this view is and whether it is complete.
@@ -41,6 +45,7 @@ export function FleetFreshness({
   replicas: ReplicaStatus[];
   partial: boolean;
 }) {
+  const { locale, t } = useI18n();
   return (
     <div className="grid gap-2">
       {partial ? (
@@ -48,11 +53,10 @@ export function FleetFreshness({
           role="alert"
           className="rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"
         >
-          这份清单不完整：有 Gateway 副本没有作答，只连到它们上面的节点不会出现在下面。
-        </div>
+          <Message id="common.thisInventoryIsIncompleteSomeGatewayReplicasDid" /></div>
       ) : null}
       <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
-        <span>控制面采集于 {formatDateTime(collectedAt)}</span>
+        <span><Message id="common.collectedByTheControlPlaneAt_710937" values={{ value: formatDateTime(collectedAt, undefined, locale) }} /></span>
         {replicas.map((replica) => (
           <Badge
             key={replica.endpoint}
@@ -62,16 +66,14 @@ export function FleetFreshness({
           >
             {replica.replicaId ?? replica.endpoint}
             {replica.error
-              ? `：${REPLICA_ERRORS[replica.error] ?? replica.error}`
-              : `：${replica.nodeCount} 个节点 · ${formatDateTime(replica.generatedAt)}`}
+              ? `：${replicaErrors(t)[replica.error] ?? replica.error}`
+              : t("common.nodes", { nodeCount: replica.nodeCount, value: formatDateTime(replica.generatedAt, undefined, locale) })}
           </Badge>
         ))}
       </div>
       {replicas.length > 0 ? (
         <p className="text-xs text-muted-foreground">
-          每个副本只知道连到它自己身上的节点，因此这里的每个数字都取自各副本各自查看的那个
-          时刻，而不是同一瞬间。
-        </p>
+          <Message id="common.eachReplicaKnowsOnlyTheNodesConnectedTo" /></p>
       ) : (
         // A tenant view is given no replica breakdown: which gateway replicas
         // exist and where they run is infrastructure identity. What remains
@@ -81,8 +83,7 @@ export function FleetFreshness({
         // 租户视图不会拿到逐副本的明细：有哪些网关副本、它们跑在哪里，属于基础设施身份。
         // 依然成立、也依然值得说的是：这个答案是在略有先后的若干时刻从多个来源拼起来的。
         <p className="text-xs text-muted-foreground">
-          这份内容由多个网关副本各自的回答拼合而成，各自的采集时刻略有先后。
-        </p>
+          <Message id="common.thisContentCombinesResponsesFromMultipleGatewayReplicas" /></p>
       )}
     </div>
   );

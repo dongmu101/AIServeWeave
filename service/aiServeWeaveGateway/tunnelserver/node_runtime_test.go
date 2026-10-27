@@ -106,6 +106,20 @@ func runtimeAgent(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunne
 		}
 		return reply(dataFrame(payload))
 
+	case tunnelv1.Operation_OPERATION_RERANK:
+		in, err := tunnelwire.UnmarshalRerankRequest(req.GetPayload())
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalRerankResponse(runtime.RerankResponse{
+			Model:   "rerank-1",
+			Results: []runtime.RerankResult{{Index: 0, Score: 1}, {Index: len(in.Documents) - 1, Score: 0.5}},
+		})
+		if err != nil {
+			return err
+		}
+		return reply(dataFrame(payload))
+
 	case tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT:
 		// The template travels in DataChunks, never in the headers: the
 		// assertion that it arrived intact belongs here, on the Agent side.
@@ -155,6 +169,26 @@ func runtimeAgent(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunne
 		}
 		payload, err := tunnelwire.MarshalInputUploadResult(runtime.InputUploadResult{
 			InputRef: meta.Filename + ":" + string(joined),
+		})
+		if err != nil {
+			return err
+		}
+		return reply(dataFrame(payload))
+
+	case tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE:
+		// Same point as INPUT_UPLOAD above: asserting on body here proves the
+		// audio bytes survived DataChunk framing, not merely that NodeRuntime
+		// believes it sent them.
+		in, err := tunnelwire.UnmarshalAudioTranscriptionRequest(req.GetPayload())
+		if err != nil {
+			return err
+		}
+		var joined []byte
+		for _, chunk := range body {
+			joined = append(joined, chunk...)
+		}
+		payload, err := tunnelwire.MarshalAudioTranscriptionResponse(runtime.AudioTranscriptionResponse{
+			Text: in.Model + ":" + in.Filename + ":" + string(joined),
 		})
 		if err != nil {
 			return err
@@ -220,6 +254,17 @@ func TestNodeRuntimeSatisfiesTheRuntimeContractOverTheTunnel(t *testing.T) {
 		}
 		if len(resp.Data) != 1 || len(resp.Data[0].Vector) != 2 || resp.Data[0].Vector[1] != -0.25 {
 			t.Errorf("embedding = %v, want one 2-dimensional vector ending in -0.25", resp.Data)
+		}
+	})
+
+	t.Run("Rerank", func(t *testing.T) {
+		awaitSlots(t)
+		resp, err := rt.Rerank(ctx, runtime.RerankRequest{Model: "rerank-1", Query: "x", Documents: []string{"a", "b"}})
+		if err != nil {
+			t.Fatalf("Rerank: %v", err)
+		}
+		if len(resp.Results) != 2 || resp.Results[1].Score != 0.5 {
+			t.Errorf("results = %v, want two results ending in score 0.5", resp.Results)
 		}
 	})
 
@@ -334,6 +379,20 @@ func TestNodeRuntimeUploadInputStreamsTheBody(t *testing.T) {
 	}
 	if result.InputRef != "photo.png:hello world!" {
 		t.Errorf("InputRef = %q, want the Agent's echo of filename and full body", result.InputRef)
+	}
+}
+
+func TestNodeRuntimeTranscribeStreamsTheAudio(t *testing.T) {
+	_, rt := newRuntimeHarness(t)
+
+	resp, err := rt.Transcribe(context.Background(),
+		runtime.AudioTranscriptionRequest{Model: "whisper-1", Filename: "clip.mp3", Task: runtime.AudioTaskTranscribe},
+		strings.NewReader("fake audio bytes"))
+	if err != nil {
+		t.Fatalf("Transcribe: %v", err)
+	}
+	if resp.Text != "whisper-1:clip.mp3:fake audio bytes" {
+		t.Errorf("Text = %q, want the Agent's echo of model, filename and full body", resp.Text)
 	}
 }
 

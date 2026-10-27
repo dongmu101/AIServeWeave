@@ -8,6 +8,7 @@ import (
 
 	"AIServeWeave/common/modelroute"
 	"AIServeWeave/common/workflowtemplate"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/apidocs"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 )
 
@@ -17,7 +18,8 @@ import (
 // are visible in one screen on purpose: an endpoint's protection should be
 // readable without following it into its handler.
 //
-//   - Public: sign-in only, tenant and platform operator alike.
+//   - Public: sign-in, tenant and platform operator alike, plus tenant
+//     self-service sign-up when Config.Signup enables it.
 //   - Tenant session: everything the Console does on behalf of a signed-in
 //     tenant user.
 //   - Platform session (STATUS.md's P01): the fleet inventory and node-ops
@@ -33,7 +35,7 @@ import (
 // 这些守卫组就是本服务全部的授权面，而且它们被刻意放在一屏之内：一个端点受什么保护，
 // 应当无需追进它的 handler 就能读出来。
 //
-//   - 公开：仅登录，租户与平台运维皆然。
+//   - 公开：登录，租户与平台运维皆然；Config.Signup 开启时另有租户自助注册。
 //   - 租户会话：Console 代表已登录租户用户所做的一切。
 //   - 平台会话（STATUS.md 的 P01）：机群清单与节点操作写入，代表一名已登录的平台
 //     运维——与任何租户都不同的一种身份，由 requirePlatformSession 守卫，
@@ -43,33 +45,52 @@ import (
 func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodGet, Path: "/operator/v1/routes", Handler: requirePlatformSession(ctx, currentRoutes(ctx, false))},
-		{Method: http.MethodGet, Path: "/operator/v1/routes/history", Handler: requirePlatformSession(ctx, routeHistory(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/routes/revisions/:revision", Handler: requirePlatformSession(ctx, routeRevision(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/routes/status", Handler: requirePlatformSession(ctx, routingStatus(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/routes/rollback", Handler: requirePlatformSession(ctx, rollbackRoutes(ctx))},
-		{Method: http.MethodGet, Path: "/internal/v1/routes/current", Handler: requireSharedSecret(ctx.Config.InternalToken, currentRoutes(ctx, true))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes", requirePlatformSession(ctx, currentRoutes(ctx, false)))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/history", requirePlatformSession(ctx, routeHistory(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/revisions/:revision", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/revisions/:revision", requirePlatformSession(ctx, routeRevision(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/routes/status", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/status", requirePlatformSession(ctx, routingStatus(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/rollback", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/rollback", requirePlatformSession(ctx, rollbackRoutes(ctx)))},
+		{Method: http.MethodGet, Path: "/internal/v1/routes/current", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/routes/current", requireSharedSecret(ctx.Config.InternalToken, currentRoutes(ctx, true)))},
 	})
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodPost, Path: "/operator/v1/routes/validate", Handler: requirePlatformSession(ctx, validateRoutes(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/routes/publish", Handler: requirePlatformSession(ctx, publishRoutes(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/validate", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/validate", requirePlatformSession(ctx, validateRoutes(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/routes/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/routes/publish", requirePlatformSession(ctx, publishRoutes(ctx)))},
 	}, rest.WithMaxBytes(modelroute.MaxDocumentBytes))
 
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: requirePlatformSession(ctx, listWorkflowTemplates(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id", Handler: requirePlatformSession(ctx, getWorkflowTemplate(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/history", Handler: requirePlatformSession(ctx, workflowTemplateHistory(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/revisions/:revision", Handler: requirePlatformSession(ctx, workflowTemplateRevisionAt(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/status", Handler: requirePlatformSession(ctx, workflowTemplateStatus(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/rollback", Handler: requirePlatformSession(ctx, rollbackWorkflowTemplate(ctx))},
-		{Method: http.MethodGet, Path: "/internal/v1/workflow-templates/current", Handler: requireSharedSecret(ctx.Config.InternalToken, currentWorkflowTemplatesBundle(ctx))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates", requirePlatformSession(ctx, listWorkflowTemplates(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id", requirePlatformSession(ctx, getWorkflowTemplate(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/history", requirePlatformSession(ctx, workflowTemplateHistory(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/:id/revisions/:revision", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/revisions/:revision", requirePlatformSession(ctx, workflowTemplateRevisionAt(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates/status", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/status", requirePlatformSession(ctx, workflowTemplateStatus(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/rollback", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/rollback", requirePlatformSession(ctx, rollbackWorkflowTemplate(ctx)))},
+		{Method: http.MethodGet, Path: "/internal/v1/workflow-templates/current", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/workflow-templates/current", requireSharedSecret(ctx.Config.InternalToken, currentWorkflowTemplatesBundle(ctx)))},
 	})
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/validate", Handler: requirePlatformSession(ctx, validateWorkflowTemplate(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: requirePlatformSession(ctx, publishWorkflowTemplate(ctx))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/validate", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/validate", requirePlatformSession(ctx, validateWorkflowTemplate(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/publish", requirePlatformSession(ctx, publishWorkflowTemplate(ctx)))},
 	}, rest.WithMaxBytes(workflowtemplate.MaxContentBytes))
+
+	// The tenant-facing API reference: any tenant session reads published
+	// pages; platform operators manage them. Writes take whole pages, hence
+	// their own body bound.
+	//
+	// 面向租户的 API 参考文档：任何租户会话都可读取已发布页面，平台运维负责管理。
+	// 写入接收的是整页内容，因此单独设置请求体上限。
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: login(ctx)},
+		{Method: http.MethodGet, Path: "/admin/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs", requireSession(ctx, listAPIDocs(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs/:slug", requireSession(ctx, getAPIDoc(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs", requirePlatformSession(ctx, operatorListAPIDocs(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, operatorGetAPIDoc(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/api-docs/:slug/reset", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug/reset", requirePlatformSession(ctx, resetAPIDoc(ctx)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, deleteAPIDoc(ctx)))},
+	})
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodPost, Path: "/operator/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs", requirePlatformSession(ctx, createAPIDoc(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, updateAPIDoc(ctx)))},
+	}, rest.WithMaxBytes(apidocs.MaxRequestBytes))
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodPost, Path: "/admin/v1/auth/login", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/login", login(ctx))},
 		// The platform operator login (STATUS.md's P01) is public the same
 		// way the tenant login above is: there is no session yet to guard
 		// with. It is a distinct endpoint, not an email-based dispatch on
@@ -80,36 +101,49 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 没有会话可供守卫。它是一个独立的端点，而不是在上面那一个基础上
 		// 按 email 分流，因为两者校验的是不同的表，绝不能因为客户端的一个
 		// bug 而被彼此混淆。
-		{Method: http.MethodPost, Path: "/admin/v1/platform/auth/login", Handler: platformLogin(ctx)},
+		{Method: http.MethodPost, Path: "/admin/v1/platform/auth/login", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/platform/auth/login", platformLogin(ctx))},
 	})
+	// Self-service sign-up is public too, and mounted only when the
+	// deployment enables it: a deployment that keeps it off has no such
+	// route at all, not one that answers "disabled".
+	//
+	// 自助注册同样公开，且只在部署开启它时才挂载：保持关闭的部署根本没有这条路由，
+	// 而不是有一条回答「已关闭」的路由。
+	if ctx.Config.Signup.Enabled {
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodPost, Path: "/admin/v1/auth/signup", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/signup", signup(ctx))},
+		})
+	}
 
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: requireSession(ctx, sessionAction(ctx.Logic.Logout))},
-		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: requireSession(ctx, changeOwnPassword(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions))},
-		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout))},
-		{Method: http.MethodPost, Path: "/operator/v1/auth/password", Handler: requirePlatformSession(ctx, changeOwnPlatformPassword(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/auth/sessions/revoke", Handler: requirePlatformSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions))},
-		{Method: http.MethodGet, Path: "/operator/v1/operators", Handler: requirePlatformSession(ctx, listPlatformOperators(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators", Handler: requirePlatformSession(ctx, createPlatformOperatorAs(ctx))},
-		{Method: http.MethodPut, Path: "/operator/v1/operators/:id/password", Handler: requirePlatformSession(ctx, resetPlatformOperatorPassword(ctx))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/disable", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.DisablePlatformOperator))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/enable", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.EnablePlatformOperator))},
-		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/sessions/revoke", Handler: requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.RevokePlatformOperatorSessions))},
-		{Method: http.MethodGet, Path: "/admin/v1/users", Handler: requireSession(ctx, listUsers(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/users", Handler: requireSession(ctx, createUser(ctx))},
-		{Method: http.MethodPut, Path: "/admin/v1/users/:id/password", Handler: requireSession(ctx, resetUserPassword(ctx))},
-		{Method: http.MethodPut, Path: "/admin/v1/users/:id/role", Handler: requireSession(ctx, changeUserRole(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/users/:id/disable", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.DisableUser))},
-		{Method: http.MethodPost, Path: "/admin/v1/users/:id/enable", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.EnableUser))},
-		{Method: http.MethodPost, Path: "/admin/v1/users/:id/sessions/revoke", Handler: requireSession(ctx, userLifecycleAction(ctx.Logic.RevokeUserSessions))},
-		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, listAPIKeys(ctx))},
-		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: requireSession(ctx, createAPIKey(ctx))},
-		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: requireSession(ctx, revokeAPIKey(ctx))},
-		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: requireSession(ctx, currentTenant(ctx))},
-		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: requireSession(ctx, setTenantLimits(ctx))},
-		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: requireSession(ctx, listAudit(ctx))},
-		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: requirePlatformSession(ctx, listAudit(ctx))},
+		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session", requireSession(ctx, sessionAction(ctx.Logic.Logout)))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/password", requireSession(ctx, changeOwnPassword(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/sessions/revoke", requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/session", requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout)))},
+		{Method: http.MethodPost, Path: "/operator/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/password", requirePlatformSession(ctx, changeOwnPlatformPassword(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/auth/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/sessions/revoke", requirePlatformSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions)))},
+		{Method: http.MethodGet, Path: "/operator/v1/operators", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators", requirePlatformSession(ctx, listPlatformOperators(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators", requirePlatformSession(ctx, createPlatformOperatorAs(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/operators/:id/password", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/password", requirePlatformSession(ctx, resetPlatformOperatorPassword(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/disable", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/disable", requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.DisablePlatformOperator)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/enable", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/enable", requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.EnablePlatformOperator)))},
+		{Method: http.MethodPost, Path: "/operator/v1/operators/:id/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/operators/:id/sessions/revoke", requirePlatformSession(ctx, platformOperatorLifecycleAction(ctx.Logic.RevokePlatformOperatorSessions)))},
+		{Method: http.MethodGet, Path: "/admin/v1/users", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users", requireSession(ctx, listUsers(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users", requireSession(ctx, createUser(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/users/:id/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/password", requireSession(ctx, resetUserPassword(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/users/:id/role", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/role", requireSession(ctx, changeUserRole(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/disable", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/disable", requireSession(ctx, userLifecycleAction(ctx.Logic.DisableUser)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/enable", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/enable", requireSession(ctx, userLifecycleAction(ctx.Logic.EnableUser)))},
+		{Method: http.MethodPost, Path: "/admin/v1/users/:id/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/sessions/revoke", requireSession(ctx, userLifecycleAction(ctx.Logic.RevokeUserSessions)))},
+		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, listAPIKeys(ctx)))},
+		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, createAPIKey(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys/:id", requireSession(ctx, revokeAPIKey(ctx)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/apikeys/:id/permanent", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys/:id/permanent", requireSession(ctx, deleteAPIKey(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/tenants/current", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/current", requireSession(ctx, currentTenant(ctx)))},
+		{Method: http.MethodPut, Path: "/admin/v1/tenants/limits", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants/limits", requireSession(ctx, setTenantLimits(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/audit", requireSession(ctx, listAudit(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/audit", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/audit", requirePlatformSession(ctx, listAudit(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/metrics/history", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/metrics/history", requirePlatformSession(ctx, metricsHistory(ctx)))},
 		// Job history (STATUS.md's J07) reads the jobs table directly and is
 		// mounted here, unconditionally, unlike the Fleet-backed live view
 		// further down: it has no dependency on a configured Gateway read
@@ -118,15 +152,47 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// Job 历史（STATUS.md 的 J07）直接读 jobs 表，无条件挂载在这里，
 		// 与下面由 Fleet 支撑的实时视图不同：它不依赖任何已配置的 Gateway
 		// 读取路径，因此没有配置那条路径的部署，依然能看到自己跑过什么。
-		{Method: http.MethodGet, Path: "/admin/v1/jobs/history", Handler: requireSession(ctx, listJobHistory(ctx))},
-		{Method: http.MethodGet, Path: "/admin/v1/jobs/history/:id", Handler: requireSession(ctx, getJobHistory(ctx))},
+		{Method: http.MethodGet, Path: "/admin/v1/jobs/history", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs/history", requireSession(ctx, listJobHistory(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/jobs/history/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs/history/:id", requireSession(ctx, getJobHistory(ctx)))},
+		// Request search (STATUS.md's P09/C28): the tenant self-service view
+		// and the platform cross-tenant view, mirroring how job history sits
+		// next to /operator/v1/audit above — read-only, session-scoped
+		// searches over an append-only table.
+		//
+		// 请求检索（STATUS.md 的 P09/C28）：租户自助视角与平台跨租户视角，
+		// 与上面 job 历史紧挨着 /operator/v1/audit 的安排一致——都是针对一张
+		// 只追加表的、由会话限定范围的只读检索。
+		{Method: http.MethodGet, Path: "/admin/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/requests", requireSession(ctx, listRequestLogsTenant(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/requests", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/requests", requirePlatformSession(ctx, listRequestLogsOperator(ctx)))},
+		// Usage-ledger settlement queries (STATUS.md's P2 usage ledger): the
+		// tenant self-service view and the platform cross-tenant view, sitting
+		// next to request search above for the same reason — read-only,
+		// session-scoped aggregation over an append-only table.
+		//
+		// 用量账本结算查询（STATUS.md 的 P2 用量账本）：租户自助视角与平台
+		// 跨租户视角，紧挨着上面的请求检索，理由相同——都是针对一张只追加表
+		// 的、由会话限定范围的只读聚合。
+		{Method: http.MethodGet, Path: "/admin/v1/usage/summary", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/usage/summary", requireSession(ctx, summarizeUsageTenant(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/usage/summary", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/usage/summary", requirePlatformSession(ctx, summarizeUsageOperator(ctx)))},
+		// Alert rule CRUD (STATUS.md's P09/C29), platform-wide like fleet
+		// metrics themselves.
+		//
+		// 告警规则 CRUD（STATUS.md 的 P09/C29），与它评估的机群指标一样是
+		// 平台级的。
+		{Method: http.MethodPost, Path: "/operator/v1/alert-rules", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules", requirePlatformSession(ctx, createAlertRule(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/alert-rules", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules", requirePlatformSession(ctx, listAlertRules(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, getAlertRule(ctx)))},
+		{Method: http.MethodPatch, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, updateAlertRule(ctx)))},
+		{Method: http.MethodDelete, Path: "/operator/v1/alert-rules/:id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alert-rules/:id", requirePlatformSession(ctx, deleteAlertRule(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/alerts", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alerts", requirePlatformSession(ctx, listAlerts(ctx)))},
+		{Method: http.MethodPost, Path: "/operator/v1/alerts/:id/acknowledge", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/alerts/:id/acknowledge", requirePlatformSession(ctx, acknowledgeAlert(ctx)))},
 	})
 
 	server.AddRoutes([]rest.Route{
 		{
 			Method:  http.MethodPost,
 			Path:    "/admin/v1/tenants",
-			Handler: requireSharedSecret(ctx.Config.BootstrapToken, createTenant(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/tenants", requireSharedSecret(ctx.Config.BootstrapToken, createTenant(ctx))),
 		},
 		// Platform operator bootstrap (STATUS.md's P01) reuses the same
 		// BootstrapToken as tenant creation — see createPlatformOperator's
@@ -139,7 +205,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodPost,
 			Path:    "/admin/v1/platform/operators",
-			Handler: requireSharedSecret(ctx.Config.BootstrapToken, createPlatformOperator(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/platform/operators", requireSharedSecret(ctx.Config.BootstrapToken, createPlatformOperator(ctx))),
 		},
 	})
 
@@ -147,14 +213,14 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/apikeys/verify",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, verifyKey(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/apikeys/verify", requireSharedSecret(ctx.Config.InternalToken, verifyKey(ctx))),
 		},
 	})
 	server.AddRoutes([]rest.Route{
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/apikeys/revocations/watch",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, watchAPIKeyRevocations(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/apikeys/revocations/watch", requireSharedSecret(ctx.Config.InternalToken, watchAPIKeyRevocations(ctx))),
 		},
 	}, rest.WithTimeout(revocationWatchWait+time.Second))
 	// The Job persistence endpoints (STATUS.md's J04) share the same
@@ -171,7 +237,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/jobs",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, createJob(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs", requireSharedSecret(ctx.Config.InternalToken, createJob(ctx))),
 		},
 		// /jobs/active is registered ahead of /jobs/:id and relies on
 		// go-zero's router preferring a literal path segment over a param
@@ -189,39 +255,97 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/active",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, listActiveJobsForRoute(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/active", requireSharedSecret(ctx.Config.InternalToken, listActiveJobsForRoute(ctx))),
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/:id",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, getJob(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id", requireSharedSecret(ctx.Config.InternalToken, getJob(ctx))),
 		},
 		{
 			Method:  http.MethodPatch,
 			Path:    "/internal/v1/jobs/:id/state",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, updateJobState(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/state", requireSharedSecret(ctx.Config.InternalToken, updateJobState(ctx))),
 		},
 		{
 			Method:  http.MethodPost,
 			Path:    "/internal/v1/jobs/:id/artifacts",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, createJobArtifact(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/artifacts", requireSharedSecret(ctx.Config.InternalToken, createJobArtifact(ctx))),
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/jobs/:id/artifacts",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, listJobArtifacts(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/artifacts", requireSharedSecret(ctx.Config.InternalToken, listJobArtifacts(ctx))),
 		},
 		{
 			Method:  http.MethodDelete,
 			Path:    "/internal/v1/jobs/:id/artifacts/:artifact_id",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, deleteJobArtifact(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/jobs/:id/artifacts/:artifact_id", requireSharedSecret(ctx.Config.InternalToken, deleteJobArtifact(ctx))),
 		},
 		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/job-artifacts/expired",
-			Handler: requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx)),
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/job-artifacts/expired", requireSharedSecret(ctx.Config.InternalToken, listExpiredJobArtifacts(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/artifacts/:artifact_id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/artifacts/:artifact_id", requireSharedSecret(ctx.Config.InternalToken, getArtifactRoute(ctx))),
+		},
+		// Response-turn persistence (STATUS.md's P2 "Responses 持久会话") shares
+		// the same InternalToken as the Job endpoints above, for the same
+		// reason: a Gateway replica reporting its own callers' business, not a
+		// person in a tenant session.
+		//
+		// Response-turn 持久化（STATUS.md 的 P2「Responses 持久会话」）与上面的
+		// Job 端点共用同一个 InternalToken，理由相同：这是 Gateway 副本在报告
+		// 自己调用方的业务，而不是某个人在租户会话里的操作。
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/responses",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/responses", requireSharedSecret(ctx.Config.InternalToken, createResponseTurn(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/responses/:id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/responses/:id", requireSharedSecret(ctx.Config.InternalToken, getResponseTurn(ctx))),
 		},
 	})
+	// Request-log push (STATUS.md's P09/C28) shares the same InternalToken as
+	// the Job endpoints above, for the same reason: a Gateway replica
+	// reporting its own callers' business, not a person in a tenant session.
+	// It is registered in its own group, mirroring the routes/workflow-templates
+	// publish endpoints above, because a batch of up to
+	// httpapi.DefaultRequestLogBatchSize records does not fit the package's
+	// shared 64 KiB decode limit — see MaxRequestLogsBodyBytes.
+	//
+	// 请求日志推送（STATUS.md 的 P09/C28）与上面的 Job 端点共用同一个
+	// InternalToken，理由相同：这是 Gateway 副本在报告自己调用方的业务，而不是
+	// 某个人在租户会话里的操作。它被单独注册成一组，与上面 routes/
+	// workflow-templates 的发布端点做法一致，因为多达
+	// httpapi.DefaultRequestLogBatchSize 条记录的一个批次，装不进本包共用的
+	// 64 KiB decode 上限——见 MaxRequestLogsBodyBytes。
+	server.AddRoutes([]rest.Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/requestlogs",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/requestlogs", requireSharedSecret(ctx.Config.InternalToken, createRequestLogs(ctx))),
+		},
+	}, rest.WithMaxBytes(MaxRequestLogsBodyBytes))
+
+	// Usage-ledger push (STATUS.md's P2 usage ledger) shares the same
+	// InternalToken and the same "its own route group for a bigger body
+	// limit" reasoning as request-log push directly above.
+	//
+	// 用量账本推送（STATUS.md 的 P2 用量账本）与紧邻上方的请求日志推送共用
+	// 同一个 InternalToken，以及同一种"为更大的体积上限单独成组"的理由。
+	server.AddRoutes([]rest.Route{
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/usagerecords",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/usagerecords", requireSharedSecret(ctx.Config.InternalToken, createUsageRecords(ctx))),
+		},
+	}, rest.WithMaxBytes(MaxUsageRecordsBodyBytes))
 
 	// The fleet inventory is mounted only when it is configured, so a
 	// deployment without an operations console has no such route rather than
@@ -251,17 +375,17 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/nodes",
-				Handler: requirePlatformSession(ctx, listFleetNodes(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes", requirePlatformSession(ctx, listFleetNodes(ctx))),
 			},
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/models",
-				Handler: requirePlatformSession(ctx, listFleetModels(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/models", requirePlatformSession(ctx, listFleetModels(ctx))),
 			},
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/workflows",
-				Handler: requirePlatformSession(ctx, listOperatorWorkflows(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflows", requirePlatformSession(ctx, listOperatorWorkflows(ctx))),
 			},
 		})
 
@@ -280,12 +404,17 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodGet,
 				Path:    "/admin/v1/workflows",
-				Handler: requireSession(ctx, listWorkflows(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/workflows", requireSession(ctx, listWorkflows(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/admin/v1/models",
+				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/models", requireSession(ctx, listTenantModels(ctx))),
 			},
 			{
 				Method:  http.MethodGet,
 				Path:    "/admin/v1/jobs",
-				Handler: requireSession(ctx, listJobs(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/jobs", requireSession(ctx, listJobs(ctx))),
 			},
 		})
 	}
@@ -305,32 +434,87 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodGet,
 				Path:    "/operator/v1/nodes/states",
-				Handler: requirePlatformSession(ctx, listNodeStates(ctx)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/states", requirePlatformSession(ctx, listNodeStates(ctx))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/approve",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ApproveNode)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/approve", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.ApproveNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/disable",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.DisableNode)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/disable", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.DisableNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/enable",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnableNode)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/enable", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.EnableNode))),
 			},
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/maintenance",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.EnterMaintenance)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.EnterMaintenance))),
 			},
 			{
 				Method:  http.MethodDelete,
 				Path:    "/operator/v1/nodes/:id/maintenance",
-				Handler: requirePlatformSession(ctx, nodeOpsHandler(ctx.Logic.ExitMaintenance)),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.ExitMaintenance))),
+			},
+		})
+	}
+
+	// Model-pull forwarding (STATUS.md's P2 model distribution subtask two,
+	// the control plane forwarding layer) is mounted independently of both
+	// Fleet and RegistryClient: it reaches a third Gateway listener
+	// (-model-pull-addr) with its own token, and needs neither the
+	// read-only inventory nor the Registry's identity ledger to work.
+	//
+	// 模型拉取转发（STATUS.md 的 P2 模型分发子任务二，控制面转发层）与
+	// Fleet、RegistryClient 都分开挂载：它够到的是第三个、带着自己 token 的
+	// Gateway 监听器（-model-pull-addr），既不需要只读清单，也不需要
+	// Registry 的身份账本。
+	if ctx.ModelPullRouter != nil {
+		server.AddRoutes([]rest.Route{
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/nodes/:id/model-pulls",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/model-pulls", requirePlatformSession(ctx, triggerModelPull(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/nodes/:id/model-pulls",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/model-pulls", requirePlatformSession(ctx, modelPullStatus(ctx))),
+			},
+		})
+	}
+
+	// ComfyUI Managed forwarding (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment subtask two, the control plane forwarding layer) is
+	// mounted independently of Fleet, RegistryClient and ModelPullRouter:
+	// it reaches a fourth Gateway listener (-comfyui-managed-addr) with its
+	// own token.
+	//
+	// ComfyUI Managed 转发（STATUS.md 的 P2 ComfyUI Managed Docker 部署
+	// 子任务二，控制面转发层）与 Fleet、RegistryClient、ModelPullRouter 都
+	// 分开挂载：它够到的是第四个、带着自己 token 的 Gateway 监听器
+	// （-comfyui-managed-addr）。
+	if ctx.ComfyUIManagedRouter != nil {
+		server.AddRoutes([]rest.Route{
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/nodes/:id/comfyui-managed",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed", requirePlatformSession(ctx, triggerComfyUIManagedAction(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
+				Path:    "/operator/v1/nodes/:id/comfyui-managed",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed", requirePlatformSession(ctx, comfyUIManagedStatus(ctx))),
+			},
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/nodes/:id/comfyui-managed/custom-nodes",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/comfyui-managed/custom-nodes", requirePlatformSession(ctx, installComfyUICustomNode(ctx))),
 			},
 		})
 	}

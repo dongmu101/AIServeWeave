@@ -38,6 +38,18 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 	if err := sess.report(true); err != nil {
 		return c.streamError("initial status report", err)
 	}
+	if err := sess.forceReportModelPull(); err != nil {
+		return c.streamError("initial model pull report", err)
+	}
+	if err := sess.forceReportComfyUIManaged(); err != nil {
+		return c.streamError("initial comfyui managed report", err)
+	}
+	if err := sess.forceReportAgentUpgrade(); err != nil {
+		return c.streamError("initial agent upgrade report", err)
+	}
+	if err := sess.reportCLIUsage(true); err != nil {
+		return c.streamError("initial cli usage report", err)
+	}
 
 	heartbeat := newRearmingTimer(c.clock, c.cfg.HeartbeatInterval)
 	defer heartbeat.stop()
@@ -69,6 +81,18 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.report(false); err != nil {
 				return c.streamError("status report", err)
 			}
+			if err := sess.reportModelPull(false); err != nil {
+				return c.streamError("model pull report", err)
+			}
+			if err := sess.reportComfyUIManaged(false); err != nil {
+				return c.streamError("comfyui managed report", err)
+			}
+			if err := sess.reportAgentUpgrade(false); err != nil {
+				return c.streamError("agent upgrade report", err)
+			}
+			if err := sess.reportCLIUsage(false); err != nil {
+				return c.streamError("cli usage report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -90,6 +114,21 @@ type controlSession struct {
 	// reported maps runtime id to the material part of the last reported
 	// snapshot, so a report is only sent when something actually changed.
 	reported map[string][]byte
+	// reportedModelPull is the deterministic encoding of the last
+	// ModelPullReport sent, so reportModelPull only sends again once
+	// something in it actually changed (STATUS.md's P2 model distribution
+	// subtask 2). nil before the first report, which always differs from
+	// any real encoding and so is always sent.
+	reportedModelPull []byte
+	// reportedComfyUIManaged is reportedModelPull's counterpart for
+	// ComfyUIManagedReport (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment, subtask 2).
+	reportedComfyUIManaged []byte
+	// reportedAgentUpgrade is reportedModelPull's counterpart for
+	// AgentUpgradeReport (STATUS.md's P2 Agent auto-upgrade subtask 1).
+	reportedAgentUpgrade []byte
+	// reportedCLIUsage is reportedModelPull's counterpart for CLIUsageReport.
+	reportedCLIUsage []byte
 }
 
 // handle dispatches one frame from the replica.
@@ -110,6 +149,43 @@ func (s *controlSession) handle(ctx context.Context, frame *tunnelv1.GatewayCont
 		// Success or failure is observed through the status report rather
 		// than a dedicated ack frame, so one always follows.
 		return s.forceReport()
+
+	case *tunnelv1.GatewayControl_ModelPullTrigger:
+		if c.cfg.ModelPuller != nil {
+			c.cfg.ModelPuller.Trigger(tunnelwire.ModelPullTriggerFromProto(body.ModelPullTrigger))
+		}
+		// Same rule as GatewayControl_Config: no dedicated ack, the next
+		// status report (forced here) is how the Gateway observes an
+		// unknown name being rejected or a known one starting to move.
+		return s.forceReportModelPull()
+
+	case *tunnelv1.GatewayControl_ComfyuiManagedAction:
+		if c.cfg.ComfyUIManaged != nil {
+			c.cfg.ComfyUIManaged.Trigger(tunnelwire.ComfyUIManagedActionFromProto(body.ComfyuiManagedAction))
+		}
+		// Same rule as GatewayControl_ModelPullTrigger: no dedicated ack,
+		// the next report (forced here) is how the Gateway observes the
+		// action taking effect.
+		return s.forceReportComfyUIManaged()
+
+	case *tunnelv1.GatewayControl_ComfyuiManagedCustomNodeInstall:
+		if c.cfg.ComfyUIManaged != nil {
+			c.cfg.ComfyUIManaged.TriggerCustomNodeInstall(tunnelwire.ComfyUIManagedCustomNodeInstallTriggerFromProto(body.ComfyuiManagedCustomNodeInstall))
+		}
+		// Same rule as GatewayControl_ComfyuiManagedAction: no dedicated
+		// ack, the next report (forced here) is how the Gateway observes
+		// the install taking effect.
+		return s.forceReportComfyUIManaged()
+
+	case *tunnelv1.GatewayControl_AgentUpgradeAction:
+		if c.cfg.AgentUpgrader != nil {
+			action, targetVersion := tunnelwire.AgentUpgradeActionFromProto(body.AgentUpgradeAction)
+			c.cfg.AgentUpgrader.Trigger(action, targetVersion)
+		}
+		// Same rule as GatewayControl_ModelPullTrigger: no dedicated ack,
+		// the next report (forced here) is how the Gateway observes an
+		// unknown target version being rejected or a CHECK's result.
+		return s.forceReportAgentUpgrade()
 
 	case *tunnelv1.GatewayControl_Roster:
 		if c.cfg.OnRoster != nil {
@@ -255,6 +331,181 @@ func (s *controlSession) sendStatus(snaps []*tunnelv1.RuntimeSnapshot, full bool
 		Full:       full,
 		ReportedAt: timestamppb.New(s.client.clock.Now()),
 	}}}, "runtime status")
+}
+
+// reportModelPull sends a ModelPullReport when the ModelPuller's snapshot has
+// changed since the last one sent (or force is true). Unlike report/
+// sendStatus there is no full/partial split: a manifest is operator-authored
+// and small, so the whole known set is always sent, and "changed" is decided
+// by comparing a deterministic encoding of that whole set rather than
+// tracking each name's material part separately — the complexity
+// materialSnapshotKey needs to stay a busy loop free of noisy timestamp
+// churn does not pay for itself at this size (STATUS.md's P2 model
+// distribution subtask 2).
+//
+// reportModelPull 在 ModelPuller 的快照自上次发送后发生变化（或 force 为
+// true）时发送一次 ModelPullReport。与 report/sendStatus 不同，这里不做
+// full/partial 拆分：清单是运维手写的、条目数量有限，所以总是发送完整的
+// 已知集合，"是否变化"靠比较整个集合的确定性编码，而不是像 materialSnapshotKey
+// 那样逐条追踪——那份复杂度是为了避免时间戳噪声造成忙循环，在这个规模上不
+// 值得（STATUS.md P2 模型分发子任务二）。
+func (s *controlSession) reportModelPull(force bool) error {
+	puller := s.client.cfg.ModelPuller
+	if puller == nil {
+		return nil
+	}
+	report := tunnelwire.ModelPullReportToProto(puller.Snapshot())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a model pull report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedModelPull) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_ModelPull{ModelPull: report}}, "model pull report"); err != nil {
+		return err
+	}
+	s.reportedModelPull = key
+	return nil
+}
+
+// forceReportModelPull sends a ModelPullReport regardless of what changed,
+// the ModelPuller counterpart to forceReport.
+func (s *controlSession) forceReportModelPull() error {
+	return s.reportModelPull(true)
+}
+
+// reportComfyUIManaged sends a ComfyUIManagedReport when the Supervisor's
+// snapshot has changed since the last one sent (or force is true) —
+// reportModelPull's counterpart for STATUS.md's P2 ComfyUI Managed Docker
+// deployment, subtask 2. There is always at most one entry (an Agent
+// manages at most one Managed instance today), so the same
+// "whole-set deterministic encoding" comparison reportModelPull uses applies
+// unchanged.
+//
+// reportComfyUIManaged 在 Supervisor 的快照自上次发送后发生变化（或 force 为
+// true）时发送一次 ComfyUIManagedReport——是 reportModelPull 在 STATUS.md P2
+// ComfyUI Managed Docker 部署子任务二里的对应物。今天一个 Agent 最多管理一个
+// Managed 实例，因此总是最多一个条目，reportModelPull 那套"整个集合的确定性
+// 编码"比较方式原样适用。
+func (s *controlSession) reportComfyUIManaged(force bool) error {
+	manager := s.client.cfg.ComfyUIManaged
+	if manager == nil {
+		return nil
+	}
+	report := tunnelwire.ComfyUIManagedReportToProto(manager.Snapshot())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a comfyui managed report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedComfyUIManaged) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_ComfyuiManaged{ComfyuiManaged: report}}, "comfyui managed report"); err != nil {
+		return err
+	}
+	s.reportedComfyUIManaged = key
+	return nil
+}
+
+// forceReportComfyUIManaged sends a ComfyUIManagedReport regardless of what
+// changed, the Supervisor counterpart to forceReportModelPull.
+func (s *controlSession) forceReportComfyUIManaged() error {
+	return s.reportComfyUIManaged(true)
+}
+
+// reportAgentUpgrade sends an AgentUpgradeReport when the Checker's status
+// has changed since the last one sent (or force is true) —
+// reportModelPull's counterpart for STATUS.md's P2 Agent auto-upgrade
+// subtask 1. There is always exactly one Status (an Agent has one running
+// version, not one per named thing), so the same deterministic-encoding
+// comparison reportModelPull/reportComfyUIManaged use applies unchanged,
+// just over a single message instead of a repeated field.
+//
+// reportAgentUpgrade 在 Checker 的状态自上次发送后发生变化（或 force 为
+// true）时发送一次 AgentUpgradeReport——是 reportModelPull 在 STATUS.md P2
+// Agent 自动升级子任务一里的对应物。一个 Agent 只有一个正在运行的版本，不
+// 是按名字各一份，因此总是恰好一个 Status，reportModelPull/
+// reportComfyUIManaged 那套确定性编码比较方式原样适用，只是作用在单条消息
+// 而不是 repeated 字段上。
+func (s *controlSession) reportAgentUpgrade(force bool) error {
+	upgrader := s.client.cfg.AgentUpgrader
+	if upgrader == nil {
+		return nil
+	}
+	report := tunnelwire.AgentUpgradeReportToProto(upgrader.Status())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode an agent upgrade report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedAgentUpgrade) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_AgentUpgrade{AgentUpgrade: report}}, "agent upgrade report"); err != nil {
+		return err
+	}
+	s.reportedAgentUpgrade = key
+	return nil
+}
+
+// forceReportAgentUpgrade sends an AgentUpgradeReport regardless of what
+// changed, the Checker counterpart to forceReportModelPull.
+func (s *controlSession) forceReportAgentUpgrade() error {
+	return s.reportAgentUpgrade(true)
+}
+
+// reportCLIUsage sends a CLIUsageReport when the cached quota has changed since
+// the last one sent (or force is true) — reportModelPull's counterpart for the
+// CLI subscription quota. The wire form leaves out the flags derived from the
+// moment of reading, so an idle quota encodes identically poll after poll and
+// is sent only when a query actually changed something.
+//
+// reportCLIUsage 在缓存的额度自上次发送后发生变化（或 force 为 true）时发送一次
+// CLIUsageReport——是 reportModelPull 在 CLI 订阅额度上的对应物。线上形式不含取决于
+// 读取时刻的派生标志，因此额度没动时每次轮询的编码完全相同，只有真正有查询结果变化时
+// 才会发送。
+func (s *controlSession) reportCLIUsage(force bool) error {
+	source := s.client.cfg.CLIUsage
+	if source == nil {
+		return nil
+	}
+	accounts := source.Snapshot()
+	if len(accounts) == 0 {
+		return nil
+	}
+	report := tunnelwire.CLIUsageReportToProto(accounts)
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a cli usage report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedCLIUsage) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_CliUsage{CliUsage: report}}, "cli usage report"); err != nil {
+		return err
+	}
+	s.reportedCLIUsage = key
+	return nil
 }
 
 // applyConfig installs one control-plane configuration change. Failures are
@@ -548,6 +799,10 @@ func controlFrameName(frame *tunnelv1.GatewayControl) string {
 		return "Shutdown"
 	case *tunnelv1.GatewayControl_Ping:
 		return "Ping"
+	case *tunnelv1.GatewayControl_ModelPullTrigger:
+		return "ModelPullTrigger"
+	case *tunnelv1.GatewayControl_AgentUpgradeAction:
+		return "AgentUpgradeAction"
 	case nil:
 		return "empty frame"
 	default:

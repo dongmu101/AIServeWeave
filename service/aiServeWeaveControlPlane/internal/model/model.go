@@ -294,6 +294,7 @@ func (k APIKey) Usable(now time.Time) bool {
 // 词汇来写，而不是去猜过去的代码碰巧传了什么。
 const (
 	ActionTenantCreate       = "tenant.create"
+	ActionTenantSignup       = "tenant.signup"
 	ActionUserCreate         = "user.create"
 	ActionUserLogin          = "user.login"
 	ActionUserUpdate         = "user.update"
@@ -306,6 +307,7 @@ const (
 	ActionSessionLogout      = "session.logout"
 	ActionAPIKeyCreate       = "apikey.create"
 	ActionAPIKeyRevoke       = "apikey.revoke"
+	ActionAPIKeyDelete       = "apikey.delete"
 	ActionTenantLimits       = "tenant.limits"
 
 	// Platform actions (STATUS.md's P01) are recorded with TenantID set to
@@ -323,6 +325,40 @@ const (
 	ActionNodeEnable                     = "node.enable"
 	ActionNodeMaintenanceEnter           = "node.maintenance.enter"
 	ActionNodeMaintenanceExit            = "node.maintenance.exit"
+	// ActionModelPullTrigger records a forwarded model-pull trigger
+	// (STATUS.md's P2 model distribution, the control plane forwarding
+	// layer). Like the node-ops actions above it uses PlatformScope: a
+	// node_id has no tenant.
+	ActionModelPullTrigger = "node.model_pull.trigger"
+	// ActionComfyUIManagedTrigger records a forwarded ComfyUI Managed
+	// lifecycle action trigger (STATUS.md's P2 ComfyUI Managed Docker
+	// deployment, the control plane forwarding layer). Like
+	// ActionModelPullTrigger it uses PlatformScope.
+	ActionComfyUIManagedTrigger = "node.comfyui_managed.trigger"
+	// ActionComfyUIManagedCustomNodeInstall records a forwarded ComfyUI
+	// Managed custom node install trigger (STATUS.md's P2 ComfyUI Managed
+	// Docker deployment, subtask 4), the same shape and trust boundary as
+	// ActionComfyUIManagedTrigger.
+	//
+	// ActionComfyUIManagedCustomNodeInstall 记录一次转发的 ComfyUI Managed
+	// 自定义节点安装触发（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任
+	// 务四），与 ActionComfyUIManagedTrigger 同一形状与信任边界。
+	ActionComfyUIManagedCustomNodeInstall = "node.comfyui_managed.custom_node_install"
+	ActionAlertRuleCreate                 = "alert_rule.create"
+	ActionAlertRuleUpdate                 = "alert_rule.update"
+	ActionAlertRuleDelete                 = "alert_rule.delete"
+	ActionAlertAcknowledge                = "alert.acknowledge"
+	// ActionAPIDocCreate, ActionAPIDocUpdate, ActionAPIDocReset and
+	// ActionAPIDocDelete record platform writes to the tenant-facing API
+	// reference. Seed refreshes at startup have no actor and are not audited.
+	//
+	// ActionAPIDocCreate、ActionAPIDocUpdate、ActionAPIDocReset 与
+	// ActionAPIDocDelete 记录平台对面向租户 API 参考文档的写入。启动时的种子刷新
+	// 没有操作者，不记审计。
+	ActionAPIDocCreate = "api_doc.create"
+	ActionAPIDocUpdate = "api_doc.update"
+	ActionAPIDocReset  = "api_doc.reset"
+	ActionAPIDocDelete = "api_doc.delete"
 )
 
 // AuditLog is one administrative action, recorded for the README's

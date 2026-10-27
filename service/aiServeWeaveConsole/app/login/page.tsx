@@ -1,7 +1,10 @@
+import { Message } from "@/components/i18n/message";
+import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/app/login/login-form";
 import { internalPath } from "@/lib/console/internal-path";
+import { serverConfig } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -29,15 +32,14 @@ export default async function LoginPage({
   return (
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm">
+        <div className="mb-6 flex justify-end"><LanguageSwitcher /></div>
         <div className="mb-6 space-y-1">
           <h1 className="font-heading text-xl font-semibold">
-            AIServeWeave 控制台
-          </h1>
+            <Message id="common.consoleTitle" /></h1>
           <p className="text-sm text-muted-foreground">
-            使用管理员提供的邮箱和密码登录。
-          </p>
+            <Message id="auth.signInWithYourEmailAndPassword" /></p>
         </div>
-        <LoginForm next={target} />
+        <LoginForm next={target} signupEnabled={serverConfig().signupEnabled} />
       </div>
     </main>
   );

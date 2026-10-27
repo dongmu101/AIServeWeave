@@ -273,6 +273,36 @@ func (s *Service) ListJobArtifacts(ctx context.Context, tenantID, jobID string) 
 	return artifacts, translate(err)
 }
 
+// GetArtifactRoute reads one artifact by its bare public id and, if it
+// belongs to tenantID, the owning job's route binding (NodeID, RuntimeID) —
+// for STATUS.md's Gateway 故障切换收尾: a Gateway replica recovering a
+// download it has no local record of starts from just the artifact id, with
+// no job id to scope ListJobArtifacts by. A row that exists under a
+// different tenant answers ErrNotFound, exactly as GetJob already does for a
+// job under the wrong tenant: the two cases must be indistinguishable to the
+// caller.
+//
+// GetArtifactRoute 按裸公开 id 读取一个产物，若它属于 tenantID，一并读取其
+// 所属 job 的路由绑定（NodeID、RuntimeID）——为 STATUS.md 的「Gateway 故障切换
+// 收尾」而存在：一个正在恢复一次本地毫无记录的下载的 Gateway 副本，起点只有
+// 产物 id，没有 job id 可供 ListJobArtifacts 限定范围。一行存在但属于别的
+// 租户时答复 ErrNotFound，与 GetJob 对一个属于错误租户的 job 已经采用的做法
+// 一致：这两种情形对调用方而言必须无法区分。
+func (s *Service) GetArtifactRoute(ctx context.Context, tenantID, artifactID string) (model.JobArtifact, model.Job, error) {
+	artifact, err := s.store.GetJobArtifact(ctx, artifactID)
+	if err != nil {
+		return model.JobArtifact{}, model.Job{}, translate(err)
+	}
+	if artifact.TenantID != tenantID {
+		return model.JobArtifact{}, model.Job{}, ErrNotFound
+	}
+	job, err := s.store.GetJob(ctx, tenantID, artifact.JobID)
+	if err != nil {
+		return model.JobArtifact{}, model.Job{}, translate(err)
+	}
+	return artifact, job, nil
+}
+
 // ListExpiredJobArtifacts returns up to store.MaxExpiredJobArtifacts
 // artifacts of artifactType created before cutoff, across every tenant —
 // see store.JobArtifacts' ListJobArtifactsBefore for why this one read has

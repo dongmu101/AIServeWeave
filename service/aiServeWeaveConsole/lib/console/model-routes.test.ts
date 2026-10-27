@@ -6,15 +6,19 @@ import { resolveOperatorUpstream, resolveUpstream } from "./upstream-routes.ts";
 import { readBoundedText, MAX_BODY_BYTES } from "../server/responses.ts";
 import { ApiError } from "./errors.ts";
 import { request } from "./api-client.ts";
-const routes = [{ model: "alias", targets: [{ runtime_model: "real", priority: -1, weight: 4, node_selector: { gpu: "yes" } }] }];
+const routes = [{ model: "alias", targets: [{ runtime_model: "real", priority: -1, weight: 4, node_selector: { gpu: "yes" }, min_gpu_memory_bytes: 24 << 30 }] }];
 test("route copy preserves selectors and numeric semantics without aliasing", () => {
   const copy = parseRoutes(routes);
   copy[0].targets[0].node_selector!.gpu = "other";
   assert.equal(routes[0].targets[0].node_selector.gpu, "yes");
   assert.equal(copy[0].targets[0].priority, -1);
   assert.equal(copy[0].targets[0].weight, 4);
+  assert.equal(copy[0].targets[0].min_gpu_memory_bytes, 24 << 30);
 });
-for (const [name, value] of Object.entries({ duplicate: [...routes, ...routes], negative: [{ model: "x", targets: [{ runtime_model: "x", weight: -1 }] }], unknown: [{ ...routes[0], credential: "hidden" }], empty: [{ model: " ", targets: [] }] })) {
+test("min_gpu_memory_bytes is optional and omitted by default", () => {
+  assert.equal(parseRoutes([{ model: "a", targets: [{ runtime_model: "b" }] }])[0].targets[0].min_gpu_memory_bytes, undefined);
+});
+for (const [name, value] of Object.entries({ duplicate: [...routes, ...routes], negative: [{ model: "x", targets: [{ runtime_model: "x", weight: -1 }] }], unknown: [{ ...routes[0], credential: "hidden" }], empty: [{ model: " ", targets: [] }], "negative min_gpu_memory_bytes": [{ model: "x", targets: [{ runtime_model: "x", min_gpu_memory_bytes: -1 }] }] })) {
   test(`route validation rejects ${name}`, () => assert.throws(() => parseRoutes(value)));
 }
 test("unpublished snapshot and incomplete status stay explicit", () => {

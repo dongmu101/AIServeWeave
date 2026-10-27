@@ -4,17 +4,89 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strings"
 	"time"
 
 	"AIServeWeave/common/runtime"
 )
 
+// chatMessageDTO's Content marshals as a plain string when Parts is empty
+// and as the content-array form when it is not — see MarshalJSON. Parts is
+// never populated on a decoded response: no backend these adapters talk to
+// returns array-form content in a chat completion.
 type chatMessageDTO struct {
+	Role       string           `json:"role"`
+	Content    string           `json:"content"`
+	Parts      []contentPartDTO `json:"-"`
+	Name       string           `json:"name,omitempty"`
+	ToolCallID string           `json:"tool_call_id,omitempty"`
+	ToolCalls  []toolCallDTO    `json:"tool_calls,omitempty"`
+}
+
+// chatMessageDTOWire mirrors chatMessageDTO's JSON shape with Content typed
+// as any, so MarshalJSON can substitute either a string or []contentPartDTO
+// without hand-writing the rest of the object's fields twice.
+type chatMessageDTOWire struct {
 	Role       string        `json:"role"`
-	Content    string        `json:"content"`
+	Content    any           `json:"content"`
 	Name       string        `json:"name,omitempty"`
 	ToolCallID string        `json:"tool_call_id,omitempty"`
 	ToolCalls  []toolCallDTO `json:"tool_calls,omitempty"`
+}
+
+// MarshalJSON emits Content as an array of content parts (mirroring the
+// OpenAI-compatible vision content-array shape vLLM/SGLang/Ollama's
+// OpenAI-compatible endpoints accept) when Parts is set, or as the plain
+// string every existing caller and test already expects otherwise.
+func (m chatMessageDTO) MarshalJSON() ([]byte, error) {
+	wire := chatMessageDTOWire{
+		Role: m.Role, Name: m.Name, ToolCallID: m.ToolCallID, ToolCalls: m.ToolCalls,
+	}
+	if len(m.Parts) > 0 {
+		wire.Content = m.Parts
+	} else {
+		wire.Content = m.Content
+	}
+	return json.Marshal(wire)
+}
+
+type contentPartDTO struct {
+	Type       string           `json:"type"`
+	Text       string           `json:"text,omitempty"`
+	ImageURL   *imageURLPartDTO `json:"image_url,omitempty"`
+	InputAudio *inputAudioDTO   `json:"input_audio,omitempty"`
+	// File carries a "file" part's source (STATUS.md's P2 multimodal
+	// input). Unlike image_url/input_audio, this is not a literal OpenAI
+	// Chat Completions wire shape — OpenAI defines no chat-completions file
+	// block, only the Responses API's differently-shaped "input_file". This
+	// repository's own convention stands in, same as Rerank's non-OpenAI
+	// endpoint; no adapter today actually sends it, since nothing publishes
+	// CapabilityDocumentInput yet.
+	//
+	// File 承载一个 "file" 部件的来源（STATUS.md 的 P2 多模态输入）。与
+	// image_url/input_audio 不同，这不是 OpenAI Chat Completions 的字面 wire
+	// 形状——OpenAI 未定义 chat completions 的文件块，只有形状不同的
+	// Responses API "input_file"。本仓库自己的约定在此代为承载，与 Rerank
+	// 那个非 OpenAI 端点同一先例；今天没有任何适配器会真的发出它，因为还
+	// 没有谁发布 CapabilityDocumentInput。
+	File *filePartDTO `json:"file,omitempty"`
+}
+
+type imageURLPartDTO struct {
+	URL    string `json:"url"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// inputAudioDTO mirrors OpenAI Chat Completions' input_audio shape exactly:
+// base64 data plus a format string.
+type inputAudioDTO struct {
+	Data   string `json:"data"`
+	Format string `json:"format,omitempty"`
+}
+
+type filePartDTO struct {
+	FileData string `json:"file_data"`
+	Filename string `json:"filename,omitempty"`
 }
 
 type toolCallDTO struct {
@@ -68,11 +140,32 @@ type chatCompletionRequest struct {
 	Temperature    *float64           `json:"temperature,omitempty"`
 	TopP           *float64           `json:"top_p,omitempty"`
 	MaxTokens      *int               `json:"max_tokens,omitempty"`
+	MaxCompletion  *int               `json:"max_completion_tokens,omitempty"`
 	Stop           []string           `json:"stop,omitempty"`
 	Seed           *int64             `json:"seed,omitempty"`
 	Tools          []toolDTO          `json:"tools,omitempty"`
-	ToolChoice     string             `json:"tool_choice,omitempty"`
+	ToolChoice     json.RawMessage    `json:"tool_choice,omitempty"`
 	ResponseFormat *responseFormatDTO `json:"response_format,omitempty"`
+}
+
+// toolChoiceJSON encodes runtime.ChatRequest.ToolChoice for the wire. A mode
+// ("auto", "none", "required") is a JSON string; a named-tool choice already
+// arrives as the OpenAI object's JSON text and is sent as that object, not
+// as a string containing it, which every OpenAI-compatible server rejects.
+//
+// toolChoiceJSON 把 runtime.ChatRequest.ToolChoice 编码为线上格式。模式值
+// （"auto"、"none"、"required"）编码为 JSON 字符串；指名工具的选择到达时已是
+// OpenAI 对象的 JSON 文本，按对象原样发送，而不是包成字符串——那样会被所有
+// OpenAI 兼容服务拒绝。
+func toolChoiceJSON(choice string) json.RawMessage {
+	if choice == "" {
+		return nil
+	}
+	if trimmed := strings.TrimSpace(choice); strings.HasPrefix(trimmed, "{") && json.Valid([]byte(trimmed)) {
+		return json.RawMessage(trimmed)
+	}
+	data, _ := json.Marshal(choice)
+	return data
 }
 
 // modeledChatFields is the fixed set of wire field names the request DTOs
@@ -103,6 +196,7 @@ func toMessageDTO(m runtime.ChatMessage) chatMessageDTO {
 	dto := chatMessageDTO{
 		Role:       m.Role,
 		Content:    m.Content,
+		Parts:      toContentPartDTOs(m.ContentParts),
 		Name:       m.Name,
 		ToolCallID: m.ToolCallID,
 	}
@@ -139,6 +233,27 @@ func fromMessageDTO(dto chatMessageDTO) runtime.ChatMessage {
 	return m
 }
 
+func toContentPartDTOs(parts []runtime.ContentPart) []contentPartDTO {
+	if len(parts) == 0 {
+		return nil
+	}
+	out := make([]contentPartDTO, len(parts))
+	for i, p := range parts {
+		dto := contentPartDTO{Type: p.Type, Text: p.Text}
+		if p.ImageURL != nil {
+			dto.ImageURL = &imageURLPartDTO{URL: p.ImageURL.URL, Detail: p.ImageURL.Detail}
+		}
+		if p.Audio != nil {
+			dto.InputAudio = &inputAudioDTO{Data: p.Audio.Data, Format: p.Audio.Format}
+		}
+		if p.File != nil {
+			dto.File = &filePartDTO{FileData: p.File.URL, Filename: p.File.Filename}
+		}
+		out[i] = dto
+	}
+	return out
+}
+
 func toToolDTO(t runtime.Tool) toolDTO {
 	return toolDTO{
 		Type: t.Type,
@@ -165,6 +280,23 @@ func toResponseFormatDTO(rf *runtime.ResponseFormat) *responseFormatDTO {
 	return dto
 }
 
+// chatRequest builds the wire DTO and applies the client's token-limit
+// field name. An Extra "max_completion_tokens" wins, so the field is never
+// sent twice.
+//
+// chatRequest 构造线上 DTO 并应用客户端的 token 上限字段名。Extra 中的
+// "max_completion_tokens" 优先，因此该字段不会被发送两次。
+func (c *Client) chatRequest(req runtime.ChatRequest) chatCompletionRequest {
+	dto := buildChatCompletionRequest(req)
+	if c.maxCompl {
+		if _, set := req.Extra["max_completion_tokens"]; !set {
+			dto.MaxCompletion = dto.MaxTokens
+		}
+		dto.MaxTokens = nil
+	}
+	return dto
+}
+
 // buildChatCompletionRequest converts req's modeled fields into the wire
 // DTO shared by Chat and ChatStream. It does not touch req.Extra — callers
 // merge that separately via Client.mergeExtraFields, after any
@@ -177,7 +309,7 @@ func buildChatCompletionRequest(req runtime.ChatRequest) chatCompletionRequest {
 		MaxTokens:      req.MaxTokens,
 		Stop:           req.Stop,
 		Seed:           req.Seed,
-		ToolChoice:     req.ToolChoice,
+		ToolChoice:     toolChoiceJSON(req.ToolChoice),
 		ResponseFormat: toResponseFormatDTO(req.ResponseFormat),
 	}
 	for _, m := range req.Messages {
@@ -194,7 +326,7 @@ func buildChatCompletionRequest(req runtime.ChatRequest) chatCompletionRequest {
 // the backend responds with no choices, and with Code ErrorInvalidConfig if
 // req.Extra collides with a modeled field name.
 func Chat(ctx context.Context, c *Client, req runtime.ChatRequest) (runtime.ChatResponse, error) {
-	dtoReq := buildChatCompletionRequest(req)
+	dtoReq := c.chatRequest(req)
 	body, err := c.mergeExtraFields("chat", dtoReq, req.Extra, modeledChatFields)
 	if err != nil {
 		return runtime.ChatResponse{}, err

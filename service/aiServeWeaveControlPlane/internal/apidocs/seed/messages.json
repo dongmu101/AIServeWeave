@@ -1,0 +1,452 @@
+{
+  "slug": "messages",
+  "category": "文本对话",
+  "category_order": 10,
+  "sort_order": 40,
+  "title": "Messages（Anthropic 兼容）",
+  "method": "POST",
+  "path": "/v1/messages",
+  "summary": "兼容 Anthropic Messages API 的对话接口，可直接使用 Anthropic 官方 SDK 与 Claude Code 等客户端。",
+  "revision": 1,
+  "content": {
+    "highlights": [
+      "兼容 Anthropic Messages API，Anthropic SDK 将 base_url 设为 {{BASE_URL}} 即可使用",
+      "认证支持 x-api-key 请求头，也支持 Authorization: Bearer",
+      "支持 text、image、document、tool_use、tool_result 内容块",
+      "stream=true 时按 Anthropic 事件序列（message_start → … → message_stop）推送"
+    ],
+    "notice": "max_tokens 为必填且必须大于 0。请求体上限 8 MB，Claude 系列模型上限为 1 MB（超出返回 413）。认证失败与配额超限返回 OpenAI 格式错误体，其余错误返回 Anthropic 格式错误体 {\"type\":\"error\",\"error\":{...}}。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "x-api-key",
+        "type": "string",
+        "required": false,
+        "description": "API Key（Anthropic 风格）。未携带 Authorization 时使用此头。"
+      },
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": false,
+        "description": "`Bearer {{API_KEY}}`。携带此头时优先使用它，x-api-key 被忽略。两者至少提供一个。"
+      },
+      {
+        "name": "Content-Type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 `application/json`。"
+      }
+    ],
+    "path_params": [],
+    "query_params": [],
+    "body_type": "json",
+    "body_params": [
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型 ID，可通过 GET /v1/models 获取。"
+      },
+      {
+        "name": "messages",
+        "type": "array",
+        "required": true,
+        "description": "对话消息列表，不能为空。",
+        "children": [
+          {
+            "name": "role",
+            "type": "string",
+            "required": true,
+            "description": "消息角色。",
+            "enum": [
+              "user",
+              "assistant"
+            ]
+          },
+          {
+            "name": "content",
+            "type": "string | array",
+            "required": true,
+            "description": "消息内容：字符串或内容块数组。不支持的块类型（如 thinking）返回 400。",
+            "children": [
+              {
+                "name": "type",
+                "type": "string",
+                "required": true,
+                "description": "内容块类型。",
+                "enum": [
+                  "text",
+                  "image",
+                  "document",
+                  "tool_use",
+                  "tool_result"
+                ]
+              },
+              {
+                "name": "text",
+                "type": "string",
+                "required": false,
+                "description": "text 块的文本。"
+              },
+              {
+                "name": "source",
+                "type": "object",
+                "required": false,
+                "description": "image / document 块的来源，必填。",
+                "children": [
+                  {
+                    "name": "type",
+                    "type": "string",
+                    "required": true,
+                    "description": "来源类型。",
+                    "enum": [
+                      "base64",
+                      "url"
+                    ]
+                  },
+                  {
+                    "name": "media_type",
+                    "type": "string",
+                    "required": false,
+                    "description": "base64 时必填，如 image/png、application/pdf。"
+                  },
+                  {
+                    "name": "data",
+                    "type": "string",
+                    "required": false,
+                    "description": "base64 时必填，Base64 编码内容。"
+                  },
+                  {
+                    "name": "url",
+                    "type": "string",
+                    "required": false,
+                    "description": "url 时必填，可访问的地址。"
+                  }
+                ]
+              },
+              {
+                "name": "title",
+                "type": "string",
+                "required": false,
+                "description": "document 块的标题。"
+              },
+              {
+                "name": "id",
+                "type": "string",
+                "required": false,
+                "description": "tool_use 块的调用 ID，必填。"
+              },
+              {
+                "name": "name",
+                "type": "string",
+                "required": false,
+                "description": "tool_use 块的工具名，必填。"
+              },
+              {
+                "name": "input",
+                "type": "object",
+                "required": false,
+                "description": "tool_use 块的调用参数。"
+              },
+              {
+                "name": "tool_use_id",
+                "type": "string",
+                "required": false,
+                "description": "tool_result 块对应的 tool_use ID，必填。"
+              },
+              {
+                "name": "content",
+                "type": "string | array",
+                "required": false,
+                "description": "tool_result 块的结果：字符串或仅含 text 块的数组。"
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "name": "max_tokens",
+        "type": "integer",
+        "required": true,
+        "description": "最多生成的 token 数，必须大于 0。"
+      },
+      {
+        "name": "system",
+        "type": "string | array",
+        "required": false,
+        "description": "系统提示：字符串，或只含 text 块的数组。"
+      },
+      {
+        "name": "temperature",
+        "type": "number",
+        "required": false,
+        "description": "采样温度。"
+      },
+      {
+        "name": "top_p",
+        "type": "number",
+        "required": false,
+        "description": "核采样概率阈值。"
+      },
+      {
+        "name": "stop_sequences",
+        "type": "array",
+        "required": false,
+        "description": "停止序列（字符串数组）。"
+      },
+      {
+        "name": "stream",
+        "type": "boolean",
+        "required": false,
+        "description": "是否以 SSE 事件流返回。",
+        "default": "false"
+      },
+      {
+        "name": "tools",
+        "type": "array",
+        "required": false,
+        "description": "可供模型调用的工具。",
+        "children": [
+          {
+            "name": "name",
+            "type": "string",
+            "required": true,
+            "description": "工具名。"
+          },
+          {
+            "name": "description",
+            "type": "string",
+            "required": false,
+            "description": "工具说明。"
+          },
+          {
+            "name": "input_schema",
+            "type": "object",
+            "required": true,
+            "description": "JSON Schema 形式的输入定义。"
+          }
+        ]
+      },
+      {
+        "name": "tool_choice",
+        "type": "object",
+        "required": false,
+        "description": "工具选择策略。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": true,
+            "description": "auto：模型自行决定；none：不调用；any：必须调用某个工具；tool：调用指定工具。",
+            "enum": [
+              "auto",
+              "none",
+              "any",
+              "tool"
+            ]
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false,
+            "description": "type 为 tool 时必填。"
+          }
+        ]
+      }
+    ],
+    "response_fields": [
+      {
+        "name": "id",
+        "type": "string",
+        "required": true,
+        "description": "消息 ID。"
+      },
+      {
+        "name": "type",
+        "type": "string",
+        "required": true,
+        "description": "固定为 message。"
+      },
+      {
+        "name": "role",
+        "type": "string",
+        "required": true,
+        "description": "assistant。"
+      },
+      {
+        "name": "model",
+        "type": "string",
+        "required": true,
+        "description": "模型 ID。"
+      },
+      {
+        "name": "content",
+        "type": "array",
+        "required": true,
+        "description": "回复内容块。",
+        "children": [
+          {
+            "name": "type",
+            "type": "string",
+            "required": true,
+            "description": "块类型。",
+            "enum": [
+              "text",
+              "tool_use"
+            ]
+          },
+          {
+            "name": "text",
+            "type": "string",
+            "required": false,
+            "description": "text 块的文本。"
+          },
+          {
+            "name": "id",
+            "type": "string",
+            "required": false,
+            "description": "tool_use 块的调用 ID，回传结果时作为 tool_use_id。"
+          },
+          {
+            "name": "name",
+            "type": "string",
+            "required": false,
+            "description": "tool_use 块的工具名。"
+          },
+          {
+            "name": "input",
+            "type": "object",
+            "required": false,
+            "description": "tool_use 块的调用参数。"
+          }
+        ]
+      },
+      {
+        "name": "stop_reason",
+        "type": "string",
+        "required": true,
+        "description": "停止原因。",
+        "enum": [
+          "end_turn",
+          "max_tokens",
+          "tool_use"
+        ]
+      },
+      {
+        "name": "stop_sequence",
+        "type": "string | null",
+        "required": true,
+        "description": "命中的停止序列。"
+      },
+      {
+        "name": "usage",
+        "type": "object",
+        "required": true,
+        "description": "用量统计。",
+        "children": [
+          {
+            "name": "input_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "输入 token 数。"
+          },
+          {
+            "name": "output_tokens",
+            "type": "integer",
+            "required": true,
+            "description": "输出 token 数。"
+          }
+        ]
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl {{BASE_URL}}/v1/messages \\\n  -H \"x-api-key: {{API_KEY}}\" \\\n  -H \"Content-Type: application/json\" \\\n  -d '{\n    \"model\": \"{{MODEL}}\",\n    \"max_tokens\": 1024,\n    \"system\": \"你是一个乐于助人的助手。\",\n    \"messages\": [\n      {\"role\": \"user\", \"content\": \"用一句话介绍你自己\"}\n    ]\n  }'"
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import anthropic\n\nclient = anthropic.Anthropic(base_url=\"{{BASE_URL}}\", api_key=\"{{API_KEY}}\")\n\nmessage = client.messages.create(\n    model=\"{{MODEL}}\",\n    max_tokens=1024,\n    system=\"你是一个乐于助人的助手。\",\n    messages=[{\"role\": \"user\", \"content\": \"用一句话介绍你自己\"}],\n)\nprint(message.content[0].text)\n\n# 流式\nwith client.messages.stream(\n    model=\"{{MODEL}}\",\n    max_tokens=1024,\n    messages=[{\"role\": \"user\", \"content\": \"写一首四行短诗\"}],\n) as stream:\n    for text in stream.text_stream:\n        print(text, end=\"\", flush=True)"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/messages\", {\n  method: \"POST\",\n  headers: {\n    \"x-api-key\": \"{{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    max_tokens: 1024,\n    system: \"你是一个乐于助人的助手。\",\n    messages: [{ role: \"user\", content: \"用一句话介绍你自己\" }],\n  }),\n});\n\nconst data = await res.json();\nif (!res.ok) throw new Error(data.error?.message);\nconsole.log(data.content.filter((b) => b.type === \"text\").map((b) => b.text).join(\"\"));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "成功",
+        "content_type": "application/json",
+        "body": "{\n  \"id\": \"msg_01AbCdEf\",\n  \"type\": \"message\",\n  \"role\": \"assistant\",\n  \"model\": \"{{MODEL}}\",\n  \"content\": [\n    {\n      \"type\": \"text\",\n      \"text\": \"你好，我是一个 AI 助手。\"\n    }\n  ],\n  \"stop_reason\": \"end_turn\",\n  \"stop_sequence\": null,\n  \"usage\": {\n    \"input_tokens\": 25,\n    \"output_tokens\": 12\n  }\n}"
+      },
+      {
+        "status": 200,
+        "label": "成功（stream=true，SSE 事件流）",
+        "content_type": "text/event-stream",
+        "body": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_01AbCdEf\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"{{MODEL}}\",\"content\":[],\"stop_reason\":\"\",\"stop_sequence\":null,\"usage\":{\"input_tokens\":0,\"output_tokens\":0}}}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"你好，\"}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"我是一个 AI 助手。\"}}\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":{\"input_tokens\":0,\"output_tokens\":12}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n"
+      },
+      {
+        "status": 400,
+        "label": "参数错误",
+        "content_type": "application/json",
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"max_tokens is required and must be greater than zero\"\n  }\n}"
+      },
+      {
+        "status": 401,
+        "label": "认证失败",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "模型不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"the requested model is not available on any connected node\"\n  }\n}"
+      },
+      {
+        "status": 409,
+        "label": "工具续接失效",
+        "content_type": "application/json",
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"Messages continuation unavailable\"\n  }\n}"
+      },
+      {
+        "status": 413,
+        "label": "请求体过大",
+        "content_type": "application/json",
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"native Messages request size limit exceeded\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "超出配额",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "流式事件说明",
+        "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>。事件顺序：message_start → content_block_start → content_block_delta（文本为 text_delta，工具参数为 input_json_delta）→ content_block_stop → …（每个内容块重复）→ message_delta（含 stop_reason 与 usage.output_tokens）→ message_stop。\n\n生成中途出错时发送 event: error，data 为 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"...\"}}，之后不再发送 message_stop。"
+      },
+      {
+        "title": "使用示例：工具调用",
+        "body": "模型调用工具时 stop_reason 为 tool_use，content 中出现 tool_use 块。执行后把 assistant 回复原样追加，再追加一条 user 消息，内含对应 tool_use_id 的 tool_result 块。Claude 系列模型的工具续接需在同一 API Key 下尽快发起，续接状态失效时返回 409。",
+        "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"max_tokens\": 1024,\n  \"tools\": [\n    {\n      \"name\": \"get_weather\",\n      \"description\": \"查询城市天气\",\n      \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"city\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"city\"\n        ]\n      }\n    }\n  ],\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"上海天气如何？\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": [\n        {\n          \"type\": \"tool_use\",\n          \"id\": \"toolu_01\",\n          \"name\": \"get_weather\",\n          \"input\": {\n            \"city\": \"上海\"\n          }\n        }\n      ]\n    },\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"tool_result\",\n          \"tool_use_id\": \"toolu_01\",\n          \"content\": \"22℃，多云\"\n        }\n      ]\n    }\n  ]\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "在 Claude Code 中使用",
+        "body": "设置环境变量后即可让 Claude Code 通过本服务调用模型：",
+        "code": "export ANTHROPIC_BASE_URL={{BASE_URL}}\nexport ANTHROPIC_API_KEY={{API_KEY}}\nclaude",
+        "code_lang": "bash"
+      },
+      {
+        "title": "错误码说明",
+        "body": "认证失败（401 invalid_api_key）、暂时无法校验密钥（503 verification_unavailable）与租户配额超限（429，带 Retry-After）返回 OpenAI 格式：{\"error\":{\"message\",\"type\",\"code\"}}。\n\n其余错误返回 Anthropic 格式：{\"type\":\"error\",\"error\":{\"type\",\"message\"}}，状态码含义：400 请求体非法或参数不支持；404 模型不可用；409 工具续接状态失效；413 请求体或响应超出大小上限；429 服务暂无可用容量；500 / 502 内部或上游错误；503 服务暂不可用；504 超时。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+      }
+    ]
+  }
+}

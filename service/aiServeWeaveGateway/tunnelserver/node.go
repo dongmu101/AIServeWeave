@@ -2,8 +2,10 @@ package tunnelserver
 
 import (
 	"errors"
+	"fmt"
 	"log/slog"
 	"maps"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -11,7 +13,11 @@ import (
 	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/cliusagestatus"
+	"AIServeWeave/common/comfyuimanagedstatus"
+	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/tunnelwire"
 )
 
 // node is everything this replica knows about one connected Agent: its Control
@@ -54,6 +60,39 @@ type node struct {
 	// an instance that stopped changing is not forgotten between full
 	// reconciliations.
 	snapshots map[string]runtime.Snapshot
+	// modelPulls is this node's last-reported model pull status, keyed by
+	// name (STATUS.md's P2 model distribution subtask 2). Unlike snapshots
+	// this is always replaced wholesale on every report: the Agent's
+	// manifest is small and operator-authored, so there is no incremental-
+	// merge case worth the complexity RuntimeStatus's full/partial split
+	// carries.
+	//
+	// modelPulls 是该节点最后一次上报的模型拉取状态，按名字索引（STATUS.md
+	// P2 模型分发子任务二）。与 snapshots 不同，它每次上报都整份替换：
+	// Agent 的清单是运维手写的、体量有限，不值得为它承担 RuntimeStatus
+	// full/partial 拆分那份复杂度。
+	modelPulls map[string]modelpullstatus.Status
+	// comfyUIManaged is this node's last-reported Managed ComfyUI container
+	// status, keyed by container name (STATUS.md's P2 ComfyUI Managed
+	// Docker deployment subtask 2). Like modelPulls, it is always replaced
+	// wholesale on every report — an Agent manages at most one Managed
+	// instance today, so there is nothing to merge incrementally.
+	//
+	// comfyUIManaged 是该节点最后一次上报的 Managed ComfyUI 容器状态，按容
+	// 器名索引（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务二）。与
+	// modelPulls 一样，它每次上报都整份替换——今天一个 Agent 最多管理一个
+	// Managed 实例，没有什么需要增量合并。
+	comfyUIManaged map[string]comfyuimanagedstatus.Status
+	// cliUsage is this node's last-reported CLI subscription quota. Like
+	// modelPulls it is replaced wholesale on every report, and it is held as
+	// the Agent sent it: bounding and vocabulary checks happen where it is
+	// rendered (nodeview.CLIUsageFromAccounts), the one allowlist every
+	// console-facing view passes through.
+	//
+	// cliUsage 是该节点最后一次上报的 CLI 订阅额度。与 modelPulls 一样，每次上报都整份
+	// 替换，并按 Agent 发来的原样保存：数量与词表检查发生在渲染处
+	// （nodeview.CLIUsageFromAccounts），那是所有面向控制台的视图都要经过的唯一允许列表。
+	cliUsage []cliusagestatus.Account
 
 	lastHeartbeat time.Time
 	inflight      int
@@ -91,14 +130,16 @@ type node struct {
 
 func newNode(id string, srv *Server) *node {
 	return &node{
-		id:          id,
-		srv:         srv,
-		metrics:     srv.metrics.forNode(id),
-		controls:    make(map[*controlSession]struct{}),
-		snapshots:   make(map[string]runtime.Snapshot),
-		idle:        make(map[tunnelv1.SlotClass][]*slot),
-		liveByClass: make(map[tunnelv1.SlotClass]int),
-		revoked:     make(chan struct{}),
+		id:             id,
+		srv:            srv,
+		metrics:        srv.metrics.forNode(id),
+		controls:       make(map[*controlSession]struct{}),
+		snapshots:      make(map[string]runtime.Snapshot),
+		modelPulls:     make(map[string]modelpullstatus.Status),
+		comfyUIManaged: make(map[string]comfyuimanagedstatus.Status),
+		idle:           make(map[tunnelv1.SlotClass][]*slot),
+		liveByClass:    make(map[tunnelv1.SlotClass]int),
+		revoked:        make(chan struct{}),
 	}
 }
 
@@ -186,6 +227,12 @@ type NodeInfo struct {
 	// Live reports whether a Control stream is established and the last
 	// heartbeat is recent enough.
 	Live bool
+	// CLIUsage is the last-reported CLI subscription quota, sorted by kind.
+	// It is untrusted Agent input, bounded when rendered.
+	//
+	// CLIUsage 是最后一次上报的 CLI 订阅额度，按 kind 排序。它是不受信任的 Agent
+	// 输入，渲染时再做限制。
+	CLIUsage []cliusagestatus.Account
 }
 
 // Nodes returns a view of every node connected to this replica, sorted by
@@ -215,6 +262,120 @@ func (s *Server) Node(nodeID string) (NodeInfo, bool) {
 		return NodeInfo{}, false
 	}
 	return n.info(s.clock.Now(), s.cfg.HeartbeatTimeout), true
+}
+
+// TriggerModelPull asks nodeID to start pulling names, if it holds an active
+// Control stream to this replica (STATUS.md's P2 model distribution subtask
+// 2). It returns an error otherwise — including when the node is connected
+// only to a sibling replica — per the tunnelserver package's "no forwarding"
+// boundary (README's 四条约束第四条): a caller that does not already know
+// which replica a node is on has to be told by whatever tracks roster
+// membership, the same limitation the admin listener's per-replica views
+// already carry.
+//
+// A successful call only means the trigger reached the Agent over the wire;
+// per GatewayControl_Config's existing precedent there is no dedicated ack,
+// so whether a name was known to the Agent's manifest is only observable
+// from the ModelPullReport that follows (ModelPullStatus, below).
+func (s *Server) TriggerModelPull(nodeID string, names []string) error {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("tunnelserver: node %q is not connected to this replica", nodeID)
+	}
+	n.mu.Lock()
+	connected := len(n.controls) > 0
+	n.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("tunnelserver: node %q has no active control stream on this replica", nodeID)
+	}
+	n.broadcast(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ModelPullTrigger{
+		ModelPullTrigger: tunnelwire.ModelPullTriggerToProto(names),
+	}})
+	return nil
+}
+
+// ModelPullStatus returns this replica's last-known model pull status for
+// nodeID, and whether the node is known to this replica at all. A known node
+// with no reports yet (no manifest configured, Agent predates this feature,
+// or no report has arrived) returns an empty, true result.
+func (s *Server) ModelPullStatus(nodeID string) ([]modelpullstatus.Status, bool) {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return nil, false
+	}
+	return n.modelPullSnapshot(), true
+}
+
+// TriggerComfyUIManagedAction asks nodeID to apply action to its one
+// locally-declared Managed ComfyUI instance, if it holds an active Control
+// stream to this replica (STATUS.md's P2 ComfyUI Managed Docker deployment,
+// subtask 2). It returns an error otherwise — including when the node is
+// connected only to a sibling replica — the same "no forwarding" boundary
+// TriggerModelPull observes.
+//
+// A successful call only means the action reached the Agent over the wire;
+// per GatewayControl_ModelPullTrigger's existing precedent there is no
+// dedicated ack, so its effect is only observable from the
+// ComfyUIManagedReport that follows (ComfyUIManagedStatus, below).
+func (s *Server) TriggerComfyUIManagedAction(nodeID string, action comfyuimanagedstatus.Action) error {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("tunnelserver: node %q is not connected to this replica", nodeID)
+	}
+	n.mu.Lock()
+	connected := len(n.controls) > 0
+	n.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("tunnelserver: node %q has no active control stream on this replica", nodeID)
+	}
+	n.broadcast(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedAction{
+		ComfyuiManagedAction: tunnelwire.ComfyUIManagedActionToProto(action),
+	}})
+	return nil
+}
+
+// TriggerComfyUIManagedCustomNodeInstall asks nodeID to install name — its
+// own local allowlist decides whether name is known, never a URL this call
+// carries — into its one locally-declared Managed ComfyUI instance's
+// custom-nodes directory (STATUS.md's P2 ComfyUI Managed Docker deployment,
+// subtask 4). Same "connected to this replica or refused" boundary as
+// TriggerComfyUIManagedAction; same "no dedicated ack" contract — a
+// ComfyUIManagedReport is how the caller observes what happened.
+//
+// TriggerComfyUIManagedCustomNodeInstall 要求 nodeID 把 name（是否已知由它
+// 自己本地的允许列表决定，本调用从不携带 URL）安装进它本地已声明的那一个
+// Managed ComfyUI 实例的自定义节点目录（STATUS.md 的 P2 ComfyUI Managed
+// Docker 部署子任务四）。与 TriggerComfyUIManagedAction 同一"连到本副本才
+// 转发，否则拒绝"边界；同一"不设专门 ack"约定——调用方经由
+// ComfyUIManagedReport 观察发生了什么。
+func (s *Server) TriggerComfyUIManagedCustomNodeInstall(nodeID, name string) error {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return fmt.Errorf("tunnelserver: node %q is not connected to this replica", nodeID)
+	}
+	n.mu.Lock()
+	connected := len(n.controls) > 0
+	n.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("tunnelserver: node %q has no active control stream on this replica", nodeID)
+	}
+	n.broadcast(&tunnelv1.GatewayControl{Body: &tunnelv1.GatewayControl_ComfyuiManagedCustomNodeInstall{
+		ComfyuiManagedCustomNodeInstall: tunnelwire.ComfyUIManagedCustomNodeInstallTriggerToProto(name),
+	}})
+	return nil
+}
+
+// ComfyUIManagedStatus returns this replica's last-known Managed ComfyUI
+// status for nodeID, and whether the node is known to this replica at all. A
+// known node with no reports yet (Managed mode not configured, Agent
+// predates this feature, or no report has arrived) returns an empty, true
+// result.
+func (s *Server) ComfyUIManagedStatus(nodeID string) ([]comfyuimanagedstatus.Status, bool) {
+	n, ok := s.lookup(nodeID)
+	if !ok {
+		return nil, false
+	}
+	return n.comfyUIManagedSnapshot(), true
 }
 
 func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
@@ -255,7 +416,34 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		Draining:         n.draining,
 		Maintenance:      n.maintenance,
 		Live:             live,
+		CLIUsage:         cloneCLIUsage(n.cliUsage),
 	}
+}
+
+// cloneCLIUsage copies accounts and their windows, so a NodeInfo never aliases
+// the node's own slices.
+//
+// cloneCLIUsage 复制账户及其窗口，让 NodeInfo 不与节点自己的切片共用内存。
+func cloneCLIUsage(accounts []cliusagestatus.Account) []cliusagestatus.Account {
+	if len(accounts) == 0 {
+		return nil
+	}
+	out := make([]cliusagestatus.Account, len(accounts))
+	for i, account := range accounts {
+		out[i] = account
+		out[i].Windows = slices.Clone(account.Windows)
+	}
+	return out
+}
+
+// applyCLIUsageReport replaces the node's CLI quota wholesale with the Agent's
+// latest report.
+//
+// applyCLIUsageReport 用 Agent 的最新上报整份替换该节点的 CLI 额度。
+func (n *node) applyCLIUsageReport(accounts []cliusagestatus.Account) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.cliUsage = accounts
 }
 
 // isEmpty reports whether the entry holds neither a Control stream nor a slot,
@@ -295,6 +483,57 @@ func (n *node) applyStatus(status *tunnelv1.RuntimeStatus, snaps []runtime.Snaps
 	for _, snap := range snaps {
 		n.snapshots[snap.Descriptor.ID] = snap
 	}
+}
+
+// applyModelPullReport replaces the node's model pull status wholesale with
+// the Agent's latest report (STATUS.md's P2 model distribution subtask 2).
+func (n *node) applyModelPullReport(statuses []modelpullstatus.Status) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	next := make(map[string]modelpullstatus.Status, len(statuses))
+	for _, st := range statuses {
+		next[st.Name] = st
+	}
+	n.modelPulls = next
+}
+
+// modelPullSnapshot returns this replica's last-known model pull status for
+// the node, sorted by name.
+func (n *node) modelPullSnapshot() []modelpullstatus.Status {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]modelpullstatus.Status, 0, len(n.modelPulls))
+	for _, st := range n.modelPulls {
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// applyComfyUIManagedReport replaces the node's Managed ComfyUI status
+// wholesale with the Agent's latest report (STATUS.md's P2 ComfyUI Managed
+// Docker deployment subtask 2).
+func (n *node) applyComfyUIManagedReport(statuses []comfyuimanagedstatus.Status) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	next := make(map[string]comfyuimanagedstatus.Status, len(statuses))
+	for _, st := range statuses {
+		next[st.ContainerName] = st
+	}
+	n.comfyUIManaged = next
+}
+
+// comfyUIManagedSnapshot returns this replica's last-known Managed ComfyUI
+// status for the node, sorted by container name.
+func (n *node) comfyUIManagedSnapshot() []comfyuimanagedstatus.Status {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	out := make([]comfyuimanagedstatus.Status, 0, len(n.comfyUIManaged))
+	for _, st := range n.comfyUIManaged {
+		out = append(out, st)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ContainerName < out[j].ContainerName })
+	return out
 }
 
 // park puts a slot back into the idle set. It reports false when the node is

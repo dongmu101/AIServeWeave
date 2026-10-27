@@ -181,8 +181,28 @@ func (d *Dispatcher) Handle(ctx context.Context, req *Request, sink ResponseSink
 	return d.run(ctx, rt, spec, req, sink)
 }
 
-// run performs one operation against rt.
-func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwire.OperationSpec, req *Request, sink ResponseSink) error {
+// run performs one operation against rt. It logs one start and one finish
+// event keyed by req.ID, covering every operation through this single entry
+// point rather than one log call per case below.
+//
+// run 对 rt 执行一次操作。它以 req.ID 为键记一条起始与一条结束事件，通过这一个
+// 统一入口覆盖全部操作，而不是在下面每个 case 里各写一次日志调用。
+func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwire.OperationSpec, req *Request, sink ResponseSink) (err error) {
+	started := d.clock.Now()
+	runtimeID := req.Headers.GetRuntimeId()
+	d.logger.Info("backend call started",
+		slog.String("request_id", req.ID),
+		slog.String("runtime_id", runtimeID),
+		slog.String("operation", spec.Operation.String()))
+	defer func() {
+		d.logger.Info("backend call finished",
+			slog.String("request_id", req.ID),
+			slog.String("runtime_id", runtimeID),
+			slog.String("operation", spec.Operation.String()),
+			slog.Bool("success", err == nil),
+			slog.Duration("duration", d.clock.Now().Sub(started)))
+	}()
+
 	id := req.Headers.GetRuntimeId()
 	reqPayload := req.Headers.GetPayload()
 
@@ -236,6 +256,36 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		}
 		return forwardStream(d, sink, stream, tunnelwire.MarshalChatEvent)
 
+	case tunnelv1.Operation_OPERATION_MESSAGES:
+		mr, ok := rt.(runtime.MessagesRuntime)
+		if !ok {
+			return &runtime.RuntimeError{Code: runtime.ErrorCapability, RuntimeID: id, Message: "native Messages capability unavailable"}
+		}
+		messageReq, err := tunnelwire.UnmarshalMessagesRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		stream, err := mr.Messages(ctx, messageReq)
+		if err != nil {
+			return err
+		}
+		return forwardStream(d, sink, stream, tunnelwire.MarshalMessagesEvent)
+
+	case tunnelv1.Operation_OPERATION_IMAGE_GENERATE:
+		ir, ok := rt.(runtime.ImageRuntime)
+		if !ok {
+			return &runtime.RuntimeError{Code: runtime.ErrorCapability, RuntimeID: id, Message: "image generation capability unavailable", Cause: runtime.ErrCapabilityUnsupported}
+		}
+		imageReq, err := tunnelwire.UnmarshalImageRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		stream, err := ir.GenerateImage(ctx, imageReq)
+		if err != nil {
+			return err
+		}
+		return forwardStream(d, sink, stream, tunnelwire.MarshalImageEvent)
+
 	case tunnelv1.Operation_OPERATION_EMBED:
 		ir, err := inferenceRuntime(rt, id)
 		if err != nil {
@@ -250,6 +300,25 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 			return err
 		}
 		payload, err := tunnelwire.MarshalEmbeddingResponse(resp)
+		if err != nil {
+			return err
+		}
+		return d.sendChunk(sink, payload)
+
+	case tunnelv1.Operation_OPERATION_RERANK:
+		ir, err := inferenceRuntime(rt, id)
+		if err != nil {
+			return err
+		}
+		rerankReq, err := tunnelwire.UnmarshalRerankRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		resp, err := ir.Rerank(ctx, rerankReq)
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalRerankResponse(resp)
 		if err != nil {
 			return err
 		}
@@ -409,6 +478,44 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 			return err
 		}
 		payload, err := tunnelwire.MarshalInputUploadResult(result)
+		if err != nil {
+			return err
+		}
+		return d.sendChunk(sink, payload)
+
+	case tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE:
+		ir, err := inferenceRuntime(rt, id)
+		if err != nil {
+			return err
+		}
+		audioReq, err := tunnelwire.UnmarshalAudioTranscriptionRequest(reqPayload)
+		if err != nil {
+			return err
+		}
+		if audioReq.Model == "" {
+			return &runtime.RuntimeError{
+				Code:      runtime.ErrorProtocol,
+				RuntimeID: id,
+				Operation: dispatchOperation,
+				Message:   "audio transcription carried no model",
+			}
+		}
+		// The audio streams straight from the DataChunk channel into
+		// Transcribe, the same discipline OPERATION_INPUT_UPLOAD applies
+		// just above: an audio file has no tight size guarantee, so
+		// buffering it whole here would be the unbounded hold README.md's
+		// dispatch.go rule forbids.
+		//
+		// 音频直接从 DataChunk 通道流进 Transcribe，与上面
+		// OPERATION_INPUT_UPLOAD 遵循的纪律相同：音频文件没有紧的体积
+		// 保证，在这里把它整体缓冲下来正是 README.md 对 dispatch.go 的
+		// 规则所禁止的那种无界持有。
+		audio := &chanReader{ctx: ctx, body: req.Body, limit: d.cfg.MaxRequestBytes, id: id}
+		result, err := ir.Transcribe(ctx, audioReq, audio)
+		if err != nil {
+			return err
+		}
+		payload, err := tunnelwire.MarshalAudioTranscriptionResponse(result)
 		if err != nil {
 			return err
 		}

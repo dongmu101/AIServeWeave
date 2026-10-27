@@ -1,0 +1,173 @@
+{
+  "slug": "job-cancel",
+  "category": "工作流与任务",
+  "category_order": 50,
+  "sort_order": 40,
+  "title": "取消任务",
+  "method": "POST",
+  "path": "/v1/jobs/{job_id}/cancel",
+  "summary": "请求中断一个尚未结束的任务，返回 202 与最后已知的任务对象。",
+  "revision": 2,
+  "content": {
+    "highlights": [
+      "取消是异步请求：返回 202 只表示中断请求已送达执行端，不代表任务已经取消",
+      "响应体是最后已知的任务对象，status 可能仍为 queued 或 running",
+      "最终结果请通过状态查询或事件流确认，成功取消后状态变为 cancelled",
+      "排队中的任务会从队列移除；正在执行的任务在执行端支持中断时被停止",
+      "已经结束的任务返回 409；执行端无法中断该任务时返回 501"
+    ],
+    "notice": "任务在取消请求送达前恰好完成时，最终状态可能是 succeeded 或 failed 而不是 cancelled，请以状态接口为准。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。API Key 在控制台创建，只能访问本租户的工作流与任务。"
+      }
+    ],
+    "path_params": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true,
+        "description": "提交工作流时返回的任务 ID，以 `job_` 开头。"
+      }
+    ],
+    "query_params": [],
+    "body_type": "none",
+    "body_params": [],
+    "response_fields": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true,
+        "description": "任务 ID，以 `job_` 开头，由网关生成。"
+      },
+      {
+        "name": "workflow_id",
+        "type": "string",
+        "required": true,
+        "description": "提交时使用的工作流 ID。"
+      },
+      {
+        "name": "status",
+        "type": "string",
+        "required": true,
+        "description": "任务状态。succeeded / failed / cancelled 为终态，到达后不再变化。",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ]
+      },
+      {
+        "name": "created_at",
+        "type": "string",
+        "required": true,
+        "description": "任务创建时间，RFC 3339 格式（UTC）。"
+      },
+      {
+        "name": "updated_at",
+        "type": "string",
+        "required": true,
+        "description": "任务状态最近一次更新的时间，RFC 3339 格式（UTC）。"
+      },
+      {
+        "name": "queue_position",
+        "type": "integer",
+        "required": false,
+        "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+      },
+      {
+        "name": "durability",
+        "type": "string",
+        "required": true,
+        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "enum": [
+          "memory_only",
+          "persisted"
+        ]
+      },
+      {
+        "name": "error",
+        "type": "string",
+        "required": false,
+        "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl -X POST \"{{BASE_URL}}/v1/jobs/job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58/cancel\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\""
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\njob_id = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\"\n\nresp = requests.post(\n    f\"{BASE_URL}/v1/jobs/{job_id}/cancel\",\n    headers={\"Authorization\": f\"Bearer {API_KEY}\"},\n    timeout=30,\n)\nif resp.status_code == 202:\n    print(\"取消请求已送达，最终结果以状态接口为准\")\nelif resp.status_code == 409:\n    print(\"任务已经结束，无法取消\")\nelse:\n    print(resp.status_code, resp.json())"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\nconst resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}/cancel`, {\n  method: \"POST\",\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (resp.status === 202) {\n  const job = await resp.json(); // 最后已知状态，可能仍是 queued / running\n  console.log(\"cancel requested\", job.status);\n} else {\n  console.error(resp.status, await resp.json());\n}"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 202,
+        "label": "取消请求已送达",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "任务不存在",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}"
+      },
+      {
+        "status": 409,
+        "label": "任务已结束",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"this job has already finished and cannot be cancelled\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_already_finished\"\n  }\n}"
+      },
+      {
+        "status": 501,
+        "label": "无法中断",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the node running this job cannot interrupt a workflow\",\n    \"type\": \"api_error\",\n    \"code\": \"cancel_unsupported\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "执行端不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "错误码",
+        "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n409 job_already_finished：任务已处于终态（succeeded / failed / cancelled），无法取消。\n\n501 cancel_unsupported：执行端当前无法中断该任务，例如任务已开始执行而执行端不支持定向中断，或执行端已不再持有该任务。任务会继续运行直到自然结束。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+      },
+      {
+        "title": "任务状态",
+        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+      },
+      {
+        "title": "错误格式",
+        "body": "所有错误都以 OpenAI 兼容的 JSON 结构返回，error.type 表示错误大类，error.code 是可用于程序判断的错误码，error.message 为面向开发者的英文说明。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请一并提供。",
+        "code": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}",
+        "code_lang": "json"
+      }
+    ]
+  }
+}

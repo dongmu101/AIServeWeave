@@ -32,6 +32,87 @@ export interface ReplicaStatus {
    * error 在副本作答时为 null，否则是控制面给出的四个固定代号之一。 */
   error: string | null;
   nodeCount: number;
+  /** Local backends on this Gateway. / 本 Gateway 的本机后端。 */
+  localRuntimes: NodeRuntime[];
+}
+
+/** CliUsageWindow is one quota window the CLI's upstream reported. usedPercent is
+ * the upstream's own figure, a real zero included, never derived from tokens.
+ *
+ * CliUsageWindow 是 CLI 上游报告的一个额度窗口。usedPercent 是上游自己的数值，真实的零
+ * 也包括在内，从不由 token 推算。 */
+export interface CliUsageWindow {
+  name: string;
+  bucket: string;
+  usedPercent: number;
+  durationMinutes: number;
+  resetsAt: string | null;
+}
+
+/** CliUsage is the subscription quota of the CLI a service runs. It is the CLI
+ * account's shared quota, not a per-tenant figure. checkedAt is null until the
+ * Agent's first query.
+ *
+ * CliUsage 是某个服务所运行 CLI 的订阅额度。它是 CLI 账户的共享额度，不是按租户划分的
+ * 数字。checkedAt 在 Agent 首次查询之前为 null。 */
+export interface CliUsage {
+  status: string;
+  windows: CliUsageWindow[];
+  checkedAt: string | null;
+}
+
+/** TenantModelCatalog identifies Agent reports without addresses or diagnostics.
+ * TenantModelCatalog 标识 Agent 上报来源，不含地址或诊断信息。 */
+export interface TenantModelCatalog {
+  collectedAt: string;
+  partial: boolean;
+  services: { agentId: string; serviceId: string; nodeOnline: boolean; kind: string; state: string; version: string; models: RuntimeModel[]; cliUsage: CliUsage | null }[];
+}
+
+/** parseCliUsage validates the optional `cli_usage` of one service. Absent means
+ * the Agent reported no quota for it, which must not read as "no quota left".
+ *
+ * parseCliUsage 校验一个服务可选的 `cli_usage`。缺席表示 Agent 没有为它上报额度，这不能
+ * 被读成「额度已用尽」。 */
+function parseCliUsage(value: unknown): CliUsage | null {
+  if (value === undefined || value === null) return null;
+  const source = record(value);
+  return {
+    status: required(source, "status"),
+    checkedAt: optionalTimestamp(source, "checked_at"),
+    windows: list(source.windows, entry => {
+      const window = record(entry);
+      return {
+        name: required(window, "name"), bucket: text(window, "bucket"),
+        usedPercent: optionalNumber(window, "used_percent") ?? fail(), durationMinutes: count(window, "duration_minutes"),
+        resetsAt: optionalTimestamp(window, "resets_at"),
+      };
+    }),
+  };
+}
+
+/** parseTenantModels validates the tenant-facing Agent service catalog.
+ * parseTenantModels 校验面向租户的 Agent 服务目录。 */
+export function parseTenantModels(value: unknown): TenantModelCatalog {
+  const source = record(value);
+  if (!Array.isArray(source.services)) fail();
+  return {
+    collectedAt: timestamp(source, "collected_at"),
+    partial: flag(source, "partial"),
+    services: list(source.services, entry => {
+      const service = record(entry);
+      return {
+        agentId: required(service, "agent_id"), serviceId: required(service, "service_id"),
+        nodeOnline: typeof service.node_online === "boolean" ? service.node_online : fail(),
+        kind: required(service, "kind"), state: required(service, "state"), version: text(service, "version"),
+        cliUsage: parseCliUsage(service.cli_usage),
+        models: list(service.models, entry => {
+          const model = record(entry);
+          return { id: required(model, "id"), capabilities: stringMap(model, "capabilities") };
+        }),
+      };
+    }),
+  };
 }
 
 /** RuntimeModel is one model a runtime serves.
@@ -273,6 +354,7 @@ function parseReplica(value: unknown): ReplicaStatus {
     generatedAt: optionalTimestamp(source, "generated_at"),
     error: text(source, "error") || null,
     nodeCount: count(source, "node_count"),
+    localRuntimes: list(source.local_runtimes, parseRuntime),
   };
 }
 
@@ -358,6 +440,14 @@ export function parseFleetSnapshot(value: unknown): FleetSnapshot {
     nodes: list(source.nodes, parseNode),
     partial: flag(source, "partial"),
   };
+}
+
+/** parseGatewaySnapshot refuses a fleet-wide answer for a single Gateway view.
+ * parseGatewaySnapshot 拒绝用整个机群的响应呈现单个 Gateway 视图。 */
+export function parseGatewaySnapshot(value: unknown): FleetSnapshot {
+  const snapshot = parseFleetSnapshot(value);
+  if (snapshot.replicas.length !== 1) fail();
+  return snapshot;
 }
 
 /**

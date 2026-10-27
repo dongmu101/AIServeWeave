@@ -161,6 +161,16 @@ func (s *Store) ListJobArtifacts(ctx context.Context, tenantID, jobID string) ([
 	return out, translate(err)
 }
 
+// GetJobArtifact reads one artifact by its bare id, with no tenant scope —
+// see store.JobArtifacts for why.
+//
+// GetJobArtifact 按裸 id 读取一个产物，不限定租户——理由见 store.JobArtifacts。
+func (s *Store) GetJobArtifact(ctx context.Context, id string) (model.JobArtifact, error) {
+	var out model.JobArtifact
+	err := s.db.WithContext(ctx).Where("id = ?", id).Take(&out).Error
+	return out, translate(err)
+}
+
 // ListJobArtifactsBefore returns up to store.MaxExpiredJobArtifacts
 // artifacts of artifactType older than cutoff, across every tenant.
 //
@@ -181,4 +191,17 @@ func (s *Store) ListJobArtifactsBefore(ctx context.Context, artifactType string,
 // DeleteJobArtifact 移除一个产物记录。
 func (s *Store) DeleteJobArtifact(ctx context.Context, id string) error {
 	return translate(s.db.WithContext(ctx).Where("id = ?", id).Delete(&model.JobArtifact{}).Error)
+}
+
+// SumArtifactStorageBytes totals size_bytes across every artifact whose
+// bytes actually reached object storage.
+//
+// SumArtifactStorageBytes 对每个字节确已抵达对象存储的产物累加 size_bytes。
+func (s *Store) SumArtifactStorageBytes(ctx context.Context) (int64, error) {
+	var total int64
+	err := s.db.WithContext(ctx).Model(&model.JobArtifact{}).
+		Where("storage_key <> ?", "").
+		Select("COALESCE(SUM(size_bytes), 0)").
+		Scan(&total).Error
+	return total, translate(err)
 }

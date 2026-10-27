@@ -9,25 +9,21 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
-// TestRollingUpgradeKeepsAtLeastOneTunnelAvailable replaces every Gateway
-// replica one at a time — stop it, start its replacement on the same
-// address, wait for the Agent to find the replacement again — while a
-// background monitor continuously drives real chat requests through
-// whichever replica currently has a live route to the node. A rolling
-// upgrade that ever drops to zero usable tunnels is a user-visible outage;
-// this proves the Agent's independent per-replica tunnels make that
-// impossible as long as the Gateway side replaces replicas one at a time
-// rather than all together (contrast with
-// TestFaultInjectionAllReplicasKilled, which replaces them all at once and
-// is expected to have a gap).
+// TestRollingUpgradeKeepsAtLeastOneTunnelAvailable replaces three replicas
+// sequentially with the same source version. Chat probes run while each replica
+// is stopped, and a background monitor checks availability throughout the roll.
+// This exercises loopback replica replacement, not mixed-version compatibility.
+//
+// TestRollingUpgradeKeepsAtLeastOneTunnelAvailable 用同一源码版本逐个替换三个副本。
+// 每个副本停机期间均执行 Chat 探测，后台监视器同时检查整个替换过程的可用性。
+// 此测试验证回环网络下的副本替换，不代表混合版本兼容性验收。
 func TestRollingUpgradeKeepsAtLeastOneTunnelAvailable(t *testing.T) {
 	const replicaCount = 3
 	f := newFleet(t, replicaCount)
 	f.awaitReady(f.replicas...)
 
-	// active tracks, per original replica slot, whichever process currently
-	// holds that slot: the original while it is up, nil while its
-	// replacement is still starting, the replacement once it is ready.
+	// active names the live replica in each original position, or nil during replacement.
+	// active 记录每个原始位置上的存活副本，替换期间为 nil。
 	var (
 		mu     sync.Mutex
 		active = append([]*replica(nil), f.replicas[:replicaCount]...)
@@ -43,6 +39,29 @@ func TestRollingUpgradeKeepsAtLeastOneTunnelAvailable(t *testing.T) {
 		return append([]*replica(nil), active...)
 	}
 
+	serveAvailable := func(ctx context.Context) (attempts int, served bool) {
+		for _, r := range snapshot() {
+			if r == nil {
+				continue
+			}
+			if info, present := r.server.Node("mac-mini-01"); !present || !info.Live {
+				continue
+			}
+			rt := r.server.Runtime("mac-mini-01", "backend-1")
+			cctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			_, err := rt.Chat(cctx, runtime.ChatRequest{
+				Model:    "e2e-model",
+				Messages: []runtime.ChatMessage{{Role: "user", Content: "rolling"}},
+			})
+			cancel()
+			attempts++
+			if err == nil {
+				return attempts, true
+			}
+		}
+		return attempts, false
+	}
+
 	monitorCtx, stopMonitor := context.WithCancel(context.Background())
 	var (
 		monitorWG            sync.WaitGroup
@@ -52,31 +71,23 @@ func TestRollingUpgradeKeepsAtLeastOneTunnelAvailable(t *testing.T) {
 		firstFailureAt       time.Time
 		everyoneWasDownAtOne bool
 	)
+	t.Cleanup(func() {
+		stopMonitor()
+		monitorWG.Wait()
+	})
 	monitorWG.Add(1)
 	go func() {
 		defer monitorWG.Done()
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
 		for monitorCtx.Err() == nil {
-			ok := false
-			for _, r := range snapshot() {
-				if r == nil {
-					continue
-				}
-				if info, present := r.server.Node("mac-mini-01"); !present || !info.Live {
-					continue
-				}
-				rt := r.server.Runtime("mac-mini-01", "backend-1")
-				cctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-				_, err := rt.Chat(cctx, runtime.ChatRequest{
-					Model:    "e2e-model",
-					Messages: []runtime.ChatMessage{{Role: "user", Content: "rolling"}},
-				})
-				cancel()
-				attempts++
-				if err == nil {
-					ok = true
-					successes++
-					break
-				}
+			n, ok := serveAvailable(monitorCtx)
+			if monitorCtx.Err() != nil {
+				return
+			}
+			attempts += n
+			if ok {
+				successes++
 			}
 
 			now := time.Now()
@@ -89,16 +100,23 @@ func TestRollingUpgradeKeepsAtLeastOneTunnelAvailable(t *testing.T) {
 				firstFailureAt = now
 				everyoneWasDownAtOne = true
 			}
-			time.Sleep(5 * time.Millisecond)
+			select {
+			case <-monitorCtx.Done():
+				return
+			case <-ticker.C:
+			}
 		}
 	}()
 
-	// Roll the fleet: one replica down, its replacement up and ready, before
-	// moving on to the next. Never more than one out of three down at once.
+	// Probe surviving replicas before restarting the stopped replica, covering every outage window.
+	// 先探测存活副本，再重启已停机副本，确保覆盖每一次停机窗口。
 	for i, r := range f.replicas[:replicaCount] {
 		addr := r.addr
 		r.stop()
 		setActive(i, nil)
+		if attempts, served := serveAvailable(context.Background()); !served {
+			t.Fatalf("replica %s stopped: %d Chat attempts succeeded on no surviving replica, want one successful request", r.id, attempts)
+		}
 
 		replacement := f.restartReplica(r, addr)
 		awaitReplicaReady(t, replacement)
@@ -107,6 +125,7 @@ func TestRollingUpgradeKeepsAtLeastOneTunnelAvailable(t *testing.T) {
 
 	stopMonitor()
 	monitorWG.Wait()
+	longestGap = max(longestGap, time.Since(lastSuccess))
 
 	if everyoneWasDownAtOne {
 		t.Fatalf("no replica served a request at %s during the rolling upgrade; every tunnel was down at once",
@@ -118,6 +137,6 @@ func TestRollingUpgradeKeepsAtLeastOneTunnelAvailable(t *testing.T) {
 	if longestGap > waitTimeout {
 		t.Errorf("longest gap between successful requests was %v, want well under %v", longestGap, waitTimeout)
 	}
-	t.Logf("rolling upgrade: %d replicas replaced one at a time, %d/%d monitor requests served, longest gap between successes %v",
+	t.Logf("same-source rolling replacement: %d replicas and stopped-replica probes completed, %d/%d monitor requests served, longest gap between successes %v",
 		replicaCount, successes, attempts, longestGap)
 }

@@ -32,6 +32,108 @@ func newServer(t *testing.T, cfg httpapi.Config) (*httptest.Server, *gatewaytest
 	return srv, h
 }
 
+// TestChatCompletionsAcceptsImageContent proves an OpenAI-shaped
+// content-array message (text + image_url parts) crosses the whole
+// pipeline — httpapi's chatContentJSON/toRuntimeContentParts,
+// runtime.ChatMessage.ContentParts, tunnelwire's proto codec, and back out
+// through a fake node's own tunnelwire decode (STATUS.md's P2
+// ChatMessage.Content structured rework) — rather than only asserting on a
+// wire shape near the front door. A pure-text content array (the
+// overwhelmingly common shape before this feature existed) is covered by
+// TestChatCompletionsNonStreaming's plain string case behaving identically.
+func TestChatCompletionsAcceptsImageContent(t *testing.T) {
+	srv, h := newServer(t, httpapi.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandlerEchoingParts)
+
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(
+		`{"model":"qwen3:8b","messages":[{"role":"user","content":[
+			{"type":"text","text":"what is this"},
+			{"type":"image_url","image_url":{"url":"https://example.com/cat.png","detail":"low"}}
+		]}]}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	want := "text= text=what is this image=https://example.com/cat.png"
+	if len(body.Choices) != 1 || body.Choices[0].Message.Content != want {
+		t.Errorf("choices = %+v, want one choice with content %q", body.Choices, want)
+	}
+}
+
+// TestChatCompletionsRejectsUnsupportedContentPart proves a content part
+// type this Gateway does not carry through to a backend on this front door
+// (e.g. OpenAI Responses' "input_file" — Chat Completions itself defines no
+// file block, see responses.go for the front door that does) is rejected
+// by name rather than silently dropped.
+func TestChatCompletionsRejectsUnsupportedContentPart(t *testing.T) {
+	srv, h := newServer(t, httpapi.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler)
+
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(
+		`{"model":"qwen3:8b","messages":[{"role":"user","content":[
+			{"type":"input_file","input_file":{"file_data":"...","filename":"a.pdf"}}
+		]}]}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", resp.StatusCode)
+	}
+}
+
+// TestChatCompletionsAcceptsAudioContent proves an OpenAI-shaped
+// content-array message with an "input_audio" part (STATUS.md's P2
+// multimodal input, following on the earlier image_url delivery) crosses
+// the whole pipeline the same way TestChatCompletionsAcceptsImageContent
+// already proves for images.
+func TestChatCompletionsAcceptsAudioContent(t *testing.T) {
+	srv, h := newServer(t, httpapi.Config{})
+	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandlerEchoingParts)
+
+	resp, err := http.Post(srv.URL+"/v1/chat/completions", "application/json", strings.NewReader(
+		`{"model":"qwen3:8b","messages":[{"role":"user","content":[
+			{"type":"text","text":"transcribe this"},
+			{"type":"input_audio","input_audio":{"data":"YmFzZTY0","format":"wav"}}
+		]}]}`))
+	if err != nil {
+		t.Fatalf("POST: %v", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want 200", resp.StatusCode)
+	}
+
+	var body struct {
+		Choices []struct {
+			Message struct {
+				Content string `json:"content"`
+			} `json:"message"`
+		} `json:"choices"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	want := "text= text=transcribe this audio=YmFzZTY0/wav"
+	if len(body.Choices) != 1 || body.Choices[0].Message.Content != want {
+		t.Errorf("choices = %+v, want one choice with content %q", body.Choices, want)
+	}
+}
+
 func TestChatCompletionsNonStreaming(t *testing.T) {
 	srv, h := newServer(t, httpapi.Config{})
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler)

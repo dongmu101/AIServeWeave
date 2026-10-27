@@ -1,0 +1,152 @@
+[
+  {
+    "name": "default",
+    "saved": "",
+    "accept": "",
+    "want": "zh-CN"
+  },
+  {
+    "name": "saved de",
+    "saved": "de-DE",
+    "accept": "fr",
+    "want": "de-DE"
+  },
+  {
+    "name": "invalid cookie",
+    "saved": "../../xx",
+    "accept": "ja-JP",
+    "want": "ja-JP"
+  },
+  {
+    "name": "noncanonical cookie",
+    "saved": "en",
+    "accept": "de",
+    "want": "de-DE"
+  },
+  {
+    "name": "script traditional",
+    "saved": "",
+    "accept": "zh-Hant-HK",
+    "want": "zh-TW"
+  },
+  {
+    "name": "script simplified wins region",
+    "saved": "",
+    "accept": "zh-Hans-HK",
+    "want": "zh-CN"
+  },
+  {
+    "name": "traditional region",
+    "saved": "",
+    "accept": "zh-HK",
+    "want": "zh-TW"
+  },
+  {
+    "name": "traditional macao",
+    "saved": "",
+    "accept": "zh-MO",
+    "want": "zh-TW"
+  },
+  {
+    "name": "simplified singapore",
+    "saved": "",
+    "accept": "zh-SG",
+    "want": "zh-CN"
+  },
+  {
+    "name": "generic chinese",
+    "saved": "",
+    "accept": "zh",
+    "want": "zh-CN"
+  },
+  {
+    "name": "english regional",
+    "saved": "",
+    "accept": "en-GB",
+    "want": "en-US"
+  },
+  {
+    "name": "japanese",
+    "saved": "",
+    "accept": "ja",
+    "want": "ja-JP"
+  },
+  {
+    "name": "korean",
+    "saved": "",
+    "accept": "ko",
+    "want": "ko-KR"
+  },
+  {
+    "name": "german",
+    "saved": "",
+    "accept": "de-AT",
+    "want": "de-DE"
+  },
+  {
+    "name": "french",
+    "saved": "",
+    "accept": "fr-CA",
+    "want": "fr-FR"
+  },
+  {
+    "name": "spanish",
+    "saved": "",
+    "accept": "es-MX",
+    "want": "es-ES"
+  },
+  {
+    "name": "weighted",
+    "saved": "",
+    "accept": "en;q=0.2, fr;q=0.9",
+    "want": "fr-FR"
+  },
+  {
+    "name": "stable tie",
+    "saved": "",
+    "accept": "ja;q=0.8,de;q=0.8",
+    "want": "ja-JP"
+  },
+  {
+    "name": "disabled language",
+    "saved": "",
+    "accept": "en;q=0,zh-Hant-HK;q=0.8,de;q=0.7",
+    "want": "zh-TW"
+  },
+  {
+    "name": "bad weight",
+    "saved": "",
+    "accept": "en;q=oops,de;q=0.5",
+    "want": "de-DE"
+  },
+  {
+    "name": "weight too high",
+    "saved": "",
+    "accept": "en;q=1.1,ko;q=1",
+    "want": "ko-KR"
+  },
+  {
+    "name": "case insensitive header",
+    "saved": "",
+    "accept": "EN-us",
+    "want": "en-US"
+  },
+  {
+    "name": "wildcard ignored",
+    "saved": "",
+    "accept": "*,es;q=0.5",
+    "want": "es-ES"
+  },
+  {
+    "name": "unsupported",
+    "saved": "",
+    "accept": "ru,ar",
+    "want": "zh-CN"
+  },
+  {
+    "name": "duplicate weight rejected",
+    "saved": "",
+    "accept": "en;q=0.9;q=0.8,de",
+    "want": "de-DE"
+  }
+]

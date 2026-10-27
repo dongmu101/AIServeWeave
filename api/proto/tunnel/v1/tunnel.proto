@@ -327,6 +327,25 @@ enum Operation {
   OPERATION_ARTIFACT_OPEN = 9;
   OPERATION_ARTIFACT_LIST = 10;
   OPERATION_INPUT_UPLOAD = 11;
+  OPERATION_AUDIO_TRANSCRIBE = 12;       // transcription and translation share one operation; AudioTranscriptionRequest.task selects
+  OPERATION_RERANK = 13;
+  OPERATION_MESSAGES = 14;             // native Anthropic Messages events, not HTTP proxying
+  OPERATION_IMAGE_GENERATE = 15;       // one generated image: ImageGenerateEvent meta first, then bounded byte chunks
+}
+
+// MessagesRequest preserves the native inference document, validated by the
+// local Messages adapter. It cannot carry an endpoint, headers or CLI settings.
+// tenant_id/key_id are identifiers from Gateway authentication, never credentials.
+message MessagesRequest {
+  string model = 1;
+  string tenant_id = 2;
+  string key_id = 3;
+  bytes messages_json = 4;
+}
+
+// MessagesEvent contains exactly one bounded native SSE data document.
+message MessagesEvent {
+  bytes event_json = 1;
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose
@@ -395,6 +414,10 @@ message AgentControl {
     RuntimeStatus status = 3;           // mirror of runtime.Manager.Snapshot()
     Draining draining = 4;              // graceful shutdown notice
     Pong pong = 5;
+    ModelPullReport model_pull = 6;     // STATUS.md P2 model distribution subtask 2
+    ComfyUIManagedReport comfyui_managed = 7; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
+    AgentUpgradeReport agent_upgrade = 8; // STATUS.md P2 Agent auto-upgrade subtask 1
+    CLIUsageReport cli_usage = 9;       // credential-free CLI subscription quota snapshot
   }
 }
 
@@ -407,6 +430,10 @@ message GatewayControl {
     GatewayRoster roster = 5;
     Shutdown shutdown = 6;
     Ping ping = 7;
+    ModelPullTrigger model_pull_trigger = 8; // STATUS.md P2 model distribution subtask 2
+    ComfyUIManagedAction comfyui_managed_action = 9; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
+    ComfyUIManagedCustomNodeInstallTrigger comfyui_managed_custom_node_install = 10; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 4
+    AgentUpgradeAction agent_upgrade_action = 11; // STATUS.md P2 Agent auto-upgrade subtask 1
   }
 }
 
@@ -548,6 +575,264 @@ enum ConfigAction {
   CONFIG_ACTION_REMOVE = 3;
 }
 
+// ModelPullTrigger asks the Agent to start pulling model artifacts it
+// already knows about from its local manifest (STATUS.md's P2 model
+// distribution subtask 1), referenced only by name. It can never carry a
+// URL or any other fetch instruction: the load-bearing rule at the top of
+// this file forbids a message that expresses "fetch this URL", and a
+// replica whose trust were compromised must not be able to hand the Agent
+// an arbitrary source.
+//
+// ModelPullTrigger 要求 Agent 开始拉取它本地清单（STATUS.md P2 模型分发子
+// 任务一）里已经认识的制品，只按名字引用。它永远不能携带 URL 或任何其他取
+// 数指令：本文件头部的 load-bearing 规则禁止表达"fetch this URL"的消息，一
+// 个信任被攻破的副本不能借此让 Agent 访问任意来源。
+message ModelPullTrigger {
+  repeated string names = 1;
+}
+
+// ModelPullReport mirrors the Agent-local Puller's current status for every
+// name it knows about — every entry in its local manifest, whether or not a
+// ModelPullTrigger has ever named it. It carries no source URL, matching
+// ModelPullTrigger's restriction in the other direction, and no raw error
+// text: ModelPullStatus.reason is a closed vocabulary so a transport error
+// that happens to embed spec.SourceURL (a presigned URL can carry a
+// signature token in its query string) never crosses the tunnel.
+//
+// ModelPullReport 镜像 Agent 本地 Puller 当前已知的每一个名字的状态——本地
+// 清单里的每一条，无论 ModelPullTrigger 是否点过它的名。它不携带来源
+// URL，与 ModelPullTrigger 在另一个方向上的限制对称；也不携带原始错误文
+// 本：ModelPullStatus.reason 是封闭词表，这样一个恰好把 spec.SourceURL
+// （预签名 URL 的查询串可能带签名 token）编进错误文本的传输错误，永远不
+// 会跨越隧道。
+message ModelPullReport {
+  repeated ModelPullStatus pulls = 1;
+}
+
+enum ModelPullState {
+  MODEL_PULL_STATE_UNSPECIFIED = 0;   // known to the manifest, never triggered
+  MODEL_PULL_STATE_PENDING = 1;       // queued behind another in-flight pull
+  MODEL_PULL_STATE_DOWNLOADING = 2;
+  MODEL_PULL_STATE_DONE = 3;
+  MODEL_PULL_STATE_FAILED = 4;
+}
+
+enum ModelPullFailureReason {
+  MODEL_PULL_FAILURE_REASON_UNSPECIFIED = 0;
+  MODEL_PULL_FAILURE_REASON_UNKNOWN_NAME = 1;        // not in the Agent's local manifest
+  MODEL_PULL_FAILURE_REASON_INVALID_SPEC = 2;        // manifest entry itself malformed
+  MODEL_PULL_FAILURE_REASON_NOT_ALLOWLISTED = 3;     // source_url outside -model-pull-allowlist
+  MODEL_PULL_FAILURE_REASON_QUOTA_EXCEEDED = 4;
+  MODEL_PULL_FAILURE_REASON_FETCH_FAILED = 5;        // transport error, detail stays in the Agent's own log
+  MODEL_PULL_FAILURE_REASON_UNEXPECTED_STATUS = 6;   // non-200/206 HTTP response
+  MODEL_PULL_FAILURE_REASON_CHECKSUM_MISMATCH = 7;
+  MODEL_PULL_FAILURE_REASON_STORAGE_ERROR = 8;       // local disk write/rename failure
+  MODEL_PULL_FAILURE_REASON_OLLAMA_UNCONFIGURED = 9; // kind=ollama spec, no -ollama-url configured
+  MODEL_PULL_FAILURE_REASON_OLLAMA_PULL_FAILED = 10; // the Ollama server itself reported an error
+  MODEL_PULL_FAILURE_REASON_LEDGER_QUOTA_EXCEEDED = 11; // cross-restart cumulative ledger has no room left
+  MODEL_PULL_FAILURE_REASON_DISK_SPACE_LOW = 12;        // target filesystem free space below the configured margin
+}
+
+message ModelPullStatus {
+  string name = 1;
+  ModelPullState state = 2;
+  int64 bytes_downloaded = 3;
+  int64 bytes_total = 4;                 // 0 when unknown (Spec.SizeBytes was 0)
+  ModelPullFailureReason reason = 5;     // set only when state == FAILED
+  int64 updated_unix_ms = 6;
+}
+
+// ComfyUIManagedAction asks the Agent to apply a lifecycle action to the one
+// Managed ComfyUI instance it already declared via its own local flags
+// (STATUS.md's P2 ComfyUI Managed Docker deployment, subtask one). It never
+// carries an image, mount path, or any other spec field — those stay
+// entirely local to the Agent, the same load-bearing reason ModelPullTrigger
+// never carries a URL: an operator who wants a new image version pinned
+// still edits this node's own flags and triggers RESTART, never hands the
+// image name to the Gateway to relay.
+//
+// ComfyUIManagedAction 要求 Agent 对它已经通过本地 flag 声明的那一个 Managed
+// ComfyUI 实例（STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务一）施加一个
+// 生命周期动作。它永远不携带镜像名、挂载路径或任何其他 spec 字段——这些完全
+// 留在 Agent 本地，与 ModelPullTrigger 从不携带 URL 是同一条 load-bearing 理
+// 由：运维想固定新的镜像版本，仍然要改本节点自己的 flag 再触发 RESTART，从不
+// 是把镜像名交给 Gateway 转发。
+message ComfyUIManagedAction {
+  ComfyUIManagedActionType action = 1;
+}
+
+enum ComfyUIManagedActionType {
+  COMFYUI_MANAGED_ACTION_UNSPECIFIED = 0;
+  COMFYUI_MANAGED_ACTION_START = 1;
+  COMFYUI_MANAGED_ACTION_STOP = 2;
+  COMFYUI_MANAGED_ACTION_RESTART = 3;
+}
+
+// ComfyUIManagedReport mirrors the Agent-local Supervisor's current view of
+// its one Managed ComfyUI container: empty when Managed mode is disabled on
+// this Agent. It reports container-lifecycle state only — ComfyUI protocol
+// health for an already-registered instance keeps flowing through the
+// existing RuntimeStatus/RuntimeSnapshot path (runtime.Manager.Add
+// registers a Managed instance exactly like an External one); this message
+// covers only the gap RuntimeStatus cannot see: before the container is
+// ever registered, or after it has been deregistered.
+//
+// ComfyUIManagedReport 镜像 Agent 本地 Supervisor 对它那一个 Managed ComfyUI
+// 容器的当前视图：本 Agent 未启用 Managed 模式时为空。它只报告容器生命周期状
+// 态——一个已注册实例的 ComfyUI 协议健康状况仍然经既有的
+// RuntimeStatus/RuntimeSnapshot 通道汇报（runtime.Manager.Add 注册 Managed
+// 实例的方式与 External 实例完全相同）；这条消息只覆盖 RuntimeStatus 看不到
+// 的空档：容器从未被注册之前，或被取消注册之后。
+message ComfyUIManagedReport {
+  repeated ComfyUIManagedStatus instances = 1;
+}
+
+message ComfyUIManagedStatus {
+  string container_name = 1;
+  ComfyUIManagedState state = 2;
+  int64 updated_unix_ms = 3;
+  repeated ComfyUIManagedCustomNode custom_nodes = 4; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 4
+}
+
+enum ComfyUIManagedState {
+  COMFYUI_MANAGED_STATE_UNSPECIFIED = 0;
+  COMFYUI_MANAGED_STATE_PENDING = 1;
+  COMFYUI_MANAGED_STATE_STARTING = 2;
+  COMFYUI_MANAGED_STATE_RUNNING = 3;
+  COMFYUI_MANAGED_STATE_STOPPED = 4;
+  COMFYUI_MANAGED_STATE_FAILED = 5;
+}
+
+// ComfyUIManagedCustomNodeInstallTrigger asks the Agent to install one
+// custom node it already knows about from its local allowlist (STATUS.md's
+// P2 ComfyUI Managed Docker deployment, subtask 4), referenced only by
+// name. It can never carry a git repository URL: the load-bearing rule at
+// the top of this file forbids a message that expresses "fetch this URL",
+// the same reason ModelPullTrigger never carries one.
+//
+// ComfyUIManagedCustomNodeInstallTrigger 要求 Agent 安装它本地允许列表
+// （STATUS.md 的 P2 ComfyUI Managed Docker 部署子任务四）里已经认识的一个
+// 自定义节点，只按名字引用。它永远不能携带 git 仓库 URL：本文件头部的
+// load-bearing 规则禁止表达"fetch this URL"的消息，与 ModelPullTrigger 从不
+// 携带 URL 同一条理由。
+message ComfyUIManagedCustomNodeInstallTrigger {
+  string name = 1;
+}
+
+// AgentUpgradeAction asks the Agent to CHECK, UPGRADE, or ROLLBACK against a
+// version it already knows about from its local manifest (STATUS.md's P2
+// Agent auto-upgrade), referenced only by version string. It can never
+// carry a download URL, a signature, or anything else that would let it be
+// read as "fetch this URL" or "run this command": the load-bearing rule at
+// the top of this file forbids both, and this message's eventual payload is
+// code that will be exec'd, which makes that rule harder here than for
+// ModelPullTrigger or ComfyUIManagedAction — the Agent resolves
+// target_version against its own manifest (download URL, SHA256, and the
+// manifest-wide signature all stay local) and never asks the Gateway or
+// control plane where to fetch anything. Subtask 1 implemented CHECK only;
+// subtask 2 adds UPGRADE's full chain (download, verify, drain, self-exec).
+// ROLLBACK is still accepted on the wire but always answered with
+// FAILED/NOT_IMPLEMENTED until a later subtask.
+//
+// AgentUpgradeAction 要求 Agent 针对它本地清单（STATUS.md 的 P2 Agent 自动
+// 升级）里已经认识的一个版本执行 CHECK、UPGRADE 或 ROLLBACK，只按版本号引
+// 用。它永远不能携带下载 URL、签名或任何可能被读作"fetch this URL"或"run
+// this command"的字段：本文件头部的 load-bearing 规则同时禁止这两者，而这
+// 条消息最终的载荷是会被 exec 的代码本身，这让这条规则在这里比
+// ModelPullTrigger 或 ComfyUIManagedAction 更硬——Agent 自己拿 target_version
+// 去对本地清单解析（下载 URL、SHA256、整份清单的签名都留在本地），从不向
+// Gateway 或控制面询问该去哪里获取。子任务一只实现了 CHECK；子任务二补上
+// UPGRADE 的完整链路（下载、校验、排空、自我替换）。ROLLBACK 在协议上仍被
+// 接受，但要到后续子任务前都只会得到 FAILED/NOT_IMPLEMENTED 的回答。
+message AgentUpgradeAction {
+  AgentUpgradeActionType action = 1;
+  // target_version must name an entry in the Agent's local manifest for
+  // UPGRADE/ROLLBACK; it may be empty for CHECK.
+  string target_version = 2;
+}
+
+enum AgentUpgradeActionType {
+  AGENT_UPGRADE_ACTION_UNSPECIFIED = 0;
+  AGENT_UPGRADE_ACTION_CHECK = 1;
+  AGENT_UPGRADE_ACTION_UPGRADE = 2;
+  AGENT_UPGRADE_ACTION_ROLLBACK = 3;
+}
+
+// AgentUpgradeReport mirrors the Agent-local Checker's current view of its
+// own upgrade process. Unlike ModelPullReport or ComfyUIManagedReport this
+// is a single status, not a repeated field: an Agent has exactly one
+// running version, not one per named thing.
+//
+// AgentUpgradeReport 镜像 Agent 本地 Checker 对自己升级流程的当前视图。与
+// ModelPullReport 或 ComfyUIManagedReport 不同，这是单个状态而不是
+// repeated 字段：一个 Agent 只有一个正在运行的版本，不是按名字各一份。
+message AgentUpgradeReport {
+  string current_version = 1;
+  AgentUpgradeState state = 2;
+  AgentUpgradeFailureReason reason = 3; // set only when state == FAILED
+  int64 updated_unix_ms = 4;
+}
+
+enum AgentUpgradeState {
+  AGENT_UPGRADE_STATE_UNSPECIFIED = 0; // maps to StateIdle
+  AGENT_UPGRADE_STATE_CHECKING = 1;
+  AGENT_UPGRADE_STATE_DOWNLOADING = 2;
+  AGENT_UPGRADE_STATE_VERIFYING = 3;
+  AGENT_UPGRADE_STATE_DRAINING = 4;
+  AGENT_UPGRADE_STATE_RESTARTING = 5; // reported just before exec; a successful exec never reports again, it replaces this process
+  AGENT_UPGRADE_STATE_FAILED = 6;
+}
+
+enum AgentUpgradeFailureReason {
+  AGENT_UPGRADE_FAILURE_REASON_UNSPECIFIED = 0;
+  AGENT_UPGRADE_FAILURE_REASON_UNKNOWN_VERSION = 1;    // target_version not in the Agent's local manifest
+  AGENT_UPGRADE_FAILURE_REASON_NOT_IMPLEMENTED = 2;    // action is ROLLBACK, which has no execution path yet
+  AGENT_UPGRADE_FAILURE_REASON_DOWNLOAD_FAILED = 3;    // fetching or storing the binary failed; raw error text never leaves the Agent
+  AGENT_UPGRADE_FAILURE_REASON_VERIFICATION_FAILED = 4; // downloaded bytes' SHA256 does not match the signed manifest entry
+  AGENT_UPGRADE_FAILURE_REASON_EXEC_FAILED = 5;        // syscall.Exec itself failed; the old process is still running
+}
+
+// CLIUsageReport is the Agent's credential-free view of the subscription
+// quota of the locally declared Codex / Claude Code CLIs. It carries only the
+// percentages and timestamps the upstream reported: no account name, token or
+// credential, and no token-count estimate.
+//
+// CLIUsageReport 是 Agent 对本机已声明的 Codex / Claude Code CLI 订阅额度的
+// 不含凭据视图，只携带上游报告的百分比与时间戳：不含账户名、token 或任何凭据，
+// 也不含 token 数量推算值。
+message CLIUsageReport {
+  repeated CLIUsageAccount accounts = 1;
+}
+
+// CLIUsageAccount is one CLI's quota. kind is the runtime kind ("codex" or
+// "claude"); status is one of pending, ready, unauthorized, unavailable, error.
+message CLIUsageAccount {
+  string kind = 1;
+  string status = 2;
+  repeated CLIUsageWindow windows = 3;
+  int64 checked_unix_ms = 4; // 0 until the first query attempt
+}
+
+// CLIUsageWindow is one upstream-reported quota window.
+message CLIUsageWindow {
+  string name = 1;
+  string bucket = 2;
+  double used_percent = 3;
+  int64 duration_minutes = 4; // 0 means the upstream did not report it
+  int64 resets_unix_ms = 5;
+}
+
+// ComfyUIManagedCustomNode is one custom node this Agent found installed
+// under its Managed container's custom-nodes directory, as read back from
+// the container rather than from the allowlist that named it.
+//
+// ComfyUIManagedCustomNode 是本 Agent 在其 Managed 容器自定义节点目录下发现
+// 的一个已安装节点，是从容器里读回的，而不是来自点名它的允许列表。
+message ComfyUIManagedCustomNode {
+  string name = 1;
+  string version = 2;
+}
+
 // RuntimeSpec mirrors runtime.Config with one deliberate difference: there is
 // no api_key field. The control plane names a secret, the Agent resolves it
 // locally, and a compromised Gateway therefore learns no credentials.
@@ -612,6 +897,12 @@ message HealthReport {
   google.protobuf.Duration latency = 2;
   google.protobuf.Timestamp checked_at = 3;
   string error_summary = 4;             // already sanitized
+  // queue_running/queue_pending are ComfyUI-only occupancy signals (STATUS.md's
+  // P2 realtime-utilization subtask); every other runtime kind leaves both 0,
+  // which the scheduler must treat the same as "not reported", not "confirmed
+  // idle".
+  int32 queue_running = 5;
+  int32 queue_pending = 6;
 }
 
 message Discovery {
@@ -633,6 +924,9 @@ message CapabilityEvidence {
 message Model {
   string id = 1;
   map<string, CapabilityEvidence> capabilities = 2;
+  string display_name = 3;
+  // One-based backend catalogue position; zero preserves ID ordering.
+  uint32 display_order = 4;
 }
 
 // ModelList is the LIST_MODELS response payload; protobuf has no top-level
@@ -669,6 +963,47 @@ message ChatMessage {
   string name = 3;
   string tool_call_id = 4;
   repeated ToolCall tool_calls = 5;
+
+  // content_parts carries a multi-part message body (text mixed with
+  // images) for the vision-capable OpenAI-compatible content-array shape
+  // (STATUS.md's P2 ChatMessage.Content structured rework). Empty for a
+  // text-only message, which stays in content above — the two are never
+  // both non-empty on the same message.
+  repeated ContentPart content_parts = 6;
+}
+
+// ContentPart is one piece of ChatMessage.content_parts: a text run, an
+// image reference, an inline audio payload, or an inline file/document
+// reference.
+message ContentPart {
+  string type = 1;                      // "text", "image_url", "input_audio", or "file"
+  string text = 2;                      // set when type == "text"
+  ContentImageURL image_url = 3;        // set when type == "image_url"
+  ContentAudio input_audio = 4;         // set when type == "input_audio"
+  ContentFile file = 5;                 // set when type == "file"
+}
+
+// ContentImageURL is an image content part's source. url may be an http(s)
+// URL or a data: URI carrying inline base64 image bytes; this contract does
+// not distinguish them, the backend does.
+message ContentImageURL {
+  string url = 1;
+  string detail = 2;                    // optional: "auto" | "low" | "high"
+}
+
+// ContentAudio is an "input_audio" content part's inline payload: base64
+// bytes plus a format string, mirroring OpenAI's own input_audio shape.
+message ContentAudio {
+  string data = 1;
+  string format = 2;                    // e.g. "wav" or "mp3"
+}
+
+// ContentFile is a "file" content part's source: an inline document. url may
+// be an http(s) URL or a data: URI, the same convention as
+// ContentImageURL.url.
+message ContentFile {
+  string url = 1;
+  string filename = 2;                  // optional
 }
 
 message ToolCall {
@@ -796,6 +1131,7 @@ message WorkflowStatus {
   google.protobuf.Timestamp started_at = 3;
   google.protobuf.Timestamp finished_at = 4;
   string error_summary = 5;             // already sanitized
+  bool out_of_memory = 6;               // only ever true alongside state == "failed"
 }
 
 message ArtifactRef {
@@ -845,4 +1181,87 @@ message InputUploadResult {
   // which may differ from the requested filename on a collision). It is
   // meaningful only to the runtime adapter that produced it.
   string input_ref = 1;
+}
+
+// AudioTranscriptionRequest is the OPERATION_AUDIO_TRANSCRIBE request
+// payload's metadata (STATUS.md's P2). Like InputUploadRequest, it carries
+// no audio bytes: they follow as DataChunks and RequestEnd closes them, the
+// same framing WORKFLOW_SUBMIT and INPUT_UPLOAD already use for a body too
+// large for RequestHeaders.payload.
+message AudioTranscriptionRequest {
+  string model = 1;
+  string filename = 2;                  // caller-supplied name; never interpreted as a filesystem path
+  AudioTask task = 3;
+  optional string language = 4;         // meaningful only for AUDIO_TASK_TRANSCRIBE
+  optional string prompt = 5;
+  optional double temperature = 6;
+  string response_format = 7;           // "text" or "json"; empty means "json"
+}
+
+// AudioTask selects which of the two OpenAI-compatible audio endpoints a
+// AudioTranscriptionRequest targets.
+enum AudioTask {
+  AUDIO_TASK_UNSPECIFIED = 0;
+  AUDIO_TASK_TRANSCRIBE = 1;
+  AUDIO_TASK_TRANSLATE = 2;
+}
+
+// AudioTranscriptionResponse is the OPERATION_AUDIO_TRANSCRIBE response
+// payload. language and duration are best-effort: a backend that does not
+// report them leaves both absent.
+message AudioTranscriptionResponse {
+  string text = 1;
+  string language = 2;
+  optional double duration = 3;
+}
+
+// RerankRequest is the OPERATION_RERANK request payload (STATUS.md's P2).
+message RerankRequest {
+  string model = 1;
+  string query = 2;
+  repeated string documents = 3;
+  optional int64 top_n = 4;
+}
+
+message RerankResponse {
+  string model = 1;
+  repeated RerankResult results = 2;
+}
+
+// RerankResult scores one document from the request's documents list.
+// index is that document's position in the request, not a rank.
+message RerankResult {
+  int64 index = 1;
+  double score = 2;
+}
+
+// ImageGenerateRequest is the OPERATION_IMAGE_GENERATE request payload. It
+// carries only a model ID and a prompt: no URL, path, header or credential,
+// so it cannot make an Agent read or fetch anything it was not configured
+// to. tenant_id/key_id are identifiers from Gateway authentication, never
+// credentials.
+message ImageGenerateRequest {
+  string model = 1;
+  string prompt = 2;
+  string tenant_id = 3;
+  string key_id = 4;
+}
+
+// ImageGenerateEvent is one OPERATION_IMAGE_GENERATE stream event. The first
+// event of a response carries meta and nothing else; every later event
+// carries one bounded chunk of the image bytes, in order.
+message ImageGenerateEvent {
+  oneof body {
+    ImageGenerateMeta meta = 1;
+    bytes data = 2;
+  }
+}
+
+// ImageGenerateMeta describes the image whose bytes follow. size is the
+// exact byte count the data events add up to.
+message ImageGenerateMeta {
+  string content_type = 1;
+  int64 size = 2;
+  string revised_prompt = 3;
+  Usage usage = 4;
 }

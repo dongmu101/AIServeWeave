@@ -47,6 +47,7 @@ type Runtime struct {
 	client  *Client
 	limiter *runtime.Limiter
 	events  *eventMux
+	metrics *recorder
 
 	discovery atomic.Pointer[runtime.Discovery]
 	closed    atomic.Bool
@@ -125,6 +126,7 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 		client:    client,
 		limiter:   runtime.NewLimiter(cfg.MaxConcurrent),
 		events:    newEventMux(client, deps.WSDialer, clock, logger, newClientID()),
+		metrics:   newRecorder(deps.Metrics),
 		submitted: make(map[string]runtime.WorkflowRun),
 	}, nil
 }
@@ -176,7 +178,15 @@ func (r *Runtime) Probe(ctx context.Context) (runtime.ProbeResult, error) {
 }
 
 // Health calls GET /system_stats, which answers from process state without
-// queueing work, so a server busy rendering still reports promptly.
+// queueing work, so a server busy rendering still reports promptly. On a
+// successful liveness check it also reads GET /queue for the occupancy
+// signal described on HealthReport; that second call is best-effort and
+// never turns a live server into an unhealthy report.
+//
+// Health 调用 GET /system_stats，它从进程状态直接作答、不排队等待，因此即便服务器
+// 正忙于渲染也能及时响应。存活性确认成功后，它还会调用一次 GET /queue 获取
+// HealthReport 文档注释里说的占用信号；这第二次调用是尽力而为的，绝不会把一个存活
+// 的服务器变成不健康的报告。
 func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 	if err := r.checkOpen("health"); err != nil {
 		return runtime.HealthReport{State: runtime.StateClosed, CheckedAt: r.clock.Now()}, err
@@ -195,11 +205,34 @@ func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 			ErrorSummary: errorSummary(err),
 		}, err
 	}
+	running, pending := r.queueOccupancy(ctx)
 	return runtime.HealthReport{
-		State:     runtime.StateHealthy,
-		Latency:   checkedAt.Sub(start),
-		CheckedAt: checkedAt,
+		State:        runtime.StateHealthy,
+		Latency:      checkedAt.Sub(start),
+		CheckedAt:    checkedAt,
+		QueueRunning: running,
+		QueuePending: pending,
 	}, nil
+}
+
+// queueOccupancy reads the current queue depth for the scheduler's P2
+// realtime-utilization ranking signal (STATUS.md). A failure here must not
+// fail the health check itself — liveness is already established by the
+// SystemStats call above — so it is logged and reported as 0, the same value
+// an unreported runtime kind always carries.
+//
+// queueOccupancy 为调度器的 P2 实时利用率排序信号（STATUS.md）读取当前队列深度。
+// 这里失败不能让健康检查本身失败——存活性已经由上面的 SystemStats 调用确认——因此
+// 只记录日志并报告为 0，与未上报该信号的运行时种类恒为的值相同。
+func (r *Runtime) queueOccupancy(ctx context.Context) (running, pending int) {
+	queue, err := r.client.Queue(ctx, "health")
+	if err != nil {
+		r.logger.Warn("comfyui health check could not read queue depth",
+			"runtime_id", r.cfg.ID, "error", errorSummary(err))
+		return 0, 0
+	}
+	r.metrics.Queue(r.cfg.ID, len(queue.RunningIDs), len(queue.PendingIDs))
+	return len(queue.RunningIDs), len(queue.PendingIDs)
 }
 
 // Discover reports the running version, the node types the server can
@@ -406,6 +439,7 @@ func (r *Runtime) Status(ctx context.Context, runID string) (runtime.WorkflowSta
 	if err != nil {
 		return runtime.WorkflowStatus{}, err
 	}
+	r.metrics.Queue(r.cfg.ID, len(queue.RunningIDs), len(queue.PendingIDs))
 	if queue.isRunning(runID) {
 		return runtime.WorkflowStatus{State: runtime.WorkflowRunning}, nil
 	}
@@ -426,7 +460,7 @@ func (r *Runtime) Status(ctx context.Context, runID string) (runtime.WorkflowSta
 // success or failure, and the message log decides whether a failure was
 // actually an interruption — ComfyUI records both as a non-success run.
 func statusFromHistory(entry historyEntry) runtime.WorkflowStatus {
-	interrupted, summary := scanHistoryMessages(entry.Status.Messages)
+	interrupted, summary, outOfMemory := scanHistoryMessages(entry.Status.Messages)
 
 	switch {
 	case interrupted:
@@ -437,7 +471,7 @@ func statusFromHistory(entry historyEntry) runtime.WorkflowStatus {
 		if summary == "" {
 			summary = "the workflow failed; see the run's history for the failing node"
 		}
-		return runtime.WorkflowStatus{State: runtime.WorkflowFailed, ErrorSummary: summary}
+		return runtime.WorkflowStatus{State: runtime.WorkflowFailed, ErrorSummary: summary, OutOfMemory: outOfMemory}
 	case !entry.Status.Completed:
 		return runtime.WorkflowStatus{State: runtime.WorkflowRunning}
 	default:
@@ -447,7 +481,7 @@ func statusFromHistory(entry historyEntry) runtime.WorkflowStatus {
 
 // scanHistoryMessages walks the [event_name, payload] pairs a history entry
 // carries, looking only for the two that change the normalized state.
-func scanHistoryMessages(messages [][]json.RawMessage) (interrupted bool, summary string) {
+func scanHistoryMessages(messages [][]json.RawMessage) (interrupted bool, summary string, outOfMemory bool) {
 	for _, message := range messages {
 		if len(message) == 0 {
 			continue
@@ -461,14 +495,31 @@ func scanHistoryMessages(messages [][]json.RawMessage) (interrupted bool, summar
 			interrupted = true
 		case "execution_error":
 			if len(message) > 1 {
-				summary = truncate(errorMessageFromHistory(message[1]), maxErrorMessageLen)
+				var oom bool
+				var raw string
+				raw, oom = errorMessageFromHistory(message[1])
+				summary = truncate(raw, maxErrorMessageLen)
+				outOfMemory = oom
 			}
 		}
 	}
-	return interrupted, summary
+	return interrupted, summary, outOfMemory
 }
 
-func errorMessageFromHistory(payload json.RawMessage) string {
+// errorMessageFromHistory renders one execution_error payload's node,
+// exception type and message into a human-readable summary, and classifies
+// it as an out-of-memory failure (STATUS.md's A06) from the same exception
+// type/message a PyTorch-backed node raises for CUDA/host memory
+// exhaustion — the only structured signal ComfyUI's history gives an
+// adapter for this, since the server itself does not label OOM as a
+// distinct status.
+//
+// errorMessageFromHistory 把一条 execution_error 载荷的节点、异常类型与消息
+// 渲染成可读摘要，并（STATUS.md 的 A06）从同一份异常类型/消息里判断这是否是
+// 一次显存/内存耗尽失败——这是 ComfyUI 的 history 能为适配器提供的唯一结构化
+// 信号，因为服务端自己并不把 OOM 标记为一个独立状态。PyTorch 支撑的节点在
+// CUDA 或宿主内存耗尽时正是抛出这类异常类型/消息。
+func errorMessageFromHistory(payload json.RawMessage) (message string, outOfMemory bool) {
 	var detail struct {
 		NodeID           any    `json:"node_id"`
 		NodeType         string `json:"node_type"`
@@ -476,8 +527,9 @@ func errorMessageFromHistory(payload json.RawMessage) string {
 		ExceptionMessage string `json:"exception_message"`
 	}
 	if err := json.Unmarshal(payload, &detail); err != nil {
-		return "the workflow failed"
+		return "the workflow failed", false
 	}
+	outOfMemory = looksLikeOutOfMemory(detail.ExceptionType, detail.ExceptionMessage)
 	node := ""
 	switch id := detail.NodeID.(type) {
 	case string:
@@ -486,9 +538,31 @@ func errorMessageFromHistory(payload json.RawMessage) string {
 		node = strconv.FormatInt(int64(id), 10)
 	}
 	if node == "" && detail.NodeType == "" {
-		return detail.ExceptionMessage
+		return detail.ExceptionMessage, outOfMemory
 	}
-	return fmt.Sprintf("node %s (%s): %s %s", node, detail.NodeType, detail.ExceptionType, detail.ExceptionMessage)
+	return fmt.Sprintf("node %s (%s): %s %s", node, detail.NodeType, detail.ExceptionType, detail.ExceptionMessage), outOfMemory
+}
+
+// looksLikeOutOfMemory reports whether an exception type/message pair from
+// ComfyUI's history matches the shapes PyTorch raises for CUDA or host
+// memory exhaustion (e.g. "torch.cuda.OutOfMemoryError", "CUDA out of
+// memory"). It is a best-effort text match, not a stable API contract: a
+// custom node or a future PyTorch release may phrase it differently, in
+// which case the failure is still reported, just not counted as OOM.
+//
+// looksLikeOutOfMemory 判断一对来自 ComfyUI history 的异常类型/消息，是否
+// 匹配 PyTorch 在 CUDA 或宿主内存耗尽时抛出的形态（如
+// "torch.cuda.OutOfMemoryError"、"CUDA out of memory"）。这是尽力而为的文本
+// 匹配，不是稳定的 API 契约：某个自定义节点或未来的 PyTorch 版本可能用不同的
+// 措辞，那种情况下失败依旧会被上报，只是不计入 OOM。
+func looksLikeOutOfMemory(exceptionType, exceptionMessage string) bool {
+	for _, s := range [...]string{exceptionType, exceptionMessage} {
+		lower := strings.ToLower(s)
+		if strings.Contains(lower, "outofmemoryerror") || strings.Contains(lower, "out of memory") {
+			return true
+		}
+	}
+	return false
 }
 
 // Cancel stops a run, but only where doing so cannot disturb someone else's
@@ -514,6 +588,7 @@ func (r *Runtime) Cancel(ctx context.Context, runID string) error {
 	if err != nil {
 		return err
 	}
+	r.metrics.Queue(r.cfg.ID, len(queue.RunningIDs), len(queue.PendingIDs))
 
 	if queue.Position(runID) > 0 {
 		return r.client.DeleteFromQueue(ctx, runID)

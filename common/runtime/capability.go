@@ -8,6 +8,9 @@ import "fmt"
 type Capability string
 
 const (
+	// CapabilityMessages gates the native Anthropic Messages interface.
+	// CapabilityMessages 为原生 Anthropic Messages 接口提供能力门禁。
+	CapabilityMessages          Capability = "anthropic_messages"
 	CapabilityChat              Capability = "chat"
 	CapabilityChatStream        Capability = "chat_stream"
 	CapabilityCompletions       Capability = "completions"
@@ -23,6 +26,65 @@ const (
 	CapabilityWorkflowCancel    Capability = "workflow_cancel"
 	CapabilityArtifactRead      Capability = "artifact_read"
 	CapabilityInputWrite        Capability = "input_write"
+	// CapabilityAudioTranscription gates InferenceRuntime.Transcribe for both
+	// AudioTaskTranscribe and AudioTaskTranslate (STATUS.md's P2). It is a
+	// deliberately single capability for both tasks: their wire and backend
+	// contracts differ only in the request's Task field, not in what the
+	// caller must prove is supported.
+	//
+	// CapabilityAudioTranscription 同时为 AudioTaskTranscribe 与
+	// AudioTaskTranslate 两种任务门禁 InferenceRuntime.Transcribe（STATUS.md
+	// 的 P2）。两个任务刻意共用一个能力：它们的 wire 与后端契约只在请求的 Task
+	// 字段上不同，调用方需要证明支持的东西并无不同。
+	CapabilityAudioTranscription Capability = "audio_transcription"
+	// CapabilityRerank gates InferenceRuntime.Rerank (STATUS.md's P2). It is
+	// the pilot for the "new InferenceRuntime method" breaking-change pattern
+	// the P2 API compat design doc recommended validating before audio
+	// transcription reused it: new capability constant, new request/response
+	// types, a new interface method, and a shared oaibase default that keeps
+	// every existing adapter compiling.
+	//
+	// CapabilityRerank 为 InferenceRuntime.Rerank 门禁（STATUS.md 的 P2）。它是
+	// P2 API 兼容边界设计文档建议先行验证的「新增 InferenceRuntime 方法」这套
+	// 破坏性变更模式的试点，音频转录随后复用了同一套模式：新增能力常量、新增
+	// 请求/响应类型、接口新增方法，以及一个让全部既有适配器保持可编译的
+	// oaibase 共享默认实现。
+	CapabilityRerank Capability = "rerank"
+	// CapabilityDocumentInput gates a chat request whose message content
+	// includes a "file" content part (STATUS.md's P2 multimodal input: an
+	// inline document such as a PDF, mirroring Anthropic's "document"
+	// content block and the OpenAI Responses "input_file" part). No adapter
+	// in this repository publishes it yet — see CapabilityRerank's note on
+	// shipping a capability's protocol plumbing ahead of any backend that
+	// grants it.
+	//
+	// CapabilityDocumentInput 为一次聊天请求内容中含有 "file" 内容片段的情形
+	// 门禁（STATUS.md 的 P2 多模态输入：内联附带一份 PDF 等文档，对应
+	// Anthropic 的 "document" 内容块与 OpenAI Responses 的 "input_file"
+	// 部件）。本仓库目前没有任何适配器发布这项能力——协议先于任何授予它的
+	// 后端交付的先例见 CapabilityRerank 的说明。
+	CapabilityDocumentInput Capability = "document_input"
+	// CapabilityAudioInput gates a chat request whose message content
+	// includes an "input_audio" content part (STATUS.md's P2 multimodal
+	// input, mirroring OpenAI Chat Completions' inline audio input for an
+	// audio-capable model). It is distinct from CapabilityAudioTranscription,
+	// which gates the separate /v1/audio/transcriptions endpoint rather than
+	// inline chat content; no adapter in this repository publishes either
+	// yet.
+	//
+	// CapabilityAudioInput 为一次聊天请求内容中含有 "input_audio" 内容片段的
+	// 情形门禁（STATUS.md 的 P2 多模态输入，对应 OpenAI Chat Completions
+	// 面向具备音频能力模型的内联音频输入）。它与 CapabilityAudioTranscription
+	// 不同——后者为独立的 /v1/audio/transcriptions 端点门禁，而不是内联聊天
+	// 内容；本仓库目前对这两项能力都没有任何适配器发布。
+	CapabilityAudioInput Capability = "audio_input"
+	// CapabilityImageGeneration gates ImageRuntime.GenerateImage. A model
+	// that carries it is an image model and carries no chat capability, so
+	// chat routing and image routing never select each other's models.
+	//
+	// CapabilityImageGeneration 为 ImageRuntime.GenerateImage 门禁。带有它的模型
+	// 是图像模型，不带任何聊天能力，因此聊天路由与图像路由永远不会选中对方的模型。
+	CapabilityImageGeneration Capability = "image_generation"
 )
 
 // CapabilitySource records how a piece of capability evidence was obtained,

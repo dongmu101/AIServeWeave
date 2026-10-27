@@ -9,6 +9,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/workflowview"
+	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
@@ -17,6 +18,9 @@ import (
 
 // Config configures the HTTP front door.
 type Config struct {
+	// MessagesSessions supplies shared, one-shot Claude continuation affinity.
+	// MessagesSessions 提供共享且一次性的 Claude 续接定位。
+	MessagesSessions messagesession.Store
 	// Verifier resolves API keys against the control plane. When set it is
 	// the authority and APIKeys is ignored; see auth.go for the three modes.
 	//
@@ -199,6 +203,20 @@ type Config struct {
 	// DefaultRecoverCallTimeout。
 	RecoverCallTimeout time.Duration
 
+	// ArtifactRecoveryClient lets listArtifacts and downloadArtifact answer a
+	// job or artifact this replica has no local record of, by reading back
+	// what the control plane already has on file (STATUS.md's Gateway 故障
+	// 切换收尾). Nil disables the fallback entirely — a deployment with no
+	// control plane, or a local miss that predates this feature, gets
+	// exactly today's 404/"job not found".
+	//
+	// ArtifactRecoveryClient 让 listArtifacts 与 downloadArtifact 能够回答一个
+	// 本副本没有本地记录的 job 或产物，做法是读回控制面已经存档的内容
+	// （STATUS.md 的「Gateway 故障切换收尾」）。为 nil 时完全关闭这条回退——
+	// 未部署控制面的环境，或本功能存在之前就会发生的一次本地未命中，得到的
+	// 正是今天的 404/"job not found"。
+	ArtifactRecoveryClient ArtifactRecoveryClient
+
 	// ArtifactCleanupClient reaps expired artifact records and their object
 	// storage bytes (STATUS.md's P04). Nil disables the cleanup sweeper
 	// entirely — a deployment with no control plane, or one that never
@@ -245,15 +263,133 @@ type Config struct {
 	// jobs.go 里几行之外的 MaxWorkflowUploadBytes 一样。叠加在这层文件名检查
 	// 之上的字节嗅探检查见 uploadformat.go。
 	AllowedUploadExtensions []string
+
+	// RequestLogClient pushes batches of authenticated front-door request
+	// records to the control plane's internal API (STATUS.md's P09/C28).
+	// Nil disables request logging entirely — a deployment with no control
+	// plane gets no searchable request history, the same nil-degrades
+	// pattern JobPersistClient already follows.
+	//
+	// RequestLogClient 把一批已鉴权的前门请求记录推送给控制面的内部 API
+	// （STATUS.md 的 P09/C28）。为 nil 时完全关闭请求日志——未部署控制面的
+	// 环境得不到可检索的请求历史，与 JobPersistClient 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	RequestLogClient RequestLogClient
+	// RequestLogBufferSize bounds the in-memory push buffer. Zero uses
+	// DefaultRequestLogBufferSize.
+	//
+	// RequestLogBufferSize 限定内存推送缓冲的大小。为零时采用
+	// DefaultRequestLogBufferSize。
+	RequestLogBufferSize int
+	// RequestLogBatchSize bounds how many records one push call carries.
+	// Zero uses DefaultRequestLogBatchSize.
+	//
+	// RequestLogBatchSize 限定单次推送调用携带多少条记录。为零时采用
+	// DefaultRequestLogBatchSize。
+	RequestLogBatchSize int
+	// RequestLogFlushInterval is the maximum time a record waits in the
+	// buffer before being pushed. Zero uses DefaultRequestLogFlushInterval.
+	//
+	// RequestLogFlushInterval 是一条记录在缓冲中等待推送的最长时间。为零时
+	// 采用 DefaultRequestLogFlushInterval。
+	RequestLogFlushInterval time.Duration
+
+	// UsageLedgerClient pushes batches of per-tenant/model token usage to the
+	// control plane's internal API (STATUS.md's P2 usage ledger). Nil
+	// disables the ledger entirely — a deployment with no control plane gets
+	// no durable usage records, the same nil-degrades pattern
+	// RequestLogClient already follows.
+	//
+	// UsageLedgerClient 把一批按租户/模型的 token 用量推送给控制面的内部 API
+	// （STATUS.md 的 P2 用量账本）。为 nil 时完全关闭账本——未部署控制面的
+	// 环境得不到持久化的用量记录，与 RequestLogClient 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	UsageLedgerClient UsageLedgerClient
+	// UsageLedgerBufferSize bounds the in-memory push buffer. Zero uses
+	// DefaultUsageLedgerBufferSize.
+	//
+	// UsageLedgerBufferSize 限定内存推送缓冲的大小。为零时采用
+	// DefaultUsageLedgerBufferSize。
+	UsageLedgerBufferSize int
+	// UsageLedgerBatchSize bounds how many records one push call carries.
+	// Zero uses DefaultUsageLedgerBatchSize.
+	//
+	// UsageLedgerBatchSize 限定单次推送调用携带多少条记录。为零时采用
+	// DefaultUsageLedgerBatchSize。
+	UsageLedgerBatchSize int
+	// UsageLedgerFlushInterval is the maximum time a record waits in the
+	// buffer before being pushed. Zero uses DefaultUsageLedgerFlushInterval.
+	//
+	// UsageLedgerFlushInterval 是一条记录在缓冲中等待推送的最长时间。为零时
+	// 采用 DefaultUsageLedgerFlushInterval。
+	UsageLedgerFlushInterval time.Duration
+
+	// ImagesWorkflowID is the registered workflow template POST
+	// /v1/images/generations binds a caller's prompt onto (STATUS.md's P2).
+	// Empty disables the route: it stays mounted but answers 404, the same
+	// "route always mounted, configuration decides" pattern the workflow
+	// routes already follow. The caller of httpapi.New (main.go) is
+	// responsible for validating at startup that this id, once non-empty,
+	// names a template with the required declared inputs and outputs — see
+	// main.go's own validation and the Gateway README's 图像生成 section.
+	//
+	// ImagesWorkflowID 是 POST /v1/images/generations 把调用方提示词绑定到
+	// 其上的那个已注册工作流模板（STATUS.md 的 P2）。为空时该路由关闭：
+	// 它照常挂载但答复 404，与工作流路由已经遵循的「路由总是挂载、由配置
+	// 决定」同一模式。httpapi.New 的调用方（main.go）负责在启动期校验：
+	// 一旦这个 id 非空，它必须指向一个声明了所需输入与输出的模板——见
+	// main.go 自己的校验与 Gateway README「图像生成」一节。
+	ImagesWorkflowID string
+	// ImagesGenerationTimeout bounds imagesGenerations' whole synchronous
+	// Submit-to-terminal loop. Zero uses DefaultImagesGenerationTimeout.
+	//
+	// ImagesGenerationTimeout 限定 imagesGenerations 整个同步的「提交到终态」
+	// 循环。为零时采用 DefaultImagesGenerationTimeout。
+	ImagesGenerationTimeout time.Duration
+
+	// ResponsesClient persists and continues Responses API turns opted into
+	// store:true or previous_response_id (STATUS.md's P2 "Responses 持久
+	// 会话"). Nil keeps both fields refused exactly as before this feature
+	// existed — a deployment with no control plane configured for it gets
+	// no conversation persistence, the same nil-degrades pattern
+	// JobPersistClient already follows.
+	//
+	// ResponsesClient 持久化并续接选择了 store:true 或 previous_response_id
+	// 的 Responses API 轮次（STATUS.md 的 P2「Responses 持久会话」）。为 nil
+	// 时两个字段的行为与本功能存在之前完全一样，均被拒绝——未为此配置控制面
+	// 的部署得不到会话持久化，与 JobPersistClient 已经遵循的同一种「为 nil
+	// 时退化」模式。
+	ResponsesClient ResponsesPersistClient
+	// ResponsePersistConcurrency bounds concurrent CreateResponseTurn calls.
+	// Zero uses DefaultResponsePersistConcurrency.
+	//
+	// ResponsePersistConcurrency 限制并发的 CreateResponseTurn 调用数。为零
+	// 时采用 DefaultResponsePersistConcurrency。
+	ResponsePersistConcurrency int
+	// ResponsePersistCallTimeout bounds one CreateResponseTurn or
+	// GetResponseTurn call. Zero uses DefaultResponsePersistCallTimeout.
+	//
+	// ResponsePersistCallTimeout 限制单次 CreateResponseTurn 或
+	// GetResponseTurn 调用。为零时采用 DefaultResponsePersistCallTimeout。
+	ResponsePersistCallTimeout time.Duration
 }
 
 // New returns the front door's http.Handler: GET /v1/models,
 // POST /v1/chat/completions (streaming and non-streaming),
-// POST /v1/embeddings, POST /v1/workflows/{workflow_id}/runs,
-// GET /v1/jobs/{job_id}, GET /v1/jobs/{job_id}/events (SSE),
-// POST /v1/jobs/{job_id}/cancel, GET /v1/jobs/{job_id}/artifacts and
-// GET /v1/artifacts/{artifact_id}, wrapped in request logging and API key
-// authentication.
+// POST /v1/embeddings, POST /v1/responses, POST /v1/images/generations,
+// POST /v1/messages (Anthropic Messages v1, text-only — see anthropic.go),
+// POST /api/chat, POST /api/generate, POST /api/embeddings (Ollama native
+// API, pure inference only — see ollama.go) plus a clear "not supported"
+// answer on Ollama's model-management endpoints,
+// POST /v1/audio/transcriptions and POST /v1/audio/translations (audio.go,
+// STATUS.md's P2 — a single candidate, no cross-node retry, see
+// Scheduler.Transcribe),
+// POST /v1/rerank (rerank.go, STATUS.md's P2 — no adapter's Discover reports
+// CapabilityRerank yet, so every call is refused locally until one does),
+// POST /v1/workflows/{workflow_id}/runs, GET /v1/jobs/{job_id},
+// GET /v1/jobs/{job_id}/events (SSE), POST /v1/jobs/{job_id}/cancel,
+// GET /v1/jobs/{job_id}/artifacts and GET /v1/artifacts/{artifact_id},
+// wrapped in request logging and API key authentication.
 func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	logger := cfg.Logger
 	if logger == nil {
@@ -263,8 +399,13 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
+	imagesGenerationTimeout := cfg.ImagesGenerationTimeout
+	if imagesGenerationTimeout <= 0 {
+		imagesGenerationTimeout = DefaultImagesGenerationTimeout
+	}
 
 	h := &handlers{
+		messagesSessions:        cfg.MessagesSessions,
 		sched:                   sched,
 		logger:                  logger,
 		metrics:                 newRecorder(cfg.Metrics),
@@ -274,7 +415,18 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		limiter:                 cfg.Limiter,
 		storage:                 cfg.ArtifactStorage,
 		allowedUploadExtensions: normalizeAllowedExtensions(cfg.AllowedUploadExtensions),
+		artifactRecovery:        cfg.ArtifactRecoveryClient,
+		imagesWorkflowID:        cfg.ImagesWorkflowID,
+		imagesGenerationTimeout: imagesGenerationTimeout,
 	}
+	// h.jobs.metrics is set after the struct literal rather than inside it:
+	// h.metrics must exist first, and a struct literal cannot reference the
+	// value it is still constructing (STATUS.md's A06).
+	//
+	// h.jobs.metrics 在结构体字面量之外赋值，而不是在其内部：h.metrics 必须
+	// 先存在，而一个结构体字面量无法引用自己尚在构造中的值（STATUS.md 的
+	// A06）。
+	h.jobs.metrics = h.metrics
 
 	syncer := newJobSyncer(h.jobs, sched, clock, logger, jobSyncConfig{
 		Interval:    cfg.SyncInterval,
@@ -304,10 +456,66 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 			CallTimeout:         cfg.PersistCallTimeout,
 			MaxBackoff:          cfg.PersistMaxBackoff,
 			ArtifactCopyTimeout: cfg.ArtifactCopyTimeout,
+			Metrics:             h.metrics,
 		})
 		go persister.run()
 	}
 	h.persister = persister
+
+	// The request-log pusher follows the same nil-degrades pattern: no
+	// control plane configured to push to means there is nowhere for a
+	// searchable request history to go, so this replica simply records
+	// nothing rather than buffering records no one will ever read.
+	//
+	// 请求日志推送器遵循同一种「为 nil 时退化」模式：未配置可供推送的控制面，
+	// 意味着可检索的请求历史无处可去，本副本因此干脆不记录，而不是缓冲一堆
+	// 永远不会被读取的记录。
+	var pusher *requestLogPusher
+	if cfg.RequestLogClient != nil {
+		pusher = newRequestLogPusher(cfg.RequestLogClient, clock, logger, h.metrics, requestLogPushConfig{
+			BufferSize:    cfg.RequestLogBufferSize,
+			BatchSize:     cfg.RequestLogBatchSize,
+			FlushInterval: cfg.RequestLogFlushInterval,
+		})
+		go pusher.run()
+		h.requestLogs = pusher
+	}
+
+	// The usage-ledger pusher follows the same nil-degrades pattern: no
+	// control plane configured to push to means there is nowhere for a
+	// durable per-tenant/model usage ledger to go, so this replica simply
+	// records nothing rather than buffering records no one will ever read.
+	//
+	// 用量账本推送器遵循同一种「为 nil 时退化」模式：未配置可供推送的控制面，
+	// 意味着按租户/模型的持久化用量账本无处可去，本副本因此干脆不记录，而
+	// 不是缓冲一堆永远不会被读取的记录。
+	var usageLedgerPusher *usageLedgerPusher
+	if cfg.UsageLedgerClient != nil {
+		usageLedgerPusher = newUsageLedgerPusher(cfg.UsageLedgerClient, clock, logger, h.metrics, usageLedgerPushConfig{
+			BufferSize:    cfg.UsageLedgerBufferSize,
+			BatchSize:     cfg.UsageLedgerBatchSize,
+			FlushInterval: cfg.UsageLedgerFlushInterval,
+		})
+		go usageLedgerPusher.run()
+		h.usageLedger = usageLedgerPusher
+	}
+
+	// The response-turn persister follows the same nil-degrades pattern: no
+	// control plane configured to persist to means store and
+	// previous_response_id stay refused, exactly as they were before this
+	// feature existed.
+	//
+	// 轮次持久化器遵循同一种「为 nil 时退化」模式：未配置可供持久化的控制面，
+	// 意味着 store 与 previous_response_id 保持被拒绝，与本功能存在之前完全
+	// 一样。
+	responsePersistCallTimeout := cfg.ResponsePersistCallTimeout
+	if responsePersistCallTimeout <= 0 {
+		responsePersistCallTimeout = DefaultResponsePersistCallTimeout
+	}
+	h.responsePersistCallTimeout = responsePersistCallTimeout
+	if cfg.ResponsesClient != nil {
+		h.responsePersist = newResponsePersister(cfg.ResponsesClient, cfg.ResponsePersistConcurrency, responsePersistCallTimeout, logger, h.metrics)
+	}
 
 	// The recoverer follows the same nil-degrades pattern: no control plane
 	// configured means nothing to recover non-terminal jobs from, so this
@@ -367,6 +575,22 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
 	mux.HandleFunc("POST /v1/embeddings", h.embeddings)
 	mux.HandleFunc("POST /v1/responses", h.responses)
+	mux.HandleFunc("POST /v1/images/generations", h.imagesGenerations)
+	mux.HandleFunc("POST /v1/messages", h.anthropicMessages)
+	mux.HandleFunc("POST /v1/audio/transcriptions", h.audioTranscriptions)
+	mux.HandleFunc("POST /v1/audio/translations", h.audioTranslations)
+	mux.HandleFunc("POST /v1/rerank", h.rerank)
+	mux.HandleFunc("POST /api/chat", h.ollamaChat)
+	mux.HandleFunc("POST /api/generate", h.ollamaGenerate)
+	mux.HandleFunc("POST /api/embeddings", h.ollamaEmbeddings)
+	mux.HandleFunc("POST /api/create", ollamaUnsupported)
+	mux.HandleFunc("POST /api/pull", ollamaUnsupported)
+	mux.HandleFunc("POST /api/push", ollamaUnsupported)
+	mux.HandleFunc("DELETE /api/delete", ollamaUnsupported)
+	mux.HandleFunc("POST /api/copy", ollamaUnsupported)
+	mux.HandleFunc("POST /api/show", ollamaUnsupported)
+	mux.HandleFunc("GET /api/tags", ollamaUnsupported)
+	mux.HandleFunc("GET /api/ps", ollamaUnsupported)
 	mux.HandleFunc("POST /v1/workflows/{workflow_id}/runs", h.submitRun)
 	mux.HandleFunc("GET /v1/jobs/{job_id}", h.jobStatus)
 	mux.HandleFunc("GET /v1/jobs/{job_id}/events", h.jobEvents)
@@ -388,12 +612,14 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
 	return &Server{
-		Handler:   h.observe(withLogging(logger, auth.middleware(h.rateLimit(mux)))),
-		handlers:  h,
-		syncer:    syncer,
-		persister: persister,
-		recoverer: recoverer,
-		cleaner:   cleaner,
+		Handler:           withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux)))))),
+		handlers:          h,
+		syncer:            syncer,
+		persister:         persister,
+		recoverer:         recoverer,
+		cleaner:           cleaner,
+		requestLogPusher:  pusher,
+		usageLedgerPusher: usageLedgerPusher,
 	}
 }
 
@@ -412,37 +638,41 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 // 一个方法，接收它所限定的租户，返回副本。
 type Server struct {
 	http.Handler
-	handlers  *handlers
-	syncer    *jobSyncer
-	persister *jobPersister
-	recoverer *jobRecoverer
-	cleaner   *artifactCleaner
+	handlers          *handlers
+	syncer            *jobSyncer
+	persister         *jobPersister
+	recoverer         *jobRecoverer
+	cleaner           *artifactCleaner
+	requestLogPusher  *requestLogPusher
+	usageLedgerPusher *usageLedgerPusher
 }
 
-// Close stops the background job syncer, persister, recoverer and artifact
-// cleanup sweeper, waiting for each one's current round, if any, to finish.
-// Call it during shutdown, after the HTTP listener has stopped accepting
-// new requests and before the scheduler's underlying tunnel is torn down —
-// the syncer and the recoverer both dispatch through that same scheduler,
-// and stopping them first avoids a burst of "node is not connected"
-// warnings against a tunnel that is closing on purpose rather than one that
-// failed. The persister and the cleanup sweeper do not dispatch through the
-// tunnel at all — they talk to the control plane (and, for the sweeper,
-// object storage) — but stopping them here too means shutdown has one
-// place that waits for every background loop this package started, not
-// four.
+// Close stops the background job syncer, persister, recoverer, artifact
+// cleanup sweeper, request-log pusher and usage-ledger pusher, waiting for
+// each one's current round, if any, to finish. Call it during shutdown,
+// after the HTTP listener has stopped accepting new requests and before the
+// scheduler's underlying tunnel is torn down — the syncer and the recoverer
+// both dispatch through that same scheduler, and stopping them first avoids
+// a burst of "node is not connected" warnings against a tunnel that is
+// closing on purpose rather than one that failed. The persister, the
+// cleanup sweeper, the request-log pusher and the usage-ledger pusher do
+// not dispatch through the tunnel at all — they talk to the control plane
+// (and, for the sweeper, object storage) — but stopping them here too means
+// shutdown has one place that waits for every background loop this package
+// started, not six.
 //
 // It does not stop the HTTP handler itself; that remains the caller's
 // http.Server to shut down.
 //
-// Close 停止后台 job 同步器、持久化器、恢复器与产物清理扫描器，并分别等待
-// 它们正在进行的一轮（如果有）跑完。应当在关闭期间调用它——在 HTTP 监听器
-// 停止接受新请求之后、调度器底下的隧道被拆除之前——同步器与恢复器都经由
-// 同一个调度器分派，先停止它们能避免对着一条正在有意关闭而非故障的隧道
-// 打出一串「node is not connected」告警。持久化器与清理扫描器根本不经由
-// 隧道分派——它们对话的是控制面（清理扫描器还对话对象存储）——但在这里
-// 一并停止它们，意味着关闭流程只有一处要等待本包启动的每一个后台循环，
-// 而不是四处。
+// Close 停止后台 job 同步器、持久化器、恢复器、产物清理扫描器、请求日志
+// 推送器与用量账本推送器，并分别等待它们正在进行的一轮（如果有）跑完。
+// 应当在关闭期间调用它——在 HTTP 监听器停止接受新请求之后、调度器底下的
+// 隧道被拆除之前——同步器与恢复器都经由同一个调度器分派，先停止它们能
+// 避免对着一条正在有意关闭而非故障的隧道打出一串「node is not
+// connected」告警。持久化器、清理扫描器、请求日志推送器与用量账本推送器
+// 根本不经由隧道分派——它们对话的是控制面（清理扫描器还对话对象存储）——
+// 但在这里一并停止它们，意味着关闭流程只有一处要等待本包启动的每一个
+// 后台循环，而不是六处。
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
@@ -455,6 +685,12 @@ func (s *Server) Close() {
 	}
 	if s.cleaner != nil {
 		s.cleaner.Stop()
+	}
+	if s.requestLogPusher != nil {
+		s.requestLogPusher.Stop()
+	}
+	if s.usageLedgerPusher != nil {
+		s.usageLedgerPusher.Stop()
 	}
 }
 
@@ -474,6 +710,18 @@ func (s *Server) JobsFor(tenantID string) ([]workflowview.Job, bool) {
 	return s.handlers.jobs.forTenant(tenantID)
 }
 
+// HasActiveJobOnNode reports whether this replica is tracking any
+// non-terminal job routed to nodeID. comfyuimanagedapi's drain-before-restart
+// check (STATUS.md's P2) uses this to refuse a RESTART while a job is still
+// running on that node.
+//
+// HasActiveJobOnNode 报告本副本是否在追踪任何路由到 nodeID 的非终态 job。
+// comfyuimanagedapi 的重启前排空检查（STATUS.md 的 P2）用它在该节点仍有 job
+// 在跑时拒绝 RESTART。
+func (s *Server) HasActiveJobOnNode(nodeID string) bool {
+	return s.handlers.jobs.hasActiveJobOnNode(nodeID)
+}
+
 // Templates returns the registered workflow catalogue, without the graphs.
 //
 // Templates 返回已注册的工作流目录，不含图。
@@ -482,13 +730,14 @@ func (s *Server) Templates() []workflowview.Template {
 }
 
 type handlers struct {
-	sched     *scheduler.Scheduler
-	logger    *slog.Logger
-	metrics   *recorder
-	workflows *workflow.Handle
-	jobs      *jobStore
-	clock     runtime.Clock
-	limiter   ratelimit.Limiter
+	messagesSessions messagesession.Store
+	sched            *scheduler.Scheduler
+	logger           *slog.Logger
+	metrics          *recorder
+	workflows        *workflow.Handle
+	jobs             *jobStore
+	clock            runtime.Clock
+	limiter          ratelimit.Limiter
 	// persister is nil when no JobPersistClient is configured. Its nudge
 	// method is nil-receiver-safe, so call sites never need to check this
 	// for nil themselves — see jobpersist.go.
@@ -496,6 +745,23 @@ type handlers struct {
 	// persister 在未配置 JobPersistClient 时为 nil。它的 nudge 方法对 nil
 	// 接收者是安全的，因此调用点从不需要自己检查它是否为 nil——见 jobpersist.go。
 	persister *jobPersister
+	// requestLogs is nil when no control plane is configured to push
+	// request-log records to, in which case requestLogMiddleware is a pure
+	// pass-through — the same nil-degrades pattern persister already
+	// follows.
+	//
+	// requestLogs 在未配置可供推送请求记录的控制面时为 nil，此时
+	// requestLogMiddleware 是纯粹的透传——与 persister 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	requestLogs requestLogSink
+	// usageLedger is nil when no control plane is configured to push usage
+	// records to, in which case ledgerUsage (ratelimit.go) is a no-op — the
+	// same nil-degrades pattern requestLogs already follows.
+	//
+	// usageLedger 在未配置可供推送用量记录的控制面时为 nil，此时
+	// ledgerUsage（ratelimit.go）是空操作——与 requestLogs 已经遵循的同一种
+	// 「为 nil 时退化」模式。
+	usageLedger usageLedgerSink
 	// storage is nil when no Config.ArtifactStorage is configured, in which
 	// case downloadArtifact pulls live from the node exactly as it always
 	// has. See jobpersist.go's persistArtifacts for the write side.
@@ -503,12 +769,47 @@ type handlers struct {
 	// storage 在未配置 Config.ArtifactStorage 时为 nil，此时 downloadArtifact
 	// 照旧从节点实时拉取。写入侧见 jobpersist.go 的 persistArtifacts。
 	storage objectstore.Backend
+	// artifactRecovery is nil when no Config.ArtifactRecoveryClient is
+	// configured, in which case listArtifacts and downloadArtifact answer a
+	// local miss exactly as they always have — see artifactrecovery.go.
+	//
+	// artifactRecovery 在未配置 Config.ArtifactRecoveryClient 时为 nil，此时
+	// listArtifacts 与 downloadArtifact 对一次本地未命中的应答与它们一贯的
+	// 行为完全一样——见 artifactrecovery.go。
+	artifactRecovery ArtifactRecoveryClient
 	// allowedUploadExtensions is Config.AllowedUploadExtensions normalized
 	// into a lookup set — see uploadformat.go.
 	//
 	// allowedUploadExtensions 是归一化成查找集合后的
 	// Config.AllowedUploadExtensions——见 uploadformat.go。
 	allowedUploadExtensions map[string]struct{}
+	// imagesWorkflowID and imagesGenerationTimeout are Config.ImagesWorkflowID
+	// and Config.ImagesGenerationTimeout (already defaulted) — see images.go.
+	//
+	// imagesWorkflowID 与 imagesGenerationTimeout 分别是 Config.ImagesWorkflowID
+	// 与已经补过默认值的 Config.ImagesGenerationTimeout——见 images.go。
+	imagesWorkflowID        string
+	imagesGenerationTimeout time.Duration
+
+	// responsePersist is nil when no Config.ResponsesClient is configured, in
+	// which case store and previous_response_id stay refused exactly as
+	// before this feature existed — see responsespersist.go's nil-receiver
+	// convention.
+	//
+	// responsePersist 在未配置 Config.ResponsesClient 时为 nil，此时 store 与
+	// previous_response_id 的行为与本功能存在之前完全一样，均被拒绝——见
+	// responsespersist.go 的「对 nil 接收者安全」约定。
+	responsePersist *responsePersister
+	// responsePersistCallTimeout bounds the synchronous GetResponseTurn call
+	// loadResponsePrefix makes on a caller's own request path — the timeout
+	// responsePersister.callTimeout applies to the asynchronous write side,
+	// reused here for the read side so one Config field governs both.
+	//
+	// responsePersistCallTimeout 限制 loadResponsePrefix 在调用方自己的请求
+	// 路径上发起的那次同步 GetResponseTurn 调用——与
+	// responsePersister.callTimeout 施加于异步写入一侧的是同一个超时，这里
+	// 复用它，好让一个 Config 字段同时管住两侧。
+	responsePersistCallTimeout time.Duration
 }
 
 // observe wraps the whole handler chain in the request counter, the duration

@@ -1,5 +1,10 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+
+
 import * as React from "react";
 
 import { FleetFreshness } from "@/components/console/fleet-freshness";
@@ -40,7 +45,8 @@ const NO_SNAPSHOT: FleetNode[] = [];
 
 /** FleetView renders independently refreshed Gateway observations.
  * FleetView 渲染可独立刷新的 Gateway 观测。 */
-export function FleetView({ title = "节点" }: { title?: string }) {
+export function FleetView({ title }: { title?: string }) {
+  const {t } = useI18n();
   const fleet = useResource<FleetSnapshot>({
     method: "GET",
     surface: "operator",
@@ -69,19 +75,17 @@ export function FleetView({ title = "节点" }: { title?: string }) {
   return (
     <div className="grid gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">{title}</h1>
+        <h1 className="font-heading text-lg font-semibold">{title ?? t("tenant.nodes")}</h1>
         <p className="text-sm text-muted-foreground">
-          运维视图：整个机群的节点是所有租户共用的基础设施，不属于任何一个租户。
-          标签、硬件与运行时清单都是 Agent 自述的内容；平台判定的只有在线状态。
-        </p>
+          <Message id="tenant.operationsViewNodesAcrossTheFleetAreShared" /></p>
       </div>
 
-      <Button variant="outline" className="w-fit" disabled={fleet.loading} onClick={fleet.reload}>刷新实时机群</Button>
+      <Button variant="outline" className="w-fit" disabled={fleet.loading} onClick={fleet.reload}><Message id="tenant.refreshLiveFleet" /></Button>
 
       {fleet.error ? (
         <ErrorState message={fleet.error} onRetry={fleet.reload} />
       ) : fleet.loading || !fleet.data ? (
-        <LoadingState label="正在采集机群清单" rows={5} />
+        <LoadingState label={t("tenant.collectingFleetInventory")} rows={5} />
       ) : (
         <>
           <FleetFreshness
@@ -93,23 +97,20 @@ export function FleetView({ title = "节点" }: { title?: string }) {
           <div className="flex flex-wrap items-center gap-3">
             <Input
               className="max-w-xs"
-              placeholder="筛选节点 ID、标签或运行时"
+              placeholder={t("tenant.filterByNodeIdLabelOrRuntime")}
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              aria-label="筛选已采集的节点"
+              aria-label={t("tenant.filterCollectedNodes")}
             />
-            <span className="text-xs text-muted-foreground">
-              显示 {shown.length} / 已采集 {nodes.length} 个节点；筛选只作用于本次采集到的
-              内容。
-            </span>
+            <span className="text-xs text-muted-foreground"><Message id="tenant.nodesShownCollectedFiltersApplyOnlyToThe" values={{ count: shown.length, count2: nodes.length }} /></span>
           </div>
 
           {shown.length === 0 ? (
             <EmptyState
-              title={nodes.length === 0 ? "没有节点连接到任何已配置的副本" : "没有符合筛选条件的节点"}
+              title={nodes.length === 0 ? t("tenant.noNodesAreConnectedToAnyConfiguredReplica") : t("tenant.noNodesMatchTheFilters")}
               description={
                 nodes.length === 0
-                  ? "Agent 只主动出站建连；节点不在这里，意味着它没有连上任何一个被询问的 Gateway 副本。"
+                  ? t("tenant.theAgentOnlyInitiatesOutboundConnectionsIfA")
                   : undefined
               }
             />
@@ -130,16 +131,17 @@ export function FleetView({ title = "节点" }: { title?: string }) {
  *
  * NodeCard 渲染一个节点及其运行时。 */
 function NodeCard({ node }: { node: FleetNode }) {
+  const { locale, t } = useI18n();
   return (
     <Card>
       <CardHeader>
         <CardTitle className="flex flex-wrap items-center gap-2">
           <code className="min-w-0 break-all font-mono text-sm">{node.nodeId}</code>
           <Badge variant={node.live ? "secondary" : "outline"}>
-            {node.live ? "在线" : "离线"}
+            {node.live ? t("tenant.online") : t("tenant.offline")}
           </Badge>
-          <Badge variant="outline">{node.maintenance ? "维护中（观测）" : "未维护（观测）"}</Badge>
-          {node.draining ? <Badge variant="outline">正在退出</Badge> : null}
+          <Badge variant="outline">{node.maintenance ? t("tenant.inMaintenanceObserved") : t("tenant.notInMaintenanceObserved")}</Badge>
+          {node.draining ? <Badge variant="outline"><Message id="tenant.exiting" /></Badge> : null}
           {node.agentVersion ? (
             <span className="text-xs font-normal text-muted-foreground">
               Agent {node.agentVersion}
@@ -147,39 +149,39 @@ function NodeCard({ node }: { node: FleetNode }) {
           ) : null}
         </CardTitle>
       </CardHeader>
-      <CardContent className="grid gap-4">
-        <p className="text-xs text-muted-foreground">维护标记取自控制面选定的一份 Gateway 观测。聚合接口不提供每个副本的维护标记，不能据此确认所有副本已生效。</p>
-        <dl className="grid gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
-          <Fact label="最近心跳" value={formatDateTime(node.lastHeartbeat, "无心跳")} />
-          <Fact label="在途请求" value={String(node.inflightRequests)} />
+      <CardContent className="grid grid-cols-1 gap-4">
+        <p className="text-xs text-muted-foreground"><Message id="tenant.theMaintenanceFlagComesFromOneGatewayObservation" /></p>
+        <dl className="grid grid-cols-1 gap-x-6 gap-y-3 text-sm sm:grid-cols-4">
+          <Fact label={t("tenant.lastHeartbeat")} value={formatDateTime(node.lastHeartbeat, t("tenant.noHeartbeat"), locale)} />
+          <Fact label={t("tenant.inFlightRequests")} value={String(node.inflightRequests)} />
           <Fact
-            label="空闲槽位"
+            label={t("tenant.freeSlots")}
             value={
               Object.keys(node.idleSlots).length === 0
-                ? "无"
+                ? t("tenant.none")
                 : Object.entries(node.idleSlots)
                     .map(([name, value]) => `${name} ${value}`)
                     .join(" · ")
             }
           />
-          <Fact label="报告它的副本" value={node.replicas.join("、") || "未知"} />
+          <Fact label={t("tenant.reportingReplicas")} value={node.replicas.join("、") || t("tenant.unknown")} />
           <Fact
-            label="硬件"
+            label={t("tenant.hardware")}
             value={
               node.resources
-                ? `${node.resources.cpuCores} 核 · ${node.resources.gpuCount} GPU · ${node.resources.os}/${node.resources.arch}`
-                : "未上报"
+                ? t("tenant.cpuCoresGpus", { cpuCores: node.resources.cpuCores, gpuCount: node.resources.gpuCount, os: node.resources.os, arch: node.resources.arch })
+                : t("tenant.notReported")
             }
           />
-          <Fact label="采集时刻" value={formatDateTime(node.observedAt)} />
+          <Fact label={t("tenant.collectedAt")} value={formatDateTime(node.observedAt, undefined, locale)} />
           <div className="grid gap-1 sm:col-span-2">
-            <dt className="text-xs text-muted-foreground">标签（Agent 自述）</dt>
+            <dt className="text-xs text-muted-foreground"><Message id="tenant.labelsAgentReported" /></dt>
             <dd className="flex flex-wrap gap-1">
               {Object.keys(node.labels).length === 0 ? (
-                <span className="text-sm text-muted-foreground">无</span>
+                <span className="text-sm text-muted-foreground"><Message id="tenant.none" /></span>
               ) : (
                 Object.entries(node.labels).map(([name, value]) => (
-                  <Badge key={name} variant="outline" className="font-mono text-xs">
+                  <Badge key={name} variant="outline" className="h-auto max-w-full whitespace-normal break-all font-mono text-xs">
                     {name}={value}
                   </Badge>
                 ))
@@ -189,22 +191,18 @@ function NodeCard({ node }: { node: FleetNode }) {
         </dl>
 
         <div className="grid gap-2">
-          <p className="text-xs text-muted-foreground">运行时</p>
+          <p className="text-xs text-muted-foreground"><Message id="tenant.runtimes" /></p>
           {node.runtimes.length === 0 ? (
-            <p className="text-sm text-muted-foreground">
-              该节点尚未上报任何运行时清单
-              {node.declaredRuntimeIds.length > 0
-                ? `；它在握手时声明过 ${node.declaredRuntimeIds.join("、")}`
-                : ""}
-              。
-            </p>
+            <p className="text-sm text-muted-foreground"><Message id="tenant.thisNodeHasNotReportedAnyRuntimeInventory_eca6ac" values={{ value: node.declaredRuntimeIds.length > 0
+                ? t("tenant.itDeclaredDuringTheHandshake", { value: node.declaredRuntimeIds.join("、") })
+                : "" }} /></p>
           ) : (
             <div className="grid gap-2">
               {node.runtimes.map((rt) => (
                 <div key={rt.id} className="rounded-lg border px-3 py-2 text-sm">
                   <div className="flex flex-wrap items-center gap-2">
                     <code className="font-mono text-xs">{rt.id}</code>
-                    <Badge variant="outline">{rt.kind || "未知类型"}</Badge>
+                    <Badge variant="outline">{rt.kind || t("tenant.unknownType")}</Badge>
                     <Badge
                       variant="outline"
                       className={rt.state === "healthy" ? undefined : "text-destructive"}
@@ -212,12 +210,12 @@ function NodeCard({ node }: { node: FleetNode }) {
                       {rt.state}
                     </Badge>
                     {rt.identityVerified ? null : (
-                      <Badge variant="outline">身份未验证</Badge>
+                      <Badge variant="outline"><Message id="tenant.identityNotVerified" /></Badge>
                     )}
                     <span className="text-xs text-muted-foreground">
                       {rt.latencyMillis === null
-                        ? "未完成过健康检查"
-                        : `${rt.latencyMillis} ms · ${formatDateTime(rt.checkedAt)}`}
+                        ? t("tenant.noHealthCheckCompletedYet")
+                        : `${rt.latencyMillis} ms · ${formatDateTime(rt.checkedAt, undefined, locale)}`}
                     </span>
                   </div>
                   {rt.baseUrl ? (
@@ -229,16 +227,11 @@ function NodeCard({ node }: { node: FleetNode }) {
                     <p className="mt-1 text-xs text-destructive">{rt.errorSummary}</p>
                   ) : null}
                   {rt.degraded.length > 0 ? (
-                    <p className="mt-1 text-xs text-muted-foreground">
-                      降级：{rt.degraded.join("；")}
-                    </p>
+                    <p className="mt-1 text-xs text-muted-foreground"><Message id="tenant.degraded_0dfb3a" values={{ value: rt.degraded.join("；") }} /></p>
                   ) : null}
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    模型：
-                    {rt.models.length === 0
-                      ? "未发现"
-                      : rt.models.map((model) => model.id).join("、")}
-                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground"><Message id="tenant.models_298940" values={{ value: rt.models.length === 0
+                      ? t("tenant.notFound")
+                      : rt.models.map((model) => model.id).join("、") }} /></p>
                 </div>
               ))}
             </div>

@@ -1,0 +1,172 @@
+{
+  "slug": "job-status",
+  "category": "工作流与任务",
+  "category_order": 50,
+  "sort_order": 20,
+  "title": "查询任务状态",
+  "method": "GET",
+  "path": "/v1/jobs/{job_id}",
+  "summary": "查询一次工作流运行的当前状态、排队位置与失败原因。",
+  "revision": 2,
+  "content": {
+    "highlights": [
+      "返回与提交接口相同结构的任务对象",
+      "未结束的任务每次查询都会向执行端获取最新状态与排队位置；已结束的任务直接返回最终结果",
+      "只能查询本租户提交的任务，其他租户的任务与不存在的任务一样返回 404",
+      "失败任务通过 error 字段给出失败摘要"
+    ],
+    "notice": "需要实时进度时优先使用 SSE 事件流（GET /v1/jobs/{job_id}/events），本接口适合轮询兜底或事件流断开后确认最终状态。",
+    "auth": "bearer",
+    "headers": [
+      {
+        "name": "Authorization",
+        "type": "string",
+        "required": true,
+        "description": "Bearer 鉴权，格式为 `Bearer {{API_KEY}}`。API Key 在控制台创建，只能访问本租户的工作流与任务。"
+      }
+    ],
+    "path_params": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true,
+        "description": "提交工作流时返回的任务 ID，以 `job_` 开头。"
+      }
+    ],
+    "query_params": [],
+    "body_type": "none",
+    "body_params": [],
+    "response_fields": [
+      {
+        "name": "job_id",
+        "type": "string",
+        "required": true,
+        "description": "任务 ID，以 `job_` 开头，由网关生成。"
+      },
+      {
+        "name": "workflow_id",
+        "type": "string",
+        "required": true,
+        "description": "提交时使用的工作流 ID。"
+      },
+      {
+        "name": "status",
+        "type": "string",
+        "required": true,
+        "description": "任务状态。succeeded / failed / cancelled 为终态，到达后不再变化。",
+        "enum": [
+          "queued",
+          "running",
+          "succeeded",
+          "failed",
+          "cancelled"
+        ]
+      },
+      {
+        "name": "created_at",
+        "type": "string",
+        "required": true,
+        "description": "任务创建时间，RFC 3339 格式（UTC）。"
+      },
+      {
+        "name": "updated_at",
+        "type": "string",
+        "required": true,
+        "description": "任务状态最近一次更新的时间，RFC 3339 格式（UTC）。"
+      },
+      {
+        "name": "queue_position",
+        "type": "integer",
+        "required": false,
+        "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+      },
+      {
+        "name": "durability",
+        "type": "string",
+        "required": true,
+        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "enum": [
+          "memory_only",
+          "persisted"
+        ]
+      },
+      {
+        "name": "error",
+        "type": "string",
+        "required": false,
+        "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+      }
+    ],
+    "request_examples": [
+      {
+        "lang": "curl",
+        "label": "cURL",
+        "code": "curl \"{{BASE_URL}}/v1/jobs/job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\" \\\n  -H \"Authorization: Bearer {{API_KEY}}\""
+      },
+      {
+        "lang": "python",
+        "label": "Python",
+        "code": "import time\nimport requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\njob_id = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\"\n\nwhile True:\n    resp = requests.get(\n        f\"{BASE_URL}/v1/jobs/{job_id}\",\n        headers={\"Authorization\": f\"Bearer {API_KEY}\"},\n        timeout=30,\n    )\n    resp.raise_for_status()\n    job = resp.json()\n    print(job[\"status\"], job.get(\"queue_position\"))\n    if job[\"status\"] in (\"succeeded\", \"failed\", \"cancelled\"):\n        break\n    time.sleep(2)\n\nif job[\"status\"] == \"failed\":\n    print(\"失败原因：\", job.get(\"error\"))"
+      },
+      {
+        "lang": "javascript",
+        "label": "JavaScript",
+        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\nconst TERMINAL = new Set([\"succeeded\", \"failed\", \"cancelled\"]);\nlet job;\ndo {\n  const resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}`, {\n    headers: { Authorization: `Bearer ${API_KEY}` },\n  });\n  if (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\n  job = await resp.json();\n  console.log(job.status, job.queue_position);\n  if (!TERMINAL.has(job.status)) await new Promise((r) => setTimeout(r, 2000));\n} while (!TERMINAL.has(job.status));"
+      }
+    ],
+    "response_examples": [
+      {
+        "status": 200,
+        "label": "排队中",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"queue_position\": 2,\n  \"durability\": \"persisted\"\n}"
+      },
+      {
+        "status": 200,
+        "label": "执行成功",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
+      },
+      {
+        "status": 200,
+        "label": "执行失败",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
+      },
+      {
+        "status": 401,
+        "label": "API Key 无效",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 404,
+        "label": "任务不存在",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "执行端不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      }
+    ],
+    "sections": [
+      {
+        "title": "任务状态",
+        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+      },
+      {
+        "title": "错误码",
+        "body": "404 job_not_found：任务不存在，或不属于当前 API Key 所在租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+      },
+      {
+        "title": "错误格式",
+        "body": "所有错误都以 OpenAI 兼容的 JSON 结构返回，error.type 表示错误大类，error.code 是可用于程序判断的错误码，error.message 为面向开发者的英文说明。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请一并提供。",
+        "code": "{\n  \"error\": {\n    \"message\": \"no such job\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"job_not_found\"\n  }\n}",
+        "code_lang": "json"
+      }
+    ]
+  }
+}

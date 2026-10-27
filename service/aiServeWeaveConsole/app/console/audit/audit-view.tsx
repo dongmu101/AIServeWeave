@@ -1,5 +1,12 @@
 "use client";
 
+
+import { useI18n } from "@/components/i18n/provider";
+import { Message } from "@/components/i18n/message";
+import type { Translator } from "@/lib/i18n/translate";
+import type { Locale } from "@/lib/i18n/locale";
+
+
 import * as React from "react";
 import {
   createColumnHelper,
@@ -25,7 +32,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { parseAuditEntries, type AuditEntry } from "@/lib/console/contract";
-import { AUDIT_ACTIONS, formatDateTime } from "@/lib/console/format";
+import { auditActions, formatDateTime } from "@/lib/console/format";
 
 /**
  * The audit trail.
@@ -52,29 +59,29 @@ import { AUDIT_ACTIONS, formatDateTime } from "@/lib/console/format";
 const features = tableFeatures({});
 const helper = createColumnHelper<typeof features, AuditEntry>();
 
-const columns = helper.columns([
+const columns = (t: Translator, locale: Locale) => (helper.columns([
   helper.accessor("createdAt", {
-    header: "时间",
-    cell: (info) => formatDateTime(info.getValue()),
+    header: t("tenant.time"),
+    cell: (info) => formatDateTime(info.getValue(), undefined, locale),
   }),
   helper.accessor("action", {
-    header: "动作",
+    header: t("tenant.action"),
     cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
   }),
   helper.accessor("actorId", {
-    header: "操作者",
+    header: t("tenant.actor"),
     cell: (info) => (
       <span className="font-mono text-xs">
-        {info.getValue() === "" ? "系统" : info.getValue()}
+        {info.getValue() === "" ? t("tenant.system") : info.getValue()}
       </span>
     ),
   }),
   helper.accessor("target", {
-    header: "目标",
+    header: t("tenant.target"),
     cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
   }),
   helper.accessor("detail", {
-    header: "详情",
+    header: t("tenant.details"),
     cell: (info) => {
       const detail = info.getValue();
       if (detail === "") {
@@ -97,7 +104,7 @@ const columns = helper.columns([
     header: "IP",
     cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
   }),
-]);
+]));
 
 /** PAGE_SIZES is what the person may ask one page to hold.
  *
@@ -118,19 +125,20 @@ const GRID =
 const ROW_HEIGHT = 40;
 
 const NO_ENTRIES: AuditEntry[] = [];
-const PLATFORM_ACTIONS = [
-  { value: "platform_operator.create", label: "创建运维账户" },
-  { value: "platform_operator.login", label: "运维登录" },
-  { value: "node.approve", label: "审批节点" },
-  { value: "node.disable", label: "禁用节点" },
-  { value: "node.enable", label: "启用节点" },
-  { value: "node.maintenance.enter", label: "进入维护" },
-  { value: "node.maintenance.exit", label: "退出维护" },
-];
+const PLATFORM_ACTIONS = (t: Translator) => ([
+  { value: "platform_operator.create", label: t("tenant.createOperatorAccount") },
+  { value: "platform_operator.login", label: t("tenant.operatorSignIn") },
+  { value: "node.approve", label: t("tenant.approveNode") },
+  { value: "node.disable", label: t("tenant.disableNode") },
+  { value: "node.enable", label: t("tenant.enableNode") },
+  { value: "node.maintenance.enter", label: t("tenant.enterMaintenance") },
+  { value: "node.maintenance.exit", label: t("tenant.exitMaintenance") },
+]);
 
 /** AuditView shares paging and virtualization across isolated audit surfaces.
  * AuditView 在隔离的审计入口之间共用分页与虚拟滚动。 */
 export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator" }) {
+  const { locale, t } = useI18n();
   const [filters, setFilters] = useUrlFilters([
     "q",
     "action",
@@ -172,9 +180,10 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
   });
 
   const rows = audit.items ?? NO_ENTRIES;
-  const actions = surface === "operator" ? PLATFORM_ACTIONS : AUDIT_ACTIONS;
+  const actions = surface === "operator" ? PLATFORM_ACTIONS(t) : auditActions(locale);
 
-  const table = useTable({ features, columns, data: rows });
+  const localizedColumns = React.useMemo(() => columns(t, locale), [t, locale]);
+  const table = useTable({ features, columns: localizedColumns, data: rows });
   const modelRows = table.getRowModel().rows;
 
   const scrollRef = React.useRef<HTMLDivElement>(null);
@@ -196,19 +205,18 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
   });
 
   return (
-    <div className="grid gap-4">
+    <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">{surface === "operator" ? "平台审计" : "管理审计"}</h1>
+        <h1 className="font-heading text-lg font-semibold">{surface === "operator" ? t("tenant.platformAudit") : t("tenant.administrativeAudit")}</h1>
         <p className="text-sm text-muted-foreground">
-          {surface === "operator" ? "平台运维账户与节点操作记录；与租户审计独立，不包含推理请求。" : "当前租户的管理操作记录：登录、创建用户、创建与吊销 Key、修改配额。这不是推理请求日志，网关处理的调用不会出现在这里。"}
+          {surface === "operator" ? t("tenant.platformOperatorAccountAndNodeActivitySeparateFrom") : t("tenant.administrativeActivityForTheCurrentTenantSignIns")}
         </p>
       </div>
 
       <div className="flex flex-wrap items-end gap-3">
         <div className="grid gap-1">
           <label htmlFor="audit-action" className="text-xs text-muted-foreground">
-            动作
-          </label>
+            <Message id="tenant.action" /></label>
           <Select
             value={filters.action === "" ? "all" : filters.action}
             onValueChange={(next) => {
@@ -218,10 +226,10 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
             }}
           >
             <SelectTrigger id="audit-action">
-              <SelectValue>{filters.action === "" ? "全部动作" : actions.find((action) => action.value === filters.action)?.label ?? filters.action}</SelectValue>
+              <SelectValue>{filters.action === "" ? t("tenant.allActions") : actions.find((action) => action.value === filters.action)?.label ?? filters.action}</SelectValue>
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="all">全部动作</SelectItem>
+              <SelectItem value="all"><Message id="tenant.allActions" /></SelectItem>
               {actions.map((action) => (
                 <SelectItem key={action.value} value={action.value}>
                   {action.label}
@@ -233,12 +241,11 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
 
         <div className="grid gap-1">
           <label htmlFor="audit-actor" className="text-xs text-muted-foreground">
-            操作者 ID
-          </label>
+            <Message id="tenant.actorId" /></label>
           <Input
             id="audit-actor"
             className="w-56 font-mono text-xs"
-            placeholder={surface === "operator" ? "平台操作者 ID" : "usr_..."}
+            placeholder={surface === "operator" ? t("tenant.platformActorId") : "usr_..."}
             value={draftActor}
             onChange={(event) => setDraftActor(event.target.value)}
           />
@@ -246,8 +253,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
 
         <div className="grid gap-1">
           <label htmlFor="audit-since" className="text-xs text-muted-foreground">
-            起始日期（含）
-          </label>
+            <Message id="tenant.startDateInclusive" /></label>
           <Input
             id="audit-since"
             type="date"
@@ -259,8 +265,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
 
         <div className="grid gap-1">
           <label htmlFor="audit-until" className="text-xs text-muted-foreground">
-            结束日期（含）
-          </label>
+            <Message id="tenant.endDateInclusive" /></label>
           <Input
             id="audit-until"
             type="date"
@@ -272,8 +277,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
 
         <div className="grid gap-1">
           <label htmlFor="audit-size" className="text-xs text-muted-foreground">
-            每页
-          </label>
+            <Message id="tenant.perPage" /></label>
           <Select
             value={String(pageSize)}
             onValueChange={(next) => {
@@ -283,13 +287,11 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
             }}
           >
             <SelectTrigger id="audit-size">
-              <SelectValue>{pageSize} 条 / 页</SelectValue>
+              <SelectValue><Message id="tenant.perPage_9dfa4c" values={{ pageSize: pageSize }} /></SelectValue>
             </SelectTrigger>
             <SelectContent>
               {PAGE_SIZES.map((size) => (
-                <SelectItem key={size} value={size}>
-                  {size} 条
-                </SelectItem>
+                <SelectItem key={size} value={size}><Message id="tenant.records_09f864" values={{ size: size }} /></SelectItem>
               ))}
             </SelectContent>
           </Select>
@@ -303,17 +305,16 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
               setFilters({ action: "", actor_id: "", since: "", until: "" })
             }
           >
-            清除筛选
-          </Button>
+            <Message id="tenant.clearFilters" /></Button>
         ) : null}
       </div>
 
       {audit.error ? (
         <ErrorState message={audit.error} onRetry={audit.reload} />
       ) : audit.loading ? (
-        <LoadingState label="正在加载审计记录" rows={6} />
+        <LoadingState label={t("tenant.loadingAuditRecords")} rows={6} />
       ) : (
-        <div className="rounded-xl border" role="table" aria-label="管理审计记录">
+        <div className="rounded-xl border" role="table" aria-label={t("tenant.administrativeAuditRecords")}>
           <div className="overflow-x-auto">
             <div className="min-w-[64rem]">
               {table.getHeaderGroups().map((group) => (
@@ -336,15 +337,15 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
               {modelRows.length === 0 ? (
                 <p className="px-3 py-8 text-center text-sm text-muted-foreground">
                   {hasFilters(filters)
-                    ? "没有符合筛选条件的记录"
-                    : surface === "operator" ? "平台还没有运维操作记录" : "该租户还没有管理操作记录"}
+                    ? t("tenant.noRecordsMatchTheFilters")
+                    : surface === "operator" ? t("tenant.noPlatformOperationsHaveBeenRecordedYet") : t("tenant.noAdministrativeActivityHasBeenRecordedForThis")}
                 </p>
               ) : (
                 <div
                   ref={scrollRef}
                   className="max-h-[32rem] overflow-y-auto"
                   tabIndex={0}
-                  aria-label="审计记录列表，可滚动"
+                  aria-label={t("tenant.scrollableAuditRecordList")}
                 >
                   <div
                     className="relative"
@@ -391,11 +392,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
         <Pager resource={audit} loadedCount={rows.length} />
       )}
 
-      <p className="text-xs text-muted-foreground">
-        筛选与翻页由控制面执行，覆盖{surface === "operator" ? "平台的全部运维记录" : "当前租户的全部记录"}；接口不提供总数，因此这里只显示
-        页码而不显示总页数。审计写入与被记录的操作不在同一个事务中，控制面在写入失败时
-        只记录日志；因此这份记录可能少于实际发生的操作，不能当作完备账本使用。
-      </p>
+      <p className="text-xs text-muted-foreground"><Message id="tenant.filteringAndPaginationAreHandledByTheControl_f06ac4" values={{ value: surface === "operator" ? t("tenant.allPlatformOperations") : t("tenant.allRecordsForTheCurrentTenant") }} /></p>
     </div>
   );
 }
