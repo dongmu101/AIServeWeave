@@ -130,6 +130,17 @@ type responseOutputRaw struct {
 	Role    string                `json:"role,omitempty"`
 	Content []responseContentPart `json:"content,omitempty"`
 
+	// Summary is set only on a reasoning item, where Responses requires the
+	// field. It is a pointer so the empty array a reasoning item carries
+	// still serialises; the reasoning itself is raw text in Content
+	// (reasoning_text parts), not a summary, since a chat backend hands up
+	// its chain of thought verbatim.
+	//
+	// Summary 只在 reasoning 项上设置，Responses 要求该项带这个字段。用指针是为了让
+	// reasoning 项携带的空数组依旧被序列化；思考本身以原文放在 Content 里
+	// （reasoning_text 部件），而不是摘要，因为聊天后端递上来的就是逐字的思考链。
+	Summary *[]responseContentPart `json:"summary,omitempty"`
+
 	// Arguments, Input and Action are pointers or maps so a present-but-empty
 	// value still serialises: a function_call whose arguments are "" must say
 	// so, because Responses clients treat the field as required on that type.
@@ -145,16 +156,29 @@ type responseOutputRaw struct {
 	Action    map[string]any `json:"action,omitempty"`
 }
 
+// responseContentPart is one content part of an output item. Annotations is
+// omitzero rather than omitempty: an output_text part sets it to an empty
+// array that must still serialise, while a reasoning_text part, which has no
+// such field, leaves it nil.
+//
+// responseContentPart 是输出项的一个内容部件。Annotations 用 omitzero 而不是
+// omitempty：output_text 部件把它设为必须照样序列化的空数组，而没有这个字段的
+// reasoning_text 部件让它保持 nil。
 type responseContentPart struct {
 	Type        string `json:"type"`
 	Text        string `json:"text"`
-	Annotations []any  `json:"annotations"`
+	Annotations []any  `json:"annotations,omitzero"`
 }
 
 type responsesUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
-	TotalTokens  int `json:"total_tokens"`
+	InputTokens         int                           `json:"input_tokens"`
+	OutputTokens        int                           `json:"output_tokens"`
+	TotalTokens         int                           `json:"total_tokens"`
+	OutputTokensDetails *responsesOutputTokensDetails `json:"output_tokens_details,omitempty"`
+}
+
+type responsesOutputTokensDetails struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
 }
 
 type responsesError struct {

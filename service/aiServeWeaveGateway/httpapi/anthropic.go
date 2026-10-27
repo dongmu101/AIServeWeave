@@ -8,9 +8,11 @@
 // any Anthropic-specific core type — a "tool_use" block becomes a
 // runtime.ToolCall on an assistant message, a "tool_result" block becomes
 // its own synthetic "tool"-role message, matching every other front door's
-// shape. Any other content block type (document, thinking, …) is still
-// refused by name rather than silently dropped, matching responses.go's
-// "unsupported 字段" pattern.
+// shape. A response's reasoning is rendered as a leading "thinking" block;
+// thinking and redacted_thinking blocks a client echoes back on an assistant
+// turn are dropped, since the backend is never sent a prior turn's
+// reasoning. Any other content block type is still refused by name rather
+// than silently dropped, matching responses.go's "unsupported 字段" pattern.
 //
 // anthropic.go 实现 POST /v1/messages，在边界处转换成与其他每个前门相同的
 // canonical 聊天请求（STATUS.md 的「Anthropic Messages 前门」——见设计文档
@@ -18,9 +20,10 @@
 // runtime.ChatMessage 既有的 ToolCalls/ToolCallID 字段（与 chat.go 里 OpenAI
 // 前门填的是同一对字段）而非任何 Anthropic 专属核心类型——一个 "tool_use" 块
 // 变成 assistant 消息上的一次 runtime.ToolCall，一个 "tool_result" 块变成一条
-// 独立的 "tool" 角色合成消息，与其他每个前门的形状一致。其他任何内容块类型
-// （document、thinking……）仍按名字拒绝而非静默丢弃，与 responses.go 的
-// 「unsupported 字段」模式一致。
+// 独立的 "tool" 角色合成消息，与其他每个前门的形状一致。响应里的思考渲染为打头的
+// "thinking" 块；客户端在 assistant 回合里回传的 thinking 与 redacted_thinking 块被
+// 丢弃，因为上一轮的思考从不发给后端。其他任何内容块类型仍按名字拒绝而非静默丢弃，
+// 与 responses.go 的「unsupported 字段」模式一致。
 package httpapi
 
 import (
@@ -147,13 +150,27 @@ type anthropicMessageJSON struct {
 
 // anthropicContentBlockJSON is one element of a "content" array: "text",
 // "image", "document", "tool_use" and "tool_result" are the block types
-// accepted on input; anthropicMessageToRuntime rejects any other type by
-// name. The same struct doubles as the output content block shape, where
-// Type is "text" or "tool_use" — a response is never constructed with an
-// image, document or tool_result block.
+// accepted on input, plus "thinking" and "redacted_thinking" on an assistant
+// turn, which are dropped; anthropicMessageToRuntime rejects any other type
+// by name. The same struct doubles as the output content block shape, where
+// Type is "thinking", "text" or "tool_use" — a response is never constructed
+// with an image, document or tool_result block.
 type anthropicContentBlockJSON struct {
-	Type   string                    `json:"type"`
-	Text   string                    `json:"text,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+
+	// Thinking and Signature are set on an output "thinking" block. They are
+	// pointers because the block requires both fields even when empty. No
+	// backend behind this front door can mint a signature Anthropic would
+	// accept, so it is always empty; a client that echoes the block back
+	// has it dropped rather than verified.
+	//
+	// Thinking 与 Signature 设置在输出的 "thinking" 块上。用指针是因为这个块即使为空也
+	// 要求两个字段都在。本前门背后没有哪个后端能签出 Anthropic 认可的签名，因此它总为
+	// 空；客户端回传这个块时它会被丢弃，而不是被校验。
+	Thinking  *string `json:"thinking,omitempty"`
+	Signature *string `json:"signature,omitempty"`
+
 	Source *anthropicImageSourceJSON `json:"source,omitempty"`
 	// Title is a "document" block's optional caption, carried through as
 	// runtime.ContentFile.Filename; images carry no equivalent field.
@@ -404,6 +421,15 @@ func anthropicMessageToRuntime(role string, raw json.RawMessage) ([]runtime.Chat
 		return nil
 	}
 	for _, b := range blocks {
+		if role == "assistant" && (b.Type == "thinking" || b.Type == "redacted_thinking") {
+			// The reasoning of a prior turn is not replayed to the backend:
+			// it is the model's own scratch work, and the signature that
+			// would make it meaningful to Anthropic is not ours to verify.
+			//
+			// 上一轮的思考不回放给后端：那是模型自己的草稿，而能让它对 Anthropic
+			// 有意义的签名也不归我们校验。
+			continue
+		}
 		if b.Type != "tool_result" {
 			run = append(run, b)
 			continue
@@ -488,15 +514,25 @@ type anthropicMessageResponse struct {
 	Usage        anthropicUsageJSON          `json:"usage"`
 }
 
-// anthropicResponseContentBlocks renders a Chat response message's text and
-// tool calls as Anthropic content blocks: a leading "text" block only when
-// there is text to carry (Anthropic never emits an empty one when a
-// response is tool_use-only), then one "tool_use" block per
-// runtime.ToolCall, in order. A response with neither — an edge case no
-// real backend should produce — still renders one empty text block so
-// Content is never an empty array.
+// anthropicResponseContentBlocks renders a Chat response message's
+// reasoning, text and tool calls as Anthropic content blocks: a leading
+// "thinking" block when there is reasoning, a "text" block only when there
+// is text to carry (Anthropic never emits an empty one when a response is
+// tool_use-only), then one "tool_use" block per runtime.ToolCall, in order.
+// A response with neither text nor tool calls — an edge case no real backend
+// should produce — still renders one empty text block, so a client always
+// finds an answer block.
+//
+// anthropicResponseContentBlocks 把 Chat 响应消息的思考、文本与工具调用渲染成
+// Anthropic 内容块：有思考时打头一个 "thinking" 块，有文本时才有 "text" 块
+// （只含 tool_use 的响应里 Anthropic 从不发空 text 块），随后按顺序每个
+// runtime.ToolCall 一个 "tool_use" 块。既无文本也无工具调用的响应——真实后端不该
+// 产生的边界情形——依旧渲染一个空 text 块，让客户端总能找到回答块。
 func anthropicResponseContentBlocks(msg runtime.ChatMessage) []anthropicContentBlockJSON {
 	var blocks []anthropicContentBlockJSON
+	if msg.ReasoningContent != "" {
+		blocks = append(blocks, anthropicThinkingBlock(msg.ReasoningContent))
+	}
 	if msg.Content != "" {
 		blocks = append(blocks, anthropicContentBlockJSON{Type: "text", Text: msg.Content})
 	}
@@ -512,10 +548,20 @@ func anthropicResponseContentBlocks(msg runtime.ChatMessage) []anthropicContentB
 			Input: input,
 		})
 	}
-	if len(blocks) == 0 {
-		blocks = []anthropicContentBlockJSON{{Type: "text", Text: ""}}
+	if msg.Content == "" && len(msg.ToolCalls) == 0 {
+		blocks = append(blocks, anthropicContentBlockJSON{Type: "text", Text: ""})
 	}
 	return blocks
+}
+
+// anthropicThinkingBlock is a "thinking" content block carrying text and the
+// empty signature explained on anthropicContentBlockJSON.Signature.
+//
+// anthropicThinkingBlock 是一个携带 text 的 "thinking" 内容块，签名为空，原因见
+// anthropicContentBlockJSON.Signature。
+func anthropicThinkingBlock(text string) anthropicContentBlockJSON {
+	signature := ""
+	return anthropicContentBlockJSON{Type: "thinking", Thinking: &text, Signature: &signature}
 }
 
 // anthropicStopReason maps this Gateway's backend-opaque finish reason
@@ -663,6 +709,13 @@ type anthropicTextDelta struct {
 	Text string `json:"text"`
 }
 
+// anthropicThinkingDelta is a thinking content block's streaming delta.
+// anthropicThinkingDelta 是 thinking 内容块的流式增量。
+type anthropicThinkingDelta struct {
+	Type     string `json:"type"`
+	Thinking string `json:"thinking"`
+}
+
 // anthropicInputJSONDelta is a tool_use content block's streaming delta:
 // PartialJSON is one fragment of the arguments object's JSON text, to be
 // concatenated (never separately parsed) across every delta an SDK sees for
@@ -673,9 +726,10 @@ type anthropicInputJSONDelta struct {
 	PartialJSON string `json:"partial_json"`
 }
 
-// anthropicContentBlockDeltaEvent's Delta is anthropicTextDelta for the text
-// block (index 0) or anthropicInputJSONDelta for a tool_use block — the two
-// delta shapes Anthropic's own wire protocol defines.
+// anthropicContentBlockDeltaEvent's Delta is anthropicThinkingDelta for a
+// thinking block, anthropicTextDelta for a text block, or
+// anthropicInputJSONDelta for a tool_use block — delta shapes Anthropic's own
+// wire protocol defines.
 type anthropicContentBlockDeltaEvent struct {
 	Type  string `json:"type"`
 	Index int    `json:"index"`
@@ -731,19 +785,18 @@ func writeAnthropicSSE(w io.Writer, event string, v any) error {
 // anthropicMessagesStream serves POST /v1/messages with stream:true,
 // translating runtime.ChatEvent values into Anthropic's
 // message_start/content_block_start/content_block_delta/content_block_stop/
-// message_delta/message_stop sequence. message_start and content_block_start
-// are written unconditionally before the first Recv — not lazily on first
-// content — both because Anthropic's own wire protocol always opens them
-// before any delta, and because deferring them to first content would skip
-// them entirely for a response with no content (stop_reason alone).
+// message_delta/message_stop sequence. message_start is written before the
+// first Recv, as Anthropic's own protocol always opens with it; content blocks
+// are opened as their content arrives, by anthropicBlocks, because a thinking
+// block has to come before the text block and only the backend knows whether
+// there will be one.
 //
 // anthropicMessagesStream 服务带 stream:true 的 POST /v1/messages，把
 // runtime.ChatEvent 转换成 Anthropic 的
 // message_start/content_block_start/content_block_delta/content_block_stop/
-// message_delta/message_stop 序列。message_start 与 content_block_start 在第
-// 一次 Recv 之前就无条件写出——而不是等到第一段内容才写——原因有二：Anthropic
-// 自己的协议本就在任何 delta 之前打开它们；且如果推迟到第一段内容，一个没有
-// 内容、只有 stop_reason 的响应会完全跳过它们。
+// message_delta/message_stop 序列。message_start 在第一次 Recv 之前写出，与
+// Anthropic 自己的协议总以它开场一致；内容块则由 anthropicBlocks 随内容到达再打开，
+// 因为 thinking 块必须排在 text 块之前，而会不会有 thinking 块只有后端知道。
 func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time) {
 	stream, candidate, err := h.sched.ChatStream(r.Context(), canonical)
 	if err != nil {
@@ -779,11 +832,6 @@ func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Reques
 			Usage:   anthropicUsageJSON{},
 		},
 	})
-	_ = writeAnthropicSSE(w, "content_block_start", anthropicContentBlockStartEvent{
-		Type:         "content_block_start",
-		Index:        0,
-		ContentBlock: anthropicContentBlockJSON{Type: "text", Text: ""},
-	})
 	flusher.Flush()
 
 	loggedTTFT := false
@@ -792,34 +840,11 @@ func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Reques
 	// chatStream: OpenAI-shaped backends restate a running total rather than
 	// adding to it.
 	var usage runtime.Usage
-
-	// Tool-call streaming state. Anthropic's content blocks are strictly
-	// sequential — one open at a time, each started, deltared and stopped
-	// before the next starts — while runtime.ToolCallDelta.Index (mirroring
-	// OpenAI's own streaming shape) can only be trusted to group deltas
-	// belonging to the same call, not to promise they arrive contiguously.
-	// In practice every OpenAI-compatible backend this Gateway talks to
-	// streams one call to completion before starting the next, so this loop
-	// assumes that ordering rather than buffering to reorder around it —
-	// consistent with the rest of this codebase never buffering a stream to
-	// reshape it. textClosed tracks whether the leading text block (index 0,
-	// already started above) has been stopped; toolBlockIndex maps an
-	// incoming ToolCallDelta.Index to the Anthropic content block index
-	// assigned to it; openToolIndex names whichever tool_use block is
-	// currently open, so it can be stopped before the next one starts or at
-	// EOF.
-	textClosed := false
-	toolBlockIndex := map[int]int{}
-	nextBlockIndex := 1
-	openToolIndex := -1
+	blocks := newAnthropicBlocks(w)
 	for {
 		ev, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
-			if openToolIndex >= 0 {
-				_ = writeAnthropicSSE(w, "content_block_stop", anthropicContentBlockStopEvent{Type: "content_block_stop", Index: openToolIndex})
-			} else if !textClosed {
-				_ = writeAnthropicSSE(w, "content_block_stop", anthropicContentBlockStopEvent{Type: "content_block_stop", Index: 0})
-			}
+			blocks.finish()
 			if stopReason == "" {
 				stopReason = anthropicStopReason("")
 			}
@@ -854,56 +879,160 @@ func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Reques
 			stopReason = anthropicStopReason(ev.FinishReason)
 		}
 
+		// Within one event the order is thinking, text, tool calls: the order
+		// a model produces them in, so a backend that packs several into one
+		// event does not get its text split around a tool call.
+		//
+		// 同一事件内按 thinking、文本、工具调用的顺序处理：这正是模型产出它们的顺序，
+		// 因此把几样打包进同一事件的后端不会让文本被工具调用拆开。
+		if ev.Delta.ReasoningContent != "" {
+			if err := blocks.thinking(ev.Delta.ReasoningContent); err != nil {
+				return
+			}
+		}
+		if ev.Delta.Content != "" {
+			if err := blocks.text(ev.Delta.Content); err != nil {
+				return
+			}
+		}
 		for _, td := range ev.Delta.ToolCalls {
-			if !textClosed {
-				_ = writeAnthropicSSE(w, "content_block_stop", anthropicContentBlockStopEvent{Type: "content_block_stop", Index: 0})
-				textClosed = true
+			if err := blocks.toolCall(td); err != nil {
+				return
 			}
-			idx, seen := toolBlockIndex[td.Index]
-			if !seen {
-				if openToolIndex >= 0 {
-					_ = writeAnthropicSSE(w, "content_block_stop", anthropicContentBlockStopEvent{Type: "content_block_stop", Index: openToolIndex})
-				}
-				idx = nextBlockIndex
-				nextBlockIndex++
-				toolBlockIndex[td.Index] = idx
-				openToolIndex = idx
-				input := json.RawMessage("{}")
-				_ = writeAnthropicSSE(w, "content_block_start", anthropicContentBlockStartEvent{
-					Type:  "content_block_start",
-					Index: idx,
-					ContentBlock: anthropicContentBlockJSON{
-						Type: "tool_use", ID: td.ID, Name: td.Function.Name, Input: input,
-					},
-				})
-			}
-			if td.Function.Arguments != "" {
-				if err := writeAnthropicSSE(w, "content_block_delta", anthropicContentBlockDeltaEvent{
-					Type:  "content_block_delta",
-					Index: idx,
-					Delta: anthropicInputJSONDelta{Type: "input_json_delta", PartialJSON: td.Function.Arguments},
-				}); err != nil {
-					return
-				}
-			}
-			flusher.Flush()
-		}
-
-		if ev.Delta.Content == "" {
-			continue
-		}
-		if err := writeAnthropicSSE(w, "content_block_delta", anthropicContentBlockDeltaEvent{
-			Type:  "content_block_delta",
-			Index: 0,
-			Delta: anthropicTextDelta{Type: "text_delta", Text: ev.Delta.Content},
-		}); err != nil {
-			return
 		}
 		flusher.Flush()
-		if !loggedTTFT {
+		if !loggedTTFT && (ev.Delta.ReasoningContent != "" || ev.Delta.Content != "") {
 			loggedTTFT = true
 			h.logTTFT(r, canonical.Model, candidate.NodeID, start, true)
 			h.metrics.TTFT(EndpointAnthropicMessages, time.Since(start))
 		}
 	}
+}
+
+// anthropicBlocks sequences Anthropic content blocks over one stream.
+// Anthropic's blocks are strictly sequential — one open at a time, each
+// started, deltaed and stopped before the next starts — so a change of kind
+// stops the open block and starts a new one at the next index.
+//
+// A text block always precedes the first tool_use block and is always
+// present by the end, even if empty: that is the shape this front door has
+// produced since before thinking existed, and a client that indexes blocks
+// by position keeps working.
+//
+// runtime.ToolCallDelta.Index (mirroring OpenAI's own streaming shape) can
+// only be trusted to group deltas belonging to the same call, not to promise
+// they arrive contiguously. In practice every OpenAI-compatible backend this
+// Gateway talks to streams one call to completion before starting the next,
+// so this assumes that ordering rather than buffering to reorder around it —
+// consistent with the rest of this codebase never buffering a stream to
+// reshape it.
+//
+// anthropicBlocks 在一条流上给 Anthropic 内容块排序。Anthropic 的块严格顺序——同一
+// 时间只开一个，每个都先 start、delta、stop，下一个才开始——因此种类一变，就停掉
+// 打开的块，在下一个下标开新块。
+//
+// 第一个 tool_use 块之前总有一个 text 块，流结束时也必定至少有一个 text 块（哪怕为
+// 空）：这是本前门在 thinking 出现之前就一直产出的形状，按位置取块的客户端照常工作。
+//
+// runtime.ToolCallDelta.Index（对应 OpenAI 自己的流式形状）只能用来把属于同一调用的
+// delta 归到一起，不能保证它们连续到达。实际上本 Gateway 对接的每个 OpenAI 兼容后端
+// 都是一个调用发完再发下一个，因此这里假定这种顺序，而不是缓冲重排——与本仓库从不为
+// 改形而缓冲流的做法一致。
+type anthropicBlocks struct {
+	w           io.Writer
+	next        int         // index the next block gets / 下一个块的下标
+	open        int         // index of the open block, -1 when none / 打开的块的下标，没有时为 -1
+	openType    string      // "thinking", "text" or "tool_use" / 打开的块的类型
+	textStarted bool        // whether a text block has been started / 是否已开过 text 块
+	tools       map[int]int // ToolCallDelta.Index -> block index / 工具调用下标 -> 块下标
+}
+
+func newAnthropicBlocks(w io.Writer) *anthropicBlocks {
+	return &anthropicBlocks{w: w, open: -1, tools: map[int]int{}}
+}
+
+// start stops the open block, if any, and starts block at the next index.
+//
+// start 停掉打开的块（如果有），在下一个下标开始 block。
+func (b *anthropicBlocks) start(block anthropicContentBlockJSON) {
+	b.stop()
+	b.open, b.openType = b.next, block.Type
+	b.next++
+	if block.Type == "text" {
+		b.textStarted = true
+	}
+	_ = writeAnthropicSSE(b.w, "content_block_start", anthropicContentBlockStartEvent{
+		Type: "content_block_start", Index: b.open, ContentBlock: block,
+	})
+}
+
+// stop stops the open block, if any.
+//
+// stop 停掉打开的块（如果有）。
+func (b *anthropicBlocks) stop() {
+	if b.open < 0 {
+		return
+	}
+	_ = writeAnthropicSSE(b.w, "content_block_stop", anthropicContentBlockStopEvent{Type: "content_block_stop", Index: b.open})
+	b.open, b.openType = -1, ""
+}
+
+func (b *anthropicBlocks) delta(index int, delta any) error {
+	return writeAnthropicSSE(b.w, "content_block_delta", anthropicContentBlockDeltaEvent{
+		Type: "content_block_delta", Index: index, Delta: delta,
+	})
+}
+
+// thinking writes a reasoning fragment, opening a thinking block if one is
+// not already open.
+//
+// thinking 写出一段思考片段；没有打开的 thinking 块时先打开一个。
+func (b *anthropicBlocks) thinking(text string) error {
+	if b.openType != "thinking" {
+		b.start(anthropicThinkingBlock(""))
+	}
+	return b.delta(b.open, anthropicThinkingDelta{Type: "thinking_delta", Thinking: text})
+}
+
+// text writes a text fragment, opening a text block if one is not already
+// open.
+//
+// text 写出一段文本片段；没有打开的 text 块时先打开一个。
+func (b *anthropicBlocks) text(text string) error {
+	if b.openType != "text" {
+		b.start(anthropicContentBlockJSON{Type: "text", Text: ""})
+	}
+	return b.delta(b.open, anthropicTextDelta{Type: "text_delta", Text: text})
+}
+
+// toolCall writes one tool-call delta, starting a tool_use block the first
+// time its index is seen.
+//
+// toolCall 写出一个工具调用 delta；某个下标第一次出现时开始一个 tool_use 块。
+func (b *anthropicBlocks) toolCall(td runtime.ToolCallDelta) error {
+	if !b.textStarted {
+		b.start(anthropicContentBlockJSON{Type: "text", Text: ""})
+	}
+	idx, seen := b.tools[td.Index]
+	if !seen {
+		b.start(anthropicContentBlockJSON{
+			Type: "tool_use", ID: td.ID, Name: td.Function.Name, Input: json.RawMessage("{}"),
+		})
+		idx = b.open
+		b.tools[td.Index] = idx
+	}
+	if td.Function.Arguments == "" {
+		return nil
+	}
+	return b.delta(idx, anthropicInputJSONDelta{Type: "input_json_delta", PartialJSON: td.Function.Arguments})
+}
+
+// finish makes sure a text block exists and stops the open block.
+//
+// finish 确保存在一个 text 块，并停掉打开的块。
+func (b *anthropicBlocks) finish() {
+	if !b.textStarted {
+		b.start(anthropicContentBlockJSON{Type: "text", Text: ""})
+	}
+	b.stop()
 }

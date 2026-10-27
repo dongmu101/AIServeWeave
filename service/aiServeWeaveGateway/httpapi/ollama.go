@@ -162,9 +162,16 @@ func (o *ollamaOptionsJSON) applyTo(req *runtime.ChatRequest) {
 // -----------------------------------------------------------------------
 
 type ollamaMessageJSON struct {
-	Role    string          `json:"role"`
-	Content string          `json:"content"`
-	Images  json.RawMessage `json:"images,omitempty"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
+	// Thinking is Ollama's own name for the model's reasoning. It is
+	// rendered on a response; on a request it is accepted and ignored, so a
+	// client echoing a prior turn's reasoning does not have it replayed.
+	//
+	// Thinking 是 Ollama 自己对模型思考的叫法。它在响应上输出；在请求上被接受但
+	// 忽略，因此客户端回传上一轮的思考时不会被回放。
+	Thinking string          `json:"thinking,omitempty"`
+	Images   json.RawMessage `json:"images,omitempty"`
 }
 
 type ollamaChatRequest struct {
@@ -283,7 +290,7 @@ func (h *handlers) ollamaChatOnce(w http.ResponseWriter, r *http.Request, canoni
 	body := ollamaChatResponse{
 		Model:           resp.Model,
 		CreatedAt:       h.clock.Now().UTC().Format(time.RFC3339Nano),
-		Message:         ollamaMessageJSON{Role: role, Content: resp.Message.Content},
+		Message:         ollamaMessageJSON{Role: role, Content: resp.Message.Content, Thinking: resp.Message.ReasoningContent},
 		Done:            true,
 		DoneReason:      ollamaDoneReason(resp.FinishReason),
 		PromptEvalCount: resp.Usage.PromptTokens,
@@ -364,13 +371,13 @@ func (h *handlers) ollamaChatStream(w http.ResponseWriter, r *http.Request, cano
 		if ev.FinishReason != "" {
 			doneReason = ev.FinishReason
 		}
-		if ev.Delta.Content == "" {
+		if ev.Delta.Content == "" && ev.Delta.ReasoningContent == "" {
 			continue
 		}
 		if err := writeOllamaNDJSON(w, ollamaChatResponse{
 			Model:     canonical.Model,
 			CreatedAt: h.clock.Now().UTC().Format(time.RFC3339Nano),
-			Message:   ollamaMessageJSON{Role: "assistant", Content: ev.Delta.Content},
+			Message:   ollamaMessageJSON{Role: "assistant", Content: ev.Delta.Content, Thinking: ev.Delta.ReasoningContent},
 			Done:      false,
 		}); err != nil {
 			return
@@ -447,6 +454,7 @@ type ollamaGenerateResponse struct {
 	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
 	Response  string `json:"response"`
+	Thinking  string `json:"thinking,omitempty"`
 	Done      bool   `json:"done"`
 	// See ollamaChatResponse's doc comment: omitted rather than
 	// zero-valued until a terminal response actually has them.
@@ -496,6 +504,7 @@ func (h *handlers) ollamaGenerateOnce(w http.ResponseWriter, r *http.Request, ca
 		Model:           resp.Model,
 		CreatedAt:       h.clock.Now().UTC().Format(time.RFC3339Nano),
 		Response:        resp.Message.Content,
+		Thinking:        resp.Message.ReasoningContent,
 		Done:            true,
 		DoneReason:      ollamaDoneReason(resp.FinishReason),
 		PromptEvalCount: resp.Usage.PromptTokens,
@@ -560,13 +569,14 @@ func (h *handlers) ollamaGenerateStream(w http.ResponseWriter, r *http.Request, 
 		if ev.FinishReason != "" {
 			doneReason = ev.FinishReason
 		}
-		if ev.Delta.Content == "" {
+		if ev.Delta.Content == "" && ev.Delta.ReasoningContent == "" {
 			continue
 		}
 		if err := writeOllamaNDJSON(w, ollamaGenerateResponse{
 			Model:     canonical.Model,
 			CreatedAt: h.clock.Now().UTC().Format(time.RFC3339Nano),
 			Response:  ev.Delta.Content,
+			Thinking:  ev.Delta.ReasoningContent,
 			Done:      false,
 		}); err != nil {
 			return

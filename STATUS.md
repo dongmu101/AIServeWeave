@@ -63,7 +63,7 @@
 - **身份与密钥**：节点禁用最终一致，没有 CRL/OCSP；`TokenAdmin` 用一把不区分调用者的共享密钥，没有 RBAC（S02/S03）。密钥轮换没有新旧并存，CA 轮换没有代码路径，对象存储没有自动对账；参考部署里 Gateway 的服务端证书有效期 30 天且不会自动续期（A02）。Registry 的 JSON 状态文件没有 schema version，回退二进制会抹掉新版本写入的字段（A03）。
 - **路由与调度**：生效确认只覆盖已配置的 Fleet 端点，不保证全局原子切换（P02）；Direct 模式在代码里不存在（A04）；租户节点池、基于会话标识的亲和、成本评分都没做，`prefix_hash` 没有命中率指标（A05）；模型和工作流需要多少显存全靠人工声明，模板层面的显存声明还没设计。
 - **模板与图像生成**：没有模板删除/归档 API，依赖与输出声明只做结构校验，不和节点实际能力核对（P03）；图像生成靠扩展名判断产物是不是图片，启动期校验不会随模板热替换重跑，`n` 只接受 1。
-- **协议前门范围**：Anthropic 的 `thinking` 等内容块和 `tool_result` 内嵌图片按名字拒绝；Responses 的 `file_id` 拒绝；Ollama 原生 API 的 `images` 拒绝，模型管理端点统一答 501。
+- **协议前门范围**：Anthropic 的 `tool_result` 内嵌图片按名字拒绝，user 回合里的 `thinking` 块按名字拒绝（assistant 回合回传的会被丢弃）；请求侧开启思考的参数（Chat 的 `reasoning_effort`、Anthropic 的 `thinking`、Ollama 的 `think`）尚未实现，目前被静默忽略，与「不支持的参数按名字拒绝」不符；Responses 的 `file_id` 拒绝；Ollama 原生 API 的 `images` 拒绝，模型管理端点统一答 501。
 - **数据与运维**：`response_turns` 没有保留期清理；用量账本最终一致（缓冲满即丢弃、推送失败不重试）；已通过鉴权的在途推理不因 Key 吊销中断（P06）；MySQL 迁移 dirty 后需人工检查再 resume，不提供 down（P07）；`Kind: ollama` 的模型拉取不受来源白名单与字节配额约束。
 - Agent 的 `workflow/` 是占位包，工作流模板目录与输入绑定属于 Gateway，不要按目录名重复实现。
 
@@ -142,6 +142,7 @@
 - **持久化用量账本**：按租户/模型的 token 用量，`request_id` 幂等去重，Console `/console/usage`、`/operator/usage`；不含计费。见 [Gateway](service/aiServeWeaveGateway/STATUS.md#按租户模型的持久化用量账本statusmd-的-p2) 与 [ControlPlane](service/aiServeWeaveControlPlane/STATUS.md#用量账本statusmd-的-p2)。
 - **独立 Tunnel Gateway 与事件基础设施评估**：结论是现在不拆，见 [评估](docs/superpowers/specs/2026-09-18-p2-tunnel-gateway-event-infra-evaluation.md)。
 - **目标内排序策略**：`-scheduler-policy`（`least_load`/`power_of_two`/`prefix_hash`），见 [Gateway STATUS「模型别名与节点标签」第 6 条](service/aiServeWeaveGateway/STATUS.md#模型别名与节点标签)。
+- **推理内容透传**：契约（proto、`runtime.ChatMessage`/`ChatMessageDelta`/`Usage`、`tunnelwire`）新增思考内容与思考 token；`openai` 适配器解析 `reasoning_content`/`reasoning`，`anthropic` 适配器解析 `thinking` 块；四个前门各按自己协议输出，客户端回传的思考不转发。见 [Gateway STATUS「Responses API」](service/aiServeWeaveGateway/STATUS.md#responses-api)、[Anthropic Messages](service/aiServeWeaveGateway/STATUS.md#anthropic-messages)、[Ollama 原生 API](service/aiServeWeaveGateway/STATUS.md#ollama-原生-api)。CLI 后端（Codex、Claude Code 等）的思考仍被丢弃，请求侧参数与兜底解析器是后续任务。
 - **TensorRT-LLM 与 TokenSpeed 本地后端**：见 [runtime README](common/runtime/README.md#tensorrt-llm)。
 
 ## 状态维护与完成标准

@@ -42,9 +42,11 @@ type chatStreamChoiceDTO struct {
 }
 
 type chatMessageDeltaDTO struct {
-	Role      string             `json:"role"`
-	Content   string             `json:"content"`
-	ToolCalls []toolCallDeltaDTO `json:"tool_calls"`
+	Role             string             `json:"role"`
+	Content          string             `json:"content"`
+	ToolCalls        []toolCallDeltaDTO `json:"tool_calls"`
+	ReasoningContent string             `json:"reasoning_content"`
+	Reasoning        string             `json:"reasoning"`
 }
 
 type toolCallDeltaDTO struct {
@@ -153,17 +155,18 @@ func decodeChatStream(c *Client, resp *http.Response, out *runtime.ChanStream[ru
 func chatEventFromChunk(chunk chatStreamChunkDTO) runtime.ChatEvent {
 	event := runtime.ChatEvent{ID: chunk.ID, Model: chunk.Model}
 	if chunk.Usage != nil {
-		event.Usage = &runtime.Usage{
-			PromptTokens:     chunk.Usage.PromptTokens,
-			CompletionTokens: chunk.Usage.CompletionTokens,
-			TotalTokens:      chunk.Usage.TotalTokens,
-		}
+		usage := chunk.Usage.toRuntime()
+		event.Usage = &usage
 	}
 	if len(chunk.Choices) == 0 {
 		return event
 	}
 	choice := chunk.Choices[0]
-	event.Delta = runtime.ChatMessageDelta{Role: choice.Delta.Role, Content: choice.Delta.Content}
+	event.Delta = runtime.ChatMessageDelta{
+		Role:             choice.Delta.Role,
+		Content:          choice.Delta.Content,
+		ReasoningContent: reasoningText(choice.Delta.ReasoningContent, choice.Delta.Reasoning),
+	}
 	for _, tc := range choice.Delta.ToolCalls {
 		event.Delta.ToolCalls = append(event.Delta.ToolCalls, runtime.ToolCallDelta{
 			Index: tc.Index,

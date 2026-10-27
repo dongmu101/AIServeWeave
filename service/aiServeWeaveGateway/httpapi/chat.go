@@ -23,6 +23,15 @@ type chatMessageJSON struct {
 	Name       string          `json:"name,omitempty"`
 	ToolCallID string          `json:"tool_call_id,omitempty"`
 	ToolCalls  []toolCallJSON  `json:"tool_calls,omitempty"`
+	// ReasoningContent is rendered on a response, the field name DeepSeek
+	// introduced and vLLM and SGLang follow. On a request it is accepted and
+	// ignored: toRuntime does not copy it, so a client that echoes a prior
+	// turn's reasoning back does not have it replayed to the backend.
+	//
+	// ReasoningContent 在响应上输出，字段名沿用 DeepSeek 首创、vLLM 与 SGLang 跟随的
+	// 写法。在请求上它被接受但忽略：toRuntime 不拷贝它，因此客户端回传上一轮的思考时，
+	// 它不会被回放给后端。
+	ReasoningContent string `json:"reasoning_content,omitempty"`
 }
 
 // chatContentJSON accepts OpenAI's "content" as either a plain string or an
@@ -316,9 +325,32 @@ func fromRuntimeToolCalls(calls []runtime.ToolCall) []toolCallJSON {
 }
 
 type usageJSON struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens,omitempty"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int                          `json:"prompt_tokens"`
+	CompletionTokens        int                          `json:"completion_tokens,omitempty"`
+	TotalTokens             int                          `json:"total_tokens"`
+	CompletionTokensDetails *completionTokensDetailsJSON `json:"completion_tokens_details,omitempty"`
+}
+
+type completionTokensDetailsJSON struct {
+	ReasoningTokens int `json:"reasoning_tokens"`
+}
+
+// chatUsageJSON renders usage for a chat completion. completion_tokens_details
+// appears only when the backend reported reasoning tokens: a zero there would
+// claim the model did not reason, not that nobody counted.
+//
+// chatUsageJSON 渲染一次 chat completion 的用量。completion_tokens_details 只在后端
+// 报告了思考 token 时出现：在那里写 0 等于断言模型没有思考，而不是没人统计。
+func chatUsageJSON(u runtime.Usage) usageJSON {
+	out := usageJSON{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+	if u.ReasoningTokens > 0 {
+		out.CompletionTokensDetails = &completionTokensDetailsJSON{ReasoningTokens: u.ReasoningTokens}
+	}
+	return out
 }
 
 type chatCompletionResponse struct {
@@ -352,9 +384,10 @@ type chatChunkChoiceJSON struct {
 }
 
 type chatMessageDeltaJSON struct {
-	Role      string         `json:"role,omitempty"`
-	Content   string         `json:"content,omitempty"`
-	ToolCalls []toolCallJSON `json:"tool_calls,omitempty"`
+	Role             string         `json:"role,omitempty"`
+	Content          string         `json:"content,omitempty"`
+	ReasoningContent string         `json:"reasoning_content,omitempty"`
+	ToolCalls        []toolCallJSON `json:"tool_calls,omitempty"`
 }
 
 // -----------------------------------------------------------------------
@@ -419,17 +452,14 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, canonic
 		Choices: []chatChoiceJSON{{
 			Index: 0,
 			Message: chatMessageJSON{
-				Role:      resp.Message.Role,
-				Content:   chatContentJSON{Text: resp.Message.Content},
-				ToolCalls: fromRuntimeToolCalls(resp.Message.ToolCalls),
+				Role:             resp.Message.Role,
+				Content:          chatContentJSON{Text: resp.Message.Content},
+				ToolCalls:        fromRuntimeToolCalls(resp.Message.ToolCalls),
+				ReasoningContent: resp.Message.ReasoningContent,
 			},
 			FinishReason: resp.FinishReason,
 		}},
-		Usage: usageJSON{
-			PromptTokens:     resp.Usage.PromptTokens,
-			CompletionTokens: resp.Usage.CompletionTokens,
-			TotalTokens:      resp.Usage.TotalTokens,
-		},
+		Usage: chatUsageJSON(resp.Usage),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -521,20 +551,18 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical 
 			Choices: []chatChunkChoiceJSON{{
 				Index: 0,
 				Delta: chatMessageDeltaJSON{
-					Role:      ev.Delta.Role,
-					Content:   ev.Delta.Content,
-					ToolCalls: toolCallDeltasToJSON(ev.Delta.ToolCalls),
+					Role:             ev.Delta.Role,
+					Content:          ev.Delta.Content,
+					ReasoningContent: ev.Delta.ReasoningContent,
+					ToolCalls:        toolCallDeltasToJSON(ev.Delta.ToolCalls),
 				},
 				FinishReason: finishReasonPtr(ev.FinishReason),
 			}},
 		}
 		if ev.Usage != nil {
 			usage = *ev.Usage
-			chunk.Usage = &usageJSON{
-				PromptTokens:     ev.Usage.PromptTokens,
-				CompletionTokens: ev.Usage.CompletionTokens,
-				TotalTokens:      ev.Usage.TotalTokens,
-			}
+			counts := chatUsageJSON(*ev.Usage)
+			chunk.Usage = &counts
 		}
 		if err := writeSSE(w, chunk); err != nil {
 			return

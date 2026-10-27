@@ -970,6 +970,13 @@ message ChatMessage {
   // text-only message, which stays in content above — the two are never
   // both non-empty on the same message.
   repeated ContentPart content_parts = 6;
+
+  // reasoning_content is the model's visible chain of thought, kept apart
+  // from content so a front door can render it in its own protocol's slot
+  // (Chat Completions reasoning_content, a Responses reasoning item, an
+  // Anthropic thinking block). Set only on assistant output; front doors
+  // never put it on a request, so a prior turn's reasoning is not sent back.
+  string reasoning_content = 7;
 }
 
 // ContentPart is one piece of ChatMessage.content_parts: a text run, an
@@ -1060,6 +1067,7 @@ message ChatMessageDelta {
   string role = 1;
   string content = 2;
   repeated ToolCallDelta tool_calls = 3;
+  string reasoning_content = 4;         // one fragment of ChatMessage.reasoning_content
 }
 
 message ToolCallDelta {
@@ -1078,6 +1086,7 @@ message Usage {
   int64 prompt_tokens = 1;
   int64 completion_tokens = 2;
   int64 total_tokens = 3;
+  int64 reasoning_tokens = 4;           // the part of completion_tokens spent reasoning; 0 when unreported
 }
 
 message EmbeddingRequest {

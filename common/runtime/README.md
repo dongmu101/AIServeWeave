@@ -650,7 +650,7 @@ SMG 改走 `trtllm-serve --grpc` 的原型 gRPC 协议接入 TensorRT-LLM。那�
 | Chat | `POST /v1/chat/completions` | 复用共享 OpenAI-compatible 客户端 |
 | Embedding | `POST /v1/embeddings` | 对外保持 OpenAI 语义 |
 
-**已知差异（实测 0.32.14）：** 具备 `thinking` 能力的模型在 `/v1/chat/completions` 的响应里，把思考内容放在非标准的 `choices[].message.reasoning`（流式为 `delta.reasoning`）字段，`content` 只保留最终答案。`ChatMessage`/`ChatMessageDelta` 目前没有这个字段，因此思考内容会被丢弃：流式调用只收到最终答案（可接受），而非流式调用若 `max_tokens` 在思考阶段就耗尽，会返回 `content` 为空、`finish_reason` 为 `length` 的结果。这不是 Ollama 专有问题——vLLM 和 SGLang 的 reasoning 模型也走同一形状，因此归属应当是 `runtime.ChatMessage` 增加 reasoning 字段并由 `openai` 层统一解析，而不是在 Ollama 适配器里单独处理；在跨适配器方案确定前，本适配器不私自加字段。
+**思考内容（实测 0.32.14）：** 具备 `thinking` 能力的模型在 `/v1/chat/completions` 的响应里，把思考内容放在非标准的 `choices[].message.reasoning`（流式为 `delta.reasoning`）字段，`content` 只保留最终答案。vLLM、SGLang 与 DeepSeek 用的是 `reasoning_content`，较新的 vLLM 也改用 `reasoning`。`openai` 层两个名字都认，统一解析进 `ChatMessage.ReasoningContent`/`ChatMessageDelta.ReasoningContent`（两个都有时只取一个，不拼接），`usage.completion_tokens_details.reasoning_tokens` 解析进 `Usage.ReasoningTokens`。本适配器不需要单独处理。出站请求从不携带 `ReasoningContent`：上一轮的思考不回放给后端。非流式调用若 `max_tokens` 在思考阶段就耗尽，会返回 `content` 为空、`ReasoningContent` 非空、`finish_reason` 为 `length` 的结果。
 
 Ollama 原生接口用于身份和模型元数据，OpenAI-compatible 接口用于推理，避免自行转换其原生 NDJSON。不同版本支持的 OpenAI 字段不同，未验证字段保持 `unknown`。参考 [Ollama OpenAI compatibility](https://docs.ollama.com/api/openai-compatibility)、[List models](https://docs.ollama.com/api/tags) 和 [Get version](https://docs.ollama.com/api/version)。
 

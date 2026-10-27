@@ -149,6 +149,12 @@ func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req res
 func (h *handlers) persistResponseTurn(responseID, tenantID, previousResponseID, model string, ownMessages []runtime.ChatMessage, assistant runtime.ChatMessage) {
 	turn := make([]runtime.ChatMessage, 0, len(ownMessages)+1)
 	turn = append(turn, ownMessages...)
+	// A replayed turn is sent to the backend without its reasoning anyway,
+	// so storing it would only keep a copy of the model's chain of thought
+	// that nothing reads.
+	//
+	// 回放的轮次本来就不带思考发给后端，存下它只会多留一份没人读的思考链副本。
+	assistant.ReasoningContent = ""
 	turn = append(turn, assistant)
 	encoded, err := json.Marshal(turn)
 	if err != nil {
@@ -215,23 +221,33 @@ func usageFor(usage runtime.Usage) *responsesUsage {
 	if usage.PromptTokens == 0 && usage.CompletionTokens == 0 && usage.TotalTokens == 0 {
 		return nil
 	}
-	return &responsesUsage{
+	out := &responsesUsage{
 		InputTokens:  usage.PromptTokens,
 		OutputTokens: usage.CompletionTokens,
 		TotalTokens:  usage.TotalTokens,
 	}
+	// Same rule as chatUsageJSON: a zero reasoning count is not rendered.
+	// 与 chatUsageJSON 同一规则：思考 token 为 0 时不输出。
+	if usage.ReasoningTokens > 0 {
+		out.OutputTokensDetails = &responsesOutputTokensDetails{ReasoningTokens: usage.ReasoningTokens}
+	}
+	return out
 }
 
 // outputItemsFor renders an assistant message as Responses output items: a
-// message item for its text when it has any, then one item per tool call in the
-// type its tool was declared as. A reply that is only tool calls has no message
-// item: the model chose to call rather than to answer.
+// reasoning item for its chain of thought when it has one, a message item for
+// its text when it has any, then one item per tool call in the type its tool
+// was declared as. A reply that is only tool calls has no message item: the
+// model chose to call rather than to answer.
 //
-// outputItemsFor 把一条 assistant 消息渲染成 Responses 的输出项：有文本时先是一个承载
-// 文本的 message 项，随后每个工具调用一项，类型为其工具当初声明的类型。只有工具调用的
-// 回复没有 message 项：模型选择的是调用而不是作答。
+// outputItemsFor 把一条 assistant 消息渲染成 Responses 的输出项：有思考时先是一个
+// reasoning 项，有文本时是一个承载文本的 message 项，随后每个工具调用一项，类型为其
+// 工具当初声明的类型。只有工具调用的回复没有 message 项：模型选择的是调用而不是作答。
 func outputItemsFor(msg runtime.ChatMessage, toolset responsesToolset) []responseOutputRaw {
 	var items []responseOutputRaw
+	if msg.ReasoningContent != "" {
+		items = append(items, reasoningItem(newItemID("rs"), msg.ReasoningContent, "completed"))
+	}
 	if msg.Content != "" || len(msg.ToolCalls) == 0 {
 		items = append(items, responseOutputRaw{
 			Type:   "message",
@@ -316,9 +332,10 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 		if ev.FinishReason != "" {
 			finishReason = ev.FinishReason
 		}
-		if ev.Delta.Content == "" && len(ev.Delta.ToolCalls) == 0 {
+		if ev.Delta.Content == "" && len(ev.Delta.ToolCalls) == 0 && ev.Delta.ReasoningContent == "" {
 			continue
 		}
+		items.reasoning(ev.Delta.ReasoningContent)
 		items.text(ev.Delta.Content)
 		for _, call := range ev.Delta.ToolCalls {
 			items.toolCall(call)

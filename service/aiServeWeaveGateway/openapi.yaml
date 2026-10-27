@@ -475,6 +475,9 @@ components:
           type: array
           items:
             $ref: "#/components/schemas/ToolCall"
+        reasoning_content:
+          type: string
+          description: 模型的思考过程，只出现在响应里；请求里回传会被接受但不转发给后端
 
     ToolCall:
       type: object
@@ -547,6 +550,11 @@ components:
         prompt_tokens: { type: integer }
         completion_tokens: { type: integer }
         total_tokens: { type: integer }
+        completion_tokens_details:
+          type: object
+          description: 仅在后端报告了思考 token 时出现
+          properties:
+            reasoning_tokens: { type: integer }
 
     ChatCompletionResponse:
       type: object
@@ -585,6 +593,7 @@ components:
                 properties:
                   role: { type: string }
                   content: { type: string }
+                  reasoning_content: { type: string }
                   tool_calls:
                     type: array
                     items:

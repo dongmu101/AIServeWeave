@@ -817,12 +817,13 @@ func chatMessagesFromProto(pbs []*tunnelv1.ChatMessage) []runtime.ChatMessage {
 
 func chatMessageToProto(m runtime.ChatMessage) *tunnelv1.ChatMessage {
 	return &tunnelv1.ChatMessage{
-		Role:         m.Role,
-		Content:      m.Content,
-		Name:         m.Name,
-		ToolCallId:   m.ToolCallID,
-		ToolCalls:    toolCallsToProto(m.ToolCalls),
-		ContentParts: contentPartsToProto(m.ContentParts),
+		Role:             m.Role,
+		Content:          m.Content,
+		Name:             m.Name,
+		ToolCallId:       m.ToolCallID,
+		ToolCalls:        toolCallsToProto(m.ToolCalls),
+		ContentParts:     contentPartsToProto(m.ContentParts),
+		ReasoningContent: m.ReasoningContent,
 	}
 }
 
@@ -831,12 +832,13 @@ func chatMessageFromProto(pb *tunnelv1.ChatMessage) runtime.ChatMessage {
 		return runtime.ChatMessage{}
 	}
 	return runtime.ChatMessage{
-		Role:         pb.GetRole(),
-		Content:      pb.GetContent(),
-		Name:         pb.GetName(),
-		ToolCallID:   pb.GetToolCallId(),
-		ToolCalls:    toolCallsFromProto(pb.GetToolCalls()),
-		ContentParts: contentPartsFromProto(pb.GetContentParts()),
+		Role:             pb.GetRole(),
+		Content:          pb.GetContent(),
+		Name:             pb.GetName(),
+		ToolCallID:       pb.GetToolCallId(),
+		ToolCalls:        toolCallsFromProto(pb.GetToolCalls()),
+		ContentParts:     contentPartsFromProto(pb.GetContentParts()),
+		ReasoningContent: pb.GetReasoningContent(),
 	}
 }
 
@@ -1043,12 +1045,13 @@ func ChatEventFromProto(pb *tunnelv1.ChatEvent) runtime.ChatEvent {
 // chatMessageDeltaToProto returns nil for an empty delta so a bare
 // finish-reason event does not carry an empty submessage.
 func chatMessageDeltaToProto(d runtime.ChatMessageDelta) *tunnelv1.ChatMessageDelta {
-	if d.Role == "" && d.Content == "" && len(d.ToolCalls) == 0 {
+	if d.Role == "" && d.Content == "" && len(d.ToolCalls) == 0 && d.ReasoningContent == "" {
 		return nil
 	}
 	pb := &tunnelv1.ChatMessageDelta{
-		Role:    d.Role,
-		Content: d.Content,
+		Role:             d.Role,
+		Content:          d.Content,
+		ReasoningContent: d.ReasoningContent,
 	}
 	if len(d.ToolCalls) > 0 {
 		pb.ToolCalls = make([]*tunnelv1.ToolCallDelta, len(d.ToolCalls))
@@ -1072,8 +1075,9 @@ func chatMessageDeltaFromProto(pb *tunnelv1.ChatMessageDelta) runtime.ChatMessag
 		return runtime.ChatMessageDelta{}
 	}
 	d := runtime.ChatMessageDelta{
-		Role:    pb.GetRole(),
-		Content: pb.GetContent(),
+		Role:             pb.GetRole(),
+		Content:          pb.GetContent(),
+		ReasoningContent: pb.GetReasoningContent(),
 	}
 	if calls := pb.GetToolCalls(); len(calls) > 0 {
 		d.ToolCalls = make([]runtime.ToolCallDelta, len(calls))
@@ -1095,13 +1099,14 @@ func chatMessageDeltaFromProto(pb *tunnelv1.ChatMessageDelta) runtime.ChatMessag
 // usageToProto returns nil for nil or all-zero usage, so an intermediate
 // stream event stays as small as possible.
 func usageToProto(u *runtime.Usage) *tunnelv1.Usage {
-	if u == nil || (u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0) {
+	if u == nil || (u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 && u.ReasoningTokens == 0) {
 		return nil
 	}
 	return &tunnelv1.Usage{
 		PromptTokens:     int64(u.PromptTokens),
 		CompletionTokens: int64(u.CompletionTokens),
 		TotalTokens:      int64(u.TotalTokens),
+		ReasoningTokens:  int64(u.ReasoningTokens),
 	}
 }
 
@@ -1113,6 +1118,7 @@ func usageFromProto(pb *tunnelv1.Usage) *runtime.Usage {
 		PromptTokens:     int(pb.GetPromptTokens()),
 		CompletionTokens: int(pb.GetCompletionTokens()),
 		TotalTokens:      int(pb.GetTotalTokens()),
+		ReasoningTokens:  int(pb.GetReasoningTokens()),
 	}
 }
 

@@ -14,13 +14,22 @@ import (
 // and as the content-array form when it is not — see MarshalJSON. Parts is
 // never populated on a decoded response: no backend these adapters talk to
 // returns array-form content in a chat completion.
+//
+// ReasoningContent and Reasoning are decode-only: MarshalJSON goes through
+// chatMessageDTOWire, which has neither, so a prior turn's reasoning is never
+// sent back upstream.
+//
+// ReasoningContent 与 Reasoning 只用于解码：MarshalJSON 走 chatMessageDTOWire，
+// 后者两个字段都没有，因此上一轮的思考永远不会被发回上游。
 type chatMessageDTO struct {
-	Role       string           `json:"role"`
-	Content    string           `json:"content"`
-	Parts      []contentPartDTO `json:"-"`
-	Name       string           `json:"name,omitempty"`
-	ToolCallID string           `json:"tool_call_id,omitempty"`
-	ToolCalls  []toolCallDTO    `json:"tool_calls,omitempty"`
+	Role             string           `json:"role"`
+	Content          string           `json:"content"`
+	Parts            []contentPartDTO `json:"-"`
+	Name             string           `json:"name,omitempty"`
+	ToolCallID       string           `json:"tool_call_id,omitempty"`
+	ToolCalls        []toolCallDTO    `json:"tool_calls,omitempty"`
+	ReasoningContent string           `json:"reasoning_content,omitempty"`
+	Reasoning        string           `json:"reasoning,omitempty"`
 }
 
 // chatMessageDTOWire mirrors chatMessageDTO's JSON shape with Content typed
@@ -101,9 +110,43 @@ type functionCallDTO struct {
 }
 
 type usageDTO struct {
-	PromptTokens     int `json:"prompt_tokens"`
-	CompletionTokens int `json:"completion_tokens"`
-	TotalTokens      int `json:"total_tokens"`
+	PromptTokens            int `json:"prompt_tokens"`
+	CompletionTokens        int `json:"completion_tokens"`
+	TotalTokens             int `json:"total_tokens"`
+	CompletionTokensDetails *struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"completion_tokens_details"`
+}
+
+// toRuntime converts the wire usage, including the reasoning share of the
+// completion tokens when the backend breaks it out.
+//
+// toRuntime 转换线上的用量；后端单独报告时一并带上补全 token 中的思考部分。
+func (u usageDTO) toRuntime() runtime.Usage {
+	out := runtime.Usage{
+		PromptTokens:     u.PromptTokens,
+		CompletionTokens: u.CompletionTokens,
+		TotalTokens:      u.TotalTokens,
+	}
+	if u.CompletionTokensDetails != nil {
+		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens
+	}
+	return out
+}
+
+// reasoningText picks the reasoning a backend sent under either of its two
+// names: vLLM, SGLang and DeepSeek use reasoning_content, while Ollama and
+// newer vLLM use reasoning. A backend migrating between the two may send both
+// with the same text, so one is taken rather than both concatenated.
+//
+// reasoningText 取后端以两种名字之一发送的思考内容：vLLM、SGLang 与 DeepSeek 用
+// reasoning_content，Ollama 与较新的 vLLM 用 reasoning。处于迁移期的后端可能两个都
+// 发且内容相同，因此只取其一，而不是拼接。
+func reasoningText(reasoningContent, reasoning string) string {
+	if reasoningContent != "" {
+		return reasoningContent
+	}
+	return reasoning
 }
 
 type toolDTO struct {
@@ -215,10 +258,11 @@ func toMessageDTO(m runtime.ChatMessage) chatMessageDTO {
 
 func fromMessageDTO(dto chatMessageDTO) runtime.ChatMessage {
 	m := runtime.ChatMessage{
-		Role:       dto.Role,
-		Content:    dto.Content,
-		Name:       dto.Name,
-		ToolCallID: dto.ToolCallID,
+		Role:             dto.Role,
+		Content:          dto.Content,
+		Name:             dto.Name,
+		ToolCallID:       dto.ToolCallID,
+		ReasoningContent: reasoningText(dto.ReasoningContent, dto.Reasoning),
 	}
 	for _, tc := range dto.ToolCalls {
 		m.ToolCalls = append(m.ToolCalls, runtime.ToolCall{
@@ -347,14 +391,10 @@ func Chat(ctx context.Context, c *Client, req runtime.ChatRequest) (runtime.Chat
 	}
 	choice := dtoResp.Choices[0]
 	return runtime.ChatResponse{
-		ID:      dtoResp.ID,
-		Model:   dtoResp.Model,
-		Message: fromMessageDTO(choice.Message),
-		Usage: runtime.Usage{
-			PromptTokens:     dtoResp.Usage.PromptTokens,
-			CompletionTokens: dtoResp.Usage.CompletionTokens,
-			TotalTokens:      dtoResp.Usage.TotalTokens,
-		},
+		ID:           dtoResp.ID,
+		Model:        dtoResp.Model,
+		Message:      fromMessageDTO(choice.Message),
+		Usage:        dtoResp.Usage.toRuntime(),
 		FinishReason: choice.FinishReason,
 		CreatedAt:    time.Unix(dtoResp.Created, 0).UTC(),
 	}, nil

@@ -15,9 +15,13 @@ import (
 // The rules that keep the sequence well-formed:
 //
 //   - An item is announced (output_item.added) before any delta that names it.
-//   - A message item is closed as soon as a tool call opens, so a client never
-//     sees a tool call announced inside an unfinished message. Text that arrives
-//     after that opens a fresh message item.
+//   - At most one of the reasoning item and the message item is open at a
+//     time: reasoning closes an open message, and text closes open reasoning.
+//     Reasoning that arrives after an answer has started opens a fresh
+//     reasoning item instead of nesting inside the unfinished message.
+//   - A message or reasoning item is closed as soon as a tool call opens, so a
+//     client never sees a tool call announced inside an unfinished item. Text
+//     that arrives after that opens a fresh message item.
 //   - A tool call is announced once its name is known, because the item carries
 //     it; arguments that arrive earlier are held and sent right after.
 //   - Tool calls are closed together at the end of the stream. Backends
@@ -31,8 +35,11 @@ import (
 // 保证序列良构的规则：
 //
 //   - 项在任何点名它的 delta 之前先宣告（output_item.added）。
-//   - 一旦有工具调用打开，message 项就立即关闭，客户端因而永远不会看到工具调用被宣告在
-//     一条未结束的消息里面。此后再到达的文本会开一个新的 message 项。
+//   - reasoning 项与 message 项同一时间至多打开一个：思考会关闭打开的 message，文本会
+//     关闭打开的 reasoning。回答开始之后才到达的思考会开一个新的 reasoning 项，而不是
+//     嵌在未结束的消息里。
+//   - 一旦有工具调用打开，message 或 reasoning 项就立即关闭，客户端因而永远不会看到
+//     工具调用被宣告在一个未结束的项里面。此后再到达的文本会开一个新的 message 项。
 //   - 工具调用在名字已知时才宣告，因为项里带着它；更早到达的参数先扣住，宣告之后立即发出。
 //   - 工具调用在流结束时一并关闭。后端会交错发出并行调用的片段，因此在流结束之前，没有
 //     哪个调用能被确知已经结束。
@@ -51,6 +58,11 @@ type responseItems struct {
 	msgIndex int
 	msgText  strings.Builder
 	allText  strings.Builder
+
+	rsOpen  bool
+	rsID    string
+	rsIndex int
+	rsText  strings.Builder
 
 	calls map[int]*streamedCall
 	order []*streamedCall
@@ -80,6 +92,7 @@ func (r *responseItems) text(delta string) {
 		return
 	}
 	if !r.msgOpen {
+		r.closeReasoning()
 		r.msgOpen = true
 		r.msgID = newItemID("msg")
 		r.msgIndex = len(r.output)
@@ -137,6 +150,78 @@ func (r *responseItems) closeMessage() {
 	r.output[r.msgIndex] = item
 }
 
+// reasoning appends a reasoning delta, opening a reasoning item if none is
+// open. The chain of thought streams as reasoning_text, not as a summary: a
+// chat backend hands it up verbatim.
+//
+// reasoning 追加一段思考 delta；没有打开的 reasoning 项时先打开一个。思考链以
+// reasoning_text 而不是摘要的形式流出：聊天后端递上来的就是原文。
+func (r *responseItems) reasoning(delta string) {
+	if delta == "" {
+		return
+	}
+	if !r.rsOpen {
+		r.closeMessage()
+		r.rsOpen = true
+		r.rsID = newItemID("rs")
+		r.rsIndex = len(r.output)
+		r.output = append(r.output, responseOutputRaw{})
+		// Spelled out as a map for the same reason as the message item in
+		// text: the announced item's empty arrays must serialise.
+		//
+		// 与 text 里的 message 项同理用 map 写出：所宣告项的空数组必须被序列化。
+		r.em.event("response.output_item.added", map[string]any{
+			"output_index": r.rsIndex,
+			"item": map[string]any{
+				"type": "reasoning", "id": r.rsID, "status": "in_progress",
+				"summary": []any{}, "content": []any{},
+			},
+		})
+		r.em.event("response.content_part.added", map[string]any{
+			"item_id": r.rsID, "output_index": r.rsIndex, "content_index": 0,
+			"part": responseContentPart{Type: "reasoning_text", Text: ""},
+		})
+	}
+	r.rsText.WriteString(delta)
+	r.em.event("response.reasoning_text.delta", map[string]any{
+		"item_id": r.rsID, "output_index": r.rsIndex, "content_index": 0, "delta": delta,
+	})
+}
+
+// closeReasoning finishes the open reasoning item, if any.
+//
+// closeReasoning 结束当前打开的 reasoning 项（如果有）。
+func (r *responseItems) closeReasoning() {
+	if !r.rsOpen {
+		return
+	}
+	r.rsOpen = false
+	text := r.rsText.String()
+	r.rsText.Reset()
+	r.em.event("response.reasoning_text.done", map[string]any{
+		"item_id": r.rsID, "output_index": r.rsIndex, "content_index": 0, "text": text,
+	})
+	r.em.event("response.content_part.done", map[string]any{
+		"item_id": r.rsID, "output_index": r.rsIndex, "content_index": 0,
+		"part": responseContentPart{Type: "reasoning_text", Text: text},
+	})
+	item := reasoningItem(r.rsID, text, "completed")
+	r.em.event("response.output_item.done", map[string]any{"output_index": r.rsIndex, "item": item})
+	r.output[r.rsIndex] = item
+}
+
+// reasoningItem is a reasoning output item carrying text as one
+// reasoning_text part and an empty summary.
+//
+// reasoningItem 是一个 reasoning 输出项：text 作为单个 reasoning_text 部件，摘要为空。
+func reasoningItem(id, text, status string) responseOutputRaw {
+	return responseOutputRaw{
+		Type: "reasoning", ID: id, Status: status,
+		Summary: &[]responseContentPart{},
+		Content: []responseContentPart{{Type: "reasoning_text", Text: text}},
+	}
+}
+
 // toolCall applies one tool-call delta.
 //
 // toolCall 应用一个工具调用 delta。
@@ -175,6 +260,7 @@ func (r *responseItems) toolCall(d runtime.ToolCallDelta) {
 //
 // open 宣告一个工具调用的项。
 func (r *responseItems) open(c *streamedCall) {
+	r.closeReasoning()
 	r.closeMessage()
 	if c.callID == "" {
 		// Some backends never name a call. The client needs an id to pair the
@@ -217,6 +303,7 @@ func (r *responseItems) finish() []responseOutputRaw {
 			r.open(c)
 		}
 	}
+	r.closeReasoning()
 	r.closeMessage()
 	for _, c := range r.order {
 		item := r.toolset.callItem(c.itemID, c.callID, c.name, c.args.String(), "completed")

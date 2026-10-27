@@ -71,7 +71,7 @@ Messages 要求角色交替，所以相邻的同角色消息会被合并。
 
 **扩展字段**
 
-`Extra` 可以追加顶层字段（例如 `metadata`），但不能覆盖本包已写入的字段。不建议通过 `Extra` 开启 `thinking`：响应中的 thinking 块会被丢弃，多轮工具调用回传历史时无法重建，上游会拒绝；默认的 4096 输出上限也可能小于 `budget_tokens`。
+`Extra` 可以追加顶层字段（例如 `metadata`），但不能覆盖本包已写入的字段。不建议通过 `Extra` 开启 `thinking`：thinking 块的文本虽然会作为 `ReasoningContent` 返回，但签名被丢弃，多轮工具调用回传历史时无法重建带签名的 thinking 块，上游会拒绝；默认的 4096 输出上限也可能小于 `budget_tokens`。
 
 **错误文本**
 
@@ -79,7 +79,7 @@ Messages 要求角色交替，所以相邻的同角色消息会被合并。
 
 ## 响应转换
 
-- 文本块拼接为 `content`，`tool_use` 块转为 `tool_calls`，thinking 块丢弃。
+- 文本块拼接为 `content`，`tool_use` 块转为 `tool_calls`，thinking 块的文本拼接为 `ReasoningContent`（流式为 `thinking_delta` 增量）；签名（`signature_delta`）与 `redacted_thinking` 块丢弃。
 - `prompt_tokens` 包含缓存命中和缓存写入的输入 token，与 OpenAI 的口径一致。
 
 `stop_reason` 的映射：

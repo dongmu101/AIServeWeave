@@ -359,6 +359,16 @@ type ChatMessage struct {
 	Name         string
 	ToolCallID   string
 	ToolCalls    []ToolCall
+	// ReasoningContent is the model's visible chain of thought, kept apart
+	// from Content so each front door can render it in its own protocol's
+	// slot. Adapters set it only on assistant output; front doors never set
+	// it on a request, and adapters never send it upstream, so a prior
+	// turn's reasoning is not replayed to the backend.
+	//
+	// ReasoningContent 是模型可见的思考过程，与 Content 分开存放，好让每个前门
+	// 按自己协议的位置渲染它。适配器只在 assistant 输出上设置它；前门从不在请求上
+	// 设置它，适配器也从不把它发往上游，因此上一轮的思考不会回放给后端。
+	ReasoningContent string
 }
 
 // ContentPart is one piece of a multi-part ChatMessage.ContentParts: a text
@@ -464,6 +474,9 @@ type ChatMessageDelta struct {
 	Role      string
 	Content   string
 	ToolCalls []ToolCallDelta
+	// ReasoningContent is one fragment of ChatMessage.ReasoningContent.
+	// ReasoningContent 是 ChatMessage.ReasoningContent 的一个片段。
+	ReasoningContent string
 }
 
 type ToolCallDelta struct {
@@ -482,6 +495,11 @@ type Usage struct {
 	PromptTokens     int
 	CompletionTokens int
 	TotalTokens      int
+	// ReasoningTokens is the part of CompletionTokens the model spent
+	// reasoning, or 0 when the backend does not break it out.
+	//
+	// ReasoningTokens 是 CompletionTokens 中用于思考的部分；后端不单独报告时为 0。
+	ReasoningTokens int
 }
 
 type ToolCall struct {

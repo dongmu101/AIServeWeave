@@ -278,11 +278,12 @@ func (u usage) prompt() int {
 }
 
 type responseBlock struct {
-	Type  string          `json:"type"`
-	Text  string          `json:"text"`
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
+	Type     string          `json:"type"`
+	Text     string          `json:"text"`
+	Thinking string          `json:"thinking"`
+	ID       string          `json:"id"`
+	Name     string          `json:"name"`
+	Input    json.RawMessage `json:"input"`
 }
 
 type messagesResponse struct {
@@ -309,9 +310,14 @@ func finishReason(stop string) string {
 	return "stop"
 }
 
-// toChatResponse keeps text and tool_use blocks; thinking blocks are not
-// part of the OpenAI message and are dropped.
-// toChatResponse 保留文本与 tool_use 块；thinking 块不属于 OpenAI 消息，被丢弃。
+// toChatResponse keeps text and tool_use blocks and carries thinking blocks
+// as ReasoningContent. A redacted_thinking block is encrypted and has no
+// readable text, and a thinking block's signature only means something to
+// Anthropic itself, so both are dropped.
+//
+// toChatResponse 保留文本与 tool_use 块，thinking 块作为 ReasoningContent 携带。
+// redacted_thinking 块是加密的、没有可读文本，thinking 块的签名也只对 Anthropic
+// 自己有意义，因此两者都被丢弃。
 func toChatResponse(resp messagesResponse, createdAt time.Time) runtime.ChatResponse {
 	out := runtime.ChatResponse{CreatedAt: createdAt}
 	out.ID, out.Model, out.FinishReason = resp.ID, resp.Model, finishReason(resp.StopReason)
@@ -320,6 +326,8 @@ func toChatResponse(resp messagesResponse, createdAt time.Time) runtime.ChatResp
 		switch b.Type {
 		case "text":
 			out.Message.Content += b.Text
+		case "thinking":
+			out.Message.ReasoningContent += b.Thinking
 		case "tool_use":
 			args := string(b.Input)
 			if args == "" {
