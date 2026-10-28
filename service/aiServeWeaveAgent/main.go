@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"slices"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -137,6 +138,13 @@ func main() {
 	}
 
 	var declaredRuntimes []runtime.Config
+	reload := reloadSource{path: resolvedConfigPath}
+	if reload.path == "" {
+		// The setup page may create the file after startup; a reload then
+		// reads what it saved.
+		// 设置页面可能在启动之后才创建这份文件；此时重新加载读取它保存的内容。
+		reload.path = uiConfigPath
+	}
 	if resolvedConfigPath != "" {
 		cfg, err := agentconfig.Load(resolvedConfigPath)
 		if err != nil {
@@ -150,7 +158,9 @@ func main() {
 		declaredRuntimes = runtimesFromConfig(cfg.Runtimes)
 	}
 	if *ollamaURL != "" {
-		declaredRuntimes = append(declaredRuntimes, runtime.Config{ID: *ollamaID, Kind: runtime.KindOllama, BaseURL: *ollamaURL})
+		ollama := runtime.Config{ID: *ollamaID, Kind: runtime.KindOllama, BaseURL: *ollamaURL}
+		declaredRuntimes = append(declaredRuntimes, ollama)
+		reload.extra = []runtime.Config{ollama}
 	}
 
 	logger, err := newLogger(*logLevel)
@@ -160,7 +170,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr, *configUIAddr, uiConfigPath); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, reload, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr, *configUIAddr, uiConfigPath); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -176,11 +186,17 @@ func main() {
 // 页面或已声明的后端暂时不可用不阻止启动；未就绪的后端会定期重试。
 // 无效配置仍使启动失败。declaredRuntimes 合并 YAML 与 -ollama-url/-ollama-id
 // 的声明；模型拉取仅使用 ollamaURL，保持其纯本地 flag 契约。
-func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
+//
+// SIGHUP, or a save from the setup page, re-reads reload's file and applies
+// its runtimes: list in place (see runtimeReloader).
+// SIGHUP 或设置页面保存会重新读取 reload 指向的文件，并就地应用其 runtimes: 列表
+// （见 runtimeReloader）。
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, reload reloadSource, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
-	registry, err := newRegistry(declaredRuntimes)
+	local := newLocalDeclarations(declaredRuntimes)
+	registry, err := newReloadableRegistry(local)
 	if err != nil {
 		return err
 	}
@@ -204,6 +220,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		}
 	}()
 	var activeTunnels atomic.Pointer[tunnel.Manager]
+	var reloader atomic.Pointer[runtimeReloader]
 	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
 	if opts.enabled() {
 		// Only a node with a tunnel has anywhere to report the quota to; the
@@ -225,6 +242,10 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 				}
 			}
 			return snapshot
+		},
+		Reload: func(ctx context.Context) error {
+			_, err := reloader.Load().Reload(ctx)
+			return err
 		},
 	}
 	uiDone := make(chan struct{})
@@ -292,6 +313,31 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 			slog.String("base_url", fmt.Sprintf("http://127.0.0.1:%d", spec.Port)))
 	}
 
+	reloader.Store(&runtimeReloader{
+		path: reload.path, extra: reload.extra, local: local, manager: manager, usage: cliUsage,
+		usageStarted: func() {
+			if opts.enabled() {
+				go cliUsage.Run(ctx, cliUsageRefreshInterval)
+			}
+		},
+		allowed: opts.runtimeIDs(), logger: logger, current: slices.Clone(declaredRuntimes),
+	})
+	hangup := make(chan os.Signal, 1)
+	signal.Notify(hangup, syscall.SIGHUP)
+	defer signal.Stop(hangup)
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-hangup:
+				if _, err := reloader.Load().Reload(ctx); err != nil {
+					logger.Error("runtime reload failed / 运行时重新加载失败", slog.Any("error", err))
+				}
+			}
+		}
+	}()
+
 	// Beyond declaredRuntimes above, the manager starts with no instances
 	// until auto-discovery (below) or the tunnel's config delivery adds
 	// one.
@@ -351,6 +397,16 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 
 	logger.Info("agent stopped")
 	return nil
+}
+
+// reloadSource is where a runtime reload reads declarations from: the config
+// file, plus the -ollama-url declaration the file cannot change.
+//
+// reloadSource 是运行时重新加载读取声明的来源：配置文件，外加文件改变不了的
+// -ollama-url 声明。
+type reloadSource struct {
+	path  string
+	extra []runtime.Config
 }
 
 // newLogger returns a JSON logger at the requested level.

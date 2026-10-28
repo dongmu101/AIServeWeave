@@ -485,7 +485,12 @@ func (s *controlSession) reportCLIUsage(force bool) error {
 		return nil
 	}
 	accounts := source.Snapshot()
-	if len(accounts) == 0 {
+	// A node that never had a CLI account reports nothing; one that had and
+	// lost them all (a runtime reload) reports the empty list once, so the
+	// replica stops showing them.
+	// 从未有过 CLI 账户的节点什么都不报；有过而全部失去（运行时重新加载）的节点报告一次
+	// 空列表，让副本不再显示它们。
+	if len(accounts) == 0 && !s.client.cliUsageReported.Load() {
 		return nil
 	}
 	report := tunnelwire.CLIUsageReportToProto(accounts)
@@ -505,6 +510,9 @@ func (s *controlSession) reportCLIUsage(force bool) error {
 		return err
 	}
 	s.reportedCLIUsage = key
+	if len(accounts) > 0 {
+		s.client.cliUsageReported.Store(true)
+	}
 	return nil
 }
 

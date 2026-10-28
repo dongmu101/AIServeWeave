@@ -5,6 +5,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 )
@@ -169,6 +170,15 @@ func (c Config) Validate() error {
 		problems = append(problems, fmt.Sprintf("reasoning_parser %q is not one of %q, %q", c.ReasoningParser, ReasoningParserThinkTags, ReasoningParserThinkTagsPrefilled))
 	}
 
+	if c.AccountDir != "" {
+		switch {
+		case c.Kind != KindCodex && c.Kind != KindClaude:
+			problems = append(problems, fmt.Sprintf("account_dir does not apply to kind %q", c.Kind))
+		case !filepath.IsAbs(c.AccountDir) || filepath.Clean(c.AccountDir) != c.AccountDir:
+			problems = append(problems, "account_dir must be a clean absolute path")
+		}
+	}
+
 	for name := range c.Headers {
 		if forbiddenConfigHeaders[http.CanonicalHeaderKey(name)] {
 			problems = append(problems, fmt.Sprintf("header %q must not be set via config", name))
@@ -204,6 +214,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Int("max_concurrent", c.MaxConcurrent),
 		slog.Bool("exclusive", c.Exclusive),
 		slog.String("reasoning_parser", c.ReasoningParser),
+		slog.String("account_dir", c.AccountDir),
 		slog.Bool("tls_insecure_skip_verify", c.TLS.InsecureSkipVerify),
 	)
 }

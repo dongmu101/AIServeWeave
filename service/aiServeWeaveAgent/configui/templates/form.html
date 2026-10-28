@@ -100,7 +100,7 @@ button:hover { background: #1d4ed8; }
 <main>
 <h1><span data-i18n="a0009">{{$.Text.Text "a0009"}}</span></h1>
 <p class="intro"><span data-i18n="a0010">{{$.Text.Text "a0010"}}</span></p>
-{{if .Message}}<p class="message" role="status"><span data-i18n="a0084">{{.Message}}</span></p>{{end}}
+{{if .Message}}<p class="message" role="status"><span data-i18n="{{.MessageKey}}">{{.Message}}</span></p>{{end}}
 {{if .Error}}<p class="error" role="alert"><span data-i18n="a0083">{{.Error}}</span></p>{{end}}
 <form method="post">
 <div class="language-selector"><label for="aisw-locale"><span data-i18n="a0103">{{.Text.Text "a0103"}}</span></label><select id="aisw-locale" name="locale">{{range .Text.Options}}<option value="{{.Locale}}"{{if eq .Locale $.Locale}} selected{{end}}>{{.Label}}</option>{{end}}</select><span id="locale-status" role="status"></span></div>
@@ -179,10 +179,11 @@ button:hover { background: #1d4ed8; }
 <div class="field"><label><span data-i18n="a0039">{{$.Text.Text "a0039"}}</span><input type="text" class="runtime-id" placeholder="ollama-local" required pattern="[^,\s]+"></label></div>
 <div class="field"><label><span data-i18n="a0040">{{$.Text.Text "a0040"}}</span><select class="runtime-kind">
 <optgroup data-i18n-label="a0041" label="{{$.Text.Text "a0041"}}"><option value="ollama">Ollama</option><option value="vllm">vLLM</option><option value="sglang">SGLang</option><option value="trtllm">TensorRT-LLM</option><option value="tokenspeed">TokenSpeed</option><option value="comfyui">ComfyUI</option></optgroup>
-<optgroup data-i18n-label="a0042" label="{{$.Text.Text "a0042"}}"><option value="codex" data-group="cli">Codex CLI</option><option value="claude" data-group="cli">Claude Code CLI</option><option value="gemini-cli" data-group="cli" data-i18n="a0043">{{$.Text.Text "a0043"}}</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
+<optgroup data-i18n-label="a0042" label="{{$.Text.Text "a0042"}}"><option value="codex" data-group="cli" data-account="1">Codex CLI</option><option value="claude" data-group="cli" data-account="1">Claude Code CLI</option><option value="gemini-cli" data-group="cli" data-i18n="a0043">{{$.Text.Text "a0043"}}</option><option value="grok" data-group="cli">Grok CLI</option><option value="opencode" data-group="cli">OpenCode</option><option value="cursor" data-group="cli">Cursor</option><option value="codebuddy" data-group="cli">CodeBuddy Code</option><option value="qoder" data-group="cli">Qoder</option><option value="pi" data-group="cli">Pi Coding Agent</option></optgroup>
 <optgroup data-i18n-label="a0044" label="{{$.Text.Text "a0044"}}"><option value="anthropic" data-group="hosted">Claude (Anthropic API)</option><option value="openai" data-group="hosted">OpenAI</option><option value="gemini" data-group="hosted">Gemini</option><option value="deepseek" data-group="hosted">DeepSeek</option><option value="kimi" data-group="hosted">Kimi</option><option value="qwen" data-group="hosted">Qwen</option><option value="zhipu" data-group="hosted">Zhipu</option><option value="minimax" data-group="hosted">MiniMax</option><option value="anthropic_compatible" data-group="hosted" data-url-required="1" data-i18n="a0045">{{$.Text.Text "a0045"}}</option><option value="openai_compatible" data-group="hosted" data-url-required="1" data-i18n="a0046">{{$.Text.Text "a0046"}}</option></optgroup>
 </select></label></div>
 <div class="field wide"><label><span data-i18n="a0047">{{$.Text.Text "a0047"}}</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden><span data-i18n="a0048">{{$.Text.Text "a0048"}}</span></p></div>
+<div class="field wide runtime-account" hidden><label><span data-i18n="a0108">{{$.Text.Text "a0108"}}</span><input type="text" class="runtime-account-dir" placeholder="~/.codex-work" pattern="[^,]*"></label><p class="hint"><span data-i18n="a0109">{{$.Text.Text "a0109"}}</span></p></div>
 <div class="field runtime-hosted" hidden><label><span data-i18n="a0049">{{$.Text.Text "a0049"}}</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
 <div class="field runtime-hosted" hidden><label><span data-i18n="a0050">{{$.Text.Text "a0050"}}</span><input type="text" class="runtime-models" data-i18n-placeholder="a0051" placeholder="{{$.Text.Text "a0051"}}" pattern="[^,]*"></label></div>
 </div>
@@ -378,7 +379,9 @@ function syncRuntimes() {
   declarations.value = rows.map((row, index) => {
     const id = row.querySelector('.runtime-id');
     id.setCustomValidity(ids[index] && ids.indexOf(ids[index]) !== index ? AISWI18n.text('a0079') : '');
-    const fields = [ids[index], row.querySelector('.runtime-kind').value, row.querySelector('.runtime-url').value.trim()];
+    const kind = row.querySelector('.runtime-kind');
+    const account = kind.selectedOptions[0]?.dataset.account === '1';
+    const fields = [ids[index], kind.value, (account ? row.querySelector('.runtime-account-dir') : row.querySelector('.runtime-url')).value.trim()];
     const keyEnv = row.querySelector('.runtime-key-env').value.trim();
     const models = row.querySelector('.runtime-models').value.trim().split(/\s+/).filter(Boolean).join(' ');
     if (keyEnv || models) fields.push(keyEnv, models);
@@ -402,7 +405,11 @@ function addRuntime(id = '', kind = 'ollama', rest = '') {
   // 其他种类与以往一样，行的剩余部分就是 URL。
   const option = kindInput.selectedOptions[0];
   const fields = option && option.dataset.group === 'hosted' ? rest.split(',') : [rest];
-  urlInput.value = (fields[0] || '').trim();
+  // Codex and Claude Code put their account directory where the URL would be.
+  // Codex 与 Claude Code 把账户目录放在 URL 所在的列。
+  const accountInput = row.querySelector('.runtime-account-dir');
+  if (option && option.dataset.account === '1') accountInput.value = rest.trim();
+  else urlInput.value = (fields[0] || '').trim();
   row.querySelector('.runtime-key-env').value = (fields[1] || '').trim();
   row.querySelector('.runtime-models').value = fields.slice(2).join(' ').trim();
   function updateKind() {
@@ -416,6 +423,9 @@ function addRuntime(id = '', kind = 'ollama', rest = '') {
     urlInput.closest('label').hidden = cli;
     row.querySelector('.runtime-auth').hidden = !cli;
     row.querySelectorAll('.runtime-hosted').forEach(field => { field.hidden = !hosted; });
+    const account = option && option.dataset.account === '1';
+    row.querySelector('.runtime-account').hidden = !account;
+    if (!account) accountInput.value = '';
     if (cli) urlInput.value = '';
     if (!hosted) {
       row.querySelector('.runtime-key-env').value = '';

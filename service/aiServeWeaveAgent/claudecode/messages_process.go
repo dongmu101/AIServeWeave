@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -130,7 +131,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	prompt := sessionPrompt(s.request.Messages)
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
-	cmd.Env = append(probeEnv(os.Environ()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
+	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
 	if s.request.Temperature != nil {
 		extra, _ := json.Marshal(map[string]float64{"temperature": *s.request.Temperature})
 		cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+string(extra))
@@ -181,6 +182,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	var current messageBlock
 	var arguments string
 	var stopReason string
+	// quota is set once the CLI reports its account's limit rejected this
+	// round; the failure that follows is then a quota error, not a broken CLI.
+	// quota 在 CLI 报告其账户限额拒绝了本回合后被设置；随后的失败据此视为额度错误，
+	// 而不是 CLI 故障。
+	var quota *quotaError
 	finished, active, blockActive := false, false, false
 	showThinking := s.request.thinkingBudget() > 0
 	index, publicIndex, tools := 0, 0, 0
@@ -194,11 +200,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			return nil, errCLIProtocol
 		}
 		var envelope struct {
-			Type    string          `json:"type"`
-			Subtype string          `json:"subtype"`
-			IsError bool            `json:"is_error"`
-			Tools   []string        `json:"tools"`
-			Event   json.RawMessage `json:"event"`
+			Type          string          `json:"type"`
+			Subtype       string          `json:"subtype"`
+			IsError       bool            `json:"is_error"`
+			Tools         []string        `json:"tools"`
+			Event         json.RawMessage `json:"event"`
+			RateLimitInfo struct {
+				Status   string `json:"status"`
+				ResetsAt int64  `json:"resetsAt"`
+			} `json:"rate_limit_info"`
 		}
 		if json.Unmarshal(line, &envelope) != nil {
 			return nil, errCLIProtocol
@@ -218,9 +228,19 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					}
 				}
 			}
-		case "assistant", "user", "tool_progress", "tool_use_summary", "rate_limit_event":
+		case "assistant", "user", "tool_progress", "tool_use_summary":
+		case "rate_limit_event":
+			if envelope.RateLimitInfo.Status == "rejected" {
+				quota = &quotaError{}
+				if envelope.RateLimitInfo.ResetsAt > 0 {
+					quota.resetsAt = time.Unix(envelope.RateLimitInfo.ResetsAt, 0)
+				}
+			}
 		case "result":
 			if envelope.IsError || envelope.Subtype != "success" || len(final) == 0 || active {
+				if quota != nil {
+					return nil, quota
+				}
 				return nil, errCLIResult
 			}
 			finished = true
@@ -364,6 +384,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		return nil, errCLIProtocol
 	}
 	if !finished {
+		if quota != nil {
+			return nil, quota
+		}
 		return nil, errMissingResult
 	}
 	return final, nil

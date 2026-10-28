@@ -53,6 +53,7 @@ func NewFactory(executable string) runtime.Factory {
 		root, cancel := context.WithCancel(context.Background())
 		bridge := newMessagesBridge(executable, "sonnet", nil, deps.Clock)
 		bridge.capacity = cfg.MaxConcurrent
+		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
 		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel}, nil
 	}
 }
@@ -93,13 +94,13 @@ func (r *Runtime) inspect(parent context.Context, discover bool) ([]string, erro
 		}
 	}()
 	defer func() { cancel(); stopRoot(); stopTimer(); <-done }()
-	if checkAuth(ctx, r.bridge.program, probeEnv(os.Environ())) != nil {
+	if checkAuth(ctx, r.bridge.program, r.bridge.cliEnv()) != nil {
 		return nil, claudeError(runtime.ErrorUnauthorized)
 	}
 	if !discover {
 		return nil, nil
 	}
-	models, err := discoverModels(ctx, r.bridge.program, probeEnv(os.Environ()))
+	models, err := discoverModels(ctx, r.bridge.program, r.bridge.cliEnv())
 	if err != nil {
 		return nil, claudeError(runtime.ErrorProtocol)
 	}
@@ -224,12 +225,33 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		}
 		if err != nil && ctx.Err() == nil {
 			select {
-			case out.items <- nativeItem{err: claudeError(runtime.ErrorProtocol)}:
+			case out.items <- nativeItem{err: r.roundError(err)}:
 			case <-ctx.Done():
 			}
 		}
 	}()
 	return out, nil
+}
+
+// roundError reports a failed round. A quota rejection becomes a retryable
+// rate_limited carrying how long until the limit resets, so the Gateway can
+// start the session on another account and leave this one alone until then;
+// every other failure stays a protocol error with its detail withheld.
+//
+// roundError 报告一个失败的回合。额度拒绝成为可重试的 rate_limited，并携带距限额重置
+// 还有多久，使 Gateway 可以在另一个账户上开启会话、并在此之前不再打扰这个账户；其他
+// 失败仍是隐去细节的协议错误。
+func (r *Runtime) roundError(err error) error {
+	var quota *quotaError
+	if !errors.As(err, &quota) {
+		return claudeError(runtime.ErrorProtocol)
+	}
+	rtErr := &runtime.RuntimeError{Code: runtime.ErrorRateLimited, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
+		Message: "Claude Messages operation failed: " + string(runtime.ErrorRateLimited), Retryable: true}
+	if !quota.resetsAt.IsZero() {
+		rtErr.RetryAfter = max(quota.resetsAt.Sub(r.bridge.clock.Now()), 0)
+	}
+	return rtErr
 }
 
 // Recv returns one native event with no prefetch queue.

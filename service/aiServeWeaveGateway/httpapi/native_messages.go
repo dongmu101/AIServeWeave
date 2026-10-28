@@ -140,6 +140,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		status, errType, code, message := dispatchErrorDetails(h.logger, err)
+		setRetryAfter(w, err)
 		fail(status, errType, code, message)
 	}
 	identity, ok := IdentityFrom(r.Context())

@@ -32,7 +32,40 @@ var (
 	// errSessionGone 表示没有任何保留中的会话持有所提交的工具 ID：发起这些调用的
 	// CLI 已退出、已过期，或从未在本进程中运行过。
 	errSessionGone = errors.New("CLI tool session no longer exists")
+	// errQuotaExhausted is what a quotaError matches with errors.Is.
+	// errQuotaExhausted 是 quotaError 用 errors.Is 匹配的哨兵。
+	errQuotaExhausted = errors.New("CLI account usage limit reached")
 )
+
+// quotaError is a round the CLI's account limit rejected, as its
+// rate_limit_event reported. resetsAt is when that limit resets, zero when the
+// event did not say.
+//
+// quotaError 表示被 CLI 账户限额拒绝的回合，依据其 rate_limit_event 的报告。resetsAt 是
+// 该限额重置的时刻，事件没有说明时为零值。
+type quotaError struct {
+	resetsAt time.Time
+}
+
+func (e *quotaError) Error() string { return errQuotaExhausted.Error() }
+func (e *quotaError) Unwrap() error { return errQuotaExhausted }
+
+// withAccountDir points env's CLAUDE_CONFIG_DIR at dir, replacing any
+// inherited value; an empty dir returns env unchanged.
+// withAccountDir 把 env 中的 CLAUDE_CONFIG_DIR 指向 dir，替换继承来的值；dir 为空时
+// 原样返回。
+func withAccountDir(env []string, dir string) []string {
+	if dir == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+			out = append(out, entry)
+		}
+	}
+	return append(out, "CLAUDE_CONFIG_DIR="+dir)
+}
 
 const (
 	maxPending    = 8

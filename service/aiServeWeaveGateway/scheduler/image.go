@@ -35,7 +35,11 @@ func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest)
 		return runtime.ImageMeta{}, nil, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
+	var cooled cooledCandidates
 	for _, c := range candidates {
+		if s.skipCooling(c, &cooled) {
+			continue
+		}
 		attempt := req
 		attempt.Model = c.Model
 		stream, err := s.server.Runtime(c.NodeID, c.RuntimeID).GenerateImage(ctx, attempt)
@@ -65,5 +69,5 @@ func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest)
 		}
 		s.metrics.Retry(runtime.CapabilityImageGeneration)
 	}
-	return runtime.ImageMeta{}, nil, Candidate{}, lastErr
+	return runtime.ImageMeta{}, nil, Candidate{}, cooled.or(lastErr)
 }

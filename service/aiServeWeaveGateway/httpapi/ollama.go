@@ -43,6 +43,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
 // -----------------------------------------------------------------------
@@ -70,6 +71,7 @@ func writeOllamaError(w http.ResponseWriter, status int, message string) {
 // every wire protocol judges the same dispatch failure the same way.
 func handleOllamaDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) {
 	status, _, _, message := dispatchErrorDetails(logger, err)
+	setRetryAfter(w, err)
 	writeOllamaError(w, status, message)
 }
 
@@ -263,6 +265,8 @@ func (h *handlers) ollamaChat(w http.ResponseWriter, r *http.Request) {
 		writeOllamaError(w, http.StatusBadRequest, "the request body is not valid JSON")
 		return
 	}
+	req.Model, req.Think = ollamaModelSuffix(req.Model, req.Think)
+	r = r.WithContext(scheduler.WithSessionKey(r.Context(), sessionKey(r, requestProbe{}))) // headers only; Ollama bodies carry no session field / 只看请求头；Ollama 请求体没有会话字段
 	if req.Model == "" || len(req.Messages) == 0 {
 		writeOllamaError(w, http.StatusBadRequest, "model and a non-empty messages array are required")
 		return
@@ -485,6 +489,8 @@ func (h *handlers) ollamaGenerate(w http.ResponseWriter, r *http.Request) {
 		writeOllamaError(w, http.StatusBadRequest, "the request body is not valid JSON")
 		return
 	}
+	req.Model, req.Think = ollamaModelSuffix(req.Model, req.Think)
+	r = r.WithContext(scheduler.WithSessionKey(r.Context(), sessionKey(r, requestProbe{}))) // headers only; Ollama bodies carry no session field / 只看请求头；Ollama 请求体没有会话字段
 	if req.Model == "" || req.Prompt == "" {
 		writeOllamaError(w, http.StatusBadRequest, "model and prompt are required")
 		return

@@ -186,6 +186,19 @@ type Config struct {
 	// ReasoningParserThinkTags 或 ReasoningParserThinkTagsPrefilled。为空表示不启用。
 	// 它从不覆盖后端自己已经分离出的思考。仅限本地，从不通过隧道接收。
 	ReasoningParser string
+	// AccountDir is the CLI's own configuration directory, holding the login
+	// a codex or claude runtime runs under: it becomes CODEX_HOME or
+	// CLAUDE_CONFIG_DIR for every process the runtime starts. Empty inherits
+	// the Agent's environment, which is the single-account setup. Declaring
+	// two runtimes of the same kind with different directories is how one
+	// Agent serves several accounts. It must be an absolute path. Local only;
+	// it is never accepted over the tunnel.
+	//
+	// AccountDir 是 CLI 自己的配置目录，保存 codex 或 claude 运行时所使用的登录：它会
+	// 成为该运行时启动的每个进程的 CODEX_HOME 或 CLAUDE_CONFIG_DIR。为空时继承 Agent 的
+	// 环境，即单账户部署。声明两个同种类、目录不同的运行时，就是一个 Agent 服务多个账户的
+	// 方式。必须是绝对路径。仅限本地，从不通过隧道接收。
+	AccountDir string
 }
 
 // The fallback reasoning parsers Config.ReasoningParser may name.

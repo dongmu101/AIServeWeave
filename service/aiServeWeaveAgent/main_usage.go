@@ -20,29 +20,42 @@ import (
 // 数据有几分钟的年龄是看得见的，而不是被掩盖的。
 const cliUsageRefreshInterval = 5 * time.Minute
 
-// cliUsageSource hands the monitor to the tunnel, or nil when no CLI is
-// declared, so a node without Codex / Claude Code never reports an empty quota.
+// cliUsageSource hands the monitor to the tunnel, or nil when there is none.
+// A monitor with no account is still handed over, because a runtime reload
+// may declare a CLI later; the tunnel itself never sends an empty report, so a
+// node without Codex / Claude Code still reports no quota.
 //
-// cliUsageSource 把 monitor 交给隧道；没有声明任何 CLI 时返回 nil，让没有 Codex /
-// Claude Code 的节点不会上报空的额度。
+// cliUsageSource 把 monitor 交给隧道，没有时返回 nil。没有任何账户的 monitor 也照样交出，
+// 因为之后的运行时重新加载可能会声明 CLI；隧道自己从不发送空的报告，因此没有 Codex /
+// Claude Code 的节点仍然不会上报额度。
 func cliUsageSource(monitor *cliusage.Monitor) tunnel.CLIUsageSource {
-	if monitor == nil || len(monitor.Snapshot()) == 0 {
+	if monitor == nil {
 		return nil
 	}
 	return monitor
 }
 
-// newCLIUsageMonitor selects quota readers only for locally declared CLI backends.
-// newCLIUsageMonitor 只为本地声明的 CLI 后端选择额度读取器。
-func newCLIUsageMonitor(configs []runtime.Config, clock runtime.Clock) *cliusage.Monitor {
+// cliUsageProviders selects quota readers only for locally declared CLI
+// backends, one per runtime, each reading the login under the runtime's own
+// AccountDir.
+//
+// cliUsageProviders 只为本地声明的 CLI 后端选择额度读取器，每个运行时一个，各自读取
+// 该运行时 AccountDir 下的登录。
+func cliUsageProviders(configs []runtime.Config) []cliusage.Provider {
 	var providers []cliusage.Provider
 	for _, cfg := range configs {
 		switch cfg.Kind {
 		case runtime.KindCodex:
-			providers = append(providers, cliusage.Provider{Kind: cfg.Kind, Read: codexcli.ReadAccountUsage})
+			providers = append(providers, cliusage.Provider{RuntimeID: cfg.ID, Kind: cfg.Kind, Read: codexcli.AccountUsageReader(cfg.AccountDir), Source: cfg.AccountDir})
 		case runtime.KindClaude:
-			providers = append(providers, cliusage.Provider{Kind: cfg.Kind, Read: claudecode.ReadAccountUsage})
+			providers = append(providers, cliusage.Provider{RuntimeID: cfg.ID, Kind: cfg.Kind, Read: claudecode.AccountUsageReader(cfg.AccountDir), Source: cfg.AccountDir})
 		}
 	}
-	return cliusage.NewMonitor(clock, providers)
+	return providers
+}
+
+// newCLIUsageMonitor builds the monitor for the locally declared CLI backends.
+// newCLIUsageMonitor 为本地声明的 CLI 后端构造 monitor。
+func newCLIUsageMonitor(configs []runtime.Config, clock runtime.Clock) *cliusage.Monitor {
+	return cliusage.NewMonitor(clock, cliUsageProviders(configs))
 }

@@ -1,10 +1,12 @@
 package scheduler
 
 import (
-	"AIServeWeave/common/runtime"
 	"context"
 	"errors"
 	"io"
+	"math/rand"
+
+	"AIServeWeave/common/runtime"
 )
 
 // MessagesCandidates returns only nodes supporting native Anthropic Messages.
@@ -44,13 +46,17 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 	if !modelAllowed(ctx, req.Model) {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.MessagesCandidates(req.Model)
+	candidates := s.candidatesKeyed(s.routes.Load(), req.Model, runtime.CapabilityMessages, s.sessionAffinity(ctx), rand.Float64)
 	s.metrics.Selection(runtime.CapabilityMessages, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
+	var cooled cooledCandidates
 	for _, c := range candidates {
+		if s.skipCooling(c, &cooled) {
+			continue
+		}
 		stream, err := s.Messages(ctx, c, req)
 		if err == nil {
 			var first runtime.MessagesEvent
@@ -75,24 +81,24 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 		}
 		s.metrics.Retry(runtime.CapabilityMessages)
 	}
-	return nil, Candidate{}, lastErr
+	return nil, Candidate{}, cooled.or(lastErr)
 }
 
 // messagesStartRetryable reports whether a failed session start may move to
-// the next candidate: any Retryable error, plus the two codes the Claude
-// adapter sends without that flag when a node cannot take a session now —
+// the next candidate: any Retryable error, plus the codes the Claude adapter
+// sends without that flag when a node cannot take a session now —
 // backpressure while its CLI sessions are all held, closed while it shuts
-// down. Checking codes rather than the flag also covers Agents built before
-// they reported it.
+// down, rate_limited while its account's quota is spent. Checking codes
+// rather than the flag also covers Agents built before they reported it.
 //
 // messagesStartRetryable 判断一次失败的会话开启能否换到下一个候选：任何 Retryable
-// 错误都可以；另外还有两个 Claude 适配器在节点暂时无法接收会话时发出、但不带该标志
-// 的错误码——CLI 会话全部占用时的 backpressure，以及关闭过程中的 closed。按错误码而
-// 不是标志判断，也覆盖了尚不上报该标志的旧版 Agent。
+// 错误都可以；另外还有 Claude 适配器在节点暂时无法接收会话时发出、但不带该标志的错误码
+// ——CLI 会话全部占用时的 backpressure、关闭过程中的 closed，以及账户额度用完时的
+// rate_limited。按错误码而不是标志判断，也覆盖了尚不上报该标志的旧版 Agent。
 func messagesStartRetryable(err error) bool {
 	if retryable(err) {
 		return true
 	}
 	var rtErr *runtime.RuntimeError
-	return errors.As(err, &rtErr) && (rtErr.Code == runtime.ErrorBackpressure || rtErr.Code == runtime.ErrorClosed)
+	return errors.As(err, &rtErr) && (rtErr.Code == runtime.ErrorBackpressure || rtErr.Code == runtime.ErrorClosed || rtErr.Code == runtime.ErrorRateLimited)
 }

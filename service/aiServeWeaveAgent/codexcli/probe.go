@@ -210,6 +210,22 @@ func serverArgs(dir string, image bool) []string {
 	return args
 }
 
+// withAccountDir points env's CODEX_HOME at dir, replacing any inherited
+// value; an empty dir returns env unchanged.
+// withAccountDir 把 env 中的 CODEX_HOME 指向 dir，替换继承来的值；dir 为空时原样返回。
+func withAccountDir(env []string, dir string) []string {
+	if dir == "" {
+		return env
+	}
+	out := make([]string, 0, len(env)+1)
+	for _, entry := range env {
+		if !strings.HasPrefix(entry, "CODEX_HOME=") {
+			out = append(out, entry)
+		}
+	}
+	return append(out, "CODEX_HOME="+dir)
+}
+
 func probeEnv(source []string) []string {
 	allowed := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "LANG": true, "LC_ALL": true, "TMPDIR": true, "CODEX_HOME": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true}

@@ -401,6 +401,12 @@ message TunnelError {
   // far side can restore it for errors.Is. Only sentinels cross: a
   // non-sentinel cause may hold unsanitized detail and is dropped here.
   string cause = 8;
+  // retry_after is how long the backend asked to be left alone before the
+  // next attempt, set only on a rate_limited error whose backend reported a
+  // reset time (a CLI subscription window, a provider's Retry-After). Unset
+  // means unknown, never "retry immediately". A duration rather than a
+  // timestamp, so the two ends need not agree on the wall clock.
+  google.protobuf.Duration retry_after = 9;
 }
 
 // -----------------------------------------------------------------------
@@ -806,11 +812,15 @@ message CLIUsageReport {
 
 // CLIUsageAccount is one CLI's quota. kind is the runtime kind ("codex" or
 // "claude"); status is one of pending, ready, unauthorized, unavailable, error.
+// runtime_id names the locally declared runtime whose login this is, so one
+// Agent can report several accounts of the same kind; it is empty from an
+// Agent that predates multi-account support, which had at most one per kind.
 message CLIUsageAccount {
   string kind = 1;
   string status = 2;
   repeated CLIUsageWindow windows = 3;
   int64 checked_unix_ms = 4; // 0 until the first query attempt
+  string runtime_id = 5;
 }
 
 // CLIUsageWindow is one upstream-reported quota window.

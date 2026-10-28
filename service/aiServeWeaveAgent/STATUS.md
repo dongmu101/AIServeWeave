@@ -6,7 +6,7 @@
 
 - `main.go` 装配运行时管理器、后端工厂、自动发现、隧道和可选指标监听；`-version` 输出构建版本。
 - `agentconfig/`：`-config` 指向一份 YAML 文件，覆盖远程 Gateway 连接（`gateway:` 段，对应 `-gateway`/`-registry`/证书三件套/`-allowed-runtimes`/`-labels`/`-max-gateways`）与本地运行时声明（`runtimes:` 列表，任意 `ollama`/`vllm`/`sglang`/`comfyui`/`codex`/`claude`/`grok` 种类，是 `-ollama-url` 之外的补充而非替代）以及 `auto_discover`/`metrics_addr`/`log_level`。命令行显式传入的 flag 始终优先于文件里的同名设置（`main.go` 的 `applyConfig`），文件只填补 flag 留在默认值上的空白，两者可以同时使用。**不传 `-config` 时，`main.go` 的 `resolveConfigPath` 会在当前工作目录下找 `config.yaml`，存在就加载，不存在就照常只靠 flag 运行**——一次全新检出或全新部署，行为与这个功能从未上线时完全一样；文件存在但解析失败仍然是致命错误，不会被当成"没找到"悄悄跳过。`-config-ui`（见下）不带 `-config` 时也落到同一个默认路径。YAML 经由 `github.com/spf13/viper` 解码——这是 Agent 依赖红线上一次记录在案的例外，理由见 AGENTS.md 对应小节；这份文件是给人手改或由 `configui` 生成的，因此与本代码库其余纯 JSON 本地清单（`modelpull`/`agentupgrade`）不同源。
-- `configui/`：**正常启动 Agent 时默认同时启动本地 Web 设置页面，无需传 `-config-ui`**，访问 `http://127.0.0.1:8899`。`-config-ui-addr` 可覆盖监听地址，只接受回环地址（`127.0.0.1`/`::1`/`localhost`）。页面左侧菜单分为 Gateway 连接、节点与认证、本地 AI、日志与指标四组；切换保留输入，保存按钮统一保存全部分组。本地 AI 使用可添加、移除的多条配置，逐条选择后端类型和填写唯一运行时 ID；Codex CLI 和 Claude Code CLI 均不填写服务地址。正常运行时，本地 AI 分组还会按运行时列出当前发现的可用模型，显示真实模型 ID、状态和去重总数；点击“刷新模型”更新列表，不丢失未保存的配置。列表来自 Agent 内存快照，只展示健康运行时的模型；本地可用不等于 Gateway 可调度，后者还受连接与运行时白名单限制。禁用 JavaScript 时仍可通过锚点导航编辑所有分组。页面把 YAML 字段变成表单，保存到 `-config` 指向的文件；未指定时使用当前目录的 `config.yaml`。保存后需要重启 Agent 生效，不做热加载。Gateway 连接分组显示当前运行实例的实时连接状态、已连接副本数与每个 Gateway 地址的状态，支持每五秒自动刷新和手动刷新；刷新只更新只读状态，不覆盖未保存的表单。仅配置模式与隧道未启用会明确标示；状态请求失败时清除旧状态，提示 Agent 可能已停止或正在重启。模型列表只读，不修改 YAML，也不调用推理或另起 CLI。正常运行时页面启动失败（如端口被占用）会记录错误，Agent 继续运行。`-config-ui` 保留为只运行设置页面的独立模式，不启动隧道或运行时；该模式下页面提示没有运行中的模型目录，页面启动失败则退出。首次启动没有配置文件且未显式传入 `-config-ui`、`-config-ui-addr`、`-config`、`-gateway` 中任何一个时，仍自动进入只运行设置页面的模式，便于完成初始配置。
+- `configui/`：**正常启动 Agent 时默认同时启动本地 Web 设置页面，无需传 `-config-ui`**，访问 `http://127.0.0.1:8899`。`-config-ui-addr` 可覆盖监听地址，只接受回环地址（`127.0.0.1`/`::1`/`localhost`）。页面左侧菜单分为 Gateway 连接、节点与认证、本地 AI、日志与指标四组；切换保留输入，保存按钮统一保存全部分组。本地 AI 使用可添加、移除的多条配置，逐条选择后端类型和填写唯一运行时 ID；Codex CLI 和 Claude Code CLI 均不填写服务地址。正常运行时，本地 AI 分组还会按运行时列出当前发现的可用模型，显示真实模型 ID、状态和去重总数；点击“刷新模型”更新列表，不丢失未保存的配置。列表来自 Agent 内存快照，只展示健康运行时的模型；本地可用不等于 Gateway 可调度，后者还受连接与运行时白名单限制。禁用 JavaScript 时仍可通过锚点导航编辑所有分组。页面把 YAML 字段变成表单，保存到 `-config` 指向的文件；未指定时使用当前目录的 `config.yaml`。保存后 `runtimes:` 列表立即重新加载进运行中的 Agent（见 [README「运行时热重载」](README.md#运行时热重载)），其余设置（Gateway 连接、证书、运行时白名单、指标与日志）仍需重启 Agent 生效；页面会提示重新加载是否成功。Codex / Claude Code 条目可填写账户目录（`account_dir`），同一台机器挂多个订阅账户。Gateway 连接分组显示当前运行实例的实时连接状态、已连接副本数与每个 Gateway 地址的状态，支持每五秒自动刷新和手动刷新；刷新只更新只读状态，不覆盖未保存的表单。仅配置模式与隧道未启用会明确标示；状态请求失败时清除旧状态，提示 Agent 可能已停止或正在重启。模型列表只读，不修改 YAML，也不调用推理或另起 CLI。正常运行时页面启动失败（如端口被占用）会记录错误，Agent 继续运行。`-config-ui` 保留为只运行设置页面的独立模式，不启动隧道或运行时；该模式下页面提示没有运行中的模型目录，页面启动失败则退出。首次启动没有配置文件且未显式传入 `-config-ui`、`-config-ui-addr`、`-config`、`-gateway` 中任何一个时，仍自动进入只运行设置页面的模式，便于完成初始配置。
 - `localdiscovery/` 默认探测本机 Ollama（11434）/vLLM、TensorRT-LLM、TokenSpeed（均为 8000，按此顺序互斥探测，一个地址只注册一次）/SGLang（30000），可用 `-auto-discover=false` 关闭；`-ollama-url` 可显式注册 Ollama。
 - `tunnel/` 已实现身份注册/续期、多副本连接、槽池、心跳、运行时配置应用和流式请求/产物转发。执行 runtime 必须命中本地白名单。
 - 后端适配在共享的 `common/runtime`，支持 Ollama、vLLM、SGLang 和 ComfyUI；ComfyUI 适配位于 `common/runtime/workflow/comfyui`。ComfyUI 适配器新增 `comfyui_queue_running`/`comfyui_queue_pending`（`runtime_id` 标签）两个队列深度量表（STATUS.md 的 A06），复用 `Status`/`Cancel` 本就会发起的 `GET /queue`，不产生额外请求；与隧道共用同一个 `metrics.Registry`，未配置 `-metrics-addr` 时安全丢弃。ComfyUI 的失败历史同时被分类为是否显存/内存耗尽（`runtime.WorkflowStatus.OutOfMemory`），供 Gateway 侧统计使用，见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md) 的相应小节。
@@ -28,7 +28,7 @@ runtimes:
     kind: claude
 ```
 
-不填写 `base_url`、API Key 或认证文件。若设置了 `gateway.allowed_runtimes`，同时加入 `claude-local`。设置页面现已可选择 Claude Code CLI；保存后重启 Agent 生效。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
+不填写 `base_url`、API Key 或认证文件。若设置了 `gateway.allowed_runtimes`，同时加入 `claude-local`。设置页面现已可选择 Claude Code CLI；保存后运行时立即重新加载，但运行时白名单的改动仍需重启 Agent 生效（见 [README「运行时热重载」](README.md#运行时热重载)）。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
 
 模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；仅发布 CLI `resolvedModel` 返回的真实模型 ID，并按真实 ID 去重；不发布 `default`、`sonnet`、`opus`、`fable`、`haiku` 等简称。请求仅接受发现到的真实 ID，并原样传给 CLI 的 `--model`，不做简称映射。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭缓存和实验 beta；原版 Claude Code 客户端仍建议关闭 thinking。请求要求思考时（Messages 的 `thinking`、Chat 的 `reasoning_effort`、Responses 的 `reasoning`），Agent 以对应预算开启 CLI 思考并把 thinking 块透出给客户端，思考历史仍由 CLI 自己持有，客户端回传的思考被丢弃。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
 
@@ -74,13 +74,13 @@ runtimes:
     kind: codex
 ```
 
-`base_url` 必须省略或留空，不填写本机端口、API Key 或认证文件。Codex 只允许本地文件明确声明的 ID，Gateway 下发配置不能新增一个未声明的 Codex ID。修改 YAML 后重启 Agent：
+`base_url` 必须省略或留空，不填写本机端口、API Key 或认证文件。Codex 只允许本地文件明确声明的 ID，Gateway 下发配置不能新增一个未声明的 Codex ID。修改 YAML 后重启 Agent，或向 Agent 发送 `SIGHUP` 只重新加载运行时（白名单改动仍需重启）（见 [README「运行时热重载」](README.md#运行时热重载)）：
 
 ```bash
 go run ./service/aiServeWeaveAgent -config service/aiServeWeaveAgent/config.yaml
 ```
 
-按上面的命令正常启动后，即可访问 `http://127.0.0.1:8899`，在本地运行时中添加一行 `codex-local,codex,`，在运行时白名单中加入 `codex-local`，保存后重启 Agent。也可以加 `-config-ui` 只运行设置页面。
+按上面的命令正常启动后，即可访问 `http://127.0.0.1:8899`，在本地运行时中添加一行 `codex-local,codex,`，在运行时白名单中加入 `codex-local`，保存后重启 Agent（白名单改动需要重启；白名单未改动时保存即重新加载运行时）。也可以加 `-config-ui` 只运行设置页面。
 
 每次请求使用独立临时目录和 ephemeral thread，通过公开 `thread/inject_items` 注入完整的文本及工具历史；在首次工具回调处结束响应并回收进程，下一轮由调用方回传历史继续。支持文本、SSE、function/custom/namespace 工具循环及 JSON Schema 输出；一次响应最多返回一个工具调用。不支持图片/音频/文件输入、嵌入、重排、采样参数、强制工具选择或远程压缩。账户能生图时额外发布图像模型 `codex-image`，经 Gateway 的 `/v1/images/generations` 每次生成一张图，只接受提示词，见 [Codex 包说明「图像生成」](codexcli/README.md#图像生成)。默认 1 MiB 帧/历史/文本上限及 10000 帧上限；超时、关闭和背压均有界。更多边界、客户端配置和验收见 [Codex 包说明](codexcli/README.md) 与 [Gateway 工具循环](../aiServeWeaveGateway/STATUS.md#工具循环与-codex-cli-接入)。原有 [实验命令](../../experiments/codex-cli-bridge/README.md) 保留为独立合成验证器。
 

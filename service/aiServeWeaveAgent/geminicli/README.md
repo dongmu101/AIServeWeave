@@ -27,7 +27,7 @@ runtimes:
     request_timeout: 5m
 ```
 
-`base_url`、`api_key_env`、Headers 与 TLS 留空。设置了 `gateway.allowed_runtimes` 时，把 `gemini-local` 加进去。重启 Agent 后生效。也可在本地设置页的「本机 CLI」里选择「Gemini CLI（Nano Banana 生图）」。
+`base_url`、`api_key_env`、Headers 与 TLS 留空。设置了 `gateway.allowed_runtimes` 时，把 `gemini-local` 加进去。重启 Agent，或发送 `SIGHUP` 只重新加载运行时（白名单改动仍需重启，见 [Agent README「运行时热重载」](../README.md#运行时热重载)）。也可在本地设置页的「本机 CLI」里选择「Gemini CLI（Nano Banana 生图）」。
 
 扩展从 `${GEMINI_CLI_HOME}/.gemini/extensions/nanobanana` 读取；`GEMINI_CLI_HOME` 未设置时使用 `$HOME`。只接受官方 manifest 的 `node ${extensionPath}/mcp-server/dist/index.js` 布局，不执行 manifest 中自定义的命令或环境变量。
 

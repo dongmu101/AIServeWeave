@@ -154,6 +154,8 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 				Status string          `json:"status"`
 				Error  json.RawMessage `json:"error"`
 			} `json:"turn"`
+			Error      json.RawMessage `json:"error"`
+			WillRetry  bool            `json:"willRetry"`
 			TokenUsage struct {
 				Last struct {
 					Input     int `json:"inputTokens"`
@@ -242,7 +244,7 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 				return ErrProtocol
 			}
 			if n.Turn.Status != "completed" || (len(n.Turn.Error) > 0 && string(n.Turn.Error) != "null") {
-				return ErrTurn
+				return turnFailure(p, n.Turn.Error)
 			}
 			event.Delta = runtime.ChatMessageDelta{}
 			event.FinishReason = "stop"
@@ -253,7 +255,49 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 				return ErrProtocol
 			}
 		case "error":
-			return ErrTurn
+			// Codex reports a transient upstream failure it is about to retry
+			// itself (a dropped stream, a 5xx) with willRetry; the turn is still
+			// running and its own turn/completed settles the outcome.
+			// Codex 用 willRetry 报告它自己即将重试的瞬时上游故障（断流、5xx）；回合仍在
+			// 进行，最终结果由它自己的 turn/completed 给出。
+			if n.WillRetry {
+				continue
+			}
+			return turnFailure(p, n.Error)
 		}
 	}
+}
+
+// rateLimitReadID is the JSON-RPC id of the account/rateLimits/read request
+// turnFailure sends after a quota failure; the turn itself used ids 3 to 5.
+//
+// rateLimitReadID 是 turnFailure 在额度失败后发送的 account/rateLimits/read 请求的
+// JSON-RPC id；回合本身用掉了 3 到 5。
+const rateLimitReadID = 6
+
+// turnFailure classifies a failed turn's TurnError. usageLimitExceeded and
+// rateLimitExceeded mean the account, not the node, is spent: they become a
+// quotaError, and while the app-server is still up it is asked — without
+// inference — when the exhausted window resets, so the Gateway can set this
+// account aside for exactly that long. Any other failure stays ErrTurn. The
+// upstream message is never read.
+//
+// turnFailure 对失败回合的 TurnError 分类。usageLimitExceeded 与 rateLimitExceeded
+// 表示用完的是账户而不是节点：它们成为 quotaError；趁 app-server 还在，再（不执行推理地）
+// 询问用尽的窗口何时重置，让 Gateway 恰好把这个账户搁置那么久。其他失败仍是 ErrTurn。
+// 上游的错误文本从不读取。
+func turnFailure(p *protocol, raw json.RawMessage) error {
+	switch failureCode(raw) {
+	case "usageLimitExceeded", "rateLimitExceeded":
+	default:
+		return ErrTurn
+	}
+	failure := &quotaError{}
+	var usage json.RawMessage
+	if p.request(rateLimitReadID, "account/rateLimits/read", map[string]any{}, &usage) == nil {
+		if account, err := parseAccountUsage(usage); err == nil {
+			failure.resetsAt = exhaustedReset(account)
+		}
+	}
+	return failure
 }

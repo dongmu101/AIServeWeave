@@ -64,7 +64,7 @@ func (a *Aggregator) TenantModels(ctx context.Context) (TenantModelCatalog, erro
 				NodeOnline: node.Live,
 				Kind:       backend.Kind, State: backend.State, Version: backend.Version,
 				Models:   backend.Models,
-				CLIUsage: cliUsageFor(node.CLIUsage, backend.Kind),
+				CLIUsage: cliUsageFor(node.CLIUsage, backend.ID, backend.Kind),
 			})
 		}
 	}
@@ -96,19 +96,34 @@ func (c TenantModelCatalog) Filter(visible func(string) bool) TenantModelCatalog
 	return out
 }
 
-// cliUsageFor returns the quota reported for kind, or nil when the Agent
-// reported none. Services of the same kind on one node share one CLI account,
-// so they share one entry; the copy keeps a response from aliasing the snapshot.
+// cliUsageFor returns the quota reported for the service runtimeID of kind, or
+// nil when the Agent reported none. An entry naming runtimeID wins; an entry
+// with no runtime ID comes from an Agent that predates multi-account support,
+// where services of the same kind on one node shared one CLI account, so it is
+// matched by kind alone. The copy keeps a response from aliasing the snapshot.
 //
-// cliUsageFor 返回为 kind 上报的额度，Agent 没有上报时返回 nil。同一节点上同类型的服务
-// 共用一个 CLI 账户，因此共用同一条记录；复制一份是为了不让响应与快照共用内存。
-func cliUsageFor(usage []nodeview.CLIUsage, kind string) *nodeview.CLIUsage {
-	for _, entry := range usage {
-		if entry.Kind == kind {
-			copied := entry
-			copied.Windows = append([]nodeview.CLIUsageWindow(nil), entry.Windows...)
-			return &copied
+// cliUsageFor 返回为 kind 类型的服务 runtimeID 上报的额度，Agent 没有上报时返回 nil。
+// 点名 runtimeID 的记录优先；不带运行时 ID 的记录来自尚不支持多账户的旧版 Agent，那时
+// 同一节点上同类型的服务共用一个 CLI 账户，因此只按 kind 匹配。复制一份是为了不让响应
+// 与快照共用内存。
+func cliUsageFor(usage []nodeview.CLIUsage, runtimeID, kind string) *nodeview.CLIUsage {
+	var match *nodeview.CLIUsage
+	for i, entry := range usage {
+		if entry.Kind != kind {
+			continue
+		}
+		if entry.RuntimeID == runtimeID {
+			match = &usage[i]
+			break
+		}
+		if entry.RuntimeID == "" && match == nil {
+			match = &usage[i]
 		}
 	}
-	return nil
+	if match == nil {
+		return nil
+	}
+	copied := *match
+	copied.Windows = append([]nodeview.CLIUsageWindow(nil), match.Windows...)
+	return &copied
 }

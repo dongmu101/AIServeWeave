@@ -58,7 +58,7 @@ func NewFactory(executable string) runtime.Factory {
 			return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, Kind: cfg.Kind, RuntimeID: cfg.ID, Message: "invalid local Codex configuration"}
 		}
 		root, cancel := context.WithCancel(context.Background())
-		return &Runtime{cfg: cfg, deps: deps, executable: executable, env: probeEnv(os.Environ()), root: root, cancel: cancel,
+		return &Runtime{cfg: cfg, deps: deps, executable: executable, env: withAccountDir(probeEnv(os.Environ()), cfg.AccountDir), root: root, cancel: cancel,
 			limiter: runtime.NewLimiter(cfg.MaxConcurrent)}, nil
 	}
 }
@@ -153,12 +153,24 @@ func (r *Runtime) wrap(operation string, err error) error {
 		code = runtime.ErrorInvalidConfig
 	case errors.Is(err, errUnsupported):
 		code = runtime.ErrorCapability
-	case errors.Is(err, errRateLimited):
+	case errors.Is(err, errRateLimited), errors.Is(err, errQuotaExhausted):
 		code = runtime.ErrorRateLimited
 	case errors.Is(err, ErrRPC), errors.Is(err, ErrTurn), errors.Is(err, errNoImage):
 		code = runtime.ErrorUpstream
 	}
-	return &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: runtime.KindCodex, Operation: operation, Message: "Codex operation failed: " + string(code), Cause: err}
+	rtErr := &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: runtime.KindCodex, Operation: operation, Message: "Codex operation failed: " + string(code), Cause: err}
+	if code == runtime.ErrorRateLimited {
+		// Another account may still have quota, so the Gateway may move an
+		// uncommitted request on; RetryAfter tells it how long to leave this one.
+		// 别的账户可能还有额度，因此 Gateway 可以把尚未提交的请求挪走；RetryAfter
+		// 告诉它这个账户要搁置多久。
+		rtErr.Retryable = true
+		var quota *quotaError
+		if errors.As(err, &quota) && !quota.resetsAt.IsZero() {
+			rtErr.RetryAfter = max(quota.resetsAt.Sub(r.deps.Clock.Now()), 0)
+		}
+	}
+	return rtErr
 }
 
 // inspect reads the model catalog and whether the account may generate

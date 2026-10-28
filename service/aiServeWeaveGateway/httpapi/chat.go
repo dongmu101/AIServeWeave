@@ -407,7 +407,16 @@ func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var raw json.RawMessage
 	var req chatCompletionRequest
-	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil || json.Unmarshal(raw, &req) != nil {
+	if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
+		return
+	}
+	r, raw, err := prepareRequest(r, raw, dialectChat)
+	if err != nil {
+		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", err.Error())
+		return
+	}
+	if json.Unmarshal(raw, &req) != nil {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
 		return
 	}

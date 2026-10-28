@@ -38,6 +38,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/runtime"
@@ -304,9 +305,15 @@ func firstNonEmpty(values ...string) string {
 // 一个节点可上报的 CLI 额度的上限。这些数据是前往浏览器途中的、不受信任的 Agent 输入，
 // 因此在这里做数量限制并对照封闭词表检查，而不是原样渲染。
 const (
-	maxCLIUsageAccounts = 4
+	maxCLIUsageAccounts = 8
 	maxCLIUsageWindows  = 8
 	maxCLIUsageLabel    = 64
+	// maxCLIUsageRuntimeID bounds a runtime ID. Unlike a label it is never
+	// truncated, since a console pairs it with a service by exact match; an
+	// account whose ID is longer is dropped instead.
+	// maxCLIUsageRuntimeID 限定运行时 ID 的长度。与标签不同，它从不截断，因为控制台按
+	// 精确匹配把它与服务配对；ID 更长的账户直接丢弃。
+	maxCLIUsageRuntimeID = 256
 )
 
 // cliUsageStatuses is the closed set of account states a console may show.
@@ -316,15 +323,20 @@ var cliUsageStatuses = map[string]bool{
 	"pending": true, "ready": true, "unauthorized": true, "unavailable": true, "error": true,
 }
 
-// CLIUsage is one CLI's subscription quota. Kind is the runtime kind it belongs
-// to ("codex" or "claude"), which is how a console pairs it with a service.
+// CLIUsage is one CLI's subscription quota. RuntimeID names the service whose
+// login it is, which is how a console pairs it with that service when one node
+// runs several accounts of the same kind; it is empty from an Agent that
+// predates multi-account support, and a console then pairs by Kind ("codex" or
+// "claude") alone.
 //
-// CLIUsage 是一个 CLI 的订阅额度。Kind 是它所属的运行时类型（"codex" 或
-// "claude"），控制台据此把它与某个服务配对。
+// CLIUsage 是一个 CLI 的订阅额度。RuntimeID 指明它是哪个服务的登录，一个节点运行
+// 同一类型的多个账户时，控制台据此把它与对应服务配对；来自尚不支持多账户的旧版 Agent
+// 时为空，控制台此时只按 Kind（"codex" 或 "claude"）配对。
 type CLIUsage struct {
-	Kind    string           `json:"kind"`
-	Status  string           `json:"status"`
-	Windows []CLIUsageWindow `json:"windows,omitempty"`
+	RuntimeID string           `json:"runtime_id,omitempty"`
+	Kind      string           `json:"kind"`
+	Status    string           `json:"status"`
+	Windows   []CLIUsageWindow `json:"windows,omitempty"`
 	// CheckedAt is when the Agent last queried the CLI. Absent before the first
 	// query, and absent is not "a long time ago".
 	//
@@ -348,22 +360,24 @@ type CLIUsageWindow struct {
 
 // CLIUsageFromAccounts renders the Agent-reported quota through the allowlist:
 // only the two supported kinds and the known statuses survive, counts and label
-// lengths are capped, and a percentage outside 0–100 (or not a number) is
-// clamped. The result is sorted by kind.
+// lengths are capped, an account with an oversized or invalid runtime ID is
+// dropped, and a percentage outside 0–100 (or not a number) is
+// clamped. The result is sorted by kind, then runtime ID.
 //
 // CLIUsageFromAccounts 经由允许列表渲染 Agent 上报的额度：只有两种受支持的 kind 与已知
-// 状态能保留，数量与标签长度有上限，超出 0–100（或不是数字）的百分比会被夹住。结果按
-// kind 排序。
+// 状态能保留，数量与标签长度有上限，运行时 ID 过长或非法的账户被丢弃，超出 0–100（或不是数字）的百分比会被夹住。结果按
+// kind、再按运行时 ID 排序。
 func CLIUsageFromAccounts(accounts []cliusagestatus.Account) []CLIUsage {
 	var out []CLIUsage
 	for _, account := range accounts {
 		if len(out) == maxCLIUsageAccounts {
 			break
 		}
-		if account.Kind != runtime.KindCodex && account.Kind != runtime.KindClaude {
+		if (account.Kind != runtime.KindCodex && account.Kind != runtime.KindClaude) ||
+			len(account.RuntimeID) > maxCLIUsageRuntimeID || !utf8.ValidString(account.RuntimeID) {
 			continue
 		}
-		view := CLIUsage{Kind: string(account.Kind), Status: "error"}
+		view := CLIUsage{RuntimeID: account.RuntimeID, Kind: string(account.Kind), Status: "error"}
 		if cliUsageStatuses[account.Status] {
 			view.Status = account.Status
 		}
@@ -389,7 +403,12 @@ func CLIUsageFromAccounts(accounts []cliusagestatus.Account) []CLIUsage {
 		}
 		out = append(out, view)
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].RuntimeID < out[j].RuntimeID
+	})
 	return out
 }
 

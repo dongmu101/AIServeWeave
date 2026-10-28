@@ -691,6 +691,7 @@ func ErrorToProto(err error) *tunnelv1.TunnelError {
 			StatusCode: int32(re.StatusCode),
 			Message:    re.Message,
 			Retryable:  re.Retryable,
+			RetryAfter: retryAfterToProto(re.RetryAfter),
 			Cause:      sentinelWireName(re.Cause),
 		}
 	}
@@ -735,8 +736,21 @@ func ErrorFromProto(pb *tunnelv1.TunnelError) error {
 		StatusCode: int(pb.GetStatusCode()),
 		Message:    pb.GetMessage(),
 		Retryable:  pb.GetRetryable(),
+		RetryAfter: max(durationFromProto(pb.GetRetryAfter()), 0),
 		Cause:      sentinelsByWireName[pb.GetCause()],
 	}
+}
+
+// retryAfterToProto omits a non-positive RetryAfter: unlike a config
+// duration, zero here means "unknown" and has nothing to preserve.
+//
+// retryAfterToProto 省略非正的 RetryAfter：与配置里的时长不同，这里的零值表示「未知」，
+// 没有需要保留的含义。
+func retryAfterToProto(d time.Duration) *durationpb.Duration {
+	if d <= 0 {
+		return nil
+	}
+	return durationpb.New(d)
 }
 
 // -----------------------------------------------------------------------

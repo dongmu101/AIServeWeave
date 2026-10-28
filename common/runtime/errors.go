@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"net"
+	"strconv"
 	"strings"
+	"time"
 )
 
 // ErrorCode classifies a RuntimeError so callers can branch on failure kind
@@ -60,6 +62,13 @@ type RuntimeError struct {
 	StatusCode int // 0 when not applicable
 	Message    string
 	Retryable  bool
+	// RetryAfter is how long the backend asked to be left alone, set only on
+	// an ErrorRateLimited whose backend reported when its quota resets. Zero
+	// means unknown, not "retry immediately".
+	//
+	// RetryAfter 是后端要求的冷却时长，只在后端报告了额度重置时间的
+	// ErrorRateLimited 上设置。零值表示未知，而不是「立即重试」。
+	RetryAfter time.Duration
 	Cause      error
 }
 
@@ -99,6 +108,27 @@ func ErrorCodeFromStatus(status int) ErrorCode {
 	default:
 		return ErrorProtocol
 	}
+}
+
+// maxRetryAfter bounds what ParseRetryAfter accepts, so a misbehaving
+// upstream cannot park a candidate for days with one header.
+//
+// maxRetryAfter 限定 ParseRetryAfter 接受的上限，免得一个行为异常的上游用一个响应头就把
+// 候选搁置好几天。
+const maxRetryAfter = 24 * time.Hour
+
+// ParseRetryAfter reads an HTTP Retry-After header in its delay-seconds form.
+// The HTTP-date form, a malformed value, zero and anything beyond 24 hours all
+// return zero, which RuntimeError.RetryAfter reads as "unknown".
+//
+// ParseRetryAfter 读取 HTTP Retry-After 响应头的秒数形式。HTTP 日期形式、格式错误的值、
+// 零以及超过 24 小时的值都返回零，RuntimeError.RetryAfter 把零读作「未知」。
+func ParseRetryAfter(value string) time.Duration {
+	seconds, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+	if err != nil || seconds <= 0 || seconds > int64(maxRetryAfter/time.Second) {
+		return 0
+	}
+	return time.Duration(seconds) * time.Second
 }
 
 // ClassifyTransportError maps a transport-level error (from an HTTP round

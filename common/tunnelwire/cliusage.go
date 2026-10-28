@@ -31,6 +31,7 @@ func CLIUsageReportToProto(accounts []cliusagestatus.Account) *tunnelv1.CLIUsage
 			}
 		}
 		out[i] = &tunnelv1.CLIUsageAccount{
+			RuntimeId:     account.RuntimeID,
 			Kind:          string(account.Kind),
 			Status:        account.Status,
 			Windows:       windows,
@@ -40,11 +41,12 @@ func CLIUsageReportToProto(accounts []cliusagestatus.Account) *tunnelv1.CLIUsage
 	return &tunnelv1.CLIUsageReport{Accounts: out}
 }
 
-// CLIUsageReportFromProto restores the reported accounts, sorted by kind so a
-// Gateway-side consumer never depends on the Agent's send order.
+// CLIUsageReportFromProto restores the reported accounts, sorted by kind and
+// then runtime ID so a Gateway-side consumer never depends on the Agent's send
+// order.
 //
-// CLIUsageReportFromProto 还原上报的账户，按 kind 排序，让 Gateway 一侧的使用者
-// 不依赖 Agent 的发送顺序。
+// CLIUsageReportFromProto 还原上报的账户，按 kind、再按运行时 ID 排序，让 Gateway
+// 一侧的使用者不依赖 Agent 的发送顺序。
 func CLIUsageReportFromProto(pb *tunnelv1.CLIUsageReport) []cliusagestatus.Account {
 	accounts := pb.GetAccounts()
 	out := make([]cliusagestatus.Account, len(accounts))
@@ -60,13 +62,19 @@ func CLIUsageReportFromProto(pb *tunnelv1.CLIUsageReport) []cliusagestatus.Accou
 			}
 		}
 		out[i] = cliusagestatus.Account{
+			RuntimeID: account.GetRuntimeId(),
 			Kind:      runtime.Kind(account.GetKind()),
 			Status:    account.GetStatus(),
 			Windows:   windows,
 			CheckedAt: timeFromUnixMilli(account.GetCheckedUnixMs()),
 		}
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Kind < out[j].Kind })
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Kind != out[j].Kind {
+			return out[i].Kind < out[j].Kind
+		}
+		return out[i].RuntimeID < out[j].RuntimeID
+	})
 	return out
 }
 

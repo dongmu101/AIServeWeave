@@ -664,6 +664,7 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 // the two wire protocols never judge the same failure differently.
 func handleAnthropicDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) {
 	status, errType, _, message := dispatchErrorDetails(logger, err)
+	setRetryAfter(w, err)
 	writeAnthropicError(w, status, errType, message)
 }
 
@@ -679,7 +680,16 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	var req anthropicMessagesRequest
 	var raw json.RawMessage
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
-	if err := decoder.Decode(&raw); err != nil || decoder.Decode(new(any)) != io.EOF || json.Unmarshal(raw, &req) != nil {
+	if err := decoder.Decode(&raw); err != nil || decoder.Decode(new(any)) != io.EOF {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
+		return
+	}
+	r, raw, err := prepareRequest(r, raw, dialectAnthropic)
+	if err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	if json.Unmarshal(raw, &req) != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
 		return
 	}

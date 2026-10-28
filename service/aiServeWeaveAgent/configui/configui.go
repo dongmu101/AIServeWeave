@@ -9,9 +9,10 @@
 // operation cost available without adding a whole separate UI project.
 //
 // The page edits the file and shows model and live Gateway connection snapshots
-// from the running Agent, without hot reload.
-// Saving a change requires restarting the Agent to take effect. The standalone
-// -config-ui mode never starts the tunnel or any runtime (see main.go).
+// from the running Agent. Saving reloads the runtimes: list into the running
+// Agent (see Sources.Reload); every other setting still takes effect only
+// after a restart. The standalone -config-ui mode never starts the tunnel or
+// any runtime (see main.go), so there a save waits for the next start.
 //
 // Binding anywhere but loopback is refused outright, not just discouraged
 // in a flag's help text: this form can repoint the Agent at a different
@@ -28,8 +29,10 @@
 // 实存在的门槛；由 Agent 自己提供一个表单，是不额外起一个独立 UI 项目情况
 // 下能做到的最低操作成本。
 //
-// 页面编辑文件并列出运行中 Agent 的快照模型与实时 Gateway 连接状态，不做热加载，保存改动后需要重启 Agent
-// 才会生效。独立的 -config-ui 模式不启动隧道或任何运行时（见 main.go）。
+// 页面编辑文件并列出运行中 Agent 的快照模型与实时 Gateway 连接状态。保存时会把
+// runtimes: 列表重新加载进运行中的 Agent（见 Sources.Reload）；其他设置仍需重启后才
+// 生效。独立的 -config-ui 模式不启动隧道或任何运行时（见 main.go），因此在那里保存要
+// 等下次启动才生效。
 //
 // 绑定到回环地址之外的地址会被直接拒绝，而不只是在 flag 的帮助文本里劝
 // 阻：这个表单能让 Agent 改去连接不同的 Gateway 和 Registry，把它暴露在
@@ -181,6 +184,7 @@ type formValues struct {
 	MetricsAddr          string
 	LogLevel             string
 	Message              string
+	MessageKey           string
 	Error                string
 	Models               modelCatalogue
 	Gateway              gatewayView
@@ -235,7 +239,18 @@ func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) ht
 				return
 			}
 			logger.Info("config saved", slog.String("config_path", configPath))
-			values.Message = values.Text.Text("a0084")
+			values.MessageKey = "a0084"
+			if sources.Reload != nil {
+				// The reload outlives the request: a browser that gives up
+				// waiting must not leave the runtimes half reconciled.
+				// 重新加载比请求活得久：浏览器放弃等待，不能让运行时停在调和到一半的状态。
+				values.MessageKey = "a0106"
+				if err := sources.Reload(context.WithoutCancel(r.Context())); err != nil {
+					logger.Error("runtimes not reloaded after save", slog.Any("error", err))
+					values.MessageKey = "a0107"
+				}
+			}
+			values.Message = values.Text.Text(values.MessageKey)
 			render(w, values)
 		default:
 			w.Header().Set("Allow", http.MethodGet+", "+http.MethodHead+", "+http.MethodPost)
@@ -293,6 +308,9 @@ func formValuesFromConfig(cfg *agentconfig.Config) formValues {
 	runtimeLines := make([]string, 0, len(cfg.Runtimes))
 	for _, rc := range cfg.Runtimes {
 		line := rc.ID + "," + rc.Kind + "," + rc.BaseURL
+		if hasAccountDir(runtime.Kind(rc.Kind)) {
+			line = rc.ID + "," + rc.Kind + "," + rc.AccountDir
+		}
 		if runtime.Kind(rc.Kind).IsHosted() && (rc.APIKeyEnv != "" || rc.Models != "") {
 			line += "," + rc.APIKeyEnv + "," + strings.Join(rc.Models.IDs(), " ")
 		}
@@ -420,14 +438,16 @@ func parseLabels(s string) map[string]string {
 // agentconfig.RuntimeConfig: "id,kind,base_url" for every kind, where
 // base_url is the rest of the line as before, and
 // "id,kind,base_url[,api_key_env[,models]]" for hosted kinds, models being
-// space-separated. A line missing a required field is dropped rather than
+// space-separated. Codex and Claude Code, which have no base_url, use the
+// same slot for their account directory: "id,kind,account_dir". A line missing a required field is dropped rather than
 // failing the whole save. CLI runtimes have no base_url; hosted providers
 // may leave it empty for the official endpoint, except the two compatible
 // kinds, which have none.
 //
 // parseRuntimes 每行解析一条声明：所有种类都是 "id,kind,base_url"，base_url 与
 // 以往一样取该行剩余部分；托管种类为 "id,kind,base_url[,api_key_env[,models]]"，
-// models 以空格分隔。缺失必填字段的行被略过，而不是让整次保存失败。CLI 运行时
+// models 以空格分隔。没有 base_url 的 Codex 与 Claude Code 用同一列填写账户目录：
+// "id,kind,account_dir"。缺失必填字段的行被略过，而不是让整次保存失败。CLI 运行时
 // 没有 base_url；托管供应商可留空以使用官方端点，但两种 compatible 没有官方端点，
 // 必须填写。
 func parseRuntimes(s string) []agentconfig.RuntimeConfig {
@@ -444,6 +464,9 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 		id, kind, rest := strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), parts[2]
 		k := runtime.Kind(kind)
 		rc := agentconfig.RuntimeConfig{ID: id, Kind: kind, BaseURL: strings.TrimSpace(rest)}
+		if hasAccountDir(k) {
+			rc.BaseURL, rc.AccountDir = "", strings.TrimSpace(rest)
+		}
 		if k.IsHosted() {
 			fields := append(strings.SplitN(rest, ",", 3), "", "")
 			rc.BaseURL, rc.APIKeyEnv = strings.TrimSpace(fields[0]), strings.TrimSpace(fields[1])
@@ -455,6 +478,13 @@ func parseRuntimes(s string) []agentconfig.RuntimeConfig {
 		out = append(out, rc)
 	}
 	return out
+}
+
+// hasAccountDir reports whether kind takes an account directory
+// (runtime.Config.AccountDir).
+// hasAccountDir 报告 kind 是否接受账户目录（runtime.Config.AccountDir）。
+func hasAccountDir(kind runtime.Kind) bool {
+	return kind == runtime.KindCodex || kind == runtime.KindClaude
 }
 
 // formTemplate groups one shared form behind local navigation, without external assets.

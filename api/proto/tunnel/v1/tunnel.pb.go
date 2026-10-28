@@ -2627,7 +2627,13 @@ type TunnelError struct {
 	// cause names a runtime sentinel error (e.g. "ErrRuntimeNotFound") so the
 	// far side can restore it for errors.Is. Only sentinels cross: a
 	// non-sentinel cause may hold unsanitized detail and is dropped here.
-	Cause         string `protobuf:"bytes,8,opt,name=cause,proto3" json:"cause,omitempty"`
+	Cause string `protobuf:"bytes,8,opt,name=cause,proto3" json:"cause,omitempty"`
+	// retry_after is how long the backend asked to be left alone before the
+	// next attempt, set only on a rate_limited error whose backend reported a
+	// reset time (a CLI subscription window, a provider's Retry-After). Unset
+	// means unknown, never "retry immediately". A duration rather than a
+	// timestamp, so the two ends need not agree on the wall clock.
+	RetryAfter    *durationpb.Duration `protobuf:"bytes,9,opt,name=retry_after,json=retryAfter,proto3" json:"retry_after,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2716,6 +2722,13 @@ func (x *TunnelError) GetCause() string {
 		return x.Cause
 	}
 	return ""
+}
+
+func (x *TunnelError) GetRetryAfter() *durationpb.Duration {
+	if x != nil {
+		return x.RetryAfter
+	}
+	return nil
 }
 
 type AgentControl struct {
@@ -4627,12 +4640,16 @@ func (x *CLIUsageReport) GetAccounts() []*CLIUsageAccount {
 
 // CLIUsageAccount is one CLI's quota. kind is the runtime kind ("codex" or
 // "claude"); status is one of pending, ready, unauthorized, unavailable, error.
+// runtime_id names the locally declared runtime whose login this is, so one
+// Agent can report several accounts of the same kind; it is empty from an
+// Agent that predates multi-account support, which had at most one per kind.
 type CLIUsageAccount struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Kind          string                 `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
 	Status        string                 `protobuf:"bytes,2,opt,name=status,proto3" json:"status,omitempty"`
 	Windows       []*CLIUsageWindow      `protobuf:"bytes,3,rep,name=windows,proto3" json:"windows,omitempty"`
 	CheckedUnixMs int64                  `protobuf:"varint,4,opt,name=checked_unix_ms,json=checkedUnixMs,proto3" json:"checked_unix_ms,omitempty"` // 0 until the first query attempt
+	RuntimeId     string                 `protobuf:"bytes,5,opt,name=runtime_id,json=runtimeId,proto3" json:"runtime_id,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4693,6 +4710,13 @@ func (x *CLIUsageAccount) GetCheckedUnixMs() int64 {
 		return x.CheckedUnixMs
 	}
 	return 0
+}
+
+func (x *CLIUsageAccount) GetRuntimeId() string {
+	if x != nil {
+		return x.RuntimeId
+	}
+	return ""
 }
 
 // CLIUsageWindow is one upstream-reported quota window.
@@ -8462,7 +8486,7 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\tDataChunk\x12\x18\n" +
 	"\apayload\x18\x01 \x01(\fR\apayload\";\n" +
 	"\vResponseEnd\x12,\n" +
-	"\x05error\x18\x01 \x01(\v2\x16.tunnel.v1.TunnelErrorR\x05error\"\xe1\x01\n" +
+	"\x05error\x18\x01 \x01(\v2\x16.tunnel.v1.TunnelErrorR\x05error\"\x9d\x02\n" +
 	"\vTunnelError\x12\x12\n" +
 	"\x04code\x18\x01 \x01(\tR\x04code\x12\x1d\n" +
 	"\n" +
@@ -8473,7 +8497,9 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"statusCode\x12\x18\n" +
 	"\amessage\x18\x06 \x01(\tR\amessage\x12\x1c\n" +
 	"\tretryable\x18\a \x01(\bR\tretryable\x12\x14\n" +
-	"\x05cause\x18\b \x01(\tR\x05cause\"\x8d\x04\n" +
+	"\x05cause\x18\b \x01(\tR\x05cause\x12:\n" +
+	"\vretry_after\x18\t \x01(\v2\x19.google.protobuf.DurationR\n" +
+	"retryAfter\"\x8d\x04\n" +
 	"\fAgentControl\x12(\n" +
 	"\x05hello\x18\x01 \x01(\v2\x10.tunnel.v1.HelloH\x00R\x05hello\x124\n" +
 	"\theartbeat\x18\x02 \x01(\v2\x14.tunnel.v1.HeartbeatH\x00R\theartbeat\x122\n" +
@@ -8599,12 +8625,14 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\x06reason\x18\x03 \x01(\x0e2$.tunnel.v1.AgentUpgradeFailureReasonR\x06reason\x12&\n" +
 	"\x0fupdated_unix_ms\x18\x04 \x01(\x03R\rupdatedUnixMs\"H\n" +
 	"\x0eCLIUsageReport\x126\n" +
-	"\baccounts\x18\x01 \x03(\v2\x1a.tunnel.v1.CLIUsageAccountR\baccounts\"\x9a\x01\n" +
+	"\baccounts\x18\x01 \x03(\v2\x1a.tunnel.v1.CLIUsageAccountR\baccounts\"\xb9\x01\n" +
 	"\x0fCLIUsageAccount\x12\x12\n" +
 	"\x04kind\x18\x01 \x01(\tR\x04kind\x12\x16\n" +
 	"\x06status\x18\x02 \x01(\tR\x06status\x123\n" +
 	"\awindows\x18\x03 \x03(\v2\x19.tunnel.v1.CLIUsageWindowR\awindows\x12&\n" +
-	"\x0fchecked_unix_ms\x18\x04 \x01(\x03R\rcheckedUnixMs\"\xb0\x01\n" +
+	"\x0fchecked_unix_ms\x18\x04 \x01(\x03R\rcheckedUnixMs\x12\x1d\n" +
+	"\n" +
+	"runtime_id\x18\x05 \x01(\tR\truntimeId\"\xb0\x01\n" +
 	"\x0eCLIUsageWindow\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x16\n" +
 	"\x06bucket\x18\x02 \x01(\tR\x06bucket\x12!\n" +
@@ -9196,135 +9224,136 @@ var file_api_proto_tunnel_v1_tunnel_proto_depIdxs = []int32{
 	1,   // 18: tunnel.v1.RequestHeaders.operation:type_name -> tunnel.v1.Operation
 	125, // 19: tunnel.v1.RequestHeaders.trace:type_name -> tunnel.v1.RequestHeaders.TraceEntry
 	46,  // 20: tunnel.v1.ResponseEnd.error:type_name -> tunnel.v1.TunnelError
-	49,  // 21: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
-	52,  // 22: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
-	60,  // 23: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
-	54,  // 24: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
-	42,  // 25: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
-	63,  // 26: tunnel.v1.AgentControl.model_pull:type_name -> tunnel.v1.ModelPullReport
-	66,  // 27: tunnel.v1.AgentControl.comfyui_managed:type_name -> tunnel.v1.ComfyUIManagedReport
-	70,  // 28: tunnel.v1.AgentControl.agent_upgrade:type_name -> tunnel.v1.AgentUpgradeReport
-	71,  // 29: tunnel.v1.AgentControl.cli_usage:type_name -> tunnel.v1.CLIUsageReport
-	51,  // 30: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
-	53,  // 31: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
-	61,  // 32: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
-	56,  // 33: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
-	57,  // 34: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
-	55,  // 35: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
-	41,  // 36: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
-	62,  // 37: tunnel.v1.GatewayControl.model_pull_trigger:type_name -> tunnel.v1.ModelPullTrigger
-	65,  // 38: tunnel.v1.GatewayControl.comfyui_managed_action:type_name -> tunnel.v1.ComfyUIManagedAction
-	68,  // 39: tunnel.v1.GatewayControl.comfyui_managed_custom_node_install:type_name -> tunnel.v1.ComfyUIManagedCustomNodeInstallTrigger
-	69,  // 40: tunnel.v1.GatewayControl.agent_upgrade_action:type_name -> tunnel.v1.AgentUpgradeAction
-	50,  // 41: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
-	126, // 42: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
-	133, // 43: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
-	58,  // 44: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
-	2,   // 45: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
-	2,   // 46: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
-	77,  // 47: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
-	132, // 48: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
-	3,   // 49: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
-	75,  // 50: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
-	64,  // 51: tunnel.v1.ModelPullReport.pulls:type_name -> tunnel.v1.ModelPullStatus
-	4,   // 52: tunnel.v1.ModelPullStatus.state:type_name -> tunnel.v1.ModelPullState
-	5,   // 53: tunnel.v1.ModelPullStatus.reason:type_name -> tunnel.v1.ModelPullFailureReason
-	6,   // 54: tunnel.v1.ComfyUIManagedAction.action:type_name -> tunnel.v1.ComfyUIManagedActionType
-	67,  // 55: tunnel.v1.ComfyUIManagedReport.instances:type_name -> tunnel.v1.ComfyUIManagedStatus
-	7,   // 56: tunnel.v1.ComfyUIManagedStatus.state:type_name -> tunnel.v1.ComfyUIManagedState
-	74,  // 57: tunnel.v1.ComfyUIManagedStatus.custom_nodes:type_name -> tunnel.v1.ComfyUIManagedCustomNode
-	8,   // 58: tunnel.v1.AgentUpgradeAction.action:type_name -> tunnel.v1.AgentUpgradeActionType
-	9,   // 59: tunnel.v1.AgentUpgradeReport.state:type_name -> tunnel.v1.AgentUpgradeState
-	10,  // 60: tunnel.v1.AgentUpgradeReport.reason:type_name -> tunnel.v1.AgentUpgradeFailureReason
-	72,  // 61: tunnel.v1.CLIUsageReport.accounts:type_name -> tunnel.v1.CLIUsageAccount
-	73,  // 62: tunnel.v1.CLIUsageAccount.windows:type_name -> tunnel.v1.CLIUsageWindow
-	127, // 63: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
-	133, // 64: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
-	133, // 65: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
-	133, // 66: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
-	133, // 67: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
-	133, // 68: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
-	76,  // 69: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
-	128, // 70: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
-	78,  // 71: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
-	79,  // 72: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
-	80,  // 73: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
-	81,  // 74: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
-	132, // 75: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
-	132, // 76: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
-	133, // 77: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
-	132, // 78: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
-	83,  // 79: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
-	129, // 80: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
-	132, // 81: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
-	130, // 82: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
-	83,  // 83: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
-	86,  // 84: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
-	95,  // 85: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
-	97,  // 86: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
-	131, // 87: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
-	88,  // 88: tunnel.v1.ChatRequest.reasoning:type_name -> tunnel.v1.ReasoningConfig
-	93,  // 89: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
-	89,  // 90: tunnel.v1.ChatMessage.content_parts:type_name -> tunnel.v1.ContentPart
-	87,  // 91: tunnel.v1.ChatMessage.reasoning_blocks:type_name -> tunnel.v1.ReasoningBlock
-	90,  // 92: tunnel.v1.ContentPart.image_url:type_name -> tunnel.v1.ContentImageURL
-	91,  // 93: tunnel.v1.ContentPart.input_audio:type_name -> tunnel.v1.ContentAudio
-	92,  // 94: tunnel.v1.ContentPart.file:type_name -> tunnel.v1.ContentFile
-	94,  // 95: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
-	96,  // 96: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
-	98,  // 97: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
-	86,  // 98: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
-	104, // 99: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
-	132, // 100: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
-	101, // 101: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
-	104, // 102: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
-	102, // 103: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
-	87,  // 104: tunnel.v1.ChatMessageDelta.reasoning_block:type_name -> tunnel.v1.ReasoningBlock
-	103, // 105: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
-	107, // 106: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
-	104, // 107: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
-	132, // 108: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
-	132, // 109: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
-	132, // 110: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
-	132, // 111: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
-	113, // 112: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
-	11,  // 113: tunnel.v1.AudioTranscriptionRequest.task:type_name -> tunnel.v1.AudioTask
-	121, // 114: tunnel.v1.RerankResponse.results:type_name -> tunnel.v1.RerankResult
-	124, // 115: tunnel.v1.ImageGenerateEvent.meta:type_name -> tunnel.v1.ImageGenerateMeta
-	104, // 116: tunnel.v1.ImageGenerateMeta.usage:type_name -> tunnel.v1.Usage
-	82,  // 117: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	82,  // 118: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
-	47,  // 119: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
-	34,  // 120: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
-	12,  // 121: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
-	14,  // 122: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
-	59,  // 123: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
-	16,  // 124: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
-	18,  // 125: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
-	20,  // 126: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
-	22,  // 127: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
-	24,  // 128: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
-	26,  // 129: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
-	28,  // 130: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
-	30,  // 131: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
-	48,  // 132: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
-	33,  // 133: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
-	13,  // 134: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
-	15,  // 135: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
-	57,  // 136: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
-	17,  // 137: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
-	19,  // 138: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
-	21,  // 139: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
-	23,  // 140: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
-	25,  // 141: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
-	27,  // 142: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
-	29,  // 143: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
-	31,  // 144: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
-	132, // [132:145] is the sub-list for method output_type
-	119, // [119:132] is the sub-list for method input_type
-	119, // [119:119] is the sub-list for extension type_name
-	119, // [119:119] is the sub-list for extension extendee
-	0,   // [0:119] is the sub-list for field type_name
+	133, // 21: tunnel.v1.TunnelError.retry_after:type_name -> google.protobuf.Duration
+	49,  // 22: tunnel.v1.AgentControl.hello:type_name -> tunnel.v1.Hello
+	52,  // 23: tunnel.v1.AgentControl.heartbeat:type_name -> tunnel.v1.Heartbeat
+	60,  // 24: tunnel.v1.AgentControl.status:type_name -> tunnel.v1.RuntimeStatus
+	54,  // 25: tunnel.v1.AgentControl.draining:type_name -> tunnel.v1.Draining
+	42,  // 26: tunnel.v1.AgentControl.pong:type_name -> tunnel.v1.Pong
+	63,  // 27: tunnel.v1.AgentControl.model_pull:type_name -> tunnel.v1.ModelPullReport
+	66,  // 28: tunnel.v1.AgentControl.comfyui_managed:type_name -> tunnel.v1.ComfyUIManagedReport
+	70,  // 29: tunnel.v1.AgentControl.agent_upgrade:type_name -> tunnel.v1.AgentUpgradeReport
+	71,  // 30: tunnel.v1.AgentControl.cli_usage:type_name -> tunnel.v1.CLIUsageReport
+	51,  // 31: tunnel.v1.GatewayControl.ack:type_name -> tunnel.v1.HelloAck
+	53,  // 32: tunnel.v1.GatewayControl.hb_ack:type_name -> tunnel.v1.HeartbeatAck
+	61,  // 33: tunnel.v1.GatewayControl.config:type_name -> tunnel.v1.RuntimeConfig
+	56,  // 34: tunnel.v1.GatewayControl.slot_hint:type_name -> tunnel.v1.SlotHint
+	57,  // 35: tunnel.v1.GatewayControl.roster:type_name -> tunnel.v1.GatewayRoster
+	55,  // 36: tunnel.v1.GatewayControl.shutdown:type_name -> tunnel.v1.Shutdown
+	41,  // 37: tunnel.v1.GatewayControl.ping:type_name -> tunnel.v1.Ping
+	62,  // 38: tunnel.v1.GatewayControl.model_pull_trigger:type_name -> tunnel.v1.ModelPullTrigger
+	65,  // 39: tunnel.v1.GatewayControl.comfyui_managed_action:type_name -> tunnel.v1.ComfyUIManagedAction
+	68,  // 40: tunnel.v1.GatewayControl.comfyui_managed_custom_node_install:type_name -> tunnel.v1.ComfyUIManagedCustomNodeInstallTrigger
+	69,  // 41: tunnel.v1.GatewayControl.agent_upgrade_action:type_name -> tunnel.v1.AgentUpgradeAction
+	50,  // 42: tunnel.v1.Hello.resources:type_name -> tunnel.v1.NodeResources
+	126, // 43: tunnel.v1.Hello.labels:type_name -> tunnel.v1.Hello.LabelsEntry
+	133, // 44: tunnel.v1.Shutdown.grace_period:type_name -> google.protobuf.Duration
+	58,  // 45: tunnel.v1.GatewayRoster.replicas:type_name -> tunnel.v1.GatewayReplica
+	2,   // 46: tunnel.v1.GatewayReplica.state:type_name -> tunnel.v1.ReplicaState
+	2,   // 47: tunnel.v1.JoinRequest.state:type_name -> tunnel.v1.ReplicaState
+	77,  // 48: tunnel.v1.RuntimeStatus.snapshots:type_name -> tunnel.v1.RuntimeSnapshot
+	132, // 49: tunnel.v1.RuntimeStatus.reported_at:type_name -> google.protobuf.Timestamp
+	3,   // 50: tunnel.v1.RuntimeConfig.action:type_name -> tunnel.v1.ConfigAction
+	75,  // 51: tunnel.v1.RuntimeConfig.spec:type_name -> tunnel.v1.RuntimeSpec
+	64,  // 52: tunnel.v1.ModelPullReport.pulls:type_name -> tunnel.v1.ModelPullStatus
+	4,   // 53: tunnel.v1.ModelPullStatus.state:type_name -> tunnel.v1.ModelPullState
+	5,   // 54: tunnel.v1.ModelPullStatus.reason:type_name -> tunnel.v1.ModelPullFailureReason
+	6,   // 55: tunnel.v1.ComfyUIManagedAction.action:type_name -> tunnel.v1.ComfyUIManagedActionType
+	67,  // 56: tunnel.v1.ComfyUIManagedReport.instances:type_name -> tunnel.v1.ComfyUIManagedStatus
+	7,   // 57: tunnel.v1.ComfyUIManagedStatus.state:type_name -> tunnel.v1.ComfyUIManagedState
+	74,  // 58: tunnel.v1.ComfyUIManagedStatus.custom_nodes:type_name -> tunnel.v1.ComfyUIManagedCustomNode
+	8,   // 59: tunnel.v1.AgentUpgradeAction.action:type_name -> tunnel.v1.AgentUpgradeActionType
+	9,   // 60: tunnel.v1.AgentUpgradeReport.state:type_name -> tunnel.v1.AgentUpgradeState
+	10,  // 61: tunnel.v1.AgentUpgradeReport.reason:type_name -> tunnel.v1.AgentUpgradeFailureReason
+	72,  // 62: tunnel.v1.CLIUsageReport.accounts:type_name -> tunnel.v1.CLIUsageAccount
+	73,  // 63: tunnel.v1.CLIUsageAccount.windows:type_name -> tunnel.v1.CLIUsageWindow
+	127, // 64: tunnel.v1.RuntimeSpec.headers:type_name -> tunnel.v1.RuntimeSpec.HeadersEntry
+	133, // 65: tunnel.v1.RuntimeSpec.probe_timeout:type_name -> google.protobuf.Duration
+	133, // 66: tunnel.v1.RuntimeSpec.request_timeout:type_name -> google.protobuf.Duration
+	133, // 67: tunnel.v1.RuntimeSpec.stream_idle_timeout:type_name -> google.protobuf.Duration
+	133, // 68: tunnel.v1.RuntimeSpec.health_interval:type_name -> google.protobuf.Duration
+	133, // 69: tunnel.v1.RuntimeSpec.discovery_interval:type_name -> google.protobuf.Duration
+	76,  // 70: tunnel.v1.RuntimeSpec.tls:type_name -> tunnel.v1.TLSSpec
+	128, // 71: tunnel.v1.RuntimeSpec.capability_overrides:type_name -> tunnel.v1.RuntimeSpec.CapabilityOverridesEntry
+	78,  // 72: tunnel.v1.RuntimeSnapshot.descriptor:type_name -> tunnel.v1.RuntimeDescriptor
+	79,  // 73: tunnel.v1.RuntimeSnapshot.probe:type_name -> tunnel.v1.ProbeResult
+	80,  // 74: tunnel.v1.RuntimeSnapshot.health:type_name -> tunnel.v1.HealthReport
+	81,  // 75: tunnel.v1.RuntimeSnapshot.discovery:type_name -> tunnel.v1.Discovery
+	132, // 76: tunnel.v1.RuntimeSnapshot.updated_at:type_name -> google.protobuf.Timestamp
+	132, // 77: tunnel.v1.ProbeResult.probed_at:type_name -> google.protobuf.Timestamp
+	133, // 78: tunnel.v1.HealthReport.latency:type_name -> google.protobuf.Duration
+	132, // 79: tunnel.v1.HealthReport.checked_at:type_name -> google.protobuf.Timestamp
+	83,  // 80: tunnel.v1.Discovery.models:type_name -> tunnel.v1.Model
+	129, // 81: tunnel.v1.Discovery.capabilities:type_name -> tunnel.v1.Discovery.CapabilitiesEntry
+	132, // 82: tunnel.v1.Discovery.discovered_at:type_name -> google.protobuf.Timestamp
+	130, // 83: tunnel.v1.Model.capabilities:type_name -> tunnel.v1.Model.CapabilitiesEntry
+	83,  // 84: tunnel.v1.ModelList.models:type_name -> tunnel.v1.Model
+	86,  // 85: tunnel.v1.ChatRequest.messages:type_name -> tunnel.v1.ChatMessage
+	95,  // 86: tunnel.v1.ChatRequest.tools:type_name -> tunnel.v1.Tool
+	97,  // 87: tunnel.v1.ChatRequest.response_format:type_name -> tunnel.v1.ResponseFormat
+	131, // 88: tunnel.v1.ChatRequest.extra:type_name -> tunnel.v1.ChatRequest.ExtraEntry
+	88,  // 89: tunnel.v1.ChatRequest.reasoning:type_name -> tunnel.v1.ReasoningConfig
+	93,  // 90: tunnel.v1.ChatMessage.tool_calls:type_name -> tunnel.v1.ToolCall
+	89,  // 91: tunnel.v1.ChatMessage.content_parts:type_name -> tunnel.v1.ContentPart
+	87,  // 92: tunnel.v1.ChatMessage.reasoning_blocks:type_name -> tunnel.v1.ReasoningBlock
+	90,  // 93: tunnel.v1.ContentPart.image_url:type_name -> tunnel.v1.ContentImageURL
+	91,  // 94: tunnel.v1.ContentPart.input_audio:type_name -> tunnel.v1.ContentAudio
+	92,  // 95: tunnel.v1.ContentPart.file:type_name -> tunnel.v1.ContentFile
+	94,  // 96: tunnel.v1.ToolCall.function:type_name -> tunnel.v1.FunctionCall
+	96,  // 97: tunnel.v1.Tool.function:type_name -> tunnel.v1.FunctionDefinition
+	98,  // 98: tunnel.v1.ResponseFormat.json_schema:type_name -> tunnel.v1.JSONSchemaFormat
+	86,  // 99: tunnel.v1.ChatResponse.message:type_name -> tunnel.v1.ChatMessage
+	104, // 100: tunnel.v1.ChatResponse.usage:type_name -> tunnel.v1.Usage
+	132, // 101: tunnel.v1.ChatResponse.created_at:type_name -> google.protobuf.Timestamp
+	101, // 102: tunnel.v1.ChatEvent.delta:type_name -> tunnel.v1.ChatMessageDelta
+	104, // 103: tunnel.v1.ChatEvent.usage:type_name -> tunnel.v1.Usage
+	102, // 104: tunnel.v1.ChatMessageDelta.tool_calls:type_name -> tunnel.v1.ToolCallDelta
+	87,  // 105: tunnel.v1.ChatMessageDelta.reasoning_block:type_name -> tunnel.v1.ReasoningBlock
+	103, // 106: tunnel.v1.ToolCallDelta.function:type_name -> tunnel.v1.FunctionCallDelta
+	107, // 107: tunnel.v1.EmbeddingResponse.data:type_name -> tunnel.v1.Embedding
+	104, // 108: tunnel.v1.EmbeddingResponse.usage:type_name -> tunnel.v1.Usage
+	132, // 109: tunnel.v1.WorkflowRun.submitted_at:type_name -> google.protobuf.Timestamp
+	132, // 110: tunnel.v1.WorkflowEvent.received_at:type_name -> google.protobuf.Timestamp
+	132, // 111: tunnel.v1.WorkflowStatus.started_at:type_name -> google.protobuf.Timestamp
+	132, // 112: tunnel.v1.WorkflowStatus.finished_at:type_name -> google.protobuf.Timestamp
+	113, // 113: tunnel.v1.ArtifactList.artifacts:type_name -> tunnel.v1.ArtifactRef
+	11,  // 114: tunnel.v1.AudioTranscriptionRequest.task:type_name -> tunnel.v1.AudioTask
+	121, // 115: tunnel.v1.RerankResponse.results:type_name -> tunnel.v1.RerankResult
+	124, // 116: tunnel.v1.ImageGenerateEvent.meta:type_name -> tunnel.v1.ImageGenerateMeta
+	104, // 117: tunnel.v1.ImageGenerateMeta.usage:type_name -> tunnel.v1.Usage
+	82,  // 118: tunnel.v1.Discovery.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	82,  // 119: tunnel.v1.Model.CapabilitiesEntry.value:type_name -> tunnel.v1.CapabilityEvidence
+	47,  // 120: tunnel.v1.Tunnel.Control:input_type -> tunnel.v1.AgentControl
+	34,  // 121: tunnel.v1.Tunnel.Serve:input_type -> tunnel.v1.AgentFrame
+	12,  // 122: tunnel.v1.NodeIdentity.Register:input_type -> tunnel.v1.RegisterRequest
+	14,  // 123: tunnel.v1.NodeIdentity.RenewCertificate:input_type -> tunnel.v1.RenewRequest
+	59,  // 124: tunnel.v1.GatewayDirectory.Join:input_type -> tunnel.v1.JoinRequest
+	16,  // 125: tunnel.v1.TokenAdmin.MintToken:input_type -> tunnel.v1.MintTokenRequest
+	18,  // 126: tunnel.v1.TokenAdmin.RevokeToken:input_type -> tunnel.v1.RevokeTokenRequest
+	20,  // 127: tunnel.v1.TokenAdmin.DisableNode:input_type -> tunnel.v1.DisableNodeRequest
+	22,  // 128: tunnel.v1.TokenAdmin.EnableNode:input_type -> tunnel.v1.EnableNodeRequest
+	24,  // 129: tunnel.v1.TokenAdmin.ApproveNode:input_type -> tunnel.v1.ApproveNodeRequest
+	26,  // 130: tunnel.v1.TokenAdmin.SetMaintenance:input_type -> tunnel.v1.SetMaintenanceRequest
+	28,  // 131: tunnel.v1.TokenAdmin.ClearMaintenance:input_type -> tunnel.v1.ClearMaintenanceRequest
+	30,  // 132: tunnel.v1.TokenAdmin.ListNodeStates:input_type -> tunnel.v1.ListNodeStatesRequest
+	48,  // 133: tunnel.v1.Tunnel.Control:output_type -> tunnel.v1.GatewayControl
+	33,  // 134: tunnel.v1.Tunnel.Serve:output_type -> tunnel.v1.GatewayFrame
+	13,  // 135: tunnel.v1.NodeIdentity.Register:output_type -> tunnel.v1.RegisterResponse
+	15,  // 136: tunnel.v1.NodeIdentity.RenewCertificate:output_type -> tunnel.v1.RenewResponse
+	57,  // 137: tunnel.v1.GatewayDirectory.Join:output_type -> tunnel.v1.GatewayRoster
+	17,  // 138: tunnel.v1.TokenAdmin.MintToken:output_type -> tunnel.v1.MintTokenResponse
+	19,  // 139: tunnel.v1.TokenAdmin.RevokeToken:output_type -> tunnel.v1.RevokeTokenResponse
+	21,  // 140: tunnel.v1.TokenAdmin.DisableNode:output_type -> tunnel.v1.DisableNodeResponse
+	23,  // 141: tunnel.v1.TokenAdmin.EnableNode:output_type -> tunnel.v1.EnableNodeResponse
+	25,  // 142: tunnel.v1.TokenAdmin.ApproveNode:output_type -> tunnel.v1.ApproveNodeResponse
+	27,  // 143: tunnel.v1.TokenAdmin.SetMaintenance:output_type -> tunnel.v1.SetMaintenanceResponse
+	29,  // 144: tunnel.v1.TokenAdmin.ClearMaintenance:output_type -> tunnel.v1.ClearMaintenanceResponse
+	31,  // 145: tunnel.v1.TokenAdmin.ListNodeStates:output_type -> tunnel.v1.ListNodeStatesResponse
+	133, // [133:146] is the sub-list for method output_type
+	120, // [120:133] is the sub-list for method input_type
+	120, // [120:120] is the sub-list for extension type_name
+	120, // [120:120] is the sub-list for extension extendee
+	0,   // [0:120] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_tunnel_v1_tunnel_proto_init() }

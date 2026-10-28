@@ -313,7 +313,11 @@ func (c *Client) doRaw(ctx context.Context, operation, method, path string, reqB
 		if truncated {
 			return nil, c.tooLargeError(operation, resp.StatusCode)
 		}
-		return nil, c.errorFromResponse(operation, resp.StatusCode, respBytes)
+		rtErr := c.errorFromResponse(operation, resp.StatusCode, respBytes)
+		if rtErr.Code == runtime.ErrorRateLimited {
+			rtErr.RetryAfter = runtime.ParseRetryAfter(resp.Header.Get("Retry-After"))
+		}
+		return nil, rtErr
 	}
 	return resp, nil
 }
@@ -377,7 +381,11 @@ func (c *Client) doMultipart(ctx context.Context, operation, path string, fields
 		if truncated {
 			return nil, c.tooLargeError(operation, resp.StatusCode)
 		}
-		return nil, c.errorFromResponse(operation, resp.StatusCode, respBytes)
+		rtErr := c.errorFromResponse(operation, resp.StatusCode, respBytes)
+		if rtErr.Code == runtime.ErrorRateLimited {
+			rtErr.RetryAfter = runtime.ParseRetryAfter(resp.Header.Get("Retry-After"))
+		}
+		return nil, rtErr
 	}
 	return resp, nil
 }

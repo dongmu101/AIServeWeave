@@ -14,7 +14,7 @@ runtimes:
     kind: codex
 ```
 
-不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，默认探测期限为 15 秒以覆盖 CLI 冷启动。
+不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，默认探测期限为 15 秒以覆盖 CLI 冷启动。
 
 每个请求启动独立临时进程和 ephemeral thread，经公开 `thread/inject_items` 保留消息角色、function_call 的 call_id 和 function_call_output 的结果，不把工具结果伪装成用户提示词。历史完整注入后以空 input 启动回合；首次动态工具回调转换成 runtime.ToolCall，返回调用方后终止整个进程组。下一轮重新注入完整历史继续，Agent 不保存跨请求线程映射。
 
@@ -59,7 +59,7 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 - 只有生图进程的 `imageGeneration` 完成帧可以放宽到 48 MiB（一张 1024² PNG 的 base64 就约 2.2 MB），其余帧仍受 1 MiB 限制。
 - Codex 会另存一份到 `CODEX_HOME/generated_images/<thread_id>/`。进程回收后，Agent 删除这个目录。目录由校验过的线程 ID（只允许 `[A-Za-z0-9_-]`）拼出来，不使用 app-server 报回的 `savedPath`，因此不可能删到别处。
 - 生图期间 app-server 可能静默二三十秒，所以只受 `RequestTimeout`（默认 5 分钟）和 Gateway 下发的期限约束，不使用流空闲期限。与 Chat 共用并发限额。
-- 账户生图额度耗尽（`usageLimitExceeded`）映射为 `rate_limited`；回合结束仍没有图映射为 `upstream_error`；格式、大小或关联校验失败映射为 `protocol_error`。错误文本不含提示词。
+- 账户生图额度耗尽（`usageLimitExceeded`）映射为可重试的 `rate_limited`，对话回合的额度耗尽同样如此，并附带额度恢复时长（见 [额度耗尽与限流](../README.md#额度耗尽与限流)）；回合结束仍没有图映射为 `upstream_error`；格式、大小或关联校验失败映射为 `protocol_error`。错误文本不含提示词。
 
 Codex 内置生图工具不允许调用方选择上游图像模型。`codex-cli 0.162.1` 的 `thread/start`、`turn/start` 都没有相关字段，`image_generation.model`、`tools.image_generation.model` 等候选配置键也都被 CLI 判为无法识别。所以这里只发布一个不标版本的 ID，不发布 `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` 这类 API 模型 ID，也不要在 Gateway 路由里把它们设成指向 `codex-image` 的别名。尺寸、质量、背景、输出格式等参数同理，由 Gateway 按名字拒绝。设计与实测记录见 [设计文档](../../../docs/superpowers/specs/2026-10-16-codex-image-generation-design.md)。
 

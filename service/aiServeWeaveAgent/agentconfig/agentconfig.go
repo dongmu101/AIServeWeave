@@ -213,6 +213,16 @@ type RuntimeConfig struct {
 	// "think_tags_prefilled" 为不自己分离思考的 OpenAI 兼容后端把回复里内联的 <think>
 	// 思考切分出来。设置页面没有这个字段；从页面保存时保留文件里已有的值。
 	ReasoningParser string `yaml:"reasoning_parser,omitempty"`
+	// AccountDir is runtime.Config.AccountDir: the configuration directory
+	// whose login a codex or claude runtime uses (CODEX_HOME /
+	// CLAUDE_CONFIG_DIR). Leave it empty for the Agent's own login; give two
+	// runtimes of the same kind different directories to serve two accounts.
+	// A leading "~/" is expanded to the Agent user's home directory.
+	//
+	// AccountDir 即 runtime.Config.AccountDir：codex 或 claude 运行时所用登录所在的
+	// 配置目录（CODEX_HOME / CLAUDE_CONFIG_DIR）。留空使用 Agent 自己的登录；给两个
+	// 同种类运行时配置不同目录即可服务两个账户。开头的 "~/" 会展开为 Agent 用户的主目录。
+	AccountDir string `yaml:"account_dir,omitempty"`
 }
 
 // ModelList is a model catalogue written either as one space- or
@@ -311,6 +321,9 @@ func Save(path string, cfg *Config) error {
 		}
 		if rc.ReasoningParser != "" {
 			entry["reasoning_parser"] = rc.ReasoningParser
+		}
+		if rc.AccountDir != "" {
+			entry["account_dir"] = rc.AccountDir
 		}
 		runtimes[i] = entry
 	}

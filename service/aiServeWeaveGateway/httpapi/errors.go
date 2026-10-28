@@ -5,6 +5,8 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"time"
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
@@ -37,7 +39,25 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, code, message 
 // maps errors the same way.
 func handleDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) {
 	status, errType, code, message := dispatchErrorDetails(logger, err)
+	setRetryAfter(w, err)
 	writeOpenAIError(w, status, errType, code, message)
+}
+
+// setRetryAfter sets the Retry-After header from a rate_limited error's
+// RetryAfter, rounded up to whole seconds, so a client that honours the header
+// waits until the quota the scheduler is cooling down on comes back. Any other
+// error, or one with no RetryAfter, leaves the header unset.
+//
+// setRetryAfter 依据 rate_limited 错误的 RetryAfter 设置 Retry-After 响应头（向上取整
+// 到秒），让遵守该头的客户端等到调度器正在冷却的那份额度恢复。其他错误、或没有
+// RetryAfter 的错误不设置该头。
+func setRetryAfter(w http.ResponseWriter, err error) {
+	var rtErr *runtime.RuntimeError
+	if !errors.As(err, &rtErr) || rtErr.Code != runtime.ErrorRateLimited || rtErr.RetryAfter <= 0 {
+		return
+	}
+	seconds := int64((rtErr.RetryAfter + time.Second - 1) / time.Second)
+	w.Header().Set("Retry-After", strconv.FormatInt(seconds, 10))
 }
 
 // dispatchErrorDetails classifies a scheduler/runtime dispatch failure into

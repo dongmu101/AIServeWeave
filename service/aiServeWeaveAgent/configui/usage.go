@@ -40,6 +40,9 @@ func currentCLIUsage(monitor *cliusage.Monitor, locale browserlang.Locale) cliUs
 		if account.Kind == runtime.KindClaude {
 			entry.Name = "Claude Code"
 		}
+		if account.RuntimeID != "" {
+			entry.Name += " · " + account.RuntimeID
+		}
 		switch account.Status {
 		case "ready":
 			entry.StatusKey = "u.ready"

@@ -30,7 +30,7 @@ runtimes:
     kind: claude
 ```
 
-`base_url` 省略或为空，不配置 API Key、请求头、TLS 或认证文件。设置了 `gateway.allowed_runtimes` 时加入 `claude-local`。Gateway 下发配置不能创建未在本地声明的 Claude ID。配置页面可选择 Claude Code CLI，保存后仍需重启 Agent。
+`base_url` 省略或为空，不配置 API Key、请求头、TLS 或认证文件。设置了 `gateway.allowed_runtimes` 时加入 `claude-local`。Gateway 下发配置不能创建未在本地声明的 Claude ID。配置页面可选择 Claude Code CLI 并填写可选的账户目录（`account_dir`，作为 `CLAUDE_CONFIG_DIR`，见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）；保存后 Agent 即重新加载运行时，无需重启（见 [运行时热重载](../README.md#运行时热重载)）。
 
 所有 Gateway 副本连接同一 Redis（`-redis-addr`），并启用控制面 API Key 校验。调用方使用控制面签发的 Key；静态 `-api-keys` 没有租户/Key 归属，不能用于此运行时。未启用模型别名路由时，`/v1/models` 保留 CLI 顺序列出发现的模型，其中 `id`、`name` 和 `display_name` 均为同一个真实模型 ID，例如 `claude-haiku-5-5`，不使用 `Haiku 5.5` 等友好名称替代。启用路由时只列出具有可用目标的公共别名。例如，将公共模型 `claude-sonnet-4-6` 路由到目录中的同名具体模型：
 
@@ -80,7 +80,7 @@ Anthropic 的 usage 不单独报告思考 token，思考计入 `output_tokens`�
 
 每个运行时最多两个独立 CLI 会话，所有 Gateway 副本共用该 Agent 限额。等待工具和生成阶段均最多两分钟，会话总寿命十分钟；每会话最多 64 次工具调用、同时最多 8 个待决工具。原生请求最多 1 MiB、CLI 单事件 1 MiB、最多 10000 行、每回合输出最多 8 MiB。流式事件逐条传递，使用同步背压。
 
-新会话的首轮可以换节点。Gateway 的候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话名额，所以首个事件到达之前，如果节点答复会话已满（`backpressure`）、运行时正在关闭（`runtime_closed`）或带可重试标志的错误，调度器会依次尝试下一个候选。请求格式不合法等错误不换节点。续接从不换节点。
+新会话的首轮可以换节点。Gateway 的候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话名额，所以首个事件到达之前，如果节点答复会话已满（`backpressure`）、运行时正在关闭（`runtime_closed`）、账户额度耗尽（`rate_limited`，附带恢复时长，见 [额度耗尽与限流](../README.md#额度耗尽与限流)）或带可重试标志的错误，调度器会依次尝试下一个候选。请求格式不合法等错误不换节点。续接从不换节点。
 
 Redis 原子保存工具 ID 的完整集合、租户/Key、公共模型及原节点/runtime/实际模型，TTL 两分钟，不保存消息或工具结果。每次续接重新认证，不允许换节点或自动重试；已应用或结果不确定的工具结果不可重放。HTTP 断开取消未完成回合；正常完成的工具回合保留进程等待下一请求。Agent 关闭、会话超时及 CLI 退出会清理进程组、MCP 监听和临时文件。
 

@@ -19,7 +19,19 @@ const accountUsageID = "aisw_account_usage"
 // ReadAccountUsage uses Claude Code's native get_usage control request without inference.
 // ReadAccountUsage 通过 Claude Code 原生 get_usage 控制请求查询额度，不执行推理。
 func ReadAccountUsage(ctx context.Context) (cliusage.Account, error) {
-	return readAccountUsage(ctx, "claude", probeEnv(os.Environ()))
+	return AccountUsageReader("")(ctx)
+}
+
+// AccountUsageReader is ReadAccountUsage for the login under accountDir
+// (runtime.Config.AccountDir); an empty accountDir reads the Agent's own.
+//
+// AccountUsageReader 是针对 accountDir（runtime.Config.AccountDir）下那份登录的
+// ReadAccountUsage；accountDir 为空时读取 Agent 自己的登录。
+func AccountUsageReader(accountDir string) func(context.Context) (cliusage.Account, error) {
+	env := withAccountDir(probeEnv(os.Environ()), accountDir)
+	return func(ctx context.Context) (cliusage.Account, error) {
+		return readAccountUsage(ctx, "claude", env)
+	}
 }
 
 func readAccountUsage(ctx context.Context, program string, env []string) (cliusage.Account, error) {

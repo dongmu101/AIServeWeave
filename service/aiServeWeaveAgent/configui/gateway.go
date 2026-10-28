@@ -1,6 +1,7 @@
 package configui
 
 import (
+	"context"
 	"net/http"
 	"sort"
 
@@ -21,6 +22,11 @@ type Sources struct {
 	// CLIUsage caches account-level subscription limits for locally declared CLIs.
 	// CLIUsage 缓存本地声明 CLI 的账户级订阅额度。
 	CLIUsage *cliusage.Monitor
+	// Reload applies a just-saved file's runtimes: list to the running Agent;
+	// nil means setup-only mode, where a save waits for the next start.
+	// Reload 把刚保存文件的 runtimes: 列表应用到运行中的 Agent；为 nil 表示仅配置模式，
+	// 此时保存要等下次启动才生效。
+	Reload func(context.Context) error
 }
 
 // GatewaySnapshot describes the running tunnel manager without credentials.

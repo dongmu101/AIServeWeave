@@ -78,16 +78,21 @@ func ParsePolicy(name string) (Policy, error) {
 	return "", fmt.Errorf("scheduler: unknown policy %q (want %s, %s or %s)", name, PolicyLeastLoad, PolicyPowerOfTwo, PolicyPrefixHash)
 }
 
-// affinity is a request's prefix fingerprint for PolicyPrefixHash. ok is false
-// when the request carries no prefix worth pinning, which every policy treats
-// as "no preference". Only the hash is kept: the prompt text itself never
-// leaves the function that computed it.
+// affinity is a request's prefix fingerprint for PolicyPrefixHash, or its
+// session key's hash (see WithSessionKey). ok is false when the request
+// carries neither, which every policy treats as "no preference". session marks
+// a session key, which ranks by rendezvous hashing whatever the configured
+// policy is. Only the hash is kept: the prompt text itself never leaves the
+// function that computed it.
 //
-// affinity 是请求供 PolicyPrefixHash 使用的前缀指纹。请求没有值得固定的前缀时 ok 为
-// false，所有策略都把它当作「没有偏好」。只保留哈希：提示文本本身从不离开计算它的函数。
+// affinity 是请求供 PolicyPrefixHash 使用的前缀指纹，或它的会话 key 的哈希（见
+// WithSessionKey）。请求两者都没有时 ok 为 false，所有策略都把它当作「没有偏好」。
+// session 标记这是会话 key，无论配置的策略是什么，都按 rendezvous 哈希排序。只保留
+// 哈希：提示文本本身从不离开计算它的函数。
 type affinity struct {
-	hash uint64
-	ok   bool
+	hash    uint64
+	ok      bool
+	session bool
 }
 
 // scored is one eligible candidate together with the load figures every

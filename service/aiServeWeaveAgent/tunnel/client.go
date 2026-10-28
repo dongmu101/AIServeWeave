@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -439,6 +440,14 @@ type Client struct {
 	pool           *Pool
 	activeReplicas int
 	draining       bool
+
+	// cliUsageReported records that this tunnel has told its replica about a
+	// non-empty CLI quota. The replica keeps the last report across
+	// reconnects, so from then on an empty quota is sent too, to clear
+	// accounts a runtime reload removed.
+	// cliUsageReported 记录本隧道曾向其副本报告过非空的 CLI 额度。副本会跨重连保留最后
+	// 一份报告，因此此后空额度也照常发送，以清除被运行时重新加载移除的账户。
+	cliUsageReported atomic.Bool
 }
 
 // NewClient validates cfg and returns a tunnel that is not yet connected.

@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"math/rand"
+	"slices"
 	"sort"
 	"sync/atomic"
 	"time"
@@ -90,6 +91,10 @@ type Scheduler struct {
 	prefixBytes int
 	intn        func(int) int
 
+	// sessionAffinityOn is Config.SessionAffinity.
+	// sessionAffinityOn 即 Config.SessionAffinity。
+	sessionAffinityOn bool
+
 	// queueMaxWait, queueRetryInterval and queueSlots implement STATUS.md's
 	// P2 bounded task queueing for workflow submissions (see workflow.go's
 	// queueSubmitWorkflow). queueSlots is nil, and queueing disabled, unless
@@ -114,6 +119,34 @@ type Config struct {
 	// defaultBaseCooldown / defaultMaxCooldown.
 	BaseCooldown time.Duration
 	MaxCooldown  time.Duration
+
+	// RateLimitCooldown is how long a candidate that answered rate_limited
+	// without a reset time is skipped. A rate_limited error that carries
+	// RetryAfter (a CLI subscription window, a provider's Retry-After) is
+	// skipped for exactly that long instead, up to MaxRateLimitCooldown. Zero
+	// uses 30s and 1h respectively. Unlike the breaker this never counts as a
+	// failure of the node: the next success ends the cooldown at once.
+	//
+	// RateLimitCooldown 是回答 rate_limited 但没有给出重置时间的候选被跳过的时长。
+	// 携带 RetryAfter 的 rate_limited（CLI 订阅窗口、供应商的 Retry-After）则恰好跳过
+	// 那么久，但不超过 MaxRateLimitCooldown。零值分别使用 30s 与 1h。与熔断不同，它从不
+	// 算作节点故障：下一次成功会立即结束冷却。
+	RateLimitCooldown    time.Duration
+	MaxRateLimitCooldown time.Duration
+
+	// SessionAffinity ranks chat and Messages requests that carry a session
+	// key (see WithSessionKey) by rendezvous hashing of that key, whatever
+	// Policy is, so one conversation keeps reusing the prompt cache of the
+	// node and account it started on. A candidate with no idle inference slot
+	// still yields to one that has, and a cooling or broken candidate is still
+	// skipped, so affinity is a preference, never a pin. Requests without a
+	// key are unaffected.
+	//
+	// SessionAffinity 让携带会话 key（见 WithSessionKey）的聊天与 Messages 请求按该 key
+	// 的 rendezvous 哈希排序，无论 Policy 是什么，使一段对话持续复用它起始所在节点与账户
+	// 的提示缓存。没有空闲推理槽的候选仍让位于有空闲槽的，冷却中或已熔断的候选仍被跳过，
+	// 因此亲和只是偏好，从不是钉死。没有 key 的请求不受影响。
+	SessionAffinity bool
 
 	// Metrics receives the scheduler's instruments, described by
 	// Descriptions. Nil discards them.
@@ -206,14 +239,15 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 		prefixBytes = defaultPrefixBytes
 	}
 	s := &Scheduler{
-		server:      server,
-		clock:       clock,
-		breakers:    newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec),
-		metrics:     rec,
-		logger:      logger,
-		policy:      policy,
-		prefixBytes: prefixBytes,
-		intn:        rand.Intn,
+		server:            server,
+		clock:             clock,
+		breakers:          newBreakerRegistry(cfg.FailureThreshold, cfg.BaseCooldown, cfg.MaxCooldown, rec).withRateLimit(cfg.RateLimitCooldown, cfg.MaxRateLimitCooldown, logger),
+		metrics:           rec,
+		logger:            logger,
+		policy:            policy,
+		prefixBytes:       prefixBytes,
+		intn:              rand.Intn,
+		sessionAffinityOn: cfg.SessionAffinity,
 	}
 	s.routes.Store(cfg.Routes)
 
@@ -259,13 +293,17 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	if !modelAllowed(ctx, req.Model) {
 		return runtime.ChatResponse{}, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.chatCandidates(req, runtime.CapabilityChat)
+	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.ChatResponse{}, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
+	var cooled cooledCandidates
 	for _, c := range candidates {
+		if s.skipCooling(c, &cooled) {
+			continue
+		}
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Chat(ctx, withModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
@@ -279,7 +317,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 		}
 		s.metrics.Retry(runtime.CapabilityChat)
 	}
-	return runtime.ChatResponse{}, Candidate{}, lastErr
+	return runtime.ChatResponse{}, Candidate{}, cooled.or(lastErr)
 }
 
 // Embed dispatches req the same way Chat does.
@@ -293,7 +331,11 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 		return runtime.EmbeddingResponse{}, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
+	var cooled cooledCandidates
 	for _, c := range candidates {
+		if s.skipCooling(c, &cooled) {
+			continue
+		}
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Embed(ctx, withEmbedModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
@@ -307,7 +349,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 		}
 		s.metrics.Retry(runtime.CapabilityEmbeddings)
 	}
-	return runtime.EmbeddingResponse{}, Candidate{}, lastErr
+	return runtime.EmbeddingResponse{}, Candidate{}, cooled.or(lastErr)
 }
 
 // Rerank dispatches req the same way Chat and Embed do.
@@ -321,7 +363,11 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 		return runtime.RerankResponse{}, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
+	var cooled cooledCandidates
 	for _, c := range candidates {
+		if s.skipCooling(c, &cooled) {
+			continue
+		}
 		resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Rerank(ctx, withRerankModel(req, c.Model))
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
@@ -335,7 +381,7 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 		}
 		s.metrics.Retry(runtime.CapabilityRerank)
 	}
-	return runtime.RerankResponse{}, Candidate{}, lastErr
+	return runtime.RerankResponse{}, Candidate{}, cooled.or(lastErr)
 }
 
 // TranscriptionCandidates ranks the nodes able to serve req.Model with
@@ -347,8 +393,36 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 // 的节点排序。与 Chat/Embed 内部直接调用的 candidates() 不同，这里导出，是
 // 因为调用方必须在 Transcribe 开始流式发送音频之前自己选定一个候选——原因
 // 见 Transcribe 的文档注释。
+//
+// Candidates still cooling down after a rate limit are moved to the back:
+// the caller dispatches to the first one only, so this is the one place the
+// cooldown can act.
+//
+// 仍在限流冷却中的候选被移到最后：调用方只派发给第一个候选，因此这里是冷却唯一能起
+// 作用的地方。
 func (s *Scheduler) TranscriptionCandidates(model string) []Candidate {
-	return s.candidates(model, runtime.CapabilityAudioTranscription)
+	return s.coolingLast(s.candidates(model, runtime.CapabilityAudioTranscription))
+}
+
+// coolingLast moves the candidates still cooling down after a rate limit
+// behind the rest, keeping each group's order.
+// coolingLast 把仍在限流冷却中的候选移到其余候选之后，各组内部保持原有顺序。
+func (s *Scheduler) coolingLast(candidates []Candidate) []Candidate {
+	now := s.clock.Now()
+	cooling := make(map[Candidate]bool, len(candidates))
+	for _, c := range candidates {
+		_, cooling[c] = s.breakers.limited(c, now)
+	}
+	slices.SortStableFunc(candidates, func(a, b Candidate) int {
+		switch {
+		case cooling[a] == cooling[b]:
+			return 0
+		case cooling[a]:
+			return 1
+		}
+		return -1
+	})
+	return candidates
 }
 
 // Transcribe streams audio to a single, already-chosen candidate for a
@@ -383,13 +457,17 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 	if !modelAllowed(ctx, req.Model) {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.chatCandidates(req, runtime.CapabilityChatStream)
+	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
+	var cooled cooledCandidates
 	for _, c := range candidates {
+		if s.skipCooling(c, &cooled) {
+			continue
+		}
 		stream, err := s.server.Runtime(c.NodeID, c.RuntimeID).ChatStream(ctx, withModel(req, c.Model))
 		if err != nil {
 			s.breakers.record(c, err, s.clock.Now())
@@ -433,7 +511,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 		}
 		return nil, c, err
 	}
-	return nil, Candidate{}, lastErr
+	return nil, Candidate{}, cooled.or(lastErr)
 }
 
 // Models is the public catalogue: what a client may ask for right now.
@@ -547,14 +625,19 @@ func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate
 }
 
 // chatCandidates is candidates for a chat request, which alone carries a
-// prompt prefix for PolicyPrefixHash to pin. The fingerprint is only computed
-// when that policy is active, so the other policies pay nothing for it.
+// prompt prefix for PolicyPrefixHash to pin. A session key on ctx (see
+// WithSessionKey) takes precedence over the prefix: it names the conversation
+// outright instead of inferring it. The fingerprint is only computed when
+// PolicyPrefixHash is active and no session key is present, so the other
+// policies pay nothing for it.
 //
 // chatCandidates 是聊天请求版的 candidates：只有聊天请求携带可供 PolicyPrefixHash
-// 固定的提示前缀。指纹只在该策略生效时才计算，其他策略不为此付出任何代价。
-func (s *Scheduler) chatCandidates(req runtime.ChatRequest, cap runtime.Capability) []Candidate {
-	var key affinity
-	if s.policy == PolicyPrefixHash {
+// 固定的提示前缀。ctx 上的会话 key（见 WithSessionKey）优先于前缀：它直接点名对话，
+// 而不是去推断。指纹只在 PolicyPrefixHash 生效且没有会话 key 时才计算，其他策略不为此
+// 付出任何代价。
+func (s *Scheduler) chatCandidates(ctx context.Context, req runtime.ChatRequest, cap runtime.Capability) []Candidate {
+	key := s.sessionAffinity(ctx)
+	if !key.ok && s.policy == PolicyPrefixHash {
 		key = prefixAffinity(req, s.prefixBytes)
 	}
 	return s.candidatesKeyed(s.routes.Load(), req.Model, cap, key, rand.Float64)
@@ -600,7 +683,11 @@ func (s *Scheduler) candidatesKeyed(routes *routing.Table, model string, cap run
 // 在前——默认是空闲推理槽最多的优先，其次是在途请求最少的，对应 README 的「最少正在
 // 执行请求」策略。排序前先打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
 func (s *Scheduler) pick(target routing.Target, cap runtime.Capability, key affinity) []Candidate {
-	return s.pickBy(target, s.policy, key, func(snap runtime.Snapshot) bool {
+	policy := s.policy
+	if key.session {
+		policy = PolicyPrefixHash
+	}
+	return s.pickBy(target, policy, key, func(snap runtime.Snapshot) bool {
 		for _, m := range snap.Discovery.Models {
 			if m.ID != target.RuntimeModel {
 				continue

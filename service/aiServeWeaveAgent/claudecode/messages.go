@@ -11,6 +11,7 @@ import (
 	"io"
 	"mime"
 	"net/http"
+	"os"
 	"sync"
 	"time"
 
@@ -283,6 +284,11 @@ type messagesBridge struct {
 	closed         bool
 	capacity       int
 	wg             sync.WaitGroup
+	// env is the CLI environment, carrying CLAUDE_CONFIG_DIR when the
+	// runtime declares an AccountDir; nil uses the Agent's own environment.
+	// env 是 CLI 的环境变量，运行时声明了 AccountDir 时带有 CLAUDE_CONFIG_DIR；
+	// 为 nil 时使用 Agent 自己的环境。
+	env []string
 	// start is replaced by offline fixtures, never by HTTP input.
 	// start 仅由离线测试替换，从不取自 HTTP 输入。
 	start func(*messagesSession)
@@ -292,6 +298,15 @@ func newMessagesBridge(program, model string, keys map[string]principal, clock r
 	b := &messagesBridge{program: program, model: model, keys: keys, clock: clock, sessions: make(map[*messagesSession]bool), capacity: 2}
 	b.start = b.runSession
 	return b
+}
+
+// cliEnv returns the environment every CLI process of this bridge starts with.
+// cliEnv 返回本桥接启动每个 CLI 进程时使用的环境变量。
+func (b *messagesBridge) cliEnv() []string {
+	if b.env != nil {
+		return b.env
+	}
+	return probeEnv(os.Environ())
 }
 
 func (b *messagesBridge) close() {

@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/runtime/anthropic"
@@ -32,21 +33,71 @@ import (
 // 才允许创建。托管供应商还始终保留本地声明的端点与凭据：Gateway 下发的配置
 // 可以调整超时，但绝不能把本地 Key 转发到别的 URL。
 func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
-	registry := runtime.NewRegistry()
-	local := make(map[string]runtime.Config)
+	return newReloadableRegistry(newLocalDeclarations(declared))
+}
+
+// localDeclarations is the set of locally declared CLI and hosted runtimes
+// the registry's factories admit. It is shared rather than copied so a
+// runtime reload (see runtimeReloader) can declare a new CLI account or
+// provider without rebuilding the registry.
+//
+// localDeclarations 是注册表工厂所接受的、本地声明的 CLI 与托管运行时集合。它被共享
+// 而不是复制，使运行时重新加载（见 runtimeReloader）无需重建注册表就能声明新的 CLI 账户
+// 或供应商。
+type localDeclarations struct {
+	mu   sync.RWMutex
+	byID map[string]runtime.Config
+}
+
+// newLocalDeclarations returns the declarations among declared that need one.
+// newLocalDeclarations 返回 declared 中需要本地声明的那些。
+func newLocalDeclarations(declared []runtime.Config) *localDeclarations {
+	d := &localDeclarations{}
+	d.set(declared)
+	return d
+}
+
+// set replaces the declarations with those among declared.
+// set 用 declared 中需要本地声明的那些替换当前声明。
+func (d *localDeclarations) set(declared []runtime.Config) {
+	byID := make(map[string]runtime.Config)
 	for _, cfg := range declared {
 		if cfg.Kind.IsLocalCLI() || cfg.Kind.IsHosted() {
-			local[cfg.ID] = cfg
+			byID[cfg.ID] = cfg
 		}
 	}
-	// localOnly admits only IDs declared locally with the same kind.
-	// localOnly 只接受在本地以相同种类声明过的 ID。
+	d.mu.Lock()
+	d.byID = byID
+	d.mu.Unlock()
+}
+
+// get returns the local declaration for id.
+// get 返回 id 的本地声明。
+func (d *localDeclarations) get(id string) (runtime.Config, bool) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	cfg, ok := d.byID[id]
+	return cfg, ok
+}
+
+// newReloadableRegistry is newRegistry over a declaration set the caller keeps
+// and may later replace.
+// newReloadableRegistry 是基于调用方持有、之后可替换的声明集合的 newRegistry。
+func newReloadableRegistry(local *localDeclarations) (runtime.Registry, error) {
+	registry := runtime.NewRegistry()
+	// localOnly admits only IDs declared locally with the same kind, and
+	// always takes the account directory from that declaration: it is local
+	// only, so a configuration pushed by a Gateway can neither set nor move it.
+	// localOnly 只接受在本地以相同种类声明过的 ID，并始终从该声明取账户目录：它仅限
+	// 本地，Gateway 下发的配置既不能设置也不能改动它。
 	localOnly := func(build runtime.Factory) runtime.Factory {
 		return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-			if own, ok := local[cfg.ID]; !ok || own.Kind != cfg.Kind {
+			own, ok := local.get(cfg.ID)
+			if !ok || own.Kind != cfg.Kind {
 				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
 					Message: "runtime kind must be declared in the local Agent configuration"}
 			}
+			cfg.AccountDir = own.AccountDir
 			return build(cfg, deps)
 		}
 	}
@@ -58,7 +109,7 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 	// 下发的配置仍可调整超时、并发与能力覆盖，这些都无法让请求离开已声明的主机。
 	hostedLocal := func(build runtime.Factory) runtime.Factory {
 		return localOnly(func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
-			own := local[cfg.ID]
+			own, _ := local.get(cfg.ID)
 			if !sameEndpoint(cfg.Normalize().BaseURL, own.Normalize().BaseURL) {
 				return nil, &runtime.RuntimeError{Code: runtime.ErrorInvalidConfig, RuntimeID: cfg.ID, Kind: cfg.Kind,
 					Message: "hosted runtime base_url must match the local Agent configuration"}

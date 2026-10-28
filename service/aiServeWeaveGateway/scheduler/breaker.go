@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -16,6 +17,20 @@ const (
 	defaultFailureThreshold = 5
 	defaultBaseCooldown     = 5 * time.Second
 	defaultMaxCooldown      = 2 * time.Minute
+)
+
+// Default bounds for the rate-limit cooldown, used whenever a Config leaves
+// RateLimitCooldown or MaxRateLimitCooldown at zero. The default applies when
+// the backend gave no reset time; the cap bounds a reset time that is far
+// away (a weekly subscription window), so one request an hour still finds out
+// whether the quota came back early — a plan upgrade, a manual reset.
+//
+// 限流冷却的默认边界，Config 的 RateLimitCooldown 或 MaxRateLimitCooldown 为零时使用。
+// 默认值用于后端没有给出重置时间的情况；上限约束遥远的重置时间（按周的订阅窗口），使得
+// 每小时仍有一次请求去确认额度是否提前恢复——套餐升级、手动重置。
+const (
+	defaultRateLimitCooldown    = 30 * time.Second
+	defaultMaxRateLimitCooldown = time.Hour
 )
 
 // breakerFailure reports whether err should count toward a candidate's
@@ -42,11 +57,22 @@ func breakerFailure(err error) bool {
 }
 
 // breakerState is one candidate's circuit-breaker bookkeeping.
+//
+// limitedUntil is independent of the breaker proper: a rate-limited
+// candidate is not broken, it has run out of quota, so the answer never
+// counts toward a trip — like any other answer from the node it ends the
+// failure streak instead. It only says "do not send work here before this
+// instant".
+//
+// limitedUntil 独立于熔断本身：被限流的候选没有坏，只是额度用完了，所以这个答复从不
+// 计入跳闸——与节点的其他答复一样，它反而结束失败连击。它只表示「在此刻之前不要往这里
+// 派活」。
 type breakerState struct {
 	consecutiveFailures int
 	tripCount           int
 	open                bool
 	openUntil           time.Time
+	limitedUntil        time.Time
 }
 
 // breakerRegistry tracks one breakerState per Candidate. All access goes
@@ -57,7 +83,10 @@ type breakerRegistry struct {
 	failureThreshold int
 	baseCooldown     time.Duration
 	maxCooldown      time.Duration
+	limitCooldown    time.Duration
+	maxLimitCooldown time.Duration
 	metrics          *recorder
+	logger           *slog.Logger
 
 	mu      sync.Mutex
 	entries map[Candidate]*breakerState
@@ -80,9 +109,64 @@ func newBreakerRegistry(failureThreshold int, baseCooldown, maxCooldown time.Dur
 		failureThreshold: failureThreshold,
 		baseCooldown:     baseCooldown,
 		maxCooldown:      maxCooldown,
+		limitCooldown:    defaultRateLimitCooldown,
+		maxLimitCooldown: defaultMaxRateLimitCooldown,
 		metrics:          rec,
+		logger:           slog.New(slog.DiscardHandler),
 		entries:          make(map[Candidate]*breakerState),
 	}
+}
+
+// withRateLimit sets the rate-limit cooldown bounds and the logger that
+// reports each cooldown, applying the same zero-means-default rule as
+// newBreakerRegistry. It is called once, before the registry is shared.
+//
+// withRateLimit 设置限流冷却的边界及报告每次冷却的日志器，与 newBreakerRegistry 一样
+// 以零值表示默认。它只在注册表被共享之前调用一次。
+func (r *breakerRegistry) withRateLimit(limitCooldown, maxLimitCooldown time.Duration, logger *slog.Logger) *breakerRegistry {
+	if limitCooldown > 0 {
+		r.limitCooldown = limitCooldown
+	}
+	if maxLimitCooldown > 0 {
+		r.maxLimitCooldown = maxLimitCooldown
+	}
+	r.maxLimitCooldown = max(r.maxLimitCooldown, r.limitCooldown)
+	if logger != nil {
+		r.logger = logger
+	}
+	return r
+}
+
+// limited reports how much of c's rate-limit cooldown is left at now, and
+// whether there is any. It is a separate question from eligible: a cooling
+// candidate is skipped at dispatch time rather than dropped from the
+// candidate set, so a model whose every candidate is cooling answers
+// rate_limited with a retry time instead of "no node serves this model".
+//
+// limited 报告 c 在 now 时刻还剩多少限流冷却，以及是否还在冷却中。它与 eligible 是两个
+// 问题：冷却中的候选在派发时被跳过，而不是从候选集中删除，因此一个所有候选都在冷却的
+// 模型会回答带重试时间的 rate_limited，而不是「没有节点能服务这个模型」。
+func (r *breakerRegistry) limited(c Candidate, now time.Time) (time.Duration, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	st, ok := r.entries[c]
+	if !ok || !now.Before(st.limitedUntil) {
+		return 0, false
+	}
+	return st.limitedUntil.Sub(now), true
+}
+
+// limitWindow is how long a rate-limited candidate is set aside: the
+// backend's own RetryAfter when it gave one, otherwise limitCooldown, never
+// more than maxLimitCooldown.
+//
+// limitWindow 是被限流的候选被搁置的时长：后端给了 RetryAfter 就用它，否则用
+// limitCooldown，且从不超过 maxLimitCooldown。
+func (r *breakerRegistry) limitWindow(retryAfter time.Duration) time.Duration {
+	if retryAfter <= 0 {
+		retryAfter = r.limitCooldown
+	}
+	return min(retryAfter, r.maxLimitCooldown)
 }
 
 // eligible reports whether c may be tried right now. A candidate with no
@@ -131,15 +215,40 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 	var (
 		closed  bool
 		tripped bool
+		limited time.Duration
 	)
 
 	r.mu.Lock()
-	if !breakerFailure(err) {
+	if retryAfter, ok := rateLimitedError(err); ok {
+		// The node answered, so the failure streak ends here exactly as for
+		// any other non-qualifying error; on top of that the candidate rests
+		// until its quota comes back.
+		//
+		// 节点作出了回答，因此失败连击与其他不计入熔断的错误一样就此结束；在此之上，候选
+		// 还要休息到它的额度恢复。
+		st, ok := r.entries[c]
+		if !ok {
+			st = &breakerState{}
+			r.entries[c] = st
+		}
+		closed = st.open
+		st.consecutiveFailures = 0
+		st.tripCount = 0
+		st.open = false
+		limited = r.limitWindow(retryAfter)
+		st.limitedUntil = now.Add(limited)
+	} else if !breakerFailure(err) {
 		if st, ok := r.entries[c]; ok {
 			closed = st.open
 			st.consecutiveFailures = 0
 			st.tripCount = 0
 			st.open = false
+			if err == nil {
+				// A success proves the quota is back, whatever the reset
+				// time said.
+				// 一次成功证明额度已经恢复，不管重置时间怎么说。
+				st.limitedUntil = time.Time{}
+			}
 		}
 	} else {
 		st, ok := r.entries[c]
@@ -164,6 +273,23 @@ func (r *breakerRegistry) record(c Candidate, err error, now time.Time) {
 	case closed:
 		r.metrics.BreakerOpen(c, false)
 	}
+	if limited > 0 {
+		r.logger.Info("candidate rate limited; cooling down until its quota resets",
+			slog.String("node_id", c.NodeID), slog.String("runtime_id", c.RuntimeID),
+			slog.Duration("cooldown", limited))
+	}
+}
+
+// rateLimitedError reports whether err is a rate_limited RuntimeError, and the
+// RetryAfter it carries.
+//
+// rateLimitedError 报告 err 是否为 rate_limited 的 RuntimeError，以及它携带的 RetryAfter。
+func rateLimitedError(err error) (time.Duration, bool) {
+	var rtErr *runtime.RuntimeError
+	if !errors.As(err, &rtErr) || rtErr.Code != runtime.ErrorRateLimited {
+		return 0, false
+	}
+	return rtErr.RetryAfter, true
 }
 
 // cooldown returns the open-window duration for the tripCount'th trip:

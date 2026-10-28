@@ -29,6 +29,7 @@ type Window struct {
 // Account is a safe projection of one CLI account's subscription quota.
 // Account 是一个 CLI 账户订阅额度的安全投影。
 type Account struct {
+	RuntimeID string       // locally declared runtime owning this login; empty from older Agents / 持有该登录的本地运行时，旧版 Agent 为空
 	Kind      runtime.Kind // locally declared provider / 本地声明的供应方
 	Status    string       // pending, ready, unauthorized, unavailable or error / 待查询、可用、未登录、未提供或失败
 	Windows   []Window     // bounded upstream quota windows / 有界的上游额度窗口

@@ -287,7 +287,9 @@ aiserveweave-gateway \
 
 **思考内容**（`runtime.ChatMessage.ReasoningContent`，由 `common/runtime/openai` 从后端的 `reasoning_content` 或 `reasoning` 字段解析，Anthropic 后端从 `thinking` 块解析）：Chat Completions 在 `message.reasoning_content`/`delta.reasoning_content` 输出，沿用 DeepSeek 首创、vLLM 与 SGLang 跟随的字段名；Responses 输出 `reasoning` 项，思考原文放在 `content` 的 `reasoning_text` 部件里、`summary` 为空数组，流式事件是 `response.reasoning_text.delta`/`.done`，同一时间 reasoning 项与 message 项至多打开一个。后端报告了思考 token 时，Chat 的 `usage.completion_tokens_details.reasoning_tokens` 与 Responses 的 `usage.output_tokens_details.reasoning_tokens` 才会出现。客户端回传的思考（Chat 消息上的 `reasoning_content`、Responses 的 `reasoning` 输入项）一律不转发给后端，`store: true` 持久化的轮次也不保存思考。
 
-**请求侧开启思考**：四个前门各自的开关统一转成 `runtime.ChatRequest.Reasoning`（`reasoning.go`）——Chat 的 `reasoning_effort`（`none` 关闭，`minimal`/`low`/`medium`/`high`/`xhigh` 开启）、Responses 的 `reasoning.effort`（不带 `effort` 的 `reasoning` 对象视为开启、档位由后端默认；`summary` 被接受但不起作用）、Anthropic 的 `thinking`（`enabled` 必须带正的 `budget_tokens`，`adaptive` 开启，`disabled` 关闭）、Ollama 的 `think`（布尔值或 `low`/`medium`/`high`）。格式错误的值返回 400 并点名参数；合法值是**提示**而非要求：发现结果明确报告模型不支持思考时适配器去掉它，未知时照发，从不因为后端可能不兑现而拒绝请求。各后端的映射见 [runtime README「思考开关与兜底解析器」](../../common/runtime/README.md#思考开关与兜底解析器)。Claude CLI 模型走原生路径（`native_*.go`）时，`reasoning_effort`、Responses `reasoning` 与 Messages `thinking` 由 `nativeThinking` 转成 Agent 桥接唯一接受的 `{"type":"enabled","budget_tokens":N}`（收敛到 `max_tokens` 以下；带 `temperature` 或放不下 1024 token 时去掉），CLI 透出的 `thinking_delta` 在 Chat 渲染为 `reasoning_content`、在 Responses 渲染为 `reasoning` 项、在 Messages 原样转发（含签名），见 [Claude 包说明「思考内容」](../aiServeWeaveAgent/claudecode/README.md#思考内容)。
+**请求侧开启思考**：四个前门各自的开关统一转成 `runtime.ChatRequest.Reasoning`（`reasoning.go`）——Chat 的 `reasoning_effort`（`none` 关闭，`minimal`/`low`/`medium`/`high`/`xhigh` 开启）、Responses 的 `reasoning.effort`（不带 `effort` 的 `reasoning` 对象视为开启、档位由后端默认；`summary` 被接受但不起作用）、Anthropic 的 `thinking`（`enabled` 必须带正的 `budget_tokens`，`adaptive` 开启，`disabled` 关闭）、Ollama 的 `think`（布尔值或 `low`/`medium`/`high`）。格式错误的值返回 400 并点名参数；合法值是**提示**而非要求：发现结果明确报告模型不支持思考时适配器去掉它，未知时照发，从不因为后端可能不兑现而拒绝请求。各后端的映射见 [runtime README「思考开关与兜底解析器」](../../common/runtime/README.md#思考开关与兜底解析器)。
+
+**模型名后缀**（`httpapi/requestprep.go`）：只能设置模型名的客户端可以把思考档位写进模型名，`gpt-5(high)`、`claude-sonnet-4-6(16384)`。括号里可以是 `none`、五个档位之一（大小写不敏感）或 0–1000000 的整数思考预算（`0` 等于 `none`），取最后一对括号；其他写法（不认识的词、前导零、模型名为空、括号前有空格）都不算后缀，模型名按原样使用，所以真实名字以括号结尾的模型照常可用——除非括号里恰好是上述取值（例如一个真名就叫 `foo(high)` 的模型会被拆成 `foo` 加后缀，这类模型名需改用别名路由）。后缀在各前门自己的解码之前改写请求体，**覆盖**请求体里原有的思考字段，其余字段原样保留：Chat 写 `reasoning_effort`（数字预算换算成不低于它的最近档位）；Responses 写 `reasoning.effort`，`reasoning` 对象的其他字段（如 `summary`）保留；Anthropic 写 `thinking`，预算提到 1024 下限并收敛到 `max_tokens - 1`，`max_tokens` ≤ 1024 时返回 400 而不是悄悄关闭思考；Ollama 原生写 `think`（`minimal` 记为 `low`、`xhigh` 记为 `high`，`none` 记为 `false`）。改写在原生透传路径之前完成，因此 Claude CLI 原生路径看到的请求与转换路径一致。Claude CLI 模型走原生路径（`native_*.go`）时，`reasoning_effort`、Responses `reasoning` 与 Messages `thinking` 由 `nativeThinking` 转成 Agent 桥接唯一接受的 `{"type":"enabled","budget_tokens":N}`（收敛到 `max_tokens` 以下；带 `temperature` 或放不下 1024 token 时去掉），CLI 透出的 `thinking_delta` 在 Chat 渲染为 `reasoning_content`、在 Responses 渲染为 `reasoning` 项、在 Messages 原样转发（含签名），见 [Claude 包说明「思考内容」](../aiServeWeaveAgent/claudecode/README.md#思考内容)。
 
 **多模态部件的能力门禁**：`image_url`/`input_audio`/`file` 部件分别要求 `runtime.CapabilityVision`/`CapabilityAudioInput`/`CapabilityDocumentInput`（`oaibase.ChatCapabilities`，三个前门共用同一份判定），本仓库当前没有任何适配器发布后两项——协议已经在三个前门、隧道 proto（`ContentAudio`/`ContentFile` 消息）与 `common/runtime/openai` 的出站 DTO（`input_audio`/`file` 内容部件）之间全程打通，但在真正支持音频输入或文档理解的后端接入之前，携带这两种部件的请求会被本地拒绝为能力不支持而不是假定可行——与音频转录、Rerank 同一先例。
 
@@ -450,6 +452,23 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 `FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖；`main.go` 把它们暴露为三个 CLI flag（`-breaker-failure-threshold`、`-breaker-base-cooldown`、`-breaker-max-cooldown`，均默认 `0`，表示沿用 `scheduler` 包内的内置默认值 5 / 5s / 2m），便于在不同候选参数之间对比而不用重新编译。
 
 P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此默认值保持不变。真实流量校准的记录要求、长稳 CSV/JSON 归档方法与测试覆盖范围见 [P10 验收手册](../../deploy/p10-acceptance.md)；2026-09-12 的短时实测见 [验收记录](../../docs/acceptance/p10-2026-09-12/README.md)；2026-09-13 使用上述三个新 flag 对比候选参数的真实流量熔断校准见 [验收记录](../../docs/acceptance/p10-breaker-calibration-2026-09-13/README.md)。
+
+## 后端限流冷却
+
+后端答复 `rate_limited` 时（本地 CLI 账户订阅额度耗尽、OpenAI 兼容后端返回 429），熔断器把该 `(node_id, runtime_id)` 候选**搁置**到额度恢复：时长取错误携带的 `RetryAfter`（Agent 经隧道 `TunnelError.retry_after` 上报，来源见 [Agent README「额度耗尽与限流」](../aiServeWeaveAgent/README.md#额度耗尽与限流)），没有时用 `-rate-limit-cooldown`（默认 30s），且不超过 `-max-rate-limit-cooldown`（默认 1h）。两个 flag 留 `0` 表示沿用默认值。
+
+- 冷却与熔断相互独立：`rate_limited` 说明节点能正常应答，它照旧不计入连续失败，并会复位失败连击、关闭已打开的熔断；之后任何一次成功都立即解除冷却。
+- 冷却中的候选在**派发时跳过**，而不是从候选集删除。同一模型的其他候选（另一个账户、另一个节点）照常服务；所有候选都在冷却时，请求得到合成的 `rate_limited`，`Retry-After` 取最早恢复的那个候选的剩余时间（向上取整到秒），而不是「没有节点能服务这个模型」。有候选实际派发失败时，返回的是真实失败。
+- 各前门（OpenAI、Anthropic、Ollama、原生 Messages）对带 `RetryAfter` 的 `rate_limited` 都写 `Retry-After` 响应头。
+- 转录不是多候选重试循环，只派发给第一个候选，因此 `TranscriptionCandidates` 把冷却中的候选排到最后；全部在冷却时仍派发给第一个。
+- 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选（续接仍不换节点）。
+- 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。冷却状态只在副本内存中，不跨副本共享：其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+
+## 会话亲和
+
+`-session-affinity`（默认开启）让同一段对话持续落在同一个节点与运行时上——对本地 CLI 后端就是同一个账户，它的上游提示缓存已被这段对话预热。会话 key 依次取请求头 `X-Session-Id`、`Session_id`（Codex 发送）、`X-Claude-Code-Session-Id`（Claude Code 发送）、`Conversation_id`，再取请求体 `prompt_cache_key`，最后取 Anthropic 的 `metadata.user_id`；超过 512 字节的值忽略。Ollama 原生前门只看请求头。key 按租户限定（租户 ID 拼在前面），只以 FNV 哈希的形式进入调度器，不写日志。
+
+带会话 key 的 Chat/ChatStream 与原生 Messages 请求，无论 `-scheduler-policy` 是什么，目标内都按会话 key 的 rendezvous 哈希排序（与 `prefix_hash` 同一套排序与「无空闲槽者靠后」规则），会话 key 优先于提示前缀。优先级、权重、熔断与限流冷却照常先生效：首选候选被熔断或冷却时，对话换到排名第二的候选。Claude CLI 后端在 Agent 侧以 `DISABLE_PROMPT_CACHING=1` 运行，因此亲和带来的缓存收益主要体现在 Codex 与支持前缀缓存的 HTTP 后端上。关闭 flag 后会话 key 被忽略，行为与此前相同。
 
 ## 工作流 Job 的有界排队（STATUS.md 的 P2）
 

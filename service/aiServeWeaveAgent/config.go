@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -100,6 +101,24 @@ func resolveConfigPath(flagValue string, explicit bool, defaultPath string) stri
 	return ""
 }
 
+// expandHome replaces a leading "~/" with the current user's home directory,
+// leaving every other path, and a "~/" path when the home directory cannot be
+// found, unchanged.
+//
+// expandHome 把开头的 "~/" 替换为当前用户的主目录；其他路径、以及找不到主目录时的
+// "~/" 路径原样保留。
+func expandHome(path string) string {
+	rest, ok := strings.CutPrefix(path, "~/")
+	if !ok {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	return filepath.Join(home, rest)
+}
+
 // applyConfig merges cfg (loaded from -config) into the already-parsed flag
 // values named in explicit. Runtimes are handled separately by
 // runtimesFromConfig: a declared runtime is additive to -ollama-url rather
@@ -176,6 +195,12 @@ func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnel
 // 那里以 runtime.ErrRuntimeKindUnsupported 的形式暴露出来，与任何其他错误
 // 的 -kind 一样。
 //
+// A codex or claude runtime's account_dir is passed on with a leading "~/"
+// expanded; runtime.Config.Validate then requires the result to be absolute.
+//
+// codex 或 claude 运行时的 account_dir 原样传下去，开头的 "~/" 会被展开；之后由
+// runtime.Config.Validate 要求结果是绝对路径。
+//
 // A hosted provider's key is read from the environment variable named by
 // api_key_env at this point; an unset variable leaves the key empty, which
 // the provider then rejects as unauthorized rather than failing startup.
@@ -193,7 +218,7 @@ func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 	}
 	out := make([]runtime.Config, len(declared))
 	for i, rc := range declared {
-		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL, ReasoningParser: rc.ReasoningParser}
+		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL, ReasoningParser: rc.ReasoningParser, AccountDir: expandHome(rc.AccountDir)}
 		if !out[i].Kind.IsHosted() {
 			continue
 		}
