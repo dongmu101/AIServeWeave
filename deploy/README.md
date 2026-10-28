@@ -27,6 +27,56 @@ Agent 在推理节点宿主机上运行，连接本机 Ollama / vLLM / ComfyUI�
 | Registry / 指标 | 9443 / 9091 | `REGISTRY_PORT` / `REGISTRY_METRICS_PORT` |
 | MySQL / Redis | 3306 / 6379 | `MYSQL_PORT` / `REDIS_PORT` |
 
+## 脚本部署与升级
+
+`install.sh` 自动完成下文「起步」中的手工步骤，`upgrade.sh` 负责之后每次拉取新代码后的重新部署。
+两个脚本都可以在任意目录下调用，脚本会自己切换到 `deploy` 目录。
+
+### 首次部署
+
+```bash
+deploy/install.sh --owner-email owner@example.com --operator-email ops@example.com
+```
+
+脚本按以下顺序执行：
+
+1. 从 `.env.example` 创建 `.env`，权限设为 600，并去掉 CR 换行。
+2. 补齐所有为空的密钥；已有值不改动。
+3. MySQL 数据卷尚未创建时，为数据库账户生成独立密码。
+4. 账户密码留空时自动生成，并在脚本结束时显示一次。
+5. 在 `controlplane.yaml` 中关闭 go-zero 的访问日志中间件，原因见下文「对外部署与已知限制」。
+6. 逐个构建镜像，启动服务，然后检查 Console、控制面与 Gateway 是否应答。
+
+脚本可以重复执行，失败后重跑会从中断处继续。常用选项如下，完整列表见 `deploy/install.sh --help`：
+
+| 选项 | 作用 |
+| --- | --- |
+| `--https` | 部署在 HTTPS 反向代理之后，启用 Secure Cookie |
+| `--signup` | 开启租户自助注册：写入 `controlplane.yaml` 的 `Signup` 段与 `docker-compose.override.yaml` |
+| `--goproxy URL` | 指定构建时的 Go 模块代理，例如 `https://goproxy.cn,direct` |
+| `--advertise-addr HOST:PORT` | Agent 拨号的隧道地址 |
+| `--local-discovery` | 保留对 `host.docker.internal` 的本机发现。Linux 原生 Docker 无法解析这个主机名，所以默认清空 |
+| `--no-build` | 只准备配置，不构建、不启动 |
+
+### 重新部署
+
+```bash
+deploy/upgrade.sh                    # 拉取当前分支的上游提交，备份，重建有变化的服务
+deploy/upgrade.sh gateway console    # 只重建指定服务
+deploy/upgrade.sh --no-pull --force  # 不拉取代码，直接按当前工作区重建
+```
+
+升级按以下流程进行：
+
+- 只做快进合并。`controlplane.yaml` 的本地修改会在拉取期间暂存，拉取后恢复；恢复时冲突则停止，服务不受影响。其他已跟踪文件有本地修改时直接拒绝升级。
+- 拉取后改用新版本的脚本继续执行，补齐新版本要求的空密钥。
+- 如果 `.env.example` 新增了变量，或 `controlplane.yaml` 有上游改动，给出提示。
+- 构建前把 MySQL 转储和 Registry 身份材料备份到 `~/aiserveweave-backups`（可用 `--backup-dir` 修改）。任何一项备份失败都会中止升级。
+- 结束时打印回滚命令，以及本次备份的位置。
+
+两个脚本都逐个构建镜像，不会并行构建，因此 4 GiB 内存的主机也能完成构建。内存加 swap 低于
+6 GiB 时脚本会给出警告。
+
 ## 起步
 
 ### 1. 创建配置
@@ -162,6 +212,7 @@ Agent 删除；重启沿用节点证书和私钥。长期运行的本地 YAML �
 
 | 操作 | 命令 |
 | --- | --- |
+| 拉取新代码并重新部署 | `./upgrade.sh` |
 | 查看全部容器与一次性任务 | `docker compose ps --all` |
 | 查看某服务日志 | `docker compose logs --tail=100 <service>` |
 | 修改 `.env` 后应用配置 | `docker compose up -d` |
@@ -205,6 +256,11 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
 
 ## 对外部署与已知限制
 
+- go-zero 默认开启访问日志中间件。控制面返回任何 5xx 时，它会用 `httputil.DumpRequest`
+  把完整请求写进 error 日志，包括 `Authorization` 头与请求体，内部令牌和登录密码因此会进入日志。
+  在代码修复之前，`controlplane.yaml` 必须包含 `Middlewares: {Log: false}`；
+  `install.sh` 与 `upgrade.sh` 会自动补上这一段。已经泄露进日志的令牌要轮换，并用
+  `docker compose up -d --force-recreate` 重建容器，旧容器的日志随之删除。
 - 默认所有宿主机端口只绑定 `127.0.0.1`。Console 和 Gateway HTTP API 对外服务时通过
   HTTPS 反向代理接入；设置 `AISW_CONSOLE_COOKIE_SECURE=true`，并让代理保留外部 `Host`。
 - 远程 Agent 还需调整 Registry 与隧道端口的宿主机绑定、证书 SAN 和

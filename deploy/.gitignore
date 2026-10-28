@@ -3,3 +3,7 @@
 .env
 .env.*
 !.env.example
+
+# Per-host compose overrides, such as the one install.sh --signup writes.
+# 每台主机自己的 compose 覆盖文件，例如 install.sh --signup 写入的那份。
+docker-compose.override.yaml
