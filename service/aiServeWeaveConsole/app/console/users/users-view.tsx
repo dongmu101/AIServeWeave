@@ -15,7 +15,7 @@ import {
 } from "@tanstack/react-table";
 
 import { CreateUserDialog } from "@/app/console/users/create-user-dialog";
-import { UserActions } from "@/app/console/users/user-actions";
+import { UserActionsDialog } from "@/app/console/users/user-actions";
 import { DataTable } from "@/components/console/data-table";
 import { Pager } from "@/components/console/pager";
 import { ErrorState, LoadingState } from "@/components/console/states";
@@ -25,6 +25,7 @@ import {
   useUrlFilters,
 } from "@/components/console/use-url-filters";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -53,7 +54,11 @@ import { canCreateUser, canManageUsers } from "@/lib/console/permissions";
 const features = tableFeatures({});
 const helper = createColumnHelper<typeof features, User>();
 
-const columns = (t: Translator, locale: Locale) => (helper.columns([
+// onManage is null when the viewer may not manage users; the actions column is
+// then left out entirely rather than rendered empty.
+//
+// 查看者无权管理用户时 onManage 为 null，此时整列省略，而不是渲染一列空白。
+const columns = (t: Translator, locale: Locale, currentUserId: string, onManage: ((user: User) => void) | null) => (helper.columns([
   helper.accessor("name", {
     header: t("tenant.name"),
     cell: (info) => info.getValue() || <span className="text-muted-foreground"><Message id="tenant.notProvided" /></span>,
@@ -81,6 +86,17 @@ const columns = (t: Translator, locale: Locale) => (helper.columns([
     header: t("tenant.createdAt"),
     cell: (info) => formatDateTime(info.getValue(), undefined, locale),
   }),
+  ...(onManage === null ? [] : [helper.display({
+    id: "actions",
+    header: t("tenant.actions"),
+    cell: (info) => {
+      const user = info.row.original;
+      if (user.id === currentUserId) {
+        return null;
+      }
+      return <Button variant="outline" size="sm" onClick={() => onManage(user)}><Message id="tenant.manage" /></Button>;
+    },
+  })]),
 ]));
 
 const PAGE_SIZE = 50;
@@ -105,8 +121,13 @@ export function UsersView({ role, currentUserId }: { role: string; currentUserId
     parse: parseUsers,
   });
 
+  const [target, setTarget] = React.useState<User | null>(null);
   const rows = users.items ?? NO_USERS;
-  const localizedColumns = React.useMemo(() => columns(t, locale), [t, locale]);
+  const manageable = canManageUsers(role);
+  const localizedColumns = React.useMemo(
+    () => columns(t, locale, currentUserId, manageable ? setTarget : null),
+    [t, locale, currentUserId, manageable]
+  );
   const table = useTable({ features, columns: localizedColumns, data: rows });
 
   return (
@@ -171,12 +192,10 @@ export function UsersView({ role, currentUserId }: { role: string; currentUserId
             }
           />
           <Pager resource={users} loadedCount={rows.length} />
-          {canManageUsers(role) ? <section className="grid gap-3" aria-label={t("tenant.userManagementActions")}>
-            <h2 className="font-heading font-semibold"><Message id="tenant.manageUsersOnThisPage" /></h2>
-            {rows.filter((user) => user.id !== currentUserId).map((user) => <UserActions key={user.id} user={user} onChanged={users.reload} />)}
-          </section> : null}
         </>
       )}
+
+      {manageable ? <UserActionsDialog user={target} onClose={() => setTarget(null)} onChanged={users.reload} /> : null}
     </div>
   );
 }
