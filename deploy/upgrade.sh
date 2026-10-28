@@ -108,6 +108,7 @@ fi
 ensure_env
 fill_secrets
 ensure_access_log_off
+ensure_config_readable
 if [[ -n "$FROM" ]]; then
   added="$(git -C "$ROOT_DIR" diff "$FROM" HEAD -- deploy/.env.example | sed -n 's/^+\([A-Z_][A-Z0-9_]*\)=.*/\1/p' || true)"
   [[ -z "$added" ]] || warn "新版本 .env.example 新增了变量，确认 deploy/.env 是否需要设置: $(echo $added)"

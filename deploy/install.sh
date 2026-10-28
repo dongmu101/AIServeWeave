@@ -126,6 +126,7 @@ fi
 
 # ---- controlplane.yaml / override ----
 ensure_access_log_off
+ensure_config_readable
 if (( SIGNUP == 1 )); then
   if ! grep -q '^Signup:' controlplane.yaml; then
     cat >>controlplane.yaml <<'EOF'
