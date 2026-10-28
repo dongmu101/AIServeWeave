@@ -22,6 +22,13 @@ ARG SERVICE
 # 跑的容器报告它是从哪个 tag 构建的，而不是永远显示 "dev"。发布流水线会传入 tag；不带
 # --build-arg VERSION 的普通 docker build 保留 "dev" 默认值。
 ARG VERSION=dev
+# GOPROXY lets a network that cannot reach proxy.golang.org point module
+# downloads at a mirror: docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
+#
+# GOPROXY 让访问不了 proxy.golang.org 的网络把模块下载指向镜像：
+# docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 WORKDIR /src
 
 # Dependencies are fetched in their own layer so a source-only change does not
