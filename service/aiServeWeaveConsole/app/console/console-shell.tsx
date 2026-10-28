@@ -62,8 +62,6 @@ function navigationItems(t: Translator): readonly NavEntry[] { return [
     ],
   },
   { href: "/console/docs", label: t("tenant.apiDocumentation") },
-  { href: "/console/settings", label: t("tenant.settings") },
-  { href: "/console/account", label: t("tenant.accountSecurity") },
 ]; }
 
 /**
