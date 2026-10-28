@@ -15,6 +15,11 @@ type chatInput struct {
 	tools   []any
 	allowed map[string]bool
 	schema  json.RawMessage
+	// effort and summary are turn/start's reasoning overrides, empty to keep
+	// the CLI's defaults; Runtime.reasoningFor derives them.
+	// effort 与 summary 是 turn/start 的思考覆盖项，为空表示沿用 CLI 默认值；由
+	// Runtime.reasoningFor 推导。
+	effort, summary string
 }
 
 // prepareChat preserves ordered message and tool history without prompt flattening.

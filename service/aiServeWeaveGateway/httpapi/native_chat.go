@@ -60,6 +60,15 @@ func (h *handlers) nativeChat(w http.ResponseWriter, r *http.Request, req chatCo
 		writeOpenAIError(w, 400, "invalid_request_error", "unsupported_parameter", "Claude CLI Chat supports only store=false; persistent Chat storage is unavailable")
 		return
 	}
+	// reasoning_effort is a hint: nativeThinking turns it into the CLI's
+	// thinking budget where it fits and drops it otherwise. Only a malformed
+	// value is refused.
+	// reasoning_effort 是提示：nativeThinking 在放得下时把它转为 CLI 的思考预算，放不下
+	// 时丢弃。只有格式错误的值才被拒绝。
+	if _, err := reasoningFromEffort(options.ReasoningEffort, "reasoning_effort"); err != nil {
+		writeOpenAIError(w, 400, "invalid_request_error", "invalid_value", err.Error())
+		return
+	}
 	req = options.chatCompletionRequest
 	for _, tool := range options.Tools {
 		if tool.Function.Strict != nil && *tool.Function.Strict {
@@ -78,8 +87,15 @@ func (h *handlers) nativeChat(w http.ResponseWriter, r *http.Request, req chatCo
 	h.nativeMessagesOutput(w, r, native, document, start, output)
 }
 
-// toNativeMessages keeps active tool histories exact and folds completed chat history into a text transcript.
-// toNativeMessages 保留正在执行的工具历史，将已完成的聊天历史整理成带角色的文本记录。
+// toNativeMessages keeps active tool histories exact and folds completed chat
+// history into a text transcript. reasoning_effort becomes the Messages
+// "thinking" object through nativeThinking. Echoed reasoning_content is left
+// out of the transcript: a prior turn's thinking is never replayed, and the
+// retained CLI keeps its own.
+//
+// toNativeMessages 保留正在执行的工具历史，将已完成的聊天历史整理成带角色的文本
+// 记录。reasoning_effort 经 nativeThinking 转为 Messages 的 "thinking" 对象。客户端
+// 回传的 reasoning_content 不进入文本记录：上一轮的思考从不回放，保留的 CLI 自己持有它。
 func (req chatCompletionRequest) toNativeMessages() (anthropicMessagesRequest, error) {
 	out := anthropicMessagesRequest{Model: req.Model, Stream: req.Stream, MaxTokens: 4096, Temperature: req.Temperature}
 	out.Metadata = json.RawMessage(`{"aisw_chat_completions":true}`)
@@ -94,6 +110,11 @@ func (req chatCompletionRequest) toNativeMessages() (anthropicMessagesRequest, e
 	if out.MaxTokens < 1 || out.MaxTokens > 64000 || (req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 1)) {
 		return out, errors.New("Claude CLI requires max_tokens in 1..64000 and temperature in 0..1")
 	}
+	reasoning, err := reasoningFromEffort(req.ReasoningEffort, "reasoning_effort")
+	if err != nil {
+		return out, err
+	}
+	out.Thinking = nativeThinking(reasoning, out.MaxTokens, req.Temperature)
 	if req.TopP != nil || req.Seed != nil || len(req.Stop) > 0 || req.ResponseFormat != nil {
 		return out, errors.New("Claude CLI Chat does not support top_p, seed, stop or response_format")
 	}
@@ -130,6 +151,7 @@ func (req chatCompletionRequest) toNativeMessages() (anthropicMessagesRequest, e
 			if message.Role == "user" {
 				latestUser = len(history)
 			}
+			message.ReasoningContent = ""
 			history = append(history, message)
 		default:
 			return out, errors.New("unsupported Chat message role")
@@ -211,6 +233,12 @@ func (o *nativeChatOutput) chunk(delta chatMessageDeltaJSON, finish *string, usa
 	return http.NewResponseController(o.w).Flush()
 }
 
+// event renders one native event as Chat chunks: text as content, thinking
+// as reasoning_content, tool_use as tool_calls. Signatures and redacted
+// thinking have no Chat form and are not rendered.
+//
+// event 把一条原生事件渲染为 Chat 分块：文本为 content，思考为 reasoning_content，
+// tool_use 为 tool_calls。签名与 redacted thinking 在 Chat 中没有对应形式，不渲染。
 func (o *nativeChatOutput) event(data []byte) error {
 	var event struct {
 		Type    string
@@ -218,7 +246,9 @@ func (o *nativeChatOutput) event(data []byte) error {
 		Message struct{ ID string }
 		Block   anthropicContentBlockJSON `json:"content_block"`
 		Delta   struct {
+			Type        string
 			Text        string
+			Thinking    string
 			PartialJSON string `json:"partial_json"`
 		}
 	}
@@ -240,6 +270,9 @@ func (o *nativeChatOutput) event(data []byte) error {
 			o.toolArguments[event.Index] = args != ""
 			return o.chunk(chatMessageDeltaJSON{ToolCalls: []toolCallJSON{{Index: &index, ID: event.Block.ID, Type: "function", Function: functionCallJSON{Name: event.Block.Name, Arguments: args}}}}, nil, nil)
 		}
+		if event.Block.Type == "thinking" && event.Block.Thinking != nil && *event.Block.Thinking != "" {
+			return o.chunk(chatMessageDeltaJSON{ReasoningContent: *event.Block.Thinking}, nil, nil)
+		}
 		if event.Block.Text != "" {
 			return o.chunk(chatMessageDeltaJSON{Content: event.Block.Text}, nil, nil)
 		}
@@ -247,6 +280,9 @@ func (o *nativeChatOutput) event(data []byte) error {
 		if index, ok := o.toolIndexes[event.Index]; ok {
 			o.toolArguments[event.Index] = o.toolArguments[event.Index] || event.Delta.PartialJSON != ""
 			return o.chunk(chatMessageDeltaJSON{ToolCalls: []toolCallJSON{{Index: &index, Function: functionCallJSON{Arguments: event.Delta.PartialJSON}}}}, nil, nil)
+		}
+		if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+			return o.chunk(chatMessageDeltaJSON{ReasoningContent: event.Delta.Thinking}, nil, nil)
 		}
 		if event.Delta.Text != "" {
 			return o.chunk(chatMessageDeltaJSON{Content: event.Delta.Text}, nil, nil)
@@ -297,6 +333,9 @@ func (o *nativeChatOutput) finish(response map[string]any, content []anthropicCo
 	}
 	message := chatMessageJSON{Role: "assistant"}
 	for _, block := range content {
+		if block.Type == "thinking" && block.Thinking != nil {
+			message.ReasoningContent += *block.Thinking
+		}
 		if block.Type == "text" {
 			message.Content.Text += block.Text
 		}

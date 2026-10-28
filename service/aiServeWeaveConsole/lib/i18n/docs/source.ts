@@ -1588,6 +1588,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
           },
           {
+            "name": "reasoning_effort",
+            "type": "string",
+            "required": false,
+            "description": "思考强度：none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位。作为提示转发给后端，模型不支持思考时被忽略；取值非法返回 400。"
+          },
+          {
             "name": "stop",
             "type": "string | array",
             "required": false,
@@ -1909,7 +1915,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "Claude 系列模型的参数限制",
-            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、reasoning_effort、prompt_cache_key）会被拒绝；store 只能为 false。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
           },
           {
             "title": "错误码说明",
@@ -1918,7 +1924,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "9e9d0b9f0a51ff49755ec9184b551c425992eb72c450c229b9d4657803eb068f",
+    "fingerprint": "ba3e473580c67963f7e44cf32edb2e5fc430433158e65798a914a3f946a728f3",
     "fields": [
       {
         "path": [
@@ -2321,7 +2327,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0103"
+        "key": "docs.d0555"
       },
       {
         "path": [
@@ -2330,7 +2336,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
-        "key": "docs.d0104"
+        "key": "docs.d0103"
       },
       {
         "path": [
@@ -2339,13 +2345,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           10,
           "description"
         ],
+        "key": "docs.d0104"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          11,
+          "description"
+        ],
         "key": "docs.d0105"
       },
       {
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           0,
           "description"
@@ -2356,7 +2371,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "description"
@@ -2367,7 +2382,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -2380,7 +2395,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -2393,7 +2408,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -2406,7 +2421,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -2419,7 +2434,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          11,
+          12,
           "description"
         ],
         "key": "docs.d0111"
@@ -2428,7 +2443,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "description"
         ],
         "key": "docs.d0112"
@@ -2437,7 +2452,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           0,
           "description"
@@ -2448,7 +2463,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           1,
           "description"
@@ -2459,7 +2474,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           1,
           "children",
@@ -2472,7 +2487,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           1,
           "children",
@@ -3077,6 +3092,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
           },
           {
+            "name": "reasoning_effort",
+            "type": "string",
+            "required": false,
+            "description": "思考强度：none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位。作为提示转发给后端，模型不支持思考时被忽略；取值非法返回 400。"
+          },
+          {
             "name": "stop",
             "type": "string | array",
             "required": false,
@@ -3388,7 +3409,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "Claude 系列模型的参数限制",
-            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、reasoning_effort、prompt_cache_key）会被拒绝；store 只能为 false。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
           },
           {
             "title": "错误码说明",
@@ -3397,7 +3418,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "800fe5798c02b5415b05858d36ae80521e9242aa4293fdeb27ba9cda128cd7ae",
+    "fingerprint": "10cad6b568db73dcbff3ed0d425b209b01b3b307d29328be09995e6543dd20bf",
     "fields": [
       {
         "path": [
@@ -3800,7 +3821,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0103"
+        "key": "docs.d0555"
       },
       {
         "path": [
@@ -3809,7 +3830,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
-        "key": "docs.d0104"
+        "key": "docs.d0103"
       },
       {
         "path": [
@@ -3818,13 +3839,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           10,
           "description"
         ],
+        "key": "docs.d0104"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          11,
+          "description"
+        ],
         "key": "docs.d0105"
       },
       {
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           0,
           "description"
@@ -3835,7 +3865,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "description"
@@ -3846,7 +3876,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -3859,7 +3889,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -3872,7 +3902,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -3885,7 +3915,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "children",
           1,
           "children",
@@ -3898,7 +3928,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          11,
+          12,
           "description"
         ],
         "key": "docs.d0111"
@@ -3907,7 +3937,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "description"
         ],
         "key": "docs.d0112"
@@ -3916,7 +3946,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           0,
           "description"
@@ -3927,7 +3957,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           1,
           "description"
@@ -3938,7 +3968,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           1,
           "children",
@@ -3951,7 +3981,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "children",
           1,
           "children",
@@ -7191,7 +7221,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "content",
                 "type": "string | array",
                 "required": true,
-                "description": "消息内容：字符串或内容块数组。不支持的块类型（如 thinking）返回 400。",
+                "description": "消息内容：字符串或内容块数组。不支持的块类型返回 400，user 消息里的 thinking 块同样返回 400；assistant 消息里回传的 thinking / redacted_thinking 块，带签名的会回放给 Claude 后端，其余被丢弃。",
                 "children": [
                   {
                     "name": "type",
@@ -7293,6 +7323,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "type": "integer",
             "required": true,
             "description": "最多生成的 token 数，必须大于 0。"
+          },
+          {
+            "name": "thinking",
+            "type": "object",
+            "required": false,
+            "description": "扩展思考：{\"type\":\"enabled\",\"budget_tokens\":N}（N 必须大于 0）、{\"type\":\"adaptive\"} 或 {\"type\":\"disabled\"}。作为提示转发给后端，模型不支持思考时被忽略；格式非法返回 400。"
           },
           {
             "name": "system",
@@ -7574,7 +7610,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "b55c1fe950deaa168b26a36bb947620b98bf20f9f7db4d5f33e7927a00245ec3",
+    "fingerprint": "ea2ea5b5811b093bc23b0dca8b50ce037decca9d9e7e3e781df903fcf0bf103c",
     "fields": [
       {
         "path": [
@@ -7893,7 +7929,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0321"
+        "key": "docs.d0557"
       },
       {
         "path": [
@@ -7902,7 +7938,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0322"
+        "key": "docs.d0321"
       },
       {
         "path": [
@@ -7911,7 +7947,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0323"
+        "key": "docs.d0322"
       },
       {
         "path": [
@@ -7920,7 +7956,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0324"
+        "key": "docs.d0323"
       },
       {
         "path": [
@@ -7929,7 +7965,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0325"
+        "key": "docs.d0324"
       },
       {
         "path": [
@@ -7938,13 +7974,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
+        "key": "docs.d0325"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          9,
+          "description"
+        ],
         "key": "docs.d0326"
       },
       {
         "path": [
           "content",
           "body_params",
-          8,
+          9,
           "children",
           0,
           "description"
@@ -7955,7 +8000,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          8,
+          9,
           "children",
           1,
           "description"
@@ -7966,7 +8011,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          8,
+          9,
           "children",
           2,
           "description"
@@ -7977,7 +8022,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "description"
         ],
         "key": "docs.d0330"
@@ -7986,7 +8031,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           0,
           "description"
@@ -7997,7 +8042,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           1,
           "description"
@@ -8754,6 +8799,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             ]
           },
           {
+            "name": "think",
+            "type": "boolean | string",
+            "required": false,
+            "description": "是否思考：true 或 false，也可用 low、medium、high 指定档位。作为提示转发给后端，模型不支持思考时被忽略；其他取值返回 400。"
+          },
+          {
             "name": "keep_alive",
             "type": "string | number",
             "required": false,
@@ -8941,7 +8992,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "f2f57f889bb47ca66b151b8e7f61a3345ed2363969a055dcf6ca8d8d67a779db",
+    "fingerprint": "b114f13557919e62f78fb0e655ad06061d33ccd3fb37652b29a76f4c3f672f2a",
     "fields": [
       {
         "path": [
@@ -9157,7 +9208,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0386"
+        "key": "docs.d0558"
       },
       {
         "path": [
@@ -9166,13 +9217,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0387"
+        "key": "docs.d0386"
       },
       {
         "path": [
           "content",
           "body_params",
           6,
+          "description"
+        ],
+        "key": "docs.d0387"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          7,
           "description"
         ],
         "key": "docs.d0387"
@@ -9945,6 +10005,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             ]
           },
           {
+            "name": "think",
+            "type": "boolean | string",
+            "required": false,
+            "description": "是否思考：true 或 false，也可用 low、medium、high 指定档位。作为提示转发给后端，模型不支持思考时被忽略；其他取值返回 400。"
+          },
+          {
             "name": "keep_alive",
             "type": "string | number",
             "required": false,
@@ -10130,7 +10196,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "63bb3baa5f72213738d21309e2b3af4ce9dda8e19b03b7ddaf2af58c5964b20a",
+    "fingerprint": "5ef3631341ef9372c598fd8dcf27c2c9d1914770f1b615eb7e78f40c789426a9",
     "fields": [
       {
         "path": [
@@ -10322,7 +10388,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0386"
+        "key": "docs.d0558"
       },
       {
         "path": [
@@ -10331,7 +10397,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0387"
+        "key": "docs.d0386"
       },
       {
         "path": [
@@ -10349,7 +10415,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0429"
+        "key": "docs.d0387"
       },
       {
         "path": [
@@ -10358,7 +10424,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
-        "key": "docs.d0430"
+        "key": "docs.d0429"
       },
       {
         "path": [
@@ -10367,13 +10433,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           10,
           "description"
         ],
-        "key": "docs.d0431"
+        "key": "docs.d0430"
       },
       {
         "path": [
           "content",
           "body_params",
           11,
+          "description"
+        ],
+        "key": "docs.d0431"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          12,
           "description"
         ],
         "key": "docs.d0431"
@@ -11164,6 +11239,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "最多生成的 token 数。"
           },
           {
+            "name": "reasoning",
+            "type": "object",
+            "required": false,
+            "description": "思考设置。effort 取值同 Chat Completions 的 reasoning_effort（none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位），取值非法返回 400；不带 effort 视为开启并沿用后端默认档位；summary 被接受但不起作用。作为提示转发给后端，模型不支持思考时被忽略。"
+          },
+          {
             "name": "temperature",
             "type": "number",
             "required": false,
@@ -11581,7 +11662,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "Claude 系列模型的参数限制",
-            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。"
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。"
           },
           {
             "title": "错误码说明",
@@ -11590,7 +11671,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "43846986121e1c1a15c597c209466bd5e9d38e543cedfeca78238e7adc86c424",
+    "fingerprint": "b01a7e8520787a437b7cd6eb4fec5237d2c278bbdf6c2c7bbbf22647733e343e",
     "fields": [
       {
         "path": [
@@ -11911,7 +11992,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0322"
+        "key": "docs.d0556"
       },
       {
         "path": [
@@ -11920,7 +12001,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0323"
+        "key": "docs.d0322"
       },
       {
         "path": [
@@ -11929,7 +12010,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0325"
+        "key": "docs.d0323"
       },
       {
         "path": [
@@ -11938,13 +12019,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
+        "key": "docs.d0325"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          8,
+          "description"
+        ],
         "key": "docs.d0473"
       },
       {
         "path": [
           "content",
           "body_params",
-          7,
+          8,
           "children",
           0,
           "description"
@@ -11955,7 +12045,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          7,
+          8,
           "children",
           1,
           "description"
@@ -11966,7 +12056,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          7,
+          8,
           "children",
           2,
           "description"
@@ -11977,7 +12067,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          7,
+          8,
           "children",
           3,
           "description"
@@ -11988,7 +12078,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          7,
+          8,
           "children",
           4,
           "description"
@@ -11999,7 +12089,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          7,
+          8,
           "children",
           5,
           "description"
@@ -12010,7 +12100,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          8,
+          9,
           "description"
         ],
         "key": "docs.d0479"
@@ -12019,7 +12109,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "description"
         ],
         "key": "docs.d0480"
@@ -12028,7 +12118,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           0,
           "description"
@@ -12039,7 +12129,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           0,
           "children",
@@ -12052,7 +12142,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           0,
           "children",
@@ -12065,7 +12155,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           0,
           "children",
@@ -12078,7 +12168,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          10,
           "children",
           0,
           "children",
@@ -12091,7 +12181,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
           "description"
         ],
         "key": "docs.d0485"
@@ -12100,7 +12190,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          11,
+          12,
           "description"
         ],
         "key": "docs.d0486"
@@ -12109,7 +12199,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          12,
+          13,
           "description"
         ],
         "key": "docs.d0487"

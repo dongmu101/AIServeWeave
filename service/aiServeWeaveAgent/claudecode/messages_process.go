@@ -26,11 +26,14 @@ const historyInstruction = "The following JSON is the conversation history. Cont
 // sessionPrompt renders a new session's CLI input: the prompt text alone for a
 // single message, otherwise every validated turn as a role-labelled JSON
 // transcript ending with the prompt to answer, so a follow-up question keeps
-// its context without forging CLI assistant messages.
+// its context without forging CLI assistant messages. Echoed thinking blocks
+// are left out — a prior turn's thinking is never replayed — and an assistant
+// turn that held nothing else is dropped.
 //
 // sessionPrompt 渲染新会话的 CLI 输入：单条消息直接使用提问文本；否则把每个已校验的
 // 回合渲染成带角色的 JSON 文本记录，以待回答的提问结尾。这样追问能保留上下文，又
-// 不必伪造 CLI 的 assistant 消息。
+// 不必伪造 CLI 的 assistant 消息。客户端回传的思考块不进入记录——上一轮的思考从不
+// 回放——只含思考的 assistant 回合整条省略。
 func sessionPrompt(messages []bridgeMessage) string {
 	if len(messages) == 1 {
 		prompt, _ := textBlocks(messages[0].Content)
@@ -40,10 +43,12 @@ func sessionPrompt(messages []bridgeMessage) string {
 		Role    string         `json:"role"`
 		Content []messageBlock `json:"content"`
 	}
-	history := make([]turn, len(messages))
-	for i, m := range messages {
+	history := make([]turn, 0, len(messages))
+	for _, m := range messages {
 		list, _ := blocks(m.Content)
-		history[i] = turn{Role: m.Role, Content: list}
+		if list = withoutThinking(list); len(list) > 0 {
+			history = append(history, turn{Role: m.Role, Content: list})
+		}
 	}
 	var transcript strings.Builder
 	encoder := json.NewEncoder(&transcript)
@@ -59,8 +64,15 @@ func (b *messagesBridge) runSession(s *messagesSession) {
 	}
 }
 
-// runProcess retains a CLI while remote tools execute and reaps its entire group.
-// runProcess 在远端执行工具时保留 CLI，并回收其完整进程组。
+// runProcess retains a CLI while remote tools execute and reaps its entire
+// group. Thinking stays off (MAX_THINKING_TOKENS=0) unless the request asked
+// for it; then the budget becomes MAX_THINKING_TOKENS and
+// --thinking-display summarized asks the CLI to hand up readable thinking
+// text on models whose default is to omit it.
+//
+// runProcess 在远端执行工具时保留 CLI，并回收其完整进程组。除非请求要求思考，思考
+// 保持关闭（MAX_THINKING_TOKENS=0）；要求时预算写入 MAX_THINKING_TOKENS，并以
+// --thinking-display summarized 要求 CLI 在默认省略思考文本的模型上也给出可读文本。
 func (b *messagesBridge) runProcess(s *messagesSession) error {
 	dir, err := os.MkdirTemp("", "aisw-claude-messages-")
 	if err != nil {
@@ -111,10 +123,14 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if s.request.OutputConfig != nil {
 		args = append(args, "--effort", s.request.OutputConfig.Effort)
 	}
+	budget := s.request.thinkingBudget()
+	if budget > 0 {
+		args = append(args, "--thinking-display", "summarized")
+	}
 	prompt := sessionPrompt(s.request.Messages)
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
-	cmd.Env = append(probeEnv(os.Environ()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS=0", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
+	cmd.Env = append(probeEnv(os.Environ()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
 	if s.request.Temperature != nil {
 		extra, _ := json.Marshal(map[string]float64{"temperature": *s.request.Temperature})
 		cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+string(extra))
@@ -149,8 +165,15 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	return s.send(final, nil)
 }
 
-// bridgeEvents delimits rounds with message_stop and omits CLI-internal thinking blocks.
-// bridgeEvents 使用 message_stop 划分回合，并过滤 CLI 内部思考块。
+// bridgeEvents delimits rounds with message_stop. Thinking and
+// redacted_thinking blocks are forwarded, signature included, only when the
+// request enabled thinking; otherwise they stay CLI-internal and public
+// content indices are renumbered to stay contiguous. Either way the retained
+// CLI keeps the thinking history; what a client echoes back is discarded.
+//
+// bridgeEvents 使用 message_stop 划分回合。只有请求开启了思考时，thinking 与
+// redacted_thinking 块才连同签名一起转发；否则它们留在 CLI 内部，对外内容索引重新
+// 编号以保持连续。无论哪种情况，思考历史都由保留的 CLI 持有，客户端回传的部分被丢弃。
 func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes+1)
@@ -159,6 +182,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	var arguments string
 	var stopReason string
 	finished, active, blockActive := false, false, false
+	showThinking := s.request.thinkingBudget() > 0
 	index, publicIndex, tools := 0, 0, 0
 	seenIDs := make(map[string]bool)
 	for count := 0; scanner.Scan(); count++ {
@@ -314,9 +338,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			}
 			switch event.Type {
 			case "content_block_start", "content_block_delta", "content_block_stop":
-				// The retained CLI owns thinking history; public content indices stay contiguous.
-				// 保留的 CLI 负责思考历史，对外内容索引保持连续。
-				if current.Type == "thinking" || current.Type == "redacted_thinking" {
+				// Hidden thinking is skipped; public content indices stay contiguous.
+				// 不公开的思考被跳过，对外内容索引保持连续。
+				if current.isThinking() && !showThinking {
 					continue
 				}
 				if event.Index != publicIndex {

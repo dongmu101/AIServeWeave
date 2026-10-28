@@ -30,6 +30,7 @@ func init() {
 		Discover:        piDiscover,
 		Turn:            piTurn,
 		TurnRPC:         true,
+		ReasoningArgs:   piReasoningArgs,
 		Parser:          func() parser { return &piParser{} },
 	})
 }
@@ -46,6 +47,28 @@ func piTurn(_, _, prompt, model string) ([]string, []byte) {
 	}
 	command, _ := json.Marshal(map[string]string{"id": piPromptID, "type": "prompt", "message": prompt})
 	return args, append(command, '\n')
+}
+
+// piReasoningArgs maps ChatRequest.Reasoning onto Pi's --thinking level:
+// "off" when thinking is turned off, the requested level otherwise (Pi
+// accepts minimal through xhigh, the same vocabulary), and "medium" when the
+// caller asked to think without naming a level. Pi itself clamps a level to
+// what the selected model supports and ignores it for a model that cannot
+// think, so this never makes a turn fail.
+//
+// piReasoningArgs 把 ChatRequest.Reasoning 映射为 Pi 的 --thinking 档位：关闭思考时
+// 为 "off"，否则为请求的档位（Pi 接受 minimal 到 xhigh，词汇相同）；调用方要求思考
+// 却没给档位时为 "medium"。Pi 自己会把档位收敛到所选模型支持的范围，对不会思考的
+// 模型则忽略它，因此这不会让回合失败。
+func piReasoningArgs(reasoning runtime.ReasoningConfig) []string {
+	if !reasoning.Enabled {
+		return []string{"--thinking", "off"}
+	}
+	level := reasoning.EffortLevel()
+	if !runtime.ValidReasoningEffort(level) {
+		level = runtime.ReasoningEffortMedium
+	}
+	return []string{"--thinking", level}
 }
 
 // piDiscover asks the RPC server for get_available_models.
@@ -103,16 +126,19 @@ func piDiscover(c *call) ([]string, error) {
 // piParser reads the RPC event stream. agent_settled ends the turn; agent_end
 // does not, following dbx. A failed attempt (an error event or stopReason
 // "error") aborts the turn at once rather than waiting for a retry, because
-// a retry would repeat text already forwarded.
+// a retry would repeat text already forwarded. An assistant thinking_delta
+// carries one fragment of thinking text in "delta" and is forwarded as
+// thinking; thinking_start and thinking_end carry none.
 // piParser 读取 RPC 事件流。按 dbx 的做法，agent_settled 结束回合，agent_end
 // 不结束。一次失败的尝试（error 事件或 stopReason 为 "error"）立即中止回合，
-// 不等待重试，因为重试会重复已经转发出去的文本。
+// 不等待重试，因为重试会重复已经转发出去的文本。assistant 的 thinking_delta 在
+// "delta" 中携带一段思考文本，作为思考转发；thinking_start 与 thinking_end 不含文本。
 type piParser struct {
 	input, output int
 	settled       bool
 }
 
-func (p *piParser) line(event []byte, text func(string) error) (bool, error) {
+func (p *piParser) line(event []byte, out sink) (bool, error) {
 	obj := object(event)
 	switch str(obj, "type") {
 	case "response":
@@ -127,7 +153,9 @@ func (p *piParser) line(event []byte, text func(string) error) (bool, error) {
 		update := object(obj["assistantMessageEvent"])
 		switch str(update, "type") {
 		case "text_delta":
-			return false, text(str(update, "delta"))
+			return false, out.text(str(update, "delta"))
+		case "thinking_delta":
+			return false, out.reasoning(str(update, "delta"))
 		case "error":
 			return false, ErrTurn
 		case "toolcall_start", "toolcall_delta", "toolcall_end":
@@ -159,8 +187,8 @@ func (p *piParser) line(event []byte, text func(string) error) (bool, error) {
 	case "error":
 		return false, ErrTurn
 	}
-	// agent_start, turn_*, thinking deltas and future types carry no reply text.
-	// agent_start、turn_*、thinking 增量及未来新增类型都不含回复文本。
+	// agent_start, turn_* and future types carry neither reply nor thinking text.
+	// agent_start、turn_* 及未来新增类型既不含回复文本，也不含思考文本。
 	return false, nil
 }
 

@@ -192,6 +192,25 @@ OpenCode 与 Pi 透传所有 `*_API_KEY`，这同样包括托管供应商用的�
 - Qoder 先流式发送的 `text_delta` 与之后的完整 assistant 文本按前缀去重。
 - Cursor / CodeBuddy / Qoder 若在 `result` 之前没有任何文本，就使用 `result` 中的文本。
 
+## 思考内容
+
+各 CLI 输出的思考文本映射为 `ChatStream` 中独立的 `ReasoningContent` 增量，非流式 `Chat` 聚合进 `ChatMessage.ReasoningContent`，从不混进回复文本 `Content`：
+
+| CLI | 思考事件 |
+| --- | --- |
+| Grok | `{"type":"thought","data":"…"}`，形状与 `text` 相同；`data` 不是字符串时跳过，不让回合失败 |
+| OpenCode | `{"type":"reasoning","part":{"text":"…"}}`，每条是一段已完成的思考 |
+| Cursor | `{"type":"thinking","subtype":"delta","text":"…"}`；`subtype: completed` 不含文本 |
+| CodeBuddy、Qoder | `stream_event` 的 `thinking_delta`，以及完整 assistant 消息里的 `thinking` 块（与已流出的增量按前缀去重，规则同文本）；`redacted_thinking` 没有可读文本，跳过 |
+| Pi | assistant `message_update` 的 `thinking_delta`；`thinking_start` / `thinking_end` 不含文本 |
+
+思考不算回复：OpenCode 只有思考没有文本时仍按失败处理；Cursor / CodeBuddy / Qoder 只有思考时仍会取 `result` 中的文本作为回复。事件形状参照 dbx 与各 CLI 的公开协议，与其余参数一样尚未用真实 CLI 实机验收。
+
+请求中的 `reasoning`（`ChatRequest.Reasoning`）是提示：
+
+- Pi 映射为 `--thinking`：关闭思考为 `off`，否则为请求的档位（`minimal`–`xhigh`），要求思考却没给档位时为 `medium`。Pi 自己按所选模型收敛档位。
+- 其余 CLI 没有可用的思考开关（Cursor 由模型名决定是否思考，OpenCode 的 variant 是各供应商自己的名字），提示被丢弃，请求照常执行，不会因此被拒绝。
+
 非零退出即使已经输出了部分文本，也按失败处理。进程以零状态退出、却没有给出成功条件时，如果输出中出现了未登录措辞，按 `unauthorized` 处理，否则按协议错误处理。
 
 ## 支持范围
@@ -230,9 +249,9 @@ OpenCode 与 Pi 透传所有 `*_API_KEY`，这同样包括托管供应商用的�
 - 超时；
 - Agent 关闭。
 
-单行事件与提示词各最多 1 MiB；每个回合的文本最多 1 MiB，进程的全部 stdout 最多 64 MiB。
+单行事件与提示词各最多 1 MiB；每个回合的回复与思考文本合计最多 1 MiB，进程的全部 stdout 最多 64 MiB。
 
-文本增量逐条同步转发，不预读。消费者读得慢时，转发会阻塞在背压上，但仍响应客户端断开、超时与 Agent 关闭。
+文本与思考增量逐条同步转发，不预读。消费者读得慢时，转发会阻塞在背压上，但仍响应客户端断开、超时与 Agent 关闭。
 
 逐条转发只对流式输出增量的方言成立。CodeBuddy、Qoder 与 OpenCode 可能只在消息结束时输出整段文本，这期间流上没有任何事件；回复较长时，可能需要调大 `stream_idle_timeout`。
 

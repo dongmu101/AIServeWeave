@@ -57,6 +57,7 @@ type streamEvent struct {
 		Type     string `json:"type"`
 		Text     string `json:"text"`
 		Thinking string `json:"thinking"`
+		Data     string `json:"data"`
 		ID       string `json:"id"`
 		Name     string `json:"name"`
 	} `json:"content_block"`
@@ -64,6 +65,7 @@ type streamEvent struct {
 		Type        string `json:"type"`
 		Text        string `json:"text"`
 		Thinking    string `json:"thinking"`
+		Signature   string `json:"signature"`
 		PartialJSON string `json:"partial_json"`
 		StopReason  string `json:"stop_reason"`
 	} `json:"delta"`
@@ -76,13 +78,15 @@ type streamEvent struct {
 
 // startStream decodes Messages SSE into ChatEvents on a goroutine, one event
 // at a time with synchronous backpressure. Thinking deltas become
-// ReasoningContent deltas; signature deltas and redacted_thinking blocks are
-// dropped, as in toChatResponse. A stream that ends before message_stop is
+// ReasoningContent deltas; a signature delta and a redacted_thinking block
+// each become a ReasoningBlock delta, so a client that holds signatures can
+// rebuild the signed blocks. A stream that ends before message_stop is
 // reported as a protocol error, not as a normal end.
 //
 // startStream 在协程中把 Messages SSE 逐条解码为 ChatEvent，同步背压。thinking
-// 增量转为 ReasoningContent 增量；签名增量与 redacted_thinking 块被丢弃，与
-// toChatResponse 一致。在 message_stop 之前结束的流报告为协议错误，而不是正常结束。
+// 增量转为 ReasoningContent 增量；签名增量与 redacted_thinking 块各自转为一个
+// ReasoningBlock 增量，使能够保存签名的客户端可以重建签过名的块。在 message_stop
+// 之前结束的流报告为协议错误，而不是正常结束。
 func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelFunc, release func(), idleTimeout time.Duration, apiKey string) runtime.Stream[runtime.ChatEvent] {
 	s := &eventStream{ChanStream: runtime.NewChanStream[runtime.ChatEvent](0), cancel: cancel, release: release, done: make(chan struct{})}
 	if idleTimeout > 0 {
@@ -143,6 +147,11 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 						continue
 					}
 					out.Delta.ReasoningContent = ev.ContentBlock.Thinking
+				case "redacted_thinking":
+					if ev.ContentBlock.Data == "" {
+						continue
+					}
+					out.Delta.ReasoningBlock = &runtime.ReasoningBlock{Type: runtime.ReasoningBlockRedacted, Data: ev.ContentBlock.Data}
 				case "tool_use":
 					n := len(tools)
 					tools[ev.Index] = n
@@ -159,6 +168,11 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 						continue
 					}
 					out.Delta.ReasoningContent = ev.Delta.Thinking
+				case "signature_delta":
+					if ev.Delta.Signature == "" {
+						continue
+					}
+					out.Delta.ReasoningBlock = &runtime.ReasoningBlock{Type: runtime.ReasoningBlockThinking, Signature: ev.Delta.Signature}
 				case "input_json_delta":
 					n, ok := tools[ev.Index]
 					if !ok || ev.Delta.PartialJSON == "" {

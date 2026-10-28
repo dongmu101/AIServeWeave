@@ -99,6 +99,7 @@ func NewWithOptions(cfg runtime.Config, kind runtime.Kind, deps runtime.Dependen
 		AuthHeader:          opts.AuthHeader,
 		MaxCompletionTokens: opts.MaxCompletionTokens,
 		RefuseRedirects:     opts.RefuseRedirects,
+		ReasoningParser:     cfg.ReasoningParser,
 	})
 	if err != nil {
 		return nil, &runtime.RuntimeError{
@@ -166,6 +167,7 @@ func (b *Base) PublishDiscovery(d runtime.Discovery) {
 // snapshot from the last Discover: chat itself, plus tools and structured
 // output when the request uses them.
 func (b *Base) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, error) {
+	req = b.reasoningHint(req)
 	release, err := b.BeginRequest("chat", req.Model, ChatCapabilities(req)...)
 	if err != nil {
 		return runtime.ChatResponse{}, err
@@ -181,6 +183,7 @@ func (b *Base) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatR
 // the instance's concurrency slot until it is closed, so callers must close
 // it — including after Recv returns io.EOF.
 func (b *Base) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], error) {
+	req = b.reasoningHint(req)
 	caps := append(ChatCapabilities(req), runtime.CapabilityChatStream)
 	release, err := b.BeginRequest("chat_stream", req.Model, caps...)
 	if err != nil {
@@ -290,6 +293,23 @@ func ChatCapabilities(req runtime.ChatRequest) []runtime.Capability {
 		caps = append(caps, runtime.CapabilityDocumentInput)
 	}
 	return caps
+}
+
+// reasoningHint drops req.Reasoning for a model whose discovery reports
+// CapabilityReasoning unsupported: such a model cannot think, and a backend
+// such as Ollama rejects a thinking switch sent to it. Unknown support keeps
+// the hint, since that is most models behind vLLM or SGLang. This is what
+// makes ChatRequest.Reasoning a hint rather than a requirement.
+//
+// reasoningHint 对发现结果报告 CapabilityReasoning 不支持的模型去掉 req.Reasoning：
+// 这样的模型不会思考，Ollama 之类的后端还会拒绝发给它的思考开关。支持情况未知时保留
+// 提示，因为 vLLM 或 SGLang 背后的大多数模型都是这种情况。正因如此，
+// ChatRequest.Reasoning 是提示而不是要求。
+func (b *Base) reasoningHint(req runtime.ChatRequest) runtime.ChatRequest {
+	if req.Reasoning != nil && b.CapabilitiesFor(req.Model).Resolve(runtime.CapabilityReasoning).Level == runtime.SupportUnsupported {
+		req.Reasoning = nil
+	}
+	return req
 }
 
 // requestHasImage reports whether any message carries an image content

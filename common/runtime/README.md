@@ -810,6 +810,29 @@ registering
 
 核心 OpenAI 字段使用明确 Go 类型。后端扩展参数通过 `Extra map[string]json.RawMessage` 保留，但禁止覆盖已建模字段；这样既能转发 vLLM/SGLang 扩展，又不会让同一字段产生两种值。
 
+### 思考开关与兜底解析器
+
+`ChatRequest.Reasoning`（`*ReasoningConfig{Enabled, Effort, BudgetTokens}`）是协议无关的思考开关，nil 表示调用方没要求。它是**提示**：`oaibase` 在发现结果明确报告模型 `reasoning` 为 `unsupported` 时去掉它（Ollama 会拒绝发给非思考模型的开关），`unknown` 时照发，从不因此拒绝请求——vLLM 等后端的思考能力取决于模型与 chat template，几乎总是 `unknown`。档位与预算互相换算：`minimal` 1024、`low` 2048、`medium` 8192、`high` 16384、`xhigh` 32768 token；两者都没给时取 `medium`。
+
+`openai` 层按后端种类映射（`reasoning.go`），以下字段都已建模，`Extra` 不能再写：
+
+| 种类 | 开启 | 关闭 |
+| --- | --- | --- |
+| vllm、sglang、trtllm、tokenspeed | `chat_template_kwargs: {enable_thinking: true, thinking: true}`（前者给 Qwen3、后者给 DeepSeek-V3.1，模板忽略不认识的那个），有档位时另发折算到 low/medium/high 的 `reasoning_effort` | `chat_template_kwargs` 两项为 false |
+| ollama | `reasoning_effort` 折算到 low/medium/high，没给档位取 medium | `reasoning_effort: "none"` |
+| qwen | `enable_thinking: true`，给了档位或预算时另发 `thinking_budget` | `enable_thinking: false` |
+| zhipu | `thinking: {type: "enabled"}` | `thinking: {type: "disabled"}` |
+| 其余托管供应商 | 有档位时发 `reasoning_effort`，没有则不发、沿用供应商默认 | `reasoning_effort: "none"` |
+
+Anthropic 适配器发 `thinking: {type: "enabled", budget_tokens}`：调用方给的预算原样发送；由档位换算的预算收进 `max_tokens - 1` 以内，不足 1024 时不开启；调用方没给 `max_tokens` 时在预算之上再加默认的 4096。关闭发 `{type: "disabled"}`。详见 [anthropic README](anthropic/README.md)。
+
+**兜底解析器**：有些部署没开后端的 reasoning parser，思考以 `<think>…</think>` 内联在 `content` 里。`Config.ReasoningParser`（Agent YAML 的 `reasoning_parser`）显式开启切分，只适用于 OpenAI 兼容种类，CLI、ComfyUI 与 Anthropic 种类配置了会被 `Validate` 拒绝：
+
+- `think_tags`：回复以 `<think>` 开头（允许不超过 64 字节的前导空白）时切出第一段思考，否则整段是回答。
+- `think_tags_prefilled`：chat template 已经替模型写好了 `<think>`（DeepSeek-R1、QwQ 等），回复从思考开始、到 `</think>` 结束；请求显式关闭思考时跳过，因为此时不会有 `</think>`。
+
+切分逐块进行，最多扣住一个被拆开的标签或一小段前导空白，不缓冲思考本身；带 `finish_reason` 的块会把扣住的内容一并放出。后端自己送来 `reasoning_content` 时，该流立即停用解析器，避免误读回答里字面的 `<think>`。
+
 ### SSE
 
 - 支持 `event`、`data`、`id`、`retry` 字段和注释行。

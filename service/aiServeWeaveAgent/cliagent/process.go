@@ -103,6 +103,13 @@ type cliSpec struct {
 	// Turn 返回一次回合的命令行与 stdin；设置了 PromptFile 时 promptFile 中已
 	// 写入提示词，否则为空串。
 	Turn func(dir, promptFile, prompt, model string) (args []string, stdin []byte)
+	// ReasoningArgs maps ChatRequest.Reasoning onto extra command-line flags
+	// appended to Turn's. Nil means the CLI has no thinking switch, so the
+	// hint is dropped rather than refused; a nil result adds nothing.
+	// ReasoningArgs 把 ChatRequest.Reasoning 映射为追加在 Turn 命令行之后的额外参数。
+	// 为 nil 表示该 CLI 没有思考开关，此时丢弃这个提示而不是拒绝请求；返回 nil 表示
+	// 不追加任何参数。
+	ReasoningArgs func(reasoning runtime.ReasoningConfig) []string
 	// TurnRPC keeps a turn's stdin open until the parser reports done, for
 	// dialects that read commands rather than one prompt ending at EOF.
 	// TurnRPC 让回合的 stdin 一直打开到解析器报告 done，用于按命令读取、而非
@@ -113,13 +120,25 @@ type cliSpec struct {
 	Parser func() parser
 }
 
+// sink is where a parser forwards one turn's output as it arrives. text is
+// reply text; reasoning is the model's thinking text, which is never mixed
+// into the reply. Both share the turn's maxTextBytes bound.
+//
+// sink 是解析器随到随转发一次回合输出的去处。text 是回复文本；reasoning 是模型的
+// 思考文本，从不混入回复。两者共用该回合的 maxTextBytes 上限。
+type sink struct {
+	text      func(string) error
+	reasoning func(string) error
+}
+
 // parser consumes one turn's JSON object lines; non-JSON lines never reach it.
 // parser 消费一次回合的 JSON 对象行；非 JSON 行不会交给它。
 type parser interface {
-	// line handles one event. text forwards reply text; done ends the turn
-	// successfully without waiting for the process to exit.
-	// line 处理一个事件。text 转发回复文本；done 表示回合成功结束，无需等待进程退出。
-	line(event []byte, text func(string) error) (done bool, err error)
+	// line handles one event, forwarding reply and thinking text through out;
+	// done ends the turn successfully without waiting for the process to exit.
+	// line 处理一个事件，经 out 转发回复与思考文本；done 表示回合成功结束，无需等待
+	// 进程退出。
+	line(event []byte, out sink) (done bool, err error)
 	// finish runs after a clean end and reports usage, or an error such as
 	// "no terminal event".
 	// finish 在正常结束后运行，报告用量，或报告诸如「没有终止事件」之类的错误。
@@ -498,13 +517,15 @@ func (s *modelSet) result() ([]string, error) {
 }
 
 // runTurn runs one headless turn: it writes the prompt file when the CLI
-// needs one, starts the CLI, forwards reply text through emit as it arrives
-// and sends the terminal stop event only after the parser confirms a clean
-// end.
+// needs one, starts the CLI, forwards reply and thinking text through emit as
+// it arrives and sends the terminal stop event only after the parser confirms
+// a clean end. reasoning, when non-nil and the CLI has a switch for it, adds
+// that CLI's thinking flags; otherwise the hint is dropped.
 //
 // runTurn 运行一次 headless 回合：CLI 需要时写入提示词文件，启动 CLI，随到随经
-// emit 转发回复文本，并且只在解析器确认正常结束后才发送终止事件。
-func runTurn(c *call, model, prompt string, emit func(runtime.ChatEvent) error) error {
+// emit 转发回复与思考文本，并且只在解析器确认正常结束后才发送终止事件。reasoning
+// 非 nil 且该 CLI 有对应开关时追加其思考参数；否则丢弃这个提示。
+func runTurn(c *call, model, prompt string, reasoning *runtime.ReasoningConfig, emit func(runtime.ChatEvent) error) error {
 	promptFile := ""
 	if c.spec.PromptFile {
 		promptFile = filepath.Join(c.dir, "prompt.txt")
@@ -513,16 +534,23 @@ func runTurn(c *call, model, prompt string, emit func(runtime.ChatEvent) error) 
 		}
 	}
 	args, stdin := c.spec.Turn(c.dir, promptFile, prompt, model)
+	if reasoning != nil && c.spec.ReasoningArgs != nil {
+		args = append(args, c.spec.ReasoningArgs(*reasoning)...)
+	}
 	p := c.spec.Parser()
-	textBytes := 0
-	text := func(s string) error {
+	textBytes := 0 // reply and thinking together / 回复与思考合计
+	forward := func(s string, delta runtime.ChatMessageDelta) error {
 		if textBytes += len(s); textBytes > maxTextBytes {
 			return ErrProtocol
 		}
 		if s == "" {
 			return nil
 		}
-		return emit(runtime.ChatEvent{Delta: runtime.ChatMessageDelta{Content: s}})
+		return emit(runtime.ChatEvent{Delta: delta})
+	}
+	out := sink{
+		text:      func(s string) error { return forward(s, runtime.ChatMessageDelta{Content: s}) },
+		reasoning: func(s string) error { return forward(s, runtime.ChatMessageDelta{ReasoningContent: s}) },
 	}
 	noise := &headCapture{limit: maxDiagBytes}
 	diag, err := c.start(args, stdin, c.spec.TurnRPC, func(line []byte) (bool, error) {
@@ -532,7 +560,7 @@ func runTurn(c *call, model, prompt string, emit func(runtime.ChatEvent) error) 
 			_, _ = noise.Write(line)
 			return false, nil
 		}
-		done, err := p.line(line, text)
+		done, err := p.line(line, out)
 		if errors.Is(err, ErrTurn) && c.signedOut(line) {
 			err = ErrAuthentication
 		}

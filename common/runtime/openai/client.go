@@ -89,6 +89,12 @@ type ClientConfig struct {
 	// 重定向时会转发 x-api-key 这类自定义请求头，因此绝不能让远端端点把凭据
 	// 引到运维未声明的地址。
 	RefuseRedirects bool
+	// ReasoningParser is runtime.Config.ReasoningParser: the fallback that
+	// splits inline <think> reasoning out of replies. Empty means none.
+	//
+	// ReasoningParser 即 runtime.Config.ReasoningParser：把内联的 <think> 思考从回复
+	// 里切分出来的兜底解析器。为空表示不启用。
+	ReasoningParser string
 }
 
 // Client is the shared OpenAI-compatible HTTP client. It is safe for
@@ -104,6 +110,8 @@ type Client struct {
 	versioned    bool
 	authHeader   string
 	maxCompl     bool
+
+	reasoningParser string
 }
 
 // NewClient validates cfg and builds a Client. It performs no network I/O.
@@ -126,6 +134,9 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 	}
 	if u.Fragment != "" {
 		return nil, fmt.Errorf("openai: base URL must not contain a fragment")
+	}
+	if cfg.ReasoningParser != "" && newThinkSplitter(cfg.ReasoningParser) == nil {
+		return nil, fmt.Errorf("openai: unknown reasoning parser %q", cfg.ReasoningParser)
 	}
 	for name := range cfg.Headers {
 		if hopByHopHeaders[http.CanonicalHeaderKey(name)] {
@@ -158,6 +169,8 @@ func NewClient(cfg ClientConfig) (*Client, error) {
 		versioned:    cfg.VersionedBaseURL,
 		authHeader:   cfg.AuthHeader,
 		maxCompl:     cfg.MaxCompletionTokens,
+
+		reasoningParser: cfg.ReasoningParser,
 	}, nil
 }
 

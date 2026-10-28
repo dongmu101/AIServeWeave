@@ -176,7 +176,35 @@ type Config struct {
 	// Models 是运维为无法列出自身模型的端点声明的模型目录。设置后，托管运行时
 	// 发布的正是这些 ID，而不是端点返回的列表。仅限本地，从不通过隧道接收。
 	Models []string
+	// ReasoningParser names a fallback that splits reasoning out of the
+	// reply text for a backend that leaves it inline: ReasoningParserThinkTags
+	// or ReasoningParserThinkTagsPrefilled. Empty means none. It never
+	// overrides reasoning the backend already separated itself. Local only;
+	// it is never accepted over the tunnel.
+	//
+	// ReasoningParser 指定一个兜底解析器，为把思考留在回复文本里的后端把思考切分出来：
+	// ReasoningParserThinkTags 或 ReasoningParserThinkTagsPrefilled。为空表示不启用。
+	// 它从不覆盖后端自己已经分离出的思考。仅限本地，从不通过隧道接收。
+	ReasoningParser string
 }
+
+// The fallback reasoning parsers Config.ReasoningParser may name.
+//
+// ReasoningParserThinkTags expects the reply to open with <think>; a reply
+// that does not is all answer. ReasoningParserThinkTagsPrefilled is for chat
+// templates that already put <think> into the prompt (Qwen3, DeepSeek-R1), so
+// the reply starts inside the reasoning and only </think> appears.
+//
+// Config.ReasoningParser 可指定的兜底思考解析器。
+//
+// ReasoningParserThinkTags 要求回复以 <think> 开头；不以它开头的回复全部是回答。
+// ReasoningParserThinkTagsPrefilled 用于已经把 <think> 放进提示的聊天模板（Qwen3、
+// DeepSeek-R1），回复从思考内部开始，只会出现 </think>。
+const (
+	ReasoningParserThinkTags          = "think_tags"
+	ReasoningParserThinkTagsPrefilled = "think_tags_prefilled"
+)
+
 type TLSConfig struct {
 	CAFile             string
 	ServerName         string
@@ -290,12 +318,158 @@ type ChatRequest struct {
 	ToolChoice     string
 	ResponseFormat *ResponseFormat
 
+	// Reasoning asks the model to think, or not to, before answering. Nil
+	// leaves the backend's own default. It is a hint, not a capability
+	// requirement: an adapter maps it onto its backend's switch where one
+	// exists, and does not forward it to a model whose discovery reports
+	// CapabilityReasoning unsupported, since such a model cannot think and
+	// its backend would reject the switch.
+	//
+	// Reasoning 要求模型在回答之前思考或不思考。nil 表示沿用后端自己的默认值。它是
+	// 提示而不是能力要求：适配器在后端有对应开关时映射过去；对发现结果报告
+	// CapabilityReasoning 不支持的模型不转发，因为这样的模型不会思考，其后端还会
+	// 拒绝这个开关。
+	Reasoning *ReasoningConfig
+
 	// Extra forwards backend-private parameters verbatim. A key that
 	// collides with an already-modeled field (e.g. "model", "temperature")
 	// must be rejected by the conversion layer with ErrorInvalidConfig
 	// rather than silently overwriting the modeled value.
 	Extra map[string]json.RawMessage
 }
+
+// ReasoningConfig is ChatRequest.Reasoning. Front doors fill whichever of
+// Effort and BudgetTokens their protocol speaks (OpenAI's reasoning_effort,
+// Anthropic's budget_tokens); an adapter whose backend speaks the other one
+// derives it with EffortLevel or Budget.
+//
+// ReasoningConfig 即 ChatRequest.Reasoning。前门按自己协议的说法填 Effort 或
+// BudgetTokens（OpenAI 的 reasoning_effort、Anthropic 的 budget_tokens）；后端用另一种
+// 说法的适配器用 EffortLevel 或 Budget 换算。
+type ReasoningConfig struct {
+	// Enabled false explicitly turns thinking off.
+	// Enabled 为 false 表示显式关闭思考。
+	Enabled bool
+	// Effort is one of ReasoningEffortMinimal through ReasoningEffortXHigh,
+	// or "" when the caller gave none.
+	//
+	// Effort 是 ReasoningEffortMinimal 到 ReasoningEffortXHigh 之一；调用方没给时为 ""。
+	Effort string
+	// BudgetTokens caps the tokens spent thinking, or 0 when the caller
+	// gave none.
+	//
+	// BudgetTokens 是思考可用的 token 上限；调用方没给时为 0。
+	BudgetTokens int
+}
+
+// The effort levels ReasoningConfig.Effort may hold, OpenAI's vocabulary.
+// ReasoningConfig.Effort 可取的思考强度，沿用 OpenAI 的词汇。
+const (
+	ReasoningEffortMinimal = "minimal"
+	ReasoningEffortLow     = "low"
+	ReasoningEffortMedium  = "medium"
+	ReasoningEffortHigh    = "high"
+	ReasoningEffortXHigh   = "xhigh"
+)
+
+// ValidReasoningEffort reports whether effort is one of the levels above.
+// ValidReasoningEffort 报告 effort 是否为上述强度之一。
+func ValidReasoningEffort(effort string) bool {
+	switch effort {
+	case ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh:
+		return true
+	}
+	return false
+}
+
+// reasoningBudgets maps each effort level to the thinking budget Budget
+// derives from it, and back again for EffortLevel. The steps follow
+// Anthropic's guidance: 1024 tokens is its minimum budget, and returns
+// diminish past roughly 32k.
+//
+// reasoningBudgets 是 Budget 从各强度换算出的思考预算，EffortLevel 反向使用。档位依照
+// Anthropic 的建议：1024 token 是其最小预算，超过约 32k 后收益递减。
+var reasoningBudgets = []struct {
+	effort string
+	budget int
+}{
+	{ReasoningEffortMinimal, 1024},
+	{ReasoningEffortLow, 2048},
+	{ReasoningEffortMedium, 8192},
+	{ReasoningEffortHigh, 16384},
+	{ReasoningEffortXHigh, 32768},
+}
+
+// EffortLevel returns Effort, or the level whose budget is the smallest
+// one not below BudgetTokens, or "" when the caller gave neither.
+//
+// EffortLevel 返回 Effort；没有时返回预算不低于 BudgetTokens 的最小档位；两者都没给时
+// 返回 ""。
+func (r ReasoningConfig) EffortLevel() string {
+	if r.Effort != "" || r.BudgetTokens <= 0 {
+		return r.Effort
+	}
+	for _, step := range reasoningBudgets {
+		if r.BudgetTokens <= step.budget {
+			return step.effort
+		}
+	}
+	return ReasoningEffortXHigh
+}
+
+// Budget returns BudgetTokens, or the budget of Effort's level, or the
+// medium level's budget when the caller gave neither.
+//
+// Budget 返回 BudgetTokens；没有时返回 Effort 对应档位的预算；两者都没给时返回 medium
+// 档位的预算。
+func (r ReasoningConfig) Budget() int {
+	if r.BudgetTokens > 0 {
+		return r.BudgetTokens
+	}
+	effort := r.Effort
+	if effort == "" {
+		effort = ReasoningEffortMedium
+	}
+	for _, step := range reasoningBudgets {
+		if step.effort == effort {
+			return step.budget
+		}
+	}
+	return reasoningBudgets[2].budget
+}
+
+// ReasoningBlock is one provider-signed reasoning block, kept so it can be
+// replayed verbatim to the provider that produced it. Anthropic requires the
+// thinking blocks of the turn that called a tool to come back with the tool
+// result, signature intact; no other backend reads these.
+//
+// ReasoningBlock 是一个由供应商签名的思考块，保存下来以便原样回放给产生它的供应商。
+// Anthropic 要求调用了工具的那一回合的 thinking 块随工具结果原样带回、签名完好；其他
+// 后端都不读它。
+type ReasoningBlock struct {
+	// Type is ReasoningBlockThinking or ReasoningBlockRedacted.
+	// Type 是 ReasoningBlockThinking 或 ReasoningBlockRedacted。
+	Type string
+	// Thinking and Signature are set on a thinking block. On a streamed
+	// ChatMessageDelta.ReasoningBlock, Thinking is empty: the text already
+	// arrived as ReasoningContent deltas.
+	//
+	// Thinking 与 Signature 设置在 thinking 块上。在流式的
+	// ChatMessageDelta.ReasoningBlock 上 Thinking 为空：文本已经以 ReasoningContent
+	// 增量到达。
+	Thinking  string
+	Signature string
+	// Data is a redacted block's encrypted payload.
+	// Data 是 redacted 块的加密载荷。
+	Data string
+}
+
+// The block types ReasoningBlock.Type may hold, Anthropic's names.
+// ReasoningBlock.Type 可取的块类型，沿用 Anthropic 的名字。
+const (
+	ReasoningBlockThinking = "thinking"
+	ReasoningBlockRedacted = "redacted_thinking"
+)
 
 // Tool describes a callable function the model may invoke, mirroring the
 // OpenAI-compatible "function" tool shape vLLM, SGLang and Ollama all
@@ -369,6 +543,15 @@ type ChatMessage struct {
 	// 按自己协议的位置渲染它。适配器只在 assistant 输出上设置它；前门从不在请求上
 	// 设置它，适配器也从不把它发往上游，因此上一轮的思考不会回放给后端。
 	ReasoningContent string
+	// ReasoningBlocks are the provider-signed blocks behind ReasoningContent,
+	// in order. Unlike ReasoningContent they do travel on a request: a front
+	// door that receives signed blocks back from its client puts them here,
+	// and the adapter of the provider that signed them replays them.
+	//
+	// ReasoningBlocks 是 ReasoningContent 背后由供应商签名的块，按顺序排列。与
+	// ReasoningContent 不同，它们会随请求传递：前门从客户端收回签过名的块时放在这里，
+	// 由签名供应商的适配器回放。
+	ReasoningBlocks []ReasoningBlock
 }
 
 // ContentPart is one piece of a multi-part ChatMessage.ContentParts: a text
@@ -477,6 +660,13 @@ type ChatMessageDelta struct {
 	// ReasoningContent is one fragment of ChatMessage.ReasoningContent.
 	// ReasoningContent 是 ChatMessage.ReasoningContent 的一个片段。
 	ReasoningContent string
+	// ReasoningBlock, when set, closes a provider-signed block: a thinking
+	// block's signature, sealing the ReasoningContent streamed since the
+	// previous block, or a whole redacted block.
+	//
+	// ReasoningBlock 非空时结束一个供应商签名的块：要么是 thinking 块的签名，封住自上一
+	// 个块以来流出的 ReasoningContent；要么是一整个 redacted 块。
+	ReasoningBlock *ReasoningBlock
 }
 
 type ToolCallDelta struct {

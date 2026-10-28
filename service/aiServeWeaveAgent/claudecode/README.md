@@ -14,7 +14,7 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 
 普通多轮聊天以带角色标记的 JSON 历史文本作为新 CLI 回合上下文，不伪造 CLI 的 assistant 消息，也不重放历史工具。当前工具链保留原进程，并校验身份、完整历史、全部工具结果和原节点绑定。Chat 将 assistant 文本和工具分别存放，Agent 仅对带内部 `metadata.aisw_chat_completions` 标记的会话按这两个字段校验等价性；文本、工具顺序、ID 和参数仍必须一致。原生 Messages 保持块顺序校验。升级本兼容层后需要同时更新 Gateway 和重启 Agent。
 
-支持 `max_tokens` 或 `max_completion_tokens`（1–64000，默认 4096；同时指定必须相同）、`temperature`（0–1）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `reasoning_effort`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
+支持 `max_tokens` 或 `max_completion_tokens`（1–64000，默认 4096；同时指定必须相同）、`temperature`（0–1）、`reasoning_effort`（见下文「思考内容」）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `parallel_tool_calls`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
 
 ## OpenAI Responses 兼容
 
@@ -58,11 +58,21 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 支持以 user 文本结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
 
-多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史仍按同一套严格规则校验，图片等不支持的块照旧拒绝。代价是模型只能以引用文本的形式看到此前的回合，内部 thinking 也不跨会话保留。
+多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史仍按同一套严格规则校验，图片等不支持的块照旧拒绝。代价是模型只能以引用文本的形式看到此前的回合，思考块不进入记录，thinking 也不跨会话保留。
 
-支持 `max_tokens`（1–64000）、`temperature`（0–1）、`thinking: {"type":"disabled"}`、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持 thinking 内容、缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+支持 `max_tokens`（1–64000）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
 
-部分新模型仍会生成内部 `thinking` / `redacted_thinking` 块。这些块由保留的 CLI 管理，不对外输出；文本与工具块的公开索引重新连续编号，确保后续工具回合可以正常续接。这不提供客户端 thinking 内容或开启 thinking 的请求参数。
+## 思考内容
+
+请求要求思考时，Agent 以 `MAX_THINKING_TOKENS=<预算>` 启动 CLI，并加 `--thinking-display summarized`，让默认省略思考文本的新模型也给出可读文本；否则保持 `MAX_THINKING_TOKENS=0`。`--thinking-display` 需要较新的 Claude Code（本机 `2.1.311` 已有该参数），旧版本只会在请求要求思考时因参数不识别而失败。
+
+- **原生 Messages**：Agent 只接受 `thinking: {"type":"disabled"}` 或 `{"type":"enabled","budget_tokens":N}`（1024 ≤ N < `max_tokens`，且不带 `temperature`）。Gateway 先把客户端的 `thinking` 当作提示改写成这种形式：`adaptive` 按默认档位（8192）给预算，放不进 `max_tokens` 的预算收敛到 `max_tokens - 1`，带 `temperature`、关闭思考或 `max_tokens` ≤ 1024 时去掉该字段；只有格式错误的对象返回 400。开启后，CLI 的 `thinking`（含签名）与 `redacted_thinking` 块按原索引原样转发。
+- **Chat**：`reasoning_effort` 换算为思考预算（`none` 为关闭），同样按上面的规则收敛或丢弃；`thinking_delta` 渲染为 `reasoning_content`，签名与 redacted 块没有 Chat 形式，不输出。
+- **Responses**：`reasoning` 对象按同样规则转换；思考渲染为 `reasoning` 输出项。
+
+思考历史始终由保留的 CLI 自己持有。客户端回传的 `thinking` / `redacted_thinking` 块（只允许出现在 assistant 回合）以及 Chat 的 `reasoning_content` 被接受后即丢弃：不进入新会话的文本记录，也不参与续接的历史比对，所以回传与否都能续接。未要求思考时，部分新模型仍会生成内部思考块，这些块照旧不对外输出，文本与工具块的公开索引重新连续编号。
+
+Anthropic 的 usage 不单独报告思考 token，思考计入 `output_tokens`。以上行为只有离线测试覆盖，尚未用真实 CLI 验收开启思考的回合。
 
 并行工具只允许可通过名称和规范化参数区分的调用；同轮同名同参数会明确失败，因为公开 MCP 回调没有原生 tool ID，不能可靠消歧。工具仅在调用方执行；Agent 临时目录内无用户项目，内建执行工具、hooks、memory、浏览器与其他 MCP 均关闭。
 

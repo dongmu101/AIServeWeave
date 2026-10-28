@@ -19,7 +19,11 @@ const defaultMaxTokens = 4096
 // modeledFields 是本包写入的请求字段；ChatRequest.Extra 可以追加其他顶层字段，
 // 但绝不能替换其中任何一个。
 var modeledFields = map[string]bool{"model": true, "max_tokens": true, "system": true, "messages": true, "temperature": true,
-	"top_p": true, "stop_sequences": true, "tools": true, "tool_choice": true, "stream": true}
+	"top_p": true, "stop_sequences": true, "tools": true, "tool_choice": true, "stream": true, "thinking": true}
+
+// minThinkingBudget is the smallest budget_tokens Messages accepts.
+// minThinkingBudget 是 Messages 接受的最小 budget_tokens。
+const minThinkingBudget = 1024
 
 type imageSource struct {
 	Type      string `json:"type"`
@@ -37,6 +41,19 @@ type block struct {
 	Input     json.RawMessage `json:"input,omitempty"`
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   string          `json:"content,omitempty"`
+	// Thinking and Signature replay a signed thinking block; Data replays a
+	// redacted_thinking block.
+	// Thinking 与 Signature 回放签过名的 thinking 块；Data 回放 redacted_thinking 块。
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	Data      string `json:"data,omitempty"`
+}
+
+// thinkingConfig is the request's "thinking" object.
+// thinkingConfig 是请求的 "thinking" 对象。
+type thinkingConfig struct {
+	Type         string `json:"type"`
+	BudgetTokens int    `json:"budget_tokens,omitempty"`
 }
 
 type message struct {
@@ -56,16 +73,17 @@ type toolChoice struct {
 }
 
 type messagesRequest struct {
-	Model         string      `json:"model"`
-	MaxTokens     int         `json:"max_tokens"`
-	System        string      `json:"system,omitempty"`
-	Messages      []message   `json:"messages"`
-	Temperature   *float64    `json:"temperature,omitempty"`
-	TopP          *float64    `json:"top_p,omitempty"`
-	StopSequences []string    `json:"stop_sequences,omitempty"`
-	Tools         []tool      `json:"tools,omitempty"`
-	ToolChoice    *toolChoice `json:"tool_choice,omitempty"`
-	Stream        bool        `json:"stream,omitempty"`
+	Model         string          `json:"model"`
+	MaxTokens     int             `json:"max_tokens"`
+	System        string          `json:"system,omitempty"`
+	Messages      []message       `json:"messages"`
+	Temperature   *float64        `json:"temperature,omitempty"`
+	TopP          *float64        `json:"top_p,omitempty"`
+	StopSequences []string        `json:"stop_sequences,omitempty"`
+	Tools         []tool          `json:"tools,omitempty"`
+	ToolChoice    *toolChoice     `json:"tool_choice,omitempty"`
+	Stream        bool            `json:"stream,omitempty"`
+	Thinking      *thinkingConfig `json:"thinking,omitempty"`
 }
 
 // errRequest marks a ChatRequest that cannot be expressed as Messages.
@@ -114,6 +132,7 @@ func buildRequest(req runtime.ChatRequest, stream bool) (map[string]json.RawMess
 			continue
 		case "user":
 		case "assistant":
+			blocks = append(replayBlocks(m.ReasoningBlocks), blocks...)
 			for _, call := range m.ToolCalls {
 				input := json.RawMessage(call.Function.Arguments)
 				if strings.TrimSpace(call.Function.Arguments) == "" {
@@ -160,6 +179,7 @@ func buildRequest(req runtime.ChatRequest, stream bool) (map[string]json.RawMess
 		}
 		out.Tools = append(out.Tools, tool{Name: t.Function.Name, Description: t.Function.Description, InputSchema: schema})
 	}
+	out.Thinking, out.MaxTokens = thinkingFor(req, out.MaxTokens)
 	switch req.ToolChoice {
 	case "":
 	case "auto", "none":
@@ -174,6 +194,82 @@ func buildRequest(req runtime.ChatRequest, stream bool) (map[string]json.RawMess
 		out.ToolChoice = &toolChoice{Type: "tool", Name: name}
 	}
 	return mergeExtra(out, req.Extra)
+}
+
+// replayBlocks turns an assistant message's signed reasoning blocks back into
+// Messages content blocks, in order, so they lead the turn as Anthropic
+// produced them. A block without its signature or payload is not ours to
+// replay and is skipped.
+//
+// replayBlocks 把 assistant 消息上签过名的思考块按顺序还原成 Messages 内容块，使它们
+// 像 Anthropic 产出时那样排在回合最前。缺少签名或载荷的块不该由我们回放，跳过。
+func replayBlocks(reasoning []runtime.ReasoningBlock) []block {
+	var out []block
+	for _, r := range reasoning {
+		switch {
+		case r.Type == runtime.ReasoningBlockThinking && r.Signature != "":
+			out = append(out, block{Type: "thinking", Thinking: r.Thinking, Signature: r.Signature})
+		case r.Type == runtime.ReasoningBlockRedacted && r.Data != "":
+			out = append(out, block{Type: "redacted_thinking", Data: r.Data})
+		}
+	}
+	return out
+}
+
+// thinkingFor maps req.Reasoning onto the request's thinking object and
+// returns the max_tokens to send with it. Like every adapter it treats
+// Reasoning as a hint:
+//
+//   - Off sends {"type":"disabled"}.
+//   - On sends the caller's budget_tokens unchanged, for the upstream to
+//     judge. A budget derived from an effort level is fitted under
+//     max_tokens instead, and thinking is left off when the room left is
+//     below the minimum budget. With no max_tokens from the caller, the
+//     default output room is added on top of the budget, since the budget
+//     counts against max_tokens.
+//   - On is also left off when the last assistant turn called tools without
+//     its signed thinking blocks: Messages then demands those blocks back
+//     and rejects the request, and a client that never saw a signature (any
+//     front door but Anthropic's) cannot supply them.
+//
+// thinkingFor 把 req.Reasoning 映射为请求的 thinking 对象，并返回随之发送的
+// max_tokens。与每个适配器一样，它把 Reasoning 当作提示：
+//
+//   - 关闭时发送 {"type":"disabled"}。
+//   - 开启时调用方给的 budget_tokens 原样发送，交给上游判断。由思考强度换算出的预算则
+//     收进 max_tokens 之内，剩余空间低于最小预算时不开启思考。调用方没给 max_tokens
+//     时，在预算之上再加默认的输出空间，因为预算计入 max_tokens。
+//   - 最后一个 assistant 回合调用了工具、却没有带回签过名的 thinking 块时也不开启：此时
+//     Messages 要求带回这些块并拒绝请求，而从没见过签名的客户端（除 Anthropic 以外的
+//     任何前门）无法提供。
+func thinkingFor(req runtime.ChatRequest, maxTokens int) (*thinkingConfig, int) {
+	r := req.Reasoning
+	if r == nil {
+		return nil, maxTokens
+	}
+	if !r.Enabled {
+		return &thinkingConfig{Type: "disabled"}, maxTokens
+	}
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if m := req.Messages[i]; m.Role == "assistant" {
+			if len(m.ToolCalls) > 0 && len(replayBlocks(m.ReasoningBlocks)) == 0 {
+				return nil, maxTokens
+			}
+			break
+		}
+	}
+	budget := r.Budget()
+	switch {
+	case req.MaxTokens == nil:
+		maxTokens = budget + defaultMaxTokens
+	case r.BudgetTokens > 0:
+	case budget >= maxTokens:
+		budget = maxTokens - 1
+		if budget < minThinkingBudget {
+			return nil, maxTokens
+		}
+	}
+	return &thinkingConfig{Type: "enabled", BudgetTokens: budget}, maxTokens
 }
 
 // namedTool reads the tool name from a named-tool choice, which the Gateway
@@ -278,12 +374,14 @@ func (u usage) prompt() int {
 }
 
 type responseBlock struct {
-	Type     string          `json:"type"`
-	Text     string          `json:"text"`
-	Thinking string          `json:"thinking"`
-	ID       string          `json:"id"`
-	Name     string          `json:"name"`
-	Input    json.RawMessage `json:"input"`
+	Type      string          `json:"type"`
+	Text      string          `json:"text"`
+	Thinking  string          `json:"thinking"`
+	Signature string          `json:"signature"`
+	Data      string          `json:"data"`
+	ID        string          `json:"id"`
+	Name      string          `json:"name"`
+	Input     json.RawMessage `json:"input"`
 }
 
 type messagesResponse struct {
@@ -310,14 +408,14 @@ func finishReason(stop string) string {
 	return "stop"
 }
 
-// toChatResponse keeps text and tool_use blocks and carries thinking blocks
-// as ReasoningContent. A redacted_thinking block is encrypted and has no
-// readable text, and a thinking block's signature only means something to
-// Anthropic itself, so both are dropped.
+// toChatResponse keeps text and tool_use blocks, carries thinking text as
+// ReasoningContent, and keeps every thinking and redacted_thinking block
+// whole in ReasoningBlocks, so a client that can hold signatures can send
+// them back for replay.
 //
-// toChatResponse 保留文本与 tool_use 块，thinking 块作为 ReasoningContent 携带。
-// redacted_thinking 块是加密的、没有可读文本，thinking 块的签名也只对 Anthropic
-// 自己有意义，因此两者都被丢弃。
+// toChatResponse 保留文本与 tool_use 块，把 thinking 文本作为 ReasoningContent 携带，
+// 并把每个 thinking 与 redacted_thinking 块完整保存在 ReasoningBlocks 里，使能够保存
+// 签名的客户端可以把它们送回来回放。
 func toChatResponse(resp messagesResponse, createdAt time.Time) runtime.ChatResponse {
 	out := runtime.ChatResponse{CreatedAt: createdAt}
 	out.ID, out.Model, out.FinishReason = resp.ID, resp.Model, finishReason(resp.StopReason)
@@ -328,6 +426,9 @@ func toChatResponse(resp messagesResponse, createdAt time.Time) runtime.ChatResp
 			out.Message.Content += b.Text
 		case "thinking":
 			out.Message.ReasoningContent += b.Thinking
+			out.Message.ReasoningBlocks = append(out.Message.ReasoningBlocks, runtime.ReasoningBlock{Type: runtime.ReasoningBlockThinking, Thinking: b.Thinking, Signature: b.Signature})
+		case "redacted_thinking":
+			out.Message.ReasoningBlocks = append(out.Message.ReasoningBlocks, runtime.ReasoningBlock{Type: runtime.ReasoningBlockRedacted, Data: b.Data})
 		case "tool_use":
 			args := string(b.Input)
 			if args == "" {

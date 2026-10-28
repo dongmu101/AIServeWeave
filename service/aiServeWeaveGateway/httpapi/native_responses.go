@@ -55,7 +55,7 @@ func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req r
 // toNativeChat refuses in Responses terms what Claude CLI cannot honour, then rebuilds the Chat form.
 // toNativeChat 先用 Responses 的字段名拒绝 Claude CLI 无法兑现的语义，再重建为 Chat 形式。
 func (req responsesRequest) toNativeChat(canonical runtime.ChatRequest) (chatCompletionRequest, error) {
-	out := chatCompletionRequest{Model: req.Model, Stream: req.Stream, Temperature: req.Temperature, MaxTokens: req.MaxOutputTokens}
+	out := chatCompletionRequest{Model: req.Model, Stream: req.Stream, Temperature: req.Temperature, MaxTokens: req.MaxOutputTokens, ReasoningEffort: nativeEffort(canonical.Reasoning)}
 	switch {
 	case req.Store != nil && *req.Store:
 		return out, errors.New("Claude CLI Responses supports only store=false; persistent Responses storage is unavailable")
@@ -118,6 +118,26 @@ func (req responsesRequest) toNativeChat(canonical runtime.ChatRequest) (chatCom
 	return out, nil
 }
 
+// nativeEffort restates a Responses reasoning hint as the Chat
+// reasoning_effort toNativeMessages reads: "none" to turn thinking off, the
+// requested level, or "medium" when thinking was asked for without a level
+// (runtime.ReasoningConfig.Budget's default too). Nil stays "".
+//
+// nativeEffort 把 Responses 的思考提示改写为 toNativeMessages 读取的 Chat
+// reasoning_effort：关闭思考为 "none"，否则为请求的档位；要求思考却没给档位时为
+// "medium"（与 runtime.ReasoningConfig.Budget 的默认值一致）。nil 保持为 ""。
+func nativeEffort(reasoning *runtime.ReasoningConfig) string {
+	switch {
+	case reasoning == nil:
+		return ""
+	case !reasoning.Enabled:
+		return "none"
+	case runtime.ValidReasoningEffort(reasoning.EffortLevel()):
+		return reasoning.EffortLevel()
+	}
+	return runtime.ReasoningEffortMedium
+}
+
 // strictTools reports whether any declared tool, including namespace members, asks for strict schemas.
 // strictTools 报告是否有声明的工具（含 namespace 成员）要求严格 schema。
 func strictTools(tools []responsesTool) bool {
@@ -166,14 +186,20 @@ func (o *nativeResponsesOutput) begin() error {
 	return nil
 }
 
+// event renders one native event as Responses items: thinking as a
+// reasoning item, text as a message item, tool_use as a call item.
+// Signatures and redacted thinking have no Responses form and are skipped.
+//
+// event 把一条原生事件渲染为 Responses 输出项：思考为 reasoning 项，文本为 message
+// 项，tool_use 为调用项。签名与 redacted thinking 在 Responses 中没有对应形式，跳过。
 func (o *nativeResponsesOutput) event(data []byte) error {
 	var event struct {
 		Type  string
 		Index int
 		Block anthropicContentBlockJSON `json:"content_block"`
 		Delta struct {
-			Type, Text  string
-			PartialJSON string `json:"partial_json"`
+			Type, Text, Thinking string
+			PartialJSON          string `json:"partial_json"`
 		}
 	}
 	if json.Unmarshal(data, &event) != nil {
@@ -194,6 +220,8 @@ func (o *nativeResponsesOutput) event(data []byte) error {
 			o.items.toolCall(runtime.ToolCallDelta{Index: index, ID: event.Block.ID, Type: "function", Function: runtime.FunctionCallDelta{Name: event.Block.Name, Arguments: args}})
 		} else if event.Block.Type == "text" {
 			o.items.text(event.Block.Text)
+		} else if event.Block.Type == "thinking" && event.Block.Thinking != nil && *event.Block.Thinking != "" {
+			o.items.reasoning(*event.Block.Thinking)
 		}
 	case "content_block_delta":
 		if index, ok := o.calls[event.Index]; ok {
@@ -202,6 +230,8 @@ func (o *nativeResponsesOutput) event(data []byte) error {
 			}
 		} else if event.Delta.Type == "text_delta" {
 			o.items.text(event.Delta.Text)
+		} else if event.Delta.Type == "thinking_delta" && event.Delta.Thinking != "" {
+			o.items.reasoning(event.Delta.Thinking)
 		}
 	}
 	return nil
@@ -245,6 +275,9 @@ func (o *nativeResponsesOutput) finish(response map[string]any, content []anthro
 	}
 	message := runtime.ChatMessage{Role: "assistant"}
 	for _, block := range content {
+		if block.Type == "thinking" && block.Thinking != nil {
+			message.ReasoningContent += *block.Thinking
+		}
 		if block.Type == "text" {
 			message.Content += block.Text
 		}

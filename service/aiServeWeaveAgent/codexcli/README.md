@@ -35,6 +35,16 @@ Warning: 299 AIServeWeave "Codex compatibility mode: output token limit is not e
 
 需要严格输出 token 上限的客户端应选择能够执行该限制的后端。本兼容不放开 `temperature`、`top_p`、`seed`、`stop` 等参数。更新此行为需要同时部署新版 Gateway（HTTP 提示）和 Agent（参数接收）；仅重启旧二进制不会生效。上游限制见 [OpenAI 官方说明](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations)。
 
+## 思考内容
+
+Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` 映射为 `ChatStream` 中独立的 `ReasoningContent` 增量，非流式 `Chat` 聚合进 `ChatMessage.ReasoningContent`，从不混进回复。同一 reasoning 条目的不同摘要段、以及不同 reasoning 条目之间以空行分隔。原始思考链 `item/reasoning/textDelta` 只在开启 `show_raw_agent_reasoning` 时发送，隔离进程从不开启；万一到达也被忽略，避免与摘要交错。`thread/tokenUsage/updated` 的 `reasoningOutputTokens` 写入 `Usage.ReasoningTokens`（它是 `outputTokens` 的一部分）。回复与摘要共用生成文本的 1 MiB 上限。
+
+请求中的 `reasoning`（`ChatRequest.Reasoning`）是提示，映射为 `turn/start` 的 `effort` 与 `summary`：
+
+- app-server 只接受模型声明过的 effort，所以 Agent 在发现时记下 `model/list` 的 `supportedReasoningEfforts`，把请求档位换成最接近的已声明档位（距离相同取较高者）。关闭思考时取已声明的最低档位，模型提供 `none` 时即为 `none`。
+- 要求思考却没给档位时不覆盖 effort（沿用模型默认），只设置 `summary: "auto"`；开启思考时都设置 `summary: "auto"`。
+- 模型没有声明任何 effort，或最近一次发现中没有出现该模型时，不做任何覆盖，请求照常执行。提示从不导致请求被拒绝。
+
 单帧、注入历史及生成文本各最多 1 MiB，每请求最多 2048 条消息、128 个工具、10000 个 RPC 帧；模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制；流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
 
 ## 图像生成

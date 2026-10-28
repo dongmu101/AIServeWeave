@@ -71,7 +71,17 @@ Messages 要求角色交替，所以相邻的同角色消息会被合并。
 
 **扩展字段**
 
-`Extra` 可以追加顶层字段（例如 `metadata`），但不能覆盖本包已写入的字段。不建议通过 `Extra` 开启 `thinking`：thinking 块的文本虽然会作为 `ReasoningContent` 返回，但签名被丢弃，多轮工具调用回传历史时无法重建带签名的 thinking 块，上游会拒绝；默认的 4096 输出上限也可能小于 `budget_tokens`。
+`Extra` 可以追加顶层字段（例如 `metadata`），但不能覆盖本包已写入的字段；`thinking` 已建模，不能再经 `Extra` 写入。
+
+**扩展思考**
+
+`ChatRequest.Reasoning` 映射为 `thinking`：
+
+- 关闭发送 `{"type":"disabled"}`。
+- 开启时，调用方给的 `BudgetTokens` 原样作为 `budget_tokens` 发送，由上游判断；由档位换算的预算（见 [runtime README](../README.md#思考开关与兜底解析器)）收进 `max_tokens - 1` 以内，剩余不足 1024 时不开启。调用方没给 `max_tokens` 时发送 `预算 + 4096`，因为预算计入 `max_tokens`。
+- 最后一个 assistant 回合调用了工具、却没有带回签过名的思考块时不开启：Messages 此时要求带回这些块，否则返回 400，而从没见过签名的客户端无法提供。
+
+assistant 消息上的 `ReasoningBlocks` 按原顺序排在该回合内容最前回放：带签名的 `thinking` 块与带 `data` 的 `redacted_thinking` 块；缺签名或载荷的块跳过。
 
 **错误文本**
 
@@ -79,7 +89,7 @@ Messages 要求角色交替，所以相邻的同角色消息会被合并。
 
 ## 响应转换
 
-- 文本块拼接为 `content`，`tool_use` 块转为 `tool_calls`，thinking 块的文本拼接为 `ReasoningContent`（流式为 `thinking_delta` 增量）；签名（`signature_delta`）与 `redacted_thinking` 块丢弃。
+- 文本块拼接为 `content`，`tool_use` 块转为 `tool_calls`，thinking 块的文本拼接为 `ReasoningContent`（流式为 `thinking_delta` 增量）。每个 `thinking` 与 `redacted_thinking` 块另外完整保存在 `ReasoningBlocks` 里（含 `signature`/`data`）；流式时签名以 `ChatMessageDelta.ReasoningBlock{Type: "thinking", Signature}` 在 `signature_delta` 到达时送出，`redacted_thinking` 在块开始时整块送出。
 - `prompt_tokens` 包含缓存命中和缓存写入的输入 token，与 OpenAI 的口径一致。
 
 `stop_reason` 的映射：

@@ -203,13 +203,20 @@ func grokDiscoverListing(c *call) ([]string, error) {
 	return ids, err
 }
 
-// grokParser reads `--output-format streaming-json`. Thought events are
-// dropped and any tool event aborts the turn.
-// grokParser 读取 `--output-format streaming-json`。thought 事件被丢弃，任何
-// 工具事件都会中止回合。
+// grokParser reads `--output-format streaming-json`. A "thought" event carries
+// one fragment of thinking text in "data", the same shape as "text", and is
+// forwarded as thinking; a thought whose data is not a string is skipped
+// rather than failing the turn, since it is never part of the reply. Any tool
+// event aborts the turn. Grok exposes no thinking switch to this adapter, so
+// ChatRequest.Reasoning is not mapped onto any flag.
+//
+// grokParser 读取 `--output-format streaming-json`。"thought" 事件在 "data" 中携带
+// 一段思考文本，形状与 "text" 相同，作为思考转发；data 不是字符串的 thought 被跳过
+// 而不让回合失败，因为它从不属于回复。任何工具事件都会中止回合。Grok 没有向本适配器
+// 暴露思考开关，因此 ChatRequest.Reasoning 不映射到任何参数。
 type grokParser struct{ usage *runtime.Usage }
 
-func (p *grokParser) line(event []byte, text func(string) error) (bool, error) {
+func (p *grokParser) line(event []byte, out sink) (bool, error) {
 	obj := object(event)
 	switch str(obj, "type") {
 	case "text":
@@ -217,7 +224,13 @@ func (p *grokParser) line(event []byte, text func(string) error) (bool, error) {
 		if json.Unmarshal(obj["data"], &s) != nil {
 			return false, ErrProtocol
 		}
-		return false, text(s)
+		return false, out.text(s)
+	case "thought":
+		var s string
+		if json.Unmarshal(obj["data"], &s) != nil {
+			return false, nil
+		}
+		return false, out.reasoning(s)
 	case "tool_call", "tool_call_update":
 		return false, ErrUnexpectedTool
 	case "end":
@@ -228,8 +241,8 @@ func (p *grokParser) line(event []byte, text func(string) error) (bool, error) {
 	case "error":
 		return false, ErrTurn
 	}
-	// thought, plan, usage, available_commands and future types carry no reply text.
-	// thought、plan、usage、available_commands 及未来新增类型都不含回复文本。
+	// plan, usage, available_commands and future types carry neither reply nor thinking text.
+	// plan、usage、available_commands 及未来新增类型既不含回复文本，也不含思考文本。
 	return false, nil
 }
 

@@ -757,6 +757,7 @@ func ChatRequestToProto(req runtime.ChatRequest) *tunnelv1.ChatRequest {
 		Tools:          toolsToProto(req.Tools),
 		ToolChoice:     req.ToolChoice,
 		ResponseFormat: responseFormatToProto(req.ResponseFormat),
+		Reasoning:      reasoningConfigToProto(req.Reasoning),
 	}
 	if len(req.Extra) > 0 {
 		pb.Extra = make(map[string][]byte, len(req.Extra))
@@ -783,6 +784,7 @@ func ChatRequestFromProto(pb *tunnelv1.ChatRequest) runtime.ChatRequest {
 		Tools:          toolsFromProto(pb.GetTools()),
 		ToolChoice:     pb.GetToolChoice(),
 		ResponseFormat: responseFormatFromProto(pb.GetResponseFormat()),
+		Reasoning:      reasoningConfigFromProto(pb.GetReasoning()),
 	}
 	if len(pb.GetExtra()) > 0 {
 		req.Extra = make(map[string]json.RawMessage, len(pb.GetExtra()))
@@ -791,6 +793,50 @@ func ChatRequestFromProto(pb *tunnelv1.ChatRequest) runtime.ChatRequest {
 		}
 	}
 	return req
+}
+
+func reasoningConfigToProto(r *runtime.ReasoningConfig) *tunnelv1.ReasoningConfig {
+	if r == nil {
+		return nil
+	}
+	return &tunnelv1.ReasoningConfig{Enabled: r.Enabled, Effort: r.Effort, BudgetTokens: int64(r.BudgetTokens)}
+}
+
+func reasoningConfigFromProto(pb *tunnelv1.ReasoningConfig) *runtime.ReasoningConfig {
+	if pb == nil {
+		return nil
+	}
+	return &runtime.ReasoningConfig{Enabled: pb.GetEnabled(), Effort: pb.GetEffort(), BudgetTokens: int(pb.GetBudgetTokens())}
+}
+
+func reasoningBlockToProto(b runtime.ReasoningBlock) *tunnelv1.ReasoningBlock {
+	return &tunnelv1.ReasoningBlock{Type: b.Type, Thinking: b.Thinking, Signature: b.Signature, Data: b.Data}
+}
+
+func reasoningBlockFromProto(pb *tunnelv1.ReasoningBlock) runtime.ReasoningBlock {
+	return runtime.ReasoningBlock{Type: pb.GetType(), Thinking: pb.GetThinking(), Signature: pb.GetSignature(), Data: pb.GetData()}
+}
+
+func reasoningBlocksToProto(blocks []runtime.ReasoningBlock) []*tunnelv1.ReasoningBlock {
+	if len(blocks) == 0 {
+		return nil
+	}
+	out := make([]*tunnelv1.ReasoningBlock, len(blocks))
+	for i, b := range blocks {
+		out[i] = reasoningBlockToProto(b)
+	}
+	return out
+}
+
+func reasoningBlocksFromProto(pbs []*tunnelv1.ReasoningBlock) []runtime.ReasoningBlock {
+	if len(pbs) == 0 {
+		return nil
+	}
+	out := make([]runtime.ReasoningBlock, len(pbs))
+	for i, pb := range pbs {
+		out[i] = reasoningBlockFromProto(pb)
+	}
+	return out
 }
 
 func chatMessagesToProto(msgs []runtime.ChatMessage) []*tunnelv1.ChatMessage {
@@ -824,6 +870,7 @@ func chatMessageToProto(m runtime.ChatMessage) *tunnelv1.ChatMessage {
 		ToolCalls:        toolCallsToProto(m.ToolCalls),
 		ContentParts:     contentPartsToProto(m.ContentParts),
 		ReasoningContent: m.ReasoningContent,
+		ReasoningBlocks:  reasoningBlocksToProto(m.ReasoningBlocks),
 	}
 }
 
@@ -839,6 +886,7 @@ func chatMessageFromProto(pb *tunnelv1.ChatMessage) runtime.ChatMessage {
 		ToolCalls:        toolCallsFromProto(pb.GetToolCalls()),
 		ContentParts:     contentPartsFromProto(pb.GetContentParts()),
 		ReasoningContent: pb.GetReasoningContent(),
+		ReasoningBlocks:  reasoningBlocksFromProto(pb.GetReasoningBlocks()),
 	}
 }
 
@@ -1045,13 +1093,16 @@ func ChatEventFromProto(pb *tunnelv1.ChatEvent) runtime.ChatEvent {
 // chatMessageDeltaToProto returns nil for an empty delta so a bare
 // finish-reason event does not carry an empty submessage.
 func chatMessageDeltaToProto(d runtime.ChatMessageDelta) *tunnelv1.ChatMessageDelta {
-	if d.Role == "" && d.Content == "" && len(d.ToolCalls) == 0 && d.ReasoningContent == "" {
+	if d.Role == "" && d.Content == "" && len(d.ToolCalls) == 0 && d.ReasoningContent == "" && d.ReasoningBlock == nil {
 		return nil
 	}
 	pb := &tunnelv1.ChatMessageDelta{
 		Role:             d.Role,
 		Content:          d.Content,
 		ReasoningContent: d.ReasoningContent,
+	}
+	if d.ReasoningBlock != nil {
+		pb.ReasoningBlock = reasoningBlockToProto(*d.ReasoningBlock)
 	}
 	if len(d.ToolCalls) > 0 {
 		pb.ToolCalls = make([]*tunnelv1.ToolCallDelta, len(d.ToolCalls))
@@ -1078,6 +1129,10 @@ func chatMessageDeltaFromProto(pb *tunnelv1.ChatMessageDelta) runtime.ChatMessag
 		Role:             pb.GetRole(),
 		Content:          pb.GetContent(),
 		ReasoningContent: pb.GetReasoningContent(),
+	}
+	if b := pb.GetReasoningBlock(); b != nil {
+		block := reasoningBlockFromProto(b)
+		d.ReasoningBlock = &block
 	}
 	if calls := pb.GetToolCalls(); len(calls) > 0 {
 		d.ToolCalls = make([]runtime.ToolCallDelta, len(calls))

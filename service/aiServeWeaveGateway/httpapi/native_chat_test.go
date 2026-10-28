@@ -19,7 +19,6 @@ func TestNativeChatRejectsUnknownFields(t *testing.T) {
 		{"strict tool schema", `"tools":[{"type":"function","function":{"name":"read","strict":true}}]`, "Claude CLI Chat supports only tools[].function.strict=false; strict schema enforcement is unavailable"},
 		{"unknown tool field", `"tools":[{"type":"function","function":{"name":"read","sensitive_input":true}}]`, "unsupported Claude CLI Chat parameter"},
 		{"parallel tool control", `"parallel_tool_calls":false`, "Claude CLI Chat does not support parallel_tool_calls"},
-		{"reasoning control", `"reasoning_effort":"high"`, "Claude CLI Chat does not support reasoning_effort"},
 		{"cache key", `"prompt_cache_key":"sensitive_input"`, "Claude CLI Chat does not support prompt_cache_key or prompt_cache_retention"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

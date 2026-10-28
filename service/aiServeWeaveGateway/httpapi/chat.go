@@ -217,14 +217,19 @@ type chatCompletionRequest struct {
 	StreamOptions       *struct {
 		IncludeUsage bool `json:"include_usage"`
 	} `json:"stream_options,omitempty"`
-	Stop           stopField           `json:"stop,omitempty"`
-	Seed           *int64              `json:"seed,omitempty"`
-	Tools          []toolJSON          `json:"tools,omitempty"`
-	ToolChoice     json.RawMessage     `json:"tool_choice,omitempty"`
-	ResponseFormat *responseFormatJSON `json:"response_format,omitempty"`
+	Stop            stopField           `json:"stop,omitempty"`
+	Seed            *int64              `json:"seed,omitempty"`
+	Tools           []toolJSON          `json:"tools,omitempty"`
+	ToolChoice      json.RawMessage     `json:"tool_choice,omitempty"`
+	ResponseFormat  *responseFormatJSON `json:"response_format,omitempty"`
+	ReasoningEffort string              `json:"reasoning_effort,omitempty"`
 }
 
 func (req chatCompletionRequest) toRuntime() (runtime.ChatRequest, error) {
+	reasoning, err := reasoningFromEffort(req.ReasoningEffort, "reasoning_effort")
+	if err != nil {
+		return runtime.ChatRequest{}, err
+	}
 	out := runtime.ChatRequest{
 		Model:       req.Model,
 		Temperature: req.Temperature,
@@ -232,6 +237,7 @@ func (req chatCompletionRequest) toRuntime() (runtime.ChatRequest, error) {
 		MaxTokens:   req.MaxTokens,
 		Stop:        req.Stop,
 		Seed:        req.Seed,
+		Reasoning:   reasoning,
 	}
 	out.Messages = make([]runtime.ChatMessage, len(req.Messages))
 	for i, m := range req.Messages {

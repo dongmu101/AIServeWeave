@@ -109,12 +109,20 @@ func ChatStream(ctx context.Context, c *Client, req runtime.ChatRequest, idleTim
 		idleTimer = time.AfterFunc(idleTimeout, cancel)
 	}
 
-	go decodeChatStream(c, resp, out, idleTimer, idleTimeout)
+	go decodeChatStream(c, resp, out, idleTimer, idleTimeout, c.splitterFor(req))
 
 	return &chatEventStream{ChanStream: out, cancel: cancel, idleTimer: idleTimer}, nil
 }
 
-func decodeChatStream(c *Client, resp *http.Response, out *runtime.ChanStream[runtime.ChatEvent], idleTimer *time.Timer, idleTimeout time.Duration) {
+// decodeChatStream forwards one event per SSE chunk. split, when non-nil, is
+// the fallback reasoning parser: it stays in use only while the backend does
+// not separate reasoning itself, and whatever it still holds at the end is
+// sent as one last event before the stream closes.
+//
+// decodeChatStream 每个 SSE chunk 转发一个事件。split 非 nil 时是兜底思考解析器：只要
+// 后端没有自己分离思考，它就一直生效；流结束时它仍扣着的内容会在关闭之前作为最后一个
+// 事件发出。
+func decodeChatStream(c *Client, resp *http.Response, out *runtime.ChanStream[runtime.ChatEvent], idleTimer *time.Timer, idleTimeout time.Duration, split *thinkSplitter) {
 	defer func() {
 		if idleTimer != nil {
 			idleTimer.Stop()
@@ -123,6 +131,7 @@ func decodeChatStream(c *Client, resp *http.Response, out *runtime.ChanStream[ru
 	defer resp.Body.Close()
 
 	reader := newSSEReader(resp.Body, defaultSSEMaxLineBytes, defaultSSEMaxEventBytes)
+	var id, model string
 	for {
 		frame, err := reader.readFrame()
 		if idleTimer != nil {
@@ -130,6 +139,13 @@ func decodeChatStream(c *Client, resp *http.Response, out *runtime.ChanStream[ru
 		}
 		if err != nil {
 			if errors.Is(err, io.EOF) || errors.Is(err, ErrSSEDone) {
+				if split != nil {
+					if r, a := split.flush(); r != "" || a != "" {
+						if !out.Send(runtime.ChatEvent{ID: id, Model: model, Delta: runtime.ChatMessageDelta{ReasoningContent: r, Content: a}}) {
+							return
+						}
+					}
+				}
 				out.CloseWithError(nil)
 				return
 			}
@@ -146,7 +162,33 @@ func decodeChatStream(c *Client, resp *http.Response, out *runtime.ChanStream[ru
 			return
 		}
 
-		if !out.Send(chatEventFromChunk(chunk)) {
+		event := chatEventFromChunk(chunk)
+		id, model = event.ID, event.Model
+		if split != nil {
+			if event.Delta.ReasoningContent != "" {
+				// The backend separates reasoning itself; the fallback
+				// parser is not needed, and keeping it would misread a
+				// literal <think> in the answer.
+				//
+				// 后端自己会分离思考，用不上兜底解析器；继续使用反而会误读回答里字面的
+				// <think>。
+				r, a := split.flush()
+				event.Delta.ReasoningContent = r + event.Delta.ReasoningContent
+				event.Delta.Content = a + event.Delta.Content
+				split = nil
+			} else if event.Delta.Content != "" {
+				event.Delta.ReasoningContent, event.Delta.Content = split.push(event.Delta.Content)
+			}
+			if split != nil && event.FinishReason != "" {
+				// Release held text with the finishing chunk, so no content
+				// follows the finish reason.
+				// 随结束块放出扣住的文本，使结束原因之后不再有正文。
+				r, a := split.flush()
+				event.Delta.ReasoningContent += r
+				event.Delta.Content += a
+			}
+		}
+		if !out.Send(event) {
 			return // consumer closed the stream
 		}
 	}

@@ -203,6 +203,16 @@ type RuntimeConfig struct {
 	// Models 为无法列出自身模型的托管端点声明模型目录；设置后以它为准。可接受的
 	// 写法见 ModelList。
 	Models ModelList `yaml:"models,omitempty"`
+	// ReasoningParser is runtime.Config.ReasoningParser: "think_tags" or
+	// "think_tags_prefilled" splits inline <think> reasoning out of the
+	// replies of an OpenAI-compatible backend that does not separate it
+	// itself. The setup page has no field for it; a save from the page keeps
+	// whatever the file already says.
+	//
+	// ReasoningParser 即 runtime.Config.ReasoningParser："think_tags" 或
+	// "think_tags_prefilled" 为不自己分离思考的 OpenAI 兼容后端把回复里内联的 <think>
+	// 思考切分出来。设置页面没有这个字段；从页面保存时保留文件里已有的值。
+	ReasoningParser string `yaml:"reasoning_parser,omitempty"`
 }
 
 // ModelList is a model catalogue written either as one space- or
@@ -298,6 +308,9 @@ func Save(path string, cfg *Config) error {
 		}
 		if rc.Models != "" {
 			entry["models"] = string(rc.Models)
+		}
+		if rc.ReasoningParser != "" {
+			entry["reasoning_parser"] = rc.ReasoningParser
 		}
 		runtimes[i] = entry
 	}

@@ -955,6 +955,11 @@ message ChatRequest {
   // extra forwards backend-private parameters verbatim; each value is a raw
   // JSON document.
   map<string, bytes> extra = 11;
+
+  // reasoning asks the model to think, or not to; unset leaves the backend's
+  // own default. A hint, not a capability requirement — see
+  // runtime.ChatRequest.Reasoning.
+  ReasoningConfig reasoning = 12;
 }
 
 message ChatMessage {
@@ -977,6 +982,29 @@ message ChatMessage {
   // Anthropic thinking block). Set only on assistant output; front doors
   // never put it on a request, so a prior turn's reasoning is not sent back.
   string reasoning_content = 7;
+
+  // reasoning_blocks are the provider-signed blocks behind reasoning_content.
+  // Unlike reasoning_content they travel on a request too, so the adapter of
+  // the provider that signed them can replay them (Anthropic requires this
+  // within a tool loop).
+  repeated ReasoningBlock reasoning_blocks = 8;
+}
+
+// ReasoningBlock mirrors runtime.ReasoningBlock: a "thinking" block carries
+// thinking and signature, a "redacted_thinking" block carries data.
+message ReasoningBlock {
+  string type = 1;
+  string thinking = 2;
+  string signature = 3;
+  string data = 4;
+}
+
+// ReasoningConfig mirrors runtime.ReasoningConfig, a hint that the model
+// should think (or explicitly not) before answering.
+message ReasoningConfig {
+  bool enabled = 1;
+  string effort = 2;                    // minimal | low | medium | high | xhigh, or empty
+  int64 budget_tokens = 3;              // 0 when unspecified
 }
 
 // ContentPart is one piece of ChatMessage.content_parts: a text run, an
@@ -1068,6 +1096,7 @@ message ChatMessageDelta {
   string content = 2;
   repeated ToolCallDelta tool_calls = 3;
   string reasoning_content = 4;         // one fragment of ChatMessage.reasoning_content
+  ReasoningBlock reasoning_block = 5;   // closes a signed block: a signature for the reasoning since the last block, or a redacted block
 }
 
 message ToolCallDelta {

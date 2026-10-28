@@ -155,6 +155,20 @@ func (c Config) Validate() error {
 		seenModels[model] = true
 	}
 
+	// The fallback reasoning parser works on OpenAI-compatible reply text;
+	// a CLI, ComfyUI or Anthropic runtime has no such text to split.
+	// 兜底思考解析器作用于 OpenAI 兼容的回复文本；CLI、ComfyUI 或 Anthropic 运行时
+	// 没有这种文本可切分。
+	switch c.ReasoningParser {
+	case "":
+	case ReasoningParserThinkTags, ReasoningParserThinkTagsPrefilled:
+		if c.Kind.IsLocalCLI() || c.Kind == KindComfyUI || c.Kind == KindAnthropic || c.Kind == KindAnthropicCompatible {
+			problems = append(problems, fmt.Sprintf("reasoning_parser does not apply to kind %q", c.Kind))
+		}
+	default:
+		problems = append(problems, fmt.Sprintf("reasoning_parser %q is not one of %q, %q", c.ReasoningParser, ReasoningParserThinkTags, ReasoningParserThinkTagsPrefilled))
+	}
+
 	for name := range c.Headers {
 		if forbiddenConfigHeaders[http.CanonicalHeaderKey(name)] {
 			problems = append(problems, fmt.Sprintf("header %q must not be set via config", name))
@@ -189,6 +203,7 @@ func (c Config) LogValue() slog.Value {
 		slog.Duration("discovery_interval", c.DiscoveryInterval),
 		slog.Int("max_concurrent", c.MaxConcurrent),
 		slog.Bool("exclusive", c.Exclusive),
+		slog.String("reasoning_parser", c.ReasoningParser),
 		slog.Bool("tls_insecure_skip_verify", c.TLS.InsecureSkipVerify),
 	)
 }

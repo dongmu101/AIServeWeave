@@ -42,10 +42,61 @@ func (h *handlers) useNativeMessages(req anthropicMessagesRequest) bool {
 	return len(h.sched.MessagesCandidates(req.Model)) > 0
 }
 
-// nativeMessages preserves native block order and authenticates every continuation.
-// nativeMessages 保留原生块顺序，并对每次续接重新认证。
+// nativeMessages preserves native block order and authenticates every
+// continuation. A client "thinking" object is read as a reasoning hint and
+// rewritten by nativeThinking into the one form the Claude CLI bridge
+// accepts, so adaptive thinking or a budget that does not fit max_tokens is
+// adjusted or dropped rather than refused; only a malformed object is a 400.
+//
+// nativeMessages 保留原生块顺序，并对每次续接重新认证。客户端的 "thinking" 对象被当作
+// 思考提示读取，并由 nativeThinking 改写为 Claude CLI 桥接唯一接受的形式，因此
+// adaptive thinking 或放不进 max_tokens 的预算会被调整或丢弃，而不是拒绝；只有格式
+// 错误的对象才返回 400。
 func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time) {
+	if len(req.Thinking) > 0 {
+		reasoning, err := reasoningFromAnthropic(req.Thinking)
+		if err != nil {
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+			return
+		}
+		req.Thinking = nativeThinking(reasoning, req.MaxTokens, req.Temperature)
+		var document map[string]json.RawMessage
+		if json.Unmarshal(raw, &document) != nil {
+			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
+			return
+		}
+		if req.Thinking != nil {
+			document["thinking"] = req.Thinking
+		} else {
+			delete(document, "thinking")
+		}
+		raw, _ = json.Marshal(document)
+	}
 	h.nativeMessagesOutput(w, r, req, raw, start, nil)
+}
+
+// nativeThinking maps a reasoning hint onto the Messages "thinking" object
+// the Claude CLI bridge accepts: {"type":"enabled","budget_tokens":N} with
+// 1024 <= N < maxTokens, or nil for the bridge's default of no thinking. The
+// budget is reasoning.Budget() clamped below maxTokens; a hint that turns
+// thinking off, comes with a temperature (the Messages API refuses thinking
+// with a modified temperature) or cannot fit 1024 tokens below maxTokens is
+// dropped.
+//
+// nativeThinking 把思考提示映射为 Claude CLI 桥接接受的 Messages "thinking" 对象：
+// {"type":"enabled","budget_tokens":N}，其中 1024 <= N < maxTokens；或返回 nil，即
+// 桥接默认的不思考。预算取 reasoning.Budget()，并收敛到 maxTokens 以下；关闭思考的
+// 提示、带 temperature 的提示（Messages API 不接受修改了 temperature 的思考），以及
+// maxTokens 以下放不下 1024 token 的提示都被丢弃。
+func nativeThinking(reasoning *runtime.ReasoningConfig, maxTokens int, temperature *float64) json.RawMessage {
+	if reasoning == nil || !reasoning.Enabled || temperature != nil {
+		return nil
+	}
+	budget := min(reasoning.Budget(), maxTokens-1)
+	if budget < 1024 {
+		return nil
+	}
+	return json.RawMessage(fmt.Sprintf(`{"type":"enabled","budget_tokens":%d}`, budget))
 }
 
 // nativeOutput renders the native Messages stream in another public protocol.
@@ -191,9 +242,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			Message map[string]any            `json:"message"`
 			Block   anthropicContentBlockJSON `json:"content_block"`
 			Delta   struct {
-				Type, Text  string
-				PartialJSON string `json:"partial_json"`
-				StopReason  string `json:"stop_reason"`
+				Type, Text, Thinking, Signature string
+				PartialJSON                     string `json:"partial_json"`
+				StopReason                      string `json:"stop_reason"`
 			} `json:"delta"`
 			Usage map[string]any `json:"usage"`
 		}
@@ -233,8 +284,13 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				protocolError("invalid native Messages block index")
 				return
 			}
-			if event.Delta.Type == "text_delta" {
+			switch event.Delta.Type {
+			case "text_delta":
 				content[event.Index].Text += event.Delta.Text
+			case "thinking_delta":
+				content[event.Index].Thinking = appendText(content[event.Index].Thinking, event.Delta.Thinking)
+			case "signature_delta":
+				content[event.Index].Signature = appendText(content[event.Index].Signature, event.Delta.Signature)
 			}
 			if event.Delta.Type == "input_json_delta" {
 				if string(content[event.Index].Input) == "{}" {
@@ -302,6 +358,16 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 	}
+}
+
+// appendText returns a pointer to *field + s, treating a nil field as empty.
+// appendText 返回指向 *field + s 的指针，nil 视为空串。
+func appendText(field *string, s string) *string {
+	text := s
+	if field != nil {
+		text = *field + s
+	}
+	return &text
 }
 
 func messagesNotApplied(err error) bool {

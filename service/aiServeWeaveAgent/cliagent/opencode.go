@@ -70,22 +70,31 @@ func openCodeDiscover(c *call) ([]string, error) {
 }
 
 // openCodeParser reads `run --format json`. There is no end event: a clean
-// exit with some reply text is success. Token counts are summed over steps.
-// openCodeParser 读取 `run --format json`。没有结束事件：正常退出且有回复文本
-// 即为成功。token 数按步骤累加。
+// exit with some reply text is success, so a turn that only thought fails.
+// A "reasoning" event carries one finished reasoning part, forwarded whole as
+// thinking text. Token counts are summed over steps. OpenCode's reasoning
+// variants are provider-specific names, so ChatRequest.Reasoning is not
+// mapped onto any flag.
+//
+// openCodeParser 读取 `run --format json`。没有结束事件：正常退出且有回复文本即为
+// 成功，因此只有思考没有回答的回合按失败处理。"reasoning" 事件携带一段已完成的思考
+// part，整段作为思考文本转发。token 数按步骤累加。OpenCode 的思考档位（variant）是
+// 各供应商自己的名字，因此 ChatRequest.Reasoning 不映射到任何参数。
 type openCodeParser struct {
 	emitted       bool
 	input, output int
 }
 
-func (p *openCodeParser) line(event []byte, text func(string) error) (bool, error) {
+func (p *openCodeParser) line(event []byte, out sink) (bool, error) {
 	obj := object(event)
 	part := object(obj["part"])
 	switch str(obj, "type") {
 	case "text":
 		s := str(part, "text")
 		p.emitted = p.emitted || s != ""
-		return false, text(s)
+		return false, out.text(s)
+	case "reasoning":
+		return false, out.reasoning(str(part, "text"))
 	case "tool_use", "tool":
 		return false, ErrUnexpectedTool
 	case "step_finish":
@@ -111,8 +120,8 @@ func (p *openCodeParser) line(event []byte, text func(string) error) (bool, erro
 	case "error":
 		return false, ErrTurn
 	}
-	// step_start, reasoning and future types carry no reply text.
-	// step_start、reasoning 及未来新增类型都不含回复文本。
+	// step_start and future types carry neither reply nor thinking text.
+	// step_start 及未来新增类型既不含回复文本，也不含思考文本。
 	return false, nil
 }
 

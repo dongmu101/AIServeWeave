@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/responses",
   "summary": "兼容 OpenAI Responses API 的对话接口，支持流式事件、工具调用与基于 previous_response_id 的多轮续接。",
-  "revision": 2,
+  "revision": 3,
   "content": {
     "highlights": [
       "兼容 OpenAI Responses API，可直接使用 OpenAI 官方 SDK 的 responses 接口",
@@ -188,6 +188,12 @@
         "type": "integer",
         "required": false,
         "description": "最多生成的 token 数。"
+      },
+      {
+        "name": "reasoning",
+        "type": "object",
+        "required": false,
+        "description": "思考设置。effort 取值同 Chat Completions 的 reasoning_effort（none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位），取值非法返回 400；不带 effort 视为开启并沿用后端默认档位；summary 被接受但不起作用。作为提示转发给后端，模型不支持思考时被忽略。"
       },
       {
         "name": "temperature",
@@ -607,7 +613,7 @@
       },
       {
         "title": "Claude 系列模型的参数限制",
-        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。"
+        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。"
       },
       {
         "title": "错误码说明",

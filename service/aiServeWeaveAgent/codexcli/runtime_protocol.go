@@ -4,13 +4,26 @@ import (
 	"encoding/json"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 
 	"AIServeWeave/common/runtime"
 )
 
-// runChat turns canonical history into isolated app-server events.
-// runChat 把规范化历史转换为隔离的 app-server 事件。
+// runChat turns canonical history into isolated app-server events. Reply
+// deltas become Content; reasoning summary deltas
+// (item/reasoning/summaryTextDelta) become ReasoningContent, with a blank
+// line between successive summary parts or reasoning items. Codex reports a
+// summary of its reasoning, not the raw chain of thought: raw
+// item/reasoning/textDelta is only sent when show_raw_agent_reasoning is on,
+// which this isolated server never enables, and is ignored if it arrives so
+// the two never interleave. Reply and summary share one maxFrameBytes bound.
+//
+// runChat 把规范化历史转换为隔离的 app-server 事件。回复增量成为 Content；思考摘要
+// 增量（item/reasoning/summaryTextDelta）成为 ReasoningContent，相邻的摘要段或
+// reasoning 条目之间以空行分隔。Codex 报告的是思考摘要，而不是原始思考链：原始的
+// item/reasoning/textDelta 只在开启 show_raw_agent_reasoning 时发送，本隔离服务从不
+// 开启；万一到达也会被忽略，避免两者交错。回复与摘要共用一个 maxFrameBytes 上限。
 func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, instructions []string, emit func(runtime.ChatEvent) error) error {
 	if err := initializeServer(p); err != nil {
 		return err
@@ -60,6 +73,12 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 	if len(input.schema) > 0 {
 		turnParams["outputSchema"] = input.schema
 	}
+	if input.effort != "" {
+		turnParams["effort"] = input.effort
+	}
+	if input.summary != "" {
+		turnParams["summary"] = input.summary
+	}
 	if err := p.write(map[string]any{"id": 5, "method": "turn/start", "params": turnParams}); err != nil {
 		return err
 	}
@@ -101,7 +120,8 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 	}
 	event := runtime.ChatEvent{ID: turnID, Model: thread.Model}
 	var usage *runtime.Usage
-	textBytes := 0
+	textBytes := 0    // reply and reasoning summary together / 回复与思考摘要合计
+	summaryPart := "" // item and part of the last summary delta / 上一段摘要增量所属的条目与段
 	for {
 		var msg frame
 		if len(early) > 0 {
@@ -115,15 +135,16 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			}
 		}
 		var n struct {
-			ThreadID  string          `json:"threadId"`
-			TurnID    string          `json:"turnId"`
-			CallID    string          `json:"callId"`
-			Tool      string          `json:"tool"`
-			Namespace *string         `json:"namespace"`
-			Arguments json.RawMessage `json:"arguments"`
-			Delta     string          `json:"delta"`
-			ItemID    string          `json:"itemId"`
-			Item      struct {
+			ThreadID     string          `json:"threadId"`
+			TurnID       string          `json:"turnId"`
+			SummaryIndex int64           `json:"summaryIndex"`
+			CallID       string          `json:"callId"`
+			Tool         string          `json:"tool"`
+			Namespace    *string         `json:"namespace"`
+			Arguments    json.RawMessage `json:"arguments"`
+			Delta        string          `json:"delta"`
+			ItemID       string          `json:"itemId"`
+			Item         struct {
 				Type string `json:"type"`
 				ID   string `json:"id"`
 				Text string `json:"text"`
@@ -135,9 +156,10 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			} `json:"turn"`
 			TokenUsage struct {
 				Last struct {
-					Input  int `json:"inputTokens"`
-					Output int `json:"outputTokens"`
-					Total  int `json:"totalTokens"`
+					Input     int `json:"inputTokens"`
+					Output    int `json:"outputTokens"`
+					Reasoning int `json:"reasoningOutputTokens"`
+					Total     int `json:"totalTokens"`
 				} `json:"last"`
 			} `json:"tokenUsage"`
 		}
@@ -185,11 +207,36 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			if err := emit(event); err != nil {
 				return err
 			}
-		case "thread/tokenUsage/updated":
-			if n.ThreadID != thread.Thread.ID || n.TurnID != turnID || n.TokenUsage.Last.Input < 0 || n.TokenUsage.Last.Output < 0 || n.TokenUsage.Last.Total < 0 {
+		case "item/reasoning/summaryTextDelta":
+			if n.ThreadID != thread.Thread.ID || n.TurnID != turnID || n.ItemID == "" || n.SummaryIndex < 0 {
 				return ErrProtocol
 			}
-			usage = &runtime.Usage{PromptTokens: n.TokenUsage.Last.Input, CompletionTokens: n.TokenUsage.Last.Output, TotalTokens: n.TokenUsage.Last.Total}
+			delta := n.Delta
+			if part := n.ItemID + "\x00" + strconv.FormatInt(n.SummaryIndex, 10); part != summaryPart && delta != "" {
+				if summaryPart != "" {
+					delta = "\n\n" + delta
+				}
+				summaryPart = part
+			}
+			textBytes += len(delta)
+			if textBytes > maxFrameBytes {
+				return ErrProtocol
+			}
+			if delta == "" {
+				continue
+			}
+			event.Delta = runtime.ChatMessageDelta{Role: "assistant", ReasoningContent: delta}
+			if err := emit(event); err != nil {
+				return err
+			}
+		case "thread/tokenUsage/updated":
+			last := n.TokenUsage.Last
+			if n.ThreadID != thread.Thread.ID || n.TurnID != turnID || last.Input < 0 || last.Output < 0 || last.Reasoning < 0 || last.Total < 0 {
+				return ErrProtocol
+			}
+			// reasoningOutputTokens is the reasoning share of outputTokens.
+			// reasoningOutputTokens 是 outputTokens 中用于思考的部分。
+			usage = &runtime.Usage{PromptTokens: last.Input, CompletionTokens: last.Output, TotalTokens: last.Total, ReasoningTokens: last.Reasoning}
 		case "turn/completed":
 			if n.ThreadID != thread.Thread.ID || n.Turn.ID != turnID {
 				return ErrProtocol

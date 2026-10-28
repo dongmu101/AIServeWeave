@@ -47,6 +47,9 @@ type responsesRequest struct {
 	Tools           []responsesTool `json:"tools,omitempty"`
 	ToolChoice      json.RawMessage `json:"tool_choice,omitempty"`
 	Text            *responsesText  `json:"text,omitempty"`
+	// Reasoning is the Responses "reasoning" object; see reasoning.go.
+	// Reasoning 是 Responses 的 "reasoning" 对象；见 reasoning.go。
+	Reasoning *responsesReasoning `json:"reasoning,omitempty"`
 
 	// PreviousResponseID and Store are honoured only when a control plane is
 	// configured to persist conversation history (STATUS.md's P2 "Responses
@@ -385,12 +388,17 @@ func (req responsesRequest) toRuntime() (runtime.ChatRequest, responsesToolset, 
 	if err != nil {
 		return runtime.ChatRequest{}, responsesToolset{}, err
 	}
+	reasoning, err := reasoningFromResponses(req.Reasoning)
+	if err != nil {
+		return runtime.ChatRequest{}, responsesToolset{}, err
+	}
 	out := runtime.ChatRequest{
 		Model:       req.Model,
 		Messages:    messages,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
 		MaxTokens:   req.MaxOutputTokens,
+		Reasoning:   reasoning,
 	}
 	tools := append([]responsesTool(nil), req.Tools...)
 	var items []responsesInputItem

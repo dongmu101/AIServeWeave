@@ -154,7 +154,7 @@ func (h *handlers) persistResponseTurn(responseID, tenantID, previousResponseID,
 	// that nothing reads.
 	//
 	// 回放的轮次本来就不带思考发给后端，存下它只会多留一份没人读的思考链副本。
-	assistant.ReasoningContent = ""
+	assistant.ReasoningContent, assistant.ReasoningBlocks = "", nil
 	turn = append(turn, assistant)
 	encoded, err := json.Marshal(turn)
 	if err != nil {

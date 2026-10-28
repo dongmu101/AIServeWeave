@@ -189,6 +189,15 @@ type chatCompletionRequest struct {
 	Tools          []toolDTO          `json:"tools,omitempty"`
 	ToolChoice     json.RawMessage    `json:"tool_choice,omitempty"`
 	ResponseFormat *responseFormatDTO `json:"response_format,omitempty"`
+
+	// The reasoning switches; applyReasoning sets at most the ones the
+	// backend kind speaks.
+	// 思考开关；applyReasoning 只设置后端种类所用的那几个。
+	ReasoningEffort    *string            `json:"reasoning_effort,omitempty"`
+	ChatTemplateKwargs map[string]bool    `json:"chat_template_kwargs,omitempty"`
+	EnableThinking     *bool              `json:"enable_thinking,omitempty"`
+	ThinkingBudget     *int               `json:"thinking_budget,omitempty"`
+	Thinking           *thinkingSwitchDTO `json:"thinking,omitempty"`
 }
 
 // toolChoiceJSON encodes runtime.ChatRequest.ToolChoice for the wire. A mode
@@ -220,6 +229,8 @@ var modeledChatFields = map[string]bool{
 	"model": true, "messages": true, "temperature": true, "top_p": true,
 	"max_tokens": true, "stop": true, "seed": true, "tools": true,
 	"tool_choice": true, "response_format": true, "stream": true, "stream_options": true,
+	"reasoning_effort": true, "chat_template_kwargs": true, "enable_thinking": true,
+	"thinking_budget": true, "thinking": true,
 }
 
 type chatChoiceDTO struct {
@@ -332,6 +343,7 @@ func toResponseFormatDTO(rf *runtime.ResponseFormat) *responseFormatDTO {
 // "max_completion_tokens" 优先，因此该字段不会被发送两次。
 func (c *Client) chatRequest(req runtime.ChatRequest) chatCompletionRequest {
 	dto := buildChatCompletionRequest(req)
+	c.applyReasoning(&dto, req.Reasoning)
 	if c.maxCompl {
 		if _, set := req.Extra["max_completion_tokens"]; !set {
 			dto.MaxCompletion = dto.MaxTokens
@@ -390,10 +402,12 @@ func Chat(ctx context.Context, c *Client, req runtime.ChatRequest) (runtime.Chat
 		}
 	}
 	choice := dtoResp.Choices[0]
+	message := fromMessageDTO(choice.Message)
+	c.splitMessage(req, &message)
 	return runtime.ChatResponse{
 		ID:           dtoResp.ID,
 		Model:        dtoResp.Model,
-		Message:      fromMessageDTO(choice.Message),
+		Message:      message,
 		Usage:        dtoResp.Usage.toRuntime(),
 		FinishReason: choice.FinishReason,
 		CreatedAt:    time.Unix(dtoResp.Created, 0).UTC(),

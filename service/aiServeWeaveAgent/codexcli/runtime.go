@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"slices"
 	"sync"
 	"time"
 
@@ -27,6 +28,11 @@ type Runtime struct {
 	closed     bool
 	wg         sync.WaitGroup
 	limiter    *runtime.Limiter
+	// efforts holds each chat model's supportedReasoningEfforts from the last
+	// successful model/list, guarded by mu.
+	// efforts 保存最近一次成功的 model/list 中每个对话模型的
+	// supportedReasoningEfforts，由 mu 保护。
+	efforts map[string][]string
 }
 
 var _ runtime.InferenceRuntime = (*Runtime)(nil)
@@ -168,6 +174,7 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	}
 	defer finish()
 	var models []runtime.Model
+	efforts := map[string][]string{}
 	err = withServer(ctx, r.executable, r.env, func(p *protocol, _ string) error {
 		p.activity = touch
 		if err := initializeServer(p); err != nil {
@@ -177,7 +184,10 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 		for page := 0; page < 16; page++ {
 			var list struct {
 				Data []struct {
-					Model string `json:"model"`
+					Model                     string `json:"model"`
+					SupportedReasoningEfforts []struct {
+						ReasoningEffort string `json:"reasoningEffort"`
+					} `json:"supportedReasoningEfforts"`
 				} `json:"data"`
 				NextCursor *string `json:"nextCursor"`
 			}
@@ -189,6 +199,11 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 					return ErrProtocol
 				}
 				models = append(models, runtime.Model{ID: model.Model, Capabilities: capabilities()})
+				for _, option := range model.SupportedReasoningEfforts {
+					if len(efforts[model.Model]) < len(codexEfforts) && option.ReasoningEffort != "" {
+						efforts[model.Model] = append(efforts[model.Model], option.ReasoningEffort)
+					}
+				}
 			}
 			if list.NextCursor == nil {
 				if len(models) == 0 {
@@ -212,7 +227,64 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	if cause := context.Cause(ctx); cause != nil {
 		err = cause
 	}
+	if err == nil {
+		r.mu.Lock()
+		r.efforts = efforts
+		r.mu.Unlock()
+	}
 	return models, r.wrap("discover", err)
+}
+
+// codexEfforts is app-server's reasoning effort vocabulary, lowest first.
+// codexEfforts 是 app-server 的思考强度词汇，由低到高排列。
+var codexEfforts = []string{"none", runtime.ReasoningEffortMinimal, runtime.ReasoningEffortLow, runtime.ReasoningEffortMedium, runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh}
+
+// reasoningFor maps the ChatRequest.Reasoning hint onto turn/start's effort
+// and summary. app-server accepts only an effort the model advertises, so the
+// requested level is replaced by the nearest advertised one (the higher on a
+// tie); turning thinking off asks for the lowest advertised level, which is
+// "none" where the model offers it. A model with no advertised efforts, or
+// one not seen by the last discovery, gets no override at all, so the hint
+// never makes a turn fail. summary "auto" asks for reasoning summaries when
+// thinking is on; Codex hands up summaries, not its raw chain of thought.
+//
+// reasoningFor 把 ChatRequest.Reasoning 提示映射为 turn/start 的 effort 与 summary。
+// app-server 只接受模型声明过的 effort，因此请求的档位会换成最接近的已声明档位
+// （距离相同时取较高者）；关闭思考时请求已声明的最低档位，模型提供 "none" 时即为
+// "none"。没有声明任何 effort 的模型，或最近一次发现中未出现的模型，不做任何覆盖，
+// 这个提示因此永远不会让回合失败。开启思考时 summary 取 "auto" 以请求思考摘要；
+// Codex 递上来的是摘要，而不是原始思考链。
+func (r *Runtime) reasoningFor(model string, reasoning *runtime.ReasoningConfig) (effort, summary string) {
+	if reasoning == nil {
+		return "", ""
+	}
+	r.mu.Lock()
+	supported := r.efforts[model]
+	r.mu.Unlock()
+	if len(supported) == 0 {
+		return "", ""
+	}
+	want := 0 // "none": thinking off / "none"：关闭思考
+	if reasoning.Enabled {
+		summary = "auto"
+		level := reasoning.EffortLevel()
+		if level == "" {
+			return "", summary // think at the model's default level / 以模型默认档位思考
+		}
+		want = slices.Index(codexEfforts, level)
+	}
+	best, bestRank, bestDistance := "", -1, len(codexEfforts)
+	for _, option := range supported {
+		rank := slices.Index(codexEfforts, option)
+		if rank < 0 {
+			continue // a level this adapter does not know / 本适配器不认识的档位
+		}
+		distance := max(rank-want, want-rank)
+		if distance < bestDistance || (distance == bestDistance && rank > bestRank) {
+			best, bestRank, bestDistance = option, rank, distance
+		}
+	}
+	return best, summary
 }
 
 // chatCapabilities is what every Codex chat model supports.
@@ -364,13 +436,18 @@ func (s *chatStream) send(event runtime.ChatEvent) error {
 	}
 }
 
-// ChatStream streams text or one caller-executed tool call with bounded backpressure.
-// ChatStream 以有界背压发送文本或一次由调用方执行的工具调用。
+// ChatStream streams text, reasoning summaries or one caller-executed tool
+// call with bounded backpressure. req.Reasoning is a hint mapped by
+// reasoningFor and never a reason to refuse the request.
+//
+// ChatStream 以有界背压发送文本、思考摘要或一次由调用方执行的工具调用。
+// req.Reasoning 是提示，由 reasoningFor 映射，从不因此拒绝请求。
 func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], error) {
 	input, err := prepareChat(req)
 	if err != nil {
 		return nil, r.wrap("chat_stream", err)
 	}
+	input.effort, input.summary = r.reasoningFor(req.Model, req.Reasoning)
 	if req.MaxTokens != nil && r.deps.Logger != nil {
 		r.deps.Logger.Warn("Codex compatibility mode: output token limit is not enforced / Codex 兼容模式：输出 token 上限不生效")
 	}
@@ -408,8 +485,12 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 	return s, nil
 }
 
-// Chat collects a bounded non-streaming response using the same protocol driver.
-// Chat 使用相同协议驱动收集有大小限制的非流式响应。
+// Chat collects a bounded non-streaming response using the same protocol
+// driver. Reasoning summaries are gathered into ReasoningContent, apart from
+// the reply, and count toward the same maxFrameBytes bound.
+//
+// Chat 使用相同协议驱动收集有大小限制的非流式响应。思考摘要与回复分开，聚合进
+// ReasoningContent，并计入同一个 maxFrameBytes 上限。
 func (r *Runtime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, error) {
 	s, err := r.ChatStream(ctx, req)
 	if err != nil {
@@ -427,11 +508,12 @@ func (r *Runtime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.Ch
 			return runtime.ChatResponse{}, err
 		}
 		response.ID, response.Model = event.ID, event.Model
-		size += len(event.Delta.Content)
+		size += len(event.Delta.Content) + len(event.Delta.ReasoningContent)
 		if size > maxFrameBytes {
 			return runtime.ChatResponse{}, r.wrap("chat", ErrProtocol)
 		}
 		response.Message.Content += event.Delta.Content
+		response.Message.ReasoningContent += event.Delta.ReasoningContent
 		for _, call := range event.Delta.ToolCalls {
 			response.Message.ToolCalls = append(response.Message.ToolCalls, runtime.ToolCall{ID: call.ID, Type: call.Type, Function: runtime.FunctionCall{Name: call.Function.Name, Arguments: call.Function.Arguments}})
 		}

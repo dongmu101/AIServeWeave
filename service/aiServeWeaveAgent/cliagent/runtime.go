@@ -316,10 +316,13 @@ func (s *chatStream) Close() error {
 	return nil
 }
 
-// ChatStream streams text deltas with synchronous backpressure; the final
-// event is sent only after the CLI has finished successfully.
+// ChatStream streams reply and thinking deltas with synchronous
+// backpressure; the final event is sent only after the CLI has finished
+// successfully. req.Reasoning is a hint: it becomes the CLI's thinking flags
+// where the cliSpec has a ReasoningArgs, and is dropped otherwise.
 //
-// ChatStream 以同步背压流式发送文本增量；最终事件只在 CLI 成功结束后发送。
+// ChatStream 以同步背压流式发送回复与思考增量；最终事件只在 CLI 成功结束后发送。
+// req.Reasoning 是提示：cliSpec 有 ReasoningArgs 时转为该 CLI 的思考参数，否则丢弃。
 func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], error) {
 	prompt, err := buildPrompt(r.spec.Label, req)
 	if err != nil {
@@ -369,7 +372,7 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 		}
 		err := withHome(r.spec, r.executable, r.env, func(c *call) error {
 			c.ctx, c.touch = ctx, touch
-			return runTurn(c, req.Model, prompt, emit)
+			return runTurn(c, req.Model, prompt, req.Reasoning, emit)
 		})
 		if cause := context.Cause(ctx); err != nil && cause != nil && !errors.Is(cause, errFinished) {
 			err = cause
@@ -382,8 +385,12 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 	return s, nil
 }
 
-// Chat collects a bounded non-streaming response using the same process driver.
-// Chat 使用相同进程驱动收集有大小限制的非流式响应。
+// Chat collects a bounded non-streaming response using the same process
+// driver; thinking deltas are gathered into ReasoningContent, apart from the
+// reply, under the same per-turn maxTextBytes bound.
+//
+// Chat 使用相同进程驱动收集有大小限制的非流式响应；思考增量与回复分开，聚合进
+// ReasoningContent，同样受每回合 maxTextBytes 上限约束。
 func (r *Runtime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, error) {
 	s, err := r.ChatStream(ctx, req)
 	if err != nil {
@@ -401,6 +408,7 @@ func (r *Runtime) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.Ch
 		}
 		response.ID, response.Model = event.ID, event.Model
 		response.Message.Content += event.Delta.Content
+		response.Message.ReasoningContent += event.Delta.ReasoningContent
 		if event.FinishReason != "" {
 			response.FinishReason = event.FinishReason
 		}

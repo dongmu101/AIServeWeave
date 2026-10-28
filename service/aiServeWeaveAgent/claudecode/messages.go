@@ -22,8 +22,17 @@ const maxRequestBytes = 8 << 20
 var errMessages = errors.New("invalid or unsupported Messages request")
 
 type messageBlock struct {
-	Type      string          `json:"type"`
-	Text      string          `json:"text,omitempty"`
+	Type string `json:"type"`
+	Text string `json:"text,omitempty"`
+	// Thinking, Signature and Data belong to "thinking" and
+	// "redacted_thinking" blocks only. The retained CLI keeps its own
+	// thinking history, so such blocks a client echoes back are accepted and
+	// then discarded, never replayed.
+	// Thinking、Signature 与 Data 只属于 "thinking" 与 "redacted_thinking" 块。保留的
+	// CLI 自己持有思考历史，因此客户端回传的这类块被接受后即丢弃，从不回放。
+	Thinking  string          `json:"thinking,omitempty"`
+	Signature string          `json:"signature,omitempty"`
+	Data      string          `json:"data,omitempty"`
 	ID        string          `json:"id,omitempty"`
 	Name      string          `json:"name,omitempty"`
 	Input     json.RawMessage `json:"input,omitempty"`
@@ -103,6 +112,46 @@ func textBlocks(raw json.RawMessage) (string, error) {
 	return out, nil
 }
 
+// isThinking reports whether b is a thinking or redacted_thinking block.
+// isThinking 报告 b 是否为 thinking 或 redacted_thinking 块。
+func (b messageBlock) isThinking() bool { return b.Type == "thinking" || b.Type == "redacted_thinking" }
+
+// withoutThinking returns list minus its thinking blocks: the CLI owns that
+// history, so it never enters a transcript or a history comparison.
+// withoutThinking 返回去掉思考块之后的 list：这段历史归 CLI 所有，因此从不进入文本
+// 记录或历史比对。
+func withoutThinking(list []messageBlock) []messageBlock {
+	out := make([]messageBlock, 0, len(list))
+	for _, b := range list {
+		if !b.isThinking() {
+			out = append(out, b)
+		}
+	}
+	return out
+}
+
+// thinkingBudget returns the requested thinking budget, or 0 when thinking
+// is off; validate has already checked the request.
+// thinkingBudget 返回请求的思考预算；思考关闭时返回 0。请求已经过 validate 校验。
+func (r messagesRequest) thinkingBudget() int {
+	var thinking struct {
+		Type         string `json:"type"`
+		BudgetTokens int    `json:"budget_tokens"`
+	}
+	if json.Unmarshal(r.Thinking, &thinking) != nil || thinking.Type != "enabled" {
+		return 0
+	}
+	return thinking.BudgetTokens
+}
+
+// validate accepts thinking {"type":"disabled"} or {"type":"enabled",
+// "budget_tokens":N} with 1024 <= N < max_tokens and no temperature, as the
+// Messages API does; adaptive thinking is refused. Thinking blocks may appear
+// only on assistant turns and are discarded later.
+//
+// validate 接受 thinking {"type":"disabled"}，或与 Messages API 一致的
+// {"type":"enabled","budget_tokens":N}（1024 <= N < max_tokens，且不带 temperature）；
+// 拒绝 adaptive thinking。思考块只能出现在 assistant 回合里，之后会被丢弃。
 func (r messagesRequest) validate(model string) error {
 	if r.Model != model || r.MaxTokens < 1 || r.MaxTokens > 64000 || len(r.Messages) == 0 || len(r.Messages) > 2048 || len(r.Tools) > 128 {
 		return errMessages
@@ -112,9 +161,22 @@ func (r messagesRequest) validate(model string) error {
 	}
 	if len(r.Thinking) > 0 {
 		var thinking struct {
-			Type string `json:"type"`
+			Type         string `json:"type"`
+			BudgetTokens *int   `json:"budget_tokens"`
 		}
-		if decodeStrict(r.Thinking, &thinking) != nil || thinking.Type != "disabled" {
+		if decodeStrict(r.Thinking, &thinking) != nil {
+			return errMessages
+		}
+		switch thinking.Type {
+		case "disabled":
+			if thinking.BudgetTokens != nil {
+				return errMessages
+			}
+		case "enabled":
+			if thinking.BudgetTokens == nil || *thinking.BudgetTokens < 1024 || *thinking.BudgetTokens >= r.MaxTokens || r.Temperature != nil {
+				return errMessages
+			}
+		default:
 			return errMessages
 		}
 	}
@@ -153,7 +215,14 @@ func (r messagesRequest) validate(model string) error {
 			return err
 		}
 		for _, b := range list {
+			if !b.isThinking() && (b.Thinking != "" || b.Signature != "" || b.Data != "") {
+				return errMessages
+			}
 			switch b.Type {
+			case "thinking", "redacted_thinking":
+				if m.Role != "assistant" {
+					return errMessages
+				}
 			case "text":
 			case "tool_use":
 				var args map[string]json.RawMessage
@@ -366,7 +435,11 @@ func historyHash(messages []bridgeMessage, toolSets ...[]bridgeTool) [32]byte {
 	}
 	normalized := make([]bridgeMessage, len(messages))
 	for i, m := range messages {
+		// Thinking is the CLI's own history: a client may echo it back or
+		// not, and either must match the retained session.
+		// 思考是 CLI 自己的历史：客户端回传与否都必须能匹配保留的会话。
 		list, _ := blocks(m.Content)
+		list = withoutThinking(list)
 		for j := range list {
 			if list[j].Type == "tool_use" {
 				list[j].Input = normalizedToolInput(list[j].Name, list[j].Input, tools)
@@ -578,6 +651,8 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				Delta   struct {
 					Type        string `json:"type"`
 					Text        string `json:"text"`
+					Thinking    string `json:"thinking"`
+					Signature   string `json:"signature"`
 					PartialJSON string `json:"partial_json"`
 					StopReason  string `json:"stop_reason"`
 				} `json:"delta"`
@@ -603,8 +678,13 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				if ev.Index < 0 || ev.Index >= len(content) {
 					return errCLIProtocol
 				}
-				if ev.Delta.Type == "text_delta" {
+				switch ev.Delta.Type {
+				case "text_delta":
 					content[ev.Index].Text += ev.Delta.Text
+				case "thinking_delta":
+					content[ev.Index].Thinking += ev.Delta.Thinking
+				case "signature_delta":
+					content[ev.Index].Signature += ev.Delta.Signature
 				}
 				if ev.Delta.Type == "input_json_delta" {
 					if string(content[ev.Index].Input) == "{}" {

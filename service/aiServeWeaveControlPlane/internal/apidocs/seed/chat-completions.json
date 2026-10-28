@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/chat/completions",
   "summary": "兼容 OpenAI Chat Completions 的对话接口，stream=true 时以 SSE 逐段返回生成内容。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "兼容 OpenAI Chat Completions，可直接使用 OpenAI 官方 SDK",
@@ -226,6 +226,12 @@
         "type": "integer",
         "required": false,
         "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
+      },
+      {
+        "name": "reasoning_effort",
+        "type": "string",
+        "required": false,
+        "description": "思考强度：none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位。作为提示转发给后端，模型不支持思考时被忽略；取值非法返回 400。"
       },
       {
         "name": "stop",
@@ -539,7 +545,7 @@
       },
       {
         "title": "Claude 系列模型的参数限制",
-        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、reasoning_effort、prompt_cache_key）会被拒绝；store 只能为 false。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
       },
       {
         "title": "错误码说明",

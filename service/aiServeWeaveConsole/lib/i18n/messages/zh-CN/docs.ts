@@ -144,7 +144,7 @@ const docs = {
   "docs.d0142": "使用示例：图片输入",
   "docs.d0143": "content 可以是内容片段数组，混合 text 与 image_url。所选模型不支持图片输入时返回 400（capability_unsupported）。",
   "docs.d0144": "Claude 系列模型的参数限制",
-  "docs.d0145": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、reasoning_effort、prompt_cache_key）会被拒绝；store 只能为 false。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。",
+  "docs.d0145": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。",
   "docs.d0146": "错误码说明",
   "docs.d0147": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。",
   "docs.d0148": "Chat Completions（流式）",
@@ -305,7 +305,7 @@ const docs = {
   "docs.d0303": "API Key（Anthropic 风格）。未携带 Authorization 时使用此头。",
   "docs.d0304": "`Bearer {{API_KEY}}`。携带此头时优先使用它，x-api-key 被忽略。两者至少提供一个。",
   "docs.d0305": "消息角色。",
-  "docs.d0306": "消息内容：字符串或内容块数组。不支持的块类型（如 thinking）返回 400。",
+  "docs.d0306": "消息内容：字符串或内容块数组。不支持的块类型返回 400，user 消息里的 thinking 块同样返回 400；assistant 消息里回传的 thinking / redacted_thinking 块，带签名的会回放给 Claude 后端，其余被丢弃。",
   "docs.d0307": "内容块类型。",
   "docs.d0308": "text 块的文本。",
   "docs.d0309": "image / document 块的来源，必填。",
@@ -553,6 +553,10 @@ const docs = {
   "docs.d0551": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id；type 为 output 的是最终结果。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时，提交请求可能会短暂等待后才返回；若仍无空闲容量则返回 429，稍后重试即可。下面是完整的 Python 示例。",
   "docs.d0552": "400 invalid_request：请求体不是合法 JSON、超出大小限制、multipart 格式错误、inputs 表单字段不是合法 JSON，或文件扩展名不在允许列表内。\n\n400 invalid_input：输入未声明、类型不符、超出长度或数值范围、必填输入缺失，或文件内容与扩展名不符。message 形如 \"input <名称> <原因>\"。\n\n404 workflow_not_found：工作流不存在或对本租户不可见。\n\n404 workflow_backend_not_found：当前没有可运行工作流的执行端在线。\n\n429 rate_limited / backpressure：执行端容量已满，请稍后重试。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。",
   "docs.d0553": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
-  "docs.d0554": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。"
+  "docs.d0554": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。",
+  "docs.d0555": "思考强度：none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位。作为提示转发给后端，模型不支持思考时被忽略；取值非法返回 400。",
+  "docs.d0556": "思考设置。effort 取值同 Chat Completions 的 reasoning_effort（none 关闭思考，minimal、low、medium、high、xhigh 开启并指定档位），取值非法返回 400；不带 effort 视为开启并沿用后端默认档位；summary 被接受但不起作用。作为提示转发给后端，模型不支持思考时被忽略。",
+  "docs.d0557": "扩展思考：{\"type\":\"enabled\",\"budget_tokens\":N}（N 必须大于 0）、{\"type\":\"adaptive\"} 或 {\"type\":\"disabled\"}。作为提示转发给后端，模型不支持思考时被忽略；格式非法返回 400。",
+  "docs.d0558": "是否思考：true 或 false，也可用 low、medium、high 指定档位。作为提示转发给后端，模型不支持思考时被忽略；其他取值返回 400。"
 } as const;
 export default docs;

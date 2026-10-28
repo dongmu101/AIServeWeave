@@ -8,11 +8,13 @@
 // any Anthropic-specific core type — a "tool_use" block becomes a
 // runtime.ToolCall on an assistant message, a "tool_result" block becomes
 // its own synthetic "tool"-role message, matching every other front door's
-// shape. A response's reasoning is rendered as a leading "thinking" block;
-// thinking and redacted_thinking blocks a client echoes back on an assistant
-// turn are dropped, since the backend is never sent a prior turn's
-// reasoning. Any other content block type is still refused by name rather
-// than silently dropped, matching responses.go's "unsupported 字段" pattern.
+// shape. A response's reasoning is rendered as leading "thinking" (and
+// "redacted_thinking") blocks, signed when the backend signed them. Signed
+// blocks a client echoes back on an assistant turn are kept for the backend
+// that signed them to replay; unsigned ones are dropped. The "thinking"
+// request parameter becomes runtime.ChatRequest.Reasoning. Any other content
+// block type is still refused by name rather than silently dropped, matching
+// responses.go's "unsupported 字段" pattern.
 //
 // anthropic.go 实现 POST /v1/messages，在边界处转换成与其他每个前门相同的
 // canonical 聊天请求（STATUS.md 的「Anthropic Messages 前门」——见设计文档
@@ -21,9 +23,10 @@
 // 前门填的是同一对字段）而非任何 Anthropic 专属核心类型——一个 "tool_use" 块
 // 变成 assistant 消息上的一次 runtime.ToolCall，一个 "tool_result" 块变成一条
 // 独立的 "tool" 角色合成消息，与其他每个前门的形状一致。响应里的思考渲染为打头的
-// "thinking" 块；客户端在 assistant 回合里回传的 thinking 与 redacted_thinking 块被
-// 丢弃，因为上一轮的思考从不发给后端。其他任何内容块类型仍按名字拒绝而非静默丢弃，
-// 与 responses.go 的「unsupported 字段」模式一致。
+// "thinking"（及 "redacted_thinking"）块，后端签了名时带上签名。客户端在 assistant
+// 回合里回传的签名块被保留，交给签名的后端回放；没有签名的被丢弃。请求参数
+// "thinking" 转为 runtime.ChatRequest.Reasoning。其他任何内容块类型仍按名字拒绝而非
+// 静默丢弃，与 responses.go 的「unsupported 字段」模式一致。
 package httpapi
 
 import (
@@ -57,6 +60,7 @@ type anthropicMessagesRequest struct {
 	Stream        bool                   `json:"stream,omitempty"`
 	Tools         []anthropicToolJSON    `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage        `json:"tool_choice,omitempty"`
+	Thinking      json.RawMessage        `json:"thinking,omitempty"`
 }
 
 // anthropicToolJSON is one element of "tools": Anthropic names a tool
@@ -151,25 +155,26 @@ type anthropicMessageJSON struct {
 // anthropicContentBlockJSON is one element of a "content" array: "text",
 // "image", "document", "tool_use" and "tool_result" are the block types
 // accepted on input, plus "thinking" and "redacted_thinking" on an assistant
-// turn, which are dropped; anthropicMessageToRuntime rejects any other type
-// by name. The same struct doubles as the output content block shape, where
-// Type is "thinking", "text" or "tool_use" — a response is never constructed
-// with an image, document or tool_result block.
+// turn (see anthropicMessageToRuntime); any other type is rejected by name.
+// The same struct doubles as the output content block shape, where Type is
+// "thinking", "redacted_thinking", "text" or "tool_use" — a response is
+// never constructed with an image, document or tool_result block.
 type anthropicContentBlockJSON struct {
 	Type string `json:"type"`
 	Text string `json:"text,omitempty"`
 
-	// Thinking and Signature are set on an output "thinking" block. They are
-	// pointers because the block requires both fields even when empty. No
-	// backend behind this front door can mint a signature Anthropic would
-	// accept, so it is always empty; a client that echoes the block back
-	// has it dropped rather than verified.
+	// Thinking and Signature are set on a "thinking" block (both
+	// directions). They are pointers because the block requires both fields
+	// even when empty. The signature is the backend's own when an Anthropic
+	// backend produced the block, and empty otherwise; Data is a
+	// "redacted_thinking" block's encrypted payload.
 	//
-	// Thinking 与 Signature 设置在输出的 "thinking" 块上。用指针是因为这个块即使为空也
-	// 要求两个字段都在。本前门背后没有哪个后端能签出 Anthropic 认可的签名，因此它总为
-	// 空；客户端回传这个块时它会被丢弃，而不是被校验。
+	// Thinking 与 Signature 设置在 "thinking" 块上（两个方向）。用指针是因为这个块即使
+	// 为空也要求两个字段都在。块由 Anthropic 后端产出时签名是后端自己的，否则为空；
+	// Data 是 "redacted_thinking" 块的加密载荷。
 	Thinking  *string `json:"thinking,omitempty"`
 	Signature *string `json:"signature,omitempty"`
+	Data      string  `json:"data,omitempty"`
 
 	Source *anthropicImageSourceJSON `json:"source,omitempty"`
 	// Title is a "document" block's optional caption, carried through as
@@ -406,28 +411,35 @@ func anthropicMessageToRuntime(role string, raw json.RawMessage) ([]runtime.Chat
 
 	var out []runtime.ChatMessage
 	var run []anthropicContentBlockJSON
+	var reasoning []runtime.ReasoningBlock
 	flush := func() error {
-		if len(run) == 0 {
+		if len(run) == 0 && len(reasoning) == 0 {
 			return nil
 		}
 		text, parts, calls, err := anthropicContentRun(run)
 		if err != nil {
 			return err
 		}
-		if text != "" || len(parts) > 0 || len(calls) > 0 {
-			out = append(out, runtime.ChatMessage{Role: role, Content: text, ContentParts: parts, ToolCalls: calls})
+		if text != "" || len(parts) > 0 || len(calls) > 0 || len(reasoning) > 0 {
+			out = append(out, runtime.ChatMessage{Role: role, Content: text, ContentParts: parts, ToolCalls: calls, ReasoningBlocks: reasoning})
 		}
-		run = nil
+		run, reasoning = nil, nil
 		return nil
 	}
 	for _, b := range blocks {
 		if role == "assistant" && (b.Type == "thinking" || b.Type == "redacted_thinking") {
-			// The reasoning of a prior turn is not replayed to the backend:
-			// it is the model's own scratch work, and the signature that
-			// would make it meaningful to Anthropic is not ours to verify.
+			// A signed block is kept whole for the Anthropic backend that
+			// signed it, which must get it back within a tool loop; a forged
+			// signature is that backend's to reject. An unsigned block is
+			// the reasoning this front door rendered for some other backend,
+			// and a prior turn's reasoning is not replayed, so it is dropped.
 			//
-			// 上一轮的思考不回放给后端：那是模型自己的草稿，而能让它对 Anthropic
-			// 有意义的签名也不归我们校验。
+			// 签过名的块被完整保留，交给签名的 Anthropic 后端——它在工具循环中必须收回这些
+			// 块；伪造的签名由该后端拒绝。没有签名的块是本前门为其他后端渲染的思考，而上一轮
+			// 的思考不回放，因此丢弃。
+			if block, ok := anthropicSignedBlock(b); ok {
+				reasoning = append(reasoning, block)
+			}
 			continue
 		}
 		if b.Type != "tool_result" {
@@ -452,6 +464,26 @@ func anthropicMessageToRuntime(role string, raw json.RawMessage) ([]runtime.Chat
 	return out, nil
 }
 
+// anthropicSignedBlock returns the reasoning block an echoed "thinking" or
+// "redacted_thinking" block carries, and whether it is signed and so worth
+// replaying.
+//
+// anthropicSignedBlock 返回回传的 "thinking" 或 "redacted_thinking" 块所携带的思考块，
+// 以及它是否签了名、因而值得回放。
+func anthropicSignedBlock(b anthropicContentBlockJSON) (runtime.ReasoningBlock, bool) {
+	if b.Type == "redacted_thinking" {
+		return runtime.ReasoningBlock{Type: runtime.ReasoningBlockRedacted, Data: b.Data}, b.Data != ""
+	}
+	if b.Signature == nil || *b.Signature == "" {
+		return runtime.ReasoningBlock{}, false
+	}
+	block := runtime.ReasoningBlock{Type: runtime.ReasoningBlockThinking, Signature: *b.Signature}
+	if b.Thinking != nil {
+		block.Thinking = *b.Thinking
+	}
+	return block, true
+}
+
 // toRuntime converts req into the canonical chat request every front door
 // produces. It rejects any message role other than "user"/"assistant" by
 // name; anthropicMessageToRuntime rejects unsupported content block types
@@ -462,8 +494,14 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 		return runtime.ChatRequest{}, err
 	}
 
+	reasoning, err := reasoningFromAnthropic(req.Thinking)
+	if err != nil {
+		return runtime.ChatRequest{}, err
+	}
+
 	maxTokens := req.MaxTokens
 	out := runtime.ChatRequest{
+		Reasoning:   reasoning,
 		Model:       req.Model,
 		Temperature: req.Temperature,
 		TopP:        req.TopP,
@@ -515,8 +553,10 @@ type anthropicMessageResponse struct {
 }
 
 // anthropicResponseContentBlocks renders a Chat response message's
-// reasoning, text and tool calls as Anthropic content blocks: a leading
-// "thinking" block when there is reasoning, a "text" block only when there
+// reasoning, text and tool calls as Anthropic content blocks: leading
+// reasoning blocks when there is reasoning — the backend's signed blocks
+// as they were when it kept them, otherwise one unsigned "thinking" block —
+// a "text" block only when there
 // is text to carry (Anthropic never emits an empty one when a response is
 // tool_use-only), then one "tool_use" block per runtime.ToolCall, in order.
 // A response with neither text nor tool calls — an edge case no real backend
@@ -524,13 +564,25 @@ type anthropicMessageResponse struct {
 // finds an answer block.
 //
 // anthropicResponseContentBlocks 把 Chat 响应消息的思考、文本与工具调用渲染成
-// Anthropic 内容块：有思考时打头一个 "thinking" 块，有文本时才有 "text" 块
+// Anthropic 内容块：有思考时打头是思考块——后端保留了签名块时原样输出，否则输出一个
+// 不带签名的 "thinking" 块——有文本时才有 "text" 块
 // （只含 tool_use 的响应里 Anthropic 从不发空 text 块），随后按顺序每个
 // runtime.ToolCall 一个 "tool_use" 块。既无文本也无工具调用的响应——真实后端不该
 // 产生的边界情形——依旧渲染一个空 text 块，让客户端总能找到回答块。
 func anthropicResponseContentBlocks(msg runtime.ChatMessage) []anthropicContentBlockJSON {
 	var blocks []anthropicContentBlockJSON
-	if msg.ReasoningContent != "" {
+	switch {
+	case len(msg.ReasoningBlocks) > 0:
+		for _, r := range msg.ReasoningBlocks {
+			if r.Type == runtime.ReasoningBlockRedacted {
+				blocks = append(blocks, anthropicContentBlockJSON{Type: "redacted_thinking", Data: r.Data})
+				continue
+			}
+			block := anthropicThinkingBlock(r.Thinking)
+			*block.Signature = r.Signature
+			blocks = append(blocks, block)
+		}
+	case msg.ReasoningContent != "":
 		blocks = append(blocks, anthropicThinkingBlock(msg.ReasoningContent))
 	}
 	if msg.Content != "" {
@@ -554,11 +606,11 @@ func anthropicResponseContentBlocks(msg runtime.ChatMessage) []anthropicContentB
 	return blocks
 }
 
-// anthropicThinkingBlock is a "thinking" content block carrying text and the
-// empty signature explained on anthropicContentBlockJSON.Signature.
+// anthropicThinkingBlock is a "thinking" content block carrying text and an
+// empty signature, for a caller to fill when the backend signed the block.
 //
-// anthropicThinkingBlock 是一个携带 text 的 "thinking" 内容块，签名为空，原因见
-// anthropicContentBlockJSON.Signature。
+// anthropicThinkingBlock 是一个携带 text、签名为空的 "thinking" 内容块；后端签了名时
+// 由调用方填入。
 func anthropicThinkingBlock(text string) anthropicContentBlockJSON {
 	signature := ""
 	return anthropicContentBlockJSON{Type: "thinking", Thinking: &text, Signature: &signature}
@@ -714,6 +766,14 @@ type anthropicTextDelta struct {
 type anthropicThinkingDelta struct {
 	Type     string `json:"type"`
 	Thinking string `json:"thinking"`
+}
+
+// anthropicSignatureDelta carries a thinking block's signature, sent last
+// before the block stops.
+// anthropicSignatureDelta 携带 thinking 块的签名，在块结束前最后发送。
+type anthropicSignatureDelta struct {
+	Type      string `json:"type"`
+	Signature string `json:"signature"`
 }
 
 // anthropicInputJSONDelta is a tool_use content block's streaming delta:
@@ -890,6 +950,11 @@ func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Reques
 				return
 			}
 		}
+		if ev.Delta.ReasoningBlock != nil {
+			if err := blocks.signed(*ev.Delta.ReasoningBlock); err != nil {
+				return
+			}
+		}
 		if ev.Delta.Content != "" {
 			if err := blocks.text(ev.Delta.Content); err != nil {
 				return
@@ -992,6 +1057,27 @@ func (b *anthropicBlocks) thinking(text string) error {
 		b.start(anthropicThinkingBlock(""))
 	}
 	return b.delta(b.open, anthropicThinkingDelta{Type: "thinking_delta", Thinking: text})
+}
+
+// signed closes a signed reasoning block: a thinking block's signature goes
+// into the open thinking block (one is opened if the signature arrived with
+// no text), which then stops, so later reasoning starts a new block; a
+// redacted block is written whole.
+//
+// signed 结束一个签过名的思考块：thinking 块的签名写入打开的 thinking 块（签名到达时
+// 没有文本就先开一个），随后该块结束，之后的思考会开新块；redacted 块整块写出。
+func (b *anthropicBlocks) signed(r runtime.ReasoningBlock) error {
+	if r.Type == runtime.ReasoningBlockRedacted {
+		b.start(anthropicContentBlockJSON{Type: "redacted_thinking", Data: r.Data})
+		b.stop()
+		return nil
+	}
+	if b.openType != "thinking" {
+		b.start(anthropicThinkingBlock(""))
+	}
+	err := b.delta(b.open, anthropicSignatureDelta{Type: "signature_delta", Signature: r.Signature})
+	b.stop()
+	return err
 }
 
 // text writes a text fragment, opening a text block if one is not already

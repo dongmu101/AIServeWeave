@@ -193,7 +193,7 @@ func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 	}
 	out := make([]runtime.Config, len(declared))
 	for i, rc := range declared {
-		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL}
+		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL, ReasoningParser: rc.ReasoningParser}
 		if !out[i].Kind.IsHosted() {
 			continue
 		}

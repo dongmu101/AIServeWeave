@@ -190,6 +190,9 @@ type ollamaChatRequest struct {
 	Format    json.RawMessage    `json:"format,omitempty"`
 	KeepAlive json.RawMessage    `json:"keep_alive,omitempty"`
 	Tools     json.RawMessage    `json:"tools,omitempty"`
+	// Think is Ollama's thinking switch; see reasoningFromOllamaThink.
+	// Think 是 Ollama 的思考开关；见 reasoningFromOllamaThink。
+	Think json.RawMessage `json:"think,omitempty"`
 }
 
 func (req ollamaChatRequest) wantsStream() bool {
@@ -212,7 +215,11 @@ func (req ollamaChatRequest) toRuntime() (runtime.ChatRequest, error) {
 	if len(req.Format) > 0 {
 		return runtime.ChatRequest{}, errors.New("format is not supported by this Ollama-compatible endpoint")
 	}
-	out := runtime.ChatRequest{Model: req.Model}
+	reasoning, err := reasoningFromOllamaThink(req.Think)
+	if err != nil {
+		return runtime.ChatRequest{}, err
+	}
+	out := runtime.ChatRequest{Model: req.Model, Reasoning: reasoning}
 	out.Messages = make([]runtime.ChatMessage, len(req.Messages))
 	for i, m := range req.Messages {
 		if len(m.Images) > 0 {
@@ -408,6 +415,7 @@ type ollamaGenerateRequest struct {
 	Raw       bool               `json:"raw,omitempty"`
 	Template  string             `json:"template,omitempty"`
 	Suffix    string             `json:"suffix,omitempty"`
+	Think     json.RawMessage    `json:"think,omitempty"`
 }
 
 func (req ollamaGenerateRequest) wantsStream() bool {
@@ -441,7 +449,11 @@ func (req ollamaGenerateRequest) toRuntime() (runtime.ChatRequest, error) {
 		return runtime.ChatRequest{}, errors.New("suffix is not supported by this Ollama-compatible endpoint")
 	}
 
-	out := runtime.ChatRequest{Model: req.Model}
+	reasoning, err := reasoningFromOllamaThink(req.Think)
+	if err != nil {
+		return runtime.ChatRequest{}, err
+	}
+	out := runtime.ChatRequest{Model: req.Model, Reasoning: reasoning}
 	if req.System != "" {
 		out.Messages = append(out.Messages, runtime.ChatMessage{Role: "system", Content: req.System})
 	}

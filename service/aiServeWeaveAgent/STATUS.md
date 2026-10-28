@@ -30,15 +30,15 @@ runtimes:
 
 不填写 `base_url`、API Key 或认证文件。若设置了 `gateway.allowed_runtimes`，同时加入 `claude-local`。设置页面现已可选择 Claude Code CLI；保存后重启 Agent 生效。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
 
-模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；仅发布 CLI `resolvedModel` 返回的真实模型 ID，并按真实 ID 去重；不发布 `default`、`sonnet`、`opus`、`fable`、`haiku` 等简称。请求仅接受发现到的真实 ID，并原样传给 CLI 的 `--model`，不做简称映射。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭 thinking、缓存和实验 beta。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
+模型目录通过 CLI 的 `initialize` 控制请求动态获取，不执行推理、不消耗模型额度；仅发布 CLI `resolvedModel` 返回的真实模型 ID，并按真实 ID 去重；不发布 `default`、`sonnet`、`opus`、`fable`、`haiku` 等简称。请求仅接受发现到的真实 ID，并原样传给 CLI 的 `--model`，不做简称映射。未启用别名路由时，Gateway `/v1/models` 直接汇总这些模型；启用路由时需将公共别名指向目录中实际存在的目标。原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接，其他模型的目录发现不代表完整客户端兼容性已验证。每个运行时最多两个 CLI 会话；续接检查身份、历史和完整结果集合，固定原节点且不自动重试。客户端需要关闭缓存和实验 beta；原版 Claude Code 客户端仍建议关闭 thinking。请求要求思考时（Messages 的 `thinking`、Chat 的 `reasoning_effort`、Responses 的 `reasoning`），Agent 以对应预算开启 CLI 思考并把 thinking 块透出给客户端，思考历史仍由 CLI 自己持有，客户端回传的思考被丢弃。参数、限制与联调命令见 [Claude 包说明](claudecode/README.md)。
 
 ## 编程智能体 CLI 接入（Grok / OpenCode / Cursor / CodeBuddy / Qoder / Pi）
 
-`cliagent/` 已注册本地 `kind: grok`、`opencode`、`cursor`、`codebuddy`、`qoder`、`pi`，以本机已登录的对应 CLI 为纯文本推理后端，经现有 Chat/ChatStream 隧道服务 Gateway `/v1/chat/completions`。进程生命周期、期限、背压、上限、提示词渲染与错误类别只实现一次，每种 CLI 只提供命令行、环境变量、输出方言与模型发现（参照 dbx 的适配器）。每个请求在新建的临时目录中启动一次 headless 进程，内建工具与 MCP 按各 CLI 能力关闭，出现任何工具事件即终止进程组；多轮历史以带角色的 JSON 文本作为上下文。模型目录由 CLI 自身的列表命令或 RPC 获取，不执行推理，只发布真实 ID。不支持工具、图片、采样参数与结构化输出；输出 token 上限只作兼容接收、不执行。ID 必须在本地 YAML 声明，设置了 `gateway.allowed_runtimes` 时同时加入。尚未用真实 CLI 实机验收，参数与边界见 [CLI 包说明](cliagent/README.md)。
+`cliagent/` 已注册本地 `kind: grok`、`opencode`、`cursor`、`codebuddy`、`qoder`、`pi`，以本机已登录的对应 CLI 为纯文本推理后端，经现有 Chat/ChatStream 隧道服务 Gateway `/v1/chat/completions`。进程生命周期、期限、背压、上限、提示词渲染与错误类别只实现一次，每种 CLI 只提供命令行、环境变量、输出方言与模型发现（参照 dbx 的适配器）。每个请求在新建的临时目录中启动一次 headless 进程，内建工具与 MCP 按各 CLI 能力关闭，出现任何工具事件即终止进程组；多轮历史以带角色的 JSON 文本作为上下文。模型目录由 CLI 自身的列表命令或 RPC 获取，不执行推理，只发布真实 ID。各 CLI 输出的思考文本作为独立的 `ReasoningContent` 透出，不混入回复；请求的思考提示只有 Pi 映射为 `--thinking`，其余 CLI 没有开关时丢弃提示、不拒绝请求。不支持工具、图片、采样参数与结构化输出；输出 token 上限只作兼容接收、不执行。ID 必须在本地 YAML 声明，设置了 `gateway.allowed_runtimes` 时同时加入。尚未用真实 CLI 实机验收，参数与边界见 [CLI 包说明](cliagent/README.md)。
 
 ## 托管模型供应商接入
 
-Agent 可在本地 YAML 声明 `kind: openai` / `gemini` / `deepseek` / `kimi` / `qwen` / `zhipu` / `minimax` / `openai_compatible` / `anthropic` / `anthropic_compatible`。`base_url` 留空使用官方端点（两种 compatible 必填），`api_key_env` 指定保存 Key 的环境变量名（文件只存变量名），`models` 可声明模型目录（空格或逗号分隔）。这些 ID 只能在本地声明；Gateway 下发同 ID 配置时 `base_url` 必须与本地一致，端点、Key、Headers、TLS 始终取本地值，Gateway 无法把本机 Key 指向其他地址。设置页面已提供全部选项。实现见 [托管供应商说明](../../common/runtime/hosted/README.md) 与 [Anthropic 说明](../../common/runtime/anthropic/README.md)；尚未用真实 Key 实机验收。
+Agent 可在本地 YAML 声明 `kind: openai` / `gemini` / `deepseek` / `kimi` / `qwen` / `zhipu` / `minimax` / `openai_compatible` / `anthropic` / `anthropic_compatible`。`base_url` 留空使用官方端点（两种 compatible 必填），`api_key_env` 指定保存 Key 的环境变量名（文件只存变量名），`models` 可声明模型目录（空格或逗号分隔）。OpenAI 兼容种类（含 vllm/sglang/ollama 等本地服务）还可写 `reasoning_parser: think_tags` 或 `think_tags_prefilled`，把内联的 `<think>…</think>` 切成思考与回答（见 [runtime README](../../common/runtime/README.md#思考开关与兜底解析器)）；设置页面不展示该字段，但保存时按 id 与 kind 保留文件里的值。这些 ID 只能在本地声明；Gateway 下发同 ID 配置时 `base_url` 必须与本地一致，端点、Key、Headers、TLS 始终取本地值，Gateway 无法把本机 Key 指向其他地址。设置页面已提供全部选项。实现见 [托管供应商说明](../../common/runtime/hosted/README.md) 与 [Anthropic 说明](../../common/runtime/anthropic/README.md)；尚未用真实 Key 实机验收。
 
 ## 多个 AI CLI 同时接入
 
@@ -59,6 +59,8 @@ runtimes:
 Gateway `/v1/models` 合并所有就绪运行时的模型；一个 CLI 未就绪只影响它自己的模型，不会隐藏另一个 CLI。Claude 通过 Messages、Chat 或 Responses 调用，Codex 通过 Chat/Responses 调用。修改白名单后重启 Agent。若 Codex 没有模型，先在启动 Agent 的同一终端执行 `codex --version`，确认平台可执行依赖完整，再检查 CLI 登录和运行时状态；重新构建 Gateway 不会修复损坏的本机 CLI 安装。
 
 ## Codex CLI 接入
+
+Codex 的思考以摘要形式（`item/reasoning/summaryTextDelta`）作为独立的 `ReasoningContent` 透出，`reasoningOutputTokens` 计入 `Usage.ReasoningTokens`；请求的思考提示映射为 `turn/start` 的 `effort`（收敛到模型声明的档位）与 `summary`，细节见 [Codex 包说明](codexcli/README.md#思考内容)。
 
 Gateway 的 `/v1/models` 会汇总健康运行时提供的多个聊天模型并按模型 ID 去重，客户端可从目录选择；启用模型别名路由时展示已发布且可用的别名。后端未就绪时不会把它的模型列为可选。
 

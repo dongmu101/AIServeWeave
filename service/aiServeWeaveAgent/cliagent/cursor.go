@@ -76,17 +76,24 @@ func cursorDiscover(c *call) ([]string, error) {
 
 // cursorParser reads Cursor's stream-json. With --stream-partial-output only
 // assistant events carrying a timestamp are deltas; the untimestamped one
-// repeats the whole message and is skipped.
+// repeats the whole message and is skipped. A "thinking" event with subtype
+// "delta" carries one fragment of thinking text in "text"; its "completed"
+// event carries none. Cursor has no thinking switch (thinking is chosen by
+// model name, such as a "-thinking" model), so ChatRequest.Reasoning is not
+// mapped onto any flag.
 //
 // cursorParser 读取 Cursor 的 stream-json。使用 --stream-partial-output 时，
 // 只有带时间戳的 assistant 事件是增量；不带时间戳的那条重复整条消息，被跳过。
+// subtype 为 "delta" 的 "thinking" 事件在 "text" 中携带一段思考文本；其 "completed"
+// 事件不含文本。Cursor 没有思考开关（是否思考由模型名决定，例如 "-thinking" 模型），
+// 因此 ChatRequest.Reasoning 不映射到任何参数。
 type cursorParser struct {
 	emitted bool
 	usage   *runtime.Usage
 	done    bool
 }
 
-func (p *cursorParser) line(event []byte, text func(string) error) (bool, error) {
+func (p *cursorParser) line(event []byte, out sink) (bool, error) {
 	obj := object(event)
 	switch str(obj, "type") {
 	case "assistant":
@@ -107,10 +114,15 @@ func (p *cursorParser) line(event []byte, text func(string) error) (bool, error)
 				}
 				s := str(block, "text")
 				p.emitted = p.emitted || s != ""
-				if err := text(s); err != nil {
+				if err := out.text(s); err != nil {
 					return false, err
 				}
 			}
+		}
+		return false, nil
+	case "thinking":
+		if subtype := str(obj, "subtype"); subtype == "" || subtype == "delta" {
+			return false, out.reasoning(str(obj, "text"))
 		}
 		return false, nil
 	case "tool_call":
@@ -122,7 +134,7 @@ func (p *cursorParser) line(event []byte, text func(string) error) (bool, error)
 			return false, ErrTurn
 		}
 		if !p.emitted {
-			if err := text(str(obj, "result")); err != nil {
+			if err := out.text(str(obj, "result")); err != nil {
 				return false, err
 			}
 		}
@@ -135,8 +147,8 @@ func (p *cursorParser) line(event []byte, text func(string) error) (bool, error)
 	case "error":
 		return false, ErrTurn
 	}
-	// system, user, thinking and future types carry no reply text.
-	// system、user、thinking 及未来新增类型都不含回复文本。
+	// system, user and future types carry neither reply nor thinking text.
+	// system、user 及未来新增类型既不含回复文本，也不含思考文本。
 	return false, nil
 }
 

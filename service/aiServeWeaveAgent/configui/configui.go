@@ -225,6 +225,9 @@ func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) ht
 				return
 			}
 			cfg := values.toConfig()
+			if saved, err := agentconfig.Load(configPath); err == nil {
+				keepFileOnlyRuntimeFields(cfg.Runtimes, saved.Runtimes)
+			}
 			if err := agentconfig.Save(configPath, cfg); err != nil {
 				logger.Error("config not saved", slog.String("error_kind", "save_failed"))
 				values.Error = values.Text.Format("a0083", map[string]any{"error": values.Text.Text("a0102")})
@@ -355,6 +358,24 @@ func (v formValues) toConfig() *agentconfig.Config {
 		LogLevel:             strings.TrimSpace(v.LogLevel),
 	}
 	return cfg
+}
+
+// keepFileOnlyRuntimeFields copies the runtime fields the form cannot show
+// (today only ReasoningParser) from the saved file onto the matching
+// runtimes, matched by id and kind, so saving from the page never silently
+// drops them.
+//
+// keepFileOnlyRuntimeFields 把表单无法展示的运行时字段（目前只有 ReasoningParser）从
+// 已保存的文件复制到按 id 与 kind 匹配的运行时上，使从页面保存永远不会悄悄丢掉它们。
+func keepFileOnlyRuntimeFields(next, saved []agentconfig.RuntimeConfig) {
+	for i := range next {
+		for _, old := range saved {
+			if old.ID == next[i].ID && old.Kind == next[i].Kind {
+				next[i].ReasoningParser = old.ReasoningParser
+				break
+			}
+		}
+	}
 }
 
 // splitList splits s on any of seps' bytes, trims each piece, and drops

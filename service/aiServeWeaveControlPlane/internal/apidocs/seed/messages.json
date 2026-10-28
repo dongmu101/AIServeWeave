@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/messages",
   "summary": "兼容 Anthropic Messages API 的对话接口，可直接使用 Anthropic 官方 SDK 与 Claude Code 等客户端。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "兼容 Anthropic Messages API，Anthropic SDK 将 base_url 设为 {{BASE_URL}} 即可使用",
@@ -67,7 +67,7 @@
             "name": "content",
             "type": "string | array",
             "required": true,
-            "description": "消息内容：字符串或内容块数组。不支持的块类型（如 thinking）返回 400。",
+            "description": "消息内容：字符串或内容块数组。不支持的块类型返回 400，user 消息里的 thinking 块同样返回 400；assistant 消息里回传的 thinking / redacted_thinking 块，带签名的会回放给 Claude 后端，其余被丢弃。",
             "children": [
               {
                 "name": "type",
@@ -169,6 +169,12 @@
         "type": "integer",
         "required": true,
         "description": "最多生成的 token 数，必须大于 0。"
+      },
+      {
+        "name": "thinking",
+        "type": "object",
+        "required": false,
+        "description": "扩展思考：{\"type\":\"enabled\",\"budget_tokens\":N}（N 必须大于 0）、{\"type\":\"adaptive\"} 或 {\"type\":\"disabled\"}。作为提示转发给后端，模型不支持思考时被忽略；格式非法返回 400。"
       },
       {
         "name": "system",

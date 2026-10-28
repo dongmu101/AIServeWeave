@@ -144,7 +144,7 @@ const docs = {
   "docs.d0142": "使用範例：圖片輸入",
   "docs.d0143": "content 可為混合 text 與 image_url 的內容片段陣列。所選模型不支援圖片輸入時，回傳 400（capability_unsupported）。",
   "docs.d0144": "Claude 系列模型的參數限制",
-  "docs.d0145": "呼叫 Claude 系列模型時，此 API 的參數驗證較嚴格，不符合要求時回傳 400（code 為 unsupported_parameter）：\n\n1. 僅接受上表列出的參數，其他欄位（例如 n、parallel_tool_calls、reasoning_effort、prompt_cache_key）會被拒絕；store 僅能為 false。\n\n2. max_tokens 預設為 4096，範圍為 1 ~ 64000；temperature 範圍為 0 ~ 1；不支援 top_p、seed、stop、response_format。\n\n3. tool_choice 僅支援 \"auto\"；tools 僅支援 function 類型，且 function.strict 不可為 true。\n\n4. 僅支援純文字 content，不支援圖片、音訊片段；system／developer 訊息必須位於對話開頭，且至少須有一則 user 訊息。\n\n5. 請求主體不可超過 1 MB，否則回傳 413（request_too_large）。\n\n其他模型不會拒絕未列出的欄位，但這些欄位也不會生效。",
+  "docs.d0145": "呼叫 Claude 系列模型時，此 API 的參數驗證較嚴格，不符合要求時回傳 400（code 為 unsupported_parameter）：\n\n1. 僅接受上表列出的參數，其他欄位（例如 n、parallel_tool_calls、prompt_cache_key）會被拒絕；store 僅能為 false。reasoning_effort 會換算為思考預算，預算放不下（至少 1024 且小於 max_tokens）或同時設定了 temperature 時不啟用思考；取值不合法時回傳 400（code 為 invalid_value）。\n\n2. max_tokens 預設為 4096，範圍為 1 ~ 64000；temperature 範圍為 0 ~ 1；不支援 top_p、seed、stop、response_format。\n\n3. tool_choice 僅支援 \"auto\"；tools 僅支援 function 類型，且 function.strict 不可為 true。\n\n4. 僅支援純文字 content，不支援圖片、音訊片段；system／developer 訊息必須位於對話開頭，且至少須有一則 user 訊息。\n\n5. 請求主體不可超過 1 MB，否則回傳 413（request_too_large）。\n\n其他模型不會拒絕未列出的欄位，但這些欄位也不會生效。",
   "docs.d0146": "錯誤碼說明",
   "docs.d0147": "錯誤回應一律採用 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可依 HTTP 狀態碼與 code 欄位區分。\n\n400：請求主體不是有效 JSON（invalid_json）、缺少必填欄位或欄位值無效（invalid_request）、參數不受支援（unsupported_parameter），或所選模型不支援此請求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 無效（invalid_api_key）。\n\n404：要求的模型目前無法使用（model_not_found）。\n\n413：回應超出大小上限（response_too_large）。\n\n429：租戶超出配額，code 為 requests_per_minute / tokens_per_minute / max_concurrent，回應標頭 Retry-After 提供建議等待秒數；或服務暫無可用容量（rate_limited / backpressure），請稍後重試。\n\n500／502：服務內部錯誤（internal_error），或上游模型回傳錯誤（upstream_error）。\n\n503：暫時無法驗證 API Key（verification_unavailable），或服務暫時無法使用（connection_failed / runtime_closed）。\n\n504：請求逾時（timeout）。\n\n每個回應都帶有 X-Request-Id 回應標頭，回報問題時請附上此值。",
   "docs.d0148": "Chat Completions（串流）",
@@ -305,7 +305,7 @@ const docs = {
   "docs.d0303": "API Key（Anthropic 風格），未攜帶 Authorization 時使用此標頭。",
   "docs.d0304": "`Bearer {{API_KEY}}`。攜帶此標頭時優先使用，並忽略 x-api-key。兩者至少須提供一個。",
   "docs.d0305": "訊息角色。",
-  "docs.d0306": "訊息內容，可為字串或內容區塊陣列。不支援的區塊類型（例如 thinking）會回傳 400。",
+  "docs.d0306": "訊息內容，可為字串或內容區塊陣列。不支援的區塊類型會回傳 400，user 訊息中的 thinking 區塊同樣回傳 400；assistant 訊息中回傳的 thinking／redacted_thinking 區塊，帶簽章者會回放給 Claude 後端，其餘會被捨棄。",
   "docs.d0307": "內容區塊類型。",
   "docs.d0308": "text 區塊的文字。",
   "docs.d0309": "image／document 區塊的來源，必填。",
@@ -553,6 +553,10 @@ const docs = {
   "docs.d0551": "1. 呼叫此 API 提交，儲存回傳的 job_id。\n\n2. 訂閱 GET /v1/jobs/{job_id}/events 接收即時進度，或輪詢 GET /v1/jobs/{job_id}，直到狀態進入終態。\n\n3. 任務達到 succeeded 後，呼叫 GET /v1/jobs/{job_id}/artifacts 列出產物，取得 artifact_id；type 為 output 的項目即為最終結果。\n\n4. 呼叫 GET /v1/artifacts/{artifact_id} 下載檔案。\n\n所有執行端都忙碌時，提交請求可能短暫等候後才回傳；若仍無可用容量，則回傳 429，請稍後重試。下方提供完整 Python 範例。",
   "docs.d0552": "400 invalid_request：請求主體不是有效 JSON、超出大小限制、multipart 格式錯誤、inputs 表單欄位不是有效 JSON，或副檔名不在允許清單內。\n\n400 invalid_input：輸入未宣告、類型不符、超出長度或數值範圍、缺少必填輸入，或檔案內容與副檔名不符。message 格式例如 \"input <名称> <原因>\"。\n\n404 workflow_not_found：工作流程不存在，或本租戶不可見。\n\n404 workflow_backend_not_found：目前沒有可執行工作流程的執行端上線。\n\n429 rate_limited / backpressure：執行端容量已滿，請稍後重試。\n\n401 invalid_api_key：缺少 Authorization 標頭、格式不是 Bearer，或 API Key 無效／已撤銷。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 為 rate_limit_error）：超出本租戶配額，回應帶有 Retry-After 標頭（秒）。\n\n503 verification_unavailable：暫時無法驗證 API Key，請稍後重試。\n\n503 connection_failed / runtime_closed：負責此任務的執行端暫時無法使用。\n\n504 timeout：執行端回應逾時。\n\n502 upstream_error：執行端回傳錯誤。",
   "docs.d0553": "任務記錄的持久化狀態：memory_only 表示目前僅保存在受理請求的閘道執行個體記憶體中，persisted 表示平台已確認保存。只會從 memory_only 變為 persisted，不會退回。",
-  "docs.d0554": "呼叫 Claude 系列模型時，此 API 的參數驗證較嚴格，不符合要求時回傳 400（code 為 unsupported_parameter）：\n\n1. store 僅能為 false 或省略，不支援 previous_response_id，每輪請求須在 input 中帶上完整對話。\n\n2. max_output_tokens 預設為 4096，範圍為 1 ~ 64000；temperature 範圍為 0 ~ 1；不支援 top_p 與 text.format。\n\n3. tool_choice 僅支援 \"auto\"；工具的 strict 不可為 true。\n\n4. 僅支援純文字內容，不支援 input_image、input_file；developer／system 訊息必須位於對話開頭，且至少須有一則 user 訊息。\n\n5. 請求主體不可超過 1 MB，否則回傳 413（request_too_large）。\n\n6. 工具呼叫的 call_id 以 toolu_aisw_ 開頭。續接時請將 output 中的呼叫項目與對應的 function_call_output 一併放入 input，並以同一 API Key 盡快發起；續接狀態失效時回傳 409（continuation_unavailable），須重新開始本輪任務。"
+  "docs.d0554": "呼叫 Claude 系列模型時，此 API 的參數驗證較嚴格，不符合要求時回傳 400（code 為 unsupported_parameter）：\n\n1. store 僅能為 false 或省略，不支援 previous_response_id，每輪請求須在 input 中帶上完整對話。\n\n2. max_output_tokens 預設為 4096，範圍為 1 ~ 64000；temperature 範圍為 0 ~ 1；不支援 top_p 與 text.format。\n\n3. tool_choice 僅支援 \"auto\"；工具的 strict 不可為 true。\n\n4. 僅支援純文字內容，不支援 input_image、input_file；developer／system 訊息必須位於對話開頭，且至少須有一則 user 訊息。\n\n5. 請求主體不可超過 1 MB，否則回傳 413（request_too_large）。\n\n6. 工具呼叫的 call_id 以 toolu_aisw_ 開頭。續接時請將 output 中的呼叫項目與對應的 function_call_output 一併放入 input，並以同一 API Key 盡快發起；續接狀態失效時回傳 409（continuation_unavailable），須重新開始本輪任務。\n\n7. reasoning 會換算為思考預算（未帶 effort 時按 medium），預算放不下（至少 1024 且小於 max_output_tokens）或同時設定了 temperature 時不啟用思考；effort 取值不合法時回傳 400。",
+  "docs.d0555": "思考強度：none 關閉思考，minimal、low、medium、high、xhigh 啟用並指定檔位。作為提示轉送給後端，模型不支援思考時會被忽略；取值不合法時回傳 400。",
+  "docs.d0556": "思考設定。effort 取值同 Chat Completions 的 reasoning_effort（none 關閉思考，minimal、low、medium、high、xhigh 啟用並指定檔位），取值不合法時回傳 400；未帶 effort 時視為啟用並沿用後端預設檔位；summary 會被接受但不會生效。作為提示轉送給後端，模型不支援思考時會被忽略。",
+  "docs.d0557": "延伸思考：{\"type\":\"enabled\",\"budget_tokens\":N}（N 必須大於 0）、{\"type\":\"adaptive\"} 或 {\"type\":\"disabled\"}。作為提示轉送給後端，模型不支援思考時會被忽略；格式不合法時回傳 400。",
+  "docs.d0558": "是否思考：true 或 false，也可用 low、medium、high 指定檔位。作為提示轉送給後端，模型不支援思考時會被忽略；其他取值回傳 400。"
 } as const;
 export default docs;

@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/api/chat",
   "summary": "兼容 Ollama /api/chat 的多轮对话接口，默认以 NDJSON 流式返回。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "兼容 Ollama 原生 /api/chat 的请求与响应格式",
@@ -112,6 +112,12 @@
             "description": "停止序列，可以是单个字符串或字符串数组。"
           }
         ]
+      },
+      {
+        "name": "think",
+        "type": "boolean | string",
+        "required": false,
+        "description": "是否思考：true 或 false，也可用 low、medium、high 指定档位。作为提示转发给后端，模型不支持思考时被忽略；其他取值返回 400。"
       },
       {
         "name": "keep_alive",
