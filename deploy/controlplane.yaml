@@ -146,3 +146,13 @@ ComfyUIManaged:
 # Gateways before the control plane; see ControlPlane STATUS, "工作流可视化编辑器".
 # ComfyEditor:
 #   DistDir: /opt/aiserveweave/comfy-editor
+
+Middlewares:
+  Log: false
+
+Signup:
+  Enabled: true
+  MaxPerHour: 10
+  RequestsPerMinute: 60
+  TokensPerMinute: 100000
+  MaxConcurrent: 4
