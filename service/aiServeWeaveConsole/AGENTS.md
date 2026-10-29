@@ -51,7 +51,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 pnpm test         # node --test "lib/**/*.test.ts"
 ```
 
-Node 24 直接执行 `.ts`（类型擦除）并自带 `node:test` 与 `node:assert/strict`，因此单元测试**没有引入任何依赖**——这正是根仓库「标准库能解决的不引入依赖」那条约定在前端的落法。约束有两条，都不影响现有代码：
+Node 26 直接执行 `.ts`（类型擦除）并自带 `node:test` 与 `node:assert/strict`，因此单元测试**没有引入任何依赖**——这正是根仓库「标准库能解决的不引入依赖」那条约定在前端的落法。约束有两条，都不影响现有代码：
 
 - 被测模块及其依赖里的相对 import **必须写扩展名**（`./errors.ts`），因为 Node 的 ESM 解析不做扩展名补全。为此 `tsconfig.json` 开了 `allowImportingTsExtensions`，Turbopack 与 `next build` 都能正常解析。`@/` 别名 Node 解析不了，所以 `lib/console/` 内部一律用带扩展名的相对路径；`app/` 与 `components/` 不被 Node 直接执行，继续用别名。
 - 类型擦除不支持 `enum`、`namespace` 与构造函数参数属性，写测试涉及的模块时避开这三样。

@@ -1,6 +1,6 @@
 # Build with the Console directory as context; no deployment secrets enter it.
 # 以 Console 目录为构建上下文，不将部署密钥放入其中。
-FROM node:24-bookworm-slim AS base
+FROM node:26-bookworm-slim AS base
 WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
