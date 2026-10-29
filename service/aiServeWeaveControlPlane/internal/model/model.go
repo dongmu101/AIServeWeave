@@ -368,6 +368,21 @@ const (
 	// TenantID 与其他平台动作一样是 PlatformScope，目标是发生变化的 scope：要么是
 	// PlatformScope，要么是被设置列表的那个租户 id。
 	ActionModelAccessUpdate = "model_access.update"
+	// Billing actions. Package and price writes are platform actions and use
+	// PlatformScope; a tenant's mode change and balance adjustment are
+	// recorded under PlatformScope too, with the tenant id as the target.
+	// A checkout is the tenant's own action and is recorded under its tenant.
+	//
+	// 计费动作。充值包与单价的写入是平台动作，使用 PlatformScope；租户计费模式的切换
+	// 与余额调整同样记在 PlatformScope 下，以租户 id 作为目标。结账是租户自己的动作，
+	// 记在其租户之下。
+	ActionBillingPackageCreate = "billing.package.create"
+	ActionBillingPackageUpdate = "billing.package.update"
+	ActionBillingPriceUpdate   = "billing.price.update"
+	ActionBillingPriceDelete   = "billing.price.delete"
+	ActionBillingTenantMode    = "billing.tenant.mode"
+	ActionBillingTenantAdjust  = "billing.tenant.adjust"
+	ActionBillingCheckout      = "billing.checkout.create"
 )
 
 // AuditLog is one administrative action, recorded for the README's

@@ -878,4 +878,161 @@ type Store interface {
 	UsageRecords
 	Alerting
 	APIDocs
+	Billing
+}
+
+// CheckoutOrderFilter narrows a checkout-order list. An empty field does not
+// filter.
+//
+// CheckoutOrderFilter 收窄结账订单列表。字段为空表示不筛选。
+type CheckoutOrderFilter struct {
+	TenantID string
+	Status   string
+}
+
+// CreditLedgerFilter narrows a ledger list. An empty field does not filter.
+//
+// CreditLedgerFilter 收窄账目列表。字段为空表示不筛选。
+type CreditLedgerFilter struct {
+	TenantID string
+	Kind     string
+}
+
+// Billing event kinds ApplyBillingEvent understands. Any other provider event
+// is acknowledged and ignored before it reaches the store.
+//
+// ApplyBillingEvent 理解的计费事件类型。服务商的其他事件在到达 store 之前就已被确认
+// 并忽略。
+const (
+	BillingEventPaymentSucceeded = "payment_succeeded"
+	BillingEventPaymentFailed    = "payment_failed"
+	BillingEventRefundSucceeded  = "refund_succeeded"
+	BillingEventDisputeOpened    = "dispute_opened"
+	BillingEventDisputeWon       = "dispute_won"
+)
+
+// Outcomes ApplyBillingEvent reports. Every one of them is a final answer for
+// the event: none is worth the provider redelivering it, so the webhook is
+// acknowledged whichever one comes back. Only an error asks for a retry.
+//
+// ApplyBillingEvent 报告的处理结果。每一个都是该事件的最终答复：没有哪一个值得服务商
+// 重新投递，因此无论返回哪个，webhook 都会被确认。只有错误才要求重试。
+const (
+	BillingOutcomeApplied   = "applied"
+	BillingOutcomeDuplicate = "duplicate"
+	BillingOutcomeNoOrder   = "no_order"
+	BillingOutcomeMismatch  = "mismatch"
+	BillingOutcomeIgnored   = "ignored"
+)
+
+// BillingEvent is a verified provider event, already reduced to the fields
+// the ledger acts on. OrderID and TenantID come from the metadata this
+// service attached when it created the checkout; PaymentID binds refunds and
+// disputes back to the order.
+//
+// BillingEvent 是一个已验签的服务商事件，已被归约为账目要处理的字段。OrderID 与
+// TenantID 来自本服务创建结账时附加的 metadata；PaymentID 把退款与争议关联回订单。
+type BillingEvent struct {
+	WebhookID         string
+	Type              string
+	Kind              string
+	OrderID           string
+	TenantID          string
+	PaymentID         string
+	CheckoutSessionID string
+	RefundID          string
+	DisputeID         string
+	AmountMinor       int64
+}
+
+// BillingEventResult is what applying one event did.
+//
+// BillingEventResult 是应用一个事件所产生的结果。
+type BillingEventResult struct {
+	Outcome  string
+	TenantID string
+	OrderID  string
+	// BlockedChanged reports that the tenant's balance crossed between
+	// usable and exhausted, so cached key verifications are now stale.
+	//
+	// BlockedChanged 报告租户余额在可用与耗尽之间发生了翻转，已缓存的 key 校验结果
+	// 因此过期。
+	BlockedChanged bool
+}
+
+// Billing persists prepaid-credit billing. Every method that moves a balance
+// does so in one transaction with the ledger entry recording it, and, when the
+// balance crosses between usable and exhausted, with the durable cache
+// invalidation that tells the Gateway — the reason these writes live here
+// rather than being composed from smaller calls in the logic layer.
+//
+// Billing 持久化预充值点数计费。每个变动余额的方法，都在同一事务中写入记录该变动的
+// 账目；余额在可用与耗尽之间翻转时，还在同一事务中写入通知 Gateway 的持久化缓存失效
+// ——这正是这些写入放在这里、而不是由 logic 层用更小的调用拼出来的原因。
+type Billing interface {
+	// GetTenantBilling reads one tenant's billing row, or ErrNotFound when
+	// the tenant has none (and is therefore exempt).
+	//
+	// GetTenantBilling 读取一个租户的计费行；该租户没有计费行（因而是 exempt）时返回
+	// ErrNotFound。
+	GetTenantBilling(ctx context.Context, tenantID string) (model.TenantBilling, error)
+	// GetTenantBillings reads the billing rows of the given tenants, keyed by
+	// tenant id; a tenant without a row is absent from the map.
+	//
+	// GetTenantBillings 读取给定租户的计费行，以租户 id 为键；没有计费行的租户不出现在
+	// 映射中。
+	GetTenantBillings(ctx context.Context, tenantIDs []string) (map[string]model.TenantBilling, error)
+	// InitTenantBilling inserts a tenant's first billing row, and grant as its
+	// opening ledger entry when grant is not nil. ErrConflict if the row exists.
+	//
+	// InitTenantBilling 插入租户的第一行计费记录；grant 不为 nil 时一并写入作为期初
+	// 账目。该行已存在时返回 ErrConflict。
+	InitTenantBilling(ctx context.Context, billing model.TenantBilling, grant *model.CreditLedgerEntry) error
+	// SetTenantBillingMode sets a tenant's mode, creating its row with a zero
+	// balance if it has none.
+	//
+	// SetTenantBillingMode 设置租户的计费模式；没有计费行时以零余额创建。
+	SetTenantBillingMode(ctx context.Context, tenantID, mode string, now time.Time) (blockedChanged bool, err error)
+	// SetDodoCustomerID records the provider customer a tenant's checkouts
+	// attach to, creating the tenant's row as exempt if it has none.
+	//
+	// SetDodoCustomerID 记录租户结账所关联的服务商客户；没有计费行时以 exempt 创建。
+	SetDodoCustomerID(ctx context.Context, tenantID, customerID string, now time.Time) error
+	// AdjustCredit applies entry.AmountMicro to entry.TenantID's balance and
+	// appends entry with its resulting balance filled in.
+	//
+	// AdjustCredit 把 entry.AmountMicro 记入 entry.TenantID 的余额，并追加填好结果余额
+	// 的 entry。
+	AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry) (model.CreditLedgerEntry, bool, error)
+	// ChargeUsage inserts records as CreateUsageRecords does and charges every
+	// one of charges not already charged, in one transaction. A charge whose
+	// request id is already in usage_charges is skipped, so a re-pushed batch
+	// is charged once.
+	//
+	// ChargeUsage 像 CreateUsageRecords 一样插入 records，并在同一事务中对 charges 里
+	// 尚未扣费的每一条扣费。请求 id 已在 usage_charges 中的费用会被跳过，因此重推的
+	// 批次只扣费一次。
+	ChargeUsage(ctx context.Context, records []model.UsageRecord, charges []model.UsageCharge) (blockedChanged bool, err error)
+	// ApplyBillingEvent applies one verified provider event exactly once.
+	//
+	// ApplyBillingEvent 对一个已验签的服务商事件恰好应用一次。
+	ApplyBillingEvent(ctx context.Context, event BillingEvent, now time.Time) (BillingEventResult, error)
+
+	CreateCreditPackage(ctx context.Context, pkg *model.CreditPackage) error
+	UpdateCreditPackage(ctx context.Context, pkg model.CreditPackage) error
+	GetCreditPackage(ctx context.Context, id string) (model.CreditPackage, error)
+	// ListCreditPackages returns packages in display order; activeOnly hides
+	// archived ones.
+	//
+	// ListCreditPackages 按展示顺序返回充值包；activeOnly 时隐藏已下架的。
+	ListCreditPackages(ctx context.Context, activeOnly bool) ([]model.CreditPackage, error)
+
+	ListModelPrices(ctx context.Context) ([]model.ModelPrice, error)
+	PutModelPrice(ctx context.Context, price model.ModelPrice) error
+	DeleteModelPrice(ctx context.Context, modelAlias string) error
+
+	CreateCheckoutOrder(ctx context.Context, order *model.CheckoutOrder) error
+	SetCheckoutOrderSession(ctx context.Context, orderID, sessionID string, now time.Time) error
+	ListCheckoutOrders(ctx context.Context, query ListQuery, filter CheckoutOrderFilter) (Page[model.CheckoutOrder], error)
+	ListCreditLedger(ctx context.Context, query ListQuery, filter CreditLedgerFilter) (Page[model.CreditLedgerEntry], error)
 }

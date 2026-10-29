@@ -3,7 +3,7 @@
 import * as React from "react";
 
 import type { RequestSpec } from "@/lib/console/api-client";
-import { ApiError, describe } from "@/lib/console/errors";
+import { ApiError, describe, type ApiErrorKind } from "@/lib/console/errors";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { useI18n } from "@/components/i18n/provider";
 
@@ -24,6 +24,13 @@ import { useI18n } from "@/components/i18n/provider";
 export interface Resource<T> {
   data: T | null;
   error: string | null;
+  /** errorKind is the failure's classification, for the few views where a
+   * kind means something other than "failed" — billing answers 404 when the
+   * deployment has not enabled it. The copy to show is still `error`.
+   *
+   * errorKind 是失败的分类，供少数几个视图使用：在那里某个分类并不只意味着「失败」
+   * ——比如部署未开启计费时计费端点回答 404。要展示的文案仍然是 `error`。 */
+  errorKind: ApiErrorKind | null;
   loading: boolean;
   reload: () => void;
 }
@@ -122,6 +129,7 @@ export function useResource<T>(spec: Omit<RequestSpec<T>, "signal">): Resource<T
   return {
     data: fresh ? settled.data : null,
     error: fresh && settled.error !== null ? describe(settled.error, locale) : null,
+    errorKind: fresh && settled.error instanceof ApiError ? settled.error.kind : null,
     loading: !fresh,
     reload,
   };

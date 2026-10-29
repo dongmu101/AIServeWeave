@@ -1683,7 +1683,7 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 // renderVerification 把一次校验结果写成 Gateway 的线上形式：不受限制的模型授权表现
 // 为两份缺席的列表，而不是 null。
 func renderVerification(verification logic.Verification) types.VerifyResponse {
-	out := types.VerifyResponse{TenantID: verification.TenantID, KeyID: verification.KeyID, Limits: verification.Limits}
+	out := types.VerifyResponse{TenantID: verification.TenantID, KeyID: verification.KeyID, Limits: verification.Limits, BillingBlocked: verification.BillingBlocked}
 	if verification.Models != nil {
 		out.Models = *verification.Models
 	}

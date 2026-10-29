@@ -176,6 +176,18 @@ const ROUTES: readonly UpstreamRoute[] = [
     segments: [literal("admin"), literal("v1"), literal("requests")],
     query: ["limit", "cursor", "since", "until", "status", "request_id"],
   },
+  // Prepaid billing. The tenant comes from the session, never from a query
+  // parameter; checkout and the portal link are created by the control plane,
+  // which alone holds the payment provider's credentials. These routes exist
+  // only when the control plane enables billing — otherwise they answer 404.
+  //
+  // 预充值计费。租户来自会话，绝不来自查询参数；结账与客户门户链接由控制面创建，
+  // 只有它持有支付服务商的凭据。这些路由仅在控制面开启计费时存在，否则回 404。
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("checkout")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("portal")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind"] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status"] },
 ];
 
 /**
@@ -236,6 +248,19 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("alerts"), param(), literal("acknowledge")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("requests")], query: ["limit", "cursor", "since", "until", "status", "request_id", "tenant_id"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("usage"), literal("summary")], query: ["since", "until", "tenant_id"] },
+  // Prepaid billing administration; see the tenant table for why these may 404.
+  // 预充值计费管理；为何可能回 404 见租户表的说明。
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages"), param()], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("model-prices")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("model-prices")], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("billing"), literal("model-prices")], query: ["model"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants")], query: ["limit", "cursor", "status", "q"] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("mode")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("adjust")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status", "tenant_id"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind", "tenant_id"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("approve")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("disable")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("enable")], query: [] },

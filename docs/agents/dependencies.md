@@ -37,6 +37,8 @@ Redis 与对象存储是按配置启用的能力；未配置时的退回行为�
 
 go-zero、gorm 及数据库驱动、golang-jwt、`golang.org/x/crypto` 归控制面。其 Admin API、数据库事务、JWT/Redis 可吊销会话与密码哈希需求，不适用于数据面热路径；详细取舍见 [ControlPlane STATUS「为什么这个服务用 go-zero，而数据面不用」](../../service/aiServeWeaveControlPlane/STATUS.md#为什么这个服务用-go-zero而数据面不用)。
 
+`github.com/dodopayments/dodopayments-go` 归控制面，且只由 `internal/billing/dodo` import：结账、客户门户与 Standard Webhooks 验签由官方 SDK 维护，随之带入 standard-webhooks 与 tidwall/gjson、sjson、match、pretty。Console 不引入 npm `dodopayments`、不持有 Dodo 凭据。理由见 [ControlPlane STATUS「计费与充值」](../../service/aiServeWeaveControlPlane/STATUS.md#计费与充值)。
+
 ## Console
 
 前端依赖、TypeScript 双版本、Node 内置单元测试与独立 Playwright 验收遵守 [Console AGENTS](../../service/aiServeWeaveConsole/AGENTS.md)。不要把后端的依赖允许列表套用到前端，也不要以升级名义移除其已有兼容安排。

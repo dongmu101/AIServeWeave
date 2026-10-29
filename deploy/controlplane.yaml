@@ -146,3 +146,26 @@ ComfyUIManaged:
 # Gateways before the control plane; see ControlPlane STATUS, "工作流可视化编辑器".
 # ComfyEditor:
 #   DistDir: /opt/aiserveweave/comfy-editor
+
+# 计费与充值（Dodo Payments）：默认关闭。开启后租户可预付购买点数，用量按运维配置的
+# 模型单价从余额扣减，prepaid 租户余额耗尽时 Gateway 返回 402。先在 deploy/.env 填好
+# AISW_DODO_API_KEY 与 AISW_DODO_WEBHOOK_SECRET（前缀 dodo_test_ / dodo_live_ 须与
+# Environment 一致），在 Dodo 控制台把 webhook 指向 <控制面公网地址>/billing/v1/dodo/webhook，
+# 再取消注释。ReturnURL 是付款后回跳的 Console 计费页。详见 ControlPlane STATUS「计费与充值」。
+#
+# Billing and top-ups (Dodo Payments): off by default. When enabled, tenants
+# prepay for credits, usage is charged against the balance at the operator's
+# model prices, and Gateway answers 402 once a prepaid tenant's balance runs
+# out. Fill AISW_DODO_API_KEY and AISW_DODO_WEBHOOK_SECRET in deploy/.env
+# first (the dodo_test_ / dodo_live_ prefix must match Environment), point
+# the Dodo dashboard's webhook at <public control plane URL>/billing/v1/dodo/webhook,
+# then uncomment. ReturnURL is the Console billing page a payment returns to.
+# See ControlPlane STATUS, "计费与充值".
+# Billing:
+#   Enabled: true
+#   Dodo:
+#     APIKey: "${AISW_DODO_API_KEY}"
+#     WebhookSecret: "${AISW_DODO_WEBHOOK_SECRET}"
+#     Environment: test
+#   ReturnURL: https://console.example.com/console/billing
+#   SignupGrantCredits: 0

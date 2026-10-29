@@ -64,6 +64,17 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 	if len(records) == 0 {
 		return 0, nil
 	}
+	// With billing on, the records and their charges commit together, so a
+	// record is never in the ledger uncharged nor charged twice.
+	//
+	// 开启计费时，记录与其费用一同提交，因此一条记录既不会入账却未扣费，也不会被扣费
+	// 两次。
+	if s.billingEnabled() {
+		if err := s.chargeUsage(ctx, records); err != nil {
+			return 0, err
+		}
+		return len(records), nil
+	}
 	if err := s.store.CreateUsageRecords(ctx, records); err != nil {
 		return 0, err
 	}

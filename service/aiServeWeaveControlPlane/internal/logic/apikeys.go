@@ -232,6 +232,13 @@ type Verification struct {
 	// 下发，理由与 Limits 相同；SetModelAccess 会丢弃全部已缓存的校验结果，使变更
 	// 不必等它们过期。两级都不做限制时它为 nil，这让 Verification 保持可比较。
 	Models *modelaccess.Policy
+	// BillingBlocked reports a prepaid tenant whose balance is exhausted. The
+	// key still authenticates — the Gateway answers 402 rather than 401, so
+	// the caller learns to top up rather than to replace a working key.
+	//
+	// BillingBlocked 报告一个余额已耗尽的 prepaid 租户。key 仍然通过认证——Gateway
+	// 回答 402 而不是 401，让调用方知道该充值，而不是去替换一把仍然有效的 key。
+	BillingBlocked bool
 }
 
 // VerifyKeyHash resolves a key hash to the tenant it authenticates, or
@@ -291,7 +298,11 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	if err != nil {
 		return Verification{}, err
 	}
-	verification := Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits()}
+	blocked, err := s.billingBlocked(ctx, tenant.ID)
+	if err != nil {
+		return Verification{}, err
+	}
+	verification := Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits(), BillingBlocked: blocked}
 	if !policy.Unrestricted() {
 		verification.Models = &policy
 	}

@@ -21,6 +21,9 @@ const (
 	PrefixPlatformOperator = "plt_"
 	PrefixAlertRule        = "alr_"
 	PrefixAlertInstance    = "ali_"
+	PrefixCreditPackage    = "pkg_"
+	PrefixCheckoutOrder    = "ord_"
+	PrefixCreditLedger     = "led_"
 )
 
 // randomBytes is the entropy in an id. 14 bytes leaves a 32-character id

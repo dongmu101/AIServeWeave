@@ -38,7 +38,7 @@
 | `service/aiServeWeaveAgent/` | 本机配置、发现、运行时与 CLI、主动出站隧道；执行本地允许的操作 |
 | `service/aiServeWeaveGateway/` | 兼容 API 前门、鉴权与配额、路由与调度、隧道终结、Job、产物存储与控制面同步 |
 | `service/aiServeWeaveRegistry/` | 节点身份、证书与令牌、Gateway 副本名册 |
-| `service/aiServeWeaveControlPlane/` | 管理与内部 API、会话、授权、数据库、发布、审计、历史指标与请求/用量记录 |
+| `service/aiServeWeaveControlPlane/` | 管理与内部 API、会话、授权、数据库、发布、审计、历史指标与请求/用量记录、预付点数计费；Dodo Payments SDK 只在 `internal/billing/dodo` |
 | `service/aiServeWeaveConsole/` | 管理界面与受限服务端转发；具体凭据和跨服务例外见其 AGENTS |
 | `deploy/` | 部署、升级、恢复与验收操作说明 |
 

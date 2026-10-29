@@ -236,11 +236,17 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
 
 1. **单一入账点。** 五个协议前门（OpenAI Chat、Embeddings、Responses、Anthropic Messages、Ollama 原生 chat/generate/embeddings）在得知一次请求的 `runtime.Usage` 后，都调用同一个 `h.recordUsage(ctx, usage, elapsed, endpoint, model)`——与它已经承担的「记指标、扣配额」职责相同的那一个函数，新增的 `endpoint`/`model` 只流向账本，从不进入 Prometheus 标签（原因见 `metrics.go` 关于模型基数的说明）。`model` 从不是客户端自由文本：这两个参数只在派发成功路径上被传入，此时调度器早已把请求解析到一个 `modelroute` 别名上。音频转录与 rerank 不按 token 计量，从不调用 `recordUsage`，因此账本里没有它们的 `endpoint` 取值。
 2. **两个条件跳过入账，而不是写入一条空记录。** 全零用量（部分后端在中间 chunk 上不上报用量）与没有解析出租户身份的请求（未启用鉴权的部署没有可记账的租户）都直接返回，不占用推送缓冲。
-3. **有界缓冲、批量异步推送、从不重试**，与请求日志推送器同一套参数（`DefaultUsageLedgerBufferSize` 10000、`DefaultUsageLedgerBatchSize` 500、`DefaultUsageLedgerFlushInterval` 5 秒）：满足 AGENTS.md「任何一跳都不得无界缓冲」，channel 满时丢弃并计入 `gateway_usage_ledger_dropped_total`，推送失败计入 `gateway_usage_ledger_push_failed_total`，均不重试——账本是最终一致的结算依据，不是逐笔确认收讫的交易日志；需要更强保证的消费方，应参照 P07 的事务 outbox 模式另行设计，这不在本项范围内。
+3. **有界缓冲、批量异步推送、失败有界重试**，与请求日志推送器同一套参数（`DefaultUsageLedgerBufferSize` 10000、`DefaultUsageLedgerBatchSize` 500、`DefaultUsageLedgerFlushInterval` 5 秒）。channel 满时丢弃新记录，计入 `gateway_usage_ledger_dropped_total`，不阻塞推理请求。推送失败计入 `gateway_usage_ledger_push_failed_total`，**整批留在内存里按指数退避重试**（从 `FlushInterval` 起翻倍，上限 `MaxUsageLedgerRetryBackoff` 1 分钟）；有批次在等待重试时，新批次排在其后、不越过它推送，宕机的控制面不会被反复冲击。待重试的记录与 channel 共用 `BufferSize` 这条上界，超出时丢弃最旧的批次并逐条计入 dropped 指标，仍满足 AGENTS.md「任何一跳都不得无界缓冲」。与请求日志推送器不同，这里要重试，是因为控制面按这份账本从预付余额中扣费（见 [ControlPlane STATUS「计费与充值」](../aiServeWeaveControlPlane/STATUS.md#计费与充值)），丢掉一批就是一批没人付钱的用量；重试是安全的，因为控制面按 `request_id` 去重。重试状态只在进程内：副本崩溃会丢掉尚未送达的批次，优雅停止时做一次尽力而为的 flush。
 4. **去重规则是主键本身。** `RequestID`（`common/reqid` 铸造）既是控制面 `usage_records` 表的主键，也是幂等写入的依据（`ON CONFLICT DO NOTHING`）——一次被重试的批量推送，第二次到达时被静默跳过，不会让同一次请求的用量被计两次。
 5. **复用与请求日志相同的控制面连接。** `-control-plane-addr`/`-control-plane-token`（或 `AISW_CONTROLPLANE_TOKEN` 环境变量）驱动 `controlplaneclient.UsageLedgerClient` 推送到 `POST /internal/v1/usagerecords`；未配置控制面的部署，账本整体关闭（`h.usageLedger` 为 `nil`），不新增独立的地址/令牌配置项。
 
-控制面侧的表结构、内部推送端点幂等性、两个结算查询端点（`/admin/v1/usage/summary`、`/operator/v1/usage/summary`）与保留期见 [ControlPlane STATUS「用量账本（STATUS.md 的 P2）」](../aiServeWeaveControlPlane/STATUS.md#用量账本statusmd-的-p2)。已知缺口：定价/发票生成不在范围内——账本只给出按 (租户, 模型) 分组的 token 求和与请求计数，结算金额需要一个外部计费流程消费这份汇总；Console 尚未接入结算页面。
+控制面侧的表结构、内部推送端点幂等性、两个结算查询端点（`/admin/v1/usage/summary`、`/operator/v1/usage/summary`）与保留期见 [ControlPlane STATUS「用量账本（STATUS.md 的 P2）」](../aiServeWeaveControlPlane/STATUS.md#用量账本statusmd-的-p2)。控制面开启 `Billing` 后，同一批推送会在入账事务内按模型单价从预付余额扣费，见 [ControlPlane STATUS「计费与充值」](../aiServeWeaveControlPlane/STATUS.md#计费与充值)。发票不在本服务范围内，由 Dodo Payments 的客户门户提供。
+
+### 余额耗尽返回 402
+
+控制面开启计费后，`POST /internal/v1/apikeys/verify` 的响应对余额已耗尽的 prepaid 租户带 `billing_blocked: true`，`controlplaneclient.Verifier` 把它解码进 `httpapi.Identity.BillingBlocked`。鉴权中间件写入身份之后立即检查它，命中时返回 **402**，错误体为 OpenAI 形状，`type` 为 `insufficient_quota`、`code` 为 `insufficient_balance`；与鉴权中间件既有的 401/503 一样，所有前门（含 Anthropic、Ollama 路径）都使用这一种错误形状。检查放在鉴权中间件而不是 `rateLimit`：后者对配额不限的租户整个跳过，而余额耗尽必须拦住每一个租户。key 本身仍然有效，因此是 402 而不是 401——调用方该去充值，而不是去换 key。
+
+生效延迟：余额翻转时控制面在扣费/入账的同一事务里推进吊销 outbox 的 generation，本副本经 `RunRevocationWatch` 在约 1 秒内清空校验缓存；通知通道不健康时退回 `-key-cache-ttl`（默认 30 秒）。从余额耗尽到请求被拒之间，进行中的请求、最长一个 `FlushInterval` 的攒批与这段缓存窗口里的请求仍会被扣费，余额因此可以短暂为负，这是已接受的超额，见控制面文档。
 
 ## 工作流模板版本与发布（P03）
 

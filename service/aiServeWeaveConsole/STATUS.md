@@ -22,6 +22,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 使用文档 | 已重写 | README 记录调用链路、环境变量、门禁与部署前置条件 |
 | 业务页面（用户/Key/审计/配额） | M2、M3 已就位 | `app/console/users`、`keys`、`audit`、`quota`，均对接真实 Admin API；三张列表为服务端游标分页与筛选 |
 | 运维页面（节点/模型/发布状态） | M4、M5 已就位 | `app/console/fleet`、`models`，以及 `workflows` 的运维区块；只读，只在配置了运维模式的部署中存在，且只对名单内的人存在 |
+| 预充值计费 | 已接入 | 租户 `app/console/billing`、运维 `app/operator/(protected)/billing`，经白名单调用控制面计费 API；Console 不持有 Dodo 凭据，见下文「预充值计费 Console 接入」 |
 | 工作流与运行（租户） | M5 已就位 | `app/console/workflows`（菜单，不含图）、`app/console/jobs`（实时视图）、`app/console/jobs/history`（持久化历史与详情），取消和产物访问经服务端 Gateway 入口 |
 
 实现时遵守 [Console 开发约定](AGENTS.md) 与 [仓库开发约定](../../AGENTS.md)。技术栈沿用现有选型；动 Next.js 代码前先读本地 `node_modules/next/dist/docs/`，不在本规划中引入依赖升级。
@@ -39,6 +40,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
 | 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话 |
+| 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders}`；运维 `/operator/v1/billing/*` | 仅在控制面 `Billing.Enabled` 时挂载，否则 `404`；全部登录角色可读，owner/admin 可结账与打开门户（member `403`）；`503` 表示控制面联系 Dodo 失败 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 
 用户、Key 与审计列表返回 `{items, next_cursor}` 信封，支持游标分页与服务端筛选；吊销成功返回 `204`，错误体为 `{ "error": "..." }`。Job 历史另有 `/admin/v1/jobs/history` 与详情端点，不依赖 Fleet 配置。
@@ -400,3 +402,20 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 已接入 `/console/users` 的 owner 管理操作、`/console/account` 自助改密/会话撤销、`/operator/operators` 平台运维账户管理与 `/operator/account` 平台账户安全。退出不再只删本地 Cookie：Console 服务端先调用对应 ControlPlane Redis 会话撤销端点，`204/401` 才清 Cookie，`503`、超时或断网保留 Cookie 供重试。租户与平台 Cookie、白名单和跳转继续相互隔离。
 
 纯逻辑测试新增平台账户契约、租户/平台生命周期白名单、owner 管理权限与退出处置矩阵；`pnpm test` 为 134 个用例。`pnpm lint`、TS 7 `pnpm typecheck` 与 `next build --webpack` 已通过，构建清单包含 `/console/account`、`/operator/account` 与 `/operator/operators`。默认 Turbopack 在本机沙箱仍因内部 CSS 子进程绑定端口失败，沿用仓库既有 Webpack 验收路径。真实 Chrome 连接临时 PostgreSQL/Redis/ControlPlane 与生产构建 Console，验证租户 owner 登录、目标用户管理控件、账户安全页、独立平台登录、运维账户页，以及两个标签页的租户/平台会话同时有效；高影响的改密/禁用最终提交由真实 HTTP e2e 覆盖，未在 GUI 重复执行。
+
+## 预充值计费 Console 接入（2026-10-29）
+
+后端（控制面 `internal/billing`、`internal/logic/billing.go`、`internal/handler/billing.go`）已完成，本次只改 Console，不改 Go 代码、不引入 `dodopayments` npm 包。
+
+| 层 | 落点 |
+| --- | --- |
+| 契约与换算 | `lib/console/billing.ts`：镜像 `internal/types/billing.go` 的全部响应解析（结账/门户链接必须是绝对 https URL，否则按契约违例拒绝）；micro 点与货币最小单位的字符串精确换算；充值包、单价、余额调整的前端校验（与 `packageFromInput`/`PutModelPrice`/`AdjustTenantCredit` 规则一致）；有界轮询 `pollUntilSettled`（`read`/`sleep` 可注入） |
+| 白名单 | `lib/console/upstream-routes.ts`：租户 5 条（`tenant_id` 不透传）、运维 11 条（列表筛选含 `tenant_id`，删除单价只透传 `model`）；Dodo Webhook 不在任何一张表里 |
+| 权限 | `lib/console/permissions.ts` 新增 `canPurchaseCredits`（owner/admin），镜像控制面 `Actor.canPurchase` |
+| 页面 | 租户 `/console/billing`（`page.tsx` 服务端读会话与回跳参数、`billing-view.tsx`）；运维 `/operator/billing`（五个标签页）；共用 `components/console/billing-tables.tsx`。两侧导航各加一项 |
+| 读取状态 | `useResource`/`usePagedResource` 新增只读字段 `errorKind`，计费页据此把 `404` 渲染为「计费未开启」；其余页面行为不变 |
+| 文案 | 8 种语言的 `tenant.billing*` 与 `operator.billing*` 词条 |
+| 测试 | `lib/console/billing.test.ts`（解析、拒绝、单位换算、范围校验、草稿构造、回跳识别、轮询上界/提前停止/失败计次/取消）；白名单与权限测试补充计费用例；e2e `console.spec.ts` 页面矩阵加入两个页面，`e2e/billing.spec.ts` 覆盖自定义金额换算与请求体、固定包不带金额、`503` 固定文案、回跳轮询等待服务端确认、`404` 空状态、`402` 提示，以及运维新建 JPY 充值包/设置单价/调整余额的线上整数 |
+
+不变量：页面从不根据回跳 URL 的 `status` 判定到账；轮询每 3 秒一次、最多 10 次，订单离开 `pending` 即停止；结账、门户、单价、模式切换与余额调整都只发送一次，不自动重试。
+

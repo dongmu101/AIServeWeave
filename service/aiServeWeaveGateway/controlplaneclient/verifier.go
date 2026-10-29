@@ -356,6 +356,11 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			KeyID    string             `json:"key_id"`
 			Limits   quota.Limits       `json:"limits"`
 			Models   modelaccess.Policy `json:"models"`
+			// BillingBlocked is absent unless the tenant is prepaid with an
+			// exhausted balance.
+			//
+			// BillingBlocked 仅在租户为 prepaid 且余额耗尽时出现。
+			BillingBlocked bool `json:"billing_blocked"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 			return httpapi.Identity{}, fmt.Errorf("controlplaneclient: decoding the verification: %w", err)
@@ -368,7 +373,7 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			// 只差一次 join。
 			return httpapi.Identity{}, errors.New("controlplaneclient: the control plane returned no tenant")
 		}
-		identity := httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, Limits: decoded.Limits}
+		identity := httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, Limits: decoded.Limits, BillingBlocked: decoded.BillingBlocked}
 		if !decoded.Models.Unrestricted() {
 			identity.Models = &decoded.Models
 		}

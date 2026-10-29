@@ -65,6 +65,8 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
 | 配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | `/console/quota` | 任何登录角色可读租户资料与配额；仅 owner/admin 可整组写入。零表示不限制 |
 | 模型授权 | `GET /operator/v1/tenants`、`GET/PUT /operator/v1/model-access/:scope` | `/operator/model-access` | **平台运维接口**：编辑全平台与按商户的模型别名白名单。平台列表是上限、商户列表只能收窄，空列表不限制；写请求体上限与路由发布相同（1 MiB + 64 KiB），不自动重试 |
+| 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders}` | `/console/billing` | 仅在控制面 `Billing.Enabled` 时存在，否则全部 `404`，页面显示「计费未开启」。任何角色可看余额、账目与订单；仅 owner/admin 可购买与打开客户门户。结账与门户链接由控制面向 Dodo Payments 申请，Console 只校验其为 https 后跳转 |
+| 计费管理 | `/operator/v1/billing/{packages,model-prices,tenants,orders,ledger}` | `/operator/billing` | **平台运维接口**：充值包新建/编辑（无删除，下架即 `active:false`）、模型单价（`*` 为默认价）、租户计费模式与余额调整、跨租户订单与账目 |
 | 审计 | `GET /admin/v1/audit` | `/console/audit` | 支持 `action`、`actor_id`、`since`、`until` 筛选与游标分页 |
 | 机群清单 | `GET /operator/v1/nodes`、`GET /operator/v1/models` | `/operator/fleet`、`/operator/models` | **不是租户接口**：节点是所有租户共用的基础设施，由平台会话守卫；清单依赖控制面 Fleet 配置，节点写操作依赖 Registry 配置 |
 | 工作流菜单 | `GET /admin/v1/workflows` | `/console/workflows` | 租户接口，返回模板与输入声明；**不含工作流的图**。控制面在返回前清空副本 id 与内部 endpoint |
@@ -125,6 +127,7 @@ app/console/account/ 租户账户改密与会话撤销
 app/console/keys/    API Key 列表、创建（一次性明文）与吊销
 app/console/audit/   管理审计（TanStack Table + Virtual 虚拟滚动）
 app/console/quota/   租户资料与配额读写
+app/console/billing/ 预充值余额、充值包购买、账目与订单（租户）
 app/operator/login/ 平台运维登录（独立 Cookie）
 app/operator/(protected)/ 平台会话布局、机群/发布/运维账户/账户安全页面
 app/console/fleet/   旧节点入口，跳转到 /operator/fleet
@@ -146,6 +149,7 @@ lib/console/         浏览器与服务端共用的纯逻辑：契约校验、�
 lib/server/          仅服务端：配置、会话 Cookie 读写、控制面调用、响应封装
 components/console/  共享交互：加载/空/失败状态、确认框、提交按钮、表格外壳、
                      翻页控件，以及读取、分页、URL 筛选同步三个 hook
+                     billing-tables.tsx 是租户与运维共用的账目/订单表
 components/ui/       已引入的 shadcn/ui 组件源码
 lib/utils.ts         共享 cn 工具导出
 public/              静态资源
@@ -241,3 +245,14 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 租户导航的“AI 服务与模型”（`/console/models`）使用租户会话调用 `GET /admin/v1/models`，无需平台运维登录。所有已登录租户角色均可查看连接到默认 Gateway 的 Agent 所上报的服务类型、健康状态、版本、模型 ID 与能力，并区分 Agent 在线与离线；离线数据明确标示为最近一次上报，不混入 Gateway 本机发现结果；控制面按字段允许列表返回，明确返回 `agent_id` 与 `service_id` 以区分不同 Agent 的服务，不携带 Gateway 标识、内部地址、凭据或自由诊断文本。页面支持搜索、手动刷新与每 15 秒自动刷新；失败时显示错误，不将失败当作空目录。这份目录是共享服务发现信息，并非某租户的可调用模型授权清单，推理仍取决于 Agent 与路由配置。平台模型页保留原有详细运维视图。
 
 租户模型目录以 TanStack Table 列表展示，每个 Agent 只占一条主记录：Agent 列显示标识与连接状态，AI 服务列内使用子表列出该 Agent 的服务 ID、类型、健康、版本与模型数量；列表不展示模型 ID，需点“查看模型”在弹窗中查看。同一 Agent 的多个服务不会重复主记录。Agent 主表、服务子表和模型详情分别在当前已采集快照内每页显示 25 条，限制 DOM 行数。搜索覆盖当前快照的全部 Agent/服务/模型，不限于当前页，支持只看在线 Agent。完整模型 ID 与能力通过“查看模型”弹窗按需展示，详情打开时暂停自动刷新。计数与页数仅描述这次已采集快照，不是跨时间的机群总量。
+
+## 预充值计费（Dodo Payments）
+
+计费的业务与支付全部在控制面：点数余额、账目、订单、模型单价与 Dodo Payments 的 API Key、Webhook 密钥都只在控制面。**Console 不持有任何 Dodo 凭据，不引入 Dodo SDK，也不直连 Dodo**；页面只经 `/api/admin/*`、`/api/operator/*` 白名单调用控制面，Dodo 的 Webhook 直接打到控制面 `POST /billing/v1/dodo/webhook`，不经过 Console、也不在白名单里。
+
+- 单位：点数在线上是 micro 点整数（1 点 = 1,000,000 micro），展示与输入都以「点」为单位并按字符串精确换算，最多 6 位小数；金额是货币最小单位整数，按货币的小数位数（Intl 解析，JPY 为 0、USD 为 2）展示与输入。换算与校验集中在 `lib/console/billing.ts`，有单元测试。
+- 租户 `/console/billing`：余额卡片（预充值且 `blocked` 时醒目提示 API 将返回 HTTP 402；免计费模式单独说明）、充值包（固定包显示点数与价格，自定义包按 `credits_per_minor_unit_micro` 实时换算并校验上下限）、「管理付款与收据」（`has_customer` 且 owner/admin 时显示，首次购买前门户 `404` 显示固定文案）、账目与订单两张游标分页表。结账与门户都是只发一次的写请求；`503` 显示「支付服务暂时不可用」，上游错误原文不渲染。
+- 支付回跳：Dodo 回跳 `return_url` 时附带 `status`、`payment_id`。页面**只把它们当作「开始等待」的提示**，从不据此判定到账；随后每 3 秒读取一次余额与最近一笔订单，最多 10 次，订单不再是 `pending` 即停止，到账一律以服务端记录为准。
+- 运维 `/operator/billing`：充值包、模型单价、商户、订单、账目五个标签页。单价输入单位为「点/百万 token」，别名 `*` 是默认价，别名可能含 `/`，因此写在请求体、删除时放查询参数；余额调整以点为单位、可为负，原因必填（≤128 字符），只发送一次。
+- 控制面未开启计费时上述端点全部 `404`，两侧页面都渲染为「计费未开启」空状态而不是错误。
+

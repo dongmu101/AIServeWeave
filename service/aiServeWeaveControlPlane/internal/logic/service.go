@@ -212,6 +212,7 @@ type Service struct {
 	registryClient       RegistryClient
 	modelPullRouter      ModelPullRouter
 	comfyUIManagedRouter ComfyUIManagedRouter
+	billing              *BillingConfig
 }
 
 // Option configures a Service.
@@ -343,7 +344,7 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 		return model.Tenant{}, model.User{}, ErrInvalidInput
 	}
 
-	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, quota.Limits{})
+	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, quota.Limits{}, false)
 	if err != nil {
 		return model.Tenant{}, model.User{}, err
 	}
@@ -402,7 +403,7 @@ func (s *Service) SignUpTenant(ctx context.Context, name, ownerEmail, ownerPassw
 		return model.Tenant{}, model.User{}, err
 	}
 
-	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, limits)
+	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, limits, true)
 	if err != nil {
 		return model.Tenant{}, model.User{}, err
 	}
@@ -456,7 +457,7 @@ func bareEmail(email string) (string, bool) {
 //
 // createTenantWithOwner 是 CreateTenant 与 SignUpTenant 共用的插入路径。它不写审计：
 // 两个调用方记录的动作不同。
-func (s *Service) createTenantWithOwner(ctx context.Context, name, ownerEmail, ownerPassword string, limits quota.Limits) (model.Tenant, model.User, error) {
+func (s *Service) createTenantWithOwner(ctx context.Context, name, ownerEmail, ownerPassword string, limits quota.Limits, prepaid bool) (model.Tenant, model.User, error) {
 	now := s.clock.Now()
 	tenant := model.Tenant{
 		ID:                model.NewID(model.PrefixTenant),
@@ -469,6 +470,20 @@ func (s *Service) createTenantWithOwner(ctx context.Context, name, ownerEmail, o
 	}
 	if err := s.store.CreateTenant(ctx, &tenant); err != nil {
 		return model.Tenant{}, model.User{}, translate(err)
+	}
+	// A prepaid tenant's billing row is written before its owner, so a
+	// failure leaves an ownerless, inert tenant rather than one somebody can
+	// sign in to and use without a balance: a tenant with no billing row is
+	// exempt.
+	//
+	// prepaid 租户的计费行在其 owner 之前写入，因此一次失败留下的是一个没有 owner 的
+	// 惰性租户，而不是一个有人能登录、无需余额就能使用的租户：没有计费行的租户是 exempt。
+	if prepaid {
+		if row, grant := s.initialBilling(tenant.ID); row != nil {
+			if err := s.store.InitTenantBilling(ctx, *row, grant); err != nil {
+				return model.Tenant{}, model.User{}, translate(err)
+			}
+		}
 	}
 
 	owner, err := s.createUser(ctx, tenant.ID, ownerEmail, ownerPassword, name+" owner", model.RoleOwner, now)

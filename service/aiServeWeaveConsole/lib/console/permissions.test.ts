@@ -7,6 +7,7 @@ import {
   canEditTenantLimits,
   canManageGatewayKey,
   canManageUsers,
+  canPurchaseCredits,
   canRevokeApiKey,
 } from "./permissions.ts";
 
@@ -76,5 +77,19 @@ test("a member sees revoke only on the keys it created", () => {
       item.want,
       item.name
     );
+  }
+});
+
+test("only owners and admins see the controls that spend money", () => {
+  const cases: { role: string; purchase: boolean }[] = [
+    { role: "owner", purchase: true },
+    { role: "admin", purchase: true },
+    { role: "member", purchase: false },
+    { role: "auditor", purchase: false },
+    { role: "", purchase: false },
+    { role: "Owner", purchase: false },
+  ];
+  for (const item of cases) {
+    assert.equal(canPurchaseCredits(item.role), item.purchase, `${item.role || "(empty)"}: purchase credits`);
   }
 });

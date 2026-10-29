@@ -2,18 +2,25 @@
 // STATUS.md's P2 usage ledger: it buffers UsageRecord values enqueued by
 // recordUsage (ratelimit.go) and pushes them to the control plane in
 // batches, on a timer or once a batch fills, whichever comes first. It
-// never blocks the handler that just answered a request and never retries a
-// failed push — the same two deliberate choices requestlogpush.go already
-// makes, for the same reason: a database hiccup here must not become
-// inference-path latency or an unbounded local backlog (AGENTS.md's "任何
-// 一跳都不得无界缓冲").
+// never blocks the handler that just answered a request — a database hiccup
+// here must not become inference-path latency.
+//
+// Unlike requestlogpush.go it keeps a failed batch and retries it with
+// backoff, because the control plane charges prepaid balances from this
+// ledger and a dropped batch is usage nobody pays for. The retry is safe
+// because the control plane deduplicates on request id, and it stays bounded
+// (AGENTS.md's "任何一跳都不得无界缓冲"): batches awaiting retry share
+// BufferSize, and the oldest are dropped, counted, once it is exceeded.
 //
 // usageledgerpush.go 是 Gateway 一侧对 STATUS.md P2 用量账本有界、异步的
 // 那一半：它缓冲 recordUsage（ratelimit.go）入队的 UsageRecord，按定时器或
 // 攒满一批（以先到者为准）批量推送给控制面。它从不阻塞刚刚应答完一次请求的
-// handler，也从不重试失败的推送——与 requestlogpush.go 已经做出的同两个
-// 刻意选择相同，理由也相同：这里的一次数据库故障不能变成推理路径的延迟，
-// 也不能变成一份无界的本地积压（AGENTS.md 的"任何一跳都不得无界缓冲"）。
+// handler——这里的一次数据库故障不能变成推理路径的延迟。
+//
+// 与 requestlogpush.go 不同，它会保留失败的批次并按退避重试，因为控制面依据这份
+// 账本从预付余额中扣费，丢掉一批就是一批没人付钱的用量。重试是安全的，因为控制面按
+// 请求 id 去重；重试也是有界的（AGENTS.md 的"任何一跳都不得无界缓冲"）：待重试的
+// 批次共用 BufferSize，超出时丢弃最旧的批次并计数。
 package httpapi
 
 import (
@@ -117,12 +124,11 @@ func newUsageLedgerPusher(client UsageLedgerClient, clock runtime.Clock, logger 
 
 // enqueue implements usageLedgerSink. It never blocks: a full buffer drops
 // the new record and reports false, which the caller (recordUsage) turns
-// into a metric rather than a retry — see this file's package doc comment
-// for why blocking or retrying here is exactly what must not happen.
+// into a metric — blocking here would put the push on the request path.
 //
 // enqueue 实现 usageLedgerSink。它从不阻塞：缓冲已满时丢弃新记录并报告
-// false，调用方（recordUsage）把它变成一次指标而不是一次重试——为什么在
-// 这里阻塞或重试正是不该发生的事，见本文件的包文档注释。
+// false，调用方（recordUsage）把它变成一次指标——在这里阻塞会把推送放到请求
+// 路径上。
 func (p *usageLedgerPusher) enqueue(r UsageRecord) bool {
 	select {
 	case p.ch <- r:
@@ -132,46 +138,113 @@ func (p *usageLedgerPusher) enqueue(r UsageRecord) bool {
 	}
 }
 
+// MaxUsageLedgerRetryBackoff caps the wait between retries of a failed push.
+//
+// MaxUsageLedgerRetryBackoff 是失败推送两次重试之间等待时间的上限。
+const MaxUsageLedgerRetryBackoff = time.Minute
+
 // run drains the buffer, flushing a batch to the control plane either when
 // BatchSize records have accumulated or FlushInterval has elapsed since the
-// last flush, whichever comes first. It is meant to be started as
-// `go pusher.run()`.
+// last flush, whichever comes first. A failed batch waits for its retry, and
+// while any batch is waiting new batches queue behind it rather than being
+// pushed past it, so a control plane that is down is not hammered. It is
+// meant to be started as `go pusher.run()`.
 //
 // run 消费缓冲，在攒够 BatchSize 条记录或距上次 flush 已过 FlushInterval——
-// 以先到者为准——时向控制面 flush 一批。它应当以 `go pusher.run()` 的方式
-// 启动。
+// 以先到者为准——时向控制面 flush 一批。失败的批次等待重试；只要还有批次在等待，
+// 新批次就排在它后面而不是越过它推送，因此一个宕机的控制面不会被反复冲击。它应当
+// 以 `go pusher.run()` 的方式启动。
 func (p *usageLedgerPusher) run() {
 	defer close(p.done)
 	ticker, stopTicker := p.clock.NewTimer(p.cfg.FlushInterval)
 	defer stopTicker()
 
+	var (
+		pending      [][]UsageRecord
+		pendingCount int
+		backoff      time.Duration
+		retryAt      time.Time
+	)
+	push := func(records []UsageRecord) bool {
+		ctx, cancel := context.WithTimeout(context.Background(), p.cfg.CallTimeout)
+		defer cancel()
+		if err := p.client.PushUsageRecords(ctx, records); err != nil {
+			p.logger.Warn("pushing usage records to the control plane failed; the batch is kept for retry",
+				slog.Any("error", err), slog.Int("batch_size", len(records)))
+			p.metrics.UsageLedgerPushFailed()
+			return false
+		}
+		return true
+	}
+	// hold queues records for retry, dropping the oldest held batches once
+	// the held total would exceed BufferSize.
+	//
+	// hold 把 records 排入重试队列；一旦待重试总量会超过 BufferSize，就丢弃最旧的
+	// 待重试批次。
+	hold := func(records []UsageRecord) {
+		pending = append(pending, records)
+		pendingCount += len(records)
+		for pendingCount > p.cfg.BufferSize && len(pending) > 1 {
+			for range pending[0] {
+				p.metrics.UsageLedgerDropped()
+			}
+			pendingCount -= len(pending[0])
+			pending = pending[1:]
+		}
+	}
+	// retry pushes held batches oldest first, stopping at the first failure
+	// and doubling the backoff; it reports whether nothing is held anymore.
+	//
+	// retry 从最旧的开始推送待重试批次，遇到第一次失败即停止并把退避加倍；返回值
+	// 报告是否已不再有待重试的批次。
+	retry := func(force bool) bool {
+		if len(pending) == 0 {
+			return true
+		}
+		if !force && p.clock.Now().Before(retryAt) {
+			return false
+		}
+		for len(pending) > 0 {
+			if !push(pending[0]) {
+				backoff = min(max(backoff*2, p.cfg.FlushInterval), MaxUsageLedgerRetryBackoff)
+				retryAt = p.clock.Now().Add(backoff)
+				return false
+			}
+			pendingCount -= len(pending[0])
+			pending = pending[1:]
+		}
+		backoff = 0
+		return true
+	}
+
 	batch := make([]UsageRecord, 0, p.cfg.BatchSize)
-	flush := func() {
+	flush := func(force bool) {
+		drained := retry(force)
 		if len(batch) == 0 {
 			return
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), p.cfg.CallTimeout)
-		if err := p.client.PushUsageRecords(ctx, batch); err != nil {
-			p.logger.Warn("pushing usage records to the control plane failed; the batch is dropped, not retried",
-				slog.Any("error", err), slog.Int("batch_size", len(batch)))
-			p.metrics.UsageLedgerPushFailed()
+		if !drained || !push(batch) {
+			hold(batch)
+			if drained {
+				backoff = min(max(backoff*2, p.cfg.FlushInterval), MaxUsageLedgerRetryBackoff)
+				retryAt = p.clock.Now().Add(backoff)
+			}
 		}
-		cancel()
 		batch = make([]UsageRecord, 0, p.cfg.BatchSize)
 	}
 
 	for {
 		select {
 		case <-p.stop:
-			flush()
+			flush(true)
 			return
 		case r := <-p.ch:
 			batch = append(batch, r)
 			if len(batch) >= p.cfg.BatchSize {
-				flush()
+				flush(false)
 			}
 		case <-ticker:
-			flush()
+			flush(false)
 			ticker, stopTicker = p.clock.NewTimer(p.cfg.FlushInterval)
 		}
 	}

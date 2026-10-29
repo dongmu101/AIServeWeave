@@ -30,6 +30,7 @@ function navigationItems(t: Translator) { return [
   { href: "/operator/requests", label: t("tenant.requestSearch") },
   { href: "/operator/metrics", label: t("operator.metrics") },
   { href: "/operator/usage", label: t("tenant.usage") },
+  { href: "/operator/billing", label: t("operator.billing") },
   { href: "/operator/alert-rules", label: t("operator.alertRules") },
   { href: "/operator/alerts", label: t("operator.alerts") },
   { href: "/operator/operators", label: t("operator.operatorAccounts") },

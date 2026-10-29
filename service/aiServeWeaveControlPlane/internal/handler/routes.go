@@ -129,6 +129,39 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		})
 	}
 
+	// Billing is mounted only when the deployment enables it, like sign-up.
+	// The webhook is public: the provider cannot hold a session, and its
+	// Standard Webhooks signature is what authenticates it.
+	//
+	// 计费与自助注册一样，只在部署开启时挂载。webhook 是公开的：服务商无法持有会话，
+	// 认证它的是 Standard Webhooks 签名。
+	if ctx.Config.Billing.Enabled {
+		billingRoute := func(method, path string, guard func(*svc.ServiceContext, http.HandlerFunc) http.HandlerFunc, h http.HandlerFunc) rest.Route {
+			return rest.Route{Method: method, Path: path, Handler: instrumented(ctx.MetricsRegistry, path, guard(ctx, h))}
+		}
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodPost, Path: "/billing/v1/dodo/webhook", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/dodo/webhook", billingWebhook(ctx))},
+		}, rest.WithMaxBytes(MaxBillingWebhookBytes))
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/admin/v1/billing", requireSession, billingOverview(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/checkout", requireSession, createCheckout(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
+			billingRoute(http.MethodGet, "/admin/v1/billing/ledger", requireSession, listBillingLedger(ctx, false)),
+			billingRoute(http.MethodGet, "/admin/v1/billing/orders", requireSession, listBillingOrders(ctx, false)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/packages", requirePlatformSession, listCreditPackages(ctx)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/packages", requirePlatformSession, saveCreditPackage(ctx, true)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/packages/:id", requirePlatformSession, saveCreditPackage(ctx, false)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/model-prices", requirePlatformSession, listModelPrices(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/model-prices", requirePlatformSession, putModelPrice(ctx)),
+			billingRoute(http.MethodDelete, "/operator/v1/billing/model-prices", requirePlatformSession, deleteModelPrice(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/tenants", requirePlatformSession, listBillingTenants(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/tenants/:id/mode", requirePlatformSession, setBillingMode(ctx)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/tenants/:id/adjust", requirePlatformSession, adjustCredit(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/orders", requirePlatformSession, listBillingOrders(ctx, true)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/ledger", requirePlatformSession, listBillingLedger(ctx, true)),
+		})
+	}
+
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session", requireSession(ctx, sessionAction(ctx.Logic.Logout)))},
 		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/password", requireSession(ctx, changeOwnPassword(ctx)))},

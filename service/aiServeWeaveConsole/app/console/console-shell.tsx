@@ -52,6 +52,7 @@ function navigationItems(t: Translator): readonly NavEntry[] { return [
   { href: "/console/requests", label: t("tenant.requestSearch") },
   { href: "/console/quota", label: t("tenant.quotas") },
   { href: "/console/usage", label: t("tenant.usage") },
+  { href: "/console/billing", label: t("tenant.billing") },
   { href: "/console/models", label: t("tenant.aiServicesModels") },
   {
     label: t("tenant.workflows"),

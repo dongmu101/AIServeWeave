@@ -92,6 +92,19 @@ export const tenantEntries = [
     }
   },
   {
+    "path": "/console/billing",
+    "headings": {
+      "zh-CN": "计费",
+      "zh-TW": "計費",
+      "en-US": "Billing",
+      "ja-JP": "課金",
+      "ko-KR": "결제",
+      "de-DE": "Abrechnung",
+      "fr-FR": "Facturation",
+      "es-ES": "Facturación"
+    }
+  },
+  {
     "path": "/console/models",
     "headings": {
       "zh-CN": "Agent AI 服务与模型",
@@ -353,6 +366,19 @@ export const operatorEntries = [
       "de-DE": "Nutzung",
       "fr-FR": "Utilisation",
       "es-ES": "Uso"
+    }
+  },
+  {
+    "path": "/operator/billing",
+    "headings": {
+      "zh-CN": "计费",
+      "zh-TW": "計費",
+      "en-US": "Billing",
+      "ja-JP": "課金",
+      "ko-KR": "결제",
+      "de-DE": "Abrechnung",
+      "fr-FR": "Facturation",
+      "es-ES": "Facturación"
     }
   },
   {
