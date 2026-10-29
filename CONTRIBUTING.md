@@ -16,16 +16,7 @@
 
 ## 提交前必须跑通的检查
 
-Go 代码改动：
-
-```bash
-gofmt -l ./service ./api      # 必须无输出
-go vet ./...
-go build ./...                # 三个服务入口都必须能链接
-go generate ./api/...         # 结果须与仓库一致，有 diff 说明没重新生成或工具版本不对
-go test ./...
-go test -race ./service/...
-```
+Go 代码改动执行 [AGENTS.md「质量门禁」](AGENTS.md#质量门禁) 的完整命令；该处是格式、静态检查、构建、proto 生成、测试与 race 检查的统一入口，覆盖共享包与所有 Go 服务。
 
 Console 改动额外执行其专属门禁（lint、typecheck、test、build），见 Console AGENTS.md。
 

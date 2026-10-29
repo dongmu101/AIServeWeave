@@ -10,11 +10,13 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.112.0
 	github.com/aws/smithy-go v1.28.1
 	github.com/coder/websocket v1.8.15
+	github.com/dodopayments/dodopayments-go v1.125.0
 	github.com/go-sql-driver/mysql v1.10.0
 	github.com/go-viper/mapstructure/v2 v2.4.0
 	github.com/golang-jwt/jwt/v5 v5.3.1
 	github.com/redis/go-redis/v9 v9.22.0
 	github.com/spf13/viper v1.20.1
+	github.com/standard-webhooks/standard-webhooks/libraries v0.0.1
 	github.com/studio-b12/gowebdav v0.13.0
 	github.com/zeromicro/go-zero v1.10.3
 	golang.org/x/crypto v0.57.0
@@ -71,6 +73,10 @@ require (
 	github.com/spf13/cast v1.7.1 // indirect
 	github.com/spf13/pflag v1.0.6 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
+	github.com/tidwall/gjson v1.18.0 // indirect
+	github.com/tidwall/match v1.2.0 // indirect
+	github.com/tidwall/pretty v1.2.2 // indirect
+	github.com/tidwall/sjson v1.2.5 // indirect
 	github.com/titanous/json5 v1.0.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.45.0 // indirect

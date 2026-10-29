@@ -460,3 +460,48 @@ test("the alert instances list forwards exactly its named filters", () => {
     "?limit=20&cursor=c1&status=firing&rule_id=rule_1&since=2026-09-11T00%3A00%3A00Z&until=2026-09-12T00%3A00%3A00Z"
   );
 });
+
+test("tenant billing routes resolve only on the tenant surface and never forward a tenant selector", () => {
+  const cases: { name: string; method: string; path: string; query: string; search: string | null }[] = [
+    { name: "overview", method: "GET", path: "/admin/v1/billing", query: "tenant_id=other", search: "" },
+    { name: "checkout", method: "POST", path: "/admin/v1/billing/checkout", query: "", search: "" },
+    { name: "portal", method: "POST", path: "/admin/v1/billing/portal", query: "return_url=https%3A%2F%2Fevil.invalid", search: "" },
+    { name: "ledger filters", method: "GET", path: "/admin/v1/billing/ledger", query: "limit=50&cursor=c&kind=usage&tenant_id=other", search: "?limit=50&cursor=c&kind=usage" },
+    { name: "order filters", method: "GET", path: "/admin/v1/billing/orders", query: "limit=50&cursor=c&status=paid&tenant_id=other", search: "?limit=50&cursor=c&status=paid" },
+    { name: "overview is read-only", method: "POST", path: "/admin/v1/billing", query: "", search: null },
+    { name: "checkout is not readable", method: "GET", path: "/admin/v1/billing/checkout", query: "", search: null },
+    { name: "portal is not readable", method: "GET", path: "/admin/v1/billing/portal", query: "", search: null },
+    { name: "the provider webhook is never forwarded", method: "POST", path: "/billing/v1/dodo/webhook", query: "", search: null },
+  ];
+  for (const item of cases) {
+    assert.equal(resolve(item.method, item.path, item.query)?.search ?? null, item.search, item.name);
+    assert.equal(resolveOperatorUpstream(item.method, item.path.split("/").filter(Boolean), new URLSearchParams(item.query)), null, `${item.name}: not on the operator surface`);
+  }
+});
+
+test("operator billing routes resolve only on the operator surface with their own filters", () => {
+  const operatorResolve = (method: string, path: string, query = "") =>
+    resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams(query));
+  const cases: { name: string; method: string; path: string; query?: string; search: string | null }[] = [
+    { name: "list packages", method: "GET", path: "/operator/v1/billing/packages", search: "" },
+    { name: "create package", method: "POST", path: "/operator/v1/billing/packages", search: "" },
+    { name: "replace package", method: "PUT", path: "/operator/v1/billing/packages/pkg_1", search: "" },
+    { name: "no package delete", method: "DELETE", path: "/operator/v1/billing/packages/pkg_1", search: null },
+    { name: "traversal as package id", method: "PUT", path: "/operator/v1/billing/packages/..", search: null },
+    { name: "list prices", method: "GET", path: "/operator/v1/billing/model-prices", search: "" },
+    { name: "put price", method: "PUT", path: "/operator/v1/billing/model-prices", query: "model=x", search: "" },
+    { name: "delete price takes only the alias", method: "DELETE", path: "/operator/v1/billing/model-prices", query: "model=org%2Fm&tenant_id=t", search: "?model=org%2Fm" },
+    { name: "an alias is never a path segment", method: "PUT", path: "/operator/v1/billing/model-prices/m", search: null },
+    { name: "list tenants", method: "GET", path: "/operator/v1/billing/tenants", query: "limit=25&cursor=c&status=active&q=acme&debug=1", search: "?limit=25&cursor=c&status=active&q=acme" },
+    { name: "set mode", method: "PUT", path: "/operator/v1/billing/tenants/tnt_1/mode", search: "" },
+    { name: "mode is not readable", method: "GET", path: "/operator/v1/billing/tenants/tnt_1/mode", search: null },
+    { name: "adjust balance", method: "POST", path: "/operator/v1/billing/tenants/tnt_1/adjust", search: "" },
+    { name: "adjust is not a PUT", method: "PUT", path: "/operator/v1/billing/tenants/tnt_1/adjust", search: null },
+    { name: "orders by tenant", method: "GET", path: "/operator/v1/billing/orders", query: "limit=50&status=paid&tenant_id=tnt_1&kind=x", search: "?limit=50&status=paid&tenant_id=tnt_1" },
+    { name: "ledger by tenant", method: "GET", path: "/operator/v1/billing/ledger", query: "cursor=c&kind=adjust&tenant_id=tnt_1&status=x", search: "?cursor=c&kind=adjust&tenant_id=tnt_1" },
+  ];
+  for (const item of cases) {
+    assert.equal(operatorResolve(item.method, item.path, item.query)?.search ?? null, item.search, item.name);
+    assert.equal(resolve(item.method, item.path, item.query ?? ""), null, `${item.name}: not on the tenant surface`);
+  }
+});

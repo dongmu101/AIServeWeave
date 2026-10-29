@@ -117,6 +117,18 @@ export function canManageGatewayKey(role: string): boolean {
 }
 
 /**
+ * canPurchaseCredits reports whether a role may start a checkout or open the
+ * payment provider's customer portal. Owner and admin may, mirroring
+ * `Actor.canPurchase` in the control plane, which answers a member with 403.
+ *
+ * canPurchaseCredits 报告某个角色是否可以发起结账或打开支付服务商的客户门户。
+ * owner 与 admin 可以，与控制面的 `Actor.canPurchase` 一致；member 会得到 403。
+ */
+export function canPurchaseCredits(role: string): boolean {
+  return role === "owner" || role === "admin";
+}
+
+/**
  * assignableRoles is what a creation form may offer. It is the full set: an
  * owner creating a user may pick any role, including another owner.
  *

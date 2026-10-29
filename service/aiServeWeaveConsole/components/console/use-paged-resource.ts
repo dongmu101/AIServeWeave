@@ -90,6 +90,7 @@ export function usePagedResource<T>(spec: {
   return {
     items: page.data?.items ?? null,
     error: page.error,
+    errorKind: page.errorKind,
     loading: page.loading,
     reload: page.reload,
     pageNumber: history.length,

@@ -13,11 +13,11 @@ async function tabTo(page: Page, target: Locator) {
 
 const pages = [
   "/console", "/console/users", "/console/keys", "/console/audit", "/console/requests",
-  "/console/quota", "/console/workflows", "/console/jobs", "/console/jobs/history",
+  "/console/quota", "/console/billing", "/console/workflows", "/console/jobs", "/console/jobs/history",
   "/console/jobs/history/job_p10", "/console/settings", "/console/account",
   "/operator/fleet", "/operator/models", "/operator/routes", "/operator/workflow-templates",
   "/operator/workflows", "/operator/audit", "/operator/requests", "/operator/metrics",
-  "/operator/operators", "/operator/account",
+  "/operator/operators", "/operator/account", "/operator/billing",
 ];
 
 for (const width of [1440, 390, 320]) {

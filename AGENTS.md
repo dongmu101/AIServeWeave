@@ -1,100 +1,123 @@
 # AIServeWeave 开发约定
 
-分布式 AI 推理节点管理平台，Go 1.27。按开源项目标准开发：文档、测试、注释与代码同等重要。
+分布式 AI 推理节点管理平台。文档、测试、注释与代码同等重要；Go 工具链以 `go.mod` 为准，Console 工具链以其 `package.json` 与局部约定为准。
 
-## 先读哪份文档
+## 开始工作
 
-本文件只写跨仓库的通用约定，细节以专门文档为准，不在此复述：
+1. 先读 [README.md](README.md) 了解项目；涉及交付范围、待办或验收时，再读 [STATUS.md](STATUS.md) 与目标服务的 `STATUS.md`。区分代码已交付、默认测试通过和真实环境已验收。
+2. 按下表读取当前改动需要的文档。已有实现以当前代码为准；发现文档不一致时，在本次涉及范围内同步修正。公共 API、配置与行为变更须同步对应文档。
+3. 修改前确认目标包已有的实现、测试与调用边界；尚未实现的能力以 STATUS 为依据，不根据目录名或历史设计假定已经可用。
 
-- [README.md](README.md) —— 项目简介、快速开始与文档索引。
-- [docs/architecture.md](docs/architecture.md) —— 架构、协议兼容、ComfyUI、调度、数据模型、安全与可观测性设计。
-- [service/aiServeWeaveAgent/tunnel/README.md](service/aiServeWeaveAgent/tunnel/README.md) —— 隧道协议定义、连接状态机、槽池、实施阶段。改隧道相关代码前必读。
-- [service/aiServeWeaveControlPlane/STATUS.md](service/aiServeWeaveControlPlane/STATUS.md) —— 控制面为什么用 go-zero 而数据面不用、三种凭据的三种存法、吊销的生效路径。改控制面或 Gateway 鉴权前必读。
+| 改动范围 | 必读入口 |
+| --- | --- |
+| 跨服务职责、协议、调度与数据模型 | [架构设计](docs/architecture.md) |
+| Agent/Gateway 隧道与 proto | [隧道协议与状态机](service/aiServeWeaveAgent/tunnel/README.md) |
+| Agent 配置、热重载与 CLI 账户额度 | [Agent README](service/aiServeWeaveAgent/README.md)、[Agent STATUS](service/aiServeWeaveAgent/STATUS.md)；CLI 适配再读对应后端包的 README |
+| Gateway 兼容 API、路由、Job 与产物 | [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md)；协议支持范围和能力门禁以该文档与代码为准 |
+| 控制面、Gateway 鉴权与凭据吊销 | [ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md) |
+| Registry 身份、令牌与名册 | [Registry README](service/aiServeWeaveRegistry/README.md) |
+| Console 页面、会话、转发与编辑器 | [Console AGENTS](service/aiServeWeaveConsole/AGENTS.md)；包含 Next.js 本地文档、TS 双版本、受限转发与验证要求 |
+| 数据库 schema、迁移、升级与恢复 | ControlPlane STATUS 的「数据库」与 [数据库升级与恢复](deploy/database-recovery.md) |
+| 部署、发布与真实环境验收 | [部署说明](deploy/README.md)、根 STATUS 中相关任务链接 |
+| 第三方依赖 | [依赖边界与选型理由](docs/agents/dependencies.md) |
 
-**README 与代码不一致视为缺陷。** 改公共 API 时同步更新对应文档，不要留到"以后补"。
+### CodeGraph
+
+仓库根目录存在 `.codegraph/` 时，定位或理解代码先调用 `codegraph_explore`，查询中指定问题、符号或文件路径；也可执行 `codegraph explore "<问题或符号>"`。使用返回的当前源码和调用关系，避免重复搜索已覆盖的代码。配置、文档、未覆盖内容或明确标记过时的源码再直接读取。没有索引时使用 `rg` 等常规工具，不自行建立索引。
 
 ## 代码地图
 
-布局是 `service/<服务名>/`，完整结构见 [架构设计「代码结构」](docs/architecture.md#代码结构)一节。各服务当前进度：
+布局与完整职责见 [架构设计「代码结构」](docs/architecture.md#代码结构)。本文件只保留选层所需的边界，功能完成情况由各服务 STATUS 维护。
 
-| 路径 | 状态 |
+| 路径 | 职责与边界 |
 | --- | --- |
-| `api/proto/` | 三边共享的 gRPC 契约，已生成 |
-| `common/runtime/` | 推理后端抽象：能力探测、配额、流式转换。Agent 与 Gateway 共用；`hosted/`（OpenAI 兼容的托管供应商）与 `anthropic/`（Claude 官方 API 与 Anthropic 兼容端点，经 Chat 适配）只由 Agent 注册 |
-| `common/tunnelwire/` | `common/runtime` 类型与隧道 proto 之间的双向编解码，隧道两端共用；结果标签的六值约定也在这里 |
-| `common/cliusagestatus/` | 本机 Codex / Claude Code CLI 订阅额度的不含凭据形状（百分比、窗口名、时间戳）。Agent 读取、隧道上报，Gateway 经 `nodeview` 允许列表输出给控制面与租户模型页 |
-| `common/metrics/` | `runtime.Metrics` 的实现与 Prometheus 文本导出，Agent/Gateway 使用同一注册表实现（各进程独立实例），ControlPlane 尚未接入；`metricstest/` 是各服务测试用的内存收集器 |
-| `common/apikey/` | API Key 的格式、哈希与展示形式。控制面铸造、Gateway 校验，两边必须算出同一个哈希，因此它是契约而非任一方的内部实现 |
-| `common/modelaccess/` | 商户可见/可调用的模型别名白名单契约：平台列表为上限、租户列表只能收窄，任一级空列表表示不限制。控制面存储与下发（随 Key 校验结果）、Gateway 在调度器入口执行，两边按同一套规则解释 |
-| `common/quota/` | 租户限制值及其含义。控制面存储与下发、Gateway 执行，两边必须按同一套规则解释同一份数据，因此同样是契约 |
-| `common/workflowview/` | 工作流模板目录与实时 job 视图的契约，Gateway 与控制面共用。模板不含图、job 不含运行位置（节点/运行时/解析后的模型），两者都是刻意的 |
-| `common/modelroute/` | 模型别名与目标、路由快照/摘要、生效状态和容量校验的共享契约；控制面发布与 Gateway 应用共用 |
-| `common/nodeview/` | 机群清单的契约：Gateway 报告已连接节点、控制面聚合后交给运维控制台的形状。渲染采用允许列表——只输出这里点名的字段，不序列化 `NodeInfo` 或 `Descriptor` 碰巧持有的一切 |
-| `service/aiServeWeaveAgent/` | `tunnel/`（隧道）、`localdiscovery/`（本机 Ollama/vLLM/TensorRT-LLM/TokenSpeed/SGLang 自动发现）、`hostresources/`（Hello 握手前的 CPU/内存/GPU 静态容量探测，STATUS.md P2）、`agentconfig/`（`-config` 的 YAML 契约：远程 Gateway 连接 + 本地运行时声明）、`configui/`（`-config-ui-addr` 的本地设置页面，回环地址专用）与 `cliusage/`（本地 Codex / Claude Code CLI 订阅额度的不含凭据快照，每分钟最多查询一批，供设置页面展示）已实现；`codexcli/`、`claudecode/` 分别是 `kind: codex` / `claude` 的本地 CLI 推理后端（可用 `account_dir` 在一台机器上挂多个账户），`reload.go` 在 `SIGHUP` 或设置页保存时热重载 `runtimes:` 列表，`cliagent/` 以一套通用进程层承载 `grok` / `opencode` / `cursor` / `codebuddy` / `qoder` / `pi` 六种纯文本 CLI 后端；`workflow/` 四个文件目前只有 package 声明，是空壳 |
-| `service/aiServeWeaveGateway/` | `tunnelserver/`（隧道终结）、`scheduler/`（节点选择，含后端限流冷却与会话亲和）、`httpapi/`（OpenAI 前门：chat/responses/embeddings/models + 工作流 Job 的提交、状态、SSE 事件流、取消与产物 + 租户配额执行）、`workflow/`（工作流模板目录与输入绑定）、`ratelimit/`（租户配额执行，内存与 Redis 两个实现）、`routing/`（模型别名与节点选择器）、`routesync/`（控制面路由拉取、缓存与热切换）、`adminapi/`（`-admin-addr` 上只读的机群清单、工作流目录与按租户的 job 端点，供控制面聚合）均已落地；`controlplaneclient/` 提供 Key 校验与 Job 持久化客户端，`httpapi/` 已接入有界后台同步、旁路持久化与非终态恢复；`e2e/`（与 Agent 的联调测试） |
-| `service/aiServeWeaveRegistry/` | `NodeIdentity`（证书签发/续期）、`GatewayDirectory`（副本名册）与 `TokenAdmin`（令牌签发/撤销、节点禁用/启用）已落地，详见其 README |
-| `service/aiServeWeaveControlPlane/` | 控制面 Admin API（go-zero + gorm + Redis）：租户用户与平台运维生命周期、Redis 权威会话、API Key、审计、配额均已落地；禁用用户在数据库事务内吊销其 Key，Key 缓存以 generation 常数时间失效；列表为游标分页 + 服务端筛选。另有 Fleet 聚合、发布管理、Job 历史、租户 API 参考文档（`api_docs` 表 + 编译内置种子）、内部写 API，以及 `internal/comfyeditor`（工作流可视化编辑器的只编辑桩后端与编译内置的核心节点目录，`ComfyEditor.DistDir` 留空即关闭），详见其 STATUS |
-| `service/aiServeWeaveConsole/` | Next.js 16 + React 19 + Tailwind 4 + shadcn/ui。已落地登录、服务端会话（AES-256-GCM 密封 HttpOnly Cookie + ControlPlane Redis 撤销）、租户用户/账户安全、平台运维账户管理、API Key、审计、配额、机群、工作流、Job 与 API 文档页面；租户和平台 Cookie/白名单相互隔离。模板页的可视化编辑以 wujie 同源挂载官方 ComfyUI_frontend，是 Console 唯一按前缀转发的路由，约束与已接受的风险见 Console AGENTS。Job 取消和产物访问仍是服务端直连 Gateway 的唯一例外，凭据边界见 Console AGENTS。TypeScript 走 6/7 双版本并存，测试用 Node 内置 runner |
-
-动手前先确认目标服务是否已有实现，不要在骨架服务里凭空假设已有的包。
+| `api/proto/tunnel/v1/` | Agent、Gateway、Registry 共用的 gRPC 契约与生成代码 |
+| `common/runtime/` | 后端语义、能力门禁、适配器与并发控制；托管供应商适配器只由 Agent 注册 |
+| `common/tunnelwire/` | runtime 类型与隧道 proto 的唯一双向编解码边界，包括结果标签约定 |
+| `common/` 其他包 | 仅承载跨服务必须一致的契约或实现，例如 Key 哈希、配额、模型授权、路由与模板发布、允许列表视图、无凭据状态、指标与本机发现；复用已有包，避免各服务重定义 |
+| `service/aiServeWeaveAgent/` | 本机配置、发现、运行时与 CLI、主动出站隧道；执行本地允许的操作 |
+| `service/aiServeWeaveGateway/` | 兼容 API 前门、鉴权与配额、路由与调度、隧道终结、Job、产物存储与控制面同步 |
+| `service/aiServeWeaveRegistry/` | 节点身份、证书与令牌、Gateway 副本名册 |
+| `service/aiServeWeaveControlPlane/` | 管理与内部 API、会话、授权、数据库、发布、审计、历史指标与请求/用量记录、预付点数计费；Dodo Payments SDK 只在 `internal/billing/dodo` |
+| `service/aiServeWeaveConsole/` | 管理界面与受限服务端转发；具体凭据和跨服务例外见其 AGENTS |
+| `deploy/` | 部署、升级、恢复与验收操作说明 |
 
 ## 契约唯一源
 
-`api/proto/tunnel/v1/tunnel.proto` 是 Agent、Gateway、Registry 之间唯一的契约来源，三边都 import 同一个生成包，不允许各自定义等价结构。
+- `api/proto/tunnel/v1/tunnel.proto` 是 Agent、Gateway、Registry 共用的 gRPC 契约，三边 import 同一个生成包，不各自定义等价结构。
+- `*.pb.go` 不手工编辑。修改 `.proto` 后运行 `go generate ./api/...`；生成工具见 [generate.go](api/proto/tunnel/v1/generate.go)。生成结果必须与仓库中的契约一致。
+- 跨服务的非 proto 契约复用对应 `common/` 包。控制面发布与 Gateway 执行必须使用同一套配额、模型授权、路由和模板语义。
+- Console 手写的响应校验与契约镜像，在后端字段或语义变化时同步更新并验证，位置见 Console AGENTS。
 
-- 生成代码（`*.pb.go`）**不手工编辑**，改动只发生在 `.proto` 上。
-- 重新生成：`go generate ./api/...`（需先装 `protoc-gen-go` 与 `protoc-gen-go-grpc`，见 [generate.go](api/proto/tunnel/v1/generate.go)）。
-- 生成结果必须与仓库内文件一致，有 diff 说明没重新生成或工具版本不对。
+## 分层职责
+
+- 隧道层负责连接、传输、分发与背压；能力判断归 `runtime`，模型路由与节点选择、重试归 Gateway 路由层和调度器。
+- 流式请求的重试与会话续接遵守已有边界；产生客户端可见输出后不得重放推理，CLI 工具续接须维持原会话的节点、身份与历史约束。
+- 本地 CLI 的登录、账户目录与供应商凭据留在 Agent；CLI 订阅窗口、平台租户配额和单次推理用量是独立概念。
+- 数据库变更沿用固定版本 SQL、校验和与 dirty 状态检查，不引入隐式 schema 漂移。各表的 PostgreSQL/MySQL 支持范围逐项确认，不能由基础表双支持推定所有表双支持。
+
+## 安全红线
+
+以下属于安全要求：
+
+- API Key、自定义鉴权头、完整 Prompt、工作流 JSON 不得写入日志或错误文本；错误脱敏统一走 `runtime.Redact`。允许列表视图只输出契约明确声明的字段，不直接序列化内部 `NodeInfo`、`Descriptor` 或配置对象。
+- runtime 与隧道 proto 的转换集中在 `common/tunnelwire`；凭据不进入隧道。推理后端的 Authorization 由 Agent 本地配置提供。
+- Agent 主动出站建立隧道，不监听公网端口；本地设置页面只允许回环地址。
+- `runtime_id` 必须通过 Agent 本地运行时允许列表检查；保留已有的空列表语义。模型下载来源、自定义节点、升级清单等分别遵守其本地授权与签名规则，不类推其他允许列表的空值含义。
+- Agent 不提供通用 HTTP 或命令代理；隧道只携带运行时语义与封闭控制动作。下载来源、执行目标、镜像与路径按各功能的本地声明及受信清单校验，不由远端任意指定。
+- 每一跳的缓冲、队列、请求体与并发都有界。流式事件逐条转发，产物边读边送，通过 gRPC 流控向上游传递背压。
+- Console 的浏览器与服务端凭据边界、租户与平台会话隔离、转发允许列表、Job 直连 Gateway 和 ComfyUI 编辑器例外，严格沿用 Console AGENTS 的约束；新增端点不能沿用编辑器的前缀转发例外。
+
+## 编码约定
+
+- 新增或修改的导出标识符须有完整 doc comment，首行以标识符本身开头。
+- 新增或修改的代码注释中英成对，英文在前、中文紧随其后，含义保持一致；行尾短注释可用 `// English / 中文`。生成代码与 `.proto` 注释不受此约束。仅在本次涉及的函数中补齐双语，保留未改动代码的原有注释。
+
+  ```go
+  // Consume validates token and marks it used. It returns ErrInvalidToken
+  // when the token is unknown, already used, or expired.
+  //
+  // Consume 校验 token 并标记为已使用；token 未知、已使用或过期时返回 ErrInvalidToken。
+  func (s *Store) Consume(token string) error {
+      now := s.clock.Now() // one timestamp for the check / 整次校验共用一个时间戳
+  ```
+
+- 表驱动测试每个用例有可读 `name`，失败信息包含期望值与实际值。
+- 测试通过注入的 `runtime.Clock` 推进时间，不用真实 `time.Sleep` 推进测试时钟。
+- 协程泄漏在各包 `main_test.go` 的 `TestMain` 统一断言，不在单个测试里重复检查。
+- 默认测试不依赖真实 Gateway、GPU、外部网络或真实数据库。真实后端与数据库测试单独门控，参考 `common/runtime/ollama/live_test.go` 和 ControlPlane live 测试。
+- 包内测试辅助放在 `internal/`，例如 `common/runtime/internal/runtimetest/`，不外泄给使用方。
+- 标准库能解决的问题不增加第三方依赖；新增依赖说明理由并检查服务边界，现有例外见 [依赖约定](docs/agents/dependencies.md)。
 
 ## 质量门禁
 
-改完代码全部跑通再提交：
+先运行改动相关的测试；Go 代码提交前完成以下门禁，与当前 CI 的 Go 检查保持一致：
 
 ```bash
-gofmt -l ./service ./api      # 必须无输出
+gofmt -l ./service ./api           # 必须无输出
 go vet ./...
-go build ./...                # 四个 Go 服务入口都必须能链接
-go generate ./api/...         # 结果须与仓库一致
+go build ./...                    # 所有 Go 服务入口必须能链接
+go generate ./api/...             # 核对 api/ 中生成差异与本次契约变更一致
 go test ./...
 go test -race ./service/...
 ```
 
-## 编码约定
+涉及 `common/` 改动时，另运行 `gofmt -l ./common` 和所改共享包的 race 测试，补足当前 CI 对共享包格式与 race 的覆盖。
 
-- 所有导出标识符有完整 doc comment，以标识符本身开头。
-- 注释一律中英双语，英文在前、中文紧随其后成对出现 —— doc comment 首行必须以标识符本身开头，godoc 才认，所以英文只能在前。中文是等价表述而非逐词直译，英文改了中文同步改，两边不一致按缺陷处理。行尾短注释同理，用 `//` 一行写完两种语言：
+Console 改动执行其 AGENTS 中的 lint、build、typecheck、test；新增路由先 build 生成 `.next/types`。数据库、浏览器与真实后端验收按对应文档单独执行，不以默认测试通过替代真实环境验证。
 
-  ```go
-  // Consume validates token and marks it used, so a second call with the same
-  // value fails. It returns ErrInvalidToken for a token that is unknown,
-  // already used, or expired.
-  //
-  // Consume 校验 token 并将其标记为已使用，同一个值第二次调用必定失败。
-  // token 未知、已用过或已过期，都返回 ErrInvalidToken。
-  func (s *Store) Consume(token string) error {
+纯文档改动检查路径、链接、命令与差异，无需运行 Go 或 Console 构建。交付时说明改动、验证结果及未能执行的检查，不把未执行的验证写成通过。
 
-      now := s.clock.Now() // single timestamp for the whole check / 整次校验共用一个时间戳
-  ```
+## Agent skills
 
-  生成代码（`*.pb.go`）与 `.proto` 里的注释不受此约束。此约定只对新写和改动的代码生效：仓库里既有的纯英文注释保持原样，**不要**为了统一风格发起全量回溯改写，只在动到某个函数时顺手把那一处补成双语。
-- 表驱动测试，每个用例有可读 `name`，失败信息同时包含期望值与实际值。
-- 测试不用真实 `time.Sleep` 推进时间，一律通过注入的 `runtime.Clock` 控制。
-- 协程泄漏在各包 `main_test.go` 的 `TestMain` 里统一断言，**不要**在单个测试里手写检查。
-- 默认测试不依赖真实 Gateway、GPU 或外部网络；需要真实后端的测试单独隔离（参考 `runtime/ollama/live_test.go`）。
-- 包内测试辅助放 `internal/`（如 `runtime/internal/runtimetest/`），不外泄给使用方。
-- 新增第三方依赖要说明理由；标准库能解决的不引入依赖。**Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 `coder/websocket`，这条线要守住。** Gateway 在此之外多一个 `go-redis`：跨副本限流需要一份共享计数，而本地计数在 N 个副本下会放行 N 倍额度——这是一次经过评估的例外，`-redis-addr` 留空时退回副本内执行，代价记录在 Gateway README。go-zero、gorm、golang-jwt、x/crypto 仍只属于控制面，理由见控制面 README 的「为什么这个服务用 go-zero，而数据面不用」；Gateway 的 `controlplaneclient` 依旧只用标准库 `net/http`。**Agent 在此之外另有一个记录在案的例外：`agentconfig` 包用 `github.com/spf13/viper` 解析 `-config` 文件。** 这是一次分量比 Gateway 的 `go-redis` 更重的例外，如实记录：viper 本身没有直接解决"YAML 转 struct"之外的任何本包需求，却带进 13 个额外模块（`spf13/afero`、`spf13/pflag`、`spf13/cast`、`fsnotify`、`sagikazarmark/locafero`、`subosito/gotenv`、`go-viper/mapstructure/v2` 等），其中 `spf13/pflag` 与 Agent 本来就在用的标准库 `flag` 功能重叠，但 `agentconfig` 从不使用 viper 的 flag/env/文件热监听能力，只用它的 `SetConfigFile`/`ReadInConfig`/`Unmarshal`/`Set`/`WriteConfigAs` 五个函数读写一份本地 YAML 文件。换成零依赖的标准库 `encoding/json`、或零依赖的 `github.com/goccy/go-yaml`，同样能做到"YAML 转 struct"，viper 是团队明确要求使用的选择，不是技术上必要的选择。它只用于本地文件解析，不涉及隧道协议，不改变隧道协议解码路径仍然只用 `common/tunnelwire` 这条既有约束。
+### Issue tracker
 
-## 安全红线
+任务以本地 Markdown 保存在 `.scratch/<feature>/`。创建、读取或更新任务前，阅读 [任务系统约定](docs/agents/issue-tracker.md)。公开贡献仍按 [CONTRIBUTING.md](CONTRIBUTING.md) 的 GitHub 流程进行。
 
-以下几条被违反就是安全缺陷，不是风格问题：
+### Triage labels
 
-- API Key、自定义鉴权头、完整 Prompt、工作流 JSON **不得**写入日志或错误文本，统一走 `runtime.Redact`。
-- 跨隧道的 proto 转换只在 `common/tunnelwire` 里做，不在各服务里手写字段拷贝 —— 「凭据不过隧道」是靠那一个包保证的。
-- Agent 只主动出站建连，从不监听公网端口。
-- `runtime_id` 必须命中 Agent 本地白名单才执行 —— 即使 Gateway 被攻破也不能让 Agent 访问未声明地址。
-- Agent 永远不做通用 HTTP 代理：隧道只传运行时语义，不传任意 URL、Host 或 Authorization。
-- 任何一跳都不得无界缓冲：流式事件逐条转发，产物边读边送，背压靠 gRPC 流控向上游传导。
+设置或解释任务状态前，阅读 [triage 标签映射](docs/agents/triage-labels.md)，沿用已确认的五种默认字符串。
 
-## 分层职责
+### Domain docs
 
-隧道层不做能力判断、不做模型路由、不做重试 —— 这三件事分别属于 `runtime` 的能力门禁和 Gateway 的调度器。新增逻辑前先确认它该落在哪一层。
+探索代码前，阅读 [领域文档规则](docs/agents/domain.md)。采用 single-context 布局，术语表与 ADR 按需创建。

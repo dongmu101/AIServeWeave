@@ -18,6 +18,13 @@ const observed = { collected_at: at, replicas: [], partial: false };
 const job = { id: "job_p10", workflow_id: LONG_TEXT, state: "running", created_at: at, updated_at: at, artifact_ids: [] };
 const history = { job_id: job.id, workflow_id: job.workflow_id, workflow_version: "1", state: "succeeded", created_at: at, updated_at: at, artifacts: [] };
 const routeSnapshot = { revision: 1, digest: "d".repeat(64), created_at: at, actor_id: "op_p10", routes: [{ model: LONG_TEXT, targets: [{ runtime_model: LONG_TEXT }] }] };
+const fixedPackage = { id: "pkg_fixed", name: LONG_TEXT, kind: "fixed", credits_micro: 10_000_000, price_minor: 999, currency: "USD", active: true, sort_order: 1, created_at: at, updated_at: at };
+const customPackage = { id: "pkg_custom", name: "Custom top-up", kind: "custom", currency: "USD", credits_per_minor_unit_micro: 10_000, min_amount_minor: 500, max_amount_minor: 100_000, active: true, sort_order: 2, created_at: at, updated_at: at };
+const ledgerEntry = { id: "led_p10", kind: "topup", amount_micro: 10_000_000, balance_after_micro: 12_345_678, ref: LONG_TEXT, created_at: at };
+const order = { id: "ord_p10", package_id: fixedPackage.id, amount_minor: 999, currency: "USD", credits_micro: 10_000_000, refunded_minor: 0, status: "paid", payment_id: "pay_p10", created_at: at, updated_at: at };
+/** BILLING_OVERVIEW is the tenant billing read; tests override it per case.
+ * BILLING_OVERVIEW 是租户计费读取的样本；各用例可按需覆盖。 */
+export const BILLING_OVERVIEW = { mode: "prepaid", balance_micro: 12_345_678, blocked: false, has_customer: true, packages: [fixedPackage, customPackage] };
 const template = { template_id: LONG_TEXT, revision: 1, digest: "d".repeat(64), created_at: at, actor_id: "op_p10", description: LONG_TEXT, visible_tenant_ids: ["tnt_p10"], inputs: [{ name: "text", node: "1", field: "text", type: "string", required: true }] };
 
 /** auditPage serves at most 200 rows from a synthetic 10,000-entry data set.
@@ -53,7 +60,15 @@ async function installFixtures(page: Page, unexpected: string[]) {
     const method = route.request().method();
     let json: unknown;
     if (method === "GET") {
-      if (path.endsWith("/audit")) json = auditPage(url);
+      if (path === "/admin/v1/billing") json = BILLING_OVERVIEW;
+      else if (path === "/admin/v1/billing/ledger") json = { items: [ledgerEntry], next_cursor: "" };
+      else if (path === "/admin/v1/billing/orders") json = { items: [order], next_cursor: "" };
+      else if (path === "/operator/v1/billing/packages") json = { items: [{ ...fixedPackage, dodo_product_id: "pdt_fixed" }, { ...customPackage, active: false, dodo_product_id: LONG_TEXT.slice(0, 64) }] };
+      else if (path === "/operator/v1/billing/model-prices") json = { items: [{ model: "*", input_micro_per_mtok: 1_000_000, output_micro_per_mtok: 2_000_000, updated_by: "op_p10", updated_at: at }, { model: `org/${LONG_TEXT}`, input_micro_per_mtok: 500_000, output_micro_per_mtok: 1_500_000, updated_by: "op_p10", updated_at: at }] };
+      else if (path === "/operator/v1/billing/tenants") json = { items: [{ id: user.tenant_id, name: LONG_TEXT, status: "active", mode: "prepaid", balance_micro: 0, blocked: true, created_at: at }], next_cursor: "" };
+      else if (path === "/operator/v1/billing/orders") json = { items: [{ ...order, tenant_id: user.tenant_id }], next_cursor: "" };
+      else if (path === "/operator/v1/billing/ledger") json = { items: [{ ...ledgerEntry, tenant_id: user.tenant_id }], next_cursor: "" };
+      else if (path.endsWith("/audit")) json = auditPage(url);
       else if (path === "/admin/v1/api-docs") json = { items: API_DOCS };
       else if (path.startsWith("/admin/v1/api-docs/")) json = API_DOCS.find(doc => doc.slug === path.split("/").at(-1));
       else if (path === "/admin/v1/users") json = { items: [user, { ...user, id: "usr_peer", email: "peer@example.invalid", role: "member" }], next_cursor: "" };

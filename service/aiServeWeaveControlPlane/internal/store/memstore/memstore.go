@@ -56,6 +56,7 @@ type Store struct {
 	alertRules        map[string]model.AlertRule
 	alertInstances    map[string]model.AlertInstance
 	apiDocs           map[string]model.APIDoc
+	billing           billingState
 }
 
 // New returns an empty store.
@@ -76,6 +77,7 @@ func New() *Store {
 		alertRules:        map[string]model.AlertRule{},
 		alertInstances:    map[string]model.AlertInstance{},
 		apiDocs:           map[string]model.APIDoc{},
+		billing:           newBillingState(),
 	}
 }
 

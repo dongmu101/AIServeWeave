@@ -118,11 +118,13 @@ type usageRecordWire struct {
 // PushUsageRecords implements httpapi.UsageLedgerClient. An empty batch is
 // a no-op that never reaches the network — the pusher's own flush already
 // guards against calling with nothing to send, but a second guard here
-// costs nothing and keeps this method safe to call directly.
+// costs nothing and keeps this method safe to call directly. A refusal of
+// the batch's content wraps httpapi.ErrUsageBatchRejected.
 //
 // PushUsageRecords 实现 httpapi.UsageLedgerClient。空批次是一个从不触网的
 // 空操作——推送器自己的 flush 已经防住了"无内容可发送时调用"的情形，但这里
-// 再加一道防护不花什么代价，也让这个方法在被直接调用时依然安全。
+// 再加一道防护不花什么代价，也让这个方法在被直接调用时依然安全。批次内容被拒绝时
+// 返回的错误包装 httpapi.ErrUsageBatchRejected。
 func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []httpapi.UsageRecord) error {
 	if len(records) == 0 {
 		return nil
@@ -160,6 +162,10 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 		return fmt.Errorf("controlplaneclient: reaching the control plane: %w", err)
 	}
 	defer resp.Body.Close()
+	switch resp.StatusCode {
+	case http.StatusBadRequest, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity:
+		return fmt.Errorf("controlplaneclient: the control plane answered %d: %w", resp.StatusCode, httpapi.ErrUsageBatchRejected)
+	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("controlplaneclient: the control plane answered %d", resp.StatusCode)
 	}

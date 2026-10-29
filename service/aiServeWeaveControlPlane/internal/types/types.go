@@ -303,6 +303,12 @@ type VerifyResponse struct {
 	KeyID    string             `json:"key_id"`
 	Limits   quota.Limits       `json:"limits"`
 	Models   modelaccess.Policy `json:"models"`
+	// BillingBlocked is present and true only for a prepaid tenant whose
+	// balance is exhausted; the Gateway answers its requests with 402.
+	//
+	// BillingBlocked 仅在 prepaid 租户余额耗尽时出现且为 true；Gateway 对其请求回答
+	// 402。
+	BillingBlocked bool `json:"billing_blocked,omitempty"`
 }
 
 // TenantListResponse is one page of tenants for a platform operator.

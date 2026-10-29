@@ -29,6 +29,7 @@ import (
 	commonmetrics "AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/dodo"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyeditor"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
@@ -307,6 +308,22 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	})
 	if comfyUIManagedRouter != nil {
 		logicOpts = append(logicOpts, logic.WithComfyUIManagedRouter(comfyUIManagedRouter))
+	}
+
+	if cfg.Billing.Enabled {
+		provider, err := dodo.New(dodo.Config{
+			APIKey:        cfg.Billing.Dodo.APIKey,
+			WebhookSecret: cfg.Billing.Dodo.WebhookSecret,
+			Environment:   cfg.Billing.Dodo.Environment,
+		})
+		if err != nil {
+			return nil, errors.Join(errors.New("configuring Dodo Payments billing"), err)
+		}
+		logicOpts = append(logicOpts, logic.WithBilling(logic.BillingConfig{
+			Provider:           provider,
+			ReturnURL:          cfg.Billing.ReturnURL,
+			SignupGrantCredits: cfg.Billing.SignupGrantCredits,
+		}))
 	}
 
 	svcLogic := logic.New(st, clock, logicOpts...)

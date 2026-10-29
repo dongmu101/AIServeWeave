@@ -39,6 +39,32 @@ type Identity struct {
 	// key 与免认证两种模式下它也保持为 nil。中间件把它交给调度器——每个模型都在那里
 	// 被解析，因此也在那里执行。
 	Models *modelaccess.Policy
+	// BillingBlocked marks a prepaid tenant whose balance is exhausted. The
+	// key authenticated; the request is refused with 402 so the caller tops
+	// up rather than replacing a key that works.
+	//
+	// BillingBlocked 标记一个余额已耗尽的 prepaid 租户。key 已通过认证；请求以 402
+	// 拒绝，让调用方去充值，而不是去替换一把仍然有效的 key。
+	BillingBlocked bool
+}
+
+// startsBillableWork reports whether r can start new work, which an exhausted
+// balance refuses. Reads, deletions and job cancellation cannot: a tenant
+// whose balance ran out mid-job can still fetch what it already paid for,
+// watch the job and stop it.
+//
+// startsBillableWork 报告 r 是否可能发起新的工作，余额耗尽时拒绝的正是这类请求。
+// 读取、删除与取消 job 不会：在 job 执行中途耗尽余额的租户，仍能取回已经付费的结果、
+// 查看 job 并停止它。
+func startsBillableWork(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodDelete:
+		return false
+	case http.MethodPost:
+		return !(strings.HasPrefix(r.URL.Path, "/v1/jobs/") && strings.HasSuffix(r.URL.Path, "/cancel"))
+	default:
+		return true
+	}
 }
 
 // ErrKeyRejected is what a verifier returns for a key that does not
@@ -179,6 +205,17 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 			a.logger.Error("api key verification is unavailable", slog.Any("error", err))
 			writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "verification_unavailable",
 				"cannot verify the API key right now")
+			return
+		}
+		if identity.BillingBlocked && startsBillableWork(r) {
+			// Checked here rather than in rateLimit, which skips a tenant with
+			// unlimited quota entirely; an exhausted balance must stop every
+			// tenant whatever its limits.
+			//
+			// 在这里而不是在 rateLimit 中检查：rateLimit 会整个跳过配额不限的租户，而
+			// 余额耗尽必须拦住每一个租户，无论其配额如何。
+			writeOpenAIError(w, http.StatusPaymentRequired, "insufficient_quota", "insufficient_balance",
+				"the account balance is exhausted; top up credits to continue")
 			return
 		}
 		ctx := context.WithValue(r.Context(), identityKey{}, identity)

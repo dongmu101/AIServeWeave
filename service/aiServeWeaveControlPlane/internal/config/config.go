@@ -18,6 +18,9 @@ package config
 
 import (
 	"errors"
+	"math"
+	"net/url"
+	"strings"
 	"time"
 
 	"github.com/zeromicro/go-zero/rest"
@@ -197,6 +200,56 @@ type Config struct {
 	// Signup 配置 POST /admin/v1/auth/signup 上的租户自助注册。它是可选的，默认关闭：
 	// 一个无需认证的写端点应当由部署主动开启，而不是被一次升级悄悄打开。
 	Signup SignupConf `json:",optional"`
+
+	// Billing configures prepaid-credit billing through Dodo Payments.
+	// Optional and off by default: with it off there is no billing route, no
+	// usage is charged and no key is ever refused for its balance.
+	//
+	// Billing 配置经 Dodo Payments 的预充值点数计费。它是可选的，默认关闭：关闭时
+	// 没有任何计费路由，不对任何用量扣费，也不会因余额拒绝任何 key。
+	Billing BillingConf `json:",optional"`
+}
+
+// BillingConf configures prepaid-credit billing.
+//
+// BillingConf 配置预充值点数计费。
+type BillingConf struct {
+	// Enabled mounts the billing routes and the webhook, charges usage
+	// against prepaid balances, and lets key verification refuse an
+	// exhausted prepaid tenant.
+	//
+	// Enabled 挂载计费路由与 webhook，从预付余额中扣除用量，并让 key 校验拒绝余额已
+	// 耗尽的 prepaid 租户。
+	Enabled bool `json:",default=false"`
+	// Dodo is the Dodo Payments account. Its secrets come from the
+	// environment like every other secret here.
+	//
+	// Dodo 是 Dodo Payments 账户。其密钥与这里其他所有密钥一样来自环境变量。
+	Dodo DodoConf `json:",optional"`
+	// ReturnURL is where the provider sends a tenant after checkout and back
+	// from the customer portal: the Console's billing page.
+	//
+	// ReturnURL 是结账结束与离开客户门户后服务商把租户送回的地址：Console 的计费页面。
+	ReturnURL string `json:",optional"`
+	// SignupGrantCredits is the balance, in whole credits, a self-registered
+	// tenant starts with. Self-registered tenants are prepaid; tenants made
+	// with the bootstrap token are exempt.
+	//
+	// SignupGrantCredits 是自助注册的租户起步时的余额，以整点计。自助注册的租户是
+	// prepaid；用 bootstrap token 创建的租户是 exempt。
+	SignupGrantCredits int64 `json:",default=0"`
+}
+
+// DodoConf is one Dodo Payments account.
+//
+// DodoConf 是一个 Dodo Payments 账户。
+type DodoConf struct {
+	APIKey        string `json:",optional"`
+	WebhookSecret string `json:",optional"`
+	// Environment is "test" or "live", and must match the API key's prefix.
+	//
+	// Environment 取 "test" 或 "live"，且必须与 API key 的前缀一致。
+	Environment string `json:",default=test"`
 }
 
 // SignupConf configures self-service tenant sign-up. Registration is open
@@ -697,6 +750,11 @@ func (c Config) Validate() error {
 	if c.UsageRecordRetention < 0 {
 		return errors.New("config: UsageRecordRetention must not be negative")
 	}
+	if c.Billing.Enabled {
+		if err := c.Billing.validate(); err != nil {
+			return err
+		}
+	}
 	if c.Signup.Enabled {
 		if c.Signup.MaxPerHour < 0 {
 			return errors.New("config: Signup.MaxPerHour must not be negative")
@@ -704,6 +762,36 @@ func (c Config) Validate() error {
 		if err := c.Signup.Limits().Validate(); err != nil {
 			return errors.New("config: Signup starting quota is invalid: " + err.Error())
 		}
+	}
+	return nil
+}
+
+// validate checks an enabled billing block. The key prefix check catches the
+// one mistake that would otherwise surface only at the first checkout: a test
+// key pointed at the live API, or the reverse.
+//
+// validate 校验一个已开启的计费配置块。key 前缀检查拦下一个否则要到第一次结账才会
+// 暴露的错误：把 test key 指向 live API，或者反过来。
+func (b BillingConf) validate() error {
+	if b.Dodo.APIKey == "" || b.Dodo.WebhookSecret == "" {
+		return errors.New("config: Billing.Dodo.APIKey and Billing.Dodo.WebhookSecret are required once billing is enabled")
+	}
+	switch b.Dodo.Environment {
+	case "test", "live":
+	default:
+		return errors.New("config: Billing.Dodo.Environment must be test or live")
+	}
+	for _, prefix := range []string{"dodo_test_", "dodo_live_"} {
+		if strings.HasPrefix(b.Dodo.APIKey, prefix) && prefix != "dodo_"+b.Dodo.Environment+"_" {
+			return errors.New("config: Billing.Dodo.APIKey does not belong to the " + b.Dodo.Environment + " environment")
+		}
+	}
+	parsed, err := url.Parse(b.ReturnURL)
+	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
+		return errors.New("config: Billing.ReturnURL must be an absolute http(s) URL once billing is enabled")
+	}
+	if b.SignupGrantCredits < 0 || b.SignupGrantCredits > math.MaxInt64/1_000_000 {
+		return errors.New("config: Billing.SignupGrantCredits is out of range")
 	}
 	return nil
 }

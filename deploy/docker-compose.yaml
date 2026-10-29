@@ -208,6 +208,11 @@ services:
       AISW_GATEWAY_ADMIN_TOKEN: ${AISW_GATEWAY_ADMIN_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_MODEL_PULL_TOKEN: ${AISW_GATEWAY_MODEL_PULL_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_GATEWAY_COMFYUI_MANAGED_TOKEN: ${AISW_GATEWAY_COMFYUI_MANAGED_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      # Dodo Payments credentials, read only when controlplane.yaml enables
+      # Billing; empty by default because billing is off.
+      # Dodo Payments 凭据，只在 controlplane.yaml 开启 Billing 时读取；计费默认关闭，因此默认为空。
+      AISW_DODO_API_KEY: ${AISW_DODO_API_KEY:-}
+      AISW_DODO_WEBHOOK_SECRET: ${AISW_DODO_WEBHOOK_SECRET:-}
       MYSQL_USER: ${MYSQL_USER:-aiserveweave}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}

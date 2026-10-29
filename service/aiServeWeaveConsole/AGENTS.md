@@ -77,6 +77,10 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 
 **唯一的例外：实时 Job 与历史详情页面的取消与产物访问，Console 服务端直连 Gateway 数据面。** 取消（`POST /v1/jobs/{id}/cancel`）与产物下载（`GET /v1/jobs/{id}/artifacts`、`GET /v1/artifacts/{id}`）在 Gateway 数据面认的是租户自己的 API Key，控制面从不持有、也不该持有它，因此这两个操作没有办法走"经控制面转发"这条唯一路径——详细取舍见 [ControlPlane STATUS「Job 持久化契约」](../aiServeWeaveControlPlane/STATUS.md#已实现的持久化历史查询与-console-接入j07)。做法是：owner/admin 用已有的"创建 API Key"功能生成一把该租户的 Key，粘贴进 Console 一个专门的设置页，由 Console 服务端加密存储，仅用于代表已登录会话调用上述取消、产物列举与下载端点；这把 Key **不做 scope 收紧**，与用户自己创建的 Key 权限完全相同，被拿到后不只能取消/读产物，也能拿去跑推理烧配额——这是当前没有真实租户在生产环境运行阶段的刻意权衡，不是遗漏，真有生产租户后应重新评估是否收紧。除这些端点外，其余一切仍然只走控制面；这把 Key **不向浏览器 JavaScript 返回明文**；设置时由用户输入，随后只以密封的 HttpOnly 会话 Cookie 保存，服务端解密使用。
 
+### 计费只经控制面
+
+**Console 不持有 Dodo Payments 凭据，计费只经控制面。** 不引入 `dodopayments` 等支付 SDK，不直连 Dodo，不接收 Dodo Webhook（它直接打到控制面 `POST /billing/v1/dodo/webhook`，不在任何白名单里）。结账页与客户门户链接由控制面申请后交回，Console 只校验它是绝对 https URL 再跳转（`lib/console/billing.ts` 的 `parseCheckout`/`parsePortalLink`）。支付回跳带来的 `status`/`payment_id` 只是「开始有限次等待服务端确认」的提示，**绝不**据此判定到账。结账、门户、余额调整等写操作只发送一次，不自动重试。
+
 ### ComfyUI 编辑器：同源微前端（已接受的风险）
 
 ```text
