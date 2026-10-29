@@ -48,6 +48,25 @@ type Identity struct {
 	BillingBlocked bool
 }
 
+// startsBillableWork reports whether r can start new work, which an exhausted
+// balance refuses. Reads, deletions and job cancellation cannot: a tenant
+// whose balance ran out mid-job can still fetch what it already paid for,
+// watch the job and stop it.
+//
+// startsBillableWork 报告 r 是否可能发起新的工作，余额耗尽时拒绝的正是这类请求。
+// 读取、删除与取消 job 不会：在 job 执行中途耗尽余额的租户，仍能取回已经付费的结果、
+// 查看 job 并停止它。
+func startsBillableWork(r *http.Request) bool {
+	switch r.Method {
+	case http.MethodGet, http.MethodHead, http.MethodDelete:
+		return false
+	case http.MethodPost:
+		return !(strings.HasPrefix(r.URL.Path, "/v1/jobs/") && strings.HasSuffix(r.URL.Path, "/cancel"))
+	default:
+		return true
+	}
+}
+
 // ErrKeyRejected is what a verifier returns for a key that does not
 // authenticate, whatever the reason. A verifier must not distinguish unknown
 // from revoked from expired: the caller cannot act differently on any of them,
@@ -188,7 +207,7 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 				"cannot verify the API key right now")
 			return
 		}
-		if identity.BillingBlocked {
+		if identity.BillingBlocked && startsBillableWork(r) {
 			// Checked here rather than in rateLimit, which skips a tenant with
 			// unlimited quota entirely; an exhausted balance must stop every
 			// tenant whatever its limits.

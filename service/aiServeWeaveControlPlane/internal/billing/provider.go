@@ -24,15 +24,18 @@ var ErrInvalidSignature = errors.New("billing: webhook signature does not verify
 
 // CheckoutRequest is one checkout to open. AmountMinor is zero for a
 // fixed-price product and the chosen amount for a pay-what-you-want one.
-// OrderID and TenantID ride the checkout as metadata and come back on its
-// payment events.
+// Currency is the order's currency; the checkout must charge in it, since
+// the order's credits were priced in it. OrderID and TenantID ride the
+// checkout as metadata and come back on its payment events.
 //
 // CheckoutRequest 是一次要发起的结账。固定价格产品的 AmountMinor 为零，按意愿付费
-// 产品则为所选金额。OrderID 与 TenantID 作为 metadata 随结账传出，并随其付款事件返回。
+// 产品则为所选金额。Currency 是订单的币种；结账必须以它收款，因为订单点数是按它定价的。
+// OrderID 与 TenantID 作为 metadata 随结账传出，并随其付款事件返回。
 type CheckoutRequest struct {
 	CustomerID  string
 	ProductID   string
 	AmountMinor int64
+	Currency    string
 	ReturnURL   string
 	OrderID     string
 	TenantID    string

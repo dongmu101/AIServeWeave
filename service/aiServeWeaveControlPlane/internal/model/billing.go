@@ -27,11 +27,11 @@ import (
 const MicroPerCredit = 1_000_000
 
 // MaxPriceMicroPerMTok bounds a model price at one million credits per million
-// tokens. The bound keeps tokens × price inside 64 bits for any token count a
-// single request can report, and no real price comes near it.
+// tokens, a sanity limit on operator input that no real price comes near.
+// Cost does not depend on it: it computes in 128 bits and saturates.
 //
-// MaxPriceMicroPerMTok 把模型单价限制在每百万 token 一百万点。这个上限让单次请求可能
-// 上报的任何 token 数乘以单价都落在 64 位以内，且没有任何真实单价会接近它。
+// MaxPriceMicroPerMTok 把模型单价限制在每百万 token 一百万点，这是对运维输入的合理性
+// 限制，没有任何真实单价会接近它。Cost 并不依赖它：Cost 在 128 位内计算并饱和。
 const MaxPriceMicroPerMTok = 1_000_000 * MicroPerCredit
 
 // Billing modes a tenant may be in.
@@ -196,34 +196,52 @@ func (ModelPrice) TableName() string { return "model_prices" }
 const DefaultPriceModel = "*"
 
 // Cost returns the charge for one request in micro-credits, rounded up so a
-// non-zero usage at a non-zero price never costs nothing. It reports false
-// when the product would overflow, which only a token count no request can
-// carry reaches given MaxPriceMicroPerMTok.
+// non-zero usage at a non-zero price never costs nothing. The arithmetic is
+// exact in 128 bits; a charge beyond int64 saturates at math.MaxInt64 rather
+// than wrapping or falling to zero, so token counts the Gateway reports can
+// never make a request free. Negative inputs count as zero.
 //
 // Cost 返回一次请求的费用（micro 点），向上取整，使得非零单价下的非零用量绝不会
-// 免费。乘积会溢出时返回 false——在 MaxPriceMicroPerMTok 的约束下，只有任何请求都不可能
-// 携带的 token 数才会走到这一步。
-func (p ModelPrice) Cost(promptTokens, completionTokens int64) (int64, bool) {
-	in, ok := mulNonNegative(promptTokens, p.InputMicroPerMTok)
-	if !ok {
-		return 0, false
+// 免费。运算在 128 位内精确进行；超出 int64 的费用饱和为 math.MaxInt64，而不是回绕或
+// 变成零，因此 Gateway 上报的 token 数无论多大都不会让请求免费。负数输入按零计。
+func (p ModelPrice) Cost(promptTokens, completionTokens int64) int64 {
+	inHi, inLo := bits.Mul64(nonNegative(promptTokens), nonNegative(p.InputMicroPerMTok))
+	outHi, outLo := bits.Mul64(nonNegative(completionTokens), nonNegative(p.OutputMicroPerMTok))
+	lo, carry := bits.Add64(inLo, outLo, 0)
+	hi, overflow := bits.Add64(inHi, outHi, carry)
+	if overflow != 0 || hi >= 1_000_000 {
+		return math.MaxInt64 // quotient exceeds 64 bits / 商超出 64 位
 	}
-	out, ok := mulNonNegative(completionTokens, p.OutputMicroPerMTok)
-	if !ok || in > math.MaxInt64-out {
-		return 0, false
+	q, r := bits.Div64(hi, lo, 1_000_000)
+	if r != 0 {
+		q++
 	}
-	sum := in + out
-	return sum/1_000_000 + boolToInt64(sum%1_000_000 != 0), true
+	if q > math.MaxInt64 {
+		return math.MaxInt64
+	}
+	return int64(q)
+}
+
+func nonNegative(v int64) uint64 {
+	if v < 0 {
+		return 0
+	}
+	return uint64(v)
 }
 
 // CheckoutOrder is one purchase attempt. Its credits are fixed when the order
 // is created, so a webhook only confirms what was sold rather than deciding
 // it. DodoPaymentID is unique when set: it is the second guard against
-// crediting one payment twice, behind the webhook-id dedup.
+// crediting one payment twice, behind the webhook-id dedup. PaidAmountMinor
+// and PaidCurrency record what the payment actually charged, tax included,
+// once it succeeds; refunds are measured against them, since a refund is in
+// the payment's terms rather than the package's.
 //
 // CheckoutOrder 是一次购买尝试。点数在创建订单时就已确定，因此 webhook 只负责确认
 // 卖出了什么，而不负责决定卖什么。DodoPaymentID 一旦设置即唯一：它是 webhook-id 去重
-// 之后，防止同一笔付款入账两次的第二道防线。
+// 之后，防止同一笔付款入账两次的第二道防线。PaidAmountMinor 与 PaidCurrency 在付款成功后
+// 记录这笔付款实际收取的金额（含税）；退款以它们为基准衡量，因为退款使用的是付款的口径，
+// 而不是充值包的口径。
 type CheckoutOrder struct {
 	ID            string  `gorm:"primaryKey;size:32"`
 	TenantID      string  `gorm:"size:32;not null"`
@@ -234,10 +252,15 @@ type CheckoutOrder struct {
 	Currency      string  `gorm:"size:8;not null"`
 	CreditsMicro  int64   `gorm:"not null"`
 	RefundedMinor int64   `gorm:"not null"`
-	Status        string  `gorm:"size:16;not null"`
-	CreatedBy     string  `gorm:"size:32;not null"`
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
+	// PaidAmountMinor and PaidCurrency are zero until the payment succeeds.
+	//
+	// PaidAmountMinor 与 PaidCurrency 在付款成功之前为零值。
+	PaidAmountMinor int64  `gorm:"not null"`
+	PaidCurrency    string `gorm:"size:8;not null"`
+	Status          string `gorm:"size:16;not null"`
+	CreatedBy       string `gorm:"size:32;not null"`
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // TableName pins the table name.
@@ -245,21 +268,36 @@ type CheckoutOrder struct {
 // TableName 钉死表名。
 func (CheckoutOrder) TableName() string { return "checkout_orders" }
 
-// RefundCredits returns the micro-credits a refund of refundMinor takes back:
-// the order's credits in proportion to the share of its amount refunded,
-// rounded up so a partial refund never leaves a fraction of credit unpaid for.
+// RefundBasisMinor is the amount refunds are measured against: what the
+// payment charged, or the order amount for an order paid before that was
+// recorded.
 //
-// RefundCredits 返回退款 refundMinor 应扣回多少 micro 点：按退款占订单金额的比例
-// 折算订单点数，向上取整，使部分退款绝不会留下一点未付费的零头。
+// RefundBasisMinor 是衡量退款的基准金额：付款实际收取的金额；对于在记录实付金额之前
+// 就已付款的订单，则为订单金额。
+func (o CheckoutOrder) RefundBasisMinor() int64 {
+	if o.PaidAmountMinor > 0 {
+		return o.PaidAmountMinor
+	}
+	return o.AmountMinor
+}
+
+// RefundCredits returns the micro-credits a cumulative refund of refundMinor
+// takes back: the order's credits in proportion to the share of
+// RefundBasisMinor refunded, rounded up so a partial refund never leaves a
+// fraction of credit unpaid for.
+//
+// RefundCredits 返回累计退款 refundMinor 应扣回多少 micro 点：按退款占
+// RefundBasisMinor 的比例折算订单点数，向上取整，使部分退款绝不会留下一点未付费的零头。
 func (o CheckoutOrder) RefundCredits(refundMinor int64) int64 {
-	if o.AmountMinor <= 0 || refundMinor <= 0 {
+	basis := o.RefundBasisMinor()
+	if basis <= 0 || refundMinor <= 0 {
 		return 0
 	}
-	if refundMinor >= o.AmountMinor {
+	if refundMinor >= basis {
 		return o.CreditsMicro
 	}
 	num := new(big.Int).Mul(big.NewInt(o.CreditsMicro), big.NewInt(refundMinor))
-	den := big.NewInt(o.AmountMinor)
+	den := big.NewInt(basis)
 	q, r := new(big.Int).QuoRem(num, den, new(big.Int))
 	if r.Sign() != 0 {
 		q.Add(q, big.NewInt(1))
@@ -346,11 +384,4 @@ func mulNonNegative(a, b int64) (int64, bool) {
 		return 0, false
 	}
 	return int64(lo), true
-}
-
-func boolToInt64(b bool) int64 {
-	if b {
-		return 1
-	}
-	return 0
 }

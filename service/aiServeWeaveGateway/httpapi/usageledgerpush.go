@@ -9,8 +9,12 @@
 // backoff, because the control plane charges prepaid balances from this
 // ledger and a dropped batch is usage nobody pays for. The retry is safe
 // because the control plane deduplicates on request id, and it stays bounded
-// (AGENTS.md's "任何一跳都不得无界缓冲"): batches awaiting retry share
-// BufferSize, and the oldest are dropped, counted, once it is exceeded.
+// (AGENTS.md's "任何一跳都不得无界缓冲"): records awaiting retry are capped at
+// BufferSize of their own, beside the channel's, and the oldest batches are
+// dropped, counted, once it is exceeded. A batch the control plane refuses
+// (ErrUsageBatchRejected) is dropped at once, and one that keeps failing is
+// dropped after MaxUsageLedgerBatchAttempts, so no single batch can hold the
+// ones behind it forever.
 //
 // usageledgerpush.go 是 Gateway 一侧对 STATUS.md P2 用量账本有界、异步的
 // 那一半：它缓冲 recordUsage（ratelimit.go）入队的 UsageRecord，按定时器或
@@ -20,11 +24,14 @@
 // 与 requestlogpush.go 不同，它会保留失败的批次并按退避重试，因为控制面依据这份
 // 账本从预付余额中扣费，丢掉一批就是一批没人付钱的用量。重试是安全的，因为控制面按
 // 请求 id 去重；重试也是有界的（AGENTS.md 的"任何一跳都不得无界缓冲"）：待重试的
-// 批次共用 BufferSize，超出时丢弃最旧的批次并计数。
+// 记录在 channel 之外另有一条 BufferSize 上界，超出时丢弃最旧的批次并计数。被控制面
+// 拒绝的批次（ErrUsageBatchRejected）立即丢弃，持续失败的批次在
+// MaxUsageLedgerBatchAttempts 次后丢弃，任何一个批次都不能永远挡住后面的批次。
 package httpapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -143,6 +150,27 @@ func (p *usageLedgerPusher) enqueue(r UsageRecord) bool {
 // MaxUsageLedgerRetryBackoff 是失败推送两次重试之间等待时间的上限。
 const MaxUsageLedgerRetryBackoff = time.Minute
 
+// MaxUsageLedgerBatchAttempts is how many times one batch is pushed before it
+// is dropped. With the backoff doubling from FlushInterval up to a minute,
+// the default settings give a batch about a quarter of an hour, enough to
+// ride out a control plane restart, while a batch that fails for its own
+// reasons stops holding up the rest.
+//
+// MaxUsageLedgerBatchAttempts 是一个批次被丢弃前的推送次数。退避从 FlushInterval
+// 起翻倍直至一分钟，默认设置下一个批次约有一刻钟，足以熬过一次控制面重启，而因自身
+// 原因失败的批次也不会再挡住其余批次。
+const MaxUsageLedgerBatchAttempts = 20
+
+// ErrUsageBatchRejected marks a push the control plane refused for its
+// content (400, 413 or 422). Retrying the same batch cannot succeed, so it is
+// dropped. An authentication failure is not one of these: it is a
+// configuration fault that a fix on either side cures, so it is retried.
+//
+// ErrUsageBatchRejected 标记控制面因内容而拒绝的推送（400、413 或 422）。重试同一
+// 批次不可能成功，因此将其丢弃。鉴权失败不在此列：它是配置故障，任一侧修正即可恢复，
+// 因此会被重试。
+var ErrUsageBatchRejected = errors.New("httpapi: the control plane rejected the usage batch")
+
 // run drains the buffer, flushing a batch to the control plane either when
 // BatchSize records have accumulated or FlushInterval has elapsed since the
 // last flush, whichever comes first. A failed batch waits for its retry, and
@@ -162,19 +190,33 @@ func (p *usageLedgerPusher) run() {
 	var (
 		pending      [][]UsageRecord
 		pendingCount int
+		headAttempts int // failed pushes of pending[0] / pending[0] 的失败推送次数
 		backoff      time.Duration
 		retryAt      time.Time
 	)
-	push := func(records []UsageRecord) bool {
+	// drop discards records, counting each one as dropped.
+	//
+	// drop 丢弃 records，每条都计为一次丢弃。
+	drop := func(records []UsageRecord, reason string) {
+		p.logger.Error("dropping a usage batch", slog.String("reason", reason), slog.Int("batch_size", len(records)))
+		for range records {
+			p.metrics.UsageLedgerDropped()
+		}
+	}
+	// push sends records once. ok reports success; rejected reports a refusal
+	// that no retry can change.
+	//
+	// push 发送一次 records。ok 报告是否成功；rejected 报告一次任何重试都改变不了的拒绝。
+	push := func(records []UsageRecord) (ok, rejected bool) {
 		ctx, cancel := context.WithTimeout(context.Background(), p.cfg.CallTimeout)
 		defer cancel()
 		if err := p.client.PushUsageRecords(ctx, records); err != nil {
-			p.logger.Warn("pushing usage records to the control plane failed; the batch is kept for retry",
+			p.logger.Warn("pushing usage records to the control plane failed",
 				slog.Any("error", err), slog.Int("batch_size", len(records)))
 			p.metrics.UsageLedgerPushFailed()
-			return false
+			return false, errors.Is(err, ErrUsageBatchRejected)
 		}
-		return true
+		return true, false
 	}
 	// hold queues records for retry, dropping the oldest held batches once
 	// the held total would exceed BufferSize.
@@ -185,18 +227,25 @@ func (p *usageLedgerPusher) run() {
 		pending = append(pending, records)
 		pendingCount += len(records)
 		for pendingCount > p.cfg.BufferSize && len(pending) > 1 {
-			for range pending[0] {
-				p.metrics.UsageLedgerDropped()
-			}
+			drop(pending[0], "the retry backlog exceeds the buffer size")
 			pendingCount -= len(pending[0])
 			pending = pending[1:]
+			headAttempts = 0
 		}
 	}
+	// pop removes the oldest held batch. pop 移除最旧的待重试批次。
+	pop := func() {
+		pendingCount -= len(pending[0])
+		pending = pending[1:]
+		headAttempts = 0
+	}
 	// retry pushes held batches oldest first, stopping at the first failure
-	// and doubling the backoff; it reports whether nothing is held anymore.
+	// and doubling the backoff; a rejected batch, or one out of attempts, is
+	// dropped and the next one tried. It reports whether nothing is held
+	// anymore.
 	//
-	// retry 从最旧的开始推送待重试批次，遇到第一次失败即停止并把退避加倍；返回值
-	// 报告是否已不再有待重试的批次。
+	// retry 从最旧的开始推送待重试批次，遇到第一次失败即停止并把退避加倍；被拒绝或
+	// 用尽次数的批次被丢弃，然后尝试下一个。返回值报告是否已不再有待重试的批次。
 	retry := func(force bool) bool {
 		if len(pending) == 0 {
 			return true
@@ -205,13 +254,24 @@ func (p *usageLedgerPusher) run() {
 			return false
 		}
 		for len(pending) > 0 {
-			if !push(pending[0]) {
-				backoff = min(max(backoff*2, p.cfg.FlushInterval), MaxUsageLedgerRetryBackoff)
-				retryAt = p.clock.Now().Add(backoff)
-				return false
+			ok, rejected := push(pending[0])
+			switch {
+			case ok:
+				pop()
+				continue
+			case rejected:
+				drop(pending[0], "the control plane rejected it")
+				pop()
+				continue
 			}
-			pendingCount -= len(pending[0])
-			pending = pending[1:]
+			if headAttempts++; headAttempts >= MaxUsageLedgerBatchAttempts {
+				drop(pending[0], "it failed every attempt")
+				pop()
+				continue
+			}
+			backoff = min(max(backoff*2, p.cfg.FlushInterval), MaxUsageLedgerRetryBackoff)
+			retryAt = p.clock.Now().Add(backoff)
+			return false
 		}
 		backoff = 0
 		return true
@@ -223,9 +283,17 @@ func (p *usageLedgerPusher) run() {
 		if len(batch) == 0 {
 			return
 		}
-		if !drained || !push(batch) {
+		switch {
+		case !drained:
 			hold(batch)
-			if drained {
+		default:
+			ok, rejected := push(batch)
+			switch {
+			case ok:
+			case rejected:
+				drop(batch, "the control plane rejected it")
+			default:
+				hold(batch)
 				backoff = min(max(backoff*2, p.cfg.FlushInterval), MaxUsageLedgerRetryBackoff)
 				retryAt = p.clock.Now().Add(backoff)
 			}

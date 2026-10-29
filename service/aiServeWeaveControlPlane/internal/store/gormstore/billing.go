@@ -2,6 +2,7 @@ package gormstore
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"math"
@@ -94,14 +95,21 @@ func (s *Store) SetTenantBillingMode(ctx context.Context, tenantID, mode string,
 // SetDodoCustomerID implements store.Billing.
 //
 // SetDodoCustomerID 实现 store.Billing。
-func (s *Store) SetDodoCustomerID(ctx context.Context, tenantID, customerID string, now time.Time) error {
-	return translate(s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if _, err := lockTenantBilling(tx, tenantID, now); err != nil {
+func (s *Store) SetDodoCustomerID(ctx context.Context, tenantID, customerID string, now time.Time) (string, error) {
+	effective := customerID
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		row, err := lockTenantBilling(tx, tenantID, now)
+		if err != nil {
 			return err
+		}
+		if row.DodoCustomerID != "" {
+			effective = row.DodoCustomerID
+			return nil
 		}
 		return tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
 			Updates(map[string]any{"dodo_customer_id": customerID, "updated_at": now}).Error
-	}))
+	})
+	return effective, translate(err)
 }
 
 // AdjustCredit implements store.Billing.
@@ -121,8 +129,23 @@ func (s *Store) AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry)
 // order before the already-charged check, so two concurrent pushes of the
 // same batch serialize on them and the second sees the first's charges.
 //
+// The transaction runs at READ COMMITTED on both databases. That is what lets
+// the already-charged check be a plain read: after the tenant locks, it sees
+// every charge committed by the push that held them. A locking read would
+// work too, but under MySQL's default REPEATABLE READ a locking read of
+// request ids that do not exist yet takes gap locks, and two replicas pushing
+// unrelated batches would deadlock inserting into each other's gaps.
+// Tenants without a billing row are exempt, so a concurrent duplicate for
+// one of them only meets the primary key and inserts nothing.
+//
 // ChargeUsage 实现 store.Billing。在检查「是否已扣费」之前，按 id 顺序锁定租户行，
 // 因此同一批次的两次并发推送会在这些行上串行化，后一次能看到前一次的扣费。
+//
+// 事务在两种数据库上都以 READ COMMITTED 运行，这使「是否已扣费」的检查可以是普通读：
+// 拿到租户锁之后，它能看到持有这些锁的那次推送已提交的全部扣费。锁定读也能达到目的，
+// 但在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 request id 做锁定读会加间隙锁，
+// 两个副本推送互不相关的批次时会因向对方的间隙插入而死锁。没有计费行的租户是 exempt，
+// 它们的并发重复只会撞上主键，什么也不插入。
 func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, charges []model.UsageCharge) (bool, error) {
 	if len(records) == 0 && len(charges) == 0 {
 		return false, nil
@@ -158,7 +181,7 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, ch
 			byTenant[b.TenantID] = b
 		}
 		var existing []string
-		if err := tx.Model(&model.UsageCharge{}).Clauses(clause.Locking{Strength: "UPDATE"}).
+		if err := tx.Model(&model.UsageCharge{}).
 			Where("request_id IN ?", requestIDs).Pluck("request_id", &existing).Error; err != nil {
 			return err
 		}
@@ -223,7 +246,7 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, ch
 			return enqueueRevocation(tx)
 		}
 		return nil
-	})
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
 	return changed, translate(err)
 }
 
@@ -450,6 +473,7 @@ func (l gormLedger) OrderByPayment(paymentID string) (model.CheckoutOrder, error
 func (l gormLedger) SaveOrder(order model.CheckoutOrder) error {
 	return l.tx.Model(&model.CheckoutOrder{}).Where("id = ?", order.ID).Updates(map[string]any{
 		"dodo_payment_id": order.DodoPaymentID, "refunded_minor": order.RefundedMinor,
+		"paid_amount_minor": order.PaidAmountMinor, "paid_currency": order.PaidCurrency,
 		"status": order.Status, "updated_at": order.UpdatedAt,
 	}).Error
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/zeromicro/go-zero/rest/pathvar"
 
@@ -23,15 +24,28 @@ import (
 // 上限留得宽裕，让一个很大的购物车也不会因被截断而校验失败。
 const MaxBillingWebhookBytes = 1 << 20
 
+// BillingCallTimeout bounds the routes that call the payment provider
+// (checkout and portal), which may make two provider calls in a row and so
+// need more than the server's default timeout. It stays below the Console's
+// default upstream timeout of 10 seconds, so a slow provider surfaces as this
+// service's 503 rather than the Console's own timeout.
+//
+// BillingCallTimeout 限制调用支付服务商的路由（结账与门户）。它们可能连续发起两次服务商
+// 调用，因此需要比服务器默认超时更长的时间。它低于 Console 默认 10 秒的上游超时，使缓慢
+// 的服务商表现为本服务的 503，而不是 Console 自己的超时。
+const BillingCallTimeout = 9 * time.Second
+
 // billingWebhook handles POST /billing/v1/dodo/webhook. It reads the raw body
 // itself rather than through decode: the signature covers the exact bytes,
 // and the event carries fields this service does not model. A verified event
-// is acknowledged with 200 whatever its outcome; only a bad signature (401)
-// or a failure to apply it (500, which the provider retries) is not.
+// is acknowledged with 200 whatever its outcome; only a bad signature (401),
+// an event that arrived ahead of the one it follows (503) or a failure to
+// apply it (500) is not, and the provider redelivers the last two.
 //
 // billingWebhook 处理 POST /billing/v1/dodo/webhook。它自己读取原始请求体，而不经过
 // decode：签名覆盖的是精确的字节，且事件携带本服务不建模的字段。已验签的事件无论结果
-// 如何都以 200 确认；只有签名错误（401）或应用失败（500，服务商会重试）例外。
+// 如何都以 200 确认；只有签名错误（401）、早于其前置事件到达（503）或应用失败（500）
+// 例外，服务商会重新投递后两者。
 func billingWebhook(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, MaxBillingWebhookBytes))
@@ -43,6 +57,8 @@ func billingWebhook(ctx *svc.ServiceContext) http.HandlerFunc {
 		switch {
 		case errors.Is(err, logic.ErrInvalidSignature):
 			writeError(w, http.StatusUnauthorized, "the webhook signature does not verify")
+		case errors.Is(err, store.ErrBillingEventEarly):
+			writeError(w, http.StatusServiceUnavailable, "the event arrived before the one it follows; retry later")
 		case err != nil:
 			respondErr(w, err)
 		default:

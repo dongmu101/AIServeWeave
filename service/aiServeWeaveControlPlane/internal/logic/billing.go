@@ -193,7 +193,7 @@ func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID str
 		return CheckoutResult{}, translate(err)
 	}
 	req := billing.CheckoutRequest{
-		CustomerID: customerID, ProductID: pkg.DodoProductID, ReturnURL: s.billing.ReturnURL,
+		CustomerID: customerID, ProductID: pkg.DodoProductID, Currency: pkg.Currency, ReturnURL: s.billing.ReturnURL,
 		OrderID: order.ID, TenantID: actor.TenantID,
 	}
 	if pkg.Kind == model.PackageKindCustom {
@@ -237,10 +237,11 @@ func (s *Service) ensureCustomer(ctx context.Context, actor Actor) (string, erro
 		slog.Error("registering a billing customer failed", slog.String("tenant_id", tenant.ID))
 		return "", ErrUnavailable
 	}
-	if err := s.store.SetDodoCustomerID(ctx, tenant.ID, customerID, s.clock.Now()); err != nil {
-		return "", translate(err)
-	}
-	return customerID, nil
+	// A concurrent first purchase may have recorded its customer meanwhile;
+	// the store keeps that one and this registration goes unused.
+	// 并发的首次购买可能已先记录了它的客户；store 保留那一个，本次登记的客户不再使用。
+	recorded, err := s.store.SetDodoCustomerID(ctx, tenant.ID, customerID, s.clock.Now())
+	return recorded, translate(err)
 }
 
 // BillingPortalLink returns a link to the provider's customer portal, where
@@ -301,14 +302,16 @@ func (s *Service) ListBillingOrders(ctx context.Context, actor Actor, query stor
 }
 
 // HandleBillingWebhook verifies and applies one provider webhook. It returns
-// an error only when the provider should redeliver: a bad signature, or a
-// store failure. Every other result — including an event for an order this
-// service does not know — is final, and the webhook is acknowledged. Logs
-// carry ids and outcomes, never the payload.
+// an error only when the webhook must not be acknowledged: a bad signature,
+// store.ErrBillingEventEarly for a refund or dispute that outran the event it
+// follows, or a store failure. Every other result — including a payment for
+// an order this service does not know — is final, and the webhook is
+// acknowledged. Logs carry ids and outcomes, never the payload.
 //
-// HandleBillingWebhook 校验并应用一个服务商 webhook。只有在服务商应当重新投递时才
-// 返回错误：签名错误或 store 故障。其他所有结果——包括本服务不认识的订单的事件——都是
-// 最终结果，webhook 会被确认。日志只带 id 与结果，从不带载荷。
+// HandleBillingWebhook 校验并应用一个服务商 webhook。只有在 webhook 不应被确认时才
+// 返回错误：签名错误、退款或争议早于其前置事件到达时的 store.ErrBillingEventEarly，或
+// store 故障。其他所有结果——包括本服务不认识的订单的付款——都是最终结果，webhook 会被
+// 确认。日志只带 id 与结果，从不带载荷。
 func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, headers http.Header) (store.BillingEventResult, error) {
 	if !s.billingEnabled() {
 		return store.BillingEventResult{}, ErrNotFound
@@ -316,6 +319,7 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 	event, err := s.billing.Provider.ParseWebhook(payload, headers)
 	if err != nil {
 		if errors.Is(err, billing.ErrInvalidSignature) {
+			slog.Warn("a billing webhook failed signature verification", slog.String("webhook_id", headers.Get("webhook-id")))
 			return store.BillingEventResult{}, ErrInvalidSignature
 		}
 		return store.BillingEventResult{}, err
@@ -324,6 +328,11 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 		return store.BillingEventResult{Outcome: store.BillingOutcomeIgnored}, nil
 	}
 	result, err := s.store.ApplyBillingEvent(ctx, event, s.clock.Now())
+	if errors.Is(err, store.ErrBillingEventEarly) {
+		slog.Warn("a billing webhook arrived before the event it follows; asking for redelivery",
+			slog.String("type", event.Type), slog.String("webhook_id", event.WebhookID), slog.String("payment_id", event.PaymentID))
+		return store.BillingEventResult{}, err
+	}
 	if err != nil {
 		return store.BillingEventResult{}, err
 	}
@@ -331,8 +340,13 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 		s.invalidator.InvalidateAll(ctx)
 	}
 	level := slog.LevelInfo
-	if result.Outcome == store.BillingOutcomeMismatch || result.Outcome == store.BillingOutcomeNoOrder {
+	switch result.Outcome {
+	case store.BillingOutcomeNoOrder:
 		level = slog.LevelWarn
+	case store.BillingOutcomeMismatch:
+		// A paid order left uncredited, or a refund not taken back, needs an
+		// operator. 已付款却未入账的订单，或未扣回的退款，需要运维处理。
+		level = slog.LevelError
 	}
 	slog.Log(ctx, level, "billing webhook processed",
 		slog.String("type", event.Type), slog.String("outcome", result.Outcome),
@@ -361,11 +375,7 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 		if !ok {
 			price = byModel[model.DefaultPriceModel]
 		}
-		cost, ok := price.Cost(max(r.PromptTokens, 0), max(r.CompletionTokens, 0))
-		if !ok {
-			slog.Error("usage cost overflowed; the record is charged nothing", slog.String("request_id", r.ID))
-			cost = 0
-		}
+		cost := price.Cost(r.PromptTokens, r.CompletionTokens)
 		charges = append(charges, model.UsageCharge{
 			RequestID: r.ID, TenantID: r.TenantID, Model: r.Model, CostMicro: cost, CreatedAt: now,
 		})

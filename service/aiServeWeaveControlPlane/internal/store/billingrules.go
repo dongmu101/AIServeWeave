@@ -25,10 +25,10 @@ type BillingTx interface {
 	//
 	// OrderByPayment 读取并锁定某笔服务商付款所支付的订单。
 	OrderByPayment(paymentID string) (model.CheckoutOrder, error)
-	// SaveOrder writes an order's payment id, refunded amount, status and
-	// update time.
+	// SaveOrder writes an order's payment id, paid amount and currency,
+	// refunded amount, status and update time.
 	//
-	// SaveOrder 写入订单的付款 id、已退款金额、状态与更新时间。
+	// SaveOrder 写入订单的付款 id、实付金额与币种、已退款金额、状态与更新时间。
 	SaveOrder(order model.CheckoutOrder) error
 	// Credit applies a ledger entry to its tenant's balance. changed reports
 	// a usable/exhausted flip; duplicate reports an idempotency key already
@@ -45,17 +45,21 @@ type BillingTx interface {
 }
 
 // ApplyBillingEventRules applies one provider event through tx. A payment
-// credits its order's credits once, keyed by payment id; a refund takes back
-// the credits in proportion to the amount refunded, keyed by refund id; a
-// dispute takes back what the order still holds and a won dispute returns
-// exactly that. Balances may go negative: credits already spent cannot be
+// credits its order's credits once, keyed by payment id, and only when it
+// charged at least the order's amount in the order's currency; a refund
+// takes back the credits in proportion to the share of the paid amount
+// refunded, keyed by refund id; a dispute takes back what the order still
+// holds and a won dispute returns exactly that. A refund or dispute that
+// outruns the event it follows returns ErrBillingEventEarly so the provider
+// redelivers it. Balances may go negative: credits already spent cannot be
 // taken back from usage, so a negative balance is the debt the next top-up
 // settles first.
 //
 // ApplyBillingEventRules 通过 tx 应用一个服务商事件。付款按付款 id 为键，为其订单
-// 入账一次；退款按退款 id 为键，按退款金额比例扣回点数；争议扣回订单仍持有的点数，
-// 争议胜诉时原样退回。余额可以为负：已经用掉的点数无法从用量中收回，因此负余额就是
-// 下一次充值首先要还上的欠款。
+// 入账一次，且仅当它以订单币种收取了不少于订单金额的款项时才入账；退款按退款 id 为键，
+// 按退款占实付金额的比例扣回点数；争议扣回订单仍持有的点数，争议胜诉时原样退回。先于
+// 前置事件到达的退款或争议返回 ErrBillingEventEarly，让服务商重新投递。余额可以为负：
+// 已经用掉的点数无法从用量中收回，因此负余额就是下一次充值首先要还上的欠款。
 func ApplyBillingEventRules(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {
 	switch event.Kind {
 	case BillingEventPaymentSucceeded:
@@ -95,8 +99,19 @@ func paymentSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingE
 		}
 		return result, nil
 	}
+	// The order's credits were priced in its own currency and amount, so a
+	// payment in another currency or for less — a discount code, a product
+	// misconfigured for the package — does not earn them.
+	// 订单点数按订单自身的币种与金额定价，因此币种不同或金额更少的付款（折扣码、与
+	// 充值包配置不符的产品）拿不到这些点数。
+	if !strings.EqualFold(event.Currency, order.Currency) || event.AmountMinor < order.AmountMinor {
+		result.Outcome = BillingOutcomeMismatch
+		return result, nil
+	}
 	paymentID := event.PaymentID
 	order.DodoPaymentID = &paymentID
+	order.PaidAmountMinor = event.AmountMinor
+	order.PaidCurrency = strings.ToUpper(event.Currency)
 	order.Status = model.OrderStatusPaid
 	order.UpdatedAt = now
 	if err := tx.SaveOrder(order); err != nil {
@@ -124,12 +139,13 @@ func paymentFailed(tx BillingTx, event BillingEvent, now time.Time) (BillingEven
 }
 
 func refundSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {
-	order, result, ok, err := findOrder(tx, "", event.PaymentID)
+	order, result, ok, err := findPaidOrder(tx, event.PaymentID)
 	if !ok || err != nil {
 		return result, err
 	}
 	key := "refund:" + event.RefundID
-	if event.RefundID == "" || event.AmountMinor <= 0 {
+	if event.RefundID == "" ||
+		(event.Currency != "" && order.PaidCurrency != "" && !strings.EqualFold(event.Currency, order.PaidCurrency)) {
 		result.Outcome = BillingOutcomeMismatch
 		return result, nil
 	}
@@ -137,10 +153,22 @@ func refundSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingEv
 		result.Outcome = BillingOutcomeDuplicate
 		return result, err
 	}
-	refunded := min(order.RefundedMinor+event.AmountMinor, order.AmountMinor)
+	basis := order.RefundBasisMinor()
+	amount := event.AmountMinor
+	if amount <= 0 {
+		// The provider may omit the amount; only a full refund is then
+		// unambiguous, and it returns whatever is left.
+		// 服务商可能不给出金额；此时只有全额退款含义明确，它退回剩余的全部金额。
+		if event.IsPartial {
+			result.Outcome = BillingOutcomeMismatch
+			return result, nil
+		}
+		amount = basis - order.RefundedMinor
+	}
+	refunded := min(order.RefundedMinor+max(amount, 0), basis)
 	credits := order.RefundCredits(refunded) - order.RefundCredits(order.RefundedMinor)
 	order.RefundedMinor = refunded
-	if refunded >= order.AmountMinor {
+	if refunded >= basis {
 		order.Status = model.OrderStatusRefunded
 	}
 	order.UpdatedAt = now
@@ -151,7 +179,7 @@ func refundSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingEv
 }
 
 func disputeOpened(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {
-	order, result, ok, err := findOrder(tx, "", event.PaymentID)
+	order, result, ok, err := findPaidOrder(tx, event.PaymentID)
 	if !ok || err != nil {
 		return result, err
 	}
@@ -174,21 +202,24 @@ func disputeOpened(tx BillingTx, event BillingEvent, now time.Time) (BillingEven
 }
 
 func disputeWon(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {
-	order, result, ok, err := findOrder(tx, "", event.PaymentID)
+	order, result, ok, err := findPaidOrder(tx, event.PaymentID)
 	if !ok || err != nil {
 		return result, err
+	}
+	if event.DisputeID == "" {
+		result.Outcome = BillingOutcomeMismatch
+		return result, nil
 	}
 	taken, found, err := tx.LedgerAmount("dispute:" + event.DisputeID)
 	if err != nil {
 		return BillingEventResult{}, err
 	}
-	if event.DisputeID == "" || !found {
-		result.Outcome = BillingOutcomeIgnored
-		return result, nil
+	if !found {
+		return BillingEventResult{}, ErrBillingEventEarly
 	}
 	if order.Status == model.OrderStatusDisputed {
 		order.Status = model.OrderStatusPaid
-		if order.RefundedMinor >= order.AmountMinor {
+		if order.RefundedMinor >= order.RefundBasisMinor() {
 			order.Status = model.OrderStatusRefunded
 		}
 		order.UpdatedAt = now
@@ -197,6 +228,29 @@ func disputeWon(tx BillingTx, event BillingEvent, now time.Time) (BillingEventRe
 		}
 	}
 	return credit(tx, result, order.TenantID, model.LedgerKindDisputeReversal, -taken, order.ID, "dispute_won:"+event.DisputeID, now)
+}
+
+// findPaidOrder finds the order a payment paid, for the refund and dispute
+// events that follow a payment. ok is false for an event without a payment
+// id, with result already saying so. An unknown payment is
+// ErrBillingEventEarly: its success may still be on the way, and
+// acknowledging the event now would lose it for good.
+//
+// findPaidOrder 查找某笔付款所支付的订单，供付款之后的退款与争议事件使用。事件没有
+// 付款 id 时 ok 为 false，result 已说明这一点。未知付款返回 ErrBillingEventEarly：它的
+// 付款成功事件可能仍在路上，现在确认这个事件会让它永久丢失。
+func findPaidOrder(tx BillingTx, paymentID string) (model.CheckoutOrder, BillingEventResult, bool, error) {
+	if paymentID == "" {
+		return model.CheckoutOrder{}, BillingEventResult{Outcome: BillingOutcomeMismatch}, false, nil
+	}
+	order, result, ok, err := findOrder(tx, "", paymentID)
+	if err != nil {
+		return model.CheckoutOrder{}, BillingEventResult{}, false, err
+	}
+	if !ok {
+		return model.CheckoutOrder{}, BillingEventResult{}, false, ErrBillingEventEarly
+	}
+	return order, result, true, nil
 }
 
 // findOrder looks an order up by id, or by payment id when id is empty. ok is

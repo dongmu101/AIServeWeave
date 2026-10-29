@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 	"time"
@@ -105,13 +106,16 @@ func (s *Store) SetTenantBillingMode(_ context.Context, tenantID, mode string, n
 // SetDodoCustomerID implements store.Billing.
 //
 // SetDodoCustomerID 实现 store.Billing。
-func (s *Store) SetDodoCustomerID(_ context.Context, tenantID, customerID string, now time.Time) error {
+func (s *Store) SetDodoCustomerID(_ context.Context, tenantID, customerID string, now time.Time) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	row := s.billingRow(tenantID, now)
+	if row.DodoCustomerID != "" {
+		return row.DodoCustomerID, nil
+	}
 	row.DodoCustomerID, row.UpdatedAt = customerID, now
 	s.billing.tenants[tenantID] = row
-	return nil
+	return customerID, nil
 }
 
 // AdjustCredit implements store.Billing.
@@ -130,31 +134,46 @@ func (s *Store) AdjustCredit(_ context.Context, entry model.CreditLedgerEntry) (
 func (s *Store) ChargeUsage(_ context.Context, records []model.UsageRecord, charges []model.UsageCharge) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	for _, r := range records {
-		if _, exists := s.usageRecords[r.ID]; !exists {
-			s.usageRecords[r.ID] = r
-		}
-	}
+	// Everything is priced and checked before anything is written, so an
+	// overflow leaves the store as it was, as gormstore's rollback does.
+	// 先完成全部定价与检查再写入，溢出时 store 保持原样，与 gormstore 的回滚一致。
 	debit := map[string]int64{}
 	count := map[string]int{}
 	var order []string
-	var now time.Time
+	fresh := make([]model.UsageCharge, 0, len(charges))
+	seen := map[string]bool{}
 	for _, c := range charges {
-		if _, done := s.billing.charges[c.RequestID]; done {
+		if _, done := s.billing.charges[c.RequestID]; done || seen[c.RequestID] {
 			continue
 		}
+		seen[c.RequestID] = true
 		b, ok := s.billing.tenants[c.TenantID]
 		c.Charged = ok && b.Mode == model.BillingModePrepaid && c.CostMicro > 0
 		if c.Charged {
 			if debit[c.TenantID] > math.MaxInt64-c.CostMicro {
 				return false, errBalanceOverflow
 			}
-			if _, seen := debit[c.TenantID]; !seen {
+			if _, counted := debit[c.TenantID]; !counted {
 				order = append(order, c.TenantID)
 			}
 			debit[c.TenantID] += c.CostMicro
 			count[c.TenantID]++
 		}
+		fresh = append(fresh, c)
+	}
+	for _, tenantID := range order {
+		if s.billing.tenants[tenantID].BalanceMicro < math.MinInt64+debit[tenantID] {
+			return false, errBalanceOverflow
+		}
+	}
+
+	for _, r := range records {
+		if _, exists := s.usageRecords[r.ID]; !exists {
+			s.usageRecords[r.ID] = r
+		}
+	}
+	var now time.Time
+	for _, c := range fresh {
 		s.billing.charges[c.RequestID] = c
 		now = c.CreatedAt
 	}
@@ -186,9 +205,37 @@ func (s *Store) ApplyBillingEvent(_ context.Context, event store.BillingEvent, n
 		if _, seen := s.billing.webhooks[event.WebhookID]; seen {
 			return store.BillingEventResult{Outcome: store.BillingOutcomeDuplicate}, nil
 		}
+	}
+	// The rules may fail after writing an order; restoring the snapshot is
+	// this store's rollback, so a failed event leaves no trace and its
+	// redelivery is not taken for a duplicate.
+	// 规则可能在写入订单之后才失败；恢复快照就是本 store 的回滚，使失败的事件不留痕迹，
+	// 其重新投递也不会被当作重复。
+	restore := s.snapshotBilling()
+	result, err := store.ApplyBillingEventRules(memLedger{s}, event, now)
+	if err != nil {
+		restore()
+		return store.BillingEventResult{}, err
+	}
+	if event.WebhookID != "" {
 		s.billing.webhooks[event.WebhookID] = model.BillingWebhookEvent{WebhookID: event.WebhookID, Type: event.Type, ReceivedAt: now}
 	}
-	return store.ApplyBillingEventRules(memLedger{s}, event, now)
+	return result, nil
+}
+
+// snapshotBilling captures the tables an event can change and returns a
+// function restoring them. The caller holds s.mu.
+//
+// snapshotBilling 捕获一个事件可能修改的表，并返回恢复它们的函数。调用方须持有 s.mu。
+func (s *Store) snapshotBilling() func() {
+	tenants := maps.Clone(s.billing.tenants)
+	orders := maps.Clone(s.billing.orders)
+	ledgerLen := len(s.billing.ledger)
+	return func() {
+		s.billing.tenants = tenants
+		s.billing.orders = orders
+		s.billing.ledger = s.billing.ledger[:ledgerLen]
+	}
 }
 
 // CreateCreditPackage implements store.Billing.

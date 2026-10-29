@@ -129,16 +129,15 @@ const (
 	// 意味着检索表正在悄悄丢失最近的请求，但原因不同：是推送在控制面一侧、
 	// 而不是本副本自己的缓冲跟不上。
 	MetricRequestLogPushFailedTotal = "gateway_request_log_push_failed_total"
-	// MetricUsageLedgerDroppedTotal counts usage records dropped because the
-	// bounded push buffer was full (STATUS.md's P2 usage ledger). A non-zero
-	// slope means the ledger is silently missing recent usage, not that
-	// anything about serving the request failed — mirrors
-	// MetricRequestLogDroppedTotal exactly.
+	// MetricUsageLedgerDroppedTotal counts usage records dropped (STATUS.md's
+	// P2 usage ledger): because the bounded push buffer or retry backlog was
+	// full, or because their batch was rejected by the control plane or ran
+	// out of push attempts. A non-zero slope means the ledger is missing
+	// recent usage, not that anything about serving the request failed.
 	//
-	// MetricUsageLedgerDroppedTotal 统计因有界推送缓冲已满而被丢弃的用量记录
-	// (STATUS.md 的 P2 用量账本)。斜率非零意味着账本正在悄悄丢失最近的用量，
-	// 而不是服务这次请求本身出了问题——与 MetricRequestLogDroppedTotal 完全
-	// 对应。
+	// MetricUsageLedgerDroppedTotal 统计被丢弃的用量记录（STATUS.md 的 P2 用量账本）：
+	// 原因是有界推送缓冲或重试积压已满，或其批次被控制面拒绝、用尽了推送次数。斜率
+	// 非零意味着账本正在丢失最近的用量，而不是服务这次请求本身出了问题。
 	MetricUsageLedgerDroppedTotal = "gateway_usage_ledger_dropped_total"
 	// MetricUsageLedgerPushFailedTotal counts batches that reached
 	// PushUsageRecords but failed to reach the control plane or were refused

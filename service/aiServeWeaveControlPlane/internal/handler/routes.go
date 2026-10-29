@@ -144,8 +144,6 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		}, rest.WithMaxBytes(MaxBillingWebhookBytes))
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/admin/v1/billing", requireSession, billingOverview(ctx)),
-			billingRoute(http.MethodPost, "/admin/v1/billing/checkout", requireSession, createCheckout(ctx)),
-			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/ledger", requireSession, listBillingLedger(ctx, false)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/orders", requireSession, listBillingOrders(ctx, false)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/packages", requirePlatformSession, listCreditPackages(ctx)),
@@ -160,6 +158,10 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodGet, "/operator/v1/billing/orders", requirePlatformSession, listBillingOrders(ctx, true)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/ledger", requirePlatformSession, listBillingLedger(ctx, true)),
 		})
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodPost, "/admin/v1/billing/checkout", requireSession, createCheckout(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
+		}, rest.WithTimeout(BillingCallTimeout))
 	}
 
 	server.AddRoutes([]rest.Route{

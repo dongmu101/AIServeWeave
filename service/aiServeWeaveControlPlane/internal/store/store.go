@@ -900,9 +900,12 @@ type CreditLedgerFilter struct {
 
 // Billing event kinds ApplyBillingEvent understands. Any other provider event
 // is acknowledged and ignored before it reaches the store.
+// BillingEventDisputeWon covers every dispute that ends with the merchant
+// keeping the money — won or cancelled — and returns what the opening took.
 //
 // ApplyBillingEvent 理解的计费事件类型。服务商的其他事件在到达 store 之前就已被确认
-// 并忽略。
+// 并忽略。BillingEventDisputeWon 涵盖所有以商户保住款项告终的争议（胜诉或撤销），
+// 退回争议开启时扣回的点数。
 const (
 	BillingEventPaymentSucceeded = "payment_succeeded"
 	BillingEventPaymentFailed    = "payment_failed"
@@ -913,10 +916,12 @@ const (
 
 // Outcomes ApplyBillingEvent reports. Every one of them is a final answer for
 // the event: none is worth the provider redelivering it, so the webhook is
-// acknowledged whichever one comes back. Only an error asks for a retry.
+// acknowledged whichever one comes back. Only an error asks for a retry,
+// ErrBillingEventEarly among them.
 //
 // ApplyBillingEvent 报告的处理结果。每一个都是该事件的最终答复：没有哪一个值得服务商
-// 重新投递，因此无论返回哪个，webhook 都会被确认。只有错误才要求重试。
+// 重新投递，因此无论返回哪个，webhook 都会被确认。只有错误才要求重试，
+// ErrBillingEventEarly 也在其中。
 const (
 	BillingOutcomeApplied   = "applied"
 	BillingOutcomeDuplicate = "duplicate"
@@ -925,13 +930,28 @@ const (
 	BillingOutcomeIgnored   = "ignored"
 )
 
+// ErrBillingEventEarly is returned by ApplyBillingEvent for a refund or
+// dispute event that arrived before the event it follows — a refund or a
+// dispute for a payment whose success is not recorded yet, or a won dispute
+// whose opening is not. Nothing is written, the webhook id included, so the
+// provider's redelivery applies it once its predecessor has landed.
+//
+// ErrBillingEventEarly 由 ApplyBillingEvent 在退款或争议事件早于其前置事件到达时返回：
+// 付款成功尚未记录时到达的退款或争议，或争议开启尚未记录时到达的争议胜诉。什么都不会
+// 写入（包括 webhook id），因此服务商重新投递时，只要前置事件已经落地，它就会被应用。
+var ErrBillingEventEarly = errors.New("store: billing event arrived before the event it follows")
+
 // BillingEvent is a verified provider event, already reduced to the fields
 // the ledger acts on. OrderID and TenantID come from the metadata this
 // service attached when it created the checkout; PaymentID binds refunds and
-// disputes back to the order.
+// disputes back to the order. AmountMinor and Currency are what the payment
+// charged or the refund returned, tax included; IsPartial marks a partial
+// refund.
 //
 // BillingEvent 是一个已验签的服务商事件，已被归约为账目要处理的字段。OrderID 与
 // TenantID 来自本服务创建结账时附加的 metadata；PaymentID 把退款与争议关联回订单。
+// AmountMinor 与 Currency 是付款实际收取或退款实际退回的金额（含税）；IsPartial 标记
+// 部分退款。
 type BillingEvent struct {
 	WebhookID         string
 	Type              string
@@ -943,6 +963,8 @@ type BillingEvent struct {
 	RefundID          string
 	DisputeID         string
 	AmountMinor       int64
+	Currency          string
+	IsPartial         bool
 }
 
 // BillingEventResult is what applying one event did.
@@ -994,10 +1016,15 @@ type Billing interface {
 	// SetTenantBillingMode 设置租户的计费模式；没有计费行时以零余额创建。
 	SetTenantBillingMode(ctx context.Context, tenantID, mode string, now time.Time) (blockedChanged bool, err error)
 	// SetDodoCustomerID records the provider customer a tenant's checkouts
-	// attach to, creating the tenant's row as exempt if it has none.
+	// attach to, creating the tenant's row as exempt if it has none. The
+	// first customer recorded wins: when the tenant already has one, it is
+	// kept and returned, so two concurrent first purchases settle on the
+	// same customer.
 	//
 	// SetDodoCustomerID 记录租户结账所关联的服务商客户；没有计费行时以 exempt 创建。
-	SetDodoCustomerID(ctx context.Context, tenantID, customerID string, now time.Time) error
+	// 先记录的客户生效：租户已有客户时保留并返回它，因此两次并发的首次购买会落到同一个
+	// 客户上。
+	SetDodoCustomerID(ctx context.Context, tenantID, customerID string, now time.Time) (string, error)
 	// AdjustCredit applies entry.AmountMicro to entry.TenantID's balance and
 	// appends entry with its resulting balance filled in.
 	//

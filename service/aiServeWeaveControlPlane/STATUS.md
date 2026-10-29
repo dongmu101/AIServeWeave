@@ -733,12 +733,12 @@ Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 
 | `Billing.ReturnURL` | 空 | 开启时必填，绝对 `http(s)` 地址，付款完成或取消后 Dodo 回跳的 Console 计费页 |
 | `Billing.SignupGrantCredits` | `0` | 自助注册租户的期初赠送点数 |
 
-Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhook`，订阅 `payment.*`、`refund.succeeded`、`dispute.opened`、`dispute.won`。
+Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhook`，订阅 `payment.succeeded`、`payment.failed`、`payment.cancelled`、`refund.succeeded`、`dispute.opened`、`dispute.won`、`dispute.cancelled`。`deploy/docker-compose.yaml` 把控制面端口只绑定在 `127.0.0.1`，Dodo 要能投递，需要由反向代理把这一条路径（且只需这一条）暴露到公网。
 
 ### 单位与模式
 
-- **点数与 micro**：1 点 = 1,000,000 micro（`model.MicroPerCredit`），余额、账目、订单都以 micro 存 `BIGINT`。模型单价单位是「micro / 百万 token」，单笔费用 = `ceil((prompt × 输入单价 + completion × 输出单价) / 1e6)`，`math/bits.Mul64` 做溢出检查，单价上限 `model.MaxPriceMicroPerMTok`。别名没有单价时用 `*` 默认价；默认价也没有就记 0（照样写 `usage_charges` 行，报表能看出哪些用量没定价）。
-- **计费模式按租户**：`prepaid` 扣余额、余额 ≤ 0 时拦截；`exempt` 只记录费用、不动余额也不拦截。`tenant_billing` **没有行即视为 exempt**，因此存量租户与 BootstrapToken 创建的租户无需回填即保持原行为；`Billing.Enabled` 时自助注册的租户在创建租户的同一事务里写入 prepaid 行与 `grant` 账目。运维可随时切换模式。
+- **点数与 micro**：1 点 = 1,000,000 micro（`model.MicroPerCredit`），余额、账目、订单都以 micro 存 `BIGINT`。模型单价单位是「micro / 百万 token」，单笔费用 = `ceil((prompt × 输入单价 + completion × 输出单价) / 1e6)`，在 128 位内精确计算，超出 int64 时饱和为最大值而不是变成 0，因此 Gateway 上报的 token 数再大也不会让请求免费；单价上限 `model.MaxPriceMicroPerMTok` 只是对运维输入的合理性校验。别名没有单价时用 `*` 默认价；默认价也没有就记 0（照样写 `usage_charges` 行，报表能看出哪些用量没定价）。
+- **计费模式按租户**：`prepaid` 扣余额、余额 ≤ 0 时拦截；`exempt` 只记录费用、不动余额也不拦截。`tenant_billing` **没有行即视为 exempt**，因此存量租户与 BootstrapToken 创建的租户无需回填即保持原行为；`Billing.Enabled` 时自助注册的租户在租户行写入之后、owner 写入之前写入 prepaid 行与 `grant` 账目（这两行在同一个 store 事务里）。租户行、计费行、owner 之间没有事务，但这个顺序保证失败时留下的是一个没有 owner 的惰性租户，而不是一个能登录、却因缺行而被当作 exempt 的租户。运维可随时切换模式。exempt 租户也能购买点数，点数会入账，但在切换为 prepaid 之前不会被使用。
 - **只计 token**：图像生成、工作流 Job 等不按 token 计量的前门只受准入约束，不扣费。
 
 ### 数据
@@ -750,7 +750,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id` |
 | `credit_packages` | 充值包（`pkg_`）：`fixed` 为固定价格产品对应固定点数；`custom` 为 Dodo Pay What You Want 产品，按 `credits_per_minor_unit_micro` 换算，金额在 `min_amount_minor`–`max_amount_minor` 内 |
 | `model_prices` | 别名单价，`*` 为默认价 |
-| `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一 |
+| `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准 |
 | `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`usage`/`refund`/`dispute`/`dispute_reversal`/`adjust`，带 `balance_after`；`idempotency_key` 唯一 |
 | `usage_charges` | 每个 `request_id` 一行费用，是扣费的幂等依据 |
 | `billing_webhook_events` | 已处理的 `webhook-id`，用于去重 |
@@ -759,7 +759,9 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 ### 扣费
 
-`POST /internal/v1/usagerecords` 在计费开启时改走 `Store.ChargeUsage`，一个事务内：按 `DoNothing` 插入用量行 → 按租户 id 顺序对 `tenant_billing` 加 `FOR UPDATE`（缺行先补 exempt 行）→ 锁定读已存在的 `usage_charges` → 只为尚未计费的 `request_id` 插入费用 → prepaid 租户扣减余额，每租户每批写一条 `usage` 账目。Gateway 重推同一批时费用行已存在，不会重复扣费。为此 Gateway 的用量推送由「从不重试」改为有界退避重试，见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#按租户模型的持久化用量账本statusmd-的-p2)。
+`POST /internal/v1/usagerecords` 在计费开启时改走 `Store.ChargeUsage`，一个 **READ COMMITTED** 事务内：按 `DoNothing` 插入用量行 → 按租户 id 顺序对已有的 `tenant_billing` 行加 `FOR UPDATE`（没有行的租户是 exempt，不锁也不补行）→ 普通读已存在的 `usage_charges` → 只为尚未计费的 `request_id` 插入费用 → prepaid 租户扣减余额，每租户每批写一条 `usage` 账目。Gateway 并发重推同一批时，后到的事务在租户锁上等前一个提交，再读到它的费用行，不会重复扣费。隔离级别固定为 READ COMMITTED：在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 `request_id` 做锁定读会加间隙锁，两个副本推送互不相关的批次也会互相死锁。
+
+批内超出列宽的记录（`request_id` 64、`tenant_id` 32、`model` 128、`endpoint` 24 字节）与缺字段的记录一样被跳过，不会让整批被数据库拒绝：Gateway 会重试失败的批次并让新批次排在其后，一个每次都失败的批次会卡住所有租户的扣费。Gateway 的用量推送由「从不重试」改为有界退避重试，见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#按租户模型的持久化用量账本statusmd-的-p2)。
 
 ### 准入与生效延迟
 
@@ -769,16 +771,20 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 ### Webhook
 
-`POST /billing/v1/dodo/webhook` 是公开路由，请求体上限 `handler.MaxBillingWebhookBytes`（1 MiB，超出 `413`）。原始字节交给 SDK 的 `Webhooks.Unwrap` 按 Standard Webhooks 校验签名与时间戳，失败 `401`；不走通用 `decode`，因为验签要原始字节、事件体也会带本服务不认识的字段。处理在一个事务内提交后才返回 `200 {"outcome": ...}`，出错返回 `500` 让 Dodo 重试。去重三道：`webhook-id`（`billing_webhook_events`）→ `dodo_payment_id` 唯一约束 → 账目 `idempotency_key`。
+`POST /billing/v1/dodo/webhook` 是公开路由，请求体上限 `handler.MaxBillingWebhookBytes`（1 MiB，超出 `413`）。原始字节先按 Standard Webhooks 校验签名与时间戳，失败 `401` 并记一条警告日志；通过后才交给 SDK 解码。SDK 解码不了的已验签事件（比 SDK 更新的事件类型）按 `ignored` 确认，而不是 `401`，否则 Dodo 会一直重投。webhook 密钥在启动时解析，格式错误会让启动失败。不走通用 `decode`，因为验签要原始字节、事件体也会带本服务不认识的字段。处理在一个事务内提交后才返回 `200 {"outcome": ...}`，出错返回 `500` 让 Dodo 重试。去重三道：`webhook-id`（`billing_webhook_events`）→ `dodo_payment_id` 唯一约束 → 账目 `idempotency_key`。
+
+**乱序**：退款或争议事件找不到已付款的订单（它的 `payment.succeeded` 还没成功投递），或 `dispute.won` 早于 `dispute.opened` 到达时，事务整体回滚（连 `webhook-id` 都不记）并返回 `503`，让 Dodo 稍后重投，而不是确认后永久丢失。代价是：同一个 Dodo 账户下不属于本平台的付款，其退款与争议会一直重投，直到 Dodo 放弃。
 
 | 事件 | 处理 |
 | --- | --- |
-| `payment.succeeded` | 按 metadata 的 `aisw_order_id`/`aisw_tenant_id` 找订单，核对租户与结账会话；`pending`/`failed` → `paid`，记入订单点数（幂等键 `topup:<payment_id>`）。核对不符时不入账，结果 `mismatch` |
+| `payment.succeeded` | 按 metadata 的 `aisw_order_id`/`aisw_tenant_id` 找订单，核对租户、结账会话，**以及币种与订单一致、实付金额（含税）不低于订单金额**；`pending`/`failed` → `paid`，记下实付金额与币种，记入订单点数（幂等键 `topup:<payment_id>`）。核对不符时不入账，结果 `mismatch` 并记错误日志，需要运维介入 |
 | `payment.failed` / `payment.cancelled` | `pending` 订单 → `failed` |
-| `refund.succeeded` | 按退款金额占订单金额的比例扣回点数（向上取整，累计不超过订单点数），幂等键 `refund:<refund_id>`；全额退完订单 → `refunded` |
+| `refund.succeeded` | 按累计退款占**实付金额**的比例扣回点数（向上取整，累计不超过订单点数），幂等键 `refund:<refund_id>`；退款币种与付款不同为 `mismatch`；Dodo 未给出金额时，全额退款按剩余金额处理，部分退款为 `mismatch`；全额退完订单 → `refunded` |
 | `dispute.opened` | 扣回订单剩余点数，订单 → `disputed`，幂等键 `dispute:<dispute_id>` |
-| `dispute.won` | 退回争议时扣的点数，幂等键 `dispute_won:<dispute_id>` |
-| 其他 | `200`，`ignored` |
+| `dispute.won` / `dispute.cancelled` | 商户保住款项，退回争议时扣的点数，幂等键 `dispute_won:<dispute_id>` |
+| 其他（含 `dispute.lost`、`dispute.accepted`、`dispute.expired`） | `200`，`ignored`；争议开启时扣回的点数保持扣回 |
+
+结账时控制面把 `billing_currency` 固定为充值包币种，并关闭折扣码与币种切换（`allow_discount_code`、`allow_currency_selection` 均为 `false`）。上面的金额核对是第二道防线，针对充值包配错产品的情况，例如自定义金额包配到了固定价格产品上：Dodo 会忽略传入的金额、按产品价收款，订单却已按租户所选金额算好了点数。在 Dodo 测试环境实测：未关闭币种切换时，从日本访问会把 $12.34 本地化为 ¥2,025。
 
 乱序到达（例如 `payment.failed` 晚于 `payment.succeeded`）不会把已付订单改回失败。日志只记事件类型、内部 id 与结果，不记 payload、邮箱或卡信息。
 
@@ -787,7 +793,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | 接口 | 守卫 | 说明 |
 | --- | --- | --- |
 | `GET /admin/v1/billing` | 租户会话 | 模式、余额、是否拦截、上架的充值包 |
-| `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；返回 `201 {order_id, checkout_url}`。首次购买时为租户创建 Dodo 客户。Dodo 出错为 `503` |
+| `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；返回 `201 {order_id, checkout_url}`。首次购买时为租户创建 Dodo 客户；并发的首次购买以先记录的客户为准。Dodo 出错或超时为 `503` |
 | `POST /admin/v1/billing/portal` | 租户 owner/admin | 返回 Dodo 客户门户链接（发票、付款记录）；尚无客户时 `404` |
 | `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页 |
 | `GET/POST /operator/v1/billing/packages`、`PUT .../packages/:id` | 平台会话 | 充值包管理；下架用 `active: false`，不删除（订单引用它） |
@@ -797,6 +803,8 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `POST /operator/v1/billing/tenants/:id/adjust` | 平台会话 | `{amount_micro, reason}`，写 `adjust` 账目 |
 | `GET /operator/v1/billing/orders`、`/ledger` | 平台会话 | 跨租户，可选 `tenant_id` |
 
+结账与门户两条路由会调用 Dodo，单独设了 `handler.BillingCallTimeout`（9 秒）的超时，低于 Console 默认 10 秒的上游超时；其余路由沿用服务默认的 3 秒。SDK 单次尝试 4 秒、最多重试 1 次，整体再受这条路由超时约束。超时可能留下一张永远 `pending` 的订单，或一个未被记录的 Dodo 客户，两者都不影响余额。
+
 写操作的审计动作：`billing.package.create`/`update`、`billing.price.update`/`delete`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`。
 
 ### 依赖
@@ -805,9 +813,12 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 ### 已知缺口
 
-- 未用真实 Dodo 测试环境联调：默认测试用假 Provider 与本地签名覆盖逻辑，SDK 请求形状用本地 HTTP 服务器核对。联调步骤：在 Dodo 测试环境建一个固定价格产品与一个 PWYW 产品并在运维页配置为充值包、配置单价；把 webhook 指向控制面；租户用测试卡购买，确认余额增加；调用推理确认扣减；余额调到 0 确认 Gateway 402；充值后确认 1 秒内恢复；退款确认扣回。
+- Dodo 测试环境已联调到真实付款（2026-10-29）：结账会话、客户、客户门户都是真实 API 调用；测试卡付款后，用真实的 payment 对象签名投递 `payment.succeeded` 并入账；扣费、余额转负后的 `billing_blocked` 翻转、手工调整后的恢复都已验证。webhook 不是由 Dodo 直接推送的，因为联调机器没有公网地址；Gateway 的 402 没有接真实 Gateway 联调。
+- Dodo 测试账户在付款结算前钱包余额为 0，无法发起真实退款（`INSUFFICIENT_WALLET_FUNDS`），因此退款与争议只用按 SDK 结构构造的事件验证过。
 - 未做真实 PostgreSQL/MySQL live 测试验证 `billing` 迁移与 `FOR UPDATE` 扣费事务（memstore 等价实现已覆盖语义）。
 - Gateway 用量推送的重试只在进程内，副本崩溃会丢失尚未送达的批次，对应用量不扣费。
+- `usage_charges` 与 `billing_webhook_events` 还没有保留期清理，会随用量与事件持续增长。
+- 手工调整余额（`/adjust`）没有幂等键，重复提交会记两次；Console 只发送一次、不自动重试。
 
 ## 告警评估与通知（P09/C29）
 
