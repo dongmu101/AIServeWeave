@@ -42,3 +42,7 @@ go-zero、gorm 及数据库驱动、golang-jwt、`golang.org/x/crypto` 归控制
 ## Console
 
 前端依赖、TypeScript 双版本、Node 内置单元测试与独立 Playwright 验收遵守 [Console AGENTS](../../service/aiServeWeaveConsole/AGENTS.md)。不要把后端的依赖允许列表套用到前端，也不要以升级名义移除其已有兼容安排。
+
+### Agent Windows 系统接口
+
+Agent 的 `internal/localstate`、`internal/localcontrol`、`internal/cliprocess` 和 `hostresources` 复用既有 `golang.org/x/sys/windows`，用于 DACL/受限文件创建、同用户 named pipe、Job Object 与磁盘余量。标准库没有这些完整接口；依赖由 indirect 改为 direct，版本不变，不增加 Windows 服务框架或 shell 执行依赖。系统专用实现由 build tag 隔离。

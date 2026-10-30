@@ -12,6 +12,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 var (
@@ -60,7 +62,7 @@ func withAccountDir(env []string, dir string) []string {
 	}
 	out := make([]string, 0, len(env)+1)
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, "CLAUDE_CONFIG_DIR=") {
+		if !cliprocess.KeyEqual(strings.SplitN(entry, "=", 2)[0], "CLAUDE_CONFIG_DIR") {
 			out = append(out, entry)
 		}
 	}
@@ -113,11 +115,11 @@ func checkAuth(ctx context.Context, program string, env []string) error {
 	var output = boundedCapture{limit: 64 * 1024}
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = dir, env, &output, io.Discard
 	cmd.WaitDelay = time.Second
-	if err := configureProcess(cmd); err != nil {
+	if err := cliprocess.Configure(cmd); err != nil {
 		return err
 	}
 	defer func() { _ = cmd.Cancel() }()
-	err = cmd.Run()
+	err = cliprocess.Run(cmd)
 	var status struct {
 		LoggedIn   bool   `json:"loggedIn"`
 		AuthMethod string `json:"authMethod"`
@@ -148,7 +150,7 @@ func probeEnv(source []string) []string {
 	var out []string
 	for _, entry := range source {
 		key, _, ok := strings.Cut(entry, "=")
-		if ok && allowed[key] {
+		if ok && cliprocess.AllowedKey(key, allowed) {
 			out = append(out, entry)
 		}
 	}

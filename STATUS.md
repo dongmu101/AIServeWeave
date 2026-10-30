@@ -156,3 +156,7 @@
 - [Registry STATUS](service/aiServeWeaveRegistry/STATUS.md)：身份冲突、token 存储、单实例与认证边界。
 - [Agent STATUS](service/aiServeWeaveAgent/STATUS.md)：本地后端、模型拉取、Managed ComfyUI 与自动升级。
 - [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C 系列子任务与 Q03 验收。
+
+### Agent 独立主机部署（2026-10-30）
+
+Ubuntu systemd、Apple Silicon macOS LaunchAgent、Windows 11 原生用户计划任务的安装维护脚本及 Windows ACL/CLI Job/本地控制适配已实现；入口见 [Agent 独立部署](deploy/agent/README.md)。支持指定版本在线/本地来源、制品校验、显式升级/回退与保留状态卸载。操作系统矩阵、真实 HTTP/API 和 Codex/Claude 验收仍待逐组合执行；[验证记录](deploy/agent/acceptance.md) 分开记录构建、默认检查与实机结果。

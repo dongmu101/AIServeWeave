@@ -543,3 +543,27 @@ func waitForHealthCalls(t *testing.T, counter *int32, clock *runtimetest.Clock, 
 		}
 	}
 }
+
+func TestManagerCloseHonorsCancellation(t *testing.T) {
+	entered, release, finished := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	rt := &runtimetest.Runtime{CloseFunc: func() error { close(entered); <-release; close(finished); return nil }}
+	m, _ := newManagerWithRegistry(t, runtimetest.NewClock(time.Now()), rt)
+	if err := m.Add(context.Background(), baseCfg("r1")); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	result := make(chan error, 1)
+	go func() { result <- m.Close(ctx) }()
+	<-entered
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Errorf("Close error = %v, want canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Error("Close did not honor cancellation")
+	}
+	close(release)
+	<-finished
+}

@@ -21,7 +21,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 VERSION="${VERSION:-$(git describe --tags --always --dirty 2>/dev/null || echo dev)}"
-PLATFORMS="${PLATFORMS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64}"
+PLATFORMS="${PLATFORMS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}"
 SERVICES="aiServeWeaveAgent aiServeWeaveGateway aiServeWeaveControlPlane aiServeWeaveRegistry"
 OUT_DIR="dist"
 
@@ -41,12 +41,42 @@ for service in $SERVICES; do
   for platform in $PLATFORMS; do
     goos="${platform%/*}"
     goarch="${platform#*/}"
-    out="${OUT_DIR}/${bin_name}_${VERSION}_${goos}_${goarch}"
+    if [ "$goos" = windows ] && [ "$service" != aiServeWeaveAgent ];then continue;fi
+    extension=""
+    if [ "$goos" = windows ];then extension=.exe;fi
+    out="${OUT_DIR}/${bin_name}_${VERSION}_${goos}_${goarch}${extension}"
     echo "  ${bin_name} ${goos}/${goarch}"
     CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
       go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
       -o "$out" "./service/${service}"
   done
+done
+
+# Bundle maintenance scripts while retaining raw binary names for existing consumers.
+# 打包维护脚本，同时保留现有使用方依赖的原始二进制命名。
+package_dir=$(mktemp -d)
+trap 'rm -rf "$package_dir"' EXIT
+for platform in $PLATFORMS;do
+  goos="${platform%/*}";goarch="${platform#*/}"
+  stem="aiserveweave-agent_${VERSION}_${goos}_${goarch}"
+  extension="";if [ "$goos" = windows ];then extension=.exe;fi
+  [ -f "$OUT_DIR/$stem$extension" ] || continue
+  cp "$OUT_DIR/$stem$extension" "$package_dir/"
+  if command -v sha256sum >/dev/null 2>&1;then
+    (cd "$package_dir";sha256sum "$stem$extension" >SHA256SUMS.txt)
+  else (cd "$package_dir";shasum -a 256 "$stem$extension" >SHA256SUMS.txt);fi
+  cp deploy/agent/README.md "$package_dir/README.md"
+  cp deploy/agent/acceptance.md "$package_dir/acceptance.md"
+  sed 's@\[Agent 配置\](../../service/aiServeWeaveAgent/README.md)@仓库中的 service/aiServeWeaveAgent/README.md@' "$package_dir/README.md" >"$package_dir/README.next"
+  mv "$package_dir/README.next" "$package_dir/README.md"
+  if [ "$goos" = windows ];then
+    cp deploy/agent/agent.ps1 "$package_dir/agent.ps1"
+    (cd "$package_dir";zip -q "$OLDPWD/$OUT_DIR/${stem}.zip" "$stem$extension" SHA256SUMS.txt README.md acceptance.md agent.ps1)
+  else
+    cp deploy/agent/agent.sh "$package_dir/agent.sh"
+    tar -czf "$OUT_DIR/${stem}.tar.gz" -C "$package_dir" "$stem" SHA256SUMS.txt README.md acceptance.md agent.sh
+  fi
+  rm -f "$package_dir"/*
 done
 
 (

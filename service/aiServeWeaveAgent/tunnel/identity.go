@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -16,7 +17,6 @@ import (
 	"net"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +30,7 @@ import (
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/nodeid"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
 )
 
 // This file owns the node's single identity: the key pair generated locally,
@@ -567,8 +568,12 @@ func (m *IdentityManager) newIdentity(certPEM, keyPEM, caPEM []byte, wantNodeID 
 // when neither the certificate nor the key exists, which is the signal to
 // bootstrap; a half-present pair is a fatal error rather than a reason to
 // re-register, because silently discarding one half of an identity would hide
-// a botched deployment.
+// a botched deployment. A validated pending journal is completed first.
+// load 先恢复已验证的替换记录，再读取身份；无恢复记录的半对身份仍作为致命错误处理。
 func (m *IdentityManager) load() (*Identity, error) {
+	if err := m.recoverPendingIdentity(); err != nil {
+		return nil, err
+	}
 	certExists, err := m.checkSecretFile(m.cfg.CertFile, "cert_file")
 	if err != nil {
 		return nil, err
@@ -608,6 +613,7 @@ func (m *IdentityManager) load() (*Identity, error) {
 // checkSecretFile reports whether path exists and enforces mode 0600 on it.
 // A mode wider than 0600 is fatal: the file may already have been read by
 // another user, so tightening it silently would hide a real exposure.
+// checkSecretFile 使用平台私有权限策略校验身份文件，拒绝已有的宽泛授权。
 func (m *IdentityManager) checkSecretFile(path, name string) (bool, error) {
 	info, err := os.Stat(path)
 	switch {
@@ -618,9 +624,8 @@ func (m *IdentityManager) checkSecretFile(path, name string) (bool, error) {
 	case info.IsDir():
 		return false, fatalIdentityError(runtime.ErrorInvalidConfig, name+" "+path+" is a directory", nil)
 	}
-	if mode := info.Mode().Perm(); mode != secretFileMode {
-		return false, fatalIdentityError(runtime.ErrorInvalidConfig,
-			fmt.Sprintf("%s %s has mode %#o, want %#o", name, path, mode, secretFileMode), nil)
+	if err := localstate.CheckPrivate(path, true); err != nil {
+		return false, fatalIdentityError(runtime.ErrorInvalidConfig, name+" "+path+" has unsafe permissions", err)
 	}
 	return true, nil
 }
@@ -637,12 +642,13 @@ func (m *IdentityManager) hasBootstrapToken() bool {
 
 // readBootstrapToken reads the one-time token. The token itself never enters
 // a log line or an error message — only the path does.
+// readBootstrapToken 读取受保护的一次性令牌，不将其内容写入日志或错误。
 func (m *IdentityManager) readBootstrapToken() (string, error) {
 	if strings.TrimSpace(m.cfg.BootstrapTokenFile) == "" {
 		return "", fatalIdentityError(runtime.ErrorInvalidConfig,
 			"no node certificate is stored and bootstrap_token_file is not configured", nil)
 	}
-	info, err := os.Stat(m.cfg.BootstrapTokenFile)
+	_, err := os.Stat(m.cfg.BootstrapTokenFile)
 	switch {
 	case errors.Is(err, os.ErrNotExist):
 		return "", fatalIdentityError(runtime.ErrorInvalidConfig,
@@ -650,10 +656,8 @@ func (m *IdentityManager) readBootstrapToken() (string, error) {
 	case err != nil:
 		return "", fatalIdentityError(runtime.ErrorInvalidConfig, "cannot stat "+m.cfg.BootstrapTokenFile, err)
 	}
-	if mode := info.Mode().Perm(); mode&0o077 != 0 {
-		return "", fatalIdentityError(runtime.ErrorInvalidConfig,
-			fmt.Sprintf("bootstrap_token_file %s has mode %#o, which is readable beyond its owner",
-				m.cfg.BootstrapTokenFile, mode), nil)
+	if err := localstate.CheckPrivate(m.cfg.BootstrapTokenFile, false); err != nil {
+		return "", fatalIdentityError(runtime.ErrorInvalidConfig, "bootstrap token "+m.cfg.BootstrapTokenFile+" has unsafe permissions", err)
 	}
 
 	raw, err := os.ReadFile(m.cfg.BootstrapTokenFile)
@@ -668,57 +672,81 @@ func (m *IdentityManager) readBootstrapToken() (string, error) {
 	return token, nil
 }
 
-// persist writes the identity files, each one atomically so a crash mid-write
-// cannot leave a certificate that does not match its key. The key is written
-// first: a key without a certificate is recoverable by re-registering, while a
-// certificate without its key is not usable at all.
+// pendingIdentity records a validated replacement before any identity file is changed.
+// pendingIdentity 在改动身份文件前记录已校验的替换材料。
+type pendingIdentity struct {
+	Certificate []byte `json:"certificate"`
+	PrivateKey  []byte `json:"private_key"`
+	CA          []byte `json:"ca"`
+}
+
+// persist journals the complete identity before replacing its individual files.
+// persist 在逐个替换身份文件前，先记录完整身份以便中断后恢复。
 func (m *IdentityManager) persist(certPEM, keyPEM, caPEM []byte) error {
+	pending := pendingIdentity{certPEM, keyPEM, caPEM}
+	data, err := json.Marshal(pending)
+	if err != nil {
+		return err
+	}
+	if err := localstate.WriteFile(m.cfg.KeyFile+".pending", data, secretFileMode); err != nil {
+		return fatalIdentityError(runtime.ErrorInvalidConfig, "cannot prepare identity replacement", err)
+	}
+	return m.completeIdentity(pending)
+}
+
+func (m *IdentityManager) completeIdentity(p pendingIdentity) error {
 	for _, f := range []struct {
 		path string
 		data []byte
 		mode os.FileMode
 	}{
-		{m.cfg.KeyFile, keyPEM, secretFileMode},
-		{m.cfg.CertFile, certPEM, secretFileMode},
-		{m.cfg.CAFile, caPEM, caFileMode},
+		{m.cfg.KeyFile, p.PrivateKey, secretFileMode}, {m.cfg.CertFile, p.Certificate, secretFileMode}, {m.cfg.CAFile, p.CA, caFileMode},
 	} {
 		if err := writeFileAtomic(f.path, f.data, f.mode); err != nil {
 			return fatalIdentityError(runtime.ErrorInvalidConfig, "cannot write "+f.path, err)
 		}
 	}
+	if err := os.Remove(m.cfg.KeyFile + ".pending"); err != nil {
+		return fatalIdentityError(runtime.ErrorInvalidConfig, "cannot finish identity replacement", err)
+	}
 	return nil
+}
+
+func (m *IdentityManager) recoverPendingIdentity() error {
+	path := m.cfg.KeyFile + ".pending"
+	if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	if err := localstate.CheckPrivate(path, true); err != nil {
+		return fatalIdentityError(runtime.ErrorInvalidConfig, "unsafe pending identity", err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	data, err := io.ReadAll(io.LimitReader(f, (1<<20)+1))
+	closeErr := f.Close()
+	if err != nil {
+		return err
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	var pending pendingIdentity
+	if len(data) > 1<<20 || json.Unmarshal(data, &pending) != nil {
+		return fatalIdentityError(runtime.ErrorInvalidConfig, "invalid pending identity", nil)
+	}
+	if _, err := m.newIdentity(pending.Certificate, pending.PrivateKey, pending.CA, m.cfg.NodeID, true); err != nil {
+		return err
+	}
+	return m.completeIdentity(pending)
 }
 
 // writeFileAtomic writes data to path through a temporary file in the same
 // directory, so readers never observe a partially written identity file.
+// writeFileAtomic 使用平台权限和替换操作写入身份文件，不先删除旧文件。
 func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, identityDirMode); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".tmp-*")
-	if err != nil {
-		return err
-	}
-	tmpName := tmp.Name()
-	defer os.Remove(tmpName) // no-op once the rename succeeded
-
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
-	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Sync(); err != nil {
-		tmp.Close()
-		return err
-	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	return os.Rename(tmpName, path)
+	return localstate.WriteFile(path, data, mode)
 }
 
 // generateNodeKey generates the node private key. It is ECDSA P-256: TLS 1.3

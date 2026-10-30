@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"AIServeWeave/service/aiServeWeaveAgent/cliusage"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 const accountUsageID = "aisw_account_usage"
@@ -58,11 +60,11 @@ func readAccountUsage(ctx context.Context, program string, env []string) (cliusa
 	output := boundedCapture{limit: maxEventBytes}
 	cmd.Dir, cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = dir, env, &requests, &output, io.Discard
 	cmd.WaitDelay = time.Second
-	if configureProcess(cmd) != nil {
+	if cliprocess.Configure(cmd) != nil {
 		return cliusage.Account{}, errCLIStart
 	}
 	defer func() { _ = cmd.Cancel() }()
-	if cmd.Run() != nil {
+	if cliprocess.Run(cmd) != nil {
 		return cliusage.Account{}, errCLIExit
 	}
 	return parseAccountUsage(output.buffer.Bytes())

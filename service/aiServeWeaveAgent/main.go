@@ -9,6 +9,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"os/signal"
@@ -23,6 +24,8 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/localcontrol"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/rotatelog"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
@@ -79,6 +82,11 @@ const (
 )
 
 func main() {
+	environmentFile := flag.String("env-file", "", "private JSON environment file for background API/CLI settings")
+	logFile := flag.String("log-file", "", "optional private log file, rotated at 10 MiB with two backups")
+	initConfig := flag.Bool("init-config", false, "create deployment YAML once from connection flags; never overwrite")
+	checkConfig := flag.Bool("check-config", false, "validate deployment YAML and exit without networking")
+	control := flag.String("control", "", "same-user local maintenance action: status, stop or reload")
 	logLevel := flag.String("log-level", "info", "log level: debug, info, warn, error")
 	opts := registerTunnelFlags()
 	mpOpts := registerModelPullFlags()
@@ -107,6 +115,43 @@ func main() {
 	if *showVersion {
 		os.Stdout.WriteString("aiserveweave-agent " + version + "\n")
 		return
+	}
+
+	if *initConfig || *checkConfig || *control != "" {
+		var err error
+		if *configPath == "" {
+			err = errors.New("an explicit -config path is required")
+		} else {
+			switch {
+			case *initConfig:
+				err = initializeDeployment(*configPath, opts)
+			case *checkConfig:
+				err = checkDeployment(*configPath)
+			default:
+				err = controlCommand(*configPath, *control)
+			}
+		}
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "agent:", err)
+			os.Exit(2)
+		}
+		return
+	}
+	if *environmentFile != "" {
+		if err := loadEnvironment(*environmentFile); err != nil {
+			fmt.Fprintln(os.Stderr, "agent:", err)
+			os.Exit(2)
+		}
+	}
+
+	if *logFile != "" {
+		output, err := rotatelog.Open(*logFile, 10<<20, 2)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "agent: cannot open log file")
+			os.Exit(2)
+		}
+		defer output.Close()
+		logOutput = output
 	}
 
 	explicit := explicitFlagNames()
@@ -166,6 +211,7 @@ func main() {
 	logger, err := newLogger(*logLevel)
 	if err != nil {
 		// The logger is not usable yet, so report the failure directly.
+		// 日志记录器尚不可用，直接报告失败。
 		os.Stderr.WriteString("agent: " + err.Error() + "\n")
 		os.Exit(2)
 	}
@@ -194,6 +240,8 @@ func main() {
 func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, reload reloadSource, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	finished := make(chan struct{})
+	defer close(finished)
 
 	local := newLocalDeclarations(declaredRuntimes)
 	registry, err := newReloadableRegistry(local)
@@ -214,13 +262,69 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	manager := runtime.NewManager(registry, deps)
 	defer func() {
 		stop()
-		_ = manager.Close(context.Background())
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
+		defer cancel()
+		_ = manager.Close(cleanupCtx)
 		if metricsServer != nil {
 			_ = metricsServer.Close()
 		}
 	}()
 	var activeTunnels atomic.Pointer[tunnel.Manager]
+	var agentReady atomic.Bool
 	var reloader atomic.Pointer[runtimeReloader]
+	closeControl, err := localcontrol.Serve(ctx, configPath, localcontrol.Handlers{
+		Status: func() any {
+			type health struct {
+				ID     string `json:"id"`
+				Kind   string `json:"kind"`
+				State  string `json:"state"`
+				Models int    `json:"model_count"`
+			}
+			runtimes := make([]health, 0)
+			snapshots := manager.Snapshot()
+			for _, snapshot := range snapshots {
+				if len(runtimes) >= 128 {
+					break
+				}
+				runtimes = append(runtimes, health{snapshot.Descriptor.ID, string(snapshot.Descriptor.Kind), string(snapshot.State), len(snapshot.Discovery.Models)})
+			}
+			states := map[string]int{}
+			if current := activeTunnels.Load(); current != nil {
+				for _, state := range current.TunnelStates() {
+					states[state.String()]++
+				}
+			}
+			phase := "starting"
+			if agentReady.Load() {
+				phase = "running"
+			}
+			return map[string]any{"phase": phase, "pid": os.Getpid(), "version": version, "gateway_states": states, "runtimes": runtimes, "runtime_count": len(snapshots)}
+		},
+		Reload: func(ctx context.Context) error {
+			current := reloader.Load()
+			if current == nil {
+				return errors.New("Agent is starting")
+			}
+			_, err := current.Reload(ctx)
+			return err
+		},
+		Stop: stop,
+	})
+	if err != nil {
+		return err
+	}
+	defer closeControl()
+	// A stuck backend must not outlive the service stop budget.
+	// 卡住的后端不得让进程超过服务停止期限。
+	context.AfterFunc(ctx, func() {
+		timer := time.NewTimer(shutdownTimeout + 2*time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+			os.Exit(1)
+		case <-finished:
+		}
+	})
 	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
 	if opts.enabled() {
 		// Only a node with a tunnel has anywhere to report the quota to; the
@@ -341,6 +445,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	// Beyond declaredRuntimes above, the manager starts with no instances
 	// until auto-discovery (below) or the tunnel's config delivery adds
 	// one.
+	// 除已声明的运行时外，其他实例由后续本地发现或隧道配置添加。
 	logger.Info("agent started",
 		slog.Any("supported_kinds", registry.Kinds()),
 		slog.Int("configured_runtimes", configuredRuntimes),
@@ -358,11 +463,13 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	}
 
 	activeTunnels.Store(tunnelManager)
+	agentReady.Store(true)
 
 	// Whichever comes first: the operator stopping the agent, or the tunnel
 	// giving up for a reason no reconnect can fix. Either way the runtimes are
 	// drained the same way, so a fatal tunnel error is carried past the
 	// shutdown rather than short-circuiting it.
+	// 操作者停止或隧道遇到不可恢复错误时都先排空运行时，再返回可能的致命错误。
 	var fatal error
 	select {
 	case <-ctx.Done():
@@ -377,7 +484,11 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		}
 	}
 
-	<-discoveryDone // wait for the last scan's Manager.Add calls to finish before Close starts tearing instances down
+	select {
+	case <-discoveryDone:
+	case <-time.After(shutdownTimeout):
+		return errors.New("local discovery stop deadline exceeded")
+	}
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
@@ -409,12 +520,15 @@ type reloadSource struct {
 	extra []runtime.Config
 }
 
+var logOutput io.Writer = os.Stdout
+
 // newLogger returns a JSON logger at the requested level.
+// newLogger 返回指定等级的 JSON 日志记录器。
 func newLogger(level string) (*slog.Logger, error) {
 	var lvl slog.Level
 	if err := lvl.UnmarshalText([]byte(level)); err != nil {
 		return nil, err
 	}
-	handler := slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: lvl})
+	handler := slog.NewJSONHandler(logOutput, &slog.HandlerOptions{Level: lvl})
 	return slog.New(handler), nil
 }

@@ -1,6 +1,7 @@
 package tunnel_test
 
 import (
+	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -8,6 +9,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/json"
 	"encoding/pem"
 	"errors"
 	"io"
@@ -17,6 +19,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	goruntime "runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -311,7 +314,7 @@ func newIdentityFixture(t *testing.T, nodeID string) *identityFixture {
 
 func (f *identityFixture) writeToken(token string) {
 	f.t.Helper()
-	if err := os.WriteFile(f.cfg.BootstrapTokenFile, []byte(token+"\n"), 0o600); err != nil {
+	if err := localstate.WriteFile(f.cfg.BootstrapTokenFile, []byte(token+"\n"), 0o600); err != nil {
 		f.t.Fatalf("write bootstrap token: %v", err)
 	}
 }
@@ -376,11 +379,11 @@ func TestIdentityBootstrapStoresCertificateAndConsumesToken(t *testing.T) {
 		t.Errorf("bootstrap token still present after registration: stat err = %v, want os.ErrNotExist", err)
 	}
 	for _, p := range []string{f.cfg.CertFile, f.cfg.KeyFile} {
-		if got := f.mode(p); got != 0o600 {
-			t.Errorf("%s mode = %#o, want %#o", p, got, 0o600)
+		if err := localstate.CheckPrivate(p, true); err != nil {
+			t.Errorf("%s private permissions: %v", p, err)
 		}
 	}
-	if got := f.mode(f.cfg.CAFile); got != 0o644 {
+	if got := f.mode(f.cfg.CAFile); goruntime.GOOS != "windows" && got != 0o644 {
 		t.Errorf("%s mode = %#o, want %#o", f.cfg.CAFile, got, 0o644)
 	}
 
@@ -475,7 +478,7 @@ func TestIdentityBootstrapTokenProblems(t *testing.T) {
 			name: "token readable beyond its owner",
 			setup: func(f *identityFixture) {
 				f.writeToken("one-time-token")
-				if err := os.Chmod(f.cfg.BootstrapTokenFile, 0o644); err != nil {
+				if err := exposeIdentityFile(f.cfg.BootstrapTokenFile, 0o644); err != nil {
 					f.t.Fatalf("chmod token: %v", err)
 				}
 			},
@@ -589,7 +592,7 @@ func TestIdentityRejectsLooseFilePermissions(t *testing.T) {
 			f := newIdentityFixture(t, "mac-mini-01")
 			f.bootstrapped()
 			path := tt.file(f)
-			if err := os.Chmod(path, tt.mode); err != nil {
+			if err := exposeIdentityFile(path, tt.mode); err != nil {
 				t.Fatalf("chmod %s: %v", path, err)
 			}
 
@@ -1028,5 +1031,49 @@ func TestNewGRPCRegistryConnectorValidatesEndpoint(t *testing.T) {
 	}
 	if _, err := tunnel.NewGRPCRegistryConnector("registry.example.com:8444", nil); err != nil {
 		t.Fatalf("NewGRPCRegistryConnector: %v", err)
+	}
+}
+
+func TestIdentityRecoversInterruptedReplacement(t *testing.T) {
+	f := newIdentityFixture(t, "mac-mini-01")
+	_, first := f.bootstrapped()
+	cert, err := os.ReadFile(f.cfg.CertFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := os.ReadFile(f.cfg.KeyFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca, err := os.ReadFile(f.cfg.CAFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := json.Marshal(map[string][]byte{"certificate": cert, "private_key": key, "ca": ca})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := localstate.WriteFile(f.cfg.KeyFile+".pending", pending, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.cfg.CertFile); err != nil {
+		t.Fatal(err)
+	}
+	wrongKey := []byte("interrupted key replacement")
+	if err := localstate.WriteFile(f.cfg.KeyFile, wrongKey, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	recovered, err := f.manager().Ensure(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.NodeID != first.NodeID {
+		t.Fatalf("NodeID=%q, want %q", recovered.NodeID, first.NodeID)
+	}
+	if _, err := os.Stat(f.cfg.KeyFile + ".pending"); !os.IsNotExist(err) {
+		t.Fatalf("pending journal stat=%v, want removed", err)
+	}
+	if len(f.registry.registerReqs) != 1 {
+		t.Fatal("recovery unexpectedly registered another identity")
 	}
 }

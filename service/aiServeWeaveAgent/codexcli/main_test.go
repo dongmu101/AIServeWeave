@@ -1,11 +1,14 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 package codexcli
 
 import (
 	"encoding/json"
 	"fmt"
+	"io"
+	"net"
 	"os"
+	"os/exec"
 	"runtime"
 	"testing"
 	"time"
@@ -158,5 +161,30 @@ func fakeServer(mode string) {
 				send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread-test", "turn": map[string]any{"id": "turn-test", "status": status}}})
 			}
 		}
+	}
+}
+
+func waitTreeFixture(parent bool) {
+	var child *exec.Cmd
+	if parent {
+		child = exec.Command(os.Args[0])
+		child.Env = append(os.Environ(), "AISW_CODEX_FIXTURE=tree-child")
+		child.Stdout, child.Stderr = os.Stdout, io.Discard
+		if child.Start() != nil {
+			os.Exit(2)
+		}
+	}
+	conn, err := net.Dial("unix", os.Getenv("AISW_CODEX_READY"))
+	if err != nil {
+		os.Exit(3)
+	}
+	if json.NewEncoder(conn).Encode(map[string]bool{"parent": parent}) != nil {
+		os.Exit(4)
+	}
+	var data [1]byte
+	_, _ = conn.Read(data[:])
+	_ = conn.Close()
+	if child != nil {
+		_ = child.Wait()
 	}
 }

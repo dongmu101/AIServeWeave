@@ -313,3 +313,7 @@ curl --fail-with-body --connect-timeout 5 --max-time 15 \
 手动创建平台运维使用 `POST /admin/v1/platform/operators`，同样携带 bootstrap token，
 JSON 字段为 `email`、`password`、`name`。其余接口见
 [ControlPlane STATUS](../service/aiServeWeaveControlPlane/STATUS.md)。
+
+## Agent 独立部署
+
+Ubuntu systemd、Apple Silicon macOS LaunchAgent、Windows 11 原生用户计划任务的安装与维护见 [Agent 部署指南](agent/README.md)。包含固定版本在线/本地安装、状态/停止/重载、显式升级/回退与保留身份卸载。目标系统实机验收状态另列，不能由构建通过推定。

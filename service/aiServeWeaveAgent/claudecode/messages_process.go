@@ -14,6 +14,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 func bridgeToolName(index int) string { return "tool_" + strconv.Itoa(index) }
@@ -137,14 +139,14 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+string(extra))
 	}
 	cmd.WaitDelay = 2 * time.Second
-	if configureProcess(cmd) != nil {
+	if cliprocess.Configure(cmd) != nil {
 		return errCLIStart
 	}
 	out, err := cmd.StdoutPipe()
 	if err != nil {
 		return errCLIStart
 	}
-	if cmd.Start() != nil {
+	if cliprocess.Start(cmd) != nil {
 		_ = out.Close()
 		return errCLIStart
 	}

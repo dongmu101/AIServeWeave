@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 var (
@@ -254,7 +256,7 @@ func resolveExecutable(spec *cliSpec, explicit string, env []string) (string, er
 func envValue(env []string, key string) string {
 	value := ""
 	for _, entry := range env {
-		if k, v, ok := strings.Cut(entry, "="); ok && k == key {
+		if k, v, ok := strings.Cut(entry, "="); ok && cliprocess.KeyEqual(k, key) {
 			value = v
 		}
 	}
@@ -266,7 +268,7 @@ func envValue(env []string, key string) string {
 func setEnv(env []string, key, value string) []string {
 	out := env[:0:0]
 	for _, entry := range env {
-		if k, _, ok := strings.Cut(entry, "="); ok && k == key {
+		if k, _, ok := strings.Cut(entry, "="); ok && cliprocess.KeyEqual(k, key) {
 			continue
 		}
 		out = append(out, entry)
@@ -294,7 +296,7 @@ func baseEnv(spec *cliSpec, source []string, executable string) []string {
 		if !ok {
 			continue
 		}
-		pass := allowed[key]
+		pass := cliprocess.AllowedKey(key, allowed)
 		for _, prefix := range spec.PassEnvPrefixes {
 			pass = pass || strings.HasPrefix(key, prefix)
 		}
@@ -354,7 +356,7 @@ func runCLI(ctx context.Context, exe string, env []string, dir string, args []st
 	diag := &headCapture{limit: maxDiagBytes}
 	cmd.Dir, cmd.Env, cmd.Stderr = dir, env, diag
 	cmd.WaitDelay = 2 * time.Second
-	if err := configureProcess(cmd); err != nil {
+	if err := cliprocess.Configure(cmd); err != nil {
 		return nil, err
 	}
 	var input io.WriteCloser
@@ -368,12 +370,13 @@ func runCLI(ctx context.Context, exe string, env []string, dir string, args []st
 	if err != nil {
 		return nil, ErrProcess
 	}
-	if err := cmd.Start(); err != nil {
+	if err := cliprocess.Start(cmd); err != nil {
 		if ctx.Err() != nil {
 			return nil, context.Cause(ctx)
 		}
 		return nil, ErrProcess
 	}
+	defer cmd.Cancel()
 	written := make(chan struct{})
 	if input != nil {
 		go func() {
