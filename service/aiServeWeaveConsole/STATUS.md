@@ -419,3 +419,11 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 
 不变量：页面从不根据回跳 URL 的 `status` 判定到账；轮询每 3 秒一次、最多 10 次，订单离开 `pending` 即停止；结账、门户、单价、模式切换与余额调整都只发送一次，不自动重试。
 
+
+## Agent 接入下载
+
+新增运维导航「Agent 接入」与 `/operator/agent-enrollment` 页面。平台运维可单独下载公共 CA，或填写 Registry/Gateway 的外部地址和有效期，生成一个随机新节点专用的 ZIP 交给节点提供者。对方无需平台账户或平台服务器权限。包内安装说明覆盖 Ubuntu、Apple Silicon macOS、原生 Windows；Agent 发行包另行取得，保持平台同版本和实际验收范围。
+
+GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重试。响应大小限制为 128 KiB，客户端校验证书格式、摘要、节点 ID、固定文件名与 ZIP/base64 大小；接入凭据只留在当前页内存与用户主动下载的文件，不写 URL、localStorage 或日志。离开后不能找回原包。页面文案覆盖八种语言，写操作沿用同源检查、有界请求体和平台会话隔离；租户不能调用此接口。
+
+本地验证与尚需真实远程接入验收的范围见 [验证记录](../../docs/acceptance/agent-enrollment-2026-10-30/README.md)。

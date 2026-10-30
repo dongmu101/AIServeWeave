@@ -171,6 +171,19 @@ Docker 环境需自行配置该名称或覆盖地址。通过 Gateway API 调用
 
 ## 接一个 Agent
 
+推荐使用运维控制台的 **Agent 接入** 页面（`/operator/agent-enrollment`）：
+
+1. 用平台运维账户登录，填写节点可达的 Registry 和 Gateway 隧道 `host:port`，选择令牌有效期（15 分钟、1 小时或 24 小时）。当前远程部署为 `registry.open7x.com:9443` 与 `agent.open7x.com:8443`；地址必须与服务端证书和名册通告一致。页面填写地址不会修改部署配置。
+2. 点击「生成新节点接入包」，然后下载 ZIP，经可信私密渠道交给节点提供者。每次生成分配随机新节点 ID，令牌只绑定该 ID；此入口不用于覆盖既有节点或重装已有身份。
+3. 对方另行取得与平台同一版本、匹配本机系统/架构的 Agent 发行包，将接入包解压到发行包目录，按包内 `README.txt` 安装。对方不需要平台账户、Registry 管理密钥或平台服务器权限。
+4. 注册成功后在「节点管理」检查连接与运行时，再验收普通请求和 SSE。删除下载的令牌及 ZIP 副本；安装服务成功不等于模型已接入。
+
+ZIP 包含 `ca.pem`、`bootstrap-token`、`connection.json`、`README.txt`，不包含 Agent 二进制、CA 私钥、平台管理令牌或 CLI 登录。CA 也可从该页单独下载，页面显示规范化 CA 文件的 SHA256。接入包只保留在当前页面内存；离开后无法找回，过期/已使用须生成新包。响应丢失不会自动重试；再次手动生成会授权另一个节点，先前可能签发的令牌仍有效至到期。
+
+此入口沿用控制面已有 `Registry.Addr`、`Registry.AdminToken`、`Registry.CACertFile` 配置，默认 Compose 已配置，无需新增环境变量。控制面只读取 CA 公共证书，CA 文件缺失、过期或混有非证书 PEM 块时拒绝下载和签发。租户账户无权访问。接入包生成记录在平台审计 `node.enrollment.create`，只记录节点 ID、操作者及到期时间。
+
+命令行接入仍可用于管理员维护：
+
 以下示例适用于 Agent 与 Compose 位于同一台机器，且本机 Ollama 已在 `11434` 端口运行。
 每个节点使用不同的 `node-id`，示例中的 `local-ollama-01` 需按实际节点修改。
 

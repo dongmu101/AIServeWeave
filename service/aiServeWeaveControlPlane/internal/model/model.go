@@ -325,6 +325,10 @@ const (
 	ActionNodeEnable                     = "node.enable"
 	ActionNodeMaintenanceEnter           = "node.maintenance.enter"
 	ActionNodeMaintenanceExit            = "node.maintenance.exit"
+	// ActionNodeEnrollmentCreate records credential-free new-node bundle issuance.
+	//
+	// ActionNodeEnrollmentCreate 记录不含凭据的新节点接入包签发。
+	ActionNodeEnrollmentCreate = "node.enrollment.create"
 	// ActionModelPullTrigger records a forwarded model-pull trigger
 	// (STATUS.md's P2 model distribution, the control plane forwarding
 	// layer). Like the node-ops actions above it uses PlatformScope: a

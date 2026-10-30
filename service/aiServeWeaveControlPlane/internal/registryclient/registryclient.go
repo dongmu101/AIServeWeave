@@ -44,6 +44,7 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/metadata"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 )
@@ -137,6 +138,25 @@ func New(cfg Config) (*Client, error) {
 //
 // Close 释放底层连接。
 func (c *Client) Close() error { return c.conn.Close() }
+
+// MintNodeToken issues a one-time token bound to a new node identity.
+//
+// MintNodeToken 签发绑定新节点身份的一次性令牌。
+func (c *Client) MintNodeToken(ctx context.Context, nodeID string, ttl time.Duration) (string, time.Time, error) {
+	if nodeID == "" || ttl <= 0 {
+		return "", time.Time{}, errors.New("registryclient: node and positive ttl required")
+	}
+	ctx, cancel := c.authCtx(ctx)
+	defer cancel()
+	resp, err := c.admin.MintToken(ctx, &tunnelv1.MintTokenRequest{NodeId: nodeID, Ttl: durationpb.New(ttl)})
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	if resp.GetToken() == "" || resp.GetExpiresAt() == nil || resp.GetExpiresAt().CheckValid() != nil {
+		return "", time.Time{}, errors.New("registryclient: malformed mint response")
+	}
+	return resp.GetToken(), resp.GetExpiresAt().AsTime(), nil
+}
 
 // authCtx bounds ctx to c.timeout and attaches the admin token, the way
 // every TokenAdmin call must.
