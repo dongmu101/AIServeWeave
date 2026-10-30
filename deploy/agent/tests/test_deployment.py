@@ -76,5 +76,26 @@ class DeploymentTests(unittest.TestCase):
         self.manifest.write_text(self.manifest.read_text()*2)
         self.run_script('install',['--version','v0.99.1','--file',str(self.binary),'--checksums',str(self.manifest)],success=False)
         self.assertFalse((self.root/'bin/aiserveweave-agent').exists())
+    def test_local_commit_install_and_rollback_preserve_identity(self):
+        self.asset = f'aiserveweave-agent_763e0a2_{self.goos}_{self.arch}'
+        self.write_manifest(self.binary)
+        self.run_script('install', ['--version','763e0a2','--file',str(self.binary),'--checksums',str(self.manifest),'--node-id','node-one','--registry','registry.test:9443','--gateway','gateway.test:8443','--ca-file',str(self.ca),'--token-file',str(self.token)])
+        (self.root/'state/agent.yaml').write_text('existing configuration')
+        identity = self.root/'state/identity/node.key';identity.write_text('node-identity')
+        self.run_script('rollback',['--version','763e0a2'])
+        self.assertEqual((self.root/'bin/aiserveweave-agent').resolve().name,self.asset)
+        self.assertEqual(identity.read_text(),'node-identity')
+    def test_commit_download_is_rejected_before_network_access(self):
+        for name,extra in [('online only',[]),('mixed file and URL',['--file',str(self.binary),'--checksums',str(self.manifest)])]:
+            with self.subTest(name=name):
+                result = self.run_script('install',['--version','763e0a2','--base-url','https://example.invalid/releases/763e0a2',*extra],success=False)
+                self.assertIn('commit versions require --file and --checksums',result.stderr)
+                self.assertFalse((self.root/'releases').exists())
+    def test_floating_dirty_and_path_versions_are_rejected(self):
+        for name,version in [('floating','latest'),('development','dev'),('dirty','763e0a2-dirty'),('path','../763e0a2'),('short commit','763e0a'),('long commit','a'*41)]:
+            with self.subTest(name=name):
+                result = self.run_script('install',['--version',version,'--file',str(self.binary),'--checksums',str(self.manifest)],success=False)
+                self.assertIn('--version must be an exact',result.stderr)
+                self.assertFalse((self.root/'releases').exists())
 
 if __name__ == '__main__': unittest.main()

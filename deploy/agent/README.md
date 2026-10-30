@@ -39,6 +39,8 @@ sudo bash agent.sh install --version v0.99.1 --user inference \
 
 arm64 使用对应文件。在线安装将 `--file ... --checksums ...` 换成 `--base-url https://可信发布站/releases/download/v0.99.1`。版本总是显式指定，不支持 `latest`。在线模式需要 curl、HTTPS 信任库；本地模式不下载、不编译。还需要系统自带的 bash、file、awk、getent、runuser、SHA256 工具和 systemd。
 
+源码部署的平台可能显示 Git 提交号（如 `763e0a2`）。Ubuntu/macOS 的 `agent.sh` 在本地 `--file` + `--checksums` 模式也接受 7–40 位小写十六进制提交号；程序须由平台对应提交构建，文件名、清单条目及内嵌版本都使用相同提交号。保留版本的回退也支持提交号。此模式不接受 `--base-url`、`latest`、`dev` 或 `-dirty`，不把未发布的提交标成正式 Release。Windows 安装器仍要求正式版本号。暂存模式不执行二进制，不能据此认定版本或实机运行通过。
+
 - 版本二进制：`/usr/local/lib/aiserveweave-agent/releases/<version>/`；稳定入口：`/usr/local/bin/aiserveweave-agent`。
 - 可写配置：`/var/lib/aiserveweave-agent/agent.yaml`；身份：该目录下 `identity/`。普通服务账户必须能创建和替换文件；身份 0600、目录 0700。
 - 服务环境：`/etc/aiserveweave-agent/agent.env`，root:root 0600，systemd EnvironmentFile 语法。HOME、PATH 已显式设置。按需添加托管 API 环境变量；不把密钥写入命令行或工单。

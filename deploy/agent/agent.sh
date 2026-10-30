@@ -7,7 +7,7 @@ umask 077
 usage() {
   cat <<'USAGE'
 Usage: agent.sh install|upgrade|rollback|start|stop|status|reload|uninstall [options]
-  --version vX.Y.Z             Exact release, required for install/upgrade/rollback
+  --version VERSION           Exact vX.Y.Z release or Git commit (local files only)
   --file PATH --checksums PATH Local binary and release SHA256SUMS.txt (no download)
   --base-url HTTPS_URL         Release directory; online mode downloads named assets
   --user USER                  Ubuntu service account (required on first install)
@@ -166,7 +166,18 @@ case "$command_name" in
     rm -f "$entry"
     echo "Uninstalled service; state and release backups retained at $state and $root";exit;;
 esac
-[[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || fail "--version must be an exact vX.Y.Z release"
+if [[ "$version" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]; then
+  :
+elif [[ "$version" =~ ^[0-9a-f]{7,40}$ ]]; then
+  # Commit builds are installed from local verified artifacts, never a floating download.
+  # 提交号构建只从经过校验的本地制品安装，不使用浮动下载。
+  [ -z "$base_url" ] || fail "commit versions require --file and --checksums without --base-url"
+  if [ "$command_name" != rollback ]; then
+    [ -n "$local_file" ] && [ -n "$checksums" ] || fail "commit versions require --file and --checksums without --base-url"
+  fi
+else
+  fail "--version must be an exact vX.Y.Z release or a 7-40 character lowercase Git commit"
+fi
 asset=aiserveweave-agent_${version}_${goos}_${arch}
 release_dir=$root/releases/$version
 candidate=$work/$asset
