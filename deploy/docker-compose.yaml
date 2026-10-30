@@ -123,7 +123,7 @@ services:
     command:
       - -data-dir=/data
       - -issue-server-cert
-      - -tls-host=gateway,127.0.0.1,localhost
+      - -tls-host=gateway,127.0.0.1,localhost,agent.open7x.com
       - -out-dir=/data/gateway-certs
     volumes:
       - registry-data:/data
@@ -161,7 +161,7 @@ services:
         exec /usr/local/bin/service \
           -addr=:9443 \
           -data-dir=/data \
-          -tls-host=registry,127.0.0.1,localhost \
+          -tls-host=registry,127.0.0.1,localhost,registry.open7x.com \
           -admin-token-file=/data/admin-token \
           -metrics-addr=:9091 \
           -log-level=${LOG_LEVEL:-info}
@@ -179,9 +179,9 @@ services:
     volumes:
       - registry-data:/data
     ports:
-      # 暴露到回环，好让宿主机上的 Agent 能换证书。
-      # Exposed on loopback so an Agent on the host can get its certificate.
-      - "127.0.0.1:${REGISTRY_PORT:-9443}:9443"
+      # Remote Agents register and renew over TLS; restrict ingress to their source IPs.
+      # 远程 Agent 通过 TLS 注册与续期；入站访问应限制为节点的出口 IP。
+      - "0.0.0.0:${REGISTRY_PORT:-9443}:9443"
       - "127.0.0.1:${REGISTRY_METRICS_PORT:-9091}:9091"
     depends_on:
       registry-init:
@@ -371,10 +371,9 @@ services:
     command:
       - -addr=:8080
       - -tunnel-addr=:8443
-      # Agent 拨的是这个地址，因此它必须是宿主机上可达的那个，而不是容器内的。
-      # An Agent dials this, so it has to be the address reachable from the
-      # host rather than the one inside the container network.
-      - -tunnel-advertise-addr=${GATEWAY_ADVERTISE_ADDR:-127.0.0.1:8443}
+      # Advertise the DNS-only endpoint reachable by remote Agents. Existing .env values override it.
+      # 通告远程 Agent 可达的仅 DNS 入口；已有 .env 值会覆盖这里的默认值。
+      - -tunnel-advertise-addr=${GATEWAY_ADVERTISE_ADDR:-agent.open7x.com:8443}
       # 全部三份材料都来自 Registry 的 data volume：registry-init 签出的那张证书，
       # 以及 Registry 自己生成的 CA bundle。
       #
@@ -455,7 +454,9 @@ services:
       - registry-data:/registry-data:ro
     ports:
       - "127.0.0.1:${GATEWAY_PORT:-8080}:8080"
-      - "127.0.0.1:${GATEWAY_TUNNEL_PORT:-8443}:8443"
+      # The Agent tunnel terminates mTLS directly; the HTTP API stays behind Nginx.
+      # Agent 隧道直接终结 mTLS；HTTP API 继续通过 Nginx 接入。
+      - "0.0.0.0:${GATEWAY_TUNNEL_PORT:-8443}:8443"
       - "127.0.0.1:${GATEWAY_METRICS_PORT:-9090}:9090"
     depends_on:
       registry:

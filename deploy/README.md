@@ -261,11 +261,14 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
   在代码修复之前，`controlplane.yaml` 必须包含 `Middlewares: {Log: false}`；
   `install.sh` 与 `upgrade.sh` 会自动补上这一段。已经泄露进日志的令牌要轮换，并用
   `docker compose up -d --force-recreate` 重建容器，旧容器的日志随之删除。
-- 默认所有宿主机端口只绑定 `127.0.0.1`。Console 和 Gateway HTTP API 对外服务时通过
-  HTTPS 反向代理接入；设置 `AISW_CONSOLE_COOKIE_SECURE=true`，并让代理保留外部 `Host`。
-- 远程 Agent 还需调整 Registry 与隧道端口的宿主机绑定、证书 SAN 和
-  `GATEWAY_ADVERTISE_ADDR`。仅修改通告地址不能使回环端口对远程节点可达；
-  修改 `GATEWAY_TUNNEL_PORT` 时也需同步通告地址中的端口。
+- Registry gRPC `9443` 与 Gateway Agent 隧道 `8443` 默认绑定 `0.0.0.0`，供远程节点
+  直接建立 TLS/mTLS 连接；在云安全组或防火墙中限制为 Agent 的出口 IP。其他宿主机端口
+  继续绑定 `127.0.0.1`。Console 和 Gateway HTTP API 通过 HTTPS 反向代理接入；设置
+  `AISW_CONSOLE_COOKIE_SECURE=true`，并让代理保留外部 `Host`。
+- 当前远程 Agent 入口为 `registry.open7x.com:9443`、`agent.open7x.com:8443`，两条 DNS
+  记录使用 DNS only／仅 DNS，指向平台源站。Registry 与 Gateway 证书分别包含对应域名；
+  `GATEWAY_ADVERTISE_ADDR` 默认使用 `agent.open7x.com:8443`。使用其他域名时同步修改
+  两处 `-tls-host` 与通告地址；修改 `GATEWAY_TUNNEL_PORT` 时同步通告端口。
 - 当前为单 Registry、单 Gateway 编排。多副本方案见对应服务 README。
 - 默认数据库为 MySQL。`postgres` profile 只额外启动 PostgreSQL，不切换控制面数据源；
   Job 持久化目前仅支持 MySQL。
@@ -273,6 +276,30 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
   按 [数据库升级与恢复](database-recovery.md) 操作。
 - Redis 是会话的权威状态，已启用 AOF 和数据卷；不可用时管理请求返回 `503`。
   不要恢复早于吊销或改密操作的 Redis 快照。
+
+### 已有部署启用远程 Agent
+
+在原来的 `deploy` 目录拉取新配置后执行。已有 `.env` 中的旧通告值会覆盖 Compose 默认值，
+因此先备份并更新该项；重新签发服务端证书沿用原有 `registry-data` 中的 CA。
+以下命令会短暂重启 Registry 和 Gateway，Nginx 继续使用现有网站与 API 配置。
+
+```bash
+cp -p .env ".env.before-remote-agent.$(date +%Y%m%d-%H%M%S)"
+sed -i '/^GATEWAY_ADVERTISE_ADDR=/d' .env
+printf '\nGATEWAY_ADVERTISE_ADDR=agent.open7x.com:8443\n' >> .env
+
+docker compose config --quiet &&
+docker compose run --rm --no-deps registry-init &&
+docker compose up -d --no-deps --no-build --force-recreate registry &&
+docker compose up -d --no-deps --no-build --force-recreate --timeout 45 gateway
+
+docker compose ps registry gateway
+docker compose exec -T gateway /usr/local/bin/service -version
+```
+
+确认端口映射为 `0.0.0.0:9443`、`0.0.0.0:8443`，并在 Agent 所在网络验证 DNS、端口和
+证书，再按「接一个 Agent」签发绑定令牌、复制公共 CA；预编译安装见
+[Agent 独立部署](agent/README.md)。配置解析通过不代表远程系统已完成接入验收。
 
 历史指标为可选项：在 `controlplane.yaml` 添加以下配置，再重启控制面。
 Fleet、模型拉取和 ComfyUI Managed 转发已在默认配置中接好。
