@@ -187,3 +187,7 @@ build, swap each of AIServeWeave's own service's `build: {...}` block in
 as shown above, then `docker compose up -d` without `--build`. This is a
 deliberate few-line manual edit — the repository does not keep a second
 `docker-compose.image.yaml` to avoid two orchestration files drifting apart.
+
+## Agent 桌面与独立安装制品
+
+`build-release.sh` 为 Agent 增加 windows/amd64、windows/arm64 原生 `.exe`；其他服务不新增 Windows 发布目标。保留现有 Linux 与 macOS（含 Intel）裸二进制命名，新增 Agent `.tar.gz`（Unix）和 `.zip`（Windows），包含对应二进制、维护脚本、README 与选定文件的 SHA256 清单。Release 总清单同时覆盖裸文件和压缩包。内部首版不承诺签名/公证；不使用平台安全策略绕过步骤。部署及逐系统验收见 [Agent 部署](deploy/agent/README.md)。

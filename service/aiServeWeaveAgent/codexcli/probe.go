@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 var (
@@ -126,7 +128,7 @@ func probeWithEnv(ctx context.Context, cfg Config, env []string) (Report, error)
 	cmd := exec.CommandContext(ctx, path, appServerArgs(dir)...)
 	cmd.Dir, cmd.Env, cmd.Stderr = dir, env, io.Discard
 	cmd.WaitDelay = 2 * time.Second
-	if err := configureProcess(cmd); err != nil {
+	if err := cliprocess.Configure(cmd); err != nil {
 		return Report{}, err
 	}
 	input, err := cmd.StdinPipe()
@@ -139,7 +141,7 @@ func probeWithEnv(ctx context.Context, cfg Config, env []string) (Report, error)
 		return Report{}, ErrProcess
 	}
 	defer output.Close()
-	if err := cmd.Start(); err != nil {
+	if err := cliprocess.Start(cmd); err != nil {
 		if ctx.Err() != nil {
 			return Report{}, ctx.Err()
 		}
@@ -167,18 +169,24 @@ func accountInstructions(env []string) []string {
 // codexHomeDir resolves the account directory the CLI uses: CODEX_HOME, else HOME/.codex.
 // codexHomeDir 解析 CLI 使用的账户目录：优先 CODEX_HOME，否则为 HOME/.codex。
 func codexHomeDir(env []string) string {
-	var home, codexDir string
+	var home, profile, codexDir string
 	for _, entry := range env {
 		key, value, ok := strings.Cut(entry, "=")
 		if !ok {
 			continue
 		}
-		if key == "HOME" {
+		if cliprocess.KeyEqual(key, "HOME") {
 			home = value
 		}
-		if key == "CODEX_HOME" {
+		if cliprocess.KeyEqual(key, "USERPROFILE") {
+			profile = value
+		}
+		if cliprocess.KeyEqual(key, "CODEX_HOME") {
 			codexDir = value
 		}
+	}
+	if home == "" {
+		home = profile
 	}
 	if codexDir == "" && home != "" {
 		codexDir = filepath.Join(home, ".codex")
@@ -219,7 +227,7 @@ func withAccountDir(env []string, dir string) []string {
 	}
 	out := make([]string, 0, len(env)+1)
 	for _, entry := range env {
-		if !strings.HasPrefix(entry, "CODEX_HOME=") {
+		if !cliprocess.KeyEqual(strings.SplitN(entry, "=", 2)[0], "CODEX_HOME") {
 			out = append(out, entry)
 		}
 	}
@@ -232,7 +240,7 @@ func probeEnv(source []string) []string {
 	var out []string
 	for _, entry := range source {
 		key, _, ok := strings.Cut(entry, "=")
-		if ok && allowed[key] {
+		if ok && cliprocess.AllowedKey(key, allowed) {
 			out = append(out, entry)
 		}
 	}

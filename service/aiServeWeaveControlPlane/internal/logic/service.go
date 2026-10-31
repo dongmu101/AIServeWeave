@@ -28,6 +28,7 @@ import (
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
@@ -145,6 +146,14 @@ type RegistryClient interface {
 	ListNodeStates(ctx context.Context) ([]registryclient.NodeState, error)
 }
 
+// AgentEnrollment prepares public certificates and new-node credential archives.
+//
+// AgentEnrollment 准备公开证书和新节点凭据压缩包。
+type AgentEnrollment interface {
+	CA() (agentenrollment.Certificate, error)
+	Create(context.Context, string, string, time.Duration) (agentenrollment.Bundle, error)
+}
+
 // ModelPullRouter forwards STATUS.md's P2 model distribution subtask two's
 // per-node pull trigger to whichever Gateway replica currently holds
 // node_id's connection. It is an interface, implemented by
@@ -210,6 +219,7 @@ type Service struct {
 	invalidator          Invalidator
 	sessions             session.Store
 	registryClient       RegistryClient
+	agentEnrollment      AgentEnrollment
 	modelPullRouter      ModelPullRouter
 	comfyUIManagedRouter ComfyUIManagedRouter
 	billing              *BillingConfig
@@ -250,6 +260,13 @@ func WithSessions(sessions session.Store) Option {
 // 服务够到 Registry，而这些方法必须说明这一点，而不是空指针 panic。
 func WithRegistryClient(client RegistryClient) Option {
 	return func(s *Service) { s.registryClient = client }
+}
+
+// WithAgentEnrollment enables platform-only public CA and enrollment downloads.
+//
+// WithAgentEnrollment 启用仅供平台运维使用的公开 CA 和接入包下载。
+func WithAgentEnrollment(enrollment AgentEnrollment) Option {
+	return func(s *Service) { s.agentEnrollment = enrollment }
 }
 
 // WithModelPullRouter gives the Service a way to forward model-pull

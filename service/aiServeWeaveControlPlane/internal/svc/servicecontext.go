@@ -28,6 +28,7 @@ import (
 
 	commonmetrics "AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/dodo"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
@@ -292,6 +293,9 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			return nil, errors.Join(errors.New("connecting to the configured Registry"), err)
 		}
 		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
+		if cfg.Registry.CACertFile != "" {
+			logicOpts = append(logicOpts, logic.WithAgentEnrollment(agentenrollment.New(registryClient, cfg.Registry.CACertFile, clock)))
+		}
 	}
 	modelPullRouter := modelpullrouter.New(modelpullrouter.Config{
 		Gateways: cfg.ModelPull.Gateways,

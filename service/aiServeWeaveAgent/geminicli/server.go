@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 const (
@@ -23,7 +25,7 @@ const (
 func envValue(env []string, key string) string {
 	value := ""
 	for _, entry := range env {
-		if k, v, ok := strings.Cut(entry, "="); ok && k == key {
+		if k, v, ok := strings.Cut(entry, "="); ok && cliprocess.KeyEqual(k, key) {
 			value = v
 		}
 	}
@@ -43,6 +45,9 @@ func (r *Runtime) localServer() (string, string, error) {
 	home := envValue(r.env, "GEMINI_CLI_HOME")
 	if home == "" {
 		home = envValue(r.env, "HOME")
+	}
+	if home == "" {
+		home = envValue(r.env, "USERPROFILE")
 	}
 	if !filepath.IsAbs(home) {
 		return "", "", errProcess
@@ -87,10 +92,10 @@ func (r *Runtime) localServer() (string, string, error) {
 // childEnv passes only image credentials and transport settings, isolating Node's home.
 // childEnv 只传递生图凭据和网络设置，并隔离 Node 的主目录。
 func (r *Runtime) childEnv(dir, executable, key string) []string {
-	allowed := map[string]bool{"LANG": true, "LC_ALL": true, "HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "NODE_EXTRA_CA_CERTS": true, "NANOBANANA_MODEL": true}
-	out := []string{"HOME=" + dir, "TMPDIR=" + dir, "NANOBANANA_API_KEY=" + key, "PATH=" + filepath.Dir(executable) + string(os.PathListSeparator) + envValue(r.env, "PATH")}
+	allowed := map[string]bool{"SYSTEMROOT": true, "PATHEXT": true, "LANG": true, "LC_ALL": true, "HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true, "SSL_CERT_FILE": true, "SSL_CERT_DIR": true, "NODE_EXTRA_CA_CERTS": true, "NANOBANANA_MODEL": true}
+	out := []string{"USERPROFILE=" + dir, "APPDATA=" + dir, "LOCALAPPDATA=" + dir, "TEMP=" + dir, "TMP=" + dir, "HOME=" + dir, "TMPDIR=" + dir, "NANOBANANA_API_KEY=" + key, "PATH=" + filepath.Dir(executable) + string(os.PathListSeparator) + envValue(r.env, "PATH")}
 	for _, entry := range r.env {
-		if k, _, ok := strings.Cut(entry, "="); ok && allowed[k] {
+		if k, _, ok := strings.Cut(entry, "="); ok && cliprocess.AllowedKey(k, allowed) && !cliprocess.KeyEqual(k, "USERPROFILE") && !cliprocess.KeyEqual(k, "APPDATA") && !cliprocess.KeyEqual(k, "LOCALAPPDATA") && !cliprocess.KeyEqual(k, "TEMP") && !cliprocess.KeyEqual(k, "TMP") {
 			out = append(out, entry)
 		}
 	}
@@ -120,7 +125,7 @@ func (r *Runtime) withServer(ctx context.Context, run func(*protocol, string) er
 	cmd := exec.CommandContext(ctx, executable, script)
 	cmd.Dir, cmd.Env, cmd.Stderr = dir, r.childEnv(dir, executable, key), io.Discard
 	cmd.WaitDelay = 2 * time.Second
-	if err := configureProcess(cmd); err != nil {
+	if err := cliprocess.Configure(cmd); err != nil {
 		return err
 	}
 	in, err := cmd.StdinPipe()
@@ -133,7 +138,7 @@ func (r *Runtime) withServer(ctx context.Context, run func(*protocol, string) er
 		return errProcess
 	}
 	defer out.Close()
-	if cmd.Start() != nil {
+	if cliprocess.Start(cmd) != nil {
 		return errProcess
 	}
 	reaped := false

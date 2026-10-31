@@ -1,0 +1,39 @@
+name: Agent native desktop and deployment checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# Hosted runners exercise native code, not the supported-system acceptance matrix.
+# 托管 runner 执行原生代码，不代表受支持系统矩阵已验收。
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025, windows-11-arm, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Native Agent tests and process/identity/control boundaries
+        run: go test -timeout 10m ./service/aiServeWeaveAgent/... ./common/runtime
+      - name: Windows PowerShell 5.1 staging
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./deploy/agent/tests/deployment.Tests.ps1
+      - name: Unix staging
+        if: runner.os == 'macOS'
+        run: python3 -m unittest discover -s deploy/agent/tests
+  ubuntu-staging:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: python3 -m unittest discover -s deploy/agent/tests

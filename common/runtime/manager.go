@@ -371,7 +371,8 @@ func copyCapabilitySet(s CapabilitySet) CapabilitySet {
 // Close stops all scheduling, cancels every in-flight Health/Discover call,
 // closes every instance, and aggregates their Close errors. Close is
 // idempotent: a second call returns nil without touching already-closed
-// instances again.
+// instances again. Cancellation bounds the wait while cleanup finishes in the background.
+// Close 停止调度并清理运行时；取消上下文限制等待时长，清理可继续完成；重复调用返回 nil。
 func (m *manager) Close(ctx context.Context) error {
 	m.mu.Lock()
 	if m.closed {
@@ -392,17 +393,25 @@ func (m *manager) Close(ctx context.Context) error {
 		inst.mu.Unlock()
 		inst.cancel()
 	}
-	for _, inst := range insts {
-		<-inst.done
-	}
-
-	var errs []error
-	for _, inst := range insts {
-		if err := inst.runtime.Close(); err != nil {
-			errs = append(errs, err)
+	// Cleanup continues after a canceled wait; process owners enforce the final exit budget.
+	// 等待取消后清理继续执行；进程所有者负责最终退出期限。
+	done := make(chan error, 1)
+	go func() {
+		var errs []error
+		for _, inst := range insts {
+			<-inst.done
+			if err := inst.runtime.Close(); err != nil {
+				errs = append(errs, err)
+			}
 		}
+		done <- errors.Join(errs...)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
 	}
-	return errors.Join(errs...)
 }
 
 // scheduleLoop runs an instance's periodic Health and Discover checks until

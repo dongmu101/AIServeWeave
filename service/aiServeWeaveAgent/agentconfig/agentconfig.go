@@ -43,6 +43,8 @@
 package agentconfig
 
 import (
+	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
+	"bytes"
 	"fmt"
 	"reflect"
 	"strings"
@@ -295,6 +297,7 @@ func Load(path string) (*Config, error) {
 func Save(path string, cfg *Config) error {
 	v := viper.New()
 	v.SetConfigFile(path)
+	v.SetConfigType("yaml")
 	v.SetConfigPermissions(0o600)
 
 	v.Set("gateway", map[string]any{
@@ -342,7 +345,11 @@ func Save(path string, cfg *Config) error {
 		v.Set("log_level", cfg.LogLevel)
 	}
 
-	if err := v.WriteConfigAs(path); err != nil {
+	var data bytes.Buffer
+	if err := v.WriteConfigTo(&data); err != nil {
+		return fmt.Errorf("agentconfig: encode YAML: %w", err)
+	}
+	if err := localstate.WriteFile(path, data.Bytes(), 0o600); err != nil {
 		return fmt.Errorf("agentconfig: write %s: %w", path, err)
 	}
 	return nil

@@ -287,7 +287,7 @@ backup_state() {
   if [[ -n "$(compose ps --status running -q mysql 2>/dev/null)" ]]; then
     log "备份 MySQL → $sql"
     if ! (umask 077 && set -o pipefail && compose exec -T mysql sh -c \
-      'MYSQL_PWD="$MYSQL_PASSWORD" exec mysqldump -u"$MYSQL_USER" --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --skip-add-drop-table "$MYSQL_DATABASE"' |
+      'MYSQL_PWD="$MYSQL_PASSWORD" exec mysqldump -u"$MYSQL_USER" --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF --skip-masking-policies --skip-add-drop-table "$MYSQL_DATABASE"' |
       gzip >"$sql"); then
       rm -f "$sql"
       die "MySQL 备份失败，已中止"

@@ -29,7 +29,7 @@ Registry 自己的 gRPC 监听默认也用这同一个根证书自签一张服�
 
 ## `TokenAdmin`：受控签发、撤销与 node_id 绑定（S02）
 
-Console 已有租户管理与只读机群页面，但尚无 Registry 令牌管理入口；当前同一个二进制加 `-mint-token`/`-revoke-token` 标志就是发 token 与撤销 token 的方式——但两者都是对正在运行的 Registry 发起的 gRPC 调用（`tunnelv1.TokenAdmin` 服务），不是直接读写 `tokens.json`：
+Console 现可由平台运维在「Agent 接入」生成新节点绑定令牌与 CA 接入包（经控制面调用已有 `MintToken`）；命令行仍可用同一个二进制加 `-mint-token`/`-revoke-token` 标志签发或撤销令牌——但两者都是对正在运行的 Registry 发起的 gRPC 调用（`tunnelv1.TokenAdmin` 服务），不是直接读写 `tokens.json`：
 
 ```bash
 # server 进程需要先带上 -admin-token-file 才会挂载 TokenAdmin；留空则该服务不注册。

@@ -18,6 +18,7 @@ import type { OperatorIdentity } from "@/lib/console/operator-session";
 
 function navigationItems(t: Translator) { return [
   { href: "/operator/fleet", label: t("operator.fleetApprovals") },
+  { href: "/operator/agent-enrollment", label: t("operator.agentEnrollment") },
   { href: "/operator/models", label: t("tenant.models_98fd0c") },
   { href: "/operator/routes", label: t("tenant.modelRoutes") },
   { href: "/operator/model-access", label: t("operator.modelAccess") },

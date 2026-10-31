@@ -75,6 +75,7 @@ import (
 	"sync/atomic"
 
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
 )
 
 // sha256HexLen is the length of a hex-encoded SHA-256 digest.
@@ -688,7 +689,7 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, opts pullOpts)
 		os.Remove(partPath)
 		return fmt.Errorf("%w: for %q: want %s, got %s", errChecksumMismatch, spec.Name, spec.SHA256, sum)
 	}
-	if err := os.Rename(partPath, spec.TargetPath); err != nil {
+	if err := localstate.Replace(partPath, spec.TargetPath); err != nil {
 		return fmt.Errorf("%w: finalize %q: %v", errStorageFailed, spec.Name, err)
 	}
 	return nil

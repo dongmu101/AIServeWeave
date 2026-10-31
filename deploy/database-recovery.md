@@ -54,13 +54,13 @@ MySQL：分别准备 `/secure/source.cnf` 与 `/secure/restore.cnf` 的 `[client
 umask 077
 mysqldump --defaults-extra-file=/secure/source.cnf \
   --single-transaction --quick --no-tablespaces --set-gtid-purged=OFF \
-  --skip-add-drop-table aiserveweave > controlplane.sql
+  --skip-masking-policies --skip-add-drop-table aiserveweave > controlplane.sql
 sha256sum controlplane.sql > controlplane.sql.sha256
 sha256sum -c controlplane.sql.sha256
 mysql --defaults-extra-file=/secure/restore.cnf aisw_restore < controlplane.sql
 ```
 
-所有业务表必须为 InnoDB，备份期间禁止 DDL。保留退出码，失败的文件不算备份；恢复不使用 `--force`，遇错即停止。MySQL 的 DDL 无法把整个恢复包在一个可回滚事务里。[mysqldump](https://dev.mysql.com/doc/refman/9.7/en/mysqldump.html)
+`--skip-masking-policies` 是 MySQL 9.7 的 mysqldump 默认会导出 masking policy，需要 `mysql.column_masking_policy` 的 SELECT 权限，业务账户没有，不跳过会备份失败。所有业务表必须为 InnoDB，备份期间禁止 DDL。保留退出码，失败的文件不算备份；恢复不使用 `--force`，遇错即停止。MySQL 的 DDL 无法把整个恢复包在一个可回滚事务里。[mysqldump](https://dev.mysql.com/doc/refman/9.7/en/mysqldump.html)
 
 ## 恢复后的检查与切换
 

@@ -8,6 +8,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"time"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 // withServer owns one isolated process and reaps its whole process group.
@@ -37,7 +39,7 @@ func withServerMode(ctx context.Context, executable string, env []string, image 
 	cmd := exec.CommandContext(ctx, path, serverArgs(dir, image)...)
 	cmd.Dir, cmd.Env, cmd.Stderr = dir, env, io.Discard
 	cmd.WaitDelay = 2 * time.Second
-	if err := configureProcess(cmd); err != nil {
+	if err := cliprocess.Configure(cmd); err != nil {
 		return err
 	}
 	in, err := cmd.StdinPipe()
@@ -50,7 +52,7 @@ func withServerMode(ctx context.Context, executable string, env []string, image 
 		return ErrProcess
 	}
 	defer out.Close()
-	if err := cmd.Start(); err != nil {
+	if err := cliprocess.Start(cmd); err != nil {
 		return ErrProcess
 	}
 	defer func() { _ = cmd.Cancel(); _ = in.Close(); _ = out.Close(); _ = cmd.Wait() }()

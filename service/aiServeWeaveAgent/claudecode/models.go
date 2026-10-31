@@ -10,6 +10,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 const modelDiscoveryID = "aisw_model_discovery"
@@ -31,11 +33,11 @@ func discoverModels(ctx context.Context, program string, env []string) ([]string
 	output := boundedCapture{limit: maxEventBytes}
 	cmd.Dir, cmd.Env, cmd.Stdin, cmd.Stdout, cmd.Stderr = dir, env, bytes.NewReader(append(request, '\n')), &output, io.Discard
 	cmd.WaitDelay = time.Second
-	if configureProcess(cmd) != nil {
+	if cliprocess.Configure(cmd) != nil {
 		return nil, errCLIStart
 	}
 	defer func() { _ = cmd.Cancel() }()
-	if cmd.Run() != nil {
+	if cliprocess.Run(cmd) != nil {
 		return nil, errCLIExit
 	}
 	return parseModels(output.buffer.Bytes())

@@ -118,7 +118,9 @@ async function forward(
     token: session.token,
     body,
     maxResponseBytes:
-      upstream.path === "/operator/v1/routes" || upstream.path.startsWith("/operator/v1/routes/")
+      upstream.path === "/operator/v1/agent-enrollment"
+        ? 128 * 1024
+        : upstream.path === "/operator/v1/routes" || upstream.path.startsWith("/operator/v1/routes/")
         ? MAX_ROUTE_DOCUMENT_BYTES
         : upstream.path.startsWith("/operator/v1/workflow-templates/")
           ? MAX_CONTENT_BYTES

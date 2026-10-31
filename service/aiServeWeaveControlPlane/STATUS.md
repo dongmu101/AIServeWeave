@@ -228,6 +228,14 @@ Fleet:
 
 ## 节点写路径：审批、禁用、维护（P01）
 
+
+### Agent 接入材料下载
+
+新增平台会话保护的 `GET /operator/v1/agent-enrollment`（公开 CA PEM 与文件 SHA256）和 `POST /operator/v1/agent-enrollment`（新节点接入包，201 JSON，ZIP 以 base64 返回）。POST 只接受 `registry_addr`、`gateway_addr`、`ttl_minutes`（15–1440）；外部地址仅用于包内说明，不作为服务端网络目标。随机生成新 node ID 后调用已有 Registry `TokenAdmin.MintToken` 签发绑定令牌，不允许请求指定既有 node ID。包内仅有公共 CA、一次性令牌、连接元数据与跨平台安装说明，程序与安装脚本由匹配版本发行包另行提供。
+
+复用已有 Registry 客户端与 `CACertFile`，最多读取 64 KiB、仅接受有效 CA CERTIFICATE PEM，拒绝私钥和其他内容；不读取 CA 私钥。未配置证书时接口返回不可用。成功生成后沿用平台审计语义，记录 `node.enrollment.create`、node ID 与到期时间，不记录令牌或压缩包；读操作不写审计。下载不持久化，不提供历史包查询；请求丢失不会自动重发，令牌至到期或消费前仍有效。默认测试覆盖权限拒绝、审计脱敏、令牌绑定、文件权限、摘要与非法 CA/地址/TTL 拒绝；真实外部节点接入仍需部署后验收。
+
+
 节点身份的账本权威在 Registry（`internal/identitystore`），本服务不复制一份，只做转发加审计：
 
 ```yaml

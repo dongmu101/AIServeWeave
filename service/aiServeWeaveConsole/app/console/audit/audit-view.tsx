@@ -129,6 +129,7 @@ const PLATFORM_ACTIONS = (t: Translator) => ([
   { value: "platform_operator.create", label: t("tenant.createOperatorAccount") },
   { value: "platform_operator.login", label: t("tenant.operatorSignIn") },
   { value: "node.approve", label: t("tenant.approveNode") },
+  { value: "node.enrollment.create", label: t("operator.enrollmentGenerate") },
   { value: "node.disable", label: t("tenant.disableNode") },
   { value: "node.enable", label: t("tenant.enableNode") },
   { value: "node.maintenance.enter", label: t("tenant.enterMaintenance") },

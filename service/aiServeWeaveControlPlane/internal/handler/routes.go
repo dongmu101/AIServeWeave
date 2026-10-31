@@ -490,6 +490,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		server.AddRoutes([]rest.Route{
 			{
 				Method:  http.MethodGet,
+				Path:    "/operator/v1/agent-enrollment",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/agent-enrollment", requirePlatformSession(ctx, agentEnrollmentCA(ctx))),
+			},
+			{
+				Method:  http.MethodPost,
+				Path:    "/operator/v1/agent-enrollment",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/agent-enrollment", requirePlatformSession(ctx, createAgentEnrollment(ctx))),
+			},
+			{
+				Method:  http.MethodGet,
 				Path:    "/operator/v1/nodes/states",
 				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/states", requirePlatformSession(ctx, listNodeStates(ctx))),
 			},

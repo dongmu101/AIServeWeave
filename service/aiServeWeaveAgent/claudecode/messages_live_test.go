@@ -1,4 +1,4 @@
-//go:build darwin || linux
+//go:build darwin || linux || windows
 
 package claudecode
 
@@ -18,6 +18,8 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 // TestLiveModelDiscovery checks the local CLI catalogue without submitting inference.
@@ -140,7 +142,7 @@ func TestLiveMessagesOriginalClient(t *testing.T) {
 	cmd.Env = append(cmd.Env, "CLAUDE_CONFIG_DIR="+config, "ANTHROPIC_BASE_URL="+server.URL, "ANTHROPIC_API_KEY=live-first", "MAX_THINKING_TOKENS=0", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1", "CLAUDE_CODE_MAX_OUTPUT_TOKENS=4096", "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1", "CLAUDE_CODE_SIMPLE=1")
 	output := boundedCapture{limit: maxRequestBytes}
 	cmd.Stdout = &output
-	if err := configureProcess(cmd); err != nil {
+	if err := cliprocess.Configure(cmd); err != nil {
 		t.Fatal(err)
 	}
 	cmd.WaitDelay = 2 * time.Second
@@ -149,7 +151,7 @@ func TestLiveMessagesOriginalClient(t *testing.T) {
 			_ = cmd.Cancel()
 		}
 	}()
-	err := cmd.Run()
+	err := cliprocess.Run(cmd)
 	data, readErr := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("original client failed: %T; output withheld", err)

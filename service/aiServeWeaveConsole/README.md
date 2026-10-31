@@ -14,7 +14,7 @@ AIServeWeave 的 Web 管理控制台，提供租户管理、只读机群与模�
 | 图表 | ECharts + `echarts-for-react` |
 | 包管理 | pnpm，版本以 `package.json` 的 `packageManager` 为准（当前为 12.3.4） |
 | 类型检查 | TypeScript 6 / 7 并存，分别服务 ESLint/构建与日常类型检查 |
-| 测试 | 单元测试用 Node 24 内置 `node:test`；Q03 浏览器验收另用 Playwright 开发依赖 |
+| 测试 | 单元测试用 Node 26 内置 `node:test`；Q03 浏览器验收另用 Playwright 开发依赖 |
 
 TanStack Table 用于三张列表，TanStack Virtual 用于审计长列表；ECharts 已安装但尚无指标接口可画。版本与脚本以 [package.json](package.json) 为准。
 
@@ -173,7 +173,7 @@ pnpm build
 
 `pnpm typecheck` 使用 TS 7；ESLint 与 Next.js 构建内部使用 TS 6。因此类型检查通过不等于构建通过，不能删掉其中一道门禁。双版本的原因和维护方式见 [AGENTS.md](AGENTS.md)。
 
-`pnpm test` 走 Node 24 内置的 `node:test`，不引入单元测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面另走下方 P10/Q03 浏览器验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。
+`pnpm test` 走 Node 26 内置的 `node:test`，不引入单元测试框架依赖，覆盖契约解析、会话密封、转发白名单、来源校验与请求层的重试与错误分类；不依赖真实控制面、网络或时钟。组件与页面另走下方 P10/Q03 浏览器验收。`pnpm typecheck` 依赖 `.next/types`，新增路由后先跑一次 `pnpm build`。
 
 构建成功后，可在同一目录启动生产模式服务：
 
@@ -188,7 +188,7 @@ pnpm start
 docker build -t aisw-console ./service/aiServeWeaveConsole
 ```
 
-镜像使用 Node.js 24、项目指定的 pnpm 与冻结锁文件构建，启用 `output: "standalone"`，
+镜像使用 Node.js 26、项目指定的 pnpm 与冻结锁文件构建，启用 `output: "standalone"`，
 以非 root 用户执行 `node server.js`。静态资源随镜像发布，`.env*`、本地依赖和构建产物
 由 `.dockerignore` 排除；会话密钥和上游地址在运行时注入。
 

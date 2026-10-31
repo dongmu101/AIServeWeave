@@ -24,6 +24,33 @@ import (
 	"AIServeWeave/common/quota"
 )
 
+// AgentEnrollmentRequest chooses externally reachable endpoints and token lifetime.
+//
+// AgentEnrollmentRequest 指定外部可达的端点和令牌有效期。
+type AgentEnrollmentRequest struct {
+	RegistryAddr string `json:"registry_addr"`
+	GatewayAddr  string `json:"gateway_addr"`
+	TTLMinutes   int    `json:"ttl_minutes"`
+}
+
+// AgentEnrollmentCAResponse contains only public certificates and their file hash.
+//
+// AgentEnrollmentCAResponse 仅包含公开证书和文件摘要。
+type AgentEnrollmentCAResponse struct {
+	CAPEM    string `json:"ca_pem"`
+	CASHA256 string `json:"ca_sha256"`
+}
+
+// AgentEnrollmentResponse carries a one-time credential archive as bounded base64.
+//
+// AgentEnrollmentResponse 通过大小有界的 base64 传输含一次性凭据的压缩包。
+type AgentEnrollmentResponse struct {
+	NodeID    string    `json:"node_id"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Filename  string    `json:"filename"`
+	Archive   []byte    `json:"archive_base64"`
+}
+
 // LoginRequest is a Console sign-in.
 //
 // LoginRequest 是一次 Console 登录。

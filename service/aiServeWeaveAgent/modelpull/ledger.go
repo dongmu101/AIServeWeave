@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
 )
 
 // errLedgerQuotaExceeded classifies a Ledger.Reserve call that would push the
@@ -177,7 +178,7 @@ func (l *Ledger) save(state ledgerState) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return fmt.Errorf("%w: write ledger: %v", errStorageFailed, err)
 	}
-	if err := os.Rename(tmp, l.Path); err != nil {
+	if err := localstate.Replace(tmp, l.Path); err != nil {
 		return fmt.Errorf("%w: finalize ledger: %v", errStorageFailed, err)
 	}
 	return nil
