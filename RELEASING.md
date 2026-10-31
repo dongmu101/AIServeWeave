@@ -36,17 +36,27 @@ buried among routine entries.
 
 ## 支持平台 / Supported platforms
 
-| 产物 | linux/amd64 | linux/arm64 | darwin/amd64 | darwin/arm64 | Windows |
-| --- | --- | --- | --- | --- | --- |
-| 二进制（Agent、Gateway、控制面、Registry） | ✅ | ✅ | ✅ | ✅ | ❌ 不支持 |
-| 容器镜像（Gateway、控制面、Registry、Console） | ✅ | ✅ | — | — | ❌ 不支持 |
+| 产物 | linux/amd64 | linux/arm64 | darwin/amd64 | darwin/arm64 | windows/amd64 | windows/arm64 |
+| --- | --- | --- | --- | --- | --- | --- |
+| Agent 二进制与安装包 | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| 二进制（Gateway、控制面、Registry） | ✅ | ✅ | ✅ | ✅ | ❌ 不支持 | ❌ 不支持 |
+| 容器镜像（Gateway、控制面、Registry、Console） | ✅ | ✅ | — | — | — | — |
+
+✅ 表示发布流水线产出该制品，不代表已在该系统上完成实机验收；Agent 各系统的验收状态见
+[Agent 验收矩阵](deploy/agent/acceptance.md)。
+
+✅ means the release pipeline produces that artifact, not that it has been
+accepted on real hardware for that system; see the
+[Agent acceptance matrix](deploy/agent/acceptance.md) for per-system status.
 
 - Agent 交叉编译到 darwin 是因为它按设计跑在持有推理后端的宿主机上（README 与
   `deploy/docker-compose.yaml` 都把本机 Ollama/vLLM 当作常见场景），而不是因为另外
   三个服务被期望脱离容器运行；它们同样提供 darwin 二进制，纯粹是同一条构建流水线的
   副产品，没有为此单独验证过，容器镜像仍是三个数据面服务与 Registry 的推荐运行方式。
-- Windows 不在支持范围内：仓库里没有任何针对 Windows 的路径处理或验证约定
-  （证书文件权限、信号处理等均按 POSIX 假设编写），没有验证过就不列出来。
+- Windows 只发布 Agent 的原生 `.exe` 与 `.zip` 安装包：Agent 已有 Windows 适配（身份
+  ACL、named pipe 控制、计划任务部署等），部署入口与支持的 Windows 版本见
+  [Agent 部署](deploy/agent/README.md)。Gateway、控制面与 Registry 仍按 POSIX 假设编写
+  （证书文件权限、信号处理等），没有验证过，不出 Windows 制品。
 
 Agent gets darwin builds because it is designed to run on the machine that
 hosts the inference backend (the README and `deploy/docker-compose.yaml` both
@@ -54,10 +64,13 @@ treat local Ollama/vLLM as the common case) — not because the other three
 services are expected to run outside a container. They get darwin binaries
 too only because it is a byproduct of one shared build pipeline; that has not
 been separately verified, and containers remain the recommended way to run
-the three data-plane/identity services. Windows is out of scope: nothing in
-this codebase handles Windows paths or signals (certificate file permissions,
-signal handling — all POSIX assumptions), and an unverified platform does not
-get listed as supported.
+the three data-plane/identity services. On Windows only the Agent ships, as
+a native `.exe` plus a `.zip` package: the Agent has Windows-specific
+handling (identity ACLs, named-pipe control, scheduled-task deployment), and
+its deployment entry point and supported Windows versions are in
+[Agent deployment](deploy/agent/README.md). Gateway, the control plane and
+Registry still rely on POSIX assumptions (certificate file permissions,
+signal handling), are unverified on Windows, and get no Windows artifacts.
 
 ## 打一个版本 / Cutting a release
 
@@ -68,8 +81,8 @@ get listed as supported.
    `"version"` 字段同步改成同一个版本号（Console 没有独立的版本号体系，也不需要有）。
 4. 提交这两处改动（一般标题类似 `chore: release vX.Y.Z`）。
 5. `git tag vX.Y.Z && git push origin vX.Y.Z`。
-6. `.github/workflows/release.yml` 在 tag push 上自动触发：重跑一遍质量门禁、交叉编译
-   四个二进制的四个平台产物、生成 `SHA256SUMS.txt`、构建并推送四个服务的多架构容器镜像
+6. `.github/workflows/release.yml` 在 tag push 上自动触发：重跑一遍质量门禁、按上表交叉
+   编译四个二进制（Agent 另含 Windows 与安装包）、生成 `SHA256SUMS.txt`、构建并推送四个服务的多架构容器镜像
    到 GHCR（`ghcr.io/dongmu101/aiserveweave-<service>:<version>` 与 `:latest`）、创建
    GitHub Release 并附上全部二进制、校验和文件，release notes 取自 CHANGELOG 对应小节。
 7. 发布流水线跑完后，去 Releases 页面确认产物齐全，用下面「校验和验证」抽查一个平台。
@@ -85,7 +98,8 @@ get listed as supported.
 4. Commit those two changes (typically `chore: release vX.Y.Z`).
 5. `git tag vX.Y.Z && git push origin vX.Y.Z`.
 6. `.github/workflows/release.yml` fires on the tag push: it reruns the
-   quality gates, cross-compiles all four binaries for all four platforms,
+   quality gates, cross-compiles all four binaries per the table above (the
+   Agent also gets Windows builds and install packages),
    generates `SHA256SUMS.txt`, builds and pushes multi-arch images for all
    four services to GHCR
    (`ghcr.io/dongmu101/aiserveweave-<service>:<version>` and `:latest`), and
