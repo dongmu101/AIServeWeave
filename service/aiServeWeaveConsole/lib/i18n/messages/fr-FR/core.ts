@@ -8,6 +8,8 @@ const core = {
   "tenant.createApiKey": "Créer une clé API",
   "tenant.revoked": "Révoquée",
   "tenant.revokeApiKey": "Révoquer la clé API",
+  "tenant.auditNodeCreate": "Connecter un nœud propre",
+  "tenant.auditNodeRevoke": "Supprimer un nœud propre",
   "tenant.unableToConnectToTheServerCheckYour": "Impossible de joindre le serveur. Vérifiez le réseau et réessayez.",
   "tenant.theSubmittedDataDoesNotMeetTheRequirements": "Le contenu soumis n’est pas conforme. Vérifiez-le et réessayez.",
   "tenant.enterAnEmailAddress": "Veuillez saisir une adresse e-mail.",

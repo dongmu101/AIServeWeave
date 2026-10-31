@@ -213,6 +213,11 @@ services:
       # Dodo Payments 凭据，只在 controlplane.yaml 开启 Billing 时读取；计费默认关闭，因此默认为空。
       AISW_DODO_API_KEY: ${AISW_DODO_API_KEY:-}
       AISW_DODO_WEBHOOK_SECRET: ${AISW_DODO_WEBHOOK_SECRET:-}
+      # Public Registry and Gateway tunnel addresses written into tenant node
+      # enrollment bundles (controlplane.yaml's TenantNodes).
+      # 写进商户自有节点接入包的 Registry 与 Gateway 隧道对外地址（controlplane.yaml 的 TenantNodes）。
+      AISW_TENANT_NODE_REGISTRY_ADDR: ${REGISTRY_ADVERTISE_ADDR:-registry.open7x.com:9443}
+      AISW_TENANT_NODE_GATEWAY_ADDR: ${GATEWAY_ADVERTISE_ADDR:-agent.open7x.com:8443}
       MYSQL_USER: ${MYSQL_USER:-aiserveweave}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}

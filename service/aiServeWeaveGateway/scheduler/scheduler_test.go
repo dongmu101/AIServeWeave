@@ -469,7 +469,7 @@ func TestTranscribeDispatchesToACandidateAndStreamsTheAudio(t *testing.T) {
 	connectTranscriptionNode(t, h, "node-a", "backend-1", "whisper-1")
 
 	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
-	candidates := sched.TranscriptionCandidates("whisper-1")
+	candidates := sched.TranscriptionCandidates(context.Background(), "whisper-1")
 	if len(candidates) != 1 {
 		t.Fatalf("TranscriptionCandidates = %v, want 1", candidates)
 	}
@@ -491,7 +491,7 @@ func TestTranscriptionCandidatesEmptyForAModelWithoutTheCapability(t *testing.T)
 	connectNode(t, h, "node-a", "backend-1", chatCapableSnapshot("backend-1", "qwen3:8b"), chatHandler("node-a", nil))
 
 	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
-	if candidates := sched.TranscriptionCandidates("qwen3:8b"); len(candidates) != 0 {
+	if candidates := sched.TranscriptionCandidates(context.Background(), "qwen3:8b"); len(candidates) != 0 {
 		t.Errorf("TranscriptionCandidates = %v, want none for a model never discovered as transcription-capable", candidates)
 	}
 }

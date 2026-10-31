@@ -51,7 +51,7 @@ func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 	var req imagesRequest
 	r.Body = http.MaxBytesReader(w, r.Body, MaxRunRequestBytes)
 	decodeErr := json.NewDecoder(r.Body).Decode(&req)
-	if decodeErr == nil && req.Model != "" && len(h.sched.ImageCandidates(req.Model)) > 0 {
+	if decodeErr == nil && req.Model != "" && len(h.sched.ImageCandidates(r.Context(), req.Model)) > 0 {
 		h.inferenceImages(w, r, req)
 		return
 	}

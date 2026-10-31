@@ -8,6 +8,8 @@ const core = {
   "tenant.createApiKey": "API Key 생성",
   "tenant.revoked": "폐기됨",
   "tenant.revokeApiKey": "API Key 폐기",
+  "tenant.auditNodeCreate": "자체 노드 연결",
+  "tenant.auditNodeRevoke": "자체 노드 삭제",
   "tenant.unableToConnectToTheServerCheckYour": "서버에 연결할 수 없습니다. 네트워크를 확인한 후 다시 시도하세요.",
   "tenant.theSubmittedDataDoesNotMeetTheRequirements": "제출한 내용이 요구 사항에 맞지 않습니다. 확인 후 다시 시도하세요.",
   "tenant.enterAnEmailAddress": "이메일을 입력하세요.",

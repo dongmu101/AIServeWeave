@@ -28,6 +28,10 @@ type CreateUsageRecordParams struct {
 	CompletionTokens int64
 	TotalTokens      int64
 	CreatedAt        time.Time
+	// NodeID is the tenant-owned node that served the request, or empty.
+	//
+	// NodeID 是服务该请求的商户自有节点，没有则为空。
+	NodeID string
 }
 
 // Column widths of usage_records (and usage_charges), in bytes.
@@ -80,6 +84,7 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 			CompletionTokens: p.CompletionTokens,
 			TotalTokens:      p.TotalTokens,
 			CreatedAt:        p.CreatedAt,
+			NodeID:           p.NodeID,
 		})
 	}
 	if len(records) == 0 {

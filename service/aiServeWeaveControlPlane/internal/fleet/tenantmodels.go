@@ -96,6 +96,22 @@ func (c TenantModelCatalog) Filter(visible func(string) bool) TenantModelCatalog
 	return out
 }
 
+// FilterNodes keeps only the services on Agents allowed reports true for. A
+// tenant must not learn that a node dedicated to another tenant exists.
+//
+// FilterNodes 只保留 allowed 返回 true 的 Agent 上的服务。租户不应得知一台专属于
+// 其他租户的节点存在。
+func (c TenantModelCatalog) FilterNodes(allowed func(string) bool) TenantModelCatalog {
+	out := c
+	out.Services = make([]TenantModelService, 0, len(c.Services))
+	for _, service := range c.Services {
+		if allowed(service.AgentID) {
+			out.Services = append(out.Services, service)
+		}
+	}
+	return out
+}
+
 // cliUsageFor returns the quota reported for the service runtimeID of kind, or
 // nil when the Agent reported none. An entry naming runtimeID wins; an entry
 // with no runtime ID comes from an Agent that predates multi-account support,

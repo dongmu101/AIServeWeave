@@ -154,6 +154,14 @@ type AgentEnrollment interface {
 	Create(context.Context, string, string, time.Duration) (agentenrollment.Bundle, error)
 }
 
+// NodeEnrollment issues an enrollment bundle for a node ID the caller chose,
+// as agentenrollment.Service.CreateNode does.
+//
+// NodeEnrollment 为调用方选定的节点 ID 签发接入包，即 agentenrollment.Service.CreateNode。
+type NodeEnrollment interface {
+	CreateNode(ctx context.Context, nodeID, registry, gateway string, ttl time.Duration) (agentenrollment.Bundle, error)
+}
+
 // ModelPullRouter forwards STATUS.md's P2 model distribution subtask two's
 // per-node pull trigger to whichever Gateway replica currently holds
 // node_id's connection. It is an interface, implemented by
@@ -223,6 +231,7 @@ type Service struct {
 	modelPullRouter      ModelPullRouter
 	comfyUIManagedRouter ComfyUIManagedRouter
 	billing              *BillingConfig
+	tenantNodes          *TenantNodeConfig
 }
 
 // Option configures a Service.

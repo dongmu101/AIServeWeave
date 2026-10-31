@@ -443,7 +443,7 @@ qwen-coder
 - 最少正在执行请求
 - 节点优先级
 - 节点标签路由，例如 `region=local`
-- 租户绑定节点或节点池
+- 租户绑定节点或节点池（专属节点已实现：控制面按 node_id 绑定、随 Key 校验下发对租户关闭的节点，Gateway 在 `pickBy` 过滤，见 Gateway STATUS「专属节点」；商户自带节点也已实现，归属写进 node_id，只供所有者商户使用）
 - 会话亲和，以便复用 KV Cache（基于提示前缀的内容亲和已实现：Gateway `-scheduler-policy=prefix_hash`，见 Gateway STATUS「模型别名与节点标签」第 6 条；基于会话标识的亲和仍属规划）
 - 连续失败熔断和自动恢复
 
@@ -558,6 +558,7 @@ Workflow API → 受控模板绑定 → Job 提交与确认
 | `common/cliusagestatus/` | 本机 CLI 订阅额度的不含凭据形状，随 `cli_usage` 帧上报并显示在租户模型页 |
 | `common/apikey/`、`common/quota/` | Key 格式/哈希与租户限制契约 |
 | `common/modelaccess/` | 商户模型白名单契约：平台列表 ∩ 租户列表，按模型路由别名匹配，空列表为不限制 |
+| `common/nodeaccess/` | 专属节点契约：节点按 node_id 绑定到租户集合，未绑定即共享；向租户下发对其关闭的节点。商户自有节点的 id `tnode.<tenant_id>.<hex>` 也在这里生成与解析（`OwnerOf`、`Permits`） |
 | `common/modelroute/` | 模型路由发布契约：别名/目标、CAS 版本化快照与生效状态（P02） |
 | `common/workflowtemplate/` | 工作流模板发布契约：内容、版本化快照与生效状态（P03），图仅在此契约与 Gateway 内部流转 |
 | `common/nodeview/`、`common/workflowview/` | 允许列表约束的机群、模板和 Job 展示契约，不含图 |

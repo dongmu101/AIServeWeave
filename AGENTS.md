@@ -34,7 +34,7 @@
 | `api/proto/tunnel/v1/` | Agent、Gateway、Registry 共用的 gRPC 契约与生成代码 |
 | `common/runtime/` | 后端语义、能力门禁、适配器与并发控制；托管供应商适配器只由 Agent 注册 |
 | `common/tunnelwire/` | runtime 类型与隧道 proto 的唯一双向编解码边界，包括结果标签约定 |
-| `common/` 其他包 | 仅承载跨服务必须一致的契约或实现，例如 Key 哈希、配额、模型授权、路由与模板发布、允许列表视图、无凭据状态、指标与本机发现；复用已有包，避免各服务重定义 |
+| `common/` 其他包 | 仅承载跨服务必须一致的契约或实现，例如 Key 哈希、配额、模型授权、专属节点与商户自有节点归属、路由与模板发布、允许列表视图、无凭据状态、指标与本机发现；复用已有包，避免各服务重定义 |
 | `service/aiServeWeaveAgent/` | 本机配置、发现、运行时与 CLI、主动出站隧道；执行本地允许的操作 |
 | `service/aiServeWeaveGateway/` | 兼容 API 前门、鉴权与配额、路由与调度、隧道终结、Job、产物存储与控制面同步 |
 | `service/aiServeWeaveRegistry/` | 节点身份、证书与令牌、Gateway 副本名册 |
@@ -46,7 +46,7 @@
 
 - `api/proto/tunnel/v1/tunnel.proto` 是 Agent、Gateway、Registry 共用的 gRPC 契约，三边 import 同一个生成包，不各自定义等价结构。
 - `*.pb.go` 不手工编辑。修改 `.proto` 后运行 `go generate ./api/...`；生成工具见 [generate.go](api/proto/tunnel/v1/generate.go)。生成结果必须与仓库中的契约一致。
-- 跨服务的非 proto 契约复用对应 `common/` 包。控制面发布与 Gateway 执行必须使用同一套配额、模型授权、路由和模板语义。
+- 跨服务的非 proto 契约复用对应 `common/` 包。控制面发布与 Gateway 执行必须使用同一套配额、模型授权、专属节点、路由和模板语义。
 - Console 手写的响应校验与契约镜像，在后端字段或语义变化时同步更新并验证，位置见 Console AGENTS。
 
 ## 分层职责

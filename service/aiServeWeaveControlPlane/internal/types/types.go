@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/modelaccess"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
 )
 
@@ -49,6 +50,44 @@ type AgentEnrollmentResponse struct {
 	ExpiresAt time.Time `json:"expires_at"`
 	Filename  string    `json:"filename"`
 	Archive   []byte    `json:"archive_base64"`
+}
+
+// TenantNode is one of a tenant's own nodes. Status is "revoked" for a
+// deleted node, otherwise what the fleet reports: "online", "offline" (no
+// replica holds its connection), or "unknown" when the fleet could not be
+// read in full. AgentVersion and LastHeartbeat are the node's own reports.
+//
+// TenantNode 是商户的一台自有节点。已删除的节点 Status 为 "revoked"，否则取机群的报告：
+// "online"、"offline"（没有副本持有它的连接），或机群未能完整读取时的 "unknown"。
+// AgentVersion 与 LastHeartbeat 是节点自己的上报。
+type TenantNode struct {
+	NodeID        string     `json:"node_id"`
+	CreatedBy     string     `json:"created_by"`
+	CreatedAt     time.Time  `json:"created_at"`
+	EnrollBy      time.Time  `json:"enroll_by"`
+	RevokedAt     *time.Time `json:"revoked_at,omitempty"`
+	Status        string     `json:"status"`
+	AgentVersion  string     `json:"agent_version,omitempty"`
+	LastHeartbeat *time.Time `json:"last_heartbeat,omitempty"`
+}
+
+// TenantNodeListResponse is GET /admin/v1/nodes: the nodes, newest first, and
+// the two per-tenant bounds a new bundle is checked against.
+//
+// TenantNodeListResponse 是 GET /admin/v1/nodes 的响应：节点（最新的在前），以及生成
+// 新接入包时校验的两项按商户上限。
+type TenantNodeListResponse struct {
+	Items            []TenantNode `json:"items"`
+	MaxPerTenant     int          `json:"max_per_tenant"`
+	MaxCreatesPerDay int          `json:"max_creates_per_day"`
+}
+
+// CreateTenantNodeRequest is POST /admin/v1/nodes. The addresses come from
+// configuration, not from the tenant.
+//
+// CreateTenantNodeRequest 是 POST /admin/v1/nodes 的请求体。地址来自配置，而不是商户。
+type CreateTenantNodeRequest struct {
+	TTLMinutes int `json:"ttl_minutes"`
 }
 
 // LoginRequest is a Console sign-in.
@@ -330,6 +369,13 @@ type VerifyResponse struct {
 	KeyID    string             `json:"key_id"`
 	Limits   quota.Limits       `json:"limits"`
 	Models   modelaccess.Policy `json:"models"`
+	// Nodes lists the dedicated nodes closed to the tenant; an empty object
+	// means none is. A Gateway that predates it ignores the field, which is
+	// why Gateways are upgraded before any node is dedicated.
+	//
+	// Nodes 列出对该租户关闭的专属节点；空对象表示没有。早于该字段的 Gateway 会忽略
+	// 它，这正是要先升级 Gateway、再专属任何节点的原因。
+	Nodes nodeaccess.Policy `json:"nodes"`
 	// BillingBlocked is present and true only for a prepaid tenant whose
 	// balance is exhausted; the Gateway answers its requests with 402.
 	//
@@ -367,6 +413,36 @@ type ModelAccessResponse struct {
 // 更新，理由与 SetLimitsRequest 相同。
 type SetModelAccessRequest struct {
 	Models []string `json:"models"`
+}
+
+// NodeAccess is one dedicated node and the tenants it belongs to.
+//
+// NodeAccess 是一台专属节点及其所属租户。
+type NodeAccess struct {
+	NodeID    string     `json:"node_id"`
+	Tenants   []string   `json:"tenants"`
+	UpdatedBy string     `json:"updated_by,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// NodeAccessListResponse is every dedicated node. It is not paginated: the
+// list is capped at nodeaccess.MaxDedicatedNodes. A node absent from it is
+// shared.
+//
+// NodeAccessListResponse 是全部专属节点。它不分页：列表上限为
+// nodeaccess.MaxDedicatedNodes。不在其中的节点是共享节点。
+type NodeAccessListResponse struct {
+	Items []NodeAccess `json:"items"`
+}
+
+// SetNodeAccessRequest replaces one node's tenants wholesale. An empty array
+// makes the node shared again; there is no partial update, for the reason
+// SetLimitsRequest gives.
+//
+// SetNodeAccessRequest 整体替换一台节点的租户。空数组让节点恢复共享；不支持部分
+// 更新，理由与 SetLimitsRequest 相同。
+type SetNodeAccessRequest struct {
+	Tenants []string `json:"tenants"`
 }
 
 // RevocationGenerationResponse is one notification cursor or heartbeat.
@@ -529,6 +605,11 @@ type UsageRecordRequest struct {
 	CompletionTokens int64     `json:"completion_tokens"`
 	TotalTokens      int64     `json:"total_tokens"`
 	CreatedAt        time.Time `json:"created_at"`
+	// NodeID is sent only for a tenant-owned node, which leaves the request
+	// unbilled when the record's tenant owns it.
+	//
+	// NodeID 只对商户自有节点发送；记录所属租户拥有该节点时，这次请求不计费。
+	NodeID string `json:"node_id,omitempty"`
 }
 
 // CreateUsageRecordsRequest is the body of POST /internal/v1/usagerecords.

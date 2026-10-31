@@ -151,6 +151,54 @@ go run ./service/aiServeWeaveGateway \
 - **租户模型页**：`GET /admin/v1/models` 按调用方租户的授权过滤 Agent 清单。清单列的是节点上报的模型 ID，而授权按别名给出，因此一个上报模型在「本身被允许」或「是某个被允许别名在当前路由发布中的目标」时可见；过滤后一个模型都不剩的服务整体隐藏。
 - **审计**：`model_access.update`，`TenantID` 为 `platform`，目标为被修改的 scope，详情只记数量 `models=N`。
 
+### 专属节点（租户节点池）
+
+平台运维可以把一台节点指定为一个或多个商户的专属节点，契约在 `common/nodeaccess`。被绑定的商户可以使用这台节点，同时仍可使用所有共享节点；其他商户的请求不会调度到这台节点上，在 `/v1/models` 和租户模型页里也看不到它。没有绑定的节点保持共享，所以未做任何配置的部署行为与以前一样。绑定按 Registry 认证的 node_id 建立，与 Agent 自报的标签无关。和模型授权一样，只有平台运维能配置；如果租户能绑定节点，它就能把任何节点从其他所有租户手里拿走。
+
+| 接口 | 说明 |
+| --- | --- |
+| `GET /operator/v1/node-access` | 返回全部专属节点 `{items: [{node_id, tenants, updated_by, updated_at}]}`，按 node_id 排序，不分页（上限 1000）。不在列表里的节点是共享节点 |
+| `PUT /operator/v1/node-access/:node_id` | 整体替换某台节点的租户列表，请求体为 `{"tenants": [...]}`，`null` 或缺少该字段返回 `400`；空数组表示恢复共享。点名的租户不存在时返回 `404`；node_id 或租户 id 非法、租户数超过 64 时返回 `400`；新增专属节点会超过 1000 台时返回 `409`。单独路由组，请求体上限为 `nodeaccess.MaxDocumentBytes`（16 KiB），超出返回 `413` |
+
+- **存储**：`node_access` 表（基础迁移 `0011_node_access.sql`，PostgreSQL 与 MySQL 各一份），每台专属节点一行，`tenants_json` 保存规范化后的租户列表。恢复共享就是删除这一行。读到损坏的行或空列表时，读取与 Key 校验都会报错，不会当成共享放开。
+- **下发**：`POST /internal/v1/apikeys/verify` 的响应新增 `nodes: {excluded: [...]}`，内容是对该租户关闭的专属节点（绑定了租户、但不包含它的节点）；没有关闭的节点时为 `{}`。每次写入后调用 `InvalidateAll`，与模型授权的生效路径相同。
+- **上限的并发余量**：1000 台的上限是先读一遍行数再写入，没有加表锁。两位运维同时新增不同节点时，上限可能被超出并发写入的数量。这个上限约束的是校验载荷的大小，不是安全属性，所以接受这点余量。
+- **租户模型页**：`GET /admin/v1/models` 先去掉对该租户关闭的节点上的服务，再按模型授权过滤。
+- **审计**：`node_access.update`，`TenantID` 为 `platform`，目标为 node_id，详情只记录数量 `tenants=N`。
+- **升级顺序**：旧版 Gateway 会忽略 `nodes` 字段，绑定在它那里不生效。**先升级全部 Gateway，再绑定任何节点。**
+- **验证范围**：业务规则（权限、输入校验、上限、损坏行、依赖故障时拒绝而不是放开、校验结果下发、缓存失效传播、租户模型页过滤、审计）在 memstore 与 e2e 上验证过。新表的迁移 SQL 还没有在真实 PostgreSQL 或 MySQL 上跑过，live 测试需要单独执行。
+- **商户自有节点**：`tnode.` 开头的节点不能在这里绑定，`PUT` 返回 `409`；归属见下一节。
+
+### 商户自有节点
+
+商户的 owner/admin 可以在租户控制台自助生成 Agent 接入包，装到自己的机器上。这台节点只服务这个商户：其他商户的请求调度不到它，在 `/v1/models` 和租户模型页里也看不到它。商户可以随时删除自己的节点。出售给其他商户、分成结算不在本期。
+
+**归属写在 node_id 里**：控制面生成 `tnode.<tenant_id>.<32 位小写十六进制>`，并经 Registry `MintToken` 铸造只对这个 id 有效的一次性令牌。node_id 由 Registry 写进证书，Agent 改不了；Registry 拒绝用未绑定令牌注册 `tnode.` id。Gateway 与控制面用 `nodeaccess.OwnerOf` 直接从 id 判断归属，`nodeaccess.Permits(tenant, policy, node)` 的规则是：自有节点只允许所有者使用；其他节点按专属节点的排除名单判断。判断不依赖任何同步数据，所以不用把「其他商户的自有节点」塞进每个 Key 的排除名单，新节点在缓存刷新前连上来也不会被别人用到。`tnode.` 开头但格式不对的 id 无人可用。
+
+| 配置 `TenantNodes` | 默认 | 含义 |
+| --- | --- | --- |
+| `Enabled` | `true` | 总开关，默认开启；设为 `false` 关闭。所有商户（含自助注册商户）都能使用 |
+| `RegistryAddr`、`GatewayAddr` | 空 | 写进接入包的外部 `host:port`，只用于包内说明，不作为服务端网络目标 |
+| `MaxPerTenant` | `10` | 每个商户同时有效（未删除）的自有节点数，1–100 |
+| `MaxCreatesPerDay` | `10` | 每个商户滚动 24 小时内可生成的接入包数（已删除的也计入），1–1000，限制反复建删把 Registry 停用名单刷大 |
+
+**生效条件**（`TenantNodesConf.Active`）：`Enabled`、两个地址都已填写、`Registry.Addr`/`AdminToken`/`CACertFile` 都已配置。不满足时三个接口不挂载、回答 `404`，启动日志说明原因；因此没有 Registry、或还没填对外地址的部署照常启动。只配了一半（填了地址但 Registry 不全，或只填了一个地址、地址不是 `host:port`）时拒绝启动。`TenantNodes` 字段刻意不标 `optional`：go-zero 只在配置块存在时才给 optional 块填默认值，标了会让省略该块的配置文件全部关闭本功能。参考部署的 `controlplane.example.yaml` 从环境变量 `AISW_TENANT_NODE_REGISTRY_ADDR`、`AISW_TENANT_NODE_GATEWAY_ADDR` 读两个地址，compose 由 `.env` 的 `REGISTRY_ADVERTISE_ADDR`、`GATEWAY_ADVERTISE_ADDR` 传入；`install.sh`/`upgrade.sh` 会给缺少该块的 `controlplane.yaml` 补上。
+
+| 接口（租户会话） | 说明 |
+| --- | --- |
+| `GET /admin/v1/nodes` | 所有角色可读。本商户的自有节点，最新在前，最多 200 条：`{items: [{node_id, created_by, created_at, enroll_by, revoked_at?, status, agent_version?, last_heartbeat?}], max_per_tenant, max_creates_per_day}`。`status` 为 `online`/`offline`/`revoked`；机群读取失败或只拿到部分副本时为 `unknown`。只输出这些字段，不透出机群节点的标签等内部信息 |
+| `POST /admin/v1/nodes` | owner/admin。请求体 `{"ttl_minutes": 15..1440}`，不接受其他字段；成功 `201`，响应与运维接入包相同（ZIP 以 base64 返回，只返回一次）。超过任一上限 `409`，签发失败 `503` |
+| `DELETE /admin/v1/nodes/:node_id` | owner/admin。先调 Registry `DisableNode`（同时经名册断开现有连接），成功后标记删除并返回 `204`；Registry 失败返回 `503`，行保持不变。已删除、非本商户或不存在的返回 `404` |
+
+- **存储**：`tenant_nodes` 表（基础迁移 `0012_tenant_nodes.sql`，PostgreSQL 与 MySQL 各一份），索引 `(tenant_id, created_at)`。删除只标记 `revoked_at`/`revoked_by`，行保留给每日上限计数。归属以 node_id 为准，这张表只用于列表、计数与审计。
+- **生成顺序**：检查两个上限 → 写行 → 签发令牌并打包；签发失败时删除这一行（用不随请求取消的 context）。上限是先计数再写入，并发生成时可能超出并发数量，与专属节点上限的取舍相同。
+- **计费**：Gateway 只在请求跑在 `tnode.` 节点上时给用量记录附 `node_id`；`POST /internal/v1/usagerecords` 接受可选的 `node_id`，节点所有者等于记录所属商户时费用记为 0（仍写扣费行，重放仍为 0）。只附自有节点的 id，未使用本功能的部署推送内容不变。余额耗尽（`402`）的预付商户仍被拦在 Gateway 前门，不能改为只用自有节点继续服务。
+- **运维权限**：平台运维可以在节点管理里停用、设维护，但不能把商户自有节点绑定给其他商户（见上一节）。Console 专属节点页把它们显示为只读。
+- **审计**（租户范围）：`node.tenant.create`（详情为 `expires_at`）、`node.tenant.revoke`，不记令牌与接入包。
+- **租户模型页**：`GET /admin/v1/models` 按 `Permits` 过滤，其他商户的自有节点上的服务不出现。
+- **升级顺序**：本功能默认开启，地址一填就生效。Registry（保留前缀检查）、控制面、全部 Gateway 都升级之后，才能让它生效（填地址）；分批升级时先把 `Enabled` 设为 `false`。旧版 Gateway 不认识 `tnode.` 归属，会把自有节点当作共享节点派给所有商户。
+- **验证范围**：权限矩阵、上限与 24 小时窗口、签发失败回滚、删除（含 Registry 故障、重复删除、跨商户）、`Permits` 判断、Registry 前缀拒绝、Gateway 调度与 `/v1/models` 隔离、计费免扣、e2e 接口形状与配置校验都有默认测试。`0012` 迁移还没有在真实 PostgreSQL 或 MySQL 上跑过，真实 Agent 用商户接入包注册也还没有验收。
+
 ### 租户自助注册
 
 `POST /admin/v1/auth/signup` 让任何人创建一个租户及其 owner，请求体 `{"tenant_name","email","password"}`，成功返回 `201` 与 `CreateTenantResponse`（不含会话，调用方随后用同一组凭据登录）。它只在配置 `Signup.Enabled: true` 时挂载；默认关闭，关闭时路由不存在、回答 `404`。开启后完全开放：新租户立即为 active，没有审批也没有邀请码。

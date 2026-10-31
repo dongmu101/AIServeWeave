@@ -8,6 +8,8 @@ const core = {
   "tenant.createApiKey": "Create API Key",
   "tenant.revoked": "Revoked",
   "tenant.revokeApiKey": "Revoke API Key",
+  "tenant.auditNodeCreate": "Connect own node",
+  "tenant.auditNodeRevoke": "Delete own node",
   "tenant.unableToConnectToTheServerCheckYour": "Unable to connect to the server. Check your network and try again.",
   "tenant.theSubmittedDataDoesNotMeetTheRequirements": "The submitted data does not meet the requirements. Check it and try again.",
   "tenant.enterAnEmailAddress": "Enter an email address.",

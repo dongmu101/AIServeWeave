@@ -65,6 +65,8 @@ Next.js 服务端负责会话 Cookie 与受限的接口转发，控制面负责�
 | API Key | `GET/POST /admin/v1/apikeys`、`DELETE /admin/v1/apikeys/:id` | `/console/keys` | 列表支持 `status`、`q` 筛选；owner/admin 可创建、吊销；member 只能吊销自己创建的 Key。吊销不幂等：重复吊销返回 `404` |
 | 配额 | `GET /admin/v1/tenants/current`、`PUT /admin/v1/tenants/limits` | `/console/quota` | 任何登录角色可读租户资料与配额；仅 owner/admin 可整组写入。零表示不限制 |
 | 模型授权 | `GET /operator/v1/tenants`、`GET/PUT /operator/v1/model-access/:scope` | `/operator/model-access` | **平台运维接口**：编辑全平台与按商户的模型别名白名单。平台列表是上限、商户列表只能收窄，空列表不限制；写请求体上限与路由发布相同（1 MiB + 64 KiB），不自动重试 |
+| 专属节点 | `GET /operator/v1/nodes`、`GET /operator/v1/tenants`、`GET /operator/v1/node-access`、`PUT /operator/v1/node-access/:node_id` | `/operator/node-access` | **平台运维接口**：把节点设为一个或多个商户的专属节点；被绑定商户仍可用共享节点，其他商户既调度不到也看不到它。按 node_id 生效，与标签无关；空列表恢复共享，不自动重试。商户自有节点（`tnode.` 开头）只读显示，不能绑定 |
+| 我的节点 | `GET/POST /admin/v1/nodes`、`DELETE /admin/v1/nodes/:node_id` | `/console/nodes` | 商户自带机器，只供本商户使用。控制面 `TenantNodes` 默认开启，配齐对外地址与 Registry 后生效，每商户最多同时 10 台；未生效时 `404`，页面显示「未开启」。任何角色可看列表与在线状态；owner/admin 可生成接入包（ZIP 只返回一次，不自动重试）和删除节点（Registry 停用并断开连接）。跑在自有节点上的请求不扣点数 |
 | 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders}` | `/console/billing` | 仅在控制面 `Billing.Enabled` 时存在，否则全部 `404`，页面显示「计费未开启」。任何角色可看余额、账目与订单；仅 owner/admin 可购买与打开客户门户。结账与门户链接由控制面向 Dodo Payments 申请，Console 只校验其为 https 后跳转 |
 | 计费管理 | `/operator/v1/billing/{packages,model-prices,tenants,orders,ledger}` | `/operator/billing` | **平台运维接口**：充值包新建/编辑（无删除，下架即 `active:false`）、模型单价（`*` 为默认价）、租户计费模式与余额调整、跨租户订单与账目 |
 | 审计 | `GET /admin/v1/audit` | `/console/audit` | 支持 `action`、`actor_id`、`since`、`until` 筛选与游标分页 |

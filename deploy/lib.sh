@@ -135,6 +135,19 @@ fill_secrets() {
   (( filled == 0 )) || log "已生成 $filled 个空缺的密钥"
 }
 
+# ensure_controlplane_config creates deploy/controlplane.yaml from
+# controlplane.example.yaml when this host has none. The file is each
+# deployment's own and is not tracked, so an existing one is never touched.
+#
+# ensure_controlplane_config 在本机没有 deploy/controlplane.yaml 时由 controlplane.example.yaml
+# 生成。该文件属于各个部署自己、不受 git 跟踪，因此已存在的文件绝不改动。
+ensure_controlplane_config() {
+  local file="$DEPLOY_DIR/controlplane.yaml"
+  [[ -f "$file" ]] && return 0
+  cp "$DEPLOY_DIR/controlplane.example.yaml" "$file"
+  log "已从 controlplane.example.yaml 创建 controlplane.yaml，按本机部署修改后重启 controlplane 生效"
+}
+
 # ensure_access_log_off disables go-zero's access-log middleware in
 # controlplane.yaml. On every 5xx it dumps the whole request, Authorization
 # header and body included, which writes internal tokens and passwords to the
@@ -153,6 +166,30 @@ Middlewares:
   Log: false
 EOF
   log "已在 controlplane.yaml 中关闭 go-zero 访问日志中间件"
+}
+
+# ensure_tenant_nodes adds the TenantNodes block to a controlplane.yaml that
+# predates it, so an upgraded deployment gets tenant-owned nodes on by
+# default like a new one. An operator who set the block keeps it as written.
+#
+# ensure_tenant_nodes 给早于该功能的 controlplane.yaml 补上 TenantNodes 配置块，使升级后的
+# 部署与新部署一样默认开启商户自有节点。运维已写好的配置块保持原样。
+ensure_tenant_nodes() {
+  local file="$DEPLOY_DIR/controlplane.yaml"
+  [[ -f "$file" ]] || return 0
+  grep -q '^TenantNodes:' "$file" && return 0
+  cat >>"$file" <<'EOF'
+
+# Tenant-owned nodes, on by default; set Enabled to false to turn them off.
+# 商户自有节点，默认开启；把 Enabled 改为 false 即可关闭。
+TenantNodes:
+  Enabled: true
+  RegistryAddr: "${AISW_TENANT_NODE_REGISTRY_ADDR}"
+  GatewayAddr: "${AISW_TENANT_NODE_GATEWAY_ADDR}"
+  MaxPerTenant: 10
+  MaxCreatesPerDay: 10
+EOF
+  log "已在 controlplane.yaml 中加入商户自有节点配置（默认开启）"
 }
 
 # ensure_config_readable keeps controlplane.yaml world-readable. It is bind

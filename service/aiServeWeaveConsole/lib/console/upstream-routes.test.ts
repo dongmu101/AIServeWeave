@@ -80,7 +80,7 @@ test("the allowlist admits exactly the calls the Console makes", () => {
     { name: "gateway verification", method: "POST", path: "/internal/v1/apikeys/verify", want: null },
     { name: "wrong method on users", method: "DELETE", path: "/admin/v1/users", want: null },
     { name: "wrong method on audit", method: "POST", path: "/admin/v1/audit", want: null },
-    { name: "unknown resource", method: "GET", path: "/admin/v1/nodes", want: null },
+    { name: "unknown resource", method: "GET", path: "/admin/v1/fleet", want: null },
     { name: "extra segment", method: "GET", path: "/admin/v1/users/u-1", want: null },
     { name: "empty key id", method: "DELETE", path: "/admin/v1/apikeys/", want: null },
     { name: "delete key with POST", method: "POST", path: "/admin/v1/apikeys/key-123/permanent", want: null },

@@ -44,8 +44,9 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 2. 补齐所有为空的密钥；已有值不改动。
 3. MySQL 数据卷尚未创建时，为数据库账户生成独立密码。
 4. 账户密码留空时自动生成，并在脚本结束时显示一次。
-5. 在 `controlplane.yaml` 中关闭 go-zero 的访问日志中间件，原因见下文「对外部署与已知限制」。
-6. 逐个构建镜像，启动服务，然后检查 Console、控制面与 Gateway 是否应答。
+5. 本机没有 `controlplane.yaml` 时由 `controlplane.example.yaml` 复制一份。这份文件属于本机部署、不受 git 跟踪（已在 `.gitignore` 中），按需修改，已存在时脚本不会覆盖。
+6. 在 `controlplane.yaml` 中关闭 go-zero 的访问日志中间件（原因见下文「对外部署与已知限制」），缺少 `TenantNodes` 段时补上。
+7. 逐个构建镜像，启动服务，然后检查 Console、控制面与 Gateway 是否应答。
 
 脚本可以重复执行，失败后重跑会从中断处继续。常用选项如下，完整列表见 `deploy/install.sh --help`：
 
@@ -68,9 +69,9 @@ deploy/upgrade.sh --no-pull --force  # 不拉取代码，直接按当前工作�
 
 升级按以下流程进行：
 
-- 只做快进合并。`controlplane.yaml` 的本地修改会在拉取期间暂存，拉取后恢复；恢复时冲突则停止，服务不受影响。其他已跟踪文件有本地修改时直接拒绝升级。
+- 只做快进合并。`controlplane.yaml` 是本机文件，拉取不会动它；从仍跟踪该文件的旧版本第一次升级上来时，脚本在拉取期间把它挪开、拉取后原样放回，并改为不受跟踪。上游若重新跟踪该文件，脚本拒绝升级，避免覆盖本机配置。其他已跟踪文件有本地修改时直接拒绝升级。
 - 拉取后改用新版本的脚本继续执行，补齐新版本要求的空密钥。
-- 如果 `.env.example` 新增了变量，或 `controlplane.yaml` 有上游改动，给出提示。
+- 如果 `.env.example` 新增了变量，或 `controlplane.example.yaml` 有上游改动，给出提示和查看差异的命令，由你决定是否同步到本机的 `controlplane.yaml`。
 - 构建前把 MySQL 转储和 Registry 身份材料备份到 `~/aiserveweave-backups`（可用 `--backup-dir` 修改）。任何一项备份失败都会中止升级。
 - 结束时打印回滚命令，以及本次备份的位置。
 
@@ -243,6 +244,35 @@ Compose 会检测服务配置或镜像变化并重建容器，`restart` 不会�
 `registry-data`。长期部署固定目录及 Compose 项目名，避免换目录后连接到新的空数据卷。
 升级前备份配置、数据库与 Registry 身份材料；数据库升级与恢复步骤见
 [数据库升级与恢复](database-recovery.md)。不要将删除数据卷作为常规故障处理方式。
+
+专属节点（`/operator/node-access`）要求所有 Gateway 副本已经升级到支持它的版本：
+旧版 Gateway 会忽略控制面下发的 `nodes` 字段，绑定在那些副本上不生效。分批升级时，
+先升级全部 Gateway，再绑定任何节点；见
+[ControlPlane STATUS「专属节点」](../service/aiServeWeaveControlPlane/STATUS.md#专属节点租户节点池)。
+
+商户自有节点（租户控制台「我的节点」`/console/nodes`）默认开启，每个商户最多同时 10 台。
+参考部署的 `controlplane.example.yaml` 已带上配置块，`install.sh` 与 `upgrade.sh` 会给缺少它的
+`controlplane.yaml` 补上：
+
+```yaml
+TenantNodes:
+  Enabled: true                                      # 设为 false 即关闭
+  RegistryAddr: "${AISW_TENANT_NODE_REGISTRY_ADDR}"  # compose 取自 .env 的 REGISTRY_ADVERTISE_ADDR
+  GatewayAddr: "${AISW_TENANT_NODE_GATEWAY_ADDR}"    # compose 取自 .env 的 GATEWAY_ADVERTISE_ADDR
+  MaxPerTenant: 10       # 每商户同时有效的节点数，1–100
+  MaxCreatesPerDay: 10   # 每商户 24 小时内可生成的接入包数，1–1000
+```
+
+两个地址写进接入包，域名须分别包含在 Registry 证书与 Gateway 隧道证书中；compose 默认值为
+`registry.open7x.com:9443` 与 `agent.open7x.com:8443`。它还沿用 `Registry.Addr`、`Registry.AdminToken`、
+`Registry.CACertFile`：地址或 Registry 任一侧为空时功能不生效（接口 404，启动日志说明），只配了一半时
+控制面拒绝启动。
+**分批升级时先把 `Enabled` 设为 `false`，等 Registry、控制面与全部 Gateway 都升级、数据库迁移
+`0012_tenant_nodes` 执行完，再改回 `true`**（单机 compose 一次升级全部服务，无需此步）：
+旧版 Gateway 不认识 `tnode.` 归属，会把商户自有节点当作共享节点派给所有商户；旧版 Registry
+不会拒绝未绑定令牌自报 `tnode.` id。商户的 owner/admin 生成接入包后，按上面 Agent 接入的同一套
+发行包与 `README.txt` 安装；见
+[ControlPlane STATUS「商户自有节点」](../service/aiServeWeaveControlPlane/STATUS.md#商户自有节点)。
 
 ### 证书链是怎么闭合的
 

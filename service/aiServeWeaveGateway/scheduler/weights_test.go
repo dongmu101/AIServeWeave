@@ -1,6 +1,7 @@
 package scheduler
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -56,7 +57,7 @@ func TestHotWeightUpdateChangesSelectionWithoutChangingCapturedSnapshot(t *testi
 	captured := s.routes.Load()
 	assertFirst := func(table *routing.Table, want string) {
 		t.Helper()
-		got := s.candidatesWithRandom(table, "alias", runtime.CapabilityChat, func() float64 { return .5 })
+		got := s.candidatesWithRandom(context.Background(), table, "alias", runtime.CapabilityChat, func() float64 { return .5 })
 		if len(got) != 2 || got[0].Model != want {
 			t.Fatalf("want first model %s and two fallback candidates, got %+v", want, got)
 		}

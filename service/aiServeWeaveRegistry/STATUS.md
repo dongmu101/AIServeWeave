@@ -57,6 +57,8 @@ aiserveweave-registry -data-dir ./data/registry -admin-token-file ./data/registr
 
 **node_id 绑定**：`-mint-token` 可以带 `-bind-node-id <node_id>`，铸造一枚只对这个 node_id 有效的令牌；见下一节「`node_id` 唯一性」。
 
+**保留前缀 `tnode.`**：以 `tnode.` 开头的 node_id 是商户自有节点（`common/nodeaccess.OwnerOf` 从 id 本身解析出所属商户，见 [ControlPlane STATUS「商户自有节点」](../aiServeWeaveControlPlane/STATUS.md#商户自有节点)）。`Register` 只接受用**绑定了该 id** 的令牌注册这类 id；未绑定令牌自报 `tnode.` id 时，在审批与认领之前就返回 `PermissionDenied`，格式不对的 `tnode.` id 同样拒绝。这样别人不能自报某个商户的 id、再骗运维批准后冒充成那个商户的节点。绑定令牌由控制面在商户生成接入包时铸造。
+
 ## `-issue-server-cert`：Gateway 的隧道证书从哪来
 
 Gateway 的隧道监听器需要一张服务端证书，而它别处拿不到：Agent 只信任一个根——`tunnel/identity.go` 的 `TLSConfig` 把 `-ca-file` 加载的 Registry CA 作为 `RootCAs`，因此任何其他签发方的证书都会被每一个 Agent 拒绝。而本服务通过 RPC 签发的是**节点**证书（`ExtKeyUsageClientAuth` + `aiserveweave://node/<id>` SAN），那不是监听器该出示的东西。

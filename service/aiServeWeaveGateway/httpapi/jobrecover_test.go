@@ -21,7 +21,7 @@ type fakeRecoverCandidates struct {
 	candidates []scheduler.Candidate
 }
 
-func (f *fakeRecoverCandidates) WorkflowCapableCandidates() []scheduler.Candidate {
+func (f *fakeRecoverCandidates) WorkflowCapableCandidates(context.Context) []scheduler.Candidate {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]scheduler.Candidate(nil), f.candidates...)

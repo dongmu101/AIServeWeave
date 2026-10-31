@@ -113,6 +113,10 @@ type usageRecordWire struct {
 	CompletionTokens int       `json:"completion_tokens"`
 	TotalTokens      int       `json:"total_tokens"`
 	CreatedAt        time.Time `json:"created_at"`
+	// NodeID is omitted when empty, so a control plane that predates it,
+	// which refuses unknown fields, still accepts every record without one.
+	// NodeID 为空时省略，使不认识它、且拒绝未知字段的旧控制面仍接受所有不带它的记录。
+	NodeID string `json:"node_id,omitempty"`
 }
 
 // PushUsageRecords implements httpapi.UsageLedgerClient. An empty batch is
@@ -143,6 +147,7 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 			CompletionTokens: r.CompletionTokens,
 			TotalTokens:      r.TotalTokens,
 			CreatedAt:        r.CreatedAt,
+			NodeID:           r.NodeID,
 		}
 	}
 

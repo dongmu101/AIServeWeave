@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,13 +13,13 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
-func (h *handlers) useNativeChat(req chatCompletionRequest) bool {
+func (h *handlers) useNativeChat(ctx context.Context, req chatCompletionRequest) bool {
 	for i := len(req.Messages) - 1; i >= 0 && req.Messages[i].Role == "tool"; i-- {
 		if strings.HasPrefix(req.Messages[i].ToolCallID, "toolu_aisw_") {
 			return true
 		}
 	}
-	return len(h.sched.MessagesCandidates(req.Model)) > 0
+	return len(h.sched.MessagesCandidates(ctx, req.Model)) > 0
 }
 
 // nativeChat reuses authenticated Messages coordination without a second HTTP hop.

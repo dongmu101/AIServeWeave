@@ -11,8 +11,8 @@ import (
 
 // MessagesCandidates returns only nodes supporting native Anthropic Messages.
 // MessagesCandidates 仅返回支持原生 Anthropic Messages 的节点。
-func (s *Scheduler) MessagesCandidates(model string) []Candidate {
-	return s.candidates(model, runtime.CapabilityMessages)
+func (s *Scheduler) MessagesCandidates(ctx context.Context, model string) []Candidate {
+	return s.candidates(ctx, model, runtime.CapabilityMessages)
 }
 
 // Messages dispatches once to the selected node. Tool continuations use it
@@ -24,6 +24,9 @@ func (s *Scheduler) MessagesCandidates(model string) []Candidate {
 func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
 	if !modelAllowed(ctx, req.Model) {
 		return nil, ErrModelNotAllowed
+	}
+	if !nodeAllowed(ctx, c.NodeID) {
+		return nil, ErrNodeNotAllowed
 	}
 	req.Model = c.Model
 	return s.server.Runtime(c.NodeID, c.RuntimeID).Messages(ctx, req)
@@ -46,7 +49,7 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 	if !modelAllowed(ctx, req.Model) {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.candidatesKeyed(s.routes.Load(), req.Model, runtime.CapabilityMessages, s.sessionAffinity(ctx), rand.Float64)
+	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, runtime.CapabilityMessages, s.sessionAffinity(ctx), rand.Float64)
 	s.metrics.Selection(runtime.CapabilityMessages, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, ErrNoCapableNode

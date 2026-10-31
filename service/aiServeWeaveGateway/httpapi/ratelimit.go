@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 )
@@ -64,11 +65,20 @@ type usageSinkKey struct{}
 // 从不是客户端的自由文本：本方法只在派发成功路径上被调用，此时调度器早已
 // 把请求解析到了一个 modelroute 别名上。
 func (h *handlers) recordUsage(ctx context.Context, usage runtime.Usage, elapsed time.Duration, endpoint, model string) {
+	h.recordUsageOn(ctx, "", usage, elapsed, endpoint, model)
+}
+
+// recordUsageOn is recordUsage for a request known to have been served by
+// nodeID, which the ledger record carries when that node is tenant-owned.
+//
+// recordUsageOn 是已知由 nodeID 服务的请求所用的 recordUsage；该节点为商户自有时，
+// 账本记录会带上它。
+func (h *handlers) recordUsageOn(ctx context.Context, nodeID string, usage runtime.Usage, elapsed time.Duration, endpoint, model string) {
 	h.metrics.Usage(usage, elapsed)
 	if sink, ok := ctx.Value(usageSinkKey{}).(*usageSink); ok {
 		sink.tokens += usage.TotalTokens
 	}
-	h.ledgerUsage(ctx, usage, endpoint, model)
+	h.ledgerUsage(ctx, nodeID, usage, endpoint, model)
 }
 
 // ledgerUsage enqueues usage into the durable usage ledger, when one is
@@ -77,12 +87,14 @@ func (h *handlers) recordUsage(ctx context.Context, usage runtime.Usage, elapsed
 // omit it on intermediate chunks; there is nothing to bill) and a request
 // with no resolved tenant identity (an unauthenticated deployment has no
 // tenant to ledger against — the same no-op rateLimit already applies).
+// nodeID reaches the record only when it is tenant-owned.
 //
 // ledgerUsage 在配置了账本、且确有内容可记时，把用量入队进持久化用量账本。
 // 两种情形会跳过入队而不是写入一条记录：全零用量（部分后端在中间 chunk 上
 // 不上报用量；此时无可计费之物）与没有解析出租户身份的请求（未启用鉴权的
 // 部署没有可记账的租户——与 rateLimit 已经采用的同一种空操作）。
-func (h *handlers) ledgerUsage(ctx context.Context, usage runtime.Usage, endpoint, model string) {
+// nodeID 只有在属于商户自有节点时才写入记录。
+func (h *handlers) ledgerUsage(ctx context.Context, nodeID string, usage runtime.Usage, endpoint, model string) {
 	if h.usageLedger == nil {
 		return
 	}
@@ -93,7 +105,11 @@ func (h *handlers) ledgerUsage(ctx context.Context, usage runtime.Usage, endpoin
 	if !ok || identity.TenantID == "" {
 		return
 	}
+	if _, owned := nodeaccess.OwnerOf(nodeID); !owned {
+		nodeID = ""
+	}
 	accepted := h.usageLedger.enqueue(UsageRecord{
+		NodeID:           nodeID,
 		RequestID:        requestIDFrom(ctx),
 		TenantID:         identity.TenantID,
 		Model:            model,

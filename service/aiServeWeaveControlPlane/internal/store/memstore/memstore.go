@@ -43,6 +43,8 @@ type Store struct {
 	workflowTemplates []model.WorkflowTemplateRevision
 	tenants           map[string]model.Tenant
 	modelAccess       map[string]model.ModelAccess
+	nodeAccess        map[string]model.NodeAccess
+	tenantNodes       map[string]model.TenantNode
 	users             map[string]model.User
 	platformOperators map[string]model.PlatformOperator
 	keys              map[string]model.APIKey
@@ -66,6 +68,8 @@ func New() *Store {
 	return &Store{
 		tenants:           map[string]model.Tenant{},
 		modelAccess:       map[string]model.ModelAccess{},
+		nodeAccess:        map[string]model.NodeAccess{},
+		tenantNodes:       map[string]model.TenantNode{},
 		users:             map[string]model.User{},
 		platformOperators: map[string]model.PlatformOperator{},
 		keys:              map[string]model.APIKey{},
@@ -176,6 +180,40 @@ func (s *Store) DeleteModelAccess(_ context.Context, scope string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.modelAccess, scope)
+	return nil
+}
+
+// ListNodeAccess reads every dedicated node's row, ordered by node id.
+//
+// ListNodeAccess 按节点 id 顺序读取每台专属节点的行。
+func (s *Store) ListNodeAccess(_ context.Context) ([]model.NodeAccess, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows := make([]model.NodeAccess, 0, len(s.nodeAccess))
+	for _, row := range s.nodeAccess {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].NodeID < rows[j].NodeID })
+	return rows, nil
+}
+
+// PutNodeAccess inserts or replaces one node's row.
+//
+// PutNodeAccess 插入或替换某台节点的行。
+func (s *Store) PutNodeAccess(_ context.Context, row *model.NodeAccess) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodeAccess[row.NodeID] = *row
+	return nil
+}
+
+// DeleteNodeAccess removes one node's row, if there is one.
+//
+// DeleteNodeAccess 删除某台节点的行（如果存在）。
+func (s *Store) DeleteNodeAccess(_ context.Context, nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.nodeAccess, nodeID)
 	return nil
 }
 

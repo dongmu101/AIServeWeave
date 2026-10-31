@@ -116,4 +116,8 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 
 模型授权位于 `/operator/model-access`：全平台列表与按商户列表各一个编辑器，整组 `PUT /operator/v1/model-access/:scope`，不自动重试；仅该写入路径的请求体放宽到 1 MiB + 64 KiB（`modelAccessBodyLimit`）。后端公共校验源是 `common/modelaccess`，前端 `lib/console/model-access.ts` 的镜像需同步测试。
 
+专属节点位于 `/operator/node-access`：节点列表合并 `/operator/v1/nodes` 的机群节点与 `GET /operator/v1/node-access` 的已绑定节点，也可以输入尚未接入的 node_id；每台节点整组 `PUT /operator/v1/node-access/:node_id`，不自动重试，请求体沿用默认上限（控制面另限 16 KiB）。后端公共校验源是 `common/nodeaccess`，前端 `lib/console/node-access.ts` 的镜像需同步测试。`tnode.` 开头的商户自有节点在该页只读（`tenantNodeOwner` 镜像 `nodeaccess.OwnerOf`）。
+
+商户自有节点位于租户页面 `/console/nodes`，走 `/api/admin/*`（`GET/POST /admin/v1/nodes`、`DELETE /admin/v1/nodes/:node_id`），不发起平台请求。生成接入包与删除都是写操作，只发送一次、不自动重试：重发一次生成会再铸出一枚绑定令牌。契约镜像在 `lib/console/tenant-nodes.ts`，接入包解析与运维接入共用 `parseBundleFor`，只是 node_id 正则不同。
+
 路由管理（P02）位于 `/operator/routes`，草稿只在页面保留。平台发布/回滚须携带 expected_revision，不自动重试；读请求须防止过期响应覆盖新的草稿或生效状态。仅匹配路由验证/发布的请求体允许 1 MiB + 64 KiB，不能全局放宽普通管理端点。后端公共校验源是 `common/modelroute`，前端镜像需同步测试。

@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -12,7 +13,7 @@ import (
 
 // useNativeResponses routes Claude CLI models and their tool continuations to native Messages.
 // useNativeResponses 把 Claude CLI 模型及其工具续接路由到原生 Messages。
-func (h *handlers) useNativeResponses(req responsesRequest) bool {
+func (h *handlers) useNativeResponses(ctx context.Context, req responsesRequest) bool {
 	var items []responsesInputItem
 	_ = json.Unmarshal(req.Input, &items)
 	for i := len(items) - 1; i >= 0 && strings.HasSuffix(items[i].Type, "_call_output"); i-- {
@@ -20,7 +21,7 @@ func (h *handlers) useNativeResponses(req responsesRequest) bool {
 			return true
 		}
 	}
-	return len(h.sched.MessagesCandidates(req.Model)) > 0
+	return len(h.sched.MessagesCandidates(ctx, req.Model)) > 0
 }
 
 // nativeResponses reuses the Chat compatibility layer, so Responses continuations share its CLI sessions.

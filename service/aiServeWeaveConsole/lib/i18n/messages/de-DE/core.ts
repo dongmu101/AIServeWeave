@@ -8,6 +8,8 @@ const core = {
   "tenant.createApiKey": "API Key erstellen",
   "tenant.revoked": "Widerrufen",
   "tenant.revokeApiKey": "API Key widerrufen",
+  "tenant.auditNodeCreate": "Eigenen Knoten verbinden",
+  "tenant.auditNodeRevoke": "Eigenen Knoten löschen",
   "tenant.unableToConnectToTheServerCheckYour": "Server nicht erreichbar. Prüfen Sie das Netzwerk und versuchen Sie es erneut.",
   "tenant.theSubmittedDataDoesNotMeetTheRequirements": "Die Eingaben erfüllen die Anforderungen nicht. Bitte prüfen und erneut versuchen.",
   "tenant.enterAnEmailAddress": "Bitte eine E-Mail-Adresse eingeben.",

@@ -158,6 +158,27 @@ Signup:
   TokensPerMinute: 100000
   MaxConcurrent: 4
 
+# 商户自有节点：默认开启。商户的 owner/admin 可在 Console「我的节点」生成接入包，把自己的
+# 机器接成只供本商户使用的节点，跑在上面的请求不扣点数。两个地址写进接入包，须与 Registry、
+# Gateway 隧道证书里的域名一致；compose 从 deploy/.env 的 REGISTRY_ADVERTISE_ADDR 与
+# GATEWAY_ADVERTISE_ADDR 传入。不想开放时把 Enabled 改为 false。详见 ControlPlane STATUS
+# 「商户自有节点」。
+#
+# Tenant-owned nodes: on by default. A tenant's owner/admin generates an
+# enrollment bundle on the Console's "My nodes" page and connects a machine
+# of their own that only that tenant can use; requests it serves are not
+# charged. Both addresses are written into the bundle and must match the
+# names in the Registry and Gateway tunnel certificates; compose passes them
+# from REGISTRY_ADVERTISE_ADDR and GATEWAY_ADVERTISE_ADDR in deploy/.env. Set
+# Enabled to false to keep tenants from enrolling nodes. See ControlPlane
+# STATUS, "商户自有节点".
+TenantNodes:
+  Enabled: true
+  RegistryAddr: "${AISW_TENANT_NODE_REGISTRY_ADDR}"
+  GatewayAddr: "${AISW_TENANT_NODE_GATEWAY_ADDR}"
+  MaxPerTenant: 10
+  MaxCreatesPerDay: 10
+
 # 计费与充值（Dodo Payments）：默认关闭。开启后租户可预付购买点数，用量按运维配置的
 # 模型单价从余额扣减，prepaid 租户余额耗尽时 Gateway 返回 402。先在 deploy/.env 填好
 # AISW_DODO_API_KEY 与 AISW_DODO_WEBHOOK_SECRET（前缀 dodo_test_ / dodo_live_ 须与

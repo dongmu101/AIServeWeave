@@ -26,6 +26,7 @@ import (
 	"github.com/zeromicro/go-zero/rest"
 
 	"AIServeWeave/common/quota"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 )
 
 // Config is the whole of this service's configuration.
@@ -208,6 +209,97 @@ type Config struct {
 	// Billing 配置经 Dodo Payments 的预充值点数计费。它是可选的，默认关闭：关闭时
 	// 没有任何计费路由，不对任何用量扣费，也不会因余额拒绝任何 key。
 	Billing BillingConf `json:",optional"`
+
+	// TenantNodes lets tenants enroll Agents of their own, usable only by
+	// the enrolling tenant. On by default, it takes effect once the Registry
+	// and both bundle addresses are configured; see TenantNodesConf.Active.
+	// While it is not in effect the tenant node routes do not exist. The
+	// field is not optional on purpose: go-zero fills an optional block's
+	// defaults only when the block is present, which would turn the feature
+	// off for every file that omits it.
+	//
+	// TenantNodes 允许商户接入自己的 Agent，仅供接入它的商户使用。它默认开启，在 Registry
+	// 与两个接入包地址都已配置后生效，见 TenantNodesConf.Active。未生效时商户节点路由不存在。
+	// 该字段刻意不标 optional：go-zero 只在配置块存在时才为 optional 块填充默认值，那样会让
+	// 所有省略该块的配置文件都关闭本功能。
+	TenantNodes TenantNodesConf
+}
+
+// TenantNodesConf configures tenant-owned nodes. Once enabled every tenant,
+// self-registered ones included, may enroll up to MaxPerTenant nodes.
+//
+// TenantNodesConf 配置商户自有节点。一经开启，每个商户（包括自助注册的商户）都可以接入
+// 至多 MaxPerTenant 台节点。
+type TenantNodesConf struct {
+	// Enabled turns the feature on, which is the default. Set it to false to
+	// keep tenants from enrolling nodes even where everything it needs is
+	// configured.
+	//
+	// Enabled 开启本功能，默认即开启。设为 false 可在所需配置齐全时仍不让商户接入节点。
+	Enabled bool `json:",default=true"`
+	// RegistryAddr and GatewayAddr are the externally reachable host:port
+	// pairs written into each bundle. They are download content only, never
+	// addresses this service connects to.
+	//
+	// RegistryAddr 与 GatewayAddr 是写进每个接入包的对外可达 host:port。它们只是下载
+	// 内容，从不是本服务要连接的地址。
+	RegistryAddr string `json:",optional"`
+	GatewayAddr  string `json:",optional"`
+	// MaxPerTenant bounds a tenant's nodes that are not deleted.
+	//
+	// MaxPerTenant 限制一个商户未删除的节点数。
+	MaxPerTenant int `json:",default=10"`
+	// MaxCreatesPerDay bounds the bundles one tenant may create in any 24
+	// hours, deleted nodes included, so creating and deleting in a loop
+	// cannot grow the Registry's revoked list without limit.
+	//
+	// MaxCreatesPerDay 限制一个商户在任意 24 小时内可生成的接入包数（包括已删除的节点），
+	// 使反复生成再删除无法让 Registry 的停用名单无限增长。
+	MaxCreatesPerDay int `json:",default=10"`
+}
+
+// Active reports whether tenant-owned nodes are in effect: enabled, with both
+// bundle addresses set and the Registry fully configured. An enabled block
+// with no addresses is simply not in effect, so a deployment without a
+// Registry, or one that has not yet named its public addresses, starts as
+// before; Config.Validate rejects the half-configured cases.
+//
+// Active 报告商户自有节点是否生效：已开启、两个接入包地址都已设置，且 Registry 配置齐全。
+// 已开启但没有填地址的配置块只是不生效，因此没有 Registry、或尚未填写对外地址的部署照常
+// 启动；只配了一半的情形由 Config.Validate 拒绝。
+func (t TenantNodesConf) Active(registry RegistryConf) bool {
+	return t.Enabled && t.RegistryAddr != "" && t.GatewayAddr != "" && registryComplete(registry)
+}
+
+// registryComplete reports whether every Registry field enrollment needs is set.
+//
+// registryComplete 报告接入所需的 Registry 字段是否都已设置。
+func registryComplete(registry RegistryConf) bool {
+	return registry.Addr != "" && registry.AdminToken != "" && registry.CACertFile != ""
+}
+
+// validate checks an enabled tenant node block. Naming either address is
+// taken as intent to run the feature, so from then on both addresses and the
+// Registry must be right rather than the feature quietly staying off.
+//
+// validate 校验一个已开启的商户节点配置块。填写了任一地址即视为要运行本功能，此后两个地址
+// 与 Registry 都必须正确，而不是让本功能悄悄保持关闭。
+func (t TenantNodesConf) validate(registry RegistryConf) error {
+	if t.RegistryAddr != "" || t.GatewayAddr != "" {
+		if !registryComplete(registry) {
+			return errors.New("config: TenantNodes needs Registry.Addr, Registry.AdminToken and Registry.CACertFile")
+		}
+		if !agentenrollment.ValidAddress(t.RegistryAddr) || !agentenrollment.ValidAddress(t.GatewayAddr) {
+			return errors.New("config: TenantNodes.RegistryAddr and TenantNodes.GatewayAddr must both be host:port")
+		}
+	}
+	if t.MaxPerTenant < 1 || t.MaxPerTenant > 100 {
+		return errors.New("config: TenantNodes.MaxPerTenant must be between 1 and 100")
+	}
+	if t.MaxCreatesPerDay < 1 || t.MaxCreatesPerDay > 1000 {
+		return errors.New("config: TenantNodes.MaxCreatesPerDay must be between 1 and 1000")
+	}
+	return nil
 }
 
 // BillingConf configures prepaid-credit billing.
@@ -759,6 +851,11 @@ func (c Config) Validate() error {
 	}
 	if c.Billing.Enabled {
 		if err := c.Billing.validate(); err != nil {
+			return err
+		}
+	}
+	if c.TenantNodes.Enabled {
+		if err := c.TenantNodes.validate(c.Registry); err != nil {
 			return err
 		}
 	}

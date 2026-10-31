@@ -4,6 +4,11 @@
 .env.*
 !.env.example
 
+# Each deployment's own control plane configuration, created from
+# controlplane.example.yaml by install.sh / upgrade.sh.
+# 各部署自己的控制面配置，由 install.sh / upgrade.sh 从 controlplane.example.yaml 生成。
+controlplane.yaml
+
 # Per-host compose overrides, such as the one install.sh --signup writes.
 # 每台主机自己的 compose 覆盖文件，例如 install.sh --signup 写入的那份。
 docker-compose.override.yaml

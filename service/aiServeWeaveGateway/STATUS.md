@@ -381,6 +381,16 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 - **模型列表**：`GET /v1/models` 由 `Scheduler.Models(ctx)` 产出，有路由表时列别名、没有时列节点上报的模型，两种情况都过滤掉被排除的项。
 - **生效**：控制面写入后推进 generation，本副本的校验缓存随吊销监听一起清空；控制面 Redis 不可用时按 `-key-cache-ttl` 自然过期。工作流（`/v1/runs`、`/v1/jobs`）按模板而不是模型提交，不受此约束。
 
+## 专属节点
+
+控制面把一台节点绑定给某些商户后（契约 `common/nodeaccess`，见 [ControlPlane STATUS「专属节点」](../aiServeWeaveControlPlane/STATUS.md#专属节点租户节点池)），对某个租户关闭的节点集合会随 API Key 校验结果下发到 `Identity.Nodes`。鉴权中间件用 `scheduler.WithNodeAccess` 把它挂到请求 context 上。没有关闭的节点、静态 key 模式或免认证模式下不挂，行为与以前一样。
+
+- **在选节点时过滤**：`pickBy` 在节点选择器之后、能力判断之前跳过被关闭的节点。这是一道独立的检查：选择器读的是 Agent 自报的标签，这里读的是控制面按 node_id 建立的绑定，两者不能互相替代。推理（含未配置路由的模型名）、Messages 新会话、生图、转写、工作流提交、`/v1/models` 都经过这里。对外的候选查询 `MessagesCandidates`、`ImageCandidates`、`TranscriptionCandidates`、`WorkflowCapableCandidates` 都改成接收 `ctx`。
+- **派发给既定候选时再查一次**：`Messages`（工具续接）、`Transcribe`、`SubmitWorkflowTo`、`UploadInput` 发现节点已对调用方关闭时，返回 `ErrNodeNotAllowed`。它包装 `ErrNoCapableNode`，前门统一按「不存在」回答 404。续接遇到这种情况时会消费租约，会话结束，客户端需要重新开一个会话。
+- **不受约束的路径**：已提交 Job 的状态、事件、取消与产物读取，以及 J06 后台恢复（传入不带授权的 context）。run 已经在那台节点上，不算对节点的新使用；所以绑定变更前提交的 Job 仍能取回结果。
+- **升级顺序**：旧版 Gateway 会忽略校验响应里的 `nodes` 字段，绑定在它那里不生效。**先升级全部 Gateway，再在控制面绑定节点。**新版 Gateway 对接旧控制面时，没有这个字段，等于不限制。
+- **商户自有节点**：node_id 为 `tnode.<tenant_id>.<hex>` 的节点只给所有者商户用（见 [ControlPlane STATUS「商户自有节点」](../aiServeWeaveControlPlane/STATUS.md#商户自有节点)）。鉴权中间件只要有租户身份就用 `scheduler.WithNodeAccess(ctx, tenantID, policy)` 挂上访问判断，即使该租户没有被关闭的专属节点；`nodeAllowed` 统一走 `nodeaccess.Permits`，上面列出的选节点与派发检查对自有节点同样生效。归属从 id 本身解析，不依赖控制面下发。请求跑在自有节点上时，用量记录附带 `node_id`，控制面据此免扣费；其他节点不附带，推送内容与以前一致。旧版 Gateway 会把自有节点当作共享节点，所以控制面要在全部 Gateway 升级后才能开启该功能。
+
 ## 配额与限流
 
 三个维度，刻意是三个不同的问题（定义在 `common/quota`，由 `ratelimit/` 执行）：

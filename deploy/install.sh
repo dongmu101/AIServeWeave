@@ -125,7 +125,9 @@ if (( LOCAL_DISCOVERY == 0 )) && [[ "$(uname -s)" == Linux ]]; then
 fi
 
 # ---- controlplane.yaml / override ----
+ensure_controlplane_config
 ensure_access_log_off
+ensure_tenant_nodes
 ensure_config_readable
 if (( SIGNUP == 1 )); then
   if ! grep -q '^Signup:' controlplane.yaml; then

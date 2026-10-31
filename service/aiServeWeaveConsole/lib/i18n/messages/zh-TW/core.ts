@@ -8,6 +8,8 @@ const core = {
   "tenant.createApiKey": "建立 API Key",
   "tenant.revoked": "已撤銷",
   "tenant.revokeApiKey": "撤銷 API Key",
+  "tenant.auditNodeCreate": "接入自有節點",
+  "tenant.auditNodeRevoke": "刪除自有節點",
   "tenant.unableToConnectToTheServerCheckYour": "無法連線至伺服器，請檢查網路後重試。",
   "tenant.theSubmittedDataDoesNotMeetTheRequirements": "提交的內容不符合要求，請檢查後重試。",
   "tenant.enterAnEmailAddress": "請填寫電子郵件。",

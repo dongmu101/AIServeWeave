@@ -44,6 +44,7 @@ import (
 
 	"AIServeWeave/common/apikey"
 	"AIServeWeave/common/modelaccess"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
@@ -356,6 +357,11 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			KeyID    string             `json:"key_id"`
 			Limits   quota.Limits       `json:"limits"`
 			Models   modelaccess.Policy `json:"models"`
+			// Nodes is absent from a control plane that predates
+			// common/nodeaccess, which decodes as nothing excluded.
+			//
+			// 早于 common/nodeaccess 的控制面不带 Nodes，解码结果是什么都不排除。
+			Nodes nodeaccess.Policy `json:"nodes"`
 			// BillingBlocked is absent unless the tenant is prepaid with an
 			// exhausted balance.
 			//
@@ -376,6 +382,9 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 		identity := httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, Limits: decoded.Limits, BillingBlocked: decoded.BillingBlocked}
 		if !decoded.Models.Unrestricted() {
 			identity.Models = &decoded.Models
+		}
+		if !decoded.Nodes.Unrestricted() {
+			identity.Nodes = &decoded.Nodes
 		}
 		return identity, nil
 

@@ -372,6 +372,23 @@ const (
 	// TenantID 与其他平台动作一样是 PlatformScope，目标是发生变化的 scope：要么是
 	// PlatformScope，要么是被设置列表的那个租户 id。
 	ActionModelAccessUpdate = "model_access.update"
+	// ActionNodeAccessUpdate records an operator replacing the tenants a node
+	// is dedicated to (common/nodeaccess). Its TenantID is PlatformScope like
+	// the other platform actions, and its target is the node id.
+	//
+	// ActionNodeAccessUpdate 记录一次运维替换某节点专属租户（common/nodeaccess）的
+	// 操作。它的 TenantID 与其他平台动作一样是 PlatformScope，目标是节点 id。
+	ActionNodeAccessUpdate = "node_access.update"
+	// ActionTenantNodeCreate records a tenant creating an enrollment bundle
+	// for a node of its own. The token is never recorded.
+	//
+	// ActionTenantNodeCreate 记录商户为自有节点生成接入包。令牌从不被记录。
+	ActionTenantNodeCreate = "node.tenant.create"
+	// ActionTenantNodeRevoke records a tenant deleting a node of its own,
+	// which disables that identity at the Registry.
+	//
+	// ActionTenantNodeRevoke 记录商户删除一台自有节点，即在 Registry 停用该身份。
+	ActionTenantNodeRevoke = "node.tenant.revoke"
 	// Billing actions. Package and price writes are platform actions and use
 	// PlatformScope; a tenant's mode change and balance adjustment are
 	// recorded under PlatformScope too, with the tenant id as the target.
@@ -463,3 +480,51 @@ type ModelAccess struct {
 //
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (ModelAccess) TableName() string { return "model_access" }
+
+// NodeAccess is one dedicated node and the tenants it belongs to, as a
+// common/nodeaccess binding. A node with no row is shared, so making a node
+// shared again deletes its row rather than storing an empty array — there is
+// exactly one way to say "shared".
+//
+// NodeAccess 是一台专属节点及其所属租户，即一条 common/nodeaccess 绑定。没有行的
+// 节点是共享节点，因此让节点恢复共享是删除它的行，而不是存一个空数组——「共享」只有
+// 一种写法。
+type NodeAccess struct {
+	NodeID      string    `gorm:"primaryKey;size:128"`
+	TenantsJSON string    `gorm:"column:tenants_json;not null"`
+	UpdatedBy   string    `gorm:"size:32;not null"`
+	UpdatedAt   time.Time `gorm:"not null"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (NodeAccess) TableName() string { return "node_access" }
+
+// TenantNode is a node a tenant enrolled itself. Ownership is carried by the
+// node_id (common/nodeaccess.OwnerOf), not by this row: the row exists to
+// list, count and audit a tenant's nodes, so losing it can never open the
+// node to anyone else. A deleted node keeps its row, with RevokedAt set, so
+// creations stay countable against TenantNodesConf.MaxCreatesPerDay.
+//
+// TenantNode 是商户自己接入的节点。归属由 node_id 承载（common/nodeaccess.OwnerOf），
+// 而不是这一行：这一行用于列出、计数与审计商户的节点，因此丢失它也绝不会把节点开放给
+// 别人。已删除的节点保留其行并设置 RevokedAt，使生成次数仍能按
+// TenantNodesConf.MaxCreatesPerDay 计数。
+type TenantNode struct {
+	NodeID    string    `gorm:"primaryKey;size:128"`
+	TenantID  string    `gorm:"size:32;not null;index:idx_tenant_nodes_tenant_created,priority:1"`
+	CreatedBy string    `gorm:"size:32;not null"`
+	CreatedAt time.Time `gorm:"not null;index:idx_tenant_nodes_tenant_created,priority:2"`
+	// EnrollBy is when the bundle's one-time token expires.
+	//
+	// EnrollBy 是接入包一次性令牌的过期时间。
+	EnrollBy  time.Time `gorm:"not null"`
+	RevokedAt *time.Time
+	RevokedBy string `gorm:"size:32;not null"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (TenantNode) TableName() string { return "tenant_nodes" }

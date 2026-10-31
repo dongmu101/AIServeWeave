@@ -5,15 +5,20 @@
 # at a time and recreates only the containers whose image or configuration
 # changed.
 #
-# Local edits to deploy/controlplane.yaml (sign-up, access-log settings) are
-# stashed across the pull and restored afterwards; any other tracked change
-# stops the upgrade, because a fast-forward must not silently merge it.
+# deploy/controlplane.yaml is each deployment's own file: it is created from
+# controlplane.example.yaml when missing and is never tracked, so a pull
+# leaves it alone. A checkout from before that change still tracks it; the
+# first upgrade past it sets the local file aside across the pull and puts it
+# back untracked. Any other tracked change stops the upgrade, because a
+# fast-forward must not silently merge it.
 #
 # upgrade.sh 用当前分支的最新提交重新部署一套已有的 Docker Compose 安装：快进代码、备份
 # MySQL 与 Registry 身份材料、逐个重建镜像，并且只重建镜像或配置有变化的容器。
 #
-# deploy/controlplane.yaml 的本地修改（自助注册、访问日志设置）在拉取期间暂存、之后恢复；
-# 其他任何已跟踪文件的改动都会让升级停下，因为快进不能悄悄把它们合并掉。
+# deploy/controlplane.yaml 属于各个部署自己：缺失时由 controlplane.example.yaml 生成，不受 git
+# 跟踪，拉取不会动它。早于这一调整的检出仍跟踪该文件；越过这一调整的第一次升级会在拉取期间
+# 把本地文件挪到一边，拉取后以未跟踪文件放回。其他任何已跟踪文件的改动都会让升级停下，因为
+# 快进不能悄悄把它们合并掉。
 #
 # Usage:
 #   deploy/upgrade.sh                      # pull, back up, rebuild everything that changed
@@ -79,13 +84,42 @@ $dirty"
   if [[ "$old" == "$new" ]]; then
     (( FORCE == 1 )) || { log "已是最新（${old:0:12}），无需重新部署；要强制重建加 --force"; exit 0; }
   else
-    stashed=0
-    if ! git -C "$ROOT_DIR" diff --quiet -- deploy/controlplane.yaml; then
-      git -C "$ROOT_DIR" stash push --quiet -m "upgrade.sh $(date +%F-%H%M%S)" -- deploy/controlplane.yaml
-      stashed=1
+    # Whether the old and new commits track controlplane.yaml decides how
+    # the local copy survives the fast-forward.
+    #
+    # 新旧两个提交是否跟踪 controlplane.yaml，决定本地这份配置如何在快进中保留下来。
+    config="$DEPLOY_DIR/controlplane.yaml"
+    aside="$DEPLOY_DIR/.controlplane.yaml.upgrade"
+    old_tracks=0 new_tracks=0
+    git -C "$ROOT_DIR" ls-files --error-unmatch deploy/controlplane.yaml >/dev/null 2>&1 && old_tracks=1
+    git -C "$ROOT_DIR" cat-file -e "$new:deploy/controlplane.yaml" 2>/dev/null && new_tracks=1
+    (( old_tracks == 1 || new_tracks == 0 )) ||
+      die "上游 ${new:0:12} 重新跟踪了 deploy/controlplane.yaml，快进会覆盖本机配置；先备份该文件再手工处理，代码未改动"
+    [[ ! -e "$aside" ]] ||
+      die "$aside 已存在（上次升级中断？），确认其内容后移走再升级，代码未改动"
+
+    stashed=0 moved=0
+    if (( old_tracks == 1 && new_tracks == 1 )); then
+      # Both still track it: carry the local edits across with a stash.
+      # 两边都仍跟踪：用 stash 把本地修改带过快进。
+      if ! git -C "$ROOT_DIR" diff --quiet -- deploy/controlplane.yaml; then
+        git -C "$ROOT_DIR" stash push --quiet -m "upgrade.sh $(date +%F-%H%M%S)" -- deploy/controlplane.yaml
+        stashed=1
+      fi
+    elif (( old_tracks == 1 )); then
+      # The new commit stops tracking it: set the local copy aside so the
+      # fast-forward can delete the tracked one, then put it back untracked.
+      # 新提交不再跟踪：先把本地这份挪开，让快进删除被跟踪的那份，再以未跟踪文件放回。
+      if [[ -f "$config" ]]; then
+        cp -p "$config" "$aside"
+        moved=1
+      fi
+      git -C "$ROOT_DIR" checkout --quiet -- deploy/controlplane.yaml
     fi
+
     if ! git -C "$ROOT_DIR" merge --ff-only --quiet '@{u}'; then
       (( stashed == 0 )) || git -C "$ROOT_DIR" stash pop --quiet
+      (( moved == 0 )) || mv -f "$aside" "$config"
       die "无法快进到上游（本地有未推送的提交？），代码未改动"
     fi
     if (( stashed == 1 )) && ! git -C "$ROOT_DIR" stash pop --quiet; then
@@ -93,6 +127,10 @@ $dirty"
   手工解决 deploy/controlplane.yaml 中的冲突标记后执行:
     git -C $ROOT_DIR reset -q -- deploy/controlplane.yaml && git -C $ROOT_DIR stash drop
   再运行: deploy/upgrade.sh --no-pull --force"
+    fi
+    if (( moved == 1 )); then
+      mv -f "$aside" "$config"
+      log "deploy/controlplane.yaml 已改为本机文件、不再受 git 跟踪，内容保持原样"
     fi
     log "代码 ${old:0:12} → ${new:0:12}"
 
@@ -107,13 +145,15 @@ fi
 # ---- configuration that a new version may require ----
 ensure_env
 fill_secrets
+ensure_controlplane_config
 ensure_access_log_off
+ensure_tenant_nodes
 ensure_config_readable
 if [[ -n "$FROM" ]]; then
   added="$(git -C "$ROOT_DIR" diff "$FROM" HEAD -- deploy/.env.example | sed -n 's/^+\([A-Z_][A-Z0-9_]*\)=.*/\1/p' || true)"
   [[ -z "$added" ]] || warn "新版本 .env.example 新增了变量，确认 deploy/.env 是否需要设置: $(echo $added)"
-  git -C "$ROOT_DIR" diff --quiet "$FROM" HEAD -- deploy/controlplane.yaml ||
-    warn "新版本改动了 deploy/controlplane.yaml，确认与本地修改合并后的结果符合预期"
+  git -C "$ROOT_DIR" diff --quiet "$FROM" HEAD -- deploy/controlplane.example.yaml ||
+    warn "新版本改动了 deploy/controlplane.example.yaml，对照差异确认本机 deploy/controlplane.yaml 是否需要同步: git -C $ROOT_DIR diff ${FROM:0:12} HEAD -- deploy/controlplane.example.yaml"
 fi
 compose config --quiet || die "compose 配置校验失败，服务未改动"
 
@@ -139,7 +179,8 @@ fi
 echo
 log "重新部署完成：$(source_version)"
 if [[ -n "$FROM" ]]; then
-  echo "  回滚代码: cd $ROOT_DIR && git stash && git checkout ${FROM:0:12} && git stash pop && deploy/upgrade.sh --no-pull --force --no-backup"
+  echo "  回滚代码: cd $ROOT_DIR && cp deploy/controlplane.yaml deploy/controlplane.yaml.bak && git stash && git checkout ${FROM:0:12} && git stash pop && cp deploy/controlplane.yaml.bak deploy/controlplane.yaml && deploy/upgrade.sh --no-pull --force --no-backup"
+  echo "            旧版本若仍跟踪 controlplane.yaml，checkout 会覆盖它，所以先备份再放回"
   echo "            回滚后处于 detached HEAD，恢复跟踪分支用 git checkout <分支名>"
 fi
 (( BACKUP == 0 )) || echo "  本次备份: ${BACKUP_DIR}（数据库恢复见 deploy/database-recovery.md）"

@@ -41,7 +41,7 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 			field+" is not supported by this gateway")
 		return
 	}
-	if h.useNativeResponses(req) {
+	if h.useNativeResponses(r.Context(), req) {
 		h.nativeResponses(w, r, req, raw, start)
 		return
 	}
@@ -140,7 +140,7 @@ func (h *handlers) responsesOnce(w http.ResponseWriter, r *http.Request, req res
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(body)
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointResponses, resp.Model)
+	h.recordUsageOn(r.Context(), candidate.NodeID, resp.Usage, time.Since(start), UsageEndpointResponses, resp.Model)
 }
 
 // persistResponseTurn asynchronously persists one turn's contribution —
@@ -369,7 +369,7 @@ func (h *handlers) responsesStream(w http.ResponseWriter, r *http.Request, req r
 		terminal = "response.incomplete"
 	}
 	em.event(terminal, map[string]any{"response": obj})
-	h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointResponses, obj.Model)
+	h.recordUsageOn(r.Context(), candidate.NodeID, usage, time.Since(start), UsageEndpointResponses, obj.Model)
 
 	// An assistant reply is only worth persisting when the stream produced
 	// something: text or a tool call.

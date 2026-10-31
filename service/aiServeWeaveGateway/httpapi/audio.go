@@ -145,7 +145,7 @@ func (h *handlers) transcribeAudio(w http.ResponseWriter, r *http.Request, task 
 		return
 	}
 
-	candidates := h.sched.TranscriptionCandidates(model)
+	candidates := h.sched.TranscriptionCandidates(r.Context(), model)
 	if len(candidates) == 0 {
 		handleDispatchError(w, h.logger, scheduler.ErrNoCapableNode)
 		return

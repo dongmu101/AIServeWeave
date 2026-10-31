@@ -41,6 +41,12 @@ type UsageRecord struct {
 	CompletionTokens int64     `gorm:"not null"`
 	TotalTokens      int64     `gorm:"not null"`
 	CreatedAt        time.Time `gorm:"not null"`
+	// NodeID is the tenant-owned node that served the request, as the Gateway
+	// reported it, or empty. It is used to price the record and not stored.
+	//
+	// NodeID 是 Gateway 上报的、服务该请求的商户自有节点，没有则为空。它只用于给记录
+	// 定价，不被存储。
+	NodeID string `gorm:"-"`
 }
 
 // TableName returns "usage_records", the table UsageRecord persists to.

@@ -9,6 +9,7 @@ import (
 
 	"AIServeWeave/common/apikey"
 	"AIServeWeave/common/modelaccess"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -232,6 +233,15 @@ type Verification struct {
 	// 下发，理由与 Limits 相同；SetModelAccess 会丢弃全部已缓存的校验结果，使变更
 	// 不必等它们过期。两级都不做限制时它为 nil，这让 Verification 保持可比较。
 	Models *modelaccess.Policy
+	// Nodes is the set of dedicated nodes closed to the tenant
+	// (common/nodeaccess). It rides the verification for the reason Models
+	// does, and SetNodeAccess drops every cached verification the same way. It
+	// is nil when no node is closed to the tenant.
+	//
+	// Nodes 是对该租户关闭的专属节点集合（common/nodeaccess）。它随校验结果下发的
+	// 理由与 Models 相同，SetNodeAccess 也以同样方式丢弃全部已缓存的校验结果。没有
+	// 节点对该租户关闭时它为 nil。
+	Nodes *nodeaccess.Policy
 	// BillingBlocked reports a prepaid tenant whose balance is exhausted. The
 	// key still authenticates — the Gateway answers 402 rather than 401, so
 	// the caller learns to top up rather than to replace a working key.
@@ -298,6 +308,10 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	if err != nil {
 		return Verification{}, err
 	}
+	nodes, err := s.nodePolicy(ctx, tenant.ID)
+	if err != nil {
+		return Verification{}, err
+	}
 	blocked, err := s.billingBlocked(ctx, tenant.ID)
 	if err != nil {
 		return Verification{}, err
@@ -305,6 +319,9 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	verification := Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits(), BillingBlocked: blocked}
 	if !policy.Unrestricted() {
 		verification.Models = &policy
+	}
+	if !nodes.Unrestricted() {
+		verification.Nodes = &nodes
 	}
 	return verification, nil
 }

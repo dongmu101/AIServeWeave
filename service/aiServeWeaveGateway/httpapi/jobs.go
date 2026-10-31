@@ -350,7 +350,7 @@ func (h *handlers) parseRunRequest(w http.ResponseWriter, r *http.Request) (runR
 // 提交——全程只针对这一个候选，遵循 SubmitWorkflowTo「不重试」的约定
 // （STATUS.md 的 P04；换个地方重试为何在这里不安全，见该方法的文档注释）。
 func (h *handlers) submitWithFiles(ctx context.Context, req runtime.WorkflowRequest, pending []workflow.PendingFile, files *uploadedFiles) (runtime.WorkflowRun, scheduler.Candidate, error) {
-	candidates := h.sched.WorkflowCapableCandidates()
+	candidates := h.sched.WorkflowCapableCandidates(ctx)
 	if len(candidates) == 0 {
 		return runtime.WorkflowRun{}, scheduler.Candidate{}, scheduler.ErrNoCapableNode
 	}

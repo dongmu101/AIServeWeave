@@ -11,6 +11,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/nodeid"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/identitystore"
 	"AIServeWeave/service/aiServeWeaveRegistry/internal/tokenstore"
@@ -105,6 +106,18 @@ func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*
 		s.metrics.Register(ResultUnauthorized)
 		return nil, status.Errorf(codes.PermissionDenied,
 			"bootstrap token was already presented for node_id %q, not %q", grant.ClaimedNodeID, nodeID)
+	}
+
+	// A tenant-owned node_id names the only tenant that may use it, so it
+	// must come from a token minted for exactly that id. A self-chosen one,
+	// even if an operator later approved it, would let a node claim to be
+	// another tenant's machine and receive that tenant's traffic.
+	// 商户自有 node_id 写明了唯一能用它的商户，因此只能来自为该 id 签发的令牌。自选的
+	// id 即使之后被运维批准，也会让一台节点冒充另一商户的机器并接到该商户的流量。
+	if _, owned := nodeaccess.OwnerOf(nodeID); owned && boundNodeID == "" {
+		s.metrics.Register(ResultUnauthorized)
+		return nil, status.Errorf(codes.PermissionDenied,
+			"node_id %q is reserved for tenant-owned nodes and needs a token bound to it", nodeID)
 	}
 
 	// A disabled node_id (TokenAdmin.DisableNode, STATUS.md's S03) is refused

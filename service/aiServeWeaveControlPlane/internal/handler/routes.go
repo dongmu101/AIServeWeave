@@ -8,6 +8,7 @@ import (
 
 	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/modelroute"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/workflowtemplate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/apidocs"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
@@ -70,6 +71,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodPut, Path: "/operator/v1/model-access/:scope", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/model-access/:scope", requirePlatformSession(ctx, setModelAccess(ctx)))},
 	}, rest.WithMaxBytes(modelaccess.MaxDocumentBytes))
+	// Node access (which tenants a dedicated node belongs to) is platform-only
+	// for the same reason: a tenant able to bind nodes could take any node
+	// away from every other tenant.
+	//
+	// 节点授权（专属节点属于哪些租户）出于同样理由只对平台开放：能绑定节点的租户，
+	// 可以把任何节点从其他所有租户手里拿走。
+	server.AddRoutes([]rest.Route{
+		{Method: http.MethodGet, Path: "/operator/v1/node-access", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/node-access", requirePlatformSession(ctx, listNodeAccess(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/node-access/:node_id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/node-access/:node_id", requirePlatformSession(ctx, setNodeAccess(ctx)))},
+	}, rest.WithMaxBytes(nodeaccess.MaxDocumentBytes))
 
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodGet, Path: "/operator/v1/workflow-templates", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates", requirePlatformSession(ctx, listWorkflowTemplates(ctx)))},
@@ -170,6 +181,18 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPost, "/operator/v1/billing/refund-requests/:id/approve", requirePlatformSession, reviewRefundRequest(ctx, refundActionApprove)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/orders/:id/refund", requirePlatformSession, createOperatorRefund(ctx)),
 		}, rest.WithTimeout(BillingCallTimeout))
+	}
+
+	// Tenant-owned nodes are mounted only while they are in effect, like
+	// billing only when enabled.
+	//
+	// 商户自有节点只在生效时挂载，与计费只在开启时挂载相同。
+	if ctx.Config.TenantNodes.Active(ctx.Config.Registry) {
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodGet, Path: "/admin/v1/nodes", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes", requireSession(ctx, listTenantNodes(ctx)))},
+			{Method: http.MethodPost, Path: "/admin/v1/nodes", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes", requireSession(ctx, createTenantNode(ctx)))},
+			{Method: http.MethodDelete, Path: "/admin/v1/nodes/:node_id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes/:node_id", requireSession(ctx, revokeTenantNode(ctx)))},
+		})
 	}
 
 	server.AddRoutes([]rest.Route{

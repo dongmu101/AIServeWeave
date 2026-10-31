@@ -55,7 +55,7 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	resp, _, err := h.sched.Embed(r.Context(), runtime.EmbeddingRequest{Model: req.Model, Input: inputs})
+	resp, candidate, err := h.sched.Embed(r.Context(), runtime.EmbeddingRequest{Model: req.Model, Input: inputs})
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
@@ -82,5 +82,5 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 	//
 	// 嵌入请求只有输入 token、没有输出 token，因此这里只贡献输入合计，不碰输出速率
 	// 分布——本该如此：这里没有输出流，也就没有速率可言。
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointEmbeddings, req.Model)
+	h.recordUsageOn(r.Context(), candidate.NodeID, resp.Usage, time.Since(start), UsageEndpointEmbeddings, req.Model)
 }

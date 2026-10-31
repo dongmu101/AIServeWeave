@@ -33,13 +33,13 @@ func nativeResultIDs(req anthropicMessagesRequest) []string {
 	return ids
 }
 
-func (h *handlers) useNativeMessages(req anthropicMessagesRequest) bool {
+func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesRequest) bool {
 	for _, id := range nativeResultIDs(req) {
 		if strings.HasPrefix(id, "toolu_aisw_") {
 			return true
 		}
 	}
-	return len(h.sched.MessagesCandidates(req.Model)) > 0
+	return len(h.sched.MessagesCandidates(ctx, req.Model)) > 0
 }
 
 // nativeMessages preserves native block order and authenticates every
@@ -218,7 +218,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 					w.Header().Set("Content-Type", "application/json")
 					_ = json.NewEncoder(w).Encode(response)
 				}
-				h.recordUsage(r.Context(), usage, time.Since(start), endpoint, req.Model)
+				h.recordUsageOn(r.Context(), record.Candidate.NodeID, usage, time.Since(start), endpoint, req.Model)
 				return
 			}
 		}

@@ -12,8 +12,8 @@ import (
 //
 // ImageCandidates 对以图像生成能力发布了 model 的节点排序。图像模型不带聊天能力，
 // 因此这里永远不会选中聊天模型。
-func (s *Scheduler) ImageCandidates(model string) []Candidate {
-	return s.candidates(model, runtime.CapabilityImageGeneration)
+func (s *Scheduler) ImageCandidates(ctx context.Context, model string) []Candidate {
+	return s.candidates(ctx, model, runtime.CapabilityImageGeneration)
 }
 
 // GenerateImage dispatches req and returns the image's metadata together with
@@ -29,7 +29,7 @@ func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest)
 	if !modelAllowed(ctx, req.Model) {
 		return runtime.ImageMeta{}, nil, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.ImageCandidates(req.Model)
+	candidates := s.ImageCandidates(ctx, req.Model)
 	s.metrics.Selection(runtime.CapabilityImageGeneration, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.ImageMeta{}, nil, Candidate{}, ErrNoCapableNode

@@ -110,6 +110,13 @@ func run() error {
 	if cfg.Database.AutoMigrate {
 		logger.Warn("AutoMigrate is on; this process applies embedded versioned SQL at startup")
 	}
+	// Tenant nodes are on by default, so say why they are absent when the
+	// configuration leaves them out of effect.
+	//
+	// 商户自有节点默认开启，因此配置使其未生效时说明原因。
+	if cfg.TenantNodes.Enabled && !cfg.TenantNodes.Active(cfg.Registry) {
+		logger.Info("tenant nodes are not in effect: set TenantNodes.RegistryAddr, TenantNodes.GatewayAddr and the Registry block to let tenants enroll their own nodes")
+	}
 
 	server, err := rest.NewServer(cfg.RestConf, rest.WithNotFoundHandler(handler.NotFoundHandler(svcCtx)))
 	if err != nil {

@@ -15,7 +15,7 @@ import (
 // checkSchemaObjects validates the mapped columns and declared indexes without DDL.
 // checkSchemaObjects 校验映射列与声明索引，不执行 DDL。
 func checkSchemaObjects(db *gorm.DB, all bool) error {
-	models := []any{&model.Tenant{}, &model.User{}, &model.PlatformOperator{}, &model.APIKey{}, &model.AuditLog{}, &revocationOutbox{}, &model.ModelAccess{}}
+	models := []any{&model.Tenant{}, &model.User{}, &model.PlatformOperator{}, &model.APIKey{}, &model.AuditLog{}, &revocationOutbox{}, &model.ModelAccess{}, &model.NodeAccess{}, &model.TenantNode{}}
 	if all {
 		models = append(models, &model.RouteRevision{}, &model.RouteActive{}, &model.WorkflowTemplateRevision{}, &model.WorkflowTemplateActive{}, &model.APIDoc{})
 		if db.Name() == "mysql" {

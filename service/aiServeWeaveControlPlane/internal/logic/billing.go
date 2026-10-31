@@ -18,6 +18,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -362,10 +363,11 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 }
 
 // chargeUsage prices records and charges them in one store transaction,
-// dropping cached verifications when a tenant's balance ran out.
+// dropping cached verifications when a tenant's balance ran out. A request
+// served by the tenant's own node costs nothing.
 //
 // chargeUsage 为 records 定价并在一次 store 事务中扣费；租户余额耗尽时丢弃已缓存的
-// 校验结果。
+// 校验结果。由商户自己的节点服务的请求不收费。
 func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) error {
 	prices, err := s.store.ListModelPrices(ctx)
 	if err != nil {
@@ -383,6 +385,12 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 			price = byModel[model.DefaultPriceModel]
 		}
 		cost := price.Cost(r.PromptTokens, r.CompletionTokens)
+		// A tenant's own hardware is not billed; the charge row is still
+		// written, at zero, so reports count the request.
+		// 商户自己的硬件不计费；费用行仍以零写入，使报表能计入这次请求。
+		if owner, owned := nodeaccess.OwnerOf(r.NodeID); owned && owner == r.TenantID {
+			cost = 0
+		}
 		charges = append(charges, model.UsageCharge{
 			RequestID: r.ID, TenantID: r.TenantID, Model: r.Model, CostMicro: cost, CreatedAt: now,
 		})

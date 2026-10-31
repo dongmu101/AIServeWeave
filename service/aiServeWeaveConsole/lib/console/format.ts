@@ -196,6 +196,8 @@ export function auditActions(locale: Locale = DEFAULT_LOCALE): readonly { value:
   { value: "tenant.limits", label: t("common.changeQuotas") },
   { value: "tenant.create", label: t("common.createTenant") },
   { value: "tenant.signup", label: t("common.selfRegisterTenant") },
+  { value: "node.tenant.create", label: t("tenant.auditNodeCreate") },
+  { value: "node.tenant.revoke", label: t("tenant.auditNodeRevoke") },
 ];
 }
 /** AUDIT_ACTIONS preserves default-language compatibility. / AUDIT_ACTIONS 保留默认语言的兼容接口。 */

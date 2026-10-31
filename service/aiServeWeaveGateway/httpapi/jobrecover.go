@@ -84,7 +84,7 @@ type JobRecoveryClient interface {
 // 而不是具体的 *scheduler.Scheduler，理由与 jobsync.go 的 workflowStatusAsker
 // 相同：测试能针对一个桩来驱动它，而无需搭起隧道。
 type jobRecoverCandidates interface {
-	WorkflowCapableCandidates() []scheduler.Candidate
+	WorkflowCapableCandidates(ctx context.Context) []scheduler.Candidate
 }
 
 // jobRecoverConfig collects the recoverer's tunable bounds, defaulted by
@@ -219,7 +219,9 @@ func (jr *jobRecoverer) run() {
 // 「一次一轮」纪律，好让一个变慢的控制面推迟下一轮扫描，而不是让并发的多轮
 // 扫描堆在一起。
 func (jr *jobRecoverer) tick() {
-	candidates := jr.sched.WorkflowCapableCandidates()
+	// No node access policy: a run already on a node is not a new use of it.
+	// 不带节点授权：已经在节点上的 run 不是对该节点的新使用。
+	candidates := jr.sched.WorkflowCapableCandidates(context.Background())
 	if len(candidates) == 0 {
 		return
 	}

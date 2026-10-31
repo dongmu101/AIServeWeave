@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"AIServeWeave/common/modelaccess"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
@@ -39,6 +40,15 @@ type Identity struct {
 	// key 与免认证两种模式下它也保持为 nil。中间件把它交给调度器——每个模型都在那里
 	// 被解析，因此也在那里执行。
 	Models *modelaccess.Policy
+	// Nodes is the set of dedicated nodes closed to the tenant, learned from
+	// the same verification. It is nil when none is, which is also what the
+	// static-key and unauthenticated modes leave it as. The middleware hands
+	// it to the scheduler, where every node is chosen.
+	//
+	// Nodes 是对该租户关闭的专属节点集合，与同一次校验一同得知。没有节点关闭时它为
+	// nil，静态 key 与免认证两种模式下它也保持为 nil。中间件把它交给调度器——每个
+	// 节点都在那里被选出。
+	Nodes *nodeaccess.Policy
 	// BillingBlocked marks a prepaid tenant whose balance is exhausted. The
 	// key authenticated; the request is refused with 402 so the caller tops
 	// up rather than replacing a key that works.
@@ -221,6 +231,16 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 		ctx := context.WithValue(r.Context(), identityKey{}, identity)
 		if identity.Models != nil {
 			ctx = scheduler.WithModelAccess(ctx, *identity.Models)
+		}
+		// Attached for every tenant, restricted or not: whether a tenant-owned
+		// node admits this caller depends only on who the caller is.
+		// 对每个租户都附上，无论是否受限：一台商户自有节点是否接纳该调用方，只取决于调用方是谁。
+		if identity.TenantID != "" || identity.Nodes != nil {
+			var policy nodeaccess.Policy
+			if identity.Nodes != nil {
+				policy = *identity.Nodes
+			}
+			ctx = scheduler.WithNodeAccess(ctx, identity.TenantID, policy)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

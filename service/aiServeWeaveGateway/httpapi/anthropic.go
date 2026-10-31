@@ -701,7 +701,7 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "max_tokens is required and must be greater than zero")
 		return
 	}
-	if h.useNativeMessages(req) {
+	if h.useNativeMessages(r.Context(), req) {
 		h.nativeMessages(w, r, req, raw, start)
 		return
 	}
@@ -748,7 +748,7 @@ func (h *handlers) anthropicMessagesOnce(w http.ResponseWriter, r *http.Request,
 	h.logTTFT(r, canonical.Model, candidate.NodeID, start, false)
 	// Same reasoning as chatNonStream (chat.go): a non-streamed response's
 	// first byte is its last, so only the total response time is recorded.
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointAnthropicMessages, canonical.Model)
+	h.recordUsageOn(r.Context(), candidate.NodeID, resp.Usage, time.Since(start), UsageEndpointAnthropicMessages, canonical.Model)
 }
 
 // -----------------------------------------------------------------------
@@ -925,7 +925,7 @@ func (h *handlers) anthropicMessagesStream(w http.ResponseWriter, r *http.Reques
 			})
 			_ = writeAnthropicSSE(w, "message_stop", anthropicMessageStopEvent{Type: "message_stop"})
 			flusher.Flush()
-			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointAnthropicMessages, canonical.Model)
+			h.recordUsageOn(r.Context(), candidate.NodeID, usage, time.Since(start), UsageEndpointAnthropicMessages, canonical.Model)
 			return
 		}
 		if err != nil {

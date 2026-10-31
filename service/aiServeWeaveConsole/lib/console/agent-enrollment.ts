@@ -19,8 +19,14 @@ export function parseEnrollmentCA(value: unknown): EnrollmentCA {
 /** parseEnrollmentBundle bounds binary decoding and enforces a fixed safe filename.
  * parseEnrollmentBundle 限制二进制解码大小，并强制使用固定格式的安全文件名。 */
 export function parseEnrollmentBundle(value: unknown): EnrollmentBundle {
+  return parseBundleFor(value, /^node_[a-f0-9]{32}$/);
+}
+
+/** parseBundleFor is parseEnrollmentBundle for node ids matching nodeId.
+ * parseBundleFor 是针对匹配 nodeId 的节点 id 的 parseEnrollmentBundle。 */
+export function parseBundleFor(value: unknown, nodeId: RegExp): EnrollmentBundle {
   const data = record(value);
-  if (typeof data.node_id !== "string" || !/^node_[a-f0-9]{32}$/.test(data.node_id) || data.filename !== `aiserveweave-enrollment-${data.node_id}.zip` || typeof data.expires_at !== "string" || !Number.isFinite(Date.parse(data.expires_at)) || typeof data.archive_base64 !== "string" || data.archive_base64.length > 128 * 1024 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data.archive_base64)) throw new ApiError("contract");
+  if (typeof data.node_id !== "string" || !nodeId.test(data.node_id) || data.filename !== `aiserveweave-enrollment-${data.node_id}.zip` || typeof data.expires_at !== "string" || !Number.isFinite(Date.parse(data.expires_at)) || typeof data.archive_base64 !== "string" || data.archive_base64.length > 128 * 1024 || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(data.archive_base64)) throw new ApiError("contract");
   let bytes: Uint8Array<ArrayBuffer>;
   try { bytes = Uint8Array.from(atob(data.archive_base64), char => char.charCodeAt(0)); } catch { throw new ApiError("contract"); }
   if (bytes.length < 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 0x03 || bytes[3] !== 0x04) throw new ApiError("contract");

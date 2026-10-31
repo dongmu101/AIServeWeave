@@ -305,6 +305,68 @@ type ModelAccess interface {
 	DeleteModelAccess(ctx context.Context, scope string) error
 }
 
+// NodeAccess persists common/nodeaccess bindings, one row per dedicated node.
+// Like ModelAccess it speaks rows so the encoding stays in the logic layer.
+//
+// NodeAccess 持久化 common/nodeaccess 绑定，每台专属节点一行。与 ModelAccess 一样
+// 以行交换数据，使编码留在 logic 层。
+type NodeAccess interface {
+	// ListNodeAccess reads every row, ordered by node id. The logic layer caps
+	// the rows at nodeaccess.MaxDedicatedNodes, so the read is bounded.
+	//
+	// ListNodeAccess 按节点 id 顺序读取全部行。logic 层把行数限制在
+	// nodeaccess.MaxDedicatedNodes 以内，因此这次读取是有界的。
+	ListNodeAccess(ctx context.Context) ([]model.NodeAccess, error)
+	// PutNodeAccess inserts or replaces the row for row.NodeID.
+	//
+	// PutNodeAccess 插入或替换 row.NodeID 对应的行。
+	PutNodeAccess(ctx context.Context, row *model.NodeAccess) error
+	// DeleteNodeAccess removes the row for nodeID. Deleting a node with no row
+	// is not an error: the result, "shared", is what was asked for.
+	//
+	// DeleteNodeAccess 删除 nodeID 对应的行。删除一个本来就没有行的节点不算错误：
+	// 结果「共享」正是调用方想要的。
+	DeleteNodeAccess(ctx context.Context, nodeID string) error
+}
+
+// TenantNodes persists the nodes tenants enrolled themselves. Ownership is in
+// each node_id; these rows list, count and audit them.
+//
+// TenantNodes 持久化商户自己接入的节点。归属在每个 node_id 里；这些行用于列出、计数与审计。
+type TenantNodes interface {
+	// CreateTenantNode inserts row. ErrConflict if its node id exists.
+	//
+	// CreateTenantNode 插入 row；其节点 id 已存在时返回 ErrConflict。
+	CreateTenantNode(ctx context.Context, row *model.TenantNode) error
+	// GetTenantNode reads the row for nodeID. ErrNotFound if there is none.
+	//
+	// GetTenantNode 读取 nodeID 对应的行；不存在时返回 ErrNotFound。
+	GetTenantNode(ctx context.Context, nodeID string) (model.TenantNode, error)
+	// ListTenantNodes reads at most limit of tenantID's rows, deleted ones
+	// included, newest first.
+	//
+	// ListTenantNodes 读取 tenantID 至多 limit 行（包括已删除的），最新的在前。
+	ListTenantNodes(ctx context.Context, tenantID string, limit int) ([]model.TenantNode, error)
+	// CountTenantNodes counts tenantID's rows not deleted, and its rows
+	// created at or after since, deleted or not.
+	//
+	// CountTenantNodes 统计 tenantID 未删除的行数，以及在 since 及之后创建的行数（无论
+	// 是否已删除）。
+	CountTenantNodes(ctx context.Context, tenantID string, since time.Time) (active, created int64, err error)
+	// RevokeTenantNode marks tenantID's undeleted row for nodeID deleted.
+	// ErrNotFound when there is no such row, so one tenant cannot learn
+	// whether another's node exists.
+	//
+	// RevokeTenantNode 把 tenantID 名下 nodeID 对应的未删除行标记为已删除。没有这样的
+	// 行时返回 ErrNotFound，使一个商户无法得知另一商户的节点是否存在。
+	RevokeTenantNode(ctx context.Context, tenantID, nodeID, by string, at time.Time) error
+	// DeleteTenantNode removes the row for nodeID, undoing a creation whose
+	// bundle could not be issued.
+	//
+	// DeleteTenantNode 删除 nodeID 对应的行，用于撤销一次未能签发接入包的生成。
+	DeleteTenantNode(ctx context.Context, nodeID string) error
+}
+
 // Users persists the people who sign in to the Console.
 //
 // Users 持久化登录 Console 的人。
@@ -866,6 +928,8 @@ type Store interface {
 	WorkflowTemplates
 	Tenants
 	ModelAccess
+	NodeAccess
+	TenantNodes
 	Users
 	PlatformOperators
 	APIKeys

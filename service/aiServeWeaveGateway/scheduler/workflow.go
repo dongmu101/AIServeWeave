@@ -52,7 +52,7 @@ func (s *Scheduler) SubmitWorkflow(ctx context.Context, req runtime.WorkflowRequ
 // queueSubmitWorkflow 唯一会等待的条件。候选完全不存在（ErrNoCapableNode）与候选以
 // 不可重试错误失败这两种情形下它都是 false，因为等待无法改变这两种结果中的任何一个。
 func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (run runtime.WorkflowRun, c Candidate, err error, exhausted bool) {
-	candidates := s.workflowCandidates(runtime.CapabilityWorkflowExecution, req.MinGPUMemoryBytes)
+	candidates := s.workflowCandidates(ctx, runtime.CapabilityWorkflowExecution, req.MinGPUMemoryBytes)
 	s.metrics.Selection(runtime.CapabilityWorkflowExecution, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.WorkflowRun{}, Candidate{}, ErrNoCapableNode, false
@@ -167,6 +167,9 @@ func (s *Scheduler) releaseQueueSlot() {
 // 可能尝试的每一个候选都重新上传一遍，正是这个 API 主动体现、而不是悄悄
 // 掩盖的「不跨候选自动重试」这个取舍。
 func (s *Scheduler) SubmitWorkflowTo(ctx context.Context, c Candidate, req runtime.WorkflowRequest) (runtime.WorkflowRun, error) {
+	if !nodeAllowed(ctx, c.NodeID) {
+		return runtime.WorkflowRun{}, ErrNodeNotAllowed
+	}
 	run, err := s.server.Runtime(c.NodeID, c.RuntimeID).Submit(ctx, req)
 	s.breakers.record(c, err, s.clock.Now())
 	s.metrics.Dispatch(c, err)
@@ -184,6 +187,9 @@ func (s *Scheduler) SubmitWorkflowTo(ctx context.Context, c Candidate, req runti
 // 引用这次上传的结果（STATUS.md 的 P04）。与相反方向的 OpenArtifact 一样，
 // body 随隧道的消费而被读取：这里不会有什么完整持有一次上传。
 func (s *Scheduler) UploadInput(ctx context.Context, c Candidate, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
+	if !nodeAllowed(ctx, c.NodeID) {
+		return runtime.InputUploadResult{}, ErrNodeNotAllowed
+	}
 	result, err := s.server.Runtime(c.NodeID, c.RuntimeID).UploadInput(ctx, meta, body)
 	s.breakers.record(c, err, s.clock.Now())
 	s.metrics.Dispatch(c, err)
@@ -319,14 +325,14 @@ func submitRetryable(err error) bool {
 // 独占它唯一的 GPU 数秒到数分钟，背后的机群也小，因此精确的「空闲槽、再队列占用」排序
 // 比 PolicyPowerOfTwo 的分散效果更有价值——后者可能在存在空闲实例时选中一个忙碌的；
 // 而工作流也没有可供固定的提示前缀。
-func (s *Scheduler) workflowCandidates(cap runtime.Capability, minGPUMemoryBytes int64) []Candidate {
+func (s *Scheduler) workflowCandidates(ctx context.Context, cap runtime.Capability, minGPUMemoryBytes int64) []Candidate {
 	// An empty target matches every node: a workflow request carries no model
 	// to route, so there is nothing for a routing rule to select on beyond
 	// the capacity filter minGPUMemoryBytes may add.
 	//
 	// 空 target 匹配所有节点：工作流请求不携带可路由的模型，因此除了
 	// minGPUMemoryBytes 可能带来的容量过滤外，路由规则无从选择。
-	return s.pickBy(routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, PolicyLeastLoad, affinity{}, func(snap runtime.Snapshot) bool {
+	return s.pickBy(ctx, routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, PolicyLeastLoad, affinity{}, func(snap runtime.Snapshot) bool {
 		return snap.Discovery.Capabilities.Require(cap) == nil
 	})
 }
@@ -347,6 +353,13 @@ func (s *Scheduler) workflowCandidates(cap runtime.Capability, minGPUMemoryBytes
 // 在案的绑定，不是新提交要满足的显存要求，因此不带 minGPUMemoryBytes 过滤——一个
 // 节点的显存声明会随时间变化，但已经在它上面跑的 run 不会因此被重新判定为不该
 // 恢复。
-func (s *Scheduler) WorkflowCapableCandidates() []Candidate {
-	return s.workflowCandidates(runtime.CapabilityWorkflowExecution, 0)
+//
+// ctx's WithNodeAccess policy applies like everywhere else: a new submission
+// passes the request context, while J06's recovery passes one without a
+// policy, because a run already living on a node is not a new use of it.
+//
+// ctx 上的 WithNodeAccess 授权与其他地方一样生效：新提交传入请求的 context，而 J06
+// 的恢复传入不带授权的 context，因为一个已经在节点上运行的 run 不是对该节点的新使用。
+func (s *Scheduler) WorkflowCapableCandidates(ctx context.Context) []Candidate {
+	return s.workflowCandidates(ctx, runtime.CapabilityWorkflowExecution, 0)
 }

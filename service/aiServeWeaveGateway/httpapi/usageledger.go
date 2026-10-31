@@ -66,6 +66,15 @@ type UsageRecord struct {
 	CompletionTokens int
 	TotalTokens      int
 	CreatedAt        time.Time
+	// NodeID is the node that served the request, set only for a
+	// tenant-owned node (common/nodeaccess.OwnerOf), where it lets the control
+	// plane leave the owner's own hardware unbilled. Every other record omits
+	// it, so a push from a deployment without tenant-owned nodes is unchanged.
+	//
+	// NodeID 是服务该请求的节点，仅对商户自有节点（common/nodeaccess.OwnerOf）设置，
+	// 控制面据此不对所有者自己的硬件计费。其他记录都不带它，因此没有商户自有节点的部署
+	// 推送的内容保持不变。
+	NodeID string
 }
 
 // usageLedgerSink is what recordUsage hands a finished usage record to. It

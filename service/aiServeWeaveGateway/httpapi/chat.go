@@ -424,7 +424,7 @@ func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model and a non-empty messages array are required")
 		return
 	}
-	if h.useNativeChat(req) {
+	if h.useNativeChat(r.Context(), req) {
 		h.nativeChat(w, r, req, raw, start)
 		return
 	}
@@ -486,7 +486,7 @@ func (h *handlers) chatNonStream(w http.ResponseWriter, r *http.Request, canonic
 	//
 	// 非流式响应的首字节就是它的末字节：TTFT 与总响应时间是同一个数字，因此只记录
 	// 后者，好让 TTFT 分布始终是关于流式的陈述。
-	h.recordUsage(r.Context(), resp.Usage, time.Since(start), UsageEndpointChat, canonical.Model)
+	h.recordUsageOn(r.Context(), candidate.NodeID, resp.Usage, time.Since(start), UsageEndpointChat, canonical.Model)
 }
 
 func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical runtime.ChatRequest, start time.Time, limitParameters []string) {
@@ -542,7 +542,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical 
 		if errors.Is(err, io.EOF) {
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 			flusher.Flush()
-			h.recordUsage(r.Context(), usage, time.Since(start), UsageEndpointChat, canonical.Model)
+			h.recordUsageOn(r.Context(), candidate.NodeID, usage, time.Since(start), UsageEndpointChat, canonical.Model)
 			return
 		}
 		if err != nil {

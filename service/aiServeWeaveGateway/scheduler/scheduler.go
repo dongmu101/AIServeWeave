@@ -325,7 +325,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	if !modelAllowed(ctx, req.Model) {
 		return runtime.EmbeddingResponse{}, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.candidates(req.Model, runtime.CapabilityEmbeddings)
+	candidates := s.candidates(ctx, req.Model, runtime.CapabilityEmbeddings)
 	s.metrics.Selection(runtime.CapabilityEmbeddings, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.EmbeddingResponse{}, Candidate{}, ErrNoCapableNode
@@ -357,7 +357,7 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 	if !modelAllowed(ctx, req.Model) {
 		return runtime.RerankResponse{}, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.candidates(req.Model, runtime.CapabilityRerank)
+	candidates := s.candidates(ctx, req.Model, runtime.CapabilityRerank)
 	s.metrics.Selection(runtime.CapabilityRerank, len(candidates))
 	if len(candidates) == 0 {
 		return runtime.RerankResponse{}, Candidate{}, ErrNoCapableNode
@@ -400,8 +400,8 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 //
 // 仍在限流冷却中的候选被移到最后：调用方只派发给第一个候选，因此这里是冷却唯一能起
 // 作用的地方。
-func (s *Scheduler) TranscriptionCandidates(model string) []Candidate {
-	return s.coolingLast(s.candidates(model, runtime.CapabilityAudioTranscription))
+func (s *Scheduler) TranscriptionCandidates(ctx context.Context, model string) []Candidate {
+	return s.coolingLast(s.candidates(ctx, model, runtime.CapabilityAudioTranscription))
 }
 
 // coolingLast moves the candidates still cooling down after a rate limit
@@ -439,6 +439,9 @@ func (s *Scheduler) coolingLast(candidates []Candidate) []Candidate {
 func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
 	if !modelAllowed(ctx, req.Model) {
 		return runtime.AudioTranscriptionResponse{}, ErrModelNotAllowed
+	}
+	if !nodeAllowed(ctx, c.NodeID) {
+		return runtime.AudioTranscriptionResponse{}, ErrNodeNotAllowed
 	}
 	resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Transcribe(ctx, req, audio)
 	s.breakers.record(c, err, s.clock.Now())
@@ -524,8 +527,9 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // Without a routing table it lists what the nodes advertise, so a deployment
 // that never writes one is unaffected.
 // Backend display positions precede unranked models; equal positions use ID order.
-// Either way a model ctx's WithModelAccess policy excludes is left out, so the
-// catalogue a tenant sees is exactly what it may call.
+// Either way a model ctx's WithModelAccess policy excludes is left out, and so
+// is a node ctx's WithNodeAccess policy closes, so the catalogue a tenant sees
+// is exactly what it may call.
 //
 // Models 是公开目录：客户端此刻可以请求什么。
 //
@@ -535,8 +539,8 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 //
 // 没有路由表时它列出节点声明的内容，因此从不编写路由表的部署不受影响。
 // 后端显示位置排在未指定位置的模型之前；相同位置按 ID 排序。
-// 两种情况下，被 ctx 上 WithModelAccess 授权排除的模型都会略去，使租户看到的目录
-// 恰好就是它能调用的内容。
+// 两种情况下，被 ctx 上 WithModelAccess 授权排除的模型、被 WithNodeAccess 授权关闭
+// 的节点都会略去，使租户看到的目录恰好就是它能调用的内容。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	routes := s.routes.Load()
 	if routes.Len() > 0 {
@@ -545,8 +549,8 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 			if !modelAllowed(ctx, alias) {
 				continue
 			}
-			if len(s.candidatesWith(routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(routes, alias, runtime.CapabilityMessages)) > 0 ||
-				len(s.candidatesWith(routes, alias, runtime.CapabilityImageGeneration)) > 0 {
+			if len(s.candidatesWith(ctx, routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(ctx, routes, alias, runtime.CapabilityMessages)) > 0 ||
+				len(s.candidatesWith(ctx, routes, alias, runtime.CapabilityImageGeneration)) > 0 {
 				out = append(out, ModelInfo{ID: alias})
 			}
 		}
@@ -556,7 +560,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	seen := make(map[string]ModelInfo)
 	var out []ModelInfo
 	for _, node := range s.server.Nodes() {
-		if !node.Live || node.Draining || node.Maintenance {
+		if !node.Live || node.Draining || node.Maintenance || !nodeAllowed(ctx, node.NodeID) {
 			continue
 		}
 		for _, snap := range node.Runtimes {
@@ -620,8 +624,8 @@ func modelInfoLess(a, b ModelInfo) bool {
 // 外层按运维配置的优先级依次尝试，同优先级目标按权重选择；只有在同一个 target 内部
 // 才由负载启发式决定。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个
 // 声明的偏好，不会被一台一时更空闲的机器推翻。
-func (s *Scheduler) candidates(model string, cap runtime.Capability) []Candidate {
-	return s.candidatesWith(s.routes.Load(), model, cap)
+func (s *Scheduler) candidates(ctx context.Context, model string, cap runtime.Capability) []Candidate {
+	return s.candidatesWith(ctx, s.routes.Load(), model, cap)
 }
 
 // chatCandidates is candidates for a chat request, which alone carries a
@@ -640,15 +644,15 @@ func (s *Scheduler) chatCandidates(ctx context.Context, req runtime.ChatRequest,
 	if !key.ok && s.policy == PolicyPrefixHash {
 		key = prefixAffinity(req, s.prefixBytes)
 	}
-	return s.candidatesKeyed(s.routes.Load(), req.Model, cap, key, rand.Float64)
+	return s.candidatesKeyed(ctx, s.routes.Load(), req.Model, cap, key, rand.Float64)
 }
 
-func (s *Scheduler) candidatesWith(routes *routing.Table, model string, cap runtime.Capability) []Candidate {
-	return s.candidatesWithRandom(routes, model, cap, rand.Float64)
+func (s *Scheduler) candidatesWith(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability) []Candidate {
+	return s.candidatesWithRandom(ctx, routes, model, cap, rand.Float64)
 }
 
-func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, cap runtime.Capability, draw func() float64) []Candidate {
-	return s.candidatesKeyed(routes, model, cap, affinity{}, draw)
+func (s *Scheduler) candidatesWithRandom(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability, draw func() float64) []Candidate {
+	return s.candidatesKeyed(ctx, routes, model, cap, affinity{}, draw)
 }
 
 // candidatesKeyed is the shared body of every candidates variant: key is the
@@ -656,7 +660,7 @@ func (s *Scheduler) candidatesWithRandom(routes *routing.Table, model string, ca
 //
 // candidatesKeyed 是各 candidates 变体共用的实现：key 是请求的前缀指纹，没有前缀的
 // 请求传空值。
-func (s *Scheduler) candidatesKeyed(routes *routing.Table, model string, cap runtime.Capability, key affinity, draw func() float64) []Candidate {
+func (s *Scheduler) candidatesKeyed(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability, key affinity, draw func() float64) []Candidate {
 	targets, routed := routes.Resolve(model)
 	if !routed {
 		// An unrouted model is used exactly as the node advertises it. A
@@ -668,7 +672,7 @@ func (s *Scheduler) candidatesKeyed(routes *routing.Table, model string, cap run
 
 	groups := make([]targetCandidates, 0, len(targets))
 	for _, target := range targets {
-		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(target, cap, key)})
+		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(ctx, target, cap, key)})
 	}
 	return weightedCandidates(groups, draw)
 }
@@ -682,12 +686,12 @@ func (s *Scheduler) candidatesKeyed(routes *routing.Table, model string, cap run
 // pick 返回每一个能以 cap 服务 target 的 (node, runtime) 对，按配置的 Policy 最优的
 // 在前——默认是空闲推理槽最多的优先，其次是在途请求最少的，对应 README 的「最少正在
 // 执行请求」策略。排序前先打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
-func (s *Scheduler) pick(target routing.Target, cap runtime.Capability, key affinity) []Candidate {
+func (s *Scheduler) pick(ctx context.Context, target routing.Target, cap runtime.Capability, key affinity) []Candidate {
 	policy := s.policy
 	if key.session {
 		policy = PolicyPrefixHash
 	}
-	return s.pickBy(target, policy, key, func(snap runtime.Snapshot) bool {
+	return s.pickBy(ctx, target, policy, key, func(snap runtime.Snapshot) bool {
 		for _, m := range snap.Discovery.Models {
 			if m.ID != target.RuntimeModel {
 				continue
@@ -702,20 +706,22 @@ func (s *Scheduler) pick(target routing.Target, cap runtime.Capability, key affi
 }
 
 // pickBy is the shared selection walk: node health, the target's node
-// selector, the caller's own eligibility test, and the circuit breaker, then
-// the ordering policy names (see orderCandidates).
+// selector, ctx's WithNodeAccess policy, the caller's own eligibility test,
+// and the circuit breaker, then the ordering policy names (see
+// orderCandidates).
 //
 // What "eligible" means is the caller's to define — a model plus a capability
 // for inference, a runtime-level capability for workflows — so that the two
 // share one health filter, one breaker check and one ranking rather than
 // growing two copies that drift.
 //
-// pickBy 是共用的选择流程：节点健康、target 的节点选择器、调用方自己的资格判定、
-// 熔断器，然后按 policy 指定的方式排序（见 orderCandidates）。
+// pickBy 是共用的选择流程：节点健康、target 的节点选择器、ctx 上的 WithNodeAccess
+// 授权、调用方自己的资格判定、熔断器，然后按 policy 指定的方式排序（见
+// orderCandidates）。
 //
 // 「有资格」的含义由调用方定义——推理是模型加能力，工作流是 runtime 层的能力——这样
 // 两者共用同一套健康过滤、同一次熔断检查与同一套排序，而不是长出两份会各自漂移的拷贝。
-func (s *Scheduler) pickBy(target routing.Target, policy Policy, key affinity, eligible func(runtime.Snapshot) bool) []Candidate {
+func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Policy, key affinity, eligible func(runtime.Snapshot) bool) []Candidate {
 	nodes := s.server.Nodes()
 	rand.Shuffle(len(nodes), func(i, j int) { nodes[i], nodes[j] = nodes[j], nodes[i] })
 	now := s.clock.Now()
@@ -732,6 +738,17 @@ func (s *Scheduler) pickBy(target routing.Target, policy Policy, key affinity, e
 		// 节点选择器先于关于该节点的任何其他判断：一个在此不适用的 target，不该消耗
 		// 一次熔断查询或一次能力遍历。
 		if !target.MatchesNode(node.Labels) {
+			continue
+		}
+		// A node dedicated to another tenant is skipped at the same point,
+		// but as a separate check: the selector reads labels the Agent
+		// declared, while this reads the control plane's binding by node id,
+		// and the two must never stand in for each other.
+		//
+		// 专属于其他租户的节点在同一时机被跳过，但作为一次独立检查：选择器读的是
+		// Agent 自己声明的标签，这里读的是控制面按节点 id 建立的绑定，两者绝不能互相
+		// 替代。
+		if !nodeAllowed(ctx, node.NodeID) {
 			continue
 		}
 		// STATUS.md's P2 admission-threshold filtering: a node whose

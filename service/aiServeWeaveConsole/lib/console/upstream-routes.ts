@@ -104,6 +104,12 @@ const ROUTES: readonly UpstreamRoute[] = [
     segments: [literal("admin"), literal("v1"), literal("apikeys"), param(), literal("permanent")],
     query: [],
   },
+  // The tenant's own nodes. The tenant comes from the session; the Registry
+  // and Gateway addresses in a bundle come from control plane configuration.
+  // 商户的自有节点。商户来自会话；接入包里的 Registry 与 Gateway 地址来自控制面配置。
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("nodes")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("nodes")], query: [] },
+  { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("nodes"), param()], query: [] },
   {
     method: "GET",
     segments: [
@@ -222,6 +228,8 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("tenants")], query: ["limit", "cursor", "status", "q"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("model-access"), param()], query: [] },
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("model-access"), param()], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("node-access")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("node-access"), param()], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("validate")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("publish")], query: [] },

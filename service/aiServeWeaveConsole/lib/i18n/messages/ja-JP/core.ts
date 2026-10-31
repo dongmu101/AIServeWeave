@@ -8,6 +8,8 @@ const core = {
   "tenant.createApiKey": "API Key を作成",
   "tenant.revoked": "失効済み",
   "tenant.revokeApiKey": "API Key を失効させる",
+  "tenant.auditNodeCreate": "自前ノードを接続",
+  "tenant.auditNodeRevoke": "自前ノードを削除",
   "tenant.unableToConnectToTheServerCheckYour": "サーバーに接続できません。ネットワークを確認して再試行してください。",
   "tenant.theSubmittedDataDoesNotMeetTheRequirements": "送信内容が要件を満たしていません。確認して再試行してください。",
   "tenant.enterAnEmailAddress": "メールアドレスを入力してください。",

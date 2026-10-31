@@ -282,6 +282,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	relay := revocationoutbox.New(st, verifications, clock)
 	logicOpts := []logic.Option{logic.WithInvalidator(relay), logic.WithSessions(sessions)}
 	var registryClient *registryclient.Client
+	var enrollment *agentenrollment.Service
 	if cfg.Registry.Enabled() {
 		registryClient, err = registryclient.New(registryclient.Config{
 			Addr:       cfg.Registry.Addr,
@@ -294,8 +295,22 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}
 		logicOpts = append(logicOpts, logic.WithRegistryClient(registryClient))
 		if cfg.Registry.CACertFile != "" {
-			logicOpts = append(logicOpts, logic.WithAgentEnrollment(agentenrollment.New(registryClient, cfg.Registry.CACertFile, clock)))
+			enrollment = agentenrollment.New(registryClient, cfg.Registry.CACertFile, clock)
+			logicOpts = append(logicOpts, logic.WithAgentEnrollment(enrollment))
 		}
+	}
+	// Active requires the Registry and its CA file, so enrollment is set
+	// whenever it holds.
+	//
+	// Active 要求已配置 Registry 及其 CA 文件，因此它成立时 enrollment 必已设置。
+	if cfg.TenantNodes.Active(cfg.Registry) && enrollment != nil {
+		logicOpts = append(logicOpts, logic.WithTenantNodes(logic.TenantNodeConfig{
+			Enrollment:       enrollment,
+			RegistryAddr:     cfg.TenantNodes.RegistryAddr,
+			GatewayAddr:      cfg.TenantNodes.GatewayAddr,
+			MaxPerTenant:     cfg.TenantNodes.MaxPerTenant,
+			MaxCreatesPerDay: cfg.TenantNodes.MaxCreatesPerDay,
+		}))
 	}
 	modelPullRouter := modelpullrouter.New(modelpullrouter.Config{
 		Gateways: cfg.ModelPull.Gateways,

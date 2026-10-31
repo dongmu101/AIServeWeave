@@ -115,18 +115,27 @@ type Bundle struct {
 //
 // Create 分配随机新节点 ID 后签发绑定令牌。地址仅写入下载内容，绝不作为服务端网络目标。
 func (s *Service) Create(ctx context.Context, registry, gateway string, ttl time.Duration) (Bundle, error) {
-	if !validAddress(registry) || !validAddress(gateway) || ttl < 15*time.Minute || ttl > 24*time.Hour {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return Bundle{}, errors.New("agentenrollment: identity generation failed")
+	}
+	return s.CreateNode(ctx, "node_"+hex.EncodeToString(id[:]), registry, gateway, ttl)
+}
+
+// CreateNode is Create for a node ID the caller already chose, such as a
+// tenant-owned one. The caller is responsible for the ID being new: the
+// Registry binds the token to it whether or not it was ever enrolled before.
+//
+// CreateNode 是针对调用方已选定的节点 ID（例如商户自有节点 ID）的 Create。由调用方
+// 保证该 ID 是新的：无论它此前是否接入过，Registry 都会把令牌绑定到它。
+func (s *Service) CreateNode(ctx context.Context, nodeID, registry, gateway string, ttl time.Duration) (Bundle, error) {
+	if nodeID == "" || !validAddress(registry) || !validAddress(gateway) || ttl < 15*time.Minute || ttl > 24*time.Hour {
 		return Bundle{}, ErrInvalidInput
 	}
 	ca, err := s.CA()
 	if err != nil {
 		return Bundle{}, err
 	}
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return Bundle{}, errors.New("agentenrollment: identity generation failed")
-	}
-	nodeID := "node_" + hex.EncodeToString(id[:])
 	token, expiry, err := s.issuer.MintNodeToken(ctx, nodeID, ttl)
 	if err != nil {
 		return Bundle{}, errors.New("agentenrollment: token issuance unavailable")
@@ -168,6 +177,13 @@ func (s *Service) Create(ctx context.Context, registry, gateway string, ttl time
 	}
 	return Bundle{NodeID: nodeID, ExpiresAt: expiry, Filename: "aiserveweave-enrollment-" + nodeID + ".zip", Archive: archive.Bytes()}, nil
 }
+
+// ValidAddress reports whether address is a host:port an enrollment bundle may
+// name: a literal IP or a plain DNS name, and a port in 1–65535.
+//
+// ValidAddress 报告 address 是否为接入包可以写入的 host:port：字面 IP 或普通 DNS 名，
+// 端口在 1–65535 之间。
+func ValidAddress(address string) bool { return validAddress(address) }
 
 func validAddress(address string) bool {
 	if len(address) > 253 {
