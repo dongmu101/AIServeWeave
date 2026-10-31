@@ -157,10 +157,18 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPost, "/operator/v1/billing/tenants/:id/adjust", requirePlatformSession, adjustCredit(ctx)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/orders", requirePlatformSession, listBillingOrders(ctx, true)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/ledger", requirePlatformSession, listBillingLedger(ctx, true)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/orders/:id/refund-requests", requireSession, requestRefund(ctx)),
+			billingRoute(http.MethodGet, "/admin/v1/billing/refund-requests", requireSession, listRefundRequests(ctx, false)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/refund-requests/:id/cancel", requireSession, cancelRefundRequest(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/refund-requests", requirePlatformSession, listRefundRequests(ctx, true)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/refund-requests/:id/reject", requirePlatformSession, reviewRefundRequest(ctx, refundActionReject)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/refund-requests/:id/fail", requirePlatformSession, reviewRefundRequest(ctx, refundActionFail)),
 		})
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodPost, "/admin/v1/billing/checkout", requireSession, createCheckout(ctx)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/refund-requests/:id/approve", requirePlatformSession, reviewRefundRequest(ctx, refundActionApprove)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/orders/:id/refund", requirePlatformSession, createOperatorRefund(ctx)),
 		}, rest.WithTimeout(BillingCallTimeout))
 	}
 

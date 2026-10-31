@@ -22,6 +22,51 @@ import (
 // ErrInvalidSignature 由 ParseWebhook 在载荷的签名、时间戳或请求头校验不通过时返回。
 var ErrInvalidSignature = errors.New("billing: webhook signature does not verify")
 
+// ErrRefundRejected is returned by CreateRefund when the provider answered
+// and refused the refund, so no refund exists. Any other error leaves the
+// outcome unknown: the refund may have been created.
+//
+// ErrRefundRejected 由 CreateRefund 在服务商已答复并拒绝退款时返回，此时不存在任何
+// 退款。其他任何错误都意味着结果未知：退款可能已经创建。
+var ErrRefundRejected = errors.New("billing: the provider refused the refund")
+
+// Refund statuses a provider reports for a refund it accepted.
+//
+// 服务商对已受理退款报告的状态。
+const (
+	RefundStatusPending   = "pending"
+	RefundStatusReview    = "review"
+	RefundStatusSucceeded = "succeeded"
+	RefundStatusFailed    = "failed"
+)
+
+// RefundRequest is one refund to ask for: AmountMinor of the payment,
+// tax included, in Currency, the payment's currency, against ProductID, the
+// item the payment bought. RequestID, OrderID and TenantID ride the refund as
+// metadata and come back on its refund events.
+//
+// RefundRequest 是一次要发起的退款：从付款中退回 AmountMinor（含税，币种为付款币种
+// Currency），针对付款所购买的那一项 ProductID。RequestID、OrderID 与 TenantID 作为
+// metadata 随退款传出，并随其退款事件返回。
+type RefundRequest struct {
+	PaymentID   string
+	ProductID   string
+	AmountMinor int64
+	Currency    string
+	Reason      string
+	RequestID   string
+	OrderID     string
+	TenantID    string
+}
+
+// Refund is a refund the provider accepted.
+//
+// Refund 是服务商已受理的一笔退款。
+type Refund struct {
+	ID     string
+	Status string
+}
+
 // CheckoutRequest is one checkout to open. AmountMinor is zero for a
 // fixed-price product and the chosen amount for a pay-what-you-want one.
 // Currency is the order's currency; the checkout must charge in it, since
@@ -67,6 +112,15 @@ type Provider interface {
 	//
 	// PortalLink 返回服务商客户门户的一次性链接。
 	PortalLink(ctx context.Context, customerID, returnURL string) (string, error)
+	// CreateRefund asks the provider to refund part or all of a payment. It
+	// is never retried, as the provider offers no idempotency key: a retry
+	// after a lost answer could refund twice. ErrRefundRejected means no
+	// refund exists; any other error leaves that unknown.
+	//
+	// CreateRefund 请求服务商退回一笔付款的部分或全部。它从不重试，因为服务商不提供
+	// 幂等键：丢失答复之后的重试可能退款两次。ErrRefundRejected 表示不存在任何退款；
+	// 其他错误表示这一点未知。
+	CreateRefund(ctx context.Context, req RefundRequest) (Refund, error)
 	// ParseWebhook verifies a webhook against its raw body and headers and
 	// reduces it to a store.BillingEvent. An event the ledger does not act on
 	// comes back with an empty Kind. A failed verification is

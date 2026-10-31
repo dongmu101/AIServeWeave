@@ -25,12 +25,12 @@ import (
 const MaxBillingWebhookBytes = 1 << 20
 
 // BillingCallTimeout bounds the routes that call the payment provider
-// (checkout and portal), which may make two provider calls in a row and so
-// need more than the server's default timeout. It stays below the Console's
+// (checkout, portal, refund approval and direct refunds), which may make two
+// provider calls in a row and so need more than the server's default timeout. It stays below the Console's
 // default upstream timeout of 10 seconds, so a slow provider surfaces as this
 // service's 503 rather than the Console's own timeout.
 //
-// BillingCallTimeout 限制调用支付服务商的路由（结账与门户）。它们可能连续发起两次服务商
+// BillingCallTimeout 限制调用支付服务商的路由（结账、门户、退款批准与直接退款）。它们可能连续发起两次服务商
 // 调用，因此需要比服务器默认超时更长的时间。它低于 Console 默认 10 秒的上游超时，使缓慢
 // 的服务商表现为本服务的 503，而不是 Console 自己的超时。
 const BillingCallTimeout = 9 * time.Second
@@ -83,7 +83,7 @@ func billingOverview(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		writeJSON(w, http.StatusOK, types.BillingOverviewResponse{
 			Mode: overview.Mode, BalanceMicro: overview.BalanceMicro, Blocked: overview.Blocked,
-			HasCustomer: overview.HasCustomer, Packages: packages,
+			HasCustomer: overview.HasCustomer, Packages: packages, RefundWindowDays: overview.RefundWindowDays,
 		})
 	})
 }
@@ -168,11 +168,17 @@ func listBillingOrders(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 			respondErr(w, err)
 			return
 		}
+		refundable, err := ctx.Logic.RefundableOrders(r.Context(), actor, page.Items)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
 		items := make([]types.CheckoutOrder, len(page.Items))
 		for i, o := range page.Items {
 			items[i] = types.CheckoutOrder{
 				ID: o.ID, PackageID: o.PackageID, AmountMinor: o.AmountMinor, Currency: o.Currency,
-				CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, Status: o.Status,
+				CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, PaidAmountMinor: o.PaidAmountMinor,
+				PaidCurrency: o.PaidCurrency, RefundableMinor: refundable[o.ID], Status: o.Status,
 				CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
 			}
 			if o.DodoPaymentID != nil {
@@ -180,6 +186,9 @@ func listBillingOrders(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 			}
 			if operator {
 				items[i].TenantID = o.TenantID
+				if o.Status == model.OrderStatusPaid {
+					items[i].RefundableMinor = o.RemainingRefundMinor()
+				}
 			}
 		}
 		writeJSON(w, http.StatusOK, types.OrderListResponse{Items: items, NextCursor: page.NextCursor})
@@ -355,6 +364,158 @@ func adjustCredit(ctx *svc.ServiceContext) http.HandlerFunc {
 			BalanceAfterMicro: entry.BalanceAfterMicro, Ref: entry.Ref, CreatedAt: entry.CreatedAt,
 		})
 	})
+}
+
+// requestRefund handles POST /admin/v1/billing/orders/:id/refund-requests.
+//
+// requestRefund 处理 POST /admin/v1/billing/orders/:id/refund-requests。
+func requestRefund(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		var req types.RefundCreateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		out, err := ctx.Logic.RequestRefund(r.Context(), actor, pathvar.Vars(r)["id"], req.AmountMinor, req.Reason)
+		if err != nil {
+			respondRefundErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderRefundRequest(out, false))
+	})
+}
+
+// cancelRefundRequest handles POST /admin/v1/billing/refund-requests/:id/cancel.
+//
+// cancelRefundRequest 处理 POST /admin/v1/billing/refund-requests/:id/cancel。
+func cancelRefundRequest(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		out, err := ctx.Logic.CancelRefundRequest(r.Context(), actor, pathvar.Vars(r)["id"])
+		if err != nil {
+			respondRefundErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderRefundRequest(out, false))
+	})
+}
+
+// listRefundRequests handles GET /admin/v1/billing/refund-requests and, with
+// cross-tenant filters, GET /operator/v1/billing/refund-requests.
+//
+// listRefundRequests 处理 GET /admin/v1/billing/refund-requests，并以跨租户筛选
+// 处理 GET /operator/v1/billing/refund-requests。
+func listRefundRequests(ctx *svc.ServiceContext, operator bool) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		query := r.URL.Query()
+		filter := store.RefundRequestFilter{Status: query.Get("status"), OrderID: query.Get("order_id")}
+		if operator {
+			filter.TenantID = query.Get("tenant_id")
+		}
+		page, err := ctx.Logic.ListRefundRequests(r.Context(), actor, listQuery(query), filter)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		items := make([]types.RefundRequest, len(page.Items))
+		for i, req := range page.Items {
+			items[i] = renderRefundRequest(req, operator)
+		}
+		writeJSON(w, http.StatusOK, types.RefundRequestListResponse{Items: items, NextCursor: page.NextCursor})
+	})
+}
+
+// Operator refund actions served by reviewRefundRequest.
+//
+// 由 reviewRefundRequest 处理的运维退款操作。
+const (
+	refundActionApprove = "approve"
+	refundActionReject  = "reject"
+	refundActionFail    = "fail"
+)
+
+// reviewRefundRequest handles POST /operator/v1/billing/refund-requests/:id/
+// approve, /reject and /fail.
+//
+// reviewRefundRequest 处理 POST /operator/v1/billing/refund-requests/:id/ 下的
+// approve、reject 与 fail。
+func reviewRefundRequest(ctx *svc.ServiceContext, action string) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		var req types.RefundReviewRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		id := pathvar.Vars(r)["id"]
+		var (
+			out model.RefundRequest
+			err error
+		)
+		switch action {
+		case refundActionApprove:
+			out, err = ctx.Logic.ApproveRefundRequest(r.Context(), actor, id, req.AmountMinor, req.Note)
+		case refundActionReject:
+			if req.AmountMinor != 0 {
+				err = logic.ErrInvalidInput
+				break
+			}
+			out, err = ctx.Logic.RejectRefundRequest(r.Context(), actor, id, req.Note)
+		default:
+			if req.AmountMinor != 0 {
+				err = logic.ErrInvalidInput
+				break
+			}
+			out, err = ctx.Logic.MarkRefundFailed(r.Context(), actor, id, req.Note)
+		}
+		if err != nil {
+			respondRefundErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderRefundRequest(out, true))
+	})
+}
+
+// createOperatorRefund handles POST /operator/v1/billing/orders/:id/refund.
+//
+// createOperatorRefund 处理 POST /operator/v1/billing/orders/:id/refund。
+func createOperatorRefund(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		var req types.RefundCreateRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		out, err := ctx.Logic.CreateOperatorRefund(r.Context(), actor, pathvar.Vars(r)["id"], req.AmountMinor, req.Reason)
+		if err != nil {
+			respondRefundErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusCreated, renderRefundRequest(out, true))
+	})
+}
+
+// respondRefundErr answers a refund refusal with 409 and its reason as the
+// code, and anything else as respondErr does.
+//
+// respondRefundErr 以 409 答复退款拒绝，并把原因作为 code；其他错误按 respondErr 处理。
+func respondRefundErr(w http.ResponseWriter, err error) {
+	var refused *store.RefundRefusedError
+	if errors.As(err, &refused) {
+		writeJSON(w, http.StatusConflict, types.ErrorResponse{Error: "the refund is not allowed", Code: refused.Reason})
+		return
+	}
+	respondErr(w, err)
+}
+
+func renderRefundRequest(req model.RefundRequest, operator bool) types.RefundRequest {
+	out := types.RefundRequest{
+		ID: req.ID, OrderID: req.OrderID, Source: req.Source, Status: req.Status, AmountMinor: req.AmountMinor,
+		Currency: req.Currency, CreditsMicro: req.CreditsMicro, Reason: req.Reason, ReviewNote: req.ReviewNote,
+		Failure: req.Failure, RequestedBy: req.RequestedBy, CreatedAt: req.CreatedAt, UpdatedAt: req.UpdatedAt,
+	}
+	if req.DodoRefundID != nil {
+		out.RefundID = *req.DodoRefundID
+	}
+	if operator {
+		out.TenantID, out.ReviewedBy = req.TenantID, req.ReviewedBy
+	}
+	return out
 }
 
 // withActorHandler resolves the authenticated actor once for a handler that

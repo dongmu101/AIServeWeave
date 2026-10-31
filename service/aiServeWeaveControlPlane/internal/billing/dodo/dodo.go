@@ -39,8 +39,10 @@ const (
 //
 // 结账携带、其付款事件返回的 metadata 键。
 const (
-	metadataOrderID  = "aisw_order_id"
-	metadataTenantID = "aisw_tenant_id"
+	metadataOrderID   = "aisw_order_id"
+	metadataTenantID  = "aisw_tenant_id"
+	metadataRefundID  = "aisw_refund_request_id"
+	maxRefundReasonCh = 3000
 )
 
 // requestTimeout bounds one attempt of an API call and maxRetries the
@@ -186,6 +188,52 @@ func (p *Provider) PortalLink(ctx context.Context, customerID, returnURL string)
 	return session.Link, nil
 }
 
+// CreateRefund implements billing.Provider. The refund names the product the
+// payment bought, with the amount tax-inclusive in the payment's currency,
+// the terms the payment's own amount is in. It is sent once, without the
+// client's retry: an answer lost after Dodo created the refund would
+// otherwise create a second one. A 4xx answer other than 408 and 429 is a
+// definite refusal and wraps billing.ErrRefundRejected.
+//
+// CreateRefund 实现 billing.Provider。退款指明付款所购买的产品，金额含税、以付款币种
+// 计——正是付款金额本身的口径。它只发送一次，不使用客户端的重试：否则 Dodo 创建退款
+// 之后丢失的答复会让它再创建一笔。除 408 与 429 之外的 4xx 答复是明确的拒绝，包装为
+// billing.ErrRefundRejected。
+func (p *Provider) CreateRefund(ctx context.Context, req billing.RefundRequest) (billing.Refund, error) {
+	if req.PaymentID == "" || req.ProductID == "" || req.AmountMinor <= 0 {
+		return billing.Refund{}, fmt.Errorf("%w: payment, product and a positive amount are required", billing.ErrRefundRejected)
+	}
+	params := dodopayments.RefundNewParams{
+		PaymentID: dodopayments.F(req.PaymentID),
+		Items: dodopayments.F([]dodopayments.RefundNewParamsItem{{
+			ItemID:       dodopayments.F(req.ProductID),
+			Amount:       dodopayments.F(req.AmountMinor),
+			TaxInclusive: dodopayments.F(true),
+		}}),
+		Metadata: dodopayments.F(dodopayments.MetadataParam{
+			metadataRefundID: shared.UnionString(req.RequestID),
+			metadataOrderID:  shared.UnionString(req.OrderID),
+			metadataTenantID: shared.UnionString(req.TenantID),
+		}),
+	}
+	if req.Currency != "" {
+		params.Currency = dodopayments.F(dodopayments.Currency(strings.ToUpper(req.Currency)))
+	}
+	if reason := []rune(req.Reason); len(reason) > 0 {
+		params.Reason = dodopayments.F(string(reason[:min(len(reason), maxRefundReasonCh)]))
+	}
+	refund, err := p.client.Refunds.New(ctx, params, option.WithMaxRetries(0))
+	if err != nil {
+		var apiErr *dodopayments.Error
+		if errors.As(err, &apiErr) && apiErr.StatusCode >= 400 && apiErr.StatusCode < 500 &&
+			apiErr.StatusCode != http.StatusRequestTimeout && apiErr.StatusCode != http.StatusTooManyRequests {
+			return billing.Refund{}, fmt.Errorf("%w: status %d", billing.ErrRefundRejected, apiErr.StatusCode)
+		}
+		return billing.Refund{}, fmt.Errorf("dodo: creating refund: %w", err)
+	}
+	return billing.Refund{ID: refund.RefundID, Status: string(refund.Status)}, nil
+}
+
 // ParseWebhook implements billing.Provider. The signature is verified first,
 // by Standard Webhooks over webhook-id, webhook-timestamp and the raw body; a
 // timestamp outside the tolerance fails like a bad signature. Only then is
@@ -222,9 +270,9 @@ func (p *Provider) ParseWebhook(payload []byte, headers http.Header) (store.Bill
 	case dodopayments.PaymentCancelledWebhookEvent:
 		fillPayment(&out, store.BillingEventPaymentFailed, e.Data)
 	case dodopayments.RefundSucceededWebhookEvent:
-		out.Kind = store.BillingEventRefundSucceeded
-		out.PaymentID, out.RefundID, out.AmountMinor = e.Data.PaymentID, e.Data.RefundID, e.Data.Amount
-		out.Currency, out.IsPartial = string(e.Data.Currency), e.Data.IsPartial
+		fillRefund(&out, store.BillingEventRefundSucceeded, e.Data)
+	case dodopayments.RefundFailedWebhookEvent:
+		fillRefund(&out, store.BillingEventRefundFailed, e.Data)
 	case dodopayments.DisputeOpenedWebhookEvent:
 		out.Kind = store.BillingEventDisputeOpened
 		out.PaymentID, out.DisputeID = e.Data.PaymentID, e.Data.DisputeID
@@ -248,6 +296,13 @@ func fillPayment(out *store.BillingEvent, kind string, payment dodopayments.Paym
 	out.Currency = string(payment.Currency)
 	out.OrderID = metadataString(payment.Metadata, metadataOrderID)
 	out.TenantID = metadataString(payment.Metadata, metadataTenantID)
+}
+
+func fillRefund(out *store.BillingEvent, kind string, refund dodopayments.Refund) {
+	out.Kind = kind
+	out.PaymentID, out.RefundID, out.AmountMinor = refund.PaymentID, refund.RefundID, refund.Amount
+	out.Currency, out.IsPartial = string(refund.Currency), refund.IsPartial
+	out.RefundRequestID = metadataString(refund.Metadata, metadataRefundID)
 }
 
 func metadataString(metadata dodopayments.Metadata, key string) string {

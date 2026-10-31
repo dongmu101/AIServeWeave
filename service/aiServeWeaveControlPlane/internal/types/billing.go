@@ -38,6 +38,11 @@ type BillingOverviewResponse struct {
 	Blocked      bool            `json:"blocked"`
 	HasCustomer  bool            `json:"has_customer"`
 	Packages     []CreditPackage `json:"packages"`
+	// RefundWindowDays is how long after a purchase the tenant may ask for a
+	// refund; zero means it may not.
+	//
+	// RefundWindowDays 是购买后租户可申请退款的天数；为零表示不可申请。
+	RefundWindowDays int `json:"refund_window_days"`
 }
 
 // CheckoutRequest is POST /admin/v1/billing/checkout. AmountMinor is the
@@ -92,17 +97,33 @@ type LedgerListResponse struct {
 //
 // CheckoutOrder 是一次购买尝试。租户自己的视图省略 TenantID。
 type CheckoutOrder struct {
-	ID            string    `json:"id"`
-	TenantID      string    `json:"tenant_id,omitempty"`
-	PackageID     string    `json:"package_id"`
-	AmountMinor   int64     `json:"amount_minor"`
-	Currency      string    `json:"currency"`
-	CreditsMicro  int64     `json:"credits_micro"`
-	RefundedMinor int64     `json:"refunded_minor"`
-	Status        string    `json:"status"`
-	PaymentID     string    `json:"payment_id,omitempty"`
-	CreatedAt     time.Time `json:"created_at"`
-	UpdatedAt     time.Time `json:"updated_at"`
+	ID            string `json:"id"`
+	TenantID      string `json:"tenant_id,omitempty"`
+	PackageID     string `json:"package_id"`
+	AmountMinor   int64  `json:"amount_minor"`
+	Currency      string `json:"currency"`
+	CreditsMicro  int64  `json:"credits_micro"`
+	RefundedMinor int64  `json:"refunded_minor"`
+	// PaidAmountMinor and PaidCurrency are what the payment charged, tax
+	// included; refunds are in these terms. Zero and empty until paid.
+	//
+	// PaidAmountMinor 与 PaidCurrency 是付款实际收取的金额（含税）；退款以它们为口径。
+	// 付款之前为零值。
+	PaidAmountMinor int64  `json:"paid_amount_minor"`
+	PaidCurrency    string `json:"paid_currency"`
+	// RefundableMinor, in PaidCurrency, is on the tenant's view what the
+	// tenant may ask to refund now (window, unused credits, no refund in
+	// progress), and on the operator's view what of the payment is not
+	// refunded yet. Zero when nothing may be.
+	//
+	// RefundableMinor 以 PaidCurrency 计：在租户视图中是租户此刻可申请退款的金额
+	// （期限内、未用点数、没有进行中的退款）；在运维视图中是付款中尚未退款的金额。不可
+	// 退款时为零。
+	RefundableMinor int64     `json:"refundable_minor"`
+	Status          string    `json:"status"`
+	PaymentID       string    `json:"payment_id,omitempty"`
+	CreatedAt       time.Time `json:"created_at"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }
 
 // OrderListResponse is one page of orders.
@@ -199,4 +220,59 @@ type BillingModeRequest struct {
 type CreditAdjustRequest struct {
 	AmountMicro int64  `json:"amount_micro"`
 	Reason      string `json:"reason"`
+}
+
+// RefundRequest is one refund of one order. AmountMinor is in Currency, the
+// payment's, tax included; CreditsMicro is what approval held off the
+// balance. ReviewedBy and TenantID appear on the operator's view only.
+//
+// RefundRequest 是一个订单的一次退款。AmountMinor 以付款币种 Currency 计，含税；
+// CreditsMicro 是批准时从余额中冻结的点数。ReviewedBy 与 TenantID 只出现在运维视图中。
+type RefundRequest struct {
+	ID           string    `json:"id"`
+	TenantID     string    `json:"tenant_id,omitempty"`
+	OrderID      string    `json:"order_id"`
+	Source       string    `json:"source"`
+	Status       string    `json:"status"`
+	AmountMinor  int64     `json:"amount_minor"`
+	Currency     string    `json:"currency"`
+	CreditsMicro int64     `json:"credits_micro"`
+	Reason       string    `json:"reason"`
+	ReviewNote   string    `json:"review_note,omitempty"`
+	Failure      string    `json:"failure,omitempty"`
+	RefundID     string    `json:"refund_id,omitempty"`
+	RequestedBy  string    `json:"requested_by"`
+	ReviewedBy   string    `json:"reviewed_by,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+}
+
+// RefundRequestListResponse is one page of refund requests.
+//
+// RefundRequestListResponse 是一页退款申请。
+type RefundRequestListResponse struct {
+	Items      []RefundRequest `json:"items"`
+	NextCursor string          `json:"next_cursor,omitempty"`
+}
+
+// RefundCreateRequest asks for a refund of an order: a tenant's request or
+// an operator's direct refund. AmountMinor, in the payment's currency, is
+// omitted to ask for everything allowed.
+//
+// RefundCreateRequest 请求对一个订单退款：租户的申请或运维的直接退款。AmountMinor 以
+// 付款币种计，省略时表示申请允许的全部金额。
+type RefundCreateRequest struct {
+	AmountMinor int64  `json:"amount_minor,omitempty"`
+	Reason      string `json:"reason"`
+}
+
+// RefundReviewRequest is an operator's answer to a refund request: approve
+// (AmountMinor, when set, lowers the amount), reject, or mark failed, with
+// Note as the remark.
+//
+// RefundReviewRequest 是运维对一个退款申请的答复：批准（AmountMinor 设置时调低金额）、
+// 驳回或标记失败，Note 为备注。
+type RefundReviewRequest struct {
+	AmountMinor int64  `json:"amount_minor,omitempty"`
+	Note        string `json:"note,omitempty"`
 }

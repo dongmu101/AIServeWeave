@@ -188,6 +188,13 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("portal")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind"] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status"] },
+  // Refunds after sale: a tenant asks, lists and withdraws its own requests;
+  // the money moves only when an operator approves on the operator surface.
+  //
+  // 售后退款：租户申请、列出并撤回自己的申请；只有运维在运维面批准后才会发生资金流动。
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders"), param(), literal("refund-requests")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("refund-requests")], query: ["limit", "cursor", "status", "order_id"] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("refund-requests"), param(), literal("cancel")], query: [] },
 ];
 
 /**
@@ -261,6 +268,11 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("adjust")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status", "tenant_id"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind", "tenant_id"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("refund-requests")], query: ["limit", "cursor", "status", "tenant_id", "order_id"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("refund-requests"), param(), literal("approve")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("refund-requests"), param(), literal("reject")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("refund-requests"), param(), literal("fail")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("orders"), param(), literal("refund")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("approve")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("disable")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("enable")], query: [] },

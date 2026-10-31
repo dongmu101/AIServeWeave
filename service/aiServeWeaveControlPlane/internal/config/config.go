@@ -238,6 +238,13 @@ type BillingConf struct {
 	// SignupGrantCredits 是自助注册的租户起步时的余额，以整点计。自助注册的租户是
 	// prepaid；用 bootstrap token 创建的租户是 exempt。
 	SignupGrantCredits int64 `json:",default=0"`
+	// RefundWindowDays is how many days after a purchase its tenant may ask
+	// for a refund of the credits it has not used. Zero turns tenant refund
+	// requests off; operators can refund at any time either way.
+	//
+	// RefundWindowDays 是购买后租户可以就其未用点数申请退款的天数。为零时关闭租户退款
+	// 申请；无论如何，运维都可以随时退款。
+	RefundWindowDays int `json:",default=30"`
 }
 
 // DodoConf is one Dodo Payments account.
@@ -792,6 +799,9 @@ func (b BillingConf) validate() error {
 	}
 	if b.SignupGrantCredits < 0 || b.SignupGrantCredits > math.MaxInt64/1_000_000 {
 		return errors.New("config: Billing.SignupGrantCredits is out of range")
+	}
+	if b.RefundWindowDays < 0 || b.RefundWindowDays > 3650 {
+		return errors.New("config: Billing.RefundWindowDays must be between 0 and 3650")
 	}
 	return nil
 }

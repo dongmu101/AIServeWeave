@@ -768,6 +768,13 @@ type ListExpiredJobArtifactsResponse struct {
 // ErrorResponse 是每个端点返回失败时的形状。
 type ErrorResponse struct {
 	Error string `json:"error"`
+	// Code, when present, is a stable machine-readable reason for the
+	// error, for a client to show its own text; so far only refund
+	// refusals set it.
+	//
+	// Code 出现时是该错误稳定的机器可读原因，供客户端展示自己的文案；目前只有退款
+	// 拒绝会设置它。
+	Code string `json:"code,omitempty"`
 }
 
 // -----------------------------------------------------------------------

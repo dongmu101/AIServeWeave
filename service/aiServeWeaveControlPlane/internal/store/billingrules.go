@@ -42,6 +42,41 @@ type BillingTx interface {
 	//
 	// LedgerAmount 读取携带某个幂等键的账目金额，以及是否存在这样一条账目。
 	LedgerAmount(key string) (int64, bool, error)
+	// TenantBilling reads and locks a tenant's billing row, creating an
+	// exempt zero-balance row when there is none.
+	//
+	// TenantBilling 读取并锁定租户的计费行；没有时创建一行零余额的 exempt 记录。
+	TenantBilling(tenantID string, now time.Time) (model.TenantBilling, error)
+	// RefundRequestOrderID reads, without locking, the order a refund
+	// request belongs to, so the caller can lock that order first: every
+	// refund path locks the order before the request, which keeps them from
+	// deadlocking one another.
+	//
+	// RefundRequestOrderID 不加锁地读取退款申请所属的订单，使调用方能先锁定该订单：所有
+	// 退款路径都先锁订单、再锁申请，彼此因此不会死锁。
+	RefundRequestOrderID(id string) (string, error)
+	// RefundRequestByID reads and locks one refund request.
+	//
+	// RefundRequestByID 读取并锁定一个退款申请。
+	RefundRequestByID(id string) (model.RefundRequest, error)
+	// RefundRequestByRefund reads and locks the request a provider refund
+	// settles.
+	//
+	// RefundRequestByRefund 读取并锁定某个服务商退款所结算的申请。
+	RefundRequestByRefund(refundID string) (model.RefundRequest, error)
+	// OrderHasActiveRefund reports whether the order has a pending or
+	// processing refund request other than exceptID.
+	//
+	// OrderHasActiveRefund 报告订单是否有除 exceptID 之外的待审核或处理中退款申请。
+	OrderHasActiveRefund(orderID, exceptID string) (bool, error)
+	// InsertRefundRequest inserts a refund request.
+	//
+	// InsertRefundRequest 插入一个退款申请。
+	InsertRefundRequest(req model.RefundRequest) error
+	// SaveRefundRequest writes a refund request's mutable fields.
+	//
+	// SaveRefundRequest 写入退款申请的可变字段。
+	SaveRefundRequest(req model.RefundRequest) error
 }
 
 // ApplyBillingEventRules applies one provider event through tx. A payment
@@ -68,6 +103,8 @@ func ApplyBillingEventRules(tx BillingTx, event BillingEvent, now time.Time) (Bi
 		return paymentFailed(tx, event, now)
 	case BillingEventRefundSucceeded:
 		return refundSucceeded(tx, event, now)
+	case BillingEventRefundFailed:
+		return refundFailed(tx, event, now)
 	case BillingEventDisputeOpened:
 		return disputeOpened(tx, event, now)
 	case BillingEventDisputeWon:
@@ -149,6 +186,14 @@ func refundSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingEv
 		result.Outcome = BillingOutcomeMismatch
 		return result, nil
 	}
+	req, linked, err := refundRequestFor(tx, order, event)
+	if err != nil {
+		return BillingEventResult{}, err
+	}
+	if linked && req.Status == model.RefundStatusSucceeded {
+		result.Outcome = BillingOutcomeDuplicate
+		return result, nil
+	}
 	if _, seen, err := tx.LedgerAmount(key); err != nil || seen {
 		result.Outcome = BillingOutcomeDuplicate
 		return result, err
@@ -165,17 +210,317 @@ func refundSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingEv
 		}
 		amount = basis - order.RefundedMinor
 	}
-	refunded := min(order.RefundedMinor+max(amount, 0), basis)
-	credits := order.RefundCredits(refunded) - order.RefundCredits(order.RefundedMinor)
-	order.RefundedMinor = refunded
-	if refunded >= basis {
+	credits := order.RefundDelta(amount)
+	order.RefundedMinor = min(order.RefundedMinor+max(amount, 0), basis)
+	if order.RefundedMinor >= basis {
 		order.Status = model.OrderStatusRefunded
 	}
 	order.UpdatedAt = now
 	if err := tx.SaveOrder(order); err != nil {
 		return BillingEventResult{}, err
 	}
-	return credit(tx, result, order.TenantID, model.LedgerKindRefund, -credits, order.ID, key, now)
+	// A refund this service approved already holds its credits off the
+	// balance; only the difference between what was held and what the
+	// refund actually takes back moves the balance now.
+	// 本服务批准的退款在批准时已冻结了点数；此刻只按冻结量与实际扣回量之差变动余额。
+	var held int64
+	if linked {
+		if req.Status == model.RefundStatusProcessing {
+			held = req.CreditsMicro
+		}
+		refundID := event.RefundID
+		req.Status, req.DodoRefundID, req.Failure, req.UpdatedAt = model.RefundStatusSucceeded, &refundID, "", now
+		if err := tx.SaveRefundRequest(req); err != nil {
+			return BillingEventResult{}, err
+		}
+	}
+	net := credits - held
+	if net == 0 {
+		result.Outcome = BillingOutcomeApplied
+		return result, nil
+	}
+	kind := model.LedgerKindRefund
+	if net < 0 {
+		kind = model.LedgerKindRefundReversal
+	}
+	return credit(tx, result, order.TenantID, kind, -net, order.ID, key, now)
+}
+
+// refundFailed settles a refund this service asked for as failed and returns
+// the credits its approval held. A failed refund this service did not ask
+// for changes nothing.
+//
+// refundFailed 把本服务发起的退款结算为失败，并退回批准时冻结的点数。不是本服务发起
+// 的失败退款不改变任何东西。
+func refundFailed(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {
+	if event.PaymentID == "" {
+		return BillingEventResult{Outcome: BillingOutcomeMismatch}, nil
+	}
+	order, result, ok, err := findOrder(tx, "", event.PaymentID)
+	if !ok || err != nil {
+		return result, err
+	}
+	req, linked, err := refundRequestFor(tx, order, event)
+	if err != nil {
+		return BillingEventResult{}, err
+	}
+	switch {
+	case !linked:
+		result.Outcome = BillingOutcomeIgnored
+		return result, nil
+	case req.Status == model.RefundStatusFailed:
+		result.Outcome = BillingOutcomeDuplicate
+		return result, nil
+	case req.Status != model.RefundStatusProcessing:
+		result.Outcome = BillingOutcomeIgnored
+		return result, nil
+	}
+	if event.RefundID != "" {
+		refundID := event.RefundID
+		req.DodoRefundID = &refundID
+	}
+	changed, err := failRefund(tx, &req, "the provider reported the refund failed", now)
+	if err != nil {
+		return BillingEventResult{}, err
+	}
+	result.BlockedChanged = changed
+	result.Outcome = BillingOutcomeApplied
+	return result, nil
+}
+
+// refundRequestFor finds the refund request a refund event settles: by the
+// request id its metadata carries, else by the provider refund id. linked is
+// false for a refund made elsewhere, or one whose request belongs to another
+// order.
+//
+// refundRequestFor 查找一个退款事件所结算的退款申请：先按其 metadata 携带的申请 id，
+// 再按服务商退款 id。在别处发起的退款，或申请属于其他订单时，linked 为 false。
+func refundRequestFor(tx BillingTx, order model.CheckoutOrder, event BillingEvent) (model.RefundRequest, bool, error) {
+	req, err := model.RefundRequest{}, ErrNotFound
+	if event.RefundRequestID != "" {
+		req, err = tx.RefundRequestByID(event.RefundRequestID)
+	}
+	if errors.Is(err, ErrNotFound) && event.RefundID != "" {
+		req, err = tx.RefundRequestByRefund(event.RefundID)
+	}
+	if errors.Is(err, ErrNotFound) {
+		return model.RefundRequest{}, false, nil
+	}
+	if err != nil {
+		return model.RefundRequest{}, false, err
+	}
+	return req, req.OrderID == order.ID, nil
+}
+
+// OpenRefundRules records a new refund request through tx; see
+// Billing.OpenRefundRequest. An empty req.TenantID takes the order's, for an
+// operator who names only the order; a set one must own it.
+//
+// OpenRefundRules 通过 tx 记录一个新的退款申请，见 Billing.OpenRefundRequest。
+// req.TenantID 为空时取订单的租户，供只指明订单的运维使用；不为空时必须是订单的所属
+// 租户。
+func OpenRefundRules(tx BillingTx, req model.RefundRequest, policy RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error) {
+	order, err := tx.OrderByID(req.OrderID)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	if req.TenantID == "" {
+		req.TenantID = order.TenantID
+	}
+	if req.TenantID != order.TenantID {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, ErrNotFound
+	}
+	limit, err := refundLimit(tx, order, policy, "", now)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	switch {
+	case req.AmountMinor < 0 || req.AmountMinor > limit:
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, &RefundRefusedError{Reason: RefundRefusedAmount}
+	case req.AmountMinor == 0:
+		req.AmountMinor = limit
+	}
+	req.Currency = refundCurrency(order)
+	req.CreatedAt, req.UpdatedAt = now, now
+	changed := false
+	if req.Status == model.RefundStatusProcessing {
+		req.CreditsMicro = order.RefundDelta(req.AmountMinor)
+		if changed, err = holdRefund(tx, req, now); err != nil {
+			return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+		}
+	}
+	if err := tx.InsertRefundRequest(req); err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	return req, order, changed, nil
+}
+
+// ApproveRefundRules approves a pending request through tx; see
+// Billing.ApproveRefundRequest. policy.NotBefore is not applied again: the
+// window is judged when the tenant asks, not when an operator gets to it.
+//
+// ApproveRefundRules 通过 tx 批准一个待审核的申请，见 Billing.ApproveRefundRequest。
+// 不再重新应用 policy.NotBefore：期限在租户申请时判断，而不是在运维处理时判断。
+func ApproveRefundRules(tx BillingTx, id, reviewer, note string, amountMinor int64, policy RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error) {
+	req, order, err := lockRefundRequest(tx, id)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	if req.Status != model.RefundStatusPending {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, &RefundRefusedError{Reason: RefundRefusedStatus}
+	}
+	policy.NotBefore = time.Time{}
+	limit, err := refundLimit(tx, order, policy, req.ID, now)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	limit = min(limit, req.AmountMinor)
+	switch {
+	case amountMinor < 0 || amountMinor > limit:
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, &RefundRefusedError{Reason: RefundRefusedAmount}
+	case amountMinor == 0:
+		amountMinor = limit
+	}
+	req.AmountMinor = amountMinor
+	req.Currency = refundCurrency(order)
+	req.CreditsMicro = order.RefundDelta(amountMinor)
+	req.Status, req.ReviewedBy, req.ReviewNote, req.UpdatedAt = model.RefundStatusProcessing, reviewer, note, now
+	changed, err := holdRefund(tx, req, now)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	if err := tx.SaveRefundRequest(req); err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	return req, order, changed, nil
+}
+
+// TransitionRefundRules applies t through tx; see RefundTransition.
+//
+// TransitionRefundRules 通过 tx 应用 t，见 RefundTransition。
+func TransitionRefundRules(tx BillingTx, t RefundTransition, now time.Time) (model.RefundRequest, bool, error) {
+	req, _, err := lockRefundRequest(tx, t.ID)
+	if err != nil {
+		return model.RefundRequest{}, false, err
+	}
+	if t.TenantID != "" && req.TenantID != t.TenantID {
+		return model.RefundRequest{}, false, ErrNotFound
+	}
+	from := model.RefundStatusPending
+	if t.To == model.RefundStatusFailed {
+		from = model.RefundStatusProcessing
+	}
+	if req.Status != from {
+		return model.RefundRequest{}, false, &RefundRefusedError{Reason: RefundRefusedStatus}
+	}
+	changed := false
+	switch t.To {
+	case model.RefundStatusRejected:
+		req.Status, req.ReviewedBy, req.ReviewNote, req.UpdatedAt = t.To, t.Actor, t.Note, now
+	case model.RefundStatusCancelled:
+		req.Status, req.UpdatedAt = t.To, now
+	case model.RefundStatusFailed:
+		// failRefund saves the request. failRefund 会保存申请。
+		changed, err = failRefund(tx, &req, t.Note, now)
+		return req, changed, err
+	default:
+		return model.RefundRequest{}, false, &RefundRefusedError{Reason: RefundRefusedStatus}
+	}
+	return req, changed, tx.SaveRefundRequest(req)
+}
+
+// lockRefundRequest locks a refund request's order, then the request, in the
+// order every refund path takes them.
+//
+// lockRefundRequest 按所有退款路径共同的顺序，先锁定退款申请的订单，再锁定申请本身。
+func lockRefundRequest(tx BillingTx, id string) (model.RefundRequest, model.CheckoutOrder, error) {
+	orderID, err := tx.RefundRequestOrderID(id)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, err
+	}
+	order, err := tx.OrderByID(orderID)
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, err
+	}
+	req, err := tx.RefundRequestByID(id)
+	return req, order, err
+}
+
+// refundLimit is the most a refund of order may return under policy, or a
+// *RefundRefusedError saying why nothing may be.
+//
+// refundLimit 是在 policy 下这个订单的一次退款最多能退回的金额；一分也不能退时返回
+// 说明原因的 *RefundRefusedError。
+func refundLimit(tx BillingTx, order model.CheckoutOrder, policy RefundPolicy, exceptID string, now time.Time) (int64, error) {
+	if order.Status != model.OrderStatusPaid {
+		return 0, &RefundRefusedError{Reason: RefundRefusedOrderState}
+	}
+	if !policy.NotBefore.IsZero() && order.CreatedAt.Before(policy.NotBefore) {
+		return 0, &RefundRefusedError{Reason: RefundRefusedWindow}
+	}
+	active, err := tx.OrderHasActiveRefund(order.ID, exceptID)
+	if err != nil {
+		return 0, err
+	}
+	if active {
+		return 0, &RefundRefusedError{Reason: RefundRefusedInProgress}
+	}
+	limit := order.RemainingRefundMinor()
+	if policy.UnusedOnly {
+		row, err := tx.TenantBilling(order.TenantID, now)
+		if err != nil {
+			return 0, err
+		}
+		limit = order.UnusedRefundMinor(row.BalanceMicro)
+	}
+	if limit <= 0 {
+		return 0, &RefundRefusedError{Reason: RefundRefusedNothing}
+	}
+	return limit, nil
+}
+
+func refundCurrency(order model.CheckoutOrder) string {
+	if order.PaidCurrency != "" {
+		return order.PaidCurrency
+	}
+	return strings.ToUpper(order.Currency)
+}
+
+// holdRefund takes an approved refund's credits off the balance until the
+// provider settles it, so the tenant cannot spend what is being refunded.
+//
+// holdRefund 在服务商结算之前把已批准退款的点数从余额中扣下，使租户无法花掉正在退款的
+// 点数。
+func holdRefund(tx BillingTx, req model.RefundRequest, now time.Time) (bool, error) {
+	if req.CreditsMicro <= 0 {
+		return false, nil
+	}
+	return creditOnce(tx, req.TenantID, model.LedgerKindRefund, -req.CreditsMicro, req.OrderID, "refund_hold:"+req.ID, now)
+}
+
+// failRefund marks a processing request failed with failure as the reason,
+// saves it, and returns the credits its approval held.
+//
+// failRefund 把一个处理中的申请标记为失败并以 failure 为原因，保存它，并退回批准时冻结
+// 的点数。
+func failRefund(tx BillingTx, req *model.RefundRequest, failure string, now time.Time) (bool, error) {
+	req.Status, req.Failure, req.UpdatedAt = model.RefundStatusFailed, failure, now
+	if err := tx.SaveRefundRequest(*req); err != nil {
+		return false, err
+	}
+	if req.CreditsMicro <= 0 {
+		return false, nil
+	}
+	return creditOnce(tx, req.TenantID, model.LedgerKindRefundReversal, req.CreditsMicro, req.OrderID, "refund_release:"+req.ID, now)
+}
+
+func creditOnce(tx BillingTx, tenantID, kind string, amount int64, ref, key string, now time.Time) (bool, error) {
+	entry := model.CreditLedgerEntry{
+		ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: kind,
+		AmountMicro: amount, Ref: ref, IdempotencyKey: &key, CreatedAt: now,
+	}
+	changed, _, err := tx.Credit(&entry)
+	return changed, err
 }
 
 func disputeOpened(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {

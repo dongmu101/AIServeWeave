@@ -383,6 +383,19 @@ const (
 	ActionBillingTenantMode    = "billing.tenant.mode"
 	ActionBillingTenantAdjust  = "billing.tenant.adjust"
 	ActionBillingCheckout      = "billing.checkout.create"
+	// Refund actions. A tenant's request and cancellation are recorded under
+	// its tenant; an operator's approval, rejection, direct refund and
+	// marking a refund failed under PlatformScope. The target is the refund
+	// request id.
+	//
+	// 退款动作。租户的申请与撤回记在其租户之下；运维的批准、驳回、直接退款与标记失败
+	// 记在 PlatformScope 下。目标是退款申请 id。
+	ActionBillingRefundRequest = "billing.refund.request"
+	ActionBillingRefundCancel  = "billing.refund.cancel"
+	ActionBillingRefundApprove = "billing.refund.approve"
+	ActionBillingRefundReject  = "billing.refund.reject"
+	ActionBillingRefundCreate  = "billing.refund.create"
+	ActionBillingRefundFail    = "billing.refund.fail"
 )
 
 // AuditLog is one administrative action, recorded for the README's

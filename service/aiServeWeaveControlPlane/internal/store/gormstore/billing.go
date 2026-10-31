@@ -278,6 +278,116 @@ func (s *Store) ApplyBillingEvent(ctx context.Context, event store.BillingEvent,
 	return result, nil
 }
 
+// OpenRefundRequest implements store.Billing.
+//
+// OpenRefundRequest 实现 store.Billing。
+func (s *Store) OpenRefundRequest(ctx context.Context, req model.RefundRequest, policy store.RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error) {
+	var (
+		order   model.CheckoutOrder
+		changed bool
+	)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		req, order, changed, err = store.OpenRefundRules(gormLedger{tx: tx}, req, policy, now)
+		return err
+	})
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, translate(err)
+	}
+	return req, order, changed, nil
+}
+
+// ApproveRefundRequest implements store.Billing.
+//
+// ApproveRefundRequest 实现 store.Billing。
+func (s *Store) ApproveRefundRequest(ctx context.Context, id, reviewer, note string, amountMinor int64, policy store.RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error) {
+	var (
+		req     model.RefundRequest
+		order   model.CheckoutOrder
+		changed bool
+	)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		req, order, changed, err = store.ApproveRefundRules(gormLedger{tx: tx}, id, reviewer, note, amountMinor, policy, now)
+		return err
+	})
+	if err != nil {
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, translate(err)
+	}
+	return req, order, changed, nil
+}
+
+// TransitionRefundRequest implements store.Billing.
+//
+// TransitionRefundRequest 实现 store.Billing。
+func (s *Store) TransitionRefundRequest(ctx context.Context, t store.RefundTransition, now time.Time) (model.RefundRequest, bool, error) {
+	var (
+		req     model.RefundRequest
+		changed bool
+	)
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		req, changed, err = store.TransitionRefundRules(gormLedger{tx: tx}, t, now)
+		return err
+	})
+	if err != nil {
+		return model.RefundRequest{}, false, translate(err)
+	}
+	return req, changed, nil
+}
+
+// RecordRefundSubmitted implements store.Billing.
+//
+// RecordRefundSubmitted 实现 store.Billing。
+func (s *Store) RecordRefundSubmitted(ctx context.Context, id, refundID string, now time.Time) error {
+	return translate(s.db.WithContext(ctx).Model(&model.RefundRequest{}).
+		Where("id = ? AND dodo_refund_id IS NULL", id).
+		Updates(map[string]any{"dodo_refund_id": refundID, "updated_at": now}).Error)
+}
+
+// GetRefundRequest implements store.Billing.
+//
+// GetRefundRequest 实现 store.Billing。
+func (s *Store) GetRefundRequest(ctx context.Context, id string) (model.RefundRequest, error) {
+	var out model.RefundRequest
+	return out, translate(s.db.WithContext(ctx).Where("id = ?", id).Take(&out).Error)
+}
+
+// ListRefundRequests implements store.Billing.
+//
+// ListRefundRequests 实现 store.Billing。
+func (s *Store) ListRefundRequests(ctx context.Context, query store.ListQuery, filter store.RefundRequestFilter) (store.Page[model.RefundRequest], error) {
+	db := s.db.WithContext(ctx).Model(&model.RefundRequest{})
+	if filter.TenantID != "" {
+		db = db.Where("tenant_id = ?", filter.TenantID)
+	}
+	if filter.OrderID != "" {
+		db = db.Where("order_id = ?", filter.OrderID)
+	}
+	if filter.Status != "" {
+		db = db.Where("status = ?", filter.Status)
+	}
+	return readPage(db, query, func(r model.RefundRequest) (time.Time, string) { return r.CreatedAt, r.ID })
+}
+
+// ActiveRefundOrders implements store.Billing.
+//
+// ActiveRefundOrders 实现 store.Billing。
+func (s *Store) ActiveRefundOrders(ctx context.Context, tenantID string) (map[string]bool, error) {
+	var ids []string
+	err := s.db.WithContext(ctx).Model(&model.RefundRequest{}).
+		Where("tenant_id = ? AND status IN ?", tenantID, []string{model.RefundStatusPending, model.RefundStatusProcessing}).
+		Pluck("order_id", &ids).Error
+	if err != nil {
+		return nil, translate(err)
+	}
+	out := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		out[id] = true
+	}
+	return out, nil
+}
+
 // CreateCreditPackage implements store.Billing.
 //
 // CreateCreditPackage 实现 store.Billing。
@@ -468,6 +578,48 @@ func (l gormLedger) OrderByPayment(paymentID string) (model.CheckoutOrder, error
 	var out model.CheckoutOrder
 	err := l.tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("dodo_payment_id = ?", paymentID).Take(&out).Error
 	return out, translate(err)
+}
+
+func (l gormLedger) TenantBilling(tenantID string, now time.Time) (model.TenantBilling, error) {
+	return lockTenantBilling(l.tx, tenantID, now)
+}
+
+func (l gormLedger) RefundRequestOrderID(id string) (string, error) {
+	var req model.RefundRequest
+	err := l.tx.Select("order_id").Where("id = ?", id).Take(&req).Error
+	return req.OrderID, translate(err)
+}
+
+func (l gormLedger) RefundRequestByID(id string) (model.RefundRequest, error) {
+	var out model.RefundRequest
+	err := l.tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Take(&out).Error
+	return out, translate(err)
+}
+
+func (l gormLedger) RefundRequestByRefund(refundID string) (model.RefundRequest, error) {
+	var out model.RefundRequest
+	err := l.tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("dodo_refund_id = ?", refundID).Take(&out).Error
+	return out, translate(err)
+}
+
+func (l gormLedger) OrderHasActiveRefund(orderID, exceptID string) (bool, error) {
+	var n int64
+	err := l.tx.Model(&model.RefundRequest{}).
+		Where("order_id = ? AND id <> ? AND status IN ?", orderID, exceptID, []string{model.RefundStatusPending, model.RefundStatusProcessing}).
+		Count(&n).Error
+	return n > 0, err
+}
+
+func (l gormLedger) InsertRefundRequest(req model.RefundRequest) error {
+	return l.tx.Create(&req).Error
+}
+
+func (l gormLedger) SaveRefundRequest(req model.RefundRequest) error {
+	return l.tx.Model(&model.RefundRequest{}).Where("id = ?", req.ID).Updates(map[string]any{
+		"status": req.Status, "amount_minor": req.AmountMinor, "currency": req.Currency,
+		"credits_micro": req.CreditsMicro, "reviewed_by": req.ReviewedBy, "review_note": req.ReviewNote,
+		"dodo_refund_id": req.DodoRefundID, "failure": req.Failure, "updated_at": req.UpdatedAt,
+	}).Error
 }
 
 func (l gormLedger) SaveOrder(order model.CheckoutOrder) error {

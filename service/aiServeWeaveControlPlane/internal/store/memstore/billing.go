@@ -31,6 +31,7 @@ type billingState struct {
 	ledger   []model.CreditLedgerEntry
 	charges  map[string]model.UsageCharge
 	webhooks map[string]model.BillingWebhookEvent
+	refunds  map[string]model.RefundRequest
 }
 
 func newBillingState() billingState {
@@ -41,6 +42,7 @@ func newBillingState() billingState {
 		orders:   map[string]model.CheckoutOrder{},
 		charges:  map[string]model.UsageCharge{},
 		webhooks: map[string]model.BillingWebhookEvent{},
+		refunds:  map[string]model.RefundRequest{},
 	}
 }
 
@@ -230,12 +232,126 @@ func (s *Store) ApplyBillingEvent(_ context.Context, event store.BillingEvent, n
 func (s *Store) snapshotBilling() func() {
 	tenants := maps.Clone(s.billing.tenants)
 	orders := maps.Clone(s.billing.orders)
+	refunds := maps.Clone(s.billing.refunds)
 	ledgerLen := len(s.billing.ledger)
 	return func() {
 		s.billing.tenants = tenants
 		s.billing.orders = orders
+		s.billing.refunds = refunds
 		s.billing.ledger = s.billing.ledger[:ledgerLen]
 	}
+}
+
+// OpenRefundRequest implements store.Billing.
+//
+// OpenRefundRequest 实现 store.Billing。
+func (s *Store) OpenRefundRequest(_ context.Context, req model.RefundRequest, policy store.RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	restore := s.snapshotBilling()
+	out, order, changed, err := store.OpenRefundRules(memLedger{s}, req, policy, now)
+	if err != nil {
+		restore()
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	return out, order, changed, nil
+}
+
+// ApproveRefundRequest implements store.Billing.
+//
+// ApproveRefundRequest 实现 store.Billing。
+func (s *Store) ApproveRefundRequest(_ context.Context, id, reviewer, note string, amountMinor int64, policy store.RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	restore := s.snapshotBilling()
+	req, order, changed, err := store.ApproveRefundRules(memLedger{s}, id, reviewer, note, amountMinor, policy, now)
+	if err != nil {
+		restore()
+		return model.RefundRequest{}, model.CheckoutOrder{}, false, err
+	}
+	return req, order, changed, nil
+}
+
+// TransitionRefundRequest implements store.Billing.
+//
+// TransitionRefundRequest 实现 store.Billing。
+func (s *Store) TransitionRefundRequest(_ context.Context, t store.RefundTransition, now time.Time) (model.RefundRequest, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	restore := s.snapshotBilling()
+	req, changed, err := store.TransitionRefundRules(memLedger{s}, t, now)
+	if err != nil {
+		restore()
+		return model.RefundRequest{}, false, err
+	}
+	return req, changed, nil
+}
+
+// RecordRefundSubmitted implements store.Billing.
+//
+// RecordRefundSubmitted 实现 store.Billing。
+func (s *Store) RecordRefundSubmitted(_ context.Context, id, refundID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	req, ok := s.billing.refunds[id]
+	if !ok || req.DodoRefundID != nil {
+		return nil
+	}
+	for _, other := range s.billing.refunds {
+		if other.DodoRefundID != nil && *other.DodoRefundID == refundID {
+			return store.ErrConflict
+		}
+	}
+	req.DodoRefundID, req.UpdatedAt = &refundID, now
+	s.billing.refunds[id] = req
+	return nil
+}
+
+// GetRefundRequest implements store.Billing.
+//
+// GetRefundRequest 实现 store.Billing。
+func (s *Store) GetRefundRequest(_ context.Context, id string) (model.RefundRequest, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	req, ok := s.billing.refunds[id]
+	if !ok {
+		return model.RefundRequest{}, store.ErrNotFound
+	}
+	return req, nil
+}
+
+// ListRefundRequests implements store.Billing.
+//
+// ListRefundRequests 实现 store.Billing。
+func (s *Store) ListRefundRequests(_ context.Context, query store.ListQuery, filter store.RefundRequestFilter) (store.Page[model.RefundRequest], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var items []model.RefundRequest
+	for _, r := range s.billing.refunds {
+		if (filter.TenantID == "" || r.TenantID == filter.TenantID) &&
+			(filter.OrderID == "" || r.OrderID == filter.OrderID) &&
+			(filter.Status == "" || r.Status == filter.Status) {
+			items = append(items, r)
+		}
+	}
+	key := func(r model.RefundRequest) (time.Time, string) { return r.CreatedAt, r.ID }
+	sortNewestFirst(items, key)
+	return paginate(items, query, key)
+}
+
+// ActiveRefundOrders implements store.Billing.
+//
+// ActiveRefundOrders 实现 store.Billing。
+func (s *Store) ActiveRefundOrders(_ context.Context, tenantID string) (map[string]bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := map[string]bool{}
+	for _, r := range s.billing.refunds {
+		if r.TenantID == tenantID && r.Active() {
+			out[r.OrderID] = true
+		}
+	}
+	return out, nil
 }
 
 // CreateCreditPackage implements store.Billing.
@@ -481,6 +597,64 @@ func (l memLedger) SaveOrder(order model.CheckoutOrder) error {
 		}
 	}
 	l.s.billing.orders[order.ID] = order
+	return nil
+}
+
+func (l memLedger) TenantBilling(tenantID string, now time.Time) (model.TenantBilling, error) {
+	return l.s.billingRow(tenantID, now), nil
+}
+
+func (l memLedger) RefundRequestOrderID(id string) (string, error) {
+	req, ok := l.s.billing.refunds[id]
+	if !ok {
+		return "", store.ErrNotFound
+	}
+	return req.OrderID, nil
+}
+
+func (l memLedger) RefundRequestByID(id string) (model.RefundRequest, error) {
+	req, ok := l.s.billing.refunds[id]
+	if !ok {
+		return model.RefundRequest{}, store.ErrNotFound
+	}
+	return req, nil
+}
+
+func (l memLedger) RefundRequestByRefund(refundID string) (model.RefundRequest, error) {
+	for _, req := range l.s.billing.refunds {
+		if req.DodoRefundID != nil && *req.DodoRefundID == refundID {
+			return req, nil
+		}
+	}
+	return model.RefundRequest{}, store.ErrNotFound
+}
+
+func (l memLedger) OrderHasActiveRefund(orderID, exceptID string) (bool, error) {
+	for _, req := range l.s.billing.refunds {
+		if req.OrderID == orderID && req.ID != exceptID && req.Active() {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (l memLedger) InsertRefundRequest(req model.RefundRequest) error {
+	if _, ok := l.s.billing.refunds[req.ID]; ok {
+		return store.ErrConflict
+	}
+	l.s.billing.refunds[req.ID] = req
+	return nil
+}
+
+func (l memLedger) SaveRefundRequest(req model.RefundRequest) error {
+	if req.DodoRefundID != nil {
+		for id, other := range l.s.billing.refunds {
+			if id != req.ID && other.DodoRefundID != nil && *other.DodoRefundID == *req.DodoRefundID {
+				return store.ErrConflict
+			}
+		}
+	}
+	l.s.billing.refunds[req.ID] = req
 	return nil
 }
 

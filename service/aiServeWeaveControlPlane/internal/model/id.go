@@ -24,6 +24,7 @@ const (
 	PrefixCreditPackage    = "pkg_"
 	PrefixCheckoutOrder    = "ord_"
 	PrefixCreditLedger     = "led_"
+	PrefixRefundRequest    = "rfd_"
 )
 
 // randomBytes is the entropy in an id. 14 bytes leaves a 32-character id

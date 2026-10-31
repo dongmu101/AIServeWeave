@@ -910,6 +910,7 @@ const (
 	BillingEventPaymentSucceeded = "payment_succeeded"
 	BillingEventPaymentFailed    = "payment_failed"
 	BillingEventRefundSucceeded  = "refund_succeeded"
+	BillingEventRefundFailed     = "refund_failed"
 	BillingEventDisputeOpened    = "dispute_opened"
 	BillingEventDisputeWon       = "dispute_won"
 )
@@ -961,10 +962,16 @@ type BillingEvent struct {
 	PaymentID         string
 	CheckoutSessionID string
 	RefundID          string
-	DisputeID         string
-	AmountMinor       int64
-	Currency          string
-	IsPartial         bool
+	// RefundRequestID is the refund request a refund this service asked
+	// for carries in its metadata; empty for a refund made elsewhere.
+	//
+	// RefundRequestID 是本服务发起的退款在 metadata 中携带的退款申请 id；在别处
+	// 发起的退款为空。
+	RefundRequestID string
+	DisputeID       string
+	AmountMinor     int64
+	Currency        string
+	IsPartial       bool
 }
 
 // BillingEventResult is what applying one event did.
@@ -980,6 +987,98 @@ type BillingEventResult struct {
 	// BlockedChanged 报告租户余额在可用与耗尽之间发生了翻转，已缓存的 key 校验结果
 	// 因此过期。
 	BlockedChanged bool
+}
+
+// RefundRequestFilter narrows a refund-request list. An empty field does not
+// filter.
+//
+// RefundRequestFilter 收窄退款申请列表。字段为空表示不筛选。
+type RefundRequestFilter struct {
+	TenantID string
+	OrderID  string
+	Status   string
+}
+
+// RefundPolicy is how much of an order a new or approved refund may return.
+// NotBefore, when set, refuses orders created before it: the tenant's
+// refund window. UnusedOnly caps the refund at the order's credits the
+// tenant has not spent, judged against the current balance.
+//
+// RefundPolicy 规定一次新建或批准的退款最多能退回订单的多少。NotBefore 设置时，拒绝
+// 在它之前创建的订单：即租户的退款期限。UnusedOnly 把退款限制在租户尚未花掉的订单点数
+// 之内，依据当前余额判断。
+type RefundPolicy struct {
+	NotBefore  time.Time
+	UnusedOnly bool
+}
+
+// Reasons a refund is refused, carried by RefundRefusedError.
+//
+// 退款被拒绝的原因，由 RefundRefusedError 携带。
+const (
+	// RefundRefusedOrderState: the order is not a paid order (pending,
+	// failed, fully refunded or disputed).
+	//
+	// RefundRefusedOrderState：订单不是已付款状态（待付款、失败、已全额退款或争议中）。
+	RefundRefusedOrderState = "order_not_refundable"
+	// RefundRefusedWindow: the order is older than the refund window.
+	//
+	// RefundRefusedWindow：订单早于退款期限。
+	RefundRefusedWindow = "refund_window_closed"
+	// RefundRefusedInProgress: the order already has a pending or processing
+	// refund.
+	//
+	// RefundRefusedInProgress：订单已有待审核或处理中的退款。
+	RefundRefusedInProgress = "refund_in_progress"
+	// RefundRefusedNothing: the policy leaves nothing to refund, e.g. every
+	// credit of the order is spent.
+	//
+	// RefundRefusedNothing：按规则已无可退金额，例如订单点数已全部用完。
+	RefundRefusedNothing = "nothing_refundable"
+	// RefundRefusedAmount: the amount asked for exceeds what may be refunded.
+	//
+	// RefundRefusedAmount：所请求的金额超过可退金额。
+	RefundRefusedAmount = "amount_exceeds_refundable"
+	// RefundRefusedStatus: the request is not in a status the action
+	// applies to.
+	//
+	// RefundRefusedStatus：申请所处的状态不适用该操作。
+	RefundRefusedStatus = "refund_status_conflict"
+)
+
+// RefundRefusedError refuses a refund action for Reason, one of the
+// RefundRefused constants. It matches ErrConflict under errors.Is.
+//
+// RefundRefusedError 以 Reason（RefundRefused 系列常量之一）拒绝一个退款操作。在
+// errors.Is 下它与 ErrConflict 匹配。
+type RefundRefusedError struct {
+	Reason string
+}
+
+// Error implements error.
+//
+// Error 实现 error。
+func (e *RefundRefusedError) Error() string { return "store: refund refused: " + e.Reason }
+
+// Unwrap makes the refusal an ErrConflict.
+//
+// Unwrap 使该拒绝成为一个 ErrConflict。
+func (e *RefundRefusedError) Unwrap() error { return ErrConflict }
+
+// RefundTransition closes a refund request without a provider event: a
+// tenant cancelling or an operator rejecting a pending one, or an operator
+// marking a processing one failed, which returns its held credits. TenantID,
+// when set, must own the request.
+//
+// RefundTransition 在没有服务商事件的情况下关闭一个退款申请：租户撤回或运维驳回一个
+// 待审核的申请，或运维把一个处理中的申请标记为失败（退回其冻结的点数）。TenantID 设置
+// 时必须是该申请的所属租户。
+type RefundTransition struct {
+	ID       string
+	TenantID string
+	To       string
+	Actor    string
+	Note     string
 }
 
 // Billing persists prepaid-credit billing. Every method that moves a balance
@@ -1044,6 +1143,43 @@ type Billing interface {
 	//
 	// ApplyBillingEvent 对一个已验签的服务商事件恰好应用一次。
 	ApplyBillingEvent(ctx context.Context, event BillingEvent, now time.Time) (BillingEventResult, error)
+
+	// OpenRefundRequest records a new refund of req.OrderID within policy.
+	// req.AmountMinor zero asks for everything the policy allows. A pending
+	// request (a tenant's) holds nothing yet; a processing one (an
+	// operator's) holds its credits off the balance at once. A refusal is a
+	// *RefundRefusedError.
+	//
+	// OpenRefundRequest 在 policy 范围内记录一个新的 req.OrderID 退款。req.AmountMinor
+	// 为零表示申请规则允许的全部金额。待审核的申请（租户发起）此时不冻结任何点数；处理中
+	// 的申请（运维发起）立即从余额中冻结其点数。拒绝时返回 *RefundRefusedError。
+	OpenRefundRequest(ctx context.Context, req model.RefundRequest, policy RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error)
+	// ApproveRefundRequest moves a pending request to processing, re-judging
+	// its amount within policy at today's balance (amountMinor, when not
+	// zero, lowers it further) and holding its credits. It returns the
+	// request, its order, and whether the hold flipped the tenant blocked.
+	//
+	// ApproveRefundRequest 把一个待审核的申请推进到处理中：按当前余额在 policy 范围内
+	// 重新核定其金额（amountMinor 不为零时可进一步调低），并冻结其点数。返回申请、其订单，
+	// 以及冻结是否让租户翻转为被拦截。
+	ApproveRefundRequest(ctx context.Context, id, reviewer, note string, amountMinor int64, policy RefundPolicy, now time.Time) (model.RefundRequest, model.CheckoutOrder, bool, error)
+	// TransitionRefundRequest applies t. See RefundTransition.
+	//
+	// TransitionRefundRequest 应用 t，见 RefundTransition。
+	TransitionRefundRequest(ctx context.Context, t RefundTransition, now time.Time) (model.RefundRequest, bool, error)
+	// RecordRefundSubmitted records the provider refund id of a request the
+	// provider accepted, unless a refund event already did.
+	//
+	// RecordRefundSubmitted 记录服务商已受理的申请所对应的服务商退款 id；退款事件已
+	// 记录过时不覆盖。
+	RecordRefundSubmitted(ctx context.Context, id, refundID string, now time.Time) error
+	GetRefundRequest(ctx context.Context, id string) (model.RefundRequest, error)
+	ListRefundRequests(ctx context.Context, query ListQuery, filter RefundRequestFilter) (Page[model.RefundRequest], error)
+	// ActiveRefundOrders returns the ids of a tenant's orders with a pending
+	// or processing refund.
+	//
+	// ActiveRefundOrders 返回租户名下有待审核或处理中退款的订单 id。
+	ActiveRefundOrders(ctx context.Context, tenantID string) (map[string]bool, error)
 
 	CreateCreditPackage(ctx context.Context, pkg *model.CreditPackage) error
 	UpdateCreditPackage(ctx context.Context, pkg model.CreditPackage) error

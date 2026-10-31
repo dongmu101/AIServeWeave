@@ -472,6 +472,18 @@ test("tenant billing routes resolve only on the tenant surface and never forward
     { name: "checkout is not readable", method: "GET", path: "/admin/v1/billing/checkout", query: "", search: null },
     { name: "portal is not readable", method: "GET", path: "/admin/v1/billing/portal", query: "", search: null },
     { name: "the provider webhook is never forwarded", method: "POST", path: "/billing/v1/dodo/webhook", query: "", search: null },
+    { name: "request a refund", method: "POST", path: "/admin/v1/billing/orders/ord_1/refund-requests", query: "tenant_id=other", search: "" },
+    { name: "refund request is not a PUT", method: "PUT", path: "/admin/v1/billing/orders/ord_1/refund-requests", query: "", search: null },
+    { name: "traversal as order id", method: "POST", path: "/admin/v1/billing/orders/../refund-requests", query: "", search: null },
+    { name: "no tenant direct refund", method: "POST", path: "/admin/v1/billing/orders/ord_1/refund", query: "", search: null },
+    { name: "refund request filters", method: "GET", path: "/admin/v1/billing/refund-requests", query: "limit=20&cursor=c&status=pending&order_id=ord_1&tenant_id=other", search: "?limit=20&cursor=c&status=pending&order_id=ord_1" },
+    { name: "refund requests are not created by collection POST", method: "POST", path: "/admin/v1/billing/refund-requests", query: "", search: null },
+    { name: "withdraw a refund request", method: "POST", path: "/admin/v1/billing/refund-requests/rr_1/cancel", query: "", search: "" },
+    { name: "withdraw is not readable", method: "GET", path: "/admin/v1/billing/refund-requests/rr_1/cancel", query: "", search: null },
+    { name: "a tenant cannot approve", method: "POST", path: "/admin/v1/billing/refund-requests/rr_1/approve", query: "", search: null },
+    { name: "a tenant cannot reject", method: "POST", path: "/admin/v1/billing/refund-requests/rr_1/reject", query: "", search: null },
+    { name: "a tenant cannot mark failed", method: "POST", path: "/admin/v1/billing/refund-requests/rr_1/fail", query: "", search: null },
+    { name: "no single refund request read", method: "GET", path: "/admin/v1/billing/refund-requests/rr_1", query: "", search: null },
   ];
   for (const item of cases) {
     assert.equal(resolve(item.method, item.path, item.query)?.search ?? null, item.search, item.name);
@@ -499,6 +511,18 @@ test("operator billing routes resolve only on the operator surface with their ow
     { name: "adjust is not a PUT", method: "PUT", path: "/operator/v1/billing/tenants/tnt_1/adjust", search: null },
     { name: "orders by tenant", method: "GET", path: "/operator/v1/billing/orders", query: "limit=50&status=paid&tenant_id=tnt_1&kind=x", search: "?limit=50&status=paid&tenant_id=tnt_1" },
     { name: "ledger by tenant", method: "GET", path: "/operator/v1/billing/ledger", query: "cursor=c&kind=adjust&tenant_id=tnt_1&status=x", search: "?cursor=c&kind=adjust&tenant_id=tnt_1" },
+    { name: "refund requests by status and tenant", method: "GET", path: "/operator/v1/billing/refund-requests", query: "limit=20&cursor=c&status=pending&tenant_id=tnt_1&order_id=ord_1&kind=x", search: "?limit=20&cursor=c&status=pending&tenant_id=tnt_1&order_id=ord_1" },
+    { name: "approve", method: "POST", path: "/operator/v1/billing/refund-requests/rr_1/approve", search: "" },
+    { name: "approve is not a PUT", method: "PUT", path: "/operator/v1/billing/refund-requests/rr_1/approve", search: null },
+    { name: "reject", method: "POST", path: "/operator/v1/billing/refund-requests/rr_1/reject", search: "" },
+    { name: "mark failed", method: "POST", path: "/operator/v1/billing/refund-requests/rr_1/fail", search: "" },
+    { name: "mark failed is not a DELETE", method: "DELETE", path: "/operator/v1/billing/refund-requests/rr_1/fail", search: null },
+    { name: "an operator never withdraws a tenant's request", method: "POST", path: "/operator/v1/billing/refund-requests/rr_1/cancel", search: null },
+    { name: "unknown review action", method: "POST", path: "/operator/v1/billing/refund-requests/rr_1/succeed", search: null },
+    { name: "traversal as refund id", method: "POST", path: "/operator/v1/billing/refund-requests/../approve", search: null },
+    { name: "direct refund", method: "POST", path: "/operator/v1/billing/orders/ord_1/refund", query: "amount_minor=1", search: "" },
+    { name: "direct refund is not readable", method: "GET", path: "/operator/v1/billing/orders/ord_1/refund", search: null },
+    { name: "an operator does not file tenant requests", method: "POST", path: "/operator/v1/billing/orders/ord_1/refund-requests", search: null },
   ];
   for (const item of cases) {
     assert.equal(operatorResolve(item.method, item.path, item.query)?.search ?? null, item.search, item.name);

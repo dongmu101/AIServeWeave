@@ -83,10 +83,17 @@ const (
 //
 // 账目类型。集合是封闭的，理由与审计动作相同：对账查询要针对一套已知词汇来写。
 const (
-	LedgerKindGrant           = "grant"
-	LedgerKindTopup           = "topup"
-	LedgerKindUsage           = "usage"
-	LedgerKindRefund          = "refund"
+	LedgerKindGrant  = "grant"
+	LedgerKindTopup  = "topup"
+	LedgerKindUsage  = "usage"
+	LedgerKindRefund = "refund"
+	// LedgerKindRefundReversal returns credits a refund held or took back
+	// beyond what the provider finally refunded: a refund that failed, or one
+	// that settled for less than was approved.
+	//
+	// LedgerKindRefundReversal 退回退款冻结或多扣的点数：退款失败，或最终退款金额少于
+	// 批准金额时。
+	LedgerKindRefundReversal  = "refund_reversal"
 	LedgerKindDispute         = "dispute"
 	LedgerKindDisputeReversal = "dispute_reversal"
 	LedgerKindAdjust          = "adjust"
@@ -243,9 +250,17 @@ func nonNegative(v int64) uint64 {
 // 记录这笔付款实际收取的金额（含税）；退款以它们为基准衡量，因为退款使用的是付款的口径，
 // 而不是充值包的口径。
 type CheckoutOrder struct {
-	ID            string  `gorm:"primaryKey;size:32"`
-	TenantID      string  `gorm:"size:32;not null"`
-	PackageID     string  `gorm:"size:32;not null"`
+	ID        string `gorm:"primaryKey;size:32"`
+	TenantID  string `gorm:"size:32;not null"`
+	PackageID string `gorm:"size:32;not null"`
+	// DodoProductID is the package's product when the order was created,
+	// kept so a refund names the item the payment bought even after the
+	// package is pointed at another product. Empty for orders created before
+	// it was recorded.
+	//
+	// DodoProductID 是创建订单时充值包的产品，保留下来，使充值包改指其他产品之后，退款
+	// 仍能指明这笔付款买的是哪一项。记录这一列之前创建的订单为空。
+	DodoProductID string  `gorm:"size:64;not null"`
 	DodoSessionID string  `gorm:"size:128;not null"`
 	DodoPaymentID *string `gorm:"size:64"`
 	AmountMinor   int64   `gorm:"not null"`
@@ -303,6 +318,120 @@ func (o CheckoutOrder) RefundCredits(refundMinor int64) int64 {
 		q.Add(q, big.NewInt(1))
 	}
 	return q.Int64()
+}
+
+// RemainingRefundMinor is how much of the payment is not refunded yet.
+//
+// RemainingRefundMinor 是这笔付款尚未退款的金额。
+func (o CheckoutOrder) RemainingRefundMinor() int64 {
+	return max(o.RefundBasisMinor()-o.RefundedMinor, 0)
+}
+
+// HeldCredits is how many of the order's credits refunds have not taken back.
+//
+// HeldCredits 是订单点数中尚未被退款扣回的部分。
+func (o CheckoutOrder) HeldCredits() int64 {
+	return o.CreditsMicro - o.RefundCredits(o.RefundedMinor)
+}
+
+// UnusedRefundMinor is the most a refund of this order may return under the
+// unused-credits rule, when the tenant's balance is availableMicro: the
+// remaining payment when the balance still covers every credit the order
+// holds, and otherwise the share of the payment the balance stands for,
+// rounded down. Refunding it never takes back more than availableMicro,
+// because RefundCredits rounds up only what the rounding down here left out.
+//
+// UnusedRefundMinor 是在「只退未用点数」规则下、租户余额为 availableMicro 时，这个
+// 订单的一次退款最多能退回的金额：余额仍覆盖订单持有的全部点数时，为剩余的付款金额；
+// 否则为余额所对应的那部分付款金额，向下取整。退回这个金额扣回的点数绝不会超过
+// availableMicro，因为 RefundCredits 向上取整的部分，正是这里向下取整舍去的部分。
+func (o CheckoutOrder) UnusedRefundMinor(availableMicro int64) int64 {
+	remaining := o.RemainingRefundMinor()
+	if remaining <= 0 || o.CreditsMicro <= 0 || availableMicro <= 0 {
+		return 0
+	}
+	if availableMicro >= o.HeldCredits() {
+		return remaining
+	}
+	num := new(big.Int).Mul(big.NewInt(availableMicro), big.NewInt(o.RefundBasisMinor()))
+	q := new(big.Int).Quo(num, big.NewInt(o.CreditsMicro))
+	return min(q.Int64(), remaining)
+}
+
+// RefundDelta is the credits refunding amountMinor more of the order takes
+// back, given what is already refunded.
+//
+// RefundDelta 是在已退款金额的基础上再退 amountMinor 所要扣回的点数。
+func (o CheckoutOrder) RefundDelta(amountMinor int64) int64 {
+	refunded := min(o.RefundedMinor+max(amountMinor, 0), o.RefundBasisMinor())
+	return o.RefundCredits(refunded) - o.RefundCredits(o.RefundedMinor)
+}
+
+// Refund request statuses. A tenant's request starts pending and an
+// operator approves or rejects it; an operator's own refund starts
+// processing. Processing means the refund was approved, its credits are held
+// off the balance, and the provider has it or is being asked; the provider's
+// refund events settle it as succeeded or failed.
+//
+// 退款申请状态。租户的申请从 pending 开始，由运维批准或驳回；运维直接发起的退款从
+// processing 开始。processing 表示退款已批准、其点数已从余额中冻结，且服务商已收到或
+// 正在受理；服务商的退款事件把它结算为 succeeded 或 failed。
+const (
+	RefundStatusPending    = "pending"
+	RefundStatusRejected   = "rejected"
+	RefundStatusCancelled  = "cancelled"
+	RefundStatusProcessing = "processing"
+	RefundStatusSucceeded  = "succeeded"
+	RefundStatusFailed     = "failed"
+)
+
+// Refund request sources.
+//
+// 退款申请来源。
+const (
+	RefundSourceTenant   = "tenant"
+	RefundSourceOperator = "operator"
+)
+
+// RefundRequest is one refund of one order, from a tenant's request or an
+// operator's own decision, through to the provider's answer. AmountMinor is
+// in the payment's currency, tax included. CreditsMicro is what approval
+// held off the balance, so a failure returns exactly that. DodoRefundID is
+// unique when set.
+//
+// RefundRequest 是一个订单的一次退款，从租户的申请或运维的直接决定开始，直到服务商
+// 给出答复。AmountMinor 以付款币种计，含税。CreditsMicro 是批准时从余额中冻结的点数，
+// 退款失败时原样退回。DodoRefundID 一旦设置即唯一。
+type RefundRequest struct {
+	ID           string  `gorm:"primaryKey;size:32"`
+	TenantID     string  `gorm:"size:32;not null"`
+	OrderID      string  `gorm:"size:32;not null"`
+	Source       string  `gorm:"size:16;not null"`
+	Status       string  `gorm:"size:16;not null"`
+	AmountMinor  int64   `gorm:"not null"`
+	Currency     string  `gorm:"size:8;not null"`
+	CreditsMicro int64   `gorm:"not null"`
+	Reason       string  `gorm:"size:1024;not null"`
+	RequestedBy  string  `gorm:"size:32;not null"`
+	ReviewedBy   string  `gorm:"size:32;not null"`
+	ReviewNote   string  `gorm:"size:1024;not null"`
+	DodoRefundID *string `gorm:"size:64"`
+	Failure      string  `gorm:"size:256;not null"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+}
+
+// TableName pins the table name.
+//
+// TableName 钉死表名。
+func (RefundRequest) TableName() string { return "refund_requests" }
+
+// Active reports whether the request still holds its order: one waiting for
+// review or for the provider.
+//
+// Active 报告该申请是否仍占用其订单：等待审核或等待服务商答复。
+func (r RefundRequest) Active() bool {
+	return r.Status == RefundStatusPending || r.Status == RefundStatusProcessing
 }
 
 // CreditLedgerEntry is one balance change. The ledger is append-only and

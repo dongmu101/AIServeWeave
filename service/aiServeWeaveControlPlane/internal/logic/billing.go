@@ -29,15 +29,17 @@ import (
 var ErrInvalidSignature = errors.New("logic: invalid webhook signature")
 
 // BillingConfig is what billing needs beyond the store: the provider, where
-// a tenant returns to after checkout, and what a self-registered tenant
-// starts with.
+// a tenant returns to after checkout, what a self-registered tenant starts
+// with, and how many days after a purchase its tenant may ask for a refund
+// (zero turns tenant refund requests off).
 //
-// BillingConfig 是计费在 store 之外所需的一切：服务商、租户结账后返回的地址，以及
-// 自助注册的租户起步时拥有的点数。
+// BillingConfig 是计费在 store 之外所需的一切：服务商、租户结账后返回的地址、自助注册
+// 的租户起步时拥有的点数，以及购买后多少天内租户可以申请退款（为零时关闭租户退款申请）。
 type BillingConfig struct {
 	Provider           billing.Provider
 	ReturnURL          string
 	SignupGrantCredits int64
+	RefundWindowDays   int
 }
 
 // WithBilling turns billing on. Without it the Service charges nothing,
@@ -63,6 +65,11 @@ type BillingOverview struct {
 	Blocked      bool
 	HasCustomer  bool
 	Packages     []model.CreditPackage
+	// RefundWindowDays is how long after a purchase the tenant may ask for
+	// a refund; zero means it may not.
+	//
+	// RefundWindowDays 是购买后租户可申请退款的天数；为零表示不可申请。
+	RefundWindowDays int
 }
 
 // CheckoutResult is an opened checkout: the order it created and where to
@@ -137,7 +144,7 @@ func (s *Service) BillingOverview(ctx context.Context, actor Actor) (BillingOver
 	}
 	return BillingOverview{
 		Mode: row.Mode, BalanceMicro: row.BalanceMicro, Blocked: row.Blocked(),
-		HasCustomer: row.DodoCustomerID != "", Packages: packages,
+		HasCustomer: row.DodoCustomerID != "", Packages: packages, RefundWindowDays: s.billing.RefundWindowDays,
 	}, nil
 }
 
@@ -185,7 +192,7 @@ func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID str
 
 	now := s.clock.Now()
 	order := model.CheckoutOrder{
-		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PackageID: pkg.ID,
+		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PackageID: pkg.ID, DodoProductID: pkg.DodoProductID,
 		AmountMinor: amountMinor, Currency: pkg.Currency, CreditsMicro: credits,
 		Status: model.OrderStatusPending, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 	}

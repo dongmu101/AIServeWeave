@@ -323,6 +323,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			Provider:           provider,
 			ReturnURL:          cfg.Billing.ReturnURL,
 			SignupGrantCredits: cfg.Billing.SignupGrantCredits,
+			RefundWindowDays:   cfg.Billing.RefundWindowDays,
 		}))
 	}
 
