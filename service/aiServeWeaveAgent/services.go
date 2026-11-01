@@ -10,11 +10,13 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
+	"AIServeWeave/service/aiServeWeaveAgent/clidiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/localdiscovery"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
 )
@@ -43,15 +45,35 @@ func startMetricsEndpoint(logger *slog.Logger, registry *metrics.Registry, addr 
 	return server
 }
 
-// startLocalDiscovery starts localdiscovery.Scanner in the background and
-// returns a channel that is closed once its goroutine has exited — after ctx
-// is canceled, not before — so the caller can wait for any in-flight
-// Manager.Add call to finish before Close starts tearing instances down.
-// When autoDiscover is false the channel is returned already closed, so
-// waiting on it is always safe regardless of whether discovery is enabled.
-func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runtime.Manager, autoDiscover bool, interval time.Duration) <-chan struct{} {
+// startLocalDiscovery starts localdiscovery.Scanner and clidiscovery.Scanner in
+// the background and returns a channel that is closed once both goroutines
+// have exited — after ctx is canceled, not before — so the caller can wait for
+// any in-flight Manager.Add call to finish before Close starts tearing
+// instances down. When autoDiscover is false the channel is returned already
+// closed, so waiting on it is always safe regardless of whether discovery is
+// enabled. The CLI scanner follows the same switch: -auto-discover=false also
+// stops a logged-in Codex CLI from being registered on its own.
+//
+// startLocalDiscovery 在后台启动 localdiscovery.Scanner 与 clidiscovery.Scanner，并返回
+// 一个通道，两个协程都退出后（在 ctx 取消之后，而不是之前）才关闭，让调用方能在 Close 开始
+// 拆除实例之前，等待正在进行的 Manager.Add 完成。autoDiscover 为 false 时返回的通道已经
+// 关闭，因此无论是否启用发现，等待它都是安全的。CLI 扫描器服从同一个开关：
+// -auto-discover=false 也会让已登录的 Codex CLI 不再被自动注册。
+func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runtime.Manager, local *localDeclarations, allowed []string, autoDiscover bool, interval time.Duration) <-chan struct{} {
 	done := make(chan struct{})
 	if !autoDiscover {
+		close(done)
+		return done
+	}
+	cliScanner, err := clidiscovery.New(clidiscovery.Config{
+		Manager:         manager,
+		Declare:         local.add,
+		Undeclare:       local.remove,
+		AllowedRuntimes: allowed,
+		Logger:          logger,
+	})
+	if err != nil {
+		logger.Error("cli discovery did not start", slog.Any("error", err))
 		close(done)
 		return done
 	}
@@ -68,11 +90,23 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 		close(done)
 		return done
 	}
+	var running sync.WaitGroup
+	running.Add(2)
 	go func() {
-		defer close(done)
+		defer running.Done()
 		if err := scanner.Run(ctx); err != nil {
 			logger.Error("local discovery stopped unexpectedly", slog.Any("error", err))
 		}
+	}()
+	go func() {
+		defer running.Done()
+		if err := cliScanner.Run(ctx); err != nil {
+			logger.Error("cli discovery stopped unexpectedly", slog.Any("error", err))
+		}
+	}()
+	go func() {
+		running.Wait()
+		close(done)
 	}()
 	return done
 }

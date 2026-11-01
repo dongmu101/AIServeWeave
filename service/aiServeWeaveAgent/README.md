@@ -41,6 +41,7 @@ runtimes:
 
 - 文件无法读取、存在重复 ID 或任一运行时配置非法时，本次重新加载整体放弃，运行中的运行时不受影响；越过这一关后各运行时独立调和，个别失败只保留该运行时原状。
 - 只调和文件声明的运行时；`-ollama-url` 声明的、自动发现的与 Gateway 下发的实例不受影响。
+- 自动发现：`-auto-discover`（默认开）下，Agent 还会每两分钟检查本机是否装了并登录了 Codex CLI，是则以 `codex-local` 注册；PATH 里没有 `codex`、未登录、已有 `kind: codex` 声明、或 `allowed_runtimes` 非空且不含 `codex-local` 时都不注册。`-auto-discover=false` 关闭。Ubuntu 服务的 PATH 不含 nvm、npm 全局目录等，安装时用 `--path` 补上。
 - Gateway 端点、证书、运行时白名单、指标与日志等其余设置仍需重启。重新加载出白名单外的运行时 ID 时，日志会给出警告。
 - 没有 `-config` 文件（也没有设置页面的配置路径）时，`SIGHUP` 只记录一条日志，不做任何改动。
 

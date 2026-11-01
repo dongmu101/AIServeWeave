@@ -395,6 +395,46 @@ func TestCodexFactoryRequiresLocalDeclaration(t *testing.T) {
 	}
 }
 
+// TestDiscoveredCodexDeclarationIsLocalAndRevocable checks that the declaration made
+// by CLI discovery lets the factory build Codex, only for that ID and kind, and
+// stops once it is withdrawn.
+//
+// TestDiscoveredCodexDeclarationIsLocalAndRevocable 检查 CLI 自动发现做出的声明能让工厂
+// 构建 Codex，且只限该 ID 与种类，撤回后即失效。
+func TestDiscoveredCodexDeclarationIsLocalAndRevocable(t *testing.T) {
+	local := newLocalDeclarations(nil)
+	registry, err := newReloadableRegistry(local)
+	if err != nil {
+		t.Fatal(err)
+	}
+	create := func(id string, kind runtime.Kind) error {
+		rt, err := registry.Create(runtime.Config{ID: id, Kind: kind}, newDependencies(slog.New(slog.DiscardHandler), metrics.New()))
+		if rt != nil {
+			_ = rt.Close()
+		}
+		return err
+	}
+
+	if err := create("codex-local", runtime.KindCodex); err == nil {
+		t.Fatal("an undeclared codex runtime was built")
+	}
+	local.add(runtime.Config{ID: "codex-local", Kind: runtime.KindCodex})
+	if err := create("codex-local", runtime.KindCodex); err != nil {
+		t.Fatalf("a declared codex runtime was refused: %v", err)
+	}
+	if err := create("codex-other", runtime.KindCodex); err == nil {
+		t.Fatal("declaring codex-local also admitted another codex ID")
+	}
+	local.remove("codex-local")
+	if err := create("codex-local", runtime.KindCodex); err == nil {
+		t.Fatal("a withdrawn declaration still admitted codex")
+	}
+	local.add(runtime.Config{ID: "ollama-11434", Kind: runtime.KindOllama})
+	if _, ok := local.get("ollama-11434"); ok {
+		t.Fatal("an HTTP backend was recorded as a local CLI declaration")
+	}
+}
+
 // TestClaudeFactoryRequiresLocalDeclaration rejects Gateway-created Claude IDs.
 // TestClaudeFactoryRequiresLocalDeclaration 拒绝 Gateway 擅自创建的 Claude ID。
 func TestClaudeFactoryRequiresLocalDeclaration(t *testing.T) {

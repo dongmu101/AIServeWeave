@@ -453,7 +453,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		slog.Bool("auto_discover", autoDiscover),
 	)
 
-	discoveryDone := startLocalDiscovery(ctx, logger, manager, autoDiscover, autoDiscoverInterval)
+	discoveryDone := startLocalDiscovery(ctx, logger, manager, local, opts.runtimeIDs(), autoDiscover, autoDiscoverInterval)
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 

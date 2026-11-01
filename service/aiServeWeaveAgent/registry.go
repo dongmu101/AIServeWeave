@@ -71,6 +71,31 @@ func (d *localDeclarations) set(declared []runtime.Config) {
 	d.mu.Unlock()
 }
 
+// add declares cfg locally, for a runtime the Agent itself decided to register
+// (see clidiscovery). Only CLI and hosted kinds need a declaration.
+//
+// add 在本地声明 cfg，用于 Agent 自己决定注册的运行时（见 clidiscovery）。只有 CLI 与
+// 托管种类需要声明。
+func (d *localDeclarations) add(cfg runtime.Config) {
+	if !cfg.Kind.IsLocalCLI() && !cfg.Kind.IsHosted() {
+		return
+	}
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if d.byID == nil {
+		d.byID = make(map[string]runtime.Config)
+	}
+	d.byID[cfg.ID] = cfg
+}
+
+// remove withdraws the declaration for id.
+// remove 撤回 id 的声明。
+func (d *localDeclarations) remove(id string) {
+	d.mu.Lock()
+	delete(d.byID, id)
+	d.mu.Unlock()
+}
+
 // get returns the local declaration for id.
 // get 返回 id 的本地声明。
 func (d *localDeclarations) get(id string) (runtime.Config, bool) {
