@@ -66,6 +66,14 @@
 
 ## 一行命令安装（2026-11-01）
 
+**两类机器，别混：**
+
+| 机器 | 做什么 |
+| --- | --- |
+| 平台服务器（运行 Docker Compose 的那台） | `git pull`、`deploy/enable-agent-install.sh https://站点`、配置 Nginx `location /agent/`；用 `curl https://站点/agent/v1/manifest` 确认 `version` 不是 `dev` 且 `installable` 为 `true`。**不在这台机器上装 Agent** |
+| 节点机器（Ubuntu、macOS、Windows） | 执行 Console「添加节点」生成的一行命令；在这台机器上看 `systemctl status aiserveweave-agent`（Ubuntu）或 `agent.sh/agent.ps1 status`；节点要有推理后端（如 Ollama）和模型，`/v1/models` 才会列出模型 |
+| 浏览器 | 登录 Console 生成命令，在「节点管理」看节点是否在线 |
+
 「一行命令安装」列单独记录：从 Console 生成命令、在目标系统执行 `install.sh`/`install.ps1`、下载并校验制品、兑换一次性码、服务注册与启动、节点上线。通过标准是该系统/架构组合上由 Console 生成的真实命令执行成功，且节点在「节点管理」在线；暂存测试、容器内测试与 CI 不计入。逐项步骤见 [任务 08](../../.scratch/agent-one-line-install/issues/08-acceptance-open7x.md)。
 
 补充验收项（每个组合各自记录）：

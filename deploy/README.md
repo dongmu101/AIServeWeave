@@ -344,35 +344,40 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
 
 ### 已有部署启用一行命令安装
 
-Gateway 镜像要内置 Agent 制品，需要重新构建；Nginx 要把 `/agent/` 前缀转给 Gateway HTTP 端口。以下以 `https://open7x.com` 为例，改成实际站点地址。
+在**平台服务器**的仓库里一步完成（以 `https://open7x.com` 为例，改成实际站点地址）：
 
-1. 拉取新代码，在 `deploy/.env` 追加 `AGENT_PUBLIC_URL=https://open7x.com`。只需要部分平台时再设置 `AGENT_PLATFORMS`（如 `"linux/amd64"`），要从其他仓库的 Release 下载时设置 `AGENT_GITHUB_REPO`。
-2. 在 `controlplane.yaml` 增加 `AgentInstall: {PublicURL: "https://open7x.com"}`。`deploy/install.sh`、`deploy/upgrade.sh` 在缺少该段时按 `.env` 的 `AGENT_PUBLIC_URL` 补上，已有该段不会改写。两处必须一致：`AGENT_PUBLIC_URL` 决定 Gateway 是否挂载 `/agent/*`，`AgentInstall.PublicURL` 决定控制面是否签发并写进命令。
-3. Nginx 在站点 server 块增加下面的转发。`/agent/` 是公开入口，不带 Cookie，所以不要放进 Console 的 location，也不要对它启用登录校验。`proxy_pass` 的端口是 Gateway HTTP 端口（Compose 默认 `GATEWAY_PORT`，按现有 API 转发配置为准）。
+```bash
+git pull
+deploy/enable-agent-install.sh https://open7x.com
+# 验收只需要部分平台时可缩短约 10 分钟的构建：
+# deploy/enable-agent-install.sh https://open7x.com --platforms "linux/amd64 darwin/arm64 windows/amd64"
+```
 
-   ```nginx
-   location /agent/ {
-       proxy_pass http://127.0.0.1:8080;   # Gateway HTTP / Gateway HTTP 端口
-       proxy_set_header Host $host;
-       proxy_buffering off;                # 制品较大，不落盘缓冲 / large artifacts
-       client_max_body_size 4k;            # 兑换请求体不超过 1 KiB
-   }
-   ```
+脚本依次做：检查版本（工作区必须干净，否则版本带 `-dirty`，安装脚本会拒绝）、写 `.env` 的 `AGENT_PUBLIC_URL`、补 `controlplane.yaml` 的 `AgentInstall` 段、**带版本**构建并重建 `gateway` 与 `controlplane`，最后自检 Gateway 本机入口、安装脚本和公网入口。哪一步没通过，会直接说明原因。公网入口不通时，会打印要加到 Nginx 的内容：
 
-4. 重新构建并重启（会短暂重启 Gateway 与控制面）：
+```nginx
+location /agent/ {
+    proxy_pass http://127.0.0.1:8080;   # Gateway HTTP 端口，即 GATEWAY_PORT
+    proxy_set_header Host $host;
+    proxy_buffering off;                # 制品较大，不落盘缓冲
+    client_max_body_size 4k;            # 兑换请求体不超过 1 KiB
+}
+```
 
-   Gateway 必须带版本构建。直接 `docker compose up --build` 不传 `VERSION`，版本变成 `dev`，安装脚本会拒绝 `dev` 和带 `-dirty` 的版本，所以工作区要干净（`git status --short` 无输出）。
+`/agent/` 是公开入口，不带 Cookie，不要放进 Console 的 `location`，也不要对它启用登录校验。加好后 `nginx -t && nginx -s reload`，再运行 `deploy/enable-agent-install.sh https://open7x.com --no-build` 复查。
 
-   ```bash
-   VERSION=$(git -C .. describe --tags --always --dirty); echo "$VERSION"   # 不能含 dev 或 dirty
-   docker compose config --quiet &&
-   docker compose build --build-arg VERSION="$VERSION" gateway &&
-   docker compose up -d --no-build --force-recreate gateway controlplane
-   ```
+通过后，在 Console 生成命令，到**节点机器**（不是平台服务器）上执行。Console 在生成命令后，会读取本站 `/agent/v1/manifest`，平台版本是 `dev`/`-dirty` 或入口不通时在命令上方显示红色警告。
 
-   `deploy/install.sh` 与 `deploy/upgrade.sh` 会自动传版本，也可以改用它们。
+两处配置必须一致：`AGENT_PUBLIC_URL` 决定 Gateway 是否挂载 `/agent/*`，`AgentInstall.PublicURL` 决定控制面是否签发并写进命令。`deploy/install.sh --agent-public-url`、`deploy/upgrade.sh` 与上面的脚本都按 `.env` 的值写入；`controlplane.yaml` 已有 `AgentInstall` 段时不会改写，不一致时脚本会拒绝并说明怎么改。
 
-5. 验证：`curl -fsS https://open7x.com/agent/v1/manifest` 返回的 `version` 是提交号或 tag，不是 `dev`，并带有资产列表；`https://open7x.com/agent/install.sh` 返回脚本，且不再包含 `__AISW_PLATFORM_URL__`。然后在 Console 生成一条命令走一遍；真实环境验收见 [Agent 验收矩阵](agent/acceptance.md)。
+**手动步骤**（不用脚本时）：Gateway 与控制面必须带版本构建。直接 `docker compose up --build` 不传 `VERSION`，版本变成 `dev`，安装脚本会拒绝。
+
+```bash
+VERSION=$(git -C .. describe --tags --always --dirty); echo "$VERSION"   # 不能含 dev 或 dirty
+docker compose build --build-arg VERSION="$VERSION" controlplane gateway &&
+docker compose up -d --no-build --force-recreate controlplane gateway
+curl -fsS https://open7x.com/agent/v1/manifest   # version 不是 dev，"installable":true
+```
 
 关闭时清空 `AGENT_PUBLIC_URL` 和 `AgentInstall.PublicURL` 后重建，`/agent/*` 不再挂载，已签发的兑换码到期失效。
 

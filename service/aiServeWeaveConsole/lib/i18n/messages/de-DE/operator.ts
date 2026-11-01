@@ -543,6 +543,8 @@ const operator = {
   "install.tokenSecret": "Der Befehl enthält ein einmaliges Knoten-Token; nicht öffentlich posten und nach Gebrauch ablaufen lassen.",
   "install.regenerate": "Die aktuelle Auswahl braucht eine andere Zugangsart; erzeugen Sie einen neuen Befehl.",
   "install.notEnabled": "Auf dieser Plattform ist die Ein-Zeilen-Installation nicht aktiviert; verwenden Sie das ZIP unten.",
+  "install.checkRefused": "Die Plattform läuft mit Version {version}, die die Installationsskripte ablehnen (Dev- oder Dirty-Build). Baue das Gateway mit einer Version neu (siehe Deployment-Anleitung) und erzeuge einen neuen Befehl.",
+  "install.checkUnreachable": "Knoten erreichen /agent/ auf dieser Seite nicht, der Befehl schlägt fehl. Prüfe, ob der Reverse-Proxy /agent/ an das Gateway weiterleitet und die Ein-Zeilen-Installation aktiviert ist.",
   "install.advanced": "Erweitert: Registrierungs-ZIP herunterladen"
 } as const;
 export default operator;

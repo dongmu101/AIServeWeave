@@ -657,7 +657,7 @@ ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_
 | 路由 | 说明 |
 | --- | --- |
 | `GET /agent/install.sh`、`/agent/install.ps1` | 目录中的引导脚本，占位符已替换；`no-store` |
-| `GET /agent/v1/manifest` | `{version, platform_url, github?, assets:[{os, arch, name, sha256}]}`；资产取自 `SHA256SUMS.txt` 中存在于磁盘且符合 `aiserveweave-agent_<版本>_<os>_<arch>[.exe]` 命名的文件 |
+| `GET /agent/v1/manifest` | `{version, platform_url, github?, assets:[{os, arch, name, sha256}], installable, reason?}`；`installable` 为 `false`（`dev`、`-dirty` 或既非发布 tag 也非小写提交号）表示安装脚本会拒绝该版本，启动时同样记一条警告；资产取自 `SHA256SUMS.txt` 中存在于磁盘且符合 `aiserveweave-agent_<版本>_<os>_<arch>[.exe]` 命名的文件 |
 | `GET /agent/download/<版本>/<文件>` | 只提供当前版本的制品与 `agent.sh`、`agent.ps1`、`SHA256SUMS.txt`；其他版本、其他文件名、含路径分隔符的一律 `404`（支持 Range） |
 | `POST /agent/v1/redeem` | 请求体至多 1 KiB，转发控制面 `/internal/v1/agent-install/redeem`（共享密钥 `AISW_CONTROL_PLANE_TOKEN`） |
 | `GET /agent/v1/ca` | 转发控制面 `/internal/v1/agent-install/ca` |

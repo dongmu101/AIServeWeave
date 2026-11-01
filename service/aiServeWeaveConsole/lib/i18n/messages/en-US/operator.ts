@@ -546,6 +546,8 @@ const operator = {
   "install.tokenSecret": "The command holds a one-time node token; do not post it publicly and let it expire once used.",
   "install.regenerate": "The current choice needs a different credential; generate a new one.",
   "install.notEnabled": "One-line install is not enabled on this platform; use the enrollment ZIP below.",
+  "install.checkRefused": "The platform runs version {version}, which the install scripts refuse (a dev or dirty build). Rebuild the Gateway with a version (see the deployment guide) and generate a new command.",
+  "install.checkUnreachable": "Nodes cannot reach /agent/ on this site, so the command will fail. Check that the reverse proxy forwards /agent/ to the Gateway and that one-line install is enabled.",
   "install.advanced": "Advanced: download the enrollment ZIP"
 } as const;
 export default operator;

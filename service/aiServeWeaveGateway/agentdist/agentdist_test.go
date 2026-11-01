@@ -294,3 +294,39 @@ func TestRoutesRejectWrongMethods(t *testing.T) {
 		}
 	}
 }
+
+// TestManifestFlagsVersionsTheInstallScriptsRefuse checks that the manifest says
+// whether the install scripts accept the Gateway's version.
+//
+// TestManifestFlagsVersionsTheInstallScriptsRefuse 检查清单会说明安装脚本是否接受 Gateway 的版本。
+func TestManifestFlagsVersionsTheInstallScriptsRefuse(t *testing.T) {
+	tests := []struct {
+		name        string
+		version     string
+		installable bool
+	}{
+		{"release", "v1.2.3", true},
+		{"git describe", "v1.2.3-4-gabc1234", true},
+		{"commit", "a1b2c3d4e5f6", true},
+		{"dev build", "dev", false},
+		{"dirty commit", "a1b2c3d-dirty", false},
+		{"dirty release", "v1.2.3-dirty", false},
+		{"uppercase commit", "A1B2C3D4E5F6", false},
+		{"short commit", "a1b2c3", false},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			var m manifest
+			w := get(newTestHandler(t, tc.version, "http://cp", nil), "/agent/v1/manifest")
+			if w.Code != http.StatusOK {
+				t.Fatalf("manifest status=%d body=%s, want 200", w.Code, w.Body)
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &m); err != nil {
+				t.Fatalf("manifest is not JSON: %v", err)
+			}
+			if m.Installable != tc.installable || (m.Reason == "") != tc.installable {
+				t.Fatalf("version %q: installable=%v reason=%q, want installable=%v", tc.version, m.Installable, m.Reason, tc.installable)
+			}
+		})
+	}
+}

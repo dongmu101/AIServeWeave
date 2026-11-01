@@ -78,7 +78,29 @@ var (
 	//
 	// safeVersion 保证版本可作为单个路径元素。
 	safeVersion = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	// installableVersion is what install.sh and install.ps1 accept: a release
+	// tag (possibly git-describe style) or a 7-40 character lowercase commit.
+	//
+	// installableVersion 是 install.sh 与 install.ps1 接受的版本：发布 tag（可含 git describe
+	// 形式）或 7 到 40 位小写提交号。
+	installableVersion = regexp.MustCompile(`^(v\d+\.\d+\.\d+(-[A-Za-z0-9.-]+)?|[0-9a-f]{7,40})$`)
 )
+
+// notInstallableReason explains why the install scripts would refuse version,
+// or returns "" when they accept it.
+//
+// notInstallableReason 说明安装脚本为何会拒绝 version；脚本接受时返回 ""。
+func notInstallableReason(version string) string {
+	switch {
+	case version == "dev":
+		return "this Gateway was built without a version (dev); rebuild it with --build-arg VERSION=<git describe>"
+	case strings.HasSuffix(version, "-dirty"):
+		return "this Gateway was built from a dirty working tree; commit or stash changes and rebuild"
+	case !installableVersion.MatchString(version):
+		return "the Gateway version is neither a release tag nor a lowercase git commit"
+	}
+	return ""
+}
 
 // staticFiles are served from the version directory besides the artifacts.
 //
@@ -165,6 +187,9 @@ func New(cfg Config) (*Handler, error) {
 		logger = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
 	h := &Handler{cfg: cfg, client: client, logger: logger, dir: filepath.Join(cfg.DistDir, cfg.Version)}
+	if reason := notInstallableReason(cfg.Version); reason != "" {
+		logger.Warn("Agent installs will be refused by the install scripts", slog.String("version", cfg.Version), slog.String("reason", reason))
+	}
 	if _, err := h.checksums(); err != nil {
 		logger.Warn("agent artifacts are unavailable; /agent/v1/manifest will answer 503",
 			slog.String("dir", h.dir), slog.String("error", runtimeRedact(err.Error(), cfg.Token)))
@@ -225,6 +250,10 @@ type manifest struct {
 	PlatformURL string  `json:"platform_url"`
 	GitHub      *github `json:"github,omitempty"`
 	Assets      []asset `json:"assets"`
+	// Installable is false when the install scripts would refuse Version; Reason
+	// then says why. Installable 为 false 时安装脚本会拒绝 Version，Reason 给出原因。
+	Installable bool   `json:"installable"`
+	Reason      string `json:"reason,omitempty"`
 }
 
 // assets lists the artifacts of this version that exist on disk and are
@@ -260,7 +289,8 @@ func (h *Handler) manifest(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusServiceUnavailable, "agent artifacts unavailable")
 		return
 	}
-	m := manifest{Version: h.cfg.Version, PlatformURL: h.cfg.PublicURL, Assets: assets}
+	reason := notInstallableReason(h.cfg.Version)
+	m := manifest{Version: h.cfg.Version, PlatformURL: h.cfg.PublicURL, Assets: assets, Installable: reason == "", Reason: reason}
 	if h.cfg.GitHubRepo != "" && releaseVersion.MatchString(h.cfg.Version) {
 		m.GitHub = &github{Repo: h.cfg.GitHubRepo, BaseURL: "https://github.com/" + h.cfg.GitHubRepo + "/releases/download/" + h.cfg.Version}
 	}

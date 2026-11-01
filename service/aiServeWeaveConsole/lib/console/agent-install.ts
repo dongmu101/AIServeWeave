@@ -141,3 +141,25 @@ export function buildInstallCommand(issue: InstallIssue, choice: { os: InstallOS
   const shell = choice.os === "ubuntu" ? "sudo bash" : "bash";
   return `curl -fsSL --proto '=https' ${posixQuote(`${issue.baseUrl}/agent/install.sh`)} | ${shell} -s --${options.length ? ` ${options.join(" ")}` : ""}`;
 }
+
+/** PlatformCheck is what the platform's public /agent/v1/manifest says about installing. / PlatformCheck 是平台公开的 /agent/v1/manifest 对安装的说明。 */
+export type PlatformCheck = { state: "ok" } | { state: "refused"; version: string } | { state: "unreachable" };
+
+const MANIFEST_VERSION = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
+
+/**
+ * parsePlatformCheck reads a manifest response. A manifest that is not valid,
+ * or an old Gateway without the installable flag, counts as unreachable rather
+ * than ok, so the warning errs on the side of showing.
+ *
+ * parsePlatformCheck 解析清单响应。格式不对，或没有 installable 字段的旧 Gateway，按
+ * 不可达处理而不是 ok，让警告宁可多显示。
+ */
+export function parsePlatformCheck(value: unknown): PlatformCheck {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return { state: "unreachable" };
+  const data = value as Record<string, unknown>;
+  if (typeof data.installable !== "boolean") return { state: "unreachable" };
+  if (data.installable) return { state: "ok" };
+  const version = typeof data.version === "string" && MANIFEST_VERSION.test(data.version) ? data.version : "?";
+  return { state: "refused", version };
+}

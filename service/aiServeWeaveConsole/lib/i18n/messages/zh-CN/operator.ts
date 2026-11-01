@@ -540,6 +540,8 @@ const operator = {
   "install.tokenSecret": "命令里含一次性节点令牌，不要发到公开渠道，用完请让它过期。",
   "install.regenerate": "当前选择需要另一种凭据，请重新生成。",
   "install.notEnabled": "此平台未开启一行命令安装，请使用下方的接入包 ZIP。",
+  "install.checkRefused": "平台版本为 {version}，安装脚本会拒绝它（开发版或带 dirty）。请带版本重新构建 Gateway（见部署说明），再生成新命令。",
+  "install.checkUnreachable": "节点访问不到本站的 /agent/ 入口，命令会失败。请检查反向代理是否把 /agent/ 转给了 Gateway，以及是否已开启一行命令安装。",
   "install.advanced": "高级：下载接入包 ZIP"
 } as const;
 export default operator;

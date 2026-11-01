@@ -18,6 +18,8 @@ import {
   type InstallMethod,
   type InstallOS,
   type InstallSource,
+  type PlatformCheck,
+  parsePlatformCheck,
 } from "@/lib/console/agent-install";
 import { ApiError } from "@/lib/console/errors";
 import { formatDateTime } from "@/lib/console/format";
@@ -58,15 +60,31 @@ export function AgentInstallPanel({ surface, path, parse, extraBody, onIssued, c
   const [error, setError] = React.useState<unknown>(null);
   const [issue, setIssue] = React.useState<InstallIssue | null>(null);
   const [copied, setCopied] = React.useState(false);
+  const [check, setCheck] = React.useState<PlatformCheck | null>(null);
+
+  // Ask the public manifest whether nodes can really install from this site. It only
+  // runs when the platform address is this site's own origin: a cross-origin address
+  // cannot be read from the browser and would only produce a false warning.
+  // 向公开清单确认节点能否真的从本站安装。只有平台地址就是本站来源时才查：跨域地址浏览器读不到，
+  // 只会产生误报。
+  async function checkPlatform(baseUrl: string) {
+    if (typeof window === "undefined" || window.location.origin !== baseUrl) { setCheck(null); return; }
+    try {
+      const response = await fetch(`${baseUrl}/agent/v1/manifest`, { cache: "no-store", credentials: "omit", signal: AbortSignal.timeout(5000) });
+      setCheck(response.ok ? parsePlatformCheck(await response.json()) : { state: "unreachable" });
+    } catch { setCheck({ state: "unreachable" }); }
+  }
 
   async function generate(event: React.FormEvent) {
     event.preventDefault();
     if (inFlight.current || extraBody === null) return;
     inFlight.current = true;
-    setPending(true); setError(null); setIssue(null); setCopied(false);
+    setPending(true); setError(null); setIssue(null); setCopied(false); setCheck(null);
     try {
-      setIssue(await run({ method: "POST", surface, path, body: { ...extraBody, ttl_minutes: Number(ttl), credential: credentialFor(method) }, parse }));
+      const issued = await run({ method: "POST", surface, path, body: { ...extraBody, ttl_minutes: Number(ttl), credential: credentialFor(method) }, parse });
+      setIssue(issued);
       onIssued?.();
+      void checkPlatform(issued.baseUrl);
     } catch (failure) { setError(failure); }
     finally { inFlight.current = false; setPending(false); }
   }
@@ -105,6 +123,8 @@ export function AgentInstallPanel({ surface, path, parse, extraBody, onIssued, c
       <p className="font-semibold"><Message id="install.ready" /></p>
       <code className="break-all text-sm">{issue.nodeId}</code>
       <p className="text-sm"><Message id="install.expires" values={{ value: formatDateTime(issue.expiresAt, undefined, locale) }} /></p>
+      {check?.state === "refused" ? <p role="alert" className="text-sm font-semibold text-destructive"><Message id="install.checkRefused" values={{ version: check.version }} /></p>
+        : check?.state === "unreachable" ? <p role="alert" className="text-sm font-semibold text-destructive"><Message id="install.checkUnreachable" /></p> : null}
       {command ? <>
         <pre className="overflow-x-auto whitespace-pre-wrap break-all rounded-md border bg-muted p-3 text-xs" tabIndex={0}>{command}</pre>
         <Button variant="outline" className="w-fit" onClick={copy}><Message id={copied ? "install.copied" : "install.copy"} /></Button>

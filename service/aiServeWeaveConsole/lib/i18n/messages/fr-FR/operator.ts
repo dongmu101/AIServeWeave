@@ -543,6 +543,8 @@ const operator = {
   "install.tokenSecret": "La commande contient un jeton de nœud à usage unique ; ne le publiez pas et laissez-le expirer après usage.",
   "install.regenerate": "Le choix actuel exige un autre identifiant ; générez-en un nouveau.",
   "install.notEnabled": "L’installation en une ligne n’est pas activée sur cette plateforme ; utilisez le ZIP ci-dessous.",
+  "install.checkRefused": "La plateforme exécute la version {version}, que les scripts d'installation refusent (build dev ou dirty). Reconstruisez le Gateway avec une version (voir le guide de déploiement) et générez une nouvelle commande.",
+  "install.checkUnreachable": "Les nœuds ne peuvent pas joindre /agent/ sur ce site, la commande échouera. Vérifiez que le proxy inverse transmet /agent/ au Gateway et que l'installation en une ligne est activée.",
   "install.advanced": "Avancé : télécharger le ZIP d’inscription"
 } as const;
 export default operator;

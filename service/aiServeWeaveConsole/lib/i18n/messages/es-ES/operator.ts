@@ -540,6 +540,8 @@ const operator = {
   "install.tokenSecret": "El comando contiene un token de nodo de un solo uso; no lo publique y deje que caduque tras usarlo.",
   "install.regenerate": "La selección actual necesita otra credencial; genere una nueva.",
   "install.notEnabled": "La instalación en una línea no está activada en esta plataforma; use el ZIP de abajo.",
+  "install.checkRefused": "La plataforma ejecuta la versión {version}, que los scripts de instalación rechazan (compilación dev o dirty). Recompila el Gateway con una versión (consulta la guía de despliegue) y genera un comando nuevo.",
+  "install.checkUnreachable": "Los nodos no pueden acceder a /agent/ en este sitio, así que el comando fallará. Comprueba que el proxy inverso reenvía /agent/ al Gateway y que la instalación en una línea está activada.",
   "install.advanced": "Avanzado: descargar el ZIP de inscripción"
 } as const;
 export default operator;

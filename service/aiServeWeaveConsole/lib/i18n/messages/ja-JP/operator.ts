@@ -540,6 +540,8 @@ const operator = {
   "install.tokenSecret": "コマンドには使い捨てのノードトークンが含まれます。公開の場に貼らず、使用後は失効させてください。",
   "install.regenerate": "現在の選択には別の認証情報が必要です。再生成してください。",
   "install.notEnabled": "このプラットフォームではワンライン・インストールが有効ではありません。下の登録 ZIP を使用してください。",
+  "install.checkRefused": "プラットフォームのバージョンは {version} で、インストールスクリプトは拒否します（dev または dirty ビルド）。バージョンを指定して Gateway を再ビルドし（デプロイ手順を参照）、新しいコマンドを生成してください。",
+  "install.checkUnreachable": "ノードがこのサイトの /agent/ に到達できないため、コマンドは失敗します。リバースプロキシが /agent/ を Gateway に転送しているか、ワンライン インストールが有効かを確認してください。",
   "install.advanced": "詳細：登録 ZIP をダウンロード"
 } as const;
 export default operator;

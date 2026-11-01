@@ -540,6 +540,8 @@ const operator = {
   "install.tokenSecret": "명령에는 일회용 노드 토큰이 들어 있습니다. 공개된 곳에 올리지 말고 사용 후 만료시키세요.",
   "install.regenerate": "현재 선택에는 다른 자격 증명이 필요합니다. 새로 생성하세요.",
   "install.notEnabled": "이 플랫폼에서는 한 줄 설치가 켜져 있지 않습니다. 아래 등록 ZIP을 사용하세요.",
+  "install.checkRefused": "플랫폼 버전은 {version}이며 설치 스크립트가 거부합니다(dev 또는 dirty 빌드). 버전을 지정해 Gateway를 다시 빌드하고(배포 안내 참조) 새 명령을 생성하세요.",
+  "install.checkUnreachable": "노드가 이 사이트의 /agent/에 접근할 수 없어 명령이 실패합니다. 리버스 프록시가 /agent/를 Gateway로 전달하는지, 한 줄 설치가 활성화되어 있는지 확인하세요.",
   "install.advanced": "고급: 등록 ZIP 내려받기"
 } as const;
 export default operator;

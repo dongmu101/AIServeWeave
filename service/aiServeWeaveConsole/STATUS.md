@@ -432,6 +432,6 @@ GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重�
 
 运维「Agent 接入」与商户「节点管理」新增共用的「添加节点」面板（`components/console/agent-install-panel.tsx`）：选择系统（Ubuntu、macOS、Windows）、凭据方式（兑换码、交互输入、令牌直写）、下载来源（平台、GitHub）与有效期，调用控制面 `POST /operator/v1/agent-install-codes` 或 `POST /admin/v1/nodes/install-codes`，生成一行命令与复制按钮。原 ZIP 接入包收进「高级」折叠区。
 
-响应由 `lib/console/agent-install.ts` 严格校验（兑换码格式、节点 ID、令牌字符集、地址、HTTPS 站点根），命令里的所有值用单引号引用；两条路由写入 `upstream-routes.ts` 白名单且丢弃查询参数，签发不自动重试，凭据只留在页面内存。控制面未配置 `AgentInstall.PublicURL` 时（`404`）显示「未启用」。文案覆盖八种语言。
+响应由 `lib/console/agent-install.ts` 严格校验（兑换码格式、节点 ID、令牌字符集、地址、HTTPS 站点根），命令里的所有值用单引号引用；两条路由写入 `upstream-routes.ts` 白名单且丢弃查询参数，签发不自动重试，凭据只留在页面内存。控制面未配置 `AgentInstall.PublicURL` 时（`404`）显示「未启用」。签发成功后，若平台地址就是本站来源，面板用浏览器读取公开的 `/agent/v1/manifest`（`credentials: omit`，5 秒超时），平台版本被安装脚本拒绝（`installable: false`）或入口不可达时在命令上方显示红色警告；跨域地址不检查，避免误报。文案覆盖八种语言。
 
 默认测试（`agent-install.test.ts` 等，Console 共 312 项）、`eslint`、`next build`、`tsc` 通过。未验证：浏览器渲染与剪贴板、Playwright e2e、真实控制面端到端、八种语言译文审校。部署与使用见 [部署说明](../../deploy/README.md#接一个-agent)。

@@ -8,6 +8,7 @@ import {
   INSTALL_OSES,
   INSTALL_SOURCES,
   parseOperatorInstall,
+  parsePlatformCheck,
   parseTenantInstall,
   type InstallIssue,
 } from "./agent-install.ts";
@@ -133,5 +134,14 @@ test("a lost install code response never automatically issues a second code", as
       sleep: async () => { assert.fail("an issue must never retry"); },
     }));
     assert.equal(calls, 1);
+  }
+});
+
+test("platform check tells installable, refused and unreachable apart", () => {
+  assert.deepEqual(parsePlatformCheck({ version: "v1.2.3", installable: true }), { state: "ok" });
+  assert.deepEqual(parsePlatformCheck({ version: "dev", installable: false, reason: "x" }), { state: "refused", version: "dev" });
+  assert.deepEqual(parsePlatformCheck({ version: "<script>", installable: false }), { state: "refused", version: "?" });
+  for (const bad of [null, "x", [], {}, { version: "v1.2.3" }, { installable: "yes" }]) {
+    assert.deepEqual(parsePlatformCheck(bad), { state: "unreachable" }, JSON.stringify(bad));
   }
 });
