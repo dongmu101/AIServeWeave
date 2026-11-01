@@ -2,13 +2,13 @@
 # enable-agent-install.sh turns on the one-line Agent install for an existing
 # Docker Compose deployment in one go: it writes AGENT_PUBLIC_URL into .env,
 # makes sure controlplane.yaml has the AgentInstall block, rebuilds the Gateway
-# and the control plane WITH a version, recreates them and then checks the whole
+# the control plane and the Console WITH a version, recreates them and then checks the whole
 # chain. The Nginx forwarding for /agent/ stays manual; the script tells you
 # whether it is missing and prints what to add.
 #
 # enable-agent-install.sh 一步为已有的 Docker Compose 部署开启 Agent 一行命令安装：把
 # AGENT_PUBLIC_URL 写进 .env，确保 controlplane.yaml 有 AgentInstall 段，带版本重建 Gateway
-# 与控制面，重建容器，再逐段自检。/agent/ 的 Nginx 转发仍需手动配置；脚本会告诉你它是否缺失，
+# 控制面与 Console，重建容器，再逐段自检。/agent/ 的 Nginx 转发仍需手动配置；脚本会告诉你它是否缺失，
 # 并打印要加的内容。
 #
 # Usage:
@@ -31,7 +31,7 @@ usage() {
   --no-build          不构建，沿用已带版本构建的镜像
   -h, --help          显示本帮助
 
-脚本会：写 .env、补 controlplane.yaml、带版本重建 gateway 与 controlplane、重建容器，
+脚本会：写 .env、补 controlplane.yaml、带版本重建 gateway、controlplane 与 console、重建容器，
 然后检查 Gateway 本机入口、安装脚本和（若可达）公网入口。工作区必须干净，否则版本带 -dirty，
 安装脚本会拒绝。
 EOF
@@ -79,10 +79,10 @@ log "配置已就绪（.env: AGENT_PUBLIC_URL=${URL}）"
 # ---- 3. build and recreate / 构建并重建 ----
 if (( BUILD == 1 )); then
   check_memory
-  build_images "$VERSION" controlplane gateway
+  build_images "$VERSION" controlplane gateway console
 fi
-log "重建 gateway 与 controlplane 容器"
-compose up -d --no-build --force-recreate controlplane gateway
+log "重建 gateway、controlplane 与 console 容器"
+compose up -d --no-build --force-recreate controlplane gateway console
 
 # ---- 4. checks / 自检 ----
 GATEWAY_PORT_VALUE="$(env_get GATEWAY_PORT)"
