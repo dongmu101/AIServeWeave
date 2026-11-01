@@ -97,5 +97,12 @@ class DeploymentTests(unittest.TestCase):
                 result = self.run_script('install',['--version',version,'--file',str(self.binary),'--checksums',str(self.manifest)],success=False)
                 self.assertIn('--version must be an exact',result.stderr)
                 self.assertFalse((self.root/'releases').exists())
+    @unittest.skipUnless(platform.system() == 'Linux', 'the Ubuntu service user only exists on Linux / 服务账户只存在于 Linux')
+    def test_root_service_user_is_allowed(self):
+        install = ['--version','v0.99.1','--file',str(self.binary),'--checksums',str(self.manifest),'--node-id','node-one','--registry','registry.test:9090','--gateway','gateway.test:9090','--ca-file',str(self.ca),'--token-file',str(self.token),'--user','root']
+        result = self.run_script('install',install)
+        self.assertIn('runs as root',result.stderr)
+        self.assertIn('User=root',(self.root/'aiserveweave-agent.service').read_text())
+        self.run_script('upgrade',['--version','v0.99.1','--file',str(self.binary),'--checksums',str(self.manifest),'--user','root'])
 
 if __name__ == '__main__': unittest.main()

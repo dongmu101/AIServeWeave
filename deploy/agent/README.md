@@ -47,6 +47,7 @@ curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | bash -s -- --c
 - 脚本只接受 HTTPS 平台地址，下载与重定向都限制为 HTTPS。`curl … | bash` 的信任根是平台站点的 TLS 证书与域名；需要先审阅脚本时，先下载 `install.sh` 再执行。
 - Windows 不要在管理员窗口运行，脚本会拒绝提权。计划任务在该用户登录后运行，沿用下文 Windows 约定。
 - 已安装节点的机器不要重新兑换，升级改用 `--upgrade`。
+- 默认服务账户是 `aiserveweave`（不存在则创建）。需要用 root 运行时（例如 Codex、Claude 已登录在 root 下）加 `--user root`：不需要额外开关，安装时会打印一行警告。Agent 和它启动的每个 CLI 都拥有 root 权限，并读取 root 的家目录与 CLI 登录；从 root 改回普通账户或反之，仍属于需要显式身份迁移的更换。
 - 节点上已装并登录 Codex CLI 时，Agent 启动后两分钟内会自动注册为 `codex-local`，不需要手写 YAML；条件是用 `--user` 指定的服务账户执行过 `codex login`，且 `codex` 在服务的 PATH 里（npm 全局目录等用 `--path` 补上）。其他推理后端（Ollama、vLLM 等）仍要先在节点上装好。
 - 一行命令不会取代手动流程，也不改变 CLI 登录、模型安装等节点侧责任。
 

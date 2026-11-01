@@ -106,7 +106,6 @@ load_environment() {
     fi
     [ -n "$service_user" ] || fail "--user is required"
     uid=$(id -u "$service_user") || fail "service user does not exist"
-    [ "$uid" -ne 0 ] || fail "Agent must run as an ordinary user"
     user_home=$(getent passwd "$service_user" | cut -d: -f6)
     [ -d "$user_home" ] || fail "service user's home directory is missing"
     cli_path=${cli_path:-"$user_home/.local/bin:$user_home/.npm-global/bin:/usr/local/bin:/usr/bin:/bin"}
@@ -254,6 +253,9 @@ systemd_value() { local value=$1;value=${value//\\/\\\\};value=${value//\"/\\\"}
 xml_value() { printf '%s' "$1" | sed -e 's/\&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g' -e 's/"/\&quot;/g' -e "s/'/\&apos;/g"; }
 if [ "$goos" = linux ];then
   printf '%s\n' "$service_user" >"$root/service-user"
+  if [ "$uid" -eq 0 ];then
+    echo "warning: the Agent runs as root; it and every CLI it starts hold root's privileges" >&2
+  fi
   {
     echo '[Unit]';echo 'Description=AIServeWeave Agent';echo 'Wants=network-online.target';echo 'After=network-online.target'
     echo '[Service]';echo 'Type=simple';printf 'User=%s\n' "$service_user"

@@ -145,4 +145,6 @@ log_level: info
 
 目标为 Ubuntu 22.04/24.04/26.04 × amd64/arm64、Windows 11 25H2/26H2 × amd64/arm64，以及 macOS 15/26/27 arm64；26H1 Windows 新硬件单独验证。真实系统与 CLI 均未因本次代码交付而标为已验收，见 [矩阵](../../deploy/agent/acceptance.md)。其他 CLI、Managed ComfyUI 与 GPU 依赖保留既有能力，Windows 原生运行结果分别待验证。
 
+2026-11-01：Ubuntu 上允许 `--user root`（`install.sh` 与 `agent.sh` 都支持，不需要额外开关），安装时打印一行警告；默认服务账户仍是 `aiserveweave`。systemd 单元不变（无额外加固），root 下 Agent 及其启动的 CLI 拥有 root 权限。默认测试只在 Linux 上覆盖暂存树，真实 root 服务启动未验证。
+
 一行命令安装（2026-11-01）：[install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1) 在 `agent.sh`/`agent.ps1` 之前下载并校验制品、兑换一次性码，再调用它们安装；`agent.ps1` 同步支持本地提交号版本。Agent 二进制与隧道协议无变化。使用见 [Agent 独立部署](../../deploy/agent/README.md#一行命令安装)，真实系统验收仍待执行。
