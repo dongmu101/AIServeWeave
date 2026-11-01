@@ -361,12 +361,18 @@ Gateway 镜像要内置 Agent 制品，需要重新构建；Nginx 要把 `/agent
 
 4. 重新构建并重启（会短暂重启 Gateway 与控制面）：
 
+   Gateway 必须带版本构建。直接 `docker compose up --build` 不传 `VERSION`，版本变成 `dev`，安装脚本会拒绝 `dev` 和带 `-dirty` 的版本，所以工作区要干净（`git status --short` 无输出）。
+
    ```bash
+   VERSION=$(git -C .. describe --tags --always --dirty); echo "$VERSION"   # 不能含 dev 或 dirty
    docker compose config --quiet &&
-   docker compose up -d --build --no-deps gateway controlplane
+   docker compose build --build-arg VERSION="$VERSION" gateway &&
+   docker compose up -d --no-build --force-recreate gateway controlplane
    ```
 
-5. 验证：`curl -fsS https://open7x.com/agent/v1/manifest` 返回当前版本与资产列表；`https://open7x.com/agent/install.sh` 返回脚本，且不再包含 `__AISW_PLATFORM_URL__`。然后在 Console 生成一条命令走一遍；真实环境验收见 [Agent 验收矩阵](agent/acceptance.md)。
+   `deploy/install.sh` 与 `deploy/upgrade.sh` 会自动传版本，也可以改用它们。
+
+5. 验证：`curl -fsS https://open7x.com/agent/v1/manifest` 返回的 `version` 是提交号或 tag，不是 `dev`，并带有资产列表；`https://open7x.com/agent/install.sh` 返回脚本，且不再包含 `__AISW_PLATFORM_URL__`。然后在 Console 生成一条命令走一遍；真实环境验收见 [Agent 验收矩阵](agent/acceptance.md)。
 
 关闭时清空 `AGENT_PUBLIC_URL` 和 `AgentInstall.PublicURL` 后重建，`/agent/*` 不再挂载，已签发的兑换码到期失效。
 
