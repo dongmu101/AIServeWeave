@@ -1,6 +1,6 @@
 # 01 控制面：兑换码存储、生成与兑换
 
-Status: needs-triage
+Status: ready-for-agent
 
 依据：[spec.md「控制面」](../spec.md#控制面)。
 
@@ -16,8 +16,10 @@ Status: needs-triage
 
 ## 验收
 
-- [ ] spec「Testing Decisions」控制面各项，含并发兑换 `-race`
-- [ ] 错误与日志不含兑换码、令牌
-- [ ] AGENTS 质量门禁
+- [x] spec「Testing Decisions」控制面各项，含并发兑换 `-race`
+- [x] 错误与日志不含兑换码、令牌
+- [x] AGENTS 质量门禁
 
 ## Comments
+
+2026-10-31：控制面实现与默认测试完成（含 `-race` 并发兑换），文档见 ControlPlane STATUS「Agent 安装兑换码」。未覆盖：`redeemgate` 的 Redis 实现无单测（与 `signupgate` 同样没有）；`0013` 迁移未在真实 PG/MySQL 上跑过；Gateway 转发（任务 02）未做。

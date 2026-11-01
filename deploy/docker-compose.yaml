@@ -218,6 +218,11 @@ services:
       # 写进商户自有节点接入包的 Registry 与 Gateway 隧道对外地址（controlplane.yaml 的 TenantNodes）。
       AISW_TENANT_NODE_REGISTRY_ADDR: ${REGISTRY_ADVERTISE_ADDR:-registry.open7x.com:9443}
       AISW_TENANT_NODE_GATEWAY_ADDR: ${GATEWAY_ADVERTISE_ADDR:-agent.open7x.com:8443}
+      # Platform origin written into Agent install commands (controlplane.yaml's
+      # AgentInstall.PublicURL); empty keeps code issuing off.
+      # 写进 Agent 安装命令的平台站点地址（controlplane.yaml 的 AgentInstall.PublicURL）；
+      # 留空则不提供签发。
+      AISW_AGENT_PUBLIC_URL: ${AGENT_PUBLIC_URL:-}
       MYSQL_USER: ${MYSQL_USER:-aiserveweave}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
@@ -372,6 +377,10 @@ services:
       context: ..
       args:
         SERVICE: aiServeWeaveGateway
+        # Platforms of the Agent artifacts baked into the image; one is enough
+        # for a smoke test: AGENT_PLATFORMS="linux/amd64".
+        # 内置进镜像的 Agent 制品平台；冒烟时一个就够：AGENT_PLATFORMS="linux/amd64"。
+        AGENT_PLATFORMS: ${AGENT_PLATFORMS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}
     restart: unless-stopped
     command:
       - -addr=:8080
@@ -440,6 +449,14 @@ services:
       # capabilities with different leak blast radii, see the Gateway
       # README's "ComfyUI Managed 触发".
       - -comfyui-managed-addr=:8093
+      # Public /agent/* install entry. Both flags are empty unless AGENT_PUBLIC_URL
+      # is set, which leaves the entry off; -agent-dist-dir must be set together
+      # with -agent-public-url or the Gateway refuses to start.
+      # 公开的 /agent/* 安装入口。未设置 AGENT_PUBLIC_URL 时两个 flag 都为空，入口关闭；
+      # -agent-dist-dir 必须与 -agent-public-url 同时设置，否则 Gateway 拒绝启动。
+      - -agent-dist-dir=${AGENT_PUBLIC_URL:+/opt/aisw/agent-dist}
+      - -agent-public-url=${AGENT_PUBLIC_URL:-}
+      - -agent-github-repo=${AGENT_GITHUB_REPO:-dongmu101/AIServeWeave}
       - -log-level=${LOG_LEVEL:-info}
     environment:
       # flag 在 ps 输出里可见，因此这四个令牌都走环境变量。

@@ -427,3 +427,11 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重试。响应大小限制为 128 KiB，客户端校验证书格式、摘要、节点 ID、固定文件名与 ZIP/base64 大小；接入凭据只留在当前页内存与用户主动下载的文件，不写 URL、localStorage 或日志。离开后不能找回原包。页面文案覆盖八种语言，写操作沿用同源检查、有界请求体和平台会话隔离；租户不能调用此接口。
 
 本地验证与尚需真实远程接入验收的范围见 [验证记录](../../docs/acceptance/agent-enrollment-2026-10-30/README.md)。
+
+## Agent 一行命令安装面板（2026-11-01）
+
+运维「Agent 接入」与商户「节点管理」新增共用的「添加节点」面板（`components/console/agent-install-panel.tsx`）：选择系统（Ubuntu、macOS、Windows）、凭据方式（兑换码、交互输入、令牌直写）、下载来源（平台、GitHub）与有效期，调用控制面 `POST /operator/v1/agent-install-codes` 或 `POST /admin/v1/nodes/install-codes`，生成一行命令与复制按钮。原 ZIP 接入包收进「高级」折叠区。
+
+响应由 `lib/console/agent-install.ts` 严格校验（兑换码格式、节点 ID、令牌字符集、地址、HTTPS 站点根），命令里的所有值用单引号引用；两条路由写入 `upstream-routes.ts` 白名单且丢弃查询参数，签发不自动重试，凭据只留在页面内存。控制面未配置 `AgentInstall.PublicURL` 时（`404`）显示「未启用」。文案覆盖八种语言。
+
+默认测试（`agent-install.test.ts` 等，Console 共 312 项）、`eslint`、`next build`、`tsc` 通过。未验证：浏览器渲染与剪贴板、Playwright e2e、真实控制面端到端、八种语言译文审校。部署与使用见 [部署说明](../../deploy/README.md#接一个-agent)。

@@ -45,7 +45,7 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 3. MySQL 数据卷尚未创建时，为数据库账户生成独立密码。
 4. 账户密码留空时自动生成，并在脚本结束时显示一次。
 5. 本机没有 `controlplane.yaml` 时由 `controlplane.example.yaml` 复制一份。这份文件属于本机部署、不受 git 跟踪（已在 `.gitignore` 中），按需修改，已存在时脚本不会覆盖。
-6. 在 `controlplane.yaml` 中关闭 go-zero 的访问日志中间件（原因见下文「对外部署与已知限制」），缺少 `TenantNodes` 段时补上。
+6. 在 `controlplane.yaml` 中关闭 go-zero 的访问日志中间件（原因见下文「对外部署与已知限制」），缺少 `TenantNodes` 与 `AgentInstall` 段时补上。
 7. 逐个构建镜像，启动服务，然后检查 Console、控制面与 Gateway 是否应答。
 
 脚本可以重复执行，失败后重跑会从中断处继续。常用选项如下，完整列表见 `deploy/install.sh --help`：
@@ -56,6 +56,7 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 | `--signup` | 开启租户自助注册：写入 `controlplane.yaml` 的 `Signup` 段与 `docker-compose.override.yaml` |
 | `--goproxy URL` | 指定构建时的 Go 模块代理，例如 `https://goproxy.cn,direct` |
 | `--advertise-addr HOST:PORT` | Agent 拨号的隧道地址 |
+| `--agent-public-url URL` | 平台对外的 HTTPS 站点地址（如 `https://open7x.com`），写入 `.env` 的 `AGENT_PUBLIC_URL`，开启 Agent 一行命令安装，见「对外部署与已知限制」 |
 | `--local-discovery` | 保留对 `host.docker.internal` 的本机发现。Linux 原生 Docker 无法解析这个主机名，所以默认清空 |
 | `--no-build` | 只准备配置，不构建、不启动 |
 
@@ -172,7 +173,20 @@ Docker 环境需自行配置该名称或覆盖地址。通过 Gateway API 调用
 
 ## 接一个 Agent
 
-推荐使用运维控制台的 **Agent 接入** 页面（`/operator/agent-enrollment`）：
+### 一行命令安装（推荐）
+
+前提：平台已开启一行命令安装（`.env` 设置了 `AGENT_PUBLIC_URL`，启用步骤见下文「已有部署启用一行命令安装」）。未开启时 Console 提示「未启用」，改用后面的 ZIP 接入包。
+
+1. 平台运维在 **Agent 接入**（`/operator/agent-enrollment`）、商户 owner/admin 在 **节点管理**（`/console/nodes`）的「添加节点」面板选择系统（Ubuntu、macOS、Windows）、凭据方式与下载来源，点击生成。运维先填好 Registry 与 Gateway 隧道地址；商户的地址取自 `TenantNodes` 配置。
+2. 复制页面显示的一行命令，在节点机上执行：Ubuntu 用带 `sudo` 的 `curl … | sudo bash`，macOS 不用 sudo，Windows 在普通（非管理员）PowerShell 中运行。命令包含一次性兑换码，有效期 15 分钟至 24 小时，只能兑换一次。
+3. 脚本从平台（`/agent/*`）取得与平台同版本的 Agent 与 `SHA256SUMS.txt`，校验通过后才兑换并安装服务；也可选择从 GitHub Release 下载（仅正式 `vX.Y.Z` 版本）。兑换码只在页面内存中出现一次，离开页面后无法找回，过期或已用须重新生成。
+4. 安装完成后在「节点管理」检查连接与运行时，再验收普通请求和 SSE。
+
+凭据方式有三种：兑换码（命令内含码）、交互输入（命令不含码，脚本隐藏输入提示，页面另显示码）、令牌直写（命令内含一次性 Bootstrap 令牌与 CA 指纹）。兑换码只在兑换时才铸造令牌，数据库不保存明文码与令牌。已有节点升级用脚本的 `--upgrade`（Windows 为 `-Upgrade`），不使用兑换码。详细参数与排错见 [Agent 独立部署](agent/README.md#一行命令安装)。
+
+### ZIP 接入包（高级）
+
+也可使用运维控制台的 **Agent 接入** 页面（`/operator/agent-enrollment`，「高级」折叠区）手动生成 ZIP：
 
 1. 用平台运维账户登录，填写节点可达的 Registry 和 Gateway 隧道 `host:port`，选择令牌有效期（15 分钟、1 小时或 24 小时）。当前远程部署为 `registry.open7x.com:9443` 与 `agent.open7x.com:8443`；地址必须与服务端证书和名册通告一致。页面填写地址不会修改部署配置。
 2. 点击「生成新节点接入包」，然后下载 ZIP，经可信私密渠道交给节点提供者。每次生成分配随机新节点 ID，令牌只绑定该 ID；此入口不用于覆盖既有节点或重装已有身份。
@@ -312,6 +326,14 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
   记录使用 DNS only／仅 DNS，指向平台源站。Registry 与 Gateway 证书分别包含对应域名；
   `GATEWAY_ADVERTISE_ADDR` 默认使用 `agent.open7x.com:8443`。使用其他域名时同步修改
   两处 `-tls-host` 与通告地址；修改 `GATEWAY_TUNNEL_PORT` 时同步通告端口。
+- Gateway 镜像内置 Agent 制品，供 `/agent/*` 一行命令安装使用。构建时按 `.env` 的
+  `AGENT_PLATFORMS`（默认 linux、darwin、windows 的 amd64 与 arm64 共六个平台）以同一
+  `VERSION` 交叉编译 Agent，落到镜像内的 `/opt/aisw/agent-dist/<VERSION>/`，并附带
+  `agent.sh`、`agent.ps1`、`install.sh`、`install.ps1` 与覆盖全部文件的 `SHA256SUMS.txt`。
+  未设置 `AGENT_PUBLIC_URL` 时 Gateway 不挂载 `/agent/*`，控制面不提供签发。其他服务镜像只多一个空目录。
+  本地实测（依赖层已缓存）：六平台约增加 98 MB 镜像体积（Gateway 镜像约 195 MB，单平台约 76 MB），
+  构建约 52 秒；首次构建要另外下载 Go 模块。只需要部分平台时设置 `AGENT_PLATFORMS="linux/amd64"` 缩短构建。
+  公开入口需要反向代理把 `/agent/` 前缀转给 Gateway HTTP 端口。
 - 当前为单 Registry、单 Gateway 编排。多副本方案见对应服务 README。
 - 默认数据库为 MySQL。`postgres` profile 只额外启动 PostgreSQL，不切换控制面数据源；
   Job 持久化目前仅支持 MySQL。
@@ -319,6 +341,34 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
   按 [数据库升级与恢复](database-recovery.md) 操作。
 - Redis 是会话的权威状态，已启用 AOF 和数据卷；不可用时管理请求返回 `503`。
   不要恢复早于吊销或改密操作的 Redis 快照。
+
+### 已有部署启用一行命令安装
+
+Gateway 镜像要内置 Agent 制品，需要重新构建；Nginx 要把 `/agent/` 前缀转给 Gateway HTTP 端口。以下以 `https://open7x.com` 为例，改成实际站点地址。
+
+1. 拉取新代码，在 `deploy/.env` 追加 `AGENT_PUBLIC_URL=https://open7x.com`。只需要部分平台时再设置 `AGENT_PLATFORMS`（如 `"linux/amd64"`），要从其他仓库的 Release 下载时设置 `AGENT_GITHUB_REPO`。
+2. 在 `controlplane.yaml` 增加 `AgentInstall: {PublicURL: "https://open7x.com"}`。`deploy/install.sh`、`deploy/upgrade.sh` 在缺少该段时按 `.env` 的 `AGENT_PUBLIC_URL` 补上，已有该段不会改写。两处必须一致：`AGENT_PUBLIC_URL` 决定 Gateway 是否挂载 `/agent/*`，`AgentInstall.PublicURL` 决定控制面是否签发并写进命令。
+3. Nginx 在站点 server 块增加下面的转发。`/agent/` 是公开入口，不带 Cookie，所以不要放进 Console 的 location，也不要对它启用登录校验。`proxy_pass` 的端口是 Gateway HTTP 端口（Compose 默认 `GATEWAY_PORT`，按现有 API 转发配置为准）。
+
+   ```nginx
+   location /agent/ {
+       proxy_pass http://127.0.0.1:8080;   # Gateway HTTP / Gateway HTTP 端口
+       proxy_set_header Host $host;
+       proxy_buffering off;                # 制品较大，不落盘缓冲 / large artifacts
+       client_max_body_size 4k;            # 兑换请求体不超过 1 KiB
+   }
+   ```
+
+4. 重新构建并重启（会短暂重启 Gateway 与控制面）：
+
+   ```bash
+   docker compose config --quiet &&
+   docker compose up -d --build --no-deps gateway controlplane
+   ```
+
+5. 验证：`curl -fsS https://open7x.com/agent/v1/manifest` 返回当前版本与资产列表；`https://open7x.com/agent/install.sh` 返回脚本，且不再包含 `__AISW_PLATFORM_URL__`。然后在 Console 生成一条命令走一遍；真实环境验收见 [Agent 验收矩阵](agent/acceptance.md)。
+
+关闭时清空 `AGENT_PUBLIC_URL` 和 `AgentInstall.PublicURL` 后重建，`/agent/*` 不再挂载，已签发的兑换码到期失效。
 
 ### 已有部署启用远程 Agent
 

@@ -118,6 +118,8 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 
 专属节点位于 `/operator/node-access`：节点列表合并 `/operator/v1/nodes` 的机群节点与 `GET /operator/v1/node-access` 的已绑定节点，也可以输入尚未接入的 node_id；每台节点整组 `PUT /operator/v1/node-access/:node_id`，不自动重试，请求体沿用默认上限（控制面另限 16 KiB）。后端公共校验源是 `common/nodeaccess`，前端 `lib/console/node-access.ts` 的镜像需同步测试。`tnode.` 开头的商户自有节点在该页只读（`tenantNodeOwner` 镜像 `nodeaccess.OwnerOf`）。
 
+Agent 一行命令安装：运维 `/operator/agent-enrollment` 与商户 `/console/nodes` 共用 `components/console/agent-install-panel.tsx`，分别走 `POST /operator/v1/agent-install-codes` 与 `POST /admin/v1/nodes/install-codes`（各一行白名单）。兑换码或令牌只在页面内存中保留，只请求一次、不自动重试、离开页面即丢失；平台地址取自响应的 `install_base_url`，Console 不连 Gateway 读 manifest。命令由 `lib/console/agent-install.ts` 的 `buildInstallCommand` 拼装，所有值单引号引用，解析器对令牌、地址、base URL 做严格校验（镜像 `internal/types` 的 `InstallIssueResponse`）。接入包 ZIP 收进「高级」折叠区。控制面未配置 `AgentInstall.PublicURL` 时两条路由返回 404，面板提示改用 ZIP。
+
 商户自有节点位于租户页面 `/console/nodes`，走 `/api/admin/*`（`GET/POST /admin/v1/nodes`、`DELETE /admin/v1/nodes/:node_id`），不发起平台请求。生成接入包与删除都是写操作，只发送一次、不自动重试：重发一次生成会再铸出一枚绑定令牌。契约镜像在 `lib/console/tenant-nodes.ts`，接入包解析与运维接入共用 `parseBundleFor`，只是 node_id 正则不同。
 
 路由管理（P02）位于 `/operator/routes`，草稿只在页面保留。平台发布/回滚须携带 expected_revision，不自动重试；读请求须防止过期响应覆盖新的草稿或生效状态。仅匹配路由验证/发布的请求体允许 1 MiB + 64 KiB，不能全局放宽普通管理端点。后端公共校验源是 `common/modelroute`，前端镜像需同步测试。

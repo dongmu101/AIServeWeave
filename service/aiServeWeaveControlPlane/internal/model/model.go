@@ -389,6 +389,18 @@ const (
 	//
 	// ActionTenantNodeRevoke 记录商户删除一台自有节点，即在 Registry 停用该身份。
 	ActionTenantNodeRevoke = "node.tenant.revoke"
+	// ActionInstallCodeCreate records issuing an Agent install credential
+	// (a one-time code or a directly minted token) for a node. Neither the
+	// code nor the token is ever recorded.
+	//
+	// ActionInstallCodeCreate 记录为节点签发 Agent 安装凭据（一次性兑换码或直接签出的
+	// 令牌）。兑换码与令牌都从不被记录。
+	ActionInstallCodeCreate = "node.install_code.create"
+	// ActionInstallCodeRedeem records a one-time install code being redeemed,
+	// which mints the node's Registry token.
+	//
+	// ActionInstallCodeRedeem 记录一次性安装兑换码被兑换，此时才为节点签出 Registry 令牌。
+	ActionInstallCodeRedeem = "node.install_code.redeem"
 	// Billing actions. Package and price writes are platform actions and use
 	// PlatformScope; a tenant's mode change and balance adjustment are
 	// recorded under PlatformScope too, with the tenant id as the target.
@@ -528,3 +540,31 @@ type TenantNode struct {
 //
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (TenantNode) TableName() string { return "tenant_nodes" }
+
+// AgentInstallCode is a one-time install code awaiting redemption. Only the
+// SHA-256 of the normalized code is stored, never the code or any Registry
+// token: the token is minted at redemption, so a database leak yields nothing
+// that can enroll a node. TenantID is PlatformScope for operator codes.
+//
+// AgentInstallCode 是等待兑换的一次性安装兑换码。只保存规范化后兑换码的 SHA-256，不保存
+// 兑换码本身，也不保存任何 Registry 令牌：令牌在兑换时才签出，因此数据库泄露得不到任何
+// 可用于接入节点的东西。运维签发的码，TenantID 为 PlatformScope。
+type AgentInstallCode struct {
+	CodeHash     string    `gorm:"primaryKey;size:64"`
+	NodeID       string    `gorm:"size:128;not null"`
+	TenantID     string    `gorm:"size:32;not null"`
+	RegistryAddr string    `gorm:"size:255;not null"`
+	GatewayAddr  string    `gorm:"size:255;not null"`
+	CreatedBy    string    `gorm:"size:32;not null"`
+	CreatedAt    time.Time `gorm:"not null"`
+	ExpiresAt    time.Time `gorm:"not null"`
+	// RedeemedAt is set by the one conditional update that redeems the code.
+	//
+	// RedeemedAt 由兑换该码的那次条件更新写入。
+	RedeemedAt *time.Time
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (AgentInstallCode) TableName() string { return "agent_install_codes" }

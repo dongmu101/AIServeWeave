@@ -2,13 +2,18 @@ name: Release
 
 # 打一个 vX.Y.Z tag 触发：重跑一遍质量门禁，交叉编译四个二进制的全部受支持平台，
 # 生成校验和，构建并推送四个服务的多架构容器镜像到 GHCR，创建 GitHub Release。
+# Release 资产还包含 Agent 安装脚本（agent.sh、agent.ps1、install.sh、install.ps1），
+# 由 scripts/build-release.sh 放进 dist/ 并纳入总校验和；Gateway 镜像内置同版本的 Agent 制品。
 # 流程与版本策略见根 RELEASING.md，不在这里重复。
 #
 # Fires on a vX.Y.Z tag push: reruns the quality gates, cross-compiles all
 # four binaries for every supported platform, generates checksums, builds and
 # pushes multi-arch images for all four services to GHCR, and creates a
-# GitHub Release. The process and versioning policy live in the root
-# RELEASING.md — not repeated here.
+# GitHub Release. The release assets also include the Agent install scripts
+# (agent.sh, agent.ps1, install.sh, install.ps1), which scripts/build-release.sh
+# puts in dist/ under the overall checksums; the Gateway image bakes in the
+# same version's Agent artifacts. The process and versioning policy live in the
+# root RELEASING.md — not repeated here.
 on:
   push:
     tags:

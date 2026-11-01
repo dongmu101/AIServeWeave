@@ -34,5 +34,29 @@ try {
     & $script uninstall -Root $root -Stage
     if(Test-Path -LiteralPath $entry){throw 'Uninstall retained the active entry.'}
     if([IO.File]::ReadAllText($key) -ne 'node-identity' -or [IO.File]::ReadAllText($config) -ne 'existing configuration'){throw 'Identity/configuration was not preserved.'}
+    # Commit builds install only from local verified artifacts, with the same rules as agent.sh.
+    # 提交号构建只从本地已校验制品安装，规则与 agent.sh 一致。
+    $commit='763e0a2'
+    $commitAsset="aiserveweave-agent_${commit}_windows_$arch.exe"
+    $commitBinary=Join-Path $temp $commitAsset;Copy-Item -LiteralPath $binary -Destination $commitBinary
+    $commitSums=Join-Path $temp 'commit-sums.txt';[IO.File]::WriteAllText($commitSums,"$digest  $commitAsset`n")
+    $commitRoot=Join-Path $temp 'commit Agent'
+    & $script install -Root $commitRoot -Stage -Version $commit -File $commitBinary -Checksums $commitSums -NodeId node-commit -Registry registry.test:9090 -Gateway gateway.test:9090 -CAFile $ca -TokenFile $token
+    if(!(Test-Path -LiteralPath (Join-Path $commitRoot 'bin\aiserveweave-agent.exe'))){throw 'Commit install is missing.'}
+    $rejected=@(
+        @{Name='download';Arguments=@{Version=$commit;BaseUrl='https://example.invalid/releases/763e0a2'}},
+        @{Name='no checksums';Arguments=@{Version=$commit;File=$commitBinary}},
+        @{Name='dirty';Arguments=@{Version="$commit-dirty";File=$commitBinary;Checksums=$commitSums}},
+        @{Name='development';Arguments=@{Version='dev';File=$commitBinary;Checksums=$commitSums}},
+        @{Name='uppercase';Arguments=@{Version='763E0A2';File=$commitBinary;Checksums=$commitSums}},
+        @{Name='short';Arguments=@{Version='763e0a';File=$commitBinary;Checksums=$commitSums}},
+        @{Name='long';Arguments=@{Version=('a'*41);File=$commitBinary;Checksums=$commitSums}}
+    )
+    foreach($case in $rejected){
+        $failed=$false;$rejectedRoot=Join-Path $temp ('rejected '+$case.Name);$arguments=$case.Arguments
+        try{& $script install -Root $rejectedRoot -Stage @arguments}catch{$failed=$true}
+        if(!$failed){throw "Version case '$($case.Name)' was accepted."}
+        if(Test-Path -LiteralPath (Join-Path $rejectedRoot 'releases')){throw "Version case '$($case.Name)' left a release behind."}
+    }
     Write-Output 'Windows staging tests passed.'
 } finally {Remove-Item -LiteralPath $temp -Force -Recurse}

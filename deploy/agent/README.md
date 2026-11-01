@@ -16,9 +16,44 @@ Windows 26H1 新硬件另列专项验证；较新系统版本未完成实机验�
 
 桌面锁屏后继续运行；睡眠/休眠期间不承诺在线，唤醒后沿用隧道重连；注销、关机退出，下次登录恢复。脚本不修改睡眠设置、不创建 Windows SYSTEM 服务或 macOS LaunchDaemon。
 
-## 准备接入材料
+## 一行命令安装
 
-推荐让平台运维在控制台「Agent 接入」（`/operator/agent-enrollment`）生成 ZIP，经可信私密渠道交付。节点提供者无需登录平台服务器或拥有平台账户；将 ZIP 中四个文件解压到匹配版本的 Agent 发行包目录，按包内 `README.txt` 安装。发行包（程序、安装脚本和校验清单）需另外取得。CA 也可单独从该页面下载。每个包授权随机新节点，不用于重装已有节点；首次注册须在包内截止时间前完成，注册后删除下载的令牌与 ZIP 副本。
+平台开启后（部署方设置 `AGENT_PUBLIC_URL`，见 [部署说明](../README.md#已有部署启用一行命令安装)），节点提供者在 Console 的「添加节点」取得一行命令，无需另行取得发行包和接入材料。命令下载与平台同版本的 Agent，校验 `SHA256SUMS.txt` 通过后才兑换一次性兑换码，再交给本目录的 `agent.sh`/`agent.ps1` 安装，服务、目录与运行身份与下文手动流程一致。
+
+```bash
+# Ubuntu（sudo）/ macOS（不用 sudo，当前用户）
+curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | sudo bash -s -- --code 'XXXX-XXXX-XXXX-XXXX-XXXX'
+curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | bash -s -- --code 'XXXX-XXXX-XXXX-XXXX-XXXX'
+```
+
+```powershell
+# Windows 11：普通（非管理员）PowerShell
+& ([scriptblock]::Create((irm 'https://open7x.com/agent/install.ps1'))) -Code 'XXXX-XXXX-XXXX-XXXX-XXXX'
+```
+
+| 项 | 说明 |
+| --- | --- |
+| 凭据 | `--code`/`-Code`：兑换码，一次性，到期（15 分钟至 24 小时）或兑换后失效。不带凭据时在终端隐藏输入兑换码（Windows 用 `irm … \| iex`）。`--node-id --token --ca-sha256 --registry --gateway`（Windows 为 `-NodeId -Token -CaSha256 -Registry -Gateway`）直接给一次性令牌，脚本向平台取 CA 并按指纹固定。`--bundle`/`-Bundle` 使用 Console 下载的 ZIP |
+| 来源 | 默认 `platform`：从平台 `/agent/download/<版本>/` 下载。`--source github` 从 GitHub Release 下载，仅正式 `vX.Y.Z` 版本可用；`--source https://目录` 指向自行托管且含 `SHA256SUMS.txt` 的目录 |
+| 版本 | 默认平台自己的版本；`--version` 可指定，开发版（`dev`、`-dirty`）一律拒绝 |
+| 校验 | 先下载 Agent、`agent.sh`/`agent.ps1` 与 `SHA256SUMS.txt`，逐个校验摘要，全部通过才兑换。任何校验失败都不消耗兑换码 |
+| Ubuntu | `--user NAME` 指定服务账户（默认 `aiserveweave`，不存在则创建）；`--path` 传给 `agent.sh` 作为后台 CLI 的 PATH |
+| 升级 | `--upgrade`/`-Upgrade` 升级已安装节点，不需要凭据，沿用现有配置与身份 |
+| 排错 | `404 invalid_code`：码错误、已用、已过期或节点已删除，不区分原因，须重新生成；`429`：兑换过于频繁，按 `Retry-After` 等待；`503`：平台暂不可用，码未消耗时可在到期前重试 |
+
+注意：
+
+- 命令里的兑换码等同一次性接入凭据，只在可信终端使用；执行后码即失效，但仍不要贴进工单或聊天。脚本不把码、令牌写入日志或错误文本；Ubuntu/macOS 通过标准输入把码交给 `curl`，不出现在进程参数里。
+- 脚本只接受 HTTPS 平台地址，下载与重定向都限制为 HTTPS。`curl … | bash` 的信任根是平台站点的 TLS 证书与域名；需要先审阅脚本时，先下载 `install.sh` 再执行。
+- Windows 不要在管理员窗口运行，脚本会拒绝提权。计划任务在该用户登录后运行，沿用下文 Windows 约定。
+- 已安装节点的机器不要重新兑换，升级改用 `--upgrade`。
+- 一行命令不会取代手动流程，也不改变 CLI 登录、模型安装等节点侧责任。
+
+下文的手动流程（接入包 ZIP、`--file`/`--checksums` 本地制品）保留为高级用法：离线环境、无法访问平台 `/agent/*`、需要提交号版本或审阅每个文件时使用。
+
+## 准备接入材料（手动流程）
+
+需要手动安装时，平台运维在控制台「Agent 接入」（`/operator/agent-enrollment`）生成 ZIP，经可信私密渠道交付。节点提供者无需登录平台服务器或拥有平台账户；将 ZIP 中四个文件解压到匹配版本的 Agent 发行包目录，按包内 `README.txt` 安装。发行包（程序、安装脚本和校验清单）需另外取得。CA 也可单独从该页面下载。每个包授权随机新节点，不用于重装已有节点；首次注册须在包内截止时间前完成，注册后删除下载的令牌与 ZIP 副本。
 
 平台管理员提供：唯一 node ID、绑定该节点的一次性令牌文件、Registry CA PEM、可达的 Registry 与 Gateway `host:port`。服务器证书 SAN 必须匹配远程地址，不能直接照抄本机 `localhost` 示例，也不能关闭 TLS 校验。管理员凭据不导入节点。注册成功后 Agent 删除导入的令牌，节点证书/私钥保留并自动续期。
 

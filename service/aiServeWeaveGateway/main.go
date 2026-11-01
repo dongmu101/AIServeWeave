@@ -36,6 +36,7 @@ import (
 	"AIServeWeave/common/localdiscovery"
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
+	"AIServeWeave/service/aiServeWeaveGateway/agentdist"
 	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
@@ -172,6 +173,12 @@ func run() error {
 		"how long a persisted \"temp\" (preview/intermediate) artifact is kept, deliberately much shorter than -artifact-retention; zero uses httpapi.DefaultArtifactPreviewRetention")
 	allowedUploadExtensions := flag.String("workflow-upload-allowed-extensions", "",
 		"comma-separated, dot-prefixed file extensions a workflow InputFile upload may use (STATUS.md's P04); empty uses httpapi.DefaultAllowedUploadExtensions, there is no way to disable the check")
+	agentDistDir := flag.String("agent-dist-dir", "",
+		"directory holding <version>/ subdirectories of Agent artifacts and bootstrap scripts, served at /agent/* for one-command installs; must be set together with -agent-public-url and needs -control-plane-addr")
+	agentPublicURL := flag.String("agent-public-url", "",
+		"this platform's public HTTPS origin, e.g. https://open7x.com, written into the served bootstrap scripts; must be set together with -agent-dist-dir")
+	agentGitHubRepo := flag.String("agent-github-repo", "",
+		"owner/name of the GitHub repository whose Releases hold the same Agent artifacts; advertised in the manifest only for vX.Y.Z versions")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 
@@ -478,6 +485,33 @@ func run() error {
 	topMux := http.NewServeMux()
 	if err := mountDocs(topMux); err != nil {
 		return err
+	}
+	// The /agent/* entry is public for the same reason as the docs: it hands
+	// out the Agent and its install scripts to machines that hold no API key
+	// yet. It exists only when both -agent-dist-dir and -agent-public-url are
+	// given; one without the other refuses to start.
+	//
+	// /agent/* 入口与文档一样是公开的：它把 Agent 及其安装脚本交给尚未持有任何 API Key 的
+	// 机器。只有同时给出 -agent-dist-dir 与 -agent-public-url 才存在；只给其一则拒绝启动。
+	if *agentDistDir != "" || *agentPublicURL != "" {
+		token := *controlPlaneToken
+		if token == "" {
+			token = os.Getenv(controlPlaneTokenEnv)
+		}
+		agent, err := agentdist.New(agentdist.Config{
+			DistDir:         *agentDistDir,
+			Version:         version,
+			PublicURL:       *agentPublicURL,
+			GitHubRepo:      *agentGitHubRepo,
+			ControlPlaneURL: *controlPlaneAddr,
+			Token:           token,
+			Logger:          logger,
+		})
+		if err != nil {
+			return err
+		}
+		agent.Mount(topMux)
+		logger.Info("serving Agent installs", slog.String("agent_dist_dir", *agentDistDir), slog.String("agent_public_url", *agentPublicURL))
 	}
 	topMux.Handle("/", front)
 	httpServer := &http.Server{Addr: *addr, Handler: topMux}

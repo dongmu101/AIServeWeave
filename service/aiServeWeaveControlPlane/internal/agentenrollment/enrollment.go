@@ -110,6 +110,53 @@ type Bundle struct {
 	Archive   []byte
 }
 
+// Credential is a freshly minted node token with the public CA material a
+// node needs to trust the platform, returned without being packed into an
+// archive.
+//
+// Credential 是新签出的节点令牌，连同节点信任平台所需的公开 CA 材料，不打进压缩包直接返回。
+type Credential struct {
+	NodeID    string
+	Token     string
+	ExpiresAt time.Time
+	CAPEM     string
+	CASHA256  string
+}
+
+// NewNodeID returns a random node ID of the form node_<32 hex>.
+//
+// NewNodeID 返回形如 node_<32 位十六进制> 的随机节点 ID。
+func NewNodeID() (string, error) {
+	var id [16]byte
+	if _, err := rand.Read(id[:]); err != nil {
+		return "", errors.New("agentenrollment: identity generation failed")
+	}
+	return "node_" + hex.EncodeToString(id[:]), nil
+}
+
+// MintCredential issues a token bound to nodeID without building an archive.
+// The caller is responsible for the ID being new, as for CreateNode.
+//
+// MintCredential 签发绑定 nodeID 的令牌而不生成压缩包。与 CreateNode 一样，由调用方保证
+// 该 ID 是新的。
+func (s *Service) MintCredential(ctx context.Context, nodeID string, ttl time.Duration) (Credential, error) {
+	if nodeID == "" || ttl < 15*time.Minute || ttl > 24*time.Hour {
+		return Credential{}, ErrInvalidInput
+	}
+	ca, err := s.CA()
+	if err != nil {
+		return Credential{}, err
+	}
+	token, expiry, err := s.issuer.MintNodeToken(ctx, nodeID, ttl)
+	if err != nil {
+		return Credential{}, errors.New("agentenrollment: token issuance unavailable")
+	}
+	if token == "" || len(token) > 4096 || strings.ContainsAny(token, "\r\n\x00") || !expiry.After(s.clock.Now()) {
+		return Credential{}, errors.New("agentenrollment: invalid issued token")
+	}
+	return Credential{NodeID: nodeID, Token: token, ExpiresAt: expiry, CAPEM: ca.PEM, CASHA256: ca.SHA256}, nil
+}
+
 // Create allocates a random new node ID before issuing its bound token.
 // Addresses are download content, never server-side network destinations.
 //

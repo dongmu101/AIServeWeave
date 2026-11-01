@@ -193,6 +193,31 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{Method: http.MethodPost, Path: "/admin/v1/nodes", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes", requireSession(ctx, createTenantNode(ctx)))},
 			{Method: http.MethodDelete, Path: "/admin/v1/nodes/:node_id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes/:node_id", requireSession(ctx, revokeTenantNode(ctx)))},
 		})
+		if ctx.Config.AgentInstall.Issuing(ctx.Config.Registry) {
+			server.AddRoutes([]rest.Route{
+				{Method: http.MethodPost, Path: "/admin/v1/nodes/install-codes", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes/install-codes", requireSession(ctx, createTenantInstall(ctx)))},
+			})
+		}
+	}
+
+	// Agent install codes: the operator issuing route needs
+	// AgentInstall.PublicURL; the redeem and CA routes the Gateway calls need
+	// only a complete Registry block and are guarded by the shared
+	// InternalToken like the other Gateway-facing endpoints.
+	//
+	// Agent 安装兑换码：运维签发路由需要 AgentInstall.PublicURL；Gateway 调用的兑换与 CA
+	// 路由只需要 Registry 配置齐全，并与其他面向 Gateway 的端点一样由共享的 InternalToken
+	// 守卫。
+	if ctx.Config.AgentInstall.Issuing(ctx.Config.Registry) {
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodPost, Path: "/operator/v1/agent-install-codes", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/agent-install-codes", requirePlatformSession(ctx, createOperatorInstall(ctx)))},
+		})
+	}
+	if ctx.Config.AgentInstall.Serving(ctx.Config.Registry) {
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodPost, Path: "/internal/v1/agent-install/redeem", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/agent-install/redeem", requireSharedSecret(ctx.Config.InternalToken, redeemInstallCode(ctx)))},
+			{Method: http.MethodGet, Path: "/internal/v1/agent-install/ca", Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/agent-install/ca", requireSharedSecret(ctx.Config.InternalToken, installCA(ctx)))},
+		})
 	}
 
 	server.AddRoutes([]rest.Route{

@@ -1,10 +1,13 @@
 #!/usr/bin/env bash
 # build-release.sh cross-compiles the four Go binaries for every supported
 # platform and writes a checksum file next to them, for a GitHub Release or a
-# local dry run.
+# local dry run. It also copies the Agent install scripts (agent.sh, agent.ps1,
+# install.sh, install.ps1) into dist/ so they are covered by the checksum file.
+# It empties dist/ first.
 #
 # build-release.sh 为四个 Go 二进制交叉编译出每个受支持平台的产物，并在旁边生成一份
-# 校验和文件，供 GitHub Release 或本地试跑使用。
+# 校验和文件，供 GitHub Release 或本地试跑使用。它还会把 Agent 安装脚本（agent.sh、
+# agent.ps1、install.sh、install.ps1）复制进 dist/，纳入校验和文件。脚本会先清空 dist/。
 #
 # Usage:
 #   VERSION=v0.1.0 scripts/build-release.sh
@@ -77,6 +80,13 @@ for platform in $PLATFORMS;do
     tar -czf "$OUT_DIR/${stem}.tar.gz" -C "$package_dir" "$stem" SHA256SUMS.txt README.md acceptance.md agent.sh
   fi
   rm -f "$package_dir"/*
+done
+
+# Ship the install scripts as standalone assets too, so a GitHub release mirrors
+# the layout the platform serves under /agent/download/<version>/.
+# 安装脚本也作为独立资产发布，使 GitHub Release 与平台在 /agent/download/<版本>/ 下提供的布局一致。
+for script in agent.sh agent.ps1 install.sh install.ps1;do
+  cp "deploy/agent/$script" "$OUT_DIR/$script"
 done
 
 (

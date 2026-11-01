@@ -109,6 +109,8 @@ const ROUTES: readonly UpstreamRoute[] = [
   // 商户的自有节点。商户来自会话；接入包里的 Registry 与 Gateway 地址来自控制面配置。
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("nodes")], query: [] },
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("nodes")], query: [] },
+  // One-line install codes; written once, never retried. / 一行命令安装码；只写一次，不重试。
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("nodes"), literal("install-codes")], query: [] },
   { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("nodes"), param()], query: [] },
   {
     method: "GET",
@@ -248,6 +250,7 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), literal("states")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("agent-enrollment")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("agent-enrollment")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("agent-install-codes")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("audit")], query: ["limit", "cursor", "action", "actor_id", "since", "until"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("metrics"), literal("history")], query: ["since", "until"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("api-docs")], query: [] },

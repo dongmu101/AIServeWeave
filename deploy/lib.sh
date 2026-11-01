@@ -192,6 +192,26 @@ EOF
   log "已在 controlplane.yaml 中加入商户自有节点配置（默认开启）"
 }
 
+# ensure_agent_install adds the AgentInstall block to a controlplane.yaml that
+# predates it. PublicURL comes from AGENT_PUBLIC_URL, so an empty value keeps
+# code issuing off; an operator who set the block keeps it as written.
+#
+# ensure_agent_install 给早于该功能的 controlplane.yaml 补上 AgentInstall 配置块。PublicURL
+# 取自 AGENT_PUBLIC_URL，因此留空即不提供签发；运维已写好的配置块保持原样。
+ensure_agent_install() {
+  local file="$DEPLOY_DIR/controlplane.yaml"
+  [[ -f "$file" ]] || return 0
+  grep -q '^AgentInstall:' "$file" && return 0
+  cat >>"$file" <<'EOF'
+
+# One-line Agent install; PublicURL is the platform's HTTPS origin, empty keeps it off.
+# Agent 一行命令安装；PublicURL 是平台的 HTTPS 站点地址，留空则关闭。
+AgentInstall:
+  PublicURL: "${AISW_AGENT_PUBLIC_URL}"
+EOF
+  log "已在 controlplane.yaml 中加入 Agent 安装配置（PublicURL 取自 AGENT_PUBLIC_URL）"
+}
+
 # ensure_config_readable keeps controlplane.yaml world-readable. It is bind
 # mounted into a container that runs as uid 10001, and git rewrites it with
 # the caller's umask on every pull or stash, so a shell left at umask 077

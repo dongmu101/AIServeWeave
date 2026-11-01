@@ -82,6 +82,65 @@ type TenantNodeListResponse struct {
 	MaxCreatesPerDay int          `json:"max_creates_per_day"`
 }
 
+// CreateOperatorInstallRequest is POST /operator/v1/agent-install-codes.
+// Credential is "code" (the default) or "token".
+//
+// CreateOperatorInstallRequest 是 POST /operator/v1/agent-install-codes 的请求体。
+// Credential 为 "code"（默认）或 "token"。
+type CreateOperatorInstallRequest struct {
+	RegistryAddr string `json:"registry_addr"`
+	GatewayAddr  string `json:"gateway_addr"`
+	TTLMinutes   int    `json:"ttl_minutes"`
+	Credential   string `json:"credential"`
+}
+
+// CreateTenantInstallRequest is POST /admin/v1/nodes/install-codes. The
+// addresses come from configuration, not from the tenant.
+//
+// CreateTenantInstallRequest 是 POST /admin/v1/nodes/install-codes 的请求体。地址来自
+// 配置，而不是商户。
+type CreateTenantInstallRequest struct {
+	TTLMinutes int    `json:"ttl_minutes"`
+	Credential string `json:"credential"`
+}
+
+// InstallIssueResponse is returned once when an install credential is issued.
+// Code is set for credential "code"; the token fields for credential "token".
+//
+// InstallIssueResponse 在签发安装凭据时仅返回一次。credential 为 "code" 时设置 Code，
+// 为 "token" 时设置令牌字段。
+type InstallIssueResponse struct {
+	Credential     string    `json:"credential"`
+	Code           string    `json:"code,omitempty"`
+	NodeID         string    `json:"node_id"`
+	ExpiresAt      time.Time `json:"expires_at"`
+	InstallBaseURL string    `json:"install_base_url"`
+	BootstrapToken string    `json:"bootstrap_token,omitempty"`
+	CASHA256       string    `json:"ca_sha256,omitempty"`
+	RegistryAddr   string    `json:"registry_addr,omitempty"`
+	GatewayAddr    string    `json:"gateway_addr,omitempty"`
+}
+
+// InstallRedeemRequest is POST /internal/v1/agent-install/redeem.
+//
+// InstallRedeemRequest 是 POST /internal/v1/agent-install/redeem 的请求体。
+type InstallRedeemRequest struct {
+	Code string `json:"code"`
+}
+
+// InstallRedeemResponse is what redeeming a code returns once.
+//
+// InstallRedeemResponse 是兑换一个码时仅返回一次的内容。
+type InstallRedeemResponse struct {
+	NodeID         string    `json:"node_id"`
+	RegistryAddr   string    `json:"registry_addr"`
+	GatewayAddr    string    `json:"gateway_addr"`
+	CAPEM          string    `json:"ca_pem"`
+	CASHA256       string    `json:"ca_sha256"`
+	BootstrapToken string    `json:"bootstrap_token"`
+	TokenExpiresAt time.Time `json:"token_expires_at"`
+}
+
 // CreateTenantNodeRequest is POST /admin/v1/nodes. The addresses come from
 // configuration, not from the tenant.
 //

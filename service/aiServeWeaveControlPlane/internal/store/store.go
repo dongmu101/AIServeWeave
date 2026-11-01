@@ -367,6 +367,30 @@ type TenantNodes interface {
 	DeleteTenantNode(ctx context.Context, nodeID string) error
 }
 
+// AgentInstallCodes persists one-time Agent install codes by the hash of the
+// code. The code itself is never stored.
+//
+// AgentInstallCodes 按兑换码的哈希持久化一次性 Agent 安装兑换码。兑换码本身从不保存。
+type AgentInstallCodes interface {
+	// CreateAgentInstallCode inserts row. ErrConflict if its hash exists.
+	//
+	// CreateAgentInstallCode 插入 row；其哈希已存在时返回 ErrConflict。
+	CreateAgentInstallCode(ctx context.Context, row *model.AgentInstallCode) error
+	// RedeemAgentInstallCode marks the code unredeemed and unexpired at now
+	// as redeemed with one conditional update, so concurrent redemptions
+	// succeed once. ErrNotFound when the hash is unknown, already redeemed or
+	// expired, without telling which.
+	//
+	// RedeemAgentInstallCode 以一次条件更新，把 now 时刻未兑换且未过期的码标记为已兑换，
+	// 使并发兑换只成功一次。哈希未知、已兑换或已过期时返回 ErrNotFound，且不区分原因。
+	RedeemAgentInstallCode(ctx context.Context, codeHash string, now time.Time) (model.AgentInstallCode, error)
+	// UnredeemAgentInstallCode clears the redemption of a code whose token
+	// could not be minted, so the holder can retry until it expires.
+	//
+	// UnredeemAgentInstallCode 撤销一个未能签出令牌的码的兑换，使持有者可以在过期前重试。
+	UnredeemAgentInstallCode(ctx context.Context, codeHash string) error
+}
+
 // Users persists the people who sign in to the Console.
 //
 // Users 持久化登录 Console 的人。
@@ -930,6 +954,7 @@ type Store interface {
 	ModelAccess
 	NodeAccess
 	TenantNodes
+	AgentInstallCodes
 	Users
 	PlatformOperators
 	APIKeys

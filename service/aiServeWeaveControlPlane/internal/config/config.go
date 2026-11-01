@@ -223,6 +223,82 @@ type Config struct {
 	// 该字段刻意不标 optional：go-zero 只在配置块存在时才为 optional 块填充默认值，那样会让
 	// 所有省略该块的配置文件都关闭本功能。
 	TenantNodes TenantNodesConf
+
+	// AgentInstall configures one-command Agent installation: the one-time
+	// install codes the Console shows and the Gateway redeems. Not optional
+	// for the same reason as TenantNodes: its defaults must apply when the
+	// block is omitted.
+	//
+	// AgentInstall 配置 Agent 一行命令安装：Console 展示、由 Gateway 兑换的一次性安装
+	// 兑换码。与 TenantNodes 同理不标 optional：省略该块时也必须应用其默认值。
+	AgentInstall AgentInstallConf
+}
+
+// AgentInstallConf configures install codes. The redeem and CA endpoints the
+// Gateway calls need only a complete Registry block; PublicURL gates the two
+// endpoints that issue codes.
+//
+// AgentInstallConf 配置安装兑换码。Gateway 调用的兑换与 CA 端点只需要 Registry 配置齐全；
+// PublicURL 控制两个签发兑换码的端点。
+type AgentInstallConf struct {
+	// PublicURL is the platform site's HTTPS root, such as
+	// https://open7x.com. It is returned to the Console so it can print the
+	// install command; empty leaves the two issuing routes unmounted.
+	//
+	// PublicURL 是平台站点的 HTTPS 根地址，如 https://open7x.com。它返回给 Console 以
+	// 生成安装命令；为空时两条签发路由不挂载。
+	PublicURL string `json:",optional"`
+	// RedeemPerMinute bounds redemptions and CA reads per minute across the
+	// deployment.
+	//
+	// RedeemPerMinute 限制整个部署每分钟的兑换与 CA 读取次数。
+	RedeemPerMinute int `json:",default=60"`
+}
+
+// RedeemLimit returns RedeemPerMinute, or the documented default of 60 for a
+// Config built in Go rather than loaded, where go-zero applied no default.
+//
+// RedeemLimit 返回 RedeemPerMinute；对于在 Go 中直接构造而非加载的 Config（go-zero 不会
+// 应用默认值），返回文档所述的默认值 60。
+func (a AgentInstallConf) RedeemLimit() int {
+	if a.RedeemPerMinute == 0 {
+		return 60
+	}
+	return a.RedeemPerMinute
+}
+
+// Serving reports whether the redeem and CA endpoints are mounted.
+//
+// Serving 报告兑换与 CA 端点是否挂载。
+func (a AgentInstallConf) Serving(registry RegistryConf) bool { return registryComplete(registry) }
+
+// Issuing reports whether the code-issuing endpoints are mounted.
+//
+// Issuing 报告签发兑换码的端点是否挂载。
+func (a AgentInstallConf) Issuing(registry RegistryConf) bool {
+	return a.PublicURL != "" && registryComplete(registry)
+}
+
+// validate checks the block. A named PublicURL is taken as intent to run the
+// feature, so it must be a bare HTTPS origin and the Registry must be set.
+//
+// validate 校验配置块。填写了 PublicURL 即视为要运行本功能，因此它必须是纯 HTTPS 源，
+// 且 Registry 必须已配置。
+func (a AgentInstallConf) validate(registry RegistryConf) error {
+	if a.RedeemPerMinute < 0 || a.RedeemPerMinute > 10000 {
+		return errors.New("config: AgentInstall.RedeemPerMinute must be between 1 and 10000")
+	}
+	if a.PublicURL == "" {
+		return nil
+	}
+	if !registryComplete(registry) {
+		return errors.New("config: AgentInstall needs Registry.Addr, Registry.AdminToken and Registry.CACertFile")
+	}
+	u, err := url.Parse(a.PublicURL)
+	if err != nil || u.Scheme != "https" || u.Host == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" {
+		return errors.New("config: AgentInstall.PublicURL must be an https origin such as https://open7x.com")
+	}
+	return nil
 }
 
 // TenantNodesConf configures tenant-owned nodes. Once enabled every tenant,
@@ -858,6 +934,9 @@ func (c Config) Validate() error {
 		if err := c.TenantNodes.validate(c.Registry); err != nil {
 			return err
 		}
+	}
+	if err := c.AgentInstall.validate(c.Registry); err != nil {
+		return err
 	}
 	if c.Signup.Enabled {
 		if c.Signup.MaxPerHour < 0 {

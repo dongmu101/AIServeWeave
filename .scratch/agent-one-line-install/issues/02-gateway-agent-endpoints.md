@@ -1,6 +1,6 @@
 # 02 Gateway：公开 `/agent/*` 入口
 
-Status: needs-triage
+Status: ready-for-agent
 Blocked by: 01
 
 依据：[spec.md「Gateway」](../spec.md#gateway)。
@@ -15,8 +15,10 @@ Blocked by: 01
 
 ## 验收
 
-- [ ] spec「Testing Decisions」Gateway 各项
-- [ ] 未配置时现有路由行为不变
-- [ ] AGENTS 质量门禁
+- [x] spec「Testing Decisions」Gateway 各项
+- [x] 未配置时现有路由行为不变
+- [x] AGENTS 质量门禁
 
 ## Comments
+
+2026-10-31：实现于 `service/aiServeWeaveGateway/agentdist`，文档见 Gateway STATUS「Agent 公开安装入口」。未覆盖：对真实控制面的端到端验证；制品目录等任务 03。

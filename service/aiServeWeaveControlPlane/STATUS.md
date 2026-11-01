@@ -199,6 +199,33 @@ go run ./service/aiServeWeaveGateway \
 - **升级顺序**：本功能默认开启，地址一填就生效。Registry（保留前缀检查）、控制面、全部 Gateway 都升级之后，才能让它生效（填地址）；分批升级时先把 `Enabled` 设为 `false`。旧版 Gateway 不认识 `tnode.` 归属，会把自有节点当作共享节点派给所有商户。
 - **验证范围**：权限矩阵、上限与 24 小时窗口、签发失败回滚、删除（含 Registry 故障、重复删除、跨商户）、`Permits` 判断、Registry 前缀拒绝、Gateway 调度与 `/v1/models` 隔离、计费免扣、e2e 接口形状与配置校验都有默认测试。`0012` 迁移还没有在真实 PostgreSQL 或 MySQL 上跑过，真实 Agent 用商户接入包注册也还没有验收。
 
+### Agent 安装兑换码
+
+一行命令安装 Agent 用的一次性兑换码（任务见 [.scratch/agent-one-line-install](../../.scratch/agent-one-line-install/spec.md)）。控制面只负责签发与兑换；引导脚本与公开下载入口由 Gateway 提供（见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#agent-公开安装入口agent)），Console 的「添加节点」面板（运维 `/operator/agent-enrollment`、商户 `/console/nodes`）调用上面两条签发接口。部署与启用步骤见 [部署说明](../../deploy/README.md#已有部署启用一行命令安装)。
+
+**兑换码**：20 位 Crockford Base32（100 bit，`crypto/rand`），显示为 `XXXX-XXXX-XXXX-XXXX-XXXX`；规范化为去 `-`、转大写，其他字符拒绝。数据库只存规范化后的 SHA-256，不存明文码，也不存任何 Registry 令牌：令牌在兑换时才铸造，库泄露得不到可用于接入节点的东西。
+
+| 配置 `AgentInstall` | 默认 | 含义 |
+| --- | --- | --- |
+| `PublicURL` | 空 | 平台站点 HTTPS 根地址（无路径、用户信息、查询），随签发响应返回为 `install_base_url`。为空时两条签发接口不挂载；非空要求 Registry 配置齐全，否则拒绝启动 |
+| `RedeemPerMinute` | `60` | 兑换与 CA 两条接口的部署级每分钟上限，0 视为默认值，上限 10000 |
+
+兑换与 CA 两条内部接口只要求 `Registry.Addr`/`AdminToken`/`CACertFile` 配置齐全即挂载，与 `PublicURL` 无关。字段刻意不标 `optional`，理由同 `TenantNodes`。
+
+| 接口 | 守卫 | 说明 |
+| --- | --- | --- |
+| `POST /operator/v1/agent-install-codes` | 平台会话 | `{registry_addr, gateway_addr, ttl_minutes: 15..1440, credential}`；`credential` 为 `code`（默认）或 `token` |
+| `POST /admin/v1/nodes/install-codes` | 租户会话 owner/admin | `{ttl_minutes, credential}`；仅在 `TenantNodes` 生效时挂载，先写 `tenant_nodes` 行并计入 `MaxPerTenant`/`MaxCreatesPerDay`，签发失败再删除该行；地址取自 `TenantNodes` |
+| `POST /internal/v1/agent-install/redeem` | `InternalToken` | `{code}` → `{node_id, registry_addr, gateway_addr, ca_pem, ca_sha256, bootstrap_token, token_expires_at}` |
+| `GET /internal/v1/agent-install/ca` | `InternalToken` | `{ca_pem, ca_sha256}`，供令牌直写方式核对 CA 指纹 |
+
+- **签发响应**（`201`，`Cache-Control: no-store`，只返回一次）：`code` 方式含 `code`、`node_id`、`expires_at`、`install_base_url`；`token` 方式不写兑换码行，直接铸造令牌并返回 `bootstrap_token`、`ca_sha256`、两个地址。
+- **兑换**：先用一次条件更新（`redeemed_at IS NULL AND expires_at > now`）占有这个码，因此并发兑换只成功一次；商户码再检查 `tenant_nodes` 未删除；然后铸造 15 分钟令牌，失败时用不随请求取消的 context 复位 `redeemed_at` 并返回 `503`，持有者可在过期前重试。未知、格式错误、已兑换、已过期、节点已删除统一回答 `404 invalid_code`，不区分原因。
+- **限流**：`redeemgate` 与 `signupgate` 同构（部署级 Redis 固定窗口，窗口一分钟）；超限 `429` 加 `Retry-After`，Redis 故障 `503`（fail-closed）。不按 IP 限流：Gateway 之前的代理没有可信代理配置。
+- **存储**：`agent_install_codes` 表（基础迁移 `0013_agent_install_codes.sql`，PostgreSQL 与 MySQL 各一份），主键 `code_hash`。过期的行目前不清理。
+- **审计**：`node.install_code.create`（详情为 `credential` 与 `expires_at`）、`node.install_code.redeem`；商户码记在对应租户，运维码记在 `platform`。不记兑换码与令牌。
+- **验证范围**：生成与规范化、兑换成功/重复/过期/未知/节点已删除、铸造失败复位、并发兑换只成功一次（`-race`）、限流 `429`/`503`、审计不含码与令牌、商户限额与签发失败回滚、两种方言迁移 SQL 的列检查、配置校验都有默认测试。`0013` 迁移还没有在真实 PostgreSQL 或 MySQL 上跑过，没有 Gateway 转发与真实 Agent 的端到端验收。
+
 ### 租户自助注册
 
 `POST /admin/v1/auth/signup` 让任何人创建一个租户及其 owner，请求体 `{"tenant_name","email","password"}`，成功返回 `201` 与 `CreateTenantResponse`（不含会话，调用方随后用同一组凭据登录）。它只在配置 `Signup.Enabled: true` 时挂载；默认关闭，关闭时路由不存在、回答 `404`。开启后完全开放：新租户立即为 active，没有审批也没有邀请码。

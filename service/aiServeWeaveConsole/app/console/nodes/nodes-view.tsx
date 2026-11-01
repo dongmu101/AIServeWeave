@@ -9,10 +9,12 @@ import { useI18n } from "@/components/i18n/provider";
 import { EmptyState, ErrorState, FormError, LoadingState } from "@/components/console/states";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { useResource } from "@/components/console/use-resource";
+import { AgentInstallPanel } from "@/components/console/agent-install-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import type { EnrollmentBundle } from "@/lib/console/agent-enrollment";
+import { parseTenantInstall } from "@/lib/console/agent-install";
 import { parseNoContent } from "@/lib/console/contract";
 import { ApiError } from "@/lib/console/errors";
 import { formatDateTime } from "@/lib/console/format";
@@ -70,22 +72,28 @@ export function NodesView({ role }: { role: string }) {
       <p className="mt-2 text-sm text-muted-foreground"><Message id="tenant.myNodesIntro" /></p>
     </div>
     {nodes.error ? <ErrorState message={nodes.error} onRetry={nodes.reload} /> : !data ? <LoadingState rows={3} /> : <>
-      {canManage ? <form onSubmit={generate} className="grid gap-4 rounded-xl border p-4" aria-labelledby="node-bundle-title">
-        <h2 id="node-bundle-title" className="font-semibold"><Message id="tenant.addNode" /></h2>
+      {canManage ? <>
         <p className="text-sm text-muted-foreground"><Message id="tenant.nodeLimits" values={{ active: activeNodeCount(data), max: data.maxPerTenant, daily: data.maxCreatesPerDay }} /></p>
-        <label className="grid gap-2 text-sm" htmlFor="node-ttl"><Message id="operator.enrollmentTTL" /><select id="node-ttl" className="h-9 w-fit rounded-md border bg-background px-3" value={ttl} onChange={(e) => setTTL(e.target.value)} disabled={pending}><option value="15">{t("operator.enrollment15Minutes")}</option><option value="60">{t("operator.enrollment1Hour")}</option><option value="1440">{t("operator.enrollment24Hours")}</option></select></label>
-        <Button type="submit" disabled={pending || full} aria-busy={pending} className="w-fit"><Message id={pending ? "operator.enrollmentGenerating" : "operator.enrollmentGenerate"} /></Button>
+        <AgentInstallPanel path="/admin/v1/nodes/install-codes" parse={parseTenantInstall} extraBody={full ? null : {}} onIssued={nodes.reload} />
         {full ? <p className="text-sm text-muted-foreground"><Message id="tenant.nodeLimitReached" /></p> : null}
-        {error ? <><FormError message={error instanceof ApiError && error.kind === "conflict" ? <Message id="tenant.nodeLimitReached" /> : <ErrorMessage error={error} />} /><p className="text-sm text-muted-foreground"><Message id="operator.enrollmentUncertain" /></p></> : null}
-      </form> : <p className="text-sm text-muted-foreground"><Message id="tenant.nodesReadOnly" /></p>}
-      {bundle ? <section className="grid gap-3 rounded-xl border p-4" aria-live="polite">
-        <p className="font-semibold"><Message id="operator.enrollmentReady" /></p>
-        <code className="break-all text-sm">{bundle.nodeId}</code>
-        <p className="text-sm"><Message id="operator.enrollmentExpires" values={{ value: formatDateTime(bundle.expiresAt, undefined, locale) }} /></p>
-        <Button className="w-fit" onClick={() => downloadFile(new Blob([bundle.bytes], { type: "application/zip" }), bundle.filename)}><Message id="operator.enrollmentDownloadBundle" /></Button>
-        <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentPrivate" /></p>
-        <p className="text-sm text-muted-foreground"><Message id="tenant.nodeInstallHint" /></p>
-      </section> : null}
+        <details className="rounded-xl border p-4">
+          <summary className="cursor-pointer font-semibold"><Message id="install.advanced" /></summary>
+          <form onSubmit={generate} className="mt-4 grid gap-4" aria-labelledby="node-bundle-title">
+            <h2 id="node-bundle-title" className="font-semibold"><Message id="tenant.addNode" /></h2>
+            <label className="grid gap-2 text-sm" htmlFor="node-ttl"><Message id="operator.enrollmentTTL" /><select id="node-ttl" className="h-9 w-fit rounded-md border bg-background px-3" value={ttl} onChange={(e) => setTTL(e.target.value)} disabled={pending}><option value="15">{t("operator.enrollment15Minutes")}</option><option value="60">{t("operator.enrollment1Hour")}</option><option value="1440">{t("operator.enrollment24Hours")}</option></select></label>
+            <Button type="submit" disabled={pending || full} aria-busy={pending} className="w-fit"><Message id={pending ? "operator.enrollmentGenerating" : "operator.enrollmentGenerate"} /></Button>
+            {error ? <><FormError message={error instanceof ApiError && error.kind === "conflict" ? <Message id="tenant.nodeLimitReached" /> : <ErrorMessage error={error} />} /><p className="text-sm text-muted-foreground"><Message id="operator.enrollmentUncertain" /></p></> : null}
+          </form>
+          {bundle ? <section className="mt-4 grid gap-3 rounded-xl border p-4" aria-live="polite">
+            <p className="font-semibold"><Message id="operator.enrollmentReady" /></p>
+            <code className="break-all text-sm">{bundle.nodeId}</code>
+            <p className="text-sm"><Message id="operator.enrollmentExpires" values={{ value: formatDateTime(bundle.expiresAt, undefined, locale) }} /></p>
+            <Button className="w-fit" onClick={() => downloadFile(new Blob([bundle.bytes], { type: "application/zip" }), bundle.filename)}><Message id="operator.enrollmentDownloadBundle" /></Button>
+            <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentPrivate" /></p>
+            <p className="text-sm text-muted-foreground"><Message id="tenant.nodeInstallHint" /></p>
+          </section> : null}
+        </details>
+      </> : <p className="text-sm text-muted-foreground"><Message id="tenant.nodesReadOnly" /></p>}
       {data.items.length === 0 ? <EmptyState title={t("tenant.noNodes")} description={t("tenant.noNodesDescription")} /> : <ul className="grid gap-3">
         {data.items.map((node) => <li key={node.nodeId}><NodeCard node={node} canManage={canManage} onDeleted={nodes.reload} /></li>)}
       </ul>}

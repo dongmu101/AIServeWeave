@@ -205,3 +205,13 @@ deliberate few-line manual edit — the repository does not keep a second
 ## Agent 桌面与独立安装制品
 
 `build-release.sh` 为 Agent 增加 windows/amd64、windows/arm64 原生 `.exe`；其他服务不新增 Windows 发布目标。保留现有 Linux 与 macOS（含 Intel）裸二进制命名，新增 Agent `.tar.gz`（Unix）和 `.zip`（Windows），包含对应二进制、维护脚本、README 与选定文件的 SHA256 清单。Release 总清单同时覆盖裸文件和压缩包。内部首版不承诺签名/公证；不使用平台安全策略绕过步骤。部署及逐系统验收见 [Agent 部署](deploy/agent/README.md)。
+
+### 安装脚本资产 / Install script assets
+
+`build-release.sh` 另把 `agent.sh`、`agent.ps1`、`install.sh`、`install.ps1` 四个脚本原样复制进 `dist/`（先清空 `dist/`），随 Release 作为独立资产上传，并纳入总 `SHA256SUMS.txt`。`install.sh`/`install.ps1` 里的 `__AISW_PLATFORM_URL__` 占位符在发布资产里保持原样，只有平台（Gateway 的 `/agent/*`）下发时才替换为自己的站点地址；直接从 Release 运行这两个脚本须传 `--platform`/`-Platform`，或改用平台下发的版本。
+
+Gateway 镜像构建时按同一 `VERSION` 交叉编译 Agent 并内置 `/opt/aisw/agent-dist/<VERSION>/`，与 Release 的 Agent 二进制来自同一份源码，但是各自构建，不保证字节一致；用户通过 `--source github` 安装的是 Release 资产，通过平台安装的是镜像内置的制品，两者都由各自的 `SHA256SUMS.txt` 校验。`--source github` 只对正式 `vX.Y.Z` 版本可用，所以打 tag 后才能在 Release 页面验证这一路。镜像体积与构建时间的影响见 [部署说明](deploy/README.md)。启用方式与验收见 [部署说明](deploy/README.md#已有部署启用一行命令安装) 和 [Agent 验收矩阵](deploy/agent/acceptance.md)。
+
+`build-release.sh` also copies the four scripts `agent.sh`, `agent.ps1`, `install.sh` and `install.ps1` into `dist/` verbatim (it empties `dist/` first); they ship as standalone release assets under the overall `SHA256SUMS.txt`. The `__AISW_PLATFORM_URL__` placeholder in `install.sh`/`install.ps1` stays unreplaced in release assets and is substituted only when the platform (the Gateway's `/agent/*`) serves the script, so running these two straight from a release needs `--platform`/`-Platform`, or the platform-served copy instead.
+
+The Gateway image cross-compiles the Agent for the same `VERSION` at build time and bakes it into `/opt/aisw/agent-dist/<VERSION>/`. It comes from the same source as the release's Agent binaries but is built separately, so the bytes need not match; `--source github` installs a release asset, the platform path installs the image's artifacts, and each is verified against its own `SHA256SUMS.txt`. `--source github` works only for official `vX.Y.Z` versions, so that path can only be verified after a tag is pushed. See [deployment](deploy/README.md#已有部署启用一行命令安装) and the [Agent acceptance matrix](deploy/agent/acceptance.md) for enabling and acceptance.

@@ -8,9 +8,11 @@ import { ErrorMessage } from "@/components/i18n/error-message";
 import { useResource } from "@/components/console/use-resource";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { ErrorState, FormError, LoadingState } from "@/components/console/states";
+import { AgentInstallPanel } from "@/components/console/agent-install-panel";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { parseEnrollmentCA, parseEnrollmentBundle, type EnrollmentBundle } from "@/lib/console/agent-enrollment";
+import { parseOperatorInstall } from "@/lib/console/agent-install";
 import { formatDateTime } from "@/lib/console/format";
 
 /** AgentEnrollmentView keeps one-time credentials out of URLs and persistent storage.
@@ -48,16 +50,22 @@ export function AgentEnrollmentView() {
         <Button variant="outline" className="w-fit" disabled={!ca.data} onClick={() => { if (ca.data) downloadFile(new Blob([ca.data.pem], { type: "application/x-pem-file" }), "ca.pem"); }}><Message id="operator.enrollmentDownloadCA" /></Button>
       </>}
     </section>
-    <form onSubmit={generate} className="grid gap-4 rounded-xl border p-4" aria-labelledby="bundle-title">
-      <h2 id="bundle-title" className="font-semibold"><Message id="operator.enrollmentBundle" /></h2>
+    <section className="grid gap-4 rounded-xl border p-4" aria-labelledby="addresses-title">
+      <h2 id="addresses-title" className="font-semibold"><Message id="operator.enrollmentAddresses" /></h2>
       <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentAddressesNote" /></p>
       <label className="grid gap-2 text-sm" htmlFor="enrollment-registry"><Message id="operator.enrollmentRegistry" /><Input id="enrollment-registry" required maxLength={253} value={registry} onChange={e => setRegistry(e.target.value)} placeholder="registry.open7x.com:9443" disabled={pending} /></label>
       <label className="grid gap-2 text-sm" htmlFor="enrollment-gateway"><Message id="operator.enrollmentGateway" /><Input id="enrollment-gateway" required maxLength={253} value={gateway} onChange={e => setGateway(e.target.value)} placeholder="agent.open7x.com:8443" disabled={pending} /></label>
-      <label className="grid gap-2 text-sm" htmlFor="enrollment-ttl"><Message id="operator.enrollmentTTL" /><select id="enrollment-ttl" className="h-9 rounded-md border bg-background px-3" value={ttl} onChange={e => setTTL(e.target.value)} disabled={pending}><option value="15">{t("operator.enrollment15Minutes")}</option><option value="60">{t("operator.enrollment1Hour")}</option><option value="1440">{t("operator.enrollment24Hours")}</option></select></label>
-      <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentContents" /></p>
-      <Button type="submit" disabled={pending || !ca.data} aria-busy={pending} className="w-fit"><Message id={pending ? "operator.enrollmentGenerating" : "operator.enrollmentGenerate"} /></Button>
-      {error ? <><FormError message={<ErrorMessage error={error} />} /><p className="text-sm text-muted-foreground"><Message id="operator.enrollmentUncertain" /></p></> : null}
-    </form>
+    </section>
+    <AgentInstallPanel surface="operator" path="/operator/v1/agent-install-codes" parse={parseOperatorInstall} extraBody={registry.trim() && gateway.trim() ? { registry_addr: registry.trim(), gateway_addr: gateway.trim() } : null} />
+    <details className="rounded-xl border p-4">
+      <summary className="cursor-pointer font-semibold"><Message id="install.advanced" /></summary>
+      <form onSubmit={generate} className="mt-4 grid gap-4" aria-labelledby="bundle-title">
+        <h2 id="bundle-title" className="font-semibold"><Message id="operator.enrollmentBundle" /></h2>
+        <label className="grid gap-2 text-sm" htmlFor="enrollment-ttl"><Message id="operator.enrollmentTTL" /><select id="enrollment-ttl" className="h-9 rounded-md border bg-background px-3" value={ttl} onChange={e => setTTL(e.target.value)} disabled={pending}><option value="15">{t("operator.enrollment15Minutes")}</option><option value="60">{t("operator.enrollment1Hour")}</option><option value="1440">{t("operator.enrollment24Hours")}</option></select></label>
+        <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentContents" /></p>
+        <Button type="submit" disabled={pending || !ca.data || !registry.trim() || !gateway.trim()} aria-busy={pending} className="w-fit"><Message id={pending ? "operator.enrollmentGenerating" : "operator.enrollmentGenerate"} /></Button>
+        {error ? <><FormError message={<ErrorMessage error={error} />} /><p className="text-sm text-muted-foreground"><Message id="operator.enrollmentUncertain" /></p></> : null}
+      </form>
     {bundle ? <section className="grid gap-3 rounded-xl border p-4" aria-live="polite">
       <p className="font-semibold"><Message id="operator.enrollmentReady" /></p>
       <code className="break-all text-sm">{bundle.nodeId}</code>
@@ -65,6 +73,7 @@ export function AgentEnrollmentView() {
       <Button className="w-fit" onClick={() => downloadFile(new Blob([bundle.bytes], { type: "application/zip" }), bundle.filename)}><Message id="operator.enrollmentDownloadBundle" /></Button>
       <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentPrivate" /></p>
     </section> : null}
+    </details>
     <Link href="/operator/fleet" className="text-sm underline"><Message id="operator.enrollmentFleet" /></Link>
   </div>;
 }

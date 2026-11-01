@@ -1,6 +1,6 @@
 # AIServeWeave 开发状态与待办
 
-更新日期：2026-10-27。
+更新日期：2026-11-01。
 
 本文是跨服务任务安排的唯一入口，只记录交付范围、遗留缺口与细节所在位置。实现细节、接口与验收证据在各服务 STATUS/README 与 [`docs/superpowers/specs/`](docs/superpowers/specs/) 设计文档中，本文不复述；架构与协议边界见 [架构设计](docs/architecture.md)。根 README 只做简介与文档索引，不维护完成标记或排期。
 
@@ -51,6 +51,7 @@
 - **界面**：`/operator/metrics` 未做带真实会话与数据的交互验收（P08）；P01 的真实集群传播与全站 Q03 验收未完成。
 - **升级兼容**：没有真实的混合版本滚动升级排练，CI 也没有 `buf breaking` 门禁（A03）。
 - **长稳**：24h 长稳由维护者在自有服务器上进行，不在仓库归档，见 [P10 验收手册](deploy/p10-acceptance.md)。
+- **Agent 一行命令安装**：安装脚本、Gateway `/agent/*`、控制面兑换码与 Console 面板只有默认测试；缺真实三系统主机、Windows PowerShell 5.1、Nginx 转发与 `0013` 真实数据库迁移的验证，见上方「Agent 一行命令安装」。
 - **后端适配**：TensorRT-LLM、TokenSpeed 未接真实后端；Gemini CLI 未用有效 Key 执行付费生图。
 - **能力门禁关闭**：音频转录/翻译、rerank、音频输入、文档输入的协议已打通，但目前没有适配器发布对应能力，这类请求一律被本地拒绝，接入真实后端后才能打开。
 
@@ -156,6 +157,12 @@
 - [Registry STATUS](service/aiServeWeaveRegistry/STATUS.md)：身份冲突、token 存储、单实例与认证边界。
 - [Agent STATUS](service/aiServeWeaveAgent/STATUS.md)：本地后端、模型拉取、Managed ComfyUI 与自动升级。
 - [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C 系列子任务与 Q03 验收。
+
+### Agent 一行命令安装（2026-11-01）
+
+Console「添加节点」生成一行命令，在 Ubuntu、macOS 与 Windows 上下载并校验 Agent、兑换一次性码并安装服务。代码均已交付：控制面一次性兑换码与迁移 `0013`（[ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#agent-安装兑换码)）、Gateway `/agent/*` 公开入口（[Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#agent-公开安装入口agent)）、Gateway 镜像内置 Agent 制品、[install.sh](deploy/agent/install.sh) 与 [install.ps1](deploy/agent/install.ps1)、Console 运维与商户面板（[Console AGENTS](service/aiServeWeaveConsole/AGENTS.md)）。启用与 Nginx 配置见 [部署说明](deploy/README.md#已有部署启用一行命令安装)，使用见 [Agent 独立部署](deploy/agent/README.md#一行命令安装)。任务拆分与完成记录在 [.scratch/agent-one-line-install](.scratch/agent-one-line-install/spec.md)。
+
+**未验证**：真实 Ubuntu、macOS、Windows（含 Windows PowerShell 5.1）主机与真实 Nginx/open7x.com 上的端到端安装（任务 08，见 [验收矩阵](deploy/agent/acceptance.md#一行命令安装2026-11-01)）；`0013` 迁移在真实 PostgreSQL/MySQL 上执行；`--source github` 的真实下载（需先发布正式版本）；Console 浏览器渲染、剪贴板与八种语言译文审校；shellcheck；CI 新增步骤的远端运行。
 
 ### Agent 独立主机部署（2026-10-30）
 

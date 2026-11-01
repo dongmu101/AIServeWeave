@@ -1,6 +1,6 @@
 # Agent 一行命令安装方案
 
-Status: needs-triage
+Status: ready-for-agent
 
 更新日期：2026-10-31。本文记录需求来源、已确认决定、现状调查与待确认事项；实施规格见 [spec.md](spec.md)，任务拆分见 [issues/](issues/)。代码尚未开始。
 

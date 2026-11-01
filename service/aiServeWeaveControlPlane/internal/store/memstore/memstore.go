@@ -45,6 +45,7 @@ type Store struct {
 	modelAccess       map[string]model.ModelAccess
 	nodeAccess        map[string]model.NodeAccess
 	tenantNodes       map[string]model.TenantNode
+	installCodes      map[string]model.AgentInstallCode
 	users             map[string]model.User
 	platformOperators map[string]model.PlatformOperator
 	keys              map[string]model.APIKey
@@ -70,6 +71,7 @@ func New() *Store {
 		modelAccess:       map[string]model.ModelAccess{},
 		nodeAccess:        map[string]model.NodeAccess{},
 		tenantNodes:       map[string]model.TenantNode{},
+		installCodes:      map[string]model.AgentInstallCode{},
 		users:             map[string]model.User{},
 		platformOperators: map[string]model.PlatformOperator{},
 		keys:              map[string]model.APIKey{},

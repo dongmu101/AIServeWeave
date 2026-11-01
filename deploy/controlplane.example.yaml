@@ -179,6 +179,15 @@ TenantNodes:
   MaxPerTenant: 10
   MaxCreatesPerDay: 10
 
+# Agent 一行命令安装：Console 展示一次性兑换码，由 Gateway 对外兑换。PublicURL 是平台
+# 站点的 HTTPS 根地址（如 https://open7x.com）；留空时只提供兑换与 CA 两条内部接口，
+# 不提供签发。RedeemPerMinute 是兑换与 CA 读取的部署级每分钟上限。详见 ControlPlane
+# STATUS「Agent 安装兑换码」。
+#
+# AgentInstall:
+#   PublicURL: "https://open7x.com"
+#   RedeemPerMinute: 60
+
 # 计费与充值（Dodo Payments）：默认关闭。开启后租户可预付购买点数，用量按运维配置的
 # 模型单价从余额扣减，prepaid 租户余额耗尽时 Gateway 返回 402。先在 deploy/.env 填好
 # AISW_DODO_API_KEY 与 AISW_DODO_WEBHOOK_SECRET（前缀 dodo_test_ / dodo_live_ 须与

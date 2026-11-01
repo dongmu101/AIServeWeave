@@ -47,6 +47,33 @@ COPY . .
 RUN test -n "$SERVICE" || (echo "SERVICE build-arg is required" >&2; exit 1) && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/service ./service/${SERVICE}
 
+# agent-dist cross-compiles the Agent for every platform in AGENT_PLATFORMS and
+# lays out the directory the Gateway serves under /agent/. It does the work only
+# when SERVICE is the Gateway; for every other service it leaves an empty
+# directory, so their images differ by nothing but that empty directory.
+#
+# agent-dist 为 AGENT_PLATFORMS 中的每个平台交叉编译 Agent，并摆出 Gateway 在 /agent/
+# 下提供的目录。只有 SERVICE 是 Gateway 时才真正干活；其他服务只留下一个空目录，镜像之间
+# 的差别仅此而已。
+FROM build AS agent-dist
+ARG VERSION=dev
+ARG AGENT_PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
+ARG SERVICE
+RUN set -eu; \
+    mkdir -p /opt/aisw/agent-dist; \
+    if [ "$SERVICE" != aiServeWeaveGateway ]; then exit 0; fi; \
+    dir="/opt/aisw/agent-dist/${VERSION}"; \
+    mkdir -p "$dir"; \
+    for platform in $AGENT_PLATFORMS; do \
+      goos="${platform%/*}"; goarch="${platform#*/}"; ext=""; \
+      if [ "$goos" = windows ]; then ext=.exe; fi; \
+      CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" \
+        go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" \
+        -o "$dir/aiserveweave-agent_${VERSION}_${goos}_${goarch}${ext}" ./service/aiServeWeaveAgent; \
+    done; \
+    for f in agent.sh agent.ps1 install.sh install.ps1; do cp "deploy/agent/$f" "$dir/$f"; done; \
+    cd "$dir" && sha256sum -- * > SHA256SUMS.txt
+
 FROM alpine:3.22
 # ca-certificates is for outbound TLS — the Gateway calls the control plane
 # over HTTPS in a real deployment. The tunnel's own trust comes from the
@@ -72,4 +99,7 @@ RUN apk add --no-cache ca-certificates && adduser -D -u 10001 aisw && \
     mkdir -p /data && chown aisw:aisw /data
 USER aisw
 COPY --from=build /out/service /usr/local/bin/service
+# Empty for every service but the Gateway, whose agent-dist stage fills it.
+# 除 Gateway 外都是空目录，由 Gateway 的 agent-dist 阶段填充。
+COPY --from=agent-dist /opt/aisw/agent-dist /opt/aisw/agent-dist
 ENTRYPOINT ["/usr/local/bin/service"]

@@ -642,6 +642,31 @@ ComfyUI 适配器自身的队列深度指标（`comfyui_queue_running`/`comfyui_
 - `gateway_scheduler_breaker_open` 持续为 1 而 `gateway_scheduler_breaker_trips_total` 不再增长，说明该候选是持续损坏而不是抖动；反过来跳闸计数斜率高而 gauge 反复归零，就是抖动。
 - `aisw_metric_conflicts_total` 应当永远为 0。不为 0 说明某个包用与声明不符的类型记录了某个指标，那条序列的数据正在被丢弃。
 
+## Agent 公开安装入口（`/agent/*`）
+
+一行命令安装 Agent 的公开入口（任务见 [.scratch/agent-one-line-install](../../.scratch/agent-one-line-install/spec.md)），实现在 `agentdist` 包。与 `/docs` 一样挂在 `topMux` 上，不经 API Key 中间件。
+
+| Flag | 含义 |
+| --- | --- |
+| `-agent-dist-dir` | 按版本分目录的制品目录，只服务 `<dir>/<Gateway 版本>/` |
+| `-agent-public-url` | 平台公开 HTTPS 源（无路径、用户信息、查询），替换进脚本占位符 `__AISW_PLATFORM_URL__` |
+| `-agent-github-repo` | `owner/name`；仅当版本是正式 `vX.Y.Z` 时在 manifest 中给出 GitHub 下载基址 |
+
+两个必填 flag 缺一个、`-agent-public-url` 不是 HTTPS 源、未配置 `-control-plane-addr`（需带 scheme）或控制面 token 时，Gateway 拒绝启动；都不给则不挂载任何 `/agent/*` 路由，现有路由不变。版本目录或 `SHA256SUMS.txt` 缺失时 Gateway 仍启动并记一条警告，manifest 回答 `503`。
+
+| 路由 | 说明 |
+| --- | --- |
+| `GET /agent/install.sh`、`/agent/install.ps1` | 目录中的引导脚本，占位符已替换；`no-store` |
+| `GET /agent/v1/manifest` | `{version, platform_url, github?, assets:[{os, arch, name, sha256}]}`；资产取自 `SHA256SUMS.txt` 中存在于磁盘且符合 `aiserveweave-agent_<版本>_<os>_<arch>[.exe]` 命名的文件 |
+| `GET /agent/download/<版本>/<文件>` | 只提供当前版本的制品与 `agent.sh`、`agent.ps1`、`SHA256SUMS.txt`；其他版本、其他文件名、含路径分隔符的一律 `404`（支持 Range） |
+| `POST /agent/v1/redeem` | 请求体至多 1 KiB，转发控制面 `/internal/v1/agent-install/redeem`（共享密钥 `AISW_CONTROL_PLANE_TOKEN`） |
+| `GET /agent/v1/ca` | 转发控制面 `/internal/v1/agent-install/ca` |
+
+转发只转述四类结果：`200` 原样返回（至多 64 KiB）、`404 invalid_code`、`429`（带 `Retry-After`），其余包括控制面 `401/5xx` 与不可达一律不透明的 `503`。请求体、响应体、兑换码与令牌从不写日志；日志里的错误文本经 `runtime.Redact` 去掉令牌。单次转发超时 10 秒。
+
+- **制品与脚本**：Gateway 镜像的 `agent-dist` 构建阶段生成 `-agent-dist-dir` 所需的版本目录（Agent 二进制、`agent.sh`、`agent.ps1`、`install.sh`、`install.ps1`、`SHA256SUMS.txt`），引导脚本为 [install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1)。反代（Nginx）需把 `/agent/` 前缀转到本监听器，见 [部署说明「已有部署启用一行命令安装」](../../deploy/README.md#已有部署启用一行命令安装)。
+- **验证范围**：配置拒绝、manifest（正式版/提交号版本/目录缺失）、占位符替换、下载允许列表与路径穿越/跨版本拒绝、转发的状态映射/鉴权头/请求体上限/不可达、日志不含码与令牌、方法限制都有默认测试。没有对真实控制面与真实 Nginx 的端到端验收，真实环境验收见 [Agent 验收矩阵](../../deploy/agent/acceptance.md)。
+
 ## 下一步
 
 1. **OpenTelemetry**：`runtime.Metrics` 这层抽象足以再接一个 OTel 导出器。P08 已经把 Gateway 前门铸造的 `request_id`（`common/reqid`）一路带到 Scheduler 派发决策、Tunnel 分发/完成与 Agent 后端调用，落地为可按 `request_id` 关联的结构化日志，但仍是日志而非独立的 trace 存储——接入真正的 span/trace 后端是独立的一步，见 STATUS.md 的 P08。

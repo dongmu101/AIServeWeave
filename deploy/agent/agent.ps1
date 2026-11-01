@@ -182,7 +182,12 @@ try {
             Write-Output "Service removed. State, identities, CLI logins and releases retained at $Root";return
         }
     }
-    if ($Version -notmatch '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$') { throw 'Specify an exact -Version vX.Y.Z.' }
+    $isRelease = $Version -match '^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$'
+    # Commit builds are installed from local verified artifacts, never a floating download.
+    # 提交号构建只从经过校验的本地制品安装，不使用浮动下载。
+    $isCommit = $Version -cmatch '^[0-9a-f]{7,40}$'
+    if (!$isRelease -and !$isCommit) { throw 'Specify an exact -Version vX.Y.Z or a 7-40 character lowercase Git commit.' }
+    if ($isCommit -and ($BaseUrl -or ($Action -ne 'rollback' -and (!$File -or !$Checksums)))) { throw 'Commit versions require -File and -Checksums without -BaseUrl.' }
     $asset="aiserveweave-agent_${Version}_windows_${arch}.exe"
     $releaseDir=Join-Path $Root "releases\$Version"
     $candidate=Join-Path $work $asset

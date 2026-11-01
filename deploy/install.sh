@@ -32,6 +32,7 @@ usage() {
   --https                    Console 部署在 HTTPS 反向代理之后，启用 Secure Cookie
   --signup                   开启租户自助注册（控制面与 Console 同时开启）
   --advertise-addr HOST:PORT Agent 拨号的 Gateway 隧道地址（默认 127.0.0.1:8443）
+  --agent-public-url URL     平台对外的 HTTPS 站点地址，开启 Agent 一行命令安装（如 https://open7x.com）
   --local-discovery          保留 Gateway 对 host.docker.internal 上 Ollama/vLLM 的发现
                              （Linux 原生 Docker 默认关闭，因为该主机名无法解析）
   --goproxy URL              构建时的 Go 模块代理，如 https://goproxy.cn,direct
@@ -41,7 +42,7 @@ EOF
 }
 
 OWNER_EMAIL="" OWNER_PASSWORD="" TENANT_NAME="" OPERATOR_EMAIL="" OPERATOR_PASSWORD=""
-HTTPS=0 SIGNUP=0 ADVERTISE_ADDR="" LOCAL_DISCOVERY=0 NO_BUILD=0 GOPROXY_ARG=""
+HTTPS=0 SIGNUP=0 ADVERTISE_ADDR="" AGENT_URL="" LOCAL_DISCOVERY=0 NO_BUILD=0 GOPROXY_ARG=""
 while (($# > 0)); do
   case "$1" in
     --owner-email) OWNER_EMAIL="${2:?}"; shift 2 ;;
@@ -52,6 +53,7 @@ while (($# > 0)); do
     --https) HTTPS=1; shift ;;
     --signup) SIGNUP=1; shift ;;
     --advertise-addr) ADVERTISE_ADDR="${2:?}"; shift 2 ;;
+    --agent-public-url) AGENT_URL="${2:?}"; shift 2 ;;
     --local-discovery) LOCAL_DISCOVERY=1; shift ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
     --no-build) NO_BUILD=1; shift ;;
@@ -111,6 +113,10 @@ fi
 
 (( HTTPS == 0 )) || env_set AISW_CONSOLE_COOKIE_SECURE true
 [[ -z "$ADVERTISE_ADDR" ]] || env_set GATEWAY_ADVERTISE_ADDR "$ADVERTISE_ADDR"
+if [[ -n "$AGENT_URL" ]]; then
+  [[ "$AGENT_URL" =~ ^https://[^/?#]+$ ]] || die "--agent-public-url 必须是 https 站点根地址，如 https://open7x.com"
+  env_set AGENT_PUBLIC_URL "$AGENT_URL"
+fi
 
 # host.docker.internal exists only under Docker Desktop. Clearing the example
 # defaults on Linux skips a discovery that could never succeed; a value the
@@ -128,6 +134,7 @@ fi
 ensure_controlplane_config
 ensure_access_log_off
 ensure_tenant_nodes
+ensure_agent_install
 ensure_config_readable
 if (( SIGNUP == 1 )); then
   if ! grep -q '^Signup:' controlplane.yaml; then

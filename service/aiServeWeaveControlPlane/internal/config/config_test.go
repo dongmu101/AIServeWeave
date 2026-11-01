@@ -108,3 +108,61 @@ func TestComfyUIManagedConfDisabledByDefault(t *testing.T) {
 		t.Error("Enabled() = true, want false for the zero value")
 	}
 }
+
+func TestAgentInstallConfValidation(t *testing.T) {
+	registry := config.RegistryConf{Addr: "registry:9443", AdminToken: strings.Repeat("r", 32), CACertFile: "/etc/aisw/ca.pem"}
+	for _, tc := range []struct {
+		name      string
+		registry  config.RegistryConf
+		install   config.AgentInstallConf
+		wantError string
+	}{
+		{name: "omitted block", install: config.AgentInstallConf{}},
+		{name: "https origin", registry: registry, install: config.AgentInstallConf{PublicURL: "https://open7x.com", RedeemPerMinute: 60}},
+		{name: "trailing slash", registry: registry, install: config.AgentInstallConf{PublicURL: "https://open7x.com/", RedeemPerMinute: 60}},
+		{name: "http refused", registry: registry, install: config.AgentInstallConf{PublicURL: "http://open7x.com", RedeemPerMinute: 60}, wantError: "https origin"},
+		{name: "path refused", registry: registry, install: config.AgentInstallConf{PublicURL: "https://open7x.com/agent", RedeemPerMinute: 60}, wantError: "https origin"},
+		{name: "userinfo refused", registry: registry, install: config.AgentInstallConf{PublicURL: "https://u:p@open7x.com", RedeemPerMinute: 60}, wantError: "https origin"},
+		{name: "needs registry", install: config.AgentInstallConf{PublicURL: "https://open7x.com", RedeemPerMinute: 60}, wantError: "Registry"},
+		{name: "limit too high", registry: registry, install: config.AgentInstallConf{RedeemPerMinute: 10001}, wantError: "RedeemPerMinute"},
+		{name: "negative limit", registry: registry, install: config.AgentInstallConf{RedeemPerMinute: -1}, wantError: "RedeemPerMinute"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := validConfig()
+			cfg.Registry, cfg.AgentInstall = tc.registry, tc.install
+			cfg.TenantNodes.MaxPerTenant, cfg.TenantNodes.MaxCreatesPerDay = 10, 10
+			err := cfg.Validate()
+			if (tc.wantError == "") != (err == nil) || (err != nil && !strings.Contains(err.Error(), tc.wantError)) {
+				t.Fatalf("Validate() error = %v, want one containing %q", err, tc.wantError)
+			}
+		})
+	}
+}
+
+func TestAgentInstallConfMounting(t *testing.T) {
+	complete := config.RegistryConf{Addr: "registry:9443", AdminToken: "t", CACertFile: "/ca.pem"}
+	withURL := config.AgentInstallConf{PublicURL: "https://open7x.com"}
+	for _, tc := range []struct {
+		name             string
+		install          config.AgentInstallConf
+		registry         config.RegistryConf
+		serving, issuing bool
+	}{
+		{"nothing configured", config.AgentInstallConf{}, config.RegistryConf{}, false, false},
+		{"registry only", config.AgentInstallConf{}, complete, true, false},
+		{"registry and url", withURL, complete, true, true},
+		{"url without registry", withURL, config.RegistryConf{}, false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.install.Serving(tc.registry); got != tc.serving {
+				t.Errorf("Serving() = %v, want %v", got, tc.serving)
+			}
+			if got := tc.install.Issuing(tc.registry); got != tc.issuing {
+				t.Errorf("Issuing() = %v, want %v", got, tc.issuing)
+			}
+		})
+	}
+	if got := (config.AgentInstallConf{}).RedeemLimit(); got != 60 {
+		t.Errorf("RedeemLimit() of zero value = %d, want 60", got)
+	}
+}

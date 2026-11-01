@@ -141,3 +141,5 @@ log_level: info
 [部署入口](../../deploy/agent/README.md) 提供 Ubuntu systemd、macOS Apple Silicon LaunchAgent 与 Windows 11 原生用户计划任务。Windows Go 适配包括身份 ACL、受保护写入与恢复记录、同用户 named pipe、执行前加入 Job 的 CLI 后代回收、大小写不敏感环境与无 shell npm 入口、磁盘余量。`-init-config`、`-check-config`、`-control` 和 `-log-file` 供部署维护；原有手动启动方式保留。身份与 YAML 写入使用临时文件替换，证书组通过受保护 pending 记录恢复。运行时 Close 的上下文限制等待，进程另有最终停止期限。
 
 目标为 Ubuntu 22.04/24.04/26.04 × amd64/arm64、Windows 11 25H2/26H2 × amd64/arm64，以及 macOS 15/26/27 arm64；26H1 Windows 新硬件单独验证。真实系统与 CLI 均未因本次代码交付而标为已验收，见 [矩阵](../../deploy/agent/acceptance.md)。其他 CLI、Managed ComfyUI 与 GPU 依赖保留既有能力，Windows 原生运行结果分别待验证。
+
+一行命令安装（2026-11-01）：[install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1) 在 `agent.sh`/`agent.ps1` 之前下载并校验制品、兑换一次性码，再调用它们安装；`agent.ps1` 同步支持本地提交号版本。Agent 二进制与隧道协议无变化。使用见 [Agent 独立部署](../../deploy/agent/README.md#一行命令安装)，真实系统验收仍待执行。

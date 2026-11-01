@@ -1,18 +1,18 @@
 # Agent 部署验证记录
 
-更新：2026-10-30。构建、离线测试、服务管理器与真实后端验收分别记录。本文不把尚未运行的 CI 记为通过。
+更新：2026-11-01。构建、离线测试、服务管理器与真实后端验收分别记录。本文不把尚未运行的 CI 记为通过。
 
-| 目标系统 | CPU | 完整系统安装/启动/身份/普通与 SSE/升级回退 | 真实 Codex/Claude |
-| --- | --- | --- | --- |
-| Ubuntu 22.04 | amd64 / arm64，分别记录 | 待验证 | 待验证 |
-| Ubuntu 24.04 | amd64 / arm64，分别记录 | 待验证 | 待验证 |
-| Ubuntu 26.04 | amd64 / arm64，分别记录 | 待验证 | 待验证 |
-| Windows 11 25H2 | amd64 / arm64，分别记录 | 待验证 | 待验证 |
-| Windows 11 26H2 | amd64 / arm64，分别记录 | 待验证 | 待验证 |
-| Windows 11 26H1 新硬件专项 | arm64 | 待验证 | 待验证 |
-| macOS 15 | arm64 | 待验证 | 待验证 |
-| macOS 26 | arm64 | 待验证 | 待验证 |
-| macOS 27 | arm64 | 待验证 | 待验证 |
+| 目标系统 | CPU | 完整系统安装/启动/身份/普通与 SSE/升级回退 | 一行命令安装 | 真实 Codex/Claude |
+| --- | --- | --- | --- | --- |
+| Ubuntu 22.04 | amd64 / arm64，分别记录 | 待验证 | 待验证 | 待验证 |
+| Ubuntu 24.04 | amd64 / arm64，分别记录 | 待验证 | 待验证 | 待验证 |
+| Ubuntu 26.04 | amd64 / arm64，分别记录 | 待验证 | 待验证 | 待验证 |
+| Windows 11 25H2 | amd64 / arm64，分别记录 | 待验证 | 待验证 | 待验证 |
+| Windows 11 26H2 | amd64 / arm64，分别记录 | 待验证 | 待验证 | 待验证 |
+| Windows 11 26H1 新硬件专项 | arm64 | 待验证 | 待验证 | 待验证 |
+| macOS 15 | arm64 | 待验证 | 待验证 | 待验证 |
+| macOS 26 | arm64 | 待验证 | 待验证 | 待验证 |
+| macOS 27 | arm64 | 待验证 | 待验证 | 待验证 |
 
 每个系统/架构组合使用原生系统或完整虚拟机独立记录：系统准确版本与硬件、Agent/平台版本及制品 SHA256、安装账户、CLI 版本/架构/安装方式/登录结果、配置路径（不含秘密）、时间、结果、脱敏证据位置。
 
@@ -63,3 +63,28 @@
 检查结果：Bash 语法和 `git diff --check` 通过，黑盒暂存测试扩展为 7 项，包含提交号安装/回退保留身份、拒绝提交号在线或混合下载、拒绝非法版本。暂存不执行二进制，不代表目标系统运行通过。
 
 从固定源码提交 `763e0a2b4080b3771532a12fd5ae2656f99b8fef` 的 Git 归档交叉构建 Linux amd64/arm64 Agent，内嵌版本为 `763e0a2`，CGO 关闭；`file` 核对为对应架构的静态 ELF。配套包带更新后的 Bash 安装器及二进制 SHA256 清单，不含节点凭据。目标 Ubuntu 的 systemd、注册与真实后端仍待部署验收，不因构建通过更新上方实机矩阵。
+
+## 一行命令安装（2026-11-01）
+
+「一行命令安装」列单独记录：从 Console 生成命令、在目标系统执行 `install.sh`/`install.ps1`、下载并校验制品、兑换一次性码、服务注册与启动、节点上线。通过标准是该系统/架构组合上由 Console 生成的真实命令执行成功，且节点在「节点管理」在线；暂存测试、容器内测试与 CI 不计入。逐项步骤见 [任务 08](../../.scratch/agent-one-line-install/issues/08-acceptance-open7x.md)。
+
+补充验收项（每个组合各自记录）：
+
+1. 兑换码方式、交互输入方式、令牌直写方式各一次；重复使用同一个码被拒绝（`invalid_code`），过期码被拒绝。
+2. `--source platform` 与 `--source github`（仅正式版本）各一次；篡改 `SHA256SUMS.txt` 或二进制时安装中止且兑换码未被消耗。
+3. `--upgrade` 升级已装节点，保留配置、身份与 CLI 登录。
+4. Ubuntu 经 `sudo bash` 执行，服务账户非 root；Windows 在管理员窗口运行被拒绝。
+5. 脚本、终端回显与平台日志中均不出现兑换码、令牌或 Prompt。
+
+本次开发机检查（均不等于上表的实机通过）：
+
+| 检查 | 结果 |
+| --- | --- |
+| `install.sh` 黑盒测试（`test_install_sh.py`，17 项，本机 HTTPS 桩平台） | 通过：下载失败与校验和不符不兑换、码被拒绝不安装、令牌方式固定 CA 并拒绝错误指纹、ZIP 方式、凭据方式互斥、终端隐藏输入、已安装节点须 `--upgrade`、自定义 HTTPS 来源、dirty/dev 版本与明文 HTTP 平台被拒 |
+| `install.Tests.ps1`（PowerShell 7.5，Linux 容器） | 通过。未在 Windows PowerShell 5.1 与 Windows 主机运行 |
+| `deployment.Tests.ps1` 提交号版本新增用例 | 已编写，未在 Windows 运行 |
+| shellcheck | 本机未安装，未运行 |
+| Gateway 镜像构建（含 Agent 制品）、`build-release.sh` 单平台、compose 渲染 | 通过；六平台镜像与真实服务器构建时长未验证 |
+| Console 单测 312 项、`eslint`、`next build`、`tsc` | 通过；浏览器渲染、剪贴板与真实控制面端到端未验证 |
+| `0013` 迁移（PostgreSQL/MySQL） | SQL 列检查通过，未在真实数据库上执行 |
+| CI | 已在 `agent-desktop.yml` 加入 `install.sh`/`install.ps1` 测试，远端未触发 |

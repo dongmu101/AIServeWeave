@@ -26,6 +26,18 @@ jobs:
         if: runner.os == 'Windows'
         shell: powershell
         run: ./deploy/agent/tests/deployment.Tests.ps1
+      - uses: actions/setup-python@v5
+        if: runner.os == 'Windows'
+        with:
+          python-version: "3.12"
+      - name: Windows PowerShell 5.1 install.ps1
+        if: runner.os == 'Windows'
+        shell: powershell
+        run: ./deploy/agent/tests/install.Tests.ps1
+      - name: Windows PowerShell 7 install.ps1
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./deploy/agent/tests/install.Tests.ps1
       - name: Unix staging
         if: runner.os == 'macOS'
         run: python3 -m unittest discover -s deploy/agent/tests

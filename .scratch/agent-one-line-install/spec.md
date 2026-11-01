@@ -1,6 +1,6 @@
 # Agent 一行命令安装规格
 
-Status: needs-triage
+Status: ready-for-agent
 
 更新日期：2026-10-31。依据 [plan.md](plan.md) 的 Q1–Q4 与建议取舍 D1–D8 整理；D1–D8 经确认后状态改为 ready-for-agent。
 

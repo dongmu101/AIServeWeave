@@ -40,6 +40,7 @@ import (
 	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/redeemgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
@@ -147,6 +148,12 @@ type ServiceContext struct {
 	// SignupGate 限定每小时的自助注册次数。Signup 关闭或其 MaxPerHour 为零时它为
 	// nil，注册 handler 此时放行每一次尝试。
 	SignupGate signupgate.Gate
+
+	// RedeemGate bounds install-code redemptions and CA reads per minute. It
+	// is nil when the AgentInstall endpoints are not served.
+	//
+	// RedeemGate 限定每分钟的安装码兑换与 CA 读取次数。AgentInstall 端点未提供时为 nil。
+	RedeemGate redeemgate.Gate
 
 	db          *gorm.DB
 	redisClient *redis.Client
@@ -312,6 +319,12 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			MaxCreatesPerDay: cfg.TenantNodes.MaxCreatesPerDay,
 		}))
 	}
+	if enrollment != nil && cfg.AgentInstall.Serving(cfg.Registry) {
+		logicOpts = append(logicOpts, logic.WithAgentInstall(logic.AgentInstallConfig{
+			Issuer:    enrollment,
+			PublicURL: cfg.AgentInstall.PublicURL,
+		}))
+	}
 	modelPullRouter := modelpullrouter.New(modelpullrouter.Config{
 		Gateways: cfg.ModelPull.Gateways,
 		Token:    cfg.ModelPull.GatewayToken,
@@ -455,9 +468,15 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		signupGate = signupgate.NewRedis(redisClient, clock, cfg.Signup.MaxPerHour)
 	}
 
+	var redeemGate redeemgate.Gate
+	if enrollment != nil && cfg.AgentInstall.Serving(cfg.Registry) {
+		redeemGate = redeemgate.NewRedis(redisClient, clock, cfg.AgentInstall.RedeemLimit())
+	}
+
 	ready = true
 	return &ServiceContext{
 		SignupGate:  signupGate,
+		RedeemGate:  redeemGate,
 		ComfyEditor: editor,
 		Config:      cfg,
 		Logic:       svcLogic,
