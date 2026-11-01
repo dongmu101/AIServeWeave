@@ -259,7 +259,9 @@ if [ "$goos" = linux ];then
   {
     echo '[Unit]';echo 'Description=AIServeWeave Agent';echo 'Wants=network-online.target';echo 'After=network-online.target'
     echo '[Service]';echo 'Type=simple';printf 'User=%s\n' "$service_user"
-    printf 'WorkingDirectory=%s\n' "$(systemd_value "$state")"
+    # WorkingDirectory is not unquoted by systemd: a quoted path is rejected as not absolute.
+    # systemd 不会对 WorkingDirectory 去引号：带引号的路径会被判为非绝对路径。
+    printf 'WorkingDirectory=%s\n' "${state//%/%%}"
     printf 'Environment=%s %s\n' "$(systemd_value "HOME=$user_home")" "$(systemd_value "PATH=$cli_path")"
     echo 'EnvironmentFile=-/etc/aiserveweave-agent/agent.env'
     printf 'ExecStart=%s -config %s\n' "$(systemd_value "$entry")" "$(systemd_value "$config")"

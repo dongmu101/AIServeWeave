@@ -103,6 +103,8 @@ class DeploymentTests(unittest.TestCase):
         result = self.run_script('install',install)
         self.assertIn('runs as root',result.stderr)
         self.assertIn('User=root',(self.root/'aiserveweave-agent.service').read_text())
+        # systemd rejects a quoted WorkingDirectory as "not absolute" / systemd 把带引号的 WorkingDirectory 判为非绝对路径
+        self.assertIn(f"WorkingDirectory={self.root/'state'}\n",(self.root/'aiserveweave-agent.service').read_text())
         self.run_script('upgrade',['--version','v0.99.1','--file',str(self.binary),'--checksums',str(self.manifest),'--user','root'])
 
 if __name__ == '__main__': unittest.main()
