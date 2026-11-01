@@ -21,8 +21,13 @@ export function AgentEnrollmentView() {
   const { t, locale } = useI18n();
   const ca = useResource({ method: "GET", surface: "operator", path: "/operator/v1/agent-enrollment", parse: parseEnrollmentCA });
   const run = useConsoleRequest();
-  const [registry, setRegistry] = React.useState("");
-  const [gateway, setGateway] = React.useState("");
+  // Addresses default to the conventional hosts of this site's own domain until the operator edits them.
+  // 地址默认取本站域名下约定的主机，直到运维修改为止。
+  const host = React.useSyncExternalStore(subscribeNothing, siteHost, () => "");
+  const [registryInput, setRegistry] = React.useState<string | null>(null);
+  const [gatewayInput, setGateway] = React.useState<string | null>(null);
+  const registry = registryInput ?? (host ? `registry.${host}:9443` : "");
+  const gateway = gatewayInput ?? (host ? `agent.${host}:8443` : "");
   const [ttl, setTTL] = React.useState("60");
   const [pending, setPending] = React.useState(false);
   const inFlight = React.useRef(false);
@@ -76,6 +81,15 @@ export function AgentEnrollmentView() {
     </details>
     <Link href="/operator/fleet" className="text-sm underline"><Message id="operator.enrollmentFleet" /></Link>
   </div>;
+}
+
+function subscribeNothing() { return () => {}; }
+
+// siteHost is this site's domain name, or "" for localhost and IP addresses where no convention applies.
+// siteHost 是本站域名；localhost 与 IP 地址没有约定，返回 ""。
+function siteHost(): string {
+  const host = window.location.hostname;
+  return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) && !/^\d+(\.\d+){3}$/.test(host) ? host : "";
 }
 
 function downloadFile(blob: Blob, filename: string) {
