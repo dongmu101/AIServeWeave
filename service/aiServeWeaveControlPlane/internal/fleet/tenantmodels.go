@@ -78,9 +78,23 @@ func (a *Aggregator) TenantModels(ctx context.Context) (TenantModelCatalog, erro
 // Filter 只保留 visible 返回 true 的模型，并去掉过滤后一个模型都不剩的服务：一个
 // 不能使用某服务任何模型的租户，没有理由得知这个服务的存在。
 func (c TenantModelCatalog) Filter(visible func(string) bool) TenantModelCatalog {
+	return c.FilterExcept(visible, nil)
+}
+
+// FilterExcept is Filter, except that services on Agents exempt reports true
+// for keep every model: a tenant's own node may serve the tenant any model, so
+// the model access lists do not narrow it. A nil exempt exempts nothing.
+//
+// FilterExcept 与 Filter 相同，但 exempt 返回 true 的 Agent 上的服务保留全部模型：商户
+// 自有节点可以为该商户提供任何模型，因此不受模型授权收窄。exempt 为 nil 时不豁免任何服务。
+func (c TenantModelCatalog) FilterExcept(visible, exempt func(string) bool) TenantModelCatalog {
 	out := c
 	out.Services = make([]TenantModelService, 0, len(c.Services))
 	for _, service := range c.Services {
+		if exempt != nil && exempt(service.AgentID) {
+			out.Services = append(out.Services, service)
+			continue
+		}
 		var models []nodeview.Model
 		for _, model := range service.Models {
 			if visible(model.ID) {

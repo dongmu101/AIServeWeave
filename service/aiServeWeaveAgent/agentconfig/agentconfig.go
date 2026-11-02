@@ -199,6 +199,16 @@ type RuntimeConfig struct {
 	// APIKeyEnv 指定保存托管供应商 API Key 的环境变量名。文件只保存变量名，
 	// 从不保存 Key 本身。只对托管种类读取。
 	APIKeyEnv string `yaml:"api_key_env,omitempty"`
+	// APIKeyFile is the path of a private file holding a hosted provider's
+	// API key, the same file-path convention as cert_file: the YAML stores
+	// the path, never the key. The setup page writes such files under the
+	// config directory's keys/ folder. When set it takes precedence over
+	// APIKeyEnv. It is read for hosted kinds only.
+	//
+	// APIKeyFile 是保存托管供应商 API Key 的私有文件路径，与 cert_file 同一约定：YAML
+	// 只保存路径，从不保存 Key。设置页面把这类文件写在配置目录的 keys/ 下。设置后
+	// 优先于 APIKeyEnv。只对托管种类读取。
+	APIKeyFile string `yaml:"api_key_file,omitempty"`
 	// Models declares the catalogue for a hosted endpoint that cannot list
 	// its own models; when set it is authoritative. See ModelList for the
 	// accepted spellings.
@@ -318,6 +328,9 @@ func Save(path string, cfg *Config) error {
 		entry := map[string]any{"id": rc.ID, "kind": rc.Kind, "base_url": rc.BaseURL}
 		if rc.APIKeyEnv != "" {
 			entry["api_key_env"] = rc.APIKeyEnv
+		}
+		if rc.APIKeyFile != "" {
+			entry["api_key_file"] = rc.APIKeyFile
 		}
 		if rc.Models != "" {
 			entry["models"] = string(rc.Models)

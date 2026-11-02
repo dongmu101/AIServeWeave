@@ -201,17 +201,20 @@ func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnel
 // codex 或 claude 运行时的 account_dir 原样传下去，开头的 "~/" 会被展开；之后由
 // runtime.Config.Validate 要求结果是绝对路径。
 //
-// A hosted provider's key is read from the environment variable named by
-// api_key_env at this point; an unset variable leaves the key empty, which
-// the provider then rejects as unauthorized rather than failing startup.
-// api_key_env and models apply to hosted kinds only, the same rule the
-// setup page follows, so a CLI's start-up never depends on whether some
-// environment variable happens to be set. Duplicate model IDs are dropped.
+// A hosted provider's key is read at this point from api_key_file when set,
+// otherwise from the environment variable named by api_key_env; an unset
+// variable or unreadable file leaves the key empty, which the provider then
+// rejects as unauthorized rather than failing startup (-check-config reports
+// an unreadable file). api_key_file, api_key_env and models apply to hosted
+// kinds only, the same rule the setup page follows, so a CLI's start-up never
+// depends on whether some environment variable happens to be set. Duplicate
+// model IDs are dropped.
 //
-// 托管供应商的 Key 在此处从 api_key_env 指定的环境变量读取；变量未设置时 Key
-// 为空，由供应商以未授权拒绝，而不是让启动失败。api_key_env 与 models 只对托管
-// 种类生效（与设置页面的规则相同），本机 CLI 能否启动从不取决于某个环境变量
-// 是否碰巧存在。重复的模型 ID 会被去掉。
+// 托管供应商的 Key 在此处读取：设置了 api_key_file 时读该文件，否则读 api_key_env
+// 指定的环境变量；变量未设置或文件读不到时 Key 为空，由供应商以未授权拒绝，而不是
+// 让启动失败（读不到的文件由 -check-config 报告）。api_key_file、api_key_env 与
+// models 只对托管种类生效（与设置页面的规则相同），本机 CLI 能否启动从不取决于某个
+// 环境变量是否碰巧存在。重复的模型 ID 会被去掉。
 func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 	if len(declared) == 0 {
 		return nil
@@ -222,7 +225,10 @@ func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 		if !out[i].Kind.IsHosted() {
 			continue
 		}
-		if rc.APIKeyEnv != "" {
+		switch {
+		case rc.APIKeyFile != "":
+			out[i].APIKey, _ = agentconfig.ReadAPIKeyFile(expandHome(rc.APIKeyFile))
+		case rc.APIKeyEnv != "":
 			out[i].APIKey = os.Getenv(rc.APIKeyEnv)
 		}
 		for _, id := range rc.Models.IDs() {

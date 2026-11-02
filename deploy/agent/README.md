@@ -108,7 +108,7 @@ bash agent.sh status
 
 程序和状态位于 `~/Library/Application Support/AIServeWeave/Agent`，服务定义为 `~/Library/LaunchAgents/com.aiserveweave.agent.plist`。默认捕获安装时 PATH；可用 `--path` 指定，并在安装根目录的 `cli-path` 调整后重新安装以刷新定义。日志在 `~/Library/Logs/AIServeWeave/Agent/agent.log`，每文件最多 10 MiB，保留当前文件和两个备份。`--root` 可指定其他当前用户安装目录；后续维护必须传同一根目录，一个用户只注册一个该名称的 LaunchAgent。
 
-打开本机 `http://127.0.0.1:8899`。`start/stop/status/reload` 与 Ubuntu 同名。HOME、CLI 登录、Keychain 和 account_dir 均属于当前用户；后台进程不会读取交互式 shell 启动文件。托管 API 等环境变量写入安装根目录的私有 `environment.json`（JSON 字符串键值对象，0600），然后 stop/start；不在 plist 或命令行保存密钥。
+打开本机 `http://127.0.0.1:8899`。`start/stop/status/reload` 与 Ubuntu 同名。HOME、CLI 登录、Keychain 和 account_dir 均属于当前用户；后台进程不会读取交互式 shell 启动文件。托管 API 等环境变量写入安装根目录的私有 `environment.json`（JSON 字符串键值对象，0600），然后 stop/start；不在 plist 或命令行保存密钥。托管 API Key 也可以直接在设置页面的「本地 AI」里填写，保存后热重载生效，不需要改 `environment.json` 或重启。
 
 ## Windows
 

@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/localcontrol"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
@@ -97,6 +98,20 @@ func validateDeployment(cfg *agentconfig.Config) error {
 		seen[declared.ID] = true
 		if err := declared.Normalize().Validate(); err != nil {
 			return errors.New("invalid runtime declaration; review local runtime settings")
+		}
+	}
+	for _, declared := range cfg.Runtimes {
+		if declared.APIKeyFile == "" || !runtime.Kind(declared.Kind).IsHosted() {
+			continue
+		}
+		// A key file must be private and readable; startup would otherwise
+		// run with an empty key. / Key 文件必须私有且可读，否则启动后 Key 为空。
+		path := expandHome(declared.APIKeyFile)
+		if err := localstate.CheckPrivate(path, false); err != nil {
+			return errors.New("API key file is missing or not private; review local runtime settings")
+		}
+		if _, err := agentconfig.ReadAPIKeyFile(path); err != nil {
+			return errors.New("API key file is unreadable; review local runtime settings")
 		}
 	}
 	if cfg.MetricsAddr != nil && *cfg.MetricsAddr != "" {

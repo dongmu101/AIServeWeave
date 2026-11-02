@@ -102,7 +102,7 @@ func Serve(ctx context.Context, logger *slog.Logger, addr, configPath string, so
 	mux.HandleFunc("/status/gateway", newGatewayHandler(sources.Gateway))
 	mux.HandleFunc("/status/cli-usage", newUsageHandler(sources.CLIUsage))
 	mux.HandleFunc("/", newIndexHandler(logger, configPath, sources))
-	server := &http.Server{Addr: addr, Handler: mux}
+	server := &http.Server{Addr: addr, Handler: guardLocal(mux)}
 	defer server.Close()
 
 	serveErr := make(chan error, 1)
@@ -154,6 +154,32 @@ func validateLoopback(addr string) error {
 	return nil
 }
 
+// guardLocal admits only requests a local browser tab of this page can send.
+// The Host must be a loopback name, which defeats DNS rebinding (a foreign
+// hostname resolved to 127.0.0.1), and http.CrossOriginProtection rejects
+// cross-site POSTs. Without both, any web page the operator visits could
+// repoint a runtime holding a saved API key at its own server.
+//
+// guardLocal 只放行本页面在本机浏览器标签页中能发出的请求。Host 必须是回环名，挡住
+// DNS 重绑定（解析到 127.0.0.1 的外部主机名）；http.CrossOriginProtection 拒绝跨站
+// POST。缺少任何一项，运维访问的任意网页都可能把保存了 API Key 的运行时改指向自己的
+// 服务器。
+func guardLocal(next http.Handler) http.Handler {
+	protected := http.NewCrossOriginProtection().Handler(next)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host := r.Host
+		if h, _, err := net.SplitHostPort(host); err == nil {
+			host = h
+		}
+		host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
+		if ip := net.ParseIP(host); host != "localhost" && (ip == nil || !ip.IsLoopback()) {
+			http.Error(w, "forbidden", http.StatusForbidden)
+			return
+		}
+		protected.ServeHTTP(w, r)
+	})
+}
+
 // formValues is what the HTML template renders and what a POST is parsed
 // back into — the string-shaped, human-edited form of agentconfig.Config.
 // Keeping this separate from Config itself means a malformed field (an
@@ -166,19 +192,23 @@ func validateLoopback(addr string) error {
 // 格式错误的字段（解析不了的时长、非数字的 max_gateways）可以带着其余输
 // 入原样回显给操作者，而不会因为一个笔误丢掉整份表单。
 type formValues struct {
-	Locale               browserlang.Locale
-	Text                 pageText
-	Endpoints            string
-	Registry             string
-	NodeID               string
-	CertFile             string
-	KeyFile              string
-	CAFile               string
-	BootstrapTokenFile   string
-	AllowedRuntimes      string
-	Labels               string
-	MaxGateways          string
-	Runtimes             string
+	Locale             browserlang.Locale
+	Text               pageText
+	Endpoints          string
+	Registry           string
+	NodeID             string
+	CertFile           string
+	KeyFile            string
+	CAFile             string
+	BootstrapTokenFile string
+	AllowedRuntimes    string
+	Labels             string
+	MaxGateways        string
+	Runtimes           string
+	// KeyedRuntimes lists the hosted runtime ids with a saved key file. The
+	// page shows only that a key is saved, never the key.
+	// KeyedRuntimes 列出已保存 Key 文件的托管运行时 id。页面只显示已保存，从不显示 Key。
+	KeyedRuntimes        []string
 	AutoDiscover         bool
 	AutoDiscoverInterval string
 	MetricsAddr          string
@@ -186,9 +216,13 @@ type formValues struct {
 	Message              string
 	MessageKey           string
 	Error                string
-	Models               modelCatalogue
-	Gateway              gatewayView
-	CLIUsage             cliUsageView
+	// ErrorKey names the phrase filling Error's {error} slot, so a language
+	// switch re-renders the same reason; empty means a0102.
+	// ErrorKey 指明填入 Error 中 {error} 的文案，切换语言时仍显示同一原因；为空即 a0102。
+	ErrorKey string
+	Models   modelCatalogue
+	Gateway  gatewayView
+	CLIUsage cliUsageView
 }
 
 // newIndexHandler builds the "/" handler: GET renders the form (pre-filled
@@ -229,8 +263,21 @@ func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) ht
 				return
 			}
 			cfg := values.toConfig()
-			if saved, err := agentconfig.Load(configPath); err == nil {
-				keepFileOnlyRuntimeFields(cfg.Runtimes, saved.Runtimes)
+			var saved []agentconfig.RuntimeConfig
+			if file, err := agentconfig.Load(configPath); err == nil {
+				saved = file.Runtimes
+				keepFileOnlyRuntimeFields(cfg.Runtimes, saved)
+			}
+			values.KeyedRuntimes = keyedRuntimes(saved)
+			// Keys are written before the YAML that points at them, and
+			// replaced files are removed only after the YAML no longer does.
+			// 先写 Key 文件再写指向它的 YAML；被替换的文件等 YAML 不再指向它之后才删除。
+			if err := applyAPIKeys(configPath, cfg.Runtimes, r.PostForm); err != nil {
+				logger.Error("API key not saved", slog.String("error_kind", "api_key_failed"))
+				values.ErrorKey = "a0114"
+				values.Error = values.Text.Format("a0083", map[string]any{"error": values.Text.Text(values.ErrorKey)})
+				render(w, values)
+				return
 			}
 			if err := agentconfig.Save(configPath, cfg); err != nil {
 				logger.Error("config not saved", slog.String("error_kind", "save_failed"))
@@ -238,6 +285,8 @@ func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) ht
 				render(w, values)
 				return
 			}
+			removeUnusedKeyFiles(configPath, saved, cfg.Runtimes)
+			values.KeyedRuntimes = keyedRuntimes(cfg.Runtimes)
 			logger.Info("config saved", slog.String("config_path", configPath))
 			values.MessageKey = "a0084"
 			if sources.Reload != nil {
@@ -317,6 +366,7 @@ func formValuesFromConfig(cfg *agentconfig.Config) formValues {
 		runtimeLines = append(runtimeLines, line)
 	}
 	v.Runtimes = strings.Join(runtimeLines, "\n")
+	v.KeyedRuntimes = keyedRuntimes(cfg.Runtimes)
 	return v
 }
 
@@ -379,17 +429,24 @@ func (v formValues) toConfig() *agentconfig.Config {
 }
 
 // keepFileOnlyRuntimeFields copies the runtime fields the form cannot show
-// (today only ReasoningParser) from the saved file onto the matching
+// (ReasoningParser and APIKeyFile) from the saved file onto the matching
 // runtimes, matched by id and kind, so saving from the page never silently
-// drops them.
+// drops them. APIKeyFile is kept only while base_url is unchanged too: a
+// saved key never follows its runtime to a different endpoint, so a new
+// endpoint needs the key entered again.
 //
-// keepFileOnlyRuntimeFields 把表单无法展示的运行时字段（目前只有 ReasoningParser）从
-// 已保存的文件复制到按 id 与 kind 匹配的运行时上，使从页面保存永远不会悄悄丢掉它们。
+// keepFileOnlyRuntimeFields 把表单无法展示的运行时字段（ReasoningParser 与
+// APIKeyFile）从已保存的文件复制到按 id 与 kind 匹配的运行时上，使从页面保存永远不会
+// 悄悄丢掉它们。APIKeyFile 还要求 base_url 未变才保留：已保存的 Key 从不跟随运行时
+// 换到另一个端点，换端点需要重新填写 Key。
 func keepFileOnlyRuntimeFields(next, saved []agentconfig.RuntimeConfig) {
 	for i := range next {
 		for _, old := range saved {
 			if old.ID == next[i].ID && old.Kind == next[i].Kind {
 				next[i].ReasoningParser = old.ReasoningParser
+				if old.BaseURL == next[i].BaseURL {
+					next[i].APIKeyFile = old.APIKeyFile
+				}
 				break
 			}
 		}

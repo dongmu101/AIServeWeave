@@ -290,13 +290,14 @@ func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candid
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable.
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return runtime.ChatResponse{}, Candidate{}, ErrModelNotAllowed
 	}
 	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.ChatResponse{}, Candidate{}, ErrNoCapableNode
+		return runtime.ChatResponse{}, Candidate{}, noCandidates(ctx)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -322,13 +323,14 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 
 // Embed dispatches req the same way Chat does.
 func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (runtime.EmbeddingResponse, Candidate, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return runtime.EmbeddingResponse{}, Candidate{}, ErrModelNotAllowed
 	}
 	candidates := s.candidates(ctx, req.Model, runtime.CapabilityEmbeddings)
 	s.metrics.Selection(runtime.CapabilityEmbeddings, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.EmbeddingResponse{}, Candidate{}, ErrNoCapableNode
+		return runtime.EmbeddingResponse{}, Candidate{}, noCandidates(ctx)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -354,13 +356,14 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 
 // Rerank dispatches req the same way Chat and Embed do.
 func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runtime.RerankResponse, Candidate, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return runtime.RerankResponse{}, Candidate{}, ErrModelNotAllowed
 	}
 	candidates := s.candidates(ctx, req.Model, runtime.CapabilityRerank)
 	s.metrics.Selection(runtime.CapabilityRerank, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.RerankResponse{}, Candidate{}, ErrNoCapableNode
+		return runtime.RerankResponse{}, Candidate{}, noCandidates(ctx)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -401,6 +404,7 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 // 仍在限流冷却中的候选被移到最后：调用方只派发给第一个候选，因此这里是冷却唯一能起
 // 作用的地方。
 func (s *Scheduler) TranscriptionCandidates(ctx context.Context, model string) []Candidate {
+	ctx, _ = admitModel(ctx, model) // own nodes only for an excluded model / 被排除的模型只用自有节点
 	return s.coolingLast(s.candidates(ctx, model, runtime.CapabilityAudioTranscription))
 }
 
@@ -437,7 +441,8 @@ func (s *Scheduler) coolingLast(candidates []Candidate) []Candidate {
 // 重试就需要调用方从头重新读一遍整个文件——与 UploadInput 文档注释里「不跨
 // 节点重试一次上传」给出的理由相同。
 func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.AudioTranscriptionRequest, audio io.Reader) (runtime.AudioTranscriptionResponse, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return runtime.AudioTranscriptionResponse{}, ErrModelNotAllowed
 	}
 	if !nodeAllowed(ctx, c.NodeID) {
@@ -457,13 +462,14 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 // the caller exactly as the underlying Stream reports it, with no further
 // node switch.
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
 	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
-		return nil, Candidate{}, ErrNoCapableNode
+		return nil, Candidate{}, noCandidates(ctx)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -527,9 +533,11 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // Without a routing table it lists what the nodes advertise, so a deployment
 // that never writes one is unaffected.
 // Backend display positions precede unranked models; equal positions use ID order.
-// Either way a model ctx's WithModelAccess policy excludes is left out, and so
-// is a node ctx's WithNodeAccess policy closes, so the catalogue a tenant sees
-// is exactly what it may call.
+// Either way a model ctx's WithModelAccess policy excludes is left out unless
+// the caller's own node serves it (see admitModel), and so is a node ctx's
+// WithNodeAccess policy closes, so the catalogue a tenant sees is exactly what
+// it may call. With a routing table, models on the caller's own nodes that no
+// alias names are listed by their own id, the id they are requested by.
 //
 // Models 是公开目录：客户端此刻可以请求什么。
 //
@@ -539,28 +547,57 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 //
 // 没有路由表时它列出节点声明的内容，因此从不编写路由表的部署不受影响。
 // 后端显示位置排在未指定位置的模型之前；相同位置按 ID 排序。
-// 两种情况下，被 ctx 上 WithModelAccess 授权排除的模型、被 WithNodeAccess 授权关闭
-// 的节点都会略去，使租户看到的目录恰好就是它能调用的内容。
+// 两种情况下，被 ctx 上 WithModelAccess 授权排除的模型（调用方自有节点提供的除外，见
+// admitModel）、被 WithNodeAccess 授权关闭的节点都会略去，使租户看到的目录恰好就是它能
+// 调用的内容。有路由表时，调用方自有节点上没有别名指向的模型按原 id 列出，即请求它所用的 id。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	routes := s.routes.Load()
 	if routes.Len() > 0 {
 		var out []ModelInfo
+		aliases := make(map[string]bool)
 		for _, alias := range routes.Models() {
-			if !modelAllowed(ctx, alias) {
+			aliases[alias] = true
+			actx, admitted := admitModel(ctx, alias)
+			if !admitted {
 				continue
 			}
-			if len(s.candidatesWith(ctx, routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(ctx, routes, alias, runtime.CapabilityMessages)) > 0 ||
-				len(s.candidatesWith(ctx, routes, alias, runtime.CapabilityImageGeneration)) > 0 {
+			if len(s.candidatesWith(actx, routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(actx, routes, alias, runtime.CapabilityMessages)) > 0 ||
+				len(s.candidatesWith(actx, routes, alias, runtime.CapabilityImageGeneration)) > 0 {
 				out = append(out, ModelInfo{ID: alias})
+			}
+		}
+		// A model on the caller's own node is requested by its own id when
+		// no alias names it, so it is listed the same way.
+		// 调用方自有节点上的模型在没有别名指向它时按原 id 请求，因此也按原 id 列出。
+		for _, info := range s.advertisedModels(ctx, true) {
+			if !aliases[info.ID] {
+				out = append(out, info)
 			}
 		}
 		return out
 	}
+	return s.advertisedModels(ctx, false)
+}
 
+// advertisedModels lists the chat, Messages and image models live nodes
+// advertise, deduplicated by id and sorted by modelInfoLess. A node ctx's
+// WithNodeAccess policy closes is skipped. A model the WithModelAccess policy
+// excludes is kept only from the caller's own nodes; ownOnly keeps nothing
+// else.
+//
+// advertisedModels 列出活节点声明的聊天、Messages 与图像模型，按 id 去重并按
+// modelInfoLess 排序。被 ctx 上 WithNodeAccess 授权关闭的节点被跳过。被 WithModelAccess
+// 授权排除的模型只从调用方自有节点保留；ownOnly 时其他一概不保留。
+func (s *Scheduler) advertisedModels(ctx context.Context, ownOnly bool) []ModelInfo {
+	_, hasTenant := ctx.Value(nodeAccessKey{}).(nodeAccess)
+	own := context.WithValue(ctx, ownNodesOnlyKey{}, true)
 	seen := make(map[string]ModelInfo)
-	var out []ModelInfo
 	for _, node := range s.server.Nodes() {
 		if !node.Live || node.Draining || node.Maintenance || !nodeAllowed(ctx, node.NodeID) {
+			continue
+		}
+		owned := hasTenant && nodeAllowed(own, node.NodeID)
+		if ownOnly && !owned {
 			continue
 		}
 		for _, snap := range node.Runtimes {
@@ -568,7 +605,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 				continue
 			}
 			for _, m := range snap.Discovery.Models {
-				if !modelAllowed(ctx, m.ID) {
+				if !owned && !modelAllowed(ctx, m.ID) {
 					continue
 				}
 				effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
@@ -583,6 +620,7 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 			}
 		}
 	}
+	out := make([]ModelInfo, 0, len(seen))
 	for _, info := range seen {
 		out = append(out, info)
 	}

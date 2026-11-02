@@ -30,7 +30,7 @@ legend { padding: 0 8px; font-size: 18px; font-weight: 600; }
 .wide { grid-column: 1 / -1; }
 label { display: block; margin-bottom: 6px; font-weight: 600; }
 label span { display: block; color: #64748b; font-size: 12px; font-weight: 400; }
-input[type=text], input[type=url], select, textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
+input[type=text], input[type=url], input[type=password], select, textarea { width: 100%; padding: 10px 12px; border: 1px solid #cbd5e1; border-radius: 7px; background: #fff; color: inherit; font: inherit; }
 textarea { min-height: 100px; resize: vertical; font-family: ui-monospace, monospace; font-size: 13px; }
 input:focus-visible, select:focus-visible, textarea:focus-visible, a:focus-visible, button:focus-visible { outline: 3px solid #bfdbfe; outline-offset: 2px; border-color: #3b82f6; }
 .checkbox { display: flex; align-items: center; gap: 10px; margin: 0; }
@@ -101,7 +101,7 @@ button:hover { background: #1d4ed8; }
 <h1><span data-i18n="a0009">{{$.Text.Text "a0009"}}</span></h1>
 <p class="intro"><span data-i18n="a0010">{{$.Text.Text "a0010"}}</span></p>
 {{if .Message}}<p class="message" role="status"><span data-i18n="{{.MessageKey}}">{{.Message}}</span></p>{{end}}
-{{if .Error}}<p class="error" role="alert"><span data-i18n="a0083">{{.Error}}</span></p>{{end}}
+{{if .Error}}<p class="error" role="alert"><span data-i18n="a0083"{{if .ErrorKey}} data-i18n-error="{{.ErrorKey}}"{{end}}>{{.Error}}</span></p>{{end}}
 <form method="post">
 <div class="language-selector"><label for="aisw-locale"><span data-i18n="a0103">{{.Text.Text "a0103"}}</span></label><select id="aisw-locale" name="locale">{{range .Text.Options}}<option value="{{.Locale}}"{{if eq .Locale $.Locale}} selected{{end}}>{{.Label}}</option>{{end}}</select><span id="locale-status" role="status"></span></div>
 <fieldset id="gateway">
@@ -184,6 +184,7 @@ button:hover { background: #1d4ed8; }
 </select></label></div>
 <div class="field wide"><label><span data-i18n="a0047">{{$.Text.Text "a0047"}}</span><input type="url" class="runtime-url" placeholder="http://127.0.0.1:11434" required pattern="https?://[^,\s]+"></label><p class="hint runtime-auth" hidden><span data-i18n="a0048">{{$.Text.Text "a0048"}}</span></p></div>
 <div class="field wide runtime-account" hidden><label><span data-i18n="a0108">{{$.Text.Text "a0108"}}</span><input type="text" class="runtime-account-dir" placeholder="~/.codex-work" pattern="[^,]*"></label><p class="hint"><span data-i18n="a0109">{{$.Text.Text "a0109"}}</span></p></div>
+<div class="field wide runtime-hosted" hidden><label><span data-i18n="a0110">{{$.Text.Text "a0110"}}</span><input type="password" class="runtime-key" autocomplete="off" spellcheck="false" placeholder="{{$.Text.Text "a0111"}}"></label><p class="hint"><span data-i18n="a0112">{{$.Text.Text "a0112"}}</span></p><label class="checkbox runtime-key-saved" hidden><input type="checkbox" class="runtime-key-clear" value="1"><span data-i18n="a0113">{{$.Text.Text "a0113"}}</span></label></div>
 <div class="field runtime-hosted" hidden><label><span data-i18n="a0049">{{$.Text.Text "a0049"}}</span><input type="text" class="runtime-key-env" placeholder="OPENAI_API_KEY" pattern="[A-Za-z_][A-Za-z0-9_]*"></label></div>
 <div class="field runtime-hosted" hidden><label><span data-i18n="a0050">{{$.Text.Text "a0050"}}</span><input type="text" class="runtime-models" data-i18n-placeholder="a0051" placeholder="{{$.Text.Text "a0051"}}" pattern="[^,]*"></label></div>
 </div>
@@ -372,6 +373,7 @@ function selectGroup() {
 window.addEventListener('hashchange', selectGroup);
 selectGroup();
 const declarations = document.getElementById('runtime_declarations');
+const keyedRuntimes = {{.KeyedRuntimes}} || [];
 const runtimeList = document.getElementById('runtime-list');
 function syncRuntimes() {
   const rows = Array.from(runtimeList.children);
@@ -385,6 +387,16 @@ function syncRuntimes() {
     const keyEnv = row.querySelector('.runtime-key-env').value.trim();
     const models = row.querySelector('.runtime-models').value.trim().split(/\s+/).filter(Boolean).join(' ');
     if (keyEnv || models) fields.push(keyEnv, models);
+    // Keys travel in their own fields named after the id, never in the
+    // declarations text, which the server echoes back into the page; a key is
+    // saved only under the id it was shown for. / Key 走按 id 命名的独立字段，从不
+    // 进入会被服务端回显的声明文本；已保存的 Key 只对它所属的 id 显示。
+    const hosted = kind.selectedOptions[0]?.dataset.group === 'hosted';
+    const saved = hosted && row.dataset.savedKey !== undefined && row.dataset.savedKey === ids[index];
+    row.querySelector('.runtime-key').name = hosted && ids[index] ? 'api_key:' + ids[index] : '';
+    row.querySelector('.runtime-key').placeholder = AISWI18n.text(saved ? 'a0115' : 'a0111');
+    row.querySelector('.runtime-key-saved').hidden = !saved;
+    row.querySelector('.runtime-key-clear').name = saved ? 'api_key_clear:' + ids[index] : '';
     return fields.join(',');
   }).join('\n');
 }
@@ -394,6 +406,7 @@ function addRuntime(id = '', kind = 'ollama', rest = '') {
   const kindInput = row.querySelector('.runtime-kind');
   const urlInput = row.querySelector('.runtime-url');
   idInput.value = id;
+  if (id && keyedRuntimes.includes(id)) row.dataset.savedKey = id;
   if (!Array.from(kindInput.options).some(option => option.value === kind)) {
     const unknown = new Option(AISWI18n.text('a0080', { kind }), kind);
     unknown.dataset.i18n = 'a0080'; unknown.dataset.i18nValues = JSON.stringify({ kind });
@@ -430,6 +443,8 @@ function addRuntime(id = '', kind = 'ollama', rest = '') {
     if (!hosted) {
       row.querySelector('.runtime-key-env').value = '';
       row.querySelector('.runtime-models').value = '';
+      row.querySelector('.runtime-key').value = '';
+      row.querySelector('.runtime-key-clear').checked = false;
     }
     syncRuntimes();
   }

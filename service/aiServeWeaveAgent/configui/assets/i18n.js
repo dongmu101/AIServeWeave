@@ -16,7 +16,7 @@
     for (const element of elements) {
       const values = JSON.parse(element.dataset.i18nValues || "{}");
       if (element.dataset.runtimeState) values.state = states[element.dataset.runtimeState] ? text(states[element.dataset.runtimeState]) : element.dataset.runtimeState;
-      if (element.dataset.i18n === "a0083") values.error = text("a0102");
+      if (element.dataset.i18n === "a0083") values.error = text(element.dataset.i18nError || "a0102");
       element.textContent = text(element.dataset.i18n, values);
     }
     for (const attr of ["aria-label", "placeholder", "label"]) {

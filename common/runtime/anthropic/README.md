@@ -24,7 +24,7 @@ Gateway 的原生 `/v1/messages` 通道与 Claude Code CLI 会话绑定，依赖
 
 `base_url` 末尾带不带 `/v1` 都可以，不会拼出重复的 `/v1`。
 
-声明方式、`api_key_env`、`models`，以及「只能本地声明、`base_url` 必须与本地一致」的规则，都与 [hosted](../hosted/README.md#声明) 相同。
+声明方式、`api_key_file`/`api_key_env`、`models`，以及「只能本地声明、`base_url` 必须与本地一致」的规则，都与 [hosted](../hosted/README.md#声明) 相同。
 
 ## 请求转换
 

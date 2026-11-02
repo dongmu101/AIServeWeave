@@ -9,9 +9,12 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
-// MessagesCandidates returns only nodes supporting native Anthropic Messages.
-// MessagesCandidates 仅返回支持原生 Anthropic Messages 的节点。
+// MessagesCandidates returns only nodes supporting native Anthropic Messages,
+// limited to the caller's own nodes when admitModel says so.
+// MessagesCandidates 仅返回支持原生 Anthropic Messages 的节点；admitModel 要求时只返回
+// 调用方的自有节点。
 func (s *Scheduler) MessagesCandidates(ctx context.Context, model string) []Candidate {
+	ctx, _ = admitModel(ctx, model)
 	return s.candidates(ctx, model, runtime.CapabilityMessages)
 }
 
@@ -22,7 +25,8 @@ func (s *Scheduler) MessagesCandidates(ctx context.Context, model string) []Cand
 // Messages 仅向所选节点分派一次。工具续接使用它，因为续接必须回到持有其 CLI 的节点；
 // 新会话改走 MessagesStart。
 func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return nil, ErrModelNotAllowed
 	}
 	if !nodeAllowed(ctx, c.NodeID) {
@@ -46,13 +50,14 @@ func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.Messa
 // 按隧道槽位排序，看不到 Agent 的 CLI 会话上限，正是这层换节点避免了一个节点已满、
 // 另一个节点空闲时仍返回 429。
 func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], Candidate, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
 	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, runtime.CapabilityMessages, s.sessionAffinity(ctx), rand.Float64)
 	s.metrics.Selection(runtime.CapabilityMessages, len(candidates))
 	if len(candidates) == 0 {
-		return nil, Candidate{}, ErrNoCapableNode
+		return nil, Candidate{}, noCandidates(ctx)
 	}
 	var lastErr error
 	var cooled cooledCandidates

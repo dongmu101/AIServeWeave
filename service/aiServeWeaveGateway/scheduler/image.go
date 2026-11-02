@@ -9,10 +9,12 @@ import (
 
 // ImageCandidates ranks the nodes that published model with image generation.
 // Image models carry no chat capability, so this never selects a chat model.
+// A model admitModel limits to the caller's own nodes ranks only those.
 //
 // ImageCandidates 对以图像生成能力发布了 model 的节点排序。图像模型不带聊天能力，
-// 因此这里永远不会选中聊天模型。
+// 因此这里永远不会选中聊天模型。被 admitModel 限定为自有节点的模型只对自有节点排序。
 func (s *Scheduler) ImageCandidates(ctx context.Context, model string) []Candidate {
+	ctx, _ = admitModel(ctx, model)
 	return s.candidates(ctx, model, runtime.CapabilityImageGeneration)
 }
 
@@ -26,13 +28,14 @@ func (s *Scheduler) ImageCandidates(ctx context.Context, model string) []Candida
 // 元数据到达前的失败在 Retryable 时换下一个候选重试；元数据一旦读到就不再重试，
 // 因为该节点已经消耗了账户的生图额度。
 func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest) (runtime.ImageMeta, runtime.Stream[runtime.ImageEvent], Candidate, error) {
-	if !modelAllowed(ctx, req.Model) {
+	ctx, admitted := admitModel(ctx, req.Model)
+	if !admitted {
 		return runtime.ImageMeta{}, nil, Candidate{}, ErrModelNotAllowed
 	}
 	candidates := s.ImageCandidates(ctx, req.Model)
 	s.metrics.Selection(runtime.CapabilityImageGeneration, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.ImageMeta{}, nil, Candidate{}, ErrNoCapableNode
+		return runtime.ImageMeta{}, nil, Candidate{}, noCandidates(ctx)
 	}
 	var lastErr error
 	var cooled cooledCandidates

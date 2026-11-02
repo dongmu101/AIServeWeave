@@ -145,6 +145,7 @@ go run ./service/aiServeWeaveGateway \
 | `GET /operator/v1/model-access/:scope` | 读一份列表。`scope` 为 `platform` 或租户 id；未知租户 `404`；从未设置时返回 `models: []` 且不带 `updated_*` |
 | `PUT /operator/v1/model-access/:scope` | 整体替换，请求体 `{"models": [...]}`（`null` 或缺字段为 `400`）；空数组解除这一级限制。单独路由组，请求体上限 `modelaccess.MaxDocumentBytes`（同路由文档 1 MiB + 64 KiB） |
 
+- **商户自有节点例外**：商户自有节点（`tnode.`）上的模型不受两级列表限制，只供节点所有者使用，见下方「商户自有节点」。
 - **两级求交**：平台列表是上限，租户列表只能在其内收窄，永远不能放宽；任一级空列表表示这一级不限制。名字是 `common/modelroute` 的别名；没有路由表时节点上报的模型 ID 即别名。列表经 `modelaccess.Normalize` 去空白、去重、排序，最多 1000 项、每项 256 字节。
 - **存储**：`model_access` 表（基础迁移 `0010_model_access.sql`），每个 scope 一行，`scope` 为 `platform` 或租户 id（租户 id 恒以 `tnt_` 开头，不会相撞）。清空即删行，「不限制」只有一种写法。损坏的行在读取与 Key 校验时报错而不是放开。
 - **下发**：`POST /internal/v1/apikeys/verify` 的响应新增 `models: {platform, tenant}`，两级都不限制时两份列表缺席。写入后调用 `InvalidateAll` 推进 generation，Gateway 立即清空校验缓存，不必等 TTL；Redis 不可用时退化为按 TTL 过期。
@@ -195,7 +196,8 @@ go run ./service/aiServeWeaveGateway \
 - **计费**：Gateway 只在请求跑在 `tnode.` 节点上时给用量记录附 `node_id`；`POST /internal/v1/usagerecords` 接受可选的 `node_id`，节点所有者等于记录所属商户时费用记为 0（仍写扣费行，重放仍为 0）。只附自有节点的 id，未使用本功能的部署推送内容不变。余额耗尽（`402`）的预付商户仍被拦在 Gateway 前门，不能改为只用自有节点继续服务。
 - **运维权限**：平台运维可以在节点管理里停用、设维护，但不能把商户自有节点绑定给其他商户（见上一节）。Console 专属节点页把它们显示为只读。
 - **审计**（租户范围）：`node.tenant.create`（详情为 `expires_at`）、`node.tenant.revoke`，不记令牌与接入包。
-- **租户模型页**：`GET /admin/v1/models` 按 `Permits` 过滤，其他商户的自有节点上的服务不出现。
+- **租户模型页**：`GET /admin/v1/models` 按 `Permits` 过滤，其他商户的自有节点上的服务不出现；本商户自有节点上的服务不受模型授权收窄（`TenantModelCatalog.FilterExcept`）。
+- **模型授权**（2026-11-02）：商户在自有节点上提供的模型不受平台/租户模型授权列表限制，Gateway 把这类请求限定派发到该商户自己的节点，见 [Gateway STATUS「模型授权」](../aiServeWeaveGateway/STATUS.md#模型授权)。授权列表只约束共享与专属节点。
 - **升级顺序**：本功能默认开启，地址一填就生效。Registry（保留前缀检查）、控制面、全部 Gateway 都升级之后，才能让它生效（填地址）；分批升级时先把 `Enabled` 设为 `false`。旧版 Gateway 不认识 `tnode.` 归属，会把自有节点当作共享节点派给所有商户。
 - **验证范围**：权限矩阵、上限与 24 小时窗口、签发失败回滚、删除（含 Registry 故障、重复删除、跨商户）、`Permits` 判断、Registry 前缀拒绝、Gateway 调度与 `/v1/models` 隔离、计费免扣、e2e 接口形状与配置校验都有默认测试。`0012` 迁移还没有在真实 PostgreSQL 或 MySQL 上跑过，真实 Agent 用商户接入包注册也还没有验收。
 

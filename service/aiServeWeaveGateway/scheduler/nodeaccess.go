@@ -49,10 +49,19 @@ func WithNodeAccess(ctx context.Context, tenantID string, policy nodeaccess.Poli
 	return context.WithValue(ctx, nodeAccessKey{}, nodeAccess{tenantID: tenantID, policy: policy})
 }
 
-// nodeAllowed reports whether ctx's caller may use nodeID.
+// nodeAllowed reports whether ctx's caller may use nodeID. Under
+// ownNodesOnly only the caller's own tenant nodes qualify.
 //
-// nodeAllowed 报告 ctx 上的调用方是否可以使用 nodeID。
+// nodeAllowed 报告 ctx 上的调用方是否可以使用 nodeID。在 ownNodesOnly 下只有调用方的
+// 自有节点符合。
 func nodeAllowed(ctx context.Context, nodeID string) bool {
 	access, ok := ctx.Value(nodeAccessKey{}).(nodeAccess)
-	return !ok || nodeaccess.Permits(access.tenantID, access.policy, nodeID)
+	if !ok {
+		return true
+	}
+	if ownNodesOnly(ctx) {
+		owner, owned := nodeaccess.OwnerOf(nodeID)
+		return owned && owner != "" && owner == access.tenantID
+	}
+	return nodeaccess.Permits(access.tenantID, access.policy, nodeID)
 }

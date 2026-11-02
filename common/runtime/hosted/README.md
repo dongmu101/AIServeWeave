@@ -41,6 +41,9 @@ runtimes:
   - id: openai
     kind: openai
     api_key_env: AISW_OPENAI_KEY     # 只存环境变量名
+  - id: deepseek
+    kind: deepseek
+    api_key_file: /etc/aisw/keys/deepseek.key   # 私有文件路径，优先于 api_key_env
   - id: my-gateway
     kind: openai_compatible
     base_url: https://llm.example.com/v1
@@ -50,7 +53,7 @@ runtimes:
 
 ### Key 只留在 Agent 本机
 
-Key 只在 Agent 启动时从 `api_key_env` 指定的环境变量读取，不写进配置文件，也不过隧道。环境变量没有设置时 Key 为空：供应商会以 `unauthorized` 拒绝，Agent 本身照常启动。`api_key_env` 与 `models` 只对托管种类生效，写在其他种类上会被忽略。
+Key 在 Agent 启动和运行时重新加载时读取：设置了 `api_key_file` 时读该私有文件（Agent 本地设置页面填写 Key 时写入配置目录的 `keys/<id>.key`，0600），否则读 `api_key_env` 指定的环境变量。Key 不写进配置文件，也不过隧道。文件读不到或环境变量没有设置时 Key 为空：供应商会以 `unauthorized` 拒绝，Agent 本身照常启动。`api_key_file`、`api_key_env` 与 `models` 只对托管种类生效，写在其他种类上会被忽略。
 
 建议给这些变量起 Agent 专用的名字（例如 `AISW_OPENAI_KEY`），不要直接用 `OPENAI_API_KEY`：本机 CLI 中的 OpenCode 与 Pi 会透传所有 `*_API_KEY` 变量，用通用名字会让它们也拿到这把 Key。
 

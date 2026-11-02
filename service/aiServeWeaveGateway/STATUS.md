@@ -378,7 +378,8 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 商户可见/可调用的模型白名单（契约 `common/modelaccess`，由控制面运维配置）随 API Key 校验结果下发到 `Identity.Models`，鉴权中间件用 `scheduler.WithModelAccess` 把它挂到请求 context 上；没有限制、静态 key 或免认证模式下不挂。
 
 - **在调度器入口执行**：`Chat`、`ChatStream`、`Embed`、`Rerank`、`MessagesStart`、`Messages`（续接）、`GenerateImage`、`Transcribe` 在解析候选之前检查请求的模型名（即调用方发送的别名），被排除时返回 `ErrModelNotAllowed`。它包装 `ErrNoCapableNode`，因此各前门一律按「模型不存在」回答 `404 model_not_found`——拒绝本身不泄露部署了什么。原生 Messages 路径单独区分它与「缺少原生节点」的 503。
-- **模型列表**：`GET /v1/models` 由 `Scheduler.Models(ctx)` 产出，有路由表时列别名、没有时列节点上报的模型，两种情况都过滤掉被排除的项。
+- **商户自有节点不受授权限制**（2026-11-02）：被排除的模型对有租户身份的调用方不直接拒绝，`scheduler.admitModel` 改为把这次请求的候选限定在该租户自己的 `tnode.` 节点（`nodeAllowed` 只认 `nodeaccess.OwnerOf` 等于调用方的节点）；没有自有节点提供时仍返回 `ErrModelNotAllowed`，前门回答不变。`ImageCandidates`、`MessagesCandidates`、`TranscriptionCandidates` 套用同一收窄，预选候选不会先落到共享节点。共享与专属节点仍完全按授权列表。静态 key 与免认证模式没有租户身份，行为不变。
+- **模型列表**：`GET /v1/models` 由 `Scheduler.Models(ctx)` 产出，有路由表时列别名、没有时列节点上报的模型，两种情况都过滤掉被排除的项（调用方自有节点上的模型除外）。有路由表时，调用方自有节点上的模型另按原 id 列出（与别名同名的不重复），因为没有匹配别名的请求按原名派发。
 - **生效**：控制面写入后推进 generation，本副本的校验缓存随吊销监听一起清空；控制面 Redis 不可用时按 `-key-cache-ttl` 自然过期。工作流（`/v1/runs`、`/v1/jobs`）按模板而不是模型提交，不受此约束。
 
 ## 专属节点
