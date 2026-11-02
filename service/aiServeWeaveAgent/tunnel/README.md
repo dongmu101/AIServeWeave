@@ -638,7 +638,7 @@ tunnel:
 - 帧大小、请求体大小、deadline 全部有本地上限，超限返回 `ErrorResponseTooLarge` 而不是尝试处理。
 - 日志只记录 `node_id`、`slot_id`、`request_id`、`runtime_id`、`operation`、错误码和延迟；不记录 payload。
 - Agent 不提供任何远程执行、文件读写或端口转发能力；协议里没有这类 Operation，也不留扩展位。
-- 凭据只有一种方式经过隧道：`RemoteProviders` 的 HPKE 密文，封装给节点证书公钥，且须 Agent 本地开启 `remote_providers`；其余帧不携带凭据。
+- 凭据只有一种方式经过隧道：`RemoteProviders` 的 HPKE 密文，封装给节点证书公钥；其余帧不携带凭据。
 
 ## 可观测性
 

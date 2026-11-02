@@ -405,7 +405,7 @@ RemoteProviders:
 - **请求与响应。** `PUT` 体为 `{kind, base_url, api_key?, models}`。`api_key` 只写不读：省略表示保留原值，但 `kind` 或 `base_url` 变化时必须重填（防止把旧 Key 发往新端点）。列表返回 `{version, connected, report?, items:[{id, kind, base_url, models, key_last4, updated_by, updated_at, state}]}`，`key_last4` 对短于 12 字符的 Key 为空；写入返回 `{item?, version, delivered}`。校验复用 `common/remoteprovider.ValidateProvider`（`remote-` 前缀、托管种类、https 公网端点）；每节点最多 32 个，超出答 409。
 - **整份、带版本。** 表 `node_providers`（主键 node_id + runtime_id）保存配置与密文，`node_provider_versions` 为每节点保存单调递增版本；每次写入在同一事务内加锁递增版本。写入成功后同步尝试下发，`delivered=false` 只表示节点当前不在线或下发失败，由对账补齐。
 - **封装给谁。** `internal/remoteproviderrouter` 并发询问各副本，取得该节点连接所用证书的公钥（Gateway 从 mTLS 对端取得）；本服务只采用指纹与 Registry `ListNodeStates.key_fingerprint` 一致的那一把，节点被禁用或待审批时不下发。随后整份打包、HPKE 封装并推送到所有报告已连接的副本，Agent 对重复的同一版本不做处理。
-- **对账。** 每 `ReconcileInterval` 遍历有版本的节点：节点回报的 `applied_version` 已追上，或在当前版本上回报 `disabled`（节点未同意）时跳过，其余重发。证书续期后的 `open_failed` 也由这一步用新公钥重发。
+- **对账。** 每 `ReconcileInterval` 遍历有版本的节点：节点回报的 `applied_version` 已追上，或在当前版本上回报 `disabled`（仍带开关且未开启的旧版 Agent，升级重启后回报重置）时跳过，其余重发。证书续期后的 `open_failed` 也由这一步用新公钥重发。
 - **审计。** 写入与删除分别记 `node.provider.update`、`node.provider.delete`，`Detail` 只有 `kind=` 与端点主机名，从不包含 Key、完整 URL 或模型列表；平台写入记在 `model.PlatformScope` 下。
 
 迁移为 `0014_node_providers.sql`，PostgreSQL 与 MySQL 两套都有（MySQL 的 `models_json` 用 `MEDIUMTEXT`）；尚未在真实数据库上执行。

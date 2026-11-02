@@ -115,8 +115,6 @@
   "a0113": "Effacer la clé enregistrée",
   "a0114": "La clé API n’a pas pu être enregistrée. Vérifiez la clé et les autorisations du répertoire de configuration.",
   "a0115": "Enregistrée ; laissez vide pour la conserver",
-  "a0116": "Autoriser la Console à provisionner des fournisseurs d'API hébergés et leurs clés",
-  "a0117": "Les paquets sont chiffrés pour le certificat de ce nœud et seule cette machine peut les ouvrir. Leurs ID de runtime commencent par remote- et ne remplacent jamais les déclarations locales. Prend effet après un redémarrage de l'Agent ; la désactivation supprime les runtimes provisionnés et leur copie enregistrée. Sans réglage explicite, il est activé pour les nœuds appartenant à un locataire.",
   "u.title": "Quota du compte CLI",
   "u.note": "Quota d’abonnement partagé des CLI déclarées localement, distinct des limites du locataire et des jetons par requête. Une interrogation par minute au maximum. Le pourcentage restant est calculé à partir de l’utilisation déclarée et ne représente pas un nombre de jetons.",
   "u.pending": "En attente de consultation",

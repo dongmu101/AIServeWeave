@@ -169,16 +169,6 @@ type GatewayConfig struct {
 	//
 	// MaxGateways 对应 -max-gateways；零值保留 flag 自己的默认值。
 	MaxGateways int `yaml:"max_gateways,omitempty"`
-
-	// RemoteProviders mirrors -remote-providers: true lets the control plane
-	// provision hosted provider runtimes (remote-* ids, endpoint and key
-	// sealed to this node's certificate) through the tunnel. Nil keeps the
-	// flag's own value, which defaults to off.
-	//
-	// RemoteProviders 对应 -remote-providers：为 true 时允许控制面经隧道下发托管供应商
-	// 运行时（remote-* id，端点与 Key 按本节点证书加密）。nil 保留 flag 自己的值，默认
-	// 关闭。
-	RemoteProviders *bool `yaml:"remote_providers,omitempty"`
 }
 
 // RuntimeConfig declares one local inference backend to register at
@@ -331,9 +321,6 @@ func Save(path string, cfg *Config) error {
 		"allowed_runtimes":     cfg.Gateway.AllowedRuntimes,
 		"labels":               cfg.Gateway.Labels,
 		"max_gateways":         cfg.Gateway.MaxGateways,
-	}
-	if cfg.Gateway.RemoteProviders != nil {
-		gateway["remote_providers"] = *cfg.Gateway.RemoteProviders
 	}
 	v.Set("gateway", gateway)
 

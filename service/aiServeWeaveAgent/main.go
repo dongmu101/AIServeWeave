@@ -155,7 +155,6 @@ func main() {
 	}
 
 	explicit := explicitFlagNames()
-	opts.remoteProvidersSet = explicit["remote-providers"]
 	resolvedConfigPath := resolveConfigPath(*configPath, explicit["config"], defaultConfigPath)
 	uiConfigPath := *configPath
 	if !explicit["config"] {

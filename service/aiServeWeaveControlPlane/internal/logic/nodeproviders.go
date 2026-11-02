@@ -457,6 +457,10 @@ func (s *Service) ReconcileNodeProviders(ctx context.Context) {
 		if err != nil || !status.Connected {
 			continue
 		}
+		// An older Agent with its switch off refuses every push of this
+		// version; resend only after it restarts (its report resets) or the
+		// version moves. / 关闭开关的旧版 Agent 会拒绝该版本的每次推送；等它重启（回报
+		// 重置）或版本变化后再重发。
 		if r := status.Report; r != nil && (r.AppliedVersion >= v.Version ||
 			(r.AttemptedVersion == v.Version && r.Outcome == remoteprovider.OutcomeDisabled.String())) {
 			continue

@@ -442,8 +442,7 @@ docker compose up -d --no-deps --no-build --force-recreate controlplane gateway
 ```
 
 控制面容器以 uid 10001（`aisw`）运行，读不到 0600 的主密钥会启动失败，因此在宿主机上执行 `sudo chown 10001 provider-master.key`。
-商户自有节点上的 Agent 默认接受下发，平台节点需要在 Agent 配置里开启
-`gateway.remote_providers: true`（或 `-remote-providers`）。Key 只以封装给节点证书公钥的密文
+Agent 侧不需要任何配置，商户节点与平台节点升级到 2026-11-02 之后的版本即可接收。Key 只以封装给节点证书公钥的密文
 经过 Gateway，规则见[托管供应商说明「控制面远程下发」](../common/runtime/hosted/README.md#控制面远程下发)。
 已完成默认测试，未经真实环境验收。
 

@@ -93,7 +93,6 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		Path:    filepath.Join(filepath.Dir(opts.keyFile), remoteproviders.FileName),
 		KeyFile: opts.keyFile,
 		NodeID:  identity.NodeID,
-		Enabled: opts.remoteProvidersEnabled(identity.NodeID),
 		Reload:  remote.reload,
 		Logger:  logger,
 	})

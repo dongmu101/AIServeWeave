@@ -756,7 +756,7 @@ type RemoteProvidersOutcome int32
 const (
 	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_UNSPECIFIED  RemoteProvidersOutcome = 0 // nothing received yet
 	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_APPLIED      RemoteProvidersOutcome = 1
-	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_DISABLED     RemoteProvidersOutcome = 2 // local config does not enable remote_providers
+	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_DISABLED     RemoteProvidersOutcome = 2 // older Agents only: their remote_providers switch was off
 	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_OPEN_FAILED  RemoteProvidersOutcome = 3 // not sealed to this node's current key, or tampered with
 	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_INVALID      RemoteProvidersOutcome = 4 // opened but failed validation
 	RemoteProvidersOutcome_REMOTE_PROVIDERS_OUTCOME_STALE        RemoteProvidersOutcome = 5 // version not above the applied one
@@ -8311,15 +8311,14 @@ func (x *RerankResult) GetScore() float64 {
 // nor alter the endpoints. It declares hosted inference runtimes only — the
 // Agent refuses non-hosted kinds, non-https endpoints and non-public hosts —
 // and so still cannot express "fetch this URL" or "run this command". The
-// Agent accepts it only when its local config enables remote_providers, and
-// only for a version above the one it applied last.
+// Agent accepts only a version above the one it applied last.
 //
 // RemoteProviders 是控制面在本节点上配置的全部托管供应商运行时，处于同一个版本。
 // sealed 是 HPKE 密文（common/remoteprovider.Seal），发给节点当前证书的公钥，并绑定
 // node_id 与 version，因此只有该 Agent 能打开，转发它的 Gateway 既读不到其中的 API
 // Key，也改不了端点。它只声明托管推理运行时——Agent 拒绝非托管种类、非 https 端点与
-// 非公网主机——因此仍然无法表达"fetch this URL"或"run this command"。Agent 只在本地
-// 配置开启 remote_providers 时接受它，且只接受高于上次已应用的版本。
+// 非公网主机——因此仍然无法表达"fetch this URL"或"run this command"。Agent 只接受
+// 高于上次已应用的版本。
 type RemoteProviders struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Version       uint64                 `protobuf:"varint,1,opt,name=version,proto3" json:"version,omitempty"`

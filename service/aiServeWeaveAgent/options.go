@@ -5,7 +5,6 @@ import (
 	"strings"
 	"time"
 
-	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 )
 
@@ -24,12 +23,6 @@ type tunnelOptions struct {
 	allowedRuntimes string
 	labels          string
 	maxGateways     int
-	remoteProviders bool
-	// remoteProvidersSet records that -remote-providers or the config file
-	// chose remoteProviders; otherwise the node identity decides.
-	// remoteProvidersSet 记录 -remote-providers 或配置文件是否已决定 remoteProviders；
-	// 未决定时由节点身份决定。
-	remoteProvidersSet bool
 }
 
 func registerTunnelFlags() *tunnelOptions {
@@ -48,8 +41,6 @@ func registerTunnelFlags() *tunnelOptions {
 		"comma-separated runtime ids the gateway may dispatch to; empty means every configured runtime")
 	flag.StringVar(&opts.labels, "labels", "",
 		"comma-separated key=value facts about this node for the gateway's routing rules, e.g. region=local,gpu=4090")
-	flag.BoolVar(&opts.remoteProviders, "remote-providers", false,
-		"accept hosted provider runtimes (remote-* ids) the control plane seals to this node's certificate")
 	return opts
 }
 
@@ -342,20 +333,4 @@ func parseComfyUIManagedMounts(raw string) map[string]string {
 		return nil
 	}
 	return out
-}
-
-// remoteProvidersEnabled reports whether this node accepts provisioned
-// hosted providers. Unless the flag or the config file says otherwise, a
-// tenant-owned node (nodeaccess.TenantNodePrefix) accepts them, because its
-// owner manages it from the Console, and a platform node does not.
-//
-// remoteProvidersEnabled 报告本节点是否接受下发的托管供应商。除非 flag 或配置文件另有
-// 指定，商户自有节点（nodeaccess.TenantNodePrefix）接受，因为其所有者在 Console 中管理
-// 它；平台节点不接受。
-func (o *tunnelOptions) remoteProvidersEnabled(nodeID string) bool {
-	if o.remoteProvidersSet {
-		return o.remoteProviders
-	}
-	_, owned := nodeaccess.OwnerOf(nodeID)
-	return owned
 }

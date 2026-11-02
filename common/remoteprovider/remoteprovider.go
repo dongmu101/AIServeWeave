@@ -354,6 +354,10 @@ type Outcome int
 const (
 	OutcomeNone Outcome = iota
 	OutcomeApplied
+	// OutcomeDisabled is only reported by older Agents that still had the
+	// remote_providers switch turned off; current Agents always accept.
+	// OutcomeDisabled 只由仍带 remote_providers 开关且未开启的旧版 Agent 回报；当前版本
+	// 总是接受。
 	OutcomeDisabled
 	OutcomeOpenFailed
 	OutcomeInvalid

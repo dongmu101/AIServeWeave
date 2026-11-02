@@ -68,7 +68,7 @@ Gateway 下发同一个 ID 时，`base_url` 必须与本地声明指向同一地
 商户（自有节点 `tnode.`）与平台运维（平台节点）可以在 Console 填写接口与 Key，由控制面下发到 Agent，不必登录节点机器（2026-11-02）。这是「Key 只留在本机、不过隧道」的唯一例外，放宽范围如下：
 
 - **Key 不以明文过隧道。** 控制面把该节点全部远程运行时整份打包（`common/remoteprovider.Bundle`），用 HPKE（DHKEM(P-256, HKDF-SHA256) + HKDF-SHA256 + AES-256-GCM）封装给节点证书公钥；`info` 绑定 node_id 与版本号。公钥由 Gateway 从 mTLS 对端证书取得，控制面只在它的指纹与 Registry 记录一致时才封装，因此 Gateway 报告的公钥不可伪造，Gateway 也读不到、改不了内容。
-- **需要节点本地同意。** Agent 配置 `gateway.remote_providers: true`（或 `-remote-providers`）才接受；未设置时商户自有节点默认开启、平台节点默认关闭。关闭时 Agent 删除已保存的打包，并对每次推送回报 `disabled`。
+- **不需要节点本地开关。** 商户节点与平台节点的 Agent 都直接接受下发（2026-11-02 起取消了 `remote_providers` 开关，旧配置里的这一项会被忽略）。能下发到哪台节点由控制面按 node_id 归属控制：商户只能写自己的 `tnode.` 节点，平台运维只能写平台节点。仍带开关的旧版 Agent 会回报 `disabled`，升级后即可接收。
 - **与本地声明隔离。** 远程 ID 必须以 `remote-` 开头；与本地声明同 ID 时本地胜出，远程项回报 `conflict`。远程运行时同样受 `allowed_runtimes` 约束。端点必须是 https，且不能是回环、私网或链路本地地址字面量（解析到私网的主机名无法在这里拦截）。
 - **整份、带版本。** 每次变更都发送整份列表，版本单调递增：同版本（多个副本各转发一份）不重复应用，更低版本回报 `stale`，空列表移除全部远程运行时。证书续期换了密钥后旧密文打不开，Agent 回报 `open_failed`，控制面对账时用新公钥重发。
 

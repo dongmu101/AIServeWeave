@@ -349,14 +349,11 @@ type ClientConfig struct {
 	// ModelPuller 同一种"可选钩子"形状——意味着从不发送 CLIUsageReport。
 	CLIUsage CLIUsageSource
 	// RemoteProviders receives the sealed hosted provider bundles the control
-	// plane provisions and supplies the report sent back. Nil — the node did
-	// not opt in with remote_providers — means a RemoteProviders frame is
-	// ignored and no report is ever sent, so the control plane sees the node
-	// as not accepting remote providers.
+	// plane provisions and supplies the report sent back. Nil means a
+	// RemoteProviders frame is ignored and no report is ever sent.
 	//
-	// RemoteProviders 接收控制面下发的已封装托管供应商打包，并提供回传的回报。nil——
-	// 节点没有用 remote_providers 选择接受——表示忽略 RemoteProviders 帧、从不发送
-	// 回报，控制面因此把该节点视为不接受远程下发。
+	// RemoteProviders 接收控制面下发的已封装托管供应商打包，并提供回传的回报。nil 表示
+	// 忽略 RemoteProviders 帧、从不发送回报。
 	RemoteProviders RemoteProvidersStore
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and

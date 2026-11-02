@@ -115,8 +115,6 @@
   "a0113": "Gespeicherten Schlüssel löschen",
   "a0114": "Der API-Schlüssel konnte nicht gespeichert werden. Schlüssel und Berechtigungen des Konfigurationsverzeichnisses prüfen.",
   "a0115": "Gespeichert; leer lassen, um ihn zu behalten",
-  "a0116": "Der Console erlauben, gehostete API-Anbieter und Keys bereitzustellen",
-  "a0117": "Die Pakete sind für das Zertifikat dieses Knotens verschlüsselt, nur dieser Rechner kann sie öffnen. Ihre Runtime-IDs beginnen mit remote- und überschreiben keine lokalen Deklarationen. Wirksam nach einem Neustart des Agents; beim Ausschalten werden die bereitgestellten Runtimes und ihre gespeicherte Kopie entfernt. Ohne Angabe ist es für mandanteneigene Knoten eingeschaltet.",
   "u.title": "CLI-Kontingent",
   "u.note": "Gemeinsames Abonnementkontingent lokal deklarierter CLIs, unabhängig von Mandantenlimits und Tokens pro Anfrage. Höchstens eine Abfrage pro Minute. Der Restanteil wird aus der gemeldeten Nutzung berechnet und ist kein Tokenbudget.",
   "u.pending": "Abfrage ausstehend",

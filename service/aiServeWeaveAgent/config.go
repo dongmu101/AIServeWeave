@@ -165,9 +165,6 @@ func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnel
 	if !explicit["max-gateways"] && gw.MaxGateways > 0 {
 		opts.maxGateways = gw.MaxGateways
 	}
-	if !explicit["remote-providers"] && gw.RemoteProviders != nil {
-		opts.remoteProviders, opts.remoteProvidersSet = *gw.RemoteProviders, true
-	}
 
 	if !explicit["auto-discover"] && cfg.AutoDiscover != nil {
 		*autoDiscover = *cfg.AutoDiscover

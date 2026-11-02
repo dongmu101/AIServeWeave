@@ -22,7 +22,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"io/fs"
 	"log/slog"
@@ -59,13 +58,6 @@ type Config struct {
 	//
 	// NodeID 是本节点身份；发给其他节点的打包打不开。
 	NodeID string
-	// Enabled is the local consent (remote_providers). A disabled Store
-	// deletes any saved bundle, supplies no runtimes and reports
-	// OutcomeDisabled for every push.
-	//
-	// Enabled 是本地同意（remote_providers）。关闭时 Store 删除已保存的打包、不提供
-	// 任何运行时，并对每次推送回报 OutcomeDisabled。
-	Enabled bool
 	// Reload asks the Agent to reconcile its runtimes with Runtimes; the
 	// reloader reports each outcome back through Observe.
 	//
@@ -96,10 +88,10 @@ type push struct {
 
 // New builds a Store and loads the saved bundle. A saved bundle that cannot
 // be read, or belongs to another node, is ignored and left for the next push
-// to replace; a disabled Store deletes it instead.
+// to replace.
 //
 // New 构造 Store 并加载已保存的打包。读不出来或属于其他节点的已保存打包被忽略，留给下一
-// 次推送替换；关闭状态的 Store 则删除它。
+// 次推送替换。
 func New(cfg Config) (*Store, error) {
 	if cfg.Path == "" || cfg.KeyFile == "" || cfg.NodeID == "" {
 		return nil, errors.New("remoteproviders: Path, KeyFile and NodeID are required")
@@ -111,13 +103,6 @@ func New(cfg Config) (*Store, error) {
 		cfg.Logger = slog.New(slog.DiscardHandler)
 	}
 	s := &Store{cfg: cfg, wake: make(chan struct{}, 1)}
-	if !cfg.Enabled {
-		s.report.Outcome = remoteprovider.OutcomeDisabled
-		if err := os.Remove(cfg.Path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return nil, fmt.Errorf("remoteproviders: remove %s: %w", cfg.Path, err)
-		}
-		return s, nil
-	}
 	b, err := load(cfg.Path, cfg.NodeID)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
@@ -208,11 +193,6 @@ func (s *Store) Run(ctx context.Context) {
 // process 打开、检查、持久化并应用一次推送。
 func (s *Store) process(ctx context.Context, p push) {
 	log := s.cfg.Logger.With(slog.Uint64("version", p.version))
-	if !s.cfg.Enabled {
-		s.finish(remoteprovider.OutcomeDisabled, p.version)
-		log.Warn("remote providers refused: remote_providers is off / 拒绝远程供应商：remote_providers 未开启")
-		return
-	}
 	s.mu.Lock()
 	applied := s.bundle.Version
 	s.mu.Unlock()
@@ -324,14 +304,10 @@ func (s *Store) Observe(failed, conflicts []string) {
 	}
 }
 
-// Runtimes returns the applied bundle as runtime declarations; nil while
-// disabled.
+// Runtimes returns the applied bundle as runtime declarations.
 //
-// Runtimes 把已应用的打包转换成运行时声明返回；关闭时为 nil。
+// Runtimes 把已应用的打包转换成运行时声明返回。
 func (s *Store) Runtimes() []runtime.Config {
-	if !s.cfg.Enabled {
-		return nil
-	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if len(s.bundle.Providers) == 0 {
