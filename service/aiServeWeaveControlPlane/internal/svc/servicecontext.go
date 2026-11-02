@@ -42,6 +42,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/redeemgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/remoteproviderrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
@@ -212,6 +213,20 @@ type ServiceContext struct {
 	alertEvaluatorCancel context.CancelFunc
 	alertEvaluatorDone   chan struct{}
 
+	// nodeProvidersCancel/nodeProvidersDone tear down the remote provider
+	// reconciler, started only when RemoteProviders is configured.
+	//
+	// nodeProvidersCancel/nodeProvidersDone 关停远程供应商对账循环；只有配置了
+	// RemoteProviders 时才启动。
+	nodeProvidersCancel context.CancelFunc
+	nodeProvidersDone   chan struct{}
+
+	// RemoteProviderRouter is non-nil when RemoteProviders is configured; the
+	// node provider routes are mounted only then.
+	//
+	// RemoteProviderRouter 在配置了 RemoteProviders 时非 nil；只有此时才挂载节点供应商路由。
+	RemoteProviderRouter *remoteproviderrouter.Router
+
 	// usageRetentionCancel/usageRetentionDone tear down the usage_records
 	// retention sweeper started below (STATUS.md's P2 usage ledger). Like
 	// requestLogRetentionCancel/requestLogRetentionDone, this goroutine
@@ -359,6 +374,22 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}))
 	}
 
+	var remoteProviderRouter *remoteproviderrouter.Router
+	if cfg.RemoteProviders.Enabled() {
+		secrets, err := logic.LoadProviderSecrets(cfg.RemoteProviders.MasterKeyFile)
+		if err != nil {
+			return nil, err
+		}
+		remoteProviderRouter = remoteproviderrouter.New(remoteproviderrouter.Config{
+			Gateways: cfg.RemoteProviders.Gateways,
+			Token:    cfg.RemoteProviders.GatewayToken,
+			Timeout:  cfg.RemoteProviders.Timeout,
+		})
+		logicOpts = append(logicOpts, logic.WithNodeProviders(logic.NodeProviderConfig{
+			Router: remoteProviderRouter, Secrets: secrets, Logger: slog.Default(),
+		}))
+	}
+
 	svcLogic := logic.New(st, clock, logicOpts...)
 	// Compiled-in API reference pages are inserted or refreshed on every
 	// start, never overwriting a page an operator has edited. A failure here
@@ -397,6 +428,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		defer close(artifactStorageDone)
 		runArtifactStorageGauge(artifactStorageCtx, st, metricsRegistry)
 	}()
+
+	var nodeProvidersCancel context.CancelFunc
+	var nodeProvidersDone chan struct{}
+	if remoteProviderRouter != nil {
+		npCtx, npCancel := context.WithCancel(ctx)
+		nodeProvidersCancel, nodeProvidersDone = npCancel, make(chan struct{})
+		go func() {
+			defer close(nodeProvidersDone)
+			svcLogic.RunNodeProviderReconciler(npCtx, cfg.RemoteProviders.ReconcileInterval)
+		}()
+	}
 
 	var metricsHistoryCancel context.CancelFunc
 	var metricsHistoryDone chan struct{}
@@ -508,6 +550,9 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		requestLogRetentionDone:   rlDone,
 		alertEvaluatorCancel:      aeCancel,
 		alertEvaluatorDone:        aeDone,
+		nodeProvidersCancel:       nodeProvidersCancel,
+		nodeProvidersDone:         nodeProvidersDone,
+		RemoteProviderRouter:      remoteProviderRouter,
 		usageRetentionCancel:      urCancel,
 		usageRetentionDone:        urDone,
 	}, nil
@@ -670,6 +715,10 @@ func (s *ServiceContext) Close() error {
 	if s.alertEvaluatorCancel != nil {
 		s.alertEvaluatorCancel()
 		<-s.alertEvaluatorDone
+	}
+	if s.nodeProvidersCancel != nil {
+		s.nodeProvidersCancel()
+		<-s.nodeProvidersDone
 	}
 	if s.usageRetentionCancel != nil {
 		s.usageRetentionCancel()

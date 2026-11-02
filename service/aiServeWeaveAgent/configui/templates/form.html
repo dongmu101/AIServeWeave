@@ -197,6 +197,10 @@ button:hover { background: #1d4ed8; }
 <p class="hint"><span data-i18n="a0053">{{$.Text.Text "a0053"}}</span></p>
 </div>
 <div class="field wide">
+<label class="checkbox" for="remote_providers"><input type="checkbox" id="remote_providers" name="remote_providers" value="1" {{if .RemoteProviders}}checked{{end}}><span data-i18n="a0116">{{$.Text.Text "a0116"}}</span></label>
+<p class="hint"><span data-i18n="a0117">{{$.Text.Text "a0117"}}</span></p>
+</div>
+<div class="field wide">
 <label class="checkbox" for="auto_discover"><input type="checkbox" id="auto_discover" name="auto_discover" value="1" {{if .AutoDiscover}}checked{{end}}><span data-i18n="a0054">{{$.Text.Text "a0054"}}</span></label>
 </div>
 <div class="field wide">

@@ -45,6 +45,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 	"AIServeWeave/service/aiServeWeaveGateway/registryclient"
+	"AIServeWeave/service/aiServeWeaveGateway/remoteprovidersapi"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
 )
@@ -143,6 +144,8 @@ func run() error {
 		"vLLM inventory endpoint; set a container-reachable host address when needed, empty skips vLLM")
 	modelPullAddr := flag.String("model-pull-addr", "",
 		"address the model-pull trigger/status listener binds, e.g. 127.0.0.1:8092 (STATUS.md's P2 model distribution subtask 2); empty disables it. Unlike -admin-addr this listener accepts writes, so it has its own token: AISW_GATEWAY_MODEL_PULL_TOKEN")
+	remoteProvidersAddr := flag.String("remote-providers-addr", "",
+		"address the remote providers push/status listener binds, e.g. 127.0.0.1:8094; empty disables it. The control plane relays Console-provisioned hosted providers through it as ciphertext sealed to each node's key. Its own token: AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN")
 	comfyUIManagedAddr := flag.String("comfyui-managed-addr", "",
 		"address the ComfyUI Managed action/status listener binds, e.g. 127.0.0.1:8093 (STATUS.md's P2 ComfyUI Managed Docker deployment subtask 2); empty disables it. It is a separate write listener from -model-pull-addr with its own token: AISW_GATEWAY_COMFYUI_MANAGED_TOKEN")
 	artifactStorageKind := flag.String("artifact-storage", "",
@@ -606,6 +609,38 @@ func run() error {
 		logger.Info("model-pull listening", slog.String("model_pull_addr", modelPullListener.Addr().String()))
 	}
 
+	// The remote providers listener relays Console-provisioned hosted
+	// providers, sealed by the control plane to each node's certificate key,
+	// to connected nodes. It is a write listener with its own token, like
+	// -model-pull-addr, and it never sees an API key in the clear.
+	//
+	// 远程供应商监听器把控制面封装给各节点证书密钥的、经 Console 配置的托管供应商转发给
+	// 已连接节点。它与 -model-pull-addr 一样是带独立 token 的写监听器，从不接触明文 API Key。
+	var remoteProvidersServer *http.Server
+	if *remoteProvidersAddr == "" {
+		logger.Info("no -remote-providers-addr; this replica relays no remote providers")
+	} else {
+		remoteProvidersHandler, err := remoteprovidersapi.New(remoteprovidersapi.Config{
+			Token:  os.Getenv("AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN"),
+			Send:   server.SendRemoteProviders,
+			Status: server.RemoteProvidersStatus,
+		})
+		if err != nil {
+			return err
+		}
+		remoteProvidersListener, err := net.Listen("tcp", *remoteProvidersAddr)
+		if err != nil {
+			return err
+		}
+		remoteProvidersServer = &http.Server{Handler: remoteProvidersHandler}
+		go func() {
+			if err := remoteProvidersServer.Serve(remoteProvidersListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				logger.Error("remote providers listener stopped", slog.Any("error", err))
+			}
+		}()
+		logger.Info("remote providers listening", slog.String("remote_providers_addr", remoteProvidersListener.Addr().String()))
+	}
+
 	// The ComfyUI Managed listener is a third, separate operator port
 	// (STATUS.md's P2 ComfyUI Managed Docker deployment subtask 2): it also
 	// accepts writes — an action can stop or restart a connected node's
@@ -802,6 +837,9 @@ func run() error {
 	}
 	if modelPullServer != nil {
 		_ = modelPullServer.Close()
+	}
+	if remoteProvidersServer != nil {
+		_ = remoteProvidersServer.Close()
 	}
 	if comfyUIManagedServer != nil {
 		_ = comfyUIManagedServer.Close()

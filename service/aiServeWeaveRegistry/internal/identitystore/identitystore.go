@@ -568,6 +568,11 @@ type State struct {
 	Maintenance     bool
 	FirstSeenAt     time.Time
 	LastSeenAt      time.Time
+	// KeyFingerprint is Fingerprint of the key the node registered or last
+	// renewed with; empty before its first registration.
+	//
+	// KeyFingerprint 是节点注册或最近一次续期所用密钥的 Fingerprint；首次注册前为空。
+	KeyFingerprint string
 }
 
 // States returns every node_id the ledger has an opinion about, in no
@@ -584,6 +589,7 @@ func (s *Store) States() []State {
 			Maintenance:     r.Maintenance,
 			FirstSeenAt:     r.FirstSeenAt,
 			LastSeenAt:      r.LastSeenAt,
+			KeyFingerprint:  r.Fingerprint,
 		})
 	}
 	return states

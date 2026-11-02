@@ -542,6 +542,11 @@ const operator = {
   "install.notEnabled": "La instalación en una línea no está activada en esta plataforma; use el ZIP de abajo.",
   "install.checkRefused": "La plataforma ejecuta la versión {version}, que los scripts de instalación rechazan (compilación dev o dirty). Recompila el Gateway con una versión (consulta la guía de despliegue) y genera un comando nuevo.",
   "install.checkUnreachable": "Los nodos no pueden acceder a /agent/ en este sitio, así que el comando fallará. Comprueba que el proxy inverso reenvía /agent/ al Gateway y que la instalación en una línea está activada.",
-  "install.advanced": "Avanzado: descargar el ZIP de inscripción"
+  "install.advanced": "Avanzado: descargar el ZIP de inscripción",
+  "operator.nodeProviders": "Proveedores de API de los nodos",
+  "operator.nodeProvidersIntro": "Aprovisiona proveedores de API alojados y sus claves en los nodos de la plataforma. Los nodos propios de un inquilino (que empiezan por tnode.) los gestiona ese inquilino en su propia consola.",
+  "operator.nodeProvidersNodeId": "ID del nodo",
+  "operator.nodeProvidersLookup": "Consultar",
+  "operator.nodeProvidersTenantNode": "Los nodos propios de un inquilino que empiezan por tnode. solo puede gestionarlos ese inquilino."
 } as const;
 export default operator;

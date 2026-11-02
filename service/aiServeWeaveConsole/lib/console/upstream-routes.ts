@@ -112,6 +112,9 @@ const ROUTES: readonly UpstreamRoute[] = [
   // One-line install codes; written once, never retried. / 一行命令安装码；只写一次，不重试。
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("nodes"), literal("install-codes")], query: [] },
   { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("nodes"), param()], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("nodes"), param(), literal("providers")], query: [] },
+  { method: "PUT", segments: [literal("admin"), literal("v1"), literal("nodes"), param(), literal("providers"), param()], query: [] },
+  { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("nodes"), param(), literal("providers"), param()], query: [] },
   {
     method: "GET",
     segments: [
@@ -296,6 +299,9 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("comfyui-managed"), literal("custom-nodes")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("model-pulls")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("model-pulls")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("providers")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("providers"), param()], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("nodes"), { node: true }, literal("providers"), param()], query: [] },
 
   {
     method: "GET",

@@ -16,6 +16,7 @@ import (
 	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
+	"AIServeWeave/common/remoteprovider"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 )
@@ -93,6 +94,17 @@ type node struct {
 	// 替换，并按 Agent 发来的原样保存：数量与词表检查发生在渲染处
 	// （nodeview.CLIUsageFromAccounts），那是所有面向控制台的视图都要经过的唯一允许列表。
 	cliUsage []cliusagestatus.Account
+	// nodeKey is the DER SubjectPublicKeyInfo of the certificate on the most
+	// recent Control stream; remoteProviders is the node's last-reported
+	// remote provider outcome, hasRemoteProviders whether one arrived. See
+	// remoteproviders.go.
+	//
+	// nodeKey 是最近一条 Control 流所用证书的 DER SubjectPublicKeyInfo；remoteProviders
+	// 是该节点最后一次上报的远程供应商结果，hasRemoteProviders 表示是否收到过。见
+	// remoteproviders.go。
+	nodeKey            []byte
+	remoteProviders    remoteprovider.Report
+	hasRemoteProviders bool
 
 	lastHeartbeat time.Time
 	inflight      int

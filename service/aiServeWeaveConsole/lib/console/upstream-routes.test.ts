@@ -304,6 +304,9 @@ test("platform operations and audit are allowlisted only on their own surface", 
     ["POST", "/operator/v1/nodes/node-1/comfyui-managed/custom-nodes"],
     ["GET", "/operator/v1/nodes/node-1/model-pulls"],
     ["POST", "/operator/v1/nodes/node-1/model-pulls"],
+    ["GET", "/operator/v1/nodes/node-1/providers"],
+    ["PUT", "/operator/v1/nodes/node-1/providers/remote-openai"],
+    ["DELETE", "/operator/v1/nodes/node-1/providers/remote-openai"],
     ["GET", "/operator/v1/audit"],
     ["POST", "/operator/v1/auth/password"],
     ["POST", "/operator/v1/auth/sessions/revoke"],
@@ -528,4 +531,16 @@ test("operator billing routes resolve only on the operator surface with their ow
     assert.equal(operatorResolve(item.method, item.path, item.query)?.search ?? null, item.search, item.name);
     assert.equal(resolve(item.method, item.path, item.query ?? ""), null, `${item.name}: not on the tenant surface`);
   }
+});
+
+test("tenant node providers are allowlisted on the admin surface only", () => {
+  const operatorResolve = (method: string, path: string) => resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams());
+  const node = "/admin/v1/nodes/tnode.tnt_1.0123456789abcdef0123456789abcdef/providers";
+  for (const [method, path] of [["GET", node], ["PUT", `${node}/remote-openai`], ["DELETE", `${node}/remote-openai`]]) {
+    assert.equal(resolve(method, path)?.path, path);
+    assert.equal(operatorResolve(method, path), null);
+  }
+  assert.equal(resolve("POST", node), null);
+  assert.equal(resolve("PUT", node), null);
+  assert.equal(resolve("GET", `${node}/remote-openai/extra`), null);
 });

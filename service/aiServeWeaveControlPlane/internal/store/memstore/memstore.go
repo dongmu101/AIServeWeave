@@ -45,21 +45,25 @@ type Store struct {
 	modelAccess       map[string]model.ModelAccess
 	nodeAccess        map[string]model.NodeAccess
 	tenantNodes       map[string]model.TenantNode
-	installCodes      map[string]model.AgentInstallCode
-	users             map[string]model.User
-	platformOperators map[string]model.PlatformOperator
-	keys              map[string]model.APIKey
-	audit             []model.AuditLog
-	jobs              map[string]model.Job
-	artifacts         map[string]model.JobArtifact
-	responseTurns     map[string]model.ResponseTurn
-	metricsHistory    []model.MetricsHistoryPoint
-	requestLogs       map[string]model.RequestLog
-	usageRecords      map[string]model.UsageRecord
-	alertRules        map[string]model.AlertRule
-	alertInstances    map[string]model.AlertInstance
-	apiDocs           map[string]model.APIDoc
-	billing           billingState
+	// nodeProviders and nodeProviderVersions back store.NodeProviders.
+	// nodeProviders 与 nodeProviderVersions 支撑 store.NodeProviders。
+	nodeProviders        map[nodeProviderKey]model.NodeProvider
+	nodeProviderVersions map[string]model.NodeProviderVersion
+	installCodes         map[string]model.AgentInstallCode
+	users                map[string]model.User
+	platformOperators    map[string]model.PlatformOperator
+	keys                 map[string]model.APIKey
+	audit                []model.AuditLog
+	jobs                 map[string]model.Job
+	artifacts            map[string]model.JobArtifact
+	responseTurns        map[string]model.ResponseTurn
+	metricsHistory       []model.MetricsHistoryPoint
+	requestLogs          map[string]model.RequestLog
+	usageRecords         map[string]model.UsageRecord
+	alertRules           map[string]model.AlertRule
+	alertInstances       map[string]model.AlertInstance
+	apiDocs              map[string]model.APIDoc
+	billing              billingState
 }
 
 // New returns an empty store.
@@ -67,23 +71,25 @@ type Store struct {
 // New 返回一个空的 store。
 func New() *Store {
 	return &Store{
-		tenants:           map[string]model.Tenant{},
-		modelAccess:       map[string]model.ModelAccess{},
-		nodeAccess:        map[string]model.NodeAccess{},
-		tenantNodes:       map[string]model.TenantNode{},
-		installCodes:      map[string]model.AgentInstallCode{},
-		users:             map[string]model.User{},
-		platformOperators: map[string]model.PlatformOperator{},
-		keys:              map[string]model.APIKey{},
-		jobs:              map[string]model.Job{},
-		artifacts:         map[string]model.JobArtifact{},
-		responseTurns:     map[string]model.ResponseTurn{},
-		requestLogs:       map[string]model.RequestLog{},
-		usageRecords:      map[string]model.UsageRecord{},
-		alertRules:        map[string]model.AlertRule{},
-		alertInstances:    map[string]model.AlertInstance{},
-		apiDocs:           map[string]model.APIDoc{},
-		billing:           newBillingState(),
+		tenants:              map[string]model.Tenant{},
+		modelAccess:          map[string]model.ModelAccess{},
+		nodeAccess:           map[string]model.NodeAccess{},
+		tenantNodes:          map[string]model.TenantNode{},
+		nodeProviders:        map[nodeProviderKey]model.NodeProvider{},
+		nodeProviderVersions: map[string]model.NodeProviderVersion{},
+		installCodes:         map[string]model.AgentInstallCode{},
+		users:                map[string]model.User{},
+		platformOperators:    map[string]model.PlatformOperator{},
+		keys:                 map[string]model.APIKey{},
+		jobs:                 map[string]model.Job{},
+		artifacts:            map[string]model.JobArtifact{},
+		responseTurns:        map[string]model.ResponseTurn{},
+		requestLogs:          map[string]model.RequestLog{},
+		usageRecords:         map[string]model.UsageRecord{},
+		alertRules:           map[string]model.AlertRule{},
+		alertInstances:       map[string]model.AlertInstance{},
+		apiDocs:              map[string]model.APIDoc{},
+		billing:              newBillingState(),
 	}
 }
 

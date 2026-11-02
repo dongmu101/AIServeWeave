@@ -193,6 +193,14 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{Method: http.MethodPost, Path: "/admin/v1/nodes", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes", requireSession(ctx, createTenantNode(ctx)))},
 			{Method: http.MethodDelete, Path: "/admin/v1/nodes/:node_id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes/:node_id", requireSession(ctx, revokeTenantNode(ctx)))},
 		})
+		if ctx.RemoteProviderRouter != nil {
+			const path = "/admin/v1/nodes/:node_id/providers"
+			server.AddRoutes([]rest.Route{
+				{Method: http.MethodGet, Path: path, Handler: instrumented(ctx.MetricsRegistry, path, requireSession(ctx, listNodeProviders(ctx, "node_id")))},
+				{Method: http.MethodPut, Path: path + "/:runtime_id", Handler: instrumented(ctx.MetricsRegistry, path+"/:runtime_id", requireSession(ctx, putNodeProvider(ctx, "node_id")))},
+				{Method: http.MethodDelete, Path: path + "/:runtime_id", Handler: instrumented(ctx.MetricsRegistry, path+"/:runtime_id", requireSession(ctx, deleteNodeProvider(ctx, "node_id")))},
+			})
+		}
 		if ctx.Config.AgentInstall.Issuing(ctx.Config.Registry) {
 			server.AddRoutes([]rest.Route{
 				{Method: http.MethodPost, Path: "/admin/v1/nodes/install-codes", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/nodes/install-codes", requireSession(ctx, createTenantInstall(ctx)))},
@@ -589,6 +597,19 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	// Fleet、RegistryClient 都分开挂载：它够到的是第三个、带着自己 token 的
 	// Gateway 监听器（-model-pull-addr），既不需要只读清单，也不需要
 	// Registry 的身份账本。
+	// Remote provider provisioning reaches its own Gateway listener
+	// (-remote-providers-addr); operators manage platform nodes only.
+	//
+	// 远程供应商下发够到它自己的 Gateway 监听器（-remote-providers-addr）；运维只管理平台节点。
+	if ctx.RemoteProviderRouter != nil {
+		const path = "/operator/v1/nodes/:id/providers"
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodGet, Path: path, Handler: instrumented(ctx.MetricsRegistry, path, requirePlatformSession(ctx, listNodeProviders(ctx, "id")))},
+			{Method: http.MethodPut, Path: path + "/:runtime_id", Handler: instrumented(ctx.MetricsRegistry, path+"/:runtime_id", requirePlatformSession(ctx, putNodeProvider(ctx, "id")))},
+			{Method: http.MethodDelete, Path: path + "/:runtime_id", Handler: instrumented(ctx.MetricsRegistry, path+"/:runtime_id", requirePlatformSession(ctx, deleteNodeProvider(ctx, "id")))},
+		})
+	}
+
 	if ctx.ModelPullRouter != nil {
 		server.AddRoutes([]rest.Route{
 			{

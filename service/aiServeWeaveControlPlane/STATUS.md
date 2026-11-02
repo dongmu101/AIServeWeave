@@ -381,6 +381,35 @@ ComfyUIManaged:
 
 **实现在 `internal/comfyuimanagedrouter`，与 `internal/modelpullrouter` 形状对称但不共用代码。** 两者要解决的问题相同（一个具体 `node_id` 归哪个副本管），但线上请求/响应格式不同——一个是封闭的 `Action` 字符串，另一个是名字列表；一个报告容器实例，另一个报告命名拉取——这层差异让共用代码的收益小于维护一层泛化抽象的代价，因此按仓库一贯的"重复优于早熟抽象"选择独立实现。
 
+## 托管供应商远程下发
+
+商户与平台运维在 Console 为节点填写托管接口（`openai`、`deepseek`、`openai_compatible`、`anthropic` 等）与 Key，本服务加密保存并经 Gateway 下发到 Agent（2026-11-02，代码已交付，默认测试通过，未经真实环境验收）。安全模型见 [托管供应商说明「控制面远程下发」](../../common/runtime/hosted/README.md#控制面远程下发)。
+
+```yaml
+RemoteProviders:
+  Gateways: ["http://gateway-1:8094", "http://gateway-2:8094"]   # 各副本的 -remote-providers-addr
+  GatewayToken: "${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN}"         # 与各 Gateway 的同名变量一致，至少 32 字符
+  MasterKeyFile: /etc/aiserveweave/provider-master.key          # 32 字节，十六进制或 base64
+  Timeout: 3s
+  ReconcileInterval: 1m
+```
+
+任一字段出现即视为开启，此时 `Gateways`、`MasterKeyFile`、`GatewayToken` 与 `Registry` 配置都必须齐全，否则拒绝启动；未配置时下列路由都不挂载。主密钥用 AES-256-GCM 静态加密 Key，AAD 绑定 node_id 与运行时 ID，密文挪到别的行就解不开；**主密钥丢失后已保存的 Key 全部不可读，本期不提供轮换**。
+
+| 端点 | 守卫与范围 |
+| --- | --- |
+| `GET /admin/v1/nodes/:node_id/providers` | 租户会话（owner/admin/member），只限本商户未删除的 `tnode.` 节点；挂在 `TenantNodes` 开启时 |
+| `PUT`/`DELETE /admin/v1/nodes/:node_id/providers/:runtime_id` | 同上，仅 owner/admin |
+| `GET`/`PUT`/`DELETE /operator/v1/nodes/:id/providers[/:runtime_id]` | `requirePlatformSession`，只限非 `tnode.` 的平台节点 |
+
+- **请求与响应。** `PUT` 体为 `{kind, base_url, api_key?, models}`。`api_key` 只写不读：省略表示保留原值，但 `kind` 或 `base_url` 变化时必须重填（防止把旧 Key 发往新端点）。列表返回 `{version, connected, report?, items:[{id, kind, base_url, models, key_last4, updated_by, updated_at, state}]}`，`key_last4` 对短于 12 字符的 Key 为空；写入返回 `{item?, version, delivered}`。校验复用 `common/remoteprovider.ValidateProvider`（`remote-` 前缀、托管种类、https 公网端点）；每节点最多 32 个，超出答 409。
+- **整份、带版本。** 表 `node_providers`（主键 node_id + runtime_id）保存配置与密文，`node_provider_versions` 为每节点保存单调递增版本；每次写入在同一事务内加锁递增版本。写入成功后同步尝试下发，`delivered=false` 只表示节点当前不在线或下发失败，由对账补齐。
+- **封装给谁。** `internal/remoteproviderrouter` 并发询问各副本，取得该节点连接所用证书的公钥（Gateway 从 mTLS 对端取得）；本服务只采用指纹与 Registry `ListNodeStates.key_fingerprint` 一致的那一把，节点被禁用或待审批时不下发。随后整份打包、HPKE 封装并推送到所有报告已连接的副本，Agent 对重复的同一版本不做处理。
+- **对账。** 每 `ReconcileInterval` 遍历有版本的节点：节点回报的 `applied_version` 已追上，或在当前版本上回报 `disabled`（节点未同意）时跳过，其余重发。证书续期后的 `open_failed` 也由这一步用新公钥重发。
+- **审计。** 写入与删除分别记 `node.provider.update`、`node.provider.delete`，`Detail` 只有 `kind=` 与端点主机名，从不包含 Key、完整 URL 或模型列表；平台写入记在 `model.PlatformScope` 下。
+
+迁移为 `0014_node_providers.sql`，PostgreSQL 与 MySQL 两套都有（MySQL 的 `models_json` 用 `MEDIUMTEXT`）；尚未在真实数据库上执行。
+
 ## 平台运维身份（P01）
 
 平台运维与租户用户是两张分开的表（`platform_operators`，不是 `TenantID` 留空的 `users`）与两条分开的登录入口：

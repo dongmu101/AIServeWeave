@@ -50,6 +50,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 	if err := sess.reportCLIUsage(true); err != nil {
 		return c.streamError("initial cli usage report", err)
 	}
+	if err := sess.reportRemoteProviders(true); err != nil {
+		return c.streamError("initial remote providers report", err)
+	}
 
 	heartbeat := newRearmingTimer(c.clock, c.cfg.HeartbeatInterval)
 	defer heartbeat.stop()
@@ -93,6 +96,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.reportCLIUsage(false); err != nil {
 				return c.streamError("cli usage report", err)
 			}
+			if err := sess.reportRemoteProviders(false); err != nil {
+				return c.streamError("remote providers report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -129,6 +135,10 @@ type controlSession struct {
 	reportedAgentUpgrade []byte
 	// reportedCLIUsage is reportedModelPull's counterpart for CLIUsageReport.
 	reportedCLIUsage []byte
+	// reportedRemoteProviders is reportedModelPull's counterpart for
+	// RemoteProvidersReport.
+	// reportedRemoteProviders 是 reportedModelPull 在 RemoteProvidersReport 上的对应物。
+	reportedRemoteProviders []byte
 }
 
 // handle dispatches one frame from the replica.
@@ -186,6 +196,18 @@ func (s *controlSession) handle(ctx context.Context, frame *tunnelv1.GatewayCont
 		// the next report (forced here) is how the Gateway observes an
 		// unknown target version being rejected or a CHECK's result.
 		return s.forceReportAgentUpgrade()
+
+	case *tunnelv1.GatewayControl_RemoteProviders:
+		if c.cfg.RemoteProviders == nil {
+			return nil
+		}
+		c.cfg.RemoteProviders.Apply(tunnelwire.RemoteProvidersFromProto(body.RemoteProviders))
+		// Decryption and the reload run off this goroutine; the forced report
+		// carries whatever the store has so far, and the status poll sends the
+		// outcome once it changes.
+		// 解密与重新加载不在本协程执行；这里强制发送的回报携带存储当前的状态，结果变化后
+		// 由状态轮询发送。
+		return s.reportRemoteProviders(true)
 
 	case *tunnelv1.GatewayControl_Roster:
 		if c.cfg.OnRoster != nil {
@@ -513,6 +535,36 @@ func (s *controlSession) reportCLIUsage(force bool) error {
 	if len(accounts) > 0 {
 		s.client.cliUsageReported.Store(true)
 	}
+	return nil
+}
+
+// reportRemoteProviders sends a RemoteProvidersReport when the store's report
+// has changed since the last one sent (or force is true).
+//
+// reportRemoteProviders 在存储的回报自上次发送后发生变化（或 force 为 true）时发送一次
+// RemoteProvidersReport。
+func (s *controlSession) reportRemoteProviders(force bool) error {
+	store := s.client.cfg.RemoteProviders
+	if store == nil {
+		return nil
+	}
+	report := tunnelwire.RemoteProvidersReportToProto(store.Snapshot())
+	key, err := proto.MarshalOptions{Deterministic: true}.Marshal(report)
+	if err != nil {
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorProtocol,
+			Operation: clientOperation,
+			Message:   "cannot encode a remote providers report",
+			Cause:     err,
+		}
+	}
+	if !force && bytes.Equal(key, s.reportedRemoteProviders) {
+		return nil
+	}
+	if err := s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_RemoteProviders{RemoteProviders: report}}, "remote providers report"); err != nil {
+		return err
+	}
+	s.reportedRemoteProviders = key
 	return nil
 }
 

@@ -28,6 +28,7 @@ function navigationItems(t: Translator) { return [
   { href: "/operator/api-docs", label: t("tenant.apiDocumentation") },
   { href: "/operator/comfyui-managed", label: "ComfyUI Managed" },
   { href: "/operator/model-pulls", label: t("operator.modelPulls") },
+  { href: "/operator/node-providers", label: t("operator.nodeProviders") },
   { href: "/operator/audit", label: t("operator.operationsAudit") },
   { href: "/operator/requests", label: t("tenant.requestSearch") },
   { href: "/operator/metrics", label: t("operator.metrics") },

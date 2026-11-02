@@ -21,6 +21,7 @@ import (
 	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
+	"AIServeWeave/common/remoteprovider"
 	"AIServeWeave/common/runtime"
 )
 
@@ -90,6 +91,23 @@ type CLIUsageSource interface {
 	//
 	// Snapshot 返回每个已声明 CLI 的缓存、不含凭据的额度。
 	Snapshot() []cliusagestatus.Account
+}
+
+// RemoteProvidersStore is implemented by *remoteproviders.Store. It is
+// declared here as an interface for the reason ModelPuller is: tests can fake
+// it without a node key or a file on disk.
+//
+// RemoteProvidersStore 由 *remoteproviders.Store 实现。这里声明成接口，理由与
+// ModelPuller 相同：测试可以用假实现替换，不需要节点密钥或磁盘文件。
+type RemoteProvidersStore interface {
+	// Apply queues a sealed bundle for decryption; it never blocks.
+	//
+	// Apply 把一份已封装的打包排入解密队列；它从不阻塞。
+	Apply(version uint64, sealed []byte)
+	// Snapshot returns the store's current report.
+	//
+	// Snapshot 返回存储当前的回报。
+	Snapshot() remoteprovider.Report
 }
 
 // AgentUpgrader is implemented by *agentupgrade.Checker (STATUS.md's P2
@@ -330,6 +348,16 @@ type ClientConfig struct {
 	// 上报给每个副本，好让控制台把它显示在对应服务旁。nil 是一个合法取值——与
 	// ModelPuller 同一种"可选钩子"形状——意味着从不发送 CLIUsageReport。
 	CLIUsage CLIUsageSource
+	// RemoteProviders receives the sealed hosted provider bundles the control
+	// plane provisions and supplies the report sent back. Nil — the node did
+	// not opt in with remote_providers — means a RemoteProviders frame is
+	// ignored and no report is ever sent, so the control plane sees the node
+	// as not accepting remote providers.
+	//
+	// RemoteProviders 接收控制面下发的已封装托管供应商打包，并提供回传的回报。nil——
+	// 节点没有用 remote_providers 选择接受——表示忽略 RemoteProviders 帧、从不发送
+	// 回报，控制面因此把该节点视为不接受远程下发。
+	RemoteProviders RemoteProvidersStore
 
 	// HeartbeatInterval is the application-level heartbeat period (15s) and
 	// HeartbeatFailureThreshold the number of unanswered heartbeats that

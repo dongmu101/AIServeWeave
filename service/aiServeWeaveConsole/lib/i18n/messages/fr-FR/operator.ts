@@ -545,6 +545,11 @@ const operator = {
   "install.notEnabled": "L’installation en une ligne n’est pas activée sur cette plateforme ; utilisez le ZIP ci-dessous.",
   "install.checkRefused": "La plateforme exécute la version {version}, que les scripts d'installation refusent (build dev ou dirty). Reconstruisez le Gateway avec une version (voir le guide de déploiement) et générez une nouvelle commande.",
   "install.checkUnreachable": "Les nœuds ne peuvent pas joindre /agent/ sur ce site, la commande échouera. Vérifiez que le proxy inverse transmet /agent/ au Gateway et que l'installation en une ligne est activée.",
-  "install.advanced": "Avancé : télécharger le ZIP d’inscription"
+  "install.advanced": "Avancé : télécharger le ZIP d’inscription",
+  "operator.nodeProviders": "Fournisseurs d'API des nœuds",
+  "operator.nodeProvidersIntro": "Provisionnez des fournisseurs d'API hébergés et leurs clés sur les nœuds de la plateforme. Les nœuds appartenant à un locataire (commençant par tnode.) sont gérés par ce locataire dans sa propre console.",
+  "operator.nodeProvidersNodeId": "ID du nœud",
+  "operator.nodeProvidersLookup": "Rechercher",
+  "operator.nodeProvidersTenantNode": "Les nœuds de locataire commençant par tnode. ne peuvent être gérés que par leur locataire."
 } as const;
 export default operator;

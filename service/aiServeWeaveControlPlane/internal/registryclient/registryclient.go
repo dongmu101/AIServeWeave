@@ -236,6 +236,12 @@ type NodeState struct {
 	Maintenance     bool
 	FirstSeenAt     time.Time
 	LastSeenAt      time.Time
+	// KeyFingerprint is the hex SHA-256 of the node's current key
+	// (remoteprovider.Fingerprint); empty before its first registration.
+	//
+	// KeyFingerprint 是节点当前密钥的十六进制 SHA-256（remoteprovider.Fingerprint）；首次
+	// 注册前为空。
+	KeyFingerprint string
 }
 
 // ListNodeStates calls TokenAdmin.ListNodeStates.
@@ -257,6 +263,7 @@ func (c *Client) ListNodeStates(ctx context.Context) ([]NodeState, error) {
 			Maintenance:     st.GetMaintenance(),
 			FirstSeenAt:     st.GetFirstSeenAt().AsTime(),
 			LastSeenAt:      st.GetLastSeenAt().AsTime(),
+			KeyFingerprint:  st.GetKeyFingerprint(),
 		})
 	}
 	return states, nil

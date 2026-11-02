@@ -55,6 +55,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/browserlang"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 )
@@ -210,6 +211,7 @@ type formValues struct {
 	// KeyedRuntimes 列出已保存 Key 文件的托管运行时 id。页面只显示已保存，从不显示 Key。
 	KeyedRuntimes        []string
 	AutoDiscover         bool
+	RemoteProviders      bool
 	AutoDiscoverInterval string
 	MetricsAddr          string
 	LogLevel             string
@@ -340,6 +342,13 @@ func formValuesFromConfig(cfg *agentconfig.Config) formValues {
 	if cfg.Gateway.MaxGateways > 0 {
 		v.MaxGateways = strconv.Itoa(cfg.Gateway.MaxGateways)
 	}
+	if cfg.Gateway.RemoteProviders != nil {
+		v.RemoteProviders = *cfg.Gateway.RemoteProviders
+	} else {
+		// Unset follows the Agent's default: on for a tenant-owned node.
+		// 未设置时沿用 Agent 的默认值：商户自有节点开启。
+		_, v.RemoteProviders = nodeaccess.OwnerOf(cfg.Gateway.NodeID)
+	}
 	if cfg.AutoDiscover != nil {
 		v.AutoDiscover = *cfg.AutoDiscover
 	}
@@ -390,6 +399,7 @@ func formValuesFromRequest(r *http.Request) formValues {
 		MaxGateways:          r.FormValue("max_gateways"),
 		Runtimes:             r.FormValue("runtimes"),
 		AutoDiscover:         r.FormValue("auto_discover") != "",
+		RemoteProviders:      r.FormValue("remote_providers") != "",
 		AutoDiscoverInterval: r.FormValue("auto_discover_interval"),
 		MetricsAddr:          r.FormValue("metrics_addr"),
 		LogLevel:             r.FormValue("log_level"),
@@ -403,6 +413,7 @@ func formValuesFromRequest(r *http.Request) formValues {
 // configuration.
 func (v formValues) toConfig() *agentconfig.Config {
 	autoDiscover := v.AutoDiscover
+	remoteProviders := v.RemoteProviders
 	metricsAddr := strings.TrimSpace(v.MetricsAddr)
 	maxGateways, _ := strconv.Atoi(strings.TrimSpace(v.MaxGateways))
 
@@ -418,6 +429,7 @@ func (v formValues) toConfig() *agentconfig.Config {
 			AllowedRuntimes:    splitList(v.AllowedRuntimes, ","),
 			Labels:             parseLabels(v.Labels),
 			MaxGateways:        maxGateways,
+			RemoteProviders:    &remoteProviders,
 		},
 		Runtimes:             parseRuntimes(v.Runtimes),
 		AutoDiscover:         &autoDiscover,

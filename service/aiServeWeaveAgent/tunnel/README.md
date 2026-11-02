@@ -360,6 +360,8 @@ enum ReplicaState {
 
 `RuntimeConfig` 下发的是 `runtime.Config` 的镜像，但**不含 `APIKey` 明文**，只含 `api_key_ref`；Agent 本地解析 Secret。收到配置后 Agent 调用 `Manager.Add`/`Replace`/`Remove`，成功与否通过下一帧 `RuntimeStatus` 反映，不单独设计确认帧。
 
+**托管供应商远程下发（`GatewayControl.remote_providers` / `AgentControl.remote_providers`）是「凭据不进隧道」的唯一例外，且只以密文形式。** `RemoteProviders{version, sealed}` 是控制面用 HPKE 封装给本节点证书公钥的整份托管运行时列表（`common/remoteprovider`），Gateway 只转发、读不到也改不了。Agent 交给 `RemoteProvidersStore.Apply`（不阻塞 Control 流；未配置 store 时忽略该帧），随即强制发送一帧当前的 `RemoteProvidersReport{applied_version, attempted_version, outcome, runtimes, updated_unix_ms}`；解密与重新加载在 store 自己的协程里完成，结果由连接建立时与每次状态轮询在报告变化时发送（与 `cli_usage` 同一套确定性编码比较）。报告只有版本、封闭枚举与运行时 ID，不带端点、Key 或错误原文。接受条件与本地规则见 [托管供应商说明「控制面远程下发」](../../../common/runtime/hosted/README.md#控制面远程下发)。
+
 ## 连接生命周期
 
 ### 注册与身份
@@ -636,6 +638,7 @@ tunnel:
 - 帧大小、请求体大小、deadline 全部有本地上限，超限返回 `ErrorResponseTooLarge` 而不是尝试处理。
 - 日志只记录 `node_id`、`slot_id`、`request_id`、`runtime_id`、`operation`、错误码和延迟；不记录 payload。
 - Agent 不提供任何远程执行、文件读写或端口转发能力；协议里没有这类 Operation，也不留扩展位。
+- 凭据只有一种方式经过隧道：`RemoteProviders` 的 HPKE 密文，封装给节点证书公钥，且须 Agent 本地开启 `remote_providers`；其余帧不携带凭据。
 
 ## 可观测性
 

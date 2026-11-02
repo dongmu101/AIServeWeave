@@ -48,15 +48,34 @@ type runtimeReloader struct {
 	usageStarted func()
 	allowed      []string
 	logger       *slog.Logger
+	// remote supplies the runtimes the control plane provisioned
+	// (remoteproviders.Store); nil when the tunnel is off.
+	// remote 提供控制面下发的运行时（remoteproviders.Store）；隧道关闭时为 nil。
+	remote remoteRuntimes
 
 	mu      sync.Mutex
 	current []runtime.Config
+	// localDeclared is the last local declaration list applied, which a
+	// remote-only reload reuses instead of re-reading the file.
+	// localDeclared 是最近一次应用的本地声明列表；仅由远程触发的重新加载复用它，而不是
+	// 重新读取文件。
+	localDeclared []runtime.Config
 }
 
-// runtimeChanges summarises one reload, by runtime ID.
-// runtimeChanges 按运行时 ID 汇总一次重新加载。
+// remoteRuntimes is the reloader's view of remoteproviders.Store.
+// remoteRuntimes 是重新加载器眼中的 remoteproviders.Store。
+type remoteRuntimes interface {
+	Runtimes() []runtime.Config
+	Observe(failed, conflicts []string)
+}
+
+// runtimeChanges summarises one reload, by runtime ID. Conflicts lists the
+// provisioned runtimes left out because a local declaration has the same ID.
+//
+// runtimeChanges 按运行时 ID 汇总一次重新加载。Conflicts 列出因本地声明使用了相同 ID
+// 而被略过的下发运行时。
 type runtimeChanges struct {
-	Added, Replaced, Removed, Failed []string
+	Added, Replaced, Removed, Failed, Conflicts []string
 }
 
 // Reload applies the file's current runtimes. A file that fails to load, or a
@@ -75,13 +94,59 @@ func (r *runtimeReloader) Reload(ctx context.Context) (runtimeChanges, error) {
 	if err != nil {
 		return runtimeChanges{}, err
 	}
-	next := append(runtimesFromConfig(cfg.Runtimes), r.extra...)
-	if err := validateDeclared(next); err != nil {
+	local := append(runtimesFromConfig(cfg.Runtimes), r.extra...)
+	if err := validateDeclared(local); err != nil {
 		return runtimeChanges{}, err
 	}
-
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.applyLocked(ctx, local)
+}
+
+// ReloadRemote applies the provisioned runtimes again over the last local
+// declarations, without re-reading the file: a push must not pick up a
+// half-edited config file.
+//
+// ReloadRemote 在最近一次的本地声明之上重新应用下发的运行时，不重新读取文件：一次推送
+// 不应读到编辑到一半的配置文件。
+func (r *runtimeReloader) ReloadRemote(ctx context.Context) (runtimeChanges, error) {
+	if r == nil || r.remote == nil {
+		return runtimeChanges{}, errNoReloadSource
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.applyLocked(ctx, r.localDeclared)
+}
+
+// applyLocked reconciles the manager with local plus the provisioned
+// runtimes. A provisioned runtime whose ID a local declaration already uses
+// is left out as a conflict, and one whose configuration is invalid fails on
+// its own. r.mu must be held.
+//
+// applyLocked 按本地声明加下发的运行时调和管理器。ID 已被本地声明占用的下发运行时作为冲突
+// 略过，配置非法的下发运行时单独失败。调用方必须持有 r.mu。
+func (r *runtimeReloader) applyLocked(ctx context.Context, local []runtime.Config) (runtimeChanges, error) {
+	r.localDeclared = local
+	next := slices.Clone(local)
+	var conflicts, invalid []string
+	if r.remote != nil {
+		taken := make(map[string]bool, len(local))
+		for _, rc := range local {
+			taken[rc.ID] = true
+		}
+		for _, rc := range r.remote.Runtimes() {
+			switch {
+			case taken[rc.ID]:
+				conflicts = append(conflicts, rc.ID)
+			case rc.Normalize().Validate() != nil:
+				invalid = append(invalid, rc.ID)
+			default:
+				taken[rc.ID] = true
+				next = append(next, rc)
+			}
+		}
+	}
+
 	previous := make(map[string]runtime.Config, len(r.current))
 	for _, rc := range r.current {
 		previous[rc.ID] = rc
@@ -96,7 +161,7 @@ func (r *runtimeReloader) Reload(ctx context.Context) (runtimeChanges, error) {
 	// 工厂必须先接受新 ID 才能添加；下面最终的集合会再次去掉失败的那些。
 	r.local.set(append(slices.Clone(r.current), next...))
 
-	var changes runtimeChanges
+	changes := runtimeChanges{Failed: invalid, Conflicts: conflicts}
 	var problems []error
 	var applied []runtime.Config
 	for _, rc := range r.current {
@@ -145,6 +210,9 @@ func (r *runtimeReloader) Reload(ctx context.Context) (runtimeChanges, error) {
 		r.usageStarted()
 	}
 	r.logChanges(changes, applied)
+	if r.remote != nil {
+		r.remote.Observe(changes.Failed, changes.Conflicts)
+	}
 	return changes, errors.Join(problems...)
 }
 
@@ -175,7 +243,7 @@ func validateDeclared(declared []runtime.Config) error {
 func (r *runtimeReloader) logChanges(changes runtimeChanges, applied []runtime.Config) {
 	r.logger.Info("runtimes reloaded / 运行时已重新加载",
 		slog.Any("added", changes.Added), slog.Any("replaced", changes.Replaced),
-		slog.Any("removed", changes.Removed), slog.Any("failed", changes.Failed))
+		slog.Any("removed", changes.Removed), slog.Any("failed", changes.Failed), slog.Any("conflicts", changes.Conflicts))
 	if len(r.allowed) == 0 {
 		return
 	}

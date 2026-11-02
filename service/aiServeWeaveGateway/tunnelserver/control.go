@@ -11,6 +11,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/nodeid"
 	"AIServeWeave/common/tunnelwire"
 )
 
@@ -64,6 +65,10 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 		return status.Error(codes.Unavailable, err.Error())
 	}
 	session := &controlSession{stream: stream}
+	// The newest stream's certificate key is the one a remote provider
+	// bundle must be sealed to; a renewal reconnects with a new key.
+	// 最新一条流所用证书的密钥，就是远程供应商密文要发往的密钥；续期后会以新密钥重连。
+	nodeKey, _ := nodeid.PublicKeyFromPeer(ctx)
 
 	n.mu.Lock()
 	n.controls[session] = struct{}{}
@@ -71,6 +76,9 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	n.resources = hello.GetResources()
 	n.runtimeIDs = append([]string(nil), hello.GetRuntimeIds()...)
 	n.labels = maps.Clone(hello.GetLabels())
+	if len(nodeKey) > 0 {
+		n.nodeKey = nodeKey
+	}
 	// A reconnecting Agent is not draining any more: Draining describes the
 	// stream it was announced on, and that stream is gone. Maintenance is the
 	// opposite: it is a Registry-level fact about the node_id, not the
@@ -228,6 +236,9 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 
 		case *tunnelv1.AgentControl_ModelPull:
 			n.applyModelPullReport(tunnelwire.ModelPullReportFromProto(body.ModelPull))
+
+		case *tunnelv1.AgentControl_RemoteProviders:
+			n.applyRemoteProvidersReport(tunnelwire.RemoteProvidersReportFromProto(body.RemoteProviders))
 
 		case *tunnelv1.AgentControl_CliUsage:
 			n.applyCLIUsageReport(tunnelwire.CLIUsageReportFromProto(body.CliUsage))

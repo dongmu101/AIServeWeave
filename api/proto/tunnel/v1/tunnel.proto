@@ -8,9 +8,13 @@
 // model. Agent and Gateway share this one file and its generated code.
 //
 // Two rules are load-bearing and must survive any future edit:
-//   - No message here carries a credential. RuntimeSpec references an API key
-//     by name (api_key_ref) and never by value; RuntimeSnapshot mirrors
-//     runtime.Snapshot, which is credential-free by construction.
+//   - No message here carries a credential in the clear. RuntimeSpec
+//     references an API key by name (api_key_ref) and never by value;
+//     RuntimeSnapshot mirrors runtime.Snapshot, which is credential-free by
+//     construction. The one exception is RemoteProviders, whose payload the
+//     control plane seals with HPKE to the node's own certificate key
+//     (common/remoteprovider): a Gateway relays the ciphertext but can
+//     neither read the keys inside nor change the endpoints they go to.
 //   - No message here can express "fetch this URL" or "run this command". The
 //     Agent is not a general-purpose proxy, and the protocol deliberately
 //     leaves no extension point that would make it one.
@@ -259,6 +263,11 @@ message NodeState {
   bool maintenance = 4;
   google.protobuf.Timestamp first_seen_at = 5;
   google.protobuf.Timestamp last_seen_at = 6;
+  // key_fingerprint is the hex SHA-256 of the DER SubjectPublicKeyInfo of the
+  // key this node registered or last renewed with, empty before it ever
+  // registered. The control plane checks a node public key reported through
+  // a Gateway against it before sealing anything to that key.
+  string key_fingerprint = 7;
 }
 
 // -----------------------------------------------------------------------
@@ -424,6 +433,7 @@ message AgentControl {
     ComfyUIManagedReport comfyui_managed = 7; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
     AgentUpgradeReport agent_upgrade = 8; // STATUS.md P2 Agent auto-upgrade subtask 1
     CLIUsageReport cli_usage = 9;       // credential-free CLI subscription quota snapshot
+    RemoteProvidersReport remote_providers = 10; // outcome of the last RemoteProviders bundle
   }
 }
 
@@ -440,6 +450,7 @@ message GatewayControl {
     ComfyUIManagedAction comfyui_managed_action = 9; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 2
     ComfyUIManagedCustomNodeInstallTrigger comfyui_managed_custom_node_install = 10; // STATUS.md P2 ComfyUI Managed Docker deployment subtask 4
     AgentUpgradeAction agent_upgrade_action = 11; // STATUS.md P2 Agent auto-upgrade subtask 1
+    RemoteProviders remote_providers = 12; // Console-provisioned hosted providers, sealed to the node key
   }
 }
 
@@ -1281,6 +1292,67 @@ message RerankResponse {
 message RerankResult {
   int64 index = 1;
   double score = 2;
+}
+
+// RemoteProviders is the whole set of hosted provider runtimes the control
+// plane provisions on this node, at one version. sealed is an HPKE ciphertext
+// (common/remoteprovider.Seal) addressed to the public key of the node's
+// current certificate and bound to node_id and version, so the Agent alone
+// can open it and a relaying Gateway can neither read the API keys inside
+// nor alter the endpoints. It declares hosted inference runtimes only — the
+// Agent refuses non-hosted kinds, non-https endpoints and non-public hosts —
+// and so still cannot express "fetch this URL" or "run this command". The
+// Agent accepts it only when its local config enables remote_providers, and
+// only for a version above the one it applied last.
+//
+// RemoteProviders 是控制面在本节点上配置的全部托管供应商运行时，处于同一个版本。
+// sealed 是 HPKE 密文（common/remoteprovider.Seal），发给节点当前证书的公钥，并绑定
+// node_id 与 version，因此只有该 Agent 能打开，转发它的 Gateway 既读不到其中的 API
+// Key，也改不了端点。它只声明托管推理运行时——Agent 拒绝非托管种类、非 https 端点与
+// 非公网主机——因此仍然无法表达"fetch this URL"或"run this command"。Agent 只在本地
+// 配置开启 remote_providers 时接受它，且只接受高于上次已应用的版本。
+message RemoteProviders {
+  uint64 version = 1;
+  bytes sealed = 2;
+}
+
+// RemoteProvidersReport is the Agent's outcome for the last RemoteProviders
+// bundle it received, plus the version it is running. It never carries an
+// endpoint, key or raw error text.
+//
+// RemoteProvidersReport 是 Agent 对最近一次收到的 RemoteProviders 的处理结果，以及
+// 它正在运行的版本。它从不携带端点、Key 或原始错误文本。
+message RemoteProvidersReport {
+  uint64 applied_version = 1;   // version now running; 0 before any bundle
+  uint64 attempted_version = 2; // version of the last bundle received
+  RemoteProvidersOutcome outcome = 3;
+  repeated RemoteRuntimeResult runtimes = 4;
+  int64 updated_unix_ms = 5;
+}
+
+enum RemoteProvidersOutcome {
+  REMOTE_PROVIDERS_OUTCOME_UNSPECIFIED = 0;  // nothing received yet
+  REMOTE_PROVIDERS_OUTCOME_APPLIED = 1;
+  REMOTE_PROVIDERS_OUTCOME_DISABLED = 2;     // local config does not enable remote_providers
+  REMOTE_PROVIDERS_OUTCOME_OPEN_FAILED = 3;  // not sealed to this node's current key, or tampered with
+  REMOTE_PROVIDERS_OUTCOME_INVALID = 4;      // opened but failed validation
+  REMOTE_PROVIDERS_OUTCOME_STALE = 5;        // version not above the applied one
+  REMOTE_PROVIDERS_OUTCOME_STORE_FAILED = 6; // could not be persisted locally
+}
+
+// RemoteRuntimeResult is one provisioned runtime's state on the Agent.
+//
+// RemoteRuntimeResult 是一个下发的运行时在 Agent 上的状态。
+message RemoteRuntimeResult {
+  string id = 1;
+  RemoteRuntimeState state = 2;
+}
+
+enum RemoteRuntimeState {
+  REMOTE_RUNTIME_STATE_UNSPECIFIED = 0;
+  REMOTE_RUNTIME_STATE_ACTIVE = 1;   // registered with the runtime manager
+  REMOTE_RUNTIME_STATE_CONFLICT = 2; // id already declared locally; the local one wins
+  REMOTE_RUNTIME_STATE_FAILED = 3;   // the runtime manager refused it
 }
 
 // ImageGenerateRequest is the OPERATION_IMAGE_GENERATE request payload. It

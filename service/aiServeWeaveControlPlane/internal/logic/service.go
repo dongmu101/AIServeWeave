@@ -232,6 +232,7 @@ type Service struct {
 	comfyUIManagedRouter ComfyUIManagedRouter
 	billing              *BillingConfig
 	tenantNodes          *TenantNodeConfig
+	nodeProviders        *NodeProviderConfig
 	agentInstall         *AgentInstallConfig
 }
 

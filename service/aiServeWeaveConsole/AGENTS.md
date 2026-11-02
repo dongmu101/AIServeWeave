@@ -122,4 +122,6 @@ Agent 一行命令安装：运维 `/operator/agent-enrollment` 与商户 `/conso
 
 商户自有节点位于租户页面 `/console/nodes`，走 `/api/admin/*`（`GET/POST /admin/v1/nodes`、`DELETE /admin/v1/nodes/:node_id`），不发起平台请求。生成接入包与删除都是写操作，只发送一次、不自动重试：重发一次生成会再铸出一枚绑定令牌。契约镜像在 `lib/console/tenant-nodes.ts`，接入包解析与运维接入共用 `parseBundleFor`，只是 node_id 正则不同。
 
+节点托管供应商：商户节点卡片与运维 `/operator/node-providers` 共用 `components/console/node-providers-panel.tsx`，按 `surface` 分别走 `/admin/v1/nodes/:node_id/providers[/:runtime_id]` 与 `/operator/v1/nodes/:id/providers[/:runtime_id]`。API Key 只写不读：表单提交后立即清空，不放进 URL、日志或错误提示，展示只用响应里的 `key_last4`；省略 `api_key` 表示保留原值。写入不自动重试。契约镜像在 `lib/console/node-providers.ts`，ID 与端点规则须与 `common/remoteprovider` 同步测试；运维页拒绝 `tnode.` 节点。
+
 路由管理（P02）位于 `/operator/routes`，草稿只在页面保留。平台发布/回滚须携带 expected_revision，不自动重试；读请求须防止过期响应覆盖新的草稿或生效状态。仅匹配路由验证/发布的请求体允许 1 MiB + 64 KiB，不能全局放宽普通管理端点。后端公共校验源是 `common/modelroute`，前端镜像需同步测试。

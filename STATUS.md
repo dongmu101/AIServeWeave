@@ -51,6 +51,7 @@
 - **界面**：`/operator/metrics` 未做带真实会话与数据的交互验收（P08）；P01 的真实集群传播与全站 Q03 验收未完成。
 - **升级兼容**：没有真实的混合版本滚动升级排练，CI 也没有 `buf breaking` 门禁（A03）。
 - **长稳**：24h 长稳由维护者在自有服务器上进行，不在仓库归档，见 [P10 验收手册](deploy/p10-acceptance.md)。
+- **托管供应商远程下发**：Console 填写接口与 Key 下发到 Agent 只有默认测试；缺真实 Key 调用、证书续期后重新封装、离线节点上线补齐、`0014` 真实数据库迁移与 Console 浏览器检查，见下方「托管供应商远程下发」。
 - **Agent 一行命令安装**：安装脚本、Gateway `/agent/*`、控制面兑换码与 Console 面板只有默认测试；缺真实三系统主机、Windows PowerShell 5.1、Nginx 转发与 `0013` 真实数据库迁移的验证，见上方「Agent 一行命令安装」。
 - **后端适配**：TensorRT-LLM、TokenSpeed 未接真实后端；Gemini CLI 未用有效 Key 执行付费生图。
 - **能力门禁关闭**：音频转录/翻译、rerank、音频输入、文档输入的协议已打通，但目前没有适配器发布对应能力，这类请求一律被本地拒绝，接入真实后端后才能打开。
@@ -157,6 +158,12 @@
 - [Registry STATUS](service/aiServeWeaveRegistry/STATUS.md)：身份冲突、token 存储、单实例与认证边界。
 - [Agent STATUS](service/aiServeWeaveAgent/STATUS.md)：本地后端、模型拉取、Managed ComfyUI 与自动升级。
 - [Console STATUS](service/aiServeWeaveConsole/STATUS.md)：C 系列子任务与 Q03 验收。
+
+### 托管供应商远程下发（2026-11-02）
+
+商户可以给自有节点、平台运维可以给平台节点在 Console 填写托管 AI 接口与 Key，由控制面加密保存，以封装给节点证书公钥的 HPKE 密文经 Gateway 下发到 Agent。这是「凭据不进入隧道」红线的唯一例外，见 [AGENTS.md](AGENTS.md) 与 [托管供应商说明](common/runtime/hosted/README.md#控制面远程下发)。代码均已交付：`common/remoteprovider`、proto `RemoteProviders`/`RemoteProvidersReport` 与 Registry 指纹、Agent `remoteproviders`（[Agent STATUS](service/aiServeWeaveAgent/STATUS.md#托管模型供应商接入)）、Gateway `-remote-providers-addr`（[Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#托管供应商远程下发转发)）、控制面接口、迁移 `0014` 与对账（[ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#托管供应商远程下发)）、Console 面板（[Console STATUS](service/aiServeWeaveConsole/STATUS.md#节点托管供应商面板2026-11-02)）。启用步骤见 [部署说明](deploy/README.md#启用托管供应商远程下发)，设计记录在 [.scratch/remote-hosted-providers](.scratch/remote-hosted-providers/spec.md)。
+
+**未验证**：真实 Key 端到端调用；证书续期后的重新封装；离线节点上线后的对账补齐；`0014` 在真实 PostgreSQL/MySQL 上执行；Console 浏览器渲染与八种语言译文审校。**未做**：主密钥轮换；Agent 设置页只读展示远程运行时与本地忽略单个远程 ID。
 
 ### Agent 一行命令安装（2026-11-01）
 

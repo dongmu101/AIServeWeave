@@ -389,6 +389,18 @@ const (
 	//
 	// ActionTenantNodeRevoke 记录商户删除一台自有节点，即在 Registry 停用该身份。
 	ActionTenantNodeRevoke = "node.tenant.revoke"
+	// ActionNodeProviderUpdate records creating or changing a provisioned
+	// hosted provider on a node. The detail names the kind and endpoint
+	// host only, never the key.
+	//
+	// ActionNodeProviderUpdate 记录在节点上新建或修改一个下发的托管供应商。详情只记种类与
+	// 端点主机名，从不记 Key。
+	ActionNodeProviderUpdate = "node.provider.update"
+	// ActionNodeProviderDelete records removing a provisioned hosted
+	// provider from a node.
+	//
+	// ActionNodeProviderDelete 记录从节点上移除一个下发的托管供应商。
+	ActionNodeProviderDelete = "node.provider.delete"
 	// ActionInstallCodeCreate records issuing an Agent install credential
 	// (a one-time code or a directly minted token) for a node. Neither the
 	// code nor the token is ever recorded.
@@ -568,3 +580,48 @@ type AgentInstallCode struct {
 //
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (AgentInstallCode) TableName() string { return "agent_install_codes" }
+
+// NodeProvider is one hosted provider runtime provisioned on a node. Scope is
+// the owning tenant for a tenant-owned node and PlatformScope otherwise. The
+// key is stored only as KeyCiphertext, AES-256-GCM under the control plane's
+// master key with the node and runtime ids as associated data; KeyLast4 is
+// what listings show.
+//
+// NodeProvider 是下发到某个节点的一个托管供应商运行时。商户自有节点的 Scope 是所属商户，
+// 其他节点为 PlatformScope。Key 只以 KeyCiphertext 保存：在控制面主密钥下做 AES-256-GCM
+// 加密，节点与运行时 id 作为附加数据；列表显示的是 KeyLast4。
+type NodeProvider struct {
+	NodeID        string    `gorm:"primaryKey;size:128"`
+	RuntimeID     string    `gorm:"primaryKey;size:64"`
+	Scope         string    `gorm:"size:32;not null"`
+	Kind          string    `gorm:"size:32;not null"`
+	BaseURL       string    `gorm:"size:2048;not null"`
+	ModelsJSON    string    `gorm:"type:text;not null"`
+	KeyCiphertext string    `gorm:"type:text;not null"`
+	KeyLast4      string    `gorm:"size:8;not null"`
+	UpdatedBy     string    `gorm:"size:32;not null"`
+	CreatedAt     time.Time `gorm:"not null"`
+	UpdatedAt     time.Time `gorm:"not null"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (NodeProvider) TableName() string { return "node_providers" }
+
+// NodeProviderVersion is a node's provisioned list version. Every change to
+// the node's providers increments it; it is never reset, so an Agent can
+// refuse a replayed older bundle.
+//
+// NodeProviderVersion 是节点下发列表的版本。节点供应商的每次变化都使它加一；它从不重置，
+// 因此 Agent 能拒绝重放的旧打包。
+type NodeProviderVersion struct {
+	NodeID    string    `gorm:"primaryKey;size:128"`
+	Version   uint64    `gorm:"not null"`
+	UpdatedAt time.Time `gorm:"not null"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (NodeProviderVersion) TableName() string { return "node_provider_versions" }

@@ -542,6 +542,11 @@ const operator = {
   "install.notEnabled": "このプラットフォームではワンライン・インストールが有効ではありません。下の登録 ZIP を使用してください。",
   "install.checkRefused": "プラットフォームのバージョンは {version} で、インストールスクリプトは拒否します（dev または dirty ビルド）。バージョンを指定して Gateway を再ビルドし（デプロイ手順を参照）、新しいコマンドを生成してください。",
   "install.checkUnreachable": "ノードがこのサイトの /agent/ に到達できないため、コマンドは失敗します。リバースプロキシが /agent/ を Gateway に転送しているか、ワンライン インストールが有効かを確認してください。",
-  "install.advanced": "詳細：登録 ZIP をダウンロード"
+  "install.advanced": "詳細：登録 ZIP をダウンロード",
+  "operator.nodeProviders": "ノードの API プロバイダー",
+  "operator.nodeProvidersIntro": "プラットフォームノードにホスト型 API プロバイダーとキーを配信します。テナント所有ノード（tnode. で始まる）はテナント自身のコンソールで管理します。",
+  "operator.nodeProvidersNodeId": "ノード ID",
+  "operator.nodeProvidersLookup": "照会",
+  "operator.nodeProvidersTenantNode": "tnode. で始まるテナント所有ノードはテナント自身しか管理できません。"
 } as const;
 export default operator;

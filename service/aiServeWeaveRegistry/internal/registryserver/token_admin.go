@@ -207,6 +207,7 @@ func (s *Server) ListNodeStates(ctx context.Context, _ *tunnelv1.ListNodeStatesR
 			Maintenance:     st.Maintenance,
 			FirstSeenAt:     timestamppb.New(st.FirstSeenAt),
 			LastSeenAt:      timestamppb.New(st.LastSeenAt),
+			KeyFingerprint:  st.KeyFingerprint,
 		})
 	}
 	return resp, nil

@@ -53,15 +53,26 @@ runtimes:
 
 ### Key 只留在 Agent 本机
 
-Key 在 Agent 启动和运行时重新加载时读取：设置了 `api_key_file` 时读该私有文件（Agent 本地设置页面填写 Key 时写入配置目录的 `keys/<id>.key`，0600），否则读 `api_key_env` 指定的环境变量。Key 不写进配置文件，也不过隧道。文件读不到或环境变量没有设置时 Key 为空：供应商会以 `unauthorized` 拒绝，Agent 本身照常启动。`api_key_file`、`api_key_env` 与 `models` 只对托管种类生效，写在其他种类上会被忽略。
+Key 在 Agent 启动和运行时重新加载时读取：设置了 `api_key_file` 时读该私有文件（Agent 本地设置页面填写 Key 时写入配置目录的 `keys/<id>.key`，0600），否则读 `api_key_env` 指定的环境变量。Key 不写进配置文件，本地声明的 Key 也不过隧道（控制面远程下发的 Key 只以密文过隧道，见下文）。文件读不到或环境变量没有设置时 Key 为空：供应商会以 `unauthorized` 拒绝，Agent 本身照常启动。`api_key_file`、`api_key_env` 与 `models` 只对托管种类生效，写在其他种类上会被忽略。
 
 建议给这些变量起 Agent 专用的名字（例如 `AISW_OPENAI_KEY`），不要直接用 `OPENAI_API_KEY`：本机 CLI 中的 OpenCode 与 Pi 会透传所有 `*_API_KEY` 变量，用通用名字会让它们也拿到这把 Key。
 
 `models` 可以写成空格或逗号分隔的字符串，也可以写成 YAML 列表；重复项会被去掉。
 
-这些 ID 只能在本地声明，Gateway 下发的配置不能新建它们。
+这些 ID 只能在本地声明，Gateway 下发的配置（`GatewayControl.config`）不能新建它们。唯一的例外是下一节的控制面远程下发，它走另一条消息，且只能新建 `remote-` 前缀的 ID。
 
 Gateway 下发同一个 ID 时，`base_url` 必须与本地声明指向同一地址（协议与主机名不区分大小写，忽略默认端口与末尾斜杠），否则拒绝创建。端点、Key、Headers、TLS 与模型目录始终取本地值，所以即使 Gateway 被攻破，也无法把本机 Key 发到其他地址；下发的配置只能调整超时、并发与能力覆盖。
+
+## 控制面远程下发
+
+商户（自有节点 `tnode.`）与平台运维（平台节点）可以在 Console 填写接口与 Key，由控制面下发到 Agent，不必登录节点机器（2026-11-02）。这是「Key 只留在本机、不过隧道」的唯一例外，放宽范围如下：
+
+- **Key 不以明文过隧道。** 控制面把该节点全部远程运行时整份打包（`common/remoteprovider.Bundle`），用 HPKE（DHKEM(P-256, HKDF-SHA256) + HKDF-SHA256 + AES-256-GCM）封装给节点证书公钥；`info` 绑定 node_id 与版本号。公钥由 Gateway 从 mTLS 对端证书取得，控制面只在它的指纹与 Registry 记录一致时才封装，因此 Gateway 报告的公钥不可伪造，Gateway 也读不到、改不了内容。
+- **需要节点本地同意。** Agent 配置 `gateway.remote_providers: true`（或 `-remote-providers`）才接受；未设置时商户自有节点默认开启、平台节点默认关闭。关闭时 Agent 删除已保存的打包，并对每次推送回报 `disabled`。
+- **与本地声明隔离。** 远程 ID 必须以 `remote-` 开头；与本地声明同 ID 时本地胜出，远程项回报 `conflict`。远程运行时同样受 `allowed_runtimes` 约束。端点必须是 https，且不能是回环、私网或链路本地地址字面量（解析到私网的主机名无法在这里拦截）。
+- **整份、带版本。** 每次变更都发送整份列表，版本单调递增：同版本（多个副本各转发一份）不重复应用，更低版本回报 `stale`，空列表移除全部远程运行时。证书续期换了密钥后旧密文打不开，Agent 回报 `open_failed`，控制面对账时用新公钥重发。
+
+Agent 把解开的打包保存为节点密钥目录下的 `remote-providers.json`（0600），重启后直接加载；解密时每次现读节点私钥。控制面侧接口、存储与配置见 [ControlPlane STATUS「托管供应商远程下发」](../../../service/aiServeWeaveControlPlane/STATUS.md#托管供应商远程下发)。
 
 ## 模型目录
 

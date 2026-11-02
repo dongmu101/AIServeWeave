@@ -110,6 +110,15 @@ type Config struct {
 	// 够到的是第四个、带着自己 token 的独立 Gateway 监听器。
 	ComfyUIManaged ComfyUIManagedConf `json:",optional"`
 
+	// RemoteProviders configures provisioning hosted provider runtimes, with
+	// their keys, onto nodes: the Gateway listeners that relay sealed
+	// bundles and the master key that encrypts keys at rest. It is optional
+	// and independent of the other forwarding blocks.
+	//
+	// RemoteProviders 配置向节点下发托管供应商运行时及其 Key：转发已封装打包的 Gateway
+	// 监听器，以及静态加密 Key 的主密钥。它是可选的，且与其他转发配置相互独立。
+	RemoteProviders RemoteProvidersConf `json:",optional"`
+
 	// Registry configures this service's client to the Registry's TokenAdmin
 	// service (STATUS.md's P01): node approval, disable/enable and
 	// maintenance. Like Fleet, it is optional — a deployment with no
@@ -611,6 +620,48 @@ func (m ModelPullConf) Enabled() bool {
 	return len(m.Gateways) > 0 || m.GatewayToken != ""
 }
 
+// RemoteProvidersConf configures provisioning hosted providers onto nodes.
+// Provisioning also needs the Registry block, whose key fingerprints decide
+// which certificate key a bundle is sealed to.
+//
+// RemoteProvidersConf 配置向节点下发托管供应商。下发还需要 Registry 配置：由它记录的密钥
+// 指纹决定打包封装给哪个证书公钥。
+type RemoteProvidersConf struct {
+	// Gateways are the base URLs of each Gateway replica's
+	// -remote-providers-addr listener, e.g. http://gateway-1:8094.
+	//
+	// Gateways 是各 Gateway 副本 -remote-providers-addr 监听器的基础 URL，例如
+	// http://gateway-1:8094。
+	Gateways []string `json:",optional"`
+	// GatewayToken must match each Gateway's
+	// AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN.
+	//
+	// GatewayToken 必须与各 Gateway 的 AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN 一致。
+	GatewayToken string `json:",optional"`
+	// MasterKeyFile holds the 32-byte key, as hex or base64, that encrypts
+	// provider keys at rest. Losing it makes every saved key unreadable.
+	//
+	// MasterKeyFile 保存静态加密供应商 Key 的 32 字节密钥（十六进制或 base64）。丢失后所有
+	// 已保存的 Key 都无法读取。
+	MasterKeyFile string `json:",optional"`
+	// Timeout bounds one call to one replica.
+	// Timeout 限制对单个副本的单次调用。
+	Timeout time.Duration `json:",default=3s"`
+	// ReconcileInterval is how often nodes that have not applied their
+	// current version are sent it again.
+	//
+	// ReconcileInterval 是向尚未应用当前版本的节点重发的间隔。
+	ReconcileInterval time.Duration `json:",default=1m"`
+}
+
+// Enabled reports whether any part of provisioning is configured; Validate
+// then requires all of it.
+//
+// Enabled 报告下发是否配置了任何部分；之后由 Validate 要求全部配齐。
+func (r RemoteProvidersConf) Enabled() bool {
+	return len(r.Gateways) > 0 || r.GatewayToken != "" || r.MasterKeyFile != ""
+}
+
 // ComfyUIManagedConf configures forwarding STATUS.md's P2 ComfyUI Managed
 // Docker deployment subtask two's per-node lifecycle action trigger and
 // status calls.
@@ -898,6 +949,17 @@ func (c Config) Validate() error {
 		}
 		if len(c.ComfyUIManaged.GatewayToken) < minSecretLen {
 			return errors.New("config: ComfyUIManaged.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+	}
+	if c.RemoteProviders.Enabled() {
+		if len(c.RemoteProviders.Gateways) == 0 || c.RemoteProviders.MasterKeyFile == "" {
+			return errors.New("config: RemoteProviders.Gateways and RemoteProviders.MasterKeyFile are both required once remote providers are configured")
+		}
+		if len(c.RemoteProviders.GatewayToken) < minSecretLen {
+			return errors.New("config: RemoteProviders.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")
+		}
+		if !c.Registry.Enabled() {
+			return errors.New("config: RemoteProviders needs the Registry block to verify node keys")
 		}
 	}
 	if c.Registry.Enabled() {

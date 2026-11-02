@@ -542,6 +542,11 @@ const operator = {
   "install.notEnabled": "此平台未开启一行命令安装，请使用下方的接入包 ZIP。",
   "install.checkRefused": "平台版本为 {version}，安装脚本会拒绝它（开发版或带 dirty）。请带版本重新构建 Gateway（见部署说明），再生成新命令。",
   "install.checkUnreachable": "节点访问不到本站的 /agent/ 入口，命令会失败。请检查反向代理是否把 /agent/ 转给了 Gateway，以及是否已开启一行命令安装。",
-  "install.advanced": "高级：下载接入包 ZIP"
+  "install.advanced": "高级：下载接入包 ZIP",
+  "operator.nodeProviders": "节点接口与 Key",
+  "operator.nodeProvidersIntro": "为平台节点下发托管 API 接口和 Key。商户自有节点（tnode. 开头）由商户在自己的控制台管理。",
+  "operator.nodeProvidersNodeId": "节点 ID",
+  "operator.nodeProvidersLookup": "查询",
+  "operator.nodeProvidersTenantNode": "tnode. 开头的商户自有节点只能由商户自己管理。"
 } as const;
 export default operator;

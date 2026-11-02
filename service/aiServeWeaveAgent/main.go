@@ -155,6 +155,7 @@ func main() {
 	}
 
 	explicit := explicitFlagNames()
+	opts.remoteProvidersSet = explicit["remote-providers"]
 	resolvedConfigPath := resolveConfigPath(*configPath, explicit["config"], defaultConfigPath)
 	uiConfigPath := *configPath
 	if !explicit["config"] {
@@ -417,6 +418,16 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 			slog.String("base_url", fmt.Sprintf("http://127.0.0.1:%d", spec.Port)))
 	}
 
+	remote := &remoteProviderSource{reload: func(ctx context.Context) error {
+		_, err := reloader.Load().ReloadRemote(ctx)
+		if errors.Is(err, errNoReloadSource) {
+			return err
+		}
+		if err != nil {
+			logger.Warn("some remote providers were not applied / 部分远程供应商未应用", slog.Any("error", err))
+		}
+		return nil
+	}}
 	reloader.Store(&runtimeReloader{
 		path: reload.path, extra: reload.extra, local: local, manager: manager, usage: cliUsage,
 		usageStarted: func() {
@@ -425,6 +436,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 			}
 		},
 		allowed: opts.runtimeIDs(), logger: logger, current: slices.Clone(declaredRuntimes),
+		remote: remote, localDeclared: slices.Clone(declaredRuntimes),
 	})
 	hangup := make(chan os.Signal, 1)
 	signal.Notify(hangup, syscall.SIGHUP)
@@ -457,7 +469,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 
-	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker, cliUsage)
+	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker, cliUsage, remote)
 	if err != nil {
 		return err
 	}

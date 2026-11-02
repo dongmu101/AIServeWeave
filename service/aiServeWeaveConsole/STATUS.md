@@ -428,6 +428,10 @@ GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重�
 
 本地验证与尚需真实远程接入验收的范围见 [验证记录](../../docs/acceptance/agent-enrollment-2026-10-30/README.md)。
 
+## 节点托管供应商面板（2026-11-02）
+
+商户 `/console/nodes` 的每台未删除节点卡片里新增可折叠的「托管 AI 接口」面板，平台运维新增 `/operator/node-providers`（输入平台节点 node_id，拒绝 `tnode.`）。两者共用 `components/console/node-providers-panel.tsx`，分别走 `/admin/v1/nodes/:node_id/providers[/:runtime_id]` 与 `/operator/v1/nodes/:id/providers[/:runtime_id]`（白名单各三行）。Key 输入框只写不读，只展示后端返回的末 4 位；面板显示版本、节点是否在线、Agent 回报结果与逐项状态。写入只发一次、不自动重试。契约镜像与本地预检在 `lib/console/node-providers.ts`（镜像 `common/remoteprovider` 的 ID 与端点规则）。lint、构建、TS7/TS6 类型检查与单元测试通过；未做浏览器视觉检查与八语言译文审校。
+
 ## Agent 一行命令安装面板（2026-11-01）
 
 运维「Agent 接入」与商户「节点管理」新增共用的「添加节点」面板（`components/console/agent-install-panel.tsx`）：选择系统（Ubuntu、macOS、Windows）、凭据方式（兑换码、交互输入、令牌直写）、下载来源（平台、GitHub）与有效期，调用控制面 `POST /operator/v1/agent-install-codes` 或 `POST /admin/v1/nodes/install-codes`，生成一行命令与复制按钮。原 ZIP 接入包收进「高级」折叠区。

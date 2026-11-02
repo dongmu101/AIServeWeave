@@ -10,6 +10,7 @@ import { EmptyState, ErrorState, FormError, LoadingState } from "@/components/co
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { useResource } from "@/components/console/use-resource";
 import { AgentInstallPanel } from "@/components/console/agent-install-panel";
+import { NodeProvidersPanel } from "@/components/console/node-providers-panel";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -137,6 +138,10 @@ function NodeCard({ node, canManage, onDeleted }: { node: TenantNode; canManage:
     {!revoked && node.lastHeartbeat === null ? <p className="text-muted-foreground"><Message id="tenant.nodeEnrollBy" values={{ time: formatDateTime(node.enrollBy, undefined, locale) }} /></p> : null}
     {node.lastHeartbeat ? <p className="text-muted-foreground"><Message id="tenant.nodeLastHeartbeat" values={{ time: formatDateTime(node.lastHeartbeat, undefined, locale) }} /></p> : null}
     {node.agentVersion ? <p className="text-muted-foreground"><Message id="tenant.nodeAgentVersion" values={{ version: node.agentVersion }} /></p> : null}
+    {!revoked ? <details className="rounded-lg border p-3">
+      <summary className="cursor-pointer font-semibold"><Message id="tenant.providers" /></summary>
+      <div className="mt-3"><NodeProvidersPanel surface="admin" nodeId={node.nodeId} canManage={canManage} /></div>
+    </details> : null}
     {canManage && !revoked ? <Button variant="destructive" size="sm" className="w-fit" disabled={pending} onClick={remove}><Message id="tenant.deleteNode" /></Button> : null}
     {error ? <FormError message={<ErrorMessage error={error} />} /> : null}
   </CardContent></Card>;

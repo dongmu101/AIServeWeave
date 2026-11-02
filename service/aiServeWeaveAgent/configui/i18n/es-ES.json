@@ -115,6 +115,8 @@
   "a0113": "Borrar la clave guardada",
   "a0114": "No se pudo guardar la clave API. Comprueba la clave y los permisos del directorio de configuración.",
   "a0115": "Guardada; déjalo vacío para conservarla",
+  "a0116": "Permitir que la Console aprovisione proveedores de API alojados y sus claves",
+  "a0117": "Los paquetes se cifran para el certificado de este nodo y solo esta máquina puede abrirlos. Sus ID de runtime empiezan por remote- y nunca sustituyen las declaraciones locales. Se aplica tras reiniciar el Agent; al desactivarlo se eliminan los runtimes aprovisionados y su copia guardada. Si no se configura, está activado en los nodos propios de un inquilino.",
   "u.title": "Cuota de la cuenta CLI",
   "u.note": "Cuota de suscripción compartida de las CLI declaradas localmente, independiente de los límites del inquilino y los tokens por solicitud. Se consulta como máximo una vez por minuto. El porcentaje restante se calcula del uso informado y no es una cantidad de tokens.",
   "u.pending": "Esperando consulta",

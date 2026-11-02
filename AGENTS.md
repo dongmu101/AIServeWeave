@@ -61,7 +61,7 @@
 以下属于安全要求：
 
 - API Key、自定义鉴权头、完整 Prompt、工作流 JSON 不得写入日志或错误文本；错误脱敏统一走 `runtime.Redact`。允许列表视图只输出契约明确声明的字段，不直接序列化内部 `NodeInfo`、`Descriptor` 或配置对象。
-- runtime 与隧道 proto 的转换集中在 `common/tunnelwire`；凭据不进入隧道。推理后端的 Authorization 由 Agent 本地配置提供。
+- runtime 与隧道 proto 的转换集中在 `common/tunnelwire`；凭据不以明文进入隧道。推理后端的 Authorization 由 Agent 本地配置提供。唯一例外是控制面远程下发的托管供应商（`GatewayControl.remote_providers`）：端点、Key 与模型目录整份经 `common/remoteprovider` 用 HPKE 封装给目标节点证书公钥（公钥须与 Registry 记录的指纹一致），Gateway 只转发密文；Agent 须本地开启 `remote_providers` 才接受，运行时 ID 固定带 `remote-` 前缀、不能覆盖本地声明。见 [托管供应商说明](common/runtime/hosted/README.md#控制面远程下发)。
 - Agent 主动出站建立隧道，不监听公网端口；本地设置页面只允许回环地址。
 - `runtime_id` 必须通过 Agent 本地运行时允许列表检查；保留已有的空列表语义。模型下载来源、自定义节点、升级清单等分别遵守其本地授权与签名规则，不类推其他允许列表的空值含义。
 - Agent 不提供通用 HTTP 或命令代理；隧道只携带运行时语义与封闭控制动作。下载来源、执行目标、镜像与路径按各功能的本地声明及受信清单校验，不由远端任意指定。

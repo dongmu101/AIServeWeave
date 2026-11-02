@@ -545,6 +545,11 @@ const operator = {
   "install.notEnabled": "Auf dieser Plattform ist die Ein-Zeilen-Installation nicht aktiviert; verwenden Sie das ZIP unten.",
   "install.checkRefused": "Die Plattform läuft mit Version {version}, die die Installationsskripte ablehnen (Dev- oder Dirty-Build). Baue das Gateway mit einer Version neu (siehe Deployment-Anleitung) und erzeuge einen neuen Befehl.",
   "install.checkUnreachable": "Knoten erreichen /agent/ auf dieser Seite nicht, der Befehl schlägt fehl. Prüfe, ob der Reverse-Proxy /agent/ an das Gateway weiterleitet und die Ein-Zeilen-Installation aktiviert ist.",
-  "install.advanced": "Erweitert: Registrierungs-ZIP herunterladen"
+  "install.advanced": "Erweitert: Registrierungs-ZIP herunterladen",
+  "operator.nodeProviders": "API-Anbieter der Knoten",
+  "operator.nodeProvidersIntro": "Gehostete API-Anbieter und Keys auf Plattformknoten bereitstellen. Mandanteneigene Knoten (beginnend mit tnode.) verwaltet der Mandant in seiner eigenen Console.",
+  "operator.nodeProvidersNodeId": "Knoten-ID",
+  "operator.nodeProvidersLookup": "Abfragen",
+  "operator.nodeProvidersTenantNode": "Mandanteneigene Knoten, die mit tnode. beginnen, kann nur ihr Mandant verwalten."
 } as const;
 export default operator;

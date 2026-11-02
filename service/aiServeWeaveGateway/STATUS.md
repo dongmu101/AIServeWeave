@@ -123,6 +123,18 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 - **自定义节点安装已交付（子任务四）**：`-comfyui-managed-addr` 新增 `POST .../comfyui-managed/custom-nodes`，安装源（仓库 URL + 固定 ref）100% 留在 Agent 本地 `-comfyui-managed-custom-nodes` 允许列表，本端点只传一个名字，理由与生命周期动作不携带镜像名同一条 `tunnel.proto` 红线；`GET` 响应同时携带该实例上报的已安装节点清单。`-admin-addr` 新增只读诊断 `GET /internal/v1/comfyui-managed/reconcile?node_id=&template_id=`，把工作流模板声明的自定义节点依赖与该节点实际安装的对账，纯读取、不写审计、不接入调度决策——`common/comfyuimanagedstatus.ReconcileCustomNodes` 的调用方之一，设计文档见 [`docs/superpowers/specs/2026-09-19-p2-comfyui-managed-docker-subtask4-design.md`](../../docs/superpowers/specs/2026-09-19-p2-comfyui-managed-docker-subtask4-design.md)。
 - **范围边界**：单实例，见上文「动作不携带容器名」。Console 可见性（设计文档拆分出的最后一项子任务五）已交付，见 Console 运维端的 `app/operator/(protected)/comfyui-managed` 页面。
 
+## 托管供应商远程下发转发
+
+`-remote-providers-addr` 打开第四个独立的写入口，供控制面把 Console 配置的托管供应商下发到已连接节点；不给地址就不启用，没有 `AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN` 时拒绝启动（2026-11-02，默认测试通过，未经真实环境验收）。
+
+| 端点 | 内容 |
+| --- | --- |
+| `POST /internal/v1/nodes/{node_id}/remote-providers` | body `{version, sealed}`（`sealed` 为 base64 密文），写入该节点在本副本上的 Control 流，答 202 只表示已下发；未连接答 404 |
+| `GET /internal/v1/nodes/{node_id}/remote-providers` | 本副本上该节点连接所用证书的公钥（SPKI，tunnelserver 在每条 Control 流建立时从 mTLS 对端证书取得）（`node_key`）与 Agent 最近一次 `RemoteProvidersReport`（`report`）；未连接答 404 |
+
+- **只转发密文。** 密文由控制面用 HPKE 封装给节点证书公钥，本副本读不到其中的 Key，也改不了端点；公钥由控制面对照 Registry 指纹核验，本副本无法以伪造公钥骗取明文。
+- 与 `-model-pull-addr`、`-comfyui-managed-addr` 同一纪律：独立 token、不转发到其他副本、错误不带原文。跨副本路由在控制面的 `internal/remoteproviderrouter`，见 [ControlPlane STATUS「托管供应商远程下发」](../aiServeWeaveControlPlane/STATUS.md#托管供应商远程下发)。
+
 ## API Key 鉴权
 
 鉴权有三种模式，按真实部署应当采用的优先级排列（实现在 `httpapi/auth.go`）：

@@ -115,6 +115,8 @@
   "a0113": "Clear the saved Key",
   "a0114": "The API Key could not be saved. Check the Key and the config directory permissions.",
   "a0115": "Saved; leave blank to keep it",
+  "a0116": "Allow the Console to provision hosted API providers and keys",
+  "a0117": "Bundles are encrypted to this node's certificate and only this machine can open them. Their runtime IDs start with remote- and never override local declarations. Takes effect after an Agent restart; turning it off removes the provisioned runtimes and their saved copy. When unset, it is on for tenant-owned nodes.",
   "u.title": "CLI account quota",
   "u.note": "Shared subscription quota for locally declared CLIs, separate from tenant limits and per-request tokens. Queries run at most once a minute. Remaining percentage is derived from reported usage, not a token allowance.",
   "u.pending": "Waiting for query",

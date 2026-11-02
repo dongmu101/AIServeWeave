@@ -367,6 +367,39 @@ type TenantNodes interface {
 	DeleteTenantNode(ctx context.Context, nodeID string) error
 }
 
+// NodeProviders persists the hosted providers provisioned on nodes and each
+// node's list version.
+//
+// NodeProviders 持久化下发到各节点的托管供应商，以及每个节点的列表版本。
+type NodeProviders interface {
+	// ListNodeProviders reads nodeID's providers ordered by runtime id.
+	//
+	// ListNodeProviders 读取 nodeID 的供应商，按运行时 id 排序。
+	ListNodeProviders(ctx context.Context, nodeID string) ([]model.NodeProvider, error)
+	// PutNodeProvider inserts or replaces row and increments its node's
+	// version in one transaction, returning the new version. CreatedAt is
+	// kept from an existing row.
+	//
+	// PutNodeProvider 在一个事务中插入或替换 row 并把其节点版本加一，返回新版本。已有行的
+	// CreatedAt 保持不变。
+	PutNodeProvider(ctx context.Context, row *model.NodeProvider) (uint64, error)
+	// DeleteNodeProvider removes one provider and increments the node's
+	// version in one transaction. ErrNotFound when there is no such row.
+	//
+	// DeleteNodeProvider 在一个事务中删除一个供应商并把节点版本加一。没有这样的行时返回
+	// ErrNotFound。
+	DeleteNodeProvider(ctx context.Context, nodeID, runtimeID string, at time.Time) (uint64, error)
+	// NodeProviderVersion reads nodeID's version, zero when it has none.
+	//
+	// NodeProviderVersion 读取 nodeID 的版本，没有时为零。
+	NodeProviderVersion(ctx context.Context, nodeID string) (uint64, error)
+	// ListNodeProviderVersions reads every node's version, for
+	// reconciliation.
+	//
+	// ListNodeProviderVersions 读取所有节点的版本，用于对账。
+	ListNodeProviderVersions(ctx context.Context) ([]model.NodeProviderVersion, error)
+}
+
 // AgentInstallCodes persists one-time Agent install codes by the hash of the
 // code. The code itself is never stored.
 //
@@ -954,6 +987,7 @@ type Store interface {
 	ModelAccess
 	NodeAccess
 	TenantNodes
+	NodeProviders
 	AgentInstallCodes
 	Users
 	PlatformOperators

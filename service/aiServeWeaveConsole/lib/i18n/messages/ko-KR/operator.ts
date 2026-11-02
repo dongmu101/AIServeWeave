@@ -542,6 +542,11 @@ const operator = {
   "install.notEnabled": "이 플랫폼에서는 한 줄 설치가 켜져 있지 않습니다. 아래 등록 ZIP을 사용하세요.",
   "install.checkRefused": "플랫폼 버전은 {version}이며 설치 스크립트가 거부합니다(dev 또는 dirty 빌드). 버전을 지정해 Gateway를 다시 빌드하고(배포 안내 참조) 새 명령을 생성하세요.",
   "install.checkUnreachable": "노드가 이 사이트의 /agent/에 접근할 수 없어 명령이 실패합니다. 리버스 프록시가 /agent/를 Gateway로 전달하는지, 한 줄 설치가 활성화되어 있는지 확인하세요.",
-  "install.advanced": "고급: 등록 ZIP 내려받기"
+  "install.advanced": "고급: 등록 ZIP 내려받기",
+  "operator.nodeProviders": "노드 API 공급자",
+  "operator.nodeProvidersIntro": "플랫폼 노드에 호스팅 API 공급자와 키를 배포합니다. 테넌트 소유 노드(tnode.로 시작)는 테넌트가 자체 콘솔에서 관리합니다.",
+  "operator.nodeProvidersNodeId": "노드 ID",
+  "operator.nodeProvidersLookup": "조회",
+  "operator.nodeProvidersTenantNode": "tnode.로 시작하는 테넌트 소유 노드는 해당 테넌트만 관리할 수 있습니다."
 } as const;
 export default operator;

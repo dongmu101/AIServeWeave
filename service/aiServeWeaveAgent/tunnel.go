@@ -4,6 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"path/filepath"
+	"sync/atomic"
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
@@ -11,6 +13,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/hostresources"
 	"AIServeWeave/service/aiServeWeaveAgent/modelpull"
+	"AIServeWeave/service/aiServeWeaveAgent/remoteproviders"
 	"AIServeWeave/service/aiServeWeaveAgent/tunnel"
 )
 
@@ -50,7 +53,7 @@ import (
 // accept, but not execute, UPGRADE/ROLLBACK) and report status back.
 // newAgentUpgradeChecker never returns nil, so this is never nil either —
 // the same shape puller uses.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker, cliUsage *cliusage.Monitor) (<-chan error, *tunnel.Manager, error) {
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker, cliUsage *cliusage.Monitor, remote *remoteProviderSource) (<-chan error, *tunnel.Manager, error) {
 	if !opts.enabled() {
 		return nil, nil, nil
 	}
@@ -86,6 +89,20 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		return nil, nil, err
 	}
 
+	remoteStore, err := remoteproviders.New(remoteproviders.Config{
+		Path:    filepath.Join(filepath.Dir(opts.keyFile), remoteproviders.FileName),
+		KeyFile: opts.keyFile,
+		NodeID:  identity.NodeID,
+		Enabled: opts.remoteProvidersEnabled(identity.NodeID),
+		Reload:  remote.reload,
+		Logger:  logger,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	remote.attach(remoteStore)
+	go remoteStore.Run(ctx)
+
 	dispatcher, err := tunnel.NewDispatcher(tunnel.DispatchConfig{
 		Manager:         manager,
 		NodeID:          identity.NodeID,
@@ -119,6 +136,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			ComfyUIManaged:  comfyUIManagedClient,
 			AgentUpgrader:   upgradeChecker,
 			CLIUsage:        cliUsageSource(cliUsage),
+			RemoteProviders: remoteStore,
 			Metrics:         metrics,
 			Logger:          logger,
 		},
@@ -147,4 +165,34 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 	done := make(chan error, 1)
 	go func() { done <- tunnels.Run(ctx) }()
 	return done, tunnels, nil
+}
+
+// remoteProviderSource hands the reloader the provisioned runtimes. The store
+// is attached only once the tunnel knows the node identity, so until then it
+// supplies none.
+//
+// remoteProviderSource 把下发的运行时交给重新加载器。存储要等隧道得知节点身份后才挂上，
+// 在此之前不提供任何运行时。
+type remoteProviderSource struct {
+	store  atomic.Pointer[remoteproviders.Store]
+	reload func(ctx context.Context) error
+}
+
+func (s *remoteProviderSource) attach(store *remoteproviders.Store) { s.store.Store(store) }
+
+// Runtimes returns the attached store's runtimes, or none.
+// Runtimes 返回已挂上存储的运行时，没有时返回空。
+func (s *remoteProviderSource) Runtimes() []runtime.Config {
+	if store := s.store.Load(); store != nil {
+		return store.Runtimes()
+	}
+	return nil
+}
+
+// Observe forwards one reconcile's results to the attached store.
+// Observe 把一次调和的结果转给已挂上的存储。
+func (s *remoteProviderSource) Observe(failed, conflicts []string) {
+	if store := s.store.Load(); store != nil {
+		store.Observe(failed, conflicts)
+	}
 }

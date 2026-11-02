@@ -53,3 +53,27 @@ func verifiedLeaf(info credentials.TLSInfo) *x509.Certificate {
 	}
 	return nil
 }
+
+// PublicKeyFromPeer returns the DER SubjectPublicKeyInfo of the verified client
+// certificate on ctx's connection — the node key a sealed remote provider
+// bundle is addressed to. The caller must still check it against the
+// Registry's fingerprint before trusting it for anything.
+//
+// PublicKeyFromPeer 返回 ctx 所在连接上已验证客户端证书的 DER SubjectPublicKeyInfo——
+// 即远程供应商密文所发往的节点密钥。调用方在把它用于任何用途之前，仍须用 Registry 的
+// 指纹核对它。
+func PublicKeyFromPeer(ctx context.Context) ([]byte, error) {
+	p, ok := peer.FromContext(ctx)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "no peer information on the connection")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok {
+		return nil, status.Error(codes.Unauthenticated, "connection is not mutually authenticated TLS")
+	}
+	leaf := verifiedLeaf(tlsInfo)
+	if leaf == nil {
+		return nil, status.Error(codes.Unauthenticated, "no verified client certificate")
+	}
+	return append([]byte(nil), leaf.RawSubjectPublicKeyInfo...), nil
+}

@@ -1300,3 +1300,67 @@ type ResponseTurnResponse struct {
 	Messages           json.RawMessage `json:"messages"`
 	CreatedAt          time.Time       `json:"created_at"`
 }
+
+// NodeProviderRequest is the body of PUT .../nodes/:node_id/providers/:runtime_id.
+// APIKey is write-only: omit it to keep the saved key, which is allowed only
+// while kind and base_url are unchanged.
+//
+// NodeProviderRequest 是 PUT .../nodes/:node_id/providers/:runtime_id 的请求体。APIKey
+// 只写不读：省略表示保留已保存的 Key，仅在 kind 与 base_url 都不变时允许。
+type NodeProviderRequest struct {
+	Kind    string   `json:"kind"`
+	BaseURL string   `json:"base_url"`
+	APIKey  *string  `json:"api_key,omitempty"`
+	Models  []string `json:"models"`
+}
+
+// NodeProvider is one provisioned hosted provider without its key. State is
+// the Agent's last report for it ("active", "conflict", "failed"), empty
+// until the node has applied a version that includes it.
+//
+// NodeProvider 是一个不含 Key 的下发托管供应商。State 是 Agent 对它的最后回报
+// （"active"、"conflict"、"failed"），节点应用包含它的版本之前为空。
+type NodeProvider struct {
+	ID        string    `json:"id"`
+	Kind      string    `json:"kind"`
+	BaseURL   string    `json:"base_url"`
+	Models    []string  `json:"models"`
+	KeyLast4  string    `json:"key_last4"`
+	UpdatedBy string    `json:"updated_by"`
+	UpdatedAt time.Time `json:"updated_at"`
+	State     string    `json:"state"`
+}
+
+// NodeProviderReport is the Agent's last remote provider report. Outcome is
+// "none", "applied", "disabled", "open_failed", "invalid", "stale" or
+// "store_failed".
+//
+// NodeProviderReport 是 Agent 最后一次远程供应商回报。Outcome 为 "none"、"applied"、
+// "disabled"、"open_failed"、"invalid"、"stale" 或 "store_failed"。
+type NodeProviderReport struct {
+	AppliedVersion   uint64     `json:"applied_version"`
+	AttemptedVersion uint64     `json:"attempted_version"`
+	Outcome          string     `json:"outcome"`
+	UpdatedAt        *time.Time `json:"updated_at,omitempty"`
+}
+
+// NodeProvidersResponse is GET .../nodes/:node_id/providers's body.
+//
+// NodeProvidersResponse 是 GET .../nodes/:node_id/providers 的响应体。
+type NodeProvidersResponse struct {
+	Version   uint64              `json:"version"`
+	Connected bool                `json:"connected"`
+	Report    *NodeProviderReport `json:"report,omitempty"`
+	Items     []NodeProvider      `json:"items"`
+}
+
+// NodeProviderWriteResponse answers a PUT or DELETE. Delivered false means
+// the node was not reachable now; the control plane resends it later.
+//
+// NodeProviderWriteResponse 是 PUT 或 DELETE 的响应。Delivered 为 false 表示节点此刻不可达；
+// 控制面稍后重发。
+type NodeProviderWriteResponse struct {
+	Item      *NodeProvider `json:"item,omitempty"`
+	Version   uint64        `json:"version"`
+	Delivered bool          `json:"delivered"`
+}

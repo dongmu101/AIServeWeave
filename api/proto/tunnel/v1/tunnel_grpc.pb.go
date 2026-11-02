@@ -8,9 +8,13 @@
 // model. Agent and Gateway share this one file and its generated code.
 //
 // Two rules are load-bearing and must survive any future edit:
-//   - No message here carries a credential. RuntimeSpec references an API key
-//     by name (api_key_ref) and never by value; RuntimeSnapshot mirrors
-//     runtime.Snapshot, which is credential-free by construction.
+//   - No message here carries a credential in the clear. RuntimeSpec
+//     references an API key by name (api_key_ref) and never by value;
+//     RuntimeSnapshot mirrors runtime.Snapshot, which is credential-free by
+//     construction. The one exception is RemoteProviders, whose payload the
+//     control plane seals with HPKE to the node's own certificate key
+//     (common/remoteprovider): a Gateway relays the ciphertext but can
+//     neither read the keys inside nor change the endpoints they go to.
 //   - No message here can express "fetch this URL" or "run this command". The
 //     Agent is not a general-purpose proxy, and the protocol deliberately
 //     leaves no extension point that would make it one.

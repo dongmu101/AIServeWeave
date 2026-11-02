@@ -1,6 +1,6 @@
 # Console 远程下发托管 API 接口与 Key
 
-Status: needs-triage
+Status: ready-for-human
 
 ## 背景
 
@@ -23,7 +23,7 @@ AGENTS.md 有两条红线：「凭据不进入隧道」，以及「推理后端�
 本功能必须放宽这两条。放宽到什么程度：
 
 - **Key 仍然不以明文进入隧道。** 控制面把「端点 + Key + 模型目录」整体用 HPKE 加密到目标节点证书的公钥。Gateway 和隧道只看到密文，拿不到 Key，也改不了端点：密文用 AEAD 绑定，改动即解密失败。
-- **远程下发需要节点本地同意。** Agent YAML 写了 `remote_providers: true` 才接受，默认关闭。商户接入包生成的配置默认开启。
+- **远程下发需要节点本地同意。** Agent YAML 写了 `remote_providers: true` 才接受；未设置时商户自有节点默认开启，平台节点默认关闭。
 - **远程运行时与本地声明隔离。** 远程 ID 统一带 `remote-` 前缀，不能覆盖本地声明，也不能修改本地 Key 文件。本地仍然可以随时关闭开关，或者删除某个远程运行时。
 
 实施第一个任务时，同步修改 AGENTS.md 的这两条红线和托管供应商说明，写明上述例外。
@@ -46,19 +46,19 @@ AGENTS.md 有两条红线：「凭据不进入隧道」，以及「推理后端�
    - 运维：`PUT /operator/v1/nodes/:node_id/providers/:id`
    - 请求体：`{kind, base_url, api_key, models}`。`api_key` 只写不读，省略表示保持原值。
 2. 控制面落库，表 `node_providers`：
-   - Key 用控制面主密钥做 AES-256-GCM 静态加密。主密钥来自 `ProviderSecrets.MasterKeyFile`，文件不存在时功能不挂载。
+   - Key 用控制面主密钥做 AES-256-GCM 静态加密。主密钥来自 `RemoteProviders.MasterKeyFile`；未配置 `RemoteProviders` 时功能不挂载，配置了但缺主密钥、token 或 Registry 时拒绝启动。
    - 列表接口只返回 Key 末 4 位和更新时间。
    - 每台节点维护一个单调递增的 `version`。
 3. 下发：
-   - 控制面向 Registry 取目标节点当前证书的公钥（ECDSA P-256，经 `.ECDH()`）。
+   - Gateway 在每条 Control 流建立时从 mTLS 对端证书取得节点公钥（SPKI），经内部端点报告给控制面；控制面只采用指纹与 Registry `ListNodeStates.key_fingerprint` 一致的公钥（ECDSA P-256，经 `.ECDH()`）。
    - 把该节点的全部远程运行时整份打包，用 HPKE 封装，套件为 DHKEM(P-256, HKDF-SHA256) + HKDF-SHA256 + AES-256-GCM。
    - HPKE `info` = `"aisw-remote-providers/v1" || node_id || version`。
    - 经已有的「控制面 → Gateway 内部转发」路径发出。Gateway 侧新增 `GatewayControl.remote_providers`，承载 `{version, sealed}`。
 4. Agent：
    - 用节点私钥解封，校验 `info` 里的 node_id 与自己的一致、`version` 大于已应用的版本。
    - 写入本地 `remote-providers.json`（0600），然后走现有的运行时热重载。
-   - 在状态快照里上报 `remote_providers_version` 和逐项结果（成功，或封闭枚举的失败原因，不带原始错误文本）。
-5. 对账：控制面定期比对节点上报的版本，落后就重发。证书续期换了密钥时，旧密文解不开，Agent 上报 `seal_key_mismatch`，控制面用新公钥重新封装。
+   - 经 `AgentControl.remote_providers` 上报 `applied_version`、`attempted_version`、封闭枚举 `outcome` 与逐项状态，不带原始错误文本。
+5. 对账：控制面定期比对节点上报的版本，落后就重发。证书续期换了密钥时，旧密文解不开，Agent 上报 `open_failed`，控制面用新公钥重新封装。
 
 ### 为什么整份下发
 
@@ -94,8 +94,11 @@ AGENTS.md 有两条红线：「凭据不进入隧道」，以及「推理后端�
 6. Console：商户「我的节点」和运维「节点管理」里的接口与 Key 编辑面板（Key 只写不读）。
 7. 真实环境验收：真实 Key、证书续期后重新封装、离线节点上线补齐。
 
-## 待确认
+## 实施记录（2026-11-02）
 
-- 商户接入包默认开启 `remote_providers`，运维节点默认关闭。是否同意？
-- 远程运行时 ID 前缀用 `remote-`，还是允许运维自定义？
-- 控制面主密钥轮换是否本期就做（重新加密全部行）？
+任务 1–6 的代码已交付，默认测试通过；任务 7 未做。落地时的取舍：
+
+- 待确认项按默认处理：商户自有节点默认开启、平台节点默认关闭，在 Agent 侧按 node_id 前缀判断（接入包本身不带 YAML，因此没有改接入包）；ID 统一 `remote-` 前缀；主密钥轮换本期不做。
+- 任务 3 没有新增 Registry 接口：`ListNodeStates` 增加 `key_fingerprint`，节点公钥由 Gateway 从 mTLS 对端取得后报告，控制面对照指纹核验。
+- 任务 2 未完成的部分：设置页只读展示远程运行时、本地「删除并忽略某个 ID」；目前只能整体关闭开关。
+- 交付位置见根 [STATUS.md「托管供应商远程下发」](../../STATUS.md#托管供应商远程下发2026-11-02)。

@@ -548,6 +548,11 @@ const operator = {
   "install.notEnabled": "One-line install is not enabled on this platform; use the enrollment ZIP below.",
   "install.checkRefused": "The platform runs version {version}, which the install scripts refuse (a dev or dirty build). Rebuild the Gateway with a version (see the deployment guide) and generate a new command.",
   "install.checkUnreachable": "Nodes cannot reach /agent/ on this site, so the command will fail. Check that the reverse proxy forwards /agent/ to the Gateway and that one-line install is enabled.",
-  "install.advanced": "Advanced: download the enrollment ZIP"
+  "install.advanced": "Advanced: download the enrollment ZIP",
+  "operator.nodeProviders": "Node API providers",
+  "operator.nodeProvidersIntro": "Provision hosted API providers and keys onto platform nodes. Tenant-owned nodes (starting with tnode.) are managed by their tenant in its own console.",
+  "operator.nodeProvidersNodeId": "Node ID",
+  "operator.nodeProvidersLookup": "Look up",
+  "operator.nodeProvidersTenantNode": "Tenant-owned nodes starting with tnode. can only be managed by their tenant."
 } as const;
 export default operator;
