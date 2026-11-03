@@ -39,6 +39,7 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 // NewFactory 绑定仅由本地管理员提供的可执行文件。
 func NewFactory(executable string) runtime.Factory {
 	return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+		requested := cfg.MaxConcurrent // before Normalize fills the generic default / 在 Normalize 填入通用默认值之前读取
 		cfg = cfg.Normalize()
 		if err := cfg.Validate(); err != nil {
 			return nil, err
@@ -46,16 +47,42 @@ func NewFactory(executable string) runtime.Factory {
 		if cfg.Kind != runtime.KindClaude || executable == "" || deps.Clock == nil {
 			return nil, claudeError(runtime.ErrorInvalidConfig)
 		}
-		if cfg.MaxConcurrent < 1 {
-			cfg.MaxConcurrent = 2
-		} else {
-			cfg.MaxConcurrent = min(cfg.MaxConcurrent, 2)
-		}
+		cfg.MaxConcurrent = sessionCapacity(requested)
 		root, cancel := context.WithCancel(context.Background())
 		bridge := newMessagesBridge(executable, "sonnet", nil, deps.Clock)
 		bridge.capacity = cfg.MaxConcurrent
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
 		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel}, nil
+	}
+}
+
+// Session capacity. Every session is a resident CLI process that may wait for
+// tool results for hours, so even an unlimited configuration stays bounded.
+//
+// 会话容量。每个会话都是一个可能为等待工具结果驻留数小时的 CLI 进程，因此即使配置
+// 为不限并发也保持有界。
+const (
+	// defaultSessions applies when max_concurrent is not configured.
+	// defaultSessions 用于未配置 max_concurrent 的情况。
+	defaultSessions = 8
+	// maxSessions caps any configured value, including the negative "unlimited".
+	// maxSessions 限制任何配置值，包括表示不限并发的负值。
+	maxSessions = 32
+)
+
+// sessionCapacity maps the raw max_concurrent setting to resident sessions:
+// unset uses defaultSessions, and anything else is clamped to maxSessions.
+//
+// sessionCapacity 将原始 max_concurrent 配置换算为驻留会话数：未配置时取
+// defaultSessions，其余值收敛到 maxSessions 以内。
+func sessionCapacity(requested int) int {
+	switch {
+	case requested == 0:
+		return defaultSessions
+	case requested < 0:
+		return maxSessions
+	default:
+		return min(requested, maxSessions)
 	}
 }
 

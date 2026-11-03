@@ -623,10 +623,34 @@ func (s *messagesSession) touch() {
 	}
 }
 
+// Session timers. A caller may take as long as its tools need, up to the
+// Gateway's continuation TTL, while a CLI that stops producing output is
+// reclaimed quickly so it does not hold a capacity slot.
+//
+// 会话计时器。调用方执行工具可以花费所需时间，上限与 Gateway 续接 TTL 一致；
+// CLI 停止输出时则尽快回收，避免占住会话名额。
+const (
+	// sessionLife bounds a whole session, including every tool wait.
+	// sessionLife 限定整个会话的寿命，包含所有工具等待。
+	sessionLife = 24 * time.Hour
+	// toolWaitTimeout bounds one wait for the caller's tool results.
+	// toolWaitTimeout 限定一次等待调用方工具结果的时长。
+	toolWaitTimeout = 24 * time.Hour
+	// generationTimeout bounds one CLI generation phase without output.
+	// generationTimeout 限定 CLI 一次生成阶段在无进展时的时长。
+	generationTimeout = 2 * time.Minute
+)
+
+// expire cancels s when its life or current phase runs out. Each activity
+// signal restarts the phase timer with the limit for s.waiting at that moment,
+// so a dropped duplicate signal still yields the latest phase.
+//
+// expire 在会话寿命或当前阶段时限耗尽时取消 s。每次活动信号按当时的 s.waiting
+// 重启阶段计时器，因此被丢弃的重复信号不影响取到最新阶段。
 func (b *messagesBridge) expire(s *messagesSession) {
-	life, stopLife := b.clock.NewTimer(10 * time.Minute)
+	life, stopLife := b.clock.NewTimer(sessionLife)
 	defer stopLife()
-	phase, stopPhase := b.clock.NewTimer(2 * time.Minute)
+	phase, stopPhase := b.clock.NewTimer(generationTimeout)
 	defer func() { stopPhase() }()
 	for {
 		select {
@@ -640,7 +664,13 @@ func (b *messagesBridge) expire(s *messagesSession) {
 			return
 		case <-s.activity:
 			stopPhase()
-			phase, stopPhase = b.clock.NewTimer(2 * time.Minute)
+			s.mu.Lock()
+			limit := generationTimeout
+			if s.waiting {
+				limit = toolWaitTimeout
+			}
+			s.mu.Unlock()
+			phase, stopPhase = b.clock.NewTimer(limit)
 		}
 	}
 }

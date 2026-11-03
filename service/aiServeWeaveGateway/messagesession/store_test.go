@@ -94,7 +94,7 @@ func TestRedisClaims(t *testing.T) {
 	if _, _, err := a.Claim(t.Context(), ids, "tenant", "key", "alias"); err == nil {
 		t.Fatal("consumed result accepted")
 	}
-	if ttl := first.PTTL(t.Context(), keys[0]).Val(); ttl <= 0 || ttl > 2*time.Minute {
-		t.Fatalf("TTL=%s,want (0,2m]", ttl)
+	if ttl := first.PTTL(t.Context(), keys[0]).Val(); ttl <= continuationTTL-time.Minute || ttl > continuationTTL {
+		t.Fatalf("TTL=%s,want (%s,%s]", ttl, continuationTTL-time.Minute, continuationTTL)
 	}
 }

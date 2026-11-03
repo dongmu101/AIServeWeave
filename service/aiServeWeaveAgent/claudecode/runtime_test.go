@@ -149,13 +149,20 @@ func TestRuntimeCloseUnconsumedStream(t *testing.T) {
 	}
 }
 
-// TestClaudeCapacityBound keeps even an unlimited configuration within two resident processes.
-// TestClaudeCapacityBound 即使配置无限并发也将驻留进程限制为两个。
+// TestClaudeCapacityBound keeps even an unlimited configuration within maxSessions resident processes.
+// TestClaudeCapacityBound 即使配置无限并发也将驻留进程限制在 maxSessions 以内。
 func TestClaudeCapacityBound(t *testing.T) {
 	for _, tc := range []struct {
 		name             string
 		configured, want int
-	}{{"unlimited", -1, 2}, {"default", 0, 2}, {"one", 1, 1}, {"many", 8, 2}} {
+	}{
+		{"unlimited", -1, maxSessions},
+		{"default", 0, defaultSessions},
+		{"one", 1, 1},
+		{"many", 16, 16},
+		{"at cap", maxSessions, maxSessions},
+		{"over cap", maxSessions + 1, maxSessions},
+	} {
 		t.Run(tc.name, func(t *testing.T) {
 			rt, err := NewFactory("unused")(runtime.Config{ID: "local", Kind: runtime.KindClaude, MaxConcurrent: tc.configured}, runtime.Dependencies{Clock: runtime.NewSystemClock()})
 			if err != nil {

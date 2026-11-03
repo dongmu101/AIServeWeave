@@ -66,8 +66,15 @@ for _,k in ipairs(KEYS) do if redis.call('EXISTS',k)==1 then return 0 end end
 for _,k in ipairs(KEYS) do redis.call('SET',k,ARGV[1],'PX',ARGV[2]) end
 return 1`)
 
-// Publish stores no prompt or tool result; each record expires within two minutes.
-// Publish 不存储提示词或工具结果；每条记录在两分钟内过期。
+// continuationTTL bounds how long a caller may take to return tool results;
+// it matches the Agent CLI bridge's tool wait, so neither side outlives the other.
+//
+// continuationTTL 限定调用方送回工具结果的最长时间；与 Agent CLI 桥接的工具等待
+// 时限一致，两侧都不会比对方存活更久。
+const continuationTTL = 24 * time.Hour
+
+// Publish stores no prompt or tool result; each record expires within continuationTTL.
+// Publish 不存储提示词或工具结果；每条记录在 continuationTTL 内过期。
 func (s *Redis) Publish(ctx context.Context, record Record) error {
 	keys, err := keysFor(record.IDs)
 	if err != nil {
@@ -80,7 +87,7 @@ func (s *Redis) Publish(ctx context.Context, record Record) error {
 	if err != nil || len(data) > 16384 {
 		return ErrUnavailable
 	}
-	n, err := publishScript.Run(ctx, s.client, keys, "ready\n"+string(data), (2 * time.Minute).Milliseconds()).Int()
+	n, err := publishScript.Run(ctx, s.client, keys, "ready\n"+string(data), continuationTTL.Milliseconds()).Int()
 	if err != nil {
 		return ErrUnavailable
 	}
