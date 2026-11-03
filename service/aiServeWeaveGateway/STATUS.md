@@ -554,7 +554,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
   - 文本块（或裸字符串）合并成一条 **user** 消息。不转成 system，因为不少后端的聊天模板不接受首位之后的 system 轮次。如果这条消息出现在 assistant 的工具调用和工具结果之间，就挪到工具结果之后，让每个工具调用后面紧跟它的 tool 消息。块上的 `cache_control`、消息上的 `clear_at`/`output_config` 忽略。
   - 工具集合由 `anthropicActiveTools` 一次算出：带 `defer_loading: true` 的已声明工具先隐藏；`tool_addition`（`tool_reference` 引用已声明工具，或 `tool_definition` 给出新定义、可覆盖同名）激活工具，`tool_removal` 停用工具；`tool_result` 里的 `tool_reference`（`tool_name`，客户端 ToolSearch 的结果）同样激活工具，并在结果文本中渲染为 `Tool loaded and now callable: <name>`。引用未声明的工具忽略。最终顺序：未延迟的工具按声明顺序，其余按首次激活顺序。
   - system 轮次里出现不认识的块类型、点不出工具名的工具块、`tool_removal` 带定义、内容不是字符串也不是块数组，都返回 400，`error.message` 末尾带 `capability_rejected: mid_conv_system`；Claude Code 匹配到这个标记会去掉 system 轮次重发并在本次对话保持关闭，作为兜底。`tool`、`developer` 等其他角色仍然只点名报错。
-  - 原生 Messages 路径（Claude CLI 模型）不经过这里。
+  - 原生 Messages 路径（Claude CLI 模型）不经过这里，但复用同一套 system 轮次解析与 `anthropicActiveTools`，见「Claude Code 原生 Messages」的请求整形。
 - **工具调用（`tools`/`tool_choice`/`tool_use`/`tool_result`）已支持，复用既有 `ToolCalls`/`ToolCallID` 字段，不新增核心类型**：设计文档§四.3 原本把这层交互形状列为独立缺口，本轮核实后发现今天的 `runtime.ChatMessage.ToolCalls`/`ToolCallID`——OpenAI 前门早已使用的同一对字段——足够表达它。`tools`（Anthropic 扁平的 `{name, description, input_schema}` 形状，无 `"function"` 包装）映射成 `runtime.Tool{Type:"function", ...}`；`tool_choice` 的 `"auto"`/`"none"` 原样传递，`"any"`（至少调用一个工具）映射到 OpenAI 词汇里最接近的 `"required"`，`"tool"`（指名一个工具）重新编码成 OpenAI 具名工具选择的对象形状；`disable_parallel_tool_use` 没有对应的逐请求旋钮，被静默忽略——与 `ollama.go` 对 `keep_alive` 的处理同一先例。一条 assistant 消息里的 `"tool_use"` 块变成该消息的 `ToolCalls`（可以与同一回合的文本块共存，就像 OpenAI 的 assistant 消息能同时携带 `Content` 和 `ToolCalls` 一样）；一条 user 消息里的 `"tool_result"` 块被拆分成一条独立的合成 `"tool"` 角色消息（`ToolCallID` + 结果文本），因为 Anthropic 把工具结果嵌在 user 回合的内容块里，而其余每个前门的 canonical 形状都要求它是一条独立消息——原始块顺序在拆分后的消息切片里保持不变。`tool_result.content` 里的图片块目前按名字拒绝：还没有任何前门的 `"tool"` 角色消息携带 `ContentParts`。
 - **流式响应里的工具调用遵循 Anthropic 自己的顺序纪律**：内容块严格顺序化，一次只开一个——收到第一个工具调用增量时，若开头的文本块（index 0）尚未关闭就先关闭它，再为该工具调用开一个新的 `tool_use` 块（`content_block_start` 携带 `id`/`name`，`input` 先给空对象）；后续参数片段以 `input_json_delta.partial_json` 逐段追加，从不在服务端拼接解析。这依赖一个未强制校验的假设：本仓库目前对接的 OpenAI 兼容后端都是把一次工具调用完整流完再开始下一次，不会把两个调用的参数片段交替发送——真交替到达时，本实现会在收到新索引时把上一个块关闭、开一个新块，仍能产出合法但更琐碎的分块序列，而不是缓冲重排（AGENTS.md「任何一跳都不得无界缓冲」）。
 - **`system` 字段的归约规则不变，仍是纯文本**：顶层 `system`（字符串，或全为 `"text"` 块的数组）映射成一条前置的 `Role: "system"` 消息——Anthropic 协议本身把 `system` 定义为纯文本，从不携带图片或工具块，因此它复用的是更窄的 `anthropicText`，与 `messages[i].content` 走的 `anthropicMessageToRuntime` 分开维护。`messages[i].role` 只接受 `"user"`/`"assistant"`，其余角色（含 Anthropic 协议里不存在于 `messages` 数组的 `"system"`）按名字拒绝。
@@ -758,7 +758,17 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 `max_output_tokens` 默认 4096，必须为正整数，不设置固定上限，客户端指定值经 Chat 转换原样传给 CLI；`temperature` 范围 0–1。以下情况明确返回 400：`store: true`、`previous_response_id`、`top_p`、`text` 以外的 `text.format`、非 `auto` 的 `tool_choice`、`strict: true` 的工具，以及图片或文件内容。每轮须在 `input` 中携带完整对话。与普通 Responses 一样，Codex 等客户端附带的其他字段不会被拒绝，但也不生效。转换前后的请求均限制为 1 MiB，用量账本与指标都记为 `responses`。目前只做过离线端到端验证（真实 Agent 加模拟 CLI，跨副本 JSON/SSE 工具续接），尚未用真实 Claude CLI 或 Codex 客户端联调。
 
-模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。以 user 文本结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录，原样转发、不在 Gateway 改写。其他模型仍使用既有 Chat 转换。
+模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。以 user 文本结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录。其他模型仍使用既有 Chat 转换。
+
+转发前 Gateway 只整形 Claude Code 等客户端附带、Agent 严格解码会拒绝的部分（`httpapi/native_messages_shape.go`），改变模型所见内容的字段仍原样交给 Agent 判断：
+
+- `thinking` 按 [Claude 运行时说明「思考内容」](../aiServeWeaveAgent/claudecode/README.md#思考内容) 改写。
+- 去掉 `context_management`：保留的 CLI 自行管理上下文，也不回放此前的思考。
+- 去掉 system、消息、嵌套 `tool_result` 与工具上的 `cache_control`：CLI 以 `DISABLE_PROMPT_CACHING=1` 运行。
+- `tools` 换成 `anthropicActiveTools` 的结果，只保留 `name`/`description`/`input_schema`；未被引用的 `defer_loading` 工具不下发，`tool_result` 里的 `tool_reference` 渲染为 `Tool loaded and now callable: <name>` 文本。
+- 对话中途 `role:"system"` 轮次的文本空一行后追加到紧邻其前、且不含 `tool_result` 的 user 消息（Claude Code 的环境轮次就在第一条 user 之后），单个提问因此仍是一条提问；否则自成一条 user 消息，落在工具调用与结果之间时挪到结果之后。无法理解的 system 轮次返回带 `capability_rejected: mid_conv_system` 的 400。
+
+整形只取决于消息本身，同一对话各轮折叠结果一致，续接的历史比对不受影响。已用 Claude Code 2.1.317 实际发出的首轮与工具续接请求离线核对：整形前被 Agent 拒绝，整形后通过 Agent 严格校验，续接的历史哈希与会话配置一致；尚未用真实 CLI 端到端验收。
 
 新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接仍经 `Scheduler.Messages` 只发往绑定的节点。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
 

@@ -56,7 +56,19 @@ func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesR
 // adaptive thinking 或放不进 max_tokens 的预算会被调整或丢弃，而不是拒绝；只有格式
 // 错误的对象才返回 400。adaptive 会变成按 output_config.effort 选出的固定预算（未给时
 // 取 medium）：模型不再按每个请求自行决定思考深度，这是本桥接无法保留的那部分原生语义。
+//
+// The rest of the body is reshaped by nativeBridgeShape, so the requests
+// Claude Code itself sends reach the bridge's strict decoder in a form it
+// accepts.
+//
+// 请求体其余部分由 nativeBridgeShape 整形，使 Claude Code 自己发出的请求以桥接严格
+// 解码器能接受的形式到达。
 func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time) {
+	var document map[string]json.RawMessage
+	if json.Unmarshal(raw, &document) != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
+		return
+	}
 	if len(req.Thinking) > 0 {
 		reasoning, err := reasoningFromAnthropic(req.Thinking, anthropicOutputEffort(req.OutputConfig))
 		if err != nil {
@@ -64,18 +76,17 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 			return
 		}
 		req.Thinking = nativeThinking(reasoning, req.MaxTokens, req.Temperature)
-		var document map[string]json.RawMessage
-		if json.Unmarshal(raw, &document) != nil {
-			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
-			return
-		}
 		if req.Thinking != nil {
 			document["thinking"] = req.Thinking
 		} else {
 			delete(document, "thinking")
 		}
-		raw, _ = json.Marshal(document)
 	}
+	if err := nativeBridgeShape(document, req); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
+		return
+	}
+	raw, _ = json.Marshal(document)
 	h.nativeMessagesOutput(w, r, req, raw, start, nil)
 }
 
