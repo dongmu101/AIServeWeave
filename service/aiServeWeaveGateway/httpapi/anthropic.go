@@ -484,10 +484,28 @@ func anthropicSignedBlock(b anthropicContentBlockJSON) (runtime.ReasoningBlock, 
 	return block, true
 }
 
+// anthropicMidConvSystemRejected is the stable token Claude Code matches in a
+// 400 error message to recognise that a mid-conversation {role:"system"}
+// message was refused; on seeing it the client resends once without system
+// messages and keeps them off for the rest of the conversation. Rejecting
+// with it, rather than converting the message, keeps backends whose chat
+// templates refuse a system turn after position 0 out of the picture.
+//
+// anthropicMidConvSystemRejected 是 Claude Code 在 400 错误信息中匹配的稳定标记，
+// 用来识别对话中途的 {role:"system"} 消息被拒绝；客户端看到后会去掉 system 消息重发
+// 一次，并在本次对话余下部分保持关闭。用它拒绝而不是转换这条消息，是为了避开那些
+// 聊天模板不接受首位之后出现 system 轮次的后端。
+const anthropicMidConvSystemRejected = "capability_rejected: mid_conv_system"
+
 // toRuntime converts req into the canonical chat request every front door
 // produces. It rejects any message role other than "user"/"assistant" by
-// name; anthropicMessageToRuntime rejects unsupported content block types
-// the same way.
+// name, tagging a "system" role with anthropicMidConvSystemRejected so
+// Claude Code falls back on its own; anthropicMessageToRuntime rejects
+// unsupported content block types the same way.
+//
+// toRuntime 把 req 转换成各前门共用的 canonical 聊天请求。除 "user"/"assistant"
+// 外的角色一律点名拒绝，其中 "system" 角色附带 anthropicMidConvSystemRejected，
+// 让 Claude Code 自行回退；anthropicMessageToRuntime 以同样方式拒绝不支持的内容块类型。
 func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 	choice, err := anthropicToolChoice(req.ToolChoice)
 	if err != nil {
@@ -520,6 +538,10 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 	}
 
 	for i, m := range req.Messages {
+		if m.Role == "system" {
+			// Claude Code recovers only on its own token / 只有带上这个标记 Claude Code 才会自行回退
+			return runtime.ChatRequest{}, fmt.Errorf(`messages[%d]: mid-conversation "system" messages are not supported; %s`, i, anthropicMidConvSystemRejected)
+		}
 		if m.Role != "user" && m.Role != "assistant" {
 			return runtime.ChatRequest{}, fmt.Errorf(`messages[%d].role must be "user" or "assistant"`, i)
 		}
