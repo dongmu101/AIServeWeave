@@ -111,7 +111,10 @@ report, err := codexcli.Probe(ctx, codexcli.Config{
 - 核对线程、turn、工具名、参数与调用 ID；重复或跨会话调用失败。CLI 终态、两个实际回调以及调用方随机结果均满足时才报告通过。
 - 取消和任何退出路径都清理 app-server 进程组。默认测试使用假子进程，不访问模型服务。
 
-**保留工具名**：app-server 把 `mcp` 与 `mcp__` 前缀（区分大小写）留给自己的 MCP 工具，`dynamicTools` 里出现这类名字时整个回合失败，Gateway 只能看到 `upstream_error`。Claude Code 的 MCP 工具一律命名为 `mcp__<服务>__<工具>`，因此正式 Runtime 用 `wireToolName` 把这类名字注册为 `c_` 前缀的别名（超过 64 字符时截断并拼接名字哈希），历史中的工具调用同样改写；app-server 回调别名时换回客户端原名再输出。别名与另一工具的真实名字相同时按 `ErrConfig` 拒绝。2026-11-03 在 open7x 上实测：`mcp__x__t`、`mcp__t`、`mcp` 失败，`x__t`、`mcp_x_t`、`MCP__x__t`、`xmcp__t` 正常。
+**工具名与 schema**：`wireToolName` 把客户端工具名映射成 app-server 接受的名字（`^[A-Za-z_][A-Za-z0-9_-]{0,63}$`，且不在保留命名空间里），对话历史中的工具调用按同一规则改写；app-server 回调别名时换回客户端原名再输出。
+- app-server 把 `mcp` 与 `mcp__` 前缀（区分大小写）留给自己的 MCP 工具，`dynamicTools` 里出现这类名字时整个回合失败，Gateway 只能看到 `upstream_error`。Claude Code 的 MCP 工具一律命名为 `mcp__<服务>__<工具>`。放得下时别名为 `c_` + 原名。2026-11-03 在 open7x 上实测：`mcp__x__t`、`mcp__t`、`mcp` 失败，`x__t`、`mcp_x_t`、`MCP__x__t`、`xmcp__t` 正常。
+- 客户端名字按 `^[A-Za-z0-9_.:-]{1,256}$` 校验。超过 64 字符、或含 app-server 拒绝的字符时，别名为 `c_` + 可读主干 + `_` + 完整名字 SHA-256 的前 8 位十六进制；`mcp__<服务>__<工具>` 的主干保留工具名、优先截短服务名，长服务名下的各个工具对模型仍可区分。不合法字符替换为 `_`。别名与另一工具的真实名字相同时按 `ErrConfig` 拒绝。
+- `normalizeToolSchema`：缺失的 schema 视为无参数；缺少或为 null 的 `type` 补成 `"object"`，包含 `"object"` 的类型列表收敛为 `"object"`；其他类型、显式 `null`、非对象 schema 按 `ErrConfig` 拒绝；已合规的 schema 逐字节保留。2026-11-03 实测 `$schema`、`$id`/`$defs`、`\p{L}` 正则、`additionalProperties`、`anyOf`、`propertyNames` 在 app-server 上均正常，因此不改写。
 
 合成 Probe 的限制与正式 Runtime 的范围分别以上文为准；不声明完整 Responses API 对等。`dynamicTools` 是实验接口，CLI 更新后必须重新验证；不能仅凭 schema 出现某字段就假定该版本已实现对应能力。
 

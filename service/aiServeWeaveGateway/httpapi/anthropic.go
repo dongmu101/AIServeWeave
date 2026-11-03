@@ -65,11 +65,17 @@ type anthropicMessagesRequest struct {
 
 // anthropicToolJSON is one element of "tools": Anthropic names a tool
 // directly (no OpenAI-style {"type":"function","function":{...}} wrapper),
-// so it maps straight onto runtime.FunctionDefinition.
+// so it maps straight onto runtime.FunctionDefinition. DeferLoading declares
+// a tool without showing it to the model until a reference activates it
+// (see anthropicActiveTools).
+//
+// anthropicToolJSON 是 "tools" 的一个元素。DeferLoading 声明一个工具，但在引用激活它
+// 之前不向模型展示（见 anthropicActiveTools）。
 type anthropicToolJSON struct {
-	Name        string          `json:"name"`
-	Description string          `json:"description,omitempty"`
-	InputSchema json.RawMessage `json:"input_schema"`
+	Name         string          `json:"name"`
+	Description  string          `json:"description,omitempty"`
+	InputSchema  json.RawMessage `json:"input_schema"`
+	DeferLoading bool            `json:"defer_loading,omitempty"`
 }
 
 // toRuntimeTools converts Anthropic's flat tool list into runtime.Tool,
@@ -198,6 +204,13 @@ type anthropicContentBlockJSON struct {
 	// and reduced by anthropicToolResultContent.
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
+
+	// ToolName is set on a "tool_reference" block inside a tool_result: a
+	// client-side tool search naming a deferred tool it has loaded.
+	//
+	// ToolName 设置在 tool_result 内的 "tool_reference" 块上：客户端工具搜索点名一个
+	// 它已加载的延迟工具。
+	ToolName string `json:"tool_name,omitempty"`
 }
 
 // anthropicImageSourceJSON is an "image" or "document" content block's
@@ -300,10 +313,24 @@ func anthropicToolResultContent(raw json.RawMessage) (string, error) {
 	}
 	var sb strings.Builder
 	for _, b := range blocks {
-		if b.Type != "text" {
+		switch b.Type {
+		case "text":
+			sb.WriteString(b.Text)
+		case "tool_reference":
+			// The referenced tool joins the request's tool list (see
+			// anthropicActiveTools); the text tells the model the search found it.
+			// 被引用的工具会加入请求的工具列表（见 anthropicActiveTools）；这段文本告诉
+			// 模型搜索找到了它。
+			if b.ToolName == "" {
+				return "", errors.New(`a "tool_reference" block requires "tool_name"`)
+			}
+			if sb.Len() > 0 {
+				sb.WriteString("\n")
+			}
+			sb.WriteString("Tool loaded and now callable: " + b.ToolName)
+		default:
 			return "", fmt.Errorf("tool_result content block type %q is not supported", b.Type)
 		}
-		sb.WriteString(b.Text)
 	}
 	return sb.String(), nil
 }
@@ -487,25 +514,30 @@ func anthropicSignedBlock(b anthropicContentBlockJSON) (runtime.ReasoningBlock, 
 // anthropicMidConvSystemRejected is the stable token Claude Code matches in a
 // 400 error message to recognise that a mid-conversation {role:"system"}
 // message was refused; on seeing it the client resends once without system
-// messages and keeps them off for the rest of the conversation. Rejecting
-// with it, rather than converting the message, keeps backends whose chat
-// templates refuse a system turn after position 0 out of the picture.
+// messages and keeps them off for the rest of the conversation. System turns
+// are converted (see anthropic_system.go); the token marks only one this
+// front door cannot understand, so the client still has a way out.
 //
 // anthropicMidConvSystemRejected 是 Claude Code 在 400 错误信息中匹配的稳定标记，
 // 用来识别对话中途的 {role:"system"} 消息被拒绝；客户端看到后会去掉 system 消息重发
-// 一次，并在本次对话余下部分保持关闭。用它拒绝而不是转换这条消息，是为了避开那些
-// 聊天模板不接受首位之后出现 system 轮次的后端。
+// 一次，并在本次对话余下部分保持关闭。system 轮次会被转换（见 anthropic_system.go），
+// 这个标记只用于本前门无法理解的那种，让客户端仍有退路。
 const anthropicMidConvSystemRejected = "capability_rejected: mid_conv_system"
 
 // toRuntime converts req into the canonical chat request every front door
-// produces. It rejects any message role other than "user"/"assistant" by
-// name, tagging a "system" role with anthropicMidConvSystemRejected so
-// Claude Code falls back on its own; anthropicMessageToRuntime rejects
-// unsupported content block types the same way.
+// produces. A mid-conversation "system" turn's text becomes a user message —
+// held back past the tool results when it arrives between an assistant's
+// tool calls and their results — and its tool changes, with any deferred
+// tools referenced, decide the tool list (anthropicActiveTools). Any other
+// role than "user"/"assistant"/"system" is rejected by name;
+// anthropicMessageToRuntime rejects unsupported content block types the same
+// way.
 //
-// toRuntime 把 req 转换成各前门共用的 canonical 聊天请求。除 "user"/"assistant"
-// 外的角色一律点名拒绝，其中 "system" 角色附带 anthropicMidConvSystemRejected，
-// 让 Claude Code 自行回退；anthropicMessageToRuntime 以同样方式拒绝不支持的内容块类型。
+// toRuntime 把 req 转换成各前门共用的 canonical 聊天请求。对话中途 "system" 轮次的
+// 文本变成一条 user 消息——若它出现在 assistant 的工具调用与其结果之间，则暂缓到结果
+// 之后——其中的工具变更连同被引用的延迟工具决定工具列表（anthropicActiveTools）。
+// "user"/"assistant"/"system" 以外的角色一律点名拒绝；anthropicMessageToRuntime 以同样
+// 方式拒绝不支持的内容块类型。
 func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 	choice, err := anthropicToolChoice(req.ToolChoice)
 	if err != nil {
@@ -513,6 +545,11 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 	}
 
 	reasoning, err := reasoningFromAnthropic(req.Thinking)
+	if err != nil {
+		return runtime.ChatRequest{}, err
+	}
+
+	tools, err := anthropicActiveTools(req)
 	if err != nil {
 		return runtime.ChatRequest{}, err
 	}
@@ -525,7 +562,7 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 		TopP:        req.TopP,
 		MaxTokens:   &maxTokens,
 		Stop:        req.StopSequences,
-		Tools:       toRuntimeTools(req.Tools),
+		Tools:       toRuntimeTools(tools),
 		ToolChoice:  choice,
 	}
 
@@ -537,20 +574,38 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 		out.Messages = append(out.Messages, runtime.ChatMessage{Role: "system", Content: system})
 	}
 
+	var held []runtime.ChatMessage // system text waiting for tool results / 等待工具结果的 system 文本
 	for i, m := range req.Messages {
 		if m.Role == "system" {
-			// Claude Code recovers only on its own token / 只有带上这个标记 Claude Code 才会自行回退
-			return runtime.ChatRequest{}, fmt.Errorf(`messages[%d]: mid-conversation "system" messages are not supported; %s`, i, anthropicMidConvSystemRejected)
+			turn, err := parseAnthropicSystemTurn(i, m.Content)
+			if err != nil {
+				return runtime.ChatRequest{}, err
+			}
+			if turn.text == "" {
+				continue
+			}
+			msg := runtime.ChatMessage{Role: "user", Content: turn.text}
+			if len(held) > 0 || awaitingToolResults(out.Messages) {
+				held = append(held, msg)
+			} else {
+				out.Messages = append(out.Messages, msg)
+			}
+			continue
 		}
 		if m.Role != "user" && m.Role != "assistant" {
-			return runtime.ChatRequest{}, fmt.Errorf(`messages[%d].role must be "user" or "assistant"`, i)
+			return runtime.ChatRequest{}, fmt.Errorf(`messages[%d].role must be "user", "assistant" or "system"`, i)
 		}
 		msgs, err := anthropicMessageToRuntime(m.Role, m.Content)
 		if err != nil {
 			return runtime.ChatRequest{}, fmt.Errorf("messages[%d]: %w", i, err)
 		}
+		if len(held) > 0 {
+			msgs = insertAfterToolResults(msgs, held)
+			held = nil
+		}
 		out.Messages = append(out.Messages, msgs...)
 	}
+	out.Messages = append(out.Messages, held...)
 	return out, nil
 }
 
