@@ -43,7 +43,7 @@ func (s *Store) ListTenantNodes(_ context.Context, tenantID string, limit int) (
 	defer s.mu.Unlock()
 	rows := []model.TenantNode{}
 	for _, row := range s.tenantNodes {
-		if row.TenantID == tenantID {
+		if row.TenantID == tenantID && row.RevokedAt == nil {
 			rows = append(rows, row)
 		}
 	}

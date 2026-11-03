@@ -30,7 +30,7 @@ func (s *Store) GetTenantNode(ctx context.Context, nodeID string) (model.TenantN
 // ListTenantNodes 基于 (tenant_id, created_at) 索引实现 store.TenantNodes。
 func (s *Store) ListTenantNodes(ctx context.Context, tenantID string, limit int) ([]model.TenantNode, error) {
 	rows := []model.TenantNode{}
-	err := s.db.WithContext(ctx).Where("tenant_id = ?", tenantID).
+	err := s.db.WithContext(ctx).Where("tenant_id = ? AND revoked_at IS NULL", tenantID).
 		Order("created_at DESC").Order("node_id DESC").Limit(limit).Find(&rows).Error
 	return rows, translate(err)
 }

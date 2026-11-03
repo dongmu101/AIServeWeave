@@ -342,10 +342,12 @@ type TenantNodes interface {
 	//
 	// GetTenantNode 读取 nodeID 对应的行；不存在时返回 ErrNotFound。
 	GetTenantNode(ctx context.Context, nodeID string) (model.TenantNode, error)
-	// ListTenantNodes reads at most limit of tenantID's rows, deleted ones
-	// included, newest first.
+	// ListTenantNodes reads at most limit of tenantID's rows not deleted,
+	// newest first. Deleted rows are kept (CountTenantNodes needs them for
+	// the daily cap) but never listed.
 	//
-	// ListTenantNodes 读取 tenantID 至多 limit 行（包括已删除的），最新的在前。
+	// ListTenantNodes 读取 tenantID 至多 limit 行未删除的行，最新的在前。已删除的行仍保留
+	// （CountTenantNodes 需要它们计算每日上限），但不会被列出。
 	ListTenantNodes(ctx context.Context, tenantID string, limit int) ([]model.TenantNode, error)
 	// CountTenantNodes counts tenantID's rows not deleted, and its rows
 	// created at or after since, deleted or not.

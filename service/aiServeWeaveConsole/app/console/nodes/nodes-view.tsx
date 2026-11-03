@@ -65,6 +65,8 @@ export function NodesView({ role }: { role: string }) {
     return <EmptyState title={t("tenant.nodesDisabled")} description={t("tenant.nodesDisabledDescription")} />;
   }
   const data = nodes.data;
+  // Deleted (revoked) nodes are not shown. / 已删除（吊销）的节点不显示。
+  const visibleNodes = data ? data.items.filter((node) => node.revokedAt === null && node.status !== "revoked") : [];
   const full = data !== null && data !== undefined && activeNodeCount(data) >= data.maxPerTenant;
 
   return <div className="grid max-w-4xl gap-6">
@@ -95,8 +97,8 @@ export function NodesView({ role }: { role: string }) {
           </section> : null}
         </details>
       </> : <p className="text-sm text-muted-foreground"><Message id="tenant.nodesReadOnly" /></p>}
-      {data.items.length === 0 ? <EmptyState title={t("tenant.noNodes")} description={t("tenant.noNodesDescription")} /> : <ul className="grid gap-3">
-        {data.items.map((node) => <li key={node.nodeId}><NodeCard node={node} canManage={canManage} onDeleted={nodes.reload} /></li>)}
+      {visibleNodes.length === 0 ? <EmptyState title={t("tenant.noNodes")} description={t("tenant.noNodesDescription")} /> : <ul className="grid gap-3">
+        {visibleNodes.map((node) => <li key={node.nodeId}><NodeCard node={node} canManage={canManage} onDeleted={nodes.reload} /></li>)}
       </ul>}
     </>}
   </div>;

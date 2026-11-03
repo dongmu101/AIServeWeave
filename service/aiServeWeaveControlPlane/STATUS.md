@@ -187,7 +187,7 @@ go run ./service/aiServeWeaveGateway \
 
 | 接口（租户会话） | 说明 |
 | --- | --- |
-| `GET /admin/v1/nodes` | 所有角色可读。本商户的自有节点，最新在前，最多 200 条：`{items: [{node_id, created_by, created_at, enroll_by, revoked_at?, status, agent_version?, last_heartbeat?}], max_per_tenant, max_creates_per_day}`。`status` 为 `online`/`offline`/`revoked`；机群读取失败或只拿到部分副本时为 `unknown`。只输出这些字段，不透出机群节点的标签等内部信息 |
+| `GET /admin/v1/nodes` | 所有角色可读。本商户的自有节点，最新在前，最多 200 条：`{items: [{node_id, created_by, created_at, enroll_by, revoked_at?, status, agent_version?, last_heartbeat?}], max_per_tenant, max_creates_per_day}`。已删除的节点不列出（行保留给每日上限计数）。`status` 为 `online`/`offline`；机群读取失败或只拿到部分副本时为 `unknown`。只输出这些字段，不透出机群节点的标签等内部信息 |
 | `POST /admin/v1/nodes` | owner/admin。请求体 `{"ttl_minutes": 15..1440}`，不接受其他字段；成功 `201`，响应与运维接入包相同（ZIP 以 base64 返回，只返回一次）。超过任一上限 `409`，签发失败 `503` |
 | `DELETE /admin/v1/nodes/:node_id` | owner/admin。先调 Registry `DisableNode`（同时经名册断开现有连接），成功后标记删除并返回 `204`；Registry 失败返回 `503`，行保持不变。已删除、非本商户或不存在的返回 `404` |
 
