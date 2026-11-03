@@ -23,7 +23,7 @@
 # Usage:
 #   deploy/upgrade.sh                      # pull, back up, rebuild everything that changed
 #   deploy/upgrade.sh gateway console      # rebuild only these services
-#   deploy/upgrade.sh --no-pull --force    # rebuild the current checkout as it is
+#   deploy/upgrade.sh --no-pull            # rebuild the current checkout as it is
 #   deploy/upgrade.sh --help
 set -euo pipefail
 
@@ -35,7 +35,7 @@ usage() {
 
   服务...           只重建这些服务（registry-init registry controlplane gateway console），默认全部
   --no-pull         不拉取代码，直接用当前工作区重建
-  --force           代码没有新提交也照常重建
+  --force           兼容旧用法，无作用（代码没有新提交时也会照常重建）
   --no-backup       跳过 MySQL 与 Registry 备份
   --backup-dir DIR  备份目录（默认 ~/aiserveweave-backups）
   --goproxy URL     构建时的 Go 模块代理，如 https://goproxy.cn,direct
@@ -45,13 +45,13 @@ EOF
 }
 
 ORIGINAL_ARGS=("$@")
-PULL=1 FORCE=0 BACKUP=1 PRUNE=0 FROM="" GOPROXY_ARG=""
+PULL=1 BACKUP=1 PRUNE=0 FROM="" GOPROXY_ARG=""
 BACKUP_DIR="${AISW_BACKUP_DIR:-$HOME/aiserveweave-backups}"
 SERVICES=()
 while (($# > 0)); do
   case "$1" in
     --no-pull) PULL=0; shift ;;
-    --force) FORCE=1; shift ;;
+    --force) shift ;; # accepted for old commands; a rebuild always runs / 兼容旧命令；总会重建
     --no-backup) BACKUP=0; shift ;;
     --backup-dir) BACKUP_DIR="${2:?}"; shift 2 ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
@@ -82,7 +82,13 @@ $dirty"
   old="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   new="$(git -C "$ROOT_DIR" rev-parse '@{u}')"
   if [[ "$old" == "$new" ]]; then
-    (( FORCE == 1 )) || { log "已是最新（${old:0:12}），无需重新部署；要强制重建加 --force"; exit 0; }
+    # An up-to-date checkout says nothing about the running containers: a
+    # manual git pull leaves them on the old build. So keep going; unchanged
+    # images come from the build cache and compose recreates only what changed.
+    #
+    # 代码已是最新不代表容器已是最新：手动 git pull 之后容器仍是旧版本。所以照常继续；
+    # 没变化的镜像走构建缓存，compose 只重建有变化的容器。
+    log "代码已是最新（${old:0:12}），按当前代码重建；未变化的镜像走构建缓存，容器只在有变化时重建"
   else
     # Whether the old and new commits track controlplane.yaml decides how
     # the local copy survives the fast-forward.
@@ -126,7 +132,7 @@ $dirty"
       die "恢复 deploy/controlplane.yaml 本地修改时冲突。代码已更新到 ${new:0:12}，服务未改动。
   手工解决 deploy/controlplane.yaml 中的冲突标记后执行:
     git -C $ROOT_DIR reset -q -- deploy/controlplane.yaml && git -C $ROOT_DIR stash drop
-  再运行: deploy/upgrade.sh --no-pull --force"
+  再运行: deploy/upgrade.sh --no-pull"
     fi
     if (( moved == 1 )); then
       mv -f "$aside" "$config"
@@ -138,7 +144,7 @@ $dirty"
     # steps below are the new version's rather than the one already in memory.
     #
     # 重新执行刚拉取下来的这份脚本，让下面的构建与启动步骤用新版本，而不是已经读进内存的旧版本。
-    exec bash "$DEPLOY_DIR/upgrade.sh" --no-pull --force --from "$old" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
+    exec bash "$DEPLOY_DIR/upgrade.sh" --no-pull --from "$old" ${ORIGINAL_ARGS[@]+"${ORIGINAL_ARGS[@]}"}
   fi
 fi
 
@@ -181,7 +187,7 @@ fi
 echo
 log "重新部署完成：$(source_version)"
 if [[ -n "$FROM" ]]; then
-  echo "  回滚代码: cd $ROOT_DIR && cp deploy/controlplane.yaml deploy/controlplane.yaml.bak && git stash && git checkout ${FROM:0:12} && git stash pop && cp deploy/controlplane.yaml.bak deploy/controlplane.yaml && deploy/upgrade.sh --no-pull --force --no-backup"
+  echo "  回滚代码: cd $ROOT_DIR && cp deploy/controlplane.yaml deploy/controlplane.yaml.bak && git stash && git checkout ${FROM:0:12} && git stash pop && cp deploy/controlplane.yaml.bak deploy/controlplane.yaml && deploy/upgrade.sh --no-pull --no-backup"
   echo "            旧版本若仍跟踪 controlplane.yaml，checkout 会覆盖它，所以先备份再放回"
   echo "            回滚后处于 detached HEAD，恢复跟踪分支用 git checkout <分支名>"
 fi

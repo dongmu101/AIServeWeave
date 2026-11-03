@@ -65,11 +65,12 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 ```bash
 deploy/upgrade.sh                    # 拉取当前分支的上游提交，备份，重建有变化的服务
 deploy/upgrade.sh gateway console    # 只重建指定服务
-deploy/upgrade.sh --no-pull --force  # 不拉取代码，直接按当前工作区重建
+deploy/upgrade.sh --no-pull          # 不拉取代码，直接按当前工作区重建
 ```
 
 升级按以下流程进行：
 
+- 代码已是最新时照常重建，不会提前退出：手动 `git pull` 之后容器仍是旧版本，所以不能用「代码有没有新提交」判断要不要部署。未变化的镜像走构建缓存，容器只在镜像或配置有变化时重建；`--force` 只为兼容旧命令保留，不再有作用。
 - 只做快进合并。`controlplane.yaml` 是本机文件，拉取不会动它；从仍跟踪该文件的旧版本第一次升级上来时，脚本在拉取期间把它挪开、拉取后原样放回，并改为不受跟踪。上游若重新跟踪该文件，脚本拒绝升级，避免覆盖本机配置。其他已跟踪文件有本地修改时直接拒绝升级。
 - 拉取后改用新版本的脚本继续执行，补齐新版本要求的空密钥。
 - 如果 `.env.example` 新增了变量，或 `controlplane.example.yaml` 有上游改动，给出提示和查看差异的命令，由你决定是否同步到本机的 `controlplane.yaml`。
