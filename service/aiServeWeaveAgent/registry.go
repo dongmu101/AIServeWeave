@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"sync"
 
@@ -39,14 +40,20 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 // localDeclarations is the set of locally declared CLI and hosted runtimes
 // the registry's factories admit. It is shared rather than copied so a
 // runtime reload (see runtimeReloader) can declare a new CLI account or
-// provider without rebuilding the registry.
+// provider without rebuilding the registry. Declarations from the
+// configuration file and those the Agent made itself (see clidiscovery) are
+// kept apart, so a reload that replaces the former never withdraws the latter
+// while its runtime is still registered; a file declaration of the same ID
+// takes precedence.
 //
 // localDeclarations 是注册表工厂所接受的、本地声明的 CLI 与托管运行时集合。它被共享
 // 而不是复制，使运行时重新加载（见 runtimeReloader）无需重建注册表就能声明新的 CLI 账户
-// 或供应商。
+// 或供应商。配置文件的声明与 Agent 自己做出的声明（见 clidiscovery）分开保存，因此替换
+// 前者的重新加载不会在后者的运行时仍注册时把它撤回；同一 ID 以配置文件的声明为准。
 type localDeclarations struct {
-	mu   sync.RWMutex
-	byID map[string]runtime.Config
+	mu         sync.RWMutex
+	byID       map[string]runtime.Config // from the configuration file / 来自配置文件
+	discovered map[string]runtime.Config // declared by the Agent itself / Agent 自己声明的
 }
 
 // newLocalDeclarations returns the declarations among declared that need one.
@@ -57,12 +64,14 @@ func newLocalDeclarations(declared []runtime.Config) *localDeclarations {
 	return d
 }
 
-// set replaces the declarations with those among declared.
-// set 用 declared 中需要本地声明的那些替换当前声明。
+// set replaces the file declarations with those among declared; declarations
+// the Agent made itself are kept.
+//
+// set 用 declared 中需要本地声明的那些替换配置文件的声明；Agent 自己做出的声明保留。
 func (d *localDeclarations) set(declared []runtime.Config) {
 	byID := make(map[string]runtime.Config)
 	for _, cfg := range declared {
-		if cfg.Kind.IsLocalCLI() || cfg.Kind.IsHosted() {
+		if needsLocalDeclaration(cfg.Kind) {
 			byID[cfg.ID] = cfg
 		}
 	}
@@ -77,33 +86,60 @@ func (d *localDeclarations) set(declared []runtime.Config) {
 // add 在本地声明 cfg，用于 Agent 自己决定注册的运行时（见 clidiscovery）。只有 CLI 与
 // 托管种类需要声明。
 func (d *localDeclarations) add(cfg runtime.Config) {
-	if !cfg.Kind.IsLocalCLI() && !cfg.Kind.IsHosted() {
+	if !needsLocalDeclaration(cfg.Kind) {
 		return
 	}
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	if d.byID == nil {
-		d.byID = make(map[string]runtime.Config)
+	if d.discovered == nil {
+		d.discovered = make(map[string]runtime.Config)
 	}
-	d.byID[cfg.ID] = cfg
+	d.discovered[cfg.ID] = cfg
 }
 
-// remove withdraws the declaration for id.
-// remove 撤回 id 的声明。
+// remove withdraws the Agent's own declaration for id.
+// remove 撤回 Agent 自己对 id 做出的声明。
 func (d *localDeclarations) remove(id string) {
 	d.mu.Lock()
-	delete(d.byID, id)
+	delete(d.discovered, id)
 	d.mu.Unlock()
 }
 
-// get returns the local declaration for id.
-// get 返回 id 的本地声明。
+// get returns the local declaration for id, preferring the file's.
+// get 返回 id 的本地声明，优先取配置文件的声明。
 func (d *localDeclarations) get(id string) (runtime.Config, bool) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	cfg, ok := d.byID[id]
+	if cfg, ok := d.byID[id]; ok {
+		return cfg, true
+	}
+	cfg, ok := d.discovered[id]
 	return cfg, ok
 }
+
+// all returns every effective declaration sorted by ID, file declarations
+// shadowing the Agent's own for the same ID.
+//
+// all 返回按 ID 排序的全部有效声明，同一 ID 下配置文件的声明覆盖 Agent 自己的声明。
+func (d *localDeclarations) all() []runtime.Config {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	out := make([]runtime.Config, 0, len(d.byID)+len(d.discovered))
+	for _, cfg := range d.byID {
+		out = append(out, cfg)
+	}
+	for id, cfg := range d.discovered {
+		if _, shadowed := d.byID[id]; !shadowed {
+			out = append(out, cfg)
+		}
+	}
+	slices.SortFunc(out, func(a, b runtime.Config) int { return strings.Compare(a.ID, b.ID) })
+	return out
+}
+
+// needsLocalDeclaration reports whether kind may only be built from a local declaration.
+// needsLocalDeclaration 报告 kind 是否只能依据本地声明构建。
+func needsLocalDeclaration(kind runtime.Kind) bool { return kind.IsLocalCLI() || kind.IsHosted() }
 
 // newReloadableRegistry is newRegistry over a declaration set the caller keeps
 // and may later replace.

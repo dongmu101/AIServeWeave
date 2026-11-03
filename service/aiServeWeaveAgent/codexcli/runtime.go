@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 var errUnsupported = errors.New("codexcli: request feature is unsupported")
@@ -372,11 +373,19 @@ func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 	return report, err
 }
 
-// Discover publishes the locally authenticated model catalog.
-// Discover 发布本机已登录账户的模型目录。
+// Discover publishes the locally authenticated model catalog and the CLI
+// version reported by `codex --version`; Version stays empty when the CLI
+// does not report one.
+//
+// Discover 发布本机已登录账户的模型目录，以及 `codex --version` 报告的 CLI 版本；
+// CLI 未报告版本时 Version 留空。
 func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 	models, err := r.inspect(ctx)
-	return runtime.Discovery{Models: models, Capabilities: runtimeCapabilities(models), DiscoveredAt: r.deps.Clock.Now()}, err
+	if err != nil {
+		return runtime.Discovery{Models: models, Capabilities: runtimeCapabilities(models), DiscoveredAt: r.deps.Clock.Now()}, err
+	}
+	version := cliprocess.Version(ctx, r.executable, r.env)
+	return runtime.Discovery{Version: version, Models: models, Capabilities: runtimeCapabilities(models), DiscoveredAt: r.deps.Clock.Now()}, nil
 }
 
 // ListModels reads models using the local app-server, without inference.

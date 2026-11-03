@@ -1,6 +1,7 @@
 package main
 
 import (
+	"sync"
 	"time"
 
 	"AIServeWeave/common/runtime"
@@ -58,4 +59,33 @@ func cliUsageProviders(configs []runtime.Config) []cliusage.Provider {
 // newCLIUsageMonitor 为本地声明的 CLI 后端构造 monitor。
 func newCLIUsageMonitor(configs []runtime.Config, clock runtime.Clock) *cliusage.Monitor {
 	return cliusage.NewMonitor(clock, cliUsageProviders(configs))
+}
+
+// usageRefresher re-selects the quota accounts from the effective local
+// declarations. Reloads and CLI auto-discovery both change those
+// declarations from different goroutines; serializing the read-and-replace
+// keeps an older snapshot from overwriting a newer one.
+//
+// usageRefresher 依据有效的本地声明重新选取额度账户。重新加载与 CLI 自动发现会在不同
+// 协程中修改这些声明；把「读取并替换」串行化，避免较旧的快照覆盖较新的快照。
+type usageRefresher struct {
+	mu      sync.Mutex
+	monitor *cliusage.Monitor
+	local   *localDeclarations
+	// start launches the refresh loop; it is called only when the monitor
+	// has accounts but no loop (see cliusage.Monitor.Replace).
+	// start 启动刷新循环；仅在监视器有账户却没有循环时调用（见 cliusage.Monitor.Replace）。
+	start func()
+}
+
+// refresh replaces the monitor's providers with those of every effective
+// declaration, including a CLI the Agent registered itself.
+//
+// refresh 用全部有效声明（包括 Agent 自己注册的 CLI）的查询来源替换监视器的来源。
+func (u *usageRefresher) refresh() {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	if u.monitor.Replace(cliUsageProviders(u.local.all())) && u.start != nil {
+		u.start()
+	}
 }

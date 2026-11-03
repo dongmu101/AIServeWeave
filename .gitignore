@@ -13,3 +13,5 @@ dist/
 
 # go test -c / dlv test binaries
 *.test
+data/open7x
+deploy/config.open7x.yaml

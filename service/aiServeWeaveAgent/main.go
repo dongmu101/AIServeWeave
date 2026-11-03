@@ -326,6 +326,11 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		}
 	})
 	cliUsage := newCLIUsageMonitor(declaredRuntimes, deps.Clock)
+	usage := &usageRefresher{monitor: cliUsage, local: local, start: func() {
+		if opts.enabled() {
+			go cliUsage.Run(ctx, cliUsageRefreshInterval)
+		}
+	}}
 	if opts.enabled() {
 		// Only a node with a tunnel has anywhere to report the quota to; the
 		// settings page refreshes the cache on its own when it is viewed.
@@ -428,12 +433,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		return nil
 	}}
 	reloader.Store(&runtimeReloader{
-		path: reload.path, extra: reload.extra, local: local, manager: manager, usage: cliUsage,
-		usageStarted: func() {
-			if opts.enabled() {
-				go cliUsage.Run(ctx, cliUsageRefreshInterval)
-			}
-		},
+		path: reload.path, extra: reload.extra, local: local, manager: manager, refreshUsage: usage.refresh,
 		allowed: opts.runtimeIDs(), logger: logger, current: slices.Clone(declaredRuntimes),
 		remote: remote, localDeclared: slices.Clone(declaredRuntimes),
 	})
@@ -464,7 +464,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		slog.Bool("auto_discover", autoDiscover),
 	)
 
-	discoveryDone := startLocalDiscovery(ctx, logger, manager, local, opts.runtimeIDs(), autoDiscover, autoDiscoverInterval)
+	discoveryDone := startLocalDiscovery(ctx, logger, manager, local, usage.refresh, opts.runtimeIDs(), autoDiscover, autoDiscoverInterval)
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 

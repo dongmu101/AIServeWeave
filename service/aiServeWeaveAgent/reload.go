@@ -11,7 +11,6 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
-	"AIServeWeave/service/aiServeWeaveAgent/cliusage"
 )
 
 // errNoReloadSource means the Agent was started without a config file to
@@ -39,13 +38,10 @@ type runtimeReloader struct {
 	extra   []runtime.Config
 	local   *localDeclarations
 	manager runtime.Manager
-	usage   *cliusage.Monitor
-	// usageStarted is called when the quota monitor has accounts but no
-	// refresh loop (see cliusage.Monitor.Replace), so the caller can start
-	// one; the loop returns at once while there is no account.
-	// usageStarted 在额度监视器有账户却没有刷新循环时调用（见
-	// cliusage.Monitor.Replace），以便调用方启动一个；没有账户时该循环会立即返回。
-	usageStarted func()
+	// refreshUsage re-selects the CLI quota accounts from local after the
+	// declarations change; nil when there is no quota monitor.
+	// refreshUsage 在声明变化后依据 local 重新选取 CLI 额度账户；没有额度监视器时为 nil。
+	refreshUsage func()
 	allowed      []string
 	logger       *slog.Logger
 	// remote supplies the runtimes the control plane provisioned
@@ -206,8 +202,8 @@ func (r *runtimeReloader) applyLocked(ctx context.Context, local []runtime.Confi
 
 	r.current = applied
 	r.local.set(applied)
-	if r.usage != nil && r.usage.Replace(cliUsageProviders(applied)) && r.usageStarted != nil {
-		r.usageStarted()
+	if r.refreshUsage != nil {
+		r.refreshUsage()
 	}
 	r.logChanges(changes, applied)
 	if r.remote != nil {

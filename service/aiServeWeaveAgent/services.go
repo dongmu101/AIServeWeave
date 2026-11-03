@@ -52,14 +52,17 @@ func startMetricsEndpoint(logger *slog.Logger, registry *metrics.Registry, addr 
 // instances down. When autoDiscover is false the channel is returned already
 // closed, so waiting on it is always safe regardless of whether discovery is
 // enabled. The CLI scanner follows the same switch: -auto-discover=false also
-// stops a logged-in Codex CLI from being registered on its own.
+// stops a logged-in Codex CLI from being registered on its own. registered
+// runs after the CLI scanner registers a runtime, so its subscription quota
+// is queried like a declared one's.
 //
 // startLocalDiscovery 在后台启动 localdiscovery.Scanner 与 clidiscovery.Scanner，并返回
 // 一个通道，两个协程都退出后（在 ctx 取消之后，而不是之前）才关闭，让调用方能在 Close 开始
 // 拆除实例之前，等待正在进行的 Manager.Add 完成。autoDiscover 为 false 时返回的通道已经
 // 关闭，因此无论是否启用发现，等待它都是安全的。CLI 扫描器服从同一个开关：
-// -auto-discover=false 也会让已登录的 Codex CLI 不再被自动注册。
-func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runtime.Manager, local *localDeclarations, allowed []string, autoDiscover bool, interval time.Duration) <-chan struct{} {
+// -auto-discover=false 也会让已登录的 Codex CLI 不再被自动注册。registered 在 CLI 扫描器
+// 注册运行时之后调用，使其订阅额度与已声明的运行时一样被查询。
+func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runtime.Manager, local *localDeclarations, registered func(), allowed []string, autoDiscover bool, interval time.Duration) <-chan struct{} {
 	done := make(chan struct{})
 	if !autoDiscover {
 		close(done)
@@ -69,6 +72,7 @@ func startLocalDiscovery(ctx context.Context, logger *slog.Logger, manager runti
 		Manager:         manager,
 		Declare:         local.add,
 		Undeclare:       local.remove,
+		Registered:      func(runtime.Config) { registered() },
 		AllowedRuntimes: allowed,
 		Logger:          logger,
 	})

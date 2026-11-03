@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
 // Runtime owns bounded CLI sessions; callers execute all requested tools.
@@ -129,8 +130,12 @@ func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 	return runtime.HealthReport{State: state, CheckedAt: r.bridge.clock.Now()}, err
 }
 
-// Discover reads the CLI model catalogue without inference and publishes Messages capability.
-// Discover 不执行推理，读取 CLI 模型目录并发布 Messages 能力。
+// Discover reads the CLI model catalogue without inference and publishes
+// Messages capability and the CLI version reported by `claude --version`;
+// Version stays empty when the CLI does not report one.
+//
+// Discover 不执行推理，读取 CLI 模型目录，发布 Messages 能力以及 `claude --version`
+// 报告的 CLI 版本；CLI 未报告版本时 Version 留空。
 func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 	models, err := r.inspect(ctx, true)
 	if err != nil {
@@ -147,7 +152,8 @@ func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 	for i, id := range models {
 		list = append(list, runtime.Model{ID: id, DisplayName: id, DisplayOrder: uint32(i + 1), Capabilities: caps})
 	}
-	return runtime.Discovery{Capabilities: caps, Models: list, DiscoveredAt: r.bridge.clock.Now()}, nil
+	version := cliprocess.Version(ctx, r.bridge.program, r.bridge.env)
+	return runtime.Discovery{Version: version, Capabilities: caps, Models: list, DiscoveredAt: r.bridge.clock.Now()}, nil
 }
 
 type nativeItem struct {

@@ -60,6 +60,12 @@ type Config struct {
 	// 添加失败时 Undeclare 再把它撤回。
 	Declare   func(cfg runtime.Config)
 	Undeclare func(id string)
+	// Registered, when set, is called after cfg has been added, so the
+	// caller can start what follows a declared CLI, such as its quota query.
+	//
+	// Registered 非空时在 cfg 添加成功后调用，使调用方能启动已声明 CLI 的后续工作，
+	// 例如额度查询。
+	Registered func(cfg runtime.Config)
 
 	// AllowedRuntimes is the Agent's runtime allowlist. When it is not empty
 	// and does not list CodexID, nothing is registered, because the tunnel
@@ -176,4 +182,7 @@ func (s *Scanner) scanOnce(ctx context.Context) {
 	}
 	s.cfg.Logger.Info("auto-discovered a local Codex CLI",
 		slog.String("id", CodexID), slog.String("kind", string(runtime.KindCodex)))
+	if s.cfg.Registered != nil {
+		s.cfg.Registered(cfg)
+	}
 }
