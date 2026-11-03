@@ -192,8 +192,10 @@ func TestMessagesRoundTrip(t *testing.T) {
 	}
 }
 
-// TestMessagesContinuationGuards keeps invalid continuations from consuming results.
-// TestMessagesContinuationGuards 保证非法续接不会消费待决工具结果。
+// TestMessagesContinuationGuards keeps invalid continuations from consuming
+// results. An ID that no session holds resumes as a new session instead.
+// TestMessagesContinuationGuards 保证非法续接不会消费待决工具结果；没有会话持有的
+// ID 改为以新会话恢复。
 func TestMessagesContinuationGuards(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -224,7 +226,10 @@ func TestMessagesContinuationGuards(t *testing.T) {
 			var invalid messagesRequest
 			_ = json.Unmarshal(data, &invalid)
 			tc.mutate(&invalid)
-			if w := sendMessages(b, invalid, tc.key); w.Code != 400 && w.Code != 409 {
+			resumes := tc.name == "unknown ID" // no session holds it / 没有会话持有该 ID
+			if w := sendMessages(b, invalid, tc.key); resumes && w.Code != 200 {
+				t.Fatalf("orphan status = %d, want 200", w.Code)
+			} else if !resumes && w.Code != 400 && w.Code != 409 {
 				t.Fatalf("invalid status = %d, want 400 or 409", w.Code)
 			}
 			if w := sendMessages(b, req, "first"); w.Code != 200 || !strings.Contains(w.Body.String(), "expected") {

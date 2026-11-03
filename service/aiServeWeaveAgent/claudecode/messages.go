@@ -314,12 +314,72 @@ type messagesBridge struct {
 	// start is replaced by offline fixtures, never by HTTP input.
 	// start 仅由离线测试替换，从不取自 HTTP 输入。
 	start func(*messagesSession)
+	// consumed maps tool IDs whose results were delivered to their expiry,
+	// so a replay is rejected even after its session ended. Guarded by mu.
+	// consumed 记录已投递结果的工具 ID 及其到期时间，会话结束后重放仍被拒绝。受 mu 保护。
+	consumed map[string]time.Time
 }
 
+// Replay memory. It outlives the Gateway's own used marker so either side
+// alone refuses a replay; maxConsumed keeps it bounded under any load.
+//
+// 重放记忆。它比 Gateway 的已使用标记存活更久，任何一侧单独都能拒绝重放；
+// maxConsumed 保证任何负载下都有界。
+const (
+	// consumedTTL is how long a delivered tool ID stays refused.
+	// consumedTTL 是已投递工具 ID 保持被拒绝的时长。
+	consumedTTL = 24 * time.Hour
+	// maxConsumed caps the remembered IDs; past it the oldest are dropped.
+	// maxConsumed 限制记住的 ID 数量，超出后丢弃最早的。
+	maxConsumed = 8192
+)
+
 func newMessagesBridge(program, model string, keys map[string]principal, clock runtime.Clock) *messagesBridge {
-	b := &messagesBridge{program: program, model: model, keys: keys, clock: clock, sessions: make(map[*messagesSession]bool), capacity: 2}
+	b := &messagesBridge{program: program, model: model, keys: keys, clock: clock, sessions: make(map[*messagesSession]bool), capacity: 2, consumed: make(map[string]time.Time)}
 	b.start = b.runSession
 	return b
+}
+
+// consumedLocked reports whether any of results was already delivered and is
+// still remembered. The caller holds b.mu.
+//
+// consumedLocked 报告 results 中是否有已投递且仍在记忆中的工具 ID。调用方持有 b.mu。
+func (b *messagesBridge) consumedLocked(results map[string]toolResult) bool {
+	now := b.clock.Now()
+	for id := range results {
+		if expiry, ok := b.consumed[id]; ok && now.Before(expiry) {
+			return true
+		}
+	}
+	return false
+}
+
+// consumeLocked remembers delivered tool IDs, first dropping expired entries
+// and then, if still full, the entries closest to expiry. The caller holds b.mu.
+//
+// consumeLocked 记住已投递的工具 ID：先清除过期项，仍然满时再丢弃最接近到期的项。
+// 调用方持有 b.mu。
+func (b *messagesBridge) consumeLocked(results map[string]toolResult) {
+	now := b.clock.Now()
+	if len(b.consumed)+len(results) > maxConsumed {
+		for id, expiry := range b.consumed {
+			if !now.Before(expiry) {
+				delete(b.consumed, id)
+			}
+		}
+		for len(b.consumed)+len(results) > maxConsumed {
+			oldest, first := "", time.Time{}
+			for id, expiry := range b.consumed {
+				if oldest == "" || expiry.Before(first) {
+					oldest, first = id, expiry
+				}
+			}
+			delete(b.consumed, oldest)
+		}
+	}
+	for id := range results {
+		b.consumed[id] = now.Add(consumedTTL)
+	}
 }
 
 // cliEnv returns the environment every CLI process of this bridge starts with.
@@ -560,6 +620,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 					s.pending[id].result <- result
 					s.pending[id].delivered = true
 				}
+				b.consumeLocked(results)
 				s.signalLocked()
 				s.mu.Unlock()
 				s.touch()
@@ -567,25 +628,31 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 			}
 			s.mu.Unlock()
 		}
-		// A session that still holds an ID saw a mismatched request; no holder
-		// at all means the round is unrecoverable on this node.
-		// 仍有会话持有某个 ID，说明是请求与会话不匹配；完全没有持有者，说明该回合
-		// 在本节点上已无法恢复。
-		if !held {
-			return nil, errSessionGone
+		// A session that still holds an ID saw a mismatched request, and an ID
+		// already delivered is a replay. Otherwise the CLI that asked is gone
+		// (expired, Agent restarted, or the Gateway lease lapsed), so the round
+		// resumes in a new session that reads the results from the transcript;
+		// the tools already ran on the caller's side and nothing runs twice.
+		//
+		// 仍有会话持有某个 ID，说明请求与会话不匹配；ID 已投递过则是重放。否则说明
+		// 发起调用的 CLI 已不存在（过期、Agent 重启或 Gateway 租约失效），此时在新会话
+		// 中从文本记录读取这些结果继续该回合；工具已在调用方执行，不会重复执行。
+		if held || b.consumedLocked(results) {
+			return nil, errCallRejected
 		}
-		return nil, errCallRejected
 	}
 	// Public CLI input cannot faithfully inject assistant history, so a new
-	// session must end with a user prompt; earlier turns reach the CLI only as
-	// the role-labelled transcript sessionPrompt renders.
-	// 公开 CLI 输入无法保真注入 assistant 历史，因此新会话必须以一条用户提问结尾；
-	// 此前的回合只以 sessionPrompt 渲染的带角色文本记录交给 CLI。
+	// session must end with a user message: a prompt, or the results that
+	// resume an orphaned round. Earlier turns reach the CLI only as the
+	// role-labelled transcript sessionPrompt renders.
+	// 公开 CLI 输入无法保真注入 assistant 历史，因此新会话必须以一条用户消息结尾：
+	// 提问，或恢复孤立回合的工具结果。此前的回合只以 sessionPrompt 渲染的带角色
+	// 文本记录交给 CLI。
 	if req.Messages[len(req.Messages)-1].Role != "user" {
 		return nil, errMessages
 	}
 	for _, block := range last {
-		if block.Type != "text" {
+		if block.Type != "text" && block.Type != "tool_result" {
 			return nil, errMessages
 		}
 	}
@@ -595,6 +662,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &messagesSession{owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
 	b.sessions[s] = true
+	b.consumeLocked(results) // a resumed round's results are used up too / 恢复回合的结果同样视为已用
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()

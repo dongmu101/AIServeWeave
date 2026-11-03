@@ -137,6 +137,10 @@ type nativeOutput interface {
 	// streaming reports whether response headers are already sent.
 	// streaming 报告响应头是否已经发出。
 	streaming() bool
+	// keepAlive sends the response headers if needed and one heartbeat that
+	// carries no model output, keeping an idle stream past proxy timeouts.
+	// keepAlive 按需发出响应头和一次不含模型输出的心跳，使空闲的流不被代理超时切断。
+	keepAlive() error
 	// endpoints names the usage ledger and metrics endpoints of the protocol.
 	// endpoints 给出该协议在用量账本与指标中的端点名。
 	endpoints() (usage, metric string)
@@ -186,26 +190,73 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	native := runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw}
+	// received reports whether a model event reached the client; started only
+	// whether response headers went out, which a heartbeat may do first.
+	// received 表示是否已有模型事件送达客户端；started 只表示响应头是否已发出，心跳可能先发出响应头。
+	received := false
+	var ping func() error
+	if req.Stream {
+		ping = func() error {
+			if out != nil {
+				err := out.keepAlive()
+				started = out.streaming()
+				return err
+			}
+			if !started {
+				w.Header().Set("Content-Type", "text/event-stream")
+				w.Header().Set("Cache-Control", "no-cache")
+				started = true
+			}
+			if err := writeAnthropicSSE(w, "ping", map[string]string{"type": "ping"}); err != nil {
+				return err
+			}
+			return http.NewResponseController(w).Flush()
+		}
+	}
+	type dispatched struct {
+		stream    runtime.Stream[runtime.MessagesEvent]
+		candidate scheduler.Candidate
+		err       error
+	}
 	var record messagesession.Record
 	var finish func(context.Context, bool) error
 	var stream runtime.Stream[runtime.MessagesEvent]
 	var err error
 	committed := false
+	resume := false
 	if len(ids) > 0 {
 		record, finish, err = h.messagesSessions.Claim(r.Context(), ids, identity.TenantID, identity.KeyID, req.Model)
-		if err != nil {
+		switch {
+		case errors.Is(err, messagesession.ErrExpired):
+			// Nobody continued this round in time, so its CLI is gone; the
+			// round resumes in a new session that reads the results from the
+			// transcript. Consumed or contested rounds still answer 409 below.
+			// 这一回合没有在时限内被续接，其 CLI 已不存在；在新会话中从文本记录读取结果
+			// 恢复该回合。已消费或被争用的回合仍在下面返回 409。
+			resume = true
+		case err != nil:
 			continuationUnavailable()
 			return
+		default:
+			defer func() {
+				ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
+				defer cancel()
+				_ = finish(ctx, committed)
+			}()
+			d := awaitAlive(h.clock, ping, func() dispatched {
+				stream, err := h.sched.Messages(r.Context(), record.Candidate, native)
+				return dispatched{stream: stream, err: err}
+			})
+			stream, err = d.stream, d.err
 		}
-		defer func() {
-			ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 5*time.Second)
-			defer cancel()
-			_ = finish(ctx, committed)
-		}()
-		stream, err = h.sched.Messages(r.Context(), record.Candidate, native)
-	} else {
-		var candidate scheduler.Candidate
-		stream, candidate, err = h.sched.MessagesStart(r.Context(), native)
+	}
+	if len(ids) == 0 || resume {
+		d := awaitAlive(h.clock, ping, func() dispatched {
+			stream, candidate, err := h.sched.MessagesStart(r.Context(), native)
+			return dispatched{stream, candidate, err}
+		})
+		stream, err = d.stream, d.err
+		candidate := d.candidate
 		// A model the caller may not use falls through to dispatchError's
 		// not-found, like any other front door; only a missing native node is
 		// an outage.
@@ -233,8 +284,16 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	protocolError := func(message string) {
 		fail(502, "api_error", "upstream_protocol", message)
 	}
+	type recvResult struct {
+		item runtime.MessagesEvent
+		err  error
+	}
 	for {
-		item, err := stream.Recv()
+		got := awaitAlive(h.clock, ping, func() recvResult {
+			item, err := stream.Recv()
+			return recvResult{item, err}
+		})
+		item, err := got.item, got.err
 		if err == io.EOF {
 			if !stopped {
 				err = errors.New("Messages stream ended before message_stop")
@@ -252,7 +311,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 		}
 		if err != nil {
-			if !started {
+			if !received {
 				committed = committed || !messagesNotApplied(err)
 				dispatchError(err)
 			} else {
@@ -370,10 +429,11 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				if err := out.event(data); err != nil {
 					return
 				}
-				if !started && out.streaming() {
+				if !received && out.streaming() {
 					_, metric := out.endpoints()
 					h.logTTFT(r, req.Model, record.Candidate.NodeID, start, true)
 					h.metrics.TTFT(metric, time.Since(start))
+					received = true
 				}
 				started = out.streaming()
 				continue
@@ -382,7 +442,10 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				w.Header().Set("Content-Type", "text/event-stream")
 				w.Header().Set("Cache-Control", "no-cache")
 				started = true
+			}
+			if !received {
 				h.logTTFT(r, req.Model, record.Candidate.NodeID, start, true)
+				received = true
 			}
 			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Type, data); err != nil {
 				return

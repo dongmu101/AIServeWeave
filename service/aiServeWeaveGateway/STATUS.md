@@ -778,7 +778,9 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接仍经 `Scheduler.Messages` 只发往绑定的节点。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
 
-Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），已投递或结果不确定时拒绝重放。续接不会换节点。Agent 重启或等待超时后，节点答复 `runtime_closed`，Gateway 消费绑定，返回与绑定过期相同的 409 `continuation_unavailable`；节点失联时返回 503，同样消费绑定。两种情况都需要开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
+Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），续接成功后保留已使用标记 24 小时，已投递或结果不确定时拒绝重放（409 `continuation_unavailable`）。续接不会换节点。绑定已过期（Redis 中完全没有记录，`messagesession.ErrExpired`）时，请求按新会话经 `MessagesStart` 调度，由 Agent 以文本记录恢复该回合；租约有效但原节点的 CLI 已不存在时，新版 Agent 在原节点就地开新会话恢复（旧版 Agent 仍答复 `runtime_closed`，Gateway 返回 409）。节点失联时返回 503，消费绑定。
+
+原生流式响应（Messages、Chat、Responses 三种输出）静默 15 秒即写一次心跳，避免 Nginx `proxy_read_timeout`（默认 60 秒）等代理在 CLI 启动或首个 token 较慢时断开：Messages 发官方 `event: ping`，Chat 与 Responses 发 SSE 注释 `: keep-alive`（Responses 首次心跳会先发出 `response.created`/`in_progress`）。心跳可能在首个事件之前发出响应头，此后的失败只能以 SSE 错误事件返回，不再带 HTTP 状态码和 `Retry-After`；15 秒内完成的派发失败不受影响。非流式请求不发心跳。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 
 Claude CLI 后端通过 `initialize` 动态发布 `resolvedModel` 中去重后的真实模型 ID，并保留首次出现的顺序，`/v1/models` 汇总健康运行时的目录；启用别名路由时只展示具有可用目标的公共别名。
 

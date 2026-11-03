@@ -221,10 +221,9 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		switch {
 		case errors.Is(err, errCapacity):
 			code = runtime.ErrorBackpressure
-		case errors.Is(err, errSessionGone), errors.Is(err, errClosed):
-			// Gone is not a caller mistake: the Gateway reports it as an
-			// unavailable continuation, and a new session may try another node.
-			// 会话不存在不是调用方的错误：Gateway 据此报告续接不可用，新会话则可换节点。
+		case errors.Is(err, errClosed):
+			// Closing is not a caller mistake, and a new session may try another node.
+			// 正在关闭不是调用方的错误，新会话可以换节点。
 			code = runtime.ErrorClosed
 		}
 		return nil, claudeError(code)

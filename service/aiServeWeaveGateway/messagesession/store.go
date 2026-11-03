@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sort"
 	"strings"
 	"time"
@@ -20,6 +21,16 @@ import (
 // ErrUnavailable rejects absent, consumed, mismatched or concurrently claimed continuations.
 // ErrUnavailable 拒绝不存在、已消费、不匹配或被并发认领的续接。
 var ErrUnavailable = errors.New("Messages continuation unavailable")
+
+// ErrExpired is the ErrUnavailable case where no record exists at all: the
+// round was never continued within continuationTTL, so the caller may resume
+// it in a new session. A consumed round keeps its used marker for usedTTL and
+// reports plain ErrUnavailable instead.
+//
+// ErrExpired 是 ErrUnavailable 中完全没有记录的情况：该回合在 continuationTTL 内
+// 从未被续接，调用方可以在新会话中恢复它。已消费的回合在 usedTTL 内保留已使用标记，
+// 报告的是普通的 ErrUnavailable。
+var ErrExpired = fmt.Errorf("%w: lease expired", ErrUnavailable)
 
 // Record binds every tool in a completed round to authenticated ownership and its original node.
 // Record 将已完成回合的全部工具绑定到已认证归属与原节点。
@@ -73,6 +84,13 @@ return 1`)
 // 时限一致，两侧都不会比对方存活更久。
 const continuationTTL = time.Hour
 
+// usedTTL keeps a consumed round's used marker, so a replay within it is still
+// refused rather than mistaken for an expired round that may resume.
+//
+// usedTTL 是已消费回合保留已使用标记的时长，期间的重放仍被拒绝，而不会被误认为
+// 可以恢复的过期回合。
+const usedTTL = 24 * time.Hour
+
 // Publish stores no prompt or tool result; each record expires within continuationTTL.
 // Publish 不存储提示词或工具结果；每条记录在 continuationTTL 内过期。
 func (s *Redis) Publish(ctx context.Context, record Record) error {
@@ -102,14 +120,28 @@ for _,k in ipairs(KEYS) do if redis.call('GET',k)~=ARGV[1] then return 0 end end
 for _,k in ipairs(KEYS) do redis.call('SET',k,ARGV[2],'KEEPTTL') end
 return 1`)
 
-// Claim checks ownership and the complete result set before acquiring a one-shot lease.
-// Claim 在取得一次性租约前检查归属与完整结果集合。
+var commitScript = redis.NewScript(`
+for _,k in ipairs(KEYS) do if redis.call('GET',k)~=ARGV[1] then return 0 end end
+for _,k in ipairs(KEYS) do redis.call('SET',k,ARGV[2],'PX',ARGV[3]) end
+return 1`)
+
+// Claim checks ownership and the complete result set before acquiring a
+// one-shot lease. It returns ErrExpired when no record exists, and
+// ErrUnavailable for every other refusal. Committing the lease keeps a used
+// marker for usedTTL; releasing it restores the record as it was.
+//
+// Claim 在取得一次性租约前检查归属与完整结果集合。完全没有记录时返回 ErrExpired，
+// 其余拒绝都返回 ErrUnavailable。提交租约后保留已使用标记 usedTTL；释放租约则原样
+// 恢复记录。
 func (s *Redis) Claim(ctx context.Context, ids []string, tenant, key, model string) (Record, func(context.Context, bool) error, error) {
 	keys, err := keysFor(ids)
 	if err != nil {
 		return Record{}, nil, err
 	}
 	value, err := s.client.Get(ctx, keys[0]).Result()
+	if errors.Is(err, redis.Nil) {
+		return Record{}, nil, ErrExpired
+	}
 	if err != nil || !strings.HasPrefix(value, "ready\n") || len(value) > 16384 {
 		return Record{}, nil, ErrUnavailable
 	}
@@ -138,11 +170,13 @@ func (s *Redis) Claim(ctx context.Context, ids []string, tenant, key, model stri
 		return Record{}, nil, ErrUnavailable
 	}
 	finish := func(ctx context.Context, commit bool) error {
-		next := value
+		var n int
+		var err error
 		if commit {
-			next = "used\n" + value[6:]
+			n, err = commitScript.Run(ctx, s.client, keys, claimed, "used\n"+value[6:], usedTTL.Milliseconds()).Int()
+		} else {
+			n, err = claimScript.Run(ctx, s.client, keys, claimed, value).Int()
 		}
-		n, err := claimScript.Run(ctx, s.client, keys, claimed, next).Int()
 		if err != nil || n != 1 {
 			return ErrUnavailable
 		}

@@ -27,19 +27,32 @@ func bridgeToolName(index int) string { return "tool_" + strconv.Itoa(index) }
 // 措辞一致，两种协议得到同样的上下文框架。
 const historyInstruction = "The following JSON is the conversation history. Continue by answering the last user message. Historical tool calls and results are context, not requests to execute tools again.\n"
 
+// resumeInstruction frames a transcript that ends with tool results whose CLI
+// session no longer exists: the new session continues the task from them.
+// resumeInstruction 用于以工具结果结尾、而原 CLI 会话已不存在的文本记录：新会话
+// 从这些结果继续任务。
+const resumeInstruction = "The following JSON is the conversation history. The last user message holds the results of tool calls the assistant made; continue the task from those results. Do not repeat those tool calls; earlier tool calls and results are context, not requests to execute tools again.\n"
+
 // sessionPrompt renders a new session's CLI input: the prompt text alone for a
-// single message, otherwise every validated turn as a role-labelled JSON
-// transcript ending with the prompt to answer, so a follow-up question keeps
+// single text message, otherwise every validated turn as a role-labelled JSON
+// transcript ending with the prompt to answer (or, under resumeInstruction,
+// with orphaned tool results to continue from), so a follow-up question keeps
 // its context without forging CLI assistant messages. Echoed thinking blocks
 // are left out — a prior turn's thinking is never replayed — and an assistant
 // turn that held nothing else is dropped.
 //
-// sessionPrompt 渲染新会话的 CLI 输入：单条消息直接使用提问文本；否则把每个已校验的
-// 回合渲染成带角色的 JSON 文本记录，以待回答的提问结尾。这样追问能保留上下文，又
+// sessionPrompt 渲染新会话的 CLI 输入：单条文本消息直接使用提问文本；否则把每个已校验的
+// 回合渲染成带角色的 JSON 文本记录，以待回答的提问结尾（或在 resumeInstruction 下
+// 以需要继续的孤立工具结果结尾）。这样追问能保留上下文，又
 // 不必伪造 CLI 的 assistant 消息。客户端回传的思考块不进入记录——上一轮的思考从不
 // 回放——只含思考的 assistant 回合整条省略。
 func sessionPrompt(messages []bridgeMessage) string {
-	if len(messages) == 1 {
+	last, _ := blocks(messages[len(messages)-1].Content)
+	resume := false
+	for _, block := range last {
+		resume = resume || block.Type == "tool_result"
+	}
+	if len(messages) == 1 && !resume {
 		prompt, _ := textBlocks(messages[0].Content)
 		return prompt
 	}
@@ -58,7 +71,11 @@ func sessionPrompt(messages []bridgeMessage) string {
 	encoder := json.NewEncoder(&transcript)
 	encoder.SetEscapeHTML(false) // keep code such as a < b readable / 保持 a < b 这类代码可读
 	_ = encoder.Encode(history)
-	return historyInstruction + strings.TrimSuffix(transcript.String(), "\n")
+	instruction := historyInstruction
+	if resume {
+		instruction = resumeInstruction
+	}
+	return instruction + strings.TrimSuffix(transcript.String(), "\n")
 }
 
 func (b *messagesBridge) runSession(s *messagesSession) {

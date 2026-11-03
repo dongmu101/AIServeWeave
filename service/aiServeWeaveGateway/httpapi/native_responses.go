@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -161,6 +162,20 @@ type nativeResponsesOutput struct {
 }
 
 func (o *nativeResponsesOutput) streaming() bool { return o.started }
+
+// keepAlive opens the response (response.created and in_progress) if needed
+// and writes an SSE comment, which Responses clients ignore.
+// keepAlive 按需开启响应（response.created 与 in_progress），并写出一条 Responses
+// 客户端会忽略的 SSE 注释。
+func (o *nativeResponsesOutput) keepAlive() error {
+	if err := o.begin(); err != nil {
+		return err
+	}
+	if _, err := io.WriteString(o.w, ": keep-alive\n\n"); err != nil {
+		return err
+	}
+	return http.NewResponseController(o.w).Flush()
+}
 
 func (o *nativeResponsesOutput) endpoints() (string, string) {
 	return UsageEndpointResponses, EndpointResponses

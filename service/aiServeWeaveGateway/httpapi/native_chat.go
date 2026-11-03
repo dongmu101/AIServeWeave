@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -297,6 +298,20 @@ func (o *nativeChatOutput) event(data []byte) error {
 }
 
 func (o *nativeChatOutput) streaming() bool { return o.started }
+
+// keepAlive writes an SSE comment, which Chat clients ignore.
+// keepAlive 写出一条 SSE 注释，Chat 客户端会忽略它。
+func (o *nativeChatOutput) keepAlive() error {
+	if !o.started {
+		o.w.Header().Set("Content-Type", "text/event-stream")
+		o.w.Header().Set("Cache-Control", "no-cache")
+		o.started = true
+	}
+	if _, err := io.WriteString(o.w, ": keep-alive\n\n"); err != nil {
+		return err
+	}
+	return http.NewResponseController(o.w).Flush()
+}
 
 func (o *nativeChatOutput) endpoints() (string, string) {
 	return UsageEndpointChat, EndpointChatCompletions
