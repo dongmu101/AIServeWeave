@@ -111,6 +111,8 @@ report, err := codexcli.Probe(ctx, codexcli.Config{
 - 核对线程、turn、工具名、参数与调用 ID；重复或跨会话调用失败。CLI 终态、两个实际回调以及调用方随机结果均满足时才报告通过。
 - 取消和任何退出路径都清理 app-server 进程组。默认测试使用假子进程，不访问模型服务。
 
+**保留工具名**：app-server 把 `mcp` 与 `mcp__` 前缀（区分大小写）留给自己的 MCP 工具，`dynamicTools` 里出现这类名字时整个回合失败，Gateway 只能看到 `upstream_error`。Claude Code 的 MCP 工具一律命名为 `mcp__<服务>__<工具>`，因此正式 Runtime 用 `wireToolName` 把这类名字注册为 `c_` 前缀的别名（超过 64 字符时截断并拼接名字哈希），历史中的工具调用同样改写；app-server 回调别名时换回客户端原名再输出。别名与另一工具的真实名字相同时按 `ErrConfig` 拒绝。2026-11-03 在 open7x 上实测：`mcp__x__t`、`mcp__t`、`mcp` 失败，`x__t`、`mcp_x_t`、`MCP__x__t`、`xmcp__t` 正常。
+
 合成 Probe 的限制与正式 Runtime 的范围分别以上文为准；不声明完整 Responses API 对等。`dynamicTools` 是实验接口，CLI 更新后必须重新验证；不能仅凭 schema 出现某字段就假定该版本已实现对应能力。
 
 ## 官方依据

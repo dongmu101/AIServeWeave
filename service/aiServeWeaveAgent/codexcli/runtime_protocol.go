@@ -185,7 +185,9 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			if json.Unmarshal(n.Arguments, &args) != nil || args == nil {
 				return ErrProtocol
 			}
-			event.Delta = runtime.ChatMessageDelta{Role: "assistant", ToolCalls: []runtime.ToolCallDelta{{Index: 0, ID: n.CallID, Type: "function", Function: runtime.FunctionCallDelta{Name: n.Tool, Arguments: string(n.Arguments)}}}}
+			// The client sees its own tool name, not app-server's alias.
+			// 客户端看到的是它自己的工具名，而不是 app-server 中的别名。
+			event.Delta = runtime.ChatMessageDelta{Role: "assistant", ToolCalls: []runtime.ToolCallDelta{{Index: 0, ID: n.CallID, Type: "function", Function: runtime.FunctionCallDelta{Name: input.clientName(n.Tool), Arguments: string(n.Arguments)}}}}
 			if err := emit(event); err != nil {
 				return err
 			}

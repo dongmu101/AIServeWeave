@@ -68,19 +68,29 @@ const (
 // caller decodes the returned raw, so the native paths that forward the body
 // verbatim see exactly what the converted paths see. A malformed suffix value
 // is not an error — the model name is then taken as written — but a suffix
-// the body cannot take is.
+// the body cannot take is. A trailing context-window marker ("[1m]") is
+// dropped first (see stripContextWindowSuffix), so "model(high)[1m]" works.
 //
 // prepareRequest 返回在 context 上带有请求会话 key 的 r（见 scheduler.WithSessionKey），
 // 以及应用了模型后缀的 raw。调用方解码返回的 raw，因此原样转发请求体的原生路径看到的，
 // 与经过转换的路径完全一致。后缀取值不合法不算错误——此时模型名按原样使用——但请求体
-// 无法承载的后缀算错误。
+// 无法承载的后缀算错误。末尾的上下文窗口标记（"[1m]"）先被去掉（见
+// stripContextWindowSuffix），因此 "model(high)[1m]" 同样可用。
 func prepareRequest(r *http.Request, raw json.RawMessage, dialect suffixDialect) (*http.Request, json.RawMessage, error) {
 	var probe requestProbe
 	_ = json.Unmarshal(raw, &probe)
 	r = r.WithContext(scheduler.WithSessionKey(r.Context(), sessionKey(r, probe)))
-	base, reasoning, ok := parseModelSuffix(probe.Model)
+	model, windowed := stripContextWindowSuffix(probe.Model)
+	base, reasoning, ok := parseModelSuffix(model)
 	if !ok {
-		return r, raw, nil
+		if !windowed {
+			return r, raw, nil
+		}
+		rewritten, err := setRequestModel(raw, model)
+		if err != nil {
+			return r, raw, err
+		}
+		return r, rewritten, nil
 	}
 	rewritten, err := applyModelSuffix(raw, base, reasoning, dialect)
 	if err != nil {
@@ -119,6 +129,44 @@ func sessionKey(r *http.Request, probe requestProbe) string {
 		tenant = identity.TenantID
 	}
 	return tenant + "\x00" + key
+}
+
+// stripContextWindowSuffix removes one trailing "[1m]" or "[2m]" (any case)
+// from model and reports whether it did. Claude Code marks a model it should
+// treat as having a 1M/2M context window with that suffix and strips it only
+// for claude-* names, so a gateway model picked with the window box ticked
+// (CC Switch's "1M") arrives as "gpt-…[1m]". The suffix only steers the
+// client's own compaction, so dropping it is safe; a name that is nothing but
+// the suffix is left as written.
+//
+// stripContextWindowSuffix 去掉 model 末尾的一个 "[1m]" 或 "[2m]"（不区分大小写），
+// 并报告是否去掉了。Claude Code 用这个后缀标记应按 1M/2M 上下文窗口对待的模型，但只对
+// claude-* 名字去掉它，因此勾选窗口选项（CC Switch 的「1M」）选中的网关模型会以
+// "gpt-…[1m]" 的形式到达。这个后缀只影响客户端自己的压缩时机，去掉是安全的；整个名字
+// 只有这个后缀时按原样保留。
+func stripContextWindowSuffix(model string) (string, bool) {
+	const width = len("[1m]")
+	if len(model) <= width {
+		return model, false
+	}
+	switch strings.ToLower(model[len(model)-width:]) {
+	case "[1m]", "[2m]":
+		return model[:len(model)-width], true
+	}
+	return model, false
+}
+
+// setRequestModel rewrites raw's "model" field to model, keeping every other
+// field as sent.
+//
+// setRequestModel 把 raw 的 "model" 字段改写为 model，其他字段原样保留。
+func setRequestModel(raw json.RawMessage, model string) (json.RawMessage, error) {
+	var body map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &body); err != nil {
+		return nil, fmt.Errorf("the request body is not a JSON object")
+	}
+	body["model"], _ = json.Marshal(model)
+	return json.Marshal(body)
 }
 
 // maxSuffixBudget bounds a numeric suffix; the largest thinking budget any
