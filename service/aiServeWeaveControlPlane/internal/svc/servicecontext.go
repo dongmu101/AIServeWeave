@@ -376,7 +376,13 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 
 	var remoteProviderRouter *remoteproviderrouter.Router
 	if cfg.RemoteProviders.Enabled() {
-		secrets, err := logic.LoadProviderSecrets(cfg.RemoteProviders.MasterKeyFile)
+		var secrets *logic.ProviderSecrets
+		var err error
+		if cfg.RemoteProviders.MasterKey != "" {
+			secrets, err = logic.ParseProviderSecrets(cfg.RemoteProviders.MasterKey)
+		} else {
+			secrets, err = logic.LoadProviderSecrets(cfg.RemoteProviders.MasterKeyFile)
+		}
 		if err != nil {
 			return nil, err
 		}

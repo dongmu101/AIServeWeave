@@ -547,6 +547,10 @@ const operator = {
   "operator.nodeProvidersIntro": "プラットフォームノードにホスト型 API プロバイダーとキーを配信します。テナント所有ノード（tnode. で始まる）はテナント自身のコンソールで管理します。",
   "operator.nodeProvidersNodeId": "ノード ID",
   "operator.nodeProvidersLookup": "照会",
-  "operator.nodeProvidersTenantNode": "tnode. で始まるテナント所有ノードはテナント自身しか管理できません。"
+  "operator.nodeProvidersTenantNode": "tnode. で始まるテナント所有ノードはテナント自身しか管理できません。",
+  "operator.nodeProvidersPick": "ノードを選択",
+  "operator.nodeProvidersPickPlaceholder": "登録済みのプラットフォームノードから選択",
+  "operator.nodeProvidersManual": "またはノード ID を入力（ノード管理ページのカードに表示される ID）",
+  "operator.nodeProvidersManage": "API とキー"
 } as const;
 export default operator;

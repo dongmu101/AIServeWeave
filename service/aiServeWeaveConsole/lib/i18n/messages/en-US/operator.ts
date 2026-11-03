@@ -553,6 +553,10 @@ const operator = {
   "operator.nodeProvidersIntro": "Provision hosted API providers and keys onto platform nodes. Tenant-owned nodes (starting with tnode.) are managed by their tenant in its own console.",
   "operator.nodeProvidersNodeId": "Node ID",
   "operator.nodeProvidersLookup": "Look up",
-  "operator.nodeProvidersTenantNode": "Tenant-owned nodes starting with tnode. can only be managed by their tenant."
+  "operator.nodeProvidersTenantNode": "Tenant-owned nodes starting with tnode. can only be managed by their tenant.",
+  "operator.nodeProvidersPick": "Choose a node",
+  "operator.nodeProvidersPickPlaceholder": "Choose from registered platform nodes",
+  "operator.nodeProvidersManual": "Or type a node ID (as shown on the node management cards)",
+  "operator.nodeProvidersManage": "API providers"
 } as const;
 export default operator;

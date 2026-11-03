@@ -211,9 +211,12 @@ services:
       # Dodo Payments credentials, read only when controlplane.yaml enables
       # Billing; empty by default because billing is off.
       # Dodo Payments 凭据，只在 controlplane.yaml 开启 Billing 时读取；计费默认关闭，因此默认为空。
-      # Read only when controlplane.yaml enables RemoteProviders; empty by default.
-      # 只在 controlplane.yaml 开启 RemoteProviders 时读取；默认为空。
-      AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN: ${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN:-}
+      # Hosted provider provisioning (controlplane.yaml's RemoteProviders), on
+      # by default; install.sh and upgrade.sh generate both values.
+      # 托管供应商下发（controlplane.yaml 的 RemoteProviders），默认开启；install.sh 与
+      # upgrade.sh 会生成这两个值。
+      AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN: ${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
+      AISW_PROVIDER_MASTER_KEY: ${AISW_PROVIDER_MASTER_KEY:?set it in deploy/.env — openssl rand -base64 32}
       AISW_DODO_API_KEY: ${AISW_DODO_API_KEY:-}
       AISW_DODO_WEBHOOK_SECRET: ${AISW_DODO_WEBHOOK_SECRET:-}
       # Public Registry and Gateway tunnel addresses written into tenant node
@@ -453,13 +456,13 @@ services:
       # README's "ComfyUI Managed 触发".
       - -comfyui-managed-addr=:8093
       # Relays Console-provisioned hosted providers, sealed by the control
-      # plane to each node's certificate key, to connected Agents. Opt-in:
-      # the listener exists only once AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN is
-      # set, and it is never published to a host port. See this directory's
-      # README's "启用托管供应商远程下发".
-      # 把控制面封装给各节点证书公钥的托管供应商转发给已连接的 Agent。按需开启：只有设置了
-      # AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN 才监听，且不发布到宿主机端口。见本目录 README
-      # 「启用托管供应商远程下发」。
+      # plane to each node's certificate key, to connected Agents. On by
+      # default: install.sh and upgrade.sh generate
+      # AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN; the listener is never published
+      # to a host port. See this directory's README's "托管供应商远程下发".
+      # 把控制面封装给各节点证书公钥的托管供应商转发给已连接的 Agent。默认开启：install.sh
+      # 与 upgrade.sh 会生成 AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN；不发布到宿主机端口。见本目录
+      # README「托管供应商远程下发」。
       - -remote-providers-addr=${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN:+:8094}
       # Public /agent/* install entry. Both flags are empty unless AGENT_PUBLIC_URL
       # is set, which leaves the entry off; -agent-dist-dir must be set together

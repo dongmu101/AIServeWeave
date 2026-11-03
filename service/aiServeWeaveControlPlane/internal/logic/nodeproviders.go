@@ -73,13 +73,23 @@ func LoadProviderSecrets(path string) (*ProviderSecrets, error) {
 	if err != nil {
 		return nil, fmt.Errorf("provider master key: %w", err)
 	}
-	text := strings.TrimSpace(string(data))
+	return ParseProviderSecrets(string(data))
+}
+
+// ParseProviderSecrets decodes a 32-byte master key written as 64 hex digits
+// or standard base64; surrounding whitespace is ignored. The error never
+// echoes the key.
+//
+// ParseProviderSecrets 解析以 64 位十六进制或标准 base64 写出的 32 字节主密钥，忽略首尾
+// 空白。错误信息从不回显密钥。
+func ParseProviderSecrets(text string) (*ProviderSecrets, error) {
+	text = strings.TrimSpace(text)
 	key, err := hex.DecodeString(text)
 	if err != nil || len(key) != 32 {
 		key, err = base64.StdEncoding.DecodeString(text)
 	}
 	if err != nil || len(key) != 32 {
-		return nil, errors.New("provider master key: the file must hold 32 bytes as hex or base64")
+		return nil, errors.New("provider master key: must be 32 bytes as hex or base64")
 	}
 	return NewProviderSecrets(key)
 }

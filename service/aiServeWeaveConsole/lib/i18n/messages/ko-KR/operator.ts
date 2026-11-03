@@ -547,6 +547,10 @@ const operator = {
   "operator.nodeProvidersIntro": "플랫폼 노드에 호스팅 API 공급자와 키를 배포합니다. 테넌트 소유 노드(tnode.로 시작)는 테넌트가 자체 콘솔에서 관리합니다.",
   "operator.nodeProvidersNodeId": "노드 ID",
   "operator.nodeProvidersLookup": "조회",
-  "operator.nodeProvidersTenantNode": "tnode.로 시작하는 테넌트 소유 노드는 해당 테넌트만 관리할 수 있습니다."
+  "operator.nodeProvidersTenantNode": "tnode.로 시작하는 테넌트 소유 노드는 해당 테넌트만 관리할 수 있습니다.",
+  "operator.nodeProvidersPick": "노드 선택",
+  "operator.nodeProvidersPickPlaceholder": "등록된 플랫폼 노드에서 선택",
+  "operator.nodeProvidersManual": "또는 노드 ID 직접 입력(노드 관리 페이지 카드에 표시된 ID)",
+  "operator.nodeProvidersManage": "API와 키"
 } as const;
 export default operator;

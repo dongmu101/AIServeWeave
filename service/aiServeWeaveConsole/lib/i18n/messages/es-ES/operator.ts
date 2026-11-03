@@ -547,6 +547,10 @@ const operator = {
   "operator.nodeProvidersIntro": "Aprovisiona proveedores de API alojados y sus claves en los nodos de la plataforma. Los nodos propios de un inquilino (que empiezan por tnode.) los gestiona ese inquilino en su propia consola.",
   "operator.nodeProvidersNodeId": "ID del nodo",
   "operator.nodeProvidersLookup": "Consultar",
-  "operator.nodeProvidersTenantNode": "Los nodos propios de un inquilino que empiezan por tnode. solo puede gestionarlos ese inquilino."
+  "operator.nodeProvidersTenantNode": "Los nodos propios de un inquilino que empiezan por tnode. solo puede gestionarlos ese inquilino.",
+  "operator.nodeProvidersPick": "Elegir un nodo",
+  "operator.nodeProvidersPickPlaceholder": "Elegir entre los nodos de plataforma registrados",
+  "operator.nodeProvidersManual": "O escribir un ID de nodo (el que aparece en las tarjetas de gestión de nodos)",
+  "operator.nodeProvidersManage": "Proveedores de API"
 } as const;
 export default operator;

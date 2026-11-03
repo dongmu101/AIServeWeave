@@ -550,6 +550,10 @@ const operator = {
   "operator.nodeProvidersIntro": "Provisionnez des fournisseurs d'API hébergés et leurs clés sur les nœuds de la plateforme. Les nœuds appartenant à un locataire (commençant par tnode.) sont gérés par ce locataire dans sa propre console.",
   "operator.nodeProvidersNodeId": "ID du nœud",
   "operator.nodeProvidersLookup": "Rechercher",
-  "operator.nodeProvidersTenantNode": "Les nœuds de locataire commençant par tnode. ne peuvent être gérés que par leur locataire."
+  "operator.nodeProvidersTenantNode": "Les nœuds de locataire commençant par tnode. ne peuvent être gérés que par leur locataire.",
+  "operator.nodeProvidersPick": "Choisir un nœud",
+  "operator.nodeProvidersPickPlaceholder": "Choisir parmi les nœuds de plateforme enregistrés",
+  "operator.nodeProvidersManual": "Ou saisir un ID de nœud (tel qu’affiché sur les cartes de gestion des nœuds)",
+  "operator.nodeProvidersManage": "Fournisseurs d’API"
 } as const;
 export default operator;

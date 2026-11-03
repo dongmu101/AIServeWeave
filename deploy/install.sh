@@ -135,6 +135,7 @@ ensure_controlplane_config
 ensure_access_log_off
 ensure_tenant_nodes
 ensure_agent_install
+ensure_remote_providers
 ensure_config_readable
 if (( SIGNUP == 1 )); then
   if ! grep -q '^Signup:' controlplane.yaml; then

@@ -547,6 +547,10 @@ const operator = {
   "operator.nodeProvidersIntro": "为平台节点下发托管 API 接口和 Key。商户自有节点（tnode. 开头）由商户在自己的控制台管理。",
   "operator.nodeProvidersNodeId": "节点 ID",
   "operator.nodeProvidersLookup": "查询",
-  "operator.nodeProvidersTenantNode": "tnode. 开头的商户自有节点只能由商户自己管理。"
+  "operator.nodeProvidersTenantNode": "tnode. 开头的商户自有节点只能由商户自己管理。",
+  "operator.nodeProvidersPick": "选择节点",
+  "operator.nodeProvidersPickPlaceholder": "从已登记的平台节点中选择",
+  "operator.nodeProvidersManual": "或手动输入节点 ID（节点管理页卡片上的 ID）",
+  "operator.nodeProvidersManage": "接口与 Key"
 } as const;
 export default operator;

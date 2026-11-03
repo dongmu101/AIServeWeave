@@ -6,6 +6,7 @@ import { Message } from "@/components/i18n/message";
 import type { Translator } from "@/lib/i18n/translate";
 
 import * as React from "react";
+import Link from "next/link";
 import { FleetView } from "@/app/console/fleet/fleet-view";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
@@ -15,6 +16,8 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { nodePathSegment } from "@/lib/console/node-path";
+import { tenantNodeOwner } from "@/lib/console/node-access";
+import { NODE_QUERY_PARAM } from "@/app/operator/(protected)/node-providers/node-providers-view";
 
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
 import { nodeActionLabels, nodeActionRequest, parseNodeStates, type NodeAction } from "@/lib/console/node-ops";
@@ -63,6 +66,7 @@ export function NodeOperationsView() {
           <div className="flex flex-wrap gap-2">
             {(node.pendingApproval ? ["approve" as const] : []).map((action) => <Button key={action} variant="outline" disabled={selected !== null || !nodePathSegment(node.nodeId)} onClick={() => setSelected({ nodeId: node.nodeId, action })}>{nodeActionLabels(locale)[action]}</Button>)}
             {([node.disabled ? "enable" : "disable", node.maintenance ? "resume" : "maintenance"] as NodeAction[]).map((action) => <Button key={action} variant="outline" disabled={selected !== null || !nodePathSegment(node.nodeId)} onClick={() => setSelected({ nodeId: node.nodeId, action })}>{nodeActionLabels(locale)[action]}</Button>)}
+            {nodePathSegment(node.nodeId) && tenantNodeOwner(node.nodeId) === null ? <Button variant="outline" render={<Link href={`/operator/node-providers?${new URLSearchParams({ [NODE_QUERY_PARAM]: node.nodeId })}`} />}><Message id="operator.nodeProvidersManage" /></Button> : null}
           </div>
         </div>)}
       </div>}

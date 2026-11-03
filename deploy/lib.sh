@@ -24,7 +24,7 @@ BUILD_ORDER="registry-init registry controlplane gateway console"
 #
 # SECRET_KEYS 是 .env.example 要求的独立密钥，用 openssl rand -base64 32 生成；Console
 # 会话密钥取 48 字节。
-SECRET_KEYS="AISW_ACCESS_SECRET AISW_INTERNAL_TOKEN AISW_BOOTSTRAP_TOKEN AISW_REGISTRY_ADMIN_TOKEN AISW_GATEWAY_ADMIN_TOKEN AISW_GATEWAY_MODEL_PULL_TOKEN AISW_GATEWAY_COMFYUI_MANAGED_TOKEN"
+SECRET_KEYS="AISW_ACCESS_SECRET AISW_INTERNAL_TOKEN AISW_BOOTSTRAP_TOKEN AISW_REGISTRY_ADMIN_TOKEN AISW_GATEWAY_ADMIN_TOKEN AISW_GATEWAY_MODEL_PULL_TOKEN AISW_GATEWAY_COMFYUI_MANAGED_TOKEN AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN AISW_PROVIDER_MASTER_KEY"
 
 log() { printf '\033[1;34m==>\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m警告:\033[0m %s\n' "$*" >&2; }
@@ -210,6 +210,39 @@ AgentInstall:
   PublicURL: "${AISW_AGENT_PUBLIC_URL}"
 EOF
   log "已在 controlplane.yaml 中加入 Agent 安装配置（PublicURL 取自 AGENT_PUBLIC_URL）"
+}
+
+# ensure_remote_providers adds the RemoteProviders block to a controlplane.yaml
+# that predates it, so hosted provider provisioning is on by default. Both
+# secrets come from .env (fill_secrets). A block commented out as a whole
+# ("# RemoteProviders:") is an operator's choice to turn it off and is kept;
+# a deployment without the Registry block cannot verify node keys and is
+# left as is.
+#
+# ensure_remote_providers 给早于该功能的 controlplane.yaml 补上 RemoteProviders 配置块，
+# 使托管供应商下发默认开启。两个密钥都来自 .env（fill_secrets）。整块注释掉
+# （"# RemoteProviders:"）表示运维有意关闭，保持原样；没有 Registry 配置块的部署无法核对
+# 节点公钥，同样保持原样。
+ensure_remote_providers() {
+  local file="$DEPLOY_DIR/controlplane.yaml"
+  [[ -f "$file" ]] || return 0
+  grep -Eq '^#? *RemoteProviders:' "$file" && return 0
+  if ! grep -q '^Registry:' "$file"; then
+    warn "controlplane.yaml 没有 Registry 配置块，未开启托管供应商下发"
+    return 0
+  fi
+  cat >>"$file" <<'EOF'
+
+# Hosted provider provisioning (node API endpoints and keys set in Console), on by default.
+# AISW_PROVIDER_MASTER_KEY encrypts saved keys: back up deploy/.env, losing it loses every saved key.
+# 托管供应商下发（在 Console 为节点填写 API 接口与 Key），默认开启。
+# AISW_PROVIDER_MASTER_KEY 加密已保存的 Key：请备份 deploy/.env，丢失后已保存的 Key 全部失效。
+RemoteProviders:
+  Gateways: ["http://gateway:8094"]
+  GatewayToken: "${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN}"
+  MasterKey: "${AISW_PROVIDER_MASTER_KEY}"
+EOF
+  log "已在 controlplane.yaml 中开启托管供应商下发"
 }
 
 # ensure_config_readable keeps controlplane.yaml world-readable. It is bind

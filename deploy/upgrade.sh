@@ -149,6 +149,7 @@ ensure_controlplane_config
 ensure_access_log_off
 ensure_tenant_nodes
 ensure_agent_install
+ensure_remote_providers
 ensure_config_readable
 if [[ -n "$FROM" ]]; then
   added="$(git -C "$ROOT_DIR" diff "$FROM" HEAD -- deploy/.env.example | sed -n 's/^+\([A-Z_][A-Z0-9_]*\)=.*/\1/p' || true)"

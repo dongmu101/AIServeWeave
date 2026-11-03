@@ -414,34 +414,18 @@ MetricsHistory:
   RegistryAddr: "http://registry:9091"
 ```
 
-### 启用托管供应商远程下发
+### 托管供应商远程下发
 
 商户在 `/console/nodes`、平台运维在 `/operator/node-providers` 为节点填写 OpenAI 等托管
-接口与 Key，由控制面下发到 Agent。默认关闭，开启需要三步，然后重启控制面与 Gateway：
+接口与 Key，由控制面下发到 Agent。**默认开启，无需手动配置**：`install.sh` 与 `upgrade.sh`
+会在 `.env` 中生成 `AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN` 与 `AISW_PROVIDER_MASTER_KEY`，并给
+`controlplane.yaml` 补上 `RemoteProviders` 配置块。已有部署执行一次 `deploy/upgrade.sh` 即可开启。
 
-```bash
-# 1. 主密钥：静态加密已保存的 Key。丢失后所有已保存的 Key 都读不出来，需要重新填写，请另行备份。
-install -m 0600 /dev/null provider-master.key && openssl rand -hex 32 > provider-master.key
-# 2. 控制面与 Gateway 共用的转发 token；compose 只在它非空时开启 Gateway 的 :8094 监听器。
-printf '\nAISW_GATEWAY_REMOTE_PROVIDERS_TOKEN=%s\n' "$(openssl rand -base64 32)" >> .env
-```
+`AISW_PROVIDER_MASTER_KEY` 静态加密已保存的 Key，丢失或更换后所有已保存的 Key 都读不出来，
+需要重新填写，请备份 `deploy/.env`。要关闭时把 `controlplane.yaml` 里整个 `RemoteProviders` 配置块
+（含 `RemoteProviders:` 这一行）注释掉再重启控制面；脚本看到 `# RemoteProviders:` 就不会再补回。
+不要只留一行空的 `RemoteProviders:`，控制面会因类型不匹配拒绝启动。
 
-3. 新建 `docker-compose.override.yaml`，把主密钥只读挂进控制面，再取消
-   `controlplane.yaml` 中 `RemoteProviders` 配置块的注释：
-
-```yaml
-services:
-  controlplane:
-    volumes:
-      - ./provider-master.key:/etc/aiserveweave/provider-master.key:ro
-```
-
-```bash
-docker compose config --quiet &&
-docker compose up -d --no-deps --no-build --force-recreate controlplane gateway
-```
-
-控制面容器以 uid 10001（`aisw`）运行，读不到 0600 的主密钥会启动失败，因此在宿主机上执行 `sudo chown 10001 provider-master.key`。
 Agent 侧不需要任何配置，商户节点与平台节点升级到 2026-11-02 之后的版本即可接收。Key 只以封装给节点证书公钥的密文
 经过 Gateway，规则见[托管供应商说明「控制面远程下发」](../common/runtime/hosted/README.md#控制面远程下发)。
 已完成默认测试，未经真实环境验收。

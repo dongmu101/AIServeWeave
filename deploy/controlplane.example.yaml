@@ -135,20 +135,20 @@ ComfyUIManaged:
 
 # 托管供应商远程下发：商户与平台运维在 Console 为节点填写接口与 Key，控制面用主密钥静态
 # 加密保存，再封装给节点证书公钥，经 gateway 服务独立的 -remote-providers-addr 监听器下发。
-# 默认关闭；启用步骤（生成主密钥、挂载、填 token）见本目录 README「启用托管供应商远程下发」。
-# 需要上面的 Registry 配置来核对节点公钥指纹。
+# 默认开启，两个密钥由 install.sh / upgrade.sh 写进 .env。主密钥丢失后已保存的 Key 全部
+# 失效，请备份 deploy/.env。需要上面的 Registry 配置来核对节点公钥指纹。
 #
 # Remote hosted providers: tenants and platform operators enter endpoints and
 # keys for a node in the Console; the control plane encrypts them at rest
 # with the master key, seals them to the node's certificate key and delivers
 # them through the gateway service's separate -remote-providers-addr
-# listener. Off by default; see this directory's README, "启用托管供应商远程下发",
-# for the master key, mount and token. Needs the Registry block above to
-# check node key fingerprints.
-# RemoteProviders:
-#   Gateways: ["http://gateway:8094"]
-#   GatewayToken: "${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN}"
-#   MasterKeyFile: /etc/aiserveweave/provider-master.key
+# listener. On by default; install.sh / upgrade.sh write both secrets to
+# .env. Losing the master key loses every saved key, so back up deploy/.env.
+# Needs the Registry block above to check node key fingerprints.
+RemoteProviders:
+  Gateways: ["http://gateway:8094"]
+  GatewayToken: "${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN}"
+  MasterKey: "${AISW_PROVIDER_MASTER_KEY}"
 
 # 工作流可视化编辑器（P03 后续）：指向一份由 scripts/fetch-comfyui-frontend.sh 解压的
 # ComfyUI_frontend 发布包。默认关闭——启用后目录缺失或不完整会让控制面启动失败，

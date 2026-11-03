@@ -161,7 +161,7 @@
 
 ### 托管供应商远程下发（2026-11-02）
 
-商户可以给自有节点、平台运维可以给平台节点在 Console 填写托管 AI 接口与 Key，由控制面加密保存，以封装给节点证书公钥的 HPKE 密文经 Gateway 下发到 Agent。这是「凭据不进入隧道」红线的唯一例外，见 [AGENTS.md](AGENTS.md) 与 [托管供应商说明](common/runtime/hosted/README.md#控制面远程下发)。代码均已交付：`common/remoteprovider`、proto `RemoteProviders`/`RemoteProvidersReport` 与 Registry 指纹、Agent `remoteproviders`（[Agent STATUS](service/aiServeWeaveAgent/STATUS.md#托管模型供应商接入)）、Gateway `-remote-providers-addr`（[Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#托管供应商远程下发转发)）、控制面接口、迁移 `0014` 与对账（[ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#托管供应商远程下发)）、Console 面板（[Console STATUS](service/aiServeWeaveConsole/STATUS.md#节点托管供应商面板2026-11-02)）。启用步骤见 [部署说明](deploy/README.md#启用托管供应商远程下发)，设计记录在 [.scratch/remote-hosted-providers](.scratch/remote-hosted-providers/spec.md)。
+商户可以给自有节点、平台运维可以给平台节点在 Console 填写托管 AI 接口与 Key，由控制面加密保存，以封装给节点证书公钥的 HPKE 密文经 Gateway 下发到 Agent。这是「凭据不进入隧道」红线的唯一例外，见 [AGENTS.md](AGENTS.md) 与 [托管供应商说明](common/runtime/hosted/README.md#控制面远程下发)。代码均已交付：`common/remoteprovider`、proto `RemoteProviders`/`RemoteProvidersReport` 与 Registry 指纹、Agent `remoteproviders`（[Agent STATUS](service/aiServeWeaveAgent/STATUS.md#托管模型供应商接入)）、Gateway `-remote-providers-addr`（[Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#托管供应商远程下发转发)）、控制面接口、迁移 `0014` 与对账（[ControlPlane STATUS](service/aiServeWeaveControlPlane/STATUS.md#托管供应商远程下发)）、Console 面板（[Console STATUS](service/aiServeWeaveConsole/STATUS.md#节点托管供应商面板2026-11-02)）。部署默认开启，见 [部署说明](deploy/README.md#托管供应商远程下发)，设计记录在 [.scratch/remote-hosted-providers](.scratch/remote-hosted-providers/spec.md)。
 
 **未验证**：真实 Key 端到端调用；证书续期后的重新封装；离线节点上线后的对账补齐；`0014` 在真实 PostgreSQL/MySQL 上执行；Console 浏览器渲染与八种语言译文审校。**未做**：主密钥轮换；Agent 设置页只读展示远程运行时与本地忽略单个远程 ID。
 

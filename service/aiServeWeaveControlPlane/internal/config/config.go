@@ -644,6 +644,13 @@ type RemoteProvidersConf struct {
 	// MasterKeyFile 保存静态加密供应商 Key 的 32 字节密钥（十六进制或 base64）。丢失后所有
 	// 已保存的 Key 都无法读取。
 	MasterKeyFile string `json:",optional"`
+	// MasterKey is the same 32-byte key given inline, usually as
+	// "${AISW_PROVIDER_MASTER_KEY}" so it comes from the environment like
+	// every other secret. Set exactly one of MasterKey and MasterKeyFile.
+	//
+	// MasterKey 是直接给出的同一把 32 字节密钥，通常写成 "${AISW_PROVIDER_MASTER_KEY}"，
+	// 与其他密钥一样来自环境变量。MasterKey 与 MasterKeyFile 二选一。
+	MasterKey string `json:",optional"`
 	// Timeout bounds one call to one replica.
 	// Timeout 限制对单个副本的单次调用。
 	Timeout time.Duration `json:",default=3s"`
@@ -659,7 +666,7 @@ type RemoteProvidersConf struct {
 //
 // Enabled 报告下发是否配置了任何部分；之后由 Validate 要求全部配齐。
 func (r RemoteProvidersConf) Enabled() bool {
-	return len(r.Gateways) > 0 || r.GatewayToken != "" || r.MasterKeyFile != ""
+	return len(r.Gateways) > 0 || r.GatewayToken != "" || r.MasterKeyFile != "" || r.MasterKey != ""
 }
 
 // ComfyUIManagedConf configures forwarding STATUS.md's P2 ComfyUI Managed
@@ -952,8 +959,11 @@ func (c Config) Validate() error {
 		}
 	}
 	if c.RemoteProviders.Enabled() {
-		if len(c.RemoteProviders.Gateways) == 0 || c.RemoteProviders.MasterKeyFile == "" {
-			return errors.New("config: RemoteProviders.Gateways and RemoteProviders.MasterKeyFile are both required once remote providers are configured")
+		if len(c.RemoteProviders.Gateways) == 0 {
+			return errors.New("config: RemoteProviders.Gateways is required once remote providers are configured")
+		}
+		if (c.RemoteProviders.MasterKey == "") == (c.RemoteProviders.MasterKeyFile == "") {
+			return errors.New("config: set exactly one of RemoteProviders.MasterKey and RemoteProviders.MasterKeyFile; generate a key with `openssl rand -base64 32`")
 		}
 		if len(c.RemoteProviders.GatewayToken) < minSecretLen {
 			return errors.New("config: RemoteProviders.GatewayToken must be at least 32 characters; generate one with `openssl rand -base64 32`")

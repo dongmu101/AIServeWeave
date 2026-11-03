@@ -550,6 +550,10 @@ const operator = {
   "operator.nodeProvidersIntro": "Gehostete API-Anbieter und Keys auf Plattformknoten bereitstellen. Mandanteneigene Knoten (beginnend mit tnode.) verwaltet der Mandant in seiner eigenen Console.",
   "operator.nodeProvidersNodeId": "Knoten-ID",
   "operator.nodeProvidersLookup": "Abfragen",
-  "operator.nodeProvidersTenantNode": "Mandanteneigene Knoten, die mit tnode. beginnen, kann nur ihr Mandant verwalten."
+  "operator.nodeProvidersTenantNode": "Mandanteneigene Knoten, die mit tnode. beginnen, kann nur ihr Mandant verwalten.",
+  "operator.nodeProvidersPick": "Knoten auswählen",
+  "operator.nodeProvidersPickPlaceholder": "Aus registrierten Plattformknoten auswählen",
+  "operator.nodeProvidersManual": "Oder Knoten-ID eingeben (wie auf den Karten der Knotenverwaltung angezeigt)",
+  "operator.nodeProvidersManage": "API-Anbieter"
 } as const;
 export default operator;

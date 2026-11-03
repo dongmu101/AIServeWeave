@@ -389,12 +389,12 @@ ComfyUIManaged:
 RemoteProviders:
   Gateways: ["http://gateway-1:8094", "http://gateway-2:8094"]   # 各副本的 -remote-providers-addr
   GatewayToken: "${AISW_GATEWAY_REMOTE_PROVIDERS_TOKEN}"         # 与各 Gateway 的同名变量一致，至少 32 字符
-  MasterKeyFile: /etc/aiserveweave/provider-master.key          # 32 字节，十六进制或 base64
+  MasterKey: "${AISW_PROVIDER_MASTER_KEY}"                      # 32 字节，十六进制或 base64；也可改用 MasterKeyFile 指向文件，二选一
   Timeout: 3s
   ReconcileInterval: 1m
 ```
 
-任一字段出现即视为开启，此时 `Gateways`、`MasterKeyFile`、`GatewayToken` 与 `Registry` 配置都必须齐全，否则拒绝启动；未配置时下列路由都不挂载。主密钥用 AES-256-GCM 静态加密 Key，AAD 绑定 node_id 与运行时 ID，密文挪到别的行就解不开；**主密钥丢失后已保存的 Key 全部不可读，本期不提供轮换**。
+任一字段出现即视为开启，此时 `Gateways`、`GatewayToken`、`Registry` 配置与 `MasterKey`/`MasterKeyFile` 二者之一都必须齐全，否则拒绝启动；未配置时下列路由都不挂载。Docker 部署默认开启：`deploy/install.sh` 与 `upgrade.sh` 生成两个密钥并补上配置块（见 [部署说明](../../deploy/README.md#托管供应商远程下发)）。主密钥用 AES-256-GCM 静态加密 Key，AAD 绑定 node_id 与运行时 ID，密文挪到别的行就解不开；**主密钥丢失后已保存的 Key 全部不可读，本期不提供轮换**。
 
 | 端点 | 守卫与范围 |
 | --- | --- |
