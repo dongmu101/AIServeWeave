@@ -14,7 +14,7 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 
 普通多轮聊天以带角色标记的 JSON 历史文本作为新 CLI 回合上下文，不伪造 CLI 的 assistant 消息，也不重放历史工具。当前工具链保留原进程，并校验身份、完整历史、全部工具结果和原节点绑定。Chat 将 assistant 文本和工具分别存放，Agent 仅对带内部 `metadata.aisw_chat_completions` 标记的会话按这两个字段校验等价性；文本、工具顺序、ID 和参数仍必须一致。原生 Messages 保持块顺序校验。升级本兼容层后需要同时更新 Gateway 和重启 Agent。
 
-支持 `max_tokens` 或 `max_completion_tokens`（1–64000，默认 4096；同时指定必须相同）、`temperature`（0–1）、`reasoning_effort`（见下文「思考内容」）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `parallel_tool_calls`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
+支持 `max_tokens` 或 `max_completion_tokens`（正整数，默认 4096；同时指定必须相同）、`temperature`（0–1）、`reasoning_effort`（见下文「思考内容」）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `parallel_tool_calls`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
 
 ## OpenAI Responses 兼容
 
@@ -60,7 +60,9 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史仍按同一套严格规则校验，图片等不支持的块照旧拒绝。代价是模型只能以引用文本的形式看到此前的回合，思考块不进入记录，thinking 也不跨会话保留。
 
-支持 `max_tokens`（1–64000）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+
+Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数值原样传给 CLI 的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；实际可用上限由 CLI、模型和账户能力决定。请求大小、响应大小与执行超时等资源边界仍然生效。此行为需要同时更新 Gateway 并重启 Agent。
 
 ## 思考内容
 

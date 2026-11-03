@@ -62,8 +62,8 @@ func (req responsesRequest) toNativeChat(canonical runtime.ChatRequest) (chatCom
 		return out, errors.New("Claude CLI Responses supports only store=false; persistent Responses storage is unavailable")
 	case req.PreviousResponseID != "":
 		return out, errors.New("Claude CLI Responses does not support previous_response_id; send the full input instead")
-	case req.MaxOutputTokens != nil && (*req.MaxOutputTokens < 1 || *req.MaxOutputTokens > 64000), req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 1):
-		return out, errors.New("Claude CLI requires max_output_tokens in 1..64000 and temperature in 0..1")
+	case req.MaxOutputTokens != nil && *req.MaxOutputTokens < 1, req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 1):
+		return out, errors.New("Claude CLI requires positive max_output_tokens and temperature in 0..1")
 	case req.TopP != nil:
 		return out, errors.New("Claude CLI Responses does not support top_p")
 	case canonical.ResponseFormat != nil && canonical.ResponseFormat.Type != "text":

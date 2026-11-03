@@ -154,7 +154,7 @@ func (r messagesRequest) thinkingBudget() int {
 // {"type":"enabled","budget_tokens":N}（1024 <= N < max_tokens，且不带 temperature）；
 // 拒绝 adaptive thinking。思考块只能出现在 assistant 回合里，之后会被丢弃。
 func (r messagesRequest) validate(model string) error {
-	if r.Model != model || r.MaxTokens < 1 || r.MaxTokens > 64000 || len(r.Messages) == 0 || len(r.Messages) > 2048 || len(r.Tools) > 128 {
+	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 || len(r.Messages) > 2048 || len(r.Tools) > 128 {
 		return errMessages
 	}
 	if _, err := textBlocks(r.System); err != nil {

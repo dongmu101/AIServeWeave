@@ -108,8 +108,8 @@ func (req chatCompletionRequest) toNativeMessages() (anthropicMessagesRequest, e
 	} else if req.MaxCompletionTokens != nil {
 		out.MaxTokens = *req.MaxCompletionTokens
 	}
-	if out.MaxTokens < 1 || out.MaxTokens > 64000 || (req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 1)) {
-		return out, errors.New("Claude CLI requires max_tokens in 1..64000 and temperature in 0..1")
+	if out.MaxTokens < 1 || (req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 1)) {
+		return out, errors.New("Claude CLI requires positive max_tokens and temperature in 0..1")
 	}
 	reasoning, err := reasoningFromEffort(req.ReasoningEffort, "reasoning_effort")
 	if err != nil {

@@ -19,6 +19,33 @@ func testMessagesRequest() messagesRequest {
 	return messagesRequest{Model: "sonnet", MaxTokens: 1024, Messages: []bridgeMessage{{Role: "user", Content: json.RawMessage(`"use the caller tool"`)}}, Tools: []bridgeTool{{Name: "read_file", InputSchema: json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`)}}}
 }
 
+// TestMessagesOutputTokens accepts positive client limits without a fixed upper bound.
+// TestMessagesOutputTokens 接受客户端指定的正整数输出上限，不设置固定上界。
+func TestMessagesOutputTokens(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		tokens    int
+		wantError bool
+	}{
+		{"negative", -1, true},
+		{"zero", 0, true},
+		{"minimum", 1, false},
+		{"above original maximum", 64001, false},
+		{"previous maximum", 128000, false},
+		{"above previous maximum", 128001, false},
+		{"large client limit", 1000000, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			req := testMessagesRequest()
+			req.MaxTokens = tc.tokens
+			err := req.validate(req.Model)
+			if (err != nil) != tc.wantError {
+				t.Fatalf("max_tokens=%d: error=%v, want error=%t", tc.tokens, err, tc.wantError)
+			}
+		})
+	}
+}
+
 // TestChatHistoryKeepsTextAndTools checks Chat equivalence without relaxing native history checks.
 // TestChatHistoryKeepsTextAndTools 验证 Chat 历史等价性，同时保持原生历史的严格校验。
 func TestChatHistoryKeepsTextAndTools(t *testing.T) {
@@ -151,6 +178,7 @@ func TestMessagesRoundTrip(t *testing.T) {
 			b.start = fixtureStart
 			defer b.close()
 			req := testMessagesRequest()
+			req.MaxTokens = 1000000
 			req = continuation(t, req, sendMessages(b, req, "first"), "unique-caller-result")
 			req.Stream = tc.stream
 			w := sendMessages(b, req, "first")
