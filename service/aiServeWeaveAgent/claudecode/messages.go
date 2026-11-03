@@ -630,12 +630,16 @@ func (s *messagesSession) touch() {
 // 会话计时器。调用方执行工具可以花费所需时间，上限与 Gateway 续接 TTL 一致；
 // CLI 停止输出时则尽快回收，避免占住会话名额。
 const (
-	// sessionLife bounds a whole session, including every tool wait.
-	// sessionLife 限定整个会话的寿命，包含所有工具等待。
+	// sessionLife bounds a whole session, including every tool wait. It is
+	// longer than toolWaitTimeout so an active tool chain is not cut short;
+	// abandoned rounds are reclaimed by toolWaitTimeout instead.
+	//
+	// sessionLife 限定整个会话的寿命，包含所有工具等待。它长于 toolWaitTimeout，
+	// 避免中途截断仍在进行的工具链；被放弃的回合由 toolWaitTimeout 回收。
 	sessionLife = 24 * time.Hour
 	// toolWaitTimeout bounds one wait for the caller's tool results.
 	// toolWaitTimeout 限定一次等待调用方工具结果的时长。
-	toolWaitTimeout = 24 * time.Hour
+	toolWaitTimeout = time.Hour
 	// generationTimeout bounds one CLI generation phase without output.
 	// generationTimeout 限定 CLI 一次生成阶段在无进展时的时长。
 	generationTimeout = 2 * time.Minute

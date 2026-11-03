@@ -71,7 +71,7 @@ return 1`)
 //
 // continuationTTL 限定调用方送回工具结果的最长时间；与 Agent CLI 桥接的工具等待
 // 时限一致，两侧都不会比对方存活更久。
-const continuationTTL = 24 * time.Hour
+const continuationTTL = time.Hour
 
 // Publish stores no prompt or tool result; each record expires within continuationTTL.
 // Publish 不存储提示词或工具结果；每条记录在 continuationTTL 内过期。
