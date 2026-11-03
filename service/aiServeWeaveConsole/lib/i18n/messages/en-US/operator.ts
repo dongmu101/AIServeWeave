@@ -557,6 +557,7 @@ const operator = {
   "operator.nodeProvidersPick": "Choose a node",
   "operator.nodeProvidersPickPlaceholder": "Choose from registered platform nodes",
   "operator.nodeProvidersManual": "Or type a node ID (as shown on the node management cards)",
-  "operator.nodeProvidersManage": "API providers"
+  "operator.nodeProvidersManage": "API providers",
+  "operator.deleteNodeEffect": "Delete this node from node management: its identity is revoked, rejecting future registration, renewal, and Gateway handshakes, and Gateways close its control connection after receiving the update; the node is no longer listed. A tenant-owned node is also removed from the tenant's node list. This cannot be undone on this page; to bring the machine back, generate a new install command."
 } as const;
 export default operator;

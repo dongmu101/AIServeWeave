@@ -4,6 +4,7 @@ const core = {
   "tenant.enableNode": "啟用節點",
   "tenant.enterMaintenance": "進入維護模式",
   "tenant.exitMaintenance": "退出維護模式",
+  "tenant.deleteNode": "刪除節點",
   "tenant.succeeded": "成功",
   "tenant.createApiKey": "建立 API Key",
   "tenant.revoked": "已撤銷",

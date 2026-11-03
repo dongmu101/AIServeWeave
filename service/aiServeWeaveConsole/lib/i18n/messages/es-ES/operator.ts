@@ -551,6 +551,7 @@ const operator = {
   "operator.nodeProvidersPick": "Elegir un nodo",
   "operator.nodeProvidersPickPlaceholder": "Elegir entre los nodos de plataforma registrados",
   "operator.nodeProvidersManual": "O escribir un ID de nodo (el que aparece en las tarjetas de gestión de nodos)",
-  "operator.nodeProvidersManage": "Proveedores de API"
+  "operator.nodeProvidersManage": "Proveedores de API",
+  "operator.deleteNodeEffect": "Elimina el nodo de la gestión de nodos: su identidad se revoca, se rechazan futuros registros, renovaciones y negociaciones con Gateway, y Gateway cierra la conexión de control al recibir la actualización. El nodo deja de aparecer en la lista. Un nodo propio de un inquilino también se elimina de la lista de nodos del inquilino. No se puede deshacer desde esta página; para volver a conectar la máquina, genere un nuevo comando de instalación."
 } as const;
 export default operator;

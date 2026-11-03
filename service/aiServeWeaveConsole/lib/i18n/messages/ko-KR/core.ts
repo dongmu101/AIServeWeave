@@ -4,6 +4,7 @@ const core = {
   "tenant.enableNode": "노드 활성화",
   "tenant.enterMaintenance": "유지보수 시작",
   "tenant.exitMaintenance": "유지보수 종료",
+  "tenant.deleteNode": "노드 삭제",
   "tenant.succeeded": "성공",
   "tenant.createApiKey": "API Key 생성",
   "tenant.revoked": "폐기됨",

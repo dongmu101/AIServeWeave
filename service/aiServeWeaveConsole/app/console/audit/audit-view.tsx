@@ -132,6 +132,7 @@ const PLATFORM_ACTIONS = (t: Translator) => ([
   { value: "node.enrollment.create", label: t("operator.enrollmentGenerate") },
   { value: "node.disable", label: t("tenant.disableNode") },
   { value: "node.enable", label: t("tenant.enableNode") },
+  { value: "node.delete", label: t("tenant.deleteNode") },
   { value: "node.maintenance.enter", label: t("tenant.enterMaintenance") },
   { value: "node.maintenance.exit", label: t("tenant.exitMaintenance") },
 ]);

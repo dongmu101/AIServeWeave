@@ -554,6 +554,7 @@ const operator = {
   "operator.nodeProvidersPick": "Choisir un nœud",
   "operator.nodeProvidersPickPlaceholder": "Choisir parmi les nœuds de plateforme enregistrés",
   "operator.nodeProvidersManual": "Ou saisir un ID de nœud (tel qu’affiché sur les cartes de gestion des nœuds)",
-  "operator.nodeProvidersManage": "Fournisseurs d’API"
+  "operator.nodeProvidersManage": "Fournisseurs d’API",
+  "operator.deleteNodeEffect": "Supprime le nœud de la gestion des nœuds : son identité est révoquée, les inscriptions, renouvellements et négociations Gateway suivants sont refusés, et la passerelle ferme la connexion de contrôle après réception de la mise à jour. Le nœud n’est plus listé. Un nœud appartenant à un locataire est aussi retiré de la liste de nœuds du locataire. Impossible d’annuler depuis cette page ; pour reconnecter la machine, générez une nouvelle commande d’installation."
 } as const;
 export default operator;

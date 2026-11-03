@@ -554,6 +554,7 @@ const operator = {
   "operator.nodeProvidersPick": "Knoten auswählen",
   "operator.nodeProvidersPickPlaceholder": "Aus registrierten Plattformknoten auswählen",
   "operator.nodeProvidersManual": "Oder Knoten-ID eingeben (wie auf den Karten der Knotenverwaltung angezeigt)",
-  "operator.nodeProvidersManage": "API-Anbieter"
+  "operator.nodeProvidersManage": "API-Anbieter",
+  "operator.deleteNodeEffect": "Löscht den Knoten aus der Knotenverwaltung: Seine Identität wird widerrufen, weitere Registrierungen, Verlängerungen und Gateway-Handshakes werden verweigert, und das Gateway schließt nach Empfang der Aktualisierung die Steuerverbindung. Der Knoten wird nicht mehr aufgeführt. Ein mandanteneigener Knoten wird auch aus der Knotenliste des Mandanten entfernt. Auf dieser Seite nicht rückgängig zu machen; um die Maschine wieder anzubinden, erzeugen Sie einen neuen Installationsbefehl."
 } as const;
 export default operator;

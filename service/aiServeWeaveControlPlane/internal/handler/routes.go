@@ -575,6 +575,11 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/enable", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.EnableNode))),
 			},
 			{
+				Method:  http.MethodDelete,
+				Path:    "/operator/v1/nodes/:id",
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.DeleteNode))),
+			},
+			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/maintenance",
 				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/maintenance", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.EnterMaintenance))),

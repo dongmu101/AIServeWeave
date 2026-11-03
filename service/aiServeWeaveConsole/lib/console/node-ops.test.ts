@@ -12,12 +12,20 @@ test("Registry states preserve pending nodes independently of live fleet", () =>
 for (const [name, value] of Object.entries({ envelope: [], missingFlag: { items: [{ ...entry, maintenance: undefined }] }, invalidTime: { items: [{ ...entry, last_seen_at: "bad" }] }, invalidId: { items: [{ ...entry, node_id: "" }] } })) {
   test(`Registry parser rejects ${name}`, () => assert.throws(() => parseNodeStates(value)));
 }
-for (const action of ["approve", "disable", "enable", "maintenance", "resume"] as const) {
+const ACTION_TARGETS = {
+  approve: ["POST", "/operator/v1/nodes/node%2F1/approve"],
+  disable: ["POST", "/operator/v1/nodes/node%2F1/disable"],
+  enable: ["POST", "/operator/v1/nodes/node%2F1/enable"],
+  maintenance: ["POST", "/operator/v1/nodes/node%2F1/maintenance"],
+  resume: ["DELETE", "/operator/v1/nodes/node%2F1/maintenance"],
+  delete: ["DELETE", "/operator/v1/nodes/node%2F1"],
+} as const;
+for (const [action, [method, path]] of Object.entries(ACTION_TARGETS) as [keyof typeof ACTION_TARGETS, (typeof ACTION_TARGETS)[keyof typeof ACTION_TARGETS]][]) {
   test(`${action} sends one operator write with an empty JSON body`, async () => {
     let calls = 0;
     const spec = nodeActionRequest("node/1", action);
-    assert.equal(spec.path, `/operator/v1/nodes/node%2F1/${action === "resume" ? "maintenance" : action}`);
-    assert.equal(spec.method, action === "resume" ? "DELETE" : "POST");
+    assert.equal(spec.path, path);
+    assert.equal(spec.method, method);
     await assert.rejects(request(spec, { fetchImpl: async (_url, init) => {
       calls++;
       assert.equal(init?.body, "{}");

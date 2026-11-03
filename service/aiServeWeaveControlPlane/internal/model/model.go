@@ -325,6 +325,11 @@ const (
 	ActionNodeEnable                     = "node.enable"
 	ActionNodeMaintenanceEnter           = "node.maintenance.enter"
 	ActionNodeMaintenanceExit            = "node.maintenance.exit"
+	// ActionNodeDelete records an operator deleting a node from the fleet,
+	// which revokes its identity at the Registry and hides it from the list.
+	//
+	// ActionNodeDelete 记录运维把节点从机群中删除，即在 Registry 吊销其身份并不再列出。
+	ActionNodeDelete = "node.delete"
 	// ActionNodeEnrollmentCreate records credential-free new-node bundle issuance.
 	//
 	// ActionNodeEnrollmentCreate 记录不含凭据的新节点接入包签发。

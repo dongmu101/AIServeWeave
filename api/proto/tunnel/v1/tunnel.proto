@@ -123,9 +123,21 @@ service TokenAdmin {
   // authenticate.
   rpc DisableNode(DisableNodeRequest) returns (DisableNodeResponse);
 
-  // EnableNode clears a prior DisableNode. Enabling a node_id that is not
-  // currently disabled is not an error.
+  // EnableNode clears a prior DisableNode, and a prior DeleteNode with it, so
+  // the node_id is listed again. Enabling a node_id that is not currently
+  // disabled is not an error.
   rpc EnableNode(EnableNodeRequest) returns (EnableNodeResponse);
+
+  // DeleteNode removes a node_id from the operator's view of the fleet: it
+  // disables the node_id exactly as DisableNode does — refusing Register and
+  // RenewCertificate and closing its Control stream(s) on every joined
+  // Gateway replica — and drops it from ListNodeStates. The revocation is
+  // kept, not forgotten: a node certificate stays valid for weeks after it
+  // was issued, so erasing the ledger entry would let the deleted node back
+  // in on the certificate it already holds. Deleting a node_id that is
+  // already deleted, or one that has never registered, is not an error.
+  // EnableNode undoes a delete.
+  rpc DeleteNode(DeleteNodeRequest) returns (DeleteNodeResponse);
 
   // ApproveNode clears a node_id's pending-approval mark (STATUS.md's P01),
   // creating a record for it if none exists yet — an operator may approve a
@@ -222,6 +234,12 @@ message EnableNodeRequest {
 }
 
 message EnableNodeResponse {}
+
+message DeleteNodeRequest {
+  string node_id = 1;
+}
+
+message DeleteNodeResponse {}
 
 message ApproveNodeRequest {
   string node_id = 1;

@@ -28,6 +28,7 @@ const EFFECTS = (t: Translator): Record<NodeAction, string> => ({
   enable: t("operator.clearTheDisabledFlagThisDoesNotClear"),
   maintenance: t("operator.askGatewaysToStopSendingNewRequestsTo"),
   resume: t("operator.clearTheMaintenanceFlagTheNodeMustAlso"),
+  delete: t("operator.deleteNodeEffect"),
 });
 
 /** NodeOperationsView keeps desired state and observed liveness independently readable.
@@ -67,12 +68,13 @@ export function NodeOperationsView() {
             {(node.pendingApproval ? ["approve" as const] : []).map((action) => <Button key={action} variant="outline" disabled={selected !== null || !nodePathSegment(node.nodeId)} onClick={() => setSelected({ nodeId: node.nodeId, action })}>{nodeActionLabels(locale)[action]}</Button>)}
             {([node.disabled ? "enable" : "disable", node.maintenance ? "resume" : "maintenance"] as NodeAction[]).map((action) => <Button key={action} variant="outline" disabled={selected !== null || !nodePathSegment(node.nodeId)} onClick={() => setSelected({ nodeId: node.nodeId, action })}>{nodeActionLabels(locale)[action]}</Button>)}
             {nodePathSegment(node.nodeId) && tenantNodeOwner(node.nodeId) === null ? <Button variant="outline" render={<Link href={`/operator/node-providers?${new URLSearchParams({ [NODE_QUERY_PARAM]: node.nodeId })}`} />}><Message id="operator.nodeProvidersManage" /></Button> : null}
+            <Button variant="destructive" disabled={selected !== null || !nodePathSegment(node.nodeId)} onClick={() => setSelected({ nodeId: node.nodeId, action: "delete" })}>{nodeActionLabels(locale).delete}</Button>
           </div>
         </div>)}
       </div>}
     </section>
     <FleetView key={fleetRevision} title={t("operator.liveFleetGatewayObservations")} />
-    <ConfirmDialog open={selected !== null} onOpenChange={(open) => { if (!open) setSelected(null); }} title={selected ? nodeActionLabels(locale)[selected.action] : t("operator.nodeActions")} confirmLabel={t("operator.confirmAction")} destructive={selected?.action === "disable"} description={selected ? <><span className="break-all font-mono">{selected.nodeId}</span>：{EFFECTS(t)[selected.action]} <Message id="operator.statePropagationTakesTime" /></> : ""} onConfirm={async () => {
+    <ConfirmDialog open={selected !== null} onOpenChange={(open) => { if (!open) setSelected(null); }} title={selected ? nodeActionLabels(locale)[selected.action] : t("operator.nodeActions")} confirmLabel={t("operator.confirmAction")} destructive={selected?.action === "disable" || selected?.action === "delete"} description={selected ? <><span className="break-all font-mono">{selected.nodeId}</span>：{EFFECTS(t)[selected.action]} <Message id="operator.statePropagationTakesTime" /></> : ""} onConfirm={async () => {
       if (!selected) return;
       setNotice(null);
       try {

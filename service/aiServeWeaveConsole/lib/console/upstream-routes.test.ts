@@ -299,6 +299,7 @@ test("platform operations and audit are allowlisted only on their own surface", 
     ["POST", "/operator/v1/nodes/node-1/enable"],
     ["POST", "/operator/v1/nodes/node-1/maintenance"],
     ["DELETE", "/operator/v1/nodes/node-1/maintenance"],
+    ["DELETE", "/operator/v1/nodes/node-1"],
     ["GET", "/operator/v1/nodes/node-1/comfyui-managed"],
     ["POST", "/operator/v1/nodes/node-1/comfyui-managed"],
     ["POST", "/operator/v1/nodes/node-1/comfyui-managed/custom-nodes"],
@@ -320,7 +321,8 @@ test("platform operations and audit are allowlisted only on their own surface", 
     assert.equal(operatorResolve(method, path)?.path, path);
     assert.equal(resolve(method, path), null);
   }
-  assert.equal(operatorResolve("DELETE", "/operator/v1/nodes/node-1"), null);
+  assert.equal(operatorResolve("PUT", "/operator/v1/nodes/node-1"), null);
+  assert.equal(operatorResolve("POST", "/operator/v1/nodes/node-1"), null);
   assert.equal(operatorResolve("POST", "/admin/v1/platform/operators"), null);
 });
 

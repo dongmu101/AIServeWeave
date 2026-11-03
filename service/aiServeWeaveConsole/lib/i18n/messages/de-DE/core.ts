@@ -4,6 +4,7 @@ const core = {
   "tenant.enableNode": "Knoten aktivieren",
   "tenant.enterMaintenance": "Wartung starten",
   "tenant.exitMaintenance": "Wartung beenden",
+  "tenant.deleteNode": "Knoten löschen",
   "tenant.succeeded": "Erfolgreich",
   "tenant.createApiKey": "API Key erstellen",
   "tenant.revoked": "Widerrufen",

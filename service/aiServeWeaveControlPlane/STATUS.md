@@ -333,6 +333,7 @@ Registry:
 | `POST /operator/v1/nodes/:id/enable` | `EnableNode` |
 | `POST /operator/v1/nodes/:id/maintenance` | `SetMaintenance` |
 | `DELETE /operator/v1/nodes/:id/maintenance` | `ClearMaintenance` |
+| `DELETE /operator/v1/nodes/:id` | `DeleteNode`；`tnode.` 商户自有节点的数据行同时标记删除，审计动作 `node.delete` |
 
 全部由 `requirePlatformSession` 守卫，且只在 Registry 调用成功后才写一条 `audit_logs`（`TenantID=model.PlatformScope`，`ActorID` 是平台运维的 id）——失败的调用不留痕迹，理由与 `Service.audit` 的既有约定相同：一个没发生的动作不该被记成发生过。`internal/registryclient` 是本服务第一个说 gRPC 的包，鉴权方式（纯 TLS + metadata 里的 Bearer admin token）照抄 Registry 自己 CLI 客户端已经在用的写法，不引入 mTLS。
 

@@ -4,6 +4,7 @@ const core = {
   "tenant.enableNode": "Activer le nœud",
   "tenant.enterMaintenance": "Passer en maintenance",
   "tenant.exitMaintenance": "Quitter la maintenance",
+  "tenant.deleteNode": "Supprimer le nœud",
   "tenant.succeeded": "Réussi",
   "tenant.createApiKey": "Créer une clé API",
   "tenant.revoked": "Révoquée",

@@ -8,8 +8,8 @@
 | --- | --- | --- |
 | `internal/ca` | 已实现 | Registry 自己的证书颁发机构：加载或生成根证书、签发节点证书与 Registry 自己的服务端证书 |
 | `internal/tokenstore` | 已实现 | 一次性 bootstrap token 的存储：铸造（含可选 node_id 绑定）、不消耗的校验（`Peek`）、待审批期间固定到某个 node_id（`Claim`）、消费、撤销、过期与重放校验 |
-| `internal/identitystore` | 已实现 | `node_id` 唯一性账本（S01）：记录每个 `node_id` 最近绑定的公钥指纹，供 `Register` 分辨新注册、无害重连与身份冲突；S02 之后，一枚 node_id 绑定的令牌可以让 `Register` 跳过冲突检查，直接覆盖账本；S03 之后同一条记录还携带禁用标记，供 `Disable`/`Enable`/`IsDisabled`/`DisabledNodeIDs` 使用；P01 之后还携带待审批、已批准（`Approved`）与维护标记 |
-| `internal/registryserver` | 已实现 | `NodeIdentity`（`Register`/`RenewCertificate`）、`GatewayDirectory`（`Join`，配置 `-gateway-token-file` 时要求认证，留空仍未认证）与 `TokenAdmin`（`MintToken`/`RevokeToken`/`DisableNode`/`EnableNode`）三个 gRPC 服务的实现 |
+| `internal/identitystore` | 已实现 | `node_id` 唯一性账本（S01）：记录每个 `node_id` 最近绑定的公钥指纹，供 `Register` 分辨新注册、无害重连与身份冲突；S02 之后，一枚 node_id 绑定的令牌可以让 `Register` 跳过冲突检查，直接覆盖账本；S03 之后同一条记录还携带禁用标记，供 `Disable`/`Enable`/`IsDisabled`/`DisabledNodeIDs` 使用；P01 之后还携带待审批、已批准（`Approved`）与维护标记；运维删除后携带 `Deleted` 墓碑（见「节点删除」） |
+| `internal/registryserver` | 已实现 | `NodeIdentity`（`Register`/`RenewCertificate`）、`GatewayDirectory`（`Join`，配置 `-gateway-token-file` 时要求认证，留空仍未认证）与 `TokenAdmin`（`MintToken`/`RevokeToken`/`DisableNode`/`EnableNode`/`DeleteNode` 等）三个 gRPC 服务的实现 |
 | `main.go` | 已实现 | 装配 gRPC 监听 + `-mint-token`/`-revoke-token`/`-disable-node`/`-enable-node`（`TokenAdmin` 的 gRPC 客户端）CLI 工具 |
 
 ## 证书与 token 存放在哪
@@ -105,7 +105,7 @@ Gateway 侧对应 `-registry-join-token-file`（`service/aiServeWeaveGateway/mai
 `TokenAdmin` 新增两个方法，`AdminToken` 同样守护：
 
 - **`DisableNode(node_id)`**：把 `node_id` 标记为禁用（持久化进 `internal/identitystore.Store`，与 S01 的公钥指纹账本是同一份记录），此后 `Register` 与 `RenewCertificate` 都会拒绝这个 `node_id`——即便呈递的引导令牌或客户端证书本身仍然有效。可以对一个从未注册过的 `node_id` 提前禁用（例如一枚绑定令牌在被消费前泄漏），这时账本里会创建一条尚无指纹的记录。
-- **`EnableNode(node_id)`**：清除禁用标记；对一个当前并未被禁用的 `node_id` 调用不是错误。
+- **`EnableNode(node_id)`**：清除禁用标记（连同下文的删除墓碑）；对一个当前并未被禁用的 `node_id` 调用不是错误。
 
 **只挡住未来的握手是不够的：既有连接也要生效。** `DisableNode`/`EnableNode` 每次写入后都会用当前完整的禁用集合调用 `rosterState.setRevoked`，把它塞进 `GatewayRoster.revoked_node_ids` 字段，走已有的名册广播通道推给每一条打开的 `Join` 流——不是新起一条推送链路，是把「禁用节点」表达成「名册的一部分变了」，复用 S02 之前就有的分发机制。
 
@@ -115,6 +115,15 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 2. 对已经连接的节点，如果它的 `node_id` 出现在这份集合里，立即调用 `node.kill()`：关闭它全部空闲槽（与 Agent 自己宣告 draining 时的处理一致），并让它的 `Control` 读循环从阻塞的 `Recv` 之外被打断返回——`serveControl` 把 `Recv` 挪进一个 goroutine 用 channel 接住结果，好让主循环能同时 `select` 这个 channel 与节点的 `revoked` 关闭信号；这是"既有连接也要生效"这半句要求的直接后果：单靠 Agent 配合的优雅 Draining 通知做不到强制。正在处理中的忙碌槽不受影响，请求跑完或自然失败——这与 `Server.Close` 在整个副本关闭时已经采用的克制一致，中途掐断数据面的流对等待结果的一方是更差的失败方式。
 
 **这条链路是最终一致的，不是瞬时的。** 从 `DisableNode` 返回到某个 Gateway 副本真正切断连接之间，存在名册广播传播的窗口；一个还没收到最新名册的副本仍会认为该节点合法。这与 S02 之前 `GatewayRoster` 本身传播新副本/状态变化时的一致性模型相同，S03 没有改变这一点，只是把「哪些节点被禁用」纳入了同一份需要传播的状态。
+
+## 节点删除
+
+`TokenAdmin.DeleteNode(node_id)` 供运维把节点从机群列表中删除（控制面 `DELETE /operator/v1/nodes/:id`，Console「节点管理」的「删除节点」按钮）：
+
+- 它先做与 `DisableNode` 相同的吊销：持久化禁用标记、重新广播 `revoked_node_ids`，Gateway 关闭该节点的 `Control` 流，此后 `Register`/`RenewCertificate` 都拒绝它；同时清除待审批与维护标记并重新广播 `maintenance_node_ids`。
+- 随后 `ListNodeStates` 不再列出它（账本记录带 `deleted` 墓碑）。**记录不会被抹掉**：节点证书有效期 30 天（`ca.NodeCertLifetime`），Registry 不维护 CRL/OCSP，若直接删除记录，这个 `node_id` 会离开吊销集合，已删除的节点就能凭手里尚未到期的证书重新连上 Gateway。
+- 对已删除或从未注册的 `node_id` 调用不是错误（后者与 `DisableNode` 一样会预先建一条吊销记录）。`EnableNode` 是撤销删除的唯一途径，执行后节点重新出现在列表里；Console 不提供这个入口，需要时用 `-enable-node` CLI。
+- 安装码与接入包每次都生成新的 `node_id`，重装同一台机器不受旧墓碑影响。
 
 ## 节点审批与维护（P01）
 
@@ -169,7 +178,7 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 | `registry_cert_renewal_total` | `result` | `RenewCertificate` 调用按结果分类，取值集合同上 |
 | `registry_gateway_replicas_connected` | — | 当前通过 `GatewayDirectory.Join` 保持连接的 Gateway 副本数 |
 | `registry_token_ops_total` | `operation,result` | `TokenAdmin.MintToken`/`RevokeToken`，`operation` 取 `mint`\|`revoke` |
-| `registry_node_state_changes_total` | `action,result` | `ApproveNode`/`DisableNode`/`EnableNode`/`SetMaintenance`/`ClearMaintenance`，`action` 取对应动作名 |
+| `registry_node_state_changes_total` | `action,result` | `ApproveNode`/`DisableNode`/`EnableNode`/`DeleteNode`/`SetMaintenance`/`ClearMaintenance`，`action` 取对应动作名（删除为 `delete`） |
 | `registry_list_node_states_total` | `result` | `ListNodeStates` 调用次数 |
 
 **`node_id` 不进任何标签。** 身份账本包含历史上出现过的所有节点，不像 Gateway 的 `tunnel_server_*` 系列只统计"当前连接"这个有界集合——按节点粒度排查走结构化日志，不是指标的职责。标签取值有一份封闭常量表（`metrics.go` 的 `Result*`/`TokenOp*`/`NodeAction*`），`internal/registryserver/metrics_cardinality_test.go` 的 `TestMetricLabelValuesAreBounded` 是这条纪律的可执行版本，驱动全部 RPC 的成功/失败分支后断言实际记录的标签值都落在这张表里。

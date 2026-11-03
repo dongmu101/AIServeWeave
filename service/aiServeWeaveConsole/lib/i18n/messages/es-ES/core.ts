@@ -4,6 +4,7 @@ const core = {
   "tenant.enableNode": "Habilitar nodo",
   "tenant.enterMaintenance": "Iniciar mantenimiento",
   "tenant.exitMaintenance": "Finalizar mantenimiento",
+  "tenant.deleteNode": "Eliminar nodo",
   "tenant.succeeded": "Correcto",
   "tenant.createApiKey": "Crear API Key",
   "tenant.revoked": "Revocada",

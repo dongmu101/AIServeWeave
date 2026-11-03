@@ -143,6 +143,15 @@ type record struct {
 	// identity — a replica stops assigning new work to it without closing
 	// its existing Control stream.
 	Maintenance bool `json:"maintenance,omitempty"`
+	// Deleted marks a node_id an operator deleted (TokenAdmin.DeleteNode): it
+	// is always Disabled as well, and States leaves it out. The record is
+	// kept, rather than removed, so the node_id stays in the revoked set
+	// while certificates issued before the delete are still valid.
+	//
+	// Deleted 标记运维删除的 node_id（TokenAdmin.DeleteNode）：它总是同时
+	// Disabled，States 不再列出它。保留这条记录而不是移除它，是为了在删除之前
+	// 签发的证书仍然有效期间，这个 node_id 继续留在吊销集合里。
+	Deleted bool `json:"deleted,omitempty"`
 }
 
 // fileMode matches tokenstore's: this file is not a secret, but there is no
@@ -353,9 +362,14 @@ func (s *Store) Disable(nodeID string, now time.Time) error {
 	return nil
 }
 
-// Enable clears a prior Disable. Enabling a node_id that is not currently
+// Enable clears a prior Disable, and a prior Delete with it, so the node_id
+// is listed by States again. Enabling a node_id that is not currently
 // disabled, including one with no record at all, is not an error — both
 // already guarantee the node_id is not revoked.
+//
+// Enable 清除此前的 Disable，并一并清除此前的 Delete，使 States 重新列出该
+// node_id。启用一个当前未被禁用的 node_id（包括完全没有记录的）不是错误——两者
+// 都已经保证该 node_id 没有被吊销。
 func (s *Store) Enable(nodeID string, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -364,11 +378,49 @@ func (s *Store) Enable(nodeID string, now time.Time) error {
 	if !ok || !r.Disabled {
 		return nil
 	}
-	prevSeen := r.LastSeenAt
-	r.Disabled = false
+	prevSeen, prevDeleted := r.LastSeenAt, r.Deleted
+	r.Disabled, r.Deleted = false, false
 	r.LastSeenAt = now
 	if err := s.persistLocked(); err != nil {
-		r.Disabled, r.LastSeenAt = true, prevSeen
+		r.Disabled, r.Deleted, r.LastSeenAt = true, prevDeleted, prevSeen
+		return err
+	}
+	return nil
+}
+
+// Delete disables nodeID and hides it from States, creating a record for it
+// if none exists yet, the same way Disable may revoke a node_id that has
+// never registered. Pending approval and maintenance are cleared: a deleted
+// node_id is neither waiting on an operator nor taking work. Deleting a
+// node_id that is already deleted succeeds without changing anything
+// observable.
+//
+// Delete 禁用 nodeID 并让 States 不再列出它；没有记录时新建一条，与 Disable
+// 可以吊销从未注册过的 node_id 一样。待审批与维护标记一并清除：已删除的
+// node_id 既不在等待运维，也不再接活。删除一个已删除的 node_id 会成功，且不改变
+// 任何可观察的状态。
+func (s *Store) Delete(nodeID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	r, ok := s.records[nodeID]
+	if ok && r.Deleted {
+		return nil
+	}
+	if !ok {
+		r = &record{NodeID: nodeID, FirstSeenAt: now}
+		s.records[nodeID] = r
+	}
+	prev := *r
+	r.Disabled, r.Deleted = true, true
+	r.PendingApproval, r.Maintenance = false, false
+	r.LastSeenAt = now
+	if err := s.persistLocked(); err != nil {
+		if ok {
+			*r = prev
+		} else {
+			delete(s.records, nodeID)
+		}
 		return err
 	}
 	return nil
@@ -576,12 +628,17 @@ type State struct {
 }
 
 // States returns every node_id the ledger has an opinion about, in no
-// particular order.
+// particular order, except those an operator deleted.
+//
+// States 返回账本里有记录的每一个 node_id（顺序不定），运维已删除的除外。
 func (s *Store) States() []State {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	states := make([]State, 0, len(s.records))
 	for _, r := range s.records {
+		if r.Deleted {
+			continue // revoked but hidden / 仍吊销，但不再列出
+		}
 		states = append(states, State{
 			NodeID:          r.NodeID,
 			PendingApproval: r.PendingApproval,

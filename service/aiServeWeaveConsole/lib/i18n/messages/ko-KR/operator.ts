@@ -551,6 +551,7 @@ const operator = {
   "operator.nodeProvidersPick": "노드 선택",
   "operator.nodeProvidersPickPlaceholder": "등록된 플랫폼 노드에서 선택",
   "operator.nodeProvidersManual": "또는 노드 ID 직접 입력(노드 관리 페이지 카드에 표시된 ID)",
-  "operator.nodeProvidersManage": "API와 키"
+  "operator.nodeProvidersManage": "API와 키",
+  "operator.deleteNodeEffect": "노드 관리에서 이 노드를 삭제합니다. 신원을 폐기하여 이후 등록, 갱신 및 Gateway 핸드셰이크를 거부하며, Gateway는 업데이트를 받으면 제어 연결을 닫습니다. 노드는 더 이상 목록에 표시되지 않습니다. 테넌트 소유 노드는 테넌트의 노드 목록에서도 삭제됩니다. 이 페이지에서는 되돌릴 수 없으며, 머신을 다시 연결하려면 새 설치 명령을 생성하세요."
 } as const;
 export default operator;

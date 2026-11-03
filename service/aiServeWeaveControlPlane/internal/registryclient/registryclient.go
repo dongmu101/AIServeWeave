@@ -199,6 +199,16 @@ func (c *Client) EnableNode(ctx context.Context, nodeID string) error {
 	return err
 }
 
+// DeleteNode calls TokenAdmin.DeleteNode.
+//
+// DeleteNode 调用 TokenAdmin.DeleteNode。
+func (c *Client) DeleteNode(ctx context.Context, nodeID string) error {
+	ctx, cancel := c.authCtx(ctx)
+	defer cancel()
+	_, err := c.admin.DeleteNode(ctx, &tunnelv1.DeleteNodeRequest{NodeId: nodeID})
+	return err
+}
+
 // SetMaintenance calls TokenAdmin.SetMaintenance.
 //
 // SetMaintenance 调用 TokenAdmin.SetMaintenance。

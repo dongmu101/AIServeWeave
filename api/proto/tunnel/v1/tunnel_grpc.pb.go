@@ -492,6 +492,7 @@ const (
 	TokenAdmin_RevokeToken_FullMethodName      = "/tunnel.v1.TokenAdmin/RevokeToken"
 	TokenAdmin_DisableNode_FullMethodName      = "/tunnel.v1.TokenAdmin/DisableNode"
 	TokenAdmin_EnableNode_FullMethodName       = "/tunnel.v1.TokenAdmin/EnableNode"
+	TokenAdmin_DeleteNode_FullMethodName       = "/tunnel.v1.TokenAdmin/DeleteNode"
 	TokenAdmin_ApproveNode_FullMethodName      = "/tunnel.v1.TokenAdmin/ApproveNode"
 	TokenAdmin_SetMaintenance_FullMethodName   = "/tunnel.v1.TokenAdmin/SetMaintenance"
 	TokenAdmin_ClearMaintenance_FullMethodName = "/tunnel.v1.TokenAdmin/ClearMaintenance"
@@ -536,9 +537,20 @@ type TokenAdminClient interface {
 	// registered, is not an error: both already guarantee the node cannot
 	// authenticate.
 	DisableNode(ctx context.Context, in *DisableNodeRequest, opts ...grpc.CallOption) (*DisableNodeResponse, error)
-	// EnableNode clears a prior DisableNode. Enabling a node_id that is not
-	// currently disabled is not an error.
+	// EnableNode clears a prior DisableNode, and a prior DeleteNode with it, so
+	// the node_id is listed again. Enabling a node_id that is not currently
+	// disabled is not an error.
 	EnableNode(ctx context.Context, in *EnableNodeRequest, opts ...grpc.CallOption) (*EnableNodeResponse, error)
+	// DeleteNode removes a node_id from the operator's view of the fleet: it
+	// disables the node_id exactly as DisableNode does — refusing Register and
+	// RenewCertificate and closing its Control stream(s) on every joined
+	// Gateway replica — and drops it from ListNodeStates. The revocation is
+	// kept, not forgotten: a node certificate stays valid for weeks after it
+	// was issued, so erasing the ledger entry would let the deleted node back
+	// in on the certificate it already holds. Deleting a node_id that is
+	// already deleted, or one that has never registered, is not an error.
+	// EnableNode undoes a delete.
+	DeleteNode(ctx context.Context, in *DeleteNodeRequest, opts ...grpc.CallOption) (*DeleteNodeResponse, error)
 	// ApproveNode clears a node_id's pending-approval mark (STATUS.md's P01),
 	// creating a record for it if none exists yet — an operator may approve a
 	// node_id before it has ever registered, the same way DisableNode may
@@ -607,6 +619,16 @@ func (c *tokenAdminClient) EnableNode(ctx context.Context, in *EnableNodeRequest
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnableNodeResponse)
 	err := c.cc.Invoke(ctx, TokenAdmin_EnableNode_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *tokenAdminClient) DeleteNode(ctx context.Context, in *DeleteNodeRequest, opts ...grpc.CallOption) (*DeleteNodeResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(DeleteNodeResponse)
+	err := c.cc.Invoke(ctx, TokenAdmin_DeleteNode_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -691,9 +713,20 @@ type TokenAdminServer interface {
 	// registered, is not an error: both already guarantee the node cannot
 	// authenticate.
 	DisableNode(context.Context, *DisableNodeRequest) (*DisableNodeResponse, error)
-	// EnableNode clears a prior DisableNode. Enabling a node_id that is not
-	// currently disabled is not an error.
+	// EnableNode clears a prior DisableNode, and a prior DeleteNode with it, so
+	// the node_id is listed again. Enabling a node_id that is not currently
+	// disabled is not an error.
 	EnableNode(context.Context, *EnableNodeRequest) (*EnableNodeResponse, error)
+	// DeleteNode removes a node_id from the operator's view of the fleet: it
+	// disables the node_id exactly as DisableNode does — refusing Register and
+	// RenewCertificate and closing its Control stream(s) on every joined
+	// Gateway replica — and drops it from ListNodeStates. The revocation is
+	// kept, not forgotten: a node certificate stays valid for weeks after it
+	// was issued, so erasing the ledger entry would let the deleted node back
+	// in on the certificate it already holds. Deleting a node_id that is
+	// already deleted, or one that has never registered, is not an error.
+	// EnableNode undoes a delete.
+	DeleteNode(context.Context, *DeleteNodeRequest) (*DeleteNodeResponse, error)
 	// ApproveNode clears a node_id's pending-approval mark (STATUS.md's P01),
 	// creating a record for it if none exists yet — an operator may approve a
 	// node_id before it has ever registered, the same way DisableNode may
@@ -739,6 +772,9 @@ func (UnimplementedTokenAdminServer) DisableNode(context.Context, *DisableNodeRe
 }
 func (UnimplementedTokenAdminServer) EnableNode(context.Context, *EnableNodeRequest) (*EnableNodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnableNode not implemented")
+}
+func (UnimplementedTokenAdminServer) DeleteNode(context.Context, *DeleteNodeRequest) (*DeleteNodeResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method DeleteNode not implemented")
 }
 func (UnimplementedTokenAdminServer) ApproveNode(context.Context, *ApproveNodeRequest) (*ApproveNodeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ApproveNode not implemented")
@@ -845,6 +881,24 @@ func _TokenAdmin_EnableNode_Handler(srv interface{}, ctx context.Context, dec fu
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TokenAdmin_DeleteNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(DeleteNodeRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TokenAdminServer).DeleteNode(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TokenAdmin_DeleteNode_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TokenAdminServer).DeleteNode(ctx, req.(*DeleteNodeRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TokenAdmin_ApproveNode_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(ApproveNodeRequest)
 	if err := dec(in); err != nil {
@@ -939,6 +993,10 @@ var TokenAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "EnableNode",
 			Handler:    _TokenAdmin_EnableNode_Handler,
+		},
+		{
+			MethodName: "DeleteNode",
+			Handler:    _TokenAdmin_DeleteNode_Handler,
 		},
 		{
 			MethodName: "ApproveNode",

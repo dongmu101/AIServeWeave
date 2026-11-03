@@ -4,6 +4,7 @@ const core = {
   "tenant.enableNode": "ノードを有効化",
   "tenant.enterMaintenance": "メンテナンスを開始",
   "tenant.exitMaintenance": "メンテナンスを終了",
+  "tenant.deleteNode": "ノードを削除",
   "tenant.succeeded": "成功",
   "tenant.createApiKey": "API Key を作成",
   "tenant.revoked": "失効済み",

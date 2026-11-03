@@ -17,6 +17,7 @@ import (
 	"errors"
 	"fmt"
 
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
@@ -387,6 +388,76 @@ func (s *Service) EnableNode(ctx context.Context, actor Actor, nodeID string) er
 		return err
 	}
 	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionNodeEnable, nodeID, "", actor.IP)
+	return nil
+}
+
+// NodeDeleter deletes a node_id at the Registry (TokenAdmin.DeleteNode). It
+// is kept apart from RegistryClient so a client that only reads and toggles
+// node state need not implement it; registryclient.Client implements both.
+//
+// NodeDeleter 在 Registry 删除一个 node_id（TokenAdmin.DeleteNode）。它与
+// RegistryClient 分开，使只读取与切换节点状态的客户端不必实现它；
+// registryclient.Client 两者都实现。
+type NodeDeleter interface {
+	DeleteNode(ctx context.Context, nodeID string) error
+}
+
+// The production client must satisfy DeleteNode's runtime check.
+// 生产客户端必须通过 DeleteNode 的运行时检查。
+var _ NodeDeleter = (*registryclient.Client)(nil)
+
+// DeleteNode removes a node_id from the fleet: the Registry revokes it,
+// closing its connections, and stops listing it. A tenant-owned node's row
+// is revoked as well, so the tenant's node list agrees. The Registry goes
+// first: if the row update then fails, the node is already cut off and a
+// retry repeats a delete the Registry treats as done.
+//
+// DeleteNode 把一个 node_id 从机群中删除：Registry 吊销它、断开其连接，并不再
+// 列出它。商户自有节点的数据行一并标记删除，使商户的节点列表保持一致。先改
+// Registry：之后若数据行更新失败，节点已被切断，重试时 Registry 把重复的删除视为
+// 已完成。
+func (s *Service) DeleteNode(ctx context.Context, actor Actor, nodeID string) error {
+	if err := s.requireRegistryActor(actor); err != nil {
+		return err
+	}
+	if nodeID == "" {
+		return ErrInvalidInput
+	}
+	deleter, ok := s.registryClient.(NodeDeleter)
+	if !ok {
+		return ErrRegistryUnconfigured
+	}
+	if err := deleter.DeleteNode(ctx, nodeID); err != nil {
+		return err
+	}
+	if err := s.revokeOwnedNodeRow(ctx, actor, nodeID); err != nil {
+		return err
+	}
+	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionNodeDelete, nodeID, "", actor.IP)
+	return nil
+}
+
+// revokeOwnedNodeRow marks a tenant-owned node's live row deleted on an
+// operator's behalf. A platform node, a node with no row, or one already
+// revoked needs nothing.
+//
+// revokeOwnedNodeRow 代运维把商户自有节点的有效数据行标记为已删除。平台节点、
+// 没有数据行或已经删除的节点无需处理。
+func (s *Service) revokeOwnedNodeRow(ctx context.Context, actor Actor, nodeID string) error {
+	if _, owned := nodeaccess.OwnerOf(nodeID); !owned || s.tenantNodes == nil {
+		return nil
+	}
+	row, err := s.store.GetTenantNode(ctx, nodeID)
+	if errors.Is(err, store.ErrNotFound) || (err == nil && row.RevokedAt != nil) {
+		return nil
+	}
+	if err != nil {
+		return translate(err)
+	}
+	err = s.store.RevokeTenantNode(ctx, row.TenantID, nodeID, actor.UserID, s.clock.Now().UTC())
+	if err != nil && !errors.Is(err, store.ErrNotFound) {
+		return translate(err)
+	}
 	return nil
 }
 

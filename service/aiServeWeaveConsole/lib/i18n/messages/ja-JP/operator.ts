@@ -551,6 +551,7 @@ const operator = {
   "operator.nodeProvidersPick": "ノードを選択",
   "operator.nodeProvidersPickPlaceholder": "登録済みのプラットフォームノードから選択",
   "operator.nodeProvidersManual": "またはノード ID を入力（ノード管理ページのカードに表示される ID）",
-  "operator.nodeProvidersManage": "API とキー"
+  "operator.nodeProvidersManage": "API とキー",
+  "operator.deleteNodeEffect": "ノード管理からこのノードを削除します。ID を失効させて以後の登録、更新、Gateway ハンドシェイクを拒否し、Gateway は更新を受信すると制御接続を閉じます。ノードは一覧に表示されなくなります。テナント所有のノードはテナントのノード一覧からも削除されます。この画面からは元に戻せません。マシンを再接続するには、新しいインストールコマンドを生成してください。"
 } as const;
 export default operator;

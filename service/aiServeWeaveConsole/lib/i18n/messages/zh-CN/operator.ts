@@ -551,6 +551,7 @@ const operator = {
   "operator.nodeProvidersPick": "选择节点",
   "operator.nodeProvidersPickPlaceholder": "从已登记的平台节点中选择",
   "operator.nodeProvidersManual": "或手动输入节点 ID（节点管理页卡片上的 ID）",
-  "operator.nodeProvidersManage": "接口与 Key"
+  "operator.nodeProvidersManage": "接口与 Key",
+  "operator.deleteNodeEffect": "从节点管理中删除该节点：吊销其身份，拒绝后续注册、续期与 Gateway 握手，Gateway 收到更新后关闭控制连接；该节点不再出现在列表中。商户自有节点同时从商户的节点列表删除。页面上无法撤销；要重新接入这台机器，请生成新的安装命令。"
 } as const;
 export default operator;

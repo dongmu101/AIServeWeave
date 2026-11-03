@@ -15,16 +15,16 @@ export interface NodeState {
   lastSeenAt: string;
 }
 
-/** NodeAction names the five platform node operations.
- * NodeAction 命名五种平台节点操作。 */
-export type NodeAction = "approve" | "disable" | "enable" | "maintenance" | "resume";
+/** NodeAction names the six platform node operations.
+ * NodeAction 命名六种平台节点操作。 */
+export type NodeAction = "approve" | "disable" | "enable" | "maintenance" | "resume" | "delete";
 
 /** nodeActionLabels names operations without claiming propagation.
  * nodeActionLabels 为操作提供名称，不声称已传播。 */
 export function nodeActionLabels(locale: Locale = DEFAULT_LOCALE): Record<NodeAction, string> {
   const t = coreTranslator(locale);
   return {
-  approve: t("common.approved"), disable: t("tenant.disableNode"), enable: t("tenant.enableNode"), maintenance: t("tenant.enterMaintenance"), resume: t("tenant.exitMaintenance"),
+  approve: t("common.approved"), disable: t("tenant.disableNode"), enable: t("tenant.enableNode"), maintenance: t("tenant.enterMaintenance"), resume: t("tenant.exitMaintenance"), delete: t("tenant.deleteNode"),
 };
 }
 /** NODE_ACTION_LABELS preserves default-language compatibility. / NODE_ACTION_LABELS 保留默认语言的兼容接口。 */
@@ -44,7 +44,11 @@ export function parseNodeStates(value: unknown): NodeState[] {
 }
 
 /** nodeActionRequest constructs a single write; the request layer never retries writes.
- * nodeActionRequest 构造单次写入；请求层绝不重试写操作。 */
+ * Delete targets the node itself; resume deletes the maintenance mark.
+ * nodeActionRequest 构造单次写入；请求层绝不重试写操作。
+ * 删除作用于节点本身；退出维护删除的是维护标记。 */
 export function nodeActionRequest(nodeId: string, action: NodeAction): RequestSpec<null> {
-  return { surface: "operator", method: action === "resume" ? "DELETE" : "POST", path: `/operator/v1/nodes/${encodeURIComponent(nodeId)}/${action === "resume" ? "maintenance" : action}`, body: {}, parse: parseNoContent };
+  const node = `/operator/v1/nodes/${encodeURIComponent(nodeId)}`;
+  if (action === "delete") return { surface: "operator", method: "DELETE", path: node, body: {}, parse: parseNoContent };
+  return { surface: "operator", method: action === "resume" ? "DELETE" : "POST", path: `${node}/${action === "resume" ? "maintenance" : action}`, body: {}, parse: parseNoContent };
 }

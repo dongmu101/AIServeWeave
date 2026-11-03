@@ -118,6 +118,37 @@ func (s *Server) EnableNode(ctx context.Context, req *tunnelv1.EnableNodeRequest
 	return &tunnelv1.EnableNodeResponse{}, nil
 }
 
+// DeleteNode implements tunnelv1.TokenAdminServer. It revokes the node_id
+// the way DisableNode does — re-broadcasting revoked_node_ids so every
+// joined Gateway replica closes its Control stream(s) — and re-broadcasts
+// maintenance_node_ids too, since a delete clears maintenance.
+//
+// DeleteNode 实现 tunnelv1.TokenAdminServer。它像 DisableNode 一样吊销该
+// node_id——重新广播 revoked_node_ids，让每个已加入的 Gateway 副本关闭它的
+// Control 流——并同时重新广播 maintenance_node_ids，因为删除会清除维护标记。
+func (s *Server) DeleteNode(ctx context.Context, req *tunnelv1.DeleteNodeRequest) (*tunnelv1.DeleteNodeResponse, error) {
+	if err := s.requireAdmin(ctx); err != nil {
+		s.metrics.NodeStateChange(NodeActionDelete, ResultUnauthorized)
+		return nil, err
+	}
+	nodeID := req.GetNodeId()
+	if nodeID == "" {
+		s.metrics.NodeStateChange(NodeActionDelete, ResultInvalid)
+		return nil, status.Error(codes.InvalidArgument, "node_id is required")
+	}
+	if err := s.identities.Delete(nodeID, s.clock.Now()); err != nil {
+		s.logger.Error("node delete failed", slog.String("node_id", nodeID), slog.String("error", err.Error()))
+		s.metrics.NodeStateChange(NodeActionDelete, ResultInternal)
+		return nil, status.Error(codes.Internal, "cannot delete node")
+	}
+	s.roster.setRevoked(s.identities.DisabledNodeIDs())
+	s.roster.setMaintenance(s.identities.MaintenanceNodeIDs())
+
+	s.logger.Info("node deleted", slog.String("node_id", nodeID))
+	s.metrics.NodeStateChange(NodeActionDelete, ResultSuccess)
+	return &tunnelv1.DeleteNodeResponse{}, nil
+}
+
 // ApproveNode implements tunnelv1.TokenAdminServer (STATUS.md's P01).
 func (s *Server) ApproveNode(ctx context.Context, req *tunnelv1.ApproveNodeRequest) (*tunnelv1.ApproveNodeResponse, error) {
 	if err := s.requireAdmin(ctx); err != nil {

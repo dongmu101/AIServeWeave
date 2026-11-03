@@ -52,6 +52,7 @@ const (
 	NodeActionEnable           = "enable"
 	NodeActionMaintenanceSet   = "maintenance_set"
 	NodeActionMaintenanceClear = "maintenance_clear"
+	NodeActionDelete           = "delete"
 )
 
 // Descriptions returns this package's metric catalogue.
@@ -63,7 +64,7 @@ func Descriptions() metrics.Descriptions {
 		MetricCertRenewalTotal:         {Kind: metrics.KindCounter, Help: "Certificate renewal attempts by outcome. / 按结果分类的证书续期尝试次数。"},
 		MetricGatewayReplicasConnected: {Kind: metrics.KindGauge, Help: "Gateway replicas currently joined to this Registry. / 当前加入本 Registry 的 Gateway 副本数。"},
 		MetricTokenOpsTotal:            {Kind: metrics.KindCounter, Help: "TokenAdmin token mint/revoke calls by outcome. / TokenAdmin 铸造/撤销 token 调用，按结果分类。"},
-		MetricNodeStateChangesTotal:    {Kind: metrics.KindCounter, Help: "Node approve/disable/enable/maintenance calls by outcome. / 节点审批/禁用/启用/维护调用，按结果分类。"},
+		MetricNodeStateChangesTotal:    {Kind: metrics.KindCounter, Help: "Node approve/disable/enable/delete/maintenance calls by outcome. / 节点审批/禁用/启用/删除/维护调用，按结果分类。"},
 		MetricListNodeStatesTotal:      {Kind: metrics.KindCounter, Help: "ListNodeStates calls by outcome. / ListNodeStates 调用次数，按结果分类。"},
 	}
 }
