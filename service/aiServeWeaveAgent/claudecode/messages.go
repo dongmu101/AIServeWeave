@@ -147,12 +147,17 @@ func (r messagesRequest) thinkingBudget() int {
 
 // validate accepts thinking {"type":"disabled"} or {"type":"enabled",
 // "budget_tokens":N} with 1024 <= N < max_tokens and no temperature, as the
-// Messages API does; adaptive thinking is refused. Thinking blocks may appear
-// only on assistant turns and are discarded later.
+// Messages API does; adaptive thinking is refused here because the CLI runs
+// with adaptive thinking disabled and a fixed MAX_THINKING_TOKENS. Requests
+// through the Gateway never hit this: it rewrites adaptive thinking into an
+// enabled budget first (see the Gateway's nativeThinking). Thinking blocks
+// may appear only on assistant turns and are discarded later.
 //
 // validate 接受 thinking {"type":"disabled"}，或与 Messages API 一致的
 // {"type":"enabled","budget_tokens":N}（1024 <= N < max_tokens，且不带 temperature）；
-// 拒绝 adaptive thinking。思考块只能出现在 assistant 回合里，之后会被丢弃。
+// 这里拒绝 adaptive thinking，因为 CLI 以关闭 adaptive、固定 MAX_THINKING_TOKENS 的方式
+// 运行。经 Gateway 的请求不会走到这一步：Gateway 会先把 adaptive 改写成带预算的
+// enabled（见 Gateway 的 nativeThinking）。思考块只能出现在 assistant 回合里，之后会被丢弃。
 func (r messagesRequest) validate(model string) error {
 	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 || len(r.Messages) > 2048 || len(r.Tools) > 128 {
 		return errMessages
@@ -375,7 +380,7 @@ func (b *messagesBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	var req messagesRequest
 	if decodeStrict(data, &req) != nil || req.validate(b.model) != nil {
-		messagesError(w, 400, "unsupported Messages shape or extension: adaptive thinking, prompt caching and output formats are not supported")
+		messagesError(w, 400, "unsupported Messages shape or extension: thinking must be disabled or enabled with budget_tokens (the Gateway rewrites adaptive thinking), and prompt caching and output formats are not supported")
 		return
 	}
 	s, err := b.acquire(owner, req)

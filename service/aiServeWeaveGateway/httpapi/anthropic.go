@@ -61,6 +61,10 @@ type anthropicMessagesRequest struct {
 	Tools         []anthropicToolJSON    `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage        `json:"tool_choice,omitempty"`
 	Thinking      json.RawMessage        `json:"thinking,omitempty"`
+	// OutputConfig is read only for output_config.effort, which steers
+	// adaptive thinking (see reasoningFromAnthropic).
+	// OutputConfig 只读取 output_config.effort，用来调节 adaptive 思考（见 reasoningFromAnthropic）。
+	OutputConfig json.RawMessage `json:"output_config,omitempty"`
 }
 
 // anthropicToolJSON is one element of "tools": Anthropic names a tool
@@ -544,7 +548,7 @@ func (req anthropicMessagesRequest) toRuntime() (runtime.ChatRequest, error) {
 		return runtime.ChatRequest{}, err
 	}
 
-	reasoning, err := reasoningFromAnthropic(req.Thinking)
+	reasoning, err := reasoningFromAnthropic(req.Thinking, anthropicOutputEffort(req.OutputConfig))
 	if err != nil {
 		return runtime.ChatRequest{}, err
 	}

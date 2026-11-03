@@ -64,11 +64,15 @@ func reasoningFromResponses(r *responsesReasoning) (*runtime.ReasoningConfig, er
 
 // reasoningFromAnthropic reads an Anthropic "thinking" object: "enabled"
 // with its required budget_tokens, "adaptive" (thinking on, the model picks
-// the depth), or "disabled".
+// the depth), or "disabled". effort is the request's output_config.effort;
+// it steers only adaptive thinking, whose depth it sets through
+// anthropicEffortLevel, while an explicit budget_tokens stays authoritative.
 //
 // reasoningFromAnthropic 读取 Anthropic 的 "thinking" 对象："enabled" 及其必填的
-// budget_tokens、"adaptive"（开启思考，由模型决定深度）或 "disabled"。
-func reasoningFromAnthropic(raw json.RawMessage) (*runtime.ReasoningConfig, error) {
+// budget_tokens、"adaptive"（开启思考，由模型决定深度）或 "disabled"。effort 是请求的
+// output_config.effort，只作用于 adaptive：经 anthropicEffortLevel 决定思考深度；显式的
+// budget_tokens 仍以其自身为准。
+func reasoningFromAnthropic(raw json.RawMessage, effort string) (*runtime.ReasoningConfig, error) {
 	if len(raw) == 0 || string(raw) == "null" {
 		return nil, nil
 	}
@@ -86,11 +90,44 @@ func reasoningFromAnthropic(raw json.RawMessage) (*runtime.ReasoningConfig, erro
 		}
 		return &runtime.ReasoningConfig{Enabled: true, BudgetTokens: thinking.BudgetTokens}, nil
 	case "adaptive":
-		return &runtime.ReasoningConfig{Enabled: true}, nil
+		return &runtime.ReasoningConfig{Enabled: true, Effort: anthropicEffortLevel(effort)}, nil
 	case "disabled":
 		return &runtime.ReasoningConfig{}, nil
 	}
 	return nil, fmt.Errorf(`thinking.type must be "enabled", "adaptive" or "disabled"`)
+}
+
+// anthropicOutputEffort returns output_config.effort, or "" when the object
+// is absent or does not carry a string effort. The value is only a reasoning
+// hint here, so a malformed object is left for the backend to judge instead
+// of being refused.
+//
+// anthropicOutputEffort 返回 output_config.effort；对象缺失或 effort 不是字符串时返回 ""。
+// 这里只把它当作思考提示，因此格式错误的对象留给后端判断，而不在此拒绝。
+func anthropicOutputEffort(raw json.RawMessage) string {
+	var config struct {
+		Effort string `json:"effort"`
+	}
+	if json.Unmarshal(raw, &config) != nil {
+		return ""
+	}
+	return config.Effort
+}
+
+// anthropicEffortLevel maps an Anthropic effort onto a runtime reasoning
+// level: low, medium, high and xhigh keep their names, max takes the highest
+// runtime level, and anything else is "" so Budget falls back to medium.
+//
+// anthropicEffortLevel 把 Anthropic 的 effort 映射为 runtime 思考档位：low、medium、high、
+// xhigh 同名保留，max 取 runtime 的最高档，其他值返回 ""，由 Budget 回落到 medium。
+func anthropicEffortLevel(effort string) string {
+	switch effort {
+	case runtime.ReasoningEffortLow, runtime.ReasoningEffortMedium, runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh:
+		return effort
+	case "max":
+		return runtime.ReasoningEffortXHigh
+	}
+	return ""
 }
 
 // reasoningFromOllamaThink reads Ollama's "think": a boolean, or one of the

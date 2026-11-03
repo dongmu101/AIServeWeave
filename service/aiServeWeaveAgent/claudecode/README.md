@@ -68,7 +68,7 @@ Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数�
 
 请求要求思考时，Agent 以 `MAX_THINKING_TOKENS=<预算>` 启动 CLI，并加 `--thinking-display summarized`，让默认省略思考文本的新模型也给出可读文本；否则保持 `MAX_THINKING_TOKENS=0`。`--thinking-display` 需要较新的 Claude Code（本机 `2.1.311` 已有该参数），旧版本只会在请求要求思考时因参数不识别而失败。
 
-- **原生 Messages**：Agent 只接受 `thinking: {"type":"disabled"}` 或 `{"type":"enabled","budget_tokens":N}`（1024 ≤ N < `max_tokens`，且不带 `temperature`）。Gateway 先把客户端的 `thinking` 当作提示改写成这种形式：`adaptive` 按默认档位（8192）给预算，放不进 `max_tokens` 的预算收敛到 `max_tokens - 1`，带 `temperature`、关闭思考或 `max_tokens` ≤ 1024 时去掉该字段；只有格式错误的对象返回 400。开启后，CLI 的 `thinking`（含签名）与 `redacted_thinking` 块按原索引原样转发。
+- **原生 Messages**：Agent 只接受 `thinking: {"type":"disabled"}` 或 `{"type":"enabled","budget_tokens":N}`（1024 ≤ N < `max_tokens`，且不带 `temperature`）。Gateway 先把客户端的 `thinking` 当作提示改写成这种形式：`adaptive` 按 `output_config.effort` 换算固定预算（`low` 2048、`medium` 8192、`high` 16384、`xhigh`/`max` 32768，未给或无法识别时取 8192）。这是降级而非原生 adaptive：CLI 以 `CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1` 和固定的 `MAX_THINKING_TOKENS` 运行，模型不再按请求自行决定思考深度；直接发给 Agent 的 `adaptive` 仍返回 400，放不进 `max_tokens` 的预算收敛到 `max_tokens - 1`，带 `temperature`、关闭思考或 `max_tokens` ≤ 1024 时去掉该字段；只有格式错误的对象返回 400。开启后，CLI 的 `thinking`（含签名）与 `redacted_thinking` 块按原索引原样转发。
 - **Chat**：`reasoning_effort` 换算为思考预算（`none` 为关闭），同样按上面的规则收敛或丢弃；`thinking_delta` 渲染为 `reasoning_content`，签名与 redacted 块没有 Chat 形式，不输出。
 - **Responses**：`reasoning` 对象按同样规则转换；思考渲染为 `reasoning` 输出项。
 

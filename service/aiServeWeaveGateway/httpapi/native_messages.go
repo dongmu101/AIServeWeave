@@ -47,14 +47,18 @@ func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesR
 // rewritten by nativeThinking into the one form the Claude CLI bridge
 // accepts, so adaptive thinking or a budget that does not fit max_tokens is
 // adjusted or dropped rather than refused; only a malformed object is a 400.
+// Adaptive thinking becomes a fixed budget chosen from output_config.effort
+// (medium when absent): the model no longer picks its depth per request,
+// which is the part of the native semantics this bridge cannot keep.
 //
 // nativeMessages 保留原生块顺序，并对每次续接重新认证。客户端的 "thinking" 对象被当作
 // 思考提示读取，并由 nativeThinking 改写为 Claude CLI 桥接唯一接受的形式，因此
 // adaptive thinking 或放不进 max_tokens 的预算会被调整或丢弃，而不是拒绝；只有格式
-// 错误的对象才返回 400。
+// 错误的对象才返回 400。adaptive 会变成按 output_config.effort 选出的固定预算（未给时
+// 取 medium）：模型不再按每个请求自行决定思考深度，这是本桥接无法保留的那部分原生语义。
 func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time) {
 	if len(req.Thinking) > 0 {
-		reasoning, err := reasoningFromAnthropic(req.Thinking)
+		reasoning, err := reasoningFromAnthropic(req.Thinking, anthropicOutputEffort(req.OutputConfig))
 		if err != nil {
 			writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 			return
