@@ -66,6 +66,10 @@ type messagesRequest struct {
 	Thinking     json.RawMessage     `json:"thinking,omitempty"`
 	OutputConfig *bridgeOutputConfig `json:"output_config,omitempty"`
 	Temperature  *float64            `json:"temperature,omitempty"`
+	// StopSequences end a round at the first match, emulated over the CLI's
+	// text output (see stopMatcher).
+	// StopSequences 在第一处命中时结束回合，基于 CLI 的文本输出模拟（见 stopMatcher）。
+	StopSequences []string `json:"stop_sequences,omitempty"`
 }
 
 type bridgeOutputConfig struct {
@@ -158,6 +162,11 @@ func (r messagesRequest) thinkingBudget() int {
 // 这里拒绝 adaptive thinking，因为 CLI 以关闭 adaptive、固定 MAX_THINKING_TOKENS 的方式
 // 运行。经 Gateway 的请求不会走到这一步：Gateway 会先把 adaptive 改写成带预算的
 // enabled（见 Gateway 的 nativeThinking）。思考块只能出现在 assistant 回合里，之后会被丢弃。
+//
+// stop_sequences may hold up to maxStopSequences non-empty sequences of at
+// most maxStopSequenceBytes each.
+//
+// stop_sequences 最多 maxStopSequences 个非空序列，每个不超过 maxStopSequenceBytes 字节。
 func (r messagesRequest) validate(model string) error {
 	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 || len(r.Messages) > 2048 || len(r.Tools) > 128 {
 		return errMessages
@@ -195,6 +204,14 @@ func (r messagesRequest) validate(model string) error {
 	}
 	if r.Temperature != nil && (*r.Temperature < 0 || *r.Temperature > 1) {
 		return errMessages
+	}
+	if len(r.StopSequences) > maxStopSequences {
+		return errMessages
+	}
+	for _, sequence := range r.StopSequences {
+		if sequence == "" || len(sequence) > maxStopSequenceBytes {
+			return errMessages
+		}
 	}
 	if len(r.ToolChoice) > 0 {
 		var choice struct {
@@ -669,12 +686,13 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				Index   int            `json:"index"`
 				Block   messageBlock   `json:"content_block"`
 				Delta   struct {
-					Type        string `json:"type"`
-					Text        string `json:"text"`
-					Thinking    string `json:"thinking"`
-					Signature   string `json:"signature"`
-					PartialJSON string `json:"partial_json"`
-					StopReason  string `json:"stop_reason"`
+					Type         string `json:"type"`
+					Text         string `json:"text"`
+					Thinking     string `json:"thinking"`
+					Signature    string `json:"signature"`
+					PartialJSON  string `json:"partial_json"`
+					StopReason   string `json:"stop_reason"`
+					StopSequence string `json:"stop_sequence"`
 				} `json:"delta"`
 				Usage json.RawMessage `json:"usage"`
 			}
@@ -714,6 +732,9 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				}
 			case "message_delta":
 				response["stop_reason"] = ev.Delta.StopReason
+				if ev.Delta.StopSequence != "" {
+					response["stop_sequence"] = ev.Delta.StopSequence
+				}
 				if len(ev.Usage) > 0 {
 					var usage map[string]any
 					_ = json.Unmarshal(ev.Usage, &usage)

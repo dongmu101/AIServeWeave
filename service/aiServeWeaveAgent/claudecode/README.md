@@ -60,7 +60,7 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史仍按同一套严格规则校验，图片等不支持的块照旧拒绝。代价是模型只能以引用文本的形式看到此前的回合，思考块不进入记录，thinking 也不跨会话保留。
 
-支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}` 和 `output_config.effort`（low/medium/high/xhigh/max）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}`、`output_config.effort`（low/medium/high/xhigh/max）和 `stop_sequences`（见下文「停止序列」）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
 
 Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数值原样传给 CLI 的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；实际可用上限由 CLI、模型和账户能力决定。请求大小、响应大小与执行超时等资源边界仍然生效。此行为需要同时更新 Gateway 并重启 Agent。
 
@@ -75,6 +75,16 @@ Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数�
 思考历史始终由保留的 CLI 自己持有。客户端回传的 `thinking` / `redacted_thinking` 块（只允许出现在 assistant 回合）以及 Chat 的 `reasoning_content` 被接受后即丢弃：不进入新会话的文本记录，也不参与续接的历史比对，所以回传与否都能续接。未要求思考时，部分新模型仍会生成内部思考块，这些块照旧不对外输出，文本与工具块的公开索引重新连续编号。
 
 Anthropic 的 usage 不单独报告思考 token，思考计入 `output_tokens`。以上行为只有离线测试覆盖，尚未用真实 CLI 验收开启思考的回合。
+
+## 停止序列
+
+CLI 没有停止序列选项，`stop_sequences` 由桥接在 CLI 流出的文本上模拟（`messages_stop.go`），最多 16 个、每个 1–256 字节。可能是某个序列开头的文本尾部先暂扣，因此跨增量拆开的序列也能识别，序列本身及其之后的内容从不放出。命中时放出命中位置之前的文本并关闭该文本块，回合以 `stop_reason: "stop_sequence"` 和 `stop_sequence` 结束，与 Messages API 一致；随后停止 CLI，会话不保留。只匹配文本块，思考与工具参数不参与。
+
+- `usage.output_tokens` 取 CLI 在该消息结束时报告的值，包含 CLI 越过停止序列后多生成的部分，即实际消耗。
+- 命中之后 CLI 若开始工具调用，立即结束回合且不登记该调用（API 本不会产生它），此时没有 CLI 的输出用量可报告。
+- Claude Code auto 模式的安全判断请求依赖此功能：它带 `stop_sequences: ["</severity>"]`，不支持时判断失败，Bash 等需要判断的操作会被拦下并提示 "temporarily unavailable"。
+
+Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为只有离线测试覆盖（含伪造 CLI 的端到端用例），需同时更新 Agent；尚未用真实 CLI 验收。
 
 并行工具只允许可通过名称和规范化参数区分的调用；同轮同名同参数会明确失败，因为公开 MCP 回调没有原生 tool ID，不能可靠消歧。工具仅在调用方执行；Agent 临时目录内无用户项目，内建执行工具、hooks、memory、浏览器与其他 MCP 均关闭。
 

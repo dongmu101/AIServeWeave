@@ -770,6 +770,12 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 整形只取决于消息本身，同一对话各轮折叠结果一致，续接的历史比对不受影响。已用 Claude Code 2.1.317 实际发出的首轮与工具续接请求离线核对：整形前被 Agent 拒绝，整形后通过 Agent 严格校验，续接的历史哈希与会话配置一致；尚未用真实 CLI 端到端验收。
 
+**Claude Code auto 模式**：
+
+- 主请求先带顶层 `safeguards`（`dangerous_tool_use`，请服务端判断危险工具调用）。CLI 桥接无法做这种判断，去掉字段放行等于假装做过，因此原生路径在派发前直接返回 400（`safeguards is not supported for this model`），不经过 Agent；显式 `null` 视为未提供并去掉。Claude Code 随后去掉该字段重发，改在客户端判断，每轮多一到两次快速 400。转换路径（非 Claude CLI 模型）保持原样忽略该字段，抓包确认 Claude Code 在响应缺少服务端判断结果时同样回退到客户端判断。
+- 客户端判断是单独的非流式请求，带 `stop_sequences: ["</severity>"]`，由 Agent 模拟（见 [Claude 运行时说明「停止序列」](../aiServeWeaveAgent/claudecode/README.md#停止序列)）；Gateway 非流式聚合与流式透传都带上 `stop_sequence`。
+- 判断的第一阶段固定请求 `claude-sonnet-5`，它不在 CLI 目录里（目录是 `claude-opus-5-5`、`claude-fable-5-1`、`claude-sonnet-5-5`、`claude-haiku-5-5`），会得到 404；Claude Code 随后用当前主模型重发同一请求，判断照常完成。想省掉这次 404，可配置 `claude-sonnet-5` → `claude-sonnet-5-5` 的别名路由，但有路由表时 `GET /v1/models` 只列别名（见「模型别名与节点标签」），需同时为仍要公布的每个模型写一条同名路由。
+
 新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接仍经 `Scheduler.Messages` 只发往绑定的节点。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
 
 Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定两分钟到期，已投递或结果不确定时拒绝重放。续接不会换节点。Agent 重启或等待超时后，节点答复 `runtime_closed`，Gateway 消费绑定，返回与绑定过期相同的 409 `continuation_unavailable`；节点失联时返回 503，同样消费绑定。两种情况都需要开始新任务。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。

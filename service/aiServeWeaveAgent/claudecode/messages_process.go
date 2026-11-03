@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -159,6 +160,11 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
+	// A stop sequence completes the round; the CLI is stopped, not failed.
+	// 停止序列完成了本回合；CLI 是被停止，而不是失败。
+	if errors.Is(err, errStopSequence) {
+		return s.send(final, nil)
+	}
 	if err != nil {
 		return err
 	}
@@ -177,6 +183,18 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 // bridgeEvents 使用 message_stop 划分回合。只有请求开启了思考时，thinking 与
 // redacted_thinking 块才连同签名一起转发；否则它们留在 CLI 内部，对外内容索引重新
 // 编号以保持连续。无论哪种情况，思考历史都由保留的 CLI 持有，客户端回传的部分被丢弃。
+//
+// With stop_sequences, text blocks pass through a stopMatcher. At the first
+// match the text before it is released, the block is closed, and nothing the
+// CLI produces afterwards reaches the client. The round then ends with a
+// stop_sequence message_delta carrying the CLI's usage, or at once if the CLI
+// starts a tool call first, since the API would never have produced it;
+// bridgeEvents returns errStopSequence so runProcess stops the CLI.
+//
+// 请求带 stop_sequences 时，文本块经过 stopMatcher。第一次命中时放出命中位置之前的文本
+// 并关闭该块，此后 CLI 产生的任何内容都不再到达客户端。回合随后以带 CLI 用量的
+// stop_sequence message_delta 结束；若 CLI 先开始了工具调用则立即结束，因为 API 根本不会
+// 产生它。bridgeEvents 返回 errStopSequence，由 runProcess 停止 CLI。
 func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes+1)
@@ -193,6 +211,8 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	showThinking := s.request.thinkingBudget() > 0
 	index, publicIndex, tools := 0, 0, 0
 	seenIDs := make(map[string]bool)
+	matcher := stopMatcher{sequences: s.request.StopSequences}
+	stopped := "" // the matched stop sequence, once found / 命中的停止序列（命中后设置）
 	for count := 0; scanner.Scan(); count++ {
 		line := scanner.Bytes()
 		if len(line) == 0 {
@@ -253,9 +273,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				Block messageBlock `json:"content_block"`
 				Delta struct {
 					Type        string `json:"type"`
+					Text        string `json:"text"`
 					PartialJSON string `json:"partial_json"`
 					StopReason  string `json:"stop_reason"`
 				} `json:"delta"`
+				Usage json.RawMessage `json:"usage"`
 			}
 			if json.Unmarshal(envelope.Event, &event) != nil {
 				return nil, errCLIProtocol
@@ -269,6 +291,14 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			case "content_block_start":
 				if !active || blockActive || event.Index != index {
 					return nil, errCLIProtocol
+				}
+				if stopped != "" && event.Block.Type == "tool_use" {
+					// The API stops before this call; never register it.
+					// API 会在这次调用之前停止；绝不登记它。
+					if err := s.send(stopSequenceDelta(stopped, nil), nil); err != nil {
+						return nil, err
+					}
+					return json.RawMessage(`{"type":"message_stop"}`), errStopSequence
 				}
 				current, arguments, blockActive = event.Block, "", true
 				if current.Type == "tool_use" {
@@ -340,6 +370,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || blockActive {
 					return nil, errCLIProtocol
 				}
+				if stopped != "" {
+					// Whatever the CLI's own reason, the round ended at the sequence.
+					// 无论 CLI 自己给出什么原因，回合都已在停止序列处结束。
+					stopReason = "stop_sequence"
+					if err := s.send(stopSequenceDelta(stopped, event.Usage), nil); err != nil {
+						return nil, err
+					}
+					continue
+				}
 				stopReason = event.Delta.StopReason
 				if stopReason != "tool_use" && stopReason != "end_turn" {
 					return nil, errCLIProtocol
@@ -347,6 +386,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			case "message_stop":
 				if !active || blockActive || stopReason == "" {
 					return nil, errCLIProtocol
+				}
+				if stopped != "" {
+					return append(json.RawMessage(nil), envelope.Event...), errStopSequence
 				}
 				active = false
 				if stopReason != "tool_use" {
@@ -364,6 +406,36 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				// 不公开的思考被跳过，对外内容索引保持连续。
 				if current.isThinking() && !showThinking {
 					continue
+				}
+				// Nothing after a stop sequence reaches the client.
+				// 停止序列之后的内容都不到达客户端。
+				if stopped != "" {
+					continue
+				}
+				if current.Type == "text" && len(matcher.sequences) > 0 {
+					switch event.Type {
+					case "content_block_delta":
+						emit, matched := matcher.feed(event.Delta.Text)
+						if emit != "" {
+							if err := s.send(textDeltaEvent(publicIndex, emit), nil); err != nil {
+								return nil, err
+							}
+						}
+						if matched != "" {
+							stopped = matched
+							if err := s.send(blockStopEvent(publicIndex), nil); err != nil {
+								return nil, err
+							}
+							publicIndex++
+						}
+						continue
+					case "content_block_stop":
+						if rest := matcher.flush(); rest != "" {
+							if err := s.send(textDeltaEvent(publicIndex, rest), nil); err != nil {
+								return nil, err
+							}
+						}
+					}
 				}
 				if event.Index != publicIndex {
 					var obj map[string]json.RawMessage

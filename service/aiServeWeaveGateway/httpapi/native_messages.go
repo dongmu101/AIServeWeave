@@ -63,12 +63,26 @@ func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesR
 //
 // 请求体其余部分由 nativeBridgeShape 整形，使 Claude Code 自己发出的请求以桥接严格
 // 解码器能接受的形式到达。
+//
+// A body asking for safeguards (server-side classification of dangerous tool
+// use, sent by Claude Code's auto mode) is refused here without a dispatch:
+// the CLI bridge cannot classify, and stripping the field would answer as if
+// it had. Claude Code then resends without it and classifies client-side.
+//
+// 要求 safeguards（服务端判断危险工具调用，由 Claude Code 的 auto 模式发送）的请求在这里
+// 直接拒绝，不派发：CLI 桥接无法做这种判断，去掉该字段则等于假装做过。Claude Code 随后
+// 去掉它重发，改在客户端判断。
 func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time) {
 	var document map[string]json.RawMessage
 	if json.Unmarshal(raw, &document) != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
 		return
 	}
+	if safeguards, ok := document["safeguards"]; ok && string(safeguards) != "null" {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "safeguards is not supported for this model; classify tool use client-side")
+		return
+	}
+	delete(document, "safeguards") // an explicit null asks for nothing / 显式 null 不要求任何东西
 	if len(req.Thinking) > 0 {
 		reasoning, err := reasoningFromAnthropic(req.Thinking, anthropicOutputEffort(req.OutputConfig))
 		if err != nil {
@@ -261,6 +275,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				Type, Text, Thinking, Signature string
 				PartialJSON                     string `json:"partial_json"`
 				StopReason                      string `json:"stop_reason"`
+				StopSequence                    string `json:"stop_sequence"`
 			} `json:"delta"`
 			Usage map[string]any `json:"usage"`
 		}
@@ -317,6 +332,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		case "content_block_stop":
 		case "message_delta":
 			response["stop_reason"] = event.Delta.StopReason
+			if event.Delta.StopSequence != "" {
+				response["stop_sequence"] = event.Delta.StopSequence
+			}
 			prior, _ := response["usage"].(map[string]any)
 			if prior == nil {
 				protocolError("invalid native Messages usage")
