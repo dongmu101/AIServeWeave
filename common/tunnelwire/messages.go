@@ -31,10 +31,13 @@ const (
 // MarshalMessagesRequest encodes ownership separately from the inference document.
 // MarshalMessagesRequest 将归属标识与推理文档分开编码。
 func MarshalMessagesRequest(req runtime.MessagesRequest) ([]byte, error) {
+	if err := req.ValidateProtocol(); err != nil {
+		return nil, err
+	}
 	if len(req.JSON) > MaxMessagesJSONBytes || !json.Valid(req.JSON) || req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 {
 		return nil, &runtime.RuntimeError{Code: runtime.ErrorProtocol, Message: "invalid Messages document"}
 	}
-	return proto.Marshal(&tunnelv1.MessagesRequest{Model: req.Model, TenantId: req.TenantID, KeyId: req.KeyID, MessagesJson: req.JSON})
+	return proto.Marshal(&tunnelv1.MessagesRequest{Model: req.Model, TenantId: req.TenantID, KeyId: req.KeyID, MessagesJson: req.JSON, ApiVersion: req.APIVersion, BetaFeatures: req.BetaFeatures})
 }
 
 // UnmarshalMessagesRequest decodes the shared native Messages contract.
@@ -47,7 +50,8 @@ func UnmarshalMessagesRequest(data []byte) (runtime.MessagesRequest, error) {
 	if len(pb.MessagesJson) > MaxMessagesJSONBytes || !json.Valid(pb.MessagesJson) || pb.TenantId == "" || pb.KeyId == "" || len(pb.TenantId) > 256 || len(pb.KeyId) > 256 {
 		return runtime.MessagesRequest{}, &runtime.RuntimeError{Code: runtime.ErrorProtocol, Message: "invalid Messages document"}
 	}
-	return runtime.MessagesRequest{Model: pb.Model, TenantID: pb.TenantId, KeyID: pb.KeyId, JSON: pb.MessagesJson}, nil
+	req := runtime.MessagesRequest{Model: pb.Model, TenantID: pb.TenantId, KeyID: pb.KeyId, JSON: pb.MessagesJson, APIVersion: pb.ApiVersion, BetaFeatures: pb.BetaFeatures}
+	return req, req.ValidateProtocol()
 }
 
 // MarshalMessagesEvent encodes one bounded native SSE data document.

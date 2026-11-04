@@ -55,6 +55,11 @@ func claudeProcessFixture() {
 		}
 	}
 	prompt, _ := io.ReadAll(os.Stdin)
+	var extra map[string]json.RawMessage
+	if json.Unmarshal(claudeFixtureExtraBody(), &extra) == nil && len(extra["safeguards"]) > 0 {
+		claudeSafeguardsProcessFixture(prompt, extra)
+		return
+	}
 	wantModel := "claude-sonnet-4-6"
 	if strings.HasSuffix(string(prompt), "opus") {
 		wantModel = "fixture-opus"

@@ -92,8 +92,12 @@ func blockStopEvent(index int) json.RawMessage {
 // stopSequenceDelta renders the message_delta that ends a round at sequence,
 // carrying the CLI's usage when it has reported any.
 // stopSequenceDelta 渲染在 sequence 处结束回合的 message_delta；CLI 已报告用量时一并携带。
-func stopSequenceDelta(sequence string, usage json.RawMessage) json.RawMessage {
-	event := map[string]any{"type": "message_delta", "delta": map[string]string{"stop_reason": "stop_sequence", "stop_sequence": sequence}}
+func stopSequenceDelta(sequence string, usage json.RawMessage, safeguards ...json.RawMessage) json.RawMessage {
+	delta := map[string]any{"stop_reason": "stop_sequence", "stop_sequence": sequence}
+	if len(safeguards) > 0 && len(safeguards[0]) > 0 {
+		delta["safeguard_results"] = safeguards[0]
+	}
+	event := map[string]any{"type": "message_delta", "delta": delta}
 	if len(usage) > 0 && string(usage) != "null" {
 		event["usage"] = usage
 	}

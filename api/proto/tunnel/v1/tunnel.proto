@@ -368,6 +368,9 @@ message MessagesRequest {
   string tenant_id = 2;
   string key_id = 3;
   bytes messages_json = 4;
+  // Native inference protocol version and feature selectors; never arbitrary headers or credentials.
+  string api_version = 5;
+  string beta_features = 6;
 }
 
 // MessagesEvent contains exactly one bounded native SSE data document.

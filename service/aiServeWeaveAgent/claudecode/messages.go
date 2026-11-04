@@ -58,18 +58,22 @@ type bridgeTool struct {
 }
 
 type messagesRequest struct {
-	cliModel     string
-	Model        string              `json:"model"`
-	MaxTokens    int                 `json:"max_tokens"`
-	Stream       bool                `json:"stream,omitempty"`
-	System       json.RawMessage     `json:"system,omitempty"`
-	Messages     []bridgeMessage     `json:"messages"`
-	Tools        []bridgeTool        `json:"tools,omitempty"`
-	ToolChoice   json.RawMessage     `json:"tool_choice,omitempty"`
-	Metadata     json.RawMessage     `json:"metadata,omitempty"`
-	Thinking     json.RawMessage     `json:"thinking,omitempty"`
-	OutputConfig *bridgeOutputConfig `json:"output_config,omitempty"`
-	Temperature  *float64            `json:"temperature,omitempty"`
+	cliModel       string
+	apiVersion     string
+	betaFeatures   string
+	nativeDocument map[string]json.RawMessage
+	Model          string              `json:"model"`
+	MaxTokens      int                 `json:"max_tokens"`
+	Stream         bool                `json:"stream,omitempty"`
+	System         json.RawMessage     `json:"system,omitempty"`
+	Messages       []bridgeMessage     `json:"messages"`
+	Tools          []bridgeTool        `json:"tools,omitempty"`
+	ToolChoice     json.RawMessage     `json:"tool_choice,omitempty"`
+	Metadata       json.RawMessage     `json:"metadata,omitempty"`
+	Thinking       json.RawMessage     `json:"thinking,omitempty"`
+	OutputConfig   *bridgeOutputConfig `json:"output_config,omitempty"`
+	Temperature    *float64            `json:"temperature,omitempty"`
+	Safeguards     []json.RawMessage   `json:"safeguards,omitempty"`
 	// StopSequences end a round at the first match, emulated over the CLI's
 	// text output (see stopMatcher).
 	// StopSequences 在第一处命中时结束回合，基于 CLI 的文本输出模拟（见 stopMatcher）。
@@ -176,6 +180,12 @@ func (r messagesRequest) thinkingBudget() int {
 func (r messagesRequest) validate(model string) error {
 	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 {
 		return errMessages
+	}
+	if validateSafeguards(r.Safeguards) != nil {
+		return errMessages
+	}
+	if len(r.Safeguards) > 0 {
+		return nil // the native provider validates the unchanged inference document / 原生提供方校验未改写的推理文档
 	}
 	if _, err := textBlocks(r.System); err != nil {
 		return err
@@ -462,8 +472,14 @@ func (b *messagesBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req messagesRequest
-	if decodeStrict(data, &req) != nil || req.validate(b.model) != nil {
+	if decodeMessagesRequest(data, &req) != nil || req.validate(b.model) != nil {
 		messagesError(w, 400, "unsupported Messages shape or extension: thinking must be disabled or enabled with budget_tokens (the Gateway rewrites adaptive thinking), and prompt caching and output formats are not supported")
+		return
+	}
+	req.apiVersion = r.Header.Get("Anthropic-Version")
+	req.betaFeatures = r.Header.Get("Anthropic-Beta")
+	if (runtime.MessagesRequest{APIVersion: req.apiVersion, BetaFeatures: req.betaFeatures}).ValidateProtocol() != nil {
+		messagesError(w, 400, "invalid Messages protocol selectors")
 		return
 	}
 	s, err := b.acquire(owner, req)
@@ -499,7 +515,10 @@ func canonical(v any) [32]byte {
 
 func sessionConfig(req messagesRequest) [32]byte {
 	req.Messages, req.Stream, req.Metadata = nil, false, nil
-	return canonical(req)
+	return canonical(struct {
+		Request                  messagesRequest
+		APIVersion, BetaFeatures string
+	}{req, req.apiVersion, req.betaFeatures})
 }
 
 // normalizedToolInput equates omitted defaults with values declared by the tool schema.
@@ -593,6 +612,9 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	results := make(map[string]toolResult)
 	for _, block := range last {
 		if block.Type == "tool_result" {
+			if len(req.Safeguards) > 0 {
+				continue
+			}
 			if _, exists := results[block.ToolUseID]; exists {
 				return nil, errMessages
 			}
@@ -664,10 +686,13 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	// 公开 CLI 输入无法保真注入 assistant 历史，因此新会话必须以一条用户消息结尾：
 	// 提问，或恢复孤立回合的工具结果。此前的回合只以 sessionPrompt 渲染的带角色
 	// 文本记录交给 CLI。
-	if req.Messages[len(req.Messages)-1].Role != "user" {
+	if len(req.Safeguards) == 0 && req.Messages[len(req.Messages)-1].Role != "user" {
 		return nil, errMessages
 	}
 	for _, block := range last {
+		if len(req.Safeguards) > 0 {
+			break
+		}
 		if block.Type != "text" && block.Type != "tool_result" {
 			return nil, errMessages
 		}
@@ -822,6 +847,7 @@ func (s *messagesSession) send(data json.RawMessage, err error) error {
 func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *messagesSession, stream bool) (resultErr error) {
 	response := map[string]any{}
 	var content []messageBlock
+	var originalContent []map[string]json.RawMessage
 	started := false
 	defer func() {
 		if resultErr == nil || ctx.Err() != nil {
@@ -850,13 +876,14 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				Index   int            `json:"index"`
 				Block   messageBlock   `json:"content_block"`
 				Delta   struct {
-					Type         string `json:"type"`
-					Text         string `json:"text"`
-					Thinking     string `json:"thinking"`
-					Signature    string `json:"signature"`
-					PartialJSON  string `json:"partial_json"`
-					StopReason   string `json:"stop_reason"`
-					StopSequence string `json:"stop_sequence"`
+					Type         string          `json:"type"`
+					Text         string          `json:"text"`
+					Thinking     string          `json:"thinking"`
+					Signature    string          `json:"signature"`
+					PartialJSON  string          `json:"partial_json"`
+					StopReason   string          `json:"stop_reason"`
+					StopSequence string          `json:"stop_sequence"`
+					Safeguards   json.RawMessage `json:"safeguard_results"`
 				} `json:"delta"`
 				Usage json.RawMessage `json:"usage"`
 			}
@@ -872,6 +899,13 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					return errCLIProtocol
 				}
 				content = append(content, ev.Block)
+				if len(s.request.Safeguards) > 0 {
+					var raw struct {
+						Block map[string]json.RawMessage `json:"content_block"`
+					}
+					_ = json.Unmarshal(item.data, &raw)
+					originalContent = append(originalContent, raw.Block)
+				}
 			case "content_block_delta":
 				if ev.Index < 0 || ev.Index >= len(content) {
 					return errCLIProtocol
@@ -892,6 +926,9 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				}
 			case "message_delta":
 				response["stop_reason"] = ev.Delta.StopReason
+				if len(ev.Delta.Safeguards) > 0 {
+					response["safeguard_results"] = ev.Delta.Safeguards
+				}
 				if ev.Delta.StopSequence != "" {
 					response["stop_sequence"] = ev.Delta.StopSequence
 				}
@@ -926,6 +963,9 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					s.touch()
 				}
 				response["content"] = content
+				if len(s.request.Safeguards) > 0 {
+					response["content"] = preserveMessagesContent(originalContent, content)
+				}
 			}
 			if stream {
 				if !started {

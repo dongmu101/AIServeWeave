@@ -61,6 +61,7 @@ type anthropicMessagesRequest struct {
 	Tools         []anthropicToolJSON    `json:"tools,omitempty"`
 	ToolChoice    json.RawMessage        `json:"tool_choice,omitempty"`
 	Thinking      json.RawMessage        `json:"thinking,omitempty"`
+	Safeguards    []json.RawMessage      `json:"safeguards,omitempty"`
 	// OutputConfig is read only for output_config.effort, which steers
 	// adaptive thinking (see reasoningFromAnthropic).
 	// OutputConfig 只读取 output_config.effort，用来调节 adaptive 思考（见 reasoningFromAnthropic）。

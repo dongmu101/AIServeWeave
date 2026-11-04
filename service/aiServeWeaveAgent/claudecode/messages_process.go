@@ -121,6 +121,7 @@ func (b *messagesBridge) runSession(s *messagesSession) {
 // 保持关闭（MAX_THINKING_TOKENS=0）；要求时预算写入 MAX_THINKING_TOKENS，并以
 // --thinking-display summarized 要求 CLI 在默认省略思考文本的模型上也给出可读文本。
 func (b *messagesBridge) runProcess(s *messagesSession) error {
+	guarded := len(s.request.Safeguards) > 0
 	dir, err := os.MkdirTemp("", "aisw-claude-messages-")
 	if err != nil {
 		return errProbeSetup
@@ -136,7 +137,11 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	served := make(chan struct{})
 	go func() { defer close(served); _ = server.Serve(listener) }()
 	defer func() { _ = server.Close(); <-served }()
-	config := map[string]any{"mcpServers": map[string]any{"aisw_bridge": map[string]any{"type": "http", "url": "http://" + listener.Addr().String() + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + token}}}}
+	servers := make(map[string]any)
+	if !guarded {
+		servers["aisw_bridge"] = map[string]any{"type": "http", "url": "http://" + listener.Addr().String() + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + token}}
+	}
+	config := map[string]any{"mcpServers": servers}
 	data, _ := json.Marshal(config)
 	configPath := filepath.Join(dir, "mcp.json")
 	if os.WriteFile(configPath, data, 0600) != nil {
@@ -155,16 +160,27 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		}
 	}
 	args := probeArgs(model, configPath)
-	allowed := make([]string, len(s.request.Tools))
-	for i := range s.request.Tools {
-		allowed[i] = "mcp__aisw_bridge__" + bridgeToolName(i)
+	var allowed []string
+	if !guarded {
+		for i := range s.request.Tools {
+			allowed = append(allowed, "mcp__aisw_bridge__"+bridgeToolName(i))
+		}
 	}
+	settingsPath := filepath.Join(dir, "settings.json")
 	for i := 0; i+1 < len(args); i++ {
 		switch args[i] {
 		case "--allowedTools":
 			args[i+1] = strings.Join(allowed, ",")
 		case "--system-prompt":
 			args[i], args[i+1] = "--system-prompt-file", systemPath
+		case "--permission-mode":
+			if guarded {
+				args[i+1] = "auto"
+			}
+		case "--settings":
+			if guarded {
+				args[i+1] = settingsPath
+			}
 		}
 	}
 	if s.request.OutputConfig != nil {
@@ -175,12 +191,62 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		args = append(args, "--thinking-display", "summarized")
 	}
 	prompt := sessionPrompt(s.request.Messages)
+	if guarded {
+		prompt = "Continue the supplied native Messages request."
+	}
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
 	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
+	extra := make(map[string]any)
 	if s.request.Temperature != nil {
-		extra, _ := json.Marshal(map[string]float64{"temperature": *s.request.Temperature})
-		cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+string(extra))
+		extra["temperature"] = *s.request.Temperature
+	}
+	var betas []string
+	for _, beta := range strings.Split(s.request.betaFeatures, ",") {
+		if beta = strings.TrimSpace(beta); beta != "" && !slices.Contains(betas, beta) {
+			betas = append(betas, beta)
+		}
+	}
+	if guarded {
+		for key, value := range s.request.nativeDocument {
+			extra[key] = value
+		}
+		extra["model"], extra["stream"] = model, true
+		extra["safeguards"] = s.request.Safeguards
+		// Preserve tool identity for server rules; no caller tool is registered for local execution.
+		// 保留服务端策略判断所依据的原始工具身份；调用方工具不在本机注册执行。
+		if _, ok := extra["tools"]; !ok {
+			extra["tools"] = s.request.Tools
+		}
+		if !slices.Contains(betas, "dangerous-tool-use-2026-09-03") {
+			betas = append(betas, "dangerous-tool-use-2026-09-03")
+		}
+		cmd.Env = append(cmd.Env, "CLAUDE_CODE_AUTO_MODE_SERVER=1")
+	}
+	if len(betas) > 0 {
+		extra["betas"] = betas
+	}
+	if s.request.apiVersion != "" {
+		cmd.Env = append(cmd.Env, "ANTHROPIC_CUSTOM_HEADERS=anthropic-version: "+s.request.apiVersion)
+	}
+	if len(extra) > 0 {
+		var encoded strings.Builder
+		encoder := json.NewEncoder(&encoded)
+		encoder.SetEscapeHTML(false)
+		if encoder.Encode(extra) != nil {
+			return errMessages
+		}
+		body := strings.TrimSuffix(encoded.String(), "\n")
+		if guarded {
+			// Load the large inference extension after process start, avoiding exec's environment-size limit.
+			// 由 CLI 启动后加载大型推理扩展，避开 exec 对环境变量大小的限制。
+			settings, err := json.Marshal(map[string]any{"disableAllHooks": true, "autoMemoryEnabled": false, "env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": body}})
+			if err != nil || os.WriteFile(settingsPath, settings, 0600) != nil {
+				return errProbeSetup
+			}
+		} else {
+			cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+body)
+		}
 	}
 	cmd.WaitDelay = 2 * time.Second
 	if cliprocess.Configure(cmd) != nil {
@@ -259,10 +325,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	// 而不是 CLI 故障。
 	var quota *quotaError
 	finished, active, blockActive := false, false, false
-	showThinking := s.request.thinkingBudget() > 0
+	guarded := len(s.request.Safeguards) > 0
+	showThinking := s.request.thinkingBudget() > 0 || (guarded && nativeThinkingEnabled(s.request.Thinking))
 	index, publicIndex := 0, 0
 	seenIDs := make(map[string]bool)
+	publicIDs := make(map[string]string)
 	matcher := stopMatcher{sequences: s.request.StopSequences}
+	if guarded {
+		matcher.sequences = nil
+	} // the native provider applies stop_sequences / 原生提供方处理停止序列
 	stopped := "" // the matched stop sequence, once found / 命中的停止序列（命中后设置）
 	lineNumber := 0
 	protocolError := func(reason string) error { return &cliEventError{line: lineNumber, reason: reason} }
@@ -307,7 +378,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				for _, name := range envelope.Tools {
 					ok := name == "EndConversation"
 					for i := range s.request.Tools {
-						if name == "mcp__aisw_bridge__"+bridgeToolName(i) {
+						if len(s.request.Safeguards) == 0 && name == "mcp__aisw_bridge__"+bridgeToolName(i) {
 							ok = true
 						}
 					}
@@ -358,7 +429,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_start")
 				}
-				if stopped != "" && event.Block.Type == "tool_use" {
+				if stopped != "" && event.Block.Type == "tool_use" && len(s.request.Safeguards) == 0 {
 					// The API stops before this call; never register it.
 					// API 会在这次调用之前停止；绝不登记它。
 					if err := s.send(stopSequenceDelta(stopped, nil), nil); err != nil {
@@ -370,7 +441,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if current.Type == "tool_use" {
 					found := false
 					for i, t := range s.request.Tools {
-						if current.Name == "mcp__aisw_bridge__"+bridgeToolName(i) {
+						expected := "mcp__aisw_bridge__" + bridgeToolName(i)
+						if len(s.request.Safeguards) > 0 {
+							expected = t.Name
+						}
+						if current.Name == expected {
 							current.Name = t.Name
 							found = true
 						}
@@ -382,19 +457,26 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						return nil, protocolError("duplicate_tool_id")
 					}
 					seenIDs[current.ID] = true
-					current.ID = "toolu_aisw_" + randomID()
+					upstreamID := current.ID
+					if !guarded {
+						current.ID = "toolu_aisw_" + randomID()
+					}
+					publicIDs[upstreamID] = current.ID
+					if stopped != "" {
+						publicIDs[upstreamID] = "" // reviewed upstream, hidden by the stop sequence / 上游已检查，但被停止序列隐藏
+					}
 					var obj map[string]json.RawMessage
 					_ = json.Unmarshal(envelope.Event, &obj)
 					obj["content_block"], _ = json.Marshal(current)
 					envelope.Event, _ = json.Marshal(obj)
-				} else if current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
+				} else if !guarded && current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
 					return nil, protocolError("unsupported_block")
 				}
 			case "content_block_delta":
 				if !active || !blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_delta")
 				}
-				if current.Type == "tool_use" && event.Delta.Type == "input_json_delta" {
+				if (current.Type == "tool_use" || (guarded && current.Type == "server_tool_use")) && event.Delta.Type == "input_json_delta" {
 					arguments += event.Delta.PartialJSON
 					if len(arguments) > maxEventBytes {
 						return nil, errCapacity
@@ -406,7 +488,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || !blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_stop")
 				}
-				if current.Type == "tool_use" {
+				if current.Type == "tool_use" && stopped == "" {
 					if arguments != "" {
 						current.Input = json.RawMessage(arguments)
 					}
@@ -419,10 +501,12 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						s.mu.Unlock()
 						return nil, protocolError("duplicate_pending_tool")
 					}
-					for _, pending := range s.pending {
-						if !pending.delivered && pending.block.Name == current.Name && canonical(normalizedToolInput(pending.block.Name, pending.block.Input, s.request.Tools)) == canonical(normalizedToolInput(current.Name, current.Input, s.request.Tools)) {
-							s.mu.Unlock()
-							return nil, protocolError("ambiguous_tool_call")
+					if len(s.request.Safeguards) == 0 {
+						for _, pending := range s.pending {
+							if !pending.delivered && pending.block.Name == current.Name && canonical(normalizedToolInput(pending.block.Name, pending.block.Input, s.request.Tools)) == canonical(normalizedToolInput(current.Name, current.Input, s.request.Tools)) {
+								s.mu.Unlock()
+								return nil, protocolError("ambiguous_tool_call")
+							}
 						}
 					}
 					s.pending[current.ID] = &pendingTool{block: current, result: make(chan toolResult, 1)}
@@ -435,11 +519,16 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || blockActive {
 					return nil, protocolError("unexpected_message_delta")
 				}
+				mapped, results, err := remapSafeguardDelta(envelope.Event, publicIDs)
+				if err != nil {
+					return nil, protocolError("invalid_safeguard_results")
+				}
+				envelope.Event = mapped
 				if stopped != "" {
 					// Whatever the CLI's own reason, the round ended at the sequence.
 					// 无论 CLI 自己给出什么原因，回合都已在停止序列处结束。
 					stopReason = "stop_sequence"
-					if err := s.send(stopSequenceDelta(stopped, event.Usage), nil); err != nil {
+					if err := s.send(stopSequenceDelta(stopped, event.Usage, results), nil); err != nil {
 						return nil, err
 					}
 					continue
@@ -447,6 +536,10 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				stopReason = event.Delta.StopReason
 				switch stopReason {
 				case "tool_use", "end_turn", "max_tokens", "stop_sequence", "refusal", "model_context_window_exceeded":
+				case "pause_turn":
+					if !guarded {
+						return nil, protocolError("unsupported_stop_reason")
+					}
 				default:
 					return nil, protocolError("unsupported_stop_reason")
 				}
@@ -461,6 +554,10 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				// Tool IDs need only be unique within a round.
 				// 工具 ID 只需在回合内唯一。
 				clear(seenIDs)
+				clear(publicIDs)
+				if stopReason == "tool_use" && len(s.request.Safeguards) > 0 {
+					return append(json.RawMessage(nil), envelope.Event...), errTerminalStop
+				}
 				if stopReason != "tool_use" {
 					final = append(json.RawMessage(nil), envelope.Event...)
 					if stopReason != "end_turn" {

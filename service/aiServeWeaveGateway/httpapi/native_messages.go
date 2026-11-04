@@ -53,6 +53,9 @@ func nativeResultIDs(req anthropicMessagesRequest) []string {
 }
 
 func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesRequest) bool {
+	if len(req.Safeguards) > 0 {
+		return true
+	}
 	for _, id := range nativeResultIDs(req) {
 		if strings.HasPrefix(id, "toolu_aisw_") {
 			return true
@@ -83,25 +86,23 @@ func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesR
 // 请求体其余部分由 nativeBridgeShape 整形，使 Claude Code 自己发出的请求以桥接严格
 // 解码器能接受的形式到达。
 //
-// A body asking for safeguards (server-side classification of dangerous tool
-// use, sent by Claude Code's auto mode) is refused here without a dispatch:
-// the CLI bridge cannot classify, and stripping the field would answer as if
-// it had. Claude Code then resends without it and classifies client-side.
-//
-// 要求 safeguards（服务端判断危险工具调用，由 Claude Code 的 auto 模式发送）的请求在这里
-// 直接拒绝，不派发：CLI 桥接无法做这种判断，去掉该字段则等于假装做过。Claude Code 随后
-// 去掉它重发，改在客户端判断。
+// Safeguards and their protocol selectors reach the CLI unchanged in meaning;
+// only real upstream verdicts are returned, associated with the public tool IDs.
+// Safeguards 及其协议选择完整传给 CLI；只返回真实上游判定，并关联公开工具 ID。
 func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time) {
 	var document map[string]json.RawMessage
 	if json.Unmarshal(raw, &document) != nil {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
 		return
 	}
-	if safeguards, ok := document["safeguards"]; ok && string(safeguards) != "null" {
-		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "safeguards is not supported for this model; classify tool use client-side")
+	if err := runtime.ValidateMessagesSafeguards(document["safeguards"]); err != nil {
+		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", err.Error())
 		return
 	}
-	delete(document, "safeguards") // an explicit null asks for nothing / 显式 null 不要求任何东西
+	if len(req.Safeguards) > 0 {
+		h.nativeMessagesOutput(w, r, req, raw, start, nil)
+		return
+	}
 	if len(req.Thinking) > 0 {
 		reasoning, err := reasoningFromAnthropic(req.Thinking, anthropicOutputEffort(req.OutputConfig))
 		if err != nil {
@@ -180,6 +181,10 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	ids := nativeResultIDs(req)
+	guarded := len(req.Safeguards) > 0
+	if guarded {
+		ids = nil
+	} // no live CLI consumes these results; this is a stateless native request / 无存活 CLI 接收结果，按无状态原生请求处理
 	continuationUnavailable := func() {
 		fail(409, "invalid_request_error", "continuation_unavailable", "Messages continuation unavailable")
 	}
@@ -208,7 +213,12 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		fail(413, "invalid_request_error", "request_too_large", "native Messages request size limit exceeded")
 		return
 	}
-	native := runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw}
+	native := runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw,
+		APIVersion: r.Header.Get("Anthropic-Version"), BetaFeatures: strings.Join(r.Header.Values("Anthropic-Beta"), ",")}
+	if err := native.ValidateProtocol(); err != nil {
+		fail(400, "invalid_request_error", "invalid_request_error", err.Error())
+		return
+	}
 	// received reports whether a model event reached the client; started only
 	// whether response headers went out, which a heartbeat may do first.
 	// received 表示是否已有模型事件送达客户端；started 只表示响应头是否已发出，心跳可能先发出响应头。
@@ -296,6 +306,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	defer stream.Close()
 	response := make(map[string]any)
 	var content []anthropicContentBlockJSON
+	var originalContent []map[string]json.RawMessage
 	var calls []string
 	var usage runtime.Usage
 	stopped := false
@@ -351,9 +362,10 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			Block   anthropicContentBlockJSON `json:"content_block"`
 			Delta   struct {
 				Type, Text, Thinking, Signature string
-				PartialJSON                     string `json:"partial_json"`
-				StopReason                      string `json:"stop_reason"`
-				StopSequence                    string `json:"stop_sequence"`
+				PartialJSON                     string          `json:"partial_json"`
+				StopReason                      string          `json:"stop_reason"`
+				StopSequence                    string          `json:"stop_sequence"`
+				Safeguards                      json.RawMessage `json:"safeguard_results"`
 			} `json:"delta"`
 			Usage map[string]any `json:"usage"`
 		}
@@ -385,6 +397,13 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			content = append(content, event.Block)
+			if guarded {
+				var raw struct {
+					Block map[string]json.RawMessage `json:"content_block"`
+				}
+				_ = json.Unmarshal(item.JSON, &raw)
+				originalContent = append(originalContent, raw.Block)
+			}
 			if event.Block.Type == "tool_use" {
 				calls = append(calls, event.Block.ID)
 			}
@@ -410,6 +429,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		case "content_block_stop":
 		case "message_delta":
 			response["stop_reason"] = event.Delta.StopReason
+			if len(event.Delta.Safeguards) > 0 {
+				response["safeguard_results"] = event.Delta.Safeguards
+			}
 			if event.Delta.StopSequence != "" {
 				response["stop_sequence"] = event.Delta.StopSequence
 			}
@@ -427,7 +449,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		case "message_stop":
-			if len(calls) > 0 {
+			if len(calls) > 0 && !guarded {
 				record.IDs = calls
 				if h.messagesSessions.Publish(r.Context(), record) != nil {
 					fail(503, "api_error", "session_unavailable", "Messages continuation storage unavailable")
@@ -436,6 +458,17 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 			stopped = true
 			response["content"] = content
+			if guarded {
+				for i, block := range content {
+					data, _ := json.Marshal(block)
+					var accumulated map[string]json.RawMessage
+					_ = json.Unmarshal(data, &accumulated)
+					for key, value := range accumulated {
+						originalContent[i][key] = value
+					}
+				}
+				response["content"] = originalContent
+			}
 		case "error":
 			protocolError("native Messages stream failed")
 			return

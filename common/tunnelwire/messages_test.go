@@ -3,10 +3,32 @@ package tunnelwire
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"AIServeWeave/common/runtime"
 )
+
+func TestMessagesProtocolMetadata(t *testing.T) {
+	base := runtime.MessagesRequest{Model: "fixture", TenantID: "tenant", KeyID: "key", JSON: json.RawMessage(`{"messages":[]}`), APIVersion: "2023-06-01", BetaFeatures: "dangerous-tool-use-2026-09-03, future-feature-2099-01-01"}
+	data, err := MarshalMessagesRequest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnmarshalMessagesRequest(data)
+	if err != nil || got.APIVersion != base.APIVersion || got.BetaFeatures != base.BetaFeatures {
+		t.Fatalf("protocol metadata lost: version=%q betas=%q error=%v", got.APIVersion, got.BetaFeatures, err)
+	}
+	for _, tc := range []struct{ version, betas string }{
+		{"2023-06-01\r\nAuthorization: private", ""}, {"", "feature\nAuthorization: private"}, {"", strings.Repeat("x", 16<<10+1)},
+	} {
+		req := base
+		req.APIVersion, req.BetaFeatures = tc.version, tc.betas
+		if _, err := MarshalMessagesRequest(req); err == nil || strings.Contains(err.Error(), "private") {
+			t.Fatalf("unsafe protocol metadata accepted or reflected: %v", err)
+		}
+	}
+}
 
 // TestMessagesWireRoundTrip preserves raw block order and authenticated attribution.
 // TestMessagesWireRoundTrip 保留原始块顺序与已认证归属。

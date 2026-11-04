@@ -12,6 +12,10 @@ import (
 // TestMain 统一检查整个包的协程回收。
 func TestMain(m *testing.M) {
 	if len(os.Args) > 1 && (os.Args[1] == "auth" || os.Args[1] == "--print") {
+		if os.Getenv("AISW_CLAUDE_SAFEGUARDS_FIXTURE") == "1" {
+			safeguardsProcessFixture()
+			os.Exit(0)
+		}
 		if os.Getenv("AISW_CLAUDE_TERMINAL_FIXTURE") != "" {
 			terminalProcessFixture()
 			os.Exit(0)
