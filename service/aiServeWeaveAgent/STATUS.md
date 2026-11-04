@@ -50,7 +50,7 @@
 - **Messages 文件与视频（2026-11-04）**：`attachments/` 支持 UTF-8 文本、原生 PDF、本地 LibreOffice 转 DOC/DOCX/XLS/XLSX/PPT/PPTX、FFmpeg 抽取 MP4/MOV/WebM 画面并交本地 whisper.cpp 转录音轨。工具文档经 Poppler 转文字和页图，保留完整原始历史校验；按 CLI 会话缓存转换结果，最多 32 MiB。顶层本地 `attachments` YAML 保存工具/模型路径及限额，设置页保存时保留，变更需重启；不接受远程命令或模型下载地址。默认模拟进程、跨副本真实 mTLS JSON/SSE、配置保存和 race 测试通过；真实 CLI 2.1.318 加模拟上游的 PDF 传输契约通过。真实转换器、语音识别、模型理解及线上均未验收/未部署；Chat/Responses 未随之开放附件。见 [完整配置、协议与验收](attachments/README.md)。
 - **边界**：未带 `safeguards` 的续接固定原节点、不自动重试；原 CLI 已不存在的孤立回合以新会话从文本记录恢复；投递给存活 CLI 的结果 24 小时内拒绝重放。带安全上下文的请求依靠调用方完整历史，无状态重试与跨副本调用。原生请求最多 32 MiB。
 - **终止与诊断**：合法的 `max_tokens`、`stop_sequence`、`refusal`、`model_context_window_exceeded` 保留为终止响应，完整停止后回收 CLI，避免自动续写；自然结束继续校验最终结果与退出状态，成功结果后的 CLI 通知不进入回复。本机失败日志包含固定错误分类，解析器拒绝另带事件行号与固定原因，不记录原始内容。含模拟子进程的离线回归覆盖，未带 `safeguards` 的 Opus 5.5 真实工具流程仍待验收；详见 [故障排查](claudecode/README.md#终止原因与故障排查)。
-- **生成前拒绝诊断**：`Claude Messages request rejected` 区分入口校验、续接历史/配置/归属/会话状态及工具结果拒绝，配置差异仅列字段名；公开错误保留运行时 ID。回归测试覆盖诊断不泄露内容、不消费被拒绝请求的待决结果；真实长任务中 `invalid_config` 的具体触发项尚待更新 Agent 后复现确认，不能将本项视为该线上故障已修复。
+- **生成前拒绝及连续工具回合（2026-11-04）**：`Claude Messages request rejected` 区分入口校验、续接历史/配置/归属/会话状态及工具结果拒绝，配置差异仅列字段名；公开错误保留运行时 ID。线上日志确认 `continuation_tool_count_mismatch` 和 beta 变化拒绝，本地已复现：已投递旧邮箱不再计入新一轮工具集合；beta 列表按集合比较，实际增删功能在完整归属/历史/结果集合与其他配置匹配时重建 CLI，从已执行结果恢复。默认测试覆盖连续回合、迟到回调、完整并行结果校验、beta 等价/重建及跨两个 Gateway 的 mTLS；真实 Opus 长任务和线上部署仍待验收，详见 [续接规则](claudecode/README.md#生命周期与限额)。
 
 接入步骤见 [README「Claude Code」](README.md#claude-code)，参数与限制见 [Claude 包说明](claudecode/README.md)。
 

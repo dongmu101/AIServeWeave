@@ -1,0 +1,480 @@
+diff --git a/service/aiServeWeaveAgent/claudecode/messages.go b/service/aiServeWeaveAgent/claudecode/messages.go
+--- a/service/aiServeWeaveAgent/claudecode/messages.go
++++ b/service/aiServeWeaveAgent/claudecode/messages.go
+@@ -12,6 +12,8 @@
+ 	"mime"
+ 	"net/http"
+ 	"os"
++	"slices"
++	"strings"
+ 	"sync"
+ 	"time"
+ 
+@@ -313,8 +315,13 @@
+ 	busy     bool
+ 	waiting  bool
+ 	pending  map[string]*pendingTool
+-	changed  chan struct{}
+-	activity chan bool
++	// roundTools is the complete tool set exposed by the last tool_use response.
++	// pending may also retain older delivered results for late MCP callbacks.
++	// roundTools 是最近一轮 tool_use 响应公开的完整工具集合；pending 还可能保留
++	// 已投递但尚待迟到 MCP 回调取走的旧结果，不能用于本轮数量校验。
++	roundTools map[string]*pendingTool
++	changed    chan struct{}
++	activity   chan bool
+ 	// idleSince is when the session last began waiting for tool results;
+ 	// eviction picks the session idle the longest. Guarded by mu.
+ 	// idleSince 是会话最近一次开始等待工具结果的时间；淘汰时选择空闲最久的会话。受 mu 保护。
+@@ -526,7 +533,24 @@
+ 	return canonical(struct {
+ 		Request                  messagesRequest
+ 		APIVersion, BetaFeatures string
+-	}{req, req.apiVersion, req.betaFeatures})
++	}{req, req.apiVersion, canonicalBetaFeatures(req.betaFeatures)})
++}
++
++// canonicalBetaFeatures compares the feature set, preserving malformed lists for upstream validation.
++// canonicalBetaFeatures 按功能集合比较 beta；格式异常的列表不折叠，留给上游校验。
++func canonicalBetaFeatures(raw string) string {
++	if raw == "" {
++		return ""
++	}
++	names := strings.Split(raw, ",")
++	for i := range names {
++		names[i] = strings.TrimSpace(names[i])
++		if names[i] == "" {
++			return raw
++		}
++	}
++	slices.Sort(names)
++	return strings.Join(slices.Compact(names), ",")
+ }
+ 
+ // normalizedToolInput equates omitted defaults with values declared by the tool schema.
+@@ -637,6 +661,7 @@
+ 	}
+ 	if len(results) > 0 {
+ 		held := false
++		replace := false
+ 		var mismatch error
+ 		for s := range b.sessions {
+ 			s.mu.Lock()
+@@ -648,25 +673,39 @@
+ 				sessionHeld = sessionHeld || (s.ctx.Err() == nil && s.pending[id] != nil)
+ 			}
+ 			held = held || sessionHeld
+-			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
+-			if matches {
++			ready := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && len(results) == len(s.roundTools) && len(last) == len(results)
++			if ready {
+ 				for id := range results {
+-					if s.pending[id] == nil || s.pending[id].delivered {
+-						matches = false
++					if s.roundTools[id] == nil || s.roundTools[id].delivered {
++						ready = false
+ 					}
+ 				}
+ 			}
+-			if matches {
++			ready = ready && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history
++			if ready && sessionConfig(s.request) == sessionConfig(req) {
+ 				s.busy, s.waiting, s.messages = true, false, req.Messages
+ 				for id, result := range results {
+-					s.pending[id].result <- result
+-					s.pending[id].delivered = true
++					s.roundTools[id].result <- result
++					s.roundTools[id].delivered = true
+ 				}
+ 				b.consumeLocked(results)
+ 				s.signalLocked()
+ 				s.mu.Unlock()
+ 				s.touch()
+ 				return s, nil
++			}
++			if ready {
++				previous := s.request
++				previous.betaFeatures = req.betaFeatures
++				if sessionConfig(previous) == sessionConfig(req) {
++					// A changed feature set needs a fresh CLI. Results were not
++					// applied to the old process; recover from their transcript.
++					// beta 集合变化需要新 CLI；不把结果投递给旧进程，下面从历史恢复。
++					s.cancel()
++					replace = true
++					s.mu.Unlock()
++					break
++				}
+ 			}
+ 			if sessionHeld && mismatch == nil {
+ 				mismatch = continuationMismatch(s, owner, req, results, last)
+@@ -689,10 +728,10 @@
+ 		// 恢复不触及任何存活的 CLI，因此不记录任何状态：与无状态的 Messages API 一样，
+ 		// 同一段历史可以再次发送——回合失败后的重试，或客户端并发的旁路请求——各自开启
+ 		// 自己的会话。
+-		if held {
++		if held && !replace {
+ 			return nil, mismatch
+ 		}
+-		if b.consumedLocked(results) {
++		if !replace && b.consumedLocked(results) {
+ 			return nil, rejectAdmission(errCallRejected, "continuation_consumed")
+ 		}
+ 	}
+@@ -973,10 +1012,23 @@
+ 				s.waiting = waiting
+ 				if waiting {
+ 					s.idleSince = b.clock.Now()
+-					if len(s.pending) == 0 {
++					roundTools := make(map[string]*pendingTool)
++					for _, block := range content {
++						if block.Type != "tool_use" {
++							continue
++						}
++						call := s.pending[block.ID]
++						if call == nil || call.delivered {
++							s.mu.Unlock()
++							return errCLIProtocol
++						}
++						roundTools[block.ID] = call
++					}
++					if len(roundTools) == 0 {
+ 						s.mu.Unlock()
+ 						return errCLIProtocol
+ 					}
++					s.roundTools = roundTools
+ 					body, _ := json.Marshal(content)
+ 					history := append(append([]bridgeMessage(nil), s.messages...), bridgeMessage{Role: "assistant", Content: body})
+ 					s.history = s.historyHash(history)
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go b/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go
+--- a/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go
++++ b/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go
+@@ -42,11 +42,11 @@
+ 		reason = "continuation_history_mismatch"
+ 	case len(last) != len(results):
+ 		reason = "continuation_extra_content"
+-	case len(results) != len(s.pending):
++	case len(results) != len(s.roundTools):
+ 		reason = "continuation_tool_count_mismatch"
+ 	default:
+ 		for id := range results {
+-			if call := s.pending[id]; call != nil && call.delivered {
++			if call := s.roundTools[id]; call != nil && call.delivered {
+ 				reason = "continuation_already_delivered"
+ 				break
+ 			}
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go b/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go
+--- a/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go
++++ b/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go
+@@ -45,7 +45,9 @@
+ 		}},
+ 		{name: "identity", reason: "continuation_owner_mismatch", otherOwner: true},
+ 		{name: "version", reason: "continuation_config_mismatch", changed: "api_version", version: "2023-06-01"},
+-		{name: "beta", reason: "continuation_config_mismatch", changed: "beta_features", beta: "future-feature"},
++		{name: "beta and altered history", reason: "continuation_config_mismatch", changed: "beta_features", beta: "future-feature", mutate: func(r *messagesRequest) {
++			r.Messages[0].Content = json.RawMessage(`"private-marker changed history"`)
++		}},
+ 		{name: "consumed", reason: "continuation_consumed", consumed: true},
+ 	} {
+ 		t.Run(tc.name, func(t *testing.T) {
+diff --git a/service/aiServeWeaveAgent/claudecode/safeguards_test.go b/service/aiServeWeaveAgent/claudecode/safeguards_test.go
+--- a/service/aiServeWeaveAgent/claudecode/safeguards_test.go
++++ b/service/aiServeWeaveAgent/claudecode/safeguards_test.go
+@@ -334,26 +334,18 @@
+ }
+ 
+ func TestMessagesProtocolSelectorsBindContinuation(t *testing.T) {
+-	for _, version := range []bool{false, true} {
+-		t.Run(fmt.Sprintf("version=%t", version), func(t *testing.T) {
+-			b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
+-			b.start = fixtureStart
+-			defer b.close()
+-			req := testMessagesRequest()
+-			continued := continuation(t, req, sendMessages(b, req, "first"), "result")
+-			changed := continued
+-			if version {
+-				changed.apiVersion = "future-version"
+-			} else {
+-				changed.betaFeatures = "future-feature"
+-			}
+-			if _, err := b.acquire(principal{"tenant", "key"}, changed); !errors.Is(err, errCallRejected) {
+-				t.Fatalf("changed protocol was silently applied to retained CLI: %v", err)
+-			}
+-			if _, err := b.acquire(principal{"tenant", "key"}, continued); err != nil {
+-				t.Fatalf("rejected change consumed the real continuation: %v", err)
+-			}
+-		})
++	b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
++	b.start = fixtureStart
++	defer b.close()
++	req := testMessagesRequest()
++	continued := continuation(t, req, sendMessages(b, req, "first"), "result")
++	changed := continued
++	changed.apiVersion = "future-version"
++	if _, err := b.acquire(principal{"tenant", "key"}, changed); !errors.Is(err, errCallRejected) {
++		t.Fatalf("changed API version was silently applied to retained CLI: %v", err)
++	}
++	if _, err := b.acquire(principal{"tenant", "key"}, continued); err != nil {
++		t.Fatalf("rejected change consumed the real continuation: %v", err)
+ 	}
+ }
+ 
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_rounds_test.go b/service/aiServeWeaveAgent/claudecode/messages_rounds_test.go
+new file mode 100644
+--- /dev/null
++++ b/service/aiServeWeaveAgent/claudecode/messages_rounds_test.go
+@@ -0,0 +1,255 @@
++package claudecode
++
++import (
++	"bytes"
++	"context"
++	"encoding/json"
++	"fmt"
++	"io"
++	"log/slog"
++	"net/http"
++	"net/http/httptest"
++	"strings"
++	"testing"
++
++	"AIServeWeave/common/runtime"
++)
++
++// delayedCallbackFixture leaves an earlier delivered result awaiting its MCP callback.
++// delayedCallbackFixture 模拟 CLI 已继续生成，但前一轮结果仍待迟到的 MCP 回调取走。
++func delayedCallbackFixture(s *messagesSession) {
++	r, w := io.Pipe()
++	done := make(chan struct{})
++	go func() {
++		defer close(done)
++		defer w.Close()
++		for round := 0; round < 3; round++ {
++			var output bytes.Buffer
++			fixtureRound(&output, fmt.Sprintf("native-%d", round), "")
++			_, _ = io.WriteString(w, strings.ReplaceAll(output.String(), "caller-only.txt", fmt.Sprintf("file-%d.txt", round)))
++			for {
++				s.mu.Lock()
++				delivered := false
++				for _, call := range s.pending {
++					if call.delivered && strings.Contains(string(call.block.Input), fmt.Sprintf("file-%d.txt", round)) {
++						delivered = true
++					}
++				}
++				changed := s.changed
++				s.mu.Unlock()
++				if delivered {
++					break
++				}
++				select {
++				case <-changed:
++				case <-s.ctx.Done():
++					return
++				}
++			}
++		}
++		fixtureRound(w, "", "all rounds completed")
++		_, _ = fmt.Fprintln(w, `{"type":"result","subtype":"success"}`)
++	}()
++	stop := context.AfterFunc(s.ctx, func() { _ = r.Close(); _ = w.Close() })
++	defer stop()
++	final, err := bridgeEvents(r, s)
++	_ = r.Close()
++	<-done
++	_ = s.send(final, err)
++}
++
++// TestContinuationRoundKeepsOnlyCurrentTools reproduces the observed invalid_config path.
++// TestContinuationRoundKeepsOnlyCurrentTools 覆盖连续工具回合中历史邮箱污染本轮数量校验。
++func TestContinuationRoundKeepsOnlyCurrentTools(t *testing.T) {
++	var logs bytes.Buffer
++	rt, err := NewFactory("unused")(runtime.Config{ID: "local", Kind: runtime.KindClaude}, runtime.Dependencies{
++		Clock: runtime.NewSystemClock(), Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
++	})
++	if err != nil {
++		t.Fatal(err)
++	}
++	r := rt.(*Runtime)
++	defer r.Close()
++	r.models = map[string]struct{}{"sonnet": {}}
++	r.bridge.keys = map[string]principal{"first": {"tenant", "key"}}
++	r.bridge.start = delayedCallbackFixture
++	req := testMessagesRequest()
++	req = continuation(t, req, sendMessages(r.bridge, req, "first"), "first output")
++	req = continuation(t, req, sendMessages(r.bridge, req, "first"), "second output")
++	data, _ := json.Marshal(req)
++	stream, err := r.Messages(t.Context(), runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", JSON: data})
++	if err != nil {
++		t.Fatalf("valid second continuation rejected: %v; diagnostic: %s", err, &logs)
++	}
++	defer stream.Close()
++	// Collect the native stream and continue through the HTTP boundary once more.
++	// 收集同一原生流并再次跨 HTTP 边界续接，确认后续回合也能正常推进。
++	var content []messageBlock
++	for {
++		event, err := stream.Recv()
++		if err == io.EOF {
++			break
++		}
++		if err != nil {
++			t.Fatal(err)
++		}
++		var block struct {
++			Type  string
++			Block messageBlock `json:"content_block"`
++			Delta struct {
++				Partial string `json:"partial_json"`
++			}
++		}
++		_ = json.Unmarshal(event.JSON, &block)
++		if block.Type == "content_block_start" {
++			block.Block.Input = nil
++			content = append(content, block.Block)
++		}
++		if block.Type == "content_block_delta" {
++			content[len(content)-1].Input = append(content[len(content)-1].Input, block.Delta.Partial...)
++		}
++	}
++	response := httptest.NewRecorder()
++	_ = json.NewEncoder(response).Encode(map[string]any{"content": content, "stop_reason": "tool_use"})
++	// The first delayed callback must still receive its own earlier result.
++	// 迟到的第一轮回调仍应取得第一轮结果，不能被本轮集合替换或误删。
++	r.bridge.mu.Lock()
++	var session *messagesSession
++	for s := range r.bridge.sessions {
++		session = s
++	}
++	r.bridge.mu.Unlock()
++	late, err := session.callTool(t.Context(), "read_file", json.RawMessage(`{"path":"file-0.txt"}`))
++	if err != nil || len(late.Content) != 1 || late.Content[0].Text != "first output" {
++		t.Fatalf("late callback lost its result: %v/%+v", err, late)
++	}
++	req = continuation(t, req, response, "third output")
++	if final := sendMessages(r.bridge, req, "first"); final.Code != 200 || !strings.Contains(final.Body.String(), "all rounds completed") {
++		t.Fatalf("final status/body = %d/%s", final.Code, final.Body)
++	}
++}
++
++func TestContinuationRequiresCompleteParallelResults(t *testing.T) {
++	for _, beta := range []string{"", "new-feature"} {
++		t.Run("beta="+beta, func(t *testing.T) {
++			b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
++			defer b.close()
++			b.start = func(s *messagesSession) {
++				r, w := io.Pipe()
++				done := make(chan struct{})
++				go func() {
++					defer close(done)
++					defer w.Close()
++					emitFixture(w, map[string]any{"type": "message_start", "message": map[string]any{"usage": map[string]int{"input_tokens": 1}}})
++					for i := 0; i < 2; i++ {
++						emitFixture(w, map[string]any{"type": "content_block_start", "index": i, "content_block": messageBlock{Type: "tool_use", ID: fmt.Sprint(i), Name: "mcp__aisw_bridge__tool_0", Input: json.RawMessage(`{}`)}})
++						emitFixture(w, map[string]any{"type": "content_block_delta", "index": i, "delta": map[string]string{"type": "input_json_delta", "partial_json": fmt.Sprintf(`{"path":"file-%d"}`, i)}})
++						emitFixture(w, map[string]any{"type": "content_block_stop", "index": i})
++					}
++					emitFixture(w, map[string]any{"type": "message_delta", "delta": map[string]string{"stop_reason": "tool_use"}})
++					emitFixture(w, map[string]string{"type": "message_stop"})
++					for i := 0; i < 2; i++ {
++						if _, err := s.callTool(s.ctx, "read_file", json.RawMessage(fmt.Sprintf(`{"path":"file-%d"}`, i))); err != nil {
++							return
++						}
++					}
++					fixtureRound(w, "", "both results applied")
++					_, _ = fmt.Fprintln(w, `{"type":"result","subtype":"success"}`)
++				}()
++				stop := context.AfterFunc(s.ctx, func() { _ = r.Close(); _ = w.Close() })
++				defer stop()
++				final, err := bridgeEvents(r, s)
++				_ = r.Close()
++				<-done
++				_ = s.send(final, err)
++			}
++			req := testMessagesRequest()
++			response := sendMessages(b, req, "first")
++			var first struct{ Content []messageBlock }
++			if response.Code != 200 || json.Unmarshal(response.Body.Bytes(), &first) != nil || len(first.Content) != 2 {
++				t.Fatal("expected two parallel calls")
++			}
++			body, _ := json.Marshal(first.Content)
++			req.Messages = append(req.Messages, bridgeMessage{Role: "assistant", Content: body})
++			results := []messageBlock{
++				{Type: "tool_result", ToolUseID: first.Content[0].ID, Content: json.RawMessage(`"output one"`)},
++				{Type: "tool_result", ToolUseID: first.Content[1].ID, Content: json.RawMessage(`"output two"`)},
++			}
++			body, _ = json.Marshal(results[:1])
++			req.Messages = append(req.Messages, bridgeMessage{Role: "user", Content: body})
++			if partial := sendMessagesBeta(b, req, beta); partial.Code != 409 {
++				t.Fatalf("partial results accepted: %d", partial.Code)
++			}
++			body, _ = json.Marshal(results)
++			req.Messages[len(req.Messages)-1].Content = body
++			if full := sendMessages(b, req, "first"); full.Code != 200 || !strings.Contains(full.Body.String(), "both results applied") {
++				t.Fatalf("partial attempt consumed complete continuation: %d/%s", full.Code, full.Body)
++			}
++		})
++	}
++}
++
++func sendMessagesBeta(b *messagesBridge, req messagesRequest, beta string) *httptest.ResponseRecorder {
++	data, _ := json.Marshal(req)
++	r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1/v1/messages", bytes.NewReader(data))
++	r.Header.Set("X-Api-Key", "first")
++	r.Header.Set("Content-Type", "application/json")
++	r.Header.Set("Anthropic-Beta", beta)
++	w := httptest.NewRecorder()
++	b.ServeHTTP(w, r)
++	return w
++}
++
++func TestContinuationEquivalentBetaHeaders(t *testing.T) {
++	b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
++	b.start = fixtureStart
++	defer b.close()
++	req := testMessagesRequest()
++	req = continuation(t, req, sendMessagesBeta(b, req, "feature-a,feature-b"), "expected result")
++	w := sendMessagesBeta(b, req, "feature-b, feature-a,feature-b")
++	if w.Code != 200 || !strings.Contains(w.Body.String(), "expected result") {
++		t.Fatalf("equivalent beta headers broke continuation: status=%d, body=%s", w.Code, w.Body)
++	}
++}
++
++func TestContinuationChangedBetaRestartsCLI(t *testing.T) {
++	b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
++	defer b.close()
++	started := make(chan *messagesSession, 2)
++	b.start = func(s *messagesSession) {
++		started <- s
++		last, _ := blocks(s.messages[len(s.messages)-1].Content)
++		if len(last) == 0 || last[0].Type != "tool_result" {
++			fixtureStart(s)
++			return
++		}
++		prompt := sessionPrompt(s.messages)
++		if !strings.HasPrefix(prompt, resumeInstruction) || !strings.Contains(prompt, "already executed result") {
++			_ = s.send(nil, errCLIProtocol)
++			return
++		}
++		var events bytes.Buffer
++		fixtureRound(&events, "", "continued from existing result")
++		_, _ = fmt.Fprintln(&events, `{"type":"result","subtype":"success"}`)
++		final, err := bridgeEvents(&events, s)
++		_ = s.send(final, err)
++	}
++	req := testMessagesRequest()
++	req = continuation(t, req, sendMessagesBeta(b, req, "feature-a,feature-b"), "already executed result")
++	first := <-started
++	response := sendMessagesBeta(b, req, "feature-a")
++	if response.Code != 200 || !strings.Contains(response.Body.String(), "continued from existing result") {
++		t.Fatalf("beta fallback broke continuation: status=%d, body=%s", response.Code, response.Body)
++	}
++	second := <-started
++	if second == first || first.ctx.Err() == nil || second.request.betaFeatures != "feature-a" {
++		t.Fatal("changed beta was silently reused on the old CLI")
++	}
++	first.mu.Lock()
++	defer first.mu.Unlock()
++	for _, call := range first.pending {
++		if call.delivered {
++			t.Fatal("replacement delivered results to the old CLI")
++		}
++	}
++}

@@ -334,26 +334,18 @@ func TestSafeguardsParallelIdenticalCalls(t *testing.T) {
 }
 
 func TestMessagesProtocolSelectorsBindContinuation(t *testing.T) {
-	for _, version := range []bool{false, true} {
-		t.Run(fmt.Sprintf("version=%t", version), func(t *testing.T) {
-			b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
-			b.start = fixtureStart
-			defer b.close()
-			req := testMessagesRequest()
-			continued := continuation(t, req, sendMessages(b, req, "first"), "result")
-			changed := continued
-			if version {
-				changed.apiVersion = "future-version"
-			} else {
-				changed.betaFeatures = "future-feature"
-			}
-			if _, err := b.acquire(principal{"tenant", "key"}, changed); !errors.Is(err, errCallRejected) {
-				t.Fatalf("changed protocol was silently applied to retained CLI: %v", err)
-			}
-			if _, err := b.acquire(principal{"tenant", "key"}, continued); err != nil {
-				t.Fatalf("rejected change consumed the real continuation: %v", err)
-			}
-		})
+	b := newMessagesBridge("unused", "sonnet", map[string]principal{"first": {"tenant", "key"}}, runtime.NewSystemClock())
+	b.start = fixtureStart
+	defer b.close()
+	req := testMessagesRequest()
+	continued := continuation(t, req, sendMessages(b, req, "first"), "result")
+	changed := continued
+	changed.apiVersion = "future-version"
+	if _, err := b.acquire(principal{"tenant", "key"}, changed); !errors.Is(err, errCallRejected) {
+		t.Fatalf("changed API version was silently applied to retained CLI: %v", err)
+	}
+	if _, err := b.acquire(principal{"tenant", "key"}, continued); err != nil {
+		t.Fatalf("rejected change consumed the real continuation: %v", err)
 	}
 }
 

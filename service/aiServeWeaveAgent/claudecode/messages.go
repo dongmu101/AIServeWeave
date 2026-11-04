@@ -13,6 +13,8 @@ import (
 	"mime"
 	"net/http"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -323,8 +325,13 @@ type messagesSession struct {
 	busy                 bool
 	waiting              bool
 	pending              map[string]*pendingTool
-	changed              chan struct{}
-	activity             chan bool
+	// roundTools is the complete tool set exposed by the last tool_use response.
+	// pending may also retain older delivered results for late MCP callbacks.
+	// roundTools 是最近一轮 tool_use 响应公开的完整工具集合；pending 还可能保留
+	// 已投递但尚待迟到 MCP 回调取走的旧结果，不能用于本轮数量校验。
+	roundTools map[string]*pendingTool
+	changed    chan struct{}
+	activity   chan bool
 	// idleSince is when the session last began waiting for tool results;
 	// eviction picks the session idle the longest. Guarded by mu.
 	// idleSince 是会话最近一次开始等待工具结果的时间；淘汰时选择空闲最久的会话。受 mu 保护。
@@ -538,7 +545,24 @@ func sessionConfig(req messagesRequest) [32]byte {
 	return canonical(struct {
 		Request                  messagesRequest
 		APIVersion, BetaFeatures string
-	}{req, req.apiVersion, req.betaFeatures})
+	}{req, req.apiVersion, canonicalBetaFeatures(req.betaFeatures)})
+}
+
+// canonicalBetaFeatures compares the feature set, preserving malformed lists for upstream validation.
+// canonicalBetaFeatures 按功能集合比较 beta；格式异常的列表不折叠，留给上游校验。
+func canonicalBetaFeatures(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	names := strings.Split(raw, ",")
+	for i := range names {
+		names[i] = strings.TrimSpace(names[i])
+		if names[i] == "" {
+			return raw
+		}
+	}
+	slices.Sort(names)
+	return strings.Join(slices.Compact(names), ",")
 }
 
 // normalizedToolInput equates omitted defaults with values declared by the tool schema.
@@ -649,6 +673,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	}
 	if len(results) > 0 {
 		held := false
+		replace := false
 		var mismatch error
 		for s := range b.sessions {
 			s.mu.Lock()
@@ -660,25 +685,39 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 				sessionHeld = sessionHeld || (s.ctx.Err() == nil && s.pending[id] != nil)
 			}
 			held = held || sessionHeld
-			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
-			if matches {
+			ready := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && len(results) == len(s.roundTools) && len(last) == len(results)
+			if ready {
 				for id := range results {
-					if s.pending[id] == nil || s.pending[id].delivered {
-						matches = false
+					if s.roundTools[id] == nil || s.roundTools[id].delivered {
+						ready = false
 					}
 				}
 			}
-			if matches {
+			ready = ready && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history
+			if ready && sessionConfig(s.request) == sessionConfig(req) {
 				s.busy, s.waiting, s.messages = true, false, req.Messages
 				for id, result := range results {
-					s.pending[id].result <- result
-					s.pending[id].delivered = true
+					s.roundTools[id].result <- result
+					s.roundTools[id].delivered = true
 				}
 				b.consumeLocked(results)
 				s.signalLocked()
 				s.mu.Unlock()
 				s.touch()
 				return s, nil
+			}
+			if ready {
+				previous := s.request
+				previous.betaFeatures = req.betaFeatures
+				if sessionConfig(previous) == sessionConfig(req) {
+					// A changed feature set needs a fresh CLI. Results were not
+					// applied to the old process; recover from their transcript.
+					// beta 集合变化需要新 CLI；不把结果投递给旧进程，下面从历史恢复。
+					s.cancel()
+					replace = true
+					s.mu.Unlock()
+					break
+				}
 			}
 			if sessionHeld && mismatch == nil {
 				mismatch = continuationMismatch(s, owner, req, results, last)
@@ -701,10 +740,10 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		// 恢复不触及任何存活的 CLI，因此不记录任何状态：与无状态的 Messages API 一样，
 		// 同一段历史可以再次发送——回合失败后的重试，或客户端并发的旁路请求——各自开启
 		// 自己的会话。
-		if held {
+		if held && !replace {
 			return nil, mismatch
 		}
-		if b.consumedLocked(results) {
+		if !replace && b.consumedLocked(results) {
 			return nil, rejectAdmission(errCallRejected, "continuation_consumed")
 		}
 	}
@@ -985,10 +1024,23 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				s.waiting = waiting
 				if waiting {
 					s.idleSince = b.clock.Now()
-					if len(s.pending) == 0 {
+					roundTools := make(map[string]*pendingTool)
+					for _, block := range content {
+						if block.Type != "tool_use" {
+							continue
+						}
+						call := s.pending[block.ID]
+						if call == nil || call.delivered {
+							s.mu.Unlock()
+							return errCLIProtocol
+						}
+						roundTools[block.ID] = call
+					}
+					if len(roundTools) == 0 {
 						s.mu.Unlock()
 						return errCLIProtocol
 					}
+					s.roundTools = roundTools
 					body, _ := json.Marshal(content)
 					history := append(append([]bridgeMessage(nil), s.messages...), bridgeMessage{Role: "assistant", Content: body})
 					s.history = s.historyHash(history)

@@ -45,7 +45,9 @@ func TestMessagesAdmissionDiagnostics(t *testing.T) {
 		}},
 		{name: "identity", reason: "continuation_owner_mismatch", otherOwner: true},
 		{name: "version", reason: "continuation_config_mismatch", changed: "api_version", version: "2023-06-01"},
-		{name: "beta", reason: "continuation_config_mismatch", changed: "beta_features", beta: "future-feature"},
+		{name: "beta and altered history", reason: "continuation_config_mismatch", changed: "beta_features", beta: "future-feature", mutate: func(r *messagesRequest) {
+			r.Messages[0].Content = json.RawMessage(`"private-marker changed history"`)
+		}},
 		{name: "consumed", reason: "continuation_consumed", consumed: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

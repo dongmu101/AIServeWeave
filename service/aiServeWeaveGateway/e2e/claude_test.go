@@ -135,6 +135,7 @@ func claudeProcessFixture() {
 	emit := func(event any) {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "stream_event", "event": event})
 	}
+	toolPath := "caller-only.txt"
 	round := func(tool bool, text string) {
 		emit(map[string]any{"type": "message_start", "message": map[string]any{"id": "msg_fixture", "type": "message", "role": "assistant", "model": "fixture", "content": []any{}, "usage": map[string]int{"input_tokens": 3, "output_tokens": 0}}})
 		block := map[string]any{"type": "text", "text": ""}
@@ -142,7 +143,8 @@ func claudeProcessFixture() {
 		stop := "end_turn"
 		if tool {
 			block = map[string]any{"type": "tool_use", "id": "native-fixture-id", "name": "mcp__aisw_bridge__tool_0", "input": map[string]any{}}
-			delta = map[string]any{"type": "input_json_delta", "partial_json": `{"path":"caller-only.txt"}`}
+			input, _ := json.Marshal(map[string]string{"path": toolPath})
+			delta = map[string]any{"type": "input_json_delta", "partial_json": string(input)}
 			stop = "tool_use"
 		}
 		emit(map[string]any{"type": "content_block_start", "index": 0, "content_block": block})
@@ -152,6 +154,36 @@ func claudeProcessFixture() {
 		emit(map[string]string{"type": "message_stop"})
 	}
 	round(true, "")
+	if strings.Contains(string(prompt), "multiple-tool-rounds") {
+		// The CLI continues while the first MCP callback is delayed. The old
+		// delivered mailbox must not count towards the second round's tool set.
+		// 第一轮 MCP 回调迟到，但 CLI 已继续；旧邮箱不能污染第二轮的结果集合。
+		toolPath = "next-only.txt"
+		round(true, "")
+		call := func(path string) string {
+			body, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": path, "method": "tools/call", "params": map[string]any{"name": "tool_0", "arguments": map[string]string{"path": path}}})
+			req, _ := http.NewRequest(http.MethodPost, mcp.URL, bytes.NewReader(body))
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Authorization", mcp.Headers["Authorization"])
+			response, err := http.DefaultClient.Do(req)
+			if err != nil {
+				os.Exit(3)
+			}
+			defer response.Body.Close()
+			var result struct {
+				Result struct{ Content []struct{ Text string } }
+			}
+			if json.NewDecoder(response.Body).Decode(&result) != nil || len(result.Result.Content) != 1 {
+				os.Exit(3)
+			}
+			return result.Result.Content[0].Text
+		}
+		second := call("next-only.txt")
+		first := call("caller-only.txt")
+		round(false, first+"|"+second)
+		fmt.Println(`{"type":"result","subtype":"success"}`)
+		return
+	}
 	body := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"tool_0","arguments":{"path":"caller-only.txt"}}}`
 	req, _ := http.NewRequest(http.MethodPost, mcp.URL, strings.NewReader(body))
 	req.Header.Set("Content-Type", "application/json")
@@ -190,6 +222,67 @@ func claudeProcessFixture() {
 	}
 	round(false, result.Result.Content[0].Text)
 	fmt.Println(`{"type":"result","subtype":"success"}`)
+}
+
+// TestClaudeLongToolContinuation keeps per-round ID sets across real mTLS tunnels and MCP callbacks.
+// TestClaudeLongToolContinuation 经真实 mTLS 隧道与 MCP 回调验证连续工具回合的独立集合。
+func TestClaudeLongToolContinuation(t *testing.T) {
+	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(os.Args[0]))
+	f.awaitReady(f.replicas...)
+	store := &fixtureMessagesStore{rounds: make(map[string]messagesession.Record)}
+	var servers []*httptest.Server
+	for _, replica := range f.replicas {
+		api := httpapi.New(scheduler.New(replica.server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}, MessagesSessions: store})
+		t.Cleanup(api.Close)
+		server := httptest.NewServer(api)
+		t.Cleanup(server.Close)
+		servers = append(servers, server)
+	}
+	messages := []any{map[string]string{"role": "user", "content": "multiple-tool-rounds claude-sonnet-4-6"}}
+	tools := []any{map[string]any{"name": "read_file", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}}}}
+	for round := 0; round < 3; round++ {
+		body, _ := json.Marshal(map[string]any{"model": "claude-sonnet-4-6", "max_tokens": 1024, "messages": messages, "tools": tools})
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodPost, servers[round%2].URL+"/v1/messages", bytes.NewReader(body))
+		req.Header.Set("X-Api-Key", "claude-live-first")
+		req.Header.Set("Content-Type", "application/json")
+		beta := []string{"feature-a,feature-b", "feature-b, feature-a", "feature-a,feature-b,feature-a"}[round]
+		req.Header.Set("Anthropic-Beta", beta)
+		response, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, _ := io.ReadAll(io.LimitReader(response.Body, 1<<20))
+		_ = response.Body.Close()
+		if response.StatusCode != 200 {
+			t.Fatalf("round %d: HTTP %d: %s", round, response.StatusCode, data)
+		}
+		var result struct {
+			Content []struct {
+				Type, ID, Text string
+				Input          map[string]string
+			}
+			StopReason string `json:"stop_reason"`
+		}
+		if json.Unmarshal(data, &result) != nil || len(result.Content) != 1 {
+			t.Fatalf("round %d: invalid response %s", round, data)
+		}
+		if round == 2 {
+			if result.StopReason != "end_turn" || result.Content[0].Text != "first caller result|second caller result" {
+				t.Fatalf("lost/mixed callback results: %s", data)
+			}
+			break
+		}
+		if result.StopReason != "tool_use" || result.Content[0].Type != "tool_use" || result.Content[0].Input["path"] != []string{"caller-only.txt", "next-only.txt"}[round] {
+			t.Fatalf("round %d: invalid tool round %s", round, data)
+		}
+		var content json.RawMessage
+		var raw map[string]json.RawMessage
+		_ = json.Unmarshal(data, &raw)
+		content = raw["content"]
+		messages = append(messages, map[string]any{"role": "assistant", "content": content})
+		output := []string{"first caller result", "second caller result"}[round]
+		messages = append(messages, map[string]any{"role": "user", "content": []any{map[string]string{"type": "tool_result", "tool_use_id": result.Content[0].ID, "content": output}}})
+	}
 }
 
 const claudeFixtureImage = "aW1hZ2UtYnl0ZXM="

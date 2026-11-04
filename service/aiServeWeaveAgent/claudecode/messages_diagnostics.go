@@ -42,11 +42,11 @@ func continuationMismatch(s *messagesSession, owner principal, req messagesReque
 		reason = "continuation_history_mismatch"
 	case len(last) != len(results):
 		reason = "continuation_extra_content"
-	case len(results) != len(s.pending):
+	case len(results) != len(s.roundTools):
 		reason = "continuation_tool_count_mismatch"
 	default:
 		for id := range results {
-			if call := s.pending[id]; call != nil && call.delivered {
+			if call := s.roundTools[id]; call != nil && call.delivered {
 				reason = "continuation_already_delivered"
 				break
 			}

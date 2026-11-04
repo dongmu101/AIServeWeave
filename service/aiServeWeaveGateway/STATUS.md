@@ -750,6 +750,8 @@ Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Re
 
 ## Claude Code 原生 Messages
 
+连续工具回合的 Agent 修复（2026-11-04）：Agent 按本轮公开 ID 集合校验工具结果，旧的已投递 MCP 邮箱不再污染新一轮数量；等价 beta 列表可继续复用会话，实际增删 beta 在完整归属、历史、工具结果及其他配置匹配时于原节点重建 CLI，从已执行结果恢复。Gateway 的租约、路由和一次性消费规则保持不变，本项仅需更新并重启 Agent。跨两个 Gateway、真实 mTLS 与模拟 CLI 的连续回合测试通过；线上真实长任务尚待验收，见 [Agent 续接规则](../aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。
+
 Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：Gateway 将文本、前置 system/developer 和 function 工具转换为 Messages 语义，沿用下述身份校验、Redis 认领与原节点绑定。`finish_reason` 映射为 `stop`、`length` 或 `tool_calls`；流式包含工具索引与参数增量，成功结束发送 `[DONE]`，`stream_options.include_usage` 可请求末尾用量帧。其他 Chat 后端（包括 Codex）仍走原来的 Chat 隧道。
 
 普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、必须为正整数，同时提供必须一致；Gateway 与 Agent 不设置固定输出 token 上限，客户端指定值原样传给 CLI，实际支持范围由 CLI、模型和账户能力决定；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 32 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent。

@@ -128,7 +128,7 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
 
-进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误现在也携带本地运行时 ID，便于关联 Gateway 日志；公开文案、续接校验及结果消费规则保持原样。此诊断需更新并重启 Agent，Gateway 无需修改。
+进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 
 手动用 `go run` 启动时，日志默认写到终端，不会自动生成部署脚本使用的 `agent.log`。可用 `go run . -config /绝对路径/agent.yaml -log-file /绝对路径/agent.log` 留存日志，再查 `Claude Messages request rejected` 和 `Claude Messages round failed`。对齐日志时使用时间戳自身的 UTC 偏移，例如 Agent 的 `21:03+09:00` 与 Gateway 的 `12:03Z` 是同一时刻。
 
@@ -144,11 +144,16 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 Redis 原子保存工具 ID 的完整集合、租户/Key、公共模型及原节点/runtime/实际模型，TTL 1 小时（与 Agent 等待工具的时限一致），不保存消息或工具结果；续接成功后保留已使用标记 24 小时。每次续接重新认证，不允许换节点或自动重试；已应用或结果不确定的工具结果不可重放。Agent 另外在本地记住已投递的工具 ID 24 小时（最多 8192 个，超出丢弃最早的），会话结束后重放同一批已投递的结果仍被拒绝（孤立回合的恢复不属于投递，见下文）。HTTP 断开取消未完成回合；正常完成的工具回合保留进程等待下一请求。Agent 关闭、会话超时及 CLI 退出会清理进程组、MCP 监听和临时文件。
 
+Agent 按最近一轮实际公开的 `tool_use` ID 集合校验结果数量和归属。`pending` 邮箱可暂时保留已投递、但尚待迟到 MCP 回调取走的旧结果；这些旧邮箱不计入新一轮待决工具数量，也不会因开始新一轮而被清空。连续多轮与迟到回调已有跨两个 Gateway、真实 mTLS 隧道和模拟 CLI 的回归覆盖；原来按全部邮箱数量检查会产生的 `continuation_tool_count_mismatch` 已在本地复现并修复，真实长任务仍需更新 Agent 后验收。
+
+`anthropic-beta` 按功能集合比较，顺序、逗号旁空格及重复项不影响续接；[官方 beta 文档](https://platform.claude.com/docs/en/api/beta-headers#multiple-beta-features)支持逗号列表与重复请求头。实际增加或删除功能时，只有归属、完整历史、本轮完整工具 ID 集合以及其他会话配置均匹配，才会终止旧 CLI，使用新 beta 设置开启新 CLI，并从包含已执行工具结果的完整记录恢复；不会把这些结果同时投递给旧 CLI。恢复采用与孤立回合相同的文本记录及媒体输入方式，效果可能略逊于保留原进程。API 版本变化及其他配置/历史不匹配仍明确拒绝，不会把新协议设置静默应用到旧进程。
+
 续接失败按原因区分：
 
 - 孤立回合（Gateway 租约已过期，或 Agent 重启、会话超时、CLI 已退出，没有任何会话还持有这些工具 ID，且这些 ID 未投递过）：不再返回 409，而是开启新会话恢复。新会话把完整历史连同最后的工具结果渲染成文本记录，提示 CLI 从这些结果继续任务、不要重复这些调用；工具已在调用方执行，不会重复执行。新会话看到的是文本记录而不是原进程上下文，效果可能略逊于原会话。租约仍有效时请求回到原节点恢复；租约已过期时按新会话调度到任一节点。恢复不触及存活的 CLI，因此不记录状态：与无状态的 Messages API 一样，以同一批孤立结果结尾的请求可以重复发送——回合失败后的重试，或客户端并发的旁路请求（Claude Code 会复用同一段历史）——各自开启新会话，不会被当作重放拒绝。
 - 已消费（重放）或被并发认领：返回 409 `continuation_unavailable`。
 - 会话还在，但历史、工具或归属不匹配：返回 400，租约保留，客户端修正后可以重试。
+- 仅 beta 功能集合变化、其余匹配：按上述方式在原节点重建 CLI 并恢复，Gateway 无需修改。
 - 节点失联：返回 503，租约同样被消费。
 
 以上行为需要同时升级 Gateway 和 Agent。只升级 Gateway 时，旧 Agent 仍拒绝多轮追问，重启后的续接仍是 400；只升级 Agent 时，多轮追问可用，但重启后的续接会被旧 Gateway 报成 503。
