@@ -51,12 +51,12 @@ var uploadSniffCategoryByExtension = map[string]string{
 // validateUploadContent reads before deciding — the same 512-byte window
 // net/http.DetectContentType itself documents as sufficient, so this stays a
 // bounded read regardless of the file's declared or actual size, honoring
-// AGENTS.md's 安全红线 against unbounded buffering at any hop.
+// the security rule against unbounded buffering at any hop.
 //
 // uploadSniffPeekBytes 限定 validateUploadContent 在做出判断前读取一个已
 // 上传文件多少字节——与 net/http.DetectContentType 自己文档中声明的 512 字节
 // 窗口一致，因此无论文件声明或实际大小如何，这始终是一次有界读取，符合
-// AGENTS.md「安全红线」对任何一跳都不得无界缓冲的要求。
+// 安全规则对任何一跳都不得无界缓冲的要求。
 const uploadSniffPeekBytes = 512
 
 // errUnsupportedUploadFormat marks an error produced by

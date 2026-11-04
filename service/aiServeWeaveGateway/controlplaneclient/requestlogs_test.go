@@ -92,13 +92,13 @@ func TestPushRequestLogsMaxBatchFitsTheControlPlanesBodyLimit(t *testing.T) {
 	// controlPlaneMaxRequestLogsBodyBytes mirrors the control plane's
 	// handler.MaxRequestLogsBodyBytes. It is duplicated here, not imported,
 	// because the Gateway and the control plane are separate services talking
-	// over HTTP, not a shared Go package — see this repo's AGENTS.md on
-	// contract packages. Keep the two in step by hand.
+	// over HTTP, not a shared Go package — there is no shared
+	// contract package. Keep the two in step by hand.
 	//
 	// controlPlaneMaxRequestLogsBodyBytes 对应控制面的
 	// handler.MaxRequestLogsBodyBytes。它在这里是重复定义而不是导入，因为
-	// Gateway 与控制面是通过 HTTP 对话的两个独立服务，而不是共享的 Go 包——见
-	// 本仓库 AGENTS.md 关于契约包的说明。这两处需要手动保持一致。
+	// Gateway 与控制面是通过 HTTP 对话的两个独立服务，而不是共享的 Go 包——两者没有
+	// 共享的契约包。这两处需要手动保持一致。
 	const controlPlaneMaxRequestLogsBodyBytes = 256 << 10
 
 	var gotBodyBytes int

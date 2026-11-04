@@ -198,13 +198,13 @@ const (
 	// binary's bytes failed (network error, unexpected HTTP status, or a
 	// local filesystem error). The underlying error is logged locally by
 	// the Agent and never crosses the tunnel — it can embed the manifest's
-	// SourceURL, which AGENTS.md's security rules forbid putting in a
+	// SourceURL, which the project's security rules forbid putting in a
 	// message the Gateway observes.
 	//
 	// ReasonDownloadFailed 表示获取或本地落盘新二进制字节失败（网络错误、
 	// 非预期的 HTTP 状态码，或本地文件系统错误）。底层错误只由 Agent 本地
-	// 记日志，从不跨隧道传递——它可能带有清单里的 SourceURL，AGENTS.md 的
-	// 安全规则禁止把这个放进 Gateway 能观测到的消息里。
+	// 记日志，从不跨隧道传递——它可能带有清单里的 SourceURL，项目安全规则
+	// 禁止把这个放进 Gateway 能观测到的消息里。
 	ReasonDownloadFailed
 	// ReasonVerificationFailed means the downloaded bytes' SHA256 does not
 	// match the value the Agent's signed local manifest declares for this

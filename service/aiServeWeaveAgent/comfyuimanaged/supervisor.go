@@ -55,12 +55,12 @@ type Supervisor struct {
 
 	// onIdle, when set, is called after each Trigger's background goroutine
 	// finishes. It exists only so tests can synchronize on a completed
-	// Trigger without a real time.Sleep (AGENTS.md's convention against
+	// Trigger without a real time.Sleep (CONTRIBUTING.md's convention against
 	// advancing time with a real sleep applies to this concurrency handoff
 	// too, not just simulated timers); it is always nil in production.
 	//
 	// onIdle 在设置时于每次 Trigger 的后台 goroutine 结束后被调用。它的唯一用
-	// 途是让测试无需真实 time.Sleep 就能等到一次 Trigger 完成（AGENTS.md 里
+	// 途是让测试无需真实 time.Sleep 就能等到一次 Trigger 完成（CONTRIBUTING.md 里
 	// "不用真实 time.Sleep 推进时间"的约定同样适用于这种并发交接，不只是模拟
 	// 定时器）；生产环境里始终为 nil。
 	onIdle func()

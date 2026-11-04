@@ -4,7 +4,7 @@
 // an allowlist come from local flags, not from the Gateway or control plane,
 // so the Agent never trusts a remote party about where to fetch bytes from.
 // It uses only the standard library (net/http, crypto/sha256), so it does
-// not touch the Agent's dependency line (AGENTS.md: "Agent 与 Registry 的
+// not touch the Agent's dependency line (docs/agents/dependencies.md: "Agent 与 Registry 的
 // 直接依赖只有 gRPC、protobuf 与 coder/websocket").
 //
 // This is subtask 1 of STATUS.md's P2 "模型分发" item (see
@@ -34,7 +34,7 @@
 // 支持续传中断的下载。它是纯 Agent 本地、配置驱动的：清单和白名单都来自本地
 // flag，不来自 Gateway 或控制面，因此 Agent 永远不会信任远端指定"该从哪里取
 // 字节"。它只用标准库（net/http、crypto/sha256），不触碰 Agent 的依赖线
-// （AGENTS.md：「Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与
+// （docs/agents/dependencies.md：「Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与
 // coder/websocket」）。
 //
 // 这是 STATUS.md P2「模型分发」条目的子任务一（见

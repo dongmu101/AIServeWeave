@@ -8,8 +8,8 @@
 // still perform the ComfyUI-specific identity and capability checks — this
 // package never speaks the ComfyUI wire protocol. Like hostresources, it
 // shells out to a platform tool (the docker CLI) instead of adding an SDK
-// dependency, so the Agent's dependency line stays exactly what AGENTS.md
-// requires.
+// dependency, so the Agent's dependency line stays within
+// docs/agents/dependencies.md.
 //
 // comfyuimanaged 在本节点启动、接管或停止单个 ComfyUI Docker 容器（STATUS.md 的
 // P2 ComfyUI Managed Docker 部署子任务一，设计文档见
@@ -17,8 +17,8 @@
 // 它只管理容器本身：容器端口能连通之后，调用方按 External 实例同样的方式把它注册进
 // runtime.Manager，因此 comfyui.Runtime 既有的 Probe/Discover 仍然承担 ComfyUI
 // 专属的身份与能力校验——本包从不说 ComfyUI 的线上协议。与 hostresources 一样，它
-// shell out 到平台工具（docker CLI）而不是新增 SDK 依赖，这样 Agent 的依赖线就仍是
-// AGENTS.md 要求的样子。
+// shell out 到平台工具（docker CLI）而不是新增 SDK 依赖，这样 Agent 的依赖线就仍在
+// docs/agents/dependencies.md 划定的边界内。
 package comfyuimanaged
 
 import (

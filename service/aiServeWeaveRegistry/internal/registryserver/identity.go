@@ -71,7 +71,7 @@ import (
 func (s *Server) Register(ctx context.Context, req *tunnelv1.RegisterRequest) (*tunnelv1.RegisterResponse, error) {
 	now := s.clock.Now()
 	// The token is never logged, on success or failure: it is a bearer
-	// credential until consumed, exactly like the API keys AGENTS.md's
+	// credential until consumed, exactly like the API keys SECURITY.md's
 	// security rules cover.
 	token := req.GetBootstrapToken()
 	grant, err := s.tokens.Peek(token, now)

@@ -209,7 +209,7 @@ type Config struct {
 	// defaultQueueRetryInterval. Ignored when QueueMaxWait is zero.
 	QueueRetryInterval time.Duration
 	// QueueMaxWaiters bounds how many submissions may be waiting at once, so
-	// the queue itself cannot become the unbounded buffer AGENTS.md's
+	// the queue itself cannot become the unbounded buffer the project's
 	// security rules forbid ("任何一跳都不得无界缓冲"). A submission that
 	// finds the bound already reached is rejected immediately rather than
 	// becoming an unbounded third waiter axis. Zero (with QueueMaxWait

@@ -66,11 +66,11 @@ type S3 struct {
 	bucket string
 	prefix string
 	// redact scrubs the configured secret out of any error text before it
-	// can reach a log or an HTTP response, per AGENTS.md's credential
+	// can reach a log or an HTTP response, per SECURITY.md's credential
 	// redaction rule.
 	//
 	// redact 在错误文本抵达日志或 HTTP 响应之前，把配置的密钥从中清除，对应
-	// AGENTS.md 的凭据脱敏规则。
+	// SECURITY.md 的凭据脱敏规则。
 	redact func(string) string
 }
 

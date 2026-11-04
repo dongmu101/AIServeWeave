@@ -46,12 +46,12 @@ type requestLogPushConfig struct {
 }
 
 // Package defaults for requestLogPushConfig, chosen to keep the buffer
-// bounded (STATUS.md's AGENTS.md security-line "任何一跳都不得无界缓冲")
+// bounded (the security rule "任何一跳都不得无界缓冲")
 // while batching enough that a busy replica does not call the control
 // plane once per request.
 //
-// requestLogPushConfig 的包默认值，选定的目标是让缓冲保持有界(AGENTS.md 安全
-// 红线"任何一跳都不得无界缓冲")，同时攒够一批，使一个繁忙的副本不至于每个
+// requestLogPushConfig 的包默认值，选定的目标是让缓冲保持有界(安全
+// 规则"任何一跳都不得无界缓冲")，同时攒够一批，使一个繁忙的副本不至于每个
 // 请求都调用一次控制面。
 const (
 	DefaultRequestLogBufferSize    = 10000

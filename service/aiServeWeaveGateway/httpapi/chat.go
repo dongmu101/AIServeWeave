@@ -512,7 +512,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical 
 	// A client disconnect unblocks the Recv below on its own:
 	// tunnelserver.Response.Recv selects on the request's context (call.go),
 	// so cancellation returns from it immediately and the deferred Close then
-	// carries the cancel across the tunnel to the Agent, per AGENTS.md's
+	// carries the cancel across the tunnel to the Agent, per the rule
 	// "任何一跳都不得无界缓冲".
 	//
 	// There used to be a goroutine here that called Close on cancellation.
@@ -523,7 +523,7 @@ func (h *handlers) chatStream(w http.ResponseWriter, r *http.Request, canonical 
 	//
 	// 客户端断连会让下面的 Recv 自行解除阻塞：tunnelserver.Response.Recv 自己 select
 	// 请求的 context（call.go），因此取消会让它立即返回，随后被 defer 的 Close 把这次
-	// 取消经隧道送给 Agent，对应 AGENTS.md 的「任何一跳都不得无界缓冲」。
+	// 取消经隧道送给 Agent，对应「任何一跳都不得无界缓冲」。
 	//
 	// 这里原本有一个在取消时调用 Close 的协程。它什么也没换来——Recv 本就会自行返回
 	// ——却破坏了 Response 声明的单消费者契约（见 call.go 对记录状态的说明），竞态

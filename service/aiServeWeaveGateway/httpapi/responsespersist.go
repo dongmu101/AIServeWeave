@@ -91,12 +91,12 @@ var ErrResponseTurnNotFound = errors.New("httpapi: response turn not found")
 
 // Defaults for the async response-turn persister. Concurrency bounds how
 // many CreateResponseTurn calls this replica has in flight at once — the
-// same "bounded, never unbounded" requirement AGENTS.md's security line
-// states, applied here with a semaphore instead of requestLogPusher's
+// same "bounded, never unbounded" requirement the security rules
+// state, applied here with a semaphore instead of requestLogPusher's
 // buffered channel, because a turn is one call each rather than a batch.
 //
 // 异步轮次持久化器的默认值。Concurrency 限制本副本同时在途的
-// CreateResponseTurn 调用数——与 AGENTS.md 安全红线「必须有界」是同一条
+// CreateResponseTurn 调用数——与安全规则「必须有界」是同一条
 // 要求，这里用信号量而不是 requestLogPusher 的带缓冲 channel 来实现，因为
 // 一轮对应一次调用而不是一个批次。
 const (
@@ -164,11 +164,11 @@ func newResponsePersister(client ResponsesPersistClient, concurrency int, callTi
 // persist asynchronously writes one turn, never blocking the caller: a full
 // concurrency limit drops the turn and counts it rather than waiting for a
 // slot, the same discipline requestLogPusher's full buffer already follows
-// for the same reason — see AGENTS.md's "任何一跳都不得无界缓冲".
+// for the same reason — see the rule "任何一跳都不得无界缓冲".
 //
 // persist 异步写入一轮，绝不阻塞调用方：并发上限已满时丢弃这一轮并计数，
 // 而不是等待一个空位——与 requestLogPusher 缓冲已满时已经遵循的是同一份
-// 纪律，理由相同——见 AGENTS.md 的「任何一跳都不得无界缓冲」。
+// 纪律，理由相同——见「任何一跳都不得无界缓冲」。
 func (p *responsePersister) persist(responseID, tenantID, previousResponseID, model string, messages json.RawMessage) {
 	if p == nil {
 		return

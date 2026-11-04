@@ -7,7 +7,7 @@
 // interface, on the three default ports. Nothing here scans a subnet or
 // speaks mDNS — an Agent that started reaching out to arbitrary hosts on its
 // own would be exactly the kind of "general-purpose proxy" behavior
-// AGENTS.md's security rules rule out for the tunnel, and the same
+// SECURITY.md rules out for the tunnel, and the same
 // restraint applies to this feature. Discovering an instance on another
 // host is a job for an operator explicitly configuring its address, not for
 // this package.

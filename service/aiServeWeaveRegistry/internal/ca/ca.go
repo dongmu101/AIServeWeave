@@ -2,7 +2,7 @@
 // pair that never leaves this process, and the signing operations that turn a
 // node's or this process's own CSR into a certificate. Nothing here is
 // shared with Agent or Gateway — the CA private key is the one piece of the
-// system that must stay confined to a single process, per AGENTS.md's
+// system that must stay confined to a single process, per the project's
 // security rule that it never reaches a Gateway replica.
 package ca
 

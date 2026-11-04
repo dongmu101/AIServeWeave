@@ -128,7 +128,7 @@ func (h *handlers) listPersistedArtifacts(w http.ResponseWriter, r *http.Request
 
 // downloadArtifact implements GET /v1/artifacts/{artifact_id}, streaming the
 // body straight through: a large generation is never held whole in this
-// process, per AGENTS.md's "任何一跳都不得无界缓冲".
+// process, per the rule "任何一跳都不得无界缓冲".
 //
 // When jobPersister has already copied this artifact into h.storage
 // (STATUS.md's P04), that copy is preferred — it survives after the node
@@ -140,7 +140,7 @@ func (h *handlers) listPersistedArtifacts(w http.ResponseWriter, r *http.Request
 // has no StorageKey to try in the first place.
 //
 // downloadArtifact 实现 GET /v1/artifacts/{artifact_id}，把响应体直通转发：
-// 一次大的生成从不被本进程完整持有，对应 AGENTS.md 的「任何一跳都不得无界
+// 一次大的生成从不被本进程完整持有，对应「任何一跳都不得无界
 // 缓冲」。
 //
 // 当 jobPersister 已经把这个产物复制进 h.storage（STATUS.md 的 P04）时，

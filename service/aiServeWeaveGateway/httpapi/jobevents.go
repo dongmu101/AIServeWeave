@@ -97,13 +97,13 @@ func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 	// carries the cancel across the tunnel to the Agent. Nothing else is
 	// needed to keep this goroutine from outliving its watcher — which matters
 	// more here than on a chat stream, since a workflow can idle for the whole
-	// length of a generation, per AGENTS.md's "任何一跳都不得无界缓冲".
+	// length of a generation, per the rule "任何一跳都不得无界缓冲".
 	//
 	// 调用方一走了之时，下面的 Recv 会自行解除阻塞：tunnelserver.Response.Recv 自己
 	// select 请求的 context（call.go），因此取消会让它立即返回，随后被 defer 的 Close
 	// 把这次取消经隧道送给 Agent。要让这个协程不比它的旁观者活得更久，不需要别的东西
 	// ——而这一点在这里比在聊天流上更要紧，因为一个工作流可以空闲整个生成过程之久，
-	// 对应 AGENTS.md 的「任何一跳都不得无界缓冲」。
+	// 对应「任何一跳都不得无界缓冲」。
 
 	for {
 		ev, err := stream.Recv()

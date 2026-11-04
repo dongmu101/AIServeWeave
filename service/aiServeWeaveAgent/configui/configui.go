@@ -17,7 +17,7 @@
 // Binding anywhere but loopback is refused outright, not just discouraged
 // in a flag's help text: this form can repoint the Agent at a different
 // Gateway and Registry, so exposing it beyond 127.0.0.1 would hand a
-// network attacker exactly the kind of remote-control surface AGENTS.md's
+// network attacker exactly the kind of remote-control surface SECURITY.md's
 // security line "Agent 只主动出站建连，从不监听公网端口" exists to prevent.
 //
 // configui 是 Agent 的本地设置页面，默认随 Agent 启动，也可通过 -config-ui
@@ -37,7 +37,7 @@
 // 绑定到回环地址之外的地址会被直接拒绝，而不只是在 flag 的帮助文本里劝
 // 阻：这个表单能让 Agent 改去连接不同的 Gateway 和 Registry，把它暴露在
 // 127.0.0.1 之外，等于把网络攻击者最想要的那种远程控制入口双手奉上——这
-// 正是 AGENTS.md 安全红线「Agent 只主动出站建连，从不监听公网端口」要挡住
+// 正是 SECURITY.md 安全边界「Agent 只主动出站建连，从不监听公网端口」要挡住
 // 的事。
 package configui
 

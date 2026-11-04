@@ -80,7 +80,7 @@ func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.Workf
 // failure, returned unchanged if the wait budget runs out without a
 // candidate becoming available.
 //
-// The wait is bounded on two independent axes, per AGENTS.md's "任何一跳都
+// The wait is bounded on two independent axes, per the rule "任何一跳都
 // 不得无界缓冲": a maximum duration (s.queueMaxWait) and a maximum number of
 // concurrently queued submissions (the s.queueSlots semaphore). A submission
 // that finds the semaphore already full is rejected immediately — it does
@@ -90,7 +90,7 @@ func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.Workf
 // 发现每一个当前候选都以可重试方式繁忙之后才会走到这里；firstErr 是那次耗尽尝试的
 // 失败，等待预算用完、仍没有候选可用时会原样返回它。
 //
-// 等待在两条彼此独立的轴上都设了界，对应 AGENTS.md「任何一跳都不得无界缓冲」：一个
+// 等待在两条彼此独立的轴上都设了界，对应「任何一跳都不得无界缓冲」：一个
 // 最长时长（s.queueMaxWait）与一个最大并发排队数（s.queueSlots 信号量）。发现信号量
 // 已满的提交会被立即拒绝——它不会成为排队的第三条无界轴。
 func (s *Scheduler) queueSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest, firstErr error) (runtime.WorkflowRun, Candidate, error) {

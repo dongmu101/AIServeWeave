@@ -20,8 +20,8 @@
 // configui package's local setup page, so YAML alone is the on-disk
 // contract; nothing here is ever sent to or accepted from the Gateway or
 // control plane. viper is a deliberate, recorded exception to the Agent's
-// otherwise minimal dependency footprint — see AGENTS.md's dependency
-// section for why.
+// otherwise minimal dependency footprint — see docs/agents/dependencies.md
+// for why.
 //
 // agentconfig 是 -config 的落盘契约：运维把新节点接进来最常需要的两件事——
 // 声明哪些本地推理后端、以及怎么联系远程 Gateway——用 YAML 表达以降低编辑
@@ -39,7 +39,7 @@
 // 件存在的全部意义就是给人手改、或者由 configui 包的本地设置页面生成，因
 // 此 YAML 就是唯一的落盘约定；这里的任何字段都从不发给、也从不接受
 // Gateway 或控制面下发。viper 是 Agent 本来克制的依赖footprint 上一次刻意、
-// 记录在案的例外——理由见 AGENTS.md 依赖那一节。
+// 记录在案的例外——理由见 docs/agents/dependencies.md。
 package agentconfig
 
 import (

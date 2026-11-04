@@ -9,7 +9,7 @@
 // backoff, because the control plane charges prepaid balances from this
 // ledger and a dropped batch is usage nobody pays for. The retry is safe
 // because the control plane deduplicates on request id, and it stays bounded
-// (AGENTS.md's "任何一跳都不得无界缓冲"): records awaiting retry are capped at
+// (the rule "任何一跳都不得无界缓冲"): records awaiting retry are capped at
 // BufferSize of their own, beside the channel's, and the oldest batches are
 // dropped, counted, once it is exceeded. A batch the control plane refuses
 // (ErrUsageBatchRejected) is dropped at once, and one that keeps failing is
@@ -23,7 +23,7 @@
 //
 // 与 requestlogpush.go 不同，它会保留失败的批次并按退避重试，因为控制面依据这份
 // 账本从预付余额中扣费，丢掉一批就是一批没人付钱的用量。重试是安全的，因为控制面按
-// 请求 id 去重；重试也是有界的（AGENTS.md 的"任何一跳都不得无界缓冲"）：待重试的
+// 请求 id 去重；重试也是有界的（"任何一跳都不得无界缓冲"）：待重试的
 // 记录在 channel 之外另有一条 BufferSize 上界，超出时丢弃最旧的批次并计数。被控制面
 // 拒绝的批次（ErrUsageBatchRejected）立即丢弃，持续失败的批次在
 // MaxUsageLedgerBatchAttempts 次后丢弃，任何一个批次都不能永远挡住后面的批次。

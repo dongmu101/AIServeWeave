@@ -18,7 +18,7 @@ import (
 )
 
 // fakeClock is a minimal runtime.Clock a test fully controls, matching
-// AGENTS.md's "tests never advance time with a real time.Sleep" convention.
+// CONTRIBUTING.md's "tests never advance time with a real time.Sleep" convention.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time

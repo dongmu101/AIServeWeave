@@ -97,10 +97,10 @@ const (
 	// MetricQueueRejectedTotal counts submissions that could not even enter
 	// the queue because Config.QueueMaxWaiters concurrent waiters were
 	// already there. This is the queue's own bound working as designed
-	// (AGENTS.md's "任何一跳都不得无界缓冲"), not an error.
+	// (the rule "任何一跳都不得无界缓冲"), not an error.
 	//
 	// MetricQueueRejectedTotal 统计因为 Config.QueueMaxWaiters 个并发等待者已经占满
-	// 而连排队都排不进去的提交。这是队列自身边界按设计生效（AGENTS.md 的「任何一跳
+	// 而连排队都排不进去的提交。这是队列自身边界按设计生效（「任何一跳
 	// 都不得无界缓冲」），不是一个错误。
 	MetricQueueRejectedTotal = "gateway_scheduler_queue_rejected_total"
 )

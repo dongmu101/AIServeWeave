@@ -3,13 +3,13 @@
 // Detection goes through os/exec against platform tools already installed
 // with the OS (Linux's /proc/meminfo and nvidia-smi, macOS's sysctl) rather
 // than a library such as gopsutil or an NVML binding, so the Agent's
-// dependency line stays exactly what AGENTS.md requires: "Agent 与 Registry
+// dependency line stays what docs/agents/dependencies.md requires: "Agent 与 Registry
 // 的直接依赖只有 gRPC、protobuf 与 coder/websocket".
 //
 // hostresources 探测本节点的 CPU、内存与 GPU 容量，供隧道握手的 NodeResources
 // 使用（STATUS.md 的 P2 资源采集）。探测一律经由 os/exec 调用系统自带工具
 // （Linux 的 /proc/meminfo 与 nvidia-smi、macOS 的 sysctl），而不是引入
-// gopsutil 一类的库或 NVML binding，这样 Agent 的依赖线就仍是 AGENTS.md 要求的
+// gopsutil 一类的库或 NVML binding，这样 Agent 的依赖线就仍是 docs/agents/dependencies.md 要求的
 // 「Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 coder/websocket」。
 //
 // DiskFreeBytes (diskfree_unix.go / diskfree_other.go) is a separate,

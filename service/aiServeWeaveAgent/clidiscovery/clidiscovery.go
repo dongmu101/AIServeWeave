@@ -6,15 +6,15 @@
 // with the Gateway and only probes loopback HTTP backends, while a CLI runtime
 // spends the local subscription account and must stay an Agent-only decision.
 // The runtime is still declared locally (by this process, never by a Gateway),
-// and it honors the local runtime allowlist, so the rules for CLI runtimes in
-// AGENTS.md hold.
+// and it honors the local runtime allowlist, so the local-only rules for CLI
+// runtimes hold.
 //
 // Package clidiscovery 在本机已安装并登录 Codex CLI 时自动注册它，节点所有者执行过
 // `codex login` 之后不必再手写运行时声明。
 //
 // 它放在 Agent 而不是 common/localdiscovery：后者与 Gateway 共用，只探测回环 HTTP 后端，
 // 而 CLI 运行时会消耗本机订阅账户，必须只由 Agent 决定。运行时仍是本地声明（由本进程而非
-// Gateway 声明），并遵守本地运行时白名单，因此 AGENTS.md 对 CLI 运行时的约束依然成立。
+// Gateway 声明），并遵守本地运行时白名单，因此 CLI 运行时只能本地声明的约束依然成立。
 package clidiscovery
 
 import (

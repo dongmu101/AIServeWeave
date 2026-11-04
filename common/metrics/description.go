@@ -5,7 +5,7 @@
 // It deliberately has no third-party dependency. The exposition format is a
 // stable, documented text protocol, and the alternative — a client library —
 // would pull a transitive tree into every binary in exchange for code this
-// package states in a few hundred lines. AGENTS.md's rule applies: what the
+// package states in a few hundred lines. docs/agents/dependencies.md applies: what the
 // standard library can do, no dependency does.
 //
 // The registry does not invent metric names. Each package that records owns a
@@ -19,7 +19,7 @@
 // 以及各服务在自己 /metrics 端点上导出的 Prometheus 文本格式。
 //
 // 它刻意不引入第三方依赖。导出格式本身是稳定且有文档的文本协议，而换成客户端库
-// 就是为几百行能写清楚的代码，往每个二进制里拖进一整棵传递依赖。AGENTS.md 的
+// 就是为几百行能写清楚的代码，往每个二进制里拖进一整棵传递依赖。docs/agents/dependencies.md 的
 // 规则在这里适用：标准库能解决的不引入依赖。
 //
 // 注册表不自造指标名。每个做记录的包各自持有一张 Descriptions 表，声明自己的

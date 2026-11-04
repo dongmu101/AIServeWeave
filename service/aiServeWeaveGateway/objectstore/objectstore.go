@@ -10,7 +10,7 @@
 //
 // Every implementation streams: Put reads its body and Open returns a body
 // the caller reads, neither ever buffering a whole object in memory, per
-// AGENTS.md's "任何一跳都不得无界缓冲". A caller that needs the object's
+// the rule "任何一跳都不得无界缓冲". A caller that needs the object's
 // byte size or hash for its own metadata computes it while streaming (e.g.
 // with io.TeeReader), not by asking this package to read the object twice.
 //
@@ -22,7 +22,7 @@
 // 存储，WebDAV 是本包为 NAS 场景补上的第三个选项。
 //
 // 每个实现都是流式的：Put 读取它的 body，Open 返回一个调用方自行读取的 body，
-// 两者都不会把整个对象缓冲进内存，对应 AGENTS.md 的「任何一跳都不得无界缓冲」。
+// 两者都不会把整个对象缓冲进内存，对应「任何一跳都不得无界缓冲」。
 // 调用方如果需要对象的字节数或哈希用于自己的元数据，应当在流式传输的同时算出
 // （比如用 io.TeeReader），而不是要求本包把对象读两遍。
 package objectstore

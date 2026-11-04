@@ -85,7 +85,7 @@ const imagesPollInterval = 500 * time.Millisecond
 // which bounds a live pull a caller streams through downloadArtifact:
 // base64-inflating a full-sized artifact into one JSON response body is not
 // something a synchronous handler should ever attempt, so this is the
-// deliberate, bounded exception AGENTS.md's "任何一跳都不得无界缓冲" allows —
+// deliberate, bounded exception the rule "任何一跳都不得无界缓冲" allows —
 // sized for a real generated image, not a video or a multi-hundred-megabyte
 // batch.
 //
@@ -93,7 +93,7 @@ const imagesPollInterval = 500 * time.Millisecond
 // 读入内存时的字节数上限。它刻意远小于 ComfyUI 适配器自身的 MaxArtifactBytes——
 // 后者限定的是调用方经 downloadArtifact 流式拉取的实时下载：把一个足尺寸产物
 // base64 膨胀进一个 JSON 响应体，不是一个同步处理器该做的事，因此这是
-// AGENTS.md「任何一跳都不得无界缓冲」允许的、刻意且有界的例外——按真实生成
+// 「任何一跳都不得无界缓冲」允许的、刻意且有界的例外——按真实生成
 // 图像的量级设定，不是视频或几百兆的一批。
 const MaxImageResponseBytes = 32 << 20
 
