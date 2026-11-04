@@ -218,36 +218,45 @@ type nativeStream struct {
 // Messages 校验原生语义，并保留已归属的工具会话。
 func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
 	if req.ValidateProtocol() != nil {
-		return nil, claudeError(runtime.ErrorCapability)
+		return nil, r.rejectMessages(runtime.ErrorCapability, "invalid_protocol_selectors", nil)
 	}
-	if req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 || len(req.JSON) > tunnelwire.MaxMessagesJSONBytes {
-		return nil, claudeError(runtime.ErrorInvalidConfig)
+	if req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 {
+		return nil, r.rejectMessages(runtime.ErrorInvalidConfig, "invalid_principal", nil)
+	}
+	if len(req.JSON) > tunnelwire.MaxMessagesJSONBytes {
+		return nil, r.rejectMessages(runtime.ErrorInvalidConfig, "request_too_large", nil)
 	}
 	var parsed messagesRequest
 	if decodeMessagesRequest(req.JSON, &parsed) != nil {
-		return nil, claudeError(runtime.ErrorCapability)
+		return nil, r.rejectMessages(runtime.ErrorCapability, "unsupported_request_shape", nil)
 	}
 	parsed.Model = req.Model
 	parsed.apiVersion, parsed.betaFeatures = req.APIVersion, req.BetaFeatures
 	r.modelsMu.RLock()
 	_, known := r.models[req.Model]
 	r.modelsMu.RUnlock()
-	if !known || parsed.validate(req.Model) != nil {
-		return nil, claudeError(runtime.ErrorCapability)
+	if !known {
+		return nil, r.rejectMessages(runtime.ErrorCapability, "unknown_model", nil)
+	}
+	if parsed.validate(req.Model) != nil {
+		return nil, r.rejectMessages(runtime.ErrorCapability, "unsupported_request_config", nil)
 	}
 	parsed.cliModel = req.Model
 	s, err := r.bridge.acquire(principal{req.TenantID, req.KeyID}, parsed)
 	if err != nil {
 		code := runtime.ErrorInvalidConfig
+		reason := "session_rejected"
 		switch {
 		case errors.Is(err, errCapacity):
 			code = runtime.ErrorBackpressure
+			reason = "capacity"
 		case errors.Is(err, errClosed):
 			// Closing is not a caller mistake, and a new session may try another node.
 			// 正在关闭不是调用方的错误，新会话可以换节点。
 			code = runtime.ErrorClosed
+			reason = "closed"
 		}
-		return nil, claudeError(code)
+		return nil, r.rejectMessages(code, reason, err)
 	}
 	ctx, cancel := context.WithCancel(parent)
 	stopRoot := context.AfterFunc(r.root, cancel)

@@ -636,7 +636,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 				continue
 			}
 			if _, exists := results[block.ToolUseID]; exists {
-				return nil, errMessages
+				return nil, rejectAdmission(errMessages, "duplicate_tool_result")
 			}
 			content, _ := inputBlocks(block.Content)
 			results[block.ToolUseID] = toolResult{Content: content, IsError: block.IsError}
@@ -649,14 +649,17 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	}
 	if len(results) > 0 {
 		held := false
+		var mismatch error
 		for s := range b.sessions {
 			s.mu.Lock()
+			sessionHeld := false
 			for id := range results {
 				// A cancelled (evicted or expired) session no longer holds its
 				// calls; their results resume in a new session below.
 				// 已取消（被淘汰或过期）的会话不再持有其调用，结果在下面的新会话中恢复。
-				held = held || (s.ctx.Err() == nil && s.pending[id] != nil)
+				sessionHeld = sessionHeld || (s.ctx.Err() == nil && s.pending[id] != nil)
 			}
+			held = held || sessionHeld
 			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
 			if matches {
 				for id := range results {
@@ -677,6 +680,9 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 				s.touch()
 				return s, nil
 			}
+			if sessionHeld && mismatch == nil {
+				mismatch = continuationMismatch(s, owner, req, results, last)
+			}
 			s.mu.Unlock()
 		}
 		// A session that still holds an ID saw a mismatched request, and an ID
@@ -695,8 +701,11 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		// 恢复不触及任何存活的 CLI，因此不记录任何状态：与无状态的 Messages API 一样，
 		// 同一段历史可以再次发送——回合失败后的重试，或客户端并发的旁路请求——各自开启
 		// 自己的会话。
-		if held || b.consumedLocked(results) {
-			return nil, errCallRejected
+		if held {
+			return nil, mismatch
+		}
+		if b.consumedLocked(results) {
+			return nil, rejectAdmission(errCallRejected, "continuation_consumed")
 		}
 	}
 	// Public CLI input cannot faithfully inject assistant history, so a new
@@ -707,14 +716,14 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	// 提问，或恢复孤立回合的工具结果。此前的回合只以 sessionPrompt 渲染的带角色
 	// 文本记录交给 CLI。
 	if len(req.Safeguards) == 0 && req.Messages[len(req.Messages)-1].Role != "user" {
-		return nil, errMessages
+		return nil, rejectAdmission(errMessages, "last_message_not_user")
 	}
 	for _, block := range last {
 		if len(req.Safeguards) > 0 {
 			break
 		}
 		if block.Type != "text" && block.Type != "image" && block.Type != "document" && block.Type != "video" && block.Type != "tool_result" {
-			return nil, errMessages
+			return nil, rejectAdmission(errMessages, "unsupported_last_content")
 		}
 	}
 	if b.liveLocked() >= b.capacity && !b.evictIdleLocked() {

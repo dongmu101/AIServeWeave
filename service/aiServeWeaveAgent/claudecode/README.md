@@ -128,6 +128,10 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
 
+进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误现在也携带本地运行时 ID，便于关联 Gateway 日志；公开文案、续接校验及结果消费规则保持原样。此诊断需更新并重启 Agent，Gateway 无需修改。
+
+手动用 `go run` 启动时，日志默认写到终端，不会自动生成部署脚本使用的 `agent.log`。可用 `go run . -config /绝对路径/agent.yaml -log-file /绝对路径/agent.log` 留存日志，再查 `Claude Messages request rejected` 和 `Claude Messages round failed`。对齐日志时使用时间戳自身的 UTC 偏移，例如 Agent 的 `21:03+09:00` 与 Gateway 的 `12:03Z` 是同一时刻。
+
 客户端的 `native Messages stream failed` 只能说明流已开始后失败，不能据此区分协议、进程或上游问题。工具结果已经投递或应用情况不确定时，Gateway 会消费本轮续接，重试同一批工具结果可能返回 409 `Messages continuation unavailable`；这个错误与前一次流失败需要分开判断。排查时按同一时区对齐 Agent 与 Gateway 日志，并结合请求 ID、运行时和上述错误分类定位；新建会话可以避开旧续接，但不能修复原始流故障。
 
 ## 生命周期与限额

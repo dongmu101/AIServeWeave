@@ -1,0 +1,418 @@
+diff --git a/service/aiServeWeaveAgent/claudecode/messages.go b/service/aiServeWeaveAgent/claudecode/messages.go
+--- a/service/aiServeWeaveAgent/claudecode/messages.go
++++ b/service/aiServeWeaveAgent/claudecode/messages.go
+@@ -624,7 +624,7 @@
+ 				continue
+ 			}
+ 			if _, exists := results[block.ToolUseID]; exists {
+-				return nil, errMessages
++				return nil, rejectAdmission(errMessages, "duplicate_tool_result")
+ 			}
+ 			content, _ := inputBlocks(block.Content)
+ 			results[block.ToolUseID] = toolResult{Content: content, IsError: block.IsError}
+@@ -637,14 +637,17 @@
+ 	}
+ 	if len(results) > 0 {
+ 		held := false
++		var mismatch error
+ 		for s := range b.sessions {
+ 			s.mu.Lock()
++			sessionHeld := false
+ 			for id := range results {
+ 				// A cancelled (evicted or expired) session no longer holds its
+ 				// calls; their results resume in a new session below.
+ 				// 已取消（被淘汰或过期）的会话不再持有其调用，结果在下面的新会话中恢复。
+-				held = held || (s.ctx.Err() == nil && s.pending[id] != nil)
+-			}
++				sessionHeld = sessionHeld || (s.ctx.Err() == nil && s.pending[id] != nil)
++			}
++			held = held || sessionHeld
+ 			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
+ 			if matches {
+ 				for id := range results {
+@@ -664,6 +667,9 @@
+ 				s.mu.Unlock()
+ 				s.touch()
+ 				return s, nil
++			}
++			if sessionHeld && mismatch == nil {
++				mismatch = continuationMismatch(s, owner, req, results, last)
+ 			}
+ 			s.mu.Unlock()
+ 		}
+@@ -683,8 +689,11 @@
+ 		// 恢复不触及任何存活的 CLI，因此不记录任何状态：与无状态的 Messages API 一样，
+ 		// 同一段历史可以再次发送——回合失败后的重试，或客户端并发的旁路请求——各自开启
+ 		// 自己的会话。
+-		if held || b.consumedLocked(results) {
+-			return nil, errCallRejected
++		if held {
++			return nil, mismatch
++		}
++		if b.consumedLocked(results) {
++			return nil, rejectAdmission(errCallRejected, "continuation_consumed")
+ 		}
+ 	}
+ 	// Public CLI input cannot faithfully inject assistant history, so a new
+@@ -695,14 +704,14 @@
+ 	// 提问，或恢复孤立回合的工具结果。此前的回合只以 sessionPrompt 渲染的带角色
+ 	// 文本记录交给 CLI。
+ 	if len(req.Safeguards) == 0 && req.Messages[len(req.Messages)-1].Role != "user" {
+-		return nil, errMessages
++		return nil, rejectAdmission(errMessages, "last_message_not_user")
+ 	}
+ 	for _, block := range last {
+ 		if len(req.Safeguards) > 0 {
+ 			break
+ 		}
+ 		if block.Type != "text" && block.Type != "image" && block.Type != "tool_result" {
+-			return nil, errMessages
++			return nil, rejectAdmission(errMessages, "unsupported_last_content")
+ 		}
+ 	}
+ 	if b.liveLocked() >= b.capacity && !b.evictIdleLocked() {
+diff --git a/service/aiServeWeaveAgent/claudecode/runtime.go b/service/aiServeWeaveAgent/claudecode/runtime.go
+--- a/service/aiServeWeaveAgent/claudecode/runtime.go
++++ b/service/aiServeWeaveAgent/claudecode/runtime.go
+@@ -208,36 +208,45 @@
+ // Messages 校验原生语义，并保留已归属的工具会话。
+ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
+ 	if req.ValidateProtocol() != nil {
+-		return nil, claudeError(runtime.ErrorCapability)
+-	}
+-	if req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 || len(req.JSON) > tunnelwire.MaxMessagesJSONBytes {
+-		return nil, claudeError(runtime.ErrorInvalidConfig)
++		return nil, r.rejectMessages(runtime.ErrorCapability, "invalid_protocol_selectors", nil)
++	}
++	if req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 {
++		return nil, r.rejectMessages(runtime.ErrorInvalidConfig, "invalid_principal", nil)
++	}
++	if len(req.JSON) > tunnelwire.MaxMessagesJSONBytes {
++		return nil, r.rejectMessages(runtime.ErrorInvalidConfig, "request_too_large", nil)
+ 	}
+ 	var parsed messagesRequest
+ 	if decodeMessagesRequest(req.JSON, &parsed) != nil {
+-		return nil, claudeError(runtime.ErrorCapability)
++		return nil, r.rejectMessages(runtime.ErrorCapability, "unsupported_request_shape", nil)
+ 	}
+ 	parsed.Model = req.Model
+ 	parsed.apiVersion, parsed.betaFeatures = req.APIVersion, req.BetaFeatures
+ 	r.modelsMu.RLock()
+ 	_, known := r.models[req.Model]
+ 	r.modelsMu.RUnlock()
+-	if !known || parsed.validate(req.Model) != nil {
+-		return nil, claudeError(runtime.ErrorCapability)
++	if !known {
++		return nil, r.rejectMessages(runtime.ErrorCapability, "unknown_model", nil)
++	}
++	if parsed.validate(req.Model) != nil {
++		return nil, r.rejectMessages(runtime.ErrorCapability, "unsupported_request_config", nil)
+ 	}
+ 	parsed.cliModel = req.Model
+ 	s, err := r.bridge.acquire(principal{req.TenantID, req.KeyID}, parsed)
+ 	if err != nil {
+ 		code := runtime.ErrorInvalidConfig
++		reason := "session_rejected"
+ 		switch {
+ 		case errors.Is(err, errCapacity):
+ 			code = runtime.ErrorBackpressure
++			reason = "capacity"
+ 		case errors.Is(err, errClosed):
+ 			// Closing is not a caller mistake, and a new session may try another node.
+ 			// 正在关闭不是调用方的错误，新会话可以换节点。
+ 			code = runtime.ErrorClosed
+-		}
+-		return nil, claudeError(code)
++			reason = "closed"
++		}
++		return nil, r.rejectMessages(code, reason, err)
+ 	}
+ 	ctx, cancel := context.WithCancel(parent)
+ 	stopRoot := context.AfterFunc(r.root, cancel)
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go b/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go
+new file mode 100644
+--- /dev/null
++++ b/service/aiServeWeaveAgent/claudecode/messages_diagnostics.go
+@@ -0,0 +1,99 @@
++package claudecode
++
++import (
++	"errors"
++
++	"AIServeWeave/common/runtime"
++)
++
++// admissionError retains only fixed local categories, never caller-supplied data.
++// admissionError 仅保留本地固定分类，不携带调用方提交的数据。
++type admissionError struct {
++	cause   error
++	reason  string
++	changes []string
++}
++
++func (e *admissionError) Error() string { return e.cause.Error() }
++func (e *admissionError) Unwrap() error { return e.cause }
++
++func rejectAdmission(cause error, reason string) error {
++	return &admissionError{cause: cause, reason: reason}
++}
++
++// continuationMismatch inspects a session while its mutex is held.
++// continuationMismatch 在持有会话锁时检查不匹配原因，仅返回固定分类及字段名。
++func continuationMismatch(s *messagesSession, owner principal, req messagesRequest, results map[string]toolResult, last []messageBlock) error {
++	reason := "continuation_tool_ids_mismatch"
++	var changes []string
++	switch {
++	case s.owner != owner:
++		reason = "continuation_owner_mismatch"
++	case s.ctx.Err() != nil:
++		reason = "continuation_canceled"
++	case s.busy:
++		reason = "continuation_busy"
++	case !s.waiting:
++		reason = "continuation_not_waiting"
++	case sessionConfig(s.request) != sessionConfig(req):
++		reason = "continuation_config_mismatch"
++		changes = sessionConfigChanges(s.request, req)
++	case s.historyHash(req.Messages[:len(req.Messages)-1]) != s.history:
++		reason = "continuation_history_mismatch"
++	case len(last) != len(results):
++		reason = "continuation_extra_content"
++	case len(results) != len(s.pending):
++		reason = "continuation_tool_count_mismatch"
++	default:
++		for id := range results {
++			if call := s.pending[id]; call != nil && call.delivered {
++				reason = "continuation_already_delivered"
++				break
++			}
++		}
++	}
++	return &admissionError{cause: errCallRejected, reason: reason, changes: changes}
++}
++
++// sessionConfigChanges names changed settings without logging their values or hashes.
++// sessionConfigChanges 只列出变更设置的字段名，不记录值或哈希。
++func sessionConfigChanges(a, b messagesRequest) []string {
++	var changed []string
++	for _, field := range []struct {
++		name string
++		a, b any
++	}{
++		{"model", a.Model, b.Model},
++		{"max_tokens", a.MaxTokens, b.MaxTokens},
++		{"system", a.System, b.System},
++		{"tools", a.Tools, b.Tools},
++		{"tool_choice", a.ToolChoice, b.ToolChoice},
++		{"thinking", a.Thinking, b.Thinking},
++		{"output_config", a.OutputConfig, b.OutputConfig},
++		{"temperature", a.Temperature, b.Temperature},
++		{"safeguards", a.Safeguards, b.Safeguards},
++		{"stop_sequences", a.StopSequences, b.StopSequences},
++		{"api_version", a.apiVersion, b.apiVersion},
++		{"beta_features", a.betaFeatures, b.betaFeatures},
++	} {
++		if canonical(field.a) != canonical(field.b) {
++			changed = append(changed, field.name)
++		}
++	}
++	return changed
++}
++
++func (r *Runtime) rejectMessages(code runtime.ErrorCode, reason string, cause error) error {
++	var rejected *admissionError
++	if errors.As(cause, &rejected) {
++		reason = rejected.reason
++	}
++	attrs := []any{"runtime_id", r.cfg.ID, "code", string(code), "reason", reason}
++	if rejected != nil && len(rejected.changes) > 0 {
++		attrs = append(attrs, "config_changes", rejected.changes)
++	}
++	r.logger.Warn("Claude Messages request rejected", attrs...)
++	failure := claudeError(code).(*runtime.RuntimeError)
++	failure.RuntimeID = r.cfg.ID
++	return failure
++}
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go b/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go
+new file mode 100644
+--- /dev/null
++++ b/service/aiServeWeaveAgent/claudecode/messages_diagnostics_test.go
+@@ -0,0 +1,178 @@
++package claudecode
++
++import (
++	"bytes"
++	"encoding/json"
++	"errors"
++	"io"
++	"log/slog"
++	"strings"
++	"testing"
++
++	"AIServeWeave/common/runtime"
++)
++
++// TestMessagesAdmissionDiagnostics exercises rejections before a generation round starts.
++// TestMessagesAdmissionDiagnostics 覆盖进入生成回合之前的拒绝，不泄露请求内容。
++func TestMessagesAdmissionDiagnostics(t *testing.T) {
++	for _, tc := range []struct {
++		name, reason, changed string
++		mutate                func(*messagesRequest)
++		otherOwner            bool
++		version, beta         string
++		consumed              bool
++	}{
++		{name: "history", reason: "continuation_history_mismatch", mutate: func(r *messagesRequest) {
++			r.Messages[0].Content = json.RawMessage(`"private-marker changed history"`)
++		}},
++		{name: "tools", reason: "continuation_config_mismatch", changed: "tools", mutate: func(r *messagesRequest) {
++			r.Tools[0].Description = "private-marker changed tool"
++		}},
++		{name: "system", reason: "continuation_config_mismatch", changed: "system", mutate: func(r *messagesRequest) {
++			r.System = json.RawMessage(`"private-marker system"`)
++		}},
++		{name: "output budget", reason: "continuation_config_mismatch", changed: "max_tokens", mutate: func(r *messagesRequest) { r.MaxTokens++ }},
++		{name: "extra user text", reason: "continuation_extra_content", mutate: func(r *messagesRequest) {
++			var list []messageBlock
++			_ = json.Unmarshal(r.Messages[2].Content, &list)
++			list = append(list, messageBlock{Type: "text", Text: "private-marker reminder"})
++			r.Messages[2].Content, _ = json.Marshal(list)
++		}},
++		{name: "duplicate tool result", reason: "duplicate_tool_result", mutate: func(r *messagesRequest) {
++			var list []messageBlock
++			_ = json.Unmarshal(r.Messages[2].Content, &list)
++			r.Messages[2].Content, _ = json.Marshal(append(list, list[0]))
++		}},
++		{name: "identity", reason: "continuation_owner_mismatch", otherOwner: true},
++		{name: "version", reason: "continuation_config_mismatch", changed: "api_version", version: "2023-06-01"},
++		{name: "beta", reason: "continuation_config_mismatch", changed: "beta_features", beta: "future-feature"},
++		{name: "consumed", reason: "continuation_consumed", consumed: true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var logs bytes.Buffer
++			rt, err := NewFactory("unused")(runtime.Config{ID: "local", Kind: runtime.KindClaude}, runtime.Dependencies{
++				Clock: runtime.NewSystemClock(), Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
++			})
++			if err != nil {
++				t.Fatal(err)
++			}
++			r := rt.(*Runtime)
++			defer r.Close()
++			r.models = map[string]struct{}{"sonnet": {}}
++			r.bridge.keys = map[string]principal{"first": {"tenant", "key"}}
++			r.bridge.start = fixtureStart
++			req := testMessagesRequest()
++			req.Messages[0].Content = json.RawMessage(`"private-marker use the caller tool"`)
++			valid := continuation(t, req, sendMessages(r.bridge, req, "first"), "private-marker tool output")
++			if tc.consumed {
++				if w := sendMessages(r.bridge, valid, "first"); w.Code != 200 {
++					t.Fatalf("valid round failed: %d", w.Code)
++				}
++			}
++			data, _ := json.Marshal(valid)
++			var changed messagesRequest
++			_ = json.Unmarshal(data, &changed)
++			if tc.mutate != nil {
++				tc.mutate(&changed)
++			}
++			data, _ = json.Marshal(changed)
++			request := runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", JSON: data, APIVersion: tc.version, BetaFeatures: tc.beta}
++			if tc.otherOwner {
++				request.KeyID = "private-marker-other-owner"
++			}
++			_, err = r.Messages(t.Context(), request)
++			var failure *runtime.RuntimeError
++			if !errors.As(err, &failure) || failure.Code != runtime.ErrorInvalidConfig {
++				t.Fatalf("error = %v, want invalid_config", err)
++			}
++			var record struct {
++				Message string   `json:"msg"`
++				Runtime string   `json:"runtime_id"`
++				Reason  string   `json:"reason"`
++				Changes []string `json:"config_changes"`
++			}
++			if json.Unmarshal(logs.Bytes(), &record) != nil || record.Message != "Claude Messages request rejected" || record.Runtime != "local" || record.Reason != tc.reason {
++				t.Fatalf("diagnostic = %s, want runtime local, reason %s", &logs, tc.reason)
++			}
++			if tc.changed != "" && (len(record.Changes) != 1 || record.Changes[0] != tc.changed) {
++				t.Fatalf("config_changes = %v, want [%s]", record.Changes, tc.changed)
++			}
++			if failure.RuntimeID != "local" || strings.Contains(logs.String()+failure.Error(), "private-marker") {
++				t.Fatalf("rejection lost runtime identity or leaked request data")
++			}
++			if tc.consumed {
++				return
++			}
++			// A diagnostic must not advance the pending tool call.
++			// 诊断不能消费待决工具结果；原始请求仍可正常续接。
++			data, _ = json.Marshal(valid)
++			request.KeyID, request.JSON = "key", data
++			request.APIVersion, request.BetaFeatures = "", ""
++			stream, err := r.Messages(t.Context(), request)
++			if err != nil {
++				t.Fatalf("valid continuation after rejection: %v", err)
++			}
++			defer stream.Close()
++			for {
++				_, err = stream.Recv()
++				if err == io.EOF {
++					break
++				}
++				if err != nil {
++					t.Fatal(err)
++				}
++			}
++		})
++	}
++}
++
++func TestMessagesPreflightDiagnostics(t *testing.T) {
++	for _, tc := range []struct {
++		name, reason string
++		code         runtime.ErrorCode
++		mutate       func(*runtime.MessagesRequest)
++	}{
++		{"principal", "invalid_principal", runtime.ErrorInvalidConfig, func(r *runtime.MessagesRequest) { r.KeyID = "" }},
++		{"protocol", "invalid_protocol_selectors", runtime.ErrorCapability, func(r *runtime.MessagesRequest) { r.APIVersion = "private-marker\n" }},
++		{"JSON", "unsupported_request_shape", runtime.ErrorCapability, func(r *runtime.MessagesRequest) { r.JSON = json.RawMessage(`{"private-marker":"unsupported"}`) }},
++		{"model", "unknown_model", runtime.ErrorCapability, func(r *runtime.MessagesRequest) { r.Model = "private-marker-unknown" }},
++		{"config", "unsupported_request_config", runtime.ErrorCapability, func(r *runtime.MessagesRequest) {
++			req := testMessagesRequest()
++			req.MaxTokens = 0
++			r.JSON, _ = json.Marshal(req)
++		}},
++		{"assistant end", "last_message_not_user", runtime.ErrorInvalidConfig, func(r *runtime.MessagesRequest) {
++			req := testMessagesRequest()
++			req.Messages[0].Role = "assistant"
++			r.JSON, _ = json.Marshal(req)
++		}},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			var logs bytes.Buffer
++			rt, err := NewFactory("unused")(runtime.Config{ID: "local", Kind: runtime.KindClaude}, runtime.Dependencies{
++				Clock: runtime.NewSystemClock(), Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
++			})
++			if err != nil {
++				t.Fatal(err)
++			}
++			r := rt.(*Runtime)
++			defer r.Close()
++			r.models = map[string]struct{}{"sonnet": {}}
++			data, _ := json.Marshal(testMessagesRequest())
++			req := runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", JSON: data}
++			tc.mutate(&req)
++			_, err = r.Messages(t.Context(), req)
++			var failure *runtime.RuntimeError
++			if !errors.As(err, &failure) || failure.Code != tc.code || failure.RuntimeID != "local" {
++				t.Fatalf("failure = %v, want runtime local, code %s", err, tc.code)
++			}
++			var record map[string]any
++			if json.Unmarshal(logs.Bytes(), &record) != nil || record["reason"] != tc.reason {
++				t.Fatalf("diagnostic = %s, want reason %s", &logs, tc.reason)
++			}
++			if strings.Contains(logs.String()+failure.Error(), "private-marker") {
++				t.Fatal("request data leaked")
++			}
++		})
++	}
++}
