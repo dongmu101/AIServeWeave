@@ -98,6 +98,35 @@ func MergeMessagesResponseDelta(response map[string]any, event json.RawMessage) 
 	return nil
 }
 
+// MergeMessagesCitation appends a native streamed citation to its original content block.
+// MergeMessagesCitation 将原生流式引用追加到对应的原始内容块。
+func MergeMessagesCitation(block map[string]json.RawMessage, event json.RawMessage) error {
+	var document struct {
+		Delta struct {
+			Type     string          `json:"type"`
+			Citation json.RawMessage `json:"citation"`
+		} `json:"delta"`
+	}
+	failure := &RuntimeError{Code: ErrorProtocol, Message: "invalid native Messages citation"}
+	if json.Unmarshal(event, &document) != nil {
+		return failure
+	}
+	if document.Delta.Type != "citations_delta" {
+		return nil
+	}
+	var citation map[string]json.RawMessage
+	if block == nil || json.Unmarshal(document.Delta.Citation, &citation) != nil || citation == nil {
+		return failure
+	}
+	var citations []json.RawMessage
+	if len(block["citations"]) > 0 && json.Unmarshal(block["citations"], &citations) != nil {
+		return failure
+	}
+	citations = append(citations, document.Delta.Citation)
+	block["citations"], _ = json.Marshal(citations)
+	return nil
+}
+
 // MessagesRuntime preserves caller-executed tools and native message block ordering.
 // MessagesRuntime 保留调用方执行工具的语义与原生消息块顺序。
 type MessagesRuntime interface {

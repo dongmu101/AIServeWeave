@@ -412,6 +412,10 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				protocolError("invalid native Messages block index")
 				return
 			}
+			if guarded && runtime.MergeMessagesCitation(originalContent[event.Index], item.JSON) != nil {
+				protocolError("invalid native Messages citation")
+				return
+			}
 			switch event.Delta.Type {
 			case "text_delta":
 				content[event.Index].Text += event.Delta.Text

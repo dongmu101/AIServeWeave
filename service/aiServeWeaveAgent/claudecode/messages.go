@@ -918,6 +918,9 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				if ev.Index < 0 || ev.Index >= len(content) {
 					return errCLIProtocol
 				}
+				if len(s.request.Safeguards) > 0 && runtime.MergeMessagesCitation(originalContent[ev.Index], item.data) != nil {
+					return errCLIProtocol
+				}
 				switch ev.Delta.Type {
 				case "text_delta":
 					content[ev.Index].Text += ev.Delta.Text

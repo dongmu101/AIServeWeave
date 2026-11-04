@@ -41,13 +41,14 @@
 
 ## Claude Code CLI 接入
 
-`claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行，Agent 的 CLI 只调用隔离的 MCP 桥接工具。支持文本、Messages 内联图片与调用方工具循环，不代表完整 Anthropic API 兼容；Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链仍保持原会话。请求要求思考时（Messages 的 `thinking`、Chat 的 `reasoning_effort`、Responses 的 `reasoning`）以对应预算开启 CLI 思考并透出 thinking 块，客户端回传的思考被丢弃。
+`claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行；带 `safeguards` 的原生请求保留完整结构与工具身份，Agent CLI 不注册本地执行工具，每轮独立调用真实上游。无该字段时继续使用隔离 MCP 桥接，Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链保持原会话；请求要求思考时转换预算，客户端回传的思考被丢弃。支持文本、Messages 内联图片与调用方工具循环，不代表完整 Anthropic API 兼容。
 
-- **验收**：原版 Claude Code 客户端的工具流程只验收过 `claude-sonnet-4-6`；Chat 兼容层验证过 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。其他模型能被目录发现，不代表客户端兼容性已验证。
-- **前提**：Gateway 必须配置控制面 API Key 校验与共享 `-redis-addr`；静态 key 不能用于原生续接。
-- **Messages 图片输入（2026-11-04）**：user 与工具结果支持 base64 JPEG/PNG/GIF/WebP。有图首轮用 CLI `stream-json` 结构化输入，历史图片以编号对应独立图像块，工具图片经 MCP image 返回；图片字节参与续接历史校验。URL、文件与音频仍拒绝；Chat/Responses 图片输入仍不支持。默认测试覆盖真实 mTLS 隧道及模拟 CLI；当前本机无可用订阅登录，真实看图及线上修复尚未验收。仅需更新并重启实际承载 Claude 运行时的 Agent，详见 [图片说明](claudecode/README.md#messages-图片输入)。
-- **边界**：续接固定原节点、不自动重试；原 CLI 已不存在的孤立回合以新会话从文本记录恢复；投递给存活 CLI 的结果 24 小时内拒绝重放；原生请求最多 32 MiB。
-- **终止与诊断**：合法的 `max_tokens`、`stop_sequence`、`refusal`、`model_context_window_exceeded` 保留为终止响应，完整停止后回收 CLI，避免自动续写；自然结束继续校验最终结果与退出状态，成功结果后的 CLI 通知不进入回复。本机失败日志包含固定错误分类，解析器拒绝另带事件行号与固定原因，不记录原始内容。含模拟子进程的离线回归覆盖，Opus 5.5 真实工具流程仍待验收；详见 [故障排查](claudecode/README.md#终止原因与故障排查)。
+- **验收**：未带 `safeguards` 的原版 Claude Code 客户端工具流程只验收过 `claude-sonnet-4-6`；Chat 兼容层验证过 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。其他模型能被目录发现，不代表客户端兼容性已验证。
+- **前提**：Gateway 必须配置控制面 API Key 校验；无 `safeguards` 的 MCP 续接还要求共享 `-redis-addr`。静态 key 不具备该原生路径需要的身份归属。
+- **auto 服务端安全检查（2026-11-04）**：支持 `dangerous_tool_use` / `classifier_context`，经隧道传递 API 版本与 beta，将上游真实 `safeguard_results` 原样返回；安全上下文、原始工具名/ID、结构化历史不重写，不伪造判定。每轮独立，不使用旧 MCP 的一次性续接记录。默认测试覆盖两个 Gateway 副本的 mTLS、JSON/SSE、原始上下文、并行与截断工具流；CLI `2.1.318` 离线实测工具禁用，原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 尚未部署验收。先更新 Agent，再更新 Gateway；客户端需允许配套 beta 并新建会话，详见 [兼容说明](claudecode/README.md#claude-code-auto-服务端安全检查)。
+- **Messages 图片输入（2026-11-04）**：user 与工具结果支持 base64 JPEG/PNG/GIF/WebP。有图首轮用 CLI `stream-json` 结构化输入，历史图片以编号对应独立图像块，工具图片经 MCP image 返回；图片字节参与续接历史校验。URL、文件与音频仍拒绝；Chat/Responses 图片输入仍不支持。默认测试覆盖真实 mTLS 隧道及模拟 CLI；此前图片专项验证时缺少可用订阅登录，真实看图及线上修复仍未验收。仅需更新并重启实际承载 Claude 运行时的 Agent，详见 [图片说明](claudecode/README.md#messages-图片输入)。
+- **边界**：未带 `safeguards` 的续接固定原节点、不自动重试；原 CLI 已不存在的孤立回合以新会话从文本记录恢复；投递给存活 CLI 的结果 24 小时内拒绝重放。带安全上下文的请求依靠调用方完整历史，无状态重试与跨副本调用。原生请求最多 32 MiB。
+- **终止与诊断**：合法的 `max_tokens`、`stop_sequence`、`refusal`、`model_context_window_exceeded` 保留为终止响应，完整停止后回收 CLI，避免自动续写；自然结束继续校验最终结果与退出状态，成功结果后的 CLI 通知不进入回复。本机失败日志包含固定错误分类，解析器拒绝另带事件行号与固定原因，不记录原始内容。含模拟子进程的离线回归覆盖，未带 `safeguards` 的 Opus 5.5 真实工具流程仍待验收；详见 [故障排查](claudecode/README.md#终止原因与故障排查)。
 
 接入步骤见 [README「Claude Code」](README.md#claude-code)，参数与限制见 [Claude 包说明](claudecode/README.md)。
 
