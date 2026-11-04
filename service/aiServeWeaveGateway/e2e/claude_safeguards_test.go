@@ -64,7 +64,7 @@ func claudeSafeguardsProcessFixture(_ []byte, extra map[string]json.RawMessage) 
 		if json.Unmarshal(extra["tools"], &tools) != nil || len(tools) != 1 || tools[0].Name != "read_file" {
 			os.Exit(3)
 		}
-		emit(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "guarded-upstream-id", "name": "read_file", "input": map[string]any{}}})
+		emit(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "guarded-upstream-id", "name": "read_file", "input": map[string]any{}, "caller": map[string]string{"type": "direct"}}})
 		emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "input_json_delta", "partial_json": `{"path":"caller-only.txt"}`}})
 		stop = "tool_use"
 		calls["guarded-upstream-id"] = map[string]any{"type": "evaluated", "outcome": guards[0].Context.Outcome, "opaque": "upstream-verdict"}
@@ -80,7 +80,7 @@ func claudeSafeguardsProcessFixture(_ []byte, extra map[string]json.RawMessage) 
 		emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": text}})
 	}
 	emit(map[string]any{"type": "content_block_stop", "index": 0})
-	emit(map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "safeguard_results": []any{map[string]any{"type": "dangerous_tool_use", "status": map[string]any{"type": "available", "tool_uses": calls}}}}, "usage": map[string]int{"output_tokens": 7}})
+	emit(map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "future_delta": true, "safeguard_results": []any{map[string]any{"type": "dangerous_tool_use", "status": map[string]any{"type": "available", "tool_uses": calls}}}}, "context_management": map[string]any{"applied_edits": []any{}}, "usage": map[string]int{"output_tokens": 7}})
 	emit(map[string]string{"type": "message_stop"})
 	if stop == "tool_use" {
 		time.Sleep(30 * time.Second)
@@ -129,6 +129,8 @@ func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 				t.Fatalf("status/body=%d/%s, want 200 and reviewed tool", status, first)
 			}
 			var response struct {
+				Future  bool             `json:"future_delta"`
+				Context json.RawMessage  `json:"context_management"`
 				Content []map[string]any `json:"content"`
 				Results []struct {
 					Status struct {
@@ -153,6 +155,9 @@ func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 					}
 					if event.Type == "message_delta" {
 						_ = json.Unmarshal(event.Delta, &response)
+						if bytes.Contains(first, []byte(`"context_management"`)) {
+							response.Context = json.RawMessage(`{}`)
+						}
 					}
 				}
 			} else if err := json.Unmarshal(first, &response); err != nil {
@@ -160,6 +165,9 @@ func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 			}
 			if len(response.Content) != 1 || len(response.Results) != 1 {
 				t.Fatalf("missing tool or safeguard verdict: %s", first)
+			}
+			if !response.Future || len(response.Context) == 0 || response.Content[0]["caller"] == nil {
+				t.Fatalf("native response extensions lost: %s", first)
 			}
 			id, _ := response.Content[0]["id"].(string)
 			if id != "guarded-upstream-id" || response.Results[0].Status.Calls[id]["outcome"] != tc.outcome || response.Results[0].Status.Calls[id]["opaque"] != "upstream-verdict" {

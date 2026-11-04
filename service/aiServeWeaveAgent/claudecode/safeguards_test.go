@@ -110,6 +110,61 @@ func safeguardsProcessFixture() {
 	time.Sleep(30 * time.Second) // only an explicitly stopped CLI may finish this public tool round / 此工具回合必须由桥接主动停止 CLI
 }
 
+func TestSafeguardsNativeDocument(t *testing.T) {
+	raw := json.RawMessage(`{"model":"fixture","max_tokens":4096,"messages":[{"role":"user","content":[{"type":"text","text":"question","cache_control":{"type":"ephemeral"}}]},{"role":"system","content":"caller environment"}],"system":[{"type":"text","text":"caller attribution","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"Bash","description":"caller Bash","input_schema":{"type":"object"},"defer_loading":false}],"thinking":{"type":"adaptive"},"context_management":{"edits":[]},"safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1,"prior_turn_context":{"tool_use_ids":["original-id"]},"text_provenance":{"opaque":"unchanged"}}}]}`)
+	var req messagesRequest
+	if err := decodeMessagesRequest(raw, &req); err != nil || req.validate("fixture") != nil {
+		t.Fatalf("native guarded document rejected: %v", err)
+	}
+	var want map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &want)
+	if !reflect.DeepEqual(req.nativeDocument, want) {
+		t.Fatal("structured native request or policy provenance was rewritten")
+	}
+	for _, key := range []string{"headers", "base_url", "env", "command", "api_key"} {
+		doc := map[string]any{}
+		_ = json.Unmarshal(raw, &doc)
+		doc[key] = "private-control"
+		encoded, _ := json.Marshal(doc)
+		if decodeMessagesRequest(encoded, &req) == nil {
+			t.Fatalf("non-inference control %s accepted", key)
+		}
+	}
+}
+
+func TestSafeguardsKeepsTruncatedToolStream(t *testing.T) {
+	var input bytes.Buffer
+	emitFixture(&input, map[string]any{"type": "message_start"})
+	emitFixture(&input, map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "native-partial", "name": "read_file", "input": map[string]any{}, "caller": map[string]string{"type": "direct"}}})
+	emitFixture(&input, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "input_json_delta", "partial_json": "{\"path\":\"unfinished"}})
+	emitFixture(&input, map[string]any{"type": "content_block_stop", "index": 0})
+	emitFixture(&input, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "max_tokens", "safeguard_results": []any{map[string]any{"type": "dangerous_tool_use", "status": map[string]any{"type": "unavailable", "reason": "truncated"}}}}})
+	emitFixture(&input, map[string]any{"type": "message_stop"})
+	session := &messagesSession{ctx: context.Background(), request: guardedRequest(), events: make(chan bridgeEvent, 16), pending: make(map[string]*pendingTool), changed: make(chan struct{})}
+	_, err := bridgeEvents(&input, session)
+	if !errors.Is(err, errTerminalStop) {
+		t.Fatalf("truncated native stream rejected before stop_reason: %v", err)
+	}
+	close(session.events)
+	var output strings.Builder
+	for event := range session.events {
+		output.Write(event.data)
+	}
+	if !strings.Contains(output.String(), `"stop_reason":"max_tokens"`) || !strings.Contains(output.String(), `"caller":{"type":"direct"}`) || !strings.Contains(output.String(), `"reason":"truncated"`) {
+		t.Fatalf("native truncated stream lost fields: %s", &output)
+	}
+}
+
+func TestSafeguardsRejectsLocalTools(t *testing.T) {
+	for _, name := range []string{"Bash", "mcp__aisw_bridge__tool_0"} {
+		session := &messagesSession{ctx: context.Background(), request: guardedRequest(), events: make(chan bridgeEvent, 1)}
+		wire, _ := json.Marshal(map[string]any{"type": "system", "subtype": "init", "tools": []string{name}})
+		if _, err := bridgeEvents(bytes.NewReader(wire), session); !errors.Is(err, errUnsafeTools) {
+			t.Fatalf("local tool %s was registered in guarded mode: %v", name, err)
+		}
+	}
+}
+
 func TestSafeguardsFreshContext(t *testing.T) {
 	rt, err := NewFactory(os.Args[0])(runtime.Config{ID: "guarded", Kind: runtime.KindClaude}, runtime.Dependencies{Clock: runtime.NewSystemClock()})
 	if err != nil {

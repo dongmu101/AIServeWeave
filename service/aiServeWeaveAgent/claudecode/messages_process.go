@@ -529,11 +529,14 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || blockActive {
 					return nil, protocolError("unexpected_message_delta")
 				}
-				mapped, results, err := remapSafeguardDelta(envelope.Event, publicIDs)
-				if err != nil {
-					return nil, protocolError("invalid_safeguard_results")
+				var results json.RawMessage
+				if !guarded {
+					mapped, mappedResults, err := remapSafeguardDelta(envelope.Event, publicIDs)
+					if err != nil {
+						return nil, protocolError("invalid_safeguard_results")
+					}
+					envelope.Event, results = mapped, mappedResults
 				}
-				envelope.Event = mapped
 				if stopped != "" {
 					// Whatever the CLI's own reason, the round ended at the sequence.
 					// 无论 CLI 自己给出什么原因，回合都已在停止序列处结束。
