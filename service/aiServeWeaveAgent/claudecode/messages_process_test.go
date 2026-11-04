@@ -6,9 +6,95 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
+	"testing/iotest"
+
+	"AIServeWeave/common/runtime"
 )
+
+// TestBridgeEventsFailureLocation identifies a rejected event without retaining its payload.
+// TestBridgeEventsFailureLocation 标记被拒事件的位置，不保留事件载荷。
+func TestBridgeEventsFailureLocation(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		reader       io.Reader
+		line         float64
+	}{
+		{"invalid JSON", "invalid_json", strings.NewReader("private-payload\n"), 1},
+		{"unknown event", "unsupported_envelope", strings.NewReader("{\"type\":\"private-payload\"}\n"), 1},
+		{"unknown stop reason", "unsupported_stop_reason", strings.NewReader("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"private-payload\"}}}\n"), 2},
+		{"read failure", "stream_read_failed", iotest.ErrReader(errors.New("private-payload")), 1},
+		{"partial line read failure", "stream_read_failed", io.MultiReader(strings.NewReader(`{"type":"system","subtype":"status"}`), iotest.ErrReader(errors.New("private-payload"))), 1},
+		{"next line read failure", "stream_read_failed", io.MultiReader(strings.NewReader("{\"type\":\"system\",\"subtype\":\"status\"}\n"), iotest.ErrReader(errors.New("private-payload"))), 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &messagesSession{ctx: context.Background(), request: testMessagesRequest(), events: make(chan bridgeEvent, 4)}
+			_, cause := bridgeEvents(tc.reader, s)
+			if !errors.Is(cause, errCLIProtocol) {
+				t.Fatalf("error=%v, want CLI protocol error", cause)
+			}
+			var output bytes.Buffer
+			rt, err := NewFactory("unused")(runtime.Config{ID: "local", Kind: runtime.KindClaude}, runtime.Dependencies{Clock: runtime.NewSystemClock(), Logger: slog.New(slog.NewJSONHandler(&output, nil))})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := rt.(*Runtime)
+			defer r.Close()
+			public := r.roundError(cause)
+			var record map[string]any
+			if json.Unmarshal(output.Bytes(), &record) != nil || record["cli_event_error"] != tc.reason || record["cli_event_line"] != tc.line {
+				t.Fatalf("diagnostic=%s, want line %v and reason %s", &output, tc.line, tc.reason)
+			}
+			if strings.Contains(output.String()+public.Error(), "private-payload") {
+				t.Fatal("event payload reached logs or caller")
+			}
+		})
+	}
+}
+
+// TestBridgeEventsTrailingNotifications allows CLI lifecycle notices after a successful result.
+// TestBridgeEventsTrailingNotifications 允许成功结果之后的 CLI 生命周期通知。
+func TestBridgeEventsTrailingNotifications(t *testing.T) {
+	for _, tc := range []struct {
+		name, trailing string
+		wantErr        bool
+	}{
+		{"prompt suggestion", `{"type":"prompt_suggestion","suggestion":"private-payload"}`, false},
+		{"status notice", `{"type":"system","subtype":"status","status":null}`, false},
+		{"new init", `{"type":"system","subtype":"init","tools":["Bash"]}`, true},
+		{"new model output", `{"type":"stream_event","event":{"type":"message_start"}}`, true},
+		{"duplicate result", `{"type":"result","subtype":"success"}`, true},
+		{"unknown envelope", `{"type":"private-payload"}`, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var input bytes.Buffer
+			fixtureRound(&input, "", "answer")
+			fmt.Fprintln(&input, `{"type":"result","subtype":"success"}`)
+			fmt.Fprintln(&input, tc.trailing)
+			s := &messagesSession{ctx: context.Background(), request: testMessagesRequest(), events: make(chan bridgeEvent, 16)}
+			final, err := bridgeEvents(&input, s)
+			if tc.wantErr {
+				if !errors.Is(err, errCLIProtocol) {
+					t.Fatalf("error=%v, want protocol error", err)
+				}
+				return
+			}
+			if err != nil || string(final) != `{"type":"message_stop"}` {
+				t.Fatalf("final/error=%s/%v, want message_stop/nil", final, err)
+			}
+			close(s.events)
+			for item := range s.events {
+				if bytes.Contains(item.data, []byte("private-payload")) {
+					t.Fatal("CLI notification reached the public stream")
+				}
+			}
+		})
+	}
+}
 
 // TestBridgeEventsInternalThinking verifies hidden CLI blocks preserve public tool and text indices.
 // TestBridgeEventsInternalThinking 验证 CLI 内部思考块不会破坏对外工具和文本的索引。

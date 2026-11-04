@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"net/http"
 	"os"
 	"sync"
@@ -26,6 +27,7 @@ type Runtime struct {
 	cancel   context.CancelFunc
 	modelsMu sync.RWMutex
 	models   map[string]struct{}
+	logger   *slog.Logger
 }
 
 var _ runtime.MessagesRuntime = (*Runtime)(nil)
@@ -53,7 +55,11 @@ func NewFactory(executable string) runtime.Factory {
 		bridge := newMessagesBridge(executable, "sonnet", nil, deps.Clock)
 		bridge.capacity = cfg.MaxConcurrent
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
-		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel}, nil
+		logger := deps.Logger
+		if logger == nil {
+			logger = slog.Default()
+		}
+		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger}, nil
 	}
 }
 
@@ -256,10 +262,13 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		if !keep {
 			s.cancel()
 		}
-		if err != nil && ctx.Err() == nil {
-			select {
-			case out.items <- nativeItem{err: r.roundError(err)}:
-			case <-ctx.Done():
+		if err != nil {
+			failure := r.roundError(err)
+			if ctx.Err() == nil {
+				select {
+				case out.items <- nativeItem{err: failure}:
+				case <-ctx.Done():
+				}
 			}
 		}
 	}()
@@ -275,6 +284,39 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 // 还有多久，使 Gateway 可以在另一个账户上开启会话、并在此之前不再打扰这个账户；其他
 // 失败仍是隐去细节的协议错误。
 func (r *Runtime) roundError(err error) error {
+	// Log only fixed categories and parser positions, never CLI output or errors supplied by it.
+	// 仅记录固定分类与解析位置，不记录 CLI 输出或其中携带的任意错误文本。
+	reason := "unknown"
+	switch {
+	case errors.Is(err, errCLIProtocol):
+		reason = "cli_protocol"
+	case errors.Is(err, errCLIResult):
+		reason = "cli_result"
+	case errors.Is(err, errCLIExit):
+		reason = "cli_exit"
+	case errors.Is(err, errMissingResult):
+		reason = "missing_result"
+	case errors.Is(err, errUnsafeTools):
+		reason = "unsafe_tools"
+	case errors.Is(err, errQuotaExhausted):
+		reason = "quota_exhausted"
+	case errors.Is(err, errCLIStart):
+		reason = "cli_start"
+	case errors.Is(err, errProbeSetup):
+		reason = "setup"
+	case errors.Is(err, errCapacity):
+		reason = "capacity"
+	case errors.Is(err, context.Canceled):
+		reason = "canceled"
+	case errors.Is(err, context.DeadlineExceeded):
+		reason = "deadline_exceeded"
+	}
+	attrs := []any{"runtime_id", r.cfg.ID, "reason", reason}
+	var eventFailure *cliEventError
+	if errors.As(err, &eventFailure) {
+		attrs = append(attrs, "cli_event_line", eventFailure.line, "cli_event_error", eventFailure.reason)
+	}
+	r.logger.Warn("Claude Messages round failed", attrs...)
 	var quota *quotaError
 	if !errors.As(err, &quota) {
 		return claudeError(runtime.ErrorProtocol)

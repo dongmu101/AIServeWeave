@@ -2,6 +2,7 @@ package claudecode
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -20,6 +21,31 @@ import (
 )
 
 func bridgeToolName(index int) string { return "tool_" + strconv.Itoa(index) }
+
+// cliEventError retains a fixed rejection category and position, not the event payload.
+// cliEventError 仅保留固定的拒绝分类和位置，不保留事件载荷。
+type cliEventError struct {
+	line   int
+	reason string
+}
+
+func (e *cliEventError) Error() string { return errCLIProtocol.Error() }
+func (e *cliEventError) Unwrap() error { return errCLIProtocol }
+
+var errTerminalStop = errors.New("CLI terminal response complete")
+
+// cliLineReader counts physical newlines even when Scanner cannot return the failed line.
+// cliLineReader 在 Scanner 无法返回失败行时仍能按实际读入的换行符定位。
+type cliLineReader struct {
+	io.Reader
+	newlines int
+}
+
+func (r *cliLineReader) Read(p []byte) (int, error) {
+	n, err := r.Reader.Read(p)
+	r.newlines += bytes.Count(p[:n], []byte{'\n'})
+	return n, err
+}
 
 // historyInstruction tells the CLI how to read a folded transcript; it matches
 // the Gateway's Chat folding so both protocols get the same framing.
@@ -177,9 +203,9 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if s.ctx.Err() != nil {
 		return s.ctx.Err()
 	}
-	// A stop sequence completes the round; the CLI is stopped, not failed.
-	// 停止序列完成了本回合；CLI 是被停止，而不是失败。
-	if errors.Is(err, errStopSequence) {
+	// A terminal stop completes the public round before the CLI can recover or continue it.
+	// 终止事件完成公开回合，CLI 随后被停止，避免其自动恢复或续写越过调用方边界。
+	if errors.Is(err, errStopSequence) || errors.Is(err, errTerminalStop) {
 		return s.send(final, nil)
 	}
 	if err != nil {
@@ -220,7 +246,8 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 // 与 Messages API 一样，会话的回合数、工具调用数与行数都不设上限；只有重复工具 ID 检查
 // 以回合为范围，在每次 message_stop 后重新开始。
 func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error) {
-	scanner := bufio.NewScanner(reader)
+	position := &cliLineReader{Reader: reader}
+	scanner := bufio.NewScanner(position)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes+1)
 	var final json.RawMessage
 	var current messageBlock
@@ -237,7 +264,10 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	seenIDs := make(map[string]bool)
 	matcher := stopMatcher{sequences: s.request.StopSequences}
 	stopped := "" // the matched stop sequence, once found / 命中的停止序列（命中后设置）
+	lineNumber := 0
+	protocolError := func(reason string) error { return &cliEventError{line: lineNumber, reason: reason} }
 	for scanner.Scan() {
+		lineNumber++
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -246,8 +276,8 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		// that falls silent for generationTimeout is reclaimed.
 		// 任何输出都算进展：重启空闲阶段计时器，只回收沉默满 generationTimeout 的 CLI。
 		s.touch()
-		if len(line) > maxEventBytes || finished {
-			return nil, errCLIProtocol
+		if len(line) > maxEventBytes {
+			return nil, protocolError("oversized_event")
 		}
 		var envelope struct {
 			Type          string          `json:"type"`
@@ -261,7 +291,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			} `json:"rate_limit_info"`
 		}
 		if json.Unmarshal(line, &envelope) != nil {
-			return nil, errCLIProtocol
+			return nil, protocolError("invalid_json")
+		}
+		if finished {
+			// The CLI may append lifecycle notices or a prompt suggestion after its result.
+			// CLI 可能在结果之后追加生命周期通知或下一步提示；它们不属于模型回复。
+			if envelope.Type == "prompt_suggestion" || (envelope.Type == "system" && envelope.Subtype != "" && envelope.Subtype != "init") {
+				continue
+			}
+			return nil, protocolError("unexpected_trailing_event")
 		}
 		switch envelope.Type {
 		case "system":
@@ -308,17 +346,17 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				Usage json.RawMessage `json:"usage"`
 			}
 			if json.Unmarshal(envelope.Event, &event) != nil {
-				return nil, errCLIProtocol
+				return nil, protocolError("invalid_stream_event")
 			}
 			switch event.Type {
 			case "message_start":
 				if active || len(final) > 0 {
-					return nil, errCLIProtocol
+					return nil, protocolError("unexpected_message_start")
 				}
 				active, stopReason, index, publicIndex = true, "", 0, 0
 			case "content_block_start":
 				if !active || blockActive || event.Index != index {
-					return nil, errCLIProtocol
+					return nil, protocolError("unexpected_block_start")
 				}
 				if stopped != "" && event.Block.Type == "tool_use" {
 					// The API stops before this call; never register it.
@@ -341,7 +379,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						return nil, errUnsafeTools
 					}
 					if seenIDs[current.ID] {
-						return nil, errCLIProtocol
+						return nil, protocolError("duplicate_tool_id")
 					}
 					seenIDs[current.ID] = true
 					current.ID = "toolu_aisw_" + randomID()
@@ -350,11 +388,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					obj["content_block"], _ = json.Marshal(current)
 					envelope.Event, _ = json.Marshal(obj)
 				} else if current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
-					return nil, errCLIProtocol
+					return nil, protocolError("unsupported_block")
 				}
 			case "content_block_delta":
 				if !active || !blockActive || event.Index != index {
-					return nil, errCLIProtocol
+					return nil, protocolError("unexpected_block_delta")
 				}
 				if current.Type == "tool_use" && event.Delta.Type == "input_json_delta" {
 					arguments += event.Delta.PartialJSON
@@ -362,11 +400,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						return nil, errCapacity
 					}
 				} else if !(current.Type == "text" && event.Delta.Type == "text_delta") && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) {
-					return nil, errCLIProtocol
+					return nil, protocolError("unsupported_block_delta")
 				}
 			case "content_block_stop":
 				if !active || !blockActive || event.Index != index {
-					return nil, errCLIProtocol
+					return nil, protocolError("unexpected_block_stop")
 				}
 				if current.Type == "tool_use" {
 					if arguments != "" {
@@ -374,17 +412,17 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					}
 					var input map[string]any
 					if json.Unmarshal(current.Input, &input) != nil || input == nil {
-						return nil, errCLIProtocol
+						return nil, protocolError("invalid_tool_input")
 					}
 					s.mu.Lock()
 					if s.pending[current.ID] != nil {
 						s.mu.Unlock()
-						return nil, errCLIProtocol
+						return nil, protocolError("duplicate_pending_tool")
 					}
 					for _, pending := range s.pending {
 						if !pending.delivered && pending.block.Name == current.Name && canonical(normalizedToolInput(pending.block.Name, pending.block.Input, s.request.Tools)) == canonical(normalizedToolInput(current.Name, current.Input, s.request.Tools)) {
 							s.mu.Unlock()
-							return nil, errCLIProtocol
+							return nil, protocolError("ambiguous_tool_call")
 						}
 					}
 					s.pending[current.ID] = &pendingTool{block: current, result: make(chan toolResult, 1)}
@@ -395,7 +433,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				index++
 			case "message_delta":
 				if !active || blockActive {
-					return nil, errCLIProtocol
+					return nil, protocolError("unexpected_message_delta")
 				}
 				if stopped != "" {
 					// Whatever the CLI's own reason, the round ended at the sequence.
@@ -407,12 +445,14 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					continue
 				}
 				stopReason = event.Delta.StopReason
-				if stopReason != "tool_use" && stopReason != "end_turn" {
-					return nil, errCLIProtocol
+				switch stopReason {
+				case "tool_use", "end_turn", "max_tokens", "stop_sequence", "refusal", "model_context_window_exceeded":
+				default:
+					return nil, protocolError("unsupported_stop_reason")
 				}
 			case "message_stop":
 				if !active || blockActive || stopReason == "" {
-					return nil, errCLIProtocol
+					return nil, protocolError("unexpected_message_stop")
 				}
 				if stopped != "" {
 					return append(json.RawMessage(nil), envelope.Event...), errStopSequence
@@ -423,12 +463,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				clear(seenIDs)
 				if stopReason != "tool_use" {
 					final = append(json.RawMessage(nil), envelope.Event...)
+					if stopReason != "end_turn" {
+						return final, errTerminalStop
+					}
 					continue
 				}
 			case "ping":
 				continue
 			default:
-				return nil, errCLIProtocol
+				return nil, protocolError("unsupported_stream_event")
 			}
 			switch event.Type {
 			case "content_block_start", "content_block_delta", "content_block_stop":
@@ -481,11 +524,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				return nil, err
 			}
 		default:
-			return nil, errCLIProtocol
+			return nil, protocolError("unsupported_envelope")
 		}
 	}
 	if scanner.Err() != nil {
-		return nil, errCLIProtocol
+		return nil, &cliEventError{line: position.newlines + 1, reason: "stream_read_failed"}
 	}
 	if !finished {
 		if quota != nil {

@@ -3,6 +3,7 @@ package claudecode
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -254,9 +255,6 @@ func TestMessagesUsers(t *testing.T) {
 		req := testMessagesRequest()
 		requests[i] = continuation(t, req, sendMessages(b, req, key), "result-"+key)
 	}
-	if w := sendMessages(b, testMessagesRequest(), "first"); w.Code != 409 {
-		t.Fatalf("capacity status = %d, want 409", w.Code)
-	}
 	var wg sync.WaitGroup
 	for i, key := range keys {
 		wg.Add(1)
@@ -269,6 +267,34 @@ func TestMessagesUsers(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+// TestMessagesCapacity protects generating sessions while allowing idle tool waits to be reclaimed.
+// TestMessagesCapacity 保护生成中的会话，并允许回收等待工具的空闲会话。
+func TestMessagesCapacity(t *testing.T) {
+	for _, busy := range []bool{true, false} {
+		t.Run(fmt.Sprintf("busy=%t", busy), func(t *testing.T) {
+			b := newMessagesBridge("unused", "sonnet", nil, runtime.NewSystemClock())
+			b.capacity = 1
+			b.start = func(s *messagesSession) { <-s.ctx.Done() }
+			defer b.close()
+			first, err := b.acquire(principal{"tenant", "first"}, testMessagesRequest())
+			if err != nil {
+				t.Fatal(err)
+			}
+			first.mu.Lock()
+			first.busy, first.waiting = busy, !busy
+			first.mu.Unlock()
+			second, err := b.acquire(principal{"tenant", "second"}, testMessagesRequest())
+			if busy {
+				if !errors.Is(err, errCapacity) || first.ctx.Err() != nil {
+					t.Fatalf("error/first state=%v/%v, want capacity rejection and live first session", err, first.ctx.Err())
+				}
+			} else if err != nil || second == nil || first.ctx.Err() == nil {
+				t.Fatalf("error/second/first state=%v/%v/%v, want new session and cancelled idle session", err, second != nil, first.ctx.Err())
+			}
+		})
+	}
 }
 
 // TestMessagesStrictInput rejects unsupported extensions rather than dropping them.

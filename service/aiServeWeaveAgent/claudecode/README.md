@@ -88,6 +88,14 @@ Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为
 
 并行工具只允许可通过名称和规范化参数区分的调用；同轮同名同参数会明确失败，因为公开 MCP 回调没有原生 tool ID，不能可靠消歧。工具仅在调用方执行；Agent 临时目录内无用户项目，内建执行工具、hooks、memory、浏览器与其他 MCP 均关闭。
 
+## 终止原因与故障排查
+
+CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态；成功结果之后的 `prompt_suggestion` 与非初始化 `system` 通知只在本机消费，不进入公开回复，其他尾部事件仍拒绝。完整终止之前的 CLI 失败、缺失输出或非法事件仍明确失败。此修复需要更新并重启 Agent，包含模拟 CLI 子进程的离线回归测试覆盖；尚未验收 Opus 5.5 的真实工具流程。
+
+失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
+
+客户端的 `native Messages stream failed` 只能说明流已开始后失败，不能据此区分协议、进程或上游问题。工具结果已经投递或应用情况不确定时，Gateway 会消费本轮续接，重试同一批工具结果可能返回 409 `Messages continuation unavailable`；这个错误与前一次流失败需要分开判断。排查时按同一时区对齐 Agent 与 Gateway 日志，并结合请求 ID、运行时和上述错误分类定位；新建会话可以避开旧续接，但不能修复原始流故障。
+
 ## 生命周期与限额
 
 每个运行时的独立 CLI 会话数由 `max_concurrent` 决定：未配置时 8 个，显式配置最多 32 个（负值即不限并发也按 32），所有 Gateway 副本共用该 Agent 限额。每个会话是一个常驻 CLI 进程，同一账户的会话共用订阅额度，调大前确认内存和额度。等待调用方送回工具结果最多 1 小时，CLI 生成阶段无输出最多 10 分钟（与 CLI 自身的 API 请求超时一致；CLI 每输出一行即重新计时，持续输出的长回合不受限），会话总寿命 24 小时；超时的会话被回收后，其续接按孤立回合从文本记录恢复。名额已满时淘汰等待工具结果最久的空闲会话来开启新会话（它之后的续接同样从文本记录恢复），只有全部名额都在生成时才答复会话已满。与 Messages API 一样，消息、工具、内容块、停止序列、每回合工具调用与并行工具调用的数量都不设上限。原生请求最多 32 MiB（与 Messages API 自身的请求上限一致），CLI 单行最多 256 MiB（仅防范进程异常）；Gateway 侧单次响应最多 64 MiB、续接每回合最多 64 个工具调用。流式事件逐条传递，使用同步背压。
