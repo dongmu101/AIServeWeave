@@ -339,7 +339,7 @@ Registry:
 
 ## 模型拉取转发（P2 模型分发子任务二的控制面转发层）
 
-按名字触发/查询一个节点模型拉取的两个 Gateway 端点（`docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md` 交付的 `-model-pull-addr`）只在触发到达它连接的那个 Gateway 副本时才有效——隧道设计"每个副本只服务连到自己身上的节点"的既有约束同样适用于它。运维不该需要事先知道某个 `node_id` 连在哪个副本上，因此本服务在此基础上加了一层转发：
+按名字触发/查询一个节点模型拉取的两个 Gateway 端点（`-model-pull-addr`）只在触发到达它连接的那个 Gateway 副本时才有效——隧道设计"每个副本只服务连到自己身上的节点"的既有约束同样适用于它。运维不该需要事先知道某个 `node_id` 连在哪个副本上，因此本服务在此基础上加了一层转发：
 
 ```yaml
 ModelPull:
@@ -361,7 +361,7 @@ ModelPull:
 
 ## ComfyUI Managed 转发（P2 ComfyUI Managed Docker 部署子任务三，控制面转发层）
 
-对一个节点本地已声明的那一个 Managed ComfyUI 实例施加 start/stop/restart 生命周期动作、并读回其容器状态的两个 Gateway 端点（`docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md` 交付的 `-comfyui-managed-addr`），与模型拉取的 `-model-pull-addr` 同一约束：只在触发到达它连接的那个 Gateway 副本时才有效。这里补的是与模型拉取完全对称的一层转发：
+对一个节点本地已声明的那一个 Managed ComfyUI 实例施加 start/stop/restart 生命周期动作、并读回其容器状态的两个 Gateway 端点（`-comfyui-managed-addr`），与模型拉取的 `-model-pull-addr` 同一约束：只在触发到达它连接的那个 Gateway 副本时才有效。这里补的是与模型拉取完全对称的一层转发：
 
 ```yaml
 ComfyUIManaged:
@@ -967,7 +967,7 @@ alert_instances(
 );
 ```
 
-`alert_rules.Metric` 只接受 5 个封闭取值：`request_rate`、`success_rate`、`latency_p95`、`token_usage`、`capacity`。这些**不是** `metrics_history.metric` 列的原始值——P08 的采集器只写入原始 Prometheus 计数器/直方图汇总行（`gateway_http_requests_total`、`gateway_http_request_duration_seconds_bucket/_sum/_count`、`gateway_tokens_total`、`tunnel_server_slots_total`）。`internal/alertengine/metrics.go` 的 `DerivedSeries` 把它们折算成语义值，其中 `success_rate`/`latency_p95` 是把此前只存在于 Console 前端 `lib/console/metrics-charts.ts`（`deltaByBucket`/`approxP95`）的近似算法移植成 Go 实现——两端没有共享运行时，是对同一套语义的独立重实现而非共享代码。算法细节不在此重复推导，见设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)「派生指标计算」一节与 `internal/alertengine/metrics.go` 源码注释。
+`alert_rules.Metric` 只接受 5 个封闭取值：`request_rate`、`success_rate`、`latency_p95`、`token_usage`、`capacity`。这些**不是** `metrics_history.metric` 列的原始值——P08 的采集器只写入原始 Prometheus 计数器/直方图汇总行（`gateway_http_requests_total`、`gateway_http_request_duration_seconds_bucket/_sum/_count`、`gateway_tokens_total`、`tunnel_server_slots_total`）。`internal/alertengine/metrics.go` 的 `DerivedSeries` 把它们折算成语义值，其中 `success_rate`/`latency_p95` 是把此前只存在于 Console 前端 `lib/console/metrics-charts.ts`（`deltaByBucket`/`approxP95`）的近似算法移植成 Go 实现——两端没有共享运行时，是对同一套语义的独立重实现而非共享代码。算法细节见 `internal/alertengine/metrics.go` 源码注释。
 
 评估循环（`internal/alertengine/evaluator.go` 的 `Evaluator.Run`）随服务启动**无条件运行**——不像 `MetricsHistory` 需要先配置外部 Gateway/Registry 地址才启动，告警评估只读同一个数据库里已有的 `metrics_history` 表，没有需要外部前提条件的理由，因此与 P09a 的请求日志保留期清理协程走同一先例。默认每 60 秒一轮（`config.DefaultAlertEvaluationInterval`，`Config.AlertEvaluationInterval` 可覆盖），每轮读取全部 `Enabled=true` 规则，在其 `ConsecutiveBuckets` 窗口内比较派生值与 `Threshold`：全部桶越界且没有已打开（`firing`/`acknowledged`）实例时新建一条 `alert_instances`；已有打开实例时只续 `LastEvaluatedAt`，不重复创建、不重复通知（刻意去抖动，避免同一次故障产生通知风暴）；条件不再满足且存在打开实例时转 `resolved`。
 
@@ -980,7 +980,7 @@ API 全部挂 `requirePlatformSession`，写操作复用 `audit_logs`（`TenantI
 
 ## Responses 持久会话（P2）
 
-Gateway 的 `POST /v1/responses` 默认无状态：`store`/`previous_response_id` 均被拒绝。本项让这两个字段在配置了本控制面时生效，沿用 Job 持久化（J01–J08）已经确立的形状——控制面表 + 内部 CRUD API + Gateway 客户端——而不是重新设计一套模式，详见设计文档 [`docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md`](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md) 第三节。
+Gateway 的 `POST /v1/responses` 默认无状态：`store`/`previous_response_id` 均被拒绝。本项让这两个字段在配置了本控制面时生效，沿用 Job 持久化（J01–J08）已经确立的形状——控制面表 + 内部 CRUD API + Gateway 客户端——而不是重新设计一套模式。
 
 ```sql
 response_turns(

@@ -13,24 +13,22 @@ is about releases only.
 - 遵循 [语义化版本](https://semver.org/lang/zh-CN/)，tag 格式 `vMAJOR.MINOR.PATCH`
   （如 `v0.1.0`）。
 - 项目目前在 `0.x`：**minor 版本升级仍可能包含破坏性变更**（协议、配置、数据库
-  schema、CLI flag）。达到 `1.0.0` 前不作兼容承诺，参见 [STATUS.md](STATUS.md) 的
-  `A03`（协议与配置升级兼容）——该项已交付协议演进规则、配置版本策略与滚动升级/
-  回退边界的设计文档（[`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md)），
-  但那份文档划的是"哪些方向字节层面不会崩"的边界，不是生产级兼容性承诺，本条的
-  立场不因此改变。
+  schema、CLI flag）。达到 `1.0.0` 前不作兼容承诺。`A03`（协议与配置升级兼容）的
+  设计文档给出了协议演进规则、配置版本策略与滚动升级/回退边界，但它划的只是"哪些
+  方向字节层面不会崩"，不是生产级兼容性承诺，本条的立场不因此改变。该文档已从仓库
+  删除，需要时在提交 b810671 之前的历史中查看 `docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`。
 - 每个版本的实际变更记在 [CHANGELOG.md](CHANGELOG.md)，`Added`/`Changed`/`Fixed`/
   `Removed` 分类；破坏性变更单独标注，不要淹没在普通条目里。
 
 Follows [Semantic Versioning](https://semver.org/); tags look like `vMAJOR.MINOR.PATCH`.
 While the project is on `0.x`, a minor bump may still break protocol, config,
 database schema, or CLI flags — there is no compatibility promise before
-`1.0.0` (see STATUS.md's `A03`, which now ships a design document covering
-proto evolution rules, config versioning and rolling-upgrade/rollback
-boundaries —
-[`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md).
-That document draws the line on which directions don't break at the byte
-level; it is not a production-grade compatibility guarantee, and this
-paragraph's stance is unchanged by it). Every release's actual changes live
+`1.0.0`. The `A03` design document covers proto evolution rules, config
+versioning and rolling-upgrade/rollback boundaries, but it only draws the line
+on which directions don't break at the byte level; it is not a
+production-grade compatibility guarantee, and this paragraph's stance is
+unchanged by it. The document has been removed from the repository; see
+`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md` in history before commit b810671. Every release's actual changes live
 in [CHANGELOG.md](CHANGELOG.md); breaking changes get their own callout, not
 buried among routine entries.
 
@@ -125,13 +123,12 @@ means don't run that binary — report it as an issue.
 
 ## 升级说明 / Upgrading
 
-**当前仍不对生产环境做跨版本滚动升级的承诺**——STATUS.md 的 `A03` 已交付协议演进
-规则、配置版本策略与升级/回退顺序的设计文档（
-[`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md)），
-但那份文档给出的是字节层面"哪些方向不会崩"的边界和已知缺口，不是端到端演练验证过
-的生产保证（没有真实多副本混合版本集群的滚动升级排练，见文档第九节缺口 1）。默认
-仍按以下步骤停机升级，不要假设"新镜像原地替换旧镜像"总是安全的；确实需要滚动升级
-时，先读一遍上述设计文档第六、七节的版本互操作范围声明和推荐顺序：
+**当前仍不对生产环境做跨版本滚动升级的承诺**——`A03` 设计文档给出了协议演进规则、
+配置版本策略与升级/回退顺序，但只是字节层面"哪些方向不会崩"的边界和已知缺口，不是
+端到端演练验证过的生产保证（没有真实多副本混合版本集群的滚动升级排练，见文档第九节
+缺口 1）。该文档已从仓库删除，在提交 b810671 之前的历史中查看 `docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`。默认仍按以下
+步骤停机升级，不要假设"新镜像原地替换旧镜像"总是安全的；确实需要滚动升级时，先从
+历史中读该文档第六、七节的版本互操作范围声明和推荐顺序：
 
 1. 读目标版本 CHANGELOG 里的 Breaking Changes / Known limitations，确认没有需要手动
    处理的 schema 变更或配置项改名。
@@ -147,15 +144,15 @@ means don't run that binary — report it as an issue.
 wire 兼容性（A03 设计文档第二节），没有真实多副本集群的端到端验证。
 
 **There is still no production commitment to cross-version rolling
-upgrades.** STATUS.md's `A03` now ships a design document covering proto
-evolution rules, config versioning, and upgrade/rollback ordering
-([`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md`](docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md)),
+upgrades.** The `A03` design document covers proto evolution rules, config
+versioning, and upgrade/rollback ordering (removed from the repository; see
+`docs/superpowers/specs/2026-09-15-a03-protocol-config-upgrade-design.md` in history before commit b810671),
 but it draws byte-level "won't break" boundaries and known gaps, not an
 end-to-end-rehearsed production guarantee (no real multi-replica
 mixed-version rolling-upgrade rehearsal exists yet — see gap 1 in the
 document's section 9). Default to the stop-the-world steps below rather than
 assuming a new image can always replace the old one in place; if a rolling
-upgrade is genuinely needed, read sections 6–7 of that document first for
+upgrade is genuinely needed, read sections 6–7 of that document (from history) first for
 the interoperability matrix and recommended ordering:
 
 1. Read the target version's Breaking Changes / Known limitations in the

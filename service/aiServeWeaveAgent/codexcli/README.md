@@ -61,7 +61,7 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 - 生图期间 app-server 可能静默二三十秒，所以只受 `RequestTimeout`（默认 5 分钟）和 Gateway 下发的期限约束，不使用流空闲期限。与 Chat 共用并发限额。
 - 账户生图额度耗尽（`usageLimitExceeded`）映射为可重试的 `rate_limited`，对话回合的额度耗尽同样如此，并附带额度恢复时长（见 [额度耗尽与限流](../README.md#额度耗尽与限流)）；回合结束仍没有图映射为 `upstream_error`；格式、大小或关联校验失败映射为 `protocol_error`。错误文本不含提示词。
 
-Codex 内置生图工具不允许调用方选择上游图像模型。`codex-cli 0.162.1` 的 `thread/start`、`turn/start` 都没有相关字段，`image_generation.model`、`tools.image_generation.model` 等候选配置键也都被 CLI 判为无法识别。所以这里只发布一个不标版本的 ID，不发布 `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` 这类 API 模型 ID，也不要在 Gateway 路由里把它们设成指向 `codex-image` 的别名。尺寸、质量、背景、输出格式等参数同理，由 Gateway 按名字拒绝。设计与实测记录见 [设计文档](../../../docs/superpowers/specs/2026-10-16-codex-image-generation-design.md)。
+Codex 内置生图工具不允许调用方选择上游图像模型。`codex-cli 0.162.1` 的 `thread/start`、`turn/start` 都没有相关字段，`image_generation.model`、`tools.image_generation.model` 等候选配置键也都被 CLI 判为无法识别。所以这里只发布一个不标版本的 ID，不发布 `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` 这类 API 模型 ID，也不要在 Gateway 路由里把它们设成指向 `codex-image` 的别名。尺寸、质量、背景、输出格式等参数同理，由 Gateway 按名字拒绝。
 
 ## 验证
 
@@ -77,7 +77,7 @@ AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveGateway/e2e -run TestLiveCodexCl
 AISW_CODEX_LIVE=1 go test ./service/aiServeWeaveGateway/e2e -run '^TestLiveCodexOutputLimitCompatibility$' -v -count=1
 ```
 
-生图没有自动化的真实测试，因为每跑一次都会消耗账户的生图额度。真实验收记录见设计文档第五节。
+生图没有自动化的真实测试，因为每跑一次都会消耗账户的生图额度。真实验收记录在已删除的设计文档第五节，见提交 b810671 之前历史中的 `docs/superpowers/specs/2026-10-16-codex-image-generation-design.md`。
 
 离线测试覆盖有界 stdio、跨线程/回合拒绝、禁止本机工具与审批、文本 SSE、工具结果续接、Gateway 鉴权、真实回环 mTLS、并发用户隔离、注入时钟期限、并发限额及进程回收。旧实验记录只证明其合成场景。
 

@@ -79,7 +79,7 @@ go run ./service/aiServeWeaveGateway -admin-addr 127.0.0.1:8091 ...
 
 ## 模型拉取触发（STATUS.md 的 P2「模型分发」子任务二）
 
-`-model-pull-addr` 打开一个独立的写入口，供运维触发一个已连接节点按名字拉取模型制品、并查询它的状态；不给地址就不启用，设计文档见 [`docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md`](../../docs/superpowers/specs/2026-09-17-p2-model-distribution-subtask2-design.md)。
+`-model-pull-addr` 打开一个独立的写入口，供运维触发一个已连接节点按名字拉取模型制品、并查询它的状态；不给地址就不启用。
 
 ```bash
 AISW_GATEWAY_MODEL_PULL_TOKEN=$(openssl rand -base64 32) \
@@ -92,7 +92,7 @@ go run ./service/aiServeWeaveGateway -model-pull-addr 127.0.0.1:8092 ...
 | `GET /internal/v1/nodes/{node_id}/model-pulls` | 本副本对该节点最后已知的拉取状态：名字、阶段、已下载/总字节数、失败原因（封闭枚举）、更新时间 |
 
 - **与 `-admin-addr` 刻意分处不同监听器、不同 token。** `-admin-addr` 一节的文档明文写着它"都不接受写操作"，触发一次拉取是写操作，塞进那个监听器会让那句话变成假话；两者 token 泄漏的滥用后果也不同——一个泄漏读到机群清单，这一个泄漏能让任意已连接节点开始下载它本地清单已经批准的一切，爆炸半径更大，因此没有理由比 `-admin-addr` 更宽松。
-- **触发从不携带 URL，只有名字。** Agent 对着自己本地清单（`-model-pull-manifest`）解析，Gateway 只能从 Agent 已经批准的名字集合里选——即使这个监听器的 token 被盗，能做的也只是"从节点已批准的名字里选"，不能让节点访问任意地址；协议层的完整论证见隧道 README「模型拉取的按名字触发」一节与上述设计文档。
+- **触发从不携带 URL，只有名字。** Agent 对着自己本地清单（`-model-pull-manifest`）解析，Gateway 只能从 Agent 已经批准的名字集合里选——即使这个监听器的 token 被盗，能做的也只是"从节点已批准的名字里选"，不能让节点访问任意地址；协议层的完整论证见隧道 README「模型拉取的按名字触发」一节。
 - **触发是异步的，HTTP 响应不携带名字级结果。** 202 只表示这次触发已经发到隧道的 Control 流上；未知名字、已在下载中等情况只能从随后的 `GET` 观察——Control 流"不设专门 ack 帧"是既有设计（`GatewayControl_Config` 同一先例），本端点不为了让响应更即时而破坏它。
 - **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/modelpullrouter`（并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/model-pulls`，详见 [ControlPlane STATUS「模型拉取转发（P2 模型分发子任务二的控制面转发层）」](../aiServeWeaveControlPlane/STATUS.md#模型拉取转发p2-模型分发子任务二的控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
 - **没有 token 时拒绝启动**，与 `-admin-addr` 同一克制：一个能让节点开始下载的入口不该以未认证方式提供。
@@ -100,7 +100,7 @@ go run ./service/aiServeWeaveGateway -model-pull-addr 127.0.0.1:8092 ...
 
 ## ComfyUI Managed 触发（STATUS.md 的 P2「ComfyUI Managed Docker 部署」子任务二）
 
-`-comfyui-managed-addr` 打开另一个独立的写入口，供运维对一个已连接节点本地已声明的那一个 Managed ComfyUI 实例施加 start/stop/restart 生命周期动作、并查询它的容器状态；不给地址就不启用，设计文档见 [`docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md`](../../docs/superpowers/specs/2026-09-18-p2-comfyui-managed-docker-subtask2-design.md)。
+`-comfyui-managed-addr` 打开另一个独立的写入口，供运维对一个已连接节点本地已声明的那一个 Managed ComfyUI 实例施加 start/stop/restart 生命周期动作、并查询它的容器状态；不给地址就不启用。
 
 ```bash
 AISW_GATEWAY_COMFYUI_MANAGED_TOKEN=$(openssl rand -base64 32) \
@@ -114,14 +114,14 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 | `GET /internal/v1/nodes/{node_id}/comfyui-managed` | 本副本对该节点最后已知的 Managed ComfyUI 容器状态：容器名、生命周期状态（pending/starting/running/stopped/failed）、更新时间、`custom_nodes`（该实例上报已安装的自定义节点名+版本，子任务四新增） |
 
 - **与 `-model-pull-addr` 刻意分处不同监听器、不同 token，尽管两者都是写操作。** 两者控制的是不同的能力、泄漏后果的爆炸半径不同——`-model-pull-addr` 泄漏的是能让节点下载它本地清单已经批准的一切，这一个泄漏的是能停止或重启一个正在运行的容器，与 `-model-pull-addr` 自己不并入 `-admin-addr` 的理由相同：没有理由共用一把 token。
-- **动作从不携带镜像名、挂载路径或任何其他 spec 字段，只有一个封闭动作。** 镜像、GPU、挂载路径永远是 Agent 本地 flag 配置的（`-comfyui-managed-image` 等），运维想换镜像版本仍要先改本机 flag 再触发 RESTART，从不是把镜像名交给 Gateway 转发——即使这个监听器的 token 被盗，能做的也只是对已声明的实例喊 start/stop/restart，不能让 Agent 跑任意镜像；这是 `tunnel.proto` 头部「不得表达 run this command」红线在这一层的延续，完整论证见隧道 README「ComfyUI Managed 的生命周期动作触发」一节与上述设计文档。
+- **动作从不携带镜像名、挂载路径或任何其他 spec 字段，只有一个封闭动作。** 镜像、GPU、挂载路径永远是 Agent 本地 flag 配置的（`-comfyui-managed-image` 等），运维想换镜像版本仍要先改本机 flag 再触发 RESTART，从不是把镜像名交给 Gateway 转发——即使这个监听器的 token 被盗，能做的也只是对已声明的实例喊 start/stop/restart，不能让 Agent 跑任意镜像；这是 `tunnel.proto` 头部「不得表达 run this command」红线在这一层的延续，完整论证见隧道 README「ComfyUI Managed 的生命周期动作触发」一节。
 - **动作不携带容器名。** 一个 Agent 进程今天最多管理一个 Managed 实例，动作总是针对 Agent 本地已声明的那一个 Spec；一台机器上想管理多个 Managed 实例是子任务二之后仍未排期的已知缺口。
 - **触发是异步的，HTTP 响应不携带执行结果。** 202 只表示这次触发已经发到隧道的 Control 流上；容器实际状态只能从随后的 `GET` 观察——Control 流"不设专门 ack 帧"是既有设计（`GatewayControl_Config`/模型拉取触发同一先例），本端点不为了让响应更即时而破坏它。
 - **本节点不转发。** 与推理数据面同一条边界（本文件顶部「tunnelserver 的四条约束」第四条）：一个只连着别的副本的节点，在这里表现为"未连接"。**跨副本路由已在控制面一层交付**——`internal/comfyuimanagedrouter`（与 `internal/modelpullrouter` 形状对称：并发问全部已配置副本、按结果合并）与 `ControlPlane` 挂载的 `POST`/`GET /operator/v1/nodes/:id/comfyui-managed`，详见 [ControlPlane STATUS「ComfyUI Managed 转发（P2 ComfyUI Managed Docker 部署子任务三的控制面转发层）」](../aiServeWeaveControlPlane/STATUS.md#comfyui-managed-转发p2-comfyui-managed-docker-部署子任务三控制面转发层)；直接调用本节点两个端点的调用方仍需自己知道该问哪个副本，这一层的"不转发"本身没有改变。
 - **没有 token 时拒绝启动**，与 `-admin-addr`/`-model-pull-addr` 同一克制：一个能启停容器的入口不该以未认证方式提供。
 - **排空升级检查已交付，但只覆盖本副本的路由表。** `HasActiveJob`（`httpapi.Server.HasActiveJobOnNode`，注入方式与 `Trigger`/`Status` 相同）只把关 `action="restart"`：本副本仍有非终态 job 的 `Candidate.NodeID` 等于该节点时答 409，不下发到隧道；START/STOP 不受影响。这只是"本副本自己知道的 job"，不是全局真相——一个同时连到多个副本的节点，其活跃 job 可能只被另一个副本追踪，本检查看不到那种情况；也不会自动等待排空，调用方需要在 job 结束后自行重试。
-- **自定义节点安装已交付（子任务四）**：`-comfyui-managed-addr` 新增 `POST .../comfyui-managed/custom-nodes`，安装源（仓库 URL + 固定 ref）100% 留在 Agent 本地 `-comfyui-managed-custom-nodes` 允许列表，本端点只传一个名字，理由与生命周期动作不携带镜像名同一条 `tunnel.proto` 红线；`GET` 响应同时携带该实例上报的已安装节点清单。`-admin-addr` 新增只读诊断 `GET /internal/v1/comfyui-managed/reconcile?node_id=&template_id=`，把工作流模板声明的自定义节点依赖与该节点实际安装的对账，纯读取、不写审计、不接入调度决策——`common/comfyuimanagedstatus.ReconcileCustomNodes` 的调用方之一，设计文档见 [`docs/superpowers/specs/2026-09-19-p2-comfyui-managed-docker-subtask4-design.md`](../../docs/superpowers/specs/2026-09-19-p2-comfyui-managed-docker-subtask4-design.md)。
-- **范围边界**：单实例，见上文「动作不携带容器名」。Console 可见性（设计文档拆分出的最后一项子任务五）已交付，见 Console 运维端的 `app/operator/(protected)/comfyui-managed` 页面。
+- **自定义节点安装已交付（子任务四）**：`-comfyui-managed-addr` 新增 `POST .../comfyui-managed/custom-nodes`，安装源（仓库 URL + 固定 ref）100% 留在 Agent 本地 `-comfyui-managed-custom-nodes` 允许列表，本端点只传一个名字，理由与生命周期动作不携带镜像名同一条 `tunnel.proto` 红线；`GET` 响应同时携带该实例上报的已安装节点清单。`-admin-addr` 新增只读诊断 `GET /internal/v1/comfyui-managed/reconcile?node_id=&template_id=`，把工作流模板声明的自定义节点依赖与该节点实际安装的对账，纯读取、不写审计、不接入调度决策——`common/comfyuimanagedstatus.ReconcileCustomNodes` 的调用方之一。
+- **范围边界**：单实例，见上文「动作不携带容器名」。Console 可见性（子任务五）已交付，见 Console 运维端的 `app/operator/(protected)/comfyui-managed` 页面。
 
 ## 托管供应商远程下发转发
 
@@ -240,7 +240,7 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
 3. **有界缓冲、批量异步推送，从不重试。** `requestLogPusher` 用一个容量 10000（`DefaultRequestLogBufferSize`）的有界 channel 承接中间件产生的记录；后台协程按攒够 500 条（`DefaultRequestLogBatchSize`）或每 5 秒（`DefaultRequestLogFlushInterval`）——以先到者为准——把一批推给控制面的 `POST /internal/v1/requestlogs`（`controlplaneclient.RequestLogsClient`）。**channel 满时丢弃新记录，同时对指标 `gateway_request_log_dropped_total` 自增，不阻塞正在处理的推理请求**——这是 AGENTS.md 安全红线「任何一跳都不得无界缓冲」的落实，请求记录是诊断性数据，允许极端负载下的少量丢失。一批推送失败（网络层错误）时整批本地丢弃，不重试——重试请求记录只会造成无界的本地积压。Gateway 优雅停止时对现有缓冲做一次尽力而为的 flush，不保证清空。
 4. **上报字段不含任何需要脱敏的内容。** 记录只有 `request_id`（`common/reqid` 铸造，同时是控制面 `request_logs` 表的主键，天然防重）、`tenant_id`、`apikey.Display(key)` 的展示形式（前缀 + 明文前 8 位，不存完整 key 或哈希）、封闭 `endpoint` 枚举、原始状态码、`Outcome`、耗时毫秒数与创建时间；不记录请求体、响应体、模型名、node_id、Prompt 片段或鉴权头。
 
-设计与验证细节见 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)；控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)。
+控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)。
 
 ## 按租户/模型的持久化用量账本（STATUS.md 的 P2）
 
@@ -379,7 +379,7 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 
 ### Responses 持久会话（P2）
 
-`-control-plane-addr` 配置了控制面时，`store`/`previous_response_id` 从「指名拒绝」变成生效，沿用 Job 持久化（J01–J08）已确立的控制面表 + 内部 API + Gateway 客户端形状；控制面一侧的存储契约见 [ControlPlane STATUS「Responses 持久会话（P2）」](../aiServeWeaveControlPlane/STATUS.md#responses-持久会话p2)，设计见 [`docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md`](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md) 第三节。
+`-control-plane-addr` 配置了控制面时，`store`/`previous_response_id` 从「指名拒绝」变成生效，沿用 Job 持久化（J01–J08）已确立的控制面表 + 内部 API + Gateway 客户端形状；控制面一侧的存储契约见 [ControlPlane STATUS「Responses 持久会话（P2）」](../aiServeWeaveControlPlane/STATUS.md#responses-持久会话p2)。
 
 - **写入侧是有界异步的（`httpapi/responsespersist.go` 的 `responsePersister`）**：`store:true` 时，这一轮自己的输入加上 assistant 的回复被编码成不透明 JSON，交给一个信号量限流的后台写入（默认并发 8，`-control-plane-addr`/`-control-plane-token` 复用），绝不阻塞调用方正在等待的响应——并发已满时丢弃并计入 `gateway_response_persist_dropped_total`，写入失败计入 `gateway_response_persist_failed_total`，均不重试、不入持久队列，与请求日志推送同一纪律。
 - **读取侧是同步的**：`previous_response_id` 非空时，Gateway 在派发请求之前先沿它逐跳调用控制面的 `GetResponseTurn` 走到根轮次，按时间顺序拼接每一跳自己的消息，作为前缀拼在这一轮自己的输入之前再发给后端——这一步是调用方请求路径的一部分，因为调用方点名了一段具体对话，需要一个确切答案而不是一段可能残缺的历史。链路深度有界（默认 50 跳，`maxResponseChainDepth`），超出时拒绝（503）而不是静默截断；未知或不属于该租户的 `previous_response_id` 答 400，不是编造一段更短的历史，也不是看起来像本 Gateway 自身故障的 500。
@@ -460,14 +460,14 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 1. **排序有两层，外层属于运维。** target 按 priority 依次尝试（数值小的在前，与 Kubernetes 一致），同优先级的可用 target 按权重随机排列（0 等同 1），再在各 target 内部按「空闲槽最多、上报队列占用最低、在途最少」三级选择候选（第二级见下方第 5 条；这是默认的 `least_load` 策略，可换成其他目标内排序策略，见下方第 6 条）。这正是「先用本地那台 Mac，再用租来的 GPU」名副其实的原因：一个声明的偏好，不会被一台一时更空闲的机器推翻。优先级是排序不是排除——首选匹配不到节点时会落到次选。
 2. **节点选择器是「与」。** 声明的每个标签都必须匹配；空选择器匹配所有节点。一条意为「其中任意一个」的规则根本无法表达「本地那台 4090」，而那正是运维实际会写的规则。
 3. **别名在离开 Gateway 之前被改写成真实模型名**，客户端始终不会得知后者。`GET /v1/models` 因此在有路由表时只列别名——两者都公布等于邀请客户端绑定到某个运行时模型，而那正是别名要防止的事。没有活节点能服务的别名会被略去：一个用起来就 404 的目录条目，比一个缺失的条目更糟。
-4. **`min_gpu_memory_bytes` 是准入门槛，不是排序维度**（STATUS.md 的 P2）。target 可选声明一个最小 GPU 显存总量；候选节点声明的显存（Agent 在 Hello 握手时上报的 `NodeResources.GpuMemoryBytes`，见 [Agent STATUS](../aiServeWeaveAgent/STATUS.md#当前实现) 的 `hostresources/`）低于这个值就在候选阶段被整体排除，不参与后续任何排序。零值（默认）不做任何过滤。**未上报硬件、或上报零显存的节点永远不被此字段排除**——未声明的容量不是容量不足的证据，这样才能保证某个 target 第一次设置这个字段的那天，不会把所有还没升级 Agent 版本的节点一并挡在外面。详见 [P2 设计文档](../../docs/superpowers/specs/2026-09-15-p2-resource-aware-scheduling-design.md)。
-5. **队列占用是排序维度，不是准入门槛，且只对 ComfyUI 有意义**（STATUS.md 的 P2 实时利用率子任务）。ComfyUI 同一时间只渲染一个任务，但它的软件并发上限与其他运行时共用同一个默认值——这意味着一个正在渲染的 ComfyUI 实例，空闲槽读数照样可以很高，「空闲槽最多」这一级排序因此分不清它和一个真正空闲的实例。`common/runtime/workflow/comfyui.Runtime.Health` 在存活性检查之外顺带查一次 `GET /queue`，写进 `HealthReport.QueueRunning`/`QueuePending`（`tunnel.proto` 的 `HealthReport` 消息新增字段，随 `RuntimeSnapshot` 一起到达 Gateway）；`pickBy` 在「空闲槽」相同的候选之间，优先选这两个数之和更低的一个，再退回「在途最少」。其余运行时种类这两个字段恒为 0，排序上等同于「确认空闲」——不上报这件事本身从不被当作惩罚，也不影响 Ollama/vLLM/SGLang 现有的排序结果。查询失败不影响健康检查本身，只是把这两个字段留在零值。必要性评估与范围收窄见 [必要性评估文档](../../docs/superpowers/specs/2026-09-16-p2-realtime-utilization-necessity-design.md)。
+4. **`min_gpu_memory_bytes` 是准入门槛，不是排序维度**（STATUS.md 的 P2）。target 可选声明一个最小 GPU 显存总量；候选节点声明的显存（Agent 在 Hello 握手时上报的 `NodeResources.GpuMemoryBytes`，见 [Agent STATUS](../aiServeWeaveAgent/STATUS.md#当前实现) 的 `hostresources/`）低于这个值就在候选阶段被整体排除，不参与后续任何排序。零值（默认）不做任何过滤。**未上报硬件、或上报零显存的节点永远不被此字段排除**——未声明的容量不是容量不足的证据，这样才能保证某个 target 第一次设置这个字段的那天，不会把所有还没升级 Agent 版本的节点一并挡在外面。
+5. **队列占用是排序维度，不是准入门槛，且只对 ComfyUI 有意义**（STATUS.md 的 P2 实时利用率子任务）。ComfyUI 同一时间只渲染一个任务，但它的软件并发上限与其他运行时共用同一个默认值——这意味着一个正在渲染的 ComfyUI 实例，空闲槽读数照样可以很高，「空闲槽最多」这一级排序因此分不清它和一个真正空闲的实例。`common/runtime/workflow/comfyui.Runtime.Health` 在存活性检查之外顺带查一次 `GET /queue`，写进 `HealthReport.QueueRunning`/`QueuePending`（`tunnel.proto` 的 `HealthReport` 消息新增字段，随 `RuntimeSnapshot` 一起到达 Gateway）；`pickBy` 在「空闲槽」相同的候选之间，优先选这两个数之和更低的一个，再退回「在途最少」。其余运行时种类这两个字段恒为 0，排序上等同于「确认空闲」——不上报这件事本身从不被当作惩罚，也不影响 Ollama/vLLM/SGLang 现有的排序结果。查询失败不影响健康检查本身，只是把这两个字段留在零值。
 6. **目标内排序策略由 `-scheduler-policy` 选择，只作用于同一个 target 内部**（`scheduler/policy.go`）。优先级与权重仍先生效，策略只决定同等偏好的候选先试哪个；其余候选按最少负载顺序排在后面，作为重试回退。可选值：
    - `least_load`（默认）：即第 1 条的三级排序，与引入此 flag 之前的行为完全一致。
    - `power_of_two`：随机抽两个候选，先试负载较低的那个。单副本下空闲槽是实时数（槽在派发时被占用），`least_load` 已经足够准确，这个策略的价值主要在多副本：各副本只看到自己的槽和滞后的心跳 inflight，空闲槽打平时会一致认定同一个「最空闲」节点。代价是小机群里有时选不到唯一最优的节点。
    - `prefix_hash`：共享同一段提示前缀的请求发往同一个候选，复用后端的提示/前缀缓存（Ollama 的按槽缓存、vLLM/SGLang 的 prefix caching）。前缀取「直到并包括第一条 user 消息为止的所有消息」，最多 `-scheduler-prefix-bytes`（默认 4096）字节。因此同一段对话的各轮哈希相同；只共享一段短于上限的系统提示的不同对话会分散开；系统提示本身超过上限时，所有对话会集中到同一组节点（对 vLLM 的共享前缀缓存有利，但会形成热点）。工具定义不计入。候选按 rendezvous 哈希排序：节点加入或离开时，只有原本把它排第一的前缀会迁移。没有空闲推理槽的候选排到有空闲槽的之后，所以热门前缀会依次填满它的节点，而不是一直回答背压。哈希用 FNV，各 Gateway 副本得出同一个排序。只有 Chat/ChatStream 路径（OpenAI Chat、Responses、Anthropic 转换路径、Ollama 原生 chat/generate）带前缀；Embeddings、Rerank、图像、转录和原生 Messages 没有前缀，退回 `least_load`。提示文本只在计算哈希的函数里出现，不进日志也不保存。
    - **工作流提交始终用 `least_load`**，不受此 flag 影响：ComfyUI 任务会独占唯一的 GPU 很久，背后的机群也小，精确排序比分散更重要；工作流也没有前缀可用。
-   - 这是基于内容的亲和，不是 A05 设计文档第五节说的基于会话标识的亲和：它不需要客户端提供会话 ID，也不发明会话 ID。代价是对话开头被改写（例如客户端裁剪了历史）时亲和就会失效。目前没有命中率指标；vLLM 自己的 prefix cache 命中率指标可以作为效果依据。
+   - 这是基于内容的亲和，不是基于会话标识的亲和：它不需要客户端提供会话 ID，也不发明会话 ID。代价是对话开头被改写（例如客户端裁剪了历史）时亲和就会失效。目前没有命中率指标；vLLM 自己的 prefix cache 命中率指标可以作为效果依据。
 
 **节点标签由 Agent 的 `-labels` 声明**（`region=local,gpu=4090`），随 Hello 上报，重连即重新读取——它们描述的是机器而不是负载。畸形条目被丢弃而不是让 Agent 拒绝启动：为一个只影响「请求偏好去哪」的笔误让节点下线，代价不对等。
 
@@ -503,12 +503,12 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 ## 工作流 Job 的有界排队（STATUS.md 的 P2）
 
-「tunnelserver 的四条约束」第二条"不排队"说的是隧道数据面：`Dispatch` 没有空闲槽就立刻返回 `ErrorBackpressure`，从不在那一层等待，这一点没有变。本节说的是它上面一层——`scheduler.SubmitWorkflow` 在每一个当前候选都以可重试的背压类失败作答（即所有候选此刻都忙）时，可选地等待一段有界时间、期间重新轮询候选集，而不是立即把失败返回给调用方；详见 [P2 设计文档「有界任务排队」一节](../../docs/superpowers/specs/2026-09-15-p2-resource-aware-scheduling-design.md)。
+「tunnelserver 的四条约束」第二条"不排队"说的是隧道数据面：`Dispatch` 没有空闲槽就立刻返回 `ErrorBackpressure`，从不在那一层等待，这一点没有变。本节说的是它上面一层——`scheduler.SubmitWorkflow` 在每一个当前候选都以可重试的背压类失败作答（即所有候选此刻都忙）时，可选地等待一段有界时间、期间重新轮询候选集，而不是立即把失败返回给调用方；
 
 - **默认关闭，行为与之前完全一致。** `-workflow-queue-max-wait` 默认 `0`，此时候选耗尽立即失败，等同于这个功能存在之前的行为。
-- **只覆盖工作流 Job 提交（`SubmitWorkflow`），不覆盖 Chat/Embed。** OpenAI 前门是同步请求，客户端已经在等响应，在 Gateway 内部再排队没有意义（设计文档第六节第 3 条）；工作流 Job 本身是异步提交+轮询模型，天然适合排队。
+- **只覆盖工作流 Job 提交（`SubmitWorkflow`），不覆盖 Chat/Embed。** OpenAI 前门是同步请求，客户端已经在等响应，在 Gateway 内部再排队没有意义；工作流 Job 本身是异步提交+轮询模型，天然适合排队。
 - **候选完全不存在（`ErrNoCapableNode`）或失败不可重试时永远不排队。** 前者重试也不会凭空出现一个节点；后者（例如 ComfyUI 可能已经收到了这次提交）重试有制造第二次生成的风险，两者都保持立即失败。
-- **`runtime.WorkflowRequest.MinGPUMemoryBytes` 把「模型别名与节点标签」第 4 条的准入门槛过滤接到了工作流提交路径**——这个过滤此前只经由一个有路由的模型的 `Target.MinGPUMemoryBytes` 生效，`workflowCandidates` 传的是空 `routing.Target{}`，导致它对工作流提交结构性地永远不生效，即便 P2 设计文档自己的首要场景就是"一个大模型工作流不应该被派给显存总量明显不够的节点"。字段由调用方设置（今天没有任何调用方设置它，默认零值不做过滤，行为不变），语义与 `Target.MinGPUMemoryBytes` 完全一致：达不到要求的候选在 `pickBy` 里被排除、绝不进入排队等待（等待无法让一个声明不足的显存总量变得足够，与"候选完全不存在时不排队"是同一类判断），未上报硬件的节点仍默认放行。**模板层面如何声明"这个工作流需要多少显存"仍未设计**——与 `modelroute.Target.MinGPUMemoryBytes` 今天完全靠运维手工声明、没有自动推断来源同一处境，是独立于本次调度器接线之外的后续任务。
+- **`runtime.WorkflowRequest.MinGPUMemoryBytes` 把「模型别名与节点标签」第 4 条的准入门槛过滤接到了工作流提交路径**——这个过滤此前只经由一个有路由的模型的 `Target.MinGPUMemoryBytes` 生效，`workflowCandidates` 传的是空 `routing.Target{}`，导致它对工作流提交结构性地永远不生效，即便这个字段的首要场景就是"一个大模型工作流不应该被派给显存总量明显不够的节点"。字段由调用方设置（今天没有任何调用方设置它，默认零值不做过滤，行为不变），语义与 `Target.MinGPUMemoryBytes` 完全一致：达不到要求的候选在 `pickBy` 里被排除、绝不进入排队等待（等待无法让一个声明不足的显存总量变得足够，与"候选完全不存在时不排队"是同一类判断），未上报硬件的节点仍默认放行。**模板层面如何声明"这个工作流需要多少显存"仍未设计**——与 `modelroute.Target.MinGPUMemoryBytes` 今天完全靠运维手工声明、没有自动推断来源同一处境，是独立于本次调度器接线之外的后续任务。
 - **两条独立的界，缺一不可**（AGENTS.md「任何一跳都不得无界缓冲」）：`-workflow-queue-max-wait` 限最长等待时长，`-workflow-queue-max-waiters`（默认 64）限同时在等的提交数，超过后新的提交立即被拒绝而不是排进一个更长的队。`-workflow-queue-retry-interval`（默认 500ms）是等待期间重新轮询候选集的间隔。
 - **可观测**：`gateway_scheduler_queue_depth`（当前排队数）、`gateway_scheduler_queue_wait_seconds`（按 `outcome`∈`resolved`/`canceled`/`timeout` 分桶的等待时长）、`gateway_scheduler_queue_rejected_total`（因排队已满被拒绝的次数），见下方「指标」。
 
@@ -532,7 +532,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - 不需要 API Key 也能用；有 Key 时把 `tenant_id`/`key_id` 作为归属标识带过隧道，它们不是凭据。提示词不写日志。
 - 不要在模型路由里把 `gpt-image-2.5-flare` 之类的 OpenAI API 模型 ID 设成指向 `codex-image` 的别名：Codex 无法指定上游图像模型，这样做等于给输出标错型号。
 
-**ComfyUI 模板路径**（STATUS.md 的 P2）把 OpenAI-compatible 图像生成请求映射到管理员指定的单一 ComfyUI 工作流模板，边界设计见 [P2 设计文档「图像生成映射到 ComfyUI」](../../docs/superpowers/specs/2026-09-16-p2-images-responses-multimodal-boundary-design.md)。
+**ComfyUI 模板路径**（STATUS.md 的 P2）把 OpenAI-compatible 图像生成请求映射到管理员指定的单一 ComfyUI 工作流模板。
 
 - **`-images-workflow-id` 未配置时该路由照常挂载但答 404**，与其余工作流路由「路由总是挂载、由配置决定行为」的既有模式一致。配置了但对应模板在启动期缺少必填 `prompt` 字符串输入、或没有至少一个 `Type == "image"` 的 `Output`，进程直接启动失败（`main.go` 的 `validateImagesWorkflow`）——这是一次性静态检查，**不会**在 `-workflow-source=controlplane` 热替换目录时重新触发；一次剥离了所需字段的重新发布，只会在下一次请求时表现为 400/500，不是启动失败。
 - **约定优于配置**：调用方的 `prompt` 绑定到模板声明的 `prompt` 输入，`size`（`"WIDTHxHEIGHT"`）仅在模板同时声明了 `width`/`height` 整数输入时才被接受，`quality`/`style` 同理仅在模板分别声明了同名字符串输入时才被接受，否则均按名字拒绝。没有单独的输入名映射配置——这样模板经控制面热替换时，映射关系不会与它的 `Inputs` 声明脱节。
@@ -541,12 +541,12 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - **`response_format=b64_json`（默认）** 经 `OpenArtifact` 有界读取（`MaxImageResponseBytes` 32 MiB，刻意远小于产物传输本身的 512 MiB 上限——把一个足尺寸产物 base64 膨胀进一个 JSON 响应体不是同步处理器该做的事）后 base64 编码；**`response_format=url`** 直接返回既有的 `GET /v1/artifacts/{artifact_id}` 路径，不新增同步持久化，靠该路径本就有的「优先读持久副本、失败回退实时节点拉取」覆盖异步持久化器还没赶上的窗口。
 - **`n` 目前只接受 1**，按名字拒绝而不是静默忽略。
 - **`quality`/`style` 与 `size` 同一约定**：调用方给出的 `quality`/`style` 只有在已配置模板同时声明了名为 `quality`/`style` 的输入时才会被兑现，否则按名字拒绝；本端点不解析或校验它们的取值（OpenAI 自己的 `"standard"/"hd"`、`"vivid"/"natural"` 枚举是 DALL-E-3 专属的，而这里的模板是任意一张 ComfyUI 图），原始字符串直接绑定给模板，与 `prompt` 相同。
-- 本项实现过程中发现并修复了一处独立于本功能之外的既有缺陷：`runtime.WorkflowStatus.OutOfMemory` 此前从未真正跨隧道传输（`tunnel.proto`/`common/tunnelwire` 都缺这个字段），意味着 A06 的 `gateway_workflow_job_oom_total` 指标在生产环境里从未被真正观测到过 true，详见设计文档 2.5 节。
+- 本项实现过程中发现并修复了一处独立于本功能之外的既有缺陷：`runtime.WorkflowStatus.OutOfMemory` 此前从未真正跨隧道传输（`tunnel.proto`/`common/tunnelwire` 都缺这个字段），意味着 A06 的 `gateway_workflow_job_oom_total` 指标在生产环境里从未被真正观测到过 true。
 - 本机无真实 ComfyUI/GPU 环境验证，与 A06 同一先例，默认测试套件（假节点）作为交付依据。
 
 ## Anthropic Messages
 
-`POST /v1/messages`（STATUS.md 的 P2）是 Anthropic Messages 协议的文本+图片+工具调用子集，边界设计见 [P2 设计文档「Anthropic Messages 兼容边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)；图片与工具调用支持是该文档§九.3 列为独立后续任务的 ChatMessage.Content 结构化改造的两个后续交付。实现见 `httpapi/anthropic.go`。
+`POST /v1/messages`（STATUS.md 的 P2）是 Anthropic Messages 协议的文本+图片+工具调用子集；图片与工具调用支持来自后续的 `ChatMessage.Content` 结构化改造。实现见 `httpapi/anthropic.go`。
 
 - **架构与 Responses 相同：在边界处转换，不新增调度路径。** 请求在 `toRuntime()` 里被转换成与 `chat.go`/`responses.go` 完全同一个 canonical `runtime.ChatRequest`，经同一个 `Scheduler.Chat`/`ChatStream` 派发，因此一个只会 Chat Completions 的后端在不知道 Anthropic 协议存在的情况下就能服务这个端点；不改动 `common/runtime` 核心类型或调度逻辑。
 - **`image` 内容块已支持**（STATUS.md 的 P2 ChatMessage.Content 结构化改造，`anthropicContentRun`）：`source.type` 为 `"base64"`（`media_type`+`data`）转换成 `data:` URI，`"url"` 直接透传，两者都落进 `runtime.ChatMessage.ContentParts` 的 `image_url` 部件——与 `common/runtime/openai` 后端 DTO 及 Chat Completions 前门共用同一个 `runtime.ContentPart`/`ContentImageURL` 类型，三个前门（Chat Completions、Responses、Anthropic Messages）产出的候选消息在到达调度器时已经是同一个形状。一条消息的 `content` 若全部由 `"text"` 块组成（或本身是裸字符串），仍然收敛成普通字符串 `Content`，与加入这项之前逐字节一致——只有真的出现非文本块时才会用到 `ContentParts`/`ToolCalls`。
@@ -555,7 +555,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
   - 工具集合由 `anthropicActiveTools` 一次算出：带 `defer_loading: true` 的已声明工具先隐藏；`tool_addition`（`tool_reference` 引用已声明工具，或 `tool_definition` 给出新定义、可覆盖同名）激活工具，`tool_removal` 停用工具；`tool_result` 里的 `tool_reference`（`tool_name`，客户端 ToolSearch 的结果）同样激活工具，并在结果文本中渲染为 `Tool loaded and now callable: <name>`。引用未声明的工具忽略。最终顺序：未延迟的工具按声明顺序，其余按首次激活顺序。
   - system 轮次里出现不认识的块类型、点不出工具名的工具块、`tool_removal` 带定义、内容不是字符串也不是块数组，都返回 400，`error.message` 末尾带 `capability_rejected: mid_conv_system`；Claude Code 匹配到这个标记会去掉 system 轮次重发并在本次对话保持关闭，作为兜底。`tool`、`developer` 等其他角色仍然只点名报错。
   - 原生 Messages 路径（Claude CLI 模型）不经过这里，但复用同一套 system 轮次解析与 `anthropicActiveTools`，见「Claude Code 原生 Messages」的请求整形。
-- **工具调用（`tools`/`tool_choice`/`tool_use`/`tool_result`）已支持，复用既有 `ToolCalls`/`ToolCallID` 字段，不新增核心类型**：设计文档§四.3 原本把这层交互形状列为独立缺口，本轮核实后发现今天的 `runtime.ChatMessage.ToolCalls`/`ToolCallID`——OpenAI 前门早已使用的同一对字段——足够表达它。`tools`（Anthropic 扁平的 `{name, description, input_schema}` 形状，无 `"function"` 包装）映射成 `runtime.Tool{Type:"function", ...}`；`tool_choice` 的 `"auto"`/`"none"` 原样传递，`"any"`（至少调用一个工具）映射到 OpenAI 词汇里最接近的 `"required"`，`"tool"`（指名一个工具）重新编码成 OpenAI 具名工具选择的对象形状；`disable_parallel_tool_use` 没有对应的逐请求旋钮，被静默忽略——与 `ollama.go` 对 `keep_alive` 的处理同一先例。一条 assistant 消息里的 `"tool_use"` 块变成该消息的 `ToolCalls`（可以与同一回合的文本块共存，就像 OpenAI 的 assistant 消息能同时携带 `Content` 和 `ToolCalls` 一样）；一条 user 消息里的 `"tool_result"` 块被拆分成一条独立的合成 `"tool"` 角色消息（`ToolCallID` + 结果文本），因为 Anthropic 把工具结果嵌在 user 回合的内容块里，而其余每个前门的 canonical 形状都要求它是一条独立消息——原始块顺序在拆分后的消息切片里保持不变。`tool_result.content` 里的图片块目前按名字拒绝：还没有任何前门的 `"tool"` 角色消息携带 `ContentParts`。
+- **工具调用（`tools`/`tool_choice`/`tool_use`/`tool_result`）已支持，复用既有 `ToolCalls`/`ToolCallID` 字段，不新增核心类型**：这层交互形状原本被列为独立缺口，核实后发现今天的 `runtime.ChatMessage.ToolCalls`/`ToolCallID`——OpenAI 前门早已使用的同一对字段——足够表达它。`tools`（Anthropic 扁平的 `{name, description, input_schema}` 形状，无 `"function"` 包装）映射成 `runtime.Tool{Type:"function", ...}`；`tool_choice` 的 `"auto"`/`"none"` 原样传递，`"any"`（至少调用一个工具）映射到 OpenAI 词汇里最接近的 `"required"`，`"tool"`（指名一个工具）重新编码成 OpenAI 具名工具选择的对象形状；`disable_parallel_tool_use` 没有对应的逐请求旋钮，被静默忽略——与 `ollama.go` 对 `keep_alive` 的处理同一先例。一条 assistant 消息里的 `"tool_use"` 块变成该消息的 `ToolCalls`（可以与同一回合的文本块共存，就像 OpenAI 的 assistant 消息能同时携带 `Content` 和 `ToolCalls` 一样）；一条 user 消息里的 `"tool_result"` 块被拆分成一条独立的合成 `"tool"` 角色消息（`ToolCallID` + 结果文本），因为 Anthropic 把工具结果嵌在 user 回合的内容块里，而其余每个前门的 canonical 形状都要求它是一条独立消息——原始块顺序在拆分后的消息切片里保持不变。`tool_result.content` 里的图片块目前按名字拒绝：还没有任何前门的 `"tool"` 角色消息携带 `ContentParts`。
 - **流式响应里的工具调用遵循 Anthropic 自己的顺序纪律**：内容块严格顺序化，一次只开一个——收到第一个工具调用增量时，若开头的文本块（index 0）尚未关闭就先关闭它，再为该工具调用开一个新的 `tool_use` 块（`content_block_start` 携带 `id`/`name`，`input` 先给空对象）；后续参数片段以 `input_json_delta.partial_json` 逐段追加，从不在服务端拼接解析。这依赖一个未强制校验的假设：本仓库目前对接的 OpenAI 兼容后端都是把一次工具调用完整流完再开始下一次，不会把两个调用的参数片段交替发送——真交替到达时，本实现会在收到新索引时把上一个块关闭、开一个新块，仍能产出合法但更琐碎的分块序列，而不是缓冲重排（AGENTS.md「任何一跳都不得无界缓冲」）。
 - **`system` 字段的归约规则不变，仍是纯文本**：顶层 `system`（字符串，或全为 `"text"` 块的数组）映射成一条前置的 `Role: "system"` 消息——Anthropic 协议本身把 `system` 定义为纯文本，从不携带图片或工具块，因此它复用的是更窄的 `anthropicText`，与 `messages[i].content` 走的 `anthropicMessageToRuntime` 分开维护。`messages[i].role` 只接受 `"user"`/`"assistant"`，其余角色（含 Anthropic 协议里不存在于 `messages` 数组的 `"system"`）按名字拒绝。
 - **`document` 内容块已支持**（STATUS.md 的 P2 多模态输入，紧接图片支持之后交付）：`source.type` 为 `"base64"`（`media_type`+`data`）转换成 `data:` URI、`"url"` 直接透传——与 `image` 块共用同一个来源归约逻辑（`anthropicImageSourceJSON.toURL`），只是落进 `runtime.ContentPart` 的 `"file"` 部件（`runtime.ContentFile{URL, Filename}`）而不是 `image_url`；可选的 `title` 字段透传为 `Filename`。一个含 `document`（与含 `image` 同理）的内容块运行不再把 `text` 块收敛成纯字符串，而是各自渲染成 `ContentPart`。
@@ -569,23 +569,23 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 ## Ollama 原生 API
 
-`POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（STATUS.md 的 P2）是 Gateway 对客户端的第二套原生推理前门，边界设计见 [P2 设计文档「Ollama 原生 API 兼容边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)。实现见 `httpapi/ollama.go`。**与 Agent 怎么连后端 Ollama 实例无关**：`common/runtime/ollama` 对那个后端刻意选择 OpenAI 兼容协议（见该包的包文档），这里只是在 Gateway 对客户端的一侧再开一扇门。
+`POST /api/chat`、`POST /api/generate`、`POST /api/embeddings`（STATUS.md 的 P2）是 Gateway 对客户端的第二套原生推理前门。实现见 `httpapi/ollama.go`。**与 Agent 怎么连后端 Ollama 实例无关**：`common/runtime/ollama` 对那个后端刻意选择 OpenAI 兼容协议（见该包的包文档），这里只是在 Gateway 对客户端的一侧再开一扇门。
 
 - **架构与 Anthropic 相同：边界处转换，不新增调度路径。** `toRuntime()` 把请求转换成与其他每个前门同一个 canonical `runtime.ChatRequest`/`runtime.EmbeddingRequest`，经同一个 `Scheduler.Chat`/`ChatStream`/`Embed` 派发；不改动 `common/runtime` 核心类型或调度逻辑。
-- **范围是「纯推理端点」，与设计文档§九.2 的任务拆分一致**：`tools`、`format` 与每条消息的 `images` 一旦出现即按名字拒绝（400），不静默忽略——今天的 `runtime.ChatMessage.Content` 单一字符串没有地方安放它们；`/api/generate` 额外拒绝 `images`/`context`/`raw`/`template`/`suffix`，理由相同（`context` 尤其如此：这里没有可供延续的每请求状态）。`keep_alive` 与 `options` 里除采样参数外的其余旋钮（`num_ctx`、`num_gpu`、`mirostat`……）被静默忽略而非拒绝——这个 Gateway 不管理单个后端进程的内存驻留或上下文窗口大小，没有什么可供遵从或拒绝。
+- **范围是「纯推理端点」**：`tools`、`format` 与每条消息的 `images` 一旦出现即按名字拒绝（400），不静默忽略——今天的 `runtime.ChatMessage.Content` 单一字符串没有地方安放它们；`/api/generate` 额外拒绝 `images`/`context`/`raw`/`template`/`suffix`，理由相同（`context` 尤其如此：这里没有可供延续的每请求状态）。`keep_alive` 与 `options` 里除采样参数外的其余旋钮（`num_ctx`、`num_gpu`、`mirostat`……）被静默忽略而非拒绝——这个 Gateway 不管理单个后端进程的内存驻留或上下文窗口大小，没有什么可供遵从或拒绝。
 - **`stream` 的默认值与 OpenAI 前门相反**：Ollama 自己的协议里字段整体缺失即视为 `true`，因此 wire 结构体用 `*bool` 区分「缺失」与「显式 false」（`wantsStream()`）。
 - **流式响应是换行分隔的 JSON（`application/x-ndjson`）**，不是 SSE：每行一个对象，末尾一行 `"done":true`，与 OpenAI/Anthropic 前门的 SSE 帧完全不同的协议形状。
 - **`/api/generate` 把 `prompt`/`system` 归约成两条消息**：`system`（如果非空）映射成前置的 `Role: "system"` 消息，`prompt` 映射成一条 `Role: "user"` 消息，与 Anthropic 前门对 `system` 字段的归约方式一致。
 - **思考内容输出为 `thinking` 字段**：`/api/chat` 放在 `message.thinking`，`/api/generate` 放在顶层 `thinking`，与 Ollama 自己的形状一致；流式时思考片段与文本片段各自成行。客户端在请求消息里回传的 `thinking` 被接受但不转发。请求参数 `think`（布尔值或 `low`/`medium`/`high`）转成思考提示，见上文「请求侧开启思考」。
 - **不编造未测量的计时字段**：真实 Ollama 的响应还带 `total_duration`/`load_duration`/`prompt_eval_duration`/`eval_duration` 这类计时字段，本 Gateway 不追踪，因此整体不输出（而不是发送一个有误导性的零值）；`prompt_eval_count`/`eval_count` 映射到后端真实上报的 `resp.Usage.PromptTokens`/`CompletionTokens`，是可信数字。
-- **模型管理端点明确答「不支持」，不是 404 或误导性的成功**：`/api/create`、`/api/pull`、`/api/push`、`/api/delete`、`/api/copy`、`/api/show`、`/api/tags`、`/api/ps` 统一挂载到 `ollamaUnsupported`，答 501 与 `{"error": "..."}` 说明——Gateway 从不管理任何节点上的本地模型文件，那是每个节点与自己后端之间的事，设计文档§五.3 把这条边界列为实现前必须明确声明的事项。
+- **模型管理端点明确答「不支持」，不是 404 或误导性的成功**：`/api/create`、`/api/pull`、`/api/push`、`/api/delete`、`/api/copy`、`/api/show`、`/api/tags`、`/api/ps` 统一挂载到 `ollamaUnsupported`，答 501 与 `{"error": "..."}` 说明——Gateway 从不管理任何节点上的本地模型文件，那是每个节点与自己后端之间的事。
 - **`/api/embeddings` 是单条 prompt 的旧版端点**，不是批量输入的新版 `/api/embed`——本 v1 前门不实现后者。
 - **已接入 P09/C28 请求检索**：三个推理端点分别记为 `ollama_chat`、`ollama_generate`、`ollama_embed`；上面的模型管理路由不派发，不记录。
 - 错误体是 Ollama 自己的 `{"error": "..."}` 形状（`writeOllamaError`），调度失败的分类逻辑（`errors.go` 的 `dispatchErrorDetails`）与其余前门共用。
 
 ## 音频转录与翻译
 
-`POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（STATUS.md 的 P2）是 OpenAI 兼容的音频转录/翻译端点，边界设计见 [P2 设计文档「音频转录/翻译能力边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md)。实现见 `httpapi/audio.go`；不同于 Anthropic/Ollama 两个前门，这是唯一需要给 `common/runtime.InferenceRuntime` 新增方法（`Transcribe`）的一次破坏性接口变更，而不是纯粹在边界处转换。
+`POST /v1/audio/transcriptions`、`POST /v1/audio/translations`（STATUS.md 的 P2）是 OpenAI 兼容的音频转录/翻译端点。实现见 `httpapi/audio.go`；不同于 Anthropic/Ollama 两个前门，这是唯一需要给 `common/runtime.InferenceRuntime` 新增方法（`Transcribe`）的一次破坏性接口变更，而不是纯粹在边界处转换。
 
 - **`InferenceRuntime` 新增 `Transcribe(ctx, req AudioTranscriptionRequest, audio io.Reader) (AudioTranscriptionResponse, error)`**，转录与翻译共用一个方法与一个 `CapabilityAudioTranscription`：两者的 wire 与后端契约只在请求的 `Task` 字段上不同。`oaibase.Base.Transcribe` 是三个 OpenAI 兼容适配器（ollama、vllm、sglang）共享的实现，调用 `common/runtime/openai.Transcribe` 打 `/v1/audio/transcriptions` 或 `/v1/audio/translations`。
 - **没有任何适配器的 `Discover` 会发布这项能力**：三个适配器都只是把调用委托给 `oaibase.Base.Transcribe`，而 `Base` 的能力门禁（`CapabilitiesFor` + `CapabilitySet.Require`）只认从 `Discover` 收到的证据，因此在真正为某个部署接入语音探测之前，每一次调用都会被本地拒绝为不支持，而不是被假定可行——「绝不假设后端支持」原则在这里第一次没有适配器把门打开。
@@ -597,7 +597,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 ## Rerank
 
-`POST /v1/rerank`（STATUS.md 的 P2）把文档相对一个查询打分并按相关性排序，边界设计见 [P2 设计文档「rerank 能力边界」](../../docs/superpowers/specs/2026-09-16-p2-api-compat-boundary-design.md) 第七节。实现见 `httpapi/rerank.go`；这是 P2 API 兼容边界设计文档建议先行验证的「新增 `InferenceRuntime` 方法」这套破坏性变更模式的试点，音频转录随后复用了同一套模式（见上一节）。
+`POST /v1/rerank`（STATUS.md 的 P2）把文档相对一个查询打分并按相关性排序。实现见 `httpapi/rerank.go`；这是「新增 `InferenceRuntime` 方法」这套破坏性变更模式的试点，音频转录随后复用了同一套模式（见上一节）。
 
 - **`InferenceRuntime` 新增 `Rerank(ctx, req RerankRequest) (RerankResponse, error)`**，新增 `CapabilityRerank` 门禁。`oaibase.Base.Rerank` 是三个 OpenAI 兼容适配器（ollama、vllm、sglang）共享的实现，调用 `common/runtime/openai.Rerank` 打 `POST /v1/rerank`——这不是 OpenAI 自家定义的端点，而是 vLLM、TEI 等自托管 OpenAI 生态服务器沿用 Cohere/Jina rerank 契约形成的事实约定，与 `/v1/embeddings` 有 OpenAI 自己的定义不同。
 - **没有任何适配器的 `Discover` 会发布这项能力**：三个适配器都只是把调用委托给 `oaibase.Base.Rerank`，而 `Base` 的能力门禁只认从 `Discover` 收到的证据（或运维经 `Config.CapabilityOverrides` 手工声明），因此在为某个部署确认后端支持之前，每一次调用都会被本地拒绝为不支持——与音频转录同一先例。

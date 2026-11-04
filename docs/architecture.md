@@ -2,7 +2,7 @@
 
 本文描述 AIServeWeave 的目标架构、协议兼容、ComfyUI 接入、调度、数据模型、安全与可观测性设计。**其中包含尚未实现的规划，不作为功能可用性声明**；开发进度、优先级与验收统一见 [STATUS.md](../STATUS.md)，具体接口与运行限制见各服务 README。
 
-下文的架构图与职责列表包含目标能力：Anthropic 完整功能对等（工具调用、文档内容块——图片内容块已支持）、Ollama 模型管理端点代理、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 模式在代码中尚不存在，边界核实见 [A04 设计文档](superpowers/specs/2026-09-15-a04-direct-mode-boundary-design.md)。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
+下文的架构图与职责列表包含目标能力：Anthropic 完整功能对等（工具调用、文档内容块——图片内容块已支持）、Ollama 模型管理端点代理、Managed 部署、对象存储、资源采集、模板/部署配置发布与告警仍属规划；Direct 模式在代码中尚不存在。Registry 已有令牌管理与节点禁用，控制面/Console 已接入节点审批、禁用/启用、维护与平台运维会话（P01）。历史记录可查不保证文件在原节点离线或 Gateway 重启后仍可下载。
 
 ## 整体架构
 
@@ -222,7 +222,7 @@ DeploymentCapability
 
 ComfyUI 是基于节点图的生成式 AI 推理引擎，可生成图片、视频、音频等内容。它的执行方式是提交整个工作流并异步排队，不应强行套用 LLM 的同步请求模型。
 
-AIServeWeave 将 ComfyUI 视为一种独立 Backend。以下为目标接入范围，目前已实现 External 后端适配与 Agent Tunnel 链路；Direct 在代码中尚不存在（见 [A04 设计文档](superpowers/specs/2026-09-15-a04-direct-mode-boundary-design.md)），Managed 与 Comfy Cloud 尚未交付：
+AIServeWeave 将 ComfyUI 视为一种独立 Backend。以下为目标接入范围，目前已实现 External 后端适配与 Agent Tunnel 链路；Direct 在代码中尚不存在，Managed 与 Comfy Cloud 尚未交付：
 
 - 节点上自托管的 ComfyUI
 - 通过 Direct 模式访问的 ComfyUI 服务器

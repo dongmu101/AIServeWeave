@@ -287,7 +287,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | 控制面 | 新表 `request_logs`（`internal/store/gormstore/requestlogmigrate.go` 固定版本迁移）、`internal/store` 的 `RequestLogs` 接口（gormstore/memstore 两个实现）、`internal/logic.CreateRequestLogs`/`ListRequestLogs`、`internal/handler` 的 `POST /internal/v1/requestlogs`、`GET /admin/v1/requests`、`GET /operator/v1/requests`、`internal/requestlogretention`（保留期清理，默认 30 天） |
 | Console | `app/console/requests/request-log-view.tsx`（租户/运维共享的列表/分页/筛选视图）、`app/console/requests/page.tsx`（`/console/requests`）、`app/operator/(protected)/requests/page.tsx`（`/operator/requests`，多一个 `tenant_id` 筛选框）、`lib/console/upstream-routes.ts` 新增两条转发白名单 |
 
-详见根 STATUS 的 P09 行、[Gateway STATUS「请求日志中间件与推送（P09/C28）」](../aiServeWeaveGateway/STATUS.md#请求日志中间件与推送p09c28)、[ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)与设计文档 [`docs/superpowers/specs/2026-09-11-p09-request-search-design.md`](../../docs/superpowers/specs/2026-09-11-p09-request-search-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（149 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，详见根 STATUS 的 P09 行。
+详见根 STATUS 的 P09 行、[Gateway STATUS「请求日志中间件与推送（P09/C28）」](../aiServeWeaveGateway/STATUS.md#请求日志中间件与推送p09c28)、[ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（149 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，详见根 STATUS 的 P09 行。
 
 ### C29（告警）实现位置
 
@@ -297,7 +297,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | 控制面 | 新表 `alert_rules`/`alert_instances`（`internal/store/gormstore/alertingmigrate.go` 固定版本迁移）、`internal/alertengine`（评估循环 `evaluator.go`、派生指标算法 `metrics.go`、Webhook 发送 `webhook.go`）、`internal/store` 的对应接口（gormstore/memstore 两个实现）、`internal/logic/alertrules.go`/`alertinstances.go`、`internal/handler` 的 5 个规则 CRUD 端点与 2 个实例端点（均在 `/operator/v1/alert-rules`、`/operator/v1/alerts` 下） |
 | Console | `app/operator/alert-rules/alert-rules-view.tsx` + `app/operator/(protected)/alert-rules/page.tsx`（`/operator/alert-rules`）、`app/operator/alerts/alerts-view.tsx` + `app/operator/(protected)/alerts/page.tsx`（`/operator/alerts`）、`lib/console/upstream-routes.ts` 新增 7 条转发白名单 |
 
-详见根 STATUS 的 P09 行与 [ControlPlane STATUS「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/STATUS.md#告警评估与通知p09c29)、设计文档 [`docs/superpowers/specs/2026-09-11-p09-alerting-design.md`](../../docs/superpowers/specs/2026-09-11-p09-alerting-design.md)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
+详见根 STATUS 的 P09 行与 [ControlPlane STATUS「告警评估与通知（P09/C29）」](../aiServeWeaveControlPlane/STATUS.md#告警评估与通知p09c29)。Go 全量质量门禁与 Console `lint`/`typecheck`/`test`（157 用例）/`build` 通过；未接入真实 PostgreSQL/MySQL 跑 live 测试，也未做需要真实平台会话与真实 Webhook 网关的完整交互式浏览器验收，详见根 STATUS 的 P09 行。
 
 ### 工作流模板的节点图预览（P03 后续）
 
