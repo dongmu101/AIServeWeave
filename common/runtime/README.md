@@ -1358,7 +1358,7 @@ go test -race ./common/runtime/...
 
 ## 原生 Anthropic Messages 契约
 
-`messages.go` 定义 `MessagesRuntime`、`MessagesRequest` 和 `MessagesEvent`，与通用 Chat 接口分开。`CapabilityMessages` 的值为 `anthropic_messages`；它只用于原生 Messages 调度，不能据此允许 Chat/Responses。请求只携带目标模型、已认证归属及有界推理 JSON，不接受 HTTP 地址、请求头、凭据或 CLI 配置。事件为单条原生数据 JSON，不含 HTTP 帧。跨隧道编解码统一由 `common/tunnelwire`，Agent 的 Claude 实现严格拒绝未知语义字段及未支持的内容块。
+`messages.go` 定义 `MessagesRuntime`、`MessagesRequest` 和 `MessagesEvent`，与通用 Chat 接口分开。`CapabilityMessages` 的值为 `anthropic_messages`；它只用于原生 Messages 调度，不能据此允许 Chat/Responses。请求携带目标模型、已认证归属、有界推理 JSON，以及 `APIVersion` / `BetaFeatures` 两个原生协议选择字段；分别对应 `anthropic-version` / `anthropic-beta`，最多 128 字节 / 16 KiB，只接受可打印 ASCII。不接受任意 HTTP 地址、请求头、凭据或 CLI 配置。事件为单条原生数据 JSON，不含 HTTP 帧，跨隧道编解码统一由 `common/tunnelwire`。Claude 的 `safeguards` 路径保留允许列表内的原始推理字段与安全上下文，具体 API 合法性由上游校验；无 `safeguards` 的旧兼容路径继续严格校验支持范围。`MergeMessagesResponseDelta` 在 JSON 聚合时保留原生 delta 扩展和上下文管理结果。
 
 ## 图像生成契约
 

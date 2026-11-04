@@ -78,6 +78,9 @@ func claudeSafeguardsProcessFixture(_ []byte, extra map[string]json.RawMessage) 
 		}
 		emit(map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "text", "text": ""}})
 		emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": text}})
+		for _, cited := range []string{"first-citation", "second-citation"} {
+			emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "citations_delta", "citation": map[string]any{"type": "char_location", "cited_text": cited, "document_index": 0, "start_char_index": 0, "end_char_index": 1}}})
+		}
 	}
 	emit(map[string]any{"type": "content_block_stop", "index": 0})
 	emit(map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "future_delta": true, "safeguard_results": []any{map[string]any{"type": "dangerous_tool_use", "status": map[string]any{"type": "available", "tool_uses": calls}}}}, "context_management": map[string]any{"applied_edits": []any{}}, "usage": map[string]int{"output_tokens": 7}})
@@ -183,6 +186,21 @@ func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 			}
 			if status, final := post(1, 2, "claude-live-first"); status != 200 || !bytes.Contains(final, []byte(result)) || !bytes.Contains(final, []byte("safeguard_results")) {
 				t.Fatalf("fresh-context continuation status/body=%d/%s", status, final)
+			} else if tc.stream {
+				if !bytes.Contains(final, []byte(`"type":"citations_delta"`)) || !bytes.Contains(final, []byte("second-citation")) {
+					t.Fatalf("native citation stream lost: %s", final)
+				}
+			} else {
+				var cited struct {
+					Content []struct {
+						Citations []struct {
+							Text string `json:"cited_text"`
+						}
+					}
+				}
+				if json.Unmarshal(final, &cited) != nil || len(cited.Content) != 1 || len(cited.Content[0].Citations) != 2 || cited.Content[0].Citations[1].Text != "second-citation" {
+					t.Fatalf("native JSON citations lost: %s", final)
+				}
 			}
 			if status, body := post(0, 2, "claude-live-first"); status != 200 || !bytes.Contains(body, []byte(result)) {
 				t.Fatalf("stateless retry status=%d body=%s", status, body)

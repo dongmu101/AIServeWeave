@@ -6,7 +6,7 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 
 模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models[].resolvedModel` 读取真实模型 ID，按真实 ID 去重并保留首次出现的顺序。CLI 的 `value` / `id` 简称及友好名称不作为公开模型名；没有 `resolvedModel` 的条目不发布。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。
 
-请求只能选择最近一次成功发现的真实模型 ID，传给 CLI 的 `--model` 与请求 ID 完全一致。`default`、`sonnet`、`opus`、`fable`、`haiku` 等简称不进入目录，也不能直接用于请求；同一真实模型经多个简称返回时只发布一次。工具续接保持原会话模型。不能据模型名称推断完整 API 兼容性；原版 Claude Code 客户端的工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。
+请求只能选择最近一次成功发现的真实模型 ID，传给 CLI 的 `--model` 与请求 ID 完全一致。`default`、`sonnet`、`opus`、`fable`、`haiku` 等简称不进入目录，也不能直接用于请求；同一真实模型经多个简称返回时只发布一次。工具续接保持原会话模型。不能据模型名称推断完整 API 兼容性；未带 `safeguards` 的原版 Claude Code 客户端工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。
 
 ## OpenAI Chat Completions 兼容
 
@@ -54,7 +54,21 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 客户端工具权限由调用方管理。上述 `--bare` 用于连接 Gateway 的客户端；Agent 后端采用 `--restricted`，保留原生订阅登录读取能力。客户端若继续使用本机订阅或其他认证配置，应先隔离客户端配置，避免与 Gateway Key 混用。此配置验证了单次编程任务的连续工具流程。原生 Messages 的多轮追问目前只有离线测试（假 CLI 进程经真实 mTLS 隧道）覆盖，原版客户端的交互式多轮聊天和完整客户端功能尚未实机验收。
 
-## 支持范围
+## Claude Code auto 服务端安全检查
+
+带非空 `safeguards` 的原生 `/v1/messages` 请求使用独立路径，支持一个 `dangerous_tool_use` 与对象形式的 `classifier_context`。依据 [Claude Code classifier billing 协议](https://code.claude.com/docs/en/auto-mode-classifier-billing) 和 [Gateway 兼容指南](https://code.claude.com/docs/en/llm-gateway-protocol)，Gateway 经隧道传递 `anthropic-version`、`anthropic-beta`，Agent 由已登录的 Claude Code CLI 向真实上游提交请求，转发上游的 `safeguard_results`。不生成或猜测安全判定；`unsupported`、`unavailable`、缺少判定及未来扩展状态交由客户端按官方规则处理。是否获得新计费资格取决于上游账户、模型及真实返回，升级不代表所有账户都已获得免费 classifier 资格。
+
+此路径保留原始 `system`、结构化 `messages`、工具名、工具 ID、思考历史、缓存及安全策略上下文，不经过旧路径的历史折叠、工具改名或 adaptive 思考转换。原生推理顶层字段采用允许列表，HTTP 地址、任意请求头、凭据、CLI 命令及设置不属于推理 JSON，明确拒绝。原始工具只作为上游定义：Agent CLI 的本地工具及 MCP 注册表为空，工具由调用方执行。完整请求通过权限为 `0600` 的临时 CLI 设置文件加载，进程结束后清理；CLI 继续自行管理本机订阅认证。
+
+每次请求带完整原始历史并开启独立进程，工具回合结束即停止该进程。后续请求不认领旧 MCP 会话、不依赖 Redis 续接记录，可以跨副本重试；每次仍校验调用方身份和模型权限、执行既有并发及大小限制。原始工具 ID 与判定中的 ID 一致，同名同参数的并行调用也可区分。JSON 聚合保留内容块扩展、判定及上下文管理字段；SSE 保留被 `max_tokens` 截断的不完整工具参数，非流式请求遇不完整参数返回明确的 502。
+
+整个请求最多 32 MiB、响应最多 64 MiB；安全上下文不另设小于请求大小的限制。协议版本最多 128 字节，beta 列表最多 16 KiB，均只接受可打印 ASCII，拒绝换行注入。未带 `safeguards` 的请求继续使用下文的 MCP 桥接、历史校验和一次性续接规则；需要客户端回退判定时仍支持停止序列模拟。
+
+升级时先更新并重启承载 Claude 运行时的 Agent，再重建并重启 Gateway，两端都需要此版本。客户端新建会话，移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（可显式设为 `1`），并移除 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，以允许客户端发送配套 beta。客户端工具权限仍由调用方管理。
+
+默认测试覆盖真实 mTLS 隧道、两个 Gateway 副本、JSON/SSE、原始历史与工具身份、上游状态的模拟转发、工具截断及旧路径续接保护。Claude Code `2.1.318` 离线实测确认原始 `Bash` 定义不会在 Agent 注册或执行；原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 尚未部署验收，其他 Claude Code 版本及账户的资格尚未验收。
+
+## 未带 safeguards 的支持范围
 
 支持以 user 文本、图片、文档或本平台视频附件结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本和附件工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`；原始附件、标题及字节也参与历史校验。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
 
@@ -74,11 +88,13 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 输入形状依据 [Claude 官方结构化输入文档](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)。也核对了 [CLIProxyAPI 的图片及工具结果转换](https://github.com/router-for-me/CLIProxyAPI/blob/01b24f1f95dc9b309765212c52b25b25e005ff01/internal/translator/claude/openai/chat-completions/claude_openai_request.go#L496)：参考其保留结构化图片内容的方式；该项目的 [Claude 执行器](https://github.com/router-for-me/CLIProxyAPI/blob/01b24f1f95dc9b309765212c52b25b25e005ff01/internal/runtime/executor/claude_executor_execute.go#L19) 直接访问 Anthropic HTTP API，本运行时继续由本机 CLI 管理订阅登录与推理。
 
-图片支持需要更新并重启承载该 Claude 运行时的 Agent；Gateway 的现有原生 Messages 隧道无需修改。默认测试覆盖跨两个 Gateway 的 mTLS 首轮、JSON/SSE 工具续接、历史图片、工具返回图片与历史完整性。真实 CLI 看图测试为 `AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestLiveMessagesImages$' -count=1 -timeout=180s -v`，可用 `AISW_CLAUDE_MODEL` 选择模型；本次执行环境缺少可用订阅登录，真实图片理解尚未验收。
+图片支持需要更新并重启承载该 Claude 运行时的 Agent；Gateway 的现有原生 Messages 隧道无需修改。默认测试覆盖跨两个 Gateway 的 mTLS 首轮、JSON/SSE 工具续接、历史图片、工具返回图片与历史完整性。真实 CLI 看图测试为 `AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestLiveMessagesImages$' -count=1 -timeout=180s -v`，可用 `AISW_CLAUDE_MODEL` 选择模型；此前图片专项验证时缺少可用订阅登录，真实图片理解仍未验收。
 
 Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数值原样传给 CLI 的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；实际可用上限由 CLI、模型和账户能力决定。请求大小、响应大小与执行超时等资源边界仍然生效。此行为需要同时更新 Gateway 并重启 Agent。
 
 ## 思考内容
+
+本节描述未带 `safeguards` 的兼容路径；带安全上下文的请求保留原始思考配置和历史，由上游校验及执行。
 
 请求要求思考时，Agent 以 `MAX_THINKING_TOKENS=<预算>` 启动 CLI，并加 `--thinking-display summarized`，让默认省略思考文本的新模型也给出可读文本；否则保持 `MAX_THINKING_TOKENS=0`。`--thinking-display` 需要较新的 Claude Code（本机 `2.1.311` 已有该参数），旧版本只会在请求要求思考时因参数不识别而失败。
 
@@ -92,6 +108,8 @@ Anthropic 的 usage 不单独报告思考 token，思考计入 `output_tokens`�
 
 ## 停止序列
 
+本节描述未带 `safeguards` 的兼容路径；带安全上下文的请求由上游处理原始停止序列。
+
 CLI 没有停止序列选项，`stop_sequences` 由桥接在 CLI 流出的文本上模拟（`messages_stop.go`），最多 16 个、每个 1–256 字节。可能是某个序列开头的文本尾部先暂扣，因此跨增量拆开的序列也能识别，序列本身及其之后的内容从不放出。命中时放出命中位置之前的文本并关闭该文本块，回合以 `stop_reason: "stop_sequence"` 和 `stop_sequence` 结束，与 Messages API 一致；随后停止 CLI，会话不保留。只匹配文本块，思考与工具参数不参与。
 
 - `usage.output_tokens` 取 CLI 在该消息结束时报告的值，包含 CLI 越过停止序列后多生成的部分，即实际消耗。
@@ -104,13 +122,17 @@ Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为
 
 ## 终止原因与故障排查
 
-CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态；成功结果之后的 `prompt_suggestion` 与非初始化 `system` 通知只在本机消费，不进入公开回复，其他尾部事件仍拒绝。完整终止之前的 CLI 失败、缺失输出或非法事件仍明确失败。此修复需要更新并重启 Agent，包含模拟 CLI 子进程的离线回归测试覆盖；尚未验收 Opus 5.5 的真实工具流程。
+以下常驻 CLI 和 409 续接说明适用于未带 `safeguards` 的 MCP 路径；带安全上下文的原生请求每轮独立，不使用该续接绑定。
+
+CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态；成功结果之后的 `prompt_suggestion` 与非初始化 `system` 通知只在本机消费，不进入公开回复，其他尾部事件仍拒绝。完整终止之前的 CLI 失败、缺失输出或非法事件仍明确失败。此修复需要更新并重启 Agent，包含模拟 CLI 子进程的离线回归测试覆盖；尚未验收未带 `safeguards` 的 Opus 5.5 真实工具流程。
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
 
 客户端的 `native Messages stream failed` 只能说明流已开始后失败，不能据此区分协议、进程或上游问题。工具结果已经投递或应用情况不确定时，Gateway 会消费本轮续接，重试同一批工具结果可能返回 409 `Messages continuation unavailable`；这个错误与前一次流失败需要分开判断。排查时按同一时区对齐 Agent 与 Gateway 日志，并结合请求 ID、运行时和上述错误分类定位；新建会话可以避开旧续接，但不能修复原始流故障。
 
 ## 生命周期与限额
+
+以下等待工具、历史恢复、原节点绑定及每回合 64 个 ID 限制适用于未带 `safeguards` 的 MCP 路径。带安全上下文的原生请求共用运行时并发名额和请求/响应大小限制，每轮结束回收 CLI。
 
 每个运行时的独立 CLI 会话数由 `max_concurrent` 决定：未配置时 8 个，显式配置最多 32 个（负值即不限并发也按 32），所有 Gateway 副本共用该 Agent 限额。每个会话是一个常驻 CLI 进程，同一账户的会话共用订阅额度，调大前确认内存和额度。等待调用方送回工具结果最多 1 小时，CLI 生成阶段无输出最多 10 分钟（与 CLI 自身的 API 请求超时一致；CLI 每输出一行即重新计时，持续输出的长回合不受限），会话总寿命 24 小时；超时的会话被回收后，其续接按孤立回合从文本记录恢复。名额已满时淘汰等待工具结果最久的空闲会话来开启新会话（它之后的续接同样从文本记录恢复），只有全部名额都在生成时才答复会话已满。与 Messages API 一样，消息、工具、内容块、停止序列、每回合工具调用与并行工具调用的数量都不设上限。原生请求最多 32 MiB（与 Messages API 自身的请求上限一致），CLI 单行最多 256 MiB（仅防范进程异常）；Gateway 侧单次响应最多 64 MiB、续接每回合最多 64 个工具调用。流式事件逐条传递，使用同步背压。
 

@@ -499,7 +499,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					if len(arguments) > maxEventBytes {
 						return nil, errCapacity
 					}
-				} else if !(current.Type == "text" && event.Delta.Type == "text_delta") && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) {
+				} else if !(current.Type == "text" && (event.Delta.Type == "text_delta" || (guarded && event.Delta.Type == "citations_delta"))) && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) {
 					return nil, protocolError("unsupported_block_delta")
 				}
 			case "content_block_stop":
