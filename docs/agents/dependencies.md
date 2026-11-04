@@ -13,6 +13,10 @@
 
 基础依赖边界为 gRPC、protobuf 与 `github.com/coder/websocket`；WebSocket 用于共享的 ComfyUI 适配器。控制面的框架、ORM、JWT 与密码哈希库不进入 Agent/Registry。
 
+### Agent 附件转换程序
+
+`service/aiServeWeaveAgent/attachments` 不新增 Go 模块依赖。标准库无法解码视频、识别语音或保留 Office 渲染版式，因此仅在相应附件请求中调用 Agent 本地配置的 LibreOffice、Poppler（pdfinfo/pdftoppm/pdftotext）、FFprobe/FFmpeg、whisper.cpp 与其本地模型。程序及模型路径不得从推理请求或 Gateway 下发；不自动安装、下载模型或调用云端转录。进程组/Job、取消、临时目录和输出上限复用或遵守 Agent 的既有边界，配置与验收见 [附件说明](../../service/aiServeWeaveAgent/attachments/README.md)。跨平台构建不能替代这些程序的原生验收。
+
 ### Agent 本地 YAML 配置例外
 
 `service/aiServeWeaveAgent/agentconfig/` 使用 `github.com/spf13/viper` 读写本地 YAML，并直接使用 `github.com/go-viper/mapstructure/v2` 配置 YAML 标签和模型列表解码钩子。

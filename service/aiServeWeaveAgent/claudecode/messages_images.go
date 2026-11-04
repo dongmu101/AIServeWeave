@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,11 +11,7 @@ import (
 
 // imageSource carries inline image bytes, never a URL for the Agent to fetch.
 // imageSource 只承载内联图片字节，不接受需要 Agent 抓取的 URL。
-type imageSource struct {
-	Type      string `json:"type"`
-	MediaType string `json:"media_type"`
-	Data      string `json:"data"`
-}
+type imageSource = attachments.Source
 
 func validateImage(block messageBlock) error {
 	source := block.Source
@@ -36,8 +33,8 @@ func validateImage(block messageBlock) error {
 	return nil
 }
 
-// inputBlocks validates content that can be passed to the CLI or an MCP tool result.
-// inputBlocks 校验可传给 CLI 或 MCP 工具结果的文本与图片内容。
+// inputBlocks validates text and inline media before CLI/MCP preparation.
+// inputBlocks 在 CLI/MCP 内容转换前校验文本、图片、文档和视频。
 func inputBlocks(raw json.RawMessage) ([]messageBlock, error) {
 	if len(raw) == 0 {
 		return []messageBlock{{Type: "text"}}, nil
@@ -56,6 +53,10 @@ func inputBlocks(raw json.RawMessage) ([]messageBlock, error) {
 			if err := validateImage(block); err != nil {
 				return nil, err
 			}
+		case "document", "video":
+			if err := attachments.ValidateShape(attachmentPart(block)); err != nil {
+				return nil, errMessages
+			}
 		default:
 			return nil, errMessages
 		}
@@ -63,11 +64,11 @@ func inputBlocks(raw json.RawMessage) ([]messageBlock, error) {
 	return list, nil
 }
 
-// sessionInput keeps the text-only wire unchanged. Images use the CLI's
+// sessionInput keeps the text-only wire unchanged. Images and PDFs use the CLI's
 // stream-json user envelope. For folded history, numbered placeholders keep
 // each image's location while the actual bytes travel as image blocks once,
 // including images nested in historical tool results.
-// sessionInput 保持纯文本输入不变；有图时使用 CLI 的 stream-json 用户信封。
+// sessionInput 保持纯文本输入不变；有图片或 PDF 时使用 CLI 的 stream-json 用户信封。
 // 历史记录用编号标明每张图的位置，图片字节作为独立图片块只传一次，包含历史工具结果里的图。
 func sessionInput(messages []bridgeMessage) (string, bool) {
 	var images []messageBlock
@@ -76,9 +77,9 @@ func sessionInput(messages []bridgeMessage) (string, bool) {
 		list = append([]messageBlock(nil), list...)
 		for i, block := range list {
 			switch block.Type {
-			case "image":
+			case "image", "document":
 				images = append(images, block)
-				list[i] = messageBlock{Type: "text", Text: fmt.Sprintf("[Image %d attached below]", len(images))}
+				list[i] = messageBlock{Type: "text", Text: fmt.Sprintf("[%s %d attached below]", block.Type, len(images))}
 			case "tool_result":
 				content, _ := inputBlocks(block.Content)
 				list[i].Content, _ = json.Marshal(detach(content))
@@ -97,7 +98,7 @@ func sessionInput(messages []bridgeMessage) (string, bool) {
 	}
 	content := []messageBlock{{Type: "text", Text: sessionPrompt(history)}}
 	for i, image := range images {
-		content = append(content, messageBlock{Type: "text", Text: fmt.Sprintf("Image %d:", i+1)}, image)
+		content = append(content, messageBlock{Type: "text", Text: fmt.Sprintf("%s %d:", image.Type, i+1)}, image)
 	}
 	if len(messages) == 1 {
 		list, _ := inputBlocks(messages[0].Content)

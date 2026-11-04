@@ -1,6 +1,7 @@
 package claudecode
 
 import (
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -45,6 +46,7 @@ type messageBlock struct {
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
 	Source    *imageSource    `json:"source,omitempty"`
+	Title     string          `json:"title,omitempty"`
 }
 
 type bridgeMessage struct {
@@ -252,7 +254,7 @@ func (r messagesRequest) validate(model string) error {
 			return err
 		}
 		for _, b := range list {
-			if b.Source != nil && b.Type != "image" {
+			if b.Source != nil && b.Type != "image" && b.Type != "document" && b.Type != "video" {
 				return errMessages
 			}
 			if !b.isThinking() && (b.Thinking != "" || b.Signature != "" || b.Data != "") {
@@ -266,6 +268,10 @@ func (r messagesRequest) validate(model string) error {
 			case "text":
 			case "image":
 				if m.Role != "user" || validateImage(b) != nil {
+					return errMessages
+				}
+			case "document", "video":
+				if m.Role != "user" || attachments.ValidateShape(attachmentPart(b)) != nil {
 					return errMessages
 				}
 			case "tool_use":
@@ -301,20 +307,24 @@ type pendingTool struct {
 }
 
 type messagesSession struct {
-	owner    principal
-	request  messagesRequest
-	messages []bridgeMessage
-	history  [32]byte
-	ctx      context.Context
-	cancel   context.CancelFunc
-	done     chan struct{}
-	events   chan bridgeEvent
-	mu       sync.Mutex
-	busy     bool
-	waiting  bool
-	pending  map[string]*pendingTool
-	changed  chan struct{}
-	activity chan bool
+	processor            *attachments.Processor
+	cacheMu              sync.Mutex
+	attachmentCache      map[[32]byte][]messageBlock
+	attachmentCacheBytes int
+	owner                principal
+	request              messagesRequest
+	messages             []bridgeMessage
+	history              [32]byte
+	ctx                  context.Context
+	cancel               context.CancelFunc
+	done                 chan struct{}
+	events               chan bridgeEvent
+	mu                   sync.Mutex
+	busy                 bool
+	waiting              bool
+	pending              map[string]*pendingTool
+	changed              chan struct{}
+	activity             chan bool
 	// idleSince is when the session last began waiting for tool results;
 	// eviction picks the session idle the longest. Guarded by mu.
 	// idleSince 是会话最近一次开始等待工具结果的时间；淘汰时选择空闲最久的会话。受 mu 保护。
@@ -322,6 +332,7 @@ type messagesSession struct {
 }
 
 type messagesBridge struct {
+	processor      *attachments.Processor
 	program, model string
 	keys           map[string]principal
 	clock          runtime.Clock
@@ -360,6 +371,7 @@ const (
 
 func newMessagesBridge(program, model string, keys map[string]principal, clock runtime.Clock) *messagesBridge {
 	b := &messagesBridge{program: program, model: model, keys: keys, clock: clock, sessions: make(map[*messagesSession]bool), capacity: 2, consumed: make(map[string]time.Time)}
+	b.processor, _ = attachments.New(attachments.Config{})
 	b.start = b.runSession
 	return b
 }
@@ -701,7 +713,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		if len(req.Safeguards) > 0 {
 			break
 		}
-		if block.Type != "text" && block.Type != "image" && block.Type != "tool_result" {
+		if block.Type != "text" && block.Type != "image" && block.Type != "document" && block.Type != "video" && block.Type != "tool_result" {
 			return nil, errMessages
 		}
 	}
@@ -709,7 +721,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		return nil, errCapacity
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	s := &messagesSession{owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
+	s := &messagesSession{processor: b.processor, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
 	b.sessions[s] = true
 	b.wg.Add(1)
 	go func() {

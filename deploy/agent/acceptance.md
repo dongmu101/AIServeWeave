@@ -1,5 +1,21 @@
 # Agent 部署验证记录
 
+## 文件和视频附件（2026-11-04）
+
+新增本地附件转换模块，需在实际 Agent 上配置 LibreOffice、Poppler、FFmpeg/FFprobe、whisper.cpp 与模型，见 [配置与限制](../../service/aiServeWeaveAgent/attachments/README.md)。默认测试使用模拟转换子进程，覆盖 Office、PDF、视频画面和语音、取消/清理、资源边界及跨副本真实 mTLS 续接。开发机 Claude Code 2.1.318 已通过真实 CLI 加回环模拟 API 的 PDF 传输契约测试，不使用实际订阅，也不验证理解效果。
+
+本次检查：`go test -p 1 ./service/aiServeWeaveAgent/... ./service/aiServeWeaveGateway/httpapi ./service/aiServeWeaveGateway/e2e -count=1` 通过；附件、Claude、Gateway e2e 的最终 race 通过，配置与设置页的 race 亦通过；相关 `go vet` 和 Linux/Windows amd64/arm64、macOS arm64 构建检查通过。新增硬输出上限测试曾发现嵌入 `bytes.Buffer` 导致 `ReaderFrom` 快路径绕过 `Write`，已改为显式缓冲字段，回归通过。并行全量测试另曾遇到未修改模块的模型下载并发测试抖动（独立 20 次复测通过）及既有 `TestManagerDrainAllStopsDispatchAndWaitsForInFlight` 排空竞态；未将它们计为附件回归，也未据串行通过声称排空竞态已修复。
+
+| 验收项 | 状态 |
+| --- | --- |
+| 真实 LibreOffice 的 DOC/DOCX、XLS/XLSX、PPT/PPTX 导出与页数限制 | 待目标 Agent 验证 |
+| 真实 Poppler 的 PDF 文字、扫描页、表格和图表 | 待目标 Agent 验证 |
+| 真实 MP4/MOV/WebM、无音轨、含语音及多语言转录 | 待目标 Agent 验证 |
+| Windows/macOS/Linux 的转换程序入口、带空格路径、取消和进程回收 | 待各原生系统验证 |
+| 已登录 Claude 对 PDF/Office/视频的理解及线上入口 | 未验收，未部署 |
+
+以上不改变下方既有部署矩阵与历史验收记录。
+
 更新：2026-11-01。构建、离线测试、服务管理器与真实后端验收分别记录。本文不把尚未运行的 CI 记为通过。
 
 | 目标系统 | CPU | 完整系统安装/启动/身份/普通与 SSE/升级回退 | 一行命令安装 | 真实 Codex/Claude |

@@ -22,6 +22,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/runtime/workflow/comfyui"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 	"AIServeWeave/service/aiServeWeaveAgent/configui"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/localcontrol"
@@ -201,6 +202,7 @@ func main() {
 			os.Exit(2)
 		}
 		declaredRuntimes = runtimesFromConfig(cfg.Runtimes)
+		reload.attachments = cfg.Attachments
 	}
 	if *ollamaURL != "" {
 		ollama := runtime.Config{ID: *ollamaID, Kind: runtime.KindOllama, BaseURL: *ollamaURL}
@@ -244,6 +246,11 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	defer close(finished)
 
 	local := newLocalDeclarations(declaredRuntimes)
+	processor, err := attachments.New(reload.attachments)
+	if err != nil {
+		return fmt.Errorf("invalid local attachments configuration")
+	}
+	local.attachments = processor
 	registry, err := newReloadableRegistry(local)
 	if err != nil {
 		return err
@@ -527,8 +534,9 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 // reloadSource 是运行时重新加载读取声明的来源：配置文件，外加文件改变不了的
 // -ollama-url 声明。
 type reloadSource struct {
-	path  string
-	extra []runtime.Config
+	attachments attachments.Config
+	path        string
+	extra       []runtime.Config
 }
 
 var logOutput io.Writer = os.Stdout

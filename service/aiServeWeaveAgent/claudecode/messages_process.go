@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -121,6 +122,10 @@ func (b *messagesBridge) runSession(s *messagesSession) {
 // 保持关闭（MAX_THINKING_TOKENS=0）；要求时预算写入 MAX_THINKING_TOKENS，并以
 // --thinking-display summarized 要求 CLI 在默认省略思考文本的模型上也给出可读文本。
 func (b *messagesBridge) runProcess(s *messagesSession) error {
+	messages, prepareErr := s.prepareMessages(s.ctx)
+	if prepareErr != nil {
+		return prepareErr
+	}
 	guarded := len(s.request.Safeguards) > 0
 	dir, err := os.MkdirTemp("", "aisw-claude-messages-")
 	if err != nil {
@@ -190,7 +195,10 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if budget > 0 {
 		args = append(args, "--thinking-display", "summarized")
 	}
-	prompt, structured := sessionInput(s.request.Messages)
+	prompt, structured := sessionInput(messages)
+	if len(prompt) > maxRequestBytes {
+		return &attachmentFailure{attachments.ErrLimit}
+	}
 	if guarded {
 		// Guarded rounds carry the native request in the API body, not stdin.
 		// 受保护回合通过 API 请求体携带原生请求，不经 stdin。

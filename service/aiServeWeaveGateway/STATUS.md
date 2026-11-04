@@ -758,7 +758,7 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 `max_output_tokens` 默认 4096，必须为正整数，不设置固定上限，客户端指定值经 Chat 转换原样传给 CLI；`temperature` 范围 0–1。以下情况明确返回 400：`store: true`、`previous_response_id`、`top_p`、`text` 以外的 `text.format`、非 `auto` 的 `tool_choice`、`strict: true` 的工具，以及图片或文件内容。每轮须在 `input` 中携带完整对话。与普通 Responses 一样，Codex 等客户端附带的其他字段不会被拒绝，但也不生效。转换前后的请求均限制为 32 MiB，用量账本与指标都记为 `responses`。目前只做过离线端到端验证（真实 Agent 加模拟 CLI，跨副本 JSON/SSE 工具续接），尚未用真实 Claude CLI 或 Codex 客户端联调。
 
-模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、图片、工具块顺序与实际用量。以 user 文本或内联图片结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录，图片以编号对应独立图像块。2026-11-04 的 Agent 图片修复支持 user 及工具结果中的 base64 JPEG/PNG/GIF/WebP，URL 仍拒绝；Gateway 的原生转发路径无需修改，需更新并重启实际承载 Claude 运行时的 Agent。跨副本 JSON/SSE 与图片工具结果已有模拟 CLI 的 mTLS 端到端测试，真实看图尚未验收，见 [Claude 图片说明](../aiServeWeaveAgent/claudecode/README.md#messages-图片输入)。其他模型仍使用既有 Chat 转换。
+模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、附件、工具块顺序与实际用量。以 user 文本或附件结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录，图片和 PDF 以编号对应独立内容块。2026-11-04 的 Agent 支持 user 及工具结果中的 base64 图片、PDF/文本、Office 文件与本平台扩展的 `video` 内容块。Office、视频及工具 PDF 需在实际 Agent 配置本地转换依赖，视频音轨由本地 whisper.cpp 识别。URL、文件 ID 和独立音频仍拒绝；OpenAI Chat/Responses 未开放这些附件。Gateway 的原生转发路径无需修改，需更新并重启实际承载 Claude 的 Agent。跨副本真实 mTLS JSON/SSE 与附件工具续接已有模拟转换进程测试；真实 CLI 的 PDF 传输契约已通过，实际转换、模型理解和线上仍未验收，见 [附件协议、配置与验收](../aiServeWeaveAgent/attachments/README.md)。其他模型仍使用既有 Chat 转换。
 
 转发前 Gateway 只整形 Claude Code 等客户端附带、Agent 严格解码会拒绝的部分（`httpapi/native_messages_shape.go`），改变模型所见内容的字段仍原样交给 Agent 判断：
 

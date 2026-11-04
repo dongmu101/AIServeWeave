@@ -56,11 +56,15 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 ## 支持范围
 
-支持以 user 文本或内联图片结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本和内联图片工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`；图片来源与字节也参与历史校验。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
+支持以 user 文本、图片、文档或本平台视频附件结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本和附件工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`；原始附件、标题及字节也参与历史校验。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
 
 多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史图片以编号占位标记位置，并作为独立图片块附在文本记录之后，不把 base64 编码当作提示词文本。文本历史以引用形式提供，思考块不进入记录，thinking 也不跨会话保留。
 
-支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}`、`output_config.effort`（low/medium/high/xhigh/max）和 `stop_sequences`（见下文「停止序列」）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}`、`output_config.effort`（low/medium/high/xhigh/max）和 `stop_sequences`（见下文「停止序列」）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、独立音频附件、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或未定义的客户端扩展。未知字段严格拒绝，不静默丢弃。
+
+### Messages 文件与视频输入
+
+文件和视频只在原生 `/v1/messages` 路径接入，覆盖首轮、历史、工具结果和孤立回合恢复。支持 UTF-8 文本/代码、PDF、DOC/DOCX、XLS/XLSX、PPT/PPTX、MP4/MOV/WebM。PDF 以 `document` 输入，Office 通过 LibreOffice 转 PDF，视频通过 FFmpeg 采样画面并由本地 whisper.cpp 转录音轨。工具返回的文档使用 Poppler 转为页图和文字。完整请求示例、本地 YAML、限额与未验收范围见 [附件说明](../attachments/README.md)。这不代表 OpenAI Chat/Responses 兼容层或原版客户端 UI 已开放这些格式。
 
 ### Messages 图片输入
 

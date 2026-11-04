@@ -8,7 +8,7 @@
 // decision for whoever picks up "运行时配置文件加载" next, not something
 // this package should pre-empt.
 //
-// Every field maps onto an existing -gateway/-registry/... flag documented
+// Connection and discovery fields map onto -gateway/-registry/... flags documented
 // in main.go; a flag explicitly passed on the command line always wins over
 // the same setting from this file, so an operator can still override one
 // value without editing the file (see main.go's applyConfig). YAML is
@@ -30,7 +30,7 @@
 // 保持不变；要不要把它们也并进这份配置文件，留给后续接手"运行时配置文件加
 // 载"的人决定，这个包不代为决定。
 //
-// 每个字段对应 main.go 里一个既有的 -gateway/-registry/... flag；命令行显
+// 连接与发现字段对应 main.go 里既有的 -gateway/-registry/... flag；命令行显
 // 式传入的 flag 永远优先于这份文件里的同名设置，运维仍可以只在命令行覆盖
 // 一个值而不用改文件（见 main.go 的 applyConfig）。YAML 经由 viper
 // （github.com/spf13/viper）解码进 Config 的 Go 字段，标签沿用普通 YAML 解
@@ -43,6 +43,7 @@
 package agentconfig
 
 import (
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/localstate"
 	"bytes"
 	"fmt"
@@ -67,6 +68,9 @@ const structTagName = "yaml"
 //
 // Config 是 -config 文件的顶层结构。
 type Config struct {
+	// Attachments binds local conversion tools; changes require an Agent restart.
+	// Attachments 绑定本地附件转换工具，修改后需要重启 Agent。
+	Attachments attachments.Config `yaml:"attachments,omitempty"`
 	// Gateway holds every setting needed to reach and authenticate to the
 	// remote Gateway, mirroring tunnelOptions in main.go.
 	//
@@ -291,6 +295,9 @@ func Load(path string) (*Config, error) {
 	if err := v.Unmarshal(&cfg, withYAMLTags); err != nil {
 		return nil, fmt.Errorf("agentconfig: parse %s: %w", path, err)
 	}
+	if _, err := attachments.New(cfg.Attachments); err != nil {
+		return nil, fmt.Errorf("agentconfig: invalid attachments configuration")
+	}
 	return &cfg, nil
 }
 
@@ -305,6 +312,9 @@ func Load(path string) (*Config, error) {
 // 文件保存的是凭据的文件*路径*，从不是凭据本身，但也没有理由让它的可读权
 // 限比这更宽。
 func Save(path string, cfg *Config) error {
+	if _, err := attachments.New(cfg.Attachments); err != nil {
+		return fmt.Errorf("agentconfig: invalid attachments configuration")
+	}
 	v := viper.New()
 	v.SetConfigFile(path)
 	v.SetConfigType("yaml")
@@ -323,6 +333,17 @@ func Save(path string, cfg *Config) error {
 		"max_gateways":         cfg.Gateway.MaxGateways,
 	}
 	v.Set("gateway", gateway)
+	if cfg.Attachments != (attachments.Config{}) {
+		value := reflect.ValueOf(cfg.Attachments)
+		fields := make(map[string]any)
+		for i := 0; i < value.NumField(); i++ {
+			name := strings.Split(value.Type().Field(i).Tag.Get("yaml"), ",")[0]
+			if !value.Field(i).IsZero() {
+				fields[name] = value.Field(i).Interface()
+			}
+		}
+		v.Set("attachments", fields)
+	}
 
 	runtimes := make([]map[string]any, len(cfg.Runtimes))
 	for i, rc := range cfg.Runtimes {

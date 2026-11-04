@@ -5,6 +5,7 @@ package e2e
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -29,6 +30,7 @@ func claudeProcessFixture() {
 		return
 	}
 	var imageInput bool
+	var documentInput, convertedInput, structuredInput bool
 	var prompt []byte
 	if slices.Contains(os.Args, "--input-format") {
 		var request struct {
@@ -49,15 +51,30 @@ func claudeProcessFixture() {
 			os.Exit(3)
 		}
 		if request.Type == "user" {
+			structuredInput = true
 			if request.Message.Role != "user" {
 				os.Exit(3)
 			}
 			for _, block := range request.Message.Content {
 				if block.Type == "image" {
+					if block.Source.MediaType == "image/jpeg" {
+						data, err := base64.StdEncoding.DecodeString(block.Source.Data)
+						if err != nil || !bytes.HasPrefix(data, []byte{0xff, 0xd8}) {
+							os.Exit(3)
+						}
+						convertedInput = true
+						continue
+					}
 					if block.Source.Type != "base64" || block.Source.Data != claudeFixtureImage || block.Source.MediaType != "image/png" {
 						os.Exit(3)
 					}
 					imageInput = true
+				} else if block.Type == "document" {
+					data, err := base64.StdEncoding.DecodeString(block.Source.Data)
+					if err != nil || block.Source.MediaType != "application/pdf" || !bytes.HasPrefix(data, []byte("%PDF-")) {
+						os.Exit(3)
+					}
+					documentInput = true
 				} else if block.Type == "text" {
 					if strings.Contains(block.Text, claudeFixtureImage) {
 						os.Exit(3)
@@ -65,7 +82,7 @@ func claudeProcessFixture() {
 					prompt = append(prompt, block.Text...)
 				}
 			}
-			if !imageInput {
+			if !imageInput && !documentInput && !convertedInput {
 				os.Exit(3)
 			}
 		} else {
@@ -89,7 +106,7 @@ func claudeProcessFixture() {
 			model = os.Args[i+1]
 		}
 	}
-	if !imageInput {
+	if !structuredInput {
 		prompt, _ = io.ReadAll(os.Stdin)
 	}
 	var extra map[string]json.RawMessage
@@ -158,6 +175,19 @@ func claudeProcessFixture() {
 	if (imageInput || strings.Contains(string(prompt), "tool-image")) && (len(result.Result.Content) != 2 || result.Result.Content[1].Type != "image" || result.Result.Content[1].Data != claudeFixtureImage || result.Result.Content[1].MIMEType != "image/png") {
 		os.Exit(3)
 	}
+	if documentInput || convertedInput {
+		images := 0
+		var texts string
+		for _, part := range result.Result.Content {
+			if part.Type == "image" && part.MIMEType == "image/jpeg" {
+				images++
+			}
+			texts += part.Text
+		}
+		if images == 0 || (documentInput && !strings.Contains(texts, "extracted table marker")) || (convertedInput && (!strings.Contains(texts, "spoken marker") || !strings.Contains(string(prompt), "spoken marker"))) {
+			os.Exit(3)
+		}
+	}
 	round(false, result.Result.Content[0].Text)
 	fmt.Println(`{"type":"result","subtype":"success"}`)
 }
@@ -213,7 +243,7 @@ func (s *fixtureMessagesStore) Claim(_ context.Context, ids []string, tenant, ke
 // TestClaudeMessagesThroughTunnel verifies native tools across two authenticated mTLS replicas offline.
 // TestClaudeMessagesThroughTunnel 离线验证原生工具跨两个已认证 mTLS 副本续接。
 func TestClaudeMessagesThroughTunnel(t *testing.T) {
-	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(os.Args[0]))
+	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactoryWithAttachments(os.Args[0], attachmentFixtureProcessor(t)))
 	f.awaitReady(f.replicas...)
 	store := &fixtureMessagesStore{rounds: make(map[string]messagesession.Record)}
 	var servers []*httptest.Server
@@ -267,6 +297,11 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 		{"image history", "claude-sonnet-4-6", false, "/v1/messages", "history"},
 		{"tool image only", "claude-sonnet-4-6", false, "/v1/messages", "tool only"},
 		{"tool image history", "claude-sonnet-4-6", false, "/v1/messages", "tool history"},
+		{"PDF JSON", "claude-sonnet-4-6", false, "/v1/messages", "pdf"},
+		{"PDF SSE", "claude-sonnet-4-6", true, "/v1/messages", "pdf"},
+		{"PDF history", "claude-sonnet-4-6", false, "/v1/messages", "pdf history"},
+		{"Office JSON", "claude-sonnet-4-6", false, "/v1/messages", "office"},
+		{"video speech SSE", "claude-sonnet-4-6", true, "/v1/messages", "video"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := []any{map[string]any{"role": "user", "content": "use caller tool " + tc.model}}
@@ -289,6 +324,22 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 				}
 			}
 			tools := []any{map[string]any{"name": "read_file", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}}}}
+			var attachmentBlock map[string]any
+			if tc.image == "pdf" || tc.image == "pdf history" || tc.image == "office" || tc.image == "video" {
+				kind, mime, data := "document", "application/pdf", "%PDF-1.4 attachment fixture"
+				if tc.image == "office" {
+					mime = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+					data = "office fixture"
+				}
+				if tc.image == "video" {
+					kind, mime, data = "video", "video/mp4", "video fixture"
+				}
+				attachmentBlock = map[string]any{"type": kind, "title": "fixture", "source": map[string]string{"type": "base64", "media_type": mime, "data": base64.StdEncoding.EncodeToString([]byte(data))}}
+				messages = []any{map[string]any{"role": "user", "content": []any{map[string]string{"type": "text", "text": "use caller tool"}, attachmentBlock}}}
+				if tc.image == "pdf history" {
+					messages = append(messages, map[string]string{"role": "assistant", "content": "I read the PDF."}, map[string]string{"role": "user", "content": "Continue with the caller tool."})
+				}
+			}
 			post := func(index int, stream bool) []byte {
 				body, _ := json.Marshal(map[string]any{"model": tc.model, "max_tokens": 1024, "messages": messages, "tools": tools, "stream": stream})
 				path := tc.path
@@ -362,6 +413,9 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 			var toolContent any = "unique-caller-result"
 			if tc.image != "" {
 				toolContent = []any{map[string]string{"type": "text", "text": "unique-caller-result"}, claudeImageBlock()}
+			}
+			if attachmentBlock != nil {
+				toolContent = []any{map[string]string{"type": "text", "text": "unique-caller-result"}, attachmentBlock}
 			}
 			messages = append(messages, map[string]any{"role": "assistant", "content": result.Content}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": toolContent}}})
 			final := post(1, tc.stream)

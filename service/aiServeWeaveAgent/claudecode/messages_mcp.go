@@ -127,8 +127,15 @@ func bridgeMCPHandler(s *messagesSession, token, host string) http.Handler {
 				reply["error"] = rpcError(-32602, "tool result unavailable")
 				break
 			}
+			prepared, err := s.prepareBlocks(r.Context(), result.Content, true)
+			if err != nil {
+				_ = s.send(nil, err)
+				s.cancel()
+				reply["error"] = rpcError(-32603, "attachment processing failed")
+				break
+			}
 			content := make([]any, 0, len(result.Content))
-			for _, block := range result.Content {
+			for _, block := range prepared {
 				if block.Type == "image" {
 					content = append(content, map[string]string{"type": "image", "data": block.Source.Data, "mimeType": block.Source.MediaType})
 				} else {

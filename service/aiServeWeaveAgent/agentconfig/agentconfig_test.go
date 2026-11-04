@@ -1,10 +1,26 @@
 package agentconfig
 
 import (
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"os"
 	"path/filepath"
 	"testing"
 )
+
+func TestAttachmentConfigRoundTrip(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "agent.yaml")
+	want := attachments.Config{LibreOfficePath: os.Args[0], PDFInfoPath: os.Args[0], FFmpegPath: os.Args[0], WhisperPath: os.Args[0], WhisperModelPath: filepath.Join(t.TempDir(), "model.bin"), MaxConcurrent: 2, MaxVideoFrames: 12, MaxFileBytes: 1024, Timeout: "45s"}
+	if err := Save(path, &Config{Attachments: want}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Attachments != want {
+		t.Fatalf("attachment settings lost: %+v", got.Attachments)
+	}
+}
 
 func TestLoadParsesGatewayAndRuntimes(t *testing.T) {
 	dir := t.TempDir()

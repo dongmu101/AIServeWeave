@@ -18,6 +18,7 @@ import (
 	"AIServeWeave/common/runtime/trtllm"
 	"AIServeWeave/common/runtime/vllm"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/claudecode"
 	"AIServeWeave/service/aiServeWeaveAgent/cliagent"
 	"AIServeWeave/service/aiServeWeaveAgent/codexcli"
@@ -51,15 +52,17 @@ func newRegistry(declared []runtime.Config) (runtime.Registry, error) {
 // 或供应商。配置文件的声明与 Agent 自己做出的声明（见 clidiscovery）分开保存，因此替换
 // 前者的重新加载不会在后者的运行时仍注册时把它撤回；同一 ID 以配置文件的声明为准。
 type localDeclarations struct {
-	mu         sync.RWMutex
-	byID       map[string]runtime.Config // from the configuration file / 来自配置文件
-	discovered map[string]runtime.Config // declared by the Agent itself / Agent 自己声明的
+	attachments *attachments.Processor // fixed at Agent startup, never supplied over the tunnel
+	mu          sync.RWMutex
+	byID        map[string]runtime.Config // from the configuration file / 来自配置文件
+	discovered  map[string]runtime.Config // declared by the Agent itself / Agent 自己声明的
 }
 
 // newLocalDeclarations returns the declarations among declared that need one.
 // newLocalDeclarations 返回 declared 中需要本地声明的那些。
 func newLocalDeclarations(declared []runtime.Config) *localDeclarations {
 	d := &localDeclarations{}
+	d.attachments, _ = attachments.New(attachments.Config{})
 	d.set(declared)
 	return d
 }
@@ -186,7 +189,7 @@ func newReloadableRegistry(local *localDeclarations) (runtime.Registry, error) {
 		runtime.KindTRTLLM:     trtllm.New,
 		runtime.KindTokenSpeed: tokenspeed.New,
 		runtime.KindComfyUI:    comfyui.New,
-		runtime.KindClaude:     localOnly(claudecode.New),
+		runtime.KindClaude:     localOnly(claudecode.NewFactoryWithAttachments("claude", local.attachments)),
 		runtime.KindCodex:      localOnly(codexcli.New),
 		runtime.KindGeminiCLI:  localOnly(geminicli.New),
 	}

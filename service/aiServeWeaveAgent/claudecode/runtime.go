@@ -15,6 +15,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -41,6 +42,12 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 // NewFactory binds an executable supplied by local administration only.
 // NewFactory 绑定仅由本地管理员提供的可执行文件。
 func NewFactory(executable string) runtime.Factory {
+	return NewFactoryWithAttachments(executable, nil)
+}
+
+// NewFactoryWithAttachments binds shared, locally configured converters.
+// NewFactoryWithAttachments 绑定共享、仅由本地配置的附件转换器。
+func NewFactoryWithAttachments(executable string, processor *attachments.Processor) runtime.Factory {
 	return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
 		requested := cfg.MaxConcurrent // before Normalize fills the generic default / 在 Normalize 填入通用默认值之前读取
 		cfg = cfg.Normalize()
@@ -53,6 +60,9 @@ func NewFactory(executable string) runtime.Factory {
 		cfg.MaxConcurrent = sessionCapacity(requested)
 		root, cancel := context.WithCancel(context.Background())
 		bridge := newMessagesBridge(executable, "sonnet", nil, deps.Clock)
+		if processor != nil {
+			bridge.processor = processor
+		}
 		bridge.capacity = cfg.MaxConcurrent
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
 		logger := deps.Logger
@@ -288,6 +298,9 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 // 还有多久，使 Gateway 可以在另一个账户上开启会话、并在此之前不再打扰这个账户；其他
 // 失败仍是隐去细节的协议错误。
 func (r *Runtime) roundError(err error) error {
+	if failure := r.attachmentError(err); failure != nil {
+		return failure
+	}
 	// Log only fixed categories and parser positions, never CLI output or errors supplied by it.
 	// 仅记录固定分类与解析位置，不记录 CLI 输出或其中携带的任意错误文本。
 	reason := "unknown"

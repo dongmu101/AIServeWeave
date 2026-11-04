@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
+	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 )
 
 func discardLogger() *slog.Logger {
@@ -190,6 +191,10 @@ func TestParseLabelsDropsMalformedLines(t *testing.T) {
 // 者实际使用的 HTTP handler。
 func TestIndexHandlerSaveAndReload(t *testing.T) {
 	configPath := filepath.Join(t.TempDir(), "agent.yaml")
+	attachmentConfig := attachments.Config{FFmpegPath: os.Args[0], WhisperModelPath: filepath.Join(t.TempDir(), "model.bin"), MaxVideoFrames: 12}
+	if err := agentconfig.Save(configPath, &agentconfig.Config{Attachments: attachmentConfig}); err != nil {
+		t.Fatal(err)
+	}
 	handler := newIndexHandler(discardLogger(), configPath, Sources{})
 
 	getRec := httptest.NewRecorder()
@@ -229,6 +234,9 @@ func TestIndexHandlerSaveAndReload(t *testing.T) {
 	}
 	if saved.Gateway.NodeID != "node-a" {
 		t.Errorf("saved NodeID = %q, want %q", saved.Gateway.NodeID, "node-a")
+	}
+	if saved.Attachments != attachmentConfig {
+		t.Fatal("saving the setup page discarded local attachment settings")
 	}
 	if len(saved.Runtimes) != 2 || saved.Runtimes[0].ID != "ollama-local" || saved.Runtimes[1] != (agentconfig.RuntimeConfig{ID: "codex-local", Kind: "codex"}) {
 		t.Errorf("saved Runtimes = %v, want ollama-local and local-only codex-local", saved.Runtimes)

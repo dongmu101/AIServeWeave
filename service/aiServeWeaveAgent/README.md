@@ -4,6 +4,8 @@
 
 ## 配置文件
 
+Claude Messages 文件与视频的转换工具、模型路径和限额可在 YAML 顶层 `attachments:` 配置；详见 [附件输入说明及完整配置](attachments/README.md)。这些配置仅本地使用，修改后需重启 Agent，设置页保存其他设置会保留它们；不自动安装转换程序或模型。
+
 `-config` 指向一份 YAML 文件，包含远程 Gateway 连接（`gateway:` 段，对应 `-gateway`/`-registry`/证书三件套/`-allowed-runtimes`/`-labels`/`-max-gateways`）、本地运行时声明（`runtimes:`，是 `-ollama-url` 之外的补充而非替代），以及 `auto_discover`/`metrics_addr`/`log_level`。
 
 - 命令行显式传入的 flag 始终优先于文件里的同名设置（`main.go` 的 `applyConfig`），文件只填补 flag 留在默认值上的空白，两者可以同时使用（如 `-node-id` 覆盖 `node_id`）。
