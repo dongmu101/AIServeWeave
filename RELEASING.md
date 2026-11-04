@@ -32,6 +32,19 @@ unchanged by it. The document has been removed from the repository; see
 in [CHANGELOG.md](CHANGELOG.md); breaking changes get their own callout, not
 buried among routine entries.
 
+## Agent 修复的发布与分发 / Shipping Agent fixes
+
+Agent 的修复进入 `main` 后，源码部署者重新构建并重启 Agent 即可获得修复；预编译安装用户需要安装包含修复的正式版本。平台默认的一行命令安装从 Gateway 镜像内置的 Agent 制品下载，因此发布 Agent 修复时也要从相同源码、以相同版本构建并发布 Gateway 镜像。`.github/workflows/release.yml` 的二进制作业与 Gateway 镜像构建已经分别覆盖这两种产物。
+
+以 Claude 长工具链 400 修复（`ca16c33`）为例：
+
+1. 选定包含修复的提交作为新 Release 的源码，按下文流程发布新版本及校验和；旧版本的既有下载文件不会因此改变。
+2. 平台维护者更新 Gateway 镜像后，确认 `/agent/v1/manifest` 报告预期版本且 `installable: true`，并抽查 `/agent/download/<version>/SHA256SUMS.txt` 和目标系统 Agent 文件。
+3. 已有节点通过安装脚本 `--upgrade` / `-Upgrade` 升级并重启 Agent，确认节点自身版本。平台提供新版下载包不会自动替换已有节点程序。
+4. 运行真实 Claude Code 长工具任务验收。CI 已通过不等同于目标节点或生产环境已验收；本次修复的回归包含连续工具回合、迟到回调、beta 变化和双 Gateway mTLS 路径，由现有 `go test ./...` 与数据面 race 门禁执行。
+
+针对这个修复，Gateway 的推理转发与隧道协议未变；重建 Gateway 镜像的目的包括更新其内置的 Agent 下载制品。自行分发 Agent 的部署者按自己的制品来源更新程序，范围见 [Agent 升级说明](deploy/agent/README.md#claude-code-长工具链-400-修复)。
+
 ## 支持平台 / Supported platforms
 
 | 产物 | linux/amd64 | linux/arm64 | darwin/amd64 | darwin/arm64 | windows/amd64 | windows/arm64 |

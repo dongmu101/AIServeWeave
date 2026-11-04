@@ -1,5 +1,11 @@
 # Agent 部署验证记录
 
+## Claude 连续工具回合修复（2026-11-04）
+
+源码修复为 `ca16c33`：按本轮公开工具 ID 集合校验结果，保留旧邮箱供迟到 MCP 回调消费；beta 等价列表正常续接，实际增删功能在完整归属、历史、结果及其他配置匹配时使用新 CLI 恢复。旧代码已在模拟 CLI 加真实 mTLS 的端到端回归中复现 HTTP 400 `the request could not be processed`，修复后的同一路径通过；Claude 包、Gateway e2e 的完整 race、20 次连续续接 race 回归及相关 vet 通过。
+
+这属于源码与离线回归验证。正式 Release、平台内置下载包、新安装节点及已升级节点的真实长任务分别需要验证，当前不据源码通过宣称这些部署路径已验收。平台升级检查包括 `/agent/v1/manifest` 的版本、Agent 文件及 `SHA256SUMS.txt`；已有节点另查 Agent 自身版本。部署与分发范围见 [升级说明](README.md#claude-code-长工具链-400-修复)。
+
 ## 文件和视频附件（2026-11-04）
 
 新增本地附件转换模块，需在实际 Agent 上配置 LibreOffice、Poppler、FFmpeg/FFprobe、whisper.cpp 与模型，见 [配置与限制](../../service/aiServeWeaveAgent/attachments/README.md)。默认测试使用模拟转换子进程，覆盖 Office、PDF、视频画面和语音、取消/清理、资源边界及跨副本真实 mTLS 续接。开发机 Claude Code 2.1.318 已通过真实 CLI 加回环模拟 API 的 PDF 传输契约测试，不使用实际订阅，也不验证理解效果。

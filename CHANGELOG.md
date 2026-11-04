@@ -47,6 +47,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Fixed
 
+- Claude Code 长工具链的续接 400：Agent 按本轮已公开的工具 ID 集合校验结果，已投递但尚待迟到 MCP 回调取走的旧邮箱不再触发 `continuation_tool_count_mismatch`。`anthropic-beta` 的顺序、空格及重复项按功能集合比较；实际增删 beta 时，在完整归属、历史、工具结果及其他配置均匹配后，使用新 CLI 从已执行结果恢复。修复已进入源码（`ca16c33`），默认 CI 覆盖连续工具回合、迟到回调、beta 变化和跨两个 Gateway 的 mTLS 回归。**升级范围**：现有节点需升级并重启 Agent；平台通过 `/agent/*` 分发安装包时，需重新构建并部署包含新版 Agent 制品的 Gateway 镜像，已有节点仍需各自升级。真实 Opus 长任务仍待线上验收，详见 [Agent 升级说明](deploy/agent/README.md#claude-code-长工具链-400-修复)。
+
 - `common/metrics.Registry` 的 `Counter`/`Gauge`/`Histogram` 此前对 nil 接收者 panic——一个未初始化的 `*Registry` 字段被装进 `runtime.Metrics` 接口后不再是 nil 接口，调用方常见的 `== nil` 判断拦不住它；现在与其余记录点一致，返回丢弃仪器。
 
 ## [0.1.0] - 2026-09-07

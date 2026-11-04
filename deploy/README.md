@@ -335,6 +335,10 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
   本地实测（依赖层已缓存）：六平台约增加 98 MB 镜像体积（Gateway 镜像约 195 MB，单平台约 76 MB），
   构建约 52 秒；首次构建要另外下载 Go 模块。只需要部分平台时设置 `AGENT_PLATFORMS="linux/amd64"` 缩短构建。
   公开入口需要反向代理把 `/agent/` 前缀转给 Gateway HTTP 端口。
+  **Agent 修复的分发**：Agent 源码改动也需要重建并部署 Gateway 镜像，平台才会在
+  `/agent/v1/manifest` 和 `/agent/download/<VERSION>/` 提供新的 Agent。现有运行节点仍需
+  各自升级并重启；更新平台制品不会自动替换节点程序。2026-11-04 的 Claude 长工具链
+  400 修复已在 `ca16c33` 进入源码，发行包需包含该修复，见 [Agent 升级说明](agent/README.md#claude-code-长工具链-400-修复)。
 - 当前为单 Registry、单 Gateway 编排。多副本方案见对应服务 README。
 - 默认数据库为 MySQL。`postgres` profile 只额外启动 PostgreSQL，不切换控制面数据源；
   Job 持久化目前仅支持 MySQL。

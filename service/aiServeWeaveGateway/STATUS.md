@@ -750,7 +750,7 @@ Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Re
 
 ## Claude Code 原生 Messages
 
-连续工具回合的 Agent 修复（2026-11-04）：Agent 按本轮公开 ID 集合校验工具结果，旧的已投递 MCP 邮箱不再污染新一轮数量；等价 beta 列表可继续复用会话，实际增删 beta 在完整归属、历史、工具结果及其他配置匹配时于原节点重建 CLI，从已执行结果恢复。Gateway 的租约、路由和一次性消费规则保持不变，本项仅需更新并重启 Agent。跨两个 Gateway、真实 mTLS 与模拟 CLI 的连续回合测试通过；线上真实长任务尚待验收，见 [Agent 续接规则](../aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。
+连续工具回合的 Agent 修复（2026-11-04）：Agent 按本轮公开 ID 集合校验工具结果，旧的已投递 MCP 邮箱不再污染新一轮数量；等价 beta 列表可继续复用会话，实际增删 beta 在完整归属、历史、工具结果及其他配置匹配时于原节点重建 CLI，从已执行结果恢复。Gateway 的租约、路由和一次性消费规则保持不变，修复已有节点的推理链路只需更新并重启 Agent；平台通过 Gateway 内置制品提供一行命令安装时，还要重建并部署 Gateway 镜像以分发新版 Agent，见 [分发与升级说明](../../deploy/agent/README.md#claude-code-长工具链-400-修复)。跨两个 Gateway、真实 mTLS 与模拟 CLI 的连续回合测试通过；线上真实长任务尚待验收，见 [Agent 续接规则](../aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。
 
 Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：Gateway 将文本、前置 system/developer 和 function 工具转换为 Messages 语义，沿用下述身份校验、Redis 认领与原节点绑定。`finish_reason` 映射为 `stop`、`length` 或 `tool_calls`；流式包含工具索引与参数增量，成功结束发送 `[DONE]`，`stream_options.include_usage` 可请求末尾用量帧。其他 Chat 后端（包括 Codex）仍走原来的 Chat 隧道。
 

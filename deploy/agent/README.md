@@ -2,6 +2,14 @@
 
 本目录只安装 Agent，连接已有的同版本 Registry/Gateway。安装机不需要 Go；模型、GPU 驱动、Docker 和 CLI 由节点用户自行安装。配置文件仍使用 [Agent 配置](../../service/aiServeWeaveAgent/README.md) 的 YAML 语义。
 
+## Claude Code 长工具链 400 修复
+
+源码提交 `ca16c33` 修复 Agent 连续工具回合中的 `continuation_tool_count_mismatch` 及 beta 变化拒绝，具体行为与验收边界见 [变更记录](../../CHANGELOG.md#unreleased) 和 [Claude 续接规则](../../service/aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。部署包含此修复的 Agent 即可获得修复，无需手动补丁或专用配置。预编译安装时以目标 Release 的变更记录为准；源码部署需重新构建 Agent，并停止旧进程、启动新程序。运行节点应确认 Agent 自身的 `-version` 或本地 `-control status` 中版本，而非只查看平台或源码版本。
+
+平台的一行命令安装默认下载 Gateway 镜像内置的 Agent。平台维护者需要从含修复的源码重新构建并部署 Gateway 镜像，使 `/agent/v1/manifest` 和 `/agent/download/<version>/` 提供新版制品；仅升级某个运行节点不会更新平台下载包。安装来源为 GitHub 时，需发布并选择包含此修复的正式 Release。安装来源为自托管目录时，更新对应版本的 Agent 文件及 `SHA256SUMS.txt`。已安装的其他节点仍要通过下文的 `--upgrade` / `-Upgrade` 升级并重启，平台刷新下载包不会自动替换它们。
+
+本次修复没有修改 Gateway 推理转发逻辑或隧道协议：已有推理节点的故障修复只需升级 Agent；平台提供新安装包时，Gateway 镜像承担制品分发，因此也需要刷新。平台构建与发布步骤见 [部署说明](../README.md#对外部署与已知限制) 和 [发布指南](../../RELEASING.md#agent-修复的发布与分发--shipping-agent-fixes)。真实长任务验收状态见 [验收记录](acceptance.md#claude-连续工具回合修复2026-11-04)。
+
 代码交付与实机兼容性验收分开记录：[验收矩阵](acceptance.md)。当前不把交叉构建、暂存脚本测试或 CI runner 当作目标系统验收。
 
 ## 支持目标与运行身份
