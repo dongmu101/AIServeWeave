@@ -28,21 +28,56 @@ func claudeProcessFixture() {
 		fmt.Println(`{"loggedIn":true,"authMethod":"claude.ai"}`)
 		return
 	}
+	var imageInput bool
+	var prompt []byte
 	if slices.Contains(os.Args, "--input-format") {
 		var request struct {
+			Type      string `json:"type"`
 			RequestID string `json:"request_id"`
+			Message   struct {
+				Role    string
+				Content []struct {
+					Type, Text string
+					Source     struct {
+						Type, Data string
+						MediaType  string `json:"media_type"`
+					}
+				}
+			}
 		}
 		if json.NewDecoder(os.Stdin).Decode(&request) != nil {
 			os.Exit(3)
 		}
-		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "control_response", "response": map[string]any{
-			"subtype": "success", "request_id": request.RequestID, "response": map[string]any{"models": []any{
-				map[string]string{"value": "sonnet", "resolvedModel": "claude-sonnet-4-6", "displayName": "Sonnet 4.6"},
-				map[string]string{"value": "opus", "resolvedModel": "fixture-opus", "display_name": "Opus fixture"},
-				map[string]string{"value": "default", "resolvedModel": "fixture-opus", "displayName": "Default"},
-			}},
-		}})
-		return
+		if request.Type == "user" {
+			if request.Message.Role != "user" {
+				os.Exit(3)
+			}
+			for _, block := range request.Message.Content {
+				if block.Type == "image" {
+					if block.Source.Type != "base64" || block.Source.Data != claudeFixtureImage || block.Source.MediaType != "image/png" {
+						os.Exit(3)
+					}
+					imageInput = true
+				} else if block.Type == "text" {
+					if strings.Contains(block.Text, claudeFixtureImage) {
+						os.Exit(3)
+					}
+					prompt = append(prompt, block.Text...)
+				}
+			}
+			if !imageInput {
+				os.Exit(3)
+			}
+		} else {
+			_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "control_response", "response": map[string]any{
+				"subtype": "success", "request_id": request.RequestID, "response": map[string]any{"models": []any{
+					map[string]string{"value": "sonnet", "resolvedModel": "claude-sonnet-4-6", "displayName": "Sonnet 4.6"},
+					map[string]string{"value": "opus", "resolvedModel": "fixture-opus", "display_name": "Opus fixture"},
+					map[string]string{"value": "default", "resolvedModel": "fixture-opus", "displayName": "Default"},
+				}},
+			}})
+			return
+		}
 	}
 	var path string
 	var model string
@@ -54,7 +89,9 @@ func claudeProcessFixture() {
 			model = os.Args[i+1]
 		}
 	}
-	prompt, _ := io.ReadAll(os.Stdin)
+	if !imageInput {
+		prompt, _ = io.ReadAll(os.Stdin)
+	}
 	wantModel := "claude-sonnet-4-6"
 	if strings.HasSuffix(string(prompt), "opus") {
 		wantModel = "fixture-opus"
@@ -103,13 +140,27 @@ func claudeProcessFixture() {
 	}
 	defer resp.Body.Close()
 	var result struct {
-		Result struct{ Content []struct{ Text string } }
+		Result struct {
+			Content []struct {
+				Type, Text, Data string
+				MIMEType         string `json:"mimeType"`
+			}
+		}
 	}
-	if json.NewDecoder(resp.Body).Decode(&result) != nil || len(result.Result.Content) != 1 {
+	if json.NewDecoder(resp.Body).Decode(&result) != nil || len(result.Result.Content) == 0 {
+		os.Exit(3)
+	}
+	if (imageInput || strings.Contains(string(prompt), "tool-image")) && (len(result.Result.Content) != 2 || result.Result.Content[1].Type != "image" || result.Result.Content[1].Data != claudeFixtureImage || result.Result.Content[1].MIMEType != "image/png") {
 		os.Exit(3)
 	}
 	round(false, result.Result.Content[0].Text)
 	fmt.Println(`{"type":"result","subtype":"success"}`)
+}
+
+const claudeFixtureImage = "aW1hZ2UtYnl0ZXM="
+
+func claudeImageBlock() map[string]any {
+	return map[string]any{"type": "image", "source": map[string]string{"type": "base64", "media_type": "image/png", "data": claudeFixtureImage}}
 }
 
 // fixtureMessagesStore is shared only by offline tests, never by production Gateway wiring.
@@ -200,14 +251,38 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 		model  string
 		stream bool
 		path   string
+		image  string
 	}{
-		{"JSON sonnet", "claude-sonnet-4-6", false, "/v1/messages"},
-		{"SSE opus", "fixture-opus", true, "/v1/messages"},
-		{"unified base JSON", "claude-sonnet-4-6", false, "/v1/v1/messages"},
-		{"unified base SSE", "fixture-opus", true, "/v1/v1/messages"},
+		{"JSON sonnet", "claude-sonnet-4-6", false, "/v1/messages", ""},
+		{"SSE opus", "fixture-opus", true, "/v1/messages", ""},
+		{"unified base JSON", "claude-sonnet-4-6", false, "/v1/v1/messages", ""},
+		{"unified base SSE", "fixture-opus", true, "/v1/v1/messages", ""},
+		{"image JSON", "claude-sonnet-4-6", false, "/v1/messages", "single"},
+		{"image SSE", "claude-sonnet-4-6", true, "/v1/messages", "single"},
+		{"image history", "claude-sonnet-4-6", false, "/v1/messages", "history"},
+		{"tool image only", "claude-sonnet-4-6", false, "/v1/messages", "tool only"},
+		{"tool image history", "claude-sonnet-4-6", false, "/v1/messages", "tool history"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			messages := []any{map[string]any{"role": "user", "content": "use caller tool " + tc.model}}
+			if tc.image != "" {
+				messages[0] = map[string]any{"role": "user", "content": []any{map[string]string{"type": "text", "text": "use caller tool " + tc.model}, claudeImageBlock()}}
+				if tc.image == "history" {
+					messages = append(messages, map[string]string{"role": "assistant", "content": "I saw the image."}, map[string]string{"role": "user", "content": "Continue using the caller tool."})
+				}
+				if tc.image == "tool only" {
+					messages = []any{map[string]string{"role": "user", "content": "use caller tool-image " + tc.model}}
+				}
+				if tc.image == "tool history" {
+					messages = []any{
+						map[string]string{"role": "user", "content": "read an earlier image"},
+						map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "tool_use", "id": "earlier", "name": "read_file", "input": map[string]string{"path": "earlier.png"}}}},
+						map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "earlier", "content": []any{claudeImageBlock()}}}},
+						map[string]string{"role": "assistant", "content": "I saw the earlier image."},
+						map[string]string{"role": "user", "content": "Continue using the caller tool."},
+					}
+				}
+			}
 			tools := []any{map[string]any{"name": "read_file", "input_schema": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]string{"type": "string"}}}}}
 			post := func(index int, stream bool) []byte {
 				body, _ := json.Marshal(map[string]any{"model": tc.model, "max_tokens": 1024, "messages": messages, "tools": tools, "stream": stream})
@@ -229,19 +304,61 @@ func TestClaudeMessagesThroughTunnel(t *testing.T) {
 				}
 				return data
 			}
-			first := post(0, false)
+			firstStream := tc.stream && tc.image != ""
+			first := post(0, firstStream)
 			var result struct {
 				Content    []map[string]any
 				StopReason string `json:"stop_reason"`
 			}
-			if json.Unmarshal(first, &result) != nil || len(result.Content) != 1 || result.StopReason != "tool_use" {
+			if firstStream {
+				var arguments string
+				for _, line := range bytes.Split(first, []byte("\n")) {
+					if !bytes.HasPrefix(line, []byte("data: ")) {
+						continue
+					}
+					var event struct {
+						Type  string
+						Block map[string]any `json:"content_block"`
+						Delta struct {
+							PartialJSON string `json:"partial_json"`
+							StopReason  string `json:"stop_reason"`
+						}
+					}
+					if err := json.Unmarshal(bytes.TrimPrefix(line, []byte("data: ")), &event); err != nil {
+						t.Fatal(err)
+					}
+					switch event.Type {
+					case "content_block_start":
+						result.Content = append(result.Content, event.Block)
+					case "content_block_delta":
+						arguments += event.Delta.PartialJSON
+					case "message_delta":
+						result.StopReason = event.Delta.StopReason
+					}
+				}
+				if len(result.Content) != 1 {
+					t.Fatal("stream must request one caller tool")
+				}
+				var input map[string]any
+				if err := json.Unmarshal([]byte(arguments), &input); err != nil {
+					t.Fatal(err)
+				}
+				result.Content[0]["input"] = input
+			} else if err := json.Unmarshal(first, &result); err != nil {
+				t.Fatal(err)
+			}
+			if len(result.Content) != 1 || result.StopReason != "tool_use" {
 				t.Fatal("first round must request one caller tool")
 			}
 			id, _ := result.Content[0]["id"].(string)
 			if !strings.HasPrefix(id, "toolu_aisw_") {
 				t.Fatal("tool ID must identify owned native continuation")
 			}
-			messages = append(messages, map[string]any{"role": "assistant", "content": result.Content}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": "unique-caller-result"}}})
+			var toolContent any = "unique-caller-result"
+			if tc.image != "" {
+				toolContent = []any{map[string]string{"type": "text", "text": "unique-caller-result"}, claudeImageBlock()}
+			}
+			messages = append(messages, map[string]any{"role": "assistant", "content": result.Content}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": toolContent}}})
 			final := post(1, tc.stream)
 			if !bytes.Contains(final, []byte("unique-caller-result")) {
 				t.Fatal("final text did not preserve caller result")

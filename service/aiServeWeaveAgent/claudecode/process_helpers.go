@@ -76,7 +76,7 @@ const maxEventBytes = 256 << 20
 
 type principal struct{ tenant, key string }
 type toolResult struct {
-	Text    string
+	Content []messageBlock
 	IsError bool
 }
 

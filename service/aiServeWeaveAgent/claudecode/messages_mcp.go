@@ -127,7 +127,15 @@ func bridgeMCPHandler(s *messagesSession, token, host string) http.Handler {
 				reply["error"] = rpcError(-32602, "tool result unavailable")
 				break
 			}
-			reply["result"] = map[string]any{"content": []any{map[string]string{"type": "text", "text": result.Text}}, "isError": result.IsError}
+			content := make([]any, 0, len(result.Content))
+			for _, block := range result.Content {
+				if block.Type == "image" {
+					content = append(content, map[string]string{"type": "image", "data": block.Source.Data, "mimeType": block.Source.MediaType})
+				} else {
+					content = append(content, map[string]string{"type": "text", "text": block.Text})
+				}
+			}
+			reply["result"] = map[string]any{"content": content, "isError": result.IsError}
 		default:
 			reply["error"] = rpcError(-32601, "method not found")
 		}

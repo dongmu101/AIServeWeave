@@ -174,7 +174,10 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if budget > 0 {
 		args = append(args, "--thinking-display", "summarized")
 	}
-	prompt := sessionPrompt(s.request.Messages)
+	prompt, structured := sessionInput(s.request.Messages)
+	if structured {
+		args = append(args, "--input-format", "stream-json")
+	}
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
 	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
