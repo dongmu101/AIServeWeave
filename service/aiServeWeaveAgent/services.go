@@ -206,6 +206,8 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 // with a work directory it would never have a verified entry to act on.
 // opts.workDir empty resolves to the running binary's own directory, so a
 // downloaded version lands and executes next to the one that fetched it.
+// A build without the key and without a manifest logs the disabled feature
+// at Info; a malformed key, or a manifest the build cannot verify, is an Error.
 //
 // newAgentUpgradeChecker 基于 opts（STATUS.md P2 Agent 自动升级）构造 Agent
 // 本地的 Checker，比较对象是本 Agent 自己的版本。它从不返回 nil，与
@@ -221,11 +223,22 @@ func newModelPuller(ctx context.Context, logger *slog.Logger, opts *modelPullOpt
 // 的、构造上就安全的"未实现"形状，而不是拿着一个永远不会有已校验条目可执
 // 行的工作目录去调用 EnableExecution。opts.workDir 为空时解析为运行中二进
 // 制自己所在的目录，这样下载到的版本会落在获取它的那个二进制旁边并从那里
-// 执行。
+// 执行。既没有公钥也没有清单的构建只以 Info 记录功能关闭；公钥格式错误、或配置了
+// 本构建无法校验的清单，才记为 Error。
 func newAgentUpgradeChecker(logger *slog.Logger, opts *agentUpgradeOptions) *agentupgrade.Checker {
 	pubKey, pubKeyErr := parseAgentUpgradePublicKey(agentUpgradePublicKeyHex)
-	if pubKeyErr != nil {
-		logger.Error("agent upgrade public key not usable; upgrade execution stays disabled", slog.Any("error", pubKeyErr))
+	switch {
+	case pubKeyErr == nil:
+	case agentUpgradePublicKeyHex == "" && opts.manifest == "":
+		// A plain build that was never asked to upgrade: the feature is
+		// simply off, which is not an error.
+		// 普通构建且未要求升级：功能只是关闭，并非错误。
+		logger.Info("agent upgrade disabled: this build carries no upgrade public key")
+	default:
+		// A malformed stamped key, or a manifest this build cannot verify.
+		// 注入的公钥格式错误，或配置了本构建无法校验的清单。
+		logger.Error("agent upgrade public key not usable; upgrade execution stays disabled",
+			slog.Any("error", pubKeyErr), slog.String("manifest", opts.manifest))
 	}
 
 	var entries []agentupgrade.Entry
