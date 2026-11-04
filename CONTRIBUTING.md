@@ -16,7 +16,7 @@
 
 ## 提交前必须跑通的检查
 
-Go 代码改动执行 [AGENTS.md「质量门禁」](AGENTS.md#质量门禁) 的完整命令；该处是格式、静态检查、构建、proto 生成、测试与 race 检查的统一入口，覆盖共享包与所有 Go 服务。
+Go 代码改动在本地跑通 CI 的 `go` 检查（[ci.yml](.github/workflows/ci.yml)）：格式、静态检查、构建、proto 生成、测试与 race 检查。
 
 Console 改动额外执行其专属门禁（lint、typecheck、test、build），见 Console AGENTS.md。
 

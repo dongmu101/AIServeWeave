@@ -41,7 +41,7 @@ Status: ready-for-agent
 | Windows 编译 | 本轮以现有 Go 1.27.3、禁用网络和 CGO，交叉编译 windows/amd64 Agent 及 Codex 测试二进制成功；Agent 产物为 PE32+ x86-64 | 仅证明可构建，未在 Windows 执行，不代表可注册、推理或管理 CLI |
 | 新目标构建 | 本轮另以同一工具链和离线条件交叉编译 windows/arm64、darwin/arm64 Agent 成功，产物分别为 Aarch64 PE32+ 与 arm64 Mach-O | 三个目标均已确认可构建；操作系统、原生 CLI 与用户后台集成仍待实机验证 |
 | Windows 身份文件 | [身份检查](../../service/aiServeWeaveAgent/tunnel/identity.go) 严格要求证书/私钥为 0600，并限制绑定令牌权限；Go Windows 的 Chmod 不提供这种权限隔离语义 | 必须使用 Windows ACL 建立并检查节点身份的账户访问边界，不能简单跳过安全检查 |
-| Windows CLI | [Codex](../../service/aiServeWeaveAgent/codexcli/process_other.go)、[Claude](../../service/aiServeWeaveAgent/claudecode/process_other.go)、[通用 CLI](../../service/aiServeWeaveAgent/cliagent/process_other.go)、[Gemini CLI](../../service/aiServeWeaveAgent/geminicli/process_other.go) 的非 Linux/macOS 路径均拒绝启动 | 需补充 Windows 进程启动、取消、超时和整棵子进程回收语义 |
+| Windows CLI | Codex、Claude、通用 CLI、Gemini CLI 的非 Linux/macOS 路径（现已合并到 [internal/cliprocess](../../service/aiServeWeaveAgent/internal/cliprocess/process_other.go)）均拒绝启动 | 需补充 Windows 进程启动、取消、超时和整棵子进程回收语义 |
 | Windows 环境与路径 | 现有 CLI 环境过滤主要按 Unix 变量处理；CLI 可执行入口可能是 exe 或 npm cmd 包装器 | 核对 Path 大小写、USERPROFILE/APPDATA/LOCALAPPDATA、临时目录、命令引用、空格和中文路径；保持原有环境隔离 |
 | Windows 文件更新 | 配置、身份续期及下载状态使用临时文件再 Rename | 需验证 Windows 文件共享、替换和故障恢复行为，不能由 Unix 经验推断原子性 |
 | 退出与热重载 | [main.go](../../service/aiServeWeaveAgent/main.go) 以 SIGINT/SIGTERM 退出、SIGHUP 热重载；现有页面保存也可热重载运行时 | Windows 需明确本地停止与重载入口；SIGHUP 不作为 Windows 运维契约 |
