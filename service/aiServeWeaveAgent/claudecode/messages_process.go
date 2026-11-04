@@ -235,6 +235,10 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		if len(line) == 0 {
 			continue
 		}
+		// Any output is progress: restart the idle phase timer so only a CLI
+		// that falls silent for generationTimeout is reclaimed.
+		// 任何输出都算进展：重启空闲阶段计时器，只回收沉默满 generationTimeout 的 CLI。
+		s.touch()
 		if len(line) > maxEventBytes || count >= 10000 || finished {
 			return nil, errCLIProtocol
 		}

@@ -295,6 +295,14 @@ type messagesSession struct {
 	changed  chan struct{}
 	activity chan bool
 	mcpCalls int
+	// resumed holds the tool results a resumed session started from. They
+	// count as held while the session lives and become consumed only when its
+	// first round completes, so a round that fails before then can be retried.
+	// Guarded by mu.
+	//
+	// resumed 保存恢复会话所依据的工具结果。会话存活期间它们视为被持有，首个回合完成后
+	// 才记为已消费，因此在此之前失败的回合可以重试。受 mu 保护。
+	resumed map[string]toolResult
 }
 
 type messagesBridge struct {
@@ -604,7 +612,8 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		for s := range b.sessions {
 			s.mu.Lock()
 			for id := range results {
-				held = held || s.pending[id] != nil
+				_, resuming := s.resumed[id] // a live resume of the same round / 同一回合仍在进行的恢复
+				held = held || s.pending[id] != nil || (resuming && s.ctx.Err() == nil)
 			}
 			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
 			if matches {
@@ -628,15 +637,18 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 			}
 			s.mu.Unlock()
 		}
-		// A session that still holds an ID saw a mismatched request, and an ID
-		// already delivered is a replay. Otherwise the CLI that asked is gone
-		// (expired, Agent restarted, or the Gateway lease lapsed), so the round
-		// resumes in a new session that reads the results from the transcript;
-		// the tools already ran on the caller's side and nothing runs twice.
+		// A session that still holds an ID saw a mismatched request (or is
+		// already resuming the same round), and an ID already delivered is a
+		// replay. Otherwise the CLI that asked is gone (expired, Agent
+		// restarted, or the Gateway lease lapsed), so the round resumes in a
+		// new session that reads the results from the transcript; the tools
+		// already ran on the caller's side and nothing runs twice. A resume
+		// whose round failed delivered nothing, so its retry resumes again.
 		//
-		// 仍有会话持有某个 ID，说明请求与会话不匹配；ID 已投递过则是重放。否则说明
-		// 发起调用的 CLI 已不存在（过期、Agent 重启或 Gateway 租约失效），此时在新会话
-		// 中从文本记录读取这些结果继续该回合；工具已在调用方执行，不会重复执行。
+		// 仍有会话持有某个 ID，说明请求与会话不匹配（或同一回合正在恢复）；ID 已投递过
+		// 则是重放。否则说明发起调用的 CLI 已不存在（过期、Agent 重启或 Gateway 租约
+		// 失效），此时在新会话中从文本记录读取这些结果继续该回合；工具已在调用方执行，
+		// 不会重复执行。回合失败的恢复没有投递任何内容，其重试会再次恢复。
 		if held || b.consumedLocked(results) {
 			return nil, errCallRejected
 		}
@@ -661,8 +673,10 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &messagesSession{owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
+	if len(results) > 0 {
+		s.resumed = results // consumed when the round completes / 回合完成时才记为已用
+	}
 	b.sessions[s] = true
-	b.consumeLocked(results) // a resumed round's results are used up too / 恢复回合的结果同样视为已用
 	b.wg.Add(1)
 	go func() {
 		defer b.wg.Done()
@@ -675,6 +689,26 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		<-timerDone
 	}()
 	return s, nil
+}
+
+// commitResumed marks the tool results s resumed from as consumed once a round
+// has completed, so a later replay of them is refused. It locks b.mu before
+// s.mu, the order acquire uses, so no acquire sees the IDs neither held nor
+// consumed.
+//
+// commitResumed 在回合完成后把 s 恢复所依据的工具结果记为已消费，之后重放这批结果会被
+// 拒绝。它先锁 b.mu 再锁 s.mu，与 acquire 的顺序一致，因此任何 acquire 都不会看到这些
+// ID 既未被持有也未被消费。
+func (b *messagesBridge) commitResumed(s *messagesSession) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	s.mu.Lock()
+	resumed := s.resumed
+	s.resumed = nil
+	s.mu.Unlock()
+	if len(resumed) > 0 {
+		b.consumeLocked(resumed)
+	}
 }
 
 func (s *messagesSession) signalLocked() { close(s.changed); s.changed = make(chan struct{}) }
@@ -708,8 +742,12 @@ const (
 	// toolWaitTimeout bounds one wait for the caller's tool results.
 	// toolWaitTimeout 限定一次等待调用方工具结果的时长。
 	toolWaitTimeout = time.Hour
-	// generationTimeout bounds one CLI generation phase without output.
-	// generationTimeout 限定 CLI 一次生成阶段在无进展时的时长。
+	// generationTimeout bounds how long a CLI generation phase may go without
+	// output; every line the CLI writes restarts it (see bridgeEvents), so a
+	// long but active generation is never cut short.
+	//
+	// generationTimeout 限定 CLI 生成阶段无输出的时长；CLI 每写出一行都会重新计时（见
+	// bridgeEvents），因此耗时长但持续输出的生成不会被截断。
 	generationTimeout = 2 * time.Minute
 )
 
@@ -889,6 +927,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				}
 			}
 			if ev.Type == "message_stop" {
+				b.commitResumed(s)
 				if !stream {
 					w.Header().Set("Content-Type", "application/json")
 					return json.NewEncoder(w).Encode(response)
