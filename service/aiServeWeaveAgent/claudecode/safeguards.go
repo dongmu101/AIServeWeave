@@ -64,7 +64,11 @@ func validateSafeguards(guards []json.RawMessage) error {
 	if len(guards) == 0 {
 		return nil
 	}
-	data, err := json.Marshal(guards)
+	var encoded bytes.Buffer
+	encoder := json.NewEncoder(&encoded)
+	encoder.SetEscapeHTML(false)
+	err := encoder.Encode(guards)
+	data := bytes.TrimSpace(encoded.Bytes())
 	if err != nil || runtime.ValidateMessagesSafeguards(data) != nil {
 		return errMessages
 	}

@@ -18,7 +18,6 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveAgent/claudecode"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
-	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
@@ -41,7 +40,8 @@ func claudeFixtureExtraBody() []byte {
 	return []byte(os.Getenv("CLAUDE_CODE_EXTRA_BODY"))
 }
 
-func claudeSafeguardsProcessFixture(prompt []byte, extra map[string]json.RawMessage) {
+func claudeSafeguardsProcessFixture(_ []byte, extra map[string]json.RawMessage) {
+	prompt := []byte(extra["messages"])
 	var betas []string
 	var guards []struct {
 		Type    string `json:"type"`
@@ -92,10 +92,10 @@ func claudeSafeguardsProcessFixture(prompt []byte, extra map[string]json.RawMess
 func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(os.Args[0]))
 	f.awaitReady(f.replicas...)
-	store := &fixtureMessagesStore{rounds: make(map[string]messagesession.Record)}
+
 	var servers []*httptest.Server
 	for _, replica := range f.replicas {
-		api := httpapi.New(scheduler.New(replica.server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}, MessagesSessions: store})
+		api := httpapi.New(scheduler.New(replica.server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}})
 		t.Cleanup(api.Close)
 		server := httptest.NewServer(api)
 		t.Cleanup(server.Close)
@@ -162,7 +162,7 @@ func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 				t.Fatalf("missing tool or safeguard verdict: %s", first)
 			}
 			id, _ := response.Content[0]["id"].(string)
-			if !strings.HasPrefix(id, "toolu_aisw_") || response.Results[0].Status.Calls[id]["outcome"] != tc.outcome || response.Results[0].Status.Calls[id]["opaque"] != "upstream-verdict" {
+			if id != "guarded-upstream-id" || response.Results[0].Status.Calls[id]["outcome"] != tc.outcome || response.Results[0].Status.Calls[id]["opaque"] != "upstream-verdict" {
 				t.Fatalf("wrong tool/verdict association: id=%s response=%s", id, first)
 			}
 			result := "caller-safe-result"
@@ -170,14 +170,14 @@ func TestClaudeSafeguardsThroughTunnel(t *testing.T) {
 				result = "caller-denied"
 			}
 			messages = append(messages, map[string]any{"role": "assistant", "content": response.Content}, map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": id, "content": result, "is_error": tc.outcome == "flagged"}}})
-			if status, _ := post(1, 2, "claude-live-second"); status != 409 {
-				t.Fatalf("foreign key continuation status=%d, want 409", status)
+			if status, body := post(1, 2, "claude-live-second"); status != 200 || !bytes.Contains(body, []byte(result)) {
+				t.Fatalf("authenticated stateless request status=%d body=%s", status, body)
 			}
 			if status, final := post(1, 2, "claude-live-first"); status != 200 || !bytes.Contains(final, []byte(result)) || !bytes.Contains(final, []byte("safeguard_results")) {
 				t.Fatalf("fresh-context continuation status/body=%d/%s", status, final)
 			}
-			if status, _ := post(0, 2, "claude-live-first"); status != 409 {
-				t.Fatalf("replayed continuation status=%d, want 409", status)
+			if status, body := post(0, 2, "claude-live-first"); status != 200 || !bytes.Contains(body, []byte(result)) {
+				t.Fatalf("stateless retry status=%d body=%s", status, body)
 			}
 		})
 	}

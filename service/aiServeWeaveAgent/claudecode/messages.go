@@ -44,6 +44,7 @@ type messageBlock struct {
 	ToolUseID string          `json:"tool_use_id,omitempty"`
 	Content   json.RawMessage `json:"content,omitempty"`
 	IsError   bool            `json:"is_error,omitempty"`
+	Source    *imageSource    `json:"source,omitempty"`
 }
 
 type bridgeMessage struct {
@@ -117,7 +118,7 @@ func textBlocks(raw json.RawMessage) (string, error) {
 	}
 	var out string
 	for _, b := range list {
-		if b.Type != "text" {
+		if b.Type != "text" || b.Source != nil {
 			return "", errMessages
 		}
 		out += b.Text
@@ -251,6 +252,9 @@ func (r messagesRequest) validate(model string) error {
 			return err
 		}
 		for _, b := range list {
+			if b.Source != nil && b.Type != "image" {
+				return errMessages
+			}
 			if !b.isThinking() && (b.Thinking != "" || b.Signature != "" || b.Data != "") {
 				return errMessages
 			}
@@ -260,6 +264,10 @@ func (r messagesRequest) validate(model string) error {
 					return errMessages
 				}
 			case "text":
+			case "image":
+				if m.Role != "user" || validateImage(b) != nil {
+					return errMessages
+				}
 			case "tool_use":
 				var args map[string]json.RawMessage
 				if m.Role != "assistant" || b.ID == "" || !names[b.Name] || json.Unmarshal(b.Input, &args) != nil || args == nil {
@@ -269,7 +277,7 @@ func (r messagesRequest) validate(model string) error {
 				if m.Role != "user" || b.ToolUseID == "" {
 					return errMessages
 				}
-				if _, err := textBlocks(b.Content); err != nil {
+				if _, err := inputBlocks(b.Content); err != nil {
 					return err
 				}
 			default:
@@ -618,8 +626,8 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 			if _, exists := results[block.ToolUseID]; exists {
 				return nil, errMessages
 			}
-			text, _ := textBlocks(block.Content)
-			results[block.ToolUseID] = toolResult{Text: text, IsError: block.IsError}
+			content, _ := inputBlocks(block.Content)
+			results[block.ToolUseID] = toolResult{Content: content, IsError: block.IsError}
 		}
 	}
 	b.mu.Lock()
@@ -693,7 +701,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		if len(req.Safeguards) > 0 {
 			break
 		}
-		if block.Type != "text" && block.Type != "tool_result" {
+		if block.Type != "text" && block.Type != "image" && block.Type != "tool_result" {
 			return nil, errMessages
 		}
 	}
@@ -926,6 +934,9 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				}
 			case "message_delta":
 				response["stop_reason"] = ev.Delta.StopReason
+				if len(s.request.Safeguards) > 0 && runtime.MergeMessagesResponseDelta(response, item.data) != nil {
+					return errCLIProtocol
+				}
 				if len(ev.Delta.Safeguards) > 0 {
 					response["safeguard_results"] = ev.Delta.Safeguards
 				}
@@ -945,7 +956,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					response["usage"] = prior
 				}
 			case "message_stop":
-				waiting := response["stop_reason"] == "tool_use"
+				waiting := response["stop_reason"] == "tool_use" && len(s.request.Safeguards) == 0
 				s.mu.Lock()
 				s.waiting = waiting
 				if waiting {
@@ -965,6 +976,13 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				response["content"] = content
 				if len(s.request.Safeguards) > 0 {
 					response["content"] = preserveMessagesContent(originalContent, content)
+				}
+				if !stream {
+					for _, block := range content {
+						if len(block.Input) > 0 && !json.Valid(block.Input) {
+							return errCLIProtocol
+						}
+					}
 				}
 			}
 			if stream {

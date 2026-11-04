@@ -41,10 +41,11 @@
 
 ## Claude Code CLI 接入
 
-`claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行，Agent 的 CLI 只调用隔离的 MCP 桥接工具。支持文本与调用方工具循环，不代表完整 Anthropic API 兼容；Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链仍保持原会话。请求要求思考时（Messages 的 `thinking`、Chat 的 `reasoning_effort`、Responses 的 `reasoning`）以对应预算开启 CLI 思考并透出 thinking 块，客户端回传的思考被丢弃。
+`claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行，Agent 的 CLI 只调用隔离的 MCP 桥接工具。支持文本、Messages 内联图片与调用方工具循环，不代表完整 Anthropic API 兼容；Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链仍保持原会话。请求要求思考时（Messages 的 `thinking`、Chat 的 `reasoning_effort`、Responses 的 `reasoning`）以对应预算开启 CLI 思考并透出 thinking 块，客户端回传的思考被丢弃。
 
 - **验收**：原版 Claude Code 客户端的工具流程只验收过 `claude-sonnet-4-6`；Chat 兼容层验证过 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。其他模型能被目录发现，不代表客户端兼容性已验证。
 - **前提**：Gateway 必须配置控制面 API Key 校验与共享 `-redis-addr`；静态 key 不能用于原生续接。
+- **Messages 图片输入（2026-11-04）**：user 与工具结果支持 base64 JPEG/PNG/GIF/WebP。有图首轮用 CLI `stream-json` 结构化输入，历史图片以编号对应独立图像块，工具图片经 MCP image 返回；图片字节参与续接历史校验。URL、文件与音频仍拒绝；Chat/Responses 图片输入仍不支持。默认测试覆盖真实 mTLS 隧道及模拟 CLI；当前本机无可用订阅登录，真实看图及线上修复尚未验收。仅需更新并重启实际承载 Claude 运行时的 Agent，详见 [图片说明](claudecode/README.md#messages-图片输入)。
 - **边界**：续接固定原节点、不自动重试；原 CLI 已不存在的孤立回合以新会话从文本记录恢复；投递给存活 CLI 的结果 24 小时内拒绝重放；原生请求最多 32 MiB。
 - **终止与诊断**：合法的 `max_tokens`、`stop_sequence`、`refusal`、`model_context_window_exceeded` 保留为终止响应，完整停止后回收 CLI，避免自动续写；自然结束继续校验最终结果与退出状态，成功结果后的 CLI 通知不进入回复。本机失败日志包含固定错误分类，解析器拒绝另带事件行号与固定原因，不记录原始内容。含模拟子进程的离线回归覆盖，Opus 5.5 真实工具流程仍待验收；详见 [故障排查](claudecode/README.md#终止原因与故障排查)。
 

@@ -123,7 +123,11 @@ func fixtureStart(s *messagesSession) {
 		if err != nil {
 			return
 		}
-		fixtureRound(w, "", result.Text)
+		var text string
+		for _, block := range result.Content {
+			text += block.Text
+		}
+		fixtureRound(w, "", text)
 		_, _ = fmt.Fprintln(w, `{"type":"result","subtype":"success"}`)
 	}()
 	stop := context.AfterFunc(s.ctx, func() { _ = r.Close(); _ = w.Close() })

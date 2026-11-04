@@ -75,6 +75,29 @@ func (r MessagesRequest) ValidateProtocol() error {
 // MessagesEvent 是一条经校验的 Anthropic SSE 数据文档，不含 HTTP 帧。
 type MessagesEvent struct{ JSON json.RawMessage }
 
+// MergeMessagesResponseDelta retains native response extensions during JSON aggregation.
+// MergeMessagesResponseDelta 在 JSON 聚合时保留原生响应扩展。
+func MergeMessagesResponseDelta(response map[string]any, event json.RawMessage) error {
+	var document struct {
+		Delta   map[string]json.RawMessage `json:"delta"`
+		Context json.RawMessage            `json:"context_management"`
+	}
+	if json.Unmarshal(event, &document) != nil {
+		return &RuntimeError{Code: ErrorProtocol, Message: "invalid native Messages delta"}
+	}
+	for key, value := range document.Delta {
+		switch key {
+		case "id", "type", "model", "role", "content", "usage":
+			continue
+		}
+		response[key] = value
+	}
+	if len(document.Context) > 0 {
+		response["context_management"] = document.Context
+	}
+	return nil
+}
+
 // MessagesRuntime preserves caller-executed tools and native message block ordering.
 // MessagesRuntime 保留调用方执行工具的语义与原生消息块顺序。
 type MessagesRuntime interface {

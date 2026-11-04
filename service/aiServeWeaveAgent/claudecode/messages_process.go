@@ -190,9 +190,14 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if budget > 0 {
 		args = append(args, "--thinking-display", "summarized")
 	}
-	prompt := sessionPrompt(s.request.Messages)
+	prompt, structured := sessionInput(s.request.Messages)
 	if guarded {
-		prompt = "Continue the supplied native Messages request."
+		// Guarded rounds carry the native request in the API body, not stdin.
+		// 受保护回合通过 API 请求体携带原生请求，不经 stdin。
+		prompt, structured = "Continue the supplied native Messages request.", false
+	}
+	if structured {
+		args = append(args, "--input-format", "stream-json")
 	}
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
@@ -210,6 +215,9 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if guarded {
 		for key, value := range s.request.nativeDocument {
 			extra[key] = value
+		}
+		if _, ok := extra["system"]; !ok {
+			extra["system"] = []any{}
 		}
 		extra["model"], extra["stream"] = model, true
 		extra["safeguards"] = s.request.Safeguards
@@ -465,10 +473,12 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					if stopped != "" {
 						publicIDs[upstreamID] = "" // reviewed upstream, hidden by the stop sequence / 上游已检查，但被停止序列隐藏
 					}
-					var obj map[string]json.RawMessage
-					_ = json.Unmarshal(envelope.Event, &obj)
-					obj["content_block"], _ = json.Marshal(current)
-					envelope.Event, _ = json.Marshal(obj)
+					if !guarded {
+						var obj map[string]json.RawMessage
+						_ = json.Unmarshal(envelope.Event, &obj)
+						obj["content_block"], _ = json.Marshal(current)
+						envelope.Event, _ = json.Marshal(obj)
+					}
 				} else if !guarded && current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
 					return nil, protocolError("unsupported_block")
 				}
@@ -488,7 +498,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || !blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_stop")
 				}
-				if current.Type == "tool_use" && stopped == "" {
+				if current.Type == "tool_use" && stopped == "" && !guarded {
 					if arguments != "" {
 						current.Input = json.RawMessage(arguments)
 					}

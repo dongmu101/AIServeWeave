@@ -56,11 +56,21 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 ## 支持范围
 
-支持以 user 文本结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
+支持以 user 文本或内联图片结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本和内联图片工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`；图片来源与字节也参与历史校验。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
 
-多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史仍按同一套严格规则校验，图片等不支持的块照旧拒绝。代价是模型只能以引用文本的形式看到此前的回合，思考块不进入记录，thinking 也不跨会话保留。
+多轮追问开启一个新 CLI 会话：Agent 把此前的全部回合（包括已完成的工具调用与结果）渲染成带角色标记的 JSON 文本记录，作为 CLI 的首轮输入。这与 Chat 兼容层的做法一致，不伪造 CLI 的 assistant 消息，也不重放历史工具。历史图片以编号占位标记位置，并作为独立图片块附在文本记录之后，不把 base64 编码当作提示词文本。文本历史以引用形式提供，思考块不进入记录，thinking 也不跨会话保留。
 
-支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}`、`output_config.effort`（low/medium/high/xhigh/max）和 `stop_sequences`（见下文「停止序列」）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、图片/文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+支持 `max_tokens`（必填正整数）、`temperature`（0–1）、`thinking`（见下文「思考内容」）、`tool_choice: {"type":"auto"}`、`output_config.effort`（low/medium/high/xhigh/max）和 `stop_sequences`（见下文「停止序列」）。`metadata` 为调用方注记，不转发给 CLI。不支持缓存控制、文件/音频、以 assistant 消息结尾的预填历史、强制工具选择、其他采样参数、输出 schema、上下文压缩或客户端扩展。未知字段严格拒绝，不静默丢弃。
+
+### Messages 图片输入
+
+`/v1/messages` 接受 user 消息及 `tool_result.content` 中的 `image` 块，来源必须为 `{"type":"base64","media_type":"image/png","data":"..."}`，媒体类型支持 JPEG、PNG、GIF、WebP。编码必须有效且非空；实际图片格式、尺寸和模型可接受性由 CLI/上游校验。图片沿用整个原生请求 32 MiB 上限，不额外落盘，也不进入日志。URL 来源明确返回 400，Agent 不抓取调用方提供的地址。
+
+有图的新会话通过 `--input-format stream-json` 发送包含原生 image 块的 user 信封；单条提问保留文本和图片的原始顺序，完整历史及孤立工具回合恢复保留图片编号与对应图像。存活会话的图片工具结果转换为 MCP image 内容（`data`、`mimeType`），文本、图片顺序和 `is_error` 保留。纯图片工具结果也支持。纯文本请求保持原有 CLI 输入方式。OpenAI Chat/Responses 兼容层的图片限制仍按前两节执行。
+
+输入形状依据 [Claude 官方结构化输入文档](https://code.claude.com/docs/en/agent-sdk/streaming-vs-single-mode)。也核对了 [CLIProxyAPI 的图片及工具结果转换](https://github.com/router-for-me/CLIProxyAPI/blob/01b24f1f95dc9b309765212c52b25b25e005ff01/internal/translator/claude/openai/chat-completions/claude_openai_request.go#L496)：参考其保留结构化图片内容的方式；该项目的 [Claude 执行器](https://github.com/router-for-me/CLIProxyAPI/blob/01b24f1f95dc9b309765212c52b25b25e005ff01/internal/runtime/executor/claude_executor_execute.go#L19) 直接访问 Anthropic HTTP API，本运行时继续由本机 CLI 管理订阅登录与推理。
+
+图片支持需要更新并重启承载该 Claude 运行时的 Agent；Gateway 的现有原生 Messages 隧道无需修改。默认测试覆盖跨两个 Gateway 的 mTLS 首轮、JSON/SSE 工具续接、历史图片、工具返回图片与历史完整性。真实 CLI 看图测试为 `AISW_CLAUDE_LIVE_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestLiveMessagesImages$' -count=1 -timeout=180s -v`，可用 `AISW_CLAUDE_MODEL` 选择模型；本次执行环境缺少可用订阅登录，真实图片理解尚未验收。
 
 Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数值原样传给 CLI 的 `CLAUDE_CODE_MAX_OUTPUT_TOKENS`；实际可用上限由 CLI、模型和账户能力决定。请求大小、响应大小与执行超时等资源边界仍然生效。此行为需要同时更新 Gateway 并重启 Agent。
 

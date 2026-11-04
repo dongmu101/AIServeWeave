@@ -88,7 +88,13 @@ func safeguardsProcessFixture() {
 	if !strings.Contains(os.Getenv("ANTHROPIC_CUSTOM_HEADERS"), "anthropic-version: 2023-06-01") || !slices.Contains(os.Args, "auto") {
 		os.Exit(3)
 	}
-	prompt, _ := io.ReadAll(os.Stdin)
+	_, _ = io.ReadAll(os.Stdin)
+	var native struct {
+		Messages json.RawMessage `json:"messages"`
+		System   json.RawMessage `json:"system"`
+	}
+	_ = json.Unmarshal([]byte(settings.Env["CLAUDE_CODE_EXTRA_BODY"]), &native)
+	prompt := []byte(native.Messages)
 	if strings.Contains(string(prompt), "caller-result") {
 		if !bytes.Contains(extra.Safeguards[0], []byte("second-context")) {
 			os.Exit(3)
@@ -203,39 +209,27 @@ func TestSafeguardsVerdictStates(t *testing.T) {
 }
 
 func TestSafeguardsStopSequence(t *testing.T) {
-	for _, hiddenTool := range []bool{false, true} {
-		t.Run(fmt.Sprintf("hidden_tool=%t", hiddenTool), func(t *testing.T) {
-			var input bytes.Buffer
-			emitFixture(&input, map[string]any{"type": "message_start"})
-			emitFixture(&input, map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text", "text": ""}})
-			emitFixture(&input, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": "before END after"}})
-			emitFixture(&input, map[string]any{"type": "content_block_stop", "index": 0})
-			calls := map[string]any{}
-			stop := "end_turn"
-			if hiddenTool {
-				emitFixture(&input, map[string]any{"type": "content_block_start", "index": 1, "content_block": map[string]any{"type": "tool_use", "id": "hidden-call", "name": "read_file", "input": map[string]string{"path": "hidden.txt"}}})
-				emitFixture(&input, map[string]any{"type": "content_block_stop", "index": 1})
-				calls["hidden-call"] = map[string]string{"type": "evaluated", "outcome": "flagged"}
-				stop = "tool_use"
-			}
-			emitFixture(&input, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": stop, "safeguard_results": []any{map[string]any{"type": "dangerous_tool_use", "status": map[string]any{"type": "available", "tool_uses": calls}}}}, "usage": map[string]int{"output_tokens": 7}})
-			emitFixture(&input, map[string]any{"type": "message_stop"})
-			req := guardedRequest()
-			req.StopSequences = []string{"END"}
-			s := &messagesSession{ctx: context.Background(), request: req, events: make(chan bridgeEvent, 24), pending: make(map[string]*pendingTool), changed: make(chan struct{})}
-			_, err := bridgeEvents(&input, s)
-			if !errors.Is(err, errStopSequence) {
-				t.Fatalf("error=%v, want stop sequence completion", err)
-			}
-			close(s.events)
-			var output strings.Builder
-			for item := range s.events {
-				output.Write(item.data)
-			}
-			if !strings.Contains(output.String(), `"safeguard_results"`) || !strings.Contains(output.String(), `"available"`) || strings.Contains(output.String(), "hidden-call") || strings.Contains(output.String(), "hidden.txt") || len(s.pending) != 0 {
-				t.Fatalf("stop sequence lost real verdict or exposed hidden tool: %s", &output)
-			}
-		})
+	var input bytes.Buffer
+	emitFixture(&input, map[string]any{"type": "message_start"})
+	emitFixture(&input, map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]string{"type": "text", "text": ""}})
+	emitFixture(&input, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "text_delta", "text": "before "}})
+	emitFixture(&input, map[string]any{"type": "content_block_stop", "index": 0})
+	emitFixture(&input, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "stop_sequence", "stop_sequence": "END", "safeguard_results": []any{map[string]any{"type": "dangerous_tool_use", "status": map[string]any{"type": "available", "tool_uses": map[string]any{}}}}}, "usage": map[string]int{"output_tokens": 7}})
+	emitFixture(&input, map[string]any{"type": "message_stop"})
+	req := guardedRequest()
+	req.StopSequences = []string{"END"}
+	session := &messagesSession{ctx: context.Background(), request: req, events: make(chan bridgeEvent, 16), pending: make(map[string]*pendingTool), changed: make(chan struct{})}
+	_, err := bridgeEvents(&input, session)
+	if !errors.Is(err, errTerminalStop) {
+		t.Fatalf("error=%v, want native stop sequence completion", err)
+	}
+	close(session.events)
+	var output strings.Builder
+	for event := range session.events {
+		output.Write(event.data)
+	}
+	if !strings.Contains(output.String(), `"safeguard_results"`) || !strings.Contains(output.String(), `"stop_sequence":"END"`) {
+		t.Fatalf("native stop sequence/verdict lost: %s", &output)
 	}
 }
 
@@ -279,7 +273,7 @@ func TestSafeguardsParallelIdenticalCalls(t *testing.T) {
 			verdict = event.Delta.Results[0].Status.Calls
 		}
 	}
-	if len(ids) != 2 || ids[0] == ids[1] || verdict[ids[0]].Outcome != "flagged" || verdict[ids[1]].Outcome != "not_flagged" {
+	if len(ids) != 2 || ids[0] != "native-first" || ids[1] != "native-second" || verdict[ids[0]].Outcome != "flagged" || verdict[ids[1]].Outcome != "not_flagged" {
 		t.Fatalf("parallel tool/verdict association lost: ids=%v verdict=%+v", ids, verdict)
 	}
 }
@@ -379,7 +373,7 @@ func TestSafeguardsResultsFollowPublicToolIDs(t *testing.T) {
 					}
 				}
 			}
-			if !strings.HasPrefix(id, "toolu_aisw_") || len(results) != 1 || len(results[0].Status.ToolUses) != 1 || results[0].Status.ToolUses[id]["outcome"] != outcome || results[0].Status.ToolUses[id]["opaque"] != "upstream-proof" || !results[0].Future["preserved"] {
+			if id != "native-call" || len(results) != 1 || len(results[0].Status.ToolUses) != 1 || results[0].Status.ToolUses[id]["outcome"] != outcome || results[0].Status.ToolUses[id]["opaque"] != "upstream-proof" || !results[0].Future["preserved"] {
 				t.Fatalf("tool/verdict correlation lost: id=%q results=%+v", id, results)
 			}
 		})

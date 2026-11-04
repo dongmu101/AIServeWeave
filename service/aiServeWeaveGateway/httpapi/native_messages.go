@@ -205,7 +205,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		fail(401, "authentication_error", "authentication_error", "native Messages requires authenticated API keys")
 		return
 	}
-	if h.messagesSessions == nil {
+	if h.messagesSessions == nil && !guarded {
 		fail(503, "api_error", "session_unavailable", "native Messages requires shared Redis session coordination")
 		return
 	}
@@ -429,6 +429,10 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		case "content_block_stop":
 		case "message_delta":
 			response["stop_reason"] = event.Delta.StopReason
+			if guarded && runtime.MergeMessagesResponseDelta(response, item.JSON) != nil {
+				protocolError("invalid native Messages delta")
+				return
+			}
 			if len(event.Delta.Safeguards) > 0 {
 				response["safeguard_results"] = event.Delta.Safeguards
 			}
@@ -449,6 +453,14 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
 		case "message_stop":
+			if !req.Stream {
+				for _, block := range content {
+					if len(block.Input) > 0 && !json.Valid(block.Input) {
+						protocolError("native Messages ended with incomplete tool input")
+						return
+					}
+				}
+			}
 			if len(calls) > 0 && !guarded {
 				record.IDs = calls
 				if h.messagesSessions.Publish(r.Context(), record) != nil {
