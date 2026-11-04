@@ -104,14 +104,22 @@ type call struct {
 	aborted   chan struct{}
 	abortOnce sync.Once
 	abortErr  error
+
+	// maxFrame caps one DataChunk of this request's response. A Messages
+	// event is already bounded by the tunnelwire codec, so it may use the
+	// whole gRPC message; other operations keep Config.MaxFrameBytes.
+	// maxFrame 限制本请求响应的单个 DataChunk。Messages 事件已由 tunnelwire 编解码器
+	// 限定大小，因此可使用整条 gRPC 消息；其他操作沿用 Config.MaxFrameBytes。
+	maxFrame int
 }
 
-func newCall(id string) *call {
+func newCall(id string, maxFrame int) *call {
 	return &call{
-		id:      id,
-		frames:  make(chan *tunnelv1.AgentFrame),
-		done:    make(chan struct{}),
-		aborted: make(chan struct{}),
+		id:       id,
+		maxFrame: maxFrame,
+		frames:   make(chan *tunnelv1.AgentFrame),
+		done:     make(chan struct{}),
+		aborted:  make(chan struct{}),
 	}
 }
 
@@ -189,7 +197,11 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		slog.String("node_id", req.NodeID),
 		slog.String("runtime_id", req.RuntimeID),
 		slog.String("operation", req.Operation.String()))
-	c := newCall(requestID)
+	maxFrame := s.cfg.MaxFrameBytes
+	if req.Operation == tunnelv1.Operation_OPERATION_MESSAGES {
+		maxFrame = max(maxFrame, tunnelwire.MaxTunnelMessageBytes)
+	}
+	c := newCall(requestID, maxFrame)
 	if err := sl.begin(c); err != nil {
 		sl.close(err)
 		return nil, failed(dispatchError(runtime.ErrorConnection, req, "slot closed before the request was written", true, err))

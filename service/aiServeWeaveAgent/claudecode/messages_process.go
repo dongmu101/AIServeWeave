@@ -212,6 +212,13 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 // 并关闭该块，此后 CLI 产生的任何内容都不再到达客户端。回合随后以带 CLI 用量的
 // stop_sequence message_delta 结束；若 CLI 先开始了工具调用则立即结束，因为 API 根本不会
 // 产生它。bridgeEvents 返回 errStopSequence，由 runProcess 停止 CLI。
+//
+// Like the Messages API, nothing caps the rounds, tool calls or lines of a
+// session; only the duplicate tool ID check is scoped to a round and restarts
+// at each message_stop.
+//
+// 与 Messages API 一样，会话的回合数、工具调用数与行数都不设上限；只有重复工具 ID 检查
+// 以回合为范围，在每次 message_stop 后重新开始。
 func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error) {
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 4096), maxEventBytes+1)
@@ -226,11 +233,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	var quota *quotaError
 	finished, active, blockActive := false, false, false
 	showThinking := s.request.thinkingBudget() > 0
-	index, publicIndex, tools := 0, 0, 0
+	index, publicIndex := 0, 0
 	seenIDs := make(map[string]bool)
 	matcher := stopMatcher{sequences: s.request.StopSequences}
 	stopped := "" // the matched stop sequence, once found / 命中的停止序列（命中后设置）
-	for count := 0; scanner.Scan(); count++ {
+	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
 			continue
@@ -239,7 +246,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		// that falls silent for generationTimeout is reclaimed.
 		// 任何输出都算进展：重启空闲阶段计时器，只回收沉默满 generationTimeout 的 CLI。
 		s.touch()
-		if len(line) > maxEventBytes || count >= 10000 || finished {
+		if len(line) > maxEventBytes || finished {
 			return nil, errCLIProtocol
 		}
 		var envelope struct {
@@ -330,7 +337,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 							found = true
 						}
 					}
-					if !found || current.ID == "" || len(current.ID) > 256 || tools >= maxCalls {
+					if !found || current.ID == "" {
 						return nil, errUnsafeTools
 					}
 					if seenIDs[current.ID] {
@@ -338,7 +345,6 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					}
 					seenIDs[current.ID] = true
 					current.ID = "toolu_aisw_" + randomID()
-					tools++
 					var obj map[string]json.RawMessage
 					_ = json.Unmarshal(envelope.Event, &obj)
 					obj["content_block"], _ = json.Marshal(current)
@@ -371,9 +377,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						return nil, errCLIProtocol
 					}
 					s.mu.Lock()
-					if len(s.pending) >= maxPending || s.pending[current.ID] != nil {
+					if s.pending[current.ID] != nil {
 						s.mu.Unlock()
-						return nil, errCapacity
+						return nil, errCLIProtocol
 					}
 					for _, pending := range s.pending {
 						if !pending.delivered && pending.block.Name == current.Name && canonical(normalizedToolInput(pending.block.Name, pending.block.Input, s.request.Tools)) == canonical(normalizedToolInput(current.Name, current.Input, s.request.Tools)) {
@@ -412,6 +418,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					return append(json.RawMessage(nil), envelope.Event...), errStopSequence
 				}
 				active = false
+				// Tool IDs need only be unique within a round.
+				// 工具 ID 只需在回合内唯一。
+				clear(seenIDs)
 				if stopReason != "tool_use" {
 					final = append(json.RawMessage(nil), envelope.Event...)
 					continue

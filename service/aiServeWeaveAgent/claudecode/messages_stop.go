@@ -17,15 +17,6 @@ import (
 // stop_reason "stop_sequence" 结束回合。Claude Code auto 模式的安全判断依赖这一点：它在
 // "</severity>" 处停止。
 
-const (
-	// maxStopSequences bounds how many sequences one request may declare.
-	// maxStopSequences 限制单个请求可声明的停止序列数量。
-	maxStopSequences = 16
-	// maxStopSequenceBytes bounds each sequence, and with it the text held back.
-	// maxStopSequenceBytes 限制每个序列的长度，也因此限制被暂扣的文本长度。
-	maxStopSequenceBytes = 256
-)
-
 // errStopSequence ends bridgeEvents once a stop sequence has closed the
 // round; runProcess then stops the CLI and delivers the final event. It never
 // reaches a caller.

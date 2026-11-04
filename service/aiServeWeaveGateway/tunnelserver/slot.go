@@ -256,9 +256,9 @@ func (s *slot) route(frame *tunnelv1.AgentFrame) error {
 		return nil
 	}
 
-	if data := frame.GetData(); data != nil && len(data.GetPayload()) > s.srv.cfg.MaxFrameBytes {
+	if data := frame.GetData(); data != nil && len(data.GetPayload()) > c.maxFrame {
 		err := fmt.Errorf("tunnelserver: data chunk of %d bytes exceeds the %d byte frame limit",
-			len(data.GetPayload()), s.srv.cfg.MaxFrameBytes)
+			len(data.GetPayload()), c.maxFrame)
 		c.abort(err)
 		s.finish(c)
 		return s.fault(FaultFrameTooLarge, err.Error())

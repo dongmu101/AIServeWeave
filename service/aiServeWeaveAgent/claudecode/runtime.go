@@ -13,6 +13,7 @@ import (
 	"sync"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -200,7 +201,7 @@ type nativeStream struct {
 // Messages validates native semantics and preserves an existing owned tool session.
 // Messages 校验原生语义，并保留已归属的工具会话。
 func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], error) {
-	if req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 || len(req.JSON) > 1<<20 {
+	if req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 || len(req.JSON) > tunnelwire.MaxMessagesJSONBytes {
 		return nil, claudeError(runtime.ErrorInvalidConfig)
 	}
 	var parsed messagesRequest

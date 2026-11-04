@@ -28,7 +28,7 @@ func (h *handlers) useNativeResponses(ctx context.Context, req responsesRequest)
 // nativeResponses reuses the Chat compatibility layer, so Responses continuations share its CLI sessions.
 // nativeResponses 复用 Chat 兼容层，使 Responses 续接与之共用同一套 CLI 会话校验。
 func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req responsesRequest, raw json.RawMessage, start time.Time) {
-	if len(raw) > 1<<20 {
+	if len(raw) > maxMessagesRequestBytes {
 		writeOpenAIError(w, 413, "invalid_request_error", "request_too_large", "Claude CLI Responses request size limit exceeded")
 		return
 	}

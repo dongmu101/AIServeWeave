@@ -64,11 +64,15 @@ func withAccountDir(env []string, dir string) []string {
 	return append(out, "CLAUDE_CONFIG_DIR="+dir)
 }
 
-const (
-	maxPending    = 8
-	maxCalls      = 64
-	maxEventBytes = 1 << 20
-)
+// maxEventBytes bounds one line the local CLI writes and one MCP request it
+// sends. The CLI is a trusted local process whose output its own token limit
+// already bounds, so this only stops a broken process: an assistant line
+// carrying a long answer, or a tool call writing a large file, stays far below.
+//
+// maxEventBytes 限制本机 CLI 写出的一行及它发出的一个 MCP 请求。CLI 是受信的本机进程，
+// 输出已受其自身 token 上限约束，因此这里只拦住异常进程：携带长回答的 assistant 行、
+// 写入大文件的工具调用都远低于该值。
+const maxEventBytes = 256 << 20
 
 type principal struct{ tenant, key string }
 type toolResult struct {

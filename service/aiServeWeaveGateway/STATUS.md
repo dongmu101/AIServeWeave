@@ -752,11 +752,11 @@ Harness 自动发送的正数 `max_tokens` / `max_completion_tokens`，以及 Re
 
 Claude CLI 模型同时支持 OpenAI `/v1/chat/completions`（JSON 与 SSE）：Gateway 将文本、前置 system/developer 和 function 工具转换为 Messages 语义，沿用下述身份校验、Redis 认领与原节点绑定。`finish_reason` 映射为 `stop`、`length` 或 `tool_calls`；流式包含工具索引与参数增量，成功结束发送 `[DONE]`，`stream_options.include_usage` 可请求末尾用量帧。其他 Chat 后端（包括 Codex）仍走原来的 Chat 隧道。
 
-普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、必须为正整数，同时提供必须一致；Gateway 与 Agent 不设置固定输出 token 上限，客户端指定值原样传给 CLI，实际支持范围由 CLI、模型和账户能力决定；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 1 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent。
+普通多轮 Chat 历史以带角色标记的 JSON 文本提供给新 CLI 回合，当前工具链保持原进程；不重新执行历史工具。`max_tokens` / `max_completion_tokens` 默认 4096、必须为正整数，同时提供必须一致；Gateway 与 Agent 不设置固定输出 token 上限，客户端指定值原样传给 CLI，实际支持范围由 CLI、模型和账户能力决定；支持 0–1 的 `temperature` 和自动工具选择。接受 SDK 默认的 `store: false`（不持久化保存 Chat 回复），`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。图片、音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 和未知参数明确返回 400。Chat 的转换前后请求均限制为 32 MiB，用量记为 `chat`。完整客户端设置与限制见 [Chat 兼容说明](../aiServeWeaveAgent/claudecode/README.md#openai-chat-completions-兼容)。此兼容层需要更新 Gateway 并重启新版 Agent。
 
 Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按普通 Responses 的规则把 `input` 还原为 canonical 消息，再交给上面的 Chat 转换，因此续接沿用 Chat 的身份、完整历史与原节点绑定校验，Agent 无需升级。同一回合的 assistant 文本和工具调用在 Responses 中是独立的项，转换时合并回一条，与 Agent 对 Chat 历史的等价校验保持一致。`function`、`custom`、`local_shell`、`namespace` 工具按普通 Responses 的规则还原类型；`web_search` 类工具照旧略去，并在 `X-Gateway-Ignored-Tools` 中列出。流式按 Responses 生命周期从 `response.created` 输出到 `response.completed`：`max_tokens` 截断以 `response.incomplete` 收尾，会话或上游在发出响应头后失败则以 `response.failed` 收尾。
 
-`max_output_tokens` 默认 4096，必须为正整数，不设置固定上限，客户端指定值经 Chat 转换原样传给 CLI；`temperature` 范围 0–1。以下情况明确返回 400：`store: true`、`previous_response_id`、`top_p`、`text` 以外的 `text.format`、非 `auto` 的 `tool_choice`、`strict: true` 的工具，以及图片或文件内容。每轮须在 `input` 中携带完整对话。与普通 Responses 一样，Codex 等客户端附带的其他字段不会被拒绝，但也不生效。转换前后的请求均限制为 1 MiB，用量账本与指标都记为 `responses`。目前只做过离线端到端验证（真实 Agent 加模拟 CLI，跨副本 JSON/SSE 工具续接），尚未用真实 Claude CLI 或 Codex 客户端联调。
+`max_output_tokens` 默认 4096，必须为正整数，不设置固定上限，客户端指定值经 Chat 转换原样传给 CLI；`temperature` 范围 0–1。以下情况明确返回 400：`store: true`、`previous_response_id`、`top_p`、`text` 以外的 `text.format`、非 `auto` 的 `tool_choice`、`strict: true` 的工具，以及图片或文件内容。每轮须在 `input` 中携带完整对话。与普通 Responses 一样，Codex 等客户端附带的其他字段不会被拒绝，但也不生效。转换前后的请求均限制为 32 MiB，用量账本与指标都记为 `responses`。目前只做过离线端到端验证（真实 Agent 加模拟 CLI，跨副本 JSON/SSE 工具续接），尚未用真实 Claude CLI 或 Codex 客户端联调。
 
 模型目标具有 `anthropic_messages` 能力时，`/v1/messages` 使用独立原生隧道操作，保留文本、工具块顺序与实际用量。以 user 文本结尾的多轮追问会开启新 CLI 会话，此前回合由 Agent 折叠为带角色的文本记录。其他模型仍使用既有 Chat 转换。
 
@@ -778,7 +778,7 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 新会话经 `Scheduler.MessagesStart` 派发：首个事件到达之前，`backpressure`、`runtime_closed` 或带 `Retryable` 的失败换下一个候选，其余错误原样返回。Claude 适配器报告会话名额已满时不带 `Retryable`，所以这里按错误码判断，也兼容旧版 Agent。候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话上限，没有这层回退时，一个已满的节点会让请求直接 429。续接仍经 `Scheduler.Messages` 只发往绑定的节点。原生路径要求控制面校验提供 `TenantID`、`KeyID`，以及所有 Gateway 副本共享 `-redis-addr`；未配置分别返回 401、503。Messages 和 `GET /v1/models` 接受 `x-api-key` 或既有 Bearer 认证（优先级见「API Key 鉴权」），其他端点仍要求 Bearer；凭据不进入隧道。
 
-Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），续接成功后保留已使用标记 24 小时，已投递或结果不确定时拒绝重放（409 `continuation_unavailable`）。续接不会换节点。绑定已过期（Redis 中完全没有记录，`messagesession.ErrExpired`）时，请求按新会话经 `MessagesStart` 调度，由 Agent 以文本记录恢复该回合；租约有效但原节点的 CLI 已不存在时，新版 Agent 在原节点就地开新会话恢复（旧版 Agent 仍答复 `runtime_closed`，Gateway 返回 409）。节点失联时返回 503，消费绑定。
+Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每个工具 ID 的 key 都保存整份记录（含该回合完整的 ID 列表），存储量随回合内调用数的平方增长，因此每回合最多 64 个工具调用（`messagesession.maxRoundIDs`）。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），续接成功后保留已使用标记 24 小时，已投递或结果不确定时拒绝重放（409 `continuation_unavailable`）。续接不会换节点。绑定已过期（Redis 中完全没有记录，`messagesession.ErrExpired`）时，请求按新会话经 `MessagesStart` 调度，由 Agent 以文本记录恢复该回合；租约有效但原节点的 CLI 已不存在时，新版 Agent 在原节点就地开新会话恢复（旧版 Agent 仍答复 `runtime_closed`，Gateway 返回 409）。节点失联时返回 503，消费绑定。
 
 原生流式响应（Messages、Chat、Responses 三种输出）静默 15 秒即写一次心跳，避免 Nginx `proxy_read_timeout`（默认 60 秒）等代理在 CLI 启动或首个 token 较慢时断开：Messages 发官方 `event: ping`，Chat 与 Responses 发 SSE 注释 `: keep-alive`（Responses 首次心跳会先发出 `response.created`/`in_progress`）。心跳可能在首个事件之前发出响应头，此后的失败只能以 SSE 错误事件返回，不再带 HTTP 状态码和 `Retry-After`；15 秒内完成的派发失败不受影响。非流式请求不发心跳。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 
@@ -790,4 +790,4 @@ Claude CLI 后端通过 `initialize` 动态发布 `resolvedModel` 中去重后�
 [{"model":"claude-sonnet-4-6","targets":[{"runtime_model":"claude-sonnet-4-6"}]}]
 ```
 
-Agent 与 Gateway 必须同时升级到支持 `OPERATION_MESSAGES` 的版本。客户端配置、支持范围和真实联调见 [Claude 运行时说明](../aiServeWeaveAgent/claudecode/README.md)。原生请求最多 1 MiB、单事件最多 1 MiB、单回合响应最多 8 MiB；流中失败发送明确错误，非流式只在完整成功结束后返回结果。
+Agent 与 Gateway 必须同时升级到支持 `OPERATION_MESSAGES` 的版本。客户端配置、支持范围和真实联调见 [Claude 运行时说明](../aiServeWeaveAgent/claudecode/README.md)。原生请求最多 32 MiB（与 Messages API 自身上限一致，`tunnelwire.MaxMessagesJSONBytes`；请求内联在一个隧道帧里，隧道两端的 gRPC 消息上限相应设为 33 MiB；Messages 事件帧同样按 33 MiB 收发，不受其他操作 4 MiB 单帧上限的约束）、单回合响应最多 64 MiB（节点可能由第三方运行，Gateway 不缓冲无界数据）。超过 1 MiB 的请求需要 Agent 先升级到同一版本：旧 Agent 的隧道帧上限仍是 gRPC 默认的 4 MiB、文档上限仍是 1 MiB，所以要先升级 Agent 再升级 Gateway；流中失败发送明确错误，非流式只在完整成功结束后返回结果。

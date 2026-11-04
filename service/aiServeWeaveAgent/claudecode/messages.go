@@ -18,7 +18,11 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
-const maxRequestBytes = 8 << 20
+// maxRequestBytes bounds a loopback experiment request at the Messages API's
+// own 32 MB request limit.
+//
+// maxRequestBytes 以 Messages API 自身 32 MB 的请求上限限制回环实验请求。
+const maxRequestBytes = 32 << 20
 
 var errMessages = errors.New("invalid or unsupported Messages request")
 
@@ -93,7 +97,7 @@ func blocks(raw json.RawMessage) ([]messageBlock, error) {
 		return []messageBlock{{Type: "text", Text: text}}, nil
 	}
 	var result []messageBlock
-	if decodeStrict(raw, &result) != nil || len(result) == 0 || len(result) > 256 {
+	if decodeStrict(raw, &result) != nil || len(result) == 0 {
 		return nil, errMessages
 	}
 	return result, nil
@@ -163,12 +167,14 @@ func (r messagesRequest) thinkingBudget() int {
 // 运行。经 Gateway 的请求不会走到这一步：Gateway 会先把 adaptive 改写成带预算的
 // enabled（见 Gateway 的 nativeThinking）。思考块只能出现在 assistant 回合里，之后会被丢弃。
 //
-// stop_sequences may hold up to maxStopSequences non-empty sequences of at
-// most maxStopSequenceBytes each.
+// Like the Messages API, the number of messages, tools, content blocks and
+// stop sequences is not capped; only the request size bounds them. Each stop
+// sequence must be non-empty.
 //
-// stop_sequences 最多 maxStopSequences 个非空序列，每个不超过 maxStopSequenceBytes 字节。
+// 与 Messages API 一样，消息、工具、内容块与停止序列的数量都不设上限，只受请求大小约束。
+// 每个停止序列必须非空。
 func (r messagesRequest) validate(model string) error {
-	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 || len(r.Messages) > 2048 || len(r.Tools) > 128 {
+	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 {
 		return errMessages
 	}
 	if _, err := textBlocks(r.System); err != nil {
@@ -205,11 +211,8 @@ func (r messagesRequest) validate(model string) error {
 	if r.Temperature != nil && (*r.Temperature < 0 || *r.Temperature > 1) {
 		return errMessages
 	}
-	if len(r.StopSequences) > maxStopSequences {
-		return errMessages
-	}
 	for _, sequence := range r.StopSequences {
-		if sequence == "" || len(sequence) > maxStopSequenceBytes {
+		if sequence == "" {
 			return errMessages
 		}
 	}
@@ -224,7 +227,7 @@ func (r messagesRequest) validate(model string) error {
 	names := make(map[string]bool)
 	for _, tool := range r.Tools {
 		var schema map[string]json.RawMessage
-		if tool.Name == "" || len(tool.Name) > 128 || names[tool.Name] || json.Unmarshal(tool.InputSchema, &schema) != nil || schema == nil {
+		if tool.Name == "" || names[tool.Name] || json.Unmarshal(tool.InputSchema, &schema) != nil || schema == nil {
 			return errMessages
 		}
 		names[tool.Name] = true
@@ -253,7 +256,7 @@ func (r messagesRequest) validate(model string) error {
 					return errMessages
 				}
 			case "tool_result":
-				if m.Role != "user" || b.ToolUseID == "" || len(b.Content) > maxEventBytes {
+				if m.Role != "user" || b.ToolUseID == "" {
 					return errMessages
 				}
 				if _, err := textBlocks(b.Content); err != nil {
@@ -294,7 +297,10 @@ type messagesSession struct {
 	pending  map[string]*pendingTool
 	changed  chan struct{}
 	activity chan bool
-	mcpCalls int
+	// idleSince is when the session last began waiting for tool results;
+	// eviction picks the session idle the longest. Guarded by mu.
+	// idleSince 是会话最近一次开始等待工具结果的时间；淘汰时选择空闲最久的会话。受 mu 保护。
+	idleSince time.Time
 }
 
 type messagesBridge struct {
@@ -604,7 +610,10 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		for s := range b.sessions {
 			s.mu.Lock()
 			for id := range results {
-				held = held || s.pending[id] != nil
+				// A cancelled (evicted or expired) session no longer holds its
+				// calls; their results resume in a new session below.
+				// 已取消（被淘汰或过期）的会话不再持有其调用，结果在下面的新会话中恢复。
+				held = held || (s.ctx.Err() == nil && s.pending[id] != nil)
 			}
 			matches := s.owner == owner && !s.busy && s.waiting && s.ctx.Err() == nil && sessionConfig(s.request) == sessionConfig(req) && s.historyHash(req.Messages[:len(req.Messages)-1]) == s.history && len(results) == len(s.pending) && len(last) == len(results)
 			if matches {
@@ -663,7 +672,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 			return nil, errMessages
 		}
 	}
-	if len(b.sessions) >= b.capacity {
+	if b.liveLocked() >= b.capacity && !b.evictIdleLocked() {
 		return nil, errCapacity
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -681,6 +690,48 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 		<-timerDone
 	}()
 	return s, nil
+}
+
+// liveLocked counts sessions not yet cancelled; a cancelled one only awaits
+// the reaping of its process. The caller holds b.mu.
+//
+// liveLocked 统计尚未取消的会话；已取消的会话只是在等待其进程被回收。调用方持有 b.mu。
+func (b *messagesBridge) liveLocked() int {
+	n := 0
+	for s := range b.sessions {
+		if s.ctx.Err() == nil {
+			n++
+		}
+	}
+	return n
+}
+
+// evictIdleLocked cancels the session that has waited longest for tool
+// results, so a new session can start when capacity is full. As with the
+// stateless Messages API, an idle conversation must not lock others out; its
+// continuation later resumes from the transcript. A session that is
+// generating is never evicted. It reports whether one was. The caller holds
+// b.mu.
+//
+// evictIdleLocked 取消等待工具结果最久的会话，使名额已满时仍能开启新会话。与无状态的
+// Messages API 一样，空闲的对话不能把其他对话挡在外面；它之后的续接从文本记录恢复。
+// 正在生成的会话从不被淘汰。返回是否淘汰了会话。调用方持有 b.mu。
+func (b *messagesBridge) evictIdleLocked() bool {
+	var victim *messagesSession
+	var since time.Time
+	for s := range b.sessions {
+		s.mu.Lock()
+		idle, at := !s.busy && s.waiting && s.ctx.Err() == nil, s.idleSince
+		s.mu.Unlock()
+		if idle && (victim == nil || at.Before(since)) {
+			victim, since = s, at
+		}
+	}
+	if victim == nil {
+		return false
+	}
+	victim.cancel()
+	return true
 }
 
 func (s *messagesSession) signalLocked() { close(s.changed); s.changed = make(chan struct{}) }
@@ -716,11 +767,13 @@ const (
 	toolWaitTimeout = time.Hour
 	// generationTimeout bounds how long a CLI generation phase may go without
 	// output; every line the CLI writes restarts it (see bridgeEvents), so a
-	// long but active generation is never cut short.
+	// long but active generation is never cut short. It matches the CLI's own
+	// API request timeout (10 minutes), after which the CLI gives up itself.
 	//
 	// generationTimeout 限定 CLI 生成阶段无输出的时长；CLI 每写出一行都会重新计时（见
-	// bridgeEvents），因此耗时长但持续输出的生成不会被截断。
-	generationTimeout = 2 * time.Minute
+	// bridgeEvents），因此耗时长但持续输出的生成不会被截断。它与 CLI 自身的 API 请求超时
+	// （10 分钟）一致，超过后 CLI 自己也会放弃。
+	generationTimeout = 10 * time.Minute
 )
 
 // expire cancels s when its life or current phase runs out. Each activity
@@ -769,7 +822,6 @@ func (s *messagesSession) send(data json.RawMessage, err error) error {
 func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *messagesSession, stream bool) (resultErr error) {
 	response := map[string]any{}
 	var content []messageBlock
-	total := 0
 	started := false
 	defer func() {
 		if resultErr == nil || ctx.Err() != nil {
@@ -810,10 +862,6 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 			}
 			if json.Unmarshal(item.data, &ev) != nil {
 				return errCLIProtocol
-			}
-			total += len(item.data)
-			if total > maxRequestBytes {
-				return errCapacity
 			}
 			switch ev.Type {
 			case "message_start":
@@ -864,6 +912,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				s.mu.Lock()
 				s.waiting = waiting
 				if waiting {
+					s.idleSince = b.clock.Now()
 					if len(s.pending) == 0 {
 						s.mu.Unlock()
 						return errCLIProtocol

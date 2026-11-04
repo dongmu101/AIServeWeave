@@ -11,8 +11,27 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
+)
+
+// Messages size limits. A request may be as large as the Messages API itself
+// accepts, and every hop to the Agent shares that limit. A relayed response
+// stays bounded, far above any model output, because a node may be run by a
+// third party and the Gateway must not buffer whatever it streams.
+//
+// Messages 大小上限。请求可以达到 Messages API 自身接受的大小，通往 Agent 的每一跳共用
+// 该上限。转发的响应仍然有界（远高于任何模型输出），因为节点可能由第三方运行，Gateway
+// 不能缓冲它流过来的任意数据。
+const (
+	// maxMessagesRequestBytes bounds a Messages, Chat or Responses body bound
+	// for the Claude CLI bridge.
+	// maxMessagesRequestBytes 限制发往 Claude CLI 桥接的 Messages、Chat 或 Responses 请求体。
+	maxMessagesRequestBytes = tunnelwire.MaxMessagesJSONBytes
+	// maxNativeResponseBytes bounds the events of one native response.
+	// maxNativeResponseBytes 限制一次原生响应的事件总量。
+	maxNativeResponseBytes = 64 << 20
 )
 
 func nativeResultIDs(req anthropicMessagesRequest) []string {
@@ -185,7 +204,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		fail(503, "api_error", "session_unavailable", "native Messages requires shared Redis session coordination")
 		return
 	}
-	if len(raw) > 1<<20 {
+	if len(raw) > maxMessagesRequestBytes {
 		fail(413, "invalid_request_error", "request_too_large", "native Messages request size limit exceeded")
 		return
 	}
@@ -321,7 +340,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		}
 		committed = true
 		total += len(item.JSON)
-		if total > 8<<20 {
+		if total > maxNativeResponseBytes {
 			protocolError("native Messages response size limit exceeded")
 			return
 		}

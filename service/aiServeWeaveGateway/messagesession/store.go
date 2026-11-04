@@ -55,8 +55,26 @@ type Redis struct{ client redis.UniversalClient }
 // NewRedis 绑定部署既有的 Redis 连接。
 func NewRedis(client redis.UniversalClient) *Redis { return &Redis{client: client} }
 
+// Continuation record bounds. Every tool ID key holds the whole record,
+// including the round's full ID list, so storage grows with the square of the
+// calls in a round; maxRoundIDs keeps that small while staying above the
+// parallel tool calls a client such as Claude Code makes in one turn.
+//
+// 续接记录的上限。每个工具 ID 的 key 都保存整份记录（含该回合完整的 ID 列表），存储量随
+// 一个回合内调用数的平方增长；maxRoundIDs 让它保持较小，同时高于 Claude Code 等客户端
+// 单轮发出的并行工具调用数。
+const (
+	// maxRoundIDs bounds the tool calls of one continuation round.
+	// maxRoundIDs 限制一个续接回合内的工具调用数。
+	maxRoundIDs = 64
+	// maxRecordBytes bounds one stored record; it fits maxRoundIDs IDs of the
+	// longest accepted length plus the record's other fields.
+	// maxRecordBytes 限制一条存储记录；可容纳 maxRoundIDs 个最长 ID 及记录的其他字段。
+	maxRecordBytes = 64 << 10
+)
+
 func keysFor(ids []string) ([]string, error) {
-	if len(ids) == 0 || len(ids) > 8 {
+	if len(ids) == 0 || len(ids) > maxRoundIDs {
 		return nil, ErrUnavailable
 	}
 	seen := make(map[string]bool)
@@ -102,7 +120,7 @@ func (s *Redis) Publish(ctx context.Context, record Record) error {
 		return ErrUnavailable
 	}
 	data, err := json.Marshal(record)
-	if err != nil || len(data) > 16384 {
+	if err != nil || len(data) > maxRecordBytes {
 		return ErrUnavailable
 	}
 	n, err := publishScript.Run(ctx, s.client, keys, "ready\n"+string(data), continuationTTL.Milliseconds()).Int()
@@ -142,7 +160,7 @@ func (s *Redis) Claim(ctx context.Context, ids []string, tenant, key, model stri
 	if errors.Is(err, redis.Nil) {
 		return Record{}, nil, ErrExpired
 	}
-	if err != nil || !strings.HasPrefix(value, "ready\n") || len(value) > 16384 {
+	if err != nil || !strings.HasPrefix(value, "ready\n") || len(value) > maxRecordBytes+len("ready\n") {
 		return Record{}, nil, ErrUnavailable
 	}
 	var record Record

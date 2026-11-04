@@ -26,7 +26,7 @@ func (h *handlers) useNativeChat(ctx context.Context, req chatCompletionRequest)
 // nativeChat reuses authenticated Messages coordination without a second HTTP hop.
 // nativeChat 复用已认证的 Messages 会话协调，不引入第二次 HTTP 请求。
 func (h *handlers) nativeChat(w http.ResponseWriter, r *http.Request, req chatCompletionRequest, raw json.RawMessage, start time.Time) {
-	if len(raw) > 1<<20 {
+	if len(raw) > maxMessagesRequestBytes {
 		writeOpenAIError(w, 413, "invalid_request_error", "request_too_large", "Claude CLI Chat request size limit exceeded")
 		return
 	}

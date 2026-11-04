@@ -760,8 +760,14 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 	start := time.Now()
 	var req anthropicMessagesRequest
 	var raw json.RawMessage
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 8<<20))
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxMessagesRequestBytes))
 	if err := decoder.Decode(&raw); err != nil || decoder.Decode(new(any)) != io.EOF {
+		// Like the Messages API, an oversized body is 413 request_too_large.
+		// 与 Messages API 一致，超大请求体返回 413 request_too_large。
+		if tooLarge := new(http.MaxBytesError); errors.As(err, &tooLarge) {
+			writeAnthropicError(w, http.StatusRequestEntityTooLarge, "request_too_large", "the request body exceeds the size limit")
+			return
+		}
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "the request body is not valid JSON")
 		return
 	}

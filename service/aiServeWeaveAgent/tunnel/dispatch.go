@@ -254,7 +254,7 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		if err != nil {
 			return err
 		}
-		return forwardStream(d, sink, stream, tunnelwire.MarshalChatEvent)
+		return forwardStream(sink, stream, tunnelwire.MarshalChatEvent, d.cfg.MaxFrameBytes)
 
 	case tunnelv1.Operation_OPERATION_MESSAGES:
 		mr, ok := rt.(runtime.MessagesRuntime)
@@ -269,7 +269,7 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		if err != nil {
 			return err
 		}
-		return forwardStream(d, sink, stream, tunnelwire.MarshalMessagesEvent)
+		return forwardStream(sink, stream, tunnelwire.MarshalMessagesEvent, d.messagesFrameLimit())
 
 	case tunnelv1.Operation_OPERATION_IMAGE_GENERATE:
 		ir, ok := rt.(runtime.ImageRuntime)
@@ -284,7 +284,7 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		if err != nil {
 			return err
 		}
-		return forwardStream(d, sink, stream, tunnelwire.MarshalImageEvent)
+		return forwardStream(sink, stream, tunnelwire.MarshalImageEvent, d.cfg.MaxFrameBytes)
 
 	case tunnelv1.Operation_OPERATION_EMBED:
 		ir, err := inferenceRuntime(rt, id)
@@ -371,7 +371,7 @@ func (d *Dispatcher) run(ctx context.Context, rt runtime.Runtime, spec tunnelwir
 		if err != nil {
 			return err
 		}
-		return forwardStream(d, sink, stream, tunnelwire.MarshalWorkflowEvent)
+		return forwardStream(sink, stream, tunnelwire.MarshalWorkflowEvent, d.cfg.MaxFrameBytes)
 
 	case tunnelv1.Operation_OPERATION_WORKFLOW_STATUS:
 		wr, err := workflowRuntime(rt, id)
@@ -651,12 +651,25 @@ func (d *Dispatcher) forget(id string) {
 
 // sendChunk writes one DataChunk after checking it against the frame limit.
 func (d *Dispatcher) sendChunk(sink ResponseSink, payload []byte) error {
-	if d.cfg.MaxFrameBytes > 0 && len(payload) > d.cfg.MaxFrameBytes {
+	return sendFrame(sink, payload, d.cfg.MaxFrameBytes)
+}
+
+// messagesFrameLimit bounds one Messages event frame. The tunnelwire codec
+// already caps the event at the Messages API's own size, so the frame may use
+// the whole gRPC message both tunnel ends accept; the Gateway applies the same.
+// messagesFrameLimit 限制单个 Messages 事件帧。tunnelwire 编解码器已把事件限制在
+// Messages API 自身的大小，因此帧可以用满隧道两端都接受的整条 gRPC 消息；Gateway 同样如此。
+func (d *Dispatcher) messagesFrameLimit() int {
+	return max(d.cfg.MaxFrameBytes, tunnelwire.MaxTunnelMessageBytes)
+}
+
+func sendFrame(sink ResponseSink, payload []byte, limit int) error {
+	if limit > 0 && len(payload) > limit {
 		return &runtime.RuntimeError{
 			Code:      runtime.ErrorResponseTooLarge,
 			Operation: dispatchOperation,
 			Message: "a response frame of " + strconv.Itoa(len(payload)) +
-				" bytes exceeds the local limit of " + strconv.Itoa(d.cfg.MaxFrameBytes),
+				" bytes exceeds the local limit of " + strconv.Itoa(limit),
 		}
 	}
 	return sink.Data(payload)
@@ -666,7 +679,7 @@ func (d *Dispatcher) sendChunk(sink ResponseSink, payload []byte) error {
 // This is the single guarantee behind the tunnel's time-to-first-token: any
 // "collect N events and send them together" optimisation has to prove it does
 // not delay the first one, and none can.
-func forwardStream[T any](d *Dispatcher, sink ResponseSink, stream runtime.Stream[T], marshal func(T) ([]byte, error)) error {
+func forwardStream[T any](sink ResponseSink, stream runtime.Stream[T], marshal func(T) ([]byte, error), limit int) error {
 	defer func() { _ = stream.Close() }()
 
 	for {
@@ -682,7 +695,7 @@ func forwardStream[T any](d *Dispatcher, sink ResponseSink, stream runtime.Strea
 		if err != nil {
 			return committedError(err, stream.Committed())
 		}
-		if err := d.sendChunk(sink, payload); err != nil {
+		if err := sendFrame(sink, payload, limit); err != nil {
 			return committedError(err, stream.Committed())
 		}
 	}

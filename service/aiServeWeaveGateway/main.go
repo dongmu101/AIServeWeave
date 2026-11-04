@@ -35,6 +35,7 @@ import (
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/localdiscovery"
 	"AIServeWeave/common/metrics"
+	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/adminapi"
 	"AIServeWeave/service/aiServeWeaveGateway/agentdist"
 	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
@@ -735,6 +736,10 @@ func run() error {
 				MinTime:             10 * time.Second,
 				PermitWithoutStream: true,
 			}),
+			// Match the Agent's limit so a full-size native Messages event or
+			// frame is never refused by gRPC's 4 MiB default.
+			// 与 Agent 的上限一致，满尺寸的原生 Messages 事件或帧不会被 gRPC 默认的 4 MiB 拒绝。
+			grpc.MaxRecvMsgSize(tunnelwire.MaxTunnelMessageBytes),
 		)
 		tunnelv1.RegisterTunnelServer(grpcServer, server)
 		go func() { tunnelErr <- grpcServer.Serve(tunnelLis) }()

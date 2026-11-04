@@ -601,7 +601,7 @@ tunnel:
     status_full_interval: 60s   # 无变更时的全量对账周期
 
   limits:
-    max_frame_bytes: 4Mi        # 单帧上限，SSE 事件远小于此
+    max_frame_bytes: 4Mi        # 单帧上限，SSE 事件远小于此；原生 Messages 事件帧例外，按隧道 gRPC 消息上限 33 MiB（正文由 tunnelwire 限为 32 MiB）
     max_request_bytes: 64Mi     # 工作流模板与输入文件
     max_deadline: 30m           # 下发 deadline 超过此值即按此值截断
 

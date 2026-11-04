@@ -23,6 +23,7 @@ import (
 	"AIServeWeave/common/modelpullstatus"
 	"AIServeWeave/common/remoteprovider"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/common/tunnelwire"
 )
 
 // ModelPuller is implemented by *modelpull.Puller (STATUS.md's P2 model
@@ -923,7 +924,13 @@ func NewGRPCTransport(endpoint string, id *Identity, keepaliveInterval, keepaliv
 			Time:                keepaliveInterval,
 			Timeout:             keepaliveTimeout,
 			PermitWithoutStream: true,
-		}))
+		}),
+		// A native Messages request arrives inline in one frame and may be
+		// as large as the Messages API allows; gRPC's 4 MiB default would
+		// refuse it before any code here runs.
+		// 原生 Messages 请求内联在一个帧里，可以达到 Messages API 允许的大小；gRPC 默认的
+		// 4 MiB 会在这里的代码运行之前就拒绝它。
+		grpc.WithDefaultCallOptions(grpc.MaxCallRecvMsgSize(tunnelwire.MaxTunnelMessageBytes)))
 	if err != nil {
 		return nil, &runtime.RuntimeError{
 			Code:      runtime.ErrorConnection,

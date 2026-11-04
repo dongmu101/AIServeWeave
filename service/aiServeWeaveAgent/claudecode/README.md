@@ -14,7 +14,7 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 
 普通多轮聊天以带角色标记的 JSON 历史文本作为新 CLI 回合上下文，不伪造 CLI 的 assistant 消息，也不重放历史工具。当前工具链保留原进程，并校验身份、完整历史、全部工具结果和原节点绑定。Chat 将 assistant 文本和工具分别存放，Agent 仅对带内部 `metadata.aisw_chat_completions` 标记的会话按这两个字段校验等价性；文本、工具顺序、ID 和参数仍必须一致。原生 Messages 保持块顺序校验。升级本兼容层后需要同时更新 Gateway 和重启 Agent。
 
-支持 `max_tokens` 或 `max_completion_tokens`（正整数，默认 4096；同时指定必须相同）、`temperature`（0–1）、`reasoning_effort`（见下文「思考内容」）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `parallel_tool_calls`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 1 MiB，响应上限沿用 8 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
+支持 `max_tokens` 或 `max_completion_tokens`（正整数，默认 4096；同时指定必须相同）、`temperature`（0–1）、`reasoning_effort`（见下文「思考内容」）和自动工具选择。兼容 DeepSeek Harness 等 SDK 默认发送的 `store: false`，不持久化保存 Chat 回复；`store: true` 明确返回 400。接受 OpenCode 等客户端的 `tools[].function.strict: false`（或省略/null），保留工具定义与 schema；`strict: true` 要求严格 schema 保证，明确返回 400。不支持图片/音频、强制工具选择、`top_p`、`seed`、`stop`、输出 schema 或未知参数，明确返回 400；已知但不支持的 SDK 字段（如 `parallel_tool_calls`）会在错误中点名，不回显任意字段名或参数值。Chat 请求及转换后的 Messages 请求均最多 32 MiB，响应上限沿用原生 Messages 的 64 MiB；流式逐事件输出，不缓冲完整回合再伪装流式。Codex 的 Chat/Responses 路径独立，不受此转换影响。真实 `claude-sonnet-5-5` 已验证 JSON/SSE 文本、多轮历史和跨 Gateway 工具续接；原版 Claude 客户端验收范围仍见下文。
 
 ## OpenAI Responses 兼容
 
@@ -90,7 +90,7 @@ Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为
 
 ## 生命周期与限额
 
-每个运行时的独立 CLI 会话数由 `max_concurrent` 决定：未配置时 8 个，显式配置最多 32 个（负值即不限并发也按 32），所有 Gateway 副本共用该 Agent 限额。每个会话是一个常驻 CLI 进程，同一账户的会话共用订阅额度，调大前确认内存和额度。等待调用方送回工具结果最多 1 小时，CLI 生成阶段无输出最多两分钟（CLI 每输出一行即重新计时，持续输出的长回合不受限），会话总寿命 24 小时；等待工具的会话一直占用名额，被放弃的回合（例如客户端回退或关闭）要到 1 小时后才释放，期间该名额不可用；每会话最多 64 次工具调用、同时最多 8 个待决工具。原生请求最多 1 MiB、CLI 单事件 1 MiB、最多 10000 行、每回合输出最多 8 MiB。流式事件逐条传递，使用同步背压。
+每个运行时的独立 CLI 会话数由 `max_concurrent` 决定：未配置时 8 个，显式配置最多 32 个（负值即不限并发也按 32），所有 Gateway 副本共用该 Agent 限额。每个会话是一个常驻 CLI 进程，同一账户的会话共用订阅额度，调大前确认内存和额度。等待调用方送回工具结果最多 1 小时，CLI 生成阶段无输出最多 10 分钟（与 CLI 自身的 API 请求超时一致；CLI 每输出一行即重新计时，持续输出的长回合不受限），会话总寿命 24 小时；超时的会话被回收后，其续接按孤立回合从文本记录恢复。名额已满时淘汰等待工具结果最久的空闲会话来开启新会话（它之后的续接同样从文本记录恢复），只有全部名额都在生成时才答复会话已满。与 Messages API 一样，消息、工具、内容块、停止序列、每回合工具调用与并行工具调用的数量都不设上限。原生请求最多 32 MiB（与 Messages API 自身的请求上限一致），CLI 单行最多 256 MiB（仅防范进程异常）；Gateway 侧单次响应最多 64 MiB、续接每回合最多 64 个工具调用。流式事件逐条传递，使用同步背压。
 
 新会话（包括下面恢复孤立回合开启的新会话）的首轮可以换节点。Gateway 的候选按隧道空闲槽排序，看不到 Agent 的 CLI 会话名额，所以首个事件到达之前，如果节点答复会话已满（`backpressure`）、运行时正在关闭（`runtime_closed`）、账户额度耗尽（`rate_limited`，附带恢复时长，见 [额度耗尽与限流](../README.md#额度耗尽与限流)）或带可重试标志的错误，调度器会依次尝试下一个候选。请求格式不合法等错误不换节点。续接从不换节点。
 

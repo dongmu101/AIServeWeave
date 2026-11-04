@@ -12,14 +12,6 @@ import (
 // callTool forwards a matched model call; it never executes submitted arguments.
 // callTool 转发与模型事件匹配的工具调用，从不执行提交的参数。
 func (s *messagesSession) callTool(ctx context.Context, name string, input json.RawMessage) (toolResult, error) {
-	s.mu.Lock()
-	if s.mcpCalls >= maxPending {
-		s.mu.Unlock()
-		return toolResult{}, errCapacity
-	}
-	s.mcpCalls++
-	s.mu.Unlock()
-	defer func() { s.mu.Lock(); s.mcpCalls--; s.mu.Unlock() }()
 	for {
 		s.mu.Lock()
 		for id, p := range s.pending {
