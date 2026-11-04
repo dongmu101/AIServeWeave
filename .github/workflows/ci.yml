@@ -58,7 +58,7 @@ jobs:
       - name: go test
         run: go test ./...
 
-      - name: go test -race（仅数据面服务，与 AGENTS.md 质量门禁一致）
+      - name: go test -race（仅数据面服务）
         run: go test -race ./service/...
 
   console:

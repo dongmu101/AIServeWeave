@@ -570,4 +570,4 @@ Workflow API → 受控模板绑定 → Job 提交与确认
 | `service/aiServeWeaveConsole/` | Next.js 管理界面及受限的服务端转发入口 |
 | `deploy/` | 部署配置与操作说明 |
 
-模块路径为 `AIServeWeave`。依赖边界、编码和质量门禁见 [AGENTS.md](../AGENTS.md)；隧道状态机见 [隧道设计](../service/aiServeWeaveAgent/tunnel/README.md)，控制面凭据与授权设计见 [控制面 STATUS](../service/aiServeWeaveControlPlane/STATUS.md)。
+模块路径为 `AIServeWeave`。依赖边界见 [依赖边界](agents/dependencies.md)，提交前检查见 [CONTRIBUTING](../CONTRIBUTING.md)；隧道状态机见 [隧道设计](../service/aiServeWeaveAgent/tunnel/README.md)，控制面凭据与授权设计见 [控制面 STATUS](../service/aiServeWeaveControlPlane/STATUS.md)。

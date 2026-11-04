@@ -88,7 +88,7 @@ curl http://127.0.0.1:8080/v1/chat/completions \
 
 ## 参与贡献
 
-欢迎 issue 与 PR。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md) 与 [AGENTS.md](AGENTS.md)（代码约定与质量门禁）；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
+欢迎 issue 与 PR。请先阅读 [CONTRIBUTING.md](CONTRIBUTING.md)；安全问题请按 [SECURITY.md](SECURITY.md) 私下报告。
 
 ## 许可证
 

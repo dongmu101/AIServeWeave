@@ -92,7 +92,7 @@ The documents below are currently written in Chinese.
 
 ## Contributing
 
-Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md) (coding conventions and quality gates) first; report security issues privately as described in [SECURITY.md](SECURITY.md). Issues and PRs may be written in English or Chinese.
+Issues and pull requests are welcome. Please read [CONTRIBUTING.md](CONTRIBUTING.md) first; report security issues privately as described in [SECURITY.md](SECURITY.md). Issues and PRs may be written in English or Chinese.
 
 ## License
 

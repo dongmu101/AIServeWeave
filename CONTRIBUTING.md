@@ -1,6 +1,6 @@
 # 贡献指南
 
-感谢你对 AIServeWeave 感兴趣。本文说明如何提交贡献；跨仓库的开发约定（代码地图、契约唯一源、质量门禁、编码约定、安全红线、分层职责）见 [AGENTS.md](AGENTS.md)，提交前请先读一遍，本文不重复其内容。
+感谢你对 AIServeWeave 感兴趣。本文说明如何提交贡献；开始工作前的阅读顺序见 [AGENTS.md](AGENTS.md)，第三方依赖的边界见 [依赖边界](docs/agents/dependencies.md)。
 
 ## 开始之前
 
@@ -26,8 +26,8 @@ Console 改动额外执行其专属门禁（lint、typecheck、test、build）�
 
 - Commit message 说明改动的原因（why），不只是做了什么。
 - 改公共 API（proto 契约、控制面/Gateway 对外接口、Console 白名单转发）时同步更新对应文档，不要留到"以后补"——README 与代码不一致视为缺陷。
-- 涉及编码约定的部分（导出标识符的双语 doc comment、表驱动测试、注入的 `runtime.Clock`、协程泄漏检查等）见 AGENTS.md「编码约定」一节。
-- 涉及 API Key、鉴权头、Prompt、工作流 JSON 等敏感信息处理，遵守 AGENTS.md「安全红线」一节；不确定是否触及安全边界时，在 PR 描述里说明。
+- 沿用现有代码的编码约定：导出标识符写双语 doc comment，测试用表驱动，时间经注入的 `runtime.Clock` 推进而不是真实 `time.Sleep`，检查协程泄漏。
+- 涉及 API Key、鉴权头、Prompt、工作流 JSON 等敏感信息处理，遵守 [SECURITY.md「已知安全边界」](SECURITY.md#已知安全边界)；不确定是否触及安全边界时，在 PR 描述里说明。
 
 ## Pull Request 流程
 

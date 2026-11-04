@@ -1,11 +1,11 @@
 # 发布指南 / Releasing
 
 本文说明如何给 AIServeWeave 打一个版本、CI 在打 tag 后自动做什么，以及部署方如何验证
-和升级。日常开发约定见 [AGENTS.md](AGENTS.md)；本文件只讲发布本身。
+和升级。日常开发约定见 [CONTRIBUTING.md](CONTRIBUTING.md)；本文件只讲发布本身。
 
 This document explains how to cut an AIServeWeave release, what CI does
 automatically once a tag is pushed, and how a deployer verifies and upgrades.
-Day-to-day development conventions live in [AGENTS.md](AGENTS.md); this file
+Day-to-day development conventions live in [CONTRIBUTING.md](CONTRIBUTING.md); this file
 is about releases only.
 
 ## 版本号策略 / Versioning
