@@ -774,9 +774,11 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 **Claude Code auto 模式**：
 
+- **Agent 原生路径完善（2026-11-05）**：Agent 跳过原生请求不需要的旧附件/历史/思考参数处理，生产回合日志区分 `native_safeguards` / `mcp_bridge` 与上游判定状态。真实 CLI 加模拟上游已通过原始字段、8 轮历史及客户端压缩摘要契约，以及原版客户端 12 次工具读取的直连/Agent 对照；现有生产 `api.open7x.com` 的真实 12 次工具读取任务已通过，16 个原生请求中 15 轮确认 available；Agent 主机直连基线、自动压缩、真实编程质量及本次修改部署后结果仍待验收。此次只需更新并重启 Agent，Gateway 协议不变；详见[验收记录](../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。
+
 - 主请求带非空 `safeguards`（一个 `dangerous_tool_use` 与对象形式 `classifier_context`）时，选择原生路径，跳过上述整形；原始结构化历史、system、工具名/ID、思考及策略上下文原样传给 Agent。新增隧道字段携带 `anthropic-version` / `anthropic-beta`，两端验证大小及可打印 ASCII。Agent 使用本机已登录 CLI 调用真实上游，原样透传 `safeguard_results`，不合成安全判定。JSON 聚合保留内容块扩展、delta 扩展与上下文管理结果。`null` 或空数组视为未开启；不支持的安全请求明确返回点名 `safeguards` 的 400。
 - 安全上下文路径每轮携带完整原始历史，工具仅在调用方执行，Agent CLI 本地工具/MCP 注册表为空；每轮结束停止 CLI，不认领或发布旧 MCP 续接记录、不要求 Redis 会话存储，允许无状态重试与跨副本调用。仍要求已认证的 `TenantID` / `KeyID`、模型权限以及既有并发/大小限制。上游 `unsupported` / `unavailable` / 缺少判定交由客户端按官方规则处理，升级不保证账户的免费 classifier 资格。
-- 需要先升级 Agent，再重建并重启 Gateway。客户端移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0` 和 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，然后新建会话。默认测试覆盖双 Gateway 的真实 mTLS 隧道、JSON/SSE、原始工具及策略上下文、上游状态模拟转发；真实 CLI `2.1.318` 已实测工具本地禁用，原版客户端经新 Agent 与真实 Opus 5.5 以两轮原生请求完成一次工具往返，收到真实 `available` / `evaluated/not_flagged`（非生产 Gateway 实测，见 [验收记录](../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)）；生产 open7x.com 尚未部署验收。详见 [Agent 安全检查说明](../aiServeWeaveAgent/claudecode/README.md#claude-code-auto-服务端安全检查)。
+- 需要先升级 Agent，再重建并重启 Gateway。客户端移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0` 和 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，然后新建会话。默认测试覆盖双 Gateway 的真实 mTLS 隧道、JSON/SSE、原始工具及策略上下文、上游状态模拟转发；真实 CLI `2.1.318` 已实测工具本地禁用，原版客户端经新 Agent 与真实 Opus 5.5 以两轮原生请求完成一次工具往返，收到真实 `available` / `evaluated/not_flagged`（非生产 Gateway 实测，见 [验收记录](../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)）；生产 open7x.com 的受控长工具链已在 2026-11-05 验证，Agent 主机直连对照和实际编程效果仍待验收。详见 [Agent 安全检查说明](../aiServeWeaveAgent/claudecode/README.md#claude-code-auto-服务端安全检查)。
 - 客户端回退判断仍是单独的非流式请求，带 `stop_sequences: ["</severity>"]`，由旧兼容路径模拟（见 [Claude 运行时说明「停止序列」](../aiServeWeaveAgent/claudecode/README.md#停止序列)）；Gateway 非流式聚合与流式透传都带上 `stop_sequence`。
 - 客户端回退判断的第一阶段固定请求 `claude-sonnet-5`，它不在 CLI 目录里（目录是 `claude-opus-5-5`、`claude-fable-5-1`、`claude-sonnet-5-5`、`claude-haiku-5-5`），会得到 404；Claude Code 随后用当前主模型重发同一请求，判断照常完成。想省掉这次 404，可配置 `claude-sonnet-5` → `claude-sonnet-5-5` 的别名路由，但有路由表时 `GET /v1/models` 只列别名（见「模型别名与节点标签」），需同时为仍要公布的每个模型写一条同名路由。
 

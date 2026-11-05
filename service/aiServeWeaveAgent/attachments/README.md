@@ -2,6 +2,8 @@
 
 本模块只接入 `kind: claude` 的 `/v1/messages` 原生路径，覆盖首轮、完整历史、工具结果及孤立回合恢复；OpenAI Chat/Responses 和其他运行时没有随之开放文件或视频输入。
 
+本模块的转换只用于未带 `safeguards` 的 CLI 兼容路径。带安全上下文的请求保留原始结构，不运行本地附件转换；原生图片、PDF、文本等由上游校验，Office 与本平台 `video` 扩展不在该路径自动转换。需要时调用方应在生成安全上下文之前准备原生内容，不能改写安全上下文已经描述的历史。见 [Claude 原生路径说明](../claudecode/README.md#claude-code-auto-服务端安全检查)。
+
 ## 请求格式
 
 文件使用 `document` 块，视频使用本平台扩展 `video`；后者不是 Anthropic 原生协议，也不代表原版 Claude Code 客户端有视频上传入口。下列内容块可放入 user 的 `content` 或 `tool_result.content`。

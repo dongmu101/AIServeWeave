@@ -276,8 +276,20 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		defer stopRoot()
 		defer close(out.done)
 		defer close(out.items)
-		writer := &nativeWriter{stream: out, header: make(http.Header), status: 200}
+		diagnostics := newMessagesRoundDiagnostics(len(parsed.Safeguards) > 0)
+		roundID := randomID()
+		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path)
+		writer := &nativeWriter{stream: out, header: make(http.Header), status: 200, diagnostics: diagnostics}
 		err := r.bridge.respond(ctx, writer, s, true)
+		outcome := "completed"
+		if err != nil {
+			outcome = "failed"
+			if ctx.Err() != nil {
+				outcome = "canceled"
+			}
+		}
+		r.logger.Info("Claude Messages round finished", "runtime_id", r.cfg.ID, "round_id", roundID,
+			"message_path", diagnostics.path, "outcome", outcome, "safeguard_status", diagnostics.status)
 		s.mu.Lock()
 		s.busy = false
 		keep := err == nil && s.waiting && len(s.request.Safeguards) == 0
@@ -405,10 +417,11 @@ func (s *nativeStream) Close() error {
 }
 
 type nativeWriter struct {
-	stream *nativeStream
-	header http.Header
-	status int
-	buffer []byte
+	stream      *nativeStream
+	diagnostics *messagesRoundDiagnostics
+	header      http.Header
+	status      int
+	buffer      []byte
 }
 
 // Header returns the private HTTP adapter's header map.
@@ -445,6 +458,9 @@ func (w *nativeWriter) Write(data []byte) (int, error) {
 		case w.stream.items <- nativeItem{event: runtime.MessagesEvent{JSON: event}}:
 		case <-w.stream.ctx.Done():
 			return 0, w.stream.ctx.Err()
+		}
+		if w.diagnostics != nil {
+			w.diagnostics.observe(event)
 		}
 		w.buffer = w.buffer[end+2:]
 	}

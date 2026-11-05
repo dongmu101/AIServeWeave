@@ -112,21 +112,30 @@ func (b *messagesBridge) runSession(s *messagesSession) {
 	}
 }
 
-// runProcess retains a CLI while remote tools execute and reaps its entire
-// group. Thinking stays off (MAX_THINKING_TOKENS=0) unless the request asked
-// for it; then the budget becomes MAX_THINKING_TOKENS and
-// --thinking-display summarized asks the CLI to hand up readable thinking
-// text on models whose default is to omit it.
+// runProcess isolates native rounds and retained MCP sessions, reaping each
+// process group. Only compatibility rounds map thinking to MAX_THINKING_TOKENS
+// and --thinking-display summarized; native rounds carry the caller's thinking
+// configuration in the unchanged API document.
 //
-// runProcess 在远端执行工具时保留 CLI，并回收其完整进程组。除非请求要求思考，思考
-// 保持关闭（MAX_THINKING_TOKENS=0）；要求时预算写入 MAX_THINKING_TOKENS，并以
-// --thinking-display summarized 要求 CLI 在默认省略思考文本的模型上也给出可读文本。
+// runProcess 隔离原生回合与常驻 MCP 会话，并回收完整进程组。只有兼容回合把思考配置
+// 映射为 MAX_THINKING_TOKENS 与 --thinking-display summarized；原生回合通过未改写
+// 的 API 文档携带调用方思考配置。
 func (b *messagesBridge) runProcess(s *messagesSession) error {
-	messages, prepareErr := s.prepareMessages(s.ctx)
-	if prepareErr != nil {
-		return prepareErr
-	}
 	guarded := len(s.request.Safeguards) > 0
+	// Native policy provenance describes the original document. Never convert
+	// its attachments or render its history through the compatibility path.
+	// 原生策略来源对应原始文档，不运行兼容路径的附件转换或历史渲染。
+	prompt, structured := "Continue the supplied native Messages request.", false
+	if !guarded {
+		messages, err := s.prepareMessages(s.ctx)
+		if err != nil {
+			return err
+		}
+		prompt, structured = sessionInput(messages)
+		if len(prompt) > maxRequestBytes {
+			return &attachmentFailure{attachments.ErrLimit}
+		}
+	}
 	dir, err := os.MkdirTemp("", "aisw-claude-messages-")
 	if err != nil {
 		return errProbeSetup
@@ -152,7 +161,10 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if os.WriteFile(configPath, data, 0600) != nil {
 		return errProbeSetup
 	}
-	system, _ := textBlocks(s.request.System)
+	var system string
+	if !guarded {
+		system, _ = textBlocks(s.request.System)
+	}
 	systemPath := filepath.Join(dir, "system.txt")
 	if os.WriteFile(systemPath, []byte(system), 0600) != nil {
 		return errProbeSetup
@@ -188,28 +200,25 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 			}
 		}
 	}
-	if s.request.OutputConfig != nil {
+	if !guarded && s.request.OutputConfig != nil {
 		args = append(args, "--effort", s.request.OutputConfig.Effort)
 	}
-	budget := s.request.thinkingBudget()
+	budget := 0
+	if !guarded {
+		budget = s.request.thinkingBudget()
+	}
 	if budget > 0 {
 		args = append(args, "--thinking-display", "summarized")
-	}
-	prompt, structured := sessionInput(messages)
-	if len(prompt) > maxRequestBytes {
-		return &attachmentFailure{attachments.ErrLimit}
-	}
-	if guarded {
-		// Guarded rounds carry the native request in the API body, not stdin.
-		// 受保护回合通过 API 请求体携带原生请求，不经 stdin。
-		prompt, structured = "Continue the supplied native Messages request.", false
 	}
 	if structured {
 		args = append(args, "--input-format", "stream-json")
 	}
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
-	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens), "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
+	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
+	if !guarded {
+		cmd.Env = append(cmd.Env, "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
+	}
 	extra := make(map[string]any)
 	if s.request.Temperature != nil {
 		extra["temperature"] = *s.request.Temperature

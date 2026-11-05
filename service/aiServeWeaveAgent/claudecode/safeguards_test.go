@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"slices"
@@ -60,6 +61,8 @@ func safeguardsProcessFixture() {
 	var settingsPath, mcpPath string
 	for i := 1; i+1 < len(os.Args); i++ {
 		switch os.Args[i] {
+		case "--effort", "--thinking-display", "--input-format":
+			os.Exit(3)
 		case "--settings":
 			settingsPath = os.Args[i+1]
 		case "--mcp-config":
@@ -68,6 +71,11 @@ func safeguardsProcessFixture() {
 			if os.Args[i+1] != "" {
 				os.Exit(3)
 			}
+		}
+	}
+	for _, key := range []string{"MAX_THINKING_TOKENS", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "DISABLE_PROMPT_CACHING"} {
+		if _, ok := os.LookupEnv(key); ok {
+			os.Exit(3)
 		}
 	}
 	data, err := os.ReadFile(settingsPath)
@@ -88,7 +96,10 @@ func safeguardsProcessFixture() {
 	if !strings.Contains(os.Getenv("ANTHROPIC_CUSTOM_HEADERS"), "anthropic-version: 2023-06-01") || !slices.Contains(os.Args, "auto") {
 		os.Exit(3)
 	}
-	_, _ = io.ReadAll(os.Stdin)
+	stdin, _ := io.ReadAll(os.Stdin)
+	if string(stdin) != "Continue the supplied native Messages request." {
+		os.Exit(3)
+	}
 	var native struct {
 		Messages json.RawMessage `json:"messages"`
 		System   json.RawMessage `json:"system"`
@@ -108,6 +119,38 @@ func safeguardsProcessFixture() {
 	}
 	fixtureSafeguardRound(os.Stdout, "native-guarded-id", "", "not_flagged")
 	time.Sleep(30 * time.Second) // only an explicitly stopped CLI may finish this public tool round / 此工具回合必须由桥接主动停止 CLI
+}
+
+// TestSafeguardsSkipsCompatibilityPreparation must not need a local video/Office converter.
+// TestSafeguardsSkipsCompatibilityPreparation 保证原生请求不依赖本地视频或 Office 转换器。
+func TestSafeguardsSkipsCompatibilityPreparation(t *testing.T) {
+	for _, content := range []string{
+		`[{"type":"video","source":{"type":"base64","media_type":"video/mp4","data":"dGVzdA=="}}]`,
+		`[{"type":"document","source":{"type":"base64","media_type":"application/vnd.openxmlformats-officedocument.wordprocessingml.document","data":"dGVzdA=="}}]`,
+	} {
+		b := newMessagesBridge(os.Args[0], "sonnet", map[string]principal{"fixture": {"t", "k"}}, runtime.NewSystemClock())
+		b.env = append(b.cliEnv(), "AISW_CLAUDE_SAFEGUARDS_FIXTURE=1")
+		req := guardedRequest()
+		temperature := .25
+		req.Temperature = &temperature
+		req.OutputConfig = &bridgeOutputConfig{Effort: "high"}
+		req.Thinking = json.RawMessage(`{"type":"adaptive"}`)
+		req.Messages[0].Content = json.RawMessage(content)
+		req.apiVersion = "2023-06-01"
+		req.betaFeatures = "future-feature-2099-01-01"
+		body, _ := json.Marshal(req)
+		request := httptest.NewRequest("POST", "/v1/messages", bytes.NewReader(body))
+		request.Header.Set("X-Api-Key", "fixture")
+		request.Header.Set("Content-Type", "application/json")
+		request.Header.Set("Anthropic-Version", req.apiVersion)
+		request.Header.Set("Anthropic-Beta", req.betaFeatures)
+		response := httptest.NewRecorder()
+		b.ServeHTTP(response, request)
+		b.close()
+		if response.Code != 200 || !bytes.Contains(response.Body.Bytes(), []byte("native-guarded-id")) {
+			t.Fatalf("native request entered compatibility preparation: status %d", response.Code)
+		}
+	}
 }
 
 func TestSafeguardsNativeDocument(t *testing.T) {

@@ -60,13 +60,15 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 此路径保留原始 `system`、结构化 `messages`、工具名、工具 ID、思考历史、缓存及安全策略上下文，不经过旧路径的历史折叠、工具改名或 adaptive 思考转换。原生推理顶层字段采用允许列表，HTTP 地址、任意请求头、凭据、CLI 命令及设置不属于推理 JSON，明确拒绝。原始工具只作为上游定义：Agent CLI 的本地工具及 MCP 注册表为空，工具由调用方执行。完整请求通过权限为 `0600` 的临时 CLI 设置文件加载，进程结束后清理；CLI 继续自行管理本机订阅认证。
 
+原生路径也不运行兼容路径的附件转换、历史渲染、`--effort` / `--thinking-display` 参数映射，或关闭 adaptive、beta 与缓存的环境设置；推理配置直接取自原生请求体。图片、PDF 和文本来源等原生内容由上游校验。Office MIME 与 `video` 是本平台扩展，在此路径不会自动转换；调用方须在生成安全上下文之前准备上游支持的原生内容，不能在策略生成后改写被检查的历史。`model` 按路由选择真实模型，`stream` 在内部设为 `true`，除此之外调用方推理字段保持原始结构。
+
 每次请求带完整原始历史并开启独立进程，工具回合结束即停止该进程。后续请求不认领旧 MCP 会话、不依赖 Redis 续接记录，可以跨副本重试；每次仍校验调用方身份和模型权限、执行既有并发及大小限制。原始工具 ID 与判定中的 ID 一致，同名同参数的并行调用也可区分。JSON 聚合保留内容块扩展、判定及上下文管理字段；SSE 保留被 `max_tokens` 截断的不完整工具参数，非流式请求遇不完整参数返回明确的 502。
 
 整个请求最多 32 MiB、响应最多 64 MiB；安全上下文不另设小于请求大小的限制。协议版本最多 128 字节，beta 列表最多 16 KiB，均只接受可打印 ASCII，拒绝换行注入。未带 `safeguards` 的请求继续使用下文的 MCP 桥接、历史校验和一次性续接规则；需要客户端回退判定时仍支持停止序列模拟。
 
 升级时先更新并重启承载 Claude 运行时的 Agent，再重建并重启 Gateway，两端都需要此版本。客户端新建会话，移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（可显式设为 `1`），并移除 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，以允许客户端发送配套 beta。客户端工具权限仍由调用方管理。
 
-默认测试覆盖真实 mTLS 隧道、两个 Gateway 副本、JSON/SSE、原始历史与工具身份、上游状态的模拟转发、工具截断及旧路径续接保护。Claude Code `2.1.318` 离线实测确认原始 `Bash` 定义不会在 Agent 注册或执行；原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 尚未部署验收，其他 Claude Code 版本及账户的资格尚未验收。
+默认测试覆盖真实 mTLS 隧道、两个 Gateway 副本、JSON/SSE、原始历史与工具身份、上游状态的模拟转发、工具截断及旧路径续接保护。Claude Code `2.1.318` 离线实测确认原始 `Bash` 定义不会在 Agent 注册或执行；原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 的受控长工具链已验证；Agent 主机直连对照、实际编程任务、其他 Claude Code 版本及账户的资格尚未验收。2026-11-05 新增的原生请求契约、原版客户端长工具链及真实订阅对照入口见[原生保留验收记录](../../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。
 
 ## 未带 safeguards 的支持范围
 
@@ -130,6 +132,8 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 
+Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude Messages round started` 和 `Claude Messages round finished`，共同携带本地随机 `round_id`、`runtime_id` 与 `message_path`。`native_safeguards` 表示本轮确实进入原生路径，`mcp_bridge` 表示旧兼容路径。结束日志包含 `outcome`（`completed` / `failed` / `canceled`）与 `safeguard_status`：`available`、`unsupported`、`unavailable`、`missing`（未收到对应结果）、`unknown`（未来状态）、`invalid`（结果形状异常）、`mixed`（同轮出现不同状态）；兼容路径为 `not_requested`。只观察已投递结果，不改写判定或将 `available` 等同于工具已获准；不记录提示词、历史、工具参数、工具 ID、判定原因或凭据。客户端设为 `1` 后应结合这两个字段检查实际路径及上游支持状态。新增日志需更新并重启 Agent，Gateway 无需修改。
+
 手动用 `go run` 启动时，日志默认写到终端，不会自动生成部署脚本使用的 `agent.log`。可用 `go run . -config /绝对路径/agent.yaml -log-file /绝对路径/agent.log` 留存日志，再查 `Claude Messages request rejected` 和 `Claude Messages round failed`。对齐日志时使用时间戳自身的 UTC 偏移，例如 Agent 的 `21:03+09:00` 与 Gateway 的 `12:03Z` 是同一时刻。
 
 客户端的 `native Messages stream failed` 只能说明流已开始后失败，不能据此区分协议、进程或上游问题。工具结果已经投递或应用情况不确定时，Gateway 会消费本轮续接，重试同一批工具结果可能返回 409 `Messages continuation unavailable`；这个错误与前一次流失败需要分开判断。排查时按同一时区对齐 Agent 与 Gateway 日志，并结合请求 ID、运行时和上述错误分类定位；新建会话可以避开旧续接，但不能修复原始流故障。
@@ -165,6 +169,28 @@ Agent 按最近一轮实际公开的 `tool_use` ID 集合校验结果数量和�
 ```bash
 go test ./service/aiServeWeaveAgent/claudecode ./service/aiServeWeaveGateway/messagesession ./common/tunnelwire
 ```
+
+安装了真实 CLI 时，可执行回环模拟 API 契约测试，不使用订阅认证或模型额度。覆盖原始字段一致性、8 轮请求与客户端压缩历史、Agent 用户级 `CLAUDE.md` 隔离，以及原版客户端直连/经 Agent 的 12 次工具读取和最终结果校验：
+
+```bash
+AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestNativeCLI.*Contract$' -v -count=1 -timeout=180s
+```
+
+在客户电脑上验证现有远端 Gateway/Agent 链路，读取客户端环境或当前 `CLAUDE_CONFIG_DIR/settings.json`（默认 `~/.claude/settings.json`）里的 Base URL、调用方 Key 和模型，不要求客户电脑有订阅登录：
+
+```bash
+AISW_CLAUDE_GATEWAY_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestLiveSafeguardsGateway$' -v -count=1 -timeout=10m
+```
+
+可用 `AISW_CLAUDE_GATEWAY_URL`、`AISW_CLAUDE_MODEL` 显式选择端点和模型；不在命令行打印 Key。测试通过本机回环观察代理统计原生请求与上游状态，正文和认证头原样发送至选定 Gateway，SSE 即时转发。它验证真实远端链路，不能代替在 Agent 主机直接使用 CLI 的基线。
+
+在 Agent 主机运行同一长工具链的直连/本机 Agent 对照，使用该系统账户的 `claude.ai` 登录，不导出 token：
+
+```bash
+AISW_CLAUDE_LIVE_TEST=1 AISW_CLAUDE_MODEL=claude-opus-5-5 go test ./service/aiServeWeaveAgent/claudecode -run '^TestLiveSafeguardsDirectComparison$' -v -count=1 -timeout=20m
+```
+
+上述真实测试会消耗服务端订阅额度；只使用回环 MCP 返回随机测试文本，不读写项目或执行命令。校验任务完成且至少 12 轮带原生请求及 `available` 结果，同时统计其他固定状态；重试等额外请求不等于任务轮数。不作为模型智力评分，也不代替自动压缩及实际编程任务的对照验收。直连测试的登录前提适用于 Agent 主机，不适用于仅持调用方 Key 的客户电脑；不能用客户机的认证类型判断远端 Agent 是否已登录。当前执行证据见[验收记录](../../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。
 
 真实模型发现测试仅查询本机 CLI，不执行推理：
 

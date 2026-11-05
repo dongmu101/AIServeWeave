@@ -1,10 +1,63 @@
 package claudecode
 
 import (
+	"encoding/json"
 	"errors"
 
 	"AIServeWeave/common/runtime"
 )
+
+// messagesRoundDiagnostics retains only fixed categories from delivered events.
+// messagesRoundDiagnostics 只保留已投递事件的固定分类，不保留请求或判定载荷。
+type messagesRoundDiagnostics struct {
+	path, status string
+}
+
+func newMessagesRoundDiagnostics(guarded bool) *messagesRoundDiagnostics {
+	if guarded {
+		return &messagesRoundDiagnostics{path: "native_safeguards", status: "missing"}
+	}
+	return &messagesRoundDiagnostics{path: "mcp_bridge", status: "not_requested"}
+}
+
+func (d *messagesRoundDiagnostics) observe(raw json.RawMessage) {
+	if d.path != "native_safeguards" {
+		return
+	}
+	var event struct {
+		Type  string
+		Delta struct {
+			Results json.RawMessage `json:"safeguard_results"`
+		}
+	}
+	if json.Unmarshal(raw, &event) != nil || event.Type != "message_delta" || len(event.Delta.Results) == 0 {
+		return
+	}
+	var results []struct {
+		Type   string
+		Status struct{ Type string }
+	}
+	if json.Unmarshal(event.Delta.Results, &results) != nil {
+		d.status = "invalid"
+		return
+	}
+	for _, result := range results {
+		if result.Type != "dangerous_tool_use" {
+			continue
+		}
+		status := result.Status.Type
+		switch status {
+		case "available", "unsupported", "unavailable":
+		default:
+			status = "unknown"
+		}
+		if d.status == "missing" || d.status == status {
+			d.status = status
+		} else {
+			d.status = "mixed"
+		}
+	}
+}
 
 // admissionError retains only fixed local categories, never caller-supplied data.
 // admissionError 仅保留本地固定分类，不携带调用方提交的数据。
