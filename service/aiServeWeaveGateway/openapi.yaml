@@ -112,9 +112,9 @@ paths:
       tags: [responses]
       summary: OpenAI 兼容的 Responses（边界处转换为 canonical chat 请求）
       description: |
-        只服务无状态的一次性生成：`previous_response_id`、`store=true`、
-        `background=true` 均被拒绝（400），因为本 Gateway 不持有已存储的会话，
-        也不做后台任务。内置工具（web_search 等）与非 function 类型的工具同样被拒绝。
+        `store=true` 与 `previous_response_id` 仅在配置了控制面、且调用方认证到
+        真实租户时生效（Claude CLI 模型同样适用），否则被拒绝（400）；
+        `background=true` 始终被拒绝（400），本 Gateway 不做后台任务。内置工具（web_search 等）与非 function 类型的工具同样被拒绝。
       operationId: createResponse
       requestBody:
         required: true
@@ -672,10 +672,10 @@ components:
                   type: object
         previous_response_id:
           type: string
-          description: 不支持，非空即 400
+          description: 续接已存储的会话；未配置控制面或无真实租户时 400，未知或不属于该租户的 id 为 400
         store:
           type: boolean
-          description: 不支持，true 即 400
+          description: true 时存储本轮供后续 previous_response_id 续接；未配置控制面或无真实租户时 400
         background:
           type: boolean
           description: 不支持，true 即 400

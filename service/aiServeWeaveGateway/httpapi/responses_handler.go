@@ -41,11 +41,6 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 			field+" is not supported by this gateway")
 		return
 	}
-	if h.useNativeResponses(r.Context(), req) {
-		h.nativeResponses(w, r, req, raw, start)
-		return
-	}
-
 	// store and previous_response_id need a persisted-conversation tenant to
 	// scope by, which only exists when both a control plane is configured
 	// (h.responsePersist non-nil) and the caller authenticated to a real
@@ -74,6 +69,10 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 		}
 		tenantID = identity.TenantID
 	}
+	if h.useNativeResponses(r.Context(), req) {
+		h.nativeResponses(w, r, req, raw, start, tenantID)
+		return
+	}
 
 	canonical, toolset, err := req.toRuntime()
 	if err != nil {
@@ -94,18 +93,8 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 	// 累积的完整历史再存一遍。见控制面一侧 model.ResponseTurn 的文档注释。
 	ownMessages := canonical.Messages
 
-	if req.PreviousResponseID != "" {
-		prefix, err := h.loadResponsePrefix(r.Context(), tenantID, req.PreviousResponseID)
-		if err != nil {
-			if errors.Is(err, ErrResponseTurnNotFound) {
-				writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "unknown previous_response_id")
-			} else {
-				h.logger.Error("failed to load a response's previous turns", slog.Any("error", err))
-				writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "server_error", "could not load the referenced conversation")
-			}
-			return
-		}
-		canonical.Messages = append(prefix, canonical.Messages...)
+	if !h.prependResponsePrefix(w, r, req.PreviousResponseID, tenantID, &canonical) {
+		return
 	}
 
 	responseID := newResponseID()
@@ -114,6 +103,32 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.responsesOnce(w, r, req, canonical, toolset, start, responseID, tenantID, ownMessages)
+}
+
+// prependResponsePrefix prepends the stored conversation previous_response_id
+// names, if any, to canonical's messages. On failure it has already answered
+// the caller and returns false: 400 for an id unknown to this tenant, 503 when
+// the conversation could not be loaded.
+//
+// prependResponsePrefix 把 previous_response_id（如有）所指的已存储会话拼到
+// canonical 消息之前。失败时已经答复调用方并返回 false：该租户下未知的 id 答
+// 400，会话无法加载时答 503。
+func (h *handlers) prependResponsePrefix(w http.ResponseWriter, r *http.Request, previousResponseID, tenantID string, canonical *runtime.ChatRequest) bool {
+	if previousResponseID == "" {
+		return true
+	}
+	prefix, err := h.loadResponsePrefix(r.Context(), tenantID, previousResponseID)
+	if err != nil {
+		if errors.Is(err, ErrResponseTurnNotFound) {
+			writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "unknown previous_response_id")
+		} else {
+			h.logger.Error("failed to load a response's previous turns", slog.Any("error", err))
+			writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "server_error", "could not load the referenced conversation")
+		}
+		return false
+	}
+	canonical.Messages = append(prefix, canonical.Messages...)
+	return true
 }
 
 // responsesOnce serves a non-streaming response.

@@ -26,8 +26,16 @@ func (h *handlers) useNativeResponses(ctx context.Context, req responsesRequest)
 }
 
 // nativeResponses reuses the Chat compatibility layer, so Responses continuations share its CLI sessions.
+// previous_response_id rebuilds the full input from stored turns before conversion, so the Agent
+// validates the same history a client resending everything would produce; store:true persists this
+// turn's own input and reply. Instructions stay per request: they lead the rebuilt input and are
+// not stored, as with OpenAI, where a previous response's instructions are not carried over.
+//
 // nativeResponses 复用 Chat 兼容层，使 Responses 续接与之共用同一套 CLI 会话校验。
-func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req responsesRequest, raw json.RawMessage, start time.Time) {
+// previous_response_id 在转换前用已存储的轮次重建完整输入，Agent 因此校验的是与客户端
+// 重发全部历史相同的内容；store:true 持久化本轮自己的输入与回复。instructions 只属于本次
+// 请求：置于重建输入的最前且不存储，与 OpenAI 一致，上一轮响应的 instructions 不会被沿用。
+func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req responsesRequest, raw json.RawMessage, start time.Time, tenantID string) {
 	if len(raw) > maxMessagesRequestBytes {
 		writeOpenAIError(w, 413, "invalid_request_error", "request_too_large", "Claude CLI Responses request size limit exceeded")
 		return
@@ -37,6 +45,16 @@ func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req r
 		writeOpenAIError(w, 400, "invalid_request_error", "invalid_request", err.Error())
 		return
 	}
+	own := canonical.Messages
+	var instructions []runtime.ChatMessage
+	if req.Instructions != "" {
+		instructions, own = own[:1], own[1:]
+	}
+	canonical.Messages = own
+	if !h.prependResponsePrefix(w, r, req.PreviousResponseID, tenantID, &canonical) {
+		return
+	}
+	canonical.Messages = append(instructions, canonical.Messages...)
 	chat, err := req.toNativeChat(canonical)
 	var native anthropicMessagesRequest
 	if err == nil {
@@ -50,7 +68,13 @@ func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req r
 		w.Header().Set(ignoredToolsHeader, strings.Join(toolset.ignored, ","))
 	}
 	document, _ := json.Marshal(native)
-	output := &nativeResponsesOutput{w: w, obj: req.render(newResponseID(), req.Model, h.clock.Now()), toolset: toolset, calls: make(map[int]int)}
+	responseID := newResponseID()
+	output := &nativeResponsesOutput{w: w, obj: req.render(responseID, req.Model, h.clock.Now()), toolset: toolset, calls: make(map[int]int)}
+	if req.Store != nil && *req.Store {
+		output.persist = func(reply runtime.ChatMessage) {
+			h.persistResponseTurn(responseID, tenantID, req.PreviousResponseID, req.Model, own, reply)
+		}
+	}
 	h.nativeMessagesOutput(w, r, native, document, start, output, false)
 }
 
@@ -59,10 +83,6 @@ func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req r
 func (req responsesRequest) toNativeChat(canonical runtime.ChatRequest) (chatCompletionRequest, error) {
 	out := chatCompletionRequest{Model: req.Model, Stream: req.Stream, Temperature: req.Temperature, MaxTokens: req.MaxOutputTokens, ReasoningEffort: nativeEffort(canonical.Reasoning)}
 	switch {
-	case req.Store != nil && *req.Store:
-		return out, errors.New("Claude CLI Responses supports only store=false; persistent Responses storage is unavailable")
-	case req.PreviousResponseID != "":
-		return out, errors.New("Claude CLI Responses does not support previous_response_id; send the full input instead")
 	case req.MaxOutputTokens != nil && *req.MaxOutputTokens < 1, req.Temperature != nil && (*req.Temperature < 0 || *req.Temperature > 1):
 		return out, errors.New("Claude CLI requires positive max_output_tokens and temperature in 0..1")
 	case req.TopP != nil:
@@ -159,6 +179,9 @@ type nativeResponsesOutput struct {
 	items   *responseItems
 	calls   map[int]int // native block index → tool delta index / 原生块索引 → 工具增量索引
 	started bool
+	// persist stores the completed reply when the request opted into store:true; nil otherwise.
+	// persist 在请求选择 store:true 时存储完成的回复，否则为 nil。
+	persist func(runtime.ChatMessage)
 }
 
 func (o *nativeResponsesOutput) streaming() bool { return o.started }
@@ -287,6 +310,9 @@ func (o *nativeResponsesOutput) finish(response map[string]any, content []anthro
 			terminal = "response.incomplete"
 		}
 		o.em.event(terminal, map[string]any{"response": obj})
+		if reply, produced := o.items.assistantMessage(); produced && o.persist != nil {
+			o.persist(reply)
+		}
 		return
 	}
 	message := runtime.ChatMessage{Role: "assistant"}
@@ -302,6 +328,9 @@ func (o *nativeResponsesOutput) finish(response map[string]any, content []anthro
 		}
 	}
 	obj.Output = outputItemsFor(message, o.toolset)
+	if o.persist != nil {
+		o.persist(message)
+	}
 	o.w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(o.w).Encode(obj)
 }

@@ -18,7 +18,7 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 
 ## OpenAI Responses 兼容
 
-Gateway 先把 Responses 请求还原为 Chat 形式，再走上一节的转换。Agent 收到的仍是带 `metadata.aisw_chat_completions` 标记的 Messages 请求，因此无需为此升级 Agent。同一回合的 assistant 文本和工具调用在 Responses 中是独立的项，Gateway 会合并回一条后再做等价校验。每轮须在 `input` 中携带完整对话，并保持 `store: false`（或省略）；续接时原样回放上一轮输出的调用项，以及对应的 `function_call_output`。参数限制与 Chat 相同，只是字段名换成 Responses 的 `max_output_tokens` 和 `text.format`；另外不支持 `previous_response_id`。与 Chat 不同，未知字段不会被拒绝（与普通 Responses 一致，也不生效）。完整范围见 [Gateway STATUS](../../aiServeWeaveGateway/STATUS.md#claude-code-原生-messages)。目前只做过离线端到端验证，尚未用真实 CLI 联调。
+Gateway 先把 Responses 请求还原为 Chat 形式，再走上一节的转换。Agent 收到的仍是带 `metadata.aisw_chat_completions` 标记的 Messages 请求，因此无需为此升级 Agent。同一回合的 assistant 文本和工具调用在 Responses 中是独立的项，Gateway 会合并回一条后再做等价校验。默认每轮须在 `input` 中携带完整对话；续接时原样回放上一轮输出的调用项，以及对应的 `function_call_output`。Gateway 配置了控制面时，也可用 `store: true` 加 `previous_response_id` 续接，由 Gateway 重建完整历史后再转换，Agent 收到的请求与完整回放时相同，因此同样无需升级（见 [Gateway「Responses 持久会话（P2）」](../../aiServeWeaveGateway/STATUS.md#responses-持久会话p2)）。参数限制与 Chat 相同，只是字段名换成 Responses 的 `max_output_tokens` 和 `text.format`。与 Chat 不同，未知字段不会被拒绝（与普通 Responses 一致，也不生效）。完整范围见 [Gateway STATUS](../../aiServeWeaveGateway/STATUS.md#claude-code-原生-messages)。目前只做过离线端到端验证，尚未用真实 CLI 联调。
 
 ## 启用
 
