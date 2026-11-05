@@ -25,7 +25,7 @@ func decodeMessagesRequest(raw json.RawMessage, out *messagesRequest) error {
 	}
 	for key := range doc {
 		switch key {
-		case "model", "max_tokens", "stream", "system", "messages", "tools", "tool_choice", "metadata", "thinking", "output_config", "temperature", "stop_sequences", "context_management", "cache_control", "top_p", "top_k", "service_tier", "safeguards":
+		case "model", "max_tokens", "stream", "system", "messages", "tools", "tool_choice", "metadata", "thinking", "output_config", "temperature", "stop_sequences", "context_management", "compaction", "cache_control", "top_p", "top_k", "service_tier", "safeguards":
 		default:
 			return errMessages
 		}
@@ -46,7 +46,12 @@ func preserveMessagesContent(original []map[string]json.RawMessage, accumulated 
 		return accumulated
 	}
 	for i, block := range blocks {
+		var kind string
+		_ = json.Unmarshal(original[i]["type"], &kind)
 		for key, value := range block {
+			if kind == "compaction" && key == "content" {
+				continue // accumulated by the native compaction delta / 已由原生压缩增量累积
+			}
 			original[i][key] = value
 		}
 	}

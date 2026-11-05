@@ -127,6 +127,37 @@ func MergeMessagesCitation(block map[string]json.RawMessage, event json.RawMessa
 	return nil
 }
 
+// MergeMessagesCompaction retains the complete native summary and opaque encrypted payload.
+// MergeMessagesCompaction 保留完整的原生摘要及不透明的加密载荷。
+func MergeMessagesCompaction(block map[string]json.RawMessage, event json.RawMessage) error {
+	var document struct {
+		Delta map[string]json.RawMessage `json:"delta"`
+	}
+	failure := &RuntimeError{Code: ErrorProtocol, Message: "invalid native Messages compaction"}
+	if json.Unmarshal(event, &document) != nil {
+		return failure
+	}
+	var deltaType, blockType string
+	_ = json.Unmarshal(document.Delta["type"], &deltaType)
+	if deltaType != "compaction_delta" {
+		return nil
+	}
+	_ = json.Unmarshal(block["type"], &blockType)
+	if block == nil || blockType != "compaction" {
+		return failure
+	}
+	for _, key := range []string{"content", "encrypted_content"} {
+		if value, ok := document.Delta[key]; ok {
+			var text *string
+			if json.Unmarshal(value, &text) != nil {
+				return failure
+			}
+			block[key] = value
+		}
+	}
+	return nil
+}
+
 // MessagesRuntime preserves caller-executed tools and native message block ordering.
 // MessagesRuntime 保留调用方执行工具的语义与原生消息块顺序。
 type MessagesRuntime interface {

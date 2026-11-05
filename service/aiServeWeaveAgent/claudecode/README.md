@@ -62,6 +62,12 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 原生路径也不运行兼容路径的附件转换、历史渲染、`--effort` / `--thinking-display` 参数映射，或关闭 adaptive、beta 与缓存的环境设置；推理配置直接取自原生请求体。图片、PDF 和文本来源等原生内容由上游校验。Office MIME 与 `video` 是本平台扩展，在此路径不会自动转换；调用方须在生成安全上下文之前准备上游支持的原生内容，不能在策略生成后改写被检查的历史。`model` 按路由选择真实模型，`stream` 在内部设为 `true`，除此之外调用方推理字段保持原始结构。
 
+带非空 `safeguards` 时，Gateway 的 `(high)`、数字思考预算及 `[1m]` / `[2m]` 后缀只用于解析路由模型名，不生成、覆盖或删除 `thinking`；思考设置须由调用方放在请求体中。`null` 或空数组继续采用旧路径的后缀语义。
+
+支持上游阈值压缩的 `compaction_delta`、按需压缩的 `compaction: {"type":"summarize"}` 与 `stop_reason: "compaction"`。JSON 聚合保留摘要、原始签名及 `encrypted_content`，SSE 原样传递；未生成摘要的 `content: null` 保持不变。压缩停止后回收本轮 CLI，后续历史和压缩时机仍由调用方管理。Gateway 对存在非空 `usage.iterations` 的原生响应按全部采样迭代汇总输入/输出 token，用于指标、配额及账本，不改写公开响应的原始 `usage`。
+
+能力拒绝从 CLI 标记的合成 API 错误中提取，只公开固定的 `capability_rejected:` 恢复分类；`context_management` 使用客户端可识别的固定 schema 拒绝文案。覆盖思考类型、签名、对话中途 system、输出格式、effort、上下文长度，以及请求实际携带的被拒 beta；beta 仅允许有界协议名称，不能回显任意上游内容。保留已识别的 400/413/422 状态，未知错误仍使用通用错误；普通模型文本与 CLI 内部恢复成功的中间错误不触发客户端回退。CLI 若已折叠上游原始 `error.type`，Agent 无法还原该类型；这不是任意上游错误的透明透传。
+
 每次请求带完整原始历史并开启独立进程，工具回合结束即停止该进程。后续请求不认领旧 MCP 会话、不依赖 Redis 续接记录，可以跨副本重试；每次仍校验调用方身份和模型权限、执行既有并发及大小限制。原始工具 ID 与判定中的 ID 一致，同名同参数的并行调用也可区分。JSON 聚合保留内容块扩展、判定及上下文管理字段；SSE 保留被 `max_tokens` 截断的不完整工具参数，非流式请求遇不完整参数返回明确的 502。
 
 整个请求最多 32 MiB、响应最多 64 MiB；安全上下文不另设小于请求大小的限制。协议版本最多 128 字节，beta 列表最多 16 KiB，均只接受可打印 ASCII，拒绝换行注入。未带 `safeguards` 的请求继续使用下文的 MCP 桥接、历史校验和一次性续接规则；需要客户端回退判定时仍支持停止序列模拟。

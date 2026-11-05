@@ -416,6 +416,10 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				protocolError("invalid native Messages citation")
 				return
 			}
+			if guarded && runtime.MergeMessagesCompaction(originalContent[event.Index], item.JSON) != nil {
+				protocolError("invalid native Messages compaction")
+				return
+			}
 			switch event.Delta.Type {
 			case "text_delta":
 				content[event.Index].Text += event.Delta.Text
@@ -456,6 +460,13 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				usage.CompletionTokens = int(n)
 			}
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
+			if guarded {
+				usage, err = nativeMessagesBilledUsage(prior)
+				if err != nil {
+					protocolError("invalid native Messages usage")
+					return
+				}
+			}
 		case "message_stop":
 			if !req.Stream {
 				for _, block := range content {
@@ -480,6 +491,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 					var accumulated map[string]json.RawMessage
 					_ = json.Unmarshal(data, &accumulated)
 					for key, value := range accumulated {
+						if block.Type == "compaction" && key == "content" {
+							continue // already merged from the native delta / 已由原生增量合并
+						}
 						originalContent[i][key] = value
 					}
 				}

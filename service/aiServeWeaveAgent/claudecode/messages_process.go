@@ -349,6 +349,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	// quota 在 CLI 报告其账户限额拒绝了本回合后被设置；随后的失败据此视为额度错误，
 	// 而不是 CLI 故障。
 	var quota *quotaError
+	var rejection error
 	finished, active, blockActive := false, false, false
 	guarded := len(s.request.Safeguards) > 0
 	showThinking := s.request.thinkingBudget() > 0 || (guarded && nativeThinkingEnabled(s.request.Thinking))
@@ -379,6 +380,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			Type          string          `json:"type"`
 			Subtype       string          `json:"subtype"`
 			IsError       bool            `json:"is_error"`
+			Error         string          `json:"error"`
 			Tools         []string        `json:"tools"`
 			Event         json.RawMessage `json:"event"`
 			RateLimitInfo struct {
@@ -412,7 +414,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					}
 				}
 			}
-		case "assistant", "user", "tool_progress", "tool_use_summary":
+		case "assistant":
+			if guarded && envelope.Error != "" {
+				rejection = messagesAPIRejection(line, s.request)
+			}
+		case "user", "tool_progress", "tool_use_summary":
 		case "rate_limit_event":
 			if envelope.RateLimitInfo.Status == "rejected" {
 				quota = &quotaError{}
@@ -424,6 +430,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			if envelope.IsError || envelope.Subtype != "success" || len(final) == 0 || active {
 				if quota != nil {
 					return nil, quota
+				}
+				if rejection != nil {
+					return nil, rejection
 				}
 				return nil, errCLIResult
 			}
@@ -450,6 +459,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					return nil, protocolError("unexpected_message_start")
 				}
 				active, stopReason, index, publicIndex = true, "", 0, 0
+				rejection = nil
 			case "content_block_start":
 				if !active || blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_start")
@@ -508,7 +518,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					if len(arguments) > maxEventBytes {
 						return nil, errCapacity
 					}
-				} else if !(current.Type == "text" && (event.Delta.Type == "text_delta" || (guarded && event.Delta.Type == "citations_delta"))) && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) {
+				} else if !(current.Type == "text" && (event.Delta.Type == "text_delta" || (guarded && event.Delta.Type == "citations_delta"))) && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) && !(guarded && current.Type == "compaction" && event.Delta.Type == "compaction_delta") {
 					return nil, protocolError("unsupported_block_delta")
 				}
 			case "content_block_stop":
@@ -566,7 +576,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				stopReason = event.Delta.StopReason
 				switch stopReason {
 				case "tool_use", "end_turn", "max_tokens", "stop_sequence", "refusal", "model_context_window_exceeded":
-				case "pause_turn":
+				case "pause_turn", "compaction":
 					if !guarded {
 						return nil, protocolError("unsupported_stop_reason")
 					}

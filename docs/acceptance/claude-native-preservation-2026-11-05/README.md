@@ -7,7 +7,7 @@
 - 生产 `Runtime.Messages` 入口记录回合开始/结束、随机 `round_id`、`runtime_id`、`message_path`、结束结果及固定分类的 `safeguard_status`，不记录请求、工具参数、判定原因或凭据。
 - 原生路径跳过附件转换、历史折叠、兼容输入大小检查和旧思考/effort/缓存参数映射，直接提交调用方原生推理文档。仍保持 CLI 本地工具/MCP 为空、用户配置隔离、有界请求与临时文件清理。
 - 原生附件由上游校验。Office 与 `video` 平台扩展不自动转换；准备原生内容须发生在调用方生成安全上下文之前。
-- Gateway 无新增配置或协议变化。上线本次改动需要更新并重启承载 Claude 运行时的 Agent；通过 Gateway 制品分发 Agent 时，还需更新对应分发制品。
+- 补齐原生压缩协议、受控能力拒绝恢复及后缀思考配置保留。无新增配置或隧道字段；上线这三项修复需要先更新并重启 Agent，再更新 Gateway；通过 Gateway 制品分发 Agent 时，还需更新对应分发制品。
 
 ## 已执行：真实 CLI 加模拟上游
 
@@ -27,6 +27,8 @@ AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run 
 | 测试 | 核查内容 | 结果 |
 | --- | --- | --- |
 | `TestNativeCLISafeguardsContract` | 捕获实际 CLI 出站 HTTP，逐字段比对 system、结构化历史、工具 schema/ID、思考与签名、缓存、metadata、context_management、安全上下文和协议头；8 轮，约 360 KiB 首轮历史，第 5 轮由客户端替换为压缩摘要 | 通过 |
+| `TestNativeCLICompactionContract` | 真实 CLI 接收模拟上游的阈值压缩增量和按需压缩完整块，保留摘要、签名及压缩停止 | 通过 |
+| `TestNativeCLIRejectionContract` | 模拟上游拒绝 context_management、thinking、超长请求及指定 beta，经真实 CLI 的 API 错误元数据转换为固定恢复分类；不泄漏原文标记 | 通过 |
 | `TestNativeCLIOriginalClientContract/direct` | 原版客户端直接连接模拟 API，顺序读取 12 个随机文本块，提交全部原始 token，并校验最终成功回复 | 通过 |
 | `TestNativeCLIOriginalClientContract/through_agent` | 原版客户端经 Agent 的真实 CLI 连接同一模拟 API，执行同样任务；主请求 14 轮均带 safeguards，14 轮均收到模拟 `available` | 通过 |
 | `TestNativeCLIOriginalClientContract/gateway` | 原版客户端通过回环 Gateway 观察代理连接模拟 API，验证 `/v1` 基础路径拼接及流式转发；14 轮模拟判定均可用 | 通过 |
@@ -34,6 +36,8 @@ AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run 
 前者同时在 Agent 隔离账户目录放入测试 `CLAUDE.md`，确认其内容与 CLI 占位输入均不进入原生出站文档。`model` 使用选定的真实 ID，内部 `stream` 为 `true`；其余调用方推理字段按 JSON 语义相等比较。PDF 内容只验证字节传输，不代表真实 PDF 理解。
 
 长工具链中的上游文本、工具选择与判定均由模拟 API 控制；两端 CLI 是真实程序。这证明传输、客户端工具循环及测试入口可运行，不证明真实模型质量、真实安全判定或自动压缩效果。
+
+三项修复的默认回归另覆盖双 Gateway、真实 mTLS 隧道、JSON/SSE、模型后缀保留 adaptive 配置，以及摘要聚合不被初始 `null` 覆盖。压缩迭代输入/输出计入内部指标、配额和账本，按需压缩顶层 token 为零时也会记录实际迭代消耗；公开 `usage` 保持上游结构。错误负例覆盖未标记的合成消息、状态与文本冲突、未知 beta、普通模型文本及 CLI 内部恢复成功，不把这些情况误报为能力拒绝。CLI 已折叠的上游原始 `error.type` 无法在 Agent 恢复，不宣称任意错误透明透传。
 
 ## 客户电脑验证真实远端 Gateway
 

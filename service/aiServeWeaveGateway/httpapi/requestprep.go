@@ -92,6 +92,17 @@ func prepareRequest(r *http.Request, raw json.RawMessage, dialect suffixDialect)
 		}
 		return r, rewritten, nil
 	}
+	if dialect == dialectAnthropic {
+		var native struct {
+			Safeguards []json.RawMessage `json:"safeguards"`
+		}
+		if json.Unmarshal(raw, &native) == nil && len(native.Safeguards) > 0 {
+			// Policy provenance refers to the caller's inference settings; only normalize routing.
+			// 策略来源对应调用方的推理设置；这里只规范化路由模型名。
+			rewritten, err := setRequestModel(raw, base)
+			return r, rewritten, err
+		}
+	}
 	rewritten, err := applyModelSuffix(raw, base, reasoning, dialect)
 	if err != nil {
 		return r, raw, err

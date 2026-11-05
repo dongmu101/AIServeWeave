@@ -319,6 +319,12 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 // 还有多久，使 Gateway 可以在另一个账户上开启会话、并在此之前不再打扰这个账户；其他
 // 失败仍是隐去细节的协议错误。
 func (r *Runtime) roundError(err error) error {
+	if message := runtime.MessagesRejectionMessage(err); message != "" {
+		var failure *runtime.RuntimeError
+		_ = errors.As(err, &failure)
+		r.logger.Warn("Claude Messages round failed", "runtime_id", r.cfg.ID, "reason", "capability_rejected")
+		return &runtime.RuntimeError{Code: runtime.ErrorCapability, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages", StatusCode: failure.StatusCode, Message: message}
+	}
 	if failure := r.attachmentError(err); failure != nil {
 		return failure
 	}

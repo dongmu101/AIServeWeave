@@ -56,7 +56,36 @@ func claudeSafeguardsProcessFixture(_ []byte, extra map[string]json.RawMessage) 
 	emit := func(event any) {
 		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "stream_event", "event": event})
 	}
+	if strings.HasPrefix(guards[0].Context.Outcome, "rejected_") {
+		message := "context_management: Extra inputs are not permitted PRIVATE_UPSTREAM_MARKER"
+		if guards[0].Context.Outcome == "rejected_beta" {
+			message = "Unexpected value(s) future-feature-2099-01-01 for anthropic-beta PRIVATE_UPSTREAM_MARKER"
+		}
+		_ = json.NewEncoder(os.Stdout).Encode(map[string]any{"type": "assistant", "error": "unknown", "is_api_error_message": true, "api_error_status": 400, "message": map[string]any{"model": "<synthetic>", "content": []any{map[string]string{"type": "text", "text": "API Error: 400 " + message}}}})
+		fmt.Println(`{"type":"result","subtype":"success","is_error":true}`)
+		return
+	}
 	emit(map[string]any{"type": "message_start", "message": map[string]any{"id": "msg_guarded", "type": "message", "role": "assistant", "model": "fixture", "content": []any{}, "usage": map[string]int{"input_tokens": 3, "output_tokens": 0}}})
+	if strings.HasPrefix(guards[0].Context.Outcome, "compaction_") {
+		var thinking struct{ Type string }
+		if json.Unmarshal(extra["thinking"], &thinking) != nil || thinking.Type != "adaptive" {
+			os.Exit(3)
+		}
+		block := map[string]any{"type": "compaction", "content": "original summary", "signature": "original-signature"}
+		if guards[0].Context.Outcome == "compaction_threshold" {
+			block["content"] = nil
+		} else if string(extra["compaction"]) != `{"type":"summarize"}` {
+			os.Exit(3)
+		}
+		emit(map[string]any{"type": "content_block_start", "index": 0, "content_block": block})
+		if guards[0].Context.Outcome == "compaction_threshold" {
+			emit(map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]any{"type": "compaction_delta", "content": "original summary", "encrypted_content": "opaque-summary"}})
+		}
+		emit(map[string]any{"type": "content_block_stop", "index": 0})
+		emit(map[string]any{"type": "message_delta", "delta": map[string]string{"stop_reason": "compaction"}, "usage": map[string]int{"output_tokens": 7}})
+		emit(map[string]string{"type": "message_stop"})
+		return
+	}
 	stop := "end_turn"
 	calls := map[string]any{}
 	if guards[0].Context.Round == 1 {
@@ -90,6 +119,70 @@ func claudeSafeguardsProcessFixture(_ []byte, extra map[string]json.RawMessage) 
 		return
 	}
 	fmt.Println(`{"type":"result","subtype":"success"}`)
+}
+
+func TestClaudeSafeguardsNativeRecoveryThroughTunnel(t *testing.T) {
+	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(os.Args[0]))
+	f.awaitReady(f.replicas...)
+	var servers []*httptest.Server
+	for _, replica := range f.replicas {
+		api := httpapi.New(scheduler.New(replica.server, scheduler.Config{}), httpapi.Config{Verifier: claudeLiveVerifier{}})
+		t.Cleanup(api.Close)
+		server := httptest.NewServer(api)
+		t.Cleanup(server.Close)
+		servers = append(servers, server)
+	}
+	for _, outcome := range []string{"compaction_threshold", "compaction_on_demand", "rejected_context", "rejected_beta"} {
+		for _, stream := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/stream=%t", outcome, stream), func(t *testing.T) {
+				doc := map[string]any{
+					"model": "claude-sonnet-4-6(high)", "max_tokens": 128, "stream": stream,
+					"thinking":   map[string]string{"type": "adaptive"},
+					"messages":   []any{map[string]string{"role": "user", "content": "summarize the original conversation"}},
+					"safeguards": []any{map[string]any{"type": "dangerous_tool_use", "classifier_context": map[string]any{"fixture_outcome": outcome}}},
+				}
+				if outcome == "compaction_on_demand" {
+					doc["compaction"] = map[string]string{"type": "summarize"}
+				}
+				body, _ := json.Marshal(doc)
+				for _, server := range servers {
+					req, err := http.NewRequestWithContext(t.Context(), "POST", server.URL+"/v1/messages", bytes.NewReader(body))
+					if err != nil {
+						t.Fatal(err)
+					}
+					req.Header.Set("Content-Type", "application/json")
+					req.Header.Set("X-Api-Key", "claude-live-first")
+					req.Header.Set("Anthropic-Version", "2023-06-01")
+					req.Header.Set("Anthropic-Beta", "future-feature-2099-01-01,compact-2026-09-04")
+					resp, err := http.DefaultClient.Do(req)
+					if err != nil {
+						t.Fatal(err)
+					}
+					data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+					_ = resp.Body.Close()
+					if err != nil {
+						t.Fatal(err)
+					}
+					if strings.HasPrefix(outcome, "rejected_") {
+						want := "context_management: Extra inputs are not permitted"
+						if outcome == "rejected_beta" {
+							want = "capability_rejected: beta_header:future-feature-2099-01-01"
+						}
+						if resp.StatusCode != 400 || !bytes.Contains(data, []byte(want)) || bytes.Contains(data, []byte("PRIVATE_UPSTREAM_MARKER")) {
+							t.Fatalf("rejection lost or leaked: %d %s", resp.StatusCode, data)
+						}
+						continue
+					}
+					if resp.StatusCode != 200 || bytes.Contains(data, []byte("event: error")) || !bytes.Contains(data, []byte("original summary")) || !bytes.Contains(data, []byte("original-signature")) || !bytes.Contains(data, []byte(`"stop_reason":"compaction"`)) {
+						t.Fatalf("compaction failed: %d %s", resp.StatusCode, data)
+					}
+					if outcome == "compaction_threshold" && !bytes.Contains(data, []byte("opaque-summary")) {
+						t.Fatalf("encrypted compaction lost: %s", data)
+					}
+				}
+			})
+		}
+	}
 }
 
 func TestClaudeSafeguardsThroughTunnel(t *testing.T) {

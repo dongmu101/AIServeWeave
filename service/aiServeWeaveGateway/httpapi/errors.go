@@ -85,6 +85,13 @@ func dispatchErrorDetails(logger *slog.Logger, err error) (status int, errType, 
 		slog.String("runtime_id", rtErr.RuntimeID),
 		slog.Bool("retryable", rtErr.Retryable),
 		slog.Any("error", rtErr))
+	if message := runtime.MessagesRejectionMessage(rtErr); message != "" {
+		status := http.StatusBadRequest
+		if rtErr.StatusCode == http.StatusRequestEntityTooLarge || rtErr.StatusCode == http.StatusUnprocessableEntity {
+			status = rtErr.StatusCode
+		}
+		return status, "invalid_request_error", string(rtErr.Code), message
+	}
 
 	return classify(rtErr.Code)
 }
