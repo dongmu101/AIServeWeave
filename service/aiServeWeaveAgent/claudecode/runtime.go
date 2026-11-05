@@ -312,7 +312,7 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 			s.cancel()
 		}
 		if err != nil {
-			failure := r.roundError(err)
+			failure := withUpstream(r.roundError(err), err, s.upstream)
 			if ctx.Err() == nil {
 				select {
 				case out.items <- nativeItem{err: failure}:
@@ -442,6 +442,9 @@ type nativeWriter struct {
 	header      http.Header
 	status      int
 	buffer      []byte
+	// forwarded is set once the first event, which carries the upstream headers, is out.
+	// forwarded 在携带上游响应头的首个事件发出后置位。
+	forwarded bool
 }
 
 // Header returns the private HTTP adapter's header map.
@@ -469,13 +472,25 @@ func (w *nativeWriter) Write(data []byte) (int, error) {
 			break
 		}
 		frame := w.buffer[:end]
+		if bytes.HasPrefix(frame, []byte("event: error\n")) {
+			// The bridge's generic failure frame: the classified failure,
+			// with any upstream answer, follows as the stream's error.
+			// 桥接层的通用失败帧：带有上游应答的分类失败随后作为流错误送达。
+			w.buffer = w.buffer[end+2:]
+			continue
+		}
 		start := bytes.Index(frame, []byte("\ndata: "))
 		if start < 0 {
 			return 0, errCLIProtocol
 		}
 		event := append(json.RawMessage(nil), frame[start+7:]...)
+		item := nativeItem{event: runtime.MessagesEvent{JSON: event}}
+		if !w.forwarded {
+			w.forwarded = true
+			item.event.Header = w.stream.s.upstream.successHeader()
+		}
 		select {
-		case w.stream.items <- nativeItem{event: runtime.MessagesEvent{JSON: event}}:
+		case w.stream.items <- item:
 		case <-w.stream.ctx.Done():
 			return 0, w.stream.ctx.Err()
 		}

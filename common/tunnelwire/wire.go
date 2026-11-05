@@ -693,6 +693,7 @@ func ErrorToProto(err error) *tunnelv1.TunnelError {
 			Retryable:  re.Retryable,
 			RetryAfter: retryAfterToProto(re.RetryAfter),
 			Cause:      sentinelWireName(re.Cause),
+			Upstream:   UpstreamResponseToProto(re.Upstream),
 		}
 	}
 
@@ -738,6 +739,7 @@ func ErrorFromProto(pb *tunnelv1.TunnelError) error {
 		Retryable:  pb.GetRetryable(),
 		RetryAfter: max(durationFromProto(pb.GetRetryAfter()), 0),
 		Cause:      sentinelsByWireName[pb.GetCause()],
+		Upstream:   UpstreamResponseFromProto(pb.GetUpstream()),
 	}
 }
 

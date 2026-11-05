@@ -69,7 +69,14 @@ type RuntimeError struct {
 	// RetryAfter 是后端要求的冷却时长，只在后端报告了额度重置时间的
 	// ErrorRateLimited 上设置。零值表示未知，而不是「立即重试」。
 	RetryAfter time.Duration
-	Cause      error
+	// Upstream is the native upstream's own answer to a failed Messages
+	// round — status, response headers and error document — when the Agent
+	// captured it below the CLI. Nil for every other error.
+	//
+	// Upstream 是 Agent 在 CLI 之下截获到的原生上游对失败 Messages 回合的应答——状态码、
+	// 响应头与错误文档。其他错误均为 nil。
+	Upstream *UpstreamResponse
+	Cause    error
 }
 
 func (e *RuntimeError) Error() string {

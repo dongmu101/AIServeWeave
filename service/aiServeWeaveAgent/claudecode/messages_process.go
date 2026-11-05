@@ -224,9 +224,22 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if structured {
 		args = append(args, "--input-format", "stream-json")
 	}
+	env := slices.Clone(b.cliEnv())
+	if native && s.upstream != nil {
+		// Capture the upstream's own headers and errors below the CLI, which folds them.
+		// 在 CLI 之下截获上游自己的响应头与错误，CLI 会把它们折叠掉。
+		proxy, err := startUpstreamProxy(s.upstream, env)
+		if err != nil {
+			return errProbeSetup
+		}
+		defer proxy.close()
+		if env, err = proxy.environ(dir, env); err != nil {
+			return errProbeSetup
+		}
+	}
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
-	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
+	cmd.Env = append(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
 	if !native {
 		cmd.Env = append(cmd.Env, "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
 	}
@@ -251,10 +264,14 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		if nativeMessages != nil {
 			extra["messages"] = nativeMessages
 		}
-		// Preserve tool identity for the upstream; no caller tool is registered for local execution.
-		// 为上游保留原始工具身份；调用方工具不在本机注册执行。
+		// Preserve tool identity for the upstream; no caller tool is registered
+		// for local execution. A document without tools sends an empty list,
+		// never null, which the upstream rejects as "tools: Input should be a
+		// valid array".
+		// 为上游保留原始工具身份；调用方工具不在本机注册执行。不带工具的文档发送空列表而不是
+		// null，上游会以 "tools: Input should be a valid array" 拒绝 null。
 		if _, ok := extra["tools"]; !ok {
-			extra["tools"] = s.request.Tools
+			extra["tools"] = []any{}
 		}
 		delete(extra, "safeguards")
 	}

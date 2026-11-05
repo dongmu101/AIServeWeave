@@ -765,6 +765,8 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 **未带 safeguards 的原生直通（2026-11-05）**：模型至少有一个可用节点声明 `anthropic_messages_native`（新版 Claude Agent 默认声明）时，未带 `safeguards` 的 `/v1/messages` 不再整形，原样经隧道交给 Agent（`MessagesRequest.native = 7`），与带安全上下文的请求相同：adaptive 思考、`output_config`、`context_management`、`cache_control`、`defer_loading` 工具与 `tool_reference`、对话中途 `role:"system"`、结构化历史与思考签名、上游工具 ID 都由上游执行；JSON 聚合保留内容块与 delta 扩展，按 `usage.iterations` 计量。每轮无状态：不认领或发布 Redis 续接记录、不要求 `-redis-addr`、允许跨副本重试，仍要求已认证的 `TenantID` / `KeyID`、模型权限和既有并发/大小限制。`Scheduler.MessagesStart` 只把这类请求派给声明能力的节点，混合版本集群中旧节点继续接收桥接请求；模型后缀生成的 `thinking` 照旧写入请求体后原样转发。Office、视频与文本文件附件由 Agent 在发送前转换为原生内容块（见 [Agent 原生直通](../aiServeWeaveAgent/claudecode/README.md#未带-safeguards-的原生直通)）。
 
+**上游响应头与错误透传（2026-11-05）**：原生直通与带 `safeguards` 的回合中，`nativeMessagesOutput` 在首个事件到达、尚未发出响应头时写入该事件携带的上游响应头（`MessagesEvent.Header`），不覆盖 Gateway 已设置的头；`runtime.SanitizeUpstreamHeader` 在隧道两端各过滤一次，名称、取值和边界规则见 [Agent 透传说明](../aiServeWeaveAgent/claudecode/README.md#上游响应头与错误透传)。错误带 `RuntimeError.Upstream`（隧道 `TunnelError.upstream`）且其中是有效的上游错误文档时，原生 `/v1/messages` 以上游状态码返回原样文档，SSE 已开始时作为 `event: error` 发出；Chat/Responses 兼容层按各自格式渲染上游 `error.type` 与 `message`。`Retry-After` 优先取上游值，没有时才由 `setRetryAfter` 依 `RetryAfter` 设置。能力拒绝（`MessagesRejectionMessage` 非空）仍返回固定分类文案。心跳已先发出响应头的 SSE 无法再追加上游头。
+
 以下情形仍走下面的兼容桥接整形：模型没有声明该能力的可用节点（旧版 Agent）；最后一条消息含 `toolu_aisw_` 前缀的工具结果，即答复桥接 CLI 发起的工具调用，同一对话的下一个提问转为原生；Chat/Responses 兼容层。需先升级 Agent，再重建并重启 Gateway；只升级 Gateway 时旧 Agent 不声明能力，行为不变。默认测试覆盖双 Gateway 真实 mTLS 隧道下 JSON/SSE 的首轮工具调用与跨副本无状态续接、不配置 Redis、旧节点回退和桥接续接保留；真实 CLI 与上游的未带 `safeguards` 原生直通、线上部署尚未验收。
 
 兼容桥接路径上，转发前 Gateway 只整形 Claude Code 等客户端附带、Agent 严格解码会拒绝的部分（`httpapi/native_messages_shape.go`），改变模型所见内容的字段仍原样交给 Agent 判断：

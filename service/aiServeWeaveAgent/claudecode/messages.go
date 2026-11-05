@@ -345,6 +345,10 @@ type messagesSession struct {
 	// eviction picks the session idle the longest. Guarded by mu.
 	// idleSince 是会话最近一次开始等待工具结果的时间；淘汰时选择空闲最久的会话。受 mu 保护。
 	idleSince time.Time
+	// upstream records what the real upstream answered a native round, below
+	// the CLI (see upstreamProxy); nil for compatibility sessions.
+	// upstream 在 CLI 之下记录真实上游对原生回合的应答（见 upstreamProxy）；兼容会话为 nil。
+	upstream *upstreamCapture
 }
 
 type messagesBridge struct {
@@ -779,6 +783,9 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &messagesSession{processor: b.processor, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
+	if req.isNative() {
+		s.upstream = &upstreamCapture{}
+	}
 	b.sessions[s] = true
 	b.wg.Add(1)
 	go func() {

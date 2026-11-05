@@ -66,7 +66,7 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 支持上游阈值压缩的 `compaction_delta`、按需压缩的 `compaction: {"type":"summarize"}` 与 `stop_reason: "compaction"`。JSON 聚合保留摘要、原始签名及 `encrypted_content`，SSE 原样传递；未生成摘要的 `content: null` 保持不变。压缩停止后回收本轮 CLI，后续历史和压缩时机仍由调用方管理。Gateway 对存在非空 `usage.iterations` 的原生响应按全部采样迭代汇总输入/输出 token，用于指标、配额及账本，不改写公开响应的原始 `usage`。
 
-能力拒绝从 CLI 标记的合成 API 错误中提取，只公开固定的 `capability_rejected:` 恢复分类；`context_management` 使用客户端可识别的固定 schema 拒绝文案。覆盖思考类型、签名、对话中途 system、输出格式、effort、上下文长度，以及请求实际携带的被拒 beta；beta 仅允许有界协议名称，不能回显任意上游内容。保留已识别的 400/413/422 状态，未知错误仍使用通用错误；普通模型文本与 CLI 内部恢复成功的中间错误不触发客户端回退。CLI 若已折叠上游原始 `error.type`，Agent 无法还原该类型；这不是任意上游错误的透明透传。
+能力拒绝从 CLI 标记的合成 API 错误中提取，只公开固定的 `capability_rejected:` 恢复分类；`context_management` 使用客户端可识别的固定 schema 拒绝文案。覆盖思考类型、签名、对话中途 system、输出格式、effort、上下文长度，以及请求实际携带的被拒 beta；beta 仅允许有界协议名称，不能回显任意上游内容。保留已识别的 400/413/422 状态；普通模型文本与 CLI 内部恢复成功的中间错误不触发客户端回退。其余上游错误按下文「上游响应头与错误透传」以上游原始状态码和错误文档返回，不再依赖 CLI 折叠后的文本。
 
 每次请求带完整原始历史并开启独立进程，工具回合结束即停止该进程。后续请求不认领旧 MCP 会话、不依赖 Redis 续接记录，可以跨副本重试；每次仍校验调用方身份和模型权限、执行既有并发及大小限制。原始工具 ID 与判定中的 ID 一致，同名同参数的并行调用也可区分。JSON 聚合保留内容块扩展、判定及上下文管理字段；SSE 保留被 `max_tokens` 截断的不完整工具参数，非流式请求遇不完整参数返回明确的 502。
 
@@ -84,11 +84,23 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 - 结构化历史、思考块与签名、上游工具 ID（不再改写成 `toolu_aisw_…`）原样往返；JSON 聚合保留内容块与 delta 扩展、`context_management` 结果。
 - 每轮独立：本地工具与 MCP 注册表为空，遇到 `tool_use` 即停止本轮 CLI，下一轮请求携带完整历史，可跨副本、可重试，不需要 Redis 续接记录，也没有每回合 64 个工具 ID 的限制。代价是每个工具回合都新开一次 CLI 进程。
 - 顶层字段采用与安全检查路径相同的允许列表，HTTP 地址、请求头、凭据、CLI 命令和设置明确拒绝；`safeguards: null` 或 `[]` 不转发上游。权限模式保持 `dontAsk`，不设置 `CLAUDE_CODE_AUTO_MODE_SERVER`，也不追加 `dangerous-tool-use` beta。
+- 请求不带 `tools` 时向上游发送空数组。2026-11-05 修复前发送的是 `null`，上游以 `tools: Input should be a valid array` 拒绝，真实 CLI 下不带工具的原生请求因此失败。使用订阅登录时，上游要求 `system` 带 Claude Code 身份提示词，原版客户端总会携带；自行构造的原生请求缺少它时，上游返回 429 `rate_limit_error`。
 - 本平台附件扩展仍可用：视频与 PDF 以外的 base64 文档（Office、文本文件）在发送前由 Agent 按「Messages 文件与视频输入」转换为上游接受的文本、图片或 PDF 内容块，转换只替换这些块本身，其他块保持原始字段；被替换块的 `cache_control` 移到转换结果最后一块上。原生 PDF、`text` 来源文档与图片不经转换。工具结果中的文档同样按顶层内容转换，因为上游接受工具结果里的文档。带 `safeguards` 的请求仍不做任何转换。
 
 以下情形继续走兼容桥接：模型的所有可用节点都没有该能力（旧版 Agent；运行时能力覆盖把 `anthropic_messages_native` 设为 `unsupported` 时同样不声明，但目前 Gateway 与控制面都没有下发能力覆盖的入口，只有测试使用，需要整节点回退时保留旧版 Agent）；最后一条消息是对桥接工具调用（`toolu_aisw_` ID）的结果，只有发起调用的 CLI 能接收它，同一对话的下一个提问会转为原生；OpenAI Chat/Responses 兼容层。混合版本的集群中，Gateway 只把原生请求派给声明能力的节点，旧节点继续接收桥接请求。
 
 需先升级 Agent，再升级 Gateway：旧 Gateway 不发送该标志，新 Agent 照旧走桥接。生产日志的 `message_path` 新增 `native`。默认测试覆盖双 Gateway 真实 mTLS 隧道下的 JSON/SSE 首轮工具调用与跨副本无状态续接、旧节点回退、桥接续接保留与附件转换；真实 CLI 与真实上游的未带 `safeguards` 原生直通尚未验收。
+
+## 上游响应头与错误透传
+
+原生直通与带 `safeguards` 的请求（2026-11-05 起）在 CLI 之下截获真实上游的应答，响应头与错误文档不再受 CLI 输出格式限制。Agent 为每个原生回合的 CLI 进程启动一个回环 HTTP 代理，经 `HTTPS_PROXY` 接入，只接受携带本进程随机口令的连接。只有到 `api.anthropic.com:443` 的 CONNECT 被解密：叶子证书由本进程新建的 CA 签发，该 CA 名称约束为这一主机，签发后私钥即丢弃；CA 写入权限 `0600` 的临时证书包，通过 `NODE_EXTRA_CA_CERTS` 交给 CLI，并与 Agent 原有的 `NODE_EXTRA_CA_CERTS` 合并。其他主机原样隧道转发，不解密。出站遵循 Agent 自身的 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`/`NO_PROXY`（支持 http、https、socks5 代理）。CLI 访问的仍是官方地址，订阅登录、官方配置接口与 beta 等 first-party 行为不变。CLI 内部重试时以最后一次请求为准；请求体带 `stream: true` 的 `POST /v1/messages` 视为本回合调用，额度探测、token 计数等旁路调用不截获。进程结束时代理连同全部上游连接一起关闭。兼容桥接回合不经此代理。
+
+- **成功响应头**：随首个事件经隧道 `MessagesEvent.upstream_headers` 传给 Gateway，在正文之前发出。保留全部推理相关响应头，包括 `anthropic-ratelimit-*`（含 unified 订阅窗口与利用率）、`retry-after`、`x-should-retry`、`request-id`、`anthropic-organization-id`、`anthropic-workspace-id`、`cf-ray` 等。去掉逐跳头及 `Connection` 列出的头、`Content-*`、`Set-Cookie`、`Alt-Svc`、`Strict-Transport-Security`、CORS、`Date`/`Server`/`Via`/`Vary`/缓存类、`Report-To`/`NEL`/CSP、`WWW-Authenticate`，以及名称或取值非法（含 CR/LF）的头。最多 128 个名称、每名 16 个值、合计 32 KiB，Gateway 与 Agent 两端都执行这层过滤。Gateway 不覆盖自己已设置的头（如 `X-Request-Id`）。注意：这些包含节点订阅账户的组织 ID 与限额利用率，会暴露给调用方。
+- **错误**：由上游导致的失败（CLI 报告失败结果、异常退出、缺少结果、额度拒绝、能力拒绝，以及流内错误事件之后的 CLI 流异常）携带上游状态码、响应头与原始错误文档（`{"type":"error","error":{...}}`，最多 64 KiB），经 `TunnelError.upstream` 传回。Gateway 的原生 `/v1/messages` 以该状态码和原样文档应答；SSE 已开始时以 `event: error` 发送原样文档；Chat/Responses 兼容层以各自格式渲染上游的 `error.type` 与 `message`。流中的 `event: error` 按错误类型映射状态码（如 `overloaded_error` 对应 529）。`Retry-After` 优先采用上游值。
+- **保持原状的情况**：能力拒绝仍公开固定的 `capability_rejected:` 分类文案（客户端据此回退），只额外附带上游状态码与响应头。上游 401/403/407 属于节点订阅凭据问题，原样返回会让客户端误以为自己的 Gateway Key 无效，因此不透传。Agent 本地导致的失败（工具不安全、附件、取消等）不带上游信息。错误码只有 429 改为可重试的 `rate_limited`（与额度拒绝一致，`RetryAfter` 取上游 `retry-after`），其余保持原分类，熔断与换节点行为不变。
+- **限制**：SSE 请求若在首个事件到达前已因心跳发出响应头，上游响应头无法再追加（HTTP 协议限制）。请求体超过 64 MiB 时不做判断，直接转发且不截获。
+
+升级 Agent 后即开始截获，Gateway 与 Agent 都升级后才会向客户端输出；旧 Gateway 忽略新增字段，旧 Agent 不发送这些字段。2026-11-05 开发时以临时测试验证（未保留在仓库中），覆盖双 Gateway 真实 mTLS 隧道下的成功 JSON/SSE 响应头、529/429 原样错误与 `Retry-After`、流内错误事件，以及代理口令、CA、父代理链路、解压缩和关闭时的连接回收。本机 Claude Code `2.1.318` 加回环模拟上游，验证了 CLI 会带口令走代理、信任临时 CA 并经父代理访问；同一 CLI 经真实订阅上游完成一轮原生请求，首个事件带回 `request-id` 与 `anthropic-ratelimit-unified-*` 等真实响应头。真实上游的错误透传与生产部署尚未验收。
 
 ## 兼容桥接的支持范围
 

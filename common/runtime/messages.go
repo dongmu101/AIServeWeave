@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"net/http"
 )
 
 // MaxMessagesSafeguardsBytes shares the native Messages document bound.
@@ -83,7 +84,17 @@ func (r MessagesRequest) ValidateProtocol() error {
 
 // MessagesEvent is one validated Anthropic SSE data document, without HTTP framing.
 // MessagesEvent 是一条经校验的 Anthropic SSE 数据文档，不含 HTTP 帧。
-type MessagesEvent struct{ JSON json.RawMessage }
+//
+// Header is set on a stream's first event only, and only when the Agent
+// captured the upstream response that produced it: that response's headers
+// after SanitizeUpstreamHeader, for the Gateway to send before the body.
+//
+// Header 只在流的首个事件上设置，且仅当 Agent 截获到产生它的上游响应时设置：该响应经
+// SanitizeUpstreamHeader 处理后的响应头，供 Gateway 在正文之前发送。
+type MessagesEvent struct {
+	JSON   json.RawMessage
+	Header http.Header
+}
 
 // MergeMessagesResponseDelta retains native response extensions during JSON aggregation.
 // MergeMessagesResponseDelta 在 JSON 聚合时保留原生响应扩展。

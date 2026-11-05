@@ -218,6 +218,57 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			writeAnthropicError(w, status, errType, message)
 		}
 	}
+	// headersApplied is set once the upstream headers had their one chance
+	// to go out; nothing can be added after the first byte of a response.
+	// headersApplied 在上游响应头获得唯一一次发送机会后置位；响应的首个字节之后无法再追加响应头。
+	headersApplied := false
+	applyUpstreamHeader := func(header http.Header) {
+		sent := started
+		if out != nil {
+			sent = out.streaming()
+		}
+		if headersApplied || sent {
+			return
+		}
+		headersApplied = true
+		for name, values := range runtime.SanitizeUpstreamHeader(header) {
+			if _, own := w.Header()[name]; !own {
+				w.Header()[name] = values
+			}
+		}
+	}
+	// upstreamFail answers with the upstream's own status, headers and error
+	// document when the Agent captured them. A capability rejection keeps its
+	// fixed recovery message, which clients match on.
+	// upstreamFail 在 Agent 截获到上游应答时，以上游自己的状态码、响应头与错误文档应答。
+	// 能力拒绝保留客户端据以匹配的固定恢复文案。
+	upstreamFail := func(err error) bool {
+		upstream := runtime.UpstreamOf(err)
+		if upstream == nil {
+			return false
+		}
+		applyUpstreamHeader(upstream.Header)
+		if !runtime.ValidUpstreamErrorBody(upstream.Body) || runtime.MessagesRejectionMessage(err) != "" {
+			return false
+		}
+		errType, message := runtime.UpstreamErrorDetail(upstream.Body)
+		h.logger.Warn("native Messages upstream error passed through", "status", upstream.StatusCode, "error_type", errType)
+		if w.Header().Get("Retry-After") == "" {
+			setRetryAfter(w, err)
+		}
+		switch {
+		case out != nil:
+			out.fail(upstream.StatusCode, errType, errType, message)
+		case started:
+			_ = writeAnthropicSSE(w, "error", upstream.Body)
+			_ = http.NewResponseController(w).Flush()
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(upstream.StatusCode)
+			_, _ = w.Write(upstream.Body)
+		}
+		return true
+	}
 	ids := nativeResultIDs(req)
 	unchanged := len(req.Safeguards) > 0 || passthrough
 	if unchanged {
@@ -234,8 +285,13 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			continuationUnavailable()
 			return
 		}
+		if upstreamFail(err) {
+			return
+		}
 		status, errType, code, message := dispatchErrorDetails(h.logger, err)
-		setRetryAfter(w, err)
+		if w.Header().Get("Retry-After") == "" {
+			setRetryAfter(w, err)
+		}
 		fail(status, errType, code, message)
 	}
 	identity, ok := IdentityFrom(r.Context())
@@ -382,12 +438,13 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			if !received {
 				committed = committed || !messagesNotApplied(err)
 				dispatchError(err)
-			} else {
+			} else if !upstreamFail(err) {
 				protocolError("native Messages stream failed")
 			}
 			return
 		}
 		committed = true
+		applyUpstreamHeader(item.Header)
 		total += len(item.JSON)
 		if total > maxNativeResponseBytes {
 			protocolError("native Messages response size limit exceeded")

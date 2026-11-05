@@ -380,6 +380,29 @@ message MessagesRequest {
 // MessagesEvent contains exactly one bounded native SSE data document.
 message MessagesEvent {
   bytes event_json = 1;
+  // upstream_headers is set on a stream's first event only: the response
+  // headers of the native upstream call the Agent captured below the CLI,
+  // filtered by runtime.SanitizeUpstreamHeader on both ends. It is the one
+  // deliberate exception to "no HTTP over the tunnel": inference metadata
+  // (rate limits, retry hints, request IDs), never cookies, hop-by-hop
+  // framing or credentials. An older Gateway ignores it.
+  repeated UpstreamHeader upstream_headers = 2;
+}
+
+// UpstreamHeader is one response header name and its values, in order.
+message UpstreamHeader {
+  string name = 1;
+  repeated string values = 2;
+}
+
+// UpstreamResponse is the native upstream's own answer to a failed Messages
+// round: the final attempt's HTTP status (or, for an error inside a stream,
+// the status that error type carries), its filtered response headers and its
+// bounded Anthropic error document.
+message UpstreamResponse {
+  int32 status_code = 1;
+  repeated UpstreamHeader headers = 2;
+  bytes body = 3;                       // Anthropic error JSON; empty when not captured
 }
 
 // RequestEnd closes the request-body direction of a slot. Operations whose
@@ -441,6 +464,9 @@ message TunnelError {
   // means unknown, never "retry immediately". A duration rather than a
   // timestamp, so the two ends need not agree on the wall clock.
   google.protobuf.Duration retry_after = 9;
+  // upstream is set only on a failed native Messages round whose upstream
+  // answer the Agent captured; see UpstreamResponse. An older Gateway ignores it.
+  UpstreamResponse upstream = 10;
 }
 
 // -----------------------------------------------------------------------
