@@ -49,6 +49,16 @@ type MessagesRequest struct {
 	// APIVersion 与 BetaFeatures 是原生推理协议选择，不是任意 HTTP 请求头。
 	APIVersion   string
 	BetaFeatures string
+	// Native asks the adapter to forward the document unchanged instead of
+	// through its compatibility bridge: no history folding, thinking rewrite
+	// or tool renaming, and every round is stateless. Callers set it only for
+	// runtimes advertising CapabilityMessagesNative. Safeguarded documents are
+	// always native, whether or not this is set.
+	//
+	// Native 要求适配器原样转发文档，而不经过兼容桥接：不折叠历史、不改写思考、不改工具名，
+	// 每一回合都无状态。调用方只对声明 CapabilityMessagesNative 的运行时设置它。带
+	// safeguards 的文档无论是否设置都按原生处理。
+	Native bool
 }
 
 // ValidateProtocol bounds the protocol selectors and prevents header injection at the CLI boundary.

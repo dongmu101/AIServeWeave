@@ -18,6 +18,27 @@ func (s *Scheduler) MessagesCandidates(ctx context.Context, model string) []Cand
 	return s.candidates(ctx, model, runtime.CapabilityMessages)
 }
 
+// MessagesNativeCandidates is MessagesCandidates narrowed to runtimes that
+// accept an unchanged document (runtime.CapabilityMessagesNative). A fleet
+// still mid-upgrade reports none for a model whose only nodes are older, and
+// the caller keeps those on the compatibility bridge.
+//
+// MessagesNativeCandidates 是只保留可接受原样文档的运行时（runtime.CapabilityMessagesNative）
+// 的 MessagesCandidates。升级未完成时，只有旧节点的模型返回空，调用方让它们继续走兼容桥接。
+func (s *Scheduler) MessagesNativeCandidates(ctx context.Context, model string) []Candidate {
+	ctx, _ = admitModel(ctx, model)
+	return s.candidates(ctx, model, runtime.CapabilityMessagesNative)
+}
+
+// messagesCapability is the capability a Messages request needs of its node.
+// messagesCapability 是一次 Messages 请求要求节点具备的能力。
+func messagesCapability(req runtime.MessagesRequest) runtime.Capability {
+	if req.Native {
+		return runtime.CapabilityMessagesNative
+	}
+	return runtime.CapabilityMessages
+}
+
 // Messages dispatches once to the selected node. Tool continuations use it
 // because they must return to the node holding their CLI; a new session
 // starts through MessagesStart instead.
@@ -54,8 +75,9 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 	if !admitted {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
-	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, runtime.CapabilityMessages, s.sessionAffinity(ctx), rand.Float64)
-	s.metrics.Selection(runtime.CapabilityMessages, len(candidates))
+	capability := messagesCapability(req)
+	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, capability, s.sessionAffinity(ctx), rand.Float64)
+	s.metrics.Selection(capability, len(candidates))
 	if len(candidates) == 0 {
 		return nil, Candidate{}, noCandidates(ctx)
 	}
@@ -87,7 +109,7 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 		if !messagesStartRetryable(err) {
 			return nil, c, err
 		}
-		s.metrics.Retry(runtime.CapabilityMessages)
+		s.metrics.Retry(capability)
 	}
 	return nil, Candidate{}, cooled.or(lastErr)
 }

@@ -13,9 +13,12 @@ type messagesRoundDiagnostics struct {
 	path, status string
 }
 
-func newMessagesRoundDiagnostics(guarded bool) *messagesRoundDiagnostics {
-	if guarded {
+func newMessagesRoundDiagnostics(native, guarded bool) *messagesRoundDiagnostics {
+	switch {
+	case guarded:
 		return &messagesRoundDiagnostics{path: "native_safeguards", status: "missing"}
+	case native:
+		return &messagesRoundDiagnostics{path: "native", status: "not_requested"}
 	}
 	return &messagesRoundDiagnostics{path: "mcp_bridge", status: "not_requested"}
 }

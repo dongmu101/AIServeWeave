@@ -371,6 +371,10 @@ message MessagesRequest {
   // Native inference protocol version and feature selectors; never arbitrary headers or credentials.
   string api_version = 5;
   string beta_features = 6;
+  // native asks for the unchanged document without the compatibility bridge.
+  // A Gateway sets it only for runtimes advertising anthropic_messages_native;
+  // an older Agent ignores it, which is why the Gateway checks first.
+  bool native = 7;
 }
 
 // MessagesEvent contains exactly one bounded native SSE data document.

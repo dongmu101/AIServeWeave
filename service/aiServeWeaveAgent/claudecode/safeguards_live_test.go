@@ -170,7 +170,7 @@ func runSafeguardsAcceptance(t *testing.T, program, model string, accountEnv []s
 					r.Body = io.NopCloser(bytes.NewReader(body))
 					writer := &acceptanceCapture{ResponseWriter: w, output: boundedCapture{limit: 1 << 20}}
 					handler.ServeHTTP(writer, r)
-					diagnostics := newMessagesRoundDiagnostics(true)
+					diagnostics := newMessagesRoundDiagnostics(true, true)
 					for _, line := range bytes.Split(writer.output.buffer.Bytes(), []byte("\n")) {
 						if bytes.HasPrefix(line, []byte("data: ")) {
 							diagnostics.observe(line[6:])

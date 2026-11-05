@@ -37,7 +37,7 @@ func MarshalMessagesRequest(req runtime.MessagesRequest) ([]byte, error) {
 	if len(req.JSON) > MaxMessagesJSONBytes || !json.Valid(req.JSON) || req.TenantID == "" || req.KeyID == "" || len(req.TenantID) > 256 || len(req.KeyID) > 256 {
 		return nil, &runtime.RuntimeError{Code: runtime.ErrorProtocol, Message: "invalid Messages document"}
 	}
-	return proto.Marshal(&tunnelv1.MessagesRequest{Model: req.Model, TenantId: req.TenantID, KeyId: req.KeyID, MessagesJson: req.JSON, ApiVersion: req.APIVersion, BetaFeatures: req.BetaFeatures})
+	return proto.Marshal(&tunnelv1.MessagesRequest{Model: req.Model, TenantId: req.TenantID, KeyId: req.KeyID, MessagesJson: req.JSON, ApiVersion: req.APIVersion, BetaFeatures: req.BetaFeatures, Native: req.Native})
 }
 
 // UnmarshalMessagesRequest decodes the shared native Messages contract.
@@ -50,7 +50,7 @@ func UnmarshalMessagesRequest(data []byte) (runtime.MessagesRequest, error) {
 	if len(pb.MessagesJson) > MaxMessagesJSONBytes || !json.Valid(pb.MessagesJson) || pb.TenantId == "" || pb.KeyId == "" || len(pb.TenantId) > 256 || len(pb.KeyId) > 256 {
 		return runtime.MessagesRequest{}, &runtime.RuntimeError{Code: runtime.ErrorProtocol, Message: "invalid Messages document"}
 	}
-	req := runtime.MessagesRequest{Model: pb.Model, TenantID: pb.TenantId, KeyID: pb.KeyId, JSON: pb.MessagesJson, APIVersion: pb.ApiVersion, BetaFeatures: pb.BetaFeatures}
+	req := runtime.MessagesRequest{Model: pb.Model, TenantID: pb.TenantId, KeyID: pb.KeyId, JSON: pb.MessagesJson, APIVersion: pb.ApiVersion, BetaFeatures: pb.BetaFeatures, Native: pb.Native}
 	return req, req.ValidateProtocol()
 }
 

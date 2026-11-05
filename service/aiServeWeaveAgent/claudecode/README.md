@@ -6,7 +6,7 @@ Agent 本地 `kind: claude`，标准库实现，无新增第三方依赖。使�
 
 模型发现参考 [dbx 的 Claude CLI 适配器](https://github.com/t8y2/dbx/blob/03db4cad8c154a3126bc784f3b2428ba60357511/crates/dbx-ai-provider/src/ai_claude_code_cli.rs)：向隔离的 `claude --print --input-format stream-json --output-format stream-json` 进程发送 `initialize` 控制请求，从响应的 `models[].resolvedModel` 读取真实模型 ID，按真实 ID 去重并保留首次出现的顺序。CLI 的 `value` / `id` 简称及友好名称不作为公开模型名；没有 `resolvedModel` 的条目不发布。此步骤不提交用户提示词、不执行推理、不消耗模型额度。只发布 CLI 实际返回的目录，不使用静态候选列表兜底；CLI 不支持该查询、目录为空或响应畸形时标记未就绪并按既有策略重试。每次查询受 `probe_timeout`（CLI 默认 15 秒）限制，输出最多 1 MiB、目录最多 256 项。
 
-请求只能选择最近一次成功发现的真实模型 ID，传给 CLI 的 `--model` 与请求 ID 完全一致。`default`、`sonnet`、`opus`、`fable`、`haiku` 等简称不进入目录，也不能直接用于请求；同一真实模型经多个简称返回时只发布一次。工具续接保持原会话模型。不能据模型名称推断完整 API 兼容性；未带 `safeguards` 的原版 Claude Code 客户端工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。
+请求只能选择最近一次成功发现的真实模型 ID，传给 CLI 的 `--model` 与请求 ID 完全一致。`default`、`sonnet`、`opus`、`fable`、`haiku` 等简称不进入目录，也不能直接用于请求；同一真实模型经多个简称返回时只发布一次。工具续接保持原会话模型。不能据模型名称推断完整 API 兼容性；兼容桥接路径下，原版 Claude Code 客户端工具流程目前只验收过 `claude-sonnet-4-6`；Chat 兼容层已验证 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。
 
 ## OpenAI Chat Completions 兼容
 
@@ -70,13 +70,27 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 每次请求带完整原始历史并开启独立进程，工具回合结束即停止该进程。后续请求不认领旧 MCP 会话、不依赖 Redis 续接记录，可以跨副本重试；每次仍校验调用方身份和模型权限、执行既有并发及大小限制。原始工具 ID 与判定中的 ID 一致，同名同参数的并行调用也可区分。JSON 聚合保留内容块扩展、判定及上下文管理字段；SSE 保留被 `max_tokens` 截断的不完整工具参数，非流式请求遇不完整参数返回明确的 502。
 
-整个请求最多 32 MiB、响应最多 64 MiB；安全上下文不另设小于请求大小的限制。协议版本最多 128 字节，beta 列表最多 16 KiB，均只接受可打印 ASCII，拒绝换行注入。未带 `safeguards` 的请求继续使用下文的 MCP 桥接、历史校验和一次性续接规则；需要客户端回退判定时仍支持停止序列模拟。
+整个请求最多 32 MiB、响应最多 64 MiB；安全上下文不另设小于请求大小的限制。协议版本最多 128 字节，beta 列表最多 16 KiB，均只接受可打印 ASCII，拒绝换行注入。未带 `safeguards` 的请求默认走下一节的原生直通；只有下一节列出的情形才回到 MCP 桥接、历史校验和一次性续接规则。
 
 升级时先更新并重启承载 Claude 运行时的 Agent，再重建并重启 Gateway，两端都需要此版本。客户端新建会话，移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（可显式设为 `1`），并移除 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，以允许客户端发送配套 beta。客户端工具权限仍由调用方管理。
 
 默认测试覆盖真实 mTLS 隧道、两个 Gateway 副本、JSON/SSE、原始历史与工具身份、上游状态的模拟转发、工具截断及旧路径续接保护。Claude Code `2.1.318` 离线实测确认原始 `Bash` 定义不会在 Agent 注册或执行；原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 的受控长工具链已验证；Agent 主机直连对照、实际编程任务、其他 Claude Code 版本及账户的资格尚未验收。2026-11-05 新增的原生请求契约、原版客户端长工具链及真实订阅对照入口见[原生保留验收记录](../../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。
 
-## 未带 safeguards 的支持范围
+## 未带 safeguards 的原生直通
+
+2026-11-05 起，Claude 运行时声明 `anthropic_messages_native` 能力。Gateway 看到该能力后，未带 `safeguards` 的 `/v1/messages` 也像带安全上下文的请求一样原样转发：隧道 `MessagesRequest.native` 置位，Agent 用与安全检查路径相同的方式通过本机已登录 CLI 把原始文档交给上游。与旧桥接相比：
+
+- `thinking`（含 `adaptive`）、`output_config`、`context_management`、`compaction`、system/消息/工具上的 `cache_control`、`defer_loading` 工具、`tool_reference`、对话中途 `role:"system"`、assistant 预填、`stop_sequences`、`top_p`/`top_k` 等由上游原样执行和校验，不再改成固定思考预算、不再去掉缓存标记或改写工具。CLI 不再以 `MAX_THINKING_TOKENS`、`CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING`、`DISABLE_PROMPT_CACHING`、`CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS` 运行。
+- 结构化历史、思考块与签名、上游工具 ID（不再改写成 `toolu_aisw_…`）原样往返；JSON 聚合保留内容块与 delta 扩展、`context_management` 结果。
+- 每轮独立：本地工具与 MCP 注册表为空，遇到 `tool_use` 即停止本轮 CLI，下一轮请求携带完整历史，可跨副本、可重试，不需要 Redis 续接记录，也没有每回合 64 个工具 ID 的限制。代价是每个工具回合都新开一次 CLI 进程。
+- 顶层字段采用与安全检查路径相同的允许列表，HTTP 地址、请求头、凭据、CLI 命令和设置明确拒绝；`safeguards: null` 或 `[]` 不转发上游。权限模式保持 `dontAsk`，不设置 `CLAUDE_CODE_AUTO_MODE_SERVER`，也不追加 `dangerous-tool-use` beta。
+- 本平台附件扩展仍可用：视频与 PDF 以外的 base64 文档（Office、文本文件）在发送前由 Agent 按「Messages 文件与视频输入」转换为上游接受的文本、图片或 PDF 内容块，转换只替换这些块本身，其他块保持原始字段；被替换块的 `cache_control` 移到转换结果最后一块上。原生 PDF、`text` 来源文档与图片不经转换。工具结果中的文档同样按顶层内容转换，因为上游接受工具结果里的文档。带 `safeguards` 的请求仍不做任何转换。
+
+以下情形继续走兼容桥接：模型的所有可用节点都没有该能力（旧版 Agent；运行时能力覆盖把 `anthropic_messages_native` 设为 `unsupported` 时同样不声明，但目前 Gateway 与控制面都没有下发能力覆盖的入口，只有测试使用，需要整节点回退时保留旧版 Agent）；最后一条消息是对桥接工具调用（`toolu_aisw_` ID）的结果，只有发起调用的 CLI 能接收它，同一对话的下一个提问会转为原生；OpenAI Chat/Responses 兼容层。混合版本的集群中，Gateway 只把原生请求派给声明能力的节点，旧节点继续接收桥接请求。
+
+需先升级 Agent，再升级 Gateway：旧 Gateway 不发送该标志，新 Agent 照旧走桥接。生产日志的 `message_path` 新增 `native`。默认测试覆盖双 Gateway 真实 mTLS 隧道下的 JSON/SSE 首轮工具调用与跨副本无状态续接、旧节点回退、桥接续接保留与附件转换；真实 CLI 与真实上游的未带 `safeguards` 原生直通尚未验收。
+
+## 兼容桥接的支持范围
 
 支持以 user 文本、图片、文档或本平台视频附件结尾的单轮或多轮对话、system 文本、调用方定义的工具及其 JSON Schema、文本和附件工具结果（包括 `is_error`）、JSON/SSE、多轮工具往返。工具续接的后续请求必须携带未改动的完整历史和本回合全部 `tool_result`；原始附件、标题及字节也参与历史校验。客户端补入工具 schema 明确声明的默认值视为等价，其他参数修改被拒绝。
 
@@ -102,7 +116,7 @@ Gateway 与 Agent 不设置固定的输出 token 上限，客户端指定的数�
 
 ## 思考内容
 
-本节描述未带 `safeguards` 的兼容路径；带安全上下文的请求保留原始思考配置和历史，由上游校验及执行。
+本节描述兼容桥接路径（见「未带 safeguards 的原生直通」最后一段）；原生直通与带安全上下文的请求保留原始思考配置和历史，由上游校验及执行。
 
 请求要求思考时，Agent 以 `MAX_THINKING_TOKENS=<预算>` 启动 CLI，并加 `--thinking-display summarized`，让默认省略思考文本的新模型也给出可读文本；否则保持 `MAX_THINKING_TOKENS=0`。`--thinking-display` 需要较新的 Claude Code（本机 `2.1.311` 已有该参数），旧版本只会在请求要求思考时因参数不识别而失败。
 
@@ -116,7 +130,7 @@ Anthropic 的 usage 不单独报告思考 token，思考计入 `output_tokens`�
 
 ## 停止序列
 
-本节描述未带 `safeguards` 的兼容路径；带安全上下文的请求由上游处理原始停止序列。
+本节描述兼容桥接路径；原生直通与带安全上下文的请求由上游处理原始停止序列。
 
 CLI 没有停止序列选项，`stop_sequences` 由桥接在 CLI 流出的文本上模拟（`messages_stop.go`），最多 16 个、每个 1–256 字节。可能是某个序列开头的文本尾部先暂扣，因此跨增量拆开的序列也能识别，序列本身及其之后的内容从不放出。命中时放出命中位置之前的文本并关闭该文本块，回合以 `stop_reason: "stop_sequence"` 和 `stop_sequence` 结束，与 Messages API 一致；随后停止 CLI，会话不保留。只匹配文本块，思考与工具参数不参与。
 
@@ -130,7 +144,7 @@ Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为
 
 ## 终止原因与故障排查
 
-以下常驻 CLI 和 409 续接说明适用于未带 `safeguards` 的 MCP 路径；带安全上下文的原生请求每轮独立，不使用该续接绑定。
+以下常驻 CLI 和 409 续接说明适用于兼容桥接（MCP）路径；原生直通与带安全上下文的请求每轮独立，不使用该续接绑定。
 
 CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态；成功结果之后的 `prompt_suggestion` 与非初始化 `system` 通知只在本机消费，不进入公开回复，其他尾部事件仍拒绝。完整终止之前的 CLI 失败、缺失输出或非法事件仍明确失败。此修复需要更新并重启 Agent，包含模拟 CLI 子进程的离线回归测试覆盖；尚未验收未带 `safeguards` 的 Opus 5.5 真实工具流程。
 
@@ -138,7 +152,7 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 
-Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude Messages round started` 和 `Claude Messages round finished`，共同携带本地随机 `round_id`、`runtime_id` 与 `message_path`。`native_safeguards` 表示本轮确实进入原生路径，`mcp_bridge` 表示旧兼容路径。结束日志包含 `outcome`（`completed` / `failed` / `canceled`）与 `safeguard_status`：`available`、`unsupported`、`unavailable`、`missing`（未收到对应结果）、`unknown`（未来状态）、`invalid`（结果形状异常）、`mixed`（同轮出现不同状态）；兼容路径为 `not_requested`。只观察已投递结果，不改写判定或将 `available` 等同于工具已获准；不记录提示词、历史、工具参数、工具 ID、判定原因或凭据。客户端设为 `1` 后应结合这两个字段检查实际路径及上游支持状态。新增日志需更新并重启 Agent，Gateway 无需修改。
+Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude Messages round started` 和 `Claude Messages round finished`，共同携带本地随机 `round_id`、`runtime_id` 与 `message_path`。`native_safeguards` 表示本轮进入带安全上下文的原生路径，`native` 表示未带 `safeguards` 的原生直通，`mcp_bridge` 表示兼容桥接。结束日志包含 `outcome`（`completed` / `failed` / `canceled`）与 `safeguard_status`：`available`、`unsupported`、`unavailable`、`missing`（未收到对应结果）、`unknown`（未来状态）、`invalid`（结果形状异常）、`mixed`（同轮出现不同状态）；`native` 与 `mcp_bridge` 为 `not_requested`。只观察已投递结果，不改写判定或将 `available` 等同于工具已获准；不记录提示词、历史、工具参数、工具 ID、判定原因或凭据。客户端设为 `1` 后应结合这两个字段检查实际路径及上游支持状态。新增日志需更新并重启 Agent，Gateway 无需修改。
 
 手动用 `go run` 启动时，日志默认写到终端，不会自动生成部署脚本使用的 `agent.log`。可用 `go run . -config /绝对路径/agent.yaml -log-file /绝对路径/agent.log` 留存日志，再查 `Claude Messages request rejected` 和 `Claude Messages round failed`。对齐日志时使用时间戳自身的 UTC 偏移，例如 Agent 的 `21:03+09:00` 与 Gateway 的 `12:03Z` 是同一时刻。
 
@@ -146,7 +160,7 @@ Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude M
 
 ## 生命周期与限额
 
-以下等待工具、历史恢复、原节点绑定及每回合 64 个 ID 限制适用于未带 `safeguards` 的 MCP 路径。带安全上下文的原生请求共用运行时并发名额和请求/响应大小限制，每轮结束回收 CLI。
+以下等待工具、历史恢复、原节点绑定及每回合 64 个 ID 限制适用于兼容桥接（MCP）路径。原生直通与带安全上下文的请求共用运行时并发名额和请求/响应大小限制，每轮结束回收 CLI。
 
 每个运行时的独立 CLI 会话数由 `max_concurrent` 决定：未配置时 8 个，显式配置最多 32 个（负值即不限并发也按 32），所有 Gateway 副本共用该 Agent 限额。每个会话是一个常驻 CLI 进程，同一账户的会话共用订阅额度，调大前确认内存和额度。等待调用方送回工具结果最多 1 小时，CLI 生成阶段无输出最多 10 分钟（与 CLI 自身的 API 请求超时一致；CLI 每输出一行即重新计时，持续输出的长回合不受限），会话总寿命 24 小时；超时的会话被回收后，其续接按孤立回合从文本记录恢复。名额已满时淘汰等待工具结果最久的空闲会话来开启新会话（它之后的续接同样从文本记录恢复），只有全部名额都在生成时才答复会话已满。与 Messages API 一样，消息、工具、内容块、停止序列、每回合工具调用与并行工具调用的数量都不设上限。原生请求最多 32 MiB（与 Messages API 自身的请求上限一致），CLI 单行最多 256 MiB（仅防范进程异常）；Gateway 侧单次响应最多 64 MiB、续接每回合最多 64 个工具调用。流式事件逐条传递，使用同步背压。
 

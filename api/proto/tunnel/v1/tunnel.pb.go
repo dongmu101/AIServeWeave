@@ -2396,8 +2396,12 @@ type MessagesRequest struct {
 	KeyId        string                 `protobuf:"bytes,3,opt,name=key_id,json=keyId,proto3" json:"key_id,omitempty"`
 	MessagesJson []byte                 `protobuf:"bytes,4,opt,name=messages_json,json=messagesJson,proto3" json:"messages_json,omitempty"`
 	// Native inference protocol version and feature selectors; never arbitrary headers or credentials.
-	ApiVersion    string `protobuf:"bytes,5,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
-	BetaFeatures  string `protobuf:"bytes,6,opt,name=beta_features,json=betaFeatures,proto3" json:"beta_features,omitempty"`
+	ApiVersion   string `protobuf:"bytes,5,opt,name=api_version,json=apiVersion,proto3" json:"api_version,omitempty"`
+	BetaFeatures string `protobuf:"bytes,6,opt,name=beta_features,json=betaFeatures,proto3" json:"beta_features,omitempty"`
+	// native asks for the unchanged document without the compatibility bridge.
+	// A Gateway sets it only for runtimes advertising anthropic_messages_native;
+	// an older Agent ignores it, which is why the Gateway checks first.
+	Native        bool `protobuf:"varint,7,opt,name=native,proto3" json:"native,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -2472,6 +2476,13 @@ func (x *MessagesRequest) GetBetaFeatures() string {
 		return x.BetaFeatures
 	}
 	return ""
+}
+
+func (x *MessagesRequest) GetNative() bool {
+	if x != nil {
+		return x.Native
+	}
+	return false
 }
 
 // MessagesEvent contains exactly one bounded native SSE data document.
@@ -8928,7 +8939,7 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\n" +
 	"TraceEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc6\x01\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xde\x01\n" +
 	"\x0fMessagesRequest\x12\x14\n" +
 	"\x05model\x18\x01 \x01(\tR\x05model\x12\x1b\n" +
 	"\ttenant_id\x18\x02 \x01(\tR\btenantId\x12\x15\n" +
@@ -8936,7 +8947,8 @@ const file_api_proto_tunnel_v1_tunnel_proto_rawDesc = "" +
 	"\rmessages_json\x18\x04 \x01(\fR\fmessagesJson\x12\x1f\n" +
 	"\vapi_version\x18\x05 \x01(\tR\n" +
 	"apiVersion\x12#\n" +
-	"\rbeta_features\x18\x06 \x01(\tR\fbetaFeatures\".\n" +
+	"\rbeta_features\x18\x06 \x01(\tR\fbetaFeatures\x12\x16\n" +
+	"\x06native\x18\a \x01(\bR\x06native\".\n" +
 	"\rMessagesEvent\x12\x1d\n" +
 	"\n" +
 	"event_json\x18\x01 \x01(\fR\teventJson\"\f\n" +

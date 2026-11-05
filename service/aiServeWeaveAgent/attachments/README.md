@@ -2,7 +2,7 @@
 
 本模块只接入 `kind: claude` 的 `/v1/messages` 原生路径，覆盖首轮、完整历史、工具结果及孤立回合恢复；OpenAI Chat/Responses 和其他运行时没有随之开放文件或视频输入。
 
-本模块的转换只用于未带 `safeguards` 的 CLI 兼容路径。带安全上下文的请求保留原始结构，不运行本地附件转换；原生图片、PDF、文本等由上游校验，Office 与本平台 `video` 扩展不在该路径自动转换。需要时调用方应在生成安全上下文之前准备原生内容，不能改写安全上下文已经描述的历史。见 [Claude 原生路径说明](../claudecode/README.md#claude-code-auto-服务端安全检查)。
+本模块的转换用于未带 `safeguards` 的请求：兼容桥接路径如下文所述转换全部附件；原生直通只转换视频与 PDF 以外的 base64 文档，结果作为原生内容块交给上游，原生 PDF、`text` 来源文档与图片原样发送（见 [原生直通](../claudecode/README.md#未带-safeguards-的原生直通)）。带安全上下文的请求保留原始结构，不运行本地附件转换；原生图片、PDF、文本等由上游校验，Office 与本平台 `video` 扩展不在该路径自动转换。需要时调用方应在生成安全上下文之前准备原生内容，不能改写安全上下文已经描述的历史。见 [Claude 原生路径说明](../claudecode/README.md#claude-code-auto-服务端安全检查)。
 
 ## 请求格式
 

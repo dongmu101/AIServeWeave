@@ -156,7 +156,7 @@ func TestSafeguardsSkipsCompatibilityPreparation(t *testing.T) {
 func TestSafeguardsNativeDocument(t *testing.T) {
 	raw := json.RawMessage(`{"model":"fixture","max_tokens":4096,"messages":[{"role":"user","content":[{"type":"text","text":"question","cache_control":{"type":"ephemeral"}}]},{"role":"system","content":"caller environment"}],"system":[{"type":"text","text":"caller attribution","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"Bash","description":"caller Bash","input_schema":{"type":"object"},"defer_loading":false}],"thinking":{"type":"adaptive"},"context_management":{"edits":[]},"safeguards":[{"type":"dangerous_tool_use","classifier_context":{"v":1,"prior_turn_context":{"tool_use_ids":["original-id"]},"text_provenance":{"opaque":"unchanged"}}}]}`)
 	var req messagesRequest
-	if err := decodeMessagesRequest(raw, &req); err != nil || req.validate("fixture") != nil {
+	if err := decodeMessagesRequest(raw, false, &req); err != nil || req.validate("fixture") != nil {
 		t.Fatalf("native guarded document rejected: %v", err)
 	}
 	var want map[string]json.RawMessage
@@ -169,7 +169,7 @@ func TestSafeguardsNativeDocument(t *testing.T) {
 		_ = json.Unmarshal(raw, &doc)
 		doc[key] = "private-control"
 		encoded, _ := json.Marshal(doc)
-		if decodeMessagesRequest(encoded, &req) == nil {
+		if decodeMessagesRequest(encoded, false, &req) == nil {
 			t.Fatalf("non-inference control %s accepted", key)
 		}
 	}

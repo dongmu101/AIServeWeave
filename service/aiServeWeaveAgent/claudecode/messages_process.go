@@ -121,12 +121,23 @@ func (b *messagesBridge) runSession(s *messagesSession) {
 // 映射为 MAX_THINKING_TOKENS 与 --thinking-display summarized；原生回合通过未改写
 // 的 API 文档携带调用方思考配置。
 func (b *messagesBridge) runProcess(s *messagesSession) error {
-	guarded := len(s.request.Safeguards) > 0
-	// Native policy provenance describes the original document. Never convert
-	// its attachments or render its history through the compatibility path.
-	// 原生策略来源对应原始文档，不运行兼容路径的附件转换或历史渲染。
+	native, guarded := s.request.isNative(), len(s.request.Safeguards) > 0
+	// A native round sends the caller's document, never a rendered transcript.
+	// Policy provenance describes a guarded document exactly as sent, so only
+	// an unguarded one has its platform attachments converted (see
+	// nativeMessages).
+	// 原生回合发送调用方的文档，从不发送渲染后的文本记录。策略来源对应带 safeguards
+	// 文档的原样内容，因此只有不带 safeguards 的文档才转换本平台扩展附件（见 nativeMessages）。
 	prompt, structured := "Continue the supplied native Messages request.", false
-	if !guarded {
+	var nativeMessages json.RawMessage
+	if native && !guarded {
+		converted, err := s.nativeMessages(s.ctx)
+		if err != nil {
+			return err
+		}
+		nativeMessages = converted
+	}
+	if !native {
 		messages, err := s.prepareMessages(s.ctx)
 		if err != nil {
 			return err
@@ -152,7 +163,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	go func() { defer close(served); _ = server.Serve(listener) }()
 	defer func() { _ = server.Close(); <-served }()
 	servers := make(map[string]any)
-	if !guarded {
+	if !native {
 		servers["aisw_bridge"] = map[string]any{"type": "http", "url": "http://" + listener.Addr().String() + "/mcp", "headers": map[string]string{"Authorization": "Bearer " + token}}
 	}
 	config := map[string]any{"mcpServers": servers}
@@ -162,7 +173,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		return errProbeSetup
 	}
 	var system string
-	if !guarded {
+	if !native {
 		system, _ = textBlocks(s.request.System)
 	}
 	systemPath := filepath.Join(dir, "system.txt")
@@ -178,7 +189,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	}
 	args := probeArgs(model, configPath)
 	var allowed []string
-	if !guarded {
+	if !native {
 		for i := range s.request.Tools {
 			allowed = append(allowed, "mcp__aisw_bridge__"+bridgeToolName(i))
 		}
@@ -195,16 +206,16 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 				args[i+1] = "auto"
 			}
 		case "--settings":
-			if guarded {
+			if native {
 				args[i+1] = settingsPath
 			}
 		}
 	}
-	if !guarded && s.request.OutputConfig != nil {
+	if !native && s.request.OutputConfig != nil {
 		args = append(args, "--effort", s.request.OutputConfig.Effort)
 	}
 	budget := 0
-	if !guarded {
+	if !native {
 		budget = s.request.thinkingBudget()
 	}
 	if budget > 0 {
@@ -216,7 +227,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
 	cmd.Env = append(slices.Clone(b.cliEnv()), "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
-	if !guarded {
+	if !native {
 		cmd.Env = append(cmd.Env, "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
 	}
 	extra := make(map[string]any)
@@ -229,7 +240,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 			betas = append(betas, beta)
 		}
 	}
-	if guarded {
+	if native {
 		for key, value := range s.request.nativeDocument {
 			extra[key] = value
 		}
@@ -237,12 +248,18 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 			extra["system"] = []any{}
 		}
 		extra["model"], extra["stream"] = model, true
-		extra["safeguards"] = s.request.Safeguards
-		// Preserve tool identity for server rules; no caller tool is registered for local execution.
-		// 保留服务端策略判断所依据的原始工具身份；调用方工具不在本机注册执行。
+		if nativeMessages != nil {
+			extra["messages"] = nativeMessages
+		}
+		// Preserve tool identity for the upstream; no caller tool is registered for local execution.
+		// 为上游保留原始工具身份；调用方工具不在本机注册执行。
 		if _, ok := extra["tools"]; !ok {
 			extra["tools"] = s.request.Tools
 		}
+		delete(extra, "safeguards")
+	}
+	if guarded {
+		extra["safeguards"] = s.request.Safeguards
 		if !slices.Contains(betas, "dangerous-tool-use-2026-09-03") {
 			betas = append(betas, "dangerous-tool-use-2026-09-03")
 		}
@@ -262,7 +279,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 			return errMessages
 		}
 		body := strings.TrimSuffix(encoded.String(), "\n")
-		if guarded {
+		if native {
 			// Load the large inference extension after process start, avoiding exec's environment-size limit.
 			// 由 CLI 启动后加载大型推理扩展，避开 exec 对环境变量大小的限制。
 			settings, err := json.Marshal(map[string]any{"disableAllHooks": true, "autoMemoryEnabled": false, "env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": body}})
@@ -351,13 +368,13 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	var quota *quotaError
 	var rejection error
 	finished, active, blockActive := false, false, false
-	guarded := len(s.request.Safeguards) > 0
-	showThinking := s.request.thinkingBudget() > 0 || (guarded && nativeThinkingEnabled(s.request.Thinking))
+	native := s.request.isNative()
+	showThinking := s.request.thinkingBudget() > 0 || (native && nativeThinkingEnabled(s.request.Thinking))
 	index, publicIndex := 0, 0
 	seenIDs := make(map[string]bool)
 	publicIDs := make(map[string]string)
 	matcher := stopMatcher{sequences: s.request.StopSequences}
-	if guarded {
+	if native {
 		matcher.sequences = nil
 	} // the native provider applies stop_sequences / 原生提供方处理停止序列
 	stopped := "" // the matched stop sequence, once found / 命中的停止序列（命中后设置）
@@ -405,7 +422,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				for _, name := range envelope.Tools {
 					ok := name == "EndConversation"
 					for i := range s.request.Tools {
-						if len(s.request.Safeguards) == 0 && name == "mcp__aisw_bridge__"+bridgeToolName(i) {
+						if !native && name == "mcp__aisw_bridge__"+bridgeToolName(i) {
 							ok = true
 						}
 					}
@@ -415,7 +432,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				}
 			}
 		case "assistant":
-			if guarded && envelope.Error != "" {
+			if native && envelope.Error != "" {
 				rejection = messagesAPIRejection(line, s.request)
 			}
 		case "user", "tool_progress", "tool_use_summary":
@@ -464,7 +481,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_start")
 				}
-				if stopped != "" && event.Block.Type == "tool_use" && len(s.request.Safeguards) == 0 {
+				if stopped != "" && event.Block.Type == "tool_use" && !native {
 					// The API stops before this call; never register it.
 					// API 会在这次调用之前停止；绝不登记它。
 					if err := s.send(stopSequenceDelta(stopped, nil), nil); err != nil {
@@ -477,7 +494,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					found := false
 					for i, t := range s.request.Tools {
 						expected := "mcp__aisw_bridge__" + bridgeToolName(i)
-						if len(s.request.Safeguards) > 0 {
+						if native {
 							expected = t.Name
 						}
 						if current.Name == expected {
@@ -493,39 +510,39 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					}
 					seenIDs[current.ID] = true
 					upstreamID := current.ID
-					if !guarded {
+					if !native {
 						current.ID = "toolu_aisw_" + randomID()
 					}
 					publicIDs[upstreamID] = current.ID
 					if stopped != "" {
 						publicIDs[upstreamID] = "" // reviewed upstream, hidden by the stop sequence / 上游已检查，但被停止序列隐藏
 					}
-					if !guarded {
+					if !native {
 						var obj map[string]json.RawMessage
 						_ = json.Unmarshal(envelope.Event, &obj)
 						obj["content_block"], _ = json.Marshal(current)
 						envelope.Event, _ = json.Marshal(obj)
 					}
-				} else if !guarded && current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
+				} else if !native && current.Type != "text" && current.Type != "thinking" && current.Type != "redacted_thinking" {
 					return nil, protocolError("unsupported_block")
 				}
 			case "content_block_delta":
 				if !active || !blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_delta")
 				}
-				if (current.Type == "tool_use" || (guarded && current.Type == "server_tool_use")) && event.Delta.Type == "input_json_delta" {
+				if (current.Type == "tool_use" || (native && current.Type == "server_tool_use")) && event.Delta.Type == "input_json_delta" {
 					arguments += event.Delta.PartialJSON
 					if len(arguments) > maxEventBytes {
 						return nil, errCapacity
 					}
-				} else if !(current.Type == "text" && (event.Delta.Type == "text_delta" || (guarded && event.Delta.Type == "citations_delta"))) && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) && !(guarded && current.Type == "compaction" && event.Delta.Type == "compaction_delta") {
+				} else if !(current.Type == "text" && (event.Delta.Type == "text_delta" || (native && event.Delta.Type == "citations_delta"))) && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) && !(native && current.Type == "compaction" && event.Delta.Type == "compaction_delta") {
 					return nil, protocolError("unsupported_block_delta")
 				}
 			case "content_block_stop":
 				if !active || !blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_stop")
 				}
-				if current.Type == "tool_use" && stopped == "" && !guarded {
+				if current.Type == "tool_use" && stopped == "" && !native {
 					if arguments != "" {
 						current.Input = json.RawMessage(arguments)
 					}
@@ -538,7 +555,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						s.mu.Unlock()
 						return nil, protocolError("duplicate_pending_tool")
 					}
-					if len(s.request.Safeguards) == 0 {
+					if !native {
 						for _, pending := range s.pending {
 							if !pending.delivered && pending.block.Name == current.Name && canonical(normalizedToolInput(pending.block.Name, pending.block.Input, s.request.Tools)) == canonical(normalizedToolInput(current.Name, current.Input, s.request.Tools)) {
 								s.mu.Unlock()
@@ -557,7 +574,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					return nil, protocolError("unexpected_message_delta")
 				}
 				var results json.RawMessage
-				if !guarded {
+				if !native {
 					mapped, mappedResults, err := remapSafeguardDelta(envelope.Event, publicIDs)
 					if err != nil {
 						return nil, protocolError("invalid_safeguard_results")
@@ -577,7 +594,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				switch stopReason {
 				case "tool_use", "end_turn", "max_tokens", "stop_sequence", "refusal", "model_context_window_exceeded":
 				case "pause_turn", "compaction":
-					if !guarded {
+					if !native {
 						return nil, protocolError("unsupported_stop_reason")
 					}
 				default:
@@ -595,7 +612,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				// 工具 ID 只需在回合内唯一。
 				clear(seenIDs)
 				clear(publicIDs)
-				if stopReason == "tool_use" && len(s.request.Safeguards) > 0 {
+				if stopReason == "tool_use" && native {
 					return append(json.RawMessage(nil), envelope.Event...), errTerminalStop
 				}
 				if stopReason != "tool_use" {

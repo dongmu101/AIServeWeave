@@ -52,6 +52,27 @@ func nativeResultIDs(req anthropicMessagesRequest) []string {
 	return ids
 }
 
+// nativePassthrough reports whether an unguarded request is sent unchanged
+// (runtime.MessagesRequest.Native) rather than through the compatibility
+// bridge. Every node serving the model must not be required to accept it:
+// MessagesStart only offers the request to nodes that do, so it is enough
+// that one exists. A round answering a bridge tool call stays on the bridge,
+// because only the CLI that made that call can take its results; the next
+// question in the same conversation is native.
+//
+// nativePassthrough 判断不带 safeguards 的请求是否原样发送（runtime.MessagesRequest.Native），
+// 而不经过兼容桥接。并不要求服务该模型的每个节点都接受：MessagesStart 只把请求交给接受的
+// 节点，所以存在一个即可。答复桥接工具调用的回合仍走桥接，因为只有发起调用的 CLI 能接收
+// 其结果；同一对话的下一个提问则走原生。
+func (h *handlers) nativePassthrough(ctx context.Context, req anthropicMessagesRequest) bool {
+	for _, id := range nativeResultIDs(req) {
+		if strings.HasPrefix(id, "toolu_aisw_") {
+			return false
+		}
+	}
+	return len(h.sched.MessagesNativeCandidates(ctx, req.Model)) > 0
+}
+
 func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesRequest) bool {
 	if len(req.Safeguards) > 0 {
 		return true
@@ -64,7 +85,16 @@ func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesR
 	return len(h.sched.MessagesCandidates(ctx, req.Model)) > 0
 }
 
-// nativeMessages preserves native block order and authenticates every
+// nativeMessages forwards the document unchanged when nativePassthrough
+// allows, exactly as for a safeguarded one: the original thinking, cache
+// markers, context_management and tools reach the upstream, and every round
+// is stateless. Otherwise it falls back to the compatibility bridge below.
+//
+// nativeMessages 在 nativePassthrough 允许时原样转发文档，与带 safeguards 的请求相同：
+// 原始思考、缓存标记、context_management 与工具都交给上游，每一回合都无状态。否则回退
+// 到下面的兼容桥接。
+//
+// On the bridge, nativeMessages preserves native block order and authenticates every
 // continuation. A client "thinking" object is read as a reasoning hint and
 // rewritten by nativeThinking into the one form the Claude CLI bridge
 // accepts, so adaptive thinking or a budget that does not fit max_tokens is
@@ -100,7 +130,11 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 		return
 	}
 	if len(req.Safeguards) > 0 {
-		h.nativeMessagesOutput(w, r, req, raw, start, nil)
+		h.nativeMessagesOutput(w, r, req, raw, start, nil, false)
+		return
+	}
+	if h.nativePassthrough(r.Context(), req) {
+		h.nativeMessagesOutput(w, r, req, raw, start, nil, true)
 		return
 	}
 	if len(req.Thinking) > 0 {
@@ -121,7 +155,7 @@ func (h *handlers) nativeMessages(w http.ResponseWriter, r *http.Request, req an
 		return
 	}
 	raw, _ = json.Marshal(document)
-	h.nativeMessagesOutput(w, r, req, raw, start, nil)
+	h.nativeMessagesOutput(w, r, req, raw, start, nil, false)
 }
 
 // nativeThinking maps a reasoning hint onto the Messages "thinking" object
@@ -166,9 +200,13 @@ type nativeOutput interface {
 	endpoints() (usage, metric string)
 }
 
-// nativeMessagesOutput shares ownership, affinity and limits between public protocols.
-// nativeMessagesOutput 在不同公开协议之间共用归属校验、节点绑定和容量限制。
-func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time, out nativeOutput) {
+// nativeMessagesOutput shares ownership, affinity and limits between public
+// protocols. passthrough marks an unguarded document sent unchanged; it and a
+// safeguarded one are both stateless and keep the upstream's own blocks.
+//
+// nativeMessagesOutput 在不同公开协议之间共用归属校验、节点绑定和容量限制。passthrough
+// 表示原样发送的不带 safeguards 的文档；它与带 safeguards 的文档都无状态，并保留上游自己的内容块。
+func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time, out nativeOutput, passthrough bool) {
 	started := false
 	fail := func(status int, errType, code, message string) {
 		if out != nil {
@@ -181,8 +219,8 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		}
 	}
 	ids := nativeResultIDs(req)
-	guarded := len(req.Safeguards) > 0
-	if guarded {
+	unchanged := len(req.Safeguards) > 0 || passthrough
+	if unchanged {
 		ids = nil
 	} // no live CLI consumes these results; this is a stateless native request / 无存活 CLI 接收结果，按无状态原生请求处理
 	continuationUnavailable := func() {
@@ -205,7 +243,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		fail(401, "authentication_error", "authentication_error", "native Messages requires authenticated API keys")
 		return
 	}
-	if h.messagesSessions == nil && !guarded {
+	if h.messagesSessions == nil && !unchanged {
 		fail(503, "api_error", "session_unavailable", "native Messages requires shared Redis session coordination")
 		return
 	}
@@ -214,7 +252,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 	native := runtime.MessagesRequest{Model: req.Model, TenantID: identity.TenantID, KeyID: identity.KeyID, JSON: raw,
-		APIVersion: r.Header.Get("Anthropic-Version"), BetaFeatures: strings.Join(r.Header.Values("Anthropic-Beta"), ",")}
+		APIVersion: r.Header.Get("Anthropic-Version"), BetaFeatures: strings.Join(r.Header.Values("Anthropic-Beta"), ","), Native: passthrough}
 	if err := native.ValidateProtocol(); err != nil {
 		fail(400, "invalid_request_error", "invalid_request_error", err.Error())
 		return
@@ -397,7 +435,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			content = append(content, event.Block)
-			if guarded {
+			if unchanged {
 				var raw struct {
 					Block map[string]json.RawMessage `json:"content_block"`
 				}
@@ -412,11 +450,11 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				protocolError("invalid native Messages block index")
 				return
 			}
-			if guarded && runtime.MergeMessagesCitation(originalContent[event.Index], item.JSON) != nil {
+			if unchanged && runtime.MergeMessagesCitation(originalContent[event.Index], item.JSON) != nil {
 				protocolError("invalid native Messages citation")
 				return
 			}
-			if guarded && runtime.MergeMessagesCompaction(originalContent[event.Index], item.JSON) != nil {
+			if unchanged && runtime.MergeMessagesCompaction(originalContent[event.Index], item.JSON) != nil {
 				protocolError("invalid native Messages compaction")
 				return
 			}
@@ -437,7 +475,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		case "content_block_stop":
 		case "message_delta":
 			response["stop_reason"] = event.Delta.StopReason
-			if guarded && runtime.MergeMessagesResponseDelta(response, item.JSON) != nil {
+			if unchanged && runtime.MergeMessagesResponseDelta(response, item.JSON) != nil {
 				protocolError("invalid native Messages delta")
 				return
 			}
@@ -460,7 +498,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				usage.CompletionTokens = int(n)
 			}
 			usage.TotalTokens = usage.PromptTokens + usage.CompletionTokens
-			if guarded {
+			if unchanged {
 				usage, err = nativeMessagesBilledUsage(prior)
 				if err != nil {
 					protocolError("invalid native Messages usage")
@@ -476,7 +514,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 					}
 				}
 			}
-			if len(calls) > 0 && !guarded {
+			if len(calls) > 0 && !unchanged {
 				record.IDs = calls
 				if h.messagesSessions.Publish(r.Context(), record) != nil {
 					fail(503, "api_error", "session_unavailable", "Messages continuation storage unavailable")
@@ -485,7 +523,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 			stopped = true
 			response["content"] = content
-			if guarded {
+			if unchanged {
 				for i, block := range content {
 					data, _ := json.Marshal(block)
 					var accumulated map[string]json.RawMessage

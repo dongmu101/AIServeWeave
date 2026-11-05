@@ -86,7 +86,7 @@ func (h *handlers) nativeChat(w http.ResponseWriter, r *http.Request, req chatCo
 	}
 	document, _ := json.Marshal(native)
 	output := &nativeChatOutput{w: w, model: req.Model, created: start.Unix(), toolIndexes: make(map[int]int), toolArguments: make(map[int]bool), includeUsage: req.StreamOptions != nil && req.StreamOptions.IncludeUsage}
-	h.nativeMessagesOutput(w, r, native, document, start, output)
+	h.nativeMessagesOutput(w, r, native, document, start, output, false)
 }
 
 // toNativeMessages keeps active tool histories exact and folds completed chat

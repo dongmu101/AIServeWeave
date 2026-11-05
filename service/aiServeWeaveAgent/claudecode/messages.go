@@ -67,18 +67,22 @@ type messagesRequest struct {
 	apiVersion     string
 	betaFeatures   string
 	nativeDocument map[string]json.RawMessage
-	Model          string              `json:"model"`
-	MaxTokens      int                 `json:"max_tokens"`
-	Stream         bool                `json:"stream,omitempty"`
-	System         json.RawMessage     `json:"system,omitempty"`
-	Messages       []bridgeMessage     `json:"messages"`
-	Tools          []bridgeTool        `json:"tools,omitempty"`
-	ToolChoice     json.RawMessage     `json:"tool_choice,omitempty"`
-	Metadata       json.RawMessage     `json:"metadata,omitempty"`
-	Thinking       json.RawMessage     `json:"thinking,omitempty"`
-	OutputConfig   *bridgeOutputConfig `json:"output_config,omitempty"`
-	Temperature    *float64            `json:"temperature,omitempty"`
-	Safeguards     []json.RawMessage   `json:"safeguards,omitempty"`
+	// native is set for a document forwarded unchanged (see
+	// decodeMessagesRequest): safeguarded, or marked native by the Gateway.
+	// native 表示原样转发的文档（见 decodeMessagesRequest）：带 safeguards，或由 Gateway 标记为原生。
+	native       bool
+	Model        string              `json:"model"`
+	MaxTokens    int                 `json:"max_tokens"`
+	Stream       bool                `json:"stream,omitempty"`
+	System       json.RawMessage     `json:"system,omitempty"`
+	Messages     []bridgeMessage     `json:"messages"`
+	Tools        []bridgeTool        `json:"tools,omitempty"`
+	ToolChoice   json.RawMessage     `json:"tool_choice,omitempty"`
+	Metadata     json.RawMessage     `json:"metadata,omitempty"`
+	Thinking     json.RawMessage     `json:"thinking,omitempty"`
+	OutputConfig *bridgeOutputConfig `json:"output_config,omitempty"`
+	Temperature  *float64            `json:"temperature,omitempty"`
+	Safeguards   []json.RawMessage   `json:"safeguards,omitempty"`
 	// StopSequences end a round at the first match, emulated over the CLI's
 	// text output (see stopMatcher).
 	// StopSequences 在第一处命中时结束回合，基于 CLI 的文本输出模拟（见 stopMatcher）。
@@ -182,6 +186,11 @@ func (r messagesRequest) thinkingBudget() int {
 //
 // 与 Messages API 一样，消息、工具、内容块与停止序列的数量都不设上限，只受请求大小约束。
 // 每个停止序列必须非空。
+// isNative reports whether the request is forwarded unchanged rather than
+// through the compatibility bridge: safeguarded, or marked native.
+// isNative 判断请求是否原样转发而不经过兼容桥接：带 safeguards，或被标记为原生。
+func (r messagesRequest) isNative() bool { return r.native || len(r.Safeguards) > 0 }
+
 func (r messagesRequest) validate(model string) error {
 	if r.Model != model || r.MaxTokens < 1 || len(r.Messages) == 0 {
 		return errMessages
@@ -189,7 +198,7 @@ func (r messagesRequest) validate(model string) error {
 	if validateSafeguards(r.Safeguards) != nil {
 		return errMessages
 	}
-	if len(r.Safeguards) > 0 {
+	if r.isNative() {
 		return nil // the native provider validates the unchanged inference document / 原生提供方校验未改写的推理文档
 	}
 	if _, err := textBlocks(r.System); err != nil {
@@ -499,7 +508,7 @@ func (b *messagesBridge) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var req messagesRequest
-	if decodeMessagesRequest(data, &req) != nil || req.validate(b.model) != nil {
+	if decodeMessagesRequest(data, false, &req) != nil || req.validate(b.model) != nil {
 		messagesError(w, 400, "unsupported Messages shape or extension: thinking must be disabled or enabled with budget_tokens (the Gateway rewrites adaptive thinking), and prompt caching and output formats are not supported")
 		return
 	}
@@ -656,7 +665,7 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	results := make(map[string]toolResult)
 	for _, block := range last {
 		if block.Type == "tool_result" {
-			if len(req.Safeguards) > 0 {
+			if req.isNative() {
 				continue
 			}
 			if _, exists := results[block.ToolUseID]; exists {
@@ -754,11 +763,11 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	// 公开 CLI 输入无法保真注入 assistant 历史，因此新会话必须以一条用户消息结尾：
 	// 提问，或恢复孤立回合的工具结果。此前的回合只以 sessionPrompt 渲染的带角色
 	// 文本记录交给 CLI。
-	if len(req.Safeguards) == 0 && req.Messages[len(req.Messages)-1].Role != "user" {
+	if !req.isNative() && req.Messages[len(req.Messages)-1].Role != "user" {
 		return nil, rejectAdmission(errMessages, "last_message_not_user")
 	}
 	for _, block := range last {
-		if len(req.Safeguards) > 0 {
+		if req.isNative() {
 			break
 		}
 		if block.Type != "text" && block.Type != "image" && block.Type != "document" && block.Type != "video" && block.Type != "tool_result" {
@@ -967,7 +976,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					return errCLIProtocol
 				}
 				content = append(content, ev.Block)
-				if len(s.request.Safeguards) > 0 {
+				if s.request.isNative() {
 					var raw struct {
 						Block map[string]json.RawMessage `json:"content_block"`
 					}
@@ -978,10 +987,10 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				if ev.Index < 0 || ev.Index >= len(content) {
 					return errCLIProtocol
 				}
-				if len(s.request.Safeguards) > 0 && runtime.MergeMessagesCitation(originalContent[ev.Index], item.data) != nil {
+				if s.request.isNative() && runtime.MergeMessagesCitation(originalContent[ev.Index], item.data) != nil {
 					return errCLIProtocol
 				}
-				if len(s.request.Safeguards) > 0 && runtime.MergeMessagesCompaction(originalContent[ev.Index], item.data) != nil {
+				if s.request.isNative() && runtime.MergeMessagesCompaction(originalContent[ev.Index], item.data) != nil {
 					return errCLIProtocol
 				}
 				switch ev.Delta.Type {
@@ -1000,7 +1009,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 				}
 			case "message_delta":
 				response["stop_reason"] = ev.Delta.StopReason
-				if len(s.request.Safeguards) > 0 && runtime.MergeMessagesResponseDelta(response, item.data) != nil {
+				if s.request.isNative() && runtime.MergeMessagesResponseDelta(response, item.data) != nil {
 					return errCLIProtocol
 				}
 				if len(ev.Delta.Safeguards) > 0 {
@@ -1022,7 +1031,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					response["usage"] = prior
 				}
 			case "message_stop":
-				waiting := response["stop_reason"] == "tool_use" && len(s.request.Safeguards) == 0
+				waiting := response["stop_reason"] == "tool_use" && !s.request.isNative()
 				s.mu.Lock()
 				s.waiting = waiting
 				if waiting {
@@ -1053,7 +1062,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 					s.touch()
 				}
 				response["content"] = content
-				if len(s.request.Safeguards) > 0 {
+				if s.request.isNative() {
 					response["content"] = preserveMessagesContent(originalContent, content)
 				}
 				if !stream {

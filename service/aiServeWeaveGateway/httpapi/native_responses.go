@@ -51,7 +51,7 @@ func (h *handlers) nativeResponses(w http.ResponseWriter, r *http.Request, req r
 	}
 	document, _ := json.Marshal(native)
 	output := &nativeResponsesOutput{w: w, obj: req.render(newResponseID(), req.Model, h.clock.Now()), toolset: toolset, calls: make(map[int]int)}
-	h.nativeMessagesOutput(w, r, native, document, start, output)
+	h.nativeMessagesOutput(w, r, native, document, start, output, false)
 }
 
 // toNativeChat refuses in Responses terms what Claude CLI cannot honour, then rebuilds the Chat form.

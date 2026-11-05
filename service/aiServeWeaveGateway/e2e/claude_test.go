@@ -224,10 +224,23 @@ func claudeProcessFixture() {
 	fmt.Println(`{"type":"result","subtype":"success"}`)
 }
 
+// bridgeOnly withholds anthropic_messages_native, the operator override that
+// keeps a node's unguarded requests on the compatibility bridge these tests
+// exercise.
+//
+// bridgeOnly 撤销 anthropic_messages_native，即让节点不带 safeguards 的请求继续走本组
+// 测试所覆盖的兼容桥接的运维覆盖项。
+func bridgeOnly(factory runtime.Factory) runtime.Factory {
+	return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
+		cfg.CapabilityOverrides = map[runtime.Capability]runtime.SupportLevel{runtime.CapabilityMessagesNative: runtime.SupportUnsupported}
+		return factory(cfg, deps)
+	}
+}
+
 // TestClaudeLongToolContinuation keeps per-round ID sets across real mTLS tunnels and MCP callbacks.
 // TestClaudeLongToolContinuation 经真实 mTLS 隧道与 MCP 回调验证连续工具回合的独立集合。
 func TestClaudeLongToolContinuation(t *testing.T) {
-	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactory(os.Args[0]))
+	f := newFleetWithBackend(t, 2, runtime.KindClaude, bridgeOnly(claudecode.NewFactory(os.Args[0])))
 	f.awaitReady(f.replicas...)
 	store := &fixtureMessagesStore{rounds: make(map[string]messagesession.Record)}
 	var servers []*httptest.Server
@@ -336,7 +349,7 @@ func (s *fixtureMessagesStore) Claim(_ context.Context, ids []string, tenant, ke
 // TestClaudeMessagesThroughTunnel verifies native tools across two authenticated mTLS replicas offline.
 // TestClaudeMessagesThroughTunnel 离线验证原生工具跨两个已认证 mTLS 副本续接。
 func TestClaudeMessagesThroughTunnel(t *testing.T) {
-	f := newFleetWithBackend(t, 2, runtime.KindClaude, claudecode.NewFactoryWithAttachments(os.Args[0], attachmentFixtureProcessor(t)))
+	f := newFleetWithBackend(t, 2, runtime.KindClaude, bridgeOnly(claudecode.NewFactoryWithAttachments(os.Args[0], attachmentFixtureProcessor(t))))
 	f.awaitReady(f.replicas...)
 	store := &fixtureMessagesStore{rounds: make(map[string]messagesession.Record)}
 	var servers []*httptest.Server

@@ -10,7 +10,12 @@ type Capability string
 const (
 	// CapabilityMessages gates the native Anthropic Messages interface.
 	// CapabilityMessages 为原生 Anthropic Messages 接口提供能力门禁。
-	CapabilityMessages          Capability = "anthropic_messages"
+	CapabilityMessages Capability = "anthropic_messages"
+	// CapabilityMessagesNative marks a Messages runtime that accepts
+	// MessagesRequest.Native: the unchanged document, forwarded statelessly.
+	// CapabilityMessagesNative 表示该 Messages 运行时接受 MessagesRequest.Native，
+	// 即原样、无状态转发的文档。
+	CapabilityMessagesNative    Capability = "anthropic_messages_native"
 	CapabilityChat              Capability = "chat"
 	CapabilityChatStream        Capability = "chat_stream"
 	CapabilityCompletions       Capability = "completions"

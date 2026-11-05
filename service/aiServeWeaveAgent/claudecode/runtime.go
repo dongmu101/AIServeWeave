@@ -152,8 +152,22 @@ func (r *Runtime) inspect(parent context.Context, discover bool) ([]string, erro
 	return models, nil
 }
 
-func claudeCapabilities() runtime.CapabilitySet {
-	return runtime.CapabilitySet{runtime.CapabilityMessages: {Capability: runtime.CapabilityMessages, Level: runtime.SupportSupported, Source: runtime.SourceRuntimeProfile, Detail: "local Claude Code Messages sessions"}}
+// claudeCapabilities is the runtime profile with cfg.CapabilityOverrides
+// applied on top. Overriding anthropic_messages_native to unsupported keeps
+// this node's unguarded requests on the compatibility bridge.
+//
+// claudeCapabilities 是运行时自身声明的能力，再叠加 cfg.CapabilityOverrides。把
+// anthropic_messages_native 覆盖为 unsupported 后，本节点不带 safeguards 的请求继续走兼容桥接。
+func claudeCapabilities(cfg runtime.Config) runtime.CapabilitySet {
+	profile := runtime.CapabilitySet{
+		runtime.CapabilityMessages:       {Capability: runtime.CapabilityMessages, Level: runtime.SupportSupported, Source: runtime.SourceRuntimeProfile, Detail: "local Claude Code Messages sessions"},
+		runtime.CapabilityMessagesNative: {Capability: runtime.CapabilityMessagesNative, Level: runtime.SupportSupported, Source: runtime.SourceRuntimeProfile, Detail: "unchanged Messages documents sent through the local Claude Code login"},
+	}
+	overrides := make(runtime.CapabilitySet, len(cfg.CapabilityOverrides))
+	for capability, level := range cfg.CapabilityOverrides {
+		overrides[capability] = runtime.CapabilityEvidence{Capability: capability, Level: level, Source: runtime.SourceConfigOverride, Detail: "declared by runtime configuration"}
+	}
+	return runtime.Merge(profile, overrides)
 }
 
 // Probe verifies native subscription login without spending model quota.
@@ -191,7 +205,7 @@ func (r *Runtime) Discover(ctx context.Context) (runtime.Discovery, error) {
 		r.models[id] = struct{}{}
 	}
 	r.modelsMu.Unlock()
-	caps := claudeCapabilities()
+	caps := claudeCapabilities(r.cfg)
 	list := make([]runtime.Model, 0, len(models))
 	for i, id := range models {
 		list = append(list, runtime.Model{ID: id, DisplayName: id, DisplayOrder: uint32(i + 1), Capabilities: caps})
@@ -227,7 +241,7 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		return nil, r.rejectMessages(runtime.ErrorInvalidConfig, "request_too_large", nil)
 	}
 	var parsed messagesRequest
-	if decodeMessagesRequest(req.JSON, &parsed) != nil {
+	if decodeMessagesRequest(req.JSON, req.Native, &parsed) != nil {
 		return nil, r.rejectMessages(runtime.ErrorCapability, "unsupported_request_shape", nil)
 	}
 	parsed.Model = req.Model
@@ -276,7 +290,7 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		defer stopRoot()
 		defer close(out.done)
 		defer close(out.items)
-		diagnostics := newMessagesRoundDiagnostics(len(parsed.Safeguards) > 0)
+		diagnostics := newMessagesRoundDiagnostics(parsed.isNative(), len(parsed.Safeguards) > 0)
 		roundID := randomID()
 		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path)
 		writer := &nativeWriter{stream: out, header: make(http.Header), status: 200, diagnostics: diagnostics}
@@ -292,7 +306,7 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 			"message_path", diagnostics.path, "outcome", outcome, "safeguard_status", diagnostics.status)
 		s.mu.Lock()
 		s.busy = false
-		keep := err == nil && s.waiting && len(s.request.Safeguards) == 0
+		keep := err == nil && s.waiting && !s.request.isNative()
 		s.mu.Unlock()
 		if !keep {
 			s.cancel()

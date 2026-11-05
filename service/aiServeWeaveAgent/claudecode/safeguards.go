@@ -7,16 +7,22 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
-// decodeMessagesRequest keeps guarded inference structured so opaque policy provenance still matches it.
-// decodeMessagesRequest 保留受检查推理的原始结构，使不透明策略来源证明仍与其对应。
-func decodeMessagesRequest(raw json.RawMessage, out *messagesRequest) error {
+// decodeMessagesRequest keeps native inference structured: a guarded document
+// so opaque policy provenance still matches it, and a document the Gateway
+// marked native so the upstream sees what the caller sent. Anything else goes
+// through the compatibility bridge's strict decoder.
+//
+// decodeMessagesRequest 保留原生推理的原始结构：带 safeguards 的文档使不透明策略来源证明
+// 仍与其对应，Gateway 标记为原生的文档使上游看到调用方发出的内容。其余文档经兼容桥接的严格
+// 解码器处理。
+func decodeMessagesRequest(raw json.RawMessage, native bool, out *messagesRequest) error {
 	var probe struct {
 		Safeguards []json.RawMessage `json:"safeguards"`
 	}
 	if json.Unmarshal(raw, &probe) != nil {
 		return errMessages
 	}
-	if len(probe.Safeguards) == 0 {
+	if len(probe.Safeguards) == 0 && !native {
 		return decodeStrict(raw, out)
 	}
 	var doc map[string]json.RawMessage
@@ -34,6 +40,7 @@ func decodeMessagesRequest(raw json.RawMessage, out *messagesRequest) error {
 		return errMessages
 	}
 	out.nativeDocument = doc
+	out.native = true
 	return nil
 }
 
