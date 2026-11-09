@@ -44,11 +44,11 @@ type BillingConfig struct {
 }
 
 // WithBilling turns billing on. Without it the Service charges nothing,
-// never refuses a key for its balance, and every billing method answers
-// ErrNotFound, matching a deployment that mounts no billing route.
+// never refuses a key for its balance. Unless WithAccountSales is set,
+// billing methods answer ErrNotFound, matching an unconfigured deployment.
 //
 // WithBilling 开启计费。没有它时 Service 不扣任何费用，从不因余额拒绝 key，每个计费
-// 方法都回答 ErrNotFound，与不挂载任何计费路由的部署一致。
+// 方法在未设置 WithAccountSales 时都回答 ErrNotFound。
 func WithBilling(cfg BillingConfig) Option {
 	return func(s *Service) {
 		if cfg.Provider != nil {
@@ -132,12 +132,15 @@ func (s *Service) tenantBilling(ctx context.Context, tenantID string) (model.Ten
 // BillingOverview 返回 actor 所属租户的计费模式、余额与上架的充值包。任何角色都可读，
 // 理由同 CurrentTenant。
 func (s *Service) BillingOverview(ctx context.Context, actor Actor) (BillingOverview, error) {
-	if !s.billingEnabled() {
+	if !s.accountsEnabled() {
 		return BillingOverview{}, ErrNotFound
 	}
 	row, err := s.tenantBilling(ctx, actor.TenantID)
 	if err != nil {
 		return BillingOverview{}, err
+	}
+	if !s.billingEnabled() {
+		return BillingOverview{Mode: row.Mode, BalanceMicro: row.BalanceMicro, Packages: []model.CreditPackage{}}, nil
 	}
 	packages, err := s.store.ListCreditPackages(ctx, true)
 	if err != nil {
@@ -285,7 +288,7 @@ func (s *Service) BillingPortalLink(ctx context.Context, actor Actor) (string, e
 // ListBillingLedger 读取账目。租户 actor 只能看到自己的租户；平台 actor 可看到所有
 // 租户，由 filter 收窄。
 func (s *Service) ListBillingLedger(ctx context.Context, actor Actor, query store.ListQuery, filter store.CreditLedgerFilter) (store.Page[model.CreditLedgerEntry], error) {
-	if !s.billingEnabled() {
+	if !s.accountsEnabled() {
 		return store.Page[model.CreditLedgerEntry]{}, ErrNotFound
 	}
 	if !isPlatformActor(actor) {
@@ -299,7 +302,7 @@ func (s *Service) ListBillingLedger(ctx context.Context, actor Actor, query stor
 //
 // ListBillingOrders 读取结账订单，范围限定同 ListBillingLedger。
 func (s *Service) ListBillingOrders(ctx context.Context, actor Actor, query store.ListQuery, filter store.CheckoutOrderFilter) (store.Page[model.CheckoutOrder], error) {
-	if !s.billingEnabled() {
+	if !s.accountsEnabled() {
 		return store.Page[model.CheckoutOrder]{}, ErrNotFound
 	}
 	if !isPlatformActor(actor) {
@@ -552,7 +555,7 @@ func (s *Service) DeleteModelPrice(ctx context.Context, actor Actor, alias strin
 //
 // ListBillingTenants 分页读取租户及其计费状态。
 func (s *Service) ListBillingTenants(ctx context.Context, actor Actor, query store.ListQuery, filter store.TenantFilter) (store.Page[TenantBillingView], error) {
-	if err := s.requireBillingOperator(actor); err != nil {
+	if err := s.requireAccountOperator(actor); err != nil {
 		return store.Page[TenantBillingView]{}, err
 	}
 	tenants, err := s.ListTenants(ctx, actor, query, filter)
@@ -584,7 +587,7 @@ func (s *Service) ListBillingTenants(ctx context.Context, actor Actor, query sto
 // SetTenantBillingMode 设置 prepaid、exempt 或 account_monthly。把一个没有余额的租户切到
 // prepaid，会立即开始拒绝它的流量。
 func (s *Service) SetTenantBillingMode(ctx context.Context, actor Actor, tenantID, mode string) error {
-	if err := s.requireBillingOperator(actor); err != nil {
+	if err := s.requireAccountOperator(actor); err != nil {
 		return err
 	}
 	if mode != model.BillingModePrepaid && mode != model.BillingModeExempt && mode != model.BillingModeAccountMonthly {
@@ -610,7 +613,7 @@ func (s *Service) SetTenantBillingMode(ctx context.Context, actor Actor, tenantI
 // AdjustTenantCredit 把 amountMicro（为负则扣减）记入租户余额，以 reason 作为账目
 // 引用。
 func (s *Service) AdjustTenantCredit(ctx context.Context, actor Actor, tenantID string, amountMicro int64, reason string) (model.CreditLedgerEntry, error) {
-	if err := s.requireBillingOperator(actor); err != nil {
+	if err := s.requireAccountOperator(actor); err != nil {
 		return model.CreditLedgerEntry{}, err
 	}
 	reason = strings.TrimSpace(reason)

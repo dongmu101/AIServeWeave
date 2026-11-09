@@ -2,6 +2,32 @@ import { test, expect, BILLING_OVERVIEW } from "./fixtures.ts";
 
 const CHECKOUT_URL = "https://checkout.example.invalid/session/p10";
 
+test("account editor selects actual Claude Code and Codex accounts reported by an Agent", async ({ page }) => {
+  const at = "2026-11-09T00:00:00Z";
+  await page.route("**/api/operator/operator/v1/nodes", route => route.fulfill({ json: {
+    collected_at: at, partial: false, replicas: [], nodes: [{ node_id: "agent-one", live: true, maintenance: false, observed_at: at, labels: {}, runtimes: [
+      { id: "claude-a", kind: "claude", state: "healthy", version: "test", models: [] },
+      { id: "codex-a", kind: "codex", state: "healthy", version: "test", models: [] },
+      { id: "ollama-a", kind: "ollama", state: "healthy", version: "test", models: [] },
+    ] }],
+  } }));
+  await page.goto("/operator/billing");
+  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("button", { name: "添加账号", exact: true }).click();
+  await page.getByRole("combobox", { name: "选择 Agent", exact: true }).selectOption("agent-one");
+  const accounts = page.getByRole("combobox", { name: "选择 Claude Code / Codex 账号", exact: true });
+  await expect(accounts.getByRole("option", { name: "Claude Code · claude-a", exact: true })).toHaveCount(1);
+  await expect(accounts.getByRole("option", { name: "Codex · codex-a", exact: true })).toHaveCount(1);
+  await expect(accounts.getByRole("option").filter({ hasText: "ollama" })).toHaveCount(0);
+  await accounts.selectOption("codex-a");
+  await expect(page.getByLabel("账号名称", { exact: true })).toHaveValue("Codex · codex-a");
+  await accounts.selectOption("claude-a");
+  await expect(page.getByLabel("账号名称", { exact: true })).toHaveValue("Claude Code · claude-a");
+  await page.getByRole("button", { name: "刷新", exact: true }).click();
+  await expect(page.getByRole("combobox", { name: "选择 Agent", exact: true })).toHaveValue("");
+  await expect(accounts).toBeDisabled();
+});
+
 test("monthly accounts buy and renew with one stable purchase intent", async ({ page }) => {
   const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_micro: 5_000_000, active: true, owned: false };
   let purchased = false;
@@ -40,12 +66,17 @@ test("operators list individual accounts and preserve their runtime identity whe
     writes.push(route.request().postDataJSON());
     await route.fulfill({ status: 201, json: account });
   });
+  await page.route("**/api/operator/operator/v1/nodes", route => route.fulfill({ json: {
+    collected_at: "2026-11-09T00:00:00Z", partial: false, replicas: [], nodes: [{ node_id: "agent-a", live: true, maintenance: false, observed_at: "2026-11-09T00:00:00Z", runtimes: [
+      { id: "claude-a", kind: "claude", state: "healthy", version: "test", models: [] },
+    ] }],
+  } }));
   await page.goto("/operator/billing");
   await page.getByRole("tab", { name: "账号包月", exact: true }).click();
   await page.getByRole("button", { name: "添加账号", exact: true }).click();
   await page.getByLabel("账号名称", { exact: true }).fill(account.name);
-  await page.getByLabel("Agent ID", { exact: true }).fill(account.node_id);
-  await page.getByLabel("运行时 ID", { exact: true }).fill(account.runtime_id);
+  await page.getByRole("combobox", { name: "选择 Agent", exact: true }).selectOption(account.node_id);
+  await page.getByRole("combobox", { name: "选择 Claude Code / Codex 账号", exact: true }).selectOption(account.runtime_id);
   await page.getByLabel("月价（点）", { exact: true }).fill("5");
   await page.getByRole("button", { name: "保存账号", exact: true }).click();
   await expect(page.getByText(account.name, { exact: true })).toBeVisible();
@@ -53,6 +84,10 @@ test("operators list individual accounts and preserve their runtime identity whe
   await page.getByRole("button", { name: "编辑账号", exact: true }).click();
   await expect(page.getByLabel("Agent ID", { exact: true })).toBeDisabled();
   await expect(page.getByLabel("运行时 ID", { exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await page.getByRole("button", { name: "添加账号", exact: true }).click();
+  await expect(page.getByText("没有可添加的账号", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存账号", exact: true })).toBeDisabled();
 });
 
 test("a custom top-up converts the amount live and sends only the package and amount", async ({ page }) => {
@@ -163,4 +198,35 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
     { method: "PUT", path: "/api/operator/operator/v1/billing/model-prices", body: { model: "fixture-model", input_micro_per_mtok: 1_500_000, output_micro_per_mtok: 0 } },
     { method: "POST", path: "/api/operator/operator/v1/billing/tenants/tnt_p10/adjust", body: { amount_micro: -2_500_000, reason: "chargeback" } },
   ]);
+});
+
+
+test("disabled account sales explain the deployment setting", async ({ page }) => {
+  await page.route("**/api/operator/operator/v1/billing/accounts", route => route.fulfill({ status: 404, json: { error: "not_found" } }));
+  await page.goto("/operator/billing");
+  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await expect(page.getByText("未开启账号包月", { exact: true })).toBeVisible();
+  await expect(page.getByText("请在控制面开启 AccountSales.Enabled，然后重新启动控制面。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
+  await expect(page.locator("main")).not.toContainText("目标不存在，或不属于当前租户");
+});
+
+
+test("a failed Agent inventory can be retried from the account editor", async ({ page }) => {
+  let reads = 0;
+  await page.route("**/api/operator/operator/v1/nodes", route => {
+    reads += 1;
+    return route.fulfill(reads === 1 ? { status: 404, json: { error: "not_found" } } : {
+      json: { collected_at: "2026-11-09T00:00:00Z", partial: false, replicas: [], nodes: [] },
+    });
+  });
+  await page.goto("/operator/billing");
+  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("button", { name: "添加账号", exact: true }).click();
+  const retry = page.getByRole("button", { name: "重试", exact: true });
+  await expect(retry).toBeEnabled();
+  await expect(page.getByText("没有可添加的账号", { exact: true })).toHaveCount(0);
+  await retry.click();
+  await expect(page.getByText("没有可添加的账号", { exact: true })).toBeVisible();
+  expect(reads).toBe(2);
 });

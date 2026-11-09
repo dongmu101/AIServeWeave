@@ -357,6 +357,9 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		logicOpts = append(logicOpts, logic.WithComfyUIManagedRouter(comfyUIManagedRouter))
 	}
 
+	if cfg.AccountSales.Enabled {
+		logicOpts = append(logicOpts, logic.WithAccountSales())
+	}
 	if cfg.Billing.Enabled {
 		provider, err := dodo.New(dodo.Config{
 			APIKey:        cfg.Billing.Dodo.APIKey,

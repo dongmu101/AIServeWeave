@@ -93,7 +93,8 @@ func TestMonthlyAccountBillingDisabled(t *testing.T) {
 func TestClaudeAndCodexOnOneAgentSellToDifferentTenants(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
-	f.svc = logic.New(f.store, f.clock, logic.WithBilling(logic.BillingConfig{Provider: &accountTestProvider{}}))
+	// Account sales must work without Dodo Payments or usage billing.
+	f.svc = logic.New(f.store, f.clock, logic.WithAccountSales())
 	op := logic.Actor{TenantID: model.PlatformScope, Role: model.RolePlatformOperator, UserID: "operator"}
 	otherTenant, otherOwner, err := f.svc.CreateTenant(ctx, "Codex buyer", "codex-buyer@example.com", testPassword, "127.0.0.1")
 	if err != nil {

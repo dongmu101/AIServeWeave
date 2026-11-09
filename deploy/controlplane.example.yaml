@@ -205,6 +205,13 @@ TenantNodes:
 #   PublicURL: "https://open7x.com"
 #   RedeemPerMinute: 60
 
+# 账号独享包月：可独立开启，无需 Dodo；点数由运维调整余额或现有充值入账。
+# 开启后 Console「账号包月」可选择 Agent 上报的 Claude Code / Codex 账号。
+# Monthly exclusive accounts: independent of Dodo. Operators may credit balances
+# manually. Billing.Enabled also enables accounts and their shared credit ledger.
+# AccountSales:
+#   Enabled: true
+
 # 计费与充值（Dodo Payments）：默认关闭。开启后租户可预付购买点数，用量按运维配置的
 # 模型单价从余额扣减，prepaid 租户余额耗尽时 Gateway 返回 402。先在 deploy/.env 填好
 # AISW_DODO_API_KEY 与 AISW_DODO_WEBHOOK_SECRET（前缀 dodo_test_ / dodo_live_ 须与

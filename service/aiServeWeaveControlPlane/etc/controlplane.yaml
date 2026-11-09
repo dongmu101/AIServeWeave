@@ -90,3 +90,8 @@ BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"
 #   RequestsPerMinute: 60
 #   TokensPerMinute: 100000
 #   MaxConcurrent: 4
+
+# Monthly exclusive Agent accounts without Dodo Payments.
+# 账号独享包月可独立开启，无需 Dodo Payments。
+# AccountSales:
+#   Enabled: true

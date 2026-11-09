@@ -212,12 +212,17 @@ type Config struct {
 	Signup SignupConf `json:",optional"`
 
 	// Billing configures prepaid-credit billing through Dodo Payments.
-	// Optional and off by default: with it off there is no billing route, no
+	// Optional and off by default: with it off there is no payment route, no
 	// usage is charged and no key is ever refused for its balance.
 	//
 	// Billing 配置经 Dodo Payments 的预充值点数计费。它是可选的，默认关闭：关闭时
-	// 没有任何计费路由，不对任何用量扣费，也不会因余额拒绝任何 key。
+	// 没有支付路由，不对任何用量扣费，也不会因余额拒绝任何 key。
 	Billing BillingConf `json:",optional"`
+
+	// AccountSales enables monthly exclusive accounts and their credit ledger
+	// without requiring a payment provider. Billing.Enabled also enables these.
+	// AccountSales 可独立开启账号包月和点数账目，无需支付服务商。
+	AccountSales AccountSalesConf `json:",optional"`
 
 	// TenantNodes lets tenants enroll Agents of their own, usable only by
 	// the enrolling tenant. On by default, it takes effect once the Registry
@@ -385,6 +390,12 @@ func (t TenantNodesConf) validate(registry RegistryConf) error {
 		return errors.New("config: TenantNodes.MaxCreatesPerDay must be between 1 and 1000")
 	}
 	return nil
+}
+
+// AccountSalesConf enables exclusive monthly accounts independently of payments.
+// AccountSalesConf 独立于支付开启账号包月。
+type AccountSalesConf struct {
+	Enabled bool `json:",default=false"`
 }
 
 // BillingConf configures prepaid-credit billing.

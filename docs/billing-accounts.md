@@ -30,15 +30,22 @@ CLAUDE_CONFIG_DIR="$HOME/.claude-a" claude auth login
 CODEX_HOME="$HOME/.codex-a" codex login
 ```
 
-在运维计费页分别创建两个商品，Agent ID 都填写 `agent-one`，运行时 ID 分别填写 `claude-a`、`codex-a`，各自设置月价。实际 Agent ID 以节点清单为准，若配置了 `gateway.allowed_runtimes`，须同时允许这两个运行时 ID。CLI 登录、模型能力与账号额度沿用各自的适配器。
+在运维计费页的「账号包月」点击「添加账号」，先选择 `agent-one`，再分别选择 `Claude Code · claude-a`、`Codex · codex-a`，各自设置月价。选择器使用 Agent 上报的真实类型，只列出 Claude Code / Codex，排除已有商品和商户自有节点；不会把其他运行时当作 CLI 账号。实际 Agent ID 以节点清单为准，若配置了 `gateway.allowed_runtimes`，须同时允许这两个运行时 ID。CLI 登录、模型能力与账号额度沿用各自的适配器。
 
-Claude Code / Codex 是本地账号来源；Dodo Payments 是现有点数充值的收款通道，不提供这些账号。当前实现的 `Billing.Enabled` 仍要求 Dodo 配置，账号独享授权本身按上述 Agent 运行时生效。
+Claude Code / Codex 是本地账号来源；Dodo Payments 是现有点数充值的收款通道，不提供这些账号。仅售卖账号时，在本机 `deploy/controlplane.yaml` 开启：
+
+```yaml
+AccountSales:
+  Enabled: true
+```
+
+该开关独立于 Dodo，默认关闭。`Billing.Enabled: true` 也会启用账号售卖。只开启 `AccountSales` 时，运维可在计费的「商户」页调整点数余额，商户再购买或续费；不创建支付结账、支付门户或 Dodo webhook，也不启用按 token 扣费。配置变更后需重新启动控制面。已有 Docker 部署可用 `bash deploy/upgrade.sh --no-pull controlplane console` 备份并重建这两个服务；首次启用须遵守下文先升级 Gateway 的顺序。
 
 ## 使用
 
 1. 在 Agent 上为每个实际账号声明独立的运行时 ID 和 `account_dir`，先完成对应 CLI 登录，见 [Agent 多账号配置](../service/aiServeWeaveAgent/README.md#同一-cli-的多个账户)。不要把同一实际登录通过其他运行时或其他 Agent 同时提供给共享池；平台不读取凭据，无法识别这些登录是否相同。
-2. 平台运维进入 `/operator/billing` 的「账号包月」，填写账号名称、Agent ID、运行时 ID、月价（点）并上架。同一 `(node_id, runtime_id)` 只能有一个商品，保存后不能更换目标，只能调整名称、价格或上架状态。上架时该目标立即成为受管库存，即使无人购买也不会向普通商户开放。
-3. 商户 owner/admin 在 `/console/billing` 用点数余额购买。余额不足时先走现有充值流程；本功能不直接创建新的 Dodo 订阅，也不自动扣款续费。确认框显示本次扣款和计费模式变化。
+2. 平台运维进入 `/operator/billing` 的「账号包月」，选择 Agent、选择其上报的 Claude Code / Codex 账号，填写名称与月价（点）并上架。同一 `(node_id, runtime_id)` 只能有一个商品，保存后不能更换目标，只能调整名称、价格或上架状态。上架时该目标立即成为受管库存，即使无人购买也不会向普通商户开放。
+3. 商户 owner/admin 在 `/console/billing` 用点数余额购买。余额不足时由运维调整点数余额，或在已配置 Dodo 时先充值；本功能不直接创建新的 Dodo 订阅，也不自动扣款续费。确认框显示本次扣款和计费模式变化。
 4. 购买成功后，商户计费模式自动变为 `account_monthly`，只能调用自己已购且未到期的账号，使用期间不按 token 扣点数。余额可以为零；仍可充值用于续费。运维也可在商户计费列表切换此模式。已有模型授权、节点专属绑定和配额继续生效。
 5. 「续费一个月」从 `max(当前时间, 本商户原到期时间)` 延长一个 UTC 自然月。目标月没有对应日期时取其最后一天，例如 1 月 31 日 → 2 月 28 日 → 3 月 28 日。每次只买一个月，累计到期时间最多提前十年。到期后可手动续费；其他商户也可购买已经到期的账号，先成功提交的交易获得使用权。
 
@@ -46,7 +53,7 @@ Claude Code / Codex 是本地账号来源；Dodo Payments 是现有点数充值�
 
 ## HTTP 契约
 
-所有路由都要求 `Billing.Enabled`，关闭时为 `404`；租户路由要求租户会话，平台路由要求独立平台会话。
+账号、余额概览、商户余额管理、账目和订单读取路由要求 `AccountSales.Enabled` 或 `Billing.Enabled`，两者都关闭时为 `404`；租户路由要求租户会话，平台路由要求独立平台会话。
 
 | 路由 | 用途 |
 | --- | --- |
@@ -62,7 +69,7 @@ Claude Code / Codex 是本地账号来源；Dodo Payments 是现有点数充值�
 {"node_id":"agent-a","runtime_id":"claude-a","name":"Claude 独享账号 A","price_micro":100000000,"active":true}
 ```
 
-`price_micro` 是每月 micro 点，正整数，上限 `1,000,000,000,000`，1 点等于 1,000,000 micro 点。库存上限 1000 个。`tnode.` 商户自有节点不允许作为平台售卖库存。库存可以在 Agent 上线前配置；上架不证明 CLI 已登录、健康或具备可路由模型。
+`price_micro` 是每月 micro 点，正整数，上限 `1,000,000,000,000`，1 点等于 1,000,000 micro 点。库存上限 1000 个。`tnode.` 商户自有节点不允许作为平台售卖库存。Console 从 Agent 清单选择账号，没有上报时提示先接入 Agent；清单读取失败与部分失败分别提示。API 仍允许预先配置库存。上架不证明 CLI 已登录、健康或具备可路由模型，离线账号会标注离线。
 
 购买请求：
 
@@ -84,6 +91,6 @@ Key 校验新增 `accounts: {only?, managed?: [{node_id, runtime_id, expires_at}
 
 ## 验证边界
 
-默认测试覆盖自然月月末与闰年、余额不足、并发独享、幂等购买、续费、下架保留权益、跨租户隔离、节点授权、目录过滤、缓存到期和不向共享账号回退。Console 契约、白名单、八语言词典及生产构建有独立检查。`TestLiveAccountPurchases` 复用隔离数据库助手，可通过 `AISW_MYSQL_TEST_DSN` 或 `AISW_POSTGRES_TEST_DSN` 运行双引擎事务验证；测试会创建并删除自己的临时数据库。
+默认测试覆盖自然月月末与闰年、余额不足、并发独享、幂等购买、续费、下架保留权益、跨租户隔离、节点授权、目录过滤、缓存到期和不向共享账号回退。Console 契约、白名单、八语言词典及生产构建有独立检查；Chrome 计费专项 11 项覆盖实际类型选择、保存目标、编辑身份固定、重复商品过滤、关闭提示和原有购买续费。独立开关的 HTTP 回归覆盖无支付配置下的路由鉴权、运维余额调整、购买与账目读取。`TestLiveAccountPurchases` 复用隔离数据库助手，可通过 `AISW_MYSQL_TEST_DSN` 或 `AISW_POSTGRES_TEST_DSN` 运行双引擎事务验证；测试会创建并删除自己的临时数据库。
 
 此功能尚未在生产环境验收；实际 CLI 凭据、上游配额、真实付款和实际部署的缓存通知仍需部署后联调。已购账号自身的上游配额耗尽时不会借用未购买账号。

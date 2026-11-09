@@ -126,8 +126,8 @@ go run ./service/aiServeWeaveGateway \
 | 守卫 | 路由 |
 | --- | --- |
 | 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」） |
-| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有 `/admin/v1/billing*` |
-| 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有 `/operator/v1/billing/*`），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
+| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`，`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
+| 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
 
@@ -829,7 +829,7 @@ CREATE INDEX idx_usage_records_created              ON usage_records (created_at
 
 ## 计费与充值
 
-租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments。整块由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时路由不挂载（`404`）、Key 校验不读余额、用量推送仍按原样只写账本，行为与接入前完全一致。
+租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
 
 ```
 Console ──/admin|/operator 白名单──▶ 控制面 ──SDK──▶ Dodo（结账会话、客户、客户门户）
@@ -1056,6 +1056,6 @@ Claude Code 与 Codex 均按账号独立售卖；同一 Agent 可分别把两种
 
 新增 `AccountSales` store 边界及内存/SQL 实现、`account_sales` 库存、`account_purchases` 不可变收据和独立的 `account_sales_lock` 容量锁（billing 命名空间 `0004_account_sales.sql`，PostgreSQL/MySQL）。购买在单个事务中扣点数、绑定唯一商户、延长一个自然月、切换为 `account_monthly`、写 `account_purchase` 账目并提交吊销 outbox；重复 `request_id` 返回原收据。账号目标不可修改，下架仍保留已付款权限，库存不恢复共享。
 
-新增平台账号商品 GET/POST/PUT 与商户库存 GET、购买/续费 POST；Key 校验下发 `accounts` 运行时级授权，商户模型清单同步过滤。完整契约与[升级顺序](../../docs/billing-accounts.md#数据授权与升级)见账号包月说明。必须先更新全部 Gateway，再迁移控制面并启用库存；旧 Gateway 不执行该授权。
+新增平台账号商品 GET/POST/PUT 与商户库存 GET、购买/续费 POST；`AccountSales.Enabled` 可在无 Dodo 配置时独立开启，`Billing.Enabled` 也继续启用这部分能力。仅开启账号包月时可由运维调整余额，支付端点不挂载、用量不扣点数；Key 校验下发 `accounts` 运行时级授权，商户模型清单同步过滤。完整契约与[升级顺序](../../docs/billing-accounts.md#数据授权与升级)见账号包月说明。必须先更新全部 Gateway，再迁移控制面并启用库存；旧 Gateway 不执行该授权。
 
-验证：控制面含 e2e 的默认测试通过，logic 与内存账本竞态测试通过；`TestLiveAccountPurchases/mysql` 在临时 MySQL 9.7 实例中通过，覆盖迁移/schema、唯一账号并发、重复扣款、续费与下架保留期限。PostgreSQL live 未运行；生产升级、真实付款和实际 CLI 账号尚未联调。
+验证：控制面含 e2e 的默认测试通过，logic 与内存账本竞态测试通过；独立开关的 HTTP 回归验证了无支付配置下的鉴权、余额调整、购买、概览与账目读取，独立模式的 logic/e2e 竞态检查通过；`TestLiveAccountPurchases/mysql` 在临时 MySQL 9.7 实例中通过，覆盖迁移/schema、唯一账号并发、重复扣款、续费与下架保留期限。PostgreSQL live 未运行；生产升级、真实付款和实际 CLI 账号尚未联调。

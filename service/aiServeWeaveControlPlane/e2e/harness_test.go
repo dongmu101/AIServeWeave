@@ -223,6 +223,7 @@ func newHarnessWithComfyUIManaged(t *testing.T, comfyUIManagedGateways []string)
 // 便捷构造函数各自只设置自己测试关心的那一项，而不必为每种组合都各写一个
 // 具名函数。
 type harnessOpts struct {
+	accountSales           bool
 	gateways               []string
 	modelPullGateways      []string
 	comfyUIManagedGateways []string
@@ -268,6 +269,8 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 		}
 	}
 
+	cfg.AccountSales.Enabled = opts.accountSales
+
 	st := memstore.New()
 	clock := runtime.NewSystemClock()
 	sessions := opts.sessions
@@ -290,6 +293,9 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 		Timeout:  2 * time.Second,
 	})
 	logicOpts := []logic.Option{logic.WithInvalidator(revocations), logic.WithSessions(sessions)}
+	if opts.accountSales {
+		logicOpts = append(logicOpts, logic.WithAccountSales())
+	}
 	if modelPullRouter != nil {
 		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))
 	}

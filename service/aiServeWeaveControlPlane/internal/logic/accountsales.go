@@ -12,8 +12,22 @@ import (
 	"unicode/utf8"
 )
 
+// WithAccountSales enables monthly accounts without enabling payment or usage billing.
+func WithAccountSales() Option {
+	return func(s *Service) { s.accountSales = true }
+}
+
+func (s *Service) accountsEnabled() bool { return s.accountSales || s.billingEnabled() }
+
+func (s *Service) requireAccountOperator(actor Actor) error {
+	if !s.accountsEnabled() {
+		return ErrNotFound
+	}
+	return s.requirePlatformActor(actor)
+}
+
 func (s *Service) ListAccountSales(ctx context.Context, actor Actor) ([]model.AccountSale, error) {
-	if !s.billingEnabled() {
+	if !s.accountsEnabled() {
 		return nil, ErrNotFound
 	}
 	operator := actor.TenantID == model.PlatformScope
@@ -57,7 +71,7 @@ func (s *Service) ListAccountSales(ctx context.Context, actor Actor) ([]model.Ac
 
 // SaveAccountSale never accepts ownership/expiry from the operator's draft.
 func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.AccountSale, create bool) (model.AccountSale, error) {
-	if err := s.requireBillingOperator(actor); err != nil {
+	if err := s.requireAccountOperator(actor); err != nil {
 		return model.AccountSale{}, err
 	}
 	in.Name = strings.TrimSpace(in.Name)
@@ -93,7 +107,7 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 }
 
 func (s *Service) BuyAccount(ctx context.Context, actor Actor, accountID, requestID string, price int64) (model.AccountPurchase, error) {
-	if !s.billingEnabled() {
+	if !s.accountsEnabled() {
 		return model.AccountPurchase{}, ErrNotFound
 	}
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {
@@ -135,7 +149,7 @@ func (s *Service) BuyAccount(ctx context.Context, actor Actor, accountID, reques
 // AccountPolicy includes closed inventory even after expiry or archival. It
 // carries absolute expiry timestamps so a cached verification cannot renew it.
 func (s *Service) AccountPolicy(ctx context.Context, tenantID string) (accountaccess.Policy, error) {
-	if !s.billingEnabled() {
+	if !s.accountsEnabled() {
 		return accountaccess.Policy{}, nil
 	}
 	billing, err := s.tenantBilling(ctx, tenantID)

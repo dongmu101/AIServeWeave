@@ -15,6 +15,8 @@ import { Badge } from "@/components/ui/badge";
 import { parseAccountSales, parseAccountSale, parseAccountPurchase, type AccountSale } from "@/lib/console/account-sales";
 import { formatCredits, parseCreditsInput, MAX_PRICE_MICRO_PER_MTOK } from "@/lib/console/billing";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
+import { parseFleetSnapshot } from "@/lib/console/fleet";
+import { tenantNodeOwner } from "@/lib/console/node-access";
 import { ApiError } from "@/lib/console/errors";
 
 /** AccountSales shares the credential-free monthly inventory between surfaces. */
@@ -37,9 +39,9 @@ export function AccountSales({ operator = false, canPurchase = false, onPurchase
       <div className="flex flex-wrap gap-3">
         <Input className="max-w-sm" aria-label={t("tenant.accountSearch")} placeholder={t("tenant.accountSearch")} value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} />
         <Button variant="outline" disabled={resource.loading} onClick={resource.reload}><Message id="tenant.accountRefresh" /></Button>
-        {operator ? <Button onClick={() => setEditing("new")}><Message id="tenant.accountAdd" /></Button> : null}
+        {operator ? <Button disabled={resource.loading || resource.error !== null} onClick={() => setEditing("new")}><Message id="tenant.accountAdd" /></Button> : null}
       </div>
-      {resource.error ? <ErrorState message={resource.error} onRetry={resource.reload} /> : resource.loading ? <LoadingState label={t("tenant.accountMonthly")} rows={3} /> : rows.length === 0 ? <EmptyState title={t("tenant.accountEmpty")} /> : <>
+      {resource.errorKind === "not_found" ? <EmptyState title={t("tenant.accountDisabled")} description={operator ? t("tenant.accountEnableHint") : undefined} /> : resource.error ? <ErrorState message={resource.error} onRetry={resource.reload} /> : resource.loading ? <LoadingState label={t("tenant.accountMonthly")} rows={3} /> : rows.length === 0 ? <EmptyState title={t("tenant.accountEmpty")} /> : <>
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.slice(current * 12, current * 12 + 12).map(account => <div key={account.id} className="grid content-between gap-3 rounded-lg border p-4">
           <div className="grid gap-2">
             <p className="font-medium break-all">{account.name}</p>
@@ -75,13 +77,14 @@ export function AccountSales({ operator = false, canPurchase = false, onPurchase
         resource.reload();
         onPurchased?.();
       }} />
-    {editing ? <AccountEditor key={typeof editing === "string" ? editing : editing.id} account={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={resource.reload} /> : null}
+    {editing ? <AccountEditor key={typeof editing === "string" ? editing : editing.id} account={editing === "new" ? null : editing} inventory={resource.data ?? []} onClose={() => setEditing(null)} onSaved={resource.reload} /> : null}
   </Card>;
 }
 
-function AccountEditor({ account, onClose, onSaved }: { account: AccountSale | null; onClose: () => void; onSaved: () => void }) {
+function AccountEditor({ account, inventory, onClose, onSaved }: { account: AccountSale | null; inventory: AccountSale[]; onClose: () => void; onSaved: () => void }) {
   const run = useConsoleRequest();
   const [name, setName] = React.useState(account?.name ?? "");
+  const [autoName, setAutoName] = React.useState("");
   const [node, setNode] = React.useState(account?.nodeId ?? "");
   const [runtime, setRuntime] = React.useState(account?.runtimeId ?? "");
   const [rawPrice, setPrice] = React.useState(account ? String(account.priceMicro / 1_000_000) : "");
@@ -94,7 +97,7 @@ function AccountEditor({ account, onClose, onSaved }: { account: AccountSale | n
     <CardHeader><CardTitle><Message id={account ? "tenant.accountEdit" : "tenant.accountAdd"} /></CardTitle></CardHeader>
     <CardContent><form className="grid gap-3" onSubmit={async event => {
       event.preventDefault();
-      if (price === null || price <= 0 || price > MAX_PRICE_MICRO_PER_MTOK) return;
+      if (!node || !runtime || price === null || price <= 0 || price > MAX_PRICE_MICRO_PER_MTOK) return;
       setPending(true); setError(null);
       try {
         await run({ method: account ? "PUT" : "POST", surface: "operator", path: `/operator/v1/billing/accounts${account ? `/${encodeURIComponent(account.id)}` : ""}`,
@@ -103,12 +106,60 @@ function AccountEditor({ account, onClose, onSaved }: { account: AccountSale | n
       } catch (failure) { setError(failure); } finally { setPending(false); }
     }}>
       <label htmlFor={`${prefix}-name`}><Message id="tenant.accountName" /></label><Input id={`${prefix}-name`} required maxLength={128} value={name} disabled={pending} onChange={e => setName(e.target.value)} />
-      <label htmlFor={`${prefix}-node`}><Message id="tenant.accountNode" /></label><Input id={`${prefix}-node`} required maxLength={128} value={node} disabled={pending || account !== null} onChange={e => setNode(e.target.value)} />
-      <label htmlFor={`${prefix}-runtime`}><Message id="tenant.accountRuntime" /></label><Input id={`${prefix}-runtime`} required maxLength={128} value={runtime} disabled={pending || account !== null} onChange={e => setRuntime(e.target.value)} />
+      {account ? <>
+        <label htmlFor={`${prefix}-node`}><Message id="tenant.accountNode" /></label><Input id={`${prefix}-node`} value={node} disabled />
+        <label htmlFor={`${prefix}-runtime`}><Message id="tenant.accountRuntime" /></label><Input id={`${prefix}-runtime`} value={runtime} disabled />
+      </> : <AccountTargetPicker inventory={inventory} nodeId={node} runtimeId={runtime} disabled={pending} onSelect={(nextNode, nextRuntime, nextName) => {
+        setNode(nextNode); setRuntime(nextRuntime);
+        if (nextName) {
+          setName(previous => previous === "" || previous === autoName ? nextName : previous);
+          setAutoName(nextName);
+        }
+      }} />}
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
       <label className="flex items-center gap-2"><input type="checkbox" checked={active} disabled={pending} onChange={e => setActive(e.target.checked)} /><Message id="tenant.accountListed" /></label>
       <FormError message={error === null ? null : <ErrorMessage error={error} />} />
-      <div className="flex gap-3"><Button type="submit" disabled={pending || price === null || price <= 0 || price > MAX_PRICE_MICRO_PER_MTOK}><Message id="tenant.accountSave" /></Button><Button type="button" variant="outline" disabled={pending} onClick={onClose}><Message id="common.cancel" /></Button></div>
+      <div className="flex gap-3"><Button type="submit" disabled={pending || !node || !runtime || price === null || price <= 0 || price > MAX_PRICE_MICRO_PER_MTOK}><Message id="tenant.accountSave" /></Button><Button type="button" variant="outline" disabled={pending} onClick={onClose}><Message id="common.cancel" /></Button></div>
     </form></CardContent>
   </Card>;
+}
+
+/** Only Agent-reported CLI accounts can be selected when creating an offer. */
+function AccountTargetPicker({ inventory, nodeId, runtimeId, disabled, onSelect }: {
+  inventory: AccountSale[]; nodeId: string; runtimeId: string; disabled: boolean;
+  onSelect: (nodeId: string, runtimeId: string, name: string) => void;
+}) {
+  const { t } = useI18n();
+  const prefix = React.useId();
+  const fleet = useResource({ method: "GET", surface: "operator", path: "/operator/v1/nodes", parse: parseFleetSnapshot });
+  const nodes = (fleet.data?.nodes ?? []).filter(node => tenantNodeOwner(node.nodeId) === null).map(node => ({
+    ...node, runtimes: node.runtimes.filter(runtime => (runtime.kind === "claude" || runtime.kind === "codex") &&
+      !inventory.some(account => account.nodeId === node.nodeId && account.runtimeId === runtime.id)),
+  })).filter(node => node.runtimes.length > 0);
+  const selected = nodes.find(node => node.nodeId === nodeId);
+  const label = (runtime: { kind: string; id: string }) => `${runtime.kind === "claude" ? "Claude Code" : "Codex"} · ${runtime.id}`;
+  const selectClass = "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+  const refresh = () => { onSelect("", "", ""); fleet.reload(); };
+  const unavailable = disabled || fleet.loading || fleet.error !== null;
+  return <div className="grid min-w-0 gap-3">
+    <Button type="button" variant="outline" className="justify-self-start" disabled={disabled || fleet.loading} onClick={refresh}><Message id="common.refresh" /></Button>
+    {fleet.loading ? <LoadingState label={t("tenant.accountSelectAgent")} rows={1} /> : null}
+    {fleet.error ? <ErrorState message={fleet.error} onRetry={refresh} /> : null}
+    {fleet.data?.partial ? <p role="status" className="text-sm text-muted-foreground"><Message id="tenant.accountFleetPartial" /></p> : null}
+    {fleet.data && nodes.length === 0 ? <EmptyState title={t("tenant.accountNoTargets")} description={t("tenant.accountConnectHint")} /> : null}
+    <label htmlFor={`${prefix}-agent`}><Message id="tenant.accountSelectAgent" /></label>
+    <select id={`${prefix}-agent`} className={selectClass} required disabled={unavailable || nodes.length === 0} value={nodeId} onChange={event => onSelect(event.target.value, "", "")}>
+      <option value=""><Message id="tenant.accountSelectAgent" /></option>
+      {nodes.map(node => <option key={node.nodeId} value={node.nodeId}>{node.nodeId}{node.live ? "" : ` (${t("tenant.accountOffline")})`}</option>)}
+    </select>
+    <label htmlFor={`${prefix}-account`}><Message id="tenant.accountSelectRuntime" /></label>
+    <select id={`${prefix}-account`} className={selectClass} required disabled={unavailable || !selected} value={runtimeId} onChange={event => {
+      const runtime = selected?.runtimes.find(runtime => runtime.id === event.target.value);
+      onSelect(nodeId, runtime?.id ?? "", runtime ? label(runtime) : "");
+    }}>
+      <option value=""><Message id="tenant.accountSelectRuntime" /></option>
+      {selected?.runtimes.map(runtime => <option key={runtime.id} value={runtime.id}>{label(runtime)}</option>)}
+    </select>
+    <p className="text-sm text-muted-foreground"><Message id="tenant.accountTargetHint" /></p>
+  </div>;
 }

@@ -40,7 +40,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
 | 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话 |
-| 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders}`；运维 `/operator/v1/billing/*` | 仅在控制面 `Billing.Enabled` 时挂载，否则 `404`；全部登录角色可读，owner/admin 可结账与打开门户（member `403`）；`503` 表示控制面联系 Dodo 失败 |
+| 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders}`；运维 `/operator/v1/billing/*` | 支付端点仅在控制面 `Billing.Enabled` 时挂载，否则 `404`；余额、账号和账目也可由 `AccountSales.Enabled` 独立开启；全部登录角色可读，owner/admin 可结账与打开门户（member `403`）；`503` 表示控制面联系 Dodo 失败 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 
 用户、Key 与审计列表返回 `{items, next_cursor}` 信封，支持游标分页与服务端筛选；吊销成功返回 `204`，错误体为 `{ "error": "..." }`。Job 历史另有 `/admin/v1/jobs/history` 与详情端点，不依赖 Fleet 配置。
@@ -444,6 +444,6 @@ GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重�
 
 商户与平台说明已明确 Claude Code / Codex 两种账号都支持独享售卖，同一个 Agent 中的账号可分别定价和售给不同商户；文案同步八种语言。
 
-商户计费页新增账号库存、到期时间、余额购买与续费；购买确认明确提示切换为仅允许已购账号的包月模式。平台计费页新增「账号包月」标签页，管理账号商品及月价；已建商品的 Agent/运行时 ID 只读。商户模式列表支持 `account_monthly`，账目支持 `account_purchase`。库存分页面展示，文案补齐八种语言；凭据始终留在 Agent。新接口分别列入 Admin/Operator 白名单，写入不自动重试，确认框内的人工重试复用同一次购买标识。
+商户计费页新增账号库存、到期时间、余额购买与续费；购买确认明确提示切换为仅允许已购账号的包月模式。平台计费页新增「账号包月」标签页，管理账号商品及月价；新增商品先选择 Agent、再选择实际上报的 Claude Code / Codex 账号，无需手填 ID；排除已有商品及商户自有节点，空清单与读取失败分别提示。已建商品的 Agent/运行时 ID 只读。账号接口 404 显示「未开启账号包月」，运维可看到独立开关配置提示。商户模式列表支持 `account_monthly`，账目支持 `account_purchase`。库存分页面展示，文案补齐八种语言；凭据始终留在 Agent。新接口分别列入 Admin/Operator 白名单，写入不自动重试，确认框内的人工重试复用同一次购买标识。
 
-验证：ESLint 无错误（现有 alerts 页 TanStack Virtual 警告仍在）、TS7 类型检查、323 项 Node 测试及 Next.js Webpack 生产构建通过；现有 Chrome 完成计费专项 8 项，其中新增购买/续费人工重试与运维商品编辑 2 项。浏览器使用隔离会话和模拟 API，不能替代真实控制面/付款/CLI 的生产验收。使用与升级说明见[账号包月](../../docs/billing-accounts.md)。
+验证：ESLint 无错误（现有 alerts 页 TanStack Virtual 警告仍在）、TS7 类型检查、323 项 Node 测试及 Next.js Webpack 生产构建通过；现有 Chrome 完成计费专项 11 项，涵盖实际账号类型选择、保存目标、固定身份编辑、重复库存过滤、关闭配置提示和原有购买/续费流程。浏览器使用隔离会话和模拟 API，不能替代真实控制面/付款/CLI 的生产验收。使用与升级说明见[账号包月](../../docs/billing-accounts.md)。

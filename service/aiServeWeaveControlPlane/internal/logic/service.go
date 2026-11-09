@@ -231,6 +231,7 @@ type Service struct {
 	modelPullRouter      ModelPullRouter
 	comfyUIManagedRouter ComfyUIManagedRouter
 	billing              *BillingConfig
+	accountSales         bool
 	tenantNodes          *TenantNodeConfig
 	nodeProviders        *NodeProviderConfig
 	agentInstall         *AgentInstallConfig
