@@ -33,6 +33,7 @@ import type { Translator } from "@/lib/i18n/translate";
 const PAGE_SIZE = 20;
 
 const KIND_KEYS: Record<(typeof LEDGER_KINDS)[number], MessageKey> = {
+  account_purchase: "tenant.accountPurchase",
   grant: "tenant.billingKindGrant",
   topup: "tenant.billingKindTopup",
   usage: "tenant.billingKindUsage",

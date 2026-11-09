@@ -57,12 +57,12 @@ export const DEFAULT_PRICE_MODEL = "*";
 /** BillingMode is a tenant's billing mode.
  *
  * BillingMode 是租户的计费模式。 */
-export type BillingMode = "prepaid" | "exempt";
+export type BillingMode = "prepaid" | "exempt" | "account_monthly";
 
 /** BILLING_MODES is the closed set of modes, in display order.
  *
  * BILLING_MODES 是计费模式的封闭集合，按展示顺序排列。 */
-export const BILLING_MODES: readonly BillingMode[] = ["prepaid", "exempt"];
+export const BILLING_MODES: readonly BillingMode[] = ["prepaid", "exempt", "account_monthly"];
 
 /** PackageKind says how a package is priced: a fixed bundle, or an amount the
  * buyer chooses within a range.
@@ -79,7 +79,7 @@ export const PACKAGE_KINDS: readonly PackageKind[] = ["fixed", "custom"];
  * offered as the ledger filter.
  *
  * LEDGER_KINDS 是控制面写入的词汇表（model.LedgerKind*），用作账目筛选项。 */
-export const LEDGER_KINDS = ["grant", "topup", "usage", "refund", "dispute", "dispute_reversal", "adjust"] as const;
+export const LEDGER_KINDS = ["grant", "topup", "usage", "refund", "dispute", "dispute_reversal", "adjust", "account_purchase"] as const;
 
 /** ORDER_STATUSES is the vocabulary the control plane writes
  * (model.OrderStatus*), offered as the order filter.

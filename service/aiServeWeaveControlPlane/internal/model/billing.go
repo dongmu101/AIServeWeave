@@ -38,6 +38,8 @@ const MaxPriceMicroPerMTok = 1_000_000 * MicroPerCredit
 //
 // 租户可处的计费模式。
 const (
+	// BillingModeAccountMonthly admits only purchased, unexpired accounts.
+	BillingModeAccountMonthly = "account_monthly"
 	// BillingModePrepaid charges usage against the balance and refuses
 	// traffic once the balance is not positive.
 	//
@@ -97,6 +99,7 @@ const (
 	LedgerKindDispute         = "dispute"
 	LedgerKindDisputeReversal = "dispute_reversal"
 	LedgerKindAdjust          = "adjust"
+	LedgerKindAccountPurchase = "account_purchase"
 )
 
 // TenantBilling is one tenant's billing state. A tenant with no row is

@@ -983,6 +983,7 @@ type APIDocs interface {
 // Store 是本服务全部的持久化能力，供启动时装配使用。handler 与 logic 取用上面那些
 // 窄接口，绝不取用它。
 type Store interface {
+	AccountSales
 	Routes
 	WorkflowTemplates
 	Tenants

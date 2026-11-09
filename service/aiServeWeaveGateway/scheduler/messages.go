@@ -50,7 +50,7 @@ func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.Messa
 	if !admitted {
 		return nil, ErrModelNotAllowed
 	}
-	if !nodeAllowed(ctx, c.NodeID) {
+	if !s.candidateAllowed(ctx, c) {
 		return nil, ErrNodeNotAllowed
 	}
 	req.Model = c.Model

@@ -42,6 +42,7 @@ import (
 	"sync"
 	"time"
 
+	"AIServeWeave/common/accountaccess"
 	"AIServeWeave/common/apikey"
 	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/nodeaccess"
@@ -361,7 +362,8 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			// common/nodeaccess, which decodes as nothing excluded.
 			//
 			// 早于 common/nodeaccess 的控制面不带 Nodes，解码结果是什么都不排除。
-			Nodes nodeaccess.Policy `json:"nodes"`
+			Nodes    nodeaccess.Policy    `json:"nodes"`
+			Accounts accountaccess.Policy `json:"accounts"`
 			// BillingBlocked is absent unless the tenant is prepaid with an
 			// exhausted balance.
 			//
@@ -385,6 +387,9 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 		}
 		if !decoded.Nodes.Unrestricted() {
 			identity.Nodes = &decoded.Nodes
+		}
+		if !decoded.Accounts.Unrestricted() {
+			identity.Accounts = &decoded.Accounts
 		}
 		return identity, nil
 

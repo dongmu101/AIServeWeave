@@ -433,6 +433,8 @@ const (
 	ActionBillingTenantMode    = "billing.tenant.mode"
 	ActionBillingTenantAdjust  = "billing.tenant.adjust"
 	ActionBillingCheckout      = "billing.checkout.create"
+	ActionAccountSaleSave      = "billing.account.save"
+	ActionAccountPurchase      = "billing.account.purchase"
 	// Refund actions. A tenant's request and cancellation are recorded under
 	// its tenant; an operator's approval, rejection, direct refund and
 	// marking a refund failed under PlatformScope. The target is the refund

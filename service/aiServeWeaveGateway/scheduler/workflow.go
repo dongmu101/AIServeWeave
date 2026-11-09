@@ -167,7 +167,7 @@ func (s *Scheduler) releaseQueueSlot() {
 // 可能尝试的每一个候选都重新上传一遍，正是这个 API 主动体现、而不是悄悄
 // 掩盖的「不跨候选自动重试」这个取舍。
 func (s *Scheduler) SubmitWorkflowTo(ctx context.Context, c Candidate, req runtime.WorkflowRequest) (runtime.WorkflowRun, error) {
-	if !nodeAllowed(ctx, c.NodeID) {
+	if !s.candidateAllowed(ctx, c) {
 		return runtime.WorkflowRun{}, ErrNodeNotAllowed
 	}
 	run, err := s.server.Runtime(c.NodeID, c.RuntimeID).Submit(ctx, req)
@@ -187,7 +187,7 @@ func (s *Scheduler) SubmitWorkflowTo(ctx context.Context, c Candidate, req runti
 // 引用这次上传的结果（STATUS.md 的 P04）。与相反方向的 OpenArtifact 一样，
 // body 随隧道的消费而被读取：这里不会有什么完整持有一次上传。
 func (s *Scheduler) UploadInput(ctx context.Context, c Candidate, meta runtime.InputUploadMeta, body io.Reader) (runtime.InputUploadResult, error) {
-	if !nodeAllowed(ctx, c.NodeID) {
+	if !s.candidateAllowed(ctx, c) {
 		return runtime.InputUploadResult{}, ErrNodeNotAllowed
 	}
 	result, err := s.server.Runtime(c.NodeID, c.RuntimeID).UploadInput(ctx, meta, body)

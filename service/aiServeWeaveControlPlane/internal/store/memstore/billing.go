@@ -24,25 +24,29 @@ var errBalanceOverflow = errors.New("memstore: balance overflow")
 // billingState 是内存版的计费表。每个方法在整个执行期间都持有 Store.mu，这就是本
 // store 对事务的替代。
 type billingState struct {
-	tenants  map[string]model.TenantBilling
-	packages map[string]model.CreditPackage
-	prices   map[string]model.ModelPrice
-	orders   map[string]model.CheckoutOrder
-	ledger   []model.CreditLedgerEntry
-	charges  map[string]model.UsageCharge
-	webhooks map[string]model.BillingWebhookEvent
-	refunds  map[string]model.RefundRequest
+	accounts  map[string]model.AccountSale
+	purchases map[string]model.AccountPurchase
+	tenants   map[string]model.TenantBilling
+	packages  map[string]model.CreditPackage
+	prices    map[string]model.ModelPrice
+	orders    map[string]model.CheckoutOrder
+	ledger    []model.CreditLedgerEntry
+	charges   map[string]model.UsageCharge
+	webhooks  map[string]model.BillingWebhookEvent
+	refunds   map[string]model.RefundRequest
 }
 
 func newBillingState() billingState {
 	return billingState{
-		tenants:  map[string]model.TenantBilling{},
-		packages: map[string]model.CreditPackage{},
-		prices:   map[string]model.ModelPrice{},
-		orders:   map[string]model.CheckoutOrder{},
-		charges:  map[string]model.UsageCharge{},
-		webhooks: map[string]model.BillingWebhookEvent{},
-		refunds:  map[string]model.RefundRequest{},
+		accounts:  map[string]model.AccountSale{},
+		purchases: map[string]model.AccountPurchase{},
+		tenants:   map[string]model.TenantBilling{},
+		packages:  map[string]model.CreditPackage{},
+		prices:    map[string]model.ModelPrice{},
+		orders:    map[string]model.CheckoutOrder{},
+		charges:   map[string]model.UsageCharge{},
+		webhooks:  map[string]model.BillingWebhookEvent{},
+		refunds:   map[string]model.RefundRequest{},
 	}
 }
 
@@ -100,9 +104,10 @@ func (s *Store) SetTenantBillingMode(_ context.Context, tenantID, mode string, n
 	defer s.mu.Unlock()
 	row := s.billingRow(tenantID, now)
 	before := row.Blocked()
+	modeChanged := row.Mode != mode
 	row.Mode, row.UpdatedAt = mode, now
 	s.billing.tenants[tenantID] = row
-	return before != row.Blocked(), nil
+	return modeChanged || before != row.Blocked(), nil
 }
 
 // SetDodoCustomerID implements store.Billing.

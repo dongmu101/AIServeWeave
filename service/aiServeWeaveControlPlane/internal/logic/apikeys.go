@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/accountaccess"
 	"AIServeWeave/common/apikey"
 	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/nodeaccess"
@@ -212,6 +213,7 @@ func (s *Service) manageableKey(ctx context.Context, actor Actor, keyID string) 
 // Verification 是 Gateway 就它出示的 key 所能得知的内容。它不带名称、不带创建者、不带
 // 时间戳：数据面只需要知道把这次请求归给哪个租户，别无其他。
 type Verification struct {
+	Accounts *accountaccess.Policy
 	TenantID string
 	KeyID    string
 	// Limits is the tenant's quota, handed to the Gateway alongside the
@@ -316,12 +318,19 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	if err != nil {
 		return Verification{}, err
 	}
+	accounts, err := s.AccountPolicy(ctx, tenant.ID)
+	if err != nil {
+		return Verification{}, err
+	}
 	verification := Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits(), BillingBlocked: blocked}
 	if !policy.Unrestricted() {
 		verification.Models = &policy
 	}
 	if !nodes.Unrestricted() {
 		verification.Nodes = &nodes
+	}
+	if !accounts.Unrestricted() {
+		verification.Accounts = &accounts
 	}
 	return verification, nil
 }

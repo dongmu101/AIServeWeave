@@ -1,0 +1,20 @@
+CREATE TABLE account_sales (
+ id VARCHAR(32) PRIMARY KEY,
+ node_id VARCHAR(128) NOT NULL,
+ runtime_id VARCHAR(128) NOT NULL,
+ name VARCHAR(128) NOT NULL,
+ price_micro BIGINT NOT NULL,
+ active BOOLEAN NOT NULL,
+ tenant_id VARCHAR(32) NOT NULL,
+ expires_at DATETIME(6) NOT NULL,
+ updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+CREATE UNIQUE INDEX idx_account_sales_target ON account_sales (node_id, runtime_id);
+CREATE TABLE account_purchases (
+ id VARCHAR(32) PRIMARY KEY,
+ account_id VARCHAR(32) NOT NULL,
+ tenant_id VARCHAR(32) NOT NULL,
+ price_micro BIGINT NOT NULL,
+ expires_at DATETIME(6) NOT NULL,
+ created_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;

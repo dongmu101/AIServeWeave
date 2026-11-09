@@ -1690,6 +1690,9 @@ func renderVerification(verification logic.Verification) types.VerifyResponse {
 	if verification.Nodes != nil {
 		out.Nodes = *verification.Nodes
 	}
+	if verification.Accounts != nil {
+		out.Accounts = *verification.Accounts
+	}
 	return out
 }
 

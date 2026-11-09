@@ -10,6 +10,8 @@ import type { MessageKey } from "../i18n/messages.ts";
  * 界面只根据 kind 决定展示什么，因此上游新增的报错文本永远不会变成屏幕上的新文案。
  */
 export type ApiErrorKind =
+  | "insufficient_credit"
+  | "account_unavailable"
   | "invalid_credentials"
   | "unauthorized"
   | "forbidden"
@@ -34,6 +36,8 @@ export type ApiErrorKind =
  * 可能点出内部实现，而本仓库把泄漏它当作缺陷而非措辞问题。
  */
 const MESSAGE_KEYS: Record<ApiErrorKind, MessageKey> = {
+  insufficient_credit: "tenant.accountInsufficientCredit",
+  account_unavailable: "tenant.accountUnavailable",
   invalid_credentials: "common.incorrectEmailOrPasswordCheckThemAndTry",
   unauthorized: "common.yourSignInSessionHasExpiredSignIn",
   forbidden: "common.yourCurrentRoleDoesNotHavePermissionTo",
@@ -87,6 +91,8 @@ export function kindForStatus(status: number): ApiErrorKind {
   switch (status) {
     case 400:
       return "invalid";
+    case 402:
+      return "insufficient_credit";
     case 401:
       return "unauthorized";
     case 403:

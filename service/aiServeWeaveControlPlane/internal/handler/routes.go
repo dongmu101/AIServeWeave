@@ -155,6 +155,11 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		}, rest.WithMaxBytes(MaxBillingWebhookBytes))
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/admin/v1/billing", requireSession, billingOverview(ctx)),
+			billingRoute(http.MethodGet, "/admin/v1/billing/accounts", requireSession, listAccountSales(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/accounts/:id/purchase", requireSession, buyAccount(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/accounts", requirePlatformSession, listAccountSales(ctx)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/accounts", requirePlatformSession, saveAccountSale(ctx, true)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/accounts/:id", requirePlatformSession, saveAccountSale(ctx, false)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/ledger", requireSession, listBillingLedger(ctx, false)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/orders", requireSession, listBillingOrders(ctx, false)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/packages", requirePlatformSession, listCreditPackages(ctx)),

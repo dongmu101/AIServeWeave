@@ -587,7 +587,7 @@ func (s *Service) SetTenantBillingMode(ctx context.Context, actor Actor, tenantI
 	if err := s.requireBillingOperator(actor); err != nil {
 		return err
 	}
-	if mode != model.BillingModePrepaid && mode != model.BillingModeExempt {
+	if mode != model.BillingModePrepaid && mode != model.BillingModeExempt && mode != model.BillingModeAccountMonthly {
 		return ErrInvalidInput
 	}
 	if _, err := s.store.GetTenant(ctx, tenantID); err != nil {

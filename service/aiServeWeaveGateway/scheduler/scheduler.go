@@ -445,7 +445,7 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 	if !admitted {
 		return runtime.AudioTranscriptionResponse{}, ErrModelNotAllowed
 	}
-	if !nodeAllowed(ctx, c.NodeID) {
+	if !s.candidateAllowed(ctx, c) {
 		return runtime.AudioTranscriptionResponse{}, ErrNodeNotAllowed
 	}
 	resp, err := s.server.Runtime(c.NodeID, c.RuntimeID).Transcribe(ctx, req, audio)
@@ -601,6 +601,9 @@ func (s *Scheduler) advertisedModels(ctx context.Context, ownOnly bool) []ModelI
 			continue
 		}
 		for _, snap := range node.Runtimes {
+			if !s.accountAllowed(ctx, node.NodeID, snap.Descriptor.ID) {
+				continue
+			}
 			if !runtimeHealthy(snap.State) {
 				continue
 			}
@@ -805,6 +808,9 @@ func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Po
 		}
 		idle := node.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_INFERENCE]
 		for _, snap := range node.Runtimes {
+			if !s.accountAllowed(ctx, node.NodeID, snap.Descriptor.ID) {
+				continue
+			}
 			if !runtimeHealthy(snap.State) {
 				continue
 			}

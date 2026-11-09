@@ -14,6 +14,7 @@ import (
 // 答案」变成「一眼看出错误」：一个内容为 "usr_..." 的 tenant_id，无论出现在日志行、
 // 工单还是 WHERE 子句里，都是一望即知的错。
 const (
+	PrefixAccountSale      = "acc_"
 	PrefixTenant           = "tnt_"
 	PrefixUser             = "usr_"
 	PrefixAPIKey           = "key_"

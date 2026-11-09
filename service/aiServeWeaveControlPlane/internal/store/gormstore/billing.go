@@ -78,12 +78,13 @@ func (s *Store) SetTenantBillingMode(ctx context.Context, tenantID, mode string,
 			return err
 		}
 		before := row.Blocked()
+		modeChanged := row.Mode != mode
 		row.Mode = mode
 		if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
 			Updates(map[string]any{"mode": mode, "updated_at": now}).Error; err != nil {
 			return err
 		}
-		if before != row.Blocked() {
+		if modeChanged || before != row.Blocked() {
 			changed = true
 			return enqueueRevocation(tx)
 		}

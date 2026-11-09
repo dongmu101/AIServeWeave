@@ -20,6 +20,7 @@ import (
 	"encoding/json"
 	"time"
 
+	"AIServeWeave/common/accountaccess"
 	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
@@ -424,10 +425,11 @@ type VerifyRequest struct {
 // Models 出于同样的理由：Gateway 逐个请求判断一个模型能否被列出或调用，因此它据以
 // 判断的列表也随这里下发。
 type VerifyResponse struct {
-	TenantID string             `json:"tenant_id"`
-	KeyID    string             `json:"key_id"`
-	Limits   quota.Limits       `json:"limits"`
-	Models   modelaccess.Policy `json:"models"`
+	Accounts accountaccess.Policy `json:"accounts"`
+	TenantID string               `json:"tenant_id"`
+	KeyID    string               `json:"key_id"`
+	Limits   quota.Limits         `json:"limits"`
+	Models   modelaccess.Policy   `json:"models"`
 	// Nodes lists the dedicated nodes closed to the tenant; an empty object
 	// means none is. A Gateway that predates it ignores the field, which is
 	// why Gateways are upgraded before any node is dedicated.

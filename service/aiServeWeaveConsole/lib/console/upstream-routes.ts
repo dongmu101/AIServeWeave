@@ -64,6 +64,8 @@ const param = (): Segment => ({ param: true });
  * route handler 就能读出来。
  */
 const ROUTES: readonly UpstreamRoute[] = [
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("accounts")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("accounts"), param(), literal("purchase")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("models")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs"), param()], query: [] },
@@ -222,6 +224,9 @@ const ROUTES: readonly UpstreamRoute[] = [
  * 用一张表加一个行标志，会让「这次调用由哪个密钥支付」距离出错只有一个布尔值之遥。
  */
 const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("accounts")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("accounts")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("accounts"), param()], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("auth"), literal("password")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("auth"), literal("sessions"), literal("revoke")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("operators")], query: ["limit", "cursor", "status", "q"] },

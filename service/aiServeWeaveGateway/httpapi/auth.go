@@ -7,7 +7,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
+	"AIServeWeave/common/accountaccess"
 	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
@@ -21,6 +23,7 @@ import (
 // Identity 是一个已校验 API Key 的归属。它会被附加到请求 context 上，好让后续工作
 // ——用量记录、按租户配额、限流——无需重新校验即可拿到归属信息。
 type Identity struct {
+	Accounts *accountaccess.Policy
 	TenantID string
 	KeyID    string
 	// Limits is the tenant's quota, learned from the same verification that
@@ -228,7 +231,14 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 				"the account balance is exhausted; top up credits to continue")
 			return
 		}
+		if identity.Accounts != nil && identity.Accounts.Only && !identity.Accounts.Active(time.Now()) && startsBillableWork(r) {
+			writeOpenAIError(w, http.StatusPaymentRequired, "insufficient_quota", "account_subscription_expired", "renew an account subscription to continue")
+			return
+		}
 		ctx := context.WithValue(r.Context(), identityKey{}, identity)
+		if identity.Accounts != nil {
+			ctx = scheduler.WithAccountAccess(ctx, *identity.Accounts)
+		}
 		if identity.Models != nil {
 			ctx = scheduler.WithModelAccess(ctx, *identity.Models)
 		}

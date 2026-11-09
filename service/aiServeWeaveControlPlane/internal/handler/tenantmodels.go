@@ -40,6 +40,18 @@ func listTenantModels(ctx *svc.ServiceContext) http.HandlerFunc {
 		if allowedNode != nil {
 			catalog = catalog.FilterNodes(allowedNode)
 		}
+		allowedAccount, err := ctx.Logic.TenantAccountFilter(r.Context(), actor.TenantID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		services := catalog.Services[:0]
+		for _, service := range catalog.Services {
+			if allowedAccount(service.AgentID, service.ServiceID) {
+				services = append(services, service)
+			}
+		}
+		catalog.Services = services
 		if visible != nil {
 			// The tenant's own nodes are exempt, matching the Gateway's
 			// scheduler.admitModel. / 商户自有节点豁免，与 Gateway 的
