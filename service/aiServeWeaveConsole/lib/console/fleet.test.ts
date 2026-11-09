@@ -238,3 +238,13 @@ for (const [name, maintenance] of [["missing", undefined], ["null", null], ["str
     assert.throws(() => parseFleetSnapshot({ collected_at: "2026-01-01T12:00:00Z", replicas: [replicaDocument()], nodes: [nodeDocument({ maintenance })], partial: false }), ApiError);
   });
 }
+
+test("fleet parses the CLI subscription quota a node reports", () => {
+  const usage = [{ runtime_id: "codex-local", kind: "codex", status: "ready", checked_at: "2026-01-01T12:00:00Z", windows: [{ name: "primary", bucket: "codex", used_percent: 0, duration_minutes: 300, resets_at: "2026-01-01T17:00:00Z" }] }];
+  const parse = (cli_usage?: unknown) => parseFleetSnapshot({ collected_at: "2026-01-01T12:00:00Z", replicas: [replicaDocument()], nodes: [nodeDocument({ cli_usage })], partial: false }).nodes[0];
+  const account = parse(usage)?.cliUsage[0];
+  assert.equal(account?.runtimeId, "codex-local");
+  assert.equal(account?.windows[0].usedPercent, 0);
+  assert.deepEqual(parse()?.cliUsage, []);
+  assert.throws(() => parse([{ status: "ready" }]), ApiError);
+});

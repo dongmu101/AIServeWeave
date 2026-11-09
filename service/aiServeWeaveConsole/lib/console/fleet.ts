@@ -61,6 +61,15 @@ export interface CliUsage {
   checkedAt: string | null;
 }
 
+/** NodeCliUsage is one CLI account a node reports. runtimeId is empty from an
+ * Agent that predates multi-account support.
+ *
+ * NodeCliUsage 是节点上报的一个 CLI 账户。来自尚不支持多账户的旧版 Agent 时 runtimeId 为空。 */
+export interface NodeCliUsage extends CliUsage {
+  runtimeId: string;
+  kind: string;
+}
+
 /** TenantModelCatalog identifies Agent reports without addresses or diagnostics.
  * TenantModelCatalog 标识 Agent 上报来源，不含地址或诊断信息。 */
 export interface TenantModelCatalog {
@@ -161,6 +170,7 @@ export interface FleetNode {
   declaredRuntimeIds: string[];
   runtimes: NodeRuntime[];
   replicas: string[];
+  cliUsage: NodeCliUsage[];
   observedAt: string;
 }
 
@@ -423,6 +433,10 @@ function parseNode(value: unknown): FleetNode {
     declaredRuntimeIds: strings(source, "declared_runtime_ids"),
     runtimes: list(source.runtimes, parseRuntime),
     replicas: strings(source, "replicas"),
+    cliUsage: list(source.cli_usage, entry => {
+      const account = record(entry);
+      return { ...parseCliUsage(account)!, runtimeId: text(account, "runtime_id"), kind: required(account, "kind") };
+    }),
     observedAt: timestamp(source, "observed_at"),
   };
 }

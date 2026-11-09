@@ -7,6 +7,7 @@ import { Message } from "@/components/i18n/message";
 
 import * as React from "react";
 
+import { CliQuota } from "@/components/console/cli-quota";
 import { FleetFreshness } from "@/components/console/fleet-freshness";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
 import { useResource } from "@/components/console/use-resource";
@@ -189,6 +190,21 @@ function NodeCard({ node }: { node: FleetNode }) {
             </dd>
           </div>
         </dl>
+
+        {node.cliUsage.length > 0 ? (
+          <div className="grid gap-2">
+            <p className="text-xs text-muted-foreground"><Message id="tenant.cliQuota" /></p>
+            <div className="grid gap-2 sm:grid-cols-2">
+              {node.cliUsage.map((account) => (
+                <div key={`${account.kind}/${account.runtimeId}`} className="rounded-lg border px-3 py-2">
+                  <code className="font-mono text-xs">{account.runtimeId || account.kind}</code>
+                  <CliQuota usage={account} now={Date.parse(node.observedAt)} />
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground"><Message id="tenant.cliQuotaNote" /></p>
+          </div>
+        ) : null}
 
         <div className="grid gap-2">
           <p className="text-xs text-muted-foreground"><Message id="tenant.runtimes" /></p>
