@@ -225,18 +225,6 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		args = append(args, "--input-format", "stream-json")
 	}
 	env := slices.Clone(b.cliEnv())
-	if native && s.upstream != nil {
-		// Capture the upstream's own headers and errors below the CLI, which folds them.
-		// 在 CLI 之下截获上游自己的响应头与错误，CLI 会把它们折叠掉。
-		proxy, err := startUpstreamProxy(s.upstream, env)
-		if err != nil {
-			return errProbeSetup
-		}
-		defer proxy.close()
-		if env, err = proxy.environ(dir, env); err != nil {
-			return errProbeSetup
-		}
-	}
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
 	cmd.Env = append(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
@@ -288,23 +276,37 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	if s.request.apiVersion != "" {
 		cmd.Env = append(cmd.Env, "ANTHROPIC_CUSTOM_HEADERS=anthropic-version: "+s.request.apiVersion)
 	}
+	var nativeRequest []byte
 	if len(extra) > 0 {
-		var encoded strings.Builder
-		encoder := json.NewEncoder(&encoded)
-		encoder.SetEscapeHTML(false)
-		if encoder.Encode(extra) != nil {
-			return errMessages
-		}
-		body := strings.TrimSuffix(encoded.String(), "\n")
 		if native {
-			// Load the large inference extension after process start, avoiding exec's environment-size limit.
-			// 由 CLI 启动后加载大型推理扩展，避开 exec 对环境变量大小的限制。
-			settings, err := json.Marshal(map[string]any{"disableAllHooks": true, "autoMemoryEnabled": false, "env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": body}})
-			if err != nil || os.WriteFile(settingsPath, settings, 0600) != nil {
+			settings, request, err := nativeInputSettings(extra)
+			if err != nil {
+				return err
+			}
+			nativeRequest = request
+			if os.WriteFile(settingsPath, settings, 0600) != nil {
 				return errProbeSetup
 			}
 		} else {
-			cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+body)
+			body, err := encodeMessagesJSON(extra)
+			if err != nil {
+				return err
+			}
+			cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+string(body))
+		}
+	}
+	if native && (s.upstream != nil || nativeRequest != nil) {
+		capture := s.upstream
+		if capture == nil {
+			capture = &upstreamCapture{}
+		}
+		proxy, err := startUpstreamProxy(capture, env, nativeRequest)
+		if err != nil {
+			return errProbeSetup
+		}
+		defer proxy.close()
+		if cmd.Env, err = proxy.environ(dir, cmd.Env); err != nil {
+			return errProbeSetup
 		}
 	}
 	cmd.WaitDelay = 2 * time.Second

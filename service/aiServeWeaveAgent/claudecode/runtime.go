@@ -292,7 +292,7 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		defer close(out.items)
 		diagnostics := newMessagesRoundDiagnostics(parsed.isNative(), len(parsed.Safeguards) > 0)
 		roundID := randomID()
-		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path)
+		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path, "request_bytes", len(req.JSON))
 		writer := &nativeWriter{stream: out, header: make(http.Header), status: 200, diagnostics: diagnostics}
 		err := r.bridge.respond(ctx, writer, s, true)
 		outcome := "completed"
@@ -327,11 +327,12 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 // roundError reports a failed round. A quota rejection becomes a retryable
 // rate_limited carrying how long until the limit resets, so the Gateway can
 // start the session on another account and leave this one alone until then;
-// every other failure stays a protocol error with its detail withheld.
+// a missing result or unsuccessful process exit is an upstream failure,
+// and other failures retain their protocol classification with details withheld.
 //
 // roundError 报告一个失败的回合。额度拒绝成为可重试的 rate_limited，并携带距限额重置
 // 还有多久，使 Gateway 可以在另一个账户上开启会话、并在此之前不再打扰这个账户；其他
-// 失败仍是隐去细节的协议错误。
+// 缺少结果或进程异常退出按后端失败报告，其他失败仍保留隐去细节的协议错误分类。
 func (r *Runtime) roundError(err error) error {
 	if message := runtime.MessagesRejectionMessage(err); message != "" {
 		var failure *runtime.RuntimeError
@@ -375,6 +376,10 @@ func (r *Runtime) roundError(err error) error {
 		attrs = append(attrs, "cli_event_line", eventFailure.line, "cli_event_error", eventFailure.reason)
 	}
 	r.logger.Warn("Claude Messages round failed", attrs...)
+	if errors.Is(err, errMissingResult) || errors.Is(err, errCLIExit) {
+		return &runtime.RuntimeError{Code: runtime.ErrorUpstream, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
+			Message: "Claude Messages operation failed: " + string(runtime.ErrorUpstream)}
+	}
 	var quota *quotaError
 	if !errors.As(err, &quota) {
 		return claudeError(runtime.ErrorProtocol)

@@ -4,6 +4,8 @@
 
 ## Claude Code 长工具链 400 修复
 
+2026-11-09 另修复原生长历史超过 CLI 设置文件 2 MiB 上限后快速退出、日志为 `missing_result` 的问题。选择 Release 时需确认其变更记录包含此项；此前 `ca16c33` 仅覆盖下文的工具集合及 beta 续接问题。新版本对大原生请求自动切换输入传递方式，无需用户调小历史或设置专用环境变量，见 [原生大请求说明](../../service/aiServeWeaveAgent/claudecode/README.md#原生大请求与-cli-设置文件上限)。
+
 源码提交 `ca16c33` 修复 Agent 连续工具回合中的 `continuation_tool_count_mismatch` 及 beta 变化拒绝，具体行为与验收边界见 [变更记录](../../CHANGELOG.md#unreleased) 和 [Claude 续接规则](../../service/aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。部署包含此修复的 Agent 即可获得修复，无需手动补丁或专用配置。预编译安装时以目标 Release 的变更记录为准；源码部署需重新构建 Agent，并停止旧进程、启动新程序。运行节点应确认 Agent 自身的 `-version` 或本地 `-control status` 中版本，而非只查看平台或源码版本。
 
 平台的一行命令安装默认下载 Gateway 镜像内置的 Agent。平台维护者需要从含修复的源码重新构建并部署 Gateway 镜像，使 `/agent/v1/manifest` 和 `/agent/download/<version>/` 提供新版制品；仅升级某个运行节点不会更新平台下载包。安装来源为 GitHub 时，需发布并选择包含此修复的正式 Release。安装来源为自托管目录时，更新对应版本的 Agent 文件及 `SHA256SUMS.txt`。已安装的其他节点仍要通过下文的 `--upgrade` / `-Upgrade` 升级并重启，平台刷新下载包不会自动替换它们。

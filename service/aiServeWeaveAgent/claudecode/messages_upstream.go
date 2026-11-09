@@ -3,6 +3,7 @@ package claudecode
 import (
 	"bufio"
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
@@ -179,6 +180,9 @@ func withUpstream(failure, cause error, capture *upstreamCapture) error {
 // 经由该代理），并记录本回合流式 Messages 调用的响应。CLI 看到的仍是官方 API 地址，其官方
 // 行为不受影响。只有出示本进程令牌的客户端才能使用该代理。
 type upstreamProxy struct {
+	// request is an immutable native document overlaid on the primary streamed call.
+	// request 只覆盖本回合主流式调用，是不可变的原生文档；旁路调用保持原样。
+	request   []byte
 	listener  net.Listener
 	server    *http.Server
 	inner     *http.Server
@@ -210,7 +214,7 @@ type upstreamProxy struct {
 // have used.
 //
 // startUpstreamProxy 启动截获代理，出站路由遵循 env 中的代理与 CA 设置，即 CLI 原本会使用的环境。
-func startUpstreamProxy(capture *upstreamCapture, env []string) (*upstreamProxy, error) {
+func startUpstreamProxy(capture *upstreamCapture, env []string, request ...[]byte) (*upstreamProxy, error) {
 	caPEM, leaf, err := upstreamCertificates()
 	if err != nil {
 		return nil, err
@@ -251,6 +255,9 @@ func startUpstreamProxy(capture *upstreamCapture, env []string) (*upstreamProxy,
 			TLSHandshakeTimeout: 30 * time.Second,
 			IdleConnTimeout:     30 * time.Second,
 		},
+	}
+	if len(request) > 0 {
+		p.request = request[0]
 	}
 	// Every upstream connection is tracked, including one a cancelled
 	// request's dial completes in the background, so close leaves none behind.
@@ -552,12 +559,13 @@ func stripHop(h http.Header) {
 	}
 }
 
-// forward relays one request and its response unchanged, flushing as bytes
-// arrive. A Messages call is captured when its body asks for a stream: the
-// round's call always does, the CLI's side calls do not.
+// forward relays a request and its response, flushing as bytes arrive. A
+// Messages call is captured when its body asks for a stream. Only that call
+// receives a native document override when settings could not hold it; the
+// CLI's side calls and all response bytes are relayed unchanged.
 //
-// forward 原样中继一个请求及其响应，字节到达即刷新。请求体要求流式输出的 Messages 调用会被
-// 截获：本回合的调用总是流式的，CLI 的旁路调用则不是。
+// forward 中继请求和响应，字节到达即刷新。仅要求流式输出的主 Messages 调用在设置文件
+// 容纳不下原生文档时接收覆盖；CLI 旁路调用及响应字节保持原样。
 func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL, messages bool) {
 	if !p.begin() {
 		w.WriteHeader(http.StatusServiceUnavailable)
@@ -566,22 +574,63 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 	defer p.handlers.Done()
 	body := io.Reader(r.Body)
 	primary := false
+	var replacement []byte
 	if messages {
 		head, err := io.ReadAll(io.LimitReader(r.Body, maxCapturedRequestBytes+1))
 		if err != nil {
 			w.WriteHeader(http.StatusBadGateway)
 			return
 		}
-		if len(head) <= maxCapturedRequestBytes {
+		probeBody := head
+		if r.Header.Get("Content-Encoding") == "gzip" && len(head) <= maxCapturedRequestBytes {
+			reader, err := gzip.NewReader(bytes.NewReader(head))
+			if err == nil {
+				probeBody, err = io.ReadAll(io.LimitReader(reader, maxCapturedRequestBytes+1))
+				_ = reader.Close()
+				if err != nil {
+					probeBody = nil
+				}
+			} else {
+				probeBody = nil
+			}
+		}
+		valid := false
+		if len(head) <= maxCapturedRequestBytes && len(probeBody) <= maxCapturedRequestBytes {
 			var probe struct {
 				Stream bool `json:"stream"`
 			}
-			primary = json.Unmarshal(head, &probe) == nil && probe.Stream
+			valid = json.Unmarshal(probeBody, &probe) == nil
+			primary = valid && probe.Stream
+		}
+		if p.request != nil && !valid {
+			// Refuse an unreadable seed rather than silently sending a different prompt.
+			// 种子请求无法识别时明确失败，不能静默发送不含原始历史的另一份请求。
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		if primary && p.request != nil {
+			var seed, override map[string]json.RawMessage
+			if json.Unmarshal(probeBody, &seed) != nil || json.Unmarshal(p.request, &override) != nil || seed == nil || override == nil {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
+			for key, value := range override {
+				seed[key] = value
+			}
+			var err error
+			replacement, err = encodeMessagesJSON(seed)
+			if err != nil || len(replacement) > maxCapturedRequestBytes {
+				w.WriteHeader(http.StatusBadGateway)
+				return
+			}
 		}
 		body = io.MultiReader(bytes.NewReader(head), r.Body)
 	}
 	if r.ContentLength == 0 {
 		body = http.NoBody
+	}
+	if replacement != nil {
+		body = bytes.NewReader(replacement)
 	}
 	out, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), body)
 	if err != nil {
@@ -591,6 +640,12 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 	out.ContentLength = r.ContentLength
 	out.Header = r.Header.Clone()
 	stripHop(out.Header)
+	if replacement != nil {
+		out.ContentLength = int64(len(replacement))
+		out.Header.Del("Content-Length")
+		out.Header.Del("Content-Encoding")
+		out.Header.Set("Content-Type", "application/json")
+	}
 	// The transport negotiates and removes compression, so a captured error
 	// document is always readable JSON.
 	// 由 transport 协商并解除压缩，截获的错误文档因此总是可读的 JSON。

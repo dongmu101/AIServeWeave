@@ -97,6 +97,14 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 需先升级 Agent，再升级 Gateway：旧 Gateway 不发送该标志，新 Agent 照旧走桥接。生产日志的 `message_path` 新增 `native`。默认测试覆盖双 Gateway 真实 mTLS 隧道下的 JSON/SSE 首轮工具调用与跨副本无状态续接、旧节点回退、桥接续接保留与附件转换；真实 CLI 与真实上游的未带 `safeguards` 原生直通尚未验收。
 
+## 原生大请求与 CLI 设置文件上限
+
+Claude Code `2.1.319` 对 `--settings` 文件施加 2 MiB 上限。此前 Agent 把完整原生请求放进该文件的 `CLAUDE_CODE_EXTRA_BODY`，长历史、工具结果、图片或较大的 `safeguards` 上下文经过 JSON 再次转义后可超过该上限；CLI 会在输出任何结果前退出，Agent 因而记录 `missing_result`。这比平台原生请求的 32 MiB 上限更早触发。
+
+Agent 现在检查最终设置文件的实际字节数。超过 2 MiB 时，设置中只保留小型 beta 选择参数；完整原生文档保留在本回合内存中，经下文的每进程回环代理覆盖 CLI 的主流式 Messages 请求，与小请求的 `EXTRA_BODY` 合并方式一致。CLI 仍访问官方 API 并管理登录，生成的认证头与未被调用方覆盖的元数据保留；只有主 `POST /v1/messages`、`stream: true` 请求接收该文档，旁路请求保持原样。代理支持识别 gzip 种子请求，覆盖后更新长度并移除原压缩头。无法识别种子请求时明确失败，避免发送不含原始历史的另一份请求。请求大小上限仍为 32 MiB，不新增远程地址或配置开关。
+
+本地缺少 CLI 结果、进程异常退出现在按后端错误报告（`upstream_error`，无已捕获上游错误时 HTTP 502）；已捕获的真实上游错误仍按原有规则透传。回合开始日志另带 `request_bytes`，只记录原始 JSON 字节数。默认测试覆盖设置大小边界、转义膨胀、代理字段与认证头保留、gzip 和旁路请求；真实 CLI `2.1.319` 已通过 2、4、16、31 MiB 历史、4 MiB safeguards 及转义密集请求的逐字段回环契约，见 [验收记录](../../../docs/acceptance/claude-settings-limit-2026-11-09/README.md)。这些测试使用真实 CLI 和模拟上游，不消耗真实模型额度；生产任务、其他系统与 CLI 版本仍待验收。现有运行节点需更新并重启 Agent；平台分发安装包时还需更新 Gateway 镜像内置制品，推理协议无需修改。
+
 ## 上游响应头与错误透传
 
 原生直通与带 `safeguards` 的请求（2026-11-05 起）在 CLI 之下截获真实上游的应答，响应头与错误文档不再受 CLI 输出格式限制。Agent 为每个原生回合的 CLI 进程启动一个回环 HTTP 代理，经 `HTTPS_PROXY` 接入，只接受携带本进程随机口令的连接。只有到 `api.anthropic.com:443` 的 CONNECT 被解密：叶子证书由本进程新建的 CA 签发，该 CA 名称约束为这一主机，签发后私钥即丢弃；CA 写入权限 `0600` 的临时证书包，通过 `NODE_EXTRA_CA_CERTS` 交给 CLI，并与 Agent 原有的 `NODE_EXTRA_CA_CERTS` 合并。其他主机原样隧道转发，不解密。出站遵循 Agent 自身的 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`/`NO_PROXY`（支持 http、https、socks5 代理）。CLI 访问的仍是官方地址，订阅登录、官方配置接口与 beta 等 first-party 行为不变。CLI 内部重试时以最后一次请求为准；请求体带 `stream: true` 的 `POST /v1/messages` 视为本回合调用，额度探测、token 计数等旁路调用不截获。进程结束时代理连同全部上游连接一起关闭。兼容桥接回合不经此代理。

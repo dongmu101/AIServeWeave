@@ -1,0 +1,728 @@
+diff --git a/CHANGELOG.md b/CHANGELOG.md
+--- a/CHANGELOG.md
++++ b/CHANGELOG.md
+@@ -49,6 +49,8 @@
+ 
+ ### Fixed
+ 
++- 原生 Claude 长任务在历史增大后快速返回通用 400：Agent 的完整请求设置文件会撞上 Claude Code `2.1.319` 的 2 MiB 限制。现在按最终设置字节数切换输入方式，大文档经每进程回环代理补入同一次主 API 调用，保留原始历史、工具结果、safeguards、认证头和 beta 选择器，平台请求上限仍为 32 MiB；本地缺少结果或进程异常退出按后端错误返回，回合日志新增 `request_bytes`。默认回归及真实 CLI 的 31 MiB 历史、4 MiB safeguards、转义密集请求契约通过。已有节点更新并重启 Agent；平台一键安装用户需要刷新 Gateway 镜像内的新版 Agent 制品。真实生产长任务尚待更新后验收，见 [验收记录](docs/acceptance/claude-settings-limit-2026-11-09/README.md)。
++
+ - Claude Code 长工具链的续接 400：Agent 按本轮已公开的工具 ID 集合校验结果，已投递但尚待迟到 MCP 回调取走的旧邮箱不再触发 `continuation_tool_count_mismatch`。`anthropic-beta` 的顺序、空格及重复项按功能集合比较；实际增删 beta 时，在完整归属、历史、工具结果及其他配置均匹配后，使用新 CLI 从已执行结果恢复。修复已进入源码（`ca16c33`），默认 CI 覆盖连续工具回合、迟到回调、beta 变化和跨两个 Gateway 的 mTLS 回归。**升级范围**：现有节点需升级并重启 Agent；平台通过 `/agent/*` 分发安装包时，需重新构建并部署包含新版 Agent 制品的 Gateway 镜像，已有节点仍需各自升级。真实 Opus 长任务仍待线上验收，详见 [Agent 升级说明](deploy/agent/README.md#claude-code-长工具链-400-修复)。
+ 
+ - `common/metrics.Registry` 的 `Counter`/`Gauge`/`Histogram` 此前对 nil 接收者 panic——一个未初始化的 `*Registry` 字段被装进 `runtime.Metrics` 接口后不再是 nil 接口，调用方常见的 `== nil` 判断拦不住它；现在与其余记录点一致，返回丢弃仪器。
+diff --git a/deploy/agent/README.md b/deploy/agent/README.md
+--- a/deploy/agent/README.md
++++ b/deploy/agent/README.md
+@@ -3,6 +3,8 @@
+ 本目录只安装 Agent，连接已有的同版本 Registry/Gateway。安装机不需要 Go；模型、GPU 驱动、Docker 和 CLI 由节点用户自行安装。配置文件仍使用 [Agent 配置](../../service/aiServeWeaveAgent/README.md) 的 YAML 语义。
+ 
+ ## Claude Code 长工具链 400 修复
++
++2026-11-09 另修复原生长历史超过 CLI 设置文件 2 MiB 上限后快速退出、日志为 `missing_result` 的问题。选择 Release 时需确认其变更记录包含此项；此前 `ca16c33` 仅覆盖下文的工具集合及 beta 续接问题。新版本对大原生请求自动切换输入传递方式，无需用户调小历史或设置专用环境变量，见 [原生大请求说明](../../service/aiServeWeaveAgent/claudecode/README.md#原生大请求与-cli-设置文件上限)。
+ 
+ 源码提交 `ca16c33` 修复 Agent 连续工具回合中的 `continuation_tool_count_mismatch` 及 beta 变化拒绝，具体行为与验收边界见 [变更记录](../../CHANGELOG.md#unreleased) 和 [Claude 续接规则](../../service/aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。部署包含此修复的 Agent 即可获得修复，无需手动补丁或专用配置。预编译安装时以目标 Release 的变更记录为准；源码部署需重新构建 Agent，并停止旧进程、启动新程序。运行节点应确认 Agent 自身的 `-version` 或本地 `-control status` 中版本，而非只查看平台或源码版本。
+ 
+diff --git a/service/aiServeWeaveAgent/STATUS.md b/service/aiServeWeaveAgent/STATUS.md
+--- a/service/aiServeWeaveAgent/STATUS.md
++++ b/service/aiServeWeaveAgent/STATUS.md
+@@ -52,6 +52,7 @@
+ - **Messages 图片输入（2026-11-04）**：user 与工具结果支持 base64 JPEG/PNG/GIF/WebP。有图首轮用 CLI `stream-json` 结构化输入，历史图片以编号对应独立图像块，工具图片经 MCP image 返回；图片字节参与续接历史校验。URL 与独立音频仍拒绝；Chat/Responses 图片输入仍不支持。默认测试覆盖真实 mTLS 隧道及模拟 CLI；此前图片专项验证时缺少可用订阅登录，真实看图及线上修复仍未验收。仅需更新并重启实际承载 Claude 运行时的 Agent，详见 [图片说明](claudecode/README.md#messages-图片输入)。
+ - **Messages 文件与视频（2026-11-04）**：`attachments/` 支持 UTF-8 文本、原生 PDF、本地 LibreOffice 转 DOC/DOCX/XLS/XLSX/PPT/PPTX、FFmpeg 抽取 MP4/MOV/WebM 画面并交本地 whisper.cpp 转录音轨。工具文档经 Poppler 转文字和页图，保留完整原始历史校验；按 CLI 会话缓存转换结果，最多 32 MiB。顶层本地 `attachments` YAML 保存工具/模型路径及限额，设置页保存时保留，变更需重启；不接受远程命令或模型下载地址。默认模拟进程、跨副本真实 mTLS JSON/SSE、配置保存和 race 测试通过；真实 CLI 2.1.318 加模拟上游的 PDF 传输契约通过。真实转换器、语音识别、模型理解及线上均未验收/未部署；Chat/Responses 未随之开放附件。见 [完整配置、协议与验收](attachments/README.md)。
+ - **边界**：兼容桥接的续接固定原节点、不自动重试；原 CLI 已不存在的孤立回合以新会话从文本记录恢复；投递给存活 CLI 的结果 24 小时内拒绝重放。原生直通与带安全上下文的请求依靠调用方完整历史，无状态重试与跨副本调用。原生请求最多 32 MiB。
++- **原生大请求修复（2026-11-09）**：修复完整请求经 `CLAUDE_CODE_EXTRA_BODY` 放入设置文件后超过 CLI 2 MiB 上限而产生 `missing_result` 的路径。Agent 检查最终设置字节数，大文档经原有每进程回环代理补入主流式 API 调用，认证继续由 CLI 管理；旁路请求保持原样。缺少结果和异常退出按后端错误报告，回合日志新增 `request_bytes`。默认边界、gzip、字段与认证头保留、旁路回归及相关 race/vet 通过；真实 CLI 2.1.319 与回环模拟 API 验证至 31 MiB 历史及 4 MiB safeguards，上线任务和其他系统仍待验收，见[验收记录](../../docs/acceptance/claude-settings-limit-2026-11-09/README.md)。
+ - **上游响应头与错误透传（2026-11-05）**：原生回合的 CLI 经每进程一个、带口令的回环代理访问上游。代理只解密 `api.anthropic.com`，用名称受限的临时 CA 截获最终一次 `/v1/messages` 应答。成功响应头随首个事件传给 Gateway；上游导致的失败连同状态码、响应头和原始错误文档经隧道新字段传回，原生 `/v1/messages` 原样返回。能力拒绝保留固定分类，上游 401/403/407 不透传。同时修复不带 `tools` 的原生请求向上游发送 `null` 的问题。开发时的临时测试（未入库）验证了双 Gateway mTLS 下的响应头与 529/429/流内错误；CLI `2.1.318` 加回环模拟上游与一次真实订阅请求验证了代理、CA 和真实限额头。真实上游错误与生产部署未验收，详见[透传说明](claudecode/README.md#上游响应头与错误透传)。需先升级 Agent，再升级 Gateway。
+ - **原生兼容修复（2026-11-05）**：补齐阈值/按需压缩的请求、增量、摘要/签名聚合与压缩停止；从 CLI API 错误元数据提取客户端可识别的固定能力拒绝分类。Gateway 同步保留原始 `thinking`（模型后缀仅解析路由）并按 `usage.iterations` 计量压缩采样。默认回归覆盖双 Gateway mTLS JSON/SSE；真实 CLI 加回环模拟上游已验证压缩与四类能力拒绝，未代表真实模型自动压缩或生产部署验收。须先升级 Agent，再升级 Gateway，详见[验收记录](../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。
+ - **终止与诊断**：合法的 `max_tokens`、`stop_sequence`、`refusal`、`model_context_window_exceeded` 保留为终止响应，完整停止后回收 CLI，避免自动续写；自然结束继续校验最终结果与退出状态，成功结果后的 CLI 通知不进入回复。本机失败日志包含固定错误分类，解析器拒绝另带事件行号与固定原因，不记录原始内容。含模拟子进程的离线回归覆盖，未带 `safeguards` 的 Opus 5.5 真实工具流程仍待验收；详见 [故障排查](claudecode/README.md#终止原因与故障排查)。
+diff --git a/service/aiServeWeaveAgent/claudecode/README.md b/service/aiServeWeaveAgent/claudecode/README.md
+--- a/service/aiServeWeaveAgent/claudecode/README.md
++++ b/service/aiServeWeaveAgent/claudecode/README.md
+@@ -97,6 +97,14 @@
+ 
+ 需先升级 Agent，再升级 Gateway：旧 Gateway 不发送该标志，新 Agent 照旧走桥接。生产日志的 `message_path` 新增 `native`。默认测试覆盖双 Gateway 真实 mTLS 隧道下的 JSON/SSE 首轮工具调用与跨副本无状态续接、旧节点回退、桥接续接保留与附件转换；真实 CLI 与真实上游的未带 `safeguards` 原生直通尚未验收。
+ 
++## 原生大请求与 CLI 设置文件上限
++
++Claude Code `2.1.319` 对 `--settings` 文件施加 2 MiB 上限。此前 Agent 把完整原生请求放进该文件的 `CLAUDE_CODE_EXTRA_BODY`，长历史、工具结果、图片或较大的 `safeguards` 上下文经过 JSON 再次转义后可超过该上限；CLI 会在输出任何结果前退出，Agent 因而记录 `missing_result`。这比平台原生请求的 32 MiB 上限更早触发。
++
++Agent 现在检查最终设置文件的实际字节数。超过 2 MiB 时，设置中只保留小型 beta 选择参数；完整原生文档保留在本回合内存中，经下文的每进程回环代理覆盖 CLI 的主流式 Messages 请求，与小请求的 `EXTRA_BODY` 合并方式一致。CLI 仍访问官方 API 并管理登录，生成的认证头与未被调用方覆盖的元数据保留；只有主 `POST /v1/messages`、`stream: true` 请求接收该文档，旁路请求保持原样。代理支持识别 gzip 种子请求，覆盖后更新长度并移除原压缩头。无法识别种子请求时明确失败，避免发送不含原始历史的另一份请求。请求大小上限仍为 32 MiB，不新增远程地址或配置开关。
++
++本地缺少 CLI 结果、进程异常退出现在按后端错误报告（`upstream_error`，无已捕获上游错误时 HTTP 502）；已捕获的真实上游错误仍按原有规则透传。回合开始日志另带 `request_bytes`，只记录原始 JSON 字节数。默认测试覆盖设置大小边界、转义膨胀、代理字段与认证头保留、gzip 和旁路请求；真实 CLI `2.1.319` 已通过 2、4、16、31 MiB 历史、4 MiB safeguards 及转义密集请求的逐字段回环契约，见 [验收记录](../../../docs/acceptance/claude-settings-limit-2026-11-09/README.md)。这些测试使用真实 CLI 和模拟上游，不消耗真实模型额度；生产任务、其他系统与 CLI 版本仍待验收。现有运行节点需更新并重启 Agent；平台分发安装包时还需更新 Gateway 镜像内置制品，推理协议无需修改。
++
+ ## 上游响应头与错误透传
+ 
+ 原生直通与带 `safeguards` 的请求（2026-11-05 起）在 CLI 之下截获真实上游的应答，响应头与错误文档不再受 CLI 输出格式限制。Agent 为每个原生回合的 CLI 进程启动一个回环 HTTP 代理，经 `HTTPS_PROXY` 接入，只接受携带本进程随机口令的连接。只有到 `api.anthropic.com:443` 的 CONNECT 被解密：叶子证书由本进程新建的 CA 签发，该 CA 名称约束为这一主机，签发后私钥即丢弃；CA 写入权限 `0600` 的临时证书包，通过 `NODE_EXTRA_CA_CERTS` 交给 CLI，并与 Agent 原有的 `NODE_EXTRA_CA_CERTS` 合并。其他主机原样隧道转发，不解密。出站遵循 Agent 自身的 `HTTPS_PROXY`/`HTTP_PROXY`/`ALL_PROXY`/`NO_PROXY`（支持 http、https、socks5 代理）。CLI 访问的仍是官方地址，订阅登录、官方配置接口与 beta 等 first-party 行为不变。CLI 内部重试时以最后一次请求为准；请求体带 `stream: true` 的 `POST /v1/messages` 视为本回合调用，额度探测、token 计数等旁路调用不截获。进程结束时代理连同全部上游连接一起关闭。兼容桥接回合不经此代理。
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_process.go b/service/aiServeWeaveAgent/claudecode/messages_process.go
+--- a/service/aiServeWeaveAgent/claudecode/messages_process.go
++++ b/service/aiServeWeaveAgent/claudecode/messages_process.go
+@@ -225,18 +225,6 @@
+ 		args = append(args, "--input-format", "stream-json")
+ 	}
+ 	env := slices.Clone(b.cliEnv())
+-	if native && s.upstream != nil {
+-		// Capture the upstream's own headers and errors below the CLI, which folds them.
+-		// 在 CLI 之下截获上游自己的响应头与错误，CLI 会把它们折叠掉。
+-		proxy, err := startUpstreamProxy(s.upstream, env)
+-		if err != nil {
+-			return errProbeSetup
+-		}
+-		defer proxy.close()
+-		if env, err = proxy.environ(dir, env); err != nil {
+-			return errProbeSetup
+-		}
+-	}
+ 	cmd := exec.CommandContext(s.ctx, b.program, args...)
+ 	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
+ 	cmd.Env = append(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
+@@ -288,23 +276,37 @@
+ 	if s.request.apiVersion != "" {
+ 		cmd.Env = append(cmd.Env, "ANTHROPIC_CUSTOM_HEADERS=anthropic-version: "+s.request.apiVersion)
+ 	}
++	var nativeRequest []byte
+ 	if len(extra) > 0 {
+-		var encoded strings.Builder
+-		encoder := json.NewEncoder(&encoded)
+-		encoder.SetEscapeHTML(false)
+-		if encoder.Encode(extra) != nil {
+-			return errMessages
+-		}
+-		body := strings.TrimSuffix(encoded.String(), "\n")
+ 		if native {
+-			// Load the large inference extension after process start, avoiding exec's environment-size limit.
+-			// 由 CLI 启动后加载大型推理扩展，避开 exec 对环境变量大小的限制。
+-			settings, err := json.Marshal(map[string]any{"disableAllHooks": true, "autoMemoryEnabled": false, "env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": body}})
+-			if err != nil || os.WriteFile(settingsPath, settings, 0600) != nil {
++			settings, request, err := nativeInputSettings(extra)
++			if err != nil {
++				return err
++			}
++			nativeRequest = request
++			if os.WriteFile(settingsPath, settings, 0600) != nil {
+ 				return errProbeSetup
+ 			}
+ 		} else {
+-			cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+body)
++			body, err := encodeMessagesJSON(extra)
++			if err != nil {
++				return err
++			}
++			cmd.Env = append(cmd.Env, "CLAUDE_CODE_EXTRA_BODY="+string(body))
++		}
++	}
++	if native && (s.upstream != nil || nativeRequest != nil) {
++		capture := s.upstream
++		if capture == nil {
++			capture = &upstreamCapture{}
++		}
++		proxy, err := startUpstreamProxy(capture, env, nativeRequest)
++		if err != nil {
++			return errProbeSetup
++		}
++		defer proxy.close()
++		if cmd.Env, err = proxy.environ(dir, cmd.Env); err != nil {
++			return errProbeSetup
+ 		}
+ 	}
+ 	cmd.WaitDelay = 2 * time.Second
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_upstream.go b/service/aiServeWeaveAgent/claudecode/messages_upstream.go
+--- a/service/aiServeWeaveAgent/claudecode/messages_upstream.go
++++ b/service/aiServeWeaveAgent/claudecode/messages_upstream.go
+@@ -3,6 +3,7 @@
+ import (
+ 	"bufio"
+ 	"bytes"
++	"compress/gzip"
+ 	"context"
+ 	"crypto/ecdsa"
+ 	"crypto/elliptic"
+@@ -179,6 +180,9 @@
+ // 经由该代理），并记录本回合流式 Messages 调用的响应。CLI 看到的仍是官方 API 地址，其官方
+ // 行为不受影响。只有出示本进程令牌的客户端才能使用该代理。
+ type upstreamProxy struct {
++	// request is an immutable native document overlaid on the primary streamed call.
++	// request 只覆盖本回合主流式调用，是不可变的原生文档；旁路调用保持原样。
++	request   []byte
+ 	listener  net.Listener
+ 	server    *http.Server
+ 	inner     *http.Server
+@@ -210,7 +214,7 @@
+ // have used.
+ //
+ // startUpstreamProxy 启动截获代理，出站路由遵循 env 中的代理与 CA 设置，即 CLI 原本会使用的环境。
+-func startUpstreamProxy(capture *upstreamCapture, env []string) (*upstreamProxy, error) {
++func startUpstreamProxy(capture *upstreamCapture, env []string, request ...[]byte) (*upstreamProxy, error) {
+ 	caPEM, leaf, err := upstreamCertificates()
+ 	if err != nil {
+ 		return nil, err
+@@ -252,6 +256,9 @@
+ 			IdleConnTimeout:     30 * time.Second,
+ 		},
+ 	}
++	if len(request) > 0 {
++		p.request = request[0]
++	}
+ 	// Every upstream connection is tracked, including one a cancelled
+ 	// request's dial completes in the background, so close leaves none behind.
+ 	// 每条上游连接都被跟踪，包括被取消的请求在后台完成拨号得到的连接，close 因此不留残余。
+@@ -552,12 +559,13 @@
+ 	}
+ }
+ 
+-// forward relays one request and its response unchanged, flushing as bytes
+-// arrive. A Messages call is captured when its body asks for a stream: the
+-// round's call always does, the CLI's side calls do not.
+-//
+-// forward 原样中继一个请求及其响应，字节到达即刷新。请求体要求流式输出的 Messages 调用会被
+-// 截获：本回合的调用总是流式的，CLI 的旁路调用则不是。
++// forward relays a request and its response, flushing as bytes arrive. A
++// Messages call is captured when its body asks for a stream. Only that call
++// receives a native document override when settings could not hold it; the
++// CLI's side calls and all response bytes are relayed unchanged.
++//
++// forward 中继请求和响应，字节到达即刷新。仅要求流式输出的主 Messages 调用在设置文件
++// 容纳不下原生文档时接收覆盖；CLI 旁路调用及响应字节保持原样。
+ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL, messages bool) {
+ 	if !p.begin() {
+ 		w.WriteHeader(http.StatusServiceUnavailable)
+@@ -566,22 +574,63 @@
+ 	defer p.handlers.Done()
+ 	body := io.Reader(r.Body)
+ 	primary := false
++	var replacement []byte
+ 	if messages {
+ 		head, err := io.ReadAll(io.LimitReader(r.Body, maxCapturedRequestBytes+1))
+ 		if err != nil {
+ 			w.WriteHeader(http.StatusBadGateway)
+ 			return
+ 		}
+-		if len(head) <= maxCapturedRequestBytes {
++		probeBody := head
++		if r.Header.Get("Content-Encoding") == "gzip" && len(head) <= maxCapturedRequestBytes {
++			reader, err := gzip.NewReader(bytes.NewReader(head))
++			if err == nil {
++				probeBody, err = io.ReadAll(io.LimitReader(reader, maxCapturedRequestBytes+1))
++				_ = reader.Close()
++				if err != nil {
++					probeBody = nil
++				}
++			} else {
++				probeBody = nil
++			}
++		}
++		valid := false
++		if len(head) <= maxCapturedRequestBytes && len(probeBody) <= maxCapturedRequestBytes {
+ 			var probe struct {
+ 				Stream bool `json:"stream"`
+ 			}
+-			primary = json.Unmarshal(head, &probe) == nil && probe.Stream
++			valid = json.Unmarshal(probeBody, &probe) == nil
++			primary = valid && probe.Stream
++		}
++		if p.request != nil && !valid {
++			// Refuse an unreadable seed rather than silently sending a different prompt.
++			// 种子请求无法识别时明确失败，不能静默发送不含原始历史的另一份请求。
++			w.WriteHeader(http.StatusBadGateway)
++			return
++		}
++		if primary && p.request != nil {
++			var seed, override map[string]json.RawMessage
++			if json.Unmarshal(probeBody, &seed) != nil || json.Unmarshal(p.request, &override) != nil || seed == nil || override == nil {
++				w.WriteHeader(http.StatusBadGateway)
++				return
++			}
++			for key, value := range override {
++				seed[key] = value
++			}
++			var err error
++			replacement, err = encodeMessagesJSON(seed)
++			if err != nil || len(replacement) > maxCapturedRequestBytes {
++				w.WriteHeader(http.StatusBadGateway)
++				return
++			}
+ 		}
+ 		body = io.MultiReader(bytes.NewReader(head), r.Body)
+ 	}
+ 	if r.ContentLength == 0 {
+ 		body = http.NoBody
++	}
++	if replacement != nil {
++		body = bytes.NewReader(replacement)
+ 	}
+ 	out, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), body)
+ 	if err != nil {
+@@ -591,6 +640,12 @@
+ 	out.ContentLength = r.ContentLength
+ 	out.Header = r.Header.Clone()
+ 	stripHop(out.Header)
++	if replacement != nil {
++		out.ContentLength = int64(len(replacement))
++		out.Header.Del("Content-Length")
++		out.Header.Del("Content-Encoding")
++		out.Header.Set("Content-Type", "application/json")
++	}
+ 	// The transport negotiates and removes compression, so a captured error
+ 	// document is always readable JSON.
+ 	// 由 transport 协商并解除压缩，截获的错误文档因此总是可读的 JSON。
+diff --git a/service/aiServeWeaveAgent/claudecode/runtime.go b/service/aiServeWeaveAgent/claudecode/runtime.go
+--- a/service/aiServeWeaveAgent/claudecode/runtime.go
++++ b/service/aiServeWeaveAgent/claudecode/runtime.go
+@@ -292,7 +292,7 @@
+ 		defer close(out.items)
+ 		diagnostics := newMessagesRoundDiagnostics(parsed.isNative(), len(parsed.Safeguards) > 0)
+ 		roundID := randomID()
+-		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path)
++		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path, "request_bytes", len(req.JSON))
+ 		writer := &nativeWriter{stream: out, header: make(http.Header), status: 200, diagnostics: diagnostics}
+ 		err := r.bridge.respond(ctx, writer, s, true)
+ 		outcome := "completed"
+@@ -327,11 +327,12 @@
+ // roundError reports a failed round. A quota rejection becomes a retryable
+ // rate_limited carrying how long until the limit resets, so the Gateway can
+ // start the session on another account and leave this one alone until then;
+-// every other failure stays a protocol error with its detail withheld.
++// a missing result or unsuccessful process exit is an upstream failure,
++// and other failures retain their protocol classification with details withheld.
+ //
+ // roundError 报告一个失败的回合。额度拒绝成为可重试的 rate_limited，并携带距限额重置
+ // 还有多久，使 Gateway 可以在另一个账户上开启会话、并在此之前不再打扰这个账户；其他
+-// 失败仍是隐去细节的协议错误。
++// 缺少结果或进程异常退出按后端失败报告，其他失败仍保留隐去细节的协议错误分类。
+ func (r *Runtime) roundError(err error) error {
+ 	if message := runtime.MessagesRejectionMessage(err); message != "" {
+ 		var failure *runtime.RuntimeError
+@@ -375,6 +376,10 @@
+ 		attrs = append(attrs, "cli_event_line", eventFailure.line, "cli_event_error", eventFailure.reason)
+ 	}
+ 	r.logger.Warn("Claude Messages round failed", attrs...)
++	if errors.Is(err, errMissingResult) || errors.Is(err, errCLIExit) {
++		return &runtime.RuntimeError{Code: runtime.ErrorUpstream, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
++			Message: "Claude Messages operation failed: " + string(runtime.ErrorUpstream)}
++	}
+ 	var quota *quotaError
+ 	if !errors.As(err, &quota) {
+ 		return claudeError(runtime.ErrorProtocol)
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_input.go b/service/aiServeWeaveAgent/claudecode/messages_input.go
+new file mode 100644
+--- /dev/null
++++ b/service/aiServeWeaveAgent/claudecode/messages_input.go
+@@ -0,0 +1,65 @@
++package claudecode
++
++import (
++	"bytes"
++	"encoding/json"
++
++	"AIServeWeave/service/aiServeWeaveAgent/attachments"
++)
++
++// Claude Code 2.1.319 refuses settings files larger than 2 MiB before emitting any result.
++// Claude Code 2.1.319 在输出结果之前便拒绝大于 2 MiB 的设置文件。
++const maxCLISettingsBytes = 2 << 20
++
++func encodeMessagesJSON(value any) ([]byte, error) {
++	var out bytes.Buffer
++	encoder := json.NewEncoder(&out)
++	encoder.SetEscapeHTML(false)
++	if err := encoder.Encode(value); err != nil {
++		return nil, errMessages
++	}
++	return bytes.TrimSuffix(out.Bytes(), []byte{'\n'}), nil
++}
++
++// nativeInputSettings keeps settings bounded. Large documents enter the same
++// streamed API call through the per-process proxy, after CLI authentication.
++// nativeInputSettings 限制设置文件大小；大文档在 CLI 完成认证后，经每进程代理进入
++// 同一次流式 API 调用，完整历史不放入进程环境或受限的设置文件。
++func nativeInputSettings(extra map[string]any) (settings, request []byte, err error) {
++	body, err := encodeMessagesJSON(extra)
++	if err != nil {
++		return nil, nil, err
++	}
++	encodeSettings := func(body []byte) ([]byte, error) {
++		return encodeMessagesJSON(map[string]any{"disableAllHooks": true, "autoMemoryEnabled": false, "env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": string(body)}})
++	}
++	settings, err = encodeSettings(body)
++	if err != nil || len(settings) <= maxCLISettingsBytes {
++		return settings, nil, err
++	}
++	// betas belongs to the SDK header selector, not the HTTP JSON document.
++	// betas 属于 SDK 的请求头选择参数，不是 HTTP JSON 文档字段。
++	payload := make(map[string]any, len(extra))
++	for key, value := range extra {
++		if key != "betas" {
++			payload[key] = value
++		}
++	}
++	request, err = encodeMessagesJSON(payload)
++	if err != nil {
++		return nil, nil, err
++	}
++	if len(request) > maxRequestBytes {
++		return nil, nil, &attachmentFailure{attachments.ErrLimit}
++	}
++	selectors := map[string]any{}
++	if betas, ok := extra["betas"]; ok {
++		selectors["betas"] = betas
++	}
++	body, err = encodeMessagesJSON(selectors)
++	if err != nil {
++		return nil, nil, err
++	}
++	settings, err = encodeSettings(body)
++	return settings, request, err
++}
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_input_test.go b/service/aiServeWeaveAgent/claudecode/messages_input_test.go
+new file mode 100644
+--- /dev/null
++++ b/service/aiServeWeaveAgent/claudecode/messages_input_test.go
+@@ -0,0 +1,142 @@
++package claudecode
++
++import (
++	"bytes"
++	"compress/gzip"
++	"crypto/tls"
++	"crypto/x509"
++	"encoding/json"
++	"errors"
++	"io"
++	"log/slog"
++	"net/http"
++	"net/url"
++	"strings"
++	"testing"
++
++	"AIServeWeave/common/runtime"
++)
++
++func TestNativeSettingsSizeBoundary(t *testing.T) {
++	for _, tc := range []struct {
++		name, text string
++		relay      bool
++	}{
++		{"small", strings.Repeat("x", 128<<10), false},
++		{"large history", strings.Repeat("x", 2<<20), true},
++		{"escaped tool output", strings.Repeat("\"\\", 300<<10), true},
++	} {
++		t.Run(tc.name, func(t *testing.T) {
++			extra := map[string]any{"stream": true, "model": "fixture", "messages": []any{map[string]string{"role": "user", "content": tc.text}}, "betas": []string{"feature-a"}}
++			settings, request, err := nativeInputSettings(extra)
++			if err != nil || len(settings) > maxCLISettingsBytes || (request != nil) != tc.relay {
++				t.Fatalf("settings/request/error = %d/%t/%v", len(settings), request != nil, err)
++			}
++			var parsed struct{ Env map[string]string }
++			if json.Unmarshal(settings, &parsed) != nil {
++				t.Fatal("invalid settings JSON")
++			}
++			var body map[string]json.RawMessage
++			if json.Unmarshal([]byte(parsed.Env["CLAUDE_CODE_EXTRA_BODY"]), &body) != nil || canonical(body["betas"]) != canonical(extra["betas"]) {
++				t.Fatal("lost protocol selectors")
++			}
++			if tc.relay {
++				if _, exists := body["messages"]; exists {
++					t.Fatal("large history still entered settings")
++				}
++				// Unmarshal into a fresh map: absent fields must not survive a previous decode.
++				body = nil
++				if json.Unmarshal(request, &body) != nil {
++					t.Fatal("invalid relay document")
++				}
++				if _, exists := body["betas"]; exists {
++					t.Fatal("SDK header selector entered API JSON")
++				}
++			}
++			if canonical(body["messages"]) != canonical(extra["messages"]) {
++				t.Fatal("native history changed")
++			}
++		})
++	}
++}
++
++func TestLargeNativeProxyForwarding(t *testing.T) {
++	for _, kind := range []string{"stream", "gzip", "side-call"} {
++		t.Run(kind, func(t *testing.T) {
++			type received struct {
++				body   []byte
++				header http.Header
++			}
++			seen := make(chan received, 1)
++			env := nativeFixtureEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
++				body, _ := io.ReadAll(io.LimitReader(r.Body, maxRequestBytes))
++				seen <- received{body, r.Header.Clone()}
++				_, _ = io.WriteString(w, `{"ok":true}`)
++			}))
++			original := map[string]any{"model": "fixture", "stream": true, "messages": []any{map[string]string{"role": "user", "content": strings.Repeat("history", 400<<10)}}}
++			_, payload, err := nativeInputSettings(original)
++			if err != nil || payload == nil {
++				t.Fatal("expected a large native request")
++			}
++			proxy, err := startUpstreamProxy(&upstreamCapture{}, env, payload)
++			if err != nil {
++				t.Fatal(err)
++			}
++			t.Cleanup(proxy.close)
++			roots := x509.NewCertPool()
++			roots.AppendCertsFromPEM(proxy.caPEM)
++			endpoint, _ := url.Parse(proxy.proxyURL)
++			transport := &http.Transport{Proxy: http.ProxyURL(endpoint), TLSClientConfig: &tls.Config{RootCAs: roots}}
++			t.Cleanup(transport.CloseIdleConnections)
++			seed := map[string]any{"stream": kind != "side-call", "messages": []any{map[string]string{"role": "user", "content": "small seed"}}, "metadata": map[string]bool{"generated": true}}
++			data, _ := json.Marshal(seed)
++			if kind == "gzip" {
++				var compressed bytes.Buffer
++				writer := gzip.NewWriter(&compressed)
++				_, _ = writer.Write(data)
++				_ = writer.Close()
++				data = compressed.Bytes()
++			}
++			req, _ := http.NewRequestWithContext(t.Context(), "POST", "https://"+upstreamAPIHost+"/v1/messages", bytes.NewReader(data))
++			req.Header.Set("Authorization", "Bearer fixture-only")
++			req.Header.Set("Anthropic-Beta", "feature-a")
++			if kind == "gzip" {
++				req.Header.Set("Content-Encoding", "gzip")
++			}
++			response, err := (&http.Client{Transport: transport}).Do(req)
++			if err != nil {
++				t.Fatal(err)
++			}
++			_, _ = io.Copy(io.Discard, response.Body)
++			_ = response.Body.Close()
++			if response.StatusCode != 200 {
++				t.Fatalf("relay returned %d", response.StatusCode)
++			}
++			actual := <-seen
++			var body map[string]json.RawMessage
++			_ = json.Unmarshal(actual.body, &body)
++			want := original
++			if kind == "side-call" {
++				want = seed
++			}
++			for key, value := range want {
++				if canonical(body[key]) != canonical(value) {
++					t.Fatalf("changed field %s", key)
++				}
++			}
++			if canonical(body["metadata"]) != canonical(seed["metadata"]) || actual.header.Get("Authorization") != req.Header.Get("Authorization") || actual.header.Get("Anthropic-Beta") != "feature-a" || actual.header.Get("Content-Encoding") != "" {
++				t.Fatal("relay changed authentication/selectors/metadata or retained stale compression")
++			}
++		})
++	}
++}
++
++func TestMissingCLIResultIsBackendFailure(t *testing.T) {
++	r := &Runtime{cfg: runtime.Config{ID: "fixture"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
++	for _, cause := range []error{errMissingResult, errCLIExit} {
++		var failure *runtime.RuntimeError
++		if !errors.As(r.roundError(cause), &failure) || failure.Code != runtime.ErrorUpstream || failure.RuntimeID != "fixture" {
++			t.Fatalf("local CLI failure incorrectly reported as client error: %+v", failure)
++		}
++	}
++}
+diff --git a/service/aiServeWeaveAgent/claudecode/messages_size_contract_test.go b/service/aiServeWeaveAgent/claudecode/messages_size_contract_test.go
+new file mode 100644
+--- /dev/null
++++ b/service/aiServeWeaveAgent/claudecode/messages_size_contract_test.go
+@@ -0,0 +1,161 @@
++package claudecode
++
++import (
++	"bytes"
++	"context"
++	"crypto/tls"
++	"encoding/json"
++	"errors"
++	"fmt"
++	"io"
++	"log/slog"
++	"net"
++	"net/http"
++	"net/http/httptest"
++	"os"
++	"path/filepath"
++	"strings"
++	"testing"
++	"time"
++
++	"AIServeWeave/common/runtime"
++)
++
++// nativeFixtureEnvironment keeps the CLI's first-party API URL while routing all
++// Messages traffic to a TLS loopback server. No real credentials or inference are used.
++// nativeFixtureEnvironment 保留 CLI 官方 API 地址，通过 TLS 回环服务测试代理链路，
++// 不使用真实凭据或推理服务。
++func nativeFixtureEnvironment(t *testing.T, handler http.Handler) []string {
++	t.Helper()
++	ca, leaf, err := upstreamCertificates()
++	if err != nil {
++		t.Fatal(err)
++	}
++	api := httptest.NewUnstartedServer(handler)
++	api.TLS = &tls.Config{Certificates: []tls.Certificate{leaf}}
++	api.StartTLS()
++	t.Cleanup(api.Close)
++	dir := t.TempDir()
++	caFile := filepath.Join(dir, "fixture-ca.pem")
++	if err := os.WriteFile(caFile, ca, 0600); err != nil {
++		t.Fatal(err)
++	}
++	base := append(withAccountDir(probeEnv(os.Environ()), t.TempDir()), "ANTHROPIC_API_KEY=loopback-fixture-only", "NODE_EXTRA_CA_CERTS="+caFile,
++		"DISABLE_TELEMETRY=1", "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1")
++	proxy, err := startUpstreamProxy(&upstreamCapture{}, base)
++	if err != nil {
++		t.Fatal(err)
++	}
++	t.Cleanup(proxy.close)
++	proxy.transport.Proxy = nil
++	dial := proxy.transport.DialContext
++	proxy.transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
++		if address != upstreamAPIHost+":443" {
++			return nil, errors.New("fixture refuses external destination")
++		}
++		return dial(ctx, network, api.Listener.Addr().String())
++	}
++	env, err := proxy.environ(dir, base)
++	if err != nil {
++		t.Fatal(err)
++	}
++	return env
++}
++
++// TestNativeCLIHistorySizeContract exercises growing history using the installed CLI and a loopback API.
++// TestNativeCLIHistorySizeContract 用真实 CLI 和回环 API 验证长任务中逐渐增大的历史。
++func TestNativeCLIHistorySizeContract(t *testing.T) {
++	program := installedContractCLI(t)
++	captured := make(chan map[string]json.RawMessage, 1)
++	env := nativeFixtureEnvironment(t, http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
++		if !strings.HasSuffix(req.URL.Path, "/messages") {
++			_, _ = io.WriteString(w, `{}`)
++			return
++		}
++		var document map[string]json.RawMessage
++		if err := json.NewDecoder(http.MaxBytesReader(w, req.Body, maxRequestBytes)).Decode(&document); err != nil {
++			http.Error(w, "invalid document", 400)
++			return
++		}
++		select {
++		case captured <- document:
++		case <-req.Context().Done():
++			return
++		}
++		w.Header().Set("Content-Type", "text/event-stream")
++		var events bytes.Buffer
++		fixtureRound(&events, "", "history-size-ok")
++		for _, line := range strings.Split(events.String(), "\n") {
++			if line == "" {
++				continue
++			}
++			var item struct{ Event json.RawMessage }
++			_ = json.Unmarshal([]byte(line), &item)
++			var kind struct{ Type string }
++			_ = json.Unmarshal(item.Event, &kind)
++			_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", kind.Type, item.Event)
++		}
++	}))
++	for _, tc := range []struct {
++		size             int
++		guarded, escaped bool
++	}{
++		{size: 128 << 10}, {size: 512 << 10}, {size: 1 << 20}, {size: 2 << 20}, {size: 4 << 20}, {size: 16 << 20}, {size: 31 << 20},
++		{size: 4 << 20, guarded: true}, {size: 512 << 10, escaped: true},
++	} {
++		t.Run(fmt.Sprintf("%d/guarded=%t/escaped=%t", tc.size, tc.guarded, tc.escaped), func(t *testing.T) {
++			var logs bytes.Buffer
++			rt, err := NewFactory(program)(runtime.Config{ID: "fixture", Kind: runtime.KindClaude}, runtime.Dependencies{
++				Clock: runtime.NewSystemClock(), Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
++			})
++			if err != nil {
++				t.Fatal(err)
++			}
++			r := rt.(*Runtime)
++			defer r.Close()
++			r.models = map[string]struct{}{"claude-opus-5-5": {}}
++			r.bridge.env = env
++			text := strings.Repeat("x", tc.size)
++			if tc.escaped {
++				text = strings.Repeat("\"\\", tc.size/2)
++			}
++			document := map[string]any{
++				"model": "claude-opus-5-5", "max_tokens": 1024,
++				"messages": []any{map[string]string{"role": "user", "content": text}},
++			}
++			if tc.guarded {
++				document["messages"] = []any{map[string]string{"role": "user", "content": "synthetic guarded request"}}
++				document["safeguards"] = []any{map[string]any{"type": "dangerous_tool_use", "classifier_context": map[string]any{"opaque": text}}}
++			}
++			body, _ := json.Marshal(document)
++			ctx, cancel := context.WithTimeout(t.Context(), 25*time.Second)
++			defer cancel()
++			stream, err := r.Messages(ctx, runtime.MessagesRequest{Model: "claude-opus-5-5", TenantID: "tenant", KeyID: "key", Native: true, JSON: body})
++			if err != nil {
++				t.Fatal(err)
++			}
++			defer stream.Close()
++			for {
++				_, err := stream.Recv()
++				if err == io.EOF {
++					break
++				}
++				if err != nil {
++					t.Fatalf("native history %d bytes failed: %v; diagnostics=%s", tc.size, err, &logs)
++				}
++			}
++			select {
++			case document := <-captured:
++				var expected map[string]json.RawMessage
++				_ = json.Unmarshal(body, &expected)
++				for key, value := range expected {
++					if canonical(value) != canonical(document[key]) {
++						t.Fatalf("native request changed field %s at %d bytes", key, tc.size)
++					}
++				}
++			default:
++				t.Fatal("CLI never reached the loopback API")
++			}
++		})
++	}
++}
+diff --git a/docs/acceptance/claude-settings-limit-2026-11-09/README.md b/docs/acceptance/claude-settings-limit-2026-11-09/README.md
+new file mode 100644
+--- /dev/null
++++ b/docs/acceptance/claude-settings-limit-2026-11-09/README.md
+@@ -0,0 +1,38 @@
++# 原生请求的 CLI 设置文件上限修复
++
++日期：2026-11-09。源码基线 `66ad8b3`，本机及用户 Agent 的 Claude Code 均为 `2.1.319`。
++
++## 证据与复现
++
++用户日志在 `2026-11-09T16:17:02+09:00`（台北时间 15:17:02）开始连续失败，路径为 `native`，固定原因 `missing_result`、错误码 `protocol_error`。此前多个原生回合完成；失败回合约 80–234 毫秒结束。该日志没有记录实际请求大小。
++
++真实 CLI 配合回环模拟 API 的 `TestNativeCLIHistorySizeContract` 在旧代码下，128 KiB、512 KiB、1 MiB 历史通过，2 MiB 与 4 MiB 历史均在约 60–80 毫秒失败，固定原因与用户日志一致。进一步用只有合成文字、临时账户目录和不可用回环地址的最小设置文件执行同版 CLI，得到退出码 1、stdout 为空，stderr 为：
++
++```text
++Error: Settings file exceeds the 2MiB limit: <temporary settings file>
++```
++
++根因是原生 API 文档经 JSON 再次转义后进入 `settings.json` 的 `env.CLAUDE_CODE_EXTRA_BODY`，先撞上 CLI 的设置文件上限，而非平台的 32 MiB 请求上限。这个缺陷可稳定产生与日志相同的失败；真实生产请求大小没有采集，更新后的 `request_bytes` 可用于后续关联，当前不宣称客户机任务已恢复。
++
++## 修复与边界
++
++- 小请求保留既有设置传递；按最终编码的设置字节数判断上限，覆盖引号、反斜杠膨胀。
++- 大请求的设置仅保留 beta 选择器，完整文档在本回合内存中经原有每进程代理覆盖 CLI 的主流式 Messages 请求；生成的认证头及未被覆盖的元数据保留，`betas` 不进入 HTTP JSON。
++- 仅处理官方 API 的主流式调用，旁路调用不改写。代理识别 gzip 请求，覆盖后更新长度和内容编码；无法识别的种子请求明确失败。
++- 原有认证、代理路由、名称受限临时 CA、口令保护和关闭回收规则继续使用；不获取或导出登录令牌，不记录请求内容，不增加公网入口或客户端可配置目标地址。
++- 本地缺少结果、进程异常退出按 `upstream_error` 返回；已捕获的上游错误保留原有透传规则。记录原始请求字节数，大小上限仍为 32 MiB。
++
++## 已通过
++
++```sh
++go test -race ./service/aiServeWeaveAgent/claudecode ./service/aiServeWeaveGateway/httpapi ./service/aiServeWeaveGateway/e2e -count=1 -timeout=240s
++go vet ./service/aiServeWeaveAgent/claudecode ./service/aiServeWeaveGateway/e2e
++AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestNativeCLI(HistorySizeContract|SafeguardsContract|CompactionContract|RejectionContract)$' -count=1 -timeout=180s -v
++git diff --check
++```
++
++默认测试覆盖设置边界、转义内容、认证头/元数据保留、gzip、旁路请求及后端错误分类。真实 CLI 契约逐字段检查 2、4、16、31 MiB 历史，4 MiB safeguards 上下文，以及转义密集的 512 KiB 请求；原有 8 轮 safeguards、自动/按需压缩和四类能力拒绝契约亦通过。真实 CLI 的上游为 TLS 回环模拟服务，未使用真实模型额度。
++
++## 尚待验收
++
++用户实际长任务、真实订阅的大历史、Windows/Linux 原生 CLI 及其他 CLI 版本、线上 Agent 和安装包分发尚未验收。本次 Gateway 推理逻辑和隧道协议未改；已有节点需要更新并重启 Agent。平台从 Gateway 镜像分发 Agent 时，另需更新其内置制品，现有节点仍需各自升级。
