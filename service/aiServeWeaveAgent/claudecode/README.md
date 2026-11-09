@@ -72,9 +72,15 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 整个请求最多 32 MiB、响应最多 64 MiB；安全上下文不另设小于请求大小的限制。协议版本最多 128 字节，beta 列表最多 16 KiB，均只接受可打印 ASCII，拒绝换行注入。未带 `safeguards` 的请求默认走下一节的原生直通；只有下一节列出的情形才回到 MCP 桥接、历史校验和一次性续接规则。
 
-升级时先更新并重启承载 Claude 运行时的 Agent，再重建并重启 Gateway，两端都需要此版本。客户端新建会话，移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（可显式设为 `1`），并移除 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，以允许客户端发送配套 beta。客户端工具权限仍由调用方管理。
+升级时先更新并重启承载 Claude 运行时的 Agent，再重建并重启 Gateway，两端都需要此版本。客户端新建会话，并按客户端版本调整环境变量：
 
-默认测试覆盖真实 mTLS 隧道、两个 Gateway 副本、JSON/SSE、原始历史与工具身份、上游状态的模拟转发、工具截断及旧路径续接保护。Claude Code `2.1.318` 离线实测确认原始 `Bash` 定义不会在 Agent 注册或执行；原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 的受控长工具链已验证；Agent 主机直连对照、实际编程任务、其他 Claude Code 版本及账户的资格尚未验收。2026-11-05 新增的原生请求契约、原版客户端长工具链及真实订阅对照入口见[原生保留验收记录](../../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。
+- 所有版本都要移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`。从 `2.1.319` 起，`=0` 表示不使用服务端检查、退回客户端内置分类器（不发送 `safeguards`），只适合在链路暂不支持时临时使用。
+- `2.1.318` 及以前：移除 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，否则客户端不会发送配套的 beta。
+- `2.1.319` 及以后：两个变量都不设时，默认启用服务端检查。如果要保留 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，必须同时显式设置 `CLAUDE_CODE_AUTO_MODE_SERVER=1`，否则客户端不发送 `safeguards`，退回内置分类器。托管设置里配置了前者的，`=1` 也要写进托管设置。
+
+从 `2.1.319` 起，客户端经网关使用 auto mode 时不再退回内置分类器。如果回合缺少 `safeguard_results` 或状态为 `unavailable`，需要检查的工具调用会被询问或拒绝；`-p` 模式下直接拒绝，`text`/`json` 输出的退出码为 1（`stream-json` 仍为 0），stderr 会提示网关没有转发服务端检查。因此客户端升级到 `2.1.319` 之前，承载 Claude 的 Agent 和 Gateway 必须已经升级到支持本节协议的版本，否则 auto mode 下的工具调用会被拒绝。Agent 内部的 CLI 使用 `stream-json`，并在工具回合主动停止，不受这次退出码变化的影响。客户端工具权限仍由调用方管理。
+
+默认测试覆盖真实 mTLS 隧道、两个 Gateway 副本、JSON/SSE、原始历史与工具身份、上游状态的模拟转发、工具截断及旧路径续接保护。Claude Code `2.1.318` 离线实测确认原始 `Bash` 定义不会在 Agent 注册或执行；原版客户端经新 Agent 与真实 `claude-opus-5-5` 上游以两轮原生请求完成一次工具往返，收到两次 `available` 和一次 `evaluated/not_flagged`；[验收记录](../../../docs/acceptance/claude-auto-safeguards-2026-11-04/README.md)区分本机真实调用与双 Gateway 模拟 CLI 测试。生产 open7x.com 的受控长工具链已验证；Agent 主机直连对照、实际编程任务、其他 Claude Code 版本及账户的资格尚未验收。2026-11-05 新增的原生请求契约、原版客户端长工具链及真实订阅对照入口见[原生保留验收记录](../../../docs/acceptance/claude-native-preservation-2026-11-05/README.md)。2026-11-09 用 Claude Code `2.1.319` 复验：离线契约测试全部通过；真实订阅下直连通过，经 Agent 的长工具链因上游 cyber refusal 以及客户端改用回退模型重试而失败（`2.1.318` 下同样失败，不属于版本回归），见 [2.1.319 验收记录](../../../docs/acceptance/claude-code-2.1.319-2026-11-09/README.md)。
 
 ## 未带 safeguards 的原生直通
 

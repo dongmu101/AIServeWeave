@@ -39,4 +39,4 @@ CLIENT_STDERR_BYTES 0 CLIENT_EXIT_OK true
 
 ## 升级
 
-先更新并重启承载 Claude 的 Agent，再重建并重启 Gateway。客户端移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（可设为 `1`）及 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，新建会话后核对真实返回。详见 [运行时说明](../../../service/aiServeWeaveAgent/claudecode/README.md#claude-code-auto-服务端安全检查)。
+先更新并重启承载 Claude 的 Agent，再重建并重启 Gateway。客户端移除旧的 `CLAUDE_CODE_AUTO_MODE_SERVER=0`（可设为 `1`）及 `CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1`，新建会话后核对真实返回。以上针对本记录使用的 `2.1.318`；`2.1.319` 起环境变量规则有变化，以[运行时说明](../../../service/aiServeWeaveAgent/claudecode/README.md#claude-code-auto-服务端安全检查)为准，复验结果见 [2.1.319 验收记录](../claude-code-2.1.319-2026-11-09/README.md)。
