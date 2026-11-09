@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AccountSales } from "@/components/console/account-sales";
 
 import { BillingDisabled, LedgerTable, OrdersTable } from "@/components/console/billing-tables";
 import { ErrorMessage } from "@/components/i18n/error-message";
@@ -133,6 +134,7 @@ export function BillingView({ role, returning }: { role: string; returning: bool
       {returnState ? <ReturnNotice state={returnState} /> : null}
       <BalanceCard overview={data} canPurchase={canPurchase} />
       <PackagesCard packages={data.packages} canPurchase={canPurchase} />
+      <AccountSales canPurchase={canPurchase} onPurchased={() => { setPolled(null); overview.reload(); setHistoryKey(value => value + 1); }} />
       <div key={historyKey} className="grid gap-6">
         <LedgerTable />
         <OrdersTable />
@@ -188,7 +190,7 @@ function BalanceCard({ overview, canPurchase }: { overview: BillingOverview; can
         </div>
         <div className="grid gap-1">
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingMode" /></dt>
-          <dd><Badge variant={exempt ? "secondary" : "outline"}>{exempt ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid")}</Badge></dd>
+          <dd><Badge variant={exempt ? "secondary" : "outline"}>{overview.mode === "account_monthly" ? t("tenant.accountMonthly") : exempt ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid")}</Badge></dd>
         </div>
       </dl>
       {exempt ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingExemptNote" /></p> : null}

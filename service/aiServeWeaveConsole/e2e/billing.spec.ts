@@ -2,6 +2,59 @@ import { test, expect, BILLING_OVERVIEW } from "./fixtures.ts";
 
 const CHECKOUT_URL = "https://checkout.example.invalid/session/p10";
 
+test("monthly accounts buy and renew with one stable purchase intent", async ({ page }) => {
+  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_micro: 5_000_000, active: true, owned: false };
+  let purchased = false;
+  const writes: { request_id: string; expected_price_micro: number }[] = [];
+  await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [{ ...account, owned: purchased, ...(purchased ? { expires_at: "2030-12-09T00:00:00Z" } : {}) }] } }));
+  await page.route("**/api/admin/admin/v1/billing/accounts/acc_monthly/purchase", async route => {
+    const body = route.request().postDataJSON();
+    writes.push(body);
+    if (writes.length === 1) { await route.fulfill({ status: 503, json: { error: "private diagnostic" } }); return; }
+    purchased = true;
+    await route.fulfill({ json: { id: body.request_id, account_id: account.id, price_micro: account.price_micro, expires_at: "2030-12-09T00:00:00Z" } });
+  });
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, mode: purchased ? "account_monthly" : "prepaid" } }));
+  await page.goto("/console/billing");
+  await page.getByRole("button", { name: "购买一个月", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("5 点");
+  await expect(dialog).toContainText("仅允许使用已购买且未到期的账号");
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  expect(writes).toHaveLength(1);
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(writes[0]).toEqual(writes[1]);
+  expect(writes[0].request_id).toMatch(/^[a-f0-9]{32}$/);
+  expect(writes[0].expected_price_micro).toBe(5_000_000);
+  await expect(page.getByRole("button", { name: "续费一个月", exact: true })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("private diagnostic");
+});
+
+test("operators list individual accounts and preserve their runtime identity when editing", async ({ page }) => {
+  const writes: unknown[] = [];
+  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_micro: 5_000_000, active: true, owned: false };
+  await page.route("**/api/operator/operator/v1/billing/accounts", async route => {
+    if (route.request().method() === "GET") { await route.fulfill({ json: { items: writes.length ? [account] : [] } }); return; }
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: account });
+  });
+  await page.goto("/operator/billing");
+  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("button", { name: "添加账号", exact: true }).click();
+  await page.getByLabel("账号名称", { exact: true }).fill(account.name);
+  await page.getByLabel("Agent ID", { exact: true }).fill(account.node_id);
+  await page.getByLabel("运行时 ID", { exact: true }).fill(account.runtime_id);
+  await page.getByLabel("月价（点）", { exact: true }).fill("5");
+  await page.getByRole("button", { name: "保存账号", exact: true }).click();
+  await expect(page.getByText(account.name, { exact: true })).toBeVisible();
+  expect(writes).toEqual([{ name: account.name, node_id: account.node_id, runtime_id: account.runtime_id, price_micro: 5_000_000, active: true }]);
+  await page.getByRole("button", { name: "编辑账号", exact: true }).click();
+  await expect(page.getByLabel("Agent ID", { exact: true })).toBeDisabled();
+  await expect(page.getByLabel("运行时 ID", { exact: true })).toBeDisabled();
+});
+
 test("a custom top-up converts the amount live and sends only the package and amount", async ({ page }) => {
   const writes: unknown[] = [];
   await page.route("**/api/admin/admin/v1/billing/checkout", async route => {

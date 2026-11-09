@@ -12,6 +12,14 @@ import (
 	"time"
 )
 
+// The inventory cap has its own singleton so its lock never reverses the
+// purchase path's tenant -> account -> revocation-outbox lock order.
+type accountSalesLock struct {
+	ID int64 `gorm:"primaryKey"`
+}
+
+func (accountSalesLock) TableName() string { return "account_sales_lock" }
+
 func (s *Store) ListAccountSales(ctx context.Context) ([]model.AccountSale, error) {
 	rows := []model.AccountSale{}
 	err := s.db.WithContext(ctx).Order("id").Limit(accountaccess.MaxAccounts + 1).Find(&rows).Error
@@ -21,9 +29,8 @@ func (s *Store) ListAccountSales(ctx context.Context) ([]model.AccountSale, erro
 func (s *Store) SaveAccountSale(ctx context.Context, row model.AccountSale, create bool) error {
 	return translate(s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
 		if create {
-			// All inventory writers share the durable singleton lock, including
-			// the cap check; the target also has a database unique constraint.
-			var lock revocationOutbox
+			// All inventory creators share the cap lock; targets are also unique.
+			var lock accountSalesLock
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = 1").Take(&lock).Error; err != nil {
 				return err
 			}
@@ -38,13 +45,17 @@ func (s *Store) SaveAccountSale(ctx context.Context, row model.AccountSale, crea
 				return err
 			}
 		} else {
-			result := tx.Model(&model.AccountSale{}).Where("id = ? AND node_id = ? AND runtime_id = ?", row.ID, row.NodeID, row.RuntimeID).
+			var old model.AccountSale
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", row.ID).Take(&old).Error; err != nil {
+				return err
+			}
+			if old.NodeID != row.NodeID || old.RuntimeID != row.RuntimeID {
+				return store.ErrConflict
+			}
+			result := tx.Model(&model.AccountSale{}).Where("id = ?", row.ID).
 				Updates(map[string]any{"name": row.Name, "price_micro": row.PriceMicro, "active": row.Active, "updated_at": row.UpdatedAt})
 			if result.Error != nil {
 				return result.Error
-			}
-			if result.RowsAffected == 0 {
-				return store.ErrConflict
 			}
 		}
 		return enqueueRevocation(tx)

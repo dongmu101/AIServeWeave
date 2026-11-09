@@ -806,3 +806,9 @@ Claude CLI 后端通过 `initialize` 动态发布 `resolvedModel` 中去重后�
 ```
 
 Agent 与 Gateway 必须同时升级到支持 `OPERATION_MESSAGES` 的版本。客户端配置、支持范围和真实联调见 [Claude 运行时说明](../aiServeWeaveAgent/claudecode/README.md)。原生请求最多 32 MiB（与 Messages API 自身上限一致，`tunnelwire.MaxMessagesJSONBytes`；请求内联在一个隧道帧里，隧道两端的 gRPC 消息上限相应设为 33 MiB；Messages 事件帧同样按 33 MiB 收发，不受其他操作 4 MiB 单帧上限的约束）、单回合响应最多 64 MiB（节点可能由第三方运行，Gateway 不缓冲无界数据）。超过 1 MiB 的请求需要 Agent 先升级到同一版本：旧 Agent 的隧道帧上限仍是 gRPC 默认的 4 MiB、文档上限仍是 1 MiB，所以要先升级 Agent 再升级 Gateway；流中失败发送明确错误，非流式只在完整成功结束后返回结果。
+
+## Agent 账号独享包月授权（2026-11-09）
+
+校验响应的 `accounts` 按 `(node_id, runtime_id)` 限制目录、候选、派发重试及固定运行时的续接；每次使用都检查绝对到期时间，缓存不能延长有效期。`only: true` 的包月商户只可使用已购有效账号，没有有效账号时发起新工作返回 `402 account_subscription_expired`；已有历史、产物与取消操作不因到期被余额守卫阻断。受管账号即使未售出、到期或下架也不会成为共享候选。不会回退借用未购买的账号。
+
+相关默认测试及 scheduler 竞态测试通过，覆盖同一 Agent 三个运行时的隔离、缓存到期、目录、固定续接和失败重试。尚未在真实部署验证账号售卖链路。升级要求和完整语义见[账号包月说明](../../docs/billing-accounts.md)；必须先更新所有 Gateway，再上架库存。

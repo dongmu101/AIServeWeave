@@ -61,6 +61,7 @@ async function installFixtures(page: Page, unexpected: string[]) {
     let json: unknown;
     if (method === "GET") {
       if (path === "/admin/v1/billing") json = BILLING_OVERVIEW;
+      else if (path === "/admin/v1/billing/accounts" || path === "/operator/v1/billing/accounts") json = { items: [] };
       else if (path === "/admin/v1/billing/ledger") json = { items: [ledgerEntry], next_cursor: "" };
       else if (path === "/admin/v1/billing/orders") json = { items: [order], next_cursor: "" };
       else if (path === "/operator/v1/billing/packages") json = { items: [{ ...fixedPackage, dodo_product_id: "pdt_fixed" }, { ...customPackage, active: false, dodo_product_id: LONG_TEXT.slice(0, 64) }] };

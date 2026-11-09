@@ -439,3 +439,9 @@ GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重�
 响应由 `lib/console/agent-install.ts` 严格校验（兑换码格式、节点 ID、令牌字符集、地址、HTTPS 站点根），命令里的所有值用单引号引用；两条路由写入 `upstream-routes.ts` 白名单且丢弃查询参数，签发不自动重试，凭据只留在页面内存。控制面未配置 `AgentInstall.PublicURL` 时（`404`）显示「未启用」。签发成功后，若平台地址就是本站来源，面板用浏览器读取公开的 `/agent/v1/manifest`（`credentials: omit`，5 秒超时），平台版本被安装脚本拒绝（`installable: false`）或入口不可达时在命令上方显示红色警告；跨域地址不检查，避免误报。文案覆盖八种语言。
 
 默认测试（`agent-install.test.ts` 等，Console 共 312 项）、`eslint`、`next build`、`tsc` 通过。未验证：浏览器渲染与剪贴板、Playwright e2e、真实控制面端到端、八种语言译文审校。部署与使用见 [部署说明](../../deploy/README.md#接一个-agent)。
+
+## Agent 账号独享包月页面（2026-11-09）
+
+商户计费页新增账号库存、到期时间、余额购买与续费；购买确认明确提示切换为仅允许已购账号的包月模式。平台计费页新增「账号包月」标签页，管理账号商品及月价；已建商品的 Agent/运行时 ID 只读。商户模式列表支持 `account_monthly`，账目支持 `account_purchase`。库存分页面展示，文案补齐八种语言；凭据始终留在 Agent。新接口分别列入 Admin/Operator 白名单，写入不自动重试，确认框内的人工重试复用同一次购买标识。
+
+验证：ESLint 无错误（现有 alerts 页 TanStack Virtual 警告仍在）、TS7 类型检查、323 项 Node 测试及 Next.js Webpack 生产构建通过；现有 Chrome 完成计费专项 8 项，其中新增购买/续费人工重试与运维商品编辑 2 项。浏览器使用隔离会话和模拟 API，不能替代真实控制面/付款/CLI 的生产验收。使用与升级说明见[账号包月](../../docs/billing-accounts.md)。

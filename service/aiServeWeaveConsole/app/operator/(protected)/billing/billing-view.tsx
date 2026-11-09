@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AccountSales } from "@/components/console/account-sales";
 import { toast } from "sonner";
 
 import { BillingDisabled, LedgerTable, OrdersTable, TenantIdFilter } from "@/components/console/billing-tables";
@@ -65,7 +66,7 @@ const PACKAGE_PROBLEMS: Record<PackageProblem, MessageKey> = {
 };
 
 function modeLabel(mode: BillingMode, t: Translator): string {
-  return mode === "exempt" ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid");
+  return mode === "account_monthly" ? t("tenant.accountMonthly") : mode === "exempt" ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid");
 }
 
 /**
@@ -86,12 +87,14 @@ export function BillingAdminView() {
     <Tabs defaultValue="packages">
       <TabsList aria-label={t("operator.billingSections")} className="h-auto! w-full flex-wrap justify-start">
         <TabsTrigger value="packages" className="flex-none"><Message id="tenant.billingPackages" /></TabsTrigger>
+        <TabsTrigger value="accounts" className="flex-none"><Message id="tenant.accountMonthly" /></TabsTrigger>
         <TabsTrigger value="prices" className="flex-none"><Message id="operator.billingPrices" /></TabsTrigger>
         <TabsTrigger value="tenants" className="flex-none"><Message id="operator.billingTenants" /></TabsTrigger>
         <TabsTrigger value="orders" className="flex-none"><Message id="tenant.billingOrders" /></TabsTrigger>
         <TabsTrigger value="ledger" className="flex-none"><Message id="tenant.billingLedger" /></TabsTrigger>
       </TabsList>
       <TabsContent value="packages" className="pt-2"><PackagesSection /></TabsContent>
+      <TabsContent value="accounts" className="pt-2"><AccountSales operator /></TabsContent>
       <TabsContent value="prices" className="pt-2"><PricesSection /></TabsContent>
       <TabsContent value="tenants" className="pt-2"><TenantsSection /></TabsContent>
       <TabsContent value="orders" className="pt-2"><FilteredHistory kind="orders" /></TabsContent>
@@ -403,6 +406,7 @@ function TenantsSection() {
               <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(tenant.balanceMicro, locale)}</TableCell>
               <TableCell><span className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setSwitching({ tenant, mode: next })}>{next === "exempt" ? t("operator.billingMakeExempt") : t("operator.billingMakePrepaid")}</Button>
+                {tenant.mode !== "account_monthly" ? <Button size="sm" variant="outline" onClick={() => setSwitching({ tenant, mode: "account_monthly" })}><Message id="tenant.accountMonthly" /></Button> : null}
                 <Button size="sm" variant="outline" onClick={() => setAdjusting(tenant)}><Message id="operator.billingAdjust" /></Button>
               </span></TableCell>
             </TableRow>;
@@ -415,7 +419,7 @@ function TenantsSection() {
       open={switching !== null}
       onOpenChange={(open) => { if (!open) setSwitching(null); }}
       title={t("tenant.billingMode")}
-      confirmLabel={switching ? (switching.mode === "exempt" ? t("operator.billingMakeExempt") : t("operator.billingMakePrepaid")) : undefined}
+      confirmLabel={switching ? (switching.mode === "account_monthly" ? t("tenant.accountMonthly") : switching.mode === "exempt" ? t("operator.billingMakeExempt") : t("operator.billingMakePrepaid")) : undefined}
       description={switching ? t("operator.billingModeConfirm", { name: switching.tenant.name || switching.tenant.id, mode: modeLabel(switching.mode, t) }) : ""}
       onConfirm={async () => {
         if (!switching) return;

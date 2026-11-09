@@ -578,10 +578,10 @@ func (s *Service) ListBillingTenants(ctx context.Context, actor Actor, query sto
 	return out, nil
 }
 
-// SetTenantBillingMode moves a tenant between prepaid and exempt. Switching a
+// SetTenantBillingMode selects prepaid, exempt or account_monthly. Switching a
 // tenant with no balance to prepaid starts refusing its traffic at once.
 //
-// SetTenantBillingMode 在 prepaid 与 exempt 之间切换租户。把一个没有余额的租户切到
+// SetTenantBillingMode 设置 prepaid、exempt 或 account_monthly。把一个没有余额的租户切到
 // prepaid，会立即开始拒绝它的流量。
 func (s *Service) SetTenantBillingMode(ctx context.Context, actor Actor, tenantID, mode string) error {
 	if err := s.requireBillingOperator(actor); err != nil {

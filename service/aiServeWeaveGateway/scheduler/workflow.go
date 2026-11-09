@@ -59,6 +59,9 @@ func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.Workf
 	}
 	var lastErr error
 	for _, cand := range candidates {
+		if !s.candidateAllowed(ctx, cand) {
+			return runtime.WorkflowRun{}, cand, ErrNodeNotAllowed, false
+		}
 		attemptRun, attemptErr := s.server.Runtime(cand.NodeID, cand.RuntimeID).Submit(ctx, req)
 		s.breakers.record(cand, attemptErr, s.clock.Now())
 		s.metrics.Dispatch(cand, attemptErr)

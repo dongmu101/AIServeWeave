@@ -853,7 +853,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 ### 单位与模式
 
 - **点数与 micro**：1 点 = 1,000,000 micro（`model.MicroPerCredit`），余额、账目、订单都以 micro 存 `BIGINT`。模型单价单位是「micro / 百万 token」，单笔费用 = `ceil((prompt × 输入单价 + completion × 输出单价) / 1e6)`，在 128 位内精确计算，超出 int64 时饱和为最大值而不是变成 0，因此 Gateway 上报的 token 数再大也不会让请求免费；单价上限 `model.MaxPriceMicroPerMTok` 只是对运维输入的合理性校验。别名没有单价时用 `*` 默认价；默认价也没有就记 0（照样写 `usage_charges` 行，报表能看出哪些用量没定价）。
-- **计费模式按租户**：`prepaid` 扣余额、余额 ≤ 0 时拦截；`exempt` 只记录费用、不动余额也不拦截。`tenant_billing` **没有行即视为 exempt**，因此存量租户与 BootstrapToken 创建的租户无需回填即保持原行为；`Billing.Enabled` 时自助注册的租户在租户行写入之后、owner 写入之前写入 prepaid 行与 `grant` 账目（这两行在同一个 store 事务里）。租户行、计费行、owner 之间没有事务，但这个顺序保证失败时留下的是一个没有 owner 的惰性租户，而不是一个能登录、却因缺行而被当作 exempt 的租户。运维可随时切换模式。exempt 租户也能购买点数，点数会入账，但在切换为 prepaid 之前不会被使用。
+- **计费模式按租户**：新增 `account_monthly` 账号独享包月模式，规则见[账号包月说明](../../docs/billing-accounts.md)；原有 `prepaid` 扣余额、余额 ≤ 0 时拦截；`exempt` 只记录费用、不动余额也不拦截。`tenant_billing` **没有行即视为 exempt**，因此存量租户与 BootstrapToken 创建的租户无需回填即保持原行为；`Billing.Enabled` 时自助注册的租户在租户行写入之后、owner 写入之前写入 prepaid 行与 `grant` 账目（这两行在同一个 store 事务里）。租户行、计费行、owner 之间没有事务，但这个顺序保证失败时留下的是一个没有 owner 的惰性租户，而不是一个能登录、却因缺行而被当作 exempt 的租户。运维可随时切换模式。exempt 租户也能购买点数，点数会入账，但在切换为 prepaid 之前不会被使用。
 - **只计 token**：图像生成、工作流 Job 等不按 token 计量的前门只受准入约束，不扣费。
 
 ### 数据
@@ -1049,3 +1049,11 @@ api_docs(
 写入请求体上限 512 KiB（`apidocs.MaxRequestBytes`），超出返回 413；每次运维写入与审计行（`api_doc.create/update/reset/delete`）在同一事务提交；启动时的种子刷新没有操作者，不记审计。
 
 已知缺口：未接入真实 PostgreSQL/MySQL 跑 live 测试（与 P09 新增表同一先例）；文档内容由人维护，与 Gateway 代码之间没有自动一致性校验——改 Gateway 端点时须同步改对应种子并提高 `revision`。
+
+## Agent 账号独享包月（2026-11-09）
+
+新增 `AccountSales` store 边界及内存/SQL 实现、`account_sales` 库存、`account_purchases` 不可变收据和独立的 `account_sales_lock` 容量锁（billing 命名空间 `0004_account_sales.sql`，PostgreSQL/MySQL）。购买在单个事务中扣点数、绑定唯一商户、延长一个自然月、切换为 `account_monthly`、写 `account_purchase` 账目并提交吊销 outbox；重复 `request_id` 返回原收据。账号目标不可修改，下架仍保留已付款权限，库存不恢复共享。
+
+新增平台账号商品 GET/POST/PUT 与商户库存 GET、购买/续费 POST；Key 校验下发 `accounts` 运行时级授权，商户模型清单同步过滤。完整契约与[升级顺序](../../docs/billing-accounts.md#数据授权与升级)见账号包月说明。必须先更新全部 Gateway，再迁移控制面并启用库存；旧 Gateway 不执行该授权。
+
+验证：控制面含 e2e 的默认测试通过，logic 与内存账本竞态测试通过；`TestLiveAccountPurchases/mysql` 在临时 MySQL 9.7 实例中通过，覆盖迁移/schema、唯一账号并发、重复扣款、续费与下架保留期限。PostgreSQL live 未运行；生产升级、真实付款和实际 CLI 账号尚未联调。

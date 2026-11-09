@@ -1,3 +1,5 @@
+CREATE TABLE account_sales_lock (id BIGINT PRIMARY KEY);
+INSERT INTO account_sales_lock (id) VALUES (1);
 CREATE TABLE account_sales (
  id VARCHAR(32) PRIMARY KEY,
  node_id VARCHAR(128) NOT NULL,

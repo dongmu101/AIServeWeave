@@ -40,6 +40,10 @@ func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest)
 	var lastErr error
 	var cooled cooledCandidates
 	for _, c := range candidates {
+		if !s.candidateAllowed(ctx, c) {
+			lastErr = ErrNodeNotAllowed
+			continue
+		}
 		if s.skipCooling(c, &cooled) {
 			continue
 		}

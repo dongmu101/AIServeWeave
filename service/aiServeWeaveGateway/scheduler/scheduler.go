@@ -302,6 +302,10 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	var lastErr error
 	var cooled cooledCandidates
 	for _, c := range candidates {
+		if !s.candidateAllowed(ctx, c) {
+			lastErr = ErrNodeNotAllowed
+			continue
+		}
 		if s.skipCooling(c, &cooled) {
 			continue
 		}
@@ -335,6 +339,10 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	var lastErr error
 	var cooled cooledCandidates
 	for _, c := range candidates {
+		if !s.candidateAllowed(ctx, c) {
+			lastErr = ErrNodeNotAllowed
+			continue
+		}
 		if s.skipCooling(c, &cooled) {
 			continue
 		}
@@ -368,6 +376,10 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 	var lastErr error
 	var cooled cooledCandidates
 	for _, c := range candidates {
+		if !s.candidateAllowed(ctx, c) {
+			lastErr = ErrNodeNotAllowed
+			continue
+		}
 		if s.skipCooling(c, &cooled) {
 			continue
 		}
@@ -474,6 +486,10 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 	var lastErr error
 	var cooled cooledCandidates
 	for _, c := range candidates {
+		if !s.candidateAllowed(ctx, c) {
+			lastErr = ErrNodeNotAllowed
+			continue
+		}
 		if s.skipCooling(c, &cooled) {
 			continue
 		}
