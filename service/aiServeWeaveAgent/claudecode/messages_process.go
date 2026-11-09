@@ -328,7 +328,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	}
 	waitErr := cmd.Wait()
 	if s.ctx.Err() != nil {
-		return s.ctx.Err()
+		return context.Cause(s.ctx)
 	}
 	// A terminal stop completes the public round before the CLI can recover or continue it.
 	// 终止事件完成公开回合，CLI 随后被停止，避免其自动恢复或续写越过调用方边界。

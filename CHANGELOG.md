@@ -49,6 +49,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Fixed
 
+- Claude 原生链路加固：父代理 CONNECT 握手可随取消立即退出；按完整 SSE 事件捕获多行错误，保留 429/529 与重试信息；gzip 编码名按大小写无关识别；Agent 会话寿命或生成空闲到期按 `timeout` 报告，避免误报为通用协议 400。复现与默认离线回归见[验证记录](docs/acceptance/claude-native-robustness-2026-11-09/README.md)。现有节点需更新并重启 Agent，平台安装包需刷新 Gateway 镜像内的 Agent 制品；生产验收仍待执行。
+
 - 原生 Claude 长任务在历史增大后快速返回通用 400：Agent 的完整请求设置文件会撞上 Claude Code `2.1.319` 的 2 MiB 限制。现在按最终设置字节数切换输入方式，大文档经每进程回环代理补入同一次主 API 调用，保留原始历史、工具结果、safeguards、认证头和 beta 选择器，平台请求上限仍为 32 MiB；本地缺少结果或进程异常退出按后端错误返回，回合日志新增 `request_bytes`。默认回归及真实 CLI 的 31 MiB 历史、4 MiB safeguards、转义密集请求契约通过。已有节点更新并重启 Agent；平台一键安装用户需要刷新 Gateway 镜像内的新版 Agent 制品。真实生产长任务尚待更新后验收，见 [验收记录](docs/acceptance/claude-settings-limit-2026-11-09/README.md)。
 
 - Claude Code 长工具链的续接 400：Agent 按本轮已公开的工具 ID 集合校验结果，已投递但尚待迟到 MCP 回调取走的旧邮箱不再触发 `continuation_tool_count_mismatch`。`anthropic-beta` 的顺序、空格及重复项按功能集合比较；实际增删 beta 时，在完整归属、历史、工具结果及其他配置均匹配后，使用新 CLI 从已执行结果恢复。修复已进入源码（`ca16c33`），默认 CI 覆盖连续工具回合、迟到回调、beta 变化和跨两个 Gateway 的 mTLS 回归。**升级范围**：现有节点需升级并重启 Agent；平台通过 `/agent/*` 分发安装包时，需重新构建并部署包含新版 Agent 制品的 Gateway 镜像，已有节点仍需各自升级。真实 Opus 长任务仍待线上验收，详见 [Agent 升级说明](deploy/agent/README.md#claude-code-长工具链-400-修复)。

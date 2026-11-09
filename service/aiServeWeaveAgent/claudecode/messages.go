@@ -328,6 +328,7 @@ type messagesSession struct {
 	history              [32]byte
 	ctx                  context.Context
 	cancel               context.CancelFunc
+	cancelCause          context.CancelCauseFunc
 	done                 chan struct{}
 	events               chan bridgeEvent
 	mu                   sync.Mutex
@@ -781,8 +782,9 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	if b.liveLocked() >= b.capacity && !b.evictIdleLocked() {
 		return nil, errCapacity
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	s := &messagesSession{processor: b.processor, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
+	ctx, cancelCause := context.WithCancelCause(context.Background())
+	cancel := func() { cancelCause(context.Canceled) }
+	s := &messagesSession{processor: b.processor, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, cancelCause: cancelCause, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
 	if req.isNative() {
 		s.upstream = &upstreamCapture{}
 	}
@@ -901,10 +903,10 @@ func (b *messagesBridge) expire(s *messagesSession) {
 		case <-s.ctx.Done():
 			return
 		case <-life:
-			s.cancel()
+			s.cancelCause(context.DeadlineExceeded)
 			return
 		case <-phase:
-			s.cancel()
+			s.cancelCause(context.DeadlineExceeded)
 			return
 		case <-s.activity:
 			stopPhase()
@@ -924,7 +926,7 @@ func (s *messagesSession) send(data json.RawMessage, err error) error {
 	case s.events <- bridgeEvent{data: data, err: err}:
 		return nil
 	case <-s.ctx.Done():
-		return s.ctx.Err()
+		return context.Cause(s.ctx)
 	}
 }
 
@@ -949,7 +951,7 @@ func (b *messagesBridge) respond(ctx context.Context, w http.ResponseWriter, s *
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-s.ctx.Done():
-			return s.ctx.Err()
+			return context.Cause(s.ctx)
 		case item := <-s.events:
 			if item.err != nil {
 				return item.err

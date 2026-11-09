@@ -16,6 +16,44 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
+func TestRuntimeSessionTimeoutIsBackendTimeout(t *testing.T) {
+	for _, timer := range []int{0, 1} { // Session lifetime and generation inactivity.
+		t.Run(fmt.Sprintf("timer=%d", timer), func(t *testing.T) {
+			clock := messagesClock{created: make(chan chan time.Time, 8)}
+			var logs bytes.Buffer
+			rt, err := NewFactory("unused")(runtime.Config{ID: "local", Kind: runtime.KindClaude}, runtime.Dependencies{
+				Clock: clock, Logger: slog.New(slog.NewJSONHandler(&logs, nil)),
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			r := rt.(*Runtime)
+			defer r.Close()
+			r.models = map[string]struct{}{"sonnet": {}}
+			r.bridge.start = func(s *messagesSession) { <-s.ctx.Done() }
+			ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+			defer cancel()
+			stream, err := r.Messages(ctx, runtime.MessagesRequest{Model: "sonnet", TenantID: "tenant", KeyID: "key", Native: true,
+				JSON: json.RawMessage(`{"model":"sonnet","max_tokens":16,"messages":[{"role":"user","content":"fixture"}]}`)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer stream.Close()
+			timers := []chan time.Time{<-clock.created, <-clock.created}
+			timers[timer] <- clock.Now()
+			_, err = stream.Recv()
+			var failure *runtime.RuntimeError
+			if !errors.As(err, &failure) || failure.Code != runtime.ErrorTimeout || failure.RuntimeID != "local" {
+				t.Fatalf("server timer expiration became a client error: %+v", err)
+			}
+			_ = stream.Close()
+			if !strings.Contains(logs.String(), `"reason":"deadline_exceeded"`) {
+				t.Fatalf("timeout reason missing: %s", &logs)
+			}
+		})
+	}
+}
+
 // terminalProcessFixture emits a terminal response, then attempts the CLI's automatic recovery.
 // terminalProcessFixture 发出终止响应后尝试 CLI 的自动恢复，用于验证桥接会停止进程。
 func terminalProcessFixture() {

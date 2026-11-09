@@ -503,6 +503,12 @@ func (p *upstreamProxy) dialThrough(ctx context.Context, target string) (net.Con
 	if err != nil {
 		return nil, err
 	}
+	// The socket is not tracked by tunnel until CONNECT succeeds. Cancellation
+	// must also interrupt this handshake, rather than wait for its deadline.
+	// CONNECT 成功前 socket 尚未由 tunnel 跟踪；取消也必须中断握手，不能只等固定期限。
+	dialed := conn
+	stop := context.AfterFunc(ctx, func() { _ = dialed.Close() })
+	defer stop()
 	if via.Scheme == "https" {
 		secure := tls.Client(conn, &tls.Config{ServerName: via.Hostname(), RootCAs: p.transport.TLSClientConfig.RootCAs, MinVersion: tls.VersionTLS12})
 		if err := secure.HandshakeContext(ctx); err != nil {
@@ -528,6 +534,10 @@ func (p *upstreamProxy) dialThrough(ctx context.Context, target string) (net.Con
 	if err != nil || response.StatusCode != http.StatusOK {
 		_ = conn.Close()
 		return nil, errors.New("proxy CONNECT refused")
+	}
+	if !stop() {
+		_ = conn.Close()
+		return nil, ctx.Err()
 	}
 	_ = conn.SetDeadline(time.Time{})
 	if n := reader.Buffered(); n > 0 {
@@ -582,7 +592,7 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 			return
 		}
 		probeBody := head
-		if r.Header.Get("Content-Encoding") == "gzip" && len(head) <= maxCapturedRequestBytes {
+		if strings.EqualFold(strings.TrimSpace(r.Header.Get("Content-Encoding")), "gzip") && len(head) <= maxCapturedRequestBytes {
 			reader, err := gzip.NewReader(bytes.NewReader(head))
 			if err == nil {
 				probeBody, err = io.ReadAll(io.LimitReader(reader, maxCapturedRequestBytes+1))
@@ -708,50 +718,78 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 
 // sseErrorReader passes a stream through unchanged and reports the data of
 // its first "error" event before returning the bytes that complete it, so
-// the capture is in place before the CLI sees the error. Lines longer than
-// the error bound are skipped.
+// the capture is in place before the CLI sees the error. SSE data lines are
+// joined at the event boundary; incomplete or oversized events are skipped.
 //
 // sseErrorReader 原样传递流，并在返回构成第一个 "error" 事件的字节之前报告其数据，使截获
-// 先于 CLI 看到该错误完成。超过错误大小上限的行被跳过。
+// 先于 CLI 看到该错误完成。在事件边界合并 data 行；不完整或超限的事件被跳过。
 type sseErrorReader struct {
 	io.Reader
-	found    func([]byte)
-	line     []byte
-	overflow bool
-	isError  bool
-	reported bool
+	found         func([]byte)
+	line, data    []byte
+	lineOverflow  bool
+	eventOverflow bool
+	isError       bool
+	afterCR       bool
+	reported      bool
 }
 
 func (s *sseErrorReader) Read(p []byte) (int, error) {
 	n, err := s.Reader.Read(p)
 	if !s.reported {
 		for _, c := range p[:n] {
-			if c != '\n' {
-				if len(s.line) <= runtime.MaxUpstreamErrorBytes+16 {
+			if s.afterCR {
+				s.afterCR = false
+				if c == '\n' {
+					continue
+				}
+			}
+			switch c {
+			case '\r', '\n':
+				s.endLine()
+				s.afterCR = c == '\r'
+			default:
+				if len(s.line) < runtime.MaxUpstreamErrorBytes+16 {
 					s.line = append(s.line, c)
 				} else {
-					s.overflow = true
+					s.lineOverflow = true
 				}
-				continue
 			}
-			line := bytes.TrimSuffix(s.line, []byte("\r"))
-			switch {
-			case s.overflow:
-			case len(line) == 0:
-				s.isError = false
-			case bytes.Equal(line, []byte("event: error")) || bytes.Equal(line, []byte("event:error")):
-				s.isError = true
-			case s.isError && bytes.HasPrefix(line, []byte("data:")):
-				s.reported = true
-				s.found(bytes.TrimSpace(line[len("data:"):]))
-			}
-			s.line, s.overflow = s.line[:0], false
 			if s.reported {
 				break
 			}
 		}
 	}
 	return n, err
+}
+
+func (s *sseErrorReader) endLine() {
+	switch {
+	case s.lineOverflow:
+		s.eventOverflow = true
+	case len(s.line) == 0:
+		if s.isError && !s.eventOverflow && len(s.data) > 0 {
+			s.reported = true
+			s.found(s.data[:len(s.data)-1])
+		}
+		s.data, s.isError, s.eventOverflow = s.data[:0], false, false
+	default:
+		field, value, _ := bytes.Cut(s.line, []byte(":"))
+		value = bytes.TrimPrefix(value, []byte(" "))
+		switch string(field) {
+		case "event":
+			s.isError = bytes.Equal(value, []byte("error"))
+		case "data":
+			if len(s.data)+len(value) > runtime.MaxUpstreamErrorBytes {
+				s.eventOverflow = true
+			}
+			if !s.eventOverflow {
+				s.data = append(s.data, value...)
+				s.data = append(s.data, '\n')
+			}
+		}
+	}
+	s.line, s.lineOverflow = s.line[:0], false
 }
 
 // prefixConn replays bytes already buffered before the connection was handed over.

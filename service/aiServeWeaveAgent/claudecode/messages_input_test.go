@@ -61,7 +61,7 @@ func TestNativeSettingsSizeBoundary(t *testing.T) {
 }
 
 func TestLargeNativeProxyForwarding(t *testing.T) {
-	for _, kind := range []string{"stream", "gzip", "side-call"} {
+	for _, kind := range []string{"stream", "gzip", "gzip-case", "side-call"} {
 		t.Run(kind, func(t *testing.T) {
 			type received struct {
 				body   []byte
@@ -90,7 +90,7 @@ func TestLargeNativeProxyForwarding(t *testing.T) {
 			t.Cleanup(transport.CloseIdleConnections)
 			seed := map[string]any{"stream": kind != "side-call", "messages": []any{map[string]string{"role": "user", "content": "small seed"}}, "metadata": map[string]bool{"generated": true}}
 			data, _ := json.Marshal(seed)
-			if kind == "gzip" {
+			if strings.HasPrefix(kind, "gzip") {
 				var compressed bytes.Buffer
 				writer := gzip.NewWriter(&compressed)
 				_, _ = writer.Write(data)
@@ -100,8 +100,11 @@ func TestLargeNativeProxyForwarding(t *testing.T) {
 			req, _ := http.NewRequestWithContext(t.Context(), "POST", "https://"+upstreamAPIHost+"/v1/messages", bytes.NewReader(data))
 			req.Header.Set("Authorization", "Bearer fixture-only")
 			req.Header.Set("Anthropic-Beta", "feature-a")
-			if kind == "gzip" {
+			if strings.HasPrefix(kind, "gzip") {
 				req.Header.Set("Content-Encoding", "gzip")
+				if kind == "gzip-case" {
+					req.Header.Set("Content-Encoding", "GZip")
+				}
 			}
 			response, err := (&http.Client{Transport: transport}).Do(req)
 			if err != nil {
