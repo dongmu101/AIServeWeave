@@ -1,7 +1,7 @@
 const tenant = {
   "tenant.accountMonthly": "Monatliche Konten",
-  "tenant.accountMonthlyNote": "Exklusiven Zugang zu einem bestimmten Konto mit Guthaben kaufen. Der Kauf stellt die Abrechnung auf monatliche Konten um: Nur gekaufte Konten sind nutzbar, ohne Tokengebühren. Kauf oder Verlängerung fügt einen Kalendermonat hinzu, begrenzt auf den letzten Tag des Zielmonats. Manuell verlängern.",
-  "tenant.accountOperatorNote": "Jedes Angebot benötigt eine eigene Agent-Laufzeit und eine eigene tatsächliche Anmeldung. Dieselbe Anmeldung nicht über andere Laufzeiten teilen. Gelistete Laufzeiten verlassen den gemeinsamen Pool. Archivieren erhält bezahlte Laufzeiten.",
+  "tenant.accountMonthlyNote": "Exklusiven Zugang zu einem bestimmten Claude-Code- oder Codex-Konto auf einem Agent mit Guthaben kaufen. Der Kauf stellt die Abrechnung auf monatliche Konten um: Nur gekaufte Konten sind nutzbar, ohne Tokengebühren. Kauf oder Verlängerung fügt einen Kalendermonat hinzu, begrenzt auf den letzten Tag des Zielmonats. Manuell verlängern.",
+  "tenant.accountOperatorNote": "Claude-Code- und Codex-Konten auf demselben Agent können separat verkauft werden, jeweils mit eigener Laufzeit. Dieselbe Anmeldung nicht über andere Laufzeiten teilen. Gelistete Laufzeiten verlassen den gemeinsamen Pool. Archivieren erhält bezahlte Laufzeiten.",
   "tenant.accountSearch": "Konten, Agents oder Laufzeiten suchen",
   "tenant.accountRefresh": "Konten aktualisieren",
   "tenant.accountAdd": "Konto hinzufügen",

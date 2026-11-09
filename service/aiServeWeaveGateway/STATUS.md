@@ -809,6 +809,8 @@ Agent 与 Gateway 必须同时升级到支持 `OPERATION_MESSAGES` 的版本。�
 
 ## Agent 账号独享包月授权（2026-11-09）
 
+支持同一 Agent 的 Claude Code / Codex 运行时分别独享售卖。补充真实隧道加模拟后端测试及竞态检查：Claude 买家经原生 Messages 只使用自己的 Claude 运行时，Codex 买家经 Chat 只使用自己的 Codex 运行时，双方不能跨用，模型目录也不交叉。该测试不代替真实 CLI 登录与真实上游验收。
+
 校验响应的 `accounts` 按 `(node_id, runtime_id)` 限制目录、候选、派发重试及固定运行时的续接；每次使用都检查绝对到期时间，缓存不能延长有效期。`only: true` 的包月商户只可使用已购有效账号，没有有效账号时发起新工作返回 `402 account_subscription_expired`；已有历史、产物与取消操作不因到期被余额守卫阻断。受管账号即使未售出、到期或下架也不会成为共享候选。不会回退借用未购买的账号。
 
 相关默认测试及 scheduler 竞态测试通过，覆盖同一 Agent 三个运行时的隔离、缓存到期、目录、固定续接和失败重试。尚未在真实部署验证账号售卖链路。升级要求和完整语义见[账号包月说明](../../docs/billing-accounts.md)；必须先更新所有 Gateway，再上架库存。

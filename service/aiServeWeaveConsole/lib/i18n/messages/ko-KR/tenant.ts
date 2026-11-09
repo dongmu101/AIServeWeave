@@ -1,7 +1,7 @@
 const tenant = {
   "tenant.accountMonthly": "월간 계정",
-  "tenant.accountMonthlyNote": "크레딧 잔액으로 지정 계정의 독점 사용권을 구매합니다. 구매 후 월간 계정 방식으로 전환되어 구매한 계정만 사용할 수 있고 토큰 요금은 없습니다. 구매·갱신마다 한 달이 추가되며 해당 월 말일에 맞춰집니다. 만료 전에 수동 갱신하세요.",
-  "tenant.accountOperatorNote": "상품마다 하나의 Agent 런타임과 서로 다른 실제 로그인을 사용하세요. 동일 로그인을 다른 런타임으로 공유하지 마세요. 등록 후 공유 풀에서 제외되며 판매 중단 후에도 결제한 기간은 유지됩니다.",
+  "tenant.accountMonthlyNote": "크레딧 잔액으로 Agent의 지정 Claude Code 또는 Codex 계정 독점 사용권을 구매합니다. 구매 후 월간 계정 방식으로 전환되어 구매한 계정만 사용할 수 있고 토큰 요금은 없습니다. 구매·갱신마다 한 달이 추가되며 해당 월 말일에 맞춰집니다. 만료 전에 수동 갱신하세요.",
+  "tenant.accountOperatorNote": "같은 Agent의 Claude Code와 Codex 계정을 각각의 런타임에 연결하여 별도 독점 상품으로 판매할 수 있습니다. 동일 로그인을 다른 런타임으로 공유하지 마세요. 등록 후 공유 풀에서 제외되며 판매 중단 후에도 결제한 기간은 유지됩니다.",
   "tenant.accountSearch": "계정, Agent 또는 런타임 검색",
   "tenant.accountRefresh": "계정 새로 고침",
   "tenant.accountAdd": "계정 추가",

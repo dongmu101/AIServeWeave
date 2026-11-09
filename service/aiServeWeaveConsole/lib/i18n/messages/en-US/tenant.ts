@@ -1,7 +1,7 @@
 const tenant = {
   "tenant.accountMonthly": "Monthly accounts",
-  "tenant.accountMonthlyNote": "Buy exclusive access to a specific account with your credit balance. Purchasing switches billing to monthly accounts: only purchased accounts are available, with no token charges. Each purchase or renewal adds one calendar month, clamped to the last day of the target month. Renew manually before expiry.",
-  "tenant.accountOperatorNote": "Each account binds to one Agent runtime. Use a distinct actual login for each offer; do not share the same login through other runtimes. Listing removes the runtime from the shared pool. Archiving preserves paid access.",
+  "tenant.accountMonthlyNote": "Buy exclusive access to a specific Claude Code or Codex account on an Agent with your credit balance. Purchasing switches billing to monthly accounts: only purchased accounts are available, with no token charges. Each purchase or renewal adds one calendar month, clamped to the last day of the target month. Renew manually before expiry.",
+  "tenant.accountOperatorNote": "Claude Code and Codex accounts on the same Agent can be sold separately, each bound to its own runtime. Use a distinct actual login for each offer; do not share the same login through other runtimes. Listing removes the runtime from the shared pool. Archiving preserves paid access.",
   "tenant.accountSearch": "Search accounts, Agents or runtimes",
   "tenant.accountRefresh": "Refresh accounts",
   "tenant.accountAdd": "Add account",

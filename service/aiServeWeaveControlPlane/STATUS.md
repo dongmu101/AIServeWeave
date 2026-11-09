@@ -1052,6 +1052,8 @@ api_docs(
 
 ## Agent 账号独享包月（2026-11-09）
 
+Claude Code 与 Codex 均按账号独立售卖；同一 Agent 可分别把两种账号售给不同商户，不把整台 Agent 绑定给单一商户。补充默认测试及竞态检查，覆盖两种账号分别购买、库存可见性和互相拒绝访问；真实上游账号联调尚未验收。
+
 新增 `AccountSales` store 边界及内存/SQL 实现、`account_sales` 库存、`account_purchases` 不可变收据和独立的 `account_sales_lock` 容量锁（billing 命名空间 `0004_account_sales.sql`，PostgreSQL/MySQL）。购买在单个事务中扣点数、绑定唯一商户、延长一个自然月、切换为 `account_monthly`、写 `account_purchase` 账目并提交吊销 outbox；重复 `request_id` 返回原收据。账号目标不可修改，下架仍保留已付款权限，库存不恢复共享。
 
 新增平台账号商品 GET/POST/PUT 与商户库存 GET、购买/续费 POST；Key 校验下发 `accounts` 运行时级授权，商户模型清单同步过滤。完整契约与[升级顺序](../../docs/billing-accounts.md#数据授权与升级)见账号包月说明。必须先更新全部 Gateway，再迁移控制面并启用库存；旧 Gateway 不执行该授权。

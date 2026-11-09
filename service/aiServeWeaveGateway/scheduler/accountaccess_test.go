@@ -11,6 +11,7 @@ import (
 	"context"
 	"errors"
 	"google.golang.org/protobuf/types/known/timestamppb"
+	"io"
 	"testing"
 	"time"
 )
@@ -75,5 +76,88 @@ func TestMonthlyAccountRetryDoesNotSpillToSharedAccount(t *testing.T) {
 	ctx := scheduler.WithAccountAccess(context.Background(), accountaccess.Policy{Only: true, Managed: []accountaccess.Lease{{NodeID: "owned", RuntimeID: "mine", ExpiresAt: h.Clock.Now().Add(time.Hour)}}})
 	if _, candidate, err := sched.Chat(ctx, runtime.ChatRequest{Model: "model"}); err == nil || candidate.NodeID == "shared" {
 		t.Fatal("retry spilled to an unpurchased account", candidate, err)
+	}
+}
+
+func TestClaudeMessagesAndCodexChatUseSeparateExclusiveAccountsOnOneAgent(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	control := h.Connect("agent-one", "claude-a", "codex-a")
+	claude := runtime.Snapshot{
+		Descriptor: runtime.Descriptor{ID: "claude-a", Kind: runtime.KindClaude}, State: runtime.StateHealthy,
+		Discovery: runtime.Discovery{Models: []runtime.Model{{ID: "claude-model", Capabilities: runtime.CapabilitySet{
+			runtime.CapabilityMessages: {Level: runtime.SupportSupported}, runtime.CapabilityMessagesNative: {Level: runtime.SupportSupported},
+		}}}},
+	}
+	codex := chatCapableSnapshot("codex-a", "codex-model")
+	codex.Descriptor.Kind = runtime.KindCodex
+	control.Send(t, &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Status{Status: &tunnelv1.RuntimeStatus{
+		Full: true, ReportedAt: timestamppb.New(h.Clock.Now()), Snapshots: tunnelwire.SnapshotsToProto([]runtime.Snapshot{claude, codex}),
+	}}})
+	gatewaytest.WaitFor(t, "Claude Code and Codex on the same Agent", func() bool { node, _ := h.Srv.Node("agent-one"); return len(node.Runtimes) == 2 })
+	handler := func(req *tunnelv1.RequestHeaders, body [][]byte, reply func(*tunnelv1.AgentFrame) error) error {
+		switch req.GetRuntimeId() {
+		case "claude-a":
+			if req.GetOperation() != tunnelv1.Operation_OPERATION_MESSAGES {
+				return errors.New("wrong Claude Code operation")
+			}
+			payload, err := tunnelwire.MarshalMessagesEvent(runtime.MessagesEvent{JSON: []byte(`{"type":"message_stop"}`)})
+			if err != nil {
+				return err
+			}
+			return reply(gatewaytest.DataFrame(payload))
+		case "codex-a":
+			return chatHandler("Codex account A", nil)(req, body, reply)
+		default:
+			return errors.New("unexpected account")
+		}
+	}
+	h.OpenSlot("agent-one", tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, "slot-one", handler)
+	h.OpenSlot("agent-one", tunnelv1.SlotClass_SLOT_CLASS_INFERENCE, "slot-two", handler)
+	gatewaytest.WaitFor(t, "account slots", func() bool { return gatewaytest.IdleCount(h, "agent-one") == 2 })
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	contextFor := func(mine string) context.Context {
+		policy := accountaccess.Policy{Only: true}
+		for _, id := range []string{"claude-a", "codex-a"} {
+			lease := accountaccess.Lease{NodeID: "agent-one", RuntimeID: id}
+			if id == mine {
+				lease.ExpiresAt = h.Clock.Now().Add(time.Hour)
+			}
+			policy.Managed = append(policy.Managed, lease)
+		}
+		return scheduler.WithAccountAccess(context.Background(), policy)
+	}
+	claudeContext, codexContext := contextFor("claude-a"), contextFor("codex-a")
+	stream, selected, err := sched.MessagesStart(claudeContext, runtime.MessagesRequest{Model: "claude-model", TenantID: "claude-buyer", KeyID: "claude-key", Native: true, JSON: []byte(`{"model":"claude-model","messages":[]}`)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if selected.Kind != runtime.KindClaude || selected.RuntimeID != "claude-a" {
+		t.Fatal(selected)
+	}
+	if _, err := stream.Recv(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := stream.Recv(); !errors.Is(err, io.EOF) {
+		t.Fatal(err)
+	}
+	stream.Close()
+	response, selected, err := sched.Chat(codexContext, runtime.ChatRequest{Model: "codex-model"})
+	if err != nil || selected.Kind != runtime.KindCodex || selected.RuntimeID != "codex-a" || response.Message.Content != "served by Codex account A" {
+		t.Fatal(response, selected, err)
+	}
+	if _, _, err := sched.Chat(claudeContext, runtime.ChatRequest{Model: "codex-model"}); !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Fatal("Claude buyer used Codex", err)
+	}
+	if _, _, err := sched.MessagesStart(codexContext, runtime.MessagesRequest{Model: "claude-model", Native: true}); !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Fatal("Codex buyer used Claude Code", err)
+	}
+	for _, test := range []struct {
+		ctx   context.Context
+		model string
+	}{{claudeContext, "claude-model"}, {codexContext, "codex-model"}} {
+		models := sched.Models(test.ctx)
+		if len(models) != 1 || models[0].ID != test.model {
+			t.Fatal("another account in model catalog", models)
+		}
 	}
 }

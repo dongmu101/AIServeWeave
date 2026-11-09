@@ -88,3 +88,56 @@ func TestMonthlyAccountBillingDisabled(t *testing.T) {
 		t.Fatal(p, err)
 	}
 }
+
+// Claude Code and Codex are independent sale items even on the same Agent.
+func TestClaudeAndCodexOnOneAgentSellToDifferentTenants(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	f.svc = logic.New(f.store, f.clock, logic.WithBilling(logic.BillingConfig{Provider: &accountTestProvider{}}))
+	op := logic.Actor{TenantID: model.PlatformScope, Role: model.RolePlatformOperator, UserID: "operator"}
+	otherTenant, otherOwner, err := f.svc.CreateTenant(ctx, "Codex buyer", "codex-buyer@example.com", testPassword, "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := logic.Actor{TenantID: otherTenant.ID, UserID: otherOwner.ID, Role: model.RoleOwner}
+	claude, err := f.svc.SaveAccountSale(ctx, op, model.AccountSale{NodeID: "agent-one", RuntimeID: "claude-a", Name: "Claude Code A", PriceMicro: 100, Active: true}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codex, err := f.svc.SaveAccountSale(ctx, op, model.AccountSale{NodeID: "agent-one", RuntimeID: "codex-a", Name: "Codex A", PriceMicro: 200, Active: true}, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, actor := range []logic.Actor{f.ownerAt, other} {
+		if _, _, err := f.store.AdjustCredit(ctx, model.CreditLedgerEntry{ID: model.NewID(model.PrefixCreditLedger), TenantID: actor.TenantID, AmountMicro: 1000, CreatedAt: f.clock.Now()}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := f.svc.BuyAccount(ctx, f.ownerAt, claude.ID, "00000000000000000000000000000011", 100); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.svc.BuyAccount(ctx, other, codex.ID, "00000000000000000000000000000012", 200); err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		actor        logic.Actor
+		mine, closed model.AccountSale
+	}{
+		{f.ownerAt, claude, codex}, {other, codex, claude},
+	} {
+		policy, err := f.svc.AccountPolicy(ctx, test.actor.TenantID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !policy.Allows("agent-one", test.mine.RuntimeID, f.clock.Now()) || policy.Allows("agent-one", test.closed.RuntimeID, f.clock.Now()) {
+			t.Fatalf("account isolation: %+v", policy)
+		}
+		visible, err := f.svc.ListAccountSales(ctx, test.actor)
+		if err != nil || len(visible) != 1 || visible[0].ID != test.mine.ID {
+			t.Fatalf("inventory: %+v %v", visible, err)
+		}
+		if _, err := f.svc.BuyAccount(ctx, test.actor, test.closed.ID, "00000000000000000000000000000013", test.closed.PriceMicro); !errors.Is(err, logic.ErrConflict) {
+			t.Fatalf("sold account repurchased: %v", err)
+		}
+	}
+}

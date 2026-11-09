@@ -1,6 +1,38 @@
 # Agent 账号独享包月
 
-在点数按量计费之外，支持把 Agent 中指定运行时代表的账号按月售给一个商户。凭据留在 Agent 本机；控制面只保存 Agent ID、运行时 ID、名称、月价、购买商户和到期时间。
+在点数按量计费之外，支持把 Agent 中的 **Claude Code 账号或 Codex 账号**按月独享售给一个商户。同一个 Agent 可以同时承载两种账号，每个账号作为独立商品定价、购买和续费，也可以分别售给不同商户。凭据留在 Agent 本机；控制面只保存 Agent ID、运行时 ID、名称、月价、购买商户和到期时间。
+
+例如，同一个 `agent-one` 可以分别售卖：
+
+| 商品 | 运行时 ID | 账号类型 | 购买后可使用者 |
+| --- | --- | --- | --- |
+| Claude Code 独享账号 A | `claude-a` | `kind: claude` | 购买它的商户 A |
+| Codex 独享账号 A | `codex-a` | `kind: codex` | 购买它的商户 B |
+
+商户 A 不会因此获得 `codex-a`，商户 B 也不能使用 `claude-a`。同一商户也可以分别购买两种账号；购买一个账号不会自动独占整个 Agent。账号的识别不依赖名字包含 `claude` 或 `codex`，以上 ID 只是便于识别的示例。
+
+Agent 中的运行时配置：
+
+```yaml
+runtimes:
+  - id: claude-a
+    kind: claude
+    account_dir: ~/.claude-a
+  - id: codex-a
+    kind: codex
+    account_dir: ~/.codex-a
+```
+
+在运行 Agent 的同一系统用户下分别登录：
+
+```bash
+CLAUDE_CONFIG_DIR="$HOME/.claude-a" claude auth login
+CODEX_HOME="$HOME/.codex-a" codex login
+```
+
+在运维计费页分别创建两个商品，Agent ID 都填写 `agent-one`，运行时 ID 分别填写 `claude-a`、`codex-a`，各自设置月价。实际 Agent ID 以节点清单为准，若配置了 `gateway.allowed_runtimes`，须同时允许这两个运行时 ID。CLI 登录、模型能力与账号额度沿用各自的适配器。
+
+Claude Code / Codex 是本地账号来源；Dodo Payments 是现有点数充值的收款通道，不提供这些账号。当前实现的 `Billing.Enabled` 仍要求 Dodo 配置，账号独享授权本身按上述 Agent 运行时生效。
 
 ## 使用
 

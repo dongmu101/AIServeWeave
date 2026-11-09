@@ -1,7 +1,7 @@
 const tenant = {
   "tenant.accountMonthly": "Cuentas mensuales",
-  "tenant.accountMonthlyNote": "Compra acceso exclusivo a una cuenta con tu saldo de créditos. La compra activa la facturación mensual: solo podrás usar cuentas compradas, sin cargos por tokens. Cada compra o renovación añade un mes natural, limitado al último día del mes de destino. Renueva manualmente.",
-  "tenant.accountOperatorNote": "Cada oferta requiere un entorno Agent y un inicio de sesión real distintos. No compartas el mismo inicio de sesión mediante otros entornos. Al publicar, la cuenta sale del grupo compartido. Archivar conserva el período pagado.",
+  "tenant.accountMonthlyNote": "Compra acceso exclusivo a una cuenta Claude Code o Codex de un Agent con tu saldo de créditos. La compra activa la facturación mensual: solo podrás usar cuentas compradas, sin cargos por tokens. Cada compra o renovación añade un mes natural, limitado al último día del mes de destino. Renueva manualmente.",
+  "tenant.accountOperatorNote": "Las cuentas Claude Code y Codex del mismo Agent pueden venderse por separado, cada una con su propio entorno. No compartas el mismo inicio de sesión mediante otros entornos. Al publicar, la cuenta sale del grupo compartido. Archivar conserva el período pagado.",
   "tenant.accountSearch": "Buscar cuentas, Agents o entornos",
   "tenant.accountRefresh": "Actualizar cuentas",
   "tenant.accountAdd": "Añadir cuenta",

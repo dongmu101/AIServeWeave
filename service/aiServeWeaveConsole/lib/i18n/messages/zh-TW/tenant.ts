@@ -1,7 +1,7 @@
 const tenant = {
   "tenant.accountMonthly": "帳號包月",
-  "tenant.accountMonthlyNote": "從點數餘額購買指定帳號的獨享使用權。購買後切換為帳號包月，僅可使用已購買的帳號，不再按 token 扣費。每次購買或續費延長一個曆月（月末以目標月最後一天計算），到期後需手動續費。",
-  "tenant.accountOperatorNote": "每個帳號綁定一個 Agent 執行環境。請確保不同商品對應不同的實際登入帳號，避免透過其他執行環境重複共用同一登入。上架後退出共用池，下架不影響已購買期限。",
+  "tenant.accountMonthlyNote": "從點數餘額購買 Agent 中指定 Claude Code 或 Codex 帳號的獨享使用權。購買後切換為帳號包月，僅可使用已購買的帳號，不再按 token 扣費。每次購買或續費延長一個曆月（月末以目標月最後一天計算），到期後需手動續費。",
+  "tenant.accountOperatorNote": "同一個 Agent 中的 Claude Code 與 Codex 帳號可分別獨享販售，每個商品綁定各自的執行環境。請確保不同商品對應不同的實際登入帳號，避免透過其他執行環境重複共用同一登入。上架後退出共用池，下架不影響已購買期限。",
   "tenant.accountSearch": "搜尋帳號、Agent 或執行環境",
   "tenant.accountRefresh": "重新整理帳號",
   "tenant.accountAdd": "新增帳號",
