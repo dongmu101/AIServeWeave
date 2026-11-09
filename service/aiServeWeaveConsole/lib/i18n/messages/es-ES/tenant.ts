@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "Modelo de ejemplo",
   "tenant.enterAModelNameToReplaceItIn": "Al introducirlo, se sustituye el nombre del modelo en todos los ejemplos. Consulta los modelos disponibles en «Servicios y modelos de IA».",
   "tenant.nodes": "Nodos",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Vista de operaciones: los nodos de toda la flota son infraestructura compartida por todos los inquilinos y no pertenecen a ninguno en particular. Las etiquetas, el hardware y los runtimes los declara el propio Agent; la plataforma solo determina el estado de conexión.",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Operaciones muestra todos los nodos. Los Agents son privados por defecto; el acceso depende del uso compartido, las asignaciones y las cuentas compradas. El Agent informa etiquetas, hardware y entornos.",
   "tenant.refreshLiveFleet": "Actualizar flota en tiempo real",
   "tenant.collectingFleetInventory": "Recopilando inventario de la flota",
   "tenant.filterByNodeIdLabelOrRuntime": "Filtrar por ID de nodo, etiqueta o runtime",

@@ -1,37 +1,10 @@
-// Package nodeaccess is the contract between the control plane, which stores
-// which tenants a dedicated node belongs to, and the Gateway, which keeps every
-// other tenant's work off that node. Like common/modelaccess it holds the data
-// and its meaning and nothing that enforces anything.
+// Package nodeaccess defines operator-controlled Agent sharing and dedication.
+// Platform nodes are private until explicitly shared or assigned to tenants.
+// Tenant-owned identities always remain restricted to their authenticated owner.
+// Account leases may open one runtime on a private node; see accountaccess.Policy.Permits.
 //
-// A node with no tenants bound to it is shared, which is what every node is
-// before anyone configures this feature: a deployment that upgrades into it
-// must not start refusing yesterday's traffic. A node bound to one or more
-// tenants is dedicated: those tenants may use it, and no other tenant may. The
-// bound tenants keep every shared node as well; a binding only closes a node
-// to the rest.
-//
-// Bindings name a node by its node_id, the identity the Registry certified,
-// never by a label: labels are what an Agent says about itself, and an Agent
-// that could claim a label could claim another tenant's hardware.
-//
-// A tenant-owned node, one a tenant enrolled itself, is a third kind: its
-// node_id names its owner (TenantNodePrefix), and no binding can open it to
-// anyone else.
-//
-// nodeaccess 包是控制面（存储一台专属节点属于哪些租户）与 Gateway（让其他租户的
-// 工作远离这台节点）之间的契约。与 common/modelaccess 一样，它只保存数据及其含义，
-// 不保存任何执行逻辑。
-//
-// 没有绑定任何租户的节点是共享节点，这也是本功能被配置之前每台节点的状态：升级到
-// 本功能的部署，绝不能开始拒绝它昨天还接受的流量。绑定了一个或多个租户的节点是
-// 专属节点：这些租户可以使用它，其他租户都不可以。被绑定的租户仍然保留所有共享节点；
-// 绑定只是对其余租户关闭这台节点。
-//
-// 绑定按节点的 node_id（Registry 认证过的身份）指名，绝不按标签：标签是 Agent 对
-// 自己的描述，一个能声称某个标签的 Agent，也就能声称另一个租户的硬件。
-//
-// 商户自有节点（商户自己接入的节点）是第三种：它的 node_id 写明了所有者
-// （TenantNodePrefix），任何绑定都不能把它开放给别人。
+// nodeaccess 定义运维控制的 Agent 共享与专属授权。平台节点默认不共享，商户自有节点
+// 始终只服务其所有者。私有节点的单个账号可由有效购买权益开放。
 package nodeaccess
 
 import (
@@ -76,14 +49,13 @@ const MaxIDBytes = 128
 // 引号与分隔符、长度为 MaxIDBytes 的 id，加上外层对象的空间，再向上取整。
 const MaxDocumentBytes = 16 << 10
 
-// Policy is what applies to one tenant: the dedicated nodes bound to other
-// tenants and not to it. The Gateway needs only this to decide, and a policy
-// with nothing excluded is exactly today's behavior.
-//
-// Policy 是作用于某个租户的授权：绑定给其他租户、而不包括它的那些专属节点。Gateway
-// 做判断只需要这一份，而一个什么都不排除的 policy 恰好就是现在的行为。
+// Policy contains hard exclusions plus explicit shared/dedicated grants.
+// DefaultDeny is absent only for older control planes or standalone Gateways.
 type Policy struct {
 	Excluded []string `json:"excluded,omitempty"`
+	// DefaultDeny requires an explicit shared/dedicated grant for platform nodes.
+	DefaultDeny bool     `json:"default_deny,omitempty"`
+	Allowed     []string `json:"allowed,omitempty"`
 }
 
 // Unrestricted reports whether no node is closed to the tenant, which lets a
@@ -91,22 +63,27 @@ type Policy struct {
 //
 // Unrestricted 报告是否没有任何节点对该租户关闭，调用方据此可以整个跳过过滤。
 func (p Policy) Unrestricted() bool {
-	return len(p.Excluded) == 0
+	return !p.DefaultDeny && len(p.Excluded) == 0
 }
 
 // Allows reports whether the tenant may use nodeID under p.
 //
 // Allows 报告在 p 之下该租户是否可以使用 nodeID。
 func (p Policy) Allows(nodeID string) bool {
-	return !slices.Contains(p.Excluded, nodeID)
+	return !slices.Contains(p.Excluded, nodeID) && (!p.DefaultDeny || slices.Contains(p.Allowed, nodeID))
 }
 
-// Binding is one dedicated node and the tenants it belongs to.
-//
-// Binding 是一台专属节点及其所属的租户。
+// Binding is the operator-controlled access mode and optional tenant list.
+const (
+	ModePrivate   = "private"
+	ModeShared    = "shared"
+	ModeDedicated = "dedicated"
+)
+
 type Binding struct {
 	NodeID  string
 	Tenants []string
+	Mode    string
 }
 
 // PolicyFor derives tenantID's policy from every stored binding. The result is
@@ -115,15 +92,21 @@ type Binding struct {
 // PolicyFor 由全部已存储的绑定推导 tenantID 的 policy。结果已排序，使同一组绑定的两次
 // 推导在缓存与比较中完全一致。
 func PolicyFor(bindings []Binding, tenantID string) Policy {
-	var excluded []string
+	p := Policy{DefaultDeny: true}
 	for _, binding := range bindings {
-		if len(binding.Tenants) == 0 || slices.Contains(binding.Tenants, tenantID) {
+		if binding.Mode == ModeShared {
+			p.Allowed = append(p.Allowed, binding.NodeID)
+		} else if binding.Mode == ModePrivate {
 			continue
+		} else if slices.Contains(binding.Tenants, tenantID) {
+			p.Allowed = append(p.Allowed, binding.NodeID)
+		} else if len(binding.Tenants) > 0 {
+			p.Excluded = append(p.Excluded, binding.NodeID)
 		}
-		excluded = append(excluded, binding.NodeID)
 	}
-	sort.Strings(excluded)
-	return Policy{Excluded: excluded}
+	sort.Strings(p.Excluded)
+	sort.Strings(p.Allowed)
+	return p
 }
 
 // ValidNodeID reports whether id is acceptable as a node id in a binding: non
@@ -230,15 +213,21 @@ func OwnerOf(nodeID string) (tenantID string, owned bool) {
 	return tenant, true
 }
 
-// Permits is the whole node rule for one tenant: a tenant-owned node admits
-// only its owner, and any other node is judged by the tenant's dedicated-node
-// policy.
-//
-// Permits 是对一个商户的完整节点规则：商户自有节点只允许其所有者使用，其他节点按该
-// 商户的专属节点 policy 判断。
-func Permits(tenantID string, policy Policy, nodeID string) bool {
+// CanConsider checks hard ownership/binding restrictions before runtime grants.
+// A monthly account may grant one runtime on an otherwise non-shared node.
+func CanConsider(tenantID string, policy Policy, nodeID string) bool {
 	if owner, owned := OwnerOf(nodeID); owned {
 		return owner != "" && owner == tenantID
+	}
+	return !slices.Contains(policy.Excluded, nodeID)
+}
+
+func Permits(tenantID string, policy Policy, nodeID string) bool {
+	if !CanConsider(tenantID, policy, nodeID) {
+		return false
+	}
+	if _, owned := OwnerOf(nodeID); owned {
+		return true
 	}
 	return policy.Allows(nodeID)
 }

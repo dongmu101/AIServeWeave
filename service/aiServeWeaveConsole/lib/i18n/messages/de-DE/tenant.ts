@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "Beispielmodell",
   "tenant.enterAModelNameToReplaceItIn": "Ersetzt nach Eingabe den Modellnamen in allen Beispielen. Verfügbare Modelle stehen unter „KI-Dienste und Modelle“.",
   "tenant.nodes": "Knoten",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Betriebsansicht: Alle Mandanten teilen sich die Knoten der Flotte als Infrastruktur; sie gehören keinem einzelnen Mandanten. Labels, Hardware und Laufzeitlisten werden vom Agent selbst gemeldet. Die Plattform bestimmt nur den Online-Status.",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Die Betriebsansicht zeigt alle Knoten. Agents sind standardmäßig privat. Zugriff folgt Freigaben, dedizierten Zuweisungen und gekauften Konten. Labels, Hardware und Laufzeiten meldet der Agent.",
   "tenant.refreshLiveFleet": "Live-Flotte aktualisieren",
   "tenant.collectingFleetInventory": "Flotteninventar wird erfasst",
   "tenant.filterByNodeIdLabelOrRuntime": "Nach Knoten-ID, Labels oder Laufzeit filtern",

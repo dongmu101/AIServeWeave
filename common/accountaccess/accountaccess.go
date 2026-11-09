@@ -2,7 +2,10 @@
 // accountaccess 定义按账号售卖的 Agent 运行时访问规则，不包含登录凭据。
 package accountaccess
 
-import "time"
+import (
+	"AIServeWeave/common/nodeaccess"
+	"time"
+)
 
 // MaxAccounts bounds inventory and every cached verification document.
 const MaxAccounts = 1000
@@ -30,6 +33,23 @@ func (p Policy) Allows(nodeID, runtimeID string, now time.Time) bool {
 		}
 	}
 	return !p.Only
+}
+
+// Permits combines node sharing and account leases. A lease opens only its exact
+// runtime, never another tenant's dedicated or owned node.
+func (p Policy) Permits(tenantID string, nodes nodeaccess.Policy, nodeID, runtimeID string, now time.Time) bool {
+	if !nodeaccess.CanConsider(tenantID, nodes, nodeID) || !p.Allows(nodeID, runtimeID, now) {
+		return false
+	}
+	if nodeaccess.Permits(tenantID, nodes, nodeID) {
+		return true
+	}
+	for _, lease := range p.Managed {
+		if lease.NodeID == nodeID && lease.RuntimeID == runtimeID && now.Before(lease.ExpiresAt) {
+			return true
+		}
+	}
+	return false
 }
 
 func (p Policy) Active(now time.Time) bool {

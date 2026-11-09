@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "サンプルモデル",
   "tenant.enterAModelNameToReplaceItIn": "入力すると、すべてのサンプルのモデル名が置き換わります。利用可能なモデルは「AI サービスとモデル」を参照してください。",
   "tenant.nodes": "ノード",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "運用ビュー：機群全体のノードは全テナントが共有するインフラであり、特定のテナントには属しません。ラベル、ハードウェア、ランタイム一覧は Agent の自己申告であり、プラットフォームが判定するのはオンライン状態のみです。",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "運用ビューには機群の全ノードが表示されます。Agent は初期状態で非共有です。テナントのアクセスは共有設定、専用割り当て、購入済みアカウントの有効期間で決まります。ラベル、ハードウェア、ランタイムは Agent が報告します。",
   "tenant.refreshLiveFleet": "現在の機群情報を更新",
   "tenant.collectingFleetInventory": "機群一覧を収集中",
   "tenant.filterByNodeIdLabelOrRuntime": "ノード ID、ラベル、ランタイムで絞り込む",

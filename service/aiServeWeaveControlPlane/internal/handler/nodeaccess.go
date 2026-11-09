@@ -55,7 +55,14 @@ func setNodeAccess(ctx *svc.ServiceContext) http.HandlerFunc {
 			respondErr(w, logic.ErrInvalidInput)
 			return
 		}
-		entry, err := ctx.Logic.SetNodeAccess(r.Context(), actor, pathvar.Vars(r)["node_id"], req.Tenants)
+		mode := req.Mode
+		if mode == "" {
+			mode = nodeaccess.ModeDedicated
+			if len(req.Tenants) == 0 {
+				mode = nodeaccess.ModeShared
+			}
+		}
+		entry, err := ctx.Logic.SetNodeAccessMode(r.Context(), actor, pathvar.Vars(r)["node_id"], req.Tenants, mode)
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -65,7 +72,7 @@ func setNodeAccess(ctx *svc.ServiceContext) http.HandlerFunc {
 }
 
 func renderNodeAccess(entry logic.NodeAccessEntry) types.NodeAccess {
-	out := types.NodeAccess{NodeID: entry.NodeID, Tenants: entry.Tenants, UpdatedBy: entry.UpdatedBy}
+	out := types.NodeAccess{NodeID: entry.NodeID, Mode: entry.Mode, Tenants: entry.Tenants, UpdatedBy: entry.UpdatedBy}
 	if !entry.UpdatedAt.IsZero() {
 		at := entry.UpdatedAt
 		out.UpdatedAt = &at
@@ -95,4 +102,26 @@ func decodeNodeAccess(w http.ResponseWriter, r *http.Request, out any) bool {
 		writeError(w, http.StatusBadRequest, "the request body is not valid JSON for this endpoint")
 	}
 	return false
+}
+
+// Approval chooses sharing before the Registry lets the new node connect.
+func approveNode(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.ApproveNodeRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		err := ctx.Logic.ApproveNodeWithSharing(r.Context(), actor, pathvar.Vars(r)["id"], req.Shared)
+		recordRegistryClientCall(ctx, err)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}
 }

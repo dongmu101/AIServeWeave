@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "Example model",
   "tenant.enterAModelNameToReplaceItIn": "Enter a model name to replace it in all examples. See “AI services & models” for available models.",
   "tenant.nodes": "Nodes",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Operations view: nodes across the fleet are shared infrastructure for all tenants and do not belong to any individual tenant. Labels, hardware, and runtime inventories are reported by the Agent; only online status is determined by the platform.",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Operations sees every fleet node. Agents are private by default; tenant access follows operator sharing settings, dedicated assignments, and account leases. Agents report labels, hardware, and runtimes.",
   "tenant.refreshLiveFleet": "Refresh live fleet",
   "tenant.collectingFleetInventory": "Collecting fleet inventory",
   "tenant.filterByNodeIdLabelOrRuntime": "Filter by node ID, label, or runtime",

@@ -3,6 +3,7 @@ package scheduler_test
 import (
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/accountaccess"
+	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveGateway/internal/gatewaytest"
@@ -124,7 +125,7 @@ func TestClaudeMessagesAndCodexChatUseSeparateExclusiveAccountsOnOneAgent(t *tes
 			}
 			policy.Managed = append(policy.Managed, lease)
 		}
-		return scheduler.WithAccountAccess(context.Background(), policy)
+		return scheduler.WithAccountAccess(scheduler.WithNodeAccess(context.Background(), "buyer", nodeaccess.Policy{DefaultDeny: true}), policy)
 	}
 	claudeContext, codexContext := contextFor("claude-a"), contextFor("codex-a")
 	stream, selected, err := sched.MessagesStart(claudeContext, runtime.MessagesRequest{Model: "claude-model", TenantID: "claude-buyer", KeyID: "claude-key", Native: true, JSON: []byte(`{"model":"claude-model","messages":[]}`)})
@@ -159,5 +160,29 @@ func TestClaudeMessagesAndCodexChatUseSeparateExclusiveAccountsOnOneAgent(t *tes
 		if len(models) != 1 || models[0].ID != test.model {
 			t.Fatal("another account in model catalog", models)
 		}
+	}
+}
+
+func TestAgentDefaultPrivateSharedAndPinnedDispatch(t *testing.T) {
+	h := gatewaytest.NewHarness(t, tunnelserver.Config{})
+	connectNode(t, h, "agent", "cli", chatCapableSnapshot("cli", "model"), chatHandler("private", nil))
+	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
+	ctx := scheduler.WithNodeAccess(context.Background(), "tenant", nodeaccess.Policy{DefaultDeny: true})
+	if len(sched.Models(ctx)) != 0 {
+		t.Fatal("private Agent leaked through model discovery")
+	}
+	if _, _, err := sched.Chat(ctx, runtime.ChatRequest{Model: "model"}); !errors.Is(err, scheduler.ErrNoCapableNode) {
+		t.Fatal("private Agent received ordinary tenant traffic", err)
+	}
+	if _, err := sched.Messages(ctx, scheduler.Candidate{NodeID: "agent", RuntimeID: "cli", Model: "model"}, runtime.MessagesRequest{Model: "model"}); !errors.Is(err, scheduler.ErrNodeNotAllowed) {
+		t.Fatal("pinned request bypassed private Agent", err)
+	}
+	shared := scheduler.WithNodeAccess(context.Background(), "tenant", nodeaccess.Policy{DefaultDeny: true, Allowed: []string{"agent"}})
+	if len(sched.Models(shared)) != 1 {
+		t.Fatal("explicit sharing did not publish model")
+	}
+	response, _, err := sched.Chat(shared, runtime.ChatRequest{Model: "model"})
+	if err != nil || response.Message.Content != "served by private" {
+		t.Fatal("explicitly shared Agent did not serve tenant", response, err)
 	}
 }

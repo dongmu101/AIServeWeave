@@ -512,15 +512,11 @@ type ModelAccess struct {
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (ModelAccess) TableName() string { return "model_access" }
 
-// NodeAccess is one dedicated node and the tenants it belongs to, as a
-// common/nodeaccess binding. A node with no row is shared, so making a node
-// shared again deletes its row rather than storing an empty array — there is
-// exactly one way to say "shared".
-//
-// NodeAccess 是一台专属节点及其所属租户，即一条 common/nodeaccess 绑定。没有行的
-// 节点是共享节点，因此让节点恢复共享是删除它的行，而不是存一个空数组——「共享」只有
-// 一种写法。
+// NodeAccess stores an explicit private/shared/dedicated Agent policy.
+// No row means private. Legacy dedicated rows retain their tenant assignments.
+// NodeAccess 保存运维指定的 Agent 访问方式，没有行时默认不共享。
 type NodeAccess struct {
+	Mode        string    `gorm:"size:16;not null;default:dedicated"`
 	NodeID      string    `gorm:"primaryKey;size:128"`
 	TenantsJSON string    `gorm:"column:tenants_json;not null"`
 	UpdatedBy   string    `gorm:"size:32;not null"`

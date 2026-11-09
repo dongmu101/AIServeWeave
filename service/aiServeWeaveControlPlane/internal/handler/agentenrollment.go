@@ -41,7 +41,7 @@ func createAgentEnrollment(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "ttl_minutes must be between 15 and 1440")
 			return
 		}
-		bundle, err := ctx.Logic.CreateAgentEnrollment(r.Context(), actor, req.RegistryAddr, req.GatewayAddr, time.Duration(req.TTLMinutes)*time.Minute)
+		bundle, err := ctx.Logic.CreateAgentEnrollment(r.Context(), actor, req.RegistryAddr, req.GatewayAddr, time.Duration(req.TTLMinutes)*time.Minute, req.Shared)
 		recordRegistryClientCall(ctx, err)
 		if err != nil {
 			respondErr(w, err)

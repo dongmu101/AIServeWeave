@@ -249,8 +249,8 @@ func TestInstallTokenCredentialAndAuditsHideSecrets(t *testing.T) {
 		t.Fatalf("RedeemInstallCode() error = %v", err)
 	}
 	page, err := f.st.ListAudit(ctx, model.PlatformScope, store.ListQuery{}, store.AuditFilter{})
-	if err != nil || len(page.Items) != 3 {
-		t.Fatalf("audit entries = %d, %v; want 3 (token issue, code issue, redeem)", len(page.Items), err)
+	if err != nil || len(page.Items) != 5 {
+		t.Fatalf("audit entries = %d, %v; want 5 (token issue, code issue, redeem and sharing settings)", len(page.Items), err)
 	}
 	for _, entry := range page.Items {
 		for _, secret := range []string{installTestToken, codeIssue.Code, strings.ReplaceAll(codeIssue.Code, "-", "")} {
@@ -274,5 +274,26 @@ func TestInstallDisabledIsNotFound(t *testing.T) {
 	}
 	if _, err := s.CreateOperatorInstall(t.Context(), installOperator, "a.example.com:1", "b.example.com:2", "code", time.Hour); !errors.Is(err, logic.ErrNotFound) {
 		t.Fatalf("CreateOperatorInstall() error = %v, want ErrNotFound", err)
+	}
+}
+
+func TestOperatorInstallPersistsExplicitSharingBeforeReturningCredential(t *testing.T) {
+	for _, shared := range []bool{false, true} {
+		f := newInstallFixture(t)
+		issued, err := f.svc.CreateOperatorInstall(t.Context(), installOperator, "registry.example.com:9443", "agent.example.com:8443", logic.InstallCredentialCode, time.Hour, shared)
+		if err != nil {
+			t.Fatal(err)
+		}
+		rows, err := f.svc.ListNodeAccess(t.Context(), installOperator)
+		if err != nil || len(rows) != 1 || rows[0].NodeID != issued.NodeID {
+			t.Fatal(rows, err)
+		}
+		want := "private"
+		if shared {
+			want = "shared"
+		}
+		if rows[0].Mode != want {
+			t.Fatalf("install sharing mode=%s, want %s", rows[0].Mode, want)
+		}
 	}
 }

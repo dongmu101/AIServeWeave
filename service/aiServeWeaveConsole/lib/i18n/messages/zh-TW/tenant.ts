@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "範例模型",
   "tenant.enterAModelNameToReplaceItIn": "填入後，所有範例中的模型名稱都會隨之替換，可用模型請見「AI 服務與模型」。",
   "tenant.nodes": "節點",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "維運檢視：整個節點叢集是所有租戶共用的基礎設施，不屬於任何單一租戶。標籤、硬體與執行環境清單皆由 Agent 自行回報；平台只判定上線狀態。",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "維運檢視顯示機群全部節點。Agent 預設不共用，租戶存取由維運的共用設定、專屬綁定及帳號購買權益決定。標籤、硬體與執行環境清單由 Agent 回報。",
   "tenant.refreshLiveFleet": "重新整理即時節點叢集",
   "tenant.collectingFleetInventory": "正在收集節點叢集清單",
   "tenant.filterByNodeIdLabelOrRuntime": "依節點 ID、標籤或執行環境篩選",

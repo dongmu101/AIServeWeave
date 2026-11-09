@@ -44,7 +44,7 @@ func createOperatorInstall(ctx *svc.ServiceContext) http.HandlerFunc {
 			writeError(w, http.StatusBadRequest, "ttl_minutes must be between 15 and 1440")
 			return
 		}
-		out, err := ctx.Logic.CreateOperatorInstall(r.Context(), actor, req.RegistryAddr, req.GatewayAddr, req.Credential, time.Duration(req.TTLMinutes)*time.Minute)
+		out, err := ctx.Logic.CreateOperatorInstall(r.Context(), actor, req.RegistryAddr, req.GatewayAddr, req.Credential, time.Duration(req.TTLMinutes)*time.Minute, req.Shared)
 		recordRegistryClientCall(ctx, err)
 		if err != nil {
 			respondErr(w, err)

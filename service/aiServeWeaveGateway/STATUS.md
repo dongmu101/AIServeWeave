@@ -405,7 +405,9 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 - **派发给既定候选时再查一次**：`Messages`（工具续接）、`Transcribe`、`SubmitWorkflowTo`、`UploadInput` 发现节点已对调用方关闭时，返回 `ErrNodeNotAllowed`。它包装 `ErrNoCapableNode`，前门统一按「不存在」回答 404。续接遇到这种情况时会消费租约，会话结束，客户端需要重新开一个会话。
 - **不受约束的路径**：已提交 Job 的状态、事件、取消与产物读取，以及 J06 后台恢复（传入不带授权的 context）。run 已经在那台节点上，不算对节点的新使用；所以绑定变更前提交的 Job 仍能取回结果。
 - **升级顺序**：旧版 Gateway 会忽略校验响应里的 `nodes` 字段，绑定在它那里不生效。**先升级全部 Gateway，再在控制面绑定节点。**新版 Gateway 对接旧控制面时，没有这个字段，等于不限制。
-- **商户自有节点**：node_id 为 `tnode.<tenant_id>.<hex>` 的节点只给所有者商户用（见 [ControlPlane STATUS「商户自有节点」](../aiServeWeaveControlPlane/STATUS.md#商户自有节点)）。鉴权中间件只要有租户身份就用 `scheduler.WithNodeAccess(ctx, tenantID, policy)` 挂上访问判断，即使该租户没有被关闭的专属节点；`nodeAllowed` 统一走 `nodeaccess.Permits`，上面列出的选节点与派发检查对自有节点同样生效。归属从 id 本身解析，不依赖控制面下发。请求跑在自有节点上时，用量记录附带 `node_id`，控制面据此免扣费；其他节点不附带，推送内容与以前一致。旧版 Gateway 会把自有节点当作共享节点，所以控制面要在全部 Gateway 升级后才能开启该功能。
+- **商户自有节点**：node_id 为 `tnode.<tenant_id>.<hex>` 的节点只给所有者商户用（见 [ControlPlane STATUS「商户自有节点」](../aiServeWeaveControlPlane/STATUS.md#商户自有节点)）。鉴权中间件只要有租户身份就用 `scheduler.WithNodeAccess(ctx, tenantID, policy)` 挂上访问判断，即使该租户没有被关闭的专属节点；节点初筛执行所有者与专属绑定硬限制，运行时检查再组合显式共享授权与账号购买期限，上面列出的选节点与派发检查对自有节点同样生效。归属从 id 本身解析，不依赖控制面下发。请求跑在自有节点上时，用量记录附带 `node_id`，控制面据此免扣费；其他节点不附带，推送内容与以前一致。旧版 Gateway 会把自有节点当作共享节点，所以控制面要在全部 Gateway 升级后才能开启该功能。
+
+**运维共享控制（2026-11-09）**：新控制面下发 `nodes.default_deny` 与 `allowed`，未明确共享/绑定的 Agent 对普通租户关闭。`accountaccess.Policy.Permits` 在每个运行时合并节点授权和账号租约，使非共享 Agent 的已购账号仍可使用，其他同机资源继续关闭。模型目录、候选选择、重试与固定运行时请求同步检查；后台恢复与既有任务读取不受新共享准入限制。默认测试及竞态检查覆盖默认拒绝、显式共享、同 Agent 的 Claude/Codex 独享和到期拒绝。无控制面的独立 Gateway 保持原策略。升级必须先更新全部 Gateway，详见[Agent 共享设置](../../docs/agent-sharing.md)。
 
 ## 配额与限流
 

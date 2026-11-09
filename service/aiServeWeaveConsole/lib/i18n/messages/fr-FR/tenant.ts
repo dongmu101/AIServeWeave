@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "Modèle d’exemple",
   "tenant.enterAModelNameToReplaceItIn": "La valeur saisie remplace le nom du modèle dans tous les exemples. Consultez « Services et modèles d’IA » pour les modèles disponibles.",
   "tenant.nodes": "Nœuds",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "Vue d’exploitation : les nœuds du parc sont une infrastructure partagée entre tous les locataires, sans appartenir à l’un d’eux. Les étiquettes, le matériel et les environnements d’exécution sont déclarés par l’Agent. La plateforme détermine uniquement l’état de connexion.",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "La vue d’exploitation affiche tous les nœuds. Les Agents sont privés par défaut ; l’accès dépend du partage, des attributions et des comptes achetés. L’Agent signale les étiquettes, le matériel et les environnements.",
   "tenant.refreshLiveFleet": "Actualiser le parc en direct",
   "tenant.collectingFleetInventory": "Collecte de l’inventaire du parc",
   "tenant.filterByNodeIdLabelOrRuntime": "Filtrer par ID de nœud, étiquette ou environnement d’exécution",

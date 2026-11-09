@@ -238,11 +238,11 @@ type Verification struct {
 	// Nodes is the set of dedicated nodes closed to the tenant
 	// (common/nodeaccess). It rides the verification for the reason Models
 	// does, and SetNodeAccess drops every cached verification the same way. It
-	// is nil when no node is closed to the tenant.
+	// includes default-deny and the explicit shared/dedicated node grants.
 	//
 	// Nodes 是对该租户关闭的专属节点集合（common/nodeaccess）。它随校验结果下发的
 	// 理由与 Models 相同，SetNodeAccess 也以同样方式丢弃全部已缓存的校验结果。没有
-	// 节点对该租户关闭时它为 nil。
+	// 下发默认不共享及显式授权节点。
 	Nodes *nodeaccess.Policy
 	// BillingBlocked reports a prepaid tenant whose balance is exhausted. The
 	// key still authenticates — the Gateway answers 402 rather than 401, so

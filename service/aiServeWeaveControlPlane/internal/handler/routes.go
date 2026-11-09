@@ -573,7 +573,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			{
 				Method:  http.MethodPost,
 				Path:    "/operator/v1/nodes/:id/approve",
-				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/approve", requirePlatformSession(ctx, nodeOpsHandler(ctx, ctx.Logic.ApproveNode))),
+				Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/nodes/:id/approve", requirePlatformSession(ctx, approveNode(ctx))),
 			},
 			{
 				Method:  http.MethodPost,

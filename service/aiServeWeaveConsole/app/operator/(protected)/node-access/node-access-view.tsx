@@ -19,7 +19,7 @@ import { Input } from "@/components/ui/input";
 import { parseTenants, type Tenant } from "@/lib/console/contract";
 import { parseFleetSnapshot } from "@/lib/console/fleet";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
-import { MAX_TENANTS_PER_NODE, mergeNodeRows, normalizeTenants, parseNodeAccess, parseNodeAccessList, tenantNodeOwner, validId, type NodeAccess, type NodeRow } from "@/lib/console/node-access";
+import { MAX_TENANTS_PER_NODE, mergeNodeRows, normalizeTenants, parseNodeAccess, parseNodeAccessList, tenantNodeOwner, validId, type NodeAccess, type NodeAccessMode, type NodeRow } from "@/lib/console/node-access";
 
 const PAGE_SIZE = 25;
 
@@ -37,9 +37,9 @@ export function NodeAccessView() {
   const rows = React.useMemo(() => {
     const merged = new Map((bindings.data ?? []).map((binding) => [binding.nodeId, binding]));
     for (const entry of Object.values(saved)) merged.set(entry.nodeId, entry);
-    const current = [...merged.values()].filter((entry) => entry.tenants.length > 0);
+    const current = [...merged.values()];
     const listed = mergeNodeRows((fleet.data?.nodes ?? []).map((node) => ({ nodeId: node.nodeId, live: node.live })), current);
-    if (selected && !listed.some((row) => row.nodeId === selected)) listed.push({ nodeId: selected, live: null, tenants: [] });
+    if (selected && !listed.some((row) => row.nodeId === selected)) listed.push({ mode: "private", nodeId: selected, live: null, tenants: [] });
     return listed;
   }, [bindings.data, fleet.data, saved, selected]);
   const shown = rows.filter((row) => matchesQuery([row.nodeId, ...row.tenants], query));
@@ -71,7 +71,7 @@ function NodeButton({ row, active, onSelect }: { row: NodeRow; active: boolean; 
     <span className="grid min-w-0 gap-1">
       <code className="break-all text-sm">{row.nodeId}</code>
       <span className="flex flex-wrap gap-1">
-        {tenantNodeOwner(row.nodeId) !== null ? <Badge variant="default">{t("operator.tenantOwnedNode")}</Badge> : <Badge variant={row.tenants.length > 0 ? "default" : "outline"}>{row.tenants.length > 0 ? t("operator.dedicatedToCount", { count: row.tenants.length }) : t("operator.sharedNode")}</Badge>}
+        {tenantNodeOwner(row.nodeId) !== null ? <Badge variant="default">{t("operator.tenantOwnedNode")}</Badge> : <Badge variant={row.tenants.length > 0 ? "default" : "outline"}>{row.mode === "dedicated" ? t("operator.dedicatedToCount", { count: row.tenants.length }) : t(row.mode === "shared" ? "operator.sharedNode" : "operator.privateNode")}</Badge>}
         {row.live === null ? <Badge variant="outline">{t("operator.notInFleet")}</Badge> : row.live ? null : <Badge variant="destructive">{t("operator.nodeOffline")}</Badge>}
       </span>
     </span>
@@ -91,6 +91,9 @@ function BindingEditor({ row, names, onNames, onSaved }: { row: NodeRow; names: 
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const [draft, setDraft] = React.useState<string[] | null>(null);
+  const [modeDraft, setMode] = React.useState<NodeAccessMode | null>(null);
+  const mode = modeDraft ?? row.mode;
+  const modeId = React.useId();
   const [last, setLast] = React.useState<NodeAccess | null>(null);
   const [query, setQuery] = React.useState("");
   const [pending, setPending] = React.useState(false);
@@ -98,26 +101,33 @@ function BindingEditor({ row, names, onNames, onSaved }: { row: NodeRow; names: 
   const tenants = usePagedResource<Tenant>({ path: "/operator/v1/tenants", surface: "operator", filters: { q: query }, pageSize: PAGE_SIZE, parse: parseTenants });
   const items = tenants.items;
   React.useEffect(() => { if (items && items.length > 0) onNames(Object.fromEntries(items.map((tenant) => [tenant.id, tenant.name]))); }, [items, onNames]);
-  const bound = draft ?? row.tenants;
+  const bound = mode === "dedicated" ? draft ?? row.tenants : [];
   const full = bound.length >= MAX_TENANTS_PER_NODE;
 
   async function save() {
     setError(null);
     let next: string[];
     try { next = normalizeTenants(bound); } catch (failure) { setError(<ErrorMessage error={failure} />); return; }
-    if (next.length === 0 && row.tenants.length > 0 && !window.confirm(t("operator.makeNodeSharedConfirm"))) return;
+    if (mode === "dedicated" && next.length === 0) return;
+    if (mode === "shared" && row.mode !== "shared" && !window.confirm(t("operator.makeNodeSharedConfirm"))) return;
     setPending(true);
     try {
-      const result = await run({ method: "PUT", surface: "operator", path: `/operator/v1/node-access/${encodeURIComponent(row.nodeId)}`, body: { tenants: next }, parse: parseNodeAccess });
-      setLast(result); onSaved(result); setDraft(null); toast.success(<Message id="operator.nodeAccessSaved" />);
+      const result = await run({ method: "PUT", surface: "operator", path: `/operator/v1/node-access/${encodeURIComponent(row.nodeId)}`, body: { mode, tenants: next }, parse: parseNodeAccess });
+      setLast(result); onSaved(result); setDraft(null); setMode(null); toast.success(<Message id="operator.nodeAccessSaved" />);
     } catch (failure) { setError(<ErrorMessage error={failure} />); }
     finally { setPending(false); }
   }
 
-  return <Card><CardHeader><CardTitle className="flex flex-wrap items-center gap-2 text-base"><code className="break-all">{row.nodeId}</code><Badge variant="outline">{bound.length === 0 ? t("operator.sharedNode") : t("operator.dedicatedToCount", { count: bound.length })}</Badge></CardTitle></CardHeader><CardContent className="grid gap-4">
+  return <Card><CardHeader><CardTitle className="flex flex-wrap items-center gap-2 text-base"><code className="break-all">{row.nodeId}</code><Badge variant="outline">{mode === "dedicated" ? t("operator.dedicatedToCount", { count: bound.length }) : t(mode === "shared" ? "operator.sharedNode" : "operator.privateNode")}</Badge></CardTitle></CardHeader><CardContent className="grid gap-4">
     <p className="text-sm text-muted-foreground"><Message id="operator.nodeAccessEditorHint" /></p>
+    <label className="grid gap-2 text-sm" htmlFor={modeId}><Message id="operator.nodeAccessMode" />
+      <select id={modeId} className="h-9 rounded-md border bg-background px-3" value={mode} disabled={pending} onChange={event => { setMode(event.target.value as NodeAccessMode); setDraft([]); }}>
+        <option value="private">{t("operator.privateNode")}</option><option value="shared">{t("operator.sharedNode")}</option><option value="dedicated">{t("operator.dedicatedNode")}</option>
+      </select>
+    </label>
+    <p className="text-sm text-muted-foreground"><Message id="operator.nodeSharingHint" /></p>
     {last?.updatedAt ? <p className="text-xs text-muted-foreground"><Message id="operator.lastUpdated" values={{ actor: last.updatedBy ?? "—", time: formatDateTime(last.updatedAt, undefined, locale) }} /></p> : null}
-    <div className="grid gap-2"><span className="text-sm font-medium"><Message id="operator.boundTenants" /></span>
+    {mode === "dedicated" ? <><div className="grid gap-2"><span className="text-sm font-medium"><Message id="operator.boundTenants" /></span>
       {bound.length === 0 ? <p className="text-sm text-muted-foreground"><Message id="operator.noBoundTenants" /></p> : <ul className="flex flex-wrap gap-2">{bound.map((id) => <li key={id}>
         <Button size="sm" variant="secondary" disabled={pending} aria-label={t("operator.removeTenantFromNode", { name: names[id] || id })} onClick={() => setDraft(bound.filter((x) => x !== id))}>
           <span className="break-all">{names[id] || id}</span><span aria-hidden="true">×</span>
@@ -136,7 +146,8 @@ function BindingEditor({ row, names, onNames, onSaved }: { row: NodeRow; names: 
       </>}
       {full ? <p className="text-xs text-muted-foreground"><Message id="operator.tenantsPerNodeLimit" values={{ count: MAX_TENANTS_PER_NODE }} /></p> : null}
     </div>
-    <div className="flex flex-wrap gap-2"><Button disabled={pending || draft === null} onClick={save}><Message id="operator.saveNodeAccess" /></Button><Button variant="outline" disabled={pending || draft === null} onClick={() => { setDraft(null); setError(null); }}><Message id="operator.discardNodeAccessChanges" /></Button></div>
+    </> : null}
+    <div className="flex flex-wrap gap-2"><Button disabled={pending || (draft === null && modeDraft === null) || (mode === "dedicated" && bound.length === 0)} onClick={save}><Message id="operator.saveNodeAccess" /></Button><Button variant="outline" disabled={pending || (draft === null && modeDraft === null)} onClick={() => { setDraft(null); setMode(null); setError(null); }}><Message id="operator.discardNodeAccessChanges" /></Button></div>
     <FormError message={error} />
   </CardContent></Card>;
 }

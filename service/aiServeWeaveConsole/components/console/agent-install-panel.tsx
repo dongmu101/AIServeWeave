@@ -44,7 +44,7 @@ export function AgentInstallPanel({ surface, path, parse, extraBody, onIssued, c
   path: string;
   parse: (value: unknown) => InstallIssue;
   /** Extra request fields; null keeps the form from being submitted. / 额外的请求字段；为 null 时不允许提交。 */
-  extraBody: Record<string, string> | null;
+  extraBody: Record<string, string | boolean> | null;
   /** Called after a credential was issued, e.g. to refresh a node list. / 凭据签发后调用，例如刷新节点列表。 */
   onIssued?: () => void;
   children?: React.ReactNode;

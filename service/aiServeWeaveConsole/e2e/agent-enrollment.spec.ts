@@ -27,9 +27,11 @@ for (const width of [1440, 375]) {
     expect(await fs.readFile((await downloadedCA.path())!, "utf8")).toBe(ca);
     await page.getByLabel("Registry 注册地址").fill("registry.example.com:9443");
     await page.getByLabel("Gateway 隧道地址").fill("agent.example.com:8443");
+    await expect(page.getByRole("checkbox", { name: "共享给所有租户", exact: true })).not.toBeChecked();
+    await page.locator("details > summary").click();
     await page.getByRole("button", { name: "生成新节点接入包", exact: true }).click();
     await expect(page.getByText("接入包已生成", { exact: true })).toBeVisible();
-    expect(writes).toEqual([{ registry_addr: "registry.example.com:9443", gateway_addr: "agent.example.com:8443", ttl_minutes: 60 }]);
+    expect(writes).toEqual([{ registry_addr: "registry.example.com:9443", gateway_addr: "agent.example.com:8443", ttl_minutes: 60, shared: false }]);
     for (let i = 0; i < 2; i++) {
       const download = page.waitForEvent("download");
       await page.getByRole("button", { name: "下载 ZIP 接入包", exact: true }).click();
@@ -42,6 +44,7 @@ for (const width of [1440, 375]) {
     expect(await page.evaluate(() => JSON.stringify(localStorage))).not.toContain(archive);
     await page.screenshot({ path: `/private/tmp/aisw-agent-enrollment-${width}.png`, fullPage: true });
     await page.reload();
+    await page.locator("details > summary").click();
     await expect(page.getByRole("button", { name: "生成新节点接入包", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "下载 ZIP 接入包", exact: true })).toHaveCount(0);
   });
@@ -56,6 +59,7 @@ test("enrollment generation failures never retry automatically", async ({ page }
   await page.goto("/operator/agent-enrollment");
   await page.getByLabel("Registry 注册地址").fill("registry.example.com:9443");
   await page.getByLabel("Gateway 隧道地址").fill("agent.example.com:8443");
+  await page.locator("details > summary").click();
   await page.getByRole("button", { name: "生成新节点接入包", exact: true }).click();
   await expect(page.getByText(/结果未确认时不要自动重试/)).toBeVisible();
   expect(writes).toBe(1);

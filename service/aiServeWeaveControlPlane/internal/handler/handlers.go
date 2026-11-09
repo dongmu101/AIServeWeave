@@ -1662,7 +1662,7 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 
 		cached, ok, generation := ctx.Cache.Get(r.Context(), req.Hash)
-		if ok {
+		if ok && cached.Nodes != nil && cached.Nodes.DefaultDeny {
 			writeJSON(w, http.StatusOK, renderVerification(cached))
 			return
 		}

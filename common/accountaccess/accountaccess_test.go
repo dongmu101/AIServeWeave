@@ -2,6 +2,7 @@ package accountaccess_test
 
 import (
 	"AIServeWeave/common/accountaccess"
+	"AIServeWeave/common/nodeaccess"
 	"testing"
 	"time"
 )
@@ -28,5 +29,24 @@ func TestMonthlyExpiryAndIsolation(t *testing.T) {
 	}
 	if p.Allows("agent", "mine", now.Add(time.Hour)) || p.Active(now.Add(time.Hour)) {
 		t.Fatal("cached policy survived expiry")
+	}
+}
+
+func TestPrivateAgentAllowsOnlyAnExactPaidAccount(t *testing.T) {
+	now := time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	nodes := nodeaccess.Policy{DefaultDeny: true}
+	p := accountaccess.Policy{Managed: []accountaccess.Lease{{NodeID: "private-agent", RuntimeID: "codex", ExpiresAt: now.Add(time.Hour)}}}
+	if !p.Permits("buyer", nodes, "private-agent", "codex", now) {
+		t.Fatal("paid account was denied")
+	}
+	if p.Permits("buyer", nodes, "private-agent", "claude", now) || p.Permits("buyer", nodes, "new-agent", "codex", now) {
+		t.Fatal("lease opened unpurchased resources")
+	}
+	if p.Permits("buyer", nodes, "private-agent", "codex", now.Add(time.Hour)) {
+		t.Fatal("expired lease opened a private account")
+	}
+	nodes.Excluded = []string{"private-agent"}
+	if p.Permits("buyer", nodes, "private-agent", "codex", now) {
+		t.Fatal("lease bypassed another tenant's dedicated node")
 	}
 }

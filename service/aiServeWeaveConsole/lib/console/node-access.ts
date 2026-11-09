@@ -8,7 +8,9 @@ export const MAX_TENANTS_PER_NODE = 64;
 export const MAX_ID_BYTES = 128;
 
 /** NodeAccess mirrors types.NodeAccess: one dedicated node and its tenants. / NodeAccess 镜像 types.NodeAccess：一台专属节点及其租户。 */
-export interface NodeAccess { nodeId: string; tenants: string[]; updatedBy: string | null; updatedAt: string | null }
+export type NodeAccessMode = "private" | "shared" | "dedicated";
+
+export interface NodeAccess { mode: NodeAccessMode; nodeId: string; tenants: string[]; updatedBy: string | null; updatedAt: string | null }
 
 function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError("contract");
@@ -46,13 +48,16 @@ export function parseNodeAccess(value: unknown): NodeAccess {
   const source = object(value);
   if (typeof source.node_id !== "string" || !validId(source.node_id) || !Array.isArray(source.tenants) || source.tenants.length > MAX_TENANTS_PER_NODE) throw new ApiError("contract");
   const tenants = source.tenants.map((tenant) => { if (typeof tenant !== "string" || !validId(tenant)) throw new ApiError("contract"); return tenant; });
+  const mode = source.mode ?? (tenants.length > 0 ? "dedicated" : "shared");
+  if (mode !== "private" && mode !== "shared" && mode !== "dedicated") throw new ApiError("contract");
+  if ((mode === "dedicated") !== (tenants.length > 0)) throw new ApiError("contract");
   const optional = (key: string) => {
     const field = source[key];
     if (field === undefined || field === null || field === "") return null;
     if (typeof field !== "string") throw new ApiError("contract");
     return field;
   };
-  return { nodeId: source.node_id, tenants, updatedBy: optional("updated_by"), updatedAt: optional("updated_at") };
+  return { mode, nodeId: source.node_id, tenants, updatedBy: optional("updated_by"), updatedAt: optional("updated_at") };
 }
 
 /** parseNodeAccessList validates GET /operator/v1/node-access, where every item is dedicated. / parseNodeAccessList 校验 GET /operator/v1/node-access，其中每一项都是专属节点。 */
@@ -60,7 +65,7 @@ export function parseNodeAccessList(value: unknown): NodeAccess[] {
   const source = object(value);
   if (!Array.isArray(source.items) || source.items.length > MAX_DEDICATED_NODES) throw new ApiError("contract");
   const items = source.items.map(parseNodeAccess);
-  if (items.some((item) => item.tenants.length === 0) || new Set(items.map((item) => item.nodeId)).size !== items.length) throw new ApiError("contract");
+  if (source.items.some(item => { const row = object(item); return row.mode === undefined && Array.isArray(row.tenants) && row.tenants.length === 0; }) || new Set(items.map((item) => item.nodeId)).size !== items.length) throw new ApiError("contract");
   return items;
 }
 
@@ -77,12 +82,12 @@ export function normalizeTenants(tenants: readonly string[]): string[] {
 }
 
 /** NodeRow is one node the page lists: seen in the fleet, bound, or both. / NodeRow 是页面列出的一台节点：在机群中看到的、已绑定的，或两者皆是。 */
-export interface NodeRow { nodeId: string; live: boolean | null; tenants: string[] }
+export interface NodeRow { mode: NodeAccessMode; nodeId: string; live: boolean | null; tenants: string[] }
 
 /** mergeNodeRows lists every fleet node and every bound node once, sorted by id. A bound node absent from the fleet has live null. / mergeNodeRows 把机群节点与已绑定节点各列一次并按 id 排序。不在机群中的已绑定节点 live 为 null。 */
 export function mergeNodeRows(fleet: readonly { nodeId: string; live: boolean }[], bindings: readonly NodeAccess[]): NodeRow[] {
   const rows = new Map<string, NodeRow>();
-  for (const node of fleet) rows.set(node.nodeId, { nodeId: node.nodeId, live: node.live, tenants: [] });
-  for (const binding of bindings) rows.set(binding.nodeId, { nodeId: binding.nodeId, live: rows.get(binding.nodeId)?.live ?? null, tenants: binding.tenants });
+  for (const node of fleet) rows.set(node.nodeId, { mode: "private", nodeId: node.nodeId, live: node.live, tenants: [] });
+  for (const binding of bindings) rows.set(binding.nodeId, { mode: binding.mode, nodeId: binding.nodeId, live: rows.get(binding.nodeId)?.live ?? null, tenants: binding.tenants });
   return [...rows.values()].sort((a, b) => (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0));
 }

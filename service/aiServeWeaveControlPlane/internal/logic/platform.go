@@ -344,11 +344,21 @@ func (s *Service) requireRegistryActor(actor Actor) error {
 // Registry，并且只在成功时记一条审计——为什么失败的操作不留审计，见
 // service.go 的 audit 文档注释。
 func (s *Service) ApproveNode(ctx context.Context, actor Actor, nodeID string) error {
+	return s.ApproveNodeWithSharing(ctx, actor, nodeID, false)
+}
+
+func (s *Service) ApproveNodeWithSharing(ctx context.Context, actor Actor, nodeID string, shared bool) error {
 	if err := s.requireRegistryActor(actor); err != nil {
 		return err
 	}
 	if nodeID == "" {
 		return ErrInvalidInput
+	}
+	// Tenant-owned nodes retain their authenticated owner's access.
+	if _, owned := nodeaccess.OwnerOf(nodeID); !owned {
+		if err := s.setEnrollmentSharing(ctx, actor, nodeID, shared); err != nil {
+			return err
+		}
 	}
 	if err := s.registryClient.ApproveNode(ctx, nodeID); err != nil {
 		return err
@@ -432,6 +442,14 @@ func (s *Service) DeleteNode(ctx context.Context, actor Actor, nodeID string) er
 	}
 	if err := s.revokeOwnedNodeRow(ctx, actor, nodeID); err != nil {
 		return err
+	}
+	if _, owned := nodeaccess.OwnerOf(nodeID); !owned {
+		if err := s.store.DeleteNodeAccess(ctx, nodeID); err != nil {
+			return translate(err)
+		}
+		if s.invalidator != nil {
+			s.invalidator.InvalidateAll(ctx)
+		}
 	}
 	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionNodeDelete, nodeID, "", actor.IP)
 	return nil

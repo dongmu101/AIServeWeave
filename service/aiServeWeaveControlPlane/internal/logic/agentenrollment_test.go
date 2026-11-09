@@ -58,10 +58,13 @@ func TestAgentEnrollmentRequiresPlatformAndAuditsWithoutCredentials(t *testing.T
 				t.Fatalf("read=%v create=%v node=%q, want success", readErr, err, bundle.NodeID)
 			}
 			page, err := st.ListAudit(t.Context(), model.PlatformScope, store.ListQuery{}, store.AuditFilter{})
-			if err != nil || len(page.Items) != 1 {
-				t.Fatalf("audit count=%d error=%v, want 1", len(page.Items), err)
+			if err != nil || len(page.Items) != 2 {
+				t.Fatalf("audit count=%d error=%v, want 2", len(page.Items), err)
 			}
 			audit := page.Items[0]
+			if audit.Action == model.ActionNodeAccessUpdate {
+				audit = page.Items[1]
+			}
 			if audit.Action != model.ActionNodeEnrollmentCreate || audit.Target != "new-node" || audit.ActorID != "op_1" || strings.Contains(audit.Detail, "test-private-bootstrap-token") {
 				t.Fatalf("audit=%+v, want credential-free enrollment audit", audit)
 			}

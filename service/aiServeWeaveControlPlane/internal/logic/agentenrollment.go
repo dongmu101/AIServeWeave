@@ -29,7 +29,7 @@ func (s *Service) AgentEnrollmentCA(actor Actor) (agentenrollment.Certificate, e
 // CreateAgentEnrollment issues one new-node bundle and records a credential-free audit.
 //
 // CreateAgentEnrollment 签发一个新节点接入包并记录不含凭据的审计。
-func (s *Service) CreateAgentEnrollment(ctx context.Context, actor Actor, registry, gateway string, ttl time.Duration) (agentenrollment.Bundle, error) {
+func (s *Service) CreateAgentEnrollment(ctx context.Context, actor Actor, registry, gateway string, ttl time.Duration, sharing ...bool) (agentenrollment.Bundle, error) {
 	if err := s.requirePlatformActor(actor); err != nil {
 		return agentenrollment.Bundle{}, err
 	}
@@ -37,6 +37,11 @@ func (s *Service) CreateAgentEnrollment(ctx context.Context, actor Actor, regist
 		return agentenrollment.Bundle{}, ErrUnavailable
 	}
 	bundle, err := s.agentEnrollment.Create(ctx, registry, gateway, ttl)
+	if err == nil {
+		if err := s.setEnrollmentSharing(ctx, actor, bundle.NodeID, len(sharing) > 0 && sharing[0]); err != nil {
+			return agentenrollment.Bundle{}, err
+		}
+	}
 	if errors.Is(err, agentenrollment.ErrInvalidInput) {
 		return agentenrollment.Bundle{}, ErrInvalidInput
 	}

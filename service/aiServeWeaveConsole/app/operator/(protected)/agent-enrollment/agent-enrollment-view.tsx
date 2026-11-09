@@ -28,6 +28,7 @@ export function AgentEnrollmentView() {
   const [gatewayInput, setGateway] = React.useState<string | null>(null);
   const registry = registryInput ?? (host ? `registry.${host}:9443` : "");
   const gateway = gatewayInput ?? (host ? `agent.${host}:8443` : "");
+  const [shared, setShared] = React.useState(false);
   const [ttl, setTTL] = React.useState("60");
   const [pending, setPending] = React.useState(false);
   const inFlight = React.useRef(false);
@@ -40,7 +41,7 @@ export function AgentEnrollmentView() {
     inFlight.current = true;
     setPending(true); setError(null); setBundle(null);
     try {
-      setBundle(await run({ method: "POST", surface: "operator", path: "/operator/v1/agent-enrollment", body: { registry_addr: registry.trim(), gateway_addr: gateway.trim(), ttl_minutes: Number(ttl) }, parse: parseEnrollmentBundle }));
+      setBundle(await run({ method: "POST", surface: "operator", path: "/operator/v1/agent-enrollment", body: { registry_addr: registry.trim(), gateway_addr: gateway.trim(), shared, ttl_minutes: Number(ttl) }, parse: parseEnrollmentBundle }));
     } catch (failure) { setError(failure); }
     finally { inFlight.current = false; setPending(false); }
   }
@@ -61,7 +62,11 @@ export function AgentEnrollmentView() {
       <label className="grid gap-2 text-sm" htmlFor="enrollment-registry"><Message id="operator.enrollmentRegistry" /><Input id="enrollment-registry" required maxLength={253} value={registry} onChange={e => setRegistry(e.target.value)} placeholder="registry.open7x.com:9443" disabled={pending} /></label>
       <label className="grid gap-2 text-sm" htmlFor="enrollment-gateway"><Message id="operator.enrollmentGateway" /><Input id="enrollment-gateway" required maxLength={253} value={gateway} onChange={e => setGateway(e.target.value)} placeholder="agent.open7x.com:8443" disabled={pending} /></label>
     </section>
-    <AgentInstallPanel surface="operator" path="/operator/v1/agent-install-codes" parse={parseOperatorInstall} extraBody={registry.trim() && gateway.trim() ? { registry_addr: registry.trim(), gateway_addr: gateway.trim() } : null} />
+    <section className="grid gap-2 rounded-xl border p-4">
+      <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shared} disabled={pending} onChange={event => setShared(event.target.checked)} /><Message id="operator.shareWithTenants" /></label>
+      <p className="text-sm text-muted-foreground"><Message id="operator.nodeSharingHint" /></p>
+    </section>
+    <AgentInstallPanel surface="operator" path="/operator/v1/agent-install-codes" parse={parseOperatorInstall} extraBody={registry.trim() && gateway.trim() ? { registry_addr: registry.trim(), gateway_addr: gateway.trim(), shared } : null} />
     <details className="rounded-xl border p-4">
       <summary className="cursor-pointer font-semibold"><Message id="install.advanced" /></summary>
       <form onSubmit={generate} className="mt-4 grid gap-4" aria-labelledby="bundle-title">

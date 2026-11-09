@@ -47,8 +47,8 @@ export function parseNodeStates(value: unknown): NodeState[] {
  * Delete targets the node itself; resume deletes the maintenance mark.
  * nodeActionRequest 构造单次写入；请求层绝不重试写操作。
  * 删除作用于节点本身；退出维护删除的是维护标记。 */
-export function nodeActionRequest(nodeId: string, action: NodeAction): RequestSpec<null> {
+export function nodeActionRequest(nodeId: string, action: NodeAction, shared = false): RequestSpec<null> {
   const node = `/operator/v1/nodes/${encodeURIComponent(nodeId)}`;
   if (action === "delete") return { surface: "operator", method: "DELETE", path: node, body: {}, parse: parseNoContent };
-  return { surface: "operator", method: action === "resume" ? "DELETE" : "POST", path: `${node}/${action === "resume" ? "maintenance" : action}`, body: {}, parse: parseNoContent };
+  return { surface: "operator", method: action === "resume" ? "DELETE" : "POST", path: `${node}/${action === "resume" ? "maintenance" : action}`, body: action === "approve" ? { shared } : {}, parse: parseNoContent };
 }

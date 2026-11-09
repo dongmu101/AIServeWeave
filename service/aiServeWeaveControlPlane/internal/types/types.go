@@ -30,6 +30,7 @@ import (
 //
 // AgentEnrollmentRequest 指定外部可达的端点和令牌有效期。
 type AgentEnrollmentRequest struct {
+	Shared       bool   `json:"shared,optional"`
 	RegistryAddr string `json:"registry_addr"`
 	GatewayAddr  string `json:"gateway_addr"`
 	TTLMinutes   int    `json:"ttl_minutes"`
@@ -89,6 +90,7 @@ type TenantNodeListResponse struct {
 // CreateOperatorInstallRequest 是 POST /operator/v1/agent-install-codes 的请求体。
 // Credential 为 "code"（默认）或 "token"。
 type CreateOperatorInstallRequest struct {
+	Shared       bool   `json:"shared,optional"`
 	RegistryAddr string `json:"registry_addr"`
 	GatewayAddr  string `json:"gateway_addr"`
 	TTLMinutes   int    `json:"ttl_minutes"`
@@ -480,6 +482,7 @@ type SetModelAccessRequest struct {
 //
 // NodeAccess 是一台专属节点及其所属租户。
 type NodeAccess struct {
+	Mode      string     `json:"mode"`
 	NodeID    string     `json:"node_id"`
 	Tenants   []string   `json:"tenants"`
 	UpdatedBy string     `json:"updated_by,omitempty"`
@@ -488,10 +491,10 @@ type NodeAccess struct {
 
 // NodeAccessListResponse is every dedicated node. It is not paginated: the
 // list is capped at nodeaccess.MaxDedicatedNodes. A node absent from it is
-// shared.
+// private.
 //
 // NodeAccessListResponse 是全部专属节点。它不分页：列表上限为
-// nodeaccess.MaxDedicatedNodes。不在其中的节点是共享节点。
+// nodeaccess.MaxDedicatedNodes。不在其中的节点默认不共享。
 type NodeAccessListResponse struct {
 	Items []NodeAccess `json:"items"`
 }
@@ -503,6 +506,7 @@ type NodeAccessListResponse struct {
 // SetNodeAccessRequest 整体替换一台节点的租户。空数组让节点恢复共享；不支持部分
 // 更新，理由与 SetLimitsRequest 相同。
 type SetNodeAccessRequest struct {
+	Mode    string   `json:"mode,optional"`
 	Tenants []string `json:"tenants"`
 }
 
@@ -1071,18 +1075,22 @@ type AlertInstanceListResponse struct {
 	NextCursor string                  `json:"next_cursor,omitempty"`
 }
 
-// NodeOpsRequest is the body every node-ops write endpoint accepts: none of
+// NodeOpsRequest is the body non-approval node-ops write endpoints accept: none of
 // them take any field beyond the node_id already in the path, so this is an
 // intentionally empty struct rather than an absent one — decode's
 // DisallowUnknownFields still refuses a caller that sent something, which is
 // worth catching (an accidental "reason" field, say) rather than silently
 // ignoring.
 //
-// NodeOpsRequest 是每个节点操作写端点接受的请求体：它们都不接受除路径里的
+// NodeOpsRequest 是审批以外的节点操作写端点接受的请求体：它们都不接受除路径里的
 // node_id 之外的任何字段，因此这里是一个刻意留空的结构体，而不是干脆没有
 // ——decode 的 DisallowUnknownFields 依然会拒绝发来了内容的调用方，这样的
 // 内容（比如不小心传了个 "reason" 字段）值得被发现，而不是被悄悄忽略。
 type NodeOpsRequest struct{}
+
+type ApproveNodeRequest struct {
+	Shared bool `json:"shared,optional"`
+}
 
 // NodeState is one node_id's entry in the Registry's identity ledger, as
 // ListNodeStates reports it.

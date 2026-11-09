@@ -1,0 +1,1 @@
+ALTER TABLE node_access ADD COLUMN mode VARCHAR(16) NOT NULL DEFAULT 'dedicated';

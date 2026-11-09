@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "예제 모델",
   "tenant.enterAModelNameToReplaceItIn": "입력하면 모든 예제의 모델 이름이 바뀝니다. 사용 가능한 모델은 'AI 서비스 및 모델'에서 확인하세요.",
   "tenant.nodes": "노드",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "운영 화면: 전체 클러스터의 노드는 모든 테넌트가 공유하는 인프라이며 특정 테넌트에 속하지 않습니다. 레이블, 하드웨어, 런타임 목록은 Agent가 자체 보고한 정보이며, 플랫폼이 판단하는 것은 온라인 상태뿐입니다.",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "운영 화면은 전체 노드를 표시합니다. Agent는 기본적으로 비공유이며 접근은 운영자의 공유 설정, 전용 할당 및 구매 계정 권한으로 결정됩니다. 레이블, 하드웨어와 런타임은 Agent가 보고합니다.",
   "tenant.refreshLiveFleet": "실시간 클러스터 새로고침",
   "tenant.collectingFleetInventory": "클러스터 목록을 수집하는 중",
   "tenant.filterByNodeIdLabelOrRuntime": "노드 ID, 레이블 또는 런타임으로 필터링",

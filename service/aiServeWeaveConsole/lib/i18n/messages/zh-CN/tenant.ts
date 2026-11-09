@@ -127,7 +127,7 @@ const tenant = {
   "tenant.exampleModel": "示例模型",
   "tenant.enterAModelNameToReplaceItIn": "填入后所有示例中的模型名随之替换，可用模型见「AI 服务与模型」。",
   "tenant.nodes": "节点",
-  "tenant.operationsViewNodesAcrossTheFleetAreShared": "运维视图：整个机群的节点是所有租户共用的基础设施，不属于任何一个租户。 标签、硬件与运行时清单都是 Agent 自述的内容；平台判定的只有在线状态。",
+  "tenant.operationsViewNodesAcrossTheFleetAreShared": "运维视图显示机群全部节点。Agent 默认不共享，租户访问由运维的共享设置、专属绑定和账号购买权益决定。标签、硬件与运行时清单由 Agent 上报。",
   "tenant.refreshLiveFleet": "刷新实时机群",
   "tenant.collectingFleetInventory": "正在采集机群清单",
   "tenant.filterByNodeIdLabelOrRuntime": "筛选节点 ID、标签或运行时",

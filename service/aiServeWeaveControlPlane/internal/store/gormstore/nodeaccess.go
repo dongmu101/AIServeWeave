@@ -26,7 +26,7 @@ func (s *Store) ListNodeAccess(ctx context.Context) ([]model.NodeAccess, error) 
 func (s *Store) PutNodeAccess(ctx context.Context, row *model.NodeAccess) error {
 	return translate(s.db.WithContext(ctx).Clauses(clause.OnConflict{
 		Columns:   []clause.Column{{Name: "node_id"}},
-		DoUpdates: clause.AssignmentColumns([]string{"tenants_json", "updated_by", "updated_at"}),
+		DoUpdates: clause.AssignmentColumns([]string{"mode", "tenants_json", "updated_by", "updated_at"}),
 	}).Create(row).Error)
 }
 

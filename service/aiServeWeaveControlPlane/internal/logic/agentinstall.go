@@ -120,7 +120,7 @@ func (s *Service) InstallCA() (agentenrollment.Certificate, error) {
 // The addresses are written into the redemption, never connected to.
 //
 // CreateOperatorInstall 为一台新的平台节点签发安装凭据。地址只写入兑换结果，从不被连接。
-func (s *Service) CreateOperatorInstall(ctx context.Context, actor Actor, registry, gateway, credential string, ttl time.Duration) (InstallIssue, error) {
+func (s *Service) CreateOperatorInstall(ctx context.Context, actor Actor, registry, gateway, credential string, ttl time.Duration, sharing ...bool) (InstallIssue, error) {
 	if err := s.requirePlatformActor(actor); err != nil {
 		return InstallIssue{}, err
 	}
@@ -134,7 +134,17 @@ func (s *Service) CreateOperatorInstall(ctx context.Context, actor Actor, regist
 	if err != nil {
 		return InstallIssue{}, ErrUnavailable
 	}
-	return s.issueInstall(ctx, actor, model.PlatformScope, nodeID, registry, gateway, credential, ttl)
+	if ttl < 15*time.Minute || ttl > 24*time.Hour || (credential != "" && credential != InstallCredentialCode && credential != InstallCredentialToken) {
+		return InstallIssue{}, ErrInvalidInput
+	}
+	if err := s.setEnrollmentSharing(ctx, actor, nodeID, len(sharing) > 0 && sharing[0]); err != nil {
+		return InstallIssue{}, err
+	}
+	out, err := s.issueInstall(ctx, actor, model.PlatformScope, nodeID, registry, gateway, credential, ttl)
+	if err != nil {
+		_ = s.store.DeleteNodeAccess(context.WithoutCancel(ctx), nodeID)
+	}
+	return out, err
 }
 
 // CreateTenantInstall issues an install credential for a new node of the

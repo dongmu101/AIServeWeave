@@ -46,6 +46,13 @@ func TestTenantModelsUsesTenantSessionsAndExcludesInfrastructure(t *testing.T) {
 	}
 	memberSession := loginTenant(t, h, member.Email, ownerPassword)
 	platform := bootstrapPlatformOperator(h, "models-operator@example.com")
+	var privateCatalog fleet.TenantModelCatalog
+	if got := h.call(http.MethodGet, "/admin/v1/models", owner, nil, &privateCatalog); got != http.StatusOK || len(privateCatalog.Services) != 0 {
+		t.Fatalf("Agent must not be shared before operator configuration: status=%d catalog=%+v", got, privateCatalog)
+	}
+	if got := h.call(http.MethodPut, "/operator/v1/node-access/agent-01", platform, map[string]any{"mode": "shared", "tenants": []string{}}, nil); got != http.StatusOK {
+		t.Fatalf("enable Agent sharing: %d", got)
+	}
 	for _, tt := range []struct {
 		name, session string
 		status        int

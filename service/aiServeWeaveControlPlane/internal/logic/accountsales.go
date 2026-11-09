@@ -55,7 +55,7 @@ func (s *Service) ListAccountSales(ctx context.Context, actor Actor) ([]model.Ac
 	out := make([]model.AccountSale, 0, len(rows))
 	now := s.clock.Now()
 	for _, row := range rows {
-		if !nodeaccess.Permits(actor.TenantID, policy, row.NodeID) {
+		if !nodeaccess.CanConsider(actor.TenantID, policy, row.NodeID) {
 			continue
 		}
 		if row.TenantID != actor.TenantID {
@@ -128,7 +128,7 @@ func (s *Service) BuyAccount(ctx context.Context, actor Actor, accountID, reques
 	found := false
 	for _, row := range rows {
 		if row.ID == accountID {
-			found = nodeaccess.Permits(actor.TenantID, policy, row.NodeID)
+			found = nodeaccess.CanConsider(actor.TenantID, policy, row.NodeID)
 			break
 		}
 	}
@@ -180,6 +180,10 @@ func (s *Service) TenantAccountFilter(ctx context.Context, tenantID string) (fun
 	if err != nil {
 		return nil, err
 	}
+	nodes, err := s.nodePolicy(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
 	now := s.clock.Now()
-	return func(nodeID, runtimeID string) bool { return p.Allows(nodeID, runtimeID, now) }, nil
+	return func(nodeID, runtimeID string) bool { return p.Permits(tenantID, nodes, nodeID, runtimeID, now) }, nil
 }

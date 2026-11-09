@@ -2,6 +2,8 @@
 
 节点侧 Agent 的配置与使用说明。交付范围与验收状态见 [STATUS](STATUS.md)，隧道协议见 [隧道 README](tunnel/README.md)，部署见 [Agent 部署指南](../../deploy/agent/README.md)。
 
+平台 Agent 接入后默认不共享给租户。是否共享由运维在「Agent 接入」、审批确认或「Agent 共享设置」中控制，本机 YAML 和自报标签不能开启共享。非共享 Agent 的 Claude Code / Codex 账号仍可按独享商品单独出售，购买权限只覆盖对应账号。见[共享设置](../../docs/agent-sharing.md)。
+
 ## 配置文件
 
 Claude Messages 文件与视频的转换工具、模型路径和限额可在 YAML 顶层 `attachments:` 配置；详见 [附件输入说明及完整配置](attachments/README.md)。这些配置仅本地使用，修改后需重启 Agent，设置页保存其他设置会保留它们；不自动安装转换程序或模型。

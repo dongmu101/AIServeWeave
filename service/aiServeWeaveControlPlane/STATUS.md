@@ -154,21 +154,16 @@ go run ./service/aiServeWeaveGateway \
 
 ### 专属节点（租户节点池）
 
-平台运维可以把一台节点指定为一个或多个商户的专属节点，契约在 `common/nodeaccess`。被绑定的商户可以使用这台节点，同时仍可使用所有共享节点；其他商户的请求不会调度到这台节点上，在 `/v1/models` 和租户模型页里也看不到它。没有绑定的节点保持共享，所以未做任何配置的部署行为与以前一样。绑定按 Registry 认证的 node_id 建立，与 Agent 自报的标签无关。和模型授权一样，只有平台运维能配置；如果租户能绑定节点，它就能把任何节点从其他所有租户手里拿走。
+平台运维决定 Agent 的访问方式：`private` 不共享、`shared` 共享、`dedicated` 绑定指定租户。**没有配置的平台 Agent 默认不共享**；添加及审批页面的共享选项默认关闭。商户自有节点继续只服务其所有者。非共享 Agent 上的有效账号购买权益只开放对应运行时，不能开放同机其他账号，也不能绕过其他租户的专属绑定。
 
-| 接口 | 说明 |
-| --- | --- |
-| `GET /operator/v1/node-access` | 返回全部专属节点 `{items: [{node_id, tenants, updated_by, updated_at}]}`，按 node_id 排序，不分页（上限 1000）。不在列表里的节点是共享节点 |
-| `PUT /operator/v1/node-access/:node_id` | 整体替换某台节点的租户列表，请求体为 `{"tenants": [...]}`，`null` 或缺少该字段返回 `400`；空数组表示恢复共享。点名的租户不存在时返回 `404`；node_id 或租户 id 非法、租户数超过 64 时返回 `400`；新增专属节点会超过 1000 台时返回 `409`。单独路由组，请求体上限为 `nodeaccess.MaxDocumentBytes`（16 KiB），超出返回 `413` |
+- **接口**：`GET /operator/v1/node-access` 返回全部显式配置（含 `mode`）；`PUT /operator/v1/node-access/:node_id` 整体设置 `{mode, tenants}`。私有/共享要求空列表，专属要求非空列表；模式省略时保留旧客户端「非空专属、空数组显式共享」语义。新增安装凭据、ZIP 接入包和审批请求支持可选 `shared`，缺省为 false。
+- **存储与迁移**：`node_access` 增加基础迁移 `0015_node_sharing.sql`（PostgreSQL/MySQL），现有专属绑定默认 `dedicated`；私有和共享均保存行，没有行时默认不共享。配置上限 1000 条、每节点最多 64 个租户。损坏模式和不合法列表拒绝读取。
+- **授权**：Key 校验携带 `nodes: {default_deny: true, allowed?, excluded?}`，写入后推进 generation；不复用缺少新规则的旧 Redis 校验缓存。租户模型目录同步过滤。
+- **审计**：`node_access.update` 记录 `mode` 和租户数量；不含凭据。添加、审批与独立修改均只允许平台运维。
+- **升级**：先更新全部 Gateway，再迁移/升级控制面和 Console。旧 Gateway 不执行默认不共享。未明确开放共享的既有 Agent 也会变为非共享，需运维按意图配置。
+- **验证**：控制面默认及相关竞态测试通过；隔离 MySQL 通过新迁移、模式持久化与账号事务，PostgreSQL live 和真实 CLI 尚未验收。
 
-- **存储**：`node_access` 表（基础迁移 `0011_node_access.sql`，PostgreSQL 与 MySQL 各一份），每台专属节点一行，`tenants_json` 保存规范化后的租户列表。恢复共享就是删除这一行。读到损坏的行或空列表时，读取与 Key 校验都会报错，不会当成共享放开。
-- **下发**：`POST /internal/v1/apikeys/verify` 的响应新增 `nodes: {excluded: [...]}`，内容是对该租户关闭的专属节点（绑定了租户、但不包含它的节点）；没有关闭的节点时为 `{}`。每次写入后调用 `InvalidateAll`，与模型授权的生效路径相同。
-- **上限的并发余量**：1000 台的上限是先读一遍行数再写入，没有加表锁。两位运维同时新增不同节点时，上限可能被超出并发写入的数量。这个上限约束的是校验载荷的大小，不是安全属性，所以接受这点余量。
-- **租户模型页**：`GET /admin/v1/models` 先去掉对该租户关闭的节点上的服务，再按模型授权过滤。
-- **审计**：`node_access.update`，`TenantID` 为 `platform`，目标为 node_id，详情只记录数量 `tenants=N`。
-- **升级顺序**：旧版 Gateway 会忽略 `nodes` 字段，绑定在它那里不生效。**先升级全部 Gateway，再绑定任何节点。**
-- **验证范围**：业务规则（权限、输入校验、上限、损坏行、依赖故障时拒绝而不是放开、校验结果下发、缓存失效传播、租户模型页过滤、审计）在 memstore 与 e2e 上验证过。新表的迁移 SQL 还没有在真实 PostgreSQL 或 MySQL 上跑过，live 测试需要单独执行。
-- **商户自有节点**：`tnode.` 开头的节点不能在这里绑定，`PUT` 返回 `409`；归属见下一节。
+完整操作与 HTTP 契约见[Agent 共享设置](../../docs/agent-sharing.md)。
 
 ### 商户自有节点
 
