@@ -209,3 +209,5 @@ Claude Code 与 Codex 账号都可经平台[独享包月售卖](../../docs/billi
 ## 预编译独立部署
 
 Ubuntu systemd、Apple Silicon macOS LaunchAgent、Windows 11 原生用户计划任务的安装与维护见 [Agent 部署指南](../../deploy/agent/README.md)。包含固定版本在线/本地安装、状态/停止/重载、显式升级/回退与保留身份卸载。目标系统实机验收状态另列，不能由构建通过推定。
+
+本机开发时，可以在本目录用 `make install` 把当前源码构建为 `com.aiserveweave.agent.dev` LaunchAgent（仅 macOS），默认读取本目录的 `config.yaml`，工作目录也是本目录。这个服务与正式服务的 Label、程序目录和日志目录都不同，互不覆盖。改代码后重新运行 `make install` 即可。`make status`、`make logs`、`make reload`、`make stop`、`make uninstall` 用于维护，`make help` 列出全部目标；用 `CONFIG=...` 指定其他配置。
