@@ -353,15 +353,16 @@ func LoadManifest(path string) ([]Spec, error) {
 // already holds a file matching its SHA256 is skipped without touching the
 // quota or the network. Otherwise the source must match cfg.Allowlist, and
 // the download resumes into "<TargetPath>.part" via an HTTP Range request
-// when a partial file already exists; on completion the whole file is
-// checksummed and, only on a match, atomically renamed to TargetPath. A
+// when a partial file already exists; the checksum is computed while the
+// bytes are written (a resume first hashes the existing prefix), and only on
+// a match is the file fsynced and atomically renamed to TargetPath. A
 // failing entry is recorded in Result.Failed and does not stop the rest.
 //
 // RunManifest 按顺序处理每个 Spec。TargetPath 已经存在且校验和匹配的条目直接
 // 跳过，不占用配额、不发起网络请求。否则来源必须命中 cfg.Allowlist；如果
-// "<TargetPath>.part" 已存在部分文件，用 HTTP Range 请求续传；完成后对整个
-// 文件计算校验和，只有匹配才原子改名为 TargetPath。失败的条目记入
-// Result.Failed，不影响其余条目继续处理。
+// "<TargetPath>.part" 已存在部分文件，用 HTTP Range 请求续传；校验和在写入字
+// 节的同时计算（续传先对已有前缀求哈希），只有匹配才 fsync 并原子改名为
+// TargetPath。失败的条目记入 Result.Failed，不影响其余条目继续处理。
 func RunManifest(ctx context.Context, cfg Config, specs []Spec) Result {
 	result := Result{Failed: make(map[string]error)}
 
@@ -514,16 +515,36 @@ func sourceAllowed(url string, allowlist []string) bool {
 }
 
 // alreadySatisfied reports whether spec.TargetPath already holds a file
-// whose SHA256 matches spec.SHA256.
+// whose SHA256 matches spec.SHA256. A hash sidecar (see hashSidecar) recorded
+// for the file's current size and mtime answers without reading the file; with
+// no usable sidecar the whole file is hashed, and on a match a sidecar is
+// written so the next check is cheap.
 //
 // alreadySatisfied 判断 spec.TargetPath 是否已经有一个 SHA256 与 spec.SHA256
-// 匹配的文件。
+// 匹配的文件。如果有为文件当前大小与 mtime 记录的哈希 sidecar（见
+// hashSidecar），则无需读文件即可回答；没有可用的 sidecar 时对整个文件求
+// 哈希，匹配后写入 sidecar，下一次检查就很便宜。
 func alreadySatisfied(spec Spec) bool {
+	fi, err := os.Stat(spec.TargetPath)
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	if cached, ok := readHashSidecar(spec.TargetPath, fi); ok && strings.EqualFold(cached, spec.SHA256) {
+		return true
+	}
 	sum, err := sha256File(spec.TargetPath)
 	if err != nil {
 		return false
 	}
-	return strings.EqualFold(sum, spec.SHA256)
+	if !strings.EqualFold(sum, spec.SHA256) {
+		return false
+	}
+	// Only cache when the file did not change while it was being hashed.
+	// 只有文件在哈希期间没有变化时才缓存。
+	if after, err := os.Stat(spec.TargetPath); err == nil && after.Size() == fi.Size() && after.ModTime().Equal(fi.ModTime()) {
+		_ = writeHashSidecar(spec.TargetPath, fi, sum)
+	}
+	return true
 }
 
 // sha256File returns the hex-encoded SHA-256 digest of the file at path.
@@ -536,12 +557,23 @@ func sha256File(path string) (string, error) {
 	}
 	defer f.Close()
 
+	bufp := copyBufPool.Get().(*[]byte)
+	defer copyBufPool.Put(bufp)
 	h := sha256.New()
-	if _, err := io.Copy(h, f); err != nil {
+	// Hide *os.File's WriterTo so CopyBuffer really uses our 1MiB buffer.
+	// 隐藏 *os.File 的 WriterTo，让 CopyBuffer 真正使用我们的 1MiB 缓冲区。
+	if _, err := io.CopyBuffer(h, struct{ io.Reader }{f}, *bufp); err != nil {
 		return "", err
 	}
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
+
+// syncPartFile flushes a verified partial file to stable storage. It is a
+// variable only so a test can observe when pullOne calls it.
+//
+// syncPartFile 把已校验的部分文件刷到稳定存储。它是变量仅仅是为了让测试能
+// 观察 pullOne 何时调用它。
+var syncPartFile = func(f *os.File) error { return f.Sync() }
 
 // pullOpts bundles pullOne's cross-cutting, optional concerns: the
 // session/call-scoped byte budget, the cross-restart ledger (subtask 4), the
@@ -564,11 +596,11 @@ type pullOpts struct {
 	// 变为负数就中止，把部分文件留给以后的运行。用 atomic.Int64 而不是普
 	// 通 int64，因为 MaxConcurrency > 1 时多个 Spec 会并发共享它。
 	Budget *atomic.Int64
-	// Ledger, when non-nil, is consulted (and updated) before every chunk
-	// write, on top of Budget — see Config.Ledger's doc.
+	// Ledger, when non-nil, is charged on top of Budget, in large leased
+	// blocks rather than per chunk (see ledgerLease) — see Config.Ledger's doc.
 	//
-	// Ledger 非 nil 时，在每次分块写入之前都会被查询（并更新），叠加在
-	// Budget 之上——见 Config.Ledger 的文档。
+	// Ledger 非 nil 时，在 Budget 之上被记账，按大块租约而不是逐分块（见
+	// ledgerLease）——见 Config.Ledger 的文档。
 	Ledger              *Ledger
 	LedgerQuotaBytes    int64
 	DiskFreeMarginBytes int64
@@ -617,6 +649,26 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, opts pullOpts)
 		}
 	}
 
+	// The digest is computed while the bytes are written, so a finished
+	// download never has to be read back. A resume first folds the existing
+	// prefix into the hash; that is done before the request is sent so a
+	// slow multi-GB read never leaves an open response idle. A prefix that
+	// cannot be read in full is not trusted: start over from byte 0.
+	//
+	// 摘要在写入字节的同时计算，所以完成的下载不必再读回一遍。续传先把已有前
+	// 缀并入哈希；这在发出请求之前完成，免得缓慢的数 GB 读取让一个打开的响应
+	// 空闲等待。无法完整读出的前缀不可信：从第 0 字节重新开始。
+	h := sha256.New()
+	if resumeFrom > 0 {
+		if err := hashPrefix(ctx, h, partPath, resumeFrom); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("%w: checksum partial file for %q: %v", errFetchFailed, spec.Name, err)
+			}
+			resumeFrom = 0
+			h.Reset()
+		}
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, spec.SourceURL, nil)
 	if err != nil {
 		return fmt.Errorf("%w: build request for %q: %v", errFetchFailed, spec.Name, err)
@@ -636,6 +688,7 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, opts pullOpts)
 	case resumed:
 	case resp.StatusCode == http.StatusOK:
 		resumeFrom = 0
+		h.Reset()
 	default:
 		return fmt.Errorf("%w: status %d fetching %q", errUnexpectedStatus, resp.StatusCode, spec.Name)
 	}
@@ -655,12 +708,18 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, opts pullOpts)
 		return fmt.Errorf("%w: open partial file for %q: %v", errStorageFailed, spec.Name, err)
 	}
 
-	var writer io.Writer = f
+	var writer io.Writer = &hashWriter{w: f, h: h}
 	if budget != nil {
 		writer = &quotaWriter{w: writer, remaining: budget}
 	}
+	var lease *ledgerLease
 	if opts.Ledger != nil {
-		writer = &ledgerWriter{w: writer, ledger: opts.Ledger, quotaBytes: opts.LedgerQuotaBytes}
+		hint := int64(0)
+		if spec.SizeBytes > resumeFrom {
+			hint = spec.SizeBytes - resumeFrom
+		}
+		lease = opts.Ledger.newLease(partPath, resumeFrom, opts.LedgerQuotaBytes, hint)
+		writer = &ledgerWriter{w: writer, lease: lease}
 	}
 	if opts.DiskFreeMarginBytes > 0 {
 		writer = &diskCheckWriter{w: writer, dir: filepath.Dir(partPath), marginBytes: opts.DiskFreeMarginBytes}
@@ -669,28 +728,59 @@ func pullOne(ctx context.Context, client *http.Client, spec Spec, opts pullOpts)
 		writer = &progressWriter{w: writer, base: resumeFrom, onProgress: opts.OnProgress}
 	}
 
-	_, copyErr := io.Copy(writer, resp.Body)
-	closeErr := f.Close()
+	// Hide the body's and the file's optional WriterTo/ReaderFrom so
+	// CopyBuffer really uses the 1MiB buffer.
+	// 隐藏 body 与文件可选的 WriterTo/ReaderFrom，让 CopyBuffer 真正使用 1MiB
+	// 缓冲区。
+	bufp := copyBufPool.Get().(*[]byte)
+	_, copyErr := io.CopyBuffer(writer, struct{ io.Reader }{resp.Body}, *bufp)
+	copyBufPool.Put(bufp)
+	if lease != nil {
+		// Hand back the lease's unused room right away, success or not. A
+		// failure to persist that is deliberately ignored: the lease entry
+		// stays in the ledger and is trimmed against the partial file's real
+		// size at the next start (see recoverOrphans).
+		//
+		// 无论成败都立刻归还租约中未使用的空间。持久化失败被有意忽略：租约条
+		// 目留在账本里，下次启动时按部分文件的真实大小修剪（见
+		// recoverOrphans）。
+		_ = lease.Close()
+	}
 	if copyErr != nil {
+		f.Close()
 		if errors.Is(copyErr, errQuotaExceeded) || errors.Is(copyErr, errLedgerQuotaExceeded) || errors.Is(copyErr, errDiskSpaceLow) {
 			return copyErr
 		}
 		return fmt.Errorf("%w: download %q: %v", errFetchFailed, spec.Name, copyErr)
 	}
+
+	sum := hex.EncodeToString(h.Sum(nil))
+	if !strings.EqualFold(sum, spec.SHA256) {
+		f.Close()
+		os.Remove(partPath)
+		return fmt.Errorf("%w: for %q: want %s, got %s", errChecksumMismatch, spec.Name, spec.SHA256, sum)
+	}
+	// Verified: make the bytes durable before the rename publishes them under
+	// the final name, otherwise a power loss right after the rename can leave
+	// a TargetPath that is the right size but holds unwritten (zero) blocks.
+	//
+	// 校验通过：在改名把它们发布为最终名字之前先让字节落盘，否则改名之后立
+	// 刻断电，可能留下大小正确但包含未写入（全零）块的 TargetPath。
+	syncErr := syncPartFile(f)
+	closeErr := f.Close()
+	if syncErr != nil {
+		return fmt.Errorf("%w: sync partial file for %q: %v", errStorageFailed, spec.Name, syncErr)
+	}
 	if closeErr != nil {
 		return fmt.Errorf("%w: flush partial file for %q: %v", errStorageFailed, spec.Name, closeErr)
 	}
 
-	sum, err := sha256File(partPath)
-	if err != nil {
-		return fmt.Errorf("%w: checksum %q: %v", errStorageFailed, spec.Name, err)
-	}
-	if !strings.EqualFold(sum, spec.SHA256) {
-		os.Remove(partPath)
-		return fmt.Errorf("%w: for %q: want %s, got %s", errChecksumMismatch, spec.Name, spec.SHA256, sum)
-	}
+	os.Remove(spec.TargetPath + hashSidecarSuffix) // stale cache of the file being replaced
 	if err := localstate.Replace(partPath, spec.TargetPath); err != nil {
 		return fmt.Errorf("%w: finalize %q: %v", errStorageFailed, spec.Name, err)
+	}
+	if fi, err := os.Stat(spec.TargetPath); err == nil {
+		_ = writeHashSidecar(spec.TargetPath, fi, sum)
 	}
 	return nil
 }
@@ -762,26 +852,28 @@ func (q *quotaWriter) Write(p []byte) (int, error) {
 	return written, err
 }
 
-// ledgerWriter reserves every chunk's bytes against a cross-restart Ledger
-// (subtask 4) before passing the write through, and returns the unused
-// portion of a short write back to the ledger — see Ledger.Reserve's doc.
+// ledgerWriter takes every chunk's bytes out of a ledgerLease against the
+// cross-restart Ledger (subtask 4) before passing the write through, and
+// gives the unaccepted part of a short write back to the lease. The lease
+// only touches the ledger file when it needs a new block of room, not on
+// every chunk — see ledgerLease's doc.
 //
-// ledgerWriter 在每个分块的写入通过之前，先向跨重启的 Ledger（子任务四）预
-// 留其字节数，并把一次没写完的差额还回账本——见 Ledger.Reserve 的文档。
+// ledgerWriter 在每个分块的写入通过之前，先针对跨重启的 Ledger（子任务四）从
+// ledgerLease 里取走其字节数，并把一次短写中未被接受的部分还给租约。租约只
+// 在需要新的一块空间时才碰账本文件，而不是每个分块都碰——见 ledgerLease 的
+// 文档。
 type ledgerWriter struct {
-	w          io.Writer
-	ledger     *Ledger
-	quotaBytes int64
+	w     io.Writer
+	lease *ledgerLease
 }
 
 func (l *ledgerWriter) Write(p []byte) (int, error) {
-	rollback, err := l.ledger.Reserve(int64(len(p)), l.quotaBytes)
-	if err != nil {
+	if err := l.lease.Consume(int64(len(p))); err != nil {
 		return 0, err
 	}
 	n, werr := l.w.Write(p)
-	if int64(n) < int64(len(p)) {
-		rollback(int64(len(p) - n))
+	if n < len(p) {
+		l.lease.Refund(int64(len(p) - n))
 	}
 	return n, werr
 }

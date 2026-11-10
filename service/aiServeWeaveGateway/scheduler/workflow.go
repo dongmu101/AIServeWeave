@@ -335,7 +335,7 @@ func (s *Scheduler) workflowCandidates(ctx context.Context, cap runtime.Capabili
 	//
 	// 空 target 匹配所有节点：工作流请求不携带可路由的模型，因此除了
 	// minGPUMemoryBytes 可能带来的容量过滤外，路由规则无从选择。
-	return s.pickBy(ctx, routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, PolicyLeastLoad, affinity{}, func(snap runtime.Snapshot) bool {
+	return s.pickBy(ctx, routing.Target{MinGPUMemoryBytes: minGPUMemoryBytes}, PolicyLeastLoad, affinity{}, func(snap *runtime.Snapshot) bool {
 		return snap.Discovery.Capabilities.Require(cap) == nil
 	})
 }

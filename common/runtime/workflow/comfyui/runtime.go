@@ -2,6 +2,7 @@ package comfyui
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"AIServeWeave/common/runtime"
 )
@@ -31,6 +33,31 @@ const (
 	// Discover issues at once, so a server with many folders is not hit
 	// with a burst.
 	modelFolderConcurrency = 4
+
+	// submittedTTL is how long a successful Submit stays answerable by its
+	// idempotency key. The key exists so that a retry of the same request
+	// (the Gateway re-sending after a lost response or a failover) gets the
+	// original run back; those retries arrive within seconds to a few
+	// minutes of the original, so an hour is a wide margin, while a key
+	// older than that belongs to a run ComfyUI itself has long since moved
+	// out of its queue.
+	//
+	// submittedTTL 是一次成功的 Submit 能凭其幂等键被再次应答的时长。幂等键的用途是
+	// 让同一请求的重试（Gateway 因响应丢失或故障切换而重发）拿回原来的运行；这类
+	// 重试在原请求之后几秒到几分钟内到达，所以一小时已是很宽的余量，而更老的键
+	// 对应的运行早已被 ComfyUI 自己移出队列。
+	submittedTTL = time.Hour
+
+	// maxSubmitted caps how many completed idempotency keys are remembered,
+	// oldest first out, so a node under a steady stream of keyed submissions
+	// cannot grow the table without bound within the TTL. 10000 entries is
+	// about a megabyte, and at one submission per second still covers the
+	// last three hours, comfortably more than the TTL.
+	//
+	// maxSubmitted 限制记住的已完成幂等键数量，先进先出淘汰，使节点在持续的带键
+	// 提交下也不会在 TTL 之内让表无界增长。10000 条约一兆字节，即便每秒一次提交
+	// 也能覆盖最近三小时，远多于 TTL。
+	maxSubmitted = 10000
 )
 
 // Runtime is the ComfyUI adapter. It is safe for concurrent use.
@@ -52,13 +79,44 @@ type Runtime struct {
 	discovery atomic.Pointer[runtime.Discovery]
 	closed    atomic.Bool
 
-	// submitted maps an upper-layer idempotency key to the prompt id it
-	// produced, so a retried Submit returns the original run instead of
-	// queueing the same workflow twice. ComfyUI has no idempotency of its
-	// own, and a duplicate submission costs real GPU time and produces a
-	// second set of outputs.
-	submitMu  sync.Mutex
-	submitted map[string]runtime.WorkflowRun
+	// submitted maps an upper-layer idempotency key to the Submit that owns
+	// it, so a retried Submit returns the original run instead of queueing
+	// the same workflow twice. ComfyUI has no idempotency of its own, and a
+	// duplicate submission costs real GPU time and produces a second set of
+	// outputs.
+	//
+	// An entry is claimed before the submission starts and resolved when it
+	// ends, so two concurrent Submits with one key cannot both reach ComfyUI:
+	// the second waits for the first. Only a successful result is kept; a
+	// failed attempt releases the key so a retry runs for real. Completed
+	// entries are queued in submittedOrder (oldest first) and dropped after
+	// submittedTTL or once more than maxSubmitted are held.
+	//
+	// submitted 把上层幂等键映射到拥有它的那次 Submit，使重试的 Submit 返回原来
+	// 的运行，而不是把同一个工作流排两次队。ComfyUI 自身没有幂等性，重复提交会
+	// 耗费真实的 GPU 时间并产生第二份输出。
+	//
+	// 条目在提交开始前占位、结束时落定，所以同一个键的两个并发 Submit 不可能都
+	// 到达 ComfyUI：后者等待前者。只保留成功的结果；失败的尝试会释放该键，使重试
+	// 真正去执行。已完成的条目按完成先后记在 submittedOrder 里，超过 submittedTTL
+	// 或数量超过 maxSubmitted 时丢弃。
+	submitMu       sync.Mutex
+	submitted      map[string]*submitEntry
+	submittedOrder *list.List // of string keys, oldest completion first
+}
+
+// submitEntry is one idempotency key's submission. done is closed when the
+// owning Submit finishes; ok, run and expires are written before that and are
+// only read after it (or under submitMu).
+//
+// submitEntry 是一个幂等键对应的提交。done 在所属 Submit 结束时关闭；ok、run 与
+// expires 在此之前写入，只在此之后（或持有 submitMu 时）读取。
+type submitEntry struct {
+	done    chan struct{}
+	ok      bool
+	run     runtime.WorkflowRun
+	expires time.Time
+	elem    *list.Element // position in submittedOrder once completed
 }
 
 // Compile-time proof that the adapter satisfies the workflow contract.
@@ -120,14 +178,15 @@ func New(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error)
 	}
 
 	return &Runtime{
-		cfg:       cfg,
-		logger:    logger,
-		clock:     clock,
-		client:    client,
-		limiter:   runtime.NewLimiter(cfg.MaxConcurrent),
-		events:    newEventMux(client, deps.WSDialer, clock, logger, newClientID()),
-		metrics:   newRecorder(deps.Metrics),
-		submitted: make(map[string]runtime.WorkflowRun),
+		cfg:            cfg,
+		logger:         logger,
+		clock:          clock,
+		client:         client,
+		limiter:        runtime.NewLimiter(cfg.MaxConcurrent),
+		events:         newEventMux(client, deps.WSDialer, clock, logger, newClientID()),
+		metrics:        newRecorder(deps.Metrics),
+		submitted:      make(map[string]*submitEntry),
+		submittedOrder: list.New(),
 	}, nil
 }
 
@@ -360,10 +419,52 @@ func (r *Runtime) Submit(ctx context.Context, req runtime.WorkflowRequest) (runt
 		}
 	}
 
-	if run, ok := r.lookupSubmitted(req.IdempotencyKey); ok {
-		return run, nil
+	if req.IdempotencyKey == "" {
+		return r.submit(ctx, req)
 	}
+	for {
+		entry, owner := r.claimSubmitted(req.IdempotencyKey)
+		if owner {
+			return r.submitClaimed(ctx, req, entry)
+		}
+		// Another Submit holds this key: wait for its outcome instead of
+		// submitting a second time. If it fails the key is released and the
+		// loop claims it again, so a transient failure on the first caller
+		// (its own cancelled context, say) does not fail the others.
+		waitCtx, cancel := context.WithTimeout(ctx, r.cfg.RequestTimeout)
+		select {
+		case <-entry.done:
+			cancel()
+		case <-waitCtx.Done():
+			cancel()
+			return runtime.WorkflowRun{}, &runtime.RuntimeError{
+				Code:      runtime.ErrorTimeout,
+				RuntimeID: r.cfg.ID,
+				Kind:      runtime.KindComfyUI,
+				Operation: "submit",
+				Message:   "gave up waiting for the in-flight submission with the same idempotency key",
+				Retryable: true,
+				Cause:     waitCtx.Err(),
+			}
+		}
+		if entry.ok {
+			return entry.run, nil
+		}
+	}
+}
 
+// submitClaimed runs the submission for a key this call owns and resolves the
+// key whatever happens, including a panic, so waiters are never left blocked.
+func (r *Runtime) submitClaimed(ctx context.Context, req runtime.WorkflowRequest, entry *submitEntry) (run runtime.WorkflowRun, err error) {
+	succeeded := false
+	defer func() { r.resolveSubmitted(req.IdempotencyKey, entry, run, succeeded) }()
+	run, err = r.submit(ctx, req)
+	succeeded = err == nil
+	return run, err
+}
+
+// submit performs one real submission to ComfyUI.
+func (r *Runtime) submit(ctx context.Context, req runtime.WorkflowRequest) (runtime.WorkflowRun, error) {
 	release, err := r.limiter.Acquire()
 	if err != nil {
 		return runtime.WorkflowRun{}, r.annotate("submit", err)
@@ -389,13 +490,11 @@ func (r *Runtime) Submit(ctx context.Context, req runtime.WorkflowRequest) (runt
 		return runtime.WorkflowRun{}, err
 	}
 
-	run := runtime.WorkflowRun{
+	return runtime.WorkflowRun{
 		ID:          resp.PromptID,
 		RuntimeID:   r.cfg.ID,
 		SubmittedAt: r.clock.Now(),
-	}
-	r.recordSubmitted(req.IdempotencyKey, run)
-	return run, nil
+	}, nil
 }
 
 // Subscribe returns the event stream for one run. Callers must close it.
@@ -878,23 +977,72 @@ func (r *Runtime) requireCapability(operation string, capability runtime.Capabil
 	}
 }
 
-func (r *Runtime) lookupSubmitted(key string) (runtime.WorkflowRun, bool) {
-	if key == "" {
-		return runtime.WorkflowRun{}, false
-	}
+// claimSubmitted returns the entry for key. owner is true when the caller just
+// created it and must run the submission and resolve it; otherwise the entry
+// belongs to another Submit, in flight or completed, and the caller waits on
+// entry.done.
+func (r *Runtime) claimSubmitted(key string) (entry *submitEntry, owner bool) {
 	r.submitMu.Lock()
 	defer r.submitMu.Unlock()
-	run, ok := r.submitted[key]
-	return run, ok
+	r.evictSubmittedLocked(r.clock.Now())
+	if entry, ok := r.submitted[key]; ok {
+		return entry, false
+	}
+	entry = &submitEntry{done: make(chan struct{})}
+	r.submitted[key] = entry
+	return entry, true
 }
 
-func (r *Runtime) recordSubmitted(key string, run runtime.WorkflowRun) {
-	if key == "" {
-		return
-	}
+// resolveSubmitted ends the owner's claim. A success is kept, queued for
+// expiry; a failure removes the key, so it is never answered as if it had
+// succeeded and the next caller submits for real. Either way the waiters are
+// woken.
+//
+// A failure is deliberately not remembered: Submit returned an error, so the
+// caller was told the workflow was not queued and retrying it is the contract.
+// The one case this cannot cover is a request ComfyUI accepted whose response
+// was lost (a timeout after the POST): ComfyUI offers no way to ask, so the
+// retry submits again, exactly as before this table tracked in-flight work.
+//
+// resolveSubmitted 结束持有者的占位。成功则保留并排入过期队列；失败则移除该键，
+// 使其绝不会被当作成功应答，下一个调用者会真正去提交。两种情况都会唤醒等待者。
+//
+// 失败有意不被记住：Submit 返回了错误，调用方得知工作流并未入队，重试正是约定。
+// 唯一覆盖不到的是 ComfyUI 已接受但响应丢失的请求（POST 之后超时）：ComfyUI
+// 没有任何办法可以查询，所以重试会再提交一次，与这张表开始追踪在途工作之前一样。
+func (r *Runtime) resolveSubmitted(key string, entry *submitEntry, run runtime.WorkflowRun, ok bool) {
 	r.submitMu.Lock()
-	defer r.submitMu.Unlock()
-	r.submitted[key] = run
+	if ok {
+		now := r.clock.Now()
+		entry.ok, entry.run, entry.expires = true, run, now.Add(submittedTTL)
+		entry.elem = r.submittedOrder.PushBack(key)
+		r.evictSubmittedLocked(now)
+	} else {
+		delete(r.submitted, key)
+	}
+	r.submitMu.Unlock()
+	close(entry.done)
+}
+
+// evictSubmittedLocked drops completed entries that have expired or that
+// exceed maxSubmitted, oldest first. Every entry gets the same TTL when it
+// completes, so the queue is ordered by expiry and the loop can stop at the
+// first entry that is still live. In-flight entries are not in the queue and
+// are never evicted: someone is waiting on them.
+func (r *Runtime) evictSubmittedLocked(now time.Time) {
+	for {
+		front := r.submittedOrder.Front()
+		if front == nil {
+			return
+		}
+		key := front.Value.(string)
+		entry := r.submitted[key]
+		if r.submittedOrder.Len() <= maxSubmitted && now.Before(entry.expires) {
+			return
+		}
+		r.submittedOrder.Remove(front)
+		delete(r.submitted, key)
+	}
 }
 
 func (r *Runtime) checkOpen(operation string) error {

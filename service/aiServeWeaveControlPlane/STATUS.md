@@ -84,6 +84,8 @@ MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫
 
 升级顺序、失败恢复、备份命令、恢复后的安全状态核对与可复现双引擎演练见 [数据库升级与恢复](../../deploy/database-recovery.md)。无破坏性 down 迁移；数据库恢复也不等于 Registry/Redis/对象存储的全平台灾备。
 
+**列表分页索引（2026-11-10）。** `ListUsers`、`ListAPIKeys`、`ListAudit` 经 `readPage` 以 `WHERE tenant_id = ? ORDER BY created_at DESC, id DESC`（可再叠加状态/角色/动作/时间范围过滤）做游标分页，原先只有单列 `tenant_id` 索引，每页都要对该租户的全部行排序。新增基础迁移 `base/{postgres,mysql}/0016_list_pagination_indexes.sql`：`idx_users_tenant_created`、`idx_api_keys_tenant_created`、`idx_audit_logs_tenant_created`，均为 `(tenant_id, created_at, id)`。`ListJobArtifactsBefore`（`WHERE type = ? AND created_at < ? ORDER BY created_at, id LIMIT n`，产物保留期清理使用）原先没有可用索引，新增 MySQL 专用的 `jobs/0005_add_job_artifacts_type_created_index.sql`：`idx_job_artifacts_type_created (type, created_at, id)`。`jobs` 表的 `(tenant_id, created_at, id)`、`request_logs`、`billing` 各表本来就有对应的复合索引。旧的单列 `idx_users_tenant_id`、`idx_api_keys_tenant_id`、`idx_audit_logs_tenant_id` **保留**：它们由 `model` 的 `index` 标签声明，启动时的 `CheckSchema` 要求它们存在，删掉会让服务拒绝启动；它们已被新索引的最左前缀覆盖，要清理必须先改模型标签并发版，本次不做。升级步骤与锁表影响见[数据库升级与恢复](../../deploy/database-recovery.md#列表分页索引迁移base-0016--jobs-0005)。`sql/init.sql` 现由 `gormstore.TestInitSQLMatchesMigrations` 约束，新增迁移后用 `UPDATE_INIT_SQL=1 go test ./service/aiServeWeaveControlPlane/internal/store/gormstore -run TestInitSQLMatchesMigrations` 重新生成。这两份迁移没有在真实 PostgreSQL 或 MySQL 上执行过（默认测试只验证 SQL 文件的方言一致、版本连续和 `init.sql` 同步）。
+
 ## 本地起一套
 
 ```bash
@@ -745,7 +747,7 @@ WebSocket 不经过这里：Console 在子应用里换上一个只汇报「队�
 | `controlplane_registry_client_calls_total` | `result` | 经 `ctx.Logic` 到达 Registry `TokenAdmin` 的调用（节点审批/禁用/启用/维护/列出状态），取值同上 |
 | `controlplane_artifact_storage_bytes` | — | 已实际复制进对象存储的产物总字节数（STATUS.md 的 A06） |
 
-**`controlplane_artifact_storage_bytes` 定期重新计算，不是累加计数器。** `internal/svc.runArtifactStorageGauge` 每 5 秒对 `job_artifacts` 表做一次 `SELECT COALESCE(SUM(size_bytes),0) WHERE storage_key <> ''`（`store.JobArtifacts.SumArtifactStorageBytes`，gormstore/memstore 均已实现），与 `runOutboxLagGauge` 同一先例：无条件随服务启动，不需要任何外部地址配置，只读本服务自己已有的表。选择"定期从权威表重算"而不是"在 Gateway 侧维护一个上传 +size、清理 -size 的运行时计数器"，是因为 Gateway 的 job/产物状态是有界内存、副本重启即丢（见 Gateway README 相应小节）——一个由 Gateway 持有的运行时计数器会在每次副本重启后静默归零，而它本该描述的对象存储字节依然存在；`job_artifacts` 是这份产物元数据本就持久化、唯一权威的位置，读它比另开一条易漂移的影子账本更简单也更对。一次读取失败只记日志并保留量表上一次的读数，不会把它误报成零（与 `runOutboxLagGauge` 遇到读失败时的处理一致）。
+**`controlplane_artifact_storage_bytes` 定期重新计算，不是累加计数器。** `internal/svc.runArtifactStorageGauge` 每 60 秒（每个副本各一次；原为 5 秒，该量表在仓库内没有告警或逻辑消费者，只是对外导出的 Prometheus 量表，分钟级新鲜度足够）对 `job_artifacts` 表做一次 `SELECT COALESCE(SUM(size_bytes),0) WHERE storage_key <> ''`（`store.JobArtifacts.SumArtifactStorageBytes`，gormstore/memstore 均已实现），与 `runOutboxLagGauge` 同一先例：无条件随服务启动，不需要任何外部地址配置，只读本服务自己已有的表。选择"定期从权威表重算"而不是"在 Gateway 侧维护一个上传 +size、清理 -size 的运行时计数器"，是因为 Gateway 的 job/产物状态是有界内存、副本重启即丢（见 Gateway README 相应小节）——一个由 Gateway 持有的运行时计数器会在每次副本重启后静默归零，而它本该描述的对象存储字节依然存在；`job_artifacts` 是这份产物元数据本就持久化、唯一权威的位置，读它比另开一条易漂移的影子账本更简单也更对。一次读取失败只记日志并保留量表上一次的读数，不会把它误报成零（与 `runOutboxLagGauge` 遇到读失败时的处理一致）。
 
 **历史时序复用本服务已有的关系库，不是独立 TSDB。** `internal/metricshistory` 是一个可选的后台采集器，仅在 `MetricsHistory` 配置时启动（`Enabled()` 判定与 `Fleet`/`Registry` 同一约定）：
 
