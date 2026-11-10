@@ -30,11 +30,11 @@ export default async function LoginPage({
   }
 
   return (
-    <main className="flex flex-1 items-center justify-center p-6">
-      <div className="w-full max-w-sm">
+    <main className="flex flex-1 items-center justify-center bg-muted/30 p-4 sm:p-6">
+      <div className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm sm:p-8">
         <div className="mb-6 flex justify-end"><LanguageSwitcher /></div>
-        <div className="mb-6 space-y-1">
-          <h1 className="font-heading text-xl font-semibold">
+        <div className="mb-8 space-y-2">
+          <h1 className="font-heading text-2xl font-semibold tracking-tight">
             <Message id="common.consoleTitle" /></h1>
           <p className="text-sm text-muted-foreground">
             <Message id="auth.signInWithYourEmailAndPassword" /></p>
