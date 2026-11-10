@@ -8,10 +8,10 @@ import (
 	"math/rand"
 	"slices"
 	"sort"
+	"sync"
 	"sync/atomic"
 	"time"
 
-	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/routing"
@@ -568,6 +568,14 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 // 调用的内容。有路由表时，调用方自有节点上没有别名指向的模型按原 id 列出，即请求它所用的 id。
 func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 	routes := s.routes.Load()
+	// One node view serves the whole call, so the catalogue costs one pass
+	// over the node list instead of one per alias and capability probe. It is
+	// also a consistent picture: every alias is judged against the same fleet.
+	//
+	// 整个调用共用一份节点视图，目录因此只遍历一遍节点列表，而不是每个别名、每次能力
+	// 探测各一遍。它也是一致的：所有别名都针对同一份机群状态做判断。
+	view := s.acquireView()
+	defer releaseView(view)
 	if routes.Len() > 0 {
 		var out []ModelInfo
 		aliases := make(map[string]bool)
@@ -577,26 +585,49 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 			if !admitted {
 				continue
 			}
-			if len(s.candidatesWith(actx, routes, alias, runtime.CapabilityChat)) > 0 || len(s.candidatesWith(actx, routes, alias, runtime.CapabilityMessages)) > 0 ||
-				len(s.candidatesWith(actx, routes, alias, runtime.CapabilityImageGeneration)) > 0 {
+			if s.hasCandidate(actx, routes, alias, runtime.CapabilityChat, view) || s.hasCandidate(actx, routes, alias, runtime.CapabilityMessages, view) ||
+				s.hasCandidate(actx, routes, alias, runtime.CapabilityImageGeneration, view) {
 				out = append(out, ModelInfo{ID: alias})
 			}
 		}
 		// A model on the caller's own node is requested by its own id when
 		// no alias names it, so it is listed the same way.
 		// 调用方自有节点上的模型在没有别名指向它时按原 id 请求，因此也按原 id 列出。
-		for _, info := range s.advertisedModels(ctx, true) {
+		for _, info := range s.advertisedModels(ctx, true, view) {
 			if !aliases[info.ID] {
 				out = append(out, info)
 			}
 		}
 		return out
 	}
-	return s.advertisedModels(ctx, false)
+	return s.advertisedModels(ctx, false, view)
+}
+
+// hasCandidate reports whether candidatesOn would return at least one
+// candidate for model with cap, judged against view. It walks the same nodes
+// through the same filters and breaker checks as candidatesOn does, but skips
+// ordering and building the candidate list nobody reads.
+//
+// hasCandidate 报告针对 view 判断时，candidatesOn 是否至少会为带 cap 的 model 返回一个
+// 候选。它经由与 candidatesOn 相同的过滤与熔断检查遍历同样的节点，只是略去了排序，以及
+// 构造一份没人会读的候选列表。
+func (s *Scheduler) hasCandidate(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability, view *nodeView) bool {
+	targets, routed := routes.Resolve(model)
+	if !routed {
+		targets = []routing.Target{{RuntimeModel: model}}
+	}
+	any := false
+	for _, target := range targets {
+		if len(s.collect(ctx, view, target, modelEligible(target, cap))) > 0 {
+			any = true
+		}
+	}
+	return any
 }
 
 // advertisedModels lists the chat, Messages and image models live nodes
-// advertise, deduplicated by id and sorted by modelInfoLess. A node ctx's
+// advertise, deduplicated by id and sorted by modelInfoLess. view is the node
+// view it judges against. A node ctx's
 // WithNodeAccess policy closes is skipped. A model the WithModelAccess policy
 // excludes is kept only from the caller's own nodes; ownOnly keeps nothing
 // else.
@@ -604,11 +635,12 @@ func (s *Scheduler) Models(ctx context.Context) []ModelInfo {
 // advertisedModels 列出活节点声明的聊天、Messages 与图像模型，按 id 去重并按
 // modelInfoLess 排序。被 ctx 上 WithNodeAccess 授权关闭的节点被跳过。被 WithModelAccess
 // 授权排除的模型只从调用方自有节点保留；ownOnly 时其他一概不保留。
-func (s *Scheduler) advertisedModels(ctx context.Context, ownOnly bool) []ModelInfo {
+func (s *Scheduler) advertisedModels(ctx context.Context, ownOnly bool, view *nodeView) []ModelInfo {
 	_, hasTenant := ctx.Value(nodeAccessKey{}).(nodeAccess)
 	own := context.WithValue(ctx, ownNodesOnlyKey{}, true)
 	seen := make(map[string]ModelInfo)
-	for _, node := range s.server.Nodes() {
+	for i := range view.nodes {
+		node := &view.nodes[i]
 		if !node.Live || node.Draining || node.Maintenance || !nodeAllowed(ctx, node.NodeID) {
 			continue
 		}
@@ -616,7 +648,8 @@ func (s *Scheduler) advertisedModels(ctx context.Context, ownOnly bool) []ModelI
 		if ownOnly && !owned {
 			continue
 		}
-		for _, snap := range node.Runtimes {
+		for r := range node.Runtimes {
+			snap := &node.Runtimes[r]
 			if !s.accountAllowed(ctx, node.NodeID, snap.Descriptor.ID) {
 				continue
 			}
@@ -627,9 +660,9 @@ func (s *Scheduler) advertisedModels(ctx context.Context, ownOnly bool) []ModelI
 				if !owned && !modelAllowed(ctx, m.ID) {
 					continue
 				}
-				effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
-				if effective.Require(runtime.CapabilityChat) != nil && effective.Require(runtime.CapabilityMessages) != nil &&
-					effective.Require(runtime.CapabilityImageGeneration) != nil {
+				if !modelServes(snap.Discovery.Capabilities, m.Capabilities, runtime.CapabilityChat) &&
+					!modelServes(snap.Discovery.Capabilities, m.Capabilities, runtime.CapabilityMessages) &&
+					!modelServes(snap.Discovery.Capabilities, m.Capabilities, runtime.CapabilityImageGeneration) {
 					continue
 				}
 				info := ModelInfo{ID: m.ID, DisplayName: m.DisplayName, DisplayOrder: m.DisplayOrder}
@@ -718,6 +751,16 @@ func (s *Scheduler) candidatesWithRandom(ctx context.Context, routes *routing.Ta
 // candidatesKeyed 是各 candidates 变体共用的实现：key 是请求的前缀指纹，没有前缀的
 // 请求传空值。
 func (s *Scheduler) candidatesKeyed(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability, key affinity, draw func() float64) []Candidate {
+	return s.candidatesOn(ctx, routes, model, cap, key, draw, nil)
+}
+
+// candidatesOn is candidatesKeyed against a caller-held node view, so a
+// caller that resolves several models in one go (Models) walks the node list
+// once. A nil view takes a fresh one for each routing target.
+//
+// candidatesOn 是针对调用方持有的节点视图的 candidatesKeyed，使一次解析多个模型的调用方
+// （Models）只需遍历一遍节点列表。view 为 nil 时，每个路由 target 各取一份新的视图。
+func (s *Scheduler) candidatesOn(ctx context.Context, routes *routing.Table, model string, cap runtime.Capability, key affinity, draw func() float64, view *nodeView) []Candidate {
 	targets, routed := routes.Resolve(model)
 	if !routed {
 		// An unrouted model is used exactly as the node advertises it. A
@@ -729,7 +772,7 @@ func (s *Scheduler) candidatesKeyed(ctx context.Context, routes *routing.Table, 
 
 	groups := make([]targetCandidates, 0, len(targets))
 	for _, target := range targets {
-		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(ctx, target, cap, key)})
+		groups = append(groups, targetCandidates{priority: target.Priority, weight: target.Weight, candidates: s.pick(ctx, target, cap, key, view)})
 	}
 	return weightedCandidates(groups, draw)
 }
@@ -743,23 +786,94 @@ func (s *Scheduler) candidatesKeyed(ctx context.Context, routes *routing.Table, 
 // pick 返回每一个能以 cap 服务 target 的 (node, runtime) 对，按配置的 Policy 最优的
 // 在前——默认是空闲推理槽最多的优先，其次是在途请求最少的，对应 README 的「最少正在
 // 执行请求」策略。排序前先打乱节点顺序，这样在多个节点打平时请求不会全堆到同一个上。
-func (s *Scheduler) pick(ctx context.Context, target routing.Target, cap runtime.Capability, key affinity) []Candidate {
+func (s *Scheduler) pick(ctx context.Context, target routing.Target, cap runtime.Capability, key affinity, view *nodeView) []Candidate {
 	policy := s.policy
 	if key.session {
 		policy = PolicyPrefixHash
 	}
-	return s.pickBy(ctx, target, policy, key, func(snap runtime.Snapshot) bool {
-		for _, m := range snap.Discovery.Models {
+	return s.pickOn(ctx, view, target, policy, key, modelEligible(target, cap))
+}
+
+// modelEligible is the eligibility test for an inference request: the runtime
+// serves target's runtime model with cap.
+//
+// modelEligible 是推理请求的资格判定：该运行时以 cap 服务 target 的运行时模型。
+func modelEligible(target routing.Target, cap runtime.Capability) func(*runtime.Snapshot) bool {
+	return func(snap *runtime.Snapshot) bool {
+		for i := range snap.Discovery.Models {
+			m := &snap.Discovery.Models[i]
 			if m.ID != target.RuntimeModel {
 				continue
 			}
-			effective := runtime.Intersect(snap.Discovery.Capabilities, m.Capabilities)
-			if effective.Require(cap) == nil {
+			if modelServes(snap.Discovery.Capabilities, m.Capabilities, cap) {
 				return true
 			}
 		}
 		return false
-	})
+	}
+}
+
+// modelServes reports whether a model with modelCaps on a runtime with
+// runtimeCaps supports cap: runtime.Intersect(runtimeCaps, modelCaps).
+// Require(cap) == nil, computed for the one capability asked about. Intersect
+// builds a map of every capability, which this per-node, per-model test ran
+// on each request; the answer for one capability needs none of it.
+//
+// modelServes 报告运行时能力为 runtimeCaps 的运行时上、能力为 modelCaps 的模型是否支持
+// cap：等价于 runtime.Intersect(runtimeCaps, modelCaps).Require(cap) == nil，只针对被问
+// 到的那一个能力计算。Intersect 会为所有能力构造一个 map，而这个按节点、按模型的判断每个
+// 请求都要跑一遍；一个能力的答案用不着其中任何东西。
+func modelServes(runtimeCaps, modelCaps runtime.CapabilitySet, cap runtime.Capability) bool {
+	if modelEv, ok := modelCaps[cap]; ok {
+		if runtimeEv, ok := runtimeCaps[cap]; ok && runtimeEv.Level == runtime.SupportUnsupported {
+			return false
+		}
+		return modelEv.Level == runtime.SupportSupported
+	}
+	runtimeEv, ok := runtimeCaps[cap]
+	return ok && runtimeEv.Level == runtime.SupportSupported
+}
+
+// nodeView is a reusable buffer of the scheduler's node view. pickBy borrows
+// one per call; Models holds one across all its probes. A holder may reorder
+// nodes freely — selection shuffles them — but must not retain the view after
+// releaseView.
+//
+// nodeView 是调度器节点视图的可复用缓冲。pickBy 每次调用借用一个；Models 在其全部探测
+// 期间持有一个。持有者可以随意重排 nodes——选择流程会打乱它们——但在 releaseView 之后
+// 不得继续持有该视图。
+type nodeView struct {
+	nodes []tunnelserver.SchedNode
+	// found is the scratch buffer pickOn collects scored candidates into. It
+	// is kept with the view so a selection does not regrow a few hundred
+	// entries from empty on every request.
+	//
+	// found 是 pickOn 收集带评分候选所用的暂存缓冲。它随视图保留，这样每个请求的选择过程
+	// 就不必从零开始反复扩容出几百个条目。
+	found []scored
+}
+
+var nodeViewPool = sync.Pool{New: func() any { return new(nodeView) }}
+
+// acquireView returns a node view of the nodes connected right now.
+// acquireView 返回此刻已连接节点的节点视图。
+func (s *Scheduler) acquireView() *nodeView {
+	v := nodeViewPool.Get().(*nodeView)
+	v.nodes = s.server.AppendSchedNodes(v.nodes[:0])
+	return v
+}
+
+// releaseView returns v to the pool, dropping its references so a pooled
+// buffer does not keep a departed node's inventory alive.
+//
+// releaseView 把 v 还给池，并清除其中的引用，使池中的缓冲不会让已离开节点的清单一直
+// 存活。
+func releaseView(v *nodeView) {
+	clear(v.nodes)
+	v.nodes = v.nodes[:0]
+	clear(v.found)
+	v.found = v.found[:0]
+	nodeViewPool.Put(v)
 }
 
 // pickBy is the shared selection walk: node health, the target's node
@@ -778,13 +892,53 @@ func (s *Scheduler) pick(ctx context.Context, target routing.Target, cap runtime
 //
 // 「有资格」的含义由调用方定义——推理是模型加能力，工作流是 runtime 层的能力——这样
 // 两者共用同一套健康过滤、同一次熔断检查与同一套排序，而不是长出两份会各自漂移的拷贝。
-func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Policy, key affinity, eligible func(runtime.Snapshot) bool) []Candidate {
-	nodes := s.server.Nodes()
+func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Policy, key affinity, eligible func(*runtime.Snapshot) bool) []Candidate {
+	return s.pickOn(ctx, nil, target, policy, key, eligible)
+}
+
+// pickOn is pickBy against a caller-held node view; a nil view takes a fresh
+// one for this call. Node state is read once, when the view is built: idle
+// slots, in-flight count, liveness and the drain and maintenance flags are as
+// current as that moment, exactly as fresh as the Nodes() call this replaces
+// made them, and the inventory is whatever each node last published.
+//
+// pickOn 是针对调用方持有的节点视图的 pickBy；view 为 nil 时为本次调用取一份新的。节点
+// 状态在构造视图时读取一次：空闲槽、在途数、存活以及 draining 与 maintenance 标志与那一
+// 刻一样新，和它所取代的 Nodes() 调用所给出的新鲜度完全一致；清单则是各节点最近一次
+// 发布的内容。
+func (s *Scheduler) pickOn(ctx context.Context, view *nodeView, target routing.Target, policy Policy, key affinity, eligible func(*runtime.Snapshot) bool) []Candidate {
+	if view == nil {
+		view = s.acquireView()
+		defer releaseView(view)
+	}
+	nodes := view.nodes
 	rand.Shuffle(len(nodes), func(i, j int) { nodes[i], nodes[j] = nodes[j], nodes[i] })
+
+	found := s.collect(ctx, view, target, eligible)
+	orderCandidates(found, policy, key, s.intn)
+
+	candidates := make([]Candidate, len(found))
+	for i, f := range found {
+		candidates[i] = f.Candidate
+	}
+	return candidates
+}
+
+// collect walks view's nodes in their current order and returns every
+// (node, runtime) pair that passes the filters pickBy documents, unordered.
+// The result lives in view's scratch buffer and is valid only until the next
+// collect on the same view.
+//
+// collect 按当前顺序遍历 view 中的节点，返回通过 pickBy 所述各项过滤的每一个
+// (node, runtime) 对，未排序。结果位于 view 的暂存缓冲中，仅在同一视图上下一次 collect
+// 之前有效。
+func (s *Scheduler) collect(ctx context.Context, view *nodeView, target routing.Target, eligible func(*runtime.Snapshot) bool) []scored {
+	nodes := view.nodes
 	now := s.clock.Now()
 
-	var found []scored
-	for _, node := range nodes {
+	found := view.found[:0]
+	for i := range nodes {
+		node := &nodes[i]
 		if !node.Live || node.Draining || node.Maintenance {
 			continue
 		}
@@ -822,8 +976,9 @@ func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Po
 		if !nodeHasCapacity(node, target.MinGPUMemoryBytes) {
 			continue
 		}
-		idle := node.IdleSlots[tunnelv1.SlotClass_SLOT_CLASS_INFERENCE]
-		for _, snap := range node.Runtimes {
+		idle := node.IdleInference
+		for r := range node.Runtimes {
+			snap := &node.Runtimes[r]
 			if !s.accountAllowed(ctx, node.NodeID, snap.Descriptor.ID) {
 				continue
 			}
@@ -846,13 +1001,11 @@ func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Po
 		}
 	}
 
-	orderCandidates(found, policy, key, s.intn)
-
-	candidates := make([]Candidate, len(found))
-	for i, f := range found {
-		candidates[i] = f.Candidate
-	}
-	return candidates
+	// Keep the (possibly regrown) buffer with the view for the next selection;
+	// releaseView clears what it holds.
+	// 把（可能已扩容的）缓冲留在视图里供下次选择使用；其中的内容由 releaseView 清除。
+	view.found = found
+	return found
 }
 
 // nodeHasCapacity reports whether node's declared GPU memory total meets
@@ -866,7 +1019,7 @@ func (s *Scheduler) pickBy(ctx context.Context, target routing.Target, policy Po
 // 表示 target 未设置要求，永远通过。一个尚未上报硬件、或上报零 GPU 显存的节点同样
 // 永远通过：未声明的容量不是容量不足的证据——这个默认放行的行为为何是刻意的，见
 // modelroute.Target.MinGPUMemoryBytes 的文档注释。
-func nodeHasCapacity(node tunnelserver.NodeInfo, minBytes int64) bool {
+func nodeHasCapacity(node *tunnelserver.SchedNode, minBytes int64) bool {
 	if minBytes <= 0 || node.Resources == nil || node.Resources.GpuMemoryBytes <= 0 {
 		return true
 	}

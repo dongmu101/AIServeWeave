@@ -383,7 +383,8 @@ model_catalog_json = "/Users/you/.codex/aiserveweave-models.json"
 
 - **写入侧是有界异步的（`httpapi/responsespersist.go` 的 `responsePersister`）**：`store:true` 时，这一轮自己的输入加上 assistant 的回复被编码成不透明 JSON，交给一个信号量限流的后台写入（默认并发 8，`-control-plane-addr`/`-control-plane-token` 复用），绝不阻塞调用方正在等待的响应——并发已满时丢弃并计入 `gateway_response_persist_dropped_total`，写入失败计入 `gateway_response_persist_failed_total`，均不重试、不入持久队列，与请求日志推送同一纪律。
 - **读取侧是同步的**：`previous_response_id` 非空时，Gateway 在派发请求之前先沿它逐跳调用控制面的 `GetResponseTurn` 走到根轮次，按时间顺序拼接每一跳自己的消息，作为前缀拼在这一轮自己的输入之前再发给后端——这一步是调用方请求路径的一部分，因为调用方点名了一段具体对话，需要一个确切答案而不是一段可能残缺的历史。链路深度有界（默认 50 跳，`maxResponseChainDepth`），超出时拒绝（503）而不是静默截断；未知或不属于该租户的 `previous_response_id` 答 400，不是编造一段更短的历史，也不是看起来像本 Gateway 自身故障的 500。
-- **一轮只存自己的贡献**：持久化的 `messages` 是这一轮自己的 system 指示/用户输入加上 assistant 回复，不是从根到这一轮的完整对话——存储量与对话轮数成正比而非平方，代价是续接一段长对话需要多次控制面往返而非一次（已被 `maxResponseChainDepth` 有界）。
+- **一轮只存自己的贡献**：持久化的 `messages` 是这一轮自己的 system 指示/用户输入加上 assistant 回复，不是从根到这一轮的完整对话——存储量与对话轮数成正比而非平方，代价是续接一段长对话需要多次控制面往返而非一次（已被 `maxResponseChainDepth` 有界，并由上面的副本本地缓存摊薄）。
+- **读取侧带副本本地的有界缓存（`httpapi/responsescache.go`）**：续接时每一跳先查 `(租户, response id)` 缓存，未命中才调用控制面；本副本成功写入控制面的轮次也会放入缓存（被丢弃或写入失败的不放），因此同一副本上的连续追问通常整条链零往返。缓存只存「已找到」的轮次，「未找到」从不缓存。依据：控制面对 `response_turns` 只有创建与读取，重复创建返回已有行而不覆盖，没有更新、删除接口，也没有保留期清理（见上文已知缺口）——轮次一经存在即不可变。键含租户，跨租户不会命中。容量按字节计（32 MiB，单轮单独超过预算 1/4 的不缓存，LRU 淘汰），并有 10 分钟 TTL：将来若控制面增加删除或保留期清理，各副本最多继续提供已被移除的轮次 10 分钟；若新增删除接口，须同时让本副本缓存失效。未提供配置项。
 - **Claude CLI 模型同样适用（2026-11-05）**：走「Claude Code 原生 Messages」兼容层的 `/v1/responses` 共用同一套写入/读取与租户校验。`previous_response_id` 重建出的完整输入再经 Chat 转换交给 Agent，Agent 看到的历史与客户端重发全部 `input` 时相同，原有的身份、完整历史等价校验与原节点绑定照常生效；续接时其余配置（工具、`max_output_tokens`、本轮 `instructions` 等）须与上一轮一致，否则与重发完整历史时一样被 Agent 拒绝。此路径上 `instructions` 只属于本次请求：置于重建输入最前且不随轮次存储，与 OpenAI「上一轮的 instructions 不会被沿用」一致——Claude CLI 只接受前置的 system，存下来再回放会落在历史中间而被拒绝。
 - **`store`/`previous_response_id` 都需要一个真实租户**：未配置 `Verifier`（静态 key 列表或完全不鉴权）意味着没有可供限定范围的租户，两个字段依旧被拒绝，即便控制面本身已经配置。
 - 请求本身照常以 `responses` 记入 P09/C28 请求检索；持久化的轮次内容（`response_turns`）不与请求检索关联。
@@ -497,6 +498,33 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - 转录不是多候选重试循环，只派发给第一个候选，因此 `TranscriptionCandidates` 把冷却中的候选排到最后；全部在冷却时仍派发给第一个。
 - 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选（续接仍不换节点）。
 - 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。冷却状态只在副本内存中，不跨副本共享：其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+
+## 客户端连接超时（2026-11-10）
+
+前门与各运维监听器（`-admin-addr` 等）的 `http.Server` 都设置 `ReadHeaderTimeout` 10s 与 `IdleTimeout` 120s，缓慢发送请求头或空闲不关的 keep-alive 连接不再无限占用协程与文件描述符；指标监听器（`common/metrics`）同样设置。刻意不设 `WriteTimeout`，因为它限定整个响应，会切断长时间的流式生成。
+
+响应改为按次限定：前门对每一次写出与 flush 重新设置写截止时间（`httpapi.Config.WriteStallTimeout`，默认 `DefaultWriteStallTimeout` 60s，负值关闭，目前没有 CLI flag）。客户端保持连接却停止读取时，TCP 窗口填满后的那次写出超过该时长即失败，net/http 取消请求 context，处理函数返回并经隧道把 Cancel 送给 Agent，释放该请求占用的节点槽。chunk 之间的长停顿（模型思考）期间没有正在进行的写出，不受影响。默认测试覆盖不读取的慢客户端；真实负载均衡器后的表现尚未验收。
+
+## 调度热路径的节点视图（2026-11-10）
+
+调度器每个请求、每个路由 target 都要遍历一遍节点，此前经 `Server.Nodes()` 取得完整 `NodeInfo`：对每个节点加锁、克隆标签与 CLI 额度、构造并排序 runtime 清单，再按 node_id 排序整体，成本随「节点数 × runtime 数」增长，并与 `applyStatus` 等写路径争用 `node.mu`。现在热路径改用 `Server.AppendSchedNodes`（`tunnelserver/schedview.go`）：
+
+- **不变部分发布为不可变快照。** Hello 声明的标签、硬件与按 runtime_id 排序的 runtime 清单由节点持有的 `atomic.Pointer`（`node.static`）发布，仅在 Hello 与 `RuntimeStatus` 上报时于 `node.mu` 下整份重建，读者共享、不拷贝、不排序。节点列表本身也是不可变副本，仅在节点连入或被遗忘时重发，读取不拿 `Server.mu`。
+- **每请求都在变的字段仍实时读取。** 空闲推理槽数、在途数、存活（含心跳超时）、draining、maintenance 在构造视图时于 `node.mu` 下读取，一个节点只占一次很短的临界区，新鲜度与原先 `Nodes()` 相同；因此「无空闲槽者靠后」、least-load 排序、会话亲和的空闲槽优先等语义不变。熔断、限流冷却、优先级与权重的代码路径未改动。
+- **`Models()` 一次调用内复用同一份视图**，并用不构造候选列表的 `hasCandidate` 判断别名可用性（仍经过同样的过滤与熔断检查）。目录因此在一致的机群状态上计算，而不是每个别名、每次能力探测各遍历一遍。
+- 同一轮还去掉了几处与规模成比例的分配：能力判断不再为每个 runtime 模型构造 `runtime.Intersect` 的整张 map（`modelServes` 对单个能力给出等价结果）、排序不再经 `sort.SliceStable` 的反射交换器、单 target 时不再对候选去重。
+- `Nodes()`/`Node()` 仍是管理接口的完整视图，语义不变。`SchedNode` 的 `Labels`、`Resources`、`Runtimes` 与节点共享，必须视作只读。
+
+基准见 `scheduler/hotpath_bench_test.go`（200 节点 × 每节点 4 个 runtime，每个 6 个模型；Apple M4，`go test -run '^$' -bench . -benchmem ./service/aiServeWeaveGateway/scheduler/`）：
+
+| 基准 | 修改前 | 修改后 |
+|---|---|---|
+| 路由别名（2 个 target）候选计算 | 1.13 ms/op，2.4 MB/op，3675 allocs | 0.24 ms/op，0.23 MB/op，7 allocs |
+| 单 target 候选计算 | 0.54 ms/op，1.2 MB/op，1847 allocs | 0.11 ms/op，61 KB/op，3 allocs |
+| `Models()`（20 个别名） | 23.9 ms/op，49 MB/op，75319 allocs | 1.8 ms/op，6.6 KB/op，34 allocs |
+| `Models()`（无路由表） | 0.72 ms/op，618 KB/op，1810 allocs | 0.15 ms/op，411 B/op，5 allocs |
+
+这是进程内微基准，只测候选计算，不含隧道往返；没有在真实几百节点的集群上验收。
 
 ## 会话亲和
 
@@ -797,7 +825,7 @@ Claude CLI 模型同样支持 `/v1/responses`（JSON 与 SSE）。Gateway 先按
 
 Redis 仅保存工具 ID 到归属、公共模型名及原节点/runtime/目标模型的绑定，不保存提示词或工具结果。每个工具 ID 的 key 都保存整份记录（含该回合完整的 ID 列表），存储量随回合内调用数的平方增长，因此每回合最多 64 个工具调用（`messagesession.maxRoundIDs`）。每回合的全部结果原子认领，绑定 1 小时到期（与 Agent 等待工具时限一致），续接成功后保留已使用标记 24 小时，已投递或结果不确定时拒绝重放（409 `continuation_unavailable`）。续接不会换节点。绑定已过期（Redis 中完全没有记录，`messagesession.ErrExpired`）时，请求按新会话经 `MessagesStart` 调度，由 Agent 以文本记录恢复该回合；租约有效但原节点的 CLI 已不存在时，新版 Agent 在原节点就地开新会话恢复（旧版 Agent 仍答复 `runtime_closed`，Gateway 返回 409）。节点失联时返回 503，消费绑定。
 
-原生流式响应（Messages、Chat、Responses 三种输出）静默 15 秒即写一次心跳，避免 Nginx `proxy_read_timeout`（默认 60 秒）等代理在 CLI 启动或首个 token 较慢时断开：Messages 发官方 `event: ping`，Chat 与 Responses 发 SSE 注释 `: keep-alive`（Responses 首次心跳会先发出 `response.created`/`in_progress`）。心跳可能在首个事件之前发出响应头，此后的失败只能以 SSE 错误事件返回，不再带 HTTP 状态码和 `Retry-After`；15 秒内完成的派发失败不受影响。非流式请求不发心跳。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
+原生流式响应（Messages、Chat、Responses 三种输出）静默 15 秒即写一次心跳，避免 Nginx `proxy_read_timeout`（默认 60 秒）等代理在 CLI 启动或首个 token 较慢时断开：Messages 发官方 `event: ping`，Chat 与 Responses 发 SSE 注释 `: keep-alive`（Responses 首次心跳会先发出 `response.created`/`in_progress`）。心跳可能在首个事件之前发出响应头，此后的失败只能以 SSE 错误事件返回，不再带 HTTP 状态码和 `Retry-After`；15 秒内完成的派发失败不受影响。非流式请求不发心跳。心跳按「最后一个事件之后的静默」计时。转发循环用一个常驻协程读取上游流并经无缓冲 channel 交付（至多比循环多读一个事件，慢客户端仍向隧道一侧产生背压），不再为每个事件起协程；结束时先取消流的 context 让阻塞中的 `Recv` 返回，再由该协程自己 `Close`——`tunnelserver.Response` 的 `Recv`/`Close` 是单消费者的，二者绝不并行。纯流式响应不累积块内容（只保留块头、用量与 `message_stop` 校验所需状态），非流式聚合用 `strings.Builder`，不再 O(n²) 拼接；20000 事件的长流在基准里每请求分配从约 686 MB 降到约 37 MB（`TestNativeMessagesStreamCost`，`AISW_STREAM_BENCH=1` 开启）。工具名称和参数相同的同轮并行调用无法通过公开 MCP 回调消歧，会明确失败。
 
 Claude CLI 后端通过 `initialize` 动态发布 `resolvedModel` 中去重后的真实模型 ID，并保留首次出现的顺序，`/v1/models` 汇总健康运行时的目录；启用别名路由时只展示具有可用目标的公共别名。
 

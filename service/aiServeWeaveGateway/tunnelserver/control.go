@@ -87,6 +87,7 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	n.draining = false
 	n.maintenance = s.isMaintenance(certNodeID)
 	n.lastHeartbeat = s.clock.Now()
+	n.publishStaticLocked()
 	streams := len(n.controls)
 	n.mu.Unlock()
 

@@ -624,8 +624,12 @@ func (c *Client) connectAndServe(ctx, base context.Context) error {
 }
 
 // handshake sends Hello and requires HelloAck as the very first frame.
-// Anything else — a wrong frame, a rejected certificate, a silent replica —
-// is fatal: none of it is fixed by dialling again.
+// A wrong frame or a rejected certificate is fatal: dialling again cannot fix
+// either. A replica that stays silent past HelloTimeout is not: TCP and TLS
+// already succeeded, so it is most likely starting up, overloaded or paused,
+// and a later attempt under the usual backoff can succeed. Treating that as
+// fatal would leave this replica's tunnel down until the roster changed, and
+// stop the whole Agent when it is the only replica.
 func (c *Client) handshake(ctx context.Context, stream ControlStream, reader *controlReader) error {
 	hello := &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Hello{Hello: &tunnelv1.Hello{
 		NodeId:       c.cfg.NodeID,
@@ -657,8 +661,12 @@ func (c *Client) handshake(ctx context.Context, stream ControlStream, reader *co
 	case err := <-reader.errs:
 		return c.streamError("await hello ack", err)
 	case <-timer:
-		return fatalClientError(runtime.ErrorTimeout,
-			"gateway did not answer Hello within "+c.cfg.HelloTimeout.String(), nil)
+		return &runtime.RuntimeError{
+			Code:      runtime.ErrorTimeout,
+			Operation: clientOperation,
+			Message:   "gateway did not answer Hello within " + c.cfg.HelloTimeout.String(),
+			Retryable: true,
+		}
 	case <-ctx.Done():
 		return nil
 	}

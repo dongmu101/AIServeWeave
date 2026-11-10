@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"AIServeWeave/common/runtime"
@@ -64,6 +65,18 @@ type Ledger struct {
 	Clock runtime.Clock
 
 	mu sync.Mutex
+	// recovered is true once this instance has reconciled the leases left by
+	// a previous process. Guarded by mu.
+	//
+	// recovered 为 true 表示本实例已经对账过上一个进程遗留的租约。由 mu 保护。
+	recovered bool
+	// saves counts successful save calls (one file write plus rename each).
+	// It exists so tests and benchmarks can assert how often the ledger
+	// touches disk.
+	//
+	// saves 统计成功的 save 调用次数（每次一次写文件加一次改名），供测试与
+	// 基准断言账本落盘的频率。
+	saves atomic.Int64
 }
 
 // ledgerState is Ledger's on-disk JSON shape.
@@ -72,6 +85,26 @@ type Ledger struct {
 type ledgerState struct {
 	PeriodStart time.Time `json:"period_start"`
 	BytesUsed   int64     `json:"bytes_used"`
+	// Leases lists the byte leases running downloads currently hold. Their
+	// Bytes are already included in BytesUsed; the entries exist only so a
+	// crashed process's leases can be reconciled on the next start (see
+	// recoverOrphans). Absent in files written before leases existed.
+	//
+	// Leases 列出正在运行的下载当前持有的字节租约。它们的 Bytes 已经计入
+	// BytesUsed；这些条目只是为了让下一次启动时能对账崩溃进程遗留的租约
+	// （见 recoverOrphans）。在引入租约之前写出的文件里没有该字段。
+	Leases map[string]ledgerLeaseEntry `json:"leases,omitempty"`
+}
+
+// ledgerLeaseEntry is one outstanding lease: Bytes were charged against the
+// ledger for a download writing Path, the charge starting at file offset Base.
+//
+// ledgerLeaseEntry 是一个未结清的租约：为一次写 Path 的下载向账本记了
+// Bytes 字节，这笔计费从文件偏移 Base 开始。
+type ledgerLeaseEntry struct {
+	Path  string `json:"path"`
+	Base  int64  `json:"base"`
+	Bytes int64  `json:"bytes"`
 }
 
 // now returns l.Clock.Now(), defaulting to the real wall clock.
@@ -101,17 +134,9 @@ func (l *Ledger) Reserve(n int64, quotaBytes int64) (rollback func(int64), err e
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	state, err := l.load()
+	state, _, err := l.loadLocked()
 	if err != nil {
 		return nil, err
-	}
-
-	now := l.now()
-	if l.Period > 0 && now.Sub(state.PeriodStart) >= l.Period {
-		state = ledgerState{PeriodStart: now}
-	}
-	if state.PeriodStart.IsZero() {
-		state.PeriodStart = now
 	}
 
 	if quotaBytes > 0 && state.BytesUsed+n > quotaBytes {
@@ -122,6 +147,7 @@ func (l *Ledger) Reserve(n int64, quotaBytes int64) (rollback func(int64), err e
 	if err := l.save(state); err != nil {
 		return nil, err
 	}
+	l.recovered = true
 
 	return func(unused int64) {
 		if unused <= 0 {
@@ -181,5 +207,6 @@ func (l *Ledger) save(state ledgerState) error {
 	if err := localstate.Replace(tmp, l.Path); err != nil {
 		return fmt.Errorf("%w: finalize ledger: %v", errStorageFailed, err)
 	}
+	l.saves.Add(1)
 	return nil
 }

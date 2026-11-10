@@ -322,7 +322,8 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
 - Registry gRPC `9443` 与 Gateway Agent 隧道 `8443` 默认绑定 `0.0.0.0`，供远程节点
   直接建立 TLS/mTLS 连接；在云安全组或防火墙中限制为 Agent 的出口 IP。其他宿主机端口
   继续绑定 `127.0.0.1`。Console 和 Gateway HTTP API 通过 HTTPS 反向代理接入；设置
-  `AISW_CONSOLE_COOKIE_SECURE=true`，并让代理保留外部 `Host`。
+  `AISW_CONSOLE_COOKIE_SECURE=true`，并让代理保留外部 `Host`。Nginx 配置见下文
+  [HTTPS 反向代理](#https-反向代理)。
 - 当前远程 Agent 入口为 `registry.open7x.com:9443`、`agent.open7x.com:8443`，两条 DNS
   记录使用 DNS only／仅 DNS，指向平台源站。Registry 与 Gateway 证书分别包含对应域名；
   `GATEWAY_ADVERTISE_ADDR` 默认使用 `agent.open7x.com:8443`。使用其他域名时同步修改
@@ -346,6 +347,58 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
   按 [数据库升级与恢复](database-recovery.md) 操作。
 - Redis 是会话的权威状态，已启用 AOF 和数据卷；不可用时管理请求返回 `503`。
   不要恢复早于吊销或改密操作的 Redis 快照。
+
+### HTTPS 反向代理
+
+完整示例见 [nginx.example.conf](nginx.example.conf)，复制为 `/etc/nginx/conf.d/aiserveweave.conf`
+后替换域名与证书路径。示例拓扑：
+
+| 域名 | 后端 | Cloudflare | 证书 |
+|---|---|---|---|
+| `open7x.com`、`www` | Console `:3000`，`/agent/` 转 Gateway `:8080` | 代理（橙色云） | 可用 Cloudflare Origin CA |
+| `api.open7x.com` | Gateway `:8080` | 仅 DNS（灰色云） | 必须公开受信，如 Let's Encrypt |
+
+API 不经过 Cloudflare 代理：非 Enterprise 方案的请求体上限为 100 MB，低于 Gateway 工作流上传的
+200 MiB；源站 100 秒内未返回响应头即返回 524，且无法调整。流式请求有心跳不受影响，非流式长请求会失败。
+`registry`、`agent` 两个子域名本就仅 DNS 指向源站，API 改为仅 DNS 不会额外暴露源站 IP；但 443 不能再在
+防火墙中只放行 Cloudflare 网段。
+
+Origin CA 证书只受 Cloudflare 信任，API 切换为仅 DNS **之前**先换证书。DNS-01 验证不受代理状态影响，
+可在橙色云期间完成：
+
+1. Cloudflare → My Profile → API Tokens → Create Token，选 **Edit zone DNS** 模板，Zone Resources 限定
+   该域名，可加 Client IP 过滤为服务器 IP，TTL 留空（设置过期会导致自动续期失败）。不要使用 Global API Key。
+2. 在服务器上签发并安装（`--fullchain-file` 不能换成只含叶证书的文件，否则部分 SDK 校验失败）：
+
+   ```bash
+   curl https://get.acme.sh | sh -s email=<联系邮箱>
+   source ~/.bashrc
+   read -rs CF_Token && export CF_Token     # 输入不回显，也不进 shell 历史
+   acme.sh --issue --dns dns_cf -d api.open7x.com --server letsencrypt --keylength ec-256
+   acme.sh --install-cert -d api.open7x.com --ecc \
+     --key-file       /etc/nginx/ssl/api.open7x.com.key \
+     --fullchain-file /etc/nginx/ssl/api.open7x.com.pem \
+     --reloadcmd      "nginx -t && systemctl reload nginx"
+   acme.sh --upgrade --auto-upgrade
+   unset CF_Token
+   ```
+
+   acme.sh 把 token 保存在 `/root/.acme.sh/account.conf`（`SAVED_CF_Token`），按 CA 建议的时段自动续期并
+   执行 `--reloadcmd`。轮换 token 后同步修改该值。
+3. 修改 Nginx 的 api 证书路径后执行 `nginx -t && systemctl reload nginx`。`nginx -T` 读取的是磁盘配置，
+   未 reload 时正在运行的进程仍发旧证书。
+4. 仍是橙色云时绕过 Cloudflare 验证源站证书，看到 `Let's Encrypt` 与 `SSL certificate verify ok` 再切换为仅 DNS：
+
+   ```bash
+   curl -sv --resolve api.open7x.com:443:<源站IP> https://api.open7x.com/ -o /dev/null 2>&1 \
+     | grep -E "subject:|issuer:|verify"
+   ```
+
+   校验失败时 curl 不打印证书信息，加 `-k` 查看实际发出的证书。
+
+橙色云站点的 Cloudflare 设置：SSL/TLS 模式用 **Full (strict)**（Flexible 会以 80 端口回源，被 301 重定向成循环）；
+关闭 **Bot Fight Mode**（会拦截 `curl … | bash` 一行命令安装，Free 方案无法按路径豁免）、**Rocket Loader**
+与 **Email Address Obfuscation**（改写 HTML，导致 Next.js hydration 不一致）；不要为 Console 添加 Cache Everything 规则。
 
 ### 已有部署启用一行命令安装
 

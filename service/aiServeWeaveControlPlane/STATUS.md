@@ -68,7 +68,7 @@ DELETE /admin/v1/apikeys/:id
 
 永久删除（`DELETE /admin/v1/apikeys/:id/permanent`）走同一条路径：任意状态的 key 都可删除，行在事务内被移除；若删除时该 key 仍是 active，同一事务内同样递增 outbox generation，对 Gateway 等同一次吊销。已吊销的 key 在吊销时已经递增过，不再重复递增。删除之后只剩审计记录（`apikey.delete`，用 `display` 指代）；第二次删除与跨租户、他人 key 同样返回 404。
 
-P07 使用 `key_revocation_outbox` 的一行合并待发通知：Key 吊销或用户禁用与 `generation + 1` 同事务提交；请求随后同步尝试发布，后台启动时立即补发并每秒重试，单次尝试最多 5 秒。发送者锁定该行，Redis 成功后才确认 `delivered_generation`。提交后通知前崩溃会留下持久待发状态，重启或其他控制面副本继续发送；发布后确认前崩溃可能重复通知，语义为至少一次，重复清缓存无害。该行不保存凭据或哈希，存储容量恒定。数据库与 Redis 故障期间仍依赖 TTL 作为纵深防御，不承诺零秒失效或已鉴权推理中断。
+P07 使用 `key_revocation_outbox` 的一行合并待发通知：Key 吊销或用户禁用与 `generation + 1` 同事务提交；请求随后同步尝试发布，后台启动时立即补发并每秒重试，单次尝试最多 5 秒。发送者不加锁读取该行，在事务外发布，Redis 成功后才以只增条件（`delivered_generation < ?`）确认 `delivered_generation`，因此 Redis 缓慢时不会让吊销、扣费、支付和账号购买事务在该行上排队（2026-11-10）；并发发送可能对同一代际重复发布，同样无害。提交后通知前崩溃会留下持久待发状态，重启或其他控制面副本继续发送；发布后确认前崩溃可能重复通知，语义为至少一次，重复清缓存无害。该行不保存凭据或哈希，存储容量恒定。数据库与 Redis 故障期间仍依赖 TTL 作为纵深防御，不承诺零秒失效或已鉴权推理中断。
 
 ## 数据库
 
@@ -83,6 +83,8 @@ MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫
 `-migrate up|status|resume` 使用 Database 配置独立执行，不要求 Redis 或会话密钥。默认服务启动只校验版本、映射列、声明索引和 outbox；缺失、未知、不兼容或 dirty schema 均拒绝服务。旧配置 `Database.AutoMigrate: true` 仍兼容，但它也只执行已内嵌的版本 SQL；生产先用迁移账号执行命令，再以 `AutoMigrate: false` 和受限运行账号启动。
 
 升级顺序、失败恢复、备份命令、恢复后的安全状态核对与可复现双引擎演练见 [数据库升级与恢复](../../deploy/database-recovery.md)。无破坏性 down 迁移；数据库恢复也不等于 Registry/Redis/对象存储的全平台灾备。
+
+**列表分页索引（2026-11-10）。** `ListUsers`、`ListAPIKeys`、`ListAudit` 经 `readPage` 以 `WHERE tenant_id = ? ORDER BY created_at DESC, id DESC`（可再叠加状态/角色/动作/时间范围过滤）做游标分页，原先只有单列 `tenant_id` 索引，每页都要对该租户的全部行排序。新增基础迁移 `base/{postgres,mysql}/0016_list_pagination_indexes.sql`：`idx_users_tenant_created`、`idx_api_keys_tenant_created`、`idx_audit_logs_tenant_created`，均为 `(tenant_id, created_at, id)`。`ListJobArtifactsBefore`（`WHERE type = ? AND created_at < ? ORDER BY created_at, id LIMIT n`，产物保留期清理使用）原先没有可用索引，新增 MySQL 专用的 `jobs/0005_add_job_artifacts_type_created_index.sql`：`idx_job_artifacts_type_created (type, created_at, id)`。`jobs` 表的 `(tenant_id, created_at, id)`、`request_logs`、`billing` 各表本来就有对应的复合索引。旧的单列 `idx_users_tenant_id`、`idx_api_keys_tenant_id`、`idx_audit_logs_tenant_id` **保留**：它们由 `model` 的 `index` 标签声明，启动时的 `CheckSchema` 要求它们存在，删掉会让服务拒绝启动；它们已被新索引的最左前缀覆盖，要清理必须先改模型标签并发版，本次不做。升级步骤与锁表影响见[数据库升级与恢复](../../deploy/database-recovery.md#列表分页索引迁移base-0016--jobs-0005)。`sql/init.sql` 现由 `gormstore.TestInitSQLMatchesMigrations` 约束，新增迁移后用 `UPDATE_INIT_SQL=1 go test ./service/aiServeWeaveControlPlane/internal/store/gormstore -run TestInitSQLMatchesMigrations` 重新生成。这两份迁移没有在真实 PostgreSQL 或 MySQL 上执行过（默认测试只验证 SQL 文件的方言一致、版本连续和 `init.sql` 同步）。
 
 ## 本地起一套
 
@@ -745,7 +747,7 @@ WebSocket 不经过这里：Console 在子应用里换上一个只汇报「队�
 | `controlplane_registry_client_calls_total` | `result` | 经 `ctx.Logic` 到达 Registry `TokenAdmin` 的调用（节点审批/禁用/启用/维护/列出状态），取值同上 |
 | `controlplane_artifact_storage_bytes` | — | 已实际复制进对象存储的产物总字节数（STATUS.md 的 A06） |
 
-**`controlplane_artifact_storage_bytes` 定期重新计算，不是累加计数器。** `internal/svc.runArtifactStorageGauge` 每 5 秒对 `job_artifacts` 表做一次 `SELECT COALESCE(SUM(size_bytes),0) WHERE storage_key <> ''`（`store.JobArtifacts.SumArtifactStorageBytes`，gormstore/memstore 均已实现），与 `runOutboxLagGauge` 同一先例：无条件随服务启动，不需要任何外部地址配置，只读本服务自己已有的表。选择"定期从权威表重算"而不是"在 Gateway 侧维护一个上传 +size、清理 -size 的运行时计数器"，是因为 Gateway 的 job/产物状态是有界内存、副本重启即丢（见 Gateway README 相应小节）——一个由 Gateway 持有的运行时计数器会在每次副本重启后静默归零，而它本该描述的对象存储字节依然存在；`job_artifacts` 是这份产物元数据本就持久化、唯一权威的位置，读它比另开一条易漂移的影子账本更简单也更对。一次读取失败只记日志并保留量表上一次的读数，不会把它误报成零（与 `runOutboxLagGauge` 遇到读失败时的处理一致）。
+**`controlplane_artifact_storage_bytes` 定期重新计算，不是累加计数器。** `internal/svc.runArtifactStorageGauge` 每 60 秒（每个副本各一次；原为 5 秒，该量表在仓库内没有告警或逻辑消费者，只是对外导出的 Prometheus 量表，分钟级新鲜度足够）对 `job_artifacts` 表做一次 `SELECT COALESCE(SUM(size_bytes),0) WHERE storage_key <> ''`（`store.JobArtifacts.SumArtifactStorageBytes`，gormstore/memstore 均已实现），与 `runOutboxLagGauge` 同一先例：无条件随服务启动，不需要任何外部地址配置，只读本服务自己已有的表。选择"定期从权威表重算"而不是"在 Gateway 侧维护一个上传 +size、清理 -size 的运行时计数器"，是因为 Gateway 的 job/产物状态是有界内存、副本重启即丢（见 Gateway README 相应小节）——一个由 Gateway 持有的运行时计数器会在每次副本重启后静默归零，而它本该描述的对象存储字节依然存在；`job_artifacts` 是这份产物元数据本就持久化、唯一权威的位置，读它比另开一条易漂移的影子账本更简单也更对。一次读取失败只记日志并保留量表上一次的读数，不会把它误报成零（与 `runOutboxLagGauge` 遇到读失败时的处理一致）。
 
 **历史时序复用本服务已有的关系库，不是独立 TSDB。** `internal/metricshistory` 是一个可选的后台采集器，仅在 `MetricsHistory` 配置时启动（`Enabled()` 判定与 `Fleet`/`Registry` 同一约定）：
 

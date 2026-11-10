@@ -120,6 +120,15 @@ type controlSession struct {
 	// reported maps runtime id to the material part of the last reported
 	// snapshot, so a report is only sent when something actually changed.
 	reported map[string][]byte
+	// reportedRev maps runtime id to the Snapshot.Revision that reported
+	// holds the key of. While the Manager still reports the same non-zero
+	// revisions, nothing material can have changed, so report skips the
+	// Snapshot copy, the proto conversion and the key encoding altogether.
+	//
+	// reportedRev 记录 reported 中各 key 对应的 Snapshot.Revision。只要 Manager
+	// 仍报告相同的非零版本号，实质内容就不可能变化，report 因而完全跳过 Snapshot
+	// 拷贝、proto 转换与 key 编码。
+	reportedRev map[string]uint64
 	// reportedModelPull is the deterministic encoding of the last
 	// ModelPullReport sent, so reportModelPull only sends again once
 	// something in it actually changed (STATUS.md's P2 model distribution
@@ -299,51 +308,111 @@ func (s *controlSession) ack(ack *tunnelv1.HeartbeatAck) {
 // A change to the set of instances always forces a full report: a removal
 // cannot be expressed by sending a subset.
 func (s *controlSession) report(full bool) error {
-	snaps := s.client.cfg.Manager.Snapshot()
+	mgr := s.client.cfg.Manager
+
+	// Fast path. The Manager stamps every instance with a revision that
+	// moves whenever anything material changes (everything materialSnapshotKey
+	// keeps), so an unchanged set of revisions proves a partial report would
+	// be empty. This is the common case on every StatusPollInterval tick of
+	// every replica connection, and it costs one map of integers instead of a
+	// deep copy of up to 10000 discovery entries plus their proto encoding.
+	// A full report never takes it: the 60s reconciliation must carry fresh
+	// timestamps and re-assert the whole set.
+	//
+	// 快速路径。Manager 为每个实例标注一个版本号，任何实质变化（即
+	// materialSnapshotKey 保留的所有内容）都会使其改变，所以版本号集合不变就证明
+	// 部分上报必为空。这是每个副本连接每个 StatusPollInterval 周期里的常态，
+	// 开销只是一个整数 map，而不是对多达 10000 条发现条目的深拷贝加 proto 编码。
+	// 全量上报从不走这条路径：60 秒对账必须带上新的时间戳并重申整个集合。
+	if src, ok := mgr.(runtime.RevisionSource); ok && !full && s.revisionsUnchanged(src.Revisions()) {
+		return nil
+	}
+
+	snaps := mgr.Snapshot()
 	keys := make(map[string][]byte, len(snaps))
-	changed := make([]*tunnelv1.RuntimeSnapshot, 0, len(snaps))
-	all := make([]*tunnelv1.RuntimeSnapshot, 0, len(snaps))
+	revs := make(map[string]uint64, len(snaps))
+	// pbs[i] is nil for a snapshot whose revision matches the last report:
+	// its key is reused and a proto is only built if a full report needs it.
+	// pbs[i] 为 nil 表示该快照的版本号与上次上报一致：复用其 key，只有全量上报
+	// 需要时才构造 proto。
+	pbs := make([]*tunnelv1.RuntimeSnapshot, len(snaps))
+	changedIdx := make([]int, 0, len(snaps))
 
 	setChanged := len(snaps) != len(s.reported)
-	for _, snap := range snaps {
-		pb := tunnelwire.SnapshotToProto(snap)
-		all = append(all, pb)
-
-		key, err := materialSnapshotKey(pb)
-		if err != nil {
-			return err
-		}
+	for i, snap := range snaps {
 		id := snap.Descriptor.ID
-		keys[id] = key
+		revs[id] = snap.Revision
 		prev, seen := s.reported[id]
 		if !seen {
 			setChanged = true
 		}
+		if seen && snap.Revision != 0 && s.reportedRev[id] == snap.Revision {
+			keys[id] = prev
+			continue
+		}
+
+		pb := tunnelwire.SnapshotToProto(snap)
+		pbs[i] = pb
+		key, err := materialSnapshotKey(pb)
+		if err != nil {
+			return err
+		}
+		keys[id] = key
 		if !seen || !bytes.Equal(prev, key) {
-			changed = append(changed, pb)
+			changedIdx = append(changedIdx, i)
 		}
 	}
 
 	switch {
 	case full || setChanged:
+		all := make([]*tunnelv1.RuntimeSnapshot, len(snaps))
+		for i, snap := range snaps {
+			all[i] = pbs[i]
+			if all[i] == nil {
+				all[i] = tunnelwire.SnapshotToProto(snap)
+			}
+		}
 		if err := s.sendStatus(all, true); err != nil {
 			return err
 		}
-	case len(changed) > 0:
+	case len(changedIdx) > 0:
+		changed := make([]*tunnelv1.RuntimeSnapshot, 0, len(changedIdx))
+		for _, i := range changedIdx {
+			changed = append(changed, pbs[i])
+		}
 		if err := s.sendStatus(changed, false); err != nil {
 			return err
 		}
-	default:
-		return nil
 	}
+	// In the nothing-to-send case keys equals reported entry for entry, so
+	// recording it (and the revisions that produced it) is harmless and lets
+	// the fast path resume after a revision bump that turned out immaterial.
+	// 无需发送时 keys 与 reported 逐项相同，记录它（及产生它的版本号）无害，
+	// 并让一次最终证明并不实质的版本号变动之后快速路径得以恢复。
 	s.reported = keys
+	s.reportedRev = revs
 	return nil
+}
+
+// revisionsUnchanged reports whether revs is exactly the set of revisions the
+// last successful report recorded, with no unversioned (zero) entry in it.
+func (s *controlSession) revisionsUnchanged(revs map[string]uint64) bool {
+	if len(revs) != len(s.reportedRev) || len(revs) != len(s.reported) {
+		return false
+	}
+	for id, rev := range revs {
+		if rev == 0 || s.reportedRev[id] != rev {
+			return false
+		}
+	}
+	return true
 }
 
 // forceReport sends a full report regardless of what changed, which is how a
 // configuration change is acknowledged.
 func (s *controlSession) forceReport() error {
 	s.reported = map[string][]byte{}
+	s.reportedRev = nil
 	return s.report(true)
 }
 

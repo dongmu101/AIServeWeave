@@ -134,6 +134,13 @@ type responsePersister struct {
 	callTimeout time.Duration
 	logger      *slog.Logger
 	metrics     *recorder
+	// cache holds turns already known to be in the control plane, so a
+	// continuation walks its chain without a round trip per hop. See
+	// responseTurnCache for why caching them is safe.
+	//
+	// cache 保存已确认存在于控制面的轮次，使续接遍历链时不必每一跳都往返一次。
+	// 为什么缓存它们是安全的，见 responseTurnCache。
+	cache *responseTurnCache
 }
 
 // newResponsePersister builds a persister with zero fields replaced by
@@ -158,7 +165,8 @@ func newResponsePersister(client ResponsesPersistClient, concurrency int, callTi
 	if metrics == nil {
 		metrics = newRecorder(nil)
 	}
-	return &responsePersister{client: client, sem: make(chan struct{}, concurrency), callTimeout: callTimeout, logger: logger, metrics: metrics}
+	return &responsePersister{client: client, sem: make(chan struct{}, concurrency), callTimeout: callTimeout, logger: logger, metrics: metrics,
+		cache: newResponseTurnCache(responseTurnCacheBytes, responseTurnCacheTTL)}
 }
 
 // persist asynchronously writes one turn, never blocking the caller: a full
@@ -186,24 +194,40 @@ func (p *responsePersister) persist(responseID, tenantID, previousResponseID, mo
 		if err := p.client.CreateResponseTurn(ctx, responseID, tenantID, previousResponseID, model, messages); err != nil {
 			p.metrics.ResponsePersistFailed()
 			p.logger.Warn("failed to persist a response turn", slog.String("response_id", responseID), slog.Any("error", err))
+			return
 		}
+		// Only a turn the control plane acknowledged is cached: a dropped or
+		// failed write must still read as unknown on the next continuation.
+		//
+		// 只有控制面确认过的轮次才进缓存：被丢弃或写入失败的轮次，在下一次续接时仍
+		// 必须读作未知。
+		p.cache.put(tenantID, responseID, previousResponseID, messages)
 	}()
 }
 
-// get is a synchronous passthrough to the client, used by
-// loadResponsePrefix. Unlike persist it is not asynchronous: a caller
-// naming a specific previous_response_id is asking a question that needs a
-// definite answer before this request can proceed, not a best-effort
-// background write.
+// get reads one turn through the cache, falling back to a synchronous call to
+// the client, and is used by loadResponsePrefix. The returned messages are
+// shared with the cache and must not be modified. Unlike persist it is not
+// asynchronous: a caller naming a specific previous_response_id is asking a
+// question that needs a definite answer before this request can proceed, not
+// a best-effort background write.
 //
-// get 是对 client 的同步透传，供 loadResponsePrefix 使用。与 persist 不同，
-// 它不是异步的：一个点名了具体 previous_response_id 的调用方，问的是一个
-// 需要确切答案才能让本次请求继续的问题，而不是一次尽力而为的后台写入。
+// get 先经缓存读取一轮，未命中时同步调用 client，供 loadResponsePrefix 使用。返回的
+// messages 与缓存共享，不得修改。与 persist 不同，它不是异步的：一个点名了具体
+// previous_response_id 的调用方，问的是一个需要确切答案才能让本次请求继续的问题，
+// 而不是一次尽力而为的后台写入。
 func (p *responsePersister) get(ctx context.Context, tenantID, responseID string) (previousResponseID string, messages json.RawMessage, err error) {
 	if p == nil {
 		return "", nil, ErrResponseTurnNotFound
 	}
-	return p.client.GetResponseTurn(ctx, tenantID, responseID)
+	if previousResponseID, messages, ok := p.cache.get(tenantID, responseID); ok {
+		return previousResponseID, messages, nil
+	}
+	previousResponseID, messages, err = p.client.GetResponseTurn(ctx, tenantID, responseID)
+	if err == nil {
+		p.cache.put(tenantID, responseID, previousResponseID, messages)
+	}
+	return previousResponseID, messages, err
 }
 
 // loadResponsePrefix reconstructs the message prefix a previous_response_id

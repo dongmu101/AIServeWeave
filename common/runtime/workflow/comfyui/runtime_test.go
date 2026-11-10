@@ -1801,6 +1801,56 @@ func TestRepeatedReconnectFailuresBackOffInsteadOfSpinning(t *testing.T) {
 	}
 }
 
+// TestEventsAfterATerminalEventDoNotPanic covers the window between a run's
+// terminal event and the caller's Close: the subscriber is still registered,
+// so a later queue status broadcast or a repeated terminal event reaches a
+// stream whose buffer is already closed. That must be dropped, not sent on
+// the closed channel, which would crash the whole Agent from the read loop.
+func TestEventsAfterATerminalEventDoNotPanic(t *testing.T) {
+	f := newFakeComfy(t)
+	ws := newScriptedWS(1)
+	rt := newRuntime(t, f, ws)
+	mustDiscover(t, rt)
+
+	finished, err := rt.Subscribe(context.Background(), testRunID)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer finished.Close()
+	other, err := rt.Subscribe(context.Background(), otherRunID)
+	if err != nil {
+		t.Fatalf("Subscribe: %v", err)
+	}
+	defer other.Close()
+
+	conn := ws.conn(0)
+	conn.waitDialed(t)
+	conn.send(t, "execution_success", map[string]any{"prompt_id": testRunID})
+	// finished has not been closed yet, as when its consumer is still
+	// forwarding the terminal event to the Gateway.
+	conn.send(t, "status", map[string]any{"status": map[string]any{"exec_info": map[string]any{"queue_remaining": 0}}})
+	conn.send(t, "execution_success", map[string]any{"prompt_id": testRunID})
+	conn.send(t, "execution_start", map[string]any{"prompt_id": otherRunID})
+
+	if event, err := recvWithin(t, finished); err != nil || event.Type != runtime.WorkflowEventSucceeded {
+		t.Fatalf("first Recv = %v, %v; want the terminal event", event.Type, err)
+	}
+	if _, err := recvWithin(t, finished); !errors.Is(err, io.EOF) {
+		t.Errorf("second Recv = %v, want io.EOF after the terminal event", err)
+	}
+
+	// The read loop survived and keeps serving the other run.
+	for {
+		event, err := recvWithin(t, other)
+		if err != nil {
+			t.Fatalf("other Recv: %v", err)
+		}
+		if event.Type == runtime.WorkflowEventStarted {
+			break
+		}
+	}
+}
+
 func TestASlowSubscriberDropsEventsInsteadOfStallingTheInstance(t *testing.T) {
 	f := newFakeComfy(t)
 	ws := newScriptedWS(1)

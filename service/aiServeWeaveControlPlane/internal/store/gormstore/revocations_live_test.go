@@ -159,6 +159,72 @@ func TestLiveRevocationsPersistAndRetry(t *testing.T) {
 	})
 }
 
+// TestLiveRevocationsDoNotWaitForAnInFlightPublish proves a slow publisher
+// no longer holds the outbox row: a revoking write commits while a flush is
+// still publishing, and a later flush that confirms a newer generation is
+// never moved back by the slower one finishing afterwards.
+//
+// TestLiveRevocationsDoNotWaitForAnInFlightPublish 证明缓慢的发布者不再占着
+// outbox 行：在一次发送仍在发布时，带吊销效果的写入可以提交；而之后确认了更新代际的
+// 发送，也不会被较慢的那次在其后完成时改回去。
+func TestLiveRevocationsDoNotWaitForAnInFlightPublish(t *testing.T) {
+	migrationDatabases(t, func(t *testing.T, db *gorm.DB, _ string) {
+		ctx := context.Background()
+		st := migrateRevocationStore(t, ctx, db)
+		fixture := seedRevocationFixture(t, ctx, st, model.StatusActive)
+		if err := st.RevokeAPIKey(ctx, fixture.tenantID, fixture.keyID, fixture.at); err != nil {
+			t.Fatalf("RevokeAPIKey error = %v, want nil", err)
+		}
+
+		publishing := make(chan struct{})
+		release := make(chan struct{})
+		type flushResult struct {
+			published bool
+			err       error
+		}
+		slow := make(chan flushResult, 1)
+		go func() {
+			published, err := st.FlushRevocations(ctx, func(context.Context) error {
+				close(publishing)
+				<-release
+				return nil
+			})
+			slow <- flushResult{published, err}
+		}()
+		<-publishing
+
+		// The slow flush is mid-publish. A second revoking write must not
+		// queue behind it.
+		writeCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+		defer cancel()
+		audit := model.AuditLog{ID: model.NewID(model.PrefixAuditLog), TenantID: fixture.tenantID, ActorID: fixture.ownerID, Action: model.ActionUserDisable, Target: fixture.userID, CreatedAt: fixture.at}
+		if _, err := st.SetUserStatus(writeCtx, fixture.tenantID, fixture.userID, model.StatusSuspended, fixture.at, audit); err != nil {
+			close(release)
+			t.Fatalf("SetUserStatus during an in-flight publish error = %v, want nil", err)
+		}
+
+		// A faster flush delivers the newer generation first.
+		published, err := st.FlushRevocations(ctx, func(context.Context) error { return nil })
+		if err != nil || !published {
+			close(release)
+			t.Fatalf("fast FlushRevocations = (%v, %v), want (true, nil)", published, err)
+		}
+		if generation, delivered := readOutbox(t, db); generation != 2 || delivered != 2 {
+			close(release)
+			t.Fatalf("outbox after fast flush = (%d, %d), want (2, 2)", generation, delivered)
+		}
+
+		close(release)
+		result := <-slow
+		if result.err != nil || !result.published {
+			t.Fatalf("slow FlushRevocations = (%v, %v), want (true, nil)", result.published, result.err)
+		}
+		if generation, delivered := readOutbox(t, db); generation != 2 || delivered != 2 {
+			t.Errorf("outbox after slow flush = (%d, %d), want (2, 2): confirmation must not move back", generation, delivered)
+		}
+	})
+}
+
 // TestLiveUnrelatedChangesDoNotQueueRevocations proves failed key operations
 // and user enablement leave the durable generation untouched.
 //

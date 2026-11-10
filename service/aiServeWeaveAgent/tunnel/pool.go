@@ -194,7 +194,10 @@ type Pool struct {
 	// proxy — would otherwise be answered with an unbounded open/fail loop,
 	// which burns CPU on both sides and hides the real fault in a flood of
 	// identical log lines. It is cleared as soon as a slot parks.
-	openFailedAt   time.Time
+	openFailedAt time.Time
+	// openFailures counts consecutive rounds of failed opens since a slot
+	// last parked; each round doubles the pause, up to slotOpenBackoffMax.
+	openFailures   int
 	nextID         int
 	activeReplicas int
 	hint           *tunnelv1.SlotHint
@@ -361,26 +364,54 @@ func (p *Pool) maintain(ctx context.Context) {
 	tick := newRearmingTimer(p.clock, max(p.cfg.Slots.IdleTimeout/2, time.Second))
 	defer tick.stop()
 
-	p.reconcile(ctx)
+	// retry wakes the loop when an open pause ends with slots still missing.
+	// Nothing else is guaranteed to: the failed slot's own wake-up landed
+	// inside the pause, the replica sends its slot hint only once, and the
+	// reap tick can be minutes away — long enough for a connected node to sit
+	// with no slot at all. One pending timer is enough: a failure that
+	// extends the pause just makes it fire early, and the reconcile it
+	// triggers schedules the remainder.
+	var (
+		retry     <-chan time.Time
+		stopRetry func() bool
+	)
+	defer func() {
+		if stopRetry != nil {
+			stopRetry()
+		}
+	}()
+	reconcile := func() {
+		if wait := p.reconcile(ctx); wait > 0 && retry == nil {
+			retry, stopRetry = p.clock.NewTimer(wait)
+		}
+	}
+
+	reconcile()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-p.wake:
-			p.reconcile(ctx)
+			reconcile()
 		case <-tick.C():
-			p.reconcile(ctx)
+			reconcile()
 			tick.arm()
+		case <-retry:
+			retry, stopRetry = nil, nil
+			reconcile()
 		}
 	}
 }
 
 // reconcile brings both classes back to their watermarks: reap what has been
-// idle too long, then open what the floor and the low watermark call for.
-func (p *Pool) reconcile(ctx context.Context) {
+// idle too long, then open what the floor and the low watermark call for. It
+// returns how long until opening may resume when an open pause held back
+// slots the watermarks call for, and zero otherwise.
+func (p *Pool) reconcile(ctx context.Context) time.Duration {
 	if ctx.Err() != nil {
-		return
+		return 0
 	}
+	var retryAfter time.Duration
 
 	var (
 		open []*slot
@@ -437,7 +468,11 @@ func (p *Pool) reconcile(ctx context.Context) {
 		}
 		want = min(want, ceiling)
 
-		if !p.openPausedLocked(now) {
+		if remaining := p.openPauseRemainingLocked(now); remaining > 0 {
+			if total < want {
+				retryAfter = remaining
+			}
+		} else {
 			for i := total; i < want; i++ {
 				open = append(open, p.newSlotLocked(class))
 			}
@@ -458,6 +493,7 @@ func (p *Pool) reconcile(ctx context.Context) {
 
 	p.refreshServing()
 	p.reportSlots()
+	return retryAfter
 }
 
 // reportSlots publishes the occupancy gauges. It runs at the end of every
@@ -474,10 +510,15 @@ func (p *Pool) reportSlots() {
 }
 
 // slotOpenBackoff is how long the pool waits before trying to open another
-// slot after one failed to reach Ready. Retries then happen at the reap
-// tick's cadence, which is the same order of magnitude as the reconnect
-// backoff on the Control stream.
-const slotOpenBackoff = time.Second
+// slot after one failed to reach Ready. Each further round of failures
+// doubles the wait up to slotOpenBackoffMax, the same bounds as the reconnect
+// backoff on the Control stream, so a replica that keeps refusing Serve is
+// not retried every second by every node. maintain wakes itself when the
+// wait ends.
+const (
+	slotOpenBackoff    = time.Second
+	slotOpenBackoffMax = 30 * time.Second
+)
 
 // reapTarget is one slot the reconcile decided to close, and why.
 type reapTarget struct {
@@ -560,17 +601,37 @@ func (p *Pool) statsLocked(class tunnelv1.SlotClass) ClassStats {
 	return stats
 }
 
-// openPausedLocked reports whether opening is still held off after a slot
-// failed to come up.
-func (p *Pool) openPausedLocked(now time.Time) bool {
-	return !p.openFailedAt.IsZero() && now.Sub(p.openFailedAt) < slotOpenBackoff
+// openPauseLocked is how long opening is held off after the latest failure:
+// slotOpenBackoff doubled for every round of failures after the first.
+func (p *Pool) openPauseLocked() time.Duration {
+	pause := slotOpenBackoff << min(max(p.openFailures-1, 0), maxBackoffShift)
+	if pause <= 0 || pause > slotOpenBackoffMax {
+		return slotOpenBackoffMax
+	}
+	return pause
+}
+
+// openPauseRemainingLocked reports how much longer opening is held off after
+// a slot failed to come up; zero means opening may proceed.
+func (p *Pool) openPauseRemainingLocked(now time.Time) time.Duration {
+	if p.openFailedAt.IsZero() {
+		return 0
+	}
+	return max(p.openPauseLocked()-now.Sub(p.openFailedAt), 0)
 }
 
 // slotOpenFailed records that a slot could not be brought into service, so
-// the next reconcile holds off instead of immediately trying again.
+// the next reconcile holds off instead of immediately trying again. Slots
+// opened together fail together, so a failure arriving while the pause is
+// already running belongs to the same round and does not lengthen the next
+// pause.
 func (p *Pool) slotOpenFailed() {
 	p.mu.Lock()
-	p.openFailedAt = p.clock.Now()
+	now := p.clock.Now()
+	if p.openPauseRemainingLocked(now) == 0 {
+		p.openFailures++
+	}
+	p.openFailedAt = now
 	p.mu.Unlock()
 }
 
@@ -582,6 +643,7 @@ func (p *Pool) slotIdle(s *slot) {
 	s.poolIdleSince = p.clock.Now()
 	// A slot came up, so whatever stopped the last one is over.
 	p.openFailedAt = time.Time{}
+	p.openFailures = 0
 	p.mu.Unlock()
 	p.refreshServing()
 	p.reportSlots()

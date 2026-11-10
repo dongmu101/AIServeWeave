@@ -207,6 +207,14 @@ type nativeOutput interface {
 // nativeMessagesOutput 在不同公开协议之间共用归属校验、节点绑定和容量限制。passthrough
 // 表示原样发送的不带 safeguards 的文档；它与带 safeguards 的文档都无状态，并保留上游自己的内容块。
 func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, req anthropicMessagesRequest, raw json.RawMessage, start time.Time, out nativeOutput, passthrough bool) {
+	// The upstream stream is opened with ctx rather than the request context,
+	// so stopping the relay can cancel it to unblock the goroutine reading the
+	// stream before that goroutine closes it (see streamReceiver).
+	//
+	// 上游流用 ctx 而不是请求 context 开启，使停止转发时可以取消它，先让读取该流的协程
+	// 解除阻塞，再由该协程关闭流（见 streamReceiver）。
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
 	started := false
 	fail := func(status int, errType, code, message string) {
 		if out != nil {
@@ -367,7 +375,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				_ = finish(ctx, committed)
 			}()
 			d := awaitAlive(h.clock, ping, func() dispatched {
-				stream, err := h.sched.Messages(r.Context(), record.Candidate, native)
+				stream, err := h.sched.Messages(ctx, record.Candidate, native)
 				return dispatched{stream: stream, err: err}
 			})
 			stream, err = d.stream, d.err
@@ -375,7 +383,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	}
 	if len(ids) == 0 || resume {
 		d := awaitAlive(h.clock, ping, func() dispatched {
-			stream, candidate, err := h.sched.MessagesStart(r.Context(), native)
+			stream, candidate, err := h.sched.MessagesStart(ctx, native)
 			return dispatched{stream, candidate, err}
 		})
 		stream, err = d.stream, d.err
@@ -397,10 +405,21 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		dispatchError(err)
 		return
 	}
-	defer stream.Close()
+	receiver := startStreamReceiver(stream, cancel)
+	defer receiver.stop()
 	response := make(map[string]any)
 	var content []anthropicContentBlockJSON
 	var originalContent []map[string]json.RawMessage
+	// pending holds the text of each block while a non-streaming response is
+	// being aggregated, so a long block is built in linear time and copied
+	// into content once at message_stop. A streaming response never reads
+	// the aggregate (finish only reads it when stream is false), so it keeps
+	// no text at all.
+	//
+	// pending 在聚合非流式响应期间保存每个块的文本，使长块以线性时间构建，并在
+	// message_stop 时一次性拷入 content。流式响应从不读取聚合结果（finish 只在 stream
+	// 为 false 时读取），因此完全不保留文本。
+	var pending []*blockText
 	var calls []string
 	var usage runtime.Usage
 	stopped := false
@@ -408,16 +427,8 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	protocolError := func(message string) {
 		fail(502, "api_error", "upstream_protocol", message)
 	}
-	type recvResult struct {
-		item runtime.MessagesEvent
-		err  error
-	}
 	for {
-		got := awaitAlive(h.clock, ping, func() recvResult {
-			item, err := stream.Recv()
-			return recvResult{item, err}
-		})
-		item, err := got.item, got.err
+		item, err := receiver.next(h.clock, ping)
 		if err == io.EOF {
 			if !stopped {
 				err = errors.New("Messages stream ended before message_stop")
@@ -492,6 +503,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				return
 			}
 			content = append(content, event.Block)
+			if !req.Stream {
+				pending = append(pending, newBlockText(event.Block))
+			}
 			if unchanged {
 				var raw struct {
 					Block map[string]json.RawMessage `json:"content_block"`
@@ -507,27 +521,20 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 				protocolError("invalid native Messages block index")
 				return
 			}
-			if unchanged && runtime.MergeMessagesCitation(originalContent[event.Index], item.JSON) != nil {
+			// Both merges ignore every other delta type, so the (re-parsing)
+			// calls are made only for the types they act on.
+			//
+			// 两个合并函数都会忽略其他增量类型，因此只对它们处理的类型才调用（它们会重新解析文档）。
+			if unchanged && event.Delta.Type == "citations_delta" && runtime.MergeMessagesCitation(originalContent[event.Index], item.JSON) != nil {
 				protocolError("invalid native Messages citation")
 				return
 			}
-			if unchanged && runtime.MergeMessagesCompaction(originalContent[event.Index], item.JSON) != nil {
+			if unchanged && event.Delta.Type == "compaction_delta" && runtime.MergeMessagesCompaction(originalContent[event.Index], item.JSON) != nil {
 				protocolError("invalid native Messages compaction")
 				return
 			}
-			switch event.Delta.Type {
-			case "text_delta":
-				content[event.Index].Text += event.Delta.Text
-			case "thinking_delta":
-				content[event.Index].Thinking = appendText(content[event.Index].Thinking, event.Delta.Thinking)
-			case "signature_delta":
-				content[event.Index].Signature = appendText(content[event.Index].Signature, event.Delta.Signature)
-			}
-			if event.Delta.Type == "input_json_delta" {
-				if string(content[event.Index].Input) == "{}" {
-					content[event.Index].Input = nil
-				}
-				content[event.Index].Input = append(content[event.Index].Input, event.Delta.PartialJSON...)
+			if !req.Stream {
+				pending[event.Index].apply(&content[event.Index], event.Delta.Type, event.Delta.Text, event.Delta.Thinking, event.Delta.Signature, event.Delta.PartialJSON)
 			}
 		case "content_block_stop":
 		case "message_delta":
@@ -564,6 +571,9 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 		case "message_stop":
 			if !req.Stream {
+				for i, text := range pending {
+					text.fill(&content[i])
+				}
 				for _, block := range content {
 					if len(block.Input) > 0 && !json.Valid(block.Input) {
 						protocolError("native Messages ended with incomplete tool input")
@@ -580,7 +590,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			}
 			stopped = true
 			response["content"] = content
-			if unchanged {
+			if unchanged && !req.Stream {
 				for i, block := range content {
 					data, _ := json.Marshal(block)
 					var accumulated map[string]json.RawMessage
@@ -634,14 +644,68 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 	}
 }
 
-// appendText returns a pointer to *field + s, treating a nil field as empty.
-// appendText 返回指向 *field + s 的指针，nil 视为空串。
-func appendText(field *string, s string) *string {
-	text := s
-	if field != nil {
-		text = *field + s
+// blockText accumulates the streamed text of one content block with
+// amortised linear cost. The Builders start from the block's initial values,
+// and the thinking and signature flags stay false until a delta (or the block
+// itself) sets them, because those fields are written out only once present.
+//
+// blockText 以摊销线性的代价累积一个内容块的流式文本。Builder 从块的初始值开始，
+// thinking 与 signature 标志在增量（或块本身）设置它们之前保持 false，因为这些字段只有
+// 出现过才会被写出。
+type blockText struct {
+	text, thinking, signature strings.Builder
+	hasThinking, hasSignature bool
+}
+
+func newBlockText(block anthropicContentBlockJSON) *blockText {
+	b := &blockText{}
+	b.text.WriteString(block.Text)
+	if block.Thinking != nil {
+		b.hasThinking = true
+		b.thinking.WriteString(*block.Thinking)
 	}
-	return &text
+	if block.Signature != nil {
+		b.hasSignature = true
+		b.signature.WriteString(*block.Signature)
+	}
+	return b
+}
+
+// apply adds one delta to the block; tool input is appended to the block
+// directly, since a []byte append is already amortised linear.
+//
+// apply 把一个增量加到块上；工具入参直接追加到块上，因为 []byte 的 append 本就是摊销线性的。
+func (b *blockText) apply(block *anthropicContentBlockJSON, deltaType, text, thinking, signature, partialJSON string) {
+	switch deltaType {
+	case "text_delta":
+		b.text.WriteString(text)
+	case "thinking_delta":
+		b.hasThinking = true
+		b.thinking.WriteString(thinking)
+	case "signature_delta":
+		b.hasSignature = true
+		b.signature.WriteString(signature)
+	case "input_json_delta":
+		if string(block.Input) == "{}" {
+			block.Input = nil
+		}
+		block.Input = append(block.Input, partialJSON...)
+	}
+}
+
+// fill copies the accumulated text into block.
+//
+// fill 把累积的文本拷入 block。
+func (b *blockText) fill(block *anthropicContentBlockJSON) {
+	block.Text = b.text.String()
+	if b.hasThinking {
+		thinking := b.thinking.String()
+		block.Thinking = &thinking
+	}
+	if b.hasSignature {
+		signature := b.signature.String()
+		block.Signature = &signature
+	}
 }
 
 func messagesNotApplied(err error) bool {
