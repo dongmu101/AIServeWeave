@@ -286,6 +286,10 @@ func executeMigration(db *gorm.DB, namespace string, m migrationFile) error {
 				}
 			}
 			return nil
+		case "0005_add_job_artifacts_type_created_index.sql":
+			if db.Migrator().HasIndex("job_artifacts", "idx_job_artifacts_type_created") {
+				return nil
+			}
 		}
 	}
 	for _, statement := range strings.Split(m.sql, ";") {

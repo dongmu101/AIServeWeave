@@ -657,15 +657,17 @@ type artifactStorageStore interface {
 	SumArtifactStorageBytes(ctx context.Context) (int64, error)
 }
 
-// artifactStoragePollInterval matches outboxLagPollInterval's reasoning: a
-// gauge derived from a SUM over job_artifacts does not need sub-second
-// freshness, only freshness within a few intervals of an operator looking
-// at it.
+// artifactStoragePollInterval is deliberately much slower than
+// outboxLagPollInterval. The SUM scans job_artifacts (storage_key is
+// VARCHAR(1024), too wide for a covering index) on every replica, and the
+// gauge only describes slowly changing object-storage usage that nothing in
+// the repository alerts or acts on, so minute-level freshness is enough.
 //
-// artifactStoragePollInterval 与 outboxLagPollInterval 的理由相同：一个从
-// job_artifacts 的 SUM 派生出的量表不需要亚秒级的新鲜度，只需要在运维查看
-// 它的几个周期之内保持新鲜。
-const artifactStoragePollInterval = 5 * time.Second
+// artifactStoragePollInterval 刻意比 outboxLagPollInterval 慢得多。这次 SUM 会在每个
+// 副本上扫描 job_artifacts（storage_key 是 VARCHAR(1024)，对覆盖索引来说太宽），而
+// 该量表只描述变化缓慢的对象存储用量，仓库内没有任何告警或逻辑依赖它，分钟级新鲜度
+// 就够了。
+const artifactStoragePollInterval = 60 * time.Second
 
 // runArtifactStorageGauge sets controlplane_artifact_storage_bytes to the
 // current SUM(size_bytes) over job_artifacts rows whose bytes actually

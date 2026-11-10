@@ -42,8 +42,39 @@ func weightedCandidates(groups []targetCandidates, draw func() float64) []Candid
 		start = end
 	}
 
-	var out []Candidate
-	seen := make(map[Candidate]struct{})
+	// One target is the common case, and its candidates are already distinct
+	// (one per node and runtime), so there is nothing to de-duplicate and no
+	// reason to copy them: pick hands over a slice nothing else holds.
+	//
+	// 只有一个 target 是常见情形，其候选本就互不相同（每个节点与运行时一个），无需去重，
+	// 也没有理由复制它们：pick 交出的切片没有别人持有。
+	switch len(groups) {
+	case 0:
+		return nil
+	case 1:
+		return groups[0].candidates
+	}
+
+	total := 0
+	for _, group := range groups {
+		total += len(group.candidates)
+	}
+	out := make([]Candidate, 0, total)
+	// Every candidate of one group carries that target's runtime model, and a
+	// group's own candidates are distinct, so two groups can only share a
+	// candidate when they share a model. With all models different — the usual
+	// alias with a primary and a fallback model — nothing needs de-duplicating.
+	//
+	// 同一组的每个候选都带着该 target 的运行时模型，且组内候选本就互不相同，因此只有当
+	// 两组共用同一个模型时才可能出现相同候选。所有模型都不同时——常见的「主模型加回退
+	// 模型」别名——就无需去重。
+	if distinctModels(groups) {
+		for _, group := range groups {
+			out = append(out, group.candidates...)
+		}
+		return out
+	}
+	seen := make(map[Candidate]struct{}, total)
 	for _, group := range groups {
 		for _, c := range group.candidates {
 			if _, dup := seen[c]; dup {
@@ -54,4 +85,19 @@ func weightedCandidates(groups []targetCandidates, draw func() float64) []Candid
 		}
 	}
 	return out
+}
+
+// distinctModels reports whether no two groups serve the same runtime model.
+// Groups passed in are never empty.
+//
+// distinctModels 报告是否没有任何两组服务同一个运行时模型。传入的分组都不为空。
+func distinctModels(groups []targetCandidates) bool {
+	for i := 1; i < len(groups); i++ {
+		for j := 0; j < i; j++ {
+			if groups[i].candidates[0].Model == groups[j].candidates[0].Model {
+				return false
+			}
+		}
+	}
+	return true
 }

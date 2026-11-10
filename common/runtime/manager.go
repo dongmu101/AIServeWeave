@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"math/rand"
+	"reflect"
 	"sort"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -28,6 +30,22 @@ type Manager interface {
 	Close(ctx context.Context) error
 }
 
+// RevisionSource is implemented by a Manager that can report, without copying
+// any state, which revision of each instance's material state it currently
+// holds. A caller that polls Snapshot to detect changes (the Agent tunnel's
+// status report) calls Revisions first and skips the Snapshot copy entirely
+// while every revision is unchanged. Revisions is optional: a Manager that
+// does not implement it, or reports Revision 0, is simply polled the slow way.
+//
+// RevisionSource 由能够在不拷贝任何状态的前提下报告各实例当前「实质状态」版本的
+// Manager 实现。靠轮询 Snapshot 探测变化的调用方（Agent 隧道的状态上报）先调用
+// Revisions，只要所有版本号都没变就完全跳过 Snapshot 的拷贝。该接口可选：未实现，
+// 或版本号为 0 的 Manager 按原来的慢路径轮询即可。
+type RevisionSource interface {
+	// Revisions maps every registered instance id to its current Revision.
+	Revisions() map[string]uint64
+}
+
 // Snapshot is a single instance's immutable state view: every slice and
 // CapabilitySet is deep-copied before being returned, so mutating a
 // Snapshot can never affect Manager's internal state or a later Snapshot.
@@ -43,6 +61,24 @@ type Snapshot struct {
 	Inflight  int
 	Degraded  []string // endpoint degradation notes, e.g. "SGLang missing /health"
 	UpdatedAt time.Time
+
+	// Revision identifies the material state this Snapshot carries. It is
+	// drawn from one Manager-wide counter, so it never repeats for a given
+	// id even across Replace or Remove+Add, and it changes whenever anything
+	// other than a timestamp or the health-check latency changes: State,
+	// Descriptor, Probe verdict, Health state/queue/error, or Discovery
+	// content (including Degraded). Two Snapshots of the same id with equal
+	// non-zero Revision therefore differ at most in timestamps and latency.
+	// Zero means "unversioned" (a Snapshot not produced by Manager) and
+	// must be treated as always possibly changed.
+	//
+	// Revision 标识该 Snapshot 所携带的实质状态。它取自 Manager 范围内的单一计数器，
+	// 因此同一 id 即使经历 Replace 或 Remove+Add 也不会重复；除时间戳与健康检查
+	// 延迟之外的任何内容变化（State、Descriptor、Probe 结论、Health 的状态/队列/
+	// 错误，或 Discovery 内容，含 Degraded）都会使其改变。同一 id 的两个 Snapshot
+	// 若 Revision 相等且非零，则至多只在时间戳与延迟上有差异。零表示「未版本化」
+	//（不是 Manager 产出的 Snapshot），必须视为随时可能已变化。
+	Revision uint64
 }
 
 const (
@@ -62,6 +98,11 @@ type managedInstance struct {
 	discovery  Discovery
 	degraded   []string
 	updatedAt  time.Time
+	// rev is the instance's material-state revision (see Snapshot.Revision).
+	// It is only written while holding mu.
+	//
+	// rev 是实例的实质状态版本（见 Snapshot.Revision），仅在持有 mu 时写入。
+	rev uint64
 
 	consecutiveFailures  int
 	consecutiveSuccesses int
@@ -82,7 +123,16 @@ type manager struct {
 	instances map[string]*managedInstance
 	closed    bool
 	wg        sync.WaitGroup
+
+	// revSeq is the Manager-wide source of instance revisions; see
+	// Snapshot.Revision.
+	//
+	// revSeq 是 Manager 范围内实例版本号的来源，见 Snapshot.Revision。
+	revSeq atomic.Uint64
 }
+
+// nextRev returns a revision no instance of this Manager has used before.
+func (m *manager) nextRev() uint64 { return m.revSeq.Add(1) }
 
 // NewManager creates a Manager that constructs Runtime instances through
 // registry, injecting deps into every Factory call. If deps.Clock is nil,
@@ -184,6 +234,7 @@ func (m *manager) createAndValidate(ctx context.Context, cfg Config) (*managedIn
 		discovery:  discovery,
 		degraded:   append([]string(nil), discovery.Warnings...),
 		updatedAt:  now,
+		rev:        m.nextRev(),
 		ctx:        instCtx,
 		cancel:     cancel,
 		done:       make(chan struct{}),
@@ -327,6 +378,25 @@ func (m *manager) Snapshot() []Snapshot {
 	return snapshots
 }
 
+// Revisions returns every registered instance's current material-state
+// revision without copying any instance state. See RevisionSource.
+func (m *manager) Revisions() map[string]uint64 {
+	m.mu.Lock()
+	insts := make(map[string]*managedInstance, len(m.instances))
+	for id, inst := range m.instances {
+		insts[id] = inst
+	}
+	m.mu.Unlock()
+
+	revs := make(map[string]uint64, len(insts))
+	for id, inst := range insts {
+		inst.mu.Lock()
+		revs[id] = inst.rev
+		inst.mu.Unlock()
+	}
+	return revs
+}
+
 func (inst *managedInstance) snapshot() Snapshot {
 	inst.mu.Lock()
 	defer inst.mu.Unlock()
@@ -339,7 +409,31 @@ func (inst *managedInstance) snapshot() Snapshot {
 		Inflight:   0,
 		Degraded:   append([]string(nil), inst.degraded...),
 		UpdatedAt:  inst.updatedAt,
+		Revision:   inst.rev,
 	}
+}
+
+// healthMaterialEqual reports whether two health reports differ in nothing a
+// status consumer cares about: CheckedAt and Latency move on every check even
+// when the runtime did not change.
+//
+// healthMaterialEqual 判断两份健康报告是否在状态消费者关心的内容上完全一致：
+// CheckedAt 与 Latency 在每次检查时都会变，即使运行时并没有变化。
+func healthMaterialEqual(a, b HealthReport) bool {
+	a.CheckedAt, a.Latency = time.Time{}, 0
+	b.CheckedAt, b.Latency = time.Time{}, 0
+	return a == b
+}
+
+// discoveryMaterialEqual reports whether two Discoveries differ only in
+// DiscoveredAt. It is only called when a Discover result arrives (minutes
+// apart), never on the status-poll path.
+//
+// discoveryMaterialEqual 判断两份 Discovery 是否只有 DiscoveredAt 不同。它只在
+// Discover 结果到达时调用（间隔数分钟），不会出现在状态轮询路径上。
+func discoveryMaterialEqual(a, b Discovery) bool {
+	a.DiscoveredAt, b.DiscoveredAt = time.Time{}, time.Time{}
+	return reflect.DeepEqual(a, b)
 }
 
 func deepCopyDiscovery(d Discovery) Discovery {
@@ -471,6 +565,7 @@ func (m *manager) doHealthCheck(inst *managedInstance) (recovered bool) {
 		return false
 	}
 
+	prevState, prevHealth := inst.state, inst.health
 	healthy := err == nil && report.State == StateHealthy
 	if healthy {
 		inst.consecutiveSuccesses++
@@ -493,6 +588,9 @@ func (m *manager) doHealthCheck(inst *managedInstance) (recovered bool) {
 		inst.health = HealthReport{State: inst.state, CheckedAt: m.clock.Now(), ErrorSummary: summary}
 	}
 	inst.updatedAt = m.clock.Now()
+	if inst.state != prevState || !healthMaterialEqual(prevHealth, inst.health) {
+		inst.rev = m.nextRev()
+	}
 	return recovered
 }
 
@@ -519,6 +617,7 @@ func (m *manager) retryInitialization(inst *managedInstance) {
 	inst.descriptor = inst.runtime.Descriptor()
 	inst.degraded = append([]string(nil), discovery.Warnings...)
 	inst.health = HealthReport{State: StateHealthy, CheckedAt: now}
+	inst.rev = m.nextRev()
 	inst.mu.Unlock()
 	if m.deps.Logger != nil {
 		m.deps.Logger.Info("runtime ready / 运行时已就绪", "runtime_id", inst.cfg.ID, "kind", inst.cfg.Kind)
@@ -546,6 +645,9 @@ func (m *manager) doDiscoverRefresh(inst *managedInstance) {
 	defer inst.mu.Unlock()
 	if inst.closed {
 		return
+	}
+	if !discoveryMaterialEqual(inst.discovery, discovery) {
+		inst.rev = m.nextRev()
 	}
 	inst.discovery = discovery
 	inst.degraded = append([]string(nil), discovery.Warnings...)

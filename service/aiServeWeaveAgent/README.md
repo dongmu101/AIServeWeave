@@ -209,3 +209,26 @@ Claude Code 与 Codex 账号都可经平台[独享包月售卖](../../docs/billi
 ## 预编译独立部署
 
 Ubuntu systemd、Apple Silicon macOS LaunchAgent、Windows 11 原生用户计划任务的安装与维护见 [Agent 部署指南](../../deploy/agent/README.md)。包含固定版本在线/本地安装、状态/停止/重载、显式升级/回退与保留身份卸载。目标系统实机验收状态另列，不能由构建通过推定。
+
+本机开发时，可以在本目录用 `make install` 把当前源码构建为 `com.aiserveweave.agent.dev` LaunchAgent（仅 macOS），默认读取本目录的 `config.yaml`，工作目录也是本目录。这个服务与正式服务的 Label、程序目录和日志目录都不同，互不覆盖。改代码后重新运行 `make install` 即可。`make status`、`make logs`、`make reload`、`make stop`、`make uninstall` 用于维护，`make help` 列出全部目标；用 `CONFIG=...` 指定其他配置。
+### 本机开发命令
+
+在本目录执行。`CONFIG` 可写相对路径，Makefile 会转成绝对路径写入 LaunchAgent。配置里的 `ca_file`、`cert_file`、`key_file`、`bootstrap_token_file` 不做这种转换，请写本机实际存在的绝对路径；文件不存在时 Agent 启动即退出。
+
+```bash
+# 只校验配置，不联网
+make check-config CONFIG=../../deploy/config.open7x.yaml
+
+# 常驻运行：构建 → 生成 plist → 重新加载 LaunchAgent。改代码或改 CONFIG 后重跑
+make install CONFIG=../../deploy/config.open7x.yaml
+
+# 前台调试：日志直接输出到终端，同时保存一份，Ctrl-C 退出
+make run CONFIG=../../deploy/config.open7x.yaml 2>&1 | tee /tmp/aisw-agent-fixed.log
+```
+
+- `make install` 和 `make run` 不要同时运行：两个进程使用同一个节点身份，还会争抢 `metrics_addr` 和设置页端口。前台调试前先 `make stop`，调试完再 `make start`（或重跑 `make install`）。
+- 首次安装时输出 `make: [install] Error 3 (ignored)` 是正常的：这一步是卸载旧服务，服务还没加载时会报这个错，Makefile 忽略它。
+- `已启动 com.aiserveweave.agent.dev` 只说明 launchd 已加载服务，不代表 Agent 启动成功。Agent 异常退出后，launchd 每 15 秒重新拉起一次，这时 `state = running` 也可能是在循环崩溃。用 `make status` 看 `runs` 和 `last exit code`：`runs` 不增长、`last exit code = (never exited)` 才算稳定运行。再用 `make logs` 确认日志里有 `agent started`；如果连了 Gateway，还应有 `tunnel connected`，且没有接着出现 `agent exited with error`。
+- `make status`、`make reload` 读取的是已安装服务实际使用的配置（plist 里的 `-config`），不需要再传 `CONFIG`。
+- 后台服务不读 shell 启动文件，`claude`、`codex` 等 CLI 只能通过 `make install` 时的 `PATH` 找到。如果执行 `make install` 的终端 PATH 不全，可以用 `AGENT_PATH=...` 指定。
+- 日志位置：`~/Library/Logs/AIServeWeave/AgentDev/agent.log`（Agent 日志）和 `stderr.log`（进程崩溃输出）。

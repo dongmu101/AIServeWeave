@@ -160,11 +160,13 @@ Gateway 收到带 `revoked_node_ids` 的名册后（`tunnelserver.Server.SetRost
 
 签发发生在账本检查之前（见 `identity.go` 的 `Register` 文档注释）：反过来的顺序会让一次注定被拒绝的请求先占住 `node_id`，再在签发上失败，账本就会指向一把从没人证明持有过的 key；现在这个顺序下，一次冲突请求的代价只是白白消耗掉已经花掉的引导令牌换来一张永远不会被交回去的证书。
 
-**并发注册按 `node_id` 序列化。** `identitystore.Store.Reserve` 全程持有一把互斥锁，两个并发的 `Register` 调用即便都携带同一个 `node_id`，也不会让账本产生一次"看到了旧值"的竞态——`internal/identitystore/identitystore_test.go` 与 `internal/registryserver/identity_test.go` 分别在账本层与真实 gRPC 层验证了「同一把 key 并发重连全部成功」与「不同 key 并发抢注恰好一个成功、其余全部拒绝」。
+**并发注册按 `node_id` 序列化。** `identitystore.Store` 的所有写入（`Reserve`、`Set`、`Disable`、`RecordPending`、`Approve` 等）经同一把写者互斥锁串行化，两个并发的 `Register` 调用即便都携带同一个 `node_id`，也不会让账本产生一次"看到了旧值"的竞态——`internal/identitystore/identitystore_test.go` 与 `internal/registryserver/identity_test.go` 分别在账本层与真实 gRPC 层验证了「同一把 key 并发重连全部成功」与「不同 key 并发抢注恰好一个成功、其余全部拒绝」。
 
 `RenewCertificate` 不走这条检查：它自己的认证（`nodeid.FromPeer` 必须等于请求里的 `node_id`）已经证明调用方持有该 `node_id` 当前的私钥，因此续期时账本用 `identitystore.Store.Set` 无条件覆盖指纹——一次续期常规地会带来一把新生成的 key，若也用 `Reserve` 处理会被误判为冲突。
 
 `Set` 只改指纹与观测时间，**保留**维护标记——否则节点每次自动续期都会悄悄退出维护，下一次任何节点的维护变更或 Registry 重启后，它就会重新接到新任务。`Set` 与 `Reserve` 都在账本锁内再查一次禁用标记，命中时返回 `identitystore.ErrDisabled`，账本不变，调用方回 `PermissionDenied`，签好的证书不交出去。这一步堵住了 `DisableNode` 恰好落在 handler 自己的 `IsDisabled` 检查与账本写入之间时的竞态：如果没有这次复查，那次禁用会被续期写入覆盖掉。
+
+**身份账本的读写分离与落盘持久性（2026-11-10）。** `identities.json` 的读取方法（`IsDisabled`、`IsApproved`、`IsPending`、`HasRecord`、`States`、`DisabledNodeIDs`、`MaintenanceNodeIDs`）不再和写入抢同一把锁：写者持写锁，在当前快照的私有副本上修改，把副本写盘（临时文件、`fsync`、`rename`、`fsync` 父目录）成功之后才原子发布为新快照；读者只读已发布的快照，不会因为某次 `fsync` 很慢而被挡在 `Register`/`RenewCertificate` 入口之外。语义保持不变：落盘失败时不发布，内存状态不会领先于文件，也无需手工回滚；`Reserve`/`Set` 仍在写锁内、基于最新发布的快照复核 `Disabled`，所以与 `DisableNode` 的竞态窗口没有重新打开；一次尚在落盘的写入对读者不可见，读者看到的是它之前的状态，写入返回后才看到新状态。`identities.json` 的格式没有变化（仍是同样键名的 JSON 数组），旧文件可直接读取，新文件旧版本也能读取，升级与回退都不需要处理文件。`tokens.json` 与 `identities.json` 在 `rename` 之后增加对父目录的 `fsync`（Windows 不支持对目录 `fsync`，直接跳过），避免掉电后目录项回退导致已消耗的令牌复活或已写入的禁用丢失；`fsync` 父目录失败时写入返回错误，此时磁盘文件可能已经是新内容而内存仍是旧状态，重启后以磁盘为准，调用方应把这次操作视为失败并重试。`tokenstore` 仍是单把互斥锁（`Consume` 的一次性语义要求检查与落盘在同一临界区），本次只补了父目录 `fsync`，没有改成快照；`ca.go` 的 `writeFileAtomic` 也没有改动。验证：`identitystore` 的默认测试（`-race`）覆盖写入进行中读调用不被阻塞、写入排队时 `Reserve`/`Set` 仍看到 `ErrDisabled`、所有写方法在落盘失败时状态不前进且恢复后可再写；没有在断电或真实慢盘上验证过 `fsync` 行为。
 
 ## 指标
 

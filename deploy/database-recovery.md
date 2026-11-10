@@ -21,6 +21,33 @@ P07 会接管既有 AutoMigrate 基础表，补齐缺失的配额和 `last_login
 
 `Database.AutoMigrate` 保留配置兼容，默认 false；true 现在也只执行固定版本 SQL。Compose 的本地起步配置仍为 true。生产使用独立迁移命令，使运行账号无需 DDL 权限。
 
+## 列表分页索引迁移（base 0016 / jobs 0005）
+
+本次升级新增四个复合索引，不改表结构、不改数据，没有应用层兼容问题：
+
+| 迁移 | 数据库 | 索引 |
+| --- | --- | --- |
+| `base/0016_list_pagination_indexes.sql` | PostgreSQL、MySQL | `idx_users_tenant_created`、`idx_api_keys_tenant_created`、`idx_audit_logs_tenant_created`，列均为 `(tenant_id, created_at, id)` |
+| `jobs/0005_add_job_artifacts_type_created_index.sql` | 仅 MySQL | `idx_job_artifacts_type_created (type, created_at, id)` |
+
+升级步骤与常规升级相同：按上文备份后执行 `-migrate up`，再 `-migrate status` 确认全部 applied。旧二进制遇到新版本号会按「未知版本」拒绝启动，回退需恢复旧库或使用匹配的二进制，不要手工删账本记录。
+
+**建索引期间的锁（上线前评估大表行数）：**
+
+- **MySQL（InnoDB）**：迁移使用普通 `CREATE INDEX` / `ALTER TABLE ... ADD INDEX`，二级索引在 MySQL 9.x 下默认就是 `ALGORITHM=INPLACE, LOCK=NONE`（在线 DDL，允许并发读写），仅在开始与结束时短暂持有元数据锁；该表上有长事务时，DDL 会在开始处排队并连带阻塞后来的查询，所以要先确认没有长事务。现有迁移风格不写显式 `ALGORITHM`/`LOCK` 子句，本次沿用——显式写出可以在引擎无法在线执行时报错而不是静默降级为锁表，但在兼容 MySQL 的其它发行版上更容易误伤。建索引耗时与 IO 随行数增长（`audit_logs`、`job_artifacts` 通常最大）；常规升级流程本身已停止所有副本（上文第 1 步），因此该影响主要体现为迁移耗时。
+- **PostgreSQL**：迁移在事务里执行，不能用 `CREATE INDEX CONCURRENTLY`；普通 `CREATE INDEX` 会持有 `SHARE` 锁直到建完，期间该表的读不受影响，但 `INSERT/UPDATE/DELETE` 被阻塞（`audit_logs` 最容易受影响）。大表请在停写窗口内迁移，或在 `-migrate up` 之前手工预建（同名即可，迁移会检测到已存在并跳过该语句）：
+
+  ```sql
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_users_tenant_created ON users (tenant_id, created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_api_keys_tenant_created ON api_keys (tenant_id, created_at, id);
+  CREATE INDEX CONCURRENTLY IF NOT EXISTS idx_audit_logs_tenant_created ON audit_logs (tenant_id, created_at, id);
+  ```
+
+  `CONCURRENTLY` 失败会留下状态为 `INVALID` 的同名索引（`SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid`），迁移只按名字判断是否存在，不会发现它无效；先 `DROP INDEX` 再重建，确认有效后再执行 `-migrate up`。MySQL 同理可以预建同名索引，迁移同样会跳过已存在的索引。
+- **中断恢复**：MySQL 上迁移中断会留下 dirty 记录，按上文 `-migrate resume`；`base/0016` 的每条 `CREATE INDEX` 与 `jobs/0005` 都会检查索引是否已存在，重放不会因重复索引失败。
+
+**可选清理（本次不做）：** 旧的单列索引 `idx_users_tenant_id`、`idx_api_keys_tenant_id`、`idx_audit_logs_tenant_id` 已被新复合索引的最左前缀覆盖，只多占写入成本和空间。它们由 `internal/model` 的 `index` 标签声明，`CheckSchema` 要求它们存在，现在手工删除会让控制面拒绝启动；若要清理，需要先改模型标签并发版，再另写迁移删除。
+
 ## 失败处理
 
 - **锁竞争**：另一个迁移进程持有同库会话锁时立即失败；等其退出后重试。DDL 与锁使用同一个专用连接，整个迁移调用最多五分钟。连接终止会释放数据库会话锁。

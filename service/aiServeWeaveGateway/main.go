@@ -57,6 +57,36 @@ import (
 // nothing.
 const drainGrace = 30 * time.Second
 
+// readHeaderTimeout and idleTimeout bound the two phases of a connection that
+// carry no request work: sending headers, and sitting idle between requests
+// on keep-alive. Without them a client that trickles headers or never closes
+// its connection holds a goroutine and a file descriptor indefinitely. The
+// response itself is bounded per write by httpapi's WriteStallTimeout rather
+// than by http.Server.WriteTimeout, which would cut off long streams.
+//
+// readHeaderTimeout 与 idleTimeout 限定连接上不承担请求工作的两个阶段：发送请求头，
+// 以及 keep-alive 时请求之间的空闲。没有它们，一个缓慢发送请求头或从不关闭连接的
+// 客户端会无限期占着一个协程和一个文件描述符。响应本身由 httpapi 的
+// WriteStallTimeout 按次写出加以限定，而不是 http.Server.WriteTimeout——后者会切断
+// 长时间的流。
+const (
+	readHeaderTimeout = 10 * time.Second
+	idleTimeout       = 120 * time.Second
+)
+
+// newHTTPServer returns an http.Server for handler with this binary's
+// connection timeouts.
+//
+// newHTTPServer 返回一个带有本程序连接超时设置的 http.Server。
+func newHTTPServer(addr string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              addr,
+		Handler:           handler,
+		ReadHeaderTimeout: readHeaderTimeout,
+		IdleTimeout:       idleTimeout,
+	}
+}
+
 // version is stamped at build time via -ldflags="-X main.version=...", see
 // the root Dockerfile and scripts/build-release.sh; "dev" is what a plain
 // `go build` produces.
@@ -518,7 +548,7 @@ func run() error {
 		logger.Info("serving Agent installs", slog.String("agent_dist_dir", *agentDistDir), slog.String("agent_public_url", *agentPublicURL))
 	}
 	topMux.Handle("/", front)
-	httpServer := &http.Server{Addr: *addr, Handler: topMux}
+	httpServer := newHTTPServer(*addr, topMux)
 	httpServeErr := make(chan error, 1)
 	go func() { httpServeErr <- httpServer.ListenAndServe() }()
 	logger.Info("gateway started", slog.String("addr", *addr), slog.String("replica_id", id))
@@ -566,7 +596,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		adminServer = &http.Server{Handler: adminHandler}
+		adminServer = newHTTPServer("", adminHandler)
 		go func() {
 			if err := adminServer.Serve(adminListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("operator inventory listener stopped", slog.Any("error", err))
@@ -601,7 +631,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		modelPullServer = &http.Server{Handler: modelPullHandler}
+		modelPullServer = newHTTPServer("", modelPullHandler)
 		go func() {
 			if err := modelPullServer.Serve(modelPullListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("model-pull listener stopped", slog.Any("error", err))
@@ -633,7 +663,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		remoteProvidersServer = &http.Server{Handler: remoteProvidersHandler}
+		remoteProvidersServer = newHTTPServer("", remoteProvidersHandler)
 		go func() {
 			if err := remoteProvidersServer.Serve(remoteProvidersListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("remote providers listener stopped", slog.Any("error", err))
@@ -679,7 +709,7 @@ func run() error {
 		if err != nil {
 			return err
 		}
-		comfyUIManagedServer = &http.Server{Handler: comfyUIManagedHandler}
+		comfyUIManagedServer = newHTTPServer("", comfyUIManagedHandler)
 		go func() {
 			if err := comfyUIManagedServer.Serve(comfyUIManagedListener); err != nil && !errors.Is(err, http.ErrServerClosed) {
 				logger.Error("comfyui managed listener stopped", slog.Any("error", err))

@@ -766,12 +766,15 @@ type Snapshot struct {
 	Inflight    int    // 当前在途请求数
 	Degraded    []string // 端点降级说明，例如 SGLang 缺少 /health
 	UpdatedAt   time.Time
+	Revision    uint64   // 实质状态版本，见下
 }
 ```
 
 `Add` 默认串行执行「创建 → Probe → Discover → 注册 → 启动调度」；Probe 或 Discover 失败时关闭实例且不注册。Agent 对本地已声明的后端设置 `Config.AllowUnavailable=true`：配置和 Factory 校验仍必须成功，首次可用性检查失败时保留 `unhealthy` 实例、空模型目录和固定未就绪说明；按健康检查间隔重试完整 Probe + Discover，两项都成功后才发布模型并转为 `healthy`。这项本地启动策略不通过隧道接收，不改变远程配置下发的默认严格校验。`Get` 返回接口值，调用方通过类型断言取得 `InferenceRuntime` 或 `WorkflowRuntime`；Manager 不提供按能力选择实例的调度方法，那属于上层调度器。
 
 Manager 使用互斥锁保护实例表，但任何网络调用都不能持锁执行：先在锁内取出实例引用，再释放锁发起请求。读取方获得不可变 `Snapshot`，不能拿到 Manager 内部可修改对象。
+
+`Snapshot.Revision` 标识快照的「实质状态」：取自 Manager 范围内的单一递增计数器（`Replace`、`Remove` 后重新 `Add` 也不会重复），只在除时间戳与健康检查延迟之外的内容变化时推进——`State`、`Descriptor`、Probe 结论、Health 的状态/队列/错误，以及 Discovery 内容（含 `Degraded`）。同一 id 的两份快照 `Revision` 相等且非零，则至多只在时间戳与延迟上不同。Manager 另实现可选接口 `RevisionSource.Revisions()`，不拷贝任何状态就返回各实例当前版本号；Agent 隧道的状态上报借此在版本号全部未变时跳过 `Snapshot` 深拷贝、proto 转换与编码（ComfyUI 的 Discovery 最多含 5000 个模型与 5000 个节点类型，每个 Gateway 副本连接每 2 秒各做一遍代价不小）。`Revision` 为 0 表示未版本化，调用方必须按「可能已变化」处理。
 
 状态转换：
 
@@ -1278,6 +1281,9 @@ go test -race ./common/runtime/...
   `decodeTopLevelKeys` 用 `json.Decoder` 逐 token 跳过值，不把整份文档读进内存，并有数量上限。
 - **`Submit` 支持幂等键。** ComfyUI 自身没有幂等语义，重复提交会真实消耗 GPU 并产出第二份结果，
   所以 `IdempotencyKey` 到 `prompt_id` 的映射记在实例内存里，重试返回原任务；不带键则不去重。
+  键在提交开始前就占位，同一个键的并发 `Submit` 会等待第一次的结果而不是各自提交（等待者自己的
+  上下文超时返回可重试的 `timeout`）；只保留成功的结果，失败会释放该键并唤醒等待者重试，错误不被
+  缓存成成功。已完成条目有界保留：1 小时 TTL 加 10000 条上限，先完成先淘汰，进行中的条目不会被淘汰。
   这与 README 风险表「禁止自动重提」一致：适配器自己永远不会重发提交。
 - **`Status` 对「查无此任务」报 `failed` 而不是 `pending`。** ComfyUI 的 history 存在内存里，
   服务重启后任务凭空消失；报 pending 会让调用方永远等一个不存在的任务，因此返回 failed 并在

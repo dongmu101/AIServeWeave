@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -393,5 +394,31 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncDir(dir)
+}
+
+// syncDir fsyncs dir so the rename that just replaced the token file survives
+// a crash or power loss: without it a consumed token could reappear as unused
+// after a reboot. Windows cannot fsync a directory handle, and the rename
+// there is already journaled by NTFS, so it is skipped.
+//
+// syncDir 对目录 fsync，使刚刚替换令牌文件的 rename 能挺过崩溃或掉电：否则已消耗的令牌
+// 在重启后可能又变回未使用。Windows 不能对目录句柄 fsync，且 NTFS 已对该 rename 记日志，
+// 因此跳过。
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		d.Close()
+		return err
+	}
+	return d.Close()
 }

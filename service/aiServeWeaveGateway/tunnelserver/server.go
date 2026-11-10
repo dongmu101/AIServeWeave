@@ -24,6 +24,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
@@ -107,6 +108,15 @@ type Server struct {
 
 	mu    sync.RWMutex
 	nodes map[string]*node
+	// nodeList is an immutable copy of nodes' values, republished (under mu)
+	// every time an entry is added or dropped, so the scheduler's per-request
+	// walk (SchedNodes) never takes mu or copies the map. Entries change on
+	// connect and disconnect only, far less often than requests arrive.
+	//
+	// nodeList 是 nodes 取值的不可变拷贝，每次增删条目时（在 mu 下）重新发布，使调度器
+	// 每请求一次的遍历（SchedNodes）既不用拿 mu，也不用复制 map。条目只在连接与断开时
+	// 变化，远比请求到达的频率低。
+	nodeList atomic.Pointer[[]*node]
 
 	// roster is the last roster handed to SetRoster, relayed to every Agent
 	// on connect and re-broadcast on change. The Registry authors it; this
@@ -278,6 +288,7 @@ func (s *Server) node(id string) (*node, error) {
 	if !ok {
 		n = newNode(id, s)
 		s.nodes[id] = n
+		s.publishNodesLocked()
 	}
 	return n, nil
 }
@@ -298,7 +309,20 @@ func (s *Server) forget(n *node) {
 	defer s.mu.Unlock()
 	if cur, ok := s.nodes[n.id]; ok && cur == n && n.isEmpty() {
 		delete(s.nodes, n.id)
+		s.publishNodesLocked()
 	}
+}
+
+// publishNodesLocked republishes nodeList from nodes. The caller holds s.mu
+// for writing.
+//
+// publishNodesLocked 依据 nodes 重新发布 nodeList。调用方须持有 s.mu 的写锁。
+func (s *Server) publishNodesLocked() {
+	list := make([]*node, 0, len(s.nodes))
+	for _, n := range s.nodes {
+		list = append(list, n)
+	}
+	s.nodeList.Store(&list)
 }
 
 // controlsChanged adjusts the connected-node count and republishes it. delta

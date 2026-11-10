@@ -701,9 +701,96 @@ func forwardStream[T any](sink ResponseSink, stream runtime.Stream[T], marshal f
 	}
 }
 
+// artifactUnknownSizeBuffer is the read buffer for an artifact whose length is
+// not declared: big enough that a typical image or short clip needs few
+// frames, small enough that an unknown-size small file does not pin a whole
+// MaxFrameBytes buffer. A longer body simply takes more frames.
+//
+// artifactUnknownSizeBuffer 是长度未声明的产物所用的读缓冲：足够大，典型图片或
+// 短视频不会拆出太多帧；又足够小，不会让一个未知大小的小文件占住整块
+// MaxFrameBytes 缓冲。更长的 body 只是多用几帧。
+const artifactUnknownSizeBuffer = 256 << 10
+
+// artifactBufferSize picks the read buffer length for an artifact: the
+// declared size when it is known (an image of a few dozen KB must not cost a
+// 4MiB allocation), artifactUnknownSizeBuffer when it is not, and never more
+// than maxFrame. maxFrame stays the hard bound on a frame, so this only ever
+// makes frames smaller than before, never larger.
+//
+// artifactBufferSize 为产物选择读缓冲长度：大小已知时取声明大小（几十 KB 的图片
+// 不该花掉 4MiB 的分配），未知时取 artifactUnknownSizeBuffer，且绝不超过
+// maxFrame。maxFrame 仍是单帧的硬上限，因此这里只会让帧比以前更小，不会更大。
+func artifactBufferSize(size int64, maxFrame int) int {
+	want := artifactUnknownSizeBuffer
+	if size > 0 {
+		want = int(min(size, int64(maxFrame)))
+	}
+	return max(min(want, maxFrame), 1)
+}
+
+// Artifact read buffers are recycled across requests in power-of-four size
+// classes (16KiB, 64KiB, ..., 64MiB). Classes keep a buffer taken for a small
+// file from being handed to a large one: getArtifactBuffer returns a buffer of
+// the exact length asked for, cut from a class that is at least that big, so
+// the frame size is determined by artifactBufferSize and not by whichever
+// buffer happened to be in the pool. A request larger than the top class
+// allocates directly and is not pooled.
+//
+// 产物读缓冲按 4 的幂次大小分档（16KiB、64KiB、……、64MiB）跨请求复用。分档避免
+// 为小文件取出的缓冲被交给大文件：getArtifactBuffer 返回长度恰为所求的缓冲，
+// 取自不小于该长度的档位，因此帧大小由 artifactBufferSize 决定，而不取决于池里
+// 碰巧是哪块缓冲。超过最高档的请求直接分配，不进池。
+const (
+	artifactClassMinShift = 14
+	artifactClassCount    = 7
+)
+
+var artifactBufferPools [artifactClassCount]sync.Pool
+
+// artifactClass returns the smallest class holding n bytes, or -1 when n is
+// larger than the top class.
+func artifactClass(n int) int {
+	for k := range artifactClassCount {
+		if n <= 1<<(artifactClassMinShift+2*k) {
+			return k
+		}
+	}
+	return -1
+}
+
+// getArtifactBuffer returns a buffer of length n. pooled is non-nil when the
+// buffer came from (and should go back to) a pool; hand it to
+// putArtifactBuffer when the transfer ends.
+func getArtifactBuffer(n int) (pooled *[]byte, buf []byte) {
+	k := artifactClass(n)
+	if k < 0 {
+		return nil, make([]byte, n)
+	}
+	if v, ok := artifactBufferPools[k].Get().(*[]byte); ok {
+		return v, (*v)[:n]
+	}
+	full := make([]byte, 1<<(artifactClassMinShift+2*k))
+	return &full, full[:n]
+}
+
+// putArtifactBuffer returns a buffer taken from getArtifactBuffer. A nil
+// pooled (an unpooled oversize buffer) is a no-op.
+func putArtifactBuffer(pooled *[]byte) {
+	if pooled == nil {
+		return
+	}
+	artifactBufferPools[artifactClass(cap(*pooled))].Put(pooled)
+}
+
 // forwardArtifact streams an artifact body as ResponseHeaders followed by
-// fixed-size DataChunks. The body is never read into memory whole: a 500MB
-// artifact must cost one buffer, not one allocation of its own size.
+// bounded DataChunks. The body is never read into memory whole: a 500MB
+// artifact must cost one buffer, not one allocation of its own size, and a
+// small artifact must not cost a full-frame buffer either (see
+// artifactBufferSize).
+//
+// forwardArtifact 把产物 body 作为 ResponseHeaders 加若干有上限的 DataChunk 流式
+// 转发。body 绝不整体读入内存：500MB 的产物只该花一块缓冲，而不是自身大小的一次
+// 分配；小产物同样不该花掉一整帧大小的缓冲（见 artifactBufferSize）。
 func (d *Dispatcher) forwardArtifact(ctx context.Context, sink ResponseSink, id string, artifact runtime.Artifact) error {
 	if artifact.Body != nil {
 		defer func() { _ = artifact.Body.Close() }()
@@ -716,7 +803,8 @@ func (d *Dispatcher) forwardArtifact(ctx context.Context, sink ResponseSink, id 
 		return nil
 	}
 
-	buf := make([]byte, d.cfg.MaxFrameBytes)
+	pooled, buf := getArtifactBuffer(artifactBufferSize(artifact.Size, d.cfg.MaxFrameBytes))
+	defer putArtifactBuffer(pooled)
 	committed := false
 	for {
 		if err := ctx.Err(); err != nil {

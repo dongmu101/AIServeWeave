@@ -7,7 +7,9 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/protobuf/types/known/durationpb"
@@ -138,6 +140,64 @@ type node struct {
 	// that is already open, not just against the next handshake attempt.
 	revoked     chan struct{}
 	revokedOnce sync.Once
+
+	// static is the immutable part of this node's scheduling view: what the
+	// Hello declared and the runtime inventory sorted by runtime_id. It is
+	// replaced, never edited, by publishStaticLocked whenever one of its
+	// sources changes (under mu), so a reader can use it without mu and
+	// without copying. Everything that moves per request — idle slots,
+	// in-flight count, liveness, drain and maintenance flags — stays under
+	// mu and is read fresh each time. See schedview.go.
+	//
+	// static 是该节点调度视图中不可变的部分：Hello 所声明的内容，以及按 runtime_id 排序
+	// 的运行时清单。其来源之一变化时，publishStaticLocked 会（在 mu 下）整份替换而绝不
+	// 原地修改，因此读者无需持有 mu、也无需拷贝。每请求都在变的部分——空闲槽、在途数、
+	// 存活、draining 与 maintenance 标志——仍然受 mu 保护并每次实时读取。见 schedview.go。
+	static atomic.Pointer[nodeStatic]
+}
+
+// nodeStatic is the value node.static holds. Nothing reachable from it is
+// ever mutated after publication.
+//
+// nodeStatic 是 node.static 持有的值。发布之后，从它可达的任何内容都不会再被修改。
+type nodeStatic struct {
+	resources *tunnelv1.NodeResources
+	labels    map[string]string
+	runtimes  []runtime.Snapshot
+}
+
+// publishStaticLocked rebuilds and publishes n.static from the node's
+// current fields. The caller holds n.mu. labels and resources are only ever
+// replaced wholesale (Control's Hello handling), never edited in place,
+// which is what makes sharing them safe.
+//
+// publishStaticLocked 依据节点当前字段重建并发布 n.static。调用方须持有 n.mu。labels
+// 与 resources 只会被整份替换（Control 的 Hello 处理），从不原地修改，这正是共享它们
+// 安全的原因。
+func (n *node) publishStaticLocked() {
+	runtimes := make([]runtime.Snapshot, 0, len(n.snapshots))
+	for _, snap := range n.snapshots {
+		runtimes = append(runtimes, snap)
+	}
+	slices.SortFunc(runtimes, func(a, b runtime.Snapshot) int {
+		return strings.Compare(a.Descriptor.ID, b.Descriptor.ID)
+	})
+	n.static.Store(&nodeStatic{resources: n.resources, labels: n.labels, runtimes: runtimes})
+}
+
+// liveLocked reports whether the node is live at now. The caller holds n.mu.
+//
+// A node with no Control stream is not live no matter how recent its last
+// heartbeat was: without Control there is nothing to send it a roster or a
+// shutdown, and its slots are about to follow.
+//
+// liveLocked 报告节点在 now 时刻是否存活。调用方须持有 n.mu。
+//
+// 没有 Control 流的节点，无论最近一次心跳多新，都不算存活：没有 Control 就无法向它下发
+// 名册或 shutdown，它的槽位也即将随之消失。
+func (n *node) liveLocked(now time.Time, heartbeatTimeout time.Duration) bool {
+	return len(n.controls) > 0 && !n.draining &&
+		!n.lastHeartbeat.IsZero() && now.Sub(n.lastHeartbeat) <= heartbeatTimeout
 }
 
 func newNode(id string, srv *Server) *node {
@@ -394,13 +454,13 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 	n.mu.Lock()
 	defer n.mu.Unlock()
 
-	runtimes := make([]runtime.Snapshot, 0, len(n.snapshots))
-	for _, snap := range n.snapshots {
-		runtimes = append(runtimes, snap)
+	var runtimes []runtime.Snapshot
+	if st := n.static.Load(); st != nil {
+		runtimes = slices.Clone(st.runtimes)
 	}
-	sort.Slice(runtimes, func(i, j int) bool {
-		return runtimes[i].Descriptor.ID < runtimes[j].Descriptor.ID
-	})
+	if runtimes == nil {
+		runtimes = []runtime.Snapshot{}
+	}
 
 	idle := make(map[tunnelv1.SlotClass]int, len(n.idle))
 	for class, slots := range n.idle {
@@ -408,12 +468,6 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 			idle[class] = len(slots)
 		}
 	}
-
-	// A node with no Control stream is not live no matter how recent its
-	// last heartbeat was: without Control there is nothing to send it a
-	// roster or a shutdown, and its slots are about to follow.
-	live := len(n.controls) > 0 && !n.draining &&
-		!n.lastHeartbeat.IsZero() && now.Sub(n.lastHeartbeat) <= heartbeatTimeout
 
 	return NodeInfo{
 		NodeID:           n.id,
@@ -427,7 +481,7 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		LastHeartbeat:    n.lastHeartbeat,
 		Draining:         n.draining,
 		Maintenance:      n.maintenance,
-		Live:             live,
+		Live:             n.liveLocked(now, heartbeatTimeout),
 		CLIUsage:         cloneCLIUsage(n.cliUsage),
 	}
 }
@@ -495,6 +549,7 @@ func (n *node) applyStatus(status *tunnelv1.RuntimeStatus, snaps []runtime.Snaps
 	for _, snap := range snaps {
 		n.snapshots[snap.Descriptor.ID] = snap
 	}
+	n.publishStaticLocked()
 }
 
 // applyModelPullReport replaces the node's model pull status wholesale with

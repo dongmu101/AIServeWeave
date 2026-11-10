@@ -55,9 +55,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -158,19 +161,56 @@ type record struct {
 // reason to make it world-readable either.
 const fileMode = 0o600
 
-// Store is the on-disk, mutex-guarded node-identity ledger. The zero value is
-// not usable; construct one with Open.
+// snapshot is one immutable generation of the ledger. Once published through
+// Store.snap it is never modified, so readers use it without any lock.
+//
+// snapshot 是账本的一个不可变世代。经 Store.snap 发布后就不再被修改，读者无需加锁即可使用。
+type snapshot struct {
+	records map[string]record
+}
+
+// Store is the on-disk node-identity ledger. The zero value is not usable;
+// construct one with Open.
+//
+// Writers are serialized by wmu and follow copy, mutate, persist, publish: the
+// change is applied to a private copy of the current snapshot, the copy is
+// written to disk, and only after the write succeeds is it published through
+// snap. A failed write therefore never advances the in-memory state, and
+// readers (IsDisabled, IsApproved, HasRecord, States, ...) read the published
+// snapshot without taking wmu, so they never wait on an fsync. Reserve, Set and
+// the other writers still re-check the record they act on inside the wmu
+// critical section, against the latest published snapshot, which is what keeps
+// ErrDisabled airtight against a concurrent Disable.
+//
+// Store 是落盘的节点身份账本。零值不可用，须通过 Open 构造。
+//
+// 写者由 wmu 串行化，遵循「复制、修改、落盘、发布」：变更先作用在当前快照的私有副本上，
+// 副本写盘成功后才通过 snap 发布。因此写盘失败绝不会让内存状态前进；读者（IsDisabled、
+// IsApproved、HasRecord、States 等）不取 wmu，直接读已发布的快照，不会等待 fsync。
+// Reserve、Set 等写者仍在 wmu 临界区内、基于最新发布的快照复核它们所作用的记录，
+// 这正是 ErrDisabled 能与并发的 Disable 严丝合缝的原因。
 type Store struct {
 	path string
 
-	mu      sync.Mutex
-	records map[string]*record
+	// writeFile persists data; tests replace it through export_test.go to
+	// block or fail a write.
+	// writeFile 负责落盘；测试通过 export_test.go 替换它来阻塞或使写入失败。
+	writeFile func(path string, data []byte, mode os.FileMode) error
+
+	wmu  sync.Mutex // serializes writers / 串行化写者
+	snap atomic.Pointer[snapshot]
 }
+
+// load returns the latest published snapshot.
+// load 返回最新发布的快照。
+func (s *Store) load() map[string]record { return s.snap.Load().records }
 
 // Open loads path if it exists, or starts empty if it does not. path's
 // parent directory is created if it does not exist.
 func Open(path string) (*Store, error) {
-	s := &Store{path: path, records: make(map[string]*record)}
+	s := &Store{path: path, writeFile: writeFileAtomic}
+	records := make(map[string]record)
+	s.snap.Store(&snapshot{records: records})
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return nil, fmt.Errorf("identitystore: cannot create %s: %w", filepath.Dir(path), err)
 	}
@@ -201,7 +241,7 @@ func Open(path string) (*Store, error) {
 		if presence[i].Approved == nil {
 			r.Approved = !r.PendingApproval
 		}
-		s.records[r.NodeID] = r
+		records[r.NodeID] = *r
 	}
 	return s, nil
 }
@@ -234,42 +274,40 @@ func Open(path string) (*Store, error) {
 // 调用那一刻已被禁用的 node_id 返回 ErrDisabled，账本保持不变；已有记录上的
 // 其他标记一律保留。
 func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if ok && r.Disabled {
-		return 0, ErrDisabled
-	}
-	if !ok {
-		s.records[nodeID] = &record{
-			NodeID: nodeID, Fingerprint: fingerprint, FirstSeenAt: now, LastSeenAt: now, Approved: true,
+	var outcome Outcome
+	err := s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
+		if ok && r.Disabled {
+			return false, ErrDisabled
 		}
-		if err := s.persistLocked(); err != nil {
-			delete(s.records, nodeID)
-			return 0, err
+		if !ok {
+			next[nodeID] = record{
+				NodeID: nodeID, Fingerprint: fingerprint, FirstSeenAt: now, LastSeenAt: now, Approved: true,
+			}
+			outcome = OutcomeNew
+			return true, nil
 		}
-		return OutcomeNew, nil
-	}
-	if r.Fingerprint != "" && r.Fingerprint != fingerprint {
-		return OutcomeConflict, nil
-	}
-	outcome := OutcomeMatch
-	if r.Fingerprint == "" {
-		outcome = OutcomeNew
-	}
-	// A certificate is being issued, so the node_id is approved and no longer
-	// pending — including a pending mark a RecordPending racing ApproveNode
-	// left on an already approved record.
-	// 证书即将签发，node_id 因此已批准、不再待审批——包括 RecordPending 与
-	// ApproveNode 竞争时留在已批准记录上的待审批标记。
-	prev := *r
-	r.Fingerprint = fingerprint
-	r.LastSeenAt = now
-	r.Approved = true
-	r.PendingApproval = false
-	if err := s.persistLocked(); err != nil {
-		*r = prev
+		if r.Fingerprint != "" && r.Fingerprint != fingerprint {
+			outcome = OutcomeConflict
+			return false, nil
+		}
+		outcome = OutcomeMatch
+		if r.Fingerprint == "" {
+			outcome = OutcomeNew
+		}
+		// A certificate is being issued, so the node_id is approved and no longer
+		// pending — including a pending mark a RecordPending racing ApproveNode
+		// left on an already approved record.
+		// 证书即将签发，node_id 因此已批准、不再待审批——包括 RecordPending 与
+		// ApproveNode 竞争时留在已批准记录上的待审批标记。
+		r.Fingerprint = fingerprint
+		r.LastSeenAt = now
+		r.Approved = true
+		r.PendingApproval = false
+		next[nodeID] = r
+		return true, nil
+	})
+	if err != nil {
 		return 0, err
 	}
 	return outcome, nil
@@ -297,40 +335,28 @@ func (s *Store) Reserve(nodeID, fingerprint string, now time.Time) (Outcome, err
 // 标记为已批准、不再待审批。调用那一刻已被禁用的 node_id 返回 ErrDisabled，
 // 账本保持不变——与 DisableNode 竞争的续期因此抹不掉那次禁用。
 func (s *Store) Set(nodeID, fingerprint string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if ok && r.Disabled {
-		return ErrDisabled
-	}
-	if !ok {
-		r = &record{NodeID: nodeID, FirstSeenAt: now}
-		s.records[nodeID] = r
-	}
-	prev := *r
-	r.Fingerprint = fingerprint
-	r.LastSeenAt = now
-	r.Approved = true
-	r.PendingApproval = false
-	if err := s.persistLocked(); err != nil {
-		if ok {
-			*r = prev
-		} else {
-			delete(s.records, nodeID)
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
+		if ok && r.Disabled {
+			return false, ErrDisabled
 		}
-		return err
-	}
-	return nil
+		if !ok {
+			r = record{NodeID: nodeID, FirstSeenAt: now}
+		}
+		r.Fingerprint = fingerprint
+		r.LastSeenAt = now
+		r.Approved = true
+		r.PendingApproval = false
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // IsDisabled reports whether nodeID is currently disabled (STATUS.md's S03).
 // A node_id with no record at all is not disabled — Disable always creates
 // one, so the absence of a record means nobody ever disabled this node_id.
 func (s *Store) IsDisabled(nodeID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.records[nodeID]
+	r, ok := s.load()[nodeID]
 	return ok && r.Disabled
 }
 
@@ -340,26 +366,16 @@ func (s *Store) IsDisabled(nodeID string) bool {
 // It is idempotent: disabling an already-disabled node_id succeeds without
 // changing anything observable.
 func (s *Store) Disable(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if !ok {
-		r = &record{NodeID: nodeID, FirstSeenAt: now}
-		s.records[nodeID] = r
-	}
-	prevDisabled, prevSeen := r.Disabled, r.LastSeenAt
-	r.Disabled = true
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
 		if !ok {
-			delete(s.records, nodeID)
-		} else {
-			r.Disabled, r.LastSeenAt = prevDisabled, prevSeen
+			r = record{NodeID: nodeID, FirstSeenAt: now}
 		}
-		return err
-	}
-	return nil
+		r.Disabled = true
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // Enable clears a prior Disable, and a prior Delete with it, so the node_id
@@ -371,21 +387,16 @@ func (s *Store) Disable(nodeID string, now time.Time) error {
 // node_id。启用一个当前未被禁用的 node_id（包括完全没有记录的）不是错误——两者
 // 都已经保证该 node_id 没有被吊销。
 func (s *Store) Enable(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if !ok || !r.Disabled {
-		return nil
-	}
-	prevSeen, prevDeleted := r.LastSeenAt, r.Deleted
-	r.Disabled, r.Deleted = false, false
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
-		r.Disabled, r.Deleted, r.LastSeenAt = true, prevDeleted, prevSeen
-		return err
-	}
-	return nil
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
+		if !ok || !r.Disabled {
+			return false, nil
+		}
+		r.Disabled, r.Deleted = false, false
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // Delete disables nodeID and hides it from States, creating a record for it
@@ -400,30 +411,20 @@ func (s *Store) Enable(nodeID string, now time.Time) error {
 // node_id 既不在等待运维，也不再接活。删除一个已删除的 node_id 会成功，且不改变
 // 任何可观察的状态。
 func (s *Store) Delete(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if ok && r.Deleted {
-		return nil
-	}
-	if !ok {
-		r = &record{NodeID: nodeID, FirstSeenAt: now}
-		s.records[nodeID] = r
-	}
-	prev := *r
-	r.Disabled, r.Deleted = true, true
-	r.PendingApproval, r.Maintenance = false, false
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
-		if ok {
-			*r = prev
-		} else {
-			delete(s.records, nodeID)
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
+		if ok && r.Deleted {
+			return false, nil
 		}
-		return err
-	}
-	return nil
+		if !ok {
+			r = record{NodeID: nodeID, FirstSeenAt: now}
+		}
+		r.Disabled, r.Deleted = true, true
+		r.PendingApproval, r.Maintenance = false, false
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // DisabledNodeIDs returns every currently disabled node_id, in no particular
@@ -431,10 +432,8 @@ func (s *Store) Delete(nodeID string, now time.Time) error {
 // before the first GatewayRoster broadcast, so a Gateway replica that joins
 // right after a restart still learns about nodes disabled in a prior run.
 func (s *Store) DisabledNodeIDs() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ids := make([]string, 0)
-	for id, r := range s.records {
+	for id, r := range s.load() {
 		if r.Disabled {
 			ids = append(ids, id)
 		}
@@ -449,9 +448,7 @@ func (s *Store) DisabledNodeIDs() []string {
 // IsPending 报告 nodeID 是否尝试过注册、正在等待运维批准（STATUS.md 的 P01）。
 // 它描述的是 ListNodeStates 展示的那个队列；Register 能否签发由 IsApproved 回答。
 func (s *Store) IsPending(nodeID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.records[nodeID]
+	r, ok := s.load()[nodeID]
 	return ok && r.PendingApproval
 }
 
@@ -462,9 +459,7 @@ func (s *Store) IsPending(nodeID string) bool {
 // HasRecord 报告 nodeID 在账本里是否有任何条目。有条目并不意味着已批准——
 // Disable 与 SetMaintenance 同样会建记录；Register 改问 IsApproved。
 func (s *Store) HasRecord(nodeID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	_, ok := s.records[nodeID]
+	_, ok := s.load()[nodeID]
 	return ok
 }
 
@@ -475,9 +470,7 @@ func (s *Store) HasRecord(nodeID string) bool {
 // IsApproved 报告在未绑定引导令牌下 Register 能否为 nodeID 签发（STATUS.md 的
 // P01）：运维批准过它，或它已经被签发过证书。没有记录的 node_id 视为未批准。
 func (s *Store) IsApproved(nodeID string) bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	r, ok := s.records[nodeID]
+	r, ok := s.load()[nodeID]
 	return ok && r.Approved
 }
 
@@ -492,32 +485,22 @@ func (s *Store) IsApproved(nodeID string) bool {
 // independent facets Register's caller already checks before ever reaching
 // the approval gate.
 func (s *Store) RecordPending(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if ok && r.Approved {
-		// ApproveNode won a race with the caller's IsApproved check; marking
-		// the record pending now would contradict the approval.
-		// ApproveNode 抢在了调用方的 IsApproved 检查之后；此时再标记待审批会与批准矛盾。
-		return nil
-	}
-	if !ok {
-		r = &record{NodeID: nodeID, FirstSeenAt: now}
-		s.records[nodeID] = r
-	}
-	prevPending, prevSeen := r.PendingApproval, r.LastSeenAt
-	r.PendingApproval = true
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
-		if !ok {
-			delete(s.records, nodeID)
-		} else {
-			r.PendingApproval, r.LastSeenAt = prevPending, prevSeen
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
+		if ok && r.Approved {
+			// ApproveNode won a race with the caller's IsApproved check; marking
+			// the record pending now would contradict the approval.
+			// ApproveNode 抢在了调用方的 IsApproved 检查之后；此时再标记待审批会与批准矛盾。
+			return false, nil
 		}
-		return err
-	}
-	return nil
+		if !ok {
+			r = record{NodeID: nodeID, FirstSeenAt: now}
+		}
+		r.PendingApproval = true
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // Approve clears nodeID's pending-approval mark, creating a record for it if
@@ -526,83 +509,56 @@ func (s *Store) RecordPending(nodeID string, now time.Time) error {
 // Approving a node_id that is not currently pending, including one with no
 // record at all, is not an error.
 func (s *Store) Approve(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if !ok {
-		r = &record{NodeID: nodeID, FirstSeenAt: now}
-		s.records[nodeID] = r
-	}
-	prevPending, prevApproved, prevSeen := r.PendingApproval, r.Approved, r.LastSeenAt
-	r.PendingApproval = false
-	r.Approved = true
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
 		if !ok {
-			delete(s.records, nodeID)
-		} else {
-			r.PendingApproval, r.Approved, r.LastSeenAt = prevPending, prevApproved, prevSeen
+			r = record{NodeID: nodeID, FirstSeenAt: now}
 		}
-		return err
-	}
-	return nil
+		r.PendingApproval = false
+		r.Approved = true
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // SetMaintenance marks nodeID under operator-forced maintenance
 // (STATUS.md's P01), creating a record for it if none exists yet. Setting
 // maintenance on a node_id that is already under it is not an error.
 func (s *Store) SetMaintenance(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if !ok {
-		r = &record{NodeID: nodeID, FirstSeenAt: now}
-		s.records[nodeID] = r
-	}
-	prevMaintenance, prevSeen := r.Maintenance, r.LastSeenAt
-	r.Maintenance = true
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
 		if !ok {
-			delete(s.records, nodeID)
-		} else {
-			r.Maintenance, r.LastSeenAt = prevMaintenance, prevSeen
+			r = record{NodeID: nodeID, FirstSeenAt: now}
 		}
-		return err
-	}
-	return nil
+		r.Maintenance = true
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // ClearMaintenance clears a prior SetMaintenance. Clearing maintenance on a
 // node_id that is not currently under it, including one with no record at
 // all, is not an error.
 func (s *Store) ClearMaintenance(nodeID string, now time.Time) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	r, ok := s.records[nodeID]
-	if !ok || !r.Maintenance {
-		return nil
-	}
-	prevSeen := r.LastSeenAt
-	r.Maintenance = false
-	r.LastSeenAt = now
-	if err := s.persistLocked(); err != nil {
-		r.Maintenance, r.LastSeenAt = true, prevSeen
-		return err
-	}
-	return nil
+	return s.update(func(next map[string]record) (bool, error) {
+		r, ok := next[nodeID]
+		if !ok || !r.Maintenance {
+			return false, nil
+		}
+		r.Maintenance = false
+		r.LastSeenAt = now
+		next[nodeID] = r
+		return true, nil
+	})
 }
 
 // MaintenanceNodeIDs returns every node_id currently under maintenance, in no
 // particular order, the same way DisabledNodeIDs does for disabled node_ids.
 func (s *Store) MaintenanceNodeIDs() []string {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	ids := make([]string, 0)
-	for id, r := range s.records {
+	for id, r := range s.load() {
 		if r.Maintenance {
 			ids = append(ids, id)
 		}
@@ -632,10 +588,9 @@ type State struct {
 //
 // States 返回账本里有记录的每一个 node_id（顺序不定），运维已删除的除外。
 func (s *Store) States() []State {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	states := make([]State, 0, len(s.records))
-	for _, r := range s.records {
+	records := s.load()
+	states := make([]State, 0, len(records))
+	for _, r := range records {
 		if r.Deleted {
 			continue // revoked but hidden / 仍吊销，但不再列出
 		}
@@ -652,18 +607,46 @@ func (s *Store) States() []State {
 	return states
 }
 
-// persistLocked writes every record to s.path atomically. Callers must hold
-// s.mu.
-func (s *Store) persistLocked() error {
-	recs := make([]*record, 0, len(s.records))
-	for _, r := range s.records {
+// update is the single write path. It serializes writers on wmu, hands mutate a
+// private copy of the latest published snapshot, and, if mutate reports a
+// change, writes the copy to disk and only then publishes it. mutate must only
+// touch the map it is given. If mutate returns an error, or persisting fails,
+// nothing is published, so the in-memory ledger never gets ahead of the file.
+//
+// update 是唯一的写路径。它在 wmu 上串行化写者，把最新发布快照的私有副本交给 mutate；
+// 若 mutate 报告有变更，先把副本写盘，成功后才发布。mutate 只能改动交给它的这张 map。
+// mutate 返回错误或落盘失败时都不会发布任何东西，内存账本因此不会领先于文件。
+func (s *Store) update(mutate func(next map[string]record) (changed bool, err error)) error {
+	s.wmu.Lock()
+	defer s.wmu.Unlock()
+
+	next := maps.Clone(s.load())
+	changed, err := mutate(next)
+	if err != nil || !changed {
+		return err
+	}
+	if err := s.persist(next); err != nil {
+		return err
+	}
+	s.snap.Store(&snapshot{records: next})
+	return nil
+}
+
+// persist writes every record to s.path atomically. It touches no Store state
+// and needs no lock; update calls it with wmu held so writes never interleave.
+//
+// persist 把所有记录原子地写入 s.path。它不触碰 Store 状态、无需加锁；update 在持有
+// wmu 时调用它，写入因此不会交错。
+func (s *Store) persist(records map[string]record) error {
+	recs := make([]record, 0, len(records))
+	for _, r := range records {
 		recs = append(recs, r)
 	}
 	data, err := json.MarshalIndent(recs, "", "  ")
 	if err != nil {
 		return fmt.Errorf("identitystore: cannot encode identity file: %w", err)
 	}
-	return writeFileAtomic(s.path, data, fileMode)
+	return s.writeFile(s.path, data, fileMode)
 }
 
 // Fingerprint returns a stable, opaque identifier for pub: the hex-encoded
@@ -712,5 +695,32 @@ func writeFileAtomic(path string, data []byte, mode os.FileMode) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(tmpName, path)
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return syncDir(dir)
+}
+
+// syncDir fsyncs dir so the rename that just replaced the ledger file survives
+// a crash or power loss: without it the new directory entry may still be only
+// in the page cache and the file can revert to its previous contents on reboot.
+// Windows cannot fsync a directory handle, and the rename there is already
+// journaled by NTFS, so it is skipped.
+//
+// syncDir 对目录 fsync，使刚刚替换账本文件的 rename 能挺过崩溃或掉电：否则新的目录项
+// 可能仍只在页缓存里，重启后文件会退回到旧内容。Windows 不能对目录句柄 fsync，且 NTFS
+// 已对该 rename 记日志，因此跳过。
+func syncDir(dir string) error {
+	if runtime.GOOS == "windows" {
+		return nil
+	}
+	d, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := d.Sync(); err != nil {
+		d.Close()
+		return err
+	}
+	return d.Close()
 }

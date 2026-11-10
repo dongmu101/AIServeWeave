@@ -346,6 +346,13 @@ type Config struct {
 	// ImagesGenerationTimeout 限定 imagesGenerations 整个同步的「提交到终态」
 	// 循环。为零时采用 DefaultImagesGenerationTimeout。
 	ImagesGenerationTimeout time.Duration
+	// WriteStallTimeout bounds how long one write or flush to a client may
+	// block. Zero uses DefaultWriteStallTimeout; a negative value disables
+	// the bound. See writedeadline.go.
+	//
+	// WriteStallTimeout 限定对客户端的单次写出或 flush 最多能阻塞多久。为零时采用
+	// DefaultWriteStallTimeout；为负时不设上限。见 writedeadline.go。
+	WriteStallTimeout time.Duration
 
 	// ResponsesClient persists and continues Responses API turns opted into
 	// store:true or previous_response_id (STATUS.md's P2 "Responses 持久
@@ -402,6 +409,10 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	imagesGenerationTimeout := cfg.ImagesGenerationTimeout
 	if imagesGenerationTimeout <= 0 {
 		imagesGenerationTimeout = DefaultImagesGenerationTimeout
+	}
+	writeStallTimeout := cfg.WriteStallTimeout
+	if writeStallTimeout == 0 {
+		writeStallTimeout = DefaultWriteStallTimeout
 	}
 
 	h := &handlers{
@@ -612,7 +623,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
 	return &Server{
-		Handler:           withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux)))))),
+		Handler:           withWriteDeadline(writeStallTimeout, withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))))),
 		handlers:          h,
 		syncer:            syncer,
 		persister:         persister,
@@ -877,6 +888,14 @@ func (w *statusWriter) Flush() {
 		f.Flush()
 	}
 }
+
+// Unwrap lets http.ResponseController reach the connection beneath, so
+// write deadlines and other per-connection controls work through this
+// wrapper.
+//
+// Unwrap 让 http.ResponseController 能够触及下层连接，使写超时等按连接的控制
+// 在穿过这层包装后依然有效。
+func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func newRequestID() string {
 	var b [16]byte

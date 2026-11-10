@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"hash"
 	"hash/fnv"
-	"sort"
+	"slices"
 
 	"AIServeWeave/common/runtime"
 )
@@ -136,6 +136,63 @@ func lessLoaded(a, b scored) bool {
 	return a.inflight < b.inflight
 }
 
+// stableSort sorts found in place by less, keeping the order of equal
+// elements, which is sort.SliceStable's contract without its reflection-based
+// swapper and its O(n log^2 n) merge steps; those dominated the cost of
+// ranking several hundred candidates on every request.
+//
+// It sorts a slice of indices instead of the (large) elements, breaking ties
+// on the index, which yields exactly the order a stable sort would, and then
+// applies that permutation to found in place. less receives pointers so a
+// comparison copies nothing.
+//
+// stableSort 按 less 原地对 found 排序，并保持相等元素的原有顺序。这是 sort.SliceStable
+// 的约定，却没有它基于反射的交换器与 O(n log^2 n) 的归并步骤——在每个请求都要给几百个
+// 候选排序时，那正是主要开销。
+//
+// 它对下标切片而不是（较大的）元素排序，并以下标打破平局，结果与稳定排序给出的顺序
+// 完全一致，随后把这一排列原地应用到 found 上。less 接收指针，使一次比较不复制任何东西。
+func stableSort(found []scored, less func(a, b *scored) bool) {
+	n := len(found)
+	if n < 2 {
+		return
+	}
+	idx := make([]int32, n)
+	for i := range idx {
+		idx[i] = int32(i)
+	}
+	slices.SortFunc(idx, func(i, j int32) int {
+		a, b := &found[i], &found[j]
+		switch {
+		case less(a, b):
+			return -1
+		case less(b, a):
+			return 1
+		}
+		return int(i - j)
+	})
+	// Apply the permutation (result[k] = old[idx[k]]) by following its
+	// cycles; idx[k] = k marks a position as placed.
+	// 沿排列的各个环应用该排列（result[k] = old[idx[k]]）；idx[k] = k 表示该位置已就位。
+	for start := range idx {
+		if int(idx[start]) == start {
+			continue
+		}
+		held := found[start]
+		k := start
+		for {
+			src := int(idx[k])
+			idx[k] = int32(k)
+			if src == start {
+				found[k] = held
+				break
+			}
+			found[k] = found[src]
+			k = src
+		}
+	}
+}
+
 // orderCandidates sorts found in place according to policy. intn supplies the
 // randomness PolicyPowerOfTwo needs, so tests can make it deterministic. An
 // unrecognized policy orders as PolicyLeastLoad; operator input should go
@@ -145,7 +202,7 @@ func lessLoaded(a, b scored) bool {
 // 以便测试使其确定。无法识别的策略按 PolicyLeastLoad 排序；运维输入应先经 ParsePolicy
 // 拒绝笔误，再到达这里。
 func orderCandidates(found []scored, policy Policy, key affinity, intn func(int) int) {
-	sort.SliceStable(found, func(i, j int) bool { return lessLoaded(found[i], found[j]) })
+	stableSort(found, func(a, b *scored) bool { return lessLoaded(*a, *b) })
 
 	switch policy {
 	case PolicyPowerOfTwo:
@@ -185,11 +242,11 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 		// 已满的候选只会回答背压、白白浪费一次尝试，所以偏好顺序只在此刻能接下请求的
 		// 候选之间成立。溢出顺序按 key 确定，一个热门前缀会依次填满它的节点，而不是
 		// 四处散开。
-		sort.SliceStable(found, func(i, j int) bool {
-			if (found[i].idle > 0) != (found[j].idle > 0) {
-				return found[i].idle > 0
+		stableSort(found, func(a, b *scored) bool {
+			if (a.idle > 0) != (b.idle > 0) {
+				return a.idle > 0
 			}
-			return ranks[found[i].Candidate] > ranks[found[j].Candidate]
+			return ranks[a.Candidate] > ranks[b.Candidate]
 		})
 	}
 }
