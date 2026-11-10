@@ -94,8 +94,8 @@ export const tenantEntries = [
   {
     "path": "/console/billing",
     "headings": {
-      "zh-CN": "计费",
-      "zh-TW": "計費",
+      "zh-CN": "购买",
+      "zh-TW": "購買",
       "en-US": "Billing",
       "ja-JP": "課金",
       "ko-KR": "결제",
@@ -371,8 +371,8 @@ export const operatorEntries = [
   {
     "path": "/operator/billing",
     "headings": {
-      "zh-CN": "计费",
-      "zh-TW": "計費",
+      "zh-CN": "购买",
+      "zh-TW": "購買",
       "en-US": "Billing",
       "ja-JP": "課金",
       "ko-KR": "결제",

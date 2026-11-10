@@ -577,7 +577,7 @@ const tenant = {
   "tenant.cliQuotaUnavailable": "CLI 未提供额度",
   "tenant.cliQuotaError": "额度查询失败",
   "tenant.cliQuotaMinutesWindow": "窗口时长：{minutes} 分钟",
-  "tenant.billing": "计费",
+  "tenant.billing": "购买",
   "tenant.billingDescription": "预充值点数余额、充值包与账目。API 请求按模型单价从余额扣除点数。",
   "tenant.billingDisabled": "计费未开启",
   "tenant.billingDisabledDescription": "本部署未启用预充值计费，API 请求不按点数扣费。",

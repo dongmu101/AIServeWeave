@@ -577,7 +577,7 @@ const tenant = {
   "tenant.cliQuotaUnavailable": "CLI 未提供額度",
   "tenant.cliQuotaError": "額度查詢失敗",
   "tenant.cliQuotaMinutesWindow": "視窗時長：{minutes} 分鐘",
-  "tenant.billing": "計費",
+  "tenant.billing": "購買",
   "tenant.billingDescription": "預儲值點數餘額、儲值方案與帳目。API 請求依模型單價從餘額扣除點數。",
   "tenant.billingDisabled": "計費未啟用",
   "tenant.billingDisabledDescription": "本部署未啟用預儲值計費，API 請求不依點數扣費。",

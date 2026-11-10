@@ -437,7 +437,7 @@ const operator = {
   "operator.discardModelAccessChanges": "放弃修改",
   "operator.modelAccessSaved": "模型授权已保存",
   "operator.clearModelAccessConfirm": "保存空列表会解除这一级的限制，确定继续吗？",
-  "operator.billing": "计费",
+  "operator.billing": "购买",
   "operator.billingDescription": "管理充值包、模型单价、商户计费模式与余额，查看全平台订单与账目。支付由控制面对接 Dodo Payments，Console 不持有支付凭据。",
   "operator.billingPrices": "模型单价",
   "operator.billingTenants": "商户",
