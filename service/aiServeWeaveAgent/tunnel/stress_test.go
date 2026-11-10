@@ -281,3 +281,84 @@ func TestStressAReplicaRefusingSlotsDoesNotSpin(t *testing.T) {
 		return s.Inference.Idle >= 1
 	})
 }
+
+// refuseInitialSlots starts f's pool against a replica that refuses every
+// Serve stream and waits until all three initial opens (two inference, one
+// bulk) have failed, been cleared, and the pool has armed its retry timer on
+// top of the reap tick.
+func refuseInitialSlots(t *testing.T, f *poolFixture, mx *tunneltest.Metrics) {
+	t.Helper()
+	f.gw.SetServeError(errors.New("tunneltest: no stream quota left"))
+	armed := f.clock.Armed()
+	f.start()
+	waitFailures(t, mx, 3)
+	f.waitStats("every refused slot to be cleared", func(s tunnel.PoolStats) bool {
+		return s.Inference.Total() == 0 && s.Bulk.Total() == 0
+	})
+	if !f.clock.WaitArmed(armed+2, testTimeout) {
+		t.Fatalf("armed timers = %d, want %d: no retry was scheduled for the end of the open pause", f.clock.Armed(), armed+2)
+	}
+}
+
+func waitFailures(t *testing.T, mx *tunneltest.Metrics, n float64) {
+	t.Helper()
+	deadline := time.Now().Add(testTimeout)
+	for mx.Sum(tunnel.MetricSlotAcquireFailuresTotal, nil) < n {
+		if time.Now().After(deadline) {
+			t.Fatalf("slot acquire failures = %v, want at least %v", mx.Sum(tunnel.MetricSlotAcquireFailuresTotal, nil), n)
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
+// TestPoolRetriesOpeningOnceTheOpenPauseEnds covers a replica that refused
+// Serve for a moment, as during a restart: once the open pause ends the pool
+// must refill on its own, not wait for the reap tick minutes later while the
+// node looks connected but cannot take a single request.
+func TestPoolRetriesOpeningOnceTheOpenPauseEnds(t *testing.T) {
+	mx := tunneltest.NewMetrics()
+	f := newPoolFixture(t, func(cfg *tunnel.PoolConfig) { cfg.Metrics = mx })
+	refuseInitialSlots(t, f, mx)
+
+	f.gw.SetServeError(nil)
+	f.clock.Advance(time.Second) // the first open pause, far short of the reap tick
+	f.acceptSlots(3)
+	f.waitStats("the pool to refill once the open pause ended", func(s tunnel.PoolStats) bool {
+		return s.Inference.Idle == 2 && s.Bulk.Idle == 1
+	})
+}
+
+// TestPoolOpenPauseGrowsWhileTheReplicaKeepsRefusing keeps a replica that
+// refuses every Serve stream from being retried every second by every node:
+// each round of failures doubles the pause.
+func TestPoolOpenPauseGrowsWhileTheReplicaKeepsRefusing(t *testing.T) {
+	mx := tunneltest.NewMetrics()
+	f := newPoolFixture(t, func(cfg *tunnel.PoolConfig) { cfg.Metrics = mx })
+	refuseInitialSlots(t, f, mx)
+
+	// The first pause ends; the retry round is refused too.
+	armed := f.clock.Armed()
+	f.clock.Advance(time.Second)
+	waitFailures(t, mx, 6)
+	f.waitStats("the second round of refused slots to be cleared", func(s tunnel.PoolStats) bool {
+		return s.Inference.Total() == 0 && s.Bulk.Total() == 0
+	})
+	if !f.clock.WaitArmed(armed+1, testTimeout) {
+		t.Fatalf("armed timers = %d, want %d: no retry was scheduled after the second round", f.clock.Armed(), armed+1)
+	}
+
+	// The second pause is two seconds: one second in, nothing opens yet,
+	// even though the replica would now accept.
+	f.gw.SetServeError(nil)
+	f.clock.Advance(time.Second)
+	time.Sleep(20 * time.Millisecond)
+	if s := f.pool.Stats(); s.Inference.Total() != 0 || s.Bulk.Total() != 0 {
+		t.Fatalf("slots opened one second into a two-second pause: inference=%+v bulk=%+v", s.Inference, s.Bulk)
+	}
+
+	f.clock.Advance(time.Second)
+	f.acceptSlots(3)
+	f.waitStats("the pool to refill once the longer pause ended", func(s tunnel.PoolStats) bool {
+		return s.Inference.Idle == 2 && s.Bulk.Idle == 1
+	})
+}

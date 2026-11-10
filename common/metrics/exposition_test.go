@@ -166,3 +166,12 @@ func TestHandler(t *testing.T) {
 		})
 	}
 }
+
+// TestServerBoundsIdleConnectionPhases keeps the scrape listener from being
+// held open by trickled headers or idle keep-alive connections.
+func TestServerBoundsIdleConnectionPhases(t *testing.T) {
+	srv := New().Server(":0")
+	if srv.ReadHeaderTimeout <= 0 || srv.IdleTimeout <= 0 {
+		t.Errorf("ReadHeaderTimeout = %v, IdleTimeout = %v; want both bounded", srv.ReadHeaderTimeout, srv.IdleTimeout)
+	}
+}

@@ -465,10 +465,13 @@ type eventStream struct {
 	promptID string
 	id       uint64
 
-	buf        chan runtime.WorkflowEvent
-	finishOnce sync.Once
-	dead       atomic.Bool
-	dropped    atomic.Int64
+	// mu orders deliver against finish: the buffer is closed exactly once,
+	// and never while a send to it may still be in flight.
+	mu       sync.Mutex
+	finished bool
+	buf      chan runtime.WorkflowEvent
+	dead     atomic.Bool
+	dropped  atomic.Int64
 }
 
 func newEventStream(mux *eventMux, promptID string, id uint64) *eventStream {
@@ -484,8 +487,24 @@ func newEventStream(mux *eventMux, promptID string, id uint64) *eventStream {
 }
 
 // deliver queues one event without ever blocking the multiplexer.
+//
+// The subscriber stays registered between its terminal event and the
+// caller's Close, so a queue status broadcast or a repeated terminal event
+// can still arrive after the buffer is closed; those are ignored rather
+// than sent on the closed channel.
 func (s *eventStream) deliver(event runtime.WorkflowEvent) {
 	if s.dead.Load() {
+		return
+	}
+	terminal := false
+	switch event.Type {
+	case runtime.WorkflowEventSucceeded, runtime.WorkflowEventFailed, runtime.WorkflowEventCancelled:
+		terminal = true
+	}
+
+	s.mu.Lock()
+	if s.finished {
+		s.mu.Unlock()
 		return
 	}
 	select {
@@ -496,19 +515,34 @@ func (s *eventStream) deliver(event runtime.WorkflowEvent) {
 		s.mux.logger.Warn("comfyui subscriber fell behind; dropping an event",
 			"runtime_id", s.mux.client.runtimeID, "run_id", s.promptID, "type", event.Type)
 	}
-
 	// A run only ends once, so the stream is closed after its terminal
 	// event instead of leaving callers to guess when to stop reading.
-	switch event.Type {
-	case runtime.WorkflowEventSucceeded, runtime.WorkflowEventFailed, runtime.WorkflowEventCancelled:
-		s.finish()
+	if terminal {
+		s.finishLocked()
+	}
+	s.mu.Unlock()
+
+	if terminal {
+		// Nothing more is queued for this run, so stop routing events to it
+		// now instead of waiting for the caller's Close.
+		s.mux.unsubscribe(s.promptID, s.id)
 	}
 }
 
 // finish signals that no further events will be queued. The pump drains
 // what is already buffered and then ends the stream normally.
 func (s *eventStream) finish() {
-	s.finishOnce.Do(func() { close(s.buf) })
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.finishLocked()
+}
+
+func (s *eventStream) finishLocked() {
+	if s.finished {
+		return
+	}
+	s.finished = true
+	close(s.buf)
 }
 
 func (s *eventStream) pump() {

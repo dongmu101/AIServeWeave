@@ -309,14 +309,6 @@ func TestClientFatalHandshakeFailures(t *testing.T) {
 			// speaking this protocol; dialling again cannot fix that.
 			wantCode: runtime.ErrorProtocol,
 		},
-		{
-			name: "gateway never answers Hello",
-			respond: func(f *clientFixture, sess *tunneltest.ControlSession) {
-				f.waitArmed(1) // the Hello deadline
-				f.advance(30*time.Second, 0)
-			},
-			wantCode: runtime.ErrorTimeout,
-		},
 	}
 
 	for _, tt := range tests {
@@ -372,6 +364,20 @@ func TestClientReconnectsAfterTransientFailures(t *testing.T) {
 			breakIt: func(f *clientFixture) {
 				sess := f.connect()
 				sess.Break(io.EOF)
+			},
+		},
+		{
+			// TCP and TLS succeeded, so a replica that does not answer Hello
+			// in time is most likely starting up or overloaded; another
+			// attempt can succeed, so this must not end the tunnel.
+			name: "replica never answers Hello",
+			breakIt: func(f *clientFixture) {
+				sess := f.accept()
+				if hello := f.recv(sess).GetHello(); hello == nil {
+					f.t.Fatal("the first frame was not Hello")
+				}
+				f.waitArmed(1) // the Hello deadline
+				f.advance(30*time.Second, 0)
 			},
 		},
 	}

@@ -498,6 +498,12 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选（续接仍不换节点）。
 - 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。冷却状态只在副本内存中，不跨副本共享：其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
 
+## 客户端连接超时（2026-11-10）
+
+前门与各运维监听器（`-admin-addr` 等）的 `http.Server` 都设置 `ReadHeaderTimeout` 10s 与 `IdleTimeout` 120s，缓慢发送请求头或空闲不关的 keep-alive 连接不再无限占用协程与文件描述符；指标监听器（`common/metrics`）同样设置。刻意不设 `WriteTimeout`，因为它限定整个响应，会切断长时间的流式生成。
+
+响应改为按次限定：前门对每一次写出与 flush 重新设置写截止时间（`httpapi.Config.WriteStallTimeout`，默认 `DefaultWriteStallTimeout` 60s，负值关闭，目前没有 CLI flag）。客户端保持连接却停止读取时，TCP 窗口填满后的那次写出超过该时长即失败，net/http 取消请求 context，处理函数返回并经隧道把 Cancel 送给 Agent，释放该请求占用的节点槽。chunk 之间的长停顿（模型思考）期间没有正在进行的写出，不受影响。默认测试覆盖不读取的慢客户端；真实负载均衡器后的表现尚未验收。
+
 ## 会话亲和
 
 `-session-affinity`（默认开启）让同一段对话持续落在同一个节点与运行时上——对本地 CLI 后端就是同一个账户，它的上游提示缓存已被这段对话预热。会话 key 依次取请求头 `X-Session-Id`、`Session_id`（Codex 发送）、`X-Claude-Code-Session-Id`（Claude Code 发送）、`Conversation_id`，再取请求体 `prompt_cache_key`，最后取 Anthropic 的 `metadata.user_id`；超过 512 字节的值忽略。Ollama 原生前门只看请求头。key 按租户限定（租户 ID 拼在前面），只以 FNV 哈希的形式进入调度器，不写日志。

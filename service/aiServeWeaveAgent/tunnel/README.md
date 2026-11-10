@@ -595,7 +595,7 @@ tunnel:
     heartbeat_failure_threshold: 3
 
   control:
-    hello_timeout: 10s          # 超时未收到 HelloAck 即判定为 failed
+    hello_timeout: 10s          # 超时未收到 HelloAck 即放弃本次连接，按退避重连
     drain_timeout: 30s          # 排空时等待在途请求的上限
     status_poll_interval: 2s    # 轮询 Manager.Snapshot 检测变更的周期
     status_full_interval: 60s   # 无变更时的全量对账周期
@@ -667,7 +667,7 @@ tunnel_cancel_total{node_id,replica_id,reason}
 - `tunnel_roster_version` 在副本间长期不一致，说明 Registry 到某个副本的名册推送有问题。
 - `request_id` 由 Gateway 生成并在每帧携带，Agent 转发给后端并出现在两侧全部日志中。日志还需带 `replica_id`，否则无法把用户报障对应到具体链路。
 - `tunnel_stream_first_event_seconds` 与 Gateway 侧端到端 TTFT 的差值，是判断"慢在隧道还是慢在模型"的核心手段。它只统计**渐进式响应**（事件流与产物体）的首帧；一问一答的操作首帧就是全部答案，混在一起两个分布都失去意义。
-- `tunnel_slot_acquire_failures_total` 非零说明副本接受了 Control 却拒绝 Serve（进程半死、流配额、代理故障）。Agent 在一次失败后暂停开槽 `slotOpenBackoff`，因此该计数器的斜率是有界的——它突然变陡意味着副本反复短暂恢复，而不是 Agent 在自旋。
+- `tunnel_slot_acquire_failures_total` 非零说明副本接受了 Control 却拒绝 Serve（进程半死、流配额、代理故障）。Agent 在一轮失败后暂停开槽，暂停从 `slotOpenBackoff`（1s）起每轮翻倍、上限 30s，因此该计数器的斜率是有界的——它突然变陡意味着副本反复短暂恢复，而不是 Agent 在自旋。
 
 **导出方式。** 这些指标由 `common/metrics` 的注册表接住，Agent 在 `-metrics-addr`（默认 `127.0.0.1:9091`，留空则关闭）上以 Prometheus 文本格式提供 `GET /metrics`。`Descriptions()` 是本包的目录——help 文本与直方图分桶跟指标常量写在同一个文件里，`main.go` 只负责把它交给 `metrics.New`。Agent 从不监听公网端口这条约束同样适用于这个端点，因此它默认只绑回环。
 
@@ -824,7 +824,7 @@ go test -race ./service/aiServeWeaveAgent/...
 - **`Transport` 与 `ControlStream` 两个窄接口把 gRPC 挡在状态机之外。** 生产实现是 `NewGRPCTransport`（mTLS + 20s/10s keepalive，取自「心跳」一节），测试用 `internal/tunneltest.Gateway` 的内存实现——因此整个阶段没有监听端口、没有 TLS 握手、没有真实网络，却仍然逐帧驱动真实的收发逻辑。阶段 4 给 `Transport` 加 `Serve` 方法即可，状态机不动。
 - **`Run` 的三种返回语义。** `nil` 表示 ctx 取消后已优雅排空；`ErrShutdownRequested` 表示副本主动请我们离开（正常终态，是否重连交给阶段 6 的名册决定，Client 自己绝不重拨）；`IsFatal(err)` 为真表示身份/协议层面的死结，进 `failed`。其余错误一律不外露，内部退避重连。阶段 2 的 `ErrIdentityFatal` 与本阶段的连接级致命错误合并成同一个 `ErrFatal`/`IsFatal`——状态机只需要一个判据，两个哨兵只会让调用方漏判其一。
 - **取消 ctx 触发排空而不是切流。** 流挂在 `context.WithoutCancel(ctx)` 上，Client 自己在排空结束后取消它。否则 SIGTERM 会让 `Draining` 帧发不出去，在途请求以连接错误告终——正是「优雅下线」要避免的。
-- **握手失败一律是致命的。** 首帧不是 `HelloAck`、`HelloTimeout` 内无应答、`Unauthenticated`/`PermissionDenied`/`Unimplemented`，都进 `failed` 不重连；`Unavailable`、流中断等传输问题才退避重试。README 只写了「Hello 失败/证书无效 → failed」，这里把它落成 gRPC 状态码的具体划分。
+- **握手失败按能否靠重拨修复划分。** 首帧不是 `HelloAck`、`Unauthenticated`/`PermissionDenied`/`Unimplemented` 进 `failed` 不重连；`Unavailable`、流中断等传输问题退避重试。`HelloTimeout` 内无应答也退避重试（2026-11-10 起）：TCP 与 TLS 已经成功，副本多半在启动、过载或停顿，下一次尝试可能成功；原先判为致命会让这条隧道等到名册变化才重建，单副本时整个 Agent 退出。README 只写了「Hello 失败/证书无效 → failed」，这里把它落成 gRPC 状态码的具体划分。
 - **心跳判死取"检查在发送之前"。** 每个心跳周期先看未被 ack 的心跳数是否已达阈值，达到就判死，否则发一帧并计数加一。默认 15s/3 次意味着最坏 60s 判死。收到 `HeartbeatAck` 清零并按回显的时间戳记录 RTT（`HeartbeatRTT()`，阶段 7 的 `tunnel_control_heartbeat_rtt_seconds` 直接取它），两侧都不需要信任对方的时钟。
 - **状态上报用轮询 + 物料指纹。** `runtime.Manager` 没有变更订阅，因此以 `StatusPollInterval`（默认 2s）轮询 `Snapshot()`；比较的是**清掉 `UpdatedAt`/`ProbedAt`/`CheckedAt`/`Latency` 之后**的确定性 proto 序列化结果——这些字段每次健康检查都在变，拿它们比较会让"变更触发上报"退化成刷屏。实例集合发生增减时一律发全量（子集表达不了"删除"），否则只发变化的那几个实例且 `full=false`；60s 的全量对账照常。
 - **配置下发的失败不打断隧道。** 白名单拒绝、Secret 解析失败、`Manager.Add` 报错都只写日志，随后照常发一帧**全量** `RuntimeStatus`——协议里没有 ack 帧，副本正是通过"这个实例没出现在报告里"观察到失败的。反过来，一个坏配置也不该让一条健康隧道掉线。
@@ -958,7 +958,7 @@ go test -race ./service/aiServeWeaveAgent/...
 - **握手前的 `replica_id` 记 `unknown`。** 从拨号到 `HelloAck` 之间隧道有状态要报但还不知道对端是谁。留空标签会让后端把它和其他系列混在一起，`unknown` 至少是个能被看见、基数为一的值。
 - **`tunnel_connection_state` 合并了两对状态。** `reconnecting` 记成 `connecting`（对看板而言都是"暂时没有可用链路，正在建"，重连本身有专门的计数器），`serving` 记成 `connected`（两者只差槽有没有 park，而那正是 `tunnel_slots_total` 在报的）。这样"2 就是这个副本可以派活"始终成立。README 的取值表补了 `5=failed`。
 - **TTFT 从 `RequestHeaders` 到达开始算。** 不是从处理器被调用开始：调度、取额度、建 deadline 都是 Agent 的账，藏在起点之前就等于把自己的开销从指标里减掉。
-- **槽开不出来时暂停 `slotOpenBackoff` 再试。** 接指标时发现的实际缺陷：副本接受 Control 却拒绝 Serve 时，`slot.run` 失败 → `slotFinished` → `poke` → 立刻再开，形成无退避的自旋，两侧都烧 CPU 且日志被同一行刷屏。现在一次失败后暂停开槽，重试落到维护 tick 的节奏上，任一槽 park 成功即清除。
+- **槽开不出来时暂停 `slotOpenBackoff` 再试。** 接指标时发现的实际缺陷：副本接受 Control 却拒绝 Serve 时，`slot.run` 失败 → `slotFinished` → `poke` → 立刻再开，形成无退避的自旋，两侧都烧 CPU 且日志被同一行刷屏。现在一轮失败后暂停开槽，暂停从 1s 起每轮翻倍、上限 30s；暂停结束时维护循环自行唤醒重试，任一槽 park 成功即清零。原先重试要等维护 tick（`IdleTimeout/2`，默认 2.5 分钟），期间节点显示已连接却没有任何可派发的槽（2026-11-10 修正）。
 - **被 reconcile 判死的槽从计数里摘掉（`poolReaping`）。** 关槽是异步的——要等槽自己的协程退栈才会从表里消失。在这个窗口里第二次 reconcile 会把它当成"还闲着的槽"再判死一个，把池子压到 `min_slots` 以下。压测下这是必然发生的，不是偶发。
 - **压测与故障注入进常规 `go test -race`，不是发布前的手工动作。** `stress_test.go` 用内存副本与假时钟回答阶段 7 里不需要真实 Gateway 的问题：槽数在饱和下收敛到上限并在负载消失后回到下限、额度耗尽时立即返回背压而不是排队、单副本死亡时其余链路的指标与在途请求不受影响。绝对延迟数字不在其中——那需要真实链路。
 - **Gateway 侧的隧道服务端落在 `service/aiServeWeaveGateway/tunnelserver`，节点表按 `node_id` 建、跨流共享。** Control 与每条 Serve 都是独立的 gRPC 流，到达顺序没有保证（槽可能比 Control 先重连），因此节点条目由两者共享，最后一条流走了才删除。`Nodes()` 报的 `IdleSlots` 是**服务端自己数的已 park 槽**，不是心跳里的 `idle_slots`——后者是 Agent 那一侧的快照，读到时已经过期，用它调度会把请求发给刚满的节点。

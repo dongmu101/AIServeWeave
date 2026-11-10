@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // ContentType is the media type of the exposition Render produces. It names
@@ -106,7 +107,17 @@ func (r *Registry) Handler() http.Handler {
 func (r *Registry) Server(addr string) *http.Server {
 	mux := http.NewServeMux()
 	mux.Handle("GET /metrics", r.Handler())
-	return &http.Server{Addr: addr, Handler: mux}
+	// A scrape is one short request; neither a slow header nor an idle
+	// keep-alive connection should hold the listener's resources forever.
+	//
+	// 一次抓取只是一个短请求；缓慢的请求头和空闲的 keep-alive 连接都不应永远占着
+	// 监听器的资源。
+	return &http.Server{
+		Addr:              addr,
+		Handler:           mux,
+		ReadHeaderTimeout: 10 * time.Second,
+		IdleTimeout:       120 * time.Second,
+	}
 }
 
 // Render renders the whole registry in the Prometheus text exposition format.
