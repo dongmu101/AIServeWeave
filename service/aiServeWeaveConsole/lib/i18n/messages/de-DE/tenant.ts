@@ -717,6 +717,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "Der Endpunkt muss https sein und keine private oder lokale Adresse; kompatible Arten brauchen einen.",
   "tenant.providerProblemKey": "Der Key muss eine Zeile ohne führende oder folgende Leerzeichen sein.",
   "tenant.providerProblemKeyRequired": "Geben Sie den API-Key ein (Pflicht für neue Anbieter oder geänderte Art bzw. Endpunkt).",
-  "tenant.providerProblemModels": "Modell-IDs dürfen keine Leerzeichen oder Kommas enthalten und müssen eindeutig sein."
+  "tenant.providerProblemModels": "Modell-IDs dürfen keine Leerzeichen oder Kommas enthalten und müssen eindeutig sein.",
+  "pricing.title": "Preise",
+  "pricing.subtitle": "Sehen Sie das Angebot ohne Anmeldung. Zum Kaufen müssen Sie sich anmelden.",
+  "pricing.signIn": "Anmelden",
+  "pricing.signUp": "Registrieren",
+  "pricing.openConsole": "Konsole öffnen",
+  "pricing.buy": "Kaufen",
+  "pricing.accounts": "Monatliche Konten",
+  "pricing.packages": "Credit-Pakete",
+  "pricing.prices": "Modellpreise",
+  "pricing.empty": "Derzeit ist nichts im Angebot",
+  "pricing.unavailable": "Der Kauf ist noch nicht geöffnet",
+  "pricing.packageCredits": "{credits} Credits",
+  "pricing.customAmount": "Betrag frei wählbar: {min} – {max}",
+  "pricing.model": "Modell",
+  "pricing.input": "Eingabe / 1 Mio. Tokens",
+  "pricing.output": "Ausgabe / 1 Mio. Tokens",
+  "pricing.defaultModel": "Alle anderen Modelle"
 } as const;
 export default tenant;

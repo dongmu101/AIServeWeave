@@ -456,6 +456,12 @@ Agent 接入页面新增默认不勾选的「共享给所有租户」，安装�
 验证：326 项 Node 默认测试通过，ESLint 无错误（现有 TanStack Virtual 警告保留）、TS7 检查与生产构建通过。Chrome 新增共享操作及 Agent 接入回归通过，并通过现有运维页面 1440/390/320 px 检查。本地 Docker 已实际登录验证添加页的默认不共享选项、共享设置入口和 API；租户模型目录隐藏未共享 Agent。浏览器回归使用隔离会话和模拟 API，未调用真实 CLI 生成。操作见[Agent 共享设置](../../docs/agent-sharing.md)。
 
 
+### 公开价格页 /pricing（2026-11-10）
+
+任何人无需登录即可打开 `/pricing`，查看账号包月、点数充值包与模型单价。数据由服务端组件直接读取控制面公开的 `GET /billing/v1/catalog`（不带令牌，不经 `/api/admin/*` 白名单）；控制面未开启计费、不可达或响应不合契约时显示「购买暂未开放」。「购买」按钮是普通链接：有会话 Cookie 时直达 `/console/billing`，没有时跳转 `/login?next=/console/billing`，登录后回到计费页；每次购买仍由控制面授权。`AISW_CONSOLE_SIGNUP_ENABLED` 开启时页头显示注册入口。页面覆盖根布局的 noindex，允许被索引。`proxy.ts` 的 matcher 不含 `/pricing`，天然公开。契约镜像为 `lib/console/billing.ts` 的 `parseCatalog`，八语言文案在 `pricing.*`。
+
+验证：Node 默认测试、ESLint、TS7 类型检查与生产构建通过；用模拟控制面本地启动，未登录访问 `/pricing` 返回 200 并渲染套餐/账号，购买链接为 `/login?next=%2Fconsole%2Fbilling`，注册入口按开关显示。未用真实控制面、真实 Dodo 付款或浏览器做 1440/390/320 px 布局检查。
+
 ### 机群页直接控制共享（2026-11-10）
 
 `/operator/fleet` 每个平台注册节点的操作行新增「开启共享 / 停止共享」。点击后显示节点及影响说明，确认才写入现有 `PUT /operator/v1/node-access/:node_id`；开启专属节点共享时明确提示替换租户绑定。写入失败不自动重试，完成或失败后重新读取状态；读取当前策略失败时禁用操作。商户自有节点不显示该按钮。刷新节点状态时同时刷新共享状态，八语言文案已同步。
