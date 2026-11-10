@@ -1,4 +1,9 @@
 const operator = {
+  "operator.enableNodeSharing": "Activar uso compartido",
+  "operator.disableNodeSharing": "Dejar de compartir",
+  "operator.stopNodeSharingConfirm": "Los inquilinos comunes perderán acceso a este nodo. Se mantienen las cuentas exclusivas vigentes y las tareas ya iniciadas.",
+  "operator.replaceDedicatedForSharing": "El uso compartido reemplaza las asignaciones actuales a inquilinos específicos.",
+  "operator.nodeSharingSaved": "Configuración guardada y propagándose a todos los Gateways.",
   "operator.privateNode": "No compartido",
   "operator.dedicatedNode": "Inquilinos seleccionados",
   "operator.shareWithTenants": "Compartir con todos los inquilinos",

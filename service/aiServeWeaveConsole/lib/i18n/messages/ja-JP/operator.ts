@@ -1,4 +1,9 @@
 const operator = {
+  "operator.enableNodeSharing": "共有を有効化",
+  "operator.disableNodeSharing": "共有を停止",
+  "operator.stopNodeSharingConfirm": "通常のテナントはこのノードを使用できなくなります。有効な専用アカウントの権利と実行中の処理は維持されます。",
+  "operator.replaceDedicatedForSharing": "共有を有効にすると、現在の指定テナントへの割り当てが置き換わります。",
+  "operator.nodeSharingSaved": "共有設定を保存しました。各 Gateway に反映中です。",
   "operator.privateNode": "共有しない",
   "operator.dedicatedNode": "指定テナント",
   "operator.shareWithTenants": "全テナントと共有",

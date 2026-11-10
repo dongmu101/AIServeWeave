@@ -1,4 +1,9 @@
 const operator = {
+  "operator.enableNodeSharing": "Enable sharing",
+  "operator.disableNodeSharing": "Stop sharing",
+  "operator.stopNodeSharingConfirm": "Ordinary tenants will lose access to this node. Valid exclusive account leases remain available and work already started continues.",
+  "operator.replaceDedicatedForSharing": "Enabling sharing replaces the current dedicated tenant assignments.",
+  "operator.nodeSharingSaved": "Sharing settings saved and propagating to all Gateways.",
   "operator.privateNode": "Not shared",
   "operator.dedicatedNode": "Selected tenants",
   "operator.shareWithTenants": "Share with all tenants",

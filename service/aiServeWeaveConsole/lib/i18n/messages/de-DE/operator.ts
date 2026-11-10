@@ -1,4 +1,9 @@
 const operator = {
+  "operator.enableNodeSharing": "Freigabe aktivieren",
+  "operator.disableNodeSharing": "Freigabe beenden",
+  "operator.stopNodeSharingConfirm": "Gewöhnliche Mandanten verlieren den Zugriff auf diesen Knoten. Gültige exklusive Konten und bereits laufende Aufgaben bleiben erhalten.",
+  "operator.replaceDedicatedForSharing": "Die Freigabe ersetzt die bisherigen dedizierten Mandantenzuweisungen.",
+  "operator.nodeSharingSaved": "Freigabe gespeichert und wird an alle Gateways übertragen.",
   "operator.privateNode": "Nicht geteilt",
   "operator.dedicatedNode": "Ausgewählte Mandanten",
   "operator.shareWithTenants": "Mit allen Mandanten teilen",

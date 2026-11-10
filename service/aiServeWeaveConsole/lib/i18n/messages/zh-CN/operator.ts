@@ -1,4 +1,9 @@
 const operator = {
+  "operator.enableNodeSharing": "开启共享",
+  "operator.disableNodeSharing": "停止共享",
+  "operator.stopNodeSharingConfirm": "停止共享后，普通租户将不能使用这台节点；有效的独享账号权益仍保留，已开始的任务继续执行。",
+  "operator.replaceDedicatedForSharing": "开启共享会替换当前的指定租户绑定。",
+  "operator.nodeSharingSaved": "共享状态已保存，正在同步至各 Gateway。",
   "operator.privateNode": "不共享",
   "operator.dedicatedNode": "指定租户",
   "operator.shareWithTenants": "共享给所有租户",

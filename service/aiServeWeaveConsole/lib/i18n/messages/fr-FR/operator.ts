@@ -1,4 +1,9 @@
 const operator = {
+  "operator.enableNodeSharing": "Activer le partage",
+  "operator.disableNodeSharing": "Arrêter le partage",
+  "operator.stopNodeSharingConfirm": "Les locataires ordinaires perdront l’accès à ce nœud. Les comptes exclusifs valides et les tâches déjà démarrées restent disponibles.",
+  "operator.replaceDedicatedForSharing": "Le partage remplace les attributions actuelles à des locataires dédiés.",
+  "operator.nodeSharingSaved": "Paramètres enregistrés et en cours de diffusion aux Gateways.",
   "operator.privateNode": "Non partagé",
   "operator.dedicatedNode": "Locataires sélectionnés",
   "operator.shareWithTenants": "Partager avec tous les locataires",
