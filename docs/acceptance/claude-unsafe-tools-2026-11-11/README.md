@@ -42,4 +42,11 @@ AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run 
 
 触发时客户端正在等待刚启动的数据库容器就绪，Bash 工具说明要求改用延迟工具 `Monitor`，而它的 schema 尚未载入、不在本轮 `tools` 中。Agent 不记录工具名，因此「调用的是 `Monitor`」是依据时序的推断。Claude Code 重试同一轮时模型做同样的选择，五次全部失败；用户发新消息后客户端改用 Bash 循环才继续。直连 API 时同样的调用只会得到客户端的「没有这个工具」工具结果，不会失败。
 
-修复：原生回合（含 safeguards）原样转发未声明的工具调用，由调用方答复；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝；兼容桥接保持严格。`TestNativeForwardsUndeclaredTool` 在旧实现下复现失败、修复后通过；`TestUnsafeToolFailureLocation` 增加桥接未声明与原生本机工具名两类拒绝。修复尚未部署到 Agent 主机，部署后才算闭环。
+修复：原生回合（含 safeguards）原样转发未声明的工具调用，由调用方答复；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝；兼容桥接保持严格。`TestNativeForwardsUndeclaredTool` 在旧实现下复现失败、修复后通过；`TestUnsafeToolFailureLocation` 增加桥接未声明与原生本机工具名两类拒绝。部署与真实验证见下节。
+
+## 部署后真实验证（19:24–19:52）
+
+- Agent 主机仓库 `8e4050a` 含修复；二进制 19:24:52 构建（源码 19:24:47 修改），`com.aiserveweave.agent.dev` 19:24:53 以新二进制启动，二进制内含 `localCLITool`。在该主机用 Go 1.27.4 复跑 `TestNativeForwardsUndeclaredTool` 与 `TestUnsafeToolFailureLocation`，全部通过。
+- 真实链路：本机 Claude Code `2.1.322` 经生产 Gateway（`claude -p --model claude-sonnet-5-5 --output-format stream-json`，禁用 Bash/Write/Edit 等）要求模型首个动作直接调用未声明的 `WaitForPort`。模型发出 `tool_use: WaitForPort`，客户端返回 `<tool_use_error>Error: No such tool available: WaitForPort</tool_use_error>`，模型据此正常结束（2 轮、14.3 秒、`success`）。Agent 对应两轮 `cc9c4e71…`、`4377cff9…` 均为 `native`、`completed`。修复前同样的调用会以 `unsafe_tools` 中止并返回 400。
+- 重启后至 19:52，Agent 共完成数十轮请求（含其他会话），`unsafe_tools` 为 0。
+- 旁注：手写的最小 `/v1/messages` 请求（不带 Claude Code 的请求结构，流式与非流式均试过）在原生路径上 60–180 秒无任何输出直至客户端断开；同一时段 Claude Code 自己发出的小请求均约 5 秒完成。只在部署后测试过，未在修复前对照；本修复只改变「未声明工具名」的判断，模型尚未输出任何内容时不会经过该分支，因此判断与本修复无关。原因未查，单独跟进。
