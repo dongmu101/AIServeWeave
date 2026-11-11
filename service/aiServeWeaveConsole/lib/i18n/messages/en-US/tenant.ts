@@ -615,6 +615,7 @@ const tenant = {
   "tenant.billingMode": "Billing mode",
   "tenant.billingModePrepaid": "Prepaid",
   "tenant.billingModeExempt": "Exempt",
+  "tenant.billingModeAccountMonthly": "Monthly accounts",
   "tenant.billingExemptNote": "This tenant is exempt from billing: API requests deduct no credits and are never refused for a low balance.",
   "tenant.billingBlocked": "Your balance is exhausted, so API requests will be refused (HTTP 402). Service resumes automatically once a top-up is credited.",
   "tenant.billingManagePayments": "Manage payments and receipts",

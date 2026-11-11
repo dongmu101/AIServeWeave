@@ -615,6 +615,7 @@ const tenant = {
   "tenant.billingMode": "Abrechnungsmodus",
   "tenant.billingModePrepaid": "Prepaid",
   "tenant.billingModeExempt": "Befreit",
+  "tenant.billingModeAccountMonthly": "Monatliche Konten",
   "tenant.billingExemptNote": "Dieser Mandant ist von der Abrechnung befreit: API-Anfragen ziehen keine Credits ab und werden nie wegen zu geringen Guthabens abgelehnt.",
   "tenant.billingBlocked": "Ihr Guthaben ist aufgebraucht, daher werden API-Anfragen abgelehnt (HTTP 402). Nach der Gutschrift einer Aufladung geht es automatisch weiter.",
   "tenant.billingManagePayments": "Zahlungen und Belege verwalten",

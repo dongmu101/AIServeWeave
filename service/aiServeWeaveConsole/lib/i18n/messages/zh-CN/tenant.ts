@@ -1,5 +1,5 @@
 const tenant = {
-  "tenant.accountMonthly": "账号包月",
+  "tenant.accountMonthly": "账号现货",
   "tenant.accountMonthlyNote": "以法币经在线支付购买 Agent 中指定 Claude Code 或 Codex 账号的独享使用权，不使用点数余额。付款确认后切换为账号包月，仅可使用已购买的账号，不再按 token 扣费。每次购买或续费延长一个自然月（月末按目标月最后一天计算），到期后需手动续费。",
   "tenant.accountOperatorNote": "同一个 Agent 中的 Claude Code 与 Codex 账号可分别独享售卖，每个商品绑定各自的运行时，以法币标价并经 Dodo 结账收款。请确保不同商品对应不同的实际登录账号，避免通过其他运行时重复共享同一登录。上架后该运行时退出共享池，下架不影响已购买期限。",
   "tenant.accountSearch": "搜索账号、Agent 或运行时",
@@ -603,6 +603,7 @@ const tenant = {
   "tenant.billingMode": "计费模式",
   "tenant.billingModePrepaid": "预充值",
   "tenant.billingModeExempt": "免计费",
+  "tenant.billingModeAccountMonthly": "账号包月",
   "tenant.billingExemptNote": "本租户免计费：API 请求不扣点数，也不会因余额不足被拒绝。",
   "tenant.billingBlocked": "余额已耗尽，API 请求将被拒绝（HTTP 402）。充值到账后自动恢复。",
   "tenant.billingManagePayments": "管理付款与收据",
@@ -729,7 +730,7 @@ const tenant = {
   "pricing.signUp": "注册",
   "pricing.openConsole": "进入控制台",
   "pricing.buy": "购买",
-  "pricing.accounts": "账号包月",
+  "pricing.accounts": "账号现货",
   "pricing.packages": "点数充值包",
   "pricing.prices": "模型单价",
   "pricing.empty": "暂无在售内容",
@@ -740,7 +741,7 @@ const tenant = {
   "pricing.input": "输入 / 百万 token",
   "pricing.output": "输出 / 百万 token",
   "pricing.defaultModel": "其他所有模型",
-  "tenant.presale": "账号预售",
+  "tenant.presale": "账号购买",
   "tenant.presaleNote": "预购 Claude Code 或 Codex 账号一个月的独享使用权，以法币在线付款，不使用点数余额。付款确认后订单进入「待发货」，平台通常会在数小时内为你分配账号；一个月从分配时起算，分配后切换为账号包月。",
   "tenant.presaleOperatorNote": "预售只定义账号类型、月价与名额，不绑定具体账号。商户付款后订单进入「待发货订单」，请从同类型的空闲账号库存中分配；一个月自分配时起算。名额计入 30 分钟内的待付款结账与已付款未分配的订单，超时才完成的付款仍会进入待发货。",
   "tenant.presaleBadge": "预售",
@@ -756,6 +757,6 @@ const tenant = {
   "tenant.accountKindMissing": "此账号尚未记录类型，补充后才能用于预售分配。",
   "tenant.accountProblemKind": "请选择账号类型。",
   "tenant.accountUnpricedHint": "下架的账号可以不填月价与产品 ID，仅供分配给预售订单；上架销售时须填写。",
-  "pricing.presales": "账号预售"
+  "pricing.presales": "账号购买"
 } as const;
 export default tenant;

@@ -36,7 +36,7 @@ import {
 } from "@/lib/console/billing";
 import { ApiError } from "@/lib/console/errors";
 import { canPurchaseCredits } from "@/lib/console/permissions";
-import { presaleAwaiting } from "@/lib/console/account-presales";
+import { parseAccountPresales, presaleAwaiting } from "@/lib/console/account-presales";
 import type { MessageKey } from "@/lib/i18n/messages";
 
 /** ReturnState is where the wait after a payment return stands.
@@ -48,12 +48,13 @@ type ReturnState = "pending" | "settled" | "exhausted";
  * what has happened.
  *
  * BILLING_TABS 是页面的分区，依次为可购买的内容与已发生的记录。 */
-const BILLING_TABS = ["packages", "accounts", "orders", "ledger"] as const;
+const BILLING_TABS = ["packages", "accounts", "presales", "orders", "ledger"] as const;
 type BillingTab = (typeof BILLING_TABS)[number];
 
 const TAB_KEYS: Record<BillingTab, MessageKey> = {
   packages: "tenant.billingPackages",
   accounts: "tenant.accountMonthly",
+  presales: "tenant.presale",
   orders: "tenant.billingOrders",
   ledger: "tenant.billingLedger",
 };
@@ -65,13 +66,13 @@ function isBillingTab(value: string | null): value is BillingTab {
 /** useBillingTab keeps the open section in the query, so a reload or a
  * shared link opens the same one. Without a choice it opens the orders after
  * a payment return, the monthly accounts for a tenant on them, and the
- * packages otherwise. The URL is replaced in place: switching sections does
+ * packages otherwise; a section not offered falls back the same way. The URL is replaced in place: switching sections does
  * not fill the back button, nor ask the server to render the page again.
  *
  * useBillingTab 把当前分区放在查询参数里，刷新或分享链接时打开同一个分区。未选择时，
- * 支付回跳后打开订单，账号包月的商户打开账号包月，其余打开充值包。URL 原地替换：切换
+ * 支付回跳后打开订单，账号包月的商户打开账号现货，其余打开充值包；未提供的分区同样回退。URL 原地替换：切换
  * 分区不会填满后退按钮，也不会让服务端重新渲染页面。 */
-function useBillingTab(fallback: BillingTab): [BillingTab, (tab: BillingTab) => void] {
+function useBillingTab(fallback: BillingTab, offered: readonly BillingTab[]): [BillingTab, (tab: BillingTab) => void] {
   const searchParams = useSearchParams();
   const chosen = searchParams.get("tab");
   const select = React.useCallback((tab: BillingTab) => {
@@ -79,7 +80,7 @@ function useBillingTab(fallback: BillingTab): [BillingTab, (tab: BillingTab) => 
     next.set("tab", tab);
     window.history.replaceState(null, "", `?${next.toString()}`);
   }, []);
-  return [isBillingTab(chosen) ? chosen : fallback, select];
+  return [isBillingTab(chosen) && offered.includes(chosen) ? chosen : fallback, select];
 }
 
 /** PollRead is one poll tick: the overview, and the latest order whose status
@@ -132,6 +133,10 @@ export function BillingView({ role, returning }: { role: string; returning: bool
   const [returnState, setReturnState] = React.useState<ReturnState | null>(returning ? "pending" : null);
   const [returnedPresale, setReturnedPresale] = React.useState(false);
   const [historyKey, setHistoryKey] = React.useState(0);
+  // Read here rather than in its tab: the tab is offered only while
+  // something is on presale. 在此读取而不是在其标签页内：只有存在预售时才提供该标签页。
+  const presales = useResource({ method: "GET", path: "/admin/v1/billing/presales", parse: parseAccountPresales });
+  const reloadPresales = presales.reload;
 
   React.useEffect(() => {
     if (!returning) {
@@ -164,13 +169,15 @@ export function BillingView({ role, returning }: { role: string; returning: bool
       //
       // 账目与订单是在确认到达之前读取的；重挂载它们会读到确认所产生的行。
       setHistoryKey((value) => value + 1);
+      reloadPresales();
     });
     return () => controller.abort();
-  }, [returning, run]);
+  }, [returning, run, reloadPresales]);
 
   const data = polled ?? overview.data;
   const canPurchase = canPurchaseCredits(role);
-  const [tab, setTab] = useBillingTab(returning ? "orders" : data?.mode === "account_monthly" ? "accounts" : "packages");
+  const offered = BILLING_TABS.filter((value) => value !== "presales" || (presales.data?.length ?? 0) > 0);
+  const [tab, setTab] = useBillingTab(returning ? "orders" : data?.mode === "account_monthly" ? "accounts" : "packages", offered);
 
   return <div className="grid gap-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -185,16 +192,18 @@ export function BillingView({ role, returning }: { role: string; returning: bool
       <BalanceSummary overview={data} canPurchase={canPurchase} />
       <Tabs value={tab} onValueChange={(next) => { if (isBillingTab(next)) setTab(next); }}>
         <TabsList aria-label={t("tenant.billingSections")} className="h-auto! w-full flex-wrap justify-start sm:w-fit">
-          {BILLING_TABS.map((value) => <TabsTrigger key={value} value={value} className="flex-none px-3"><Message id={TAB_KEYS[value]} /></TabsTrigger>)}
+          {offered.map((value) => <TabsTrigger key={value} value={value} className="flex-none px-3"><Message id={TAB_KEYS[value]} /></TabsTrigger>)}
         </TabsList>
         <TabsContent value="packages" className="mt-2">
           <PackagesCard packages={data.packages} canPurchase={canPurchase} />
         </TabsContent>
         {/* Remounted with the history so a month confirmed after a payment
             return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
-        <TabsContent value="accounts" className="mt-2 grid gap-6">
+        <TabsContent value="accounts" className="mt-2">
           <AccountSales key={historyKey} canPurchase={canPurchase} />
-          <PresaleSales key={`presale-${historyKey}`} canPurchase={canPurchase} />
+        </TabsContent>
+        <TabsContent value="presales" className="mt-2">
+          <PresaleSales resource={presales} canPurchase={canPurchase} />
         </TabsContent>
         <TabsContent value="orders" className="mt-2">
           <OrdersTable key={historyKey} />
@@ -269,7 +278,7 @@ function BalanceSummary({ overview, canPurchase }: { overview: BillingOverview; 
         </div>
         <div className="grid gap-1.5">
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingMode" /></dt>
-          <dd><Badge variant={exempt ? "secondary" : "outline"}>{overview.mode === "account_monthly" ? t("tenant.accountMonthly") : exempt ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid")}</Badge></dd>
+          <dd><Badge variant={exempt ? "secondary" : "outline"}>{overview.mode === "account_monthly" ? t("tenant.billingModeAccountMonthly") : exempt ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid")}</Badge></dd>
         </div>
       </dl>
       {exempt ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingExemptNote" /></p> : null}

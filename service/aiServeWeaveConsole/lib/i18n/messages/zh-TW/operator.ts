@@ -584,7 +584,7 @@ const operator = {
   "operator.presaleAssignTitle": "為訂單分配帳號",
   "operator.presaleAssignDescription": "為商戶 {tenant} 的訂單 {order} 選擇一個 {kind} 帳號。確認後立即開通一個自然月，並將該商戶切換為帳號包月。",
   "operator.presaleAssignSelect": "選擇帳號",
-  "operator.presaleAssignNone": "沒有可分配的同類型閒置帳號。請先在「帳號包月」中新增帳號；僅供預售的帳號可以下架且不標價。",
+  "operator.presaleAssignNone": "沒有可分配的同類型閒置帳號。請先在「帳號現貨」中新增帳號；僅供預售的帳號可以下架且不標價。",
   "operator.presaleAssignOwned": "此商戶已持有至 {time}，將順延一個月",
   "operator.presaleAssigned": "已分配帳號，該商戶已切換為帳號包月。",
   "operator.presaleRefund": "退款",

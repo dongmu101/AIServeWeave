@@ -51,8 +51,7 @@ const PROBLEM_KEYS: Record<PresaleDraftProblem, MessageKey> = {
  *
  * PresaleSales 列出预售。商户经服务商结账预购一个月，之后订单等待运维分配账号；这里
  * 不判定付款是否成功。只有存在预售商品时，商户才会看到这一区块。 */
-export function PresaleSales({ canPurchase = false }: { canPurchase?: boolean }) {
-  const resource = useResource({ method: "GET", path: "/admin/v1/billing/presales", parse: parseAccountPresales });
+export function PresaleSales({ resource, canPurchase = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean }) {
   return <PresaleCatalog resource={resource} canPurchase={canPurchase} />;
 }
 
