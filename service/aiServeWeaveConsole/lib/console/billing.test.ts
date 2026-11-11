@@ -346,17 +346,19 @@ test("parseCatalog reads the public catalog and tolerates null lists", () => {
       { id: "pkg_1", name: "Starter", kind: "fixed", credits_micro: 5_000_000, price_minor: 500, currency: "USD" },
       { id: "pkg_2", name: "Custom", kind: "custom", currency: "USD", min_amount_minor: 100, max_amount_minor: 10000 },
     ],
-    accounts: [{ id: "acc_1", name: "Claude A", price_micro: 100_000_000 }],
+    accounts: [{ id: "acc_1", name: "Claude A", price_minor: 1999, currency: "USD" }],
     prices: null,
   });
   assert.equal(catalog.packages.length, 2);
   assert.equal(catalog.packages[1].minAmountMinor, 100);
-  assert.deepEqual(catalog.accounts, [{ id: "acc_1", name: "Claude A", priceMicro: 100_000_000 }]);
+  assert.deepEqual(catalog.accounts, [{ id: "acc_1", name: "Claude A", priceMinor: 1999, currency: "USD" }]);
   assert.deepEqual(catalog.prices, []);
 });
 
 test("parseCatalog rejects malformed entries", () => {
   assert.throws(() => parseCatalog([]));
   assert.throws(() => parseCatalog({ packages: [{ id: "p", name: "n", kind: "weird", currency: "USD" }] }));
-  assert.throws(() => parseCatalog({ accounts: [{ id: "a", name: "n", price_micro: -1 }] }));
+  for (const account of [{ price_minor: -1, currency: "USD" }, { price_minor: 0, currency: "USD" }, { price_minor: 100, currency: "usd" }, { price_micro: 100 }]) {
+    assert.throws(() => parseCatalog({ accounts: [{ id: "a", name: "n", ...account }] }));
+  }
 });

@@ -384,7 +384,7 @@ export function parseCreditPackages(value: unknown): CreditPackage[] {
  * Catalog 镜像 types.CatalogResponse，即公开的购买信息。 */
 export interface Catalog {
   packages: Pick<CreditPackage, "id" | "name" | "kind" | "creditsMicro" | "priceMinor" | "currency" | "minAmountMinor" | "maxAmountMinor">[];
-  accounts: { id: string; name: string; priceMicro: number }[];
+  accounts: { id: string; name: string; priceMinor: number; currency: string }[];
   prices: Pick<ModelPrice, "model" | "inputMicroPerMTok" | "outputMicroPerMTok">[];
 }
 
@@ -413,7 +413,12 @@ export function parseCatalog(value: unknown): Catalog {
     }),
     accounts: list(source.accounts, item => {
       const account = record(item);
-      return { id: required(account, "id"), name: required(account, "name"), priceMicro: count(account, "price_micro") };
+      const priceMinor = count(account, "price_minor");
+      const currency = required(account, "currency");
+      if (priceMinor <= 0 || !/^[A-Z]{3}$/.test(currency)) {
+        fail();
+      }
+      return { id: required(account, "id"), name: required(account, "name"), priceMinor, currency };
     }),
     prices: list(source.prices, item => {
       const price = record(item);

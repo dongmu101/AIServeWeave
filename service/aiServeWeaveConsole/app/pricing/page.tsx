@@ -117,7 +117,7 @@ export default async function PricingPage() {
                     <CardHeader><CardTitle className="break-all">{account.name}</CardTitle></CardHeader>
                     <CardContent className="flex items-center justify-between gap-3">
                       <p className="text-lg font-semibold">
-                        {t("tenant.accountMonthlyPrice", { credits: formatCredits(account.priceMicro, locale) })}
+                        {t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) })}
                       </p>
                       {buy}
                     </CardContent>

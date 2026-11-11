@@ -15,13 +15,16 @@ type CatalogPackage struct {
 	MaxAmountMinor           int64  `json:"max_amount_minor,omitempty"`
 }
 
-// CatalogAccount is one monthly account on sale; it carries no node target.
+// CatalogAccount is one monthly account on sale, priced per month in
+// PriceMinor units of Currency; it carries no node target or product id.
 //
-// CatalogAccount 是一个在售的包月账号，不含节点目标。
+// CatalogAccount 是一个在售的包月账号，月价为 Currency 的 PriceMinor 个最小单位；不含
+// 节点目标与产品 id。
 type CatalogAccount struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
-	PriceMicro int64  `json:"price_micro"`
+	PriceMinor int64  `json:"price_minor"`
+	Currency   string `json:"currency"`
 }
 
 // CatalogPrice is one alias's price per million tokens, in micro-credits.

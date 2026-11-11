@@ -33,7 +33,7 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 			}
 		}
 		for i, a := range c.Accounts {
-			out.Accounts[i] = types.CatalogAccount{ID: a.ID, Name: a.Name, PriceMicro: a.PriceMicro}
+			out.Accounts[i] = types.CatalogAccount{ID: a.ID, Name: a.Name, PriceMinor: a.PriceMinor, Currency: a.Currency}
 		}
 		for i, p := range c.Prices {
 			out.Prices[i] = types.CatalogPrice{Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok}

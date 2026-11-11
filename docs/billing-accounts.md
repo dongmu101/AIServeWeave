@@ -94,6 +94,8 @@ Billing:
 
 账号响应为 `{id, node_id, runtime_id, name, price_minor, currency, active, owned, expires_at?}`。平台响应可额外带 `tenant_id` 与 `dodo_product_id`；商户响应只用 `owned` 表达本人持有。已到期并重新可售的账号不会向其他商户返回原持有者及其到期时间。`price_minor` 为 `0` 的商品是迁移前按点数定价的旧商品，须重新设定法币价格才能上架。
 
+公开价格目录 `GET /billing/v1/catalog`（Console `/pricing`）列出当前可购买的账号，每项为 `{id, name, price_minor, currency}`，不含产品 ID、节点与租户；只在 `Billing.Enabled` 时列出，旧版无法币价格、下架或仍被持有的账号不列出。
+
 订单列表（`/admin/v1/billing/orders`、`/operator/v1/billing/orders`）中，账号订单的 `package_id` 为空、带 `account_id`；付款开通后带 `account_expires_at`。已付款却没有 `account_expires_at` 的账号订单表示未能开通，需要退款。
 
 ## 数据、授权与升级
