@@ -718,6 +718,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "El endpoint debe ser https y no una dirección privada o local; los tipos compatibles lo requieren.",
   "tenant.providerProblemKey": "La clave debe ser una sola línea sin espacios al principio ni al final.",
   "tenant.providerProblemKeyRequired": "Introduce la clave de API (obligatoria para un proveedor nuevo o si cambian el tipo o el endpoint).",
-  "tenant.providerProblemModels": "Los ID de modelo no pueden contener espacios ni comas y no pueden repetirse."
+  "tenant.providerProblemModels": "Los ID de modelo no pueden contener espacios ni comas y no pueden repetirse.",
+  "pricing.title": "Precios",
+  "pricing.subtitle": "Consulta lo que está a la venta sin iniciar sesión. Para comprar debes iniciar sesión.",
+  "pricing.signIn": "Iniciar sesión",
+  "pricing.signUp": "Registrarse",
+  "pricing.openConsole": "Abrir la consola",
+  "pricing.buy": "Comprar",
+  "pricing.accounts": "Cuentas mensuales",
+  "pricing.packages": "Paquetes de créditos",
+  "pricing.prices": "Precios de modelos",
+  "pricing.empty": "No hay nada a la venta por ahora",
+  "pricing.unavailable": "La compra aún no está abierta",
+  "pricing.packageCredits": "{credits} créditos",
+  "pricing.customAmount": "Importe a tu elección: {min} – {max}",
+  "pricing.model": "Modelo",
+  "pricing.input": "Entrada / 1 M de tokens",
+  "pricing.output": "Salida / 1 M de tokens",
+  "pricing.defaultModel": "Todos los demás modelos"
 } as const;
 export default tenant;

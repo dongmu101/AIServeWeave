@@ -718,6 +718,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "エンドポイントは https で、プライベートやローカルのアドレスは使えません。互換種類では必須です。",
   "tenant.providerProblemKey": "キーは 1 行で、前後に空白を含めないでください。",
   "tenant.providerProblemKeyRequired": "API キーを入力してください（新規作成時、または種類・エンドポイント変更時は必須）。",
-  "tenant.providerProblemModels": "モデル ID に空白やカンマは使えず、重複もできません。"
+  "tenant.providerProblemModels": "モデル ID に空白やカンマは使えず、重複もできません。",
+  "pricing.title": "料金と購入",
+  "pricing.subtitle": "ログインなしで販売中の内容を確認できます。購入にはログインが必要です。",
+  "pricing.signIn": "ログイン",
+  "pricing.signUp": "新規登録",
+  "pricing.openConsole": "コンソールを開く",
+  "pricing.buy": "購入",
+  "pricing.accounts": "月額アカウント",
+  "pricing.packages": "クレジットパッケージ",
+  "pricing.prices": "モデル単価",
+  "pricing.empty": "現在販売中のものはありません",
+  "pricing.unavailable": "購入はまだ開始されていません",
+  "pricing.packageCredits": "{credits} クレジット",
+  "pricing.customAmount": "金額を選択：{min} – {max}",
+  "pricing.model": "モデル",
+  "pricing.input": "入力 / 100万トークン",
+  "pricing.output": "出力 / 100万トークン",
+  "pricing.defaultModel": "その他すべてのモデル"
 } as const;
 export default tenant;

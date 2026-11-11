@@ -71,6 +71,10 @@ plist: ## 生成 LaunchAgent 定义
 
 install: build plist ## 构建、生成定义并（重新）加载常驻服务；改代码后重跑即可
 	-@launchctl bootout "$(DOMAIN)/$(LABEL)" 2>/dev/null
+	@# bootout 异步返回，旧进程最多 ExitTimeOut(25s) 才退出；未卸载完就 bootstrap 会报 "5: Input/output error"。
+	@i=0; while launchctl print "$(DOMAIN)/$(LABEL)" >/dev/null 2>&1; do \
+	  i=$$((i+1)); test $$i -le 60 || { echo "等待 $(LABEL) 卸载超时" >&2; exit 1; }; sleep 0.5; \
+	done
 	launchctl bootstrap "$(DOMAIN)" "$(PLIST)"
 	@echo "已启动 $(LABEL)，日志：$(LOG_FILE)"
 

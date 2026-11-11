@@ -730,6 +730,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "Le point de terminaison doit être en https et ne pas être une adresse privée ou locale ; les types compatibles en exigent un.",
   "tenant.providerProblemKey": "La clé doit tenir sur une ligne, sans espaces au début ni à la fin.",
   "tenant.providerProblemKeyRequired": "Saisissez la clé d'API (obligatoire pour un nouveau fournisseur ou un type ou point de terminaison modifié).",
-  "tenant.providerProblemModels": "Les ID de modèle ne doivent contenir ni espaces ni virgules, et doivent être uniques."
+  "tenant.providerProblemModels": "Les ID de modèle ne doivent contenir ni espaces ni virgules, et doivent être uniques.",
+  "pricing.title": "Tarifs",
+  "pricing.subtitle": "Consultez l'offre sans vous connecter. Une connexion est nécessaire pour acheter.",
+  "pricing.signIn": "Se connecter",
+  "pricing.signUp": "S'inscrire",
+  "pricing.openConsole": "Ouvrir la console",
+  "pricing.buy": "Acheter",
+  "pricing.accounts": "Comptes mensuels",
+  "pricing.packages": "Packs de crédits",
+  "pricing.prices": "Prix des modèles",
+  "pricing.empty": "Rien n'est en vente pour le moment",
+  "pricing.unavailable": "L'achat n'est pas encore ouvert",
+  "pricing.packageCredits": "{credits} crédits",
+  "pricing.customAmount": "Montant au choix : {min} – {max}",
+  "pricing.model": "Modèle",
+  "pricing.input": "Entrée / 1 M de tokens",
+  "pricing.output": "Sortie / 1 M de tokens",
+  "pricing.defaultModel": "Tous les autres modèles"
 } as const;
 export default tenant;

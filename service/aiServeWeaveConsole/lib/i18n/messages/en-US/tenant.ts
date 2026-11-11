@@ -730,6 +730,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "The endpoint must be https and not a private or local address; compatible kinds require one.",
   "tenant.providerProblemKey": "The key must be one line without leading or trailing spaces.",
   "tenant.providerProblemKeyRequired": "Enter the API key (required for a new provider or a changed kind or endpoint).",
-  "tenant.providerProblemModels": "Model IDs must not contain spaces or commas, and must be unique."
+  "tenant.providerProblemModels": "Model IDs must not contain spaces or commas, and must be unique.",
+  "pricing.title": "Pricing",
+  "pricing.subtitle": "Browse what is on sale without signing in. You need to sign in to buy.",
+  "pricing.signIn": "Sign in",
+  "pricing.signUp": "Sign up",
+  "pricing.openConsole": "Open console",
+  "pricing.buy": "Buy",
+  "pricing.accounts": "Monthly accounts",
+  "pricing.packages": "Credit packages",
+  "pricing.prices": "Model prices",
+  "pricing.empty": "Nothing is on sale right now",
+  "pricing.unavailable": "Purchasing is not open yet",
+  "pricing.packageCredits": "{credits} credits",
+  "pricing.customAmount": "Choose your amount: {min} – {max}",
+  "pricing.model": "Model",
+  "pricing.input": "Input / 1M tokens",
+  "pricing.output": "Output / 1M tokens",
+  "pricing.defaultModel": "All other models"
 } as const;
 export default tenant;

@@ -145,6 +145,13 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		return rest.Route{Method: method, Path: path, Handler: instrumented(ctx.MetricsRegistry, path, guard(ctx, h))}
 	}
 	if ctx.Config.Billing.Enabled || ctx.Config.AccountSales.Enabled {
+		// The catalog is public so a visitor can see what is for sale before
+		// signing in; it exposes no provider ids or node targets.
+		//
+		// 目录是公开的，访客登录前即可看到在售内容；它不暴露服务商 id 或节点目标。
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodGet, Path: "/billing/v1/catalog", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/catalog", getCatalog(ctx))},
+		})
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/admin/v1/billing", requireSession, billingOverview(ctx)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/accounts", requireSession, listAccountSales(ctx)),
