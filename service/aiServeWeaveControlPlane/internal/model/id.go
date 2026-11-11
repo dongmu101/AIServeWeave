@@ -15,6 +15,7 @@ import (
 // 工单还是 WHERE 子句里，都是一望即知的错。
 const (
 	PrefixAccountSale      = "acc_"
+	PrefixAccountPresale   = "pre_"
 	PrefixTenant           = "tnt_"
 	PrefixUser             = "usr_"
 	PrefixAPIKey           = "key_"

@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "Le compte a été acheté, est en cours de paiement par un autre locataire, son prix a changé ou la limite de renouvellement est atteinte. Actualisez puis réessayez.",
   "tenant.accountInsufficientCredit": "Crédits insuffisants. Rechargez avant d’acheter ou de renouveler.",
   "tenant.accountCheckoutDisabled": "Le paiement en ligne n’est pas activé ; les comptes ne peuvent pas être achetés pour le moment. Contactez l’opérateur de la plateforme.",
-  "tenant.billingPaymentUnavailable": "Le service de paiement est momentanément indisponible. Veuillez réessayer plus tard."
+  "tenant.billingPaymentUnavailable": "Le service de paiement est momentanément indisponible. Veuillez réessayer plus tard.",
+  "tenant.presaleUnavailable": "La prévente est complète, son prix a changé ou elle a été archivée. Actualisez puis réessayez.",
+  "tenant.presaleAssignUnavailable": "Ce compte ne peut pas être attribué : il est occupé ou en cours de paiement par un autre locataire, son type ne correspond pas, son nœud n’est pas ouvert à ce locataire, ou la commande n’est plus en attente de livraison (par exemple, un remboursement est en cours). Actualisez puis réessayez.",
+  "tenant.refundUnavailable": "Cette commande ne peut pas être remboursée pour le moment : un remboursement est peut-être déjà en cours, elle est entièrement remboursée ou fait l’objet d’un litige. Actualisez puis réessayez."
 } as const;
 export default core;

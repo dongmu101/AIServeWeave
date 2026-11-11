@@ -26,9 +26,10 @@ type BillingTx interface {
 	// OrderByPayment 读取并锁定某笔服务商付款所支付的订单。
 	OrderByPayment(paymentID string) (model.CheckoutOrder, error)
 	// SaveOrder writes an order's payment id, paid amount and currency,
-	// refunded amount, status and update time.
+	// refunded amount, status, account and its expiry, and update time.
 	//
-	// SaveOrder 写入订单的付款 id、实付金额与币种、已退款金额、状态与更新时间。
+	// SaveOrder 写入订单的付款 id、实付金额与币种、已退款金额、状态、账号及其到期时间
+	// 与更新时间。
 	SaveOrder(order model.CheckoutOrder) error
 	// Credit applies a ledger entry to its tenant's balance. changed reports
 	// a usable/exhausted flip; duplicate reports an idempotency key already
@@ -87,6 +88,18 @@ type BillingTx interface {
 	// GrantAccount 把账号开通给 tenantID 直到 expiresAt，把商户切换为 account_monthly，
 	// 并使已缓存的校验结果失效。
 	GrantAccount(accountID, tenantID string, expiresAt, now time.Time) error
+	// PresaleByID reads one presale without locking: the only field a
+	// transaction acts on, its kind, never changes.
+	//
+	// PresaleByID 不加锁地读取一个预售：事务唯一依据的字段即其类型，永不改变。
+	PresaleByID(id string) (model.AccountPresale, error)
+	// AccountCheckoutHeldByOther reports whether another tenant's pending
+	// checkout holds the account at now, as AccountCheckoutHeld decides. The
+	// caller holds the account's lock, so it reads committed checkouts.
+	//
+	// AccountCheckoutHeldByOther 按 AccountCheckoutHeld 报告在 now 时是否有其他商户的
+	// 待付款结账占用该账号。调用方已持有账号锁，因此读取的是已提交的结账。
+	AccountCheckoutHeldByOther(accountID, tenantID string, now time.Time) (bool, error)
 }
 
 // ApplyBillingEventRules applies one provider event through tx. A payment
@@ -163,6 +176,15 @@ func paymentSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingE
 	order.UpdatedAt = now
 	if err := tx.SaveOrder(order); err != nil {
 		return BillingEventResult{}, err
+	}
+	// A presale order waits, paid, for an operator to assign its account;
+	// its month starts then. The tenant's mode is left as it is, so access
+	// does not change yet.
+	// 预售订单以已付款状态等待运维分配账号，一个月自那时起算。商户计费模式保持不变，
+	// 访问权限因此尚未改变。
+	if order.PresaleID != "" {
+		result.Outcome = BillingOutcomeApplied
+		return result, nil
 	}
 	// A fiat account order buys a month, not credits.
 	// 法币账号订单购买的是一个月期限，而不是点数。

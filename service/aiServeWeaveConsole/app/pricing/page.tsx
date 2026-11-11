@@ -12,6 +12,7 @@ import {
   parseCatalog,
   type Catalog,
 } from "@/lib/console/billing";
+import { accountKindLabel } from "@/lib/console/account-sales";
 import { loginPath } from "@/lib/console/internal-path";
 import { loadMessages } from "@/lib/i18n/messages";
 import { createTranslator } from "@/lib/i18n/translate";
@@ -72,7 +73,7 @@ export default async function PricingPage() {
       {t("pricing.buy")}
     </Link>
   );
-  const empty = catalog !== null && catalog.accounts.length + catalog.packages.length + catalog.prices.length === 0;
+  const empty = catalog !== null && catalog.accounts.length + catalog.presales.length + catalog.packages.length + catalog.prices.length === 0;
 
   return (
     <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 p-4 sm:p-8">
@@ -120,6 +121,31 @@ export default async function PricingPage() {
                         {t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) })}
                       </p>
                       {buy}
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+            </section>
+          ) : null}
+
+          {catalog.presales.length > 0 ? (
+            <section className="grid gap-3">
+              <h2 className="text-lg font-medium">{t("pricing.presales")}</h2>
+              <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {catalog.presales.map(presale => (
+                  <Card key={presale.id}>
+                    <CardHeader>
+                      <CardTitle className="break-all">{presale.name}</CardTitle>
+                      <p className="text-sm text-muted-foreground">{accountKindLabel(presale.kind)} · {t("tenant.presaleBadge")}</p>
+                    </CardHeader>
+                    <CardContent className="grid gap-3">
+                      <p className="text-sm text-muted-foreground">{t("tenant.presaleDelivery")}</p>
+                      <div className="flex items-center justify-between gap-3">
+                        <p className="text-lg font-semibold">
+                          {t("tenant.accountMonthlyPrice", { price: formatMoney(presale.priceMinor, presale.currency, locale) })}
+                        </p>
+                        {presale.available ? buy : <span className="text-sm font-medium text-muted-foreground">{t("tenant.presaleSoldOut")}</span>}
+                      </div>
                     </CardContent>
                   </Card>
                 ))}

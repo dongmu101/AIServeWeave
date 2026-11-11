@@ -13,6 +13,9 @@ export type ApiErrorKind =
   | "insufficient_credit"
   | "account_unavailable"
   | "account_checkout_disabled"
+  | "presale_unavailable"
+  | "presale_assign_unavailable"
+  | "refund_unavailable"
   | "payment_unavailable"
   | "invalid_credentials"
   | "unauthorized"
@@ -41,6 +44,9 @@ const MESSAGE_KEYS: Record<ApiErrorKind, MessageKey> = {
   insufficient_credit: "tenant.accountInsufficientCredit",
   account_unavailable: "tenant.accountUnavailable",
   account_checkout_disabled: "tenant.accountCheckoutDisabled",
+  presale_unavailable: "tenant.presaleUnavailable",
+  presale_assign_unavailable: "tenant.presaleAssignUnavailable",
+  refund_unavailable: "tenant.refundUnavailable",
   payment_unavailable: "tenant.billingPaymentUnavailable",
   invalid_credentials: "common.incorrectEmailOrPasswordCheckThemAndTry",
   unauthorized: "common.yourSignInSessionHasExpiredSignIn",

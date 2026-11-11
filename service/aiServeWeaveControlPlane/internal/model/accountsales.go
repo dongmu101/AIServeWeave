@@ -4,15 +4,21 @@ import "time"
 
 // AccountSale reserves one Agent runtime for exclusive monthly sale, priced in
 // fiat and paid through a provider checkout. Archiving stops new sales; it
-// never releases the runtime into the shared pool.
+// never releases the runtime into the shared pool. Archived inventory may be
+// unpriced and kept only for presale assignment. Kind is the target runtime's
+// account kind; it is empty for legacy rows, which cannot be assigned to a
+// presale until it is filled, and cannot change once set.
 //
 // AccountSale 为包月独享售卖保留一个运行时，以法币标价并经服务商结账付款。下架不影响
 // 已付费期限，也不会恢复共享。PriceMinor 为零的商品来自旧版点数定价，须重新设定法币
-// 价格后才能上架。
+// 价格后才能上架。下架的库存可以不标价，仅供分配给预售订单。Kind 是目标运行时的
+// 账号类型（AccountKindClaude / AccountKindCodex），旧版商品为空，补填前不能用于预售
+// 分配；一旦填写不可更改。
 type AccountSale struct {
 	ID            string    `gorm:"primaryKey;size:32"`
 	NodeID        string    `gorm:"size:128;not null;uniqueIndex:idx_account_sales_target"`
 	RuntimeID     string    `gorm:"size:128;not null;uniqueIndex:idx_account_sales_target"`
+	Kind          string    `gorm:"size:16;not null"`
 	Name          string    `gorm:"size:128;not null"`
 	PriceMinor    int64     `gorm:"not null"`
 	Currency      string    `gorm:"size:8;not null"`

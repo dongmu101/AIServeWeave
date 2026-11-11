@@ -735,6 +735,23 @@ const tenant = {
   "pricing.model": "模型",
   "pricing.input": "輸入 / 百萬 token",
   "pricing.output": "輸出 / 百萬 token",
-  "pricing.defaultModel": "其他所有模型"
+  "pricing.defaultModel": "其他所有模型",
+  "tenant.presale": "帳號預售",
+  "tenant.presaleNote": "預購 Claude Code 或 Codex 帳號一個月的獨享使用權，以法幣線上付款，不使用點數餘額。付款確認後訂單進入「待出貨」，平台通常會在數小時內為你分配帳號；一個月從分配時起算，分配後切換為帳號包月。",
+  "tenant.presaleOperatorNote": "預售只定義帳號類型、月價與名額，不綁定具體帳號。商戶付款後訂單進入「待出貨訂單」，請從同類型的閒置帳號庫存中分配；一個月自分配時起算。名額計入 30 分鐘內的待付款結帳與已付款未分配的訂單，逾時才完成的付款仍會進入待出貨。",
+  "tenant.presaleBadge": "預售",
+  "tenant.presaleDelivery": "付款後通常數小時內出貨，期限自分配起算",
+  "tenant.presaleSoldOut": "已售完",
+  "tenant.presaleBuy": "預購一個月",
+  "tenant.presalePurchase": "預購帳號",
+  "tenant.presaleBuyConfirm": "將前往付款頁面，為「{name}」支付 {price}，預購一個月的 {kind} 帳號。付款確認後訂單進入待出貨，平台通常會在數小時內分配帳號，一個月自分配時起算；分配後切換為帳號包月，僅允許使用已購買且未到期的帳號。",
+  "tenant.presaleEmpty": "尚無預售商品",
+  "tenant.presaleOrderAwaiting": "已付款，待出貨",
+  "tenant.billingReturnPresale": "付款已確認。平台通常會在數小時內為你分配帳號，可在訂單列表查看出貨狀態。",
+  "tenant.accountKind": "帳號類型",
+  "tenant.accountKindMissing": "此帳號尚未記錄類型，補上後才能用於預售分配。",
+  "tenant.accountProblemKind": "請選擇帳號類型。",
+  "tenant.accountUnpricedHint": "已下架的帳號可以不填月價與產品 ID，僅供分配給預售訂單；上架銷售時須填寫。",
+  "pricing.presales": "帳號預售"
 } as const;
 export default tenant;

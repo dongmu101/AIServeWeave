@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "계정이 이미 구매되었거나, 다른 테넌트가 결제 중이거나, 가격이 변경되었거나, 갱신 한도에 도달했습니다. 새로고침 후 다시 시도하세요.",
   "tenant.accountInsufficientCredit": "크레딧 잔액이 부족합니다. 구매 또는 갱신 전에 충전하세요.",
   "tenant.accountCheckoutDisabled": "온라인 결제가 활성화되지 않아 지금은 계정을 구매할 수 없습니다. 플랫폼 운영자에게 문의하세요.",
-  "tenant.billingPaymentUnavailable": "결제 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도하세요."
+  "tenant.billingPaymentUnavailable": "결제 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도하세요.",
+  "tenant.presaleUnavailable": "사전 판매 수량이 마감되었거나, 가격이 변경되었거나, 판매가 중단되었습니다. 새로고침 후 다시 시도하세요.",
+  "tenant.presaleAssignUnavailable": "이 계정을 배정할 수 없습니다. 계정이 사용 중이거나 다른 테넌트가 결제 중이거나, 유형이 맞지 않거나, 노드가 이 테넌트에 열려 있지 않거나, 주문이 더 이상 배송 대기 상태가 아닙니다(예: 환불 진행 중). 새로고침 후 다시 시도하세요.",
+  "tenant.refundUnavailable": "지금은 이 주문을 환불할 수 없습니다. 환불이 이미 진행 중이거나, 전액 환불되었거나, 분쟁 중일 수 있습니다. 새로고침 후 다시 시도하세요."
 } as const;
 export default core;

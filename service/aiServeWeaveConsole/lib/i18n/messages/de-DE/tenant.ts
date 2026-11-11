@@ -747,6 +747,23 @@ const tenant = {
   "pricing.model": "Modell",
   "pricing.input": "Eingabe / 1 Mio. Tokens",
   "pricing.output": "Ausgabe / 1 Mio. Tokens",
-  "pricing.defaultModel": "Alle anderen Modelle"
+  "pricing.defaultModel": "Alle anderen Modelle",
+  "tenant.presale": "Konto-Vorverkauf",
+  "tenant.presaleNote": "Bestellen Sie einen Monat exklusiven Zugriff auf ein Claude-Code- oder Codex-Konto vor, online in Fiatwährung bezahlt – Ihr Guthaben wird nicht verwendet. Nach bestätigter Zahlung wartet die Bestellung auf Auslieferung; die Plattform weist Ihr Konto in der Regel innerhalb weniger Stunden zu. Der Monat beginnt mit der Zuweisung, danach wechselt die Abrechnung zu monatlichen Konten.",
+  "tenant.presaleOperatorNote": "Ein Vorverkauf legt nur Kontotyp, Monatspreis und Kontingent fest und ist an kein bestimmtes Konto gebunden. Nach der Zahlung eines Mandanten erscheint die Bestellung unter „Bestellungen mit ausstehender Auslieferung“; weisen Sie ihr ein freies Konto desselben Typs aus dem Bestand zu. Der Monat beginnt mit der Zuweisung. Das Kontingent zählt ausstehende Checkouts der letzten 30 Minuten und bezahlte, noch nicht zugewiesene Bestellungen; eine Zahlung, die nach der Reservierung abgeschlossen wird, wartet trotzdem auf Auslieferung.",
+  "tenant.presaleBadge": "Vorverkauf",
+  "tenant.presaleDelivery": "Auslieferung meist innerhalb weniger Stunden nach Zahlung; der Monat beginnt mit der Zuweisung",
+  "tenant.presaleSoldOut": "Ausverkauft",
+  "tenant.presaleBuy": "Einen Monat vorbestellen",
+  "tenant.presalePurchase": "Konto vorbestellen",
+  "tenant.presaleBuyConfirm": "Sie werden zur Zahlungsseite weitergeleitet, um {price} für „{name}“ zu zahlen und einen Monat eines {kind}-Kontos vorzubestellen. Nach bestätigter Zahlung wartet die Bestellung auf Auslieferung; die Plattform weist das Konto meist innerhalb weniger Stunden zu, und der Monat beginnt mit der Zuweisung. Danach wechselt die Abrechnung zu monatlichen Konten: Nur gekaufte, nicht abgelaufene Konten sind verfügbar.",
+  "tenant.presaleEmpty": "Keine Vorverkäufe",
+  "tenant.presaleOrderAwaiting": "Bezahlt, Auslieferung ausstehend",
+  "tenant.billingReturnPresale": "Zahlung bestätigt. Die Plattform weist Ihr Konto meist innerhalb weniger Stunden zu; den Auslieferungsstatus sehen Sie in der Bestellliste.",
+  "tenant.accountKind": "Kontotyp",
+  "tenant.accountKindMissing": "Für dieses Konto ist kein Typ hinterlegt. Legen Sie ihn fest, um es Vorverkaufsbestellungen zuweisen zu können.",
+  "tenant.accountProblemKind": "Wählen Sie einen Kontotyp.",
+  "tenant.accountUnpricedHint": "Ein archiviertes Konto kann ohne Monatspreis und Produkt-ID bleiben und nur für Vorverkaufsbestellungen vorgehalten werden. Für den Verkauf sind beide erforderlich.",
+  "pricing.presales": "Konto-Vorverkauf"
 } as const;
 export default tenant;

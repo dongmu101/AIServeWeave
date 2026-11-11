@@ -1,3 +1,9 @@
+# 账号预售（2026-11-11）
+
+新增账号预售：运维只定义类型（Claude Code / Codex）、法币月价、Dodo 产品 ID 和名额上限，不绑定具体账号。商户经 Dodo 付款后，订单进入「已付款，待发货」，此时不开通账号，也不切换计费模式。运维在 `/operator/billing` 的「账号预售 → 待发货订单」为每笔订单分配一个同类型的空闲库存账号，分配时开通一个自然月并切换为账号包月；无法交付时可以在同一列表全额退款。账号商品新增 `kind`（创建时必填），下架商品可以不标价，仅供预售分配。迁移为 `billing/0006_account_presale.sql`；控制面与 Console 须一起更新，Gateway 与 Agent 无需升级。规则与契约见[账号预售](docs/billing-accounts.md#账号预售)。
+
+已通过的检查：控制面默认测试，store、logic、handler 与 e2e 的竞态检查；在临时 PostgreSQL 16 与 MySQL 8.0 上运行的 gormstore live 用例（迁移、升级保留数据、账号结账、预售）。Console 侧通过 338 项单元测试、lint、TS7 类型检查与生产构建，本机 Chrome 计费专项 15 项全部通过。`console.spec.ts` 中有 1 项与本次改动无关的导航用例失败。真实 Dodo 付款、本地与生产部署、真实 CLI 账号的发货联调尚未验收。
+
 # 账号包月改为法币标价（2026-11-11）
 
 账号包月商品改为以法币标价（币种 + 月价 + Dodo 产品 ID），商户经 Dodo 在线结账购买或续费一个月，不再使用点数余额；点数购买路由已移除。付款 webhook 验签后才开通期限，待付款结账为本商户保留账号 30 分钟，超时后被他人买走的付款记为「未开通，待退款」。迁移 `billing/0005_account_fiat.sql` 会把现有商品下架并清零价格（已售期限保留），运维须重新定价上架。购买需要 `Billing.Enabled` 并配置 Dodo，见[账号包月说明](docs/billing-accounts.md)。

@@ -984,6 +984,7 @@ type APIDocs interface {
 // 窄接口，绝不取用它。
 type Store interface {
 	AccountSales
+	AccountPresales
 	Routes
 	WorkflowTemplates
 	Tenants
@@ -1014,6 +1015,11 @@ type Store interface {
 type CheckoutOrderFilter struct {
 	TenantID string
 	Status   string
+	// Awaiting keeps only paid presale orders still waiting for an account,
+	// as PresaleAwaiting decides.
+	//
+	// Awaiting 只保留按 PresaleAwaiting 判断仍在等待分配账号的已付款预售订单。
+	Awaiting bool
 }
 
 // CreditLedgerFilter narrows a ledger list. An empty field does not filter.

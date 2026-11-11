@@ -129,7 +129,7 @@ func AccountCheckouts(t *testing.T, st AccountStore) {
 		t.Fatal(err)
 	}
 	pay(renewal, now.Add(time.Hour))
-	if got := lease().ExpiresAt.Format(time.RFC3339); got != "2026-03-28T12:00:00Z" {
+	if got := lease().ExpiresAt.UTC().Format(time.RFC3339); got != "2026-03-28T12:00:00Z" {
 		t.Fatal("renewal expiry", got)
 	}
 

@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { AccountSales } from "@/components/console/account-sales";
+import { PresaleSales } from "@/components/console/account-presales";
 
 import { BillingDisabled, LedgerTable, OrdersTable } from "@/components/console/billing-tables";
 import { ErrorMessage } from "@/components/i18n/error-message";
@@ -33,6 +34,7 @@ import {
 } from "@/lib/console/billing";
 import { ApiError } from "@/lib/console/errors";
 import { canPurchaseCredits } from "@/lib/console/permissions";
+import { presaleAwaiting } from "@/lib/console/account-presales";
 import type { MessageKey } from "@/lib/i18n/messages";
 
 /** ReturnState is where the wait after a payment return stands.
@@ -88,6 +90,7 @@ export function BillingView({ role, returning }: { role: string; returning: bool
   const overview = useResource<BillingOverview>({ method: "GET", path: "/admin/v1/billing", parse: parseBillingOverview });
   const [polled, setPolled] = React.useState<BillingOverview | null>(null);
   const [returnState, setReturnState] = React.useState<ReturnState | null>(returning ? "pending" : null);
+  const [returnedPresale, setReturnedPresale] = React.useState(false);
   const [historyKey, setHistoryKey] = React.useState(0);
 
   React.useEffect(() => {
@@ -105,7 +108,10 @@ export function BillingView({ role, returning }: { role: string; returning: bool
         ]);
         return { overview: current, latest: orders.items[0] ?? null };
       },
-      onResult: (value) => setPolled(value.overview),
+      onResult: (value) => {
+        setPolled(value.overview);
+        setReturnedPresale(value.latest !== null && presaleAwaiting(value.latest));
+      },
       settled: (value) => value.latest !== null && value.latest.status !== "pending",
       giveUp: (error) => error instanceof ApiError && (error.kind === "not_found" || error.kind === "unauthorized" || error.kind === "forbidden"),
     }).then((outcome) => {
@@ -131,12 +137,13 @@ export function BillingView({ role, returning }: { role: string; returning: bool
       <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
     </div>
     {overview.errorKind === "not_found" && !polled ? <BillingDisabled /> : overview.error && !polled ? <ErrorState message={overview.error} onRetry={overview.reload} /> : !data ? <LoadingState label={t("tenant.loadingBilling")} rows={4} /> : <>
-      {returnState ? <ReturnNotice state={returnState} /> : null}
+      {returnState ? <ReturnNotice state={returnState} presale={returnedPresale} /> : null}
       <BalanceCard overview={data} canPurchase={canPurchase} />
       <PackagesCard packages={data.packages} canPurchase={canPurchase} />
       {/* Remounted with the history so a month confirmed after a payment
           return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
       <AccountSales key={historyKey} canPurchase={canPurchase} />
+      <PresaleSales key={`presale-${historyKey}`} canPurchase={canPurchase} />
       <div key={historyKey} className="grid gap-6">
         <LedgerTable />
         <OrdersTable />
@@ -146,11 +153,14 @@ export function BillingView({ role, returning }: { role: string; returning: bool
 }
 
 /** ReturnNotice says what the page knows after a payment return, which is
- * only ever what the server has confirmed.
+ * only ever what the server has confirmed. A confirmed presale payment says
+ * that the account is still to be assigned.
  *
- * ReturnNotice 说明支付回跳后页面所知道的情况——而那只能是服务端已确认的内容。 */
-function ReturnNotice({ state }: { state: ReturnState }) {
-  const key: MessageKey = state === "pending" ? "tenant.billingReturnPending" : state === "settled" ? "tenant.billingReturnSettled" : "tenant.billingReturnTimeout";
+ * ReturnNotice 说明支付回跳后页面所知道的情况——而那只能是服务端已确认的内容。已确认的
+ * 预售付款会说明账号仍待分配。 */
+function ReturnNotice({ state, presale }: { state: ReturnState; presale: boolean }) {
+  const key: MessageKey = state === "pending" ? "tenant.billingReturnPending"
+    : state === "settled" ? (presale ? "tenant.billingReturnPresale" : "tenant.billingReturnSettled") : "tenant.billingReturnTimeout";
   return <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm"><Message id={key} /></p>;
 }
 

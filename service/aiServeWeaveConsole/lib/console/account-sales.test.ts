@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { accountCheckoutBody, accountPurchasable, accountRequest, parseAccountSale, parseAccountSales, MAX_ACCOUNT_PRICE_MINOR } from "./account-sales.ts";
+import { accountCheckoutBody, accountKindLabel, accountPurchasable, accountRequest, parseAccountSale, parseAccountSales, MAX_ACCOUNT_PRICE_MINOR } from "./account-sales.ts";
 import { parseBillingOverview, parseOrderPage } from "./billing.ts";
 import { resolveUpstream, resolveOperatorUpstream } from "./upstream-routes.ts";
 
@@ -26,15 +26,31 @@ test("monthly account responses validate fiat prices, expiry and unique runtime 
 });
 
 test("operator account drafts are priced in the currency's major unit", () => {
-  const draft = { name: " Claude A ", nodeId: "agent", runtimeId: "claude-a", price: "19.99", currency: "usd", productId: " pdt_1 ", active: true };
-  assert.deepEqual(accountRequest(draft), { request: { name: "Claude A", node_id: "agent", runtime_id: "claude-a", price_minor: 1999, currency: "USD", dodo_product_id: "pdt_1", active: true }, problem: null });
+  const draft = { name: " Claude A ", nodeId: "agent", runtimeId: "claude-a", kind: "claude" as const, kindRequired: true, price: "19.99", currency: "usd", productId: " pdt_1 ", active: true };
+  assert.deepEqual(accountRequest(draft), { request: { name: "Claude A", node_id: "agent", runtime_id: "claude-a", kind: "claude", price_minor: 1999, currency: "USD", dodo_product_id: "pdt_1", active: true }, problem: null });
   assert.equal(accountRequest({ ...draft, currency: "JPY", price: "3000" }).request?.price_minor, 3000);
   for (const [change, problem] of [
-    [{ name: " " }, "name"], [{ runtimeId: "" }, "target"], [{ currency: "US" }, "currency"], [{ price: "0" }, "price"],
+    [{ name: " " }, "name"], [{ runtimeId: "" }, "target"], [{ kind: "" }, "kind"], [{ currency: "US" }, "currency"], [{ price: "0" }, "price"],
     [{ price: "1.234" }, "price"], [{ currency: "JPY", price: "12.5" }, "price"], [{ price: "1000001" }, "price"], [{ productId: "" }, "product"],
   ] as const) {
     assert.equal(accountRequest({ ...draft, ...change }).problem, problem);
   }
+  // Archived inventory may stay unpriced for presale assignment; listing needs a price.
+  const unpriced = { ...draft, price: " ", productId: "", active: false };
+  assert.deepEqual(accountRequest(unpriced).request, { name: "Claude A", node_id: "agent", runtime_id: "claude-a", kind: "claude", price_minor: 0, currency: "", dodo_product_id: "", active: false });
+  assert.equal(accountRequest({ ...unpriced, active: true }).problem, "price");
+  assert.equal(accountRequest({ ...unpriced, productId: "pdt_1" }).problem, "price");
+  // An edit may leave a legacy row's kind empty, which keeps it.
+  assert.equal(accountRequest({ ...draft, kind: "", kindRequired: false }).request?.kind, "");
+});
+
+test("account kinds are claude or codex, and legacy rows have none", () => {
+  assert.equal(parseAccountSale(sale).kind, "");
+  assert.equal(parseAccountSale({ ...sale, kind: "codex" }).kind, "codex");
+  assert.equal(parseAccountSale({ ...sale, kind: "" }).kind, "");
+  assert.throws(() => parseAccountSale({ ...sale, kind: "ollama" }));
+  assert.equal(accountKindLabel("claude"), "Claude Code");
+  assert.equal(accountKindLabel("codex"), "Codex");
 });
 
 test("account orders carry the account and its granted expiry instead of a package", () => {

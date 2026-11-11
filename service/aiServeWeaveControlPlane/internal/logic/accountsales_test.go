@@ -63,7 +63,7 @@ func (p *accountTestProvider) pay(t *testing.T, svc *logic.Service, tenantID, or
 var accountOperator = logic.Actor{TenantID: model.PlatformScope, Role: model.RolePlatformOperator, UserID: "operator"}
 
 func accountDraft(runtime string, price int64) model.AccountSale {
-	return model.AccountSale{NodeID: "agent", RuntimeID: runtime, Name: runtime, PriceMinor: price, Currency: "USD", DodoProductID: "pdt_pwyw", Active: true}
+	return model.AccountSale{NodeID: "agent", RuntimeID: runtime, Kind: model.AccountKindClaude, Name: runtime, PriceMinor: price, Currency: "USD", DodoProductID: "pdt_pwyw", Active: true}
 }
 
 func TestMonthlyAccountSaleRequiresFiatPrice(t *testing.T) {
@@ -228,11 +228,11 @@ func TestClaudeAndCodexOnOneAgentSellToDifferentTenants(t *testing.T) {
 		t.Fatal(err)
 	}
 	other := logic.Actor{TenantID: otherTenant.ID, UserID: otherOwner.ID, Role: model.RoleOwner}
-	claude, err := f.svc.SaveAccountSale(ctx, accountOperator, model.AccountSale{NodeID: "agent-one", RuntimeID: "claude-a", Name: "Claude Code A", PriceMinor: 100, Currency: "USD", DodoProductID: "pdt", Active: true}, true)
+	claude, err := f.svc.SaveAccountSale(ctx, accountOperator, model.AccountSale{NodeID: "agent-one", RuntimeID: "claude-a", Kind: model.AccountKindClaude, Name: "Claude Code A", PriceMinor: 100, Currency: "USD", DodoProductID: "pdt", Active: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	codex, err := f.svc.SaveAccountSale(ctx, accountOperator, model.AccountSale{NodeID: "agent-one", RuntimeID: "codex-a", Name: "Codex A", PriceMinor: 200, Currency: "USD", DodoProductID: "pdt", Active: true}, true)
+	codex, err := f.svc.SaveAccountSale(ctx, accountOperator, model.AccountSale{NodeID: "agent-one", RuntimeID: "codex-a", Kind: model.AccountKindCodex, Name: "Codex A", PriceMinor: 200, Currency: "USD", DodoProductID: "pdt", Active: true}, true)
 	if err != nil {
 		t.Fatal(err)
 	}

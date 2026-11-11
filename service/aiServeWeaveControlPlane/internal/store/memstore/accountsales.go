@@ -34,7 +34,7 @@ func (s *Store) SaveAccountSale(_ context.Context, row model.AccountSale, create
 			}
 		}
 	} else {
-		if !exists || old.NodeID != row.NodeID || old.RuntimeID != row.RuntimeID {
+		if !exists || old.NodeID != row.NodeID || old.RuntimeID != row.RuntimeID || (old.Kind != "" && old.Kind != row.Kind) {
 			return store.ErrConflict
 		}
 		row.TenantID, row.ExpiresAt = old.TenantID, old.ExpiresAt

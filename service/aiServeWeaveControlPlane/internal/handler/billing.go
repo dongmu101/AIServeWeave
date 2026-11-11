@@ -162,6 +162,14 @@ func listBillingOrders(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 		filter := store.CheckoutOrderFilter{Status: query.Get("status")}
 		if operator {
 			filter.TenantID = query.Get("tenant_id")
+			switch query.Get("fulfillment") {
+			case "":
+			case "awaiting":
+				filter.Awaiting = true
+			default:
+				respondErr(w, logic.ErrInvalidInput)
+				return
+			}
 		}
 		page, err := ctx.Logic.ListBillingOrders(r.Context(), actor, listQuery(query), filter)
 		if err != nil {
@@ -175,25 +183,36 @@ func listBillingOrders(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 		}
 		items := make([]types.CheckoutOrder, len(page.Items))
 		for i, o := range page.Items {
-			items[i] = types.CheckoutOrder{
-				ID: o.ID, PackageID: o.PackageID, AmountMinor: o.AmountMinor, Currency: o.Currency,
-				CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, PaidAmountMinor: o.PaidAmountMinor,
-				PaidCurrency: o.PaidCurrency, RefundableMinor: refundable[o.ID], Status: o.Status,
-				AccountID: o.AccountID, AccountExpiresAt: o.AccountExpiresAt,
-				CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
-			}
-			if o.DodoPaymentID != nil {
-				items[i].PaymentID = *o.DodoPaymentID
-			}
-			if operator {
-				items[i].TenantID = o.TenantID
-				if o.Status == model.OrderStatusPaid {
-					items[i].RefundableMinor = o.RemainingRefundMinor()
-				}
-			}
+			items[i] = renderOrder(o, refundable[o.ID], operator)
 		}
 		writeJSON(w, http.StatusOK, types.OrderListResponse{Items: items, NextCursor: page.NextCursor})
 	})
+}
+
+// renderOrder renders one order. refundable is the tenant's view of what it
+// may ask to refund; the operator's view replaces it with what of the
+// payment is not refunded yet, and adds the tenant.
+//
+// renderOrder 呈现一个订单。refundable 是租户视图中可申请退款的金额；运维视图改为付款中
+// 尚未退款的金额，并附上租户。
+func renderOrder(o model.CheckoutOrder, refundable int64, operator bool) types.CheckoutOrder {
+	out := types.CheckoutOrder{
+		ID: o.ID, PackageID: o.PackageID, AmountMinor: o.AmountMinor, Currency: o.Currency,
+		CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, PaidAmountMinor: o.PaidAmountMinor,
+		PaidCurrency: o.PaidCurrency, RefundableMinor: refundable, Status: o.Status,
+		AccountID: o.AccountID, AccountExpiresAt: o.AccountExpiresAt, PresaleID: o.PresaleID,
+		CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
+	}
+	if o.DodoPaymentID != nil {
+		out.PaymentID = *o.DodoPaymentID
+	}
+	if operator {
+		out.TenantID = o.TenantID
+		if o.Status == model.OrderStatusPaid {
+			out.RefundableMinor = o.RemainingRefundMinor()
+		}
+	}
+	return out
 }
 
 // listCreditPackages handles GET /operator/v1/billing/packages.

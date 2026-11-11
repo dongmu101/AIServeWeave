@@ -25,6 +25,7 @@ var errBalanceOverflow = errors.New("memstore: balance overflow")
 // store 对事务的替代。
 type billingState struct {
 	accounts map[string]model.AccountSale
+	presales map[string]model.AccountPresale
 	tenants  map[string]model.TenantBilling
 	packages map[string]model.CreditPackage
 	prices   map[string]model.ModelPrice
@@ -38,6 +39,7 @@ type billingState struct {
 func newBillingState() billingState {
 	return billingState{
 		accounts: map[string]model.AccountSale{},
+		presales: map[string]model.AccountPresale{},
 		tenants:  map[string]model.TenantBilling{},
 		packages: map[string]model.CreditPackage{},
 		prices:   map[string]model.ModelPrice{},
@@ -498,7 +500,8 @@ func (s *Store) ListCheckoutOrders(_ context.Context, query store.ListQuery, fil
 	defer s.mu.Unlock()
 	var items []model.CheckoutOrder
 	for _, o := range s.billing.orders {
-		if (filter.TenantID == "" || o.TenantID == filter.TenantID) && (filter.Status == "" || o.Status == filter.Status) {
+		if (filter.TenantID == "" || o.TenantID == filter.TenantID) && (filter.Status == "" || o.Status == filter.Status) &&
+			(!filter.Awaiting || store.PresaleAwaiting(o)) {
 			items = append(items, o)
 		}
 	}

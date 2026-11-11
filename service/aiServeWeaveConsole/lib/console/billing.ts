@@ -145,21 +145,29 @@ export interface LedgerEntry {
 /** CheckoutOrder mirrors types.CheckoutOrder. `tenantId` is "" on the tenant
  * view and `paymentId` is "" until the provider reports a payment. A
  * monthly-account order has `accountId` instead of `packageId`, and
- * `accountExpiresAt` once its payment granted the month.
+ * `accountExpiresAt` once its payment granted the month. A presale order has
+ * `presaleId` instead; paid, it waits without `accountExpiresAt` until an
+ * operator assigns its account, which then sets `accountId` too.
+ * `refundableMinor` is, on the operator view, what of the payment is not
+ * refunded yet.
  *
  * CheckoutOrder 镜像 types.CheckoutOrder。租户视图上 `tenantId` 为 ""，服务商报告
  * 付款之前 `paymentId` 为 ""。包月账号订单以 `accountId` 代替 `packageId`，付款开通后
- * 带 `accountExpiresAt`。 */
+ * 带 `accountExpiresAt`。预售订单改带 `presaleId`；付款后在运维分配账号之前没有
+ * `accountExpiresAt`，分配后同时带上 `accountId`。`refundableMinor` 在运维视图中是付款
+ * 尚未退款的金额。 */
 export interface CheckoutOrder {
   id: string;
   tenantId: string;
   packageId: string;
   accountId: string;
   accountExpiresAt: string | null;
+  presaleId: string;
   amountMinor: number;
   currency: string;
   creditsMicro: number;
   refundedMinor: number;
+  refundableMinor: number;
   status: string;
   paymentId: string;
   createdAt: string;
@@ -385,6 +393,7 @@ export function parseCreditPackages(value: unknown): CreditPackage[] {
 export interface Catalog {
   packages: Pick<CreditPackage, "id" | "name" | "kind" | "creditsMicro" | "priceMinor" | "currency" | "minAmountMinor" | "maxAmountMinor">[];
   accounts: { id: string; name: string; priceMinor: number; currency: string }[];
+  presales: { id: string; kind: "claude" | "codex"; name: string; priceMinor: number; currency: string; available: boolean }[];
   prices: Pick<ModelPrice, "model" | "inputMicroPerMTok" | "outputMicroPerMTok">[];
 }
 
@@ -419,6 +428,16 @@ export function parseCatalog(value: unknown): Catalog {
         fail();
       }
       return { id: required(account, "id"), name: required(account, "name"), priceMinor, currency };
+    }),
+    presales: list(source.presales, item => {
+      const presale = record(item);
+      const priceMinor = count(presale, "price_minor");
+      const currency = required(presale, "currency");
+      const kind = presale.kind;
+      if (priceMinor <= 0 || !/^[A-Z]{3}$/.test(currency) || (kind !== "claude" && kind !== "codex")) {
+        fail();
+      }
+      return { id: required(presale, "id"), kind, name: required(presale, "name"), priceMinor, currency, available: boolean(presale, "available") };
     }),
     prices: list(source.prices, item => {
       const price = record(item);
@@ -480,19 +499,25 @@ export function parseLedgerPage(value: unknown): Page<LedgerEntry> {
   return page(value, parseLedgerEntry);
 }
 
-function parseOrder(value: unknown): CheckoutOrder {
+/** parseCheckoutOrder validates one types.CheckoutOrder.
+ *
+ * parseCheckoutOrder 校验一个 types.CheckoutOrder。 */
+export function parseCheckoutOrder(value: unknown): CheckoutOrder {
   const source = record(value);
   const accountId = optionalText(source, "account_id");
+  const presaleId = optionalText(source, "presale_id");
   return {
     id: required(source, "id"),
     tenantId: optionalText(source, "tenant_id"),
-    packageId: accountId === "" ? required(source, "package_id") : text(source, "package_id"),
+    packageId: accountId === "" && presaleId === "" ? required(source, "package_id") : text(source, "package_id"),
     accountId,
     accountExpiresAt: source.account_expires_at === undefined || source.account_expires_at === null ? null : timestamp(source, "account_expires_at"),
+    presaleId,
     amountMinor: count(source, "amount_minor"),
     currency: required(source, "currency"),
     creditsMicro: count(source, "credits_micro"),
     refundedMinor: count(source, "refunded_minor"),
+    refundableMinor: optionalCount(source, "refundable_minor"),
     status: required(source, "status"),
     paymentId: optionalText(source, "payment_id"),
     createdAt: timestamp(source, "created_at"),
@@ -504,7 +529,7 @@ function parseOrder(value: unknown): CheckoutOrder {
  *
  * parseOrderPage 校验一页结账订单。 */
 export function parseOrderPage(value: unknown): Page<CheckoutOrder> {
-  return page(value, parseOrder);
+  return page(value, parseCheckoutOrder);
 }
 
 /** parseModelPrice validates one types.ModelPrice.

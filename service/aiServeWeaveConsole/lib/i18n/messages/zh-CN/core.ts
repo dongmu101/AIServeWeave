@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "账号已被购买、正由其他商户结账、价格已变动或已达到续费上限。请刷新后重试。",
   "tenant.accountInsufficientCredit": "点数余额不足，请先充值再购买或续费。",
   "tenant.accountCheckoutDisabled": "在线支付未开启，暂时无法购买账号。请联系平台运维。",
-  "tenant.billingPaymentUnavailable": "支付服务暂时不可用，请稍后再试。"
+  "tenant.billingPaymentUnavailable": "支付服务暂时不可用，请稍后再试。",
+  "tenant.presaleUnavailable": "预售名额已满、价格已变动或已下架。请刷新后重试。",
+  "tenant.presaleAssignUnavailable": "无法分配该账号：账号已被占用或正由其他商户结账、类型不符、所在节点不对该商户开放，或订单已不在待发货状态（例如正在退款）。请刷新后重试。",
+  "tenant.refundUnavailable": "该订单当前不能退款：可能已有进行中的退款、已全额退款或处于争议中。请刷新后重试。"
 } as const;
 export default core;

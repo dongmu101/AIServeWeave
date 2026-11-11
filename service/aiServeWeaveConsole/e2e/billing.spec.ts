@@ -93,7 +93,7 @@ test("operators list individual accounts and preserve their runtime identity whe
   await page.getByLabel("月价（法币）", { exact: true }).fill("5");
   await page.getByRole("button", { name: "保存账号", exact: true }).click();
   await expect(page.getByText(account.name, { exact: true })).toBeVisible();
-  expect(writes).toEqual([{ name: account.name, node_id: account.node_id, runtime_id: account.runtime_id, price_minor: 500, currency: "EUR", dodo_product_id: "pdt_pwyw", active: true }]);
+  expect(writes).toEqual([{ name: account.name, node_id: account.node_id, runtime_id: account.runtime_id, kind: "claude", price_minor: 500, currency: "EUR", dodo_product_id: "pdt_pwyw", active: true }]);
   await page.getByRole("button", { name: "编辑账号", exact: true }).click();
   await expect(page.getByLabel("月价（法币）", { exact: true })).toHaveValue("5");
   await expect(page.getByLabel("Agent ID", { exact: true })).toBeDisabled();
@@ -243,4 +243,112 @@ test("a failed Agent inventory can be retried from the account editor", async ({
   await retry.click();
   await expect(page.getByText("没有可添加的账号", { exact: true })).toBeVisible();
   expect(reads).toBe(2);
+});
+
+
+test("tenants pre-order a presale, cannot buy a sold-out one, and see the paid order awaiting delivery", async ({ page }) => {
+  const presale = { id: "pre_claude", kind: "claude", name: "Claude Code 预售", price_minor: 1500, currency: "USD", active: true, available: true };
+  const writes: unknown[] = [];
+  await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale, { ...presale, id: "pre_codex", kind: "codex", name: "Codex 预售", available: false }] } }));
+  await page.route("**/api/admin/admin/v1/billing/presales/pre_claude/checkout", async route => {
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { order_id: "ord_presale", checkout_url: CHECKOUT_URL } });
+  });
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/orders(\?|$)/, route => route.fulfill({ json: { items: [{
+    id: "ord_waiting", package_id: "", presale_id: "pre_claude", amount_minor: 1500, currency: "USD", credits_micro: 0, refunded_minor: 0, refundable_minor: 0,
+    status: "paid", created_at: "2026-11-11T00:00:00Z", updated_at: "2026-11-11T00:00:00Z",
+  }] } }));
+  await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing");
+  await expect(page.getByText("账号预售", { exact: true }).first()).toBeVisible();
+  await expect(page.getByText("已售罄", { exact: true })).toBeVisible();
+  await expect(page.getByText("已付款，待发货", { exact: true })).toBeVisible();
+  const buttons = page.getByRole("button", { name: "预购一个月", exact: true });
+  await expect(buttons).toHaveCount(2);
+  await expect(buttons.nth(1)).toBeDisabled();
+  await buttons.first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("US$15.00");
+  await expect(dialog).toContainText("Claude Code 账号");
+  await expect(dialog).toContainText("一个月自分配时起算");
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await page.waitForURL(`${CHECKOUT_URL}**`);
+  expect(writes).toEqual([{ expected_price_minor: 1500, currency: "USD" }]);
+});
+
+test("a full presale explains itself and the checkout is not retried", async ({ page }) => {
+  const presale = { id: "pre_claude", kind: "claude", name: "Claude Code 预售", price_minor: 1500, currency: "USD", active: true, available: true };
+  let writes = 0;
+  await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale] } }));
+  await page.route("**/api/admin/admin/v1/billing/presales/pre_claude/checkout", route => { writes++; return route.fulfill({ status: 409, json: { error: "conflict" } }); });
+  await page.goto("/console/billing");
+  await page.getByRole("button", { name: "预购一个月", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("预售名额已满");
+  expect(writes).toBe(1);
+});
+
+test("operators create a presale and assign an awaiting order an account of the same kind", async ({ page }) => {
+  const at = "2026-11-11T00:00:00Z";
+  const presale = { id: "pre_claude", kind: "claude", name: "Claude Code 预售", price_minor: 1500, currency: "USD", active: true, available: true,
+    dodo_product_id: "pdt_pre", capacity: 3, outstanding: 1, updated_at: at };
+  const awaiting = { id: "ord_waiting", tenant_id: "tnt_buyer", package_id: "", presale_id: "pre_claude", amount_minor: 1500, currency: "USD", credits_micro: 0,
+    refunded_minor: 0, refundable_minor: 1500, status: "paid", payment_id: "pay_1", created_at: at, updated_at: at };
+  const account = { id: "acc_free", node_id: "agent-a", runtime_id: "claude-free", kind: "claude", name: "Claude 空闲", price_minor: 0, currency: "", active: false, owned: false };
+  const presaleWrites: unknown[] = [];
+  const assignWrites: unknown[] = [];
+  let assigned = false;
+  await page.route("**/api/operator/operator/v1/billing/presales", async route => {
+    if (route.request().method() === "GET") { await route.fulfill({ json: { items: presaleWrites.length ? [presale] : [] } }); return; }
+    presaleWrites.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: presale });
+  });
+  await page.route(url => url.pathname === "/api/operator/operator/v1/billing/orders", route => {
+    expect(new URL(route.request().url()).searchParams.get("fulfillment")).toBe("awaiting");
+    return route.fulfill({ json: { items: assigned ? [] : [awaiting], next_cursor: "" } });
+  });
+  await page.route("**/api/operator/operator/v1/billing/accounts", route => route.fulfill({ json: { items: [
+    account,
+    { ...account, id: "acc_codex", runtime_id: "codex-a", kind: "codex", name: "Codex 空闲" },
+    { ...account, id: "acc_held", runtime_id: "claude-held", name: "Claude 他人", tenant_id: "tnt_other", expires_at: "2099-01-01T00:00:00Z", owned: false },
+  ] } }));
+  await page.route("**/api/operator/operator/v1/billing/orders/ord_waiting/assign", async route => {
+    assignWrites.push(route.request().postDataJSON());
+    assigned = true;
+    await route.fulfill({ json: { ...awaiting, account_id: "acc_free", account_expires_at: "2026-12-11T00:00:00Z" } });
+  });
+  await page.goto("/operator/billing");
+  await page.getByRole("tab", { name: "账号预售", exact: true }).click();
+  await page.getByRole("button", { name: "添加预售", exact: true }).click();
+  await page.getByRole("combobox", { name: "账号类型", exact: true }).selectOption("claude");
+  await expect(page.getByLabel("预售名称", { exact: true })).toHaveValue("Claude Code");
+  await page.getByLabel("预售名称", { exact: true }).fill(presale.name);
+  await page.getByLabel("月价（法币）", { exact: true }).fill("15");
+  await page.getByLabel("Dodo 产品 ID", { exact: true }).fill("pdt_pre");
+  await page.getByLabel("名额上限", { exact: true }).fill("0");
+  await expect(page.getByText("名额上限须为 1 到 10000 之间的整数。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存预售", exact: true })).toBeDisabled();
+  await page.getByLabel("名额上限", { exact: true }).fill("3");
+  await page.getByRole("button", { name: "保存预售", exact: true }).click();
+  await expect(page.getByText("待发货 1 / 名额 3", { exact: true })).toBeVisible();
+  expect(presaleWrites).toEqual([{ kind: "claude", name: presale.name, price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 3, active: true }]);
+
+  await expect(page.getByText("ord_waiting", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "分配账号", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("tnt_buyer");
+  const select = dialog.getByRole("combobox", { name: "选择账号", exact: true });
+  await expect(select.getByRole("option")).toHaveCount(2);
+  await expect(select.getByRole("option").filter({ hasText: "Claude 空闲" })).toHaveCount(1);
+  await expect(select.getByRole("option").filter({ hasText: "Codex" })).toHaveCount(0);
+  await expect(select.getByRole("option").filter({ hasText: "他人" })).toHaveCount(0);
+  const confirm = dialog.getByRole("button", { name: "分配账号", exact: true });
+  await expect(confirm).toBeDisabled();
+  await select.selectOption("acc_free");
+  await confirm.click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByRole("status").filter({ hasText: "已分配账号" })).toBeVisible();
+  await expect(page.getByText("没有待发货的订单", { exact: true })).toBeVisible();
+  expect(assignWrites).toEqual([{ account_id: "acc_free" }]);
 });

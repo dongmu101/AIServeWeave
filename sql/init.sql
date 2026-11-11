@@ -518,6 +518,22 @@ ALTER TABLE checkout_orders ADD COLUMN account_id VARCHAR(32) NOT NULL DEFAULT '
 ALTER TABLE checkout_orders ADD COLUMN account_expires_at DATETIME(6) NULL;
 CREATE INDEX idx_checkout_orders_account ON checkout_orders (account_id, status, created_at);
 
+-- billing/mysql/0006_account_presale.sql
+CREATE TABLE IF NOT EXISTS account_presales (
+ id VARCHAR(32) PRIMARY KEY,
+ kind VARCHAR(16) NOT NULL,
+ name VARCHAR(128) NOT NULL,
+ price_minor BIGINT NOT NULL,
+ currency VARCHAR(8) NOT NULL,
+ dodo_product_id VARCHAR(64) NOT NULL,
+ capacity BIGINT NOT NULL,
+ active BOOLEAN NOT NULL,
+ updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+ALTER TABLE account_sales ADD COLUMN kind VARCHAR(16) NOT NULL DEFAULT '';
+ALTER TABLE checkout_orders ADD COLUMN presale_id VARCHAR(32) NOT NULL DEFAULT '';
+CREATE INDEX idx_checkout_orders_presale ON checkout_orders (presale_id, status, created_at);
+
 -- ============================================================
 -- jobs
 -- ============================================================

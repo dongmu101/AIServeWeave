@@ -747,6 +747,23 @@ const tenant = {
   "pricing.model": "Modèle",
   "pricing.input": "Entrée / 1 M de tokens",
   "pricing.output": "Sortie / 1 M de tokens",
-  "pricing.defaultModel": "Tous les autres modèles"
+  "pricing.defaultModel": "Tous les autres modèles",
+  "tenant.presale": "Prévente de comptes",
+  "tenant.presaleNote": "Précommandez un mois d’accès exclusif à un compte Claude Code ou Codex, payé en ligne en monnaie fiduciaire — votre solde de crédits n’est pas utilisé. Une fois le paiement confirmé, la commande attend sa livraison ; la plateforme attribue généralement votre compte en quelques heures. Le mois commence à l’attribution, puis la facturation passe aux comptes mensuels.",
+  "tenant.presaleOperatorNote": "Une prévente ne définit que le type de compte, le prix mensuel et la capacité, sans lier un compte précis. Après le paiement d’un locataire, la commande apparaît dans « Commandes en attente de livraison » ; attribuez-lui un compte libre du même type depuis l’inventaire. Le mois commence à l’attribution. La capacité compte les paiements en attente depuis moins de 30 minutes et les commandes payées non encore attribuées ; un paiement finalisé après sa réservation arrive quand même en attente de livraison.",
+  "tenant.presaleBadge": "Prévente",
+  "tenant.presaleDelivery": "Livraison généralement quelques heures après le paiement ; le mois commence à l’attribution",
+  "tenant.presaleSoldOut": "Épuisé",
+  "tenant.presaleBuy": "Précommander un mois",
+  "tenant.presalePurchase": "Précommander un compte",
+  "tenant.presaleBuyConfirm": "Vous allez être redirigé vers la page de paiement pour régler {price} pour « {name} » et précommander un mois de compte {kind}. Une fois le paiement confirmé, la commande attend sa livraison ; la plateforme attribue généralement le compte en quelques heures et le mois commence à l’attribution. La facturation passe ensuite aux comptes mensuels : seuls les comptes achetés et non expirés sont disponibles.",
+  "tenant.presaleEmpty": "Aucune prévente",
+  "tenant.presaleOrderAwaiting": "Payée, en attente de livraison",
+  "tenant.billingReturnPresale": "Paiement confirmé. La plateforme attribue généralement votre compte en quelques heures ; consultez la liste des commandes pour suivre la livraison.",
+  "tenant.accountKind": "Type de compte",
+  "tenant.accountKindMissing": "Aucun type n’est enregistré pour ce compte. Renseignez-le pour pouvoir l’attribuer à des préventes.",
+  "tenant.accountProblemKind": "Choisissez un type de compte.",
+  "tenant.accountUnpricedHint": "Un compte archivé peut rester sans prix mensuel ni ID produit et être réservé aux préventes. Les deux sont requis pour le mettre en vente.",
+  "pricing.presales": "Prévente de comptes"
 } as const;
 export default tenant;

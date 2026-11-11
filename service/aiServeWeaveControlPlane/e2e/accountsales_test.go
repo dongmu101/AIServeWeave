@@ -10,6 +10,7 @@ func TestAccountSalesRoutesWithoutPaymentProvider(t *testing.T) {
 	for _, path := range []string{
 		"/operator/v1/billing/accounts", "/admin/v1/billing/accounts", "/admin/v1/billing",
 		"/operator/v1/billing/tenants", "/operator/v1/billing/ledger", "/admin/v1/billing/ledger",
+		"/operator/v1/billing/presales", "/admin/v1/billing/presales",
 	} {
 		if got := h.call(http.MethodGet, path, "", nil, nil); got != http.StatusUnauthorized {
 			t.Errorf("%s: got %d, want authentication guard (401)", path, got)
@@ -22,6 +23,13 @@ func TestAccountSalesRoutesWithoutPaymentProvider(t *testing.T) {
 	}
 	if got := h.call(http.MethodPost, "/billing/v1/dodo/webhook", "", nil, nil); got != http.StatusNotFound {
 		t.Errorf("Dodo webhook: got %d, want disabled (404)", got)
+	}
+	// Assignment needs no provider; presale checkout does.
+	if got := h.call(http.MethodPost, "/operator/v1/billing/orders/ord_x/assign", "", nil, nil); got != http.StatusUnauthorized {
+		t.Errorf("presale assignment: got %d, want authentication guard (401)", got)
+	}
+	if got := h.call(http.MethodPost, "/admin/v1/billing/presales/pre_x/checkout", "", nil, nil); got != http.StatusNotFound {
+		t.Errorf("presale checkout: got %d, want disabled (404)", got)
 	}
 }
 
@@ -38,7 +46,7 @@ func TestAccountInventoryWithoutPaymentProvider(t *testing.T) {
 	var sale struct {
 		ID string `json:"id"`
 	}
-	draft := map[string]any{"node_id": "agent-one", "runtime_id": "codex-a", "name": "Codex", "price_minor": 2000, "currency": "USD", "dodo_product_id": "pdt_pwyw", "active": true}
+	draft := map[string]any{"node_id": "agent-one", "runtime_id": "codex-a", "kind": "codex", "name": "Codex", "price_minor": 2000, "currency": "USD", "dodo_product_id": "pdt_pwyw", "active": true}
 	if got := h.call(http.MethodPost, "/operator/v1/billing/accounts", operator, draft, &sale); got != http.StatusCreated {
 		t.Fatalf("create account: %d", got)
 	}

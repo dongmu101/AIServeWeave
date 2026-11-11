@@ -735,6 +735,23 @@ const tenant = {
   "pricing.model": "模型",
   "pricing.input": "输入 / 百万 token",
   "pricing.output": "输出 / 百万 token",
-  "pricing.defaultModel": "其他所有模型"
+  "pricing.defaultModel": "其他所有模型",
+  "tenant.presale": "账号预售",
+  "tenant.presaleNote": "预购 Claude Code 或 Codex 账号一个月的独享使用权，以法币在线付款，不使用点数余额。付款确认后订单进入「待发货」，平台通常会在数小时内为你分配账号；一个月从分配时起算，分配后切换为账号包月。",
+  "tenant.presaleOperatorNote": "预售只定义账号类型、月价与名额，不绑定具体账号。商户付款后订单进入「待发货订单」，请从同类型的空闲账号库存中分配；一个月自分配时起算。名额计入 30 分钟内的待付款结账与已付款未分配的订单，超时才完成的付款仍会进入待发货。",
+  "tenant.presaleBadge": "预售",
+  "tenant.presaleDelivery": "付款后通常数小时内发货，期限自分配起算",
+  "tenant.presaleSoldOut": "已售罄",
+  "tenant.presaleBuy": "预购一个月",
+  "tenant.presalePurchase": "预购账号",
+  "tenant.presaleBuyConfirm": "将前往支付页面，为“{name}”支付 {price}，预购一个月的 {kind} 账号。付款确认后订单进入待发货，平台通常会在数小时内分配账号，一个月自分配时起算；分配后切换为账号包月，仅允许使用已购买且未到期的账号。",
+  "tenant.presaleEmpty": "暂无预售商品",
+  "tenant.presaleOrderAwaiting": "已付款，待发货",
+  "tenant.billingReturnPresale": "付款已确认。平台通常会在数小时内为你分配账号，可在订单列表查看发货状态。",
+  "tenant.accountKind": "账号类型",
+  "tenant.accountKindMissing": "此账号尚未记录类型，补充后才能用于预售分配。",
+  "tenant.accountProblemKind": "请选择账号类型。",
+  "tenant.accountUnpricedHint": "下架的账号可以不填月价与产品 ID，仅供分配给预售订单；上架销售时须填写。",
+  "pricing.presales": "账号预售"
 } as const;
 export default tenant;

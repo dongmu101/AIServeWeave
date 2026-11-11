@@ -11,7 +11,7 @@ import (
 )
 
 func renderAccountSale(row model.AccountSale, actor logic.Actor) types.AccountSale {
-	out := types.AccountSale{ID: row.ID, NodeID: row.NodeID, RuntimeID: row.RuntimeID, Name: row.Name, PriceMinor: row.PriceMinor, Currency: row.Currency, Active: row.Active, Owned: row.TenantID == actor.TenantID}
+	out := types.AccountSale{ID: row.ID, NodeID: row.NodeID, RuntimeID: row.RuntimeID, Kind: row.Kind, Name: row.Name, PriceMinor: row.PriceMinor, Currency: row.Currency, Active: row.Active, Owned: row.TenantID == actor.TenantID}
 	if row.TenantID != "" {
 		out.ExpiresAt = row.ExpiresAt.UTC().Format(time.RFC3339Nano)
 	}
@@ -45,7 +45,7 @@ func saveAccountSale(ctx *svc.ServiceContext, create bool) http.HandlerFunc {
 		if !decode(w, r, &req) {
 			return
 		}
-		row, err := ctx.Logic.SaveAccountSale(r.Context(), actor, model.AccountSale{ID: pathvar.Vars(r)["id"], NodeID: req.NodeID, RuntimeID: req.RuntimeID, Name: req.Name, PriceMinor: req.PriceMinor, Currency: req.Currency, DodoProductID: req.DodoProductID, Active: req.Active}, create)
+		row, err := ctx.Logic.SaveAccountSale(r.Context(), actor, model.AccountSale{ID: pathvar.Vars(r)["id"], NodeID: req.NodeID, RuntimeID: req.RuntimeID, Kind: req.Kind, Name: req.Name, PriceMinor: req.PriceMinor, Currency: req.Currency, DodoProductID: req.DodoProductID, Active: req.Active}, create)
 		if err != nil {
 			respondErr(w, err)
 			return

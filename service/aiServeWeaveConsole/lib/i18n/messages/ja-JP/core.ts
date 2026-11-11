@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "アカウントが購入済み、他のテナントが決済中、価格が変更された、または更新上限に達しています。更新して再試行してください。",
   "tenant.accountInsufficientCredit": "クレジット残高が不足しています。購入・更新前にチャージしてください。",
   "tenant.accountCheckoutDisabled": "オンライン決済が有効になっていないため、現在アカウントを購入できません。プラットフォーム運用者にお問い合わせください。",
-  "tenant.billingPaymentUnavailable": "決済サービスは一時的に利用できません。しばらくしてから再試行してください。"
+  "tenant.billingPaymentUnavailable": "決済サービスは一時的に利用できません。しばらくしてから再試行してください。",
+  "tenant.presaleUnavailable": "予約販売の枠が埋まったか、価格が変更されたか、公開停止されました。更新して再試行してください。",
+  "tenant.presaleAssignUnavailable": "このアカウントは割り当てられません。使用中または他のテナントが決済中である、種別が一致しない、ノードがこのテナントに開放されていない、または注文が発送待ちではない（返金処理中など）可能性があります。更新して再試行してください。",
+  "tenant.refundUnavailable": "この注文は現在返金できません。返金処理中、全額返金済み、または異議申し立て中の可能性があります。更新して再試行してください。"
 } as const;
 export default core;

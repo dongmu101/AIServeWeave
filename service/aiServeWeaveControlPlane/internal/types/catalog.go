@@ -22,9 +22,23 @@ type CatalogPackage struct {
 // 节点目标与产品 id。
 type CatalogAccount struct {
 	ID         string `json:"id"`
+	Kind       string `json:"kind,omitempty"`
 	Name       string `json:"name"`
 	PriceMinor int64  `json:"price_minor"`
 	Currency   string `json:"currency"`
+}
+
+// CatalogPresale is one listed presale; Available is false once its
+// capacity is taken. It carries no product id or counts.
+//
+// CatalogPresale 是一个上架的预售；名额占满后 Available 为 false。不含产品 id 与数量。
+type CatalogPresale struct {
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	PriceMinor int64  `json:"price_minor"`
+	Currency   string `json:"currency"`
+	Available  bool   `json:"available"`
 }
 
 // CatalogPrice is one alias's price per million tokens, in micro-credits.
@@ -42,5 +56,6 @@ type CatalogPrice struct {
 type CatalogResponse struct {
 	Packages []CatalogPackage `json:"packages"`
 	Accounts []CatalogAccount `json:"accounts"`
+	Presales []CatalogPresale `json:"presales"`
 	Prices   []CatalogPrice   `json:"prices"`
 }

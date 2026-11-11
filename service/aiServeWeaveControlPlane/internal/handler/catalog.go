@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/types"
 	"net/http"
@@ -23,6 +24,7 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 		out := types.CatalogResponse{
 			Packages: make([]types.CatalogPackage, len(c.Packages)),
 			Accounts: make([]types.CatalogAccount, len(c.Accounts)),
+			Presales: make([]types.CatalogPresale, len(c.Presales)),
 			Prices:   make([]types.CatalogPrice, len(c.Prices)),
 		}
 		for i, p := range c.Packages {
@@ -33,7 +35,11 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 			}
 		}
 		for i, a := range c.Accounts {
-			out.Accounts[i] = types.CatalogAccount{ID: a.ID, Name: a.Name, PriceMinor: a.PriceMinor, Currency: a.Currency}
+			out.Accounts[i] = types.CatalogAccount{ID: a.ID, Kind: a.Kind, Name: a.Name, PriceMinor: a.PriceMinor, Currency: a.Currency}
+		}
+		for i, p := range c.Presales {
+			out.Presales[i] = types.CatalogPresale{ID: p.ID, Kind: p.Kind, Name: p.Name, PriceMinor: p.PriceMinor, Currency: p.Currency,
+				Available: logic.PresaleAvailable(p)}
 		}
 		for i, p := range c.Prices {
 			out.Prices[i] = types.CatalogPrice{Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok}

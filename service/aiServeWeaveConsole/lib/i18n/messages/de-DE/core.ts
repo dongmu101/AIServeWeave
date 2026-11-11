@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "Das Konto wurde gekauft, befindet sich im Checkout eines anderen Mandanten, der Preis hat sich geändert oder das Verlängerungslimit ist erreicht. Aktualisieren Sie und versuchen Sie es erneut.",
   "tenant.accountInsufficientCredit": "Unzureichendes Guthaben. Vor Kauf oder Verlängerung aufladen.",
   "tenant.accountCheckoutDisabled": "Onlinezahlung ist nicht aktiviert, daher können derzeit keine Konten gekauft werden. Wenden Sie sich an den Plattformbetreiber.",
-  "tenant.billingPaymentUnavailable": "Der Zahlungsdienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut."
+  "tenant.billingPaymentUnavailable": "Der Zahlungsdienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut.",
+  "tenant.presaleUnavailable": "Das Vorverkaufskontingent ist erschöpft, der Preis hat sich geändert oder der Vorverkauf wurde archiviert. Aktualisieren Sie und versuchen Sie es erneut.",
+  "tenant.presaleAssignUnavailable": "Dieses Konto kann nicht zugewiesen werden: Es ist belegt oder im Checkout eines anderen Mandanten, der Typ passt nicht, sein Knoten ist für diesen Mandanten nicht freigegeben, oder die Bestellung wartet nicht mehr auf Auslieferung (etwa wegen einer laufenden Erstattung). Aktualisieren Sie und versuchen Sie es erneut.",
+  "tenant.refundUnavailable": "Diese Bestellung kann derzeit nicht erstattet werden: Möglicherweise läuft bereits eine Erstattung, sie ist vollständig erstattet oder strittig. Aktualisieren Sie und versuchen Sie es erneut."
 } as const;
 export default core;

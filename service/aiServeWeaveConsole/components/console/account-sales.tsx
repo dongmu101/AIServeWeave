@@ -12,7 +12,7 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { parseAccountSales, parseAccountSale, accountCheckoutBody, accountPurchasable, accountRequest, type AccountSale, type AccountDraftProblem } from "@/lib/console/account-sales";
+import { ACCOUNT_KINDS, parseAccountSales, parseAccountSale, accountCheckoutBody, accountKindLabel, accountPurchasable, accountRequest, type AccountKind, type AccountSale, type AccountDraftProblem } from "@/lib/console/account-sales";
 import { formatMoney, formatScaled, currencyDigits, parseCheckout } from "@/lib/console/billing";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
@@ -20,9 +20,15 @@ import { parseFleetSnapshot } from "@/lib/console/fleet";
 import { tenantNodeOwner } from "@/lib/console/node-access";
 import { ApiError } from "@/lib/console/errors";
 
+/** SELECT_CLASS styles the native selects of the account forms.
+ *
+ * SELECT_CLASS 是账号表单中原生下拉框的样式。 */
+export const SELECT_CLASS = "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
+
 const PROBLEM_KEYS: Record<AccountDraftProblem, MessageKey> = {
   name: "tenant.accountProblemName",
   target: "tenant.accountProblemTarget",
+  kind: "tenant.accountProblemKind",
   currency: "tenant.accountProblemCurrency",
   price: "tenant.accountProblemPrice",
   product: "tenant.accountProblemProduct",
@@ -63,6 +69,7 @@ export function AccountSales({ operator = false, canPurchase = false }: { operat
             <code className="break-all text-xs text-muted-foreground">{account.nodeId} / {account.runtimeId}</code>
             <p className="text-lg font-semibold">{account.priceMinor > 0 ? t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) }) : t("tenant.accountPriceMissing")}</p>
             <div className="flex flex-wrap gap-2">
+              {account.kind ? <Badge variant="secondary">{accountKindLabel(account.kind)}</Badge> : null}
               {account.owned ? <Badge><Message id="tenant.accountOwned" /></Badge> : null}
               {!account.active ? <Badge variant="outline"><Message id="tenant.accountArchived" /></Badge> : null}
             </div>
@@ -107,13 +114,14 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
   const [autoName, setAutoName] = React.useState("");
   const [node, setNode] = React.useState(account?.nodeId ?? "");
   const [runtime, setRuntime] = React.useState(account?.runtimeId ?? "");
+  const [kind, setKind] = React.useState<AccountKind | "">(account?.kind ?? "");
   const [currency, setCurrency] = React.useState(account?.currency || "USD");
   const [rawPrice, setPrice] = React.useState(account && account.priceMinor > 0 ? formatScaled(account.priceMinor, currencyDigits(account.currency)) : "");
   const [productId, setProductId] = React.useState(account?.dodoProductId ?? "");
   const [active, setActive] = React.useState(account ? account.active && account.priceMinor > 0 : true);
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<unknown>(null);
-  const built = accountRequest({ name, nodeId: node, runtimeId: runtime, price: rawPrice, currency, productId, active });
+  const built = accountRequest({ name, nodeId: node, runtimeId: runtime, kind, kindRequired: account === null, price: rawPrice, currency, productId, active });
   const touched = rawPrice.trim() !== "" || productId.trim() !== "";
   const prefix = React.useId();
   return <Card className="m-4">
@@ -132,17 +140,30 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
       {account ? <>
         <label htmlFor={`${prefix}-node`}><Message id="tenant.accountNode" /></label><Input id={`${prefix}-node`} value={node} disabled />
         <label htmlFor={`${prefix}-runtime`}><Message id="tenant.accountRuntime" /></label><Input id={`${prefix}-runtime`} value={runtime} disabled />
-      </> : <AccountTargetPicker inventory={inventory} nodeId={node} runtimeId={runtime} disabled={pending} onSelect={(nextNode, nextRuntime, nextName) => {
-        setNode(nextNode); setRuntime(nextRuntime);
+        {account.kind ? <>
+          <label htmlFor={`${prefix}-kind`}><Message id="tenant.accountKind" /></label><Input id={`${prefix}-kind`} value={accountKindLabel(account.kind)} disabled />
+        </> : <>
+          {/* A legacy row may have its kind filled in once; it never changes after.
+              旧行可以补填一次类型，之后不再更改。 */}
+          <label htmlFor={`${prefix}-kind`}><Message id="tenant.accountKind" /></label>
+          <select id={`${prefix}-kind`} className={SELECT_CLASS} value={kind} disabled={pending} onChange={event => setKind(event.target.value as AccountKind | "")}>
+            <option value="">—</option>
+            {ACCOUNT_KINDS.map(value => <option key={value} value={value}>{accountKindLabel(value)}</option>)}
+          </select>
+          <p className="text-sm text-muted-foreground"><Message id="tenant.accountKindMissing" /></p>
+        </>}
+      </> : <AccountTargetPicker inventory={inventory} nodeId={node} runtimeId={runtime} disabled={pending} onSelect={(nextNode, nextRuntime, nextName, nextKind) => {
+        setNode(nextNode); setRuntime(nextRuntime); setKind(nextKind);
         if (nextName) {
           setName(previous => previous === "" || previous === autoName ? nextName : previous);
           setAutoName(nextName);
         }
       }} />}
       <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><Input id={`${prefix}-currency`} required maxLength={3} autoCapitalize="characters" value={currency} disabled={pending} onChange={e => setCurrency(e.target.value.toUpperCase())} />
-      <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
-      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
+      <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required={active} inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
+      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={active} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>
+      <p className="text-sm text-muted-foreground"><Message id="tenant.accountUnpricedHint" /></p>
       <label className="flex items-center gap-2"><input type="checkbox" checked={active} disabled={pending} onChange={e => setActive(e.target.checked)} /><Message id="tenant.accountListed" /></label>
       {touched && built.problem ? <p role="status" className="text-sm text-muted-foreground"><Message id={PROBLEM_KEYS[built.problem]} /></p> : null}
       <FormError message={error === null ? null : <ErrorMessage error={error} />} />
@@ -154,7 +175,7 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
 /** Only Agent-reported CLI accounts can be selected when creating an offer. */
 function AccountTargetPicker({ inventory, nodeId, runtimeId, disabled, onSelect }: {
   inventory: AccountSale[]; nodeId: string; runtimeId: string; disabled: boolean;
-  onSelect: (nodeId: string, runtimeId: string, name: string) => void;
+  onSelect: (nodeId: string, runtimeId: string, name: string, kind: AccountKind | "") => void;
 }) {
   const { t } = useI18n();
   const prefix = React.useId();
@@ -165,8 +186,8 @@ function AccountTargetPicker({ inventory, nodeId, runtimeId, disabled, onSelect 
   })).filter(node => node.runtimes.length > 0);
   const selected = nodes.find(node => node.nodeId === nodeId);
   const label = (runtime: { kind: string; id: string }) => `${runtime.kind === "claude" ? "Claude Code" : "Codex"} · ${runtime.id}`;
-  const selectClass = "h-10 w-full min-w-0 rounded-md border border-input bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50";
-  const refresh = () => { onSelect("", "", ""); fleet.reload(); };
+  const selectClass = SELECT_CLASS;
+  const refresh = () => { onSelect("", "", "", ""); fleet.reload(); };
   const unavailable = disabled || fleet.loading || fleet.error !== null;
   return <div className="grid min-w-0 gap-3">
     <Button type="button" variant="outline" className="justify-self-start" disabled={disabled || fleet.loading} onClick={refresh}><Message id="common.refresh" /></Button>
@@ -175,14 +196,14 @@ function AccountTargetPicker({ inventory, nodeId, runtimeId, disabled, onSelect 
     {fleet.data?.partial ? <p role="status" className="text-sm text-muted-foreground"><Message id="tenant.accountFleetPartial" /></p> : null}
     {fleet.data && nodes.length === 0 ? <EmptyState title={t("tenant.accountNoTargets")} description={t("tenant.accountConnectHint")} /> : null}
     <label htmlFor={`${prefix}-agent`}><Message id="tenant.accountSelectAgent" /></label>
-    <select id={`${prefix}-agent`} className={selectClass} required disabled={unavailable || nodes.length === 0} value={nodeId} onChange={event => onSelect(event.target.value, "", "")}>
+    <select id={`${prefix}-agent`} className={selectClass} required disabled={unavailable || nodes.length === 0} value={nodeId} onChange={event => onSelect(event.target.value, "", "", "")}>
       <option value=""><Message id="tenant.accountSelectAgent" /></option>
       {nodes.map(node => <option key={node.nodeId} value={node.nodeId}>{node.nodeId}{node.live ? "" : ` (${t("tenant.accountOffline")})`}</option>)}
     </select>
     <label htmlFor={`${prefix}-account`}><Message id="tenant.accountSelectRuntime" /></label>
     <select id={`${prefix}-account`} className={selectClass} required disabled={unavailable || !selected} value={runtimeId} onChange={event => {
       const runtime = selected?.runtimes.find(runtime => runtime.id === event.target.value);
-      onSelect(nodeId, runtime?.id ?? "", runtime ? label(runtime) : "");
+      onSelect(nodeId, runtime?.id ?? "", runtime ? label(runtime) : "", runtime ? (runtime.kind as AccountKind) : "");
     }}>
       <option value=""><Message id="tenant.accountSelectRuntime" /></option>
       {selected?.runtimes.map(runtime => <option key={runtime.id} value={runtime.id}>{label(runtime)}</option>)}

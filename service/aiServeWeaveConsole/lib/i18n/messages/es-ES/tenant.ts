@@ -735,6 +735,23 @@ const tenant = {
   "pricing.model": "Modelo",
   "pricing.input": "Entrada / 1 M de tokens",
   "pricing.output": "Salida / 1 M de tokens",
-  "pricing.defaultModel": "Todos los demás modelos"
+  "pricing.defaultModel": "Todos los demás modelos",
+  "tenant.presale": "Preventa de cuentas",
+  "tenant.presaleNote": "Reserva un mes de acceso exclusivo a una cuenta de Claude Code o Codex, pagado en línea en moneda fiduciaria; no se usa tu saldo de créditos. Una vez confirmado el pago, el pedido queda pendiente de entrega; la plataforma suele asignarte la cuenta en pocas horas. El mes empieza al asignarla y, después, la facturación pasa a cuentas mensuales.",
+  "tenant.presaleOperatorNote": "Una preventa solo define el tipo de cuenta, el precio mensual y el cupo, sin vincular una cuenta concreta. Cuando un inquilino paga, el pedido aparece en «Pedidos pendientes de entrega»; asígnale una cuenta libre del mismo tipo del inventario. El mes empieza al asignarla. El cupo cuenta los pagos pendientes de menos de 30 minutos y los pedidos pagados aún sin asignar; un pago completado después de su reserva igualmente queda pendiente de entrega.",
+  "tenant.presaleBadge": "Preventa",
+  "tenant.presaleDelivery": "Suele entregarse en pocas horas tras el pago; el mes empieza al asignar la cuenta",
+  "tenant.presaleSoldOut": "Agotado",
+  "tenant.presaleBuy": "Reservar un mes",
+  "tenant.presalePurchase": "Reservar una cuenta",
+  "tenant.presaleBuyConfirm": "Irás a la página de pago para pagar {price} por «{name}» y reservar un mes de una cuenta {kind}. Una vez confirmado el pago, el pedido queda pendiente de entrega; la plataforma suele asignar la cuenta en pocas horas y el mes empieza al asignarla. Después la facturación pasa a cuentas mensuales: solo podrás usar cuentas compradas y no caducadas.",
+  "tenant.presaleEmpty": "No hay preventas",
+  "tenant.presaleOrderAwaiting": "Pagado, pendiente de entrega",
+  "tenant.billingReturnPresale": "Pago confirmado. La plataforma suele asignarte la cuenta en pocas horas; consulta el estado de la entrega en la lista de pedidos.",
+  "tenant.accountKind": "Tipo de cuenta",
+  "tenant.accountKindMissing": "Esta cuenta no tiene un tipo registrado. Indícalo para poder asignarla a pedidos de preventa.",
+  "tenant.accountProblemKind": "Elige un tipo de cuenta.",
+  "tenant.accountUnpricedHint": "Una cuenta archivada puede dejar en blanco el precio mensual y el ID de producto y reservarse solo para preventas. Para ponerla a la venta, ambos son obligatorios.",
+  "pricing.presales": "Preventa de cuentas"
 } as const;
 export default tenant;

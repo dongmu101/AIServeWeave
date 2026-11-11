@@ -128,10 +128,19 @@ type CheckoutOrder struct {
 	// 付款开通到的到期时间；已付款却没有它的账号订单未能开通，等待退款。
 	AccountID        string     `json:"account_id,omitempty"`
 	AccountExpiresAt *time.Time `json:"account_expires_at,omitempty"`
-	Status           string     `json:"status"`
-	PaymentID        string     `json:"payment_id,omitempty"`
-	CreatedAt        time.Time  `json:"created_at"`
-	UpdatedAt        time.Time  `json:"updated_at"`
+	// PresaleID is set on a presale order, whose PackageID is empty too. A
+	// paid presale order without AccountExpiresAt is waiting for an
+	// operator to assign its account; once assigned it carries AccountID
+	// and AccountExpiresAt.
+	//
+	// PresaleID 只在预售订单上出现，此时 PackageID 同样为空。已付款却没有
+	// AccountExpiresAt 的预售订单正在等待运维分配账号；分配后带有 AccountID 与
+	// AccountExpiresAt。
+	PresaleID string    `json:"presale_id,omitempty"`
+	Status    string    `json:"status"`
+	PaymentID string    `json:"payment_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // OrderListResponse is one page of orders.

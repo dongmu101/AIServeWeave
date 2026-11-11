@@ -287,8 +287,17 @@ type CheckoutOrder struct {
 	// 无法开通，需要运维退款。
 	AccountID        string     `gorm:"size:32;not null"`
 	AccountExpiresAt *time.Time `gorm:"column:account_expires_at"`
-	CreatedAt        time.Time
-	UpdatedAt        time.Time
+	// PresaleID is the presale a fiat order buys one month of. Payment only
+	// marks it paid; an operator's assignment later sets AccountID and
+	// AccountExpiresAt. A paid presale order with a nil AccountExpiresAt is
+	// waiting for an account, not a failed grant.
+	//
+	// PresaleID 是法币订单所购一个月的预售。付款只把它标为已付款；之后由运维分配时
+	// 设置 AccountID 与 AccountExpiresAt。已付款但 AccountExpiresAt 为 nil 的预售订单
+	// 是在等待分配账号，而不是开通失败。
+	PresaleID string `gorm:"size:32;not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // TableName pins the table name.

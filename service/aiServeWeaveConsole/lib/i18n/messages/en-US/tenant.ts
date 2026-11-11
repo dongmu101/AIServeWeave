@@ -747,6 +747,23 @@ const tenant = {
   "pricing.model": "Model",
   "pricing.input": "Input / 1M tokens",
   "pricing.output": "Output / 1M tokens",
-  "pricing.defaultModel": "All other models"
+  "pricing.defaultModel": "All other models",
+  "tenant.presale": "Account presales",
+  "tenant.presaleNote": "Pre-order one month of exclusive access to a Claude Code or Codex account, paid online in fiat currency — your credit balance is not used. Once payment is confirmed, the order awaits delivery; the platform usually assigns your account within a few hours. The month starts when the account is assigned, and billing then switches to monthly accounts.",
+  "tenant.presaleOperatorNote": "A presale defines only the account kind, monthly price and capacity, without binding a specific account. After a tenant pays, the order appears under Orders awaiting delivery; assign it a free account of the same kind from inventory. The month starts at assignment. Capacity counts pending checkouts within 30 minutes and paid orders not yet assigned; a payment that completes after its hold still lands as awaiting delivery.",
+  "tenant.presaleBadge": "Presale",
+  "tenant.presaleDelivery": "Usually delivered within a few hours of payment; the month starts at assignment",
+  "tenant.presaleSoldOut": "Sold out",
+  "tenant.presaleBuy": "Pre-order one month",
+  "tenant.presalePurchase": "Pre-order an account",
+  "tenant.presaleBuyConfirm": "You will be taken to the payment page to pay {price} for “{name}”, pre-ordering one month of a {kind} account. Once payment is confirmed the order awaits delivery; the platform usually assigns the account within a few hours, and the month starts at assignment. Billing then switches to monthly accounts: only purchased, unexpired accounts are available.",
+  "tenant.presaleEmpty": "No presales",
+  "tenant.presaleOrderAwaiting": "Paid, awaiting delivery",
+  "tenant.billingReturnPresale": "Payment confirmed. The platform usually assigns your account within a few hours; check the orders list for delivery status.",
+  "tenant.accountKind": "Account kind",
+  "tenant.accountKindMissing": "This account has no recorded kind. Set it before assigning the account to presale orders.",
+  "tenant.accountProblemKind": "Choose an account kind.",
+  "tenant.accountUnpricedHint": "An archived account may leave the monthly price and product ID blank and be kept only for presale orders. Both are required to list it for sale.",
+  "pricing.presales": "Account presales"
 } as const;
 export default tenant;

@@ -187,7 +187,9 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
             {operator ? <TableCell><code className="text-xs break-all">{order.tenantId}</code></TableCell> : null}
             <TableCell><code className="text-xs break-all">{order.id}</code></TableCell>
             <TableCell className="text-right whitespace-nowrap">{formatMoney(order.amountMinor, order.currency, locale)}</TableCell>
-            <TableCell className="text-right whitespace-nowrap">{order.accountId === ""
+            <TableCell className="text-right whitespace-nowrap">{order.presaleId !== "" && order.accountExpiresAt === null
+              ? order.status === "paid" ? <span className="font-medium">{t("tenant.presaleOrderAwaiting")}</span> : t("tenant.presale")
+              : order.accountId === ""
               ? <span className="font-mono">{t("tenant.billingCreditsValue", { credits: formatCredits(order.creditsMicro, locale) })}</span>
               : order.accountExpiresAt
                 ? t("tenant.accountOrderGranted", { time: formatDateTime(order.accountExpiresAt, undefined, locale) })

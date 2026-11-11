@@ -2,6 +2,7 @@
 
 import * as React from "react";
 import { AccountSales } from "@/components/console/account-sales";
+import { PresaleAdmin } from "@/components/console/account-presales";
 import { toast } from "sonner";
 
 import { BillingDisabled, LedgerTable, OrdersTable, TenantIdFilter } from "@/components/console/billing-tables";
@@ -88,6 +89,7 @@ export function BillingAdminView() {
       <TabsList aria-label={t("operator.billingSections")} className="h-auto! w-full flex-wrap justify-start">
         <TabsTrigger value="packages" className="flex-none"><Message id="tenant.billingPackages" /></TabsTrigger>
         <TabsTrigger value="accounts" className="flex-none"><Message id="tenant.accountMonthly" /></TabsTrigger>
+        <TabsTrigger value="presales" className="flex-none"><Message id="tenant.presale" /></TabsTrigger>
         <TabsTrigger value="prices" className="flex-none"><Message id="operator.billingPrices" /></TabsTrigger>
         <TabsTrigger value="tenants" className="flex-none"><Message id="operator.billingTenants" /></TabsTrigger>
         <TabsTrigger value="orders" className="flex-none"><Message id="tenant.billingOrders" /></TabsTrigger>
@@ -95,6 +97,7 @@ export function BillingAdminView() {
       </TabsList>
       <TabsContent value="packages" className="pt-2"><PackagesSection /></TabsContent>
       <TabsContent value="accounts" className="pt-2"><AccountSales operator /></TabsContent>
+      <TabsContent value="presales" className="pt-2"><PresaleAdmin /></TabsContent>
       <TabsContent value="prices" className="pt-2"><PricesSection /></TabsContent>
       <TabsContent value="tenants" className="pt-2"><TenantsSection /></TabsContent>
       <TabsContent value="orders" className="pt-2"><FilteredHistory kind="orders" /></TabsContent>

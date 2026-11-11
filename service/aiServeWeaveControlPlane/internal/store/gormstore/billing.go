@@ -492,6 +492,9 @@ func (s *Store) ListCheckoutOrders(ctx context.Context, query store.ListQuery, f
 	if filter.Status != "" {
 		db = db.Where("status = ?", filter.Status)
 	}
+	if filter.Awaiting {
+		db = db.Where("presale_id <> '' AND status = ? AND account_expires_at IS NULL", model.OrderStatusPaid)
+	}
 	return readPage(db, query, func(o model.CheckoutOrder) (time.Time, string) { return o.CreatedAt, o.ID })
 }
 
@@ -627,7 +630,7 @@ func (l gormLedger) SaveOrder(order model.CheckoutOrder) error {
 	return l.tx.Model(&model.CheckoutOrder{}).Where("id = ?", order.ID).Updates(map[string]any{
 		"dodo_payment_id": order.DodoPaymentID, "refunded_minor": order.RefundedMinor,
 		"paid_amount_minor": order.PaidAmountMinor, "paid_currency": order.PaidCurrency,
-		"status": order.Status, "account_expires_at": order.AccountExpiresAt, "updated_at": order.UpdatedAt,
+		"status": order.Status, "account_id": order.AccountID, "account_expires_at": order.AccountExpiresAt, "updated_at": order.UpdatedAt,
 	}).Error
 }
 

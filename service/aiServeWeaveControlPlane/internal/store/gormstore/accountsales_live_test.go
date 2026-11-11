@@ -39,3 +39,18 @@ func TestLiveAccountCheckouts(t *testing.T) {
 		}
 	})
 }
+
+// Presales share the account scenario's isolated databases.
+func TestLivePresaleCheckouts(t *testing.T) {
+	migrationDatabases(t, func(t *testing.T, db *gorm.DB, _ string) {
+		ctx := context.Background()
+		st := gormstore.New(db)
+		if err := st.MigrateAll(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.CheckSchema(ctx); err != nil {
+			t.Fatal(err)
+		}
+		storetest.PresaleCheckouts(t, st)
+	})
+}

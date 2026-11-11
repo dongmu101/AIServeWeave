@@ -41,6 +41,8 @@ export function ConfirmDialog({
   description,
   confirmLabel,
   destructive = false,
+  confirmDisabled = false,
+  children,
   onConfirm,
 }: {
   open: boolean;
@@ -49,6 +51,15 @@ export function ConfirmDialog({
   description: React.ReactNode;
   confirmLabel?: React.ReactNode;
   destructive?: boolean;
+  /** confirmDisabled blocks confirming until the fields in children are
+   * valid.
+   *
+   * confirmDisabled 在 children 中的字段有效之前禁止确认。 */
+  confirmDisabled?: boolean;
+  /** children are the fields the action needs, below the description.
+   *
+   * children 是该操作所需的字段，位于说明之下。 */
+  children?: React.ReactNode;
   /** onConfirm runs the action and resolves when it is settled. Rejecting
    * keeps the dialog open and shows the message.
    *
@@ -105,6 +116,7 @@ export function ConfirmDialog({
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>
+          {children}
           <FormError message={error === null ? null : <ErrorMessage error={error} />} />
           <DialogFooter>
             <Button
@@ -116,6 +128,7 @@ export function ConfirmDialog({
               <Message id="common.cancel" /></Button>
             <SubmitButton
               pending={pending}
+              disabled={pending || confirmDisabled}
               variant={destructive ? "destructive" : "default"}
             >
               {confirmLabel ?? t("common.confirm")}

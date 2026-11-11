@@ -48,11 +48,13 @@ func (s *Store) SaveAccountSale(ctx context.Context, row model.AccountSale, crea
 			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", row.ID).Take(&old).Error; err != nil {
 				return err
 			}
-			if old.NodeID != row.NodeID || old.RuntimeID != row.RuntimeID {
+			// A kind may be filled in on a legacy row, never changed.
+			// 旧行可以补填类型，但类型一旦填写不可更改。
+			if old.NodeID != row.NodeID || old.RuntimeID != row.RuntimeID || (old.Kind != "" && old.Kind != row.Kind) {
 				return store.ErrConflict
 			}
 			result := tx.Model(&model.AccountSale{}).Where("id = ?", row.ID).
-				Updates(map[string]any{"name": row.Name, "price_minor": row.PriceMinor, "currency": row.Currency,
+				Updates(map[string]any{"kind": row.Kind, "name": row.Name, "price_minor": row.PriceMinor, "currency": row.Currency,
 					"dodo_product_id": row.DodoProductID, "active": row.Active, "updated_at": row.UpdatedAt})
 			if result.Error != nil {
 				return result.Error
@@ -77,15 +79,10 @@ func (s *Store) CreateAccountCheckoutOrder(ctx context.Context, order *model.Che
 		if err := store.AccountCheckoutTerms(sale, order.TenantID, order.AmountMinor, order.Currency, now); err != nil {
 			return err
 		}
-		var pending []model.CheckoutOrder
-		if err := tx.Where("account_id = ? AND status = ? AND created_at > ?", order.AccountID, model.OrderStatusPending, now.Add(-model.AccountCheckoutHold)).
-			Find(&pending).Error; err != nil {
+		if held, err := accountCheckoutHeld(tx, order.AccountID, order.TenantID, now); err != nil {
 			return err
-		}
-		for _, other := range pending {
-			if store.AccountCheckoutHeld(other, order.TenantID, now) {
-				return store.ErrConflict
-			}
+		} else if held {
+			return store.ErrConflict
 		}
 		return tx.Create(order).Error
 	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted}))

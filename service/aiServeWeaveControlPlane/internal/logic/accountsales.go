@@ -78,16 +78,26 @@ func (s *Service) ListAccountSales(ctx context.Context, actor Actor) ([]model.Ac
 }
 
 // SaveAccountSale never accepts ownership/expiry from the operator's draft.
+// A new account must name its kind; an update may fill in a legacy row's
+// empty kind, and keeps the stored kind when the draft omits it. Listed
+// inventory needs a fiat price; archived inventory may be left unpriced and
+// kept for presale assignment.
+//
+// SaveAccountSale 从不接受运维草稿中的归属与到期时间。新账号必须指明类型；更新可以
+// 为旧行补填空类型，草稿未带类型时保留已存类型。上架库存必须有法币价格；下架库存可以
+// 不标价，留作预售分配。
 func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.AccountSale, create bool) (model.AccountSale, error) {
 	if err := s.requireAccountOperator(actor); err != nil {
 		return model.AccountSale{}, err
 	}
 	in.Name = strings.TrimSpace(in.Name)
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
+	priced := in.Active || in.PriceMinor != 0 || in.Currency != "" || in.DodoProductID != ""
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 ||
 		!nodeaccess.ValidNodeID(in.NodeID) || !nodeaccess.ValidNodeID(in.RuntimeID) ||
-		in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(in.Currency) ||
-		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) {
+		(in.Kind != "" && !model.ValidAccountKind(in.Kind)) || (create && in.Kind == "") ||
+		(priced && (in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(in.Currency) ||
+			in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID))) {
 		return model.AccountSale{}, ErrInvalidInput
 	}
 	if _, owned := nodeaccess.OwnerOf(in.NodeID); owned {
@@ -95,6 +105,16 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 	}
 	if create {
 		in.ID = model.NewID(model.PrefixAccountSale)
+	} else if in.Kind == "" {
+		rows, err := s.store.ListAccountSales(ctx)
+		if err != nil {
+			return model.AccountSale{}, translate(err)
+		}
+		for _, row := range rows {
+			if row.ID == in.ID {
+				in.Kind = row.Kind
+			}
+		}
 	}
 	in.TenantID, in.ExpiresAt, in.UpdatedAt = "", time.Unix(0, 0).UTC(), s.clock.Now().UTC()
 	if err := s.store.SaveAccountSale(ctx, in, create); err != nil {

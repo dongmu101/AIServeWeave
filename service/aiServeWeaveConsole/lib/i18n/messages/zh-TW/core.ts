@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "帳號已被購買、正由其他商戶結帳、價格已變動或已達續費上限。請重新整理後再試。",
   "tenant.accountInsufficientCredit": "點數餘額不足，請先儲值再購買或續費。",
   "tenant.accountCheckoutDisabled": "線上付款未開啟，暫時無法購買帳號。請聯絡平台維運。",
-  "tenant.billingPaymentUnavailable": "支付服務暫時無法使用，請稍後再試。"
+  "tenant.billingPaymentUnavailable": "支付服務暫時無法使用，請稍後再試。",
+  "tenant.presaleUnavailable": "預售名額已滿、價格已變動或已下架。請重新整理後再試。",
+  "tenant.presaleAssignUnavailable": "無法分配此帳號：帳號已被佔用或正由其他商戶結帳、類型不符、所在節點未對該商戶開放，或訂單已不在待出貨狀態（例如正在退款）。請重新整理後再試。",
+  "tenant.refundUnavailable": "此訂單目前無法退款：可能已有進行中的退款、已全額退款或處於爭議中。請重新整理後再試。"
 } as const;
 export default core;

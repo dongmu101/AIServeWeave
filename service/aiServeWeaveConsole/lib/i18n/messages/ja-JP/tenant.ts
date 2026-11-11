@@ -735,6 +735,23 @@ const tenant = {
   "pricing.model": "モデル",
   "pricing.input": "入力 / 100万トークン",
   "pricing.output": "出力 / 100万トークン",
-  "pricing.defaultModel": "その他すべてのモデル"
+  "pricing.defaultModel": "その他すべてのモデル",
+  "tenant.presale": "アカウント予約販売",
+  "tenant.presaleNote": "Claude Code または Codex アカウントの 1 か月分の専有利用権を予約購入します。法定通貨でオンライン決済し、クレジット残高は使用しません。決済確認後、注文は「発送待ち」になり、通常は数時間以内にアカウントが割り当てられます。1 か月は割り当て時点から始まり、割り当て後は月額アカウントに切り替わります。",
+  "tenant.presaleOperatorNote": "予約販売はアカウント種別・月額・枠数だけを定義し、特定のアカウントには紐づけません。テナントが決済すると注文は「発送待ちの注文」に表示されるので、同じ種別の空きアカウントを在庫から割り当ててください。1 か月は割り当て時点から始まります。枠数には 30 分以内の決済待ちと、決済済みで未割り当ての注文が含まれます。保留時間を過ぎて完了した決済も発送待ちになります。",
+  "tenant.presaleBadge": "予約販売",
+  "tenant.presaleDelivery": "決済後、通常は数時間以内に発送。期間は割り当て時点から開始",
+  "tenant.presaleSoldOut": "完売",
+  "tenant.presaleBuy": "1 か月を予約購入",
+  "tenant.presalePurchase": "アカウントを予約購入",
+  "tenant.presaleBuyConfirm": "決済ページに移動し、「{name}」に {price} を支払って {kind} アカウント 1 か月分を予約購入します。決済確認後、注文は発送待ちとなり、通常は数時間以内にアカウントが割り当てられます。1 か月は割り当て時点から始まり、割り当て後は月額アカウントに切り替わって、購入済みかつ有効期限内のアカウントのみ利用できます。",
+  "tenant.presaleEmpty": "予約販売の商品はありません",
+  "tenant.presaleOrderAwaiting": "決済済み・発送待ち",
+  "tenant.billingReturnPresale": "決済が確認されました。通常は数時間以内にアカウントが割り当てられます。発送状況は注文一覧で確認できます。",
+  "tenant.accountKind": "アカウント種別",
+  "tenant.accountKindMissing": "このアカウントには種別が記録されていません。設定すると予約販売に割り当てられます。",
+  "tenant.accountProblemKind": "アカウント種別を選択してください。",
+  "tenant.accountUnpricedHint": "公開停止中のアカウントは月額と商品 ID を空欄にでき、予約販売の割り当て専用にできます。販売する場合は両方の入力が必要です。",
+  "pricing.presales": "アカウント予約販売"
 } as const;
 export default tenant;

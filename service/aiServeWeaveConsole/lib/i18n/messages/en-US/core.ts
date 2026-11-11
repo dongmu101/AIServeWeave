@@ -76,6 +76,9 @@ const core = {
   "tenant.accountUnavailable": "The account was purchased, is in another tenant's checkout, the price changed, or the renewal limit was reached. Refresh and try again.",
   "tenant.accountInsufficientCredit": "Insufficient credits. Top up before buying or renewing.",
   "tenant.accountCheckoutDisabled": "Online payment is not enabled, so accounts cannot be bought right now. Contact the platform operator.",
-  "tenant.billingPaymentUnavailable": "The payment service is temporarily unavailable. Please try again later."
+  "tenant.billingPaymentUnavailable": "The payment service is temporarily unavailable. Please try again later.",
+  "tenant.presaleUnavailable": "The presale is full, its price changed, or it was archived. Refresh and try again.",
+  "tenant.presaleAssignUnavailable": "This account cannot be assigned: it is held or in another tenant's checkout, its kind does not match, its node is not open to this tenant, or the order is no longer awaiting delivery (for example, a refund is in progress). Refresh and try again.",
+  "tenant.refundUnavailable": "This order cannot be refunded right now: a refund may already be in progress, it may be fully refunded, or it is disputed. Refresh and try again."
 } as const;
 export default core;

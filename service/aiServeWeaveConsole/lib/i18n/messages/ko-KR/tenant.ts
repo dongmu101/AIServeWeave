@@ -735,6 +735,23 @@ const tenant = {
   "pricing.model": "모델",
   "pricing.input": "입력 / 100만 토큰",
   "pricing.output": "출력 / 100만 토큰",
-  "pricing.defaultModel": "기타 모든 모델"
+  "pricing.defaultModel": "기타 모든 모델",
+  "tenant.presale": "계정 사전 판매",
+  "tenant.presaleNote": "Claude Code 또는 Codex 계정의 한 달 전용 사용권을 사전 구매합니다. 법정 통화로 온라인 결제하며 크레딧 잔액은 사용하지 않습니다. 결제가 확인되면 주문은 ‘배송 대기’ 상태가 되며, 플랫폼이 보통 몇 시간 안에 계정을 배정합니다. 한 달은 배정 시점부터 시작되며, 배정 후 월간 계정으로 전환됩니다.",
+  "tenant.presaleOperatorNote": "사전 판매는 계정 유형, 월 가격, 수량 한도만 정하며 특정 계정에 묶이지 않습니다. 테넌트가 결제하면 주문이 ‘배송 대기 주문’에 표시되니, 같은 유형의 빈 계정을 재고에서 배정하세요. 한 달은 배정 시점부터 시작됩니다. 수량 한도에는 30분 이내의 결제 대기와 결제 후 미배정 주문이 포함되며, 보류 시간이 지난 뒤 완료된 결제도 배송 대기로 들어옵니다.",
+  "tenant.presaleBadge": "사전 판매",
+  "tenant.presaleDelivery": "결제 후 보통 몇 시간 안에 배송되며, 기간은 배정 시점부터 시작",
+  "tenant.presaleSoldOut": "품절",
+  "tenant.presaleBuy": "한 달 사전 구매",
+  "tenant.presalePurchase": "계정 사전 구매",
+  "tenant.presaleBuyConfirm": "결제 페이지로 이동하여 “{name}”에 {price}를 결제하고 {kind} 계정 한 달을 사전 구매합니다. 결제가 확인되면 주문은 배송 대기 상태가 되며, 플랫폼이 보통 몇 시간 안에 계정을 배정합니다. 한 달은 배정 시점부터 시작되고, 배정 후 월간 계정으로 전환되어 구매했으며 만료되지 않은 계정만 사용할 수 있습니다.",
+  "tenant.presaleEmpty": "사전 판매 상품이 없습니다",
+  "tenant.presaleOrderAwaiting": "결제 완료, 배송 대기",
+  "tenant.billingReturnPresale": "결제가 확인되었습니다. 플랫폼이 보통 몇 시간 안에 계정을 배정하며, 주문 목록에서 배송 상태를 확인할 수 있습니다.",
+  "tenant.accountKind": "계정 유형",
+  "tenant.accountKindMissing": "이 계정에는 유형이 기록되어 있지 않습니다. 유형을 지정해야 사전 판매 주문에 배정할 수 있습니다.",
+  "tenant.accountProblemKind": "계정 유형을 선택하세요.",
+  "tenant.accountUnpricedHint": "판매 중단된 계정은 월 가격과 상품 ID를 비워 두고 사전 판매 배정 전용으로 둘 수 있습니다. 판매하려면 둘 다 입력해야 합니다.",
+  "pricing.presales": "계정 사전 판매"
 } as const;
 export default tenant;
