@@ -11,7 +11,7 @@
 #
 #   docker build --build-arg SERVICE=aiServeWeaveGateway -t aisw-gateway .
 
-FROM golang:1.27-alpine AS build
+FROM golang:1.27.4-alpine AS build
 ARG SERVICE
 # VERSION is stamped into the binary's `main.version` (see each service's
 # `-version` flag) so a running container reports the tag it was built from
