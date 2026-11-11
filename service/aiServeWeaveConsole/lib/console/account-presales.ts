@@ -12,6 +12,11 @@ import { tenantNodeOwner } from "./node-access.ts";
 export const MAX_PRESALES = 100;
 export const MAX_PRESALE_CAPACITY = 10_000;
 
+/** MAX_ALIPAY_AMOUNT mirrors billing.MaxAlipayPointAmount.
+ *
+ * MAX_ALIPAY_AMOUNT 镜像 billing.MaxAlipayPointAmount。 */
+export const MAX_ALIPAY_AMOUNT = 99_999_999;
+
 /** AccountPresale mirrors types.AccountPresale: one month of an account of
  * `kind`, sold before an account is chosen. `available` says whether it can
  * be checked out now. `dodoProductId`, `capacity` and `outstanding` exist
@@ -19,10 +24,17 @@ export const MAX_PRESALE_CAPACITY = 10_000;
  *
  * AccountPresale 镜像 types.AccountPresale：在选定账号之前预售的某一类型账号的一个月。
  * `available` 表示此刻能否结账。`dodoProductId`、`capacity` 与 `outstanding` 只在运维
- * 视图中存在（租户视图中为 "" 与 null）。 */
+ * 视图中存在（租户视图中为 "" 与 null）。
+ *
+ * `alipayAmount` is how many Alipay units (counts or points) one month costs
+ * from a tenant's Alipay quota, 0 when it cannot be paid that way;
+ * `alipayAvailable` says whether it can be now.
+ *
+ * `alipayAmount` 是用租户支付宝额度支付一个月所需的单位数（次数或积分），不能这样支付时
+ * 为 0；`alipayAvailable` 表示此刻能否这样支付。 */
 export interface AccountPresale {
   id: string; kind: AccountKind; name: string; priceMinor: number; currency: string;
-  active: boolean; available: boolean; dodoProductId: string;
+  active: boolean; available: boolean; alipayAmount: number; alipayAvailable: boolean; dodoProductId: string;
   capacity: number | null; outstanding: number | null;
 }
 
@@ -53,9 +65,14 @@ export function parseAccountPresale(value: unknown): AccountPresale {
   // 超过占用时长才完成的付款可能让等待数超过名额，因此只做宽松的上界检查。
   const outstanding = counted(row.outstanding, Number.MAX_SAFE_INTEGER);
   if ((capacity === null) !== (outstanding === null)) throw new ApiError("contract");
+  // A control plane from before Alipay presales sends neither field.
+  // 早于支付宝预售的控制面不发送这两个字段。
+  const alipayAmount = counted(row.alipay_amount, MAX_ALIPAY_AMOUNT) ?? 0;
+  if (row.alipay_available !== undefined && typeof row.alipay_available !== "boolean") throw new ApiError("contract");
   return {
     id: text(row.id, 32), kind: parseAccountKind(row.kind, false) as AccountKind, name: text(row.name, 512),
     priceMinor, currency, active: row.active, available: row.available,
+    alipayAmount, alipayAvailable: row.alipay_available === true,
     dodoProductId: row.dodo_product_id === undefined || row.dodo_product_id === "" ? "" : text(row.dodo_product_id, MAX_PRODUCT_ID_BYTES),
     capacity, outstanding,
   };
@@ -77,14 +94,24 @@ export function presaleCheckoutBody(presale: Pick<AccountPresale, "priceMinor" |
   return { expected_price_minor: presale.priceMinor, currency: presale.currency };
 }
 
+/** presaleAlipayBody pins the Alipay amount the tenant confirmed and the
+ * click's action id, so a change in between is refused with 409 and a retry
+ * of a lost answer resumes the same order.
+ *
+ * presaleAlipayBody 固定商户确认的支付宝额度数量与点击的 action id，使期间改动以 409
+ * 拒绝，并使丢失答复后的重试恢复同一订单。 */
+export function presaleAlipayBody(presale: Pick<AccountPresale, "alipayAmount">, actionId: string): { action_id: string; expected_amount: number } {
+  return { action_id: actionId, expected_amount: presale.alipayAmount };
+}
+
 /** PresaleDraftProblem names the first invalid field of a presale draft.
  *
  * PresaleDraftProblem 指出预售草稿中第一个无效字段。 */
-export type PresaleDraftProblem = "name" | "kind" | "currency" | "price" | "product" | "capacity";
+export type PresaleDraftProblem = "name" | "kind" | "currency" | "price" | "product" | "capacity" | "alipay";
 
 export interface PresaleRequest {
   kind: AccountKind; name: string; price_minor: number; currency: string;
-  dodo_product_id: string; capacity: number; active: boolean;
+  dodo_product_id: string; capacity: number; active: boolean; alipay_amount: number;
 }
 
 /** presaleRequest validates an operator's draft the way SaveAccountPresale
@@ -92,8 +119,8 @@ export interface PresaleRequest {
  * as a whole number.
  *
  * presaleRequest 按 SaveAccountPresale 的规则校验运维草稿：价格以货币主单位输入，
- * 名额为整数。 */
-export function presaleRequest(draft: { kind: AccountKind | ""; name: string; price: string; currency: string; productId: string; capacity: string; active: boolean }):
+ * 名额为整数。支付宝额度数量留空即 0（不支持支付宝）；只要填了，Dodo 产品 ID 可以留空。 */
+export function presaleRequest(draft: { kind: AccountKind | ""; name: string; price: string; currency: string; productId: string; capacity: string; active: boolean; alipayAmount?: string }):
   { request: PresaleRequest; problem: null } | { request: null; problem: PresaleDraftProblem } {
   if (draft.kind === "") return { request: null, problem: "kind" };
   const name = draft.name.trim();
@@ -102,12 +129,16 @@ export function presaleRequest(draft: { kind: AccountKind | ""; name: string; pr
   if (!isSupportedCurrency(code)) return { request: null, problem: "currency" };
   const minor = parseMoneyInput(draft.price, code);
   if (minor === null || minor <= 0 || minor > MAX_ACCOUNT_PRICE_MINOR) return { request: null, problem: "price" };
+  const rawAlipay = (draft.alipayAmount ?? "").trim();
+  if (rawAlipay !== "" && !/^\d{1,8}$/.test(rawAlipay)) return { request: null, problem: "alipay" };
+  const alipayAmount = rawAlipay === "" ? 0 : Number(rawAlipay);
+  if (alipayAmount > MAX_ALIPAY_AMOUNT) return { request: null, problem: "alipay" };
   const product = draft.productId.trim();
-  if (product === "" || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
+  if ((product === "" && alipayAmount === 0) || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
   const raw = draft.capacity.trim();
   const capacity = /^\d{1,5}$/.test(raw) ? Number(raw) : 0;
   if (capacity < 1 || capacity > MAX_PRESALE_CAPACITY) return { request: null, problem: "capacity" };
-  return { request: { kind: draft.kind, name, price_minor: minor, currency: code, dodo_product_id: product, capacity, active: draft.active }, problem: null };
+  return { request: { kind: draft.kind, name, price_minor: minor, currency: code, dodo_product_id: product, capacity, active: draft.active, alipay_amount: alipayAmount }, problem: null };
 }
 
 /** presaleAwaiting reports whether a presale order is paid and still waits

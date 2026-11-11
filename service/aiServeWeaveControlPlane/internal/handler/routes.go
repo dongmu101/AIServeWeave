@@ -198,6 +198,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPost, "/admin/v1/billing/alipay/redemptions", requireSession, alipayRedeem(ctx)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/alipay/redemptions", requireSession, listAlipayRedemptions(ctx)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/alipay/redemptions/:id/refresh", requireSession, alipayRefresh(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/presales/:id/alipay", requireSession, presaleAlipayCheckout(ctx)),
 		}, rest.WithTimeout(AlipayCallTimeout))
 	}
 	// Credit packages, checkouts, the portal and refunds go through Dodo and

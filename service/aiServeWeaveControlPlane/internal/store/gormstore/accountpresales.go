@@ -77,7 +77,7 @@ func (s *Store) SaveAccountPresale(ctx context.Context, row model.AccountPresale
 		}
 		return tx.Model(&model.AccountPresale{}).Where("id = ?", row.ID).Updates(map[string]any{
 			"name": row.Name, "price_minor": row.PriceMinor, "currency": row.Currency, "dodo_product_id": row.DodoProductID,
-			"capacity": row.Capacity, "active": row.Active, "updated_at": row.UpdatedAt,
+			"capacity": row.Capacity, "active": row.Active, "alipay_amount": row.AlipayAmount, "updated_at": row.UpdatedAt,
 		}).Error
 	}))
 }

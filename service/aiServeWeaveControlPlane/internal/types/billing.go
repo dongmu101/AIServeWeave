@@ -150,11 +150,17 @@ type CheckoutOrder struct {
 	// PresaleID 只在预售订单上出现，此时 PackageID 同样为空。已付款却没有
 	// AccountExpiresAt 的预售订单正在等待运维分配账号；分配后带有 AccountID 与
 	// AccountExpiresAt。
-	PresaleID string    `json:"presale_id,omitempty"`
-	Status    string    `json:"status"`
-	PaymentID string    `json:"payment_id,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	PresaleID string `json:"presale_id,omitempty"`
+	// AlipayAmount is the Alipay units a presale order was paid with; absent
+	// for an order paid through Dodo. Such an order has no refund.
+	//
+	// AlipayAmount 是预售订单用支付宝额度支付的单位数；经 Dodo 付款的订单没有该字段。这类
+	// 订单没有退款。
+	AlipayAmount int64     `json:"alipay_amount,omitempty"`
+	Status       string    `json:"status"`
+	PaymentID    string    `json:"payment_id,omitempty"`
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
 }
 
 // OrderListResponse is one page of orders.

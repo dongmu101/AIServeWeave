@@ -78,15 +78,20 @@ type AlipayRedeemRequest struct {
 //
 // AlipayRedemption 是一次把支付宝额度兑换为点数的记录。
 type AlipayRedemption struct {
-	ID           string    `json:"id"`
-	ActionID     string    `json:"action_id"`
-	Amount       int64     `json:"amount"`
-	QuotaUnit    string    `json:"quota_unit"`
-	CreditsMicro int64     `json:"credits_micro"`
-	Status       string    `json:"status"`
-	ReasonCode   string    `json:"reason_code"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	ID           string `json:"id"`
+	ActionID     string `json:"action_id"`
+	Amount       int64  `json:"amount"`
+	QuotaUnit    string `json:"quota_unit"`
+	CreditsMicro int64  `json:"credits_micro"`
+	// PresaleOrderID is set when the redemption pays for a presale order
+	// rather than booking credits.
+	//
+	// PresaleOrderID 在兑换用于支付预售订单、而不是入账点数时出现。
+	PresaleOrderID string    `json:"presale_order_id,omitempty"`
+	Status         string    `json:"status"`
+	ReasonCode     string    `json:"reason_code"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // AlipayRedemptionListResponse is GET /admin/v1/billing/alipay/redemptions.

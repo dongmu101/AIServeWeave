@@ -200,7 +200,7 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
       case "orders":
         return methods.dodo;
       case "presales":
-        return methods.dodo && (presales.data?.length ?? 0) > 0;
+        return (methods.dodo || methods.alipay) && (presales.data?.length ?? 0) > 0;
       case "alipay":
         return methods.alipay;
       default:
@@ -242,7 +242,7 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
           <AccountSales key={historyKey} canPurchase={canPurchase} />
         </TabsContent>
         <TabsContent value="presales" className="mt-2">
-          <PresaleSales resource={presales} canPurchase={canPurchase} />
+          <PresaleSales resource={presales} canPurchase={canPurchase} dodo={methods.dodo} alipay={methods.alipay} />
         </TabsContent>
         <TabsContent value="orders" className="mt-2">
           <OrdersTable key={historyKey} />

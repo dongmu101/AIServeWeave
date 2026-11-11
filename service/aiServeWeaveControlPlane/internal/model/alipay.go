@@ -74,16 +74,23 @@ func (AlipayPurchase) TableName() string { return "alipay_purchases" }
 // AlipayRedemption 把租户支付宝额度中的 Amount 个单位兑换为 CreditsMicro 点数，两者在
 // 创建时确定。ID 是核销的幂等编号；点数以 "alipay:<ID>" 为键，在把它标为成功的同一事务中入账。
 type AlipayRedemption struct {
-	ID             string    `gorm:"primaryKey;size:32"`
-	TenantID       string    `gorm:"size:32;not null;uniqueIndex:idx_alipay_redemptions_action,priority:1"`
-	ActionID       string    `gorm:"size:64;not null;uniqueIndex:idx_alipay_redemptions_action,priority:2"`
-	Amount         int64     `gorm:"not null"`
-	QuotaUnit      string    `gorm:"size:8;not null"`
-	CreditsMicro   int64     `gorm:"not null"`
-	Reason         string    `gorm:"size:256;not null"`
-	Status         string    `gorm:"size:16;not null"`
-	ReasonCode     string    `gorm:"size:64;not null"`
-	ConsumeOrderID string    `gorm:"size:128;not null"`
+	ID             string `gorm:"primaryKey;size:32"`
+	TenantID       string `gorm:"size:32;not null;uniqueIndex:idx_alipay_redemptions_action,priority:1"`
+	ActionID       string `gorm:"size:64;not null;uniqueIndex:idx_alipay_redemptions_action,priority:2"`
+	Amount         int64  `gorm:"not null"`
+	QuotaUnit      string `gorm:"size:8;not null"`
+	CreditsMicro   int64  `gorm:"not null"`
+	Reason         string `gorm:"size:256;not null"`
+	Status         string `gorm:"size:16;not null"`
+	ReasonCode     string `gorm:"size:64;not null"`
+	ConsumeOrderID string `gorm:"size:128;not null"`
+	// PresaleOrderID is the presale order this redemption pays for; empty
+	// for a redemption into credits. Such a redemption books no credits: its
+	// success marks the order paid, its failure marks the order failed.
+	//
+	// PresaleOrderID 是这次兑换所支付的预售订单；兑换为点数时为空。这类兑换不入账点数：
+	// 成功时把订单标为已付款，失败时把订单标为失败。
+	PresaleOrderID string    `gorm:"size:32;not null"`
 	CreatedBy      string    `gorm:"size:32;not null"`
 	CreatedAt      time.Time `gorm:"not null"`
 	UpdatedAt      time.Time `gorm:"not null"`

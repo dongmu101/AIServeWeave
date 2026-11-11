@@ -18,7 +18,7 @@ import (
 // renderPresale 呈现一个预售。商户只看到能否购买；产品、名额与等待订单只给运维。
 func renderPresale(row store.PresaleStock, actor logic.Actor) types.AccountPresale {
 	out := types.AccountPresale{ID: row.ID, Kind: row.Kind, Name: row.Name, PriceMinor: row.PriceMinor, Currency: row.Currency,
-		Active: row.Active, Available: logic.PresaleAvailable(row)}
+		Active: row.Active, Available: logic.PresaleAvailable(row), AlipayAmount: row.AlipayAmount, AlipayAvailable: logic.PresaleAlipayAvailable(row)}
 	if actor.TenantID == model.PlatformScope {
 		capacity, outstanding := row.Capacity, row.Outstanding
 		out.DodoProductID, out.Capacity, out.Outstanding = row.DodoProductID, &capacity, &outstanding
@@ -92,6 +92,27 @@ func presaleCheckout(ctx *svc.ServiceContext) http.HandlerFunc {
 			return
 		}
 		writeJSON(w, http.StatusCreated, types.CheckoutResponse{OrderID: result.OrderID, CheckoutURL: result.CheckoutURL})
+	})
+}
+
+// presaleAlipayCheckout handles POST /admin/v1/billing/presales/:id/alipay. A
+// redemption still pending answers 202: the click may be retried with the
+// same action id, which resumes it.
+//
+// presaleAlipayCheckout 处理 POST /admin/v1/billing/presales/:id/alipay。仍待确认的
+// 兑换回答 202：可以用同一 action id 重试这次点击，这会恢复它。
+func presaleAlipayCheckout(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		var req types.PresaleAlipayRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		got, err := ctx.Logic.CreatePresaleAlipayCheckout(r.Context(), actor, pathvar.Vars(r)["id"], req.ActionID, req.ExpectedAmount)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, redemptionStatus(got), renderAlipayRedemption(got))
 	})
 }
 

@@ -68,6 +68,9 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("accounts"), param(), literal("checkout")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("presales")], query: [] },
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("presales"), param(), literal("checkout")], query: [] },
+  // Paying a presale month with Alipay quota; mounted only when Alipay is on.
+  // 用支付宝额度支付预售的一个月；只在开启支付宝时挂载。
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("presales"), param(), literal("alipay")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("models")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs"), param()], query: [] },

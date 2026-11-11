@@ -33,6 +33,12 @@ type AlipayBilling interface {
 	//
 	// CreateAlipayRedemption 按 CreateAlipayRedemptionRules 保存一个待确认的兑换。
 	CreateAlipayRedemption(ctx context.Context, row model.AlipayRedemption) (model.AlipayRedemption, error)
+	// CreatePresaleAlipayRedemption saves a presale order and the pending
+	// redemption that pays for it, under CreatePresaleAlipayRules.
+	//
+	// CreatePresaleAlipayRedemption 按 CreatePresaleAlipayRules 保存一个预售订单及支付它的
+	// 待确认兑换。
+	CreatePresaleAlipayRedemption(ctx context.Context, order model.CheckoutOrder, row model.AlipayRedemption) (model.AlipayRedemption, error)
 	// SettleAlipayRedemption applies outcome under SettleAlipayRedemptionRules.
 	//
 	// SettleAlipayRedemption 按 SettleAlipayRedemptionRules 应用 outcome。
@@ -93,6 +99,25 @@ type AlipayTx interface {
 	AlipayPendingRedemption(tenantID string) (bool, error)
 	InsertAlipayRedemption(row model.AlipayRedemption) error
 	SaveAlipayRedemption(row model.AlipayRedemption) error
+	// OrderByID and SaveOrder are BillingTx's, for the presale order a
+	// redemption pays for.
+	//
+	// OrderByID 与 SaveOrder 即 BillingTx 的同名方法，用于兑换所支付的预售订单。
+	OrderByID(id string) (model.CheckoutOrder, error)
+	SaveOrder(order model.CheckoutOrder) error
+	// InsertOrder adds a new order.
+	//
+	// InsertOrder 新增一个订单。
+	InsertOrder(order model.CheckoutOrder) error
+	// LockPresale reads and locks one presale, so checkouts of the same
+	// presale are counted one at a time.
+	//
+	// LockPresale 读取并锁定一个预售，使同一预售的结账逐个计数。
+	LockPresale(id string) (model.AccountPresale, error)
+	// PresaleOutstanding counts the presale's orders PresaleOrderOutstanding counts at now.
+	//
+	// PresaleOutstanding 统计预售在 now 时按 PresaleOrderOutstanding 计入的订单数。
+	PresaleOutstanding(presaleID string, now time.Time) (int, error)
 }
 
 // CreateAlipayRedemptionRules saves row as a pending redemption through tx,
@@ -133,14 +158,100 @@ func CreateAlipayRedemptionRules(tx AlipayTx, row model.AlipayRedemption, now ti
 	return row, nil
 }
 
+// PresaleAlipayTerms decides whether one month of presale may be paid with
+// amount Alipay units while outstanding orders wait.
+//
+// PresaleAlipayTerms 判断在已有 outstanding 笔订单等待时，能否用 amount 个支付宝单位支付
+// presale 的一个月。
+func PresaleAlipayTerms(presale model.AccountPresale, amount int64, outstanding int) error {
+	if !presale.Active || presale.AlipayAmount <= 0 {
+		return ErrNotFound
+	}
+	if presale.AlipayAmount != amount {
+		return ErrConflict
+	}
+	if outstanding >= presale.Capacity {
+		return ErrConflict
+	}
+	return nil
+}
+
+// CreatePresaleAlipayRules saves order, a pending presale order, and row,
+// the pending redemption that pays for it, through tx, holding the tenant's
+// billing lock and then the presale's. A redemption already saved under the
+// same action id is returned as it stands when it pays for a presale order
+// with the same amount, and is ErrConflict otherwise. A tenant with a
+// pending redemption gets ErrConflict, as in CreateAlipayRedemptionRules.
+// The presale is then checked under PresaleAlipayTerms.
+//
+// CreatePresaleAlipayRules 经 tx 在持有租户计费锁、随后持有预售锁的情况下保存待付款的
+// 预售订单 order 与支付它的待确认兑换 row。同一 action id 已保存的兑换，若所付的是同数量的
+// 预售订单则原样返回，否则返回 ErrConflict。租户已有待确认兑换时与
+// CreateAlipayRedemptionRules 一样返回 ErrConflict。随后按 PresaleAlipayTerms 检查预售。
+func CreatePresaleAlipayRules(tx AlipayTx, order model.CheckoutOrder, row model.AlipayRedemption, now time.Time) (model.AlipayRedemption, error) {
+	if _, err := tx.TenantBilling(row.TenantID, now); err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	existing, err := tx.AlipayRedemptionByAction(row.TenantID, row.ActionID)
+	switch {
+	case err == nil:
+		if existing.PresaleOrderID == "" || existing.Amount != row.Amount {
+			return model.AlipayRedemption{}, ErrConflict
+		}
+		// One click pays for one presale: the same action id for another
+		// presale is not the same request.
+		// 一次点击只支付一个预售：同一 action id 用于另一个预售并不是同一个请求。
+		prior, err := tx.OrderByID(existing.PresaleOrderID)
+		if err != nil {
+			return model.AlipayRedemption{}, err
+		}
+		if prior.PresaleID != order.PresaleID {
+			return model.AlipayRedemption{}, ErrConflict
+		}
+		return existing, nil
+	case !errors.Is(err, ErrNotFound):
+		return model.AlipayRedemption{}, err
+	}
+	pending, err := tx.AlipayPendingRedemption(row.TenantID)
+	if err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	if pending {
+		return model.AlipayRedemption{}, ErrConflict
+	}
+	presale, err := tx.LockPresale(order.PresaleID)
+	if err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	outstanding, err := tx.PresaleOutstanding(presale.ID, now)
+	if err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	if err := PresaleAlipayTerms(presale, row.Amount, outstanding); err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	if err := tx.InsertOrder(order); err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	row.Status, row.PresaleOrderID = model.AlipayRedemptionPending, order.ID
+	if err := tx.InsertAlipayRedemption(row); err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	return row, nil
+}
+
 // SettleAlipayRedemptionRules settles a pending redemption through tx. A
 // success books its credits under model.LedgerKeyAlipay and marks it
-// succeeded; a failure only marks it failed. A redemption no longer pending
-// is returned unchanged. changed reports a usable/exhausted flip.
+// succeeded; a failure only marks it failed. A redemption that pays for a
+// presale order books no credits: its success marks the pending order paid,
+// which then waits for an account, and its failure marks it failed. A
+// redemption no longer pending is returned unchanged. changed reports a
+// usable/exhausted flip.
 //
 // SettleAlipayRedemptionRules 经 tx 结算一个待确认兑换。成功时以 model.LedgerKeyAlipay
-// 入账其点数并标为成功；失败时只标为失败。已不在待确认状态的兑换原样返回。changed 报告
-// 可用与耗尽之间的翻转。
+// 入账其点数并标为成功；失败时只标为失败。支付预售订单的兑换不入账点数：成功时把待付款
+// 订单标为已付款，随后等待分配账号；失败时把订单标为失败。已不在待确认状态的兑换原样返回。
+// changed 报告可用与耗尽之间的翻转。
 func SettleAlipayRedemptionRules(tx AlipayTx, outcome AlipayOutcome, now time.Time) (model.AlipayRedemption, bool, error) {
 	row, err := tx.AlipayRedemptionByID(outcome.ID)
 	if err != nil {
@@ -151,6 +262,29 @@ func SettleAlipayRedemptionRules(tx AlipayTx, outcome AlipayOutcome, now time.Ti
 	}
 	changed := false
 	row.ReasonCode, row.ConsumeOrderID, row.UpdatedAt = outcome.ReasonCode, outcome.ConsumeOrderID, now
+	if row.PresaleOrderID != "" {
+		order, err := tx.OrderByID(row.PresaleOrderID)
+		if err != nil {
+			return model.AlipayRedemption{}, false, err
+		}
+		if order.Status == model.OrderStatusPending {
+			order.Status, order.UpdatedAt = model.OrderStatusFailed, now
+			if outcome.Succeeded {
+				order.Status = model.OrderStatusPaid
+			}
+			if err := tx.SaveOrder(order); err != nil {
+				return model.AlipayRedemption{}, false, err
+			}
+		}
+		row.Status = model.AlipayRedemptionFailed
+		if outcome.Succeeded {
+			row.Status = model.AlipayRedemptionSucceeded
+		}
+		if err := tx.SaveAlipayRedemption(row); err != nil {
+			return model.AlipayRedemption{}, false, err
+		}
+		return row, false, nil
+	}
 	if outcome.Succeeded {
 		key := model.LedgerKeyAlipay(row.ID)
 		entry := model.CreditLedgerEntry{

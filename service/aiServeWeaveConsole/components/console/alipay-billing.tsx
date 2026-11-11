@@ -45,7 +45,7 @@ const STATUS_KEYS: Record<RedemptionStatus, MessageKey> = {
   failed: "tenant.alipayStatusFailed",
 };
 
-function unitLabel(unit: string, t: Translator): string {
+export function unitLabel(unit: string, t: Translator): string {
   return unit === "COUNT" ? t("tenant.alipayUnitCount") : unit === "POINT" ? t("tenant.alipayUnitPoint") : unit;
 }
 
@@ -69,7 +69,7 @@ function problemFor(failure: unknown, conflict: MessageKey): React.ReactNode {
  *
  * useActionId 保存进行中的那次点击的编号。答复丢失的点击保留其编号，再次按下时控制面
  * 恢复同一个请求；任何确定的答复都会让它作废。 */
-function useActionId(): { current: () => string; settle: (failure?: unknown) => void; retrying: boolean } {
+export function useActionId(): { current: () => string; settle: (failure?: unknown) => void; retrying: boolean } {
   const ref = React.useRef<string | null>(null);
   const [retrying, setRetrying] = React.useState(false);
   const current = React.useCallback(() => {
@@ -212,6 +212,12 @@ function AlipayBody({ overview, canPurchase, onChanged, onSettled }: { overview:
  *
  * outcomeNotice 是已结算或待确认兑换的固定文案。 */
 function outcomeNotice(row: AlipayRedemption, t: Translator, locale: string): React.ReactNode {
+  // A redemption that paid for a presale order booked no credits.
+  // 支付预售订单的兑换没有入账点数。
+  if (row.presaleOrderId !== "") {
+    return row.status === "succeeded" ? <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm font-medium"><Message id="tenant.presaleAlipayPaid" /></p>
+      : row.status === "failed" ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive"><Message id="tenant.presaleAlipayFailed" /></p> : null;
+  }
   if (row.status === "succeeded") {
     return <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm font-medium">{t("tenant.alipayRedeemed", { credits: formatCredits(row.creditsMicro, locale) })}</p>;
   }
@@ -252,7 +258,7 @@ function PendingRedemption({ redemption, onSettled, onChecked }: { redemption: A
   }
   return <div role="status" aria-live="polite" className="grid gap-2 rounded-lg border bg-muted/40 px-4 py-3 text-sm">
     <p><Message id="tenant.alipayRedeemPending" /></p>
-    <p className="text-muted-foreground">{t("tenant.alipayRemainingValue", { amount: redemption.amount, unit: unitLabel(redemption.quotaUnit, t) })} · {t("tenant.billingCreditsValue", { credits: formatCredits(redemption.creditsMicro, locale) })} · {formatDateTime(redemption.createdAt, undefined, locale)}</p>
+    <p className="text-muted-foreground">{t("tenant.alipayRemainingValue", { amount: redemption.amount, unit: unitLabel(redemption.quotaUnit, t) })} · {redemption.presaleOrderId !== "" ? t("tenant.alipayPresaleRow", { id: redemption.presaleOrderId }) : t("tenant.billingCreditsValue", { credits: formatCredits(redemption.creditsMicro, locale) })} · {formatDateTime(redemption.createdAt, undefined, locale)}</p>
     <div><Button size="sm" variant="outline" onClick={check} disabled={pending} aria-busy={pending}><Message id="tenant.alipayCheckAgain" /></Button></div>
     <FormError message={error} />
   </div>;
@@ -403,7 +409,7 @@ function RedemptionHistory() {
             <TableBody>{history.items.map((row) => <TableRow key={row.id}>
               <TableCell className="whitespace-nowrap">{formatDateTime(row.createdAt, undefined, locale)}</TableCell>
               <TableCell className="text-right whitespace-nowrap">{t("tenant.alipayRemainingValue", { amount: row.amount, unit: unitLabel(row.quotaUnit, t) })}</TableCell>
-              <TableCell className="text-right whitespace-nowrap">{formatCredits(row.creditsMicro, locale)}</TableCell>
+              <TableCell className="text-right whitespace-nowrap">{row.presaleOrderId !== "" ? t("tenant.alipayPresaleRow", { id: row.presaleOrderId }) : formatCredits(row.creditsMicro, locale)}</TableCell>
               <TableCell><Badge variant={row.status === "succeeded" ? "secondary" : row.status === "failed" ? "destructive" : "outline"}><Message id={STATUS_KEYS[row.status]} /></Badge></TableCell>
             </TableRow>)}</TableBody>
           </Table>

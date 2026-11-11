@@ -938,8 +938,11 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `POST /admin/v1/billing/alipay/redemptions` | 租户 owner/admin | `{action_id, amount}`；成功或失败 `200`，仍待确认 `202`，已有其他待确认兑换 `409` |
 | `GET /admin/v1/billing/alipay/redemptions` | 租户会话 | 本租户兑换记录，游标分页 |
 | `POST /admin/v1/billing/alipay/redemptions/:id/refresh` | 租户会话 | 恢复一笔待确认兑换，返回当前状态（`200`/`202`） |
+| `POST /admin/v1/billing/presales/:id/alipay` | 租户 owner/admin | `{action_id, amount}`，`amount` 须等于预售的 `alipay_amount`；成功或失败 `200`，待确认 `202`；名额已满或数量过期 `409` |
 
-迁移 `billing/0007_alipay.sql` 新增 `alipay_purchases` 与 `alipay_redemptions`。只配支付宝时，`GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo: false, alipay: true}`，公开目录只返回模型单价。审计动作 `billing.alipay.purchase`、`billing.alipay.redeem`。
+迁移 `billing/0007_alipay.sql` 新增 `alipay_purchases` 与 `alipay_redemptions`；`billing/0008_alipay_presale.sql` 给预售与订单加 `alipay_amount`，给兑换加 `presale_order_id`。
+
+**账号预售的支付宝支付**：兑换记录带 `presale_order_id` 时，不入点数账目，而是结算预售订单。创建时同一事务保存 `pending` 订单（占名额）与 `pending` 兑换；确认核销成功才把订单标为 `paid`（进入待发货），确定失败标为 `failed` 并释放名额，未知结果保持 `pending`。同一 `action_id` 不能用于另一个预售。`alipay_amount > 0` 的订单在 `refundLimit` 中一律拒绝退款。只配支付宝时，`GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo: false, alipay: true}`，公开目录只返回模型单价。审计动作 `billing.alipay.purchase`、`billing.alipay.redeem`。
 
 ### 依赖
 
@@ -953,7 +956,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 - Gateway 用量推送的重试只在进程内，副本崩溃会丢失尚未送达的批次，对应用量不扣费。
 - `usage_charges` 与 `billing_webhook_events` 还没有保留期清理，会随用量与事件持续增长。
 - 手工调整余额（`/adjust`）没有幂等键，重复提交会记两次；Console 只发送一次、不自动重试。
-- 支付宝（一人付）只用模拟接口验证：未配置真实 `opcpay_api_key`，没有只读查询过真实 `/capabilities`、`/product`，没有真实购买与核销。只支持次数/积分套餐；一人付通知（webhook）未接入，到账靠读取额度；一人付无退款，已兑换的点数如需退回只能运维手工调整，支付宝侧额度不返还。
+- 支付宝（一人付）只用模拟接口验证：未配置真实 `opcpay_api_key`，没有只读查询过真实 `/capabilities`、`/product`，没有真实购买与核销。只支持次数/积分套餐；一人付通知（webhook）未接入，到账靠读取额度；一人付无退款，已兑换的点数如需退回只能运维手工调整，支付宝侧额度不返还；支付宝支付的预售订单同样不能在系统内退款。次数包每次核销只能扣 1，预售的支付宝额度数量大于 1 须使用积分包。
 
 ## 告警评估与通知（P09/C29）
 

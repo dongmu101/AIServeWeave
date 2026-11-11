@@ -549,8 +549,11 @@ func (s *Service) advanceRedemption(ctx context.Context, row model.AlipayRedempt
 	}
 	s.invalidateIf(ctx, changed)
 	if outcome.Succeeded && row.Status != settled.Status {
-		s.audit(ctx, settled.TenantID, settled.CreatedBy, model.ActionAlipayRedeem, settled.ID,
-			fmt.Sprintf("amount %d %s credits_micro %d", settled.Amount, settled.QuotaUnit, settled.CreditsMicro), "")
+		detail := fmt.Sprintf("amount %d %s credits_micro %d", settled.Amount, settled.QuotaUnit, settled.CreditsMicro)
+		if settled.PresaleOrderID != "" {
+			detail = fmt.Sprintf("amount %d %s presale_order %s", settled.Amount, settled.QuotaUnit, settled.PresaleOrderID)
+		}
+		s.audit(ctx, settled.TenantID, settled.CreatedBy, model.ActionAlipayRedeem, settled.ID, detail, "")
 	}
 	return settled, nil
 }

@@ -61,6 +61,21 @@ func (s *Store) CreateAlipayRedemption(_ context.Context, row model.AlipayRedemp
 	return out, nil
 }
 
+// CreatePresaleAlipayRedemption implements store.AlipayBilling.
+//
+// CreatePresaleAlipayRedemption 实现 store.AlipayBilling。
+func (s *Store) CreatePresaleAlipayRedemption(_ context.Context, order model.CheckoutOrder, row model.AlipayRedemption) (model.AlipayRedemption, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	restore := s.snapshotAlipay()
+	out, err := store.CreatePresaleAlipayRules(memLedger{s}, order, row, row.CreatedAt)
+	if err != nil {
+		restore()
+		return model.AlipayRedemption{}, err
+	}
+	return out, nil
+}
+
 // SettleAlipayRedemption implements store.AlipayBilling.
 //
 // SettleAlipayRedemption 实现 store.AlipayBilling。
@@ -161,4 +176,20 @@ func (l memLedger) SaveAlipayRedemption(row model.AlipayRedemption) error {
 	}
 	l.s.billing.alipayRedemptions[row.ID] = row
 	return nil
+}
+
+func (l memLedger) InsertOrder(order model.CheckoutOrder) error {
+	if _, taken := l.s.billing.orders[order.ID]; taken {
+		return store.ErrConflict
+	}
+	l.s.billing.orders[order.ID] = order
+	return nil
+}
+
+func (l memLedger) LockPresale(id string) (model.AccountPresale, error) {
+	return l.PresaleByID(id)
+}
+
+func (l memLedger) PresaleOutstanding(presaleID string, now time.Time) (int, error) {
+	return l.s.presaleOutstanding(presaleID, now), nil
 }

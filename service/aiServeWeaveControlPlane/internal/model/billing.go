@@ -296,8 +296,15 @@ type CheckoutOrder struct {
 	// 设置 AccountID 与 AccountExpiresAt。已付款但 AccountExpiresAt 为 nil 的预售订单
 	// 是在等待分配账号，而不是开通失败。
 	PresaleID string `gorm:"size:32;not null"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	// AlipayAmount is the Alipay units a presale order was paid with; zero
+	// for an order paid through Dodo. Alipay can neither report a payment
+	// nor undo a consumption, so such an order is never refundable here.
+	//
+	// AlipayAmount 是预售订单用支付宝额度支付的单位数；经 Dodo 付款的订单为零。支付宝
+	// 既不报告付款也不能撤销核销，因此这类订单在这里永远不可退款。
+	AlipayAmount int64 `gorm:"not null"`
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
 }
 
 // TableName pins the table name.

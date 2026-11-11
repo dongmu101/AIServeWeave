@@ -208,7 +208,7 @@ func renderOrder(o model.CheckoutOrder, refundable int64, operator bool) types.C
 		ID: o.ID, PackageID: o.PackageID, AmountMinor: o.AmountMinor, Currency: o.Currency,
 		CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, PaidAmountMinor: o.PaidAmountMinor,
 		PaidCurrency: o.PaidCurrency, RefundableMinor: refundable, Status: o.Status,
-		AccountID: o.AccountID, AccountExpiresAt: o.AccountExpiresAt, PresaleID: o.PresaleID,
+		AccountID: o.AccountID, AccountExpiresAt: o.AccountExpiresAt, PresaleID: o.PresaleID, AlipayAmount: o.AlipayAmount,
 		CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
 	}
 	if o.DodoPaymentID != nil {

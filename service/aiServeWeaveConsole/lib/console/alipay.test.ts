@@ -37,6 +37,13 @@ test("parseAlipayOverview reads the contract and its optional parts", () => {
   assert.throws(() => parseAlipayOverview({ ...overviewWire, plans: [{ sku_id: "", name: "x", price: "1", currency: "CNY", quota_unit: "POINT", quota_amount: 1 }] }), ApiError);
 });
 
+test("a redemption that pays for a presale order names it", () => {
+  assert.equal(parseAlipayRedemption(redemption).presaleOrderId, "");
+  const paying = parseAlipayRedemption({ ...redemption, credits_micro: 0, presale_order_id: "ord_p" });
+  assert.deepEqual([paying.presaleOrderId, paying.creditsMicro], ["ord_p", 0]);
+  assert.throws(() => parseAlipayRedemption({ ...redemption, presale_order_id: "" }), ApiError);
+});
+
 test("parseAlipayRedemption refuses unknown statuses and amounts", () => {
   assert.equal(parseAlipayRedemption({ ...redemption, status: "succeeded" }).creditsMicro, 10_000_000);
   assert.throws(() => parseAlipayRedemption({ ...redemption, status: "paid" }), ApiError);

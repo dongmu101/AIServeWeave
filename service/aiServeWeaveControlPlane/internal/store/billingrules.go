@@ -489,7 +489,11 @@ func lockRefundRequest(tx BillingTx, id string) (model.RefundRequest, model.Chec
 // refundLimit 是在 policy 下这个订单的一次退款最多能退回的金额；一分也不能退时返回
 // 说明原因的 *RefundRefusedError。
 func refundLimit(tx BillingTx, order model.CheckoutOrder, policy RefundPolicy, exceptID string, now time.Time) (int64, error) {
-	if order.Status != model.OrderStatusPaid {
+	// Alipay can neither report a payment nor undo a consumption, so an
+	// order paid with Alipay quota is settled by an operator outside the
+	// system.
+	// 支付宝既不报告付款也不能撤销核销，因此用支付宝额度支付的订单由运维在系统外处理。
+	if order.Status != model.OrderStatusPaid || order.AlipayAmount > 0 {
 		return 0, &RefundRefusedError{Reason: RefundRefusedOrderState}
 	}
 	if !policy.NotBefore.IsZero() && order.CreatedAt.Before(policy.NotBefore) {

@@ -74,6 +74,25 @@ func (s *Store) CreateAlipayRedemption(ctx context.Context, row model.AlipayRede
 	return out, nil
 }
 
+// CreatePresaleAlipayRedemption implements store.AlipayBilling. It runs at
+// READ COMMITTED under the tenant's billing lock and then the presale's, so
+// the pending and capacity checks see everything committed before them.
+//
+// CreatePresaleAlipayRedemption 实现 store.AlipayBilling。以 READ COMMITTED 先后在租户计费锁与预售锁下
+// 运行，使待确认与名额检查能看到在它们之前提交的全部内容。
+func (s *Store) CreatePresaleAlipayRedemption(ctx context.Context, order model.CheckoutOrder, row model.AlipayRedemption) (model.AlipayRedemption, error) {
+	var out model.AlipayRedemption
+	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var err error
+		out, err = store.CreatePresaleAlipayRules(gormLedger{tx: tx}, order, row, row.CreatedAt)
+		return err
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+	if err != nil {
+		return model.AlipayRedemption{}, translate(err)
+	}
+	return out, nil
+}
+
 // SettleAlipayRedemption implements store.AlipayBilling.
 //
 // SettleAlipayRedemption 实现 store.AlipayBilling。
@@ -148,4 +167,20 @@ func (l gormLedger) SaveAlipayRedemption(row model.AlipayRedemption) error {
 	return l.tx.Model(&model.AlipayRedemption{}).Where("id = ?", row.ID).Updates(map[string]any{
 		"status": row.Status, "reason_code": row.ReasonCode, "consume_order_id": row.ConsumeOrderID, "updated_at": row.UpdatedAt,
 	}).Error
+}
+
+func (l gormLedger) InsertOrder(order model.CheckoutOrder) error {
+	return l.tx.Create(&order).Error
+}
+
+func (l gormLedger) LockPresale(id string) (model.AccountPresale, error) {
+	var out model.AccountPresale
+	err := l.tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Take(&out).Error
+	return out, translate(err)
+}
+
+func (l gormLedger) PresaleOutstanding(presaleID string, now time.Time) (int, error) {
+	var n int64
+	err := presaleOutstanding(l.tx.Model(&model.CheckoutOrder{}), now).Where("presale_id = ?", presaleID).Count(&n).Error
+	return int(n), err
 }

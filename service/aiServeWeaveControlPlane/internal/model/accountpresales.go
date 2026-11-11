@@ -30,15 +30,21 @@ func ValidAccountKind(kind string) bool {
 // 为其分配一个同类型的空闲包月账号，一个月自分配时起算。Capacity 限制仍在等待账号的
 // 订单数，包括 AccountCheckoutHold 内的待付款结账。Kind 创建后不可更改。
 type AccountPresale struct {
-	ID            string    `gorm:"primaryKey;size:32"`
-	Kind          string    `gorm:"size:16;not null"`
-	Name          string    `gorm:"size:128;not null"`
-	PriceMinor    int64     `gorm:"not null"`
-	Currency      string    `gorm:"size:8;not null"`
-	DodoProductID string    `gorm:"size:64;not null"`
-	Capacity      int       `gorm:"not null"`
-	Active        bool      `gorm:"not null"`
-	UpdatedAt     time.Time `gorm:"not null"`
+	ID            string `gorm:"primaryKey;size:32"`
+	Kind          string `gorm:"size:16;not null"`
+	Name          string `gorm:"size:128;not null"`
+	PriceMinor    int64  `gorm:"not null"`
+	Currency      string `gorm:"size:8;not null"`
+	DodoProductID string `gorm:"size:64;not null"`
+	Capacity      int    `gorm:"not null"`
+	Active        bool   `gorm:"not null"`
+	// AlipayAmount is how many Alipay units (counts or points) one month
+	// costs when paid from a tenant's Alipay quota; zero means it cannot be
+	// paid that way.
+	//
+	// AlipayAmount 是用租户支付宝额度支付一个月所需的单位数（次数或积分）；为零表示不能这样支付。
+	AlipayAmount int64     `gorm:"not null"`
+	UpdatedAt    time.Time `gorm:"not null"`
 }
 
 // TableName pins the table name.

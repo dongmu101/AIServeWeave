@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import {
-  assignableAccounts, parseAccountPresale, parseAccountPresales, parseRefundCreated, presaleAwaiting, presaleCheckoutBody, presaleRequest, refundReason,
+  assignableAccounts, parseAccountPresale, parseAccountPresales, parseRefundCreated, presaleAwaiting, presaleAlipayBody, presaleCheckoutBody, presaleRequest, refundReason,
   MAX_PRESALE_CAPACITY, MAX_PRESALES,
 } from "./account-presales.ts";
 import { parseAccountSale } from "./account-sales.ts";
@@ -33,13 +33,41 @@ test("presale responses carry a kind, a fiat price and operator-only stock", () 
 
 test("operator presale drafts are priced in the major unit and bounded in capacity", () => {
   const draft = { kind: "codex" as const, name: " Codex presale ", price: "15", currency: "usd", productId: " pdt_pre ", capacity: "10", active: true };
-  assert.deepEqual(presaleRequest(draft), { request: { kind: "codex", name: "Codex presale", price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 10, active: true }, problem: null });
+  assert.deepEqual(presaleRequest(draft), { request: { kind: "codex", name: "Codex presale", price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 10, active: true, alipay_amount: 0 }, problem: null });
   for (const [change, problem] of [
     [{ kind: "" }, "kind"], [{ name: " " }, "name"], [{ currency: "US" }, "currency"], [{ currency: "ISO" }, "currency"], [{ price: "0" }, "price"], [{ price: "1.234" }, "price"],
     [{ productId: "" }, "product"], [{ capacity: "0" }, "capacity"], [{ capacity: "10001" }, "capacity"], [{ capacity: "1.5" }, "capacity"], [{ capacity: "" }, "capacity"],
   ] as const) {
     assert.equal(presaleRequest({ ...draft, ...change }).problem, problem);
   }
+});
+
+test("an Alipay amount is optional and replaces the Dodo product", () => {
+  const draft = { kind: "codex" as const, name: "Codex presale", price: "15", currency: "usd", productId: "", capacity: "10", active: true };
+  assert.equal(presaleRequest(draft).problem, "product");
+  assert.deepEqual(presaleRequest({ ...draft, alipayAmount: "25" }).request?.alipay_amount, 25);
+  assert.equal(presaleRequest({ ...draft, alipayAmount: "25" }).request?.dodo_product_id, "");
+  assert.equal(presaleRequest({ ...draft, productId: "pdt_pre", alipayAmount: " " }).request?.alipay_amount, 0);
+  for (const bad of ["-1", "1.5", "abc", "100000000"]) {
+    assert.equal(presaleRequest({ ...draft, alipayAmount: bad }).problem, "alipay", bad);
+  }
+  // A control plane from before Alipay presales sends neither field.
+  const old = parseAccountPresale(tenantView);
+  assert.deepEqual([old.alipayAmount, old.alipayAvailable], [0, false]);
+  const paid = parseAccountPresale({ ...tenantView, alipay_amount: 25, alipay_available: true });
+  assert.deepEqual([paid.alipayAmount, paid.alipayAvailable], [25, true]);
+  for (const value of [{ ...tenantView, alipay_amount: -1 }, { ...tenantView, alipay_amount: 100_000_000 }, { ...tenantView, alipay_available: "yes" }]) {
+    assert.throws(() => parseAccountPresale(value));
+  }
+  assert.deepEqual(presaleAlipayBody(paid, "act-1"), { action_id: "act-1", expected_amount: 25 });
+  // An order paid with Alipay quota says so.
+  const order = { id: "ord_p", package_id: "", presale_id: "pre_a", alipay_amount: 25, amount_minor: 0, currency: "USD", credits_micro: 0, refunded_minor: 0,
+    status: "paid", created_at: "2026-11-11T00:00:00Z", updated_at: "2026-11-11T00:00:00Z" };
+  assert.equal(parseCheckoutOrder(order).alipayAmount, 25);
+  assert.equal(parseCheckoutOrder({ ...order, alipay_amount: undefined }).alipayAmount, 0);
+  const target = resolveUpstream("POST", ["admin", "v1", "billing", "presales", "pre_a", "alipay"], new URLSearchParams());
+  assert.deepEqual(target, { path: "/admin/v1/billing/presales/pre_a/alipay", search: "" });
+  assert.equal(resolveUpstream("GET", ["admin", "v1", "billing", "presales", "pre_a", "alipay"], new URLSearchParams()), null);
 });
 
 test("presale orders wait without a package until an account is assigned", () => {

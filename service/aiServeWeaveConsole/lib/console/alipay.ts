@@ -46,6 +46,7 @@ export interface AlipayRedemption {
   amount: number;
   quotaUnit: string;
   creditsMicro: number;
+  presaleOrderId: string;
   status: RedemptionStatus;
   reasonCode: string;
   createdAt: string;
@@ -116,6 +117,7 @@ export function parseAlipayRedemption(value: unknown): AlipayRedemption {
     amount,
     quotaUnit: text(source, "quota_unit"),
     creditsMicro: count(source, "credits_micro"),
+    presaleOrderId: source.presale_order_id === undefined ? "" : required(source, "presale_order_id"),
     status: status as RedemptionStatus,
     reasonCode: text(source, "reason_code"),
     createdAt: timestamp(source, "created_at"),

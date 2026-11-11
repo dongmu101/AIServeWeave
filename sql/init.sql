@@ -569,6 +569,11 @@ CREATE UNIQUE INDEX idx_alipay_redemptions_action ON alipay_redemptions (tenant_
 CREATE INDEX idx_alipay_redemptions_tenant_created ON alipay_redemptions (tenant_id, created_at, id);
 CREATE INDEX idx_alipay_redemptions_status_created ON alipay_redemptions (status, created_at, id);
 
+-- billing/mysql/0008_alipay_presale.sql
+ALTER TABLE account_presales ADD COLUMN alipay_amount BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE checkout_orders ADD COLUMN alipay_amount BIGINT NOT NULL DEFAULT 0;
+ALTER TABLE alipay_redemptions ADD COLUMN presale_order_id VARCHAR(32) NOT NULL DEFAULT '';
+
 -- ============================================================
 -- jobs
 -- ============================================================

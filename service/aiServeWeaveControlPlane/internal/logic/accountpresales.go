@@ -22,6 +22,15 @@ func PresaleAvailable(p store.PresaleStock) bool {
 	return p.Active && p.PriceMinor > 0 && p.Currency != "" && p.DodoProductID != "" && p.Outstanding < p.Capacity
 }
 
+// PresaleAlipayAvailable reports whether a presale can be paid with Alipay
+// quota now: it is listed, has an Alipay amount and still has a place.
+//
+// PresaleAlipayAvailable 报告一个预售此刻能否用支付宝额度支付：已上架、设有支付宝额度
+// 数量且仍有名额。
+func PresaleAlipayAvailable(p store.PresaleStock) bool {
+	return p.Active && p.AlipayAmount > 0 && p.Outstanding < p.Capacity
+}
+
 // ListAccountPresales returns the presale catalog. An operator sees every
 // presale; a tenant only the listed, priced ones, and callers must render a
 // tenant only whether one is available, never its counts or product.
@@ -52,7 +61,7 @@ func (s *Service) ListAccountPresales(ctx context.Context, actor Actor) ([]store
 	}
 	out := make([]store.PresaleStock, 0, len(rows))
 	for _, row := range rows {
-		if row.Active && row.PriceMinor > 0 && row.Currency != "" && row.DodoProductID != "" {
+		if row.Active && row.PriceMinor > 0 && row.Currency != "" && (row.DodoProductID != "" || row.AlipayAmount > 0) {
 			out = append(out, row)
 		}
 	}
@@ -72,7 +81,8 @@ func (s *Service) SaveAccountPresale(ctx context.Context, actor Actor, in model.
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 || !model.ValidAccountKind(in.Kind) ||
 		in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(in.Currency) ||
-		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) ||
+		(in.DodoProductID == "" && in.AlipayAmount == 0) || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) ||
+		in.AlipayAmount < 0 || in.AlipayAmount > billing.MaxAlipayPointAmount ||
 		in.Capacity < 1 || in.Capacity > model.MaxPresaleCapacity {
 		return store.PresaleStock{}, ErrInvalidInput
 	}
@@ -85,7 +95,7 @@ func (s *Service) SaveAccountPresale(ctx context.Context, actor Actor, in model.
 		return store.PresaleStock{}, translate(err)
 	}
 	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionPresaleSave, in.ID,
-		fmt.Sprintf("kind %s amount %d %s capacity %d active %t", in.Kind, in.PriceMinor, in.Currency, in.Capacity, in.Active), actor.IP)
+		fmt.Sprintf("kind %s amount %d %s alipay %d capacity %d active %t", in.Kind, in.PriceMinor, in.Currency, in.AlipayAmount, in.Capacity, in.Active), actor.IP)
 	rows, err := s.store.ListAccountPresales(ctx, now)
 	if err != nil {
 		return store.PresaleStock{}, translate(err)
@@ -167,6 +177,94 @@ func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presal
 	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionPresaleCheckout, presaleID,
 		fmt.Sprintf("order %s amount %d %s", order.ID, order.AmountMinor, order.Currency), actor.IP)
 	return CheckoutResult{OrderID: order.ID, CheckoutURL: checkout.URL}, nil
+}
+
+// alipayPresaleReason is the consumption reason 一人付 records for a presale
+// paid with Alipay quota: short, fixed, and free of anything personal.
+//
+// alipayPresaleReason 是用支付宝额度支付预售时一人付记录的核销说明：简短、固定、不含任何
+// 个人信息。
+const alipayPresaleReason = "购买 AIServeWeave 账号预售"
+
+// CreatePresaleAlipayCheckout pays one month of a presale with the tenant's
+// Alipay quota: it saves a pending order and the redemption that consumes
+// expectedAmount units for it, then consumes. Only a confirmed consumption
+// marks the order paid, after which it waits for an operator's assignment
+// like any paid presale order; a definite failure marks it failed, freeing
+// its place. The click's actionID makes a retry resume the same order.
+// expectedAmount must match the presale's current amount. Such an order has
+// no refund: Alipay cannot undo a consumption.
+//
+// CreatePresaleAlipayCheckout 用租户的支付宝额度支付预售的一个月：保存一个待付款订单
+// 与为它核销 expectedAmount 个单位的兑换，然后核销。只有已确认的核销才会把订单标为
+// 已付款，之后与其他已付款预售订单一样等待运维分配；明确失败则标为失败并释放名额。点击的
+// actionID 使重试恢复同一订单。expectedAmount 必须与预售当前数量一致。这类订单没有退款：
+// 支付宝无法撤销核销。
+func (s *Service) CreatePresaleAlipayCheckout(ctx context.Context, actor Actor, presaleID, actionID string, expectedAmount int64) (model.AlipayRedemption, error) {
+	if err := s.requireAlipayTenant(actor, true); err != nil {
+		return model.AlipayRedemption{}, err
+	}
+	if presaleID == "" || len(presaleID) > 64 || !actionIDPattern.MatchString(actionID) || expectedAmount < 1 || expectedAmount > billing.MaxAlipayPointAmount {
+		return model.AlipayRedemption{}, ErrInvalidInput
+	}
+	ctx, cancel := alipayContext(ctx)
+	defer cancel()
+	caps, product, err := s.alipayCatalog(ctx)
+	if err != nil {
+		return model.AlipayRedemption{}, alipayUnavailable("product", err)
+	}
+	terms := s.alipayTermsOf(caps, product)
+	if !terms.canRedeem {
+		return model.AlipayRedemption{}, ErrConflict
+	}
+	now := s.clock.Now().UTC()
+	rows, err := s.store.ListAccountPresales(ctx, now)
+	if err != nil {
+		return model.AlipayRedemption{}, translate(err)
+	}
+	var presale model.AccountPresale
+	found := false
+	for _, row := range rows {
+		if row.ID == presaleID {
+			presale, found = row.AccountPresale, true
+			break
+		}
+	}
+	if !found {
+		return model.AlipayRedemption{}, ErrNotFound
+	}
+	// Capacity and listing are judged by the store under the presale's lock,
+	// so a retry of a click that already holds its place is not refused.
+	if presale.AlipayAmount != expectedAmount {
+		return model.AlipayRedemption{}, ErrConflict
+	}
+	if expectedAmount > terms.maxAmount {
+		return model.AlipayRedemption{}, ErrConflict
+	}
+	order := model.CheckoutOrder{
+		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PresaleID: presale.ID,
+		Currency: presale.Currency, Status: model.OrderStatusPending, AlipayAmount: expectedAmount,
+		CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+	}
+	fresh := model.AlipayRedemption{
+		ID: model.NewID(model.PrefixAlipayRedemption), TenantID: actor.TenantID, ActionID: actionID, Amount: expectedAmount,
+		QuotaUnit: product.QuotaUnit, Reason: alipayPresaleReason, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+	}
+	row, err := s.store.CreatePresaleAlipayRedemption(ctx, order, fresh)
+	if err != nil {
+		return model.AlipayRedemption{}, translate(err)
+	}
+	if row.Status != model.AlipayRedemptionPending {
+		return row, nil
+	}
+	if row.ID != fresh.ID {
+		// The same click again: resume what it started.
+		return s.resumeRedemption(ctx, row)
+	}
+	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionPresaleCheckout, presale.ID,
+		fmt.Sprintf("order %s alipay %d %s", row.PresaleOrderID, row.Amount, row.QuotaUnit), actor.IP)
+	s.noteAttempt(row.ID)
+	return s.advanceRedemption(ctx, row, true)
 }
 
 // AssignPresaleOrder gives a paid presale order a monthly account of the

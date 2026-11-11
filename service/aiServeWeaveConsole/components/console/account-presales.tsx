@@ -10,6 +10,7 @@ import { usePagedResource } from "./use-paged-resource";
 import { ConfirmDialog } from "./confirm-dialog";
 import { SELECT_CLASS } from "./account-sales";
 import { CurrencySelect } from "./currency-select";
+import { unitLabel, useActionId } from "./alipay-billing";
 import { Pager } from "./pager";
 import { EmptyState, ErrorState, FormError, LoadingState } from "./states";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -23,13 +24,16 @@ import {
   parseAccountPresale,
   parseAccountPresales,
   parseRefundCreated,
+  presaleAlipayBody,
   presaleCheckoutBody,
   presaleRequest,
   refundReason,
+  MAX_ALIPAY_AMOUNT,
   MAX_PRESALE_CAPACITY,
   type AccountPresale,
   type PresaleDraftProblem,
 } from "@/lib/console/account-presales";
+import { parseAlipayOverview, parseAlipayRedemption, type AlipayOverview } from "@/lib/console/alipay";
 import { currencyDigits, formatMoney, formatScaled, parseCheckout, parseCheckoutOrder, parseOrderPage, type CheckoutOrder } from "@/lib/console/billing";
 import { formatDateTime, observationAge } from "@/lib/console/format";
 import { ApiError } from "@/lib/console/errors";
@@ -42,6 +46,7 @@ const PROBLEM_KEYS: Record<PresaleDraftProblem, MessageKey> = {
   price: "tenant.accountProblemPrice",
   product: "tenant.accountProblemProduct",
   capacity: "operator.presaleProblemCapacity",
+  alipay: "operator.presaleProblemAlipay",
 };
 
 /** PresaleSales lists the presales. A tenant pre-orders a month through the
@@ -51,8 +56,19 @@ const PROBLEM_KEYS: Record<PresaleDraftProblem, MessageKey> = {
  *
  * PresaleSales 列出预售。商户经服务商结账预购一个月，之后订单等待运维分配账号；这里
  * 不判定付款是否成功。只有存在预售商品时，商户才会看到这一区块。 */
-export function PresaleSales({ resource, canPurchase = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean }) {
-  return <PresaleCatalog resource={resource} canPurchase={canPurchase} />;
+export function PresaleSales({ resource, canPurchase = false, dodo = true, alipay = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean; dodo?: boolean; alipay?: boolean }) {
+  return alipay ? <PresaleSalesWithAlipay resource={resource} canPurchase={canPurchase} dodo={dodo} /> : <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} />;
+}
+
+/** PresaleSalesWithAlipay reads the tenant's Alipay overview, which says
+ * whether quota can be redeemed and in which unit, so a presale can also be
+ * paid with it.
+ *
+ * PresaleSalesWithAlipay 读取租户的支付宝概览，它说明能否兑换额度及其单位，使预售也能
+ * 用支付宝额度支付。 */
+function PresaleSalesWithAlipay({ resource, canPurchase, dodo }: { resource: Resource<AccountPresale[]>; canPurchase: boolean; dodo: boolean }) {
+  const overview = useResource({ method: "GET", path: "/admin/v1/billing/alipay", parse: parseAlipayOverview });
+  return <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} alipayOn alipay={overview.data} onAlipayPaid={overview.reload} />;
 }
 
 /** PresaleAdmin is the operator's presale tab: the catalog and the delivery
@@ -69,12 +85,15 @@ export function PresaleAdmin() {
   </div>;
 }
 
-function PresaleCatalog({ resource, operator = false, canPurchase = false }: { resource: Resource<AccountPresale[]>; operator?: boolean; canPurchase?: boolean }) {
+function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo = true, alipayOn = false, alipay = null, onAlipayPaid }: {
+  resource: Resource<AccountPresale[]>; operator?: boolean; canPurchase?: boolean; dodo?: boolean; alipayOn?: boolean; alipay?: AlipayOverview | null; onAlipayPaid?: () => void;
+}) {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const path = operator ? "/operator/v1/billing/presales" : "/admin/v1/billing/presales";
   const [editing, setEditing] = React.useState<AccountPresale | "new" | null>(null);
   const [buying, setBuying] = React.useState<AccountPresale | null>(null);
+  const [notice, setNotice] = React.useState<MessageKey | null>(null);
   const rows = resource.data ?? [];
   if (!operator && (resource.errorKind === "not_found" || resource.loading || (resource.data !== null && rows.length === 0))) {
     return null;
@@ -83,6 +102,7 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false }: { r
     <CardHeader><CardTitle><Message id="tenant.presale" /></CardTitle></CardHeader>
     <CardContent className="grid gap-4">
       <p className="text-sm text-muted-foreground"><Message id={operator ? "tenant.presaleOperatorNote" : "tenant.presaleNote"} /></p>
+      {notice ? <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm"><Message id={notice} /></p> : null}
       {operator ? <div className="flex flex-wrap gap-3">
         <Button variant="outline" disabled={resource.loading} onClick={resource.reload}><Message id="common.refresh" /></Button>
         <Button disabled={resource.loading || resource.error !== null} onClick={() => setEditing("new")}><Message id="operator.presaleAdd" /></Button>
@@ -91,7 +111,12 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false }: { r
         : resource.error ? <ErrorState message={resource.error} onRetry={resource.reload} />
         : resource.loading ? <LoadingState label={t("tenant.presale")} rows={2} />
         : rows.length === 0 ? <EmptyState title={t("tenant.presaleEmpty")} />
-        : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.map(presale => <div key={presale.id} className="grid content-between gap-3 rounded-lg border p-4">
+        : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.map(presale => {
+          // Whether this presale can be bought now by a way this deployment offers.
+          // 此刻能否用本部署提供的方式购买这个预售。
+          const open = operator ? presale.available || presale.alipayAvailable : (dodo && presale.available) || (alipayOn && presale.alipayAvailable);
+          const alipayOffer = !operator && alipayOn && alipay !== null && alipay.canRedeem && presale.alipayAmount > 0 && presale.alipayAmount <= alipay.maxAmount ? alipay : null;
+          return <div key={presale.id} className="grid content-between gap-3 rounded-lg border p-4">
           <div className="grid gap-2">
             <div className="flex items-start justify-between gap-2">
               <p className="line-clamp-2 min-w-0 font-medium break-all" title={presale.name}>{presale.name}</p>
@@ -100,16 +125,23 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false }: { r
             <div className="flex flex-wrap gap-2">
               <Badge variant="outline"><Message id="tenant.presaleBadge" /></Badge>
               {!presale.active ? <Badge variant="outline"><Message id="tenant.accountArchived" /></Badge> : null}
-              {presale.active && !presale.available ? <Badge variant="destructive"><Message id="tenant.presaleSoldOut" /></Badge> : null}
+              {presale.active && !open ? <Badge variant="destructive"><Message id="tenant.presaleSoldOut" /></Badge> : null}
             </div>
             <p className="text-lg font-semibold">{t("tenant.accountMonthlyPrice", { price: formatMoney(presale.priceMinor, presale.currency, locale) })}</p>
             <p className="text-sm text-muted-foreground"><Message id="tenant.presaleDelivery" /></p>
+            {alipayOffer ? <p className="text-sm">{t("tenant.presaleAlipayCost", { amount: presale.alipayAmount, unit: unitLabel(alipayOffer.quotaUnit, t) })}</p> : null}
+            {operator && presale.alipayAmount > 0 ? <p className="text-sm">{t("operator.presaleAlipayPaid", { amount: presale.alipayAmount })}</p> : null}
             {operator && presale.capacity !== null && presale.outstanding !== null ? <p className="text-sm">{t("operator.presaleStock", { outstanding: presale.outstanding, capacity: presale.capacity })}</p> : null}
             {operator && presale.dodoProductId ? <code className="text-xs break-all text-muted-foreground">{presale.dodoProductId}</code> : null}
           </div>
           {operator ? <Button variant="outline" onClick={() => setEditing(presale)}><Message id="operator.presaleEdit" /></Button>
-            : canPurchase ? <div><Button disabled={!presale.available} onClick={() => setBuying(presale)}><Message id="tenant.presaleBuy" /></Button></div> : null}
-        </div>)}</div>}
+            : canPurchase ? <div className="flex flex-wrap gap-2">
+              {dodo ? <Button disabled={!presale.available} onClick={() => { setNotice(null); setBuying(presale); }}><Message id="tenant.presaleBuy" /></Button> : null}
+              {alipayOffer ? <PresaleAlipayPay key={presale.id} presale={presale} unit={alipayOffer.quotaUnit} primary={!dodo}
+                onPaid={key => { setNotice(key); resource.reload(); onAlipayPaid?.(); }} /> : null}
+            </div> : null}
+        </div>;
+        })}</div>}
     </CardContent>
     <ConfirmDialog open={buying !== null} onOpenChange={open => { if (!open) setBuying(null); }} title={t("tenant.presalePurchase")}
       description={buying ? t("tenant.presaleBuyConfirm", { name: buying.name, price: formatMoney(buying.priceMinor, buying.currency, locale), kind: accountKindLabel(buying.kind) }) : ""}
@@ -133,6 +165,44 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false }: { r
   </Card>;
 }
 
+/** PresaleAlipayPay pays one month of a presale with the tenant's Alipay
+ * quota. The click keeps its action id until a definite answer, so pressing
+ * again after a lost answer resumes the same order instead of consuming
+ * twice. Only the control plane says whether the consumption was confirmed:
+ * a pending answer is reported as such, never as paid.
+ *
+ * PresaleAlipayPay 用租户的支付宝额度支付预售的一个月。点击在得到确定答复之前保留其
+ * action id，因此答复丢失后再次点击会恢复同一订单而不是重复扣减。核销是否已确认只由控制面
+ * 说了算：待确认的答复就如实报告为待确认，绝不当作已付款。 */
+function PresaleAlipayPay({ presale, unit, primary, onPaid }: { presale: AccountPresale; unit: string; primary: boolean; onPaid: (notice: MessageKey) => void }) {
+  const { t } = useI18n();
+  const run = useConsoleRequest();
+  const action = useActionId();
+  const [open, setOpen] = React.useState(false);
+  return <>
+    <Button variant={primary ? "default" : "outline"} disabled={!presale.alipayAvailable} onClick={() => setOpen(true)}><Message id="tenant.presaleAlipayPay" /></Button>
+    <ConfirmDialog open={open} onOpenChange={setOpen} title={t("tenant.presaleAlipayPay")}
+      description={t("tenant.presaleAlipayConfirm", { name: presale.name, kind: accountKindLabel(presale.kind), cost: t("tenant.alipayRemainingValue", { amount: presale.alipayAmount, unit: unitLabel(unit, t) }) })}
+      onConfirm={async () => {
+        let row;
+        try {
+          // A payment is a write and is never retried automatically: the
+          // action id makes a deliberate second press resume the same order.
+          // 付款是写操作，绝不自动重试：action id 使有意的再次点击恢复同一订单。
+          row = await run({ method: "POST", path: `/admin/v1/billing/presales/${encodeURIComponent(presale.id)}/alipay`, body: presaleAlipayBody(presale, action.current()), parse: parseAlipayRedemption });
+        } catch (error) {
+          action.settle(error);
+          if (error instanceof ApiError && error.status === 409) throw new ApiError("presale_unavailable", 409);
+          if (error instanceof ApiError && error.status === 404) throw new ApiError("account_checkout_disabled", 404);
+          if (error instanceof ApiError && error.status === 503) throw new ApiError("payment_unavailable", 503);
+          throw error;
+        }
+        action.settle();
+        onPaid(row.status === "succeeded" ? "tenant.presaleAlipayPaid" : row.status === "failed" ? "tenant.presaleAlipayFailed" : "tenant.presaleAlipayPending");
+      }} />
+  </>;
+}
+
 function PresaleEditor({ presale, onClose, onSaved }: { presale: AccountPresale | null; onClose: () => void; onSaved: () => void }) {
   const run = useConsoleRequest();
   const [kind, setKind] = React.useState<AccountKind | "">(presale?.kind ?? "");
@@ -141,10 +211,12 @@ function PresaleEditor({ presale, onClose, onSaved }: { presale: AccountPresale 
   const [rawPrice, setPrice] = React.useState(presale ? formatScaled(presale.priceMinor, currencyDigits(presale.currency)) : "");
   const [productId, setProductId] = React.useState(presale?.dodoProductId ?? "");
   const [capacity, setCapacity] = React.useState(presale?.capacity ? String(presale.capacity) : "");
+  const [alipayAmount, setAlipayAmount] = React.useState(presale && presale.alipayAmount > 0 ? String(presale.alipayAmount) : "");
   const [active, setActive] = React.useState(presale ? presale.active : true);
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<unknown>(null);
-  const built = presaleRequest({ kind, name, price: rawPrice, currency, productId, capacity, active });
+  const built = presaleRequest({ kind, name, price: rawPrice, currency, productId, capacity, active, alipayAmount });
+  const alipayOnly = built.request !== null ? built.request.alipay_amount > 0 : /^[1-9]\d*$/.test(alipayAmount.trim());
   const touched = kind !== "" && (name.trim() !== "" || rawPrice.trim() !== "" || productId.trim() !== "" || capacity.trim() !== "");
   const prefix = React.useId();
   return <Card className="m-4">
@@ -173,10 +245,12 @@ function PresaleEditor({ presale, onClose, onSaved }: { presale: AccountPresale 
       <label htmlFor={`${prefix}-name`}><Message id="operator.presaleName" /></label><Input id={`${prefix}-name`} required maxLength={128} value={name} disabled={pending} onChange={e => setName(e.target.value)} />
       <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><CurrencySelect id={`${prefix}-currency`} className={SELECT_CLASS} required value={currency} disabled={pending} onChange={setCurrency} />
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
-      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
+      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={!alipayOnly} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>
       <label htmlFor={`${prefix}-capacity`}><Message id="operator.presaleCapacity" /></label><Input id={`${prefix}-capacity`} required inputMode="numeric" max={MAX_PRESALE_CAPACITY} value={capacity} disabled={pending} onChange={e => setCapacity(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="operator.presaleCapacityHint" /></p>
+      <label htmlFor={`${prefix}-alipay`}><Message id="operator.presaleAlipayAmount" /></label><Input id={`${prefix}-alipay`} inputMode="numeric" max={MAX_ALIPAY_AMOUNT} value={alipayAmount} disabled={pending} onChange={e => setAlipayAmount(e.target.value)} />
+      <p className="text-sm text-muted-foreground"><Message id="operator.presaleAlipayHint" /></p>
       <label className="flex items-center gap-2"><input type="checkbox" checked={active} disabled={pending} onChange={e => setActive(e.target.checked)} /><Message id="tenant.accountListed" /></label>
       {touched && built.problem ? <p role="status" className="text-sm text-muted-foreground"><Message id={PROBLEM_KEYS[built.problem]} /></p> : null}
       <FormError message={error === null ? null : <ErrorMessage error={error} />} />
@@ -241,7 +315,10 @@ function PresaleAwaitingOrders({ presales }: { presales: Resource<AccountPresale
                   <span className="break-all">{presale.name}</span>
                   <Badge variant="secondary">{accountKindLabel(presale.kind)}</Badge>
                 </div> : <span className="text-muted-foreground"><Message id="operator.presaleUnknown" /></span>}</TableCell>
-                <TableCell className="text-right whitespace-nowrap">{formatMoney(order.amountMinor, order.currency, locale)}</TableCell>
+                <TableCell className="text-right">{order.alipayAmount > 0 ? <div className="grid gap-1">
+                  <span className="whitespace-nowrap">{t("operator.presaleAlipayPaid", { amount: order.alipayAmount })}</span>
+                  <span className="text-xs text-muted-foreground"><Message id="operator.presaleAlipayNoRefund" /></span>
+                </div> : <span className="whitespace-nowrap">{formatMoney(order.amountMinor, order.currency, locale)}</span>}</TableCell>
                 <TableCell className="text-right whitespace-nowrap">{order.refundedMinor > 0 ? formatMoney(order.refundedMinor, order.currency, locale) : "—"}</TableCell>
                 <TableCell><div className="flex flex-wrap gap-2">
                   <Button size="sm" disabled={!presale} onClick={() => { setNotice(null); setAssigning(order); }}><Message id="operator.presaleAssign" /></Button>

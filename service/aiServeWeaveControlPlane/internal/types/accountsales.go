@@ -58,17 +58,25 @@ type AccountCheckoutRequest struct {
 // Available 告诉商户此刻能否结账。DodoProductID、Capacity 与 Outstanding（仍在等待
 // 账号的订单数，含待付款结账）只返回给运维。
 type AccountPresale struct {
-	ID            string `json:"id"`
-	Kind          string `json:"kind"`
-	Name          string `json:"name"`
-	PriceMinor    int64  `json:"price_minor"`
-	Currency      string `json:"currency"`
-	Active        bool   `json:"active"`
-	Available     bool   `json:"available"`
-	DodoProductID string `json:"dodo_product_id,omitempty"`
-	Capacity      *int   `json:"capacity,omitempty"`
-	Outstanding   *int   `json:"outstanding,omitempty"`
-	UpdatedAt     string `json:"updated_at,omitempty"`
+	ID         string `json:"id"`
+	Kind       string `json:"kind"`
+	Name       string `json:"name"`
+	PriceMinor int64  `json:"price_minor"`
+	Currency   string `json:"currency"`
+	Active     bool   `json:"active"`
+	Available  bool   `json:"available"`
+	// AlipayAmount is how many Alipay units (counts or points) one month
+	// costs from a tenant's Alipay quota; zero when it cannot be paid that
+	// way. AlipayAvailable tells a tenant whether it can be paid that way now.
+	//
+	// AlipayAmount 是用租户支付宝额度支付一个月所需的单位数（次数或积分）；不能这样支付时
+	// 为零。AlipayAvailable 告诉商户此刻能否这样支付。
+	AlipayAmount    int64  `json:"alipay_amount"`
+	AlipayAvailable bool   `json:"alipay_available"`
+	DodoProductID   string `json:"dodo_product_id,omitempty"`
+	Capacity        *int   `json:"capacity,omitempty"`
+	Outstanding     *int   `json:"outstanding,omitempty"`
+	UpdatedAt       string `json:"updated_at,omitempty"`
 }
 
 // AccountPresaleRequest creates or updates a presale; kind cannot change.
@@ -82,6 +90,20 @@ type AccountPresaleRequest struct {
 	DodoProductID string `json:"dodo_product_id"`
 	Capacity      int    `json:"capacity"`
 	Active        bool   `json:"active"`
+	AlipayAmount  int64  `json:"alipay_amount"`
+}
+
+// PresaleAlipayRequest is POST /admin/v1/billing/presales/:id/alipay.
+// ActionID identifies one click and is reused when that click is retried;
+// ExpectedAmount is the Alipay amount the tenant saw, and a different current
+// amount is a conflict.
+//
+// PresaleAlipayRequest 是 POST /admin/v1/billing/presales/:id/alipay 的请求。ActionID
+// 标识一次点击，重试该点击时沿用；ExpectedAmount 是商户看到的支付宝额度数量，当前数量不同
+// 则冲突。
+type PresaleAlipayRequest struct {
+	ActionID       string `json:"action_id"`
+	ExpectedAmount int64  `json:"expected_amount"`
 }
 
 // PresaleAssignRequest names the monthly account an operator gives a paid

@@ -14,7 +14,7 @@ import (
 func renderAlipayRedemption(r model.AlipayRedemption) types.AlipayRedemption {
 	return types.AlipayRedemption{
 		ID: r.ID, ActionID: r.ActionID, Amount: r.Amount, QuotaUnit: r.QuotaUnit, CreditsMicro: r.CreditsMicro,
-		Status: r.Status, ReasonCode: r.ReasonCode, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
+		PresaleOrderID: r.PresaleOrderID, Status: r.Status, ReasonCode: r.ReasonCode, CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt,
 	}
 }
 

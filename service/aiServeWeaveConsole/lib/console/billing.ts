@@ -160,7 +160,8 @@ export interface LedgerEntry {
  * `accountExpiresAt` once its payment granted the month. A presale order has
  * `presaleId` instead; paid, it waits without `accountExpiresAt` until an
  * operator assigns its account, which then sets `accountId` too.
- * `refundableMinor` is, on the operator view, what of the payment is not
+ * `alipayAmount` is the Alipay units a presale order was paid with (0 for
+ * Dodo); such an order has no refund. `refundableMinor` is, on the operator view, what of the payment is not
  * refunded yet.
  *
  * CheckoutOrder 镜像 types.CheckoutOrder。租户视图上 `tenantId` 为 ""，服务商报告
@@ -175,6 +176,7 @@ export interface CheckoutOrder {
   accountId: string;
   accountExpiresAt: string | null;
   presaleId: string;
+  alipayAmount: number;
   amountMinor: number;
   currency: string;
   creditsMicro: number;
@@ -539,6 +541,7 @@ export function parseCheckoutOrder(value: unknown): CheckoutOrder {
     accountId,
     accountExpiresAt: source.account_expires_at === undefined || source.account_expires_at === null ? null : timestamp(source, "account_expires_at"),
     presaleId,
+    alipayAmount: optionalCount(source, "alipay_amount"),
     amountMinor: count(source, "amount_minor"),
     currency: required(source, "currency"),
     creditsMicro: count(source, "credits_micro"),
