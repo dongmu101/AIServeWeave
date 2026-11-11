@@ -74,6 +74,16 @@ func withAccountDir(env []string, dir string) []string {
 // 写入大文件的工具调用都远低于该值。
 const maxEventBytes = 256 << 20
 
+// localCLITool reports whether name is a tool the local CLI registers itself
+// (EndConversation, or the bridge's MCP tools), which it could run on this
+// machine. Such a call is refused unless the request declared it.
+//
+// localCLITool 报告 name 是否为本机 CLI 自行注册、可能在本机执行的工具（EndConversation
+// 或桥接的 MCP 工具）。除非请求声明了它，否则这类调用一律拒绝。
+func localCLITool(name string) bool {
+	return name == "EndConversation" || strings.HasPrefix(name, "mcp__")
+}
+
 type principal struct{ tenant, key string }
 type toolResult struct {
 	Content []messageBlock

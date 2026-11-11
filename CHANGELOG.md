@@ -55,6 +55,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Fixed
 
+- Claude 原生直通遇到未声明工具时整轮失败：模型调用本轮 `tools` 未声明的工具（例如尚未载入 schema 的延迟工具）时，Agent 以 `unsafe_tools` 中止回合，客户端重试同一轮反复得到 400。原生回合（含 `safeguards`）现原样转发这类调用，由调用方答复「没有这个工具」，与直连 API 一致；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝，兼容桥接保持严格。只需升级 Agent。见[诊断记录](docs/acceptance/claude-unsafe-tools-2026-11-11/README.md#根因确认与修复同日稍后)。
+
 - Claude CLI 契约加固：原生进程显式拒绝所有本机工具，保留调用方定义与工具身份；兼容合法认证/工具进度通知及成功结果后的额度通知。本机协议、工具隔离、设置与启动失败改为后端错误（正文前 HTTP 502），真实上游 400/429/529 和恢复分类保持原有透传。新增动态工具名、ToolSearch、通知顺序及真实 CLI 隔离回归，见[验证记录](docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；平台分发安装包需刷新 Gateway 镜像内置的 Agent 制品。原生产 `unsafe_tools` 的具体分支仍未复现。
 
 - Claude 原生链路加固：父代理 CONNECT 握手可随取消立即退出；按完整 SSE 事件捕获多行错误，保留 429/529 与重试信息；gzip 编码名按大小写无关识别；Agent 会话寿命或生成空闲到期按 `timeout` 报告，避免误报为通用协议 400。复现与默认离线回归见[验证记录](docs/acceptance/claude-native-robustness-2026-11-09/README.md)。现有节点需更新并重启 Agent，平台安装包需刷新 Gateway 镜像内的 Agent 制品；生产验收仍待执行。

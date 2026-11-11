@@ -58,17 +58,27 @@ func TestBridgeEventsFailureLocation(t *testing.T) {
 }
 
 func TestUnsafeToolFailureLocation(t *testing.T) {
+	upstreamCall := func(name string) string {
+		return "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"" + name + "\",\"id\":\"fixture\",\"input\":{}}}}\n"
+	}
 	for _, tc := range []struct {
 		name, reason string
+		request      messagesRequest
 		wire         string
 		line         float64
 	}{
-		{"local registration", "unexpected_local_tool", "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"private-payload\"]}\n", 1},
-		{"undeclared upstream tool", "undeclared_upstream_tool", "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"private-payload\",\"id\":\"fixture\",\"input\":{}}}}\n", 2},
-		{"missing upstream id", "missing_upstream_tool_id", "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"read_file\",\"input\":{}}}}\n", 2},
+		{"local registration", "unexpected_local_tool", guardedRequest(), "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"private-payload\"]}\n", 1},
+		// A bridged round runs calls through the local MCP bridge, so an
+		// undeclared name is refused. 桥接回合经本机 MCP 桥执行调用，未声明的名称被拒绝。
+		{"undeclared upstream tool in a bridged round", "undeclared_upstream_tool", testMessagesRequest(), upstreamCall("private-payload"), 2},
+		// A native round still refuses names the local CLI could run itself.
+		// 原生回合仍拒绝本机 CLI 自己能执行的名称。
+		{"undeclared local CLI tool in a native round", "undeclared_upstream_tool", guardedRequest(), upstreamCall("EndConversation"), 2},
+		{"undeclared bridge tool in a native round", "undeclared_upstream_tool", guardedRequest(), upstreamCall("mcp__aisw_bridge__tool_0"), 2},
+		{"missing upstream id", "missing_upstream_tool_id", guardedRequest(), "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"read_file\",\"input\":{}}}}\n", 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			s := &messagesSession{ctx: context.Background(), request: guardedRequest(), events: make(chan bridgeEvent, 4)}
+			s := &messagesSession{ctx: context.Background(), request: tc.request, events: make(chan bridgeEvent, 4)}
 			_, cause := bridgeEvents(strings.NewReader(tc.wire), s)
 			if !errors.Is(cause, errUnsafeTools) {
 				t.Fatalf("tool isolation was bypassed: %v", cause)
@@ -255,6 +265,47 @@ func TestBridgeEventsInternalThinking(t *testing.T) {
 			want := []int{0, 0, 0, 1, 1, 1, 0, 0, 0}
 			if !reflect.DeepEqual(indices, want) || len(s.pending) != 1 {
 				t.Fatalf("indices/pending=%v/%d, want %v/1", indices, len(s.pending), want)
+			}
+		})
+	}
+}
+
+// TestNativeForwardsUndeclaredTool forwards a native call to a tool the
+// caller did not declare, unchanged, so the caller can answer it ("no such
+// tool") as it would against the API, instead of failing the round. This is
+// what a model reaching for a deferred tool whose schema was not loaded does.
+//
+// TestNativeForwardsUndeclaredTool 原样转发原生回合中对调用方未声明工具的调用，让调用方
+// 像直连 API 时一样答复（「没有这个工具」），而不是让整轮失败。模型调用尚未载入 schema 的
+// 延迟工具时就是这种情况。
+func TestNativeForwardsUndeclaredTool(t *testing.T) {
+	plain := testMessagesRequest()
+	plain.native = true
+	for name, req := range map[string]messagesRequest{"native": plain, "native_safeguards": guardedRequest()} {
+		t.Run(name, func(t *testing.T) {
+			var input bytes.Buffer
+			emitFixture(&input, map[string]any{"type": "message_start"})
+			emitFixture(&input, map[string]any{"type": "content_block_start", "index": 0, "content_block": map[string]any{"type": "tool_use", "id": "toolu_upstream_1", "name": "Monitor", "input": map[string]any{}}})
+			emitFixture(&input, map[string]any{"type": "content_block_delta", "index": 0, "delta": map[string]string{"type": "input_json_delta", "partial_json": `{"command":"true"}`}})
+			emitFixture(&input, map[string]any{"type": "content_block_stop", "index": 0})
+			emitFixture(&input, map[string]any{"type": "message_delta", "delta": map[string]any{"stop_reason": "tool_use"}})
+			emitFixture(&input, map[string]any{"type": "message_stop"})
+			session := &messagesSession{ctx: context.Background(), request: req, events: make(chan bridgeEvent, 16), pending: make(map[string]*pendingTool), changed: make(chan struct{})}
+			_, err := bridgeEvents(&input, session)
+			if errors.Is(err, errUnsafeTools) {
+				t.Fatalf("an undeclared tool failed a native round: %v", err)
+			}
+			if err != nil && !errors.Is(err, errTerminalStop) {
+				t.Fatalf("native stream rejected: %v", err)
+			}
+			close(session.events)
+			var output strings.Builder
+			for event := range session.events {
+				output.Write(event.data)
+			}
+			if !strings.Contains(output.String(), `"name":"Monitor"`) || !strings.Contains(output.String(), `"id":"toolu_upstream_1"`) ||
+				!strings.Contains(output.String(), `"stop_reason":"tool_use"`) {
+				t.Fatalf("undeclared call was not forwarded unchanged: %s", &output)
 			}
 		})
 	}

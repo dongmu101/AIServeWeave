@@ -56,7 +56,7 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 ## CLI 版本与工具隔离
 
-原生 Messages 的 `tools` 是调用方的工具定义，不是 Agent 的本地执行权限。工具名不按 Claude 内建清单做白名单：`Bash`、`Read`、`Write`、`Agent`、`ToolSearch`、自定义名称及 MCP 名称都按本轮声明校验和原样转发；执行与权限提示由调用方负责。上游返回未声明名称、缺少 ID 或 CLI 初始化注册了不允许的本机工具时，仍明确失败。延迟工具与 `tool_reference` 同样需要完整定义出现在顶层 `tools` 中，见 [Tool search 协议](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)。
+原生 Messages 的 `tools` 是调用方的工具定义，不是 Agent 的本地执行权限。工具名不按 Claude 内建清单做白名单：`Bash`、`Read`、`Write`、`Agent`、`ToolSearch`、自定义名称及 MCP 名称都按本轮声明校验和原样转发；执行与权限提示由调用方负责。上游工具调用缺少 ID、或 CLI 初始化注册了不允许的本机工具时，仍明确失败。上游返回**未声明**的工具名时：原生回合（含带 `safeguards` 的）原样转发给调用方，由调用方答复「没有这个工具」，与直连 API 一致；但名称若是本机 CLI 自己能执行的工具（`EndConversation` 或 `mcp__` 前缀），仍拒绝。兼容桥接回合经本机 MCP 桥执行调用，未声明名称一律拒绝。模型调用尚未载入 schema 的延迟工具（例如 Claude Code 的 `Monitor`）就会出现未声明名称，2026-11-11 16:28–16:29 的连续 400 即由此引起。延迟工具与 `tool_reference` 同样需要完整定义出现在顶层 `tools` 中，见 [Tool search 协议](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)。
 
 Agent 的两条执行路径分别隔离：
 
@@ -200,7 +200,7 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
 
-2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（上游返回未声明的工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。三类拒绝继续保留，公开错误按上段的后端失败规则处理。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
+2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（桥接回合中上游返回未声明的工具名，或原生回合中返回未声明的本机 CLI 工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。三类拒绝继续保留，公开错误按上段的后端失败规则处理。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
 
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 

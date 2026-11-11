@@ -550,7 +550,16 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 							found = true
 						}
 					}
-					if !found {
+					// In a native round the caller runs the tools, so a call to a
+					// tool it did not declare is forwarded as it is and the
+					// caller answers it (Claude Code replies "no such tool"),
+					// as it would talking to the API directly. Only a name the
+					// local CLI could run itself stays refused. Bridged rounds
+					// run calls through the local MCP bridge and stay strict.
+					// 原生回合的工具由调用方执行，因此未声明工具的调用原样转发，由调用方答复（Claude
+					// Code 会回复「没有这个工具」），与直连 API 时一致。只有本机 CLI 自己能执行的名称
+					// 仍被拒绝。桥接回合经本机 MCP 桥执行调用，保持严格。
+					if !found && (!native || localCLITool(current.Name)) {
 						return nil, unsafeToolError("undeclared_upstream_tool")
 					}
 					if current.ID == "" {
