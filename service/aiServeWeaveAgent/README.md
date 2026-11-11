@@ -230,5 +230,6 @@ make run CONFIG=../../deploy/config.open7x.yaml 2>&1 | tee /tmp/aisw-agent-fixed
 - 首次安装时输出 `make: [install] Error 3 (ignored)` 是正常的：这一步是卸载旧服务，服务还没加载时会报这个错，Makefile 忽略它。
 - `已启动 com.aiserveweave.agent.dev` 只说明 launchd 已加载服务，不代表 Agent 启动成功。Agent 异常退出后，launchd 每 15 秒重新拉起一次，这时 `state = running` 也可能是在循环崩溃。用 `make status` 看 `runs` 和 `last exit code`：`runs` 不增长、`last exit code = (never exited)` 才算稳定运行。再用 `make logs` 确认日志里有 `agent started`；如果连了 Gateway，还应有 `tunnel connected`，且没有接着出现 `agent exited with error`。
 - `make status`、`make reload` 读取的是已安装服务实际使用的配置（plist 里的 `-config`），不需要再传 `CONFIG`。
+- `make status` 的“资源”一节列出 Agent 主进程及其全部子孙进程（claude/codex 等 CLI）的 `%CPU`、RSS 和运行时长，并给出合计。`%CPU` 是 `ps` 的近期均值、按单核计，多核满载时可超过 100%。
 - 后台服务不读 shell 启动文件，`claude`、`codex` 等 CLI 只能通过 `make install` 时的 `PATH` 找到。如果执行 `make install` 的终端 PATH 不全，可以用 `AGENT_PATH=...` 指定。
 - 日志位置：`~/Library/Logs/AIServeWeave/AgentDev/agent.log`（Agent 日志）和 `stderr.log`（进程崩溃输出）。
