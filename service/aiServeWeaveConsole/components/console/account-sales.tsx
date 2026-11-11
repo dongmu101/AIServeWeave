@@ -12,22 +12,37 @@ import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
-import { parseAccountSales, parseAccountSale, parseAccountPurchase, type AccountSale } from "@/lib/console/account-sales";
-import { formatCredits, parseCreditsInput, MAX_PRICE_MICRO_PER_MTOK } from "@/lib/console/billing";
+import { parseAccountSales, parseAccountSale, accountCheckoutBody, accountPurchasable, accountRequest, type AccountSale, type AccountDraftProblem } from "@/lib/console/account-sales";
+import { formatMoney, formatScaled, currencyDigits, parseCheckout } from "@/lib/console/billing";
+import type { MessageKey } from "@/lib/i18n/messages";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
 import { parseFleetSnapshot } from "@/lib/console/fleet";
 import { tenantNodeOwner } from "@/lib/console/node-access";
 import { ApiError } from "@/lib/console/errors";
 
-/** AccountSales shares the credential-free monthly inventory between surfaces. */
-export function AccountSales({ operator = false, canPurchase = false, onPurchased }: { operator?: boolean; canPurchase?: boolean; onPurchased?: () => void }) {
+const PROBLEM_KEYS: Record<AccountDraftProblem, MessageKey> = {
+  name: "tenant.accountProblemName",
+  target: "tenant.accountProblemTarget",
+  currency: "tenant.accountProblemCurrency",
+  price: "tenant.accountProblemPrice",
+  product: "tenant.accountProblemProduct",
+};
+
+/** AccountSales shares the credential-free monthly inventory between
+ * surfaces. A tenant buys a month through the provider's checkout, priced in
+ * fiat; the page never decides that a payment succeeded — the month appears
+ * once the server has the provider's confirmation.
+ *
+ * AccountSales 在两个界面间共享不含凭据的包月库存。商户经服务商结账以法币购买一个月；
+ * 页面从不判定付款成功——服务端收到服务商确认后才会显示期限。 */
+export function AccountSales({ operator = false, canPurchase = false }: { operator?: boolean; canPurchase?: boolean }) {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const surface = operator ? "operator" : "admin";
   const path = `/${surface}/v1/billing/accounts`;
   const resource = useResource({ method: "GET", surface, path, parse: parseAccountSales });
   const [editing, setEditing] = React.useState<AccountSale | "new" | null>(null);
-  const [buying, setBuying] = React.useState<{ account: AccountSale; requestId: string } | null>(null);
+  const [buying, setBuying] = React.useState<AccountSale | null>(null);
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
   const rows = (resource.data ?? []).filter(row => matchesQuery([row.name, row.nodeId, row.runtimeId, row.tenantId], query));
@@ -46,16 +61,17 @@ export function AccountSales({ operator = false, canPurchase = false, onPurchase
           <div className="grid gap-2">
             <p className="font-medium break-all">{account.name}</p>
             <code className="break-all text-xs text-muted-foreground">{account.nodeId} / {account.runtimeId}</code>
-            <p className="text-lg font-semibold">{t("tenant.accountMonthlyPrice", { credits: formatCredits(account.priceMicro, locale) })}</p>
+            <p className="text-lg font-semibold">{account.priceMinor > 0 ? t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) }) : t("tenant.accountPriceMissing")}</p>
             <div className="flex flex-wrap gap-2">
               {account.owned ? <Badge><Message id="tenant.accountOwned" /></Badge> : null}
               {!account.active ? <Badge variant="outline"><Message id="tenant.accountArchived" /></Badge> : null}
             </div>
             {account.expiresAt ? <p className="text-sm">{t("tenant.accountExpires", { time: formatDateTime(account.expiresAt, undefined, locale) })}</p> : null}
             {operator && account.tenantId ? <p className="text-xs break-all">{t("tenant.accountHolder", { tenant: account.tenantId })}</p> : null}
+            {operator && account.dodoProductId ? <code className="text-xs break-all text-muted-foreground">{account.dodoProductId}</code> : null}
           </div>
           {operator ? <Button variant="outline" onClick={() => setEditing(account)}><Message id="tenant.accountEdit" /></Button> : canPurchase ?
-            <Button disabled={!account.active} onClick={() => setBuying({ account, requestId: crypto.randomUUID().replaceAll("-", "") })}><Message id={account.owned ? "tenant.accountRenew" : "tenant.accountBuy"} /></Button> : null}
+            <Button disabled={!accountPurchasable(account)} onClick={() => setBuying(account)}><Message id={account.owned ? "tenant.accountRenew" : "tenant.accountBuy"} /></Button> : null}
         </div>)}</div>
         <div className="flex items-center justify-between gap-3">
           <Button variant="outline" disabled={current === 0} onClick={() => setPage(current - 1)}><Message id="tenant.accountPrevious" /></Button>
@@ -65,17 +81,21 @@ export function AccountSales({ operator = false, canPurchase = false, onPurchase
       </>}
     </CardContent>
     <ConfirmDialog open={buying !== null} onOpenChange={open => { if (!open) setBuying(null); }} title={t("tenant.accountPurchase")}
-      description={buying ? t("tenant.accountBuyConfirm", { name: buying.account.name, credits: formatCredits(buying.account.priceMicro, locale) }) : ""}
+      description={buying ? t("tenant.accountBuyConfirm", { name: buying.name, price: formatMoney(buying.priceMinor, buying.currency, locale) }) : ""}
       onConfirm={async () => {
         if (!buying) return;
+        let result;
         try {
-          await run({ method: "POST", path: `${path}/${encodeURIComponent(buying.account.id)}/purchase`, body: { request_id: buying.requestId, expected_price_micro: buying.account.priceMicro }, parse: parseAccountPurchase });
+          // A checkout is a write and is never retried: a repeat would open a
+          // second pending order. 结账是写操作，绝不重试：重发会再开一笔待付款订单。
+          result = await run({ method: "POST", path: `${path}/${encodeURIComponent(buying.id)}/checkout`, body: accountCheckoutBody(buying), parse: parseCheckout });
         } catch (error) {
           if (error instanceof ApiError && error.status === 409) throw new ApiError("account_unavailable", 409);
+          if (error instanceof ApiError && error.status === 404) throw new ApiError("account_checkout_disabled", 404);
+          if (error instanceof ApiError && error.status === 503) throw new ApiError("payment_unavailable", 503);
           throw error;
         }
-        resource.reload();
-        onPurchased?.();
+        window.location.assign(result.checkoutUrl);
       }} />
     {editing ? <AccountEditor key={typeof editing === "string" ? editing : editing.id} account={editing === "new" ? null : editing} inventory={resource.data ?? []} onClose={() => setEditing(null)} onSaved={resource.reload} /> : null}
   </Card>;
@@ -87,21 +107,24 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
   const [autoName, setAutoName] = React.useState("");
   const [node, setNode] = React.useState(account?.nodeId ?? "");
   const [runtime, setRuntime] = React.useState(account?.runtimeId ?? "");
-  const [rawPrice, setPrice] = React.useState(account ? String(account.priceMicro / 1_000_000) : "");
-  const [active, setActive] = React.useState(account?.active ?? true);
+  const [currency, setCurrency] = React.useState(account?.currency || "USD");
+  const [rawPrice, setPrice] = React.useState(account && account.priceMinor > 0 ? formatScaled(account.priceMinor, currencyDigits(account.currency)) : "");
+  const [productId, setProductId] = React.useState(account?.dodoProductId ?? "");
+  const [active, setActive] = React.useState(account ? account.active && account.priceMinor > 0 : true);
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<unknown>(null);
-  const price = parseCreditsInput(rawPrice);
+  const built = accountRequest({ name, nodeId: node, runtimeId: runtime, price: rawPrice, currency, productId, active });
+  const touched = rawPrice.trim() !== "" || productId.trim() !== "";
   const prefix = React.useId();
   return <Card className="m-4">
     <CardHeader><CardTitle><Message id={account ? "tenant.accountEdit" : "tenant.accountAdd"} /></CardTitle></CardHeader>
     <CardContent><form className="grid gap-3" onSubmit={async event => {
       event.preventDefault();
-      if (!node || !runtime || price === null || price <= 0 || price > MAX_PRICE_MICRO_PER_MTOK) return;
+      if (!built.request) return;
       setPending(true); setError(null);
       try {
         await run({ method: account ? "PUT" : "POST", surface: "operator", path: `/operator/v1/billing/accounts${account ? `/${encodeURIComponent(account.id)}` : ""}`,
-          body: { name, node_id: node, runtime_id: runtime, price_micro: price, active }, parse: parseAccountSale });
+          body: built.request, parse: parseAccountSale });
         onSaved(); onClose();
       } catch (failure) { setError(failure); } finally { setPending(false); }
     }}>
@@ -116,10 +139,14 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
           setAutoName(nextName);
         }
       }} />}
+      <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><Input id={`${prefix}-currency`} required maxLength={3} autoCapitalize="characters" value={currency} disabled={pending} onChange={e => setCurrency(e.target.value.toUpperCase())} />
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
+      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
+      <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>
       <label className="flex items-center gap-2"><input type="checkbox" checked={active} disabled={pending} onChange={e => setActive(e.target.checked)} /><Message id="tenant.accountListed" /></label>
+      {touched && built.problem ? <p role="status" className="text-sm text-muted-foreground"><Message id={PROBLEM_KEYS[built.problem]} /></p> : null}
       <FormError message={error === null ? null : <ErrorMessage error={error} />} />
-      <div className="flex gap-3"><Button type="submit" disabled={pending || !node || !runtime || price === null || price <= 0 || price > MAX_PRICE_MICRO_PER_MTOK}><Message id="tenant.accountSave" /></Button><Button type="button" variant="outline" disabled={pending} onClick={onClose}><Message id="common.cancel" /></Button></div>
+      <div className="flex gap-3"><Button type="submit" disabled={pending || built.request === null}><Message id="tenant.accountSave" /></Button><Button type="button" variant="outline" disabled={pending} onClick={onClose}><Message id="common.cancel" /></Button></div>
     </form></CardContent>
   </Card>;
 }

@@ -43,36 +43,61 @@ func (s *Store) SaveAccountSale(_ context.Context, row model.AccountSale, create
 	return nil
 }
 
-func (s *Store) BuyAccount(_ context.Context, accountID, tenantID, actorID, requestID string, price int64, now time.Time) (model.AccountPurchase, error) {
+// CreateAccountCheckoutOrder implements store.AccountSales.
+//
+// CreateAccountCheckoutOrder 实现 store.AccountSales。
+func (s *Store) CreateAccountCheckoutOrder(_ context.Context, order *model.CheckoutOrder, now time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if receipt, ok := s.billing.purchases[requestID]; ok {
-		if receipt.TenantID != tenantID || receipt.AccountID != accountID || receipt.PriceMicro != price {
-			return model.AccountPurchase{}, store.ErrConflict
-		}
-		return receipt, nil
-	}
-	sale, ok := s.billing.accounts[accountID]
+	sale, ok := s.billing.accounts[order.AccountID]
 	if !ok {
-		return model.AccountPurchase{}, store.ErrNotFound
+		return store.ErrNotFound
 	}
-	end, err := store.AccountPurchaseTerms(sale, tenantID, price, now)
-	if err != nil {
-		return model.AccountPurchase{}, err
+	if err := store.AccountCheckoutTerms(sale, order.TenantID, order.AmountMinor, order.Currency, now); err != nil {
+		return err
 	}
-	balance := s.billing.tenants[tenantID]
-	if balance.BalanceMicro < price {
-		return model.AccountPurchase{}, store.ErrInsufficientCredit
+	for _, other := range s.billing.orders {
+		if other.AccountID == order.AccountID && store.AccountCheckoutHeld(other, order.TenantID, now) {
+			return store.ErrConflict
+		}
 	}
-	balance.BalanceMicro -= price
-	balance.Mode, balance.UpdatedAt = model.BillingModeAccountMonthly, now
-	s.billing.tenants[tenantID] = balance
-	sale.TenantID, sale.ExpiresAt, sale.UpdatedAt = tenantID, end, now
-	s.billing.accounts[accountID] = sale
-	receipt := model.AccountPurchase{ID: requestID, AccountID: accountID, TenantID: tenantID, PriceMicro: price, ExpiresAt: end, CreatedAt: now}
-	s.billing.purchases[requestID] = receipt
-	key := "account:" + requestID
-	s.billing.ledger = append(s.billing.ledger, model.CreditLedgerEntry{ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindAccountPurchase,
-		AmountMicro: -price, BalanceAfterMicro: balance.BalanceMicro, Ref: accountID, ActorID: actorID, IdempotencyKey: &key, CreatedAt: now})
-	return receipt, nil
+	if _, ok := s.billing.orders[order.ID]; ok {
+		return store.ErrConflict
+	}
+	s.billing.orders[order.ID] = *order
+	return nil
+}
+
+// FailCheckoutOrder implements store.AccountSales.
+//
+// FailCheckoutOrder 实现 store.AccountSales。
+func (s *Store) FailCheckoutOrder(_ context.Context, orderID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if order, ok := s.billing.orders[orderID]; ok && order.Status == model.OrderStatusPending {
+		order.Status, order.UpdatedAt = model.OrderStatusFailed, now
+		s.billing.orders[orderID] = order
+	}
+	return nil
+}
+
+func (l memLedger) AccountSaleByID(id string) (model.AccountSale, error) {
+	sale, ok := l.s.billing.accounts[id]
+	if !ok {
+		return model.AccountSale{}, store.ErrNotFound
+	}
+	return sale, nil
+}
+
+func (l memLedger) GrantAccount(accountID, tenantID string, expiresAt, now time.Time) error {
+	sale, ok := l.s.billing.accounts[accountID]
+	if !ok {
+		return store.ErrNotFound
+	}
+	row := l.s.billingRow(tenantID, now)
+	row.Mode, row.UpdatedAt = model.BillingModeAccountMonthly, now
+	l.s.billing.tenants[tenantID] = row
+	sale.TenantID, sale.ExpiresAt, sale.UpdatedAt = tenantID, expiresAt, now
+	l.s.billing.accounts[accountID] = sale
+	return nil
 }

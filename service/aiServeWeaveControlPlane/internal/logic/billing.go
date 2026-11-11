@@ -347,7 +347,7 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 	if err != nil {
 		return store.BillingEventResult{}, err
 	}
-	if result.BlockedChanged && s.invalidator != nil {
+	if (result.BlockedChanged || result.AccessChanged) && s.invalidator != nil {
 		s.invalidator.InvalidateAll(ctx)
 	}
 	level := slog.LevelInfo

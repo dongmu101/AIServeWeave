@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "{value}일 전",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} 초안은 유지되었습니다. 현재 버전을 새로고침하여 결과를 확인하세요.",
   "common.tenantNameMustNotExceedCharacters": "테넌트 이름은 {MAX_TENANT_NAME_LENGTH}자를 초과할 수 없습니다.",
-  "common.passwordMustContainAtLeastCharacters": "비밀번호는 최소 {MIN_SIGNUP_PASSWORD_LENGTH}자여야 합니다."
+  "common.passwordMustContainAtLeastCharacters": "비밀번호는 최소 {MIN_SIGNUP_PASSWORD_LENGTH}자여야 합니다.",
+  "tenant.accountUnavailable": "계정이 이미 구매되었거나, 다른 테넌트가 결제 중이거나, 가격이 변경되었거나, 갱신 한도에 도달했습니다. 새로고침 후 다시 시도하세요.",
+  "tenant.accountInsufficientCredit": "크레딧 잔액이 부족합니다. 구매 또는 갱신 전에 충전하세요.",
+  "tenant.accountCheckoutDisabled": "온라인 결제가 활성화되지 않아 지금은 계정을 구매할 수 없습니다. 플랫폼 운영자에게 문의하세요.",
+  "tenant.billingPaymentUnavailable": "결제 서비스를 일시적으로 사용할 수 없습니다. 잠시 후 다시 시도하세요."
 } as const;
 export default core;

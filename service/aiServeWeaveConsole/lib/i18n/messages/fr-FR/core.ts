@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "il y a {value} j",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} Le brouillon a été conservé ; actualisez la version actuelle pour vérifier le résultat.",
   "common.tenantNameMustNotExceedCharacters": "Le nom du locataire ne doit pas dépasser {MAX_TENANT_NAME_LENGTH} caractères.",
-  "common.passwordMustContainAtLeastCharacters": "Le mot de passe doit contenir au moins {MIN_SIGNUP_PASSWORD_LENGTH} caractères."
+  "common.passwordMustContainAtLeastCharacters": "Le mot de passe doit contenir au moins {MIN_SIGNUP_PASSWORD_LENGTH} caractères.",
+  "tenant.accountUnavailable": "Le compte a été acheté, est en cours de paiement par un autre locataire, son prix a changé ou la limite de renouvellement est atteinte. Actualisez puis réessayez.",
+  "tenant.accountInsufficientCredit": "Crédits insuffisants. Rechargez avant d’acheter ou de renouveler.",
+  "tenant.accountCheckoutDisabled": "Le paiement en ligne n’est pas activé ; les comptes ne peuvent pas être achetés pour le moment. Contactez l’opérateur de la plateforme.",
+  "tenant.billingPaymentUnavailable": "Le service de paiement est momentanément indisponible. Veuillez réessayer plus tard."
 } as const;
 export default core;

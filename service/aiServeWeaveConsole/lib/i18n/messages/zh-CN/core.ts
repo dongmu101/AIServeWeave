@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "{value} 天前",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} 草稿已保留；请刷新当前版本核对结果。",
   "common.tenantNameMustNotExceedCharacters": "租户名称不能超过 {MAX_TENANT_NAME_LENGTH} 个字符。",
-  "common.passwordMustContainAtLeastCharacters": "密码至少 {MIN_SIGNUP_PASSWORD_LENGTH} 个字符。"
+  "common.passwordMustContainAtLeastCharacters": "密码至少 {MIN_SIGNUP_PASSWORD_LENGTH} 个字符。",
+  "tenant.accountUnavailable": "账号已被购买、正由其他商户结账、价格已变动或已达到续费上限。请刷新后重试。",
+  "tenant.accountInsufficientCredit": "点数余额不足，请先充值再购买或续费。",
+  "tenant.accountCheckoutDisabled": "在线支付未开启，暂时无法购买账号。请联系平台运维。",
+  "tenant.billingPaymentUnavailable": "支付服务暂时不可用，请稍后再试。"
 } as const;
 export default core;

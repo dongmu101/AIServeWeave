@@ -143,14 +143,19 @@ export interface LedgerEntry {
 }
 
 /** CheckoutOrder mirrors types.CheckoutOrder. `tenantId` is "" on the tenant
- * view and `paymentId` is "" until the provider reports a payment.
+ * view and `paymentId` is "" until the provider reports a payment. A
+ * monthly-account order has `accountId` instead of `packageId`, and
+ * `accountExpiresAt` once its payment granted the month.
  *
  * CheckoutOrder 镜像 types.CheckoutOrder。租户视图上 `tenantId` 为 ""，服务商报告
- * 付款之前 `paymentId` 为 ""。 */
+ * 付款之前 `paymentId` 为 ""。包月账号订单以 `accountId` 代替 `packageId`，付款开通后
+ * 带 `accountExpiresAt`。 */
 export interface CheckoutOrder {
   id: string;
   tenantId: string;
   packageId: string;
+  accountId: string;
+  accountExpiresAt: string | null;
   amountMinor: number;
   currency: string;
   creditsMicro: number;
@@ -429,10 +434,13 @@ export function parseLedgerPage(value: unknown): Page<LedgerEntry> {
 
 function parseOrder(value: unknown): CheckoutOrder {
   const source = record(value);
+  const accountId = optionalText(source, "account_id");
   return {
     id: required(source, "id"),
     tenantId: optionalText(source, "tenant_id"),
-    packageId: required(source, "package_id"),
+    packageId: accountId === "" ? required(source, "package_id") : text(source, "package_id"),
+    accountId,
+    accountExpiresAt: source.account_expires_at === undefined || source.account_expires_at === null ? null : timestamp(source, "account_expires_at"),
     amountMinor: count(source, "amount_minor"),
     currency: required(source, "currency"),
     creditsMicro: count(source, "credits_micro"),

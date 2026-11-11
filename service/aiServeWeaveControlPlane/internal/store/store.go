@@ -1113,6 +1113,11 @@ type BillingEventResult struct {
 	// BlockedChanged 报告租户余额在可用与耗尽之间发生了翻转，已缓存的 key 校验结果
 	// 因此过期。
 	BlockedChanged bool
+	// AccessChanged reports that a paid order granted a monthly account, so
+	// cached key verifications are now stale.
+	//
+	// AccessChanged 报告已付款订单开通了包月账号，已缓存的 key 校验结果因此过期。
+	AccessChanged bool
 }
 
 // RefundRequestFilter narrows a refund-request list. An empty field does not

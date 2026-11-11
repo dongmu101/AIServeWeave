@@ -6,14 +6,13 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"context"
 	"database/sql"
-	"errors"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"time"
 )
 
 // The inventory cap has its own singleton so its lock never reverses the
-// purchase path's tenant -> account -> revocation-outbox lock order.
+// payment path's order -> tenant -> account -> revocation-outbox lock order.
 type accountSalesLock struct {
 	ID int64 `gorm:"primaryKey"`
 }
@@ -53,7 +52,8 @@ func (s *Store) SaveAccountSale(ctx context.Context, row model.AccountSale, crea
 				return store.ErrConflict
 			}
 			result := tx.Model(&model.AccountSale{}).Where("id = ?", row.ID).
-				Updates(map[string]any{"name": row.Name, "price_micro": row.PriceMicro, "active": row.Active, "updated_at": row.UpdatedAt})
+				Updates(map[string]any{"name": row.Name, "price_minor": row.PriceMinor, "currency": row.Currency,
+					"dodo_product_id": row.DodoProductID, "active": row.Active, "updated_at": row.UpdatedAt})
 			if result.Error != nil {
 				return result.Error
 			}
@@ -62,54 +62,58 @@ func (s *Store) SaveAccountSale(ctx context.Context, row model.AccountSale, crea
 	}))
 }
 
-func (s *Store) BuyAccount(ctx context.Context, accountID, tenantID, actorID, requestID string, price int64, now time.Time) (model.AccountPurchase, error) {
-	var receipt model.AccountPurchase
-	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		// Same order as refunds/usage: lock the tenant balance before debit.
-		balance, err := lockTenantBilling(tx, tenantID, now)
-		if err != nil {
+// CreateAccountCheckoutOrder implements store.AccountSales. It runs at READ
+// COMMITTED so the hold check reads committed checkouts without gap locks;
+// the account row lock serializes checkouts for the same account.
+//
+// CreateAccountCheckoutOrder 实现 store.AccountSales。以 READ COMMITTED 运行，使占用
+// 检查读取已提交的结账且不加间隙锁；账号行锁使同一账号的结账串行。
+func (s *Store) CreateAccountCheckoutOrder(ctx context.Context, order *model.CheckoutOrder, now time.Time) error {
+	return translate(s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+		var sale model.AccountSale
+		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", order.AccountID).Take(&sale).Error; err != nil {
 			return err
 		}
-		err = tx.Where("id = ?", requestID).Take(&receipt).Error
-		if err == nil {
-			if receipt.TenantID != tenantID || receipt.AccountID != accountID || receipt.PriceMicro != price {
+		if err := store.AccountCheckoutTerms(sale, order.TenantID, order.AmountMinor, order.Currency, now); err != nil {
+			return err
+		}
+		var pending []model.CheckoutOrder
+		if err := tx.Where("account_id = ? AND status = ? AND created_at > ?", order.AccountID, model.OrderStatusPending, now.Add(-model.AccountCheckoutHold)).
+			Find(&pending).Error; err != nil {
+			return err
+		}
+		for _, other := range pending {
+			if store.AccountCheckoutHeld(other, order.TenantID, now) {
 				return store.ErrConflict
 			}
-			return nil
 		}
-		if !errors.Is(err, gorm.ErrRecordNotFound) {
-			return err
-		}
-		var sale model.AccountSale
-		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", accountID).Take(&sale).Error; err != nil {
-			return err
-		}
-		end, err := store.AccountPurchaseTerms(sale, tenantID, price, now)
-		if err != nil {
-			return err
-		}
-		if balance.BalanceMicro < price {
-			return store.ErrInsufficientCredit
-		}
-		balance.BalanceMicro -= price
-		if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
-			Updates(map[string]any{"balance_micro": balance.BalanceMicro, "mode": model.BillingModeAccountMonthly, "updated_at": now}).Error; err != nil {
-			return err
-		}
-		if err := tx.Model(&model.AccountSale{}).Where("id = ?", accountID).
-			Updates(map[string]any{"tenant_id": tenantID, "expires_at": end, "updated_at": now}).Error; err != nil {
-			return err
-		}
-		receipt = model.AccountPurchase{ID: requestID, AccountID: accountID, TenantID: tenantID, PriceMicro: price, ExpiresAt: end, CreatedAt: now}
-		if err := tx.Create(&receipt).Error; err != nil {
-			return err
-		}
-		key := "account:" + requestID
-		if err := tx.Create(&model.CreditLedgerEntry{ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindAccountPurchase,
-			AmountMicro: -price, BalanceAfterMicro: balance.BalanceMicro, Ref: accountID, ActorID: actorID, IdempotencyKey: &key, CreatedAt: now}).Error; err != nil {
-			return err
-		}
-		return enqueueRevocation(tx)
-	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
-	return receipt, translate(err)
+		return tx.Create(order).Error
+	}, &sql.TxOptions{Isolation: sql.LevelReadCommitted}))
+}
+
+// FailCheckoutOrder implements store.AccountSales.
+//
+// FailCheckoutOrder 实现 store.AccountSales。
+func (s *Store) FailCheckoutOrder(ctx context.Context, orderID string, now time.Time) error {
+	return translate(s.db.WithContext(ctx).Model(&model.CheckoutOrder{}).
+		Where("id = ? AND status = ?", orderID, model.OrderStatusPending).
+		Updates(map[string]any{"status": model.OrderStatusFailed, "updated_at": now}).Error)
+}
+
+func (l gormLedger) AccountSaleByID(id string) (model.AccountSale, error) {
+	var out model.AccountSale
+	err := l.tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", id).Take(&out).Error
+	return out, translate(err)
+}
+
+func (l gormLedger) GrantAccount(accountID, tenantID string, expiresAt, now time.Time) error {
+	if err := l.tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
+		Updates(map[string]any{"mode": model.BillingModeAccountMonthly, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	if err := l.tx.Model(&model.AccountSale{}).Where("id = ?", accountID).
+		Updates(map[string]any{"tenant_id": tenantID, "expires_at": expiresAt, "updated_at": now}).Error; err != nil {
+		return err
+	}
+	return enqueueRevocation(l.tx)
 }

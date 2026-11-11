@@ -43,6 +43,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Changed
 
+- 账号包月改为法币标价、经 Dodo 在线结账购买，不再使用点数余额。账号商品新增币种、月价（货币最小单位）与 Dodo「按意愿付费」产品 ID，新端点 `POST /admin/v1/billing/accounts/:id/checkout` 仅在 `Billing.Enabled` 时挂载；付款 webhook 验签后才开通或续费一个月。待付款结账为本商户保留账号 30 分钟；超时后被他人买走的付款记为已付款未开通，由运维退款。订单返回 `account_id`、`account_expires_at`。**破坏性变更**：移除 `POST /admin/v1/billing/accounts/:id/purchase` 与点数月价 `price_micro`；迁移 `billing/0005_account_fiat.sql` 把现有账号商品全部下架并清零价格（已售期限保留），须重新定价上架；控制面与 Console 须一起升级。详见 [docs/billing-accounts.md](docs/billing-accounts.md)。
+
 - Redis 成为 ControlPlane 必需依赖，Compose 使用 AOF `appendfsync always`；无 `sid` 的旧 JWT 升级后失效。
 - 禁用租户用户会在同一数据库事务中吊销其创建的 active API Key；ControlPlane Key 缓存改用 generation 防止并发旧读取回填。
 - Gateway 的 `-key-cache-ttl` 保留为纵深防御；提交后通知前崩溃由 P07 outbox 重试，漏通知、断线重连和控制面副本切换由持久 generation 补偿。

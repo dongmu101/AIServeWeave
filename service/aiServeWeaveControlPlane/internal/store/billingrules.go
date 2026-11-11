@@ -77,6 +77,16 @@ type BillingTx interface {
 	//
 	// SaveRefundRequest 写入退款申请的可变字段。
 	SaveRefundRequest(req model.RefundRequest) error
+	// AccountSaleByID reads and locks one monthly account.
+	//
+	// AccountSaleByID 读取并锁定一个包月账号。
+	AccountSaleByID(id string) (model.AccountSale, error)
+	// GrantAccount gives the account to tenantID until expiresAt, switches
+	// the tenant to account_monthly and invalidates cached verifications.
+	//
+	// GrantAccount 把账号开通给 tenantID 直到 expiresAt，把商户切换为 account_monthly，
+	// 并使已缓存的校验结果失效。
+	GrantAccount(accountID, tenantID string, expiresAt, now time.Time) error
 }
 
 // ApplyBillingEventRules applies one provider event through tx. A payment
@@ -153,6 +163,11 @@ func paymentSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingE
 	order.UpdatedAt = now
 	if err := tx.SaveOrder(order); err != nil {
 		return BillingEventResult{}, err
+	}
+	// A fiat account order buys a month, not credits.
+	// 法币账号订单购买的是一个月期限，而不是点数。
+	if order.AccountID != "" {
+		return grantAccount(tx, result, order, now)
 	}
 	return credit(tx, result, order.TenantID, model.LedgerKindTopup, order.CreditsMicro, order.ID, "topup:"+paymentID, now)
 }

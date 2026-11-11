@@ -148,7 +148,6 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/admin/v1/billing", requireSession, billingOverview(ctx)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/accounts", requireSession, listAccountSales(ctx)),
-			billingRoute(http.MethodPost, "/admin/v1/billing/accounts/:id/purchase", requireSession, buyAccount(ctx)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/accounts", requirePlatformSession, listAccountSales(ctx)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/accounts", requirePlatformSession, saveAccountSale(ctx, true)),
 			billingRoute(http.MethodPut, "/operator/v1/billing/accounts/:id", requirePlatformSession, saveAccountSale(ctx, false)),
@@ -188,6 +187,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		})
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodPost, "/admin/v1/billing/checkout", requireSession, createCheckout(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/accounts/:id/checkout", requireSession, accountCheckout(ctx)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/refund-requests/:id/approve", requirePlatformSession, reviewRefundRequest(ctx, refundActionApprove)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/orders/:id/refund", requirePlatformSession, createOperatorRefund(ctx)),

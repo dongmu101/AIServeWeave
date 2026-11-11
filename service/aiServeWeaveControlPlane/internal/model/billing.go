@@ -277,8 +277,18 @@ type CheckoutOrder struct {
 	PaidCurrency    string `gorm:"size:8;not null"`
 	Status          string `gorm:"size:16;not null"`
 	CreatedBy       string `gorm:"size:32;not null"`
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// AccountID is the monthly account a fiat order buys one month of; empty
+	// for a credit order, whose PackageID is set instead. AccountExpiresAt
+	// is the expiry the paid order granted, nil until granted — a paid order
+	// left nil could not be granted and needs an operator refund.
+	//
+	// AccountID 是法币订单所购一个月的包月账号；点数订单为空并改设 PackageID。
+	// AccountExpiresAt 是付款后开通到的到期时间，开通前为 nil——已付款却仍为 nil 的订单
+	// 无法开通，需要运维退款。
+	AccountID        string     `gorm:"size:32;not null"`
+	AccountExpiresAt *time.Time `gorm:"column:account_expires_at"`
+	CreatedAt        time.Time
+	UpdatedAt        time.Time
 }
 
 // TableName pins the table name.

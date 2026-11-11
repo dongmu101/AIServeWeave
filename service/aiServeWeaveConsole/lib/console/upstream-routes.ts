@@ -65,7 +65,7 @@ const param = (): Segment => ({ param: true });
  */
 const ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("accounts")], query: [] },
-  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("accounts"), param(), literal("purchase")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("accounts"), param(), literal("checkout")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("models")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("api-docs"), param()], query: [] },

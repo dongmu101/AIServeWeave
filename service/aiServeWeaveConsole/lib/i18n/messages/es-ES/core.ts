@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "Hace {value} d",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} Se ha conservado el borrador; actualiza la versión actual para comprobar el resultado.",
   "common.tenantNameMustNotExceedCharacters": "El nombre del inquilino no puede superar los {MAX_TENANT_NAME_LENGTH} caracteres.",
-  "common.passwordMustContainAtLeastCharacters": "La contraseña debe tener al menos {MIN_SIGNUP_PASSWORD_LENGTH} caracteres."
+  "common.passwordMustContainAtLeastCharacters": "La contraseña debe tener al menos {MIN_SIGNUP_PASSWORD_LENGTH} caracteres.",
+  "tenant.accountUnavailable": "La cuenta ya se compró, está en el pago de otro inquilino, su precio cambió o se alcanzó el límite de renovación. Actualiza e inténtalo de nuevo.",
+  "tenant.accountInsufficientCredit": "Créditos insuficientes. Recarga antes de comprar o renovar.",
+  "tenant.accountCheckoutDisabled": "El pago en línea no está activado, por lo que ahora no se pueden comprar cuentas. Ponte en contacto con el operador de la plataforma.",
+  "tenant.billingPaymentUnavailable": "El servicio de pagos no está disponible temporalmente. Inténtelo de nuevo más tarde."
 } as const;
 export default core;

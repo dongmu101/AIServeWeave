@@ -40,7 +40,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 审计 | `GET /admin/v1/audit` | 全部登录角色可读本租户审计；支持 `limit`、`cursor`、`action`、`actor_id`、`since`、`until`，不提供总数 |
 | 租户引导 | `POST /admin/v1/tenants` | 需要 BootstrapToken；不接入常规 Console 会话 |
 | 租户自助注册 | `POST /admin/v1/auth/signup` | `/signup` 页面 + `/api/signup` 路由，双开关（控制面 `Signup.Enabled`、Console `AISW_CONSOLE_SIGNUP_ENABLED`）；成功后经与登录共用的 `lib/server/sign-in.ts` 建立会话 |
-| 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`GET /admin/v1/billing/{ledger,orders}`；运维 `/operator/v1/billing/*` | 支付端点仅在控制面 `Billing.Enabled` 时挂载，否则 `404`；余额、账号和账目也可由 `AccountSales.Enabled` 独立开启；全部登录角色可读，owner/admin 可结账与打开门户（member `403`）；`503` 表示控制面联系 Dodo 失败 |
+| 预充值计费 | `GET /admin/v1/billing`、`POST /admin/v1/billing/{checkout,portal}`、`POST /admin/v1/billing/accounts/:id/checkout`、`GET /admin/v1/billing/{ledger,orders}`；运维 `/operator/v1/billing/*` | 支付端点仅在控制面 `Billing.Enabled` 时挂载，否则 `404`；余额、账号和账目也可由 `AccountSales.Enabled` 独立开启；全部登录角色可读，owner/admin 可结账与打开门户（member `403`）；`503` 表示控制面联系 Dodo 失败 |
 | Gateway 校验 | `POST /internal/v1/apikeys/verify` | 需要 InternalToken；Console 不调用、不持有该密钥 |
 
 用户、Key 与审计列表返回 `{items, next_cursor}` 信封，支持游标分页与服务端筛选；吊销成功返回 `204`，错误体为 `{ "error": "..." }`。Job 历史另有 `/admin/v1/jobs/history` 与详情端点，不依赖 Fleet 配置。
@@ -448,16 +448,4 @@ GET/POST 均通过 Operator 明确白名单调用控制面；生成不自动重�
 
 验证：ESLint 无错误（现有 alerts 页 TanStack Virtual 警告仍在）、TS7 类型检查、323 项 Node 测试及 Next.js Webpack 生产构建通过；现有 Chrome 完成计费专项 11 项，涵盖实际账号类型选择、保存目标、固定身份编辑、重复库存过滤、关闭配置提示和原有购买/续费流程。浏览器使用隔离会话和模拟 API，不能替代真实控制面/付款/CLI 的生产验收。使用与升级说明见[账号包月](../../docs/billing-accounts.md)。
 
-
-## 运维 Agent 共享设置（2026-11-09）
-
-Agent 接入页面新增默认不勾选的「共享给所有租户」，安装命令与 ZIP 接入都发送明确选择。机群审批确认框提供同一开关，并显示已保存的共享/私有/指定租户状态；机群页可进入共享设置。节点访问编辑器支持不共享、共享和指定租户三种模式，新 Agent 默认显示不共享。租户没有修改入口。文案同步八语言。
-
-验证：326 项 Node 默认测试通过，ESLint 无错误（现有 TanStack Virtual 警告保留）、TS7 检查与生产构建通过。Chrome 新增共享操作及 Agent 接入回归通过，并通过现有运维页面 1440/390/320 px 检查。本地 Docker 已实际登录验证添加页的默认不共享选项、共享设置入口和 API；租户模型目录隐藏未共享 Agent。浏览器回归使用隔离会话和模拟 API，未调用真实 CLI 生成。操作见[Agent 共享设置](../../docs/agent-sharing.md)。
-
-
-### 机群页直接控制共享（2026-11-10）
-
-`/operator/fleet` 每个平台注册节点的操作行新增「开启共享 / 停止共享」。点击后显示节点及影响说明，确认才写入现有 `PUT /operator/v1/node-access/:node_id`；开启专属节点共享时明确提示替换租户绑定。写入失败不自动重试，完成或失败后重新读取状态；读取当前策略失败时禁用操作。商户自有节点不显示该按钮。刷新节点状态时同时刷新共享状态，八语言文案已同步。
-
-验证：326 项 Node 测试、TS7 类型检查与生产构建通过；8 项 Chrome 检查覆盖开关、失败不重试、专属替换提示、策略读取失败、原审批行为及 1440/390/320 px 布局。已更新本地 Docker Console，实际登录机群页验证节点行按钮和确认/取消交互；该本地检查未提交共享变更。
+**法币标价（2026-11-11）**：账号卡片按币种显示月价（`formatMoney`），旧版无法币价格的商品显示「未设定法币价格」且不可购买。购买/续费确认后调用 `POST /admin/v1/billing/accounts/:id/checkout`（白名单替换原 `/purchase`），只发送确认时的 `expected_price_minor` 与 `currency`，不自动重试，成功后跳转控制面交回的 https 结账地址；`409`/`404`/`503` 分别提示账号不可购买、在线支付未开启与支付服务暂不可用。回跳等待确认后账号卡片随历史记录重挂载。运维编辑器改为填写币种、主单位月价与 Dodo 产品 ID（`accountRequest` 镜像控制面校验）。订单列表「购买内容」列对账号订单显示开通到期时间或「账号未开通，待退款」。新增文案补齐八种语言；`tenant.accountUnavailable` 等账号错误文案补入同步 core 词典（此前 409 会显示「暂不可用」）。验证：ESLint 无错误、TS7 类型检查、328 项 Node 测试、生产构建及 Chrome 计费专项 12 项通过；完整 Playwright 套件 420 项通过，`console-header` 两项与 `console.spec` 导航一项在改动前的代码上同样失败，与本改动无关。

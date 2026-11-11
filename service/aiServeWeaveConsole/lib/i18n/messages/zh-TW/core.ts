@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "{value} 天前",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} 草稿已保留；請重新整理目前版本，核對結果。",
   "common.tenantNameMustNotExceedCharacters": "租戶名稱不得超過 {MAX_TENANT_NAME_LENGTH} 個字元。",
-  "common.passwordMustContainAtLeastCharacters": "密碼至少須有 {MIN_SIGNUP_PASSWORD_LENGTH} 個字元。"
+  "common.passwordMustContainAtLeastCharacters": "密碼至少須有 {MIN_SIGNUP_PASSWORD_LENGTH} 個字元。",
+  "tenant.accountUnavailable": "帳號已被購買、正由其他商戶結帳、價格已變動或已達續費上限。請重新整理後再試。",
+  "tenant.accountInsufficientCredit": "點數餘額不足，請先儲值再購買或續費。",
+  "tenant.accountCheckoutDisabled": "線上付款未開啟，暫時無法購買帳號。請聯絡平台維運。",
+  "tenant.billingPaymentUnavailable": "支付服務暫時無法使用，請稍後再試。"
 } as const;
 export default core;

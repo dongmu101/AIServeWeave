@@ -134,7 +134,9 @@ export function BillingView({ role, returning }: { role: string; returning: bool
       {returnState ? <ReturnNotice state={returnState} /> : null}
       <BalanceCard overview={data} canPurchase={canPurchase} />
       <PackagesCard packages={data.packages} canPurchase={canPurchase} />
-      <AccountSales canPurchase={canPurchase} onPurchased={() => { setPolled(null); overview.reload(); setHistoryKey(value => value + 1); }} />
+      {/* Remounted with the history so a month confirmed after a payment
+          return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
+      <AccountSales key={historyKey} canPurchase={canPurchase} />
       <div key={historyKey} className="grid gap-6">
         <LedgerTable />
         <OrdersTable />

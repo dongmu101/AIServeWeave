@@ -207,8 +207,11 @@ TenantNodes:
 
 # 账号独享包月：可独立开启，无需 Dodo；点数由运维调整余额或现有充值入账。
 # 开启后 Console「账号包月」可选择 Agent 上报的 Claude Code / Codex 账号。
-# Monthly exclusive accounts: independent of Dodo. Operators may credit balances
-# manually. Billing.Enabled also enables accounts and their shared credit ledger.
+# Monthly exclusive accounts, priced in fiat. AccountSales enables the inventory
+# and its access policy; tenants buy a month through Dodo checkout, so buying
+# also needs Billing.Enabled with Dodo configured. See docs/billing-accounts.md.
+# 账号独享包月以法币标价。AccountSales 开启库存与授权；商户经 Dodo 结账购买，因此购买
+# 还需要开启下方 Billing.Enabled 并配置 Dodo。详见 docs/billing-accounts.md。
 # AccountSales:
 #   Enabled: true
 

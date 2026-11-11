@@ -128,7 +128,7 @@ go run ./service/aiServeWeaveGateway \
 | 守卫 | 路由 |
 | --- | --- |
 | 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」） |
-| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`，`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
+| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
@@ -1055,4 +1055,4 @@ Claude Code 与 Codex 均按账号独立售卖；同一 Agent 可分别把两种
 
 新增平台账号商品 GET/POST/PUT 与商户库存 GET、购买/续费 POST；`AccountSales.Enabled` 可在无 Dodo 配置时独立开启，`Billing.Enabled` 也继续启用这部分能力。仅开启账号包月时可由运维调整余额，支付端点不挂载、用量不扣点数；Key 校验下发 `accounts` 运行时级授权，商户模型清单同步过滤。完整契约与[升级顺序](../../docs/billing-accounts.md#数据授权与升级)见账号包月说明。必须先更新全部 Gateway，再迁移控制面并启用库存；旧 Gateway 不执行该授权。
 
-验证：控制面含 e2e 的默认测试通过，logic 与内存账本竞态测试通过；独立开关的 HTTP 回归验证了无支付配置下的鉴权、余额调整、购买、概览与账目读取，独立模式的 logic/e2e 竞态检查通过；`TestLiveAccountPurchases/mysql` 在临时 MySQL 9.7 实例中通过，覆盖迁移/schema、唯一账号并发、重复扣款、续费与下架保留期限。PostgreSQL live 未运行；生产升级、真实付款和实际 CLI 账号尚未联调。
+**法币标价（2026-11-11）**：账号商品改存 `price_minor`/`currency`/`dodo_product_id`（`billing/0005_account_fiat.sql`，迁移下架现有商品并清零价格、保留已售期限），点数购买 `POST /admin/v1/billing/accounts/:id/purchase`、`store.BuyAccount` 与 `account_purchases` 写入已移除。新增 `POST /admin/v1/billing/accounts/:id/checkout`（仅 `Billing.Enabled`）：锁定账号复核价格与持有者，30 分钟内其他商户的待付款订单视为占用，插入带 `account_id` 的结账订单并以订单金额打开 Dodo「按意愿付费」产品结账；结账未能发起时订单标为失败以释放占用。`ApplyBillingEventRules` 对账号订单在付款成功后经 `BillingTx.AccountSaleByID`/`GrantAccount` 开通一个月、切换 `account_monthly`、写 `account_expires_at` 并提交吊销 outbox，不写点数账目；无法开通时订单保持已付款并返回 `mismatch`。商户自助退款因无点数而被拒，运维退款不缩短期限。内存与 SQL store 共用 `internal/store/storetest` 场景；`billing` 迁移命名空间恢复执行时跳过已生效的加列、删列与建索引。默认与竞态测试通过，临时 MySQL 8.0 实测通过，PostgreSQL live 与真实 Dodo 付款未验收。

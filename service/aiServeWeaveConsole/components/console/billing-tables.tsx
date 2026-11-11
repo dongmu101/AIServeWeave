@@ -178,7 +178,7 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
             {operator ? <TableHead><Message id="tenant.tenantId" /></TableHead> : null}
             <TableHead><Message id="tenant.billingOrderId" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingAmount" /></TableHead>
-            <TableHead className="text-right"><Message id="tenant.billingCredits" /></TableHead>
+            <TableHead className="text-right"><Message id="tenant.billingOrderContent" /></TableHead>
             <TableHead><Message id="tenant.status" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingRefunded" /></TableHead>
           </TableRow></TableHeader>
@@ -187,7 +187,11 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
             {operator ? <TableCell><code className="text-xs break-all">{order.tenantId}</code></TableCell> : null}
             <TableCell><code className="text-xs break-all">{order.id}</code></TableCell>
             <TableCell className="text-right whitespace-nowrap">{formatMoney(order.amountMinor, order.currency, locale)}</TableCell>
-            <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(order.creditsMicro, locale)}</TableCell>
+            <TableCell className="text-right whitespace-nowrap">{order.accountId === ""
+              ? <span className="font-mono">{t("tenant.billingCreditsValue", { credits: formatCredits(order.creditsMicro, locale) })}</span>
+              : order.accountExpiresAt
+                ? t("tenant.accountOrderGranted", { time: formatDateTime(order.accountExpiresAt, undefined, locale) })
+                : order.status === "paid" ? <span className="text-destructive">{t("tenant.accountOrderUngranted")}</span> : t("tenant.accountMonthly")}</TableCell>
             <TableCell><Badge variant={order.status === "paid" ? "default" : order.status === "failed" || order.status === "disputed" ? "destructive" : "outline"}>{orderStatusLabel(order.status, t)}</Badge></TableCell>
             <TableCell className="text-right whitespace-nowrap">{order.refundedMinor > 0 ? formatMoney(order.refundedMinor, order.currency, locale) : "—"}</TableCell>
           </TableRow>)}</TableBody>

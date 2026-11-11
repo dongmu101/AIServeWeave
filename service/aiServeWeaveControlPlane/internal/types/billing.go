@@ -119,11 +119,19 @@ type CheckoutOrder struct {
 	// RefundableMinor 以 PaidCurrency 计：在租户视图中是租户此刻可申请退款的金额
 	// （期限内、未用点数、没有进行中的退款）；在运维视图中是付款中尚未退款的金额。不可
 	// 退款时为零。
-	RefundableMinor int64     `json:"refundable_minor"`
-	Status          string    `json:"status"`
-	PaymentID       string    `json:"payment_id,omitempty"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	RefundableMinor int64 `json:"refundable_minor"`
+	// AccountID is set on a fiat monthly-account order, whose PackageID is
+	// empty. AccountExpiresAt is the expiry its payment granted; a paid
+	// account order without it could not be granted and awaits a refund.
+	//
+	// AccountID 只在法币包月账号订单上出现，此时 PackageID 为空。AccountExpiresAt 是其
+	// 付款开通到的到期时间；已付款却没有它的账号订单未能开通，等待退款。
+	AccountID        string     `json:"account_id,omitempty"`
+	AccountExpiresAt *time.Time `json:"account_expires_at,omitempty"`
+	Status           string     `json:"status"`
+	PaymentID        string     `json:"payment_id,omitempty"`
+	CreatedAt        time.Time  `json:"created_at"`
+	UpdatedAt        time.Time  `json:"updated_at"`
 }
 
 // OrderListResponse is one page of orders.

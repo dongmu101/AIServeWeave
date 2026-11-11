@@ -12,6 +12,8 @@ import type { MessageKey } from "../i18n/messages.ts";
 export type ApiErrorKind =
   | "insufficient_credit"
   | "account_unavailable"
+  | "account_checkout_disabled"
+  | "payment_unavailable"
   | "invalid_credentials"
   | "unauthorized"
   | "forbidden"
@@ -38,6 +40,8 @@ export type ApiErrorKind =
 const MESSAGE_KEYS: Record<ApiErrorKind, MessageKey> = {
   insufficient_credit: "tenant.accountInsufficientCredit",
   account_unavailable: "tenant.accountUnavailable",
+  account_checkout_disabled: "tenant.accountCheckoutDisabled",
+  payment_unavailable: "tenant.billingPaymentUnavailable",
   invalid_credentials: "common.incorrectEmailOrPasswordCheckThemAndTry",
   unauthorized: "common.yourSignInSessionHasExpiredSignIn",
   forbidden: "common.yourCurrentRoleDoesNotHavePermissionTo",

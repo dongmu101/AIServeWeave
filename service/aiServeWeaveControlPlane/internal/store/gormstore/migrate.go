@@ -298,8 +298,14 @@ func executeMigration(db *gorm.DB, namespace string, m migrationFile) error {
 			continue
 		}
 		words := strings.Fields(statement)
-		if namespace == "base" {
+		// MySQL DDL is not transactional, so a resumed migration skips the
+		// column and index changes that already took effect.
+		// MySQL DDL 不在事务内，恢复执行时跳过已经生效的列与索引变更。
+		if namespace == "base" || namespace == "billing" {
 			if len(words) > 6 && words[0] == "ALTER" && words[3] == "ADD" && words[4] == "COLUMN" && db.Migrator().HasColumn(words[2], words[5]) {
+				continue
+			}
+			if len(words) == 6 && words[0] == "ALTER" && words[3] == "DROP" && words[4] == "COLUMN" && !db.Migrator().HasColumn(words[2], words[5]) {
 				continue
 			}
 			if len(words) > 4 && words[0] == "CREATE" && (words[1] == "INDEX" || words[1] == "UNIQUE") {

@@ -219,9 +219,12 @@ type Config struct {
 	// 没有支付路由，不对任何用量扣费，也不会因余额拒绝任何 key。
 	Billing BillingConf `json:",optional"`
 
-	// AccountSales enables monthly exclusive accounts and their credit ledger
-	// without requiring a payment provider. Billing.Enabled also enables these.
-	// AccountSales 可独立开启账号包月和点数账目，无需支付服务商。
+	// AccountSales enables the fiat-priced monthly account inventory, its
+	// access policy and the credit ledger reads without a payment provider.
+	// Buying a month is a Dodo checkout and needs Billing.Enabled, which also
+	// enables everything here.
+	// AccountSales 可独立开启法币标价的账号包月库存、授权与账目读取，无需支付服务商；
+	// 购买一个月走 Dodo 结账，需要 Billing.Enabled（它也会开启这里的全部能力）。
 	AccountSales AccountSalesConf `json:",optional"`
 
 	// TenantNodes lets tenants enroll Agents of their own, usable only by
@@ -392,8 +395,9 @@ func (t TenantNodesConf) validate(registry RegistryConf) error {
 	return nil
 }
 
-// AccountSalesConf enables exclusive monthly accounts independently of payments.
-// AccountSalesConf 独立于支付开启账号包月。
+// AccountSalesConf enables the exclusive monthly account inventory independently
+// of payments; buying still needs Billing.
+// AccountSalesConf 独立于支付开启账号包月库存；购买仍需要 Billing。
 type AccountSalesConf struct {
 	Enabled bool `json:",default=false"`
 }

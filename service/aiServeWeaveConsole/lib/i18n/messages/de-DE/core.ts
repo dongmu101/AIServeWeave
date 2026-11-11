@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "vor {value} d",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} Der Entwurf wurde beibehalten. Aktualisieren Sie die aktuelle Version, um das Ergebnis zu prüfen.",
   "common.tenantNameMustNotExceedCharacters": "Der Mandantenname darf höchstens {MAX_TENANT_NAME_LENGTH} Zeichen enthalten.",
-  "common.passwordMustContainAtLeastCharacters": "Das Passwort muss mindestens {MIN_SIGNUP_PASSWORD_LENGTH} Zeichen enthalten."
+  "common.passwordMustContainAtLeastCharacters": "Das Passwort muss mindestens {MIN_SIGNUP_PASSWORD_LENGTH} Zeichen enthalten.",
+  "tenant.accountUnavailable": "Das Konto wurde gekauft, befindet sich im Checkout eines anderen Mandanten, der Preis hat sich geändert oder das Verlängerungslimit ist erreicht. Aktualisieren Sie und versuchen Sie es erneut.",
+  "tenant.accountInsufficientCredit": "Unzureichendes Guthaben. Vor Kauf oder Verlängerung aufladen.",
+  "tenant.accountCheckoutDisabled": "Onlinezahlung ist nicht aktiviert, daher können derzeit keine Konten gekauft werden. Wenden Sie sich an den Plattformbetreiber.",
+  "tenant.billingPaymentUnavailable": "Der Zahlungsdienst ist vorübergehend nicht verfügbar. Bitte versuchen Sie es später erneut."
 } as const;
 export default core;

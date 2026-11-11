@@ -28,39 +28,47 @@ test("account editor selects actual Claude Code and Codex accounts reported by a
   await expect(accounts).toBeDisabled();
 });
 
-test("monthly accounts buy and renew with one stable purchase intent", async ({ page }) => {
-  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_micro: 5_000_000, active: true, owned: false };
-  let purchased = false;
-  const writes: { request_id: string; expected_price_micro: number }[] = [];
-  await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [{ ...account, owned: purchased, ...(purchased ? { expires_at: "2030-12-09T00:00:00Z" } : {}) }] } }));
-  await page.route("**/api/admin/admin/v1/billing/accounts/acc_monthly/purchase", async route => {
-    const body = route.request().postDataJSON();
-    writes.push(body);
+test("monthly accounts open a fiat checkout at the confirmed price and never retry it", async ({ page }) => {
+  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_minor: 1999, currency: "USD", active: true, owned: false };
+  const writes: { expected_price_minor: number; currency: string }[] = [];
+  await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [account, { ...account, id: "acc_legacy", runtime_id: "codex-a", name: "Legacy Codex", price_minor: 0, currency: "", active: false }] } }));
+  await page.route("**/api/admin/admin/v1/billing/accounts/acc_monthly/checkout", async route => {
+    writes.push(route.request().postDataJSON());
     if (writes.length === 1) { await route.fulfill({ status: 503, json: { error: "private diagnostic" } }); return; }
-    purchased = true;
-    await route.fulfill({ json: { id: body.request_id, account_id: account.id, price_micro: account.price_micro, expires_at: "2030-12-09T00:00:00Z" } });
+    await route.fulfill({ status: 201, json: { order_id: "ord_account", checkout_url: CHECKOUT_URL } });
   });
-  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, mode: purchased ? "account_monthly" : "prepaid" } }));
+  await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing");
+  await expect(page.getByText("US$19.99 / 月", { exact: true })).toBeVisible();
+  await expect(page.getByText("未设定法币价格", { exact: true })).toBeVisible();
+  const buttons = page.getByRole("button", { name: "购买一个月", exact: true });
+  await expect(buttons.nth(1)).toBeDisabled();
+  await buttons.first().click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("US$19.99");
+  await expect(dialog).toContainText("仅允许使用已购买且未到期的账号");
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("支付服务暂时不可用");
+  expect(writes).toHaveLength(1);
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await page.waitForURL(`${CHECKOUT_URL}**`);
+  expect(writes).toEqual([{ expected_price_minor: 1999, currency: "USD" }, { expected_price_minor: 1999, currency: "USD" }]);
+});
+
+test("account checkout explains a disabled payment provider", async ({ page }) => {
+  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_minor: 1999, currency: "USD", active: true, owned: false };
+  await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [account] } }));
+  await page.route("**/api/admin/admin/v1/billing/accounts/acc_monthly/checkout", route => route.fulfill({ status: 404, json: { error: "not found" } }));
   await page.goto("/console/billing");
   await page.getByRole("button", { name: "购买一个月", exact: true }).click();
   const dialog = page.getByRole("dialog");
-  await expect(dialog).toContainText("5 点");
-  await expect(dialog).toContainText("仅允许使用已购买且未到期的账号");
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
-  await expect(dialog.getByRole("alert")).toBeVisible();
-  expect(writes).toHaveLength(1);
-  await dialog.getByRole("button", { name: "确认", exact: true }).click();
-  await expect(dialog).toHaveCount(0);
-  expect(writes[0]).toEqual(writes[1]);
-  expect(writes[0].request_id).toMatch(/^[a-f0-9]{32}$/);
-  expect(writes[0].expected_price_micro).toBe(5_000_000);
-  await expect(page.getByRole("button", { name: "续费一个月", exact: true })).toBeVisible();
-  await expect(page.locator("main")).not.toContainText("private diagnostic");
+  await expect(dialog.getByRole("alert")).toContainText("在线支付未开启");
 });
 
 test("operators list individual accounts and preserve their runtime identity when editing", async ({ page }) => {
   const writes: unknown[] = [];
-  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_micro: 5_000_000, active: true, owned: false };
+  const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_minor: 500, currency: "EUR", dodo_product_id: "pdt_pwyw", active: true, owned: false };
   await page.route("**/api/operator/operator/v1/billing/accounts", async route => {
     if (route.request().method() === "GET") { await route.fulfill({ json: { items: writes.length ? [account] : [] } }); return; }
     writes.push(route.request().postDataJSON());
@@ -77,11 +85,17 @@ test("operators list individual accounts and preserve their runtime identity whe
   await page.getByLabel("账号名称", { exact: true }).fill(account.name);
   await page.getByRole("combobox", { name: "选择 Agent", exact: true }).selectOption(account.node_id);
   await page.getByRole("combobox", { name: "选择 Claude Code / Codex 账号", exact: true }).selectOption(account.runtime_id);
-  await page.getByLabel("月价（点）", { exact: true }).fill("5");
+  await page.getByLabel("币种（ISO 4217，如 USD）", { exact: true }).fill("eur");
+  await page.getByLabel("月价（法币）", { exact: true }).fill("5.001");
+  await page.getByLabel("Dodo 产品 ID", { exact: true }).fill("pdt_pwyw");
+  await expect(page.getByText("请输入大于零的月价，小数位不得超过该币种的最小单位。", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "保存账号", exact: true })).toBeDisabled();
+  await page.getByLabel("月价（法币）", { exact: true }).fill("5");
   await page.getByRole("button", { name: "保存账号", exact: true }).click();
   await expect(page.getByText(account.name, { exact: true })).toBeVisible();
-  expect(writes).toEqual([{ name: account.name, node_id: account.node_id, runtime_id: account.runtime_id, price_micro: 5_000_000, active: true }]);
+  expect(writes).toEqual([{ name: account.name, node_id: account.node_id, runtime_id: account.runtime_id, price_minor: 500, currency: "EUR", dodo_product_id: "pdt_pwyw", active: true }]);
   await page.getByRole("button", { name: "编辑账号", exact: true }).click();
+  await expect(page.getByLabel("月价（法币）", { exact: true })).toHaveValue("5");
   await expect(page.getByLabel("Agent ID", { exact: true })).toBeDisabled();
   await expect(page.getByLabel("运行时 ID", { exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "取消", exact: true }).click();
@@ -206,7 +220,7 @@ test("disabled account sales explain the deployment setting", async ({ page }) =
   await page.goto("/operator/billing");
   await page.getByRole("tab", { name: "账号包月", exact: true }).click();
   await expect(page.getByText("未开启账号包月", { exact: true })).toBeVisible();
-  await expect(page.getByText("请在控制面开启 AccountSales.Enabled，然后重新启动控制面。", { exact: true })).toBeVisible();
+  await expect(page.getByText("请在控制面开启 AccountSales.Enabled；商户在线购买还需要开启 Billing.Enabled 并配置 Dodo，然后重新启动控制面。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
   await expect(page.locator("main")).not.toContainText("目标不存在，或不属于当前租户");
 });

@@ -91,7 +91,7 @@ BootstrapToken: "${AISW_BOOTSTRAP_TOKEN}"
 #   TokensPerMinute: 100000
 #   MaxConcurrent: 4
 
-# Monthly exclusive Agent accounts without Dodo Payments.
-# 账号独享包月可独立开启，无需 Dodo Payments。
+# Monthly exclusive Agent accounts, priced in fiat; buying needs Billing with Dodo.
+# 账号独享包月以法币标价；库存可独立开启，商户购买需要 Billing 与 Dodo。
 # AccountSales:
 #   Enabled: true

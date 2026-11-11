@@ -435,6 +435,7 @@ const (
 	ActionBillingCheckout      = "billing.checkout.create"
 	ActionAccountSaleSave      = "billing.account.save"
 	ActionAccountPurchase      = "billing.account.purchase"
+	ActionAccountCheckout      = "billing.account.checkout"
 	// Refund actions. A tenant's request and cancellation are recorded under
 	// its tenant; an operator's approval, rejection, direct refund and
 	// marking a refund failed under PlatformScope. The target is the refund

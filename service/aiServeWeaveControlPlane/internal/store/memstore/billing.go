@@ -24,29 +24,27 @@ var errBalanceOverflow = errors.New("memstore: balance overflow")
 // billingState 是内存版的计费表。每个方法在整个执行期间都持有 Store.mu，这就是本
 // store 对事务的替代。
 type billingState struct {
-	accounts  map[string]model.AccountSale
-	purchases map[string]model.AccountPurchase
-	tenants   map[string]model.TenantBilling
-	packages  map[string]model.CreditPackage
-	prices    map[string]model.ModelPrice
-	orders    map[string]model.CheckoutOrder
-	ledger    []model.CreditLedgerEntry
-	charges   map[string]model.UsageCharge
-	webhooks  map[string]model.BillingWebhookEvent
-	refunds   map[string]model.RefundRequest
+	accounts map[string]model.AccountSale
+	tenants  map[string]model.TenantBilling
+	packages map[string]model.CreditPackage
+	prices   map[string]model.ModelPrice
+	orders   map[string]model.CheckoutOrder
+	ledger   []model.CreditLedgerEntry
+	charges  map[string]model.UsageCharge
+	webhooks map[string]model.BillingWebhookEvent
+	refunds  map[string]model.RefundRequest
 }
 
 func newBillingState() billingState {
 	return billingState{
-		accounts:  map[string]model.AccountSale{},
-		purchases: map[string]model.AccountPurchase{},
-		tenants:   map[string]model.TenantBilling{},
-		packages:  map[string]model.CreditPackage{},
-		prices:    map[string]model.ModelPrice{},
-		orders:    map[string]model.CheckoutOrder{},
-		charges:   map[string]model.UsageCharge{},
-		webhooks:  map[string]model.BillingWebhookEvent{},
-		refunds:   map[string]model.RefundRequest{},
+		accounts: map[string]model.AccountSale{},
+		tenants:  map[string]model.TenantBilling{},
+		packages: map[string]model.CreditPackage{},
+		prices:   map[string]model.ModelPrice{},
+		orders:   map[string]model.CheckoutOrder{},
+		charges:  map[string]model.UsageCharge{},
+		webhooks: map[string]model.BillingWebhookEvent{},
+		refunds:  map[string]model.RefundRequest{},
 	}
 }
 
@@ -238,8 +236,10 @@ func (s *Store) snapshotBilling() func() {
 	tenants := maps.Clone(s.billing.tenants)
 	orders := maps.Clone(s.billing.orders)
 	refunds := maps.Clone(s.billing.refunds)
+	accounts := maps.Clone(s.billing.accounts)
 	ledgerLen := len(s.billing.ledger)
 	return func() {
+		s.billing.accounts = accounts
 		s.billing.tenants = tenants
 		s.billing.orders = orders
 		s.billing.refunds = refunds

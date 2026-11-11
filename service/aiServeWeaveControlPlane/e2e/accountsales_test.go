@@ -25,38 +25,39 @@ func TestAccountSalesRoutesWithoutPaymentProvider(t *testing.T) {
 	}
 }
 
-func TestAccountPurchaseAndCreditLedgerWithoutPaymentProvider(t *testing.T) {
+// Without a payment provider the fiat inventory is managed and listed, but
+// there is no checkout and no credit purchase.
+func TestAccountInventoryWithoutPaymentProvider(t *testing.T) {
 	h := buildHarness(t, harnessOpts{accountSales: true})
 	operator := bootstrapPlatformOperator(h, "accounts-operator@example.com")
-	tenant, owner := bootstrap(h, "Account buyer", "accounts-buyer@example.com")
+	_, owner := bootstrap(h, "Account buyer", "accounts-buyer@example.com")
+	legacy := map[string]any{"node_id": "agent-one", "runtime_id": "codex-a", "name": "Codex", "price_micro": 5000000, "active": true}
+	if got := h.call(http.MethodPost, "/operator/v1/billing/accounts", operator, legacy, nil); got != http.StatusBadRequest {
+		t.Fatalf("credit-priced account accepted: %d", got)
+	}
 	var sale struct {
 		ID string `json:"id"`
 	}
-	draft := map[string]any{"node_id": "agent-one", "runtime_id": "codex-a", "name": "Codex", "price_micro": 5000000, "active": true}
+	draft := map[string]any{"node_id": "agent-one", "runtime_id": "codex-a", "name": "Codex", "price_minor": 2000, "currency": "USD", "dodo_product_id": "pdt_pwyw", "active": true}
 	if got := h.call(http.MethodPost, "/operator/v1/billing/accounts", operator, draft, &sale); got != http.StatusCreated {
 		t.Fatalf("create account: %d", got)
 	}
-	credit := map[string]any{"amount_micro": 10000000, "reason": "offline payment"}
-	if got := h.call(http.MethodPost, "/operator/v1/billing/tenants/"+tenant.Tenant.ID+"/adjust", operator, credit, nil); got < 200 || got >= 300 {
-		t.Fatalf("adjust credit without Dodo: %d", got)
+	var listed struct {
+		Items []map[string]any `json:"items"`
 	}
-	purchase := map[string]any{"request_id": "00000000000000000000000000000001", "expected_price_micro": 5000000}
-	if got := h.call(http.MethodPost, "/admin/v1/billing/accounts/"+sale.ID+"/purchase", owner, purchase, nil); got != http.StatusOK {
-		t.Fatalf("purchase account without Dodo: %d", got)
+	if got := h.call(http.MethodGet, "/admin/v1/billing/accounts", owner, nil, &listed); got != http.StatusOK || len(listed.Items) != 1 {
+		t.Fatalf("tenant inventory: %d %+v", got, listed)
 	}
-	var overview struct {
-		Mode     string `json:"mode"`
-		Balance  int64  `json:"balance_micro"`
-		Blocked  bool   `json:"blocked"`
-		Packages []any  `json:"packages"`
+	if item := listed.Items[0]; item["price_minor"] != float64(2000) || item["currency"] != "USD" || item["dodo_product_id"] != nil {
+		t.Fatalf("tenant inventory projection: %+v", item)
 	}
-	if got := h.call(http.MethodGet, "/admin/v1/billing", owner, nil, &overview); got != http.StatusOK {
-		t.Fatalf("billing overview without Dodo: %d", got)
+	checkout := map[string]any{"expected_price_minor": 2000, "currency": "USD"}
+	for _, path := range []string{"/admin/v1/billing/accounts/" + sale.ID + "/checkout", "/admin/v1/billing/accounts/" + sale.ID + "/purchase"} {
+		if got := h.call(http.MethodPost, path, owner, checkout, nil); got != http.StatusNotFound {
+			t.Errorf("%s without Dodo: %d, want 404", path, got)
+		}
 	}
-	if overview.Mode != "account_monthly" || overview.Balance != 5000000 || overview.Blocked || len(overview.Packages) != 0 {
-		t.Fatalf("unexpected account-only overview: %+v", overview)
-	}
-	for _, path := range []string{"/admin/v1/billing/accounts", "/admin/v1/billing/ledger", "/admin/v1/billing/orders"} {
+	for _, path := range []string{"/admin/v1/billing", "/admin/v1/billing/ledger", "/admin/v1/billing/orders"} {
 		if got := h.call(http.MethodGet, path, owner, nil, nil); got != http.StatusOK {
 			t.Errorf("%s: %d", path, got)
 		}

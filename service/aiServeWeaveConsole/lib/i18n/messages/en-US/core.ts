@@ -72,6 +72,10 @@ const core = {
   "common.dAgo": "{value}d ago",
   "common.yourDraftHasBeenKeptRefreshTheCurrent": "{value} Your draft has been kept; refresh the current version to verify the result.",
   "common.tenantNameMustNotExceedCharacters": "Tenant name must not exceed {MAX_TENANT_NAME_LENGTH} characters.",
-  "common.passwordMustContainAtLeastCharacters": "Password must contain at least {MIN_SIGNUP_PASSWORD_LENGTH} characters."
+  "common.passwordMustContainAtLeastCharacters": "Password must contain at least {MIN_SIGNUP_PASSWORD_LENGTH} characters.",
+  "tenant.accountUnavailable": "The account was purchased, is in another tenant's checkout, the price changed, or the renewal limit was reached. Refresh and try again.",
+  "tenant.accountInsufficientCredit": "Insufficient credits. Top up before buying or renewing.",
+  "tenant.accountCheckoutDisabled": "Online payment is not enabled, so accounts cannot be bought right now. Contact the platform operator.",
+  "tenant.billingPaymentUnavailable": "The payment service is temporarily unavailable. Please try again later."
 } as const;
 export default core;

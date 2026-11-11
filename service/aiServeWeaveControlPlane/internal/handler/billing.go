@@ -179,6 +179,7 @@ func listBillingOrders(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 				ID: o.ID, PackageID: o.PackageID, AmountMinor: o.AmountMinor, Currency: o.Currency,
 				CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, PaidAmountMinor: o.PaidAmountMinor,
 				PaidCurrency: o.PaidCurrency, RefundableMinor: refundable[o.ID], Status: o.Status,
+				AccountID: o.AccountID, AccountExpiresAt: o.AccountExpiresAt,
 				CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
 			}
 			if o.DodoPaymentID != nil {

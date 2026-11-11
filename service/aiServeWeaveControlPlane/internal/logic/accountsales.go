@@ -3,16 +3,24 @@ package logic
 import (
 	"AIServeWeave/common/accountaccess"
 	"AIServeWeave/common/nodeaccess"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"context"
-	"encoding/hex"
 	"errors"
+	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 	"unicode/utf8"
 )
 
-// WithAccountSales enables monthly accounts without enabling payment or usage billing.
+// WithAccountSales enables the monthly account inventory and its access
+// policy without enabling payment or usage billing. Buying a month needs
+// WithBilling, as it is paid through the provider's checkout.
+//
+// WithAccountSales 不开启支付与用量计费，只开启包月账号库存及其授权；购买一个月须经
+// 服务商结账付款，因此还需要 WithBilling。
 func WithAccountSales() Option {
 	return func(s *Service) { s.accountSales = true }
 }
@@ -75,8 +83,11 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 		return model.AccountSale{}, err
 	}
 	in.Name = strings.TrimSpace(in.Name)
+	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 ||
-		!nodeaccess.ValidNodeID(in.NodeID) || !nodeaccess.ValidNodeID(in.RuntimeID) || in.PriceMicro <= 0 || in.PriceMicro > model.MaxPriceMicroPerMTok {
+		!nodeaccess.ValidNodeID(in.NodeID) || !nodeaccess.ValidNodeID(in.RuntimeID) ||
+		in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(in.Currency) ||
+		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) {
 		return model.AccountSale{}, ErrInvalidInput
 	}
 	if _, owned := nodeaccess.OwnerOf(in.NodeID); owned {
@@ -106,44 +117,83 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 	return model.AccountSale{}, ErrNotFound
 }
 
-func (s *Service) BuyAccount(ctx context.Context, actor Actor, accountID, requestID string, price int64) (model.AccountPurchase, error) {
-	if !s.accountsEnabled() {
-		return model.AccountPurchase{}, ErrNotFound
+// CreateAccountCheckout opens a provider checkout for one month of an
+// account, priced in fiat. Only an owner or admin may buy. The month is
+// granted only when the provider's payment webhook confirms the order;
+// nothing here moves credits. expectedMinor and currency must match the
+// listed price, so a price change between reading and buying is a conflict.
+// The account must use a pay-what-you-want Dodo product: the order amount is
+// passed to the checkout.
+//
+// CreateAccountCheckout 为一个账号的一个月发起法币服务商结账。只有 owner 或 admin
+// 可以购买。只有服务商付款 webhook 确认订单后才开通这一个月；这里不变动任何点数。
+// expectedMinor 与 currency 必须与标价一致，读取与购买之间的改价视为冲突。账号须使用
+// Dodo「按意愿付费」产品：订单金额会传给结账。
+func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accountID string, expectedMinor int64, currency string) (CheckoutResult, error) {
+	if !s.billingEnabled() {
+		return CheckoutResult{}, ErrNotFound
 	}
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {
-		return model.AccountPurchase{}, ErrForbidden
+		return CheckoutResult{}, ErrForbidden
 	}
-	if b, err := hex.DecodeString(requestID); err != nil || len(b) != 16 || strings.ToLower(requestID) != requestID || price <= 0 {
-		return model.AccountPurchase{}, ErrInvalidInput
+	if expectedMinor <= 0 || expectedMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(currency) {
+		return CheckoutResult{}, ErrInvalidInput
 	}
 	// Node policy still applies to sales; purchasing does not bypass dedication.
 	rows, err := s.store.ListAccountSales(ctx)
 	if err != nil {
-		return model.AccountPurchase{}, err
+		return CheckoutResult{}, err
 	}
 	policy, err := s.nodePolicy(ctx, actor.TenantID)
 	if err != nil {
-		return model.AccountPurchase{}, err
+		return CheckoutResult{}, err
 	}
+	var sale model.AccountSale
 	found := false
 	for _, row := range rows {
 		if row.ID == accountID {
-			found = nodeaccess.CanConsider(actor.TenantID, policy, row.NodeID)
+			sale, found = row, nodeaccess.CanConsider(actor.TenantID, policy, row.NodeID)
 			break
 		}
 	}
 	if !found {
-		return model.AccountPurchase{}, ErrNotFound
+		return CheckoutResult{}, ErrNotFound
 	}
-	receipt, err := s.store.BuyAccount(ctx, accountID, actor.TenantID, actor.UserID, requestID, price, s.clock.Now().UTC())
+	now := s.clock.Now().UTC()
+	// Checked before registering a customer; the store checks again under lock.
+	if err := store.AccountCheckoutTerms(sale, actor.TenantID, expectedMinor, currency, now); err != nil {
+		return CheckoutResult{}, translate(err)
+	}
+	customerID, err := s.ensureCustomer(ctx, actor)
 	if err != nil {
-		return model.AccountPurchase{}, translate(err)
+		return CheckoutResult{}, err
 	}
-	if s.invalidator != nil {
-		s.invalidator.InvalidateAll(ctx)
+	order := model.CheckoutOrder{
+		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, AccountID: sale.ID, DodoProductID: sale.DodoProductID,
+		AmountMinor: sale.PriceMinor, Currency: sale.Currency, Status: model.OrderStatusPending,
+		CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 	}
-	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionAccountPurchase, accountID, "purchase="+requestID, actor.IP)
-	return receipt, nil
+	if err := s.store.CreateAccountCheckoutOrder(ctx, &order, now); err != nil {
+		return CheckoutResult{}, translate(err)
+	}
+	checkout, err := s.billing.Provider.CreateCheckout(ctx, billing.CheckoutRequest{
+		CustomerID: customerID, ProductID: sale.DodoProductID, AmountMinor: sale.PriceMinor, Currency: sale.Currency,
+		ReturnURL: s.billing.ReturnURL, OrderID: order.ID, TenantID: actor.TenantID,
+	})
+	if err != nil {
+		slog.Error("opening an account checkout failed", slog.String("order_id", order.ID))
+		// Release the hold: this order will never be paid.
+		if failErr := s.store.FailCheckoutOrder(ctx, order.ID, s.clock.Now()); failErr != nil {
+			slog.Error("releasing a failed account checkout failed", slog.String("order_id", order.ID))
+		}
+		return CheckoutResult{}, ErrUnavailable
+	}
+	if err := s.store.SetCheckoutOrderSession(ctx, order.ID, checkout.SessionID, s.clock.Now()); err != nil {
+		return CheckoutResult{}, translate(err)
+	}
+	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionAccountCheckout, accountID,
+		fmt.Sprintf("order %s amount %d %s", order.ID, order.AmountMinor, order.Currency), actor.IP)
+	return CheckoutResult{OrderID: order.ID, CheckoutURL: checkout.URL}, nil
 }
 
 // AccountPolicy includes closed inventory even after expiry or archival. It
