@@ -603,6 +603,7 @@ const tenant = {
   "tenant.billingMode": "課金モード",
   "tenant.billingModePrepaid": "前払い",
   "tenant.billingModeExempt": "課金免除",
+  "tenant.billingModeAccountMonthly": "月額アカウント",
   "tenant.billingExemptNote": "このテナントは課金が免除されています。API リクエストでクレジットは差し引かれず、残高不足で拒否されることもありません。",
   "tenant.billingBlocked": "残高がなくなったため、API リクエストは拒否されます（HTTP 402）。チャージが反映されると自動的に再開します。",
   "tenant.billingManagePayments": "支払いと領収書を管理",

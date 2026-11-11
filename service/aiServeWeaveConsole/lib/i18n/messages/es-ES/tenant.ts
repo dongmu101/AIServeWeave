@@ -603,6 +603,7 @@ const tenant = {
   "tenant.billingMode": "Modo de facturación",
   "tenant.billingModePrepaid": "Prepago",
   "tenant.billingModeExempt": "Exento",
+  "tenant.billingModeAccountMonthly": "Cuentas mensuales",
   "tenant.billingExemptNote": "Este inquilino está exento de facturación: las solicitudes de API no descuentan créditos y nunca se rechazan por saldo insuficiente.",
   "tenant.billingBlocked": "Su saldo se ha agotado, por lo que las solicitudes de API se rechazarán (HTTP 402). El servicio se reanuda automáticamente cuando se acredita una recarga.",
   "tenant.billingManagePayments": "Gestionar pagos y recibos",

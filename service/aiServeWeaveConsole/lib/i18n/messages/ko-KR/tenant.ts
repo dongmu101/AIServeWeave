@@ -603,6 +603,7 @@ const tenant = {
   "tenant.billingMode": "결제 모드",
   "tenant.billingModePrepaid": "선불",
   "tenant.billingModeExempt": "결제 면제",
+  "tenant.billingModeAccountMonthly": "월간 계정",
   "tenant.billingExemptNote": "이 테넌트는 결제가 면제됩니다. API 요청에서 크레딧이 차감되지 않으며 잔액 부족으로 거부되지 않습니다.",
   "tenant.billingBlocked": "잔액이 소진되어 API 요청이 거부됩니다(HTTP 402). 충전이 반영되면 자동으로 재개됩니다.",
   "tenant.billingManagePayments": "결제 및 영수증 관리",

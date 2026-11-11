@@ -12,7 +12,7 @@ test("account editor selects actual Claude Code and Codex accounts reported by a
     ] }],
   } }));
   await page.goto("/operator/billing");
-  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("tab", { name: "账号现货", exact: true }).click();
   await page.getByRole("button", { name: "添加账号", exact: true }).click();
   await page.getByRole("combobox", { name: "选择 Agent", exact: true }).selectOption("agent-one");
   const accounts = page.getByRole("combobox", { name: "选择 Claude Code / Codex 账号", exact: true });
@@ -82,7 +82,7 @@ test("operators list individual accounts and preserve their runtime identity whe
     ] }],
   } }));
   await page.goto("/operator/billing");
-  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("tab", { name: "账号现货", exact: true }).click();
   await page.getByRole("button", { name: "添加账号", exact: true }).click();
   await page.getByLabel("账号名称", { exact: true }).fill(account.name);
   await page.getByRole("combobox", { name: "选择 Agent", exact: true }).selectOption(account.node_id);
@@ -160,7 +160,7 @@ test("billing sections open by mode, follow the query, and survive a reload", as
   await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, mode: "account_monthly" } }));
   await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [account] } }));
   await page.goto("/console/billing");
-  await expect(page.getByRole("tab", { name: "账号包月", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "账号现货", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("heading", { name: "我的账号", exact: true })).toBeVisible();
   await expect(page.getByText("暂无可购买的账号", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "续费一个月", exact: true })).toBeEnabled();
@@ -168,7 +168,11 @@ test("billing sections open by mode, follow the query, and survive a reload", as
   await expect(page).toHaveURL(/[?&]tab=ledger(&|$)/);
   await expect(page.getByText("变动后余额", { exact: true })).toBeVisible();
   await page.reload();
-  await expect(page.getByRole("tab", { name: "账目", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "账目", exact: true })).toHaveAttribute("aria-selected", "true");  // Nothing is on presale, so that section is not offered, even when asked for.
+  // 没有预售商品，因此即使指定也不提供该分区。
+  await expect(page.getByRole("tab", { name: "账号购买", exact: true })).toHaveCount(0);
+  await page.goto("/console/billing?tab=presales");
+  await expect(page.getByRole("tab", { name: "账号现货", exact: true })).toHaveAttribute("aria-selected", "true");
 });
 
 test("billing that the control plane has not enabled renders as an empty state", async ({ page }) => {
@@ -236,7 +240,7 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
 test("disabled account sales explain the deployment setting", async ({ page }) => {
   await page.route("**/api/operator/operator/v1/billing/accounts", route => route.fulfill({ status: 404, json: { error: "not_found" } }));
   await page.goto("/operator/billing");
-  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("tab", { name: "账号现货", exact: true }).click();
   await expect(page.getByText("未开启账号包月", { exact: true })).toBeVisible();
   await expect(page.getByText("请在控制面开启 AccountSales.Enabled；商户在线购买还需要开启 Billing.Enabled 并配置 Dodo，然后重新启动控制面。", { exact: true })).toBeVisible();
   await expect(page.getByRole("button", { name: "添加账号", exact: true })).toBeDisabled();
@@ -253,7 +257,7 @@ test("a failed Agent inventory can be retried from the account editor", async ({
     });
   });
   await page.goto("/operator/billing");
-  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
+  await page.getByRole("tab", { name: "账号现货", exact: true }).click();
   await page.getByRole("button", { name: "添加账号", exact: true }).click();
   const retry = page.getByRole("button", { name: "重试", exact: true });
   await expect(retry).toBeEnabled();
@@ -279,8 +283,8 @@ test("tenants pre-order a presale, cannot buy a sold-out one, and see the paid o
   await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
   await page.goto("/console/billing?tab=orders");
   await expect(page.getByText("已付款，待发货", { exact: true })).toBeVisible();
-  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
-  await expect(page.getByText("账号预售", { exact: true }).first()).toBeVisible();
+  await page.getByRole("tab", { name: "账号购买", exact: true }).click();
+  await expect(page.getByText("账号购买", { exact: true }).nth(1)).toBeVisible();
   await expect(page.getByText("已售罄", { exact: true })).toBeVisible();
   const buttons = page.getByRole("button", { name: "预购一个月", exact: true });
   await expect(buttons).toHaveCount(2);
@@ -300,7 +304,7 @@ test("a full presale explains itself and the checkout is not retried", async ({ 
   let writes = 0;
   await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale] } }));
   await page.route("**/api/admin/admin/v1/billing/presales/pre_claude/checkout", route => { writes++; return route.fulfill({ status: 409, json: { error: "conflict" } }); });
-  await page.goto("/console/billing?tab=accounts");
+  await page.goto("/console/billing?tab=presales");
   await page.getByRole("button", { name: "预购一个月", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
@@ -338,7 +342,7 @@ test("operators create a presale and assign an awaiting order an account of the 
     await route.fulfill({ json: { ...awaiting, account_id: "acc_free", account_expires_at: "2026-12-11T00:00:00Z" } });
   });
   await page.goto("/operator/billing");
-  await page.getByRole("tab", { name: "账号预售", exact: true }).click();
+  await page.getByRole("tab", { name: "账号购买", exact: true }).click();
   await page.getByRole("button", { name: "添加预售", exact: true }).click();
   await page.getByRole("combobox", { name: "账号类型", exact: true }).selectOption("claude");
   await expect(page.getByLabel("预售名称", { exact: true })).toHaveValue("Claude Code");

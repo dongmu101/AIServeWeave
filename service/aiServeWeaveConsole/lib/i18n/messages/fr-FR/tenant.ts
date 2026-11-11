@@ -615,6 +615,7 @@ const tenant = {
   "tenant.billingMode": "Mode de facturation",
   "tenant.billingModePrepaid": "Prépayé",
   "tenant.billingModeExempt": "Exempté",
+  "tenant.billingModeAccountMonthly": "Comptes mensuels",
   "tenant.billingExemptNote": "Ce locataire est exempté de facturation : les requêtes API ne déduisent aucun crédit et ne sont jamais refusées pour solde insuffisant.",
   "tenant.billingBlocked": "Votre solde est épuisé : les requêtes API seront refusées (HTTP 402). Le service reprend automatiquement dès qu’une recharge est créditée.",
   "tenant.billingManagePayments": "Gérer les paiements et reçus",
