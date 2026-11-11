@@ -49,7 +49,7 @@ type ReturnState = "pending" | "settled" | "exhausted";
  * what has happened.
  *
  * BILLING_TABS 是页面的分区，依次为可购买的内容与已发生的记录。 */
-const BILLING_TABS = ["accounts", "packages", "alipay", "presales", "orders", "ledger"] as const;
+const BILLING_TABS = ["presales", "accounts", "packages", "alipay", "orders", "ledger"] as const;
 type BillingTab = (typeof BILLING_TABS)[number];
 
 const TAB_KEYS: Record<BillingTab, MessageKey> = {
