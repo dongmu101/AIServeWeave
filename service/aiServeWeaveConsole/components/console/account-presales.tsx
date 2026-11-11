@@ -9,6 +9,7 @@ import { useResource, type Resource } from "./use-resource";
 import { usePagedResource } from "./use-paged-resource";
 import { ConfirmDialog } from "./confirm-dialog";
 import { SELECT_CLASS } from "./account-sales";
+import { CurrencySelect } from "./currency-select";
 import { Pager } from "./pager";
 import { EmptyState, ErrorState, FormError, LoadingState } from "./states";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -93,9 +94,11 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false }: { r
         : rows.length === 0 ? <EmptyState title={t("tenant.presaleEmpty")} />
         : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.map(presale => <div key={presale.id} className="grid content-between gap-3 rounded-lg border p-4">
           <div className="grid gap-2">
-            <p className="font-medium break-all">{presale.name}</p>
+            <div className="flex items-start justify-between gap-2">
+              <p className="line-clamp-2 min-w-0 font-medium break-all" title={presale.name}>{presale.name}</p>
+              <Badge variant="secondary" className="shrink-0">{accountKindLabel(presale.kind)}</Badge>
+            </div>
             <div className="flex flex-wrap gap-2">
-              <Badge variant="secondary">{accountKindLabel(presale.kind)}</Badge>
               <Badge variant="outline"><Message id="tenant.presaleBadge" /></Badge>
               {!presale.active ? <Badge variant="outline"><Message id="tenant.accountArchived" /></Badge> : null}
               {presale.active && !presale.available ? <Badge variant="destructive"><Message id="tenant.presaleSoldOut" /></Badge> : null}
@@ -106,7 +109,7 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false }: { r
             {operator && presale.dodoProductId ? <code className="text-xs break-all text-muted-foreground">{presale.dodoProductId}</code> : null}
           </div>
           {operator ? <Button variant="outline" onClick={() => setEditing(presale)}><Message id="operator.presaleEdit" /></Button>
-            : canPurchase ? <Button disabled={!presale.available} onClick={() => setBuying(presale)}><Message id="tenant.presaleBuy" /></Button> : null}
+            : canPurchase ? <div><Button disabled={!presale.available} onClick={() => setBuying(presale)}><Message id="tenant.presaleBuy" /></Button></div> : null}
         </div>)}</div>}
     </CardContent>
     <ConfirmDialog open={buying !== null} onOpenChange={open => { if (!open) setBuying(null); }} title={t("tenant.presalePurchase")}
@@ -169,7 +172,7 @@ function PresaleEditor({ presale, onClose, onSaved }: { presale: AccountPresale 
       </select>
       <p className="text-sm text-muted-foreground"><Message id="operator.presaleKindLocked" /></p>
       <label htmlFor={`${prefix}-name`}><Message id="operator.presaleName" /></label><Input id={`${prefix}-name`} required maxLength={128} value={name} disabled={pending} onChange={e => setName(e.target.value)} />
-      <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><Input id={`${prefix}-currency`} required maxLength={3} autoCapitalize="characters" value={currency} disabled={pending} onChange={e => setCurrency(e.target.value.toUpperCase())} />
+      <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><CurrencySelect id={`${prefix}-currency`} className={SELECT_CLASS} required value={currency} disabled={pending} onChange={setCurrency} />
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
       <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>

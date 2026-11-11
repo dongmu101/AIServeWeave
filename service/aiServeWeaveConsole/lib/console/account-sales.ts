@@ -1,5 +1,6 @@
 import { ApiError } from "./errors.ts";
 import { MAX_PRODUCT_ID_BYTES, MAX_TEXT_RUNES, parseMoneyInput } from "./billing.ts";
+import { isSupportedCurrency } from "./currencies.ts";
 
 /** MAX_ACCOUNT_PRICE_MINOR mirrors model.MaxAccountPriceMinor.
  *
@@ -143,7 +144,7 @@ export function accountRequest(draft: { name: string; nodeId: string; runtimeId:
     return { request: { ...base, price_minor: 0, currency: "", dodo_product_id: "" }, problem: null };
   }
   const code = draft.currency.trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code)) return { request: null, problem: "currency" };
+  if (!isSupportedCurrency(code)) return { request: null, problem: "currency" };
   const minor = parseMoneyInput(draft.price, code);
   if (minor === null || minor <= 0 || minor > MAX_ACCOUNT_PRICE_MINOR) return { request: null, problem: "price" };
   if (product === "" || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };

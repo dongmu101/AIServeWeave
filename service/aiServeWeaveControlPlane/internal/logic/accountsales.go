@@ -96,7 +96,7 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 ||
 		!nodeaccess.ValidNodeID(in.NodeID) || !nodeaccess.ValidNodeID(in.RuntimeID) ||
 		(in.Kind != "" && !model.ValidAccountKind(in.Kind)) || (create && in.Kind == "") ||
-		(priced && (in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(in.Currency) ||
+		(priced && (in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(in.Currency) ||
 			in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID))) {
 		return model.AccountSale{}, ErrInvalidInput
 	}
@@ -156,7 +156,7 @@ func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accoun
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {
 		return CheckoutResult{}, ErrForbidden
 	}
-	if expectedMinor <= 0 || expectedMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(currency) {
+	if expectedMinor <= 0 || expectedMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(currency) {
 		return CheckoutResult{}, ErrInvalidInput
 	}
 	// Node policy still applies to sales; purchasing does not bypass dedication.

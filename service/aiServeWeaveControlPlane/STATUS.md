@@ -898,6 +898,8 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 结账时控制面把 `billing_currency` 固定为充值包币种，并关闭折扣码与币种切换（`allow_discount_code`、`allow_currency_selection` 均为 `false`）。上面的金额核对是第二道防线，针对充值包配错产品的情况，例如自定义金额包配到了固定价格产品上：Dodo 会忽略传入的金额、按产品价收款，订单却已按租户所选金额算好了点数。在 Dodo 测试环境实测：未关闭币种切换时，从日本访问会把 $12.34 本地化为 ¥2,025。
 
+**币种清单（2026-11-11）**：充值包、包月账号与预售的保存和结账只接受 `model.SupportedCurrencies`（与 Dodo SDK `Currency` 枚举一致，`internal/billing/dodo` 测试守护；Console `lib/console/currencies.ts` 镜像并有同步测试），取代原先只检查三位大写字母的正则。起因是一个预售被存成币种 `ISO`：保存通过，结账时 Dodo 拒绝 `billing_currency`，商户只看到 `503`。清单出现前已存的不合法币种不会自动修改：结账返回 `400`，Console 选单保留显示原值，须改选后才能保存。默认测试通过；Playwright 计费 e2e 本机缺浏览器未跑。
+
 乱序到达（例如 `payment.failed` 晚于 `payment.succeeded`）不会把已付订单改回失败。日志只记事件类型、内部 id 与结果，不记 payload、邮箱或卡信息。
 
 ### 接口

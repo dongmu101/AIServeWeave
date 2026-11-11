@@ -38,11 +38,13 @@ test("monthly accounts open a fiat checkout at the confirmed price and never ret
     await route.fulfill({ status: 201, json: { order_id: "ord_account", checkout_url: CHECKOUT_URL } });
   });
   await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
-  await page.goto("/console/billing");
+  await page.goto("/console/billing?tab=accounts");
   await expect(page.getByText("US$19.99 / 月", { exact: true })).toBeVisible();
-  await expect(page.getByText("未设定法币价格", { exact: true })).toBeVisible();
+  // An unpriced account the tenant does not hold cannot be bought, so it is not listed.
+  // 商户未持有且未定价的账号无法购买，因此不列出。
+  await expect(page.getByText("Legacy Codex", { exact: true })).toHaveCount(0);
   const buttons = page.getByRole("button", { name: "购买一个月", exact: true });
-  await expect(buttons.nth(1)).toBeDisabled();
+  await expect(buttons).toHaveCount(1);
   await buttons.first().click();
   const dialog = page.getByRole("dialog");
   await expect(dialog).toContainText("US$19.99");
@@ -59,7 +61,7 @@ test("account checkout explains a disabled payment provider", async ({ page }) =
   const account = { id: "acc_monthly", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_minor: 1999, currency: "USD", active: true, owned: false };
   await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [account] } }));
   await page.route("**/api/admin/admin/v1/billing/accounts/acc_monthly/checkout", route => route.fulfill({ status: 404, json: { error: "not found" } }));
-  await page.goto("/console/billing");
+  await page.goto("/console/billing?tab=accounts");
   await page.getByRole("button", { name: "购买一个月", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
@@ -85,7 +87,7 @@ test("operators list individual accounts and preserve their runtime identity whe
   await page.getByLabel("账号名称", { exact: true }).fill(account.name);
   await page.getByRole("combobox", { name: "选择 Agent", exact: true }).selectOption(account.node_id);
   await page.getByRole("combobox", { name: "选择 Claude Code / Codex 账号", exact: true }).selectOption(account.runtime_id);
-  await page.getByLabel("币种（ISO 4217，如 USD）", { exact: true }).fill("eur");
+  await page.getByLabel("币种（ISO 4217，如 USD）", { exact: true }).selectOption("EUR");
   await page.getByLabel("月价（法币）", { exact: true }).fill("5.001");
   await page.getByLabel("Dodo 产品 ID", { exact: true }).fill("pdt_pwyw");
   await expect(page.getByText("请输入大于零的月价，小数位不得超过该币种的最小单位。", { exact: true })).toBeVisible();
@@ -153,6 +155,22 @@ test("a payment return waits for the server and never trusts the query", async (
   expect(reads).toBeGreaterThanOrEqual(2);
 });
 
+test("billing sections open by mode, follow the query, and survive a reload", async ({ page }) => {
+  const account = { id: "acc_mine", node_id: "agent-a", runtime_id: "claude-a", kind: "claude", name: "Mine", price_minor: 1999, currency: "USD", active: true, owned: true, expires_at: "2026-12-01T00:00:00Z" };
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, mode: "account_monthly" } }));
+  await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [account] } }));
+  await page.goto("/console/billing");
+  await expect(page.getByRole("tab", { name: "账号包月", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("heading", { name: "我的账号", exact: true })).toBeVisible();
+  await expect(page.getByText("暂无可购买的账号", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "续费一个月", exact: true })).toBeEnabled();
+  await page.getByRole("tab", { name: "账目", exact: true }).click();
+  await expect(page).toHaveURL(/[?&]tab=ledger(&|$)/);
+  await expect(page.getByText("变动后余额", { exact: true })).toBeVisible();
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "账目", exact: true })).toHaveAttribute("aria-selected", "true");
+});
+
 test("billing that the control plane has not enabled renders as an empty state", async ({ page }) => {
   await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ status: 404, json: { error: "not_found" } }));
   await page.goto("/console/billing");
@@ -182,7 +200,7 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
   await page.getByRole("button", { name: "新建充值包", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByLabel("名称", { exact: true }).fill("JPY pack");
-  await dialog.getByLabel("货币（ISO 4217，如 USD）", { exact: true }).fill("jpy");
+  await dialog.getByLabel("货币（ISO 4217，如 USD）", { exact: true }).selectOption("JPY");
   await dialog.getByLabel("Dodo 产品 ID", { exact: true }).fill("pdt_jpy");
   await dialog.getByLabel("点数", { exact: true }).fill("1");
   await dialog.getByLabel("价格（主货币单位）", { exact: true }).fill("10.5");
@@ -259,10 +277,11 @@ test("tenants pre-order a presale, cannot buy a sold-out one, and see the paid o
     status: "paid", created_at: "2026-11-11T00:00:00Z", updated_at: "2026-11-11T00:00:00Z",
   }] } }));
   await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
-  await page.goto("/console/billing");
+  await page.goto("/console/billing?tab=orders");
+  await expect(page.getByText("已付款，待发货", { exact: true })).toBeVisible();
+  await page.getByRole("tab", { name: "账号包月", exact: true }).click();
   await expect(page.getByText("账号预售", { exact: true }).first()).toBeVisible();
   await expect(page.getByText("已售罄", { exact: true })).toBeVisible();
-  await expect(page.getByText("已付款，待发货", { exact: true })).toBeVisible();
   const buttons = page.getByRole("button", { name: "预购一个月", exact: true });
   await expect(buttons).toHaveCount(2);
   await expect(buttons.nth(1)).toBeDisabled();
@@ -281,7 +300,7 @@ test("a full presale explains itself and the checkout is not retried", async ({ 
   let writes = 0;
   await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale] } }));
   await page.route("**/api/admin/admin/v1/billing/presales/pre_claude/checkout", route => { writes++; return route.fulfill({ status: 409, json: { error: "conflict" } }); });
-  await page.goto("/console/billing");
+  await page.goto("/console/billing?tab=accounts");
   await page.getByRole("button", { name: "预购一个月", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认", exact: true }).click();

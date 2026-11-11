@@ -35,6 +35,8 @@ func TestPresaleDraftValidation(t *testing.T) {
 		"zero price":     func(p *model.AccountPresale) { p.PriceMinor = 0 },
 		"too expensive":  func(p *model.AccountPresale) { p.PriceMinor = model.MaxAccountPriceMinor + 1 },
 		"lower currency": func(p *model.AccountPresale) { p.Currency = "usd" },
+		"not a currency": func(p *model.AccountPresale) { p.Currency = "ISO" },
+		"country code":   func(p *model.AccountPresale) { p.Currency = "CN" },
 		"no product":     func(p *model.AccountPresale) { p.DodoProductID = "" },
 		"zero capacity":  func(p *model.AccountPresale) { p.Capacity = 0 },
 		"huge capacity":  func(p *model.AccountPresale) { p.Capacity = model.MaxPresaleCapacity + 1 },

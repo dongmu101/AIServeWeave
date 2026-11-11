@@ -108,7 +108,7 @@ Billing:
 {"node_id":"agent-a","runtime_id":"claude-a","kind":"claude","name":"Claude 独享账号 A","price_minor":1999,"currency":"USD","dodo_product_id":"pdt_xxx","active":true}
 ```
 
-`kind` 为 `claude` 或 `codex`，创建时必填；更新时省略或为空表示保持原值，已有类型不能修改（`409`），旧商品可以补填一次。`price_minor` 是每月价格的货币最小单位（USD 1999 即 19.99；JPY 没有小数），正整数，上限 `100,000,000`；`currency` 为三位大写字母；`dodo_product_id` 非空，最多 64 字节。`active: false` 的商品可以把三者都留空（`price_minor` 为 `0`），仅供预售分配；只要填写了其中任何一项，就必须三项都合法。库存上限 1000 个。`tnode.` 商户自有节点不允许作为平台售卖库存。Console 从 Agent 清单选择账号，没有上报时提示先接入 Agent；清单读取失败与部分失败分别提示。API 仍允许预先配置库存。上架不证明 CLI 已登录、健康或具备可路由模型，离线账号会标注离线。
+`kind` 为 `claude` 或 `codex`，创建时必填；更新时省略或为空表示保持原值，已有类型不能修改（`409`），旧商品可以补填一次。`price_minor` 是每月价格的货币最小单位（USD 1999 即 19.99；JPY 没有小数），正整数，上限 `100,000,000`；`currency` 须为支付服务商 Dodo 支持的大写 ISO 4217 代码（`model.SupportedCurrencies`，如 `USD`、`CNY`），格式正确但不在清单内的代码（如 `ISO`）返回 `400`，结账时同样校验，不会再发往 Dodo；Console 以下拉选单提供同一份清单；`dodo_product_id` 非空，最多 64 字节。`active: false` 的商品可以把三者都留空（`price_minor` 为 `0`），仅供预售分配；只要填写了其中任何一项，就必须三项都合法。库存上限 1000 个。`tnode.` 商户自有节点不允许作为平台售卖库存。Console 从 Agent 清单选择账号，没有上报时提示先接入 Agent；清单读取失败与部分失败分别提示。API 仍允许预先配置库存。上架不证明 CLI 已登录、健康或具备可路由模型，离线账号会标注离线。
 
 结账请求：
 

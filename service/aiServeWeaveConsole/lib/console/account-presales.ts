@@ -1,6 +1,7 @@
 import { ApiError } from "./errors.ts";
 import { MAX_PRODUCT_ID_BYTES, MAX_TEXT_RUNES, parseMoneyInput, type CheckoutOrder } from "./billing.ts";
 import { MAX_ACCOUNT_PRICE_MINOR, parseAccountKind, type AccountKind, type AccountSale } from "./account-sales.ts";
+import { isSupportedCurrency } from "./currencies.ts";
 import { tenantNodeOwner } from "./node-access.ts";
 
 /** MAX_PRESALES and MAX_PRESALE_CAPACITY mirror model.MaxPresales and
@@ -98,7 +99,7 @@ export function presaleRequest(draft: { kind: AccountKind | ""; name: string; pr
   const name = draft.name.trim();
   if (name === "" || [...name].length > MAX_TEXT_RUNES) return { request: null, problem: "name" };
   const code = draft.currency.trim().toUpperCase();
-  if (!/^[A-Z]{3}$/.test(code)) return { request: null, problem: "currency" };
+  if (!isSupportedCurrency(code)) return { request: null, problem: "currency" };
   const minor = parseMoneyInput(draft.price, code);
   if (minor === null || minor <= 0 || minor > MAX_ACCOUNT_PRICE_MINOR) return { request: null, problem: "price" };
   const product = draft.productId.trim();

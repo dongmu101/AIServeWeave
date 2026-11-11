@@ -1,7 +1,8 @@
 "use client";
 
 import * as React from "react";
-import { AccountSales } from "@/components/console/account-sales";
+import { AccountSales, SELECT_CLASS } from "@/components/console/account-sales";
+import { CurrencySelect } from "@/components/console/currency-select";
 import { PresaleAdmin } from "@/components/console/account-presales";
 import { toast } from "sonner";
 
@@ -225,7 +226,7 @@ function PackageDialog({ editing, onClose, onSaved }: { editing: CreditPackage |
               </SelectContent>
             </Select>
           </div>
-          {field("package-currency", <Message id="operator.billingCurrency" />, <Input id="package-currency" value={draft.currency} maxLength={3} autoCapitalize="characters" onChange={(e) => set({ currency: e.target.value.toUpperCase() })} disabled={pending} />)}
+          {field("package-currency", <Message id="operator.billingCurrency" />, <CurrencySelect id="package-currency" className={SELECT_CLASS} value={draft.currency} onChange={(currency) => set({ currency })} disabled={pending} />)}
         </div>
         {field("package-product", <Message id="operator.billingDodoProductId" />, <Input id="package-product" value={draft.dodoProductId} onChange={(e) => set({ dodoProductId: e.target.value })} disabled={pending} autoComplete="off" spellCheck={false} />)}
         {draft.kind === "fixed" ? <div className="grid gap-4 sm:grid-cols-2">

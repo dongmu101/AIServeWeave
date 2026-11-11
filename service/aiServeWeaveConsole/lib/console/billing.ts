@@ -1,5 +1,6 @@
 import { ApiError } from "./errors.ts";
 import type { Page } from "./contract.ts";
+import { isSupportedCurrency } from "./currencies.ts";
 
 /**
  * This module mirrors the control plane's prepaid credit billing API
@@ -821,7 +822,7 @@ export function packageRequest(draft: PackageDraft): { request: PackageRequest; 
   const currency = draft.currency.trim();
   if (name === "" || runes(name) > MAX_TEXT_RUNES || new TextEncoder().encode(name).length > 4 * MAX_TEXT_RUNES) return { request: null, problem: "name" };
   if (product === "" || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
-  if (!/^[A-Z]{3}$/.test(currency)) return { request: null, problem: "currency" };
+  if (!isSupportedCurrency(currency)) return { request: null, problem: "currency" };
   const sortOrder = parseScaled(draft.sortOrder, 0, { allowNegative: true });
   const base = {
     name, kind: draft.kind, dodo_product_id: product, currency, active: draft.active,

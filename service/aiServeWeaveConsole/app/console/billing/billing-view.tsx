@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { useSearchParams } from "next/navigation";
 import { AccountSales } from "@/components/console/account-sales";
 import { PresaleSales } from "@/components/console/account-presales";
 
@@ -15,6 +16,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   abortableSleep,
   checkoutBody,
@@ -41,6 +43,44 @@ import type { MessageKey } from "@/lib/i18n/messages";
  *
  * ReturnState 是支付回跳后等待过程所处的阶段。 */
 type ReturnState = "pending" | "settled" | "exhausted";
+
+/** BILLING_TABS are the page's sections, in order: what can be bought, then
+ * what has happened.
+ *
+ * BILLING_TABS 是页面的分区，依次为可购买的内容与已发生的记录。 */
+const BILLING_TABS = ["packages", "accounts", "orders", "ledger"] as const;
+type BillingTab = (typeof BILLING_TABS)[number];
+
+const TAB_KEYS: Record<BillingTab, MessageKey> = {
+  packages: "tenant.billingPackages",
+  accounts: "tenant.accountMonthly",
+  orders: "tenant.billingOrders",
+  ledger: "tenant.billingLedger",
+};
+
+function isBillingTab(value: string | null): value is BillingTab {
+  return value !== null && (BILLING_TABS as readonly string[]).includes(value);
+}
+
+/** useBillingTab keeps the open section in the query, so a reload or a
+ * shared link opens the same one. Without a choice it opens the orders after
+ * a payment return, the monthly accounts for a tenant on them, and the
+ * packages otherwise. The URL is replaced in place: switching sections does
+ * not fill the back button, nor ask the server to render the page again.
+ *
+ * useBillingTab 把当前分区放在查询参数里，刷新或分享链接时打开同一个分区。未选择时，
+ * 支付回跳后打开订单，账号包月的商户打开账号包月，其余打开充值包。URL 原地替换：切换
+ * 分区不会填满后退按钮，也不会让服务端重新渲染页面。 */
+function useBillingTab(fallback: BillingTab): [BillingTab, (tab: BillingTab) => void] {
+  const searchParams = useSearchParams();
+  const chosen = searchParams.get("tab");
+  const select = React.useCallback((tab: BillingTab) => {
+    const next = new URLSearchParams(window.location.search);
+    next.set("tab", tab);
+    window.history.replaceState(null, "", `?${next.toString()}`);
+  }, []);
+  return [isBillingTab(chosen) ? chosen : fallback, select];
+}
 
 /** PollRead is one poll tick: the overview, and the latest order whose status
  * the server recorded from the provider's webhook.
@@ -130,24 +170,39 @@ export function BillingView({ role, returning }: { role: string; returning: bool
 
   const data = polled ?? overview.data;
   const canPurchase = canPurchaseCredits(role);
+  const [tab, setTab] = useBillingTab(returning ? "orders" : data?.mode === "account_monthly" ? "accounts" : "packages");
 
   return <div className="grid gap-6">
-    <div>
-      <h1 className="font-heading text-lg font-semibold"><Message id="tenant.billing" /></h1>
-      <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
+    <div className="flex flex-wrap items-start justify-between gap-3">
+      <div className="min-w-0">
+        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.billing" /></h1>
+        <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
+      </div>
+      {data?.hasCustomer && canPurchase ? <PortalButton /> : null}
     </div>
     {overview.errorKind === "not_found" && !polled ? <BillingDisabled /> : overview.error && !polled ? <ErrorState message={overview.error} onRetry={overview.reload} /> : !data ? <LoadingState label={t("tenant.loadingBilling")} rows={4} /> : <>
       {returnState ? <ReturnNotice state={returnState} presale={returnedPresale} /> : null}
-      <BalanceCard overview={data} canPurchase={canPurchase} />
-      <PackagesCard packages={data.packages} canPurchase={canPurchase} />
-      {/* Remounted with the history so a month confirmed after a payment
-          return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
-      <AccountSales key={historyKey} canPurchase={canPurchase} />
-      <PresaleSales key={`presale-${historyKey}`} canPurchase={canPurchase} />
-      <div key={historyKey} className="grid gap-6">
-        <LedgerTable />
-        <OrdersTable />
-      </div>
+      <BalanceSummary overview={data} canPurchase={canPurchase} />
+      <Tabs value={tab} onValueChange={(next) => { if (isBillingTab(next)) setTab(next); }}>
+        <TabsList aria-label={t("tenant.billingSections")} className="h-auto! w-full flex-wrap justify-start sm:w-fit">
+          {BILLING_TABS.map((value) => <TabsTrigger key={value} value={value} className="flex-none px-3"><Message id={TAB_KEYS[value]} /></TabsTrigger>)}
+        </TabsList>
+        <TabsContent value="packages" className="mt-2">
+          <PackagesCard packages={data.packages} canPurchase={canPurchase} />
+        </TabsContent>
+        {/* Remounted with the history so a month confirmed after a payment
+            return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
+        <TabsContent value="accounts" className="mt-2 grid gap-6">
+          <AccountSales key={historyKey} canPurchase={canPurchase} />
+          <PresaleSales key={`presale-${historyKey}`} canPurchase={canPurchase} />
+        </TabsContent>
+        <TabsContent value="orders" className="mt-2">
+          <OrdersTable key={historyKey} />
+        </TabsContent>
+        <TabsContent value="ledger" className="mt-2">
+          <LedgerTable key={historyKey} />
+        </TabsContent>
+      </Tabs>
     </>}
   </div>;
 }
@@ -164,11 +219,12 @@ function ReturnNotice({ state, presale }: { state: ReturnState; presale: boolean
   return <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm"><Message id={key} /></p>;
 }
 
-/** BalanceCard shows the balance, the mode, and the portal entry.
+/** PortalButton opens the provider's customer portal, where payment
+ * methods and receipts live.
  *
- * BalanceCard 展示余额、计费模式与门户入口。 */
-function BalanceCard({ overview, canPurchase }: { overview: BillingOverview; canPurchase: boolean }) {
-  const { t, locale } = useI18n();
+ * PortalButton 打开服务商的客户门户，付款方式与收据都在那里。 */
+function PortalButton() {
+  const { t } = useI18n();
   const run = useConsoleRequest();
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
@@ -191,27 +247,34 @@ function BalanceCard({ overview, canPurchase }: { overview: BillingOverview; can
     }
   }
 
+  return <div className="grid justify-items-end gap-1">
+    <Button variant="outline" onClick={openPortal} disabled={pending} aria-busy={pending} title={t("tenant.billingPortalHint")}><Message id="tenant.billingManagePayments" /></Button>
+    <FormError message={error} />
+  </div>;
+}
+
+/** BalanceSummary shows the balance and the mode, with what either means
+ * for requests right now.
+ *
+ * BalanceSummary 展示余额与计费模式，以及两者此刻对请求意味着什么。 */
+function BalanceSummary({ overview, canPurchase }: { overview: BillingOverview; canPurchase: boolean }) {
+  const { t, locale } = useI18n();
   const exempt = overview.mode === "exempt";
   return <Card>
-    <CardHeader><CardTitle><Message id="tenant.billingBalance" /></CardTitle></CardHeader>
-    <CardContent className="grid gap-4">
-      <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-2">
-        <div className="grid gap-1">
+    <CardContent className="grid gap-3">
+      <dl className="flex flex-wrap items-start gap-x-10 gap-y-3">
+        <div className="grid min-w-0 gap-1">
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingBalance" /></dt>
           <dd className="font-heading text-2xl font-semibold break-all">{t("tenant.billingCreditsValue", { credits: formatCredits(overview.balanceMicro, locale) })}</dd>
         </div>
-        <div className="grid gap-1">
+        <div className="grid gap-1.5">
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingMode" /></dt>
           <dd><Badge variant={exempt ? "secondary" : "outline"}>{overview.mode === "account_monthly" ? t("tenant.accountMonthly") : exempt ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid")}</Badge></dd>
         </div>
       </dl>
       {exempt ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingExemptNote" /></p> : null}
       {!exempt && overview.blocked ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive"><Message id="tenant.billingBlocked" /></p> : null}
-      {overview.hasCustomer && canPurchase ? <div className="grid gap-2">
-        <div><Button variant="outline" onClick={openPortal} disabled={pending} aria-busy={pending}><Message id="tenant.billingManagePayments" /></Button></div>
-        <p className="text-xs text-muted-foreground"><Message id="tenant.billingPortalHint" /></p>
-        <FormError message={error} />
-      </div> : null}
+      {!canPurchase ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingPurchaseOwnerOnly" /></p> : null}
     </CardContent>
   </Card>;
 }
@@ -224,8 +287,7 @@ function PackagesCard({ packages, canPurchase }: { packages: CreditPackage[]; ca
   return <Card>
     <CardHeader><CardTitle><Message id="tenant.billingPackages" /></CardTitle></CardHeader>
     <CardContent className="grid gap-4">
-      {!canPurchase ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingPurchaseOwnerOnly" /></p> : null}
-      {packages.length === 0 ? <EmptyState title={t("tenant.billingNoPackages")} description={t("tenant.billingNoPackagesDescription")} /> : <ul className="grid gap-4 sm:grid-cols-2">
+      {packages.length === 0 ? <EmptyState title={t("tenant.billingNoPackages")} description={t("tenant.billingNoPackagesDescription")} /> : <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
         {packages.map((pkg) => <li key={pkg.id} className="min-w-0"><PackageOffer pkg={pkg} canPurchase={canPurchase} /></li>)}
       </ul>}
     </CardContent>
@@ -285,7 +347,7 @@ function PackageOffer({ pkg, canPurchase }: { pkg: CreditPackage; canPurchase: b
 
   return <div className="grid h-full content-between gap-3 rounded-lg border p-4">
     <div className="grid gap-1">
-      <p className="font-medium break-all">{pkg.name}</p>
+      <p className="line-clamp-2 font-medium break-all" title={pkg.name}>{pkg.name}</p>
       {custom ? <p className="text-xs text-muted-foreground"><Message id="tenant.billingCustomAmount" /></p> : <>
         <p className="font-heading text-xl font-semibold">{t("tenant.billingCreditsValue", { credits: formatCredits(pkg.creditsMicro, locale) })}</p>
         <p className="text-sm text-muted-foreground">{formatMoney(pkg.priceMinor, pkg.currency, locale)}</p>

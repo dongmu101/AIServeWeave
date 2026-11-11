@@ -71,7 +71,7 @@ func (s *Service) SaveAccountPresale(ctx context.Context, actor Actor, in model.
 	in.Name = strings.TrimSpace(in.Name)
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 || !model.ValidAccountKind(in.Kind) ||
-		in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(in.Currency) ||
+		in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(in.Currency) ||
 		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) ||
 		in.Capacity < 1 || in.Capacity > model.MaxPresaleCapacity {
 		return store.PresaleStock{}, ErrInvalidInput
@@ -114,7 +114,7 @@ func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presal
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {
 		return CheckoutResult{}, ErrForbidden
 	}
-	if expectedMinor <= 0 || expectedMinor > model.MaxAccountPriceMinor || !currencyPattern.MatchString(currency) {
+	if expectedMinor <= 0 || expectedMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(currency) {
 		return CheckoutResult{}, ErrInvalidInput
 	}
 	now := s.clock.Now().UTC()

@@ -202,6 +202,7 @@ test("package drafts validate per kind and zero the other kind's fields", () => 
     { name: "blank product", draft: { ...fixed, dodoProductId: "" }, problem: "product" },
     { name: "long product", draft: { ...fixed, dodoProductId: "p".repeat(65) }, problem: "product" },
     { name: "lowercase currency", draft: { ...fixed, currency: "usd" }, problem: "currency" },
+    { name: "unsupported currency", draft: { ...fixed, currency: "ISO" }, problem: "currency" },
     { name: "zero credits", draft: { ...fixed, credits: "0" }, problem: "credits" },
     { name: "price with too many digits", draft: { ...fixed, price: "9.999" }, problem: "price" },
     { name: "JPY price with a fraction", draft: { ...fixed, currency: "JPY", price: "100.5" }, problem: "price" },

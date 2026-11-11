@@ -30,7 +30,7 @@ test("operator account drafts are priced in the currency's major unit", () => {
   assert.deepEqual(accountRequest(draft), { request: { name: "Claude A", node_id: "agent", runtime_id: "claude-a", kind: "claude", price_minor: 1999, currency: "USD", dodo_product_id: "pdt_1", active: true }, problem: null });
   assert.equal(accountRequest({ ...draft, currency: "JPY", price: "3000" }).request?.price_minor, 3000);
   for (const [change, problem] of [
-    [{ name: " " }, "name"], [{ runtimeId: "" }, "target"], [{ kind: "" }, "kind"], [{ currency: "US" }, "currency"], [{ price: "0" }, "price"],
+    [{ name: " " }, "name"], [{ runtimeId: "" }, "target"], [{ kind: "" }, "kind"], [{ currency: "US" }, "currency"], [{ currency: "ISO" }, "currency"], [{ price: "0" }, "price"],
     [{ price: "1.234" }, "price"], [{ currency: "JPY", price: "12.5" }, "price"], [{ price: "1000001" }, "price"], [{ productId: "" }, "product"],
   ] as const) {
     assert.equal(accountRequest({ ...draft, ...change }).problem, problem);

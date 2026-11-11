@@ -14,7 +14,6 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
-	"regexp"
 	"strings"
 	"unicode/utf8"
 
@@ -107,8 +106,6 @@ type TenantBillingView struct {
 	Tenant  model.Tenant
 	Billing model.TenantBilling
 }
-
-var currencyPattern = regexp.MustCompile(`^[A-Z]{3}$`)
 
 func (s *Service) billingEnabled() bool { return s.billing != nil }
 
@@ -652,7 +649,7 @@ func packageFromInput(in CreditPackageInput) (model.CreditPackage, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
 	if in.Name == "" || utf8.RuneCountInString(in.Name) > 128 || len(in.Name) > 512 ||
-		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !currencyPattern.MatchString(in.Currency) {
+		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !model.ValidCurrency(in.Currency) {
 		return model.CreditPackage{}, ErrInvalidInput
 	}
 	pkg := model.CreditPackage{

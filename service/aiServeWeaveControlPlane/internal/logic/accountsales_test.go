@@ -77,6 +77,7 @@ func TestMonthlyAccountSaleRequiresFiatPrice(t *testing.T) {
 		"zero price":     func(s *model.AccountSale) { s.PriceMinor = 0 },
 		"too expensive":  func(s *model.AccountSale) { s.PriceMinor = model.MaxAccountPriceMinor + 1 },
 		"lower currency": func(s *model.AccountSale) { s.Currency = "usd" },
+		"not a currency": func(s *model.AccountSale) { s.Currency = "ISO" },
 		"no currency":    func(s *model.AccountSale) { s.Currency = "" },
 		"no product":     func(s *model.AccountSale) { s.DodoProductID = " " },
 	} {

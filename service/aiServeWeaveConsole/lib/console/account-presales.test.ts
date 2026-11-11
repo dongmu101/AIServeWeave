@@ -35,7 +35,7 @@ test("operator presale drafts are priced in the major unit and bounded in capaci
   const draft = { kind: "codex" as const, name: " Codex presale ", price: "15", currency: "usd", productId: " pdt_pre ", capacity: "10", active: true };
   assert.deepEqual(presaleRequest(draft), { request: { kind: "codex", name: "Codex presale", price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 10, active: true }, problem: null });
   for (const [change, problem] of [
-    [{ kind: "" }, "kind"], [{ name: " " }, "name"], [{ currency: "US" }, "currency"], [{ price: "0" }, "price"], [{ price: "1.234" }, "price"],
+    [{ kind: "" }, "kind"], [{ name: " " }, "name"], [{ currency: "US" }, "currency"], [{ currency: "ISO" }, "currency"], [{ price: "0" }, "price"], [{ price: "1.234" }, "price"],
     [{ productId: "" }, "product"], [{ capacity: "0" }, "capacity"], [{ capacity: "10001" }, "capacity"], [{ capacity: "1.5" }, "capacity"], [{ capacity: "" }, "capacity"],
   ] as const) {
     assert.equal(presaleRequest({ ...draft, ...change }).problem, problem);

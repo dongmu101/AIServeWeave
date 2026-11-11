@@ -7,6 +7,7 @@ import { ErrorMessage } from "@/components/i18n/error-message";
 import { useConsoleRequest } from "./use-console-request";
 import { useResource } from "./use-resource";
 import { ConfirmDialog } from "./confirm-dialog";
+import { CurrencySelect } from "./currency-select";
 import { EmptyState, ErrorState, FormError, LoadingState } from "./states";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +35,11 @@ const PROBLEM_KEYS: Record<AccountDraftProblem, MessageKey> = {
   product: "tenant.accountProblemProduct",
 };
 
+/** ACCOUNTS_PER_PAGE is how many account cards one page shows.
+ *
+ * ACCOUNTS_PER_PAGE 是每页显示的账号卡片数。 */
+const ACCOUNTS_PER_PAGE = 12;
+
 /** AccountSales shares the credential-free monthly inventory between
  * surfaces. A tenant buys a month through the provider's checkout, priced in
  * fiat; the page never decides that a payment succeeded — the month appears
@@ -42,28 +48,139 @@ const PROBLEM_KEYS: Record<AccountDraftProblem, MessageKey> = {
  * AccountSales 在两个界面间共享不含凭据的包月库存。商户经服务商结账以法币购买一个月；
  * 页面从不判定付款成功——服务端收到服务商确认后才会显示期限。 */
 export function AccountSales({ operator = false, canPurchase = false }: { operator?: boolean; canPurchase?: boolean }) {
-  const { t, locale } = useI18n();
-  const run = useConsoleRequest();
-  const surface = operator ? "operator" : "admin";
-  const path = `/${surface}/v1/billing/accounts`;
-  const resource = useResource({ method: "GET", surface, path, parse: parseAccountSales });
-  const [editing, setEditing] = React.useState<AccountSale | "new" | null>(null);
+  return operator ? <OperatorAccounts /> : <TenantAccounts canPurchase={canPurchase} />;
+}
+
+/** Pages is the previous / next control under a card grid, shown only when
+ * there is more than one page.
+ *
+ * Pages 是卡片网格下方的上一页 / 下一页控件，只在多于一页时显示。 */
+function Pages({ current, total, onChange }: { current: number; total: number; onChange: (page: number) => void }) {
+  if (total <= 1) return null;
+  return <div className="flex items-center justify-between gap-3">
+    <Button variant="outline" disabled={current === 0} onClick={() => onChange(current - 1)}><Message id="tenant.accountPrevious" /></Button>
+    <span className="text-sm">{current + 1} / {total}</span>
+    <Button variant="outline" disabled={current + 1 >= total} onClick={() => onChange(current + 1)}><Message id="tenant.accountNext" /></Button>
+  </div>;
+}
+
+/** TenantAccounts is the tenant's view: the accounts it holds, each with its
+ * expiry and renewal, apart from the accounts it may buy. An account that is
+ * neither held nor on sale is not shown — there is nothing to do with it.
+ *
+ * TenantAccounts 是商户视图：已持有的账号（附到期时间与续费）与可购买的账号分开列出。
+ * 既未持有也未上架的账号不显示——对它无事可做。 */
+function TenantAccounts({ canPurchase }: { canPurchase: boolean }) {
+  const { t } = useI18n();
+  const resource = useResource({ method: "GET", path: "/admin/v1/billing/accounts", parse: parseAccountSales });
   const [buying, setBuying] = React.useState<AccountSale | null>(null);
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
+  const all = resource.data ?? [];
+  const mine = all.filter(account => account.owned);
+  const offered = all.filter(account => !account.owned && account.active);
+  const shown = offered.filter(account => matchesQuery([account.name, account.nodeId, account.runtimeId], query));
+  const total = Math.ceil(shown.length / ACCOUNTS_PER_PAGE);
+  const current = Math.min(page, Math.max(0, total - 1));
+  const offer = (account: AccountSale) => <AccountOffer key={account.id} account={account} canPurchase={canPurchase} onBuy={() => setBuying(account)} />;
+  return <Card>
+    <CardHeader><CardTitle><Message id="tenant.accountMonthly" /></CardTitle></CardHeader>
+    <CardContent className="grid gap-6">
+      <p className="text-sm text-muted-foreground"><Message id="tenant.accountMonthlyNote" /></p>
+      {resource.errorKind === "not_found" ? <EmptyState title={t("tenant.accountDisabled")} />
+        : resource.error ? <ErrorState message={resource.error} onRetry={resource.reload} />
+        : resource.loading ? <LoadingState label={t("tenant.accountMonthly")} rows={3} />
+        : mine.length === 0 && offered.length === 0 ? <EmptyState title={t("tenant.accountEmpty")} />
+        : <>
+          {mine.length > 0 ? <section className="grid gap-3">
+            <h3 className="text-sm font-medium"><Message id="tenant.accountMine" /></h3>
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{mine.map(offer)}</div>
+          </section> : null}
+          <section className="grid gap-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h3 className="text-sm font-medium"><Message id="tenant.accountAvailable" /></h3>
+              {offered.length > ACCOUNTS_PER_PAGE ? <Input className="sm:max-w-xs" aria-label={t("tenant.accountSearch")} placeholder={t("tenant.accountSearch")} value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} /> : null}
+            </div>
+            {shown.length === 0 ? <p className="text-sm text-muted-foreground"><Message id="tenant.accountNoneAvailable" /></p> : <>
+              <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{shown.slice(current * ACCOUNTS_PER_PAGE, (current + 1) * ACCOUNTS_PER_PAGE).map(offer)}</div>
+              <Pages current={current} total={total} onChange={setPage} />
+            </>}
+          </section>
+        </>}
+    </CardContent>
+    <AccountBuyDialog account={buying} onClose={() => setBuying(null)} />
+  </Card>;
+}
+
+/** AccountOffer is one account card on the tenant's view.
+ *
+ * AccountOffer 是商户视图中的一张账号卡片。 */
+function AccountOffer({ account, canPurchase, onBuy }: { account: AccountSale; canPurchase: boolean; onBuy: () => void }) {
+  const { t, locale } = useI18n();
+  return <div className="grid content-between gap-3 rounded-lg border p-4">
+    <div className="grid gap-1.5">
+      <div className="flex items-start justify-between gap-2">
+        <p className="line-clamp-2 min-w-0 font-medium break-all" title={account.name}>{account.name}</p>
+        {account.kind ? <Badge variant="secondary" className="shrink-0">{accountKindLabel(account.kind)}</Badge> : null}
+      </div>
+      <code className="text-xs break-all text-muted-foreground">{account.nodeId} · {account.runtimeId}</code>
+      <p className="text-lg font-semibold">{account.priceMinor > 0 ? t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) }) : t("tenant.accountPriceMissing")}</p>
+      {account.expiresAt ? <p className="text-sm">{t("tenant.accountExpires", { time: formatDateTime(account.expiresAt, undefined, locale) })}</p> : null}
+      {!account.active ? <div><Badge variant="outline"><Message id="tenant.accountArchived" /></Badge></div> : null}
+    </div>
+    {canPurchase ? <div><Button disabled={!accountPurchasable(account)} onClick={onBuy}><Message id={account.owned ? "tenant.accountRenew" : "tenant.accountBuy"} /></Button></div> : null}
+  </div>;
+}
+
+/** AccountBuyDialog confirms the price and opens the provider's checkout.
+ *
+ * AccountBuyDialog 确认价格并打开服务商结账。 */
+function AccountBuyDialog({ account, onClose }: { account: AccountSale | null; onClose: () => void }) {
+  const { t, locale } = useI18n();
+  const run = useConsoleRequest();
+  return <ConfirmDialog open={account !== null} onOpenChange={open => { if (!open) onClose(); }} title={t("tenant.accountPurchase")}
+    description={account ? t("tenant.accountBuyConfirm", { name: account.name, price: formatMoney(account.priceMinor, account.currency, locale) }) : ""}
+    onConfirm={async () => {
+      if (!account) return;
+      let result;
+      try {
+        // A checkout is a write and is never retried: a repeat would open a
+        // second pending order. 结账是写操作，绝不重试：重发会再开一笔待付款订单。
+        result = await run({ method: "POST", path: `/admin/v1/billing/accounts/${encodeURIComponent(account.id)}/checkout`, body: accountCheckoutBody(account), parse: parseCheckout });
+      } catch (error) {
+        if (error instanceof ApiError && error.status === 409) throw new ApiError("account_unavailable", 409);
+        if (error instanceof ApiError && error.status === 404) throw new ApiError("account_checkout_disabled", 404);
+        if (error instanceof ApiError && error.status === 503) throw new ApiError("payment_unavailable", 503);
+        throw error;
+      }
+      window.location.assign(result.checkoutUrl);
+    }} />;
+}
+
+/** OperatorAccounts is the operator's inventory: every account, its holder
+ * and product, with search and editing.
+ *
+ * OperatorAccounts 是运维库存：全部账号及其持有者与产品，可搜索与编辑。 */
+function OperatorAccounts() {
+  const { t, locale } = useI18n();
+  const resource = useResource({ method: "GET", surface: "operator", path: "/operator/v1/billing/accounts", parse: parseAccountSales });
+  const [editing, setEditing] = React.useState<AccountSale | "new" | null>(null);
+  const [query, setQuery] = React.useState("");
+  const [page, setPage] = React.useState(0);
   const rows = (resource.data ?? []).filter(row => matchesQuery([row.name, row.nodeId, row.runtimeId, row.tenantId], query));
-  const current = Math.min(page, Math.max(0, Math.ceil(rows.length / 12) - 1));
+  const total = Math.ceil(rows.length / ACCOUNTS_PER_PAGE);
+  const current = Math.min(page, Math.max(0, total - 1));
   return <Card>
     <CardHeader><CardTitle><Message id="tenant.accountMonthly" /></CardTitle></CardHeader>
     <CardContent className="grid gap-4">
-      <p className="text-sm text-muted-foreground"><Message id={operator ? "tenant.accountOperatorNote" : "tenant.accountMonthlyNote"} /></p>
+      <p className="text-sm text-muted-foreground"><Message id="tenant.accountOperatorNote" /></p>
       <div className="flex flex-wrap gap-3">
         <Input className="max-w-sm" aria-label={t("tenant.accountSearch")} placeholder={t("tenant.accountSearch")} value={query} onChange={e => { setQuery(e.target.value); setPage(0); }} />
         <Button variant="outline" disabled={resource.loading} onClick={resource.reload}><Message id="tenant.accountRefresh" /></Button>
-        {operator ? <Button disabled={resource.loading || resource.error !== null} onClick={() => setEditing("new")}><Message id="tenant.accountAdd" /></Button> : null}
+        <Button disabled={resource.loading || resource.error !== null} onClick={() => setEditing("new")}><Message id="tenant.accountAdd" /></Button>
       </div>
-      {resource.errorKind === "not_found" ? <EmptyState title={t("tenant.accountDisabled")} description={operator ? t("tenant.accountEnableHint") : undefined} /> : resource.error ? <ErrorState message={resource.error} onRetry={resource.reload} /> : resource.loading ? <LoadingState label={t("tenant.accountMonthly")} rows={3} /> : rows.length === 0 ? <EmptyState title={t("tenant.accountEmpty")} /> : <>
-        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.slice(current * 12, current * 12 + 12).map(account => <div key={account.id} className="grid content-between gap-3 rounded-lg border p-4">
+      {resource.errorKind === "not_found" ? <EmptyState title={t("tenant.accountDisabled")} description={t("tenant.accountEnableHint")} /> : resource.error ? <ErrorState message={resource.error} onRetry={resource.reload} /> : resource.loading ? <LoadingState label={t("tenant.accountMonthly")} rows={3} /> : rows.length === 0 ? <EmptyState title={t("tenant.accountEmpty")} /> : <>
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.slice(current * ACCOUNTS_PER_PAGE, (current + 1) * ACCOUNTS_PER_PAGE).map(account => <div key={account.id} className="grid content-between gap-3 rounded-lg border p-4">
           <div className="grid gap-2">
             <p className="font-medium break-all">{account.name}</p>
             <code className="break-all text-xs text-muted-foreground">{account.nodeId} / {account.runtimeId}</code>
@@ -74,36 +191,14 @@ export function AccountSales({ operator = false, canPurchase = false }: { operat
               {!account.active ? <Badge variant="outline"><Message id="tenant.accountArchived" /></Badge> : null}
             </div>
             {account.expiresAt ? <p className="text-sm">{t("tenant.accountExpires", { time: formatDateTime(account.expiresAt, undefined, locale) })}</p> : null}
-            {operator && account.tenantId ? <p className="text-xs break-all">{t("tenant.accountHolder", { tenant: account.tenantId })}</p> : null}
-            {operator && account.dodoProductId ? <code className="text-xs break-all text-muted-foreground">{account.dodoProductId}</code> : null}
+            {account.tenantId ? <p className="text-xs break-all">{t("tenant.accountHolder", { tenant: account.tenantId })}</p> : null}
+            {account.dodoProductId ? <code className="text-xs break-all text-muted-foreground">{account.dodoProductId}</code> : null}
           </div>
-          {operator ? <Button variant="outline" onClick={() => setEditing(account)}><Message id="tenant.accountEdit" /></Button> : canPurchase ?
-            <Button disabled={!accountPurchasable(account)} onClick={() => setBuying(account)}><Message id={account.owned ? "tenant.accountRenew" : "tenant.accountBuy"} /></Button> : null}
+          <Button variant="outline" onClick={() => setEditing(account)}><Message id="tenant.accountEdit" /></Button>
         </div>)}</div>
-        <div className="flex items-center justify-between gap-3">
-          <Button variant="outline" disabled={current === 0} onClick={() => setPage(current - 1)}><Message id="tenant.accountPrevious" /></Button>
-          <span className="text-sm">{current + 1} / {Math.ceil(rows.length / 12)}</span>
-          <Button variant="outline" disabled={(current + 1) * 12 >= rows.length} onClick={() => setPage(current + 1)}><Message id="tenant.accountNext" /></Button>
-        </div>
+        <Pages current={current} total={total} onChange={setPage} />
       </>}
     </CardContent>
-    <ConfirmDialog open={buying !== null} onOpenChange={open => { if (!open) setBuying(null); }} title={t("tenant.accountPurchase")}
-      description={buying ? t("tenant.accountBuyConfirm", { name: buying.name, price: formatMoney(buying.priceMinor, buying.currency, locale) }) : ""}
-      onConfirm={async () => {
-        if (!buying) return;
-        let result;
-        try {
-          // A checkout is a write and is never retried: a repeat would open a
-          // second pending order. 结账是写操作，绝不重试：重发会再开一笔待付款订单。
-          result = await run({ method: "POST", path: `${path}/${encodeURIComponent(buying.id)}/checkout`, body: accountCheckoutBody(buying), parse: parseCheckout });
-        } catch (error) {
-          if (error instanceof ApiError && error.status === 409) throw new ApiError("account_unavailable", 409);
-          if (error instanceof ApiError && error.status === 404) throw new ApiError("account_checkout_disabled", 404);
-          if (error instanceof ApiError && error.status === 503) throw new ApiError("payment_unavailable", 503);
-          throw error;
-        }
-        window.location.assign(result.checkoutUrl);
-      }} />
     {editing ? <AccountEditor key={typeof editing === "string" ? editing : editing.id} account={editing === "new" ? null : editing} inventory={resource.data ?? []} onClose={() => setEditing(null)} onSaved={resource.reload} /> : null}
   </Card>;
 }
@@ -159,7 +254,7 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
           setAutoName(nextName);
         }
       }} />}
-      <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><Input id={`${prefix}-currency`} required maxLength={3} autoCapitalize="characters" value={currency} disabled={pending} onChange={e => setCurrency(e.target.value.toUpperCase())} />
+      <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><CurrencySelect id={`${prefix}-currency`} className={SELECT_CLASS} required={active} value={currency} disabled={pending} onChange={setCurrency} />
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required={active} inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
       <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={active} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>
