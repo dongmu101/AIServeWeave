@@ -374,6 +374,49 @@ export function parseCreditPackages(value: unknown): CreditPackage[] {
   return list(record(value).items, parseCreditPackage);
 }
 
+/** Catalog mirrors types.CatalogResponse, the public purchase information.
+ *
+ * Catalog 镜像 types.CatalogResponse，即公开的购买信息。 */
+export interface Catalog {
+  packages: Pick<CreditPackage, "id" | "name" | "kind" | "creditsMicro" | "priceMinor" | "currency" | "minAmountMinor" | "maxAmountMinor">[];
+  accounts: { id: string; name: string; priceMicro: number }[];
+  prices: Pick<ModelPrice, "model" | "inputMicroPerMTok" | "outputMicroPerMTok">[];
+}
+
+/** parseCatalog validates GET /billing/v1/catalog.
+ *
+ * parseCatalog 校验 GET /billing/v1/catalog。 */
+export function parseCatalog(value: unknown): Catalog {
+  const source = record(value);
+  return {
+    packages: list(source.packages, item => {
+      const pkg = record(item);
+      const kind = pkg.kind;
+      if (!(PACKAGE_KINDS as readonly unknown[]).includes(kind)) {
+        fail();
+      }
+      return {
+        id: required(pkg, "id"),
+        name: required(pkg, "name"),
+        kind: kind as PackageKind,
+        creditsMicro: optionalCount(pkg, "credits_micro"),
+        priceMinor: optionalCount(pkg, "price_minor"),
+        currency: required(pkg, "currency"),
+        minAmountMinor: optionalCount(pkg, "min_amount_minor"),
+        maxAmountMinor: optionalCount(pkg, "max_amount_minor"),
+      };
+    }),
+    accounts: list(source.accounts, item => {
+      const account = record(item);
+      return { id: required(account, "id"), name: required(account, "name"), priceMicro: count(account, "price_micro") };
+    }),
+    prices: list(source.prices, item => {
+      const price = record(item);
+      return { model: required(price, "model"), inputMicroPerMTok: count(price, "input_micro_per_mtok"), outputMicroPerMTok: count(price, "output_micro_per_mtok") };
+    }),
+  };
+}
+
 /** parseBillingOverview validates GET /admin/v1/billing.
  *
  * parseBillingOverview 校验 GET /admin/v1/billing。 */

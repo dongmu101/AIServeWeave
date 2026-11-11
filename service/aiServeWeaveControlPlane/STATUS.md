@@ -127,7 +127,7 @@ go run ./service/aiServeWeaveGateway \
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」） |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型单价与当前可买的包月账号，只含名称与价格，不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时 `packages`、`prices` 为空） |
 | 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`，`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |

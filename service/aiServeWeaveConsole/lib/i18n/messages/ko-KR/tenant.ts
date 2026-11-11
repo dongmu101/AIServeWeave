@@ -705,6 +705,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "엔드포인트는 https여야 하고 사설·로컬 주소는 안 됩니다. 호환 종류는 필수입니다.",
   "tenant.providerProblemKey": "키는 앞뒤 공백 없는 한 줄이어야 합니다.",
   "tenant.providerProblemKeyRequired": "API 키를 입력하세요(새 공급자이거나 종류·엔드포인트를 바꾸면 필수).",
-  "tenant.providerProblemModels": "모델 ID에는 공백이나 쉼표를 쓸 수 없고 중복될 수 없습니다."
+  "tenant.providerProblemModels": "모델 ID에는 공백이나 쉼표를 쓸 수 없고 중복될 수 없습니다.",
+  "pricing.title": "가격 및 구매",
+  "pricing.subtitle": "로그인 없이 판매 중인 항목을 볼 수 있습니다. 구매하려면 로그인해야 합니다.",
+  "pricing.signIn": "로그인",
+  "pricing.signUp": "가입",
+  "pricing.openConsole": "콘솔 열기",
+  "pricing.buy": "구매",
+  "pricing.accounts": "월간 계정",
+  "pricing.packages": "크레딧 패키지",
+  "pricing.prices": "모델 단가",
+  "pricing.empty": "현재 판매 중인 항목이 없습니다",
+  "pricing.unavailable": "구매가 아직 열리지 않았습니다",
+  "pricing.packageCredits": "{credits} 크레딧",
+  "pricing.customAmount": "금액 선택: {min} – {max}",
+  "pricing.model": "모델",
+  "pricing.input": "입력 / 100만 토큰",
+  "pricing.output": "출력 / 100만 토큰",
+  "pricing.defaultModel": "기타 모든 모델"
 } as const;
 export default tenant;

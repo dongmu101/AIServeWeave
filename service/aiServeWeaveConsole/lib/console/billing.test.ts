@@ -19,6 +19,7 @@ import {
   packageRequest,
   parseBillingOverview,
   parseBillingTenants,
+  parseCatalog,
   parseCheckout,
   parseCreditPackage,
   parseCreditPackages,
@@ -337,4 +338,25 @@ test("the browser sleep resolves on time or as soon as it is canceled", async ()
   const pending = abortableSleep(60_000, later.signal);
   later.abort();
   await pending;
+});
+
+test("parseCatalog reads the public catalog and tolerates null lists", () => {
+  const catalog = parseCatalog({
+    packages: [
+      { id: "pkg_1", name: "Starter", kind: "fixed", credits_micro: 5_000_000, price_minor: 500, currency: "USD" },
+      { id: "pkg_2", name: "Custom", kind: "custom", currency: "USD", min_amount_minor: 100, max_amount_minor: 10000 },
+    ],
+    accounts: [{ id: "acc_1", name: "Claude A", price_micro: 100_000_000 }],
+    prices: null,
+  });
+  assert.equal(catalog.packages.length, 2);
+  assert.equal(catalog.packages[1].minAmountMinor, 100);
+  assert.deepEqual(catalog.accounts, [{ id: "acc_1", name: "Claude A", priceMicro: 100_000_000 }]);
+  assert.deepEqual(catalog.prices, []);
+});
+
+test("parseCatalog rejects malformed entries", () => {
+  assert.throws(() => parseCatalog([]));
+  assert.throws(() => parseCatalog({ packages: [{ id: "p", name: "n", kind: "weird", currency: "USD" }] }));
+  assert.throws(() => parseCatalog({ accounts: [{ id: "a", name: "n", price_micro: -1 }] }));
 });

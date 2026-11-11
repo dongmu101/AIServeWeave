@@ -705,6 +705,23 @@ const tenant = {
   "tenant.providerProblemBaseUrl": "接口地址须为 https，不能是内网或本机地址；兼容种类必须填写。",
   "tenant.providerProblemKey": "Key 须为单行，首尾不能有空格。",
   "tenant.providerProblemKeyRequired": "请填写 API Key（新建接口或更换种类、地址时必填）。",
-  "tenant.providerProblemModels": "模型 ID 不能含空格或逗号，且不能重复。"
+  "tenant.providerProblemModels": "模型 ID 不能含空格或逗号，且不能重复。",
+  "pricing.title": "价格与购买",
+  "pricing.subtitle": "无需登录即可查看在售内容，购买时需要登录。",
+  "pricing.signIn": "登录",
+  "pricing.signUp": "注册",
+  "pricing.openConsole": "进入控制台",
+  "pricing.buy": "购买",
+  "pricing.accounts": "账号包月",
+  "pricing.packages": "点数充值包",
+  "pricing.prices": "模型单价",
+  "pricing.empty": "暂无在售内容",
+  "pricing.unavailable": "购买暂未开放",
+  "pricing.packageCredits": "{credits} 点",
+  "pricing.customAmount": "自选金额：{min} – {max}",
+  "pricing.model": "模型",
+  "pricing.input": "输入 / 百万 token",
+  "pricing.output": "输出 / 百万 token",
+  "pricing.defaultModel": "其他所有模型"
 } as const;
 export default tenant;

@@ -11,8 +11,10 @@ import { useRouter } from "next/navigation";
 
 import { FormError } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
+import { buttonVariants } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { signIn } from "@/lib/console/api-client";
+import { cn } from "cn";
 
 /**
  * LoginForm posts credentials to the Console's own session route, which is the
@@ -63,7 +65,7 @@ export function LoginForm({
   }
 
   return (
-    <form onSubmit={submit} className="grid gap-4" noValidate>
+    <form onSubmit={submit} className="grid gap-5" noValidate>
       <div className="grid gap-2">
         <label htmlFor="email" className="text-sm font-medium">
           <Message id="tenant.email" /></label>
@@ -76,6 +78,7 @@ export function LoginForm({
           value={email}
           onChange={(event) => setEmail(event.target.value)}
           disabled={pending}
+          className="h-10 px-3"
         />
       </div>
       <div className="grid gap-2">
@@ -89,18 +92,25 @@ export function LoginForm({
           value={password}
           onChange={(event) => setPassword(event.target.value)}
           disabled={pending}
+          className="h-10 px-3"
         />
       </div>
       <FormError message={error} />
-      <SubmitButton pending={pending} size="lg">
+      <SubmitButton pending={pending} size="lg" className="h-10 w-full text-sm">
         <Message id="auth.signIn" /></SubmitButton>
       {signupEnabled ? (
-        <p className="text-xs text-muted-foreground"><Message id="auth.donTHaveAnAccountIfYouForgot" values={{ link: <Link href="/signup" className="underline underline-offset-4">
-            <Message id="auth.registerTenant" /></Link> }} /></p>
-      ) : (
-        <p className="text-xs text-muted-foreground">
-          <Message id="auth.ifYouForgotYourPasswordOrDoNot" /></p>
-      )}
+        <>
+          <hr className="border-border" />
+          <Link
+            href="/signup"
+            className={cn(buttonVariants({ variant: "outline", size: "lg" }), "h-10 w-full text-sm")}
+          >
+            <Message id="auth.registerTenant" />
+          </Link>
+        </>
+      ) : null}
+      <p className="text-center text-xs text-muted-foreground">
+        <Message id="auth.ifYouForgotYourPasswordOrDoNot" /></p>
     </form>
   );
 }
