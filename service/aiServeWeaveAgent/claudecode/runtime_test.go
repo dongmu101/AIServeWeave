@@ -112,8 +112,8 @@ func TestRuntimeTerminalStopReasons(t *testing.T) {
 				if err != nil {
 					if tc.failure {
 						var failure *runtime.RuntimeError
-						if !errors.As(err, &failure) || failure.Code != runtime.ErrorProtocol {
-							t.Fatalf("error=%v, want protocol error", err)
+						if !errors.As(err, &failure) || failure.Code != runtime.ErrorUpstream {
+							t.Fatalf("error=%v, want backend error", err)
 						}
 						return
 					}

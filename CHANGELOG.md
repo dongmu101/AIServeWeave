@@ -55,6 +55,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Fixed
 
+- Claude CLI 契约加固：原生进程显式拒绝所有本机工具，保留调用方定义与工具身份；兼容合法认证/工具进度通知及成功结果后的额度通知。本机协议、工具隔离、设置与启动失败改为后端错误（正文前 HTTP 502），真实上游 400/429/529 和恢复分类保持原有透传。新增动态工具名、ToolSearch、通知顺序及真实 CLI 隔离回归，见[验证记录](docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；平台分发安装包需刷新 Gateway 镜像内置的 Agent 制品。原生产 `unsafe_tools` 的具体分支仍未复现。
+
 - Claude 原生链路加固：父代理 CONNECT 握手可随取消立即退出；按完整 SSE 事件捕获多行错误，保留 429/529 与重试信息；gzip 编码名按大小写无关识别；Agent 会话寿命或生成空闲到期按 `timeout` 报告，避免误报为通用协议 400。复现与默认离线回归见[验证记录](docs/acceptance/claude-native-robustness-2026-11-09/README.md)。现有节点需更新并重启 Agent，平台安装包需刷新 Gateway 镜像内的 Agent 制品；生产验收仍待执行。
 
 - 原生 Claude 长任务在历史增大后快速返回通用 400：Agent 的完整请求设置文件会撞上 Claude Code `2.1.319` 的 2 MiB 限制。现在按最终设置字节数切换输入方式，大文档经每进程回环代理补入同一次主 API 调用，保留原始历史、工具结果、safeguards、认证头和 beta 选择器，平台请求上限仍为 32 MiB；本地缺少结果或进程异常退出按后端错误返回，回合日志新增 `request_bytes`。默认回归及真实 CLI 的 31 MiB 历史、4 MiB safeguards、转义密集请求契约通过。已有节点更新并重启 Agent；平台一键安装用户需要刷新 Gateway 镜像内的新版 Agent 制品。真实生产长任务尚待更新后验收，见 [验收记录](docs/acceptance/claude-settings-limit-2026-11-09/README.md)。

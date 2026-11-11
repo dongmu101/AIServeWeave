@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -18,6 +19,29 @@ import (
 
 	"AIServeWeave/common/runtime"
 )
+
+func TestBackendFailurePreservesCapturedUpstreamErrors(t *testing.T) {
+	r := &Runtime{cfg: runtime.Config{ID: "fixture"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
+	for _, tc := range []struct {
+		status int
+		kind   string
+	}{{400, "invalid_request_error"}, {429, "rate_limit_error"}, {529, "overloaded_error"}} {
+		t.Run(tc.kind, func(t *testing.T) {
+			body := []byte(`{"type":"error","error":{"type":"` + tc.kind + `","message":"fixture"}}`)
+			record := &upstreamRecord{status: tc.status, body: body, header: http.Header{"Retry-After": []string{"7"}}}
+			capture := &upstreamCapture{}
+			capture.record(record)
+			failure := withUpstream(r.roundError(errCLIResult), errCLIResult, capture)
+			var public *runtime.RuntimeError
+			if !errors.As(failure, &public) || public.StatusCode != tc.status || public.Upstream == nil || !bytes.Equal(public.Upstream.Body, body) {
+				t.Fatalf("local classification replaced captured upstream failure: %+v", public)
+			}
+			if tc.status == 429 && (!public.Retryable || public.Code != runtime.ErrorRateLimited || public.RetryAfter != 7*time.Second) {
+				t.Fatalf("lost upstream retry information: %+v", public)
+			}
+		})
+	}
+}
 
 func TestUpstreamProxyCloseCancelsPendingConnect(t *testing.T) {
 	for _, secure := range []bool{false, true} {

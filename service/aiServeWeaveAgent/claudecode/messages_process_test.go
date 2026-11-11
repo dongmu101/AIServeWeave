@@ -26,6 +26,7 @@ func TestBridgeEventsFailureLocation(t *testing.T) {
 	}{
 		{"invalid JSON", "invalid_json", strings.NewReader("private-payload\n"), 1},
 		{"unknown event", "unsupported_envelope", strings.NewReader("{\"type\":\"private-payload\"}\n"), 1},
+		{"conversation reset", "unsupported_envelope", strings.NewReader("{\"type\":\"conversation_reset\"}\n"), 1},
 		{"unknown stop reason", "unsupported_stop_reason", strings.NewReader("{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"private-payload\"}}}\n"), 2},
 		{"read failure", "stream_read_failed", iotest.ErrReader(errors.New("private-payload")), 1},
 		{"partial line read failure", "stream_read_failed", io.MultiReader(strings.NewReader(`{"type":"system","subtype":"status"}`), iotest.ErrReader(errors.New("private-payload"))), 1},
@@ -98,6 +99,7 @@ func TestBridgeEventsTrailingNotifications(t *testing.T) {
 		{"new init", `{"type":"system","subtype":"init","tools":["Bash"]}`, true},
 		{"new model output", `{"type":"stream_event","event":{"type":"message_start"}}`, true},
 		{"duplicate result", `{"type":"result","subtype":"success"}`, true},
+		{"conversation reset", `{"type":"conversation_reset"}`, true},
 		{"unknown envelope", `{"type":"private-payload"}`, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -123,6 +125,52 @@ func TestBridgeEventsTrailingNotifications(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestBridgeEventsLifecycleNotifications(t *testing.T) {
+	for _, notification := range []string{
+		`{"type":"auth_status","isAuthenticating":true,"output":["private-lifecycle-payload"]}`,
+		`{"type":"tool_progress","tool_use_id":"fixture","tool_name":"private-lifecycle-payload","elapsed_time_seconds":1}`,
+		`{"type":"tool_use_summary","summary":"private-lifecycle-payload","preceding_tool_use_ids":[]}`,
+		`{"type":"system","subtype":"task_progress","description":"private-lifecycle-payload"}`,
+		`{"type":"rate_limit_event","rate_limit_info":{"status":"allowed"}}`,
+	} {
+		var kind struct{ Type string }
+		_ = json.Unmarshal([]byte(notification), &kind)
+		for _, native := range []bool{false, true} {
+			for _, trailing := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s/native=%t/trailing=%t", kind.Type, native, trailing), func(t *testing.T) {
+					var round, input bytes.Buffer
+					fixtureRound(&round, "", "answer")
+					round.WriteString("{\"type\":\"result\",\"subtype\":\"success\"}\n")
+					if !trailing {
+						fmt.Fprintln(&input, notification)
+					}
+					input.Write(round.Bytes())
+					if trailing {
+						fmt.Fprintln(&input, notification)
+					}
+					req := testMessagesRequest()
+					if native {
+						req = guardedRequest()
+					}
+					s := &messagesSession{ctx: context.Background(), request: req, events: make(chan bridgeEvent, 16)}
+					final, err := bridgeEvents(&input, s)
+					if err != nil || string(final) != `{"type":"message_stop"}` {
+						t.Fatalf("documented lifecycle notification broke inference: %v / %s", err, final)
+					}
+					close(s.events)
+					var reply bytes.Buffer
+					for item := range s.events {
+						reply.Write(item.data)
+					}
+					if bytes.Contains(reply.Bytes(), []byte("private-lifecycle-payload")) || !bytes.Contains(reply.Bytes(), []byte("answer")) {
+						t.Fatal("lifecycle notice leaked into the inference reply or displaced the answer")
+					}
+				})
+			}
+		}
 	}
 }
 

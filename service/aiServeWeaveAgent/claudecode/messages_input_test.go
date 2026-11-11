@@ -134,9 +134,9 @@ func TestLargeNativeProxyForwarding(t *testing.T) {
 	}
 }
 
-func TestMissingCLIResultIsBackendFailure(t *testing.T) {
+func TestLocalCLIFailureIsBackendFailure(t *testing.T) {
 	r := &Runtime{cfg: runtime.Config{ID: "fixture"}, logger: slog.New(slog.NewTextHandler(io.Discard, nil))}
-	for _, cause := range []error{errMissingResult, errCLIExit} {
+	for _, cause := range []error{errMissingResult, errCLIExit, errCLIProtocol, errCLIResult, errUnsafeTools, errCLIStart, errProbeSetup} {
 		var failure *runtime.RuntimeError
 		if !errors.As(r.roundError(cause), &failure) || failure.Code != runtime.ErrorUpstream || failure.RuntimeID != "fixture" {
 			t.Fatalf("local CLI failure incorrectly reported as client error: %+v", failure)

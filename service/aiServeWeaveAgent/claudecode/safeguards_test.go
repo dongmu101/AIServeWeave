@@ -59,6 +59,7 @@ func safeguardsProcessFixture() {
 		Env map[string]string `json:"env"`
 	}
 	var settingsPath, mcpPath string
+	deniedLocalTools := false
 	for i := 1; i+1 < len(os.Args); i++ {
 		switch os.Args[i] {
 		case "--effort", "--thinking-display", "--input-format":
@@ -71,7 +72,15 @@ func safeguardsProcessFixture() {
 			if os.Args[i+1] != "" {
 				os.Exit(3)
 			}
+		case "--disallowedTools":
+			if os.Args[i+1] != "*" {
+				os.Exit(3)
+			}
+			deniedLocalTools = true
 		}
+	}
+	if !deniedLocalTools {
+		os.Exit(3)
 	}
 	for _, key := range []string{"MAX_THINKING_TOKENS", "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS", "DISABLE_PROMPT_CACHING"} {
 		if _, ok := os.LookupEnv(key); ok {
