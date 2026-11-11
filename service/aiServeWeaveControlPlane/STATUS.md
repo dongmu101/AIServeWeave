@@ -127,8 +127,8 @@ go run ./service/aiServeWeaveGateway \
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型单价、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind` 与 `available`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
-| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型单价、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind` 与 `available`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
+| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账；结账、门户、退款只在配置 Dodo 时挂载，`/admin/v1/billing/alipay*` 只在 `Billing.Alipay.Enabled` 时挂载），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
@@ -826,7 +826,7 @@ CREATE INDEX idx_usage_records_created              ON usage_records (created_at
 
 ## 计费与充值
 
-租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
+租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments 与支付宝（一人付，2026-11-11 新增），两者可并存，也可只配一个（`Billing.Enabled` 至少需要其一）；支付宝的规则见下文「支付宝（一人付）」与[支付宝说明](../../docs/billing-alipay.md)。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
 
 ```
 Console ──/admin|/operator 白名单──▶ 控制面 ──SDK──▶ Dodo（结账会话、客户、客户门户）
@@ -840,10 +840,14 @@ Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 
 | 配置 | 默认 | 含义 |
 | --- | --- | --- |
 | `Billing.Enabled` | `false` | 总开关 |
-| `Billing.Dodo.APIKey` / `WebhookSecret` | 空 | 开启时必填，部署里用 `${AISW_DODO_API_KEY}` / `${AISW_DODO_WEBHOOK_SECRET}` 引用 |
+| `Billing.Dodo.APIKey` / `WebhookSecret` | 空 | 填了任一项即视为配置 Dodo，此时两项都必填，部署里用 `${AISW_DODO_API_KEY}` / `${AISW_DODO_WEBHOOK_SECRET}` 引用；都不填时充值包、结账、客户门户、webhook 与退款路由不挂载 |
 | `Billing.Dodo.Environment` | `test` | `test` 或 `live`；APIKey 带 `dodo_test_` / `dodo_live_` 前缀时必须与之一致，防止测试 key 配上 live 环境 |
-| `Billing.ReturnURL` | 空 | 开启时必填，绝对 `http(s)` 地址，付款完成或取消后 Dodo 回跳的 Console 计费页 |
+| `Billing.ReturnURL` | 空 | 配置 Dodo 时必填，绝对 `http(s)` 地址，付款完成或取消后 Dodo 回跳的 Console 计费页 |
 | `Billing.SignupGrantCredits` | `0` | 自助注册租户的期初赠送点数 |
+| `Billing.Alipay.Enabled` | `false` | 开启支付宝（一人付）；API Key 只从环境变量 `opcpay_api_key` 读取，缺失时启动失败 |
+| `Billing.Alipay.CreditsPerUnitMicro` | 空 | 开启时必填，每 1 次 / 1 积分兑换的 micro 点数，1 – 10^12 |
+| `Billing.Alipay.ReturnURL` | 空 | 可选，HTTPS，主机与端口须与一人付项目网址一致；建议带 `?tab=alipay&alipay_return=1` |
+| `Billing.Alipay.BaseURL` | 空 | 可选，覆盖接口基址（默认 `https://ai6666.com/opcpay/api/pay/v1`），须为 HTTPS，供测试替身使用 |
 
 Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhook`，订阅 `payment.succeeded`、`payment.failed`、`payment.cancelled`、`refund.succeeded`、`dispute.opened`、`dispute.won`、`dispute.cancelled`。`deploy/docker-compose.yaml` 把控制面端口只绑定在 `127.0.0.1`，Dodo 要能投递，需要由反向代理把这一条路径（且只需这一条）暴露到公网。
 
@@ -921,9 +925,25 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 写操作的审计动作：`billing.package.create`/`update`、`billing.price.update`/`delete`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`。
 
+### 支付宝（一人付）
+
+额度在支付宝，点数在本服务。租户在支付宝购买次数或积分（`QUANTITY` + `COUNT`/`POINT`）套餐，额度留在支付宝；在 Console 兑换时控制面先持久化兑换记录（`apr_` id 即一人付幂等编号，数量与点数在创建时按配置比例算定），再调用 `/consume`，只有 `SUCCEEDED`、`confirmed=true` 且编号、数量、单位一致时，才在同一事务里把记录标为成功并以 `alipay:<id>` 幂等键记入 `alipay_topup` 账目。`FAILED`（或 `/consume` 本身被 `400`/`409 CONFLICT` 拒绝）标为失败；`PROCESSING`/`UNKNOWN`/超时/5xx 保持 `pending`，之后用原编号查 `/consumption`，`404` 时以原参数重发 `/consume`，绝不换号再扣。确认成功但字段不符的答复记错误日志并保持待确认，等运维介入。每个租户同时只能有一笔待确认兑换；后台每分钟恢复一批（≤10 笔、创建满 30 秒的）待确认记录，覆盖进程重启。同一兑换两次恢复至少间隔 5 秒，避免共享的 120 次/分钟限流被刷光。
+
+一人付不报告逐笔付款，也没有退款（`/refunds` 等返回 501）：购买入口 `READY`、页面回跳、扫码都**不**入账，Console 回跳后只在有限次数内重新读取额度。买断/时长模式或尚未 `ENABLED` 的项目，概览如实返回 `supported`/`can_purchase`/`can_redeem` 为 false，购买与兑换返回 `409`，不调用一人付。能力与套餐缓存 60 秒；每个操作的一人付调用合计受 8 秒期限约束（路由 9 秒，低于 Console 的 10 秒），写操作与请求解绑，客户端离开不会截断要记录的核销。一人付用户 ID 是会话中的租户 id，请求体只接受 `action_id`、`sku_id`、`amount`（未知字段 `400`）。
+
+| 接口 | 守卫 | 说明 |
+| --- | --- | --- |
+| `GET /admin/v1/billing/alipay` | 租户会话 | 套餐（价格以支付宝为准）、剩余额度（读不到时 `access: null`）、兑换比例、可否购买/兑换、待确认兑换 |
+| `POST /admin/v1/billing/alipay/purchases` | 租户 owner/admin | `{action_id, sku_id?}`，先存购买意图再调 `/purchase`，同一 `action_id` 重试原样重发；返回 `201 {id, purchase_url}`。入口失败/过期 `409`，一人付不可用或结果未知 `503` |
+| `POST /admin/v1/billing/alipay/redemptions` | 租户 owner/admin | `{action_id, amount}`；成功或失败 `200`，仍待确认 `202`，已有其他待确认兑换 `409` |
+| `GET /admin/v1/billing/alipay/redemptions` | 租户会话 | 本租户兑换记录，游标分页 |
+| `POST /admin/v1/billing/alipay/redemptions/:id/refresh` | 租户会话 | 恢复一笔待确认兑换，返回当前状态（`200`/`202`） |
+
+迁移 `billing/0007_alipay.sql` 新增 `alipay_purchases` 与 `alipay_redemptions`。只配支付宝时，`GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo: false, alipay: true}`，公开目录只返回模型单价。审计动作 `billing.alipay.purchase`、`billing.alipay.redeem`。
+
 ### 依赖
 
-`github.com/dodopayments/dodopayments-go`（锁定 `v1.125.0`）只由 `internal/billing/dodo` import，logic 层只看到 `internal/billing.Provider` 接口。用官方 SDK 而不是手写 `net/http`：结账、客户与门户请求形状，以及 Standard Webhooks 验签（时间戳容差、多签名、密钥轮换）都由它维护。它带入 `github.com/standard-webhooks/standard-webhooks` 与 `github.com/tidwall/{gjson,sjson,match,pretty}`，只进控制面二进制。Console 不引入 npm `dodopayments`、不持有 Dodo 凭据，只经控制面白名单调用上面的接口。
+支付宝没有引入依赖：`internal/billing/opcpay` 按 npm 包 `opcpay` 0.3.4 与其 OpenAPI 1.1.2 契约用 `net/http` 手写（只发往 HTTPS 基址、不跟随重定向、不把上游错误文本或 Key 带进错误与日志），logic 层只看到 `internal/billing.Alipay` 接口。`github.com/dodopayments/dodopayments-go`（锁定 `v1.125.0`）只由 `internal/billing/dodo` import，logic 层只看到 `internal/billing.Provider` 接口。用官方 SDK 而不是手写 `net/http`：结账、客户与门户请求形状，以及 Standard Webhooks 验签（时间戳容差、多签名、密钥轮换）都由它维护。它带入 `github.com/standard-webhooks/standard-webhooks` 与 `github.com/tidwall/{gjson,sjson,match,pretty}`，只进控制面二进制。Console 不引入 npm `dodopayments`、不持有 Dodo 凭据，只经控制面白名单调用上面的接口。
 
 ### 已知缺口
 
@@ -933,6 +953,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 - Gateway 用量推送的重试只在进程内，副本崩溃会丢失尚未送达的批次，对应用量不扣费。
 - `usage_charges` 与 `billing_webhook_events` 还没有保留期清理，会随用量与事件持续增长。
 - 手工调整余额（`/adjust`）没有幂等键，重复提交会记两次；Console 只发送一次、不自动重试。
+- 支付宝（一人付）只用模拟接口验证：未配置真实 `opcpay_api_key`，没有只读查询过真实 `/capabilities`、`/product`，没有真实购买与核销。只支持次数/积分套餐；一人付通知（webhook）未接入，到账靠读取额度；一人付无退款，已兑换的点数如需退回只能运维手工调整，支付宝侧额度不返还。
 
 ## 告警评估与通知（P09/C29）
 

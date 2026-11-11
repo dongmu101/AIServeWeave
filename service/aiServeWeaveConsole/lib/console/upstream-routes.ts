@@ -210,6 +210,18 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders"), param(), literal("refund-requests")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("refund-requests")], query: ["limit", "cursor", "status", "order_id"] },
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("refund-requests"), param(), literal("cancel")], query: [] },
+  // Alipay (一人付): the plans and quota, a purchase entry, and redeeming
+  // quota into credits. The 一人付 user is the session's tenant; the body
+  // names only an action id, a SKU or an amount. They exist only when the
+  // control plane enables Alipay.
+  //
+  // 支付宝（一人付）：套餐与额度、购买入口，以及把额度兑换为点数。一人付用户是会话所属
+  // 租户；请求体只包含 action id、SKU 或数量。仅在控制面开启支付宝时存在。
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("alipay")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("alipay"), literal("purchases")], query: [] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("alipay"), literal("redemptions")], query: ["limit", "cursor"] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("alipay"), literal("redemptions")], query: [] },
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("alipay"), literal("redemptions"), param(), literal("refresh")], query: [] },
 ];
 
 /**

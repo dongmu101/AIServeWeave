@@ -43,6 +43,20 @@ type BillingOverviewResponse struct {
 	//
 	// RefundWindowDays 是购买后租户可申请退款的天数；为零表示不可申请。
 	RefundWindowDays int `json:"refund_window_days"`
+	// PaymentMethods reports which ways to pay the deployment offers.
+	//
+	// PaymentMethods 报告部署提供的付款方式。
+	PaymentMethods PaymentMethods `json:"payment_methods"`
+}
+
+// PaymentMethods is which payment providers are configured: Dodo for credit
+// packages and fiat checkouts, Alipay (一人付) for redeeming Alipay quota.
+//
+// PaymentMethods 是已配置的支付服务商：Dodo 用于充值包与法币结账，Alipay（一人付）
+// 用于兑换支付宝额度。
+type PaymentMethods struct {
+	Dodo   bool `json:"dodo"`
+	Alipay bool `json:"alipay"`
 }
 
 // CheckoutRequest is POST /admin/v1/billing/checkout. AmountMinor is the

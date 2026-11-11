@@ -1,6 +1,7 @@
 import { redirect } from "next/navigation";
 
 import { BillingView } from "@/app/console/billing/billing-view";
+import { isAlipayReturn } from "@/lib/console/alipay";
 import { isPaymentReturn } from "@/lib/console/billing";
 import { readSession } from "@/lib/server/session";
 
@@ -21,6 +22,11 @@ import { readSession } from "@/lib/server/session";
  *
  * 支付服务商会带着查询参数 `status` 与 `payment_id` 把购买者送回这里。它们的出现只
  * 告诉视图在短时间内等待服务端确认；它们的取值从不被当作支付结果。
+ *
+ * Alipay returns with `alipay_return`, which likewise only starts a short
+ * wait for the Alipay quota to move.
+ *
+ * 支付宝回跳带有 `alipay_return`，同样只会开始一段等待支付宝额度变化的短暂过程。
  */
 export default async function BillingPage({
   searchParams,
@@ -31,5 +37,6 @@ export default async function BillingPage({
   if (!session) {
     redirect("/login");
   }
-  return <BillingView role={session.user.role} returning={isPaymentReturn(await searchParams)} />;
+  const params = await searchParams;
+  return <BillingView role={session.user.role} returning={isPaymentReturn(params)} alipayReturning={isAlipayReturn(params)} />;
 }

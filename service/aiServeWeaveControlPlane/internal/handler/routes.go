@@ -181,15 +181,37 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	// 认证它的是 Standard Webhooks 签名。
 	if ctx.Config.Billing.Enabled {
 		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/operator/v1/billing/model-prices", requirePlatformSession, listModelPrices(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/model-prices", requirePlatformSession, putModelPrice(ctx)),
+			billingRoute(http.MethodDelete, "/operator/v1/billing/model-prices", requirePlatformSession, deleteModelPrice(ctx)),
+		})
+	}
+	// Alipay (一人付) redeems quota bought in Alipay into credits. Its routes
+	// call 一人付, so they get the provider-call bound.
+	//
+	// 支付宝（一人付）把在支付宝购买的额度兑换为点数。这些路由会调用一人付，因此使用
+	// 服务商调用的时限。
+	if ctx.Config.Billing.Enabled && ctx.Config.Billing.Alipay.Enabled {
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/admin/v1/billing/alipay", requireSession, alipayOverview(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/alipay/purchases", requireSession, alipayPurchase(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/alipay/redemptions", requireSession, alipayRedeem(ctx)),
+			billingRoute(http.MethodGet, "/admin/v1/billing/alipay/redemptions", requireSession, listAlipayRedemptions(ctx)),
+			billingRoute(http.MethodPost, "/admin/v1/billing/alipay/redemptions/:id/refresh", requireSession, alipayRefresh(ctx)),
+		}, rest.WithTimeout(AlipayCallTimeout))
+	}
+	// Credit packages, checkouts, the portal and refunds go through Dodo and
+	// exist only when it is configured.
+	//
+	// 充值包、结账、门户与退款都经 Dodo，只在配置了 Dodo 时存在。
+	if ctx.Config.Billing.Enabled && ctx.Config.Billing.DodoConfigured() {
+		server.AddRoutes([]rest.Route{
 			{Method: http.MethodPost, Path: "/billing/v1/dodo/webhook", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/dodo/webhook", billingWebhook(ctx))},
 		}, rest.WithMaxBytes(MaxBillingWebhookBytes))
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/operator/v1/billing/packages", requirePlatformSession, listCreditPackages(ctx)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/packages", requirePlatformSession, saveCreditPackage(ctx, true)),
 			billingRoute(http.MethodPut, "/operator/v1/billing/packages/:id", requirePlatformSession, saveCreditPackage(ctx, false)),
-			billingRoute(http.MethodGet, "/operator/v1/billing/model-prices", requirePlatformSession, listModelPrices(ctx)),
-			billingRoute(http.MethodPut, "/operator/v1/billing/model-prices", requirePlatformSession, putModelPrice(ctx)),
-			billingRoute(http.MethodDelete, "/operator/v1/billing/model-prices", requirePlatformSession, deleteModelPrice(ctx)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/orders/:id/refund-requests", requireSession, requestRefund(ctx)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/refund-requests", requireSession, listRefundRequests(ctx, false)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/refund-requests/:id/cancel", requireSession, cancelRefundRequest(ctx)),

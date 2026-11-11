@@ -35,6 +35,13 @@ const MaxBillingWebhookBytes = 1 << 20
 // 的服务商表现为本服务的 503，而不是 Console 自己的超时。
 const BillingCallTimeout = 9 * time.Second
 
+// AlipayCallTimeout bounds the Alipay routes. Their 一人付 calls share one
+// shorter deadline in the logic layer, so the answer arrives within it.
+//
+// AlipayCallTimeout 限制支付宝路由。它们的一人付调用在 logic 层共享一个更短的期限，
+// 因此答复会在此之内到达。
+const AlipayCallTimeout = BillingCallTimeout
+
 // billingWebhook handles POST /billing/v1/dodo/webhook. It reads the raw body
 // itself rather than through decode: the signature covers the exact bytes,
 // and the event carries fields this service does not model. A verified event
@@ -84,6 +91,7 @@ func billingOverview(ctx *svc.ServiceContext) http.HandlerFunc {
 		writeJSON(w, http.StatusOK, types.BillingOverviewResponse{
 			Mode: overview.Mode, BalanceMicro: overview.BalanceMicro, Blocked: overview.Blocked,
 			HasCustomer: overview.HasCustomer, Packages: packages, RefundWindowDays: overview.RefundWindowDays,
+			PaymentMethods: types.PaymentMethods{Dodo: overview.Dodo, Alipay: overview.Alipay},
 		})
 	})
 }

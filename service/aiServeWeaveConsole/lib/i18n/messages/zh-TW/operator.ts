@@ -591,6 +591,8 @@ const operator = {
   "operator.presaleRefundTitle": "全額退款",
   "operator.presaleRefundDescription": "將向商戶 {tenant} 退還訂單 {order} 尚未退款的 {amount}。退款由 Dodo 處理，退款進行中時不能分配帳號。",
   "operator.presaleRefundReason": "退款原因（必填，最多 500 個字元）",
-  "operator.presaleRefundSubmitted": "已送出退款，等待 Dodo 處理。全額退款完成後訂單會從此列表移除。"
+  "operator.presaleRefundSubmitted": "已送出退款，等待 Dodo 處理。全額退款完成後訂單會從此列表移除。",
+  "operator.billingNeedsDodo": "未設定 Dodo",
+  "operator.billingNeedsDodoDescription": "儲值包經 Dodo 結帳出售。本部署只開啟了支付寶（一人付），點數由租戶兌換支付寶額度取得；模型單價、租戶與帳目仍可在其他分區管理。"
 } as const;
 export default operator;

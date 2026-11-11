@@ -594,6 +594,8 @@ const operator = {
   "operator.presaleRefundTitle": "Remboursement intégral",
   "operator.presaleRefundDescription": "Rembourse au locataire {tenant} les {amount} non encore remboursés de la commande {order}. Dodo traite le remboursement ; aucun compte ne peut être attribué pendant son traitement.",
   "operator.presaleRefundReason": "Motif du remboursement (obligatoire, 500 caractères au maximum)",
-  "operator.presaleRefundSubmitted": "Remboursement envoyé, en attente du traitement par Dodo. La commande quitte cette liste une fois intégralement remboursée."
+  "operator.presaleRefundSubmitted": "Remboursement envoyé, en attente du traitement par Dodo. La commande quitte cette liste une fois intégralement remboursée.",
+  "operator.billingNeedsDodo": "Dodo n’est pas configuré",
+  "operator.billingNeedsDodoDescription": "Les forfaits de crédits sont vendus via le paiement Dodo. Ce déploiement ne propose qu’Alipay (一人付) : les locataires obtiennent des crédits en convertissant leur quota Alipay. Les prix des modèles, les locataires et le registre restent gérés dans les autres onglets."
 } as const;
 export default operator;

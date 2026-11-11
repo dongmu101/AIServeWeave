@@ -34,6 +34,9 @@ type billingState struct {
 	charges  map[string]model.UsageCharge
 	webhooks map[string]model.BillingWebhookEvent
 	refunds  map[string]model.RefundRequest
+
+	alipayPurchases   map[string]model.AlipayPurchase
+	alipayRedemptions map[string]model.AlipayRedemption
 }
 
 func newBillingState() billingState {
@@ -47,6 +50,9 @@ func newBillingState() billingState {
 		charges:  map[string]model.UsageCharge{},
 		webhooks: map[string]model.BillingWebhookEvent{},
 		refunds:  map[string]model.RefundRequest{},
+
+		alipayPurchases:   map[string]model.AlipayPurchase{},
+		alipayRedemptions: map[string]model.AlipayRedemption{},
 	}
 }
 

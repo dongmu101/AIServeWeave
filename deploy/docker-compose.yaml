@@ -219,6 +219,12 @@ services:
       AISW_PROVIDER_MASTER_KEY: ${AISW_PROVIDER_MASTER_KEY:?set it in deploy/.env — openssl rand -base64 32}
       AISW_DODO_API_KEY: ${AISW_DODO_API_KEY:-}
       AISW_DODO_WEBHOOK_SECRET: ${AISW_DODO_WEBHOOK_SECRET:-}
+      # 一人付 (opcpay) API key for Alipay, read straight from the environment
+      # only when controlplane.yaml enables Billing.Alipay; it never goes into
+      # the config file. Empty by default.
+      # 一人付（opcpay）支付宝 API Key，只在 controlplane.yaml 开启 Billing.Alipay 时直接从
+      # 环境变量读取，从不写进配置文件。默认为空。
+      opcpay_api_key: ${opcpay_api_key:-}
       # Public Registry and Gateway tunnel addresses written into tenant node
       # enrollment bundles (controlplane.yaml's TenantNodes).
       # 写进商户自有节点接入包的 Registry 与 Gateway 隧道对外地址（controlplane.yaml 的 TenantNodes）。

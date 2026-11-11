@@ -591,6 +591,8 @@ const operator = {
   "operator.presaleRefundTitle": "Reembolso completo",
   "operator.presaleRefundDescription": "Reembolsa al inquilino {tenant} los {amount} aún no reembolsados del pedido {order}. Dodo procesa el reembolso; mientras está en curso no se puede asignar una cuenta.",
   "operator.presaleRefundReason": "Motivo del reembolso (obligatorio, máximo 500 caracteres)",
-  "operator.presaleRefundSubmitted": "Reembolso enviado; pendiente de que Dodo lo procese. El pedido sale de esta lista cuando se reembolsa por completo."
+  "operator.presaleRefundSubmitted": "Reembolso enviado; pendiente de que Dodo lo procese. El pedido sale de esta lista cuando se reembolsa por completo.",
+  "operator.billingNeedsDodo": "Dodo no está configurado",
+  "operator.billingNeedsDodoDescription": "Los paquetes de créditos se venden mediante el pago de Dodo. Este despliegue solo ofrece Alipay (一人付): los inquilinos obtienen créditos canjeando su cuota de Alipay. Los precios de modelos, los inquilinos y el libro mayor se siguen gestionando en las otras pestañas."
 } as const;
 export default operator;

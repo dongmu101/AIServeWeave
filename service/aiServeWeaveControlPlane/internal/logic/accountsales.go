@@ -150,7 +150,7 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 // expectedMinor 与 currency 必须与标价一致，读取与购买之间的改价视为冲突。账号须使用
 // Dodo「按意愿付费」产品：订单金额会传给结账。
 func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accountID string, expectedMinor int64, currency string) (CheckoutResult, error) {
-	if !s.billingEnabled() {
+	if !s.dodoEnabled() {
 		return CheckoutResult{}, ErrNotFound
 	}
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {

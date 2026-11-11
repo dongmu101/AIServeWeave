@@ -43,7 +43,7 @@
 
 `claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行；带 `safeguards` 的原生请求保留完整结构与工具身份，Agent CLI 不注册本地执行工具，每轮独立调用真实上游。无该字段时默认同样原样直通（见下方「未带 safeguards 的原生直通」），旧节点等情形继续使用隔离 MCP 桥接；Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链保持原会话；请求要求思考时转换预算，客户端回传的思考被丢弃。支持文本、Messages 图片/文档/本平台视频附件与调用方工具循环，不代表完整 Anthropic API 兼容。
 
-- **工具隔离拒绝诊断（2026-11-11）**：生产 16:28–16:29（台北）连续 400 已关联到 Agent `unsafe_tools`；旧日志不能区分初始化本机工具、上游未声明工具与缺失 ID。现新增这三类固定 `cli_event_error` 及行号，继续拒绝原有不安全事件，不放宽本机执行或上游声明校验。本机 CLI `2.1.322` 的 8 轮契约及三条链路各 12 段工具测试通过；此次生产拒绝的具体分支及根因仍需新日志确认，尚未修复或验收。
+- **工具隔离拒绝诊断（2026-11-11）**：生产 16:28–16:29（台北）连续 400 已关联到 Agent `unsafe_tools`；旧日志不能区分初始化本机工具、上游未声明工具与缺失 ID。现新增这三类固定 `cli_event_error` 及行号，继续拒绝原有不安全事件，不放宽本机执行或上游声明校验。本机 CLI `2.1.322` 的 8 轮契约及三条链路各 12 段工具测试通过。诊断已在真实 Agent 主机上原生测试、构建并部署；原报错客户端重试后于 17:07:33 收到 `end_turn`，该进程观测窗口内共完成 28 轮、无新失败（包含其他会话）。此次拒绝未复现，具体分支及根因仍未确认，不视为根因修复，见[验证记录](../../docs/acceptance/claude-unsafe-tools-2026-11-11/README.md)。
 
 - **未带 safeguards 的原生直通（2026-11-05）**：Claude 运行时声明 `anthropic_messages_native`，Gateway 据此把未带 `safeguards` 的 `/v1/messages` 原样、无状态地交给 Agent（隧道 `MessagesRequest.native`），adaptive 思考、缓存标记、`context_management`、延迟工具、对话中途 system 与上游工具 ID 不再被改写；Office/视频/文本文件附件在发送前转换为原生内容块。旧版 Agent、桥接工具调用的续接及 Chat/Responses 仍走兼容桥接；运行时能力覆盖可关闭该能力，但目前没有下发入口，回退需保留旧版 Agent。默认测试覆盖双 Gateway mTLS JSON/SSE、跨副本无状态续接、混合版本回退与附件转换；真实 CLI 与上游尚未验收。须先升级 Agent，再升级 Gateway，见 [原生直通](claudecode/README.md#未带-safeguards-的原生直通)。
 - **验收**：兼容桥接路径下，原版 Claude Code 客户端工具流程只验收过 `claude-sonnet-4-6`；Chat 兼容层验证过 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。其他模型能被目录发现，不代表客户端兼容性已验证。

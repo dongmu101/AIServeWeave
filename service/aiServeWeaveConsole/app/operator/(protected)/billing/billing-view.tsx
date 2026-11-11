@@ -119,6 +119,19 @@ function FilteredHistory({ kind }: { kind: "orders" | "ledger" }) {
   </div>;
 }
 
+/** PackagesUnavailable explains a missing package list: billing off, or on
+ * without Dodo (Alipay only), told apart by whether model prices answer.
+ *
+ * PackagesUnavailable 解释充值包列表为何缺席：计费关闭，或已开启但未配置 Dodo（只有支付宝），
+ * 以模型单价是否可读来区分。 */
+function PackagesUnavailable() {
+  const { t } = useI18n();
+  const prices = useResource<ModelPrice[]>({ method: "GET", surface: "operator", path: "/operator/v1/billing/model-prices", parse: parseModelPrices });
+  if (prices.loading) return <LoadingState label={t("operator.loading")} rows={2} />;
+  if (prices.errorKind === "not_found" || prices.error) return <BillingDisabled />;
+  return <EmptyState title={t("operator.billingNeedsDodo")} description={t("operator.billingNeedsDodoDescription")} />;
+}
+
 /** PackagesSection lists every package, listed or not, and edits them.
  *
  * PackagesSection 列出全部充值包（无论是否上架）并编辑它们。 */
@@ -129,7 +142,10 @@ function PackagesSection() {
   const nonce = React.useRef(0);
   const open = (editing: CreditPackage | null) => { nonce.current += 1; setDialog({ editing, nonce: nonce.current }); };
 
-  if (packages.errorKind === "not_found") return <BillingDisabled />;
+  // Packages exist only with Dodo. Model prices answering means billing is
+  // on with Alipay alone, which deserves its own explanation.
+  // 充值包只在配置 Dodo 时存在。模型单价能读到说明计费已开启且只有支付宝，需单独说明。
+  if (packages.errorKind === "not_found") return <PackagesUnavailable />;
   return <Card>
     <CardHeader className="flex flex-wrap items-center justify-between gap-3">
       <CardTitle><Message id="tenant.billingPackages" /></CardTitle>

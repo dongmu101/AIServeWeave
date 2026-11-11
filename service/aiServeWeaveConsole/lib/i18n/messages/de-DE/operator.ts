@@ -594,6 +594,8 @@ const operator = {
   "operator.presaleRefundTitle": "Vollständige Erstattung",
   "operator.presaleRefundDescription": "Erstattet dem Mandanten {tenant} die noch nicht erstatteten {amount} der Bestellung {order}. Dodo bearbeitet die Erstattung; solange sie läuft, kann kein Konto zugewiesen werden.",
   "operator.presaleRefundReason": "Erstattungsgrund (erforderlich, höchstens 500 Zeichen)",
-  "operator.presaleRefundSubmitted": "Erstattung übermittelt, Bearbeitung durch Dodo ausstehend. Nach vollständiger Erstattung verschwindet die Bestellung aus dieser Liste."
+  "operator.presaleRefundSubmitted": "Erstattung übermittelt, Bearbeitung durch Dodo ausstehend. Nach vollständiger Erstattung verschwindet die Bestellung aus dieser Liste.",
+  "operator.billingNeedsDodo": "Dodo ist nicht konfiguriert",
+  "operator.billingNeedsDodoDescription": "Guthabenpakete werden über den Dodo-Checkout verkauft. Diese Bereitstellung bietet nur Alipay (一人付): Mandanten erhalten Guthaben, indem sie Alipay-Kontingent umwandeln. Modellpreise, Mandanten und das Kontobuch werden weiterhin in den anderen Reitern verwaltet."
 } as const;
 export default operator;

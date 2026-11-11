@@ -108,7 +108,7 @@ func (s *Service) SaveAccountPresale(ctx context.Context, actor Actor, in model.
 // 可以购买。付款只把订单标为已付款并等待；一个月自运维分配账号时起算。expectedMinor
 // 与 currency 必须与标价一致；名额已满与改价一样视为冲突。
 func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presaleID string, expectedMinor int64, currency string) (CheckoutResult, error) {
-	if !s.billingEnabled() {
+	if !s.dodoEnabled() {
 		return CheckoutResult{}, ErrNotFound
 	}
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {

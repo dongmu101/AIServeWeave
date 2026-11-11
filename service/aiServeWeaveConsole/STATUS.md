@@ -22,7 +22,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 使用文档 | 已重写 | README 记录调用链路、环境变量、门禁与部署前置条件 |
 | 业务页面（用户/Key/审计/配额） | M2、M3 已就位 | `app/console/users`、`keys`、`audit`、`quota`，均对接真实 Admin API；三张列表为服务端游标分页与筛选 |
 | 运维页面（节点/模型/发布状态） | M4、M5 已就位 | `app/console/fleet`、`models`，以及 `workflows` 的运维区块；只读，只在配置了运维模式的部署中存在，且只对名单内的人存在 |
-| 预充值计费 | 已接入 | 租户 `app/console/billing`、运维 `app/operator/(protected)/billing`，经白名单调用控制面计费 API；Console 不持有 Dodo 凭据，见下文「预充值计费 Console 接入」 |
+| 预充值计费 | 已接入 | 租户 `app/console/billing`、运维 `app/operator/(protected)/billing`，经白名单调用控制面计费 API；Console 不持有 Dodo 或一人付凭据，见下文「预充值计费 Console 接入」与「支付宝（一人付）兑换」 |
 | 工作流与运行（租户） | M5 已就位 | `app/console/workflows`（菜单，不含图）、`app/console/jobs`（实时视图）、`app/console/jobs/history`（持久化历史与详情），取消和产物访问经服务端 Gateway 入口 |
 
 实现时遵守 [Console 开发约定](AGENTS.md) 与 [仓库开发约定](../../AGENTS.md)。技术栈沿用现有选型；动 Next.js 代码前先读本地 `node_modules/next/dist/docs/`，不在本规划中引入依赖升级。
@@ -418,6 +418,14 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 | 测试 | `lib/console/billing.test.ts`（解析、拒绝、单位换算、范围校验、草稿构造、回跳识别、轮询上界/提前停止/失败计次/取消）；白名单与权限测试补充计费用例；e2e `console.spec.ts` 页面矩阵加入两个页面，`e2e/billing.spec.ts` 覆盖自定义金额换算与请求体、固定包不带金额、`503` 固定文案、回跳轮询等待服务端确认、`404` 空状态、`402` 提示，以及运维新建 JPY 充值包/设置单价/调整余额的线上整数 |
 
 不变量：页面从不根据回跳 URL 的 `status` 判定到账；轮询每 3 秒一次、最多 10 次，订单离开 `pending` 即停止；结账、门户、单价、模式切换与余额调整都只发送一次，不自动重试。
+
+## 支付宝（一人付）兑换（2026-11-11）
+
+租户计费页新增「支付宝」分区（`components/console/alipay-billing.tsx`），只在 `GET /admin/v1/billing` 的 `payment_methods.alipay` 为真时出现；`payment_methods.dodo` 为假时隐藏充值包、订单、预售与客户门户（旧控制面不发该字段时按只有 Dodo 处理）。分区展示控制面读到的支付宝剩余额度、兑换比例、套餐（价格以支付宝字符串原样展示）、兑换表单、待确认兑换与兑换记录。契约在 `lib/console/alipay.ts`，白名单新增租户 5 条（`/admin/v1/billing/alipay`、`/purchases`、`/redemptions` 的 GET/POST、`/redemptions/:id/refresh`，均不透传身份参数）。运维计费页在只配支付宝时把「充值包」分区显示为「未配置 Dodo」而非「计费未开启」。账目类型新增 `alipay_topup`。
+
+不变量：浏览器从不持有一人付 Key，也不传用户、价格或点数，请求体只有 `action_id`、`sku_id`、`amount`。购买与兑换只发送一次，不自动重试；答复丢失（网络、超时、5xx）后再次点击沿用同一 `action_id`，控制面恢复原请求，确定答复后才换新编号。购买入口只做 https 校验后跳转；带 `alipay_return` 回跳时只有限次数重新读取额度，从不据此判定到账。兑换后先读到新概览再替换旧数据，结果提示保留在重新加载的区块之外。
+
+验证：Node 单元测试 347 项、lint、TS7 类型检查与生产构建通过；本机 Chrome 计费专项 17 项通过（新增「丢失答复后同一 action id 重试成功并跳转支付宝入口」）。真实一人付与支付宝联调未进行。
 
 
 ## Agent 接入下载
