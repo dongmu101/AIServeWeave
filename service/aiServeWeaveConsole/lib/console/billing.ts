@@ -80,7 +80,7 @@ export const PACKAGE_KINDS: readonly PackageKind[] = ["fixed", "custom"];
  * offered as the ledger filter.
  *
  * LEDGER_KINDS 是控制面写入的词汇表（model.LedgerKind*），用作账目筛选项。 */
-export const LEDGER_KINDS = ["grant", "topup", "usage", "refund", "dispute", "dispute_reversal", "adjust", "account_purchase"] as const;
+export const LEDGER_KINDS = ["grant", "topup", "usage", "refund", "dispute", "dispute_reversal", "adjust", "account_purchase", "alipay_topup"] as const;
 
 /** ORDER_STATUSES is the vocabulary the control plane writes
  * (model.OrderStatus*), offered as the order filter.
@@ -120,6 +120,17 @@ export interface BillingOverview {
   blocked: boolean;
   hasCustomer: boolean;
   packages: CreditPackage[];
+  paymentMethods: PaymentMethods;
+}
+
+/** PaymentMethods mirrors types.PaymentMethods: Dodo sells credit packages
+ * and fiat checkouts, Alipay (一人付) redeems Alipay quota into credits.
+ *
+ * PaymentMethods 镜像 types.PaymentMethods：Dodo 出售充值包与法币结账，Alipay（一人付）
+ * 把支付宝额度兑换为点数。 */
+export interface PaymentMethods {
+  dodo: boolean;
+  alipay: boolean;
 }
 
 /** CheckoutResult mirrors types.CheckoutResponse.
@@ -203,14 +214,14 @@ function fail(): never {
   throw new ApiError("contract");
 }
 
-function record(value: unknown): Record<string, unknown> {
+export function record(value: unknown): Record<string, unknown> {
   if (typeof value !== "object" || value === null || Array.isArray(value)) {
     fail();
   }
   return value as Record<string, unknown>;
 }
 
-function required(source: Record<string, unknown>, key: string): string {
+export function required(source: Record<string, unknown>, key: string): string {
   const value = source[key];
   if (typeof value !== "string" || value === "") {
     fail();
@@ -221,7 +232,7 @@ function required(source: Record<string, unknown>, key: string): string {
 /** text reads a string that is always present but may be empty.
  *
  * text 读取一个总会出现、但可能为空的字符串。 */
-function text(source: Record<string, unknown>, key: string): string {
+export function text(source: Record<string, unknown>, key: string): string {
   const value = source[key];
   if (typeof value !== "string") {
     fail();
@@ -243,7 +254,7 @@ function optionalText(source: Record<string, unknown>, key: string): string {
   return value;
 }
 
-function timestamp(source: Record<string, unknown>, key: string): string {
+export function timestamp(source: Record<string, unknown>, key: string): string {
   const value = required(source, key);
   if (Number.isNaN(Date.parse(value))) {
     fail();
@@ -255,7 +266,7 @@ function timestamp(source: Record<string, unknown>, key: string): string {
  * amount is negative for a deduction.
  *
  * integer 读取一个必填的安全整数，可以为负：扣减的账目金额就是负数。 */
-function integer(source: Record<string, unknown>, key: string): number {
+export function integer(source: Record<string, unknown>, key: string): number {
   const value = source[key];
   if (typeof value !== "number" || !Number.isSafeInteger(value)) {
     fail();
@@ -278,7 +289,7 @@ function optionalCount(source: Record<string, unknown>, key: string): number {
   return value;
 }
 
-function count(source: Record<string, unknown>, key: string): number {
+export function count(source: Record<string, unknown>, key: string): number {
   const value = integer(source, key);
   if (value < 0) {
     fail();
@@ -286,7 +297,7 @@ function count(source: Record<string, unknown>, key: string): number {
   return value;
 }
 
-function boolean(source: Record<string, unknown>, key: string): boolean {
+export function boolean(source: Record<string, unknown>, key: string): boolean {
   const value = source[key];
   if (typeof value !== "boolean") {
     fail();
@@ -306,7 +317,7 @@ function mode(source: Record<string, unknown>, key: string): BillingMode {
  * encodes as null.
  *
  * list 读取一个数组字段；缺席或 null 视为空，因为 Go 的 nil 切片会编码成 null。 */
-function list<T>(value: unknown, parse: (item: unknown) => T): T[] {
+export function list<T>(value: unknown, parse: (item: unknown) => T): T[] {
   if (value === undefined || value === null) {
     return [];
   }
@@ -321,7 +332,7 @@ function list<T>(value: unknown, parse: (item: unknown) => T): T[] {
  *
  * page 读取一个 `{items, next_cursor}` 信封。游标缺席或为空表示末页，与 contract.ts
  * 的 parsePage 一致。 */
-function page<T>(value: unknown, parse: (item: unknown) => T): Page<T> {
+export function page<T>(value: unknown, parse: (item: unknown) => T): Page<T> {
   const source = record(value);
   const cursor = source.next_cursor;
   if (cursor !== undefined && cursor !== null && typeof cursor !== "string") {
@@ -340,7 +351,7 @@ function page<T>(value: unknown, parse: (item: unknown) => T): Page<T> {
  *
  * httpsLink 读取一个页面将跳转过去的链接。除绝对 https URL 外一律视为契约违例：
  * 跳转到一个被攻破的上游交回的 `javascript:` 或相对地址，会在本源中执行。 */
-function httpsLink(source: Record<string, unknown>, key: string): string {
+export function httpsLink(source: Record<string, unknown>, key: string): string {
   const value = required(source, key);
   let parsed: URL;
   try {
@@ -458,7 +469,21 @@ export function parseBillingOverview(value: unknown): BillingOverview {
     blocked: boolean(source, "blocked"),
     hasCustomer: boolean(source, "has_customer"),
     packages: list(source.packages, parseCreditPackage),
+    paymentMethods: parsePaymentMethods(source.payment_methods),
   };
+}
+
+/** parsePaymentMethods reads types.PaymentMethods. A control plane from
+ * before Alipay sends none and offers Dodo alone.
+ *
+ * parsePaymentMethods 读取 types.PaymentMethods。早于支付宝的控制面不发送该字段，
+ * 此时只提供 Dodo。 */
+function parsePaymentMethods(value: unknown): PaymentMethods {
+  if (value === undefined) {
+    return { dodo: true, alipay: false };
+  }
+  const source = record(value);
+  return { dodo: boolean(source, "dodo"), alipay: boolean(source, "alipay") };
 }
 
 /** parseCheckout validates POST /admin/v1/billing/checkout.

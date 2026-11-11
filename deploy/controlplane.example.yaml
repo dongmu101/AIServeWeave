@@ -229,6 +229,21 @@ TenantNodes:
 # the Dodo dashboard's webhook at <public control plane URL>/billing/v1/dodo/webhook,
 # then uncomment. ReturnURL is the Console billing page a payment returns to.
 # See ControlPlane STATUS, "计费与充值".
+#
+# 支付宝（一人付 opcpay）：可与 Dodo 并存，也可单独开启（此时 Dodo 整段可省略，充值包、
+# 结账、门户与退款随之关闭）。先在 https://ai6666.com/opcpay/ 创建项目、扫码完成支付宝
+# 次数或积分套餐配置并申请 API Key，填进 deploy/.env 的 opcpay_api_key（只从环境变量读取，
+# 不写进本文件）。CreditsPerUnitMicro 是每 1 次/1 积分兑换的点数（1 点 = 1000000）；
+# ReturnURL 须为 HTTPS，主机与端口要与一人付项目登记的网址一致，带 alipay_return 参数让
+# Console 回跳后短暂刷新额度。只支持次数/积分（QUANTITY）套餐，买断与时长套餐不提供兑换。
+#
+# Alipay (一人付 opcpay): runs beside Dodo or alone (then the Dodo block may be
+# left out, and packages, checkout, the portal and refunds are off). Create the
+# project at https://ai6666.com/opcpay/, configure a count or point package in
+# Alipay, request an API key and put it in deploy/.env as opcpay_api_key — it is
+# read from the environment only, never from this file. CreditsPerUnitMicro is
+# the micro-credits one count or point redeems into; ReturnURL must be HTTPS on
+# the host registered as the project's website.
 # Billing:
 #   Enabled: true
 #   Dodo:
@@ -237,4 +252,8 @@ TenantNodes:
 #     Environment: test
 #   ReturnURL: https://console.example.com/console/billing
 #   SignupGrantCredits: 0
+#   Alipay:
+#     Enabled: true
+#     CreditsPerUnitMicro: 1000000
+#     ReturnURL: https://console.example.com/console/billing?tab=alipay&alipay_return=1
 

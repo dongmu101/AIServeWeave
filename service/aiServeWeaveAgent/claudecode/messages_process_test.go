@@ -56,6 +56,36 @@ func TestBridgeEventsFailureLocation(t *testing.T) {
 	}
 }
 
+func TestUnsafeToolFailureLocation(t *testing.T) {
+	for _, tc := range []struct {
+		name, reason string
+		wire         string
+		line         float64
+	}{
+		{"local registration", "unexpected_local_tool", "{\"type\":\"system\",\"subtype\":\"init\",\"tools\":[\"private-payload\"]}\n", 1},
+		{"undeclared upstream tool", "undeclared_upstream_tool", "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"private-payload\",\"id\":\"fixture\",\"input\":{}}}}\n", 2},
+		{"missing upstream id", "missing_upstream_tool_id", "{\"type\":\"stream_event\",\"event\":{\"type\":\"message_start\"}}\n{\"type\":\"stream_event\",\"event\":{\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"name\":\"read_file\",\"input\":{}}}}\n", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s := &messagesSession{ctx: context.Background(), request: guardedRequest(), events: make(chan bridgeEvent, 4)}
+			_, cause := bridgeEvents(strings.NewReader(tc.wire), s)
+			if !errors.Is(cause, errUnsafeTools) {
+				t.Fatalf("tool isolation was bypassed: %v", cause)
+			}
+			var logs bytes.Buffer
+			r := &Runtime{cfg: runtime.Config{ID: "fixture"}, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+			public := r.roundError(cause)
+			var record map[string]any
+			if json.Unmarshal(logs.Bytes(), &record) != nil || record["reason"] != "unsafe_tools" || record["cli_event_error"] != tc.reason || record["cli_event_line"] != tc.line {
+				t.Fatalf("unsafe tool location missing: %s", &logs)
+			}
+			if strings.Contains(logs.String()+public.Error()+cause.Error(), "private-payload") {
+				t.Fatal("tool payload reached diagnostics")
+			}
+		})
+	}
+}
+
 // TestBridgeEventsTrailingNotifications allows CLI lifecycle notices after a successful result.
 // TestBridgeEventsTrailingNotifications 允许成功结果之后的 CLI 生命周期通知。
 func TestBridgeEventsTrailingNotifications(t *testing.T) {

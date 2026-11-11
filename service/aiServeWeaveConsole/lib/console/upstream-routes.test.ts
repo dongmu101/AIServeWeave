@@ -489,6 +489,16 @@ test("tenant billing routes resolve only on the tenant surface and never forward
     { name: "a tenant cannot reject", method: "POST", path: "/admin/v1/billing/refund-requests/rr_1/reject", query: "", search: null },
     { name: "a tenant cannot mark failed", method: "POST", path: "/admin/v1/billing/refund-requests/rr_1/fail", query: "", search: null },
     { name: "no single refund request read", method: "GET", path: "/admin/v1/billing/refund-requests/rr_1", query: "", search: null },
+    { name: "alipay overview", method: "GET", path: "/admin/v1/billing/alipay", query: "user_id=other&tenant_id=other", search: "" },
+    { name: "alipay overview is read-only", method: "POST", path: "/admin/v1/billing/alipay", query: "", search: null },
+    { name: "alipay purchase", method: "POST", path: "/admin/v1/billing/alipay/purchases", query: "user_id=other", search: "" },
+    { name: "alipay purchases are not listed", method: "GET", path: "/admin/v1/billing/alipay/purchases", query: "", search: null },
+    { name: "alipay redeem", method: "POST", path: "/admin/v1/billing/alipay/redemptions", query: "amount=9", search: "" },
+    { name: "alipay redemptions", method: "GET", path: "/admin/v1/billing/alipay/redemptions", query: "limit=20&cursor=c&tenant_id=other&status=pending", search: "?limit=20&cursor=c" },
+    { name: "alipay refresh", method: "POST", path: "/admin/v1/billing/alipay/redemptions/apr_1/refresh", query: "", search: "" },
+    { name: "alipay refresh is not readable", method: "GET", path: "/admin/v1/billing/alipay/redemptions/apr_1/refresh", query: "", search: null },
+    { name: "traversal as redemption id", method: "POST", path: "/admin/v1/billing/alipay/redemptions/../refresh", query: "", search: null },
+    { name: "no direct consume", method: "POST", path: "/admin/v1/billing/alipay/consume", query: "", search: null },
   ];
   for (const item of cases) {
     assert.equal(resolve(item.method, item.path, item.query)?.search ?? null, item.search, item.name);

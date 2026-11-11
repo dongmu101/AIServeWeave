@@ -985,6 +985,7 @@ type APIDocs interface {
 type Store interface {
 	AccountSales
 	AccountPresales
+	AlipayBilling
 	Routes
 	WorkflowTemplates
 	Tenants

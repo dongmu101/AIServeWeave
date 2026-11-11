@@ -36,10 +36,18 @@ var ErrInvalidSignature = errors.New("logic: invalid webhook signature")
 // BillingConfig 是计费在 store 之外所需的一切：服务商、租户结账后返回的地址、自助注册
 // 的租户起步时拥有的点数，以及购买后多少天内租户可以申请退款（为零时关闭租户退款申请）。
 type BillingConfig struct {
+	// Provider is Dodo. Nil turns credit packages, checkouts, the customer
+	// portal, the webhook and refunds off.
+	//
+	// Provider 是 Dodo。为 nil 时关闭充值包、结账、客户门户、webhook 与退款。
 	Provider           billing.Provider
 	ReturnURL          string
 	SignupGrantCredits int64
 	RefundWindowDays   int
+	// Alipay is 一人付. Nil turns Alipay purchases and redemptions off.
+	//
+	// Alipay 是一人付。为 nil 时关闭支付宝购买与兑换。
+	Alipay *AlipayConfig
 }
 
 // WithBilling turns billing on. Without it the Service charges nothing,
@@ -50,8 +58,11 @@ type BillingConfig struct {
 // 方法在未设置 WithAccountSales 时都回答 ErrNotFound。
 func WithBilling(cfg BillingConfig) Option {
 	return func(s *Service) {
-		if cfg.Provider != nil {
+		if cfg.Provider != nil || cfg.Alipay != nil {
 			s.billing = &cfg
+			if cfg.Alipay != nil {
+				s.alipayCache = &alipayCache{}
+			}
 		}
 	}
 }
@@ -70,6 +81,11 @@ type BillingOverview struct {
 	//
 	// RefundWindowDays 是购买后租户可申请退款的天数；为零表示不可申请。
 	RefundWindowDays int
+	// Dodo and Alipay report which payment methods the deployment offers.
+	//
+	// Dodo 与 Alipay 报告部署提供了哪些付款方式。
+	Dodo   bool
+	Alipay bool
 }
 
 // CheckoutResult is an opened checkout: the order it created and where to
@@ -109,6 +125,12 @@ type TenantBillingView struct {
 
 func (s *Service) billingEnabled() bool { return s.billing != nil }
 
+// dodoEnabled reports whether Dodo checkouts, the portal, the webhook and
+// refunds are available.
+//
+// dodoEnabled 报告 Dodo 结账、门户、webhook 与退款是否可用。
+func (s *Service) dodoEnabled() bool { return s.billing != nil && s.billing.Provider != nil }
+
 func (a Actor) canPurchase() bool { return a.Role == model.RoleOwner || a.Role == model.RoleAdmin }
 
 // tenantBilling reads a tenant's billing row, treating a missing one as the
@@ -139,14 +161,19 @@ func (s *Service) BillingOverview(ctx context.Context, actor Actor) (BillingOver
 	if !s.billingEnabled() {
 		return BillingOverview{Mode: row.Mode, BalanceMicro: row.BalanceMicro, Packages: []model.CreditPackage{}}, nil
 	}
+	out := BillingOverview{
+		Mode: row.Mode, BalanceMicro: row.BalanceMicro, Blocked: row.Blocked(), Packages: []model.CreditPackage{},
+		Dodo: s.dodoEnabled(), Alipay: s.alipayEnabled(),
+	}
+	if !out.Dodo {
+		return out, nil
+	}
 	packages, err := s.store.ListCreditPackages(ctx, true)
 	if err != nil {
 		return BillingOverview{}, err
 	}
-	return BillingOverview{
-		Mode: row.Mode, BalanceMicro: row.BalanceMicro, Blocked: row.Blocked(),
-		HasCustomer: row.DodoCustomerID != "", Packages: packages, RefundWindowDays: s.billing.RefundWindowDays,
-	}, nil
+	out.HasCustomer, out.Packages, out.RefundWindowDays = row.DodoCustomerID != "", packages, s.billing.RefundWindowDays
+	return out, nil
 }
 
 // CreateCheckout opens a provider checkout for one package. Only an owner or
@@ -159,7 +186,7 @@ func (s *Service) BillingOverview(ctx context.Context, actor Actor) (BillingOver
 // 能管理 key 一致。点数此刻就按充值包的当前定义固定在订单上，之后的价格变更无法改变
 // 这次购买所发放的内容。amountMinor 是自定义充值包所选的金额，固定充值包必须为零。
 func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID string, amountMinor int64) (CheckoutResult, error) {
-	if !s.billingEnabled() {
+	if !s.dodoEnabled() {
 		return CheckoutResult{}, ErrNotFound
 	}
 	if !actor.canPurchase() {
@@ -258,7 +285,7 @@ func (s *Service) ensureCustomer(ctx context.Context, actor Actor) (string, erro
 // BillingPortalLink 返回服务商客户门户的链接，收据与支付方式都在那里。首次购买之前
 // 返回 ErrNotFound。
 func (s *Service) BillingPortalLink(ctx context.Context, actor Actor) (string, error) {
-	if !s.billingEnabled() {
+	if !s.dodoEnabled() {
 		return "", ErrNotFound
 	}
 	if !actor.canPurchase() {
@@ -321,7 +348,7 @@ func (s *Service) ListBillingOrders(ctx context.Context, actor Actor, query stor
 // store 故障。其他所有结果——包括本服务不认识的订单的付款——都是最终结果，webhook 会被
 // 确认。日志只带 id 与结果，从不带载荷。
 func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, headers http.Header) (store.BillingEventResult, error) {
-	if !s.billingEnabled() {
+	if !s.dodoEnabled() {
 		return store.BillingEventResult{}, ErrNotFound
 	}
 	event, err := s.billing.Provider.ParseWebhook(payload, headers)

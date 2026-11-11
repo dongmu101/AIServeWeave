@@ -597,6 +597,8 @@ const operator = {
   "operator.presaleRefundTitle": "Full refund",
   "operator.presaleRefundDescription": "Refund the {amount} not yet refunded on order {order} to tenant {tenant}. Dodo processes the refund; the order cannot be assigned while it is in progress.",
   "operator.presaleRefundReason": "Refund reason (required, up to 500 characters)",
-  "operator.presaleRefundSubmitted": "Refund submitted and awaiting Dodo. The order leaves this list once fully refunded."
+  "operator.presaleRefundSubmitted": "Refund submitted and awaiting Dodo. The order leaves this list once fully refunded.",
+  "operator.billingNeedsDodo": "Dodo is not configured",
+  "operator.billingNeedsDodoDescription": "Credit packages are sold through Dodo checkout. This deployment offers only Alipay (一人付): tenants get credits by redeeming Alipay quota. Model prices, tenants and the ledger are still managed in the other tabs."
 } as const;
 export default operator;

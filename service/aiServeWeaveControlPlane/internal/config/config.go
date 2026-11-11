@@ -437,7 +437,54 @@ type BillingConf struct {
 	// RefundWindowDays 是购买后租户可以就其未用点数申请退款的天数。为零时关闭租户退款
 	// 申请；无论如何，运维都可以随时退款。
 	RefundWindowDays int `json:",default=30"`
+	// Alipay sells credits through 一人付 (opcpay): tenants buy count or
+	// point packages in Alipay and redeem them into credits. It may run
+	// with or without Dodo; billing needs at least one of the two.
+	//
+	// Alipay 经一人付（opcpay）出售点数：租户在支付宝购买次数或积分套餐，再兑换为点数。
+	// 它可与 Dodo 并存，也可单独使用；计费至少需要两者之一。
+	Alipay AlipayConf `json:",optional"`
 }
+
+// DodoConfigured reports whether a Dodo account is configured. Without one,
+// credit packages, checkouts, the customer portal and refunds are off.
+//
+// DodoConfigured 报告是否配置了 Dodo 账户。未配置时，充值包、结账、客户门户与退款都关闭。
+func (b BillingConf) DodoConfigured() bool {
+	return b.Dodo.APIKey != "" || b.Dodo.WebhookSecret != ""
+}
+
+// AlipayConf configures 一人付. The API key is never part of the config
+// file: it is read from the opcpay_api_key environment variable at start.
+//
+// AlipayConf 配置一人付。API Key 永远不写进配置文件：启动时从环境变量 opcpay_api_key 读取。
+type AlipayConf struct {
+	Enabled bool `json:",default=false"`
+	// CreditsPerUnitMicro is how many micro-credits one Alipay unit (one
+	// count, or one point) redeems into; 1 credit = 1,000,000 micro.
+	//
+	// CreditsPerUnitMicro 是一个支付宝单位（一次或一积分）兑换的 micro 点数；1 点 =
+	// 1,000,000 micro。
+	CreditsPerUnitMicro int64 `json:",optional"`
+	// ReturnURL is where Alipay sends the buyer back: the Console billing
+	// page. It must be HTTPS on the host and port registered as the 一人付
+	// project's website. Empty sends no callback. It is not a payment
+	// notification.
+	//
+	// ReturnURL 是支付宝把购买者送回的地址，即 Console 计费页。必须是 HTTPS，且主机与端口
+	// 与一人付项目登记的网址一致。为空时不传回跳地址。它不是付款通知。
+	ReturnURL string `json:",optional"`
+	// BaseURL overrides the API base, for a test double. It must be HTTPS.
+	//
+	// BaseURL 覆盖接口基址，供测试替身使用，必须是 HTTPS。
+	BaseURL string `json:",optional"`
+}
+
+// MaxAlipayCreditsPerUnitMicro bounds the exchange rate: one million credits
+// per unit, far above any sensible package.
+//
+// MaxAlipayCreditsPerUnitMicro 限制兑换比例：每单位一百万点，远高于任何合理的套餐。
+const MaxAlipayCreditsPerUnitMicro = 1_000_000 * 1_000_000
 
 // DodoConf is one Dodo Payments account.
 //
@@ -1043,8 +1090,25 @@ func (c Config) Validate() error {
 // validate 校验一个已开启的计费配置块。key 前缀检查拦下一个否则要到第一次结账才会
 // 暴露的错误：把 test key 指向 live API，或者反过来。
 func (b BillingConf) validate() error {
+	if !b.DodoConfigured() && !b.Alipay.Enabled {
+		return errors.New("config: billing needs Billing.Dodo (APIKey and WebhookSecret) or Billing.Alipay.Enabled")
+	}
+	if b.Alipay.Enabled {
+		if err := b.Alipay.validate(); err != nil {
+			return err
+		}
+	}
+	if b.SignupGrantCredits < 0 || b.SignupGrantCredits > math.MaxInt64/1_000_000 {
+		return errors.New("config: Billing.SignupGrantCredits is out of range")
+	}
+	if b.RefundWindowDays < 0 || b.RefundWindowDays > 3650 {
+		return errors.New("config: Billing.RefundWindowDays must be between 0 and 3650")
+	}
+	if !b.DodoConfigured() {
+		return nil
+	}
 	if b.Dodo.APIKey == "" || b.Dodo.WebhookSecret == "" {
-		return errors.New("config: Billing.Dodo.APIKey and Billing.Dodo.WebhookSecret are required once billing is enabled")
+		return errors.New("config: Billing.Dodo.APIKey and Billing.Dodo.WebhookSecret are both required once Dodo is configured")
 	}
 	switch b.Dodo.Environment {
 	case "test", "live":
@@ -1058,13 +1122,27 @@ func (b BillingConf) validate() error {
 	}
 	parsed, err := url.Parse(b.ReturnURL)
 	if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" {
-		return errors.New("config: Billing.ReturnURL must be an absolute http(s) URL once billing is enabled")
+		return errors.New("config: Billing.ReturnURL must be an absolute http(s) URL once Dodo is configured")
 	}
-	if b.SignupGrantCredits < 0 || b.SignupGrantCredits > math.MaxInt64/1_000_000 {
-		return errors.New("config: Billing.SignupGrantCredits is out of range")
+	return nil
+}
+
+// validate checks an enabled Alipay block. The API key is checked at start,
+// where it is read from the environment.
+//
+// validate 校验一个已开启的 Alipay 配置块。API Key 在启动时从环境变量读取并检查。
+func (a AlipayConf) validate() error {
+	if a.CreditsPerUnitMicro <= 0 || a.CreditsPerUnitMicro > MaxAlipayCreditsPerUnitMicro {
+		return errors.New("config: Billing.Alipay.CreditsPerUnitMicro must be between 1 and 10^12")
 	}
-	if b.RefundWindowDays < 0 || b.RefundWindowDays > 3650 {
-		return errors.New("config: Billing.RefundWindowDays must be between 0 and 3650")
+	for name, raw := range map[string]string{"ReturnURL": a.ReturnURL, "BaseURL": a.BaseURL} {
+		if raw == "" {
+			continue
+		}
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || len(raw) > 512 {
+			return errors.New("config: Billing.Alipay." + name + " must be an absolute https URL of at most 512 bytes without credentials")
+		}
 	}
 	return nil
 }

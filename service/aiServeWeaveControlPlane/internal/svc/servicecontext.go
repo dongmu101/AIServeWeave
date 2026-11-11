@@ -17,6 +17,7 @@ import (
 	"errors"
 	"log"
 	"log/slog"
+	"os"
 	"sync"
 	"time"
 
@@ -31,6 +32,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/dodo"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/opcpay"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyeditor"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyuimanagedrouter"
@@ -220,6 +222,12 @@ type ServiceContext struct {
 	// RemoteProviders 时才启动。
 	nodeProvidersCancel context.CancelFunc
 	nodeProvidersDone   chan struct{}
+	// alipayCancel/alipayDone tear down the Alipay redemption recovery;
+	// nil unless Alipay billing is enabled.
+	//
+	// alipayCancel/alipayDone 关停支付宝兑换恢复循环；未开启支付宝计费时为 nil。
+	alipayCancel context.CancelFunc
+	alipayDone   chan struct{}
 
 	// RemoteProviderRouter is non-nil when RemoteProviders is configured; the
 	// node provider routes are mounted only then.
@@ -361,20 +369,35 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		logicOpts = append(logicOpts, logic.WithAccountSales())
 	}
 	if cfg.Billing.Enabled {
-		provider, err := dodo.New(dodo.Config{
-			APIKey:        cfg.Billing.Dodo.APIKey,
-			WebhookSecret: cfg.Billing.Dodo.WebhookSecret,
-			Environment:   cfg.Billing.Dodo.Environment,
-		})
-		if err != nil {
-			return nil, errors.Join(errors.New("configuring Dodo Payments billing"), err)
-		}
-		logicOpts = append(logicOpts, logic.WithBilling(logic.BillingConfig{
-			Provider:           provider,
+		billingCfg := logic.BillingConfig{
 			ReturnURL:          cfg.Billing.ReturnURL,
 			SignupGrantCredits: cfg.Billing.SignupGrantCredits,
 			RefundWindowDays:   cfg.Billing.RefundWindowDays,
-		}))
+		}
+		if cfg.Billing.DodoConfigured() {
+			provider, err := dodo.New(dodo.Config{
+				APIKey:        cfg.Billing.Dodo.APIKey,
+				WebhookSecret: cfg.Billing.Dodo.WebhookSecret,
+				Environment:   cfg.Billing.Dodo.Environment,
+			})
+			if err != nil {
+				return nil, errors.Join(errors.New("configuring Dodo Payments billing"), err)
+			}
+			billingCfg.Provider = provider
+		}
+		if cfg.Billing.Alipay.Enabled {
+			// The key lives only in the server environment, never in the
+			// config file, a log line or an error.
+			// Key 只存在于服务端环境变量，从不出现在配置文件、日志或错误中。
+			client, err := opcpay.New(os.Getenv(opcpay.APIKeyEnv), cfg.Billing.Alipay.BaseURL, nil)
+			if err != nil {
+				return nil, errors.Join(errors.New("configuring Alipay (一人付) billing"), err)
+			}
+			billingCfg.Alipay = &logic.AlipayConfig{
+				Client: client, CreditsPerUnitMicro: cfg.Billing.Alipay.CreditsPerUnitMicro, ReturnURL: cfg.Billing.Alipay.ReturnURL,
+			}
+		}
+		logicOpts = append(logicOpts, logic.WithBilling(billingCfg))
 	}
 
 	var remoteProviderRouter *remoteproviderrouter.Router
@@ -446,6 +469,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		go func() {
 			defer close(nodeProvidersDone)
 			svcLogic.RunNodeProviderReconciler(npCtx, cfg.RemoteProviders.ReconcileInterval)
+		}()
+	}
+
+	var alipayCancel context.CancelFunc
+	var alipayDone chan struct{}
+	if cfg.Billing.Enabled && cfg.Billing.Alipay.Enabled {
+		apCtx, apCancel := context.WithCancel(ctx)
+		alipayCancel, alipayDone = apCancel, make(chan struct{})
+		go func() {
+			defer close(alipayDone)
+			svcLogic.RunAlipayRecovery(apCtx, alipayRecoveryInterval)
 		}()
 	}
 
@@ -561,6 +595,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		alertEvaluatorDone:        aeDone,
 		nodeProvidersCancel:       nodeProvidersCancel,
 		nodeProvidersDone:         nodeProvidersDone,
+		alipayCancel:              alipayCancel,
+		alipayDone:                alipayDone,
 		RemoteProviderRouter:      remoteProviderRouter,
 		usageRetentionCancel:      urCancel,
 		usageRetentionDone:        urDone,
@@ -586,6 +622,12 @@ const metricsHistoryRetentionInterval = 24 * time.Hour
 // 每天一次，与 metricsHistoryRetentionInterval 相同的节奏，理由也相同：
 // 一个清理任务没有理由比一天一次更频繁地运行。
 const requestLogRetentionInterval = 24 * time.Hour
+
+// alipayRecoveryInterval is how often pending Alipay redemptions are resumed.
+// Each pass makes at most a few 一人付 calls, well under its rate limit.
+//
+// alipayRecoveryInterval 是恢复待确认支付宝兑换的间隔。每轮最多几次一人付调用，远低于其限流。
+const alipayRecoveryInterval = time.Minute
 
 // usageRecordRetentionInterval is how often the usage-record retention
 // cleanup goroutine runs — daily, the same cadence
@@ -726,6 +768,10 @@ func (s *ServiceContext) Close() error {
 	if s.alertEvaluatorCancel != nil {
 		s.alertEvaluatorCancel()
 		<-s.alertEvaluatorDone
+	}
+	if s.alipayCancel != nil {
+		s.alipayCancel()
+		<-s.alipayDone
 	}
 	if s.nodeProvidersCancel != nil {
 		s.nodeProvidersCancel()

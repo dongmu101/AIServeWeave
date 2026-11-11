@@ -375,3 +375,62 @@ test("operators create a presale and assign an awaiting order an account of the 
   await expect(page.getByText("没有待发货的订单", { exact: true })).toBeVisible();
   expect(assignWrites).toEqual([{ account_id: "acc_free" }]);
 });
+
+test("Alipay redeems with one action id across a lost answer and opens the purchase entry", async ({ page }) => {
+  const at = "2026-11-11T08:00:00Z";
+  const overview = {
+    capability_status: "ENABLED", product_name: "点数包", billing_mode: "QUANTITY", quota_unit: "POINT", supported: true, can_purchase: true, can_redeem: true,
+    plans: [{ sku_id: "sku_100", name: "100 积分", price: "9.90", currency: "CNY", quota_unit: "POINT", quota_amount: 100 }],
+    access: { total: 100, used: 40, remaining: 60 }, credits_per_unit_micro: 2_000_000, max_amount: 99_999_999, pending: null,
+  };
+  const entry = "https://openapi.alipay.example.invalid/entry";
+  const redeems: { action_id: string; amount: number }[] = [];
+  const purchases: unknown[] = [];
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, has_customer: false, packages: [], payment_methods: { dodo: false, alipay: true } } }));
+  await page.route("**/api/admin/admin/v1/billing/alipay", route => route.fulfill({ json: overview }));
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/alipay\/redemptions(\?|$)/, async route => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: { items: [], next_cursor: "" } });
+      return;
+    }
+    const body = route.request().postDataJSON();
+    redeems.push(body);
+    if (redeems.length === 1) {
+      await route.fulfill({ status: 503, json: { error: "opcpay: internal detail" } });
+      return;
+    }
+    await route.fulfill({ json: { id: "apr_1", action_id: body.action_id, amount: body.amount, quota_unit: "POINT", credits_micro: body.amount * 2_000_000, status: "succeeded", reason_code: "", created_at: at, updated_at: at } });
+  });
+  await page.route("**/api/admin/admin/v1/billing/alipay/purchases", async route => {
+    purchases.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { id: "apu_1", purchase_url: entry, expire_time: "" } });
+  });
+  await page.route(`${entry}**`, route => route.fulfill({ contentType: "text/html", body: "<title>alipay</title>" }));
+
+  await page.goto("/console/billing");
+  await expect(page.getByRole("tab", { name: "支付宝", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "充值包", exact: true })).toHaveCount(0);
+  await expect(page.getByText("60 积分", { exact: true })).toBeVisible();
+  const amount = page.getByLabel("兑换数量（积分）", { exact: true });
+  const redeem = page.getByRole("button", { name: "兑换为点数", exact: true });
+  await amount.fill("61");
+  await expect(page.getByText("支付宝额度不足，请先用支付宝购买套餐。", { exact: true })).toBeVisible();
+  await expect(redeem).toBeDisabled();
+  await amount.fill("5");
+  await expect(page.getByText("可获得 10 点", { exact: true })).toBeVisible();
+  await redeem.click();
+  await expect(page.locator("main").getByRole("alert")).toHaveText("支付服务暂时不可用，请稍后再试。");
+  await expect(page.locator("main")).not.toContainText("internal detail");
+  await expect(page.getByText(/上次请求结果未知/).first()).toBeVisible();
+  await redeem.click();
+  await expect(page.getByText("兑换成功，已记入 10 点。", { exact: true })).toBeVisible();
+  expect(redeems).toHaveLength(2);
+  expect(redeems[0]).toEqual(redeems[1]);
+  expect(Object.keys(redeems[0]).sort()).toEqual(["action_id", "amount"]);
+  await page.screenshot({ path: "test-results/alipay-billing.png", fullPage: true });
+
+  await page.getByRole("button", { name: "用支付宝购买", exact: true }).click();
+  await page.waitForURL(entry);
+  expect(purchases).toHaveLength(1);
+  expect(Object.keys(purchases[0] as object).sort()).toEqual(["action_id", "sku_id"]);
+});

@@ -591,6 +591,8 @@ const operator = {
   "operator.presaleRefundTitle": "전액 환불",
   "operator.presaleRefundDescription": "테넌트 {tenant}의 주문 {order}에서 아직 환불되지 않은 {amount}를 환불합니다. 환불은 Dodo가 처리하며, 진행 중에는 계정을 배정할 수 없습니다.",
   "operator.presaleRefundReason": "환불 사유(필수, 최대 500자)",
-  "operator.presaleRefundSubmitted": "환불을 제출했으며 Dodo 처리를 기다리고 있습니다. 전액 환불이 완료되면 주문이 이 목록에서 사라집니다."
+  "operator.presaleRefundSubmitted": "환불을 제출했으며 Dodo 처리를 기다리고 있습니다. 전액 환불이 완료되면 주문이 이 목록에서 사라집니다.",
+  "operator.billingNeedsDodo": "Dodo가 설정되지 않았습니다",
+  "operator.billingNeedsDodoDescription": "크레딧 패키지는 Dodo 결제로 판매됩니다. 이 배포는 알리페이(一人付)만 제공하며, 테넌트는 알리페이 한도를 교환해 크레딧을 얻습니다. 모델 단가, 테넌트, 원장은 다른 탭에서 계속 관리할 수 있습니다."
 } as const;
 export default operator;

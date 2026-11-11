@@ -28,10 +28,16 @@ func bridgeToolName(index int) string { return "tool_" + strconv.Itoa(index) }
 type cliEventError struct {
 	line   int
 	reason string
+	cause  error
 }
 
-func (e *cliEventError) Error() string { return errCLIProtocol.Error() }
-func (e *cliEventError) Unwrap() error { return errCLIProtocol }
+func (e *cliEventError) Error() string { return e.Unwrap().Error() }
+func (e *cliEventError) Unwrap() error {
+	if e.cause != nil {
+		return e.cause
+	}
+	return errCLIProtocol
+}
 
 var errTerminalStop = errors.New("CLI terminal response complete")
 
@@ -399,6 +405,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	stopped := "" // the matched stop sequence, once found / 命中的停止序列（命中后设置）
 	lineNumber := 0
 	protocolError := func(reason string) error { return &cliEventError{line: lineNumber, reason: reason} }
+	unsafeToolError := func(reason string) error {
+		return &cliEventError{line: lineNumber, reason: reason, cause: errUnsafeTools}
+	}
 	for scanner.Scan() {
 		lineNumber++
 		line := scanner.Bytes()
@@ -446,7 +455,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						}
 					}
 					if !ok {
-						return nil, errUnsafeTools
+						return nil, unsafeToolError("unexpected_local_tool")
 					}
 				}
 			}
@@ -521,8 +530,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 							found = true
 						}
 					}
-					if !found || current.ID == "" {
-						return nil, errUnsafeTools
+					if !found {
+						return nil, unsafeToolError("undeclared_upstream_tool")
+					}
+					if current.ID == "" {
+						return nil, unsafeToolError("missing_upstream_tool_id")
 					}
 					if seenIDs[current.ID] {
 						return nil, protocolError("duplicate_tool_id")

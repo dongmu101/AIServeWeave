@@ -54,3 +54,18 @@ func TestLivePresaleCheckouts(t *testing.T) {
 		storetest.PresaleCheckouts(t, st)
 	})
 }
+
+// Alipay redemptions share the account scenario's isolated databases.
+func TestLiveAlipayRedemptions(t *testing.T) {
+	migrationDatabases(t, func(t *testing.T, db *gorm.DB, _ string) {
+		ctx := context.Background()
+		st := gormstore.New(db)
+		if err := st.MigrateAll(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.CheckSchema(ctx); err != nil {
+			t.Fatal(err)
+		}
+		storetest.AlipayRedemptions(t, st)
+	})
+}

@@ -439,6 +439,12 @@ const (
 	ActionPresaleSave          = "billing.presale.save"
 	ActionPresaleCheckout      = "billing.presale.checkout"
 	ActionPresaleAssign        = "billing.presale.assign"
+	// Alipay (一人付) actions, recorded under the tenant: opening a purchase
+	// entry, and a redemption whose credits were booked.
+	//
+	// 支付宝（一人付）动作，记在租户之下：创建购买入口，以及点数已入账的兑换。
+	ActionAlipayPurchase = "billing.alipay.purchase"
+	ActionAlipayRedeem   = "billing.alipay.redeem"
 	// Refund actions. A tenant's request and cancellation are recorded under
 	// its tenant; an operator's approval, rejection, direct refund and
 	// marking a refund failed under PlatformScope. The target is the refund

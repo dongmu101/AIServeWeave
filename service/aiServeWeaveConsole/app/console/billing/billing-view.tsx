@@ -4,6 +4,7 @@ import * as React from "react";
 import { useSearchParams } from "next/navigation";
 import { AccountSales } from "@/components/console/account-sales";
 import { PresaleSales } from "@/components/console/account-presales";
+import { AlipayBilling } from "@/components/console/alipay-billing";
 
 import { BillingDisabled, LedgerTable, OrdersTable } from "@/components/console/billing-tables";
 import { ErrorMessage } from "@/components/i18n/error-message";
@@ -48,11 +49,12 @@ type ReturnState = "pending" | "settled" | "exhausted";
  * what has happened.
  *
  * BILLING_TABS 是页面的分区，依次为可购买的内容与已发生的记录。 */
-const BILLING_TABS = ["packages", "accounts", "presales", "orders", "ledger"] as const;
+const BILLING_TABS = ["packages", "alipay", "accounts", "presales", "orders", "ledger"] as const;
 type BillingTab = (typeof BILLING_TABS)[number];
 
 const TAB_KEYS: Record<BillingTab, MessageKey> = {
   packages: "tenant.billingPackages",
+  alipay: "tenant.billingAlipay",
   accounts: "tenant.accountMonthly",
   presales: "tenant.presale",
   orders: "tenant.billingOrders",
@@ -125,7 +127,7 @@ function paymentProblem(failure: unknown, notFound?: MessageKey): React.ReactNod
  * 读取概览与最近一笔订单，一旦服务端报告该订单不再处于待支付就停止；展示的余额始终
  * 是服务端的值。
  */
-export function BillingView({ role, returning }: { role: string; returning: boolean }) {
+export function BillingView({ role, returning, alipayReturning = false }: { role: string; returning: boolean; alipayReturning?: boolean }) {
   const { t } = useI18n();
   const run = useConsoleRequest();
   const overview = useResource<BillingOverview>({ method: "GET", path: "/admin/v1/billing", parse: parseBillingOverview });
@@ -176,8 +178,42 @@ export function BillingView({ role, returning }: { role: string; returning: bool
 
   const data = polled ?? overview.data;
   const canPurchase = canPurchaseCredits(role);
-  const offered = BILLING_TABS.filter((value) => value !== "presales" || (presales.data?.length ?? 0) > 0);
-  const [tab, setTab] = useBillingTab(returning ? "orders" : data?.mode === "account_monthly" ? "accounts" : "packages", offered);
+  const reloadOverview = overview.reload;
+  // A redemption moves the balance and writes the ledger; read both again.
+  // The overview is read into `polled` so the page keeps showing the old one
+  // meanwhile instead of unmounting the section that reported the outcome.
+  // 兑换会变动余额并写入账目；两者都重新读取。概览读入 `polled`，期间页面继续显示旧值，
+  // 而不是卸载报告结果的那个分区。
+  const onRedeemed = React.useCallback(() => {
+    setHistoryKey((value) => value + 1);
+    run({ method: "GET", path: "/admin/v1/billing", parse: parseBillingOverview })
+      .then(setPolled)
+      .catch(() => { setPolled(null); reloadOverview(); });
+  }, [run, reloadOverview]);
+  // Packages, orders and presales are bought through Dodo; the Alipay section
+  // exists only when the control plane offers it.
+  // 充值包、订单与预售经 Dodo 购买；支付宝分区只在控制面提供时出现。
+  const methods = data?.paymentMethods ?? { dodo: true, alipay: false };
+  const offered = BILLING_TABS.filter((value) => {
+    switch (value) {
+      case "packages":
+      case "orders":
+        return methods.dodo;
+      case "presales":
+        return methods.dodo && (presales.data?.length ?? 0) > 0;
+      case "alipay":
+        return methods.alipay;
+      default:
+        return true;
+    }
+  });
+  const fallback: BillingTab = returning && methods.dodo ? "orders"
+    : alipayReturning && methods.alipay ? "alipay"
+    : data?.mode === "account_monthly" ? "accounts"
+    : methods.dodo ? "packages"
+    : methods.alipay ? "alipay"
+    : "ledger";
+  const [tab, setTab] = useBillingTab(fallback, offered);
 
   return <div className="grid gap-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -197,6 +233,9 @@ export function BillingView({ role, returning }: { role: string; returning: bool
         <TabsContent value="packages" className="mt-2">
           <PackagesCard packages={data.packages} canPurchase={canPurchase} />
         </TabsContent>
+        {methods.alipay ? <TabsContent value="alipay" className="mt-2">
+          <AlipayBilling canPurchase={canPurchase} returning={alipayReturning} onRedeemed={onRedeemed} />
+        </TabsContent> : null}
         {/* Remounted with the history so a month confirmed after a payment
             return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
         <TabsContent value="accounts" className="mt-2">

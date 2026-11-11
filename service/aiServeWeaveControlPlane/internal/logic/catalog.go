@@ -32,7 +32,7 @@ type Catalog struct {
 // Catalog 返回上架的充值包、模型单价、当前可购买的包月账号以及上架的预售。它们都仅在
 // 开启支付计费时存在：一个月须经服务商结账购买，因此只开启账号包月时返回空列表。没有
 // 法币价格的账号与预售（旧版按点数定价的商品）不列出。调用方不得据此渲染服务商 id 或
-// 节点目标。
+// 节点目标。只配置支付宝时只返回模型单价。
 func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 	if !s.accountsEnabled() {
 		return Catalog{}, ErrNotFound
@@ -42,10 +42,15 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 		return out, nil
 	}
 	var err error
-	if out.Packages, err = s.store.ListCreditPackages(ctx, true); err != nil {
+	if out.Prices, err = s.store.ListModelPrices(ctx); err != nil {
 		return Catalog{}, translate(err)
 	}
-	if out.Prices, err = s.store.ListModelPrices(ctx); err != nil {
+	// Packages, accounts and presales are bought through a Dodo checkout.
+	// 充值包、账号与预售都经 Dodo 结账购买。
+	if !s.dodoEnabled() {
+		return out, nil
+	}
+	if out.Packages, err = s.store.ListCreditPackages(ctx, true); err != nil {
 		return Catalog{}, translate(err)
 	}
 	rows, err := s.store.ListAccountSales(ctx)

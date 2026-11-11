@@ -179,6 +179,8 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
 
+2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（上游返回未声明的工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。这是诊断增强：原有工具隔离、声明校验、公开错误分类和重试行为不变。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
+
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 
 Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude Messages round started` 和 `Claude Messages round finished`，共同携带本地随机 `round_id`、`runtime_id` 与 `message_path`。`native_safeguards` 表示本轮进入带安全上下文的原生路径，`native` 表示未带 `safeguards` 的原生直通，`mcp_bridge` 表示兼容桥接。结束日志包含 `outcome`（`completed` / `failed` / `canceled`）与 `safeguard_status`：`available`、`unsupported`、`unavailable`、`missing`（未收到对应结果）、`unknown`（未来状态）、`invalid`（结果形状异常）、`mixed`（同轮出现不同状态）；`native` 与 `mcp_bridge` 为 `not_requested`。只观察已投递结果，不改写判定或将 `available` 等同于工具已获准；不记录提示词、历史、工具参数、工具 ID、判定原因或凭据。客户端设为 `1` 后应结合这两个字段检查实际路径及上游支持状态。新增日志需更新并重启 Agent，Gateway 无需修改。

@@ -55,6 +55,9 @@ test("billing responses parse in the shapes the control plane sends", () => {
   assert.equal(overview.packages[1]?.creditsMicro, 0, "omitted custom fields read as zero");
   assert.equal(overview.packages[1]?.creditsPerMinorUnitMicro, 10_000);
   assert.deepEqual(parseBillingOverview({ mode: "exempt", balance_micro: 0, blocked: false, has_customer: true, packages: null }).packages, []);
+  assert.deepEqual(overview.paymentMethods, { dodo: true, alipay: false }, "a control plane from before Alipay offers Dodo alone");
+  assert.deepEqual(parseBillingOverview({ mode: "prepaid", balance_micro: 0, blocked: false, has_customer: false, packages: [], payment_methods: { dodo: false, alipay: true } }).paymentMethods, { dodo: false, alipay: true });
+  assert.throws(() => parseBillingOverview({ mode: "prepaid", balance_micro: 0, blocked: false, has_customer: false, packages: [], payment_methods: { dodo: "yes" } }), ApiError);
 
   assert.equal(parseCreditPackages({ items: [{ ...fixedWire, dodo_product_id: "pdt_1" }] })[0]?.dodoProductId, "pdt_1");
   assert.deepEqual(parseCreditPackages({ items: [] }), []);
