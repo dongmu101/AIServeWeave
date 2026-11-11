@@ -298,13 +298,23 @@ func (c *Client) Purchase(ctx context.Context, req billing.AlipayPurchaseRequest
 	var out struct {
 		Status      string `json:"status"`
 		PurchaseURL string `json:"purchase_url"`
+		QRCodeURL   string `json:"purchase_qr_code"`
 		ExpireTime  string `json:"expire_time"`
 		ReasonCode  string `json:"reason_code"`
 	}
 	if err := c.call(ctx, http.MethodPost, "/purchase", body, &out); err != nil {
 		return billing.AlipayPurchase{}, err
 	}
-	return billing.AlipayPurchase{Status: out.Status, URL: out.PurchaseURL, ExpireTime: out.ExpireTime, ReasonCode: out.ReasonCode}, nil
+	// purchase_url is an alipays:// app link, which a browser cannot open;
+	// purchase_qr_code is the https page that works there.
+	//
+	// purchase_url 是 alipays:// 的 App 唤起链接，浏览器打不开；purchase_qr_code 是
+	// 浏览器可用的 https 页面。
+	link := out.PurchaseURL
+	if !strings.HasPrefix(link, "https://") && strings.HasPrefix(out.QRCodeURL, "https://") {
+		link = out.QRCodeURL
+	}
+	return billing.AlipayPurchase{Status: out.Status, URL: link, ExpireTime: out.ExpireTime, ReasonCode: out.ReasonCode}, nil
 }
 
 type wireConsumption struct {

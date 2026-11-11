@@ -101,6 +101,23 @@ func TestConsumeSendsTheExactRequest(t *testing.T) {
 	}
 }
 
+func TestPurchasePrefersAnHTTPSEntry(t *testing.T) {
+	const appLink = "alipays://platformapi/startapp?appId=1"
+	const webLink = "https://mobilecodec.alipay.com/show.htm?code=abc"
+	cases := []struct{ name, body, want string }{
+		{"app link falls back to the QR page", `{"status":"READY","purchase_url":"` + appLink + `","purchase_qr_code":"` + webLink + `"}`, webLink},
+		{"https purchase_url is kept", `{"status":"READY","purchase_url":"https://pay.example/x","purchase_qr_code":"` + webLink + `"}`, "https://pay.example/x"},
+		{"no https entry stays unusable", `{"status":"READY","purchase_url":"` + appLink + `"}`, appLink},
+	}
+	for _, c := range cases {
+		client := newServer(t, func(w http.ResponseWriter, _ string, _ map[string]any) { _, _ = io.WriteString(w, c.body) })
+		got, err := client.Purchase(context.Background(), billing.AlipayPurchaseRequest{UserID: "u", IdempotencyKey: "k"})
+		if err != nil || got.Status != billing.AlipayPurchaseReady || got.URL != c.want {
+			t.Errorf("%s: %+v %v", c.name, got, err)
+		}
+	}
+}
+
 func TestErrorsCarryTheCodeButNeverTheKeyOrMessage(t *testing.T) {
 	client := newServer(t, func(w http.ResponseWriter, path string, _ map[string]any) {
 		switch path {
