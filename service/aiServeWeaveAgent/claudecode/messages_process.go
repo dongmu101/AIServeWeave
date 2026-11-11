@@ -41,6 +41,18 @@ func (e *cliEventError) Unwrap() error {
 
 var errTerminalStop = errors.New("CLI terminal response complete")
 
+// cliNotification identifies lifecycle metadata, never provider response events.
+// cliNotification 识别 CLI 生命周期元数据，不包含提供方的回复事件。
+func cliNotification(kind, subtype string) bool {
+	switch kind {
+	case "auth_status", "tool_progress", "tool_use_summary", "prompt_suggestion":
+		return true
+	case "system":
+		return subtype != "" && subtype != "init"
+	}
+	return false
+}
+
 // cliLineReader counts physical newlines even when Scanner cannot return the failed line.
 // cliLineReader 在 Scanner 无法返回失败行时仍能按实际读入的换行符定位。
 type cliLineReader struct {
@@ -216,6 +228,11 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 				args[i+1] = settingsPath
 			}
 		}
+	}
+	if native {
+		// Caller tools belong to the API document, never the Agent's local registry.
+		// 调用方工具属于 API 文档，不能进入 Agent 的本地执行注册表。
+		args = append(args, "--disallowedTools", "*")
 	}
 	if !native && s.request.OutputConfig != nil {
 		args = append(args, "--effort", s.request.OutputConfig.Effort)
@@ -436,12 +453,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		if json.Unmarshal(line, &envelope) != nil {
 			return nil, protocolError("invalid_json")
 		}
+		// Notifications may surround the result. They must not enter inference
+		// output or invalidate an already successful result. Quota events before
+		// the result still participate in rejection classification below.
+		// 通知可出现在结果之前或之后，不进入推理回复，也不推翻成功结果；结果前的额度
+		// 事件仍参与下方拒绝分类。
+		if cliNotification(envelope.Type, envelope.Subtype) || (finished && envelope.Type == "rate_limit_event") {
+			continue
+		}
 		if finished {
-			// The CLI may append lifecycle notices or a prompt suggestion after its result.
-			// CLI 可能在结果之后追加生命周期通知或下一步提示；它们不属于模型回复。
-			if envelope.Type == "prompt_suggestion" || (envelope.Type == "system" && envelope.Subtype != "" && envelope.Subtype != "init") {
-				continue
-			}
 			return nil, protocolError("unexpected_trailing_event")
 		}
 		switch envelope.Type {
@@ -463,7 +483,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			if native && envelope.Error != "" {
 				rejection = messagesAPIRejection(line, s.request)
 			}
-		case "user", "tool_progress", "tool_use_summary":
+		case "user":
 		case "rate_limit_event":
 			if envelope.RateLimitInfo.Status == "rejected" {
 				quota = &quotaError{}

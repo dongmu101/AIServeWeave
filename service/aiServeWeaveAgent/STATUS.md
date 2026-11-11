@@ -45,6 +45,8 @@
 
 - **工具隔离拒绝诊断（2026-11-11）**：生产 16:28–16:29（台北）连续 400 已关联到 Agent `unsafe_tools`；旧日志不能区分初始化本机工具、上游未声明工具与缺失 ID。现新增这三类固定 `cli_event_error` 及行号，继续拒绝原有不安全事件，不放宽本机执行或上游声明校验。本机 CLI `2.1.322` 的 8 轮契约及三条链路各 12 段工具测试通过。诊断已在真实 Agent 主机上原生测试、构建并部署；原报错客户端重试后于 17:07:33 收到 `end_turn`，该进程观测窗口内共完成 28 轮、无新失败（包含其他会话）。此次拒绝未复现，具体分支及根因仍未确认，不视为根因修复，见[验证记录](../../docs/acceptance/claude-unsafe-tools-2026-11-11/README.md)。
 
+- **CLI 契约加固（2026-11-11）**：依据官方 CLI/SDK 文档，原生进程增加 `--disallowedTools "*"`，与空内建工具、严格空 MCP 和受限模式共同隔离；调用方工具定义保持原样，兼容桥接仍只开放自己的 MCP。合法认证/工具进度通知及成功结果后的额度通知不再误判；语义重置、未知事件及工具声明/ID 违规仍拒绝。本机 CLI 协议、工具隔离与启动失败改为后端错误（正文前 HTTP 502），实际上游 400/429/529 保留。默认测试、vet/build 与 CLI `2.1.322` 的 6 类工具隔离、31 MiB 历史、4 MiB safeguards、PDF、压缩和三条链路各 12 段工具流程通过。当前代码与真实部署验证进展见[契约记录](../../docs/acceptance/claude-cli-contract-2026-11-11/README.md)；原生产 `unsafe_tools` 具体分支尚未复现，不能视为该故障的根因修复。
+
 - **未带 safeguards 的原生直通（2026-11-05）**：Claude 运行时声明 `anthropic_messages_native`，Gateway 据此把未带 `safeguards` 的 `/v1/messages` 原样、无状态地交给 Agent（隧道 `MessagesRequest.native`），adaptive 思考、缓存标记、`context_management`、延迟工具、对话中途 system 与上游工具 ID 不再被改写；Office/视频/文本文件附件在发送前转换为原生内容块。旧版 Agent、桥接工具调用的续接及 Chat/Responses 仍走兼容桥接；运行时能力覆盖可关闭该能力，但目前没有下发入口，回退需保留旧版 Agent。默认测试覆盖双 Gateway mTLS JSON/SSE、跨副本无状态续接、混合版本回退与附件转换；真实 CLI 与上游尚未验收。须先升级 Agent，再升级 Gateway，见 [原生直通](claudecode/README.md#未带-safeguards-的原生直通)。
 - **验收**：兼容桥接路径下，原版 Claude Code 客户端工具流程只验收过 `claude-sonnet-4-6`；Chat 兼容层验证过 `claude-sonnet-5-5` 的文本、流式、多轮历史和工具续接。其他模型能被目录发现，不代表客户端兼容性已验证。
 - **前提**：Gateway 必须配置控制面 API Key 校验；兼容桥接的 MCP 续接还要求共享 `-redis-addr`，原生直通不需要。静态 key 不具备该原生路径需要的身份归属。

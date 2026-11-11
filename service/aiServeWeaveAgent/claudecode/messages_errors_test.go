@@ -56,7 +56,7 @@ func TestMessagesCapabilityRejection(t *testing.T) {
 			if tc.want != "" && (failure.Code != runtime.ErrorCapability || failure.Message != tc.want || failure.Retryable) {
 				t.Fatalf("public rejection=%+v, want non-retryable capability %q", failure, tc.want)
 			}
-			if tc.want == "" && failure.Code != runtime.ErrorProtocol {
+			if tc.want == "" && failure.Code != runtime.ErrorUpstream {
 				t.Fatalf("unknown failure became a capability rejection: %+v", failure)
 			}
 			if strings.Contains(logs.String()+public.Error()+cause.Error(), "PRIVATE_MARKER") {

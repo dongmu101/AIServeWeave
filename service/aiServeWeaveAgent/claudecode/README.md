@@ -54,6 +54,25 @@ claude --bare --print --model claude-sonnet-4-6 --tools Read,Edit --allowedTools
 
 客户端工具权限由调用方管理。上述 `--bare` 用于连接 Gateway 的客户端；Agent 后端采用 `--restricted`，保留原生订阅登录读取能力。客户端若继续使用本机订阅或其他认证配置，应先隔离客户端配置，避免与 Gateway Key 混用。此配置验证了单次编程任务的连续工具流程。原生 Messages 的多轮追问目前只有离线测试（假 CLI 进程经真实 mTLS 隧道）覆盖，原版客户端的交互式多轮聊天和完整客户端功能尚未实机验收。
 
+## CLI 版本与工具隔离
+
+原生 Messages 的 `tools` 是调用方的工具定义，不是 Agent 的本地执行权限。工具名不按 Claude 内建清单做白名单：`Bash`、`Read`、`Write`、`Agent`、`ToolSearch`、自定义名称及 MCP 名称都按本轮声明校验和原样转发；执行与权限提示由调用方负责。上游返回未声明名称、缺少 ID 或 CLI 初始化注册了不允许的本机工具时，仍明确失败。延迟工具与 `tool_reference` 同样需要完整定义出现在顶层 `tools` 中，见 [Tool search 协议](https://platform.claude.com/docs/en/agents-and-tools/tool-use/tool-search-tool)。
+
+Agent 的两条执行路径分别隔离：
+
+- 原生路径同时使用 `--tools ""`、`--disallowedTools "*"`、空 MCP 配置和 `--strict-mcp-config`，另保留 `--restricted`。通配拒绝用于防止新增本机工具进入执行清单；它不删除原生 API 文档中的调用方定义，也不影响调用方执行自己的工具。
+- 兼容桥接只注册 `aisw_bridge`，允许它的确定工具名，保留初始化和回调校验；此路径需要本地执行桥接回调，因此不使用通配拒绝。
+
+依据 [CLI reference](https://code.claude.com/docs/en/cli-reference)，`--allowedTools` 表示免询问规则，不能替代工具隔离；`--tools ""` 不影响 MCP。受限模式保留托管设置；存在 `managed-mcp.json` 时，官方规定它与 `--strict-mcp-config` 冲突并拒绝启动，见 [Managed MCP](https://code.claude.com/docs/en/managed-mcp)。这种主机策略冲突需要运维确认，Agent 不移除或绕过托管策略。
+
+2026-11-11 使用 Claude Code `2.1.322` 通过真实 CLI 加回环模拟 API 的工具隔离、原始字段、PDF、压缩、能力拒绝、大历史及三条链路各 12 段工具流程。默认测试不依赖安装 CLI。升级 Agent 主机的 CLI 前，在仓库根目录使用该主机实际的 Go 与 `claude` 执行下面的门控测试；可用 `AISW_CLAUDE_PATH` 指定待验版本。测试只访问回环模拟 API，不使用真实登录或模型额度；它不能替代真实订阅长任务验收。
+
+```bash
+AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestNativeCLI' -count=1 -timeout=180s -v
+```
+
+本次审查、回归与部署边界见[CLI 契约记录](../../../docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；Gateway 推理协议无需改动。平台分发安装包时，还需刷新 Gateway 镜像内的 Agent 制品，已有节点仍须各自升级。
+
 ## Claude Code auto 服务端安全检查
 
 带非空 `safeguards` 的原生 `/v1/messages` 请求使用独立路径，支持一个 `dangerous_tool_use` 与对象形式的 `classifier_context`。依据 [Claude Code classifier billing 协议](https://code.claude.com/docs/en/auto-mode-classifier-billing) 和 [Gateway 兼容指南](https://code.claude.com/docs/en/llm-gateway-protocol)，Gateway 经隧道传递 `anthropic-version`、`anthropic-beta`，Agent 由已登录的 Claude Code CLI 向真实上游提交请求，转发上游的 `safeguard_results`。不生成或猜测安全判定；`unsupported`、`unavailable`、缺少判定及未来扩展状态交由客户端按官方规则处理。是否获得新计费资格取决于上游账户、模型及真实返回，升级不代表所有账户都已获得免费 classifier 资格。
@@ -175,11 +194,13 @@ Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为
 
 以下常驻 CLI 和 409 续接说明适用于兼容桥接（MCP）路径；原生直通与带安全上下文的请求每轮独立，不使用该续接绑定。
 
-CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态；成功结果之后的 `prompt_suggestion` 与非初始化 `system` 通知只在本机消费，不进入公开回复，其他尾部事件仍拒绝。完整终止之前的 CLI 失败、缺失输出或非法事件仍明确失败。此修复需要更新并重启 Agent，包含模拟 CLI 子进程的离线回归测试覆盖；尚未验收未带 `safeguards` 的 Opus 5.5 真实工具流程。
+CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态。`auth_status`、`tool_progress`、`tool_use_summary`、`prompt_suggestion` 与非初始化 `system` 生命周期通知在结果前后均只由本机消费，不进入公开回复；成功结果后的额度通知也不推翻已完成的结果。结果前的额度拒绝仍参与失败分类。通知不能替代模型回复或成功结果；新的初始化、额外模型输出、重复结果、`conversation_reset` 及未知顶层事件仍明确拒绝，不能把语义变化当成普通通知忽略。事件分类参考 [Agent SDK 类型](https://code.claude.com/docs/en/agent-sdk/typescript)。
+
+本机 CLI 设置失败、启动失败、非法流、失败结果、工具隔离失败、异常退出及缺少结果按 `upstream_error` 报告（响应开始前 HTTP 502，SSE 已开始时以错误事件结束），避免将 Agent 故障误报为调用方请求 400；诊断分类仍保留，且不因此开启自动重试。实际捕获的上游 400/429/529 及错误文档继续按上游返回，能力拒绝仍保留客户端恢复分类，超时仍为 504。
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
 
-2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（上游返回未声明的工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。这是诊断增强：原有工具隔离、声明校验、公开错误分类和重试行为不变。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
+2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（上游返回未声明的工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。三类拒绝继续保留，公开错误按上段的后端失败规则处理。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
 
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 

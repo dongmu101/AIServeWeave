@@ -4,6 +4,8 @@
 
 ## Claude Code 长工具链 400 修复
 
+2026-11-11 的 CLI 契约加固另修复合法通知被误判、Agent 本机故障误报为 400，并为原生路径增加全部本机工具的显式拒绝；调用方工具仍可正常返回客户端执行。升级 CLI 前应在实际 Agent 主机运行门控契约测试，已验证版本为 `2.1.322`，命令和边界见 [CLI 版本与工具隔离](../../service/aiServeWeaveAgent/claudecode/README.md#cli-版本与工具隔离)。生产 `unsafe_tools` 的具体触发分支尚未复现，不应仅凭升级后请求成功就认定根因已消除。
+
 2026-11-09 另修复原生长历史超过 CLI 设置文件 2 MiB 上限后快速退出、日志为 `missing_result` 的问题。选择 Release 时需确认其变更记录包含此项；此前 `ca16c33` 仅覆盖下文的工具集合及 beta 续接问题。新版本对大原生请求自动切换输入传递方式，无需用户调小历史或设置专用环境变量，见 [原生大请求说明](../../service/aiServeWeaveAgent/claudecode/README.md#原生大请求与-cli-设置文件上限)。
 
 源码提交 `ca16c33` 修复 Agent 连续工具回合中的 `continuation_tool_count_mismatch` 及 beta 变化拒绝，具体行为与验收边界见 [变更记录](../../CHANGELOG.md#unreleased) 和 [Claude 续接规则](../../service/aiServeWeaveAgent/claudecode/README.md#生命周期与限额)。部署包含此修复的 Agent 即可获得修复，无需手动补丁或专用配置。预编译安装时以目标 Release 的变更记录为准；源码部署需重新构建 Agent，并停止旧进程、启动新程序。运行节点应确认 Agent 自身的 `-version` 或本地 `-control status` 中版本，而非只查看平台或源码版本。
