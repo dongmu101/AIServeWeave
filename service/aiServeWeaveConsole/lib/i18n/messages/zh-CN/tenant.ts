@@ -747,7 +747,7 @@ const tenant = {
   "tenant.presaleBadge": "预售",
   "tenant.presaleDelivery": "付款后通常数小时内发货，期限自分配起算",
   "tenant.presaleSoldOut": "已售罄",
-  "tenant.presaleBuy": "预购一个月",
+  "tenant.presaleBuy": "购买一个月",
   "tenant.presalePurchase": "预购账号",
   "tenant.presaleBuyConfirm": "将前往支付页面，为“{name}”支付 {price}，预购一个月的 {kind} 账号。付款确认后订单进入待发货，平台通常会在数小时内分配账号，一个月自分配时起算；分配后切换为账号包月，仅允许使用已购买且未到期的账号。",
   "tenant.presaleEmpty": "暂无预售商品",

@@ -286,7 +286,7 @@ test("tenants pre-order a presale, cannot buy a sold-out one, and see the paid o
   await page.getByRole("tab", { name: "账号购买", exact: true }).click();
   await expect(page.getByText("账号购买", { exact: true }).nth(1)).toBeVisible();
   await expect(page.getByText("已售罄", { exact: true })).toBeVisible();
-  const buttons = page.getByRole("button", { name: "预购一个月", exact: true });
+  const buttons = page.getByRole("button", { name: "购买一个月", exact: true });
   await expect(buttons).toHaveCount(2);
   await expect(buttons.nth(1)).toBeDisabled();
   await buttons.first().click();
@@ -305,7 +305,7 @@ test("a full presale explains itself and the checkout is not retried", async ({ 
   await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale] } }));
   await page.route("**/api/admin/admin/v1/billing/presales/pre_claude/checkout", route => { writes++; return route.fulfill({ status: 409, json: { error: "conflict" } }); });
   await page.goto("/console/billing?tab=presales");
-  await page.getByRole("button", { name: "预购一个月", exact: true }).click();
+  await page.getByRole("button", { name: "购买一个月", exact: true }).click();
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("button", { name: "确认", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("预售名额已满");
