@@ -10,7 +10,7 @@ import { usePagedResource } from "./use-paged-resource";
 import { ConfirmDialog } from "./confirm-dialog";
 import { SELECT_CLASS } from "./account-sales";
 import { CurrencySelect } from "./currency-select";
-import { unitLabel, useActionId } from "./alipay-billing";
+import { forgetPresaleIntent, readPresaleIntent, savePresaleIntent, unitLabel, useActionId } from "./alipay-billing";
 import { Pager } from "./pager";
 import { EmptyState, ErrorState, FormError, LoadingState } from "./states";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
@@ -33,8 +33,19 @@ import {
   type AccountPresale,
   type PresaleDraftProblem,
 } from "@/lib/console/account-presales";
-import { parseAlipayOverview, parseAlipayRedemption, type AlipayOverview } from "@/lib/console/alipay";
-import { currencyDigits, formatMoney, formatScaled, parseCheckout, parseCheckoutOrder, parseOrderPage, type CheckoutOrder } from "@/lib/console/billing";
+import {
+  actionOutcome,
+  formatPlanPrice,
+  newActionId,
+  parseAlipayOverview,
+  parseAlipayPurchase,
+  parseAlipayRedemption,
+  presaleQuotaArrived,
+  presaleTopUp,
+  type AlipayOverview,
+  type AlipayPlan,
+} from "@/lib/console/alipay";
+import { abortableSleep, currencyDigits, formatMoney, formatScaled, parseCheckout, parseCheckoutOrder, parseOrderPage, pollUntilSettled, type CheckoutOrder } from "@/lib/console/billing";
 import { formatDateTime, observationAge } from "@/lib/console/format";
 import { ApiError } from "@/lib/console/errors";
 import type { MessageKey } from "@/lib/i18n/messages";
@@ -56,9 +67,15 @@ const PROBLEM_KEYS: Record<PresaleDraftProblem, MessageKey> = {
  *
  * PresaleSales 列出预售。商户经服务商结账预购一个月，之后订单等待运维分配账号；这里
  * 不判定付款是否成功。只有存在预售商品时，商户才会看到这一区块。 */
-export function PresaleSales({ resource, canPurchase = false, dodo = true, alipay = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean; dodo?: boolean; alipay?: boolean }) {
-  return alipay ? <PresaleSalesWithAlipay resource={resource} canPurchase={canPurchase} dodo={dodo} /> : <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} />;
+export function PresaleSales({ resource, canPurchase = false, dodo = true, alipay = false, resume = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean; dodo?: boolean; alipay?: boolean; resume?: boolean }) {
+  return alipay ? <PresaleSalesWithAlipay resource={resource} canPurchase={canPurchase} dodo={dodo} resume={resume} /> : <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} />;
 }
+
+const ALIPAY_OVERVIEW_PATH = "/admin/v1/billing/alipay";
+// Alipay may take a while to report a payment: about two minutes of reads.
+// 支付宝报告一笔付款可能需要一段时间：大约读取两分钟。
+const TOP_UP_POLL_ATTEMPTS = 40;
+
 
 /** PresaleSalesWithAlipay reads the tenant's Alipay overview, which says
  * whether quota can be redeemed and in which unit, so a presale can also be
@@ -66,9 +83,63 @@ export function PresaleSales({ resource, canPurchase = false, dodo = true, alipa
  *
  * PresaleSalesWithAlipay 读取租户的支付宝概览，它说明能否兑换额度及其单位，使预售也能
  * 用支付宝额度支付。 */
-function PresaleSalesWithAlipay({ resource, canPurchase, dodo }: { resource: Resource<AccountPresale[]>; canPurchase: boolean; dodo: boolean }) {
-  const overview = useResource({ method: "GET", path: "/admin/v1/billing/alipay", parse: parseAlipayOverview });
-  return <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} alipayOn alipay={overview.data} onAlipayPaid={overview.reload} />;
+function PresaleSalesWithAlipay({ resource, canPurchase, dodo, resume }: { resource: Resource<AccountPresale[]>; canPurchase: boolean; dodo: boolean; resume: boolean }) {
+  const run = useConsoleRequest();
+  const overview = useResource({ method: "GET", path: ALIPAY_OVERVIEW_PATH, parse: parseAlipayOverview });
+  const [resumeNotice, setResumeNotice] = React.useState<MessageKey | null>(null);
+  const reloadPresales = resource.reload;
+  const reloadOverview = overview.reload;
+
+  React.useEffect(() => {
+    if (!resume || !canPurchase) {
+      return;
+    }
+    const intent = readPresaleIntent();
+    if (intent === null) {
+      return;
+    }
+    // Back from buying quota for a presale: wait a bounded while for Alipay
+    // to report enough quota, then pay with it once. The intent is dropped
+    // before paying, so neither a reload nor a second mount pays again; a
+    // payment whose answer is lost resumes from the button like any other.
+    // 为预售购买额度后返回：在有限时间内等待支付宝报告额度足够，然后用它支付一次。支付之前
+    // 先丢弃意图，因此刷新或再次挂载都不会重复支付；答复丢失的支付与其他支付一样从按钮恢复。
+    const controller = new AbortController();
+    void pollUntilSettled<AlipayOverview>({
+      signal: controller.signal,
+      sleep: abortableSleep,
+      maxAttempts: TOP_UP_POLL_ATTEMPTS,
+      read: (signal) => run({ method: "GET", path: ALIPAY_OVERVIEW_PATH, parse: parseAlipayOverview, signal }),
+      onResult: (value) => { if (!presaleQuotaArrived(value, intent)) setResumeNotice("tenant.presaleTopUpWaiting"); },
+      settled: (value) => presaleQuotaArrived(value, intent),
+      giveUp: (error) => error instanceof ApiError && (error.kind === "not_found" || error.kind === "unauthorized" || error.kind === "forbidden"),
+    }).then(async (outcome) => {
+      if (outcome === "aborted") {
+        return;
+      }
+      forgetPresaleIntent();
+      if (outcome !== "settled") {
+        setResumeNotice("tenant.presaleTopUpTimeout");
+        reloadOverview();
+        return;
+      }
+      let key: MessageKey;
+      try {
+        // Sent once and never retried, like the button's payment.
+        // 只发送一次、绝不重试，与按钮发起的支付相同。
+        const row = await run({ method: "POST", path: `/admin/v1/billing/presales/${encodeURIComponent(intent.presaleId)}/alipay`, body: presaleAlipayBody({ alipayAmount: intent.amount }, newActionId()), parse: parseAlipayRedemption });
+        key = row.status === "succeeded" ? "tenant.presaleAlipayPaid" : row.status === "failed" ? "tenant.presaleAlipayFailed" : "tenant.presaleAlipayPending";
+      } catch (error) {
+        key = actionOutcome(error) === "unknown" ? "tenant.presaleAlipayPending" : "tenant.presaleTopUpPayFailed";
+      }
+      setResumeNotice(key);
+      reloadPresales();
+      reloadOverview();
+    });
+    return () => controller.abort();
+  }, [resume, canPurchase, run, reloadPresales, reloadOverview]);
+
+  return <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} alipayOn alipay={overview.data} onAlipayPaid={overview.reload} extraNotice={resumeNotice} />;
 }
 
 /** PresaleAdmin is the operator's presale tab: the catalog and the delivery
@@ -85,8 +156,8 @@ export function PresaleAdmin() {
   </div>;
 }
 
-function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo = true, alipayOn = false, alipay = null, onAlipayPaid }: {
-  resource: Resource<AccountPresale[]>; operator?: boolean; canPurchase?: boolean; dodo?: boolean; alipayOn?: boolean; alipay?: AlipayOverview | null; onAlipayPaid?: () => void;
+function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo = true, alipayOn = false, alipay = null, onAlipayPaid, extraNotice = null }: {
+  resource: Resource<AccountPresale[]>; operator?: boolean; canPurchase?: boolean; dodo?: boolean; alipayOn?: boolean; alipay?: AlipayOverview | null; onAlipayPaid?: () => void; extraNotice?: MessageKey | null;
 }) {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
@@ -102,6 +173,7 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
     <CardHeader><CardTitle><Message id="tenant.presale" /></CardTitle></CardHeader>
     <CardContent className="grid gap-4">
       <p className="text-sm text-muted-foreground"><Message id={operator ? "tenant.presaleOperatorNote" : "tenant.presaleNote"} /></p>
+      {extraNotice && extraNotice !== notice ? <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm"><Message id={extraNotice} /></p> : null}
       {notice ? <p role="status" aria-live="polite" className="rounded-lg border bg-muted/40 px-4 py-3 text-sm"><Message id={notice} /></p> : null}
       {operator ? <div className="flex flex-wrap gap-3">
         <Button variant="outline" disabled={resource.loading} onClick={resource.reload}><Message id="common.refresh" /></Button>
@@ -116,6 +188,9 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
           // 此刻能否用本部署提供的方式购买这个预售。
           const open = operator ? presale.available || presale.alipayAvailable : (dodo && presale.available) || (alipayOn && presale.alipayAvailable);
           const alipayOffer = !operator && alipayOn && alipay !== null && alipay.canRedeem && presale.alipayAmount > 0 && presale.alipayAmount <= alipay.maxAmount ? alipay : null;
+          // Short of quota, the Alipay button first buys a plan that covers it.
+          // 额度不足时，支付宝按钮先购买一档能补足差额的套餐。
+          const topUp = alipayOffer ? presaleTopUp(alipayOffer, presale.alipayAmount) : null;
           return <div key={presale.id} className="grid content-between gap-3 rounded-lg border p-4">
           <div className="grid gap-2">
             <div className="flex items-start justify-between gap-2">
@@ -130,6 +205,7 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
             <p className="text-lg font-semibold">{t("tenant.accountMonthlyPrice", { price: formatMoney(presale.priceMinor, presale.currency, locale) })}</p>
             <p className="text-sm text-muted-foreground"><Message id="tenant.presaleDelivery" /></p>
             {alipayOffer ? <p className="text-sm">{t("tenant.presaleAlipayCost", { amount: presale.alipayAmount, unit: unitLabel(alipayOffer.quotaUnit, t) })}</p> : null}
+            {alipayOffer && topUp?.kind === "none" && canPurchase ? <p className="text-sm text-muted-foreground">{t("tenant.presaleTopUpNoPlan", { shortfall: topUp.shortfall, unit: unitLabel(alipayOffer.quotaUnit, t) })}</p> : null}
             {operator && presale.alipayAmount > 0 ? <p className="text-sm">{t("operator.presaleAlipayPaid", { amount: presale.alipayAmount })}</p> : null}
             {operator && presale.capacity !== null && presale.outstanding !== null ? <p className="text-sm">{t("operator.presaleStock", { outstanding: presale.outstanding, capacity: presale.capacity })}</p> : null}
             {operator && presale.dodoProductId ? <code className="text-xs break-all text-muted-foreground">{presale.dodoProductId}</code> : null}
@@ -137,8 +213,10 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
           {operator ? <Button variant="outline" onClick={() => setEditing(presale)}><Message id="operator.presaleEdit" /></Button>
             : canPurchase ? <div className="flex flex-wrap gap-2">
               {dodo ? <Button disabled={!presale.available} onClick={() => { setNotice(null); setBuying(presale); }}><Message id="tenant.presaleBuy" /></Button> : null}
-              {alipayOffer ? <PresaleAlipayPay key={presale.id} presale={presale} unit={alipayOffer.quotaUnit} primary={!dodo}
-                onPaid={key => { setNotice(key); resource.reload(); onAlipayPaid?.(); }} /> : null}
+              {alipayOffer && topUp?.kind === "plan" ? <PresaleAlipayTopUp key={presale.id} presale={presale} plan={topUp.plan} shortfall={topUp.shortfall}
+                remaining={alipayOffer.access?.remaining ?? 0} unit={alipayOffer.quotaUnit} primary={!dodo} />
+                : alipayOffer ? <PresaleAlipayPay key={presale.id} presale={presale} unit={alipayOffer.quotaUnit} primary={!dodo} disabled={topUp?.kind === "none"}
+                  onPaid={key => { setNotice(key); resource.reload(); onAlipayPaid?.(); }} /> : null}
             </div> : null}
         </div>;
         })}</div>}
@@ -174,13 +252,13 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
  * PresaleAlipayPay 用租户的支付宝额度支付预售的一个月。点击在得到确定答复之前保留其
  * action id，因此答复丢失后再次点击会恢复同一订单而不是重复扣减。核销是否已确认只由控制面
  * 说了算：待确认的答复就如实报告为待确认，绝不当作已付款。 */
-function PresaleAlipayPay({ presale, unit, primary, onPaid }: { presale: AccountPresale; unit: string; primary: boolean; onPaid: (notice: MessageKey) => void }) {
+function PresaleAlipayPay({ presale, unit, primary, disabled = false, onPaid }: { presale: AccountPresale; unit: string; primary: boolean; disabled?: boolean; onPaid: (notice: MessageKey) => void }) {
   const { t } = useI18n();
   const run = useConsoleRequest();
   const action = useActionId();
   const [open, setOpen] = React.useState(false);
   return <>
-    <Button variant={primary ? "default" : "outline"} disabled={!presale.alipayAvailable} onClick={() => setOpen(true)}><Message id="tenant.presaleAlipayPay" /></Button>
+    <Button variant={primary ? "default" : "outline"} disabled={disabled || !presale.alipayAvailable} onClick={() => setOpen(true)}><Message id="tenant.presaleAlipayPay" /></Button>
     <ConfirmDialog open={open} onOpenChange={setOpen} title={t("tenant.presaleAlipayPay")}
       description={t("tenant.presaleAlipayConfirm", { name: presale.name, kind: accountKindLabel(presale.kind), cost: t("tenant.alipayRemainingValue", { amount: presale.alipayAmount, unit: unitLabel(unit, t) }) })}
       onConfirm={async () => {
@@ -200,6 +278,53 @@ function PresaleAlipayPay({ presale, unit, primary, onPaid }: { presale: Account
         action.settle();
         onPaid(row.status === "succeeded" ? "tenant.presaleAlipayPaid" : row.status === "failed" ? "tenant.presaleAlipayFailed" : "tenant.presaleAlipayPending");
       }} />
+  </>;
+}
+
+/** PresaleAlipayTopUp pays a presale the tenant lacks quota for: it opens
+ * the Alipay purchase entry for a plan that covers the shortfall and
+ * remembers the presale in the browser, so that back on this page, once
+ * Alipay reports the quota, the presale is paid with it. Nothing here treats
+ * the trip to Alipay as a payment; only the quota read afterwards counts.
+ *
+ * PresaleAlipayTopUp 支付商户额度不足的预售：为一档能补足差额的套餐打开支付宝购买入口，
+ * 并在浏览器中记住该预售，使回到本页、支付宝报告额度之后用它支付预售。这里不把前往
+ * 支付宝当作付款；只有之后读到的额度才算数。 */
+function PresaleAlipayTopUp({ presale, plan, shortfall, remaining, unit, primary }: {
+  presale: AccountPresale; plan: AlipayPlan; shortfall: number; remaining: number; unit: string; primary: boolean;
+}) {
+  const { t, locale } = useI18n();
+  const run = useConsoleRequest();
+  const action = useActionId();
+  const [open, setOpen] = React.useState(false);
+  const label = unitLabel(unit, t);
+  return <>
+    <Button variant={primary ? "default" : "outline"} disabled={!presale.alipayAvailable} onClick={() => setOpen(true)}><Message id="tenant.presaleAlipayPay" /></Button>
+    <ConfirmDialog open={open} onOpenChange={setOpen} title={t("tenant.presaleAlipayPay")} confirmLabel={t("tenant.presaleTopUpGo")}
+      description={t("tenant.presaleTopUpConfirm", {
+        remaining, shortfall, unit: label, plan: plan.name || plan.skuId, quota: plan.quotaAmount, price: formatPlanPrice(plan, locale),
+        amount: presale.alipayAmount, name: presale.name, kind: accountKindLabel(presale.kind),
+      })}
+      onConfirm={async () => {
+        savePresaleIntent({ presaleId: presale.id, amount: presale.alipayAmount, savedAt: Date.now() });
+        let result;
+        try {
+          // Opening an entry is a write and is never retried automatically;
+          // a second press after a lost answer reuses the action id.
+          // 创建入口是写操作，绝不自动重试；答复丢失后的再次按下沿用 action id。
+          result = await run({ method: "POST", path: "/admin/v1/billing/alipay/purchases", body: { action_id: action.current(), sku_id: plan.skuId }, parse: parseAlipayPurchase });
+        } catch (error) {
+          action.settle(error);
+          if (actionOutcome(error) === "definite") forgetPresaleIntent();
+          if (error instanceof ApiError && (error.status === 409 || error.status === 404)) throw new ApiError("alipay_purchase_unavailable", error.status);
+          if (error instanceof ApiError && error.status === 503) throw new ApiError("payment_unavailable", 503);
+          throw error;
+        }
+        action.settle();
+        window.location.assign(result.purchaseUrl);
+      }}>
+      {action.retrying ? <p className="text-xs text-muted-foreground"><Message id="tenant.alipayRetryHint" /></p> : null}
+    </ConfirmDialog>
   </>;
 }
 

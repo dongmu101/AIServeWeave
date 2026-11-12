@@ -4,13 +4,19 @@ import assert from "node:assert/strict";
 import {
   actionOutcome,
   checkRedeemAmount,
+  decodePresaleIntent,
+  encodePresaleIntent,
   formatPlanPrice,
   newActionId,
   parseAlipayOverview,
   parseAlipayPurchase,
   parseAlipayRedemption,
   parseAlipayRedemptionPage,
+  presaleQuotaArrived,
+  presaleTopUp,
   quotaShort,
+  PRESALE_INTENT_TTL_MS,
+  type AlipayPlan,
 } from "./alipay.ts";
 import { ApiError } from "./errors.ts";
 
@@ -88,4 +94,49 @@ test("quota and price helpers", () => {
   assert.equal(quotaShort({ access: null }, 4), false, "an unknown quota does not block");
   assert.match(formatPlanPrice({ price: "9.90", currency: "CNY" }, "zh-CN"), /9\.90/);
   assert.equal(formatPlanPrice({ price: "about 10", currency: "CNY" }, "zh-CN"), "about 10 CNY");
+});
+
+const plan = (skuId: string, price: string, quotaAmount: number, quotaUnit = "POINT"): AlipayPlan => ({ skuId, name: skuId, price, currency: "CNY", quotaUnit, quotaAmount });
+
+test("presaleTopUp pays from the quota when it is enough or unknown", () => {
+  const plans = [plan("p1", "1.00", 1)];
+  assert.deepEqual(presaleTopUp({ access: { total: 3000, used: 0, remaining: 3000 }, plans, quotaUnit: "POINT", canPurchase: true }, 2500), { kind: "enough" });
+  assert.deepEqual(presaleTopUp({ access: { total: 2500, used: 0, remaining: 2500 }, plans, quotaUnit: "POINT", canPurchase: true }, 2500), { kind: "enough" });
+  assert.deepEqual(presaleTopUp({ access: null, plans, quotaUnit: "POINT", canPurchase: true }, 2500), { kind: "enough" });
+});
+
+test("presaleTopUp picks the cheapest plan that alone covers the shortfall", () => {
+  const plans = [plan("small", "1.00", 1), plan("big", "3000.00", 3000), plan("exact", "2400.00", 2400), plan("count", "1.00", 9999, "COUNT"), plan("odd", "free", 9999)];
+  const got = presaleTopUp({ access: { total: 100, used: 0, remaining: 100 }, plans, quotaUnit: "POINT", canPurchase: true }, 2500);
+  assert.equal(got.kind, "plan");
+  assert.equal(got.kind === "plan" && got.plan.skuId, "exact");
+  assert.equal(got.kind === "plan" && got.shortfall, 2400);
+  const tie = presaleTopUp({ access: { total: 0, used: 0, remaining: 0 }, plans: [plan("more", "10", 20), plan("less", "10", 10)], quotaUnit: "POINT", canPurchase: true }, 5);
+  assert.equal(tie.kind === "plan" && tie.plan.skuId, "less");
+});
+
+test("presaleTopUp reports none when no plan covers it or buying is off", () => {
+  const access = { total: 0, used: 0, remaining: 0 };
+  assert.deepEqual(presaleTopUp({ access, plans: [plan("small", "1.00", 1)], quotaUnit: "POINT", canPurchase: true }, 2500), { kind: "none", shortfall: 2500 });
+  assert.deepEqual(presaleTopUp({ access, plans: [plan("big", "2500.00", 2500)], quotaUnit: "POINT", canPurchase: false }, 2500), { kind: "none", shortfall: 2500 });
+  assert.deepEqual(presaleTopUp({ access, plans: [plan("unknown", "9.00", 0)], quotaUnit: "POINT", canPurchase: true }, 1), { kind: "none", shortfall: 1 });
+});
+
+test("a presale intent round-trips and expires", () => {
+  const now = 1_800_000_000_000;
+  const intent = { presaleId: "pre_87495ff21089eea00a2a3b84470f", amount: 2500, savedAt: now - 1000 };
+  assert.deepEqual(decodePresaleIntent(encodePresaleIntent(intent), now), intent);
+  assert.equal(decodePresaleIntent(encodePresaleIntent(intent), now - 2000), null, "from the future");
+  assert.equal(decodePresaleIntent(encodePresaleIntent({ ...intent, savedAt: now - PRESALE_INTENT_TTL_MS - 1 }), now), null, "expired");
+  assert.equal(decodePresaleIntent(null, now), null);
+  assert.equal(decodePresaleIntent("not json", now), null);
+  assert.equal(decodePresaleIntent(JSON.stringify({ presale_id: "../x", amount: 1, saved_at: now }), now), null);
+  assert.equal(decodePresaleIntent(JSON.stringify({ presale_id: "pre_1", amount: 0, saved_at: now }), now), null);
+  assert.equal(decodePresaleIntent(JSON.stringify({ presale_id: "pre_1", amount: "5", saved_at: now }), now), null);
+});
+
+test("presaleQuotaArrived needs a known quota that covers the intent", () => {
+  assert.equal(presaleQuotaArrived({ access: { total: 2500, used: 0, remaining: 2500 } }, { amount: 2500 }), true);
+  assert.equal(presaleQuotaArrived({ access: { total: 2499, used: 0, remaining: 2499 } }, { amount: 2500 }), false);
+  assert.equal(presaleQuotaArrived({ access: null }, { amount: 1 }), false);
 });

@@ -255,3 +255,116 @@ export function formatPlanPrice(plan: Pick<AlipayPlan, "price" | "currency">, lo
   }
   return plan.currency ? `${plan.price} ${plan.currency}` : plan.price;
 }
+
+/** PresaleTopUp says how a presale costing `amount` Alipay units can be paid
+ * now: from the quota already there ("enough", also when the quota could not
+ * be read and the control plane will judge), by first buying `plan` in Alipay
+ * ("plan"), or not at all because no plan covers the shortfall ("none").
+ * 一人付 buys only whole plans, never an arbitrary amount, so a plan must
+ * cover the shortfall by itself.
+ *
+ * PresaleTopUp 说明一个需要 `amount` 个支付宝单位的预售此刻如何支付：用已有额度（"enough"，
+ * 额度读不到时也是，由控制面判断）、先在支付宝购买 `plan`（"plan"），或者因为没有套餐能补足
+ * 差额而无法支付（"none"）。一人付只能整档购买套餐、不能购买任意数量，因此一档套餐必须
+ * 单独补足差额。 */
+export type PresaleTopUp =
+  | { kind: "enough" }
+  | { kind: "plan"; plan: AlipayPlan; shortfall: number }
+  | { kind: "none"; shortfall: number };
+
+function planPrice(plan: AlipayPlan): number {
+  return /^\d+(\.\d+)?$/.test(plan.price) ? Number(plan.price) : Number.POSITIVE_INFINITY;
+}
+
+/** presaleTopUp picks the cheapest plan in the overview's unit whose quota
+ * alone covers what the tenant lacks, the smaller quota winning a tie.
+ *
+ * presaleTopUp 选出与概览同单位、单档额度即可补足差额的最便宜套餐，价格相同时额度较小者优先。 */
+export function presaleTopUp(overview: Pick<AlipayOverview, "access" | "plans" | "quotaUnit" | "canPurchase">, amount: number): PresaleTopUp {
+  if (!quotaShort(overview, amount) || overview.access === null) {
+    return { kind: "enough" };
+  }
+  const shortfall = amount - overview.access.remaining;
+  if (!overview.canPurchase) {
+    return { kind: "none", shortfall };
+  }
+  let best: AlipayPlan | null = null;
+  for (const plan of overview.plans) {
+    if ((plan.quotaUnit !== "" && plan.quotaUnit !== overview.quotaUnit) || plan.quotaAmount < shortfall) {
+      continue;
+    }
+    if (best === null || planPrice(plan) < planPrice(best) || (planPrice(plan) === planPrice(best) && plan.quotaAmount < best.quotaAmount)) {
+      best = plan;
+    }
+  }
+  return best === null ? { kind: "none", shortfall } : { kind: "plan", plan: best, shortfall };
+}
+
+/** PresaleIntent remembers, across the trip to Alipay, which presale the
+ * tenant is buying quota for. It lives in the browser only: it lets the page
+ * finish the purchase once the quota arrives, and proves nothing — the
+ * control plane still checks the quota, the price and the place.
+ *
+ * PresaleIntent 在前往支付宝的往返期间记住商户为哪个预售购买额度。它只存在于浏览器：
+ * 使页面在额度到账后完成购买，本身不证明任何事——控制面仍会核对额度、价格与名额。 */
+export interface PresaleIntent {
+  presaleId: string;
+  amount: number;
+  savedAt: number;
+}
+
+/** PRESALE_INTENT_KEY is the localStorage key of the pending PresaleIntent.
+ *
+ * PRESALE_INTENT_KEY 是待完成 PresaleIntent 的 localStorage 键。 */
+export const PRESALE_INTENT_KEY = "aisw.alipay.presale-intent";
+
+/** PRESALE_INTENT_TTL_MS bounds how long after leaving for Alipay a return
+ * still completes the purchase on its own.
+ *
+ * PRESALE_INTENT_TTL_MS 限定离开前往支付宝之后多久内的回跳仍会自动完成购买。 */
+export const PRESALE_INTENT_TTL_MS = 60 * 60 * 1000;
+
+/** encodePresaleIntent serializes an intent for storage.
+ *
+ * encodePresaleIntent 把意图序列化以便存储。 */
+export function encodePresaleIntent(intent: PresaleIntent): string {
+  return JSON.stringify({ presale_id: intent.presaleId, amount: intent.amount, saved_at: intent.savedAt });
+}
+
+/** decodePresaleIntent reads a stored intent, refusing anything malformed,
+ * from the future or older than PRESALE_INTENT_TTL_MS.
+ *
+ * decodePresaleIntent 读取已存储的意图，拒绝格式不符、来自未来或早于
+ * PRESALE_INTENT_TTL_MS 的内容。 */
+export function decodePresaleIntent(raw: string | null, now: number): PresaleIntent | null {
+  if (raw === null) {
+    return null;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { presale_id: presaleId, amount, saved_at: savedAt } = value as Record<string, unknown>;
+  if (typeof presaleId !== "string" || !/^[A-Za-z0-9_-]{1,64}$/.test(presaleId)) {
+    return null;
+  }
+  if (typeof amount !== "number" || !Number.isSafeInteger(amount) || amount < 1 || amount > 99_999_999) {
+    return null;
+  }
+  if (typeof savedAt !== "number" || !Number.isFinite(savedAt) || savedAt > now || now - savedAt > PRESALE_INTENT_TTL_MS) {
+    return null;
+  }
+  return { presaleId, amount, savedAt };
+}
+
+/** presaleQuotaArrived reports whether the quota now covers the intent.
+ *
+ * presaleQuotaArrived 报告额度此刻是否已足够支付该意图。 */
+export function presaleQuotaArrived(overview: Pick<AlipayOverview, "access">, intent: Pick<PresaleIntent, "amount">): boolean {
+  return overview.access !== null && overview.access.remaining >= intent.amount;
+}

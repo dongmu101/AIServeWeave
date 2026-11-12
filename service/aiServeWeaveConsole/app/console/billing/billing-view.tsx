@@ -4,7 +4,7 @@ import * as React from "react";
 import { useSearchParams } from "next/navigation";
 import { AccountSales } from "@/components/console/account-sales";
 import { PresaleSales } from "@/components/console/account-presales";
-import { AlipayBilling } from "@/components/console/alipay-billing";
+import { AlipayBilling, hasPresaleIntent } from "@/components/console/alipay-billing";
 
 import { BillingDisabled, LedgerTable, OrdersTable } from "@/components/console/billing-tables";
 import { ErrorMessage } from "@/components/i18n/error-message";
@@ -214,6 +214,14 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
     : methods.alipay ? "alipay"
     : "ledger";
   const [tab, setTab] = useBillingTab(fallback, offered);
+  // Back from Alipay after buying quota for a presale: open the presales,
+  // where the purchase is finished once the quota arrives. Storage is read
+  // after hydration only, so the server and first client render agree.
+  // 为预售购买额度后从支付宝返回：打开预售分区，额度到账后在那里完成购买。只在水合之后
+  // 读取存储，使服务端渲染与客户端首次渲染一致。
+  React.useEffect(() => {
+    if (alipayReturning && hasPresaleIntent()) setTab("presales");
+  }, [alipayReturning, setTab]);
 
   return <div className="grid gap-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
@@ -242,7 +250,7 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
           <AccountSales key={historyKey} canPurchase={canPurchase} />
         </TabsContent>
         <TabsContent value="presales" className="mt-2">
-          <PresaleSales resource={presales} canPurchase={canPurchase} dodo={methods.dodo} alipay={methods.alipay} />
+          <PresaleSales resource={presales} canPurchase={canPurchase} dodo={methods.dodo} alipay={methods.alipay} resume={alipayReturning} />
         </TabsContent>
         <TabsContent value="orders" className="mt-2">
           <OrdersTable key={historyKey} />

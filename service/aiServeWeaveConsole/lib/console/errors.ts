@@ -14,6 +14,7 @@ export type ApiErrorKind =
   | "account_unavailable"
   | "account_checkout_disabled"
   | "presale_unavailable"
+  | "alipay_purchase_unavailable"
   | "presale_assign_unavailable"
   | "refund_unavailable"
   | "payment_unavailable"
@@ -45,6 +46,7 @@ const MESSAGE_KEYS: Record<ApiErrorKind, MessageKey> = {
   account_unavailable: "tenant.accountUnavailable",
   account_checkout_disabled: "tenant.accountCheckoutDisabled",
   presale_unavailable: "tenant.presaleUnavailable",
+  alipay_purchase_unavailable: "tenant.alipayPurchaseUnavailable",
   presale_assign_unavailable: "tenant.presaleAssignUnavailable",
   refund_unavailable: "tenant.refundUnavailable",
   payment_unavailable: "tenant.billingPaymentUnavailable",

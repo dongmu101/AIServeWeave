@@ -18,6 +18,8 @@ import { useResource } from "./use-resource";
 import {
   actionOutcome,
   checkRedeemAmount,
+  decodePresaleIntent,
+  encodePresaleIntent,
   formatPlanPrice,
   newActionId,
   parseAlipayOverview,
@@ -25,9 +27,11 @@ import {
   parseAlipayRedemption,
   parseAlipayRedemptionPage,
   quotaShort,
+  PRESALE_INTENT_KEY,
   type AlipayOverview,
   type AlipayPlan,
   type AlipayRedemption,
+  type PresaleIntent,
   type RedemptionStatus,
 } from "@/lib/console/alipay";
 import { abortableSleep, formatCredits, pollUntilSettled } from "@/lib/console/billing";
@@ -47,6 +51,48 @@ const STATUS_KEYS: Record<RedemptionStatus, MessageKey> = {
 
 export function unitLabel(unit: string, t: Translator): string {
   return unit === "COUNT" ? t("tenant.alipayUnitCount") : unit === "POINT" ? t("tenant.alipayUnitPoint") : unit;
+}
+
+/** The browser's record of a presale awaiting quota from Alipay. Storage may
+ * be unavailable; then the purchase is simply not finished on its own and
+ * the buyer presses the button again once the quota is there.
+ *
+ * 浏览器中等待支付宝额度的预售记录。存储可能不可用；那样购买不会自动完成，额度到账后
+ * 购买者再按一次按钮即可。 */
+export function readPresaleIntent(): PresaleIntent | null {
+  try {
+    return decodePresaleIntent(window.localStorage.getItem(PRESALE_INTENT_KEY), Date.now());
+  } catch {
+    return null;
+  }
+}
+
+export function savePresaleIntent(intent: PresaleIntent) {
+  try {
+    window.localStorage.setItem(PRESALE_INTENT_KEY, encodePresaleIntent(intent));
+  } catch {
+    // Without storage the return only shows the quota; see readPresaleIntent.
+  }
+}
+
+/** forgetPresaleIntent drops the pending presale, so a later Alipay return
+ * (for example from buying a plan for credits) does not pay for it.
+ *
+ * forgetPresaleIntent 丢弃待完成的预售，使之后的支付宝回跳（例如为兑换点数购买套餐）
+ * 不会去支付它。 */
+export function forgetPresaleIntent() {
+  try {
+    window.localStorage.removeItem(PRESALE_INTENT_KEY);
+  } catch {
+    // Nothing stored that could be read either.
+  }
+}
+
+/** hasPresaleIntent reports whether a presale is waiting for Alipay quota.
+ *
+ * hasPresaleIntent 报告是否有预售在等待支付宝额度。 */
+export function hasPresaleIntent(): boolean {
+  return readPresaleIntent() !== null;
 }
 
 /** problemFor turns a failed Alipay call into fixed copy. Upstream text is
@@ -358,6 +404,10 @@ function PlanOffer({ plan, enabled }: { plan: AlipayPlan; enabled: boolean }) {
     if (pending) return;
     setPending(true);
     setError(null);
+    // Buying a plan for credits is not paying for a presale: a return from
+    // this purchase must not finish one left pending earlier.
+    // 为兑换点数购买套餐不是支付预售：这次购买的回跳不能完成之前遗留的预售。
+    forgetPresaleIntent();
     try {
       // Opening an entry is a write and is never retried automatically; a
       // second press after a lost answer reuses the action id, so the
