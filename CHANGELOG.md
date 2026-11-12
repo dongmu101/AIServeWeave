@@ -54,6 +54,8 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 - 禁用租户用户会在同一数据库事务中吊销其创建的 active API Key；ControlPlane Key 缓存改用 generation 防止并发旧读取回填。
 - Gateway 的 `-key-cache-ttl` 保留为纵深防御；提交后通知前崩溃由 P07 outbox 重试，漏通知、断线重连和控制面副本切换由持久 generation 补偿。
 
+- Compose 部署适配小内存主机（2 核 3 GiB）。新增 `AISW_IMAGE_TAG`：留空时照旧源码构建，镜像改名为 `ghcr.io/dongmu101/aiserveweave-<服务>:local`；设为已发布的 `vX.Y.Z` 时，`install.sh` / `upgrade.sh` / `enable-agent-install.sh` 改为从 GHCR 拉取该版本镜像并以 `--no-build` 启动，`install.sh` 与 `upgrade.sh` 新增 `--image-tag`。各常驻服务新增内存上限，Go 服务配套 `GOMEMLIMIT`，Console 限制 V8 堆，均可在 `.env` 覆盖；容器日志改为轮转（每个容器 3 × 10 MB）；Console 健康检查改为每 60 秒一次。Dockerfile 的 Go 编译加 BuildKit 缓存挂载，`.dockerignore` 排除 Console 与 `.claude`。**行为变化**：MySQL 关闭 performance_schema 与 binlog，buffer pool 256M、最大连接数 60，升级时 mysql 容器会重建一次；`upgrade.sh` 改为先构建或拉取镜像、再备份；`--prune` 额外删除旧的 `deploy-<服务>` 镜像，构建缓存保留量从 5 GB 降到 2 GB。详见 [deploy/README.md](deploy/README.md)「小内存主机」。
+
 ### Fixed
 
 - Claude 原生直通遇到未声明工具时整轮失败：模型调用本轮 `tools` 未声明的工具（例如尚未载入 schema 的延迟工具）时，Agent 以 `unsafe_tools` 中止回合，客户端重试同一轮反复得到 400。原生回合（含 `safeguards`）现原样转发这类调用，由调用方答复「没有这个工具」，与直连 API 一致；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝，兼容桥接保持严格。只需升级 Agent。见[诊断记录](docs/acceptance/claude-unsafe-tools-2026-11-11/README.md#根因确认与修复同日稍后)。

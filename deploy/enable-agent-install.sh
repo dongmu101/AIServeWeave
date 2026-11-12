@@ -28,7 +28,10 @@ usage() {
   --platforms "..."   只把这些平台的 Agent 打进 Gateway 镜像，如 "linux/amd64 darwin/arm64 windows/amd64"
                       （默认六个平台，构建约 10 分钟；验收时三个就够）
   --goproxy URL       构建时的 Go 模块代理，如 https://goproxy.cn,direct
-  --no-build          不构建，沿用已带版本构建的镜像
+  --no-build          不构建或拉取，沿用已带版本的镜像
+
+.env 设置了 AISW_IMAGE_TAG 时改为拉取该 release 的预构建镜像，版本即该 tag；--platforms 与
+--goproxy 只用于源码构建（release 镜像内置全部六个平台）。
   -h, --help          显示本帮助
 
 脚本会：写 .env、补 controlplane.yaml、带版本重建 gateway、controlplane 与 console、重建容器，
@@ -58,7 +61,16 @@ require_tools curl git
 [[ -f "$DEPLOY_DIR/controlplane.yaml" ]] || die "deploy/controlplane.yaml 不存在或不是文件（Docker 在文件缺失时会建同名空目录，删掉它）：先用 deploy/install.sh 完成首次部署"
 
 # ---- 1. version / 版本 ----
-VERSION="$(source_version)"
+# Pulled images carry the release tag as their version; a source build takes
+# the checkout's, which must be clean.
+# 拉取的镜像以 release tag 为版本；源码构建取检出的版本，工作区必须干净。
+VERSION="$(image_tag)"
+if [[ -n "$VERSION" ]]; then
+  [[ -z "$PLATFORMS$GOPROXY_ARG" ]] || warn "拉取预构建镜像时忽略 --platforms 与 --goproxy"
+  PLATFORMS="" GOPROXY_ARG=""
+else
+  VERSION="$(source_version)"
+fi
 case "$VERSION" in
   dev) die "取不到 git 版本（不是 git 检出，或 git 不可用）；安装脚本会拒绝 dev 版本" ;;
   *-dirty)
@@ -77,10 +89,7 @@ fi
 log "配置已就绪（.env: AGENT_PUBLIC_URL=${URL}）"
 
 # ---- 3. build and recreate / 构建并重建 ----
-if (( BUILD == 1 )); then
-  check_memory
-  build_images "$VERSION" controlplane gateway console
-fi
+(( BUILD == 0 )) || prepare_images "$VERSION" controlplane gateway console
 log "重建 gateway、controlplane 与 console 容器"
 compose up -d --no-build --force-recreate controlplane gateway console
 
@@ -106,7 +115,7 @@ else
     warn "Gateway 版本是 ${served}，安装脚本会拒绝它。用本脚本（不带 --no-build）重建"
     problems=1
   elif [[ "$served" != "$VERSION" ]]; then
-    warn "Gateway 的版本 ${served} 与检出版本 ${VERSION} 不一致：镜像不是这次构建的。去掉 --no-build 重跑"
+    warn "Gateway 的版本 ${served} 与期望版本 ${VERSION} 不一致：镜像不是这次构建或拉取的。去掉 --no-build 重跑"
     problems=1
   else
     log "Gateway 本机入口正常（版本 ${served}）"

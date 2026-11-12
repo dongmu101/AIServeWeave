@@ -1,9 +1,10 @@
 # lib.sh holds what install.sh and upgrade.sh share: .env editing, the
-# sequential image build, backups and the post-start health check. It is
+# sequential image build or release image pull, backups and the post-start
+# health check. It is
 # sourced, never run, and changes into the deploy directory so every compose
 # call below resolves the same project and the same .env.
 #
-# lib.sh 存放 install.sh 与 upgrade.sh 共用的部分：.env 编辑、逐个构建镜像、备份与启动后
+# lib.sh 存放 install.sh 与 upgrade.sh 共用的部分：.env 编辑、逐个构建镜像或拉取 release 镜像、备份与启动后
 # 的健康检查。它只被 source、不单独执行，并切换到 deploy 目录，让下面每一次 compose 调用都
 # 落在同一个项目、同一份 .env 上。
 
@@ -55,7 +56,7 @@ check_memory() {
   local total_kib
   total_kib="$(awk '/^(MemTotal|SwapTotal):/ {sum += $2} END {print sum + 0}' /proc/meminfo)"
   if (( total_kib < 6 * 1024 * 1024 )); then
-    warn "内存加 swap 共 $((total_kib / 1024)) MiB，低于 6 GiB，构建时可能 OOM，建议先加 swap"
+    warn "内存加 swap 共 $((total_kib / 1024)) MiB，低于 6 GiB，构建时可能 OOM。建议在 .env 设置 AISW_IMAGE_TAG=vX.Y.Z 改为拉取预构建镜像，或先加 swap（见 deploy/README.md「小内存主机」）"
   fi
 }
 
@@ -283,6 +284,81 @@ build_images() {
     log "构建 ${service}（${version}）"
     compose build "${args[@]}" "$service" || die "$service 构建失败"
   done
+}
+
+# image_tag prints the release whose prebuilt images this deployment pulls,
+# or nothing when it builds from source. The shell environment wins over
+# .env, as it does for compose itself.
+#
+# image_tag 输出本部署拉取哪个 release 的预构建镜像；从源码构建时输出为空。与 compose
+# 自身一致，shell 环境变量优先于 .env。
+image_tag() {
+  printf '%s' "${AISW_IMAGE_TAG:-$(env_get AISW_IMAGE_TAG)}"
+}
+
+# check_image_tag warns when the compose file in this checkout differs from
+# the one released with the image: a flag added since then is one the older
+# binary rejects at startup. It warns rather than fails, because most compose
+# edits (limits, comments) are harmless to an older image.
+#
+# check_image_tag 在本检出的 compose 文件与镜像同版本发布的那份不一致时给出警告：之后新增的
+# 启动参数，旧二进制在启动时会拒绝。只警告不失败，因为多数 compose 改动（上限、注释）对旧镜像
+# 无害。
+check_image_tag() {
+  local tag="$1"
+  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
+    warn "AISW_IMAGE_TAG=${tag} 不是固定的 release 版本（vX.Y.Z），回滚时无法确定回到哪个版本"
+  if ! git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+    warn "本地没有 git tag ${tag}，无法核对 compose 文件与镜像是否同版本（git fetch --tags 后可核对）"
+  elif ! git -C "$ROOT_DIR" diff --quiet "$tag" HEAD -- deploy/docker-compose.yaml; then
+    warn "deploy/docker-compose.yaml 与镜像版本 ${tag} 发布时不同，${tag} 之后新增的启动参数旧镜像不认识。对照: git -C $ROOT_DIR diff $tag HEAD -- deploy/docker-compose.yaml"
+  fi
+}
+
+# pull_images pulls every AIServeWeave image at the configured tag. It pulls
+# all of them even when only some services were named: compose builds an
+# image it cannot find for a service with a build section, and building on
+# the host is exactly what this mode avoids. Unchanged images pull nothing,
+# and compose recreates only containers whose image changed.
+#
+# pull_images 按配置的 tag 拉取全部 AIServeWeave 镜像。即使只点名了部分服务也全部拉取：
+# 对带 build 段的服务，compose 找不到镜像时会在本机构建，而这正是本模式要避免的。未变化的
+# 镜像不会产生下载，compose 也只重建镜像有变化的容器。
+pull_images() {
+  local tag="$1" repo
+  repo="${AISW_IMAGE_REPO:-$(env_get AISW_IMAGE_REPO)}"
+  check_image_tag "$tag"
+  log "拉取预构建镜像 ${repo:-ghcr.io/dongmu101}/aiserveweave-*:${tag}"
+  # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
+  compose pull $BUILD_ORDER ||
+    die "镜像拉取失败：确认 ${tag} 已发布（GitHub Actions 的 Release 流水线已成功）；GHCR 包为私有时先 docker login ghcr.io"
+}
+
+# prepare_images makes the images that compose up will start: pulled when
+# AISW_IMAGE_TAG names a release, otherwise built from this checkout.
+#
+# prepare_images 准备 compose up 要启动的镜像：AISW_IMAGE_TAG 指定了 release 时拉取，
+# 否则从当前检出构建。
+prepare_images() {
+  local version="$1" tag
+  shift
+  tag="$(image_tag)"
+  if [[ -n "$tag" ]]; then
+    pull_images "$tag"
+  else
+    check_memory
+    build_images "$version" "$@"
+  fi
+}
+
+# up_flags prints the extra compose up flags for this image source. With
+# pulled images, --no-build turns a missing image into an error instead of a
+# silent build on the host.
+#
+# up_flags 输出与镜像来源对应的 compose up 附加参数。拉取模式下用 --no-build，让缺失的镜像
+# 报错，而不是悄悄在本机构建。
+up_flags() {
+  [[ -z "$(image_tag)" ]] || printf '%s' --no-build
 }
 
 # source_version names the checkout being built, for each binary's -version.

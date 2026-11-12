@@ -16,3 +16,10 @@ deploy/certs
 **/node_modules
 **/.next
 **/.env*
+# The Console has its own build context and Dockerfile; leaving it in the Go
+# context means a frontend-only change invalidates the Go build layer.
+# Console 有自己的构建上下文与 Dockerfile；留在 Go 的上下文里，只改前端也会让 Go 构建层失效。
+service/aiServeWeaveConsole
+# Local agent worktrees are full copies of the repository.
+# 本地 agent worktree 是整个仓库的副本。
+.claude

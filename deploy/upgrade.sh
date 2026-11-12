@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # upgrade.sh redeploys an existing Docker Compose installation from the
 # latest commit of the checked-out branch: it fast-forwards the checkout,
-# backs up MySQL and the Registry identity material, rebuilds the images one
-# at a time and recreates only the containers whose image or configuration
+# rebuilds the images one at a time (or, with AISW_IMAGE_TAG set, pulls that
+# release's prebuilt images), backs up MySQL and the Registry identity
+# material and recreates only the containers whose image or configuration
 # changed.
 #
 # deploy/controlplane.yaml is each deployment's own file: it is created from
@@ -12,8 +13,9 @@
 # back untracked. Any other tracked change stops the upgrade, because a
 # fast-forward must not silently merge it.
 #
-# upgrade.sh 用当前分支的最新提交重新部署一套已有的 Docker Compose 安装：快进代码、备份
-# MySQL 与 Registry 身份材料、逐个重建镜像，并且只重建镜像或配置有变化的容器。
+# upgrade.sh 用当前分支的最新提交重新部署一套已有的 Docker Compose 安装：快进代码、逐个重建
+# 镜像（设置了 AISW_IMAGE_TAG 时改为拉取该 release 的预构建镜像）、备份 MySQL 与 Registry
+# 身份材料，并且只重建镜像或配置有变化的容器。
 #
 # deploy/controlplane.yaml 属于各个部署自己：缺失时由 controlplane.example.yaml 生成，不受 git
 # 跟踪，拉取不会动它。早于这一调整的检出仍跟踪该文件；越过这一调整的第一次升级会在拉取期间
@@ -24,6 +26,7 @@
 #   deploy/upgrade.sh                      # pull, back up, rebuild everything that changed
 #   deploy/upgrade.sh gateway console      # rebuild only these services
 #   deploy/upgrade.sh --no-pull            # rebuild the current checkout as it is
+#   deploy/upgrade.sh --image-tag v0.2.0   # pull that release's images instead of building
 #   deploy/upgrade.sh --help
 set -euo pipefail
 
@@ -38,14 +41,17 @@ usage() {
   --force           兼容旧用法，无作用（代码没有新提交时也会照常重建）
   --no-backup       跳过 MySQL 与 Registry 备份
   --backup-dir DIR  备份目录（默认 ~/aiserveweave-backups）
-  --goproxy URL     构建时的 Go 模块代理，如 https://goproxy.cn,direct
-  --prune           完成后清理悬空镜像与构建缓存
+  --image-tag TAG   改为拉取该 release 的预构建镜像（写入 .env 的 AISW_IMAGE_TAG）；
+                    传空字符串 '' 切回源码构建。拉取模式下总是拉取全部服务的镜像
+  --goproxy URL     源码构建时的 Go 模块代理，如 https://goproxy.cn,direct
+  --prune           完成后清理悬空镜像、旧命名的镜像与构建缓存
   -h, --help        显示本帮助
 EOF
 }
 
 ORIGINAL_ARGS=("$@")
 PULL=1 BACKUP=1 PRUNE=0 FROM="" GOPROXY_ARG=""
+SET_TAG=0 IMAGE_TAG_ARG=""
 BACKUP_DIR="${AISW_BACKUP_DIR:-$HOME/aiserveweave-backups}"
 SERVICES=()
 while (($# > 0)); do
@@ -55,6 +61,9 @@ while (($# > 0)); do
     --no-backup) BACKUP=0; shift ;;
     --backup-dir) BACKUP_DIR="${2:?}"; shift 2 ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
+    --image-tag)
+      (($# >= 2)) || die "--image-tag 需要一个值（切回源码构建用 --image-tag ''）"
+      IMAGE_TAG_ARG="$2"; SET_TAG=1; shift 2 ;;
     --prune) PRUNE=1; shift ;;
     --from) FROM="${2:?}"; shift 2 ;; # internal: set by the re-exec below / 内部参数，由下面的重新执行设置
     -h | --help) usage; exit 0 ;;
@@ -150,6 +159,11 @@ fi
 
 # ---- configuration that a new version may require ----
 ensure_env
+OLD_TAG="$(image_tag)"
+if (( SET_TAG == 1 )); then
+  [[ -z "${AISW_IMAGE_TAG+x}" ]] || warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，--image-tag 写入 .env 的值不会生效"
+  env_set AISW_IMAGE_TAG "$IMAGE_TAG_ARG"
+fi
 fill_secrets
 ensure_controlplane_config
 ensure_access_log_off
@@ -165,27 +179,49 @@ if [[ -n "$FROM" ]]; then
 fi
 compose config --quiet || die "compose 配置校验失败，服务未改动"
 
-# ---- backup, build, start ----
-(( BACKUP == 0 )) || backup_state "$BACKUP_DIR"
+# ---- images, backup, start ----
+# Images come first: building or pulling changes nothing that is running, and
+# the Registry backup runs in the registry-init image, which must already
+# exist so compose does not build it on the spot.
+#
+# 先准备镜像：构建或拉取不改动任何正在运行的东西，而 Registry 备份在 registry-init 镜像里
+# 执行，镜像须已存在，compose 才不会当场构建它。
+if [[ -n "$(image_tag)" && ${#SERVICES[@]} -gt 0 ]]; then
+  log "拉取模式下拉取全部服务的镜像；镜像未变化的容器不会重建"
+fi
+prepare_images "$(source_version)" ${SERVICES[@]+"${SERVICES[@]}"}
 
-check_memory
-build_images "$(source_version)" ${SERVICES[@]+"${SERVICES[@]}"}
+(( BACKUP == 0 )) || backup_state "$BACKUP_DIR"
 
 START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "重建有变化的容器（Gateway 重建会断开隧道，Agent 自动重连）"
-compose up -d
+# shellcheck disable=SC2046 # empty or one flag / 为空或一个参数
+compose up -d $(up_flags)
 
 health_check || warn "部分服务未就绪，见上方提示"
 count_errors "$START"
 
 if (( PRUNE == 1 )); then
-  log "清理悬空镜像与构建缓存"
+  log "清理悬空镜像、旧命名的镜像与构建缓存"
   docker image prune -f >/dev/null
-  docker builder prune -f --keep-storage 5GB >/dev/null
+  # Images were once named <project>-<service>; nothing uses those names now.
+  # 镜像曾以 <项目名>-<服务名> 命名，现在已没有任何东西使用这些名字。
+  for service in $BUILD_ORDER; do
+    docker image rm "$(project_name)-${service}" >/dev/null 2>&1 || true
+  done
+  docker builder prune -f --keep-storage 2GB >/dev/null
 fi
 
 echo
-log "重新部署完成：$(source_version)"
+NEW_TAG="$(image_tag)"
+if [[ -n "$NEW_TAG" ]]; then
+  log "重新部署完成：镜像 ${NEW_TAG}，代码 $(source_version)"
+else
+  log "重新部署完成：$(source_version)"
+fi
+if [[ "$OLD_TAG" != "$NEW_TAG" ]]; then
+  echo "  回滚镜像: deploy/upgrade.sh --no-pull --no-backup --image-tag '${OLD_TAG}'"
+fi
 if [[ -n "$FROM" ]]; then
   echo "  回滚代码: cd $ROOT_DIR && cp deploy/controlplane.yaml deploy/controlplane.yaml.bak && git stash && git checkout ${FROM:0:12} && git stash pop && cp deploy/controlplane.yaml.bak deploy/controlplane.yaml && deploy/upgrade.sh --no-pull --no-backup"
   echo "            旧版本若仍跟踪 controlplane.yaml，checkout 会覆盖它，所以先备份再放回"

@@ -190,27 +190,32 @@ evidence yet for a real multi-replica mixed-version cluster.
 
 ## 使用已发布产物做全新部署 / Deploying a released version from scratch
 
-`deploy/README.md` 的「起步」一节默认从源码构建（`docker compose up -d --build`）。
-要改用已发布的镜像而不是本地构建，把 `deploy/docker-compose.yaml` 里每个
-AIServeWeave 自己服务（`registry-init`、`registry`、`controlplane`、`console`、
-`gateway`）的 `build: {...}` 块换成：
+`deploy/docker-compose.yaml` 里每个 AIServeWeave 自己的服务（`registry-init`、`registry`、
+`controlplane`、`console`、`gateway`）同时带 `build:` 与
+`image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-<service>:${AISW_IMAGE_TAG:-local}`。
+`AISW_IMAGE_TAG` 留空时从源码构建，镜像标为 `:local`；设为已发布的 `vX.Y.Z` 时就是本节流水线
+推送的镜像（`registry-init` 与 `registry` 共用 `aiserveweave-registry`）。因此只需要一份编排
+文件，不必手工改 YAML：
 
-```yaml
-image: ghcr.io/dongmu101/aiserveweave-<service>:<version>
+```bash
+git checkout vX.Y.Z           # compose 文件与镜像同版本
+deploy/install.sh --image-tag vX.Y.Z ...   # 或已有部署：deploy/upgrade.sh --image-tag vX.Y.Z
+# 手工：在 deploy/.env 设置 AISW_IMAGE_TAG=vX.Y.Z，再
+# docker compose pull && docker compose up -d --no-build
 ```
 
-（`<service>` 取值：`registry`、`controlplane`、`gateway`、`console`；`registry-init`
-与 `registry` 用同一个 `aiserveweave-registry` 镜像。）换完后 `docker compose up -d`
-不需要 `--build`。这是手工改几行 YAML 的做法，仓库里刻意不维护第二份
-`docker-compose.image.yaml`，避免两份编排文件互相漂移。
+细节（版本核对、私有包登录、小内存主机）见 [deploy/README.md](deploy/README.md)「小内存主机」。
 
-`deploy/README.md`'s "起步" section defaults to a source build
-(`docker compose up -d --build`). To use released images instead of a local
-build, swap each of AIServeWeave's own service's `build: {...}` block in
-`deploy/docker-compose.yaml` for `image: ghcr.io/dongmu101/aiserveweave-<service>:<version>`
-as shown above, then `docker compose up -d` without `--build`. This is a
-deliberate few-line manual edit — the repository does not keep a second
-`docker-compose.image.yaml` to avoid two orchestration files drifting apart.
+Each of AIServeWeave's own services in `deploy/docker-compose.yaml` carries
+both `build:` and
+`image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-<service>:${AISW_IMAGE_TAG:-local}`.
+With `AISW_IMAGE_TAG` empty the images are built from source and tagged
+`:local`; set to a released `vX.Y.Z`, they are the images this workflow
+pushed. One orchestration file serves both, with no hand-edited YAML: check
+out the tag, then run `deploy/install.sh --image-tag vX.Y.Z` (or
+`deploy/upgrade.sh --image-tag vX.Y.Z` for an existing deployment), or set
+`AISW_IMAGE_TAG` in `deploy/.env` and run
+`docker compose pull && docker compose up -d --no-build`.
 
 ## Agent 桌面与独立安装制品
 

@@ -1,17 +1,20 @@
 #!/usr/bin/env bash
 # install.sh performs a first Docker Compose deployment on one host: it
-# fills deploy/.env, builds the images one at a time, starts the stack and
+# fills deploy/.env, builds the images one at a time (or pulls a release's
+# prebuilt images with --image-tag), starts the stack and
 # checks that Console, the control plane and the Gateway answer. It is
 # idempotent: a value already in .env is kept, so rerunning it after a
 # failure resumes rather than regenerating secrets.
 #
-# install.sh 在单台主机上完成首次 Docker Compose 部署：填充 deploy/.env、逐个构建镜像、
+# install.sh 在单台主机上完成首次 Docker Compose 部署：填充 deploy/.env、逐个构建镜像
+# （或用 --image-tag 拉取某个 release 的预构建镜像）、
 # 启动整套服务，并检查 Console、控制面与 Gateway 是否应答。脚本是幂等的：.env 里已有的值
 # 会保留，失败后重跑是接着做，而不是重新生成密钥。
 #
 # Usage:
 #   deploy/install.sh --owner-email owner@example.com
 #   deploy/install.sh --owner-email a@example.com --operator-email ops@example.com --https --goproxy https://goproxy.cn,direct
+#   deploy/install.sh --owner-email owner@example.com --image-tag v0.2.0   # small host: pull, do not build
 #   deploy/install.sh --help
 set -euo pipefail
 
@@ -28,6 +31,11 @@ usage() {
   --operator-email EMAIL     创建平台运维账户
   --operator-password PASS
 
+镜像来源（默认从源码构建）:
+  --image-tag vX.Y.Z         拉取该 release 的预构建镜像（GHCR），主机上不构建；写入 .env 的
+                             AISW_IMAGE_TAG。小内存主机（如 2 核 3G）推荐
+  --goproxy URL              源码构建时的 Go 模块代理，如 https://goproxy.cn,direct
+
 部署选项:
   --https                    Console 部署在 HTTPS 反向代理之后，启用 Secure Cookie
   --signup                   开启租户自助注册（控制面与 Console 同时开启）
@@ -35,14 +43,14 @@ usage() {
   --agent-public-url URL     平台对外的 HTTPS 站点地址，开启 Agent 一行命令安装（如 https://open7x.com）
   --local-discovery          保留 Gateway 对 host.docker.internal 上 Ollama/vLLM 的发现
                              （Linux 原生 Docker 默认关闭，因为该主机名无法解析）
-  --goproxy URL              构建时的 Go 模块代理，如 https://goproxy.cn,direct
-  --no-build                 只准备配置，不构建、不启动
+  --no-build                 只准备配置，不构建或拉取镜像、不启动
   -h, --help                 显示本帮助
 EOF
 }
 
 OWNER_EMAIL="" OWNER_PASSWORD="" TENANT_NAME="" OPERATOR_EMAIL="" OPERATOR_PASSWORD=""
 HTTPS=0 SIGNUP=0 ADVERTISE_ADDR="" AGENT_URL="" LOCAL_DISCOVERY=0 NO_BUILD=0 GOPROXY_ARG=""
+IMAGE_TAG_ARG=""
 while (($# > 0)); do
   case "$1" in
     --owner-email) OWNER_EMAIL="${2:?}"; shift 2 ;;
@@ -56,6 +64,7 @@ while (($# > 0)); do
     --agent-public-url) AGENT_URL="${2:?}"; shift 2 ;;
     --local-discovery) LOCAL_DISCOVERY=1; shift ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
+    --image-tag) IMAGE_TAG_ARG="${2:?}"; shift 2 ;;
     --no-build) NO_BUILD=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage >&2; die "未知参数: $1" ;;
@@ -71,7 +80,6 @@ for value in "$OWNER_EMAIL" "$OWNER_PASSWORD" "$TENANT_NAME" "$OPERATOR_EMAIL" "
 done
 
 require_tools openssl curl awk
-check_memory
 
 # ---- .env ----
 ensure_env
@@ -112,6 +120,7 @@ fi
   warn "未设置 owner 与运维邮箱，bootstrap 不会建号；可用 --owner-email 重跑"
 
 (( HTTPS == 0 )) || env_set AISW_CONSOLE_COOKIE_SECURE true
+[[ -z "$IMAGE_TAG_ARG" ]] || env_set AISW_IMAGE_TAG "$IMAGE_TAG_ARG"
 [[ -z "$ADVERTISE_ADDR" ]] || env_set GATEWAY_ADVERTISE_ADDR "$ADVERTISE_ADDR"
 if [[ -n "$AGENT_URL" ]]; then
   [[ "$AGENT_URL" =~ ^https://[^/?#]+$ ]] || die "--agent-public-url 必须是 https 站点根地址，如 https://open7x.com"
@@ -171,15 +180,16 @@ compose config --quiet || die "compose 配置校验失败"
 log ".env 与 compose 配置就绪"
 
 if (( NO_BUILD == 1 )); then
-  log "--no-build：配置已准备好，未构建、未启动"
+  log "--no-build：配置已准备好，未构建或拉取镜像、未启动"
   exit 0
 fi
 
 # ---- build and start ----
 START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-build_images "$(source_version)"
+prepare_images "$(source_version)"
 log "启动服务"
-compose up -d
+# shellcheck disable=SC2046 # empty or one flag / 为空或一个参数
+compose up -d $(up_flags)
 
 code="$(wait_exited bootstrap 180)"
 compose logs --no-log-prefix bootstrap | tail -5

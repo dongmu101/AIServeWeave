@@ -33,12 +33,39 @@
 # Agent verifies the Gateway against that same CA — not a coincidence but the
 # trust model in tunnel/identity.go, where the Registry CA is the only root an
 # Agent trusts.
+#
+# 镜像来源：AISW_IMAGE_TAG 留空时从源码构建，镜像标为 :local；设为一个已发布的
+# vX.Y.Z 时，install.sh / upgrade.sh 改为从 GHCR 拉取 release 流水线推送的同版本
+# 镜像，主机上不再跑 Go 与 Next.js 构建。小内存主机（如 2 核 3G）应走后者。
+#
+# 资源：每个常驻服务都有内存上限，Go 服务带配套的 GOMEMLIMIT，Console 限制 V8 堆；
+# 默认值按 3 GiB 主机给出，可在 .env 中覆盖（见 .env.example 的「资源上限」）。
+#
+# Image source: with AISW_IMAGE_TAG empty, images are built from source and
+# tagged :local; set to a released vX.Y.Z, install.sh / upgrade.sh pull that
+# version's images from GHCR (pushed by the release workflow) and the host
+# runs no Go or Next.js build. Small hosts (e.g. 2 cores, 3 GiB) should do
+# the latter.
+#
+# Resources: every long-running service has a memory cap, the Go services a
+# matching GOMEMLIMIT, and Console a capped V8 heap; the defaults fit a 3 GiB
+# host and can be overridden in .env (see .env.example's 资源上限 block).
+
+# Rotate container logs: the default json-file driver never does, and on a
+# small disk the Gateway's logs alone fill it eventually.
+# 轮转容器日志：默认的 json-file 驱动从不轮转，小磁盘迟早被 Gateway 日志写满。
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
 
 services:
   postgres:
     profiles: ["postgres"]
     image: postgres:18-alpine
     restart: unless-stopped
+    logging: *logging
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-aiserveweave}
       POSTGRES_USER: ${POSTGRES_USER:-aiserveweave}
@@ -63,8 +90,29 @@ services:
   mysql:
     image: mysql:9.7
     restart: unless-stopped
+    logging: *logging
     # MySQL is the default database because Job persistence requires it.
     # MySQL 是默认数据库，因为 Job 持久化依赖它。
+    #
+    # Sized for a small single host. performance_schema alone takes 100 MB+
+    # and nothing here reads it. Only the control plane connects, with
+    # MaxOpenConns 20, so 60 connections leave room for backups and a shell.
+    # The binary log serves replication and point-in-time recovery, neither of
+    # which this single-instance deployment uses (backups are mysqldump, see
+    # database-recovery.md), and costs an fsync per commit plus disk.
+    #
+    # 按单台小主机调整。仅 performance_schema 就占 100 MB 以上，而这里没有任何东西读它。
+    # 只有控制面连库，MaxOpenConns 为 20，60 个连接给备份与手工排查留了余量。binlog 服务于
+    # 主从复制与按时间点恢复，这套单实例部署两者都不用（备份走 mysqldump，见
+    # database-recovery.md），却要每次提交多一次 fsync 并占用磁盘。
+    command:
+      - --performance-schema=OFF
+      - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M}
+      - --innodb-log-buffer-size=16M
+      - --temptable-max-ram=64M
+      - --max-connections=256
+      - --disable-log-bin
+    mem_limit: ${MYSQL_MEM_LIMIT:-1024m}
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-aiserveweave}
       MYSQL_DATABASE: ${MYSQL_DATABASE:-aiserveweave}
@@ -86,10 +134,17 @@ services:
   redis:
     image: redis:8-alpine
     restart: unless-stopped
+    logging: *logging
     # P05 会话吊销以 Redis 为权威状态；确认成功的写入必须先 fsync。
     # P05 session revocation is authoritative in Redis; acknowledged writes
     # must be fsynced before they are reported successful.
     command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
+    # A container cap only, no maxmemory: an eviction policy would drop
+    # authoritative revocation state, which must never happen silently. The
+    # headroom covers the fork during an AOF rewrite.
+    # 只设容器上限、不设 maxmemory：淘汰策略会丢掉作为权威的吊销状态，这绝不能悄悄发生。
+    # 余量用于 AOF 重写时的 fork。
+    mem_limit: ${REDIS_MEM_LIMIT:-512m}
     ports:
       - "127.0.0.1:${REDIS_PORT:-6379}:6379"
     volumes:
@@ -116,10 +171,14 @@ services:
   # It has to finish before the gateway starts, which is what
   # service_completed_successfully below waits for.
   registry-init:
+    # registry-init 与 registry 是同一个镜像，名字一致，构建或拉取一次即可。
+    # registry-init and registry are one image under one name, built or pulled once.
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-registry:${AISW_IMAGE_TAG:-local}
     build:
       context: ..
       args:
         SERVICE: aiServeWeaveRegistry
+    logging: *logging
     command:
       - -data-dir=/data
       - -issue-server-cert
@@ -130,12 +189,21 @@ services:
     restart: "no"
 
   registry:
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-registry:${AISW_IMAGE_TAG:-local}
     build:
       context: ..
       args:
         SERVICE: aiServeWeaveRegistry
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${REGISTRY_MEM_LIMIT:-128m}
     environment:
+      # GOMEMLIMIT is a soft target about 80% of the container cap: the Go GC
+      # works harder near it instead of letting the heap run into the
+      # kernel's OOM kill. Raise both together.
+      # GOMEMLIMIT 是约为容器上限 80% 的软目标：堆接近它时 Go GC 更积极地回收，而不是一路
+      # 涨到被内核 OOM 杀掉。调整时两者一起改。
+      GOMEMLIMIT: ${REGISTRY_GOMEMLIMIT:-100MiB}
       # TokenAdmin 的共享密钥，由下面的入口脚本写进 -admin-token-file；须与
       # controlplane.yaml 里 Registry.AdminToken 的值一致。
       #
@@ -188,13 +256,17 @@ services:
         condition: service_completed_successfully
 
   controlplane:
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-controlplane:${AISW_IMAGE_TAG:-local}
     build:
       context: ..
       args:
         SERVICE: aiServeWeaveControlPlane
     restart: unless-stopped
+    logging: *logging
     command: ["-f", "/etc/aiserveweave/controlplane.yaml"]
+    mem_limit: ${CONTROLPLANE_MEM_LIMIT:-384m}
     environment:
+      GOMEMLIMIT: ${CONTROLPLANE_GOMEMLIMIT:-300MiB}
       # 这七个是密钥。compose 在这里提供默认值，配置文件里只有 ${VAR}
       # ——conf.UseEnv 不支持带默认值的形式，见 controlplane.yaml 的注释。
       #
@@ -285,6 +357,7 @@ services:
   bootstrap:
     image: curlimages/curl:8.11.1
     restart: "no"
+    logging: *logging
     environment:
       AISW_BOOTSTRAP_TOKEN: ${AISW_BOOTSTRAP_TOKEN:?set it in deploy/.env — openssl rand -base64 32}
       AISW_DEFAULT_TENANT_NAME: ${AISW_DEFAULT_TENANT_NAME:-Default}
@@ -361,10 +434,17 @@ services:
         fi
 
   console:
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-console:${AISW_IMAGE_TAG:-local}
     build:
       context: ../service/aiServeWeaveConsole
     restart: unless-stopped
+    logging: *logging
+    mem_limit: ${CONSOLE_MEM_LIMIT:-384m}
     environment:
+      # Cap the V8 old-space heap below the container limit, leaving room for
+      # buffers, native memory and the healthcheck's short-lived node process.
+      # 把 V8 老生代堆限制在容器上限之下，给 buffer、原生内存与健康检查临时起的 node 进程留出空间。
+      NODE_OPTIONS: --max-old-space-size=${CONSOLE_NODE_HEAP_MB:-256}
       AISW_CONSOLE_CONTROL_PLANE_URL: http://controlplane:8090
       AISW_CONSOLE_SESSION_SECRET: ${AISW_CONSOLE_SESSION_SECRET:?set it in deploy/.env — openssl rand -base64 48}
       # Local Compose uses HTTP on loopback. Enable Secure cookies behind HTTPS.
@@ -385,14 +465,18 @@ services:
         condition: service_started
     healthcheck:
       # Check the UI without credentials; backend availability is independent.
-      # 无凭据检查 UI，后端可用性独立判断。
+      # Every probe starts a fresh node process (tens of MB and a CPU spike),
+      # so it runs once a minute rather than every 30 s.
+      # 无凭据检查 UI，后端可用性独立判断。每次探测都新起一个 node 进程（数十 MB 内存与一次
+      # CPU 尖峰），因此每分钟一次而不是每 30 秒。
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
-      interval: 30s
+      interval: 60s
       timeout: 5s
       retries: 3
       start_period: 20s
 
   gateway:
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-gateway:${AISW_IMAGE_TAG:-local}
     build:
       context: ..
       args:
@@ -402,6 +486,11 @@ services:
         # 内置进镜像的 Agent 制品平台；冒烟时一个就够：AGENT_PLATFORMS="linux/amd64"。
         AGENT_PLATFORMS: ${AGENT_PLATFORMS:-linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64}
     restart: unless-stopped
+    logging: *logging
+    # The largest Go cap: request bodies are deliberately unbounded (Claude
+    # Code sends very large ones), so concurrent big requests need headroom.
+    # Go 服务里上限最高：请求体刻意不设上限（Claude Code 会发很大的请求），并发的大请求需要余量。
+    mem_limit: ${GATEWAY_MEM_LIMIT:-512m}
     command:
       - -addr=:8080
       - -tunnel-addr=:8443
@@ -488,6 +577,7 @@ services:
       - -agent-github-repo=${AGENT_GITHUB_REPO:-dongmu101/AIServeWeave}
       - -log-level=${LOG_LEVEL:-info}
     environment:
+      GOMEMLIMIT: ${GATEWAY_GOMEMLIMIT:-400MiB}
       # flag 在 ps 输出里可见，因此这四个令牌都走环境变量。
       # A flag is visible in ps output, so all four tokens go through the
       # environment.

@@ -44,7 +44,17 @@ COPY . .
 #
 # 关闭 CGO，好让产物能跑在没有 libc 需要匹配的精简基础镜像上。-trimpath 让构建机的
 # 路径不进入二进制。
-RUN test -n "$SERVICE" || (echo "SERVICE build-arg is required" >&2; exit 1) && \
+#
+# The go-build cache mount persists compiled packages across builds and across
+# the services: COPY . . invalidates this layer on any source change, and
+# without the mount every rebuild recompiles the whole dependency tree from
+# scratch, which is most of the build time on a 2-core host.
+#
+# go-build 缓存挂载让已编译的包在多次构建之间、在各服务之间复用：任何源码改动都会让
+# COPY . . 之后的这一层失效，没有这个挂载，每次重建都要从头编译整棵依赖树——这在 2 核主机上
+# 占了构建时间的大头。
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    test -n "$SERVICE" || (echo "SERVICE build-arg is required" >&2; exit 1) && \
     CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/service ./service/${SERVICE}
 
 # agent-dist cross-compiles the Agent for every platform in AGENT_PLATFORMS and
@@ -59,7 +69,8 @@ FROM build AS agent-dist
 ARG VERSION=dev
 ARG AGENT_PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
 ARG SERVICE
-RUN set -eu; \
+RUN --mount=type=cache,target=/root/.cache/go-build \
+    set -eu; \
     mkdir -p /opt/aisw/agent-dist; \
     if [ "$SERVICE" != aiServeWeaveGateway ]; then exit 0; fi; \
     dir="/opt/aisw/agent-dist/${VERSION}"; \

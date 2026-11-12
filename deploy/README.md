@@ -15,7 +15,8 @@ Agent 在推理节点宿主机上运行，连接本机 Ollama / vLLM / ComfyUI�
 ## 环境要求
 
 - Docker Engine 24+、Docker Compose v2 或更新版本，使用 `docker compose` 命令。
-- 首次构建可访问镜像仓库、Go 模块源、npm registry 与 Google Fonts。
+- 首次构建可访问镜像仓库、Go 模块源、npm registry 与 Google Fonts；拉取预构建镜像时只需访问 Docker Hub 与 GHCR。
+- 运行整套服务需要 2 核、3 GiB 内存；在主机上从源码构建还需要内存加 swap 约 6 GiB。小内存主机见「小内存主机」。
 - 宿主机安装 `openssl`、`curl`；从源码运行 Agent 时需要 Go 1.27。
 - 下表端口空闲；冲突时在 `.env` 中设置对应变量。
 
@@ -46,7 +47,7 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 4. 账户密码留空时自动生成，并在脚本结束时显示一次。
 5. 本机没有 `controlplane.yaml` 时由 `controlplane.example.yaml` 复制一份。这份文件属于本机部署、不受 git 跟踪（已在 `.gitignore` 中），按需修改，已存在时脚本不会覆盖。
 6. 在 `controlplane.yaml` 中关闭 go-zero 的访问日志中间件（原因见下文「对外部署与已知限制」），缺少 `TenantNodes` 与 `AgentInstall` 段时补上。
-7. 逐个构建镜像，启动服务，然后检查 Console、控制面与 Gateway 是否应答。
+7. 逐个构建镜像（`.env` 设置了 `AISW_IMAGE_TAG` 时改为拉取该 release 的预构建镜像），启动服务，然后检查 Console、控制面与 Gateway 是否应答。
 
 脚本可以重复执行，失败后重跑会从中断处继续。常用选项如下，完整列表见 `deploy/install.sh --help`：
 
@@ -54,11 +55,12 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 | --- | --- |
 | `--https` | 部署在 HTTPS 反向代理之后，启用 Secure Cookie |
 | `--signup` | 开启租户自助注册：写入 `controlplane.yaml` 的 `Signup` 段与 `docker-compose.override.yaml` |
-| `--goproxy URL` | 指定构建时的 Go 模块代理，例如 `https://goproxy.cn,direct` |
+| `--image-tag vX.Y.Z` | 拉取该 release 的预构建镜像，主机上不构建；写入 `.env` 的 `AISW_IMAGE_TAG`，见「小内存主机」 |
+| `--goproxy URL` | 指定源码构建时的 Go 模块代理，例如 `https://goproxy.cn,direct` |
 | `--advertise-addr HOST:PORT` | Agent 拨号的隧道地址 |
 | `--agent-public-url URL` | 平台对外的 HTTPS 站点地址（如 `https://open7x.com`），写入 `.env` 的 `AGENT_PUBLIC_URL`，开启 Agent 一行命令安装，见「对外部署与已知限制」 |
 | `--local-discovery` | 保留对 `host.docker.internal` 的本机发现。Linux 原生 Docker 无法解析这个主机名，所以默认清空 |
-| `--no-build` | 只准备配置，不构建、不启动 |
+| `--no-build` | 只准备配置，不构建或拉取镜像、不启动 |
 
 ### 重新部署
 
@@ -66,6 +68,7 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 deploy/upgrade.sh                    # 拉取当前分支的上游提交，备份，重建有变化的服务
 deploy/upgrade.sh gateway console    # 只重建指定服务
 deploy/upgrade.sh --no-pull          # 不拉取代码，直接按当前工作区重建
+deploy/upgrade.sh --image-tag v0.2.0 # 改为拉取该 release 的预构建镜像；--image-tag '' 切回源码构建
 ```
 
 升级按以下流程进行：
@@ -74,11 +77,84 @@ deploy/upgrade.sh --no-pull          # 不拉取代码，直接按当前工作�
 - 只做快进合并。`controlplane.yaml` 是本机文件，拉取不会动它；从仍跟踪该文件的旧版本第一次升级上来时，脚本在拉取期间把它挪开、拉取后原样放回，并改为不受跟踪。上游若重新跟踪该文件，脚本拒绝升级，避免覆盖本机配置。其他已跟踪文件有本地修改时直接拒绝升级。
 - 拉取后改用新版本的脚本继续执行，补齐新版本要求的空密钥。
 - 如果 `.env.example` 新增了变量，或 `controlplane.example.yaml` 有上游改动，给出提示和查看差异的命令，由你决定是否同步到本机的 `controlplane.yaml`。
-- 构建前把 MySQL 转储和 Registry 身份材料备份到 `~/aiserveweave-backups`（可用 `--backup-dir` 修改）。任何一项备份失败都会中止升级。
-- 结束时打印回滚命令，以及本次备份的位置。
+- 先构建或拉取镜像，这一步不改动正在运行的服务；之后、重建容器之前，把 MySQL 转储和 Registry 身份材料备份到 `~/aiserveweave-backups`（可用 `--backup-dir` 修改）。任何一项备份失败都会中止升级。
+- 拉取模式下总是拉取全部服务的镜像，即使命令只点名了部分服务；镜像没有变化的容器不会重建。
+- 结束时打印回滚命令（切换过镜像版本时还有回滚镜像的命令），以及本次备份的位置。
+- `--prune` 清理悬空镜像、旧版本以 `deploy-<服务>` 命名的镜像，并把构建缓存压到 2 GB 以内。
 
-两个脚本都逐个构建镜像，不会并行构建，因此 4 GiB 内存的主机也能完成构建。内存加 swap 低于
-6 GiB 时脚本会给出警告。
+两个脚本都逐个构建镜像，不会并行构建。源码构建时内存加 swap 低于 6 GiB 脚本会给出警告；
+这类主机应改为拉取预构建镜像，见下一节。
+
+## 小内存主机
+
+下面以 2 核、3 GiB 内存的主机为例。服务本身跑得下，主机上的 Go 与 Next.js 构建却跑不下。
+
+### 拉取预构建镜像，不在主机上构建
+
+打 `vX.Y.Z` tag 时，Release 流水线会把四个服务的多架构镜像推送到
+`ghcr.io/dongmu101/aiserveweave-<服务>:<版本>`（见 [RELEASING.md](../RELEASING.md)）。
+把 `.env` 的 `AISW_IMAGE_TAG` 设为某个已发布版本，脚本就改为拉取镜像：
+
+```bash
+git fetch --tags
+deploy/install.sh --owner-email owner@example.com --image-tag v0.2.0   # 首次部署
+deploy/upgrade.sh --image-tag v0.2.0                                   # 已有部署切换或升级版本
+```
+
+- 镜像版本与代码版本应当一致。compose 文件来自当前检出，镜像来自 release；两者的
+  `deploy/docker-compose.yaml` 不同时脚本会警告，因为该版本之后新增的启动参数旧二进制不认识。
+  最稳妥的做法是 `git checkout v0.2.0` 后再部署。
+- 镜像只在打 tag 时发布。main 上尚未发布的提交，仍须源码构建，或先打一个 release。
+- GHCR 包为私有时，先用带 `read:packages` 权限的 token 执行 `docker login ghcr.io`。
+- 拉取模式下 `docker compose up` 带 `--no-build`，缺少镜像会直接报错，不会悄悄在主机上构建。
+  手工操作时使用 `docker compose pull && docker compose up -d --no-build`。
+
+### 必须在主机上构建时
+
+- 先加 swap，内存加 swap 至少 6 GiB：
+
+  ```bash
+  sudo fallocate -l 4G /swapfile && sudo chmod 600 /swapfile
+  sudo mkswap /swapfile && sudo swapon /swapfile
+  echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+  echo 'vm.swappiness=10' | sudo tee /etc/sysctl.d/99-swappiness.conf && sudo sysctl --system
+  ```
+
+- 在 `.env` 设置 `AGENT_PLATFORMS`，只编译实际要发的平台。交叉编译六个平台的 Agent 是 Gateway 镜像里最慢的一步。
+- Dockerfile 的 Go 编译使用 BuildKit 缓存挂载，第二次以后只重编改动的包；只改 Console 不会让 Go 镜像重建。
+  缓存在 `docker builder prune` 之后才会清空。
+
+### 内存上限
+
+每个常驻服务都有容器内存上限。Go 服务配套 `GOMEMLIMIT`（约为上限的 80%），堆接近它时 GC
+更积极地回收，不会一路涨到被内核 OOM 杀掉；Console 用 `--max-old-space-size` 限制 V8 堆。
+没有这些上限时，内存一紧，内核往往先杀掉占用最大的 mysqld。
+
+| 服务 | 默认上限 | 配套参数 | 覆盖变量 |
+| --- | --- | --- | --- |
+| mysql | 768m | buffer pool 256M | `MYSQL_MEM_LIMIT`、`MYSQL_INNODB_BUFFER_POOL_SIZE` |
+| gateway | 512m | `GOMEMLIMIT=400MiB` | `GATEWAY_MEM_LIMIT`、`GATEWAY_GOMEMLIMIT` |
+| controlplane | 384m | `GOMEMLIMIT=300MiB` | `CONTROLPLANE_MEM_LIMIT`、`CONTROLPLANE_GOMEMLIMIT` |
+| console | 384m | V8 堆 256 MB | `CONSOLE_MEM_LIMIT`、`CONSOLE_NODE_HEAP_MB` |
+| redis | 256m | 不设 `maxmemory`，吊销状态不能被淘汰 | `REDIS_MEM_LIMIT` |
+| registry | 128m | `GOMEMLIMIT=100MiB` | `REGISTRY_MEM_LIMIT`、`REGISTRY_GOMEMLIMIT` |
+
+上限合计约 2.4 GiB，是上限而不是预留。上线后用 `docker stats --no-stream` 观察实际占用；
+某个服务因超限被杀时，`docker inspect -f '{{.State.OOMKilled}}' <容器>` 显示 `true`，按需调高并同步配套参数。
+Gateway 刻意不限制请求体大小，并发大请求（如 Claude Code）占内存最多，因此上限给得最高。
+
+### MySQL 与日志
+
+- MySQL 关闭 performance_schema 与 binlog，buffer pool 256M，最大连接数 60。这套单实例部署
+  不做主从复制，也不做按时间点恢复，备份走 mysqldump（见 [database-recovery.md](database-recovery.md)）。
+  旧部署升级后，数据卷里已有的 `binlog.*` 文件不会再被使用，确认无用后可以删除：
+
+  ```bash
+  docker compose exec mysql sh -c 'rm -f /var/lib/mysql/binlog.[0-9]* /var/lib/mysql/binlog.index'
+  ```
+
+- 所有容器日志使用 json-file 驱动轮转，每个容器最多保留 3 个 10 MB 文件。
+  `docker compose logs` 只能看到轮转后保留的部分。
 
 ## 起步
 
@@ -136,6 +212,9 @@ docker compose up -d --build
 docker compose ps --all
 docker compose logs --tail=50 bootstrap
 ```
+
+`.env` 设置了 `AISW_IMAGE_TAG` 时，把第二行换成
+`docker compose pull && docker compose up -d --no-build`，见「小内存主机」。
 
 `mysql`、`redis`、`console` 应最终显示 `healthy`；`registry`、`controlplane`、`gateway`
 应持续运行。`registry-init` 与 `bootstrap` 成功结束后显示 `Exited (0)`，属于正常状态。
