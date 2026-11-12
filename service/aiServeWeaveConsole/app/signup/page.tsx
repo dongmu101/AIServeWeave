@@ -4,6 +4,7 @@ import Link from "next/link";
 import { notFound, redirect } from "next/navigation";
 
 import { SignupForm } from "@/app/signup/signup-form";
+import { LEGAL_PATHS, SiteFooter } from "@/components/site/site-footer";
 import { DEFAULT_LANDING } from "@/lib/console/internal-path";
 import { serverConfig } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
@@ -26,6 +27,7 @@ export default async function SignupPage() {
   }
 
   return (
+    <>
     <main className="flex flex-1 items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <div className="mb-6 flex justify-end"><LanguageSwitcher /></div>
@@ -35,9 +37,15 @@ export default async function SignupPage() {
             <Message id="auth.createANewTenantAndBecomeItsOwner" /></p>
         </div>
         <SignupForm />
+        <p className="mt-4 text-xs text-muted-foreground"><Message id="site.signupConsent" values={{
+          terms: <Link href={LEGAL_PATHS.terms} target="_blank" className="underline underline-offset-4"><Message id="site.terms" /></Link>,
+          privacy: <Link href={LEGAL_PATHS.privacy} target="_blank" className="underline underline-offset-4"><Message id="site.privacy" /></Link>,
+        }} /></p>
         <p className="mt-4 text-xs text-muted-foreground"><Message id="auth.alreadyHaveAnAccount_e11670" values={{ link: <Link href="/login" className="underline underline-offset-4">
             <Message id="auth.signIn" /></Link> }} /></p>
       </div>
     </main>
+    <SiteFooter />
+    </>
   );
 }

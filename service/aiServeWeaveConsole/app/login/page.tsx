@@ -3,6 +3,7 @@ import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import { redirect } from "next/navigation";
 
 import { LoginForm } from "@/app/login/login-form";
+import { SiteFooter } from "@/components/site/site-footer";
 import { internalPath } from "@/lib/console/internal-path";
 import { serverConfig } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
@@ -30,6 +31,7 @@ export default async function LoginPage({
   }
 
   return (
+    <>
     <main className="flex flex-1 items-center justify-center bg-muted/30 p-4 sm:p-6">
       <div className="w-full max-w-md rounded-2xl border bg-card p-6 shadow-sm sm:p-8">
         <div className="mb-6 flex justify-end"><LanguageSwitcher /></div>
@@ -42,5 +44,7 @@ export default async function LoginPage({
         <LoginForm next={target} signupEnabled={serverConfig().signupEnabled} />
       </div>
     </main>
+    <SiteFooter />
+    </>
   );
 }

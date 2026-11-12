@@ -1,7 +1,9 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { LanguageSwitcher } from "@/components/i18n/language-switcher";
+import { Message } from "@/components/i18n/message";
+import { LEGAL_PATHS, SiteFooter } from "@/components/site/site-footer";
+import { SiteHeader } from "@/components/site/site-header";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -16,7 +18,6 @@ import { accountKindLabel } from "@/lib/console/account-sales";
 import { loginPath } from "@/lib/console/internal-path";
 import { loadMessages } from "@/lib/i18n/messages";
 import { createTranslator } from "@/lib/i18n/translate";
-import { serverConfig } from "@/lib/server/config";
 import { callControlPlane } from "@/lib/server/control-plane";
 import { readLocale } from "@/lib/server/locale";
 import { readSession } from "@/lib/server/session";
@@ -75,32 +76,23 @@ export default async function PricingPage() {
   );
   const empty = catalog !== null && catalog.accounts.length + catalog.presales.length + catalog.packages.length + catalog.prices.length === 0;
 
+  const linkClass = "underline underline-offset-4 hover:text-foreground";
+
   return (
-    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 p-4 sm:p-8">
-      <header className="flex flex-wrap items-center justify-between gap-3">
+    <>
+    <SiteHeader signInNext={BUY_TARGET} />
+    <main className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-8 px-4 py-8 sm:px-8">
+      <header>
         <div className="space-y-1">
           <h1 className="font-heading text-2xl font-semibold tracking-tight">{t("pricing.title")}</h1>
           <p className="text-sm text-muted-foreground">{t("pricing.subtitle")}</p>
+          <p className="text-sm text-muted-foreground">
+            <Message id="site.purchaseNote" values={{
+              terms: <Link href={LEGAL_PATHS.terms} className={linkClass}>{t("site.terms")}</Link>,
+              refund: <Link href={LEGAL_PATHS.refund} className={linkClass}>{t("site.refund")}</Link>,
+            }} />
+          </p>
         </div>
-        <nav className="flex items-center gap-2">
-          <LanguageSwitcher />
-          {signedIn ? (
-            <Link href="/console" className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-              {t("pricing.openConsole")}
-            </Link>
-          ) : (
-            <>
-              <Link href={loginPath(BUY_TARGET)} className={cn(buttonVariants({ variant: "outline", size: "sm" }))}>
-                {t("pricing.signIn")}
-              </Link>
-              {serverConfig().signupEnabled ? (
-                <Link href="/signup" className={cn(buttonVariants({ size: "sm" }))}>
-                  {t("pricing.signUp")}
-                </Link>
-              ) : null}
-            </>
-          )}
-        </nav>
       </header>
 
       {catalog === null ? (
@@ -110,12 +102,15 @@ export default async function PricingPage() {
       ) : (
         <>
           {catalog.accounts.length > 0 ? (
-            <section className="grid gap-3">
-              <h2 className="text-lg font-medium">{t("pricing.accounts")}</h2>
+            <section className="grid grid-cols-1 gap-3">
+              <div className="space-y-1">
+                <h2 className="text-lg font-medium">{t("pricing.accounts")}</h2>
+                <p className="text-sm text-muted-foreground">{t("pricing.accountsHint")}</p>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {catalog.accounts.map(account => (
                   <Card key={account.id}>
-                    <CardHeader><CardTitle className="break-all">{account.name}</CardTitle></CardHeader>
+                    <CardHeader><CardTitle className="wrap-anywhere">{account.name}</CardTitle></CardHeader>
                     <CardContent className="flex items-center justify-between gap-3">
                       <p className="text-lg font-semibold">
                         {t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) })}
@@ -129,13 +124,13 @@ export default async function PricingPage() {
           ) : null}
 
           {catalog.presales.length > 0 ? (
-            <section className="grid gap-3">
+            <section className="grid grid-cols-1 gap-3">
               <h2 className="text-lg font-medium">{t("pricing.presales")}</h2>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {catalog.presales.map(presale => (
                   <Card key={presale.id}>
                     <CardHeader>
-                      <CardTitle className="break-all">{presale.name}</CardTitle>
+                      <CardTitle className="wrap-anywhere">{presale.name}</CardTitle>
                       <p className="text-sm text-muted-foreground">{accountKindLabel(presale.kind)} · {t("tenant.presaleBadge")}</p>
                     </CardHeader>
                     <CardContent className="grid gap-3">
@@ -154,12 +149,15 @@ export default async function PricingPage() {
           ) : null}
 
           {catalog.packages.length > 0 ? (
-            <section className="grid gap-3">
-              <h2 className="text-lg font-medium">{t("pricing.packages")}</h2>
+            <section className="grid grid-cols-1 gap-3">
+              <div className="space-y-1">
+                <h2 className="text-lg font-medium">{t("pricing.packages")}</h2>
+                <p className="text-sm text-muted-foreground">{t("pricing.packagesHint")}</p>
+              </div>
               <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                 {catalog.packages.map(pkg => (
                   <Card key={pkg.id}>
-                    <CardHeader><CardTitle className="break-all">{pkg.name}</CardTitle></CardHeader>
+                    <CardHeader><CardTitle className="wrap-anywhere">{pkg.name}</CardTitle></CardHeader>
                     <CardContent className="flex items-center justify-between gap-3">
                       <div>
                         {pkg.kind === "fixed" ? (
@@ -187,21 +185,24 @@ export default async function PricingPage() {
           ) : null}
 
           {catalog.prices.length > 0 ? (
-            <section className="grid gap-3">
-              <h2 className="text-lg font-medium">{t("pricing.prices")}</h2>
+            <section className="grid grid-cols-1 gap-3">
+              <div className="space-y-1">
+                <h2 className="text-lg font-medium">{t("pricing.prices")}</h2>
+                <p className="text-sm text-muted-foreground">{t("pricing.pricesHint")}</p>
+              </div>
               <div className="rounded-lg border">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>{t("pricing.model")}</TableHead>
-                      <TableHead className="text-right">{t("pricing.input")}</TableHead>
-                      <TableHead className="text-right">{t("pricing.output")}</TableHead>
+                      <TableHead className="h-auto py-2 text-right whitespace-normal">{t("pricing.input")}</TableHead>
+                      <TableHead className="h-auto py-2 text-right whitespace-normal">{t("pricing.output")}</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
                     {catalog.prices.map(price => (
                       <TableRow key={price.model}>
-                        <TableCell className="break-all">
+                        <TableCell className="whitespace-normal wrap-anywhere">
                           {price.model === DEFAULT_PRICE_MODEL ? t("pricing.defaultModel") : price.model}
                         </TableCell>
                         <TableCell className="text-right">{formatCredits(price.inputMicroPerMTok, locale)}</TableCell>
@@ -216,5 +217,7 @@ export default async function PricingPage() {
         </>
       )}
     </main>
+    <SiteFooter />
+    </>
   );
 }

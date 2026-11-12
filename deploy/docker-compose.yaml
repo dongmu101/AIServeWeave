@@ -370,6 +370,14 @@ services:
       # Local Compose uses HTTP on loopback. Enable Secure cookies behind HTTPS.
       # 本地 Compose 使用回环 HTTP；部署在 HTTPS 之后时启用 Secure Cookie。
       AISW_CONSOLE_COOKIE_SECURE: ${AISW_CONSOLE_COOKIE_SECURE:-false}
+      # Operator facts stated on /terms, /privacy, /refund and the page footers.
+      # 公开条款页与页脚陈述的营运方资讯；未设置时显示方括号占位符。
+      AISW_CONSOLE_LEGAL_SERVICE_NAME: ${AISW_CONSOLE_LEGAL_SERVICE_NAME:-}
+      AISW_CONSOLE_LEGAL_COMPANY: ${AISW_CONSOLE_LEGAL_COMPANY:-}
+      AISW_CONSOLE_LEGAL_ADDRESS: ${AISW_CONSOLE_LEGAL_ADDRESS:-}
+      AISW_CONSOLE_LEGAL_EMAIL: ${AISW_CONSOLE_LEGAL_EMAIL:-}
+      AISW_CONSOLE_LEGAL_JURISDICTION: ${AISW_CONSOLE_LEGAL_JURISDICTION:-}
+      AISW_CONSOLE_LEGAL_REFUND_WINDOW_DAYS: ${AISW_CONSOLE_LEGAL_REFUND_WINDOW_DAYS:-}
     ports:
       - "127.0.0.1:${CONSOLE_PORT:-3000}:3000"
     depends_on:

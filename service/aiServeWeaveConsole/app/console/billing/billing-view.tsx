@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { AccountSales } from "@/components/console/account-sales";
 import { PresaleSales } from "@/components/console/account-presales";
@@ -228,6 +229,10 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
       <div className="min-w-0">
         <h1 className="font-heading text-lg font-semibold"><Message id="tenant.billing" /></h1>
         <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
+        <p className="text-sm text-muted-foreground"><Message id="site.purchaseNote" values={{
+          terms: <Link href="/terms" target="_blank" className="underline underline-offset-4"><Message id="site.terms" /></Link>,
+          refund: <Link href="/refund" target="_blank" className="underline underline-offset-4"><Message id="site.refund" /></Link>,
+        }} /></p>
       </div>
       {data?.hasCustomer && canPurchase ? <PortalButton /> : null}
     </div>

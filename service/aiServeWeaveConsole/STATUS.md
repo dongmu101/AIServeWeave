@@ -23,6 +23,7 @@ Console 通过服务端调用控制面的 Admin/Operator API；Job 取消与产�
 | 业务页面（用户/Key/审计/配额） | M2、M3 已就位 | `app/console/users`、`keys`、`audit`、`quota`，均对接真实 Admin API；三张列表为服务端游标分页与筛选 |
 | 运维页面（节点/模型/发布状态） | M4、M5 已就位 | `app/console/fleet`、`models`，以及 `workflows` 的运维区块；只读，只在配置了运维模式的部署中存在，且只对名单内的人存在 |
 | 预充值计费 | 已接入 | 租户 `app/console/billing`、运维 `app/operator/(protected)/billing`，经白名单调用控制面计费 API；Console 不持有 Dodo 或一人付凭据，见下文「预充值计费 Console 接入」与「支付宝（一人付）兑换」 |
+| 公开首页与法律条款 | 已交付（2026-11-12），未经支付机构审核 | `/` 未登录时为产品介绍首页，新增 `/terms`、`/privacy`、`/refund`，公开页统一页脚、注册同意声明与计费页条款提示；营运方资讯来自 `AISW_CONSOLE_LEGAL_*` 环境变量，未设置时显示占位符。见 [README「公开首页与法律条款」](README.md#公开首页与法律条款) |
 | 工作流与运行（租户） | M5 已就位 | `app/console/workflows`（菜单，不含图）、`app/console/jobs`（实时视图）、`app/console/jobs/history`（持久化历史与详情），取消和产物访问经服务端 Gateway 入口 |
 
 实现时遵守 [Console 开发约定](AGENTS.md) 与 [仓库开发约定](../../AGENTS.md)。技术栈沿用现有选型；动 Next.js 代码前先读本地 `node_modules/next/dist/docs/`，不在本规划中引入依赖升级。

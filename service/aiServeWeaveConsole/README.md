@@ -248,6 +248,24 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 
 租户模型目录以 TanStack Table 列表展示，每个 Agent 只占一条主记录：Agent 列显示标识与连接状态，AI 服务列内使用子表列出该 Agent 的服务 ID、类型、健康、版本与模型数量；列表不展示模型 ID，需点“查看模型”在弹窗中查看。同一 Agent 的多个服务不会重复主记录。Agent 主表、服务子表和模型详情分别在当前已采集快照内每页显示 25 条，限制 DOM 行数。搜索覆盖当前快照的全部 Agent/服务/模型，不限于当前页，支持只看在线 Agent。完整模型 ID 与能力通过“查看模型”弹窗按需展示，详情打开时暂停自动刷新。计数与页数仅描述这次已采集快照，不是跨时间的机群总量。
 
+## 公开首页与法律条款
+
+支付机构（例如 Antom 的 MOR 审核）要求网站公开展示产品、价格、服务条款、隐私政策与退款政策，因此以下页面不需要登录，也不经 `proxy.ts`：
+
+| 路径 | 内容 |
+| --- | --- |
+| `/` | 未登录时显示产品介绍首页（API、预付点数、独享包月）、价格入口与条款链接；已登录成员照旧跳转到概览页 |
+| `/pricing` | 公开价格目录（读取控制面 `GET /billing/v1/catalog`），各分区附说明，并注明购买须遵守服务条款与退款政策 |
+| `/terms`、`/privacy`、`/refund` | 服务条款、隐私政策、退款政策 |
+
+首页、价格、条款、登录与注册页底部都有统一页脚（价格与三份条款的链接、营运方名称与联系邮箱）；注册页注明「创建账号即表示同意服务条款与隐私政策」，Console 计费页注明购买须遵守服务条款与退款政策。这些页面允许搜索引擎索引，其余页面仍为 `noindex`。
+
+- **正文**写在 `lib/legal/content/`，有英文、简体中文、繁体中文三个版本，以英文为准；其他界面语言显示英文正文并附提示。修改正文时同步三个版本并更新 `lib/legal/types.ts` 的 `LEGAL_UPDATED`；`lib/legal/legal.test.ts` 会检查三个版本的章节结构一致。
+- **营运方资讯**从环境变量读取（见 [.env.example](.env.example)）：`AISW_CONSOLE_LEGAL_SERVICE_NAME`（默认 AIServeWeave）、`_COMPANY`、`_ADDRESS`、`_EMAIL`、`_JURISDICTION`、`_REFUND_WINDOW_DAYS`。未设置或格式不对时显示方括号占位符，服务端首次渲染时打印警告，**上线前必须填写**。
+- **退款期限** `AISW_CONSOLE_LEGAL_REFUND_WINDOW_DAYS` 必须与控制面 `Billing.RefundWindowDays` 一致（默认 30；0 时退款政策改为「点数一经入账不予退款」）。Console 不读取控制面配置，两边不一致时页面陈述会与实际规则不符。
+- 退款政策与当前实现一致：点数退款只退未用部分，目前通过邮件申请（Console 尚无租户自助申请界面），由运维在 `/operator/billing` 处理；已开通的账号包月不退；预售未交付可全额退款；支付宝额度支付的订单系统内不可撤销。业务规则变更时须同步修改条款正文。
+- `/pricing` 的商品来自控制面目录，计费未开启或目录为空时只显示「暂未开放购买」，提交支付审核前须先上架商品。
+
 ## 预充值计费（Dodo Payments）
 
 计费的业务与支付全部在控制面：点数余额、账目、订单、模型单价与 Dodo Payments 的 API Key、Webhook 密钥都只在控制面。**Console 不持有任何 Dodo 凭据，不引入 Dodo SDK，也不直连 Dodo**；页面只经 `/api/admin/*`、`/api/operator/*` 白名单调用控制面，Dodo 的 Webhook 直接打到控制面 `POST /billing/v1/dodo/webhook`，不经过 Console、也不在白名单里。
