@@ -63,7 +63,7 @@ func saveAccountPresale(ctx *svc.ServiceContext, create bool) http.HandlerFunc {
 		}
 		row, err := ctx.Logic.SaveAccountPresale(r.Context(), actor, model.AccountPresale{
 			ID: pathvar.Vars(r)["id"], Kind: req.Kind, Name: req.Name, PriceMinor: req.PriceMinor, Currency: req.Currency,
-			DodoProductID: req.DodoProductID, Capacity: req.Capacity, Active: req.Active,
+			DodoProductID: req.DodoProductID, Capacity: req.Capacity, Active: req.Active, AlipayAmount: req.AlipayAmount,
 		}, create)
 		if err != nil {
 			respondErr(w, err)

@@ -144,3 +144,38 @@ func TestPresaleHTTPLifecycleAndSafeProjection(t *testing.T) {
 		t.Fatal("catalog leaks presale fields", body)
 	}
 }
+
+func TestSaveAccountPresaleKeepsAlipayAmount(t *testing.T) {
+	st := memstore.New()
+	services := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock(), logic.WithBilling(logic.BillingConfig{Provider: &accountHandlerProvider{}}))}
+	operator := logic.Actor{TenantID: model.PlatformScope, Role: model.RolePlatformOperator, UserID: "op"}
+	serve := func(h http.HandlerFunc, method, body string, vars map[string]string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "/operator/v1/billing/presales", strings.NewReader(body))
+		if vars != nil {
+			r = pathvar.WithVars(r, vars)
+		}
+		r = r.WithContext(withActor(r.Context(), operator))
+		w := httptest.NewRecorder()
+		h(w, r)
+		return w
+	}
+	created := serve(saveAccountPresale(services, true), http.MethodPost,
+		`{"kind":"claude","name":"Alipay only","price_minor":250000,"currency":"CNY","dodo_product_id":"","capacity":10,"active":true,"alipay_amount":1}`, nil)
+	var row struct {
+		ID           string `json:"id"`
+		AlipayAmount int64  `json:"alipay_amount"`
+	}
+	if created.Code != http.StatusCreated || json.Unmarshal(created.Body.Bytes(), &row) != nil || row.AlipayAmount != 1 {
+		t.Fatal("create", created.Code, created.Body.String())
+	}
+	updated := serve(saveAccountPresale(services, false), http.MethodPut,
+		`{"kind":"claude","name":"Alipay only","price_minor":250000,"currency":"CNY","dodo_product_id":"pdt_x","capacity":10,"active":true,"alipay_amount":25}`,
+		map[string]string{"id": row.ID})
+	if updated.Code != http.StatusOK || json.Unmarshal(updated.Body.Bytes(), &row) != nil || row.AlipayAmount != 25 {
+		t.Fatal("update", updated.Code, updated.Body.String())
+	}
+	stored, err := st.ListAccountPresales(context.Background(), time.Now())
+	if err != nil || len(stored) != 1 || stored[0].AlipayAmount != 25 {
+		t.Fatal("stored", stored, err)
+	}
+}
