@@ -27,6 +27,7 @@
 #   deploy/upgrade.sh gateway console      # rebuild only these services
 #   deploy/upgrade.sh --no-pull            # rebuild the current checkout as it is
 #   deploy/upgrade.sh --image-tag v0.2.0   # pull that release's images instead of building
+#   deploy/upgrade.sh --follow             # from now on, pull the images make publish pushed for each new commit
 #   deploy/upgrade.sh --no-build           # start images already loaded here (make push)
 #   deploy/upgrade.sh --help
 set -euo pipefail
@@ -42,8 +43,10 @@ usage() {
   --force           兼容旧用法，无作用（代码没有新提交时也会照常重建）
   --no-backup       跳过 MySQL 与 Registry 备份
   --backup-dir DIR  备份目录（默认 ~/aiserveweave-backups）
-  --image-tag TAG   改为拉取该 release 的预构建镜像（写入 .env 的 AISW_IMAGE_TAG）；
-                    传空字符串 '' 切回源码构建。拉取模式下总是拉取全部服务的镜像
+  --follow          开启跟随模式（写入 .env 的 AISW_IMAGE_FOLLOW=true）：之后每次升级拉取
+                    make publish 为新提交推送的镜像，直接运行 deploy/upgrade.sh 即可
+  --image-tag TAG   固定拉取这个版本的预构建镜像（写入 .env 的 AISW_IMAGE_TAG），并关闭跟随
+                    模式；传空字符串 '' 切回源码构建。拉取模式下总是拉取全部服务的镜像
   --no-build        不构建也不拉取，直接启动本机已有的镜像（在别处构建后 load 进来，见根目录
                     Makefile 的 make push）；缺少镜像时中止
   --goproxy URL     源码构建时的 Go 模块代理，如 https://goproxy.cn,direct
@@ -54,7 +57,7 @@ EOF
 
 ORIGINAL_ARGS=("$@")
 PULL=1 BACKUP=1 PRUNE=0 FROM="" GOPROXY_ARG=""
-SET_TAG=0 IMAGE_TAG_ARG="" NO_BUILD=0
+SET_TAG=0 IMAGE_TAG_ARG="" NO_BUILD=0 FOLLOW=0
 BACKUP_DIR="${AISW_BACKUP_DIR:-$HOME/aiserveweave-backups}"
 SERVICES=()
 while (($# > 0)); do
@@ -63,6 +66,7 @@ while (($# > 0)); do
     --force) shift ;; # accepted for old commands; a rebuild always runs / 兼容旧命令；总会重建
     --no-backup) BACKUP=0; shift ;;
     --no-build) NO_BUILD=1; shift ;;
+    --follow) FOLLOW=1; shift ;;
     --backup-dir) BACKUP_DIR="${2:?}"; shift 2 ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
     --image-tag)
@@ -91,7 +95,10 @@ if (( PULL == 1 )); then
 $dirty"
 
   log "拉取 $(git -C "$ROOT_DIR" rev-parse --abbrev-ref '@{u}')"
-  git -C "$ROOT_DIR" fetch --quiet
+  # Tags too: git describe on this host must match the build machine's, the
+  # version follow mode pulls by.
+  # 连同 tag 一起拉：本机的 git describe 必须与构建机一致，跟随模式按它拉取镜像。
+  git -C "$ROOT_DIR" fetch --quiet --tags
   old="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   new="$(git -C "$ROOT_DIR" rev-parse '@{u}')"
   if [[ "$old" == "$new" ]]; then
@@ -164,10 +171,17 @@ fi
 # ---- configuration that a new version may require ----
 ensure_env
 OLD_TAG="$(image_tag)"
+(( SET_TAG == 0 || FOLLOW == 0 )) || die "--image-tag 与 --follow 不能同时使用"
 if (( SET_TAG == 1 )); then
   [[ -z "${AISW_IMAGE_TAG+x}" ]] || warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，--image-tag 写入 .env 的值不会生效"
   env_set AISW_IMAGE_TAG "$IMAGE_TAG_ARG"
+  if [[ "$(env_get AISW_IMAGE_FOLLOW)" == true ]]; then
+    env_set AISW_IMAGE_FOLLOW ""
+    log "已关闭跟随模式，固定为 ${IMAGE_TAG_ARG:-源码构建}；恢复跟随用 --follow"
+  fi
 fi
+(( FOLLOW == 0 )) || env_set AISW_IMAGE_FOLLOW true
+(( NO_BUILD == 1 )) || follow_commit_images
 fill_secrets
 ensure_controlplane_config
 ensure_access_log_off
@@ -232,6 +246,7 @@ else
 fi
 if [[ "$OLD_TAG" != "$NEW_TAG" ]]; then
   echo "  回滚镜像: deploy/upgrade.sh --no-pull --no-backup --image-tag '${OLD_TAG}'"
+  [[ "$(env_get AISW_IMAGE_FOLLOW)" != true ]] || echo "            回滚会关闭跟随模式；之后恢复用 deploy/upgrade.sh --follow"
 fi
 if [[ -n "$FROM" ]]; then
   echo "  回滚代码: cd $ROOT_DIR && cp deploy/controlplane.yaml deploy/controlplane.yaml.bak && git stash && git checkout ${FROM:0:12} && git stash pop && cp deploy/controlplane.yaml.bak deploy/controlplane.yaml && deploy/upgrade.sh --no-pull --no-backup"

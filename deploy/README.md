@@ -68,7 +68,8 @@ deploy/install.sh --owner-email owner@example.com --operator-email ops@example.c
 deploy/upgrade.sh                    # 拉取当前分支的上游提交，备份，重建有变化的服务
 deploy/upgrade.sh gateway console    # 只重建指定服务
 deploy/upgrade.sh --no-pull          # 不拉取代码，直接按当前工作区重建
-deploy/upgrade.sh --image-tag v0.2.0 # 改为拉取该 release 的预构建镜像；--image-tag '' 切回源码构建
+deploy/upgrade.sh --image-tag v0.2.0 # 固定拉取该版本的预构建镜像；--image-tag '' 切回源码构建
+deploy/upgrade.sh --follow           # 开启跟随模式，之后每次升级拉取 make publish 为新提交推送的镜像
 deploy/upgrade.sh --no-build           # 沿用已 load 到本机的镜像（make push），不构建也不拉取
 ```
 
@@ -121,13 +122,25 @@ make publish                              # 结束时打印主机上要执行的
 make publish PUBLISH_TAGS="v0.2.0 latest" # 指定 tag
 ```
 
-主机上第一次在 `deploy/.env` 设置 `AISW_IMAGE_REPO=docker.io/dongmu101`，之后每次：
+主机上第一次在 `deploy/.env` 设置 `AISW_IMAGE_REPO=docker.io/dongmu101`，开启跟随模式：
 
 ```bash
-git pull && deploy/upgrade.sh --image-tag v0.1.0-107-g3625aaf
+deploy/upgrade.sh --follow     # 写入 AISW_IMAGE_FOLLOW=true，并拉取当前提交的镜像
 ```
 
-脚本会从 tag 里的 `g<提交>` 找出镜像构建时的提交，用它核对本机的 compose 文件。
+之后每次 `make publish` 完成，主机上只需执行：
+
+```bash
+deploy/upgrade.sh
+```
+
+跟随模式下，脚本快进代码后以新提交的 `git describe` 为 tag 拉取镜像，这正是 `make publish` 为同一提交推送的
+tag，因此代码与镜像总是出自同一个提交。版本里的哈希两边都固定为 12 位，否则 git 会按仓库大小自动决定长度。
+`make publish` 尚未完成时，拉取会失败并中止，服务不受影响，等推送完成后重跑即可。
+
+- 固定到某个版本（例如回滚）：`deploy/upgrade.sh --image-tag v0.1.0-107-g3625aafe4e56`，同时关闭跟随模式，
+  恢复跟随用 `--follow`。
+- 脚本从 tag 里的 `g<提交>` 找出镜像构建时的提交，用它核对本机的 compose 文件。
 首次多平台构建会创建一个名为 `aisw-multiarch` 的 docker-container builder，不会改动默认 builder。
 Docker Hub 新建的仓库默认公开，可在 Docker Hub 设置里调整。
 

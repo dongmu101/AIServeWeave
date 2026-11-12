@@ -34,6 +34,8 @@ usage() {
 镜像来源（默认从源码构建）:
   --image-tag vX.Y.Z         拉取该 release 的预构建镜像（GHCR），主机上不构建；写入 .env 的
                              AISW_IMAGE_TAG。小内存主机（如 2 核 3G）推荐
+  --follow                   拉取 make publish 为当前提交推送的镜像，之后 upgrade.sh 继续跟随；
+                             写入 .env 的 AISW_IMAGE_FOLLOW=true，需同时设置 AISW_IMAGE_REPO
   --goproxy URL              源码构建时的 Go 模块代理，如 https://goproxy.cn,direct
 
 部署选项:
@@ -50,7 +52,7 @@ EOF
 
 OWNER_EMAIL="" OWNER_PASSWORD="" TENANT_NAME="" OPERATOR_EMAIL="" OPERATOR_PASSWORD=""
 HTTPS=0 SIGNUP=0 ADVERTISE_ADDR="" AGENT_URL="" LOCAL_DISCOVERY=0 NO_BUILD=0 GOPROXY_ARG=""
-IMAGE_TAG_ARG=""
+IMAGE_TAG_ARG="" FOLLOW=0
 while (($# > 0)); do
   case "$1" in
     --owner-email) OWNER_EMAIL="${2:?}"; shift 2 ;;
@@ -65,6 +67,7 @@ while (($# > 0)); do
     --local-discovery) LOCAL_DISCOVERY=1; shift ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
     --image-tag) IMAGE_TAG_ARG="${2:?}"; shift 2 ;;
+    --follow) FOLLOW=1; shift ;;
     --no-build) NO_BUILD=1; shift ;;
     -h | --help) usage; exit 0 ;;
     *) usage >&2; die "未知参数: $1" ;;
@@ -120,7 +123,10 @@ fi
   warn "未设置 owner 与运维邮箱，bootstrap 不会建号；可用 --owner-email 重跑"
 
 (( HTTPS == 0 )) || env_set AISW_CONSOLE_COOKIE_SECURE true
+[[ -z "$IMAGE_TAG_ARG" || $FOLLOW == 0 ]] || die "--image-tag 与 --follow 不能同时使用"
 [[ -z "$IMAGE_TAG_ARG" ]] || env_set AISW_IMAGE_TAG "$IMAGE_TAG_ARG"
+(( FOLLOW == 0 )) || env_set AISW_IMAGE_FOLLOW true
+follow_commit_images
 [[ -z "$ADVERTISE_ADDR" ]] || env_set GATEWAY_ADVERTISE_ADDR "$ADVERTISE_ADDR"
 if [[ -n "$AGENT_URL" ]]; then
   [[ "$AGENT_URL" =~ ^https://[^/?#]+$ ]] || die "--agent-public-url 必须是 https 站点根地址，如 https://open7x.com"

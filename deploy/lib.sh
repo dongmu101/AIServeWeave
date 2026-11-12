@@ -348,7 +348,7 @@ pull_images() {
   log "拉取预构建镜像 ${repo:-ghcr.io/dongmu101}/aiserveweave-*:${tag}"
   # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
   compose pull $BUILD_ORDER ||
-    die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已 make publish）；仓库为私有时先 docker login"
+    die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已在构建机对该提交 make publish）；仓库为私有时先 docker login。代码可能已更新，服务未改动"
 }
 
 # prepare_images makes the images that compose up will start: pulled when
@@ -396,10 +396,40 @@ up_flags() {
   [[ -z "$(image_tag)" ]] || printf '%s' --no-build
 }
 
+# follow_commit_images points AISW_IMAGE_TAG at this checkout's version when
+# AISW_IMAGE_FOLLOW is true. That version is the tag make publish pushes for
+# the same commit, so an upgrade that fast-forwarded the code pulls images
+# built from exactly that code. The tag is written into .env, so a manual
+# docker compose up afterwards starts the same images.
+#
+# follow_commit_images 在 AISW_IMAGE_FOLLOW 为 true 时把 AISW_IMAGE_TAG 指向当前检出的
+# 版本。这个版本正是 make publish 为同一提交推送的 tag，因此快进了代码的升级拉取到的，正是由
+# 这份代码构建的镜像。tag 写入 .env，之后手工 docker compose up 启动的也是同一批镜像。
+follow_commit_images() {
+  [[ "$(env_get AISW_IMAGE_FOLLOW)" == true ]] || return 0
+  local version
+  version="$(source_version)"
+  case "$version" in
+    dev) die "跟随模式需要 git 检出来确定版本，取不到 git 版本" ;;
+    *-dirty) die "跟随模式下工作区不能有未提交的改动（版本 ${version}），make publish 不会推送这个版本" ;;
+  esac
+  [[ -z "${AISW_IMAGE_TAG+x}" ]] || warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，跟随模式不会生效"
+  [[ -n "$(env_get AISW_IMAGE_REPO)" ]] ||
+    warn "未设置 AISW_IMAGE_REPO，将从 ghcr.io/dongmu101 拉取；make publish 默认推送到 Docker Hub，应设置 AISW_IMAGE_REPO=docker.io/dongmu101"
+  env_set AISW_IMAGE_TAG "$version"
+  log "跟随当前提交的镜像：${version}"
+}
+
 # source_version names the checkout being built, for each binary's -version.
+# The hash is fixed at 12 characters: git otherwise sizes it to the
+# repository, and the build machine and the server must agree on it because
+# follow mode uses it as the image tag.
+#
+# 哈希固定为 12 位：否则 git 按仓库大小决定长度，而构建机与服务器必须算出同一个值，因为跟随
+# 模式用它作镜像 tag。
 # source_version 标识正在构建的代码版本，供各二进制的 -version 使用。
 source_version() {
-  git -C "$ROOT_DIR" describe --tags --always --dirty 2>/dev/null || echo dev
+  git -C "$ROOT_DIR" describe --tags --always --dirty --abbrev=12 2>/dev/null || echo dev
 }
 
 # wait_exited waits for a one-shot service to finish and prints its exit code.

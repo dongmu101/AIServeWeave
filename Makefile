@@ -32,7 +32,10 @@ SHELL := /bin/bash
 PLATFORM        ?= linux/amd64
 REPO            ?= ghcr.io/dongmu101
 TAG             ?= local
-VERSION         ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+# Same command as source_version in deploy/lib.sh: the server derives the tag
+# to pull from it in follow mode, so the two must agree.
+# 与 deploy/lib.sh 的 source_version 同一条命令：服务器在跟随模式下据此推出要拉取的 tag，两边必须一致。
+VERSION         ?= $(shell git describe --tags --always --dirty --abbrev=12 2>/dev/null || echo dev)
 SERVICES        ?= registry controlplane gateway console
 AGENT_PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 GOPROXY         ?=
@@ -163,8 +166,9 @@ publish: check-git builder $(addprefix publish-,$(SERVICES)) ## 构建 amd64 + a
 	@echo "==> 已推送到 $(HUB_REPO)（$(PUBLISH_PLATFORMS)）:"
 	@for s in $(SERVICES); do for t in $(PUBLISH_TAGS); do echo "    $(HUB_REPO)/aiserveweave-$${s}:$${t}"; done; done
 	@echo
-	@echo "  服务器上部署（首次先在 deploy/.env 设置 AISW_IMAGE_REPO=$(HUB_REPO)）:"
-	@echo "    git pull && deploy/upgrade.sh --image-tag $(firstword $(PUBLISH_TAGS))"
+	@echo "  服务器上部署:"
+	@echo "    首次: 在 deploy/.env 设置 AISW_IMAGE_REPO=$(HUB_REPO)，再 deploy/upgrade.sh --follow"
+	@echo "    之后: deploy/upgrade.sh"
 
 builder:
 	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || { \
