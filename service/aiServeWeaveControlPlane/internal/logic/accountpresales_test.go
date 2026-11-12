@@ -60,7 +60,7 @@ func TestPresaleDraftValidation(t *testing.T) {
 	if rows, err := f.svc.ListAccountPresales(ctx, f.ownerAt); err != nil || len(rows) != 1 {
 		t.Fatal(rows, err)
 	}
-	if _, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, created.ID, 1500, "USD"); !errors.Is(err, logic.ErrNotFound) {
+	if _, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, created.ID, 1500, "USD", logic.Payment{}); !errors.Is(err, logic.ErrNotFound) {
 		t.Fatal("bought without a payment provider", err)
 	}
 }
@@ -132,16 +132,16 @@ func TestPresaleCheckoutAndAssignment(t *testing.T) {
 	}
 	second := logic.Actor{TenantID: otherTenant.ID, UserID: otherOwner.ID, Role: model.RoleOwner}
 
-	if _, err := f.svc.CreatePresaleCheckout(ctx, f.actorWithRole(model.RoleMember), presale.ID, 1500, "USD"); !errors.Is(err, logic.ErrForbidden) {
+	if _, err := f.svc.CreatePresaleCheckout(ctx, f.actorWithRole(model.RoleMember), presale.ID, 1500, "USD", logic.Payment{}); !errors.Is(err, logic.ErrForbidden) {
 		t.Fatal("member could buy", err)
 	}
-	if _, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, presale.ID, 1499, "USD"); !errors.Is(err, logic.ErrConflict) {
+	if _, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, presale.ID, 1499, "USD", logic.Payment{}); !errors.Is(err, logic.ErrConflict) {
 		t.Fatal("stale price", err)
 	}
-	if _, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, "pre_missing", 1500, "USD"); !errors.Is(err, logic.ErrNotFound) {
+	if _, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, "pre_missing", 1500, "USD", logic.Payment{}); !errors.Is(err, logic.ErrNotFound) {
 		t.Fatal("missing presale", err)
 	}
-	checkout, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, presale.ID, 1500, "USD")
+	checkout, err := f.svc.CreatePresaleCheckout(ctx, f.ownerAt, presale.ID, 1500, "USD", logic.Payment{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,7 +149,7 @@ func TestPresaleCheckoutAndAssignment(t *testing.T) {
 		t.Fatalf("checkout request: %+v", got)
 	}
 	// The pending checkout takes the only place.
-	if _, err := f.svc.CreatePresaleCheckout(ctx, second, presale.ID, 1500, "USD"); !errors.Is(err, logic.ErrConflict) {
+	if _, err := f.svc.CreatePresaleCheckout(ctx, second, presale.ID, 1500, "USD", logic.Payment{}); !errors.Is(err, logic.ErrConflict) {
 		t.Fatal("capacity exceeded", err)
 	}
 	if rows, err := f.svc.ListAccountPresales(ctx, second); err != nil || len(rows) != 1 || logic.PresaleAvailable(rows[0]) {
@@ -244,7 +244,7 @@ func TestPresaleCheckoutAndAssignment(t *testing.T) {
 
 	// The place is free again; an order that cannot be delivered is refunded
 	// by an operator, which blocks its assignment.
-	refundable, err := f.svc.CreatePresaleCheckout(ctx, second, presale.ID, 1500, "USD")
+	refundable, err := f.svc.CreatePresaleCheckout(ctx, second, presale.ID, 1500, "USD", logic.Payment{})
 	if err != nil {
 		t.Fatal("assignment kept the place", err)
 	}

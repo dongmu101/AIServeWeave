@@ -201,14 +201,24 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPost, "/admin/v1/billing/presales/:id/alipay", requireSession, presaleAlipayCheckout(ctx)),
 		}, rest.WithTimeout(AlipayCallTimeout))
 	}
-	// Credit packages, checkouts, the portal and refunds go through Dodo and
-	// exist only when it is configured.
+	// The Dodo webhook and the customer portal are Dodo's alone.
 	//
-	// 充值包、结账、门户与退款都经 Dodo，只在配置了 Dodo 时存在。
-	if ctx.Config.Billing.Enabled && ctx.Config.Billing.DodoConfigured() {
+	// Dodo webhook 与客户门户只属于 Dodo。
+	dodo := ctx.Config.Billing.Enabled && ctx.Config.Billing.DodoConfigured()
+	ezfp := ctx.Config.Billing.Enabled && ctx.Config.Billing.Ezfp.Enabled
+	if dodo {
 		server.AddRoutes([]rest.Route{
 			{Method: http.MethodPost, Path: "/billing/v1/dodo/webhook", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/dodo/webhook", billingWebhook(ctx))},
 		}, rest.WithMaxBytes(MaxBillingWebhookBytes))
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
+		}, rest.WithTimeout(BillingCallTimeout))
+	}
+	// Credit packages, the three fiat checkouts and refunds go through a fiat
+	// provider, Dodo or 易支付, and exist when either is configured.
+	//
+	// 充值包、三种法币结账与退款都经法币服务商（Dodo 或易支付），配置了其一时存在。
+	if dodo || ezfp {
 		server.AddRoutes([]rest.Route{
 			billingRoute(http.MethodGet, "/operator/v1/billing/packages", requirePlatformSession, listCreditPackages(ctx)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/packages", requirePlatformSession, saveCreditPackage(ctx, true)),
@@ -224,9 +234,24 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPost, "/admin/v1/billing/checkout", requireSession, createCheckout(ctx)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/accounts/:id/checkout", requireSession, accountCheckout(ctx)),
 			billingRoute(http.MethodPost, "/admin/v1/billing/presales/:id/checkout", requireSession, presaleCheckout(ctx)),
-			billingRoute(http.MethodPost, "/admin/v1/billing/portal", requireSession, billingPortal(ctx)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/refund-requests/:id/approve", requirePlatformSession, reviewRefundRequest(ctx, refundActionApprove)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/orders/:id/refund", requirePlatformSession, createOperatorRefund(ctx)),
+		}, rest.WithTimeout(BillingCallTimeout))
+	}
+	// 易支付 notifies by GET (and some deployments by POST) to a public route:
+	// it cannot hold a session, and its RSA signature authenticates it. The
+	// refresh route asks 易支付 about one order, so it gets the provider-call
+	// bound.
+	//
+	// 易支付以 GET（部分部署以 POST）向公开路由投递通知：它无法持有会话，认证它的是 RSA
+	// 签名。refresh 路由就一个订单询问易支付，因此使用服务商调用的时限。
+	if ezfp {
+		server.AddRoutes([]rest.Route{
+			{Method: http.MethodGet, Path: "/billing/v1/ezfp/notify", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/ezfp/notify", ezfpNotify(ctx))},
+			{Method: http.MethodPost, Path: "/billing/v1/ezfp/notify", Handler: instrumented(ctx.MetricsRegistry, "/billing/v1/ezfp/notify", ezfpNotify(ctx))},
+		}, rest.WithMaxBytes(MaxEzfpNotifyBytes))
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodPost, "/admin/v1/billing/orders/:id/refresh", requireSession, refreshEzfpOrder(ctx)),
 		}, rest.WithTimeout(BillingCallTimeout))
 	}
 

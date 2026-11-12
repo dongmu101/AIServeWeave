@@ -171,7 +171,7 @@ func TestAlipayOnlyBillingTurnsDodoOff(t *testing.T) {
 	if err != nil || overview.Dodo || !overview.Alipay || len(overview.Packages) != 0 {
 		t.Fatalf("overview %+v %v", overview, err)
 	}
-	if _, err := f.svc.CreateCheckout(ctx, f.ownerAt, "pkg_x", 0); !errors.Is(err, logic.ErrNotFound) {
+	if _, err := f.svc.CreateCheckout(ctx, f.ownerAt, "pkg_x", 0, logic.Payment{}); !errors.Is(err, logic.ErrNotFound) {
 		t.Fatal("checkout without Dodo", err)
 	}
 	if _, err := f.svc.BillingPortalLink(ctx, f.ownerAt); !errors.Is(err, logic.ErrNotFound) {

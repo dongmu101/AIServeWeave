@@ -247,11 +247,21 @@ func nonNegative(v int64) uint64 {
 // once it succeeds; refunds are measured against them, since a refund is in
 // the payment's terms rather than the package's.
 //
+// The Dodo-named columns predate a second fiat provider and now hold the
+// provider's ids: for an 易支付 order, DodoSessionID and DodoPaymentID are
+// both "ezfp:<trade_no>". The prefix keeps one provider's ids from ever
+// colliding with another's under the unique index, and every rule that
+// finds an order by payment keeps working unchanged.
+//
 // CheckoutOrder 是一次购买尝试。点数在创建订单时就已确定，因此 webhook 只负责确认
 // 卖出了什么，而不负责决定卖什么。DodoPaymentID 一旦设置即唯一：它是 webhook-id 去重
 // 之后，防止同一笔付款入账两次的第二道防线。PaidAmountMinor 与 PaidCurrency 在付款成功后
 // 记录这笔付款实际收取的金额（含税）；退款以它们为基准衡量，因为退款使用的是付款的口径，
 // 而不是充值包的口径。
+//
+// 以 Dodo 命名的列早于第二个法币服务商，现在保存的是服务商的 id：易支付订单的
+// DodoSessionID 与 DodoPaymentID 都是 "ezfp:<trade_no>"。前缀使不同服务商的 id 在唯一
+// 索引下永远不会冲突，所有按付款查找订单的规则也都无需改动。
 type CheckoutOrder struct {
 	ID        string `gorm:"primaryKey;size:32"`
 	TenantID  string `gorm:"size:32;not null"`
@@ -303,14 +313,91 @@ type CheckoutOrder struct {
 	// AlipayAmount 是预售订单用支付宝额度支付的单位数；经 Dodo 付款的订单为零。支付宝
 	// 既不报告付款也不能撤销核销，因此这类订单在这里永远不可退款。
 	AlipayAmount int64 `gorm:"not null"`
-	CreatedAt    time.Time
-	UpdatedAt    time.Time
+	// Provider is who takes the payment: PaymentProviderDodo,
+	// PaymentProviderEzfp or PaymentProviderOpcpay. Orders created before it
+	// was recorded leave it empty; read it through PaymentProvider.
+	//
+	// Provider 是收取这笔付款的服务商：PaymentProviderDodo、PaymentProviderEzfp 或
+	// PaymentProviderOpcpay。记录这一列之前创建的订单为空；须经 PaymentProvider 读取。
+	Provider string `gorm:"size:16;not null"`
+	// PayType is the 易支付 payment type the tenant chose, EzfpPayTypeAlipay
+	// or EzfpPayTypeWxpay; empty for other providers.
+	//
+	// PayType 是租户选择的易支付付款方式，EzfpPayTypeAlipay 或 EzfpPayTypeWxpay；其他
+	// 服务商为空。
+	PayType   string `gorm:"size:16;not null"`
+	CreatedAt time.Time
+	UpdatedAt time.Time
 }
 
 // TableName pins the table name.
 //
 // TableName 钉死表名。
 func (CheckoutOrder) TableName() string { return "checkout_orders" }
+
+// Payment providers an order can be paid through. "opcpay" rather than
+// "alipay" names 一人付, so it never reads as 易支付's alipay payment type.
+//
+// 订单可以经由的支付服务商。一人付用 "opcpay" 而不是 "alipay" 命名，使它永远不会被读成
+// 易支付的 alipay 付款方式。
+const (
+	PaymentProviderDodo   = "dodo"
+	PaymentProviderEzfp   = "ezfp"
+	PaymentProviderOpcpay = "opcpay"
+)
+
+// 易支付 payment types.
+//
+// 易支付付款方式。
+const (
+	EzfpPayTypeAlipay = "alipay"
+	EzfpPayTypeWxpay  = "wxpay"
+)
+
+// EzfpCurrency is the only currency 易支付 charges in.
+//
+// EzfpCurrency 是易支付唯一收取的币种。
+const EzfpCurrency = "CNY"
+
+// EzfpIDPrefix prefixes 易支付's trade and refund numbers where they share a
+// column with Dodo's ids.
+//
+// EzfpIDPrefix 是易支付交易号与退款单号与 Dodo id 共用一列时的前缀。
+const EzfpIDPrefix = "ezfp:"
+
+// PaymentProvider is who takes the order's payment. An order from before
+// the provider was recorded is 一人付's when it carries Alipay units and
+// Dodo's otherwise, the only two providers there were.
+//
+// PaymentProvider 是收取该订单付款的服务商。记录服务商之前的订单，带支付宝单位数时属于
+// 一人付，否则属于 Dodo——当时只有这两个服务商。
+func (o CheckoutOrder) PaymentProvider() string {
+	switch {
+	case o.Provider != "":
+		return o.Provider
+	case o.AlipayAmount > 0:
+		return PaymentProviderOpcpay
+	default:
+		return PaymentProviderDodo
+	}
+}
+
+// FiatPayable reports whether an item priced in currency, with Dodo product
+// productID, can be checked out through provider: Dodo needs a product, 易支付
+// a CNY price. An empty provider is Dodo.
+//
+// FiatPayable 报告一个以 currency 标价、Dodo 产品为 productID 的商品能否经 provider
+// 结账：Dodo 需要产品，易支付需要 CNY 标价。provider 为空即 Dodo。
+func FiatPayable(provider, currency, productID string) bool {
+	switch provider {
+	case "", PaymentProviderDodo:
+		return productID != ""
+	case PaymentProviderEzfp:
+		return currency == EzfpCurrency
+	default:
+		return false
+	}
+}
 
 // RefundBasisMinor is the amount refunds are measured against: what the
 // payment charged, or the order amount for an order paid before that was

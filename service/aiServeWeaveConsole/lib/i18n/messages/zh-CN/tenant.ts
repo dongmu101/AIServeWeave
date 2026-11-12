@@ -811,6 +811,22 @@ const tenant = {
   "tenant.alipayStatusFailed": "未成功",
   "tenant.alipayQuantity": "数量",
   "tenant.billingKindAlipayTopup": "支付宝兑换",
-  "tenant.alipayLoading": "正在加载支付宝信息"
+  "tenant.alipayLoading": "正在加载支付宝信息",
+  "tenant.payChoiceDodo": "银行卡 / Dodo",
+  "tenant.payChoiceAlipay": "支付宝",
+  "tenant.payChoiceWxpay": "微信支付",
+  "tenant.payChoicePrompt": "选择支付方式",
+  "tenant.payMethodLine": "支付方式：{method}",
+  "tenant.billingPayMethod": "支付方式",
+  "tenant.billingProviderDodo": "Dodo",
+  "tenant.billingProviderEzfp": "易支付",
+  "tenant.billingProviderEzfpAlipay": "易支付 · 支付宝",
+  "tenant.billingProviderEzfpWxpay": "易支付 · 微信",
+  "tenant.billingProviderOpcpay": "支付宝额度",
+  "tenant.billingRecheck": "再次确认",
+  "tenant.billingRecheckHint": "向支付服务查询这笔订单的最新状态。到账以服务端确认为准，短时间内重复点击只会返回当前状态。",
+  "tenant.billingRecheckStillPending": "仍在等待支付确认，稍后可再次确认。",
+  "tenant.billingMethodUnavailable": "该支付方式暂时无法使用，请刷新页面后重试。",
+  "tenant.accountProductOptionalHint": "币种为 CNY 时可留空，仅能经易支付购买。"
 } as const;
 export default tenant;

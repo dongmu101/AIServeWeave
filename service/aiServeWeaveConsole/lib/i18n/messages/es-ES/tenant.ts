@@ -811,6 +811,22 @@ const tenant = {
   "tenant.alipayStatusFailed": "No completado",
   "tenant.alipayQuantity": "Cantidad",
   "tenant.billingKindAlipayTopup": "Canje de Alipay",
-  "tenant.alipayLoading": "Cargando Alipay"
+  "tenant.alipayLoading": "Cargando Alipay",
+  "tenant.payChoiceDodo": "Tarjeta / Dodo",
+  "tenant.payChoiceAlipay": "Alipay",
+  "tenant.payChoiceWxpay": "WeChat Pay",
+  "tenant.payChoicePrompt": "Elija cómo pagar",
+  "tenant.payMethodLine": "Método de pago: {method}",
+  "tenant.billingPayMethod": "Método de pago",
+  "tenant.billingProviderDodo": "Dodo",
+  "tenant.billingProviderEzfp": "Epay (易支付)",
+  "tenant.billingProviderEzfpAlipay": "Epay · Alipay",
+  "tenant.billingProviderEzfpWxpay": "Epay · WeChat Pay",
+  "tenant.billingProviderOpcpay": "Cuota de Alipay",
+  "tenant.billingRecheck": "Comprobar de nuevo",
+  "tenant.billingRecheckHint": "Consulta al servicio de pagos el estado más reciente de este pedido. Los créditos cuentan solo cuando el servidor los confirma; volver a pulsar enseguida solo devuelve el estado actual.",
+  "tenant.billingRecheckStillPending": "Aún se espera la confirmación del pago. Puede volver a comprobarlo en unos instantes.",
+  "tenant.billingMethodUnavailable": "Este método de pago no está disponible temporalmente. Actualice la página e inténtelo de nuevo.",
+  "tenant.accountProductOptionalHint": "Puede dejarse vacío si la moneda es CNY; entonces el artículo solo se puede comprar mediante Epay."
 } as const;
 export default tenant;

@@ -69,3 +69,18 @@ func TestLiveAlipayRedemptions(t *testing.T) {
 		storetest.AlipayRedemptions(t, st)
 	})
 }
+
+// 易支付 orders share the account scenario's isolated databases.
+func TestLiveEzfpOrders(t *testing.T) {
+	migrationDatabases(t, func(t *testing.T, db *gorm.DB, _ string) {
+		ctx := context.Background()
+		st := gormstore.New(db)
+		if err := st.MigrateAll(ctx, false); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.CheckSchema(ctx); err != nil {
+			t.Fatal(err)
+		}
+		storetest.EzfpOrders(t, st)
+	})
+}

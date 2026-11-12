@@ -20,7 +20,7 @@ Billing:
     ReturnURL: https://console.example.com/console/billing?tab=alipay&alipay_return=1
 ```
 
-`ReturnURL` 可以不填。填写时必须是 HTTPS，主机与端口要与一人付项目登记的网址一致。只配支付宝时可以省略 `Billing.Dodo` 和 `Billing.ReturnURL`，此时充值包、Dodo 结账、客户门户与退款都不挂载。模型单价仍在运维计费页的「模型单价」中设置。
+`ReturnURL` 可以不填。填写时必须是 HTTPS，主机与端口要与一人付项目登记的网址一致。只配支付宝时可以省略 `Billing.Dodo` 和 `Billing.ReturnURL`，此时充值包、Dodo 结账、客户门户与退款都不挂载（同时开启[易支付](billing-ezfp.md)时，充值包、结账与退款改经易支付挂载）。模型单价仍在运维计费页的「模型单价」中设置。
 
 开通后可以先只读核对实际能力与套餐，不会产生付款或核销：
 

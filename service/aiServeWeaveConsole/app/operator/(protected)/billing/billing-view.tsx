@@ -120,10 +120,11 @@ function FilteredHistory({ kind }: { kind: "orders" | "ledger" }) {
 }
 
 /** PackagesUnavailable explains a missing package list: billing off, or on
- * without Dodo (Alipay only), told apart by whether model prices answer.
+ * with neither Dodo nor EZFP (Alipay only), told apart by whether model prices
+ * answer.
  *
- * PackagesUnavailable 解释充值包列表为何缺席：计费关闭，或已开启但未配置 Dodo（只有支付宝），
- * 以模型单价是否可读来区分。 */
+ * PackagesUnavailable 解释充值包列表为何缺席：计费关闭，或已开启但既未配置 Dodo 也未配置
+ * 易支付（只有支付宝），以模型单价是否可读来区分。 */
 function PackagesUnavailable() {
   const { t } = useI18n();
   const prices = useResource<ModelPrice[]>({ method: "GET", surface: "operator", path: "/operator/v1/billing/model-prices", parse: parseModelPrices });
@@ -142,9 +143,9 @@ function PackagesSection() {
   const nonce = React.useRef(0);
   const open = (editing: CreditPackage | null) => { nonce.current += 1; setDialog({ editing, nonce: nonce.current }); };
 
-  // Packages exist only with Dodo. Model prices answering means billing is
-  // on with Alipay alone, which deserves its own explanation.
-  // 充值包只在配置 Dodo 时存在。模型单价能读到说明计费已开启且只有支付宝，需单独说明。
+  // Packages exist only with Dodo or EZFP. Model prices answering means
+  // billing is on with Alipay alone, which deserves its own explanation.
+  // 充值包只在配置 Dodo 或易支付时存在。模型单价能读到说明计费已开启且只有支付宝，需单独说明。
   if (packages.errorKind === "not_found") return <PackagesUnavailable />;
   return <Card>
     <CardHeader className="flex flex-wrap items-center justify-between gap-3">
@@ -169,7 +170,7 @@ function PackagesSection() {
           <TableCell className="min-w-40">{pkg.kind === "fixed"
             ? <span>{t("tenant.billingCreditsValue", { credits: formatCredits(pkg.creditsMicro, locale) })} · {formatMoney(pkg.priceMinor, pkg.currency, locale)}</span>
             : <span>{t("operator.billingPackageRate", { credits: formatCredits(pkg.creditsPerMinorUnitMicro, locale), min: formatMoney(pkg.minAmountMinor, pkg.currency, locale), max: formatMoney(pkg.maxAmountMinor, pkg.currency, locale) })}</span>}</TableCell>
-          <TableCell><code className="text-xs break-all">{pkg.dodoProductId}</code></TableCell>
+          <TableCell><code className="text-xs break-all">{pkg.dodoProductId || "—"}</code></TableCell>
           <TableCell><Badge variant={pkg.active ? "outline" : "secondary"}>{pkg.active ? t("operator.billingListed") : t("operator.billingUnlisted")}</Badge></TableCell>
           <TableCell className="text-right font-mono">{pkg.sortOrder}</TableCell>
           <TableCell><Button size="sm" variant="outline" onClick={() => open(pkg)} aria-label={t("operator.billingEditPackage", { name: pkg.name })}><Message id="common.edit" /></Button></TableCell>
@@ -245,6 +246,7 @@ function PackageDialog({ editing, onClose, onSaved }: { editing: CreditPackage |
           {field("package-currency", <Message id="operator.billingCurrency" />, <CurrencySelect id="package-currency" className={SELECT_CLASS} value={draft.currency} onChange={(currency) => set({ currency })} disabled={pending} />)}
         </div>
         {field("package-product", <Message id="operator.billingDodoProductId" />, <Input id="package-product" value={draft.dodoProductId} onChange={(e) => set({ dodoProductId: e.target.value })} disabled={pending} autoComplete="off" spellCheck={false} />)}
+        <p className="-mt-2 text-xs text-muted-foreground"><Message id="operator.billingProductOptionalHint" /></p>
         {draft.kind === "fixed" ? <div className="grid gap-4 sm:grid-cols-2">
           {field("package-credits", <Message id="operator.billingCreditsInput" />, <Input id="package-credits" inputMode="decimal" value={draft.credits} onChange={(e) => set({ credits: e.target.value })} disabled={pending} />)}
           {field("package-price", <Message id="operator.billingPriceInput" />, <Input id="package-price" inputMode="decimal" value={draft.price} onChange={(e) => set({ price: e.target.value })} disabled={pending} />)}

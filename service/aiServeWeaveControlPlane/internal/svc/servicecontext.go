@@ -18,6 +18,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -32,6 +33,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/dodo"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/ezfp"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/opcpay"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/cache"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/comfyeditor"
@@ -228,6 +230,12 @@ type ServiceContext struct {
 	// alipayCancel/alipayDone 关停支付宝兑换恢复循环；未开启支付宝计费时为 nil。
 	alipayCancel context.CancelFunc
 	alipayDone   chan struct{}
+	// ezfpCancel/ezfpDone tear down the 易支付 payment and refund recovery;
+	// nil unless 易支付 billing is enabled.
+	//
+	// ezfpCancel/ezfpDone 关停易支付付款与退款恢复循环；未开启易支付计费时为 nil。
+	ezfpCancel context.CancelFunc
+	ezfpDone   chan struct{}
 
 	// RemoteProviderRouter is non-nil when RemoteProviders is configured; the
 	// node provider routes are mounted only then.
@@ -397,6 +405,24 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 				Client: client, CreditsPerUnitMicro: cfg.Billing.Alipay.CreditsPerUnitMicro, ReturnURL: cfg.Billing.Alipay.ReturnURL,
 			}
 		}
+		if cfg.Billing.Ezfp.Enabled {
+			// The keys come from the environment through the config file's
+			// placeholders, and are parsed here so a bad key fails startup.
+			// 密钥经配置文件占位符来自环境变量，并在此解析，使错误的密钥让启动失败。
+			client, err := ezfp.New(ezfp.Config{
+				PID:        strconv.FormatInt(cfg.Billing.Ezfp.PID, 10),
+				PrivateKey: cfg.Billing.Ezfp.PrivateKey,
+				PublicKey:  cfg.Billing.Ezfp.PublicKey,
+				BaseURL:    cfg.Billing.Ezfp.BaseURL,
+			})
+			if err != nil {
+				return nil, errors.Join(errors.New("configuring 易支付 (EZFP) billing"), err)
+			}
+			billingCfg.Ezfp = &logic.EzfpConfig{
+				Client: client, Types: cfg.Billing.Ezfp.PayTypes(),
+				NotifyURL: cfg.Billing.Ezfp.NotifyURL, ReturnURL: cfg.Billing.Ezfp.ReturnURL,
+			}
+		}
 		logicOpts = append(logicOpts, logic.WithBilling(billingCfg))
 	}
 
@@ -480,6 +506,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		go func() {
 			defer close(alipayDone)
 			svcLogic.RunAlipayRecovery(apCtx, alipayRecoveryInterval)
+		}()
+	}
+
+	var ezfpCancel context.CancelFunc
+	var ezfpDone chan struct{}
+	if cfg.Billing.Enabled && cfg.Billing.Ezfp.Enabled {
+		epCtx, epCancel := context.WithCancel(ctx)
+		ezfpCancel, ezfpDone = epCancel, make(chan struct{})
+		go func() {
+			defer close(ezfpDone)
+			svcLogic.RunEzfpRecovery(epCtx, ezfpRecoveryInterval)
 		}()
 	}
 
@@ -597,6 +634,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		nodeProvidersDone:         nodeProvidersDone,
 		alipayCancel:              alipayCancel,
 		alipayDone:                alipayDone,
+		ezfpCancel:                ezfpCancel,
+		ezfpDone:                  ezfpDone,
 		RemoteProviderRouter:      remoteProviderRouter,
 		usageRetentionCancel:      urCancel,
 		usageRetentionDone:        urDone,
@@ -628,6 +667,12 @@ const requestLogRetentionInterval = 24 * time.Hour
 //
 // alipayRecoveryInterval 是恢复待确认支付宝兑换的间隔。每轮最多几次一人付调用，远低于其限流。
 const alipayRecoveryInterval = time.Minute
+
+// ezfpRecoveryInterval is how often pending 易支付 orders and processing
+// refunds are checked. Each pass makes at most a few dozen queries.
+//
+// ezfpRecoveryInterval 是检查待付款易支付订单与处理中退款的间隔。每轮至多几十次查询。
+const ezfpRecoveryInterval = time.Minute
 
 // usageRecordRetentionInterval is how often the usage-record retention
 // cleanup goroutine runs — daily, the same cadence
@@ -772,6 +817,10 @@ func (s *ServiceContext) Close() error {
 	if s.alipayCancel != nil {
 		s.alipayCancel()
 		<-s.alipayDone
+	}
+	if s.ezfpCancel != nil {
+		s.ezfpCancel()
+		<-s.ezfpDone
 	}
 	if s.nodeProvidersCancel != nil {
 		s.nodeProvidersCancel()

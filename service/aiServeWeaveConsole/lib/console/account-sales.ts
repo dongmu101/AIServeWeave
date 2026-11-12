@@ -1,6 +1,7 @@
 import { ApiError } from "./errors.ts";
-import { MAX_PRODUCT_ID_BYTES, MAX_TEXT_RUNES, parseMoneyInput } from "./billing.ts";
+import { EZFP_CURRENCY, MAX_PRODUCT_ID_BYTES, MAX_TEXT_RUNES, optionalBoolean, parseMoneyInput } from "./billing.ts";
 import { isSupportedCurrency } from "./currencies.ts";
+import { withPayChoice, type EzfpPayType, type PayChoice } from "./payment-choice.ts";
 
 /** MAX_ACCOUNT_PRICE_MINOR mirrors model.MaxAccountPriceMinor.
  *
@@ -38,14 +39,19 @@ export function parseAccountKind(value: unknown, allowEmpty: boolean): AccountKi
  * `priceMinor` units of `currency`. A zero price is a legacy credit-priced
  * offer, or archived inventory kept only for presale assignment; it must be
  * priced before it can be listed or bought. `kind` is "" on a legacy row.
- * `dodoProductId` and `tenantId` are "" on the tenant view.
+ * `dodoProductId` and `tenantId` are "" on the tenant view. `dodoAvailable`
+ * and `ezfpAvailable` say which providers can sell it; a control plane from
+ * before EZFP sends neither, which reads as Dodo for a priced account and no
+ * EZFP.
  *
  * AccountSale 镜像 types.AccountSale：月价为 `currency` 的 `priceMinor` 个最小单位。
  * 价格为零表示旧版按点数定价的商品，或仅供预售分配的下架库存；须标价才能上架或购买。
- * 旧行的 `kind` 为 ""。租户视图上 `dodoProductId` 与 `tenantId` 为 ""。 */
+ * 旧行的 `kind` 为 ""。租户视图上 `dodoProductId` 与 `tenantId` 为 ""。`dodoAvailable`
+ * 与 `ezfpAvailable` 说明哪些服务商能出售它；早于易支付的控制面两者都不发送，此时已标价的
+ * 账号按可经 Dodo 购买、不可经易支付处理。 */
 export interface AccountSale {
   id: string; nodeId: string; runtimeId: string; kind: AccountKind | ""; name: string;
-  priceMinor: number; currency: string; dodoProductId: string;
+  priceMinor: number; currency: string; dodoProductId: string; dodoAvailable: boolean; ezfpAvailable: boolean;
   active: boolean; owned: boolean; expiresAt: string | null; tenantId: string;
 }
 
@@ -82,6 +88,8 @@ export function parseAccountSale(value: unknown): AccountSale {
     id: text(row.id, 32), nodeId: text(row.node_id, 128), runtimeId: text(row.runtime_id, 128),
     kind: parseAccountKind(row.kind, true), name: text(row.name, 512), priceMinor, currency: currency(row.currency, priceMinor > 0),
     dodoProductId: optional(row.dodo_product_id, MAX_PRODUCT_ID_BYTES),
+    dodoAvailable: optionalBoolean(row, "dodo_available", priceMinor > 0),
+    ezfpAvailable: optionalBoolean(row, "ezfp_available", false),
     active: row.active, owned: row.owned,
     expiresAt: row.expires_at === undefined ? null : timestamp(row.expires_at),
     tenantId: optional(row.tenant_id, 32),
@@ -106,11 +114,13 @@ export function accountPurchasable(account: AccountSale): boolean {
 }
 
 /** accountCheckoutBody pins the price the tenant confirmed, so a price
- * change in between is refused with 409 rather than charged.
+ * change in between is refused with 409 rather than charged. `provider` and
+ * `pay_type` are added only when the tenant chose EZFP.
  *
- * accountCheckoutBody 固定商户确认的价格，期间若改价会以 409 拒绝而不是照新价收费。 */
-export function accountCheckoutBody(account: Pick<AccountSale, "priceMinor" | "currency">): { expected_price_minor: number; currency: string } {
-  return { expected_price_minor: account.priceMinor, currency: account.currency };
+ * accountCheckoutBody 固定商户确认的价格，期间若改价会以 409 拒绝而不是照新价收费。
+ * 只有商户选择易支付时才附加 `provider` 与 `pay_type`。 */
+export function accountCheckoutBody(account: Pick<AccountSale, "priceMinor" | "currency">, choice?: PayChoice): { expected_price_minor: number; currency: string; provider?: "ezfp"; pay_type?: EzfpPayType } {
+  return withPayChoice({ expected_price_minor: account.priceMinor, currency: account.currency }, choice);
 }
 
 /** AccountDraftProblem names the first invalid field of an account draft.
@@ -127,11 +137,12 @@ export interface AccountRequest {
  * the price is typed in the currency's major unit. A new account must name
  * its kind; an edit may leave a legacy row's kind empty, which keeps it.
  * Archived inventory may leave price and product blank, kept only for
- * presale assignment; then neither price nor currency is sent.
+ * presale assignment; then neither price nor currency is sent. A CNY account
+ * may leave the product blank: it can then be bought through EZFP only.
  *
  * accountRequest 按 SaveAccountSale 的规则校验运维草稿：价格以货币主单位输入。新账号
  * 必须指明类型；编辑旧行时可以留空类型，表示保持不变。下架库存可以不填价格与产品，
- * 仅供预售分配，此时不发送价格与币种。 */
+ * 仅供预售分配，此时不发送价格与币种。CNY 账号可以不填产品：此时只能经易支付购买。 */
 export function accountRequest(draft: { name: string; nodeId: string; runtimeId: string; kind: AccountKind | ""; kindRequired: boolean; price: string; currency: string; productId: string; active: boolean }):
   { request: AccountRequest; problem: null } | { request: null; problem: AccountDraftProblem } {
   const name = draft.name.trim();
@@ -147,6 +158,6 @@ export function accountRequest(draft: { name: string; nodeId: string; runtimeId:
   if (!isSupportedCurrency(code)) return { request: null, problem: "currency" };
   const minor = parseMoneyInput(draft.price, code);
   if (minor === null || minor <= 0 || minor > MAX_ACCOUNT_PRICE_MINOR) return { request: null, problem: "price" };
-  if (product === "" || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
+  if ((product === "" && code !== EZFP_CURRENCY) || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
   return { request: { ...base, price_minor: minor, currency: code, dodo_product_id: product }, problem: null };
 }

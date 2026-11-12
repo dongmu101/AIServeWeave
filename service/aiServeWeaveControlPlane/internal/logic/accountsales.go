@@ -93,11 +93,13 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 	in.Name = strings.TrimSpace(in.Name)
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
 	priced := in.Active || in.PriceMinor != 0 || in.Currency != "" || in.DodoProductID != ""
+	// A CNY account may leave the Dodo product out: it is then bought through
+	// 易支付 only. 以 CNY 标价的账号可以不填 Dodo 产品：此时只能经易支付购买。
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 ||
 		!nodeaccess.ValidNodeID(in.NodeID) || !nodeaccess.ValidNodeID(in.RuntimeID) ||
 		(in.Kind != "" && !model.ValidAccountKind(in.Kind)) || (create && in.Kind == "") ||
 		(priced && (in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(in.Currency) ||
-			in.DodoProductID == "" || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID))) {
+			(in.DodoProductID == "" && in.Currency != model.EzfpCurrency) || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID))) {
 		return model.AccountSale{}, ErrInvalidInput
 	}
 	if _, owned := nodeaccess.OwnerOf(in.NodeID); owned {
@@ -138,20 +140,22 @@ func (s *Service) SaveAccountSale(ctx context.Context, actor Actor, in model.Acc
 }
 
 // CreateAccountCheckout opens a provider checkout for one month of an
-// account, priced in fiat. Only an owner or admin may buy. The month is
-// granted only when the provider's payment webhook confirms the order;
-// nothing here moves credits. expectedMinor and currency must match the
-// listed price, so a price change between reading and buying is a conflict.
-// The account must use a pay-what-you-want Dodo product: the order amount is
-// passed to the checkout.
+// account, priced in fiat, through pay's provider (the zero Payment is
+// Dodo). Only an owner or admin may buy. The month is granted only when the
+// provider confirms the payment; nothing here moves credits. expectedMinor
+// and currency must match the listed price, so a price change between
+// reading and buying is a conflict. Through Dodo the account must use a
+// pay-what-you-want product: the order amount is passed to the checkout;
+// through 易支付 it must be priced in CNY.
 //
-// CreateAccountCheckout 为一个账号的一个月发起法币服务商结账。只有 owner 或 admin
-// 可以购买。只有服务商付款 webhook 确认订单后才开通这一个月；这里不变动任何点数。
-// expectedMinor 与 currency 必须与标价一致，读取与购买之间的改价视为冲突。账号须使用
-// Dodo「按意愿付费」产品：订单金额会传给结账。
-func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accountID string, expectedMinor int64, currency string) (CheckoutResult, error) {
-	if !s.dodoEnabled() {
-		return CheckoutResult{}, ErrNotFound
+// CreateAccountCheckout 经 pay 的服务商（零值 Payment 即 Dodo）为一个账号的一个月发起
+// 法币结账。只有 owner 或 admin 可以购买。只有服务商确认付款后才开通这一个月；这里不变动
+// 任何点数。expectedMinor 与 currency 必须与标价一致，读取与购买之间的改价视为冲突。经
+// Dodo 时账号须使用「按意愿付费」产品：订单金额会传给结账；经易支付时须以 CNY 标价。
+func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accountID string, expectedMinor int64, currency string, pay Payment) (CheckoutResult, error) {
+	provider, err := s.resolvePayment(pay)
+	if err != nil {
+		return CheckoutResult{}, err
 	}
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {
 		return CheckoutResult{}, ErrForbidden
@@ -181,8 +185,25 @@ func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accoun
 	}
 	now := s.clock.Now().UTC()
 	// Checked before registering a customer; the store checks again under lock.
-	if err := store.AccountCheckoutTerms(sale, actor.TenantID, expectedMinor, currency, now); err != nil {
+	if err := store.AccountCheckoutTerms(sale, actor.TenantID, provider, expectedMinor, currency, now); err != nil {
 		return CheckoutResult{}, translate(err)
+	}
+	if provider == model.PaymentProviderEzfp {
+		order := model.CheckoutOrder{
+			ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, AccountID: sale.ID,
+			AmountMinor: sale.PriceMinor, Currency: sale.Currency, Provider: provider, PayType: pay.PayType,
+			Status: model.OrderStatusPending, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := s.store.CreateAccountCheckoutOrder(ctx, &order, now); err != nil {
+			return CheckoutResult{}, translate(err)
+		}
+		result, err := s.openEzfpCheckout(ctx, actor, order, sale.Name)
+		if err != nil {
+			return CheckoutResult{}, err
+		}
+		s.audit(ctx, actor.TenantID, actor.UserID, model.ActionAccountCheckout, accountID,
+			fmt.Sprintf("order %s amount %d %s via ezfp %s", order.ID, order.AmountMinor, order.Currency, pay.PayType), actor.IP)
+		return result, nil
 	}
 	customerID, err := s.ensureCustomer(ctx, actor)
 	if err != nil {
@@ -190,7 +211,7 @@ func (s *Service) CreateAccountCheckout(ctx context.Context, actor Actor, accoun
 	}
 	order := model.CheckoutOrder{
 		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, AccountID: sale.ID, DodoProductID: sale.DodoProductID,
-		AmountMinor: sale.PriceMinor, Currency: sale.Currency, Status: model.OrderStatusPending,
+		AmountMinor: sale.PriceMinor, Currency: sale.Currency, Provider: model.PaymentProviderDodo, Status: model.OrderStatusPending,
 		CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CreateAccountCheckoutOrder(ctx, &order, now); err != nil {

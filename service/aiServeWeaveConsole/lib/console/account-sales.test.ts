@@ -25,6 +25,23 @@ test("monthly account responses validate fiat prices, expiry and unique runtime 
   assert.equal(parseBillingOverview({ mode: "account_monthly", balance_micro: 0, blocked: false, has_customer: false, packages: [] }).mode, "account_monthly");
 });
 
+test("account provider availability defaults for a control plane from before EZFP", () => {
+  const old = parseAccountSale(sale);
+  assert.deepEqual([old.dodoAvailable, old.ezfpAvailable], [true, false]);
+  const cny = parseAccountSale({ ...sale, currency: "CNY", dodo_available: false, ezfp_available: true });
+  assert.deepEqual([cny.dodoAvailable, cny.ezfpAvailable], [false, true]);
+  assert.throws(() => parseAccountSale({ ...sale, ezfp_available: "yes" }));
+  assert.deepEqual(accountCheckoutBody(cny, { provider: "dodo" }), { expected_price_minor: 2000, currency: "CNY" });
+  assert.deepEqual(accountCheckoutBody(cny, { provider: "ezfp", payType: "alipay" }), { expected_price_minor: 2000, currency: "CNY", provider: "ezfp", pay_type: "alipay" });
+});
+
+test("a CNY account may leave the Dodo product blank, any other currency may not", () => {
+  const draft = { name: "Claude A", nodeId: "agent", runtimeId: "claude-a", kind: "claude" as const, kindRequired: true, price: "68", currency: "cny", productId: "", active: true };
+  assert.deepEqual(accountRequest(draft), { request: { name: "Claude A", node_id: "agent", runtime_id: "claude-a", kind: "claude", price_minor: 6800, currency: "CNY", dodo_product_id: "", active: true }, problem: null });
+  assert.equal(accountRequest({ ...draft, currency: "USD" }).problem, "product");
+  assert.equal(accountRequest({ ...draft, productId: "x".repeat(65) }).problem, "product");
+});
+
 test("operator account drafts are priced in the currency's major unit", () => {
   const draft = { name: " Claude A ", nodeId: "agent", runtimeId: "claude-a", kind: "claude" as const, kindRequired: true, price: "19.99", currency: "usd", productId: " pdt_1 ", active: true };
   assert.deepEqual(accountRequest(draft), { request: { name: "Claude A", node_id: "agent", runtime_id: "claude-a", kind: "claude", price_minor: 1999, currency: "USD", dodo_product_id: "pdt_1", active: true }, problem: null });

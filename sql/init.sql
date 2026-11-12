@@ -574,6 +574,11 @@ ALTER TABLE account_presales ADD COLUMN alipay_amount BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE checkout_orders ADD COLUMN alipay_amount BIGINT NOT NULL DEFAULT 0;
 ALTER TABLE alipay_redemptions ADD COLUMN presale_order_id VARCHAR(32) NOT NULL DEFAULT '';
 
+-- billing/mysql/0009_ezfp.sql
+ALTER TABLE checkout_orders ADD COLUMN provider VARCHAR(16) NOT NULL DEFAULT '';
+ALTER TABLE checkout_orders ADD COLUMN pay_type VARCHAR(16) NOT NULL DEFAULT '';
+CREATE INDEX idx_checkout_orders_provider ON checkout_orders (provider, status, created_at);
+
 -- ============================================================
 -- jobs
 -- ============================================================

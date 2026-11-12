@@ -232,6 +232,7 @@ type Service struct {
 	comfyUIManagedRouter ComfyUIManagedRouter
 	billing              *BillingConfig
 	alipayCache          *alipayCache
+	ezfpAttempts         *attemptGate
 	accountSales         bool
 	tenantNodes          *TenantNodeConfig
 	nodeProviders        *NodeProviderConfig

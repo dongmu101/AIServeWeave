@@ -422,7 +422,7 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 
 ## 支付宝（一人付）兑换（2026-11-11）
 
-租户计费页新增「支付宝」分区（`components/console/alipay-billing.tsx`），只在 `GET /admin/v1/billing` 的 `payment_methods.alipay` 为真时出现；`payment_methods.dodo` 为假时隐藏充值包、订单、预售与客户门户（旧控制面不发该字段时按只有 Dodo 处理）。分区展示控制面读到的支付宝剩余额度、兑换比例、套餐（价格以支付宝字符串原样展示）、兑换表单、待确认兑换与兑换记录。契约在 `lib/console/alipay.ts`，白名单新增租户 5 条（`/admin/v1/billing/alipay`、`/purchases`、`/redemptions` 的 GET/POST、`/redemptions/:id/refresh`，均不透传身份参数）。运维计费页在只配支付宝时把「充值包」分区显示为「未配置 Dodo」而非「计费未开启」。账目类型新增 `alipay_topup`。
+租户计费页新增「支付宝」分区（`components/console/alipay-billing.tsx`），只在 `GET /admin/v1/billing` 的 `payment_methods.alipay` 为真时出现；`payment_methods.dodo` 为假时隐藏充值包、订单、预售与客户门户（旧控制面不发该字段时按只有 Dodo 处理；2026-11-12 起易支付开启时这些分区也会出现，见下文「易支付（EZFP）接入」）。分区展示控制面读到的支付宝剩余额度、兑换比例、套餐（价格以支付宝字符串原样展示）、兑换表单、待确认兑换与兑换记录。契约在 `lib/console/alipay.ts`，白名单新增租户 5 条（`/admin/v1/billing/alipay`、`/purchases`、`/redemptions` 的 GET/POST、`/redemptions/:id/refresh`，均不透传身份参数）。运维计费页在只配支付宝时把「充值包」分区显示为「未配置 Dodo」（2026-11-12 起为「未配置 Dodo 或易支付」）而非「计费未开启」。账目类型新增 `alipay_topup`。
 
 不变量：浏览器从不持有一人付 Key，也不传用户、价格或点数，请求体只有 `action_id`、`sku_id`、`amount`。购买与兑换只发送一次，不自动重试；答复丢失（网络、超时、5xx）后再次点击沿用同一 `action_id`，控制面恢复原请求，确定答复后才换新编号。购买入口只做 https 校验后跳转；带 `alipay_return` 回跳时只有限次数重新读取额度，从不据此判定到账。兑换后先读到新概览再替换旧数据，结果提示保留在重新加载的区块之外。
 
@@ -430,6 +430,27 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 
 **预售额度不足时先买套餐（2026-11-12）**：预售卡片在已知支付宝剩余额度不足时，「用支付宝额度购买」改为先购买套餐：`presaleTopUp`（`lib/console/alipay.ts`）选出与概览同单位、单档额度即可补足差额的最便宜套餐（一人付只能整档购买，不能指定数量），确认后在浏览器 `localStorage` 记下预售与额度（`PresaleIntent`，1 小时有效，只用于本页自动续办，不作任何凭证），再经既有 `POST /admin/v1/billing/alipay/purchases` 打开支付宝入口。带 `alipay_return` 回跳且存在意图时，计费页切到预售分区，最多约 2 分钟（3 秒 × 40 次）读取额度，额度足够后先丢弃意图、再以新 `action_id` 调用一次 `POST /admin/v1/billing/presales/:id/alipay`，不自动重试；超时或失败时提示到账后再按按钮，额度留在支付宝。没有能补足差额的套餐，或控制面不允许购买时，按钮停用并提示联系运维。在支付宝分区直接购买套餐会清除意图，避免该次回跳误付预售。存储不可用时不自动续办，额度到账后由商户再按一次按钮。不新增后端接口或白名单。验证：Node 单元测试 354 项、lint、TS7 类型检查与生产构建通过；真实一人付与支付宝联调未进行。
 
+
+## 易支付（EZFP）接入（2026-11-12）
+
+易支付（彩虹易支付 V2）作为第二个法币服务商与 Dodo 并存。控制面在同一变更中实现了下表「契约」中的字段与路由（见 [ControlPlane STATUS「易支付（EZFP）」](../aiServeWeaveControlPlane/STATUS.md#易支付ezfp)，其 e2e 校验了同一份 JSON 形状）；浏览器用例仍以模拟的控制面答复运行，**未与运行中的控制面在浏览器里联调**。Console 不持有易支付的商户号或密钥，不引入任何易支付 SDK，不接收易支付的异步通知（它直接打到控制面 `GET`/`POST /billing/v1/ezfp/notify`，不在任何白名单里，白名单测试新增了它的反向用例）。易支付只收人民币：只有币种为 `CNY` 的商品能经它支付，租户可选支付宝（`alipay`）或微信（`wxpay`），哪些类型可用由运维配置，Console 只展示控制面报告的结果。
+
+| 层 | 落点 |
+| --- | --- |
+| 契约 | `lib/console/billing.ts`：`payment_methods` 新增 `ezfp`（缺席为 `false`）与 `ezfp_types`（缺席为 `[]`，未知类型与重复项丢弃）；充值包新增 `dodo_available`（缺席为 `true`）与 `ezfp_available`（缺席为 `false`）；订单新增 `provider`（`dodo`/`ezfp`/`opcpay`，缺席时 `alipay_amount > 0` 推断为 `opcpay`，否则 `dodo`；本 Console 不认识的值原样保留并按原值显示，较新的控制面不会让订单列表失效）与 `pay_type`；`lib/console/account-sales.ts` 账号新增 `dodo_available`（缺席时已标价为 `true`）与 `ezfp_available`；`lib/console/account-presales.ts` 预售新增 `ezfp_available`（缺席为 `false`）。`available` 仍只代表「经 Dodo 可购买」，只有 `available`、`ezfp_available`、`alipay_available` 全为假才显示「已售罄」 |
+| 付款选择 | 新增纯函数模块 `lib/console/payment-choice.ts`：`PayChoice`、`payChoices(methods, 商品可用性)`（顺序为 Dodo，再依次是已开启的易支付类型）、`withPayChoice(body, choice)`（**只有选易支付时**才在请求体加 `provider:"ezfp"` 与 `pay_type`，Dodo 两者都不发，旧控制面会以 400 拒绝未知字段）。共用组件 `components/console/pay-choice-buttons.tsx` 用于充值包、账号现货卡片与预售卡片；只有 Dodo 一种选择时与此前完全一致（文案、行为），多种选择时显示「银行卡 / Dodo」「支付宝」「微信支付」。账号与预售的确认对话框携带所选 `PayChoice`，选易支付时写明「支付方式：…」。预售上原有的「用支付宝额度购买」（一人付额度）保持独立、文案不同的按钮 |
+| 白名单 | `lib/console/upstream-routes.ts` 租户表新增 1 条 `POST /admin/v1/billing/orders/:id/refresh`（无请求体、不透传任何查询参数）。`/billing/v1/ezfp/notify` 不在任何表里 |
+| 回跳 | 易支付回跳到 `/console/billing`（我们自己不带查询参数），并附 `pid, trade_no, out_trade_no, type, trade_status, name, money, param, buyer, timestamp, sign, sign_type` 等。`ezfpReturnOrderId(params)` 只在 `out_trade_no` 匹配 `^ord_[0-9a-f]{28}$` 且 `trade_no` 非空时返回订单 id。命中后 `billing-view.tsx` 立即 `history.replaceState` 为 `/console/billing?tab=orders`（`sign`、`buyer`、`money` 等不留在地址栏与历史记录），只发送**一次** `POST /admin/v1/billing/orders/:id/refresh`（失败与答复都忽略），随后沿用 Dodo 回跳的有界轮询（概览与 `orders?limit=1`，3 秒 × 10 次）与同一条 `ReturnNotice`。`trade_status` 与其余参数从不被读取、从不当作付款证明 |
+| 订单表 | `components/console/billing-tables.tsx` 新增「支付方式」列（Dodo / 易支付 · 支付宝 / 易支付 · 微信 / 支付宝额度）；租户面上待支付的易支付订单有「再次确认」按钮，每次点击只发送一次 refresh 并用答复更新该行（仍待支付时提示稍后再试，间隔限制由控制面执行），读取新一页后以服务端行为准 |
+| 运维表单 | 充值包、账号、预售的 Dodo 产品 ID 在币种为 `CNY` 时可留空（提示「币种为 CNY 时可留空，仅能经易支付购买」），非 CNY 仍必填（预售保留「支付宝额度数量大于 0 时可留空」的既有例外）。控制面在 Dodo 或易支付任一配置时挂载充值包管理，因此运维「充值包」分区的不可用提示改为「未配置 Dodo 或易支付」 |
+| 文案 | 8 种语言新增 `tenant.payChoice*`、`tenant.payMethodLine`、`tenant.billingPayMethod`、`tenant.billingProvider*`、`tenant.billingRecheck*`、`tenant.billingMethodUnavailable`、`tenant.accountProductOptionalHint`、`operator.billingProductOptionalHint`，并改写 `operator.billingNeedsDodo*`；`catalog.test.ts` 检查各语言键与占位符一致 |
+| 测试 | `payment-choice.test.ts`（选项顺序、可用性组合、请求体）；`billing.test.ts`（`payment_methods` 与充值包标志的默认值、订单 `provider`/`pay_type` 读取与推断、结账请求体、`ezfpReturnOrderId` 的接受与拒绝、CNY 可不填产品）；`account-sales.test.ts`、`account-presales.test.ts`（可用性标志与默认值、请求体、CNY 可不填产品）；`upstream-routes.test.ts`（refresh 路由、方法、遍历、易支付通知不转发）；e2e `billing.spec.ts` 新增 9 项：选微信只发一次 `{package_id, provider:"ezfp", pay_type:"wxpay"}` 并跳转、Dodo 点击不带 `provider`、仅 Dodo 可售的商品保持单个「购买」、仅易支付部署的分区、易支付回跳清理 URL 并只发一次 refresh 且提示由 pending 变为已确认、缺订单 id 或交易号的参数视为普通访问、「再次确认」每次点击一次请求并更新行、仅易支付的 CNY 预售不显示「已售罄」且请求体正确、CNY 账号走易支付、运维可保存无产品 ID 的 CNY 充值包而其他币种被拦下 |
+
+不变量：Console 不持有易支付凭据，不接收易支付通知；回跳参数只是提示，到账与订单状态一律以控制面记录为准；结账与 refresh 都是只发送一次的写请求，不自动重试；只有 refresh 白名单一条新路由。
+
+验证记录见本节末「验证结果」。未验证：真实易支付商户、真实控制面的 `provider`/`pay_type`/`*_available` 字段与 refresh 限速行为、真实支付后的回跳参数形状；多语言文案（除 zh-CN/zh-TW/en-US 外）为译文，未经母语者审校。
+
+验证结果（2026-11-12，本机）：`node --test "lib/**/*.test.ts"`（即 `pnpm test`）375 项通过；`eslint`（即 `pnpm lint`）0 错误，仅有既有的 `alerts-view.tsx` React Compiler 警告；`tsc --noEmit`（即 `pnpm typecheck`，TS 7）通过；`next build`（即 `pnpm build`）通过；本机 Chrome `AISW_BROWSER_CHANNEL=chrome playwright test e2e/billing.spec.ts` 26 项通过（含新增 9 项）。同时修正了既有用例「operators create a presale…」对 `alipay_amount: 0` 的遗漏断言。全套浏览器用例 432 项通过、5 项失败（`console-header.spec.ts` 的 320px 与 1024px 两项，`console.spec.ts` 中 320px 的 `/operator/routes`、`/operator/workflow-templates` 与「navigation marks only the current tenant page」）；在未含本次改动的 HEAD 上单独构建后复现了同样 5 项，与本次无关。
 
 ## Agent 接入下载
 

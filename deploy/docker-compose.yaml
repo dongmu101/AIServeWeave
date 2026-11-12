@@ -291,6 +291,10 @@ services:
       AISW_PROVIDER_MASTER_KEY: ${AISW_PROVIDER_MASTER_KEY:?set it in deploy/.env — openssl rand -base64 32}
       AISW_DODO_API_KEY: ${AISW_DODO_API_KEY:-}
       AISW_DODO_WEBHOOK_SECRET: ${AISW_DODO_WEBHOOK_SECRET:-}
+      # 易支付 (EZFP) keys, referenced by controlplane.yaml's Billing.Ezfp.
+      # Empty by default. 易支付密钥，由 controlplane.yaml 的 Billing.Ezfp 引用，默认为空。
+      AISW_EZFP_PRIVATE_KEY: ${AISW_EZFP_PRIVATE_KEY:-}
+      AISW_EZFP_PUBLIC_KEY: ${AISW_EZFP_PUBLIC_KEY:-}
       # 一人付 (opcpay) API key for Alipay, read straight from the environment
       # only when controlplane.yaml enables Billing.Alipay; it never goes into
       # the config file. Empty by default.

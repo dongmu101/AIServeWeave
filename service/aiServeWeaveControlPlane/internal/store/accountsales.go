@@ -36,12 +36,12 @@ type AccountSales interface {
 }
 
 // AccountCheckoutTerms decides whether tenantID may open a checkout for one
-// month of sale at amountMinor in currency.
+// month of sale at amountMinor in currency through provider (empty is Dodo).
 //
-// AccountCheckoutTerms 判断 tenantID 能否以 currency 计价的 amountMinor 为 sale 发起
-// 一个月的结账。
-func AccountCheckoutTerms(sale model.AccountSale, tenantID string, amountMinor int64, currency string, now time.Time) error {
-	if !sale.Active || sale.PriceMinor <= 0 || sale.Currency == "" || sale.DodoProductID == "" {
+// AccountCheckoutTerms 判断 tenantID 能否经 provider（为空即 Dodo）以 currency 计价的
+// amountMinor 为 sale 发起一个月的结账。
+func AccountCheckoutTerms(sale model.AccountSale, tenantID, provider string, amountMinor int64, currency string, now time.Time) error {
+	if !sale.Active || sale.PriceMinor <= 0 || sale.Currency == "" || !model.FiatPayable(provider, sale.Currency, sale.DodoProductID) {
 		return ErrNotFound
 	}
 	if sale.PriceMinor != amountMinor || !strings.EqualFold(sale.Currency, currency) {

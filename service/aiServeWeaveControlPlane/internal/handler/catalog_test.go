@@ -51,7 +51,7 @@ func TestCatalogIsPublicAndSafe(t *testing.T) {
 	if err := st.CreateUser(ctx, &model.User{ID: "u", TenantID: "buyer", Email: "buyer@example.com", Role: model.RoleOwner}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := service.CreateAccountCheckout(ctx, logic.Actor{TenantID: "buyer", UserID: "u", Role: model.RoleOwner}, "acc_held", 1999, "USD"); err != nil {
+	if _, err := service.CreateAccountCheckout(ctx, logic.Actor{TenantID: "buyer", UserID: "u", Role: model.RoleOwner}, "acc_held", 1999, "USD", logic.Payment{}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := service.HandleBillingWebhook(ctx, nil, http.Header{}); err != nil {

@@ -99,7 +99,7 @@ func (s *Store) CreatePresaleCheckoutOrder(ctx context.Context, order *model.Che
 			Count(&outstanding).Error; err != nil {
 			return err
 		}
-		if err := store.PresaleCheckoutTerms(presale, order.AmountMinor, order.Currency, int(outstanding)); err != nil {
+		if err := store.PresaleCheckoutTerms(presale, order.Provider, order.AmountMinor, order.Currency, int(outstanding)); err != nil {
 			return err
 		}
 		return tx.Create(order).Error

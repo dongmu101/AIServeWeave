@@ -87,11 +87,17 @@ func billingOverview(ctx *svc.ServiceContext) http.HandlerFunc {
 		packages := make([]types.CreditPackage, len(overview.Packages))
 		for i, pkg := range overview.Packages {
 			packages[i] = renderCreditPackage(pkg, false)
+			dodo, ezfp := ctx.Logic.FiatOffers(pkg.Currency, pkg.DodoProductID)
+			packages[i].DodoAvailable, packages[i].EzfpAvailable = &dodo, &ezfp
+		}
+		ezfpTypes := overview.EzfpTypes
+		if ezfpTypes == nil {
+			ezfpTypes = []string{}
 		}
 		writeJSON(w, http.StatusOK, types.BillingOverviewResponse{
 			Mode: overview.Mode, BalanceMicro: overview.BalanceMicro, Blocked: overview.Blocked,
 			HasCustomer: overview.HasCustomer, Packages: packages, RefundWindowDays: overview.RefundWindowDays,
-			PaymentMethods: types.PaymentMethods{Dodo: overview.Dodo, Alipay: overview.Alipay},
+			PaymentMethods: types.PaymentMethods{Dodo: overview.Dodo, Alipay: overview.Alipay, Ezfp: overview.Ezfp, EzfpTypes: ezfpTypes},
 		})
 	})
 }
@@ -105,7 +111,8 @@ func createCheckout(ctx *svc.ServiceContext) http.HandlerFunc {
 		if !decode(w, r, &req) {
 			return
 		}
-		result, err := ctx.Logic.CreateCheckout(r.Context(), actor, req.PackageID, req.AmountMinor)
+		result, err := ctx.Logic.CreateCheckout(r.Context(), actor, req.PackageID, req.AmountMinor,
+			logic.Payment{Provider: req.Provider, PayType: req.PayType})
 		if err != nil {
 			respondErr(w, err)
 			return
@@ -209,10 +216,12 @@ func renderOrder(o model.CheckoutOrder, refundable int64, operator bool) types.C
 		CreditsMicro: o.CreditsMicro, RefundedMinor: o.RefundedMinor, PaidAmountMinor: o.PaidAmountMinor,
 		PaidCurrency: o.PaidCurrency, RefundableMinor: refundable, Status: o.Status,
 		AccountID: o.AccountID, AccountExpiresAt: o.AccountExpiresAt, PresaleID: o.PresaleID, AlipayAmount: o.AlipayAmount,
-		CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
+		Provider: o.PaymentProvider(), PayType: o.PayType, CreatedAt: o.CreatedAt, UpdatedAt: o.UpdatedAt,
 	}
 	if o.DodoPaymentID != nil {
-		out.PaymentID = *o.DodoPaymentID
+		// 易支付's trade shares the column under a prefix; show the trade.
+		// 易支付的交易号以前缀与 Dodo 共用该列；这里呈现交易号本身。
+		out.PaymentID = strings.TrimPrefix(*o.DodoPaymentID, model.EzfpIDPrefix)
 	}
 	if operator {
 		out.TenantID = o.TenantID

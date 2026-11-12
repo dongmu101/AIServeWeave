@@ -31,6 +31,22 @@ test("presale responses carry a kind, a fiat price and operator-only stock", () 
   assert.deepEqual(presaleCheckoutBody(tenant), { expected_price_minor: 1500, currency: "USD" });
 });
 
+test("presale EZFP availability is independent of Dodo availability", () => {
+  assert.equal(parseAccountPresale(tenantView).ezfpAvailable, false, "a control plane from before EZFP sends none");
+  const cnyOnly = parseAccountPresale({ ...tenantView, currency: "CNY", available: false, ezfp_available: true });
+  assert.deepEqual([cnyOnly.available, cnyOnly.ezfpAvailable], [false, true]);
+  assert.throws(() => parseAccountPresale({ ...tenantView, ezfp_available: "yes" }));
+  assert.deepEqual(presaleCheckoutBody(cnyOnly, { provider: "dodo" }), { expected_price_minor: 1500, currency: "CNY" });
+  assert.deepEqual(presaleCheckoutBody(cnyOnly, { provider: "ezfp", payType: "wxpay" }), { expected_price_minor: 1500, currency: "CNY", provider: "ezfp", pay_type: "wxpay" });
+});
+
+test("a CNY presale may leave the Dodo product blank, any other currency may not", () => {
+  const draft = { kind: "codex" as const, name: "Codex presale", price: "68", currency: "cny", productId: "", capacity: "10", active: true };
+  assert.deepEqual(presaleRequest(draft).request?.dodo_product_id, "");
+  assert.equal(presaleRequest({ ...draft, currency: "usd" }).problem, "product");
+  assert.equal(presaleRequest({ ...draft, productId: "x".repeat(65) }).problem, "product");
+});
+
 test("operator presale drafts are priced in the major unit and bounded in capacity", () => {
   const draft = { kind: "codex" as const, name: " Codex presale ", price: "15", currency: "usd", productId: " pdt_pre ", capacity: "10", active: true };
   assert.deepEqual(presaleRequest(draft), { request: { kind: "codex", name: "Codex presale", price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 10, active: true, alipay_amount: 0 }, problem: null });

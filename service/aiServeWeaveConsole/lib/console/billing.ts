@@ -1,6 +1,7 @@
 import { ApiError } from "./errors.ts";
 import type { Page } from "./contract.ts";
 import { isSupportedCurrency } from "./currencies.ts";
+import { EZFP_PAY_TYPES, withPayChoice, type EzfpPayType, type PayChoice } from "./payment-choice.ts";
 
 /**
  * This module mirrors the control plane's prepaid credit billing API
@@ -11,9 +12,10 @@ import { isSupportedCurrency } from "./currencies.ts";
  * micro-credit integers (one million to a credit) and money in the currency's
  * minor unit, whose size depends on the currency (JPY has none, USD has two).
  *
- * The Console never talks to the payment provider. Checkout and the customer
- * portal are links the control plane creates and hands back; this module only
- * checks that such a link is an https URL before a page navigates to it.
+ * The Console never talks to a payment provider (Dodo, 易支付/EZFP, 一人付).
+ * Checkout and the customer portal are links the control plane creates and
+ * hands back; this module only checks that such a link is an https URL before
+ * a page navigates to it.
  *
  * 本模块镜像控制面的预充值点数计费 API（internal/types/billing.go）：租户概览、结账
  * 与客户门户链接、账目与订单列表，以及运维侧的充值包、模型单价与按租户的计费状态。
@@ -21,8 +23,8 @@ import { isSupportedCurrency } from "./currencies.ts";
  * 整数传输（一百万为一点），金额以货币最小单位传输，而最小单位的大小取决于货币
  * （JPY 没有小数位，USD 有两位）。
  *
- * Console 从不与支付服务商通信。结账与客户门户都是控制面创建并交回的链接；本模块
- * 只在页面跳转前确认这样的链接是 https URL。
+ * Console 从不与支付服务商（Dodo、易支付/EZFP、一人付）通信。结账与客户门户都是控制面
+ * 创建并交回的链接；本模块只在页面跳转前确认这样的链接是 https URL。
  */
 
 /** MICRO_PER_CREDIT mirrors model.MicroPerCredit.
@@ -47,6 +49,13 @@ export const MAX_TEXT_RUNES = 128;
  *
  * MAX_PRODUCT_ID_BYTES 镜像控制面对服务商产品 id 的长度上限。 */
 export const MAX_PRODUCT_ID_BYTES = 64;
+
+/** EZFP_CURRENCY is the one currency EZFP charges. An item in it needs no
+ * Dodo product id and can then be bought through EZFP only.
+ *
+ * EZFP_CURRENCY 是易支付唯一收取的货币。该货币的商品不需要 Dodo 产品 id，此时只能经
+ * 易支付购买。 */
+export const EZFP_CURRENCY = "CNY";
 
 /** DEFAULT_PRICE_MODEL mirrors model.DefaultPriceModel: the alias whose price
  * applies to every alias without one of its own.
@@ -90,10 +99,13 @@ export const ORDER_STATUSES = ["pending", "paid", "failed", "refunded", "dispute
 
 /** CreditPackage mirrors types.CreditPackage. Fields that do not apply to a
  * package's kind are zero, as the Go side omits them. `dodoProductId` is ""
- * on the tenant view, which never carries it.
+ * on the tenant view, which never carries it. `dodoAvailable` and
+ * `ezfpAvailable` say which providers can sell it; a control plane from
+ * before EZFP sends neither, which reads as Dodo only.
  *
  * CreditPackage 镜像 types.CreditPackage。不适用于该类型的字段为零，与 Go 侧省略它们
- * 一致。租户视图从不携带 `dodoProductId`，此时为 ""。 */
+ * 一致。租户视图从不携带 `dodoProductId`，此时为 ""。`dodoAvailable` 与 `ezfpAvailable`
+ * 说明哪些服务商能出售它；早于易支付的控制面两者都不发送，按只有 Dodo 处理。 */
 export interface CreditPackage {
   id: string;
   name: string;
@@ -107,6 +119,8 @@ export interface CreditPackage {
   active: boolean;
   sortOrder: number;
   dodoProductId: string;
+  dodoAvailable: boolean;
+  ezfpAvailable: boolean;
   createdAt: string;
   updatedAt: string;
 }
@@ -124,14 +138,36 @@ export interface BillingOverview {
 }
 
 /** PaymentMethods mirrors types.PaymentMethods: Dodo sells credit packages
- * and fiat checkouts, Alipay (一人付) redeems Alipay quota into credits.
+ * and fiat checkouts, Alipay (一人付) redeems Alipay quota into credits, and
+ * EZFP (易支付) takes CNY checkouts through the payment types in `ezfpTypes`.
  *
  * PaymentMethods 镜像 types.PaymentMethods：Dodo 出售充值包与法币结账，Alipay（一人付）
- * 把支付宝额度兑换为点数。 */
+ * 把支付宝额度兑换为点数，EZFP（易支付）经 `ezfpTypes` 中的支付类型接收人民币结账。 */
 export interface PaymentMethods {
   dodo: boolean;
   alipay: boolean;
+  ezfp: boolean;
+  ezfpTypes: EzfpPayType[];
 }
+
+/** defaultPaymentMethods is what a control plane that sends no
+ * `payment_methods` offers: Dodo alone.
+ *
+ * defaultPaymentMethods 是不发送 `payment_methods` 的控制面所提供的：只有 Dodo。 */
+export function defaultPaymentMethods(): PaymentMethods {
+  return { dodo: true, alipay: false, ezfp: false, ezfpTypes: [] };
+}
+
+/** OrderProvider says which provider took an order: Dodo or EZFP checkout,
+ * or 一人付 quota.
+ *
+ * OrderProvider 表示订单由哪个服务商受理：Dodo 或易支付结账，或一人付额度。 */
+export type OrderProvider = "dodo" | "ezfp" | "opcpay";
+
+/** ORDER_PROVIDERS is the closed set of order providers.
+ *
+ * ORDER_PROVIDERS 是订单服务商的封闭集合。 */
+export const ORDER_PROVIDERS: readonly OrderProvider[] = ["dodo", "ezfp", "opcpay"];
 
 /** CheckoutResult mirrors types.CheckoutResponse.
  *
@@ -162,13 +198,18 @@ export interface LedgerEntry {
  * operator assigns its account, which then sets `accountId` too.
  * `alipayAmount` is the Alipay units a presale order was paid with (0 for
  * Dodo); such an order has no refund. `refundableMinor` is, on the operator view, what of the payment is not
- * refunded yet.
+ * refunded yet. `provider` is who took the payment and `payType` the EZFP
+ * type ("" otherwise); a control plane from before EZFP sends neither, so
+ * the provider is read from `alipayAmount`. For an EZFP order `paymentId` is
+ * the EZFP trade number.
  *
  * CheckoutOrder 镜像 types.CheckoutOrder。租户视图上 `tenantId` 为 ""，服务商报告
  * 付款之前 `paymentId` 为 ""。包月账号订单以 `accountId` 代替 `packageId`，付款开通后
  * 带 `accountExpiresAt`。预售订单改带 `presaleId`；付款后在运维分配账号之前没有
  * `accountExpiresAt`，分配后同时带上 `accountId`。`refundableMinor` 在运维视图中是付款
- * 尚未退款的金额。 */
+ * 尚未退款的金额。`provider` 是收款的服务商，`payType` 是易支付的支付类型（其他为 ""）；
+ * 早于易支付的控制面两者都不发送，此时按 `alipayAmount` 推断服务商。易支付订单的
+ * `paymentId` 是易支付交易号。 */
 export interface CheckoutOrder {
   id: string;
   tenantId: string;
@@ -184,6 +225,8 @@ export interface CheckoutOrder {
   refundableMinor: number;
   status: string;
   paymentId: string;
+  provider: OrderProvider | string;
+  payType: EzfpPayType | string;
   createdAt: string;
   updatedAt: string;
 }
@@ -307,6 +350,21 @@ export function boolean(source: Record<string, unknown>, key: string): boolean {
   return value;
 }
 
+/** optionalBoolean reads a boolean field a control plane from before it was
+ * added does not send; absent takes `fallback`.
+ *
+ * optionalBoolean 读取一个较旧控制面不会发送的布尔字段；缺席时取 `fallback`。 */
+export function optionalBoolean(source: Record<string, unknown>, key: string, fallback: boolean): boolean {
+  const value = source[key];
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== "boolean") {
+    fail();
+  }
+  return value;
+}
+
 function mode(source: Record<string, unknown>, key: string): BillingMode {
   const value = source[key];
   if (!(BILLING_MODES as readonly unknown[]).includes(value)) {
@@ -389,6 +447,8 @@ export function parseCreditPackage(value: unknown): CreditPackage {
     active: boolean(source, "active"),
     sortOrder: integer(source, "sort_order"),
     dodoProductId: optionalText(source, "dodo_product_id"),
+    dodoAvailable: optionalBoolean(source, "dodo_available", true),
+    ezfpAvailable: optionalBoolean(source, "ezfp_available", false),
     createdAt: timestamp(source, "created_at"),
     updatedAt: timestamp(source, "updated_at"),
   };
@@ -476,16 +536,35 @@ export function parseBillingOverview(value: unknown): BillingOverview {
 }
 
 /** parsePaymentMethods reads types.PaymentMethods. A control plane from
- * before Alipay sends none and offers Dodo alone.
+ * before Alipay sends none and offers Dodo alone; one from before EZFP sends
+ * no `ezfp` (read as off) and no `ezfp_types` (read as none). Unknown EZFP
+ * types are dropped, so a newer control plane cannot make an unrenderable
+ * button.
  *
  * parsePaymentMethods 读取 types.PaymentMethods。早于支付宝的控制面不发送该字段，
- * 此时只提供 Dodo。 */
-function parsePaymentMethods(value: unknown): PaymentMethods {
+ * 此时只提供 Dodo；早于易支付的控制面不发送 `ezfp`（视为关闭）与 `ezfp_types`（视为
+ * 空）。未知的易支付类型会被丢弃，较新的控制面因此不会造出无法渲染的按钮。 */
+export function parsePaymentMethods(value: unknown): PaymentMethods {
   if (value === undefined) {
-    return { dodo: true, alipay: false };
+    return defaultPaymentMethods();
   }
   const source = record(value);
-  return { dodo: boolean(source, "dodo"), alipay: boolean(source, "alipay") };
+  return {
+    dodo: boolean(source, "dodo"),
+    alipay: boolean(source, "alipay"),
+    ezfp: optionalBoolean(source, "ezfp", false),
+    ezfpTypes: parseEzfpTypes(source.ezfp_types),
+  };
+}
+
+function parseEzfpTypes(value: unknown): EzfpPayType[] {
+  const types: EzfpPayType[] = [];
+  for (const item of list(value, (entry) => entry)) {
+    if ((EZFP_PAY_TYPES as readonly unknown[]).includes(item) && !types.includes(item as EzfpPayType)) {
+      types.push(item as EzfpPayType);
+    }
+  }
+  return types;
 }
 
 /** parseCheckout validates POST /admin/v1/billing/checkout.
@@ -534,6 +613,7 @@ export function parseCheckoutOrder(value: unknown): CheckoutOrder {
   const source = record(value);
   const accountId = optionalText(source, "account_id");
   const presaleId = optionalText(source, "presale_id");
+  const alipayAmount = optionalCount(source, "alipay_amount");
   return {
     id: required(source, "id"),
     tenantId: optionalText(source, "tenant_id"),
@@ -541,7 +621,7 @@ export function parseCheckoutOrder(value: unknown): CheckoutOrder {
     accountId,
     accountExpiresAt: source.account_expires_at === undefined || source.account_expires_at === null ? null : timestamp(source, "account_expires_at"),
     presaleId,
-    alipayAmount: optionalCount(source, "alipay_amount"),
+    alipayAmount,
     amountMinor: count(source, "amount_minor"),
     currency: required(source, "currency"),
     creditsMicro: count(source, "credits_micro"),
@@ -549,9 +629,41 @@ export function parseCheckoutOrder(value: unknown): CheckoutOrder {
     refundableMinor: optionalCount(source, "refundable_minor"),
     status: required(source, "status"),
     paymentId: optionalText(source, "payment_id"),
+    provider: orderProvider(source, alipayAmount),
+    payType: orderPayType(source),
     createdAt: timestamp(source, "created_at"),
     updatedAt: timestamp(source, "updated_at"),
   };
+}
+
+/** orderProvider reads `provider`; absent (a control plane from before EZFP)
+ * is derived from the Alipay amount: quota-paid is 一人付, anything else Dodo.
+ * A provider this Console does not know is kept as sent, like an unknown
+ * status, so a newer control plane cannot break the order list.
+ *
+ * orderProvider 读取 `provider`；缺席（早于易支付的控制面）时按支付宝额度推断：以额度
+ * 支付的是一人付，其余是 Dodo。本 Console 不认识的服务商按原值保留（与未知状态一样），
+ * 使较新的控制面不会让订单列表失效。 */
+function orderProvider(source: Record<string, unknown>, alipayAmount: number): string {
+  const value = source.provider;
+  if (value === undefined) {
+    return alipayAmount > 0 ? "opcpay" : "dodo";
+  }
+  if (typeof value !== "string" || value === "") {
+    fail();
+  }
+  return value;
+}
+
+function orderPayType(source: Record<string, unknown>): string {
+  const value = source.pay_type;
+  if (value === undefined) {
+    return "";
+  }
+  if (typeof value !== "string") {
+    fail();
+  }
+  return value;
 }
 
 /** parseOrderPage validates one page of checkout orders.
@@ -747,17 +859,24 @@ export function customAmountProblem(
   return { amountMinor, problem: null };
 }
 
+/** CheckoutBody is types.CheckoutRequest as sent: `provider` and `pay_type`
+ * appear only for an EZFP checkout.
+ *
+ * CheckoutBody 是实际发送的 types.CheckoutRequest：`provider` 与 `pay_type` 只在易支付
+ * 结账时出现。 */
+export type CheckoutBody = { package_id: string; amount_minor?: number; provider?: "ezfp"; pay_type?: EzfpPayType };
+
 /** checkoutBody builds types.CheckoutRequest. A fixed package never carries
  * an amount: the control plane rejects one, because its price is the
- * package's, not the buyer's.
+ * package's, not the buyer's. `choice` defaults to Dodo, which adds nothing.
  *
  * checkoutBody 构造 types.CheckoutRequest。固定充值包从不携带金额：控制面会拒绝它，
- * 因为价格属于充值包而不是购买者。 */
-export function checkoutBody(pkg: Pick<CreditPackage, "id" | "kind">, amountMinor: number | null): { package_id: string; amount_minor?: number } {
-  if (pkg.kind === "fixed" || amountMinor === null) {
-    return { package_id: pkg.id };
-  }
-  return { package_id: pkg.id, amount_minor: amountMinor };
+ * 因为价格属于充值包而不是购买者。`choice` 缺省为 Dodo，此时不附加任何字段。 */
+export function checkoutBody(pkg: Pick<CreditPackage, "id" | "kind">, amountMinor: number | null, choice?: PayChoice): CheckoutBody {
+  const body: CheckoutBody = pkg.kind === "fixed" || amountMinor === null
+    ? { package_id: pkg.id }
+    : { package_id: pkg.id, amount_minor: amountMinor };
+  return withPayChoice(body, choice);
 }
 
 /** PackageDraft is the operator's package form, as typed: credits in credits
@@ -849,7 +968,9 @@ export function packageRequest(draft: PackageDraft): { request: PackageRequest; 
   const product = draft.dodoProductId.trim();
   const currency = draft.currency.trim();
   if (name === "" || runes(name) > MAX_TEXT_RUNES || new TextEncoder().encode(name).length > 4 * MAX_TEXT_RUNES) return { request: null, problem: "name" };
-  if (product === "" || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
+  // A CNY package may leave the Dodo product blank: it can then be bought
+  // through EZFP only. CNY 充值包可以不填 Dodo 产品：此时只能经易支付购买。
+  if ((product === "" && currency !== EZFP_CURRENCY) || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
   if (!isSupportedCurrency(currency)) return { request: null, problem: "currency" };
   const sortOrder = parseScaled(draft.sortOrder, 0, { allowNegative: true });
   const base = {
@@ -934,6 +1055,33 @@ export function adjustRequest(draft: { amount: string; reason: string }):
  * 当作结果读取，因为任何人都可以手动输入它。 */
 export function isPaymentReturn(params: Readonly<Record<string, string | string[] | undefined>>): boolean {
   return params.status !== undefined || params.payment_id !== undefined;
+}
+
+/** EZFP_ORDER_ID is the shape of an order id the control plane issues:
+ * `ord_` and 28 lowercase hex digits.
+ *
+ * EZFP_ORDER_ID 是控制面签发的订单 id 的形状：`ord_` 加 28 位小写十六进制。 */
+const EZFP_ORDER_ID = /^ord_[0-9a-f]{28}$/;
+
+/** ezfpReturnOrderId reads the order id off an EZFP return redirect, or
+ * null when the page was not reached that way. EZFP appends its own
+ * parameters (`out_trade_no` is our order id, `trade_no` its trade number)
+ * to the configured return URL. They are a hint and nothing more: the id only
+ * says which order to ask the control plane to re-check, and every other
+ * parameter, `trade_status` and `sign` included, is ignored because anyone
+ * can type them.
+ *
+ * ezfpReturnOrderId 从易支付的回跳中读取订单 id；页面不是这样到达时返回 null。易支付
+ * 会把自己的参数（`out_trade_no` 是我们的订单 id，`trade_no` 是它的交易号）附加到配置
+ * 的回跳地址上。它们只是提示，别无其他：订单 id 只说明要请求控制面复核哪一笔订单，其余
+ * 参数（包括 `trade_status` 与 `sign`）一律忽略，因为任何人都可以手动输入。 */
+export function ezfpReturnOrderId(params: Readonly<Record<string, string | string[] | undefined>>): string | null {
+  const order = params.out_trade_no;
+  const trade = params.trade_no;
+  if (typeof order !== "string" || typeof trade !== "string" || trade === "" || !EZFP_ORDER_ID.test(order)) {
+    return null;
+  }
+  return order;
 }
 
 /** PollOutcome is how a bounded poll ended.

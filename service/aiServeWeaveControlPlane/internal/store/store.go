@@ -1021,6 +1021,18 @@ type CheckoutOrderFilter struct {
 	//
 	// Awaiting 只保留按 PresaleAwaiting 判断仍在等待分配账号的已付款预售订单。
 	Awaiting bool
+	// Provider keeps only orders whose recorded provider column equals it;
+	// it matches the stored value, so it finds the orders that record one.
+	//
+	// Provider 只保留记录的服务商列等于它的订单；它匹配存储的值，因此只找到记录了服务商的
+	// 订单。
+	Provider string
+	// CreatedAfter and CreatedBefore, when set, keep orders created strictly
+	// inside the window.
+	//
+	// CreatedAfter 与 CreatedBefore 设置时，只保留创建时间严格落在窗口内的订单。
+	CreatedAfter  time.Time
+	CreatedBefore time.Time
 }
 
 // CreditLedgerFilter narrows a ledger list. An empty field does not filter.
@@ -1105,6 +1117,12 @@ type BillingEvent struct {
 	AmountMinor     int64
 	Currency        string
 	IsPartial       bool
+	// Provider is the payment provider the event came from; empty is Dodo.
+	// A payment from one provider never settles another provider's order.
+	//
+	// Provider 是事件来自的支付服务商；为空即 Dodo。一个服务商的付款永远不会结算另一个
+	// 服务商的订单。
+	Provider string
 }
 
 // BillingEventResult is what applying one event did.

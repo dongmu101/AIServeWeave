@@ -13,20 +13,26 @@ import "time"
 //
 // CreditPackage 是一个可购买的充值包。
 type CreditPackage struct {
-	ID                       string    `json:"id"`
-	Name                     string    `json:"name"`
-	Kind                     string    `json:"kind"`
-	CreditsMicro             int64     `json:"credits_micro,omitempty"`
-	PriceMinor               int64     `json:"price_minor,omitempty"`
-	Currency                 string    `json:"currency"`
-	CreditsPerMinorUnitMicro int64     `json:"credits_per_minor_unit_micro,omitempty"`
-	MinAmountMinor           int64     `json:"min_amount_minor,omitempty"`
-	MaxAmountMinor           int64     `json:"max_amount_minor,omitempty"`
-	Active                   bool      `json:"active"`
-	SortOrder                int64     `json:"sort_order"`
-	DodoProductID            string    `json:"dodo_product_id,omitempty"`
-	CreatedAt                time.Time `json:"created_at"`
-	UpdatedAt                time.Time `json:"updated_at"`
+	ID                       string `json:"id"`
+	Name                     string `json:"name"`
+	Kind                     string `json:"kind"`
+	CreditsMicro             int64  `json:"credits_micro,omitempty"`
+	PriceMinor               int64  `json:"price_minor,omitempty"`
+	Currency                 string `json:"currency"`
+	CreditsPerMinorUnitMicro int64  `json:"credits_per_minor_unit_micro,omitempty"`
+	MinAmountMinor           int64  `json:"min_amount_minor,omitempty"`
+	MaxAmountMinor           int64  `json:"max_amount_minor,omitempty"`
+	Active                   bool   `json:"active"`
+	SortOrder                int64  `json:"sort_order"`
+	DodoProductID            string `json:"dodo_product_id,omitempty"`
+	// DodoAvailable and EzfpAvailable, on the tenant's view, tell through
+	// which providers the package can be bought now.
+	//
+	// DodoAvailable 与 EzfpAvailable 在租户视图中表示此刻可以经哪些服务商购买该充值包。
+	DodoAvailable *bool     `json:"dodo_available,omitempty"`
+	EzfpAvailable *bool     `json:"ezfp_available,omitempty"`
+	CreatedAt     time.Time `json:"created_at"`
+	UpdatedAt     time.Time `json:"updated_at"`
 }
 
 // BillingOverviewResponse is GET /admin/v1/billing.
@@ -49,24 +55,34 @@ type BillingOverviewResponse struct {
 	PaymentMethods PaymentMethods `json:"payment_methods"`
 }
 
-// PaymentMethods is which payment providers are configured: Dodo for credit
-// packages and fiat checkouts, Alipay (一人付) for redeeming Alipay quota.
+// PaymentMethods is which payment providers are configured: Dodo and Ezfp
+// (易支付, CNY items only) for credit packages and fiat checkouts, Alipay
+// (一人付) for redeeming Alipay quota. EzfpTypes are the 易支付 payment types
+// a tenant may choose, alipay and wxpay.
 //
-// PaymentMethods 是已配置的支付服务商：Dodo 用于充值包与法币结账，Alipay（一人付）
-// 用于兑换支付宝额度。
+// PaymentMethods 是已配置的支付服务商：Dodo 与 Ezfp（易支付，仅限 CNY 商品）用于充值包
+// 与法币结账，Alipay（一人付）用于兑换支付宝额度。EzfpTypes 是租户可选的易支付付款方式，
+// 即 alipay 与 wxpay。
 type PaymentMethods struct {
-	Dodo   bool `json:"dodo"`
-	Alipay bool `json:"alipay"`
+	Dodo      bool     `json:"dodo"`
+	Alipay    bool     `json:"alipay"`
+	Ezfp      bool     `json:"ezfp"`
+	EzfpTypes []string `json:"ezfp_types"`
 }
 
 // CheckoutRequest is POST /admin/v1/billing/checkout. AmountMinor is the
-// chosen amount for a custom package and omitted for a fixed one.
+// chosen amount for a custom package and omitted for a fixed one. Provider
+// and PayType choose 易支付 ("ezfp" with "alipay" or "wxpay"); omitted, the
+// checkout is Dodo's.
 //
 // CheckoutRequest 是 POST /admin/v1/billing/checkout 的请求。AmountMinor 是自定义
-// 充值包所选的金额，固定充值包省略。
+// 充值包所选的金额，固定充值包省略。Provider 与 PayType 选择易支付（"ezfp" 搭配 "alipay"
+// 或 "wxpay"）；省略时为 Dodo 结账。
 type CheckoutRequest struct {
 	PackageID   string `json:"package_id"`
 	AmountMinor int64  `json:"amount_minor,omitempty"`
+	Provider    string `json:"provider,omitempty"`
+	PayType     string `json:"pay_type,omitempty"`
 }
 
 // CheckoutResponse carries the hosted checkout page to send the tenant to.
@@ -156,11 +172,22 @@ type CheckoutOrder struct {
 	//
 	// AlipayAmount 是预售订单用支付宝额度支付的单位数；经 Dodo 付款的订单没有该字段。这类
 	// 订单没有退款。
-	AlipayAmount int64     `json:"alipay_amount,omitempty"`
-	Status       string    `json:"status"`
-	PaymentID    string    `json:"payment_id,omitempty"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	AlipayAmount int64 `json:"alipay_amount,omitempty"`
+	// Provider is who takes the payment: "dodo", "ezfp" (易支付) or "opcpay"
+	// (一人付 quota). PayType is the 易支付 payment type, empty otherwise.
+	//
+	// Provider 是收取付款的服务商："dodo"、"ezfp"（易支付）或 "opcpay"（一人付额度）。
+	// PayType 是易支付付款方式，其他服务商为空。
+	Provider string `json:"provider"`
+	PayType  string `json:"pay_type"`
+	Status   string `json:"status"`
+	// PaymentID is the provider's payment: Dodo's payment id, or 易支付's
+	// trade number.
+	//
+	// PaymentID 是服务商的付款：Dodo 的付款 id，或易支付的交易号。
+	PaymentID string    `json:"payment_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // OrderListResponse is one page of orders.

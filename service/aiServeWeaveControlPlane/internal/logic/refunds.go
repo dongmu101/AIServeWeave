@@ -59,7 +59,7 @@ const (
 // 供计费页面参考；申请本身会在一个事务中重新判断。所有订单都必须属于 actor 的租户。
 func (s *Service) RefundableOrders(ctx context.Context, actor Actor, orders []model.CheckoutOrder) (map[string]int64, error) {
 	out := map[string]int64{}
-	if !s.dodoEnabled() || s.billing.RefundWindowDays <= 0 || isPlatformActor(actor) {
+	if !s.fiatEnabled() || s.billing.RefundWindowDays <= 0 || isPlatformActor(actor) {
 		return out, nil
 	}
 	row, err := s.tenantBilling(ctx, actor.TenantID)
@@ -72,7 +72,8 @@ func (s *Service) RefundableOrders(ctx context.Context, actor Actor, orders []mo
 	}
 	notBefore := s.refundWindowStart()
 	for _, o := range orders {
-		if o.TenantID != actor.TenantID || o.Status != model.OrderStatusPaid || active[o.ID] || o.CreatedAt.Before(notBefore) {
+		if o.TenantID != actor.TenantID || o.Status != model.OrderStatusPaid || active[o.ID] || o.CreatedAt.Before(notBefore) ||
+			!s.refundProviderEnabled(o) {
 			continue
 		}
 		if amount := o.UnusedRefundMinor(row.BalanceMicro); amount > 0 {
@@ -91,7 +92,7 @@ func (s *Service) RefundableOrders(ctx context.Context, actor Actor, orders []mo
 // 申请「只退未用点数」规则所允许的全部金额。只有 owner 或 admin 可以申请，与只有他们
 // 能购买一致；退款期限为零时关闭自助退款。
 func (s *Service) RequestRefund(ctx context.Context, actor Actor, orderID string, amountMinor int64, reason string) (model.RefundRequest, error) {
-	if !s.dodoEnabled() {
+	if !s.fiatEnabled() {
 		return model.RefundRequest{}, ErrNotFound
 	}
 	if !actor.canPurchase() || s.billing.RefundWindowDays <= 0 {
@@ -100,6 +101,12 @@ func (s *Service) RequestRefund(ctx context.Context, actor Actor, orderID string
 	reason, ok := refundText(reason, true)
 	if !ok || amountMinor < 0 {
 		return model.RefundRequest{}, ErrInvalidInput
+	}
+	// An order whose provider is no longer configured cannot be refunded
+	// here; asking would only queue a refund nothing can submit.
+	// 服务商已不再配置的订单无法在这里退款；申请只会排入一笔无法提交的退款。
+	if order, err := s.store.GetCheckoutOrder(ctx, orderID); err == nil && order.TenantID == actor.TenantID && !s.refundProviderEnabled(order) {
+		return model.RefundRequest{}, translateRefund(&store.RefundRefusedError{Reason: store.RefundRefusedOrderState})
 	}
 	req, _, _, err := s.store.OpenRefundRequest(ctx, model.RefundRequest{
 		ID: model.NewID(model.PrefixRefundRequest), TenantID: actor.TenantID, OrderID: orderID,
@@ -118,7 +125,7 @@ func (s *Service) RequestRefund(ctx context.Context, actor Actor, orderID string
 //
 // CancelRefundRequest 撤回租户自己的一个待审核申请。
 func (s *Service) CancelRefundRequest(ctx context.Context, actor Actor, id string) (model.RefundRequest, error) {
-	if !s.dodoEnabled() {
+	if !s.fiatEnabled() {
 		return model.RefundRequest{}, ErrNotFound
 	}
 	if !actor.canPurchase() {
@@ -138,7 +145,7 @@ func (s *Service) CancelRefundRequest(ctx context.Context, actor Actor, id strin
 //
 // ListRefundRequests 读取退款申请，范围限定同 ListBillingLedger。
 func (s *Service) ListRefundRequests(ctx context.Context, actor Actor, query store.ListQuery, filter store.RefundRequestFilter) (store.Page[model.RefundRequest], error) {
-	if !s.dodoEnabled() {
+	if !s.fiatEnabled() {
 		return store.Page[model.RefundRequest]{}, ErrNotFound
 	}
 	if !isPlatformActor(actor) {
@@ -158,7 +165,7 @@ func (s *Service) ListRefundRequests(ctx context.Context, actor Actor, query sto
 // 点数」规则以当前余额重新核定，可能低于申请金额；amountMinor 不为零时可进一步调低。
 // 服务商处理中或其答复丢失时，返回的申请为 processing；服务商拒绝时为 failed。
 func (s *Service) ApproveRefundRequest(ctx context.Context, actor Actor, id string, amountMinor int64, note string) (model.RefundRequest, error) {
-	if !s.dodoEnabled() {
+	if !s.fiatEnabled() {
 		return model.RefundRequest{}, ErrNotFound
 	}
 	if err := s.requireBillingOperator(actor); err != nil {
@@ -188,7 +195,7 @@ func (s *Service) ApproveRefundRequest(ctx context.Context, actor Actor, id stri
 // 情形。它只受付款中尚未退款的金额限制，因此可能扣回已经花掉的点数、使余额为负。
 // amountMinor 为零时退回剩余全部。
 func (s *Service) CreateOperatorRefund(ctx context.Context, actor Actor, orderID string, amountMinor int64, reason string) (model.RefundRequest, error) {
-	if !s.dodoEnabled() {
+	if !s.fiatEnabled() {
 		return model.RefundRequest{}, ErrNotFound
 	}
 	if err := s.requireBillingOperator(actor); err != nil {
@@ -274,6 +281,20 @@ func (s *Service) MarkRefundFailed(ctx context.Context, actor Actor, id, note st
 // 退回点数；答复丢失时保持 processing（退款可能已经存在），交由退款事件或运维结算。
 // 答复在脱离请求的 context 上记录，使不耐烦的客户端无法把它丢掉。
 func (s *Service) submitRefund(ctx context.Context, req model.RefundRequest, order model.CheckoutOrder) (model.RefundRequest, error) {
+	switch order.PaymentProvider() {
+	case model.PaymentProviderEzfp:
+		return s.submitEzfpRefund(ctx, req, order)
+	case model.PaymentProviderDodo:
+		if !s.dodoEnabled() {
+			record, cancel := context.WithTimeout(context.WithoutCancel(ctx), refundRecordTimeout)
+			defer cancel()
+			return s.failSubmittedRefund(record, req, refundFailureNoTarget)
+		}
+	default:
+		record, cancel := context.WithTimeout(context.WithoutCancel(ctx), refundRecordTimeout)
+		defer cancel()
+		return s.failSubmittedRefund(record, req, refundFailureNoTarget)
+	}
 	call := billing.RefundRequest{
 		AmountMinor: req.AmountMinor, Currency: req.Currency, Reason: req.Reason,
 		RequestID: req.ID, OrderID: order.ID, TenantID: order.TenantID, ProductID: order.DodoProductID,
@@ -334,6 +355,21 @@ func (s *Service) failSubmittedRefund(ctx context.Context, req model.RefundReque
 	}
 	s.invalidateIf(ctx, changed)
 	return failed, nil
+}
+
+// refundProviderEnabled reports whether the provider that took order's
+// payment is configured, so a refund of it can be submitted.
+//
+// refundProviderEnabled 报告收取该订单付款的服务商是否已配置，从而能提交其退款。
+func (s *Service) refundProviderEnabled(order model.CheckoutOrder) bool {
+	switch order.PaymentProvider() {
+	case model.PaymentProviderDodo:
+		return s.dodoEnabled()
+	case model.PaymentProviderEzfp:
+		return s.ezfpEnabled()
+	default:
+		return false
+	}
 }
 
 // refundWindowStart is the creation time before which an order is past the

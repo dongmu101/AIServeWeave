@@ -53,7 +53,7 @@ func (s *Store) CreateAccountCheckoutOrder(_ context.Context, order *model.Check
 	if !ok {
 		return store.ErrNotFound
 	}
-	if err := store.AccountCheckoutTerms(sale, order.TenantID, order.AmountMinor, order.Currency, now); err != nil {
+	if err := store.AccountCheckoutTerms(sale, order.TenantID, order.Provider, order.AmountMinor, order.Currency, now); err != nil {
 		return err
 	}
 	for _, other := range s.billing.orders {

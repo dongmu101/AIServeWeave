@@ -22,6 +22,14 @@ type AccountSale struct {
 	Owned         bool   `json:"owned"`
 	ExpiresAt     string `json:"expires_at,omitempty"`
 	TenantID      string `json:"tenant_id,omitempty"`
+	// DodoAvailable and EzfpAvailable, on the tenant's view, tell through
+	// which providers a month can be bought: Dodo needs a product, 易支付 a
+	// CNY price.
+	//
+	// DodoAvailable 与 EzfpAvailable 在租户视图中表示一个月可以经哪些服务商购买：Dodo
+	// 需要产品，易支付需要 CNY 标价。
+	DodoAvailable *bool `json:"dodo_available,omitempty"`
+	EzfpAvailable *bool `json:"ezfp_available,omitempty"`
 }
 
 // AccountSaleRequest creates or updates an account. Kind is required on
@@ -46,6 +54,12 @@ type AccountSaleRequest struct {
 type AccountCheckoutRequest struct {
 	ExpectedPriceMinor int64  `json:"expected_price_minor"`
 	Currency           string `json:"currency"`
+	// Provider and PayType choose 易支付, as on CheckoutRequest; omitted,
+	// the checkout is Dodo's.
+	//
+	// Provider 与 PayType 选择易支付，与 CheckoutRequest 相同；省略时为 Dodo 结账。
+	Provider string `json:"provider,omitempty"`
+	PayType  string `json:"pay_type,omitempty"`
 }
 
 // AccountPresale is a presale of one month of an account of Kind, priced in
@@ -71,12 +85,17 @@ type AccountPresale struct {
 	//
 	// AlipayAmount 是用租户支付宝额度支付一个月所需的单位数（次数或积分）；不能这样支付时
 	// 为零。AlipayAvailable 告诉商户此刻能否这样支付。
-	AlipayAmount    int64  `json:"alipay_amount"`
-	AlipayAvailable bool   `json:"alipay_available"`
-	DodoProductID   string `json:"dodo_product_id,omitempty"`
-	Capacity        *int   `json:"capacity,omitempty"`
-	Outstanding     *int   `json:"outstanding,omitempty"`
-	UpdatedAt       string `json:"updated_at,omitempty"`
+	AlipayAmount    int64 `json:"alipay_amount"`
+	AlipayAvailable bool  `json:"alipay_available"`
+	// EzfpAvailable tells a tenant whether a month can be bought through
+	// 易支付 now; Available keeps meaning through Dodo.
+	//
+	// EzfpAvailable 告诉商户此刻能否经易支付购买一个月；Available 仍表示经 Dodo。
+	EzfpAvailable bool   `json:"ezfp_available"`
+	DodoProductID string `json:"dodo_product_id,omitempty"`
+	Capacity      *int   `json:"capacity,omitempty"`
+	Outstanding   *int   `json:"outstanding,omitempty"`
+	UpdatedAt     string `json:"updated_at,omitempty"`
 }
 
 // AccountPresaleRequest creates or updates a presale; kind cannot change.

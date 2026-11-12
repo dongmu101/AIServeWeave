@@ -145,7 +145,7 @@ func paymentSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingE
 	if !ok || err != nil {
 		return result, err
 	}
-	if event.TenantID != order.TenantID ||
+	if event.TenantID != order.TenantID || eventProvider(event) != order.PaymentProvider() ||
 		(event.CheckoutSessionID != "" && order.DodoSessionID != "" && event.CheckoutSessionID != order.DodoSessionID) {
 		result.Outcome = BillingOutcomeMismatch
 		return result, nil
@@ -192,6 +192,18 @@ func paymentSucceeded(tx BillingTx, event BillingEvent, now time.Time) (BillingE
 		return grantAccount(tx, result, order, now)
 	}
 	return credit(tx, result, order.TenantID, model.LedgerKindTopup, order.CreditsMicro, order.ID, "topup:"+paymentID, now)
+}
+
+// eventProvider is the provider an event came from; an event that names
+// none is Dodo's, the provider whose webhook predates the field.
+//
+// eventProvider 是事件来自的服务商；没有指明服务商的事件属于 Dodo——它的 webhook 早于
+// 该字段。
+func eventProvider(event BillingEvent) string {
+	if event.Provider == "" {
+		return model.PaymentProviderDodo
+	}
+	return event.Provider
 }
 
 func paymentFailed(tx BillingTx, event BillingEvent, now time.Time) (BillingEventResult, error) {

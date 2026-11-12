@@ -24,6 +24,14 @@ func TestAccountSalesRoutesWithoutPaymentProvider(t *testing.T) {
 	if got := h.call(http.MethodPost, "/billing/v1/dodo/webhook", "", nil, nil); got != http.StatusNotFound {
 		t.Errorf("Dodo webhook: got %d, want disabled (404)", got)
 	}
+	for _, method := range []string{http.MethodGet, http.MethodPost} {
+		if got := h.call(method, "/billing/v1/ezfp/notify", "", nil, nil); got != http.StatusNotFound {
+			t.Errorf("易支付 notify (%s): got %d, want disabled (404)", method, got)
+		}
+	}
+	if got := h.call(http.MethodPost, "/admin/v1/billing/orders/ord_x/refresh", "", nil, nil); got != http.StatusNotFound {
+		t.Errorf("易支付 refresh: got %d, want disabled (404)", got)
+	}
 	// Assignment needs no provider; presale checkout does.
 	if got := h.call(http.MethodPost, "/operator/v1/billing/orders/ord_x/assign", "", nil, nil); got != http.StatusUnauthorized {
 		t.Errorf("presale assignment: got %d, want authentication guard (401)", got)

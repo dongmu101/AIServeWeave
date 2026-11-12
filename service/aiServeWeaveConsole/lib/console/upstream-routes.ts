@@ -206,6 +206,16 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("portal")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind"] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status"] },
+  // EZFP (易支付) re-check: asks the control plane to query EZFP for the
+  // tenant's own pending EZFP order and settle it if paid. No body; the
+  // control plane rate-limits it per order. EZFP's own notify
+  // (/billing/v1/ezfp/notify) goes to the control plane directly and is never
+  // listed here, like the Dodo webhook.
+  //
+  // 易支付复核：请控制面向易支付查询租户自己的待支付易支付订单，已付款则入账。无请求体；
+  // 控制面按订单限速。易支付自己的异步通知（/billing/v1/ezfp/notify）直接打到控制面，
+  // 与 Dodo webhook 一样，绝不列在这里。
+  { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders"), param(), literal("refresh")], query: [] },
   // Refunds after sale: a tenant asks, lists and withdraws its own requests;
   // the money moves only when an operator approves on the operator surface.
   //

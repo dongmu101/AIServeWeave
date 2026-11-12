@@ -811,6 +811,22 @@ const tenant = {
   "tenant.alipayStatusFailed": "未完了",
   "tenant.alipayQuantity": "数量",
   "tenant.billingKindAlipayTopup": "Alipay 交換",
-  "tenant.alipayLoading": "Alipay 情報を読み込み中"
+  "tenant.alipayLoading": "Alipay 情報を読み込み中",
+  "tenant.payChoiceDodo": "カード / Dodo",
+  "tenant.payChoiceAlipay": "Alipay",
+  "tenant.payChoiceWxpay": "WeChat Pay",
+  "tenant.payChoicePrompt": "支払い方法を選択",
+  "tenant.payMethodLine": "支払い方法：{method}",
+  "tenant.billingPayMethod": "支払い方法",
+  "tenant.billingProviderDodo": "Dodo",
+  "tenant.billingProviderEzfp": "易支付（Epay）",
+  "tenant.billingProviderEzfpAlipay": "易支付 · Alipay",
+  "tenant.billingProviderEzfpWxpay": "易支付 · WeChat Pay",
+  "tenant.billingProviderOpcpay": "Alipay クォータ",
+  "tenant.billingRecheck": "再確認",
+  "tenant.billingRecheckHint": "決済サービスにこの注文の最新状態を問い合わせます。クレジットの反映はサーバーの確認が基準です。続けて押しても現在の状態が返るだけです。",
+  "tenant.billingRecheckStillPending": "まだ決済の確認を待っています。しばらくしてから再確認できます。",
+  "tenant.billingMethodUnavailable": "この支払い方法は一時的に利用できません。ページを更新して再試行してください。",
+  "tenant.accountProductOptionalHint": "通貨が CNY の場合は空欄にできます。その場合は易支付（Epay）でのみ購入できます。"
 } as const;
 export default tenant;

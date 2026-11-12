@@ -597,7 +597,8 @@ const operator = {
   "operator.presaleRefundDescription": "将向商户 {tenant} 退还订单 {order} 尚未退款的 {amount}。退款由 Dodo 处理，退款进行中时不能分配账号。",
   "operator.presaleRefundReason": "退款原因（必填，最多 500 个字符）",
   "operator.presaleRefundSubmitted": "已提交退款，等待 Dodo 处理。全额退款完成后订单会从此列表移除。",
-  "operator.billingNeedsDodo": "未配置 Dodo",
-  "operator.billingNeedsDodoDescription": "充值包经 Dodo 结账出售。本部署只开启了支付宝（一人付），点数由租户兑换支付宝额度获得；模型单价、租户与账目仍可在其他分区管理。"
+  "operator.billingNeedsDodo": "未配置 Dodo 或易支付",
+  "operator.billingNeedsDodoDescription": "充值包经 Dodo 或易支付结账出售。本部署两者都未配置，只开启了支付宝（一人付），点数由租户兑换支付宝额度获得；模型单价、租户与账目仍可在其他分区管理。",
+  "operator.billingProductOptionalHint": "币种为 CNY 时可留空，仅能经易支付购买。"
 } as const;
 export default operator;

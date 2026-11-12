@@ -1,3 +1,9 @@
+# 易支付（EZFP）人民币收款（2026-11-12）
+
+新增易支付（彩虹易支付 V2）作为 Dodo 之外的第二个法币收款通道，租户可选支付宝或微信支付，用于充值包、账号包月与账号预售三条结账流程。只有币种为 CNY 的商品可以走易支付，金额就是现有标价，不另设价格；CNY 商品可以不填 Dodo 产品 ID，此时只能经易支付购买。易支付可与 Dodo 并存（结账时由租户选择），也可单独开启计费。到账只认经平台公钥验签的异步通知或控制面主动查询，两者都走 Dodo 已有的入账事务与去重；Console 回跳只触发一次查询，订单列表另有「再次确认」，后台每分钟补查 2 小时内的待付款订单。退款以退款申请 id 为 `out_refund_no` 同步结算；答复丢失时以退款查询恢复，不自动重发。配置为控制面 `Billing.Ezfp`，密钥经 `AISW_EZFP_PRIVATE_KEY` / `AISW_EZFP_PUBLIC_KEY` 注入，反向代理须暴露 `/billing/v1/ezfp/notify`（已更新 `deploy/` 下的配置示例、`.env.example`、Compose 与 nginx 示例）。迁移为 `billing/0009_ezfp.sql`；控制面与 Console 须一起更新，Gateway 与 Agent 无需升级。规则、开通步骤与验证边界见[易支付说明](docs/billing-ezfp.md)。
+
+已通过的检查：控制面默认测试，billing、logic、handler、store、config、e2e 的竞态检查；签名内容与算法与 OpenSSL 生成的固定向量一致；e2e 以真实客户端经 HTTPS 连模拟易支付，跑完「只配易支付 → 建 CNY 充值包 → 结账 → 签名 GET 通知入账 → 重放不重复 → 运维退款」；临时 PostgreSQL 16 与 MySQL 8.0 上的 gormstore live 用例（含 0009 迁移与 `storetest.EzfpOrders`）。Console 375 项单元测试、lint（仅 1 个既有警告）、TS7 类型检查与生产构建通过，本机 Chrome 计费专项 26 项通过；全套浏览器用例中 `console-header.spec.ts` 两项、`console.spec.ts` 三项（320px 的 `/operator/routes`、`/operator/workflow-templates` 与导航 `aria-current`）失败，已在未含本次改动的 HEAD 上复现同样 5 项，与本次无关。未用真实商户号联调（手机微信 jump、`out_refund_no` 防重复、通知重投是否重新签名均未实测），`clientip` 是 Console 的地址而不是付款人真实 IP，尚未部署。
+
 # 公开首页与法律条款（2026-11-12）
 
 为配合 Antom MOR 审核（要求网站公开展示产品、价格、T&C、隐私条款与退款条款），Console 新增公开页面：`/` 未登录时改为产品介绍首页（已登录照旧进入概览），新增 `/terms`、`/privacy`、`/refund`（英文、简中、繁中，以英文为准，其余语言显示英文），首页、价格、登录、注册页加统一页脚，注册页加同意声明，价格页加分区说明，计费页加条款链接。退款条款按现有规则撰写（点数在 `RefundWindowDays` 内退未用部分，经邮件申请；已开通包月不退；预售未交付全额退；支付宝额度不可撤销）。营运方名称、地址、邮箱、准据法与退款天数来自 Console 环境变量 `AISW_CONSOLE_LEGAL_*`（已接入 Compose 与 `.env.example`），未设置时显示方括号占位符。只需更新 Console，控制面、Gateway 与 Agent 无需升级。说明见 [Console README](service/aiServeWeaveConsole/README.md#公开首页与法律条款)。

@@ -16,9 +16,10 @@ import (
 // bought; its product, capacity and waiting orders are the operator's.
 //
 // renderPresale 呈现一个预售。商户只看到能否购买；产品、名额与等待订单只给运维。
-func renderPresale(row store.PresaleStock, actor logic.Actor) types.AccountPresale {
+func renderPresale(svcLogic *logic.Service, row store.PresaleStock, actor logic.Actor) types.AccountPresale {
 	out := types.AccountPresale{ID: row.ID, Kind: row.Kind, Name: row.Name, PriceMinor: row.PriceMinor, Currency: row.Currency,
-		Active: row.Active, Available: logic.PresaleAvailable(row), AlipayAmount: row.AlipayAmount, AlipayAvailable: logic.PresaleAlipayAvailable(row)}
+		Active: row.Active, Available: logic.PresaleAvailable(row), AlipayAmount: row.AlipayAmount, AlipayAvailable: logic.PresaleAlipayAvailable(row),
+		EzfpAvailable: svcLogic.PresaleEzfpAvailable(row)}
 	if actor.TenantID == model.PlatformScope {
 		capacity, outstanding := row.Capacity, row.Outstanding
 		out.DodoProductID, out.Capacity, out.Outstanding = row.DodoProductID, &capacity, &outstanding
@@ -41,7 +42,7 @@ func listAccountPresales(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		items := make([]types.AccountPresale, 0, len(rows))
 		for _, row := range rows {
-			items = append(items, renderPresale(row, actor))
+			items = append(items, renderPresale(ctx.Logic, row, actor))
 		}
 		w.Header().Set("Cache-Control", "no-store")
 		writeJSON(w, http.StatusOK, struct {
@@ -73,7 +74,7 @@ func saveAccountPresale(ctx *svc.ServiceContext, create bool) http.HandlerFunc {
 		if create {
 			status = http.StatusCreated
 		}
-		writeJSON(w, status, renderPresale(row, actor))
+		writeJSON(w, status, renderPresale(ctx.Logic, row, actor))
 	})
 }
 
@@ -86,7 +87,8 @@ func presaleCheckout(ctx *svc.ServiceContext) http.HandlerFunc {
 		if !decode(w, r, &req) {
 			return
 		}
-		result, err := ctx.Logic.CreatePresaleCheckout(r.Context(), actor, pathvar.Vars(r)["id"], req.ExpectedPriceMinor, req.Currency)
+		result, err := ctx.Logic.CreatePresaleCheckout(r.Context(), actor, pathvar.Vars(r)["id"], req.ExpectedPriceMinor, req.Currency,
+			logic.Payment{Provider: req.Provider, PayType: req.PayType})
 		if err != nil {
 			respondErr(w, err)
 			return

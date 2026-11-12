@@ -77,7 +77,7 @@ func TestAlipayHTTPContract(t *testing.T) {
 		return w
 	}
 
-	if w := serve(billingOverview(services), http.MethodGet, "", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"payment_methods":{"dodo":false,"alipay":true}`) {
+	if w := serve(billingOverview(services), http.MethodGet, "", nil); w.Code != 200 || !strings.Contains(w.Body.String(), `"payment_methods":{"dodo":false,"alipay":true,"ezfp":false,"ezfp_types":[]}`) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	w := serve(alipayOverview(services), http.MethodGet, "", nil)

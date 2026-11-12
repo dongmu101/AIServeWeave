@@ -826,7 +826,7 @@ CREATE INDEX idx_usage_records_created              ON usage_records (created_at
 
 ## 计费与充值
 
-租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments 与支付宝（一人付，2026-11-11 新增），两者可并存，也可只配一个（`Billing.Enabled` 至少需要其一）；支付宝的规则见下文「支付宝（一人付）」与[支付宝说明](../../docs/billing-alipay.md)。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
+租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments、支付宝（一人付，2026-11-11 新增）与易支付（EZFP，2026-11-12 新增），可任意并存，也可只配一个（`Billing.Enabled` 至少需要其一）。Dodo 与易支付是法币结账通道，服务充值包、账号包月与预售，易支付只收 CNY 标价的商品；支付宝（一人付）兑换额度。规则见下文「支付宝（一人付）」「易支付（EZFP）」、[支付宝说明](../../docs/billing-alipay.md)与[易支付说明](../../docs/billing-ezfp.md)。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
 
 ```
 Console ──/admin|/operator 白名单──▶ 控制面 ──SDK──▶ Dodo（结账会话、客户、客户门户）
@@ -848,6 +848,12 @@ Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 
 | `Billing.Alipay.CreditsPerUnitMicro` | 空 | 开启时必填，每 1 次 / 1 积分兑换的 micro 点数，1 – 10^12 |
 | `Billing.Alipay.ReturnURL` | 空 | 可选，HTTPS，主机与端口须与一人付项目网址一致；建议带 `?tab=alipay&alipay_return=1` |
 | `Billing.Alipay.BaseURL` | 空 | 可选，覆盖接口基址（默认 `https://ai6666.com/opcpay/api/pay/v1`），须为 HTTPS，供测试替身使用 |
+| `Billing.Ezfp.Enabled` | `false` | 开启易支付；只配易支付时可省略 `Billing.Dodo` 与 `Billing.ReturnURL` |
+| `Billing.Ezfp.PID` | 空 | 开启时必填，商户 ID（正整数） |
+| `Billing.Ezfp.PrivateKey` / `PublicKey` | 空 | 开启时必填，商户 RSA 私钥与平台 RSA 公钥（裸 base64 或 PEM），部署里用 `${AISW_EZFP_PRIVATE_KEY}` / `${AISW_EZFP_PUBLIC_KEY}` 引用；启动时解析，格式错误启动失败 |
+| `Billing.Ezfp.Types` | `[alipay, wxpay]` | 提供给租户的付款方式，只能是 `alipay`、`wxpay`，不可重复 |
+| `Billing.Ezfp.NotifyURL` / `ReturnURL` | 空 | 开启时必填，绝对 HTTPS，不带凭据、query、fragment，≤512 字节；前者是本控制面公开的 `/billing/v1/ezfp/notify`，后者是 Console 计费页 |
+| `Billing.Ezfp.BaseURL` | 空 | 可选，覆盖接口基址（默认 `https://www.ezfp.cn/`），须为 HTTPS，供测试替身使用 |
 
 Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhook`，订阅 `payment.succeeded`、`payment.failed`、`payment.cancelled`、`refund.succeeded`、`dispute.opened`、`dispute.won`、`dispute.cancelled`。`deploy/docker-compose.yaml` 把控制面端口只绑定在 `127.0.0.1`，Dodo 要能投递，需要由反向代理把这一条路径（且只需这一条）暴露到公网。
 
@@ -866,7 +872,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id` |
 | `credit_packages` | 充值包（`pkg_`）：`fixed` 为固定价格产品对应固定点数；`custom` 为 Dodo Pay What You Want 产品，按 `credits_per_minor_unit_micro` 换算，金额在 `min_amount_minor`–`max_amount_minor` 内 |
 | `model_prices` | 别名单价，`*` 为默认价 |
-| `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准 |
+| `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准。`provider`（`dodo`/`ezfp`/`opcpay`）与 `pay_type`（易支付的 `alipay`/`wxpay`）见 `0009_ezfp.sql`，旧行为空，空值按 `alipay_amount` 推断为一人付或 Dodo。易支付订单的 `dodo_session_id`/`dodo_payment_id` 存 `ezfp:<trade_no>`，前缀使不同服务商的 id 在唯一索引下不冲突 |
 | `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`usage`/`refund`/`dispute`/`dispute_reversal`/`adjust`，带 `balance_after`；`idempotency_key` 唯一 |
 | `usage_charges` | 每个 `request_id` 一行费用，是扣费的幂等依据 |
 | `billing_webhook_events` | 已处理的 `webhook-id`，用于去重 |
@@ -911,9 +917,11 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | 接口 | 守卫 | 说明 |
 | --- | --- | --- |
 | `GET /admin/v1/billing` | 租户会话 | 模式、余额、是否拦截、上架的充值包 |
-| `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；返回 `201 {order_id, checkout_url}`。首次购买时为租户创建 Dodo 客户；并发的首次购买以先记录的客户为准。Dodo 出错或超时为 `503` |
+| `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?, provider?, pay_type?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；省略 `provider` 为 Dodo，`"ezfp"` 须带已配置的 `pay_type` 且商品为 CNY。返回 `201 {order_id, checkout_url}`。经 Dodo 首次购买时为租户创建 Dodo 客户；并发的首次购买以先记录的客户为准。服务商未配置或商品不能经它购买 `404`，选择非法 `400`，服务商出错或超时 `503` |
 | `POST /admin/v1/billing/portal` | 租户 owner/admin | 返回 Dodo 客户门户链接（发票、付款记录）；尚无客户时 `404` |
-| `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页 |
+| `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页；订单带 `provider`、`pay_type`，易支付订单的 `payment_id` 是去掉前缀的交易号 |
+| `POST /admin/v1/billing/orders/:id/refresh` | 租户会话 | 仅易支付；就本租户一笔待付款的易支付订单查询易支付，已付款则结算，返回订单（同一订单 5 秒内只查一次）；不是本租户的易支付订单 `404` |
+| `GET`、`POST /billing/v1/ezfp/notify` | 公开（RSA 签名） | 仅易支付；验签后结算，纯文本答复：最终结果 `200 success`，签名错误 `401 fail`，存储出错 `500 fail` |
 | `GET/POST /operator/v1/billing/packages`、`PUT .../packages/:id` | 平台会话 | 充值包管理；下架用 `active: false`，不删除（订单引用它） |
 | `GET/PUT/DELETE /operator/v1/billing/model-prices` | 平台会话 | 单价；别名可能含 `/`，因此 PUT 的别名放在请求体 `model`，DELETE 用 `?model=` |
 | `GET /operator/v1/billing/tenants` | 平台会话 | 租户及其模式与余额 |
@@ -923,7 +931,9 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 结账与门户两条路由会调用 Dodo，单独设了 `handler.BillingCallTimeout`（9 秒）的超时，低于 Console 默认 10 秒的上游超时；其余路由沿用服务默认的 3 秒。SDK 单次尝试 4 秒、最多重试 1 次，整体再受这条路由超时约束。超时可能留下一张永远 `pending` 的订单，或一个未被记录的 Dodo 客户，两者都不影响余额。
 
-写操作的审计动作：`billing.package.create`/`update`、`billing.price.update`/`delete`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`。
+`GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo, alipay, ezfp, ezfp_types}`，充值包另带 `dodo_available`/`ezfp_available`；Dodo 或易支付之一配置时挂载充值包、三个结账、退款申请与运维退款路由，客户门户与 Dodo webhook 只随 Dodo 挂载。
+
+写操作的审计动作：`billing.package.create`/`update`、`billing.price.update`/`delete`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`（易支付结账在说明中带 `via ezfp <type>`）。
 
 ### 支付宝（一人付）
 
@@ -944,9 +954,20 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 **账号预售的支付宝支付**：兑换记录带 `presale_order_id` 时，不入点数账目，而是结算预售订单。创建时同一事务保存 `pending` 订单（占名额）与 `pending` 兑换；确认核销成功才把订单标为 `paid`（进入待发货），确定失败标为 `failed` 并释放名额，未知结果保持 `pending`。同一 `action_id` 不能用于另一个预售。`alipay_amount > 0` 的订单在 `refundLimit` 中一律拒绝退款。只配支付宝时，`GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo: false, alipay: true}`，公开目录只返回模型单价。审计动作 `billing.alipay.purchase`、`billing.alipay.redeem`。
 
+### 易支付（EZFP）
+
+易支付（彩虹易支付 V2）是第二个法币结账通道，与 Dodo 服务同样的充值包、账号包月与预售，只收 CNY 标价的商品，金额即商品标价；CNY 商品可以不填 Dodo 产品 ID（此时只能经易支付购买，`packageFromInput`、`SaveAccountSale`、`SaveAccountPresale` 与 `model.FiatPayable` 共用这条规则）。租户在结账请求里选择 `provider: "ezfp"` 与 `pay_type`（`alipay`/`wxpay`）。规则与开通步骤见[易支付说明](../../docs/billing-ezfp.md)。
+
+- **下单**：先存 `pending` 订单（`provider=ezfp`、`pay_type`），再以 `method=jump` 调 `api/pay/create`，`out_trade_no` 为订单 id，`param` 为租户 id，`clientip` 为请求来源（控制面只看到 Console 的地址）；把 `ezfp:<trade_no>` 记为会话 id。下单失败（含结果未知）标记订单失败、释放账号占用或预售名额，返回 `503`。请求以商户私钥 SHA256WithRSA 签名；`code=0` 的答复以平台公钥验签并检查时间戳在 ±300 秒内，不通过一律视为结果未知。
+- **结算**：通知（GET 或 POST 表单）只验签、不限时间戳新旧；查询答复同样验签。两者都在核对商户 ID、交易状态与订单服务商后，归约为 `store.BillingEvent`（`Provider: ezfp`，事件 id `ezfp:pay:<trade_no>`，付款与会话 id `ezfp:<trade_no>`，CNY），走 `ApplyBillingEvent` 的同一事务与去重；`paymentSucceeded` 新增服务商核对，Dodo 事件（`Provider` 为空）不能结算易支付订单，反之亦然。租户取自订单，`param` 只作交叉核对。
+- **补救**：`POST /admin/v1/billing/orders/:id/refresh`（Console 回跳时发一次、「再次确认」每次一发）与后台 `RunEzfpRecovery`（每分钟，≤20 笔创建满 30 秒、未满 2 小时的待付款易支付订单；同一订单两次查询至少间隔 5 秒）都调用 `api/pay/query`。易支付报告已退款或冻结的待付款订单记错误日志，留给运维。
+- **退款**：`submitRefund` 先按订单服务商分派。易支付以 `rfd_` id 为 `out_refund_no` 调 `api/pay/refund`，答复成功即 `RecordRefundSubmitted(ezfp:<refund_no>)` 并合成带 `RefundRequestID` 的 `refund_succeeded` 事件立即结算；`code≠0` 为拒绝（失败并退回冻结点数）；其他错误保持 `processing`，恢复循环以 `api/pay/refundquery` 查询：1 成功、0 失败，查不到时留给运维 `fail`，不自动重发。退款申请、审批与运维退款在 Dodo 或易支付之一配置时可用；订单所属服务商未配置时，租户申请返回 `409 order_state`，已批准的退款以 `the order has no payment or product to refund` 失败。
+
+迁移 `billing/0009_ezfp.sql` 为 `checkout_orders` 增加 `provider`、`pay_type` 与索引 `idx_checkout_orders_provider (provider, status, created_at)`。新建的 Dodo 与一人付预售订单也会写明 `provider`。控制面与 Console 须一起升级，Gateway 与 Agent 不需要升级。
+
 ### 依赖
 
-支付宝没有引入依赖：`internal/billing/opcpay` 按 npm 包 `opcpay` 0.3.4 与其 OpenAPI 1.1.2 契约用 `net/http` 手写（只发往 HTTPS 基址、不跟随重定向、不把上游错误文本或 Key 带进错误与日志），logic 层只看到 `internal/billing.Alipay` 接口。`github.com/dodopayments/dodopayments-go`（锁定 `v1.125.0`）只由 `internal/billing/dodo` import，logic 层只看到 `internal/billing.Provider` 接口。用官方 SDK 而不是手写 `net/http`：结账、客户与门户请求形状，以及 Standard Webhooks 验签（时间戳容差、多签名、密钥轮换）都由它维护。它带入 `github.com/standard-webhooks/standard-webhooks` 与 `github.com/tidwall/{gjson,sjson,match,pretty}`，只进控制面二进制。Console 不引入 npm `dodopayments`、不持有 Dodo 凭据，只经控制面白名单调用上面的接口。
+易支付也没有引入依赖：`internal/billing/ezfp` 按易支付 V2 文档与参考 PHP SDK 2.0 用标准库手写（`crypto/rsa` 签名验签，只发往 HTTPS 基址、不跟随重定向、答复上限 64 KiB、错误不带上游文本），签名内容与算法由 OpenSSL 生成的固定向量守护；logic 层只看到 `internal/billing.Ezfp` 接口。支付宝没有引入依赖：`internal/billing/opcpay` 按 npm 包 `opcpay` 0.3.4 与其 OpenAPI 1.1.2 契约用 `net/http` 手写（只发往 HTTPS 基址、不跟随重定向、不把上游错误文本或 Key 带进错误与日志），logic 层只看到 `internal/billing.Alipay` 接口。`github.com/dodopayments/dodopayments-go`（锁定 `v1.125.0`）只由 `internal/billing/dodo` import，logic 层只看到 `internal/billing.Provider` 接口。用官方 SDK 而不是手写 `net/http`：结账、客户与门户请求形状，以及 Standard Webhooks 验签（时间戳容差、多签名、密钥轮换）都由它维护。它带入 `github.com/standard-webhooks/standard-webhooks` 与 `github.com/tidwall/{gjson,sjson,match,pretty}`，只进控制面二进制。Console 不引入 npm `dodopayments`、不持有 Dodo 凭据，只经控制面白名单调用上面的接口。
 
 ### 已知缺口
 
@@ -956,6 +977,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 - Gateway 用量推送的重试只在进程内，副本崩溃会丢失尚未送达的批次，对应用量不扣费。
 - `usage_charges` 与 `billing_webhook_events` 还没有保留期清理，会随用量与事件持续增长。
 - 手工调整余额（`/adjust`）没有幂等键，重复提交会记两次；Console 只发送一次、不自动重试。
+- 易支付只用模拟接口验证（签名向量、客户端、logic、handler、真实客户端经 HTTPS 的 e2e，临时 PostgreSQL 16 / MySQL 8.0 上的 0009 迁移与 `storetest.EzfpOrders`）：未用真实商户号联调；手机微信 jump 页面、`out_refund_no` 是否真正防重复、通知重投是否重新签名都未实测。`clientip` 是 Console 的地址，微信手机 H5 支付可能因此受限。易支付后台手工发起的退款不会同步进系统；多副本各自运行恢复，查询量随副本数增加。
 - 支付宝（一人付）只用模拟接口验证：未配置真实 `opcpay_api_key`，没有只读查询过真实 `/capabilities`、`/product`，没有真实购买与核销。只支持次数/积分套餐；一人付通知（webhook）未接入，到账靠读取额度；一人付无退款，已兑换的点数如需退回只能运维手工调整，支付宝侧额度不返还；支付宝支付的预售订单同样不能在系统内退款。次数包每次核销只能扣 1，预售的支付宝额度数量大于 1 须使用积分包。
 
 ## 告警评估与通知（P09/C29）

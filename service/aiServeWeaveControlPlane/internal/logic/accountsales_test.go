@@ -92,7 +92,7 @@ func TestMonthlyAccountSaleRequiresFiatPrice(t *testing.T) {
 		t.Fatal(sale, err)
 	}
 	// Without a payment provider the inventory is managed but cannot be bought.
-	if _, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD"); !errors.Is(err, logic.ErrNotFound) {
+	if _, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD", logic.Payment{}); !errors.Is(err, logic.ErrNotFound) {
 		t.Fatal("bought without a payment provider", err)
 	}
 }
@@ -106,7 +106,7 @@ func TestMonthlyAccountFiatCheckoutLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.CreateAccountCheckout(ctx, f.actorWithRole(model.RoleMember), sale.ID, 2000, "USD"); !errors.Is(err, logic.ErrForbidden) {
+	if _, err := f.svc.CreateAccountCheckout(ctx, f.actorWithRole(model.RoleMember), sale.ID, 2000, "USD", logic.Payment{}); !errors.Is(err, logic.ErrForbidden) {
 		t.Fatal("member could buy", err)
 	}
 	for _, test := range []struct {
@@ -114,11 +114,11 @@ func TestMonthlyAccountFiatCheckoutLifecycle(t *testing.T) {
 		currency string
 		want     error
 	}{{0, "USD", logic.ErrInvalidInput}, {2000, "usd", logic.ErrInvalidInput}, {1999, "USD", logic.ErrConflict}, {2000, "EUR", logic.ErrConflict}} {
-		if _, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, test.amount, test.currency); !errors.Is(err, test.want) {
+		if _, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, test.amount, test.currency, logic.Payment{}); !errors.Is(err, test.want) {
 			t.Errorf("%d %s: %v", test.amount, test.currency, err)
 		}
 	}
-	checkout, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD")
+	checkout, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD", logic.Payment{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +130,7 @@ func TestMonthlyAccountFiatCheckoutLifecycle(t *testing.T) {
 		t.Fatal(err)
 	}
 	second := logic.Actor{TenantID: otherTenant.ID, UserID: otherOwner.ID, Role: model.RoleOwner}
-	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD"); !errors.Is(err, logic.ErrConflict) {
+	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD", logic.Payment{}); !errors.Is(err, logic.ErrConflict) {
 		t.Fatal("a pending checkout did not hold the account", err)
 	}
 	// Opening a checkout grants nothing.
@@ -168,11 +168,11 @@ func TestMonthlyAccountFiatCheckoutLifecycle(t *testing.T) {
 	if visible, err := f.svc.ListAccountSales(ctx, second); err != nil || len(visible) != 0 {
 		t.Fatalf("sold account offered to another tenant: %+v %v", visible, err)
 	}
-	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD"); !errors.Is(err, logic.ErrConflict) {
+	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD", logic.Payment{}); !errors.Is(err, logic.ErrConflict) {
 		t.Fatal("sold account checked out by another tenant", err)
 	}
 	// A renewal extends from the current expiry.
-	renewal, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD")
+	renewal, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD", logic.Payment{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -192,17 +192,17 @@ func TestMonthlyAccountFiatCheckoutLifecycle(t *testing.T) {
 	// A checkout the provider never opened releases its hold.
 	f.clock.Advance(rows[0].ExpiresAt.Sub(f.clock.Now()))
 	provider.failNext = true
-	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD"); !errors.Is(err, logic.ErrUnavailable) {
+	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD", logic.Payment{}); !errors.Is(err, logic.ErrUnavailable) {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD"); err != nil {
+	if _, err := f.svc.CreateAccountCheckout(ctx, f.ownerAt, sale.ID, 2000, "USD", logic.Payment{}); err != nil {
 		t.Fatal("failed checkout kept holding the account", err)
 	}
 	// A node binding still narrows account inventory and checkouts.
 	if _, err := f.svc.SetNodeAccess(ctx, accountOperator, "agent", []string{f.tenant.ID}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD"); !errors.Is(err, logic.ErrNotFound) {
+	if _, err := f.svc.CreateAccountCheckout(ctx, second, sale.ID, 2000, "USD", logic.Payment{}); !errors.Is(err, logic.ErrNotFound) {
 		t.Fatal("node dedication was bypassed", err)
 	}
 }
@@ -241,7 +241,7 @@ func TestClaudeAndCodexOnOneAgentSellToDifferentTenants(t *testing.T) {
 		actor logic.Actor
 		sale  model.AccountSale
 	}{{f.ownerAt, claude}, {other, codex}} {
-		checkout, err := f.svc.CreateAccountCheckout(ctx, buy.actor, buy.sale.ID, buy.sale.PriceMinor, "USD")
+		checkout, err := f.svc.CreateAccountCheckout(ctx, buy.actor, buy.sale.ID, buy.sale.PriceMinor, "USD", logic.Payment{})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -264,7 +264,7 @@ func TestClaudeAndCodexOnOneAgentSellToDifferentTenants(t *testing.T) {
 		if err != nil || len(visible) != 1 || visible[0].ID != test.mine.ID {
 			t.Fatalf("inventory: %+v %v", visible, err)
 		}
-		if _, err := f.svc.CreateAccountCheckout(ctx, test.actor, test.closed.ID, test.closed.PriceMinor, "USD"); !errors.Is(err, logic.ErrConflict) {
+		if _, err := f.svc.CreateAccountCheckout(ctx, test.actor, test.closed.ID, test.closed.PriceMinor, "USD", logic.Payment{}); !errors.Is(err, logic.ErrConflict) {
 			t.Fatalf("sold account repurchased: %v", err)
 		}
 	}

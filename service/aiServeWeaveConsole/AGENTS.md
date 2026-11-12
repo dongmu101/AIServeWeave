@@ -79,7 +79,7 @@ Console 只调用控制面的 Admin API，不直连 Gateway 数据面、不直�
 
 ### 计费只经控制面
 
-**Console 不持有 Dodo Payments 或一人付（opcpay）凭据，计费只经控制面。** 不引入 npm `opcpay`：一人付 Key 只在控制面环境变量 `opcpay_api_key`，支付宝购买入口由控制面申请后交回，兑换只发送 `action_id` 与数量（`lib/console/alipay.ts`）。不引入 `dodopayments` 等支付 SDK，不直连 Dodo，不接收 Dodo Webhook（它直接打到控制面 `POST /billing/v1/dodo/webhook`，不在任何白名单里）。结账页与客户门户链接由控制面申请后交回，Console 只校验它是绝对 https URL 再跳转（`lib/console/billing.ts` 的 `parseCheckout`/`parsePortalLink`）。支付回跳带来的 `status`/`payment_id` 只是「开始有限次等待服务端确认」的提示，**绝不**据此判定到账。结账、门户、余额调整等写操作只发送一次，不自动重试。
+**Console 不持有 Dodo Payments、易支付（EZFP）或一人付（opcpay）凭据，计费只经控制面。** 不引入 npm `opcpay`：一人付 Key 只在控制面环境变量 `opcpay_api_key`，支付宝购买入口由控制面申请后交回，兑换只发送 `action_id` 与数量（`lib/console/alipay.ts`）。不引入 `dodopayments` 等支付 SDK，不直连 Dodo，不接收 Dodo Webhook（它直接打到控制面 `POST /billing/v1/dodo/webhook`，不在任何白名单里）。易支付同理：商户号与密钥只在控制面，Console 不直连易支付、不接收它的异步通知（直接打到控制面 `POST /billing/v1/ezfp/notify`，同样不在任何白名单里）；仅有的新增路由是租户 `POST /admin/v1/billing/orders/:id/refresh`（请控制面复核自己的待支付易支付订单，无请求体）。易支付只收 CNY；结账请求体只在租户选了易支付时才带 `provider` 与 `pay_type`（Dodo 不带，旧控制面会以 400 拒绝未知字段）。结账页与客户门户链接由控制面申请后交回，Console 只校验它是绝对 https URL 再跳转（`lib/console/billing.ts` 的 `parseCheckout`/`parsePortalLink`）。支付回跳带来的 `status`/`payment_id` 只是「开始有限次等待服务端确认」的提示，**绝不**据此判定到账。易支付回跳附带的 `out_trade_no`、`trade_no`、`trade_status`、`sign`、`buyer`、`money` 等同样只是提示：页面立即把它们从地址栏与历史记录中清掉，只取匹配 `^ord_[0-9a-f]{28}$` 的订单 id 请控制面复核一次，**绝不**读取 `trade_status` 或据此判定到账。结账、门户、易支付复核、余额调整等写操作只发送一次，不自动重试。
 
 ### ComfyUI 编辑器：同源微前端（已接受的风险）
 

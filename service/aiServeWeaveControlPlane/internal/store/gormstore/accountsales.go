@@ -76,7 +76,7 @@ func (s *Store) CreateAccountCheckoutOrder(ctx context.Context, order *model.Che
 		if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("id = ?", order.AccountID).Take(&sale).Error; err != nil {
 			return err
 		}
-		if err := store.AccountCheckoutTerms(sale, order.TenantID, order.AmountMinor, order.Currency, now); err != nil {
+		if err := store.AccountCheckoutTerms(sale, order.TenantID, order.Provider, order.AmountMinor, order.Currency, now); err != nil {
 			return err
 		}
 		if held, err := accountCheckoutHeld(tx, order.AccountID, order.TenantID, now); err != nil {

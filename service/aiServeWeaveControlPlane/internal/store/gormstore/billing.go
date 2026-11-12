@@ -495,6 +495,15 @@ func (s *Store) ListCheckoutOrders(ctx context.Context, query store.ListQuery, f
 	if filter.Awaiting {
 		db = db.Where("presale_id <> '' AND status = ? AND account_expires_at IS NULL", model.OrderStatusPaid)
 	}
+	if filter.Provider != "" {
+		db = db.Where("provider = ?", filter.Provider)
+	}
+	if !filter.CreatedAfter.IsZero() {
+		db = db.Where("created_at > ?", filter.CreatedAfter)
+	}
+	if !filter.CreatedBefore.IsZero() {
+		db = db.Where("created_at < ?", filter.CreatedBefore)
+	}
 	return readPage(db, query, func(o model.CheckoutOrder) (time.Time, string) { return o.CreatedAt, o.ID })
 }
 

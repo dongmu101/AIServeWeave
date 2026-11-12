@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/svc"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/types"
 	"net/http"
@@ -39,7 +38,7 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		for i, p := range c.Presales {
 			out.Presales[i] = types.CatalogPresale{ID: p.ID, Kind: p.Kind, Name: p.Name, PriceMinor: p.PriceMinor, Currency: p.Currency,
-				Available: logic.PresaleAvailable(p)}
+				Available: ctx.Logic.PresaleFiatAvailable(p)}
 		}
 		for i, p := range c.Prices {
 			out.Prices[i] = types.CatalogPrice{Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok}

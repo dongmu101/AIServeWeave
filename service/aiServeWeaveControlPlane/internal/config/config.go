@@ -444,6 +444,100 @@ type BillingConf struct {
 	// Alipay 经一人付（opcpay）出售点数：租户在支付宝购买次数或积分套餐，再兑换为点数。
 	// 它可与 Dodo 并存，也可单独使用；计费至少需要两者之一。
 	Alipay AlipayConf `json:",optional"`
+	// Ezfp takes CNY payments through 易支付 (EZFP) for the same checkouts
+	// Dodo serves — credit packages, monthly accounts and presales — on items
+	// priced in CNY. It may run with or without Dodo.
+	//
+	// Ezfp 经易支付（EZFP）为 Dodo 所服务的同一批结账（充值包、包月账号与预售）收取人民币
+	// 付款，只适用于以 CNY 标价的商品。它可与 Dodo 并存，也可单独使用。
+	Ezfp EzfpConf `json:",optional"`
+}
+
+// EzfpConf configures 易支付. The keys come from the environment, as
+// ${AISW_EZFP_PRIVATE_KEY} and ${AISW_EZFP_PUBLIC_KEY}, like every other
+// secret here; they are parsed at start, so a bad key fails startup.
+//
+// EzfpConf 配置易支付。密钥与这里其他所有密钥一样来自环境变量
+// （${AISW_EZFP_PRIVATE_KEY} 与 ${AISW_EZFP_PUBLIC_KEY}）；启动时解析，错误的密钥会让
+// 启动失败。
+type EzfpConf struct {
+	Enabled bool `json:",default=false"`
+	// PID is the merchant id.
+	//
+	// PID 是商户 ID。
+	PID int64 `json:",optional"`
+	// PrivateKey is the merchant RSA private key the dashboard generated;
+	// PublicKey is the platform RSA public key it shows. Either may be the
+	// bare base64 the dashboard shows or PEM.
+	//
+	// PrivateKey 是商户后台生成的商户 RSA 私钥；PublicKey 是后台所示的平台 RSA 公钥。
+	// 两者都可以是后台所示的裸 base64 或 PEM。
+	PrivateKey string `json:",optional"`
+	PublicKey  string `json:",optional"`
+	// Types are the payment types offered to tenants, of alipay and wxpay;
+	// empty offers both.
+	//
+	// Types 是提供给租户的付款方式，取自 alipay 与 wxpay；为空时两者都提供。
+	Types []string `json:",optional"`
+	// NotifyURL is where EZFP posts payment notifications: this control
+	// plane's public /billing/v1/ezfp/notify. ReturnURL is where it sends
+	// the payer back: the Console billing page. Neither may carry a query,
+	// since EZFP appends its own parameters.
+	//
+	// NotifyURL 是易支付投递付款通知的地址，即本控制面公开的 /billing/v1/ezfp/notify。
+	// ReturnURL 是易支付把付款人送回的地址，即 Console 计费页。两者都不能带 query，因为
+	// 易支付会追加自己的参数。
+	NotifyURL string `json:",optional"`
+	ReturnURL string `json:",optional"`
+	// BaseURL overrides the API base (https://www.ezfp.cn/), for a test
+	// double. It must be HTTPS.
+	//
+	// BaseURL 覆盖接口基址（https://www.ezfp.cn/），供测试替身使用，必须是 HTTPS。
+	BaseURL string `json:",optional"`
+}
+
+// PayTypes returns the payment types to offer: Types, or both when empty.
+//
+// PayTypes 返回要提供的付款方式：Types，为空时两者都提供。
+func (e EzfpConf) PayTypes() []string {
+	if len(e.Types) == 0 {
+		return []string{"alipay", "wxpay"}
+	}
+	return append([]string(nil), e.Types...)
+}
+
+// validate checks an enabled EZFP block. The keys are only checked present
+// here; they are parsed where the client is built.
+//
+// validate 校验一个已开启的易支付配置块。这里只检查密钥存在；它们在构建客户端处解析。
+func (e EzfpConf) validate() error {
+	if e.PID <= 0 {
+		return errors.New("config: Billing.Ezfp.PID must be the positive merchant id")
+	}
+	if strings.TrimSpace(e.PrivateKey) == "" || strings.TrimSpace(e.PublicKey) == "" {
+		return errors.New("config: Billing.Ezfp.PrivateKey and Billing.Ezfp.PublicKey are both required")
+	}
+	seen := map[string]bool{}
+	for _, t := range e.Types {
+		if (t != "alipay" && t != "wxpay") || seen[t] {
+			return errors.New("config: Billing.Ezfp.Types may only list alipay and wxpay, each once")
+		}
+		seen[t] = true
+	}
+	for name, raw := range map[string]string{"NotifyURL": e.NotifyURL, "ReturnURL": e.ReturnURL} {
+		parsed, err := url.Parse(raw)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil ||
+			parsed.RawQuery != "" || parsed.ForceQuery || parsed.Fragment != "" || len(raw) > 512 {
+			return errors.New("config: Billing.Ezfp." + name + " must be an absolute https URL of at most 512 bytes, without credentials, query or fragment")
+		}
+	}
+	if e.BaseURL != "" {
+		parsed, err := url.Parse(e.BaseURL)
+		if err != nil || parsed.Scheme != "https" || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" {
+			return errors.New("config: Billing.Ezfp.BaseURL must be an absolute https URL")
+		}
+	}
+	return nil
 }
 
 // DodoConfigured reports whether a Dodo account is configured. Without one,
@@ -1090,11 +1184,16 @@ func (c Config) Validate() error {
 // validate 校验一个已开启的计费配置块。key 前缀检查拦下一个否则要到第一次结账才会
 // 暴露的错误：把 test key 指向 live API，或者反过来。
 func (b BillingConf) validate() error {
-	if !b.DodoConfigured() && !b.Alipay.Enabled {
-		return errors.New("config: billing needs Billing.Dodo (APIKey and WebhookSecret) or Billing.Alipay.Enabled")
+	if !b.DodoConfigured() && !b.Alipay.Enabled && !b.Ezfp.Enabled {
+		return errors.New("config: billing needs Billing.Dodo (APIKey and WebhookSecret), Billing.Alipay.Enabled or Billing.Ezfp.Enabled")
 	}
 	if b.Alipay.Enabled {
 		if err := b.Alipay.validate(); err != nil {
+			return err
+		}
+	}
+	if b.Ezfp.Enabled {
+		if err := b.Ezfp.validate(); err != nil {
 			return err
 		}
 	}

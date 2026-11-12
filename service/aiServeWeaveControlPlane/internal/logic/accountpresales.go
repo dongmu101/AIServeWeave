@@ -14,12 +14,43 @@ import (
 	"unicode/utf8"
 )
 
-// PresaleAvailable reports whether a presale can be checked out now: it is
-// listed with a fiat price and still has a place.
+// PresaleAvailable reports whether a presale can be checked out through
+// Dodo now: it is listed with a fiat price and a Dodo product and still has
+// a place.
 //
-// PresaleAvailable 报告一个预售此刻能否结账：已上架、有法币价格且仍有名额。
+// PresaleAvailable 报告一个预售此刻能否经 Dodo 结账：已上架、有法币价格与 Dodo 产品，
+// 且仍有名额。
 func PresaleAvailable(p store.PresaleStock) bool {
-	return p.Active && p.PriceMinor > 0 && p.Currency != "" && p.DodoProductID != "" && p.Outstanding < p.Capacity
+	return PresaleAvailableFor(p, model.PaymentProviderDodo)
+}
+
+// PresaleAvailableFor reports whether a presale can be checked out through
+// provider now: it is listed with a fiat price provider can charge and still
+// has a place.
+//
+// PresaleAvailableFor 报告一个预售此刻能否经 provider 结账：已上架、有 provider 能收取的
+// 法币价格，且仍有名额。
+func PresaleAvailableFor(p store.PresaleStock, provider string) bool {
+	return p.Active && p.PriceMinor > 0 && p.Currency != "" && model.FiatPayable(provider, p.Currency, p.DodoProductID) &&
+		p.Outstanding < p.Capacity
+}
+
+// PresaleEzfpAvailable reports whether a presale can be checked out through
+// 易支付 now: 易支付 is configured and the presale is listed in CNY with a place.
+//
+// PresaleEzfpAvailable 报告一个预售此刻能否经易支付结账：已配置易支付，且预售以 CNY
+// 上架并仍有名额。
+func (s *Service) PresaleEzfpAvailable(p store.PresaleStock) bool {
+	return s.ezfpEnabled() && PresaleAvailableFor(p, model.PaymentProviderEzfp)
+}
+
+// PresaleFiatAvailable reports whether a presale can be checked out now
+// through any configured fiat provider, as the public catalog shows it.
+//
+// PresaleFiatAvailable 报告一个预售此刻能否经任一已配置的法币服务商结账，即公开目录所
+// 显示的状态。
+func (s *Service) PresaleFiatAvailable(p store.PresaleStock) bool {
+	return (s.dodoEnabled() && PresaleAvailable(p)) || s.PresaleEzfpAvailable(p)
 }
 
 // PresaleAlipayAvailable reports whether a presale can be paid with Alipay
@@ -61,7 +92,8 @@ func (s *Service) ListAccountPresales(ctx context.Context, actor Actor) ([]store
 	}
 	out := make([]store.PresaleStock, 0, len(rows))
 	for _, row := range rows {
-		if row.Active && row.PriceMinor > 0 && row.Currency != "" && (row.DodoProductID != "" || row.AlipayAmount > 0) {
+		if row.Active && row.PriceMinor > 0 && row.Currency != "" &&
+			(row.DodoProductID != "" || row.AlipayAmount > 0 || (s.ezfpEnabled() && row.Currency == model.EzfpCurrency)) {
 			out = append(out, row)
 		}
 	}
@@ -81,7 +113,7 @@ func (s *Service) SaveAccountPresale(ctx context.Context, actor Actor, in model.
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
 	if in.Name == "" || !utf8.ValidString(in.Name) || utf8.RuneCountInString(in.Name) > 128 || !model.ValidAccountKind(in.Kind) ||
 		in.PriceMinor <= 0 || in.PriceMinor > model.MaxAccountPriceMinor || !model.ValidCurrency(in.Currency) ||
-		(in.DodoProductID == "" && in.AlipayAmount == 0) || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) ||
+		(in.DodoProductID == "" && in.AlipayAmount == 0 && in.Currency != model.EzfpCurrency) || len(in.DodoProductID) > 64 || !utf8.ValidString(in.DodoProductID) ||
 		in.AlipayAmount < 0 || in.AlipayAmount > billing.MaxAlipayPointAmount ||
 		in.Capacity < 1 || in.Capacity > model.MaxPresaleCapacity {
 		return store.PresaleStock{}, ErrInvalidInput
@@ -109,17 +141,19 @@ func (s *Service) SaveAccountPresale(ctx context.Context, actor Actor, in model.
 }
 
 // CreatePresaleCheckout opens a provider checkout for one month of a
-// presale, priced in fiat. Only an owner or admin may buy. The payment only
-// marks the order paid and waiting; the month starts when an operator
-// assigns an account. expectedMinor and currency must match the listed
-// price; a full capacity is a conflict, as is a price change.
+// presale, priced in fiat, through pay's provider (the zero Payment is
+// Dodo). Only an owner or admin may buy. The payment only marks the order
+// paid and waiting; the month starts when an operator assigns an account.
+// expectedMinor and currency must match the listed price; a full capacity is
+// a conflict, as is a price change.
 //
-// CreatePresaleCheckout 为一个预售的一个月发起法币服务商结账。只有 owner 或 admin
-// 可以购买。付款只把订单标为已付款并等待；一个月自运维分配账号时起算。expectedMinor
-// 与 currency 必须与标价一致；名额已满与改价一样视为冲突。
-func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presaleID string, expectedMinor int64, currency string) (CheckoutResult, error) {
-	if !s.dodoEnabled() {
-		return CheckoutResult{}, ErrNotFound
+// CreatePresaleCheckout 经 pay 的服务商（零值 Payment 即 Dodo）为一个预售的一个月发起
+// 法币结账。只有 owner 或 admin 可以购买。付款只把订单标为已付款并等待；一个月自运维分配
+// 账号时起算。expectedMinor 与 currency 必须与标价一致；名额已满与改价一样视为冲突。
+func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presaleID string, expectedMinor int64, currency string, pay Payment) (CheckoutResult, error) {
+	provider, err := s.resolvePayment(pay)
+	if err != nil {
+		return CheckoutResult{}, err
 	}
 	if !actor.canPurchase() || actor.TenantID == "" || actor.TenantID == model.PlatformScope {
 		return CheckoutResult{}, ErrForbidden
@@ -144,8 +178,25 @@ func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presal
 		return CheckoutResult{}, ErrNotFound
 	}
 	// Checked before registering a customer; the store checks again under lock.
-	if err := store.PresaleCheckoutTerms(presale.AccountPresale, expectedMinor, currency, presale.Outstanding); err != nil {
+	if err := store.PresaleCheckoutTerms(presale.AccountPresale, provider, expectedMinor, currency, presale.Outstanding); err != nil {
 		return CheckoutResult{}, translate(err)
+	}
+	if provider == model.PaymentProviderEzfp {
+		order := model.CheckoutOrder{
+			ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PresaleID: presale.ID,
+			AmountMinor: presale.PriceMinor, Currency: presale.Currency, Provider: provider, PayType: pay.PayType,
+			Status: model.OrderStatusPending, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := s.store.CreatePresaleCheckoutOrder(ctx, &order, now); err != nil {
+			return CheckoutResult{}, translate(err)
+		}
+		result, err := s.openEzfpCheckout(ctx, actor, order, presale.Name)
+		if err != nil {
+			return CheckoutResult{}, err
+		}
+		s.audit(ctx, actor.TenantID, actor.UserID, model.ActionPresaleCheckout, presaleID,
+			fmt.Sprintf("order %s amount %d %s via ezfp %s", order.ID, order.AmountMinor, order.Currency, pay.PayType), actor.IP)
+		return result, nil
 	}
 	customerID, err := s.ensureCustomer(ctx, actor)
 	if err != nil {
@@ -153,7 +204,7 @@ func (s *Service) CreatePresaleCheckout(ctx context.Context, actor Actor, presal
 	}
 	order := model.CheckoutOrder{
 		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PresaleID: presale.ID, DodoProductID: presale.DodoProductID,
-		AmountMinor: presale.PriceMinor, Currency: presale.Currency, Status: model.OrderStatusPending,
+		AmountMinor: presale.PriceMinor, Currency: presale.Currency, Provider: model.PaymentProviderDodo, Status: model.OrderStatusPending,
 		CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CreatePresaleCheckoutOrder(ctx, &order, now); err != nil {
@@ -244,7 +295,7 @@ func (s *Service) CreatePresaleAlipayCheckout(ctx context.Context, actor Actor, 
 	order := model.CheckoutOrder{
 		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PresaleID: presale.ID,
 		Currency: presale.Currency, Status: model.OrderStatusPending, AlipayAmount: expectedAmount,
-		CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+		Provider: model.PaymentProviderOpcpay, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	fresh := model.AlipayRedemption{
 		ID: model.NewID(model.PrefixAlipayRedemption), TenantID: actor.TenantID, ActionID: actionID, Amount: expectedAmount,

@@ -70,7 +70,7 @@ func (s *Store) CreatePresaleCheckoutOrder(_ context.Context, order *model.Check
 	if !ok {
 		return store.ErrNotFound
 	}
-	if err := store.PresaleCheckoutTerms(presale, order.AmountMinor, order.Currency, s.presaleOutstanding(presale.ID, now)); err != nil {
+	if err := store.PresaleCheckoutTerms(presale, order.Provider, order.AmountMinor, order.Currency, s.presaleOutstanding(presale.ID, now)); err != nil {
 		return err
 	}
 	if _, ok := s.billing.orders[order.ID]; ok {

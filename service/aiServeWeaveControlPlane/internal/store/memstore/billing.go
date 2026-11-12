@@ -507,7 +507,9 @@ func (s *Store) ListCheckoutOrders(_ context.Context, query store.ListQuery, fil
 	var items []model.CheckoutOrder
 	for _, o := range s.billing.orders {
 		if (filter.TenantID == "" || o.TenantID == filter.TenantID) && (filter.Status == "" || o.Status == filter.Status) &&
-			(!filter.Awaiting || store.PresaleAwaiting(o)) {
+			(!filter.Awaiting || store.PresaleAwaiting(o)) && (filter.Provider == "" || o.Provider == filter.Provider) &&
+			(filter.CreatedAfter.IsZero() || o.CreatedAt.After(filter.CreatedAfter)) &&
+			(filter.CreatedBefore.IsZero() || o.CreatedAt.Before(filter.CreatedBefore)) {
 			items = append(items, o)
 		}
 	}

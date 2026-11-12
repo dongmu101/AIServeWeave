@@ -276,3 +276,12 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 - 运维 `/operator/billing`：充值包、模型单价、商户、订单、账目五个标签页。单价输入单位为「点/百万 token」，别名 `*` 是默认价，别名可能含 `/`，因此写在请求体、删除时放查询参数；余额调整以点为单位、可为负，原因必填（≤128 字符），只发送一次。
 - 控制面未开启计费时上述端点全部 `404`，两侧页面都渲染为「计费未开启」空状态而不是错误。
 
+### 易支付（EZFP）
+
+易支付（彩虹易支付 V2）与 Dodo 并存，作为第二个法币服务商：只收人民币（`CNY`），租户在支付宝（`alipay`）与微信（`wxpay`）中选择，运维配置开启哪些类型。同样**由控制面持有商户号与密钥，Console 不持有任何易支付凭据**，不引入 SDK、不直连易支付，也不接收它的异步通知（直接打到控制面 `POST /billing/v1/ezfp/notify`，不在任何白名单里）。
+
+- 购买：充值包、账号现货与预售卡片按控制面报告的 `payment_methods`（`dodo`、`ezfp`、`ezfp_types`）与商品的 `dodo_available`、`ezfp_available` 决定选项（`lib/console/payment-choice.ts`）。只有 Dodo 可选时与以前一致（单个「购买」按钮）；有多种方式时显示「银行卡 / Dodo」「支付宝」「微信支付」。**只有选易支付时**才在结账请求体里加 `provider: "ezfp"` 与 `pay_type`，Dodo 不发这两个字段。预售的「用支付宝额度购买」是一人付额度兑换，与易支付的「支付宝」是两件事，按钮单独保留。结账返回的仍是控制面申请好的 https 链接，Console 校验后跳转。
+- 回跳：易支付把浏览器送回 `/console/billing` 并附带 `out_trade_no`（即订单 id）、`trade_no`、`trade_status`、`sign` 等自己的参数。这些参数**只是提示**：页面立即把地址栏与历史记录改成 `/console/billing?tab=orders`（不留 `sign`、`buyer`、`money`），请控制面向易支付复核该订单一次（`POST /admin/v1/billing/orders/:id/refresh`，答复忽略），再按 Dodo 回跳同样的有界轮询等待服务端确认。`trade_status` 从不被当作付款证明。
+- 订单：订单表新增「支付方式」列；租户面上待支付的易支付订单有「再次确认」按钮，每次点击发送一次 refresh，控制面按订单限速、过早的请求只返回当前状态。
+- 运维：币种为 `CNY` 的充值包、账号与预售可以不填 Dodo 产品 ID（仅能经易支付购买）；非 CNY 仍必填。
+

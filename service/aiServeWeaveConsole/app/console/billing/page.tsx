@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 
 import { BillingView } from "@/app/console/billing/billing-view";
 import { isAlipayReturn } from "@/lib/console/alipay";
-import { isPaymentReturn } from "@/lib/console/billing";
+import { ezfpReturnOrderId, isPaymentReturn } from "@/lib/console/billing";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -26,7 +26,16 @@ import { readSession } from "@/lib/server/session";
  * Alipay returns with `alipay_return`, which likewise only starts a short
  * wait for the Alipay quota to move.
  *
+ * EZFP (易支付) returns to this page with no query of our own and appends its
+ * own: `out_trade_no` (our order id), `trade_no`, `trade_status`, `sign` and
+ * more. Only the order id is passed on, for one control-plane re-check; the
+ * rest, `trade_status` included, is never trusted as proof of payment.
+ *
  * 支付宝回跳带有 `alipay_return`，同样只会开始一段等待支付宝额度变化的短暂过程。
+ *
+ * 易支付回跳到本页时，我们自己没有任何查询参数，由它追加自己的参数：`out_trade_no`（我们
+ * 的订单 id）、`trade_no`、`trade_status`、`sign` 等。只有订单 id 会被传下去，用于请求
+ * 控制面复核一次；其余参数（包括 `trade_status`）绝不被当作付款证明。
  */
 export default async function BillingPage({
   searchParams,
@@ -38,5 +47,5 @@ export default async function BillingPage({
     redirect("/login");
   }
   const params = await searchParams;
-  return <BillingView role={session.user.role} returning={isPaymentReturn(params)} alipayReturning={isAlipayReturn(params)} />;
+  return <BillingView role={session.user.role} returning={isPaymentReturn(params)} alipayReturning={isAlipayReturn(params)} ezfpReturnOrder={ezfpReturnOrderId(params)} />;
 }

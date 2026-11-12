@@ -46,7 +46,9 @@ Billing:
     Environment: live
 ```
 
-`AccountSales.Enabled` 开启库存、商户列表与账号授权；**购买一个月必须开启 `Billing.Enabled` 并配置 Dodo**（`AISW_DODO_API_KEY`、`AISW_DODO_WEBHOOK_SECRET`，webhook 指向 `<控制面公网地址>/billing/v1/dodo/webhook`），否则结账端点不挂载，Console 提示「在线支付未开启」。`Billing.Enabled` 也会开启点数充值与按 token 扣费，规则见 ControlPlane STATUS「计费与充值」：此后自助注册的商户为 prepaid，存量商户与 BootstrapToken 创建的商户仍为 exempt；商户买到账号后自动切换为 `account_monthly`，不按 token 扣费。配置变更后需重新启动控制面。已有 Docker 部署可用 `bash deploy/upgrade.sh --no-pull controlplane console` 备份并重建这两个服务；首次启用须遵守下文先升级 Gateway 的顺序。
+**易支付（2026-11-12）**：币种为 CNY 的账号与预售也可以经[易支付](billing-ezfp.md)（支付宝 / 微信支付）购买，此时 Dodo 产品 ID 可以留空；两者都填写时，商户在购买时选择。下文关于 Dodo 结账的占用、名额、付款确认与退款规则同样适用于易支付订单。
+
+`AccountSales.Enabled` 开启库存、商户列表与账号授权；**购买一个月必须开启 `Billing.Enabled` 并配置 Dodo 或易支付**（`AISW_DODO_API_KEY`、`AISW_DODO_WEBHOOK_SECRET`，webhook 指向 `<控制面公网地址>/billing/v1/dodo/webhook`），否则结账端点不挂载，Console 提示「在线支付未开启」。`Billing.Enabled` 也会开启点数充值与按 token 扣费，规则见 ControlPlane STATUS「计费与充值」：此后自助注册的商户为 prepaid，存量商户与 BootstrapToken 创建的商户仍为 exempt；商户买到账号后自动切换为 `account_monthly`，不按 token 扣费。配置变更后需重新启动控制面。已有 Docker 部署可用 `bash deploy/upgrade.sh --no-pull controlplane console` 备份并重建这两个服务；首次启用须遵守下文先升级 Gateway 的顺序。
 
 在 Dodo 控制台为账号准备一个**「按意愿付费」（Pay What You Want）产品**，币种与商品一致，最低价不高于月价；控制面在结账时把月价作为金额传给它，多个账号商品可共用同一个产品。不要使用固定价格产品，也不要允许折扣码：付款金额低于订单金额或币种不同时不会开通。
 

@@ -8,13 +8,15 @@ import { useConsoleRequest } from "./use-console-request";
 import { useResource } from "./use-resource";
 import { ConfirmDialog } from "./confirm-dialog";
 import { CurrencySelect } from "./currency-select";
+import { PayChoiceButtons, payChoiceLabelKey } from "./pay-choice-buttons";
 import { EmptyState, ErrorState, FormError, LoadingState } from "./states";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { ACCOUNT_KINDS, parseAccountSales, parseAccountSale, accountCheckoutBody, accountKindLabel, accountPurchasable, accountRequest, type AccountKind, type AccountSale, type AccountDraftProblem } from "@/lib/console/account-sales";
-import { formatMoney, formatScaled, currencyDigits, parseCheckout } from "@/lib/console/billing";
+import { defaultPaymentMethods, EZFP_CURRENCY, formatMoney, formatScaled, currencyDigits, parseCheckout, type PaymentMethods } from "@/lib/console/billing";
+import { payChoices, type PayChoice } from "@/lib/console/payment-choice";
 import type { MessageKey } from "@/lib/i18n/messages";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
 import { parseFleetSnapshot } from "@/lib/console/fleet";
@@ -47,8 +49,8 @@ const ACCOUNTS_PER_PAGE = 12;
  *
  * AccountSales 在两个界面间共享不含凭据的包月库存。商户经服务商结账以法币购买一个月；
  * 页面从不判定付款成功——服务端收到服务商确认后才会显示期限。 */
-export function AccountSales({ operator = false, canPurchase = false }: { operator?: boolean; canPurchase?: boolean }) {
-  return operator ? <OperatorAccounts /> : <TenantAccounts canPurchase={canPurchase} />;
+export function AccountSales({ operator = false, canPurchase = false, methods }: { operator?: boolean; canPurchase?: boolean; methods?: PaymentMethods }) {
+  return operator ? <OperatorAccounts /> : <TenantAccounts canPurchase={canPurchase} methods={methods ?? defaultPaymentMethods()} />;
 }
 
 /** Pages is the previous / next control under a card grid, shown only when
@@ -70,10 +72,12 @@ function Pages({ current, total, onChange }: { current: number; total: number; o
  *
  * TenantAccounts 是商户视图：已持有的账号（附到期时间与续费）与可购买的账号分开列出。
  * 既未持有也未上架的账号不显示——对它无事可做。 */
-function TenantAccounts({ canPurchase }: { canPurchase: boolean }) {
+function TenantAccounts({ canPurchase, methods }: { canPurchase: boolean; methods: PaymentMethods }) {
   const { t } = useI18n();
   const resource = useResource({ method: "GET", path: "/admin/v1/billing/accounts", parse: parseAccountSales });
-  const [buying, setBuying] = React.useState<AccountSale | null>(null);
+  // The dialog carries the way to pay the tenant chose, so it confirms and
+  // checks out exactly that. 对话框携带商户选择的付款方式，因此确认并结账的正是这一种。
+  const [buying, setBuying] = React.useState<{ account: AccountSale; choice: PayChoice } | null>(null);
   const [query, setQuery] = React.useState("");
   const [page, setPage] = React.useState(0);
   const all = resource.data ?? [];
@@ -82,7 +86,7 @@ function TenantAccounts({ canPurchase }: { canPurchase: boolean }) {
   const shown = offered.filter(account => matchesQuery([account.name, account.nodeId, account.runtimeId], query));
   const total = Math.ceil(shown.length / ACCOUNTS_PER_PAGE);
   const current = Math.min(page, Math.max(0, total - 1));
-  const offer = (account: AccountSale) => <AccountOffer key={account.id} account={account} canPurchase={canPurchase} onBuy={() => setBuying(account)} />;
+  const offer = (account: AccountSale) => <AccountOffer key={account.id} account={account} methods={methods} canPurchase={canPurchase} onBuy={(choice) => setBuying({ account, choice })} />;
   return <Card>
     <CardHeader><CardTitle><Message id="tenant.accountMonthly" /></CardTitle></CardHeader>
     <CardContent className="grid gap-6">
@@ -108,15 +112,18 @@ function TenantAccounts({ canPurchase }: { canPurchase: boolean }) {
           </section>
         </>}
     </CardContent>
-    <AccountBuyDialog account={buying} onClose={() => setBuying(null)} />
+    <AccountBuyDialog buying={buying} onClose={() => setBuying(null)} />
   </Card>;
 }
 
 /** AccountOffer is one account card on the tenant's view.
  *
  * AccountOffer 是商户视图中的一张账号卡片。 */
-function AccountOffer({ account, canPurchase, onBuy }: { account: AccountSale; canPurchase: boolean; onBuy: () => void }) {
+function AccountOffer({ account, methods, canPurchase, onBuy }: { account: AccountSale; methods: PaymentMethods; canPurchase: boolean; onBuy: (choice: PayChoice) => void }) {
   const { t, locale } = useI18n();
+  // An account that cannot be bought offers no way to pay, so its button is disabled.
+  // 不能购买的账号没有任何付款方式，因此它的按钮是禁用的。
+  const choices = accountPurchasable(account) ? payChoices(methods, account) : [];
   return <div className="grid content-between gap-3 rounded-lg border p-4">
     <div className="grid gap-1.5">
       <div className="flex items-start justify-between gap-2">
@@ -128,25 +135,28 @@ function AccountOffer({ account, canPurchase, onBuy }: { account: AccountSale; c
       {account.expiresAt ? <p className="text-sm">{t("tenant.accountExpires", { time: formatDateTime(account.expiresAt, undefined, locale) })}</p> : null}
       {!account.active ? <div><Badge variant="outline"><Message id="tenant.accountArchived" /></Badge></div> : null}
     </div>
-    {canPurchase ? <div><Button disabled={!accountPurchasable(account)} onClick={onBuy}><Message id={account.owned ? "tenant.accountRenew" : "tenant.accountBuy"} /></Button></div> : null}
+    {canPurchase ? <div><PayChoiceButtons choices={choices} label={account.owned ? "tenant.accountRenew" : "tenant.accountBuy"} onChoose={onBuy} /></div> : null}
   </div>;
 }
 
-/** AccountBuyDialog confirms the price and opens the provider's checkout.
+/** AccountBuyDialog confirms the price and opens the checkout of the provider
+ * the tenant chose. An EZFP choice names its payment type in the dialog.
  *
- * AccountBuyDialog 确认价格并打开服务商结账。 */
-function AccountBuyDialog({ account, onClose }: { account: AccountSale | null; onClose: () => void }) {
+ * AccountBuyDialog 确认价格并打开租户所选服务商的结账。选择易支付时，对话框会写明所选
+ * 的支付类型。 */
+function AccountBuyDialog({ buying, onClose }: { buying: { account: AccountSale; choice: PayChoice } | null; onClose: () => void }) {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
+  const account = buying?.account ?? null;
   return <ConfirmDialog open={account !== null} onOpenChange={open => { if (!open) onClose(); }} title={t("tenant.accountPurchase")}
     description={account ? t("tenant.accountBuyConfirm", { name: account.name, price: formatMoney(account.priceMinor, account.currency, locale) }) : ""}
     onConfirm={async () => {
-      if (!account) return;
+      if (!buying) return;
       let result;
       try {
         // A checkout is a write and is never retried: a repeat would open a
         // second pending order. 结账是写操作，绝不重试：重发会再开一笔待付款订单。
-        result = await run({ method: "POST", path: `/admin/v1/billing/accounts/${encodeURIComponent(account.id)}/checkout`, body: accountCheckoutBody(account), parse: parseCheckout });
+        result = await run({ method: "POST", path: `/admin/v1/billing/accounts/${encodeURIComponent(buying.account.id)}/checkout`, body: accountCheckoutBody(buying.account, buying.choice), parse: parseCheckout });
       } catch (error) {
         if (error instanceof ApiError && error.status === 409) throw new ApiError("account_unavailable", 409);
         if (error instanceof ApiError && error.status === 404) throw new ApiError("account_checkout_disabled", 404);
@@ -154,7 +164,9 @@ function AccountBuyDialog({ account, onClose }: { account: AccountSale | null; o
         throw error;
       }
       window.location.assign(result.checkoutUrl);
-    }} />;
+    }}>
+    {buying?.choice.provider === "ezfp" ? <p className="text-sm font-medium"><Message id="tenant.payMethodLine" values={{ method: t(payChoiceLabelKey(buying.choice)) }} /></p> : null}
+  </ConfirmDialog>;
 }
 
 /** OperatorAccounts is the operator's inventory: every account, its holder
@@ -256,8 +268,9 @@ function AccountEditor({ account, inventory, onClose, onSaved }: { account: Acco
       }} />}
       <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><CurrencySelect id={`${prefix}-currency`} className={SELECT_CLASS} required={active} value={currency} disabled={pending} onChange={setCurrency} />
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required={active} inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
-      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={active} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
+      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={active && currency.trim().toUpperCase() !== EZFP_CURRENCY} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>
+      <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductOptionalHint" /></p>
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountUnpricedHint" /></p>
       <label className="flex items-center gap-2"><input type="checkbox" checked={active} disabled={pending} onChange={e => setActive(e.target.checked)} /><Message id="tenant.accountListed" /></label>
       {touched && built.problem ? <p role="status" className="text-sm text-muted-foreground"><Message id={PROBLEM_KEYS[built.problem]} /></p> : null}

@@ -823,6 +823,22 @@ const tenant = {
   "tenant.alipayStatusFailed": "Non abouti",
   "tenant.alipayQuantity": "Quantité",
   "tenant.billingKindAlipayTopup": "Conversion Alipay",
-  "tenant.alipayLoading": "Chargement d’Alipay"
+  "tenant.alipayLoading": "Chargement d’Alipay",
+  "tenant.payChoiceDodo": "Carte / Dodo",
+  "tenant.payChoiceAlipay": "Alipay",
+  "tenant.payChoiceWxpay": "WeChat Pay",
+  "tenant.payChoicePrompt": "Choisissez le mode de paiement",
+  "tenant.payMethodLine": "Mode de paiement : {method}",
+  "tenant.billingPayMethod": "Mode de paiement",
+  "tenant.billingProviderDodo": "Dodo",
+  "tenant.billingProviderEzfp": "Epay (易支付)",
+  "tenant.billingProviderEzfpAlipay": "Epay · Alipay",
+  "tenant.billingProviderEzfpWxpay": "Epay · WeChat Pay",
+  "tenant.billingProviderOpcpay": "Quota Alipay",
+  "tenant.billingRecheck": "Revérifier",
+  "tenant.billingRecheckHint": "Interroge le service de paiement sur l’état le plus récent de cette commande. Les crédits ne comptent qu’une fois confirmés par le serveur ; un nouveau clic immédiat renvoie simplement l’état actuel.",
+  "tenant.billingRecheckStillPending": "Confirmation du paiement toujours en attente. Vous pourrez revérifier dans un instant.",
+  "tenant.billingMethodUnavailable": "Ce mode de paiement est momentanément indisponible. Actualisez la page et réessayez.",
+  "tenant.accountProductOptionalHint": "Peut rester vide lorsque la devise est CNY ; l’article ne peut alors être acheté que via Epay."
 } as const;
 export default tenant;

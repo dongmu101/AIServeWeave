@@ -6,6 +6,7 @@ import { useSearchParams } from "next/navigation";
 import { AccountSales } from "@/components/console/account-sales";
 import { PresaleSales } from "@/components/console/account-presales";
 import { AlipayBilling, hasPresaleIntent } from "@/components/console/alipay-billing";
+import { PayChoiceButtons } from "@/components/console/pay-choice-buttons";
 
 import { BillingDisabled, LedgerTable, OrdersTable } from "@/components/console/billing-tables";
 import { ErrorMessage } from "@/components/i18n/error-message";
@@ -25,17 +26,21 @@ import {
   currencyDigits,
   customAmountProblem,
   customCredits,
+  defaultPaymentMethods,
   formatCredits,
   formatMoney,
   parseBillingOverview,
   parseCheckout,
+  parseCheckoutOrder,
   parseOrderPage,
   parsePortalLink,
   pollUntilSettled,
   type BillingOverview,
   type CheckoutOrder,
   type CreditPackage,
+  type PaymentMethods,
 } from "@/lib/console/billing";
+import { payChoices, type PayChoice } from "@/lib/console/payment-choice";
 import { ApiError } from "@/lib/console/errors";
 import { canPurchaseCredits } from "@/lib/console/permissions";
 import { parseAccountPresales, presaleAwaiting } from "@/lib/console/account-presales";
@@ -127,13 +132,32 @@ function paymentProblem(failure: unknown, notFound?: MessageKey): React.ReactNod
  * 本页面上没有任何东西会判定一次支付成功。服务商把购买者送回之后，页面在有限次数内
  * 读取概览与最近一笔订单，一旦服务端报告该订单不再处于待支付就停止；展示的余额始终
  * 是服务端的值。
+ *
+ * An EZFP (易支付) return is handled the same way, with two additions. The
+ * redirect carries EZFP's own parameters (`sign`, `buyer`, `money`, ...), which
+ * are dropped from the address bar and the history at once. The order id they
+ * name (`ezfpReturnOrder`) is used for exactly one request, asking the control
+ * plane to re-check that order with EZFP, whose answer is ignored; what the
+ * page then shows still comes from the polling below. `trade_status` is never
+ * read.
+ *
+ * 易支付回跳按同样的方式处理，另有两点：回跳带有易支付自己的参数（`sign`、`buyer`、
+ * `money` 等），它们会立刻从地址栏与历史记录中去掉。参数指明的订单 id（`ezfpReturnOrder`）
+ * 只用于恰好一次请求——请控制面向易支付复核该订单，其答复被忽略；页面随后展示的内容仍然
+ * 来自下面的轮询。`trade_status` 从不被读取。
  */
-export function BillingView({ role, returning, alipayReturning = false }: { role: string; returning: boolean; alipayReturning?: boolean }) {
+export function BillingView({ role, returning, alipayReturning = false, ezfpReturnOrder = null }: { role: string; returning: boolean; alipayReturning?: boolean; ezfpReturnOrder?: string | null }) {
   const { t } = useI18n();
   const run = useConsoleRequest();
   const overview = useResource<BillingOverview>({ method: "GET", path: "/admin/v1/billing", parse: parseBillingOverview });
   const [polled, setPolled] = React.useState<BillingOverview | null>(null);
-  const [returnState, setReturnState] = React.useState<ReturnState | null>(returning ? "pending" : null);
+  const watching = returning || ezfpReturnOrder !== null;
+  const [returnState, setReturnState] = React.useState<ReturnState | null>(watching ? "pending" : null);
+  // The one re-check an EZFP return sends. Held in a ref so that re-running
+  // the effect below (React strict mode in development) cannot send it twice.
+  // 易支付回跳发送的那一次复核。放在 ref 里，使下面的 effect 重新运行（开发环境的
+  // React strict mode）时不会发送第二次。
+  const ezfpRecheck = React.useRef<Promise<void> | null>(null);
   const [returnedPresale, setReturnedPresale] = React.useState(false);
   const [historyKey, setHistoryKey] = React.useState(0);
   // Read here rather than in its tab: the tab is offered only while
@@ -142,11 +166,25 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
   const reloadPresales = presales.reload;
 
   React.useEffect(() => {
-    if (!returning) {
+    if (!watching) {
       return;
     }
+    if (ezfpReturnOrder !== null) {
+      // Strip EZFP's parameters from the URL and the history entry before
+      // anything else: `sign`, `buyer` and `money` have no business staying in
+      // the address bar, a bookmark or a shared link.
+      // 先于一切地从 URL 与历史记录中去掉易支付的参数：`sign`、`buyer`、`money` 不应留在
+      // 地址栏、书签或分享链接里。
+      window.history.replaceState(null, "", `${window.location.pathname}?tab=orders`);
+      // A write, sent once and never retried; its answer and its failure are
+      // both ignored, because only the polling below says what happened.
+      // 写操作，只发送一次、绝不重试；它的答复与失败都被忽略，因为只有下面的轮询才说明
+      // 发生了什么。
+      ezfpRecheck.current ??= run({ method: "POST", path: `/admin/v1/billing/orders/${encodeURIComponent(ezfpReturnOrder)}/refresh`, parse: parseCheckoutOrder }).then(() => undefined, () => undefined);
+    }
     const controller = new AbortController();
-    void pollUntilSettled<PollRead>({
+    const recheck = ezfpRecheck.current ?? Promise.resolve();
+    void recheck.then(() => controller.signal.aborted ? "aborted" as const : pollUntilSettled<PollRead>({
       signal: controller.signal,
       sleep: abortableSleep,
       read: async (signal) => {
@@ -162,7 +200,7 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
       },
       settled: (value) => value.latest !== null && value.latest.status !== "pending",
       giveUp: (error) => error instanceof ApiError && (error.kind === "not_found" || error.kind === "unauthorized" || error.kind === "forbidden"),
-    }).then((outcome) => {
+    })).then((outcome) => {
       if (outcome === "aborted") {
         return;
       }
@@ -175,7 +213,7 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
       reloadPresales();
     });
     return () => controller.abort();
-  }, [returning, run, reloadPresales]);
+  }, [watching, ezfpReturnOrder, run, reloadPresales]);
 
   const data = polled ?? overview.data;
   const canPurchase = canPurchaseCredits(role);
@@ -191,27 +229,28 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
       .then(setPolled)
       .catch(() => { setPolled(null); reloadOverview(); });
   }, [run, reloadOverview]);
-  // Packages, orders and presales are bought through Dodo; the Alipay section
-  // exists only when the control plane offers it.
-  // 充值包、订单与预售经 Dodo 购买；支付宝分区只在控制面提供时出现。
-  const methods = data?.paymentMethods ?? { dodo: true, alipay: false };
+  // Packages, orders and presales are bought through Dodo or EZFP; the Alipay
+  // section exists only when the control plane offers it.
+  // 充值包、订单与预售经 Dodo 或易支付购买；支付宝分区只在控制面提供时出现。
+  const methods = data?.paymentMethods ?? defaultPaymentMethods();
+  const fiat = methods.dodo || methods.ezfp;
   const offered = BILLING_TABS.filter((value) => {
     switch (value) {
       case "packages":
       case "orders":
-        return methods.dodo;
+        return fiat;
       case "presales":
-        return (methods.dodo || methods.alipay) && (presales.data?.length ?? 0) > 0;
+        return (fiat || methods.alipay) && (presales.data?.length ?? 0) > 0;
       case "alipay":
         return methods.alipay;
       default:
         return true;
     }
   });
-  const fallback: BillingTab = returning && methods.dodo ? "orders"
+  const fallback: BillingTab = watching && fiat ? "orders"
     : alipayReturning && methods.alipay ? "alipay"
     : data?.mode === "account_monthly" ? "accounts"
-    : methods.dodo ? "packages"
+    : fiat ? "packages"
     : methods.alipay ? "alipay"
     : "ledger";
   const [tab, setTab] = useBillingTab(fallback, offered);
@@ -244,7 +283,7 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
           {offered.map((value) => <TabsTrigger key={value} value={value} className="flex-none px-3"><Message id={TAB_KEYS[value]} /></TabsTrigger>)}
         </TabsList>
         <TabsContent value="packages" className="mt-2">
-          <PackagesCard packages={data.packages} canPurchase={canPurchase} />
+          <PackagesCard packages={data.packages} methods={methods} canPurchase={canPurchase} />
         </TabsContent>
         {methods.alipay ? <TabsContent value="alipay" className="mt-2">
           <AlipayBilling canPurchase={canPurchase} returning={alipayReturning} onRedeemed={onRedeemed} />
@@ -252,10 +291,10 @@ export function BillingView({ role, returning, alipayReturning = false }: { role
         {/* Remounted with the history so a month confirmed after a payment
             return shows up. 与历史记录一同重挂载，使支付回跳后确认的期限能显示出来。 */}
         <TabsContent value="accounts" className="mt-2">
-          <AccountSales key={historyKey} canPurchase={canPurchase} />
+          <AccountSales key={historyKey} canPurchase={canPurchase} methods={methods} />
         </TabsContent>
         <TabsContent value="presales" className="mt-2">
-          <PresaleSales resource={presales} canPurchase={canPurchase} dodo={methods.dodo} alipay={methods.alipay} resume={alipayReturning} />
+          <PresaleSales resource={presales} canPurchase={canPurchase} methods={methods} resume={alipayReturning} />
         </TabsContent>
         <TabsContent value="orders" className="mt-2">
           <OrdersTable key={historyKey} />
@@ -343,13 +382,13 @@ function BalanceSummary({ overview, canPurchase }: { overview: BillingOverview; 
 /** PackagesCard lists the packages on sale.
  *
  * PackagesCard 列出在售的充值包。 */
-function PackagesCard({ packages, canPurchase }: { packages: CreditPackage[]; canPurchase: boolean }) {
+function PackagesCard({ packages, methods, canPurchase }: { packages: CreditPackage[]; methods: PaymentMethods; canPurchase: boolean }) {
   const { t } = useI18n();
   return <Card>
     <CardHeader><CardTitle><Message id="tenant.billingPackages" /></CardTitle></CardHeader>
     <CardContent className="grid gap-4">
       {packages.length === 0 ? <EmptyState title={t("tenant.billingNoPackages")} description={t("tenant.billingNoPackagesDescription")} /> : <ul className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-        {packages.map((pkg) => <li key={pkg.id} className="min-w-0"><PackageOffer pkg={pkg} canPurchase={canPurchase} /></li>)}
+        {packages.map((pkg) => <li key={pkg.id} className="min-w-0"><PackageOffer pkg={pkg} methods={methods} canPurchase={canPurchase} /></li>)}
       </ul>}
     </CardContent>
   </Card>;
@@ -363,7 +402,7 @@ function PackagesCard({ packages, canPurchase }: { packages: CreditPackage[]; ca
  * PackageOffer 是一个充值包及其购买按钮。自定义充值包在购买者输入时就把金额换算成
  * 点数，并做与服务端相同的范围检查，这样一个会被拒绝的金额在发送前就已说明原因。
  */
-function PackageOffer({ pkg, canPurchase }: { pkg: CreditPackage; canPurchase: boolean }) {
+function PackageOffer({ pkg, methods, canPurchase }: { pkg: CreditPackage; methods: PaymentMethods; canPurchase: boolean }) {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const [raw, setRaw] = React.useState("");
@@ -372,8 +411,9 @@ function PackageOffer({ pkg, canPurchase }: { pkg: CreditPackage; canPurchase: b
   const custom = pkg.kind === "custom";
   const check = custom ? customAmountProblem(pkg, raw) : null;
   const inputId = `billing-amount-${pkg.id}`;
+  const choices = payChoices(methods, pkg);
 
-  async function buy() {
+  async function buy(choice: PayChoice) {
     if (pending) return;
     const amount = check ? check.amountMinor : null;
     if (custom && amount === null) return;
@@ -384,10 +424,10 @@ function PackageOffer({ pkg, canPurchase }: { pkg: CreditPackage; canPurchase: b
       // second pending order for the same intent.
       //
       // 结账是写操作，绝不重试：重发会为同一个意图再开一笔待支付订单。
-      const result = await run({ method: "POST", path: "/admin/v1/billing/checkout", body: checkoutBody(pkg, amount), parse: parseCheckout });
+      const result = await run({ method: "POST", path: "/admin/v1/billing/checkout", body: checkoutBody(pkg, amount, choice), parse: parseCheckout });
       window.location.assign(result.checkoutUrl);
     } catch (failure) {
-      setError(paymentProblem(failure));
+      setError(paymentProblem(failure, "tenant.billingMethodUnavailable"));
       setPending(false);
     }
   }
@@ -421,6 +461,6 @@ function PackageOffer({ pkg, canPurchase }: { pkg: CreditPackage; canPurchase: b
       {hint}
     </div> : null}
     <FormError message={error} />
-    <div><Button onClick={buy} disabled={!canPurchase || pending || (custom && check?.problem !== null)} aria-busy={pending}><Message id="tenant.billingBuy" /></Button></div>
+    <div><PayChoiceButtons choices={choices} label="tenant.billingBuy" onChoose={buy} disabled={!canPurchase || pending || (custom && check?.problem !== null)} busy={pending} /></div>
   </div>;
 }

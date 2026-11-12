@@ -58,12 +58,13 @@ type AccountPresales interface {
 }
 
 // PresaleCheckoutTerms decides whether a checkout for one month of presale
-// may open at amountMinor in currency while outstanding orders wait.
+// may open through provider (empty is Dodo) at amountMinor in currency while
+// outstanding orders wait.
 //
-// PresaleCheckoutTerms 判断在已有 outstanding 笔订单等待时，能否以 currency 计价的
-// amountMinor 为 presale 发起一个月的结账。
-func PresaleCheckoutTerms(presale model.AccountPresale, amountMinor int64, currency string, outstanding int) error {
-	if !presale.Active || presale.PriceMinor <= 0 || presale.Currency == "" || presale.DodoProductID == "" {
+// PresaleCheckoutTerms 判断在已有 outstanding 笔订单等待时，能否经 provider（为空即
+// Dodo）以 currency 计价的 amountMinor 为 presale 发起一个月的结账。
+func PresaleCheckoutTerms(presale model.AccountPresale, provider string, amountMinor int64, currency string, outstanding int) error {
+	if !presale.Active || presale.PriceMinor <= 0 || presale.Currency == "" || !model.FiatPayable(provider, presale.Currency, presale.DodoProductID) {
 		return ErrNotFound
 	}
 	if presale.PriceMinor != amountMinor || !strings.EqualFold(presale.Currency, currency) {

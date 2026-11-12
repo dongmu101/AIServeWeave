@@ -228,6 +228,10 @@ type harnessOpts struct {
 	modelPullGateways      []string
 	comfyUIManagedGateways []string
 	sessions               session.Store
+	// ezfp turns billing on with 易支付 as its only provider.
+	//
+	// ezfp 以易支付为唯一服务商开启计费。
+	ezfp *logic.EzfpConfig
 }
 
 func buildHarness(t *testing.T, opts harnessOpts) *harness {
@@ -270,6 +274,9 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 	}
 
 	cfg.AccountSales.Enabled = opts.accountSales
+	if opts.ezfp != nil {
+		cfg.Billing.Enabled, cfg.Billing.Ezfp.Enabled, cfg.Billing.RefundWindowDays = true, true, 30
+	}
 
 	st := memstore.New()
 	clock := runtime.NewSystemClock()
@@ -295,6 +302,9 @@ func buildHarness(t *testing.T, opts harnessOpts) *harness {
 	logicOpts := []logic.Option{logic.WithInvalidator(revocations), logic.WithSessions(sessions)}
 	if opts.accountSales {
 		logicOpts = append(logicOpts, logic.WithAccountSales())
+	}
+	if opts.ezfp != nil {
+		logicOpts = append(logicOpts, logic.WithBilling(logic.BillingConfig{Ezfp: opts.ezfp, RefundWindowDays: 30}))
 	}
 	if modelPullRouter != nil {
 		logicOpts = append(logicOpts, logic.WithModelPullRouter(modelPullRouter))

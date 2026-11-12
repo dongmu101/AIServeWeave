@@ -1,8 +1,9 @@
 import { ApiError } from "./errors.ts";
-import { MAX_PRODUCT_ID_BYTES, MAX_TEXT_RUNES, parseMoneyInput, type CheckoutOrder } from "./billing.ts";
+import { EZFP_CURRENCY, MAX_PRODUCT_ID_BYTES, MAX_TEXT_RUNES, optionalBoolean, parseMoneyInput, type CheckoutOrder } from "./billing.ts";
 import { MAX_ACCOUNT_PRICE_MINOR, parseAccountKind, type AccountKind, type AccountSale } from "./account-sales.ts";
 import { isSupportedCurrency } from "./currencies.ts";
 import { tenantNodeOwner } from "./node-access.ts";
+import { withPayChoice, type EzfpPayType, type PayChoice } from "./payment-choice.ts";
 
 /** MAX_PRESALES and MAX_PRESALE_CAPACITY mirror model.MaxPresales and
  * model.MaxPresaleCapacity.
@@ -26,6 +27,15 @@ export const MAX_ALIPAY_AMOUNT = 99_999_999;
  * `available` 表示此刻能否结账。`dodoProductId`、`capacity` 与 `outstanding` 只在运维
  * 视图中存在（租户视图中为 "" 与 null）。
  *
+ * `available` means listed, with capacity, and payable through Dodo. An item
+ * may be `available: false` and `ezfpAvailable: true` (a CNY presale sold
+ * through EZFP only): that is not sold out. `ezfpAvailable` is false when a
+ * control plane from before EZFP does not send it.
+ *
+ * `available` 表示已上架、有名额且可经 Dodo 支付。商品可以 `available: false` 而
+ * `ezfpAvailable: true`（只经易支付出售的 CNY 预售）：这不是售罄。早于易支付的控制面
+ * 不发送 `ezfpAvailable`，此时为 false。
+ *
  * `alipayAmount` is how many Alipay units (counts or points) one month costs
  * from a tenant's Alipay quota, 0 when it cannot be paid that way;
  * `alipayAvailable` says whether it can be now.
@@ -34,7 +44,7 @@ export const MAX_ALIPAY_AMOUNT = 99_999_999;
  * 为 0；`alipayAvailable` 表示此刻能否这样支付。 */
 export interface AccountPresale {
   id: string; kind: AccountKind; name: string; priceMinor: number; currency: string;
-  active: boolean; available: boolean; alipayAmount: number; alipayAvailable: boolean; dodoProductId: string;
+  active: boolean; available: boolean; ezfpAvailable: boolean; alipayAmount: number; alipayAvailable: boolean; dodoProductId: string;
   capacity: number | null; outstanding: number | null;
 }
 
@@ -72,6 +82,7 @@ export function parseAccountPresale(value: unknown): AccountPresale {
   return {
     id: text(row.id, 32), kind: parseAccountKind(row.kind, false) as AccountKind, name: text(row.name, 512),
     priceMinor, currency, active: row.active, available: row.available,
+    ezfpAvailable: optionalBoolean(row, "ezfp_available", false),
     alipayAmount, alipayAvailable: row.alipay_available === true,
     dodoProductId: row.dodo_product_id === undefined || row.dodo_product_id === "" ? "" : text(row.dodo_product_id, MAX_PRODUCT_ID_BYTES),
     capacity, outstanding,
@@ -87,11 +98,13 @@ export function parseAccountPresales(value: unknown): AccountPresale[] {
 }
 
 /** presaleCheckoutBody pins the price the tenant confirmed, so a price
- * change in between is refused with 409 rather than charged.
+ * change in between is refused with 409 rather than charged. `provider` and
+ * `pay_type` are added only when the tenant chose EZFP.
  *
- * presaleCheckoutBody 固定商户确认的价格，期间若改价会以 409 拒绝而不是照新价收费。 */
-export function presaleCheckoutBody(presale: Pick<AccountPresale, "priceMinor" | "currency">): { expected_price_minor: number; currency: string } {
-  return { expected_price_minor: presale.priceMinor, currency: presale.currency };
+ * presaleCheckoutBody 固定商户确认的价格，期间若改价会以 409 拒绝而不是照新价收费。
+ * 只有商户选择易支付时才附加 `provider` 与 `pay_type`。 */
+export function presaleCheckoutBody(presale: Pick<AccountPresale, "priceMinor" | "currency">, choice?: PayChoice): { expected_price_minor: number; currency: string; provider?: "ezfp"; pay_type?: EzfpPayType } {
+  return withPayChoice({ expected_price_minor: presale.priceMinor, currency: presale.currency }, choice);
 }
 
 /** presaleAlipayBody pins the Alipay amount the tenant confirmed and the
@@ -119,7 +132,8 @@ export interface PresaleRequest {
  * as a whole number.
  *
  * presaleRequest 按 SaveAccountPresale 的规则校验运维草稿：价格以货币主单位输入，
- * 名额为整数。支付宝额度数量留空即 0（不支持支付宝）；只要填了，Dodo 产品 ID 可以留空。 */
+ * 名额为整数。支付宝额度数量留空即 0（不支持支付宝）；只要填了，Dodo 产品 ID 可以留空；
+ * 币种为 CNY 时 Dodo 产品 ID 同样可以留空，此时只能经易支付购买。 */
 export function presaleRequest(draft: { kind: AccountKind | ""; name: string; price: string; currency: string; productId: string; capacity: string; active: boolean; alipayAmount?: string }):
   { request: PresaleRequest; problem: null } | { request: null; problem: PresaleDraftProblem } {
   if (draft.kind === "") return { request: null, problem: "kind" };
@@ -134,7 +148,7 @@ export function presaleRequest(draft: { kind: AccountKind | ""; name: string; pr
   const alipayAmount = rawAlipay === "" ? 0 : Number(rawAlipay);
   if (alipayAmount > MAX_ALIPAY_AMOUNT) return { request: null, problem: "alipay" };
   const product = draft.productId.trim();
-  if ((product === "" && alipayAmount === 0) || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
+  if ((product === "" && alipayAmount === 0 && code !== EZFP_CURRENCY) || new TextEncoder().encode(product).length > MAX_PRODUCT_ID_BYTES) return { request: null, problem: "product" };
   const raw = draft.capacity.trim();
   const capacity = /^\d{1,5}$/.test(raw) ? Number(raw) : 0;
   if (capacity < 1 || capacity > MAX_PRESALE_CAPACITY) return { request: null, problem: "capacity" };

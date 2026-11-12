@@ -1,11 +1,13 @@
-// Package billing defines what the control plane needs from a payment
-// provider, so the logic layer and its tests never import a provider SDK.
-// The one implementation is billing/dodo, over Dodo Payments; it is the only
-// package in the repository that imports that SDK.
+// Package billing defines what the control plane needs from its payment
+// providers, so the logic layer and its tests never import a provider SDK or
+// client. Provider is implemented by billing/dodo over Dodo Payments, the
+// only package in the repository that imports that SDK; Alipay by
+// billing/opcpay (一人付); Ezfp by billing/ezfp (易支付).
 //
-// billing 包定义控制面对支付服务商的需求，使 logic 层及其测试永远不必 import 服务商
-// SDK。唯一的实现是基于 Dodo Payments 的 billing/dodo，它是仓库中唯一 import 该 SDK
-// 的包。
+// billing 包定义控制面对各支付服务商的需求，使 logic 层及其测试永远不必 import 服务商
+// SDK 或客户端。Provider 由基于 Dodo Payments 的 billing/dodo 实现，它是仓库中唯一
+// import 该 SDK 的包；Alipay 由 billing/opcpay（一人付）实现；Ezfp 由 billing/ezfp
+// （易支付）实现。
 package billing
 
 import (

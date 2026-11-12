@@ -12,6 +12,7 @@ import { SELECT_CLASS } from "./account-sales";
 import { CurrencySelect } from "./currency-select";
 import { forgetPresaleIntent, readPresaleIntent, savePresaleIntent, unitLabel, useActionId } from "./alipay-billing";
 import { Pager } from "./pager";
+import { PayChoiceButtons, payChoiceLabelKey } from "./pay-choice-buttons";
 import { EmptyState, ErrorState, FormError, LoadingState } from "./states";
 import { Card, CardHeader, CardTitle, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -45,7 +46,8 @@ import {
   type AlipayOverview,
   type AlipayPlan,
 } from "@/lib/console/alipay";
-import { abortableSleep, currencyDigits, formatMoney, formatScaled, parseCheckout, parseCheckoutOrder, parseOrderPage, pollUntilSettled, type CheckoutOrder } from "@/lib/console/billing";
+import { abortableSleep, currencyDigits, defaultPaymentMethods, EZFP_CURRENCY, formatMoney, formatScaled, parseCheckout, parseCheckoutOrder, parseOrderPage, pollUntilSettled, type CheckoutOrder, type PaymentMethods } from "@/lib/console/billing";
+import { payChoices, type PayChoice } from "@/lib/console/payment-choice";
 import { formatDateTime, observationAge } from "@/lib/console/format";
 import { ApiError } from "@/lib/console/errors";
 import type { MessageKey } from "@/lib/i18n/messages";
@@ -67,8 +69,9 @@ const PROBLEM_KEYS: Record<PresaleDraftProblem, MessageKey> = {
  *
  * PresaleSales 列出预售。商户经服务商结账预购一个月，之后订单等待运维分配账号；这里
  * 不判定付款是否成功。只有存在预售商品时，商户才会看到这一区块。 */
-export function PresaleSales({ resource, canPurchase = false, dodo = true, alipay = false, resume = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean; dodo?: boolean; alipay?: boolean; resume?: boolean }) {
-  return alipay ? <PresaleSalesWithAlipay resource={resource} canPurchase={canPurchase} dodo={dodo} resume={resume} /> : <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} />;
+export function PresaleSales({ resource, canPurchase = false, methods, resume = false }: { resource: Resource<AccountPresale[]>; canPurchase?: boolean; methods?: PaymentMethods; resume?: boolean }) {
+  const offered = methods ?? defaultPaymentMethods();
+  return offered.alipay ? <PresaleSalesWithAlipay resource={resource} canPurchase={canPurchase} methods={offered} resume={resume} /> : <PresaleCatalog resource={resource} canPurchase={canPurchase} methods={offered} />;
 }
 
 const ALIPAY_OVERVIEW_PATH = "/admin/v1/billing/alipay";
@@ -83,7 +86,7 @@ const TOP_UP_POLL_ATTEMPTS = 40;
  *
  * PresaleSalesWithAlipay 读取租户的支付宝概览，它说明能否兑换额度及其单位，使预售也能
  * 用支付宝额度支付。 */
-function PresaleSalesWithAlipay({ resource, canPurchase, dodo, resume }: { resource: Resource<AccountPresale[]>; canPurchase: boolean; dodo: boolean; resume: boolean }) {
+function PresaleSalesWithAlipay({ resource, canPurchase, methods, resume }: { resource: Resource<AccountPresale[]>; canPurchase: boolean; methods: PaymentMethods; resume: boolean }) {
   const run = useConsoleRequest();
   const overview = useResource({ method: "GET", path: ALIPAY_OVERVIEW_PATH, parse: parseAlipayOverview });
   const [resumeNotice, setResumeNotice] = React.useState<MessageKey | null>(null);
@@ -139,7 +142,7 @@ function PresaleSalesWithAlipay({ resource, canPurchase, dodo, resume }: { resou
     return () => controller.abort();
   }, [resume, canPurchase, run, reloadPresales, reloadOverview]);
 
-  return <PresaleCatalog resource={resource} canPurchase={canPurchase} dodo={dodo} alipayOn alipay={overview.data} onAlipayPaid={overview.reload} extraNotice={resumeNotice} />;
+  return <PresaleCatalog resource={resource} canPurchase={canPurchase} methods={methods} alipayOn alipay={overview.data} onAlipayPaid={overview.reload} extraNotice={resumeNotice} />;
 }
 
 /** PresaleAdmin is the operator's presale tab: the catalog and the delivery
@@ -156,14 +159,17 @@ export function PresaleAdmin() {
   </div>;
 }
 
-function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo = true, alipayOn = false, alipay = null, onAlipayPaid, extraNotice = null }: {
-  resource: Resource<AccountPresale[]>; operator?: boolean; canPurchase?: boolean; dodo?: boolean; alipayOn?: boolean; alipay?: AlipayOverview | null; onAlipayPaid?: () => void; extraNotice?: MessageKey | null;
+function PresaleCatalog({ resource, operator = false, canPurchase = false, methods = defaultPaymentMethods(), alipayOn = false, alipay = null, onAlipayPaid, extraNotice = null }: {
+  resource: Resource<AccountPresale[]>; operator?: boolean; canPurchase?: boolean; methods?: PaymentMethods; alipayOn?: boolean; alipay?: AlipayOverview | null; onAlipayPaid?: () => void; extraNotice?: MessageKey | null;
 }) {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const path = operator ? "/operator/v1/billing/presales" : "/admin/v1/billing/presales";
   const [editing, setEditing] = React.useState<AccountPresale | "new" | null>(null);
-  const [buying, setBuying] = React.useState<AccountPresale | null>(null);
+  // The dialog carries the way to pay the tenant chose.
+  // 对话框携带商户选择的付款方式。
+  const [buying, setBuying] = React.useState<{ presale: AccountPresale; choice: PayChoice } | null>(null);
+  const fiat = methods.dodo || methods.ezfp;
   const [notice, setNotice] = React.useState<MessageKey | null>(null);
   const rows = resource.data ?? [];
   if (!operator && (resource.errorKind === "not_found" || resource.loading || (resource.data !== null && rows.length === 0))) {
@@ -185,8 +191,13 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
         : rows.length === 0 ? <EmptyState title={t("tenant.presaleEmpty")} />
         : <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">{rows.map(presale => {
           // Whether this presale can be bought now by a way this deployment offers.
-          // 此刻能否用本部署提供的方式购买这个预售。
-          const open = operator ? presale.available || presale.alipayAvailable : (dodo && presale.available) || (alipayOn && presale.alipayAvailable);
+          // `available` is Dodo's alone: a CNY presale sold only through EZFP is
+          // `available: false` and `ezfpAvailable: true`, and is not sold out.
+          // 此刻能否用本部署提供的方式购买这个预售。`available` 只代表 Dodo：只经易支付出售的
+          // CNY 预售是 `available: false` 而 `ezfpAvailable: true`，并非售罄。
+          const open = operator ? presale.available || presale.ezfpAvailable || presale.alipayAvailable
+            : (methods.dodo && presale.available) || (methods.ezfp && presale.ezfpAvailable) || (alipayOn && presale.alipayAvailable);
+          const choices = payChoices(methods, { dodoAvailable: presale.available, ezfpAvailable: presale.ezfpAvailable });
           const alipayOffer = !operator && alipayOn && alipay !== null && alipay.canRedeem && presale.alipayAmount > 0 && presale.alipayAmount <= alipay.maxAmount ? alipay : null;
           // Short of quota, the Alipay button first buys a plan that covers it.
           // 额度不足时，支付宝按钮先购买一档能补足差额的套餐。
@@ -212,17 +223,17 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
           </div>
           {operator ? <Button variant="outline" onClick={() => setEditing(presale)}><Message id="operator.presaleEdit" /></Button>
             : canPurchase ? <div className="flex flex-wrap gap-2">
-              {dodo ? <Button disabled={!presale.available} onClick={() => { setNotice(null); setBuying(presale); }}><Message id="tenant.presaleBuy" /></Button> : null}
+              {fiat ? <PayChoiceButtons choices={choices} label="tenant.presaleBuy" onChoose={choice => { setNotice(null); setBuying({ presale, choice }); }} /> : null}
               {alipayOffer && topUp?.kind === "plan" ? <PresaleAlipayTopUp key={presale.id} presale={presale} plan={topUp.plan} shortfall={topUp.shortfall}
-                remaining={alipayOffer.access?.remaining ?? 0} unit={alipayOffer.quotaUnit} primary={!dodo} />
-                : alipayOffer ? <PresaleAlipayPay key={presale.id} presale={presale} unit={alipayOffer.quotaUnit} primary={!dodo} disabled={topUp?.kind === "none"}
+                remaining={alipayOffer.access?.remaining ?? 0} unit={alipayOffer.quotaUnit} primary={!fiat} />
+                : alipayOffer ? <PresaleAlipayPay key={presale.id} presale={presale} unit={alipayOffer.quotaUnit} primary={!fiat} disabled={topUp?.kind === "none"}
                   onPaid={key => { setNotice(key); resource.reload(); onAlipayPaid?.(); }} /> : null}
             </div> : null}
         </div>;
         })}</div>}
     </CardContent>
     <ConfirmDialog open={buying !== null} onOpenChange={open => { if (!open) setBuying(null); }} title={t("tenant.presalePurchase")}
-      description={buying ? t("tenant.presaleBuyConfirm", { name: buying.name, price: formatMoney(buying.priceMinor, buying.currency, locale), kind: accountKindLabel(buying.kind) }) : ""}
+      description={buying ? t("tenant.presaleBuyConfirm", { name: buying.presale.name, price: formatMoney(buying.presale.priceMinor, buying.presale.currency, locale), kind: accountKindLabel(buying.presale.kind) }) : ""}
       onConfirm={async () => {
         if (!buying) return;
         let result;
@@ -230,7 +241,7 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
           // A checkout is a write and is never retried: a repeat would open a
           // second pending order and take a second place.
           // 结账是写操作，绝不重试：重发会再开一笔待付款订单并再占一个名额。
-          result = await run({ method: "POST", path: `${path}/${encodeURIComponent(buying.id)}/checkout`, body: presaleCheckoutBody(buying), parse: parseCheckout });
+          result = await run({ method: "POST", path: `${path}/${encodeURIComponent(buying.presale.id)}/checkout`, body: presaleCheckoutBody(buying.presale, buying.choice), parse: parseCheckout });
         } catch (error) {
           if (error instanceof ApiError && error.status === 409) throw new ApiError("presale_unavailable", 409);
           if (error instanceof ApiError && error.status === 404) throw new ApiError("account_checkout_disabled", 404);
@@ -238,7 +249,9 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, dodo 
           throw error;
         }
         window.location.assign(result.checkoutUrl);
-      }} />
+      }}>
+      {buying?.choice.provider === "ezfp" ? <p className="text-sm font-medium"><Message id="tenant.payMethodLine" values={{ method: t(payChoiceLabelKey(buying.choice)) }} /></p> : null}
+    </ConfirmDialog>
     {editing ? <PresaleEditor key={typeof editing === "string" ? editing : editing.id} presale={editing === "new" ? null : editing} onClose={() => setEditing(null)} onSaved={resource.reload} /> : null}
   </Card>;
 }
@@ -370,8 +383,9 @@ function PresaleEditor({ presale, onClose, onSaved }: { presale: AccountPresale 
       <label htmlFor={`${prefix}-name`}><Message id="operator.presaleName" /></label><Input id={`${prefix}-name`} required maxLength={128} value={name} disabled={pending} onChange={e => setName(e.target.value)} />
       <label htmlFor={`${prefix}-currency`}><Message id="tenant.accountCurrency" /></label><CurrencySelect id={`${prefix}-currency`} className={SELECT_CLASS} required value={currency} disabled={pending} onChange={setCurrency} />
       <label htmlFor={`${prefix}-price`}><Message id="tenant.accountPrice" /></label><Input id={`${prefix}-price`} required inputMode="decimal" value={rawPrice} disabled={pending} onChange={e => setPrice(e.target.value)} />
-      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={!alipayOnly} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
+      <label htmlFor={`${prefix}-product`}><Message id="tenant.accountProductId" /></label><Input id={`${prefix}-product`} required={!alipayOnly && currency.trim().toUpperCase() !== EZFP_CURRENCY} maxLength={64} value={productId} disabled={pending} onChange={e => setProductId(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductHint" /></p>
+      <p className="text-sm text-muted-foreground"><Message id="tenant.accountProductOptionalHint" /></p>
       <label htmlFor={`${prefix}-capacity`}><Message id="operator.presaleCapacity" /></label><Input id={`${prefix}-capacity`} required inputMode="numeric" max={MAX_PRESALE_CAPACITY} value={capacity} disabled={pending} onChange={e => setCapacity(e.target.value)} />
       <p className="text-sm text-muted-foreground"><Message id="operator.presaleCapacityHint" /></p>
       <label htmlFor={`${prefix}-alipay`}><Message id="operator.presaleAlipayAmount" /></label><Input id={`${prefix}-alipay`} inputMode="numeric" max={MAX_ALIPAY_AMOUNT} value={alipayAmount} disabled={pending} onChange={e => setAlipayAmount(e.target.value)} />

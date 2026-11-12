@@ -48,6 +48,11 @@ type BillingConfig struct {
 	//
 	// Alipay 是一人付。为 nil 时关闭支付宝购买与兑换。
 	Alipay *AlipayConfig
+	// Ezfp is 易支付, a second fiat provider for CNY-priced items. Nil turns
+	// it off.
+	//
+	// Ezfp 是易支付，为以 CNY 标价的商品提供的第二个法币服务商。为 nil 时关闭。
+	Ezfp *EzfpConfig
 }
 
 // WithBilling turns billing on. Without it the Service charges nothing,
@@ -58,10 +63,13 @@ type BillingConfig struct {
 // 方法在未设置 WithAccountSales 时都回答 ErrNotFound。
 func WithBilling(cfg BillingConfig) Option {
 	return func(s *Service) {
-		if cfg.Provider != nil || cfg.Alipay != nil {
+		if cfg.Provider != nil || cfg.Alipay != nil || cfg.Ezfp != nil {
 			s.billing = &cfg
 			if cfg.Alipay != nil {
 				s.alipayCache = &alipayCache{}
+			}
+			if cfg.Ezfp != nil {
+				s.ezfpAttempts = &attemptGate{gap: ezfpQueryGap}
 			}
 		}
 	}
@@ -81,11 +89,15 @@ type BillingOverview struct {
 	//
 	// RefundWindowDays 是购买后租户可申请退款的天数；为零表示不可申请。
 	RefundWindowDays int
-	// Dodo and Alipay report which payment methods the deployment offers.
+	// Dodo, Alipay and Ezfp report which payment methods the deployment
+	// offers; EzfpTypes are the 易支付 payment types a tenant may choose.
 	//
-	// Dodo 与 Alipay 报告部署提供了哪些付款方式。
-	Dodo   bool
-	Alipay bool
+	// Dodo、Alipay 与 Ezfp 报告部署提供了哪些付款方式；EzfpTypes 是租户可选的易支付
+	// 付款方式。
+	Dodo      bool
+	Alipay    bool
+	Ezfp      bool
+	EzfpTypes []string
 }
 
 // CheckoutResult is an opened checkout: the order it created and where to
@@ -131,6 +143,37 @@ func (s *Service) billingEnabled() bool { return s.billing != nil }
 // dodoEnabled 报告 Dodo 结账、门户、webhook 与退款是否可用。
 func (s *Service) dodoEnabled() bool { return s.billing != nil && s.billing.Provider != nil }
 
+// ezfpEnabled reports whether 易支付 checkouts, notifications and refunds are
+// available.
+//
+// ezfpEnabled 报告易支付结账、通知与退款是否可用。
+func (s *Service) ezfpEnabled() bool { return s.billing != nil && s.billing.Ezfp != nil }
+
+// fiatEnabled reports whether any fiat provider is: credit packages, the
+// three checkouts and refunds need one.
+//
+// fiatEnabled 报告是否有任一法币服务商可用：充值包、三种结账与退款都需要一个。
+func (s *Service) fiatEnabled() bool { return s.dodoEnabled() || s.ezfpEnabled() }
+
+// FiatOffers reports through which enabled fiat providers an item priced in
+// currency, with Dodo product productID, can be checked out.
+//
+// FiatOffers 报告一个以 currency 标价、Dodo 产品为 productID 的商品可以经哪些已开启的
+// 法币服务商结账。
+func (s *Service) FiatOffers(currency, productID string) (dodo, ezfp bool) {
+	return s.dodoEnabled() && model.FiatPayable(model.PaymentProviderDodo, currency, productID),
+		s.ezfpEnabled() && model.FiatPayable(model.PaymentProviderEzfp, currency, productID)
+}
+
+// fiatPayable reports whether an item can be checked out through any
+// enabled fiat provider.
+//
+// fiatPayable 报告一个商品能否经任一已开启的法币服务商结账。
+func (s *Service) fiatPayable(currency, productID string) bool {
+	dodo, ezfp := s.FiatOffers(currency, productID)
+	return dodo || ezfp
+}
+
 func (a Actor) canPurchase() bool { return a.Role == model.RoleOwner || a.Role == model.RoleAdmin }
 
 // tenantBilling reads a tenant's billing row, treating a missing one as the
@@ -163,37 +206,45 @@ func (s *Service) BillingOverview(ctx context.Context, actor Actor) (BillingOver
 	}
 	out := BillingOverview{
 		Mode: row.Mode, BalanceMicro: row.BalanceMicro, Blocked: row.Blocked(), Packages: []model.CreditPackage{},
-		Dodo: s.dodoEnabled(), Alipay: s.alipayEnabled(),
+		Dodo: s.dodoEnabled(), Alipay: s.alipayEnabled(), Ezfp: s.ezfpEnabled(), EzfpTypes: s.ezfpTypes(),
 	}
-	if !out.Dodo {
+	if !s.fiatEnabled() {
 		return out, nil
 	}
 	packages, err := s.store.ListCreditPackages(ctx, true)
 	if err != nil {
 		return BillingOverview{}, err
 	}
-	out.HasCustomer, out.Packages, out.RefundWindowDays = row.DodoCustomerID != "", packages, s.billing.RefundWindowDays
+	for _, pkg := range packages {
+		if s.fiatPayable(pkg.Currency, pkg.DodoProductID) {
+			out.Packages = append(out.Packages, pkg)
+		}
+	}
+	out.HasCustomer, out.RefundWindowDays = out.Dodo && row.DodoCustomerID != "", s.billing.RefundWindowDays
 	return out, nil
 }
 
-// CreateCheckout opens a provider checkout for one package. Only an owner or
-// admin may buy, as only they may manage keys. The credits are fixed on the
-// order now, from the package as it stands, so a later price change cannot
-// alter what this purchase grants. amountMinor is the chosen amount for a
-// custom package and must be zero for a fixed one.
+// CreateCheckout opens a provider checkout for one package through pay's
+// provider (the zero Payment is Dodo). Only an owner or admin may buy, as
+// only they may manage keys. The credits are fixed on the order now, from
+// the package as it stands, so a later price change cannot alter what this
+// purchase grants. amountMinor is the chosen amount for a custom package and
+// must be zero for a fixed one.
 //
-// CreateCheckout 为一个充值包发起服务商结账。只有 owner 或 admin 可以购买，与只有他们
-// 能管理 key 一致。点数此刻就按充值包的当前定义固定在订单上，之后的价格变更无法改变
-// 这次购买所发放的内容。amountMinor 是自定义充值包所选的金额，固定充值包必须为零。
-func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID string, amountMinor int64) (CheckoutResult, error) {
-	if !s.dodoEnabled() {
-		return CheckoutResult{}, ErrNotFound
+// CreateCheckout 经 pay 的服务商（零值 Payment 即 Dodo）为一个充值包发起结账。只有
+// owner 或 admin 可以购买，与只有他们能管理 key 一致。点数此刻就按充值包的当前定义固定
+// 在订单上，之后的价格变更无法改变这次购买所发放的内容。amountMinor 是自定义充值包所选的
+// 金额，固定充值包必须为零。
+func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID string, amountMinor int64, pay Payment) (CheckoutResult, error) {
+	provider, err := s.resolvePayment(pay)
+	if err != nil {
+		return CheckoutResult{}, err
 	}
 	if !actor.canPurchase() {
 		return CheckoutResult{}, ErrForbidden
 	}
 	pkg, err := s.store.GetCreditPackage(ctx, packageID)
-	if err != nil || !pkg.Active {
+	if err != nil || !pkg.Active || !model.FiatPayable(provider, pkg.Currency, pkg.DodoProductID) {
 		if err == nil || errors.Is(err, store.ErrNotFound) {
 			return CheckoutResult{}, ErrNotFound
 		}
@@ -213,6 +264,24 @@ func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID str
 	if !ok {
 		return CheckoutResult{}, ErrInvalidInput
 	}
+	if provider == model.PaymentProviderEzfp {
+		now := s.clock.Now()
+		order := model.CheckoutOrder{
+			ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PackageID: pkg.ID,
+			AmountMinor: amountMinor, Currency: pkg.Currency, CreditsMicro: credits, Provider: provider, PayType: pay.PayType,
+			Status: model.OrderStatusPending, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
+		}
+		if err := s.store.CreateCheckoutOrder(ctx, &order); err != nil {
+			return CheckoutResult{}, translate(err)
+		}
+		result, err := s.openEzfpCheckout(ctx, actor, order, pkg.Name)
+		if err != nil {
+			return CheckoutResult{}, err
+		}
+		s.audit(ctx, actor.TenantID, actor.UserID, model.ActionBillingCheckout, order.ID,
+			fmt.Sprintf("package %s amount %d %s via ezfp %s", pkg.ID, amountMinor, pkg.Currency, pay.PayType), actor.IP)
+		return result, nil
+	}
 	customerID, err := s.ensureCustomer(ctx, actor)
 	if err != nil {
 		return CheckoutResult{}, err
@@ -221,7 +290,7 @@ func (s *Service) CreateCheckout(ctx context.Context, actor Actor, packageID str
 	now := s.clock.Now()
 	order := model.CheckoutOrder{
 		ID: model.NewID(model.PrefixCheckoutOrder), TenantID: actor.TenantID, PackageID: pkg.ID, DodoProductID: pkg.DodoProductID,
-		AmountMinor: amountMinor, Currency: pkg.Currency, CreditsMicro: credits,
+		AmountMinor: amountMinor, Currency: pkg.Currency, CreditsMicro: credits, Provider: model.PaymentProviderDodo,
 		Status: model.OrderStatusPending, CreatedBy: actor.UserID, CreatedAt: now, UpdatedAt: now,
 	}
 	if err := s.store.CreateCheckoutOrder(ctx, &order); err != nil {
@@ -675,8 +744,10 @@ func (s *Service) requireBillingOperator(actor Actor) error {
 func packageFromInput(in CreditPackageInput) (model.CreditPackage, error) {
 	in.Name = strings.TrimSpace(in.Name)
 	in.DodoProductID = strings.TrimSpace(in.DodoProductID)
+	// A CNY package may leave the Dodo product out: it is then bought through
+	// 易支付 only. 以 CNY 标价的充值包可以不填 Dodo 产品：此时只能经易支付购买。
 	if in.Name == "" || utf8.RuneCountInString(in.Name) > 128 || len(in.Name) > 512 ||
-		in.DodoProductID == "" || len(in.DodoProductID) > 64 || !model.ValidCurrency(in.Currency) {
+		(in.DodoProductID == "" && in.Currency != model.EzfpCurrency) || len(in.DodoProductID) > 64 || !model.ValidCurrency(in.Currency) {
 		return model.CreditPackage{}, ErrInvalidInput
 	}
 	pkg := model.CreditPackage{

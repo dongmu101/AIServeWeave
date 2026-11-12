@@ -45,13 +45,20 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 	if out.Prices, err = s.store.ListModelPrices(ctx); err != nil {
 		return Catalog{}, translate(err)
 	}
-	// Packages, accounts and presales are bought through a Dodo checkout.
-	// 充值包、账号与预售都经 Dodo 结账购买。
-	if !s.dodoEnabled() {
+	// Packages, accounts and presales are bought through a fiat checkout,
+	// Dodo's or 易支付's; an item is listed when one of them can sell it.
+	// 充值包、账号与预售都经法币结账（Dodo 或易支付）购买；其中之一能出售时才列出。
+	if !s.fiatEnabled() {
 		return out, nil
 	}
-	if out.Packages, err = s.store.ListCreditPackages(ctx, true); err != nil {
+	packages, err := s.store.ListCreditPackages(ctx, true)
+	if err != nil {
 		return Catalog{}, translate(err)
+	}
+	for _, pkg := range packages {
+		if s.fiatPayable(pkg.Currency, pkg.DodoProductID) {
+			out.Packages = append(out.Packages, pkg)
+		}
 	}
 	rows, err := s.store.ListAccountSales(ctx)
 	if err != nil {
@@ -60,7 +67,7 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 	now := s.clock.Now()
 	for _, row := range rows {
 		// A held account is back on sale once its month has ended.
-		if row.Active && row.PriceMinor > 0 && row.Currency != "" && row.DodoProductID != "" && !now.Before(row.ExpiresAt) {
+		if row.Active && row.PriceMinor > 0 && row.Currency != "" && s.fiatPayable(row.Currency, row.DodoProductID) && !now.Before(row.ExpiresAt) {
 			out.Accounts = append(out.Accounts, row)
 		}
 	}
@@ -69,7 +76,7 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 		return Catalog{}, translate(err)
 	}
 	for _, row := range presales {
-		if row.Active && row.PriceMinor > 0 && row.Currency != "" && row.DodoProductID != "" {
+		if row.Active && row.PriceMinor > 0 && row.Currency != "" && s.fiatPayable(row.Currency, row.DodoProductID) {
 			out.Presales = append(out.Presales, row)
 		}
 	}

@@ -9,6 +9,7 @@ import {
   customAmountProblem,
   customCredits,
   emptyPackageDraft,
+  ezfpReturnOrderId,
   formatCredits,
   formatMoney,
   formatScaled,
@@ -27,6 +28,7 @@ import {
   parseLedgerPage,
   parseModelPrices,
   parseMoneyInput,
+  parsePaymentMethods,
   parseOrderPage,
   parsePortalLink,
   pollUntilSettled,
@@ -55,8 +57,8 @@ test("billing responses parse in the shapes the control plane sends", () => {
   assert.equal(overview.packages[1]?.creditsMicro, 0, "omitted custom fields read as zero");
   assert.equal(overview.packages[1]?.creditsPerMinorUnitMicro, 10_000);
   assert.deepEqual(parseBillingOverview({ mode: "exempt", balance_micro: 0, blocked: false, has_customer: true, packages: null }).packages, []);
-  assert.deepEqual(overview.paymentMethods, { dodo: true, alipay: false }, "a control plane from before Alipay offers Dodo alone");
-  assert.deepEqual(parseBillingOverview({ mode: "prepaid", balance_micro: 0, blocked: false, has_customer: false, packages: [], payment_methods: { dodo: false, alipay: true } }).paymentMethods, { dodo: false, alipay: true });
+  assert.deepEqual(overview.paymentMethods, { dodo: true, alipay: false, ezfp: false, ezfpTypes: [] }, "a control plane from before Alipay offers Dodo alone");
+  assert.deepEqual(parseBillingOverview({ mode: "prepaid", balance_micro: 0, blocked: false, has_customer: false, packages: [], payment_methods: { dodo: false, alipay: true } }).paymentMethods, { dodo: false, alipay: true, ezfp: false, ezfpTypes: [] }, "a control plane from before EZFP sends no ezfp fields");
   assert.throws(() => parseBillingOverview({ mode: "prepaid", balance_micro: 0, blocked: false, has_customer: false, packages: [], payment_methods: { dodo: "yes" } }), ApiError);
 
   assert.equal(parseCreditPackages({ items: [{ ...fixedWire, dodo_product_id: "pdt_1" }] })[0]?.dodoProductId, "pdt_1");
@@ -185,6 +187,79 @@ test("a custom amount is checked against the package range before checkout", () 
 
   assert.deepEqual(checkoutBody(pkg, 500), { package_id: "pkg_custom", amount_minor: 500 });
   assert.deepEqual(checkoutBody(parseCreditPackage(fixedWire), 500), { package_id: "pkg_fixed" }, "a fixed package never sends an amount");
+});
+
+test("payment methods and package flags default for a control plane from before EZFP", () => {
+  assert.deepEqual(parsePaymentMethods({ dodo: true, alipay: false, ezfp: true, ezfp_types: ["alipay", "wxpay"] }), { dodo: true, alipay: false, ezfp: true, ezfpTypes: ["alipay", "wxpay"] });
+  assert.deepEqual(parsePaymentMethods({ dodo: false, alipay: false, ezfp: true, ezfp_types: ["wxpay", "paypal", 7, "wxpay"] }).ezfpTypes, ["wxpay"], "unknown and repeated types are dropped");
+  assert.deepEqual(parsePaymentMethods({ dodo: true, alipay: false, ezfp: true, ezfp_types: null }).ezfpTypes, []);
+  assert.deepEqual(parsePaymentMethods({ dodo: true, alipay: false, ezfp_types: ["alipay"] }).ezfp, false, "a missing ezfp reads as off");
+  rejects("ezfp must be a boolean", () => parsePaymentMethods({ dodo: true, alipay: false, ezfp: "yes" }));
+  rejects("ezfp_types must be a list", () => parsePaymentMethods({ dodo: true, alipay: false, ezfp: true, ezfp_types: "alipay" }));
+
+  const old = parseCreditPackage(fixedWire);
+  assert.deepEqual([old.dodoAvailable, old.ezfpAvailable], [true, false]);
+  const flagged = parseCreditPackage({ ...fixedWire, currency: "CNY", dodo_available: false, ezfp_available: true });
+  assert.deepEqual([flagged.dodoAvailable, flagged.ezfpAvailable], [false, true]);
+  rejects("dodo_available must be a boolean", () => parseCreditPackage({ ...fixedWire, dodo_available: 1 }));
+});
+
+test("order provider and pay type are read, or derived for a control plane from before EZFP", () => {
+  const order = { id: "ord_a", package_id: "pkg_fixed", amount_minor: 100, currency: "CNY", credits_micro: 1, refunded_minor: 0, status: "pending", created_at: at, updated_at: at };
+  const [plain, quota, ezfp, noType] = parseOrderPage({ items: [
+    order,
+    { ...order, package_id: "", presale_id: "pre_a", alipay_amount: 25 },
+    { ...order, provider: "ezfp", pay_type: "wxpay", payment_id: "2026111200001" },
+    { ...order, provider: "dodo", pay_type: "" },
+  ] }).items;
+  assert.deepEqual([plain?.provider, plain?.payType], ["dodo", ""], "no provider and no Alipay amount is Dodo");
+  assert.deepEqual([quota?.provider, quota?.payType], ["opcpay", ""], "no provider and an Alipay amount is 一人付");
+  assert.deepEqual([ezfp?.provider, ezfp?.payType, ezfp?.paymentId], ["ezfp", "wxpay", "2026111200001"]);
+  assert.deepEqual([noType?.provider, noType?.payType], ["dodo", ""]);
+  assert.equal(parseCheckoutOrderFor({ ...order, provider: "opcpay" }).provider, "opcpay");
+  rejects("non-string provider", () => parseOrderPage({ items: [{ ...order, provider: 1 }] }));
+  const later = parseCheckoutOrderFor({ ...order, provider: "stripe", pay_type: "bank" });
+  assert.deepEqual([later.provider, later.payType], ["stripe", "bank"], "a provider this Console predates is kept as sent");
+});
+
+function parseCheckoutOrderFor(wire: unknown) {
+  return parseOrderPage({ items: [wire] }).items[0]!;
+}
+
+test("an EZFP checkout adds provider and pay_type, and Dodo adds nothing", () => {
+  const custom = parseCreditPackage(customWire);
+  const fixed = parseCreditPackage(fixedWire);
+  assert.deepEqual(checkoutBody(fixed, null, { provider: "dodo" }), { package_id: "pkg_fixed" });
+  assert.deepEqual(checkoutBody(fixed, null, { provider: "ezfp", payType: "alipay" }), { package_id: "pkg_fixed", provider: "ezfp", pay_type: "alipay" });
+  assert.deepEqual(checkoutBody(fixed, 500, { provider: "ezfp", payType: "wxpay" }), { package_id: "pkg_fixed", provider: "ezfp", pay_type: "wxpay" }, "a fixed package still never sends an amount");
+  assert.deepEqual(checkoutBody(custom, 1250, { provider: "ezfp", payType: "wxpay" }), { package_id: "pkg_custom", amount_minor: 1250, provider: "ezfp", pay_type: "wxpay" });
+  assert.deepEqual(checkoutBody(custom, 1250, { provider: "dodo" }), { package_id: "pkg_custom", amount_minor: 1250 });
+  assert.equal("provider" in checkoutBody(custom, 1250, { provider: "dodo" }), false);
+});
+
+test("an EZFP return names an order only when it carries our id and EZFP's trade number", () => {
+  const id = `ord_${"0123456789abcdef".repeat(2).slice(0, 28)}`;
+  assert.equal(ezfpReturnOrderId({ out_trade_no: id, trade_no: "2026111200001", trade_status: "TRADE_SUCCESS", sign: "x" }), id);
+  assert.equal(ezfpReturnOrderId({ out_trade_no: id, trade_no: "T1" }), id, "trade_status is not read at all");
+  for (const params of [
+    {}, { out_trade_no: id }, { trade_no: "T1" }, { out_trade_no: id, trade_no: "" },
+    { out_trade_no: "ord_ABCDEF0123456789abcdef012345", trade_no: "T1" },
+    { out_trade_no: `${id}0`, trade_no: "T1" }, { out_trade_no: id.slice(0, -1), trade_no: "T1" },
+    { out_trade_no: `x${id}`, trade_no: "T1" }, { out_trade_no: `${id}\n`, trade_no: "T1" },
+    { out_trade_no: [id, id], trade_no: "T1" }, { out_trade_no: id, trade_no: ["T1"] },
+    { status: "succeeded", payment_id: "pay_1" },
+  ]) {
+    assert.equal(ezfpReturnOrderId(params), null, JSON.stringify(params));
+  }
+  assert.equal(isPaymentReturn({ out_trade_no: id, trade_no: "T1", trade_status: "TRADE_SUCCESS" }), false, "an EZFP return is not a Dodo return");
+});
+
+test("a CNY package may leave the Dodo product blank, any other currency may not", () => {
+  const draft: PackageDraft = { ...emptyPackageDraft(), name: "CNY pack", currency: "CNY", credits: "10", price: "68" };
+  assert.deepEqual(packageRequest(draft).request?.dodo_product_id, "");
+  assert.equal(packageRequest({ ...draft, currency: "USD" }).problem, "product");
+  assert.equal(packageRequest({ ...draft, dodoProductId: "x".repeat(65) }).problem, "product", "the length bound still applies");
+  assert.equal(packageRequest({ ...draft, kind: "custom", creditsPerMinorUnit: "0.01", minAmount: "5", maxAmount: "1000" }).problem, null);
 });
 
 test("package drafts validate per kind and zero the other kind's fields", () => {

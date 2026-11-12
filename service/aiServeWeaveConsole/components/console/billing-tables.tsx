@@ -2,12 +2,15 @@
 
 import * as React from "react";
 
+import { ErrorMessage } from "@/components/i18n/error-message";
 import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
 import { Pager } from "@/components/console/pager";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
+import { useConsoleRequest } from "@/components/console/use-console-request";
 import { usePagedResource } from "@/components/console/use-paged-resource";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
@@ -18,6 +21,7 @@ import {
   formatSignedCredits,
   LEDGER_KINDS,
   ORDER_STATUSES,
+  parseCheckoutOrder,
   parseLedgerPage,
   parseOrderPage,
   type CheckoutOrder,
@@ -65,6 +69,75 @@ export function ledgerKindLabel(kind: string, t: Translator): string {
  * orderStatusLabel 给出订单状态的名称，回退方式相同。 */
 export function orderStatusLabel(status: string, t: Translator): string {
   return status in STATUS_KEYS ? t(STATUS_KEYS[status as keyof typeof STATUS_KEYS]) : status;
+}
+
+/** orderMethodLabel names how an order was paid: Dodo, EZFP with its payment
+ * type, or 一人付 Alipay quota. An EZFP order without a type says only that
+ * it went through EZFP.
+ *
+ * orderMethodLabel 给出订单的付款方式：Dodo、带支付类型的易支付，或一人付的支付宝额度。
+ * 没有类型的易支付订单只说明它经由易支付。 */
+export function orderMethodLabel(order: Pick<CheckoutOrder, "provider" | "payType">, t: Translator): string {
+  switch (order.provider) {
+    case "opcpay":
+      return t("tenant.billingProviderOpcpay");
+    case "ezfp":
+      return order.payType === "alipay" ? t("tenant.billingProviderEzfpAlipay")
+        : order.payType === "wxpay" ? t("tenant.billingProviderEzfpWxpay")
+        : t("tenant.billingProviderEzfp");
+    case "dodo":
+      return t("tenant.billingProviderDodo");
+    default:
+      // A provider this Console predates is shown as sent.
+      // 本 Console 早于其出现的服务商按原值显示。
+      return order.provider;
+  }
+}
+
+/** recheckable says whether a tenant may ask for an EZFP order to be
+ * re-checked: it is an EZFP order still waiting for payment.
+ *
+ * recheckable 说明租户能否请求复核一笔易支付订单：它是仍在等待付款的易支付订单。 */
+function recheckable(order: CheckoutOrder): boolean {
+  return order.provider === "ezfp" && order.status === "pending";
+}
+
+/** RecheckButton asks the control plane to query EZFP for one pending order
+ * and settle it if paid. Each click sends one request and never retries; the
+ * control plane spaces calls per order and answers a call that comes too soon
+ * with the order as it is. The answer is the order the server holds: the row
+ * shows it, and the button says so when it is still pending.
+ *
+ * RecheckButton 请控制面向易支付查询一笔待支付订单，已付款则入账。每次点击只发送一次
+ * 请求、绝不重试；控制面按订单限制调用间隔，过早的调用会得到订单的现状。答复就是服务端
+ * 持有的订单：该行据此显示，仍待支付时按钮会如实说明。 */
+function RecheckButton({ order, onUpdated }: { order: CheckoutOrder; onUpdated: (order: CheckoutOrder) => void }) {
+  const { t } = useI18n();
+  const run = useConsoleRequest();
+  const [pending, setPending] = React.useState(false);
+  const [notice, setNotice] = React.useState<React.ReactNode>(null);
+
+  async function recheck() {
+    if (pending) return;
+    setPending(true);
+    setNotice(null);
+    try {
+      const updated = await run({ method: "POST", path: `/admin/v1/billing/orders/${encodeURIComponent(order.id)}/refresh`, parse: parseCheckoutOrder });
+      if (updated.status === "pending") {
+        setNotice(<Message id="tenant.billingRecheckStillPending" />);
+      }
+      onUpdated(updated);
+    } catch (failure) {
+      setNotice(<ErrorMessage error={failure} />);
+    } finally {
+      setPending(false);
+    }
+  }
+
+  return <div className="grid justify-items-start gap-1">
+    <Button size="sm" variant="outline" onClick={recheck} disabled={pending} aria-busy={pending} title={t("tenant.billingRecheckHint")}><Message id="tenant.billingRecheck" /></Button>
+    {notice ? <p role="status" aria-live="polite" className="max-w-48 text-xs text-muted-foreground">{notice}</p> : null}
+  </div>;
 }
 
 /** BillingDisabled is the empty state for a deployment whose control plane
@@ -157,6 +230,13 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
   if (surface === "operator") filters.tenant_id = tenantId;
   const orders = usePagedResource<CheckoutOrder>({ path: pathFor(surface, "orders"), surface, filters, pageSize: PAGE_SIZE, parse: parseOrderPage });
   const operator = surface === "operator";
+  // Rows a re-check has updated, kept only for the page they were read with:
+  // once the list is read again, the server's rows win.
+  // 已被复核更新的行，只对读取它们的那一页有效：列表重新读取后，以服务端的行为准。
+  const [patch, setPatch] = React.useState<{ base: CheckoutOrder[] | null; rows: Record<string, CheckoutOrder> }>({ base: null, rows: {} });
+  const patched = patch.base === orders.items ? patch.rows : {};
+  const rows = orders.items?.map((order) => patched[order.id] ?? order) ?? null;
+  const showRecheck = !operator && (rows?.some(recheckable) ?? false);
 
   return <Card>
     <CardHeader className="flex flex-wrap items-center justify-between gap-3">
@@ -172,21 +252,24 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
       </Select>
     </CardHeader>
     <CardContent className="grid gap-3">
-      {orders.errorKind === "not_found" ? <BillingDisabled /> : orders.error ? <ErrorState message={orders.error} onRetry={orders.reload} /> : orders.loading || !orders.items ? <LoadingState label={t("tenant.billingLoadingOrders")} rows={3} /> : orders.items.length === 0 ? <EmptyState title={t("tenant.billingNoOrders")} /> : <>
+      {orders.errorKind === "not_found" ? <BillingDisabled /> : orders.error ? <ErrorState message={orders.error} onRetry={orders.reload} /> : orders.loading || !orders.items ? <LoadingState label={t("tenant.billingLoadingOrders")} rows={3} /> : orders.items.length === 0 || rows === null ? <EmptyState title={t("tenant.billingNoOrders")} /> : <>
         <Table>
           <TableHeader><TableRow>
             <TableHead><Message id="tenant.time" /></TableHead>
             {operator ? <TableHead><Message id="tenant.tenantId" /></TableHead> : null}
             <TableHead><Message id="tenant.billingOrderId" /></TableHead>
+            <TableHead><Message id="tenant.billingPayMethod" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingAmount" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingOrderContent" /></TableHead>
             <TableHead><Message id="tenant.status" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingRefunded" /></TableHead>
+            {showRecheck ? <TableHead><span className="sr-only"><Message id="tenant.action" /></span></TableHead> : null}
           </TableRow></TableHeader>
-          <TableBody>{orders.items.map((order) => <TableRow key={order.id}>
+          <TableBody>{rows.map((order) => <TableRow key={order.id}>
             <TableCell className="whitespace-nowrap">{formatDateTime(order.createdAt, undefined, locale)}</TableCell>
             {operator ? <TableCell><code className="text-xs break-all">{order.tenantId}</code></TableCell> : null}
             <TableCell><code className="text-xs break-all">{order.id}</code></TableCell>
+            <TableCell className="whitespace-nowrap">{orderMethodLabel(order, t)}</TableCell>
             <TableCell className="text-right whitespace-nowrap">{order.alipayAmount > 0 ? t("operator.presaleAlipayPaid", { amount: order.alipayAmount }) : formatMoney(order.amountMinor, order.currency, locale)}</TableCell>
             <TableCell className="text-right whitespace-nowrap">{order.presaleId !== "" && order.accountExpiresAt === null
               ? order.status === "paid" ? <span className="font-medium">{t("tenant.presaleOrderAwaiting")}</span> : t("tenant.presale")
@@ -197,6 +280,7 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
                 : order.status === "paid" ? <span className="text-destructive">{t("tenant.accountOrderUngranted")}</span> : t("tenant.accountMonthly")}</TableCell>
             <TableCell><Badge variant={order.status === "paid" ? "default" : order.status === "failed" || order.status === "disputed" ? "destructive" : "outline"}>{orderStatusLabel(order.status, t)}</Badge></TableCell>
             <TableCell className="text-right whitespace-nowrap">{order.refundedMinor > 0 ? formatMoney(order.refundedMinor, order.currency, locale) : "—"}</TableCell>
+            {showRecheck ? <TableCell>{recheckable(order) ? <RecheckButton order={order} onUpdated={(updated) => setPatch({ base: orders.items, rows: { ...patched, [updated.id]: updated } })} /> : null}</TableCell> : null}
           </TableRow>)}</TableBody>
         </Table>
         <Pager resource={orders} loadedCount={orders.items.length} />

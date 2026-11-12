@@ -355,7 +355,7 @@ test("operators create a presale and assign an awaiting order an account of the 
   await page.getByLabel("名额上限", { exact: true }).fill("3");
   await page.getByRole("button", { name: "保存预售", exact: true }).click();
   await expect(page.getByText("待发货 1 / 名额 3", { exact: true })).toBeVisible();
-  expect(presaleWrites).toEqual([{ kind: "claude", name: presale.name, price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 3, active: true }]);
+  expect(presaleWrites).toEqual([{ kind: "claude", name: presale.name, price_minor: 1500, currency: "USD", dodo_product_id: "pdt_pre", capacity: 3, active: true, alipay_amount: 0 }]);
 
   await expect(page.getByText("ord_waiting", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "分配账号", exact: true }).click();
@@ -433,4 +433,189 @@ test("Alipay redeems with one action id across a lost answer and opens the purch
   await page.waitForURL(entry);
   expect(purchases).toHaveLength(1);
   expect(Object.keys(purchases[0] as object).sort()).toEqual(["action_id", "sku_id"]);
+});
+
+// ---- 易支付 (EZFP) ----
+const EZFP_AT = "2026-11-12T00:00:00Z";
+const EZFP_METHODS = { dodo: true, alipay: false, ezfp: true, ezfp_types: ["alipay", "wxpay"] };
+const CNY_PACKAGE = { id: "pkg_fixed", name: "CNY pack", kind: "fixed", credits_micro: 10_000_000, price_minor: 6800, currency: "CNY", active: true, sort_order: 1, dodo_available: true, ezfp_available: true, created_at: EZFP_AT, updated_at: EZFP_AT };
+const EZFP_ORDER_ID = `ord_${"0123456789abcdef".repeat(2).slice(0, 28)}`;
+const ezfpOverview = (patch: Record<string, unknown> = {}) => ({ ...BILLING_OVERVIEW, packages: [CNY_PACKAGE], payment_methods: EZFP_METHODS, ...patch });
+
+test("choosing WeChat Pay sends one EZFP checkout with provider and pay_type and redirects", async ({ page }) => {
+  const writes: unknown[] = [];
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview() }));
+  await page.route("**/api/admin/admin/v1/billing/checkout", async route => {
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { order_id: EZFP_ORDER_ID, checkout_url: CHECKOUT_URL } });
+  });
+  await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing");
+  const group = page.getByRole("group", { name: "购买", exact: true });
+  await expect(group.getByRole("button")).toHaveText(["银行卡 / Dodo", "支付宝", "微信支付"]);
+  await group.getByRole("button", { name: "微信支付", exact: true }).click();
+  await page.waitForURL(CHECKOUT_URL);
+  expect(writes).toEqual([{ package_id: "pkg_fixed", provider: "ezfp", pay_type: "wxpay" }]);
+});
+
+test("a Dodo click on a package that EZFP also sells sends neither provider nor pay_type", async ({ page }) => {
+  const writes: unknown[] = [];
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview() }));
+  await page.route("**/api/admin/admin/v1/billing/checkout", async route => {
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { order_id: EZFP_ORDER_ID, checkout_url: CHECKOUT_URL } });
+  });
+  await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing");
+  await page.getByRole("button", { name: "银行卡 / Dodo", exact: true }).click();
+  await page.waitForURL(CHECKOUT_URL);
+  expect(writes).toEqual([{ package_id: "pkg_fixed" }]);
+});
+
+test("a package only Dodo can sell keeps the single 购买 button, and an EZFP-only deployment lists its packages", async ({ page }) => {
+  // Not payable through EZFP (non-CNY): today's single button, even with EZFP on.
+  // 不能经易支付支付（非 CNY）：即使开启易支付，仍是今天的单个按钮。
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview({ packages: [{ ...CNY_PACKAGE, currency: "USD", ezfp_available: false }] }) }));
+  await page.goto("/console/billing");
+  await expect(page.getByRole("button", { name: "购买", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("group", { name: "购买", exact: true })).toHaveCount(0);
+
+  // Dodo off, EZFP on with one type: packages and orders are still offered.
+  // Dodo 关闭、易支付开启且只有一种类型：充值包与订单分区仍然提供。
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview({ payment_methods: { dodo: false, alipay: false, ezfp: true, ezfp_types: ["wxpay", "bogus"] }, packages: [{ ...CNY_PACKAGE, dodo_available: false }] }) }));
+  await page.reload();
+  await expect(page.getByRole("tab", { name: "充值包", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "订单", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "微信支付", exact: true })).toHaveCount(1);
+  await expect(page.getByRole("button", { name: "支付宝", exact: true })).toHaveCount(0);
+});
+
+test("an EZFP return strips the URL, asks the control plane once, and trusts only the server", async ({ page }) => {
+  const events: string[] = [];
+  let polls = 0;
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview() }));
+  await page.route(`**/api/admin/admin/v1/billing/orders/${EZFP_ORDER_ID}/refresh`, async route => {
+    events.push(`refresh:${route.request().method()}:${route.request().postData() ?? ""}`);
+    await route.fulfill({ json: { id: EZFP_ORDER_ID, package_id: "pkg_fixed", amount_minor: 6800, currency: "CNY", credits_micro: 10_000_000, refunded_minor: 0, status: "pending", provider: "ezfp", pay_type: "wxpay", payment_id: "T1", created_at: EZFP_AT, updated_at: EZFP_AT } });
+  });
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/orders(\?|$)/, async route => {
+    const poll = new URL(route.request().url()).searchParams.get("limit") === "1";
+    if (poll) { polls++; events.push("poll"); }
+    const status = poll && polls < 2 ? "pending" : "paid";
+    await route.fulfill({ json: { items: [{ id: EZFP_ORDER_ID, package_id: "pkg_fixed", amount_minor: 6800, currency: "CNY", credits_micro: 10_000_000, refunded_minor: 0, status, provider: "ezfp", pay_type: "wxpay", payment_id: "T1", created_at: EZFP_AT, updated_at: EZFP_AT }], next_cursor: "" } });
+  });
+  // TRADE_SUCCESS in the query proves nothing: the notice follows the server's order status.
+  // 查询里的 TRADE_SUCCESS 什么也证明不了：提示跟随的是服务端的订单状态。
+  await page.goto(`/console/billing?out_trade_no=${EZFP_ORDER_ID}&trade_no=T1&trade_status=TRADE_SUCCESS&sign=x&sign_type=RSA&buyer=b&money=68.00&pid=1000&type=wxpay&name=n&param=p&timestamp=1`);
+  await expect(page.getByRole("status").filter({ hasText: "支付确认中" })).toBeVisible();
+  await expect(page).toHaveURL(/\/console\/billing\?tab=orders$/);
+  expect(page.url()).not.toMatch(/sign|buyer|money|trade_status/);
+  await expect(page.getByRole("status").filter({ hasText: "服务端已确认" })).toBeVisible({ timeout: 10_000 });
+  expect(events.filter(event => event.startsWith("refresh"))).toEqual(["refresh:POST:"]);
+  expect(events[0], "the re-check is sent before the polling starts").toMatch(/^refresh/);
+  expect(polls).toBeGreaterThanOrEqual(2);
+  await expect(page.getByRole("tab", { name: "订单", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByText("易支付 · 微信", { exact: true })).toBeVisible();
+});
+
+test("an EZFP return without our order id and a trade number is an ordinary visit", async ({ page }) => {
+  let refreshes = 0;
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview() }));
+  await page.route("**/api/admin/admin/v1/billing/orders/**", route => { refreshes++; return route.fulfill({ status: 500, json: {} }); });
+  await page.goto("/console/billing?out_trade_no=ord_not-ours&trade_no=T1&trade_status=TRADE_SUCCESS");
+  await expect(page.getByRole("tab", { name: "充值包", exact: true })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("status").filter({ hasText: "支付确认中" })).toHaveCount(0);
+  expect(refreshes).toBe(0);
+});
+
+test("a pending EZFP order is re-checked once per click and its row follows the server", async ({ page }) => {
+  let posts = 0;
+  const base = { id: EZFP_ORDER_ID, package_id: "pkg_fixed", amount_minor: 6800, currency: "CNY", credits_micro: 10_000_000, refunded_minor: 0, provider: "ezfp", pay_type: "alipay", payment_id: "T1", created_at: EZFP_AT, updated_at: EZFP_AT };
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview() }));
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/orders(\?|$)/, route => route.fulfill({ json: { items: [
+    { ...base, status: "pending" },
+    { ...base, id: "ord_paid", status: "paid" },
+    { ...base, id: "ord_dodo", status: "pending", provider: "dodo", pay_type: "", payment_id: "" },
+  ], next_cursor: "" } }));
+  await page.route(`**/api/admin/admin/v1/billing/orders/${EZFP_ORDER_ID}/refresh`, async route => {
+    posts++;
+    await route.fulfill({ json: { ...base, status: posts === 1 ? "pending" : "paid" } });
+  });
+  await page.goto("/console/billing?tab=orders");
+  await expect(page.getByText("易支付 · 支付宝", { exact: true })).toHaveCount(2);
+  await expect(page.getByText("Dodo", { exact: true })).toBeVisible();
+  const recheck = page.getByRole("button", { name: "再次确认", exact: true });
+  await expect(recheck, "only the pending EZFP order can be re-checked").toHaveCount(1);
+  await recheck.click();
+  await expect(page.getByText("仍在等待支付确认，稍后可再次确认。", { exact: true })).toBeVisible();
+  expect(posts).toBe(1);
+  await recheck.click();
+  await expect(recheck).toHaveCount(0);
+  await expect(page.getByText("待支付", { exact: true })).toHaveCount(1);
+  expect(posts).toBe(2);
+});
+
+test("a CNY presale sold only through EZFP is not sold out and is paid with the chosen type", async ({ page }) => {
+  const writes: unknown[] = [];
+  const presale = { id: "pre_cny", kind: "claude", name: "Claude Code 预售", price_minor: 6800, currency: "CNY", active: true, available: false, ezfp_available: true };
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview({ packages: [] }) }));
+  await page.route("**/api/admin/admin/v1/billing/presales", route => route.fulfill({ json: { items: [presale] } }));
+  await page.route("**/api/admin/admin/v1/billing/presales/pre_cny/checkout", async route => {
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { order_id: EZFP_ORDER_ID, checkout_url: CHECKOUT_URL } });
+  });
+  await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing?tab=presales");
+  await expect(page.getByText("已售罄", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "银行卡 / Dodo", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "支付宝", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("¥68.00");
+  await expect(dialog).toContainText("支付方式：支付宝");
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await page.waitForURL(CHECKOUT_URL);
+  expect(writes).toEqual([{ expected_price_minor: 6800, currency: "CNY", provider: "ezfp", pay_type: "alipay" }]);
+});
+
+test("a monthly account in CNY offers Dodo only where Dodo can sell it, and EZFP carries its choice into the dialog", async ({ page }) => {
+  const writes: unknown[] = [];
+  const account = { id: "acc_cny", node_id: "agent-a", runtime_id: "claude-a", name: "Dedicated Claude", price_minor: 6800, currency: "CNY", active: true, owned: false, dodo_available: false, ezfp_available: true };
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: ezfpOverview() }));
+  await page.route("**/api/admin/admin/v1/billing/accounts", route => route.fulfill({ json: { items: [account] } }));
+  await page.route("**/api/admin/admin/v1/billing/accounts/acc_cny/checkout", async route => {
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { order_id: EZFP_ORDER_ID, checkout_url: CHECKOUT_URL } });
+  });
+  await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing?tab=accounts");
+  await expect(page.getByRole("button", { name: "银行卡 / Dodo", exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "微信支付", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("支付方式：微信支付");
+  await dialog.getByRole("button", { name: "确认", exact: true }).click();
+  await page.waitForURL(CHECKOUT_URL);
+  expect(writes).toEqual([{ expected_price_minor: 6800, currency: "CNY", provider: "ezfp", pay_type: "wxpay" }]);
+});
+
+test("operators can save a CNY package without a Dodo product id, but no other currency", async ({ page }) => {
+  const writes: unknown[] = [];
+  await page.route("**/api/operator/operator/v1/billing/packages", async route => {
+    if (route.request().method() === "GET") { await route.fulfill({ json: { items: [] } }); return; }
+    writes.push(route.request().postDataJSON());
+    await route.fulfill({ status: 201, json: { id: "pkg_cny", name: "CNY pack", kind: "fixed", credits_micro: 10_000_000, price_minor: 6800, currency: "CNY", active: true, sort_order: 0, dodo_product_id: "", created_at: EZFP_AT, updated_at: EZFP_AT } });
+  });
+  await page.goto("/operator/billing");
+  await page.getByRole("button", { name: "新建充值包", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("币种为 CNY 时可留空，仅能经易支付购买。");
+  await dialog.getByLabel("名称", { exact: true }).fill("CNY pack");
+  await dialog.getByLabel("点数", { exact: true }).fill("10");
+  await dialog.getByLabel("价格（主货币单位）", { exact: true }).fill("68");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toContainText("Dodo 产品 ID");
+  expect(writes).toHaveLength(0);
+  await dialog.getByLabel("货币（ISO 4217，如 USD）", { exact: true }).selectOption("CNY");
+  await dialog.getByRole("button", { name: "创建", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  expect(writes).toEqual([{ name: "CNY pack", kind: "fixed", dodo_product_id: "", currency: "CNY", active: true, credits_micro: 10_000_000, price_minor: 6800, credits_per_minor_unit_micro: 0, min_amount_minor: 0, max_amount_minor: 0, sort_order: 0 }]);
 });

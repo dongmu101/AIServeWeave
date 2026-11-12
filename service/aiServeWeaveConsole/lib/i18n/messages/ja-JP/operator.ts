@@ -597,7 +597,8 @@ const operator = {
   "operator.presaleRefundDescription": "テナント {tenant} の注文 {order} の未返金分 {amount} を返金します。返金は Dodo が処理し、処理中はアカウントを割り当てられません。",
   "operator.presaleRefundReason": "返金理由（必須、500 文字以内）",
   "operator.presaleRefundSubmitted": "返金を送信しました。Dodo の処理を待っています。全額返金が完了すると注文はこの一覧から消えます。",
-  "operator.billingNeedsDodo": "Dodo が未設定です",
-  "operator.billingNeedsDodoDescription": "クレジットパッケージは Dodo の決済で販売します。このデプロイでは Alipay（一人付）のみが有効で、テナントは Alipay の枠を交換してクレジットを得ます。モデル単価・テナント・台帳は他のタブで引き続き管理できます。"
+  "operator.billingNeedsDodo": "Dodo も易支付も未設定です",
+  "operator.billingNeedsDodoDescription": "クレジットパッケージは Dodo または易支付（Epay）の決済で販売します。このデプロイではどちらも未設定で、Alipay（一人付）のみが有効です。テナントは Alipay の枠を交換してクレジットを得ます。モデル単価・テナント・台帳は他のタブで引き続き管理できます。",
+  "operator.billingProductOptionalHint": "通貨が CNY の場合は空欄にできます。その場合は易支付（Epay）でのみ購入できます。"
 } as const;
 export default operator;
