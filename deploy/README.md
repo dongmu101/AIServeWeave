@@ -110,6 +110,27 @@ deploy/upgrade.sh --image-tag v0.2.0                                   # 已有�
 - 拉取模式下 `docker compose up` 带 `--no-build`，缺少镜像会直接报错，不会悄悄在主机上构建。
   手工操作时使用 `docker compose pull && docker compose up -d --no-build`。
 
+### 推送到 Docker Hub，主机拉取
+
+在开发机执行 `make publish`：构建 amd64 与 arm64 两种架构的镜像，以 `git describe` 版本（如
+`v0.1.0-107-g3625aaf`）为 tag，推送到 `docker.io/dongmu101/aiserveweave-<服务>`。要求本机工作区干净且已推送。
+
+```bash
+docker login                              # 首次
+make publish                              # 结束时打印主机上要执行的命令
+make publish PUBLISH_TAGS="v0.2.0 latest" # 指定 tag
+```
+
+主机上第一次在 `deploy/.env` 设置 `AISW_IMAGE_REPO=docker.io/dongmu101`，之后每次：
+
+```bash
+git pull && deploy/upgrade.sh --image-tag v0.1.0-107-g3625aaf
+```
+
+脚本会从 tag 里的 `g<提交>` 找出镜像构建时的提交，用它核对本机的 compose 文件。
+首次多平台构建会创建一个名为 `aisw-multiarch` 的 docker-container builder，不会改动默认 builder。
+Docker Hub 新建的仓库默认公开，可在 Docker Hub 设置里调整。
+
 ### 在别的机器上构建，再送到主机
 
 main 上尚未发布的提交，可以在开发机上构建，再经 ssh 送到主机。仓库根目录的 `Makefile` 包好了这几步：

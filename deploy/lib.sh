@@ -297,22 +297,39 @@ image_tag() {
 }
 
 # check_image_tag warns when the compose file in this checkout differs from
-# the one released with the image: a flag added since then is one the older
-# binary rejects at startup. It warns rather than fails, because most compose
-# edits (limits, comments) are harmless to an older image.
+# the one at the commit the image was built from: a flag added since then is
+# one the older binary rejects at startup. It warns rather than fails, because
+# most compose edits (limits, comments) are harmless to an older image.
 #
-# check_image_tag 在本检出的 compose 文件与镜像同版本发布的那份不一致时给出警告：之后新增的
-# 启动参数，旧二进制在启动时会拒绝。只警告不失败，因为多数 compose 改动（上限、注释）对旧镜像
-# 无害。
+# A tag names its commit in one of two ways: a release vX.Y.Z is a git tag,
+# and a build published from a checkout (make publish) carries git describe's
+# <tag>-<n>-g<sha>. Anything else, such as latest, pins no commit.
+#
+# check_image_tag 在本检出的 compose 文件与镜像构建时那个提交的不一致时给出警告：之后新增
+# 的启动参数，旧二进制在启动时会拒绝。只警告不失败，因为多数 compose 改动（上限、注释）对旧
+# 镜像无害。
+#
+# tag 以两种方式指明提交：release 的 vX.Y.Z 是 git tag，从检出发布的构建（make publish）
+# 带 git describe 的 <tag>-<n>-g<sha>。其他写法（如 latest）不固定任何提交。
 check_image_tag() {
-  local tag="$1"
-  [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]] ||
-    warn "AISW_IMAGE_TAG=${tag} 不是固定的 release 版本（vX.Y.Z），回滚时无法确定回到哪个版本"
-  if ! git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+  local tag="$1" commit=""
+  if git -C "$ROOT_DIR" rev-parse -q --verify "refs/tags/${tag}^{commit}" >/dev/null 2>&1; then
+    commit="$tag"
+  elif [[ "$tag" =~ -g([0-9a-f]{7,40})$ ]]; then
+    commit="${BASH_REMATCH[1]}"
+    git -C "$ROOT_DIR" rev-parse -q --verify "${commit}^{commit}" >/dev/null 2>&1 || {
+      warn "本地没有镜像 ${tag} 对应的提交 ${commit}，无法核对 compose 文件与镜像是否同版本（git fetch 后可核对）"
+      return 0
+    }
+  elif [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
     warn "本地没有 git tag ${tag}，无法核对 compose 文件与镜像是否同版本（git fetch --tags 后可核对）"
-  elif ! git -C "$ROOT_DIR" diff --quiet "$tag" HEAD -- deploy/docker-compose.yaml; then
-    warn "deploy/docker-compose.yaml 与镜像版本 ${tag} 发布时不同，${tag} 之后新增的启动参数旧镜像不认识。对照: git -C $ROOT_DIR diff $tag HEAD -- deploy/docker-compose.yaml"
+    return 0
+  else
+    warn "AISW_IMAGE_TAG=${tag} 不固定任何提交（应为 vX.Y.Z 或 make publish 输出的版本），回滚时无法确定回到哪个版本"
+    return 0
   fi
+  git -C "$ROOT_DIR" diff --quiet "$commit" HEAD -- deploy/docker-compose.yaml ||
+    warn "deploy/docker-compose.yaml 与镜像 ${tag} 构建时不同，之后新增的启动参数旧镜像不认识。对照: git -C $ROOT_DIR diff $commit HEAD -- deploy/docker-compose.yaml"
 }
 
 # pull_images pulls every AIServeWeave image at the configured tag. It pulls
@@ -331,7 +348,7 @@ pull_images() {
   log "拉取预构建镜像 ${repo:-ghcr.io/dongmu101}/aiserveweave-*:${tag}"
   # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
   compose pull $BUILD_ORDER ||
-    die "镜像拉取失败：确认 ${tag} 已发布（GitHub Actions 的 Release 流水线已成功）；GHCR 包为私有时先 docker login ghcr.io"
+    die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已 make publish）；仓库为私有时先 docker login"
 }
 
 # prepare_images makes the images that compose up will start: pulled when
