@@ -69,6 +69,7 @@ deploy/upgrade.sh                    # 拉取当前分支的上游提交，备�
 deploy/upgrade.sh gateway console    # 只重建指定服务
 deploy/upgrade.sh --no-pull          # 不拉取代码，直接按当前工作区重建
 deploy/upgrade.sh --image-tag v0.2.0 # 改为拉取该 release 的预构建镜像；--image-tag '' 切回源码构建
+deploy/upgrade.sh --no-build           # 沿用已 load 到本机的镜像（make push），不构建也不拉取
 ```
 
 升级按以下流程进行：
@@ -108,6 +109,26 @@ deploy/upgrade.sh --image-tag v0.2.0                                   # 已有�
 - GHCR 包为私有时，先用带 `read:packages` 权限的 token 执行 `docker login ghcr.io`。
 - 拉取模式下 `docker compose up` 带 `--no-build`，缺少镜像会直接报错，不会悄悄在主机上构建。
   手工操作时使用 `docker compose pull && docker compose up -d --no-build`。
+
+### 在别的机器上构建，再送到主机
+
+main 上尚未发布的提交，可以在开发机上构建，再经 ssh 送到主机。仓库根目录的 `Makefile` 包好了这几步：
+
+```bash
+make images                                   # 为 linux/amd64 构建四个镜像（服务器是 arm64 时加 PLATFORM=linux/arm64）
+make push SERVER=user@host                    # docker save | ssh | docker load，不重启服务
+make deploy SERVER=user@host                  # 以上两步，再在主机上执行 deploy/upgrade.sh --no-build
+make deploy SERVER=user@host SERVICES=gateway # 只更新 Gateway
+make help                                     # 全部目标与变量
+```
+
+- 镜像标为 `ghcr.io/dongmu101/aiserveweave-<服务>:local`，正是主机 `.env` 中 `AISW_IMAGE_TAG` 留空时启动的镜像。
+- `upgrade.sh --no-build` 照常拉取代码、补配置、备份，但不构建也不拉取镜像，缺少镜像时直接中止。
+  主机上的代码会快进到上游提交，因此 `make deploy` 要求本机工作区干净且已推送，镜像与主机代码才出自同一个提交。
+- Go 编译在构建机原生平台上交叉编译，不经过 QEMU；Console 的 `pnpm build` 仍在目标平台模拟下运行，
+  在 Apple Silicon 上较慢，Docker Desktop 开启 Rosetta 可以加快。
+- `make push` 会先核对主机架构与镜像架构，避免把 arm64 镜像送到 amd64 主机。主机用户须能直接执行 `docker`（在 docker 组中）。
+- 无法直连 ssh 时用 `make save`，把压缩包拷到主机后 `gunzip -c <文件> | docker load`，再执行 `deploy/upgrade.sh --no-build`。
 
 ### 必须在主机上构建时
 

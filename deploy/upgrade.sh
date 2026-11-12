@@ -27,6 +27,7 @@
 #   deploy/upgrade.sh gateway console      # rebuild only these services
 #   deploy/upgrade.sh --no-pull            # rebuild the current checkout as it is
 #   deploy/upgrade.sh --image-tag v0.2.0   # pull that release's images instead of building
+#   deploy/upgrade.sh --no-build           # start images already loaded here (make push)
 #   deploy/upgrade.sh --help
 set -euo pipefail
 
@@ -43,6 +44,8 @@ usage() {
   --backup-dir DIR  备份目录（默认 ~/aiserveweave-backups）
   --image-tag TAG   改为拉取该 release 的预构建镜像（写入 .env 的 AISW_IMAGE_TAG）；
                     传空字符串 '' 切回源码构建。拉取模式下总是拉取全部服务的镜像
+  --no-build        不构建也不拉取，直接启动本机已有的镜像（在别处构建后 load 进来，见根目录
+                    Makefile 的 make push）；缺少镜像时中止
   --goproxy URL     源码构建时的 Go 模块代理，如 https://goproxy.cn,direct
   --prune           完成后清理悬空镜像、旧命名的镜像与构建缓存
   -h, --help        显示本帮助
@@ -51,7 +54,7 @@ EOF
 
 ORIGINAL_ARGS=("$@")
 PULL=1 BACKUP=1 PRUNE=0 FROM="" GOPROXY_ARG=""
-SET_TAG=0 IMAGE_TAG_ARG=""
+SET_TAG=0 IMAGE_TAG_ARG="" NO_BUILD=0
 BACKUP_DIR="${AISW_BACKUP_DIR:-$HOME/aiserveweave-backups}"
 SERVICES=()
 while (($# > 0)); do
@@ -59,6 +62,7 @@ while (($# > 0)); do
     --no-pull) PULL=0; shift ;;
     --force) shift ;; # accepted for old commands; a rebuild always runs / 兼容旧命令；总会重建
     --no-backup) BACKUP=0; shift ;;
+    --no-build) NO_BUILD=1; shift ;;
     --backup-dir) BACKUP_DIR="${2:?}"; shift 2 ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
     --image-tag)
@@ -186,17 +190,24 @@ compose config --quiet || die "compose 配置校验失败，服务未改动"
 #
 # 先准备镜像：构建或拉取不改动任何正在运行的东西，而 Registry 备份在 registry-init 镜像里
 # 执行，镜像须已存在，compose 才不会当场构建它。
-if [[ -n "$(image_tag)" && ${#SERVICES[@]} -gt 0 ]]; then
-  log "拉取模式下拉取全部服务的镜像；镜像未变化的容器不会重建"
+UP_FLAGS="$(up_flags)"
+if (( NO_BUILD == 1 )); then
+  require_images
+  log "沿用本机已有的镜像，不构建也不拉取"
+  UP_FLAGS=--no-build
+else
+  if [[ -n "$(image_tag)" && ${#SERVICES[@]} -gt 0 ]]; then
+    log "拉取模式下拉取全部服务的镜像；镜像未变化的容器不会重建"
+  fi
+  prepare_images "$(source_version)" ${SERVICES[@]+"${SERVICES[@]}"}
 fi
-prepare_images "$(source_version)" ${SERVICES[@]+"${SERVICES[@]}"}
 
 (( BACKUP == 0 )) || backup_state "$BACKUP_DIR"
 
 START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "重建有变化的容器（Gateway 重建会断开隧道，Agent 自动重连）"
-# shellcheck disable=SC2046 # empty or one flag / 为空或一个参数
-compose up -d $(up_flags)
+# shellcheck disable=SC2086 # empty or one flag / 为空或一个参数
+compose up -d $UP_FLAGS
 
 health_check || warn "部分服务未就绪，见上方提示"
 count_errors "$START"

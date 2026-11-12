@@ -351,6 +351,24 @@ prepare_images() {
   fi
 }
 
+# require_images fails unless every AIServeWeave image compose will start is
+# already on this host, for images built elsewhere and loaded here (the root
+# Makefile's push target). Without the check, the Registry backup or compose
+# up would quietly build a missing image on the host.
+#
+# require_images 要求 compose 将启动的每个 AIServeWeave 镜像都已在本机，用于在别处构建、
+# 再 load 到本机的镜像（根目录 Makefile 的 push 目标）。不检查的话，Registry 备份或
+# compose up 会悄悄在本机构建缺失的镜像。
+require_images() {
+  local image missing=()
+  # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
+  while read -r image; do
+    docker image inspect "$image" >/dev/null 2>&1 || missing+=("$image")
+  done < <(compose config --images $BUILD_ORDER | grep '/aiserveweave-' | sort -u)
+  (( ${#missing[@]} == 0 )) ||
+    die "--no-build 要求镜像已在本机，缺少: ${missing[*]}（在构建机上执行 make push SERVER=...）"
+}
+
 # up_flags prints the extra compose up flags for this image source. With
 # pulled images, --no-build turns a missing image into an error instead of a
 # silent build on the host.

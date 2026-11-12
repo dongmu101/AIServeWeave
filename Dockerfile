@@ -11,8 +11,18 @@
 #
 #   docker build --build-arg SERVICE=aiServeWeaveGateway -t aisw-gateway .
 
-FROM golang:1.27.4-alpine AS build
+# The build stage runs on the builder's own platform and cross-compiles for the
+# target (CGO is off, so no target toolchain is needed). Building a linux/amd64
+# image on an arm64 Mac, or the arm64 image in release CI, would otherwise run
+# the whole Go compile under QEMU, several times slower.
+#
+# 构建阶段跑在构建机自己的平台上，交叉编译到目标平台（CGO 关闭，不需要目标平台工具链）。
+# 否则在 arm64 Mac 上构建 linux/amd64 镜像、或在 release CI 里构建 arm64 镜像时，整个 Go
+# 编译都要在 QEMU 模拟下跑，慢好几倍。
+FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
 ARG SERVICE
+ARG TARGETOS
+ARG TARGETARCH
 # VERSION is stamped into the binary's `main.version` (see each service's
 # `-version` flag) so a running container reports the tag it was built from
 # instead of always saying "dev". Release CI passes the tag; a plain
@@ -55,7 +65,7 @@ COPY . .
 # 占了构建时间的大头。
 RUN --mount=type=cache,target=/root/.cache/go-build \
     test -n "$SERVICE" || (echo "SERVICE build-arg is required" >&2; exit 1) && \
-    CGO_ENABLED=0 go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/service ./service/${SERVICE}
+    CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/service ./service/${SERVICE}
 
 # agent-dist cross-compiles the Agent for every platform in AGENT_PLATFORMS and
 # lays out the directory the Gateway serves under /agent/. It does the work only
