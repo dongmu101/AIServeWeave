@@ -51,6 +51,16 @@ HUB_REPO          ?= docker.io/dongmu101
 PUBLISH_PLATFORMS ?= linux/amd64,linux/arm64
 PUBLISH_TAGS      ?= $(VERSION)
 BUILDER           ?= aisw-multiarch
+# BuildKit steps run at once in that builder. A multi-platform build otherwise
+# compiles Go for every platform at the same time, which a Docker Desktop VM
+# of a few GiB cannot hold. Takes effect when the builder is created
+# (make builder-reset recreates it).
+# 该 builder 同时执行的 BuildKit 步骤数。否则多平台构建会同时为每个平台编译 Go，几 GiB 的
+# Docker Desktop 虚拟机装不下。创建 builder 时生效（make builder-reset 重建）。
+BUILD_PARALLELISM ?= 1
+# Docker memory below this gets a warning before building.
+# Docker 内存低于这个值时，构建前给出警告。
+MIN_DOCKER_MEM_GIB ?= 4
 SOURCE_URL        ?= https://github.com/dongmu101/AIServeWeave
 
 ARCH            := $(lastword $(subst /, ,$(PLATFORM)))
@@ -67,7 +77,7 @@ SERVICE_registry     := aiServeWeaveRegistry
 SERVICE_controlplane := aiServeWeaveControlPlane
 SERVICE_gateway      := aiServeWeaveGateway
 
-.PHONY: help images local push save deploy publish builder check-server check-git clean
+.PHONY: help images local push save deploy publish builder builder-reset check-docker-mem check-server check-git clean
 
 help: ## 列出可用目标与变量
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -86,7 +96,17 @@ help: ## 列出可用目标与变量
 	@echo "    PUBLISH_PLATFORMS=...  publish 的平台（$(PUBLISH_PLATFORMS)）"
 	@echo "    当前版本: $(VERSION)"
 
-images: $(addprefix image-,$(SERVICES)) ## 为 PLATFORM 构建镜像并载入本机 Docker
+# Warns only: a build may still fit, and the fix (Docker Desktop settings) is
+# outside this Makefile.
+# 只警告：构建仍可能装得下，而解决办法（Docker Desktop 设置）不在本 Makefile 里。
+check-docker-mem:
+	@mem="$$(docker info --format '{{.MemTotal}}' 2>/dev/null)" || { echo "无法连接 Docker：先启动 Docker Desktop" >&2; exit 1; }; \
+	  if (( mem < $(MIN_DOCKER_MEM_GIB) * 1024 * 1024 * 1024 )); then \
+	    echo "警告: Docker 只有 $$((mem / 1024 / 1024)) MiB 内存，Go / Next.js 构建可能被 OOM 杀掉（signal: killed）。" >&2; \
+	    echo "      在 Docker Desktop → Settings → Resources → Memory 调到 6 GB 以上，Apply & restart 后重试" >&2; \
+	  fi
+
+images: check-docker-mem $(addprefix image-,$(SERVICES)) ## 为 PLATFORM 构建镜像并载入本机 Docker
 	@echo "==> 已构建 $(PLATFORM)（版本 $(VERSION)）:"; printf '    %s\n' $(IMAGES)
 
 local: ## 为本机平台构建，供本地 docker compose up 试跑
@@ -162,7 +182,7 @@ deploy: check-server check-git images push ## 构建 + 送达 + 在服务器上 
 # docker-container 驱动的 builder，这里以独立名字创建一次，不改动默认 builder。tag 取
 # git describe，指明了提交；服务器据此核对自己的 compose 文件（deploy/lib.sh 的
 # check_image_tag）。
-publish: check-git builder $(addprefix publish-,$(SERVICES)) ## 构建 amd64 + arm64 镜像并推送到 Docker Hub
+publish: check-git check-docker-mem builder $(addprefix publish-,$(SERVICES)) ## 构建 amd64 + arm64 镜像并推送到 Docker Hub
 	@echo "==> 已推送到 $(HUB_REPO)（$(PUBLISH_PLATFORMS)）:"
 	@for s in $(SERVICES); do for t in $(PUBLISH_TAGS); do echo "    $(HUB_REPO)/aiserveweave-$${s}:$${t}"; done; done
 	@echo
@@ -172,8 +192,14 @@ publish: check-git builder $(addprefix publish-,$(SERVICES)) ## 构建 amd64 + a
 
 builder:
 	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || { \
-	  echo "==> 创建多平台 builder $(BUILDER)"; \
-	  docker buildx create --name $(BUILDER) --driver docker-container >/dev/null; }
+	  echo "==> 创建多平台 builder $(BUILDER)（同时执行 $(BUILD_PARALLELISM) 个构建步骤）"; \
+	  mkdir -p dist; \
+	  printf '[worker.oci]\n  max-parallelism = %s\n' "$(BUILD_PARALLELISM)" > dist/buildkitd.toml; \
+	  docker buildx create --name $(BUILDER) --driver docker-container --buildkitd-config dist/buildkitd.toml >/dev/null; }
+
+builder-reset: ## 删除并重建多平台 builder（改了 BUILD_PARALLELISM 后用；会清空它的构建缓存）
+	-docker buildx rm $(BUILDER)
+	@$(MAKE) --no-print-directory builder
 
 publish-console:
 	@echo "==> 构建并推送 console（$(PUBLISH_PLATFORMS)）"
