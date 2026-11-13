@@ -98,7 +98,7 @@ function navItemClass(active: boolean): string {
     variant: "ghost",
     size: "sm",
     className: active
-      ? "relative px-2.5 text-foreground after:absolute after:inset-x-2.5 after:-bottom-3.5 after:h-0.5 after:rounded-full after:bg-primary"
+      ? "relative px-2.5 text-foreground after:absolute after:inset-x-2.5 after:-bottom-3.5 after:h-0.5 after:rounded-full after:bg-brand"
       : "relative px-2.5 text-muted-foreground",
   });
 }
@@ -240,7 +240,7 @@ export function ConsoleShell({
             <DropdownMenuTrigger
               aria-label={t("tenant.accountMenu")}
               disabled={leaving}
-              render={<Button variant="outline" size="icon" className="rounded-full border-primary/50 bg-primary/20 text-xs font-semibold text-accent-foreground hover:bg-primary/30 hover:text-accent-foreground aria-expanded:bg-primary/30 aria-expanded:text-accent-foreground" />}
+              render={<Button variant="outline" size="icon" className="rounded-full border-brand/50 bg-brand/20 text-xs font-semibold text-accent-foreground hover:bg-brand/30 hover:text-accent-foreground aria-expanded:bg-brand/30 aria-expanded:text-accent-foreground" />}
             >
               <span aria-hidden="true">{initial}</span>
             </DropdownMenuTrigger>

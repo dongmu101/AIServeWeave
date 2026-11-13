@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { parseUsageSummary, type UsageSummary, type UsageSummaryEntry } from "@/lib/console/usage";
+import { CHART_COLORS } from "@/lib/console/chart-colors";
 
 /** localToIso turns a `datetime-local` input value into an RFC 3339
  * timestamp, or "" when the field is empty — the shape `GET
@@ -48,6 +49,7 @@ function totalsOf(items: UsageSummaryEntry[]) {
 function tokensByModelOption(items: UsageSummaryEntry[], t: Translator) {
   const sorted = [...items].sort((a, b) => b.totalTokens - a.totalTokens);
   return {
+    color: CHART_COLORS,
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
     grid: { left: 140, right: 24, top: 16, bottom: 24 },
     xAxis: { type: "value", name: "token" },

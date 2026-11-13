@@ -116,7 +116,7 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
                         aria-current={active ? "true" : undefined}
                         className={cn(
                           "flex min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm",
-                          active ? "bg-primary/20 text-accent-foreground" : "hover:bg-muted"
+                          active ? "bg-brand/20 text-accent-foreground" : "hover:bg-muted"
                         )}
                       >
                         <MethodBadge method={doc.method} className="w-12 justify-center" />

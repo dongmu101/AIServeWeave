@@ -360,6 +360,8 @@ test("tenants pre-order a presale, cannot buy a sold-out one, and see the paid o
     status: "paid", created_at: "2026-11-11T00:00:00Z", updated_at: "2026-11-11T00:00:00Z",
   }] } }));
   await page.route(`${CHECKOUT_URL}**`, route => route.fulfill({ contentType: "text/html", body: "<title>checkout</title>" }));
+  await page.goto("/console/billing");
+  await expect(page.getByRole("tab", { name: "账号购买", exact: true })).toHaveAttribute("aria-selected", "true");
   await page.goto("/console/billing?tab=orders");
   await expect(page.getByText("已付款，待发货", { exact: true })).toBeVisible();
   await page.getByRole("tab", { name: "账号购买", exact: true }).click();

@@ -73,12 +73,14 @@ function isBillingTab(value: string | null): value is BillingTab {
 
 /** useBillingTab keeps the open section in the query, so a reload or a
  * shared link opens the same one. Without a choice it opens the orders after
- * a payment return, the monthly accounts for a tenant on them, and the
- * packages otherwise; a section not offered falls back the same way. The URL is replaced in place: switching sections does
+ * a payment return, account purchases when offered, the monthly accounts for
+ * a tenant on them, and the packages otherwise; a section not offered falls
+ * back the same way. The URL is replaced in place: switching sections does
  * not fill the back button, nor ask the server to render the page again.
  *
  * useBillingTab 把当前分区放在查询参数里，刷新或分享链接时打开同一个分区。未选择时，
- * 支付回跳后打开订单，账号包月的商户打开账号现货，其余打开充值包；未提供的分区同样回退。URL 原地替换：切换
+ * 支付回跳后打开订单，其余优先打开可用的账号购买；未提供时，账号包月的商户打开账号现货，
+ * 其余打开充值包；未提供的分区同样回退。URL 原地替换：切换
  * 分区不会填满后退按钮，也不会让服务端重新渲染页面。 */
 function useBillingTab(fallback: BillingTab, offered: readonly BillingTab[]): [BillingTab, (tab: BillingTab) => void] {
   const searchParams = useSearchParams();
@@ -249,6 +251,7 @@ export function BillingView({ role, returning, alipayReturning = false, ezfpRetu
   });
   const fallback: BillingTab = watching && fiat ? "orders"
     : alipayReturning && methods.alipay ? "alipay"
+    : offered.includes("presales") ? "presales"
     : data?.mode === "account_monthly" ? "accounts"
     : fiat ? "packages"
     : methods.alipay ? "alipay"

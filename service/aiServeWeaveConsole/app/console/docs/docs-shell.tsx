@@ -102,7 +102,7 @@ function DocsNav({ list }: { list: Resource<ApiDocSummary[]> }) {
                 aria-current={active ? "page" : undefined}
                 className={cn(
                   "flex items-center gap-2 rounded-md px-2 py-1.5 text-sm",
-                  active ? "bg-primary/20 font-medium text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  active ? "bg-brand/20 font-medium text-accent-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
                 )}
               >
                 <MethodBadge method={doc.method} className="w-12 justify-center" />

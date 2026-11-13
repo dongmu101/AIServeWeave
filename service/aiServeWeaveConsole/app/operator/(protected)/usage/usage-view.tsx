@@ -15,6 +15,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { parseUsageSummary, type UsageSummary, type UsageSummaryEntry } from "@/lib/console/usage";
+import { CHART_COLORS } from "@/lib/console/chart-colors";
 
 /** localToIso turns a `datetime-local` input value into an RFC 3339
  * timestamp, or "" when the field is empty.
@@ -59,6 +60,7 @@ function byModel(items: UsageSummaryEntry[]): { model: string; totalTokens: numb
 
 function tokensByModelOption(rows: { model: string; totalTokens: number }[], t: Translator, locale: Locale) {
   return {
+    color: CHART_COLORS,
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" }, valueFormatter: (value: unknown) => new Intl.NumberFormat(locale).format(Number(value)) },
     grid: { left: 140, right: 24, top: 16, bottom: 24 },
     xAxis: { type: "value", name: "token", axisLabel: { formatter: (value: number) => new Intl.NumberFormat(locale).format(value) } },

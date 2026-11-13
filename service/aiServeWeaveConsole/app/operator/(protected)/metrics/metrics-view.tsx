@@ -13,6 +13,7 @@ import { useResource } from "@/components/console/use-resource";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { deltaByBucket, approxP95 } from "@/lib/console/metrics-charts";
 import { parseMetricsHistory, type MetricsHistory, type MetricsHistorySeries } from "@/lib/console/metrics";
+import { CHART_COLORS } from "@/lib/console/chart-colors";
 
 /**
  * The fleet-wide metrics history page (P08, Console C27).
@@ -47,13 +48,22 @@ function lineOption(
   locale: Locale,
 ) {
   return {
+    color: CHART_COLORS,
     title: { text: title, textStyle: { fontSize: 13 } },
     tooltip: { trigger: "axis", valueFormatter: (value: unknown) => new Intl.NumberFormat(locale).format(Number(value)) },
     legend: { top: 24, textStyle: { fontSize: 11 } },
     grid: { top: 64, left: 48, right: 24, bottom: 48 },
     xAxis: { type: "time", axisLabel: { formatter: (value: number) => new Intl.DateTimeFormat(locale, { hour: "2-digit", minute: "2-digit" }).format(value) }, axisPointer: { label: { formatter: ({ value }: { value: number }) => new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(new Date(value)) } } },
     yAxis: { type: "value", name: unit, axisLabel: { formatter: (value: number) => new Intl.NumberFormat(locale).format(value) } },
-    dataZoom: [{ type: "inside" }, { type: "slider", height: 16 }],
+    dataZoom: [{ type: "inside" }, {
+      type: "slider",
+      height: 16,
+      borderColor: "#e7e5e4",
+      fillerColor: "rgba(184, 134, 11, 0.14)",
+      selectedDataBackground: { lineStyle: { color: CHART_COLORS[0] }, areaStyle: { color: CHART_COLORS[0] } },
+      moveHandleStyle: { color: "#d6d3d1" },
+      emphasis: { moveHandleStyle: { color: "#a8a29e" } },
+    }],
     series: lines.map((l) => ({
       name: l.name,
       type: "line",

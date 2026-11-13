@@ -204,7 +204,7 @@ export function ExamplePanel({
                 onClick={() => setActive(index)}
                 className={cn(
                   "shrink-0 border-b-2 px-2 py-2 font-mono text-xs",
-                  selected ? "border-primary text-accent-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
+                  selected ? "border-brand text-accent-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
                   tab.tone === "error" && !selected && "text-destructive/80"
                 )}
               >

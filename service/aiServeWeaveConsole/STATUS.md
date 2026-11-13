@@ -1,3 +1,9 @@
+## 计费页默认账号购买（2026-11-14）
+
+商户直接访问 `/console/billing` 时优先选中可用的「账号购买」分区；显式标签、支付回跳和无预售商品时的回退沿用原流程。使用说明见[账号预售](../../docs/billing-accounts.md#账号预售)。
+
+验证：375 项单元测试、类型检查、lint（仅既有 alerts 页警告）、Webpack 生产构建和 Chrome 计费专项 29 项通过。浏览器使用隔离回环服务与模拟 API；未部署生产。
+
 ## 商户订单删除（2026-11-13）
 
 商户计费页「订单」新增删除与确认框，owner/admin 可删除任意状态的本商户订单；member 只读。删除持久化为 `checkout_orders.tenant_deleted_at`，仅商户列表隐藏，运维历史、付款恢复、去重、发货、退款与库存占用继续使用原订单。新接口为 `DELETE /admin/v1/billing/orders/:id`，成功 `204`，跨商户、未知与已删除统一 `404`，审计动作 `billing.order.delete`。Console 白名单、八语言提示、失败保留确认框与末页回退已接入。迁移为 PostgreSQL/MySQL `billing/0010_order_deletion.sql`，`sql/init.sql` 已同步；控制面与 Console 须一起更新。行为与升级说明见[商户订单删除](../../docs/billing-orders.md)。
@@ -503,7 +509,7 @@ Agent 接入页面新增默认不勾选的「共享给所有租户」，安装�
 
 账号预售（2026-11-11）：平台计费页新增「账号预售」标签页，包含预售商品（类型、名称、币种、月价、Dodo 产品 ID、名额、上架；显示「待发货 x / 名额 y」）和「待发货订单」两块。待发货订单经 `fulfillment=awaiting` 分页读取，每行可以「分配账号」：对话框只列出同类型、不在商户自有节点、空闲或已属于该商户的库存，最终仍以控制面判断为准。也可以「退款」，填写原因后全额退款，这是 Console 首个运维退款入口。商户计费页在有预售时显示「账号预售」区块，售罄时禁用购买；订单表显示「已付款，待发货」，支付回跳确认的是预售订单时，提示账号将在数小时内分配。`/pricing` 增加预售区块。账号编辑器创建时带上 Agent 上报的类型，旧商品可以补填类型，下架时允许不填价格与产品。`ConfirmDialog` 新增可选的 `children` 与 `confirmDisabled`。契约镜像在 `lib/console/account-presales.ts`；新增 6 条白名单与 3 个错误类型，八语言文案齐备；所有写操作只发送一次。
 
-商户计费页布局整理（2026-11-11）：页头右侧放「管理付款与收据」（门户提示改为按钮 `title`），下方是精简的余额 / 计费模式摘要（「只有 owner 与 admin 可购买」的提示移到这里），其余内容分为「充值包 / 账号现货 / 账号购买 / 订单 / 账目」标签页；「账号购买」（预售）只在有预售商品时提供，其读取提到页面层，支付回跳确认后重新读取。当前标签写入查询参数 `tab`（`window.history.replaceState`，不触发服务端重渲染、不占后退历史），刷新或分享链接时保持不变；没有 `tab` 时，支付回跳打开订单，`account_monthly` 商户打开账号现货，其余打开充值包；指定了未提供的分区时同样回退。账号现货区分「我的账号」与「可购买的账号」：既未持有也未上架的账号不再列给商户；搜索框只在可购买账号超过一页（12 个）时出现，分页控件只在多于一页时出现；商户侧去掉「刷新账号」按钮。运维账号视图与之前相同。卡片按钮不再占满整行，名称最多显示两行。中文界面把商品区块「账号包月」改名为「账号现货」、「账号预售」改名为「账号购买」（`tenant.accountMonthly`、`tenant.presale`、`pricing.accounts`、`pricing.presales`，简繁两种，运维标签页与 `/pricing` 一并生效）；计费模式名称拆为独立的 `tenant.billingModeAccountMonthly`，仍显示「账号包月」。新增八语言文案 `tenant.accountMine`、`tenant.accountAvailable`、`tenant.accountNoneAvailable`、`tenant.billingSections`。lint、typecheck、单元测试、build 与 `e2e/billing.spec.ts`（16 项）通过；`console.spec.ts` 中「navigation marks only the current tenant page」（`/console/jobs/history`）在改动前就已失败，与本次无关。
+商户计费页布局整理（2026-11-11）：页头右侧放「管理付款与收据」（门户提示改为按钮 `title`），下方是精简的余额 / 计费模式摘要（「只有 owner 与 admin 可购买」的提示移到这里），其余内容分为「充值包 / 账号现货 / 账号购买 / 订单 / 账目」标签页；「账号购买」（预售）只在有预售商品时提供，其读取提到页面层，支付回跳确认后重新读取。当前标签写入查询参数 `tab`（`window.history.replaceState`，不触发服务端重渲染、不占后退历史），刷新或分享链接时保持不变；没有 `tab` 时，支付回跳打开对应的订单或支付宝分区，其余优先打开可用的「账号购买」；没有预售商品时，`account_monthly` 商户打开账号现货，其余按付款方式回退到充值包、支付宝或账目；指定了未提供的分区时同样回退。账号现货区分「我的账号」与「可购买的账号」：既未持有也未上架的账号不再列给商户；搜索框只在可购买账号超过一页（12 个）时出现，分页控件只在多于一页时出现；商户侧去掉「刷新账号」按钮。运维账号视图与之前相同。卡片按钮不再占满整行，名称最多显示两行。中文界面把商品区块「账号包月」改名为「账号现货」、「账号预售」改名为「账号购买」（`tenant.accountMonthly`、`tenant.presale`、`pricing.accounts`、`pricing.presales`，简繁两种，运维标签页与 `/pricing` 一并生效）；计费模式名称拆为独立的 `tenant.billingModeAccountMonthly`，仍显示「账号包月」。新增八语言文案 `tenant.accountMine`、`tenant.accountAvailable`、`tenant.accountNoneAvailable`、`tenant.billingSections`。lint、typecheck、单元测试、build 与 `e2e/billing.spec.ts`（16 项）通过；`console.spec.ts` 中「navigation marks only the current tenant page」（`/console/jobs/history`）在改动前就已失败，与本次无关。
 
 验证：ESLint 无错误（仍有既有的 alerts 页 TanStack Virtual 警告）、TS7 类型检查、338 项 Node 测试与生产构建通过。使用本机 Chrome（`AISW_BROWSER_CHANNEL=chrome`）跑计费专项 15 项全部通过，新增商户预购、售罄与 409 不重试、运维新建预售并按类型分配三项。`console.spec.ts` 80/81 通过，失败的 `/console/jobs/history` 导航高亮用例与本次改动无关，未在本次处理。浏览器测试使用模拟 API，不能替代真实控制面、付款与部署验收。
 

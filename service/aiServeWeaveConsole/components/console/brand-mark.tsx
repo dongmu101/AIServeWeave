@@ -9,7 +9,7 @@ export function BrandMark({ className }: { className?: string }) {
   return (
     <span
       aria-hidden="true"
-      className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg bg-primary text-primary-foreground", className)}
+      className={cn("flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand text-brand-foreground", className)}
     >
       <WaypointsIcon className="size-4" />
     </span>
