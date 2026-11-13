@@ -210,7 +210,7 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	var models []runtime.Model
 	efforts := map[string][]string{}
 	var server *protocol
-	err = withServer(ctx, r.executable, r.env, func(p *protocol, _ string) error {
+	err = withReadServer(ctx, r.executable, r.env, func(p *protocol, _ string) error {
 		p.activity = touch
 		server = p
 		if err := initializeServer(p); err != nil {

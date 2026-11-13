@@ -200,7 +200,15 @@ func appServerArgs(dir string) []string { return serverArgs(dir, false) }
 // the hosted image_generation tool enabled; every other host tool stays off.
 // serverArgs 构造隔离的 app-server 命令行。image 只额外保留托管的
 // image_generation 工具，其余宿主工具一律关闭。
-func serverArgs(dir string, image bool) []string {
+func serverArgs(dir string, image bool) []string { return serverArgsIn(dir, "", image) }
+
+// serverArgsIn is serverArgs with sqlite_home set to state; empty state keeps
+// it in dir.
+// serverArgsIn 是把 sqlite_home 设为 state 的 serverArgs；state 为空时仍放在 dir。
+func serverArgsIn(dir, state string, image bool) []string {
+	if state == "" {
+		state = dir
+	}
 	args := []string{"app-server", "--listen", "stdio://"}
 	// Keep code_mode_host available: disabling it also hides client dynamic tools.
 	// 保留 code_mode_host：关闭它也会让客户端动态工具不可见。
@@ -212,7 +220,7 @@ func serverArgs(dir string, image bool) []string {
 	}
 	args = append(args, "--enable", "skip_host_skill_discovery")
 	for _, value := range []string{`mcp_servers={}`, `hooks={}`, `plugins={}`, `web_search="disabled"`, `tools.view_image=false`, `project_doc_max_bytes=0`,
-		`history.persistence="none"`, `analytics.enabled=false`, `forced_login_method="chatgpt"`, "sqlite_home=" + strconv.Quote(dir), "log_dir=" + strconv.Quote(dir)} {
+		`history.persistence="none"`, `analytics.enabled=false`, `forced_login_method="chatgpt"`, "sqlite_home=" + strconv.Quote(state), "log_dir=" + strconv.Quote(dir)} {
 		args = append(args, "-c", value)
 	}
 	return args

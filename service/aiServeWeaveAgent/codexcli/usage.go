@@ -34,7 +34,7 @@ func AccountUsageReader(accountDir string) func(context.Context) (cliusage.Accou
 
 func readAccountUsage(ctx context.Context, program string, env []string) (cliusage.Account, error) {
 	var account cliusage.Account
-	err := withServer(ctx, program, env, func(p *protocol, _ string) error {
+	err := withReadServer(ctx, program, env, func(p *protocol, _ string) error {
 		if err := initializeServer(p); err != nil {
 			return err
 		}
