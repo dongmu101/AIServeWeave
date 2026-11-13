@@ -63,7 +63,7 @@ function ComfyNodeCard({ data, selected }: NodeProps<ComfyFlowNode>) {
       key={field.name}
       style={{ height: NODE_ROW_HEIGHT }}
       title={field.bound.length > 0 ? t("common.templateInputWritesToThisField", { value: field.bound.join(", ") }) : undefined}
-      className={cn("relative flex items-center gap-2 px-2 text-[11px]", field.bound.length > 0 && "bg-primary/10 font-medium")}
+      className={cn("relative flex items-center gap-2 px-2 text-[11px]", field.bound.length > 0 && "bg-primary/20 font-medium")}
     >
       {field.kind === "link" && !field.dangling && <Handle type="target" position={Position.Left} id={`in-${field.name}`} isConnectable={false} />}
       <span className="shrink-0 text-muted-foreground">{field.name}</span>

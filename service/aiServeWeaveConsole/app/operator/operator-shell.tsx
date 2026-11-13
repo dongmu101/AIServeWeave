@@ -67,7 +67,7 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
   return <div className="flex min-h-full flex-1 flex-col bg-muted/40">
     <header className="border-b bg-background">
       <div className="mx-auto flex min-h-14 max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
-        <span className="mr-auto flex items-center gap-2 font-heading text-sm font-semibold"><BrandMark className="bg-foreground text-background" /><Message id="auth.aiserveweavePlatformOperations" /></span>
+        <span className="mr-auto flex items-center gap-2 font-heading text-sm font-semibold"><BrandMark className="bg-foreground text-primary" /><Message id="auth.aiserveweavePlatformOperations" /></span>
         <LanguageSwitcher />
         <Link href="/console" className={buttonVariants({ variant: "ghost", size: "sm" })}><Message id="operator.tenantConsole" /></Link>
         <span className="hidden max-w-40 truncate text-sm text-muted-foreground sm:inline" title={operator.name || operator.email}>{operator.name || operator.email}</span>

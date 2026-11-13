@@ -105,7 +105,7 @@ function ParamItem({ param }: { param: ApiDocParam }) {
   return (
     <div className="py-3">
       <div className="flex flex-wrap items-center gap-2">
-        <code className="font-mono text-sm font-semibold text-primary">{param.name}</code>
+        <code className="font-mono text-sm font-semibold text-accent-foreground">{param.name}</code>
         <span className="rounded bg-muted px-1.5 py-0.5 font-mono text-xs text-muted-foreground">{param.type}</span>
         {param.required ? (
           <span className="rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive"><Message id="tenant.required" /></span>
@@ -204,7 +204,7 @@ export function ExamplePanel({
                 onClick={() => setActive(index)}
                 className={cn(
                   "shrink-0 border-b-2 px-2 py-2 font-mono text-xs",
-                  selected ? "border-primary text-primary" : "border-transparent text-muted-foreground hover:text-foreground",
+                  selected ? "border-primary text-accent-foreground" : "border-transparent text-muted-foreground hover:text-foreground",
                   tab.tone === "error" && !selected && "text-destructive/80"
                 )}
               >
@@ -277,7 +277,7 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
     <div className="grid grid-cols-1 gap-8 xl:grid-cols-[minmax(0,1fr)_minmax(0,26rem)] 2xl:grid-cols-[minmax(0,1fr)_minmax(0,32rem)]">
       <article className="flex min-w-0 flex-col gap-6">
         <header className="flex flex-col gap-3">
-          <p className="text-sm font-medium text-primary">{doc.category}</p>
+          <p className="text-sm font-medium text-accent-foreground">{doc.category}</p>
           <h1 className="font-heading text-2xl font-semibold tracking-tight">{doc.title}</h1>
           {doc.summary ? <p className="text-muted-foreground">{doc.summary}</p> : null}
           {c.highlights.length > 0 ? (
@@ -293,7 +293,7 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
 
         {c.notice ? (
           <div className="flex gap-3 rounded-xl border bg-muted/30 p-4 text-sm">
-            <InfoIcon className="mt-0.5 size-4 shrink-0 text-primary" />
+            <InfoIcon className="mt-0.5 size-4 shrink-0 text-accent-foreground" />
             <p className="whitespace-pre-line">{c.notice}</p>
           </div>
         ) : null}
@@ -314,7 +314,7 @@ export function ApiDocArticle({ doc, values }: { doc: ApiDocPage; values: Exampl
             <p className="text-sm text-muted-foreground"><Message id="common.thisEndpointDoesNotRequireAuthentication" /></p>
           )}
           {c.auth === "bearer" ? (
-            <p className="text-sm text-muted-foreground"><Message id="common.createAKeyOnTheCompleteKeyIs" values={{ link: <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
+            <p className="text-sm text-muted-foreground"><Message id="common.createAKeyOnTheCompleteKeyIs" values={{ link: <Link href="/console/keys" className="font-medium text-accent-foreground underline underline-offset-4">
                 <Message id="tenant.apiKeyManagementPage" /></Link> }} /></p>
           ) : null}
         </DocSection>

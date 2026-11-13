@@ -95,7 +95,7 @@ export function DocsOverview() {
         <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
           <h2 className="font-heading font-semibold"><Message id="tenant.authentication" /></h2>
           <code className="rounded-lg bg-muted/40 px-3 py-2 font-mono text-sm">Authorization: Bearer YOUR_API_KEY</code>
-          <p className="text-sm text-muted-foreground"><Message id="tenant.createAKeyOnAndAlsoAcceptThe" values={{ link: <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
+          <p className="text-sm text-muted-foreground"><Message id="tenant.createAKeyOnAndAlsoAcceptThe" values={{ link: <Link href="/console/keys" className="font-medium text-accent-foreground underline underline-offset-4">
               <Message id="tenant.apiKeyManagementPage" /></Link>, code: <code className="font-mono">/v1/messages</code>, code2: <code className="font-mono">/v1/models</code>, code3: <code className="font-mono">x-api-key</code> }} /></p>
         </div>
       </section>
