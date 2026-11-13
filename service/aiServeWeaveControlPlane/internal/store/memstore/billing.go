@@ -506,7 +506,8 @@ func (s *Store) ListCheckoutOrders(_ context.Context, query store.ListQuery, fil
 	defer s.mu.Unlock()
 	var items []model.CheckoutOrder
 	for _, o := range s.billing.orders {
-		if (filter.TenantID == "" || o.TenantID == filter.TenantID) && (filter.Status == "" || o.Status == filter.Status) &&
+		if (!filter.ExcludeTenantDeleted || o.TenantDeletedAt == nil) &&
+			(filter.TenantID == "" || o.TenantID == filter.TenantID) && (filter.Status == "" || o.Status == filter.Status) &&
 			(!filter.Awaiting || store.PresaleAwaiting(o)) && (filter.Provider == "" || o.Provider == filter.Provider) &&
 			(filter.CreatedAfter.IsZero() || o.CreatedAt.After(filter.CreatedAfter)) &&
 			(filter.CreatedBefore.IsZero() || o.CreatedAt.Before(filter.CreatedBefore)) {
@@ -516,6 +517,21 @@ func (s *Store) ListCheckoutOrders(_ context.Context, query store.ListQuery, fil
 	key := func(o model.CheckoutOrder) (time.Time, string) { return o.CreatedAt, o.ID }
 	sortNewestFirst(items, key)
 	return paginate(items, query, key)
+}
+
+// DeleteCheckoutOrder implements store.Billing.
+//
+// DeleteCheckoutOrder 实现 store.Billing。
+func (s *Store) DeleteCheckoutOrder(_ context.Context, tenantID, orderID string, now time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	order, ok := s.billing.orders[orderID]
+	if !ok || order.TenantID != tenantID || order.TenantDeletedAt != nil {
+		return store.ErrNotFound
+	}
+	order.TenantDeletedAt = &now
+	s.billing.orders[orderID] = order
+	return nil
 }
 
 // ListCreditLedger implements store.Billing.

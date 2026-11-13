@@ -843,6 +843,8 @@ const tenant = {
   "tenant.billingProviderEzfpWxpay": "Epay · WeChat Pay",
   "tenant.billingProviderEzfpUsdt": "Epay · USDT",
   "tenant.billingProviderOpcpay": "Alipay-Kontingent",
+  "tenant.billingDeleteOrder": "Bestellung löschen",
+  "tenant.billingDeleteOrderDescription": "Bestellung {id} aus Ihrer Bestellliste löschen? Dies storniert keine Zahlung, beantragt keine Erstattung und ändert weder Guthaben noch Kontozugriff. Transaktionsdaten bleiben erhalten.",
   "tenant.billingRecheck": "Erneut prüfen",
   "tenant.billingRecheckHint": "Fragt beim Zahlungsdienst den aktuellen Stand dieser Bestellung ab. Guthaben zählt erst, wenn der Server es bestätigt; ein sofortiges erneutes Klicken liefert nur den aktuellen Stand.",
   "tenant.billingRecheckStillPending": "Die Zahlungsbestätigung steht noch aus. Sie können gleich erneut prüfen.",

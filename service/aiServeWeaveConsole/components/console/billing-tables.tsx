@@ -6,6 +6,7 @@ import { ErrorMessage } from "@/components/i18n/error-message";
 import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
 import { Pager } from "@/components/console/pager";
+import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { usePagedResource } from "@/components/console/use-paged-resource";
@@ -28,6 +29,7 @@ import {
   type LedgerEntry,
 } from "@/lib/console/billing";
 import { formatDateTime } from "@/lib/console/format";
+import { parseNoContent } from "@/lib/console/contract";
 import type { MessageKey } from "@/lib/i18n/messages";
 import type { Translator } from "@/lib/i18n/translate";
 
@@ -224,8 +226,10 @@ export function LedgerTable({ surface = "admin", tenantId = "" }: { surface?: "a
  * OrdersTable 按时间倒序列出结账订单，面向规则与 LedgerTable 相同。订单状态是服务端
  * 依据服务商 webhook 记录的结果——绝不是回跳 URL 声称的结果。
  */
-export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "admin" | "operator"; tenantId?: string }) {
+export function OrdersTable({ surface = "admin", tenantId = "", canDelete = false }: { surface?: "admin" | "operator"; tenantId?: string; canDelete?: boolean }) {
   const { t, locale } = useI18n();
+  const run = useConsoleRequest();
+  const [deleting, setDeleting] = React.useState<CheckoutOrder | null>(null);
   const [status, setStatus] = React.useState("");
   const filters: Record<string, string> = { status };
   if (surface === "operator") filters.tenant_id = tenantId;
@@ -238,6 +242,8 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
   const patched = patch.base === orders.items ? patch.rows : {};
   const rows = orders.items?.map((order) => patched[order.id] ?? order) ?? null;
   const showRecheck = !operator && (rows?.some(recheckable) ?? false);
+  const showDelete = !operator && canDelete;
+  const showActions = showRecheck || showDelete;
 
   return <Card>
     <CardHeader className="flex flex-wrap items-center justify-between gap-3">
@@ -264,7 +270,7 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
             <TableHead className="text-right"><Message id="tenant.billingOrderContent" /></TableHead>
             <TableHead><Message id="tenant.status" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingRefunded" /></TableHead>
-            {showRecheck ? <TableHead><span className="sr-only"><Message id="tenant.action" /></span></TableHead> : null}
+            {showActions ? <TableHead><span className="sr-only"><Message id="tenant.action" /></span></TableHead> : null}
           </TableRow></TableHeader>
           <TableBody>{rows.map((order) => <TableRow key={order.id}>
             <TableCell className="whitespace-nowrap">{formatDateTime(order.createdAt, undefined, locale)}</TableCell>
@@ -281,12 +287,28 @@ export function OrdersTable({ surface = "admin", tenantId = "" }: { surface?: "a
                 : order.status === "paid" ? <span className="text-destructive">{t("tenant.accountOrderUngranted")}</span> : t("tenant.accountMonthly")}</TableCell>
             <TableCell><Badge variant={order.status === "paid" ? "default" : order.status === "failed" || order.status === "disputed" ? "destructive" : "outline"}>{orderStatusLabel(order.status, t)}</Badge></TableCell>
             <TableCell className="text-right whitespace-nowrap">{order.refundedMinor > 0 ? formatMoney(order.refundedMinor, order.currency, locale) : "—"}</TableCell>
-            {showRecheck ? <TableCell>{recheckable(order) ? <RecheckButton order={order} onUpdated={(updated) => setPatch({ base: orders.items, rows: { ...patched, [updated.id]: updated } })} /> : null}</TableCell> : null}
+            {showActions ? <TableCell><div className="flex flex-wrap items-start gap-2">
+              {showRecheck && recheckable(order) ? <RecheckButton order={order} onUpdated={(updated) => setPatch({ base: orders.items, rows: { ...patched, [updated.id]: updated } })} /> : null}
+              {showDelete ? <Button size="sm" variant="destructive" onClick={() => setDeleting(order)}><Message id="common.delete" /></Button> : null}
+            </div></TableCell> : null}
           </TableRow>)}</TableBody>
         </Table>
         <Pager resource={orders} loadedCount={orders.items.length} />
       </>}
     </CardContent>
+    {deleting ? <ConfirmDialog
+      open
+      onOpenChange={(open) => { if (!open) setDeleting(null); }}
+      title={t("tenant.billingDeleteOrder")}
+      description={t("tenant.billingDeleteOrderDescription", { id: deleting.id })}
+      confirmLabel={t("common.delete")}
+      destructive
+      onConfirm={async () => {
+        await run({ method: "DELETE", path: `/admin/v1/billing/orders/${encodeURIComponent(deleting.id)}`, parse: parseNoContent });
+        if (orders.items?.length === 1 && orders.hasPrevious) orders.previous();
+        else orders.reload();
+      }}
+    /> : null}
   </Card>;
 }
 

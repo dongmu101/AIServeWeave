@@ -831,6 +831,8 @@ const tenant = {
   "tenant.billingProviderEzfpWxpay": "Epay · WeChat Pay",
   "tenant.billingProviderEzfpUsdt": "Epay · USDT",
   "tenant.billingProviderOpcpay": "Cuota de Alipay",
+  "tenant.billingDeleteOrder": "Eliminar pedido",
+  "tenant.billingDeleteOrderDescription": "¿Eliminar el pedido {id} de su lista? Esto no cancela el pago, solicita un reembolso ni modifica los créditos o el acceso a la cuenta. Los registros de la transacción se conservan.",
   "tenant.billingRecheck": "Comprobar de nuevo",
   "tenant.billingRecheckHint": "Consulta al servicio de pagos el estado más reciente de este pedido. Los créditos cuentan solo cuando el servidor los confirma; volver a pulsar enseguida solo devuelve el estado actual.",
   "tenant.billingRecheckStillPending": "Aún se espera la confirmación del pago. Puede volver a comprobarlo en unos instantes.",

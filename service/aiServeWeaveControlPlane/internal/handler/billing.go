@@ -204,6 +204,19 @@ func listBillingOrders(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 	})
 }
 
+// deleteBillingOrder handles DELETE /admin/v1/billing/orders/:id.
+//
+// deleteBillingOrder 处理 DELETE /admin/v1/billing/orders/:id。
+func deleteBillingOrder(ctx *svc.ServiceContext) http.HandlerFunc {
+	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
+		if err := ctx.Logic.DeleteBillingOrder(r.Context(), actor, pathvar.Vars(r)["id"]); err != nil {
+			respondErr(w, err)
+			return
+		}
+		w.WriteHeader(http.StatusNoContent)
+	})
+}
+
 // renderOrder renders one order. refundable is the tenant's view of what it
 // may ask to refund; the operator's view replaces it with what of the
 // payment is not refunded yet, and adds the tenant.

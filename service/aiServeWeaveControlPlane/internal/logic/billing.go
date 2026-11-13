@@ -400,9 +400,28 @@ func (s *Service) ListBillingOrders(ctx context.Context, actor Actor, query stor
 	}
 	if !isPlatformActor(actor) {
 		filter.TenantID = actor.TenantID
+		filter.ExcludeTenantDeleted = true
 	}
 	page, err := s.store.ListCheckoutOrders(ctx, query, filter)
 	return page, translate(err)
+}
+
+// DeleteBillingOrder removes an order from the tenant's history while keeping
+// its financial record available to payment processing and operators.
+//
+// DeleteBillingOrder 从租户历史删除订单，同时保留财务记录供付款处理与运维使用。
+func (s *Service) DeleteBillingOrder(ctx context.Context, actor Actor, orderID string) error {
+	if !s.accountsEnabled() {
+		return ErrNotFound
+	}
+	if !actor.canPurchase() {
+		return ErrForbidden
+	}
+	if err := s.store.DeleteCheckoutOrder(ctx, actor.TenantID, orderID, s.clock.Now()); err != nil {
+		return translate(err)
+	}
+	s.audit(ctx, actor.TenantID, actor.UserID, model.ActionBillingOrderDelete, orderID, "removed from tenant order history", actor.IP)
+	return nil
 }
 
 // HandleBillingWebhook verifies and applies one provider webhook. It returns

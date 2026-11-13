@@ -132,6 +132,8 @@ Billing:
 
 订单列表（`/admin/v1/billing/orders`、`/operator/v1/billing/orders`）中，账号订单的 `package_id` 为空、带 `account_id`；付款开通后带 `account_expires_at`。已付款却没有 `account_expires_at` 的账号订单表示未能开通，需要退款。预售订单的 `package_id` 同样为空，改带 `presale_id`；已付款且没有 `account_expires_at` 表示**待发货**，而不是开通失败；分配后同时带 `account_id` 与 `account_expires_at`。平台订单列表接受 `fulfillment=awaiting`，只返回待发货的预售订单，其他取值返回 `400`。
 
+商户 owner/admin 可以从列表删除任意状态的订单；付款、发货和退款继续处理，运维历史保留。接口与升级说明见[商户订单删除](billing-orders.md)。
+
 ## 数据、授权与升级
 
 `billing/0004_account_sales.sql` 为 PostgreSQL 和 MySQL 新增 `account_sales` 库存、`account_purchases` 收据和 `account_sales_lock` 库存容量锁。`billing/0005_account_fiat.sql` 改为法币定价：`account_sales` 新增 `price_minor`、`currency`、`dodo_product_id` 并删除 `price_micro`，`checkout_orders` 新增 `account_id`、`account_expires_at` 与索引 `idx_checkout_orders_account`。**迁移会把全部现有账号商品设为下架、价格清零**，已售出的商户与到期时间保留；运维须为每个商品填写法币价格与 Dodo 产品 ID 后重新上架。`account_purchases` 与 `account_purchase` 账目保留为历史记录，不再写入。`billing/0006_account_presale.sql` 新增 `account_presales` 表，为 `account_sales` 新增 `kind`（现有行为空），为 `checkout_orders` 新增 `presale_id` 与索引 `idx_checkout_orders_presale`。迁移不修改已有数据；现有商品需要在编辑中补填类型后才能用于预售分配。

@@ -486,6 +486,9 @@ func (s *Store) SetCheckoutOrderSession(ctx context.Context, orderID, sessionID 
 // ListCheckoutOrders 实现 store.Billing。
 func (s *Store) ListCheckoutOrders(ctx context.Context, query store.ListQuery, filter store.CheckoutOrderFilter) (store.Page[model.CheckoutOrder], error) {
 	db := s.db.WithContext(ctx).Model(&model.CheckoutOrder{})
+	if filter.ExcludeTenantDeleted {
+		db = db.Where("tenant_deleted_at IS NULL")
+	}
 	if filter.TenantID != "" {
 		db = db.Where("tenant_id = ?", filter.TenantID)
 	}
@@ -505,6 +508,22 @@ func (s *Store) ListCheckoutOrders(ctx context.Context, query store.ListQuery, f
 		db = db.Where("created_at < ?", filter.CreatedBefore)
 	}
 	return readPage(db, query, func(o model.CheckoutOrder) (time.Time, string) { return o.CreatedAt, o.ID })
+}
+
+// DeleteCheckoutOrder implements store.Billing.
+//
+// DeleteCheckoutOrder 实现 store.Billing。
+func (s *Store) DeleteCheckoutOrder(ctx context.Context, tenantID, orderID string, now time.Time) error {
+	result := s.db.WithContext(ctx).Model(&model.CheckoutOrder{}).
+		Where("id = ? AND tenant_id = ? AND tenant_deleted_at IS NULL", orderID, tenantID).
+		UpdateColumn("tenant_deleted_at", now)
+	if result.Error != nil {
+		return translate(result.Error)
+	}
+	if result.RowsAffected == 0 {
+		return store.ErrNotFound
+	}
+	return nil
 }
 
 // ListCreditLedger implements store.Billing.

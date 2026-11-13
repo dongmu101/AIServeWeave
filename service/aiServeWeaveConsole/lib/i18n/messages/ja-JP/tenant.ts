@@ -831,6 +831,8 @@ const tenant = {
   "tenant.billingProviderEzfpWxpay": "易支付 · WeChat Pay",
   "tenant.billingProviderEzfpUsdt": "易支付 · USDT",
   "tenant.billingProviderOpcpay": "Alipay クォータ",
+  "tenant.billingDeleteOrder": "注文を削除",
+  "tenant.billingDeleteOrderDescription": "注文 {id} を注文一覧から削除しますか？支払いのキャンセルや返金申請は行われず、クレジットやアカウントの利用権も変わりません。取引記録は保持されます。",
   "tenant.billingRecheck": "再確認",
   "tenant.billingRecheckHint": "決済サービスにこの注文の最新状態を問い合わせます。クレジットの反映はサーバーの確認が基準です。続けて押しても現在の状態が返るだけです。",
   "tenant.billingRecheckStillPending": "まだ決済の確認を待っています。しばらくしてから再確認できます。",

@@ -297,7 +297,7 @@ export function BillingView({ role, returning, alipayReturning = false, ezfpRetu
           <PresaleSales resource={presales} canPurchase={canPurchase} methods={methods} resume={alipayReturning} />
         </TabsContent>
         <TabsContent value="orders" className="mt-2">
-          <OrdersTable key={historyKey} />
+          <OrdersTable key={historyKey} canDelete={canPurchaseCredits(role)} />
         </TabsContent>
         <TabsContent value="ledger" className="mt-2">
           <LedgerTable key={historyKey} />

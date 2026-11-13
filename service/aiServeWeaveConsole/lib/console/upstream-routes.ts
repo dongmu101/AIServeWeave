@@ -206,6 +206,7 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("portal")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind"] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status"] },
+  { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders"), param()], query: [] },
   // EZFP (易支付) re-check: asks the control plane to query EZFP for the
   // tenant's own pending EZFP order and settle it if paid. No body; the
   // control plane rate-limits it per order. EZFP's own notify

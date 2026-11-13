@@ -1,3 +1,9 @@
+# 商户订单删除（2026-11-13）
+
+商户计费页「订单」新增删除与确认框，owner/admin 可删除任意状态的本商户订单；member 只读。删除持久化为 `checkout_orders.tenant_deleted_at`，仅商户列表隐藏，运维历史、付款恢复、去重、发货、退款与库存占用继续使用原订单。新接口为 `DELETE /admin/v1/billing/orders/:id`，成功 `204`，跨商户、未知与已删除统一 `404`，审计动作 `billing.order.delete`。Console 白名单、八语言提示、失败保留确认框与末页回退已接入。迁移为 PostgreSQL/MySQL `billing/0010_order_deletion.sql`，`sql/init.sql` 已同步；控制面与 Console 须一起更新。行为与升级说明见[商户订单删除](docs/billing-orders.md)。
+
+验证：控制面默认测试及 logic/handler/store 竞态检查、Console 375 项单元测试、lint（仅既有 alerts 页警告）、类型检查与生产构建、Chrome 计费回归 29 项通过。新增共享 store 场景覆盖所有订单状态、租户隔离、分页前过滤、删除后的迟到付款与重放去重；新增 HTTP/logic 用例覆盖授权与审计。真实 PostgreSQL/MySQL 迁移、真实付款与生产部署尚未验收。
+
 # 易支付（EZFP）人民币收款（2026-11-12）
 
 新增易支付（彩虹易支付 V2）作为 Dodo 之外的第二个法币收款通道，租户可选支付宝或微信支付，用于充值包、账号包月与账号预售三条结账流程。只有币种为 CNY 的商品可以走易支付，金额就是现有标价，不另设价格；CNY 商品可以不填 Dodo 产品 ID，此时只能经易支付购买。易支付可与 Dodo 并存（结账时由租户选择），也可单独开启计费。到账只认经平台公钥验签的异步通知或控制面主动查询，两者都走 Dodo 已有的入账事务与去重；Console 回跳只触发一次查询，订单列表另有「再次确认」，后台每分钟补查 2 小时内的待付款订单。退款以退款申请 id 为 `out_refund_no` 同步结算；答复丢失时以退款查询恢复，不自动重发。配置为控制面 `Billing.Ezfp`，密钥经 `AISW_EZFP_PRIVATE_KEY` / `AISW_EZFP_PUBLIC_KEY` 注入，反向代理须暴露 `/billing/v1/ezfp/notify`（已更新 `deploy/` 下的配置示例、`.env.example`、Compose 与 nginx 示例）。迁移为 `billing/0009_ezfp.sql`；控制面与 Console 须一起更新，Gateway 与 Agent 无需升级。规则、开通步骤与验证边界见[易支付说明](docs/billing-ezfp.md)。

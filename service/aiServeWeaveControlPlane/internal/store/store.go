@@ -1016,6 +1016,11 @@ type Store interface {
 type CheckoutOrderFilter struct {
 	TenantID string
 	Status   string
+	// ExcludeTenantDeleted hides orders removed from the tenant's history.
+	// Internal recovery and operator reads leave this false.
+	//
+	// ExcludeTenantDeleted 隐藏已从租户历史删除的订单。内部恢复与运维读取保持 false。
+	ExcludeTenantDeleted bool
 	// Awaiting keeps only paid presale orders still waiting for an account,
 	// as PresaleAwaiting decides.
 	//
@@ -1351,6 +1356,12 @@ type Billing interface {
 	DeleteModelPrice(ctx context.Context, modelAlias string) error
 
 	CreateCheckoutOrder(ctx context.Context, order *model.CheckoutOrder) error
+	// DeleteCheckoutOrder marks a tenant's visible order deleted, retaining its
+	// financial record. Unknown, foreign and already deleted orders return ErrNotFound.
+	//
+	// DeleteCheckoutOrder 标记租户可见订单为已删除，保留财务记录。未知、其他租户或已删除
+	// 的订单均返回 ErrNotFound。
+	DeleteCheckoutOrder(ctx context.Context, tenantID, orderID string, now time.Time) error
 	SetCheckoutOrderSession(ctx context.Context, orderID, sessionID string, now time.Time) error
 	ListCheckoutOrders(ctx context.Context, query ListQuery, filter CheckoutOrderFilter) (Page[model.CheckoutOrder], error)
 	ListCreditLedger(ctx context.Context, query ListQuery, filter CreditLedgerFilter) (Page[model.CreditLedgerEntry], error)

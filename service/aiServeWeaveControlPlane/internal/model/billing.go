@@ -324,9 +324,14 @@ type CheckoutOrder struct {
 	// EzfpPayTypes; empty for other providers.
 	//
 	// PayType 是租户选择的易支付付款方式，取自 EzfpPayTypes；其他服务商为空。
-	PayType   string `gorm:"size:16;not null"`
-	CreatedAt time.Time
-	UpdatedAt time.Time
+	PayType string `gorm:"size:16;not null"`
+	// TenantDeletedAt hides the order from tenant lists only. Payment,
+	// fulfillment, refunds and operator history continue to use the row.
+	//
+	// TenantDeletedAt 仅从租户列表隐藏订单。付款、发货、退款与运维历史继续使用该行。
+	TenantDeletedAt *time.Time
+	CreatedAt       time.Time
+	UpdatedAt       time.Time
 }
 
 // TableName pins the table name.

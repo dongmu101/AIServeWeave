@@ -1,6 +1,85 @@
 import { test, expect, BILLING_OVERVIEW } from "./fixtures.ts";
+import { deriveSessionKey, seal, SESSION_COOKIE } from "../lib/console/session-payload.ts";
 
 const CHECKOUT_URL = "https://checkout.example.invalid/session/p10";
+
+test("deleting an order requires confirmation, keeps failures open, and persists after reload", async ({ page }) => {
+  let deletes = 0;
+  let removed = false;
+  const at = "2026-11-13T00:00:00Z";
+  const order = { id: "ord_delete", package_id: "pkg_fixed", amount_minor: 999, currency: "USD", credits_micro: 10_000_000, refunded_minor: 0, status: "paid", created_at: at, updated_at: at };
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/orders(\?|$)/, route => route.fulfill({ json: { items: removed ? [] : [order], next_cursor: "" } }));
+  await page.route("**/api/admin/admin/v1/billing/orders/ord_delete", async route => {
+    expect(route.request().method()).toBe("DELETE");
+    deletes++;
+    if (deletes === 1) await route.fulfill({ status: 503, json: { error: "unavailable" } });
+    else {
+      removed = true;
+      await route.fulfill({ status: 204 });
+    }
+  });
+  await page.goto("/console/billing?tab=orders");
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  await expect(dialog).toContainText("ord_delete");
+  await expect(dialog).toContainText("删除不会取消付款");
+  await dialog.getByRole("button", { name: "取消", exact: true }).click();
+  expect(deletes).toBe(0);
+  await expect(page.getByText("ord_delete", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  await dialog.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(dialog.getByRole("alert")).toBeVisible();
+  expect(deletes).toBe(1);
+  await expect(dialog).toBeVisible();
+  await dialog.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("ord_delete", { exact: true })).toHaveCount(0);
+  expect(deletes).toBe(2);
+  await page.reload();
+  await expect(page.getByText("ord_delete", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "删除", exact: true })).toHaveCount(0);
+});
+
+test("deleting the last order on a later page returns to the previous page on mobile", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  let removed = false;
+  const at = "2026-11-13T00:00:00Z";
+  const base = { package_id: "pkg_fixed", amount_minor: 999, currency: "USD", credits_micro: 10_000_000, refunded_minor: 0, status: "pending", created_at: at, updated_at: at };
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/orders(\?|$)/, route => {
+    const later = new URL(route.request().url()).searchParams.has("cursor");
+    return route.fulfill({ json: { items: later ? removed ? [] : [{ ...base, id: "ord_last" }] : [{ ...base, id: "ord_first" }], next_cursor: !later && !removed ? "later" : "" } });
+  });
+  await page.route("**/api/admin/admin/v1/billing/orders/ord_last", async route => {
+    expect(route.request().method()).toBe("DELETE");
+    removed = true;
+    await route.fulfill({ status: 204 });
+  });
+  await page.goto("/console/billing?tab=orders");
+  await page.getByRole("button", { name: "下一页", exact: true }).click();
+  await expect(page.getByText("ord_last", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "删除", exact: true }).click();
+  const dialog = page.getByRole("dialog");
+  const box = await dialog.boundingBox();
+  expect(box).not.toBeNull();
+  expect(box!.x).toBeGreaterThanOrEqual(0);
+  expect(box!.x + box!.width).toBeLessThanOrEqual(390);
+  await page.screenshot({ path: "/tmp/aisw-order-delete-mobile.png", animations: "disabled" });
+  await dialog.getByRole("button", { name: "删除", exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.getByText("ord_first", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "上一页", exact: true })).toBeDisabled();
+});
+
+test("members can view orders without a delete control", async ({ page }) => {
+  await page.context().addCookies([{
+    name: SESSION_COOKIE,
+    value: seal({ token: "synthetic-member-token", expiresAt: new Date(Date.now() + 3_600_000).toISOString(), user: { id: "usr_member", tenantId: "tnt_p10", email: "member@example.invalid", name: "Member", role: "member" } }, deriveSessionKey("p10-browser-acceptance-only-not-a-deployment-secret")),
+    url: "http://127.0.0.1:3100", httpOnly: true, sameSite: "Lax",
+  }]);
+  await page.goto("/console/billing?tab=orders");
+  await expect(page.getByText("ord_p10", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "删除", exact: true })).toHaveCount(0);
+});
 
 test("account editor selects actual Claude Code and Codex accounts reported by an Agent", async ({ page }) => {
   const at = "2026-11-09T00:00:00Z";

@@ -831,6 +831,8 @@ const tenant = {
   "tenant.billingProviderEzfpWxpay": "易支付 · 微信",
   "tenant.billingProviderEzfpUsdt": "易支付 · USDT",
   "tenant.billingProviderOpcpay": "支付寶額度",
+  "tenant.billingDeleteOrder": "刪除訂單",
+  "tenant.billingDeleteOrderDescription": "確定從訂單列表刪除訂單 {id}？刪除不會取消付款、申請退款或變更點數與帳號權益，交易紀錄仍會保留。",
   "tenant.billingRecheck": "再次確認",
   "tenant.billingRecheckHint": "向支付服務查詢這筆訂單的最新狀態。入帳以服務端確認為準，短時間內重複點擊只會回傳目前狀態。",
   "tenant.billingRecheckStillPending": "仍在等待付款確認，稍後可再次確認。",

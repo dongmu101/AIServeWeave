@@ -831,6 +831,8 @@ const tenant = {
   "tenant.billingProviderEzfpWxpay": "易支付 · 微信",
   "tenant.billingProviderEzfpUsdt": "易支付 · USDT",
   "tenant.billingProviderOpcpay": "支付宝额度",
+  "tenant.billingDeleteOrder": "删除订单",
+  "tenant.billingDeleteOrderDescription": "确定从订单列表删除订单 {id}？删除不会取消付款、发起退款或改变点数与账号权益，交易记录仍会保留。",
   "tenant.billingRecheck": "再次确认",
   "tenant.billingRecheckHint": "向支付服务查询这笔订单的最新状态。到账以服务端确认为准，短时间内重复点击只会返回当前状态。",
   "tenant.billingRecheckStillPending": "仍在等待支付确认，稍后可再次确认。",

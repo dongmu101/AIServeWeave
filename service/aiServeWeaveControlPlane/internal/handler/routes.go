@@ -165,6 +165,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPost, "/operator/v1/billing/orders/:id/assign", requirePlatformSession, assignPresaleOrder(ctx)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/ledger", requireSession, listBillingLedger(ctx, false)),
 			billingRoute(http.MethodGet, "/admin/v1/billing/orders", requireSession, listBillingOrders(ctx, false)),
+			billingRoute(http.MethodDelete, "/admin/v1/billing/orders/:id", requireSession, deleteBillingOrder(ctx)),
 			billingRoute(http.MethodGet, "/operator/v1/billing/tenants", requirePlatformSession, listBillingTenants(ctx)),
 			billingRoute(http.MethodPut, "/operator/v1/billing/tenants/:id/mode", requirePlatformSession, setBillingMode(ctx)),
 			billingRoute(http.MethodPost, "/operator/v1/billing/tenants/:id/adjust", requirePlatformSession, adjustCredit(ctx)),
