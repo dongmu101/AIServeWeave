@@ -65,7 +65,7 @@ Agent 的两条执行路径分别隔离：
 
 依据 [CLI reference](https://code.claude.com/docs/en/cli-reference)，`--allowedTools` 表示免询问规则，不能替代工具隔离；`--tools ""` 不影响 MCP。受限模式保留托管设置；存在 `managed-mcp.json` 时，官方规定它与 `--strict-mcp-config` 冲突并拒绝启动，见 [Managed MCP](https://code.claude.com/docs/en/managed-mcp)。这种主机策略冲突需要运维确认，Agent 不移除或绕过托管策略。
 
-2026-11-11 使用 Claude Code `2.1.322` 通过真实 CLI 加回环模拟 API 的工具隔离、原始字段、PDF、压缩、能力拒绝、大历史及三条链路各 12 段工具流程。默认测试不依赖安装 CLI。升级 Agent 主机的 CLI 前，在仓库根目录使用该主机实际的 Go 与 `claude` 执行下面的门控测试；可用 `AISW_CLAUDE_PATH` 指定待验版本。测试只访问回环模拟 API，不使用真实登录或模型额度；它不能替代真实订阅长任务验收。
+2026-11-11 使用 Claude Code `2.1.322` 通过真实 CLI 加回环模拟 API 的工具隔离、原始字段、PDF、压缩、能力拒绝、大历史及三条链路各 12 段工具流程。2026-11-13 用 `2.1.323` 复跑全部门控测试通过，Agent 无需修改，见 [2.1.323 复验记录](../../../docs/acceptance/claude-code-2.1.323-2026-11-13/README.md)。默认测试不依赖安装 CLI。升级 Agent 主机的 CLI 前，在仓库根目录使用该主机实际的 Go 与 `claude` 执行下面的门控测试；可用 `AISW_CLAUDE_PATH` 指定待验版本，`claude` 是 shell 函数或别名时也须用它指向实际可执行文件。测试必须在装有待验 CLI 的主机上运行，可从 `TestNativeCLISafeguardsContract` 日志中的 `CLI version` 核对实际版本。测试只访问回环模拟 API，不使用真实登录或模型额度；它不能替代真实订阅长任务验收。
 
 ```bash
 AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestNativeCLI' -count=1 -timeout=180s -v
