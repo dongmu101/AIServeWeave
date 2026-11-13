@@ -127,7 +127,7 @@ app/console/         受保护的管理布局、外壳与概览页
 app/console/users/   用户列表、创建与生命周期管理
 app/console/account/ 租户账户改密与会话撤销
 app/console/keys/    API Key 列表、创建（一次性明文）与吊销
-app/console/audit/   管理审计（TanStack Table + Virtual 虚拟滚动）
+app/console/audit/   管理审计与请求检索（两个 Tab，`?tab=requests`；TanStack Table + Virtual 虚拟滚动）
 app/console/quota/   租户资料与配额读写
 app/console/billing/ 预充值余额、充值包购买、账目与订单（租户）
 app/operator/login/ 平台运维登录（独立 Cookie）

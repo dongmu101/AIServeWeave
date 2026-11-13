@@ -46,14 +46,13 @@ type NavEntry = NavLeaf | { label: string; children: readonly NavLeaf[] };
  */
 function navigationItems(t: Translator): readonly NavEntry[] { return [
   { href: "/console", label: t("tenant.overview") },
+  { href: "/console/billing", label: t("tenant.billing") },
+  { href: "/console/models", label: t("tenant.aiServicesModels") },
   { href: "/console/users", label: t("tenant.users") },
   { href: "/console/keys", label: "API Key" },
   { href: "/console/audit", label: t("tenant.audit") },
-  { href: "/console/requests", label: t("tenant.requestSearch") },
   { href: "/console/quota", label: t("tenant.quotas") },
   { href: "/console/usage", label: t("tenant.usage") },
-  { href: "/console/billing", label: t("tenant.billing") },
-  { href: "/console/models", label: t("tenant.aiServicesModels") },
   { href: "/console/nodes", label: t("tenant.myNodes") },
   {
     label: t("tenant.workflows"),

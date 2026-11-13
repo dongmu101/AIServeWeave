@@ -1,19 +1,12 @@
 import { redirect } from "next/navigation";
 
-import { RequestLogView } from "@/app/console/requests/request-log-view";
-import { readSession } from "@/lib/server/session";
-
 /**
- * The request search page. Every signed-in tenant user may read their own
- * tenant's authenticated front-door requests (STATUS.md's P09/C28).
+ * Request search is now a tab of the audit page; this route keeps old links
+ * working. Filters are not carried over: the tab starts unfiltered.
  *
- * 请求检索页。任何已登录的租户用户都可以读取自己租户已通过鉴权的前门请求
- * (STATUS.md 的 P09/C28)。
+ * 请求检索现在是审计页的一个 Tab；保留此路由让旧链接继续可用。筛选条件不带过去，
+ * Tab 以无筛选状态打开。
  */
-export default async function RequestsPage() {
-  const session = await readSession();
-  if (!session) {
-    redirect("/login");
-  }
-  return <RequestLogView />;
+export default function RequestsPage() {
+  redirect("/console/audit?tab=requests");
 }
