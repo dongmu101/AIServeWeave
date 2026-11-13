@@ -68,12 +68,16 @@ export default async function PricingPage() {
   const t = createTranslator(locale, await loadMessages(locale));
   const [catalog, session] = await Promise.all([loadCatalog(), readSession()]);
   const signedIn = session !== null;
-  const buyHref = signedIn ? BUY_TARGET : loginPath(BUY_TARGET);
-  const buy = (
-    <Link href={buyHref} className={cn(buttonVariants({ size: "sm" }))}>
-      {t("pricing.buy")}
-    </Link>
-  );
+  // Each Buy button opens the billing tab that sells what its card shows.
+  // 每个「购买」按钮打开出售该卡片内容的计费分区。
+  const buy = (tab: "accounts" | "presales" | "packages") => {
+    const target = `${BUY_TARGET}?tab=${tab}`;
+    return (
+      <Link href={signedIn ? target : loginPath(target)} className={cn(buttonVariants({ size: "sm" }))}>
+        {t("pricing.buy")}
+      </Link>
+    );
+  };
   const empty = catalog !== null && catalog.accounts.length + catalog.presales.length + catalog.packages.length + catalog.prices.length === 0;
 
   const linkClass = "underline underline-offset-4 hover:text-foreground";
@@ -115,7 +119,7 @@ export default async function PricingPage() {
                       <p className="text-lg font-semibold">
                         {t("tenant.accountMonthlyPrice", { price: formatMoney(account.priceMinor, account.currency, locale) })}
                       </p>
-                      {buy}
+                      {buy("accounts")}
                     </CardContent>
                   </Card>
                 ))}
@@ -139,7 +143,7 @@ export default async function PricingPage() {
                         <p className="text-lg font-semibold">
                           {t("tenant.accountMonthlyPrice", { price: formatMoney(presale.priceMinor, presale.currency, locale) })}
                         </p>
-                        {presale.available ? buy : <span className="text-sm font-medium text-muted-foreground">{t("tenant.presaleSoldOut")}</span>}
+                        {presale.available ? buy("presales") : <span className="text-sm font-medium text-muted-foreground">{t("tenant.presaleSoldOut")}</span>}
                       </div>
                     </CardContent>
                   </Card>
@@ -176,7 +180,7 @@ export default async function PricingPage() {
                           </p>
                         )}
                       </div>
-                      {buy}
+                      {buy("packages")}
                     </CardContent>
                   </Card>
                 ))}
