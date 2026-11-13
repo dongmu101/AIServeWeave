@@ -47,8 +47,8 @@ export function AgentEnrollmentView() {
   }
 
   return <div className="grid max-w-3xl gap-6">
-    <div><h1 className="font-heading text-lg font-semibold"><Message id="operator.agentEnrollment" /></h1><p className="mt-2 text-sm text-muted-foreground"><Message id="operator.enrollmentIntro" /></p></div>
-    <section className="grid gap-3 rounded-xl border p-4" aria-labelledby="ca-title">
+    <div><h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.agentEnrollment" /></h1><p className="mt-2 text-sm text-muted-foreground"><Message id="operator.enrollmentIntro" /></p></div>
+    <section className="grid gap-3 rounded-xl border bg-card p-4" aria-labelledby="ca-title">
       <h2 id="ca-title" className="font-semibold"><Message id="operator.enrollmentCA" /></h2>
       {ca.error ? <ErrorState message={ca.error} onRetry={ca.reload} /> : ca.loading ? <LoadingState /> : <>
         <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentCANote" /></p>
@@ -56,18 +56,18 @@ export function AgentEnrollmentView() {
         <Button variant="outline" className="w-fit" disabled={!ca.data} onClick={() => { if (ca.data) downloadFile(new Blob([ca.data.pem], { type: "application/x-pem-file" }), "ca.pem"); }}><Message id="operator.enrollmentDownloadCA" /></Button>
       </>}
     </section>
-    <section className="grid gap-4 rounded-xl border p-4" aria-labelledby="addresses-title">
+    <section className="grid gap-4 rounded-xl border bg-card p-4" aria-labelledby="addresses-title">
       <h2 id="addresses-title" className="font-semibold"><Message id="operator.enrollmentAddresses" /></h2>
       <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentAddressesNote" /></p>
       <label className="grid gap-2 text-sm" htmlFor="enrollment-registry"><Message id="operator.enrollmentRegistry" /><Input id="enrollment-registry" required maxLength={253} value={registry} onChange={e => setRegistry(e.target.value)} placeholder="registry.open7x.com:9443" disabled={pending} /></label>
       <label className="grid gap-2 text-sm" htmlFor="enrollment-gateway"><Message id="operator.enrollmentGateway" /><Input id="enrollment-gateway" required maxLength={253} value={gateway} onChange={e => setGateway(e.target.value)} placeholder="agent.open7x.com:8443" disabled={pending} /></label>
     </section>
-    <section className="grid gap-2 rounded-xl border p-4">
+    <section className="grid gap-2 rounded-xl border bg-card p-4">
       <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={shared} disabled={pending} onChange={event => setShared(event.target.checked)} /><Message id="operator.shareWithTenants" /></label>
       <p className="text-sm text-muted-foreground"><Message id="operator.nodeSharingHint" /></p>
     </section>
     <AgentInstallPanel surface="operator" path="/operator/v1/agent-install-codes" parse={parseOperatorInstall} extraBody={registry.trim() && gateway.trim() ? { registry_addr: registry.trim(), gateway_addr: gateway.trim(), shared } : null} />
-    <details className="rounded-xl border p-4">
+    <details className="rounded-xl border bg-card p-4">
       <summary className="cursor-pointer font-semibold"><Message id="install.advanced" /></summary>
       <form onSubmit={generate} className="mt-4 grid gap-4" aria-labelledby="bundle-title">
         <h2 id="bundle-title" className="font-semibold"><Message id="operator.enrollmentBundle" /></h2>
@@ -76,7 +76,7 @@ export function AgentEnrollmentView() {
         <Button type="submit" disabled={pending || !ca.data || !registry.trim() || !gateway.trim()} aria-busy={pending} className="w-fit"><Message id={pending ? "operator.enrollmentGenerating" : "operator.enrollmentGenerate"} /></Button>
         {error ? <><FormError message={<ErrorMessage error={error} />} /><p className="text-sm text-muted-foreground"><Message id="operator.enrollmentUncertain" /></p></> : null}
       </form>
-    {bundle ? <section className="grid gap-3 rounded-xl border p-4" aria-live="polite">
+    {bundle ? <section className="grid gap-3 rounded-xl border bg-card p-4" aria-live="polite">
       <p className="font-semibold"><Message id="operator.enrollmentReady" /></p>
       <code className="break-all text-sm">{bundle.nodeId}</code>
       <p className="text-sm"><Message id="operator.enrollmentExpires" values={{ value: formatDateTime(bundle.expiresAt, undefined, locale) }} /></p>

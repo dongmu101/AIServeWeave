@@ -140,7 +140,7 @@ export function ModelPullView() {
   return <div className="grid gap-8">
     <section className="grid gap-4" aria-labelledby="model-pull-title">
       <div>
-        <h1 id="model-pull-title" className="font-heading text-lg font-semibold"><Message id="operator.modelPulls" /></h1>
+        <h1 id="model-pull-title" className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.modelPulls" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="operator.queryAndTriggerPullsForModelsDeclaredIn" /></p>
       </div>
@@ -164,7 +164,7 @@ export function ModelPullView() {
       <div className="grid gap-2">
         <h3 className="text-sm font-medium"><Message id="operator.knownPulls" /></h3>
         {status && status.pulls.length > 0 ? <ul className="grid gap-2">
-          {status.pulls.map((pull) => <li key={pull.name} className="grid gap-1 rounded-xl border p-3 text-sm">
+          {status.pulls.map((pull) => <li key={pull.name} className="grid gap-1 rounded-xl border bg-card p-3 text-sm">
             <div className="flex flex-wrap items-center gap-2">
               <code>{pull.name}</code>
               <Badge variant={pull.state === "done" ? "default" : pull.state === "failed" ? "destructive" : "outline"}>
@@ -180,7 +180,7 @@ export function ModelPullView() {
         </ul> : <p className="text-sm text-muted-foreground"><Message id="operator.thisNodeHasNotReportedAnyPullStatus" /></p>}
       </div>
 
-      <form onSubmit={triggerPull} className="grid gap-3 rounded-xl border p-4">
+      <form onSubmit={triggerPull} className="grid gap-3 rounded-xl border bg-card p-4">
         <h3 className="text-sm font-medium"><Message id="operator.triggerPull" /></h3>
         <p className="text-xs text-muted-foreground"><Message id="operator.separateMultipleNamesWithCommasOrNewlinesEach" /></p>
         <div className="grid gap-1.5">

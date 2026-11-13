@@ -45,7 +45,7 @@ export function OperatorsView({ currentOperatorId }: { currentOperatorId: string
   }
 
   return <div className="grid gap-4">
-    <div><h1 className="font-heading text-lg font-semibold"><Message id="operator.platformOperatorAccounts" /></h1><p className="text-sm text-muted-foreground"><Message id="operator.operatorAccountsHaveEqualPrivilegesTheSystemAlways" /></p></div>
+    <div><h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.platformOperatorAccounts" /></h1><p className="text-sm text-muted-foreground"><Message id="operator.operatorAccountsHaveEqualPrivilegesTheSystemAlways" /></p></div>
     <Card><CardHeader><CardTitle><Message id="tenant.createOperatorAccount" /></CardTitle></CardHeader><CardContent><form className="grid gap-3 sm:grid-cols-2" onSubmit={create}>
       <label className="grid gap-1 text-sm"><Message id="operator.email" values={{ content: <Input type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={pending} /> }} /></label>
       <label className="grid gap-1 text-sm"><Message id="operator.name" values={{ content: <Input value={name} onChange={(e) => setName(e.target.value)} disabled={pending} /> }} /></label>

@@ -102,7 +102,7 @@ export function AgentInstallPanel({ surface, path, parse, extraBody, onIssued, c
     </select>;
 
   const disabled = error instanceof ApiError && error.kind === "not_found";
-  return <section className="grid gap-4 rounded-xl border p-4" aria-labelledby="install-title">
+  return <section className="grid gap-4 rounded-xl border bg-card p-4" aria-labelledby="install-title">
     <h2 id="install-title" className="font-semibold"><Message id="install.title" /></h2>
     <p className="text-sm text-muted-foreground"><Message id="install.intro" /></p>
     {children}

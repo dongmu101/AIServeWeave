@@ -13,10 +13,10 @@ export function LanguageSwitcher() {
   const generation = React.useRef(0);
   return <div className="flex max-w-full flex-col gap-1">
     <label className="inline-flex items-center gap-1.5 text-sm">
-      <LanguagesIcon aria-hidden="true" className="size-4 shrink-0" />
+      <LanguagesIcon aria-hidden="true" className="size-4 shrink-0 text-muted-foreground" />
       <span className="sr-only">{t("common.language")}</span>
       <select data-language-switcher value={locale} aria-busy={changing}
-        className="h-8 max-w-36 rounded-md border border-input bg-background px-2 text-sm"
+        className="h-8 max-w-36 rounded-lg border border-input bg-background px-2 text-sm"
         onChange={async event => {
           const next = parseLocale(event.target.value);
           if (!next) return;

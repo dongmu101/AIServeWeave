@@ -166,7 +166,7 @@ function QuotaEditor({
   return (
     <div className="grid gap-6">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.quotas" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.quotas" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="tenant.limitsApplyToTheEntireTenantAllOf" /></p>
       </div>

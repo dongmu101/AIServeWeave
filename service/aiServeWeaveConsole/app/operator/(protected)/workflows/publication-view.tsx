@@ -23,7 +23,7 @@ export function PublicationView() {
   const shown = rollout.data?.templates.filter((template) => matchesQuery([template.id, template.description, ...template.replicas], query)) ?? [];
   return <div className="grid gap-4">
     <div>
-      <h1 className="font-heading text-lg font-semibold"><Message id="operator.workflowReleaseStatus" /></h1>
+      <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.workflowReleaseStatus" /></h1>
       <p className="text-sm text-muted-foreground"><Message id="operator.checkTemplateRegistrationDescriptionsAndInputDeclarationsAcross" /></p>
     </div>
     <div className="flex flex-wrap gap-3">

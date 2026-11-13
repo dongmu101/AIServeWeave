@@ -47,7 +47,7 @@ export function NodeAccessView() {
   const manualValid = validId(manual.trim());
 
   return <div className="grid gap-4">
-    <div><h1 className="font-heading text-lg font-semibold"><Message id="operator.nodeAccess" /></h1><p className="text-sm text-muted-foreground"><Message id="operator.nodeAccessDescription" /></p></div>
+    <div><h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.nodeAccess" /></h1><p className="text-sm text-muted-foreground"><Message id="operator.nodeAccessDescription" /></p></div>
     <Card><CardContent className="grid gap-4 pt-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <div className="grid content-start gap-3">
         <Input aria-label={t("operator.filterNodeAccess")} placeholder={t("operator.filterNodeAccess")} value={query} onChange={(e) => setQuery(e.target.value)} />

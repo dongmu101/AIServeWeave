@@ -76,7 +76,7 @@ export function TenantModelsView() {
 
   return <div className="grid gap-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
-      <div><h1 className="font-heading text-lg font-semibold"><Message id="tenant.agentAiServicesModels" /></h1><p className="text-sm text-muted-foreground"><Message id="tenant.oneRecordPerAgentWithAiServicesAnd" /></p></div>
+      <div><h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.agentAiServicesModels" /></h1><p className="text-sm text-muted-foreground"><Message id="tenant.oneRecordPerAgentWithAiServicesAnd" /></p></div>
       <Button variant="outline" disabled={loading} onClick={refresh}><Message id="tenant.refreshServicesModels" /></Button>
     </div>
     <p className="text-xs text-muted-foreground"><Message id="tenant.refreshesEvery15SecondsPausingInBackgroundTabs_e8c2ce" /></p>

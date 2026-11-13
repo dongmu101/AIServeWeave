@@ -11,7 +11,9 @@ import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Button } from "@/components/ui/button";
+import { LogOutIcon } from "lucide-react";
+import { BrandMark } from "@/components/console/brand-mark";
+import { Button, buttonVariants } from "@/components/ui/button";
 import { FormError } from "@/components/console/states";
 import { operatorSignOut } from "@/lib/console/operator-client";
 import type { OperatorIdentity } from "@/lib/console/operator-session";
@@ -48,6 +50,11 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
   const pathname = usePathname();
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
+  const navigationRef = React.useRef<HTMLElement>(null);
+  // Keep the current entry in view when the phone row scrolls. / 手机上导航横向滚动时，让当前条目保持可见。
+  React.useEffect(() => {
+    navigationRef.current?.querySelector('[aria-current="page"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [pathname]);
   async function leave() {
     setPending(true);
     setError(null);
@@ -57,16 +64,22 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
       router.refresh();
     } catch (failure) { setError(<ErrorMessage error={failure} />); setPending(false); }
   }
-  return <div className="flex min-h-full flex-1 flex-col">
-    <header className="border-b"><div className="mx-auto flex max-w-6xl flex-wrap items-center gap-3 px-4 py-3">
-      <span className="font-heading font-semibold"><Message id="auth.aiserveweavePlatformOperations" /></span>
-      <nav aria-label={t("operator.platformOperationsNavigation")} className="flex flex-wrap gap-1">{navigation.map(item => <Button key={item.href} variant={pathname === item.href ? "secondary" : "ghost"} size="sm" render={<Link href={item.href} />} aria-current={pathname === item.href ? "page" : undefined}>{item.label}</Button>)}</nav>
-      <LanguageSwitcher />
-      <Link href="/console" className="text-sm underline"><Message id="operator.tenantConsole" /></Link>
-      <span className="ml-auto max-w-56 break-all text-sm">{operator.name || operator.email}</span>
-      <Button variant="outline" size="sm" onClick={leave} disabled={pending} aria-busy={pending}><Message id="operator.signOutOfOperations" /></Button>
-      <FormError message={error} />
-    </div></header>
+  return <div className="flex min-h-full flex-1 flex-col bg-muted/40">
+    <header className="border-b bg-background">
+      <div className="mx-auto flex min-h-14 max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
+        <span className="mr-auto flex items-center gap-2 font-heading text-sm font-semibold"><BrandMark className="bg-foreground text-background" /><Message id="auth.aiserveweavePlatformOperations" /></span>
+        <LanguageSwitcher />
+        <Link href="/console" className={buttonVariants({ variant: "ghost", size: "sm" })}><Message id="operator.tenantConsole" /></Link>
+        <span className="hidden max-w-40 truncate text-sm text-muted-foreground sm:inline" title={operator.name || operator.email}>{operator.name || operator.email}</span>
+        <Button variant="outline" size="sm" onClick={leave} disabled={pending} aria-busy={pending}><LogOutIcon /><Message id="operator.signOutOfOperations" /></Button>
+        <FormError message={error} />
+      </div>
+      {/* One scrolling row on a phone, wrapped rows from md up. / 手机上是一行横向滚动，md 起换行排列。 */}
+      <nav ref={navigationRef} aria-label={t("operator.platformOperationsNavigation")} className="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4 pb-2 md:flex-wrap">{navigation.map(item => {
+        const active = pathname === item.href;
+        return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} className={buttonVariants({ variant: "ghost", size: "sm", className: active ? "bg-accent text-accent-foreground hover:bg-accent hover:text-accent-foreground" : "text-muted-foreground" })}>{item.label}</Link>;
+      })}</nav>
+    </header>
     <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 wrap-anywhere px-4 py-6">{children}</main>
   </div>;
 }

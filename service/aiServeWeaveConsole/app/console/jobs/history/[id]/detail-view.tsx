@@ -68,7 +68,7 @@ export function DetailView({
           className="text-sm text-muted-foreground underline underline-offset-2"
         >
           <Message id="tenant.backToRunHistory" /></Link>
-        <h1 className="mt-1 font-heading text-lg font-semibold">
+        <h1 className="mt-1 font-heading text-xl font-semibold tracking-tight">
           <span className="font-mono">{jobId}</span>
         </h1>
       </div>
@@ -79,7 +79,7 @@ export function DetailView({
         <LoadingState label={t("tenant.loadingJobDetails")} rows={4} />
       ) : (
         <>
-          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl border p-4 text-sm sm:grid-cols-3">
+          <dl className="grid grid-cols-2 gap-x-6 gap-y-3 rounded-xl border bg-card p-4 text-sm sm:grid-cols-3">
             <div>
               <dt className="text-xs text-muted-foreground"><Message id="tenant.workflows" /></dt>
               <dd className="font-mono text-xs">

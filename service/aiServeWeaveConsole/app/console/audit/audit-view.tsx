@@ -209,7 +209,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">{surface === "operator" ? t("tenant.platformAudit") : t("tenant.administrativeAudit")}</h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight">{surface === "operator" ? t("tenant.platformAudit") : t("tenant.administrativeAudit")}</h1>
         <p className="text-sm text-muted-foreground">
           {surface === "operator" ? t("tenant.platformOperatorAccountAndNodeActivitySeparateFrom") : t("tenant.administrativeActivityForTheCurrentTenantSignIns")}
         </p>
@@ -316,7 +316,7 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
       ) : audit.loading ? (
         <LoadingState label={t("tenant.loadingAuditRecords")} rows={6} />
       ) : (
-        <div className="rounded-xl border" role="table" aria-label={t("tenant.administrativeAuditRecords")}>
+        <div className="rounded-xl border bg-card" role="table" aria-label={t("tenant.administrativeAuditRecords")}>
           <div className="overflow-x-auto">
             <div className="min-w-[64rem]">
               {table.getHeaderGroups().map((group) => (

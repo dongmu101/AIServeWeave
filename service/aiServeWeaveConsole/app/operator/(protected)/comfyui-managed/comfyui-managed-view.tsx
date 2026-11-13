@@ -127,7 +127,7 @@ export function ComfyUIManagedView() {
   return <div className="grid gap-8">
     <section className="grid gap-4" aria-labelledby="comfyui-managed-title">
       <div>
-        <h1 id="comfyui-managed-title" className="font-heading text-lg font-semibold">ComfyUI Managed</h1>
+        <h1 id="comfyui-managed-title" className="font-heading text-xl font-semibold tracking-tight">ComfyUI Managed</h1>
         <p className="text-sm text-muted-foreground">
           <Message id="operator.queryAndManageTheSingleManagedComfyuiContainer" /></p>
       </div>
@@ -147,7 +147,7 @@ export function ComfyUIManagedView() {
       <h2 id="comfyui-managed-instance-title" className="font-heading text-base font-semibold">
         <code className="break-all">{nodeId}</code>
       </h2>
-      {instance ? <div className="grid gap-3 rounded-xl border p-4">
+      {instance ? <div className="grid gap-3 rounded-xl border bg-card p-4">
         <div className="flex flex-wrap items-center gap-2">
           <code className="text-sm">{instance.containerName}</code>
           <Badge variant={instance.state === "running" ? "default" : instance.state === "failed" ? "destructive" : "outline"}>
@@ -178,7 +178,7 @@ export function ComfyUIManagedView() {
         </div>
       </div> : <p className="text-sm text-muted-foreground"><Message id="operator.thisNodeHasNoLocallyConfiguredManagedInstance" /></p>}
 
-      <form onSubmit={installCustomNode} className="grid gap-3 rounded-xl border p-4">
+      <form onSubmit={installCustomNode} className="grid gap-3 rounded-xl border bg-card p-4">
         <h3 className="text-sm font-medium"><Message id="operator.installCustomNode" /></h3>
         <p className="text-xs text-muted-foreground"><Message id="operator.installationCanOnlyBeTriggeredByNameThe_9bb3bc" values={{ code: <code>-comfyui-managed-custom-nodes</code> }} /></p>
         <div className="flex flex-wrap items-end gap-3">

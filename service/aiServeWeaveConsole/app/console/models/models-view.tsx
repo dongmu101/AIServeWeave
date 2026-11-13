@@ -60,7 +60,7 @@ export function ModelsView() {
   return <div className="grid gap-4">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.localAiModelsOnTheCurrentGateway" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.localAiModelsOnTheCurrentGateway" /></h1>
         <p className="text-sm text-muted-foreground"><Message id="tenant.aiServicesDiscoveredOnThisGatewayPlusBackends" /></p>
       </div>
       <Button variant="outline" disabled={loading} onClick={reload} aria-busy={loading}><Message id="tenant.refreshConnectionsModels" /></Button>
@@ -106,7 +106,7 @@ export function ModelsView() {
 /** Summary labels counts within the collected snapshot.
  * Summary 标示本次采集快照内的计数。 */
 function Summary({ label, value }: { label: string; value: string }) {
-  return <div className="rounded-xl border p-4"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-xl font-semibold">{value}</dd></div>;
+  return <div className="rounded-xl border bg-card p-4"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-xl font-semibold">{value}</dd></div>;
 }
 
 /** ConnectionCard groups local backends under their connected Agent.

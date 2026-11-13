@@ -278,7 +278,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.requestSearch" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.requestSearch" /></h1>
         <p className="text-sm text-muted-foreground">
           {surface === "operator"
             ? t("tenant.searchRequestsAcrossTenantsForTroubleshootingAndCustomer")
@@ -401,7 +401,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
       ) : requests.loading ? (
         <LoadingState label={t("tenant.loadingRequestRecords")} rows={6} />
       ) : (
-        <div className="rounded-xl border" role="table" aria-label={t("tenant.requestSearchResults")}>
+        <div className="rounded-xl border bg-card" role="table" aria-label={t("tenant.requestSearchResults")}>
           <div className="overflow-x-auto">
             <div className="min-w-[80rem]">
               {table.getHeaderGroups().map((group) => (

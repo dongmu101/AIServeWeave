@@ -118,7 +118,7 @@ export function HistoryView() {
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.runHistory" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.runHistory" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="tenant.persistedJobRecordsForThisTenantFromThe" /></p>
       </div>
@@ -229,7 +229,7 @@ export function HistoryView() {
           title={hasFilters ? t("tenant.noRecordsMatchTheFilters") : t("tenant.noPersistedRunsForThisTenantYet")}
         />
       ) : (
-        <div className="rounded-xl border">
+        <div className="rounded-xl border bg-card">
           <Table>
             <TableHeader>
               <TableRow>

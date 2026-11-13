@@ -71,7 +71,7 @@ export function NodesView({ role }: { role: string }) {
 
   return <div className="grid max-w-4xl gap-6">
     <div>
-      <h1 className="font-heading text-lg font-semibold"><Message id="tenant.myNodes" /></h1>
+      <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.myNodes" /></h1>
       <p className="mt-2 text-sm text-muted-foreground"><Message id="tenant.myNodesIntro" /></p>
     </div>
     {nodes.error ? <ErrorState message={nodes.error} onRetry={nodes.reload} /> : !data ? <LoadingState rows={3} /> : <>
@@ -79,7 +79,7 @@ export function NodesView({ role }: { role: string }) {
         <p className="text-sm text-muted-foreground"><Message id="tenant.nodeLimits" values={{ active: activeNodeCount(data), max: data.maxPerTenant, daily: data.maxCreatesPerDay }} /></p>
         <AgentInstallPanel path="/admin/v1/nodes/install-codes" parse={parseTenantInstall} extraBody={full ? null : {}} onIssued={nodes.reload} />
         {full ? <p className="text-sm text-muted-foreground"><Message id="tenant.nodeLimitReached" /></p> : null}
-        <details className="rounded-xl border p-4">
+        <details className="rounded-xl border bg-card p-4">
           <summary className="cursor-pointer font-semibold"><Message id="install.advanced" /></summary>
           <form onSubmit={generate} className="mt-4 grid gap-4" aria-labelledby="node-bundle-title">
             <h2 id="node-bundle-title" className="font-semibold"><Message id="tenant.addNode" /></h2>
@@ -87,7 +87,7 @@ export function NodesView({ role }: { role: string }) {
             <Button type="submit" disabled={pending || full} aria-busy={pending} className="w-fit"><Message id={pending ? "operator.enrollmentGenerating" : "operator.enrollmentGenerate"} /></Button>
             {error ? <><FormError message={error instanceof ApiError && error.kind === "conflict" ? <Message id="tenant.nodeLimitReached" /> : <ErrorMessage error={error} />} /><p className="text-sm text-muted-foreground"><Message id="operator.enrollmentUncertain" /></p></> : null}
           </form>
-          {bundle ? <section className="mt-4 grid gap-3 rounded-xl border p-4" aria-live="polite">
+          {bundle ? <section className="mt-4 grid gap-3 rounded-xl border bg-card p-4" aria-live="polite">
             <p className="font-semibold"><Message id="operator.enrollmentReady" /></p>
             <code className="break-all text-sm">{bundle.nodeId}</code>
             <p className="text-sm"><Message id="operator.enrollmentExpires" values={{ value: formatDateTime(bundle.expiresAt, undefined, locale) }} /></p>

@@ -77,7 +77,7 @@ export function AccountSecurity({ surface }: { surface: "admin" | "operator" }) 
   }
 
   return <div className="grid gap-4">
-    <div><h1 className="font-heading text-lg font-semibold"><Message id="tenant.accountSecurity" /></h1><p className="text-sm text-muted-foreground"><Message id="common.afterChangingYourPasswordOrRevokingAllSessions" /></p></div>
+    <div><h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.accountSecurity" /></h1><p className="text-sm text-muted-foreground"><Message id="common.afterChangingYourPasswordOrRevokingAllSessions" /></p></div>
     <Card><CardHeader><CardTitle><Message id="common.changePassword" /></CardTitle></CardHeader><CardContent>
       <form className="grid max-w-md gap-3" onSubmit={changePassword}>
         <label className="grid gap-1 text-sm"><Message id="common.currentPassword_1dc575" values={{ content: <Input type="password" autoComplete="current-password" value={currentPassword} onChange={(event) => setCurrentPassword(event.target.value)} disabled={pending} /> }} /></label>

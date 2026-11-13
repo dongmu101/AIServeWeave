@@ -369,7 +369,7 @@ export function AlertRulesView() {
     <div className="grid gap-4">
       <div className="flex flex-wrap items-end justify-between gap-3">
         <div>
-          <h1 className="font-heading text-lg font-semibold"><Message id="operator.alertRules" /></h1>
+          <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.alertRules" /></h1>
           <p className="text-sm text-muted-foreground">
             <Message id="operator.thresholdRulesBasedOnMetricsDerivedFromMetrics" /></p>
         </div>

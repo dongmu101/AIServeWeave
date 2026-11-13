@@ -27,7 +27,7 @@ export function OverviewView({ user, expiresAt }: { user: SessionUser; expiresAt
   return (
     <div className="grid gap-6">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.overview" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.overview" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="tenant.currentSessionInformationUsersApiKeysAdministrativeAudits" /></p>
       </div>

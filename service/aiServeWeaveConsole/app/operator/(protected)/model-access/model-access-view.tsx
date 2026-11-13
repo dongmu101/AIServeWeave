@@ -33,7 +33,7 @@ export function ModelAccessView() {
   const aliases = React.useMemo(() => (routes.data?.routes ?? []).map((route) => route.model), [routes.data]);
 
   return <div className="grid gap-4">
-    <div><h1 className="font-heading text-lg font-semibold"><Message id="operator.modelAccess" /></h1><p className="text-sm text-muted-foreground"><Message id="operator.modelAccessDescription" /></p></div>
+    <div><h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.modelAccess" /></h1><p className="text-sm text-muted-foreground"><Message id="operator.modelAccessDescription" /></p></div>
     <AccessEditor key={PLATFORM_SCOPE} scope={PLATFORM_SCOPE} title={t("operator.platformModelAccess")} aliases={aliases} />
     <Card><CardHeader><CardTitle><Message id="operator.tenantModelAccess" /></CardTitle></CardHeader><CardContent className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,2fr)]">
       <div className="grid content-start gap-3">

@@ -83,7 +83,7 @@ export function BillingAdminView() {
   const { t } = useI18n();
   return <div className="grid gap-4">
     <div>
-      <h1 className="font-heading text-lg font-semibold"><Message id="operator.billing" /></h1>
+      <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.billing" /></h1>
       <p className="text-sm text-muted-foreground"><Message id="operator.billingDescription" /></p>
     </div>
     <Tabs defaultValue="packages">

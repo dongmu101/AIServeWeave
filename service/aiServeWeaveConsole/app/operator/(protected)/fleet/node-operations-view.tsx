@@ -51,7 +51,7 @@ export function NodeOperationsView() {
   return <div className="grid gap-8">
     <section className="grid gap-4" aria-labelledby="registry-title">
       <div>
-        <h1 id="registry-title" className="font-heading text-lg font-semibold"><Message id="operator.nodeManagement" /></h1>
+        <h1 id="registry-title" className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.nodeManagement" /></h1>
         <p className="text-sm text-muted-foreground"><Message id="operator.desiredStateRecordedByTheRegistryIncludingNodes" /></p>
       </div>
       <div className="flex flex-wrap gap-3">
@@ -60,7 +60,7 @@ export function NodeOperationsView() {
       </div>
       {notice ? <p role="status" className="text-sm">{notice}</p> : null}
       {registry.error ? <ErrorState message={registry.error} onRetry={registry.reload} /> : registry.loading ? <LoadingState label={t("operator.loadingRegistryState")} /> : shown.length === 0 ? <EmptyState title={registry.data?.length ? t("tenant.noNodesMatchTheFilters") : t("operator.noNodeRecordsInTheRegistryYet")} /> : <div className="grid gap-3">
-        {shown.map((node) => <div key={node.nodeId} className="grid gap-3 rounded-xl border p-4">
+        {shown.map((node) => <div key={node.nodeId} className="grid gap-3 rounded-xl border bg-card p-4">
           <div className="flex flex-wrap items-center gap-2">
             <code className="min-w-0 break-all text-sm">{node.nodeId}</code>
             <Badge variant="outline">{node.pendingApproval ? t("operator.pendingApproval") : t("operator.approved")}</Badge>

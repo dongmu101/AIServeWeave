@@ -84,7 +84,7 @@ export function DocsOverview() {
       </header>
 
       <section className="grid gap-4 md:grid-cols-2">
-        <div className="flex flex-col gap-2 rounded-xl border p-4">
+        <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
           <h2 className="font-heading font-semibold"><Message id="tenant.baseUrl" /></h2>
           <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2">
             <code className="min-w-0 flex-1 truncate font-mono text-sm">{values.baseUrl}</code>
@@ -92,7 +92,7 @@ export function DocsOverview() {
           </div>
           <p className="text-sm text-muted-foreground"><Message id="tenant.setTheOpenaiSdkSToOllamaClients" values={{ code: <code className="font-mono">base_url</code>, code2: <code className="font-mono">{values.baseUrl}/v1</code> }} /></p>
         </div>
-        <div className="flex flex-col gap-2 rounded-xl border p-4">
+        <div className="flex flex-col gap-2 rounded-xl border bg-card p-4">
           <h2 className="font-heading font-semibold"><Message id="tenant.authentication" /></h2>
           <code className="rounded-lg bg-muted/40 px-3 py-2 font-mono text-sm">Authorization: Bearer YOUR_API_KEY</code>
           <p className="text-sm text-muted-foreground"><Message id="tenant.createAKeyOnAndAlsoAcceptThe" values={{ link: <Link href="/console/keys" className="font-medium text-primary underline underline-offset-4">
@@ -124,7 +124,7 @@ export function DocsOverview() {
         {list.data && groups.length === 0 ? <EmptyState title={t("tenant.noDocumentationHasBeenPublishedYet")} /> : null}
         <div className="grid gap-4 md:grid-cols-2">
           {groups.map((group) => (
-            <div key={group.category} className="flex flex-col gap-1 rounded-xl border p-4">
+            <div key={group.category} className="flex flex-col gap-1 rounded-xl border bg-card p-4">
               <h3 className="pb-1 text-sm font-semibold">{group.category}</h3>
               {group.items.map((doc) => (
                 <Link

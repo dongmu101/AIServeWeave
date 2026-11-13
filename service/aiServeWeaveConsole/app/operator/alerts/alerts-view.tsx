@@ -308,7 +308,7 @@ export function AlertsView() {
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="operator.alerts" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.alerts" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="operator.alertInstancesTriggeredByAllPlatformRulesActive" /></p>
       </div>
@@ -390,7 +390,7 @@ export function AlertsView() {
       ) : alerts.loading ? (
         <LoadingState label={t("operator.loadingAlerts")} rows={6} />
       ) : (
-        <div className="rounded-xl border" role="table" aria-label={t("operator.alertList")}>
+        <div className="rounded-xl border bg-card" role="table" aria-label={t("operator.alertList")}>
           <div className="overflow-x-auto">
             <div className="min-w-[64rem]">
               {table.getHeaderGroups().map((group) => (

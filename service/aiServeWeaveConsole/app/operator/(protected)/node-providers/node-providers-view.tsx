@@ -61,7 +61,7 @@ export function NodeProvidersView() {
 
   return <div className="grid max-w-4xl gap-6">
     <div>
-      <h1 className="font-heading text-lg font-semibold"><Message id="operator.nodeProviders" /></h1>
+      <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.nodeProviders" /></h1>
       <p className="mt-2 text-sm text-muted-foreground"><Message id="operator.nodeProvidersIntro" /></p>
     </div>
     {platformNodes.length > 0 ? <label className="grid gap-1 text-sm" htmlFor="node-providers-pick"><Message id="operator.nodeProvidersPick" />
@@ -77,7 +77,7 @@ export function NodeProvidersView() {
       <Button type="submit" variant={platformNodes.length > 0 ? "outline" : "default"}><Message id="operator.nodeProvidersLookup" /></Button>
     </form>
     <FormError message={error} />
-    {nodeId ? <section className="grid gap-3 rounded-xl border p-4">
+    {nodeId ? <section className="grid gap-3 rounded-xl border bg-card p-4">
       <code className="break-all text-sm">{nodeId}</code>
       <NodeProvidersPanel key={nodeId} surface="operator" nodeId={nodeId} canManage />
     </section> : null}

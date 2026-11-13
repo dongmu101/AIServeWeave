@@ -15,9 +15,32 @@ import { LanguageSwitcher } from "@/components/i18n/language-switcher";
 import * as React from "react";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { CheckIcon, ChevronDownIcon, LogOutIcon, MenuIcon, SettingsIcon, ShieldCheckIcon, UserRoundIcon } from "lucide-react";
+import {
+  BookOpenIcon,
+  BoxesIcon,
+  ChartColumnIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CreditCardIcon,
+  GaugeIcon,
+  HistoryIcon,
+  KeyRoundIcon,
+  LayoutDashboardIcon,
+  LayoutTemplateIcon,
+  ListChecksIcon,
+  LogOutIcon,
+  MenuIcon,
+  ScrollTextIcon,
+  ServerIcon,
+  SettingsIcon,
+  ShieldCheckIcon,
+  UserRoundIcon,
+  UsersIcon,
+  type LucideIcon,
+} from "lucide-react";
 import { toast } from "sonner";
 
+import { BrandMark } from "@/components/console/brand-mark";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -31,7 +54,7 @@ import { signOut } from "@/lib/console/api-client";
 import { type Role } from "@/lib/console/contract";
 import type { SessionUser } from "@/lib/console/session-payload";
 
-type NavLeaf = { href: string; label: string };
+type NavLeaf = { href: string; label: string; icon: LucideIcon };
 type NavEntry = NavLeaf | { label: string; children: readonly NavLeaf[] };
 
 /**
@@ -45,25 +68,40 @@ type NavEntry = NavLeaf | { label: string; children: readonly NavLeaf[] };
  * 原因——它没有 Admin API，那个 API 背后也没有存储。
  */
 function navigationItems(t: Translator): readonly NavEntry[] { return [
-  { href: "/console", label: t("tenant.overview") },
-  { href: "/console/billing", label: t("tenant.billing") },
-  { href: "/console/models", label: t("tenant.aiServicesModels") },
-  { href: "/console/users", label: t("tenant.users") },
-  { href: "/console/keys", label: "API Key" },
-  { href: "/console/audit", label: t("tenant.audit") },
-  { href: "/console/quota", label: t("tenant.quotas") },
-  { href: "/console/usage", label: t("tenant.usage") },
-  { href: "/console/nodes", label: t("tenant.myNodes") },
+  { href: "/console", label: t("tenant.overview"), icon: LayoutDashboardIcon },
+  { href: "/console/billing", label: t("tenant.billing"), icon: CreditCardIcon },
+  { href: "/console/models", label: t("tenant.aiServicesModels"), icon: BoxesIcon },
+  { href: "/console/users", label: t("tenant.users"), icon: UsersIcon },
+  { href: "/console/keys", label: "API Key", icon: KeyRoundIcon },
+  { href: "/console/audit", label: t("tenant.audit"), icon: ScrollTextIcon },
+  { href: "/console/quota", label: t("tenant.quotas"), icon: GaugeIcon },
+  { href: "/console/usage", label: t("tenant.usage"), icon: ChartColumnIcon },
+  { href: "/console/nodes", label: t("tenant.myNodes"), icon: ServerIcon },
   {
     label: t("tenant.workflows"),
     children: [
-      { href: "/console/workflows", label: t("tenant.workflowTemplates") },
-      { href: "/console/jobs", label: t("tenant.runs") },
-      { href: "/console/jobs/history", label: t("tenant.runHistory") },
+      { href: "/console/workflows", label: t("tenant.workflowTemplates"), icon: LayoutTemplateIcon },
+      { href: "/console/jobs", label: t("tenant.runs"), icon: ListChecksIcon },
+      { href: "/console/jobs/history", label: t("tenant.runHistory"), icon: HistoryIcon },
     ],
   },
-  { href: "/console/docs", label: t("tenant.apiDocumentation") },
+  { href: "/console/docs", label: t("tenant.apiDocumentation"), icon: BookOpenIcon },
 ]; }
+
+/** navItemClass styles one top-bar entry. The current page is marked by a bar
+ * resting on the header's bottom edge, so the row reads as a set of tabs.
+ *
+ * navItemClass 为顶栏的一个条目设定样式。当前页面由贴在页首底边上的一条色带标出，
+ * 使这一行读起来像一组标签页。 */
+function navItemClass(active: boolean): string {
+  return buttonVariants({
+    variant: "ghost",
+    size: "sm",
+    className: active
+      ? "relative px-2.5 text-foreground after:absolute after:inset-x-2.5 after:-bottom-3.5 after:h-0.5 after:rounded-full after:bg-primary"
+      : "relative px-2.5 text-muted-foreground",
+  });
+}
 
 /**
  * ConsoleShell is the frame every console page renders in: navigation, who is
@@ -122,8 +160,11 @@ export function ConsoleShell({
     <div className="flex h-dvh shrink-0 flex-col overflow-hidden">
       <header className="h-14 shrink-0 border-b bg-background">
         <div className="mx-auto flex h-full w-full max-w-[96rem] items-center gap-3 px-4">
-          <Link href="/console" className="shrink-0 whitespace-nowrap font-heading text-sm font-semibold">
-            AIServeWeave<span className="hidden sm:inline"> <Message id="tenant.console" /></span>
+          <Link href="/console" className="flex shrink-0 items-center gap-2 whitespace-nowrap font-heading text-sm font-semibold">
+            <BrandMark />
+            <span className="sr-only sm:not-sr-only">
+              AIServeWeave <span className="font-normal text-muted-foreground"><Message id="tenant.console" /></span>
+            </span>
           </Link>
           <nav aria-label={t("tenant.consoleNavigation")} className="flex min-w-0 flex-1 items-center justify-end sm:justify-start">
             <div className="hidden items-center gap-0.5 xl:flex">
@@ -132,9 +173,7 @@ export function ConsoleShell({
                   const groupActive = item.children.some((child) => child.href === activeItem?.href);
                   return (
                     <DropdownMenu key={item.label}>
-                      <DropdownMenuTrigger
-                        render={<Button variant={groupActive ? "secondary" : "ghost"} size="sm" className="px-2" />}
-                      >
+                      <DropdownMenuTrigger className={navItemClass(groupActive)}>
                         {item.label}
                         <ChevronDownIcon className="size-3 text-muted-foreground" />
                       </DropdownMenuTrigger>
@@ -146,6 +185,7 @@ export function ConsoleShell({
                             aria-current={child.href === activeItem?.href ? "page" : undefined}
                             className="min-h-9"
                           >
+                            <child.icon className="text-muted-foreground" />
                             {child.label}
                             {child.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
                           </DropdownMenuItem>
@@ -159,7 +199,7 @@ export function ConsoleShell({
                   <Link
                     key={item.href}
                     href={item.href}
-                    className={buttonVariants({ variant: active ? "secondary" : "ghost", size: "sm", className: "px-2" })}
+                    className={navItemClass(active)}
                     aria-current={active ? "page" : undefined}
                   >
                     {item.label}
@@ -186,6 +226,7 @@ export function ConsoleShell({
                       aria-current={item.href === activeItem?.href ? "page" : undefined}
                       className={nested ? "min-h-9 pl-6" : "min-h-9"}
                     >
+                      <item.icon className="text-muted-foreground" />
                       {nested ? `${entry.label} / ${item.label}` : item.label}
                       {item.href === activeItem?.href ? <CheckIcon className="ml-auto" /> : null}
                     </DropdownMenuItem>
@@ -199,7 +240,7 @@ export function ConsoleShell({
             <DropdownMenuTrigger
               aria-label={t("tenant.accountMenu")}
               disabled={leaving}
-              render={<Button variant="outline" size="icon" className="rounded-full bg-muted text-xs" />}
+              render={<Button variant="outline" size="icon" className="rounded-full border-primary/20 bg-primary/10 text-xs font-semibold text-primary hover:bg-primary/15 hover:text-primary aria-expanded:bg-primary/15 aria-expanded:text-primary" />}
             >
               <span aria-hidden="true">{initial}</span>
             </DropdownMenuTrigger>
@@ -223,7 +264,7 @@ export function ConsoleShell({
         </div>
       </header>
       {/* Only the content scrolls beneath the compact fixed-height menu. / 仅正文在紧凑的固定高度菜单下方滚动。 */}
-      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto">
+      <main className="relative min-h-0 min-w-0 flex-1 overflow-y-auto bg-muted/40">
         {/* The API reference is a three-column page and gets a wider frame. / API 参考文档是三栏页面，使用更宽的框架。 */}
         <div
           className={`mx-auto w-full min-w-0 wrap-anywhere px-4 py-6 ${

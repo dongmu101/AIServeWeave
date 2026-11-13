@@ -100,7 +100,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.workflowRuns" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.workflowRuns" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="tenant.currentRunsForThisTenantThisViewHas" /></p>
         <ul className="mt-2 grid gap-1 text-sm text-muted-foreground">
@@ -152,7 +152,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
               }
             />
           ) : (
-            <div className="rounded-xl border">
+            <div className="rounded-xl border bg-card">
               <Table>
                 <TableHeader>
                   <TableRow>

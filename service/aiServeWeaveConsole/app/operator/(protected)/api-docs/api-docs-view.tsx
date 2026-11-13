@@ -86,14 +86,14 @@ export function ApiDocsAdminView({ baseUrl }: { baseUrl: string }) {
     <div className="grid grid-cols-1 gap-4">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <h1 className="font-heading text-lg font-semibold"><Message id="tenant.apiDocumentation" /></h1>
+          <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.apiDocumentation" /></h1>
           <p className="max-w-3xl text-sm text-muted-foreground"><Message id="operator.contentForTheTenantConsoleSApiDocumentation_ee5c4b" values={{ code: <code className="font-mono">{"{{BASE_URL}}"}</code>, code2: <code className="font-mono">{"{{API_KEY}}"}</code>, code3: <code className="font-mono">{"{{MODEL}}"}</code> }} /></p>
         </div>
         <Button size="sm" onClick={() => setEditing({ kind: "new" })}><Message id="operator.newDocument_76182b" values={{ content: <PlusIcon /> }} /></Button>
       </div>
 
       <div className="grid grid-cols-1 gap-4 xl:grid-cols-[20rem_minmax(0,1fr)]">
-        <div className="min-w-0 rounded-xl border p-2">
+        <div className="min-w-0 rounded-xl border bg-card p-2">
           {list.error ? (
             <ErrorState message={list.error} onRetry={list.reload} />
           ) : !list.data ? (
@@ -259,7 +259,7 @@ function DocEditor({
 
   return (
     <form onSubmit={save} className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-center gap-2 rounded-xl border p-3 text-sm">
+      <div className="flex flex-wrap items-center gap-2 rounded-xl border bg-card p-3 text-sm">
         {existing ? (
           <>
             <code className="font-mono">{existing.slug}</code>
@@ -312,7 +312,7 @@ function DocEditor({
           />
         </label>
         {preview ? (
-          <div className="min-w-0 rounded-xl border p-4">
+          <div className="min-w-0 rounded-xl border bg-card p-4">
             {"error" in parsed ? (
               <p className="text-sm text-muted-foreground"><Message id="operator.aPreviewWillAppearOnceTheJsonIs" /></p>
             ) : (

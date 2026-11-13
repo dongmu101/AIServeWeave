@@ -79,7 +79,7 @@ export function WorkflowsView({ operator }: { operator: boolean }) {
   return (
     <div className="grid grid-cols-1 gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.workflows" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.workflows" /></h1>
         <p className="text-sm text-muted-foreground">
           <Message id="tenant.workflowTemplatesAvailableToThisTenantAndTheir" /></p>
       </div>
@@ -143,7 +143,7 @@ function TemplateCard({
 }) {
   const {t } = useI18n();
   return (
-    <div className="rounded-xl border">
+    <div className="rounded-xl border bg-card">
       <div className="flex flex-wrap items-center gap-2 border-b px-3 py-2">
         <code className="font-mono text-sm">{template.id}</code>
         {template.valid ? null : (
@@ -277,7 +277,7 @@ function RolloutSection() {
 
   const divergent = rollout.data.templates.filter((template) => template.divergent);
   return (
-    <div className="grid gap-2 rounded-xl border p-3">
+    <div className="grid gap-2 rounded-xl border bg-card p-3">
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="font-heading text-sm font-semibold"><Message id="tenant.replicaConsistencyOperations" /></h2>
         <Badge variant={divergent.length === 0 ? "secondary" : "outline"}

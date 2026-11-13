@@ -266,7 +266,7 @@ export function BillingView({ role, returning, alipayReturning = false, ezfpRetu
   return <div className="grid gap-6">
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="min-w-0">
-        <h1 className="font-heading text-lg font-semibold"><Message id="tenant.billing" /></h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.billing" /></h1>
         <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
         <p className="text-sm text-muted-foreground"><Message id="site.purchaseNote" values={{
           terms: <Link href="/terms" target="_blank" className="underline underline-offset-4"><Message id="site.terms" /></Link>,

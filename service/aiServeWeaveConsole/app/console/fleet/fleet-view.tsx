@@ -76,7 +76,7 @@ export function FleetView({ title }: { title?: string }) {
   return (
     <div className="grid gap-4">
       <div>
-        <h1 className="font-heading text-lg font-semibold">{title ?? t("tenant.nodes")}</h1>
+        <h1 className="font-heading text-xl font-semibold tracking-tight">{title ?? t("tenant.nodes")}</h1>
         <p className="text-sm text-muted-foreground">
           <Message id="tenant.operationsViewNodesAcrossTheFleetAreShared" /></p>
       </div>
