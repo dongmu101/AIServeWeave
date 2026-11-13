@@ -776,7 +776,12 @@ request_logs(
   status_code  SMALLINT NOT NULL,
   outcome      VARCHAR(24) NOT NULL,     -- 封闭枚举，Gateway 侧从状态码纯推导，不存自由文本错误
   duration_ms  BIGINT NOT NULL,
-  created_at   TIMESTAMP NOT NULL  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
+  created_at   TIMESTAMP NOT NULL,  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
+  -- 以下四列由迁移 0003 增加，只对失败请求（状态码 ≥ 400）填写，成功请求为空串：
+  model          VARCHAR(128)  NOT NULL DEFAULT '',  -- 客户端请求的模型
+  error_code     VARCHAR(64)   NOT NULL DEFAULT '',  -- 答复客户端的错误码
+  error_message  VARCHAR(512)  NOT NULL DEFAULT '',  -- 答复客户端的错误信息
+  error_detail   VARCHAR(1024) NOT NULL DEFAULT ''   -- 服务端错误详情，只在运维检索中返回
 );
 -- 索引比照 jobs 表按 (tenant_id, created_at) 与 (tenant_id, status) 的既有模式：
 CREATE INDEX idx_request_logs_tenant_created         ON request_logs (tenant_id, created_at, id);
@@ -789,6 +794,8 @@ CREATE INDEX idx_request_logs_tenant_outcome_created ON request_logs (tenant_id,
 
 - `GET /admin/v1/requests`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，租户无法指定别的 `tenant_id`，响应省略 `tenant_id` 字段。
 - `GET /operator/v1/requests`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则返回全部租户，响应保留 `tenant_id` 字段。
+
+失败记录的 `model`、`error_code`、`error_message` 两个端点都返回。`error_detail` 只在运维端点返回，因为它可能提到平台节点和运行时，属于内部信息。四个字段在成功记录上为空，响应里省略。`CreateRequestLogs` 写入前按列宽在 rune 边界截断，过长的值不会导致整批写入失败。Console 请求检索页最后一列是「错误信息」，显示「模型 · 错误信息」，点击后在弹窗里查看请求 ID、模型、错误码、错误信息和服务端错误详情。
 
 **保留期默认 30 天**（`config.DefaultRequestLogRetention`，`Config.RequestLogRetention` 可覆盖）——比 `metrics_history` 的 90 天短，因为这是逐请求明细而非 5 分钟聚合桶，同等时间窗口下行数级别不同。`internal/requestlogretention` 是一个独立的后台协程，每 24 小时运行一次，按创建时间批量删除过期行；与 `MetricsHistory` 需要显式配置才启动不同，这个清理协程**只要表已迁移就无条件运行**——填充这张表的内部推送 API 只要设置了 `InternalToken` 就已经挂载，不存在一个独立的「是否配置了」的问题。
 

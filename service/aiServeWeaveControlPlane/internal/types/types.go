@@ -607,6 +607,12 @@ type RequestLogRecordRequest struct {
 	Outcome    string    `json:"outcome"`
 	DurationMS int64     `json:"duration_ms"`
 	CreatedAt  time.Time `json:"created_at"`
+	// The failure fields are sent only for a failed request.
+	// 失败字段只对失败请求发送。
+	Model        string `json:"model,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	ErrorDetail  string `json:"error_detail,omitempty"`
 }
 
 // CreateRequestLogsRequest is the body of POST /internal/v1/requestlogs.
@@ -629,14 +635,13 @@ type CreateRequestLogsResponse struct {
 }
 
 // RequestLogResponse is one persisted request record, as both the tenant and
-// the operator search endpoints render it. It carries every field
-// request_logs stores — there is no route-binding-style internal-only data
-// to strip here, unlike JobResponse versus JobHistoryResponse.
+// the operator search endpoints render it. The failure fields are present only
+// for a failed request; ErrorDetail, the server-side cause, is rendered on the
+// operator endpoint only, since it can name platform nodes and runtimes.
 //
 // RequestLogResponse 是一条已持久化的请求记录，租户与运维两个检索端点都用
-// 这个形状渲染它。它携带 request_logs 存储的每一个字段——这里没有像
-// JobResponse 相对 JobHistoryResponse 那样需要剥离的、路由绑定式的内部专用
-// 数据。
+// 这个形状渲染它。失败字段只在失败请求上出现；服务端原因 ErrorDetail 只在运维
+// 端点渲染，因为它可能指名平台的节点与运行时。
 type RequestLogResponse struct {
 	RequestID  string    `json:"request_id"`
 	TenantID   string    `json:"tenant_id,omitempty"`
@@ -646,6 +651,11 @@ type RequestLogResponse struct {
 	Outcome    string    `json:"outcome"`
 	DurationMS int64     `json:"duration_ms"`
 	CreatedAt  time.Time `json:"created_at"`
+
+	Model        string `json:"model,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	ErrorDetail  string `json:"error_detail,omitempty"`
 }
 
 // RequestLogListResponse is one page of request records.

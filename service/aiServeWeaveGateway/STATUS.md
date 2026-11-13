@@ -238,7 +238,13 @@ README 顶层「ComfyUI 任务 API」列出的六个端点已全部落地。产�
    | 其他（含客户端提前断开、状态码未写出） | `error` |
 
 3. **有界缓冲、批量异步推送，从不重试。** `requestLogPusher` 用一个容量 10000（`DefaultRequestLogBufferSize`）的有界 channel 承接中间件产生的记录；后台协程按攒够 500 条（`DefaultRequestLogBatchSize`）或每 5 秒（`DefaultRequestLogFlushInterval`）——以先到者为准——把一批推给控制面的 `POST /internal/v1/requestlogs`（`controlplaneclient.RequestLogsClient`）。**channel 满时丢弃新记录，同时对指标 `gateway_request_log_dropped_total` 自增，不阻塞正在处理的推理请求**——这是「任何一跳都不得无界缓冲」这条安全要求的落实，请求记录是诊断性数据，允许极端负载下的少量丢失。一批推送失败（网络层错误）时整批本地丢弃，不重试——重试请求记录只会造成无界的本地积压。Gateway 优雅停止时对现有缓冲做一次尽力而为的 flush，不保证清空。
-4. **上报字段不含任何需要脱敏的内容。** 记录只有 `request_id`（`common/reqid` 铸造，同时是控制面 `request_logs` 表的主键，天然防重）、`tenant_id`、`apikey.Display(key)` 的展示形式（前缀 + 明文前 8 位，不存完整 key 或哈希）、封闭 `endpoint` 枚举、原始状态码、`Outcome`、耗时毫秒数与创建时间；不记录请求体、响应体、模型名、node_id、Prompt 片段或鉴权头。
+4. **上报字段。** 每条记录都有 `request_id`（`common/reqid` 铸造，同时是控制面 `request_logs` 表的主键，天然防重）、`tenant_id`、`apikey.Display(key)` 的展示形式（前缀 + 明文前 8 位，不存完整 key 或哈希）、封闭 `endpoint` 枚举、原始状态码、`Outcome`、耗时毫秒数与创建时间。不记录请求体、响应体、Prompt 片段或鉴权头。
+5. **失败请求另记排错信息（2026-11-13）。** 状态码 ≥ 400 的请求另外记录四个字段，成功请求不记，也不上报：
+   - `model`：客户端请求的模型名（≤128 字节）。`prepareRequest`（Messages、Chat、Responses）以及 embeddings、rerank、images、音频、Ollama 各 handler 在解析出模型后调用 `noteRequestModel`，写入中间件放在 context 里的 `requestLogNote`。
+   - `error_code`、`error_message`：答复客户端的错误码与错误信息（≤64、≤512 字节）。中间件用 `requestLogWriter` 保留错误响应的前 4KB，按 OpenAI、Anthropic、Ollama 三种错误体形状解析，因此任何写出错误体的路径都不用改。错误码优先取派发分类给出的码（`model_not_found`、`model_unavailable`、`internal_error`、运行时错误码等）；没有时取错误体里的 `code`，再没有就取 `type`。
+   - `error_detail`：派发失败背后的服务端错误，也就是 `dispatchErrorDetails` 写进日志的那个 `err.Error()`（≤1024 字节）。客户端只看到 "internal error" 这类泛化信息，排错需要这一项。`handleDispatchError`、`handleAnthropicDispatchError`、`handleOllamaDispatchError`、原生 Messages 的派发错误和上游错误透传都会调用 `noteDispatchError`，以第一次记下的为准。
+
+   所有截断都在 rune 边界上进行。已知限制：流式响应在 200 响应头发出之后才出错的（SSE `error` 事件），状态码仍是 200，按成功记录，不带这些字段。
 
 控制面侧的表结构、内部推送端点幂等性、两个检索端点与保留期见 [ControlPlane STATUS「请求日志检索（P09/C28）」](../aiServeWeaveControlPlane/STATUS.md#请求日志检索p09c28)。
 

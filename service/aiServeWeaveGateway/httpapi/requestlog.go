@@ -1,22 +1,28 @@
 // requestlog.go is the Gateway's side of STATUS.md's P09/C28: it classifies
 // a finished, authenticated front-door request into the closed vocabulary
 // the design doc requires, and defines the record shape the background
-// pusher (requestlogpush.go) batches to the control plane. Nothing in this
-// file reads a request body, a response body, or any free-text error — the
-// only inputs are the request path and the final HTTP status code, both of
-// which are already public in access logs and carry nothing that needs
-// redaction.
+// pusher (requestlogpush.go) batches to the control plane. A successful
+// request records only its path, status and timing. A failed one (status 400
+// and up) also records, for troubleshooting, the model it asked for, the
+// error code and message the client was answered with, and — on dispatch
+// failures — the server-side error behind that answer, each truncated to a
+// fixed length. No request or response body beyond the error answer itself is
+// ever read.
 //
 // requestlog.go 是 Gateway 一侧对 STATUS.md P09/C28 的实现：把一次已完成、
 // 已鉴权的前门请求，分类进设计文档要求的封闭词汇表，并定义后台推送器
-// (requestlogpush.go)批量发往控制面所用的记录形状。本文件从不读取请求体、
-// 响应体或任何自由文本错误——唯一的输入是请求路径与最终 HTTP 状态码，两者
-// 本就出现在访问日志里，不携带任何需要脱敏的内容。
+// (requestlogpush.go)批量发往控制面所用的记录形状。成功的请求只记录路径、
+// 状态码与耗时。失败的请求（状态码 400 及以上）为便于排错另外记录：所请求的
+// 模型、答复客户端的错误码与错误信息，以及派发失败时这一答复背后的服务端错误，
+// 各自截断到固定长度。除错误答复本身外，从不读取任何请求体或响应体。
 package httpapi
 
 import (
+	"context"
+	"encoding/json"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"AIServeWeave/common/apikey"
 )
@@ -145,15 +151,18 @@ func requestLogEndpoint(path string) (string, bool) {
 }
 
 // RequestLogRecord is one finished, authenticated front-door request,
-// ready to be pushed to the control plane. It carries nothing beyond what
-// the design doc's field table allows — no request body, no response body,
-// no model name. It is exported specifically so controlplaneclient's
-// RequestLogsClient — an implementation of RequestLogClient living outside
-// this package — can be typed against it.
+// ready to be pushed to the control plane. It never carries a request or
+// response body. Model, ErrorCode, ErrorMessage and ErrorDetail are set only
+// for a failed request (status 400 and up) and are empty otherwise, so a
+// successful request costs no more than it did before they existed. It is
+// exported specifically so controlplaneclient's RequestLogsClient — an
+// implementation of RequestLogClient living outside this package — can be
+// typed against it.
 //
-// RequestLogRecord 是一条已完成、已鉴权的前门请求，可供推送至控制面。它携带
-// 的字段不超出设计文档字段表所允许的范围——没有请求体、没有响应体、没有
-// 模型名。它被特意导出，正是为了让本包之外、RequestLogClient 的实现方
+// RequestLogRecord 是一条已完成、已鉴权的前门请求，可供推送至控制面。它从不
+// 携带请求体或响应体。Model、ErrorCode、ErrorMessage 与 ErrorDetail 只对失败
+// 请求（状态码 400 及以上）设置，其余情况为空，因此成功请求的开销与这些字段
+// 出现之前相同。它被特意导出，正是为了让本包之外、RequestLogClient 的实现方
 // controlplaneclient 的 RequestLogsClient 能够以它为类型。
 type RequestLogRecord struct {
 	RequestID  string
@@ -164,6 +173,161 @@ type RequestLogRecord struct {
 	Outcome    string
 	DurationMS int64
 	CreatedAt  time.Time
+	// Model is the model the client asked for, as sent.
+	// Model 是客户端请求的模型，按原样记录。
+	Model string
+	// ErrorCode and ErrorMessage are what the client was answered with: the
+	// classification code (model_not_found, internal_error, a runtime error
+	// code, …) and the error body's message.
+	//
+	// ErrorCode 与 ErrorMessage 是答复客户端的内容：分类错误码（model_not_found、
+	// internal_error、某个运行时错误码……）与错误体中的信息。
+	ErrorCode    string
+	ErrorMessage string
+	// ErrorDetail is the server-side error behind a dispatch failure, which
+	// the client never sees — "internal error" alone says nothing about what
+	// broke. Only the operator search shows it.
+	//
+	// ErrorDetail 是派发失败背后的服务端错误，客户端看不到——单凭 "internal
+	// error" 说明不了哪里坏了。只有运维检索会显示它。
+	ErrorDetail string
+}
+
+// Length limits for the failure fields, matching the request_logs columns
+// they are stored in. Values are cut on a rune boundary.
+//
+// 失败字段的长度上限，与存放它们的 request_logs 列一致。按 rune 边界截断。
+const (
+	requestLogModelMax        = 128
+	requestLogErrorCodeMax    = 64
+	requestLogErrorMessageMax = 512
+	requestLogErrorDetailMax  = 1024
+	// requestLogErrorBodyMax bounds how much of an error response is kept to
+	// read its code and message from; every error body this package writes
+	// is far smaller.
+	// requestLogErrorBodyMax 限定为读取错误码与错误信息而保留的错误响应长度；本包
+	// 写出的任何错误体都远小于它。
+	requestLogErrorBodyMax = 4096
+)
+
+// requestLogNote collects the failure context of one request while it is
+// served: handlers record the model they parsed and the dispatch error they
+// classified, and the middleware reads it back only if the request failed.
+//
+// requestLogNote 在请求服务期间收集它的失败上下文：handler 记下解析出的模型与
+// 归类的派发错误，中间件只在请求失败时读回。
+type requestLogNote struct {
+	model     string
+	errorCode string
+	detail    string
+}
+
+type requestLogNoteKey struct{}
+
+// noteRequestModel records the model a request asked for. It is a no-op
+// when the request is not being logged.
+//
+// noteRequestModel 记下请求所要的模型。请求未被记录时为空操作。
+func noteRequestModel(ctx context.Context, model string) {
+	if note, ok := ctx.Value(requestLogNoteKey{}).(*requestLogNote); ok && note.model == "" {
+		note.model = model
+	}
+}
+
+// noteDispatchError records the classification code and the server-side
+// error of a dispatch failure on w's request log, if w is (or wraps) the
+// request-log writer. The first failure noted wins: it is the one the client
+// was answered with.
+//
+// noteDispatchError 在 w 是（或包装了）请求日志 writer 时，把一次派发失败的分类
+// 错误码与服务端错误记到它的请求日志上。以第一次记下的失败为准：那正是答复客户端
+// 的那一次。
+func noteDispatchError(w http.ResponseWriter, code string, err error) {
+	for w != nil {
+		if lw, ok := w.(*requestLogWriter); ok {
+			if lw.note.errorCode == "" && lw.note.detail == "" {
+				lw.note.errorCode = code
+				if err != nil {
+					lw.note.detail = err.Error()
+				}
+			}
+			return
+		}
+		u, ok := w.(interface{ Unwrap() http.ResponseWriter })
+		if !ok {
+			return
+		}
+		w = u.Unwrap()
+	}
+}
+
+// requestLogWriter is the statusWriter requestLogMiddleware serves through.
+// On top of the status it keeps the beginning of an error response, so the
+// code and message the client received can be recorded without any handler
+// having to report them.
+//
+// requestLogWriter 是 requestLogMiddleware 所用的 statusWriter。除状态码外，它还
+// 保留错误响应的开头，使客户端收到的错误码与错误信息无需任何 handler 上报就能记录。
+type requestLogWriter struct {
+	*statusWriter
+	note *requestLogNote
+	body []byte
+}
+
+// Write keeps the first requestLogErrorBodyMax bytes of an error response.
+// Write 保留错误响应的前 requestLogErrorBodyMax 字节。
+func (w *requestLogWriter) Write(b []byte) (int, error) {
+	if statusOf(w.statusWriter) >= http.StatusBadRequest && len(w.body) < requestLogErrorBodyMax {
+		w.body = append(w.body, b[:min(len(b), requestLogErrorBodyMax-len(w.body))]...)
+	}
+	return w.statusWriter.Write(b)
+}
+
+// errorBodyFields reads the code and message out of an error body in any of
+// the shapes this package writes: OpenAI ({"error":{"code","type",
+// "message"}}), Anthropic ({"type":"error","error":{"type","message"}}) and
+// Ollama ({"error":"message"}). Without a code the error type stands in. An
+// unrecognized body yields empty strings.
+//
+// errorBodyFields 从本包写出的任一形状的错误体中读取错误码与错误信息：OpenAI、
+// Anthropic 与 Ollama。没有错误码时以错误类型代替。无法识别的错误体返回空字符串。
+func errorBodyFields(body []byte) (code, message string) {
+	var envelope struct {
+		Error json.RawMessage `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) != nil || len(envelope.Error) == 0 {
+		return "", ""
+	}
+	var text string
+	if json.Unmarshal(envelope.Error, &text) == nil {
+		return "", text
+	}
+	var detail struct {
+		Code    any    `json:"code"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(envelope.Error, &detail) != nil {
+		return "", ""
+	}
+	code = detail.Type
+	if c, ok := detail.Code.(string); ok && c != "" {
+		code = c
+	}
+	return code, detail.Message
+}
+
+// truncateRunes cuts s to at most limit bytes on a rune boundary.
+// truncateRunes 在 rune 边界上把 s 截断到最多 limit 字节。
+func truncateRunes(s string, limit int) string {
+	if len(s) <= limit {
+		return s
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 // requestLogSink is what the middleware hands a finished record to. It is
@@ -220,15 +384,16 @@ func (h *handlers) requestLogMiddleware(next http.Handler) http.Handler {
 		}
 
 		start := h.clock.Now()
-		sw := &statusWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(sw, r)
-		status := statusOf(sw)
+		note := &requestLogNote{}
+		sw := &requestLogWriter{statusWriter: &statusWriter{ResponseWriter: w, status: http.StatusOK}, note: note}
+		next.ServeHTTP(sw, r.WithContext(context.WithValue(r.Context(), requestLogNoteKey{}, note)))
+		status := statusOf(sw.statusWriter)
 
 		var keyDisplay string
 		if key, ok := requestKey(r); ok {
 			keyDisplay = apikey.Display(key)
 		}
-		accepted := h.requestLogs.enqueue(RequestLogRecord{
+		record := RequestLogRecord{
 			RequestID:  requestIDFrom(r.Context()),
 			TenantID:   identity.TenantID,
 			KeyDisplay: keyDisplay,
@@ -237,7 +402,18 @@ func (h *handlers) requestLogMiddleware(next http.Handler) http.Handler {
 			Outcome:    outcomeForStatus(status),
 			DurationMS: h.clock.Now().Sub(start).Milliseconds(),
 			CreatedAt:  start,
-		})
+		}
+		if status >= http.StatusBadRequest {
+			code, message := errorBodyFields(sw.body)
+			if note.errorCode != "" {
+				code = note.errorCode
+			}
+			record.Model = truncateRunes(note.model, requestLogModelMax)
+			record.ErrorCode = truncateRunes(code, requestLogErrorCodeMax)
+			record.ErrorMessage = truncateRunes(message, requestLogErrorMessageMax)
+			record.ErrorDetail = truncateRunes(note.detail, requestLogErrorDetailMax)
+		}
+		accepted := h.requestLogs.enqueue(record)
 		if !accepted {
 			h.metrics.RequestLogDropped()
 		}

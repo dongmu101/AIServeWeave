@@ -34,6 +34,7 @@ func (h *handlers) rerank(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
 		return
 	}
+	noteRequestModel(r.Context(), req.Model)
 	if req.Model == "" || req.Query == "" || len(req.Documents) == 0 {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",
 			"model, query and a non-empty documents array are required")

@@ -48,6 +48,7 @@ func (h *handlers) embeddings(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_json", "the request body is not valid JSON")
 		return
 	}
+	noteRequestModel(r.Context(), req.Model)
 	inputs, ok := req.inputs()
 	if req.Model == "" || !ok || len(inputs) == 0 {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request",

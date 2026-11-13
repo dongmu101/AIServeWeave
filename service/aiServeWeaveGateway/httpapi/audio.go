@@ -83,6 +83,7 @@ func (h *handlers) transcribeAudio(w http.ResponseWriter, r *http.Request, task 
 		return
 	}
 	model := modelValues[0]
+	noteRequestModel(r.Context(), model)
 
 	responseFormat := "json"
 	if v := r.MultipartForm.Value["response_format"]; len(v) > 0 && v[0] != "" {

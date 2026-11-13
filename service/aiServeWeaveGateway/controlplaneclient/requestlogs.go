@@ -113,6 +113,12 @@ type requestLogRecordWire struct {
 	Outcome    string    `json:"outcome"`
 	DurationMS int64     `json:"duration_ms"`
 	CreatedAt  time.Time `json:"created_at"`
+	// The failure fields are empty, and omitted, for a successful request.
+	// 失败字段对成功请求为空并省略。
+	Model        string `json:"model,omitempty"`
+	ErrorCode    string `json:"error_code,omitempty"`
+	ErrorMessage string `json:"error_message,omitempty"`
+	ErrorDetail  string `json:"error_detail,omitempty"`
 }
 
 // PushRequestLogs implements httpapi.RequestLogClient. An empty batch is a
@@ -141,6 +147,11 @@ func (c *RequestLogsClient) PushRequestLogs(ctx context.Context, records []httpa
 			Outcome:    r.Outcome,
 			DurationMS: r.DurationMS,
 			CreatedAt:  r.CreatedAt,
+
+			Model:        r.Model,
+			ErrorCode:    r.ErrorCode,
+			ErrorMessage: r.ErrorMessage,
+			ErrorDetail:  r.ErrorDetail,
 		}
 	}
 

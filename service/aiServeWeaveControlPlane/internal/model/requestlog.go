@@ -19,8 +19,11 @@ import "time"
 // already provides.
 //
 // Outcome is a closed classification derived purely from StatusCode by the
-// Gateway before this row ever exists; no free-text error message is ever
-// stored here.
+// Gateway before this row ever exists. Model, ErrorCode, ErrorMessage and
+// ErrorDetail are filled only for a failed request (status 400 and up), for
+// troubleshooting, and stay empty for a successful one; ErrorDetail is the
+// server-side cause the client never saw and is shown on the operator search
+// only.
 //
 // RequestLog 是一次已通过鉴权的推理前门请求(OpenAI、Anthropic Messages、
 // Ollama、音频、rerank 或模型列表；Endpoint 存 Gateway 为它定的封闭短名，最长
@@ -29,8 +32,10 @@ import "time"
 // 也是每个调用方已经用来指代这次请求的东西，因此重复上报（一次被重试的批量
 // 推送）天然会被这同一个唯一性拒绝——这里的表现是被悄悄跳过。
 //
-// Outcome 是 Gateway 在这一行存在之前就已从 StatusCode 纯粹推导出的封闭分类；
-// 这里从不存储任何自由文本错误信息。
+// Outcome 是 Gateway 在这一行存在之前就已从 StatusCode 纯粹推导出的封闭分类。
+// Model、ErrorCode、ErrorMessage 与 ErrorDetail 只为失败请求（状态码 400 及以上）
+// 填写以便排错，成功请求留空；ErrorDetail 是客户端看不到的服务端原因，只在运维
+// 检索中显示。
 type RequestLog struct {
 	ID         string    `gorm:"primaryKey;size:64"`
 	TenantID   string    `gorm:"size:32;not null"`
@@ -40,7 +45,24 @@ type RequestLog struct {
 	Outcome    string    `gorm:"size:24;not null"`
 	DurationMS int64     `gorm:"not null"`
 	CreatedAt  time.Time `gorm:"not null"`
+
+	Model        string `gorm:"size:128;not null;default:''"`
+	ErrorCode    string `gorm:"size:64;not null;default:''"`
+	ErrorMessage string `gorm:"size:512;not null;default:''"`
+	ErrorDetail  string `gorm:"size:1024;not null;default:''"`
 }
+
+// Length limits of the failure columns. CreateRequestLogs cuts longer values
+// on a rune boundary instead of letting the database reject the batch.
+//
+// 失败字段列的长度上限。CreateRequestLogs 在 rune 边界截断更长的值，而不是让数据库
+// 拒绝整批写入。
+const (
+	RequestLogModelMax        = 128
+	RequestLogErrorCodeMax    = 64
+	RequestLogErrorMessageMax = 512
+	RequestLogErrorDetailMax  = 1024
+)
 
 // TableName returns "request_logs", the table RequestLog persists to.
 //

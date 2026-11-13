@@ -22,6 +22,13 @@ import {
   useUrlFilters,
 } from "@/components/console/use-url-filters";
 import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import {
   Select,
@@ -102,12 +109,25 @@ function outcomeLabel(value: string, t: Translator): string {
 /** GRID_TENANT and GRID_OPERATOR are the shared column geometry for the
  * header and every row, on the tenant surface and the operator surface
  * respectively — the operator grid has one more track for the tenant column.
+ * Both end with the widest track, the error column.
  *
  * GRID_TENANT 与 GRID_OPERATOR 分别是租户视角与运维视角下、表头与每一行共用的
- * 列几何——运维视角的网格多一条给租户列的轨道。 */
-const GRID_TENANT =
+ * 列几何——运维视角的网格多一条给租户列的轨道。两者都以最宽的错误信息列结尾。 */
+const GRID_BASE =
   "minmax(9.5rem,10rem) minmax(5rem,6rem) minmax(7rem,9rem) minmax(7rem,9rem) minmax(5rem,6rem) minmax(9rem,1fr)";
-const GRID_OPERATOR = `${GRID_TENANT} minmax(8rem,9rem)`;
+const GRID_ERROR = "minmax(14rem,2fr)";
+const GRID_TENANT = `${GRID_BASE} ${GRID_ERROR}`;
+const GRID_OPERATOR = `${GRID_BASE} minmax(8rem,9rem) ${GRID_ERROR}`;
+
+/** errorSummary is the one-line text of a failed request's error column: the
+ * model it asked for, then what it was answered with. A successful request
+ * has none.
+ *
+ * errorSummary 是失败请求错误信息列的单行文字：先是所请求的模型，再是答复内容。
+ * 成功请求没有。 */
+function errorSummary(entry: RequestLogEntry): string {
+  return [entry.model, entry.errorMessage || entry.errorCode].filter(Boolean).join(" · ");
+}
 
 /** RequestLogView shares paging and virtualization across the tenant and
  * operator request-search surfaces.
@@ -164,6 +184,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
   });
 
   const rows = requests.items ?? NO_ENTRIES;
+  const [selected, setSelected] = React.useState<RequestLogEntry | null>(null);
 
   // Columns vary by surface — the tenant column exists only on the operator
   // surface — so they are built per-render instead of hoisted to module
@@ -198,8 +219,29 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
         cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
       }),
     ];
+    const error = helper.display({
+      id: "error",
+      header: t("tenant.errorInfo"),
+      cell: (info) => {
+        const entry = info.row.original;
+        const summary = errorSummary(entry);
+        if (summary === "" && entry.errorDetail === "") {
+          return null;
+        }
+        return (
+          <button
+            type="button"
+            className="block w-full truncate text-left text-xs text-destructive underline-offset-2 hover:underline"
+            title={summary}
+            onClick={() => setSelected(entry)}
+          >
+            {summary || entry.errorCode || t("tenant.details")}
+          </button>
+        );
+      },
+    });
     if (surface !== "operator") {
-      return helper.columns(base);
+      return helper.columns([...base, error]);
     }
     return helper.columns([
       ...base,
@@ -207,6 +249,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
         header: t("tenant.tenant"),
         cell: (info) => <span className="font-mono text-xs">{info.getValue()}</span>,
       }),
+      error,
     ]);
   }, [surface, t, locale]);
 
@@ -360,7 +403,7 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
       ) : (
         <div className="rounded-xl border" role="table" aria-label={t("tenant.requestSearchResults")}>
           <div className="overflow-x-auto">
-            <div className="min-w-[64rem]">
+            <div className="min-w-[80rem]">
               {table.getHeaderGroups().map((group) => (
                 <div
                   key={group.id}
@@ -436,8 +479,47 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
         <Pager resource={requests} loadedCount={rows.length} />
       )}
 
+      <Dialog open={selected !== null} onOpenChange={(open) => { if (!open) setSelected(null); }}>
+        {selected ? <RequestErrorDetails entry={selected} /> : null}
+      </Dialog>
+
       <p className="text-xs text-muted-foreground"><Message id="tenant.filteringAndPaginationAreHandledByTheControl_d6754f" values={{ value: surface === "operator" ? t("tenant.allPlatformRequestRecords") : t("tenant.allRecordsForTheCurrentTenantFromThe") }} /></p>
     </div>
+  );
+}
+
+/** RequestErrorDetails shows everything recorded about one failed request.
+ * Each value is shown whole and selectable, so it can be copied into a
+ * search or a ticket.
+ *
+ * RequestErrorDetails 展示一条失败请求记录下的全部信息。每个值完整显示且可选中，
+ * 便于复制到检索或工单中。 */
+function RequestErrorDetails({ entry }: { entry: RequestLogEntry }) {
+  const { t } = useI18n();
+  const fields: { label: string; value: string }[] = [
+    { label: t("tenant.requestId"), value: entry.requestId },
+    { label: t("tenant.requestedModel"), value: entry.model },
+    { label: t("tenant.errorCode"), value: entry.errorCode },
+    { label: t("tenant.errorMessage"), value: entry.errorMessage },
+    { label: t("tenant.errorDetail"), value: entry.errorDetail },
+  ];
+  return (
+    <DialogContent className="sm:max-w-2xl">
+      <DialogHeader>
+        <DialogTitle><Message id="tenant.requestErrorDetails" /></DialogTitle>
+        <DialogDescription>
+          {entry.statusCode} · {entry.endpoint}
+        </DialogDescription>
+      </DialogHeader>
+      <dl className="grid gap-3">
+        {fields.filter((field) => field.value !== "").map((field) => (
+          <div key={field.label} className="grid gap-1">
+            <dt className="text-xs text-muted-foreground">{field.label}</dt>
+            <dd className="whitespace-pre-wrap break-all rounded-md bg-muted/40 p-2 font-mono text-xs">{field.value}</dd>
+          </div>
+        ))}
+      </dl>
+    </DialogContent>
   );
 }
 

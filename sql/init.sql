@@ -279,6 +279,12 @@ CREATE TABLE request_logs (
 -- request_logs/mysql/0002_add_request_logs_created_index.sql
 CREATE INDEX idx_request_logs_created ON request_logs (created_at, id);
 
+-- request_logs/mysql/0003_add_request_logs_failure_fields.sql
+ALTER TABLE request_logs ADD COLUMN model VARCHAR(128) NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN error_code VARCHAR(64) NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN error_message VARCHAR(512) NOT NULL DEFAULT '';
+ALTER TABLE request_logs ADD COLUMN error_detail VARCHAR(1024) NOT NULL DEFAULT '';
+
 -- ============================================================
 -- alerting
 -- ============================================================

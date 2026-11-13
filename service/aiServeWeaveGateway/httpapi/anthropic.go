@@ -745,7 +745,8 @@ func writeAnthropicError(w http.ResponseWriter, status int, errType, message str
 // counterpart, sharing dispatchErrorDetails's classification (errors.go) so
 // the two wire protocols never judge the same failure differently.
 func handleAnthropicDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) {
-	status, errType, _, message := dispatchErrorDetails(logger, err)
+	status, errType, code, message := dispatchErrorDetails(logger, err)
+	noteDispatchError(w, code, err)
 	setRetryAfter(w, err)
 	writeAnthropicError(w, status, errType, message)
 }

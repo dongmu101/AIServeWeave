@@ -176,6 +176,15 @@ export interface RequestLogEntry {
   outcome: string;
   durationMs: number;
   createdAt: string;
+  /** model, errorCode and errorMessage are set only for a failed request;
+   * errorDetail, the server-side cause, only on the operator endpoint.
+   *
+   * model、errorCode 与 errorMessage 只在失败请求上有值；服务端原因 errorDetail
+   * 只在运维端点上有值。 */
+  model: string;
+  errorCode: string;
+  errorMessage: string;
+  errorDetail: string;
 }
 
 /**
@@ -584,6 +593,10 @@ export function parseRequestLogEntries(value: unknown): Page<RequestLogEntry> {
       outcome: text(source, "outcome"),
       durationMs: count(source, "duration_ms"),
       createdAt: timestamp(source, "created_at"),
+      model: optionalText(source, "model"),
+      errorCode: optionalText(source, "error_code"),
+      errorMessage: optionalText(source, "error_message"),
+      errorDetail: optionalText(source, "error_detail"),
     };
   });
 }

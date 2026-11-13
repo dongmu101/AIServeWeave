@@ -281,6 +281,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 		}
 		errType, message := runtime.UpstreamErrorDetail(upstream.Body)
 		h.logger.Warn("native Messages upstream error passed through", "status", upstream.StatusCode, "error_type", errType)
+		noteDispatchError(w, errType, err)
 		if w.Header().Get("Retry-After") == "" {
 			setRetryAfter(w, err)
 		}
@@ -317,6 +318,7 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			return
 		}
 		status, errType, code, message := dispatchErrorDetails(h.logger, err)
+		noteDispatchError(w, code, err)
 		if w.Header().Get("Retry-After") == "" {
 			setRetryAfter(w, err)
 		}

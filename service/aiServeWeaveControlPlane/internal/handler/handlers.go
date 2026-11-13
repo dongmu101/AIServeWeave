@@ -1801,6 +1801,7 @@ func createRequestLogs(ctx *svc.ServiceContext) http.HandlerFunc {
 				RequestID: rec.RequestID, TenantID: rec.TenantID, KeyDisplay: rec.KeyDisplay,
 				Endpoint: rec.Endpoint, StatusCode: rec.StatusCode, Outcome: rec.Outcome,
 				DurationMS: rec.DurationMS, CreatedAt: rec.CreatedAt,
+				Model: rec.Model, ErrorCode: rec.ErrorCode, ErrorMessage: rec.ErrorMessage, ErrorDetail: rec.ErrorDetail,
 			}
 		}
 		accepted, err := ctx.Logic.CreateRequestLogs(r.Context(), batch)
@@ -1815,18 +1816,21 @@ func createRequestLogs(ctx *svc.ServiceContext) http.HandlerFunc {
 // renderRequestLog converts a persisted request record to its wire form.
 // includeTenant is false on the tenant-scoped endpoint, where the tenant is
 // already implied by the caller's own session and repeating it on every row
-// would be noise, not information.
+// would be noise, not information. It is true only on the operator endpoint,
+// which is also the only one shown ErrorDetail.
 //
 // renderRequestLog 把一条持久化的请求记录转换成线上形式。includeTenant 在
 // 按租户限定的端点上为 false——那里租户已经由调用方自己的会话隐含，在每一行
-// 上重复它是噪音，不是信息。
+// 上重复它是噪音，不是信息。它只在运维端点上为 true，ErrorDetail 也只在那里显示。
 func renderRequestLog(r model.RequestLog, includeTenant bool) types.RequestLogResponse {
 	out := types.RequestLogResponse{
 		RequestID: r.ID, KeyDisplay: r.KeyDisplay, Endpoint: r.Endpoint,
 		StatusCode: r.StatusCode, Outcome: r.Outcome, DurationMS: r.DurationMS, CreatedAt: r.CreatedAt,
+		Model: r.Model, ErrorCode: r.ErrorCode, ErrorMessage: r.ErrorMessage,
 	}
 	if includeTenant {
 		out.TenantID = r.TenantID
+		out.ErrorDetail = r.ErrorDetail
 	}
 	return out
 }

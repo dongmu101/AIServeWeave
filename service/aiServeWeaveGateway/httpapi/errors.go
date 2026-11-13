@@ -39,6 +39,7 @@ func writeOpenAIError(w http.ResponseWriter, status int, errType, code, message 
 // maps errors the same way.
 func handleDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) {
 	status, errType, code, message := dispatchErrorDetails(logger, err)
+	noteDispatchError(w, code, err)
 	setRetryAfter(w, err)
 	writeOpenAIError(w, status, errType, code, message)
 }

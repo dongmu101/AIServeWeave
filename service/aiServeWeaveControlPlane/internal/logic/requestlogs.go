@@ -26,6 +26,11 @@ type CreateRequestLogParams struct {
 	Outcome    string
 	DurationMS int64
 	CreatedAt  time.Time
+
+	Model        string
+	ErrorCode    string
+	ErrorMessage string
+	ErrorDetail  string
 }
 
 // CreateRequestLogs persists a batch of records, skipping — not failing on
@@ -61,6 +66,11 @@ func (s *Service) CreateRequestLogs(ctx context.Context, batch []CreateRequestLo
 			Outcome:    p.Outcome,
 			DurationMS: p.DurationMS,
 			CreatedAt:  p.CreatedAt,
+
+			Model:        truncate(p.Model, model.RequestLogModelMax),
+			ErrorCode:    truncate(p.ErrorCode, model.RequestLogErrorCodeMax),
+			ErrorMessage: truncate(p.ErrorMessage, model.RequestLogErrorMessageMax),
+			ErrorDetail:  truncate(p.ErrorDetail, model.RequestLogErrorDetailMax),
 		})
 	}
 	if len(records) == 0 {

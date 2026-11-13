@@ -79,6 +79,7 @@ const (
 func prepareRequest(r *http.Request, raw json.RawMessage, dialect suffixDialect) (*http.Request, json.RawMessage, error) {
 	var probe requestProbe
 	_ = json.Unmarshal(raw, &probe)
+	noteRequestModel(r.Context(), probe.Model)
 	r = r.WithContext(scheduler.WithSessionKey(r.Context(), sessionKey(r, probe)))
 	model, windowed := stripContextWindowSuffix(probe.Model)
 	base, reasoning, ok := parseModelSuffix(model)

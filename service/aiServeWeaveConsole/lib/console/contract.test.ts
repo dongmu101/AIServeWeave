@@ -199,6 +199,10 @@ test("request log entries keep the fields the API actually returns", () => {
     outcome: "ok",
     durationMs: 842,
     createdAt: "2026-09-11T08:00:00Z",
+    model: "",
+    errorCode: "",
+    errorMessage: "",
+    errorDetail: "",
   });
   assert.equal(page.nextCursor, null);
 });
