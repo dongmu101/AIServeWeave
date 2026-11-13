@@ -210,7 +210,6 @@ export function HistoryView() {
         {hasFilters ? (
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => {
               setDraftWorkflow("");
               setFilters({ state: "", workflow_id: "", since: "", until: "" });
@@ -247,7 +246,7 @@ export function HistoryView() {
                   <TableCell className="font-mono text-xs">
                     <Link
                       href={`/console/jobs/history/${encodeURIComponent(job.jobId)}`}
-                      className="underline underline-offset-2"
+                      className="font-medium text-accent-foreground underline underline-offset-4"
                     >
                       {job.jobId}
                     </Link>

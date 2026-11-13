@@ -84,7 +84,7 @@ export function AgentEnrollmentView() {
       <p className="text-sm text-muted-foreground"><Message id="operator.enrollmentPrivate" /></p>
     </section> : null}
     </details>
-    <Link href="/operator/fleet" className="text-sm underline"><Message id="operator.enrollmentFleet" /></Link>
+    <Link href="/operator/fleet" className="text-sm font-medium text-accent-foreground underline underline-offset-4"><Message id="operator.enrollmentFleet" /></Link>
   </div>;
 }
 

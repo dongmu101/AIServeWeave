@@ -302,7 +302,6 @@ export function AuditView({ surface = "admin" }: { surface?: "admin" | "operator
         {hasFilters(filters) ? (
           <Button
             variant="ghost"
-            size="sm"
             onClick={() =>
               setFilters({ action: "", actor_id: "", since: "", until: "" })
             }

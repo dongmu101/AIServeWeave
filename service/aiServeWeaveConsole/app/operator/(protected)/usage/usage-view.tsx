@@ -144,7 +144,7 @@ export function UsageView() {
             onChange={(event) => setUntilInput(event.target.value)}
           />
         </div>
-        <Button type="submit" variant="outline"><Message id="operator.applyFilters" /></Button>
+        <Button type="submit"><Message id="operator.applyFilters" /></Button>
         {since || until || tenantId ? (
           <Button
             type="button"

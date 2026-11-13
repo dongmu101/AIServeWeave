@@ -269,8 +269,8 @@ export function BillingView({ role, returning, alipayReturning = false, ezfpRetu
         <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.billing" /></h1>
         <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
         <p className="text-sm text-muted-foreground"><Message id="site.purchaseNote" values={{
-          terms: <Link href="/terms" target="_blank" className="underline underline-offset-4"><Message id="site.terms" /></Link>,
-          refund: <Link href="/refund" target="_blank" className="underline underline-offset-4"><Message id="site.refund" /></Link>,
+          terms: <Link href="/terms" target="_blank" className="font-medium text-accent-foreground underline underline-offset-4"><Message id="site.terms" /></Link>,
+          refund: <Link href="/refund" target="_blank" className="font-medium text-accent-foreground underline underline-offset-4"><Message id="site.refund" /></Link>,
         }} /></p>
       </div>
       {data?.hasCustomer && canPurchase ? <PortalButton /> : null}

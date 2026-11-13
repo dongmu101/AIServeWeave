@@ -378,7 +378,6 @@ export function AlertsView() {
         {hasFilters(filters) ? (
           <Button
             variant="ghost"
-            size="sm"
             onClick={() => setFilters({ status: "", rule_id: "", since: "", until: "" })}
           >
             <Message id="tenant.clearFilters" /></Button>

@@ -238,7 +238,7 @@ export function JobsView({ hasGatewayKey }: { hasGatewayKey: boolean }) {
               : t("tenant.cancellationAndArtifactDownloadsUseTheGatewayData_292c9a"), value2: hasGatewayKey ? null : (
               <>
                 {" "}
-                <Link href="/console/settings" className="underline underline-offset-2">
+                <Link href="/console/settings" className="font-medium text-accent-foreground underline underline-offset-4">
                   <Message id="tenant.goToSettings" /></Link>
               </>
             ) }} /></p>
@@ -327,7 +327,7 @@ export function ArtifactLinks({ artifactIds }: { artifactIds: string[] }) {
         <a
           key={id}
           href={`/api/gateway/artifacts/${encodeURIComponent(id)}`}
-          className="underline underline-offset-2"
+          className="font-medium text-accent-foreground underline underline-offset-4"
           title={id}
         >
           <Message id="tenant.download" /></a>

@@ -65,7 +65,7 @@ export function ModelsView() {
       </div>
       <Button variant="outline" disabled={loading} onClick={reload} aria-busy={loading}><Message id="tenant.refreshConnectionsModels" /></Button>
     </div>
-    <p className="text-xs text-muted-foreground"><Message id="tenant.refreshesEvery15SecondsPausingInBackgroundTabs_6e72a0" values={{ link: <Link className="underline" href="/operator/routes"><Message id="tenant.modelRoutes" /></Link> }} /></p>
+    <p className="text-xs text-muted-foreground"><Message id="tenant.refreshesEvery15SecondsPausingInBackgroundTabs_6e72a0" values={{ link: <Link className="font-medium text-accent-foreground underline underline-offset-4" href="/operator/routes"><Message id="tenant.modelRoutes" /></Link> }} /></p>
     {fleet.error ? <ErrorState message={fleet.error} onRetry={reload} /> : loading || !fleet.data ?
       <LoadingState label={t("tenant.loadingAiConnectionsAndModelsFromTheCurrent")} rows={4} /> : fleet.data.partial ?
       <ErrorState message={t("tenant.unableToLoadConnectionsAndModelsFromThe")} onRetry={reload} /> : <>

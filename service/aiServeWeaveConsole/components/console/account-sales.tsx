@@ -60,9 +60,9 @@ export function AccountSales({ operator = false, canPurchase = false, methods }:
 function Pages({ current, total, onChange }: { current: number; total: number; onChange: (page: number) => void }) {
   if (total <= 1) return null;
   return <div className="flex items-center justify-between gap-3">
-    <Button variant="outline" disabled={current === 0} onClick={() => onChange(current - 1)}><Message id="tenant.accountPrevious" /></Button>
+    <Button variant="outline" size="sm" disabled={current === 0} onClick={() => onChange(current - 1)}><Message id="tenant.accountPrevious" /></Button>
     <span className="text-sm">{current + 1} / {total}</span>
-    <Button variant="outline" disabled={current + 1 >= total} onClick={() => onChange(current + 1)}><Message id="tenant.accountNext" /></Button>
+    <Button variant="outline" size="sm" disabled={current + 1 >= total} onClick={() => onChange(current + 1)}><Message id="tenant.accountNext" /></Button>
   </div>;
 }
 

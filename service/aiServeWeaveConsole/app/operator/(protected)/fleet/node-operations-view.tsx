@@ -86,7 +86,7 @@ export function NodeOperationsView() {
       </div>}
     </section>
     {sharing.error ? <ErrorState message={sharing.error} onRetry={sharing.reload} /> : null}
-    <Link className="text-sm underline" href="/operator/node-access"><Message id="operator.sharingSettings" /></Link>
+    <Link className="text-sm font-medium text-accent-foreground underline underline-offset-4" href="/operator/node-access"><Message id="operator.sharingSettings" /></Link>
     <FleetView key={fleetRevision} title={t("operator.liveFleetGatewayObservations")} />
     <ConfirmDialog open={sharingTarget !== null} onOpenChange={open => { if (!open) setSharingTarget(null); }}
       title={t(sharingTarget?.mode === "private" ? "operator.disableNodeSharing" : "operator.enableNodeSharing")}

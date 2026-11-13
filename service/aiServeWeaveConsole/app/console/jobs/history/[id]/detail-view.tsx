@@ -125,7 +125,7 @@ export function DetailView({
               {hasGatewayKey ? (
                 <CancelButton jobId={jobId} onCancelled={job.reload} />
               ) : (
-                <p className="text-xs text-muted-foreground"><Message id="tenant.thisRunHasNotFinishedButNoGateway_2df060" values={{ link: <Link href="/console/settings" className="underline underline-offset-2">
+                <p className="text-xs text-muted-foreground"><Message id="tenant.thisRunHasNotFinishedButNoGateway_2df060" values={{ link: <Link href="/console/settings" className="font-medium text-accent-foreground underline underline-offset-4">
                     <Message id="tenant.settings" /></Link> }} /></p>
               )}
             </div>
@@ -145,7 +145,7 @@ export function DetailView({
                 ))}
               </div>
             ) : (
-              <p className="mt-2 text-xs text-muted-foreground"><Message id="tenant.totalArtifactsPreviewsAndDownloadsUseTheGateway" values={{ count: job.data.artifacts.length, link: <Link href="/console/settings" className="underline underline-offset-2">
+              <p className="mt-2 text-xs text-muted-foreground"><Message id="tenant.totalArtifactsPreviewsAndDownloadsUseTheGateway" values={{ count: job.data.artifacts.length, link: <Link href="/console/settings" className="font-medium text-accent-foreground underline underline-offset-4">
                   <Message id="tenant.settings" /></Link> }} /></p>
             )}
           </div>

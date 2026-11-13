@@ -387,7 +387,6 @@ export function RequestLogView({ surface = "admin" }: { surface?: "admin" | "ope
         {hasFilters(filters, surface) ? (
           <Button
             variant="ghost"
-            size="sm"
             onClick={() =>
               setFilters({ status: "", request_id: "", tenant_id: "", since: "", until: "" })
             }

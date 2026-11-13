@@ -122,7 +122,7 @@ export function UsageView() {
             onChange={(event) => setUntilInput(event.target.value)}
           />
         </div>
-        <Button type="submit" variant="outline"><Message id="tenant.applyTimeRange" /></Button>
+        <Button type="submit"><Message id="tenant.applyTimeRange" /></Button>
         {since || until ? (
           <Button
             type="button"

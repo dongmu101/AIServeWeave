@@ -95,7 +95,7 @@ function UserActionsForm({ user, pending, setPending, onDone, onChanged }: {
           <SelectTrigger id="manage-user-role" className="w-40" aria-label={t("tenant.changeRoleFor", { email: user.email })}><SelectValue /></SelectTrigger>
           <SelectContent>{assignableRoles.map((item) => <SelectItem key={item} value={item}>{roleLabels(locale)[item]}</SelectItem>)}</SelectContent>
         </Select>
-        <Button variant="outline" disabled={pending || role === user.role} onClick={() => mutate(`${base}/role`, "PUT", { role })}><Message id="tenant.saveRole" /></Button>
+        <Button disabled={pending || role === user.role} onClick={() => mutate(`${base}/role`, "PUT", { role })}><Message id="tenant.saveRole" /></Button>
       </div>
     </div>
 
