@@ -158,7 +158,7 @@ export function ConsoleShell({
 
   return (
     <div className="flex h-dvh shrink-0 flex-col overflow-hidden">
-      <header className="h-14 shrink-0 border-b bg-background">
+      <header className="h-14 shrink-0 border-b bg-muted/40">
         <div className="mx-auto flex h-full w-full max-w-[96rem] items-center gap-3 px-4">
           <Link href="/console" className="flex shrink-0 items-center gap-2 whitespace-nowrap font-heading text-sm font-semibold">
             <BrandMark />

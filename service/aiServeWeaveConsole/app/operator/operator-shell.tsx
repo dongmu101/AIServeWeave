@@ -65,9 +65,9 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
     } catch (failure) { setError(<ErrorMessage error={failure} />); setPending(false); }
   }
   return <div className="flex min-h-full flex-1 flex-col bg-muted/40">
-    <header className="border-b bg-background">
+    <header className="border-b">
       <div className="mx-auto flex min-h-14 max-w-6xl flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2">
-        <span className="mr-auto flex items-center gap-2 font-heading text-sm font-semibold"><BrandMark className="bg-foreground text-primary" /><Message id="auth.aiserveweavePlatformOperations" /></span>
+        <span className="mr-auto flex items-center gap-2 font-heading text-sm font-semibold"><BrandMark /><Message id="auth.aiserveweavePlatformOperations" /></span>
         <LanguageSwitcher />
         <Link href="/console" className={buttonVariants({ variant: "ghost", size: "sm" })}><Message id="operator.tenantConsole" /></Link>
         <span className="hidden max-w-40 truncate text-sm text-muted-foreground sm:inline" title={operator.name || operator.email}>{operator.name || operator.email}</span>
@@ -77,7 +77,7 @@ export function OperatorShell({ operator, children }: { operator: OperatorIdenti
       {/* One scrolling row on a phone, wrapped rows from md up. / 手机上是一行横向滚动，md 起换行排列。 */}
       <nav ref={navigationRef} aria-label={t("operator.platformOperationsNavigation")} className="mx-auto flex max-w-6xl gap-1 overflow-x-auto px-4 pb-2 md:flex-wrap">{navigation.map(item => {
         const active = pathname === item.href;
-        return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} className={buttonVariants({ variant: "ghost", size: "sm", className: active ? "bg-accent text-accent-foreground hover:bg-accent hover:text-accent-foreground" : "text-muted-foreground" })}>{item.label}</Link>;
+        return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} className={buttonVariants({ variant: "ghost", size: "sm", className: active ? "bg-primary text-primary-foreground hover:bg-primary hover:text-primary-foreground" : "text-muted-foreground" })}>{item.label}</Link>;
       })}</nav>
     </header>
     <main className="mx-auto w-full min-w-0 max-w-6xl flex-1 wrap-anywhere px-4 py-6">{children}</main>
