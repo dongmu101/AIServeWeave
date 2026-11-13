@@ -176,7 +176,10 @@ func (s *Service) openEzfpCheckout(ctx context.Context, actor Actor, order model
 		if errors.As(err, &refused) {
 			code = refused.Code
 		}
-		slog.Error("opening an 易支付 payment failed", slog.String("order_id", order.ID), slog.Int("code", code))
+		// The client's errors carry no upstream text, URL or key, only the
+		// cause: a timeout, an HTTP status, an unverified answer.
+		slog.Error("opening an 易支付 payment failed", slog.String("order_id", order.ID), slog.Int("code", code),
+			slog.String("error", err.Error()))
 		if failErr := s.store.FailCheckoutOrder(context.WithoutCancel(ctx), order.ID, s.clock.Now()); failErr != nil {
 			slog.Error("releasing a failed 易支付 checkout failed", slog.String("order_id", order.ID))
 		}
