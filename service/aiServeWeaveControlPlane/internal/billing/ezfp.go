@@ -51,6 +51,7 @@ type Ezfp interface {
 const (
 	EzfpTypeAlipay = "alipay"
 	EzfpTypeWxpay  = "wxpay"
+	EzfpTypeUsdt   = "usdt"
 )
 
 // EzfpTradeSuccess is the only trade_status a notification carries.

@@ -320,11 +320,10 @@ type CheckoutOrder struct {
 	// Provider 是收取这笔付款的服务商：PaymentProviderDodo、PaymentProviderEzfp 或
 	// PaymentProviderOpcpay。记录这一列之前创建的订单为空；须经 PaymentProvider 读取。
 	Provider string `gorm:"size:16;not null"`
-	// PayType is the 易支付 payment type the tenant chose, EzfpPayTypeAlipay
-	// or EzfpPayTypeWxpay; empty for other providers.
+	// PayType is the 易支付 payment type the tenant chose, one of
+	// EzfpPayTypes; empty for other providers.
 	//
-	// PayType 是租户选择的易支付付款方式，EzfpPayTypeAlipay 或 EzfpPayTypeWxpay；其他
-	// 服务商为空。
+	// PayType 是租户选择的易支付付款方式，取自 EzfpPayTypes；其他服务商为空。
 	PayType   string `gorm:"size:16;not null"`
 	CreatedAt time.Time
 	UpdatedAt time.Time
@@ -346,13 +345,21 @@ const (
 	PaymentProviderOpcpay = "opcpay"
 )
 
-// 易支付 payment types.
+// 易支付 payment types. USDT is still charged as a CNY amount; 易支付
+// converts it on its payment page.
 //
-// 易支付付款方式。
+// 易支付付款方式。USDT 仍按人民币金额收取，由易支付在付款页换算。
 const (
 	EzfpPayTypeAlipay = "alipay"
 	EzfpPayTypeWxpay  = "wxpay"
+	EzfpPayTypeUsdt   = "usdt"
 )
+
+// EzfpPayTypes is every 易支付 payment type this service can offer, in
+// display order.
+//
+// EzfpPayTypes 是本服务能提供的全部易支付付款方式，按展示顺序排列。
+var EzfpPayTypes = []string{EzfpPayTypeAlipay, EzfpPayTypeWxpay, EzfpPayTypeUsdt}
 
 // EzfpCurrency is the only currency 易支付 charges in.
 //

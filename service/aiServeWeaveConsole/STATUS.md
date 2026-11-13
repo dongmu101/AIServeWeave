@@ -433,7 +433,7 @@ TS 7 类型检查与使用 TS 6 的构建必须分别通过；`pnpm typecheck` �
 
 ## 易支付（EZFP）接入（2026-11-12）
 
-易支付（彩虹易支付 V2）作为第二个法币服务商与 Dodo 并存。控制面在同一变更中实现了下表「契约」中的字段与路由（见 [ControlPlane STATUS「易支付（EZFP）」](../aiServeWeaveControlPlane/STATUS.md#易支付ezfp)，其 e2e 校验了同一份 JSON 形状）；浏览器用例仍以模拟的控制面答复运行，**未与运行中的控制面在浏览器里联调**。Console 不持有易支付的商户号或密钥，不引入任何易支付 SDK，不接收易支付的异步通知（它直接打到控制面 `GET`/`POST /billing/v1/ezfp/notify`，不在任何白名单里，白名单测试新增了它的反向用例）。易支付只收人民币：只有币种为 `CNY` 的商品能经它支付，租户可选支付宝（`alipay`）或微信（`wxpay`），哪些类型可用由运维配置，Console 只展示控制面报告的结果。
+易支付（彩虹易支付 V2）作为第二个法币服务商与 Dodo 并存。控制面在同一变更中实现了下表「契约」中的字段与路由（见 [ControlPlane STATUS「易支付（EZFP）」](../aiServeWeaveControlPlane/STATUS.md#易支付ezfp)，其 e2e 校验了同一份 JSON 形状）；浏览器用例仍以模拟的控制面答复运行，**未与运行中的控制面在浏览器里联调**。Console 不持有易支付的商户号或密钥，不引入任何易支付 SDK，不接收易支付的异步通知（它直接打到控制面 `GET`/`POST /billing/v1/ezfp/notify`，不在任何白名单里，白名单测试新增了它的反向用例）。易支付只收人民币：只有币种为 `CNY` 的商品能经它支付，租户可选支付宝（`alipay`）、微信（`wxpay`）或 USDT（`usdt`），哪些类型可用由运维配置，Console 只展示控制面报告的结果。
 
 | 层 | 落点 |
 | --- | --- |

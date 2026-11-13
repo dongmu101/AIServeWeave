@@ -84,6 +84,7 @@ export function orderMethodLabel(order: Pick<CheckoutOrder, "provider" | "payTyp
     case "ezfp":
       return order.payType === "alipay" ? t("tenant.billingProviderEzfpAlipay")
         : order.payType === "wxpay" ? t("tenant.billingProviderEzfpWxpay")
+        : order.payType === "usdt" ? t("tenant.billingProviderEzfpUsdt")
         : t("tenant.billingProviderEzfp");
     case "dodo":
       return t("tenant.billingProviderDodo");

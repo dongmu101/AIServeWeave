@@ -258,12 +258,13 @@ TenantNodes:
 #     ReturnURL: https://console.example.com/console/billing?tab=alipay&alipay_return=1
 #
 # 易支付（EZFP）：与 Dodo 并存或单独使用，为 CNY 标价的充值包、包月账号与预售收取人民币
-# （支付宝 / 微信）。在商户后台「API 信息」生成商户 RSA 密钥对，把商户私钥与平台公钥写进
+# （支付宝 / 微信 / USDT，USDT 须在 Types 中明确列出）。在商户后台「API 信息」生成商户 RSA 密钥对，把商户私钥与平台公钥写进
 # deploy/.env 的 AISW_EZFP_PRIVATE_KEY / AISW_EZFP_PUBLIC_KEY。NotifyURL 指向本控制面的
 # /billing/v1/ezfp/notify（反向代理须暴露这一条路径，见 nginx.example.conf），ReturnURL 为
 # Console 计费页；两者都须为 HTTPS 且不带 query。详见 docs/billing-ezfp.md。
 #
-# 易支付 (EZFP): beside Dodo or alone, takes CNY payments (Alipay / WeChat Pay)
+# 易支付 (EZFP): beside Dodo or alone, takes CNY payments (Alipay / WeChat Pay /
+# USDT, which Types must list explicitly)
 # for CNY-priced packages, accounts and presales. Generate the merchant RSA key
 # pair in the merchant dashboard and put the merchant private key and platform
 # public key in deploy/.env. NotifyURL must reach this control plane's

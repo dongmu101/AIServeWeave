@@ -1,11 +1,12 @@
 import type { PaymentMethods } from "./billing.ts";
 
 /** EZFP_PAY_TYPES is the closed set of payment types 易支付 (EZFP, 彩虹易支付 V2)
- * can be asked for: Alipay and WeChat Pay.
+ * can be asked for: Alipay, WeChat Pay and USDT. USDT is still charged as the
+ * item's CNY price; 易支付 converts it on its payment page.
  *
- * EZFP_PAY_TYPES 是易支付（EZFP，彩虹易支付 V2）可指定的支付类型的封闭集合：支付宝与
- * 微信支付。 */
-export const EZFP_PAY_TYPES = ["alipay", "wxpay"] as const;
+ * EZFP_PAY_TYPES 是易支付（EZFP，彩虹易支付 V2）可指定的支付类型的封闭集合：支付宝、
+ * 微信支付与 USDT。USDT 仍按商品的人民币标价收取，由易支付在付款页换算。 */
+export const EZFP_PAY_TYPES = ["alipay", "wxpay", "usdt"] as const;
 export type EzfpPayType = (typeof EZFP_PAY_TYPES)[number];
 
 /** PayChoice is how a tenant chose to pay a fiat checkout: through Dodo, or

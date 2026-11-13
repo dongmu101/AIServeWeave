@@ -137,7 +137,7 @@ func (s *Service) resolvePayment(pay Payment) (string, error) {
 		}
 		return model.PaymentProviderDodo, nil
 	case model.PaymentProviderEzfp:
-		if pay.PayType != model.EzfpPayTypeAlipay && pay.PayType != model.EzfpPayTypeWxpay {
+		if !slices.Contains(model.EzfpPayTypes, pay.PayType) {
 			return "", ErrInvalidInput
 		}
 		if !s.ezfpEnabled() {
