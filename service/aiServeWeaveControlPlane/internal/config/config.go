@@ -474,10 +474,12 @@ type EzfpConf struct {
 	// 两者都可以是后台所示的裸 base64 或 PEM。
 	PrivateKey string `json:",optional"`
 	PublicKey  string `json:",optional"`
-	// Types are the payment types offered to tenants, of alipay and wxpay;
-	// empty offers both.
+	// Types are the payment types offered to tenants, of alipay, wxpay and
+	// usdt; empty offers alipay and wxpay. usdt is never a default: the
+	// merchant must have the channel enabled at 易支付 first.
 	//
-	// Types 是提供给租户的付款方式，取自 alipay 与 wxpay；为空时两者都提供。
+	// Types 是提供给租户的付款方式，取自 alipay、wxpay 与 usdt；为空时提供 alipay 与
+	// wxpay。usdt 从不作为默认值：商户须先在易支付开通该通道。
 	Types []string `json:",optional"`
 	// NotifyURL is where EZFP posts payment notifications: this control
 	// plane's public /billing/v1/ezfp/notify. ReturnURL is where it sends
@@ -496,9 +498,10 @@ type EzfpConf struct {
 	BaseURL string `json:",optional"`
 }
 
-// PayTypes returns the payment types to offer: Types, or both when empty.
+// PayTypes returns the payment types to offer: Types, or alipay and wxpay
+// when empty.
 //
-// PayTypes 返回要提供的付款方式：Types，为空时两者都提供。
+// PayTypes 返回要提供的付款方式：Types，为空时为 alipay 与 wxpay。
 func (e EzfpConf) PayTypes() []string {
 	if len(e.Types) == 0 {
 		return []string{"alipay", "wxpay"}
@@ -519,8 +522,8 @@ func (e EzfpConf) validate() error {
 	}
 	seen := map[string]bool{}
 	for _, t := range e.Types {
-		if (t != "alipay" && t != "wxpay") || seen[t] {
-			return errors.New("config: Billing.Ezfp.Types may only list alipay and wxpay, each once")
+		if (t != "alipay" && t != "wxpay" && t != "usdt") || seen[t] {
+			return errors.New("config: Billing.Ezfp.Types may only list alipay, wxpay and usdt, each once")
 		}
 		seen[t] = true
 	}

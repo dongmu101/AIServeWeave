@@ -5,19 +5,28 @@ import * as React from "react";
 import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
 import { Button } from "@/components/ui/button";
-import { payChoiceKey, type PayChoice } from "@/lib/console/payment-choice";
+import { payChoiceKey, type EzfpPayType, type PayChoice } from "@/lib/console/payment-choice";
 import type { MessageKey } from "@/lib/i18n/messages";
 
-/** payChoiceLabelKey names a way to pay: Dodo takes cards, the two EZFP
- * types are Alipay and WeChat Pay.
+/** EZFP_LABEL_KEYS names each EZFP payment type.
  *
- * payChoiceLabelKey 给出一种付款方式的名称：Dodo 走银行卡，易支付的两种类型是支付宝与
- * 微信支付。 */
+ * EZFP_LABEL_KEYS 给出每种易支付付款方式的名称。 */
+const EZFP_LABEL_KEYS: Record<EzfpPayType, MessageKey> = {
+  alipay: "tenant.payChoiceAlipay",
+  wxpay: "tenant.payChoiceWxpay",
+  usdt: "tenant.payChoiceUsdt",
+};
+
+/** payChoiceLabelKey names a way to pay: Dodo takes cards, the EZFP types
+ * are Alipay, WeChat Pay and USDT.
+ *
+ * payChoiceLabelKey 给出一种付款方式的名称：Dodo 走银行卡，易支付的类型是支付宝、
+ * 微信支付与 USDT。 */
 export function payChoiceLabelKey(choice: PayChoice): MessageKey {
   if (choice.provider === "dodo") {
     return "tenant.payChoiceDodo";
   }
-  return choice.payType === "alipay" ? "tenant.payChoiceAlipay" : "tenant.payChoiceWxpay";
+  return EZFP_LABEL_KEYS[choice.payType];
 }
 
 /**

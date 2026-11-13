@@ -51,6 +51,7 @@ type Ezfp interface {
 const (
 	EzfpTypeAlipay = "alipay"
 	EzfpTypeWxpay  = "wxpay"
+	EzfpTypeUsdt   = "usdt"
 )
 
 // EzfpTradeSuccess is the only trade_status a notification carries.
@@ -144,13 +145,17 @@ type EzfpRefund struct {
 	Status      int
 }
 
-// EzfpError is a non-zero code EZFP answered with. The upstream message is
-// kept out, so it can never reach a log or a page.
+// EzfpError is a non-zero code EZFP answered with. Msg is EZFP's own reason,
+// meant for the merchant (a bad signature, a channel not enabled), cut short
+// and stripped of control characters. Error leaves it out, so it never
+// reaches a page; only an operator log reads it.
 //
-// EzfpError 是易支付答复的非零 code。不保留上游消息文本，使它永远到不了日志或页面。
+// EzfpError 是易支付答复的非零 code。Msg 是易支付给商户看的原因（签名错误、通道未开通
+// 等），已截短并去掉控制字符。Error 不包含它，使它永远到不了页面；只有运维日志读取它。
 type EzfpError struct {
 	Op   string
 	Code int
+	Msg  string
 }
 
 func (e *EzfpError) Error() string {

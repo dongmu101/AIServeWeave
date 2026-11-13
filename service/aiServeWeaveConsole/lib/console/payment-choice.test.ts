@@ -30,6 +30,7 @@ test("withPayChoice adds provider and pay_type only for EZFP", () => {
   assert.equal("pay_type" in withPayChoice(body, dodo), false);
   assert.deepEqual(withPayChoice(body, undefined), { package_id: "pkg_1" });
   assert.deepEqual(withPayChoice(body, { provider: "ezfp", payType: "wxpay" }), { package_id: "pkg_1", provider: "ezfp", pay_type: "wxpay" });
+  assert.deepEqual(withPayChoice(body, { provider: "ezfp", payType: "usdt" }), { package_id: "pkg_1", provider: "ezfp", pay_type: "usdt" });
   assert.deepEqual(body, { package_id: "pkg_1" }, "the input is not mutated");
 });
 

@@ -851,7 +851,7 @@ Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 
 | `Billing.Ezfp.Enabled` | `false` | 开启易支付；只配易支付时可省略 `Billing.Dodo` 与 `Billing.ReturnURL` |
 | `Billing.Ezfp.PID` | 空 | 开启时必填，商户 ID（正整数） |
 | `Billing.Ezfp.PrivateKey` / `PublicKey` | 空 | 开启时必填，商户 RSA 私钥与平台 RSA 公钥（裸 base64 或 PEM），部署里用 `${AISW_EZFP_PRIVATE_KEY}` / `${AISW_EZFP_PUBLIC_KEY}` 引用；启动时解析，格式错误启动失败 |
-| `Billing.Ezfp.Types` | `[alipay, wxpay]` | 提供给租户的付款方式，只能是 `alipay`、`wxpay`，不可重复 |
+| `Billing.Ezfp.Types` | `[alipay, wxpay]` | 提供给租户的付款方式，只能是 `alipay`、`wxpay`、`usdt`，不可重复；`usdt` 不在默认值中，须明确列出（USDT 仍按人民币金额下单，由易支付换算） |
 | `Billing.Ezfp.NotifyURL` / `ReturnURL` | 空 | 开启时必填，绝对 HTTPS，不带凭据、query、fragment，≤512 字节；前者是本控制面公开的 `/billing/v1/ezfp/notify`，后者是 Console 计费页 |
 | `Billing.Ezfp.BaseURL` | 空 | 可选，覆盖接口基址（默认 `https://www.ezfp.cn/`），须为 HTTPS，供测试替身使用 |
 
@@ -872,7 +872,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id` |
 | `credit_packages` | 充值包（`pkg_`）：`fixed` 为固定价格产品对应固定点数；`custom` 为 Dodo Pay What You Want 产品，按 `credits_per_minor_unit_micro` 换算，金额在 `min_amount_minor`–`max_amount_minor` 内 |
 | `model_prices` | 别名单价，`*` 为默认价 |
-| `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准。`provider`（`dodo`/`ezfp`/`opcpay`）与 `pay_type`（易支付的 `alipay`/`wxpay`）见 `0009_ezfp.sql`，旧行为空，空值按 `alipay_amount` 推断为一人付或 Dodo。易支付订单的 `dodo_session_id`/`dodo_payment_id` 存 `ezfp:<trade_no>`，前缀使不同服务商的 id 在唯一索引下不冲突 |
+| `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准。`provider`（`dodo`/`ezfp`/`opcpay`）与 `pay_type`（易支付的 `alipay`/`wxpay`/`usdt`）见 `0009_ezfp.sql`，旧行为空，空值按 `alipay_amount` 推断为一人付或 Dodo。易支付订单的 `dodo_session_id`/`dodo_payment_id` 存 `ezfp:<trade_no>`，前缀使不同服务商的 id 在唯一索引下不冲突 |
 | `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`usage`/`refund`/`dispute`/`dispute_reversal`/`adjust`，带 `balance_after`；`idempotency_key` 唯一 |
 | `usage_charges` | 每个 `request_id` 一行费用，是扣费的幂等依据 |
 | `billing_webhook_events` | 已处理的 `webhook-id`，用于去重 |
@@ -956,7 +956,7 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 ### 易支付（EZFP）
 
-易支付（彩虹易支付 V2）是第二个法币结账通道，与 Dodo 服务同样的充值包、账号包月与预售，只收 CNY 标价的商品，金额即商品标价；CNY 商品可以不填 Dodo 产品 ID（此时只能经易支付购买，`packageFromInput`、`SaveAccountSale`、`SaveAccountPresale` 与 `model.FiatPayable` 共用这条规则）。租户在结账请求里选择 `provider: "ezfp"` 与 `pay_type`（`alipay`/`wxpay`）。规则与开通步骤见[易支付说明](../../docs/billing-ezfp.md)。
+易支付（彩虹易支付 V2）是第二个法币结账通道，与 Dodo 服务同样的充值包、账号包月与预售，只收 CNY 标价的商品，金额即商品标价；CNY 商品可以不填 Dodo 产品 ID（此时只能经易支付购买，`packageFromInput`、`SaveAccountSale`、`SaveAccountPresale` 与 `model.FiatPayable` 共用这条规则）。租户在结账请求里选择 `provider: "ezfp"` 与 `pay_type`（`alipay`/`wxpay`/`usdt`，后者须运维在 `Types` 中开启）。规则与开通步骤见[易支付说明](../../docs/billing-ezfp.md)。
 
 - **下单**：先存 `pending` 订单（`provider=ezfp`、`pay_type`），再以 `method=jump` 调 `api/pay/create`，`out_trade_no` 为订单 id，`param` 为租户 id，`clientip` 为请求来源（控制面只看到 Console 的地址）；把 `ezfp:<trade_no>` 记为会话 id。下单失败（含结果未知）标记订单失败、释放账号占用或预售名额，返回 `503`。请求以商户私钥 SHA256WithRSA 签名；`code=0` 的答复以平台公钥验签并检查时间戳在 ±300 秒内，不通过一律视为结果未知。
 - **结算**：通知（GET 或 POST 表单）只验签、不限时间戳新旧；查询答复同样验签。两者都在核对商户 ID、交易状态与订单服务商后，归约为 `store.BillingEvent`（`Provider: ezfp`，事件 id `ezfp:pay:<trade_no>`，付款与会话 id `ezfp:<trade_no>`，CNY），走 `ApplyBillingEvent` 的同一事务与去重；`paymentSucceeded` 新增服务商核对，Dodo 事件（`Provider` 为空）不能结算易支付订单，反之亦然。租户取自订单，`param` 只作交叉核对。

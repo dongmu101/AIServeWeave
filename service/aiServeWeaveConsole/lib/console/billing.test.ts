@@ -192,6 +192,7 @@ test("a custom amount is checked against the package range before checkout", () 
 test("payment methods and package flags default for a control plane from before EZFP", () => {
   assert.deepEqual(parsePaymentMethods({ dodo: true, alipay: false, ezfp: true, ezfp_types: ["alipay", "wxpay"] }), { dodo: true, alipay: false, ezfp: true, ezfpTypes: ["alipay", "wxpay"] });
   assert.deepEqual(parsePaymentMethods({ dodo: false, alipay: false, ezfp: true, ezfp_types: ["wxpay", "paypal", 7, "wxpay"] }).ezfpTypes, ["wxpay"], "unknown and repeated types are dropped");
+  assert.deepEqual(parsePaymentMethods({ dodo: false, alipay: false, ezfp: true, ezfp_types: ["alipay", "usdt"] }).ezfpTypes, ["alipay", "usdt"], "usdt is a known type");
   assert.deepEqual(parsePaymentMethods({ dodo: true, alipay: false, ezfp: true, ezfp_types: null }).ezfpTypes, []);
   assert.deepEqual(parsePaymentMethods({ dodo: true, alipay: false, ezfp_types: ["alipay"] }).ezfp, false, "a missing ezfp reads as off");
   rejects("ezfp must be a boolean", () => parsePaymentMethods({ dodo: true, alipay: false, ezfp: "yes" }));

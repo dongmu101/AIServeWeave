@@ -32,6 +32,10 @@ func TestEzfpOnlyBillingNeedsNoDodo(t *testing.T) {
 	if err := cfg.Validate(); err != nil || !slices.Equal(cfg.Billing.Ezfp.PayTypes(), []string{"wxpay"}) {
 		t.Fatalf("wxpay only: %v %v", err, cfg.Billing.Ezfp.PayTypes())
 	}
+	cfg.Billing.Ezfp.Types = []string{"alipay", "wxpay", "usdt"}
+	if err := cfg.Validate(); err != nil || !slices.Equal(cfg.Billing.Ezfp.PayTypes(), []string{"alipay", "wxpay", "usdt"}) {
+		t.Fatalf("with usdt: %v %v", err, cfg.Billing.Ezfp.PayTypes())
+	}
 }
 
 func TestEzfpConfigIsChecked(t *testing.T) {

@@ -177,6 +177,19 @@ func bare(t *testing.T, der []byte) string {
 	return base64.StdEncoding.EncodeToString(der)
 }
 
+func TestCleanMsg(t *testing.T) {
+	for in, want := range map[string]string{
+		"签名错误":                   "签名错误",
+		" a\nb\tc\x00 ":          "a b c",
+		"bad\xffutf8":            "badutf8",
+		strings.Repeat("中", 100): strings.Repeat("中", maxMsgBytes/3),
+	} {
+		if got := cleanMsg(in); got != want {
+			t.Errorf("cleanMsg(%q) = %q; want %q", in, got, want)
+		}
+	}
+}
+
 func newTestClient(t *testing.T) (*Client, *fakeEzfp, *rsa.PrivateKey) {
 	t.Helper()
 	merchant, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -289,6 +302,9 @@ func TestCreateOrderRefusesWhatDoesNotVerify(t *testing.T) {
 		var refused *billing.EzfpError
 		if !errors.As(err, &refused) || refused.Code != -1 || strings.Contains(err.Error(), "secret") {
 			t.Fatalf("err = %v", err)
+		}
+		if refused.Msg != "商户不存在 <secret>" {
+			t.Fatalf("Msg = %q; want the upstream reason for the log", refused.Msg)
 		}
 	})
 	for name, setup := range map[string]func(*fakeEzfp){

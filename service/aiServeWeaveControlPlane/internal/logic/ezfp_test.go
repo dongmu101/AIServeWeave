@@ -99,7 +99,10 @@ func ezfpConfig(client billing.Ezfp) *logic.EzfpConfig {
 	}
 }
 
-var wxpay = logic.Payment{Provider: model.PaymentProviderEzfp, PayType: model.EzfpPayTypeWxpay}
+var (
+	wxpay = logic.Payment{Provider: model.PaymentProviderEzfp, PayType: model.EzfpPayTypeWxpay}
+	usdt  = logic.Payment{Provider: model.PaymentProviderEzfp, PayType: model.EzfpPayTypeUsdt}
+)
 
 func cnyPackage(t *testing.T, svc *logic.Service, product string) model.CreditPackage {
 	t.Helper()
@@ -120,6 +123,33 @@ func balanceOf(t *testing.T, svc *logic.Service, actor logic.Actor) int64 {
 		t.Fatal(err)
 	}
 	return overview.BalanceMicro
+}
+
+func TestEzfpUsdtCheckoutWhenOffered(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	ezfp := &fakeEzfp{}
+	cfg := ezfpConfig(ezfp)
+	cfg.Types = []string{model.EzfpPayTypeAlipay, model.EzfpPayTypeUsdt}
+	f.svc = logic.New(f.store, f.clock, logic.WithBilling(logic.BillingConfig{Ezfp: cfg, RefundWindowDays: 30}))
+	if err := f.svc.SetTenantBillingMode(ctx, accountOperator, f.tenant.ID, model.BillingModePrepaid); err != nil {
+		t.Fatal(err)
+	}
+	pkg := cnyPackage(t, f.svc, "")
+	if _, err := f.svc.CreateCheckout(ctx, f.ownerAt, pkg.ID, 0, wxpay); !errors.Is(err, logic.ErrInvalidInput) {
+		t.Fatalf("wxpay not offered: %v", err)
+	}
+	checkout, err := f.svc.CreateCheckout(ctx, f.ownerAt, pkg.ID, 0, usdt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sent := ezfp.orders[len(ezfp.orders)-1]; sent.OutTradeNo != checkout.OrderID || sent.PayType != "usdt" || sent.MoneyMinor != 6800 {
+		t.Fatalf("create request = %+v", sent)
+	}
+	order, err := f.store.GetCheckoutOrder(ctx, checkout.OrderID)
+	if err != nil || order.PayType != model.EzfpPayTypeUsdt {
+		t.Fatalf("order = %+v, %v", order, err)
+	}
 }
 
 func TestEzfpOnlyPackageCheckoutAndNotify(t *testing.T) {
@@ -158,6 +188,7 @@ func TestEzfpOnlyPackageCheckoutAndNotify(t *testing.T) {
 	}{
 		"dodo is off":      {f.ownerAt, pkg.ID, logic.Payment{}, logic.ErrNotFound},
 		"unknown type":     {f.ownerAt, pkg.ID, logic.Payment{Provider: "ezfp", PayType: "qqpay"}, logic.ErrInvalidInput},
+		"usdt not offered": {f.ownerAt, pkg.ID, usdt, logic.ErrInvalidInput},
 		"type on dodo":     {f.ownerAt, pkg.ID, logic.Payment{Provider: "dodo", PayType: "wxpay"}, logic.ErrInvalidInput},
 		"unknown provider": {f.ownerAt, pkg.ID, logic.Payment{Provider: "stripe"}, logic.ErrInvalidInput},
 		"member":           {f.actorWithRole(model.RoleMember), pkg.ID, wxpay, logic.ErrForbidden},

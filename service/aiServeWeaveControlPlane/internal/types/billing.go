@@ -58,11 +58,11 @@ type BillingOverviewResponse struct {
 // PaymentMethods is which payment providers are configured: Dodo and Ezfp
 // (易支付, CNY items only) for credit packages and fiat checkouts, Alipay
 // (一人付) for redeeming Alipay quota. EzfpTypes are the 易支付 payment types
-// a tenant may choose, alipay and wxpay.
+// a tenant may choose, of alipay, wxpay and usdt.
 //
 // PaymentMethods 是已配置的支付服务商：Dodo 与 Ezfp（易支付，仅限 CNY 商品）用于充值包
 // 与法币结账，Alipay（一人付）用于兑换支付宝额度。EzfpTypes 是租户可选的易支付付款方式，
-// 即 alipay 与 wxpay。
+// 取自 alipay、wxpay 与 usdt。
 type PaymentMethods struct {
 	Dodo      bool     `json:"dodo"`
 	Alipay    bool     `json:"alipay"`
@@ -72,12 +72,12 @@ type PaymentMethods struct {
 
 // CheckoutRequest is POST /admin/v1/billing/checkout. AmountMinor is the
 // chosen amount for a custom package and omitted for a fixed one. Provider
-// and PayType choose 易支付 ("ezfp" with "alipay" or "wxpay"); omitted, the
+// and PayType choose 易支付 ("ezfp" with "alipay", "wxpay" or "usdt"); omitted, the
 // checkout is Dodo's.
 //
 // CheckoutRequest 是 POST /admin/v1/billing/checkout 的请求。AmountMinor 是自定义
-// 充值包所选的金额，固定充值包省略。Provider 与 PayType 选择易支付（"ezfp" 搭配 "alipay"
-// 或 "wxpay"）；省略时为 Dodo 结账。
+// 充值包所选的金额，固定充值包省略。Provider 与 PayType 选择易支付（"ezfp" 搭配 "alipay"、
+// "wxpay" 或 "usdt"）；省略时为 Dodo 结账。
 type CheckoutRequest struct {
 	PackageID   string `json:"package_id"`
 	AmountMinor int64  `json:"amount_minor,omitempty"`

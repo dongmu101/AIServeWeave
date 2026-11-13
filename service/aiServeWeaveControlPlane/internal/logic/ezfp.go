@@ -137,7 +137,7 @@ func (s *Service) resolvePayment(pay Payment) (string, error) {
 		}
 		return model.PaymentProviderDodo, nil
 	case model.PaymentProviderEzfp:
-		if pay.PayType != model.EzfpPayTypeAlipay && pay.PayType != model.EzfpPayTypeWxpay {
+		if !slices.Contains(model.EzfpPayTypes, pay.PayType) {
 			return "", ErrInvalidInput
 		}
 		if !s.ezfpEnabled() {
@@ -172,11 +172,16 @@ func (s *Service) openEzfpCheckout(ctx context.Context, actor Actor, order model
 	})
 	if err != nil {
 		var refused *billing.EzfpError
-		code := 0
+		code, msg := 0, ""
 		if errors.As(err, &refused) {
-			code = refused.Code
+			code, msg = refused.Code, refused.Msg
 		}
-		slog.Error("opening an 易支付 payment failed", slog.String("order_id", order.ID), slog.Int("code", code))
+		// The client's errors carry no URL or key, only the cause: a timeout,
+		// an HTTP status, an unverified answer. msg is EZFP's reason for a
+		// refusal, written for the merchant, and is what says why code is
+		// non-zero.
+		slog.Error("opening an 易支付 payment failed", slog.String("order_id", order.ID), slog.Int("code", code),
+			slog.String("msg", msg), slog.String("error", err.Error()))
 		if failErr := s.store.FailCheckoutOrder(context.WithoutCancel(ctx), order.ID, s.clock.Now()); failErr != nil {
 			slog.Error("releasing a failed 易支付 checkout failed", slog.String("order_id", order.ID))
 		}

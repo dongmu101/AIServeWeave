@@ -95,7 +95,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
     for f in agent.sh agent.ps1 install.sh install.ps1; do cp "deploy/agent/$f" "$dir/$f"; done; \
     cd "$dir" && sha256sum -- * > SHA256SUMS.txt
 
-FROM alpine:3.22
+FROM alpine:3.24
 # ca-certificates is for outbound TLS — the Gateway calls the control plane
 # over HTTPS in a real deployment. The tunnel's own trust comes from the
 # Registry CA, which is mounted, not baked in.

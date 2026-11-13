@@ -1,6 +1,6 @@
 # 易支付（EZFP）人民币收款
 
-[易支付](https://www.ezfp.cn/)（彩虹易支付 V2 协议）是 Dodo 之外的第二个法币收款通道，以人民币收款，租户可选**支付宝**或**微信支付**。它与 Dodo 服务同样三条结账流程：点数充值包、账号包月（现货）、账号预售。两者可以并存，都可用时由租户在结账时选择；也可以只配易支付。
+[易支付](https://www.ezfp.cn/)（彩虹易支付 V2 协议）是 Dodo 之外的第二个法币收款通道，以人民币收款，租户可选**支付宝**、**微信支付**或 **USDT**（运维在 `Types` 中开启哪几种）。它与 Dodo 服务同样三条结账流程：点数充值包、账号包月（现货）、账号预售。两者可以并存，都可用时由租户在结账时选择；也可以只配易支付。
 
 > 只有**币种为 CNY** 的商品可以走易支付，金额就是商品现有的标价（分），不另设价格。CNY 商品可以不填 Dodo 产品 ID，此时只能经易支付购买；其他币种的商品照旧只能经 Dodo 购买。
 
@@ -27,12 +27,14 @@ Billing:
     PID: 1001                       # 商户 ID
     PrivateKey: "${AISW_EZFP_PRIVATE_KEY}"
     PublicKey: "${AISW_EZFP_PUBLIC_KEY}"
-    Types: [alipay, wxpay]          # 可省略，默认两者都提供
+    Types: [alipay, wxpay, usdt]    # 可省略，默认 [alipay, wxpay]；usdt 须明确列出
     NotifyURL: https://console.example.com/billing/v1/ezfp/notify
     ReturnURL: https://console.example.com/console/billing
 ```
 
 `NotifyURL` 与 `ReturnURL` 必须是 HTTPS，且**不能带 query 或 fragment**：易支付会在后面追加自己的参数。只配易支付时可以省略 `Billing.Dodo` 和 `Billing.ReturnURL`，Dodo webhook 与客户门户不挂载。密钥在启动时解析，格式错误会让控制面启动失败。
+
+`Types` 可列 `alipay`、`wxpay`、`usdt`，不可重复。`usdt` 不在默认值里：先在易支付商户后台确认 USDT 通道已开通，再加进 `Types`，否则租户点击后易支付会拒绝下单（控制面返回 `503`）。USDT 订单仍按商品的人民币标价下单，由易支付在付款页换算成 USDT；本服务的订单、入账与退款金额都以人民币计。部分通道不支持退款，USDT 退款被易支付拒绝时按「明确拒绝」处理。
 
 5. 让易支付能投递通知：`deploy/docker-compose.yaml` 把控制面端口只绑定在 `127.0.0.1`，需要反向代理把 `/billing/v1/ezfp/notify` 这一条路径（GET 与 POST）转到控制面，见 `deploy/nginx.example.conf`。经 Cloudflare 代理时，要让 WAF 与 Bot Fight Mode 放行这条路径。通知的 query 里带付款人标识与签名，示例配置对这条路径关闭了访问日志。
 6. 控制面所在服务器须开启时间同步：易支付接口答复的时间戳与本机时钟相差超过 5 分钟时会验签失败，结账返回 `503`，恢复也会停滞。
@@ -45,7 +47,7 @@ Billing:
 
 ## 防重复入账与交付
 
-- **先落库再下单**：订单（`ord_` id 即易支付的 `out_trade_no`）先以 `pending` 保存，点数或开通内容在此时确定，再调用 `api/pay/create`（`method=jump`）。下单失败时订单标为失败，并释放账号占用或预售名额，返回 `503`。
+- **先落库再下单**：订单（`ord_` id 即易支付的 `out_trade_no`）先以 `pending` 保存，点数或开通内容在此时确定，再调用 `api/pay/create`（`method=jump`）。下单失败时订单标为失败，并释放账号占用或预售名额，返回 `503`。原因记在控制面的 `opening an 易支付 payment failed` 日志里：`code` 与 `msg` 非空表示易支付明确拒绝，`msg` 是易支付给商户的原因（截短、去控制字符，不会出现在页面上）；`code=0` 时看 `error`，它是超时、HTTP 状态或验签失败。
 - **同一条结算路径**：通知与查询都归约为和 Dodo webhook 相同的付款事件，交给同一个事务。账号订单开通一个月，预售订单进入「待发货」，充值包记入 `topup` 点数。
 - **逐项核对**：商户 ID 一致；`trade_status` 为 `TRADE_SUCCESS`（查询时 `status` 为 1）；订单确实是易支付订单；交易号与下单时记录的一致；币种为 CNY；实付金额不低于订单金额；`param` 中的租户与订单一致。任一项不符都不入账，记错误日志，留给运维处理。
 - **三道去重**：事件 id `ezfp:pay:<trade_no>`、付款 id `ezfp:<trade_no>` 唯一约束、账目幂等键 `topup:ezfp:<trade_no>`。通知重投、通知与查询同时到达，都只入账一次。
