@@ -303,6 +303,7 @@ const (
 	ActionUserRoleChange     = "user.role.change"
 	ActionUserDisable        = "user.disable"
 	ActionUserEnable         = "user.enable"
+	ActionUserDelete         = "user.delete"
 	ActionUserSessionsRevoke = "user.sessions.revoke"
 	ActionSessionLogout      = "session.logout"
 	ActionAPIKeyCreate       = "apikey.create"

@@ -68,12 +68,12 @@ function UserActionsForm({ user, pending, setPending, onDone, onChanged }: {
   const [password, setPassword] = React.useState("");
   const [error, setError] = React.useState<React.ReactNode>(null);
 
-  async function mutate(path: string, method: "POST" | "PUT" = "POST", body?: unknown) {
+  async function mutate(path: string, method: "POST" | "PUT" | "DELETE" = "POST", body?: unknown) {
     if (pending) return;
     setPending(true); setError(null);
     try {
       await run({ method, path, body, parse: parseNoContent });
-      setPassword(""); toast.success(<Message id={"tenant.userStatusUpdated"} />); onChanged(); onDone();
+      setPassword(""); toast.success(<Message id={method === "DELETE" ? "tenant.userDeleted" : "tenant.userStatusUpdated"} />); onChanged(); onDone();
     } catch (failure) { setPassword(""); setError(<ErrorMessage error={failure} />); onChanged(); }
     finally { setPending(false); }
   }
@@ -113,6 +113,7 @@ function UserActionsForm({ user, pending, setPending, onDone, onChanged }: {
       <Button variant="outline" disabled={pending} onClick={() => window.confirm(t("tenant.revokeAllSessionsForThisUser")) && mutate(`${base}/sessions/revoke`)}><Message id="tenant.revokeSessions" /></Button>
       {user.status === "active" ? <Button variant="destructive" disabled={pending} onClick={() => window.confirm(t("tenant.disablingThisUserPermanentlyRevokesAllApiKeys")) && mutate(`${base}/disable`)}><Message id="tenant.disable" /></Button>
         : <Button variant="outline" disabled={pending} onClick={() => mutate(`${base}/enable`)}><Message id="tenant.enable" /></Button>}
+      <Button variant="destructive" disabled={pending} onClick={() => window.confirm(t("tenant.deleteUserConfirm")) && mutate(base, "DELETE")}><Message id="tenant.deleteUser" /></Button>
     </div>
     <FormError message={error} />
   </div>;

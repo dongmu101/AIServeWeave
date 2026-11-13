@@ -129,6 +129,29 @@ func (s *Service) EnableUser(ctx context.Context, actor Actor, userID string) er
 	return s.finishMutation(ctx, gate, mutationErr)
 }
 
+// DeleteUser permanently removes another tenant user, revokes their sessions,
+// and transactionally revokes every active API Key they created. Their email
+// becomes free to register again.
+//
+// DeleteUser 永久删除同租户另一名用户、吊销其会话，并在事务中吊销其创建的全部有效
+// API Key。其 email 之后可以重新注册。
+func (s *Service) DeleteUser(ctx context.Context, actor Actor, userID string) error {
+	user, err := s.managedUser(ctx, actor, userID)
+	if err != nil {
+		return err
+	}
+	gate, err := s.beginUserMutation(ctx, user)
+	if err != nil {
+		return err
+	}
+	audit := s.auditEntry(actor.TenantID, actor.UserID, model.ActionUserDelete, user.ID, "user deleted ("+user.Email+") and creator keys revoked", actor.IP)
+	mutationErr := s.store.DeleteUser(ctx, actor.TenantID, user.ID, s.clock.Now(), audit)
+	if mutationErr == nil && s.invalidator != nil {
+		s.invalidator.InvalidateAll(ctx)
+	}
+	return s.finishMutation(ctx, gate, mutationErr)
+}
+
 // RevokeUserSessions revokes every session belonging to another tenant user.
 //
 // RevokeUserSessions 吊销同租户另一名用户的全部会话。

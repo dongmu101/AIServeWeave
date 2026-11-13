@@ -425,11 +425,11 @@ RemoteProviders:
 
 Redis 现在是会话的权威来源而不是可选缓存：JWT 必须带随机 `sid`，每个受保护请求既验 JWT，也要求 Redis 中存在身份、租户/范围和角色完全一致的记录。旧版无 `sid` JWT 在升级时统一失效。每账户最多 20 个会话，第 21 个挤掉最早到期者；退出只撤销当前会话，改密、重置密码、改角色与禁用会先关闭短期登录门并撤销全部会话，再写数据库，避免并发登录穿过变更窗口。Redis 不可用时登录与管理请求 fail closed 为 `503`，不降级成只验 JWT。
 
-租户 owner 可管理其他用户；不能禁用/降级自己，数据库事务与行锁保证并发操作也不会留下零个有效 owner。禁用用户在同一数据库事务里把其全部 active API Key 置为 revoked；重新启用不会恢复 Key。密码与角色变化不影响 Key。Key 校验缓存以 generation 命名，吊销推进并发布 generation；一个早先开始的数据库读取只能尝试写回旧代际，不能在吊销后重新填脏新缓存，Gateway 也通过同一 generation 清空进程内正向缓存。
+租户 owner 可管理其他用户；不能禁用/降级自己，数据库事务与行锁保证并发操作也不会留下零个有效 owner。禁用用户在同一数据库事务里把其全部 active API Key 置为 revoked；重新启用不会恢复 Key。owner 也可硬删除其他用户（`DELETE /admin/v1/users/:id`）：与禁用相同地先关门撤销全部会话，再在同一事务里吊销其 active API Key、删除 `users` 行并写入 `user.delete` 审计（detail 记录被删 email）；删除后 email 可重新注册，审计中原有的 actor/target id 保留为悬空引用；同样不能删除自己或最后一个有效 owner。密码与角色变化不影响 Key。Key 校验缓存以 generation 命名，吊销推进并发布 generation；一个早先开始的数据库读取只能尝试写回旧代际，不能在吊销后重新填脏新缓存，Gateway 也通过同一 generation 清空进程内正向缓存。
 
 平台运维可在始终保留一名有效运维的前提下创建和管理其他运维；账户管理不依赖 Fleet 或 Registry 配置。BootstrapToken 入口保留作首次创建与带外恢复。
 
-租户端点：`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}`、`PUT /admin/v1/users/:id/{password,role}`、`POST /admin/v1/users/:id/{disable,enable}` 与 `POST /admin/v1/users/:id/sessions/revoke`。平台端点为对应的 `/operator/v1/auth/*` 与 `/operator/v1/operators*`，并包含分页列表和会话内创建。
+租户端点：`DELETE /admin/v1/auth/session`、`POST /admin/v1/auth/{password,sessions/revoke}`、`PUT /admin/v1/users/:id/{password,role}`、`POST /admin/v1/users/:id/{disable,enable}`、`DELETE /admin/v1/users/:id` 与 `POST /admin/v1/users/:id/sessions/revoke`。平台端点为对应的 `/operator/v1/auth/*` 与 `/operator/v1/operators*`，并包含分页列表和会话内创建。
 
 ## 工作流菜单与运行（租户）
 

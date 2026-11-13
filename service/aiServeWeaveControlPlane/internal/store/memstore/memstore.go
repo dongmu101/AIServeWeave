@@ -401,6 +401,34 @@ func (s *Store) SetUserStatus(_ context.Context, tenantID, id, status string, at
 	return store.UserLifecycleResult{User: user, Changed: true}, nil
 }
 
+// DeleteUser removes one scoped user and revokes their active API Keys under
+// the same lock, without removing the last active owner.
+//
+// DeleteUser 在同一把锁下删除一个限定范围用户并吊销其有效 API Key，且不会移除最后
+// 一个有效 owner。
+func (s *Store) DeleteUser(_ context.Context, tenantID, id string, at time.Time, audit model.AuditLog) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	user, ok := s.users[id]
+	if !ok || user.TenantID != tenantID {
+		return store.ErrNotFound
+	}
+	if user.Status == model.StatusActive && user.Role == model.RoleOwner && s.activeOwners(tenantID) <= 1 {
+		return store.ErrConflict
+	}
+	for keyID, key := range s.keys {
+		if key.TenantID == tenantID && key.CreatedBy == id && key.Status == model.StatusActive {
+			key.Status = model.StatusRevoked
+			key.RevokedAt = &at
+			key.UpdatedAt = at
+			s.keys[keyID] = key
+		}
+	}
+	delete(s.users, id)
+	s.audit = append(s.audit, audit)
+	return nil
+}
+
 func (s *Store) activeOwners(tenantID string) int {
 	count := 0
 	for _, user := range s.users {

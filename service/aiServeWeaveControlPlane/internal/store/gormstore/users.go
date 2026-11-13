@@ -97,6 +97,33 @@ func (s *Store) SetUserStatus(ctx context.Context, tenantID, id, status string, 
 	})
 }
 
+// DeleteUser removes a scoped user, revokes their active API Keys and
+// appends the audit entry in one transaction, preserving at least one active
+// owner.
+//
+// DeleteUser 在一个事务中删除限定范围用户、吊销其有效 API Key 并追加审计，同时保留
+// 至少一个有效 owner。
+func (s *Store) DeleteUser(ctx context.Context, tenantID, id string, at time.Time, audit model.AuditLog) error {
+	_, err := s.mutateUser(ctx, tenantID, id, at, audit, func(tx *gorm.DB, user *model.User, owners int64) (bool, error) {
+		if user.Status == model.StatusActive && user.Role == model.RoleOwner && owners <= 1 {
+			return false, store.ErrConflict
+		}
+		if err := tx.Model(&model.APIKey{}).
+			Where("tenant_id = ? AND created_by = ? AND status = ?", tenantID, id, model.StatusActive).
+			Updates(map[string]any{"status": model.StatusRevoked, "revoked_at": at, "updated_at": at}).Error; err != nil {
+			return false, err
+		}
+		if err := enqueueRevocation(tx); err != nil {
+			return false, err
+		}
+		if err := tx.Where("tenant_id = ? AND id = ?", tenantID, id).Delete(&model.User{}).Error; err != nil {
+			return false, err
+		}
+		return true, nil
+	})
+	return err
+}
+
 func (s *Store) mutateUser(ctx context.Context, tenantID, id string, at time.Time, audit model.AuditLog, change func(*gorm.DB, *model.User, int64) (bool, error)) (store.UserLifecycleResult, error) {
 	var result store.UserLifecycleResult
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {

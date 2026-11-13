@@ -88,6 +88,43 @@ func TestDisableUserRevokesSessionsAndCreatedKeysPermanently(t *testing.T) {
 	}
 }
 
+func TestDeleteUserRemovesRowSessionsAndCreatedKeys(t *testing.T) {
+	f := newFixture(t)
+	user, actor := f.userWithSession(model.RoleAdmin, "deleted@example.com")
+	created := f.mustCreateKey(actor, "automation")
+
+	if err := f.svc.DeleteUser(context.Background(), f.ownerAt, user.ID); err != nil {
+		t.Fatalf("DeleteUser: %v", err)
+	}
+	if _, err := f.store.GetUser(context.Background(), f.tenant.ID, user.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("GetUser after delete error = %v, want %v", err, store.ErrNotFound)
+	}
+	if err := f.sessions.Validate(context.Background(), actor.SessionID,
+		session.Subject{Kind: session.SubjectTenantUser, ID: user.ID}, f.tenant.ID, user.Role); !errors.Is(err, session.ErrInvalid) {
+		t.Errorf("Validate deleted session error = %v, want %v", err, session.ErrInvalid)
+	}
+	if _, err := f.svc.VerifyKeyHash(context.Background(), apikey.Hash(created.Plaintext)); !errors.Is(err, logic.ErrNotFound) {
+		t.Errorf("deleted creator key error = %v, want %v", err, logic.ErrNotFound)
+	}
+	if err := f.svc.DeleteUser(context.Background(), f.ownerAt, user.ID); !errors.Is(err, logic.ErrNotFound) {
+		t.Errorf("second DeleteUser error = %v, want %v", err, logic.ErrNotFound)
+	}
+	if _, err := f.svc.CreateUser(context.Background(), f.ownerAt, user.Email, testPassword, user.Email, model.RoleMember); err != nil {
+		t.Errorf("re-create with deleted email error = %v, want nil", err)
+	}
+}
+
+func TestDeleteUserRejectsNonOwnerAndSelf(t *testing.T) {
+	f := newFixture(t)
+	user, _ := f.userWithSession(model.RoleMember, "keep@example.com")
+	if err := f.svc.DeleteUser(context.Background(), f.actorWithRole(model.RoleAdmin), user.ID); !errors.Is(err, logic.ErrForbidden) {
+		t.Errorf("admin DeleteUser error = %v, want %v", err, logic.ErrForbidden)
+	}
+	if err := f.svc.DeleteUser(context.Background(), f.ownerAt, f.owner.ID); !errors.Is(err, logic.ErrConflict) {
+		t.Errorf("self DeleteUser error = %v, want %v", err, logic.ErrConflict)
+	}
+}
+
 func TestRoleChangeRevokesSessionsButKeepsKeys(t *testing.T) {
 	f := newFixture(t)
 	user, actor := f.userWithSession(model.RoleAdmin, "role@example.com")

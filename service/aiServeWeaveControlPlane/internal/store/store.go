@@ -447,6 +447,12 @@ type Users interface {
 	UpdateUserPassword(ctx context.Context, tenantID, id, passwordHash string, audit model.AuditLog) (model.User, error)
 	UpdateUserRole(ctx context.Context, tenantID, id, role string, at time.Time, audit model.AuditLog) (UserLifecycleResult, error)
 	SetUserStatus(ctx context.Context, tenantID, id, status string, at time.Time, audit model.AuditLog) (UserLifecycleResult, error)
+	// DeleteUser removes a scoped user and revokes their active API Keys in
+	// one transaction. ErrConflict if it would leave no active owner.
+	//
+	// DeleteUser 在一个事务中删除限定范围的用户并吊销其有效 API Key；会导致没有
+	// 有效 owner 时返回 ErrConflict。
+	DeleteUser(ctx context.Context, tenantID, id string, at time.Time, audit model.AuditLog) error
 }
 
 // UserLifecycleResult reports the stored user and whether a state mutation

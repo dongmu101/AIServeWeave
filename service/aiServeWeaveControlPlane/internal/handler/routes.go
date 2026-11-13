@@ -320,6 +320,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodPut, Path: "/admin/v1/users/:id/role", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/role", requireSession(ctx, changeUserRole(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/users/:id/disable", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/disable", requireSession(ctx, userLifecycleAction(ctx.Logic.DisableUser)))},
 		{Method: http.MethodPost, Path: "/admin/v1/users/:id/enable", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/enable", requireSession(ctx, userLifecycleAction(ctx.Logic.EnableUser)))},
+		{Method: http.MethodDelete, Path: "/admin/v1/users/:id", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id", requireSession(ctx, userLifecycleAction(ctx.Logic.DeleteUser)))},
 		{Method: http.MethodPost, Path: "/admin/v1/users/:id/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/users/:id/sessions/revoke", requireSession(ctx, userLifecycleAction(ctx.Logic.RevokeUserSessions)))},
 		{Method: http.MethodGet, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, listAPIKeys(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/apikeys", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/apikeys", requireSession(ctx, createAPIKey(ctx)))},
