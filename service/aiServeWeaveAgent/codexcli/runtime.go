@@ -3,6 +3,7 @@ package codexcli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"slices"
@@ -34,7 +35,23 @@ type Runtime struct {
 	// efforts 保存最近一次成功的 model/list 中每个对话模型的
 	// supportedReasoningEfforts，由 mu 保护。
 	efforts map[string][]string
+	// catalog and catalogAt hold the last successful inspect for one
+	// follow-up call within catalogReuse, guarded by mu; see recentCatalog.
+	// catalog 与 catalogAt 保存最近一次成功的 inspect，供 catalogReuse 内的下一次
+	// 调用使用一次，由 mu 保护；见 recentCatalog。
+	catalog   []runtime.Model
+	catalogAt time.Time
 }
+
+// catalogReuse is how long a successful catalogue read may answer the next
+// one. The Manager checks identity and then reads the catalogue back to back
+// (Probe then Discover, or a recovering Health then Discover), and each read
+// cold-starts an app-server that can take most of the probe deadline.
+//
+// catalogReuse 是一次成功的目录读取可以代答下一次读取的时长。Manager 会紧接着先查身份
+// 再读目录（Probe 后 Discover，或恢复中的 Health 后 Discover），而每次读取都要冷启动
+// 一个可能耗掉大半探测期限的 app-server。
+const catalogReuse = 5 * time.Second
 
 var _ runtime.InferenceRuntime = (*Runtime)(nil)
 
@@ -181,15 +198,21 @@ func (r *Runtime) wrap(operation string, err error) error {
 // inspect 读取模型目录及账户能否生图，不执行推理。账户可以生图时，额外加入
 // 唯一的图像模型 ImageModelID。
 func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
+	if models, ok := r.recentCatalog(); ok {
+		return models, nil
+	}
 	ctx, finish, touch, err := r.operation(ctx, r.cfg.ProbeTimeout, 0)
 	if err != nil {
 		return nil, err
 	}
 	defer finish()
+	started := r.deps.Clock.Now()
 	var models []runtime.Model
 	efforts := map[string][]string{}
+	var server *protocol
 	err = withServer(ctx, r.executable, r.env, func(p *protocol, _ string) error {
 		p.activity = touch
+		server = p
 		if err := initializeServer(p); err != nil {
 			return err
 		}
@@ -240,12 +263,49 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 	if cause := context.Cause(ctx); cause != nil {
 		err = cause
 	}
+	r.mu.Lock()
 	if err == nil {
-		r.mu.Lock()
 		r.efforts = efforts
-		r.mu.Unlock()
+		r.catalog, r.catalogAt = slices.Clone(models), r.deps.Clock.Now()
+	} else {
+		r.catalog, r.catalogAt = nil, time.Time{}
 	}
-	return models, r.wrap("discover", err)
+	r.mu.Unlock()
+	wrapped := r.wrap("discover", err)
+	var rtErr *runtime.RuntimeError
+	if errors.Is(err, context.DeadlineExceeded) && errors.As(wrapped, &rtErr) {
+		// Name the step that never answered: a slow initialize points at the
+		// CLI's own start-up, a slow account/read at the network.
+		// 指明没有应答的步骤：initialize 慢说明 CLI 自身启动慢，account/read 慢说明网络慢。
+		step := "app-server start"
+		if server != nil && server.pending != "" {
+			step = server.pending
+		}
+		rtErr.Message += fmt.Sprintf(" (no reply to %s after %s; probe_timeout is %s)",
+			step, r.deps.Clock.Now().Sub(started).Round(time.Second), r.cfg.ProbeTimeout)
+	}
+	return models, wrapped
+}
+
+// recentCatalog hands out the last successful inspect once, if it finished
+// within catalogReuse, so a back-to-back check does not start a second
+// app-server. A failed inspect leaves nothing to reuse.
+//
+// recentCatalog 在最近一次成功的 inspect 完成于 catalogReuse 之内时交出它，且只交出
+// 一次，使紧接着的检查不再启动第二个 app-server。失败的 inspect 不留下可复用的结果。
+func (r *Runtime) recentCatalog() ([]runtime.Model, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closed || r.catalogAt.IsZero() {
+		return nil, false
+	}
+	models, at := r.catalog, r.catalogAt
+	r.catalog, r.catalogAt = nil, time.Time{}
+	age := r.deps.Clock.Now().Sub(at)
+	if age < 0 || age > catalogReuse {
+		return nil, false
+	}
+	return models, true
 }
 
 // codexEfforts is app-server's reasoning effort vocabulary, lowest first.

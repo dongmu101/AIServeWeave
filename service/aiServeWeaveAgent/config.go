@@ -201,6 +201,10 @@ func applyConfig(cfg *agentconfig.Config, explicit map[string]bool, opts *tunnel
 // codex 或 claude 运行时的 account_dir 原样传下去，开头的 "~/" 会被展开；之后由
 // runtime.Config.Validate 要求结果是绝对路径。
 //
+// probe_timeout becomes ProbeTimeout; empty leaves the kind's default.
+//
+// probe_timeout 转为 ProbeTimeout；留空则使用该种类的默认值。
+//
 // A hosted provider's key is read at this point from api_key_file when set,
 // otherwise from the environment variable named by api_key_env; an unset
 // variable or unreadable file leaves the key empty, which the provider then
@@ -222,6 +226,9 @@ func runtimesFromConfig(declared []agentconfig.RuntimeConfig) []runtime.Config {
 	out := make([]runtime.Config, len(declared))
 	for i, rc := range declared {
 		out[i] = runtime.Config{ID: rc.ID, Kind: runtime.Kind(rc.Kind), BaseURL: rc.BaseURL, ReasoningParser: rc.ReasoningParser, AccountDir: expandHome(rc.AccountDir)}
+		// agentconfig.Load has already rejected an invalid value.
+		// agentconfig.Load 已拒绝非法值。
+		out[i].ProbeTimeout, _ = rc.ProbeTimeoutDuration()
 		if !out[i].Kind.IsHosted() {
 			continue
 		}

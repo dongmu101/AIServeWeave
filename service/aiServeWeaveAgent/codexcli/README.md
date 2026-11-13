@@ -14,7 +14,7 @@ runtimes:
     kind: codex
 ```
 
-不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，默认探测期限为 15 秒以覆盖 CLI 冷启动。
+不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，每次都冷启动一个 app-server，受 `probe_timeout`（默认 60 秒）限制；紧接着的下一次检查（Probe 后的 Discover、恢复中的 Health 后的 Discover）在 5 秒内复用上一次成功的结果一次，不再启动第二个进程。app-server 启动时会读取 CODEX_HOME 下的整个 `sessions` 目录，会话积累到 GB 级时仅 `initialize` 就可能耗时数秒，机器繁忙时会超过期限；超时错误会写明卡在哪一步（如 `no reply to initialize after 60s`）。处理办法是把旧会话移出 CODEX_HOME，或在运行时声明里调大 `probe_timeout`（见 [Agent README](../README.md#探测期限)）。
 
 每个请求启动独立临时进程和 ephemeral thread，经公开 `thread/inject_items` 保留消息角色、function_call 的 call_id 和 function_call_output 的结果，不把工具结果伪装成用户提示词。历史完整注入后以空 input 启动回合；首次动态工具回调转换成 runtime.ToolCall，返回调用方后终止整个进程组。下一轮重新注入完整历史继续，Agent 不保存跨请求线程映射。
 

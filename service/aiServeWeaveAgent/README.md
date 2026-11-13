@@ -142,6 +142,17 @@ Gateway `/v1/models` 合并所有就绪运行时的模型；一个 CLI 未就绪
 
 OpenAI 兼容种类（含 vllm/sglang/ollama 等本地服务）可写 `reasoning_parser: think_tags` 或 `think_tags_prefilled`，把内联的 `<think>…</think>` 切成思考与回答（见 [runtime README](../../common/runtime/README.md#思考开关与兜底解析器)）；设置页面不展示该字段，但保存时按 id 与 kind 保留。端点与 Key 规则见 [托管供应商说明](../../common/runtime/hosted/README.md)。
 
+### 探测期限
+
+每个运行时可写 `probe_timeout`（Go duration，如 `45s`），作为单次身份探测、健康检查和模型目录读取的期限。留空使用种类默认值：本地 CLI 60 秒，托管供应商 10 秒，其他 3 秒。取值须大于 0 且不超过 `10m`；裸数字（如 `45`）、非正值或超过上限的值会让启动、`-check-config` 与热重载都报错并指出运行时 ID。设置页面不展示该字段，但保存时按 id 与 kind 保留；修改后热重载即生效。由 Gateway 下发配置创建的实例使用下发配置里的期限（未设置时取种类默认值），不读本地的 `probe_timeout`。
+
+```yaml
+runtimes:
+  - {id: codex-local, kind: codex, probe_timeout: 2m}
+```
+
+本地 CLI 启动较慢时（CLI 本地状态很大，例如 Codex 的 `sessions` 目录积累到 GB 级；机器负载高；网络需走代理），探测会超时，运行时保持未就绪并定期重试。原因会写进 Agent 日志：首次失败、原因变化时各记一条 `runtime not ready; retrying`，原因不变时每 10 分钟重复一次，超时还带 `hint` 字段；已就绪的运行时变为不健康或恢复时也各记一条。自动发现的 `codex-local` 使用默认期限；要调整，就在 `runtimes:` 里显式声明 `kind: codex`。
+
 ## 本地 CLI 账户额度
 
 正常运行的 Agent 在本地配置页面（`-config-ui-addr`）的「推理后端」中显示「CLI 账户额度」。只查询本地声明的 `kind: codex` / `kind: claude`（配置文件声明的，以及 Agent 自动发现并注册的 `codex-local`；后者不会因热重载而被移出），每个运行时一行（名称后附运行时 ID）；声明了不同 `account_dir` 的运行时各自查询自己的账户（见[同一 CLI 的多个账户](#同一-cli-的多个账户)）。仅配置模式尚未启动运行时，不执行账户查询。

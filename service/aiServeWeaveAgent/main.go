@@ -384,13 +384,9 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 		}
 		configuredRuntimes++
 	}
-	for _, snapshot := range manager.Snapshot() {
-		if snapshot.State != runtime.StateHealthy {
-			logger.Warn("runtime not ready; Agent will keep running and retry / 运行时未就绪，Agent 继续运行并重试",
-				slog.String("runtime_id", snapshot.Descriptor.ID), slog.String("kind", string(snapshot.Descriptor.Kind)),
-				slog.String("state", string(snapshot.State)))
-		}
-	}
+	// A runtime that is not ready yet has been logged by the Manager with its
+	// reason; the Agent keeps running and retries it.
+	// 尚未就绪的运行时已由 Manager 连同原因记入日志；Agent 继续运行并重试。
 
 	// Managed ComfyUI (STATUS.md's P2 ComfyUI Managed Docker deployment,
 	// subtask one boot path + subtask two's remote lifecycle actions): bring

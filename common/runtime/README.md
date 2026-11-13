@@ -539,7 +539,7 @@ runtimes:
 
 - `id` 非空且在单个 Agent 内唯一。
 - `kind` 只能是已注册值之一：本地服务（vllm、sglang、trtllm、tokenspeed、ollama、comfyui）、本地 CLI（codex、claude、grok、opencode、cursor、codebuddy、qoder、pi、gemini-cli）或托管供应商（openai、gemini、deepseek、kimi、qwen、zhipu、minimax、openai_compatible、anthropic、anthropic_compatible）。
-- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 15 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode`、`service/aiServeWeaveAgent/cliagent` 和 `service/aiServeWeaveAgent/geminicli`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
+- HTTP 后端的 `base_url` 只允许 `http` 或 `https`，拒绝 URL userinfo、query 和 fragment。本地 CLI 种类（`Kind.IsLocalCLI`）的 `base_url`、API Key、Headers 和 TLS 均必须为空，默认探测期限为 60 秒；实现分别位于 `service/aiServeWeaveAgent/codexcli`、`service/aiServeWeaveAgent/claudecode`、`service/aiServeWeaveAgent/cliagent` 和 `service/aiServeWeaveAgent/geminicli`，不会链入 Gateway。托管供应商（`Kind.IsHosted`）的 `base_url` 留空时取 `DefaultBaseURL`（两种 compatible 必填），默认探测期限为 10 秒；实现位于 `runtime/hosted` 与 `runtime/anthropic`，只由 Agent 注册，且 ID 必须在 Agent 本地声明、下发配置的 `base_url` 必须与本地声明一致（Agent 始终使用本地的端点、Key、Headers 与 TLS），否则拒绝创建。
 - `models` 是可选的本地模型目录声明：每项非空、不超过 256 字节且不重复；设置后以它为准，端点没有模型列表路由（404/405）时也能发布。
 - 路径前缀允许存在，但 URL 拼接必须保留前缀，不能用字符串直接相加。
 - 自定义 Header 禁止覆盖 `Host`、`Content-Length`、hop-by-hop headers 和 Agent 链路追踪头。
@@ -565,7 +565,7 @@ func (c Config) LogValue() slog.Value
 
 `Normalize` 必须在 `Validate` 之前调用，Registry 的 `Create` 内部按此顺序执行，调用方无需自行拼装。URL 拼接统一走 `url.URL.JoinPath`，保留配置中的路径前缀。
 
-建议默认值：探测和健康检查超时 `3s`（本地 Codex/Claude CLI 为 `15s`，覆盖冷启动），发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
+建议默认值：探测和健康检查超时 `3s`（本地 CLI 为 `60s`，覆盖冷启动及本地状态较大、机器繁忙时的启动变慢），发现超时 `10s`，普通请求超时 `5m`，流空闲超时 `60s`，健康检查间隔 `10s`，发现间隔 `5m`，单实例并发上限 `32`。所有值可按实例覆盖；Context 截止时间始终优先。零值一律视为「未设置」并取默认值；如需真正无限制，必须显式配置为负值并触发一条告警。
 
 ## 后端接入矩阵
 

@@ -61,7 +61,7 @@ func TestNormalizeCodexProbeTimeout(t *testing.T) {
 		name        string
 		input, want time.Duration
 	}{
-		{"cold startup default", 0, 15 * time.Second},
+		{"cold startup default", 0, 60 * time.Second},
 		{"explicit timeout", time.Second, time.Second},
 		{"explicit unlimited", -1, -1},
 	} {

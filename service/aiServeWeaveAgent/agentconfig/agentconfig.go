@@ -49,6 +49,7 @@ import (
 	"fmt"
 	"reflect"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/go-viper/mapstructure/v2"
@@ -239,6 +240,44 @@ type RuntimeConfig struct {
 	// 配置目录（CODEX_HOME / CLAUDE_CONFIG_DIR）。留空使用 Agent 自己的登录；给两个
 	// 同种类运行时配置不同目录即可服务两个账户。开头的 "~/" 会展开为 Agent 用户的主目录。
 	AccountDir string `yaml:"account_dir,omitempty"`
+	// ProbeTimeout overrides runtime.Config.ProbeTimeout, the deadline of one
+	// identity probe, health check or catalogue read, as a Go duration such
+	// as "45s". Empty keeps the kind's default. Raise it when a local CLI
+	// starts slowly, for example because its sessions directory has grown
+	// large; it must lie in (0, MaxProbeTimeout]. The setup page has no field
+	// for it; a save from the page keeps whatever the file already says.
+	//
+	// ProbeTimeout 覆盖 runtime.Config.ProbeTimeout，即单次身份探测、健康检查或目录
+	// 读取的期限，写成 Go duration，如 "45s"。留空使用该种类的默认值。本机 CLI 启动
+	// 较慢时（例如其 sessions 目录变得很大）调大它；取值须在 (0, MaxProbeTimeout] 内。
+	// 设置页面没有这个字段；从页面保存时保留文件里已有的值。
+	ProbeTimeout string `yaml:"probe_timeout,omitempty"`
+}
+
+// MaxProbeTimeout caps RuntimeConfig.ProbeTimeout. A probe holds the
+// runtime's serial check loop, so an unbounded one would leave a hung CLI
+// undetected; ten minutes covers any plausible cold start.
+//
+// MaxProbeTimeout 是 RuntimeConfig.ProbeTimeout 的上限。探测会占住运行时串行的
+// 检查循环，不设上限会让卡住的 CLI 始终不被发现；十分钟足以覆盖任何合理的冷启动。
+const MaxProbeTimeout = 10 * time.Minute
+
+// ProbeTimeoutDuration parses ProbeTimeout. It returns 0 for an empty value,
+// meaning the kind's default, and an error for anything outside
+// (0, MaxProbeTimeout] or not a Go duration.
+//
+// ProbeTimeoutDuration 解析 ProbeTimeout。空值返回 0（即使用该种类的默认值）；
+// 不是 Go duration 或不在 (0, MaxProbeTimeout] 内时返回错误。
+func (rc RuntimeConfig) ProbeTimeoutDuration() (time.Duration, error) {
+	value := strings.TrimSpace(rc.ProbeTimeout)
+	if value == "" {
+		return 0, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 || d > MaxProbeTimeout {
+		return 0, fmt.Errorf("runtime %q: probe_timeout must be a duration such as 45s, greater than 0 and at most %s", rc.ID, MaxProbeTimeout)
+	}
+	return d, nil
 }
 
 // ModelList is a model catalogue written either as one space- or
@@ -297,6 +336,11 @@ func Load(path string) (*Config, error) {
 	}
 	if _, err := attachments.New(cfg.Attachments); err != nil {
 		return nil, fmt.Errorf("agentconfig: invalid attachments configuration")
+	}
+	for _, rc := range cfg.Runtimes {
+		if _, err := rc.ProbeTimeoutDuration(); err != nil {
+			return nil, fmt.Errorf("agentconfig: %s: %w", path, err)
+		}
 	}
 	return &cfg, nil
 }
@@ -362,6 +406,9 @@ func Save(path string, cfg *Config) error {
 		}
 		if rc.AccountDir != "" {
 			entry["account_dir"] = rc.AccountDir
+		}
+		if rc.ProbeTimeout != "" {
+			entry["probe_timeout"] = rc.ProbeTimeout
 		}
 		runtimes[i] = entry
 	}

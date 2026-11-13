@@ -31,6 +31,10 @@ type protocol struct {
 	// image 放行 imageGeneration 条目，且只有其完成帧可以超过 maxFrameBytes，
 	// 上限为 maxImageFrameBytes。
 	image bool
+	// pending is the method of the request awaiting its reply, so a timeout
+	// can say which step stalled.
+	// pending 是正在等待应答的请求方法，超时时据此说明卡在哪一步。
+	pending string
 }
 
 func (p *protocol) write(v any) error {
@@ -91,6 +95,7 @@ func (p *protocol) read() (frame, error) {
 }
 
 func (p *protocol) request(id int, method string, params any, result any) error {
+	p.pending = method
 	if err := p.write(map[string]any{"id": id, "method": method, "params": params}); err != nil {
 		return err
 	}
@@ -115,6 +120,7 @@ func (p *protocol) request(id int, method string, params any, result any) error 
 		if len(msg.Result) == 0 || string(msg.Result) == "null" || json.Unmarshal(msg.Result, result) != nil {
 			return ErrProtocol
 		}
+		p.pending = ""
 		return nil
 	}
 }

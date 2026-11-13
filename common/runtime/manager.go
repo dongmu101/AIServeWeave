@@ -108,6 +108,12 @@ type managedInstance struct {
 	consecutiveSuccesses int
 	closed               bool
 	pending              bool
+	// notReadyError and notReadyLoggedAt record the last logged reason a
+	// pending instance failed initialization; see logNotReady.
+	// notReadyError 与 notReadyLoggedAt 记录未就绪实例最近一次记入日志的初始化失败
+	// 原因；见 logNotReady。
+	notReadyError    string
+	notReadyLoggedAt time.Time
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -224,7 +230,7 @@ func (m *manager) createAndValidate(ctx context.Context, cfg Config) (*managedIn
 		probeResult, discovery = ProbeResult{Kind: cfg.Kind}, Discovery{}
 	}
 	instCtx, cancel := context.WithCancel(context.Background())
-	return &managedInstance{
+	inst := &managedInstance{
 		runtime:    rt,
 		cfg:        cfg,
 		descriptor: rt.Descriptor(),
@@ -239,7 +245,41 @@ func (m *manager) createAndValidate(ctx context.Context, cfg Config) (*managedIn
 		cancel:     cancel,
 		done:       make(chan struct{}),
 		pending:    err != nil,
-	}, nil
+	}
+	if err != nil {
+		m.logNotReady(inst, err)
+	}
+	return inst, nil
+}
+
+// notReadyRelogInterval is how often an unchanged initialization failure is
+// logged again, so the reason stays in a rotated log without one line per
+// retry.
+// notReadyRelogInterval 是相同的初始化失败重新记入日志的间隔，使原因留在轮转后的
+// 日志里，又不必每次重试都记一行。
+const notReadyRelogInterval = 10 * time.Minute
+
+// logNotReady logs why inst could not initialize: the first failure, a
+// changed reason, or the same reason again after notReadyRelogInterval. The
+// caller holds inst.mu or owns inst exclusively.
+//
+// logNotReady 记录 inst 无法初始化的原因：首次失败、原因变化，或相同原因在
+// notReadyRelogInterval 之后再记一次。调用方须持有 inst.mu 或独占 inst。
+func (m *manager) logNotReady(inst *managedInstance, err error) {
+	logger := m.deps.Logger
+	if logger == nil {
+		return
+	}
+	now, reason := m.clock.Now(), err.Error()
+	if reason == inst.notReadyError && now.Sub(inst.notReadyLoggedAt) < notReadyRelogInterval {
+		return
+	}
+	inst.notReadyError, inst.notReadyLoggedAt = reason, now
+	args := []any{"runtime_id", inst.cfg.ID, "kind", inst.cfg.Kind, "error", reason, "probe_timeout", inst.cfg.ProbeTimeout}
+	if errors.Is(err, &RuntimeError{Code: ErrorTimeout}) || errors.Is(err, context.DeadlineExceeded) {
+		args = append(args, "hint", "the backend did not answer within probe_timeout; a slow-starting backend needs a larger probe_timeout")
+	}
+	logger.Warn("runtime not ready; retrying / 运行时未就绪，将定期重试", args...)
 }
 
 // initializeRuntime requires both identity probing and model discovery to succeed.
@@ -591,6 +631,14 @@ func (m *manager) doHealthCheck(inst *managedInstance) (recovered bool) {
 	if inst.state != prevState || !healthMaterialEqual(prevHealth, inst.health) {
 		inst.rev = m.nextRev()
 	}
+	if logger := m.deps.Logger; logger != nil && inst.state != prevState {
+		if inst.state == StateUnhealthy {
+			logger.Warn("runtime became unhealthy / 运行时变为不健康", "runtime_id", inst.cfg.ID, "kind", inst.cfg.Kind,
+				"error", inst.health.ErrorSummary, "probe_timeout", inst.cfg.ProbeTimeout)
+		} else {
+			logger.Info("runtime recovered / 运行时已恢复", "runtime_id", inst.cfg.ID, "kind", inst.cfg.Kind)
+		}
+	}
 	return recovered
 }
 
@@ -609,9 +657,11 @@ func (m *manager) retryInitialization(inst *managedInstance) {
 	inst.updatedAt = now
 	inst.health.CheckedAt = now
 	if err != nil {
+		m.logNotReady(inst, err)
 		inst.mu.Unlock()
 		return
 	}
+	inst.notReadyError, inst.notReadyLoggedAt = "", time.Time{}
 	inst.pending, inst.state = false, StateHealthy
 	inst.probe, inst.discovery = probe, discovery
 	inst.descriptor = inst.runtime.Descriptor()

@@ -19,6 +19,10 @@ const (
 	defaultMaxConcurrent     = 32
 )
 
+// defaultLocalCLIProbeTimeout bounds one probe of a local CLI runtime.
+// defaultLocalCLIProbeTimeout 是本地 CLI 运行时单次探测的期限。
+const defaultLocalCLIProbeTimeout = 60 * time.Second
+
 // forbiddenConfigHeaders are Config.Headers keys a caller must not set,
 // because they are connection-scoped (RFC 7230 §6.1) or would let a config
 // silently corrupt the request the runtime builds.
@@ -53,9 +57,12 @@ func (c Config) Normalize() Config {
 		n.ProbeTimeout = defaultProbeTimeout
 		switch {
 		case n.Kind.IsLocalCLI():
-			// Cold CLI startup and account discovery need more time than an HTTP probe.
-			// CLI 冷启动和账户发现比 HTTP 探测需要更长时间。
-			n.ProbeTimeout = 15 * time.Second
+			// Cold CLI startup and account discovery need more time than an HTTP
+			// probe, and a CLI's start-up grows with its local state (Codex reads
+			// its whole sessions directory) and slows further on a busy machine.
+			// CLI 冷启动和账户发现比 HTTP 探测需要更长时间；CLI 启动耗时还随本地状态
+			// 增长（Codex 会读取整个 sessions 目录），机器繁忙时更慢。
+			n.ProbeTimeout = defaultLocalCLIProbeTimeout
 		case n.Kind.IsHosted():
 			// A hosted API is across the internet, often behind a proxy.
 			// 托管 API 位于互联网另一端，往往还经过代理。
