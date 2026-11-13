@@ -176,8 +176,16 @@ make help                                     # 全部目标与变量
   ```
 
 - 在 `.env` 设置 `AGENT_PLATFORMS`，只编译实际要发的平台。交叉编译六个平台的 Agent 是 Gateway 镜像里最慢的一步。
-- Dockerfile 的 Go 编译使用 BuildKit 缓存挂载，第二次以后只重编改动的包；只改 Console 不会让 Go 镜像重建。
-  缓存在 `docker builder prune` 之后才会清空。
+- Dockerfile 使用 BuildKit 缓存挂载复用 Go 模块（`/go/pkg/mod`）与编译产物（`/root/.cache/go-build`）。
+  下载依赖放在 `SERVICE`、`VERSION` 与目标平台参数声明之前，切换服务、版本或目标平台可复用下载层；
+  `go.mod` / `go.sum` 变化时也能复用已下载的模块。只改 Console 不会让 Go 镜像重建。
+  缓存属于各自的 builder，切换 builder 或机器时不会自动共享；`upgrade.sh --prune`、
+  `docker builder prune` 或 BuildKit 自动回收可能删除缓存。首次构建仍需下载依赖，网络较慢时可使用：
+
+  ```bash
+  cd deploy
+  docker compose build --build-arg GOPROXY=https://goproxy.cn,direct registry controlplane gateway
+  ```
 
 ### 内存上限
 

@@ -20,6 +20,26 @@
 # 否则在 arm64 Mac 上构建 linux/amd64 镜像、或在 release CI 里构建 arm64 镜像时，整个 Go
 # 编译都要在 QEMU 模拟下跑，慢好几倍。
 FROM --platform=$BUILDPLATFORM golang:1.27.4-alpine AS build
+# GOPROXY lets a network that cannot reach proxy.golang.org point module
+# downloads at a mirror: docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
+#
+# GOPROXY 让访问不了 proxy.golang.org 的网络把模块下载指向镜像：
+# docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+WORKDIR /src
+
+# Dependencies are fetched before service/version/target ARGs so changing those
+# values does not invalidate this layer. The module cache mount also reuses
+# downloaded dependencies when go.mod or go.sum changes.
+#
+# 在声明服务、版本和目标平台参数前下载依赖，避免这些参数变化让下载层失效。
+# 模块缓存挂载也让 go.mod / go.sum 变化时可以复用已下载的依赖。
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
+
+COPY . .
 ARG SERVICE
 ARG TARGETOS
 ARG TARGETARCH
@@ -32,23 +52,6 @@ ARG TARGETARCH
 # 跑的容器报告它是从哪个 tag 构建的，而不是永远显示 "dev"。发布流水线会传入 tag；不带
 # --build-arg VERSION 的普通 docker build 保留 "dev" 默认值。
 ARG VERSION=dev
-# GOPROXY lets a network that cannot reach proxy.golang.org point module
-# downloads at a mirror: docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
-#
-# GOPROXY 让访问不了 proxy.golang.org 的网络把模块下载指向镜像：
-# docker compose build --build-arg GOPROXY=https://goproxy.cn,direct
-ARG GOPROXY=https://proxy.golang.org,direct
-ENV GOPROXY=${GOPROXY}
-WORKDIR /src
-
-# Dependencies are fetched in their own layer so a source-only change does not
-# re-download the module cache.
-#
-# 依赖在自己的层里拉取，这样只改源码时不会重新下载模块缓存。
-COPY go.mod go.sum ./
-RUN go mod download
-
-COPY . .
 # CGO is off so the result runs on a distroless-style base with no libc to
 # match. -trimpath keeps build machine paths out of the binary.
 #
@@ -63,7 +66,8 @@ COPY . .
 # go-build 缓存挂载让已编译的包在多次构建之间、在各服务之间复用：任何源码改动都会让
 # COPY . . 之后的这一层失效，没有这个挂载，每次重建都要从头编译整棵依赖树——这在 2 核主机上
 # 占了构建时间的大头。
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
     test -n "$SERVICE" || (echo "SERVICE build-arg is required" >&2; exit 1) && \
     CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/service ./service/${SERVICE}
 
@@ -79,7 +83,8 @@ FROM build AS agent-dist
 ARG VERSION=dev
 ARG AGENT_PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
 ARG SERVICE
-RUN --mount=type=cache,target=/root/.cache/go-build \
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
     set -eu; \
     mkdir -p /opt/aisw/agent-dist; \
     if [ "$SERVICE" != aiServeWeaveGateway ]; then exit 0; fi; \
