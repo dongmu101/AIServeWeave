@@ -147,6 +147,8 @@ func run() error {
 		"how often a queued workflow submission re-polls candidates; zero uses scheduler's built-in default (500ms); ignored when -workflow-queue-max-wait is zero")
 	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", 0,
 		"maximum workflow submissions allowed to wait at once; one beyond this is rejected immediately rather than queueing; zero uses scheduler's built-in default (64); ignored when -workflow-queue-max-wait is zero")
+	modelUnavailableWait := flag.Duration("model-unavailable-wait", 0,
+		"how long a Messages, Chat Completions or Responses request waits for a model whose node left within the last 2 minutes (typically an Agent reconnecting) to come back, before answering a retryable 503 model_unavailable instead of 404 model_not_found; zero uses scheduler's built-in default (15s), negative answers 503 at once without waiting")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
 	routeStateFile := flag.String("route-state-file", "", "durable last-good route snapshot; required in controlplane mode")
 	routeSyncInterval := flag.Duration("route-sync-interval", 30*time.Second, "managed route polling interval")
@@ -406,6 +408,7 @@ func run() error {
 		QueueMaxWait:         *workflowQueueMaxWait,
 		QueueRetryInterval:   *workflowQueueRetryInterval,
 		QueueMaxWaiters:      *workflowQueueMaxWaiters,
+		UnavailableWait:      *modelUnavailableWait,
 	})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {

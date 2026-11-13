@@ -558,8 +558,8 @@ func TestChatSkipsANodeAfterItsBreakerTrips(t *testing.T) {
 	}
 
 	_, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"})
-	if !errors.Is(err, scheduler.ErrNoCapableNode) {
-		t.Fatalf("Chat after the trip = %v, want ErrNoCapableNode (the only candidate should be excluded)", err)
+	if !errors.Is(err, scheduler.ErrModelUnavailable) {
+		t.Fatalf("Chat after the trip = %v, want ErrModelUnavailable (the only candidate should be excluded, but the model still exists)", err)
 	}
 	if got := failCount.Load(); got != 2 {
 		t.Errorf("node-a was contacted again after tripping (count=%d), want it skipped entirely", got)
@@ -591,8 +591,8 @@ func TestChatRecoversAfterTheCooldownOnceAProbeSucceeds(t *testing.T) {
 	}
 
 	// Breaker is open now; too early to probe.
-	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); !errors.Is(err, scheduler.ErrNoCapableNode) {
-		t.Fatalf("Chat during the cooldown = %v, want ErrNoCapableNode", err)
+	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); !errors.Is(err, scheduler.ErrModelUnavailable) {
+		t.Fatalf("Chat during the cooldown = %v, want ErrModelUnavailable", err)
 	}
 
 	h.Clock.Advance(10 * time.Second)
@@ -649,8 +649,8 @@ func TestCandidatesExcludeAnUnhealthyRuntimeAndReadmitItOnRecovery(t *testing.T)
 	})
 
 	sched := scheduler.New(h.Srv, scheduler.Config{Clock: h.Clock})
-	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); !errors.Is(err, scheduler.ErrNoCapableNode) {
-		t.Fatalf("Chat against an unhealthy runtime = %v, want ErrNoCapableNode", err)
+	if _, _, err := sched.Chat(context.Background(), runtime.ChatRequest{Model: "qwen3:8b"}); !errors.Is(err, scheduler.ErrModelUnavailable) {
+		t.Fatalf("Chat against an unhealthy runtime = %v, want ErrModelUnavailable", err)
 	}
 	if got := count.Load(); got != 0 {
 		t.Errorf("the unhealthy node was contacted %d times, want 0", got)

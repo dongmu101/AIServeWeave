@@ -481,7 +481,7 @@ Redis 那一半默认不跑（`go test ./...` 保持自足），设 `AISW_REDIS_
 
 `scheduler.candidates()` 现在有两层排除，都在 `service/aiServeWeaveGateway/scheduler/scheduler.go` 与 `breaker.go`：
 
-1. **读 Agent 已经算好的健康状态。** `runtime.Snapshot.State` 是 `unhealthy`/`closed` 的 runtime 实例直接被过滤——这是 Agent 侧 `runtime.Manager` 探测出来的结论，Gateway 只是消费它，不重新判断一遍。
+1. **读 Agent 已经算好的健康状态。** `runtime.Snapshot.State` 是 `unhealthy`/`closed` 的 runtime 实例直接被过滤——这是 Agent 侧 `runtime.Manager` 探测出来的结论，Gateway 只是消费它，不重新判断一遍。被过滤或熔断掉的唯一候选会让请求得到 503 `model_unavailable` 而不是 404，见「节点暂时不可用返回 503」。
 2. **Gateway 侧的熔断器。** 按 `(node_id, runtime_id)` 维护一个失败计数：`connection_failed`/`timeout`/`upstream_error` 三种错误计入连续失败，达到 `FailureThreshold`（默认 5）后该候选被排除一段冷却时间（默认 5s，翻倍退避到 2m 封顶），冷却结束后下一次请求本身就是一次探测，成功即整体复位。`ErrorBackpressure`/`ErrorRateLimited` 明确不计入——它们是"这一刻满了"，不是"坏了"。没有做教科书式的三态 half-open + 单飞探测：Gateway 本来就是零排队、失败立即换节点的模型，冷却期内多个请求同时探测同一个候选，最坏情况也只是各自快速失败再换节点。
 
 `FailureThreshold`/`BaseCooldown`/`MaxCooldown` 是未经真实流量验证的初始默认值，`scheduler.New` 的 `Config` 参数可以覆盖；`main.go` 把它们暴露为三个 CLI flag（`-breaker-failure-threshold`、`-breaker-base-cooldown`、`-breaker-max-cooldown`，均默认 `0`，表示沿用 `scheduler` 包内的内置默认值 5 / 5s / 2m），便于在不同候选参数之间对比而不用重新编译。
@@ -498,6 +498,17 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 - 转录不是多候选重试循环，只派发给第一个候选，因此 `TranscriptionCandidates` 把冷却中的候选排到最后；全部在冷却时仍派发给第一个。
 - 原生 Messages 首轮在首个事件到达前遇到 `rate_limited` 也会换候选（续接仍不换节点）。
 - 每次进入冷却记一条 Info 日志（节点、运行时、冷却时长），不新增指标。冷却状态只在副本内存中，不跨副本共享：其他副本要各自碰到一次 `rate_limited` 才会搁置同一候选。
+
+## 节点暂时不可用返回 503（2026-11-13）
+
+以前，一个模型只要此刻没有候选，各前门一律答 `404 model_not_found`。这里面有两种情况被混在一起：模型确实不存在；或者模型存在，只是节点暂时用不了，比如 Agent 隧道断线重连、runtime 不健康、唯一候选正在熔断。后一种在单节点机群里很常见。客户端把 404 当成「模型不存在」，不会重试，于是用户看到的是偶发的 404。现在把两种情况分开处理：
+
+- **记住刚离开的节点**：节点从副本上被遗忘时，`tunnelserver` 把它最后的调度视图保留 `Config.DepartedRetention`（默认 2m，即 `DefaultDepartedRetention`），通过 `Server.AppendDepartedNodes` 读取，代码在 `tunnelserver/departed.go`。节点重连时清除这条记录；已吊销或维护中的节点不返回；没有上报过清单的节点不记录。
+- **区分「不存在」与「暂时不可用」**：调度器找不到候选时，会看调用方可用的节点（包括上面那些刚离开的）是否以所需能力声明过该模型。这一步忽略存活、draining、runtime 健康和熔断，但节点授权、模型授权、账户、节点选择器和容量过滤照常生效，维护中的节点也排除。声明过的，返回 `scheduler.ErrModelUnavailable`。它不包装 `ErrNoCapableNode`，前门答 `503`，`type` 为 `api_error`，`code` 为 `model_unavailable`，并带 `Retry-After: 5`。没声明过的，仍是原来的 404 或 `ErrModelNotAllowed`。因为只查调用方本来就能在 `/v1/models` 看到的节点和模型，这不会泄露额外的部署信息。代码在 `scheduler/unavailable.go`。
+- **对话类前门先等节点回来**：`/v1/messages`、`/v1/chat/completions`、`/v1/responses` 在选择原生路径或转换路径之前，先调用 `Scheduler.AwaitModel`。如果模型此刻既没有 Messages 候选，也没有所需的聊天候选，但最近有节点服务过它，就每 500ms 检查一次，最多等 `-model-unavailable-wait`（默认 `0`，表示内置的 15s；负值表示不等、直接返回 503）。节点在等待期间回来，请求照常派发，走它从未离开时本该走的路径；超时则返回 503。客户端断开时立即停止等待。其他前门（embeddings、rerank、图像等）不等待，直接按上面的规则返回 503 或 404。
+- 熔断冷却期和 runtime 不健康期间，唯一候选的请求现在也返回 503，以前是 404。
+
+默认测试覆盖：分类规则（从未服务、未知模型、保留期内外、维护、吊销、其他租户的节点、自有节点、模型被排除）、各派发路径、重连清除记录、等待期间节点回来、等待超时、context 取消、并发断线重连（`-race`），以及三个对话前门与 embeddings 的 503 响应体和 `Retry-After`。真实环境尚未验收。
 
 ## 客户端连接超时（2026-11-10）
 

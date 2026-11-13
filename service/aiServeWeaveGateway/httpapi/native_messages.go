@@ -73,6 +73,26 @@ func (h *handlers) nativePassthrough(ctx context.Context, req anthropicMessagesR
 	return len(h.sched.MessagesNativeCandidates(ctx, req.Model)) > 0
 }
 
+// awaitConversationModel lets a conversation front door (Messages, Chat
+// Completions, Responses) ride out a node reconnect before it picks the
+// native or the translated path: it waits, via scheduler.AwaitModel, while
+// model has no Messages candidate and no chat candidate of the kind the
+// request needs but was served recently. A non-nil result is
+// scheduler.ErrModelUnavailable, for the caller to answer as its dispatch
+// errors.
+//
+// awaitConversationModel 让对话类前门（Messages、Chat Completions、Responses）在选择
+// 原生或转换路径之前等过一次节点重连：当 model 既没有 Messages 候选、也没有该请求所需的
+// 聊天候选，但最近有人提供过时，经由 scheduler.AwaitModel 等待。非 nil 结果为
+// scheduler.ErrModelUnavailable，由调用方按派发错误答复。
+func (h *handlers) awaitConversationModel(ctx context.Context, model string, stream bool) error {
+	chat := runtime.CapabilityChat
+	if stream {
+		chat = runtime.CapabilityChatStream
+	}
+	return h.sched.AwaitModel(ctx, model, runtime.CapabilityMessages, chat)
+}
+
 func (h *handlers) useNativeMessages(ctx context.Context, req anthropicMessagesRequest) bool {
 	if len(req.Safeguards) > 0 {
 		return true

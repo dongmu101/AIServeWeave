@@ -102,6 +102,11 @@ type Scheduler struct {
 	queueMaxWait       time.Duration
 	queueRetryInterval time.Duration
 	queueSlots         chan struct{}
+
+	// unavailableWait is Config.UnavailableWait after defaulting; see
+	// unavailable.go.
+	// unavailableWait 是取默认值之后的 Config.UnavailableWait，见 unavailable.go。
+	unavailableWait time.Duration
 }
 
 // Config configures New. Every field is optional.
@@ -216,6 +221,16 @@ type Config struct {
 	// positive) uses defaultQueueMaxWaiters. Ignored when QueueMaxWait is
 	// zero.
 	QueueMaxWaiters int
+
+	// UnavailableWait is how long AwaitModel holds a request whose model was
+	// served recently but has no candidate now — typically while its node's
+	// Agent reconnects — before answering ErrModelUnavailable. Zero uses
+	// defaultUnavailableWait (15s); negative answers at once without waiting.
+	//
+	// UnavailableWait 是 AwaitModel 让「最近有人提供、但此刻没有候选」的模型请求等待的
+	// 时长（典型情形是其节点的 Agent 正在重连），之后返回 ErrModelUnavailable。为零时使用
+	// defaultUnavailableWait（15s）；为负时不等待、立即返回。
+	UnavailableWait time.Duration
 }
 
 // New returns a Scheduler that selects among the nodes connected to server.
@@ -250,6 +265,10 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 		sessionAffinityOn: cfg.SessionAffinity,
 	}
 	s.routes.Store(cfg.Routes)
+	s.unavailableWait = cfg.UnavailableWait
+	if s.unavailableWait == 0 {
+		s.unavailableWait = defaultUnavailableWait
+	}
 
 	if cfg.QueueMaxWait > 0 {
 		interval := cfg.QueueRetryInterval
@@ -297,7 +316,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.ChatResponse{}, Candidate{}, noCandidates(ctx)
+		return runtime.ChatResponse{}, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChat)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -334,7 +353,7 @@ func (s *Scheduler) Embed(ctx context.Context, req runtime.EmbeddingRequest) (ru
 	candidates := s.candidates(ctx, req.Model, runtime.CapabilityEmbeddings)
 	s.metrics.Selection(runtime.CapabilityEmbeddings, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.EmbeddingResponse{}, Candidate{}, noCandidates(ctx)
+		return runtime.EmbeddingResponse{}, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityEmbeddings)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -371,7 +390,7 @@ func (s *Scheduler) Rerank(ctx context.Context, req runtime.RerankRequest) (runt
 	candidates := s.candidates(ctx, req.Model, runtime.CapabilityRerank)
 	s.metrics.Selection(runtime.CapabilityRerank, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.RerankResponse{}, Candidate{}, noCandidates(ctx)
+		return runtime.RerankResponse{}, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityRerank)
 	}
 	var lastErr error
 	var cooled cooledCandidates
@@ -481,7 +500,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
-		return nil, Candidate{}, noCandidates(ctx)
+		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChatStream)
 	}
 	var lastErr error
 	var cooled cooledCandidates

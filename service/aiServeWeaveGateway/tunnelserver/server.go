@@ -57,6 +57,16 @@ type Config struct {
 	// DefaultHeartbeatTimeout.
 	HeartbeatTimeout time.Duration
 
+	// DepartedRetention is how long the inventory of a node that left this
+	// replica is kept for AppendDepartedNodes, so a request arriving while
+	// the node reconnects is told the model is temporarily unavailable
+	// rather than unknown. Zero uses DefaultDepartedRetention.
+	//
+	// DepartedRetention 是离开本副本的节点清单为 AppendDepartedNodes 保留的时长，使节点
+	// 重连期间到达的请求得知模型暂时不可用，而不是模型不存在。为零时使用
+	// DefaultDepartedRetention。
+	DepartedRetention time.Duration
+
 	// MaxFrameBytes caps a single DataChunk this replica will accept from an
 	// Agent. Zero uses DefaultMaxFrameBytes. It is a protocol guard, not a
 	// tuning knob: a frame over the limit ends the request as a protocol
@@ -77,6 +87,11 @@ const (
 	// DefaultHeartbeatTimeout tolerates two missed heartbeats at the Agent's
 	// default 15s interval before a node stops counting as live.
 	DefaultHeartbeatTimeout = 45 * time.Second
+	// DefaultDepartedRetention covers an Agent's reconnect backoff with room
+	// to spare; a node gone longer than this is treated as gone.
+	// DefaultDepartedRetention 足以覆盖 Agent 的重连退避并留有余量；离开更久的节点按已
+	// 离开处理。
+	DefaultDepartedRetention = 2 * time.Minute
 	// DefaultMaxFrameBytes matches the Agent's default frame limit, so
 	// neither side rejects a frame the other considered legal.
 	DefaultMaxFrameBytes = 4 << 20
@@ -117,6 +132,11 @@ type Server struct {
 	// 每请求一次的遍历（SchedNodes）既不用拿 mu，也不用复制 map。条目只在连接与断开时
 	// 变化，远比请求到达的频率低。
 	nodeList atomic.Pointer[[]*node]
+	// departed holds the last view of recently forgotten nodes (see
+	// departed.go), guarded by mu.
+	//
+	// departed 保存最近被遗忘节点的最后视图（见 departed.go），由 mu 保护。
+	departed map[string]departedNode
 
 	// roster is the last roster handed to SetRoster, relayed to every Agent
 	// on connect and re-broadcast on change. The Registry authors it; this
@@ -157,6 +177,9 @@ func New(cfg Config) (*Server, error) {
 	}
 	if cfg.MaxFrameBytes <= 0 {
 		cfg.MaxFrameBytes = DefaultMaxFrameBytes
+	}
+	if cfg.DepartedRetention <= 0 {
+		cfg.DepartedRetention = DefaultDepartedRetention
 	}
 	logger := cfg.Logger
 	if logger == nil {
@@ -288,6 +311,7 @@ func (s *Server) node(id string) (*node, error) {
 	if !ok {
 		n = newNode(id, s)
 		s.nodes[id] = n
+		delete(s.departed, id)
 		s.publishNodesLocked()
 	}
 	return n, nil
@@ -309,6 +333,7 @@ func (s *Server) forget(n *node) {
 	defer s.mu.Unlock()
 	if cur, ok := s.nodes[n.id]; ok && cur == n && n.isEmpty() {
 		delete(s.nodes, n.id)
+		s.recordDepartureLocked(n)
 		s.publishNodesLocked()
 	}
 }

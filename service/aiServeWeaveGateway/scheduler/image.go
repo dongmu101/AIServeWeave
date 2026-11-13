@@ -35,7 +35,7 @@ func (s *Scheduler) GenerateImage(ctx context.Context, req runtime.ImageRequest)
 	candidates := s.ImageCandidates(ctx, req.Model)
 	s.metrics.Selection(runtime.CapabilityImageGeneration, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.ImageMeta{}, nil, Candidate{}, noCandidates(ctx)
+		return runtime.ImageMeta{}, nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityImageGeneration)
 	}
 	var lastErr error
 	var cooled cooledCandidates

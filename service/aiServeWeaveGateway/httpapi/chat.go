@@ -424,6 +424,10 @@ func (h *handlers) chatCompletions(w http.ResponseWriter, r *http.Request) {
 		writeOpenAIError(w, http.StatusBadRequest, "invalid_request_error", "invalid_request", "model and a non-empty messages array are required")
 		return
 	}
+	if err := h.awaitConversationModel(r.Context(), req.Model, req.Stream); err != nil {
+		handleDispatchError(w, h.logger, err)
+		return
+	}
 	if h.useNativeChat(r.Context(), req) {
 		h.nativeChat(w, r, req, raw, start)
 		return

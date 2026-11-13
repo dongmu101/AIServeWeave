@@ -79,7 +79,7 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, capability, s.sessionAffinity(ctx), rand.Float64)
 	s.metrics.Selection(capability, len(candidates))
 	if len(candidates) == 0 {
-		return nil, Candidate{}, noCandidates(ctx)
+		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, capability)
 	}
 	var lastErr error
 	var cooled cooledCandidates

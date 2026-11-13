@@ -789,6 +789,10 @@ func (h *handlers) anthropicMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicError(w, http.StatusBadRequest, "invalid_request_error", "max_tokens is required and must be greater than zero")
 		return
 	}
+	if err := h.awaitConversationModel(r.Context(), req.Model, req.Stream); err != nil {
+		handleAnthropicDispatchError(w, h.logger, err)
+		return
+	}
 	if h.useNativeMessages(r.Context(), req) {
 		h.nativeMessages(w, r, req, raw, start)
 		return

@@ -69,6 +69,10 @@ func (h *handlers) responses(w http.ResponseWriter, r *http.Request) {
 		}
 		tenantID = identity.TenantID
 	}
+	if err := h.awaitConversationModel(r.Context(), req.Model, req.Stream); err != nil {
+		handleDispatchError(w, h.logger, err)
+		return
+	}
 	if h.useNativeResponses(r.Context(), req) {
 		h.nativeResponses(w, r, req, raw, start, tenantID)
 		return
