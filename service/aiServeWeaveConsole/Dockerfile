@@ -8,12 +8,18 @@ FROM base AS dependencies
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 # Use the package manager version declared by the project and its lockfile.
 # 使用项目声明的包管理器版本与锁文件。
-RUN npm install --global "$(node -p 'require("./package.json").packageManager')" && \
-    pnpm install --frozen-lockfile
+# Cache mounts keep the npm cache and pnpm store across builds; they never enter the image.
+# 缓存挂载让 npm 缓存与 pnpm store 跨构建保留，不进入镜像。
+RUN --mount=type=cache,target=/root/.npm \
+    --mount=type=cache,target=/pnpm/store \
+    npm install --global "$(node -p 'require("./package.json").packageManager')" && \
+    pnpm install --frozen-lockfile --store-dir /pnpm/store
 
 FROM dependencies AS build
 COPY . .
-RUN pnpm build
+# Reuse the Next.js compilation cache across builds.
+# 跨构建复用 Next.js 编译缓存。
+RUN --mount=type=cache,target=/app/.next/cache pnpm build
 
 FROM base AS runtime
 ENV NODE_ENV=production \
