@@ -3,11 +3,13 @@
 // SDK 2.0. It is the only package that talks to EZFP. Requests are signed
 // with the merchant's RSA private key, which never leaves this process; the
 // answers and notifications the ledger acts on are verified against the
-// platform's public key. Upstream messages are kept out of errors and logs.
+// platform's public key. Upstream messages are kept out of error strings; a
+// refusal's reason rides only on billing.EzfpError.Msg, for operator logs.
 //
 // ezfp 包基于易支付（EZFP）V2 接口（彩虹易支付协议）实现 billing.Ezfp，遵循其公开文档
 // 与参考 PHP SDK 2.0。它是唯一与易支付通信的包。请求以商户 RSA 私钥签名，私钥从不离开
-// 本进程；账目据以行动的答复与通知都用平台公钥验签。上游消息不会进入错误或日志。
+// 本进程；账目据以行动的答复与通知都用平台公钥验签。上游消息不会进入错误字符串；拒绝的
+// 原因只放在 billing.EzfpError.Msg 上，供运维日志使用。
 package ezfp
 
 import (
@@ -23,6 +25,7 @@ import (
 	"strconv"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing"
@@ -52,6 +55,11 @@ const maxResponseBytes = 64 << 10
 //
 // MaxClockSkew 是签名接口答复的时间戳与本服务器时钟之间允许的最大偏差，与参考 SDK 一致。
 const MaxClockSkew = 300 * time.Second
+
+// maxMsgBytes is the most bytes of a refusal's reason kept for the log.
+//
+// maxMsgBytes 是为日志保留的拒绝原因最大字节数。
+const maxMsgBytes = 200
 
 // maxNameBytes is the most bytes of a product name EZFP keeps.
 //
@@ -188,7 +196,7 @@ func (c *Client) call(ctx context.Context, op, path string, params map[string]st
 		return nil, fmt.Errorf("ezfp: %s: the answer has no code", op)
 	}
 	if code != 0 {
-		return nil, &billing.EzfpError{Op: op, Code: code}
+		return nil, &billing.EzfpError{Op: op, Code: code, Msg: cleanMsg(answer["msg"])}
 	}
 	if !verify(c.public, answer) || !c.fresh(answer["timestamp"]) || answer["pid"] != "" && answer["pid"] != c.pid {
 		return nil, fmt.Errorf("%w (%s)", ErrUnverified, op)
@@ -239,6 +247,27 @@ func decodeAnswer(raw []byte) (map[string]string, error) {
 		}
 	}
 	return out, nil
+}
+
+// cleanMsg keeps a refusal's reason fit for one log line: control
+// characters become spaces and it is cut to maxMsgBytes on a character
+// boundary.
+func cleanMsg(msg string) string {
+	msg = strings.Map(func(r rune) rune {
+		if unicode.IsControl(r) {
+			return ' '
+		}
+		return r
+	}, strings.ToValidUTF8(msg, ""))
+	msg = strings.TrimSpace(msg)
+	if len(msg) <= maxMsgBytes {
+		return msg
+	}
+	cut := maxMsgBytes
+	for cut > 0 && !utf8.RuneStart(msg[cut]) {
+		cut--
+	}
+	return msg[:cut]
 }
 
 // truncateName cuts a product name to maxNameBytes on a character boundary,

@@ -45,7 +45,7 @@ Billing:
 
 ## 防重复入账与交付
 
-- **先落库再下单**：订单（`ord_` id 即易支付的 `out_trade_no`）先以 `pending` 保存，点数或开通内容在此时确定，再调用 `api/pay/create`（`method=jump`）。下单失败时订单标为失败，并释放账号占用或预售名额，返回 `503`。
+- **先落库再下单**：订单（`ord_` id 即易支付的 `out_trade_no`）先以 `pending` 保存，点数或开通内容在此时确定，再调用 `api/pay/create`（`method=jump`）。下单失败时订单标为失败，并释放账号占用或预售名额，返回 `503`。原因记在控制面的 `opening an 易支付 payment failed` 日志里：`code` 与 `msg` 非空表示易支付明确拒绝，`msg` 是易支付给商户的原因（截短、去控制字符，不会出现在页面上）；`code=0` 时看 `error`，它是超时、HTTP 状态或验签失败。
 - **同一条结算路径**：通知与查询都归约为和 Dodo webhook 相同的付款事件，交给同一个事务。账号订单开通一个月，预售订单进入「待发货」，充值包记入 `topup` 点数。
 - **逐项核对**：商户 ID 一致；`trade_status` 为 `TRADE_SUCCESS`（查询时 `status` 为 1）；订单确实是易支付订单；交易号与下单时记录的一致；币种为 CNY；实付金额不低于订单金额；`param` 中的租户与订单一致。任一项不符都不入账，记错误日志，留给运维处理。
 - **三道去重**：事件 id `ezfp:pay:<trade_no>`、付款 id `ezfp:<trade_no>` 唯一约束、账目幂等键 `topup:ezfp:<trade_no>`。通知重投、通知与查询同时到达，都只入账一次。
