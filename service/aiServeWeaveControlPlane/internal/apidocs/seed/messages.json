@@ -7,15 +7,16 @@
   "method": "POST",
   "path": "/v1/messages",
   "summary": "兼容 Anthropic Messages API 的对话接口，可直接使用 Anthropic 官方 SDK 与 Claude Code 等客户端。",
-  "revision": 2,
+  "revision": 3,
   "content": {
     "highlights": [
       "兼容 Anthropic Messages API，Anthropic SDK 将 base_url 设为 {{BASE_URL}} 即可使用",
       "认证支持 x-api-key 请求头，也支持 Authorization: Bearer",
-      "支持 text、image、document、tool_use、tool_result 内容块",
-      "stream=true 时按 Anthropic 事件序列（message_start → … → message_stop）推送"
+      "支持 text、image、document、tool_use、tool_result 内容块，回复中可带 thinking 块",
+      "stream=true 时按 Anthropic 事件序列（message_start → … → message_stop）推送",
+      "Anthropic SDK 的 base_url 带 /v1 时（请求路径变为 /v1/v1/messages）同样可用"
     ],
-    "notice": "max_tokens 为必填且必须大于 0。请求体上限 8 MB，Claude 系列模型上限为 1 MB（超出返回 413）。认证失败与配额超限返回 OpenAI 格式错误体，其余错误返回 Anthropic 格式错误体 {\"type\":\"error\",\"error\":{...}}。",
+    "notice": "max_tokens 为必填且必须大于 0。请求体上限 32 MiB（与 Anthropic Messages API 一致），超出返回 413。认证失败、余额不足、配额超限与密钥校验不可用返回 OpenAI 格式错误体，其余错误返回 Anthropic 格式错误体 {\"type\":\"error\",\"error\":{...}}。",
     "auth": "bearer",
     "headers": [
       {
@@ -31,10 +32,28 @@
         "description": "`Bearer {{API_KEY}}`。携带此头时优先使用它，x-api-key 被忽略。两者至少提供一个。"
       },
       {
+        "name": "anthropic-version",
+        "type": "string",
+        "required": false,
+        "description": "Anthropic API 版本，仅在由 Claude 系列模型处理请求时转发给后端，其他模型忽略。"
+      },
+      {
+        "name": "anthropic-beta",
+        "type": "string",
+        "required": false,
+        "description": "Anthropic beta 特性，仅在由 Claude 系列模型处理请求时转发给后端，其他模型忽略。"
+      },
+      {
         "name": "Content-Type",
         "type": "string",
         "required": true,
         "description": "固定为 `application/json`。"
+      },
+      {
+        "name": "X-Session-Id",
+        "type": "string",
+        "required": false,
+        "description": "会话标识（可选）。同一段对话带相同的值，会被尽量调度到同一节点以提高缓存命中；未提供时取请求体的 metadata.user_id。也识别 X-Claude-Code-Session-Id 请求头，超过 512 字节的值被忽略。"
       }
     ],
     "path_params": [],
@@ -158,7 +177,7 @@
                 "name": "content",
                 "type": "string | array",
                 "required": false,
-                "description": "tool_result 块的结果：字符串或仅含 text 块的数组。"
+                "description": "tool_result 块的结果：字符串，或仅含 text 与 tool_reference 块的数组（tool_reference 需带 tool_name，用于启用 defer_loading 的工具）。"
               }
             ]
           }
@@ -175,6 +194,18 @@
         "type": "object",
         "required": false,
         "description": "扩展思考：{\"type\":\"enabled\",\"budget_tokens\":N}（N 必须大于 0）、{\"type\":\"adaptive\"} 或 {\"type\":\"disabled\"}。作为提示转发给后端，模型不支持思考时被忽略；格式非法返回 400。"
+      },
+      {
+        "name": "output_config",
+        "type": "object",
+        "required": false,
+        "description": "目前只读取 effort（low、medium、high、xhigh、max；max 按 xhigh 处理），在 thinking 为 adaptive 时指定思考档位。"
+      },
+      {
+        "name": "metadata",
+        "type": "object",
+        "required": false,
+        "description": "请求元数据。其中的 user_id 用作会话标识（作用同 X-Session-Id 请求头），其余字段不生效。"
       },
       {
         "name": "system",
@@ -230,6 +261,12 @@
             "type": "object",
             "required": true,
             "description": "JSON Schema 形式的输入定义。"
+          },
+          {
+            "name": "defer_loading",
+            "type": "boolean",
+            "required": false,
+            "description": "为 true 时工具先不向模型展示，直到某个 tool_result 里的 tool_reference 块点名它才启用。"
           }
         ]
       },
@@ -237,7 +274,7 @@
         "name": "tool_choice",
         "type": "object",
         "required": false,
-        "description": "工具选择策略。",
+        "description": "工具选择策略。disable_parallel_tool_use 被接受但不生效。",
         "children": [
           {
             "name": "type",
@@ -298,6 +335,8 @@
             "description": "块类型。",
             "enum": [
               "text",
+              "thinking",
+              "redacted_thinking",
               "tool_use"
             ]
           },
@@ -306,6 +345,18 @@
             "type": "string",
             "required": false,
             "description": "text 块的文本。"
+          },
+          {
+            "name": "thinking",
+            "type": "string",
+            "required": false,
+            "description": "thinking 块的思考内容。后端未提供签名时 signature 为空字符串。"
+          },
+          {
+            "name": "signature",
+            "type": "string",
+            "required": false,
+            "description": "thinking 块的签名，回传 thinking 块时需原样带回。"
           },
           {
             "name": "id",
@@ -331,7 +382,7 @@
         "name": "stop_reason",
         "type": "string",
         "required": true,
-        "description": "停止原因。",
+        "description": "停止原因。Claude 系列模型返回后端的原始取值，可能还有 stop_sequence 等。",
         "enum": [
           "end_turn",
           "max_tokens",
@@ -342,13 +393,13 @@
         "name": "stop_sequence",
         "type": "string | null",
         "required": true,
-        "description": "命中的停止序列。"
+        "description": "命中的停止序列。非 Claude 系列模型恒为 null。"
       },
       {
         "name": "usage",
         "type": "object",
         "required": true,
-        "description": "用量统计。",
+        "description": "用量统计。Claude 系列模型还会带上后端上报的其他字段。",
         "children": [
           {
             "name": "input_tokens",
@@ -408,6 +459,18 @@
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
       },
       {
+        "status": 402,
+        "label": "余额不足",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "账号包月已过期",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
+      },
+      {
         "status": 404,
         "label": "模型不可用",
         "content_type": "application/json",
@@ -423,25 +486,45 @@
         "status": 413,
         "label": "请求体过大",
         "content_type": "application/json",
-        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"native Messages request size limit exceeded\"\n  }\n}"
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"request_too_large\",\n    \"message\": \"the request body exceeds the size limit\"\n  }\n}"
       },
       {
         "status": 429,
         "label": "超出配额",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "服务暂无可用容量",
+        "content_type": "application/json",
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"rate_limit_error\",\n    \"message\": \"no node had capacity for this request; retry shortly\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "模型暂时不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"api_error\",\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\"\n  }\n}"
       }
     ],
     "sections": [
       {
         "title": "流式事件说明",
-        "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>。事件顺序：message_start → content_block_start → content_block_delta（文本为 text_delta，工具参数为 input_json_delta）→ content_block_stop → …（每个内容块重复）→ message_delta（含 stop_reason 与 usage.output_tokens）→ message_stop。\n\n生成中途出错时发送 event: error，data 为 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"...\"}}，之后不再发送 message_stop。"
+        "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>。事件顺序：message_start → content_block_start → content_block_delta（文本为 text_delta，思考为 thinking_delta / signature_delta，工具参数为 input_json_delta）→ content_block_stop → …（每个内容块重复）→ message_delta（含 stop_reason 与 usage.output_tokens）→ message_stop。Claude 系列模型的流为后端原生事件，可能穿插 ping 事件。\n\n响应头发出后 HTTP 状态码已固定为 200；生成中途出错时发送 event: error，data 为 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"...\"}}，之后不再发送 message_stop，客户端请据此判断是否完整。尚未开始输出时的错误（如鉴权、配额、参数问题）仍以对应状态码返回。"
       },
       {
         "title": "使用示例：工具调用",
         "body": "模型调用工具时 stop_reason 为 tool_use，content 中出现 tool_use 块。执行后把 assistant 回复原样追加，再追加一条 user 消息，内含对应 tool_use_id 的 tool_result 块。Claude 系列模型的工具续接需在同一 API Key 下尽快发起，续接状态失效时返回 409。",
         "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"max_tokens\": 1024,\n  \"tools\": [\n    {\n      \"name\": \"get_weather\",\n      \"description\": \"查询城市天气\",\n      \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"city\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"city\"\n        ]\n      }\n    }\n  ],\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"上海天气如何？\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": [\n        {\n          \"type\": \"tool_use\",\n          \"id\": \"toolu_01\",\n          \"name\": \"get_weather\",\n          \"input\": {\n            \"city\": \"上海\"\n          }\n        }\n      ]\n    },\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"tool_result\",\n          \"tool_use_id\": \"toolu_01\",\n          \"content\": \"22℃，多云\"\n        }\n      ]\n    }\n  ]\n}",
         "code_lang": "json"
+      },
+      {
+        "title": "Claude 系列模型",
+        "body": "调用 Claude 系列模型时，请求会交给 Claude 后端处理，与其他模型的差异如下：\n\n1. 原生字段（如 cache_control、citations）由后端按 Anthropic 语义处理，回复与流式事件也是后端的原生输出。部分节点经兼容桥接转发时，cache_control 与 context_management 会被去除，thinking 仅作提示：预算至少 1024 且小于 max_tokens，且不能同时设置 temperature，否则不开启；adaptive 会按 output_config.effort（未给时 medium）换算成固定预算。\n\n2. 后端的上游错误会连同状态码与错误体原样返回；后端拒绝请求时 message 为固定短语，如 capability_rejected: prompt_too_long（输入过长）、capability_rejected: max_tokens_context_overflow（输入加上 max_tokens 超出上下文窗口）。\n\n3. 其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+      },
+      {
+        "title": "模型名后缀：指定思考档位",
+        "body": "只能填写模型名的客户端，可以在模型名后加 (档位) 指定思考档位，例如 {{MODEL}}(high) 或 {{MODEL}}(16384)。档位为 none、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭）。后缀会覆盖请求体中的 thinking：none 与 0 等同 {\"type\":\"disabled\"}，其余等同 {\"type\":\"enabled\",\"budget_tokens\":N}，预算至少 1024 且小于 max_tokens；max_tokens 不大于 1024 时返回 400。\n\n括号里不是上述取值时，整个字符串按模型名处理；模型名末尾的 [1m]、[2m] 上下文窗口标记会被去掉。"
       },
       {
         "title": "在 Claude Code 中使用",
@@ -451,7 +534,7 @@
       },
       {
         "title": "错误码说明",
-        "body": "认证失败（401 invalid_api_key）、暂时无法校验密钥（503 verification_unavailable）与租户配额超限（429，带 Retry-After）返回 OpenAI 格式：{\"error\":{\"message\",\"type\",\"code\"}}。\n\n其余错误返回 Anthropic 格式：{\"type\":\"error\",\"error\":{\"type\",\"message\"}}，状态码含义：400 请求体非法或参数不支持；404 模型不可用；409 工具续接状态失效；413 请求体或响应超出大小上限；429 服务暂无可用容量；500 / 502 内部或上游错误；503 服务暂不可用；504 超时。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+        "body": "以下错误由入口产生，返回 OpenAI 格式：{\"error\":{\"message\",\"type\",\"code\"}}：401 缺少 API Key 或 Key 无效（invalid_api_key）；402 账户余额耗尽（insufficient_balance，请充值）或仅使用账号包月的商户在包月过期后（account_subscription_expired，请续费）；429 租户超出配额（code 为 requests_per_minute / tokens_per_minute / max_concurrent，带 Retry-After）；503 暂时无法校验密钥（verification_unavailable）。\n\n其余错误返回 Anthropic 格式：{\"type\":\"error\",\"error\":{\"type\",\"message\"}}，没有 code 字段，状态码含义：400 请求体非法或参数不支持；404 模型不可用或当前 Key 无权使用；409 工具续接状态失效；413 请求体超过 32 MiB（type 为 request_too_large）或响应超出大小上限；429 服务暂无可用容量（type 为 rate_limit_error，带 Retry-After）；500 / 502 内部或上游错误；503 服务暂不可用，或模型的节点暂时不可用（带 Retry-After）；504 超时。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
       }
     ]
   }

@@ -25,7 +25,9 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "响应体是文件原始字节，不是 JSON",
           "边读边传，大文件不会在网关整体缓存，适合流式写盘",
           "Content-Disposition 以附件形式给出文件名，Content-Type 与 Content-Length 在已知时返回",
-          "只能下载本租户任务的产物，其他 artifact_id 一律返回 404"
+          "只能下载本租户任务的产物，其他 artifact_id 一律返回 404",
+          "若部署启用了产物存储，已转存的产物在执行端离线后仍可下载；未转存的产物须从产出它的执行端实时拉取",
+          "账户余额耗尽或账号包月到期后仍可下载已生成的产物"
         ],
         "notice": "artifact_id 来自「获取任务产物列表」接口。传输中途出错时连接会提前结束（收到的字节少于 Content-Length），请校验长度并重新下载；本接口不支持 Range 分段续传。",
         "auth": "bearer",
@@ -120,7 +122,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "错误码",
-            "body": "404 artifact_not_found：artifact_id 不存在、不属于当前租户，或对应产物已不再可用。\n\n413 response_too_large：文件超出传输大小上限。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+            "body": "404 artifact_not_found：artifact_id 不存在、不属于当前租户，或对应产物已不再可用。\n\n413 response_too_large：文件超出传输大小上限（从执行端实时拉取时生效，默认 512 MiB，以部署配置为准）。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
           },
           {
             "title": "错误格式",
@@ -131,7 +133,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "e548f848d42c21fe718e5538faa85e0cb4754feaaf06428eb96429a96aa3dec6",
+    "fingerprint": "f31e1ae5daa49af0bfb682c6e4b3168fc6d3e4a24f146704ac9b7bad9cdd7ed1",
     "fields": [
       {
         "path": [
@@ -182,6 +184,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3
         ],
         "key": "docs.d0006"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          4
+        ],
+        "key": "docs.d0559"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          5
+        ],
+        "key": "docs.d0560"
       },
       {
         "path": [
@@ -296,7 +314,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0019"
+        "key": "docs.d0561"
       },
       {
         "path": [
@@ -334,10 +352,10 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "兼容 OpenAI Audio API，可直接使用 OpenAI SDK",
           "将音频转写为原语言文本，可用 language 指定音频语言",
           "请求为 multipart/form-data，整个请求不超过 25 MiB",
-          "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频",
+          "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频；目前只有 WAV 与带 ID3 标签的 MP3 能通过内容校验",
           "response_format 支持 json（默认）与 text"
         ],
-        "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前可被稳定识别为音频的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；文件头无法识别为音频时返回 400。",
+        "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前能通过内容校验的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；.ogg 与 .flac 虽在扩展名允许列表内，但文件头无法被识别为音频，同样会返回 400。",
         "auth": "bearer",
         "headers": [
           {
@@ -361,7 +379,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "file",
             "type": "file",
             "required": true,
-            "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容。整个请求（含音频）不超过 25 MiB。"
+            "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容（目前为 WAV 或带 ID3 标签的 MP3）。整个请求（含音频）不超过 25 MiB。"
           },
           {
             "name": "model",
@@ -468,6 +486,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -495,7 +519,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "文件要求",
-            "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400，错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
+            "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400（目前只有 WAV 与带 ID3 标签的 MP3 能通过，.ogg、.flac 与不带 ID3 标签的 MP3 会被拒绝），错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
           },
           {
             "title": "参数校验",
@@ -503,16 +527,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码一览",
-            "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+            "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n402 insufficient_balance：账户余额已耗尽，充值后即可恢复\n402 account_subscription_expired：仅使用包月账号的租户，订阅已过期，续订后即可恢复\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n401：后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
           },
           {
             "title": "鉴权与配额",
-            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
           }
         ]
       }
     },
-    "fingerprint": "37cb86cc1f39b7b6a1541810eedb05e15e8aa191af0731d564029cc68c015370",
+    "fingerprint": "79f7e7ede38643563266d4919411933346596690a3f3e740a1b541f8a2fc236c",
     "fields": [
       {
         "path": [
@@ -562,7 +586,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           3
         ],
-        "key": "docs.d0028"
+        "key": "docs.d0562"
       },
       {
         "path": [
@@ -577,7 +601,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "notice"
         ],
-        "key": "docs.d0030"
+        "key": "docs.d0563"
       },
       {
         "path": [
@@ -604,7 +628,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "description"
         ],
-        "key": "docs.d0033"
+        "key": "docs.d0564"
       },
       {
         "path": [
@@ -730,7 +754,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -739,7 +763,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "label"
         ],
-        "key": "docs.d0048"
+        "key": "docs.d0047"
       },
       {
         "path": [
@@ -748,13 +772,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "label"
         ],
-        "key": "docs.d0049"
+        "key": "docs.d0048"
       },
       {
         "path": [
           "content",
           "response_examples",
           10,
+          "label"
+        ],
+        "key": "docs.d0049"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          11,
           "label"
         ],
         "key": "docs.d0050"
@@ -775,7 +808,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0052"
+        "key": "docs.d0566"
       },
       {
         "path": [
@@ -811,7 +844,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0056"
+        "key": "docs.d0567"
       },
       {
         "path": [
@@ -829,7 +862,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0058"
+        "key": "docs.d0568"
       }
     ]
   },
@@ -849,11 +882,11 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "兼容 OpenAI Audio API，可直接使用 OpenAI SDK",
           "将音频内容翻译为英文文本，输出语言固定为英文",
           "请求为 multipart/form-data，整个请求不超过 25 MiB",
-          "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频",
+          "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频；目前只有 WAV 与带 ID3 标签的 MP3 能通过内容校验",
           "response_format 支持 json（默认）与 text",
           "不接受 language 参数，传入即返回 400"
         ],
-        "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前可被稳定识别为音频的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；文件头无法识别为音频时返回 400。",
+        "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前能通过内容校验的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；.ogg 与 .flac 虽在扩展名允许列表内，但文件头无法被识别为音频，同样会返回 400。",
         "auth": "bearer",
         "headers": [
           {
@@ -877,7 +910,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "file",
             "type": "file",
             "required": true,
-            "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容。整个请求（含音频）不超过 25 MiB。"
+            "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容（目前为 WAV 或带 ID3 标签的 MP3）。整个请求（含音频）不超过 25 MiB。"
           },
           {
             "name": "model",
@@ -984,6 +1017,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -1011,7 +1050,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "文件要求",
-            "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400，错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
+            "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400（目前只有 WAV 与带 ID3 标签的 MP3 能通过，.ogg、.flac 与不带 ID3 标签的 MP3 会被拒绝），错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
           },
           {
             "title": "参数校验",
@@ -1019,16 +1058,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码一览",
-            "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+            "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n402 insufficient_balance：账户余额已耗尽，充值后即可恢复\n402 account_subscription_expired：仅使用包月账号的租户，订阅已过期，续订后即可恢复\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n401：后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
           },
           {
             "title": "鉴权与配额",
-            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
           }
         ]
       }
     },
-    "fingerprint": "e5afdf7c84d548e81587721a559401f43f9f458070352e32a92d7fef53e7361d",
+    "fingerprint": "9f78a7219d5c2783a93a37430716107a72b524571132b8b7dcb3f96d10ae0266",
     "fields": [
       {
         "path": [
@@ -1078,7 +1117,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           3
         ],
-        "key": "docs.d0028"
+        "key": "docs.d0562"
       },
       {
         "path": [
@@ -1101,7 +1140,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "notice"
         ],
-        "key": "docs.d0030"
+        "key": "docs.d0563"
       },
       {
         "path": [
@@ -1128,7 +1167,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "description"
         ],
-        "key": "docs.d0033"
+        "key": "docs.d0564"
       },
       {
         "path": [
@@ -1254,7 +1293,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -1263,7 +1302,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "label"
         ],
-        "key": "docs.d0048"
+        "key": "docs.d0047"
       },
       {
         "path": [
@@ -1272,13 +1311,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           10,
           "label"
         ],
-        "key": "docs.d0049"
+        "key": "docs.d0048"
       },
       {
         "path": [
           "content",
           "response_examples",
           11,
+          "label"
+        ],
+        "key": "docs.d0049"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          12,
           "label"
         ],
         "key": "docs.d0050"
@@ -1299,7 +1347,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0052"
+        "key": "docs.d0566"
       },
       {
         "path": [
@@ -1335,7 +1383,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0056"
+        "key": "docs.d0567"
       },
       {
         "path": [
@@ -1353,7 +1401,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0058"
+        "key": "docs.d0568"
       }
     ]
   },
@@ -1389,6 +1437,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "type": "string",
             "required": true,
             "description": "固定为 `application/json`。"
+          },
+          {
+            "name": "X-Session-Id",
+            "type": "string",
+            "required": false,
+            "description": "可选。同一段对话的请求携带相同的值，网关会尽量把它们路由到同一个节点，以复用上游缓存（是否生效取决于部署配置）。"
           }
         ],
         "path_params": [],
@@ -1579,13 +1633,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "max_tokens",
             "type": "integer",
             "required": false,
-            "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，取值范围 1 ~ 64000。"
+            "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，不得小于 1。 部分后端只接收而不强制执行输出上限，此时响应头 X-Gateway-Ignored-Parameters 会列出被忽略的参数名，并附带 Warning 头。"
           },
           {
             "name": "max_completion_tokens",
             "type": "integer",
             "required": false,
-            "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
+            "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。 部分后端只接收而不强制执行输出上限，此时响应头 X-Gateway-Ignored-Parameters 会列出被忽略的参数名，并附带 Warning 头。"
           },
           {
             "name": "reasoning_effort",
@@ -1757,6 +1811,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
                     "description": "回复文本；仅发起工具调用时可能为空字符串。"
                   },
                   {
+                    "name": "reasoning_content",
+                    "type": "string",
+                    "required": false,
+                    "description": "思考内容，仅在模型返回思考过程时出现。"
+                  },
+                  {
                     "name": "tool_calls",
                     "type": "array",
                     "required": false,
@@ -1829,6 +1889,20 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "type": "integer",
                 "required": true,
                 "description": "总 token 数。"
+              },
+              {
+                "name": "completion_tokens_details",
+                "type": "object",
+                "required": false,
+                "description": "输出 token 的细分，仅在后端上报了思考 token 时出现。",
+                "children": [
+                  {
+                    "name": "reasoning_tokens",
+                    "type": "integer",
+                    "required": true,
+                    "description": "思考消耗的 token 数。"
+                  }
+                ]
               }
             ]
           }
@@ -1876,6 +1950,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "账号包月已过期",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -1892,6 +1978,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "请求超时",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"the request timed out\",\n    \"type\": \"timeout_error\",\n    \"code\": \"timeout\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "模型暂时不可用",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"model_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
@@ -1914,17 +2006,23 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "code_lang": "json"
           },
           {
+            "title": "使用示例：通过模型名设置思考",
+            "body": "只能设置 model 的客户端，可以在模型名后追加括号后缀指定思考强度：none（关闭）、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭；预算会映射到不低于它的最近档位）。后缀等价于设置 reasoning_effort，且优先于请求体中的 reasoning_effort。括号内不是上述取值时，整个字符串按模型名处理。模型名末尾的 [1m] 或 [2m] 标记会被忽略。",
+            "code": "{\n  \"model\": \"{{MODEL}}(high)\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"证明根号 2 是无理数\"\n    }\n  ]\n}",
+            "code_lang": "json"
+          },
+          {
             "title": "Claude 系列模型的参数限制",
-            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，不得小于 1；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 32 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
           },
           {
             "title": "错误码说明",
-            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n402：账户余额已耗尽（insufficient_balance），请充值后重试；账号包月订阅已过期时 code 为 account_subscription_expired，请续订。\n\n404：请求的模型不存在、当前不可用，或当前 API Key 无权使用（model_not_found）。\n\n409：Claude 系列模型的工具调用结果无法续接（continuation_unavailable），例如同一轮工具结果被重复提交，请重新发起请求。\n\n413：响应超出大小上限（response_too_large）；调用 Claude 系列模型时请求体超过 32 MB 为 request_too_large。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），响应可能带有 Retry-After，稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。调用 Claude 系列模型时，上游返回的错误可能连同其原状态码返回（type 与 code 取自上游错误），上游返回内容异常时为 502（upstream_protocol）。\n\n503：暂时无法校验 API Key（verification_unavailable）；模型所在节点暂时不可用（model_unavailable，带 Retry-After，稍后重试即可）；或服务暂不可用（connection_failed / runtime_closed）。Claude 系列模型另有 node_unavailable、session_unavailable。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "ba3e473580c67963f7e44cf32edb2e5fc430433158e65798a914a3f946a728f3",
+    "fingerprint": "61a96637261ed8a9793adde2af110cd5533d4277e735c2baa8d2b84bd391f8fc",
     "fields": [
       {
         "path": [
@@ -2000,6 +2098,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "description"
         ],
         "key": "docs.d0075"
+      },
+      {
+        "path": [
+          "content",
+          "headers",
+          2,
+          "description"
+        ],
+        "key": "docs.d0569"
       },
       {
         "path": [
@@ -2309,7 +2416,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0101"
+        "key": "docs.d0570"
       },
       {
         "path": [
@@ -2318,7 +2425,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0102"
+        "key": "docs.d0571"
       },
       {
         "path": [
@@ -2587,6 +2694,19 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
+        "key": "docs.d0572"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          4,
+          "children",
+          1,
+          "children",
+          3,
+          "description"
+        ],
         "key": "docs.d0125"
       },
       {
@@ -2597,7 +2717,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           0,
           "description"
@@ -2612,7 +2732,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           2,
           "description"
@@ -2627,7 +2747,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           2,
           "children",
@@ -2644,7 +2764,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           2,
           "children",
@@ -2709,6 +2829,30 @@ export const DOC_SOURCES: readonly DocSource[] = [
       {
         "path": [
           "content",
+          "response_fields",
+          5,
+          "children",
+          3,
+          "description"
+        ],
+        "key": "docs.d0573"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          5,
+          "children",
+          3,
+          "children",
+          0,
+          "description"
+        ],
+        "key": "docs.d0574"
+      },
+      {
+        "path": [
+          "content",
           "response_examples",
           0,
           "label"
@@ -2749,7 +2893,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0575"
       },
       {
         "path": [
@@ -2758,7 +2902,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0137"
+        "key": "docs.d0576"
       },
       {
         "path": [
@@ -2767,7 +2911,34 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
+        "key": "docs.d0047"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          7,
+          "label"
+        ],
+        "key": "docs.d0137"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          8,
+          "label"
+        ],
         "key": "docs.d0050"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          9,
+          "label"
+        ],
+        "key": "docs.d0577"
       },
       {
         "path": [
@@ -2830,7 +3001,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "title"
         ],
-        "key": "docs.d0144"
+        "key": "docs.d0578"
       },
       {
         "path": [
@@ -2839,7 +3010,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0145"
+        "key": "docs.d0579"
       },
       {
         "path": [
@@ -2848,7 +3019,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "title"
         ],
-        "key": "docs.d0146"
+        "key": "docs.d0144"
       },
       {
         "path": [
@@ -2857,7 +3028,25 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "body"
         ],
-        "key": "docs.d0147"
+        "key": "docs.d0580"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "title"
+        ],
+        "key": "docs.d0146"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "body"
+        ],
+        "key": "docs.d0581"
       }
     ]
   },
@@ -2893,6 +3082,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "type": "string",
             "required": true,
             "description": "固定为 `application/json`。"
+          },
+          {
+            "name": "X-Session-Id",
+            "type": "string",
+            "required": false,
+            "description": "可选。同一段对话的请求携带相同的值，网关会尽量把它们路由到同一个节点，以复用上游缓存（是否生效取决于部署配置）。"
           }
         ],
         "path_params": [],
@@ -3083,13 +3278,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "max_tokens",
             "type": "integer",
             "required": false,
-            "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，取值范围 1 ~ 64000。"
+            "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，不得小于 1。 部分后端只接收而不强制执行输出上限，此时响应头 X-Gateway-Ignored-Parameters 会列出被忽略的参数名，并附带 Warning 头。"
           },
           {
             "name": "max_completion_tokens",
             "type": "integer",
             "required": false,
-            "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
+            "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。 部分后端只接收而不强制执行输出上限，此时响应头 X-Gateway-Ignored-Parameters 会列出被忽略的参数名，并附带 Warning 头。"
           },
           {
             "name": "reasoning_effort",
@@ -3222,7 +3417,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "created",
             "type": "integer",
             "required": true,
-            "description": "创建时间（Unix 秒）。"
+            "description": "创建时间（Unix 秒）。非 Claude 系列模型的流式 chunk 中固定为 0。"
           },
           {
             "name": "model",
@@ -3259,6 +3454,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
                     "type": "string",
                     "required": false,
                     "description": "新增的文本片段。"
+                  },
+                  {
+                    "name": "reasoning_content",
+                    "type": "string",
+                    "required": false,
+                    "description": "新增的思考内容，仅在模型返回思考过程时出现。"
                   },
                   {
                     "name": "tool_calls",
@@ -3325,6 +3526,20 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "type": "integer",
                 "required": true,
                 "description": "总 token 数。"
+              },
+              {
+                "name": "completion_tokens_details",
+                "type": "object",
+                "required": false,
+                "description": "输出 token 的细分，仅在后端上报了思考 token 时出现。",
+                "children": [
+                  {
+                    "name": "reasoning_tokens",
+                    "type": "integer",
+                    "required": true,
+                    "description": "思考消耗的 token 数。"
+                  }
+                ]
               }
             ]
           }
@@ -3343,7 +3558,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           {
             "lang": "javascript",
             "label": "JavaScript",
-            "code": "const res = await fetch(\"{{BASE_URL}}/v1/chat/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    stream: true,\n    messages: [{ role: \"user\", content: \"用一句话介绍你自己\" }],\n  }),\n});\n\nconst reader = res.body.getReader();\nconst decoder = new TextDecoder();\nlet buffer = \"\";\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n  buffer += decoder.decode(value, { stream: true });\n  const events = buffer.split(\"\\n\\n\");\n  buffer = events.pop();\n  for (const event of events) {\n    const data = event.replace(/^data: /, \"\");\n    if (data === \"[DONE]\") continue;\n    const chunk = JSON.parse(data);\n    const text = chunk.choices?.[0]?.delta?.content;\n    if (text) console.log(text);\n  }\n}"
+            "code": "const res = await fetch(\"{{BASE_URL}}/v1/chat/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    stream: true,\n    messages: [{ role: \"user\", content: \"用一句话介绍你自己\" }],\n  }),\n});\n\nif (!res.ok) {\n  const err = await res.json();\n  throw new Error(err.error?.message);\n}\n\nconst reader = res.body.getReader();\nconst decoder = new TextDecoder();\nlet buffer = \"\";\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n  buffer += decoder.decode(value, { stream: true });\n  const events = buffer.split(\"\\n\\n\");\n  buffer = events.pop();\n  for (const event of events) {\n    if (!event.startsWith(\"data: \")) continue; // 忽略心跳注释行\n    const data = event.slice(6);\n    if (data === \"[DONE]\") continue;\n    const chunk = JSON.parse(data);\n    if (chunk.error) throw new Error(chunk.error.message);\n    const text = chunk.choices?.[0]?.delta?.content;\n    if (text) console.log(text);\n  }\n}"
           }
         ],
         "response_examples": [
@@ -3360,6 +3575,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "data: {\"id\":\"\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n"
           },
           {
+            "status": 200,
+            "label": "流中途失败（Claude 系列模型）",
+            "content_type": "text/event-stream",
+            "body": "data: {\"error\":{\"message\":\"native Messages stream failed\",\"type\":\"api_error\",\"code\":\"upstream_protocol\"}}\n\n"
+          },
+          {
             "status": 400,
             "label": "参数错误",
             "content_type": "application/json",
@@ -3370,6 +3591,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "认证失败",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "账号包月已过期",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
           },
           {
             "status": 404,
@@ -3388,6 +3621,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "暂时无法校验密钥",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"cannot verify the API key right now\",\n    \"type\": \"api_error\",\n    \"code\": \"verification_unavailable\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "模型暂时不可用",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"model_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
@@ -3408,17 +3647,27 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "code_lang": "json"
           },
           {
+            "title": "使用示例：通过模型名设置思考",
+            "body": "只能设置 model 的客户端，可以在模型名后追加括号后缀指定思考强度：none（关闭）、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭；预算会映射到不低于它的最近档位）。后缀等价于设置 reasoning_effort，且优先于请求体中的 reasoning_effort。括号内不是上述取值时，整个字符串按模型名处理。模型名末尾的 [1m] 或 [2m] 标记会被忽略。",
+            "code": "{\n  \"model\": \"{{MODEL}}(high)\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"证明根号 2 是无理数\"\n    }\n  ]\n}",
+            "code_lang": "json"
+          },
+          {
+            "title": "Claude 系列模型的流式输出",
+            "body": "生成间隙可能夹带以 : 开头的 SSE 注释行（: keep-alive）作为心跳，标准 SSE 解析器会忽略它；自行解析时请跳过不以 data: 开头的行。created 为请求开始时间。只有 stream_options.include_usage 为 true 时才会发送 usage chunk。"
+          },
+          {
             "title": "Claude 系列模型的参数限制",
-            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，不得小于 1；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 32 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
           },
           {
             "title": "错误码说明",
-            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n402：账户余额已耗尽（insufficient_balance），请充值后重试；账号包月订阅已过期时 code 为 account_subscription_expired，请续订。\n\n404：请求的模型不存在、当前不可用，或当前 API Key 无权使用（model_not_found）。\n\n409：Claude 系列模型的工具调用结果无法续接（continuation_unavailable），例如同一轮工具结果被重复提交，请重新发起请求。\n\n413：响应超出大小上限（response_too_large）；调用 Claude 系列模型时请求体超过 32 MB 为 request_too_large。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），响应可能带有 Retry-After，稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。调用 Claude 系列模型时，上游返回的错误可能连同其原状态码返回（type 与 code 取自上游错误），上游返回内容异常时为 502（upstream_protocol）。\n\n503：暂时无法校验 API Key（verification_unavailable）；模型所在节点暂时不可用（model_unavailable，带 Retry-After，稍后重试即可）；或服务暂不可用（connection_failed / runtime_closed）。Claude 系列模型另有 node_unavailable、session_unavailable。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "10cad6b568db73dcbff3ed0d425b209b01b3b307d29328be09995e6543dd20bf",
+    "fingerprint": "036310e58656f101d2e76967c53997b812d2464349733c823d6ab098a4011ca8",
     "fields": [
       {
         "path": [
@@ -3494,6 +3743,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "description"
         ],
         "key": "docs.d0075"
+      },
+      {
+        "path": [
+          "content",
+          "headers",
+          2,
+          "description"
+        ],
+        "key": "docs.d0569"
       },
       {
         "path": [
@@ -3803,7 +4061,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0101"
+        "key": "docs.d0570"
       },
       {
         "path": [
@@ -3812,7 +4070,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0102"
+        "key": "docs.d0571"
       },
       {
         "path": [
@@ -4015,7 +4273,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
-        "key": "docs.d0119"
+        "key": "docs.d0582"
       },
       {
         "path": [
@@ -4094,6 +4352,19 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
+        "key": "docs.d0583"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          4,
+          "children",
+          1,
+          "children",
+          3,
+          "description"
+        ],
         "key": "docs.d0160"
       },
       {
@@ -4104,7 +4375,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           0,
           "description"
@@ -4119,7 +4390,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           1,
           "description"
@@ -4134,7 +4405,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "children",
           1,
           "children",
-          2,
+          3,
           "children",
           3,
           "description"
@@ -4197,6 +4468,30 @@ export const DOC_SOURCES: readonly DocSource[] = [
       {
         "path": [
           "content",
+          "response_fields",
+          5,
+          "children",
+          3,
+          "description"
+        ],
+        "key": "docs.d0573"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          5,
+          "children",
+          3,
+          "children",
+          0,
+          "description"
+        ],
+        "key": "docs.d0574"
+      },
+      {
+        "path": [
+          "content",
           "response_examples",
           0,
           "label"
@@ -4219,7 +4514,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "label"
         ],
-        "key": "docs.d0135"
+        "key": "docs.d0584"
       },
       {
         "path": [
@@ -4228,7 +4523,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0136"
+        "key": "docs.d0135"
       },
       {
         "path": [
@@ -4237,7 +4532,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0136"
       },
       {
         "path": [
@@ -4246,7 +4541,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0137"
+        "key": "docs.d0575"
       },
       {
         "path": [
@@ -4255,7 +4550,43 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
+        "key": "docs.d0576"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          7,
+          "label"
+        ],
+        "key": "docs.d0047"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          8,
+          "label"
+        ],
+        "key": "docs.d0137"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          9,
+          "label"
+        ],
         "key": "docs.d0168"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          10,
+          "label"
+        ],
+        "key": "docs.d0577"
       },
       {
         "path": [
@@ -4318,7 +4649,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "title"
         ],
-        "key": "docs.d0144"
+        "key": "docs.d0578"
       },
       {
         "path": [
@@ -4327,7 +4658,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0145"
+        "key": "docs.d0579"
       },
       {
         "path": [
@@ -4336,7 +4667,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "title"
         ],
-        "key": "docs.d0146"
+        "key": "docs.d0585"
       },
       {
         "path": [
@@ -4345,7 +4676,43 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "body"
         ],
-        "key": "docs.d0147"
+        "key": "docs.d0586"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "title"
+        ],
+        "key": "docs.d0144"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "body"
+        ],
+        "key": "docs.d0580"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          6,
+          "title"
+        ],
+        "key": "docs.d0146"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          6,
+          "body"
+        ],
+        "key": "docs.d0581"
       }
     ]
   },
@@ -4496,6 +4863,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -4517,12 +4890,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "错误码说明",
-            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON 或字段类型不符（invalid_json）、缺少必填字段或字段取值不合法（invalid_request），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）；或后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关。\n\n402：账户余额已耗尽（insufficient_balance），充值后即可恢复，无需更换 API Key；仅使用包月账号的租户订阅已过期时为 account_subscription_expired，续订后恢复。\n\n404：请求的模型不存在、当前不可用，或你的租户无权使用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），响应可能带 Retry-After 头，稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），服务暂不可用（connection_failed / runtime_closed），或所请求的模型暂时不可用（model_unavailable，带 Retry-After: 5），稍后重试即可。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "6b5bd0aa0286baa0d2065f962994b2a7816a1781f5a105213de96101e8885b9c",
+    "fingerprint": "79236e1a5a14091c98c2dd778804ef66e174ae60cd06585d8215ab8fb1b4cc99",
     "fields": [
       {
         "path": [
@@ -4728,7 +5101,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -4737,13 +5110,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0137"
+        "key": "docs.d0047"
       },
       {
         "path": [
           "content",
           "response_examples",
           5,
+          "label"
+        ],
+        "key": "docs.d0137"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          6,
           "label"
         ],
         "key": "docs.d0168"
@@ -4764,7 +5146,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0147"
+        "key": "docs.d0587"
       }
     ]
   },
@@ -4786,7 +5168,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "两种生成方式：model 指定平台发布的图像模型时由该模型直接出图；否则使用平台预设的图像工作流",
           "默认以 b64_json 返回图像；单张图像上限 32 MiB",
           "生成超时默认 120 秒（以平台配置为准），超时返回 504",
-          "n 目前只支持 1；不支持的参数会按名字报错，不会被静默忽略"
+          "n 目前只支持 1；图像模型方式下不支持的参数会按名字报错，不会被静默忽略"
         ],
         "notice": "图像生成耗时较长，请把客户端读超时设得比平台生成超时更长（建议 ≥ 150 秒）。请求体大小上限 1 MiB。",
         "auth": "bearer",
@@ -4842,7 +5224,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "size",
             "type": "string",
             "required": false,
-            "description": "图像尺寸。预设工作流方式：格式为 `宽x高` 的正整数（如 `1024x1024`），仅当平台工作流支持自定义尺寸时可用，否则返回 400。图像模型方式：只接受 `auto`（等同于不传）。"
+            "description": "图像尺寸。预设工作流方式：格式为 `宽x高` 的正整数（如 `1024x1024`，不接受 `auto`），仅当平台工作流支持自定义尺寸时可用，否则返回 400。图像模型方式：只接受 `auto`（等同于不传）。"
           },
           {
             "name": "quality",
@@ -4952,6 +5334,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "未开通图像生成",
             "content_type": "application/json",
@@ -4968,6 +5356,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "超出租户配额（响应带 Retry-After 头）",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+          },
+          {
+            "status": 429,
+            "label": "工作流排队已满或排队超时（响应带 Retry-After 头）",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue is full; retry later\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"queue_full\"\n  }\n}"
           },
           {
             "status": 500,
@@ -4995,7 +5389,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "超时与结果查询",
-            "body": "整个生成过程在一次请求内同步完成，平台默认最多等待 120 秒（具体以平台配置为准），超时返回 504 timeout。\n\n预设工作流方式下，超时后生成任务不会被取消，会在后台继续运行；504 响应中不返回任务 ID。图像模型方式下超时即失败。"
+            "body": "整个生成过程在一次请求内同步完成，平台默认最多等待 120 秒（具体以平台配置为准），超时返回 504 timeout。\n\n预设工作流方式下，生成任务已开始运行后超时，任务不会被取消，会在后台继续运行；504 响应中不返回任务 ID。图像模型方式下超时即失败。\n\n平台启用工作流排队时，请求可能先在队列中等待：队列已满返回 429 queue_full，等待期间用尽时限则返回 429 queue_timeout（该任务已被撤回），两者都带 Retry-After 头，稍后重试即可。"
           },
           {
             "title": "使用 url 返回格式",
@@ -5005,16 +5399,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码一览",
-            "body": "400 invalid_json：请求体不是合法 JSON 或超过 1 MiB\n400 invalid_request：prompt 为空；size 格式不是「宽x高」正整数；图像模型方式下 prompt 超过 32 KiB 或不是合法 UTF-8\n400 unsupported_parameter：n 不为 1、response_format 取值不支持，或某参数在当前出图方式下不可用\n400 invalid_input：参数值未通过预设工作流的输入校验\n404 endpoint_not_configured：平台未开通图像生成\n404 workflow_backend_not_found：当前没有可用的出图服务\n404 model_not_found：所选图像模型当前不可用\n500 generation_failed / cancelled / out_of_memory：生成失败、被取消或显存不足\n500 no_image_produced：工作流运行完成但没有产出图像\n502 response_too_large：生成的图像超过 32 MiB（图像模型方式）\n502 upstream_protocol：返回的图像数据不完整或格式异常（图像模型方式）\n413 response_too_large：生成的图像超过 32 MiB（预设工作流方式，b64_json）\n504 timeout：生成超时\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+            "body": "400 invalid_json：请求体不是合法 JSON 或超过 1 MiB\n400 invalid_request：prompt 为空；size 格式不是「宽x高」正整数；图像模型方式下 prompt 超过 32 KiB 或不是合法 UTF-8\n400 unsupported_parameter：n 不为 1、response_format 取值不支持，或某参数在当前出图方式下不可用\n400 invalid_input：参数值未通过预设工作流的输入校验\n402 insufficient_balance：账户余额已耗尽，充值后即可恢复\n402 account_subscription_expired：仅使用包月账号的租户，订阅已过期，续订后即可恢复\n404 endpoint_not_configured：平台未开通图像生成\n404 workflow_backend_not_found：当前没有可用的出图服务\n404 model_not_found：所选图像模型当前不可用\n500 generation_failed / cancelled / out_of_memory：生成失败、被取消或显存不足\n500 no_image_produced：工作流运行完成但没有产出图像\n502 response_too_large：生成的图像超过 32 MiB（图像模型方式）\n502 submit_outcome_unknown：任务可能已到达节点但未能确认，且不会被自动重新提交（平台启用工作流排队时）\n502 upstream_protocol：返回的图像数据不完整或格式异常（图像模型方式）\n413 response_too_large：生成的图像超过 32 MiB（预设工作流方式，b64_json）\n504 timeout：生成超时\n429 queue_full / queue_timeout：工作流排队已满或排队超时，带 Retry-After 头（平台启用工作流排队时）\n503 queue_unavailable：工作流队列暂时无法访问，或无法确认本次提交是否成功（平台启用工作流排队时）\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n401：后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed），或所选图像模型暂时不可用（model_unavailable，带 Retry-After 头）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
           },
           {
             "title": "鉴权与配额",
-            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
           }
         ]
       }
     },
-    "fingerprint": "c25ae90be7955e1a480ec0ee9a59bcea1a604b1c4e6053af73841c6622ce018c",
+    "fingerprint": "089c4a17313ac0f354068a3ed2a53718c05dfd2f3d97b5e76b0d41d3a23857ec",
     "fields": [
       {
         "path": [
@@ -5080,7 +5474,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           5
         ],
-        "key": "docs.d0191"
+        "key": "docs.d0588"
       },
       {
         "path": [
@@ -5150,7 +5544,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0197"
+        "key": "docs.d0589"
       },
       {
         "path": [
@@ -5291,7 +5685,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0211"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -5300,7 +5694,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
-        "key": "docs.d0212"
+        "key": "docs.d0211"
       },
       {
         "path": [
@@ -5309,7 +5703,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "label"
         ],
-        "key": "docs.d0048"
+        "key": "docs.d0212"
       },
       {
         "path": [
@@ -5318,7 +5712,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "label"
         ],
-        "key": "docs.d0213"
+        "key": "docs.d0048"
       },
       {
         "path": [
@@ -5327,13 +5721,31 @@ export const DOC_SOURCES: readonly DocSource[] = [
           10,
           "label"
         ],
-        "key": "docs.d0214"
+        "key": "docs.d0590"
       },
       {
         "path": [
           "content",
           "response_examples",
           11,
+          "label"
+        ],
+        "key": "docs.d0213"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          12,
+          "label"
+        ],
+        "key": "docs.d0214"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          13,
           "label"
         ],
         "key": "docs.d0215"
@@ -5372,7 +5784,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0219"
+        "key": "docs.d0591"
       },
       {
         "path": [
@@ -5408,7 +5820,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0222"
+        "key": "docs.d0592"
       },
       {
         "path": [
@@ -5426,7 +5838,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "body"
         ],
-        "key": "docs.d0058"
+        "key": "docs.d0568"
       }
     ]
   },
@@ -5446,10 +5858,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "artifact_id 由本接口生成，下载产物前必须先调用本接口",
           "同一产物在多次列举之间 artifact_id 保持不变，可放心重复调用",
           "任务尚未结束时通常返回空列表，请在任务 succeeded 后再列举",
+          "任务仍在排队，或未交给执行端就被队列判为失败或取消时，返回空列表",
           "type 区分最终产物（output）、临时预览（temp）与输入文件（input）",
-          "只能列举本租户任务的产物"
+          "只能列举本租户任务的产物",
+          "列表顺序在多次调用间保持一致，但不代表执行先后",
+          "账户余额耗尽或账号包月到期后仍可列举产物"
         ],
-        "notice": "产物 ID 只在列举时生成：从未被列举过的产物没有 artifact_id，也就无法下载。任务成功后请及时调用本接口。",
+        "notice": "产物 ID 只在列举时生成：从未被列举过的产物没有 artifact_id，也就无法下载。若处理该任务的网关实例已重启，或请求落在其他实例上，只会返回此前已列举过并由平台确认保存的产物，因此请在任务成功后尽快列举一次并保存 artifact_id。",
         "auth": "bearer",
         "headers": [
           {
@@ -5556,6 +5971,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "执行端不可用",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "队列暂不可读",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
@@ -5565,7 +5986,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码",
-            "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+            "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，无法确定任务是否存在，请稍后重试。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
           },
           {
             "title": "错误格式",
@@ -5576,7 +5997,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "db615abfe4af57fec865cfa39d61e5eea903dd78ba0818a2d228d7c99cc2e285",
+    "fingerprint": "7f6bfece1b0f78713b43fbd2b7f479020d0a9f1de8f1b9599f844b9fee883af6",
     "fields": [
       {
         "path": [
@@ -5626,7 +6047,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           3
         ],
-        "key": "docs.d0228"
+        "key": "docs.d0593"
       },
       {
         "path": [
@@ -5634,14 +6055,38 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           4
         ],
+        "key": "docs.d0228"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          5
+        ],
         "key": "docs.d0229"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          6
+        ],
+        "key": "docs.d0594"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          7
+        ],
+        "key": "docs.d0595"
       },
       {
         "path": [
           "content",
           "notice"
         ],
-        "key": "docs.d0230"
+        "key": "docs.d0596"
       },
       {
         "path": [
@@ -5760,6 +6205,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
       {
         "path": [
           "content",
+          "response_examples",
+          5,
+          "label"
+        ],
+        "key": "docs.d0597"
+      },
+      {
+        "path": [
+          "content",
           "sections",
           0,
           "title"
@@ -5791,7 +6245,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0240"
+        "key": "docs.d0598"
       },
       {
         "path": [
@@ -5830,7 +6284,9 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "响应体是最后已知的任务对象，status 可能仍为 queued 或 running",
           "最终结果请通过状态查询或事件流确认，成功取消后状态变为 cancelled",
           "排队中的任务会从队列移除；正在执行的任务在执行端支持中断时被停止",
-          "已经结束的任务返回 409；执行端无法中断该任务时返回 501"
+          "任务仍在平台共享队列中时会立即变为 cancelled（响应的 status 与 error_code 均为 cancelled）；若恰好正在提交，则返回 queued，运行在执行端接单后立即被中断",
+          "已经结束的任务返回 409；执行端无法中断该任务时返回 501",
+          "账户余额耗尽或账号包月到期后仍可取消任务"
         ],
         "notice": "任务在取消请求送达前恰好完成时，最终状态可能是 succeeded 或 failed 而不是 cancelled，请以状态接口为准。",
         "auth": "bearer",
@@ -5895,14 +6351,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "queue_position",
             "type": "integer",
             "required": false,
-            "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+            "description": "排队位置，仅在任务排队中且已知位置时返回。"
           },
           {
             "name": "durability",
             "type": "string",
             "required": true,
-            "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+            "description": "任务记录的持久化状态：shared_queue 表示任务只存在于平台的共享工作流队列中（仍在排队，或未交给执行端就被队列判为失败或取消），仅启用排队的部署会出现；memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
             "enum": [
+              "shared_queue",
               "memory_only",
               "persisted"
             ]
@@ -5911,7 +6368,20 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "error",
             "type": "string",
             "required": false,
-            "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+            "description": "失败摘要，仅在任务失败且有原因可报告时返回：来自执行端，或在排队阶段失败时由平台给出说明。"
+          },
+          {
+            "name": "error_code",
+            "type": "string",
+            "required": false,
+            "description": "仅在平台于排队阶段（任务尚未交给执行端）就把任务判为失败或取消时返回：queue_timeout 表示排队超时仍无空闲执行端，submit_outcome_unknown 表示提交结果无法确认（为避免重复生成不会自动重新提交），node_not_allowed 表示没有对本租户开放的可用执行端，cancelled 表示排队期间被取消，internal_error 表示平台内部错误。",
+            "enum": [
+              "queue_timeout",
+              "submit_outcome_unknown",
+              "node_not_allowed",
+              "cancelled",
+              "internal_error"
+            ]
           }
         ],
         "request_examples": [
@@ -5937,6 +6407,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "取消请求已送达",
             "content_type": "application/json",
             "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
+          },
+          {
+            "status": 202,
+            "label": "排队中的任务已取消",
+            "content_type": "application/json",
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"cancelled\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"shared_queue\",\n  \"error_code\": \"cancelled\"\n}"
           },
           {
             "status": 401,
@@ -5967,16 +6443,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "执行端不可用",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "队列暂不可读",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
           {
             "title": "错误码",
-            "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n409 job_already_finished：任务已处于终态（succeeded / failed / cancelled），无法取消。\n\n501 cancel_unsupported：执行端当前无法中断该任务，例如任务已开始执行而执行端不支持定向中断，或执行端已不再持有该任务。任务会继续运行直到自然结束。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+            "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n409 job_already_finished：任务已处于终态（succeeded / failed / cancelled），无法取消。\n\n501 cancel_unsupported：执行端当前无法中断该任务，例如任务已开始执行而执行端不支持定向中断（任务会继续运行直到自然结束），或执行端已不再持有该任务（例如任务刚刚结束，请查询状态确认）。\n\n400 capability_unsupported：执行端不具备取消工作流的能力。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，请稍后重试。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
           },
           {
             "title": "任务状态",
-            "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+            "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled，此时 error_code 给出原因。"
           },
           {
             "title": "错误格式",
@@ -5987,7 +6469,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "14bb4a4ab13e63f90da5ed40b0483dd4f13a856b5e74fd05116954a0ea0812e6",
+    "fingerprint": "41db85c8947d49ac7c8b7501cef9ccfef258d8606602a88b23742bb9a9f58858",
     "fields": [
       {
         "path": [
@@ -6045,7 +6527,23 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           4
         ],
+        "key": "docs.d0599"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          5
+        ],
         "key": "docs.d0247"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          6
+        ],
+        "key": "docs.d0600"
       },
       {
         "path": [
@@ -6124,7 +6622,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0254"
+        "key": "docs.d0601"
       },
       {
         "path": [
@@ -6133,7 +6631,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0553"
+        "key": "docs.d0602"
       },
       {
         "path": [
@@ -6142,7 +6640,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0255"
+        "key": "docs.d0603"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          8,
+          "description"
+        ],
+        "key": "docs.d0604"
       },
       {
         "path": [
@@ -6160,7 +6667,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "label"
         ],
-        "key": "docs.d0015"
+        "key": "docs.d0605"
       },
       {
         "path": [
@@ -6169,7 +6676,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "label"
         ],
-        "key": "docs.d0237"
+        "key": "docs.d0015"
       },
       {
         "path": [
@@ -6178,7 +6685,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0257"
+        "key": "docs.d0237"
       },
       {
         "path": [
@@ -6187,7 +6694,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0258"
+        "key": "docs.d0257"
       },
       {
         "path": [
@@ -6196,7 +6703,25 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
+        "key": "docs.d0258"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          6,
+          "label"
+        ],
         "key": "docs.d0017"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          7,
+          "label"
+        ],
+        "key": "docs.d0597"
       },
       {
         "path": [
@@ -6214,7 +6739,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0259"
+        "key": "docs.d0606"
       },
       {
         "path": [
@@ -6232,7 +6757,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0261"
+        "key": "docs.d0607"
       },
       {
         "path": [
@@ -6270,10 +6795,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "标准 SSE：每一帧都带 event 名称，可按事件类型分别处理",
           "收到 succeeded / failed / cancelled 终态事件后服务端关闭连接，终态帧带 status 字段",
           "任务已结束时立即返回一帧终态事件，不会让客户端空等",
+          "任务仍在平台共享队列中等待时，名次变化以 queue_changed 帧推送，并每 15 秒发送一行 SSE 注释保活；任务派发后接续执行端自己的事件",
           "订阅失败（如执行端不可用）在开始推流前以普通 JSON 错误和 HTTP 状态码返回",
-          "不支持 Last-Event-ID 续传：断线重连只接收重连之后的事件"
+          "不支持 Last-Event-ID 续传：断线重连只接收重连之后的事件",
+          "账户余额耗尽或账号包月到期后仍可订阅事件流"
         ],
-        "notice": "浏览器原生 EventSource 不能携带 Authorization 头，请用 fetch 读取流或在服务端转发。流上没有心跳帧，生成期间可能长时间没有任何输出，请不要为连接设置较短的读超时。若租户配置了并发上限，连接保持期间会占用一个并发名额。",
+        "notice": "浏览器原生 EventSource 不能携带 Authorization 头，请用 fetch 读取流或在服务端转发。任务执行期间流上没有心跳帧，可能长时间没有任何输出，请不要为连接设置较短的读超时；排队期间每 15 秒会发送一行以冒号开头的 SSE 注释（: keep-alive），客户端应忽略。若租户配置了并发上限，连接保持期间会占用一个并发名额。",
         "auth": "bearer",
         "headers": [
           {
@@ -6331,8 +6858,9 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "status",
             "type": "string",
             "required": false,
-            "description": "任务最终状态，仅在终态事件（succeeded / failed / cancelled）上返回。",
+            "description": "任务状态：终态事件（succeeded / failed / cancelled）上为最终状态；任务在平台共享队列中排队时的 queue_changed 帧为 queued。",
             "enum": [
+              "queued",
               "succeeded",
               "failed",
               "cancelled"
@@ -6342,7 +6870,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "data",
             "type": "object",
             "required": false,
-            "description": "执行端的原始事件内容，结构随事件类型而异，供展示进度等用途（例如 progress 事件中的当前步数与总步数）。单条超过 64 KiB 时替换为 {\"truncated\": true}。网关对已结束任务直接返回的终态帧和 error 帧不含此字段。"
+            "description": "执行端的原始事件内容，结构随事件类型而异，供展示进度等用途（例如 progress 事件中的当前步数与总步数）；任务在平台共享队列中排队时，queue_changed 帧的 data 为 {\"position\": 名次}。单条超过 64 KiB 时替换为 {\"truncated\": true}。网关对已结束任务直接返回的终态帧和 error 帧不含此字段。"
           },
           {
             "name": "received_at",
@@ -6365,7 +6893,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           {
             "lang": "javascript",
             "label": "JavaScript",
-            "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\n// 浏览器原生 EventSource 无法携带 Authorization 头，这里用 fetch 读取流\nconst resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}/events`, {\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\n\nconst reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();\nlet buffer = \"\";\nfor (;;) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  buffer += value;\n  let sep;\n  while ((sep = buffer.indexOf(\"\\n\\n\")) !== -1) {\n    const raw = buffer.slice(0, sep);\n    buffer = buffer.slice(sep + 2);\n    const event = raw.match(/^event: (.*)$/m)?.[1];\n    const data = JSON.parse(raw.match(/^data: (.*)$/m)?.[1] ?? \"{}\");\n    console.log(event, data.node, data.status);\n  }\n}"
+            "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\n// 浏览器原生 EventSource 无法携带 Authorization 头，这里用 fetch 读取流\nconst resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}/events`, {\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\n\nconst reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();\nlet buffer = \"\";\nfor (;;) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  buffer += value;\n  let sep;\n  while ((sep = buffer.indexOf(\"\\n\\n\")) !== -1) {\n    const raw = buffer.slice(0, sep);\n    buffer = buffer.slice(sep + 2);\n    const event = raw.match(/^event: (.*)$/m)?.[1];\n    if (!event) continue; // 忽略 \": keep-alive\" 之类的注释块\n    const data = JSON.parse(raw.match(/^data: (.*)$/m)?.[1] ?? \"{}\");\n    console.log(event, data.node, data.status);\n  }\n}"
           }
         ],
         "response_examples": [
@@ -6374,6 +6902,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "执行中的事件流",
             "content_type": "text/event-stream",
             "body": "event: started\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"started\",\"data\":{\"type\":\"execution_start\",\"data\":{\"timestamp\":1792139407481}},\"received_at\":\"2026-10-16T08:30:01.020311Z\"}\n\nevent: progress\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"progress\",\"node\":\"3\",\"data\":{\"type\":\"progress\",\"data\":{\"value\":12,\"max\":30,\"node\":\"3\"}},\"received_at\":\"2026-10-16T08:30:03.511904Z\"}\n\nevent: succeeded\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"succeeded\",\"status\":\"succeeded\",\"data\":{\"type\":\"execution_success\",\"data\":{\"timestamp\":1792139414802}},\"received_at\":\"2026-10-16T08:30:07.481902Z\"}\n\n"
+          },
+          {
+            "status": 200,
+            "label": "排队中的事件流",
+            "content_type": "text/event-stream",
+            "body": "event: queue_changed\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"queue_changed\",\"status\":\"queued\",\"data\":{\"position\":2},\"received_at\":\"2026-10-16T08:30:00.220311Z\"}\n\n: keep-alive\n\nevent: queue_changed\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"queue_changed\",\"status\":\"queued\",\"data\":{\"position\":1},\"received_at\":\"2026-10-16T08:30:15.402718Z\"}\n\nevent: started\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"started\",\"data\":{\"type\":\"execution_start\",\"data\":{\"timestamp\":1792139431481}},\"received_at\":\"2026-10-16T08:30:31.020311Z\"}\n\n"
           },
           {
             "status": 200,
@@ -6404,26 +6938,32 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "执行端不可用",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "队列暂不可读",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
           {
             "title": "帧格式",
-            "body": "响应头为 Content-Type: text/event-stream 与 Cache-Control: no-cache。每一帧由 event 行和一行 JSON 的 data 组成，帧之间以空行分隔。服务端不发送 id 字段，也不读取 Last-Event-ID 请求头。",
+            "body": "响应头为 Content-Type: text/event-stream 与 Cache-Control: no-cache。每一帧由 event 行和一行 JSON 的 data 组成，帧之间以空行分隔。服务端不发送 id 字段，也不读取 Last-Event-ID 请求头。任务排队期间流上还会出现以冒号开头的注释行（: keep-alive），它不是事件帧，应忽略。",
             "code": "event: progress\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"progress\",\"node\":\"3\",\"data\":{...},\"received_at\":\"2026-10-16T08:30:03.511904Z\"}\n\n",
             "code_lang": "text"
           },
           {
             "title": "事件类型",
-            "body": "queue_changed：执行队列发生变化。\n\nstarted：任务开始执行。\n\ncached：部分步骤命中缓存，将跳过执行。\n\nnode_started：某个步骤开始执行，node 为步骤标识。\n\nprogress：某个步骤的执行进度。\n\nnode_output：某个步骤产出了结果。\n\ncompleted：执行流程结束，最终结果以终态事件为准。\n\nsucceeded / failed / cancelled：终态事件，带 status 字段，发送后连接关闭。\n\nunknown：执行端发出的其他事件，原样透传在 data 中，可忽略。\n\nerror：网关与执行端之间的事件流意外中断，该帧之后连接关闭。此时任务本身可能仍在运行，请调用 GET /v1/jobs/{job_id} 确认状态。"
+            "body": "queue_changed：排队名次或执行队列发生变化。任务仍在平台共享队列中时，data 为 {\"position\": 名次}，status 为 queued。\n\nstarted：任务开始执行。\n\ncached：部分步骤命中缓存，将跳过执行。\n\nnode_started：某个步骤开始执行，node 为步骤标识。\n\nprogress：某个步骤的执行进度。\n\nnode_output：某个步骤产出了结果。\n\ncompleted：执行流程结束，最终结果以终态事件为准。\n\nsucceeded / failed / cancelled：终态事件，带 status 字段，发送后连接关闭。被平台队列判为失败或取消的任务同样以一帧 failed / cancelled 结束，原因见 GET /v1/jobs/{job_id} 返回的 error_code。\n\nunknown：执行端发出的其他事件，原样透传在 data 中，可忽略。\n\nerror：事件流意外中断（例如网关与执行端之间的连接断开，或排队期间读取失败、排队结束后订阅执行端失败），该帧之后连接关闭。此时任务本身可能仍在运行，请调用 GET /v1/jobs/{job_id} 确认状态。"
           },
           {
             "title": "断线与重连",
-            "body": "事件不做缓存回放：重新请求本接口会重新订阅，只能收到重连之后发生的事件，断开期间的进度事件不会补发。\n\n建议重连前先调用 GET /v1/jobs/{job_id}：若任务已进入终态，直接处理结果即可；若仍在进行，再重新订阅事件流。\n\n客户端主动断开连接不会取消任务；取消请调用 POST /v1/jobs/{job_id}/cancel。"
+            "body": "事件不做缓存回放：重新请求本接口会重新订阅，只能收到重连之后发生的事件，断开期间的进度事件不会补发。\n\n建议重连前先调用 GET /v1/jobs/{job_id}：若任务已进入终态，直接处理结果即可；若仍在进行，再重新订阅事件流。\n\n若连接在收到终态事件之前被正常关闭（没有 error 帧），同样请调用 GET /v1/jobs/{job_id} 确认状态。\n\n客户端主动断开连接不会取消任务；取消请调用 POST /v1/jobs/{job_id}/cancel。"
           },
           {
             "title": "错误码",
-            "body": "以下错误在开始推流前返回，响应为普通 JSON：\n\n404 job_not_found：任务不存在，或不属于当前租户。\n\n400 capability_unsupported：执行该任务的执行端不支持事件推送，请改用状态轮询。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。\n\n推流开始后发生的故障以 event: error 帧报告。"
+            "body": "以下错误在开始推流前返回，响应为普通 JSON：\n\n404 job_not_found：任务不存在，或不属于当前租户。\n\n400 capability_unsupported：执行该任务的执行端不支持事件推送，请改用状态轮询。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，无法确定任务是否存在，请稍后重试。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。\n\n推流开始后发生的故障以 event: error 帧报告。"
           },
           {
             "title": "错误格式",
@@ -6434,7 +6974,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "57276b7427dc47cf3de7c8a57bfce10d283d444be2e0e1450b0fb45b27607739",
+    "fingerprint": "4065393bd4da344a122b4282255310ccd7836d71a56886c37f2410de5a504c03",
     "fields": [
       {
         "path": [
@@ -6484,7 +7024,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           3
         ],
-        "key": "docs.d0267"
+        "key": "docs.d0608"
       },
       {
         "path": [
@@ -6492,14 +7032,30 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           4
         ],
+        "key": "docs.d0267"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          5
+        ],
         "key": "docs.d0268"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          6
+        ],
+        "key": "docs.d0609"
       },
       {
         "path": [
           "content",
           "notice"
         ],
-        "key": "docs.d0269"
+        "key": "docs.d0610"
       },
       {
         "path": [
@@ -6553,7 +7109,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0273"
+        "key": "docs.d0611"
       },
       {
         "path": [
@@ -6562,7 +7118,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0274"
+        "key": "docs.d0612"
       },
       {
         "path": [
@@ -6589,7 +7145,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "label"
         ],
-        "key": "docs.d0257"
+        "key": "docs.d0613"
       },
       {
         "path": [
@@ -6598,7 +7154,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "label"
         ],
-        "key": "docs.d0277"
+        "key": "docs.d0257"
       },
       {
         "path": [
@@ -6607,7 +7163,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0015"
+        "key": "docs.d0277"
       },
       {
         "path": [
@@ -6616,7 +7172,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0237"
+        "key": "docs.d0015"
       },
       {
         "path": [
@@ -6625,7 +7181,25 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
+        "key": "docs.d0237"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          6,
+          "label"
+        ],
         "key": "docs.d0017"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          7,
+          "label"
+        ],
+        "key": "docs.d0597"
       },
       {
         "path": [
@@ -6643,7 +7217,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0279"
+        "key": "docs.d0614"
       },
       {
         "path": [
@@ -6661,7 +7235,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0281"
+        "key": "docs.d0615"
       },
       {
         "path": [
@@ -6679,7 +7253,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0283"
+        "key": "docs.d0616"
       },
       {
         "path": [
@@ -6697,7 +7271,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0284"
+        "key": "docs.d0617"
       },
       {
         "path": [
@@ -6734,8 +7308,10 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "highlights": [
           "返回与提交接口相同结构的任务对象",
           "未结束的任务每次查询都会向执行端获取最新状态与排队位置；已结束的任务直接返回最终结果",
+          "仍在平台共享队列中等待的任务由平台直接返回名次（durability 为 shared_queue）；被队列判为失败或取消的任务带 error_code",
           "只能查询本租户提交的任务，其他租户的任务与不存在的任务一样返回 404",
-          "失败任务通过 error 字段给出失败摘要"
+          "失败任务通过 error 字段给出失败摘要",
+          "账户余额耗尽或账号包月到期后仍可查询任务状态"
         ],
         "notice": "需要实时进度时优先使用 SSE 事件流（GET /v1/jobs/{job_id}/events），本接口适合轮询兜底或事件流断开后确认最终状态。",
         "auth": "bearer",
@@ -6800,14 +7376,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "queue_position",
             "type": "integer",
             "required": false,
-            "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+            "description": "排队位置，仅在任务排队中且已知位置时返回。"
           },
           {
             "name": "durability",
             "type": "string",
             "required": true,
-            "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+            "description": "任务记录的持久化状态：shared_queue 表示任务只存在于平台的共享工作流队列中（仍在排队，或未交给执行端就被队列判为失败或取消），仅启用排队的部署会出现；memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
             "enum": [
+              "shared_queue",
               "memory_only",
               "persisted"
             ]
@@ -6816,7 +7393,20 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "error",
             "type": "string",
             "required": false,
-            "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+            "description": "失败摘要，仅在任务失败且有原因可报告时返回：来自执行端，或在排队阶段失败时由平台给出说明。"
+          },
+          {
+            "name": "error_code",
+            "type": "string",
+            "required": false,
+            "description": "仅在平台于排队阶段（任务尚未交给执行端）就把任务判为失败或取消时返回：queue_timeout 表示排队超时仍无空闲执行端，submit_outcome_unknown 表示提交结果无法确认（为避免重复生成不会自动重新提交），node_not_allowed 表示没有对本租户开放的可用执行端，cancelled 表示排队期间被取消，internal_error 表示平台内部错误。",
+            "enum": [
+              "queue_timeout",
+              "submit_outcome_unknown",
+              "node_not_allowed",
+              "cancelled",
+              "internal_error"
+            ]
           }
         ],
         "request_examples": [
@@ -6845,6 +7435,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "status": 200,
+            "label": "排队等待（共享队列）",
+            "content_type": "application/json",
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"queue_position\": 3,\n  \"durability\": \"shared_queue\"\n}"
+          },
+          {
+            "status": 200,
             "label": "执行成功",
             "content_type": "application/json",
             "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
@@ -6854,6 +7450,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "执行失败",
             "content_type": "application/json",
             "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
+          },
+          {
+            "status": 200,
+            "label": "排队超时失败",
+            "content_type": "application/json",
+            "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:35:00.123456Z\",\n  \"durability\": \"shared_queue\",\n  \"error_code\": \"queue_timeout\",\n  \"error\": \"no workflow node had capacity before the queue wait ran out\"\n}"
           },
           {
             "status": 401,
@@ -6872,16 +7474,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "执行端不可用",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "队列暂不可读",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
           {
             "title": "任务状态",
-            "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+            "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled，此时 error_code 给出原因。"
           },
           {
             "title": "错误码",
-            "body": "404 job_not_found：任务不存在，或不属于当前 API Key 所在租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+            "body": "404 job_not_found：任务不存在，或不属于当前 API Key 所在租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，无法确定任务是否存在，请稍后重试而不是重新提交。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
           },
           {
             "title": "错误格式",
@@ -6892,7 +7500,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "dbe9dce0795ca4072b47db8ce2fa3b9c33a9aff92e3acb355d1657497aba3717",
+    "fingerprint": "3f13758f5959c385c8592687aba99e2051f6d6d4dbfaefc51a16c5fbbe6cadaf",
     "fields": [
       {
         "path": [
@@ -6934,7 +7542,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           2
         ],
-        "key": "docs.d0289"
+        "key": "docs.d0618"
       },
       {
         "path": [
@@ -6942,7 +7550,23 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           3
         ],
+        "key": "docs.d0289"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          4
+        ],
         "key": "docs.d0290"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          5
+        ],
+        "key": "docs.d0619"
       },
       {
         "path": [
@@ -7021,7 +7645,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0254"
+        "key": "docs.d0601"
       },
       {
         "path": [
@@ -7030,7 +7654,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0553"
+        "key": "docs.d0602"
       },
       {
         "path": [
@@ -7039,7 +7663,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0255"
+        "key": "docs.d0603"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          8,
+          "description"
+        ],
+        "key": "docs.d0604"
       },
       {
         "path": [
@@ -7057,7 +7690,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "label"
         ],
-        "key": "docs.d0293"
+        "key": "docs.d0620"
       },
       {
         "path": [
@@ -7066,7 +7699,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "label"
         ],
-        "key": "docs.d0294"
+        "key": "docs.d0293"
       },
       {
         "path": [
@@ -7075,7 +7708,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0015"
+        "key": "docs.d0294"
       },
       {
         "path": [
@@ -7084,7 +7717,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0237"
+        "key": "docs.d0621"
       },
       {
         "path": [
@@ -7093,7 +7726,34 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
+        "key": "docs.d0015"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          6,
+          "label"
+        ],
+        "key": "docs.d0237"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          7,
+          "label"
+        ],
         "key": "docs.d0017"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          8,
+          "label"
+        ],
+        "key": "docs.d0597"
       },
       {
         "path": [
@@ -7111,7 +7771,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0261"
+        "key": "docs.d0607"
       },
       {
         "path": [
@@ -7129,7 +7789,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0295"
+        "key": "docs.d0622"
       },
       {
         "path": [
@@ -7166,10 +7826,11 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "highlights": [
           "兼容 Anthropic Messages API，Anthropic SDK 将 base_url 设为 {{BASE_URL}} 即可使用",
           "认证支持 x-api-key 请求头，也支持 Authorization: Bearer",
-          "支持 text、image、document、tool_use、tool_result 内容块",
-          "stream=true 时按 Anthropic 事件序列（message_start → … → message_stop）推送"
+          "支持 text、image、document、tool_use、tool_result 内容块，回复中可带 thinking 块",
+          "stream=true 时按 Anthropic 事件序列（message_start → … → message_stop）推送",
+          "Anthropic SDK 的 base_url 带 /v1 时（请求路径变为 /v1/v1/messages）同样可用"
         ],
-        "notice": "max_tokens 为必填且必须大于 0。请求体上限 8 MB，Claude 系列模型上限为 1 MB（超出返回 413）。认证失败与配额超限返回 OpenAI 格式错误体，其余错误返回 Anthropic 格式错误体 {\"type\":\"error\",\"error\":{...}}。",
+        "notice": "max_tokens 为必填且必须大于 0。请求体上限 32 MiB（与 Anthropic Messages API 一致），超出返回 413。认证失败、余额不足、配额超限与密钥校验不可用返回 OpenAI 格式错误体，其余错误返回 Anthropic 格式错误体 {\"type\":\"error\",\"error\":{...}}。",
         "auth": "bearer",
         "headers": [
           {
@@ -7185,10 +7846,28 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "description": "`Bearer {{API_KEY}}`。携带此头时优先使用它，x-api-key 被忽略。两者至少提供一个。"
           },
           {
+            "name": "anthropic-version",
+            "type": "string",
+            "required": false,
+            "description": "Anthropic API 版本，仅在由 Claude 系列模型处理请求时转发给后端，其他模型忽略。"
+          },
+          {
+            "name": "anthropic-beta",
+            "type": "string",
+            "required": false,
+            "description": "Anthropic beta 特性，仅在由 Claude 系列模型处理请求时转发给后端，其他模型忽略。"
+          },
+          {
             "name": "Content-Type",
             "type": "string",
             "required": true,
             "description": "固定为 `application/json`。"
+          },
+          {
+            "name": "X-Session-Id",
+            "type": "string",
+            "required": false,
+            "description": "会话标识（可选）。同一段对话带相同的值，会被尽量调度到同一节点以提高缓存命中；未提供时取请求体的 metadata.user_id。也识别 X-Claude-Code-Session-Id 请求头，超过 512 字节的值被忽略。"
           }
         ],
         "path_params": [],
@@ -7312,7 +7991,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                     "name": "content",
                     "type": "string | array",
                     "required": false,
-                    "description": "tool_result 块的结果：字符串或仅含 text 块的数组。"
+                    "description": "tool_result 块的结果：字符串，或仅含 text 与 tool_reference 块的数组（tool_reference 需带 tool_name，用于启用 defer_loading 的工具）。"
                   }
                 ]
               }
@@ -7329,6 +8008,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "type": "object",
             "required": false,
             "description": "扩展思考：{\"type\":\"enabled\",\"budget_tokens\":N}（N 必须大于 0）、{\"type\":\"adaptive\"} 或 {\"type\":\"disabled\"}。作为提示转发给后端，模型不支持思考时被忽略；格式非法返回 400。"
+          },
+          {
+            "name": "output_config",
+            "type": "object",
+            "required": false,
+            "description": "目前只读取 effort（low、medium、high、xhigh、max；max 按 xhigh 处理），在 thinking 为 adaptive 时指定思考档位。"
+          },
+          {
+            "name": "metadata",
+            "type": "object",
+            "required": false,
+            "description": "请求元数据。其中的 user_id 用作会话标识（作用同 X-Session-Id 请求头），其余字段不生效。"
           },
           {
             "name": "system",
@@ -7384,6 +8075,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "type": "object",
                 "required": true,
                 "description": "JSON Schema 形式的输入定义。"
+              },
+              {
+                "name": "defer_loading",
+                "type": "boolean",
+                "required": false,
+                "description": "为 true 时工具先不向模型展示，直到某个 tool_result 里的 tool_reference 块点名它才启用。"
               }
             ]
           },
@@ -7391,7 +8088,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "tool_choice",
             "type": "object",
             "required": false,
-            "description": "工具选择策略。",
+            "description": "工具选择策略。disable_parallel_tool_use 被接受但不生效。",
             "children": [
               {
                 "name": "type",
@@ -7452,6 +8149,8 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "description": "块类型。",
                 "enum": [
                   "text",
+                  "thinking",
+                  "redacted_thinking",
                   "tool_use"
                 ]
               },
@@ -7460,6 +8159,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "type": "string",
                 "required": false,
                 "description": "text 块的文本。"
+              },
+              {
+                "name": "thinking",
+                "type": "string",
+                "required": false,
+                "description": "thinking 块的思考内容。后端未提供签名时 signature 为空字符串。"
+              },
+              {
+                "name": "signature",
+                "type": "string",
+                "required": false,
+                "description": "thinking 块的签名，回传 thinking 块时需原样带回。"
               },
               {
                 "name": "id",
@@ -7485,7 +8196,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "stop_reason",
             "type": "string",
             "required": true,
-            "description": "停止原因。",
+            "description": "停止原因。Claude 系列模型返回后端的原始取值，可能还有 stop_sequence 等。",
             "enum": [
               "end_turn",
               "max_tokens",
@@ -7496,13 +8207,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "stop_sequence",
             "type": "string | null",
             "required": true,
-            "description": "命中的停止序列。"
+            "description": "命中的停止序列。非 Claude 系列模型恒为 null。"
           },
           {
             "name": "usage",
             "type": "object",
             "required": true,
-            "description": "用量统计。",
+            "description": "用量统计。Claude 系列模型还会带上后端上报的其他字段。",
             "children": [
               {
                 "name": "input_tokens",
@@ -7562,6 +8273,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "余额不足",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "账号包月已过期",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -7577,25 +8300,45 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "status": 413,
             "label": "请求体过大",
             "content_type": "application/json",
-            "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"native Messages request size limit exceeded\"\n  }\n}"
+            "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"request_too_large\",\n    \"message\": \"the request body exceeds the size limit\"\n  }\n}"
           },
           {
             "status": 429,
             "label": "超出配额",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+          },
+          {
+            "status": 429,
+            "label": "服务暂无可用容量",
+            "content_type": "application/json",
+            "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"rate_limit_error\",\n    \"message\": \"no node had capacity for this request; retry shortly\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "模型暂时不可用",
+            "content_type": "application/json",
+            "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"api_error\",\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\"\n  }\n}"
           }
         ],
         "sections": [
           {
             "title": "流式事件说明",
-            "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>。事件顺序：message_start → content_block_start → content_block_delta（文本为 text_delta，工具参数为 input_json_delta）→ content_block_stop → …（每个内容块重复）→ message_delta（含 stop_reason 与 usage.output_tokens）→ message_stop。\n\n生成中途出错时发送 event: error，data 为 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"...\"}}，之后不再发送 message_stop。"
+            "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>。事件顺序：message_start → content_block_start → content_block_delta（文本为 text_delta，思考为 thinking_delta / signature_delta，工具参数为 input_json_delta）→ content_block_stop → …（每个内容块重复）→ message_delta（含 stop_reason 与 usage.output_tokens）→ message_stop。Claude 系列模型的流为后端原生事件，可能穿插 ping 事件。\n\n响应头发出后 HTTP 状态码已固定为 200；生成中途出错时发送 event: error，data 为 {\"type\":\"error\",\"error\":{\"type\":\"api_error\",\"message\":\"...\"}}，之后不再发送 message_stop，客户端请据此判断是否完整。尚未开始输出时的错误（如鉴权、配额、参数问题）仍以对应状态码返回。"
           },
           {
             "title": "使用示例：工具调用",
             "body": "模型调用工具时 stop_reason 为 tool_use，content 中出现 tool_use 块。执行后把 assistant 回复原样追加，再追加一条 user 消息，内含对应 tool_use_id 的 tool_result 块。Claude 系列模型的工具续接需在同一 API Key 下尽快发起，续接状态失效时返回 409。",
             "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"max_tokens\": 1024,\n  \"tools\": [\n    {\n      \"name\": \"get_weather\",\n      \"description\": \"查询城市天气\",\n      \"input_schema\": {\n        \"type\": \"object\",\n        \"properties\": {\n          \"city\": {\n            \"type\": \"string\"\n          }\n        },\n        \"required\": [\n          \"city\"\n        ]\n      }\n    }\n  ],\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"上海天气如何？\"\n    },\n    {\n      \"role\": \"assistant\",\n      \"content\": [\n        {\n          \"type\": \"tool_use\",\n          \"id\": \"toolu_01\",\n          \"name\": \"get_weather\",\n          \"input\": {\n            \"city\": \"上海\"\n          }\n        }\n      ]\n    },\n    {\n      \"role\": \"user\",\n      \"content\": [\n        {\n          \"type\": \"tool_result\",\n          \"tool_use_id\": \"toolu_01\",\n          \"content\": \"22℃，多云\"\n        }\n      ]\n    }\n  ]\n}",
             "code_lang": "json"
+          },
+          {
+            "title": "Claude 系列模型",
+            "body": "调用 Claude 系列模型时，请求会交给 Claude 后端处理，与其他模型的差异如下：\n\n1. 原生字段（如 cache_control、citations）由后端按 Anthropic 语义处理，回复与流式事件也是后端的原生输出。部分节点经兼容桥接转发时，cache_control 与 context_management 会被去除，thinking 仅作提示：预算至少 1024 且小于 max_tokens，且不能同时设置 temperature，否则不开启；adaptive 会按 output_config.effort（未给时 medium）换算成固定预算。\n\n2. 后端的上游错误会连同状态码与错误体原样返回；后端拒绝请求时 message 为固定短语，如 capability_rejected: prompt_too_long（输入过长）、capability_rejected: max_tokens_context_overflow（输入加上 max_tokens 超出上下文窗口）。\n\n3. 其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+          },
+          {
+            "title": "模型名后缀：指定思考档位",
+            "body": "只能填写模型名的客户端，可以在模型名后加 (档位) 指定思考档位，例如 {{MODEL}}(high) 或 {{MODEL}}(16384)。档位为 none、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭）。后缀会覆盖请求体中的 thinking：none 与 0 等同 {\"type\":\"disabled\"}，其余等同 {\"type\":\"enabled\",\"budget_tokens\":N}，预算至少 1024 且小于 max_tokens；max_tokens 不大于 1024 时返回 400。\n\n括号里不是上述取值时，整个字符串按模型名处理；模型名末尾的 [1m]、[2m] 上下文窗口标记会被去掉。"
           },
           {
             "title": "在 Claude Code 中使用",
@@ -7605,12 +8348,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码说明",
-            "body": "认证失败（401 invalid_api_key）、暂时无法校验密钥（503 verification_unavailable）与租户配额超限（429，带 Retry-After）返回 OpenAI 格式：{\"error\":{\"message\",\"type\",\"code\"}}。\n\n其余错误返回 Anthropic 格式：{\"type\":\"error\",\"error\":{\"type\",\"message\"}}，状态码含义：400 请求体非法或参数不支持；404 模型不可用；409 工具续接状态失效；413 请求体或响应超出大小上限；429 服务暂无可用容量；500 / 502 内部或上游错误；503 服务暂不可用；504 超时。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+            "body": "以下错误由入口产生，返回 OpenAI 格式：{\"error\":{\"message\",\"type\",\"code\"}}：401 缺少 API Key 或 Key 无效（invalid_api_key）；402 账户余额耗尽（insufficient_balance，请充值）或仅使用账号包月的商户在包月过期后（account_subscription_expired，请续费）；429 租户超出配额（code 为 requests_per_minute / tokens_per_minute / max_concurrent，带 Retry-After）；503 暂时无法校验密钥（verification_unavailable）。\n\n其余错误返回 Anthropic 格式：{\"type\":\"error\",\"error\":{\"type\",\"message\"}}，没有 code 字段，状态码含义：400 请求体非法或参数不支持；404 模型不可用或当前 Key 无权使用；409 工具续接状态失效；413 请求体超过 32 MiB（type 为 request_too_large）或响应超出大小上限；429 服务暂无可用容量（type 为 rate_limit_error，带 Retry-After）；500 / 502 内部或上游错误；503 服务暂不可用，或模型的节点暂时不可用（带 Retry-After）；504 超时。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "ea2ea5b5811b093bc23b0dca8b50ce037decca9d9e7e3e781df903fcf0bf103c",
+    "fingerprint": "b9dbbf14b4d973664854e077aa49ee3dee0c144196d4fd271fa623943dfa5722",
     "fields": [
       {
         "path": [
@@ -7652,7 +8395,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           2
         ],
-        "key": "docs.d0300"
+        "key": "docs.d0623"
       },
       {
         "path": [
@@ -7665,9 +8408,17 @@ export const DOC_SOURCES: readonly DocSource[] = [
       {
         "path": [
           "content",
+          "highlights",
+          4
+        ],
+        "key": "docs.d0624"
+      },
+      {
+        "path": [
+          "content",
           "notice"
         ],
-        "key": "docs.d0302"
+        "key": "docs.d0625"
       },
       {
         "path": [
@@ -7694,7 +8445,34 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
+        "key": "docs.d0626"
+      },
+      {
+        "path": [
+          "content",
+          "headers",
+          3,
+          "description"
+        ],
+        "key": "docs.d0627"
+      },
+      {
+        "path": [
+          "content",
+          "headers",
+          4,
+          "description"
+        ],
         "key": "docs.d0075"
+      },
+      {
+        "path": [
+          "content",
+          "headers",
+          5,
+          "description"
+        ],
+        "key": "docs.d0628"
       },
       {
         "path": [
@@ -7911,7 +8689,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0319"
+        "key": "docs.d0629"
       },
       {
         "path": [
@@ -7938,7 +8716,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0321"
+        "key": "docs.d0630"
       },
       {
         "path": [
@@ -7947,7 +8725,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0322"
+        "key": "docs.d0631"
       },
       {
         "path": [
@@ -7956,7 +8734,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0323"
+        "key": "docs.d0321"
       },
       {
         "path": [
@@ -7965,7 +8743,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0324"
+        "key": "docs.d0322"
       },
       {
         "path": [
@@ -7974,7 +8752,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0325"
+        "key": "docs.d0323"
       },
       {
         "path": [
@@ -7983,13 +8761,31 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
+        "key": "docs.d0324"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          10,
+          "description"
+        ],
+        "key": "docs.d0325"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          11,
+          "description"
+        ],
         "key": "docs.d0326"
       },
       {
         "path": [
           "content",
           "body_params",
-          9,
+          11,
           "children",
           0,
           "description"
@@ -8000,7 +8796,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          11,
           "children",
           1,
           "description"
@@ -8011,7 +8807,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          9,
+          11,
           "children",
           2,
           "description"
@@ -8022,16 +8818,27 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          11,
+          "children",
+          3,
           "description"
         ],
-        "key": "docs.d0330"
+        "key": "docs.d0632"
       },
       {
         "path": [
           "content",
           "body_params",
-          10,
+          12,
+          "description"
+        ],
+        "key": "docs.d0633"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          12,
           "children",
           0,
           "description"
@@ -8042,7 +8849,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "body_params",
-          10,
+          12,
           "children",
           1,
           "description"
@@ -8116,7 +8923,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
-        "key": "docs.d0338"
+        "key": "docs.d0634"
       },
       {
         "path": [
@@ -8127,7 +8934,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0339"
+        "key": "docs.d0635"
       },
       {
         "path": [
@@ -8136,6 +8943,28 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "children",
           4,
+          "description"
+        ],
+        "key": "docs.d0338"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          4,
+          "children",
+          5,
+          "description"
+        ],
+        "key": "docs.d0339"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          4,
+          "children",
+          6,
           "description"
         ],
         "key": "docs.d0317"
@@ -8147,7 +8976,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0340"
+        "key": "docs.d0636"
       },
       {
         "path": [
@@ -8156,7 +8985,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0341"
+        "key": "docs.d0637"
       },
       {
         "path": [
@@ -8165,7 +8994,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0129"
+        "key": "docs.d0638"
       },
       {
         "path": [
@@ -8232,7 +9061,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0639"
       },
       {
         "path": [
@@ -8241,7 +9070,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0343"
+        "key": "docs.d0576"
       },
       {
         "path": [
@@ -8250,7 +9079,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0344"
+        "key": "docs.d0047"
       },
       {
         "path": [
@@ -8259,7 +9088,43 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
+        "key": "docs.d0343"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          8,
+          "label"
+        ],
+        "key": "docs.d0344"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          9,
+          "label"
+        ],
         "key": "docs.d0137"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          10,
+          "label"
+        ],
+        "key": "docs.d0640"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          11,
+          "label"
+        ],
+        "key": "docs.d0577"
       },
       {
         "path": [
@@ -8277,7 +9142,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0346"
+        "key": "docs.d0641"
       },
       {
         "path": [
@@ -8304,7 +9169,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "title"
         ],
-        "key": "docs.d0348"
+        "key": "docs.d0642"
       },
       {
         "path": [
@@ -8313,7 +9178,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0349"
+        "key": "docs.d0643"
       },
       {
         "path": [
@@ -8322,7 +9187,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "title"
         ],
-        "key": "docs.d0146"
+        "key": "docs.d0644"
       },
       {
         "path": [
@@ -8331,7 +9196,43 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0350"
+        "key": "docs.d0645"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          4,
+          "title"
+        ],
+        "key": "docs.d0348"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          4,
+          "body"
+        ],
+        "key": "docs.d0349"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "title"
+        ],
+        "key": "docs.d0146"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "body"
+        ],
+        "key": "docs.d0646"
       }
     ]
   },
@@ -8350,7 +9251,8 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "highlights": [
           "兼容 OpenAI Models 接口，可直接使用 OpenAI 官方 SDK",
           "认证支持 Authorization: Bearer，也支持 Anthropic 风格的 x-api-key",
-          "返回的 id 即为其他接口 model 参数应填的值"
+          "返回的 id 即为其他接口 model 参数应填的值",
+          "列表只包含当前 API Key 有权使用的模型"
         ],
         "notice": "列表只包含当前可用于对话（Chat Completions / Responses / Messages）与图像生成的模型，且只反映当前在线可用的情况；仅支持向量或重排的模型不会出现在列表中。",
         "auth": "bearer",
@@ -8470,12 +9372,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "错误码说明",
-            "body": "401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n429：租户超出配额（requests_per_minute / max_concurrent 等），响应头 Retry-After 给出建议等待秒数。\n\n503：暂时无法校验 API Key（verification_unavailable），请稍后重试。"
+            "body": "401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数。\n\n503：暂时无法校验 API Key（verification_unavailable），请稍后重试。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "87d35d4f35145c5517525b269712f4ee8ddc1abd777b09b278b950c8f5424b49",
+    "fingerprint": "87df75325c6f2dbf719f3ae13870c8767a683da797f305a2b3f6824a155e5f1b",
     "fields": [
       {
         "path": [
@@ -8518,6 +9420,14 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2
         ],
         "key": "docs.d0356"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          3
+        ],
+        "key": "docs.d0647"
       },
       {
         "path": [
@@ -8678,7 +9588,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0367"
+        "key": "docs.d0648"
       }
     ]
   },
@@ -8701,7 +9611,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "不支持工具调用（tools）、结构化输出（format）与图片输入（messages[].images），传入即返回 400",
           "需要 Bearer API Key 鉴权"
         ],
-        "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+        "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）、余额耗尽（402）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
         "auth": "bearer",
         "headers": [
           {
@@ -8725,7 +9635,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "model",
             "type": "string",
             "required": true,
-            "description": "模型 ID，可通过 GET /v1/models 查看。"
+            "description": "模型 ID，可通过 GET /v1/models 查看。模型名后可附思考后缀，如 `模型名(high)`：括号内可为 none、minimal、low、medium、high、xhigh 或数字思考预算，会覆盖 think 字段。"
           },
           {
             "name": "messages",
@@ -8746,10 +9656,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "description": "消息文本。"
               },
               {
+                "name": "thinking",
+                "type": "string",
+                "required": false,
+                "description": "上一轮回复中的思考内容。为兼容 Ollama 客户端而接受，但会被忽略。"
+              },
+              {
                 "name": "images",
                 "type": "array",
                 "required": false,
-                "description": "不支持。任意一条消息带非空 images 时返回 400。"
+                "description": "不支持。任意一条消息带 images 字段（即使值为 null 或空数组）即返回 400。"
               }
             ]
           },
@@ -8782,7 +9698,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "num_predict",
                 "type": "integer",
                 "required": false,
-                "description": "最多生成的 Token 数。"
+                "description": "最多生成的 Token 数。部分后端（如命令行类 Agent 后端）只接受、不强制该上限，此时响应带有 `X-Gateway-Ignored-Parameters: options.num_predict` 与 `Warning` 头。"
               },
               {
                 "name": "seed",
@@ -8814,13 +9730,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "tools",
             "type": "array",
             "required": false,
-            "description": "不支持，传入即返回 400。"
+            "description": "不支持，字段出现即返回 400（即使值为 null 或空数组）。"
           },
           {
             "name": "format",
             "type": "string | object",
             "required": false,
-            "description": "不支持，传入即返回 400。"
+            "description": "不支持，字段出现即返回 400（即使值为 null 或空数组）。"
           }
         ],
         "response_fields": [
@@ -8853,6 +9769,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "type": "string",
                 "required": true,
                 "description": "回复文本（流式时为本段增量）。"
+              },
+              {
+                "name": "thinking",
+                "type": "string",
+                "required": false,
+                "description": "模型的思考内容，仅在模型产生思考内容时出现；流式时与 content 一样按段增量返回。"
               }
             ]
           },
@@ -8936,6 +9858,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -8969,7 +9897,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "流式响应",
-            "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，message.content 是本段增量文本；最后一行 done 为 true，message.content 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n流式过程中若发生错误，状态码已经是 200，错误会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。客户端应逐行检查是否含 error 字段。"
+            "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，message.content 是本段增量文本（模型产生思考内容时，增量思考文本在 message.thinking 中）；最后一行 done 为 true，message.content 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n开始输出之前发生的错误（如模型不可用）仍以相应的 HTTP 状态码返回。流式过程中若发生错误，状态码已经是 200，错误会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。客户端应逐行检查是否含 error 字段。"
           },
           {
             "title": "与原生 Ollama 的差异",
@@ -8977,22 +9905,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "不支持的 Ollama 端点",
-            "body": "平台不管理模型文件，以下模型管理类端点固定返回 501，错误体为 Ollama 格式：\n\nPOST /api/create、POST /api/pull、POST /api/push、DELETE /api/delete、POST /api/copy、POST /api/show、GET /api/tags、GET /api/ps\n\n需要查看可用模型时请改用 GET /v1/models。批量向量接口 /api/embed 及其他未列出的路径未实现（返回 404），向量请使用 POST /api/embeddings 或 POST /v1/embeddings。以上端点同样需要先通过鉴权，未携带有效 Key 时先得到 401。",
+            "body": "平台不管理模型文件，以下模型管理类端点固定返回 501，错误体为 Ollama 格式：\n\nPOST /api/create、POST /api/pull、POST /api/push、DELETE /api/delete、POST /api/copy、POST /api/show、GET /api/tags、GET /api/ps\n\n需要查看可用模型时请改用 GET /v1/models。批量向量接口 /api/embed 及其他未列出的路径未实现（返回 404，响应体为纯文本 `404 page not found`），向量请使用 POST /api/embeddings 或 POST /v1/embeddings。以上端点同样需要先通过鉴权，未携带有效 Key 时先得到 401；其中 POST 端点在账户余额耗尽时先得到 402。",
             "code": "{\n  \"error\": \"this gateway does not manage node-local models; model management endpoints are not supported (each node manages its own models independently)\"\n}",
             "code_lang": "json"
           },
           {
             "title": "错误码一览",
-            "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+            "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON，或字段类型不符\n400 model and a non-empty messages array are required：缺少 model 或 messages 为空\n400 <字段> is not supported by this Ollama-compatible endpoint：传入了不支持的字段，信息里会指出具体字段\n400 think must be true, false, \"low\", \"medium\" or \"high\"：think 取值不合法\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n401 the node rejected this request's credentials：后端节点拒绝了请求凭证，与你的 API Key 无关\n404 the requested model is not available on any connected node：模型不存在、当前不可用，或你的租户无权使用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试（可能带 Retry-After 头）\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n503 the requested model is temporarily unavailable, retry shortly：模型暂时不可用，响应带 Retry-After: 5\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401，invalid_api_key）、余额耗尽（402）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
           },
           {
             "title": "鉴权与配额",
-            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
           }
         ]
       }
     },
-    "fingerprint": "b114f13557919e62f78fb0e655ad06061d33ccd3fb37652b29a76f4c3f672f2a",
+    "fingerprint": "6dbabf498dc0c9ae93ec76b80dc81169c181e7dcf117837d5c5e020c00087093",
     "fields": [
       {
         "path": [
@@ -9057,7 +9985,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "notice"
         ],
-        "key": "docs.d0376"
+        "key": "docs.d0649"
       },
       {
         "path": [
@@ -9084,7 +10012,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "description"
         ],
-        "key": "docs.d0377"
+        "key": "docs.d0650"
       },
       {
         "path": [
@@ -9126,7 +10054,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
-        "key": "docs.d0380"
+        "key": "docs.d0651"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          1,
+          "children",
+          3,
+          "description"
+        ],
+        "key": "docs.d0652"
       },
       {
         "path": [
@@ -9177,7 +10116,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
-        "key": "docs.d0383"
+        "key": "docs.d0653"
       },
       {
         "path": [
@@ -9226,7 +10165,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0387"
+        "key": "docs.d0654"
       },
       {
         "path": [
@@ -9235,7 +10174,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0387"
+        "key": "docs.d0654"
       },
       {
         "path": [
@@ -9285,6 +10224,17 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "description"
         ],
         "key": "docs.d0392"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          2,
+          "children",
+          2,
+          "description"
+        ],
+        "key": "docs.d0655"
       },
       {
         "path": [
@@ -9383,7 +10333,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -9392,7 +10342,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
-        "key": "docs.d0048"
+        "key": "docs.d0047"
       },
       {
         "path": [
@@ -9401,7 +10351,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "label"
         ],
-        "key": "docs.d0402"
+        "key": "docs.d0048"
       },
       {
         "path": [
@@ -9410,13 +10360,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "label"
         ],
-        "key": "docs.d0049"
+        "key": "docs.d0402"
       },
       {
         "path": [
           "content",
           "response_examples",
           10,
+          "label"
+        ],
+        "key": "docs.d0049"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          11,
           "label"
         ],
         "key": "docs.d0050"
@@ -9437,7 +10396,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0404"
+        "key": "docs.d0656"
       },
       {
         "path": [
@@ -9473,7 +10432,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0408"
+        "key": "docs.d0657"
       },
       {
         "path": [
@@ -9491,7 +10450,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0409"
+        "key": "docs.d0658"
       },
       {
         "path": [
@@ -9509,7 +10468,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "body"
         ],
-        "key": "docs.d0058"
+        "key": "docs.d0568"
       }
     ]
   },
@@ -9531,7 +10490,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "批量接口 /api/embed 未实现，批量请使用 POST /v1/embeddings",
           "需要 Bearer API Key 鉴权"
         ],
-        "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+        "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）、余额耗尽（402）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
         "auth": "bearer",
         "headers": [
           {
@@ -9615,6 +10574,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -9652,16 +10617,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码一览",
-            "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+            "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON，或字段类型不符\n400 model and prompt are required：缺少 model 或 prompt\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n401 the node rejected this request's credentials：后端节点拒绝了请求凭证，与你的 API Key 无关\n404 the requested model is not available on any connected node：模型不存在、当前不可用，或你的租户无权使用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试（可能带 Retry-After 头）\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n503 the requested model is temporarily unavailable, retry shortly：模型暂时不可用，响应带 Retry-After: 5\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401，invalid_api_key）、余额耗尽（402）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
           },
           {
             "title": "鉴权与配额",
-            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
           }
         ]
       }
     },
-    "fingerprint": "d61aded6e45eba9fd5ed720f7678f1b1a54bc6a5d73e9058f3bab39255f56c90",
+    "fingerprint": "0be24bae6686608edab49f2c7e751d60a0d52f8f8b9c5b914f97af12079345da",
     "fields": [
       {
         "path": [
@@ -9718,7 +10683,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "notice"
         ],
-        "key": "docs.d0376"
+        "key": "docs.d0649"
       },
       {
         "path": [
@@ -9808,7 +10773,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -9817,7 +10782,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0048"
+        "key": "docs.d0047"
       },
       {
         "path": [
@@ -9826,7 +10791,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0402"
+        "key": "docs.d0048"
       },
       {
         "path": [
@@ -9835,13 +10800,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
-        "key": "docs.d0049"
+        "key": "docs.d0402"
       },
       {
         "path": [
           "content",
           "response_examples",
           8,
+          "label"
+        ],
+        "key": "docs.d0049"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          9,
           "label"
         ],
         "key": "docs.d0050"
@@ -9880,7 +10854,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0409"
+        "key": "docs.d0659"
       },
       {
         "path": [
@@ -9898,7 +10872,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0058"
+        "key": "docs.d0568"
       }
     ]
   },
@@ -9921,7 +10895,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "不支持 format、images、context、raw、template、suffix，传入即返回 400；响应也不返回 context",
           "需要 Bearer API Key 鉴权"
         ],
-        "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+        "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）、余额耗尽（402）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
         "auth": "bearer",
         "headers": [
           {
@@ -9945,7 +10919,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "model",
             "type": "string",
             "required": true,
-            "description": "模型 ID，可通过 GET /v1/models 查看。"
+            "description": "模型 ID，可通过 GET /v1/models 查看。模型名后可附思考后缀，如 `模型名(high)`：括号内可为 none、minimal、low、medium、high、xhigh 或数字思考预算，会覆盖 think 字段。"
           },
           {
             "name": "prompt",
@@ -9988,7 +10962,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "num_predict",
                 "type": "integer",
                 "required": false,
-                "description": "最多生成的 Token 数。"
+                "description": "最多生成的 Token 数。部分后端（如命令行类 Agent 后端）只接受、不强制该上限，此时响应带有 `X-Gateway-Ignored-Parameters: options.num_predict` 与 `Warning` 头。"
               },
               {
                 "name": "seed",
@@ -10020,19 +10994,19 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "format",
             "type": "string | object",
             "required": false,
-            "description": "不支持，传入即返回 400。"
+            "description": "不支持，字段出现即返回 400（即使值为 null 或空数组）。"
           },
           {
             "name": "images",
             "type": "array",
             "required": false,
-            "description": "不支持，传入即返回 400。"
+            "description": "不支持，字段出现即返回 400（即使值为 null 或空数组）。"
           },
           {
             "name": "context",
             "type": "array",
             "required": false,
-            "description": "不支持（平台不保存续写上下文），传入即返回 400。"
+            "description": "不支持（平台不保存续写上下文），字段出现即返回 400（即使值为 null 或空数组）。"
           },
           {
             "name": "raw",
@@ -10071,6 +11045,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "type": "string",
             "required": true,
             "description": "生成的文本。流式时为本段增量，最后一行为空字符串。"
+          },
+          {
+            "name": "thinking",
+            "type": "string",
+            "required": false,
+            "description": "模型的思考内容，仅在模型产生思考内容时出现；流式时与 response 一样按段增量返回。"
           },
           {
             "name": "done",
@@ -10146,6 +11126,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -10179,7 +11165,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "流式响应",
-            "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，response 为本段增量文本；最后一行 done 为 true，response 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n流式过程中若发生错误，会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。"
+            "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，response 为本段增量文本（模型产生思考内容时，增量思考文本在 thinking 中）；最后一行 done 为 true，response 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n开始输出之前发生的错误（如模型不可用）仍以相应的 HTTP 状态码返回。流式过程中若发生错误，状态码已经是 200，会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。"
           },
           {
             "title": "与原生 Ollama 的差异",
@@ -10187,16 +11173,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "错误码一览",
-            "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+            "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON，或字段类型不符\n400 model and prompt are required：缺少 model 或 prompt\n400 <字段> is not supported by this Ollama-compatible endpoint：传入了不支持的字段，信息里会指出具体字段\n400 think must be true, false, \"low\", \"medium\" or \"high\"：think 取值不合法\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n401 the node rejected this request's credentials：后端节点拒绝了请求凭证，与你的 API Key 无关\n404 the requested model is not available on any connected node：模型不存在、当前不可用，或你的租户无权使用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试（可能带 Retry-After 头）\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n503 the requested model is temporarily unavailable, retry shortly：模型暂时不可用，响应带 Retry-After: 5\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401，invalid_api_key）、余额耗尽（402）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
           },
           {
             "title": "鉴权与配额",
-            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+            "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
           }
         ]
       }
     },
-    "fingerprint": "5ef3631341ef9372c598fd8dcf27c2c9d1914770f1b615eb7e78f40c789426a9",
+    "fingerprint": "d4eddfd578263a4b13daac4882dc910309232e72aa9e832e62c486e6a4fdd309",
     "fields": [
       {
         "path": [
@@ -10261,7 +11247,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "content",
           "notice"
         ],
-        "key": "docs.d0376"
+        "key": "docs.d0649"
       },
       {
         "path": [
@@ -10288,7 +11274,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "description"
         ],
-        "key": "docs.d0377"
+        "key": "docs.d0650"
       },
       {
         "path": [
@@ -10357,7 +11343,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
-        "key": "docs.d0383"
+        "key": "docs.d0653"
       },
       {
         "path": [
@@ -10406,7 +11392,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0387"
+        "key": "docs.d0654"
       },
       {
         "path": [
@@ -10415,7 +11401,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0387"
+        "key": "docs.d0654"
       },
       {
         "path": [
@@ -10424,7 +11410,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
-        "key": "docs.d0429"
+        "key": "docs.d0660"
       },
       {
         "path": [
@@ -10487,7 +11473,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0393"
+        "key": "docs.d0661"
       },
       {
         "path": [
@@ -10496,7 +11482,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0394"
+        "key": "docs.d0393"
       },
       {
         "path": [
@@ -10505,13 +11491,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0395"
+        "key": "docs.d0394"
       },
       {
         "path": [
           "content",
           "response_fields",
           6,
+          "description"
+        ],
+        "key": "docs.d0395"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          7,
           "description"
         ],
         "key": "docs.d0396"
@@ -10568,7 +11563,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -10577,7 +11572,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0048"
+        "key": "docs.d0047"
       },
       {
         "path": [
@@ -10586,7 +11581,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
-        "key": "docs.d0402"
+        "key": "docs.d0048"
       },
       {
         "path": [
@@ -10595,13 +11590,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "label"
         ],
-        "key": "docs.d0049"
+        "key": "docs.d0402"
       },
       {
         "path": [
           "content",
           "response_examples",
           9,
+          "label"
+        ],
+        "key": "docs.d0049"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          10,
           "label"
         ],
         "key": "docs.d0050"
@@ -10622,7 +11626,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0433"
+        "key": "docs.d0662"
       },
       {
         "path": [
@@ -10658,7 +11662,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "body"
         ],
-        "key": "docs.d0409"
+        "key": "docs.d0663"
       },
       {
         "path": [
@@ -10676,7 +11680,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0058"
+        "key": "docs.d0568"
       }
     ]
   },
@@ -10739,7 +11743,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "top_n",
             "type": "integer",
             "required": false,
-            "description": "只返回得分最高的前 N 条；省略时返回全部。"
+            "description": "只返回得分最高的前 N 条；省略时返回全部。取值不由网关校验，后端拒绝的取值会按上游错误返回。"
           }
         ],
         "response_fields": [
@@ -10807,6 +11811,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
           },
           {
+            "status": 402,
+            "label": "账户余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
             "status": 404,
             "label": "模型不可用",
             "content_type": "application/json",
@@ -10828,12 +11838,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "sections": [
           {
             "title": "错误码说明",
-            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON 或字段类型不符（invalid_json）、缺少必填字段或字段取值不合法（invalid_request），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）；或后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关。\n\n402：账户余额已耗尽（insufficient_balance），充值后即可恢复，无需更换 API Key；仅使用包月账号的租户订阅已过期时为 account_subscription_expired，续订后恢复。\n\n404：请求的模型不存在、当前不可用，或你的租户无权使用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），响应可能带 Retry-After 头，稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），服务暂不可用（connection_failed / runtime_closed），或所请求的模型暂时不可用（model_unavailable，带 Retry-After: 5），稍后重试即可。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "1ef062660183b724f180e1f32e32078e94f656c1cc691b663be2180a955c7c7f",
+    "fingerprint": "ae82328edb879145448ebc7d4df26b5824368ce7cdf17979accde3998418ed1d",
     "fields": [
       {
         "path": [
@@ -10930,7 +11940,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0443"
+        "key": "docs.d0664"
       },
       {
         "path": [
@@ -11006,7 +12016,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0565"
       },
       {
         "path": [
@@ -11015,13 +12025,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0137"
+        "key": "docs.d0047"
       },
       {
         "path": [
           "content",
           "response_examples",
           5,
+          "label"
+        ],
+        "key": "docs.d0137"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          6,
           "label"
         ],
         "key": "docs.d0168"
@@ -11042,7 +12061,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0147"
+        "key": "docs.d0587"
       }
     ]
   },
@@ -11079,6 +12098,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "type": "string",
             "required": true,
             "description": "固定为 `application/json`。"
+          },
+          {
+            "name": "X-Session-Id",
+            "type": "string",
+            "required": false,
+            "description": "会话标识（可选）。同一段对话带相同的值，会被尽量调度到同一节点以提高缓存命中；未提供时取请求体的 prompt_cache_key。也识别 Session_id、Conversation_id 请求头，超过 512 字节的值被忽略。"
           }
         ],
         "path_params": [],
@@ -11101,7 +12126,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "type",
                 "type": "string",
                 "required": false,
-                "description": "输入项类型，省略时为 message。reasoning 项会被忽略；其他类型返回 400。",
+                "description": "输入项类型，省略时为 message。reasoning 项会被忽略；其他类型（如 compaction、web_search_call）返回 400。",
                 "enum": [
                   "message",
                   "function_call",
@@ -11130,7 +12155,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "content",
                 "type": "string | array",
                 "required": false,
-                "description": "message 项的内容：字符串，或内容片段数组。",
+                "description": "message 项的内容：字符串，或内容片段数组。其他片段类型（如 input_audio）返回 400。",
                 "children": [
                   {
                     "name": "type",
@@ -11216,7 +12241,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "output",
                 "type": "string | array",
                 "required": false,
-                "description": "*_output 项的工具执行结果。"
+                "description": "*_output 项的工具执行结果：字符串，或内容片段数组（格式同 message 的 content）。"
               },
               {
                 "name": "tools",
@@ -11236,7 +12261,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "max_output_tokens",
             "type": "integer",
             "required": false,
-            "description": "最多生成的 token 数。"
+            "description": "最多生成的 token 数。Codex 等部分 CLI 类后端不执行该上限，此时成功响应会带 X-Gateway-Ignored-Parameters 与 Warning 响应头提示。"
           },
           {
             "name": "reasoning",
@@ -11309,7 +12334,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "tools",
                 "type": "array",
                 "required": false,
-                "description": "namespace 工具下的成员工具，不能再嵌套 namespace。"
+                "description": "namespace 工具下的成员工具（function 或 custom），不能再嵌套 namespace。"
               }
             ]
           },
@@ -11335,7 +12360,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
                     "name": "type",
                     "type": "string",
                     "required": true,
-                    "description": "格式类型，如 json_schema。"
+                    "description": "格式类型。",
+                    "enum": [
+                      "text",
+                      "json_object",
+                      "json_schema"
+                    ]
                   },
                   {
                     "name": "name",
@@ -11369,7 +12399,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "previous_response_id",
             "type": "string",
             "required": false,
-            "description": "上一轮响应的 id（该轮须以 store=true 发起），服务端会自动拼接此前的对话历史。id 不存在时返回 400。"
+            "description": "上一轮响应的 id（该轮须以 store=true 发起），服务端会自动拼接此前的对话历史。id 不存在时返回 400；续接链最多 50 轮，超出返回 503。"
+          },
+          {
+            "name": "prompt_cache_key",
+            "type": "string",
+            "required": false,
+            "description": "会话标识，作用同 X-Session-Id 请求头：把同一段对话尽量调度到同一节点以提高缓存命中。"
           },
           {
             "name": "background",
@@ -11401,7 +12437,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "status",
             "type": "string",
             "required": true,
-            "description": "响应状态。达到 max_output_tokens 被截断时为 incomplete。",
+            "description": "响应状态。达到 max_output_tokens 被截断时为 incomplete；failed 只出现在流式的 response.failed 事件中。",
             "enum": [
               "completed",
               "incomplete",
@@ -11419,7 +12455,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "output",
             "type": "array",
             "required": true,
-            "description": "输出项列表。",
+            "description": "输出项列表。模型返回思考内容时，会先有一个 reasoning 项。",
             "children": [
               {
                 "name": "type",
@@ -11428,6 +12464,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "description": "输出项类型。",
                 "enum": [
                   "message",
+                  "reasoning",
                   "function_call",
                   "custom_tool_call",
                   "local_shell_call"
@@ -11455,7 +12492,13 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "name": "content",
                 "type": "array",
                 "required": false,
-                "description": "message 项的内容，元素为 {type: \"output_text\", text, annotations}。"
+                "description": "message 项的内容，元素为 {type: \"output_text\", text, annotations}；reasoning 项的内容，元素为 {type: \"reasoning_text\", text}。"
+              },
+              {
+                "name": "summary",
+                "type": "array",
+                "required": false,
+                "description": "reasoning 项固定为空数组，思考原文在 content 中。"
               },
               {
                 "name": "call_id",
@@ -11518,6 +12561,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
                 "type": "integer",
                 "required": true,
                 "description": "总 token 数。"
+              },
+              {
+                "name": "output_tokens_details",
+                "type": "object",
+                "required": false,
+                "description": "输出 token 明细，仅在模型上报了思考 token 时出现，含 reasoning_tokens。"
               }
             ]
           },
@@ -11525,7 +12574,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "error",
             "type": "object | null",
             "required": true,
-            "description": "失败时的错误信息（code、message），成功为 null。"
+            "description": "成功为 null；仅在流式的 response.failed 事件中为 {code, message}。"
           },
           {
             "name": "incomplete_details",
@@ -11619,10 +12668,28 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"unknown previous_response_id\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
           },
           {
+            "status": 400,
+            "label": "不支持的工具类型",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"tool type \\\"file_search\\\" is not supported by this gateway\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+          },
+          {
             "status": 401,
             "label": "认证失败",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "余额不足",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "账号包月已过期",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
           },
           {
             "status": 404,
@@ -11631,26 +12698,50 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
           },
           {
+            "status": 409,
+            "label": "工具续接失效（Claude 系列模型）",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"Messages continuation unavailable\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"continuation_unavailable\"\n  }\n}"
+          },
+          {
+            "status": 413,
+            "label": "请求体过大（Claude 系列模型）",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"Claude CLI Responses request size limit exceeded\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"request_too_large\"\n  }\n}"
+          },
+          {
             "status": 429,
             "label": "超出配额",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
           },
           {
+            "status": 429,
+            "label": "服务暂无可用容量",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"no node had capacity for this request; retry shortly\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"backpressure\"\n  }\n}"
+          },
+          {
             "status": 503,
             "label": "无法加载历史对话",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"could not load the referenced conversation\",\n    \"type\": \"api_error\",\n    \"code\": \"server_error\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "模型暂时不可用",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"model_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
           {
             "title": "流式事件说明",
-            "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>，JSON 中带 type 与递增的 sequence_number。没有 [DONE] 标记，以终止事件结束。\n\n事件顺序：response.created → response.in_progress → 每个输出项的 response.output_item.added → 文本的 response.content_part.added / response.output_text.delta / response.output_text.done / response.content_part.done，或函数调用的 response.function_call_arguments.delta / response.function_call_arguments.done → response.output_item.done → 终止事件。\n\n终止事件：正常结束为 response.completed；因 max_output_tokens 截断为 response.incomplete；生成中途失败为 response.failed（response.error.code 为 server_error）。"
+            "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>，JSON 中带 type 与递增的 sequence_number。没有 [DONE] 标记，以终止事件结束。\n\n事件顺序：response.created → response.in_progress → 每个输出项的 response.output_item.added → 文本的 response.content_part.added / response.output_text.delta / response.output_text.done / response.content_part.done，或函数调用的 response.function_call_arguments.delta / response.function_call_arguments.done → response.output_item.done → 终止事件。custom 与 local_shell 调用没有 arguments 事件，完整内容在 response.output_item.done 中给出。模型返回思考内容时，会先出现 reasoning 输出项，其文本事件为 response.reasoning_text.delta / response.reasoning_text.done。\n\n终止事件：正常结束为 response.completed；因 max_output_tokens 截断为 response.incomplete；生成中途失败为 response.failed（response.error 带 code 与 message，非 Claude 系列模型的 code 为 server_error）。\n\n响应头发出后 HTTP 状态码已固定为 200，中途失败只能通过 response.failed 判断；尚未开始输出时的错误（如鉴权、配额、参数问题）仍以对应状态码返回。Claude 系列模型的流在空闲时可能穿插以冒号开头的注释行（: keep-alive），按 SSE 规范忽略即可。"
           },
           {
             "title": "使用示例：多轮续接",
-            "body": "第一轮请求带上 store=true，记下返回的 id；下一轮把它作为 previous_response_id，并只在 input 中放本轮的新内容。若希望继续向后续接，本轮同样需要 store=true。",
+            "body": "第一轮请求带上 store=true，记下返回的 id；下一轮把它作为 previous_response_id，并只在 input 中放本轮的新内容。若希望继续向后续接，本轮同样需要 store=true。\n\n对话以异步方式保存，写入繁忙而被丢弃或写入失败的轮次，之后续接时会按 id 不存在返回 400。非 Claude 系列模型的上一轮 instructions 会随历史一并保留；Claude 系列模型不会，每轮需要重新带上。",
             "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"previous_response_id\": \"resp_8f3a2c\",\n  \"store\": true,\n  \"input\": \"再详细一点\"\n}",
             "code_lang": "json"
           },
@@ -11662,16 +12753,20 @@ export const DOC_SOURCES: readonly DocSource[] = [
           },
           {
             "title": "Claude 系列模型的参数限制",
-            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。"
+            "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 每轮请求默认需在 input 中带上完整对话；也可以用 store 与 previous_response_id 续接，规则同上，但上一轮的 instructions 不会沿用。\n\n2. max_output_tokens 默认 4096，必须为正整数；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 32 MiB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头，历史中的 function_call 的 arguments 必须是 JSON 对象。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。\n\n8. Claude 后端拒绝请求时，错误的 message 为固定短语，如 capability_rejected: prompt_too_long（输入过长）、capability_rejected: max_tokens_context_overflow（输入加上输出上限超出上下文窗口）。"
+          },
+          {
+            "title": "模型名后缀：指定思考档位",
+            "body": "只能填写模型名的客户端，可以在模型名后加 (档位) 指定思考档位，例如 {{MODEL}}(high) 或 {{MODEL}}(16384)。档位为 none、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭，数字预算对应到不低于它的最近档位）。后缀会覆盖请求体中的 reasoning.effort。\n\n括号里不是上述取值时，整个字符串按模型名处理；模型名末尾的 [1m]、[2m] 上下文窗口标记会被去掉。"
           },
           {
             "title": "错误码说明",
-            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+            "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法，包括不支持的工具类型或输入项类型（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n402：账户余额耗尽（insufficient_balance），请充值后重试；或仅使用账号包月的商户在包月过期后（account_subscription_expired），请续费。\n\n404：请求的模型当前不可用，或当前 Key 无权使用该模型（model_not_found）。\n\n409：Claude 系列模型的工具续接状态失效（continuation_unavailable）。\n\n413：请求体超出大小上限（request_too_large，仅 Claude 系列模型），或响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent；或服务暂时没有可用容量（rate_limited / backpressure）。两者都带响应头 Retry-After，给出建议等待秒数。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable）、模型的节点暂时不可用（model_unavailable，带 Retry-After）、无法加载 previous_response_id 对应的历史对话或续接链超过 50 轮（server_error），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
           }
         ]
       }
     },
-    "fingerprint": "b01a7e8520787a437b7cd6eb4fec5237d2c278bbdf6c2c7bbbf22647733e343e",
+    "fingerprint": "744a599c021b916eb373e257cc8e82e4456d2cbdeab738e76379f5bc3ce5f8ec",
     "fields": [
       {
         "path": [
@@ -11753,6 +12848,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
       {
         "path": [
           "content",
+          "headers",
+          2,
+          "description"
+        ],
+        "key": "docs.d0665"
+      },
+      {
+        "path": [
+          "content",
           "body_params",
           0,
           "description"
@@ -11777,7 +12881,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "description"
         ],
-        "key": "docs.d0455"
+        "key": "docs.d0666"
       },
       {
         "path": [
@@ -11799,7 +12903,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "description"
         ],
-        "key": "docs.d0457"
+        "key": "docs.d0667"
       },
       {
         "path": [
@@ -11954,7 +13058,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
-        "key": "docs.d0469"
+        "key": "docs.d0668"
       },
       {
         "path": [
@@ -11983,7 +13087,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0472"
+        "key": "docs.d0669"
       },
       {
         "path": [
@@ -12094,7 +13198,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0478"
+        "key": "docs.d0670"
       },
       {
         "path": [
@@ -12136,7 +13240,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "description"
         ],
-        "key": "docs.d0482"
+        "key": "docs.d0671"
       },
       {
         "path": [
@@ -12193,13 +13297,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
           12,
           "description"
         ],
-        "key": "docs.d0486"
+        "key": "docs.d0672"
       },
       {
         "path": [
           "content",
           "body_params",
           13,
+          "description"
+        ],
+        "key": "docs.d0673"
+      },
+      {
+        "path": [
+          "content",
+          "body_params",
+          14,
           "description"
         ],
         "key": "docs.d0487"
@@ -12238,7 +13351,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "description"
         ],
-        "key": "docs.d0490"
+        "key": "docs.d0674"
       },
       {
         "path": [
@@ -12256,7 +13369,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0491"
+        "key": "docs.d0675"
       },
       {
         "path": [
@@ -12311,7 +13424,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "description"
         ],
-        "key": "docs.d0496"
+        "key": "docs.d0676"
       },
       {
         "path": [
@@ -12322,7 +13435,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0497"
+        "key": "docs.d0677"
       },
       {
         "path": [
@@ -12333,7 +13446,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0498"
+        "key": "docs.d0497"
       },
       {
         "path": [
@@ -12344,7 +13457,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0499"
+        "key": "docs.d0498"
       },
       {
         "path": [
@@ -12355,7 +13468,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           8,
           "description"
         ],
-        "key": "docs.d0466"
+        "key": "docs.d0499"
       },
       {
         "path": [
@@ -12366,7 +13479,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           9,
           "description"
         ],
-        "key": "docs.d0500"
+        "key": "docs.d0466"
       },
       {
         "path": [
@@ -12375,6 +13488,17 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "children",
           10,
+          "description"
+        ],
+        "key": "docs.d0500"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          5,
+          "children",
+          11,
           "description"
         ],
         "key": "docs.d0501"
@@ -12425,10 +13549,21 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "response_fields",
+          6,
+          "children",
+          3,
+          "description"
+        ],
+        "key": "docs.d0678"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
           7,
           "description"
         ],
-        "key": "docs.d0503"
+        "key": "docs.d0679"
       },
       {
         "path": [
@@ -12545,7 +13680,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0136"
+        "key": "docs.d0680"
       },
       {
         "path": [
@@ -12554,7 +13689,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0047"
+        "key": "docs.d0136"
       },
       {
         "path": [
@@ -12563,7 +13698,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0137"
+        "key": "docs.d0639"
       },
       {
         "path": [
@@ -12572,7 +13707,70 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
+        "key": "docs.d0576"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          8,
+          "label"
+        ],
+        "key": "docs.d0047"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          9,
+          "label"
+        ],
+        "key": "docs.d0681"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          10,
+          "label"
+        ],
+        "key": "docs.d0682"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          11,
+          "label"
+        ],
+        "key": "docs.d0137"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          12,
+          "label"
+        ],
+        "key": "docs.d0640"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          13,
+          "label"
+        ],
         "key": "docs.d0513"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          14,
+          "label"
+        ],
+        "key": "docs.d0577"
       },
       {
         "path": [
@@ -12590,7 +13788,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           0,
           "body"
         ],
-        "key": "docs.d0514"
+        "key": "docs.d0683"
       },
       {
         "path": [
@@ -12608,7 +13806,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "body"
         ],
-        "key": "docs.d0516"
+        "key": "docs.d0684"
       },
       {
         "path": [
@@ -12644,7 +13842,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "body"
         ],
-        "key": "docs.d0554"
+        "key": "docs.d0685"
       },
       {
         "path": [
@@ -12653,7 +13851,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "title"
         ],
-        "key": "docs.d0146"
+        "key": "docs.d0644"
       },
       {
         "path": [
@@ -12662,7 +13860,25 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "body"
         ],
-        "key": "docs.d0147"
+        "key": "docs.d0686"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "title"
+        ],
+        "key": "docs.d0146"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          5,
+          "body"
+        ],
+        "key": "docs.d0687"
       }
     ]
   },
@@ -12681,10 +13897,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "highlights": [
           "工作流由平台运维在 ComfyUI 编辑器中搭建、发布为模板；调用方只传模板声明的输入，不需要、也无法提交 ComfyUI 工作流 JSON",
           "异步执行：受理即返回 202 和 job_id，初始状态为 queued，之后通过状态查询或 SSE 事件流跟踪进度",
+          "启用排队的部署会让 JSON 提交直接入队：同样返回 202，durability 为 shared_queue 并带 queue_position；队列已满返回 429 queue_full。带文件输入的提交不入队",
           "只需提供模板声明的输入，按名称绑定；未声明的输入名会被拒绝，而不是被静默忽略",
           "string / integer / number / boolean 输入按模板声明的类型与上下限严格校验；未提供时依次使用模板默认值、模板中保存的原值",
           "支持 multipart/form-data 在同一次请求里上传图片、视频、音频等文件输入",
-          "对本租户不可见的工作流与不存在的工作流一样返回 404"
+          "对本租户不可见的工作流与不存在的工作流一样返回 404",
+          "账户余额耗尽或账号包月到期时，提交会被拒绝并返回 402；已提交的任务仍可查询、取消与下载产物"
         ],
         "notice": "JSON 请求体上限 1 MiB；multipart 请求整体（含全部文件）上限 200 MiB。带文件输入的请求在一次调用内完成上传与提交，失败时请整体重新提交。",
         "auth": "bearer",
@@ -12781,14 +13999,15 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "queue_position",
             "type": "integer",
             "required": false,
-            "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+            "description": "排队位置，仅在任务排队中且已知位置时返回。"
           },
           {
             "name": "durability",
             "type": "string",
             "required": true,
-            "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+            "description": "任务记录的持久化状态：shared_queue 表示任务只存在于平台的共享工作流队列中（仍在排队，或未交给执行端就被队列判为失败或取消），仅启用排队的部署会出现；memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
             "enum": [
+              "shared_queue",
               "memory_only",
               "persisted"
             ]
@@ -12797,7 +14016,20 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "name": "error",
             "type": "string",
             "required": false,
-            "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+            "description": "失败摘要，仅在任务失败且有原因可报告时返回：来自执行端，或在排队阶段失败时由平台给出说明。"
+          },
+          {
+            "name": "error_code",
+            "type": "string",
+            "required": false,
+            "description": "仅在平台于排队阶段（任务尚未交给执行端）就把任务判为失败或取消时返回：queue_timeout 表示排队超时仍无空闲执行端，submit_outcome_unknown 表示提交结果无法确认（为避免重复生成不会自动重新提交），node_not_allowed 表示没有对本租户开放的可用执行端，cancelled 表示排队期间被取消，internal_error 表示平台内部错误。",
+            "enum": [
+              "queue_timeout",
+              "submit_outcome_unknown",
+              "node_not_allowed",
+              "cancelled",
+              "internal_error"
+            ]
           }
         ],
         "request_examples": [
@@ -12830,6 +14062,12 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"durability\": \"memory_only\"\n}"
           },
           {
+            "status": 202,
+            "label": "已受理（进入共享队列）",
+            "content_type": "application/json",
+            "body": "{\n  \"job_id\": \"job_8a41c0de2f6b4d3e9172a5b6c8d0e3f4\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"queue_position\": 3,\n  \"durability\": \"shared_queue\"\n}"
+          },
+          {
             "status": 400,
             "label": "输入校验失败",
             "content_type": "application/json",
@@ -12846,6 +14084,18 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "label": "API Key 无效",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "余额耗尽",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+          },
+          {
+            "status": 402,
+            "label": "账号包月已到期",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
           },
           {
             "status": 404,
@@ -12866,10 +14116,28 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
           },
           {
+            "status": 429,
+            "label": "执行端全部繁忙",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"no node had capacity for this request; retry shortly\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"backpressure\"\n  }\n}"
+          },
+          {
+            "status": 429,
+            "label": "共享队列已满",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue is full; retry later\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"queue_full\"\n  }\n}"
+          },
+          {
             "status": 503,
             "label": "执行端不可用",
             "content_type": "application/json",
             "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+          },
+          {
+            "status": 503,
+            "label": "队列无法确认提交",
+            "content_type": "application/json",
+            "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue could not confirm this submission; check the job before resubmitting\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
           }
         ],
         "sections": [
@@ -12896,18 +14164,22 @@ export const DOC_SOURCES: readonly DocSource[] = [
             "code_lang": "bash"
           },
           {
+            "title": "排队（启用共享队列的部署）",
+            "body": "部署启用了共享工作流队列时，不带文件输入的 JSON 提交不会先尝试派发，而是直接入队，立即返回 202：status 为 queued，durability 为 shared_queue，并带 queue_position。平台在执行端有空闲容量时派发，任何网关实例都能查询到这个任务。\n\n带文件输入的 multipart 提交不入队，仍在本次请求内同步派发；执行端都繁忙时立即返回 429。\n\n排队有最长等待时间（由部署配置）：超时仍无空闲执行端时任务变为 failed，error_code 为 queue_timeout。排队期间调用取消接口通常会立即得到 cancelled。共享队列已满时返回 429 queue_full，响应带 Retry-After: 5。\n\n排队阶段的名次变化可通过 GET /v1/jobs/{job_id}/events 的 queue_changed 事件接收，也可轮询 GET /v1/jobs/{job_id} 读取 queue_position。"
+          },
+          {
             "title": "获取结果的完整流程",
-            "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id；type 为 output 的是最终结果。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时，提交请求可能会短暂等待后才返回；若仍无空闲容量则返回 429，稍后重试即可。下面是完整的 Python 示例。",
+            "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id；type 为 output 的是最终结果。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时：未启用排队的部署立即返回 429，稍后重试即可；启用排队的部署会让 JSON 提交先入队（见「排队」）。下面是完整的 Python 示例。",
             "code": "import os\nimport time\n\nimport requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\nHEADERS = {\"Authorization\": f\"Bearer {API_KEY}\"}\n\n# 1. 提交：workflow_id 是模板 ID，inputs 只放模板声明过的输入\nresp = requests.post(\n    f\"{BASE_URL}/v1/workflows/txt2img-basic/runs\",\n    headers=HEADERS,\n    json={\"inputs\": {\"prompt\": \"a lighthouse on a cliff at sunset\", \"seed\": 42}},\n    timeout=60,\n)\nresp.raise_for_status()  # 成功为 202\njob_id = resp.json()[\"job_id\"]\n\n# 2. 等待终态（也可以订阅 GET /v1/jobs/{job_id}/events 的 SSE 事件流）\nwhile True:\n    job = requests.get(f\"{BASE_URL}/v1/jobs/{job_id}\", headers=HEADERS, timeout=30).json()\n    if job[\"status\"] in (\"succeeded\", \"failed\", \"cancelled\"):\n        break\n    time.sleep(2)\nif job[\"status\"] != \"succeeded\":\n    raise RuntimeError(f\"{job_id} {job['status']}: {job.get('error', '')}\")\n\n# 3. 列出产物，跳过临时预览与输入文件，下载最终结果\nartifacts = requests.get(f\"{BASE_URL}/v1/jobs/{job_id}/artifacts\", headers=HEADERS, timeout=30).json()[\"data\"]\nfor art in artifacts:\n    if art.get(\"type\") in (\"temp\", \"input\"):\n        continue\n    name = os.path.basename(art[\"filename\"])\n    with requests.get(f\"{BASE_URL}/v1/artifacts/{art['artifact_id']}\", headers=HEADERS, stream=True, timeout=300) as r:\n        r.raise_for_status()\n        with open(name, \"wb\") as f:\n            for chunk in r.iter_content(chunk_size=1 << 16):\n                f.write(chunk)\n    print(\"saved\", name)",
             "code_lang": "python"
           },
           {
             "title": "错误码",
-            "body": "400 invalid_request：请求体不是合法 JSON、超出大小限制、multipart 格式错误、inputs 表单字段不是合法 JSON，或文件扩展名不在允许列表内。\n\n400 invalid_input：输入未声明、类型不符、超出长度或数值范围、必填输入缺失，或文件内容与扩展名不符。message 形如 \"input <名称> <原因>\"。\n\n404 workflow_not_found：工作流不存在或对本租户不可见。\n\n404 workflow_backend_not_found：当前没有可运行工作流的执行端在线。\n\n429 rate_limited / backpressure：执行端容量已满，请稍后重试。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+            "body": "400 invalid_request：请求体不是合法 JSON、超出大小限制、multipart 格式错误、inputs 表单字段不是合法 JSON，或文件扩展名不在允许列表内。\n\n400 invalid_input：输入未声明、类型不符、超出长度或数值范围、必填输入缺失，或文件内容与扩展名不符。message 形如 \"input <名称> <原因>\"。\n\n400 protocol_error / invalid_config / capability_unsupported：执行端拒绝或无法处理该请求。\n\n404 workflow_not_found：工作流不存在或对本租户不可见。\n\n404 workflow_backend_not_found：当前没有可运行工作流的执行端在线，或没有对本租户开放的执行端。\n\n429 rate_limited / backpressure（type 为 rate_limit_error）：执行端容量已满，请稍后重试。\n\n429 queue_full（type 为 rate_limit_error）：启用排队的部署中共享队列已满，响应带 Retry-After: 5。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n402 insufficient_balance（type 为 insufficient_quota）：账户余额已耗尽，请充值后再提交。已提交的任务仍可查询、取消与下载产物。\n\n402 account_subscription_expired（type 为 insufficient_quota）：账号包月的账户订阅已到期，请续费后再提交。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务未能确认本次提交是否已被受理，请先核实再决定是否重新提交。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。\n\n500 internal_error：平台内部错误。"
           },
           {
             "title": "任务状态",
-            "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+            "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled，此时 error_code 给出原因。"
           },
           {
             "title": "错误格式",
@@ -12918,7 +14190,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         ]
       }
     },
-    "fingerprint": "3c0b2452d381db8f714ce19e0cbf683d0eb04a8885339a75e1604af09445f2f7",
+    "fingerprint": "5f0c18cedd6d31f3c3468e3f01fc11c09c1113ad9710a832b655b3203bee3271",
     "fields": [
       {
         "path": [
@@ -12960,7 +14232,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           2
         ],
-        "key": "docs.d0523"
+        "key": "docs.d0688"
       },
       {
         "path": [
@@ -12968,7 +14240,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           3
         ],
-        "key": "docs.d0524"
+        "key": "docs.d0523"
       },
       {
         "path": [
@@ -12976,7 +14248,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           4
         ],
-        "key": "docs.d0525"
+        "key": "docs.d0524"
       },
       {
         "path": [
@@ -12984,7 +14256,23 @@ export const DOC_SOURCES: readonly DocSource[] = [
           "highlights",
           5
         ],
+        "key": "docs.d0525"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          6
+        ],
         "key": "docs.d0526"
+      },
+      {
+        "path": [
+          "content",
+          "highlights",
+          7
+        ],
+        "key": "docs.d0689"
       },
       {
         "path": [
@@ -13101,7 +14389,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "description"
         ],
-        "key": "docs.d0254"
+        "key": "docs.d0601"
       },
       {
         "path": [
@@ -13110,7 +14398,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "description"
         ],
-        "key": "docs.d0553"
+        "key": "docs.d0602"
       },
       {
         "path": [
@@ -13119,7 +14407,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "description"
         ],
-        "key": "docs.d0255"
+        "key": "docs.d0603"
+      },
+      {
+        "path": [
+          "content",
+          "response_fields",
+          8,
+          "description"
+        ],
+        "key": "docs.d0604"
       },
       {
         "path": [
@@ -13146,7 +14443,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           1,
           "label"
         ],
-        "key": "docs.d0535"
+        "key": "docs.d0690"
       },
       {
         "path": [
@@ -13155,7 +14452,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           2,
           "label"
         ],
-        "key": "docs.d0536"
+        "key": "docs.d0535"
       },
       {
         "path": [
@@ -13164,7 +14461,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           3,
           "label"
         ],
-        "key": "docs.d0015"
+        "key": "docs.d0536"
       },
       {
         "path": [
@@ -13173,7 +14470,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           4,
           "label"
         ],
-        "key": "docs.d0537"
+        "key": "docs.d0015"
       },
       {
         "path": [
@@ -13182,7 +14479,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "label"
         ],
-        "key": "docs.d0538"
+        "key": "docs.d0575"
       },
       {
         "path": [
@@ -13191,7 +14488,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           6,
           "label"
         ],
-        "key": "docs.d0539"
+        "key": "docs.d0691"
       },
       {
         "path": [
@@ -13200,7 +14497,61 @@ export const DOC_SOURCES: readonly DocSource[] = [
           7,
           "label"
         ],
+        "key": "docs.d0537"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          8,
+          "label"
+        ],
+        "key": "docs.d0538"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          9,
+          "label"
+        ],
+        "key": "docs.d0539"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          10,
+          "label"
+        ],
+        "key": "docs.d0692"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          11,
+          "label"
+        ],
+        "key": "docs.d0693"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          12,
+          "label"
+        ],
         "key": "docs.d0017"
+      },
+      {
+        "path": [
+          "content",
+          "response_examples",
+          13,
+          "label"
+        ],
+        "key": "docs.d0694"
       },
       {
         "path": [
@@ -13299,7 +14650,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "title"
         ],
-        "key": "docs.d0550"
+        "key": "docs.d0695"
       },
       {
         "path": [
@@ -13308,13 +14659,31 @@ export const DOC_SOURCES: readonly DocSource[] = [
           5,
           "body"
         ],
-        "key": "docs.d0551"
+        "key": "docs.d0696"
       },
       {
         "path": [
           "content",
           "sections",
           6,
+          "title"
+        ],
+        "key": "docs.d0550"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          6,
+          "body"
+        ],
+        "key": "docs.d0697"
+      },
+      {
+        "path": [
+          "content",
+          "sections",
+          7,
           "title"
         ],
         "key": "docs.d0018"
@@ -13323,16 +14692,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "sections",
-          6,
+          7,
           "body"
         ],
-        "key": "docs.d0552"
+        "key": "docs.d0698"
       },
       {
         "path": [
           "content",
           "sections",
-          7,
+          8,
           "title"
         ],
         "key": "docs.d0260"
@@ -13341,16 +14710,16 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "sections",
-          7,
+          8,
           "body"
         ],
-        "key": "docs.d0261"
+        "key": "docs.d0607"
       },
       {
         "path": [
           "content",
           "sections",
-          8,
+          9,
           "title"
         ],
         "key": "docs.d0020"
@@ -13359,7 +14728,7 @@ export const DOC_SOURCES: readonly DocSource[] = [
         "path": [
           "content",
           "sections",
-          8,
+          9,
           "body"
         ],
         "key": "docs.d0021"

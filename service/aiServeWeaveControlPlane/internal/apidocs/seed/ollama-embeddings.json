@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/api/embeddings",
   "summary": "兼容 Ollama 旧版 /api/embeddings 的单条文本向量接口。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "兼容 Ollama 旧版单条文本的 /api/embeddings 接口",
@@ -15,7 +15,7 @@
       "批量接口 /api/embed 未实现，批量请使用 POST /v1/embeddings",
       "需要 Bearer API Key 鉴权"
     ],
-    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）、余额耗尽（402）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
     "auth": "bearer",
     "headers": [
       {
@@ -99,6 +99,12 @@
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
       },
       {
+        "status": 402,
+        "label": "账户余额耗尽",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
         "status": 404,
         "label": "模型不可用",
         "content_type": "application/json",
@@ -136,11 +142,11 @@
       },
       {
         "title": "错误码一览",
-        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON，或字段类型不符\n400 model and prompt are required：缺少 model 或 prompt\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n401 the node rejected this request's credentials：后端节点拒绝了请求凭证，与你的 API Key 无关\n404 the requested model is not available on any connected node：模型不存在、当前不可用，或你的租户无权使用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试（可能带 Retry-After 头）\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n503 the requested model is temporarily unavailable, retry shortly：模型暂时不可用，响应带 Retry-After: 5\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401，invalid_api_key）、余额耗尽（402）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
       },
       {
         "title": "鉴权与配额",
-        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
       }
     ]
   }

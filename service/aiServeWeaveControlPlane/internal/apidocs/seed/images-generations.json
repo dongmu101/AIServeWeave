@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/images/generations",
   "summary": "OpenAI 兼容的文生图接口，同步返回生成的图像（默认 base64）。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "同步接口：一次请求直接返回图像，没有轮询或流式变体",
@@ -15,7 +15,7 @@
       "两种生成方式：model 指定平台发布的图像模型时由该模型直接出图；否则使用平台预设的图像工作流",
       "默认以 b64_json 返回图像；单张图像上限 32 MiB",
       "生成超时默认 120 秒（以平台配置为准），超时返回 504",
-      "n 目前只支持 1；不支持的参数会按名字报错，不会被静默忽略"
+      "n 目前只支持 1；图像模型方式下不支持的参数会按名字报错，不会被静默忽略"
     ],
     "notice": "图像生成耗时较长，请把客户端读超时设得比平台生成超时更长（建议 ≥ 150 秒）。请求体大小上限 1 MiB。",
     "auth": "bearer",
@@ -71,7 +71,7 @@
         "name": "size",
         "type": "string",
         "required": false,
-        "description": "图像尺寸。预设工作流方式：格式为 `宽x高` 的正整数（如 `1024x1024`），仅当平台工作流支持自定义尺寸时可用，否则返回 400。图像模型方式：只接受 `auto`（等同于不传）。"
+        "description": "图像尺寸。预设工作流方式：格式为 `宽x高` 的正整数（如 `1024x1024`，不接受 `auto`），仅当平台工作流支持自定义尺寸时可用，否则返回 400。图像模型方式：只接受 `auto`（等同于不传）。"
       },
       {
         "name": "quality",
@@ -181,6 +181,12 @@
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
       },
       {
+        "status": 402,
+        "label": "账户余额耗尽",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
         "status": 404,
         "label": "未开通图像生成",
         "content_type": "application/json",
@@ -197,6 +203,12 @@
         "label": "超出租户配额（响应带 Retry-After 头）",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "工作流排队已满或排队超时（响应带 Retry-After 头）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue is full; retry later\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"queue_full\"\n  }\n}"
       },
       {
         "status": 500,
@@ -224,7 +236,7 @@
       },
       {
         "title": "超时与结果查询",
-        "body": "整个生成过程在一次请求内同步完成，平台默认最多等待 120 秒（具体以平台配置为准），超时返回 504 timeout。\n\n预设工作流方式下，超时后生成任务不会被取消，会在后台继续运行；504 响应中不返回任务 ID。图像模型方式下超时即失败。"
+        "body": "整个生成过程在一次请求内同步完成，平台默认最多等待 120 秒（具体以平台配置为准），超时返回 504 timeout。\n\n预设工作流方式下，生成任务已开始运行后超时，任务不会被取消，会在后台继续运行；504 响应中不返回任务 ID。图像模型方式下超时即失败。\n\n平台启用工作流排队时，请求可能先在队列中等待：队列已满返回 429 queue_full，等待期间用尽时限则返回 429 queue_timeout（该任务已被撤回），两者都带 Retry-After 头，稍后重试即可。"
       },
       {
         "title": "使用 url 返回格式",
@@ -234,11 +246,11 @@
       },
       {
         "title": "错误码一览",
-        "body": "400 invalid_json：请求体不是合法 JSON 或超过 1 MiB\n400 invalid_request：prompt 为空；size 格式不是「宽x高」正整数；图像模型方式下 prompt 超过 32 KiB 或不是合法 UTF-8\n400 unsupported_parameter：n 不为 1、response_format 取值不支持，或某参数在当前出图方式下不可用\n400 invalid_input：参数值未通过预设工作流的输入校验\n404 endpoint_not_configured：平台未开通图像生成\n404 workflow_backend_not_found：当前没有可用的出图服务\n404 model_not_found：所选图像模型当前不可用\n500 generation_failed / cancelled / out_of_memory：生成失败、被取消或显存不足\n500 no_image_produced：工作流运行完成但没有产出图像\n502 response_too_large：生成的图像超过 32 MiB（图像模型方式）\n502 upstream_protocol：返回的图像数据不完整或格式异常（图像模型方式）\n413 response_too_large：生成的图像超过 32 MiB（预设工作流方式，b64_json）\n504 timeout：生成超时\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+        "body": "400 invalid_json：请求体不是合法 JSON 或超过 1 MiB\n400 invalid_request：prompt 为空；size 格式不是「宽x高」正整数；图像模型方式下 prompt 超过 32 KiB 或不是合法 UTF-8\n400 unsupported_parameter：n 不为 1、response_format 取值不支持，或某参数在当前出图方式下不可用\n400 invalid_input：参数值未通过预设工作流的输入校验\n402 insufficient_balance：账户余额已耗尽，充值后即可恢复\n402 account_subscription_expired：仅使用包月账号的租户，订阅已过期，续订后即可恢复\n404 endpoint_not_configured：平台未开通图像生成\n404 workflow_backend_not_found：当前没有可用的出图服务\n404 model_not_found：所选图像模型当前不可用\n500 generation_failed / cancelled / out_of_memory：生成失败、被取消或显存不足\n500 no_image_produced：工作流运行完成但没有产出图像\n502 response_too_large：生成的图像超过 32 MiB（图像模型方式）\n502 submit_outcome_unknown：任务可能已到达节点但未能确认，且不会被自动重新提交（平台启用工作流排队时）\n502 upstream_protocol：返回的图像数据不完整或格式异常（图像模型方式）\n413 response_too_large：生成的图像超过 32 MiB（预设工作流方式，b64_json）\n504 timeout：生成超时\n429 queue_full / queue_timeout：工作流排队已满或排队超时，带 Retry-After 头（平台启用工作流排队时）\n503 queue_unavailable：工作流队列暂时无法访问，或无法确认本次提交是否成功（平台启用工作流排队时）\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n401：后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed），或所选图像模型暂时不可用（model_unavailable，带 Retry-After 头）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
       },
       {
         "title": "鉴权与配额",
-        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
       }
     ]
   }

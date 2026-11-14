@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/api/chat",
   "summary": "兼容 Ollama /api/chat 的多轮对话接口，默认以 NDJSON 流式返回。",
-  "revision": 2,
+  "revision": 3,
   "content": {
     "highlights": [
       "兼容 Ollama 原生 /api/chat 的请求与响应格式",
@@ -16,7 +16,7 @@
       "不支持工具调用（tools）、结构化输出（format）与图片输入（messages[].images），传入即返回 400",
       "需要 Bearer API Key 鉴权"
     ],
-    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
+    "notice": "与本地 Ollama 不同，所有请求都必须携带 `Authorization: Bearer {{API_KEY}}`。注意：鉴权失败（401）、余额耗尽（402）与租户配额超限（429）返回 OpenAI 格式的错误体 `{\"error\": {\"message\", \"type\", \"code\"}}`，接口自身的错误返回 Ollama 格式 `{\"error\": \"...\"}`。",
     "auth": "bearer",
     "headers": [
       {
@@ -40,7 +40,7 @@
         "name": "model",
         "type": "string",
         "required": true,
-        "description": "模型 ID，可通过 GET /v1/models 查看。"
+        "description": "模型 ID，可通过 GET /v1/models 查看。模型名后可附思考后缀，如 `模型名(high)`：括号内可为 none、minimal、low、medium、high、xhigh 或数字思考预算，会覆盖 think 字段。"
       },
       {
         "name": "messages",
@@ -61,10 +61,16 @@
             "description": "消息文本。"
           },
           {
+            "name": "thinking",
+            "type": "string",
+            "required": false,
+            "description": "上一轮回复中的思考内容。为兼容 Ollama 客户端而接受，但会被忽略。"
+          },
+          {
             "name": "images",
             "type": "array",
             "required": false,
-            "description": "不支持。任意一条消息带非空 images 时返回 400。"
+            "description": "不支持。任意一条消息带 images 字段（即使值为 null 或空数组）即返回 400。"
           }
         ]
       },
@@ -97,7 +103,7 @@
             "name": "num_predict",
             "type": "integer",
             "required": false,
-            "description": "最多生成的 Token 数。"
+            "description": "最多生成的 Token 数。部分后端（如命令行类 Agent 后端）只接受、不强制该上限，此时响应带有 `X-Gateway-Ignored-Parameters: options.num_predict` 与 `Warning` 头。"
           },
           {
             "name": "seed",
@@ -129,13 +135,13 @@
         "name": "tools",
         "type": "array",
         "required": false,
-        "description": "不支持，传入即返回 400。"
+        "description": "不支持，字段出现即返回 400（即使值为 null 或空数组）。"
       },
       {
         "name": "format",
         "type": "string | object",
         "required": false,
-        "description": "不支持，传入即返回 400。"
+        "description": "不支持，字段出现即返回 400（即使值为 null 或空数组）。"
       }
     ],
     "response_fields": [
@@ -168,6 +174,12 @@
             "type": "string",
             "required": true,
             "description": "回复文本（流式时为本段增量）。"
+          },
+          {
+            "name": "thinking",
+            "type": "string",
+            "required": false,
+            "description": "模型的思考内容，仅在模型产生思考内容时出现；流式时与 content 一样按段增量返回。"
           }
         ]
       },
@@ -251,6 +263,12 @@
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
       },
       {
+        "status": 402,
+        "label": "账户余额耗尽",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
         "status": 404,
         "label": "模型不可用",
         "content_type": "application/json",
@@ -284,7 +302,7 @@
     "sections": [
       {
         "title": "流式响应",
-        "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，message.content 是本段增量文本；最后一行 done 为 true，message.content 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n流式过程中若发生错误，状态码已经是 200，错误会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。客户端应逐行检查是否含 error 字段。"
+        "body": "stream 缺省或为 true 时，响应 Content-Type 为 application/x-ndjson，每行一个 JSON 对象。中间行 done 为 false，message.content 是本段增量文本（模型产生思考内容时，增量思考文本在 message.thinking 中）；最后一行 done 为 true，message.content 为空字符串，并带上 done_reason 以及 prompt_eval_count / eval_count（有用量数据时）。\n\n开始输出之前发生的错误（如模型不可用）仍以相应的 HTTP 状态码返回。流式过程中若发生错误，状态码已经是 200，错误会以额外一行 `{\"error\": \"the stream ended with an error\"}` 给出，之后连接结束。客户端应逐行检查是否含 error 字段。"
       },
       {
         "title": "与原生 Ollama 的差异",
@@ -292,17 +310,17 @@
       },
       {
         "title": "不支持的 Ollama 端点",
-        "body": "平台不管理模型文件，以下模型管理类端点固定返回 501，错误体为 Ollama 格式：\n\nPOST /api/create、POST /api/pull、POST /api/push、DELETE /api/delete、POST /api/copy、POST /api/show、GET /api/tags、GET /api/ps\n\n需要查看可用模型时请改用 GET /v1/models。批量向量接口 /api/embed 及其他未列出的路径未实现（返回 404），向量请使用 POST /api/embeddings 或 POST /v1/embeddings。以上端点同样需要先通过鉴权，未携带有效 Key 时先得到 401。",
+        "body": "平台不管理模型文件，以下模型管理类端点固定返回 501，错误体为 Ollama 格式：\n\nPOST /api/create、POST /api/pull、POST /api/push、DELETE /api/delete、POST /api/copy、POST /api/show、GET /api/tags、GET /api/ps\n\n需要查看可用模型时请改用 GET /v1/models。批量向量接口 /api/embed 及其他未列出的路径未实现（返回 404，响应体为纯文本 `404 page not found`），向量请使用 POST /api/embeddings 或 POST /v1/embeddings。以上端点同样需要先通过鉴权，未携带有效 Key 时先得到 401；其中 POST 端点在账户余额耗尽时先得到 402。",
         "code": "{\n  \"error\": \"this gateway does not manage node-local models; model management endpoints are not supported (each node manages its own models independently)\"\n}",
         "code_lang": "json"
       },
       {
         "title": "错误码一览",
-        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n404 the requested model is not available on any connected node：模型当前不可用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
+        "body": "接口自身的错误体为 Ollama 格式 `{\"error\": \"<信息>\"}`，状态码与信息对应如下：\n\n400 the request body is not valid JSON：请求体不是合法 JSON，或字段类型不符\n400 model and a non-empty messages array are required：缺少 model 或 messages 为空\n400 <字段> is not supported by this Ollama-compatible endpoint：传入了不支持的字段，信息里会指出具体字段\n400 think must be true, false, \"low\", \"medium\" or \"high\"：think 取值不合法\n400 the request could not be processed：请求无法被处理\n400 the selected model does not support this request：所选模型不支持该请求\n401 the node rejected this request's credentials：后端节点拒绝了请求凭证，与你的 API Key 无关\n404 the requested model is not available on any connected node：模型不存在、当前不可用，或你的租户无权使用\n413 the response exceeded the size limit：响应超过大小上限\n429 no node had capacity for this request; retry shortly：暂无可用容量，请稍后重试（可能带 Retry-After 头）\n502 the backend returned an error：后端返回错误\n503 the selected node is unavailable：服务暂时不可用\n503 the requested model is temporarily unavailable, retry shortly：模型暂时不可用，响应带 Retry-After: 5\n504 the request timed out：请求超时\n500 internal error：其他内部错误\n\n鉴权失败（401，invalid_api_key）、余额耗尽（402）与租户配额超限（429，带 Retry-After 头）返回 OpenAI 格式的错误体，见「鉴权与配额」。"
       },
       {
         "title": "鉴权与配额",
-        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
       }
     ]
   }

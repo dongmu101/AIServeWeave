@@ -345,7 +345,7 @@ Job 事件逐条消费，页面离开时取消订阅，断线恢复依赖明确�
 | --- | --- |
 | 契约 | 控制面 `internal/apidocs`（文档结构、校验规则、内置种子）与 `logic.APIDocSummary`/`APIDocDetail`/`OperatorAPIDoc*`；Console `lib/console/api-docs.ts`（解析、分组、占位符替换、写入体积上限） |
 | 控制面 | 新表 `api_docs`（固定版本迁移）、启动时 `SyncAPIDocSeeds` 填充 19 份内置文档；租户 2 个只读端点、平台 6 个管理端点，见 [ControlPlane STATUS「API 参考文档（租户）」](../aiServeWeaveControlPlane/STATUS.md#api-参考文档租户) |
-| Console | 租户 `/console/docs`（快速开始 + 端点索引）与 `/console/docs/[slug]`（左侧分组导航、参数表、多语言请求示例与按状态码的响应示例，`app/console/docs/`）；运维 `/operator/api-docs`（JSON 编辑 + 实时预览、恢复内置版本、删除）；渲染部件 `components/console/api-doc-article.tsx` 两侧共用；`lib/console/upstream-routes.ts` 新增 8 条转发白名单 |
+| Console | 租户 `/console/docs`（快速开始、完整错误码表与通用约定、端点索引）、`/console/docs/clients`（Claude Code、Codex CLI、OpenAI/Anthropic SDK、Ollama 客户端与聊天应用的接入配置，静态页，优先于 `[slug]`）与 `/console/docs/[slug]`（左侧分组导航、页内目录、参数表、多语言请求示例与按状态码的响应示例，`app/console/docs/`）；运维 `/operator/api-docs`（JSON 编辑 + 实时预览、恢复内置版本、删除）；渲染部件 `components/console/api-doc-article.tsx` 两侧共用；`lib/console/upstream-routes.ts` 新增 8 条转发白名单 |
 
 示例中的基地址取 `AISW_CONSOLE_PUBLIC_GATEWAY_URL`（租户可访问的公开 Gateway 地址，可带路径前缀），未设置时退回 `AISW_CONSOLE_GATEWAY_URL`。
 

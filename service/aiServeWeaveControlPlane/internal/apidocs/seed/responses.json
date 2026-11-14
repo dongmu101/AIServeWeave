@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/responses",
   "summary": "兼容 OpenAI Responses API 的对话接口，支持流式事件、工具调用与基于 previous_response_id 的多轮续接。",
-  "revision": 3,
+  "revision": 4,
   "content": {
     "highlights": [
       "兼容 OpenAI Responses API，可直接使用 OpenAI 官方 SDK 的 responses 接口",
@@ -30,6 +30,12 @@
         "type": "string",
         "required": true,
         "description": "固定为 `application/json`。"
+      },
+      {
+        "name": "X-Session-Id",
+        "type": "string",
+        "required": false,
+        "description": "会话标识（可选）。同一段对话带相同的值，会被尽量调度到同一节点以提高缓存命中；未提供时取请求体的 prompt_cache_key。也识别 Session_id、Conversation_id 请求头，超过 512 字节的值被忽略。"
       }
     ],
     "path_params": [],
@@ -52,7 +58,7 @@
             "name": "type",
             "type": "string",
             "required": false,
-            "description": "输入项类型，省略时为 message。reasoning 项会被忽略；其他类型返回 400。",
+            "description": "输入项类型，省略时为 message。reasoning 项会被忽略；其他类型（如 compaction、web_search_call）返回 400。",
             "enum": [
               "message",
               "function_call",
@@ -81,7 +87,7 @@
             "name": "content",
             "type": "string | array",
             "required": false,
-            "description": "message 项的内容：字符串，或内容片段数组。",
+            "description": "message 项的内容：字符串，或内容片段数组。其他片段类型（如 input_audio）返回 400。",
             "children": [
               {
                 "name": "type",
@@ -167,7 +173,7 @@
             "name": "output",
             "type": "string | array",
             "required": false,
-            "description": "*_output 项的工具执行结果。"
+            "description": "*_output 项的工具执行结果：字符串，或内容片段数组（格式同 message 的 content）。"
           },
           {
             "name": "tools",
@@ -187,7 +193,7 @@
         "name": "max_output_tokens",
         "type": "integer",
         "required": false,
-        "description": "最多生成的 token 数。"
+        "description": "最多生成的 token 数。Codex 等部分 CLI 类后端不执行该上限，此时成功响应会带 X-Gateway-Ignored-Parameters 与 Warning 响应头提示。"
       },
       {
         "name": "reasoning",
@@ -260,7 +266,7 @@
             "name": "tools",
             "type": "array",
             "required": false,
-            "description": "namespace 工具下的成员工具，不能再嵌套 namespace。"
+            "description": "namespace 工具下的成员工具（function 或 custom），不能再嵌套 namespace。"
           }
         ]
       },
@@ -286,7 +292,12 @@
                 "name": "type",
                 "type": "string",
                 "required": true,
-                "description": "格式类型，如 json_schema。"
+                "description": "格式类型。",
+                "enum": [
+                  "text",
+                  "json_object",
+                  "json_schema"
+                ]
               },
               {
                 "name": "name",
@@ -320,7 +331,13 @@
         "name": "previous_response_id",
         "type": "string",
         "required": false,
-        "description": "上一轮响应的 id（该轮须以 store=true 发起），服务端会自动拼接此前的对话历史。id 不存在时返回 400。"
+        "description": "上一轮响应的 id（该轮须以 store=true 发起），服务端会自动拼接此前的对话历史。id 不存在时返回 400；续接链最多 50 轮，超出返回 503。"
+      },
+      {
+        "name": "prompt_cache_key",
+        "type": "string",
+        "required": false,
+        "description": "会话标识，作用同 X-Session-Id 请求头：把同一段对话尽量调度到同一节点以提高缓存命中。"
       },
       {
         "name": "background",
@@ -352,7 +369,7 @@
         "name": "status",
         "type": "string",
         "required": true,
-        "description": "响应状态。达到 max_output_tokens 被截断时为 incomplete。",
+        "description": "响应状态。达到 max_output_tokens 被截断时为 incomplete；failed 只出现在流式的 response.failed 事件中。",
         "enum": [
           "completed",
           "incomplete",
@@ -370,7 +387,7 @@
         "name": "output",
         "type": "array",
         "required": true,
-        "description": "输出项列表。",
+        "description": "输出项列表。模型返回思考内容时，会先有一个 reasoning 项。",
         "children": [
           {
             "name": "type",
@@ -379,6 +396,7 @@
             "description": "输出项类型。",
             "enum": [
               "message",
+              "reasoning",
               "function_call",
               "custom_tool_call",
               "local_shell_call"
@@ -406,7 +424,13 @@
             "name": "content",
             "type": "array",
             "required": false,
-            "description": "message 项的内容，元素为 {type: \"output_text\", text, annotations}。"
+            "description": "message 项的内容，元素为 {type: \"output_text\", text, annotations}；reasoning 项的内容，元素为 {type: \"reasoning_text\", text}。"
+          },
+          {
+            "name": "summary",
+            "type": "array",
+            "required": false,
+            "description": "reasoning 项固定为空数组，思考原文在 content 中。"
           },
           {
             "name": "call_id",
@@ -469,6 +493,12 @@
             "type": "integer",
             "required": true,
             "description": "总 token 数。"
+          },
+          {
+            "name": "output_tokens_details",
+            "type": "object",
+            "required": false,
+            "description": "输出 token 明细，仅在模型上报了思考 token 时出现，含 reasoning_tokens。"
           }
         ]
       },
@@ -476,7 +506,7 @@
         "name": "error",
         "type": "object | null",
         "required": true,
-        "description": "失败时的错误信息（code、message），成功为 null。"
+        "description": "成功为 null；仅在流式的 response.failed 事件中为 {code, message}。"
       },
       {
         "name": "incomplete_details",
@@ -570,10 +600,28 @@
         "body": "{\n  \"error\": {\n    \"message\": \"unknown previous_response_id\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
       },
       {
+        "status": 400,
+        "label": "不支持的工具类型",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"tool type \\\"file_search\\\" is not supported by this gateway\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_request\"\n  }\n}"
+      },
+      {
         "status": 401,
         "label": "认证失败",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "余额不足",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "账号包月已过期",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
       },
       {
         "status": 404,
@@ -582,26 +630,50 @@
         "body": "{\n  \"error\": {\n    \"message\": \"the requested model is not available on any connected node\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"model_not_found\"\n  }\n}"
       },
       {
+        "status": 409,
+        "label": "工具续接失效（Claude 系列模型）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"Messages continuation unavailable\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"continuation_unavailable\"\n  }\n}"
+      },
+      {
+        "status": 413,
+        "label": "请求体过大（Claude 系列模型）",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"Claude CLI Responses request size limit exceeded\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"request_too_large\"\n  }\n}"
+      },
+      {
         "status": 429,
         "label": "超出配额",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
       },
       {
+        "status": 429,
+        "label": "服务暂无可用容量",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no node had capacity for this request; retry shortly\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"backpressure\"\n  }\n}"
+      },
+      {
         "status": 503,
         "label": "无法加载历史对话",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"could not load the referenced conversation\",\n    \"type\": \"api_error\",\n    \"code\": \"server_error\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "模型暂时不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"model_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
       {
         "title": "流式事件说明",
-        "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>，JSON 中带 type 与递增的 sequence_number。没有 [DONE] 标记，以终止事件结束。\n\n事件顺序：response.created → response.in_progress → 每个输出项的 response.output_item.added → 文本的 response.content_part.added / response.output_text.delta / response.output_text.done / response.content_part.done，或函数调用的 response.function_call_arguments.delta / response.function_call_arguments.done → response.output_item.done → 终止事件。\n\n终止事件：正常结束为 response.completed；因 max_output_tokens 截断为 response.incomplete；生成中途失败为 response.failed（response.error.code 为 server_error）。"
+        "body": "stream=true 时响应为 text/event-stream，每帧形如 event: <事件名> + data: <JSON>，JSON 中带 type 与递增的 sequence_number。没有 [DONE] 标记，以终止事件结束。\n\n事件顺序：response.created → response.in_progress → 每个输出项的 response.output_item.added → 文本的 response.content_part.added / response.output_text.delta / response.output_text.done / response.content_part.done，或函数调用的 response.function_call_arguments.delta / response.function_call_arguments.done → response.output_item.done → 终止事件。custom 与 local_shell 调用没有 arguments 事件，完整内容在 response.output_item.done 中给出。模型返回思考内容时，会先出现 reasoning 输出项，其文本事件为 response.reasoning_text.delta / response.reasoning_text.done。\n\n终止事件：正常结束为 response.completed；因 max_output_tokens 截断为 response.incomplete；生成中途失败为 response.failed（response.error 带 code 与 message，非 Claude 系列模型的 code 为 server_error）。\n\n响应头发出后 HTTP 状态码已固定为 200，中途失败只能通过 response.failed 判断；尚未开始输出时的错误（如鉴权、配额、参数问题）仍以对应状态码返回。Claude 系列模型的流在空闲时可能穿插以冒号开头的注释行（: keep-alive），按 SSE 规范忽略即可。"
       },
       {
         "title": "使用示例：多轮续接",
-        "body": "第一轮请求带上 store=true，记下返回的 id；下一轮把它作为 previous_response_id，并只在 input 中放本轮的新内容。若希望继续向后续接，本轮同样需要 store=true。",
+        "body": "第一轮请求带上 store=true，记下返回的 id；下一轮把它作为 previous_response_id，并只在 input 中放本轮的新内容。若希望继续向后续接，本轮同样需要 store=true。\n\n对话以异步方式保存，写入繁忙而被丢弃或写入失败的轮次，之后续接时会按 id 不存在返回 400。非 Claude 系列模型的上一轮 instructions 会随历史一并保留；Claude 系列模型不会，每轮需要重新带上。",
         "code": "{\n  \"model\": \"{{MODEL}}\",\n  \"previous_response_id\": \"resp_8f3a2c\",\n  \"store\": true,\n  \"input\": \"再详细一点\"\n}",
         "code_lang": "json"
       },
@@ -613,11 +685,15 @@
       },
       {
         "title": "Claude 系列模型的参数限制",
-        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. store 只能为 false 或省略，不支持 previous_response_id，每轮请求需在 input 中带上完整对话。\n\n2. max_output_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。"
+        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 每轮请求默认需在 input 中带上完整对话；也可以用 store 与 previous_response_id 续接，规则同上，但上一轮的 instructions 不会沿用。\n\n2. max_output_tokens 默认 4096，必须为正整数；temperature 范围 0 ~ 1；不支持 top_p 和 text.format。\n\n3. tool_choice 只支持 \"auto\"；工具的 strict 不能为 true。\n\n4. 只支持纯文本内容，不支持 input_image、input_file；developer / system 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 32 MiB，否则返回 413（request_too_large）。\n\n6. 工具调用的 call_id 以 toolu_aisw_ 开头，历史中的 function_call 的 arguments 必须是 JSON 对象。续接时把 output 中的调用项与对应的 function_call_output 一起放入 input，并在同一 API Key 下尽快发起；续接状态失效时返回 409（continuation_unavailable），需要重新开始本轮任务。\n\n7. reasoning 会换算为思考预算（不带 effort 时按 medium），预算放不下（至少 1024 且小于 max_output_tokens）或同时设置了 temperature 时不开启思考；effort 取值非法返回 400。\n\n8. Claude 后端拒绝请求时，错误的 message 为固定短语，如 capability_rejected: prompt_too_long（输入过长）、capability_rejected: max_tokens_context_overflow（输入加上输出上限超出上下文窗口）。"
+      },
+      {
+        "title": "模型名后缀：指定思考档位",
+        "body": "只能填写模型名的客户端，可以在模型名后加 (档位) 指定思考档位，例如 {{MODEL}}(high) 或 {{MODEL}}(16384)。档位为 none、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭，数字预算对应到不低于它的最近档位）。后缀会覆盖请求体中的 reasoning.effort。\n\n括号里不是上述取值时，整个字符串按模型名处理；模型名末尾的 [1m]、[2m] 上下文窗口标记会被去掉。"
       },
       {
         "title": "错误码说明",
-        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法，包括不支持的工具类型或输入项类型（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n402：账户余额耗尽（insufficient_balance），请充值后重试；或仅使用账号包月的商户在包月过期后（account_subscription_expired），请续费。\n\n404：请求的模型当前不可用，或当前 Key 无权使用该模型（model_not_found）。\n\n409：Claude 系列模型的工具续接状态失效（continuation_unavailable）。\n\n413：请求体超出大小上限（request_too_large，仅 Claude 系列模型），或响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent；或服务暂时没有可用容量（rate_limited / backpressure）。两者都带响应头 Retry-After，给出建议等待秒数。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable）、模型的节点暂时不可用（model_unavailable，带 Retry-After）、无法加载 previous_response_id 对应的历史对话或续接链超过 50 轮（server_error），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
       }
     ]
   }

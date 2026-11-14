@@ -7,16 +7,18 @@
   "method": "GET",
   "path": "/v1/jobs/{job_id}/events",
   "summary": "以 Server-Sent Events 实时推送任务的排队、执行进度与最终结果。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "标准 SSE：每一帧都带 event 名称，可按事件类型分别处理",
       "收到 succeeded / failed / cancelled 终态事件后服务端关闭连接，终态帧带 status 字段",
       "任务已结束时立即返回一帧终态事件，不会让客户端空等",
+      "任务仍在平台共享队列中等待时，名次变化以 queue_changed 帧推送，并每 15 秒发送一行 SSE 注释保活；任务派发后接续执行端自己的事件",
       "订阅失败（如执行端不可用）在开始推流前以普通 JSON 错误和 HTTP 状态码返回",
-      "不支持 Last-Event-ID 续传：断线重连只接收重连之后的事件"
+      "不支持 Last-Event-ID 续传：断线重连只接收重连之后的事件",
+      "账户余额耗尽或账号包月到期后仍可订阅事件流"
     ],
-    "notice": "浏览器原生 EventSource 不能携带 Authorization 头，请用 fetch 读取流或在服务端转发。流上没有心跳帧，生成期间可能长时间没有任何输出，请不要为连接设置较短的读超时。若租户配置了并发上限，连接保持期间会占用一个并发名额。",
+    "notice": "浏览器原生 EventSource 不能携带 Authorization 头，请用 fetch 读取流或在服务端转发。任务执行期间流上没有心跳帧，可能长时间没有任何输出，请不要为连接设置较短的读超时；排队期间每 15 秒会发送一行以冒号开头的 SSE 注释（: keep-alive），客户端应忽略。若租户配置了并发上限，连接保持期间会占用一个并发名额。",
     "auth": "bearer",
     "headers": [
       {
@@ -74,8 +76,9 @@
         "name": "status",
         "type": "string",
         "required": false,
-        "description": "任务最终状态，仅在终态事件（succeeded / failed / cancelled）上返回。",
+        "description": "任务状态：终态事件（succeeded / failed / cancelled）上为最终状态；任务在平台共享队列中排队时的 queue_changed 帧为 queued。",
         "enum": [
+          "queued",
           "succeeded",
           "failed",
           "cancelled"
@@ -85,7 +88,7 @@
         "name": "data",
         "type": "object",
         "required": false,
-        "description": "执行端的原始事件内容，结构随事件类型而异，供展示进度等用途（例如 progress 事件中的当前步数与总步数）。单条超过 64 KiB 时替换为 {\"truncated\": true}。网关对已结束任务直接返回的终态帧和 error 帧不含此字段。"
+        "description": "执行端的原始事件内容，结构随事件类型而异，供展示进度等用途（例如 progress 事件中的当前步数与总步数）；任务在平台共享队列中排队时，queue_changed 帧的 data 为 {\"position\": 名次}。单条超过 64 KiB 时替换为 {\"truncated\": true}。网关对已结束任务直接返回的终态帧和 error 帧不含此字段。"
       },
       {
         "name": "received_at",
@@ -108,7 +111,7 @@
       {
         "lang": "javascript",
         "label": "JavaScript",
-        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\n// 浏览器原生 EventSource 无法携带 Authorization 头，这里用 fetch 读取流\nconst resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}/events`, {\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\n\nconst reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();\nlet buffer = \"\";\nfor (;;) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  buffer += value;\n  let sep;\n  while ((sep = buffer.indexOf(\"\\n\\n\")) !== -1) {\n    const raw = buffer.slice(0, sep);\n    buffer = buffer.slice(sep + 2);\n    const event = raw.match(/^event: (.*)$/m)?.[1];\n    const data = JSON.parse(raw.match(/^data: (.*)$/m)?.[1] ?? \"{}\");\n    console.log(event, data.node, data.status);\n  }\n}"
+        "code": "const BASE_URL = \"{{BASE_URL}}\";\nconst API_KEY = \"{{API_KEY}}\";\nconst jobId = \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\";\n\n// 浏览器原生 EventSource 无法携带 Authorization 头，这里用 fetch 读取流\nconst resp = await fetch(`${BASE_URL}/v1/jobs/${jobId}/events`, {\n  headers: { Authorization: `Bearer ${API_KEY}` },\n});\nif (!resp.ok) throw new Error(JSON.stringify(await resp.json()));\n\nconst reader = resp.body.pipeThrough(new TextDecoderStream()).getReader();\nlet buffer = \"\";\nfor (;;) {\n  const { value, done } = await reader.read();\n  if (done) break;\n  buffer += value;\n  let sep;\n  while ((sep = buffer.indexOf(\"\\n\\n\")) !== -1) {\n    const raw = buffer.slice(0, sep);\n    buffer = buffer.slice(sep + 2);\n    const event = raw.match(/^event: (.*)$/m)?.[1];\n    if (!event) continue; // 忽略 \": keep-alive\" 之类的注释块\n    const data = JSON.parse(raw.match(/^data: (.*)$/m)?.[1] ?? \"{}\");\n    console.log(event, data.node, data.status);\n  }\n}"
       }
     ],
     "response_examples": [
@@ -117,6 +120,12 @@
         "label": "执行中的事件流",
         "content_type": "text/event-stream",
         "body": "event: started\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"started\",\"data\":{\"type\":\"execution_start\",\"data\":{\"timestamp\":1792139407481}},\"received_at\":\"2026-10-16T08:30:01.020311Z\"}\n\nevent: progress\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"progress\",\"node\":\"3\",\"data\":{\"type\":\"progress\",\"data\":{\"value\":12,\"max\":30,\"node\":\"3\"}},\"received_at\":\"2026-10-16T08:30:03.511904Z\"}\n\nevent: succeeded\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"succeeded\",\"status\":\"succeeded\",\"data\":{\"type\":\"execution_success\",\"data\":{\"timestamp\":1792139414802}},\"received_at\":\"2026-10-16T08:30:07.481902Z\"}\n\n"
+      },
+      {
+        "status": 200,
+        "label": "排队中的事件流",
+        "content_type": "text/event-stream",
+        "body": "event: queue_changed\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"queue_changed\",\"status\":\"queued\",\"data\":{\"position\":2},\"received_at\":\"2026-10-16T08:30:00.220311Z\"}\n\n: keep-alive\n\nevent: queue_changed\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"queue_changed\",\"status\":\"queued\",\"data\":{\"position\":1},\"received_at\":\"2026-10-16T08:30:15.402718Z\"}\n\nevent: started\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"started\",\"data\":{\"type\":\"execution_start\",\"data\":{\"timestamp\":1792139431481}},\"received_at\":\"2026-10-16T08:30:31.020311Z\"}\n\n"
       },
       {
         "status": 200,
@@ -147,26 +156,32 @@
         "label": "执行端不可用",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "队列暂不可读",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
       {
         "title": "帧格式",
-        "body": "响应头为 Content-Type: text/event-stream 与 Cache-Control: no-cache。每一帧由 event 行和一行 JSON 的 data 组成，帧之间以空行分隔。服务端不发送 id 字段，也不读取 Last-Event-ID 请求头。",
+        "body": "响应头为 Content-Type: text/event-stream 与 Cache-Control: no-cache。每一帧由 event 行和一行 JSON 的 data 组成，帧之间以空行分隔。服务端不发送 id 字段，也不读取 Last-Event-ID 请求头。任务排队期间流上还会出现以冒号开头的注释行（: keep-alive），它不是事件帧，应忽略。",
         "code": "event: progress\ndata: {\"job_id\":\"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\"type\":\"progress\",\"node\":\"3\",\"data\":{...},\"received_at\":\"2026-10-16T08:30:03.511904Z\"}\n\n",
         "code_lang": "text"
       },
       {
         "title": "事件类型",
-        "body": "queue_changed：执行队列发生变化。\n\nstarted：任务开始执行。\n\ncached：部分步骤命中缓存，将跳过执行。\n\nnode_started：某个步骤开始执行，node 为步骤标识。\n\nprogress：某个步骤的执行进度。\n\nnode_output：某个步骤产出了结果。\n\ncompleted：执行流程结束，最终结果以终态事件为准。\n\nsucceeded / failed / cancelled：终态事件，带 status 字段，发送后连接关闭。\n\nunknown：执行端发出的其他事件，原样透传在 data 中，可忽略。\n\nerror：网关与执行端之间的事件流意外中断，该帧之后连接关闭。此时任务本身可能仍在运行，请调用 GET /v1/jobs/{job_id} 确认状态。"
+        "body": "queue_changed：排队名次或执行队列发生变化。任务仍在平台共享队列中时，data 为 {\"position\": 名次}，status 为 queued。\n\nstarted：任务开始执行。\n\ncached：部分步骤命中缓存，将跳过执行。\n\nnode_started：某个步骤开始执行，node 为步骤标识。\n\nprogress：某个步骤的执行进度。\n\nnode_output：某个步骤产出了结果。\n\ncompleted：执行流程结束，最终结果以终态事件为准。\n\nsucceeded / failed / cancelled：终态事件，带 status 字段，发送后连接关闭。被平台队列判为失败或取消的任务同样以一帧 failed / cancelled 结束，原因见 GET /v1/jobs/{job_id} 返回的 error_code。\n\nunknown：执行端发出的其他事件，原样透传在 data 中，可忽略。\n\nerror：事件流意外中断（例如网关与执行端之间的连接断开，或排队期间读取失败、排队结束后订阅执行端失败），该帧之后连接关闭。此时任务本身可能仍在运行，请调用 GET /v1/jobs/{job_id} 确认状态。"
       },
       {
         "title": "断线与重连",
-        "body": "事件不做缓存回放：重新请求本接口会重新订阅，只能收到重连之后发生的事件，断开期间的进度事件不会补发。\n\n建议重连前先调用 GET /v1/jobs/{job_id}：若任务已进入终态，直接处理结果即可；若仍在进行，再重新订阅事件流。\n\n客户端主动断开连接不会取消任务；取消请调用 POST /v1/jobs/{job_id}/cancel。"
+        "body": "事件不做缓存回放：重新请求本接口会重新订阅，只能收到重连之后发生的事件，断开期间的进度事件不会补发。\n\n建议重连前先调用 GET /v1/jobs/{job_id}：若任务已进入终态，直接处理结果即可；若仍在进行，再重新订阅事件流。\n\n若连接在收到终态事件之前被正常关闭（没有 error 帧），同样请调用 GET /v1/jobs/{job_id} 确认状态。\n\n客户端主动断开连接不会取消任务；取消请调用 POST /v1/jobs/{job_id}/cancel。"
       },
       {
         "title": "错误码",
-        "body": "以下错误在开始推流前返回，响应为普通 JSON：\n\n404 job_not_found：任务不存在，或不属于当前租户。\n\n400 capability_unsupported：执行该任务的执行端不支持事件推送，请改用状态轮询。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。\n\n推流开始后发生的故障以 event: error 帧报告。"
+        "body": "以下错误在开始推流前返回，响应为普通 JSON：\n\n404 job_not_found：任务不存在，或不属于当前租户。\n\n400 capability_unsupported：执行该任务的执行端不支持事件推送，请改用状态轮询。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，无法确定任务是否存在，请稍后重试。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。\n\n推流开始后发生的故障以 event: error 帧报告。"
       },
       {
         "title": "错误格式",

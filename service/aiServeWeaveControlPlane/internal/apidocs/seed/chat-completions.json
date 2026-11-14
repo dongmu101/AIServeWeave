@@ -7,7 +7,7 @@
   "method": "POST",
   "path": "/v1/chat/completions",
   "summary": "兼容 OpenAI Chat Completions 的对话接口，stream=true 时以 SSE 逐段返回生成内容。",
-  "revision": 2,
+  "revision": 3,
   "content": {
     "highlights": [
       "兼容 OpenAI Chat Completions，可直接使用 OpenAI 官方 SDK",
@@ -29,6 +29,12 @@
         "type": "string",
         "required": true,
         "description": "固定为 `application/json`。"
+      },
+      {
+        "name": "X-Session-Id",
+        "type": "string",
+        "required": false,
+        "description": "可选。同一段对话的请求携带相同的值，网关会尽量把它们路由到同一个节点，以复用上游缓存（是否生效取决于部署配置）。"
       }
     ],
     "path_params": [],
@@ -219,13 +225,13 @@
         "name": "max_tokens",
         "type": "integer",
         "required": false,
-        "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，取值范围 1 ~ 64000。"
+        "description": "最多生成的 token 数。省略时由模型决定；Claude 系列模型默认 4096，不得小于 1。 部分后端只接收而不强制执行输出上限，此时响应头 X-Gateway-Ignored-Parameters 会列出被忽略的参数名，并附带 Warning 头。"
       },
       {
         "name": "max_completion_tokens",
         "type": "integer",
         "required": false,
-        "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。"
+        "description": "max_tokens 的别名，未传 max_tokens 时生效。Claude 系列模型同时传两者时必须相等。 部分后端只接收而不强制执行输出上限，此时响应头 X-Gateway-Ignored-Parameters 会列出被忽略的参数名，并附带 Warning 头。"
       },
       {
         "name": "reasoning_effort",
@@ -358,7 +364,7 @@
         "name": "created",
         "type": "integer",
         "required": true,
-        "description": "创建时间（Unix 秒）。"
+        "description": "创建时间（Unix 秒）。非 Claude 系列模型的流式 chunk 中固定为 0。"
       },
       {
         "name": "model",
@@ -395,6 +401,12 @@
                 "type": "string",
                 "required": false,
                 "description": "新增的文本片段。"
+              },
+              {
+                "name": "reasoning_content",
+                "type": "string",
+                "required": false,
+                "description": "新增的思考内容，仅在模型返回思考过程时出现。"
               },
               {
                 "name": "tool_calls",
@@ -461,6 +473,20 @@
             "type": "integer",
             "required": true,
             "description": "总 token 数。"
+          },
+          {
+            "name": "completion_tokens_details",
+            "type": "object",
+            "required": false,
+            "description": "输出 token 的细分，仅在后端上报了思考 token 时出现。",
+            "children": [
+              {
+                "name": "reasoning_tokens",
+                "type": "integer",
+                "required": true,
+                "description": "思考消耗的 token 数。"
+              }
+            ]
           }
         ]
       }
@@ -479,7 +505,7 @@
       {
         "lang": "javascript",
         "label": "JavaScript",
-        "code": "const res = await fetch(\"{{BASE_URL}}/v1/chat/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    stream: true,\n    messages: [{ role: \"user\", content: \"用一句话介绍你自己\" }],\n  }),\n});\n\nconst reader = res.body.getReader();\nconst decoder = new TextDecoder();\nlet buffer = \"\";\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n  buffer += decoder.decode(value, { stream: true });\n  const events = buffer.split(\"\\n\\n\");\n  buffer = events.pop();\n  for (const event of events) {\n    const data = event.replace(/^data: /, \"\");\n    if (data === \"[DONE]\") continue;\n    const chunk = JSON.parse(data);\n    const text = chunk.choices?.[0]?.delta?.content;\n    if (text) console.log(text);\n  }\n}"
+        "code": "const res = await fetch(\"{{BASE_URL}}/v1/chat/completions\", {\n  method: \"POST\",\n  headers: {\n    \"Authorization\": \"Bearer {{API_KEY}}\",\n    \"Content-Type\": \"application/json\",\n  },\n  body: JSON.stringify({\n    model: \"{{MODEL}}\",\n    stream: true,\n    messages: [{ role: \"user\", content: \"用一句话介绍你自己\" }],\n  }),\n});\n\nif (!res.ok) {\n  const err = await res.json();\n  throw new Error(err.error?.message);\n}\n\nconst reader = res.body.getReader();\nconst decoder = new TextDecoder();\nlet buffer = \"\";\nwhile (true) {\n  const { done, value } = await reader.read();\n  if (done) break;\n  buffer += decoder.decode(value, { stream: true });\n  const events = buffer.split(\"\\n\\n\");\n  buffer = events.pop();\n  for (const event of events) {\n    if (!event.startsWith(\"data: \")) continue; // 忽略心跳注释行\n    const data = event.slice(6);\n    if (data === \"[DONE]\") continue;\n    const chunk = JSON.parse(data);\n    if (chunk.error) throw new Error(chunk.error.message);\n    const text = chunk.choices?.[0]?.delta?.content;\n    if (text) console.log(text);\n  }\n}"
       }
     ],
     "response_examples": [
@@ -496,6 +522,12 @@
         "body": "data: {\"id\":\"\",\"object\":\"chat.completion.chunk\",\"created\":0,\"model\":\"\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"error\"}]}\n"
       },
       {
+        "status": 200,
+        "label": "流中途失败（Claude 系列模型）",
+        "content_type": "text/event-stream",
+        "body": "data: {\"error\":{\"message\":\"native Messages stream failed\",\"type\":\"api_error\",\"code\":\"upstream_protocol\"}}\n\n"
+      },
+      {
         "status": 400,
         "label": "参数错误",
         "content_type": "application/json",
@@ -506,6 +538,18 @@
         "label": "认证失败",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "余额耗尽",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "账号包月已过期",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
       },
       {
         "status": 404,
@@ -524,6 +568,12 @@
         "label": "暂时无法校验密钥",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"cannot verify the API key right now\",\n    \"type\": \"api_error\",\n    \"code\": \"verification_unavailable\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "模型暂时不可用",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the requested model is temporarily unavailable, retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"model_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
@@ -544,12 +594,22 @@
         "code_lang": "json"
       },
       {
+        "title": "使用示例：通过模型名设置思考",
+        "body": "只能设置 model 的客户端，可以在模型名后追加括号后缀指定思考强度：none（关闭）、minimal、low、medium、high、xhigh，或以 token 计的思考预算（0 表示关闭；预算会映射到不低于它的最近档位）。后缀等价于设置 reasoning_effort，且优先于请求体中的 reasoning_effort。括号内不是上述取值时，整个字符串按模型名处理。模型名末尾的 [1m] 或 [2m] 标记会被忽略。",
+        "code": "{\n  \"model\": \"{{MODEL}}(high)\",\n  \"messages\": [\n    {\n      \"role\": \"user\",\n      \"content\": \"证明根号 2 是无理数\"\n    }\n  ]\n}",
+        "code_lang": "json"
+      },
+      {
+        "title": "Claude 系列模型的流式输出",
+        "body": "生成间隙可能夹带以 : 开头的 SSE 注释行（: keep-alive）作为心跳，标准 SSE 解析器会忽略它；自行解析时请跳过不以 data: 开头的行。created 为请求开始时间。只有 stream_options.include_usage 为 true 时才会发送 usage chunk。"
+      },
+      {
         "title": "Claude 系列模型的参数限制",
-        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，范围 1 ~ 64000；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 1 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
+        "body": "调用 Claude 系列模型时，本接口对参数校验更严格，不满足时返回 400（code 为 unsupported_parameter）：\n\n1. 只接受上表列出的参数，出现其他字段（如 n、parallel_tool_calls、prompt_cache_key）会被拒绝；store 只能为 false。reasoning_effort 会换算为思考预算，预算放不下（至少 1024 且小于 max_tokens）或同时设置了 temperature 时不开启思考；取值非法返回 400（code 为 invalid_value）。\n\n2. max_tokens 默认 4096，不得小于 1；temperature 范围 0 ~ 1；不支持 top_p、seed、stop、response_format。\n\n3. tool_choice 只支持 \"auto\"；tools 只支持 function 类型，且 function.strict 不能为 true。\n\n4. 只支持纯文本 content，不支持图片、音频片段；system / developer 消息必须位于对话开头，且至少要有一条 user 消息。\n\n5. 请求体不能超过 32 MB，否则返回 413（request_too_large）。\n\n其他模型不会拒绝未列出的字段，但这些字段也不会生效。"
       },
       {
         "title": "错误码说明",
-        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n404：请求的模型当前不可用（model_not_found）。\n\n413：响应超出大小上限（response_too_large）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。\n\n503：暂时无法校验 API Key（verification_unavailable），或服务暂不可用（connection_failed / runtime_closed）。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
+        "body": "错误响应统一为 OpenAI 格式：{\"error\": {\"message\", \"type\", \"code\"}}，可按 HTTP 状态码与 code 字段区分。\n\n400：请求体不是合法 JSON（invalid_json）、缺少必填字段或字段取值不合法（invalid_request）、参数不被支持（unsupported_parameter），或所选模型不支持该请求（capability_unsupported）。\n\n401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n402：账户余额已耗尽（insufficient_balance），请充值后重试；账号包月订阅已过期时 code 为 account_subscription_expired，请续订。\n\n404：请求的模型不存在、当前不可用，或当前 API Key 无权使用（model_not_found）。\n\n409：Claude 系列模型的工具调用结果无法续接（continuation_unavailable），例如同一轮工具结果被重复提交，请重新发起请求。\n\n413：响应超出大小上限（response_too_large）；调用 Claude 系列模型时请求体超过 32 MB 为 request_too_large。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数；或服务暂时没有可用容量（rate_limited / backpressure），响应可能带有 Retry-After，稍后重试即可。\n\n500 / 502：服务内部错误（internal_error）或上游模型返回错误（upstream_error）。调用 Claude 系列模型时，上游返回的错误可能连同其原状态码返回（type 与 code 取自上游错误），上游返回内容异常时为 502（upstream_protocol）。\n\n503：暂时无法校验 API Key（verification_unavailable）；模型所在节点暂时不可用（model_unavailable，带 Retry-After，稍后重试即可）；或服务暂不可用（connection_failed / runtime_closed）。Claude 系列模型另有 node_unavailable、session_unavailable。\n\n504：请求超时（timeout）。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
       }
     ]
   }

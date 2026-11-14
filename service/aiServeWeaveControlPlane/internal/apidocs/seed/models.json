@@ -7,12 +7,13 @@
   "method": "GET",
   "path": "/v1/models",
   "summary": "列出当前可调用的模型，兼容 OpenAI 与 Anthropic 客户端的模型列表请求。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "兼容 OpenAI Models 接口，可直接使用 OpenAI 官方 SDK",
       "认证支持 Authorization: Bearer，也支持 Anthropic 风格的 x-api-key",
-      "返回的 id 即为其他接口 model 参数应填的值"
+      "返回的 id 即为其他接口 model 参数应填的值",
+      "列表只包含当前 API Key 有权使用的模型"
     ],
     "notice": "列表只包含当前可用于对话（Chat Completions / Responses / Messages）与图像生成的模型，且只反映当前在线可用的情况；仅支持向量或重排的模型不会出现在列表中。",
     "auth": "bearer",
@@ -132,7 +133,7 @@
     "sections": [
       {
         "title": "错误码说明",
-        "body": "401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n429：租户超出配额（requests_per_minute / max_concurrent 等），响应头 Retry-After 给出建议等待秒数。\n\n503：暂时无法校验 API Key（verification_unavailable），请稍后重试。"
+        "body": "401：缺少 API Key 或 Key 无效（invalid_api_key）。\n\n429：租户超出配额，code 为 requests_per_minute / tokens_per_minute / max_concurrent，响应头 Retry-After 给出建议等待秒数。\n\n503：暂时无法校验 API Key（verification_unavailable），请稍后重试。\n\n每个响应都带有 X-Request-Id 响应头，反馈问题时请附上该值。"
       }
     ]
   }

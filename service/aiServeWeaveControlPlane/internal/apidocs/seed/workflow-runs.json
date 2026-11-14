@@ -7,15 +7,17 @@
   "method": "POST",
   "path": "/v1/workflows/{workflow_id}/runs",
   "summary": "按已发布的工作流模板绑定输入并异步提交执行，受理后立即返回 202 与任务对象。",
-  "revision": 3,
+  "revision": 4,
   "content": {
     "highlights": [
       "工作流由平台运维在 ComfyUI 编辑器中搭建、发布为模板；调用方只传模板声明的输入，不需要、也无法提交 ComfyUI 工作流 JSON",
       "异步执行：受理即返回 202 和 job_id，初始状态为 queued，之后通过状态查询或 SSE 事件流跟踪进度",
+      "启用排队的部署会让 JSON 提交直接入队：同样返回 202，durability 为 shared_queue 并带 queue_position；队列已满返回 429 queue_full。带文件输入的提交不入队",
       "只需提供模板声明的输入，按名称绑定；未声明的输入名会被拒绝，而不是被静默忽略",
       "string / integer / number / boolean 输入按模板声明的类型与上下限严格校验；未提供时依次使用模板默认值、模板中保存的原值",
       "支持 multipart/form-data 在同一次请求里上传图片、视频、音频等文件输入",
-      "对本租户不可见的工作流与不存在的工作流一样返回 404"
+      "对本租户不可见的工作流与不存在的工作流一样返回 404",
+      "账户余额耗尽或账号包月到期时，提交会被拒绝并返回 402；已提交的任务仍可查询、取消与下载产物"
     ],
     "notice": "JSON 请求体上限 1 MiB；multipart 请求整体（含全部文件）上限 200 MiB。带文件输入的请求在一次调用内完成上传与提交，失败时请整体重新提交。",
     "auth": "bearer",
@@ -112,14 +114,15 @@
         "name": "queue_position",
         "type": "integer",
         "required": false,
-        "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+        "description": "排队位置，仅在任务排队中且已知位置时返回。"
       },
       {
         "name": "durability",
         "type": "string",
         "required": true,
-        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "description": "任务记录的持久化状态：shared_queue 表示任务只存在于平台的共享工作流队列中（仍在排队，或未交给执行端就被队列判为失败或取消），仅启用排队的部署会出现；memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
         "enum": [
+          "shared_queue",
           "memory_only",
           "persisted"
         ]
@@ -128,7 +131,20 @@
         "name": "error",
         "type": "string",
         "required": false,
-        "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+        "description": "失败摘要，仅在任务失败且有原因可报告时返回：来自执行端，或在排队阶段失败时由平台给出说明。"
+      },
+      {
+        "name": "error_code",
+        "type": "string",
+        "required": false,
+        "description": "仅在平台于排队阶段（任务尚未交给执行端）就把任务判为失败或取消时返回：queue_timeout 表示排队超时仍无空闲执行端，submit_outcome_unknown 表示提交结果无法确认（为避免重复生成不会自动重新提交），node_not_allowed 表示没有对本租户开放的可用执行端，cancelled 表示排队期间被取消，internal_error 表示平台内部错误。",
+        "enum": [
+          "queue_timeout",
+          "submit_outcome_unknown",
+          "node_not_allowed",
+          "cancelled",
+          "internal_error"
+        ]
       }
     ],
     "request_examples": [
@@ -161,6 +177,12 @@
         "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"durability\": \"memory_only\"\n}"
       },
       {
+        "status": 202,
+        "label": "已受理（进入共享队列）",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_8a41c0de2f6b4d3e9172a5b6c8d0e3f4\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"queue_position\": 3,\n  \"durability\": \"shared_queue\"\n}"
+      },
+      {
         "status": 400,
         "label": "输入校验失败",
         "content_type": "application/json",
@@ -177,6 +199,18 @@
         "label": "API Key 无效",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "余额耗尽",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
+        "status": 402,
+        "label": "账号包月已到期",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"renew an account subscription to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"account_subscription_expired\"\n  }\n}"
       },
       {
         "status": 404,
@@ -197,10 +231,28 @@
         "body": "{\n  \"error\": {\n    \"message\": \"this tenant is over its requests_per_minute limit; retry after 12s\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"requests_per_minute\"\n  }\n}"
       },
       {
+        "status": 429,
+        "label": "执行端全部繁忙",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"no node had capacity for this request; retry shortly\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"backpressure\"\n  }\n}"
+      },
+      {
+        "status": 429,
+        "label": "共享队列已满",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue is full; retry later\",\n    \"type\": \"rate_limit_error\",\n    \"code\": \"queue_full\"\n  }\n}"
+      },
+      {
         "status": 503,
         "label": "执行端不可用",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "队列无法确认提交",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue could not confirm this submission; check the job before resubmitting\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
@@ -227,18 +279,22 @@
         "code_lang": "bash"
       },
       {
+        "title": "排队（启用共享队列的部署）",
+        "body": "部署启用了共享工作流队列时，不带文件输入的 JSON 提交不会先尝试派发，而是直接入队，立即返回 202：status 为 queued，durability 为 shared_queue，并带 queue_position。平台在执行端有空闲容量时派发，任何网关实例都能查询到这个任务。\n\n带文件输入的 multipart 提交不入队，仍在本次请求内同步派发；执行端都繁忙时立即返回 429。\n\n排队有最长等待时间（由部署配置）：超时仍无空闲执行端时任务变为 failed，error_code 为 queue_timeout。排队期间调用取消接口通常会立即得到 cancelled。共享队列已满时返回 429 queue_full，响应带 Retry-After: 5。\n\n排队阶段的名次变化可通过 GET /v1/jobs/{job_id}/events 的 queue_changed 事件接收，也可轮询 GET /v1/jobs/{job_id} 读取 queue_position。"
+      },
+      {
         "title": "获取结果的完整流程",
-        "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id；type 为 output 的是最终结果。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时，提交请求可能会短暂等待后才返回；若仍无空闲容量则返回 429，稍后重试即可。下面是完整的 Python 示例。",
+        "body": "1. 调用本接口提交，保存返回的 job_id。\n\n2. 订阅 GET /v1/jobs/{job_id}/events 接收实时进度，或轮询 GET /v1/jobs/{job_id} 直到状态进入终态。\n\n3. 任务 succeeded 后调用 GET /v1/jobs/{job_id}/artifacts 列出产物，得到 artifact_id；type 为 output 的是最终结果。\n\n4. 调用 GET /v1/artifacts/{artifact_id} 下载文件。\n\n所有执行端都繁忙时：未启用排队的部署立即返回 429，稍后重试即可；启用排队的部署会让 JSON 提交先入队（见「排队」）。下面是完整的 Python 示例。",
         "code": "import os\nimport time\n\nimport requests\n\nBASE_URL = \"{{BASE_URL}}\"\nAPI_KEY = \"{{API_KEY}}\"\nHEADERS = {\"Authorization\": f\"Bearer {API_KEY}\"}\n\n# 1. 提交：workflow_id 是模板 ID，inputs 只放模板声明过的输入\nresp = requests.post(\n    f\"{BASE_URL}/v1/workflows/txt2img-basic/runs\",\n    headers=HEADERS,\n    json={\"inputs\": {\"prompt\": \"a lighthouse on a cliff at sunset\", \"seed\": 42}},\n    timeout=60,\n)\nresp.raise_for_status()  # 成功为 202\njob_id = resp.json()[\"job_id\"]\n\n# 2. 等待终态（也可以订阅 GET /v1/jobs/{job_id}/events 的 SSE 事件流）\nwhile True:\n    job = requests.get(f\"{BASE_URL}/v1/jobs/{job_id}\", headers=HEADERS, timeout=30).json()\n    if job[\"status\"] in (\"succeeded\", \"failed\", \"cancelled\"):\n        break\n    time.sleep(2)\nif job[\"status\"] != \"succeeded\":\n    raise RuntimeError(f\"{job_id} {job['status']}: {job.get('error', '')}\")\n\n# 3. 列出产物，跳过临时预览与输入文件，下载最终结果\nartifacts = requests.get(f\"{BASE_URL}/v1/jobs/{job_id}/artifacts\", headers=HEADERS, timeout=30).json()[\"data\"]\nfor art in artifacts:\n    if art.get(\"type\") in (\"temp\", \"input\"):\n        continue\n    name = os.path.basename(art[\"filename\"])\n    with requests.get(f\"{BASE_URL}/v1/artifacts/{art['artifact_id']}\", headers=HEADERS, stream=True, timeout=300) as r:\n        r.raise_for_status()\n        with open(name, \"wb\") as f:\n            for chunk in r.iter_content(chunk_size=1 << 16):\n                f.write(chunk)\n    print(\"saved\", name)",
         "code_lang": "python"
       },
       {
         "title": "错误码",
-        "body": "400 invalid_request：请求体不是合法 JSON、超出大小限制、multipart 格式错误、inputs 表单字段不是合法 JSON，或文件扩展名不在允许列表内。\n\n400 invalid_input：输入未声明、类型不符、超出长度或数值范围、必填输入缺失，或文件内容与扩展名不符。message 形如 \"input <名称> <原因>\"。\n\n404 workflow_not_found：工作流不存在或对本租户不可见。\n\n404 workflow_backend_not_found：当前没有可运行工作流的执行端在线。\n\n429 rate_limited / backpressure：执行端容量已满，请稍后重试。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+        "body": "400 invalid_request：请求体不是合法 JSON、超出大小限制、multipart 格式错误、inputs 表单字段不是合法 JSON，或文件扩展名不在允许列表内。\n\n400 invalid_input：输入未声明、类型不符、超出长度或数值范围、必填输入缺失，或文件内容与扩展名不符。message 形如 \"input <名称> <原因>\"。\n\n400 protocol_error / invalid_config / capability_unsupported：执行端拒绝或无法处理该请求。\n\n404 workflow_not_found：工作流不存在或对本租户不可见。\n\n404 workflow_backend_not_found：当前没有可运行工作流的执行端在线，或没有对本租户开放的执行端。\n\n429 rate_limited / backpressure（type 为 rate_limit_error）：执行端容量已满，请稍后重试。\n\n429 queue_full（type 为 rate_limit_error）：启用排队的部署中共享队列已满，响应带 Retry-After: 5。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n402 insufficient_balance（type 为 insufficient_quota）：账户余额已耗尽，请充值后再提交。已提交的任务仍可查询、取消与下载产物。\n\n402 account_subscription_expired（type 为 insufficient_quota）：账号包月的账户订阅已到期，请续费后再提交。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务未能确认本次提交是否已被受理，请先核实再决定是否重新提交。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。\n\n500 internal_error：平台内部错误。"
       },
       {
         "title": "任务状态",
-        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled，此时 error_code 给出原因。"
       },
       {
         "title": "错误格式",

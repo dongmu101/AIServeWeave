@@ -7,16 +7,19 @@
   "method": "GET",
   "path": "/v1/jobs/{job_id}/artifacts",
   "summary": "列出一次工作流运行生成的文件，并为每个文件分配用于下载的 artifact_id。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "artifact_id 由本接口生成，下载产物前必须先调用本接口",
       "同一产物在多次列举之间 artifact_id 保持不变，可放心重复调用",
       "任务尚未结束时通常返回空列表，请在任务 succeeded 后再列举",
+      "任务仍在排队，或未交给执行端就被队列判为失败或取消时，返回空列表",
       "type 区分最终产物（output）、临时预览（temp）与输入文件（input）",
-      "只能列举本租户任务的产物"
+      "只能列举本租户任务的产物",
+      "列表顺序在多次调用间保持一致，但不代表执行先后",
+      "账户余额耗尽或账号包月到期后仍可列举产物"
     ],
-    "notice": "产物 ID 只在列举时生成：从未被列举过的产物没有 artifact_id，也就无法下载。任务成功后请及时调用本接口。",
+    "notice": "产物 ID 只在列举时生成：从未被列举过的产物没有 artifact_id，也就无法下载。若处理该任务的网关实例已重启，或请求落在其他实例上，只会返回此前已列举过并由平台确认保存的产物，因此请在任务成功后尽快列举一次并保存 artifact_id。",
     "auth": "bearer",
     "headers": [
       {
@@ -123,6 +126,12 @@
         "label": "执行端不可用",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "队列暂不可读",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
@@ -132,7 +141,7 @@
       },
       {
         "title": "错误码",
-        "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+        "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，无法确定任务是否存在，请稍后重试。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
       },
       {
         "title": "错误格式",

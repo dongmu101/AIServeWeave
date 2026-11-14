@@ -89,6 +89,15 @@ function DocsNav({ list }: { list: Resource<ApiDocSummary[]> }) {
         )}
       >
         <Message id="tenant.quickStart" /></Link>
+      <Link
+        href="/console/docs/clients"
+        aria-current={pathname === "/console/docs/clients" ? "page" : undefined}
+        className={cn(
+          "-mt-3 rounded-md px-2 py-1.5 text-sm",
+          pathname === "/console/docs/clients" ? "bg-muted font-medium" : "text-muted-foreground hover:text-foreground"
+        )}
+      >
+        <Message id="tenant.docsClientsTitle" /></Link>
       {groups.map((group) => (
         <div key={group.category} className="flex flex-col gap-0.5">
           <p className="px-2 pb-1 text-xs font-semibold text-foreground">{group.category}</p>

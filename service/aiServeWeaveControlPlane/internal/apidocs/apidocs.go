@@ -101,12 +101,14 @@ type Meta struct {
 	Summary string `json:"summary"`
 }
 
-// Content is one documented endpoint's page body. Code and example bodies may
-// carry the placeholders {{BASE_URL}}, {{API_KEY}} and {{MODEL}}, which the
-// Console substitutes at render time.
+// Content is one documented endpoint's page body. Code, example bodies,
+// highlights, the notice, section bodies and parameter descriptions may carry
+// the placeholders {{BASE_URL}}, {{API_KEY}} and {{MODEL}}, which the Console
+// substitutes at render time.
 //
-// Content 是一个被文档化端点的页面正文。代码与示例正文中可以带有占位符
-// {{BASE_URL}}、{{API_KEY}} 与 {{MODEL}}，由 Console 在渲染时替换。
+// Content 是一个被文档化端点的页面正文。代码、示例正文、要点、提示框、段落正文
+// 与参数说明中可以带有占位符 {{BASE_URL}}、{{API_KEY}} 与 {{MODEL}}，由 Console
+// 在渲染时替换。
 type Content struct {
 	// Highlights are the bullet points under the title. / Highlights 是标题下方的要点列表。
 	Highlights []string `json:"highlights"`

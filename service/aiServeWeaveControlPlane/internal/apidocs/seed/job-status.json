@@ -7,13 +7,15 @@
   "method": "GET",
   "path": "/v1/jobs/{job_id}",
   "summary": "查询一次工作流运行的当前状态、排队位置与失败原因。",
-  "revision": 2,
+  "revision": 3,
   "content": {
     "highlights": [
       "返回与提交接口相同结构的任务对象",
       "未结束的任务每次查询都会向执行端获取最新状态与排队位置；已结束的任务直接返回最终结果",
+      "仍在平台共享队列中等待的任务由平台直接返回名次（durability 为 shared_queue）；被队列判为失败或取消的任务带 error_code",
       "只能查询本租户提交的任务，其他租户的任务与不存在的任务一样返回 404",
-      "失败任务通过 error 字段给出失败摘要"
+      "失败任务通过 error 字段给出失败摘要",
+      "账户余额耗尽或账号包月到期后仍可查询任务状态"
     ],
     "notice": "需要实时进度时优先使用 SSE 事件流（GET /v1/jobs/{job_id}/events），本接口适合轮询兜底或事件流断开后确认最终状态。",
     "auth": "bearer",
@@ -78,14 +80,15 @@
         "name": "queue_position",
         "type": "integer",
         "required": false,
-        "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+        "description": "排队位置，仅在任务排队中且已知位置时返回。"
       },
       {
         "name": "durability",
         "type": "string",
         "required": true,
-        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "description": "任务记录的持久化状态：shared_queue 表示任务只存在于平台的共享工作流队列中（仍在排队，或未交给执行端就被队列判为失败或取消），仅启用排队的部署会出现；memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
         "enum": [
+          "shared_queue",
           "memory_only",
           "persisted"
         ]
@@ -94,7 +97,20 @@
         "name": "error",
         "type": "string",
         "required": false,
-        "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+        "description": "失败摘要，仅在任务失败且有原因可报告时返回：来自执行端，或在排队阶段失败时由平台给出说明。"
+      },
+      {
+        "name": "error_code",
+        "type": "string",
+        "required": false,
+        "description": "仅在平台于排队阶段（任务尚未交给执行端）就把任务判为失败或取消时返回：queue_timeout 表示排队超时仍无空闲执行端，submit_outcome_unknown 表示提交结果无法确认（为避免重复生成不会自动重新提交），node_not_allowed 表示没有对本租户开放的可用执行端，cancelled 表示排队期间被取消，internal_error 表示平台内部错误。",
+        "enum": [
+          "queue_timeout",
+          "submit_outcome_unknown",
+          "node_not_allowed",
+          "cancelled",
+          "internal_error"
+        ]
       }
     ],
     "request_examples": [
@@ -123,6 +139,12 @@
       },
       {
         "status": 200,
+        "label": "排队等待（共享队列）",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"queued\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"queue_position\": 3,\n  \"durability\": \"shared_queue\"\n}"
+      },
+      {
+        "status": 200,
         "label": "执行成功",
         "content_type": "application/json",
         "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"succeeded\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
@@ -132,6 +154,12 @@
         "label": "执行失败",
         "content_type": "application/json",
         "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\",\n  \"error\": \"the run is in neither the queue nor the history; the server may have been restarted\"\n}"
+      },
+      {
+        "status": 200,
+        "label": "排队超时失败",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"failed\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:35:00.123456Z\",\n  \"durability\": \"shared_queue\",\n  \"error_code\": \"queue_timeout\",\n  \"error\": \"no workflow node had capacity before the queue wait ran out\"\n}"
       },
       {
         "status": 401,
@@ -150,16 +178,22 @@
         "label": "执行端不可用",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "队列暂不可读",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
       {
         "title": "任务状态",
-        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled，此时 error_code 给出原因。"
       },
       {
         "title": "错误码",
-        "body": "404 job_not_found：任务不存在，或不属于当前 API Key 所在租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+        "body": "404 job_not_found：任务不存在，或不属于当前 API Key 所在租户。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，无法确定任务是否存在，请稍后重试而不是重新提交。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
       },
       {
         "title": "错误格式",

@@ -7,13 +7,15 @@
   "method": "GET",
   "path": "/v1/artifacts/{artifact_id}",
   "summary": "按 artifact_id 下载工作流生成的文件，响应体为文件原始字节。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "响应体是文件原始字节，不是 JSON",
       "边读边传，大文件不会在网关整体缓存，适合流式写盘",
       "Content-Disposition 以附件形式给出文件名，Content-Type 与 Content-Length 在已知时返回",
-      "只能下载本租户任务的产物，其他 artifact_id 一律返回 404"
+      "只能下载本租户任务的产物，其他 artifact_id 一律返回 404",
+      "若部署启用了产物存储，已转存的产物在执行端离线后仍可下载；未转存的产物须从产出它的执行端实时拉取",
+      "账户余额耗尽或账号包月到期后仍可下载已生成的产物"
     ],
     "notice": "artifact_id 来自「获取任务产物列表」接口。传输中途出错时连接会提前结束（收到的字节少于 Content-Length），请校验长度并重新下载；本接口不支持 Range 分段续传。",
     "auth": "bearer",
@@ -108,7 +110,7 @@
     "sections": [
       {
         "title": "错误码",
-        "body": "404 artifact_not_found：artifact_id 不存在、不属于当前租户，或对应产物已不再可用。\n\n413 response_too_large：文件超出传输大小上限。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+        "body": "404 artifact_not_found：artifact_id 不存在、不属于当前租户，或对应产物已不再可用。\n\n413 response_too_large：文件超出传输大小上限（从执行端实时拉取时生效，默认 512 MiB，以部署配置为准）。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
       },
       {
         "title": "错误格式",

@@ -7,16 +7,16 @@
   "method": "POST",
   "path": "/v1/audio/transcriptions",
   "summary": "把音频转写为文本，兼容 OpenAI /v1/audio/transcriptions。",
-  "revision": 1,
+  "revision": 2,
   "content": {
     "highlights": [
       "兼容 OpenAI Audio API，可直接使用 OpenAI SDK",
       "将音频转写为原语言文本，可用 language 指定音频语言",
       "请求为 multipart/form-data，整个请求不超过 25 MiB",
-      "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频",
+      "支持 .mp3 / .wav / .ogg / .flac 扩展名，并校验文件内容确为音频；目前只有 WAV 与带 ID3 标签的 MP3 能通过内容校验",
       "response_format 支持 json（默认）与 text"
     ],
-    "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前可被稳定识别为音频的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；文件头无法识别为音频时返回 400。",
+    "notice": "请求必须是 multipart/form-data，音频放在名为 file 的字段中。目前能通过内容校验的是 WAV（RIFF/WAVE）文件和带 ID3 标签的 MP3 文件；.ogg 与 .flac 虽在扩展名允许列表内，但文件头无法被识别为音频，同样会返回 400。",
     "auth": "bearer",
     "headers": [
       {
@@ -40,7 +40,7 @@
         "name": "file",
         "type": "file",
         "required": true,
-        "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容。整个请求（含音频）不超过 25 MiB。"
+        "description": "音频文件，表单字段名必须为 file（只取第一个）。扩展名须为 .mp3、.wav、.ogg 或 .flac（不区分大小写），且文件头需能被识别为音频内容（目前为 WAV 或带 ID3 标签的 MP3）。整个请求（含音频）不超过 25 MiB。"
       },
       {
         "name": "model",
@@ -147,6 +147,12 @@
         "body": "{\n  \"error\": {\n    \"message\": \"missing or invalid API key\",\n    \"type\": \"invalid_request_error\",\n    \"code\": \"invalid_api_key\"\n  }\n}"
       },
       {
+        "status": 402,
+        "label": "账户余额耗尽",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the account balance is exhausted; top up credits to continue\",\n    \"type\": \"insufficient_quota\",\n    \"code\": \"insufficient_balance\"\n  }\n}"
+      },
+      {
         "status": 404,
         "label": "模型不可用",
         "content_type": "application/json",
@@ -174,7 +180,7 @@
     "sections": [
       {
         "title": "文件要求",
-        "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400，错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
+        "body": "1. 表单中必须有名为 file 的文件字段；有多个时只使用第一个。\n2. 文件扩展名必须是 .mp3、.wav、.ogg、.flac 之一（不区分大小写），否则返回 400，错误信息会给出收到的扩展名。\n3. 平台会读取文件开头的字节判断内容是否为音频，扩展名与实际内容不符时返回 400（目前只有 WAV 与带 ID3 标签的 MP3 能通过，.ogg、.flac 与不带 ID3 标签的 MP3 会被拒绝），错误信息形如 `unsupported upload format: file \"a.mp3\" does not look like audio content (detected ...)`。\n4. 整个请求（含音频和其他表单字段）不超过 25 MiB，超出或表单格式损坏时返回 400：`the request body is not a valid multipart upload, or is over the size limit`。"
       },
       {
         "title": "参数校验",
@@ -182,11 +188,11 @@
       },
       {
         "title": "错误码一览",
-        "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
+        "body": "400 invalid_request：请求格式或参数不合法（见上文各项）\n402 insufficient_balance：账户余额已耗尽，充值后即可恢复\n402 account_subscription_expired：仅使用包月账号的租户，订阅已过期，续订后即可恢复\n404 model_not_found：所请求的模型当前不可用\n\n上游处理失败时按以下规则返回（OpenAI 错误格式中的 error.code 括号内给出）：\n\n400：请求无法被处理（invalid_config / protocol_error），或所选模型不支持该请求（capability_unsupported）\n401：后端节点拒绝了请求凭证（unauthorized），与你的 API Key 无关\n429：暂时没有可用容量，请稍后重试（rate_limited / backpressure）\n502：后端返回错误（upstream_error）\n503：服务暂时不可用（connection_failed / runtime_closed）\n504：请求超时（timeout）\n413：响应超过大小上限（response_too_large）\n500：其他内部错误（internal_error）"
       },
       {
         "title": "鉴权与配额",
-        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
+        "body": "所有请求都需要在 Authorization 头里携带 `Bearer {{API_KEY}}`。Key 缺失、格式不对、已吊销或已过期统一返回 401 invalid_api_key；平台暂时无法校验 Key 时返回 503 verification_unavailable，这种情况下 Key 本身可能完全有效，稍后重试即可。\n\n租户配额按 Key 所属租户执行，超限返回 429，error.code 为超出的那一项：requests_per_minute（每分钟请求数）、tokens_per_minute（每分钟 Token 数）或 max_concurrent（并发数），并通过 Retry-After 响应头给出建议等待秒数（至少 1 秒）。\n\n账户余额耗尽时发起新请求返回 402，error.type 为 insufficient_quota，error.code 为 insufficient_balance，充值后即可恢复，无需更换 API Key；仅使用包月账号的租户在订阅过期后发起新请求，同样返回 402，error.code 为 account_subscription_expired，续订后恢复。\n\n每个响应都带有 X-Request-Id 头，排查问题时请提供该值。"
       }
     ]
   }

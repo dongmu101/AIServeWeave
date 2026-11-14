@@ -7,14 +7,16 @@
   "method": "POST",
   "path": "/v1/jobs/{job_id}/cancel",
   "summary": "请求中断一个尚未结束的任务，返回 202 与最后已知的任务对象。",
-  "revision": 2,
+  "revision": 3,
   "content": {
     "highlights": [
       "取消是异步请求：返回 202 只表示中断请求已送达执行端，不代表任务已经取消",
       "响应体是最后已知的任务对象，status 可能仍为 queued 或 running",
       "最终结果请通过状态查询或事件流确认，成功取消后状态变为 cancelled",
       "排队中的任务会从队列移除；正在执行的任务在执行端支持中断时被停止",
-      "已经结束的任务返回 409；执行端无法中断该任务时返回 501"
+      "任务仍在平台共享队列中时会立即变为 cancelled（响应的 status 与 error_code 均为 cancelled）；若恰好正在提交，则返回 queued，运行在执行端接单后立即被中断",
+      "已经结束的任务返回 409；执行端无法中断该任务时返回 501",
+      "账户余额耗尽或账号包月到期后仍可取消任务"
     ],
     "notice": "任务在取消请求送达前恰好完成时，最终状态可能是 succeeded 或 failed 而不是 cancelled，请以状态接口为准。",
     "auth": "bearer",
@@ -79,14 +81,15 @@
         "name": "queue_position",
         "type": "integer",
         "required": false,
-        "description": "排队位置，仅在任务排队中且执行端报告了位置时返回。"
+        "description": "排队位置，仅在任务排队中且已知位置时返回。"
       },
       {
         "name": "durability",
         "type": "string",
         "required": true,
-        "description": "任务记录的持久化状态：memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
+        "description": "任务记录的持久化状态：shared_queue 表示任务只存在于平台的共享工作流队列中（仍在排队，或未交给执行端就被队列判为失败或取消），仅启用排队的部署会出现；memory_only 表示目前只保存在受理请求的网关实例内存中，persisted 表示平台已确认保存。只会从 memory_only 变为 persisted，不会退回。",
         "enum": [
+          "shared_queue",
           "memory_only",
           "persisted"
         ]
@@ -95,7 +98,20 @@
         "name": "error",
         "type": "string",
         "required": false,
-        "description": "失败摘要，仅在任务失败且执行端给出原因时返回。"
+        "description": "失败摘要，仅在任务失败且有原因可报告时返回：来自执行端，或在排队阶段失败时由平台给出说明。"
+      },
+      {
+        "name": "error_code",
+        "type": "string",
+        "required": false,
+        "description": "仅在平台于排队阶段（任务尚未交给执行端）就把任务判为失败或取消时返回：queue_timeout 表示排队超时仍无空闲执行端，submit_outcome_unknown 表示提交结果无法确认（为避免重复生成不会自动重新提交），node_not_allowed 表示没有对本租户开放的可用执行端，cancelled 表示排队期间被取消，internal_error 表示平台内部错误。",
+        "enum": [
+          "queue_timeout",
+          "submit_outcome_unknown",
+          "node_not_allowed",
+          "cancelled",
+          "internal_error"
+        ]
       }
     ],
     "request_examples": [
@@ -121,6 +137,12 @@
         "label": "取消请求已送达",
         "content_type": "application/json",
         "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"running\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"persisted\"\n}"
+      },
+      {
+        "status": 202,
+        "label": "排队中的任务已取消",
+        "content_type": "application/json",
+        "body": "{\n  \"job_id\": \"job_3f9c2a7e5b8d4c1fa0e6b2d9c7f41a58\",\n  \"workflow_id\": \"txt2img-basic\",\n  \"status\": \"cancelled\",\n  \"created_at\": \"2026-10-16T08:30:00.123456Z\",\n  \"updated_at\": \"2026-10-16T08:30:07.481902Z\",\n  \"durability\": \"shared_queue\",\n  \"error_code\": \"cancelled\"\n}"
       },
       {
         "status": 401,
@@ -151,16 +173,22 @@
         "label": "执行端不可用",
         "content_type": "application/json",
         "body": "{\n  \"error\": {\n    \"message\": \"the selected node is unavailable\",\n    \"type\": \"api_error\",\n    \"code\": \"connection_failed\"\n  }\n}"
+      },
+      {
+        "status": 503,
+        "label": "队列暂不可读",
+        "content_type": "application/json",
+        "body": "{\n  \"error\": {\n    \"message\": \"the workflow queue cannot be reached right now; retry shortly\",\n    \"type\": \"api_error\",\n    \"code\": \"queue_unavailable\"\n  }\n}"
       }
     ],
     "sections": [
       {
         "title": "错误码",
-        "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n409 job_already_finished：任务已处于终态（succeeded / failed / cancelled），无法取消。\n\n501 cancel_unsupported：执行端当前无法中断该任务，例如任务已开始执行而执行端不支持定向中断，或执行端已不再持有该任务。任务会继续运行直到自然结束。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
+        "body": "404 job_not_found：任务不存在，或不属于当前租户。\n\n409 job_already_finished：任务已处于终态（succeeded / failed / cancelled），无法取消。\n\n501 cancel_unsupported：执行端当前无法中断该任务，例如任务已开始执行而执行端不支持定向中断（任务会继续运行直到自然结束），或执行端已不再持有该任务（例如任务刚刚结束，请查询状态确认）。\n\n400 capability_unsupported：执行端不具备取消工作流的能力。\n\n401 invalid_api_key：缺少 Authorization 头、格式不是 Bearer，或 API Key 无效 / 已吊销。\n\n429 requests_per_minute / tokens_per_minute / max_concurrent（type 为 rate_limit_error）：超出本租户配额，响应带 Retry-After 头（秒）。\n\n503 verification_unavailable：暂时无法校验 API Key，请稍后重试。\n\n503 connection_failed / runtime_closed：负责该任务的执行端暂时不可用。\n\n503 queue_unavailable：排队服务暂时无法读取，请稍后重试。\n\n504 timeout：执行端响应超时。\n\n502 upstream_error：执行端返回了错误。"
       },
       {
         "title": "任务状态",
-        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled。"
+        "body": "queued：已受理，正在排队等待执行。\n\nrunning：正在执行。\n\nsucceeded：执行成功，可调用「获取任务产物」列出生成结果。\n\nfailed：执行失败，error 字段给出失败摘要（如有）。\n\ncancelled：已被取消。\n\n后三种为终态，任务到达终态后状态不再变化。排队中的任务也可能直接进入 failed 或 cancelled，此时 error_code 给出原因。"
       },
       {
         "title": "错误格式",
