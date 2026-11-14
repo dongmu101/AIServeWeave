@@ -68,6 +68,13 @@ type DispatchConfig struct {
 	// MaxRequestBytes bounds a whole request body — in practice a workflow
 	// template. Default 64Mi.
 	MaxRequestBytes int
+	// Admission is the optional node-wide admission gate (resource pressure
+	// plus per-class semaphores) applied on top of each runtime's own
+	// limiter. Nil admits everything the limiter admits.
+	//
+	// Admission 是可选的整机准入闸门（资源紧张检查加分类信号量），叠加在每个运行时
+	// 自身的限流器之上。为 nil 时，限流器放行的请求全部放行。
+	Admission Admitter
 	// Metrics receives the limiter instrument. Nil discards it.
 	Metrics runtime.Metrics
 	// Clock defaults to runtime.NewSystemClock; the deadline arithmetic runs
@@ -168,6 +175,20 @@ func (d *Dispatcher) Handle(ctx context.Context, req *Request, sink ResponseSink
 	}
 	defer cancel()
 
+	// Node-wide admission runs in cheapest-refusal-first order: the pressure
+	// gate never blocks, the per-runtime limiter never blocks, and only then
+	// may the class semaphore wait, so a request never waits just to be
+	// turned away by a check that could have answered at once.
+	//
+	// 整机准入按「最便宜的拒绝在前」排序：资源闸门从不阻塞，按运行时的限流器从不阻塞，
+	// 之后分类信号量才可能等待，这样请求不会先等一阵、再被一个本可以立刻回答的检查拒绝。
+	gate, class := admissionFor(spec.Operation, rt.Descriptor().Kind)
+	if gate && d.cfg.Admission != nil {
+		if err := d.cfg.Admission.CheckPressure(admissionLabel(class)); err != nil {
+			return withRuntimeID(err, id)
+		}
+	}
+
 	// The quota is released by this defer on every path there is: a normal
 	// return, an early error, a cancelled context, and a panic unwinding
 	// through the slot's recover. Streaming operations hold it for the whole
@@ -177,6 +198,14 @@ func (d *Dispatcher) Handle(ctx context.Context, req *Request, sink ResponseSink
 		return err
 	}
 	defer release()
+
+	if class != "" && d.cfg.Admission != nil {
+		admitted, err := d.cfg.Admission.Acquire(ctx, class)
+		if err != nil {
+			return withRuntimeID(err, id)
+		}
+		defer admitted()
+	}
 
 	return d.run(ctx, rt, spec, req, sink)
 }
@@ -635,6 +664,92 @@ func (d *Dispatcher) acquire(rt runtime.Runtime) (func(), error) {
 		d.metrics.LimiterRejection(desc.ID)
 	}
 	return release, err
+}
+
+// Admitter is the node-wide admission gate the Agent's admission package
+// implements. It is declared here so this package does not import that one.
+//
+// Admitter 是 Agent 的 admission 包实现的整机准入闸门。在这里声明，使本包不必 import
+// 那个包。
+type Admitter interface {
+	// CheckPressure refuses at once while the machine is under resource
+	// pressure; it never blocks.
+	CheckPressure(class string) error
+	// Acquire reserves one slot of the class semaphore, possibly waiting a
+	// bounded time. release must be called exactly once.
+	Acquire(ctx context.Context, class string) (release func(), err error)
+}
+
+// Admission classes, matching the admission package's constants.
+const (
+	admissionClassCLI     = "cli"
+	admissionClassGeneral = "general"
+	// admissionLabelWorkflow labels gate-only refusals of operations that
+	// take no class slot.
+	admissionLabelWorkflow = "workflow"
+)
+
+// admissionFor decides how node-wide admission applies to one operation on
+// one runtime kind. gate means the resource-pressure check applies; class,
+// when non-empty, names the semaphore the request holds for its whole
+// duration.
+//
+//   - Hosted providers are exempt: their compute is remote, so the local
+//     machine is not what they load.
+//   - Status, cancel, subscribe and artifact reads are exempt, so a
+//     saturated node still answers for work it already accepted.
+//   - Workflow submission and input upload pass the gate but take no slot:
+//     a submit holds for milliseconds and the GPU work then runs in
+//     ComfyUI's own queue, so a slot would bound nothing.
+//   - Everything else takes the cli slot on a local CLI runtime (a process
+//     per request) and the general slot on other local backends.
+//
+// admissionFor 决定整机准入如何作用于某个运行时类型上的某个操作。gate 表示适用资源紧张
+// 检查；class 非空时指明请求在整个执行期间占用的信号量。
+//
+//   - 托管供应商豁免：它们的算力在远端，加重的不是本机。
+//   - 状态、取消、订阅与产物读取豁免，让满载的节点仍能回应已经接下的工作。
+//   - 工作流提交与输入上传过闸门但不占位置：提交只持续几毫秒，GPU 工作随后在 ComfyUI
+//     自己的队列里执行，占位置约束不了任何东西。
+//   - 其余操作在本地 CLI 运行时（每请求一个进程）上占 cli 位置，在其他本地后端上占
+//     general 位置。
+func admissionFor(op tunnelv1.Operation, kind runtime.Kind) (gate bool, class string) {
+	if kind.IsHosted() {
+		return false, ""
+	}
+	switch op {
+	case tunnelv1.Operation_OPERATION_WORKFLOW_SUBMIT, tunnelv1.Operation_OPERATION_INPUT_UPLOAD:
+		return true, ""
+	case tunnelv1.Operation_OPERATION_CHAT, tunnelv1.Operation_OPERATION_CHAT_STREAM,
+		tunnelv1.Operation_OPERATION_MESSAGES, tunnelv1.Operation_OPERATION_IMAGE_GENERATE,
+		tunnelv1.Operation_OPERATION_EMBED, tunnelv1.Operation_OPERATION_RERANK,
+		tunnelv1.Operation_OPERATION_AUDIO_TRANSCRIBE:
+		if kind.IsLocalCLI() {
+			return true, admissionClassCLI
+		}
+		return true, admissionClassGeneral
+	default:
+		return false, ""
+	}
+}
+
+func admissionLabel(class string) string {
+	if class == "" {
+		return admissionLabelWorkflow
+	}
+	return class
+}
+
+// withRuntimeID tags an admission refusal with the runtime it was for, so
+// the Gateway's error carries the same context as a limiter refusal.
+func withRuntimeID(err error, id string) error {
+	var rtErr *runtime.RuntimeError
+	if errors.As(err, &rtErr) && rtErr.RuntimeID == "" {
+		tagged := *rtErr
+		tagged.RuntimeID = id
+		return &tagged
+	}
+	return err
 }
 
 // forget drops the limiter of a runtime the Manager no longer has, so a node

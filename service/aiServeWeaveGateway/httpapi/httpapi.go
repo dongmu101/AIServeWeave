@@ -9,6 +9,7 @@ import (
 
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/workflowview"
+	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
 	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
@@ -21,6 +22,16 @@ type Config struct {
 	// MessagesSessions supplies shared, one-shot Claude continuation affinity.
 	// MessagesSessions 提供共享且一次性的 Claude 续接定位。
 	MessagesSessions messagesession.Store
+	// WorkflowQueue is the shared Redis queue JSON workflow submissions and
+	// ComfyUI image generations wait in for capacity. New starts this
+	// replica's workers on it and Close stops them. Nil dispatches every
+	// submission synchronously and fails it at once when no node has
+	// capacity.
+	//
+	// WorkflowQueue 是 JSON 工作流提交与 ComfyUI 图像生成等待容量所用的共享 Redis 队列。
+	// New 在其上启动本副本的 worker，Close 停止它们。为 nil 时每个提交都同步派发，没有
+	// 节点空闲时立即失败。
+	WorkflowQueue *jobqueue.Queue
 	// Verifier resolves API keys against the control plane. When set it is
 	// the authority and APIKeys is ignored; see auth.go for the three modes.
 	//
@@ -429,6 +440,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		artifactRecovery:        cfg.ArtifactRecoveryClient,
 		imagesWorkflowID:        cfg.ImagesWorkflowID,
 		imagesGenerationTimeout: imagesGenerationTimeout,
+		queue:                   cfg.WorkflowQueue,
 	}
 	// h.jobs.metrics is set after the struct literal rather than inside it:
 	// h.metrics must exist first, and a struct literal cannot reference the
@@ -581,6 +593,15 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 		go cleaner.run()
 	}
 
+	if h.queue != nil {
+		if err := h.queue.Start(queueDispatcher{h: h}); err != nil {
+			// The queue still admits jobs and every other replica's workers
+			// still drain it; this replica only does not help.
+			// 队列仍会准入 job，其他副本的 worker 仍会消化它；只是本副本不参与。
+			logger.Error("workflow queue workers did not start on this replica", slog.Any("error", err))
+		}
+	}
+
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /v1/models", h.models)
 	mux.HandleFunc("POST /v1/chat/completions", h.chatCompletions)
@@ -687,6 +708,14 @@ type Server struct {
 //
 // 它不会停止 HTTP 处理器本身；那仍然是调用方自己的 http.Server 该做的关闭。
 func (s *Server) Close() {
+	// The queue goes first: its in-flight submits finish while the tunnels,
+	// the persister and the syncer they hand their jobs to are still up, and
+	// tasks it holds go back to the queue for another replica.
+	// 队列最先停止：它在途的提交在隧道、持久化器与同步器仍在运行时完成，手上持有的任务
+	// 交还队列给其他副本。
+	if s.handlers.queue != nil {
+		s.handlers.queue.Shutdown()
+	}
 	s.syncer.Stop()
 	if s.persister != nil {
 		s.persister.Stop()
@@ -741,6 +770,7 @@ func (s *Server) Templates() []workflowview.Template {
 }
 
 type handlers struct {
+	queue            *jobqueue.Queue
 	messagesSessions messagesession.Store
 	sched            *scheduler.Scheduler
 	logger           *slog.Logger

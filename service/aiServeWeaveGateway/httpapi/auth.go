@@ -13,7 +13,6 @@ import (
 	"AIServeWeave/common/modelaccess"
 	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/quota"
-	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 )
 
 // Identity is who a verified API key belongs to. It is attached to the request
@@ -236,22 +235,7 @@ func (a *authenticator) middleware(next http.Handler) http.Handler {
 			return
 		}
 		ctx := context.WithValue(r.Context(), identityKey{}, identity)
-		if identity.Accounts != nil {
-			ctx = scheduler.WithAccountAccess(ctx, *identity.Accounts)
-		}
-		if identity.Models != nil {
-			ctx = scheduler.WithModelAccess(ctx, *identity.Models)
-		}
-		// Attached for every tenant, restricted or not: whether a tenant-owned
-		// node admits this caller depends only on who the caller is.
-		// 对每个租户都附上，无论是否受限：一台商户自有节点是否接纳该调用方，只取决于调用方是谁。
-		if identity.TenantID != "" || identity.Nodes != nil {
-			var policy nodeaccess.Policy
-			if identity.Nodes != nil {
-				policy = *identity.Nodes
-			}
-			ctx = scheduler.WithNodeAccess(ctx, identity.TenantID, policy)
-		}
+		ctx = withSchedulingAccess(ctx, identity.TenantID, identity.Accounts, identity.Models, identity.Nodes)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

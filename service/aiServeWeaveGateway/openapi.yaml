@@ -150,6 +150,12 @@ paths:
         200 MiB。字节先被 Gateway 挑中的节点接收，再经该节点写入其本地 ComfyUI 的
         输入目录——因此含文件输入的提交固定在单个候选节点上，不做跨节点重试：那个
         节点的分发失败即整体失败，不会换一个节点重新上传文件。
+
+        部署开启工作流持久队列（`-workflow-queue-max-wait`）时，JSON 提交会进入由
+        所有 Gateway 副本共享的 Redis 队列并立即返回 202：`status=queued`、
+        `durability=shared_queue`、`queue_position` 为全集群名次。任一副本的 worker
+        都会在节点空闲时派发它，等待超过期限即以 `error_code=queue_timeout` 失败。
+        multipart 提交不入队。
       operationId: submitWorkflowRun
       parameters:
         - $ref: "#/components/parameters/WorkflowID"
@@ -185,6 +191,21 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/OpenAIErrorBody"
+        "429":
+          description: 全集群工作流队列已满（`queue_full`），按 `Retry-After` 稍后重试
+          headers:
+            Retry-After:
+              schema: { type: integer }
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIErrorBody"
+        "503":
+          description: 队列无法确认这次提交是否已入队（`queue_unavailable`）；重提之前先查询 job
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIErrorBody"
 
   /v1/jobs/{job_id}:
     get:
@@ -192,7 +213,9 @@ paths:
       summary: 查询一次运行的状态
       description: |
         已结束的运行直接由本 Gateway 的内存 job 表作答；仍在进行中的会去问运行它的
-        节点，状态来自后端的队列与历史。
+        节点，状态来自后端的队列与历史。开启工作流持久队列时，本副本查不到的 job 会
+        改读共享队列记录：排队中返回 `queued` 与名次，被队列判为失败或取消的返回终态
+        与 `error_code`，已派发的接着向运行它的节点查询。
       operationId: getJobStatus
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -213,7 +236,8 @@ paths:
       description: |
         已经结束的运行会立即得到携带终态的单独一帧而不是订阅。事件名（SSE 的
         `event:` 字段）为后端事件类型（如 progress、node_output、succeeded、
-        failed、cancelled 等），载荷为 JobEvent。
+        failed、cancelled 等），载荷为 JobEvent。仍在共享工作流队列中的 job 先收到
+        `queue_changed` 帧（`data.position` 为名次），派发后接上节点的事件。
       operationId: streamJobEvents
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -236,6 +260,8 @@ paths:
       description: |
         取消是异步请求而不是结论：本端点返回 202 与最后已知的 job 视图，真实结果由
         状态端点或事件流报告。已结束的 job 返回 409；节点不支持中断时返回 501。
+        仍在共享工作流队列中、尚未派发的 job 会被直接取消，202 返回
+        `status=cancelled`——没有后端见过它，因此这是确定的结论。
       operationId: cancelJob
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -743,11 +769,16 @@ components:
         queue_position: { type: integer }
         durability:
           type: string
-          enum: [memory_only, persisted]
+          enum: [shared_queue, memory_only, persisted]
           description: |
+            shared_queue：在全集群工作流队列中尚未派发，或被队列判为失败/取消，任一副本都能作答；
             memory_only：只在受理请求的副本内存里，控制面尚未确认收到（或未配置控制面）；
-            persisted：控制面已确认落库。只会从 memory_only 变为 persisted。
+            persisted：控制面已确认落库。只会依次变化：shared_queue → memory_only → persisted。
         error: { type: string }
+        error_code:
+          type: string
+          enum: [queue_timeout, submit_outcome_unknown, node_not_allowed, cancelled, internal_error]
+          description: 只在共享工作流队列于任何节点见到 job 之前就将其判为失败或取消时出现
 
     JobEvent:
       type: object

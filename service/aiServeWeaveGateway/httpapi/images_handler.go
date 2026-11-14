@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
 )
@@ -26,9 +27,10 @@ import (
 //
 // Submission goes through the same scheduler.SubmitWorkflow entry point
 // submitRun uses, not a bypass: a ComfyUI node is typically Exclusive, and
-// this endpoint must correctly contend and queue (STATUS.md's P2 bounded
-// queueing) against ordinary /v1/workflows/{id}/runs Jobs on that same node
-// rather than jumping ahead of them.
+// this endpoint must correctly contend and queue against ordinary
+// /v1/workflows/{id}/runs Jobs on that same node rather than jumping ahead of
+// them. With the shared workflow queue on, it enters the same queue as those
+// Jobs (queueImageGeneration) and waits for a worker inside its own timeout.
 //
 // imagesGenerations 实现 POST /v1/images/generations。它把调用方的提示词绑定
 // 到唯一一个管理员配置的 ComfyUI 模板上（-images-workflow-id，已在启动期
@@ -39,8 +41,9 @@ import (
 //
 // 提交经由与 submitRun 相同的 scheduler.SubmitWorkflow 入口，而不是绕开它：
 // ComfyUI 节点通常是 Exclusive 的，本端点必须与同一节点上普通的
-// /v1/workflows/{id}/runs Job 正确竞争、排队（STATUS.md 的 P2 有界排队），
-// 而不是插到它们前面。
+// /v1/workflows/{id}/runs Job 正确竞争、排队，而不是插到它们前面。开启共享
+// 工作流队列时，它与那些 Job 进入同一个队列（queueImageGeneration），并在自己的
+// 超时之内等待 worker 派发。
 func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 	// The body is decoded before the ComfyUI checks so a model some node
 	// published as an image model can take the inference path. A decode
@@ -136,41 +139,54 @@ func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 
 	identity, _ := IdentityFrom(r.Context())
 	jobID := "img_" + newRequestID()
-	run, candidate, err := h.sched.SubmitWorkflow(ctx, runtime.WorkflowRequest{Template: graph, ClientID: jobID})
-	if err != nil {
-		if errors.Is(err, scheduler.ErrNoCapableNode) {
-			h.logger.Warn("no node can generate images", slog.String("workflow_id", h.imagesWorkflowID))
-			writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "workflow_backend_not_found",
-				"no connected node can generate images right now")
+	var (
+		runID     string
+		candidate scheduler.Candidate
+		handled   bool
+	)
+	if h.queue != nil {
+		runID, candidate, handled = h.queueImageGeneration(ctx, w, r, jobID, tpl.Version, graph)
+		if handled && runID == "" {
+			return // answered: rejected, timed out or failed in the queue
+		}
+	}
+	if !handled {
+		run, submitted, err := h.sched.SubmitWorkflow(ctx, runtime.WorkflowRequest{Template: graph, ClientID: jobID})
+		if err != nil {
+			if errors.Is(err, scheduler.ErrNoCapableNode) {
+				h.logger.Warn("no node can generate images", slog.String("workflow_id", h.imagesWorkflowID))
+				writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "workflow_backend_not_found",
+					"no connected node can generate images right now")
+				return
+			}
+			handleDispatchError(w, h.logger, err)
 			return
 		}
-		handleDispatchError(w, h.logger, err)
-		return
-	}
+		runID, candidate = run.ID, submitted
 
-	// The job is recorded before the poll loop, exactly like submitRun does
-	// before it ever asks about status: STATUS.md's J06 route-binding
-	// recovery and a caller's own GET /v1/jobs/{job_id} must be able to find
-	// this run even if this handler's own wait times out below.
-	//
-	// job 在轮询循环之前就被记录，与 submitRun 在第一次询问状态之前的做法完全
-	// 一致：STATUS.md 的 J06 路由绑定恢复，以及调用方自己的
-	// GET /v1/jobs/{job_id}，都必须能找到这次运行，即便本处理器自己的等待
-	// 在下面超时了。
-	now := h.clock.Now()
-	j := job{
-		ID: jobID, WorkflowID: h.imagesWorkflowID, WorkflowVersion: tpl.Version,
-		TenantID: identity.TenantID, Candidate: candidate, RunID: run.ID,
-		State: runtime.WorkflowPending, CreatedAt: now, UpdatedAt: now,
+		// The job is recorded before the poll loop, exactly like submitRun does
+		// before it ever asks about status: STATUS.md's J06 route-binding
+		// recovery and a caller's own GET /v1/jobs/{job_id} must be able to find
+		// this run even if this handler's own wait times out below.
+		//
+		// job 在轮询循环之前就被记录，与 submitRun 在第一次询问状态之前的做法完全
+		// 一致：STATUS.md 的 J06 路由绑定恢复，以及调用方自己的
+		// GET /v1/jobs/{job_id}，都必须能找到这次运行，即便本处理器自己的等待
+		// 在下面超时了。
+		now := h.clock.Now()
+		h.jobs.add(job{
+			ID: jobID, WorkflowID: h.imagesWorkflowID, WorkflowVersion: tpl.Version,
+			TenantID: identity.TenantID, Candidate: candidate, RunID: runID,
+			State: runtime.WorkflowPending, CreatedAt: now, UpdatedAt: now,
+		})
+		h.persister.nudge()
 	}
-	h.jobs.add(j)
-	h.persister.nudge()
 	h.logger.Info("image generation submitted",
 		slog.String("job_id", jobID), slog.String("workflow_id", h.imagesWorkflowID),
 		slog.String("node_id", candidate.NodeID), slog.String("runtime_id", candidate.RuntimeID),
 		slog.String("request_id", requestIDFrom(r.Context())))
 
-	status, err := h.pollWorkflowToTerminal(ctx, candidate, run.ID)
+	status, err := h.pollWorkflowToTerminal(ctx, candidate, runID)
 	if err != nil {
 		if errors.Is(err, context.DeadlineExceeded) {
 			writeOpenAIError(w, http.StatusGatewayTimeout, "timeout_error", "timeout",
@@ -196,7 +212,7 @@ func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	refs, err := h.sched.WorkflowArtifacts(r.Context(), candidate, run.ID)
+	refs, err := h.sched.WorkflowArtifacts(r.Context(), candidate, runID)
 	if err != nil {
 		handleDispatchError(w, h.logger, err)
 		return
@@ -240,6 +256,71 @@ func (h *handlers) imagesGenerations(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(imagesResponse{Created: h.clock.Now().Unix(), Data: data})
+}
+
+// queueImageGeneration queues an image generation in the shared workflow
+// queue and waits, inside the request's own time budget, until a worker on
+// any replica dispatched it. It reports handled=false when the queue did not
+// take the job (so the caller submits synchronously), and runID="" once it
+// has written the answer itself. A generation still queued when the client
+// leaves or the budget runs out is cancelled; one already dispatched keeps
+// running and can be queried as a job, as before.
+//
+// queueImageGeneration 把一次图像生成放入共享工作流队列，并在请求自身的时间预算内等待，
+// 直到任一副本上的 worker 派发了它。队列未接收时返回 handled=false（由调用方同步提交）；
+// 已自行写出答复时返回 runID=""。客户端离开或预算用尽时仍在排队的生成会被取消；已派发的
+// 继续运行，并可像以前一样作为 job 查询。
+func (h *handlers) queueImageGeneration(ctx context.Context, w http.ResponseWriter, r *http.Request, jobID, version string, graph json.RawMessage) (string, scheduler.Candidate, bool) {
+	identity, _ := IdentityFrom(r.Context())
+	if len(h.sched.WorkflowCapableCandidates(ctx)) == 0 {
+		h.logger.Warn("no node can generate images", slog.String("workflow_id", h.imagesWorkflowID))
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "workflow_backend_not_found",
+			"no connected node can generate images right now")
+		return "", scheduler.Candidate{}, true
+	}
+	task := jobqueue.Task{Kind: jobqueue.KindImage, JobID: jobID, TenantID: identity.TenantID, WorkflowID: h.imagesWorkflowID,
+		WorkflowVersion: version, Graph: graph, Deadline: h.queueWaitDeadline(h.imagesGenerationTimeout)}
+	position, handled := h.enqueueWorkflow(w, r, task)
+	if !handled || position == 0 {
+		return "", scheduler.Candidate{}, handled
+	}
+
+	j, err := h.awaitQueuedJob(ctx, jobqueue.Record{JobID: jobID}, nil)
+	if err != nil {
+		if ctx.Err() != nil {
+			if _, cerr := h.queue.Cancel(context.WithoutCancel(r.Context()), jobID); cerr != nil {
+				h.logger.Warn("cancelling a queued image generation failed", slog.String("job_id", jobID), slog.Any("error", cerr))
+			}
+			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+				w.Header().Set("Retry-After", queueRetryAfter)
+				writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", jobqueue.CodeQueueTimeout,
+					"no image node had capacity before the configured timeout")
+			}
+			return "", scheduler.Candidate{}, true
+		}
+		writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "queue_unavailable", "the workflow queue cannot be reached right now")
+		return "", scheduler.Candidate{}, true
+	}
+	if j.queueOnly {
+		switch j.ErrorCode {
+		case jobqueue.CodeQueueTimeout:
+			w.Header().Set("Retry-After", queueRetryAfter)
+			writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", jobqueue.CodeQueueTimeout,
+				"no image node had capacity before the configured timeout")
+		case jobqueue.CodeSubmitOutcomeUnknown:
+			writeOpenAIError(w, http.StatusBadGateway, "api_error", jobqueue.CodeSubmitOutcomeUnknown,
+				"the image generation may have reached a node but was not confirmed; it was not resubmitted")
+		case jobqueue.CodeNodeNotAllowed:
+			writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "workflow_backend_not_found",
+				"no connected node can generate images right now")
+		case jobqueue.CodeCancelled:
+			writeOpenAIError(w, http.StatusInternalServerError, "api_error", "cancelled", "image generation did not succeed")
+		default:
+			writeOpenAIError(w, http.StatusInternalServerError, "api_error", "internal_error", "image generation did not succeed")
+		}
+		return "", scheduler.Candidate{}, true
+	}
+	return j.RunID, j.Candidate, true
 }
 
 // pollWorkflowToTerminal re-asks WorkflowStatus at imagesPollInterval until

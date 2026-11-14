@@ -63,9 +63,17 @@ type artifactsResponse struct {
 func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
 	jobID := r.PathValue("job_id")
-	j, ok := h.jobs.get(jobID, identity.TenantID)
+	j, _, queued, ok := h.findJob(r.Context(), jobID, identity.TenantID)
 	if !ok {
 		h.listPersistedArtifacts(w, r, identity.TenantID, jobID)
+		return
+	}
+	// A job that never reached a node — still queued, or failed or
+	// cancelled by the queue — has produced nothing.
+	// 从未到达节点的 job——仍在排队，或被队列判为失败或取消——没有任何产物。
+	if queued || j.queueOnly {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(artifactsResponse{Object: "list", Data: []artifactJSON{}})
 		return
 	}
 

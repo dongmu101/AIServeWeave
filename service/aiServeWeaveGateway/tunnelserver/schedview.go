@@ -48,6 +48,13 @@ type SchedNode struct {
 	Draining         bool
 	Maintenance      bool
 	Live             bool
+	// Pressure means the node's last heartbeat said it is refusing new heavy
+	// work because its CPU or memory crossed a threshold. A node that has not
+	// reported load is never under pressure: unknown is not overloaded.
+	//
+	// Pressure 表示节点最近一次心跳声明它因 CPU 或内存越过阈值而拒绝新的重任务。
+	// 未上报负载的节点永远不算资源紧张：未知不等于过载。
+	Pressure bool
 }
 
 // AppendSchedNodes appends the scheduler's view of every node connected to
@@ -90,6 +97,7 @@ func (n *node) schedView(now time.Time, heartbeatTimeout time.Duration) SchedNod
 	v.Draining = n.draining
 	v.Maintenance = n.maintenance
 	v.Live = n.liveLocked(now, heartbeatTimeout)
+	v.Pressure = v.Live && n.hasLoad && n.load.Pressure
 	st := n.static.Load()
 	n.mu.Unlock()
 	if st != nil {

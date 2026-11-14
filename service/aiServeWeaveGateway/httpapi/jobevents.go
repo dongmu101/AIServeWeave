@@ -50,7 +50,7 @@ type jobEventJSON struct {
 // 无话可说的后端流只会让调用方对着沉默干等。
 func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, ok := h.jobs.get(r.PathValue("job_id"), identity.TenantID)
+	j, rec, queued, ok := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
 		return
@@ -62,8 +62,39 @@ func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if j.terminal() {
+	// A job still in the shared queue streams its position as queue_changed
+	// frames until it leaves the queue, then continues as any other job: the
+	// node's own events once dispatched, or one terminal frame if the queue
+	// failed or cancelled it.
+	//
+	// 仍在共享队列中的 job 以 queue_changed 帧推送名次，直到离开队列，之后与其他 job 一样
+	// 继续：派发后转为节点自己的事件，若被队列判为失败或取消则发一帧终态。
+	headerSent := false
+	if queued {
 		writeSSEHeader(w)
+		w.WriteHeader(http.StatusOK)
+		flusher.Flush()
+		headerSent = true
+		resolved, err := h.awaitQueuedJob(r.Context(), rec, func(position int) {
+			data, _ := json.Marshal(map[string]int{"position": position})
+			_ = writeNamedSSE(w, "queue_changed", jobEventJSON{JobID: rec.JobID, Type: "queue_changed",
+				Status: StatusQueued, Data: data, ReceivedAt: h.clock.Now()})
+			flusher.Flush()
+		})
+		if err != nil {
+			if r.Context().Err() == nil {
+				_ = writeNamedSSE(w, "error", jobEventJSON{JobID: rec.JobID, Type: "error", ReceivedAt: h.clock.Now()})
+				flusher.Flush()
+			}
+			return
+		}
+		j = resolved
+	}
+
+	if j.terminal() {
+		if !headerSent {
+			writeSSEHeader(w)
+		}
 		_ = writeNamedSSE(w, publicStatus(j.State), jobEventJSON{
 			JobID:      j.ID,
 			Type:       publicStatus(j.State),
@@ -83,13 +114,20 @@ func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 	// ——那必须是一个 HTTP 状态码而不是一帧 SSE，因此它发生在写出任何响应头之前。
 	stream, err := h.sched.WorkflowEvents(r.Context(), j.Candidate, j.RunID)
 	if err != nil {
+		if headerSent {
+			_ = writeNamedSSE(w, "error", jobEventJSON{JobID: j.ID, Type: "error", ReceivedAt: h.clock.Now()})
+			flusher.Flush()
+			return
+		}
 		handleDispatchError(w, h.logger, err)
 		return
 	}
 	defer stream.Close()
 
-	writeSSEHeader(w)
-	w.WriteHeader(http.StatusOK)
+	if !headerSent {
+		writeSSEHeader(w)
+		w.WriteHeader(http.StatusOK)
+	}
 
 	// A client that walks away unblocks the Recv below on its own:
 	// tunnelserver.Response.Recv selects on the request's context (call.go),

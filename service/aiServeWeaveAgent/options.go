@@ -2,9 +2,13 @@ package main
 
 import (
 	"flag"
+	"log/slog"
 	"strings"
 	"time"
 
+	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/admission"
+	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
 )
 
@@ -144,6 +148,109 @@ func registerModelPullFlags() *modelPullOptions {
 	flag.Int64Var(&opts.diskFreeMarginBytes, "model-pull-disk-free-margin-bytes", 0,
 		"abort a model pull once the target filesystem's free space falls below this many bytes (subtask 4's secondary defense); <=0 disables the check")
 	return opts
+}
+
+// admissionOptions configures node-wide admission (see the admission
+// package): a resource-pressure gate and two local semaphores, one for local
+// CLI runtimes and one for other local backends. Every limit defaults to off,
+// so upgrading changes nothing until an operator sets one; sampling and the
+// heartbeat report always run.
+//
+// admissionOptions 配置整机准入（见 admission 包）：一道资源紧张闸门与两个本地信号量，
+// 一个给本地 CLI 运行时，一个给其他本地后端。所有限制默认关闭，升级后在运维设置之前
+// 不改变任何行为；采样与心跳上报始终运行。
+type admissionOptions struct {
+	sampleInterval    time.Duration
+	cpuHighPercent    float64
+	memoryLowPercent  float64
+	hysteresisPercent float64
+	cliMax            int
+	generalMax        int
+	queueMaxWait      time.Duration
+	queueMaxWaiters   int
+}
+
+func registerAdmissionFlags() *admissionOptions {
+	opts := &admissionOptions{}
+	flag.DurationVar(&opts.sampleInterval, "admission-sample-interval", admission.DefaultSampleInterval,
+		"how often live CPU and memory are sampled for the admission gate and the heartbeat report")
+	flag.Float64Var(&opts.cpuHighPercent, "admission-cpu-high", 0,
+		"refuse new heavy work while host CPU utilization stays at or above this percent; 0 disables")
+	flag.Float64Var(&opts.memoryLowPercent, "admission-memory-low", 0,
+		"refuse new heavy work while available memory is at or below this percent of total; 0 disables")
+	flag.Float64Var(&opts.hysteresisPercent, "admission-hysteresis", admission.DefaultHysteresisPercent,
+		"percentage points a value must move back past its threshold before pressure clears")
+	flag.IntVar(&opts.cliMax, "admission-cli-max", 0,
+		"maximum concurrent requests across all local CLI runtimes (claude, codex, gemini-cli, ...); 0 is unlimited")
+	flag.IntVar(&opts.generalMax, "admission-general-max", 0,
+		"maximum concurrent requests across all other local backends (ollama, vllm, ...); 0 is unlimited")
+	flag.DurationVar(&opts.queueMaxWait, "admission-queue-max-wait", 5*time.Second,
+		"how long a request may wait for a full -admission-*-max semaphore before it is refused with backpressure; 0 refuses at once")
+	flag.IntVar(&opts.queueMaxWaiters, "admission-queue-max-waiters", admission.DefaultQueueMaxWaiters,
+		"maximum requests waiting per semaphore; more are refused at once")
+	return opts
+}
+
+// apply merges the YAML admission section into the flags; an explicit flag
+// wins, as everywhere else in applyConfig.
+//
+// apply 把 YAML 的 admission 区块合并进 flag；与 applyConfig 其他地方一样，显式 flag 优先。
+func (o *admissionOptions) apply(cfg agentconfig.AdmissionConfig, explicit map[string]bool) error {
+	if err := cfg.Validate(); err != nil {
+		return err
+	}
+	if !explicit["admission-sample-interval"] && cfg.SampleInterval != "" {
+		o.sampleInterval, _ = time.ParseDuration(cfg.SampleInterval)
+	}
+	if !explicit["admission-cpu-high"] && cfg.CPUHighPercent != 0 {
+		o.cpuHighPercent = cfg.CPUHighPercent
+	}
+	if !explicit["admission-memory-low"] && cfg.MemoryLowPercent != 0 {
+		o.memoryLowPercent = cfg.MemoryLowPercent
+	}
+	if !explicit["admission-hysteresis"] && cfg.HysteresisPercent != 0 {
+		o.hysteresisPercent = cfg.HysteresisPercent
+	}
+	if !explicit["admission-cli-max"] && cfg.CLIMax != 0 {
+		o.cliMax = cfg.CLIMax
+	}
+	if !explicit["admission-general-max"] && cfg.GeneralMax != 0 {
+		o.generalMax = cfg.GeneralMax
+	}
+	if !explicit["admission-queue-max-wait"] && cfg.QueueMaxWait != "" {
+		o.queueMaxWait, _ = time.ParseDuration(cfg.QueueMaxWait)
+	}
+	if !explicit["admission-queue-max-waiters"] && cfg.QueueMaxWaiters != 0 {
+		o.queueMaxWaiters = cfg.QueueMaxWaiters
+	}
+	return nil
+}
+
+// validate rejects values the flags accept syntactically but admission
+// cannot honour.
+func (o *admissionOptions) validate() error {
+	return agentconfig.AdmissionConfig{
+		CPUHighPercent: o.cpuHighPercent, MemoryLowPercent: o.memoryLowPercent, HysteresisPercent: o.hysteresisPercent,
+		CLIMax: o.cliMax, GeneralMax: o.generalMax, QueueMaxWaiters: o.queueMaxWaiters,
+		SampleInterval: o.sampleInterval.String(), QueueMaxWait: o.queueMaxWait.String(),
+	}.Validate()
+}
+
+// controller builds the admission controller these options describe.
+func (o *admissionOptions) controller(clock runtime.Clock, sink runtime.Metrics, logger *slog.Logger) *admission.Controller {
+	return admission.New(admission.Config{
+		SampleInterval:    o.sampleInterval,
+		CPUHighPercent:    o.cpuHighPercent,
+		MemoryLowPercent:  o.memoryLowPercent,
+		HysteresisPercent: o.hysteresisPercent,
+		CLIMax:            o.cliMax,
+		GeneralMax:        o.generalMax,
+		QueueMaxWait:      o.queueMaxWait,
+		QueueMaxWaiters:   o.queueMaxWaiters,
+		Clock:             clock,
+		Metrics:           sink,
+		Logger:            logger,
+	})
 }
 
 // agentUpgradeOptions is agentupgrade's configuration (STATUS.md's P2 Agent

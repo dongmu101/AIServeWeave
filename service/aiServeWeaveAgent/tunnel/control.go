@@ -99,6 +99,9 @@ func (c *Client) runControl(ctx context.Context, stream ControlStream, reader *c
 			if err := sess.reportRemoteProviders(false); err != nil {
 				return c.streamError("remote providers report", err)
 			}
+			if err := sess.reportPressureChange(); err != nil {
+				return c.streamError("load report", err)
+			}
 			statusPoll.arm()
 
 		case <-statusFull.C():
@@ -117,6 +120,9 @@ type controlSession struct {
 
 	// unacked counts heartbeats sent since the last HeartbeatAck.
 	unacked int
+	// sentLoad and sentPressure record the admission verdict the last
+	// heartbeat carried, so a flip can be reported before the next one.
+	sentLoad, sentPressure bool
 	// reported maps runtime id to the material part of the last reported
 	// snapshot, so a report is only sent when something actually changed.
 	reported map[string][]byte
@@ -274,15 +280,51 @@ func (s *controlSession) beat() error {
 		}
 	}
 
-	frame := &tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Heartbeat{Heartbeat: &tunnelv1.Heartbeat{
-		SentUnixMs:       c.clock.Now().UnixMilli(),
-		InflightRequests: int32(c.inFlight()),
-	}}}
-	if err := s.send(frame, "heartbeat"); err != nil {
+	if err := s.sendHeartbeat(); err != nil {
 		return err
 	}
 	s.unacked++
 	return nil
+}
+
+// sendHeartbeat writes one heartbeat carrying the in-flight count and, when a
+// load source is configured, the latest host-load sample.
+//
+// sendHeartbeat 写出一次心跳，携带在途请求数；配置了负载来源时一并携带最近一次主机负载采样。
+func (s *controlSession) sendHeartbeat() error {
+	c := s.client
+	hb := &tunnelv1.Heartbeat{
+		SentUnixMs:       c.clock.Now().UnixMilli(),
+		InflightRequests: int32(c.inFlight()),
+	}
+	if source := c.cfg.Load; source != nil {
+		if report, ok := source.Report(); ok {
+			hb.Load = tunnelwire.NodeLoadToProto(report)
+			s.sentPressure, s.sentLoad = report.Pressure, true
+		}
+	}
+	return s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Heartbeat{Heartbeat: hb}}, "heartbeat")
+}
+
+// reportPressureChange sends an extra heartbeat when the admission verdict
+// differs from the one the replica last saw, so a node coming under pressure
+// is ranked last within one status poll instead of one heartbeat interval.
+// The extra heartbeat does not count toward the unanswered-heartbeat
+// threshold: it is a report, not a liveness probe.
+//
+// reportPressureChange 在准入判断与副本上次看到的不同时补发一次心跳，让进入资源紧张的
+// 节点在一次状态轮询内就被排到最后，而不必等一个心跳间隔。补发的心跳不计入未应答心跳
+// 阈值：它是一次上报，不是存活探测。
+func (s *controlSession) reportPressureChange() error {
+	source := s.client.cfg.Load
+	if source == nil {
+		return nil
+	}
+	report, ok := source.Report()
+	if !ok || (s.sentLoad && report.Pressure == s.sentPressure) {
+		return nil
+	}
+	return s.sendHeartbeat()
 }
 
 // ack records the round trip of an answered heartbeat and clears the miss

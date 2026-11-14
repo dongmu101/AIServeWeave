@@ -26,12 +26,6 @@ var schedulerMetrics = []string{
 	scheduler.MetricCandidates,
 	scheduler.MetricBreakerOpen,
 	scheduler.MetricBreakerTripsTotal,
-	scheduler.MetricQueueDepth,
-	scheduler.MetricQueueWaitSeconds,
-	scheduler.MetricQueueRejectedTotal,
-	scheduler.MetricChatQueueDepth,
-	scheduler.MetricChatQueueWaitSeconds,
-	scheduler.MetricChatQueueRejectedTotal,
 }
 
 func TestSchedulerDescriptionsCoverEveryMetric(t *testing.T) {

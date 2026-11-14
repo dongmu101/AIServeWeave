@@ -1,3 +1,49 @@
+# Gateway Redis 队列与 Agent 整机准入（2026-11-14）
+
+Gateway 的等待改为全集群：
+
+- **工作流与图像生成**：JSON 工作流提交与 ComfyUI 图像生成进入 Redis + asynq 持久队列（`jobqueue/`），提交立即答 202 `queued`，任一副本的 worker 在节点空闲时派发。
+  - 投递至少一次，但提交至多一次：意图标记保证结果未知时不重新提交。
+  - 任一副本都能查询、取消排队中的 job，也能订阅它的 `queue_changed` 事件。
+  - 图像生成在原有的超时预算内同步等待派发。
+- **对话**：对话请求的等待改为 Redis 跨副本 FIFO（`waitqueue/`，带头部窗口与停滞逃逸），派发仍在持有连接的副本上。
+- **开启条件**：两个队列默认关闭，开启都必须配 `-redis-addr`，否则拒绝启动。进程内排队已删除，`-*-queue-max-waiters` 改为全集群上限。
+
+Agent 新增实时 CPU/内存采集（不引入 gopsutil），经心跳新字段 `Heartbeat.load` 上报，并提供可选的整机准入：
+
+- **资源闸门**：CPU 或内存越过阈值时拒绝新的重任务，带迟滞。
+- **本机信号量**：`cli` 与 `general` 两类，满了先有界等待，超时返回可重试背压。
+- **Gateway 与 Console**：Gateway 把资源紧张节点在所有策略中排到最后（不跳过）；Console 机群页显示「实时负载」与「资源紧张」。
+
+升级顺序：
+
+- 负载上报与 Agent 准入不限顺序。
+- 队列须等所有 Gateway 副本都升级后再开启。
+- 新依赖 `github.com/hibiken/asynq` v0.25.1 只用于 Gateway。
+
+说明见 [Gateway STATUS「工作流 Job 的持久队列」](service/aiServeWeaveGateway/STATUS.md#工作流-job-的持久队列asynq2026-11-14)、[对话请求的全集群等待队列](service/aiServeWeaveGateway/STATUS.md#对话请求的全集群等待队列redis2026-11-14) 与 [Agent README「整机准入与负载上报」](service/aiServeWeaveAgent/README.md#整机准入与负载上报)。
+
+已通过的检查：
+
+- Gateway、Agent、common 与控制面 fleet 的默认测试及竞态检查。
+- 新增测试：
+  - 队列状态机：意图未确认不重提、持有后交还、期限超时、提交途中取消；
+  - 两副本共享内存队列的 HTTP 路径：跨副本派发与查询、取消、队列满 429、Redis 不可用时退回同步、租户隔离、排队事件流、图像排队超时；
+  - 对话等待：头部窗口、停滞逃逸、租约过期、Redis 故障；
+  - Agent：准入迟滞与信号量、派发分类与豁免、心跳负载、配置往返；
+  - Gateway：压力排序。
+- 在专用 Redis 7 容器上通过 Lua 脚本与 asynq 端到端投递的 live 用例（`AISW_REDIS_ADDR=… go test -p 1 ./service/aiServeWeaveGateway/jobqueue/... ./service/aiServeWeaveGateway/waitqueue/... ./service/aiServeWeaveGateway/ratelimit/...`；`-p 1` 是因为 ratelimit 的 live 用例会 FLUSHDB）。
+- Agent 交叉编译：windows/linux/darwin，amd64/arm64。
+- 实际采样：Linux arm64 容器在 256 MiB cgroup 限额下读到 256 MiB 总量，macOS 本机读到估算 CPU。
+- Console：378 项单元测试、lint（仅 1 个既有警告）、TS7 类型检查与生产构建。
+
+尚未验收：
+
+- 多副本真实部署与真实 ComfyUI 下的排队和崩溃恢复。
+- 真实负载下的阈值校准。
+- Windows 实机采样。
+- 孤儿运行（节点已接单、绑定未写入时 worker 崩溃）的对账。
+
 # 商户订单删除（2026-11-13）
 
 商户计费页「订单」新增删除与确认框，owner/admin 可删除任意状态的本商户订单；member 只读。删除持久化为 `checkout_orders.tenant_deleted_at`，仅商户列表隐藏，运维历史、付款恢复、去重、发货、退款与库存占用继续使用原订单。新接口为 `DELETE /admin/v1/billing/orders/:id`，成功 `204`，跨商户、未知与已删除统一 `404`，审计动作 `billing.order.delete`。Console 白名单、八语言提示、失败保留确认框与末页回退已接入。迁移为 PostgreSQL/MySQL `billing/0010_order_deletion.sql`，`sql/init.sql` 已同步；控制面与 Console 须一起更新。行为与升级说明见[商户订单删除](docs/billing-orders.md)。

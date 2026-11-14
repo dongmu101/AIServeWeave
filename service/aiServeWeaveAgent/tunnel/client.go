@@ -21,6 +21,7 @@ import (
 	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
+	"AIServeWeave/common/nodeload"
 	"AIServeWeave/common/remoteprovider"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
@@ -92,6 +93,17 @@ type CLIUsageSource interface {
 	//
 	// Snapshot 返回每个已声明 CLI 的缓存、不含凭据的额度。
 	Snapshot() []cliusagestatus.Account
+}
+
+// LoadSource is implemented by *admission.Controller. It is declared here as
+// an interface for the reason CLIUsageSource is: tests can fake it without
+// sampling the host. Report must return cached data without blocking; false
+// means no sample exists yet.
+//
+// LoadSource 由 *admission.Controller 实现。与 CLIUsageSource 同一个理由声明成接口：
+// 测试可以替换它，不必采样主机。Report 必须返回缓存数据、不得阻塞；false 表示尚无样本。
+type LoadSource interface {
+	Report() (nodeload.Report, bool)
 }
 
 // RemoteProvidersStore is implemented by *remoteproviders.Store. It is
@@ -349,6 +361,13 @@ type ClientConfig struct {
 	// 上报给每个副本，好让控制台把它显示在对应服务旁。nil 是一个合法取值——与
 	// ModelPuller 同一种"可选钩子"形状——意味着从不发送 CLIUsageReport。
 	CLIUsage CLIUsageSource
+	// Load supplies the live host load and admission verdict carried on every
+	// heartbeat. Nil means heartbeats carry no load, which a Gateway reads as
+	// "not reported".
+	//
+	// Load 提供每次心跳携带的实时主机负载与准入判断。nil 表示心跳不带负载，Gateway
+	// 会将其读为「未上报」。
+	Load LoadSource
 	// RemoteProviders receives the sealed hosted provider bundles the control
 	// plane provisions and supplies the report sent back. Nil means a
 	// RemoteProviders frame is ignored and no report is ever sent.

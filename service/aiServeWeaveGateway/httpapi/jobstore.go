@@ -55,8 +55,19 @@ type job struct {
 	State           runtime.WorkflowState
 	QueuePosition   int
 	ErrorSummary    string
-	CreatedAt       time.Time
-	UpdatedAt       time.Time
+	// ErrorCode is set only for a job the shared workflow queue failed or
+	// cancelled before any node saw it (jobqueue.Code*).
+	//
+	// ErrorCode 只在共享工作流队列于任何节点见到 job 之前就将其判为失败或取消时设置
+	// （jobqueue.Code*）。
+	ErrorCode string
+	// queueOnly marks such a job: it lives in the shared queue's record, not
+	// in this store, and was never dispatched.
+	//
+	// queueOnly 标记这样的 job：它存在于共享队列的记录中，不在本存储里，且从未被派发。
+	queueOnly bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
 	// artifactIDs maps a backend artifact reference to the public id minted
 	// for it, so re-listing a job answers with the ids a caller already has
 	// rather than a fresh set. ArtifactRef is four strings and therefore

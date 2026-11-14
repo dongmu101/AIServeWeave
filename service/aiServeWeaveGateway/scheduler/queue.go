@@ -3,108 +3,37 @@ package scheduler
 import (
 	"context"
 	"errors"
-	"sync/atomic"
-	"time"
-
-	"golang.org/x/sync/semaphore"
 
 	"AIServeWeave/common/runtime"
 )
 
-// waitQueue is the bounded wait shared by workflow submissions and new chat
-// or Messages requests. Capacity lives on the Agents, not here, so waiting
-// means re-running one dispatch pass every interval until it stops finding
-// every candidate busy. The queue bounds the wait on two independent axes,
-// per the rule "任何一跳都不得无界缓冲": maxWait limits how long one request
-// waits, and the waiters semaphore limits how many wait at once. A request
-// that finds the semaphore full is rejected immediately instead of becoming
-// an unbounded third axis.
+// WaitQueue is the bounded wait new Chat, ChatStream and Messages requests
+// enter once every candidate they tried was busy. Capacity lives on the
+// Agents, not in the queue, so waiting means re-running one dispatch pass
+// until it stops finding every candidate busy; the queue decides when a
+// waiter may run a pass, and for how long it may wait, never where the
+// request goes. Dispatch always stays on the replica that holds the
+// client's connection.
 //
-// waitQueue 是工作流提交与新对话、新 Messages 请求共用的有界等待。容量在 Agent 上，
-// 不在这里，所以等待的方式是每隔 interval 重跑一轮派发，直到不再发现所有候选都忙。
-// 队列在两条彼此独立的轴上设界，对应「任何一跳都不得无界缓冲」：maxWait 限一次请求的
-// 等待时长，waiters 信号量限同时等待的请求数。发现信号量已满的请求被立即拒绝，不会成为
-// 第三条无界的轴。
-type waitQueue struct {
-	clock    runtime.Clock
-	maxWait  time.Duration
-	interval time.Duration
-	waiters  *semaphore.Weighted
-	depth    atomic.Int64
-	observe  queueObserver
-}
-
-// queueObserver receives one queue's measurements.
-// queueObserver 接收一个队列的观测值。
-type queueObserver struct {
-	depth    func(int)
-	wait     func(time.Duration, string)
-	rejected func()
-}
-
-// newWaitQueue returns nil, which disables queueing, unless maxWait is
-// positive. A non-positive interval or maxWaiters uses the given default.
+// Wait re-runs attempt until attempt succeeds, fails without reporting busy,
+// ctx ends, or the queue's own bounds run out. firstErr is the failure of
+// the pass that found every candidate busy; an implementation returns it
+// unchanged when the queue refuses entry, and the latest busy failure on
+// timeout. attempt keeps its own results; Wait only reports the final error.
+// The production implementation is the Redis-backed cluster-wide FIFO in the
+// waitqueue package; the scheduler does not import Redis.
 //
-// newWaitQueue 在 maxWait 不为正时返回 nil，即关闭排队。interval 或 maxWaiters 不为正时
-// 使用给定的默认值。
-func newWaitQueue(clock runtime.Clock, maxWait, interval, defaultInterval time.Duration, maxWaiters, defaultMaxWaiters int, observe queueObserver) *waitQueue {
-	if maxWait <= 0 {
-		return nil
-	}
-	if interval <= 0 {
-		interval = defaultInterval
-	}
-	if maxWaiters <= 0 {
-		maxWaiters = defaultMaxWaiters
-	}
-	return &waitQueue{clock: clock, maxWait: maxWait, interval: interval, waiters: semaphore.NewWeighted(int64(maxWaiters)), observe: observe}
-}
-
-// wait re-runs attempt every interval until attempt succeeds, fails without
-// reporting busy, ctx ends, or maxWait runs out. firstErr is the failure of
-// the pass that found every candidate busy; it is returned unchanged when
-// the queue is full, and the latest busy failure is returned on timeout.
-// attempt keeps its own results; wait only reports the final error.
+// WaitQueue 是新 Chat、ChatStream 与 Messages 请求在所尝试的候选全部繁忙后进入的有界
+// 等待。容量在 Agent 上，不在队列里，所以等待的方式是重跑一轮派发，直到不再发现所有候选
+// 都忙；队列决定等待者何时可以跑一轮、最多等多久，从不决定请求去哪里。派发始终留在持有
+// 客户端连接的那个副本上。
 //
-// wait 每隔 interval 重跑一次 attempt，直到 attempt 成功、以非繁忙原因失败、ctx 结束或
-// maxWait 用尽。firstErr 是发现所有候选都忙的那一轮的失败：队列已满时原样返回它，超时
-// 返回最近一次繁忙失败。attempt 自己保存结果，wait 只报告最终错误。
-func (q *waitQueue) wait(ctx context.Context, firstErr error, attempt func() (err error, busy bool)) error {
-	if !q.waiters.TryAcquire(1) {
-		q.observe.rejected()
-		return firstErr
-	}
-	q.observe.depth(int(q.depth.Add(1)))
-	defer func() {
-		q.waiters.Release(1)
-		q.observe.depth(int(q.depth.Add(-1)))
-	}()
-
-	start := q.clock.Now()
-	deadline := start.Add(q.maxWait)
-	lastErr := firstErr
-	for {
-		remaining := deadline.Sub(q.clock.Now())
-		if remaining <= 0 {
-			q.observe.wait(q.clock.Now().Sub(start), queueOutcomeTimeout)
-			return lastErr
-		}
-		timer, stop := q.clock.NewTimer(min(q.interval, remaining))
-		select {
-		case <-ctx.Done():
-			stop()
-			q.observe.wait(q.clock.Now().Sub(start), queueOutcomeCanceled)
-			return ctx.Err()
-		case <-timer:
-		}
-
-		err, busy := attempt()
-		if err == nil || !busy {
-			q.observe.wait(q.clock.Now().Sub(start), queueOutcomeResolved)
-			return err
-		}
-		lastErr = err
-	}
+// Wait 重跑 attempt，直到 attempt 成功、以非繁忙原因失败、ctx 结束或队列自身的界用尽。
+// firstErr 是发现所有候选都忙的那一轮的失败；队列拒绝进入时实现原样返回它，超时返回最近
+// 一次繁忙失败。attempt 自己保存结果，Wait 只报告最终错误。生产实现是 waitqueue 包中
+// 基于 Redis 的全集群 FIFO；调度器本身不 import Redis。
+type WaitQueue interface {
+	Wait(ctx context.Context, firstErr error, attempt func() (err error, busy bool)) error
 }
 
 // busyError reports whether err means the candidate had no free capacity

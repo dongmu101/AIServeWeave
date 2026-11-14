@@ -64,15 +64,15 @@ func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.Messa
 // Committed rule ChatStream follows. Candidates rank by tunnel slots,
 // which cannot see an Agent's CLI session limit, so this fallback is what
 // keeps one full node from turning into a 429 while another sits idle. When
-// every candidate is full and Config.ChatQueueMaxWait is positive, it waits
-// for one to free up (see waitQueue) before answering.
+// every candidate is full and Config.ChatQueue is set, it waits
+// for one to free up (see WaitQueue) before answering.
 //
 // MessagesStart 在最佳候选上开启一个新的原生 Messages 会话。首个事件到达之前，
 // 没有客户端见过这个会话，因此节点已满、正在关闭或不可达时，请求交给下一个候选；
 // 一旦有事件到达，流就归调用方所有，与 ChatStream 遵循的 Committed 规则相同。候选
 // 按隧道槽位排序，看不到 Agent 的 CLI 会话上限，正是这层换节点避免了一个节点已满、
-// 另一个节点空闲时仍返回 429。所有候选都已满且 Config.ChatQueueMaxWait 为正时，它会等待
-// 某个候选空出来（见 waitQueue）再作答。
+// 另一个节点空闲时仍返回 429。所有候选都已满且设置了 Config.ChatQueue 时，它会等待
+// 某个候选空出来（见 WaitQueue）再作答。
 func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], Candidate, error) {
 	ctx, admitted := admitModel(ctx, req.Model)
 	if !admitted {
@@ -82,7 +82,7 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 	if err == nil || !busy || s.chatQueue == nil {
 		return stream, c, err
 	}
-	err = s.chatQueue.wait(ctx, err, func() (error, bool) {
+	err = s.chatQueue.Wait(ctx, err, func() (error, bool) {
 		var err error
 		stream, c, err, busy = s.attemptMessagesStart(ctx, req)
 		return err, busy

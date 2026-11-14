@@ -25,11 +25,22 @@ import (
 // 「已取消」，就是本 Gateway 在编造一个没人告诉过它的结果。
 func (h *handlers) cancelJob(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, ok := h.jobs.get(r.PathValue("job_id"), identity.TenantID)
+	j, rec, queued, ok := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
 		return
 	}
+	if queued {
+		h.cancelQueued(w, r, rec)
+		return
+	}
+	h.cancelResolvedJob(w, r, j)
+}
+
+// cancelResolvedJob asks the node running j to interrupt it.
+//
+// cancelResolvedJob 请运行 j 的节点中断它。
+func (h *handlers) cancelResolvedJob(w http.ResponseWriter, r *http.Request, j job) {
 	// A finished run is not cancellable, and answering 202 anyway would tell
 	// the caller their interrupt is on its way to a backend that will never
 	// receive it. 409 says the request conflicts with the job's state, which

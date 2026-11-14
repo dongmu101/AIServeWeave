@@ -21,6 +21,7 @@ import (
 	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/runtime/workflow/comfyui"
+	"AIServeWeave/service/aiServeWeaveAgent/admission"
 	"AIServeWeave/service/aiServeWeaveAgent/agentconfig"
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
@@ -93,6 +94,7 @@ func main() {
 	mpOpts := registerModelPullFlags()
 	cmOpts := registerComfyUIManagedFlags()
 	auOpts := registerAgentUpgradeFlags()
+	admOpts := registerAdmissionFlags()
 	ollamaURL := flag.String("ollama-url", "",
 		"base URL of a local Ollama instance to register, e.g. http://127.0.0.1:11434; empty registers no runtime")
 	ollamaID := flag.String("ollama-id", "ollama", "runtime id to register the Ollama instance under")
@@ -201,8 +203,16 @@ func main() {
 			os.Stderr.WriteString("agent: config: " + err.Error() + "\n")
 			os.Exit(2)
 		}
+		if err := admOpts.apply(cfg.Admission, explicit); err != nil {
+			os.Stderr.WriteString("agent: config: " + err.Error() + "\n")
+			os.Exit(2)
+		}
 		declaredRuntimes = runtimesFromConfig(cfg.Runtimes)
 		reload.attachments = cfg.Attachments
+	}
+	if err := admOpts.validate(); err != nil {
+		os.Stderr.WriteString("agent: " + err.Error() + "\n")
+		os.Exit(2)
 	}
 	if *ollamaURL != "" {
 		ollama := runtime.Config{ID: *ollamaID, Kind: runtime.KindOllama, BaseURL: *ollamaURL}
@@ -218,7 +228,7 @@ func main() {
 		os.Exit(2)
 	}
 
-	if err := run(logger, opts, mpOpts, cmOpts, auOpts, declaredRuntimes, reload, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr, *configUIAddr, uiConfigPath); err != nil {
+	if err := run(logger, opts, mpOpts, cmOpts, auOpts, admOpts, declaredRuntimes, reload, *ollamaURL, *autoDiscover, *autoDiscoverInterval, *metricsAddr, *configUIAddr, uiConfigPath); err != nil {
 		logger.Error("agent exited with error", slog.Any("error", err))
 		os.Exit(1)
 	}
@@ -239,7 +249,7 @@ func main() {
 // its runtimes: list in place (see runtimeReloader).
 // SIGHUP 或设置页面保存会重新读取 reload 指向的文件，并就地应用其 runtimes: 列表
 // （见 runtimeReloader）。
-func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, declaredRuntimes []runtime.Config, reload reloadSource, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
+func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmOpts *comfyuiManagedOptions, auOpts *agentUpgradeOptions, admOpts *admissionOptions, declaredRuntimes []runtime.Config, reload reloadSource, ollamaURL string, autoDiscover bool, autoDiscoverInterval time.Duration, metricsAddr, configUIAddr, configPath string) error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	finished := make(chan struct{})
@@ -262,10 +272,18 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	//
 	// 整个节点共用一个指标注册表：运行时层与隧道记录进同一个下沉端，这才让「后端慢」
 	// 与「隧道慢」成为两个可以互相对照的数字，而不是两套说辞。
-	metricsRegistry := metrics.New(tunnel.Descriptions(), comfyui.Descriptions())
+	metricsRegistry := metrics.New(tunnel.Descriptions(), comfyui.Descriptions(), admission.Descriptions())
 	metricsServer := startMetricsEndpoint(logger, metricsRegistry, metricsAddr)
 
 	deps := newDependencies(logger, metricsRegistry)
+	// Node-wide admission samples the host from startup, so the first
+	// heartbeat already carries a load figure and the gate is armed before
+	// any request can arrive.
+	//
+	// 整机准入从启动起就采样主机，使第一次心跳就带有负载数值，且闸门在任何请求到来之前
+	// 已经就位。
+	admissionController := admOpts.controller(deps.Clock, metricsRegistry, logger)
+	go admissionController.Run(ctx)
 	manager := runtime.NewManager(registry, deps)
 	defer func() {
 		stop()
@@ -471,7 +489,7 @@ func run(logger *slog.Logger, opts *tunnelOptions, mpOpts *modelPullOptions, cmO
 	puller := newModelPuller(ctx, logger, mpOpts, ollamaURL)
 	upgradeChecker := newAgentUpgradeChecker(logger, auOpts)
 
-	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker, cliUsage, remote)
+	tunnelErr, tunnelManager, err := startTunnel(ctx, logger, manager, deps.Metrics, opts, puller, comfyUIManagedSupervisor, upgradeChecker, cliUsage, remote, admissionController)
 	if err != nil {
 		return err
 	}

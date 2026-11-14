@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/workflow"
 )
@@ -110,10 +111,17 @@ type jobJSON struct {
 	CreatedAt     time.Time `json:"created_at"`
 	UpdatedAt     time.Time `json:"updated_at"`
 	QueuePosition int       `json:"queue_position,omitempty"`
-	// Durability is DurabilityMemoryOnly or DurabilityPersisted.
+	// Durability is DurabilitySharedQueue, DurabilityMemoryOnly or
+	// DurabilityPersisted.
 	//
-	// Durability 取 DurabilityMemoryOnly 或 DurabilityPersisted。
+	// Durability 取 DurabilitySharedQueue、DurabilityMemoryOnly 或 DurabilityPersisted。
 	Durability string `json:"durability"`
+	// ErrorCode names why the shared workflow queue failed or cancelled the
+	// job before any node saw it; absent otherwise.
+	//
+	// ErrorCode 说明共享工作流队列为何在任何节点见到 job 之前就将其判为失败或取消；
+	// 其他情况下缺席。
+	ErrorCode string `json:"error_code,omitempty"`
 	// Error is the backend's own failure summary, already bounded and
 	// structured by the ComfyUI adapter. It reaches only the tenant that
 	// submitted the run, and without it a failed generation is unactionable.
@@ -187,6 +195,39 @@ func (h *handlers) submitRun(w http.ResponseWriter, r *http.Request) {
 	// 公开 job id 同时充当后端的 client_id，这样在后端打开的事件流，天然就带着
 	// 调用方所知的那个标识符。
 	wfReq := runtime.WorkflowRequest{Template: graph, ClientID: jobID, IdempotencyKey: req.IdempotencyKey}
+
+	// With the shared queue on, every JSON submission is queued rather than
+	// tried first: a long GPU job would otherwise be starved by new arrivals
+	// taking each freed slot. A replica that sees no workflow node at all
+	// still answers 404 at once, as before. Submissions with files stay
+	// synchronous: their bytes exist only in this request.
+	//
+	// 共享队列开启时，每个 JSON 提交都直接入队而不先尝试派发：否则长时间的 GPU 任务会被
+	// 每次抢到空出槽位的新请求饿死。本副本完全看不到工作流节点时仍像以前一样立即答 404。
+	// 带文件的提交保持同步：它们的字节只存在于本次请求中。
+	if h.queue != nil && len(pending) == 0 {
+		if len(h.sched.WorkflowCapableCandidates(r.Context())) == 0 {
+			h.logger.Warn("no node can run workflows", slog.String("workflow_id", workflowID))
+			writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "workflow_backend_not_found",
+				"no connected node can run workflows right now")
+			return
+		}
+		task := jobqueue.Task{Kind: jobqueue.KindRun, JobID: jobID, TenantID: identity.TenantID, WorkflowID: workflowID,
+			WorkflowVersion: tpl.Version, Graph: graph, IdempotencyKey: req.IdempotencyKey}
+		if position, handled := h.enqueueWorkflow(w, r, task); handled {
+			if position > 0 {
+				now := h.clock.Now()
+				h.logger.Info("workflow queued",
+					slog.String("job_id", jobID), slog.String("workflow_id", workflowID),
+					slog.Int("position", position), slog.String("request_id", requestIDFrom(r.Context())))
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusAccepted)
+				_ = json.NewEncoder(w).Encode(jobJSON{JobID: jobID, WorkflowID: workflowID, Status: StatusQueued,
+					CreatedAt: now, UpdatedAt: now, QueuePosition: position, Durability: DurabilitySharedQueue})
+			}
+			return
+		}
+	}
 
 	var run runtime.WorkflowRun
 	var candidate scheduler.Candidate
@@ -397,9 +438,13 @@ func (h *handlers) submitWithFiles(ctx context.Context, req runtime.WorkflowRequ
 // Gateway 可能漏掉的事件。
 func (h *handlers) jobStatus(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, ok := h.jobs.get(r.PathValue("job_id"), identity.TenantID)
+	j, rec, queued, ok := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
 	if !ok {
 		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+		return
+	}
+	if queued {
+		h.writeQueuedJob(r.Context(), w, rec, 0)
 		return
 	}
 	if j.terminal() {
@@ -437,7 +482,10 @@ func writeJobBody(w http.ResponseWriter, j job) {
 
 func renderJob(j job) jobJSON {
 	durability := DurabilityMemoryOnly
-	if j.persisted {
+	switch {
+	case j.queueOnly:
+		durability = DurabilitySharedQueue
+	case j.persisted:
 		durability = DurabilityPersisted
 	}
 	return jobJSON{
@@ -449,6 +497,7 @@ func renderJob(j job) jobJSON {
 		QueuePosition: j.QueuePosition,
 		Durability:    durability,
 		Error:         j.ErrorSummary,
+		ErrorCode:     j.ErrorCode,
 	}
 }
 

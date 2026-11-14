@@ -31,7 +31,8 @@ viper 是团队明确要求的选择。当前只用它完成本地文件读写�
 
 | 依赖 | 使用范围与理由 |
 | --- | --- |
-| `github.com/redis/go-redis/v9` | 共享租户限流计数及 Redis 会话存储；跨副本额度不能靠各副本独立计数保证 |
+| `github.com/redis/go-redis/v9` | 共享租户限流计数、Redis 会话存储与两个跨副本队列（对话等待队列 `waitqueue/` 的 Lua 票据脚本、工作流队列 `jobqueue/` 的状态记录）；跨副本额度与排队顺序不能靠各副本独立计数保证 |
+| `github.com/hibiken/asynq` | 仅由 `jobqueue/transport.go` import：工作流提交与 ComfyUI 图像生成的持久、至少一次投递队列，含租约、崩溃后重新投递、延迟重试与按 id 检视/删除任务。只用 go-redis 自写需要重新实现租约回收与转发器，风险更高。固定 v0.25.1（v0.26 会连带把 Agent 的 viper 依赖 `spf13/cast` 升级），新增传递依赖 `robfig/cron/v3` 与 `golang.org/x/time`；`google/uuid`、protobuf 与 go-redis 已在仓库中。asynq 的键前缀固定为 `asynq:`，队列名是唯一隔离单位 |
 | AWS SDK for Go v2（含 credentials、service/s3）与 `github.com/aws/smithy-go` | `objectstore/` 的 S3 兼容存储与错误处理 |
 | `github.com/studio-b12/gowebdav` | `objectstore/` 的 WebDAV 存储，支持仅提供 WebDAV 的 NAS |
 
@@ -47,6 +48,10 @@ go-zero、gorm 及数据库驱动、golang-jwt、`golang.org/x/crypto` 归控制
 
 前端依赖、TypeScript 双版本、Node 内置单元测试与独立 Playwright 验收遵守 [Console AGENTS](../../service/aiServeWeaveConsole/AGENTS.md)。不要把后端的依赖允许列表套用到前端，也不要以升级名义移除其已有兼容安排。
 
-### Agent Windows 系统接口
+### Agent 系统接口
 
 Agent 的 `internal/localstate`、`internal/localcontrol`、`internal/cliprocess` 和 `hostresources` 复用既有 `golang.org/x/sys/windows`，用于 DACL/受限文件创建、同用户 named pipe、Job Object 与磁盘余量。标准库没有这些完整接口；依赖由 indirect 改为 direct，版本不变，不增加 Windows 服务框架或 shell 执行依赖。系统专用实现由 build tag 隔离。
+
+`hostresources/usage_*.go` 的实时 CPU/内存采样同样不引入 gopsutil：Linux 读 `/proc` 与 cgroup v2 文件；macOS 用既有 `golang.org/x/sys/unix` 的 `SysctlRaw`/`SysctlUint32`/`SysctlUint64`（不使用 cgo，CPU 由负载均值估算）；Windows 的 `GetSystemTimes` 与 `GlobalMemoryStatusEx` 在 `x/sys/windows` 中没有封装，经 `windows.NewLazySystemDLL("kernel32.dll")` 绑定（只从 System32 加载）。
+
+`admission/` 的本机分类信号量使用 `golang.org/x/sync/semaphore`（根 `go.mod` 已有，Gateway 的 `scheduler` 早已使用，不新增模块）：需要带上下文的有界等待，标准库的 channel 信号量无法在等待者计数与取消之间提供同样清晰的语义。

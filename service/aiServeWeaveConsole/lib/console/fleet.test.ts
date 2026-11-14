@@ -248,3 +248,64 @@ test("fleet parses the CLI subscription quota a node reports", () => {
   assert.deepEqual(parse()?.cliUsage, []);
   assert.throws(() => parse([{ status: "ready" }]), ApiError);
 });
+
+test("fleet parses a node's live load and keeps unmeasured values absent", () => {
+  const snapshot = parseFleetSnapshot({
+    collected_at: "2026-01-01T12:00:00Z",
+    replicas: [replicaDocument()],
+    nodes: [
+      nodeDocument({
+        load: {
+          sampled_at: "2026-01-01T11:58:59Z",
+          cpu_utilization: 0.82,
+          cpu_estimated: true,
+          memory_available_bytes: 2147483648,
+          memory_total_bytes: 17179869184,
+          pressure: true,
+          pressure_reasons: ["cpu", "bogus", "cpu"],
+          admission_waiting: 3,
+        },
+      }),
+    ],
+    partial: false,
+  });
+  const load = snapshot.nodes[0]?.load;
+  assert.ok(load);
+  assert.equal(load.cpuUtilization, 0.82);
+  assert.equal(load.cpuEstimated, true);
+  assert.equal(load.loadAverage1m, null, "an unmeasured load average stays absent, not zero");
+  assert.equal(load.memoryAvailableBytes, 2147483648);
+  assert.equal(load.pressure, true);
+  assert.deepEqual(load.pressureReasons, ["cpu"]);
+  assert.equal(load.admissionWaiting, 3);
+});
+
+test("a missing or malformed load renders as not reported without failing the fleet", () => {
+  const snapshot = parseFleetSnapshot({
+    collected_at: "2026-01-01T12:00:00Z",
+    replicas: [replicaDocument()],
+    nodes: [nodeDocument(), nodeDocument({ node_id: "node-b", load: "oops" }), nodeDocument({ node_id: "node-c", load: [1] })],
+    partial: false,
+  });
+  assert.equal(snapshot.nodes.length, 3);
+  for (const node of snapshot.nodes) assert.equal(node.load, null);
+});
+
+test("load values are clamped to their ranges", () => {
+  const snapshot = parseFleetSnapshot({
+    collected_at: "2026-01-01T12:00:00Z",
+    replicas: [replicaDocument()],
+    nodes: [
+      nodeDocument({
+        load: { cpu_utilization: 4, memory_available_bytes: 99, memory_total_bytes: 10, admission_waiting: -2, sampled_at: "nope", pressure: "yes" },
+      }),
+    ],
+    partial: false,
+  });
+  const load = snapshot.nodes[0]?.load;
+  assert.equal(load?.cpuUtilization, 1);
+  assert.equal(load?.memoryAvailableBytes, 10);
+  assert.equal(load?.admissionWaiting, 0);
+  assert.equal(load?.sampledAt, null);
+  assert.equal(load?.pressure, false, "only a boolean true counts as pressure");
+});

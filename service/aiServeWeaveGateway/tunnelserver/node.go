@@ -18,6 +18,7 @@ import (
 	"AIServeWeave/common/cliusagestatus"
 	"AIServeWeave/common/comfyuimanagedstatus"
 	"AIServeWeave/common/modelpullstatus"
+	"AIServeWeave/common/nodeload"
 	"AIServeWeave/common/remoteprovider"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
@@ -111,7 +112,14 @@ type node struct {
 	lastHeartbeat time.Time
 	inflight      int
 	reportedIdle  int
-	draining      bool
+	// load is the host load the last heartbeat carried; hasLoad is false when
+	// that heartbeat carried none, so an older Agent stays "not reported".
+	//
+	// load 是最近一次心跳携带的主机负载；该心跳未携带时 hasLoad 为 false，使旧版 Agent
+	// 保持「未上报」。
+	load     nodeload.Report
+	hasLoad  bool
+	draining bool
 	// maintenance is set from the Registry's GatewayRoster.maintenance_node_ids
 	// (STATUS.md's P01), not by the Agent. Unlike draining it never closes
 	// idle slots or the Control stream: a node under operator-forced
@@ -305,6 +313,13 @@ type NodeInfo struct {
 	// CLIUsage 是最后一次上报的 CLI 订阅额度，按 kind 排序。它是不受信任的 Agent
 	// 输入，渲染时再做限制。
 	CLIUsage []cliusagestatus.Account
+	// Load is the live host load the node reported on its last heartbeat, or
+	// nil when it has reported none (an older Agent, or no heartbeat yet).
+	// Nil is "not reported", never "idle".
+	//
+	// Load 是该节点在最近一次心跳上报的实时主机负载；未上报时（旧版 Agent 或尚无心跳）
+	// 为 nil。nil 表示「未上报」，绝不表示「空闲」。
+	Load *nodeload.Report
 }
 
 // Nodes returns a view of every node connected to this replica, sorted by
@@ -483,7 +498,23 @@ func (n *node) info(now time.Time, heartbeatTimeout time.Duration) NodeInfo {
 		Maintenance:      n.maintenance,
 		Live:             n.liveLocked(now, heartbeatTimeout),
 		CLIUsage:         cloneCLIUsage(n.cliUsage),
+		Load:             n.loadLocked(),
 	}
+}
+
+// loadLocked returns a copy of the last heartbeat's load, or nil. n.mu is held.
+// The report's pointer fields are never mutated after decoding, so a shallow
+// copy with its own reasons slice does not alias anything that changes.
+//
+// loadLocked 返回最近一次心跳负载的副本，或 nil。调用方持有 n.mu。报告的指针字段解码后
+// 不再修改，因此一个带独立 reasons 切片的浅拷贝不会与任何会变化的东西共用内存。
+func (n *node) loadLocked() *nodeload.Report {
+	if !n.hasLoad {
+		return nil
+	}
+	load := n.load
+	load.PressureReasons = slices.Clone(n.load.PressureReasons)
+	return &load
 }
 
 // cloneCLIUsage copies accounts and their windows, so a NodeInfo never aliases

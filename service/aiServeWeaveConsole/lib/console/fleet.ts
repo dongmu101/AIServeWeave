@@ -171,7 +171,32 @@ export interface FleetNode {
   runtimes: NodeRuntime[];
   replicas: string[];
   cliUsage: NodeCliUsage[];
+  /** Live host load from the last heartbeat; null means not reported, never idle.
+   * 最近一次心跳的实时主机负载；null 表示未上报，绝不表示空闲。 */
+  load: NodeLoad | null;
   observedAt: string;
+}
+
+/** NodeLoadReason names why an Agent reports resource pressure.
+ * NodeLoadReason 说明 Agent 报告资源紧张的原因。 */
+export type NodeLoadReason = "cpu" | "memory";
+
+/** NodeLoad is the live host load an Agent reported. Every measurement is
+ * optional: null means the platform could not measure it, not zero.
+ *
+ * NodeLoad 是 Agent 上报的实时主机负载。每项测量都是可选的：null 表示该平台无法测量，
+ * 而不是零。 */
+export interface NodeLoad {
+  sampledAt: string | null;
+  /** 0..1 */
+  cpuUtilization: number | null;
+  cpuEstimated: boolean;
+  loadAverage1m: number | null;
+  memoryAvailableBytes: number | null;
+  memoryTotalBytes: number | null;
+  pressure: boolean;
+  pressureReasons: NodeLoadReason[];
+  admissionWaiting: number;
 }
 
 /** NodeResources is the hardware the Agent reported.
@@ -403,6 +428,39 @@ function parseRuntime(value: unknown): NodeRuntime {
   };
 }
 
+function finiteOrNull(value: unknown, minimum: number, maximum: number): number | null {
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  return Math.min(Math.max(value, minimum), maximum);
+}
+
+/**
+ * parseLoad reads a node's live load leniently: an absent or malformed load
+ * renders as "not reported" instead of failing the whole fleet document, the
+ * numbers are clamped to their ranges, and only the two known reasons survive.
+ *
+ * parseLoad 宽松地读取节点实时负载：缺席或格式错误的负载渲染为「未上报」，而不是让整份
+ * 机群文档失败；数值被限制在各自范围内，只保留两个已知原因。
+ */
+export function parseLoad(value: unknown): NodeLoad | null {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  const source = value as Record<string, unknown>;
+  const total = finiteOrNull(source.memory_total_bytes, 0, Number.MAX_SAFE_INTEGER);
+  const available = finiteOrNull(source.memory_available_bytes, 0, total ?? Number.MAX_SAFE_INTEGER);
+  const sampled = typeof source.sampled_at === "string" && !Number.isNaN(Date.parse(source.sampled_at)) ? source.sampled_at : null;
+  const reasons = Array.isArray(source.pressure_reasons) ? source.pressure_reasons : [];
+  return {
+    sampledAt: sampled,
+    cpuUtilization: finiteOrNull(source.cpu_utilization, 0, 1),
+    cpuEstimated: source.cpu_estimated === true,
+    loadAverage1m: finiteOrNull(source.load_average_1m, 0, 1 << 20),
+    memoryAvailableBytes: available,
+    memoryTotalBytes: total,
+    pressure: source.pressure === true,
+    pressureReasons: (["cpu", "memory"] as const).filter((reason) => reasons.includes(reason)),
+    admissionWaiting: Math.trunc(finiteOrNull(source.admission_waiting, 0, Number.MAX_SAFE_INTEGER) ?? 0),
+  };
+}
+
 function parseNode(value: unknown): FleetNode {
   const source = record(value);
   const resources = source.resources;
@@ -437,6 +495,7 @@ function parseNode(value: unknown): FleetNode {
       const account = record(entry);
       return { ...parseCliUsage(account)!, runtimeId: text(account, "runtime_id"), kind: required(account, "kind") };
     }),
+    load: parseLoad(source.load),
     observedAt: timestamp(source, "observed_at"),
   };
 }

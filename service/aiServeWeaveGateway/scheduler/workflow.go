@@ -8,111 +8,49 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/routing"
 )
 
-// SubmitWorkflow queues req on a workflow-capable node and returns the run
+// SubmitWorkflow queues req on one workflow-capable node and returns the run
 // handle together with the candidate that accepted it. The caller must keep
 // that candidate: every later question about this run — status, events,
-// cancellation, artifacts — goes back to the same node, because the run only
-// exists in that one ComfyUI's queue.
+// cancellation, artifacts — has to go back to the same node, because the run
+// exists only in that one ComfyUI's queue.
 //
-// When every current candidate answers with a retryable backpressure-style
-// failure — every node is busy right now, not permanently unable to serve
-// this request — and the Scheduler was constructed with Config.QueueMaxWait
-// positive, SubmitWorkflow does not give up immediately. It waits up to that
-// long, re-polling the candidate set, before returning the failure
-// (STATUS.md's P2 bounded task queueing; see queueSubmitWorkflow). The
-// default (QueueMaxWait zero) keeps today's behavior: an exhausted candidate
-// set fails the call right away.
+// It makes exactly one pass over the current candidates, moving to the next
+// only on a failure SubmitRetryable allows. Waiting for capacity happens above
+// the scheduler, in the Redis-backed jobqueue, so a submission that finds
+// every node busy fails here at once and the queue decides whether to try
+// again.
 //
 // SubmitWorkflow 把 req 排入某个具备工作流能力的节点，返回 run 句柄与接受它的候选。
 // 调用方必须保存这个候选：此后关于这次运行的一切问题——状态、事件、取消、产物——都要
 // 回到同一个节点，因为这次运行只存在于那一个 ComfyUI 的队列里。
 //
-// 当每一个当前候选都以可重试的背压类失败作答——每个节点此刻都忙，不是永久无法服务
-// 这次请求——且 Scheduler 构造时 Config.QueueMaxWait 为正值，SubmitWorkflow 不会
-// 立即放弃。它会等待至多这么久、期间重新轮询候选集，再把失败返回给调用方
-// （STATUS.md 的 P2 有界任务排队，见 queueSubmitWorkflow）。默认值（QueueMaxWait
-// 为零）保持今天的行为：候选集耗尽立即让这次调用失败。
+// 它对当前候选恰好跑一轮，只在 SubmitRetryable 允许的失败上换下一个候选。等待容量发生在
+// 调度器之上、基于 Redis 的 jobqueue 中，因此发现所有节点都忙的提交在这里立即失败，由
+// 队列决定是否再试。
 func (s *Scheduler) SubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (runtime.WorkflowRun, Candidate, error) {
-	run, c, err, exhausted := s.attemptSubmitWorkflow(ctx, req)
-	if err == nil || !exhausted || s.workflowQueue == nil {
-		return run, c, err
-	}
-	return s.queueSubmitWorkflow(ctx, req, err)
-}
-
-// attemptSubmitWorkflow runs exactly one pass over the current candidate
-// set, exactly what SubmitWorkflow did before queueing existed. exhausted
-// reports whether every tried candidate failed with a retryable error — the
-// only condition queueSubmitWorkflow will wait on. It is false both when no
-// candidate exists at all (ErrNoCapableNode) and when a candidate failed
-// with a non-retryable error, because waiting cannot change either outcome.
-//
-// attemptSubmitWorkflow 对当前候选集跑恰好一轮——就是排队功能出现之前 SubmitWorkflow
-// 所做的事。exhausted 报告是否每一个被尝试的候选都以可重试错误失败——这是
-// queueSubmitWorkflow 唯一会等待的条件。候选完全不存在（ErrNoCapableNode）与候选以
-// 不可重试错误失败这两种情形下它都是 false，因为等待无法改变这两种结果中的任何一个。
-func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (run runtime.WorkflowRun, c Candidate, err error, exhausted bool) {
 	candidates := s.workflowCandidates(ctx, runtime.CapabilityWorkflowExecution, req.MinGPUMemoryBytes)
 	s.metrics.Selection(runtime.CapabilityWorkflowExecution, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.WorkflowRun{}, Candidate{}, ErrNoCapableNode, false
+		return runtime.WorkflowRun{}, Candidate{}, ErrNoCapableNode
 	}
 	var lastErr error
 	for _, cand := range candidates {
 		if !s.candidateAllowed(ctx, cand) {
-			return runtime.WorkflowRun{}, cand, ErrNodeNotAllowed, false
+			return runtime.WorkflowRun{}, cand, ErrNodeNotAllowed
 		}
 		attemptRun, attemptErr := s.server.Runtime(cand.NodeID, cand.RuntimeID).Submit(ctx, req)
 		s.breakers.record(cand, attemptErr, s.clock.Now())
 		s.metrics.Dispatch(cand, attemptErr)
 		if attemptErr == nil {
-			return attemptRun, cand, nil, false
+			return attemptRun, cand, nil
 		}
 		lastErr = attemptErr
 		if !submitRetryable(attemptErr) {
-			return runtime.WorkflowRun{}, cand, attemptErr, false
+			return runtime.WorkflowRun{}, cand, attemptErr
 		}
 		s.metrics.Retry(runtime.CapabilityWorkflowExecution)
 	}
-	return runtime.WorkflowRun{}, Candidate{}, lastErr, true
-}
-
-// queueSubmitWorkflow implements STATUS.md's P2 bounded task queueing. It is
-// reached only after attemptSubmitWorkflow found every current candidate
-// busy in a retryable way; firstErr is that first exhausted attempt's
-// failure, returned unchanged if the wait budget runs out without a
-// candidate becoming available.
-//
-// The wait is bounded on two independent axes, per the rule "任何一跳都
-// 不得无界缓冲": a maximum duration (Config.QueueMaxWait) and a maximum number
-// of concurrently queued submissions (Config.QueueMaxWaiters). A submission
-// that finds the semaphore already full is rejected immediately — it does
-// not become a third, unbounded axis of queueing. Both bounds live in the
-// shared waitQueue (queue.go).
-//
-// queueSubmitWorkflow 实现 STATUS.md 的 P2 有界任务排队。只有在 attemptSubmitWorkflow
-// 发现每一个当前候选都以可重试方式繁忙之后才会走到这里；firstErr 是那次耗尽尝试的
-// 失败，等待预算用完、仍没有候选可用时会原样返回它。
-//
-// 等待在两条彼此独立的轴上都设了界，对应「任何一跳都不得无界缓冲」：一个
-// 最长时长（Config.QueueMaxWait）与一个最大并发排队数（Config.QueueMaxWaiters）。发现信号量
-// 已满的提交会被立即拒绝——它不会成为排队的第三条无界轴。两条界都由共用的 waitQueue
-// （queue.go）实现。
-func (s *Scheduler) queueSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest, firstErr error) (runtime.WorkflowRun, Candidate, error) {
-	var (
-		run runtime.WorkflowRun
-		c   Candidate
-	)
-	err := s.workflowQueue.wait(ctx, firstErr, func() (error, bool) {
-		var err error
-		var exhausted bool
-		run, c, err, exhausted = s.attemptSubmitWorkflow(ctx, req)
-		return err, exhausted
-	})
-	if err != nil {
-		return runtime.WorkflowRun{}, c, err
-	}
-	return run, c, nil
+	return runtime.WorkflowRun{}, Candidate{}, lastErr
 }
 
 // SubmitWorkflowTo queues req on c specifically, with no candidate selection
@@ -252,6 +190,14 @@ func (s *Scheduler) OpenArtifact(ctx context.Context, c Candidate, ref runtime.A
 // 的失败才算——没有空闲槽、连接根本没建起来、runtime 已关闭。上游错误与超时会让这次
 // 提交的下场变成未知，而一个被提交两次的工作流会产出第二次没人要的生成，还占着有人
 // 在为之付费的硬件。
+// SubmitRetryable is submitRetryable for the queue above the scheduler: a
+// queued submission may be tried again later only when it is certain no
+// backend saw it.
+//
+// SubmitRetryable 是给调度器之上的队列使用的 submitRetryable：只有确定没有后端见过它时，
+// 排队中的提交才可以稍后再试。
+func SubmitRetryable(err error) bool { return submitRetryable(err) }
+
 func submitRetryable(err error) bool {
 	code, ok := errorCode(err)
 	if !ok {

@@ -41,6 +41,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/comfyuimanagedapi"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
+	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
 	"AIServeWeave/service/aiServeWeaveGateway/messagesession"
 	"AIServeWeave/service/aiServeWeaveGateway/modelpullapi"
 	"AIServeWeave/service/aiServeWeaveGateway/objectstore"
@@ -49,6 +50,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveGateway/remoteprovidersapi"
 	"AIServeWeave/service/aiServeWeaveGateway/scheduler"
 	"AIServeWeave/service/aiServeWeaveGateway/tunnelserver"
+	"AIServeWeave/service/aiServeWeaveGateway/waitqueue"
 )
 
 // drainGrace is how long connected Agents are given to finish in-flight
@@ -124,7 +126,7 @@ func run() error {
 		"path to the shared secret GatewayDirectory.Join presents to the Registry (STATUS.md's S03); empty omits it, which only works when the Registry has no -gateway-token-file configured")
 	advertiseAddr := flag.String("tunnel-advertise-addr", "", "address Agents should dial to reach this replica's tunnel listener; defaults to -tunnel-addr, which is wrong once NAT or a load balancer sits in front of it")
 	redisAddr := flag.String("redis-addr", "",
-		"Redis host:port for fleet-wide rate limiting; empty enforces per-replica, which admits the configured allowance once per replica")
+		"Redis host:port shared by every replica, for fleet-wide rate limiting, Messages continuations and the chat and workflow queues; empty enforces rate limits per replica (admitting the configured allowance once per replica) and leaves both queues unavailable")
 	breakerFailureThreshold := flag.Int("breaker-failure-threshold", 0,
 		"consecutive breaker-qualifying failures (connection/timeout/upstream errors only) before a candidate node trips open; zero uses scheduler's built-in default (5), which is unvalidated against real traffic as of P10 — see docs/acceptance/p10-breaker-calibration-2026-09-13")
 	breakerBaseCooldown := flag.Duration("breaker-base-cooldown", 0,
@@ -142,17 +144,23 @@ func run() error {
 	schedulerPrefixBytes := flag.Int("scheduler-prefix-bytes", 0,
 		"with -scheduler-policy=prefix_hash, how many bytes of a chat request's leading messages (up to and including the first user message) are fingerprinted; zero uses scheduler's built-in default (4096)")
 	workflowQueueMaxWait := flag.Duration("workflow-queue-max-wait", 0,
-		"STATUS.md's P2 bounded task queueing: how long a workflow submission waits, re-polling candidates, once every workflow-capable node is busy in a retryable way, before the failure is returned; zero disables queueing, which fails such a submission immediately (today's behavior, and the default)")
-	workflowQueueRetryInterval := flag.Duration("workflow-queue-retry-interval", 0,
-		"how often a queued workflow submission re-polls candidates; zero uses scheduler's built-in default (500ms); ignored when -workflow-queue-max-wait is zero")
-	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", 0,
-		"maximum workflow submissions allowed to wait at once; one beyond this is rejected immediately rather than queueing; zero uses scheduler's built-in default (64); ignored when -workflow-queue-max-wait is zero")
+		"turns on the durable Redis workflow queue (requires -redis-addr): JSON workflow runs and ComfyUI image generations are admitted to a cluster-wide asynq queue and dispatched by any replica's workers when a node has capacity, waiting at most this long before failing with queue_timeout; zero disables queueing, which fails a submission at once when every node is busy (the default)")
+	workflowQueueRetryInterval := flag.Duration("workflow-queue-retry-interval", time.Second,
+		"how often a worker holding a queued workflow re-polls candidates; ignored when -workflow-queue-max-wait is zero")
+	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", jobqueueDefaultMaxLength,
+		"maximum workflow jobs admitted to the queue across the whole cluster; one beyond this is answered 429 queue_full; ignored when -workflow-queue-max-wait is zero")
+	workflowQueueConcurrency := flag.Int("workflow-queue-concurrency", 4,
+		"how many queued workflow tasks this replica's workers hold at once; ignored when -workflow-queue-max-wait is zero")
+	workflowQueueName := flag.String("workflow-queue-name", "aisw-workflow",
+		"name isolating this deployment's workflow queue in a shared Redis; every replica of one fleet must use the same name")
 	chatQueueMaxWait := flag.Duration("chat-queue-max-wait", 0,
-		"how long a new Chat Completions, Responses or Messages request waits, re-polling candidates, once every candidate it tried was busy (no idle slot, or the Agent's concurrency or CLI session limit reached), before the 429 is returned; zero disables queueing and returns it immediately (the default); continuations and rate-limited candidates never wait")
-	chatQueueRetryInterval := flag.Duration("chat-queue-retry-interval", 0,
-		"how often a queued chat request re-polls candidates; zero uses scheduler's built-in default (250ms); ignored when -chat-queue-max-wait is zero")
-	chatQueueMaxWaiters := flag.Int("chat-queue-max-waiters", 0,
-		"maximum chat requests allowed to wait at once; one beyond this gets the 429 immediately; zero uses scheduler's built-in default (64); ignored when -chat-queue-max-wait is zero")
+		"turns on the cluster-wide chat wait queue (requires -redis-addr): a new Chat Completions, Responses or Messages request whose every candidate was busy (no idle slot, or the Agent's concurrency, admission or CLI session limit reached) takes a ticket in a Redis FIFO shared by all replicas and waits at most this long, re-polling from the head of the queue, before the 429 is returned; dispatch stays on the replica holding the connection; zero disables queueing and returns the 429 immediately (the default); continuations and rate-limited candidates never wait")
+	chatQueueRetryInterval := flag.Duration("chat-queue-retry-interval", waitqueue.DefaultRetryInterval,
+		"how often a queued chat request polls the queue; ignored when -chat-queue-max-wait is zero")
+	chatQueueMaxWaiters := flag.Int("chat-queue-max-waiters", waitqueue.DefaultMaxWaiters,
+		"maximum chat requests waiting at once across the whole cluster; one beyond this gets the 429 immediately; ignored when -chat-queue-max-wait is zero")
+	chatQueueHeadWindow := flag.Int("chat-queue-head-window", waitqueue.DefaultHeadWindow,
+		"how many requests at the head of the chat queue may re-run a dispatch pass at once; ignored when -chat-queue-max-wait is zero")
 	modelUnavailableWait := flag.Duration("model-unavailable-wait", 0,
 		"how long a Messages, Chat Completions or Responses request waits for a model whose node left within the last 2 minutes (typically an Agent reconnecting) to come back, before answering a retryable 503 model_unavailable instead of 404 model_not_found; zero uses scheduler's built-in default (15s), negative answers 503 at once without waiting")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
@@ -247,6 +255,25 @@ func run() error {
 		id = host
 	}
 
+	// Asked to queue without the shared store a queue needs, the replica
+	// refuses to start rather than silently answering 429 at once: the
+	// operator opted in, and finding out at startup beats finding out from
+	// traffic.
+	// 要求排队却没有队列所需的共享存储时，副本拒绝启动，而不是悄悄地立即回答 429：运维已经
+	// 明确开启，在启动时发现好过从流量里发现。
+	if err := validateQueueFlags(*workflowQueueMaxWait, *chatQueueMaxWait, *redisAddr); err != nil {
+		return err
+	}
+	// One Redis pool serves rate limiting, Messages continuations and both
+	// queues' own scripts; asynq gets a separate pool (buildWorkflowQueue).
+	// 一个 Redis 连接池服务于限流、Messages 续接与两个队列自己的脚本；asynq 另用一个池
+	// （buildWorkflowQueue）。
+	var sharedRedis *redis.Client
+	if *redisAddr != "" {
+		sharedRedis = redis.NewClient(&redis.Options{Addr: *redisAddr})
+		defer sharedRedis.Close()
+	}
+
 	// One registry for the whole process: the tunnel server, the scheduler
 	// and the front door measure three points on the same request path, and
 	// splitting them across registries would mean three endpoints whose
@@ -258,6 +285,8 @@ func run() error {
 		tunnelserver.Descriptions(),
 		scheduler.Descriptions(),
 		httpapi.Descriptions(),
+		waitqueue.Descriptions(),
+		jobqueue.Descriptions(),
 	)
 
 	server, err := tunnelserver.New(tunnelserver.Config{
@@ -391,7 +420,12 @@ func run() error {
 	// 本副本用哪个限流器是部署问题而不是代码问题：单副本两种方式都精确，而多副本只有
 	// 共享 Redis 时才真正执行配置的额度。没有它时每个副本各放行一份完整额度，这一点
 	// 被记录下来而不是默默接受——见 README。
-	limiter, err := rateLimiter(*redisAddr, logger)
+	limiter, err := rateLimiter(sharedRedis, logger)
+	if err != nil {
+		return err
+	}
+
+	chatQueue, err := buildChatQueue(sharedRedis, id, *chatQueueMaxWait, *chatQueueRetryInterval, *chatQueueMaxWaiters, *chatQueueHeadWindow, registry, logger)
 	if err != nil {
 		return err
 	}
@@ -401,23 +435,18 @@ func run() error {
 		return err
 	}
 	sched := scheduler.New(server, scheduler.Config{
-		Metrics:                registry,
-		Logger:                 logger,
-		FailureThreshold:       *breakerFailureThreshold,
-		BaseCooldown:           *breakerBaseCooldown,
-		MaxCooldown:            *breakerMaxCooldown,
-		RateLimitCooldown:      *rateLimitCooldown,
-		MaxRateLimitCooldown:   *maxRateLimitCooldown,
-		SessionAffinity:        *sessionAffinity,
-		Policy:                 policy,
-		PrefixBytes:            *schedulerPrefixBytes,
-		QueueMaxWait:           *workflowQueueMaxWait,
-		QueueRetryInterval:     *workflowQueueRetryInterval,
-		QueueMaxWaiters:        *workflowQueueMaxWaiters,
-		ChatQueueMaxWait:       *chatQueueMaxWait,
-		ChatQueueRetryInterval: *chatQueueRetryInterval,
-		ChatQueueMaxWaiters:    *chatQueueMaxWaiters,
-		UnavailableWait:        *modelUnavailableWait,
+		Metrics:              registry,
+		Logger:               logger,
+		FailureThreshold:     *breakerFailureThreshold,
+		BaseCooldown:         *breakerBaseCooldown,
+		MaxCooldown:          *breakerMaxCooldown,
+		RateLimitCooldown:    *rateLimitCooldown,
+		MaxRateLimitCooldown: *maxRateLimitCooldown,
+		SessionAffinity:      *sessionAffinity,
+		Policy:               policy,
+		PrefixBytes:          *schedulerPrefixBytes,
+		ChatQueue:            chatQueue,
+		UnavailableWait:      *modelUnavailableWait,
 	})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {
@@ -515,11 +544,16 @@ func run() error {
 	if responsesPersist != nil {
 		httpCfg.ResponsesClient = responsesPersist
 	}
-	if *redisAddr != "" {
-		messageRedis := redis.NewClient(&redis.Options{Addr: *redisAddr})
-		defer messageRedis.Close()
-		httpCfg.MessagesSessions = messagesession.NewRedis(messageRedis)
+	if sharedRedis != nil {
+		httpCfg.MessagesSessions = messagesession.NewRedis(sharedRedis)
 	}
+	workflowQueue, closeWorkflowQueue, err := buildWorkflowQueue(*redisAddr, sharedRedis, id, *workflowQueueName,
+		*workflowQueueMaxWait, *workflowQueueRetryInterval, *workflowQueueMaxWaiters, *workflowQueueConcurrency, registry, logger)
+	if err != nil {
+		return err
+	}
+	defer closeWorkflowQueue()
+	httpCfg.WorkflowQueue = workflowQueue
 	front := httpapi.New(sched, httpCfg)
 
 	// The docs routes are registered on a mux that wraps front rather than
@@ -1070,18 +1104,94 @@ func responsesPersistAdapter(addr, token string, logger *slog.Logger) (*controlp
 // rateLimiter builds the quota limiter this replica enforces with.
 //
 // rateLimiter 构造本副本用于执行配额的限流器。
-func rateLimiter(redisAddr string, logger *slog.Logger) (ratelimit.Limiter, error) {
-	if redisAddr == "" {
+func rateLimiter(client *redis.Client, logger *slog.Logger) (ratelimit.Limiter, error) {
+	if client == nil {
 		logger.Warn("no -redis-addr: rate limits are enforced per replica, so a fleet of N replicas admits N times each tenant's configured allowance")
 		return ratelimit.NewMemory(ratelimit.MemoryConfig{}), nil
 	}
-	client := redis.NewClient(&redis.Options{Addr: redisAddr})
 	limiter, err := ratelimit.NewRedis(ratelimit.RedisConfig{Client: client})
 	if err != nil {
 		return nil, err
 	}
-	logger.Info("rate limits are enforced fleet-wide", slog.String("redis_addr", redisAddr))
+	logger.Info("rate limits are enforced fleet-wide", slog.String("redis_addr", client.Options().Addr))
 	return limiter, nil
+}
+
+// jobqueueDefaultMaxLength is -workflow-queue-max-waiters' default.
+const jobqueueDefaultMaxLength = 64
+
+// validateQueueFlags refuses a queue that is turned on without -redis-addr:
+// both queues are cluster-wide and live in Redis.
+//
+// validateQueueFlags 拒绝在没有 -redis-addr 的情况下开启队列：两个队列都是全集群的，
+// 都存放在 Redis 中。
+func validateQueueFlags(workflowMaxWait, chatMaxWait time.Duration, redisAddr string) error {
+	if redisAddr != "" {
+		return nil
+	}
+	if workflowMaxWait > 0 {
+		return errors.New("-workflow-queue-max-wait requires -redis-addr: the workflow queue is shared by every replica through Redis")
+	}
+	if chatMaxWait > 0 {
+		return errors.New("-chat-queue-max-wait requires -redis-addr: the chat wait queue is shared by every replica through Redis")
+	}
+	return nil
+}
+
+// buildChatQueue returns the cluster-wide chat wait queue, or nil when
+// -chat-queue-max-wait is zero.
+//
+// buildChatQueue 返回全集群对话等待队列；-chat-queue-max-wait 为零时返回 nil。
+func buildChatQueue(client *redis.Client, replicaID string, maxWait, retryInterval time.Duration, maxWaiters, headWindow int, registry *metrics.Registry, logger *slog.Logger) (scheduler.WaitQueue, error) {
+	if maxWait <= 0 {
+		return nil, nil
+	}
+	q, err := waitqueue.New(waitqueue.Config{
+		Client: client, ReplicaID: replicaID, MaxWait: maxWait, RetryInterval: retryInterval,
+		MaxWaiters: maxWaiters, HeadWindow: headWindow, Metrics: registry, Logger: logger,
+	})
+	if err != nil {
+		return nil, err
+	}
+	logger.Info("chat wait queue is cluster-wide", slog.Duration("max_wait", maxWait), slog.Int("max_waiters", maxWaiters))
+	return q, nil
+}
+
+// buildWorkflowQueue returns the durable workflow queue, or nil when
+// -workflow-queue-max-wait is zero. asynq gets its own Redis pool, sized for
+// its workers, heartbeats and forwarders, so it does not starve rate limiting
+// on the shared pool; the returned close releases it after the queue stopped.
+//
+// buildWorkflowQueue 返回持久工作流队列；-workflow-queue-max-wait 为零时返回 nil。asynq
+// 使用自己的 Redis 连接池，按其 worker、心跳与转发器的需要设定大小，避免挤占共享池上的
+// 限流；返回的 close 在队列停止之后释放它。
+func buildWorkflowQueue(redisAddr string, shared *redis.Client, replicaID, name string, maxWait, retryInterval time.Duration, maxLength, concurrency int, registry *metrics.Registry, logger *slog.Logger) (*jobqueue.Queue, func(), error) {
+	if maxWait <= 0 {
+		return nil, func() {}, nil
+	}
+	concurrency = max(concurrency, 1)
+	asynqRedis := redis.NewClient(&redis.Options{Addr: redisAddr, PoolSize: concurrency + 10})
+	q, err := jobqueue.New(jobqueue.Config{
+		Store: jobqueue.NewRedisStore(shared, name),
+		Transport: jobqueue.NewAsynqTransport(jobqueue.AsynqConfig{
+			Client: asynqRedis, Queue: name, Concurrency: concurrency, RetryInterval: retryInterval,
+			ShutdownTimeout: 10 * time.Second, Logger: logger,
+		}),
+		Classify:      httpapi.ClassifyQueuedSubmit,
+		ReplicaID:     replicaID,
+		MaxWait:       maxWait,
+		MaxLength:     maxLength,
+		RetryInterval: retryInterval,
+		Metrics:       registry,
+		Logger:        logger,
+	})
+	if err != nil {
+		_ = asynqRedis.Close()
+		return nil, nil, err
+	}
+	logger.Info("workflow queue is durable and cluster-wide",
+		slog.String("queue", name), slog.Duration("max_wait", maxWait), slog.Int("max_length", maxLength), slog.Int("concurrency", concurrency))
+	return q, func() { _ = asynqRedis.Close() }, nil
 }
 
 // loadSecretFile reads a bearer-token secret from path, trimmed of

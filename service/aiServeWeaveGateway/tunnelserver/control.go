@@ -214,7 +214,10 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 			n.lastHeartbeat = now
 			n.inflight = int(body.Heartbeat.GetInflightRequests())
 			n.reportedIdle = int(body.Heartbeat.GetIdleSlots())
+			n.load, n.hasLoad = tunnelwire.NodeLoadFromProto(body.Heartbeat.GetLoad())
+			pressure := n.hasLoad && n.load.Pressure
 			n.mu.Unlock()
+			n.metrics.Pressure(pressure)
 
 			// The interval is measured against the previous heartbeat rather
 			// than against the Agent's own sent_unix_ms: the two clocks are

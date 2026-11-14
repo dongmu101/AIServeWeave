@@ -104,6 +104,16 @@ type scored struct {
 	idle     int
 	queued   int
 	inflight int
+	// pressure means the node reported resource pressure on its last
+	// heartbeat (tunnelserver.SchedNode.Pressure). Every policy tries such a
+	// candidate last; it is not skipped, because the Agent's own admission is
+	// the hard gate and a pressured node may still be the only one able to
+	// serve.
+	//
+	// pressure 表示节点在最近一次心跳报告了资源紧张（tunnelserver.SchedNode.Pressure）。
+	// 所有策略都把这样的候选放到最后尝试；它不会被跳过，因为 Agent 自己的准入才是硬性
+	// 闸门，而一个资源紧张的节点仍可能是唯一能服务的那个。
+	pressure bool
 }
 
 // lessLoaded is the least-load comparator: more idle slots first, then lower
@@ -127,6 +137,9 @@ type scored struct {
 // 记录了原因），所以单靠 idle 无法区分这样两个候选。对不上报该信号的运行时种类它恒为
 // 0，排序上等同于"确认空闲"——不上报这件事本身从不被当作惩罚。
 func lessLoaded(a, b scored) bool {
+	if a.pressure != b.pressure {
+		return !a.pressure
+	}
 	if a.idle != b.idle {
 		return a.idle > b.idle
 	}
@@ -203,6 +216,10 @@ func stableSort(found []scored, less func(a, b *scored) bool) {
 // 拒绝笔误，再到达这里。
 func orderCandidates(found []scored, policy Policy, key affinity, intn func(int) int) {
 	stableSort(found, func(a, b *scored) bool { return lessLoaded(*a, *b) })
+	// Whatever order the policy settles on, candidates under resource
+	// pressure go last, keeping their relative order as retry fallbacks.
+	// 无论策略最终排成什么顺序，资源紧张的候选都排到最后，并保持彼此的相对顺序作为重试回退。
+	defer pressureLast(found)
 
 	switch policy {
 	case PolicyPowerOfTwo:
@@ -249,6 +266,30 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 			return ranks[a.Candidate] > ranks[b.Candidate]
 		})
 	}
+}
+
+// pressureLast stably moves candidates under resource pressure behind the
+// rest. It allocates nothing when no candidate is under pressure, which is the
+// common case on the hot path.
+//
+// pressureLast 把资源紧张的候选稳定地移到其余候选之后。没有候选资源紧张时（热路径上的
+// 常见情形）不做任何分配。
+func pressureLast(found []scored) {
+	first := slices.IndexFunc(found, func(s scored) bool { return s.pressure })
+	if first < 0 {
+		return
+	}
+	held := make([]scored, 0, len(found)-first)
+	k := first
+	for _, s := range found[first:] {
+		if s.pressure {
+			held = append(held, s)
+			continue
+		}
+		found[k] = s
+		k++
+	}
+	copy(found[k:], held)
 }
 
 // rendezvousScore is the highest-random-weight score of c for key. Each

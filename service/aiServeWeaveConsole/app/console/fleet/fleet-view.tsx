@@ -15,8 +15,9 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { parseFleetSnapshot, type FleetNode, type FleetSnapshot } from "@/lib/console/fleet";
+import { parseFleetSnapshot, type FleetNode, type FleetSnapshot, type NodeLoad } from "@/lib/console/fleet";
 import { formatDateTime, matchesQuery } from "@/lib/console/format";
+import { formatBytes, formatNumber, formatPercent } from "@/lib/i18n/format";
 
 /**
  * The fleet view.
@@ -143,6 +144,16 @@ function NodeCard({ node }: { node: FleetNode }) {
           </Badge>
           <Badge variant="outline">{node.maintenance ? t("tenant.inMaintenanceObserved") : t("tenant.notInMaintenanceObserved")}</Badge>
           {node.draining ? <Badge variant="outline"><Message id="tenant.exiting" /></Badge> : null}
+          {node.live && node.load?.pressure ? (
+            <Badge variant="destructive">
+              {[
+                t("tenant.underPressure"),
+                ...node.load.pressureReasons.map((reason) =>
+                  reason === "cpu" ? t("tenant.pressureReasonCpu") : t("tenant.pressureReasonMemory"),
+                ),
+              ].join(" · ")}
+            </Badge>
+          ) : null}
           {node.agentVersion ? (
             <span className="text-xs font-normal text-muted-foreground">
               Agent {node.agentVersion}
@@ -174,6 +185,7 @@ function NodeCard({ node }: { node: FleetNode }) {
                 : t("tenant.notReported")
             }
           />
+          <Fact label={t("tenant.liveLoad")} value={describeLoad(node.load, t, locale)} />
           <Fact label={t("tenant.collectedAt")} value={formatDateTime(node.observedAt, undefined, locale)} />
           <div className="grid gap-1 sm:col-span-2">
             <dt className="text-xs text-muted-foreground"><Message id="tenant.labelsAgentReported" /></dt>
@@ -256,6 +268,38 @@ function NodeCard({ node }: { node: FleetNode }) {
       </CardContent>
     </Card>
   );
+}
+
+/** describeLoad renders only what the Agent measured; an absent value is
+ * omitted rather than shown as zero.
+ *
+ * describeLoad 只渲染 Agent 测到的内容；缺席的值被省略，而不是显示为零。 */
+function describeLoad(
+  load: NodeLoad | null,
+  t: ReturnType<typeof useI18n>["t"],
+  locale: ReturnType<typeof useI18n>["locale"],
+): string {
+  if (!load) return t("tenant.loadNotReported");
+  const parts: string[] = [];
+  if (load.cpuUtilization !== null) {
+    const value = formatPercent(load.cpuUtilization, locale);
+    parts.push(load.cpuEstimated ? t("tenant.cpuUsageEstimated", { value }) : t("tenant.cpuUsage", { value }));
+  }
+  if (load.memoryAvailableBytes !== null && load.memoryTotalBytes !== null) {
+    parts.push(
+      t("tenant.memoryAvailable", {
+        available: formatBytes(load.memoryAvailableBytes, locale),
+        total: formatBytes(load.memoryTotalBytes, locale),
+      }),
+    );
+  }
+  if (load.loadAverage1m !== null) {
+    parts.push(t("tenant.loadAverage1m", { value: formatNumber(load.loadAverage1m, locale, { maximumFractionDigits: 2 }) }));
+  }
+  if (load.admissionWaiting > 0) {
+    parts.push(t("tenant.admissionWaiting", { value: load.admissionWaiting }));
+  }
+  return parts.length > 0 ? parts.join(" · ") : t("tenant.loadNotReported");
 }
 
 function Fact({ label, value }: { label: string; value: string }) {

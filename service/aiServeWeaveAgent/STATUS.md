@@ -22,7 +22,7 @@
   - 同一 CLI 可经 `account_dir` 以多个订阅账户对外服务，见 [README](README.md#同一-cli-的多个账户)。
 - ComfyUI 适配器提供 `comfyui_queue_running`/`comfyui_queue_pending`（`runtime_id` 标签）队列深度量表，复用 `Status`/`Cancel` 本就会发起的 `GET /queue`，不产生额外请求；与隧道共用同一个 `metrics.Registry`，未配置 `-metrics-addr` 时安全丢弃。失败历史同时按是否显存/内存耗尽分类（`runtime.WorkflowStatus.OutOfMemory`），供 Gateway 统计，见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md)。
 - `workflow/` 仍是占位包。受控模板目录与输入绑定已在 Gateway 的 `workflow/` 实现，不能据此目录重复建设。
-- `hostresources/` 在 Hello 握手前探测本节点的 CPU 核数、内存总量、GPU 数量与显存总量，写入 `ClientConfig.Resources`。探测经 `os/exec` 调用系统自带工具（Linux 读 `/proc/meminfo`、`nvidia-smi`；macOS 用 `sysctl` 取内存，GPU 显存无通用查询手段留空），不引入 `gopsutil`/NVML，见 [依赖边界](../../docs/agents/dependencies.md)。这是**尽力而为的静态容量声明**：探测失败的字段留零值、不阻塞启动。Gateway 调度器用其中的 GPU 显存总量做准入过滤（target 的 `min_gpu_memory_bytes`，未上报或上报零显存的节点不被排除），见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md)；CPU、内存与 GPU 数量目前只用于展示。
+- `hostresources/` 在 Hello 握手前探测本节点的 CPU 核数、内存总量、GPU 数量与显存总量，写入 `ClientConfig.Resources`。探测经 `os/exec` 调用系统自带工具（Linux 读 `/proc/meminfo`、`nvidia-smi`；macOS 用 `sysctl` 取内存，GPU 显存无通用查询手段留空），不引入 `gopsutil`/NVML，见 [依赖边界](../../docs/agents/dependencies.md)。这是**尽力而为的静态容量声明**：探测失败的字段留零值、不阻塞启动。Gateway 调度器用其中的 GPU 显存总量做准入过滤（target 的 `min_gpu_memory_bytes`，未上报或上报零显存的节点不被排除），见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md)；CPU、内存与 GPU 数量目前只用于展示。2026-11-14 起，`hostresources/usage_*.go` 另行采集**实时** CPU、内存与负载（Linux `/proc` 与 cgroup v2、macOS sysctl 估算 CPU、Windows kernel32），由 `admission/` 经心跳上报，并驱动可选的资源闸门与本机分类信号量，见 [README「整机准入与负载上报」](README.md#整机准入与负载上报)。
 - `comfyuimanaged/`：Agent 本地、单容器的 ComfyUI Docker 生命周期管理，shell out 到 `docker` CLI（不新增 SDK 依赖）。镜像、GPU 设备、挂载路径与自定义节点来源全部来自本地 `-comfyui-managed-*` flag，从不接受 Gateway/控制面下发（`tunnel.proto`「不得表达 run this command / fetch this URL」）。
   - 启动：`Launcher.Start` 幂等——接管运行中的同名容器，不存在或已退出才创建/重建，镜像缺失先 `docker pull`；镜像必须带显式、非 `latest` 的 tag，端口固定绑定 `127.0.0.1`。`WaitReady` 只确认 TCP 可连通（未做 WebSocket 就绪检查），随后调用与 External 模式相同的 `manager.Add`，身份/能力校验交给 `comfyui.Runtime` 的 Probe/Discover。配置了 `-comfyui-managed-image` 但启动或校验失败会让 Agent 启动失败；普通本地后端未就绪不阻止启动。
   - 远程动作（`supervisor.go`）：Gateway 经隧道 Control 流触发 START/STOP/RESTART，动作不带容器名，只作用于本地声明的唯一实例；容器状态（pending/starting/running/stopped/failed）回报 Gateway。Agent 侧 RESTART 即 STOP 后 START，不检查在途 Job、不比对镜像版本，换镜像要先改本机 flag。活跃 Job 检查在 Gateway（`comfyuimanagedapi`：本副本仍有路由到该节点的非终态 Job 时答 409），跨副本聚合在控制面 `/operator/v1/nodes/:id/comfyui-managed`，Console 页面为 `/operator/comfyui-managed`。
@@ -106,7 +106,7 @@
 
 ## 尚未交付的范围
 
-- **资源感知调度**：Gateway 已按 Hello 上报的静态 GPU 显存做准入过滤；GPU/内存实时利用率采集与按实时负载调度未做。
+- **资源感知调度**：Gateway 已按 Hello 上报的静态 GPU 显存做准入过滤。实时 CPU/内存采集、心跳上报、Agent 本机准入（资源闸门 + 分类信号量）与 Gateway 资源紧张降级已于 2026-11-14 交付，默认测试与 Linux 容器（cgroup 256 MiB）、macOS 本机实测采样通过，真实负载与 Windows 实机未验收。GPU 实时利用率、cgroup CPU 配额换算未做。
 - **Agent 自动升级**：Agent 侧 CHECK/UPGRADE 已交付；ROLLBACK、Gateway 下发入口、控制面聚合与 Console 灰度可见性未做，因此目前无法从平台侧触发升级。
 - **ComfyUI Managed**：Agent 本地生命周期、Gateway 动作与 409 检查、控制面聚合、自定义节点、Console 页面均已交付；单机多实例未做；排空检查只看得到本副本的 Job，且不会自动等排空完成再执行。
 - **模型分发**：HTTP/Ollama 条目、按名字触发、并发、跨重启账本、磁盘余量与 Console 可见性均已交付。

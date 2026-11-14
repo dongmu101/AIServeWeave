@@ -358,6 +358,8 @@ Job 持久化由控制面管理，目标数据库为 MySQL 9.7 / InnoDB。Gatewa
 
 数据库事务不能与 ComfyUI 提交组成一个本地原子事务。设计必须区分提交意图、后端确认与结果未知，采用幂等更新和状态对账；结果未知时不盲目重新提交。后台同步有批次、频率和并发上限；多副本恢复必须明确执行权，避免重复执行。断线或观测超时不应直接被解释为后端已经停止。
 
+开启 Gateway 工作流持久队列（`jobqueue/`，Redis + asynq）后，提交意图已建模：worker 提交前把共享记录从 `queued` 改为 `dispatching` 并写入意图，节点接单后写入绑定（`dispatched`）。之后的投递若只见意图、不见绑定，就标记为 `submit_outcome_unknown`，不再提交。见 [Gateway STATUS「工作流 Job 的持久队列」](../service/aiServeWeaveGateway/STATUS.md#工作流-job-的持久队列asynq2026-11-14)。
+
 目标任务执行状态（提交确认状态另行建模）：
 
 ```text
@@ -390,7 +392,7 @@ ComfyUI 调度除通用节点状态外，还应考虑：
 - 工作流类型，例如图片、视频、音频或 3D
 - 租户是否有权使用指定工作流和模型
 
-ComfyUI 作业一旦开始执行，不应自动迁移到其他节点。只有仍处于 AIServeWeave 队列且尚未提交到 ComfyUI 的任务，才可以重新调度。
+ComfyUI 作业一旦开始执行，不应自动迁移到其他节点。只有仍处于 AIServeWeave 队列且尚未提交到 ComfyUI 的任务，才可以重新调度。 这个队列即 Gateway 的 `jobqueue/`：排队中的任务可由任一副本的 worker 派发。
 
 ## 模型与部署抽象
 

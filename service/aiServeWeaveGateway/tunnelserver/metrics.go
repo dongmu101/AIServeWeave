@@ -86,6 +86,12 @@ const (
 	// 延迟」在服务端的读数：Agent 自己的 RTT 指标看不见一次根本没到达的心跳，而这个
 	// 分布的长尾看得见。
 	MetricHeartbeatIntervalSeconds = "tunnel_server_heartbeat_interval_seconds"
+	// MetricNodePressure is 1 while the node's last heartbeat said it is
+	// refusing new heavy work for lack of CPU or memory, else 0.
+	//
+	// MetricNodePressure 在节点最近一次心跳声明它因 CPU 或内存不足而拒绝新的重任务时为 1，
+	// 否则为 0。
+	MetricNodePressure = "tunnel_server_node_pressure"
 	// MetricSlotsTotal is the slot occupancy gauge, by class and by
 	// SlotStateIdle/SlotStateBusy, as this replica sees it.
 	//
@@ -257,6 +263,10 @@ func Descriptions() metrics.Descriptions {
 			Kind: metrics.KindCounter,
 			Help: "Heartbeats received from the node.",
 		},
+		MetricNodePressure: {
+			Kind: metrics.KindGauge,
+			Help: "1 while the node reports resource pressure (CPU or memory over its admission threshold), else 0.",
+		},
 		MetricHeartbeatIntervalSeconds: {
 			Kind:    metrics.KindHistogram,
 			Help:    "Gap between consecutive heartbeats received from the node.",
@@ -390,6 +400,17 @@ func (r *recorder) Heartbeat(interval time.Duration) {
 	if interval > 0 {
 		r.sink.Histogram(MetricHeartbeatIntervalSeconds, r.link()).Observe(interval.Seconds())
 	}
+}
+
+// Pressure publishes whether the node reports resource pressure.
+//
+// Pressure 发布该节点是否报告资源紧张。
+func (r *recorder) Pressure(on bool) {
+	v := 0.0
+	if on {
+		v = 1
+	}
+	r.sink.Gauge(MetricNodePressure, r.link()).Set(v)
 }
 
 // Slots publishes one class's occupancy on this node.

@@ -23,23 +23,6 @@ import (
 // capability.
 var ErrNoCapableNode = errors.New("scheduler: no node can serve this model")
 
-// defaultQueueRetryInterval and defaultQueueMaxWaiters are the defaults for
-// Config.QueueRetryInterval and Config.QueueMaxWaiters when queueing is
-// enabled (Config.QueueMaxWait > 0) but a caller leaves one of them unset.
-//
-// defaultQueueRetryInterval 与 defaultQueueMaxWaiters 是排队开启
-// （Config.QueueMaxWait > 0）但调用方未设置其中某项时使用的默认值。
-//
-// defaultChatQueueRetryInterval is shorter because a chat client is waiting
-// on the response, not polling a job.
-//
-// defaultChatQueueRetryInterval 更短，因为对话客户端在等响应，而不是轮询一个 job。
-const (
-	defaultQueueRetryInterval     = 500 * time.Millisecond
-	defaultQueueMaxWaiters        = 64
-	defaultChatQueueRetryInterval = 250 * time.Millisecond
-)
-
 // Candidate is the (node, runtime instance) pair a request was dispatched
 // to, kept around so a caller can attribute the response and identify backend compatibility.
 // Candidate 记录实际派发的节点与运行时，供调用方归属响应并识别后端兼容行为。
@@ -101,17 +84,13 @@ type Scheduler struct {
 	// sessionAffinityOn 即 Config.SessionAffinity。
 	sessionAffinityOn bool
 
-	// workflowQueue implements STATUS.md's P2 bounded task queueing for
-	// workflow submissions (see workflow.go's queueSubmitWorkflow), and
-	// chatQueue the same bounded wait for new Chat, ChatStream and Messages
-	// requests. Each is nil, and its queueing disabled, unless its max wait
-	// was positive at construction.
+	// chatQueue is Config.ChatQueue: the bounded wait new Chat, ChatStream
+	// and Messages requests enter once every candidate was busy. Nil
+	// disables waiting.
 	//
-	// workflowQueue 实现工作流提交的 STATUS.md P2 有界任务排队（见 workflow.go 的
-	// queueSubmitWorkflow），chatQueue 为新的 Chat、ChatStream 与 Messages 请求提供
-	// 同样的有界等待。各自的最长等待在构造时不为正时为 nil，即关闭排队。
-	workflowQueue *waitQueue
-	chatQueue     *waitQueue
+	// chatQueue 即 Config.ChatQueue：新 Chat、ChatStream 与 Messages 请求在所有候选
+	// 都繁忙后进入的有界等待。为 nil 时不等待。
+	chatQueue WaitQueue
 
 	// unavailableWait is Config.UnavailableWait after defaulting; see
 	// unavailable.go.
@@ -202,65 +181,21 @@ type Config struct {
 	// defaultPrefixBytes（4096）。其他策略忽略此字段。
 	PrefixBytes int
 
-	// QueueMaxWait bounds STATUS.md's P2 bounded task queueing for
-	// SubmitWorkflow: once every currently connected workflow-capable
-	// candidate has answered one submission attempt with a retryable
-	// backpressure-style failure, SubmitWorkflow waits up to this long,
-	// re-polling the candidate set, before giving up and returning that
-	// failure — instead of returning it immediately, which is what happens
-	// today and what the zero value (the default) still does. Queueing never
-	// applies when no candidate exists at all (ErrNoCapableNode) or when a
-	// failure is not retryable: see the P2 design doc's 有界任务排队 section
-	// for why those two cases must not wait.
+	// ChatQueue is the bounded wait new Chat, ChatStream and native Messages
+	// sessions enter once every candidate tried in one pass was busy
+	// (ErrorBackpressure — no idle tunnel slot, or the Agent's runtime limit,
+	// node-wide admission or CLI session pool full). Nil (the default)
+	// returns the 429 at once. Other failures, a missing candidate, rate
+	// limits and Messages continuations, which must return to their own node,
+	// never wait. Workflow submissions are queued above the scheduler (the
+	// jobqueue package), so SubmitWorkflow always makes exactly one pass.
 	//
-	// QueueMaxWait 限定 STATUS.md P2 的有界任务排队：当每一个当前已连接、具备工作流
-	// 能力的候选，在一轮提交尝试里都以可重试的背压类失败作答时，SubmitWorkflow 会
-	// 等待至多这么久、期间重新轮询候选集，而不是像今天（以及零值默认）这样立即把
-	// 失败返回给调用方。候选完全不存在（ErrNoCapableNode）或失败不可重试的情形永远
-	// 不排队：理由见 P2 设计文档的「有界任务排队」一节。
-	QueueMaxWait time.Duration
-	// QueueRetryInterval is how often a queued submission re-polls the
-	// candidate set while it waits. Zero (with QueueMaxWait positive) uses
-	// defaultQueueRetryInterval. Ignored when QueueMaxWait is zero.
-	QueueRetryInterval time.Duration
-	// QueueMaxWaiters bounds how many submissions may be waiting at once, so
-	// the queue itself cannot become the unbounded buffer the project's
-	// security rules forbid ("任何一跳都不得无界缓冲"). A submission that
-	// finds the bound already reached is rejected immediately rather than
-	// becoming an unbounded third waiter axis. Zero (with QueueMaxWait
-	// positive) uses defaultQueueMaxWaiters. Ignored when QueueMaxWait is
-	// zero.
-	QueueMaxWaiters int
-
-	// ChatQueueMaxWait is the same bounded wait for new Chat, ChatStream and
-	// native Messages sessions: once every candidate tried in one pass was
-	// busy (ErrorBackpressure — no idle tunnel slot, or the Agent's runtime
-	// limit or CLI session pool full), the request waits up to this long,
-	// re-polling candidates, before the 429 is returned. Zero (the default)
-	// returns it at once. Other failures, a missing candidate, rate limits
-	// and Messages continuations, which must return to their own node, never
-	// wait.
-	//
-	// ChatQueueMaxWait 是新 Chat、ChatStream 与原生 Messages 会话的同一种有界等待：
-	// 一轮里尝试过的每个候选都繁忙（ErrorBackpressure——没有空闲隧道槽，或 Agent 的
-	// 运行时并发上限、CLI 会话池已满）时，请求最多等待这么久、期间重新轮询候选，之后才
-	// 返回 429。零值（默认）立即返回。其他失败、没有候选、限流，以及必须回到原节点的
-	// Messages 续接，都不排队。
-	ChatQueueMaxWait time.Duration
-	// ChatQueueRetryInterval is how often a waiting request re-polls. Zero
-	// uses defaultChatQueueRetryInterval (250ms). Ignored when
-	// ChatQueueMaxWait is zero.
-	//
-	// ChatQueueRetryInterval 是等待中的请求重新轮询的间隔。零值使用
-	// defaultChatQueueRetryInterval（250ms）。ChatQueueMaxWait 为零时忽略。
-	ChatQueueRetryInterval time.Duration
-	// ChatQueueMaxWaiters bounds how many requests may wait at once; one
-	// beyond it gets the 429 immediately. Zero uses defaultQueueMaxWaiters
-	// (64). Ignored when ChatQueueMaxWait is zero.
-	//
-	// ChatQueueMaxWaiters 限定同时等待的请求数，超出的请求立即得到 429。零值使用
-	// defaultQueueMaxWaiters（64）。ChatQueueMaxWait 为零时忽略。
-	ChatQueueMaxWaiters int
+	// ChatQueue 是新 Chat、ChatStream 与原生 Messages 会话在一轮里尝试过的每个候选都
+	// 繁忙（ErrorBackpressure——没有空闲隧道槽，或 Agent 的运行时上限、整机准入、CLI
+	// 会话池已满）时进入的有界等待。nil（默认）立即返回 429。其他失败、没有候选、限流，
+	// 以及必须回到原节点的 Messages 续接，都不等待。工作流提交在调度器之上排队（jobqueue
+	// 包），因此 SubmitWorkflow 永远只跑一轮。
+	ChatQueue WaitQueue
 
 	// UnavailableWait is how long AwaitModel holds a request whose model was
 	// served recently but has no candidate now — typically while its node's
@@ -310,10 +245,7 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 		s.unavailableWait = defaultUnavailableWait
 	}
 
-	s.workflowQueue = newWaitQueue(clock, cfg.QueueMaxWait, cfg.QueueRetryInterval, defaultQueueRetryInterval,
-		cfg.QueueMaxWaiters, defaultQueueMaxWaiters, queueObserver{depth: rec.QueueDepth, wait: rec.QueueWait, rejected: rec.QueueRejected})
-	s.chatQueue = newWaitQueue(clock, cfg.ChatQueueMaxWait, cfg.ChatQueueRetryInterval, defaultChatQueueRetryInterval,
-		cfg.ChatQueueMaxWaiters, defaultQueueMaxWaiters, queueObserver{depth: rec.ChatQueueDepth, wait: rec.ChatQueueWait, rejected: rec.ChatQueueRejected})
+	s.chatQueue = cfg.ChatQueue
 	return s
 }
 
@@ -339,11 +271,11 @@ func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candid
 
 // Chat dispatches req to the best available node, retrying on the next
 // candidate while the failure is Retryable or the candidate is busy. When
-// every candidate tried was busy and Config.ChatQueueMaxWait is positive, it
-// waits for capacity (see waitQueue) instead of failing at once.
+// every candidate tried was busy and Config.ChatQueue is set, it waits for
+// capacity (see WaitQueue) instead of failing at once.
 //
 // Chat 把 req 派发给最合适的节点，失败可重试或候选繁忙时换下一个候选。所尝试的候选全部
-// 繁忙且 Config.ChatQueueMaxWait 为正时，它会等待容量（见 waitQueue），而不是立即失败。
+// 繁忙且设置了 Config.ChatQueue 时，它会等待容量（见 WaitQueue），而不是立即失败。
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
 	ctx, admitted := admitModel(ctx, req.Model)
 	if !admitted {
@@ -353,7 +285,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	if err == nil || !busy || s.chatQueue == nil {
 		return resp, c, err
 	}
-	err = s.chatQueue.wait(ctx, err, func() (error, bool) {
+	err = s.chatQueue.Wait(ctx, err, func() (error, bool) {
 		var err error
 		resp, c, err, busy = s.attemptChat(ctx, req)
 		return err, busy
@@ -552,11 +484,11 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 // point retries on the next candidate, and a failure after it is handed to
 // the caller exactly as the underlying Stream reports it, with no further
 // node switch. Like Chat, it waits for capacity when every candidate tried
-// was busy and Config.ChatQueueMaxWait is positive.
+// was busy and Config.ChatQueue is set.
 //
 // ChatStream 派发 req，返回已定位到首个事件（或有效空响应的 io.EOF）的流。首个事件之前
 // 的失败换下一个候选，之后的失败原样交给调用方、不再换节点。与 Chat 一样，所尝试的候选
-// 全部繁忙且 Config.ChatQueueMaxWait 为正时，它会等待容量。
+// 全部繁忙且设置了 Config.ChatQueue 时，它会等待容量。
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
 	ctx, admitted := admitModel(ctx, req.Model)
 	if !admitted {
@@ -566,7 +498,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 	if err == nil || !busy || s.chatQueue == nil {
 		return stream, c, err
 	}
-	err = s.chatQueue.wait(ctx, err, func() (error, bool) {
+	err = s.chatQueue.Wait(ctx, err, func() (error, bool) {
 		var err error
 		stream, c, err, busy = s.attemptChatStream(ctx, req)
 		return err, busy
@@ -1104,6 +1036,7 @@ func (s *Scheduler) collect(ctx context.Context, view *nodeView, target routing.
 				idle:      idle,
 				queued:    snap.Health.QueueRunning + snap.Health.QueuePending,
 				inflight:  node.InflightRequests,
+				pressure:  node.Pressure,
 			})
 		}
 	}

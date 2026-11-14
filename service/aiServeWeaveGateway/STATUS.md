@@ -20,6 +20,8 @@
 | `modelpullapi/` | 已实现 | 按名字触发节点本地模型拉取并读回状态（P2 模型分发子任务二）；独立监听器与 token，见「模型拉取触发」 |
 | `comfyuimanagedapi/` | 已实现 | 对节点本地声明的唯一 Managed ComfyUI 实例触发 start/stop/restart 与按名字安装自定义节点，读回容器状态（P2 ComfyUI Managed 子任务二、四）；见「ComfyUI Managed 触发」 |
 | `messagesession/` | 已实现 | 经共享 `-redis-addr` 跨副本协调调用方工具续接，供 Claude Code 原生 Messages 使用；见「Claude Code 原生 Messages」 |
+| `jobqueue/` | 已实现（2026-11-14） | 工作流提交与 ComfyUI 图像生成的持久全集群队列：Redis 状态记录（意图标记、绑定、名次）+ asynq 至少一次投递，见「工作流 Job 的持久队列」 |
+| `waitqueue/` | 已实现（2026-11-14） | 新对话请求的全集群 Redis FIFO 等待（票据租约、头部窗口、停滞逃逸），实现 `scheduler.WaitQueue`，见「对话请求的全集群等待队列」 |
 | `objectstore/` | 已实现 | 产物与输入文件字节的存储后端：`local`、`s3`、`webdav` 三个实现，由 `-artifact-storage` 选择，留空关闭（P04）；见「工作流 Job」第十二条 |
 | `internal/gatewaytest/` | 测试辅助 | 内存 gRPC 流与节点证书，测试逐帧扮演 Agent，不需要监听端口 |
 | `e2e/` | 已实现 | 真实 TCP + mTLS 下三副本与真实 Agent 的联调测试 |
@@ -549,29 +551,68 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 带会话 key 的 Chat/ChatStream 与原生 Messages 请求，无论 `-scheduler-policy` 是什么，目标内都按会话 key 的 rendezvous 哈希排序（与 `prefix_hash` 同一套排序与「无空闲槽者靠后」规则），会话 key 优先于提示前缀。优先级、权重、熔断与限流冷却照常先生效：首选候选被熔断或冷却时，对话换到排名第二的候选。Claude CLI 后端在 Agent 侧以 `DISABLE_PROMPT_CACHING=1` 运行，因此亲和带来的缓存收益主要体现在 Codex 与支持前缀缓存的 HTTP 后端上。关闭 flag 后会话 key 被忽略，行为与此前相同。
 
-## 工作流 Job 的有界排队（STATUS.md 的 P2）
+## 工作流 Job 的持久队列（asynq，2026-11-14）
 
-「tunnelserver 的四条约束」第二条"不排队"说的是隧道数据面：`Dispatch` 没有空闲槽就立刻返回 `ErrorBackpressure`，从不在那一层等待，这一点没有变。本节说的是它上面一层——`scheduler.SubmitWorkflow` 在每一个当前候选都以可重试的背压类失败作答（即所有候选此刻都忙）时，可选地等待一段有界时间、期间重新轮询候选集，而不是立即把失败返回给调用方；
+「tunnelserver 的四条约束」第二条"不排队"说的是隧道数据面：`Dispatch` 没有空闲槽就立刻返回 `ErrorBackpressure`，这一点没有变。本节是它上面的一层：`jobqueue/` 把 JSON 工作流提交（`POST /v1/workflows/{id}/runs`）与 ComfyUI 图像生成放进一个存放在 Redis、由所有副本共享的持久队列，也就是 [架构说明](../../docs/architecture.md) 所写的「AIServeWeave 队列」。
 
-- **默认关闭，行为与之前完全一致。** `-workflow-queue-max-wait` 默认 `0`，此时候选耗尽立即失败，等同于这个功能存在之前的行为。
-- **本节参数只覆盖工作流 Job 提交（`SubmitWorkflow`）。** 新的对话与 Messages 请求有独立的一组参数，见下一节「对话请求的有界排队」；Embed、Rerank、转录不排队。
-- **候选完全不存在（`ErrNoCapableNode`）或失败不可重试时永远不排队。** 前者重试也不会凭空出现一个节点；后者（例如 ComfyUI 可能已经收到了这次提交）重试有制造第二次生成的风险，两者都保持立即失败。
-- **`runtime.WorkflowRequest.MinGPUMemoryBytes` 把「模型别名与节点标签」第 4 条的准入门槛过滤接到了工作流提交路径**——这个过滤此前只经由一个有路由的模型的 `Target.MinGPUMemoryBytes` 生效，`workflowCandidates` 传的是空 `routing.Target{}`，导致它对工作流提交结构性地永远不生效，即便这个字段的首要场景就是"一个大模型工作流不应该被派给显存总量明显不够的节点"。字段由调用方设置（今天没有任何调用方设置它，默认零值不做过滤，行为不变），语义与 `Target.MinGPUMemoryBytes` 完全一致：达不到要求的候选在 `pickBy` 里被排除、绝不进入排队等待（等待无法让一个声明不足的显存总量变得足够，与"候选完全不存在时不排队"是同一类判断），未上报硬件的节点仍默认放行。**模板层面如何声明"这个工作流需要多少显存"仍未设计**——与 `modelroute.Target.MinGPUMemoryBytes` 今天完全靠运维手工声明、没有自动推断来源同一处境，是独立于本次调度器接线之外的后续任务。
-- **两条独立的界，缺一不可**（「任何一跳都不得无界缓冲」）：`-workflow-queue-max-wait` 限最长等待时长，`-workflow-queue-max-waiters`（默认 64）限同时在等的提交数，超过后新的提交立即被拒绝而不是排进一个更长的队。`-workflow-queue-retry-interval`（默认 500ms）是等待期间重新轮询候选集的间隔。
-- **可观测**：`gateway_scheduler_queue_depth`（当前排队数）、`gateway_scheduler_queue_wait_seconds`（按 `outcome`∈`resolved`/`canceled`/`timeout` 分桶的等待时长）、`gateway_scheduler_queue_rejected_total`（因排队已满被拒绝的次数），见下方「指标」。
+- **开启方式与默认值。** `-workflow-queue-max-wait > 0` 开启，并且**必须同时配置 `-redis-addr`**，否则拒绝启动。默认 `0` 表示不排队：所有节点都忙时提交立即失败，与以前的默认行为一致。旧版的进程内轮询等待（`scheduler.QueueMaxWait` 等）已删除，`scheduler.SubmitWorkflow` 现在只派发一轮。
+- **提交立即作答。** 开启后，每个 JSON 提交都直接入队，不先尝试派发，避免长时间的 GPU 任务被不断抢到空槽的新请求饿死。响应是 202 `{status: queued, durability: shared_queue, queue_position}`。本副本完全看不到具备工作流能力的节点时，仍立即答 404 `workflow_backend_not_found`。带文件的 multipart 提交保持同步，因为文件字节只存在于本次请求中。
+- **由任意副本的 worker 派发。** 每个副本运行 `-workflow-queue-concurrency`（默认 4）个 asynq worker。worker 取到任务后会持有最多 30 秒，期间按 `-workflow-queue-retry-interval`（默认 1s）重试派发。持有到期后把任务交还队列，让其他副本接手；本副本可能缺少通往空闲节点的隧道，交还就是为了绕开这种情况。交还不计为失败。
+- **至少一次投递、至多一次提交。** worker 提交前先在共享记录中写入意图（`queued → dispatching`）。之后的投递若发现只有意图、没有绑定，说明上一个 worker 死在提交途中，于是把 job 标为 `failed/submit_outcome_unknown`，绝不重新提交。只有能确定后端从未见过的失败才会重试：背压、限流、连接失败、本副本没有可用节点。上游错误和超时都按「结果未知」处理。
+- **界限**（「任何一跳都不得无界缓冲」）：
+  - `-workflow-queue-max-waiters`（默认 64）是**全集群**的已准入 job 上限，超出返回 429 `queue_full`，并带 `Retry-After: 5`；
+  - 每个 job 的等待期限是 `-workflow-queue-max-wait`，到期以 `queue_timeout` 失败；
+  - 超过 4 MiB 的载荷不入队，直接同步派发；
+  - 绑定好的图（含提示词）只在任务完成前留在 Redis，且从不写入日志。
+- **任意副本都能查询。** 本地查不到时，状态、事件流、取消、产物列举会去读共享记录，租户不符一律答 404：
+  - 排队中：返回名次。事件流先推送 `queue_changed {position}` 帧，派发后接上节点自己的事件。
+  - 已派发：先把绑定恢复到本地 job 表，再走原有流程。
+  - 被队列判为失败或取消：返回终态，带 `error_code`（`queue_timeout`、`submit_outcome_unknown`、`node_not_allowed`、`cancelled`），产物为空列表。
+  - 取消排队中的 job 会立即得到 `cancelled`，因为没有后端见过它。提交途中被取消的 job，会在节点接单后立刻被中断。
+- **Redis 不可用时。** 入队失败、且确认 job 没有进入队列时，退回同步派发；无法确认时答 503 `queue_unavailable`，绝不重复派发。
+- **Redis 要求：** Redis 7+（脚本用 `TIME` 后写入），`maxmemory-policy noeviction`；Compose 的 Redis 已开启 AOF。`-workflow-queue-name`（默认 `aisw-workflow`）是共用同一个 Redis 时的隔离单位，同一机群的所有副本必须一致。asynq 自己的键前缀固定为 `asynq:`。
+- **升级顺序。** 所有副本都升级后才能打开队列。旧副本读不到共享记录，会对排队中的 job 答 404。
+- **已知限制。**
+  - 访问策略在入队时冻结，受最长等待时长约束。
+  - FIFO 只是近似的：worker 手上持有的任务和交还后的任务，顺序会变化。
+  - worker 在节点已接单、但绑定还没写入时崩溃，job 会显示为 `submit_outcome_unknown`，而节点上的运行仍在继续（孤儿运行）。不会重复生成。
+  - 从未派发的 job 不写入控制面，因此不会出现在控制面的 Job 历史和运维实时视图里。
+- **可观测**：`gateway_workflow_queue_depth`、`gateway_workflow_queue_wait_seconds{outcome}`、`gateway_workflow_queue_rejected_total{reason}`、`gateway_workflow_queue_store_errors_total{op}`、`gateway_workflow_queue_held`，见下方「指标」。旧的 `gateway_scheduler_queue_*` 已移除。
 
-## 对话请求的有界排队
+## 对话请求的全集群等待队列（Redis，2026-11-14）
 
-新的 Chat Completions、Responses（`Chat`/`ChatStream`）与原生 Messages 会话（`MessagesStart`）在一轮派发里尝试过的每个候选都繁忙时，可以等待一段有界时间，期间重新轮询候选集，而不是立即返回 429。隧道数据面"不排队"的约束不变。
+新的 Chat Completions、Responses（`Chat`/`ChatStream`）与原生 Messages 会话（`MessagesStart`）在一轮派发里尝试过的每个候选都繁忙时，会进入 `waitqueue/` 中由所有副本共享的 Redis FIFO 等待，而不是立即返回 429。**派发始终留在持有客户端连接的副本上**：队列只决定何时可以再试，不决定请求去哪里，因此隧道「不转发」的约束不变。
 
-- **默认关闭。** `-chat-queue-max-wait` 默认 `0`，此时行为与之前一致：候选全忙立即返回 429。
-- **只等"繁忙"。** 只有每个被尝试的候选都返回 `ErrorBackpressure` 时才排队，包括 Gateway 找不到空闲隧道槽，以及 Agent 的运行时并发上限或 CLI 会话池已满。限流（`rate_limited`）、连接故障、不可重试的失败、没有候选都立即返回，原因是等几秒改变不了这些结果。冷却中或未授权而被跳过的候选不影响判断。
-- **候选繁忙时也会换下一个候选。** `Chat`/`ChatStream` 以前只在失败带 `Retryable` 时换候选；现在 `ErrorBackpressure` 即使不带该标志也会换（请求没有发到后端），与 `MessagesStart` 一致。
-- **Messages 续接不排队。** 续接必须回到持有 CLI 会话的原节点，走 `Messages` 而不是 `MessagesStart`。
-- **两条独立的界**：`-chat-queue-max-wait` 限单个请求的最长等待；`-chat-queue-max-waiters`（默认 64）限同时等待的请求数，超出的请求立即得到 429。`-chat-queue-retry-interval`（默认 250ms）是重新轮询的间隔。等待计入请求自身的期限，客户端断开即停止等待。等待数上限用 `golang.org/x/sync/semaphore` 实现，工作流队列共用同一实现（`scheduler/queue.go`）。
-- **每个副本独立排队，不按租户公平。** 一个租户的突发流量可以占满等待位；租户并发配额（`ratelimit`）在进入调度器之前已经生效，仍然限制单个租户能同时发出的请求数。
-- **候选全忙的 429 带 `Retry-After: 1`**，无论是否开启排队。遵守该头的 SDK 会在一秒后重试，而不是按自己的退避猜测。
-- **可观测**：`gateway_scheduler_chat_queue_depth`、`gateway_scheduler_chat_queue_wait_seconds`（`outcome` 标签）、`gateway_scheduler_chat_queue_rejected_total`，见下方「指标」。
+- **开启方式与默认值。** `-chat-queue-max-wait > 0` 开启，并且**必须同时配置 `-redis-addr`**，否则拒绝启动。默认 `0`：候选全忙立即返回 429。
+- **只等「繁忙」。** 只有每个被尝试的候选都返回 `ErrorBackpressure` 时才排队，包括 Gateway 找不到空闲隧道槽，以及 Agent 的运行时并发上限、整机准入或 CLI 会话池已满。以下情况都立即返回，因为等几秒改变不了结果：
+  - 限流（`rate_limited`）
+  - 连接故障
+  - 不可重试的失败
+  - 没有候选
+  - Messages 续接（必须回到原节点）
+- **FIFO 与头部窗口。** 每张票的序号由 Redis `INCR` 产生。只有名次在 `-chat-queue-head-window`（默认 8）以内的票，才会按 `-chat-queue-retry-interval`（默认 250ms）重跑派发。
+- **停滞逃逸。** 队首的票可能属于连不到空闲节点的副本。若排队请求在 4 个轮询间隔内都没有成功派发，每个副本自己最早的那张票也获得资格。这样常态下保持 FIFO，又不会因队头阻塞卡死。
+- **界限**：
+  - `-chat-queue-max-waiters`（默认 64）**改为全集群上限**，超出的请求立即得到 429，并带 `Retry-After: 1`；
+  - `-chat-queue-max-wait` 限定单个请求的等待时长；
+  - 每张票带一个租约（max(10×间隔, 5s)），每次轮询都会续期；崩溃副本的票过期后，由下一次脚本清除。
+  - 时间一律取 Redis `TIME`，不依赖各副本时钟一致。
+- **热路径不变。** 只有第一轮发现全部繁忙的请求才会进入 Redis，未饱和时请求路径上没有 Redis 调用。新请求仍可能抢在等待者之前拿到空出的容量（插队）。
+- **Redis 故障。** 进入或轮询队列时出错，会立即返回最近一次繁忙错误，也就是 429（fail-open，与限流器一致），同时累加 `store_errors` 指标，日志按间隔限频。
+- **不按租户公平。** 租户并发配额（`ratelimit`）在进入调度器之前生效。
+- **可观测**：
+  - `gateway_scheduler_chat_queue_depth` 现在表示**本副本**的等待数，集群总数需跨副本求和；
+  - `gateway_scheduler_chat_queue_wait_seconds{outcome}`，`outcome` 新增 `lost`、`store_error`；
+  - `gateway_scheduler_chat_queue_rejected_total`；
+  - 新增 `gateway_scheduler_chat_queue_store_errors_total{op}`。
+
+## 节点资源压力降级（2026-11-14）
+
+Agent 在心跳中上报实时 CPU、内存与准入判断（`Heartbeat.load`，见 [Agent README](../aiServeWeaveAgent/README.md#整机准入与负载上报)）。
+
+- **降级，不跳过。** Gateway 把它保存在节点状态中（`NodeInfo.Load`）。处于资源紧张的节点在所有调度策略（least_load、power_of_two、prefix_hash、会话亲和）中都排到最后，但不会被跳过：Agent 自己的准入才是硬闸门，资源紧张的节点也可能是唯一能服务的节点。
+- **未上报不算紧张。** 节点不再 Live 时，它报告的压力会被忽略。没有上报负载的旧版 Agent 显示为「未上报」，永远不视为资源紧张。
+- **对外展示。** `GET /internal/v1/nodes` 的节点视图带 `load`（经 `common/nodeview` 允许列表渲染）；指标为 `tunnel_server_node_pressure{node_id}`。
 
 ## 图像生成
 
@@ -597,7 +638,10 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 
 - **`-images-workflow-id` 未配置时该路由照常挂载但答 404**，与其余工作流路由「路由总是挂载、由配置决定行为」的既有模式一致。配置了但对应模板在启动期缺少必填 `prompt` 字符串输入、或没有至少一个 `Type == "image"` 的 `Output`，进程直接启动失败（`main.go` 的 `validateImagesWorkflow`）——这是一次性静态检查，**不会**在 `-workflow-source=controlplane` 热替换目录时重新触发；一次剥离了所需字段的重新发布，只会在下一次请求时表现为 400/500，不是启动失败。
 - **约定优于配置**：调用方的 `prompt` 绑定到模板声明的 `prompt` 输入，`size`（`"WIDTHxHEIGHT"`）仅在模板同时声明了 `width`/`height` 整数输入时才被接受，`quality`/`style` 同理仅在模板分别声明了同名字符串输入时才被接受，否则均按名字拒绝。没有单独的输入名映射配置——这样模板经控制面热替换时，映射关系不会与它的 `Inputs` 声明脱节。
-- **全程同步**：内部经 `scheduler.SubmitWorkflow`（与 `/v1/workflows/{id}/runs` 共用同一个入口，因此正确参与 P2 有界排队）提交后，以注入的 `runtime.Clock` 驱动的 500ms 固定间隔轮询 `WorkflowStatus` 直到终态或 `-images-generation-timeout`（默认 120s）超时；超时答 504，运行本身在节点上继续、不被取消，job 记录早于轮询循环写入，因此仍可用 `GET /v1/jobs/{job_id}` 查询。
+- **全程同步**：内部经 `scheduler.SubmitWorkflow`（与 `/v1/workflows/{id}/runs` 共用同一个入口）提交后，以注入的 `runtime.Clock` 驱动的 500ms 固定间隔轮询 `WorkflowStatus` 直到终态或 `-images-generation-timeout`（默认 120s）超时；超时答 504，运行本身在节点上继续、不被取消，job 记录早于轮询循环写入，因此仍可用 `GET /v1/jobs/{job_id}` 查询。开启工作流持久队列时，生成任务与普通工作流 Job 进入同一个队列（`kind=image`）公平竞争，本处理器在同一个 `-images-generation-timeout` 预算内等待任一副本派发，再从本副本轮询结果：
+  - 预算内仍未派发：撤回任务，答 429 `queue_timeout`；
+  - 结果未知：答 502 `submit_outcome_unknown`；
+  - 客户端断开时任务仍在排队：撤回任务。
 - **产物筛选是运行期的扩展名约定，不是结构化的图判定**：`runtime.ArtifactRef` 不携带节点身份，因此无法把一次产物与模板声明的哪个 `Output.Node` 关联；实现上，`WorkflowArtifacts()` 结果里 `Type == "output"` 且文件名后缀属于已知图片扩展名（`.png .jpg .jpeg .webp .gif .bmp`）的才被当作生成图像，其余（包括模板作者自己保存的非图像调试产物）静默跳过。零个合格产物答 500。
 - **`response_format=b64_json`（默认）** 经 `OpenArtifact` 有界读取（`MaxImageResponseBytes` 32 MiB，刻意远小于产物传输本身的 512 MiB 上限——把一个足尺寸产物 base64 膨胀进一个 JSON 响应体不是同步处理器该做的事）后 base64 编码；**`response_format=url`** 直接返回既有的 `GET /v1/artifacts/{artifact_id}` 路径，不新增同步持久化，靠该路径本就有的「优先读持久副本、失败回退实时节点拉取」覆盖异步持久化器还没赶上的窗口。
 - **`n` 目前只接受 1**，按名字拒绝而不是静默忽略。
@@ -681,6 +725,7 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 | `tunnel_server_control_streams` | `+node_id` | 该节点存活的 Control 流数，长期为 2 说明没察觉死流 |
 | `tunnel_server_heartbeats_total` | `+node_id` | 收到的心跳数 |
 | `tunnel_server_heartbeat_interval_seconds` | `+node_id` | 相邻心跳间隔，长尾即"心跳迟到" |
+| `tunnel_server_node_pressure` | `+node_id` | 节点最近一次心跳报告资源紧张时为 1，否则为 0 |
 | `tunnel_server_slots_total` | `+node_id,class,state` | `state`: idle\|busy |
 | `tunnel_server_slot_faults_total` | `+node_id,reason` | Agent 违反帧契约导致关槽 |
 | `tunnel_server_dispatch_total` | `+node_id,operation,result` | `result` 沿用六值约定，无空闲槽记 `backpressure` |
@@ -697,12 +742,15 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 | `gateway_scheduler_candidates` | `capability` | 每次选择的候选数，向 1 收拢即失去冗余 |
 | `gateway_scheduler_breaker_open` | `node_id,runtime_id` | 候选当前是否被熔断排除 |
 | `gateway_scheduler_breaker_trips_total` | `node_id,runtime_id` | 熔断跳闸次数 |
-| `gateway_scheduler_queue_depth` | 无 | 当前排队等待的工作流提交数（STATUS.md 的 P2） |
-| `gateway_scheduler_queue_wait_seconds` | `outcome` | 排队提交的等待时长分布 |
-| `gateway_scheduler_queue_rejected_total` | 无 | 因排队已满（`-workflow-queue-max-waiters`）被立即拒绝的次数 |
-| `gateway_scheduler_chat_queue_depth` | 无 | 当前因候选全忙而排队等待的对话与 Messages 请求数 |
-| `gateway_scheduler_chat_queue_wait_seconds` | `outcome` | 排队对话请求的等待时长分布 |
-| `gateway_scheduler_chat_queue_rejected_total` | 无 | 因排队已满（`-chat-queue-max-waiters`）被立即返回 429 的次数 |
+| `gateway_workflow_queue_depth` | 无 | 全集群已准入的工作流 job 数，各副本每 10s 采样一次，跨副本取 `max()` |
+| `gateway_workflow_queue_wait_seconds` | `outcome` | 从入队到离开队列的时长，`outcome`∈`dispatched`/`timeout`/`cancelled`/`failed`/`unknown` |
+| `gateway_workflow_queue_rejected_total` | `reason` | 队列未接收的提交，`reason`∈`full`/`unavailable` |
+| `gateway_workflow_queue_store_errors_total` | `op` | Redis 或 asynq 调用失败 |
+| `gateway_workflow_queue_held` | 无 | 本副本 worker 正持有、等待容量的任务数 |
+| `gateway_scheduler_chat_queue_depth` | 无 | 本副本当前在全集群等待队列中的对话与 Messages 请求数，集群总数跨副本求和 |
+| `gateway_scheduler_chat_queue_wait_seconds` | `outcome` | 排队对话请求的等待时长，`outcome`∈`resolved`/`canceled`/`timeout`/`lost`/`store_error` |
+| `gateway_scheduler_chat_queue_rejected_total` | 无 | 因全集群等待队列已满（`-chat-queue-max-waiters`）被立即返回 429 的次数 |
+| `gateway_scheduler_chat_queue_store_errors_total` | `op` | 等待队列的 Redis 调用失败；进入或轮询失败的请求立即得到 429 |
 | `gateway_http_requests_total` | `endpoint,status` | `endpoint` 是本包十条路由加 `other`；带标识符的六条按形状匹配，工作流 id 与 job id 都不进标签。`job_events` 与 `jobs` 分开：一次 SSE 旁观持续整个生成过程，与毫秒级的状态查询共用直方图，哪个都描述不了 |
 | `gateway_http_request_duration_seconds` | `endpoint` | 总响应时间 |
 | `gateway_http_inflight_requests` | `endpoint` | 并发数 |
@@ -772,8 +820,13 @@ go test -race ./service/aiServeWeaveGateway/...
 
 对照 `httpapi/jobs.go`、`jobevents.go`、`jobrecover.go` 与 `artifacts.go` 核实（R04 初次核实之后，「Gateway 故障切换收尾」补上了产物回退，本节已按现状改写）：
 
-- 公开 Job 响应（提交、状态、取消）输出 J01 设计的 `durability`：`memory_only` 表示只在本副本内存里（未配置控制面，或 `CreateJob` 尚未确认），`persisted` 表示控制面已确认落库，变化单向。202 时总是 `memory_only`，因为提交从不等待持久化。Console 的实时 Job 视图经 `adminapi` 的 `workflowview.Job` 契约渲染，尚未携带这个字段。
-- `GET /v1/jobs/{job_id}` 与 `GET /v1/jobs/{job_id}/events` 只查本副本内存表。后台恢复器只找回非终态 Job 的路由绑定（「工作流 Job」第十一条），因此终态 Job 在副本重启或切换后从数据面查询得到 404，历史只能经控制面的 Job 历史接口查看。
+- 公开 Job 响应（提交、状态、取消）输出 J01 设计的 `durability`：
+  - `shared_queue`：job 在全集群工作流队列中尚未派发，或被队列判为失败/取消，任一副本都能作答；
+  - `memory_only`：只在本副本内存里（未配置控制面，或 `CreateJob` 尚未确认）；
+  - `persisted`：控制面已确认落库。
+
+  变化依次为 `shared_queue → memory_only → persisted`，单向。同步派发的 202 总是 `memory_only`，因为提交从不等待持久化。从未派发的排队 job 不写入控制面。Console 的实时 Job 视图经 `adminapi` 的 `workflowview.Job` 契约渲染，尚未携带这个字段。
+- `GET /v1/jobs/{job_id}` 与 `GET /v1/jobs/{job_id}/events` 查本副本内存表；开启工作流队列时，未命中再查共享队列记录（保留 24 小时）。后台恢复器只找回非终态 Job 的路由绑定（「工作流 Job」第十一条），因此终态 Job 在副本重启或切换后从数据面查询得到 404，历史只能经控制面的 Job 历史接口查看。
 - 产物列举与下载在本地未命中时回退到控制面（第十八条），有 `StorageKey` 时优先从对象存储读取（第十二条）。仍有三处缺口：产物 ID 只在调用方列举时铸造，从未被列举过的 Job 没有可恢复的产物 ID；刚完成、尚未被下一轮 `jobPersister` 持久化的产物，切换副本后会短暂拿不到；未配置 `-artifact-storage` 时下载只能从原节点实时拉取，原节点离线即不可用。
 
 ## 控制面管理路由（P02）

@@ -211,6 +211,59 @@ Claude Code 与 Codex 账号都可经平台[独享包月售卖](../../docs/billi
 - OpenAI 兼容的 HTTP 后端返回 429 时，`Retry-After` 的秒数形式同样透传（日期形式与超过 24 小时的值视为未知）。
 - 重置时间未知时 `retry_after` 留空，由 Gateway 使用默认冷却时长。上述事件格式按 CLI 当前版本实现，尚未在真实账户耗尽场景下验收。
 
+## 整机准入与负载上报
+
+Agent 每 `-admission-sample-interval`（默认 5s）采集一次本机实时 CPU 与内存，经每次心跳上报 Gateway（`Heartbeat.load`）。采样与上报始终开启：Gateway 用它把资源紧张的节点排到最后，Console 机群页的「实时负载」也显示它。在此之上，可以选择开启两道本机防线，避免 CLI 或其他任务把机器压垮：
+
+1. **资源闸门**：
+   - CPU 连续 2 次采样 ≥ `-admission-cpu-high`%，或可用内存 ≤ `-admission-memory-low`%（1 次即触发）时，节点进入「资源紧张」；
+   - 处于资源紧张时，新的重任务立即以可重试的 `backpressure` 拒绝，Gateway 换节点或进入它的等待队列；
+   - 退出需要连续 2 次回到阈值以外 `-admission-hysteresis` 个百分点，并且至少保持 15 秒；
+   - 采样连续失败 3 次会解除资源紧张状态，避免坏掉的探测让节点永远拒绝工作。
+2. **本机信号量**：
+   - `-admission-cli-max` 限制所有本地 CLI 运行时（claude、codex、gemini-cli、cliagent 系列）的同时请求数，`-admission-general-max` 限制其他本地后端（ollama、vllm 等）的同时请求数；
+   - 满了以后最多等待 `-admission-queue-max-wait`（默认 5s），每类最多 `-admission-queue-max-waiters`（默认 16）个请求等待，超时或等待数满时以 `backpressure` 拒绝；
+   - 这两个上限叠加在每个运行时自己的 `max_concurrent` 之上。
+
+所有阈值与上限默认为 0（关闭），升级后在设置之前行为不变。
+
+| 操作 | 资源闸门 | 信号量 |
+| --- | --- | --- |
+| Chat、流式 Chat、Messages、图像生成、Embed、Rerank、转录 | 是 | 本地 CLI 占 `cli`，其他本地后端占 `general` |
+| 工作流提交、输入上传 | 是 | 否（提交只持续几毫秒，GPU 工作在 ComfyUI 自己的队列里） |
+| 模型列表、工作流状态/事件/取消、产物读取 | 否 | 否（满载时仍能回应已接下的工作） |
+| 托管供应商（OpenAI、Anthropic 等） | 否 | 否（算力在远端） |
+
+健康/inspect 探测、CLI 额度轮询和 Claude 会话在两轮之间的驻留不受准入控制，会话数仍由 Claude 运行时自己的上限管。YAML 写法如下，命令行显式传入的 flag 优先，修改后需要重启：
+
+```yaml
+admission:
+  cpu_high_percent: 90
+  memory_low_percent: 10
+  cli_max: 6
+  general_max: 16
+  queue_max_wait: 5s      # "0s" 表示立即拒绝
+  queue_max_waiters: 16
+```
+
+平台差异：
+
+- Linux 读 `/proc`；在 cgroup v2 中运行（容器）时，内存按 cgroup 限额计算，CPU 仍按整机口径。
+- macOS 不使用 cgo，CPU 由 1 分钟负载均值除以核数估算，并在上报中标记为估算值。
+- Windows 经 kernel32 读取，没有负载均值。
+
+本机 `/metrics` 上的相关指标：
+
+- `agent_admission_pressure`
+- `agent_admission_rejections_total{class,reason}`
+- `agent_admission_wait_seconds{class,outcome}`
+- `agent_admission_inflight/waiting{class}`
+- `agent_host_cpu_utilization`
+- `agent_host_memory_available_bytes`
+- `agent_host_memory_total_bytes`
+- `agent_host_load_average_1m`
+- `agent_host_sample_errors_total`
+
 ## Gemini CLI 图片生成
 
 在本地声明 `kind: gemini-cli`，通过 Gemini CLI 官方 Nano Banana 扩展提供 `gemini-image` 图片模型，复用 Gateway 的 `/v1/images/generations` 与既有图像流隧道。该后端仅支持单张文生图，直接调用扩展的固定 MCP 工具；凭据只从 Agent 本机环境读取。现有 `kind: gemini` 的托管聊天用途不变。

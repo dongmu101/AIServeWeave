@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/admission"
 	"AIServeWeave/service/aiServeWeaveAgent/agentupgrade"
 	"AIServeWeave/service/aiServeWeaveAgent/cliusage"
 	"AIServeWeave/service/aiServeWeaveAgent/comfyuimanaged"
@@ -53,7 +54,7 @@ import (
 // accept, but not execute, UPGRADE/ROLLBACK) and report status back.
 // newAgentUpgradeChecker never returns nil, so this is never nil either —
 // the same shape puller uses.
-func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker, cliUsage *cliusage.Monitor, remote *remoteProviderSource) (<-chan error, *tunnel.Manager, error) {
+func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manager, metrics runtime.Metrics, opts *tunnelOptions, puller *modelpull.Puller, comfyUIManaged *comfyuimanaged.Supervisor, upgradeChecker *agentupgrade.Checker, cliUsage *cliusage.Monitor, remote *remoteProviderSource, admissionController *admission.Controller) (<-chan error, *tunnel.Manager, error) {
 	if !opts.enabled() {
 		return nil, nil, nil
 	}
@@ -106,6 +107,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 		Manager:         manager,
 		NodeID:          identity.NodeID,
 		AllowedRuntimes: opts.runtimeIDs(),
+		Admission:       admissionController,
 		Metrics:         metrics,
 		Logger:          logger,
 	})
@@ -135,6 +137,7 @@ func startTunnel(ctx context.Context, logger *slog.Logger, manager runtime.Manag
 			ComfyUIManaged:  comfyUIManagedClient,
 			AgentUpgrader:   upgradeChecker,
 			CLIUsage:        cliUsageSource(cliUsage),
+			Load:            admissionController,
 			RemoteProviders: remoteStore,
 			Metrics:         metrics,
 			Logger:          logger,

@@ -516,6 +516,15 @@ services:
       - -registry-ca=/registry-data/ca/ca-cert.pem
       - -control-plane-addr=http://controlplane:8090
       - -redis-addr=redis:6379
+      # 跨副本队列（默认关闭），都依赖上面的 Redis；这里的 Redis 没有 maxmemory，等同于
+      # noeviction，队列状态不会被淘汰。所有副本升级后再打开，见 Gateway STATUS「工作流 Job
+      # 的持久队列」「对话请求的全集群等待队列」。
+      # Cross-replica queues (off by default), both backed by the Redis above;
+      # it has no maxmemory, i.e. noeviction, so queue state is never evicted.
+      # Turn them on only once every replica is upgraded.
+      # - -workflow-queue-max-wait=5m
+      # - -workflow-queue-max-waiters=256
+      # - -chat-queue-max-wait=20s
       # 容器内绑 0.0.0.0，但端口只映射到宿主机回环，因此实际暴露面与
       # Gateway README 那条「默认只绑回环」的意图一致：导出内容会点出每一个
       # 连着的 node_id，那不是一份该对外派发的清单。

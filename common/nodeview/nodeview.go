@@ -41,6 +41,7 @@ import (
 	"unicode/utf8"
 
 	"AIServeWeave/common/cliusagestatus"
+	"AIServeWeave/common/nodeload"
 	"AIServeWeave/common/runtime"
 )
 
@@ -135,6 +136,38 @@ type Node struct {
 	// CLIUsage 是该 Agent 所运行的 Codex / Claude Code CLI 的订阅额度，取自它最近一次
 	// 的上报。它是 CLI 自身账户的额度，由该 CLI 服务的所有请求共用，不是按租户划分的数字。
 	CLIUsage []CLIUsage `json:"cli_usage,omitempty"`
+	// Load is the live host load the Agent reported on its last heartbeat.
+	// Absent means the Agent has not reported one (an older Agent, or no
+	// heartbeat yet), which a console must not render as an idle machine.
+	//
+	// Load 是 Agent 在最近一次心跳上报的实时主机负载。缺席表示 Agent 尚未上报（旧版
+	// Agent 或尚无心跳），控制台不能把它渲染成一台空闲的机器。
+	Load *Load `json:"load,omitempty"`
+}
+
+// Load is one node's live host load as the Agent last reported it. Every
+// measurement is optional: absent means the platform could not measure it.
+//
+// Load 是 Agent 最近一次上报的节点实时主机负载。每一项测量都是可选的：缺席表示该平台
+// 无法测量它。
+type Load struct {
+	SampledAt *time.Time `json:"sampled_at,omitempty"`
+	// CPUUtilization is a ratio in 0..1. CPUEstimated marks a figure derived
+	// from the load average rather than measured CPU time.
+	//
+	// CPUUtilization 是 0..1 的比例。CPUEstimated 标记该值由负载均值推算，而不是
+	// 测量的 CPU 时间。
+	CPUUtilization       *float64 `json:"cpu_utilization,omitempty"`
+	CPUEstimated         bool     `json:"cpu_estimated,omitempty"`
+	LoadAverage1m        *float64 `json:"load_average_1m,omitempty"`
+	MemoryAvailableBytes *int64   `json:"memory_available_bytes,omitempty"`
+	MemoryTotalBytes     *int64   `json:"memory_total_bytes,omitempty"`
+	// Pressure means the Agent is refusing new heavy work right now.
+	//
+	// Pressure 表示 Agent 此刻正在拒绝新的重任务。
+	Pressure         bool     `json:"pressure"`
+	PressureReasons  []string `json:"pressure_reasons,omitempty"`
+	AdmissionWaiting int      `json:"admission_waiting,omitempty"`
 }
 
 // Resources is the hardware the Agent reported at Hello.
@@ -410,6 +443,48 @@ func CLIUsageFromAccounts(accounts []cliusagestatus.Account) []CLIUsage {
 		return out[i].RuntimeID < out[j].RuntimeID
 	})
 	return out
+}
+
+// LoadFromReport renders a decoded heartbeat load through the allowlist, or
+// returns nil when the node has not reported one. The tunnel decoder already
+// sanitized the values; this copies only the named fields so a field later
+// added to nodeload.Report stays out of the fleet view until someone puts it
+// here on purpose.
+//
+// LoadFromReport 经由允许列表渲染已解码的心跳负载；节点未上报时返回 nil。隧道解码器
+// 已经清洗过这些值；这里只复制点名的字段，以便日后加到 nodeload.Report 上的字段在有人
+// 刻意放进来之前不会进入机群视图。
+func LoadFromReport(report *nodeload.Report) *Load {
+	if report == nil {
+		return nil
+	}
+	view := &Load{
+		CPUUtilization:       copyPtr(report.CPUUtilization),
+		CPUEstimated:         report.CPUEstimated,
+		LoadAverage1m:        copyPtr(report.LoadAverage1m),
+		MemoryAvailableBytes: copyPtr(report.MemoryAvailableBytes),
+		MemoryTotalBytes:     copyPtr(report.MemoryTotalBytes),
+		Pressure:             report.Pressure,
+		AdmissionWaiting:     max(report.AdmissionWaiting, 0),
+	}
+	if !report.SampledAt.IsZero() {
+		sampled := report.SampledAt.UTC()
+		view.SampledAt = &sampled
+	}
+	for _, reason := range report.PressureReasons {
+		if reason == nodeload.ReasonCPU || reason == nodeload.ReasonMemory {
+			view.PressureReasons = append(view.PressureReasons, string(reason))
+		}
+	}
+	return view
+}
+
+func copyPtr[T any](p *T) *T {
+	if p == nil {
+		return nil
+	}
+	v := *p
+	return &v
 }
 
 // truncateLabel caps a label at maxCLIUsageLabel bytes on a rune boundary.

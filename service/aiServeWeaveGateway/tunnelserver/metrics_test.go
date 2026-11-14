@@ -25,6 +25,7 @@ var allMetrics = []string{
 	tunnelserver.MetricControlStreams,
 	tunnelserver.MetricHeartbeatsTotal,
 	tunnelserver.MetricHeartbeatIntervalSeconds,
+	tunnelserver.MetricNodePressure,
 	tunnelserver.MetricSlotsTotal,
 	tunnelserver.MetricSlotFaultsTotal,
 	tunnelserver.MetricDispatchTotal,

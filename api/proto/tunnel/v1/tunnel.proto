@@ -543,6 +543,30 @@ message Heartbeat {
   int64 sent_unix_ms = 1;
   int32 inflight_requests = 2;
   int32 idle_slots = 3;
+  // load is the Agent's live host load and admission verdict. An older Agent
+  // leaves it absent, which the Gateway reads as "not reported", never as idle.
+  NodeLoad load = 4;
+}
+
+// NodeLoad is one live host-load sample plus the Agent's own admission
+// verdict. Every measurement is optional: a platform that cannot measure a
+// value leaves it absent rather than reporting zero.
+message NodeLoad {
+  int64 sampled_unix_ms = 1;
+  optional double cpu_utilization = 2;        // 0..1 over the last sample interval
+  bool cpu_estimated = 3;                     // true when derived from load average, not CPU time
+  optional double load_average_1m = 4;        // absent on Windows
+  optional int64 memory_available_bytes = 5;
+  optional int64 memory_total_bytes = 6;
+  bool pressure = 7;                          // Agent is refusing new heavy work
+  repeated LoadPressureReason pressure_reasons = 8;
+  int32 admission_waiting = 9;                // requests waiting on the Agent's local semaphores
+}
+
+enum LoadPressureReason {
+  LOAD_PRESSURE_REASON_UNSPECIFIED = 0;
+  LOAD_PRESSURE_REASON_CPU = 1;
+  LOAD_PRESSURE_REASON_MEMORY = 2;
 }
 
 message HeartbeatAck {

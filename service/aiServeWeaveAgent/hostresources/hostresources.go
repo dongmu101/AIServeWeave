@@ -2,15 +2,17 @@
 // the tunnel handshake's NodeResources (STATUS.md's P2 resource collection).
 // Detection goes through os/exec against platform tools already installed
 // with the OS (Linux's /proc/meminfo and nvidia-smi, macOS's sysctl) rather
-// than a library such as gopsutil or an NVML binding, so the Agent's
-// dependency line stays what docs/agents/dependencies.md requires: "Agent 与 Registry
-// 的直接依赖只有 gRPC、protobuf 与 coder/websocket".
+// than a library such as gopsutil or an NVML binding, keeping the Agent
+// within the dependency boundary docs/agents/dependencies.md sets; the live
+// usage probes in usage_*.go read /proc, sysctl (golang.org/x/sys/unix) and
+// kernel32 (golang.org/x/sys/windows) for the same reason.
 //
 // hostresources 探测本节点的 CPU、内存与 GPU 容量，供隧道握手的 NodeResources
 // 使用（STATUS.md 的 P2 资源采集）。探测一律经由 os/exec 调用系统自带工具
 // （Linux 的 /proc/meminfo 与 nvidia-smi、macOS 的 sysctl），而不是引入
-// gopsutil 一类的库或 NVML binding，这样 Agent 的依赖线就仍是 docs/agents/dependencies.md 要求的
-// 「Agent 与 Registry 的直接依赖只有 gRPC、protobuf 与 coder/websocket」。
+// gopsutil 一类的库或 NVML binding，让 Agent 保持在 docs/agents/dependencies.md 规定的
+// 依赖边界之内；usage_*.go 中的实时用量探测出于同样理由读取 /proc、sysctl
+// （golang.org/x/sys/unix）与 kernel32（golang.org/x/sys/windows）。
 //
 // DiskFreeBytes (diskfree_unix.go / diskfree_other.go) is a separate,
 // deliberately un-wired probe: NodeResources is a static capacity snapshot

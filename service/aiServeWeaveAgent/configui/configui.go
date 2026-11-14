@@ -266,6 +266,7 @@ func newIndexHandler(logger *slog.Logger, configPath string, sources Sources) ht
 			var saved []agentconfig.RuntimeConfig
 			if file, err := agentconfig.Load(configPath); err == nil {
 				cfg.Attachments = file.Attachments
+				cfg.Admission = file.Admission
 				saved = file.Runtimes
 				keepFileOnlyRuntimeFields(cfg.Runtimes, saved)
 			}

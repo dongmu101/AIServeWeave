@@ -119,6 +119,59 @@ type Config struct {
 	//
 	// LogLevel 在非空时覆盖 -log-level。
 	LogLevel string `yaml:"log_level,omitempty"`
+
+	// Admission configures node-wide admission (resource-pressure gate and
+	// local semaphores); each set field overrides the matching -admission-*
+	// flag. Changes require an Agent restart.
+	//
+	// Admission 配置整机准入（资源紧张闸门与本地信号量）；每个已设置的字段覆盖对应的
+	// -admission-* flag。修改后需要重启 Agent。
+	Admission AdmissionConfig `yaml:"admission,omitempty"`
+}
+
+// AdmissionConfig mirrors the -admission-* flags. A zero field leaves its
+// flag alone, so a duration is a string: "0s" explicitly sets zero (for
+// queue_max_wait, refuse at once) while an absent value keeps the flag.
+//
+// AdmissionConfig 对应 -admission-* flag。字段为零值时不改动对应 flag，因此时长用字符串
+// 表示："0s" 明确设为零（对 queue_max_wait 即立刻拒绝），缺席则保留 flag 的值。
+type AdmissionConfig struct {
+	SampleInterval    string  `yaml:"sample_interval,omitempty"`
+	CPUHighPercent    float64 `yaml:"cpu_high_percent,omitempty"`
+	MemoryLowPercent  float64 `yaml:"memory_low_percent,omitempty"`
+	HysteresisPercent float64 `yaml:"hysteresis_percent,omitempty"`
+	CLIMax            int     `yaml:"cli_max,omitempty"`
+	GeneralMax        int     `yaml:"general_max,omitempty"`
+	QueueMaxWait      string  `yaml:"queue_max_wait,omitempty"`
+	QueueMaxWaiters   int     `yaml:"queue_max_waiters,omitempty"`
+}
+
+// Validate reports the first invalid admission setting.
+//
+// Validate 报告第一个无效的准入设置。
+func (a AdmissionConfig) Validate() error {
+	for name, value := range map[string]string{"sample_interval": a.SampleInterval, "queue_max_wait": a.QueueMaxWait} {
+		if value == "" {
+			continue
+		}
+		d, err := time.ParseDuration(value)
+		if err != nil || d < 0 {
+			return fmt.Errorf("admission.%s: invalid duration %q", name, value)
+		}
+	}
+	for name, value := range map[string]float64{
+		"cpu_high_percent": a.CPUHighPercent, "memory_low_percent": a.MemoryLowPercent, "hysteresis_percent": a.HysteresisPercent,
+	} {
+		if value < 0 || value > 100 {
+			return fmt.Errorf("admission.%s: must be between 0 and 100", name)
+		}
+	}
+	for name, value := range map[string]int{"cli_max": a.CLIMax, "general_max": a.GeneralMax, "queue_max_waiters": a.QueueMaxWaiters} {
+		if value < 0 {
+			return fmt.Errorf("admission.%s: must not be negative", name)
+		}
+	}
+	return nil
 }
 
 // GatewayConfig is the connection half of Config, mirroring tunnelOptions.
@@ -337,6 +390,9 @@ func Load(path string) (*Config, error) {
 	if _, err := attachments.New(cfg.Attachments); err != nil {
 		return nil, fmt.Errorf("agentconfig: invalid attachments configuration")
 	}
+	if err := cfg.Admission.Validate(); err != nil {
+		return nil, fmt.Errorf("agentconfig: %s: %w", path, err)
+	}
 	for _, rc := range cfg.Runtimes {
 		if _, err := rc.ProbeTimeoutDuration(); err != nil {
 			return nil, fmt.Errorf("agentconfig: %s: %w", path, err)
@@ -378,15 +434,13 @@ func Save(path string, cfg *Config) error {
 	}
 	v.Set("gateway", gateway)
 	if cfg.Attachments != (attachments.Config{}) {
-		value := reflect.ValueOf(cfg.Attachments)
-		fields := make(map[string]any)
-		for i := 0; i < value.NumField(); i++ {
-			name := strings.Split(value.Type().Field(i).Tag.Get("yaml"), ",")[0]
-			if !value.Field(i).IsZero() {
-				fields[name] = value.Field(i).Interface()
-			}
+		v.Set("attachments", nonZeroYAMLFields(cfg.Attachments))
+	}
+	if cfg.Admission != (AdmissionConfig{}) {
+		if err := cfg.Admission.Validate(); err != nil {
+			return fmt.Errorf("agentconfig: %w", err)
 		}
-		v.Set("attachments", fields)
+		v.Set("admission", nonZeroYAMLFields(cfg.Admission))
 	}
 
 	runtimes := make([]map[string]any, len(cfg.Runtimes))
@@ -435,6 +489,23 @@ func Save(path string, cfg *Config) error {
 		return fmt.Errorf("agentconfig: write %s: %w", path, err)
 	}
 	return nil
+}
+
+// nonZeroYAMLFields maps a flat struct's set fields to their YAML names, so a
+// section writes only what the operator configured.
+//
+// nonZeroYAMLFields 把扁平结构体中已设置的字段映射到它们的 YAML 名称，使一个区块只写出
+// 运维实际配置过的内容。
+func nonZeroYAMLFields(section any) map[string]any {
+	value := reflect.ValueOf(section)
+	fields := make(map[string]any)
+	for i := 0; i < value.NumField(); i++ {
+		name := strings.Split(value.Type().Field(i).Tag.Get("yaml"), ",")[0]
+		if !value.Field(i).IsZero() {
+			fields[name] = value.Field(i).Interface()
+		}
+	}
+	return fields
 }
 
 // withYAMLTags is the viper.DecoderConfigOption that makes Load's
