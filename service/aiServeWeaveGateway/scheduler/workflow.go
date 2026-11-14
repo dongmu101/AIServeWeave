@@ -34,7 +34,7 @@ import (
 // 为零）保持今天的行为：候选集耗尽立即让这次调用失败。
 func (s *Scheduler) SubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest) (runtime.WorkflowRun, Candidate, error) {
 	run, c, err, exhausted := s.attemptSubmitWorkflow(ctx, req)
-	if err == nil || !exhausted || s.queueSlots == nil {
+	if err == nil || !exhausted || s.workflowQueue == nil {
 		return run, c, err
 	}
 	return s.queueSubmitWorkflow(ctx, req, err)
@@ -84,72 +84,35 @@ func (s *Scheduler) attemptSubmitWorkflow(ctx context.Context, req runtime.Workf
 // candidate becoming available.
 //
 // The wait is bounded on two independent axes, per the rule "任何一跳都
-// 不得无界缓冲": a maximum duration (s.queueMaxWait) and a maximum number of
-// concurrently queued submissions (the s.queueSlots semaphore). A submission
+// 不得无界缓冲": a maximum duration (Config.QueueMaxWait) and a maximum number
+// of concurrently queued submissions (Config.QueueMaxWaiters). A submission
 // that finds the semaphore already full is rejected immediately — it does
-// not become a third, unbounded axis of queueing.
+// not become a third, unbounded axis of queueing. Both bounds live in the
+// shared waitQueue (queue.go).
 //
 // queueSubmitWorkflow 实现 STATUS.md 的 P2 有界任务排队。只有在 attemptSubmitWorkflow
 // 发现每一个当前候选都以可重试方式繁忙之后才会走到这里；firstErr 是那次耗尽尝试的
 // 失败，等待预算用完、仍没有候选可用时会原样返回它。
 //
 // 等待在两条彼此独立的轴上都设了界，对应「任何一跳都不得无界缓冲」：一个
-// 最长时长（s.queueMaxWait）与一个最大并发排队数（s.queueSlots 信号量）。发现信号量
-// 已满的提交会被立即拒绝——它不会成为排队的第三条无界轴。
+// 最长时长（Config.QueueMaxWait）与一个最大并发排队数（Config.QueueMaxWaiters）。发现信号量
+// 已满的提交会被立即拒绝——它不会成为排队的第三条无界轴。两条界都由共用的 waitQueue
+// （queue.go）实现。
 func (s *Scheduler) queueSubmitWorkflow(ctx context.Context, req runtime.WorkflowRequest, firstErr error) (runtime.WorkflowRun, Candidate, error) {
-	if !s.acquireQueueSlot() {
-		s.metrics.QueueRejected()
-		return runtime.WorkflowRun{}, Candidate{}, firstErr
+	var (
+		run runtime.WorkflowRun
+		c   Candidate
+	)
+	err := s.workflowQueue.wait(ctx, firstErr, func() (error, bool) {
+		var err error
+		var exhausted bool
+		run, c, err, exhausted = s.attemptSubmitWorkflow(ctx, req)
+		return err, exhausted
+	})
+	if err != nil {
+		return runtime.WorkflowRun{}, c, err
 	}
-	defer s.releaseQueueSlot()
-
-	start := s.clock.Now()
-	deadline := start.Add(s.queueMaxWait)
-	lastErr := firstErr
-	for {
-		remaining := deadline.Sub(s.clock.Now())
-		if remaining <= 0 {
-			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeTimeout)
-			return runtime.WorkflowRun{}, Candidate{}, lastErr
-		}
-		timer, stop := s.clock.NewTimer(min(s.queueRetryInterval, remaining))
-		select {
-		case <-ctx.Done():
-			stop()
-			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeCanceled)
-			return runtime.WorkflowRun{}, Candidate{}, ctx.Err()
-		case <-timer:
-		}
-
-		run, c, err, exhausted := s.attemptSubmitWorkflow(ctx, req)
-		if err == nil {
-			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeResolved)
-			return run, c, nil
-		}
-		lastErr = err
-		if !exhausted {
-			s.metrics.QueueWait(s.clock.Now().Sub(start), queueOutcomeResolved)
-			return runtime.WorkflowRun{}, c, err
-		}
-	}
-}
-
-// acquireQueueSlot claims one of the queue's bounded waiter slots, reporting
-// whether one was available.
-func (s *Scheduler) acquireQueueSlot() bool {
-	select {
-	case s.queueSlots <- struct{}{}:
-		s.metrics.QueueDepth(len(s.queueSlots))
-		return true
-	default:
-		return false
-	}
-}
-
-// releaseQueueSlot returns a waiter slot claimed by acquireQueueSlot.
-func (s *Scheduler) releaseQueueSlot() {
-	<-s.queueSlots
-	s.metrics.QueueDepth(len(s.queueSlots))
+	return run, c, nil
 }
 
 // SubmitWorkflowTo queues req on c specifically, with no candidate selection

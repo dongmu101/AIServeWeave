@@ -52,23 +52,40 @@ func handleDispatchError(w http.ResponseWriter, logger *slog.Logger, err error) 
 // 秒数：请求已经等过节点，客户端在这之后重试多半能得到服务。
 const modelUnavailableRetryAfter = "5"
 
+// backpressureRetryAfter is the Retry-After, in seconds, sent when every
+// candidate was busy. A slot frees when some request finishes, which no one
+// can predict, so this is the shortest hint that is not a busy-retry
+// invitation, the same choice the tenant concurrency limit makes.
+//
+// backpressureRetryAfter 是所有候选都繁忙时发送的 Retry-After 秒数。名额在某个请求结束时
+// 才腾出，无法预测，因此取不至于变成忙重试邀请的最短提示，与租户并发限额的取值相同。
+const backpressureRetryAfter = "1"
+
 // setRetryAfter sets the Retry-After header from a rate_limited error's
 // RetryAfter, rounded up to whole seconds, so a client that honours the header
 // waits until the quota the scheduler is cooling down on comes back.
-// scheduler.ErrModelUnavailable gets modelUnavailableRetryAfter. Any other
-// error, or one with no RetryAfter, leaves the header unset.
+// scheduler.ErrModelUnavailable gets modelUnavailableRetryAfter and
+// backpressure gets backpressureRetryAfter. Any other error, or a
+// rate_limited one with no RetryAfter, leaves the header unset.
 //
 // setRetryAfter 依据 rate_limited 错误的 RetryAfter 设置 Retry-After 响应头（向上取整
 // 到秒），让遵守该头的客户端等到调度器正在冷却的那份额度恢复。
-// scheduler.ErrModelUnavailable 设置为 modelUnavailableRetryAfter。其他错误、或没有
-// RetryAfter 的错误不设置该头。
+// scheduler.ErrModelUnavailable 设置为 modelUnavailableRetryAfter，backpressure 设置为
+// backpressureRetryAfter。其他错误、或没有 RetryAfter 的 rate_limited 错误不设置该头。
 func setRetryAfter(w http.ResponseWriter, err error) {
 	if errors.Is(err, scheduler.ErrModelUnavailable) {
 		w.Header().Set("Retry-After", modelUnavailableRetryAfter)
 		return
 	}
 	var rtErr *runtime.RuntimeError
-	if !errors.As(err, &rtErr) || rtErr.Code != runtime.ErrorRateLimited || rtErr.RetryAfter <= 0 {
+	if !errors.As(err, &rtErr) {
+		return
+	}
+	if rtErr.Code == runtime.ErrorBackpressure {
+		w.Header().Set("Retry-After", backpressureRetryAfter)
+		return
+	}
+	if rtErr.Code != runtime.ErrorRateLimited || rtErr.RetryAfter <= 0 {
 		return
 	}
 	seconds := int64((rtErr.RetryAfter + time.Second - 1) / time.Second)

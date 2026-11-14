@@ -63,26 +63,52 @@ func (s *Scheduler) Messages(ctx context.Context, c Candidate, req runtime.Messa
 // candidate; once an event arrives the stream belongs to the caller, the same
 // Committed rule ChatStream follows. Candidates rank by tunnel slots,
 // which cannot see an Agent's CLI session limit, so this fallback is what
-// keeps one full node from turning into a 429 while another sits idle.
+// keeps one full node from turning into a 429 while another sits idle. When
+// every candidate is full and Config.ChatQueueMaxWait is positive, it waits
+// for one to free up (see waitQueue) before answering.
 //
 // MessagesStart 在最佳候选上开启一个新的原生 Messages 会话。首个事件到达之前，
 // 没有客户端见过这个会话，因此节点已满、正在关闭或不可达时，请求交给下一个候选；
 // 一旦有事件到达，流就归调用方所有，与 ChatStream 遵循的 Committed 规则相同。候选
 // 按隧道槽位排序，看不到 Agent 的 CLI 会话上限，正是这层换节点避免了一个节点已满、
-// 另一个节点空闲时仍返回 429。
+// 另一个节点空闲时仍返回 429。所有候选都已满且 Config.ChatQueueMaxWait 为正时，它会等待
+// 某个候选空出来（见 waitQueue）再作答。
 func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], Candidate, error) {
 	ctx, admitted := admitModel(ctx, req.Model)
 	if !admitted {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
+	stream, c, err, busy := s.attemptMessagesStart(ctx, req)
+	if err == nil || !busy || s.chatQueue == nil {
+		return stream, c, err
+	}
+	err = s.chatQueue.wait(ctx, err, func() (error, bool) {
+		var err error
+		stream, c, err, busy = s.attemptMessagesStart(ctx, req)
+		return err, busy
+	})
+	if err != nil {
+		return nil, c, err
+	}
+	return stream, c, nil
+}
+
+// attemptMessagesStart runs one pass over the current candidates. busy
+// reports whether every candidate it tried was full, the only failure
+// MessagesStart waits on.
+//
+// attemptMessagesStart 对当前候选跑一轮。busy 报告它尝试过的每个候选是否都已满，这是
+// MessagesStart 唯一会等待的失败。
+func (s *Scheduler) attemptMessagesStart(ctx context.Context, req runtime.MessagesRequest) (runtime.Stream[runtime.MessagesEvent], Candidate, error, bool) {
 	capability := messagesCapability(req)
 	candidates := s.candidatesKeyed(ctx, s.routes.Load(), req.Model, capability, s.sessionAffinity(ctx), rand.Float64)
 	s.metrics.Selection(capability, len(candidates))
 	if len(candidates) == 0 {
-		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, capability)
+		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, capability), false
 	}
 	var lastErr error
 	var cooled cooledCandidates
+	var pass busyPass
 	for _, c := range candidates {
 		if s.skipCooling(c, &cooled) {
 			continue
@@ -95,7 +121,7 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 				s.breakers.record(c, nil, s.clock.Now())
 				s.metrics.Dispatch(c, nil)
 				s.logDispatchDecision(ctx, "messages", c, nil)
-				return &prefetchStream[runtime.MessagesEvent]{first: first, hasFirst: err == nil, eof: err == io.EOF, underlying: stream}, c, nil
+				return &prefetchStream[runtime.MessagesEvent]{first: first, hasFirst: err == nil, eof: err == io.EOF, underlying: stream}, c, nil, false
 			}
 			stream.Close()
 		}
@@ -103,15 +129,16 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "messages", c, err)
 		lastErr = err
+		pass.record(err)
 		// A failed first Recv delivered nothing, so the stream is never
 		// Committed here and the session can still start elsewhere.
 		// 首次 Recv 失败意味着什么都没交付，此处的流不可能已 Committed，会话仍可在别处开启。
 		if !messagesStartRetryable(err) {
-			return nil, c, err
+			return nil, c, err, false
 		}
 		s.metrics.Retry(capability)
 	}
-	return nil, Candidate{}, cooled.or(lastErr)
+	return nil, Candidate{}, cooled.or(lastErr), pass.allBusy() && busyError(lastErr)
 }
 
 // messagesStartRetryable reports whether a failed session start may move to

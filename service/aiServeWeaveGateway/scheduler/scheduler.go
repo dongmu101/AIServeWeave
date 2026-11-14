@@ -29,9 +29,15 @@ var ErrNoCapableNode = errors.New("scheduler: no node can serve this model")
 //
 // defaultQueueRetryInterval 与 defaultQueueMaxWaiters 是排队开启
 // （Config.QueueMaxWait > 0）但调用方未设置其中某项时使用的默认值。
+//
+// defaultChatQueueRetryInterval is shorter because a chat client is waiting
+// on the response, not polling a job.
+//
+// defaultChatQueueRetryInterval 更短，因为对话客户端在等响应，而不是轮询一个 job。
 const (
-	defaultQueueRetryInterval = 500 * time.Millisecond
-	defaultQueueMaxWaiters    = 64
+	defaultQueueRetryInterval     = 500 * time.Millisecond
+	defaultQueueMaxWaiters        = 64
+	defaultChatQueueRetryInterval = 250 * time.Millisecond
 )
 
 // Candidate is the (node, runtime instance) pair a request was dispatched
@@ -95,13 +101,17 @@ type Scheduler struct {
 	// sessionAffinityOn 即 Config.SessionAffinity。
 	sessionAffinityOn bool
 
-	// queueMaxWait, queueRetryInterval and queueSlots implement STATUS.md's
-	// P2 bounded task queueing for workflow submissions (see workflow.go's
-	// queueSubmitWorkflow). queueSlots is nil, and queueing disabled, unless
-	// Config.QueueMaxWait was positive at construction.
-	queueMaxWait       time.Duration
-	queueRetryInterval time.Duration
-	queueSlots         chan struct{}
+	// workflowQueue implements STATUS.md's P2 bounded task queueing for
+	// workflow submissions (see workflow.go's queueSubmitWorkflow), and
+	// chatQueue the same bounded wait for new Chat, ChatStream and Messages
+	// requests. Each is nil, and its queueing disabled, unless its max wait
+	// was positive at construction.
+	//
+	// workflowQueue 实现工作流提交的 STATUS.md P2 有界任务排队（见 workflow.go 的
+	// queueSubmitWorkflow），chatQueue 为新的 Chat、ChatStream 与 Messages 请求提供
+	// 同样的有界等待。各自的最长等待在构造时不为正时为 nil，即关闭排队。
+	workflowQueue *waitQueue
+	chatQueue     *waitQueue
 
 	// unavailableWait is Config.UnavailableWait after defaulting; see
 	// unavailable.go.
@@ -222,6 +232,36 @@ type Config struct {
 	// zero.
 	QueueMaxWaiters int
 
+	// ChatQueueMaxWait is the same bounded wait for new Chat, ChatStream and
+	// native Messages sessions: once every candidate tried in one pass was
+	// busy (ErrorBackpressure — no idle tunnel slot, or the Agent's runtime
+	// limit or CLI session pool full), the request waits up to this long,
+	// re-polling candidates, before the 429 is returned. Zero (the default)
+	// returns it at once. Other failures, a missing candidate, rate limits
+	// and Messages continuations, which must return to their own node, never
+	// wait.
+	//
+	// ChatQueueMaxWait 是新 Chat、ChatStream 与原生 Messages 会话的同一种有界等待：
+	// 一轮里尝试过的每个候选都繁忙（ErrorBackpressure——没有空闲隧道槽，或 Agent 的
+	// 运行时并发上限、CLI 会话池已满）时，请求最多等待这么久、期间重新轮询候选，之后才
+	// 返回 429。零值（默认）立即返回。其他失败、没有候选、限流，以及必须回到原节点的
+	// Messages 续接，都不排队。
+	ChatQueueMaxWait time.Duration
+	// ChatQueueRetryInterval is how often a waiting request re-polls. Zero
+	// uses defaultChatQueueRetryInterval (250ms). Ignored when
+	// ChatQueueMaxWait is zero.
+	//
+	// ChatQueueRetryInterval 是等待中的请求重新轮询的间隔。零值使用
+	// defaultChatQueueRetryInterval（250ms）。ChatQueueMaxWait 为零时忽略。
+	ChatQueueRetryInterval time.Duration
+	// ChatQueueMaxWaiters bounds how many requests may wait at once; one
+	// beyond it gets the 429 immediately. Zero uses defaultQueueMaxWaiters
+	// (64). Ignored when ChatQueueMaxWait is zero.
+	//
+	// ChatQueueMaxWaiters 限定同时等待的请求数，超出的请求立即得到 429。零值使用
+	// defaultQueueMaxWaiters（64）。ChatQueueMaxWait 为零时忽略。
+	ChatQueueMaxWaiters int
+
 	// UnavailableWait is how long AwaitModel holds a request whose model was
 	// served recently but has no candidate now — typically while its node's
 	// Agent reconnects — before answering ErrModelUnavailable. Zero uses
@@ -270,19 +310,10 @@ func New(server *tunnelserver.Server, cfg Config) *Scheduler {
 		s.unavailableWait = defaultUnavailableWait
 	}
 
-	if cfg.QueueMaxWait > 0 {
-		interval := cfg.QueueRetryInterval
-		if interval <= 0 {
-			interval = defaultQueueRetryInterval
-		}
-		maxWaiters := cfg.QueueMaxWaiters
-		if maxWaiters <= 0 {
-			maxWaiters = defaultQueueMaxWaiters
-		}
-		s.queueMaxWait = cfg.QueueMaxWait
-		s.queueRetryInterval = interval
-		s.queueSlots = make(chan struct{}, maxWaiters)
-	}
+	s.workflowQueue = newWaitQueue(clock, cfg.QueueMaxWait, cfg.QueueRetryInterval, defaultQueueRetryInterval,
+		cfg.QueueMaxWaiters, defaultQueueMaxWaiters, queueObserver{depth: rec.QueueDepth, wait: rec.QueueWait, rejected: rec.QueueRejected})
+	s.chatQueue = newWaitQueue(clock, cfg.ChatQueueMaxWait, cfg.ChatQueueRetryInterval, defaultChatQueueRetryInterval,
+		cfg.ChatQueueMaxWaiters, defaultQueueMaxWaiters, queueObserver{depth: rec.ChatQueueDepth, wait: rec.ChatQueueWait, rejected: rec.ChatQueueRejected})
 	return s
 }
 
@@ -307,19 +338,47 @@ func (s *Scheduler) logDispatchDecision(ctx context.Context, op string, c Candid
 }
 
 // Chat dispatches req to the best available node, retrying on the next
-// candidate while the failure is Retryable.
+// candidate while the failure is Retryable or the candidate is busy. When
+// every candidate tried was busy and Config.ChatQueueMaxWait is positive, it
+// waits for capacity (see waitQueue) instead of failing at once.
+//
+// Chat 把 req 派发给最合适的节点，失败可重试或候选繁忙时换下一个候选。所尝试的候选全部
+// 繁忙且 Config.ChatQueueMaxWait 为正时，它会等待容量（见 waitQueue），而不是立即失败。
 func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error) {
 	ctx, admitted := admitModel(ctx, req.Model)
 	if !admitted {
 		return runtime.ChatResponse{}, Candidate{}, ErrModelNotAllowed
 	}
+	resp, c, err, busy := s.attemptChat(ctx, req)
+	if err == nil || !busy || s.chatQueue == nil {
+		return resp, c, err
+	}
+	err = s.chatQueue.wait(ctx, err, func() (error, bool) {
+		var err error
+		resp, c, err, busy = s.attemptChat(ctx, req)
+		return err, busy
+	})
+	if err != nil {
+		return runtime.ChatResponse{}, c, err
+	}
+	return resp, c, nil
+}
+
+// attemptChat runs one dispatch pass over the current candidates. busy
+// reports whether every candidate it tried had no free capacity, the only
+// failure Chat waits on.
+//
+// attemptChat 对当前候选跑一轮派发。busy 报告它尝试过的每个候选是否都没有空闲容量，这是
+// Chat 唯一会等待的失败。
+func (s *Scheduler) attemptChat(ctx context.Context, req runtime.ChatRequest) (runtime.ChatResponse, Candidate, error, bool) {
 	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChat)
 	s.metrics.Selection(runtime.CapabilityChat, len(candidates))
 	if len(candidates) == 0 {
-		return runtime.ChatResponse{}, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChat)
+		return runtime.ChatResponse{}, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChat), false
 	}
 	var lastErr error
 	var cooled cooledCandidates
+	var pass busyPass
 	for _, c := range candidates {
 		if !s.candidateAllowed(ctx, c) {
 			lastErr = ErrNodeNotAllowed
@@ -333,15 +392,16 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "chat", c, err)
 		if err == nil {
-			return resp, c, nil
+			return resp, c, nil, false
 		}
 		lastErr = err
-		if !retryable(err) {
-			return runtime.ChatResponse{}, c, err
+		pass.record(err)
+		if !retryable(err) && !busyError(err) {
+			return runtime.ChatResponse{}, c, err, false
 		}
 		s.metrics.Retry(runtime.CapabilityChat)
 	}
-	return runtime.ChatResponse{}, Candidate{}, cooled.or(lastErr)
+	return runtime.ChatResponse{}, Candidate{}, cooled.or(lastErr), pass.allBusy() && busyError(lastErr)
 }
 
 // Embed dispatches req the same way Chat does.
@@ -491,19 +551,45 @@ func (s *Scheduler) Transcribe(ctx context.Context, c Candidate, req runtime.Aud
 // stream, so ChatStream reads the first event itself: a failure before that
 // point retries on the next candidate, and a failure after it is handed to
 // the caller exactly as the underlying Stream reports it, with no further
-// node switch.
+// node switch. Like Chat, it waits for capacity when every candidate tried
+// was busy and Config.ChatQueueMaxWait is positive.
+//
+// ChatStream 派发 req，返回已定位到首个事件（或有效空响应的 io.EOF）的流。首个事件之前
+// 的失败换下一个候选，之后的失败原样交给调用方、不再换节点。与 Chat 一样，所尝试的候选
+// 全部繁忙且 Config.ChatQueueMaxWait 为正时，它会等待容量。
 func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error) {
 	ctx, admitted := admitModel(ctx, req.Model)
 	if !admitted {
 		return nil, Candidate{}, ErrModelNotAllowed
 	}
+	stream, c, err, busy := s.attemptChatStream(ctx, req)
+	if err == nil || !busy || s.chatQueue == nil {
+		return stream, c, err
+	}
+	err = s.chatQueue.wait(ctx, err, func() (error, bool) {
+		var err error
+		stream, c, err, busy = s.attemptChatStream(ctx, req)
+		return err, busy
+	})
+	if err != nil {
+		return nil, c, err
+	}
+	return stream, c, nil
+}
+
+// attemptChatStream runs one dispatch pass over the current candidates, the
+// streaming counterpart of attemptChat.
+//
+// attemptChatStream 对当前候选跑一轮派发，是 attemptChat 的流式版本。
+func (s *Scheduler) attemptChatStream(ctx context.Context, req runtime.ChatRequest) (runtime.Stream[runtime.ChatEvent], Candidate, error, bool) {
 	candidates := s.chatCandidates(ctx, req, runtime.CapabilityChatStream)
 	s.metrics.Selection(runtime.CapabilityChatStream, len(candidates))
 	if len(candidates) == 0 {
-		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChatStream)
+		return nil, Candidate{}, s.noCandidatesFor(ctx, req.Model, runtime.CapabilityChatStream), false
 	}
 	var lastErr error
 	var cooled cooledCandidates
+	var pass busyPass
 	for _, c := range candidates {
 		if !s.candidateAllowed(ctx, c) {
 			lastErr = ErrNodeNotAllowed
@@ -518,11 +604,12 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			s.metrics.Dispatch(c, err)
 			s.logDispatchDecision(ctx, "chat_stream", c, err)
 			lastErr = err
-			if retryable(err) {
+			pass.record(err)
+			if retryable(err) || busyError(err) {
 				s.metrics.Retry(runtime.CapabilityChatStream)
 				continue
 			}
-			return nil, c, err
+			return nil, c, err, false
 		}
 
 		first, err := stream.Recv()
@@ -530,7 +617,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
-			return &prefetchStream[runtime.ChatEvent]{first: first, hasFirst: true, underlying: stream}, c, nil
+			return &prefetchStream[runtime.ChatEvent]{first: first, hasFirst: true, underlying: stream}, c, nil, false
 		}
 		stream.Close()
 		if err == io.EOF {
@@ -539,23 +626,24 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 			s.breakers.record(c, nil, s.clock.Now())
 			s.metrics.Dispatch(c, nil)
 			s.logDispatchDecision(ctx, "chat_stream", c, nil)
-			return &prefetchStream[runtime.ChatEvent]{eof: true}, c, nil
+			return &prefetchStream[runtime.ChatEvent]{eof: true}, c, nil, false
 		}
 		s.breakers.record(c, err, s.clock.Now())
 		s.metrics.Dispatch(c, err)
 		s.logDispatchDecision(ctx, "chat_stream", c, err)
 		lastErr = err
+		pass.record(err)
 		// Committed() is defined to flip only once an event has been
 		// delivered, so it is necessarily still false here; the check
 		// documents that this is the property being relied on, not an
 		// accident of call order.
-		if !stream.Committed() && retryable(err) {
+		if !stream.Committed() && (retryable(err) || busyError(err)) {
 			s.metrics.Retry(runtime.CapabilityChatStream)
 			continue
 		}
-		return nil, c, err
+		return nil, c, err, false
 	}
-	return nil, Candidate{}, cooled.or(lastErr)
+	return nil, Candidate{}, cooled.or(lastErr), pass.allBusy() && busyError(lastErr)
 }
 
 // Models is the public catalogue: what a client may ask for right now.

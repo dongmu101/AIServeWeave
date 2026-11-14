@@ -554,11 +554,24 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 「tunnelserver 的四条约束」第二条"不排队"说的是隧道数据面：`Dispatch` 没有空闲槽就立刻返回 `ErrorBackpressure`，从不在那一层等待，这一点没有变。本节说的是它上面一层——`scheduler.SubmitWorkflow` 在每一个当前候选都以可重试的背压类失败作答（即所有候选此刻都忙）时，可选地等待一段有界时间、期间重新轮询候选集，而不是立即把失败返回给调用方；
 
 - **默认关闭，行为与之前完全一致。** `-workflow-queue-max-wait` 默认 `0`，此时候选耗尽立即失败，等同于这个功能存在之前的行为。
-- **只覆盖工作流 Job 提交（`SubmitWorkflow`），不覆盖 Chat/Embed。** OpenAI 前门是同步请求，客户端已经在等响应，在 Gateway 内部再排队没有意义；工作流 Job 本身是异步提交+轮询模型，天然适合排队。
+- **本节参数只覆盖工作流 Job 提交（`SubmitWorkflow`）。** 新的对话与 Messages 请求有独立的一组参数，见下一节「对话请求的有界排队」；Embed、Rerank、转录不排队。
 - **候选完全不存在（`ErrNoCapableNode`）或失败不可重试时永远不排队。** 前者重试也不会凭空出现一个节点；后者（例如 ComfyUI 可能已经收到了这次提交）重试有制造第二次生成的风险，两者都保持立即失败。
 - **`runtime.WorkflowRequest.MinGPUMemoryBytes` 把「模型别名与节点标签」第 4 条的准入门槛过滤接到了工作流提交路径**——这个过滤此前只经由一个有路由的模型的 `Target.MinGPUMemoryBytes` 生效，`workflowCandidates` 传的是空 `routing.Target{}`，导致它对工作流提交结构性地永远不生效，即便这个字段的首要场景就是"一个大模型工作流不应该被派给显存总量明显不够的节点"。字段由调用方设置（今天没有任何调用方设置它，默认零值不做过滤，行为不变），语义与 `Target.MinGPUMemoryBytes` 完全一致：达不到要求的候选在 `pickBy` 里被排除、绝不进入排队等待（等待无法让一个声明不足的显存总量变得足够，与"候选完全不存在时不排队"是同一类判断），未上报硬件的节点仍默认放行。**模板层面如何声明"这个工作流需要多少显存"仍未设计**——与 `modelroute.Target.MinGPUMemoryBytes` 今天完全靠运维手工声明、没有自动推断来源同一处境，是独立于本次调度器接线之外的后续任务。
 - **两条独立的界，缺一不可**（「任何一跳都不得无界缓冲」）：`-workflow-queue-max-wait` 限最长等待时长，`-workflow-queue-max-waiters`（默认 64）限同时在等的提交数，超过后新的提交立即被拒绝而不是排进一个更长的队。`-workflow-queue-retry-interval`（默认 500ms）是等待期间重新轮询候选集的间隔。
 - **可观测**：`gateway_scheduler_queue_depth`（当前排队数）、`gateway_scheduler_queue_wait_seconds`（按 `outcome`∈`resolved`/`canceled`/`timeout` 分桶的等待时长）、`gateway_scheduler_queue_rejected_total`（因排队已满被拒绝的次数），见下方「指标」。
+
+## 对话请求的有界排队
+
+新的 Chat Completions、Responses（`Chat`/`ChatStream`）与原生 Messages 会话（`MessagesStart`）在一轮派发里尝试过的每个候选都繁忙时，可以等待一段有界时间，期间重新轮询候选集，而不是立即返回 429。隧道数据面"不排队"的约束不变。
+
+- **默认关闭。** `-chat-queue-max-wait` 默认 `0`，此时行为与之前一致：候选全忙立即返回 429。
+- **只等"繁忙"。** 只有每个被尝试的候选都返回 `ErrorBackpressure` 时才排队，包括 Gateway 找不到空闲隧道槽，以及 Agent 的运行时并发上限或 CLI 会话池已满。限流（`rate_limited`）、连接故障、不可重试的失败、没有候选都立即返回，原因是等几秒改变不了这些结果。冷却中或未授权而被跳过的候选不影响判断。
+- **候选繁忙时也会换下一个候选。** `Chat`/`ChatStream` 以前只在失败带 `Retryable` 时换候选；现在 `ErrorBackpressure` 即使不带该标志也会换（请求没有发到后端），与 `MessagesStart` 一致。
+- **Messages 续接不排队。** 续接必须回到持有 CLI 会话的原节点，走 `Messages` 而不是 `MessagesStart`。
+- **两条独立的界**：`-chat-queue-max-wait` 限单个请求的最长等待；`-chat-queue-max-waiters`（默认 64）限同时等待的请求数，超出的请求立即得到 429。`-chat-queue-retry-interval`（默认 250ms）是重新轮询的间隔。等待计入请求自身的期限，客户端断开即停止等待。等待数上限用 `golang.org/x/sync/semaphore` 实现，工作流队列共用同一实现（`scheduler/queue.go`）。
+- **每个副本独立排队，不按租户公平。** 一个租户的突发流量可以占满等待位；租户并发配额（`ratelimit`）在进入调度器之前已经生效，仍然限制单个租户能同时发出的请求数。
+- **候选全忙的 429 带 `Retry-After: 1`**，无论是否开启排队。遵守该头的 SDK 会在一秒后重试，而不是按自己的退避猜测。
+- **可观测**：`gateway_scheduler_chat_queue_depth`、`gateway_scheduler_chat_queue_wait_seconds`（`outcome` 标签）、`gateway_scheduler_chat_queue_rejected_total`，见下方「指标」。
 
 ## 图像生成
 
@@ -687,6 +700,9 @@ P10 的合成后端长稳与同版逐副本替换不能校准这些值，因此�
 | `gateway_scheduler_queue_depth` | 无 | 当前排队等待的工作流提交数（STATUS.md 的 P2） |
 | `gateway_scheduler_queue_wait_seconds` | `outcome` | 排队提交的等待时长分布 |
 | `gateway_scheduler_queue_rejected_total` | 无 | 因排队已满（`-workflow-queue-max-waiters`）被立即拒绝的次数 |
+| `gateway_scheduler_chat_queue_depth` | 无 | 当前因候选全忙而排队等待的对话与 Messages 请求数 |
+| `gateway_scheduler_chat_queue_wait_seconds` | `outcome` | 排队对话请求的等待时长分布 |
+| `gateway_scheduler_chat_queue_rejected_total` | 无 | 因排队已满（`-chat-queue-max-waiters`）被立即返回 429 的次数 |
 | `gateway_http_requests_total` | `endpoint,status` | `endpoint` 是本包十条路由加 `other`；带标识符的六条按形状匹配，工作流 id 与 job id 都不进标签。`job_events` 与 `jobs` 分开：一次 SSE 旁观持续整个生成过程，与毫秒级的状态查询共用直方图，哪个都描述不了 |
 | `gateway_http_request_duration_seconds` | `endpoint` | 总响应时间 |
 | `gateway_http_inflight_requests` | `endpoint` | 并发数 |

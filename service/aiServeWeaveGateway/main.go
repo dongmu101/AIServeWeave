@@ -147,6 +147,12 @@ func run() error {
 		"how often a queued workflow submission re-polls candidates; zero uses scheduler's built-in default (500ms); ignored when -workflow-queue-max-wait is zero")
 	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", 0,
 		"maximum workflow submissions allowed to wait at once; one beyond this is rejected immediately rather than queueing; zero uses scheduler's built-in default (64); ignored when -workflow-queue-max-wait is zero")
+	chatQueueMaxWait := flag.Duration("chat-queue-max-wait", 0,
+		"how long a new Chat Completions, Responses or Messages request waits, re-polling candidates, once every candidate it tried was busy (no idle slot, or the Agent's concurrency or CLI session limit reached), before the 429 is returned; zero disables queueing and returns it immediately (the default); continuations and rate-limited candidates never wait")
+	chatQueueRetryInterval := flag.Duration("chat-queue-retry-interval", 0,
+		"how often a queued chat request re-polls candidates; zero uses scheduler's built-in default (250ms); ignored when -chat-queue-max-wait is zero")
+	chatQueueMaxWaiters := flag.Int("chat-queue-max-waiters", 0,
+		"maximum chat requests allowed to wait at once; one beyond this gets the 429 immediately; zero uses scheduler's built-in default (64); ignored when -chat-queue-max-wait is zero")
 	modelUnavailableWait := flag.Duration("model-unavailable-wait", 0,
 		"how long a Messages, Chat Completions or Responses request waits for a model whose node left within the last 2 minutes (typically an Agent reconnecting) to come back, before answering a retryable 503 model_unavailable instead of 404 model_not_found; zero uses scheduler's built-in default (15s), negative answers 503 at once without waiting")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
@@ -395,20 +401,23 @@ func run() error {
 		return err
 	}
 	sched := scheduler.New(server, scheduler.Config{
-		Metrics:              registry,
-		Logger:               logger,
-		FailureThreshold:     *breakerFailureThreshold,
-		BaseCooldown:         *breakerBaseCooldown,
-		MaxCooldown:          *breakerMaxCooldown,
-		RateLimitCooldown:    *rateLimitCooldown,
-		MaxRateLimitCooldown: *maxRateLimitCooldown,
-		SessionAffinity:      *sessionAffinity,
-		Policy:               policy,
-		PrefixBytes:          *schedulerPrefixBytes,
-		QueueMaxWait:         *workflowQueueMaxWait,
-		QueueRetryInterval:   *workflowQueueRetryInterval,
-		QueueMaxWaiters:      *workflowQueueMaxWaiters,
-		UnavailableWait:      *modelUnavailableWait,
+		Metrics:                registry,
+		Logger:                 logger,
+		FailureThreshold:       *breakerFailureThreshold,
+		BaseCooldown:           *breakerBaseCooldown,
+		MaxCooldown:            *breakerMaxCooldown,
+		RateLimitCooldown:      *rateLimitCooldown,
+		MaxRateLimitCooldown:   *maxRateLimitCooldown,
+		SessionAffinity:        *sessionAffinity,
+		Policy:                 policy,
+		PrefixBytes:            *schedulerPrefixBytes,
+		QueueMaxWait:           *workflowQueueMaxWait,
+		QueueRetryInterval:     *workflowQueueRetryInterval,
+		QueueMaxWaiters:        *workflowQueueMaxWaiters,
+		ChatQueueMaxWait:       *chatQueueMaxWait,
+		ChatQueueRetryInterval: *chatQueueRetryInterval,
+		ChatQueueMaxWaiters:    *chatQueueMaxWaiters,
+		UnavailableWait:        *modelUnavailableWait,
 	})
 	routeStatus, routeSyncer, err := configureRoutes(ctx, *routeSource, *modelRoutes, *routeStateFile, *controlPlaneAddr, *controlPlaneToken, *routeSyncInterval, sched.SetRoutes)
 	if err != nil {

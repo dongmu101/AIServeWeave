@@ -103,6 +103,17 @@ const (
 	// 而连排队都排不进去的提交。这是队列自身边界按设计生效（「任何一跳
 	// 都不得无界缓冲」），不是一个错误。
 	MetricQueueRejectedTotal = "gateway_scheduler_queue_rejected_total"
+	// MetricChatQueueDepth, MetricChatQueueWaitSeconds and
+	// MetricChatQueueRejectedTotal are the same three measurements for the
+	// chat queue (Config.ChatQueueMaxWait): new Chat, ChatStream and Messages
+	// requests waiting because every candidate was busy.
+	//
+	// MetricChatQueueDepth、MetricChatQueueWaitSeconds 与
+	// MetricChatQueueRejectedTotal 是对话队列（Config.ChatQueueMaxWait）的同样三项
+	// 观测：因所有候选繁忙而等待的新 Chat、ChatStream 与 Messages 请求。
+	MetricChatQueueDepth         = "gateway_scheduler_chat_queue_depth"
+	MetricChatQueueWaitSeconds   = "gateway_scheduler_chat_queue_wait_seconds"
+	MetricChatQueueRejectedTotal = "gateway_scheduler_chat_queue_rejected_total"
 )
 
 // Label keys. The set is closed, and deliberately holds no key for the model.
@@ -114,7 +125,7 @@ const (
 	LabelResult     = "result"
 	LabelCapability = "capability"
 	// LabelOutcome carries one of the queueOutcome* values below, on
-	// MetricQueueWaitSeconds only.
+	// MetricQueueWaitSeconds and MetricChatQueueWaitSeconds only.
 	LabelOutcome = "outcome"
 )
 
@@ -168,6 +179,19 @@ func Descriptions() metrics.Descriptions {
 		MetricQueueRejectedTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Workflow submissions rejected because the queue's maximum concurrent waiters was already reached.",
+		},
+		MetricChatQueueDepth: {
+			Kind: metrics.KindGauge,
+			Help: "New chat and Messages requests currently waiting because every candidate was busy.",
+		},
+		MetricChatQueueWaitSeconds: {
+			Kind:    metrics.KindHistogram,
+			Help:    "How long a queued chat or Messages request waited before it stopped waiting, by outcome.",
+			Buckets: []float64{0.1, 0.25, 0.5, 1, 2, 5, 10, 30},
+		},
+		MetricChatQueueRejectedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Chat and Messages requests answered 429 at once because the chat queue's maximum concurrent waiters was already reached.",
 		},
 	}
 }
@@ -297,3 +321,24 @@ type discardInstrument struct{}
 func (discardInstrument) Add(float64)     {}
 func (discardInstrument) Set(float64)     {}
 func (discardInstrument) Observe(float64) {}
+
+// ChatQueueDepth publishes how many chat or Messages requests are waiting.
+//
+// ChatQueueDepth 发布当前有多少对话或 Messages 请求正在等待。
+func (r *recorder) ChatQueueDepth(n int) {
+	r.sink.Gauge(MetricChatQueueDepth, nil).Set(float64(n))
+}
+
+// ChatQueueWait observes how long a queued chat request waited before outcome.
+//
+// ChatQueueWait 观测一次排队的对话请求在 outcome 结束等待前等了多久。
+func (r *recorder) ChatQueueWait(d time.Duration, outcome string) {
+	r.sink.Histogram(MetricChatQueueWaitSeconds, map[string]string{LabelOutcome: outcome}).Observe(d.Seconds())
+}
+
+// ChatQueueRejected counts one chat request that found the chat queue full.
+//
+// ChatQueueRejected 统计一次发现对话队列已满的对话请求。
+func (r *recorder) ChatQueueRejected() {
+	r.sink.Counter(MetricChatQueueRejectedTotal, nil).Add(1)
+}
