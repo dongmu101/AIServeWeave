@@ -59,8 +59,12 @@ func TestLiveMetricsHistoryDeleteRollupBefore(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DeleteRollupBefore() error = %v", err)
 		}
-		if n != 1 {
-			t.Fatalf("DeleteRollupBefore() removed %d rows, want 1", n)
+		if n.PartitionsDropped+n.RowsDeleted == 0 {
+			t.Fatalf("DeleteRollupBefore() = %+v, want the old row removed", n)
+		}
+		got, err := st.ListRollup(ctx, []string{"m"}, old.Add(-time.Hour), recent.Add(time.Hour))
+		if err != nil || len(got) != 1 || !got[0].BucketAt.Equal(recent) {
+			t.Fatalf("ListRollup() = %+v, %v; want only the recent row", got, err)
 		}
 	})
 }

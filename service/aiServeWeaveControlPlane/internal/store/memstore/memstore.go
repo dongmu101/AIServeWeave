@@ -754,6 +754,33 @@ func (s *Store) AppendAudit(_ context.Context, entry *model.AuditLog) error {
 	return nil
 }
 
+// DeleteAuditLogsBefore implements store.AuditRetention.
+//
+// DeleteAuditLogsBefore 实现 store.AuditRetention。
+func (s *Store) DeleteAuditLogsBefore(_ context.Context, before time.Time) (store.RetentionResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	kept := s.audit[:0]
+	var removed int64
+	for _, entry := range s.audit {
+		if entry.CreatedAt.Before(before) {
+			removed++
+			continue
+		}
+		kept = append(kept, entry)
+	}
+	s.audit = kept
+	return store.RetentionResult{RowsDeleted: removed}, nil
+}
+
+// MaintainPartitions implements store.PartitionMaintenance. An in-memory store
+// has no partitions, so there is nothing to create.
+//
+// MaintainPartitions 实现 store.PartitionMaintenance。内存存储没有分区，无需创建。
+func (s *Store) MaintainPartitions(context.Context, time.Time) (store.PartitionMaintenanceResult, error) {
+	return store.PartitionMaintenanceResult{}, nil
+}
+
 // ListAudit reads one tenant's audit trail, newest first.
 //
 // ListAudit 读取某个租户的审计线索，最新的在前。

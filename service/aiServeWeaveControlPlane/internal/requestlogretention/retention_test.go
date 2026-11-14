@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // fakeClock is a minimal runtime.Clock fixed at a known instant — RunOnce
@@ -22,18 +23,18 @@ func (c fakeClock) NewTimer(time.Duration) (<-chan time.Time, func() bool) {
 
 type fakeStore struct {
 	deletedBefore time.Time
-	toReturn      int64
+	toReturn      store.RetentionResult
 	err           error
 }
 
-func (f *fakeStore) DeleteRequestLogsBefore(_ context.Context, before time.Time) (int64, error) {
+func (f *fakeStore) DeleteRequestLogsBefore(_ context.Context, before time.Time) (store.RetentionResult, error) {
 	f.deletedBefore = before
 	return f.toReturn, f.err
 }
 
 func TestRunOnceDeletesRowsOlderThanRetention(t *testing.T) {
 	clock := fakeClock{now: time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)}
-	store := &fakeStore{toReturn: 3}
+	store := &fakeStore{toReturn: store.RetentionResult{RowsDeleted: 3}}
 	r := requestlogretention.New(store, 30*24*time.Hour, clock, nil)
 
 	if err := r.RunOnce(context.Background()); err != nil {

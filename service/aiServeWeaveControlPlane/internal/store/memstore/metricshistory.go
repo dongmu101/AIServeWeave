@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // UpsertRollup implements store.MetricsHistory.
@@ -51,7 +52,7 @@ func (s *Store) ListRollup(_ context.Context, metrics []string, since, until tim
 }
 
 // DeleteRollupBefore implements store.MetricsHistory.
-func (s *Store) DeleteRollupBefore(_ context.Context, before time.Time) (int64, error) {
+func (s *Store) DeleteRollupBefore(_ context.Context, before time.Time) (store.RetentionResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	kept := s.metricsHistory[:0]
@@ -64,5 +65,5 @@ func (s *Store) DeleteRollupBefore(_ context.Context, before time.Time) (int64, 
 		kept = append(kept, point)
 	}
 	s.metricsHistory = kept
-	return removed, nil
+	return store.RetentionResult{RowsDeleted: removed}, nil
 }

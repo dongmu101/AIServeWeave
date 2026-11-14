@@ -95,8 +95,8 @@ func TestDeleteRequestLogsBeforeRemovesOnlyOlderRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteRequestLogsBefore() error = %v, want nil", err)
 	}
-	if removed != 1 {
-		t.Fatalf("DeleteRequestLogsBefore() removed %d rows, want 1", removed)
+	if removed.RowsDeleted != 1 {
+		t.Fatalf("DeleteRequestLogsBefore() removed %d rows, want 1", removed.RowsDeleted)
 	}
 	page, err := s.ListRequestLogs(ctx, store.ListQuery{}, store.RequestLogFilter{TenantID: "tnt_1"})
 	if err != nil {

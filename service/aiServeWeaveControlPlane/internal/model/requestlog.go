@@ -16,7 +16,9 @@ import "time"
 // already globally unique and is what every caller already refers to the
 // request by, so a duplicate report (a retried batch push) is naturally
 // rejected — here, silently skipped — by the same uniqueness this key
-// already provides.
+// already provides. The table is range-partitioned by day on CreatedAt, so
+// the primary key is (id, created_at): the dedup holds because the Gateway's
+// outbox resends a record with the CreatedAt it was first stamped with.
 //
 // Outcome is a closed classification derived purely from StatusCode by the
 // Gateway before this row ever exists. Model, ErrorCode, ErrorMessage and
@@ -30,7 +32,9 @@ import "time"
 // 16 个字符)，由 Gateway 副本上报。ID 是 Gateway 一侧 common/reqid 为它铸造的请求关联
 // id，不是代理键——与 Job.ID 相同的选择，理由也相同：这个 id 本就全局唯一，
 // 也是每个调用方已经用来指代这次请求的东西，因此重复上报（一次被重试的批量
-// 推送）天然会被这同一个唯一性拒绝——这里的表现是被悄悄跳过。
+// 推送）天然会被这同一个唯一性拒绝——这里的表现是被悄悄跳过。这张表按
+// CreatedAt 按天做 RANGE 分区，因此主键是 (id, created_at)：去重依然成立，
+// 因为 Gateway 的 outbox 重发记录时沿用其首次生成时的 CreatedAt。
 //
 // Outcome 是 Gateway 在这一行存在之前就已从 StatusCode 纯粹推导出的封闭分类。
 // Model、ErrorCode、ErrorMessage 与 ErrorDetail 只为失败请求（状态码 400 及以上）
@@ -44,7 +48,7 @@ type RequestLog struct {
 	StatusCode int       `gorm:"not null"`
 	Outcome    string    `gorm:"size:24;not null"`
 	DurationMS int64     `gorm:"not null"`
-	CreatedAt  time.Time `gorm:"not null"`
+	CreatedAt  time.Time `gorm:"primaryKey;not null"`
 
 	Model        string `gorm:"size:128;not null;default:''"`
 	ErrorCode    string `gorm:"size:64;not null;default:''"`

@@ -33,8 +33,10 @@ func TestLoadResponseTurnsMigrationsParsesEmbeddedSQL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loadMigrations(response_turns, %s) error = %v, want nil", dialect, err)
 			}
-			if len(files) != 1 {
-				t.Fatalf("loadMigrations(response_turns, %s) returned %d files, want 1", dialect, len(files))
+			// 0001 creates the table; 0002 converts it to time partitions.
+			// 0001 建表；0002 把它转换为按时间分区。
+			if len(files) != 2 {
+				t.Fatalf("loadMigrations(response_turns, %s) returned %d files, want 2", dialect, len(files))
 			}
 		})
 	}

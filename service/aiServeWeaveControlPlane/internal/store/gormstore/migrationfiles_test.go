@@ -136,7 +136,12 @@ func renderInitSQL(t *testing.T, current string) string {
 		}
 		for _, m := range all {
 			out.WriteString("\n-- " + strings.TrimPrefix(path.Join(migrationDir(namespace, "mysql"), m.id), "migrations/") + "\n")
-			body := strings.TrimRight(m.sql, "\n")
+			// Partition bounds are only known at apply time; the reference
+			// script keeps just the catch-all partition, and a real deployment
+			// gets its dated partitions from the migration and maintenance.
+			// 分区边界只有执行时才能确定；参考脚本只保留兜底分区，真实部署的按日期分区
+			// 由迁移与分区维护生成。
+			body := partitionDirective.ReplaceAllString(strings.TrimRight(m.sql, "\n"), mysqlCatchAllDef)
 			// The migrator splits on ";" and never needs a final one, but the
 			// concatenated script does.
 			// 迁移器按 ";" 切分，不需要末尾分号；拼接后的脚本需要。

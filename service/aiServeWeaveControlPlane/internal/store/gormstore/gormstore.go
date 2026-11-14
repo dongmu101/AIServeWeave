@@ -30,13 +30,35 @@ import (
 //
 // Store 基于一个 gorm 连接实现 store.Store。
 type Store struct {
-	db *gorm.DB
+	db               *gorm.DB
+	migrationTimeout time.Duration
+}
+
+// Option configures a Store.
+//
+// Option 配置一个 Store。
+type Option func(*Store)
+
+// WithMigrationTimeout bounds one migration run; zero keeps
+// DefaultMigrationTimeout. Converting a large table to partitions copies it,
+// so a deployment with large tables raises this.
+//
+// WithMigrationTimeout 限制一次迁移运行的时长；为零时采用 DefaultMigrationTimeout。
+// 把大表转换为分区表需要整表复制，表很大的部署需要调大它。
+func WithMigrationTimeout(d time.Duration) Option {
+	return func(s *Store) { s.migrationTimeout = d }
 }
 
 // New returns a Store over db.
 //
 // New 基于 db 返回一个 Store。
-func New(db *gorm.DB) *Store { return &Store{db: db} }
+func New(db *gorm.DB, opts ...Option) *Store {
+	s := &Store{db: db}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
 
 // Migrate applies the versioned base schema, preserving existing data.
 // Migrate 应用基础表的版本化迁移，并保留已有数据。
@@ -323,6 +345,14 @@ func (s *Store) MarkAPIKeyUsed(ctx context.Context, id string, at time.Time) err
 // AppendAudit 插入一条审计记录。
 func (s *Store) AppendAudit(ctx context.Context, entry *model.AuditLog) error {
 	return translate(s.db.WithContext(ctx).Create(entry).Error)
+}
+
+// DeleteAuditLogsBefore implements store.AuditRetention.
+//
+// DeleteAuditLogsBefore 实现 store.AuditRetention。
+func (s *Store) DeleteAuditLogsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
+	result, err := s.applyRetention(ctx, "audit_logs", &model.AuditLog{}, before)
+	return result, translate(err)
 }
 
 // ListAudit reads one tenant's audit trail, newest first.

@@ -193,6 +193,14 @@ CREATE INDEX idx_users_tenant_created ON users (tenant_id, created_at, id);
 CREATE INDEX idx_api_keys_tenant_created ON api_keys (tenant_id, created_at, id);
 CREATE INDEX idx_audit_logs_tenant_created ON audit_logs (tenant_id, created_at, id);
 
+-- base/mysql/0017_partition_audit_logs.sql
+UPDATE audit_logs SET created_at = UTC_TIMESTAMP(3) WHERE created_at IS NULL;
+ALTER TABLE audit_logs
+ MODIFY created_at DATETIME(3) NOT NULL,
+ DROP PRIMARY KEY,
+ ADD PRIMARY KEY (id, created_at)
+ PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
+
 -- ============================================================
 -- routes
 -- ============================================================
@@ -258,6 +266,12 @@ CREATE TABLE metrics_history_points (
 CREATE UNIQUE INDEX idx_metrics_history_points_series ON metrics_history_points (metric, labels, bucket_at);
 CREATE INDEX idx_metrics_history_points_bucket ON metrics_history_points (bucket_at);
 
+-- metrics_history/mysql/0002_partition_metrics_history_points.sql
+ALTER TABLE metrics_history_points
+ DROP PRIMARY KEY,
+ ADD PRIMARY KEY (id, bucket_at)
+ PARTITION BY RANGE COLUMNS(bucket_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
+
 -- ============================================================
 -- request_logs
 -- ============================================================
@@ -284,6 +298,12 @@ ALTER TABLE request_logs ADD COLUMN model VARCHAR(128) NOT NULL DEFAULT '';
 ALTER TABLE request_logs ADD COLUMN error_code VARCHAR(64) NOT NULL DEFAULT '';
 ALTER TABLE request_logs ADD COLUMN error_message VARCHAR(512) NOT NULL DEFAULT '';
 ALTER TABLE request_logs ADD COLUMN error_detail VARCHAR(1024) NOT NULL DEFAULT '';
+
+-- request_logs/mysql/0004_partition_request_logs.sql
+ALTER TABLE request_logs
+ DROP PRIMARY KEY,
+ ADD PRIMARY KEY (id, created_at)
+ PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
 
 -- ============================================================
 -- alerting
@@ -336,6 +356,12 @@ CREATE TABLE response_turns (
  INDEX idx_response_turns_tenant (tenant_id, created_at, id)
 ) ENGINE=InnoDB;
 
+-- response_turns/mysql/0002_partition_response_turns.sql
+ALTER TABLE response_turns
+ DROP PRIMARY KEY,
+ ADD PRIMARY KEY (id, created_at)
+ PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
+
 -- ============================================================
 -- usage_records
 -- ============================================================
@@ -353,6 +379,12 @@ CREATE TABLE usage_records (
  INDEX idx_usage_records_tenant_model_created (tenant_id, model, created_at),
  INDEX idx_usage_records_created (created_at, id)
 ) ENGINE=InnoDB;
+
+-- usage_records/mysql/0002_partition_usage_records.sql
+ALTER TABLE usage_records
+ DROP PRIMARY KEY,
+ ADD PRIMARY KEY (id, created_at)
+ PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
 
 -- ============================================================
 -- api_docs

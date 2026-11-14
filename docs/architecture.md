@@ -501,7 +501,7 @@ audit_logs
 - Job 保存公开任务 ID、ComfyUI `prompt_id` 和实际 Deployment 的映射
 - Artifact 保存输入文件、预览图和最终生成文件的元数据；Job Artifact 保存任务与稳定公开产物 ID 的关联
 
-任务、事件、文件元数据与请求摘要均需定义保留期和有界清理。Prometheus 承担指标采集，历史指标与日志使用适合查询规模的存储；用量账本独立定义去重与结算规则。备份范围应同时覆盖数据库、Registry 身份材料和对象存储，恢复后进行引用一致性检查。
+任务、事件、文件元数据与请求摘要均需定义保留期和有界清理。控制面的五张增长表（`request_logs`、`usage_records`、`metrics_history_points`、`response_turns`、`audit_logs`）在 MySQL 9.7 与 PostgreSQL 上按时间 RANGE 分区，过期数据整段删除分区，跨越截止时间的分区再按行删除；分区由控制面每小时预建，每张表有兜底分区。主键为 `(id, 分区列)`，计费表不分区。布局、保留期与升级见[数据库升级与恢复](../deploy/database-recovery.md)。Prometheus 承担指标采集，历史指标与日志使用适合查询规模的存储；用量账本独立定义去重与结算规则。备份范围应同时覆盖数据库、Registry 身份材料和对象存储，恢复后进行引用一致性检查。
 
 ## 安全设计
 

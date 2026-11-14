@@ -493,7 +493,7 @@ type AuditLog struct {
 	//
 	// IP 是该动作来源的客户端地址。
 	IP        string    `gorm:"size:64"`
-	CreatedAt time.Time `gorm:"index"`
+	CreatedAt time.Time `gorm:"primaryKey;not null;index"`
 }
 
 // TableName pins the table name. See Tenant.TableName.

@@ -1,3 +1,58 @@
+# 增长表按时间分区（2026-11-14）
+
+控制面五张持续增长的表改为按时间 RANGE 分区，MySQL 9.7 与 PostgreSQL 都做，两边表结构一致：
+
+| 表 | 分区 | 保留期（默认） |
+| --- | --- | --- |
+| `request_logs` | 按天，`created_at` | 30 天 |
+| `usage_records` | 按月，`created_at` | 400 天 |
+| `metrics_history_points` | 按天，`bucket_at` | 90 天（启用指标历史时） |
+| `response_turns` | 按天，`created_at` | 30 天（新增 `ResponseTurnRetention`） |
+| `audit_logs` | 按月，`created_at` | 400 天（新增 `AuditLogRetention`） |
+
+- **清理**：先整段删除过期分区，再删除跨越截止时间那个分区里的过期行，精确到行。
+- **维护**：控制面启动时及之后每小时预建未来分区（按天 7 天、按月 2 个月），多副本之间用迁移锁串行；每张表有兜底分区，维护落后时写入不会失败。
+- **配置**：新增 `ResponseTurnRetention`、`AuditLogRetention`、`Database.MigrationTimeout`；按天分区的表保留期上限 3650 天。
+- **不分区**：`usage_charges` 等计费表，扣费去重依赖 `request_id` 全局唯一。
+
+MySQL 9.7 对分区没有实质性加强：主键和唯一键须包含分区列、分区表不能有外键，这些限制仍在，本次按此设计。
+
+升级须知（不兼容）：
+
+- 五张表的主键改为 `(id, 分区列)`；`audit_logs.created_at` 改为 `NOT NULL`，NULL 回填为迁移时间。
+- 升级后的第一轮清理会删除超过 30 天的对话轮次与超过 400 天的审计记录；需要更久的部署先调大配置再升级。
+- 迁移原地转换已有数据，整表复制期间不可写；大表须先在恢复副本上计时，并设置 `Database.MigrationTimeout`。
+- 没有反向迁移，回退只能恢复升级前的备份。只需升级控制面，Gateway 与 Agent 无需改动。
+
+说明见 [数据库升级与恢复「按时间分区」](deploy/database-recovery.md#按时间分区base-0017--request_logs-0004--usage_records-0002--metrics_history-0002--response_turns-0002)，设计与规格见 `openspec/changes/partition-time-series-tables/`。
+
+已通过的检查：
+
+- 控制面默认测试与 gormstore、logic、retention、partitionmaint 的竞态检查；Gateway `httpapi` 默认测试与竞态检查（新增「用量重试保持原 `created_at`」契约测试）。
+- 临时 MySQL 9.7.4 与 PostgreSQL 16 上 gormstore 全部 live 用例，新增分区用例：
+  - 升级保留数据与索引、自增计数不回退；
+  - PostgreSQL 转换失败整体回滚、MySQL 已转换后显式 resume；
+  - 迁移超时拒绝启动并可恢复；
+  - 复合主键下用量去重、扣费不重复、对话轮次重试；
+  - 多副本维护、兜底分区搬移；
+  - 精确到行的清理与多副本并发清理；
+  - 查询回归与审计跨月分页；
+  - schema 检查按表名拒绝。
+- 带分区表的原生备份与恢复演练（mysqldump / pg_dump）。
+- `EXPLAIN` 核对：租户倒序分页走跨分区索引扫描，无全量排序；单日范围查询只扫一个分区。
+- 本机 Docker 上转换 100 万行 `request_logs`：MySQL 22.4 秒、PostgreSQL 16 为 5.6 秒。删除 16 万行，MySQL `DELETE` 1.81 秒，`DROP PARTITION` 0.085 秒。
+
+既有问题（与本次无关，已在未改动的 HEAD 上复现）：
+
+- PostgreSQL 18 上 gormstore live 用例因 `tenant_nodes` 索引检查失败。
+- `TestLiveServiceStartupRelaysRecoveredRevocations` 失败。
+
+尚未验收：
+
+- 生产规模数据的转换耗时。
+- 真实多副本部署下的维护与清理。
+- 长期运行后分区数与清理节奏的观察。
+
 # Gateway Redis 队列与 Agent 整机准入（2026-11-14）
 
 Gateway 的等待改为全集群：

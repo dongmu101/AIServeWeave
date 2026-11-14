@@ -112,8 +112,8 @@ func TestDeleteUsageRecordsBeforeRemovesOnlyOlderRows(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteUsageRecordsBefore() error = %v, want nil", err)
 	}
-	if removed != 1 {
-		t.Fatalf("DeleteUsageRecordsBefore() removed %d rows, want 1", removed)
+	if removed.RowsDeleted != 1 {
+		t.Fatalf("DeleteUsageRecordsBefore() removed %d rows, want 1", removed.RowsDeleted)
 	}
 	summary, err := s.SummarizeUsage(ctx, store.UsageRecordFilter{TenantID: "tnt_1"})
 	if err != nil {

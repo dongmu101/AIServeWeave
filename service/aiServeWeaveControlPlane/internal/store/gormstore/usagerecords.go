@@ -91,7 +91,7 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 // DeleteUsageRecordsBefore implements store.UsageRecords.
 //
 // DeleteUsageRecordsBefore 实现 store.UsageRecords。
-func (s *Store) DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (int64, error) {
-	res := s.db.WithContext(ctx).Where("created_at < ?", before).Delete(&model.UsageRecord{})
-	return res.RowsAffected, translate(res.Error)
+func (s *Store) DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
+	result, err := s.applyRetention(ctx, "usage_records", &model.UsageRecord{}, before)
+	return result, translate(err)
 }

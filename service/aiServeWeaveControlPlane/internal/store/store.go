@@ -546,6 +546,48 @@ type Audit interface {
 	ListAudit(ctx context.Context, tenantID string, query ListQuery, filter AuditFilter) (Page[model.AuditLog], error)
 }
 
+// AuditRetention ages out audit records past their retention window. It is
+// kept apart from Audit so the interface logic and handlers take still has no
+// delete: only the retention sweeper is wired to this one.
+//
+// AuditRetention 清理超出保留期的审计记录。它与 Audit 分开，使 logic 与 handler 取用
+// 的接口依然没有删除方法：只有保留期清理协程装配这一个接口。
+type AuditRetention interface {
+	// DeleteAuditLogsBefore removes every record older than before.
+	//
+	// DeleteAuditLogsBefore 删除每一条早于 before 的记录。
+	DeleteAuditLogsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
+}
+
+// RetentionResult reports one retention pass over a time-partitioned table:
+// whole partitions dropped (their rows are not counted, since counting would
+// scan them) and rows deleted from the partition straddling the cutoff.
+//
+// RetentionResult 报告对一张按时间分区的表执行的一次保留期清理：整段删除的分区数（不
+// 统计其中的行数，计数本身就要扫描），以及从跨越截止时间的分区中删除的行数。
+type RetentionResult struct {
+	PartitionsDropped int64
+	RowsDeleted       int64
+}
+
+// PartitionMaintenanceResult reports one partition maintenance pass. Skipped
+// means another session held the lock and this pass did nothing.
+//
+// PartitionMaintenanceResult 报告一次分区维护。Skipped 表示锁被另一个会话持有，本轮
+// 什么也没做。
+type PartitionMaintenanceResult struct {
+	Skipped bool
+	Created int
+}
+
+// PartitionMaintenance keeps the time-partitioned tables' future partitions
+// created ahead of the clock.
+//
+// PartitionMaintenance 让按时间分区的表始终预先建好未来的分区。
+type PartitionMaintenance interface {
+	MaintainPartitions(ctx context.Context, now time.Time) (PartitionMaintenanceResult, error)
+}
+
 // Jobs persists the control plane's record of a workflow run, per the
 // ControlPlane README's 「Job 持久化契约」 and STATUS.md's J01/J03. It is a
 // side channel to a Gateway's own in-memory job table, not a replacement for
@@ -741,6 +783,12 @@ type ResponseTurns interface {
 	//
 	// GetResponseTurn 按 id 读取一轮，并限定在其租户范围内。
 	GetResponseTurn(ctx context.Context, tenantID, id string) (model.ResponseTurn, error)
+	// DeleteResponseTurnsBefore removes every turn older than before, for the
+	// retention sweeper. A reaped turn reads back as unknown.
+	//
+	// DeleteResponseTurnsBefore 删除每一轮早于 before 的记录，供保留期清理协程
+	// 使用。被回收的轮次读取时等同未知。
+	DeleteResponseTurnsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
 // RequestLogFilter narrows a RequestLogs listing. An empty TenantID means
@@ -786,7 +834,7 @@ type RequestLogs interface {
 	//
 	// DeleteRequestLogsBefore 删除每一行早于 before 的记录，供保留期清理协程
 	// 使用。
-	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
 // UsageRecordFilter narrows a SummarizeUsage call. An empty TenantID means
@@ -853,7 +901,7 @@ type UsageRecords interface {
 	//
 	// DeleteUsageRecordsBefore 删除每一行早于 before 的记录，供保留期清理
 	// 协程使用。
-	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
 // AlertRuleFilter narrows a ListAlertRules call. An empty Enabled means no
@@ -1004,6 +1052,8 @@ type Store interface {
 	PlatformOperators
 	APIKeys
 	Audit
+	AuditRetention
+	PartitionMaintenance
 	Jobs
 	JobArtifacts
 	ResponseTurns

@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"gorm.io/gorm"
+	"gorm.io/gorm/migrator"
 	"gorm.io/gorm/schema"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
@@ -27,6 +28,9 @@ func checkSchemaObjects(db *gorm.DB, all bool) error {
 		if err := checkModelSchema(db, value); err != nil {
 			return err
 		}
+	}
+	if err := checkPartitionLayouts(db, all); err != nil {
+		return err
 	}
 	var row struct {
 		Generation          sql.NullInt64
@@ -126,7 +130,7 @@ func checkModelSchema(db *gorm.DB, value any) error {
 			return fmt.Errorf("schema column %s.%s is missing or incompatible; inspect before migration or restore", table, field.DBName)
 		}
 	}
-	indexes, err := db.Migrator().GetIndexes(value)
+	indexes, err := readIndexes(db, value, table)
 	if err != nil {
 		return fmt.Errorf("reading indexes for %s failed", table)
 	}
@@ -170,4 +174,78 @@ func checkModelSchema(db *gorm.DB, value any) error {
 		}
 	}
 	return nil
+}
+
+// checkPartitionLayouts verifies each time-partitioned table is RANGE
+// partitioned on its column and still has its catch-all partition. A base-only
+// check covers audit_logs, the one partitioned table in that namespace.
+//
+// checkPartitionLayouts 校验每张按时间分区的表都以规定的列做 RANGE 分区，且兜底分区
+// 仍在。只检查 base 时只覆盖 audit_logs，它是该分组中唯一的分区表。
+func checkPartitionLayouts(db *gorm.DB, all bool) error {
+	for _, table := range partitionedTables {
+		if !all && table.name != "audit_logs" {
+			continue
+		}
+		layout, err := readPartitionLayout(db, table.name)
+		if err != nil {
+			return err
+		}
+		if !layout.partitioned {
+			return fmt.Errorf("schema table %s is not partitioned; run the database migration", table.name)
+		}
+		if layout.column != table.column {
+			return fmt.Errorf("schema table %s must be RANGE partitioned on %s", table.name, table.column)
+		}
+		if _, ok := catchAllPartition(layout.parts); !ok {
+			return fmt.Errorf("schema table %s has no catch-all partition; inspect before migration or restore", table.name)
+		}
+	}
+	return nil
+}
+
+// readIndexes lists a table's indexes. The PostgreSQL driver only looks at
+// ordinary tables (relkind 'r'), so a partitioned parent (relkind 'p') — whose
+// indexes are partitioned indexes — is read with an equivalent query here.
+//
+// readIndexes 列出一张表的索引。PostgreSQL 驱动只查看普通表（relkind 'r'），因此分区
+// 父表（relkind 'p'，其索引是分区索引）在这里用等价的查询读取。
+func readIndexes(db *gorm.DB, value any, table string) ([]gorm.Index, error) {
+	if _, partitioned := lookupPartitionedTable(table); !partitioned || db.Name() != "postgres" {
+		return db.Migrator().GetIndexes(value)
+	}
+	var rows []struct {
+		IndexName  string
+		ColumnName string
+		IsUnique   bool
+		IsPrimary  bool
+	}
+	err := db.Raw(`SELECT ci.relname AS index_name, a.attname AS column_name, i.indisunique AS is_unique, i.indisprimary AS is_primary
+FROM pg_index i
+JOIN pg_class ct ON ct.oid = i.indrelid
+JOIN pg_class ci ON ci.oid = i.indexrelid
+JOIN pg_attribute a ON a.attrelid = ct.oid AND a.attnum = ANY(i.indkey)
+LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid
+WHERE con.oid IS NULL AND ct.relkind IN ('r', 'p') AND ct.oid = to_regclass(?)
+ORDER BY ci.relname, array_position(i.indkey::int2[], a.attnum)`, table).Scan(&rows).Error
+	if err != nil {
+		return nil, err
+	}
+	byName := map[string]*migrator.Index{}
+	var out []gorm.Index
+	for _, row := range rows {
+		index, ok := byName[row.IndexName]
+		if !ok {
+			index = &migrator.Index{
+				TableName:       table,
+				NameValue:       row.IndexName,
+				PrimaryKeyValue: sql.NullBool{Bool: row.IsPrimary, Valid: true},
+				UniqueValue:     sql.NullBool{Bool: row.IsUnique, Valid: true},
+			}
+			byName[row.IndexName] = index
+			out = append(out, index)
+		}
+		index.ColumnList = append(index.ColumnList, row.ColumnName)
+	}
+	return out, nil
 }

@@ -18,6 +18,7 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"math"
 	"net/url"
 	"strings"
@@ -192,6 +193,30 @@ type Config struct {
 	// 30 天，因为 usage_records 支撑的是结算而非诊断：几个月后的一次账单
 	// 争议仍然需要这条账本记录，而不只是那个时间窗口内的 Prometheus 计数器。
 	UsageRecordRetention time.Duration `json:",optional"`
+
+	// ResponseTurnRetention is how long a persisted response_turns row (a
+	// Responses API turn the Gateway asked this service to remember) is kept
+	// before the retention sweeper reaps it. Zero uses
+	// DefaultResponseTurnRetention. Once reaped, a previous_response_id that
+	// named the turn is answered exactly like an unknown id. Like
+	// RequestLogRetention's sweeper, this loop always runs.
+	//
+	// ResponseTurnRetention 是一条已持久化的 response_turns 行（Gateway 请本服务
+	// 代为记住的一轮 Responses API 对话）在被保留期清理协程回收前保留多久。为零时
+	// 采用 DefaultResponseTurnRetention。被回收后，指向它的 previous_response_id
+	// 与未知 id 的答复完全相同。与 RequestLogRetention 的清理协程一样，这个循环
+	// 总会运行。
+	ResponseTurnRetention time.Duration `json:",optional"`
+
+	// AuditLogRetention is how long an audit_logs row is kept before the
+	// retention sweeper reaps it. Zero uses DefaultAuditLogRetention. Like
+	// RequestLogRetention's sweeper, this loop always runs; a deployment with
+	// a longer compliance requirement raises it before upgrading.
+	//
+	// AuditLogRetention 是一条 audit_logs 行在被保留期清理协程回收前保留多久。
+	// 为零时采用 DefaultAuditLogRetention。与 RequestLogRetention 的清理协程一样，
+	// 这个循环总会运行；合规要求更长的部署应在升级前调大它。
+	AuditLogRetention time.Duration `json:",optional"`
 
 	// ComfyEditor configures the embedded ComfyUI workflow editor served under
 	// /operator/v1/comfy-editor/ for the Console's template page. Optional:
@@ -675,6 +700,32 @@ const DefaultAlertEvaluationInterval = 60 * time.Second
 // 处理迟到账单争议的余量。
 const DefaultUsageRecordRetention = 400 * 24 * time.Hour
 
+// DefaultResponseTurnRetention is how long a response_turns row is kept when
+// Config.ResponseTurnRetention is zero — 30 days, the same window the
+// OpenAI Responses API stores a response for.
+//
+// DefaultResponseTurnRetention 是 Config.ResponseTurnRetention 为零时，一条
+// response_turns 行被保留的时长——30 天，与 OpenAI Responses API 默认保存一次
+// 响应的时长相同。
+const DefaultResponseTurnRetention = 30 * 24 * time.Hour
+
+// DefaultAuditLogRetention is how long an audit_logs row is kept when
+// Config.AuditLogRetention is zero — 400 days, matching usage_records so a
+// billing year's actions stay traceable.
+//
+// DefaultAuditLogRetention 是 Config.AuditLogRetention 为零时，一条 audit_logs
+// 行被保留的时长——400 天，与 usage_records 一致，使一个计费年度内的操作都可追溯。
+const DefaultAuditLogRetention = 400 * 24 * time.Hour
+
+// MaxDailyPartitionedRetention caps the retention of a table partitioned by
+// day (request_logs, metrics_history_points, response_turns), keeping its
+// partition count well under MySQL's 8192-partitions-per-table limit.
+//
+// MaxDailyPartitionedRetention 是按天分区的表（request_logs、
+// metrics_history_points、response_turns）保留期的上限，使分区数远低于 MySQL
+// 每表 8192 个分区的限制。
+const MaxDailyPartitionedRetention = 3650 * 24 * time.Hour
+
 // FleetConf configures the fleet inventory.
 //
 // The node inventory is not tenant data: a node is shared infrastructure that
@@ -1028,6 +1079,14 @@ type DatabaseConf struct {
 	// AutoMigrate 在启动时执行内嵌版本 SQL，兼容既有本地配置。false 仅检查 schema；
 	// 生产在启动服务副本前，先运行独立的数据库迁移命令。
 	AutoMigrate bool `json:",default=false"`
+	// MigrationTimeout bounds one migration run, including converting an
+	// existing table to time partitions (a full table copy). Zero keeps the
+	// 5-minute default; raise it after timing the upgrade on a restored copy.
+	//
+	// MigrationTimeout 限制一次迁移运行的时长，包括把已有的表转换为按时间分区
+	// （一次整表复制）。为零时沿用 5 分钟的默认值；应先在恢复出的副本上计时升级，
+	// 再据此调大。
+	MigrationTimeout time.Duration `json:",optional"`
 }
 
 // RedisConf is the verification cache.
@@ -1155,6 +1214,27 @@ func (c Config) Validate() error {
 	}
 	if c.UsageRecordRetention < 0 {
 		return errors.New("config: UsageRecordRetention must not be negative")
+	}
+	if c.ResponseTurnRetention < 0 {
+		return errors.New("config: ResponseTurnRetention must not be negative")
+	}
+	if c.AuditLogRetention < 0 {
+		return errors.New("config: AuditLogRetention must not be negative")
+	}
+	if c.Database.MigrationTimeout < 0 {
+		return errors.New("config: Database.MigrationTimeout must not be negative")
+	}
+	for _, daily := range []struct {
+		name  string
+		value time.Duration
+	}{
+		{"RequestLogRetention", c.RequestLogRetention},
+		{"ResponseTurnRetention", c.ResponseTurnRetention},
+		{"MetricsHistory.Retention", c.MetricsHistory.Retention},
+	} {
+		if daily.value > MaxDailyPartitionedRetention {
+			return fmt.Errorf("config: %s must not exceed 3650 days (87600h); the table is partitioned by day", daily.name)
+		}
 	}
 	if c.Billing.Enabled {
 		if err := c.Billing.validate(); err != nil {

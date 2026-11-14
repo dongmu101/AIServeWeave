@@ -44,6 +44,27 @@ Database:
   # then starts with this disabled and checks schema compatibility only.
   # 本地执行内嵌版本 SQL；生产先运行 -migrate up，再关闭本项，仅检查 schema 兼容性。
   AutoMigrate: true
+  # Bounds one migration run, including converting an existing table to time
+  # partitions (a full table copy). Unset keeps 5m; time the upgrade on a
+  # restored copy first. See deploy/database-recovery.md.
+  # 限制一次迁移运行的时长，包括把已有的表转换为按时间分区（整表复制）。不设时为 5m；
+  # 先在恢复出的副本上计时升级。见 deploy/database-recovery.md。
+  # MigrationTimeout: 30m
+
+# Retention of the time-partitioned tables. Expired partitions are dropped
+# whole, then the rows before the cutoff in the straddling partition are
+# deleted. Unset (zero) uses the default shown; daily-partitioned tables
+# (request_logs, metrics_history_points, response_turns) cap at 87600h.
+# Upgrading reaps response turns older than 30 days and audit records older
+# than 400 days unless these are raised first.
+# 按时间分区的表的保留期：先整段删除过期分区，再删除跨越截止时间那个分区里的过期行。
+# 不设（为零）时采用下列默认值；按天分区的表（request_logs、metrics_history_points、
+# response_turns）上限 87600h。若不先调大，升级后会清理超过 30 天的对话轮次与超过
+# 400 天的审计记录。
+# RequestLogRetention: 720h     # request_logs, 30 days
+# UsageRecordRetention: 9600h   # usage_records, 400 days
+# ResponseTurnRetention: 720h   # response_turns, 30 days
+# AuditLogRetention: 9600h      # audit_logs, 400 days
 
 # Required for revocable sessions and API Key verification caching.
 # 必填，用于可吊销会话和 API Key 校验缓存。

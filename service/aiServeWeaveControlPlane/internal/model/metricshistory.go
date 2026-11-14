@@ -14,7 +14,7 @@ type MetricsHistoryPoint struct {
 	ID       int64     `gorm:"primaryKey;autoIncrement"`
 	Metric   string    `gorm:"column:metric"`
 	Labels   string    `gorm:"column:labels"`
-	BucketAt time.Time `gorm:"column:bucket_at"`
+	BucketAt time.Time `gorm:"column:bucket_at;primaryKey"`
 	Value    float64   `gorm:"column:value"`
 }
 

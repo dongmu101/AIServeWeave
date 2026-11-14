@@ -27,8 +27,8 @@ type MetricsHistory interface {
 	// 全部样本，按 bucket_at 升序排列。
 	ListRollup(ctx context.Context, metrics []string, since, until time.Time) ([]model.MetricsHistoryPoint, error)
 	// DeleteRollupBefore deletes every row with bucket_at < before and
-	// reports how many rows it removed.
+	// reports the partitions dropped and rows deleted.
 	//
-	// DeleteRollupBefore 删除全部 bucket_at < before 的行，并报告删除行数。
-	DeleteRollupBefore(ctx context.Context, before time.Time) (int64, error)
+	// DeleteRollupBefore 删除全部 bucket_at < before 的行，并报告删除的分区数与行数。
+	DeleteRollupBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }

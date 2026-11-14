@@ -56,7 +56,7 @@ func (s *Store) ListRequestLogs(_ context.Context, query store.ListQuery, filter
 }
 
 // DeleteRequestLogsBefore implements store.RequestLogs.
-func (s *Store) DeleteRequestLogsBefore(_ context.Context, before time.Time) (int64, error) {
+func (s *Store) DeleteRequestLogsBefore(_ context.Context, before time.Time) (store.RetentionResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var removed int64
@@ -66,5 +66,5 @@ func (s *Store) DeleteRequestLogsBefore(_ context.Context, before time.Time) (in
 			removed++
 		}
 	}
-	return removed, nil
+	return store.RetentionResult{RowsDeleted: removed}, nil
 }

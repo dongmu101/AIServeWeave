@@ -7,6 +7,7 @@ import (
 	"gorm.io/gorm/clause"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // UpsertRollup implements store.MetricsHistory.
@@ -31,7 +32,6 @@ func (s *Store) ListRollup(ctx context.Context, metrics []string, since, until t
 }
 
 // DeleteRollupBefore implements store.MetricsHistory.
-func (s *Store) DeleteRollupBefore(ctx context.Context, before time.Time) (int64, error) {
-	res := s.db.WithContext(ctx).Where("bucket_at < ?", before).Delete(&model.MetricsHistoryPoint{})
-	return res.RowsAffected, res.Error
+func (s *Store) DeleteRollupBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
+	return s.applyRetention(ctx, "metrics_history_points", &model.MetricsHistoryPoint{}, before)
 }

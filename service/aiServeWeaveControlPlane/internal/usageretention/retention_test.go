@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/usageretention"
 )
 
@@ -19,18 +20,18 @@ func (c fakeClock) NewTimer(time.Duration) (<-chan time.Time, func() bool) {
 
 type fakeStore struct {
 	deletedBefore time.Time
-	toReturn      int64
+	toReturn      store.RetentionResult
 	err           error
 }
 
-func (f *fakeStore) DeleteUsageRecordsBefore(_ context.Context, before time.Time) (int64, error) {
+func (f *fakeStore) DeleteUsageRecordsBefore(_ context.Context, before time.Time) (store.RetentionResult, error) {
 	f.deletedBefore = before
 	return f.toReturn, f.err
 }
 
 func TestRunOnceDeletesRowsOlderThanRetention(t *testing.T) {
 	clock := fakeClock{now: time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)}
-	store := &fakeStore{toReturn: 3}
+	store := &fakeStore{toReturn: store.RetentionResult{RowsDeleted: 3}}
 	r := usageretention.New(store, 400*24*time.Hour, clock, nil)
 
 	if err := r.RunOnce(context.Background()); err != nil {

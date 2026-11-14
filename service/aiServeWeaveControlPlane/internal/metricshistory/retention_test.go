@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // fakeClock is a minimal runtime.Clock fixed at a known instant — RunOnce
@@ -22,9 +23,9 @@ func (c fakeClock) NewTimer(time.Duration) (<-chan time.Time, func() bool) {
 
 type fakeRetentionStore struct{ deletedBefore []time.Time }
 
-func (f *fakeRetentionStore) DeleteRollupBefore(ctx context.Context, before time.Time) (int64, error) {
+func (f *fakeRetentionStore) DeleteRollupBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
 	f.deletedBefore = append(f.deletedBefore, before)
-	return 3, nil
+	return store.RetentionResult{RowsDeleted: 3}, nil
 }
 
 func TestRetentionDeletesOlderThanWindow(t *testing.T) {

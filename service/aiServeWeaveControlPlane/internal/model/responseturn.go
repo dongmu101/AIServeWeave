@@ -55,7 +55,7 @@ type ResponseTurn struct {
 	PreviousResponseID string    `gorm:"size:64;not null;default:''"`
 	Model              string    `gorm:"size:128;not null;default:''"`
 	Messages           string    `gorm:"type:text;not null"`
-	CreatedAt          time.Time `gorm:"not null;index:idx_response_turns_tenant"`
+	CreatedAt          time.Time `gorm:"primaryKey;not null;index:idx_response_turns_tenant"`
 }
 
 // TableName pins the table name. See Tenant.TableName in model.go.

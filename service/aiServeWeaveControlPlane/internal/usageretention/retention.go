@@ -23,13 +23,14 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // Store is the persistence surface retention cleanup needs.
 //
 // Store 是保留期清理所需要的持久化接口。
 type Store interface {
-	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error)
 }
 
 // Retention periodically deletes usage_records rows past their retention
@@ -63,12 +64,13 @@ func New(store Store, retention time.Duration, clock runtime.Clock, logger *slog
 // RunOnce 一次性删除全部超出保留期的行。
 func (r *Retention) RunOnce(ctx context.Context) error {
 	before := r.clock.Now().Add(-r.retention)
-	n, err := r.store.DeleteUsageRecordsBefore(ctx, before)
+	result, err := r.store.DeleteUsageRecordsBefore(ctx, before)
 	if err != nil {
 		return err
 	}
-	if n > 0 {
-		r.logger.Info("usage record retention cleanup", slog.Int64("rows_deleted", n), slog.Time("before", before))
+	if result.PartitionsDropped > 0 || result.RowsDeleted > 0 {
+		r.logger.Info("usage record retention cleanup", slog.String("table", "usage_records"), slog.Time("before", before),
+			slog.Int64("partitions_dropped", result.PartitionsDropped), slog.Int64("rows_deleted", result.RowsDeleted))
 	}
 	return nil
 }

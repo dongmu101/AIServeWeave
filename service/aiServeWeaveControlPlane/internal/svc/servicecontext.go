@@ -32,6 +32,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/alertengine"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/auditretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/dodo"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/ezfp"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing/opcpay"
@@ -44,10 +45,12 @@ import (
 	cpmetrics "AIServeWeave/service/aiServeWeaveControlPlane/internal/metrics"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/partitionmaint"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/redeemgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/remoteproviderrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/requestlogretention"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/responseturnretention"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/revocationoutbox"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/signupgate"
@@ -258,6 +261,17 @@ type ServiceContext struct {
 	// 存在，而填充它的内部推送 API 只要配置了 InternalToken 就无条件挂载。
 	usageRetentionCancel context.CancelFunc
 	usageRetentionDone   chan struct{}
+
+	// storageUpkeepCancel/storageUpkeepDone tear down the partition
+	// maintenance loop and the response_turns and audit_logs retention
+	// sweepers. Like usageRetentionCancel, they always start: the tables exist
+	// once migrated, whatever else is configured.
+	//
+	// storageUpkeepCancel/storageUpkeepDone 关停分区维护循环，以及 response_turns
+	// 与 audit_logs 的保留期清理协程。与 usageRetentionCancel 一样，它们总会启动：
+	// 这些表只要迁移过就存在，与其它配置无关。
+	storageUpkeepCancel context.CancelFunc
+	storageUpkeepDone   chan struct{}
 }
 
 // NewServiceContext connects to the database and Redis, runs the migration when
@@ -281,7 +295,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		return nil, err
 	}
 
-	st := gormstore.New(db)
+	st := gormstore.New(db, gormstore.WithMigrationTimeout(cfg.Database.MigrationTimeout))
 	ready := false
 	defer func() {
 		if !ready {
@@ -297,6 +311,19 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	} else if err := st.CheckSchema(ctx); err != nil {
 		return nil, err
 	}
+
+	// Pre-create the partitions before serving. A failure is logged, not
+	// fatal: every partitioned table has a catch-all partition, so writes
+	// still land, and the hourly loop below retries.
+	//
+	// 在对外服务前预建分区。失败只记日志、不终止启动：每张分区表都有兜底分区，写入
+	// 照常落地，下面每小时一次的循环会重试。
+	partitionMaintainer := partitionmaint.New(st, nil, slog.Default())
+	pmStartCtx, pmStartCancel := context.WithTimeout(ctx, partitionmaint.StartupTimeout)
+	if err := partitionMaintainer.RunOnce(pmStartCtx); err != nil {
+		slog.Error("initial partition maintenance failed; writes fall into the catch-all partition until a later pass", slog.Any("error", err))
+	}
+	pmStartCancel()
 
 	redisClient := redis.NewClient(&redis.Options{Addr: cfg.Redis.Addr, Password: cfg.Redis.Password, DB: cfg.Redis.DB, ContextTimeoutEnabled: true})
 	defer func() {
@@ -579,6 +606,32 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		usageretention.New(st, usageRecordRetention, nil, nil).Run(urCtx, usageRecordRetentionInterval)
 	}()
 
+	responseTurnRetention := cfg.ResponseTurnRetention
+	if responseTurnRetention <= 0 {
+		responseTurnRetention = config.DefaultResponseTurnRetention
+	}
+	auditLogRetention := cfg.AuditLogRetention
+	if auditLogRetention <= 0 {
+		auditLogRetention = config.DefaultAuditLogRetention
+	}
+	suCtx, suCancel := context.WithCancel(ctx)
+	suDone := make(chan struct{})
+	go func() {
+		defer close(suDone)
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() { defer wg.Done(); partitionMaintainer.Run(suCtx, partitionmaint.Interval) }()
+		go func() {
+			defer wg.Done()
+			responseturnretention.New(st, responseTurnRetention, nil, slog.Default()).Run(suCtx, requestLogRetentionInterval)
+		}()
+		go func() {
+			defer wg.Done()
+			auditretention.New(st, auditLogRetention, nil, slog.Default()).Run(suCtx, usageRecordRetentionInterval)
+		}()
+		wg.Wait()
+	}()
+
 	// The gate is assigned through a guard rather than directly: a nil
 	// *signupgate.Redis stored in the interface field would be a non-nil
 	// Gate holding a nil pointer.
@@ -639,6 +692,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		RemoteProviderRouter:      remoteProviderRouter,
 		usageRetentionCancel:      urCancel,
 		usageRetentionDone:        urDone,
+		storageUpkeepCancel:       suCancel,
+		storageUpkeepDone:         suDone,
 	}, nil
 }
 
@@ -829,6 +884,10 @@ func (s *ServiceContext) Close() error {
 	if s.usageRetentionCancel != nil {
 		s.usageRetentionCancel()
 		<-s.usageRetentionDone
+	}
+	if s.storageUpkeepCancel != nil {
+		s.storageUpkeepCancel()
+		<-s.storageUpkeepDone
 	}
 	var errs []error
 	if err := s.Cache.Close(); err != nil {

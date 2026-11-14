@@ -1,3 +1,11 @@
+## 增长表按时间分区（2026-11-14）
+
+`request_logs`（按天）、`usage_records`（按月）、`metrics_history_points`（按天，按 `bucket_at`）、`response_turns`（按天）、`audit_logs`（按月）在 MySQL 9.7 与 PostgreSQL 上统一改为按时间 RANGE 分区。保留期清理先整段删除过期分区，再删除跨越截止时间那个分区里的过期行，精确到行。新增 `ResponseTurnRetention`（默认 30 天）、`AuditLogRetention`（默认 400 天）、`Database.MigrationTimeout`（默认 5 分钟）；按天分区的表保留期上限 3650 天。启动时及之后每小时预建未来分区（`internal/partitionmaint`），与迁移共用非阻塞会话锁；每张表有兜底分区，维护落后时写入不会失败。
+
+不兼容：五张表的主键改为 `(id, 分区列)`；`audit_logs.created_at` 改为 `NOT NULL`（NULL 回填为迁移时间）；升级后会清理超过 30 天的对话轮次和超过 400 天的审计记录；`CreateResponseTurn` 改为先按 id 查找再插入（并发重试可能留下内容相同的两行，读取结果不变）。迁移为 `base/0017`、`request_logs/0004`、`usage_records/0002`、`metrics_history/0002`、`response_turns/0002`，原地转换已有数据（整表复制，期间不可写）；`sql/init.sql` 已同步。只需升级控制面，Gateway 无需改动。升级步骤、耗时与回退见[数据库升级与恢复](../../deploy/database-recovery.md#按时间分区base-0017--request_logs-0004--usage_records-0002--metrics_history-0002--response_turns-0002)。
+
+验证：控制面默认测试与竞态检查；临时 MySQL 9.7.4 与 PostgreSQL 16 上的 gormstore live 用例全部通过，新增 8 组分区用例覆盖升级保留数据与索引、PG 失败回滚与 MySQL resume、迁移超时、复合主键下的写入与扣费幂等、多副本维护与兜底分区搬移、精确到行的清理与多副本清理、查询回归、schema 检查按表名拒绝；带分区表的原生备份恢复演练通过。100 万行转换耗时 MySQL 22.4 秒、PostgreSQL 16 为 5.6 秒（本机 Docker）。PostgreSQL 18 上 gormstore live 用例在未改动的 HEAD 上同样因 `tenant_nodes` 索引检查失败（既有问题，与本次无关）；`TestLiveServiceStartupRelaysRecoveredRevocations` 在 HEAD 上同样失败。生产规模的转换耗时与真实部署尚未验收。
+
 ## 商户订单删除（2026-11-13）
 
 商户计费页「订单」新增删除与确认框，owner/admin 可删除任意状态的本商户订单；member 只读。删除持久化为 `checkout_orders.tenant_deleted_at`，仅商户列表隐藏，运维历史、付款恢复、去重、发货、退款与库存占用继续使用原订单。新接口为 `DELETE /admin/v1/billing/orders/:id`，成功 `204`，跨商户、未知与已删除统一 `404`，审计动作 `billing.order.delete`。Console 白名单、八语言提示、失败保留确认框与末页回退已接入。迁移为 PostgreSQL/MySQL `billing/0010_order_deletion.sql`，`sql/init.sql` 已同步；控制面与 Console 须一起更新。行为与升级说明见[商户订单删除](../../docs/billing-orders.md)。
@@ -91,6 +99,8 @@ MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫
 升级顺序、失败恢复、备份命令、恢复后的安全状态核对与可复现双引擎演练见 [数据库升级与恢复](../../deploy/database-recovery.md)。无破坏性 down 迁移；数据库恢复也不等于 Registry/Redis/对象存储的全平台灾备。
 
 **列表分页索引（2026-11-10）。** `ListUsers`、`ListAPIKeys`、`ListAudit` 经 `readPage` 以 `WHERE tenant_id = ? ORDER BY created_at DESC, id DESC`（可再叠加状态/角色/动作/时间范围过滤）做游标分页，原先只有单列 `tenant_id` 索引，每页都要对该租户的全部行排序。新增基础迁移 `base/{postgres,mysql}/0016_list_pagination_indexes.sql`：`idx_users_tenant_created`、`idx_api_keys_tenant_created`、`idx_audit_logs_tenant_created`，均为 `(tenant_id, created_at, id)`。`ListJobArtifactsBefore`（`WHERE type = ? AND created_at < ? ORDER BY created_at, id LIMIT n`，产物保留期清理使用）原先没有可用索引，新增 MySQL 专用的 `jobs/0005_add_job_artifacts_type_created_index.sql`：`idx_job_artifacts_type_created (type, created_at, id)`。`jobs` 表的 `(tenant_id, created_at, id)`、`request_logs`、`billing` 各表本来就有对应的复合索引。旧的单列 `idx_users_tenant_id`、`idx_api_keys_tenant_id`、`idx_audit_logs_tenant_id` **保留**：它们由 `model` 的 `index` 标签声明，启动时的 `CheckSchema` 要求它们存在，删掉会让服务拒绝启动；它们已被新索引的最左前缀覆盖，要清理必须先改模型标签并发版，本次不做。升级步骤与锁表影响见[数据库升级与恢复](../../deploy/database-recovery.md#列表分页索引迁移base-0016--jobs-0005)。`sql/init.sql` 现由 `gormstore.TestInitSQLMatchesMigrations` 约束，新增迁移后用 `UPDATE_INIT_SQL=1 go test ./service/aiServeWeaveControlPlane/internal/store/gormstore -run TestInitSQLMatchesMigrations` 重新生成。这两份迁移没有在真实 PostgreSQL 或 MySQL 上执行过（默认测试只验证 SQL 文件的方言一致、版本连续和 `init.sql` 同步）。
+
+**增长表按时间分区（2026-11-14）。** `request_logs`、`usage_records`、`metrics_history_points`、`response_turns`、`audit_logs` 按时间 RANGE 分区，分区清单只有一份（`gormstore/partitions.go` 的 `partitionedTables`），迁移展开、维护、清理和 schema 检查都读它。转换迁移里的 `/*aisw:partitions table=…*/` 占位在执行时按最旧一行与当前日期展开，校验和覆盖的是模板，所以账本稳定；MySQL 上表已分区时跳过 ALTER，保证 `resume` 可以重复执行。主键必须包含分区列（MySQL 9.7 仍有这一限制），因此是 `(id, 分区列)`：用量记录的去重依赖 Gateway 重发时沿用原 `created_at`（`usageledger_createdat_test.go` 固定了这一点），扣费去重仍由不分区的 `usage_charges.request_id` 保证；`response_turns` 的 `created_at` 取控制面时钟，写入前先按 id 查找。schema 检查会校验分区列与兜底分区；PostgreSQL 分区父表的索引由 `readIndexes` 自行读取（GORM 驱动只看普通表）。审计删除放在独立的 `store.AuditRetention` 接口里，`store.Audit` 仍然没有删除方法。
 
 ## 本地起一套
 

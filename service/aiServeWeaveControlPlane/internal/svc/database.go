@@ -28,7 +28,7 @@ func RunDatabaseCommand(ctx context.Context, cfg config.DatabaseConf, action str
 		return err
 	}
 	defer pool.Close()
-	st := gormstore.New(db)
+	st := gormstore.New(db, gormstore.WithMigrationTimeout(cfg.MigrationTimeout))
 	if action != "status" {
 		if err := st.MigrateAll(ctx, action == "resume"); err != nil {
 			return err

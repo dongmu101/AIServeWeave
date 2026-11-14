@@ -58,7 +58,7 @@ func (s *Store) ListRequestLogs(ctx context.Context, query store.ListQuery, filt
 // DeleteRequestLogsBefore implements store.RequestLogs.
 //
 // DeleteRequestLogsBefore 实现 store.RequestLogs。
-func (s *Store) DeleteRequestLogsBefore(ctx context.Context, before time.Time) (int64, error) {
-	res := s.db.WithContext(ctx).Where("created_at < ?", before).Delete(&model.RequestLog{})
-	return res.RowsAffected, translate(res.Error)
+func (s *Store) DeleteRequestLogsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
+	result, err := s.applyRetention(ctx, "request_logs", &model.RequestLog{}, before)
+	return result, translate(err)
 }

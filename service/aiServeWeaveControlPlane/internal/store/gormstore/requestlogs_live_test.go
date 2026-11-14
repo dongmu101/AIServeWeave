@@ -102,8 +102,13 @@ func TestLiveRequestLogsDeleteBeforeRemovesOnlyOlderRows(t *testing.T) {
 		if err != nil {
 			t.Fatalf("DeleteRequestLogsBefore() error = %v, want nil", err)
 		}
-		if n != 1 {
-			t.Fatalf("DeleteRequestLogsBefore() removed %d rows, want 1", n)
+		// The old row sits in the history partition: either the partition is
+		// dropped whole (rows uncounted) or, when the cutoff still falls inside
+		// it, the row is deleted. The survivors below are what matters.
+		// 旧行位于历史分区：要么整段删除该分区（不计行数），要么截止时间仍落在分区内而
+		// 删除该行。真正要验证的是下面剩下的行。
+		if n.PartitionsDropped+n.RowsDeleted == 0 {
+			t.Fatalf("DeleteRequestLogsBefore() = %+v, want the old row removed", n)
 		}
 
 		page, err := st.ListRequestLogs(ctx, store.ListQuery{}, store.RequestLogFilter{TenantID: "tnt_1"})

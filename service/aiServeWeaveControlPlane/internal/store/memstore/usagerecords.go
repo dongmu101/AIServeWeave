@@ -67,7 +67,7 @@ func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter
 }
 
 // DeleteUsageRecordsBefore implements store.UsageRecords.
-func (s *Store) DeleteUsageRecordsBefore(_ context.Context, before time.Time) (int64, error) {
+func (s *Store) DeleteUsageRecordsBefore(_ context.Context, before time.Time) (store.RetentionResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	var removed int64
@@ -77,5 +77,5 @@ func (s *Store) DeleteUsageRecordsBefore(_ context.Context, before time.Time) (i
 			removed++
 		}
 	}
-	return removed, nil
+	return store.RetentionResult{RowsDeleted: removed}, nil
 }

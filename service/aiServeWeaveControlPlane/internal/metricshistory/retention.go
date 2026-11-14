@@ -6,13 +6,14 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // RetentionStore is the persistence surface retention cleanup needs.
 //
 // RetentionStore 是保留期清理所需要的持久化接口。
 type RetentionStore interface {
-	DeleteRollupBefore(ctx context.Context, before time.Time) (int64, error)
+	DeleteRollupBefore(ctx context.Context, before time.Time) (store.RetentionResult, error)
 }
 
 // Retention periodically deletes rollup rows past their retention window.
@@ -45,12 +46,13 @@ func NewRetention(store RetentionStore, retention time.Duration, clock runtime.C
 // RunOnce 一次性删除全部超出保留期的行。
 func (r *Retention) RunOnce(ctx context.Context) error {
 	before := r.clock.Now().Add(-r.retention)
-	n, err := r.store.DeleteRollupBefore(ctx, before)
+	result, err := r.store.DeleteRollupBefore(ctx, before)
 	if err != nil {
 		return err
 	}
-	if n > 0 {
-		r.logger.Info("metrics history retention cleanup", slog.Int64("rows_deleted", n), slog.Time("before", before))
+	if result.PartitionsDropped > 0 || result.RowsDeleted > 0 {
+		r.logger.Info("metrics history retention cleanup", slog.String("table", "metrics_history_points"), slog.Time("before", before),
+			slog.Int64("partitions_dropped", result.PartitionsDropped), slog.Int64("rows_deleted", result.RowsDeleted))
 	}
 	return nil
 }

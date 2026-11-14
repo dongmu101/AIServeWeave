@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 )
@@ -92,5 +93,24 @@ func TestCreateResponseTurnRejectsEmptyFields(t *testing.T) {
 				t.Errorf("CreateResponseTurn(%+v) = %v, want ErrInvalidInput", tt.p, err)
 			}
 		})
+	}
+}
+
+// TestReapedResponseTurnReadsLikeAnUnknownID pins the retention contract: once
+// the sweeper removes a turn, a previous_response_id naming it gets exactly the
+// answer an id that never existed gets.
+//
+// TestReapedResponseTurnReadsLikeAnUnknownID 固定保留期契约：清理协程移除一轮之后，
+// 指向它的 previous_response_id 得到的答复与从未存在的 id 完全相同。
+func TestReapedResponseTurnReadsLikeAnUnknownID(t *testing.T) {
+	f := newFixture(t)
+	mustCreateResponseTurn(t, f, "resp_reaped", "")
+	if _, err := f.store.DeleteResponseTurnsBefore(context.Background(), f.clock.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_, reaped := f.svc.GetResponseTurn(context.Background(), f.tenant.ID, "resp_reaped")
+	_, unknown := f.svc.GetResponseTurn(context.Background(), f.tenant.ID, "resp_never")
+	if !errors.Is(reaped, logic.ErrNotFound) || reaped.Error() != unknown.Error() {
+		t.Errorf("reaped = %v, unknown = %v; want the same not-found answer", reaped, unknown)
 	}
 }

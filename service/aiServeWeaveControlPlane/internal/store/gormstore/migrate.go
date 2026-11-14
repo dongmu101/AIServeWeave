@@ -114,14 +114,42 @@ func validateMigrationHistory(all []migrationFile, records []migrationRecord, re
 	return nil
 }
 
-// withMigrationLock pins the session lock to the connection executing DDL.
-// withMigrationLock 将会话锁绑定到真正执行 DDL 的连接。
+// DefaultMigrationTimeout bounds one migration run when no MigrationTimeout
+// option is given.
+//
+// DefaultMigrationTimeout 是未指定 MigrationTimeout 时一次迁移运行的时限。
+const DefaultMigrationTimeout = 5 * time.Minute
+
+// errMigrationLockBusy reports that another session holds the migration lock.
+// errMigrationLockBusy 表示迁移锁正被另一个会话持有。
+var errMigrationLockBusy = errors.New("database migration lock unavailable; retry after the other migrator finishes")
+
+// withMigrationLock pins the session lock to the connection executing DDL and
+// bounds the whole run by the configured migration timeout.
+// withMigrationLock 将会话锁绑定到真正执行 DDL 的连接，并以配置的迁移超时限制整次运行。
 func (s *Store) withMigrationLock(ctx context.Context, run func(*gorm.DB) error) error {
+	timeout := s.migrationTimeout
+	if timeout <= 0 {
+		timeout = DefaultMigrationTimeout
+	}
+	ctx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	err := s.withSessionLock(ctx, run)
+	if err != nil && ctx.Err() == context.DeadlineExceeded {
+		return errors.Join(fmt.Errorf("database migration exceeded the %s migration timeout; raise Database.MigrationTimeout for large tables", timeout), err)
+	}
+	return err
+}
+
+// withSessionLock takes the migration lock without waiting. Partition
+// maintenance and retention share it, so partition DDL never overlaps a
+// migration or another replica's partition DDL.
+// withSessionLock 以不等待的方式获取迁移锁。分区维护与保留期清理共用此锁，使分区 DDL
+// 不会与迁移或其它副本的分区 DDL 重叠。
+func (s *Store) withSessionLock(ctx context.Context, run func(*gorm.DB) error) error {
 	if name := s.db.Name(); name != "mysql" && name != "postgres" {
 		return errors.New("gormstore: migrations require postgres or mysql")
 	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
-	defer cancel()
 	return s.db.WithContext(ctx).Connection(func(db *gorm.DB) (result error) {
 		db = db.Session(&gorm.Session{NewDB: true})
 		var acquired bool
@@ -132,7 +160,7 @@ func (s *Store) withMigrationLock(ctx context.Context, run func(*gorm.DB) error)
 			unlockSQL = "SELECT RELEASE_LOCK(CONCAT('aisw:', LEFT(SHA2(DATABASE(), 256), 48)))"
 		}
 		if err := db.Raw(lockSQL).Scan(&acquired).Error; err != nil || !acquired {
-			return errors.New("database migration lock unavailable; retry after the other migrator finishes")
+			return errMigrationLockBusy
 		}
 		defer func() {
 			cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
@@ -260,6 +288,9 @@ func migrateNamespace(db *gorm.DB, namespace string, resume bool) ([]string, err
 // executeMigration handles only the repository's fixed SQL, not user input.
 // executeMigration 只执行仓库固定 SQL，不接受用户输入。
 func executeMigration(db *gorm.DB, namespace string, m migrationFile) error {
+	if isPartitionMigration(m) {
+		return executePartitionMigration(db, m)
+	}
 	if namespace == "jobs" {
 		switch m.id {
 		case "0001_create_jobs.sql":
