@@ -59,6 +59,7 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 - 只有生图进程的 `imageGeneration` 完成帧可以放宽到 48 MiB（一张 1024² PNG 的 base64 就约 2.2 MB），其余帧仍受 1 MiB 限制。
 - Codex 会另存一份到 `CODEX_HOME/generated_images/<thread_id>/`。进程回收后，Agent 删除这个目录。目录由校验过的线程 ID（只允许 `[A-Za-z0-9_-]`）拼出来，不使用 app-server 报回的 `savedPath`，因此不可能删到别处。
 - 生图期间 app-server 可能静默二三十秒，所以只受 `RequestTimeout`（默认 5 分钟）和 Gateway 下发的期限约束，不使用流空闲期限。与 Chat 共用并发限额。
+- 每个请求冷启动一个独立的 app-server 进程，同时运行的进程数由 `max_concurrent` 决定：未配置时 4 个（不沿用通用默认值 32），显式配置的值原样使用。调大前确认内存和订阅额度。
 - 账户生图额度耗尽（`usageLimitExceeded`）映射为可重试的 `rate_limited`，对话回合的额度耗尽同样如此，并附带额度恢复时长（见 [额度耗尽与限流](../README.md#额度耗尽与限流)）；回合结束仍没有图映射为 `upstream_error`；格式、大小或关联校验失败映射为 `protocol_error`。错误文本不含提示词。
 
 Codex 内置生图工具不允许调用方选择上游图像模型。`codex-cli 0.162.1` 的 `thread/start`、`turn/start` 都没有相关字段，`image_generation.model`、`tools.image_generation.model` 等候选配置键也都被 CLI 判为无法识别。所以这里只发布一个不标版本的 ID，不发布 `gpt-image-2.5-flare` / `gpt-image-2.5-sunburst` 这类 API 模型 ID，也不要在 Gateway 路由里把它们设成指向 `codex-image` 的别名。尺寸、质量、背景、输出格式等参数同理，由 Gateway 按名字拒绝。

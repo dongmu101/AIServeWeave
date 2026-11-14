@@ -53,6 +53,14 @@ type Runtime struct {
 // 一个可能耗掉大半探测期限的 app-server。
 const catalogReuse = 5 * time.Second
 
+// defaultMaxConcurrent applies when max_concurrent is not configured. Every
+// request cold-starts its own app-server process, so the generic default of
+// 32 would let a burst of traffic exhaust the host's memory.
+//
+// defaultMaxConcurrent 用于未配置 max_concurrent 的情况。每个请求都会冷启动一个独立的
+// app-server 进程，通用默认值 32 会让突发流量耗尽本机内存。
+const defaultMaxConcurrent = 8
+
 var _ runtime.InferenceRuntime = (*Runtime)(nil)
 
 // New constructs the Agent-local Codex factory without starting a process.
@@ -67,6 +75,9 @@ func NewFactory(executable string) runtime.Factory {
 	return func(cfg runtime.Config, deps runtime.Dependencies) (runtime.Runtime, error) {
 		if cfg.Kind == "" {
 			cfg.Kind = runtime.KindCodex
+		}
+		if cfg.MaxConcurrent == 0 { // before Normalize fills the generic default / 在 Normalize 填入通用默认值之前处理
+			cfg.MaxConcurrent = defaultMaxConcurrent
 		}
 		cfg = cfg.Normalize()
 		if err := cfg.Validate(); err != nil {
