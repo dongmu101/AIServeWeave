@@ -167,7 +167,7 @@ export function ConsoleShell({
             </span>
           </Link>
           <nav aria-label={t("tenant.consoleNavigation")} className="flex min-w-0 flex-1 items-center justify-end sm:justify-start">
-            <div className="hidden items-center gap-0.5 xl:flex">
+            <div className="hidden min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] xl:flex">
               {NAV_ITEMS.map((item) => {
                 if ("children" in item) {
                   const groupActive = item.children.some((child) => child.href === activeItem?.href);

@@ -1,4 +1,4 @@
-import { test, expect, API_DOCS } from "./fixtures";
+import { test, expect, API_DOCS, chooseLanguage } from "./fixtures";
 
 const headings = {
   "zh-CN": "下载产物", "zh-TW": "下載產物", "en-US": "Download artifact", "ja-JP": "成果物をダウンロード",
@@ -23,7 +23,7 @@ test("switching documentation retains example inputs, the selected tab and the e
   const code = await selected.textContent();
   await selected.locator("..").getByRole("button", { name: "复制", exact: true }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
-  await page.locator("[data-language-switcher]").selectOption("en-US");
+  await chooseLanguage(page, "en-US");
   await expect(page.locator("html")).toHaveAttribute("lang", "en-US");
   await expect(page.locator('input[maxlength="128"]')).toHaveValue("author-model-原文");
   await expect(page.getByRole("tab", { name: "Python", exact: true })).toHaveAttribute("aria-selected", "true");
@@ -36,7 +36,7 @@ test("edited server content is rendered intact despite a matching built-in slug"
   const original = API_DOCS.find(doc => doc.slug === "artifact-download");
   await page.route("**/api/admin/admin/v1/api-docs/artifact-download", route => route.fulfill({ json: { ...original, title: "作者自定义标题", content: { ...original.content, notice: "作者自定义正文" } } }));
   await page.goto("/console/docs/artifact-download");
-  await page.locator("[data-language-switcher]").selectOption("de-DE");
+  await chooseLanguage(page, "de-DE");
   await expect(page.locator("html")).toHaveAttribute("lang", "de-DE");
   await expect(page.locator("h1")).toHaveText("作者自定义标题");
   await expect(page.locator("article")).toContainText("作者自定义正文");

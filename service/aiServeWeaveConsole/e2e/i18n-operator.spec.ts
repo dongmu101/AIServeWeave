@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures";
+import { test, expect, chooseLanguage } from "./fixtures";
 import { operatorEntries } from "./i18n-expectations";
 import { LOCALES } from "../lib/i18n/locale.ts";
 
@@ -20,7 +20,7 @@ test("route drafts keep machine model values and the revision while the UI chang
   await page.goto("/operator/routes");
   const model = page.getByRole("textbox").first();
   await model.fill("synthetic-unsaved-route");
-  await page.locator("[data-language-switcher]").selectOption("fr-FR");
+  await chooseLanguage(page, "fr-FR");
   await expect(page.locator("html")).toHaveAttribute("lang", "fr-FR");
   await expect(model).toHaveValue("synthetic-unsaved-route");
   expect(writes).toEqual([]);
@@ -48,7 +48,7 @@ test("template graph drafts and a replacement confirmation survive a locale chan
   await graph.fill(raw);
   await page.getByRole("button", { name: "用当前版本替换草稿" }).click();
   await expect(page.getByRole("dialog")).toBeVisible();
-  await page.locator("[data-language-switcher]").selectOption("de-DE");
+  await chooseLanguage(page, "de-DE", { behindModal: true });
   await expect(page.locator("html")).toHaveAttribute("lang", "de-DE");
   await expect(graph).toHaveValue(raw);
   await expect(page.getByRole("dialog")).toBeVisible();
@@ -61,7 +61,7 @@ test("API document JSON remains author content when the editor UI changes", asyn
   const editor = page.locator("textarea");
   const source = '{"title":"自定义 API 作者内容","example":"{{BASE_URL}}/v1/chat/completions"}';
   await editor.fill(source);
-  await page.locator("[data-language-switcher]").selectOption("ja-JP");
+  await chooseLanguage(page, "ja-JP");
   await expect(page.locator("html")).toHaveAttribute("lang", "ja-JP");
   await expect(editor).toHaveValue(source);
 });
@@ -71,7 +71,7 @@ test("an open alert rule keeps draft inputs and selected machine enums", async (
   await page.getByRole("button", { name: "创建规则" }).click();
   await page.locator("#rule-name").fill("synthetic-unsaved-rule");
   await page.locator("#rule-threshold").fill("17");
-  await page.locator("[data-language-switcher]").selectOption("fr-FR");
+  await chooseLanguage(page, "fr-FR", { behindModal: true });
   await expect(page.locator("html")).toHaveAttribute("lang", "fr-FR");
   await expect(page.locator("#rule-name")).toHaveValue("synthetic-unsaved-rule");
   await expect(page.locator("#rule-threshold")).toHaveValue("17");
@@ -89,7 +89,7 @@ test("model pull drafts survive switching without triggering a pull or another r
   await page.locator("#node-id").fill("synthetic-node");
   await page.locator("#node-id").press("Enter");
   await page.locator("#pull-names").fill("local-allowlisted-model");
-  await page.locator("[data-language-switcher]").selectOption("ko-KR");
+  await chooseLanguage(page, "ko-KR");
   await expect(page.locator("html")).toHaveAttribute("lang", "ko-KR");
   await expect(page.locator("#pull-names")).toHaveValue("local-allowlisted-model");
   expect(reads).toBe(1);

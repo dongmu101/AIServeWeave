@@ -1,4 +1,4 @@
-import { test, expect } from "./fixtures";
+import { test, expect, chooseLanguage } from "./fixtures";
 import { tenantEntries, saveText } from "./i18n-expectations";
 import { LOCALES } from "../lib/i18n/locale.ts";
 
@@ -19,13 +19,13 @@ test("quota validation and gateway-key drafts follow language without changing i
   await input.fill("-1");
   await page.getByRole("button", { name: "保存全部三项", exact: true }).click();
   await expect(page.locator("main").getByRole("alert")).toContainText("只能填写非负整数");
-  await page.locator("[data-language-switcher]").selectOption("de-DE");
+  await chooseLanguage(page, "de-DE");
   await expect(page.locator("html")).toHaveAttribute("lang", "de-DE");
   await expect(input).toHaveValue("-1");
   await expect(page.locator("main").getByRole("alert")).not.toContainText("只能填写非负整数");
   await page.goto("/console/settings");
   await page.locator("#gateway-key-input").fill("aisw_synthetic_unsaved_draft");
-  await page.locator("[data-language-switcher]").selectOption("fr-FR");
+  await chooseLanguage(page, "fr-FR");
   await expect(page.locator("html")).toHaveAttribute("lang", "fr-FR");
   await expect(page.locator("#gateway-key-input")).toHaveValue("aisw_synthetic_unsaved_draft");
 });
@@ -37,10 +37,7 @@ test("a creation error and all user draft fields remain while the language chang
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
   await expect(dialog.getByRole("alert")).toContainText("请填写邮箱");
   await dialog.locator('input[type="email"]').fill("draft@example.invalid");
-  await page.evaluate(() => {
-    const select = document.querySelector<HTMLSelectElement>("[data-language-switcher]")!;
-    select.value = "en-US"; select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await chooseLanguage(page, "en-US", { behindModal: true });
   await expect(dialog.getByRole("alert")).toHaveText("Enter an email address.");
   await expect(dialog.locator('input[type="email"]')).toHaveValue("draft@example.invalid");
 });
@@ -61,10 +58,7 @@ test("creating a key sends stable machine values and language changes preserve i
   await page.getByRole("dialog").getByRole("button", { name: "创建", exact: true }).click();
   const secret = page.getByRole("dialog").getByText("aisw_synthetic_once_only_secret", { exact: true });
   await expect(secret).toBeVisible();
-  await page.evaluate(() => {
-    const select = document.querySelector<HTMLSelectElement>("[data-language-switcher]")!;
-    select.value = "ja-JP"; select.dispatchEvent(new Event("change", { bubbles: true }));
-  });
+  await chooseLanguage(page, "ja-JP", { behindModal: true });
   await expect(page.locator("html")).toHaveAttribute("lang", "ja-JP");
   await expect(secret).toBeVisible();
   expect(writes).toEqual([{ name: "synthetic key", ttl_seconds: 90 * 24 * 60 * 60 }]);

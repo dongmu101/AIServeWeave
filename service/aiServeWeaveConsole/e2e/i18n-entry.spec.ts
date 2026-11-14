@@ -1,5 +1,5 @@
 import { test, expect } from "@playwright/test";
-import { test as signedIn } from "./fixtures";
+import { test as signedIn, chooseLanguage } from "./fixtures";
 
 test("SSR isolates concurrent language requests and honours Chinese script", async ({ request }) => {
   const responses = await Promise.all([
@@ -20,7 +20,7 @@ test("Japanese entry and switching preserve credentials and the URL", async ({ b
   await expect(page.getByRole("button", { name: "ログイン", exact: true })).toBeVisible();
   await page.locator("#email").fill("draft@example.invalid");
   await page.locator("#password").fill("synthetic-draft-password");
-  await page.locator("[data-language-switcher]").selectOption("de-DE");
+  await chooseLanguage(page, "de-DE");
   await expect(page.locator("html")).toHaveAttribute("lang", "de-DE");
   await expect(page.getByRole("button", { name: "Anmelden", exact: true })).toBeVisible();
   await expect(page.locator("#email")).toHaveValue("draft@example.invalid");
@@ -37,7 +37,7 @@ for (const path of ["/login", "/signup", "/operator/login"]) {
   test(`${path} exposes a keyboard-accessible preference on a narrow viewport`, async ({ page }) => {
     await page.setViewportSize({ width: 375, height: 760 });
     await page.goto(path);
-    await page.locator("[data-language-switcher]").selectOption("fr-FR");
+    await chooseLanguage(page, "fr-FR");
     await expect(page.locator("html")).toHaveAttribute("lang", "fr-FR");
     await expect(page.locator("[data-language-switcher]")).toHaveAccessibleName("Langue");
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
@@ -47,10 +47,10 @@ for (const path of ["/login", "/signup", "/operator/login"]) {
 signedIn("tenant and operator shells share display preference without changing identities", async ({ page }) => {
   await page.goto("/console/users");
   const identities = (await page.context().cookies()).filter(cookie => /session/.test(cookie.name));
-  await page.locator("[data-language-switcher]").selectOption("ko-KR");
+  await chooseLanguage(page, "ko-KR");
   await expect(page.locator("html")).toHaveAttribute("lang", "ko-KR");
   await page.goto("/operator/fleet");
   await expect(page.locator("html")).toHaveAttribute("lang", "ko-KR");
-  await expect(page.locator("[data-language-switcher]")).toHaveValue("ko-KR");
+  await expect(page.locator("[data-language-switcher]")).toHaveAttribute("data-value", "ko-KR");
   expect((await page.context().cookies()).filter(cookie => /session/.test(cookie.name))).toEqual(identities);
 });

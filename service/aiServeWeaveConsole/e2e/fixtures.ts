@@ -3,6 +3,7 @@ import path from "node:path";
 import { test as base, expect, type Page } from "@playwright/test";
 import { deriveSessionKey, seal, SESSION_COOKIE } from "../lib/console/session-payload.ts";
 import { sealOperator, OPERATOR_COOKIE } from "../lib/console/operator-session.ts";
+import { LANGUAGE_NAMES, type Locale } from "../lib/i18n/locale.ts";
 
 /** LONG_TEXT exercises unbroken identifiers and names within a bounded fixture.
  * LONG_TEXT 用有上限的样本覆盖不含空格的长标识符与名称。 */
@@ -121,3 +122,18 @@ export const test = base.extend({
   },
 });
 export { expect };
+
+/** chooseLanguage drives the themed language popup, which has no native selectOption. behindModal dispatches synthetic clicks so an open modal is not dismissed by an outside press.
+ * chooseLanguage 操作主题化语言弹层（非原生 select，无法使用 selectOption）。behindModal 派发合成点击，避免外部点击关闭已打开的模态框。 */
+export async function chooseLanguage(page: Page, locale: Locale, options: { behindModal?: boolean } = {}) {
+  const trigger = page.locator("[data-language-switcher]");
+  const option = page.getByRole("option", { name: LANGUAGE_NAMES[locale], exact: true });
+  if (options.behindModal) {
+    await trigger.dispatchEvent("click");
+    await option.dispatchEvent("pointerdown", { pointerType: "mouse" });
+    await option.dispatchEvent("click");
+  } else {
+    await trigger.click();
+    await option.click();
+  }
+}

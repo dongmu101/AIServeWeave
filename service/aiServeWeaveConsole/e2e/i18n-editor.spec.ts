@@ -1,5 +1,5 @@
 import {type Frame, type Page} from "@playwright/test";
-import {test, expect} from "./fixtures";
+import {test, expect, chooseLanguage} from "./fixtures";
 import {LOCALES} from "../lib/i18n/locale";
 
 type ProbeNode = {id: string | number; title: string; getTitle(): string; clone(): ProbeNode; pos: number[]; size: number[]};
@@ -50,7 +50,7 @@ test("real editor switches all eight languages without changing the graph or edi
   const reads = definitionReads;
   const titles: string[] = [];
   for (const locale of LOCALES) {
-    await page.locator("[data-language-switcher]").selectOption(locale);
+    await chooseLanguage(page, locale);
     await expect(page.locator("html").first()).toHaveAttribute("lang", locale);
     const code = {"zh-CN":"zh", "zh-TW":"zh-TW", "en-US":"en", "ja-JP":"ja", "ko-KR":"ko", "de-DE":"de", "fr-FR":"fr", "es-ES":"es"}[locale];
     await expect(page.locator("html").nth(1)).toHaveAttribute("lang", code);
