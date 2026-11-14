@@ -28,6 +28,7 @@ const common = {
   "common.copied": "복사됨",
   "common.unavailable": "사용할 수 없음",
   "common.language": "언어",
+  "common.telegramSupport": "텔레그램 고객지원",
   "common.languageLoadFailed": "언어를 불러오지 못했습니다. 다시 시도해 주세요.",
   "common.consoleTitle": "AIServeWeave 콘솔",
   "common.consoleDescription": "AIServeWeave 테넌트 관리: 사용자, API 키 및 감사 로그.",

@@ -28,6 +28,7 @@ const common = {
   "common.copied": "コピーしました",
   "common.unavailable": "利用できません",
   "common.language": "言語",
+  "common.telegramSupport": "Telegram サポート",
   "common.languageLoadFailed": "言語を読み込めませんでした。再試行してください。",
   "common.consoleTitle": "AIServeWeave コンソール",
   "common.consoleDescription": "AIServeWeave テナント管理：ユーザー、API キー、監査ログ。",

@@ -28,6 +28,7 @@ const common = {
   "common.copied": "Kopiert",
   "common.unavailable": "Nicht verfügbar",
   "common.language": "Sprache",
+  "common.telegramSupport": "Telegram-Support",
   "common.languageLoadFailed": "Die Sprache konnte nicht geladen werden. Bitte erneut versuchen.",
   "common.consoleTitle": "AIServeWeave-Konsole",
   "common.consoleDescription": "AIServeWeave-Mandantenverwaltung: Benutzer, API-Schlüssel und Audit-Protokolle.",

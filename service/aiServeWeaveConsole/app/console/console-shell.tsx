@@ -41,6 +41,7 @@ import {
 import { toast } from "sonner";
 
 import { BrandMark } from "@/components/console/brand-mark";
+import { SupportLink } from "@/components/site/support-link";
 import { Badge } from "@/components/ui/badge";
 import { Button, buttonVariants } from "@/components/ui/button";
 import {
@@ -235,6 +236,7 @@ export function ConsoleShell({
               </DropdownMenuContent>
             </DropdownMenu>
           </nav>
+          <SupportLink label={t("common.telegramSupport")} />
           <LanguageSwitcher />
           <DropdownMenu>
             <DropdownMenuTrigger

@@ -28,6 +28,7 @@ const common = {
   "common.copied": "已複製",
   "common.unavailable": "暫不可用",
   "common.language": "語言",
+  "common.telegramSupport": "Telegram 客服",
   "common.languageLoadFailed": "語言載入失敗，請重試。",
   "common.consoleTitle": "AIServeWeave 控制台",
   "common.consoleDescription": "AIServeWeave 租戶管理控制台：使用者、API Key 與管理稽核。",

@@ -1,6 +1,7 @@
 import Link from "next/link";
 
 import { LanguageSwitcher } from "@/components/i18n/language-switcher";
+import { SupportLink } from "@/components/site/support-link";
 import { buttonVariants } from "@/components/ui/button";
 import { loadMessages } from "@/lib/i18n/messages";
 import { createTranslator } from "@/lib/i18n/translate";
@@ -37,7 +38,7 @@ export async function SiteHeader({ signInNext = DEFAULT_LANDING }: { signInNext?
     <header className="border-b">
       <div className={cn(SITE_CONTAINER, "flex flex-wrap items-center gap-x-2 gap-y-3 py-3")}>
         <Link href="/" className="mr-auto font-heading text-base font-semibold tracking-tight">{legalEntity().serviceName}</Link>
-        <div className="sm:order-2"><LanguageSwitcher /></div>
+        <div className="flex items-center gap-1 sm:order-2"><SupportLink label={t("common.telegramSupport")} /><LanguageSwitcher /></div>
         <nav className="order-3 flex w-full items-center justify-end gap-2 sm:order-1 sm:w-auto">
           <Link href="/pricing" className={cn(buttonVariants({ variant: "ghost", size: "sm" }))}>{t("site.pricing")}</Link>
           {session ? (
