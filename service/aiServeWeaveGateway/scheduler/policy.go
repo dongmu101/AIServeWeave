@@ -216,10 +216,14 @@ func stableSort(found []scored, less func(a, b *scored) bool) {
 // 拒绝笔误，再到达这里。
 func orderCandidates(found []scored, policy Policy, key affinity, intn func(int) int) {
 	stableSort(found, func(a, b *scored) bool { return lessLoaded(*a, *b) })
-	// Whatever order the policy settles on, candidates under resource
-	// pressure go last, keeping their relative order as retry fallbacks.
-	// 无论策略最终排成什么顺序，资源紧张的候选都排到最后，并保持彼此的相对顺序作为重试回退。
-	defer pressureLast(found)
+	// lessLoaded already puts candidates under resource pressure last; the
+	// reorderings below may move one forward again, so they put it back,
+	// keeping relative order as retry fallbacks.
+	// lessLoaded 已经把资源紧张的候选排在最后；下面的重排可能把它提前，因此再放回去，
+	// 并保持相对顺序作为重试回退。
+	if policy != PolicyLeastLoad {
+		defer pressureLast(found)
+	}
 
 	switch policy {
 	case PolicyPowerOfTwo:
@@ -269,27 +273,25 @@ func orderCandidates(found []scored, policy Policy, key affinity, intn func(int)
 }
 
 // pressureLast stably moves candidates under resource pressure behind the
-// rest. It allocates nothing when no candidate is under pressure, which is the
-// common case on the hot path.
+// rest, in place and without allocating. With none under pressure, the
+// common case, it is one scan.
 //
-// pressureLast 把资源紧张的候选稳定地移到其余候选之后。没有候选资源紧张时（热路径上的
-// 常见情形）不做任何分配。
+// pressureLast 把资源紧张的候选稳定地、原地且无分配地移到其余候选之后。没有候选资源
+// 紧张时（常见情形）只做一次扫描。
 func pressureLast(found []scored) {
-	first := slices.IndexFunc(found, func(s scored) bool { return s.pressure })
-	if first < 0 {
+	if !slices.ContainsFunc(found, func(s scored) bool { return s.pressure }) {
 		return
 	}
-	held := make([]scored, 0, len(found)-first)
-	k := first
-	for _, s := range found[first:] {
-		if s.pressure {
-			held = append(held, s)
-			continue
+	slices.SortStableFunc(found, func(a, b scored) int {
+		switch {
+		case a.pressure == b.pressure:
+			return 0
+		case a.pressure:
+			return 1
+		default:
+			return -1
 		}
-		found[k] = s
-		k++
-	}
-	copy(found[k:], held)
+	})
 }
 
 // rendezvousScore is the highest-random-weight score of c for key. Each

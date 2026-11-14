@@ -173,7 +173,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 	}
 	n, ok := s.lookup(req.NodeID)
 	if !ok {
-		return nil, failed(dispatchError(runtime.ErrorConnection, req, "node is not connected to this replica", true, ErrNodeNotConnected))
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "node is not connected to this replica", true, errors.Join(runtime.ErrNotDelivered, ErrNodeNotConnected)))
 	}
 
 	class := req.Class
@@ -204,7 +204,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 	c := newCall(requestID, maxFrame)
 	if err := sl.begin(c); err != nil {
 		sl.close(err)
-		return nil, failed(dispatchError(runtime.ErrorConnection, req, "slot closed before the request was written", true, err))
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "slot closed before the request was written", true, errors.Join(runtime.ErrNotDelivered, err)))
 	}
 
 	deadline := req.Deadline
@@ -228,7 +228,7 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 	}
 	if err := sl.send(headers); err != nil {
 		sl.close(err)
-		return nil, failed(dispatchError(runtime.ErrorConnection, req, "writing the request failed", true, err))
+		return nil, failed(dispatchError(runtime.ErrorConnection, req, "writing the request failed", true, errors.Join(runtime.ErrNotDelivered, err)))
 	}
 
 	if req.Body != nil {
@@ -243,13 +243,17 @@ func (s *Server) Dispatch(ctx context.Context, req Request) (*Response, error) {
 		}
 		if err := req.Body(send); err != nil {
 			sl.close(err)
-			return nil, failed(dispatchError(runtime.ErrorConnection, req, "writing the request body failed", true, err))
+			return nil, failed(dispatchError(runtime.ErrorConnection, req, "writing the request body failed", true, errors.Join(runtime.ErrNotDelivered, err)))
 		}
 	}
 
 	// RequestEnd goes out for every operation, including those whose whole
 	// request fit in the headers, so the Agent has one uniform signal that
-	// no more input is coming.
+	// no more input is coming. The Agent acts on a request only once End
+	// arrives, so every failure above is marked runtime.ErrNotDelivered; a
+	// failed End send is not — it may have arrived anyway.
+	// Agent 只在收到 End 后才处理请求，因此上面的每个失败都标记为 runtime.ErrNotDelivered；
+	// End 发送失败则不标记——它可能已经到达。
 	if err := sl.send(&tunnelv1.GatewayFrame{
 		RequestId: requestID,
 		Body:      &tunnelv1.GatewayFrame_End{End: &tunnelv1.RequestEnd{}},

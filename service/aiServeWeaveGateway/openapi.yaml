@@ -215,7 +215,8 @@ paths:
         已结束的运行直接由本 Gateway 的内存 job 表作答；仍在进行中的会去问运行它的
         节点，状态来自后端的队列与历史。开启工作流持久队列时，本副本查不到的 job 会
         改读共享队列记录：排队中返回 `queued` 与名次，被队列判为失败或取消的返回终态
-        与 `error_code`，已派发的接着向运行它的节点查询。
+        与 `error_code`，已派发的接着向运行它的节点查询。共享记录暂时读不到时答 503
+        `queue_unavailable`（而不是 404）；取消与产物列举同样如此。
       operationId: getJobStatus
       parameters:
         - $ref: "#/components/parameters/JobID"
@@ -228,6 +229,12 @@ paths:
                 $ref: "#/components/schemas/Job"
         "404":
           $ref: "#/components/responses/OpenAIError"
+        "503":
+          description: 共享工作流队列暂时不可读（`queue_unavailable`），稍后重试
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OpenAIErrorBody"
 
   /v1/jobs/{job_id}/events:
     get:

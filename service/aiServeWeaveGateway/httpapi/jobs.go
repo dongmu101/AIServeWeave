@@ -438,9 +438,9 @@ func (h *handlers) submitWithFiles(ctx context.Context, req runtime.WorkflowRequ
 // Gateway 可能漏掉的事件。
 func (h *handlers) jobStatus(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, rec, queued, ok := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
-	if !ok {
-		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+	j, rec, queued, err := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
+	if err != nil {
+		writeFindJobError(w, err)
 		return
 	}
 	if queued {

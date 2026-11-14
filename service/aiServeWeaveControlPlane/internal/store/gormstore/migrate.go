@@ -8,6 +8,7 @@ import (
 	"embed"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -134,23 +135,25 @@ func (s *Store) withMigrationLock(ctx context.Context, run func(*gorm.DB) error)
 	}
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
-	err := s.withSessionLock(ctx, run)
+	err := s.withSessionLockOn(ctx, s.db, run)
 	if err != nil && ctx.Err() == context.DeadlineExceeded {
 		return errors.Join(fmt.Errorf("database migration exceeded the %s migration timeout; raise Database.MigrationTimeout for large tables", timeout), err)
 	}
 	return err
 }
 
-// withSessionLock takes the migration lock without waiting. Partition
-// maintenance and retention share it, so partition DDL never overlaps a
-// migration or another replica's partition DDL.
-// withSessionLock 以不等待的方式获取迁移锁。分区维护与保留期清理共用此锁，使分区 DDL
-// 不会与迁移或其它副本的分区 DDL 重叠。
-func (s *Store) withSessionLock(ctx context.Context, run func(*gorm.DB) error) error {
-	if name := s.db.Name(); name != "mysql" && name != "postgres" {
+// withSessionLockOn takes the migration lock on pool without waiting. The lock
+// is scoped to the database, not the account, so partition maintenance and
+// retention share it even on a separate maintenance pool, and partition DDL
+// never overlaps a migration or another replica's partition DDL.
+// withSessionLockOn 在 pool 上以不等待的方式获取迁移锁。这把锁按数据库而非账号区分，
+// 因此即使分区维护与保留期清理使用单独的维护连接池也共用它，分区 DDL 不会与迁移或其它
+// 副本的分区 DDL 重叠。
+func (s *Store) withSessionLockOn(ctx context.Context, pool *gorm.DB, run func(*gorm.DB) error) error {
+	if name := pool.Name(); name != "mysql" && name != "postgres" {
 		return errors.New("gormstore: migrations require postgres or mysql")
 	}
-	return s.db.WithContext(ctx).Connection(func(db *gorm.DB) (result error) {
+	return pool.WithContext(ctx).Connection(func(db *gorm.DB) (result error) {
 		db = db.Session(&gorm.Session{NewDB: true})
 		var acquired bool
 		lockSQL := "SELECT pg_try_advisory_lock(71407001)"
@@ -374,6 +377,15 @@ func (s *Store) MigrateAll(ctx context.Context, resume bool) error {
 			if _, err := migrateNamespace(db, namespace, resume); err != nil {
 				return err
 			}
+		}
+		// The migration account runs in a maintenance window, so it also
+		// creates partitions with no cap on catch-all rows to move — the
+		// backlog the periodic maintenance leaves alone. A failure here does
+		// not undo the completed migrations; the hourly loop retries.
+		// 迁移账号在维护窗口内执行，因此它也负责建分区，且不限制从兜底分区搬移的行数——
+		// 这正是定时维护不处理的那部分积压。这里失败不会撤销已完成的迁移，每小时的循环会重试。
+		if _, err := maintainAllPartitions(db, partitionMigrationNow(), 0); err != nil {
+			slog.Error("partition maintenance after migration failed; the hourly maintenance retries", slog.Any("error", err))
 		}
 		return checkSchemaObjects(db, true)
 	})

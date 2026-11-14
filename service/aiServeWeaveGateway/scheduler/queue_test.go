@@ -19,9 +19,11 @@ import (
 type onePassQueue struct {
 	waits atomic.Int32
 	full  bool
+	key   string
 }
 
-func (q *onePassQueue) Wait(_ context.Context, firstErr error, attempt func() (error, bool)) error {
+func (q *onePassQueue) Wait(_ context.Context, key string, firstErr error, attempt func() (error, bool)) error {
+	q.key = key
 	q.waits.Add(1)
 	if q.full {
 		return firstErr
@@ -55,6 +57,9 @@ func TestChatWaitsOnTheInjectedQueueOnlyWhenEveryCandidateIsBusy(t *testing.T) {
 	}
 	if resp.Message.Content != "served by node-a" || queue.waits.Load() != 1 {
 		t.Fatalf("content=%q waits=%d, want served after one queued wait", resp.Message.Content, queue.waits.Load())
+	}
+	if queue.key != "qwen3:8b" {
+		t.Fatalf("lane key = %q, want the requested model", queue.key)
 	}
 
 	// A request that succeeds on the first pass never touches the queue.

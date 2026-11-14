@@ -12,6 +12,7 @@ import (
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
 	"AIServeWeave/common/nodeid"
+	"AIServeWeave/common/nodeload"
 	"AIServeWeave/common/tunnelwire"
 )
 
@@ -86,6 +87,11 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 	// currently says instead of resetting it.
 	n.draining = false
 	n.maintenance = s.isMaintenance(certNodeID)
+	// Load describes the previous stream's heartbeats; until this stream
+	// sends one the node's load is not reported, not whatever it last was.
+	// 负载描述的是上一条流的心跳；在本条流发出心跳之前，节点负载是「未上报」，而不是沿用
+	// 上一次的值。
+	n.load, n.hasLoad = nodeload.Report{}, false
 	n.lastHeartbeat = s.clock.Now()
 	n.publishStaticLocked()
 	streams := len(n.controls)
@@ -119,6 +125,7 @@ func (s *Server) Control(stream tunnelv1.Tunnel_ControlServer) error {
 			// 停在最后一个值上：一个已离开节点上残留的 1，正是会让运维去找一份并
 			// 不存在的容量的读数。
 			n.metrics.NodeState(nodeGone)
+			n.metrics.Pressure(false)
 		}
 		n.metrics.ControlStreams(remaining)
 		s.forget(n)
@@ -209,13 +216,14 @@ func (s *Server) serveControl(n *node, session *controlSession) error {
 		switch body := frame.GetBody().(type) {
 		case *tunnelv1.AgentControl_Heartbeat:
 			now := s.clock.Now()
+			load, hasLoad := tunnelwire.NodeLoadFromProto(body.Heartbeat.GetLoad())
 			n.mu.Lock()
 			previous := n.lastHeartbeat
 			n.lastHeartbeat = now
 			n.inflight = int(body.Heartbeat.GetInflightRequests())
 			n.reportedIdle = int(body.Heartbeat.GetIdleSlots())
-			n.load, n.hasLoad = tunnelwire.NodeLoadFromProto(body.Heartbeat.GetLoad())
-			pressure := n.hasLoad && n.load.Pressure
+			n.load, n.hasLoad = load, hasLoad
+			pressure := hasLoad && load.Pressure
 			n.mu.Unlock()
 			n.metrics.Pressure(pressure)
 

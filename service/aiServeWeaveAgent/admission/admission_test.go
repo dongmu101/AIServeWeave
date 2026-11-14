@@ -3,6 +3,7 @@ package admission
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -314,5 +315,90 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not reached")
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+func TestExitMarkStaysReachableForExtremeThresholds(t *testing.T) {
+	clock := newFakeClock()
+	s := &scriptedSampler{}
+	// memory_low 96 with hysteresis 5 would put the exit at 101%.
+	c := New(Config{Sampler: s, Clock: clock, MemoryLowPercent: 96, CPUHighPercent: 4})
+	s.set(10, 50)
+	c.Sample()
+	c.Sample()
+	if c.CheckPressure(ClassCLI) == nil {
+		t.Fatal("setup: expected pressure")
+	}
+	clock.Advance(minPressureHold)
+	s.set(1, 100)
+	c.Sample()
+	c.Sample()
+	if err := c.CheckPressure(ClassCLI); err != nil {
+		t.Fatalf("a fully recovered machine must leave pressure: %v", err)
+	}
+}
+
+func TestPersistentlyMissingMetricFailsOpen(t *testing.T) {
+	s := &scriptedSampler{}
+	c := New(Config{Sampler: s, Clock: newFakeClock(), MemoryLowPercent: 10})
+	s.set(10, 1)
+	c.Sample()
+	if c.CheckPressure(ClassCLI) == nil {
+		t.Fatal("setup: expected memory pressure")
+	}
+	// Memory stops being measurable while samples keep succeeding.
+	s.mu.Lock()
+	s.usage.MemoryAvailableBytes = nil
+	s.mu.Unlock()
+	for i := 0; i < failOpenErrors; i++ {
+		c.Sample()
+	}
+	if err := c.CheckPressure(ClassCLI); err != nil {
+		t.Fatalf("a metric that stays missing must not pin pressure: %v", err)
+	}
+}
+
+func TestRequestDeadlineWhileWaitingIsNotBackpressure(t *testing.T) {
+	c := New(Config{Sampler: &scriptedSampler{}, Clock: newFakeClock(), CLIMax: 1, QueueMaxWait: 5 * time.Second})
+	release, _ := c.Acquire(context.Background(), ClassCLI)
+	defer release()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	_, err := c.Acquire(ctx, ClassCLI)
+	var rtErr *runtime.RuntimeError
+	if !errors.As(err, &rtErr) || rtErr.Code != runtime.ErrorTimeout || rtErr.Retryable {
+		t.Fatalf("expired request = %v, want a non-retryable timeout", err)
+	}
+}
+
+func TestReportGoesStaleAfterRepeatedSampleFailures(t *testing.T) {
+	s := &scriptedSampler{}
+	s.set(10, 50)
+	c := New(Config{Sampler: s, Clock: newFakeClock()})
+	c.Sample()
+	if _, ok := c.Report(); !ok {
+		t.Fatal("setup: expected a report")
+	}
+	s.fail()
+	for i := 0; i < failOpenErrors; i++ {
+		c.Sample()
+	}
+	if _, ok := c.Report(); ok {
+		t.Fatal("a stale sample must not be reported as live")
+	}
+}
+
+func TestBothReasonsLabelMemory(t *testing.T) {
+	s := &scriptedSampler{}
+	c := New(Config{Sampler: s, Clock: newFakeClock(), CPUHighPercent: 50, MemoryLowPercent: 10})
+	s.set(90, 1)
+	c.Sample()
+	c.Sample()
+	report, _ := c.Report()
+	if len(report.PressureReasons) != 2 {
+		t.Fatalf("reasons = %v, want both", report.PressureReasons)
+	}
+	if err := c.CheckPressure(ClassCLI); err == nil || !strings.Contains(err.Error(), ReasonPressureMemory) {
+		t.Fatalf("refusal = %v, want the memory label", err)
 	}
 }

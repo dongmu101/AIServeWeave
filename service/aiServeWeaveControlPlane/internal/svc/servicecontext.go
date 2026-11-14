@@ -164,6 +164,7 @@ type ServiceContext struct {
 	RedeemGate redeemgate.Gate
 
 	db          *gorm.DB
+	maintenance *gorm.DB
 	redisClient *redis.Client
 	relayCancel context.CancelFunc
 	relayDone   chan struct{}
@@ -295,12 +296,29 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		return nil, err
 	}
 
-	st := gormstore.New(db, gormstore.WithMigrationTimeout(cfg.Database.MigrationTimeout))
+	storeOptions := []gormstore.Option{gormstore.WithMigrationTimeout(cfg.Database.MigrationTimeout)}
+	var maintenanceDB *gorm.DB
+	if cfg.Database.MaintenanceDSN != "" {
+		maintenanceDB, err = openMaintenanceDatabase(cfg.Database)
+		if err != nil {
+			if pool, poolErr := db.DB(); poolErr == nil {
+				_ = pool.Close()
+			}
+			return nil, errors.Join(errors.New("opening the partition maintenance database"), err)
+		}
+		storeOptions = append(storeOptions, gormstore.WithMaintenanceDB(maintenanceDB))
+	}
+	st := gormstore.New(db, storeOptions...)
 	ready := false
 	defer func() {
 		if !ready {
-			if pool, err := db.DB(); err == nil {
-				_ = pool.Close()
+			for _, opened := range []*gorm.DB{db, maintenanceDB} {
+				if opened == nil {
+					continue
+				}
+				if pool, err := opened.DB(); err == nil {
+					_ = pool.Close()
+				}
 			}
 		}
 	}()
@@ -670,6 +688,7 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		RegistryClient:            registryClient,
 		MetricsRegistry:           metricsRegistry,
 		db:                        db,
+		maintenance:               maintenanceDB,
 		redisClient:               redisClient,
 		relayCancel:               relayCancel,
 		relayDone:                 relayDone,
@@ -697,25 +716,24 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 	}, nil
 }
 
-// metricsHistoryRetentionInterval is how often the retention cleanup goroutine
-// runs — once a day is plenty for a job that only prunes rows past a
-// 90-day-scale window; it does not need to share MetricsHistoryConf.Interval,
-// which is the much finer collector cadence.
+// metricsHistoryRetentionInterval is how often the metrics-history retention
+// sweeper runs. Hourly, like every retention sweeper: a pass over a
+// partitioned table is a catalog read and, about once a day, a partition
+// drop, so it is cheap; and a 24-hour ticker restarted with every deploy
+// could never fire on a service redeployed daily.
 //
-// metricsHistoryRetentionInterval 是保留期清理协程的运行频率——对一个只清理
-// 90 天量级窗口之外数据的任务，一天一次足够；它不需要与
-// MetricsHistoryConf.Interval(更细的采集节奏)共用同一个值。
-const metricsHistoryRetentionInterval = 24 * time.Hour
+// metricsHistoryRetentionInterval 是指标历史保留期清理协程的运行频率。与所有保留期
+// 清理协程一样每小时一次：对分区表的一轮清理只是一次目录读取，外加大约每天一次的删分区，
+// 代价很低；而每次部署都会重置的 24 小时定时器，在每天重新部署的服务上永远不会触发。
+const metricsHistoryRetentionInterval = time.Hour
 
-// requestLogRetentionInterval is how often the request-log retention
-// cleanup goroutine runs — daily, the same cadence metricsHistoryRetentionInterval
-// already uses, for the same reason: a cleanup task has no reason to run
-// more often than once a day.
+// requestLogRetentionInterval is how often the request-log (and response-turn)
+// retention sweepers run — hourly, for metricsHistoryRetentionInterval's
+// reasons.
 //
-// requestLogRetentionInterval 是 request_logs 保留期清理协程的运行频率——
-// 每天一次，与 metricsHistoryRetentionInterval 相同的节奏，理由也相同：
-// 一个清理任务没有理由比一天一次更频繁地运行。
-const requestLogRetentionInterval = 24 * time.Hour
+// requestLogRetentionInterval 是 request_logs（以及 response_turns）保留期清理协程的
+// 运行频率——每小时一次，理由与 metricsHistoryRetentionInterval 相同。
+const requestLogRetentionInterval = time.Hour
 
 // alipayRecoveryInterval is how often pending Alipay redemptions are resumed.
 // Each pass makes at most a few 一人付 calls, well under its rate limit.
@@ -729,15 +747,13 @@ const alipayRecoveryInterval = time.Minute
 // ezfpRecoveryInterval 是检查待付款易支付订单与处理中退款的间隔。每轮至多几十次查询。
 const ezfpRecoveryInterval = time.Minute
 
-// usageRecordRetentionInterval is how often the usage-record retention
-// cleanup goroutine runs — daily, the same cadence
-// requestLogRetentionInterval already uses, for the same reason: a cleanup
-// task has no reason to run more often than once a day.
+// usageRecordRetentionInterval is how often the usage-record (and audit-log)
+// retention sweepers run — hourly, for metricsHistoryRetentionInterval's
+// reasons.
 //
-// usageRecordRetentionInterval 是 usage_records 保留期清理协程的运行
-// 频率——每天一次，与 requestLogRetentionInterval 相同的节奏，理由也相同：
-// 一个清理任务没有理由比一天一次更频繁地运行。
-const usageRecordRetentionInterval = 24 * time.Hour
+// usageRecordRetentionInterval 是 usage_records（以及 audit_logs）保留期清理协程的
+// 运行频率——每小时一次，理由与 metricsHistoryRetentionInterval 相同。
+const usageRecordRetentionInterval = time.Hour
 
 // outboxLagStore is the read the outbox-lag gauge needs — a subset of
 // *gormstore.Store, named here so the poller does not depend on the whole
@@ -903,8 +919,11 @@ func (s *ServiceContext) Close() error {
 			errs = append(errs, err)
 		}
 	}
-	if s.db != nil {
-		sqlDB, err := s.db.DB()
+	for _, opened := range []*gorm.DB{s.db, s.maintenance} {
+		if opened == nil {
+			continue
+		}
+		sqlDB, err := opened.DB()
 		if err != nil {
 			errs = append(errs, err)
 		} else if err := sqlDB.Close(); err != nil {
@@ -941,6 +960,18 @@ func dialector(cfg config.DatabaseConf) (gorm.Dialector, error) {
 	default:
 		return nil, errors.New("config: unknown Database.Driver " + cfg.Driver + "; want postgres or mysql")
 	}
+}
+
+// openMaintenanceDatabase opens the small pool partition DDL runs on when the
+// runtime account has no DDL rights. Maintenance and retention hold at most
+// one connection at a time, so two is plenty.
+//
+// openMaintenanceDatabase 打开运行账号没有 DDL 权限时执行分区 DDL 的小连接池。维护与
+// 保留期清理同一时刻最多占用一个连接，两个足够。
+func openMaintenanceDatabase(cfg config.DatabaseConf) (*gorm.DB, error) {
+	cfg.DSN = cfg.MaintenanceDSN
+	cfg.MaxOpenConns, cfg.MaxIdleConns = 2, 1
+	return openDatabase(cfg)
 }
 
 // openDatabase opens the connection pool with explicit bounds.

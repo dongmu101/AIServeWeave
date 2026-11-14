@@ -202,9 +202,14 @@ func TestSubmitWorkflowRetriesOnlyBeforeTheBackendCouldHaveSeenIt(t *testing.T) 
 			wantRetried: true,
 		},
 		{
-			name:        "connection failed before the backend answered",
-			failWith:    &gatewaytest.WireError{Code: "connection_failed", Message: "dial failed", Retryable: true},
+			name:        "dial to the backend never connected",
+			failWith:    &gatewaytest.WireError{Code: "connection_failed", Message: "dial failed", Retryable: true, Cause: "ErrNotDelivered"},
 			wantRetried: true,
+		},
+		{
+			name:        "connection broke after the backend may have received it",
+			failWith:    &gatewaytest.WireError{Code: "connection_failed", Message: "connection reset", Retryable: true},
+			wantRetried: false,
 		},
 		{
 			name:        "upstream error may already have queued the workflow",

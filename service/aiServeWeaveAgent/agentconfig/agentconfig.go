@@ -158,13 +158,32 @@ func (a AdmissionConfig) Validate() error {
 		if err != nil || d < 0 {
 			return fmt.Errorf("admission.%s: invalid duration %q", name, value)
 		}
+		// A shorter interval would busy-read /proc and make the CPU delta
+		// mostly scheduler-tick noise.
+		// 更短的间隔会忙读 /proc，并使 CPU 增量几乎全是调度时钟噪声。
+		if name == "sample_interval" && d != 0 && d < time.Second {
+			return fmt.Errorf("admission.sample_interval: must be at least 1s")
+		}
 	}
 	for name, value := range map[string]float64{
 		"cpu_high_percent": a.CPUHighPercent, "memory_low_percent": a.MemoryLowPercent, "hysteresis_percent": a.HysteresisPercent,
 	} {
-		if value < 0 || value > 100 {
+		if !(value >= 0 && value <= 100) { // also rejects NaN / 同时拒绝 NaN
 			return fmt.Errorf("admission.%s: must be between 0 and 100", name)
 		}
+	}
+	// The exit mark must be reachable, or pressure once entered never clears.
+	// 0 hysteresis means the default of 5 (admission.DefaultHysteresisPercent).
+	// 退出线必须可达，否则一旦进入压力就永远无法解除。迟滞为 0 表示默认值 5。
+	hysteresis := a.HysteresisPercent
+	if hysteresis == 0 {
+		hysteresis = 5
+	}
+	if a.CPUHighPercent > 0 && a.CPUHighPercent <= hysteresis {
+		return fmt.Errorf("admission.cpu_high_percent: must exceed hysteresis_percent (%g)", hysteresis)
+	}
+	if a.MemoryLowPercent > 0 && a.MemoryLowPercent+hysteresis >= 100 {
+		return fmt.Errorf("admission.memory_low_percent: plus hysteresis_percent (%g) must stay below 100", hysteresis)
 	}
 	for name, value := range map[string]int{"cli_max": a.CLIMax, "general_max": a.GeneralMax, "queue_max_waiters": a.QueueMaxWaiters} {
 		if value < 0 {

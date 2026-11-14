@@ -75,7 +75,7 @@ ALTER TABLE request_logs
 - 模型给分区列也加上 `primaryKey` tag。`metrics_history_points.id` 显式加 `autoIncrement`，因为 GORM 在复合主键下默认不自增。
 - `OnConflict{DoNothing}` 在 PG 生成不带冲突目标的 `ON CONFLICT DO NOTHING`，对分区表有效；在 MySQL 生成 `ON DUPLICATE KEY UPDATE`，以复合主键判定。两者都由 live 测试验证。
 - `metrics_history_points` 的 upsert 冲突目标 `(metric, labels, bucket_at)` 已包含分区列，PG 分区表接受这个唯一索引。
-- `response_turns` 的 id 来自 Gateway（`resp_` 加随机数），`created_at` 则是控制面的时钟，Gateway 重试时会变，复合主键挡不住重复。gormstore 的 `CreateResponseTurn` 改为先 `SELECT tenant_id … WHERE id = ? LIMIT 1`：命中就返回 `ErrConflict`，logic 层已有的逻辑会读出已有行或报告租户冲突；没命中再插入。并发重试可能留下两行内容相同的记录，读取结果不变，过期后一起清理。备选方案是另建不分区的 id 唯一表，代价是多一张表，而且那张表仍要逐行删除，所以不采用。
+- `response_turns` 的 id 来自 Gateway（`resp_` 加随机数），`created_at` 则是控制面的时钟，Gateway 重试时会变，复合主键挡不住重复。gormstore 的 `CreateResponseTurn` 改为先按 id 计数，并限定 `created_at` 在本次调用前 24 小时内，这样只触达一两个分区，不用扫全部分区（同一轮的重试在几秒内到达，id 是随机的）：命中就返回 `ErrConflict`，logic 层已有的逻辑会读出已有行或报告租户冲突；没命中再插入。并发重试可能留下两行内容相同的记录，读取结果不变，过期后一起清理。备选方案是另建不分区的 id 唯一表，代价是多一张表，而且那张表仍要逐行删除，所以不采用。
 - 实现时要 grep 这五个模型按主键读写的用法（`First(&x, id)`、`Save`、`Delete(&x)`）：复合主键下，这些调用会要求两个主键字段都有值。
 
 ### D5. 分区维护：`partitionmaint` 定时调用 store
@@ -85,21 +85,32 @@ ALTER TABLE request_logs
 - 启动时在迁移完成后同步执行一次，限时 30 秒，失败只记日志、不阻止启动（有兜底分区，写入不受影响），之后由定时器接手。
 - **MySQL**：`ALTER TABLE t REORGANIZE PARTITION p_max INTO (PARTITION pX VALUES LESS THAN (...), …, PARTITION p_max VALUES LESS THAN (MAXVALUE))`。`p_max` 为空时只建空分区，瞬时完成；有数据时会正确搬移（满足 spec 的极端情况），耗时与搬移行数成正比。
 - **PG**：先查 `<table>_default` 里有没有落在新范围内的行。没有就直接 `CREATE TABLE … PARTITION OF … FOR VALUES FROM … TO …`。有的话在一个事务里：`DETACH` 默认分区 → 建新分区 → 把范围内的行从被摘下的默认分区插入父表并删除 → 重新 `ATTACH` 默认分区。
-- **互斥**：直接复用迁移锁的非阻塞获取。拿不到就跳过本轮（返回「已跳过」，不报错），这样就同时与迁移、其它副本的维护和分区删除互斥。
-- **锁等待保护**：DDL 前设置会话级短等待，MySQL 用 `SET SESSION lock_wait_timeout = 5`，PG 用 `SET LOCAL lock_timeout = '5s'`，避免 DDL 排在长事务后面时连带阻塞后续查询；超时则本轮失败，下一轮重试。
+- **互斥**：直接复用迁移锁的非阻塞获取。拿不到就跳过本轮（返回「已跳过」，不报错），这样就同时与迁移、其它副本的维护和分区删除互斥。这把锁按数据库区分，不按账号区分，所以即使维护走单独的连接池也同样互斥。
+- **锁等待保护**：DDL 前设置会话级短等待，MySQL 用 `SET SESSION lock_wait_timeout = 2`，PG 用 `SET LOCAL lock_timeout = '2000ms'`。DDL 排在长事务后面时会连带阻塞后续查询，所以这个等待就是最坏情况下的停顿上限；超时则本轮失败，下一轮重试。MySQL 会话值事先读出、事后恢复，恢复失败就丢弃该连接，避免带着 2 秒的锁等待回到连接池。
+- **积压上限**：搬移兜底分区里的行期间，该表不能写入（MySQL REORGANIZE、PG 摘下默认分区）。定时维护发现要搬的行超过 20 万时拒绝执行并报错，提示在低峰期执行 `-migrate up`；`MigrateAll` 在迁移完成后执行一次不限搬移量的维护（维护失败只记日志，不影响迁移结果）。正常运行时兜底分区是空的，只有维护连续失败超过一周才会触发这个上限。
+- **维护账号**：生产的运行账号没有 DDL 权限（`deploy/database-recovery.md`）。新增可选的 `Database.MaintenanceDSN`，分区维护和删分区都在这个小连接池（2 个连接）上执行，PostgreSQL 上须是表的所有者，一般就用迁移账号。不配置时用主连接池。
 
 **备选方案**：MySQL Event Scheduler 或 PG 的 pg_partman / pg_cron。依赖数据库侧配置与扩展，部署面变大，不能与迁移锁互斥，两种数据库的行为也不一致，排除。
 
-### D6. 清理：先删整段分区，再删边界行
+### D6. 清理：至少保留到截止时间，只删整段分区
 
-`DeleteXBefore(ctx, before)` 的返回值改为 `RetentionResult{PartitionsDropped, RowsDeleted int64}`，三个既有清理包与两个新包都以它记日志。实现分两步：
+`DeleteXBefore(ctx, before)` 的返回值改为 `RetentionResult{PartitionsDropped, RowsDeleted int64}`，三个既有清理包与两个新包都以它记日志。语义是「至少保留到 `before`」：先把 `before` 向下取整到所在分区的起点（floor），再处理：
 
-1. 非阻塞获取迁移锁。拿到后列出上界不晚于 `before` 的常规分区和 `p_hist`（兜底分区永远不删），一条语句删除：MySQL 用 `ALTER TABLE t DROP PARTITION a, b, …`，PG 用 `DROP TABLE t_a, t_b, …`（删分区子表只短暂锁父表）。同样设置 D5 的短等待。
-2. 无论是否拿到锁，都执行 `DELETE FROM t WHERE 分区列 < ?`。分区裁剪让它只触达边界分区（以及升级后尚未整段过期的 `p_hist`）。
+1. 获取迁移锁，最多等待 2 分钟（每秒重试一次非阻塞获取）。每小时，五个清理协程和维护循环会在同一时刻触发，每个只持锁片刻，等待就能让它们排队执行，而不会只有一个成功、其余全部跳过。拿到锁后，列出上界不晚于 floor 的常规分区和 `p_hist`（兜底分区永远不删），用一条语句删除：MySQL 用 `ALTER TABLE t DROP PARTITION a, b, …`，PG 用 `DROP TABLE t_a, t_b, …`。同样设置 D5 的短等待。
+2. 分批删除早于 floor 的零散行，每批 5000 行，每批一个短事务。MySQL 用 `DELETE … LIMIT`；PG 没有这种写法，用主键 `(id, 分区列) IN (SELECT … LIMIT)` 圈定每批。被删分区之外早于 floor 的行只有两种：落进 PG 默认分区的迟到写入，以及 MySQL 最低分区里的行（该分区没有下界）。所以这一步通常删 0 行。
 
-第 1 步拿不到锁时只做第 2 步，结果仍然满足「清理精确到行」，只是这一轮代价较高。删掉的分区不统计行数（`COUNT` 本身就要扫表），日志中记分区数。
+跨越 `before` 的那个分区整段保留，所以稳态下不会逐行删除，代价是最多多留一个分区周期：按天的表多 1 天，按月的表约 1 个月（400 天变为最多约 431 天）。
 
-**备选方案**：清理只删分区、不删边界行，保留期精度退化为一个分区粒度（月表最多多留约 31 天）。会改变现有「精确到行」的语义，`usage_records` 的结算口径也会受影响，排除。
+失败处理：
+- 2 分钟内一直拿不到锁：另一个会话正在执行分区 DDL，本轮跳过，不报错。
+- 元数据锁等待超时（MySQL 1205、PG 55P03）：本轮报错，下一轮重试，不退回行删除，以免锁争用演变成大删除。
+- 其它 DDL 失败（典型是账号没有 DDL 权限）：退回分批删除早于 floor 的全部行并报错说明，保证保留期不会停摆。
+
+清理协程由每 24 小时改为每小时运行一次。没有可删内容时，一轮只是一次目录读取加一个通常为空的分批删除；而且以前「启动后满 24 小时才第一次执行」的定时器，在每天重新部署的服务上永远不会触发。
+
+**备选方案**：
+- 精确到行：边界分区里的过期行每天逐行删除。按月分区的表在整月过期、要删分区时，分区早已被逐日删空，删分区完全派不上用场。按天分区的表平均也只有约一半数据能走删分区。排除。
+- 精确到行，同时把用量和审计改为按天分区：两张表各约 410 个分区，不带时间条件的审计分页要扫约 410 个分区。排除。
 
 ### D7. 两个新清理协程照搬既有结构
 
@@ -107,7 +118,7 @@ ALTER TABLE request_logs
 
 ### D8. 配置
 
-`config.go` 新增 `ResponseTurnRetention`、`AuditLogRetention`（零值取默认值，负值报错）、`Database.MigrationTimeout`；按天分区的三张表保留期超过 3650 天时报错。`deploy/controlplane.example.yaml` 写明新配置项与默认值。
+`config.go` 新增 `ResponseTurnRetention`、`AuditLogRetention`（零值取默认值，负值报错）、`Database.MigrationTimeout`、`Database.MaintenanceDSN`；按天分区的三张表保留期超过 3650 天时报错。`deploy/controlplane.example.yaml` 写明新配置项与默认值。
 
 ### D9. schemacheck
 
@@ -123,8 +134,11 @@ ALTER TABLE request_logs
 - [不带分区列的查询要探测所有分区]（`GetResponseTurn` 按 id 读、审计按租户分页） → 稳态分区数约为：请求日志 37、对话轮次 37、指标 97、用量 16、审计 16，都在可接受范围。已用 `EXPLAIN` 核对（100 万行 `request_logs`、41 个分区）：按 `(tenant_id, created_at, id)` 倒序分页，MySQL 9.7 是跨分区的索引倒序扫描（无 filesort），PostgreSQL 16 是各分区倒序索引扫描再 Merge Append（无全量排序）；单日时间范围查询在两种数据库上都只扫描当天一个分区。
 - **实测耗时（2026-11-14，本机 Docker，100 万行 `request_logs` 分布在 30 天内）**：转换 MySQL 9.7 为 22.4 秒，PostgreSQL 16 为 5.6 秒（拷贝 3.7 秒，建三个索引 1.9 秒）。清理 15.8 万行，MySQL 用 `DELETE` 要 1.81 秒，`DROP PARTITION` 删 5 个分区（16.7 万行）只要 0.085 秒；PostgreSQL 的 `DELETE` 只要 40 毫秒，但会留下死元组等 VACUUM 回收，删分区则在 10 毫秒以内且不留死元组。生产硬件与数据量不同，升级前仍需在恢复副本上实测。
 - [大表转换期间不可写、耗时不确定] → 现行升级流程本就要求停掉全部副本，Gateway outbox 会缓冲请求日志与用量；`MigrationTimeout` 可调；文档要求先在副本或恢复演练环境实测。
-- [DDL 被长事务阻塞并引发 MDL 堆积] → 会话级短等待（D5），超时下一轮重试。
-- [维护长期停止，兜底分区积累数据] → 写入不受影响；恢复后的第一轮维护会搬移数据（MySQL REORGANIZE 期间阻塞写入），耗时与积累量成正比；维护失败会有错误日志，可以据此告警。
+- [DDL 被长事务阻塞并引发 MDL 堆积] → DDL 等待元数据锁期间，后续查询会排在它后面，会话级短等待（D5，2 秒）就是最坏的停顿上限，超时后下一轮重试。在「只删整段分区」的语义下，每张表每天大约只有一次建分区和一次删分区，这种停顿很少发生。PG 的 `DETACH … CONCURRENTLY` 不能用于带默认分区的表，所以只能用短等待来兜底。
+- [维护长期停止，兜底分区积累数据] → 写入不受影响。积压不超过 20 万行时，恢复后的定时维护会自动搬移；超过时拒绝搬移、每小时报错，由运维在低峰期执行 `-migrate up` 完成（D5）。
+- [运行账号没有 DDL 权限] → 配置 `Database.MaintenanceDSN`；即使没有配置，保留期清理也会退回分批行删除并持续报错，不会停摆。但维护会一直失败，写入会持续落进兜底分区，所以文档把配置 `MaintenanceDSN`（或给运行账号授权）列为升级的必做步骤。
+- [逐行删除造成长事务] → 所有行删除都分批进行（5000 行一批）。稳态下只删零散行；只有在退回逐行删除时才会删完整的过期数据，但每批事务依然很短。
+- [同一个 id 的对话轮次查重只看最近 24 小时] → 同一轮的重试在几秒内到达；跨租户的 id 碰撞对 128 位随机 id 来说可以忽略。`GetResponseTurn` 按 id 读取仍要探测所有分区（默认约 38 个，每个是一次主键索引查找）；保留期设到上限 3650 天时会有约 3657 个分区，按 id 读取的规划和执行都会明显变慢，文档提示不要设得过长。
 - [升级时清理掉旧数据：超过 30 天的对话轮次、超过 400 天的审计记录] → 已在 proposal 标为 BREAKING，写入升级说明；需要更长保留期的部署在升级前调大配置。
 - [MySQL 分区表不保存创建时的 SQL mode] → 文档注明升级后不要修改服务器 `sql_mode`（官方限制）。
 - [`ALTER TABLE … ADD COLUMN … ALGORITHM=INSTANT` 后无法 EXCHANGE PARTITION] → 本方案不使用 EXCHANGE PARTITION，不受影响；在设计中记录，供后续变更参考。
@@ -132,11 +146,11 @@ ALTER TABLE request_logs
 
 ## Migration Plan
 
-1. 升级前：按 `deploy/database-recovery.md` 做完整备份；在恢复演练环境上用生产数据量执行一次升级，记录转换耗时，据此设置 `Database.MigrationTimeout`；如需保留更久的对话轮次或审计记录，先调大 `ResponseTurnRetention`/`AuditLogRetention`。
+1. 升级前：按 `deploy/database-recovery.md` 做完整备份；在恢复演练环境上用生产数据量执行一次升级，记录转换耗时，据此设置 `Database.MigrationTimeout`；如需保留更久的对话轮次或审计记录，先调大 `ResponseTurnRetention`/`AuditLogRetention`；运行账号没有 DDL 权限的部署，配置 `Database.MaintenanceDSN`（一般用迁移账号）。
 2. 停止全部控制面副本（现行流程）。Gateway 可以继续运行，请求日志和用量会在 outbox 中缓冲。
 3. 启动一个新版本控制面执行迁移（`AutoMigrate` 或显式迁移命令）。依次执行：`base/0017`（`audit_logs`）、`metrics_history/0002`、`request_logs/0004`、`response_turns/0002`、`usage_records/0002`。
 4. 迁移成功后启动时会同步跑一次分区维护和 schema 检查，再启动其余副本。
-5. 观察日志：第一轮清理会把超过保留期的历史数据整段删掉，日志中应能看到 `partitions_dropped`。
+5. 观察日志：启动约 1 小时后的第一轮清理会把超过保留期的历史数据整段删掉，日志中应能看到 `partitions_dropped`。如果出现 `row by row` 或 `partition maintenance failed`，说明分区 DDL 没有权限，按第 1 步配置 `MaintenanceDSN`。
 
 **回滚**：没有反向迁移。旧版本看到账本里有未知迁移会拒绝启动，所以回滚只能从第 1 步的备份恢复，然后启动旧版本。Gateway outbox 中尚未确认的记录会重新推送给恢复后的库。
 

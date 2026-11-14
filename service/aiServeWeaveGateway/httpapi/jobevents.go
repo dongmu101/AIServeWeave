@@ -50,9 +50,9 @@ type jobEventJSON struct {
 // 无话可说的后端流只会让调用方对着沉默干等。
 func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, rec, queued, ok := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
-	if !ok {
-		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+	j, rec, queued, err := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
+	if err != nil {
+		writeFindJobError(w, err)
 		return
 	}
 
@@ -75,10 +75,23 @@ func (h *handlers) jobEvents(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		flusher.Flush()
 		headerSent = true
+		// A position frame goes out when the position changes; between
+		// changes an SSE comment keeps proxies from closing a quiet stream.
+		// 名次变化时发出名次帧；两次变化之间用 SSE 注释防止代理关闭安静的流。
+		lastPosition, lastWrite := -1, h.clock.Now()
 		resolved, err := h.awaitQueuedJob(r.Context(), rec, func(position int) {
-			data, _ := json.Marshal(map[string]int{"position": position})
-			_ = writeNamedSSE(w, "queue_changed", jobEventJSON{JobID: rec.JobID, Type: "queue_changed",
-				Status: StatusQueued, Data: data, ReceivedAt: h.clock.Now()})
+			now := h.clock.Now()
+			switch {
+			case position != lastPosition:
+				data, _ := json.Marshal(map[string]int{"position": position})
+				_ = writeNamedSSE(w, "queue_changed", jobEventJSON{JobID: rec.JobID, Type: "queue_changed",
+					Status: StatusQueued, Data: data, ReceivedAt: now})
+			case now.Sub(lastWrite) >= queueKeepAlive:
+				_, _ = w.Write([]byte(": keep-alive\n\n"))
+			default:
+				return
+			}
+			lastPosition, lastWrite = position, now
 			flusher.Flush()
 		})
 		if err != nil {
@@ -211,6 +224,10 @@ func terminalState(t runtime.WorkflowEventType) (runtime.WorkflowState, bool) {
 		return "", false
 	}
 }
+
+// queueKeepAlive is how often a quiet queued-job event stream sends an SSE
+// comment.
+const queueKeepAlive = 15 * time.Second
 
 func writeSSEHeader(w http.ResponseWriter) {
 	w.Header().Set("Content-Type", "text/event-stream")

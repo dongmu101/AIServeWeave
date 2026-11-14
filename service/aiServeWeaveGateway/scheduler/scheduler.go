@@ -285,7 +285,7 @@ func (s *Scheduler) Chat(ctx context.Context, req runtime.ChatRequest) (runtime.
 	if err == nil || !busy || s.chatQueue == nil {
 		return resp, c, err
 	}
-	err = s.chatQueue.Wait(ctx, err, func() (error, bool) {
+	err = s.chatQueue.Wait(ctx, req.Model, err, func() (error, bool) {
 		var err error
 		resp, c, err, busy = s.attemptChat(ctx, req)
 		return err, busy
@@ -498,7 +498,7 @@ func (s *Scheduler) ChatStream(ctx context.Context, req runtime.ChatRequest) (ru
 	if err == nil || !busy || s.chatQueue == nil {
 		return stream, c, err
 	}
-	err = s.chatQueue.Wait(ctx, err, func() (error, bool) {
+	err = s.chatQueue.Wait(ctx, req.Model, err, func() (error, bool) {
 		var err error
 		stream, c, err, busy = s.attemptChatStream(ctx, req)
 		return err, busy

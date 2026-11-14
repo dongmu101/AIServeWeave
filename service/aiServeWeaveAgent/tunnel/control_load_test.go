@@ -105,3 +105,24 @@ func TestControlPressureFlipSendsAnExtraHeartbeat(t *testing.T) {
 	f.advance(2*time.Second, 1)
 	expectNoStatus(f, sess, 2)
 }
+
+func TestControlReasonChangeSendsAnExtraHeartbeat(t *testing.T) {
+	load := &fakeLoad{}
+	load.set(nodeload.Report{SampledAt: tunnelNow, Pressure: true, PressureReasons: []nodeload.Reason{nodeload.ReasonCPU}})
+	f := newClientFixture(t, func(cfg *tunnel.ClientConfig) {
+		isolateStatus(cfg)
+		cfg.Load = load
+	})
+	f.start()
+	sess := f.connect()
+	f.advance(2*time.Second, 1)
+	if hb := f.recv(sess).GetHeartbeat(); hb == nil {
+		t.Fatal("first poll sent no heartbeat")
+	}
+	// Still under pressure, but now for memory too.
+	load.set(nodeload.Report{SampledAt: tunnelNow, Pressure: true, PressureReasons: []nodeload.Reason{nodeload.ReasonCPU, nodeload.ReasonMemory}})
+	f.advance(2*time.Second, 1)
+	if hb := f.recv(sess).GetHeartbeat(); hb == nil || len(hb.GetLoad().GetPressureReasons()) != 2 {
+		t.Fatalf("after a reason change = %v, want a heartbeat with both reasons", hb)
+	}
+}

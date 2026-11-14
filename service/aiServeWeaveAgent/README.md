@@ -219,10 +219,12 @@ Agent 每 `-admission-sample-interval`（默认 5s）采集一次本机实时 CP
    - CPU 连续 2 次采样 ≥ `-admission-cpu-high`%，或可用内存 ≤ `-admission-memory-low`%（1 次即触发）时，节点进入「资源紧张」；
    - 处于资源紧张时，新的重任务立即以可重试的 `backpressure` 拒绝，Gateway 换节点或进入它的等待队列；
    - 退出需要连续 2 次回到阈值以外 `-admission-hysteresis` 个百分点，并且至少保持 15 秒；
-   - 采样连续失败 3 次会解除资源紧张状态，避免坏掉的探测让节点永远拒绝工作。
+   - 配置校验要求 CPU 阈值大于迟滞、内存阈值加迟滞小于 100，保证退出线可达；
+   - 采样连续失败 3 次，或某项指标连续 3 次缺失，会解除对应的资源紧张状态，避免坏掉的探测让节点永远拒绝工作；此后心跳改报「未上报」，不再发送陈旧数值。
 2. **本机信号量**：
    - `-admission-cli-max` 限制所有本地 CLI 运行时（claude、codex、gemini-cli、cliagent 系列）的同时请求数，`-admission-general-max` 限制其他本地后端（ollama、vllm 等）的同时请求数；
-   - 满了以后最多等待 `-admission-queue-max-wait`（默认 5s），每类最多 `-admission-queue-max-waiters`（默认 16）个请求等待，超时或等待数满时以 `backpressure` 拒绝；
+   - 满了以后最多等待 `-admission-queue-max-wait`（默认 5s），每类最多 `-admission-queue-max-waiters`（默认 16）个请求等待，超时或等待数满时以 `backpressure` 拒绝；请求自身期限先到时返回不可重试的 `timeout`，不会把过期请求推给别的节点；
+   - 等待期间请求仍占着该运行时自己的并发名额；
    - 这两个上限叠加在每个运行时自己的 `max_concurrent` 之上。
 
 所有阈值与上限默认为 0（关闭），升级后在设置之前行为不变。
@@ -236,6 +238,8 @@ Agent 每 `-admission-sample-interval`（默认 5s）采集一次本机实时 CP
 
 健康/inspect 探测、CLI 额度轮询和 Claude 会话在两轮之间的驻留不受准入控制，会话数仍由 Claude 运行时自己的上限管。YAML 写法如下，命令行显式传入的 flag 优先，修改后需要重启：
 
+`sample_interval` 最小 1s。
+
 ```yaml
 admission:
   cpu_high_percent: 90
@@ -248,8 +252,8 @@ admission:
 
 平台差异：
 
-- Linux 读 `/proc`；在 cgroup v2 中运行（容器）时，内存按 cgroup 限额计算，CPU 仍按整机口径。
-- macOS 不使用 cgo，CPU 由 1 分钟负载均值除以核数估算，并在上报中标记为估算值。
+- Linux 读 `/proc`。在 cgroup v2 中运行时（容器，或设置了 `MemoryMax=` 的 systemd 服务），按 `/proc/self/cgroup` 找到自己的 cgroup，取它和各级祖先中最严格的内存限额。可用量与内核 MemAvailable 同口径：限额减去已用，并把除 shmem 外的页缓存和可回收 slab 计为可用，mmap 的模型权重不会让容器显得长期缺内存。CPU 仍按整机口径；不支持 cgroup v1，这类主机按整机测量。
+- macOS 不使用 cgo，CPU 由 1 分钟负载均值除以核数估算，并在上报中标记为估算值。负载均值包含短暂的可运行线程，在 macOS 上设置 `-admission-cpu-high` 时要留出余量。
 - Windows 经 kernel32 读取，没有负载均值。
 
 本机 `/metrics` 上的相关指标：

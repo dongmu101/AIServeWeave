@@ -130,7 +130,12 @@ func (d queueDispatcher) Submit(ctx context.Context, task jobqueue.Task) (jobque
 func (d queueDispatcher) Dispatched(task jobqueue.Task, b jobqueue.Binding) {
 	h := d.h
 	now := h.clock.Now()
-	h.jobs.add(job{
+	// recoverIfMissing, not add: a GET or image wait on this replica may
+	// already have restored the job from the shared record in the moment
+	// after the binding was written, and add would insert it a second time.
+	// 用 recoverIfMissing 而不是 add：在绑定写入后的那一刻，本副本上的 GET 或图像等待可能
+	// 已经从共享记录恢复了这个 job，add 会再插入一次。
+	h.jobs.recoverIfMissing(job{
 		ID: task.JobID, WorkflowID: task.WorkflowID, WorkflowVersion: task.WorkflowVersion, TenantID: task.TenantID,
 		Candidate: candidateOf(b), RunID: b.RunID, State: runtime.WorkflowPending, CreatedAt: task.EnqueuedAt, UpdatedAt: now,
 	})
@@ -191,31 +196,54 @@ func (h *handlers) enqueueWorkflow(w http.ResponseWriter, r *http.Request, task 
 	}
 }
 
+// errQueueUnavailable is findJob's answer when the shared queue record could
+// not be read: the job may well exist, so it must not be answered 404.
+var errQueueUnavailable = errors.New("httpapi: workflow queue unavailable")
+
 // findJob resolves jobID for tenantID: from this replica's store, or — when
 // the queue is on — from the shared queue record. A job still waiting returns
 // its record and queued=true; a dispatched one is restored into the local
 // store first, so the existing handlers continue on it; one the queue failed
 // or cancelled comes back as a terminal job that exists only in the queue.
+// errQueueUnavailable means the record could not be read.
 //
 // findJob 为 tenantID 解析 jobID：来自本副本的存储，或者——队列开启时——来自共享队列记录。
 // 仍在等待的 job 返回其记录且 queued=true；已派发的先恢复到本地存储，让既有处理器接着处理；
-// 被队列判为失败或取消的，以只存在于队列中的终态 job 返回。
-func (h *handlers) findJob(ctx context.Context, jobID, tenantID string) (j job, rec jobqueue.Record, queued, found bool) {
+// 被队列判为失败或取消的，以只存在于队列中的终态 job 返回。errQueueUnavailable 表示记录
+// 读取失败。
+func (h *handlers) findJob(ctx context.Context, jobID, tenantID string) (j job, rec jobqueue.Record, queued bool, err error) {
 	if j, ok := h.jobs.get(jobID, tenantID); ok {
-		return j, jobqueue.Record{}, false, true
+		return j, jobqueue.Record{}, false, nil
 	}
 	if h.queue == nil {
-		return job{}, jobqueue.Record{}, false, false
+		return job{}, jobqueue.Record{}, false, errJobNotFound
 	}
 	rec, ok, err := h.queue.Lookup(ctx, jobID)
-	if err != nil || !ok || rec.TenantID != tenantID {
+	if err != nil {
+		return job{}, jobqueue.Record{}, false, errQueueUnavailable
+	}
+	if !ok || rec.TenantID != tenantID {
 		// A record of another tenant answers exactly like a missing one.
-		return job{}, jobqueue.Record{}, false, false
+		return job{}, jobqueue.Record{}, false, errJobNotFound
 	}
 	if rec.State.Waiting() {
-		return job{}, rec, true, true
+		return job{}, rec, true, nil
 	}
-	return h.jobFromRecord(rec), rec, false, true
+	return h.jobFromRecord(rec), rec, false, nil
+}
+
+// errJobNotFound is findJob's answer for a job that does not exist for the
+// tenant.
+var errJobNotFound = errors.New("httpapi: job not found")
+
+// writeFindJobError answers a findJob failure.
+func writeFindJobError(w http.ResponseWriter, err error) {
+	if errors.Is(err, errQueueUnavailable) {
+		writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "queue_unavailable",
+			"the workflow queue cannot be reached right now; retry shortly")
+		return
+	}
+	writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
 }
 
 // jobFromRecord turns a queue record that left the queue into a job. A
@@ -274,9 +302,9 @@ func (h *handlers) writeQueuedJob(ctx context.Context, w http.ResponseWriter, re
 }
 
 // awaitQueuedJob waits for a queued job to leave the queue, then resolves it
-// like findJob. onPosition, when set, sees each position change.
-func (h *handlers) awaitQueuedJob(ctx context.Context, rec jobqueue.Record, onPosition func(int)) (job, error) {
-	final, err := h.queue.AwaitDispatch(ctx, rec.JobID, onPosition)
+// like findJob. onPoll, when set, sees the position on every poll.
+func (h *handlers) awaitQueuedJob(ctx context.Context, rec jobqueue.Record, onPoll func(int)) (job, error) {
+	final, err := h.queue.AwaitDispatch(ctx, rec.JobID, onPoll)
 	if err != nil {
 		return job{}, err
 	}
@@ -287,6 +315,10 @@ func (h *handlers) awaitQueuedJob(ctx context.Context, rec jobqueue.Record, onPo
 // definitive when it was still queued, since no backend ever saw it.
 func (h *handlers) cancelQueued(w http.ResponseWriter, r *http.Request, rec jobqueue.Record) {
 	result, err := h.queue.Cancel(r.Context(), rec.JobID)
+	if errors.Is(err, jobqueue.ErrNotFound) {
+		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+		return
+	}
 	if err != nil {
 		writeOpenAIError(w, http.StatusServiceUnavailable, "api_error", "queue_unavailable", "the workflow queue cannot be reached right now")
 		return

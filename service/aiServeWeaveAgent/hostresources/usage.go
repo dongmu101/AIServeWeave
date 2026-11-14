@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"path/filepath"
 	goruntime "runtime"
 	"strconv"
 	"strings"
@@ -182,14 +183,18 @@ func parseLoadAvg(data []byte) (float64, error) {
 
 // cgroupMemory narrows host memory to a cgroup v2 limit. limitRaw is the
 // content of memory.max ("max" means unlimited), currentRaw of
-// memory.current, statRaw of memory.stat (its inactive_file is reclaimable
-// page cache, counted as available as MemAvailable does). It reports false
-// when there is no numeric limit or the limit is not below the host total.
+// memory.current, statRaw of memory.stat. Like the kernel's MemAvailable,
+// reclaimable page cache counts as available: file pages other than shmem
+// (which is swap-backed, not reclaimable) plus reclaimable slab. Counting
+// only inactive_file would leave a container that mmaps model weights —
+// active_file — looking permanently out of memory. It reports false when
+// there is no numeric limit or the limit is not below the host total.
 //
 // cgroupMemory 把主机内存收窄到 cgroup v2 的限额。limitRaw 是 memory.max 的内容
-// （"max" 表示不限），currentRaw 是 memory.current，statRaw 是 memory.stat（其中的
-// inactive_file 是可回收的页缓存，与 MemAvailable 一样计为可用）。没有数值限额或限额
-// 不低于主机总量时返回 false。
+// （"max" 表示不限），currentRaw 是 memory.current，statRaw 是 memory.stat。与内核的
+// MemAvailable 一样，可回收的页缓存计为可用：除 shmem（由 swap 支撑、不可回收）外的
+// file 页，加上可回收的 slab。只计 inactive_file 会让一个 mmap 了模型权重（active_file）
+// 的容器看起来永远缺内存。没有数值限额或限额不低于主机总量时返回 false。
 func cgroupMemory(limitRaw, currentRaw, statRaw []byte, hostTotal int64) (available, total int64, ok bool) {
 	limit, err := strconv.ParseInt(strings.TrimSpace(string(limitRaw)), 10, 64)
 	if err != nil || limit <= 0 || (hostTotal > 0 && limit >= hostTotal) {
@@ -199,16 +204,64 @@ func cgroupMemory(limitRaw, currentRaw, statRaw []byte, hostTotal int64) (availa
 	if err != nil {
 		return 0, 0, false
 	}
-	var inactive int64
+	stat := map[string]int64{}
 	sc := bufio.NewScanner(bytes.NewReader(statRaw))
 	for sc.Scan() {
-		if name, value, found := strings.Cut(sc.Text(), " "); found && name == "inactive_file" {
-			inactive, _ = strconv.ParseInt(strings.TrimSpace(value), 10, 64)
+		if name, value, found := strings.Cut(sc.Text(), " "); found {
+			if v, err := strconv.ParseInt(strings.TrimSpace(value), 10, 64); err == nil {
+				stat[name] = v
+			}
+		}
+	}
+	reclaimable, hasFile := stat["file"]
+	if hasFile {
+		reclaimable -= stat["shmem"]
+	} else {
+		// Kernels before 4.x lack the aggregate; inactive_file is the
+		// conservative part of it.
+		reclaimable = stat["inactive_file"]
+	}
+	reclaimable = max(reclaimable, 0) + max(stat["slab_reclaimable"], 0)
+	used := max(current-reclaimable, 0)
+	return min(max(limit-used, 0), limit), limit, true
+}
+
+// cgroupMemoryDir finds the cgroup v2 directory whose memory.max governs this
+// process: the process's own cgroup (from /proc/self/cgroup's "0::" line)
+// or the ancestor with the smallest numeric limit, since a parent's limit
+// caps every child. Without a cgroup namespace the own path is nested under
+// root (a systemd service with MemoryMax=, for example), which reading only
+// the root would miss. It returns "" when no ancestor has a numeric limit.
+// cgroup v1 is not supported; such a host is measured host-wide.
+//
+// cgroupMemoryDir 找出约束本进程的 cgroup v2 目录 memory.max：进程自己的 cgroup（取自
+// /proc/self/cgroup 的 "0::" 行），或数值限额最小的祖先——父级的限额约束所有子级。没有
+// cgroup namespace 时，自身路径嵌套在根下（例如设置了 MemoryMax= 的 systemd 服务），
+// 只读根目录会漏掉它。没有任何祖先有数值限额时返回 ""。不支持 cgroup v1，此类主机按整机
+// 口径测量。
+func cgroupMemoryDir(root string, procSelfCgroup []byte, readFile func(string) ([]byte, error)) string {
+	rel := ""
+	sc := bufio.NewScanner(bytes.NewReader(procSelfCgroup))
+	for sc.Scan() {
+		if path, ok := strings.CutPrefix(sc.Text(), "0::"); ok {
+			rel = path
 			break
 		}
 	}
-	used := max(current-inactive, 0)
-	return max(limit-used, 0), limit, true
+	best, bestLimit := "", int64(0)
+	dir := filepath.Clean(root + "/" + rel)
+	for {
+		if raw, err := readFile(dir + "/memory.max"); err == nil {
+			if limit, err := strconv.ParseInt(strings.TrimSpace(string(raw)), 10, 64); err == nil && limit > 0 &&
+				(best == "" || limit < bestLimit) {
+				best, bestLimit = dir, limit
+			}
+		}
+		if dir == root || len(dir) <= len(root) {
+			return best
+		}
+		dir = filepath.Dir(dir)
+	}
 }
 
 // parseDarwinLoadavg decodes sysctl vm.loadavg's struct loadavg: three

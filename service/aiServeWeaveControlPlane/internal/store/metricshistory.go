@@ -26,9 +26,12 @@ type MetricsHistory interface {
 	// ListRollup 返回 metrics 中任意一个、且 bucket_at 落在 [since, until) 的
 	// 全部样本，按 bucket_at 升序排列。
 	ListRollup(ctx context.Context, metrics []string, since, until time.Time) ([]model.MetricsHistoryPoint, error)
-	// DeleteRollupBefore deletes every row with bucket_at < before and
-	// reports the partitions dropped and rows deleted.
+	// DeleteRollupBefore ages out rows with bucket_at < before, with
+	// RequestLogs.DeleteRequestLogsBefore's "kept at least until before"
+	// contract, and reports the partitions dropped and rows deleted.
 	//
-	// DeleteRollupBefore 删除全部 bucket_at < before 的行，并报告删除的分区数与行数。
+	// DeleteRollupBefore 清理 bucket_at < before 的行，契约与
+	// RequestLogs.DeleteRequestLogsBefore 相同：「至少保留到 before」；并报告删除的
+	// 分区数与行数。
 	DeleteRollupBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }

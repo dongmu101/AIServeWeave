@@ -631,6 +631,7 @@ var sentinelWireNames = []struct {
 	{"ErrCapabilityUnsupported", runtime.ErrCapabilityUnsupported},
 	{"ErrConcurrencyLimit", runtime.ErrConcurrencyLimit},
 	{"ErrRuntimeClosed", runtime.ErrRuntimeClosed},
+	{"ErrNotDelivered", runtime.ErrNotDelivered},
 	{"ErrContextCanceled", context.Canceled},
 	{"ErrContextDeadlineExceeded", context.DeadlineExceeded},
 }

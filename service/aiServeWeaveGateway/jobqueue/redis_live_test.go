@@ -66,18 +66,24 @@ func TestRedisStoreTransitions(t *testing.T) {
 		t.Fatalf("Admit beyond the length = %v", err)
 	}
 
-	if ok, err := store.BeginDispatch(ctx, "job_a", "r1:x", now); err != nil || !ok {
-		t.Fatalf("BeginDispatch = %v %v", ok, err)
+	if got, err := store.BeginDispatch(ctx, "job_a", "r1:x", now); err != nil || got != jobqueue.Begun {
+		t.Fatalf("BeginDispatch = %v %v", got, err)
 	}
-	if ok, _ := store.BeginDispatch(ctx, "job_a", "r2:y", now); ok {
-		t.Fatal("a second worker began dispatching the same job")
+	if got, _ := store.BeginDispatch(ctx, "job_a", "r1:x", now); got != jobqueue.Begun {
+		t.Fatalf("retried BeginDispatch with the same intent = %v, want begun", got)
+	}
+	if got, _ := store.BeginDispatch(ctx, "job_a", "r2:y", now); got != jobqueue.BeginNotQueued {
+		t.Fatalf("a second worker = %v, want not queued", got)
 	}
 	if result, _ := store.Cancel(ctx, "job_a", now); result != jobqueue.CancelRequested {
 		t.Fatalf("Cancel while dispatching = %v", result)
 	}
-	cancelRequested, err := store.Dispatched(ctx, "job_a", "r1:x", jobqueue.Binding{NodeID: "n1", RuntimeID: "c1", RunID: "p1"}, now)
-	if err != nil || !cancelRequested {
-		t.Fatalf("Dispatched = %v %v, want the cancel request reported", cancelRequested, err)
+	dispatched, err := store.Dispatched(ctx, "job_a", "r1:x", jobqueue.Binding{NodeID: "n1", RuntimeID: "c1", RunID: "p1"}, now)
+	if err != nil || !dispatched.Recorded || !dispatched.CancelRequested {
+		t.Fatalf("Dispatched = %+v %v, want recorded with the cancel request reported", dispatched, err)
+	}
+	if again, _ := store.Dispatched(ctx, "job_a", "r1:x", jobqueue.Binding{}, now); again.Recorded {
+		t.Fatal("a second Dispatched on a decided record reported recorded")
 	}
 	rec, ok, err := store.Get(ctx, "job_a")
 	if err != nil || !ok || rec.State != jobqueue.StateDispatched || rec.Binding.RunID != "p1" || rec.TenantID != "t1" {
@@ -97,6 +103,24 @@ func TestRedisStoreTransitions(t *testing.T) {
 	}
 	if depth, _ := store.Depth(ctx); depth != 0 {
 		t.Fatalf("depth = %d, want 0", depth)
+	}
+
+	// A cancel that arrives while a worker holds the job survives the
+	// worker handing it back: the requeue cancels it.
+	if _, err := store.Admit(ctx, jobqueue.Record{JobID: "job_d", TenantID: "t1", CreatedAt: now}, 4, time.Hour, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = store.BeginDispatch(ctx, "job_d", "r1:z", now)
+	_, _ = store.Cancel(ctx, "job_d", now)
+	if cancelled, err := store.Requeue(ctx, "job_d", "r1:z", now); err != nil || !cancelled {
+		t.Fatalf("Requeue after a cancel = %v %v, want cancelled", cancelled, err)
+	}
+	rec, position, ok, err := store.Snapshot(ctx, "job_d")
+	if err != nil || !ok || rec.State != jobqueue.StateCancelled || position != 0 {
+		t.Fatalf("Snapshot after the cancelled requeue = %+v %d %v %v", rec, position, ok, err)
+	}
+	if _, _, ok, _ := store.Snapshot(ctx, "job_missing"); ok {
+		t.Fatal("Snapshot of a missing job reported a record")
 	}
 }
 

@@ -33,5 +33,5 @@ func (s *Store) ListRollup(ctx context.Context, metrics []string, since, until t
 
 // DeleteRollupBefore implements store.MetricsHistory.
 func (s *Store) DeleteRollupBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
-	return s.applyRetention(ctx, "metrics_history_points", &model.MetricsHistoryPoint{}, before)
+	return s.applyRetention(ctx, "metrics_history_points", before)
 }

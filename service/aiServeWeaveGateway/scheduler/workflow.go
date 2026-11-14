@@ -2,6 +2,7 @@ package scheduler
 
 import (
 	"context"
+	"errors"
 	"io"
 
 	"AIServeWeave/common/runtime"
@@ -198,14 +199,25 @@ func (s *Scheduler) OpenArtifact(ctx context.Context, c Candidate, ref runtime.A
 // 排队中的提交才可以稍后再试。
 func SubmitRetryable(err error) bool { return submitRetryable(err) }
 
+// A connection failure qualifies only when it carries runtime.ErrNotDelivered
+// (the tunnel request was not fully sent, or the Agent's dial to ComfyUI never
+// connected): the same code is also used when a slot dies after the Agent
+// received the request, or when ComfyUI's connection broke after the prompt
+// was posted, and resending either would run the workflow twice.
+//
+// 连接失败只有携带 runtime.ErrNotDelivered（隧道请求未完整发出，或 Agent 到 ComfyUI 的
+// 拨号从未连通）时才算：同一个错误码也用于 Agent 已收到请求后 slot 断开、或 ComfyUI 在
+// prompt 发出后断线的情形，重发任何一种都会让工作流跑两次。
 func submitRetryable(err error) bool {
 	code, ok := errorCode(err)
 	if !ok {
 		return false
 	}
 	switch code {
-	case runtime.ErrorBackpressure, runtime.ErrorRateLimited, runtime.ErrorConnection, runtime.ErrorClosed:
+	case runtime.ErrorBackpressure, runtime.ErrorRateLimited, runtime.ErrorClosed:
 		return true
+	case runtime.ErrorConnection:
+		return errors.Is(err, runtime.ErrNotDelivered)
 	default:
 		return false
 	}

@@ -9,9 +9,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -311,15 +313,31 @@ func (c *Client) transportError(ctx context.Context, operation string, err error
 	if code == "" {
 		code = runtime.ErrorConnection
 	}
+	cause := err
+	if code == runtime.ErrorConnection && isDialError(err) {
+		// Nothing was sent, so a submit that failed here may be sent to
+		// another node; any later connection failure may have reached
+		// ComfyUI and must not be.
+		// 什么都没有发出，因此在这里失败的提交可以改发到其他节点；任何更晚的连接失败都
+		// 可能已到达 ComfyUI，不能改发。
+		cause = errors.Join(runtime.ErrNotDelivered, err)
+	}
 	return &runtime.RuntimeError{
 		Code:      code,
 		RuntimeID: c.runtimeID,
 		Kind:      runtime.KindComfyUI,
 		Operation: operation,
 		Message:   runtime.Redact(err.Error(), c.apiKey),
-		Cause:     err,
+		Cause:     cause,
 		Retryable: code == runtime.ErrorConnection || code == runtime.ErrorTimeout,
 	}
+}
+
+// isDialError reports whether err is a failure to establish the connection,
+// before any byte of the request was written.
+func isDialError(err error) bool {
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "dial"
 }
 
 func (c *Client) errorFromResponse(operation string, status int, body []byte) *runtime.RuntimeError {

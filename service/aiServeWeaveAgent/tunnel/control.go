@@ -12,6 +12,7 @@ import (
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/nodeload"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 )
@@ -120,9 +121,11 @@ type controlSession struct {
 
 	// unacked counts heartbeats sent since the last HeartbeatAck.
 	unacked int
-	// sentLoad and sentPressure record the admission verdict the last
-	// heartbeat carried, so a flip can be reported before the next one.
-	sentLoad, sentPressure bool
+	// sentLoad and sentVerdict record the admission verdict the last
+	// heartbeat carried (pressure plus its reasons), so a change can be
+	// reported before the next one.
+	sentLoad    bool
+	sentVerdict string
 	// reported maps runtime id to the material part of the last reported
 	// snapshot, so a report is only sent when something actually changed.
 	reported map[string][]byte
@@ -300,7 +303,7 @@ func (s *controlSession) sendHeartbeat() error {
 	if source := c.cfg.Load; source != nil {
 		if report, ok := source.Report(); ok {
 			hb.Load = tunnelwire.NodeLoadToProto(report)
-			s.sentPressure, s.sentLoad = report.Pressure, true
+			s.sentVerdict, s.sentLoad = verdictOf(report), true
 		}
 	}
 	return s.send(&tunnelv1.AgentControl{Body: &tunnelv1.AgentControl_Heartbeat{Heartbeat: hb}}, "heartbeat")
@@ -321,10 +324,23 @@ func (s *controlSession) reportPressureChange() error {
 		return nil
 	}
 	report, ok := source.Report()
-	if !ok || (s.sentLoad && report.Pressure == s.sentPressure) {
+	if !ok || (s.sentLoad && verdictOf(report) == s.sentVerdict) {
 		return nil
 	}
 	return s.sendHeartbeat()
+}
+
+// verdictOf is the part of a load report whose change is worth an extra
+// heartbeat: whether the node refuses work, and why.
+func verdictOf(r nodeload.Report) string {
+	if !r.Pressure {
+		return ""
+	}
+	verdict := "pressure"
+	for _, reason := range r.PressureReasons {
+		verdict += ":" + string(reason)
+	}
+	return verdict
 }
 
 // ack records the round trip of an answered heartbeat and clears the miss

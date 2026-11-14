@@ -5,6 +5,9 @@ import (
 	"os"
 )
 
+// cgroupRoot is where cgroup v2 is mounted.
+const cgroupRoot = "/sys/fs/cgroup"
+
 // readPlatform samples /proc for CPU time, memory and load, narrowing memory
 // to a cgroup v2 limit when the Agent runs inside one (containers). A CPU
 // quota on the cgroup is not applied: utilization stays host-wide.
@@ -28,9 +31,11 @@ func (r *UsageReader) readPlatform() (Usage, error) {
 	} else if avail, total, err := parseMemInfoUsage(data); err != nil {
 		errs = append(errs, err)
 	} else {
-		if limit, lerr := os.ReadFile("/sys/fs/cgroup/memory.max"); lerr == nil {
-			current, _ := os.ReadFile("/sys/fs/cgroup/memory.current")
-			stat, _ := os.ReadFile("/sys/fs/cgroup/memory.stat")
+		self, _ := os.ReadFile("/proc/self/cgroup")
+		if dir := cgroupMemoryDir(cgroupRoot, self, os.ReadFile); dir != "" {
+			limit, _ := os.ReadFile(dir + "/memory.max")
+			current, _ := os.ReadFile(dir + "/memory.current")
+			stat, _ := os.ReadFile(dir + "/memory.stat")
 			if a, t, ok := cgroupMemory(limit, current, stat, total); ok {
 				avail, total = min(a, avail), t
 			}

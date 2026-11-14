@@ -149,18 +149,20 @@ func run() error {
 		"how often a worker holding a queued workflow re-polls candidates; ignored when -workflow-queue-max-wait is zero")
 	workflowQueueMaxWaiters := flag.Int("workflow-queue-max-waiters", jobqueueDefaultMaxLength,
 		"maximum workflow jobs admitted to the queue across the whole cluster; one beyond this is answered 429 queue_full; ignored when -workflow-queue-max-wait is zero")
-	workflowQueueConcurrency := flag.Int("workflow-queue-concurrency", 4,
-		"how many queued workflow tasks this replica's workers hold at once; ignored when -workflow-queue-max-wait is zero")
+	workflowQueueConcurrency := flag.Int("workflow-queue-concurrency", 8,
+		"how many queued workflow tasks this replica's workers hold at once; a worker re-polls a held task for up to 10s before handing it back; ignored when -workflow-queue-max-wait is zero")
 	workflowQueueName := flag.String("workflow-queue-name", "aisw-workflow",
 		"name isolating this deployment's workflow queue in a shared Redis; every replica of one fleet must use the same name")
 	chatQueueMaxWait := flag.Duration("chat-queue-max-wait", 0,
 		"turns on the cluster-wide chat wait queue (requires -redis-addr): a new Chat Completions, Responses or Messages request whose every candidate was busy (no idle slot, or the Agent's concurrency, admission or CLI session limit reached) takes a ticket in a Redis FIFO shared by all replicas and waits at most this long, re-polling from the head of the queue, before the 429 is returned; dispatch stays on the replica holding the connection; zero disables queueing and returns the 429 immediately (the default); continuations and rate-limited candidates never wait")
 	chatQueueRetryInterval := flag.Duration("chat-queue-retry-interval", waitqueue.DefaultRetryInterval,
-		"how often a queued chat request polls the queue; ignored when -chat-queue-max-wait is zero")
+		"how often a queued chat request polls the queue, at least 50ms; ignored when -chat-queue-max-wait is zero")
 	chatQueueMaxWaiters := flag.Int("chat-queue-max-waiters", waitqueue.DefaultMaxWaiters,
-		"maximum chat requests waiting at once across the whole cluster; one beyond this gets the 429 immediately; ignored when -chat-queue-max-wait is zero")
+		"maximum chat requests waiting at once across the whole cluster, at most 1024; one beyond this gets the 429 immediately; ignored when -chat-queue-max-wait is zero")
 	chatQueueHeadWindow := flag.Int("chat-queue-head-window", waitqueue.DefaultHeadWindow,
-		"how many requests at the head of the chat queue may re-run a dispatch pass at once; ignored when -chat-queue-max-wait is zero")
+		"how many requests at the head of each model's chat queue may re-run a dispatch pass at once; ignored when -chat-queue-max-wait is zero")
+	chatQueueName := flag.String("chat-queue-name", "aisw-chat",
+		"name isolating this deployment's chat wait queue in a shared Redis; every replica of one fleet must use the same name")
 	modelUnavailableWait := flag.Duration("model-unavailable-wait", 0,
 		"how long a Messages, Chat Completions or Responses request waits for a model whose node left within the last 2 minutes (typically an Agent reconnecting) to come back, before answering a retryable 503 model_unavailable instead of 404 model_not_found; zero uses scheduler's built-in default (15s), negative answers 503 at once without waiting")
 	routeSource := flag.String("route-source", "file", "model route source: file or controlplane")
@@ -270,7 +272,15 @@ func run() error {
 	// （buildWorkflowQueue）。
 	var sharedRedis *redis.Client
 	if *redisAddr != "" {
-		sharedRedis = redis.NewClient(&redis.Options{Addr: *redisAddr})
+		// Short timeouts and one retry: every caller (rate limiting, the
+		// queues, Messages continuations) fails open or answers at once when
+		// Redis is down, so a Redis that stops answering must cost a request
+		// about a second, not go-redis's default of three retries at 3s each.
+		// 短超时、只重试一次：每个调用方（限流、队列、Messages 续接）在 Redis 故障时都会
+		// fail-open 或立即作答，因此不再应答的 Redis 只应让请求付出约一秒，而不是 go-redis
+		// 默认的三次重试、每次 3 秒。
+		sharedRedis = redis.NewClient(&redis.Options{Addr: *redisAddr, DialTimeout: 2 * time.Second,
+			ReadTimeout: time.Second, WriteTimeout: time.Second, MaxRetries: 1})
 		defer sharedRedis.Close()
 	}
 
@@ -425,7 +435,7 @@ func run() error {
 		return err
 	}
 
-	chatQueue, err := buildChatQueue(sharedRedis, id, *chatQueueMaxWait, *chatQueueRetryInterval, *chatQueueMaxWaiters, *chatQueueHeadWindow, registry, logger)
+	chatQueue, err := buildChatQueue(sharedRedis, id, *chatQueueName, *chatQueueMaxWait, *chatQueueRetryInterval, *chatQueueMaxWaiters, *chatQueueHeadWindow, registry, logger)
 	if err != nil {
 		return err
 	}
@@ -1142,12 +1152,12 @@ func validateQueueFlags(workflowMaxWait, chatMaxWait time.Duration, redisAddr st
 // -chat-queue-max-wait is zero.
 //
 // buildChatQueue 返回全集群对话等待队列；-chat-queue-max-wait 为零时返回 nil。
-func buildChatQueue(client *redis.Client, replicaID string, maxWait, retryInterval time.Duration, maxWaiters, headWindow int, registry *metrics.Registry, logger *slog.Logger) (scheduler.WaitQueue, error) {
+func buildChatQueue(client *redis.Client, replicaID, name string, maxWait, retryInterval time.Duration, maxWaiters, headWindow int, registry *metrics.Registry, logger *slog.Logger) (scheduler.WaitQueue, error) {
 	if maxWait <= 0 {
 		return nil, nil
 	}
 	q, err := waitqueue.New(waitqueue.Config{
-		Client: client, ReplicaID: replicaID, MaxWait: maxWait, RetryInterval: retryInterval,
+		Client: client, Name: name, ReplicaID: replicaID, MaxWait: maxWait, RetryInterval: retryInterval,
 		MaxWaiters: maxWaiters, HeadWindow: headWindow, Metrics: registry, Logger: logger,
 	})
 	if err != nil {
@@ -1170,12 +1180,13 @@ func buildWorkflowQueue(redisAddr string, shared *redis.Client, replicaID, name 
 		return nil, func() {}, nil
 	}
 	concurrency = max(concurrency, 1)
-	asynqRedis := redis.NewClient(&redis.Options{Addr: redisAddr, PoolSize: concurrency + 10})
+	asynqRedis := redis.NewClient(&redis.Options{Addr: redisAddr, PoolSize: concurrency + 10,
+		DialTimeout: 2 * time.Second, ReadTimeout: 2 * time.Second, WriteTimeout: 2 * time.Second})
 	q, err := jobqueue.New(jobqueue.Config{
 		Store: jobqueue.NewRedisStore(shared, name),
 		Transport: jobqueue.NewAsynqTransport(jobqueue.AsynqConfig{
 			Client: asynqRedis, Queue: name, Concurrency: concurrency, RetryInterval: retryInterval,
-			ShutdownTimeout: 10 * time.Second, Logger: logger,
+			ShutdownTimeout: jobqueue.ShutdownTimeout, Logger: logger,
 		}),
 		Classify:      httpapi.ClassifyQueuedSubmit,
 		ReplicaID:     replicaID,

@@ -75,9 +75,17 @@ func TestParseLoadAvg(t *testing.T) {
 }
 
 func TestCgroupMemory(t *testing.T) {
-	avail, total, ok := cgroupMemory([]byte("1073741824\n"), []byte("805306368\n"), []byte("anon 1\ninactive_file 268435456\n"), 16<<30)
-	if !ok || total != 1<<30 || avail != 512<<20 {
-		t.Fatalf("got avail %d total %d ok %v", avail, total, ok)
+	// 1 GiB limit, 900 MiB charged, of which 600 MiB is file cache (100 MiB
+	// shmem) and 50 MiB reclaimable slab: used = 900 - (600-100) - 50 = 350.
+	stat := []byte("anon 300000000\nfile 629145600\nshmem 104857600\nslab_reclaimable 52428800\ninactive_file 1\n")
+	avail, total, ok := cgroupMemory([]byte("1073741824\n"), []byte("943718400\n"), stat, 16<<30)
+	if !ok || total != 1<<30 || avail != (1024-350)<<20 {
+		t.Fatalf("got avail %d total %d ok %v, want %d", avail, total, ok, (1024-350)<<20)
+	}
+	// Without the aggregate "file", inactive_file is the fallback.
+	avail, _, ok = cgroupMemory([]byte("1073741824\n"), []byte("805306368\n"), []byte("inactive_file 268435456\n"), 16<<30)
+	if !ok || avail != 512<<20 {
+		t.Fatalf("fallback avail %d, want %d", avail, 512<<20)
 	}
 	if _, _, ok := cgroupMemory([]byte("max\n"), []byte("1\n"), nil, 16<<30); ok {
 		t.Fatal("unlimited cgroup must not narrow host memory")
@@ -88,6 +96,36 @@ func TestCgroupMemory(t *testing.T) {
 	avail, _, ok = cgroupMemory([]byte("100\n"), []byte("500\n"), nil, 1000)
 	if !ok || avail != 0 {
 		t.Fatalf("usage above limit must clamp available to 0, got %d", avail)
+	}
+}
+
+func TestCgroupMemoryDirPicksTheTightestAncestor(t *testing.T) {
+	files := map[string]string{
+		"/sys/fs/cgroup/memory.max":                                 "max",
+		"/sys/fs/cgroup/system.slice/memory.max":                    "8589934592",
+		"/sys/fs/cgroup/system.slice/aisw-agent.service/memory.max": "2147483648",
+	}
+	read := func(path string) ([]byte, error) {
+		if v, ok := files[path]; ok {
+			return []byte(v + "\n"), nil
+		}
+		return nil, errors.New("missing")
+	}
+	self := []byte("0::/system.slice/aisw-agent.service\n")
+	if got := cgroupMemoryDir("/sys/fs/cgroup", self, read); got != "/sys/fs/cgroup/system.slice/aisw-agent.service" {
+		t.Fatalf("dir = %q, want the service's own cgroup", got)
+	}
+	files["/sys/fs/cgroup/system.slice/memory.max"] = "1073741824"
+	if got := cgroupMemoryDir("/sys/fs/cgroup", self, read); got != "/sys/fs/cgroup/system.slice" {
+		t.Fatalf("dir = %q, want the tighter parent", got)
+	}
+	// Inside a cgroup namespace the path is "/" and the limit sits at root.
+	files["/sys/fs/cgroup/memory.max"] = "536870912"
+	if got := cgroupMemoryDir("/sys/fs/cgroup", []byte("0::/\n"), read); got != "/sys/fs/cgroup" {
+		t.Fatalf("dir = %q, want root", got)
+	}
+	if got := cgroupMemoryDir("/sys/fs/cgroup", nil, func(string) ([]byte, error) { return nil, errors.New("x") }); got != "" {
+		t.Fatalf("dir = %q, want none without any limit", got)
 	}
 }
 

@@ -74,7 +74,7 @@ const (
 	// partitionLockWait bounds how long partition DDL waits for a metadata
 	// lock, so it never queues behind a long transaction and stalls queries.
 	// partitionLockWait 限制分区 DDL 等待元数据锁的时长，避免排在长事务之后连带阻塞查询。
-	partitionLockWait = 5 * time.Second
+	partitionLockWait = 2 * time.Second
 
 	mysqlHistPartition     = "p_hist"
 	mysqlCatchAllPartition = "p_max"

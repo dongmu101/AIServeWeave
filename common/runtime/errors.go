@@ -48,6 +48,16 @@ var (
 	ErrCapabilityUnsupported    = errors.New("runtime: capability unsupported")
 	ErrConcurrencyLimit         = errors.New("runtime: concurrency limit reached")
 	ErrRuntimeClosed            = errors.New("runtime: runtime closed")
+	// ErrNotDelivered marks a failure that certainly happened before the
+	// backend received the request: a dial that never connected, or a
+	// tunnel request that was not fully sent. Only such a failure lets a
+	// non-idempotent operation (a workflow submit) be sent again elsewhere;
+	// any other connection failure leaves its fate unknown.
+	//
+	// ErrNotDelivered 标记一次确定发生在后端收到请求之前的失败：从未连通的拨号，或未完整
+	// 发出的隧道请求。只有这样的失败才允许把非幂等操作（工作流提交）改发到别处；其他连接
+	// 失败都让结果成为未知。
+	ErrNotDelivered = errors.New("runtime: request was not delivered to the backend")
 )
 
 // RuntimeError is the error type returned by all Runtime operations.

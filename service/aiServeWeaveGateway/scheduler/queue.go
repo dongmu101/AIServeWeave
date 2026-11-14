@@ -33,7 +33,11 @@ import (
 // 一次繁忙失败。attempt 自己保存结果，Wait 只报告最终错误。生产实现是 waitqueue 包中
 // 基于 Redis 的全集群 FIFO；调度器本身不 import Redis。
 type WaitQueue interface {
-	Wait(ctx context.Context, firstErr error, attempt func() (err error, busy bool)) error
+	// key is the requested model: requests for one model wait in one lane,
+	// so a saturated model never holds back another model's waiters.
+	// key 是所请求的模型：同一模型的请求在同一通道等待，使饱和的模型不会拖住其他模型的
+	// 等待者。
+	Wait(ctx context.Context, key string, firstErr error, attempt func() (err error, busy bool)) error
 }
 
 // busyError reports whether err means the candidate had no free capacity

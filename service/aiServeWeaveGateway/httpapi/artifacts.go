@@ -63,8 +63,12 @@ type artifactsResponse struct {
 func (h *handlers) listArtifacts(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
 	jobID := r.PathValue("job_id")
-	j, _, queued, ok := h.findJob(r.Context(), jobID, identity.TenantID)
-	if !ok {
+	j, _, queued, err := h.findJob(r.Context(), jobID, identity.TenantID)
+	if errors.Is(err, errQueueUnavailable) {
+		writeFindJobError(w, err)
+		return
+	}
+	if err != nil {
 		h.listPersistedArtifacts(w, r, identity.TenantID, jobID)
 		return
 	}

@@ -68,4 +68,8 @@ func TestPressureLastWithoutPressureIsANoOp(t *testing.T) {
 	if allocs := testing.AllocsPerRun(100, func() { pressureLast(found) }); allocs != 0 {
 		t.Fatalf("pressureLast allocated %v times with no pressured candidate", allocs)
 	}
+	pressured := pressureCandidates()
+	if allocs := testing.AllocsPerRun(100, func() { pressureLast(pressured) }); allocs != 0 {
+		t.Fatalf("pressureLast allocated %v times with pressured candidates", allocs)
+	}
 }

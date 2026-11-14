@@ -287,10 +287,15 @@ func (h *handlers) queueImageGeneration(ctx context.Context, w http.ResponseWrit
 
 	j, err := h.awaitQueuedJob(ctx, jobqueue.Record{JobID: jobID}, nil)
 	if err != nil {
+		// Whatever ended the wait, a generation still queued is withdrawn
+		// so it does not run for a caller that already got its answer (and
+		// may retry). One already dispatched keeps running as a job.
+		// 无论等待因何结束，仍在排队的生成都会被撤回，免得它为一个已经拿到答复（而且可能
+		// 会重试）的调用方运行。已派发的继续作为 job 运行。
+		if _, cerr := h.queue.Cancel(context.WithoutCancel(r.Context()), jobID); cerr != nil {
+			h.logger.Warn("cancelling a queued image generation failed", slog.String("job_id", jobID), slog.Any("error", cerr))
+		}
 		if ctx.Err() != nil {
-			if _, cerr := h.queue.Cancel(context.WithoutCancel(r.Context()), jobID); cerr != nil {
-				h.logger.Warn("cancelling a queued image generation failed", slog.String("job_id", jobID), slog.Any("error", cerr))
-			}
 			if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 				w.Header().Set("Retry-After", queueRetryAfter)
 				writeOpenAIError(w, http.StatusTooManyRequests, "rate_limit_error", jobqueue.CodeQueueTimeout,

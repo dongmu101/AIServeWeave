@@ -175,7 +175,7 @@ func registerAdmissionFlags() *admissionOptions {
 	flag.DurationVar(&opts.sampleInterval, "admission-sample-interval", admission.DefaultSampleInterval,
 		"how often live CPU and memory are sampled for the admission gate and the heartbeat report")
 	flag.Float64Var(&opts.cpuHighPercent, "admission-cpu-high", 0,
-		"refuse new heavy work while host CPU utilization stays at or above this percent; 0 disables")
+		"refuse new heavy work while host CPU utilization stays at or above this percent; 0 disables; on macOS the figure is estimated from the 1-minute load average divided by the core count")
 	flag.Float64Var(&opts.memoryLowPercent, "admission-memory-low", 0,
 		"refuse new heavy work while available memory is at or below this percent of total; 0 disables")
 	flag.Float64Var(&opts.hysteresisPercent, "admission-hysteresis", admission.DefaultHysteresisPercent,

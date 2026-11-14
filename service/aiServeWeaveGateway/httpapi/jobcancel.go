@@ -25,9 +25,9 @@ import (
 // 「已取消」，就是本 Gateway 在编造一个没人告诉过它的结果。
 func (h *handlers) cancelJob(w http.ResponseWriter, r *http.Request) {
 	identity, _ := IdentityFrom(r.Context())
-	j, rec, queued, ok := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
-	if !ok {
-		writeOpenAIError(w, http.StatusNotFound, "invalid_request_error", "job_not_found", "no such job")
+	j, rec, queued, err := h.findJob(r.Context(), r.PathValue("job_id"), identity.TenantID)
+	if err != nil {
+		writeFindJobError(w, err)
 		return
 	}
 	if queued {

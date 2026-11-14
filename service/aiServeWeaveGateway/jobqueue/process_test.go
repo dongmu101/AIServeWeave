@@ -355,8 +355,8 @@ func TestAwaitDispatchReportsPositionsAndTheOutcome(t *testing.T) {
 	if !errors.Is(err, context.DeadlineExceeded) || rec.State != jobqueue.StateQueued {
 		t.Fatalf("AwaitDispatch while queued = %+v %v", rec, err)
 	}
-	if len(positions) != 1 || positions[0] != 2 {
-		t.Fatalf("positions = %v, want one report of position 2", positions)
+	if len(positions) == 0 || positions[0] != 2 || positions[len(positions)-1] != 2 {
+		t.Fatalf("positions = %v, want every poll to report position 2", positions[:min(len(positions), 5)])
 	}
 
 	_ = f.deliver("job_1")
@@ -370,4 +370,110 @@ func TestAwaitDispatchReportsPositionsAndTheOutcome(t *testing.T) {
 func mustPayload(t *testing.T, jobID string) []byte {
 	t.Helper()
 	return []byte(`{"v":1,"kind":"run","job_id":"` + jobID + `","workflow_id":"wf","graph":null,"enqueued_at":"2023-11-14T22:13:20Z","deadline":"2100-01-01T00:00:00Z"}`)
+}
+
+// TestCancelDuringABusyAttemptIsNotLost: the cancel lands while a worker
+// holds the job between a busy submit and its requeue. The job must end
+// cancelled, never be submitted again, and never reach a node.
+func TestCancelDuringABusyAttemptIsNotLost(t *testing.T) {
+	f := newFixture(t, nil)
+	f.enqueue("job_1")
+	busy := make([]error, 100)
+	for i := range busy {
+		busy[i] = errBusy
+	}
+	f.disp.answers = busy
+	cancelled := false
+	f.disp.onSubmit = func() {
+		if !cancelled {
+			cancelled = true
+			if result, _ := f.queue.Cancel(context.Background(), "job_1"); result != jobqueue.CancelRequested {
+				t.Errorf("cancel while dispatching = %v", result)
+			}
+		}
+	}
+	if err := f.deliver("job_1"); err != nil {
+		t.Fatalf("deliver = %v, want the cancel to end the delivery", err)
+	}
+	if rec := f.record("job_1"); rec.State != jobqueue.StateCancelled {
+		t.Fatalf("state = %s, want cancelled", rec.State)
+	}
+	if f.disp.submits != 1 {
+		t.Fatalf("submits = %d, want no further attempt after the cancel", f.disp.submits)
+	}
+}
+
+// TestTerminalWriteFailureHandsTheTaskBack: a deadline reached while Redis
+// rejects the write must not end the delivery as if it were recorded.
+func TestTerminalWriteFailureHandsTheTaskBack(t *testing.T) {
+	f := newFixture(t, func(c *jobqueue.Config) { c.MaxWait = time.Second })
+	f.enqueue("job_1")
+	f.disp.answers = []error{errBusy, errBusy, errBusy}
+	f.disp.onSubmit = func() { f.store.SetErr(errors.New("redis down")) }
+	if err := f.deliver("job_1"); !errors.Is(err, jobqueue.ErrRequeue) {
+		t.Fatalf("deliver = %v, want the task handed back", err)
+	}
+	f.store.SetErr(nil)
+	// The redelivery finds the intent left behind and ends the job visibly.
+	if err := f.deliver("job_1"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := f.record("job_1"); rec.State != jobqueue.StateFailed {
+		t.Fatalf("state = %s, want a decided failure", rec.State)
+	}
+}
+
+// TestAJobWithNoTaskBehindItExpires: an enqueue that crashed after Admit
+// leaves a record no worker will ever read; reading it past the horizon ends it.
+func TestAJobWithNoTaskBehindItExpires(t *testing.T) {
+	f := newFixture(t, nil)
+	f.enqueue("job_1")
+	_ = f.replica.Delete(context.Background(), "job_1") // the task never made it
+	f.store.Age("job_1", 24*time.Hour)
+	rec, ok, err := f.queue.Lookup(context.Background(), "job_1")
+	if err != nil || !ok || rec.State != jobqueue.StateFailed || rec.ErrorCode != jobqueue.CodeQueueTimeout {
+		t.Fatalf("Lookup of an orphaned record = %+v %v %v, want failed/queue_timeout", rec, ok, err)
+	}
+	if position, _ := f.queue.Position(context.Background(), "job_1"); position != 0 {
+		t.Fatalf("an expired record still holds position %d", position)
+	}
+}
+
+// TestAwaitDispatchRidesOutATransientStoreError: a few failed reads are
+// tolerated; a sustained failure is reported.
+func TestAwaitDispatchRidesOutATransientStoreError(t *testing.T) {
+	f := newFixture(t, func(c *jobqueue.Config) { c.MaxWait = 100000 * time.Hour })
+	f.enqueue("job_1")
+	f.store.FailSnapshots(3)
+	polls := 0
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Millisecond)
+	defer cancel()
+	_, err := f.queue.AwaitDispatch(ctx, "job_1", func(int) { polls++ })
+	if !errors.Is(err, context.DeadlineExceeded) || polls == 0 {
+		t.Fatalf("AwaitDispatch = %v polls=%d, want it to resume polling after the blip", err, polls)
+	}
+
+	f.store.FailSnapshots(1000)
+	if _, err := f.queue.AwaitDispatch(context.Background(), "job_1", nil); err == nil {
+		t.Fatal("a sustained store failure must be reported")
+	}
+}
+
+func TestBindingWriteFailureStillRecordsTheRunLocally(t *testing.T) {
+	f := newFixture(t, nil)
+	f.enqueue("job_1")
+	f.disp.onSubmit = func() { f.store.SetErr(errors.New("redis down")) }
+	if err := f.deliver("job_1"); !errors.Is(err, jobqueue.ErrRequeue) {
+		t.Fatalf("deliver = %v, want the task handed back after the binding write failed", err)
+	}
+	if len(f.disp.dispatched) != 1 {
+		t.Fatal("the run a node accepted must still reach the local job store")
+	}
+	f.store.SetErr(nil)
+	if err := f.deliver("job_1"); err != nil {
+		t.Fatal(err)
+	}
+	if f.disp.submits != 1 {
+		t.Fatalf("submits = %d, want the accepted run never submitted again", f.disp.submits)
+	}
 }

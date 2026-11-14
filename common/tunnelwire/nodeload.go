@@ -75,13 +75,15 @@ func NodeLoadFromProto(pb *tunnelv1.NodeLoad) (nodeload.Report, bool) {
 			r.LoadAverage1m = &v
 		}
 	}
-	if pb.MemoryTotalBytes != nil {
-		v := max(pb.GetMemoryTotalBytes(), 0)
+	// A zero total is no total at all: it could not bound available.
+	// 总量为零等于没有总量：它无法约束可用量。
+	if pb.MemoryTotalBytes != nil && pb.GetMemoryTotalBytes() > 0 {
+		v := pb.GetMemoryTotalBytes()
 		r.MemoryTotalBytes = &v
 	}
 	if pb.MemoryAvailableBytes != nil {
 		v := max(pb.GetMemoryAvailableBytes(), 0)
-		if r.MemoryTotalBytes != nil && *r.MemoryTotalBytes > 0 {
+		if r.MemoryTotalBytes != nil {
 			v = min(v, *r.MemoryTotalBytes)
 		}
 		r.MemoryAvailableBytes = &v

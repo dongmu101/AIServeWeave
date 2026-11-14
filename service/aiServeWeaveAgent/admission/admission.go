@@ -140,18 +140,32 @@ type Controller struct {
 	cpuHigh     int // consecutive samples at or above the CPU threshold
 	cpuLow      int // consecutive samples below the CPU exit mark
 	memLow      int // consecutive samples above the memory exit mark
+	cpuMissing  int // consecutive successful samples without a CPU figure
+	memMissing  int // consecutive successful samples without a memory figure
 	sampleErrs  int
 
-	// pressure mirrors cpuPressure || memPressure for the lock-free hot path.
-	pressure atomic.Bool
-	reasons  atomic.Value // []nodeload.Reason
+	// pressure mirrors cpuPressure || memPressure for the lock-free hot path,
+	// and pressureReason is the rejection label it implies. Both are written
+	// under mu, together, so a reader never sees one without the other.
+	//
+	// pressure 镜像 cpuPressure || memPressure 供无锁热路径读取，pressureReason 是它
+	// 对应的拒绝标签。二者在 mu 下一起写入，读者不会只看到其中一个。
+	pressure       atomic.Bool
+	pressureReason atomic.Value // string
 }
 
+// class is one admission semaphore. waiting and active are kept under mu so
+// a gauge is always set to the value its own update produced; atomics alone
+// would let two concurrent Sets land out of order and leave a stale reading.
+//
+// class 是一个准入信号量。waiting 与 active 在 mu 下维护，使 gauge 总是写入它自己那次
+// 更新产生的值；只用原子量的话，两次并发的 Set 可能乱序落地，留下陈旧读数。
 type class struct {
 	name    string
 	sem     *semaphore.Weighted
-	waiting atomic.Int64
-	active  atomic.Int64
+	mu      sync.Mutex
+	waiting int
+	active  int
 }
 
 // New returns a Controller. Call Run to start sampling.
@@ -185,7 +199,7 @@ func New(cfg Config) *Controller {
 			ClassGeneral: newClass(ClassGeneral, cfg.GeneralMax),
 		},
 	}
-	c.reasons.Store([]nodeload.Reason(nil))
+	c.pressureReason.Store(ReasonPressureCPU)
 	c.metrics.pressure(false)
 	return c
 }
@@ -214,8 +228,8 @@ func (c *Controller) Run(ctx context.Context) {
 }
 
 // Sample takes one sample and updates the verdict. Run calls it; tests may
-// call it directly.
-// Sample 采集一次样本并更新判断。由 Run 调用；测试可直接调用。
+// call it directly. It is safe for concurrent use.
+// Sample 采集一次样本并更新判断。由 Run 调用；测试可直接调用。可并发调用。
 func (c *Controller) Sample() {
 	usage, err := c.cfg.Sampler.Read()
 	now := c.clock.Now()
@@ -225,9 +239,9 @@ func (c *Controller) Sample() {
 	if err != nil {
 		c.sampleErrs++
 		c.metrics.sampleError()
-		if c.sampleErrs >= failOpenErrors && before {
-			c.cpuPressure, c.memPressure = false, false
-			c.cpuHigh, c.cpuLow, c.memLow = 0, 0, 0
+		if c.sampleErrs >= failOpenErrors {
+			c.clearCPU()
+			c.clearMemory()
 		}
 	} else {
 		c.sampleErrs = 0
@@ -237,6 +251,31 @@ func (c *Controller) Sample() {
 		c.metrics.usage(usage)
 	}
 	after := c.cpuPressure || c.memPressure
+	reason := ReasonPressureCPU
+	if c.memPressure {
+		// Memory is the more urgent of the two when both hold.
+		reason = ReasonPressureMemory
+	}
+	c.pressureReason.Store(reason)
+	c.pressure.Store(after)
+	reasons := c.reasonsLocked()
+	errs := c.sampleErrs
+	c.mu.Unlock()
+
+	if err != nil && errs == 1 {
+		c.logger.Warn("host usage sample failed", slog.String("error", err.Error()))
+	}
+	c.metrics.pressure(after)
+	if before != after {
+		c.logger.Info("admission pressure changed", slog.Bool("pressure", after), slog.Any("reasons", reasons))
+	}
+}
+
+func (c *Controller) clearCPU()    { c.cpuPressure, c.cpuHigh, c.cpuLow = false, 0, 0 }
+func (c *Controller) clearMemory() { c.memPressure, c.memLow = false, 0 }
+
+// reasonsLocked lists the active pressure reasons. c.mu is held.
+func (c *Controller) reasonsLocked() []nodeload.Reason {
 	var reasons []nodeload.Reason
 	if c.cpuPressure {
 		reasons = append(reasons, nodeload.ReasonCPU)
@@ -244,35 +283,53 @@ func (c *Controller) Sample() {
 	if c.memPressure {
 		reasons = append(reasons, nodeload.ReasonMemory)
 	}
-	c.mu.Unlock()
+	return reasons
+}
 
-	if err != nil && c.sampleErrs == 1 {
-		c.logger.Warn("host usage sample failed", slog.String("error", err.Error()))
-	}
-	c.reasons.Store(reasons)
-	c.pressure.Store(after)
-	c.metrics.pressure(after)
-	if before != after {
-		c.logger.Info("admission pressure changed", slog.Bool("pressure", after), slog.Any("reasons", reasons))
-	}
+// cpuExit is the utilization at or below which CPU pressure may clear. It is
+// high minus the hysteresis, but never below half of high, so the exit stays
+// reachable however the two were configured.
+//
+// cpuExit 是 CPU 压力可以解除的使用率上限：high 减去迟滞，但不低于 high 的一半，
+// 使无论两者如何配置，退出线都可达。
+func (c *Controller) cpuExit() float64 {
+	high := c.cfg.CPUHighPercent
+	return max(high-c.cfg.HysteresisPercent, high/2)
+}
+
+// memExit is the available share at or above which memory pressure may
+// clear: low plus the hysteresis, but never above halfway to 100%.
+//
+// memExit 是内存压力可以解除的可用比例下限：low 加上迟滞，但不高于 low 到 100% 的中点。
+func (c *Controller) memExit() float64 {
+	low := c.cfg.MemoryLowPercent
+	return min(low+c.cfg.HysteresisPercent, (low+100)/2)
 }
 
 // updateCPU applies the CPU thresholds. c.mu is held.
 func (c *Controller) updateCPU(u hostresources.Usage, now time.Time) {
 	high := c.cfg.CPUHighPercent
 	if high <= 0 {
-		c.cpuPressure = false
+		c.clearCPU()
 		return
 	}
 	if u.CPUUtilization == nil {
-		return // unknown contributes nothing either way
+		// Unknown contributes nothing either way, but a figure that stays
+		// missing must not pin the node in pressure: fail open, as for a
+		// failing probe.
+		// 未知值不影响判断；但持续缺失的数值不能把节点钉在压力态：与探测失败一样 fail-open。
+		if c.cpuMissing++; c.cpuMissing >= failOpenErrors {
+			c.clearCPU()
+		}
+		return
 	}
+	c.cpuMissing = 0
 	pct := *u.CPUUtilization * 100
 	switch {
 	case pct >= high:
 		c.cpuHigh++
 		c.cpuLow = 0
-	case pct <= high-c.cfg.HysteresisPercent:
+	case pct <= c.cpuExit():
 		c.cpuLow++
 		c.cpuHigh = 0
 	default:
@@ -289,12 +346,16 @@ func (c *Controller) updateCPU(u hostresources.Usage, now time.Time) {
 func (c *Controller) updateMemory(u hostresources.Usage, now time.Time) {
 	low := c.cfg.MemoryLowPercent
 	if low <= 0 {
-		c.memPressure = false
+		c.clearMemory()
 		return
 	}
 	if u.MemoryAvailableBytes == nil || u.MemoryTotalBytes == nil || *u.MemoryTotalBytes <= 0 {
+		if c.memMissing++; c.memMissing >= failOpenErrors {
+			c.clearMemory()
+		}
 		return
 	}
+	c.memMissing = 0
 	pct := float64(*u.MemoryAvailableBytes) / float64(*u.MemoryTotalBytes) * 100
 	switch {
 	case pct <= low:
@@ -302,7 +363,7 @@ func (c *Controller) updateMemory(u hostresources.Usage, now time.Time) {
 		if !c.memPressure {
 			c.memPressure, c.memEntered = true, now
 		}
-	case pct >= low+c.cfg.HysteresisPercent:
+	case pct >= c.memExit():
 		c.memLow++
 	default:
 		c.memLow = 0
@@ -319,10 +380,7 @@ func (c *Controller) CheckPressure(className string) error {
 	if !c.pressure.Load() {
 		return nil
 	}
-	reason := ReasonPressureCPU
-	if reasons, _ := c.reasons.Load().([]nodeload.Reason); len(reasons) > 0 && reasons[0] == nodeload.ReasonMemory {
-		reason = ReasonPressureMemory
-	}
+	reason, _ := c.pressureReason.Load().(string)
 	c.metrics.rejection(className, reason)
 	return busyError("node is under resource pressure (" + reason + ")")
 }
@@ -346,23 +404,31 @@ func (c *Controller) Acquire(ctx context.Context, className string) (func(), err
 		c.metrics.rejection(cl.name, ReasonQueueFull)
 		return nil, busyError("node " + cl.name + " concurrency limit reached")
 	}
-	if cl.waiting.Add(1) > int64(c.cfg.QueueMaxWaiters) {
-		c.metrics.waiting(cl.name, int(cl.waiting.Add(-1)))
+	if !c.addWaiter(cl) {
 		c.metrics.rejection(cl.name, ReasonQueueFull)
 		return nil, busyError("node " + cl.name + " admission queue is full")
 	}
-	c.metrics.waiting(cl.name, int(cl.waiting.Load()))
 	start := c.clock.Now()
 	wctx, cancel := context.WithTimeout(ctx, c.cfg.QueueMaxWait)
 	err := cl.sem.Acquire(wctx, 1)
 	cancel()
-	c.metrics.waiting(cl.name, int(cl.waiting.Add(-1)))
+	c.removeWaiter(cl)
 	waited := c.clock.Now().Sub(start)
 
 	if err != nil {
-		if errors.Is(ctx.Err(), context.Canceled) {
+		if cerr := ctx.Err(); cerr != nil {
+			// The request itself ended: the caller left, or its own deadline
+			// passed. Neither is this node being busy, so it is not answered
+			// as a retryable backpressure that would send an expired
+			// request on to another node.
+			// 请求本身已经结束：调用方离开，或其自身期限已过。这都不是本节点繁忙，因此不以
+			// 可重试背压作答——那会把一个已过期的请求再送到另一个节点。
 			c.metrics.wait(cl.name, "canceled", waited)
-			return nil, ctx.Err()
+			if errors.Is(cerr, context.DeadlineExceeded) {
+				return nil, &runtime.RuntimeError{Code: runtime.ErrorTimeout, Operation: "admission",
+					Message: "request deadline passed while waiting for admission", Cause: cerr}
+			}
+			return nil, cerr
 		}
 		c.metrics.wait(cl.name, "timeout", waited)
 		c.metrics.rejection(cl.name, ReasonWaitTimeout)
@@ -378,12 +444,37 @@ func (c *Controller) Acquire(ctx context.Context, className string) (func(), err
 	return release, nil
 }
 
+// addWaiter registers one waiter unless QueueMaxWaiters already wait.
+func (c *Controller) addWaiter(cl *class) bool {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	if cl.waiting >= c.cfg.QueueMaxWaiters {
+		return false
+	}
+	cl.waiting++
+	c.metrics.waiting(cl.name, cl.waiting)
+	return true
+}
+
+func (c *Controller) removeWaiter(cl *class) {
+	cl.mu.Lock()
+	defer cl.mu.Unlock()
+	cl.waiting--
+	c.metrics.waiting(cl.name, cl.waiting)
+}
+
 func (c *Controller) granted(cl *class) func() {
-	c.metrics.inflight(cl.name, int(cl.active.Add(1)))
+	cl.mu.Lock()
+	cl.active++
+	c.metrics.inflight(cl.name, cl.active)
+	cl.mu.Unlock()
 	var once sync.Once
 	return func() {
 		once.Do(func() {
-			c.metrics.inflight(cl.name, int(cl.active.Add(-1)))
+			cl.mu.Lock()
+			cl.active--
+			c.metrics.inflight(cl.name, cl.active)
+			cl.mu.Unlock()
 			cl.sem.Release(1)
 		})
 	}
@@ -394,18 +485,24 @@ func (c *Controller) granted(cl *class) func() {
 func (c *Controller) Waiting() int {
 	total := 0
 	for _, cl := range c.classes {
-		total += int(cl.waiting.Load())
+		cl.mu.Lock()
+		total += cl.waiting
+		cl.mu.Unlock()
 	}
 	return total
 }
 
 // Report returns the latest sample and verdict for the heartbeat. It reports
-// false before the first successful sample.
-// Report 返回供心跳使用的最近一次样本与判断。首次成功采样之前返回 false。
+// false before the first successful sample, and again once sampling has
+// failed failOpenErrors times in a row: a stale figure sent as if it were
+// live is worse than "not reported".
+//
+// Report 返回供心跳使用的最近一次样本与判断。首次成功采样之前返回 false；采样连续失败
+// failOpenErrors 次之后也返回 false：把陈旧数值当作实时数据发送，比「未上报」更糟。
 func (c *Controller) Report() (nodeload.Report, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if c.sampledAt.IsZero() {
+	if c.sampledAt.IsZero() || c.sampleErrs >= failOpenErrors {
 		return nodeload.Report{}, false
 	}
 	r := nodeload.Report{
@@ -416,13 +513,8 @@ func (c *Controller) Report() (nodeload.Report, bool) {
 		MemoryAvailableBytes: c.usage.MemoryAvailableBytes,
 		MemoryTotalBytes:     c.usage.MemoryTotalBytes,
 		Pressure:             c.cpuPressure || c.memPressure,
+		PressureReasons:      c.reasonsLocked(),
 		AdmissionWaiting:     c.Waiting(),
-	}
-	if c.cpuPressure {
-		r.PressureReasons = append(r.PressureReasons, nodeload.ReasonCPU)
-	}
-	if c.memPressure {
-		r.PressureReasons = append(r.PressureReasons, nodeload.ReasonMemory)
 	}
 	return r, true
 }

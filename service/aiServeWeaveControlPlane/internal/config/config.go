@@ -1087,6 +1087,19 @@ type DatabaseConf struct {
 	// （一次整表复制）。为零时沿用 5 分钟的默认值；应先在恢复出的副本上计时升级，
 	// 再据此调大。
 	MigrationTimeout time.Duration `json:",optional"`
+	// MaintenanceDSN, when set, is the connection partition DDL runs on —
+	// creating future partitions and dropping expired ones — for a
+	// deployment whose runtime account (DSN) has no DDL rights. It uses the
+	// same Driver and connects as an account allowed to alter the
+	// partitioned tables (on PostgreSQL, their owner, usually the migration
+	// account). Unset, partition DDL runs on DSN; if that fails, retention
+	// falls back to batched row deletes and logs the failure.
+	//
+	// MaintenanceDSN 非空时，分区 DDL（预建未来分区、删除过期分区）在这个连接上执行，
+	// 用于运行账号（DSN）没有 DDL 权限的部署。它使用同一个 Driver，以有权修改这些分区表
+	// 的账号连接（PostgreSQL 上须是表的所有者，通常就是迁移账号）。不设置时分区 DDL 在
+	// DSN 上执行；若失败，保留期清理退回分批行删除并记录失败。
+	MaintenanceDSN string `json:",optional"`
 }
 
 // RedisConf is the verification cache.

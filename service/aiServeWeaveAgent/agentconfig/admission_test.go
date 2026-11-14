@@ -67,3 +67,17 @@ func TestLoadRejectsInvalidAdmission(t *testing.T) {
 		t.Fatalf("Load = %v, want a cpu_high_percent error", err)
 	}
 }
+
+func TestAdmissionConfigRejectsUnreachableExits(t *testing.T) {
+	bad := []AdmissionConfig{
+		{MemoryLowPercent: 96},                      // 96 + default 5 ≥ 100
+		{CPUHighPercent: 5},                         // ≤ default hysteresis 5
+		{CPUHighPercent: 20, HysteresisPercent: 30}, // ≤ explicit hysteresis
+		{SampleInterval: "100ms"},
+	}
+	for _, cfg := range bad {
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate(%+v) accepted an unreachable exit or a too-short interval", cfg)
+		}
+	}
+}

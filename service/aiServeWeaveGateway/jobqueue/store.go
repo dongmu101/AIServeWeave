@@ -31,14 +31,20 @@ type Store interface {
 	Position(ctx context.Context, jobID string) (int, error)
 	// Depth returns how many jobs are admitted.
 	Depth(ctx context.Context) (int, error)
-	// BeginDispatch moves queued → dispatching with intent; false when the
-	// job is no longer queued.
-	BeginDispatch(ctx context.Context, jobID, intent string, now time.Time) (bool, error)
-	// Requeue moves dispatching(intent) → queued.
-	Requeue(ctx context.Context, jobID, intent string, now time.Time) error
+	// Snapshot returns the job's record and its 1-based position (0 when
+	// not queued) in one round trip.
+	Snapshot(ctx context.Context, jobID string) (Record, int, bool, error)
+	// BeginDispatch moves queued → dispatching with intent. It is
+	// idempotent for the same intent, so a retried call whose first reply
+	// was lost still succeeds. A job whose cancel was requested is moved to
+	// cancelled instead.
+	BeginDispatch(ctx context.Context, jobID, intent string, now time.Time) (BeginResult, error)
+	// Requeue moves dispatching(intent) → queued, or to cancelled when a
+	// cancel was requested meanwhile (reported as true).
+	Requeue(ctx context.Context, jobID, intent string, now time.Time) (cancelled bool, err error)
 	// Dispatched moves dispatching(intent) → dispatched with b and drops the
-	// job from the queue, reporting whether a cancel was requested meanwhile.
-	Dispatched(ctx context.Context, jobID, intent string, b Binding, now time.Time) (cancelRequested bool, err error)
+	// job from the queue.
+	Dispatched(ctx context.Context, jobID, intent string, b Binding, now time.Time) (DispatchResult, error)
 	// Fail moves a job in state from to failed with code and drops it from
 	// the queue; false when it was not in from.
 	Fail(ctx context.Context, jobID string, from State, code string, now time.Time) (bool, error)
@@ -86,7 +92,37 @@ redis.call('PEXPIRE', KEYS[1], ARGV[4])
 return redis.call('ZRANK', KEYS[1], ARGV[1]) + 1
 `)
 
-// transitionScript is every compare-and-set transition.
+// beginScript: ARGV 1 job id, 2 intent, 3 now ms. Returns -1 missing,
+// 0 not queued, 1 begun (or already begun with this intent), 3 cancelled.
+var beginScript = redis.NewScript(`
+local st = redis.call('HGET', KEYS[2], 'state')
+if not st then return -1 end
+if st == 'dispatching' and redis.call('HGET', KEYS[2], 'intent') == ARGV[2] then return 1 end
+if st ~= 'queued' then return 0 end
+if redis.call('HGET', KEYS[2], 'cancel_requested') == '1' then
+  redis.call('HSET', KEYS[2], 'state', 'cancelled', 'error_code', 'cancelled', 'updated', ARGV[3])
+  redis.call('ZREM', KEYS[1], ARGV[1])
+  return 3
+end
+redis.call('HSET', KEYS[2], 'state', 'dispatching', 'intent', ARGV[2], 'updated', ARGV[3])
+return 1
+`)
+
+// requeueScript: ARGV 1 job id, 2 intent, 3 now ms. Returns 0 precondition
+// failed, 1 requeued, 3 cancelled.
+var requeueScript = redis.NewScript(`
+if redis.call('HGET', KEYS[2], 'state') ~= 'dispatching' then return 0 end
+if redis.call('HGET', KEYS[2], 'intent') ~= ARGV[2] then return 0 end
+if redis.call('HGET', KEYS[2], 'cancel_requested') == '1' then
+  redis.call('HSET', KEYS[2], 'state', 'cancelled', 'error_code', 'cancelled', 'updated', ARGV[3])
+  redis.call('ZREM', KEYS[1], ARGV[1])
+  return 3
+end
+redis.call('HSET', KEYS[2], 'state', 'queued', 'updated', ARGV[3])
+return 1
+`)
+
+// transitionScript is every other compare-and-set transition.
 // ARGV: 1 job id, 2 expected state, 3 expected intent (” = any),
 // 4 drop from queue ('1'/'0'), 5.. field/value pairs.
 // Returns -1 missing, 0 precondition failed, 1 done, 2 done and a cancel was
@@ -155,6 +191,10 @@ func (s *redisStore) Get(ctx context.Context, jobID string) (Record, bool, error
 	if err != nil || len(fields) == 0 {
 		return Record{}, false, err
 	}
+	return recordFrom(jobID, fields), true, nil
+}
+
+func recordFrom(jobID string, fields map[string]string) Record {
 	millis := func(name string) time.Time {
 		v, _ := strconv.ParseInt(fields[name], 10, 64)
 		if v == 0 {
@@ -175,7 +215,7 @@ func (s *redisStore) Get(ctx context.Context, jobID string) (Record, bool, error
 		ErrorCode: fields["error_code"],
 		CreatedAt: millis("created"),
 		UpdatedAt: millis("updated"),
-	}, true, nil
+	}
 }
 
 func (s *redisStore) Position(ctx context.Context, jobID string) (int, error) {
@@ -194,21 +234,48 @@ func (s *redisStore) Depth(ctx context.Context) (int, error) {
 	return int(n), err
 }
 
-func (s *redisStore) BeginDispatch(ctx context.Context, jobID, intent string, now time.Time) (bool, error) {
-	n, err := s.transition(ctx, jobID, StateQueued, "", false, "state", string(StateDispatching), "intent", intent, "updated", ms(now))
-	return n > 0, err
+func (s *redisStore) Snapshot(ctx context.Context, jobID string) (Record, int, bool, error) {
+	pipe := s.client.Pipeline()
+	fields := pipe.HGetAll(ctx, s.jobKey+jobID)
+	rank := pipe.ZRank(ctx, s.admitted, jobID)
+	if _, err := pipe.Exec(ctx); err != nil && err != redis.Nil {
+		return Record{}, 0, false, err
+	}
+	values, err := fields.Result()
+	if err != nil || len(values) == 0 {
+		return Record{}, 0, false, err
+	}
+	position := 0
+	if r, err := rank.Result(); err == nil {
+		position = int(r) + 1
+	}
+	return recordFrom(jobID, values), position, true, nil
 }
 
-func (s *redisStore) Requeue(ctx context.Context, jobID, intent string, now time.Time) error {
-	_, err := s.transition(ctx, jobID, StateDispatching, intent, false, "state", string(StateQueued), "updated", ms(now))
-	return err
+func (s *redisStore) BeginDispatch(ctx context.Context, jobID, intent string, now time.Time) (BeginResult, error) {
+	n, err := beginScript.Run(ctx, s.client, s.keys(jobID), jobID, intent, ms(now)).Int()
+	switch {
+	case err != nil:
+		return 0, err
+	case n == 1:
+		return Begun, nil
+	case n == 3:
+		return BeginCancelled, nil
+	default:
+		return BeginNotQueued, nil
+	}
 }
 
-func (s *redisStore) Dispatched(ctx context.Context, jobID, intent string, b Binding, now time.Time) (bool, error) {
+func (s *redisStore) Requeue(ctx context.Context, jobID, intent string, now time.Time) (bool, error) {
+	n, err := requeueScript.Run(ctx, s.client, s.keys(jobID), jobID, intent, ms(now)).Int()
+	return n == 3, err
+}
+
+func (s *redisStore) Dispatched(ctx context.Context, jobID, intent string, b Binding, now time.Time) (DispatchResult, error) {
 	n, err := s.transition(ctx, jobID, StateDispatching, intent, true,
 		"state", string(StateDispatched), "node_id", b.NodeID, "runtime_id", b.RuntimeID,
 		"runtime_kind", b.Kind, "run_id", b.RunID, "updated", ms(now))
-	return n == 2, err
+	return DispatchResult{Recorded: n > 0, CancelRequested: n == 2}, err
 }
 
 func (s *redisStore) Fail(ctx context.Context, jobID string, from State, code string, now time.Time) (bool, error) {

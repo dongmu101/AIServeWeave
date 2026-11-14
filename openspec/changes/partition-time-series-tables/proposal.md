@@ -15,8 +15,8 @@
 - **BREAKING（表结构）**：这五张表的主键由 `(id)` 改为 `(id, <分区列>)`。数据库不再保证 `id` 单独全局唯一，而是由写入方保证：`request_logs`/`usage_records` 的幂等依赖 Gateway outbox 重发时保持原 `created_at`，这一点会在契约与测试中固化。`audit_logs` 的 id 由控制面随机生成（128 位）。`response_turns` 的 id 是 Gateway 生成的随机 ResponseID，`created_at` 则是控制面收到请求时的时间，重试时会变，所以写入前先按 id 查一次：顺序重试照旧返回已有行，只有并发重试可能留下内容相同的重复行（读取结果不变）。
 - **BREAKING（表结构）**：`audit_logs.created_at` 改为 `NOT NULL`。历史 NULL 行回填为迁移执行时间，因此不会在升级时立即被清理掉。
 - 已有数据在升级迁移中原地转换成分区表。迁移要整表复制，耗时与行数成正比；新增可配置的迁移超时，取代写死的 5 分钟。
-- 新增分区维护任务：预先建好未来的分区（兜底分区保证维护落后时写入也不会失败），多副本之间用锁串行化。
-- 保留期清理改为：整段过期的分区直接 `DROP`，边界分区里剩下的过期行仍用 `DELETE`。保留期语义不变，精度仍然到行。
+- 新增分区维护任务：预先建好未来的分区（兜底分区保证维护落后时写入也不会失败），多副本之间用锁串行化。新增可选的 `Database.MaintenanceDSN`，生产环境的运行账号没有 DDL 权限时，分区 DDL 改走这个维护账号。
+- **BREAKING（行为）**：保留期改为「至少保留 N 天」。只整段删除过期分区，截止时间所在的分区整段保留，最多多留一个分区周期（按天的表 1 天，按月的表约 1 个月）。稳态下不再逐行删除；只有零散的迟到行，以及无法执行分区 DDL 时的降级情况才逐行删除，而且分批进行。清理改为每小时运行一次。
 - 新增保留期配置：`ResponseTurnRetention`（默认 30 天）与 `AuditLogRetention`（默认 400 天），零值采用默认值，与 `RequestLogRetention` 风格一致。**BREAKING（行为）**：升级后超过 30 天的对话轮次与超过 400 天的审计记录会被清理，超过 30 天的 `previous_response_id` 将返回未找到。
 - 不分区：`usage_charges` 等计费表。扣费去重依赖 `request_id` 全局唯一，分区后无法保证。
 
@@ -31,7 +31,7 @@
 
 ## Impact
 
-- **代码**：`service/aiServeWeaveControlPlane/internal/store/gormstore`（五个命名空间的 MySQL/PG 新迁移、迁移执行器的动态分区展开与可配置超时、`DeleteXBefore` 系列改为先删分区、schemacheck 增加分区校验），`internal/model`（主键 tag），`internal/config`（新增两项保留期和迁移超时），`internal/svc/servicecontext.go`（接入维护任务与两个新清理协程），新增 `internal/partitionmaint`、`internal/responseturnretention`、`internal/auditretention`，`internal/store`（接口与 memstore 新增删除方法）。
+- **代码**：`service/aiServeWeaveControlPlane/internal/store/gormstore`（五个命名空间的 MySQL/PG 新迁移、迁移执行器的动态分区展开与可配置超时、`DeleteXBefore` 系列改为先删分区、schemacheck 增加分区校验），`internal/model`（主键 tag），`internal/config`（新增两项保留期、迁移超时和维护账号 DSN），`internal/svc/servicecontext.go`（接入维护任务与两个新清理协程），新增 `internal/partitionmaint`、`internal/responseturnretention`、`internal/auditretention`，`internal/store`（接口与 memstore 新增删除方法）。
 - **Gateway**：不改代码，只补测试，固化「outbox 重发保持原 `created_at`」的契约。
 - **数据库与运维**：升级须停掉全部控制面副本（现行流程已经要求），大表转换期间不可写；`deploy/database-recovery.md` 补充分区表的备份恢复与转换耗时说明；`sql/init.sql` 同步；`deploy/controlplane.example.yaml` 增加新配置项。
 - **文档**：根目录 `STATUS.md`、控制面 `STATUS.md`/`README.md`、`docs/architecture.md` 的存储章节。

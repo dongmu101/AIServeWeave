@@ -82,7 +82,7 @@ func (s *Scheduler) MessagesStart(ctx context.Context, req runtime.MessagesReque
 	if err == nil || !busy || s.chatQueue == nil {
 		return stream, c, err
 	}
-	err = s.chatQueue.Wait(ctx, err, func() (error, bool) {
+	err = s.chatQueue.Wait(ctx, req.Model, err, func() (error, bool) {
 		var err error
 		stream, c, err, busy = s.attemptMessagesStart(ctx, req)
 		return err, busy

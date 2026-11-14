@@ -1,7 +1,11 @@
 // Package waitqueue is the cluster-wide bounded wait for new chat requests
 // (scheduler.WaitQueue). When every candidate a request tried was busy, the
-// request takes a ticket in one Redis-held FIFO shared by every Gateway
-// replica, and only tickets inside the head window re-run a dispatch pass.
+// request takes a ticket in a Redis-held FIFO shared by every Gateway
+// replica, one FIFO per lane (the requested model, so a saturated model
+// never holds back another model's waiters), and only tickets inside its
+// lane's head window re-run a dispatch pass. An eligible ticket is claimed
+// for the length of its pass and put back at the same place if the pass
+// finds every candidate busy again.
 // Dispatch itself never leaves the replica holding the client's connection:
 // the queue decides when a waiter may try again, never where it goes, which
 // keeps the tunnel's "no forwarding" constraint intact.
@@ -30,8 +34,10 @@
 // serving.
 //
 // waitqueue 是新对话请求的全集群有界等待（scheduler.WaitQueue）。请求尝试过的每个候选
-// 都繁忙时，它在一个由所有 Gateway 副本共享、保存在 Redis 中的 FIFO 里取一张票，只有位于
-// 头部窗口内的票会重跑派发。派发本身从不离开持有客户端连接的那个副本：队列只决定等待者
+// 都繁忙时，它在一个由所有 Gateway 副本共享、保存在 Redis 中的 FIFO 里取一张票——每个通道
+// （即所请求的模型）一个 FIFO，使饱和的模型不会拖住其他模型的等待者——只有位于本通道头部
+// 窗口内的票会重跑派发。获得资格的票在这一轮派发期间被领走，若这一轮仍发现所有候选都忙，
+// 就放回原来的位置。派发本身从不离开持有客户端连接的那个副本：队列只决定等待者
 // 何时可以再试，从不决定它去哪里，因此隧道「不转发」的约束保持不变。
 //
 // 各项界限，对应「任何一跳都不得无界缓冲」：
@@ -55,8 +61,11 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"hash/fnv"
 	"log/slog"
+	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -65,11 +74,19 @@ import (
 	"AIServeWeave/common/runtime"
 )
 
-// Defaults applied by New.
+// Defaults and bounds applied by New.
 const (
 	DefaultRetryInterval = 250 * time.Millisecond
 	DefaultMaxWaiters    = 64
 	DefaultHeadWindow    = 8
+
+	// MinRetryInterval and MaxMaxWaiters bound the Redis load the queue can
+	// put on the store shared with rate limiting: every waiter polls once
+	// per interval, and the stall-escape scan is linear in a lane's length.
+	// MinRetryInterval 与 MaxMaxWaiters 限定队列能给与限流共用的存储施加的负载：每个
+	// 等待者每个间隔轮询一次，停滞逃逸的扫描与通道长度成线性关系。
+	MinRetryInterval = 50 * time.Millisecond
+	MaxMaxWaiters    = 1024
 
 	// minLease keeps a ticket alive across a short GC pause or a slow Redis
 	// round trip even with a very short retry interval.
@@ -93,18 +110,20 @@ type Config struct {
 	// Client is the shared Redis. Required by New.
 	Client redis.UniversalClient
 	// Name isolates this queue's keys; every replica of one fleet must use
-	// the same name. Default "chat".
+	// the same name, and two fleets sharing one Redis must not. Default
+	// "aisw-chat".
 	Name string
 	// ReplicaID tags this replica's tickets, for the stall escape. Required.
 	ReplicaID string
 	// MaxWait bounds one request's wait. Must be positive.
 	MaxWait time.Duration
-	// RetryInterval is how often a waiter polls. Default 250ms.
+	// RetryInterval is how often a waiter polls. Default 250ms, at least 50ms.
 	RetryInterval time.Duration
-	// MaxWaiters caps waiting requests across the cluster. Default 64.
+	// MaxWaiters caps waiting requests across the cluster. Default 64, at
+	// most 1024.
 	MaxWaiters int
-	// HeadWindow is how many tickets at the head may run a dispatch pass at
-	// once. Default 8.
+	// HeadWindow is how many tickets at the head of a lane may run a
+	// dispatch pass at once. Default 8.
 	HeadWindow int
 
 	Clock   runtime.Clock
@@ -124,27 +143,36 @@ const (
 // ticketStore is the shared FIFO. The Redis implementation is in
 // store_redis.go; tests substitute an in-memory one.
 type ticketStore interface {
-	// join adds ticket unless maxWaiters tickets are already waiting.
-	join(ctx context.Context, ticket string, maxWaiters int, lease time.Duration) (bool, error)
+	// join adds ticket to lane unless maxWaiters tickets already wait
+	// across all lanes.
+	join(ctx context.Context, lane, ticket string, maxWaiters int, lease time.Duration) (bool, error)
 	// poll renews ticket's lease and reports whether it may run a pass:
-	// inside the head window, or the oldest of its replica (prefix) once no
-	// queued request has dispatched for stall.
-	poll(ctx context.Context, ticket, prefix string, lease time.Duration, window int, stall time.Duration) (pollResult, error)
-	// leave removes ticket; dispatched records progress for the stall escape.
-	leave(ctx context.Context, ticket string, dispatched bool) error
+	// inside the lane's head window, or the oldest of its replica (prefix)
+	// in the lane once no queued request there has dispatched for stall. An
+	// eligible ticket is claimed (removed) and its seq returned.
+	poll(ctx context.Context, lane, ticket, prefix string, lease time.Duration, window int, stall time.Duration) (pollResult, int64, error)
+	// rejoin puts a claimed ticket back at seq.
+	rejoin(ctx context.Context, lane, ticket string, seq int64, lease time.Duration) error
+	// leave removes a ticket that is still queued.
+	leave(ctx context.Context, lane, ticket string) error
+	// progress records a queued dispatch on lane, for the stall escape.
+	progress(ctx context.Context, lane string) error
 }
 
 // Queue is a scheduler.WaitQueue backed by a shared ticket store.
 type Queue struct {
-	cfg     Config
-	store   ticketStore
-	clock   runtime.Clock
-	logger  *slog.Logger
-	metrics recorder
-	lease   time.Duration
-	stall   time.Duration
-	prefix  string
-	depth   atomic.Int64
+	cfg          Config
+	store        ticketStore
+	clock        runtime.Clock
+	logger       *slog.Logger
+	metrics      recorder
+	lease        time.Duration
+	stall        time.Duration
+	storeTimeout time.Duration
+	prefix       string
+
+	depthMu sync.Mutex
+	depth   int
 	// lastStoreErrLog throttles store-error logging to one line per interval.
 	lastStoreErrLog atomic.Int64
 }
@@ -156,7 +184,7 @@ func New(cfg Config) (*Queue, error) {
 		return nil, errors.New("waitqueue: a Redis client is required")
 	}
 	if cfg.Name == "" {
-		cfg.Name = "chat"
+		cfg.Name = "aisw-chat"
 	}
 	return newQueue(cfg, newRedisStore(cfg.Client, cfg.Name))
 }
@@ -171,8 +199,14 @@ func newQueue(cfg Config, store ticketStore) (*Queue, error) {
 	if cfg.RetryInterval <= 0 {
 		cfg.RetryInterval = DefaultRetryInterval
 	}
+	if cfg.RetryInterval < MinRetryInterval {
+		return nil, errors.New("waitqueue: RetryInterval must be at least " + MinRetryInterval.String())
+	}
 	if cfg.MaxWaiters <= 0 {
 		cfg.MaxWaiters = DefaultMaxWaiters
+	}
+	if cfg.MaxWaiters > MaxMaxWaiters {
+		return nil, errors.New("waitqueue: MaxWaiters must be at most " + strconv.Itoa(MaxMaxWaiters))
 	}
 	if cfg.HeadWindow <= 0 {
 		cfg.HeadWindow = DefaultHeadWindow
@@ -191,16 +225,51 @@ func newQueue(cfg Config, store ticketStore) (*Queue, error) {
 		metrics: newRecorder(cfg.Metrics),
 		lease:   max(10*cfg.RetryInterval, minLease),
 		stall:   4 * cfg.RetryInterval,
-		prefix:  cfg.ReplicaID + "|",
+		// A Redis that stops answering must not hold a request longer than
+		// a couple of polls: the request gets its 429 instead.
+		// 不再应答的 Redis 不能把请求扣住超过两三次轮询：请求改为得到 429。
+		storeTimeout: min(max(2*cfg.RetryInterval, 250*time.Millisecond), time.Second),
+		prefix:       cfg.ReplicaID + "|",
 	}, nil
 }
 
-// Wait implements scheduler.WaitQueue.
-// Wait 实现 scheduler.WaitQueue。
-func (q *Queue) Wait(ctx context.Context, firstErr error, attempt func() (err error, busy bool)) error {
-	ticket := q.prefix + newTicketID()
-	joined, err := q.store.join(ctx, ticket, q.cfg.MaxWaiters, q.lease)
+// laneOf maps a lane key (the requested model) onto a short, key-safe id.
+func laneOf(key string) string {
+	h := fnv.New64a()
+	h.Write([]byte(key))
+	return strconv.FormatUint(h.Sum64(), 16)
+}
+
+func (q *Queue) addDepth(delta int) {
+	q.depthMu.Lock()
+	q.depth += delta
+	q.metrics.depth(q.depth)
+	q.depthMu.Unlock()
+}
+
+// call runs one store call bounded by storeTimeout.
+func (q *Queue) call(ctx context.Context, fn func(context.Context) error) error {
+	cctx, cancel := context.WithTimeout(ctx, q.storeTimeout)
+	defer cancel()
+	return fn(cctx)
+}
+
+// Wait implements scheduler.WaitQueue. key names the lane: requests for the
+// same model share one FIFO.
+// Wait 实现 scheduler.WaitQueue。key 指定通道：同一模型的请求共用一个 FIFO。
+func (q *Queue) Wait(ctx context.Context, key string, firstErr error, attempt func() (err error, busy bool)) error {
+	lane := laneOf(key)
+	ticket := q.prefix + lane + "|" + newTicketID()
+	var joined bool
+	err := q.call(ctx, func(cctx context.Context) error {
+		var err error
+		joined, err = q.store.join(cctx, lane, ticket, q.cfg.MaxWaiters, q.lease)
+		return err
+	})
 	if err != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		q.storeError("join", err)
 		return firstErr
 	}
@@ -208,13 +277,16 @@ func (q *Queue) Wait(ctx context.Context, firstErr error, attempt func() (err er
 		q.metrics.rejected()
 		return firstErr
 	}
-	q.metrics.depth(int(q.depth.Add(1)))
-	dispatched := false
+	q.addDepth(1)
+	queued := true
 	defer func() {
-		q.metrics.depth(int(q.depth.Add(-1)))
+		q.addDepth(-1)
+		if !queued {
+			return
+		}
 		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaveTimeout)
 		defer cancel()
-		if err := q.store.leave(lctx, ticket, dispatched); err != nil {
+		if err := q.store.leave(lctx, lane, ticket); err != nil {
 			q.storeError("leave", err)
 		}
 	}()
@@ -237,7 +309,13 @@ func (q *Queue) Wait(ctx context.Context, firstErr error, attempt func() (err er
 		case <-timer:
 		}
 
-		standing, err := q.store.poll(ctx, ticket, q.prefix, q.lease, q.cfg.HeadWindow, q.stall)
+		var standing pollResult
+		var seq int64
+		err := q.call(ctx, func(cctx context.Context) error {
+			var err error
+			standing, seq, err = q.store.poll(cctx, lane, ticket, q.prefix, q.lease, q.cfg.HeadWindow, q.stall)
+			return err
+		})
 		if err != nil {
 			if ctx.Err() != nil {
 				q.metrics.wait(q.clock.Now().Sub(start), OutcomeCanceled)
@@ -252,19 +330,36 @@ func (q *Queue) Wait(ctx context.Context, firstErr error, attempt func() (err er
 			// The lease expired (a pause longer than the lease, or Redis
 			// lost the key). Rejoining would jump the queue's order, so the
 			// request gets its 429 like any other wait that ran out.
+			queued = false
 			q.metrics.wait(q.clock.Now().Sub(start), OutcomeLost)
 			return lastErr
 		case pollWait:
 			continue
 		}
 
+		// Claimed: the ticket is out of the lane while the pass runs.
+		queued = false
 		err, busy := attempt()
+		if err == nil {
+			_ = q.call(context.WithoutCancel(ctx), func(cctx context.Context) error { return q.store.progress(cctx, lane) })
+		}
 		if err == nil || !busy {
-			dispatched = err == nil
 			q.metrics.wait(q.clock.Now().Sub(start), OutcomeResolved)
 			return err
 		}
 		lastErr = err
+		if ctx.Err() != nil || !q.clock.Now().Before(deadline) {
+			continue // the loop head answers the timeout or cancellation
+		}
+		err = q.call(ctx, func(cctx context.Context) error { return q.store.rejoin(cctx, lane, ticket, seq, q.lease) })
+		if err != nil {
+			if ctx.Err() == nil {
+				q.storeError("rejoin", err)
+			}
+			q.metrics.wait(q.clock.Now().Sub(start), OutcomeStoreError)
+			return lastErr
+		}
+		queued = true
 	}
 }
 

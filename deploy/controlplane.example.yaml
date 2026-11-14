@@ -50,17 +50,26 @@ Database:
   # 限制一次迁移运行的时长，包括把已有的表转换为按时间分区（整表复制）。不设时为 5m；
   # 先在恢复出的副本上计时升级。见 deploy/database-recovery.md。
   # MigrationTimeout: 30m
+  # Account partition DDL runs on (creating future partitions, dropping expired
+  # ones) when the runtime account above has no DDL rights. Use the migration
+  # account; on PostgreSQL it must own the tables, on MySQL it needs ALTER and
+  # DROP on them. See deploy/database-recovery.md.
+  # 上面的运行账号没有 DDL 权限时，分区 DDL（预建未来分区、删除过期分区）使用的账号。
+  # 一般用迁移账号；PostgreSQL 上必须是表的所有者，MySQL 上需要这些表的 ALTER 与 DROP
+  # 权限。见 deploy/database-recovery.md。
+  # MaintenanceDSN: "<migration-user>:<password>@tcp(mysql:3306)/${MYSQL_DATABASE}?charset=utf8mb4&parseTime=True&loc=UTC"
 
-# Retention of the time-partitioned tables. Expired partitions are dropped
-# whole, then the rows before the cutoff in the straddling partition are
-# deleted. Unset (zero) uses the default shown; daily-partitioned tables
-# (request_logs, metrics_history_points, response_turns) cap at 87600h.
-# Upgrading reaps response turns older than 30 days and audit records older
-# than 400 days unless these are raised first.
-# 按时间分区的表的保留期：先整段删除过期分区，再删除跨越截止时间那个分区里的过期行。
-# 不设（为零）时采用下列默认值；按天分区的表（request_logs、metrics_history_points、
-# response_turns）上限 87600h。若不先调大，升级后会清理超过 30 天的对话轮次与超过
-# 400 天的审计记录。
+# Retention of the time-partitioned tables: rows are kept at least this long.
+# Only whole expired partitions are dropped, so rows may stay up to one more
+# partition period (a day for daily tables, about a month for monthly ones).
+# Unset (zero) uses the default shown; daily-partitioned tables (request_logs,
+# metrics_history_points, response_turns) cap at 87600h. Upgrading reaps
+# response turns older than 30 days and audit records older than 400 days
+# unless these are raised first.
+# 按时间分区的表的保留期：数据至少保留这么久。只整段删除过期分区，因此最多多留一个分区
+# 周期（按天的表 1 天，按月的表约 1 个月）。不设（为零）时采用下列默认值；按天分区的表
+# （request_logs、metrics_history_points、response_turns）上限 87600h。若不先调大，
+# 升级后会清理超过 30 天的对话轮次与超过 400 天的审计记录。
 # RequestLogRetention: 720h     # request_logs, 30 days
 # UsageRecordRetention: 9600h   # usage_records, 400 days
 # ResponseTurnRetention: 720h   # response_turns, 30 days

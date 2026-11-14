@@ -26,6 +26,8 @@ type Store struct {
 	seq      int64
 	// err, when set via SetErr, is returned by every call.
 	err error
+	// snapshotFaults, set via FailSnapshots, fails that many Snapshot calls.
+	snapshotFaults int
 }
 
 // NewStore returns an empty Store.
@@ -117,34 +119,74 @@ func (s *Store) Depth(context.Context) (int, error) {
 	return len(s.admitted), s.err
 }
 
-func (s *Store) BeginDispatch(_ context.Context, jobID, intent string, now time.Time) (bool, error) {
+func (s *Store) Snapshot(_ context.Context, jobID string) (jobqueue.Record, int, bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	ok, _, err := s.transition(jobID, jobqueue.StateQueued, "", false, func(r *jobqueue.Record) {
-		r.State, r.UpdatedAt = jobqueue.StateDispatching, now
-	})
-	if ok {
-		s.intents[jobID] = intent
+	if s.err != nil {
+		return jobqueue.Record{}, 0, false, s.err
 	}
-	return ok, err
+	if s.snapshotFaults > 0 {
+		s.snapshotFaults--
+		return jobqueue.Record{}, 0, false, errors.New("jobqueuetest: injected snapshot fault")
+	}
+	rec, ok := s.records[jobID]
+	return rec, s.positionLocked(jobID), ok, nil
 }
 
-func (s *Store) Requeue(_ context.Context, jobID, intent string, now time.Time) error {
+func (s *Store) BeginDispatch(_ context.Context, jobID, intent string, now time.Time) (jobqueue.BeginResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, _, err := s.transition(jobID, jobqueue.StateDispatching, intent, false, func(r *jobqueue.Record) {
-		r.State, r.UpdatedAt = jobqueue.StateQueued, now
-	})
-	return err
+	if s.err != nil {
+		return 0, s.err
+	}
+	rec, ok := s.records[jobID]
+	switch {
+	case !ok:
+		return jobqueue.BeginNotQueued, nil
+	case rec.State == jobqueue.StateDispatching && s.intents[jobID] == intent:
+		return jobqueue.Begun, nil
+	case rec.State != jobqueue.StateQueued:
+		return jobqueue.BeginNotQueued, nil
+	case rec.CancelRequested:
+		rec.State, rec.ErrorCode, rec.UpdatedAt = jobqueue.StateCancelled, jobqueue.CodeCancelled, now
+		s.records[jobID] = rec
+		delete(s.admitted, jobID)
+		return jobqueue.BeginCancelled, nil
+	}
+	rec.State, rec.UpdatedAt = jobqueue.StateDispatching, now
+	s.records[jobID] = rec
+	s.intents[jobID] = intent
+	return jobqueue.Begun, nil
 }
 
-func (s *Store) Dispatched(_ context.Context, jobID, intent string, b jobqueue.Binding, now time.Time) (bool, error) {
+func (s *Store) Requeue(_ context.Context, jobID, intent string, now time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	_, cancel, err := s.transition(jobID, jobqueue.StateDispatching, intent, true, func(r *jobqueue.Record) {
+	if s.err != nil {
+		return false, s.err
+	}
+	rec, ok := s.records[jobID]
+	if !ok || rec.State != jobqueue.StateDispatching || s.intents[jobID] != intent {
+		return false, nil
+	}
+	if rec.CancelRequested {
+		rec.State, rec.ErrorCode, rec.UpdatedAt = jobqueue.StateCancelled, jobqueue.CodeCancelled, now
+		s.records[jobID] = rec
+		delete(s.admitted, jobID)
+		return true, nil
+	}
+	rec.State, rec.UpdatedAt = jobqueue.StateQueued, now
+	s.records[jobID] = rec
+	return false, nil
+}
+
+func (s *Store) Dispatched(_ context.Context, jobID, intent string, b jobqueue.Binding, now time.Time) (jobqueue.DispatchResult, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	ok, cancel, err := s.transition(jobID, jobqueue.StateDispatching, intent, true, func(r *jobqueue.Record) {
 		r.State, r.Binding, r.UpdatedAt = jobqueue.StateDispatched, b, now
 	})
-	return cancel, err
+	return jobqueue.DispatchResult{Recorded: ok, CancelRequested: ok && cancel}, err
 }
 
 func (s *Store) Fail(_ context.Context, jobID string, from jobqueue.State, code string, now time.Time) (bool, error) {
@@ -190,12 +232,28 @@ func (s *Store) SetErr(err error) {
 	s.err = err
 }
 
+// FailSnapshots makes the next n Snapshot calls fail.
+func (s *Store) FailSnapshots(n int) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.snapshotFaults = n
+}
+
 // SetState forces a record's state, for tests that stage a crash mid-submit.
 func (s *Store) SetState(jobID string, state jobqueue.State) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	rec := s.records[jobID]
 	rec.State = state
+	s.records[jobID] = rec
+}
+
+// Age moves a record's creation time back by d, for tests of expiry.
+func (s *Store) Age(jobID string, d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rec := s.records[jobID]
+	rec.CreatedAt = rec.CreatedAt.Add(-d)
 	s.records[jobID] = rec
 }
 

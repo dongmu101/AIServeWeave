@@ -92,6 +92,6 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 //
 // DeleteUsageRecordsBefore 实现 store.UsageRecords。
 func (s *Store) DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
-	result, err := s.applyRetention(ctx, "usage_records", &model.UsageRecord{}, before)
+	result, err := s.applyRetention(ctx, "usage_records", before)
 	return result, translate(err)
 }

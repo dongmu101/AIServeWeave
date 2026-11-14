@@ -71,7 +71,7 @@ func (t *asynqTransport) Enqueue(ctx context.Context, jobID string, payload []by
 	// MaxRetry 必须为正：asynq 在询问错误是否算失败之前，就会把重试次数已达上限的任务归档，
 	// 因此零值会让第一次弹回就被归档。弹回从不增加重试次数。
 	_, err := t.client.EnqueueContext(ctx, asynq.NewTask(TaskType, payload),
-		asynq.TaskID(jobID), asynq.Queue(t.cfg.Queue), asynq.MaxRetry(3), asynq.Timeout(timeout))
+		asynq.TaskID(jobID), asynq.Queue(t.cfg.Queue), asynq.MaxRetry(20), asynq.Timeout(timeout))
 	return err
 }
 

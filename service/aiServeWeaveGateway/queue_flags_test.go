@@ -23,7 +23,7 @@ func TestValidateQueueFlagsRequiresRedis(t *testing.T) {
 
 func TestQueuesOffBuildNothing(t *testing.T) {
 	logger := slog.New(slog.DiscardHandler)
-	chat, err := buildChatQueue(nil, "r1", 0, 0, 0, 0, nil, logger)
+	chat, err := buildChatQueue(nil, "r1", "aisw-chat", 0, 0, 0, 0, nil, logger)
 	if err != nil || chat != nil {
 		t.Fatalf("chat queue with zero max wait = %v %v, want none", chat, err)
 	}

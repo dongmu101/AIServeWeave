@@ -30,7 +30,13 @@ import (
 //
 // Store 基于一个 gorm 连接实现 store.Store。
 type Store struct {
-	db               *gorm.DB
+	db *gorm.DB
+	// maintenance, when set, runs partition DDL (maintenance and dropping
+	// expired partitions) for a deployment whose runtime account has no DDL
+	// rights.
+	// maintenance 非空时负责执行分区 DDL（分区维护与删除过期分区），用于运行账号没有
+	// DDL 权限的部署。
+	maintenance      *gorm.DB
 	migrationTimeout time.Duration
 }
 
@@ -47,6 +53,18 @@ type Option func(*Store)
 // 把大表转换为分区表需要整表复制，表很大的部署需要调大它。
 func WithMigrationTimeout(d time.Duration) Option {
 	return func(s *Store) { s.migrationTimeout = d }
+}
+
+// WithMaintenanceDB runs partition DDL — creating future partitions and
+// dropping expired ones — on db instead of the main pool. It is for a
+// deployment whose runtime account has no DDL rights: db connects as an
+// account that may alter the partitioned tables (on PostgreSQL, their owner).
+//
+// WithMaintenanceDB 让分区 DDL（预建未来分区、删除过期分区）在 db 上执行，而不是主连接
+// 池。用于运行账号没有 DDL 权限的部署：db 以有权修改这些分区表的账号连接（PostgreSQL 上
+// 须是表的所有者）。
+func WithMaintenanceDB(db *gorm.DB) Option {
+	return func(s *Store) { s.maintenance = db }
 }
 
 // New returns a Store over db.
@@ -351,7 +369,7 @@ func (s *Store) AppendAudit(ctx context.Context, entry *model.AuditLog) error {
 //
 // DeleteAuditLogsBefore 实现 store.AuditRetention。
 func (s *Store) DeleteAuditLogsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
-	result, err := s.applyRetention(ctx, "audit_logs", &model.AuditLog{}, before)
+	result, err := s.applyRetention(ctx, "audit_logs", before)
 	return result, translate(err)
 }
 

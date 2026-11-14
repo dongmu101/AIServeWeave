@@ -90,8 +90,19 @@ func unixMilliOrZero(t time.Time) int64 {
 	return t.UnixMilli()
 }
 
+// maxUnixMilli is the last millisecond of year 9999, the largest instant
+// encoding/json can render. An Agent is authenticated but not trusted to send
+// sane timestamps, and one out of range would make every JSON view that
+// carries it fail to encode.
+//
+// maxUnixMilli 是 9999 年的最后一毫秒，即 encoding/json 能渲染的最大时刻。Agent 已认证，
+// 但不被信任一定会发送合理的时间戳，超出范围的值会让携带它的每个 JSON 视图编码失败。
+const maxUnixMilli = 253402300799999
+
+// timeFromUnixMilli decodes a wire timestamp; zero, negative or out-of-range
+// values decode as the zero time ("not reported").
 func timeFromUnixMilli(ms int64) time.Time {
-	if ms == 0 {
+	if ms <= 0 || ms > maxUnixMilli {
 		return time.Time{}
 	}
 	return time.UnixMilli(ms).UTC()

@@ -69,3 +69,23 @@ func PartitionLayoutForTest(db *gorm.DB, table string) (column string, names []s
 	}
 	return layout.column, names, catchAll, nil
 }
+
+// SetPartitionTuningForTest shrinks the delete batch and the periodic
+// catch-all move limit, and pins the clock migrations use, returning a func
+// that restores them.
+//
+// SetPartitionTuningForTest 调小删除批量与定时维护的兜底分区搬移上限，并固定迁移所用的
+// 时钟；返回恢复原值的函数。
+func SetPartitionTuningForTest(batch int, moveLimit int64, now func() time.Time) func() {
+	oldBatch, oldLimit, oldNow := deleteBatchSize, maxCatchAllMove, partitionMigrationNow
+	if batch > 0 {
+		deleteBatchSize = batch
+	}
+	if moveLimit > 0 {
+		maxCatchAllMove = moveLimit
+	}
+	if now != nil {
+		partitionMigrationNow = now
+	}
+	return func() { deleteBatchSize, maxCatchAllMove, partitionMigrationNow = oldBatch, oldLimit, oldNow }
+}

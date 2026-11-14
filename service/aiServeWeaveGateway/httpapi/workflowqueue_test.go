@@ -300,3 +300,32 @@ func TestQueuedImageGenerationTimesOutWhileStillQueued(t *testing.T) {
 		t.Fatalf("the timed-out generation is still pending: %v", pending)
 	}
 }
+
+// TestQueueStoreFailureIsNot404: a job this replica does not hold, while the
+// shared record cannot be read, must not be answered "no such job" — a
+// client would resubmit it.
+func TestQueueStoreFailureIsNot404(t *testing.T) {
+	shared := newSharedQueue()
+	queueA, _ := shared.replica(t, "replica-a", 8)
+	queueB, _ := shared.replica(t, "replica-b", 8)
+	srvA, hA := newServer(t, httpapi.Config{Workflows: templates(t), WorkflowQueue: queueA})
+	srvB, _ := newServer(t, httpapi.Config{Workflows: templates(t), WorkflowQueue: queueB})
+	connectNode(t, hA, "node-comfy", "comfy-1", workflowSnapshot("comfy-1"), workflowHandler)
+
+	var queued queuedJobBody
+	postJSON(t, srvA.URL+"/v1/workflows/text-to-image/runs", runBody, &queued)
+	shared.store.SetErr(errors.New("redis down"))
+	for _, path := range []string{"/v1/jobs/" + queued.JobID, "/v1/jobs/" + queued.JobID + "/artifacts"} {
+		var body struct {
+			Error struct {
+				Code string `json:"code"`
+			} `json:"error"`
+		}
+		if code := getJSON(t, srvB.URL+path, &body); code != http.StatusServiceUnavailable || body.Error.Code != "queue_unavailable" {
+			t.Fatalf("GET %s with Redis down = %d %+v, want 503 queue_unavailable", path, code, body)
+		}
+	}
+	if resp := postJSON(t, srvB.URL+"/v1/jobs/"+queued.JobID+"/cancel", "", &struct{}{}); resp.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("cancel with Redis down = %d, want 503", resp.StatusCode)
+	}
+}

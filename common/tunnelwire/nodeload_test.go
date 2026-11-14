@@ -82,3 +82,19 @@ func TestNodeLoadFromProtoSanitizes(t *testing.T) {
 		t.Fatalf("negative values not clamped: %+v", neg)
 	}
 }
+
+func TestNodeLoadDropsOutOfRangeTimestamps(t *testing.T) {
+	for _, ms := range []int64{-1, math.MaxInt64} {
+		got, _ := NodeLoadFromProto(&tunnelv1.NodeLoad{SampledUnixMs: ms})
+		if !got.SampledAt.IsZero() {
+			t.Fatalf("sampled_unix_ms %d decoded as %v, want not reported", ms, got.SampledAt)
+		}
+		if _, err := got.SampledAt.MarshalJSON(); err != nil {
+			t.Fatalf("decoded time does not encode: %v", err)
+		}
+	}
+	zeroTotal, _ := NodeLoadFromProto(&tunnelv1.NodeLoad{MemoryTotalBytes: ptr(int64(0)), MemoryAvailableBytes: ptr(int64(5))})
+	if zeroTotal.MemoryTotalBytes != nil {
+		t.Fatal("a zero total must decode as not reported")
+	}
+}

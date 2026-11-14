@@ -59,6 +59,6 @@ func (s *Store) ListRequestLogs(ctx context.Context, query store.ListQuery, filt
 //
 // DeleteRequestLogsBefore 实现 store.RequestLogs。
 func (s *Store) DeleteRequestLogsBefore(ctx context.Context, before time.Time) (store.RetentionResult, error) {
-	result, err := s.applyRetention(ctx, "request_logs", &model.RequestLog{}, before)
+	result, err := s.applyRetention(ctx, "request_logs", before)
 	return result, translate(err)
 }

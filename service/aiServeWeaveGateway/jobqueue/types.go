@@ -111,6 +111,28 @@ type Record struct {
 	UpdatedAt       time.Time
 }
 
+// BeginResult is the outcome of BeginDispatch.
+type BeginResult int
+
+const (
+	// Begun: the intent is recorded; the worker may submit.
+	Begun BeginResult = iota + 1
+	// BeginNotQueued: the job left the queue (dispatched, failed, cancelled
+	// or begun by another worker).
+	BeginNotQueued
+	// BeginCancelled: a cancel was pending, so the job is now cancelled.
+	BeginCancelled
+)
+
+// DispatchResult is the outcome of Dispatched.
+type DispatchResult struct {
+	// Recorded is false when the record no longer matched (it expired, or a
+	// redelivery already decided the job): the binding was not written.
+	Recorded bool
+	// CancelRequested: a cancel arrived while the submit was in flight.
+	CancelRequested bool
+}
+
 // CancelResult is the outcome of Cancel.
 type CancelResult int
 

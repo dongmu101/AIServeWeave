@@ -83,7 +83,7 @@ func (f partitionFixture) load(t *testing.T, ctx context.Context, db *gorm.DB, s
 		}
 	}
 	for _, entry := range []model.AuditLog{
-		{ID: "aud_old", TenantID: "tnt_p", ActorID: "usr_p", Action: "x.old", CreatedAt: f.now.AddDate(0, 0, -60)},
+		{ID: "aud_old", TenantID: "tnt_p", ActorID: "usr_p", Action: "x.old", CreatedAt: f.now.AddDate(0, 0, -90)},
 		{ID: "aud_recent", TenantID: "tnt_p", ActorID: "usr_p", Action: "x.recent", CreatedAt: f.now.Add(-time.Minute)},
 	} {
 		entry := entry
@@ -547,20 +547,28 @@ func TestLivePartitionRetention(t *testing.T) {
 		st, f, _ := upgradedDatabase(t, ctx, db)
 		_, before, _, _ := gormstore.PartitionLayoutForTest(db, "request_logs")
 
+		// Kept at least until the cutoff: every partition wholly before the
+		// cutoff's day is dropped, and that day's partition stays whole, so its
+		// morning row survives a midday cutoff and nothing is deleted row by row.
+		// 至少保留到截止时间：整个区间早于截止日的分区都被删除，截止日的分区整段保留，
+		// 因此中午的截止时间不会删掉当天上午的行，也没有逐行删除。
 		cutoff := f.day.Add(12 * time.Hour)
 		res, err := st.DeleteRequestLogsBefore(ctx, cutoff)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if res.RowsDeleted != 1 || res.PartitionsDropped < 2 {
-			t.Errorf("retention = %+v, want the history and earlier day partitions dropped and one boundary row deleted", res)
+		if res.RowsDeleted != 0 || res.PartitionsDropped < 2 {
+			t.Errorf("retention = %+v, want the history and earlier day partitions dropped and no row deletes", res)
 		}
-		var ids []string
-		for _, row := range snapshot(t, db, "request_logs") {
-			ids = append(ids, fmt.Sprint(row["id"]))
+		requestLogIDs := func() []string {
+			var ids []string
+			for _, row := range snapshot(t, db, "request_logs") {
+				ids = append(ids, fmt.Sprint(row["id"]))
+			}
+			return ids
 		}
-		if want := []string{"req_d_pm", "req_today"}; !reflect.DeepEqual(ids, want) {
-			t.Errorf("surviving request logs = %v, want %v", ids, want)
+		if got, want := requestLogIDs(), []string{"req_d_am", "req_d_pm", "req_today"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("surviving request logs = %v, want %v", got, want)
 		}
 		_, after, _, _ := gormstore.PartitionLayoutForTest(db, "request_logs")
 		if hasPartitionFor(after, f.day.AddDate(0, 0, -1)) || !hasPartitionFor(after, f.day) {
@@ -568,6 +576,20 @@ func TestLivePartitionRetention(t *testing.T) {
 		}
 		if int64(len(before)-len(after)) != res.PartitionsDropped {
 			t.Errorf("dropped %d partitions, catalog shrank by %d", res.PartitionsDropped, len(before)-len(after))
+		}
+
+		// A late row older than every remaining partition (PostgreSQL routes it
+		// to the default partition, MySQL to its lowest partition) is deleted
+		// row by row.
+		// 早于所有剩余分区的迟到行（PostgreSQL 落入默认分区，MySQL 落入最低分区）按行删除。
+		if err := st.CreateRequestLogs(ctx, []model.RequestLog{{ID: "req_late", TenantID: "tnt_p", KeyDisplay: "k", Endpoint: "chat", StatusCode: 200, Outcome: "ok", CreatedAt: f.day.AddDate(0, 0, -50)}}); err != nil {
+			t.Fatal(err)
+		}
+		if res, err := st.DeleteRequestLogsBefore(ctx, cutoff); err != nil || res.RowsDeleted != 1 || res.PartitionsDropped != 0 {
+			t.Errorf("stray-row retention = %+v, %v; want exactly the late row deleted", res, err)
+		}
+		if got, want := requestLogIDs(), []string{"req_d_am", "req_d_pm", "req_today"}; !reflect.DeepEqual(got, want) {
+			t.Errorf("request logs after the stray pass = %v, want %v", got, want)
 		}
 
 		// Two replicas sweeping at once both succeed and leave nothing expired.
@@ -587,14 +609,14 @@ func TestLivePartitionRetention(t *testing.T) {
 			t.Fatalf("concurrent retention errors: %v, %v", errs[0], errs[1])
 		}
 		var expired int64
-		db.Model(&model.RequestLog{}).Where("created_at < ?", next).Count(&expired)
+		db.Model(&model.RequestLog{}).Where("created_at < ?", dayStart(next)).Count(&expired)
 		if expired != 0 {
 			t.Errorf("%d expired rows remain after concurrent retention", expired)
 		}
 
 		// Reaped turns read back as unknown; audit history ages out too.
 		// 被回收的轮次读取时等同未知；审计历史同样会过期清理。
-		if res, err := st.DeleteResponseTurnsBefore(ctx, f.day.Add(10*time.Hour)); err != nil || res.PartitionsDropped+res.RowsDeleted == 0 {
+		if res, err := st.DeleteResponseTurnsBefore(ctx, f.day.AddDate(0, 0, 1).Add(time.Hour)); err != nil || res.PartitionsDropped == 0 {
 			t.Fatalf("DeleteResponseTurnsBefore = %+v, %v", res, err)
 		}
 		if _, err := st.GetResponseTurn(ctx, "tnt_p", "resp_old"); !errors.Is(err, store.ErrNotFound) {
@@ -603,7 +625,7 @@ func TestLivePartitionRetention(t *testing.T) {
 		if _, err := st.GetResponseTurn(ctx, "tnt_p", "resp_new"); err != nil {
 			t.Errorf("kept turn read = %v", err)
 		}
-		if res, err := st.DeleteAuditLogsBefore(ctx, f.now.AddDate(0, 0, -30)); err != nil || res.PartitionsDropped+res.RowsDeleted == 0 {
+		if res, err := st.DeleteAuditLogsBefore(ctx, f.now.AddDate(0, 0, -30)); err != nil || res.PartitionsDropped == 0 {
 			t.Fatalf("DeleteAuditLogsBefore = %+v, %v", res, err)
 		}
 		page, err := st.ListAudit(ctx, "tnt_p", store.ListQuery{}, store.AuditFilter{})
@@ -617,10 +639,10 @@ func TestLivePartitionRetention(t *testing.T) {
 		if strings.Contains(strings.Join(audit, ","), "aud_old") || len(audit) != 2 {
 			t.Errorf("audit after retention = %v, want aud_null and aud_recent", audit)
 		}
-		if res, err := st.DeleteUsageRecordsBefore(ctx, f.now.AddDate(0, 0, -30)); err != nil || res.PartitionsDropped+res.RowsDeleted == 0 {
+		if res, err := st.DeleteUsageRecordsBefore(ctx, f.now.AddDate(0, 0, -30)); err != nil || res.PartitionsDropped == 0 {
 			t.Fatalf("DeleteUsageRecordsBefore = %+v, %v", res, err)
 		}
-		if res, err := st.DeleteRollupBefore(ctx, f.day); err != nil || res.PartitionsDropped+res.RowsDeleted == 0 {
+		if res, err := st.DeleteRollupBefore(ctx, f.day); err != nil || res.PartitionsDropped == 0 {
 			t.Fatalf("DeleteRollupBefore = %+v, %v", res, err)
 		}
 		if err := st.CheckSchema(ctx); err != nil {

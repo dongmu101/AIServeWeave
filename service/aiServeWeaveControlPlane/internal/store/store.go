@@ -553,18 +553,22 @@ type Audit interface {
 // AuditRetention 清理超出保留期的审计记录。它与 Audit 分开，使 logic 与 handler 取用
 // 的接口依然没有删除方法：只有保留期清理协程装配这一个接口。
 type AuditRetention interface {
-	// DeleteAuditLogsBefore removes every record older than before.
+	// DeleteAuditLogsBefore ages out records older than before, with
+	// DeleteRequestLogsBefore's "kept at least until before" contract.
 	//
-	// DeleteAuditLogsBefore 删除每一条早于 before 的记录。
+	// DeleteAuditLogsBefore 清理早于 before 的记录，契约与 DeleteRequestLogsBefore
+	// 相同：「至少保留到 before」。
 	DeleteAuditLogsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
 // RetentionResult reports one retention pass over a time-partitioned table:
 // whole partitions dropped (their rows are not counted, since counting would
-// scan them) and rows deleted from the partition straddling the cutoff.
+// scan them) and rows deleted one by one (stray rows outside the dropped
+// partitions, or every expired row when partition DDL is not possible).
 //
 // RetentionResult 报告对一张按时间分区的表执行的一次保留期清理：整段删除的分区数（不
-// 统计其中的行数，计数本身就要扫描），以及从跨越截止时间的分区中删除的行数。
+// 统计其中的行数，计数本身就要扫描），以及逐行删除的行数（不在被删分区里的零散行，或在
+// 无法执行分区 DDL 时的全部过期行）。
 type RetentionResult struct {
 	PartitionsDropped int64
 	RowsDeleted       int64
@@ -783,11 +787,12 @@ type ResponseTurns interface {
 	//
 	// GetResponseTurn 按 id 读取一轮，并限定在其租户范围内。
 	GetResponseTurn(ctx context.Context, tenantID, id string) (model.ResponseTurn, error)
-	// DeleteResponseTurnsBefore removes every turn older than before, for the
-	// retention sweeper. A reaped turn reads back as unknown.
+	// DeleteResponseTurnsBefore ages out turns older than before, for the
+	// retention sweeper, with DeleteRequestLogsBefore's "kept at least until
+	// before" contract. A reaped turn reads back as unknown.
 	//
-	// DeleteResponseTurnsBefore 删除每一轮早于 before 的记录，供保留期清理协程
-	// 使用。被回收的轮次读取时等同未知。
+	// DeleteResponseTurnsBefore 清理早于 before 的轮次，供保留期清理协程使用，契约与
+	// DeleteRequestLogsBefore 相同：「至少保留到 before」。被回收的轮次读取时等同未知。
 	DeleteResponseTurnsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
@@ -829,11 +834,15 @@ type RequestLogs interface {
 	//
 	// ListRequestLogs 读取一页，最新的在前。
 	ListRequestLogs(ctx context.Context, query ListQuery, filter RequestLogFilter) (Page[model.RequestLog], error)
-	// DeleteRequestLogsBefore removes every row older than before, for the
-	// retention sweeper.
+	// DeleteRequestLogsBefore ages out rows older than before, for the
+	// retention sweeper. Rows at or after before are always kept; a
+	// partitioned implementation may also keep the older rows that share a
+	// partition with before, dropping only whole partitions ("kept at least
+	// until before").
 	//
-	// DeleteRequestLogsBefore 删除每一行早于 before 的记录，供保留期清理协程
-	// 使用。
+	// DeleteRequestLogsBefore 清理早于 before 的记录，供保留期清理协程使用。不早于
+	// before 的行一定保留；分区实现还可能保留与 before 同处一个分区的较早行，只整段
+	// 删除分区（「至少保留到 before」）。
 	DeleteRequestLogsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
@@ -896,11 +905,12 @@ type UsageRecords interface {
 	// SummarizeUsage 把 usage_records 聚合成 filter 窗口内每个 (tenant,
 	// model) 分组一行——即结算查询。
 	SummarizeUsage(ctx context.Context, filter UsageRecordFilter) ([]UsageSummary, error)
-	// DeleteUsageRecordsBefore removes every row older than before, for the
-	// retention sweeper.
+	// DeleteUsageRecordsBefore ages out rows older than before, for the
+	// retention sweeper, with DeleteRequestLogsBefore's "kept at least until
+	// before" contract.
 	//
-	// DeleteUsageRecordsBefore 删除每一行早于 before 的记录，供保留期清理
-	// 协程使用。
+	// DeleteUsageRecordsBefore 清理早于 before 的记录，供保留期清理协程使用，契约与
+	// DeleteRequestLogsBefore 相同：「至少保留到 before」。
 	DeleteUsageRecordsBefore(ctx context.Context, before time.Time) (RetentionResult, error)
 }
 
