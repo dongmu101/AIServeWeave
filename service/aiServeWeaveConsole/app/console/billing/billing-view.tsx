@@ -266,21 +266,28 @@ export function BillingView({ role, returning, alipayReturning = false, ezfpRetu
     if (alipayReturning && hasPresaleIntent()) setTab("presales");
   }, [alipayReturning, setTab]);
 
+  // Account purchases are paid directly, not from the credit balance, so the
+  // credit heading and balance are left out there to avoid suggesting they are.
+  // 账号购买直接付款、不扣点数余额，因此这些分区不显示点数说明与余额，以免造成误解。
+  const accountTab = tab === "presales" || tab === "accounts";
+
+  const portal = Boolean(data?.hasCustomer && canPurchase);
+
   return <div className="grid gap-6">
-    <div className="flex flex-wrap items-start justify-between gap-3">
-      <div className="min-w-0">
+    {accountTab && !portal ? null : <div className={`flex flex-wrap items-start gap-3 ${accountTab ? "justify-end" : "justify-between"}`}>
+      {accountTab ? null : <div className="min-w-0">
         <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.billing" /></h1>
         <p className="text-sm text-muted-foreground"><Message id="tenant.billingDescription" /></p>
         <p className="text-sm text-muted-foreground"><Message id="site.purchaseNote" values={{
           terms: <Link href="/terms" target="_blank" className="font-medium text-accent-foreground underline underline-offset-4"><Message id="site.terms" /></Link>,
           refund: <Link href="/refund" target="_blank" className="font-medium text-accent-foreground underline underline-offset-4"><Message id="site.refund" /></Link>,
         }} /></p>
-      </div>
-      {data?.hasCustomer && canPurchase ? <PortalButton /> : null}
-    </div>
+      </div>}
+      {portal ? <PortalButton /> : null}
+    </div>}
     {overview.errorKind === "not_found" && !polled ? <BillingDisabled /> : overview.error && !polled ? <ErrorState message={overview.error} onRetry={overview.reload} /> : !data ? <LoadingState label={t("tenant.loadingBilling")} rows={4} /> : <>
       {returnState ? <ReturnNotice state={returnState} presale={returnedPresale} /> : null}
-      <BalanceSummary overview={data} canPurchase={canPurchase} />
+      {accountTab ? (!canPurchase ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingPurchaseOwnerOnly" /></p> : null) : <BalanceSummary overview={data} canPurchase={canPurchase} />}
       <Tabs value={tab} onValueChange={(next) => { if (isBillingTab(next)) setTab(next); }}>
         <TabsList aria-label={t("tenant.billingSections")} className="h-auto! w-full flex-wrap justify-start sm:w-fit">
           {offered.map((value) => <TabsTrigger key={value} value={value} className="flex-none px-3"><Message id={TAB_KEYS[value]} /></TabsTrigger>)}
