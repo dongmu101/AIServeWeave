@@ -357,9 +357,11 @@ function PortalButton() {
 }
 
 /** BalanceSummary shows the balance and the mode, with what either means
- * for requests right now.
+ * for requests right now. An exempt tenant is not told it is exempt: the
+ * mode badge is left out for it on this purchase page.
  *
- * BalanceSummary 展示余额与计费模式，以及两者此刻对请求意味着什么。 */
+ * BalanceSummary 展示余额与计费模式，以及两者此刻对请求意味着什么。免计费租户不在
+ * 购买页上看到计费模式与免计费说明。 */
 function BalanceSummary({ overview, canPurchase }: { overview: BillingOverview; canPurchase: boolean }) {
   const { t, locale } = useI18n();
   const exempt = overview.mode === "exempt";
@@ -370,12 +372,11 @@ function BalanceSummary({ overview, canPurchase }: { overview: BillingOverview; 
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingBalance" /></dt>
           <dd className="font-heading text-2xl font-semibold break-all">{t("tenant.billingCreditsValue", { credits: formatCredits(overview.balanceMicro, locale) })}</dd>
         </div>
-        <div className="grid gap-1.5">
+        {exempt ? null : <div className="grid gap-1.5">
           <dt className="text-xs text-muted-foreground"><Message id="tenant.billingMode" /></dt>
-          <dd><Badge variant={exempt ? "secondary" : "outline"}>{overview.mode === "account_monthly" ? t("tenant.billingModeAccountMonthly") : exempt ? t("tenant.billingModeExempt") : t("tenant.billingModePrepaid")}</Badge></dd>
-        </div>
+          <dd><Badge variant="outline">{overview.mode === "account_monthly" ? t("tenant.billingModeAccountMonthly") : t("tenant.billingModePrepaid")}</Badge></dd>
+        </div>}
       </dl>
-      {exempt ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingExemptNote" /></p> : null}
       {!exempt && overview.blocked ? <p role="alert" className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm font-medium text-destructive"><Message id="tenant.billingBlocked" /></p> : null}
       {!canPurchase ? <p className="text-sm text-muted-foreground"><Message id="tenant.billingPurchaseOwnerOnly" /></p> : null}
     </CardContent>
