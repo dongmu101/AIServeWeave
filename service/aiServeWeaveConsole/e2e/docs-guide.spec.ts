@@ -30,7 +30,7 @@ for (const width of [1440, 390, 320]) {
     await expect(claude.getByRole("tabpanel")).toContainText("ANTHROPIC_BASE_URL=http://127.0.0.1:1");
     await expect(claude.getByRole("tabpanel")).toContainText("ANTHROPIC_MODEL=guide-model");
     await expect(page.locator("#codex").getByRole("tabpanel")).toContainText('base_url = "http://127.0.0.1:1/v1"');
-    await expect(page.getByRole("navigation", { name: "本页内容" }).getByRole("link")).toHaveCount(6);
+    await expect(page.getByRole("navigation", { name: "本页内容" }).getByRole("link")).toHaveCount(7);
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(width + 1);
   });
 }

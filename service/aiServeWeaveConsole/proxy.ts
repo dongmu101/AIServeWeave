@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from "next/server";
 
 import { OPERATOR_COOKIE } from "@/lib/console/operator-session";
 import { loginPath } from "@/lib/console/internal-path";
+import { isPublicDocsPage, PUBLIC_DOCS_HEADER } from "@/lib/console/public-docs";
 import { SESSION_COOKIE } from "@/lib/console/session-payload";
 
 /**
@@ -37,10 +38,22 @@ export function proxy(request: NextRequest): NextResponse {
     headers.set("x-aisw-operator-return", target);
     return NextResponse.next({ request: { headers } });
   }
-  if (request.cookies.has(SESSION_COOKIE)) {
-    return NextResponse.next();
-  }
   const { pathname, search } = request.nextUrl;
+  // The API reference is public. The hint tells the layout it may render the
+  // page without a session; it is overwritten or stripped on every request,
+  // so a browser cannot set it on any other console page.
+  //
+  // API 参考文档是公开的。该提示告诉布局可以在没有会话时渲染此页面；每次请求都会覆盖
+  // 或移除它，因此浏览器无法在其他控制台页面上设置它。
+  const headers = new Headers(request.headers);
+  if (isPublicDocsPage(pathname)) {
+    headers.set(PUBLIC_DOCS_HEADER, "1");
+    return NextResponse.next({ request: { headers } });
+  }
+  headers.delete(PUBLIC_DOCS_HEADER);
+  if (request.cookies.has(SESSION_COOKIE)) {
+    return NextResponse.next({ request: { headers } });
+  }
   return NextResponse.redirect(
     new URL(loginPath(`${pathname}${search}`), request.url)
   );

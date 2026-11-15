@@ -151,8 +151,8 @@ go run ./service/aiServeWeaveGateway \
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型单价、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind`、`available` 与剩余名额数 `remaining`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
-| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`、`/admin/v1/api-docs*`（只读）；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账；结账、门户、退款只在配置 Dodo 时挂载，`/admin/v1/billing/alipay*` 只在 `Billing.Alipay.Enabled` 时挂载），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`、只读 `GET /admin/v1/api-docs*`（仅已发布页面）；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型单价、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind`、`available` 与剩余名额数 `remaining`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
+| 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账；结账、门户、退款只在配置 Dodo 时挂载，`/admin/v1/billing/alipay*` 只在 `Billing.Alipay.Enabled` 时挂载），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
 | InternalToken | `POST /internal/v1/apikeys/verify`、`GET /internal/v1/apikeys/revocations/watch`、`/internal/v1/jobs*`（STATUS.md 的 P06/J04/J06，见「吊销的生效路径」与「Job 持久化契约」） |
@@ -1119,8 +1119,8 @@ api_docs(
 
 | 方法 | 路径 | 守卫 | 说明 |
 | --- | --- | --- | --- |
-| GET | `/admin/v1/api-docs` | 租户会话 | 已发布文档的导航条目（不含正文） |
-| GET | `/admin/v1/api-docs/:slug` | 租户会话 | 单页完整内容；草稿与不存在一样返回 404 |
+| GET | `/admin/v1/api-docs` | 公开 | 已发布文档的导航条目（不含正文） |
+| GET | `/admin/v1/api-docs/:slug` | 公开 | 单页完整内容；草稿与不存在一样返回 404 |
 | GET | `/operator/v1/api-docs`、`/operator/v1/api-docs/:slug` | 平台会话 | 含草稿、来源、版本与 `seeded` |
 | POST | `/operator/v1/api-docs` | 平台会话 | 新建，slug 已存在返回 409 |
 | PUT | `/operator/v1/api-docs/:slug` | 平台会话 | 整页替换，须带 `expected_version`，版本不符返回 409 |

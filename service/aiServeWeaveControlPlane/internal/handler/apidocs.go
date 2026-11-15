@@ -15,10 +15,9 @@ import (
 )
 
 // listAPIDocs handles GET /admin/v1/api-docs: every published page's
-// navigation entry, for any signed-in tenant user.
+// navigation entry. Public: it needs no session.
 //
-// listAPIDocs 处理 GET /admin/v1/api-docs：所有已发布页面的导航条目，任何已登录的
-// 租户用户均可读取。
+// listAPIDocs 处理 GET /admin/v1/api-docs：所有已发布页面的导航条目。公开，无需会话。
 func listAPIDocs(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		items, err := ctx.Logic.ListAPIDocs(r.Context())

@@ -96,15 +96,16 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		{Method: http.MethodPost, Path: "/operator/v1/workflow-templates/:id/publish", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/workflow-templates/:id/publish", requirePlatformSession(ctx, publishWorkflowTemplate(ctx)))},
 	}, rest.WithMaxBytes(workflowtemplate.MaxContentBytes))
 
-	// The tenant-facing API reference: any tenant session reads published
-	// pages; platform operators manage them. Writes take whole pages, hence
-	// their own body bound.
+	// The tenant-facing API reference: published pages are public, so a
+	// visitor can read them before signing in (drafts stay invisible, and no
+	// page carries tenant data); platform operators manage them. Writes take
+	// whole pages, hence their own body bound.
 	//
-	// 面向租户的 API 参考文档：任何租户会话都可读取已发布页面，平台运维负责管理。
-	// 写入接收的是整页内容，因此单独设置请求体上限。
+	// 面向租户的 API 参考文档：已发布页面公开，访客登录前即可阅读（草稿仍不可见，页面不含
+	// 任何租户数据）；平台运维负责管理。写入接收的是整页内容，因此单独设置请求体上限。
 	server.AddRoutes([]rest.Route{
-		{Method: http.MethodGet, Path: "/admin/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs", requireSession(ctx, listAPIDocs(ctx)))},
-		{Method: http.MethodGet, Path: "/admin/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs/:slug", requireSession(ctx, getAPIDoc(ctx)))},
+		{Method: http.MethodGet, Path: "/admin/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs", listAPIDocs(ctx))},
+		{Method: http.MethodGet, Path: "/admin/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/api-docs/:slug", getAPIDoc(ctx))},
 		{Method: http.MethodGet, Path: "/operator/v1/api-docs", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs", requirePlatformSession(ctx, operatorListAPIDocs(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/api-docs/:slug", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug", requirePlatformSession(ctx, operatorGetAPIDoc(ctx)))},
 		{Method: http.MethodPost, Path: "/operator/v1/api-docs/:slug/reset", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/api-docs/:slug/reset", requirePlatformSession(ctx, resetAPIDoc(ctx)))},

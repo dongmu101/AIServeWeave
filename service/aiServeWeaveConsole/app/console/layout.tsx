@@ -1,7 +1,11 @@
 import type * as React from "react";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 import { ConsoleShell } from "@/app/console/console-shell";
+import { SiteFooter } from "@/components/site/site-footer";
+import { SiteHeader } from "@/components/site/site-header";
+import { PUBLIC_DOCS_HEADER, PUBLIC_DOCS_ROOT } from "@/lib/console/public-docs";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -21,6 +25,13 @@ import { readSession } from "@/lib/server/session";
  *
  * 本布局是动态的，这是后果而非声明：读取 cookie 会让该路由退出预渲染，而这正是一个
  * 已认证视图本来就需要的。
+ *
+ * The API reference is the one exception: a visitor without a session reads
+ * it inside the public site frame instead of being sent to sign-in. Its data
+ * is public on the control plane too, so nothing behind it needs a session.
+ *
+ * API 参考文档是唯一的例外：没有会话的访客在公开站点框架内阅读它，而不是被送去登录。
+ * 它的数据在控制面上同样是公开的，因此其背后没有任何东西需要会话。
  */
 export default async function ConsoleLayout({
   children,
@@ -29,6 +40,15 @@ export default async function ConsoleLayout({
 }) {
   const session = await readSession();
   if (!session) {
+    if ((await headers()).get(PUBLIC_DOCS_HEADER) === "1") {
+      return (
+        <>
+          <SiteHeader signInNext={PUBLIC_DOCS_ROOT} />
+          <main className="mx-auto w-full max-w-[96rem] flex-1 px-4 py-6 sm:px-8">{children}</main>
+          <SiteFooter />
+        </>
+      );
+    }
     redirect("/login");
   }
 

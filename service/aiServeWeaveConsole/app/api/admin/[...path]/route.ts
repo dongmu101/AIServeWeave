@@ -1,3 +1,4 @@
+import { isPublicDocsRead } from "@/lib/console/public-docs";
 import { isTrustedWrite } from "@/lib/console/request-origin";
 import { resolveUpstream } from "@/lib/console/upstream-routes";
 import { callControlPlane } from "@/lib/server/control-plane";
@@ -74,13 +75,16 @@ async function forward(
   context: RouteContext
 ): Promise<Response> {
   const session = await readSession();
-  if (!session) {
-    return errorResponse(401, "unauthorized");
-  }
-
   const url = new URL(request.url);
   const { path } = await context.params;
   const upstream = resolveUpstream(request.method, path, url.searchParams);
+  // The API reference reads are public, so they go out without a session;
+  // every other call needs one.
+  //
+  // API 参考文档的读取是公开的，因此不带会话也会发出；其他调用都需要会话。
+  if (!session && !(upstream && isPublicDocsRead(request.method, upstream.path))) {
+    return errorResponse(401, "unauthorized");
+  }
   if (!upstream) {
     // An unlisted call is answered as not found rather than forbidden: the
     // Console has no such endpoint, and saying "forbidden" would suggest the
@@ -115,14 +119,14 @@ async function forward(
     method: request.method,
     path: upstream.path,
     search: upstream.search,
-    token: session.token,
+    token: session?.token,
     body,
   });
   if (result.kind !== "response") {
     return errorResponse(result.kind === "timeout" ? 504 : 502, "upstream");
   }
 
-  if (result.status === 401) {
+  if (result.status === 401 && session) {
     // The control plane rejected the token this session holds, so the session
     // is over: clearing it here means the next page load goes to sign-in
     // rather than rendering a shell whose every request will fail.
