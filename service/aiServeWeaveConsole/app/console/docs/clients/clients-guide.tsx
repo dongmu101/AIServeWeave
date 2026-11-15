@@ -93,6 +93,51 @@ codex`,
     ],
   },
   {
+    id: "deepseek-harness",
+    protocol: "OpenAI / Anthropic",
+    title: "DeepSeek Harness",
+    body: "tenant.docsClientDeepseekHarnessBody",
+    codes: ["/v1/chat/completions", "$DSH_HOME/profiles/web/cordis.patch.yml"],
+    tabs: [
+      {
+        key: "yaml",
+        label: "cordis.patch.yml",
+        code: `- id: llm-pi-ai
+  config:
+    providers:
+      gateway:
+        apiKeyEnv: GATEWAY_API_KEY
+        api: openai-completions
+        baseURL: {{BASE_URL}}/v1
+        models:
+          - id: {{MODEL}}`,
+      },
+      {
+        key: "claude",
+        label: "Claude",
+        code: `# Claude models need the @huahao/dsh-llm-claude plugin
+# model ids must start with claude-
+- id: llm-pi-ai
+  config:
+    providers:
+      gateway:
+        apiKeyEnv: GATEWAY_API_KEY
+        api: anthropic-messages
+        baseURL: {{BASE_URL}}
+        models:
+          - id: {{MODEL}}`,
+      },
+      {
+        key: "shell",
+        label: "Shell",
+        code: `export GATEWAY_API_KEY={{API_KEY}}
+# only for Claude models
+npx @deepseek-ai/dsh plugin --profile web add @huahao/dsh-llm-claude
+npx @deepseek-ai/dsh web`,
+      },
+    ],
+  },
+  {
     id: "cc-switch",
     protocol: "Deep link",
     title: "CC Switch",

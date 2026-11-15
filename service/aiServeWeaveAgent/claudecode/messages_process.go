@@ -286,6 +286,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 			extra["tools"] = []any{}
 		}
 		delete(extra, "safeguards")
+		renameNativeTools(extra, s.request.nativeToolAliases())
 	}
 	if guarded {
 		extra["safeguards"] = s.request.Safeguards
@@ -412,6 +413,10 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	var rejection error
 	finished, active, blockActive := false, false, false
 	native := s.request.isNative()
+	// aliases are the upstream names this round gave caller tools (see
+	// nativeToolAliases); each tool_use is renamed back before it is sent.
+	// aliases 是本回合给调用方工具的上游名（见 nativeToolAliases）；每个 tool_use 在发送前改回原名。
+	aliases := s.request.nativeToolAliases()
 	showThinking := s.request.thinkingBudget() > 0 || (native && nativeThinkingEnabled(s.request.Thinking))
 	index, publicIndex := 0, 0
 	seenIDs := make(map[string]bool)
@@ -545,8 +550,18 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						expected := "mcp__aisw_bridge__" + bridgeToolName(i)
 						if native {
 							expected = t.Name
+							if alias, ok := aliases[t.Name]; ok {
+								expected = alias
+							}
 						}
 						if current.Name == expected {
+							if native && expected != t.Name {
+								restored, ok := restoreToolUseName(envelope.Event, t.Name)
+								if !ok {
+									return nil, protocolError("invalid_stream_event")
+								}
+								envelope.Event = restored
+							}
 							current.Name = t.Name
 							found = true
 						}

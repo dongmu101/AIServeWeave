@@ -624,9 +624,7 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 				w.WriteHeader(http.StatusBadGateway)
 				return
 			}
-			for key, value := range override {
-				seed[key] = value
-			}
+			mergeNativeRequest(seed, override)
 			var err error
 			replacement, err = encodeMessagesJSON(seed)
 			if err != nil || len(replacement) > maxCapturedRequestBytes {

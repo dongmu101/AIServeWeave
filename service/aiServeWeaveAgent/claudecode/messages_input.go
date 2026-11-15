@@ -3,6 +3,7 @@ package claudecode
 import (
 	"bytes"
 	"encoding/json"
+	"slices"
 
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 )
@@ -25,8 +26,16 @@ func encodeMessagesJSON(value any) ([]byte, error) {
 // streamed API call through the per-process proxy, after CLI authentication.
 // nativeInputSettings 限制设置文件大小；大文档在 CLI 完成认证后，经每进程代理进入
 // 同一次流式 API 调用，完整历史不放入进程环境或受限的设置文件。
+//
+// system and metadata never enter the settings: the CLI would let them
+// replace its own identity blocks and user_id before the proxy sees the
+// request, so they reach the proxy instead, which merges them with what the
+// CLI sent (see mergeNativeRequest).
+//
+// system 与 metadata 从不进入设置文件：CLI 会让它们在代理看到请求之前替换掉 CLI 自己的身份块
+// 与 user_id，因此改由代理接收，并与 CLI 发出的内容合并（见 mergeNativeRequest）。
 func nativeInputSettings(extra map[string]any) (settings, request []byte, err error) {
-	body, err := encodeMessagesJSON(extra)
+	body, err := encodeMessagesJSON(withoutKeys(extra, "system", "metadata"))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -34,8 +43,27 @@ func nativeInputSettings(extra map[string]any) (settings, request []byte, err er
 		return encodeMessagesJSON(map[string]any{"disableAllHooks": true, "autoMemoryEnabled": false, "env": map[string]string{"CLAUDE_CODE_EXTRA_BODY": string(body)}})
 	}
 	settings, err = encodeSettings(body)
-	if err != nil || len(settings) <= maxCLISettingsBytes {
-		return settings, nil, err
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(settings) <= maxCLISettingsBytes {
+		identity := make(map[string]any)
+		for _, key := range []string{"system", "metadata"} {
+			if value, ok := extra[key]; ok {
+				identity[key] = value
+			}
+		}
+		if len(identity) == 0 {
+			return settings, nil, nil
+		}
+		request, err = encodeMessagesJSON(identity)
+		if err != nil {
+			return nil, nil, err
+		}
+		if len(request) > maxRequestBytes {
+			return nil, nil, &attachmentFailure{attachments.ErrLimit}
+		}
+		return settings, request, nil
 	}
 	// betas belongs to the SDK header selector, not the HTTP JSON document.
 	// betas 属于 SDK 的请求头选择参数，不是 HTTP JSON 文档字段。
@@ -62,4 +90,16 @@ func nativeInputSettings(extra map[string]any) (settings, request []byte, err er
 	}
 	settings, err = encodeSettings(body)
 	return settings, request, err
+}
+
+// withoutKeys returns a shallow copy of fields without keys.
+// withoutKeys 返回去掉 keys 后的 fields 浅拷贝。
+func withoutKeys(fields map[string]any, keys ...string) map[string]any {
+	out := make(map[string]any, len(fields))
+	for key, value := range fields {
+		if !slices.Contains(keys, key) {
+			out[key] = value
+		}
+	}
+	return out
 }

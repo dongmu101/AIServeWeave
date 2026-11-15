@@ -862,6 +862,7 @@ const tenant = {
   "tenant.docsClientsIntro": "게이트웨이는 OpenAI, Anthropic, Ollama 프로토콜과 호환되므로 일반적인 도구는 기본 URL과 API Key만 바꾸면 됩니다. 예제의 {code}은(는) {link}에서 만든 키로 바꾸세요. 아래에 모델 이름을 입력하면 예제에 자동으로 반영됩니다.",
   "tenant.docsClientClaudeCodeBody": "Claude Code는 {code}을(를) 통해 모델을 호출합니다. 아래 환경 변수를 설정한 뒤 claude를 실행하거나, {code2}의 env 필드에 적어 계속 적용되게 할 수 있습니다. ANTHROPIC_MODEL은 생략할 수 있으며 기본 모델을 지정합니다.",
   "tenant.docsClientCodexBody": "Codex CLI는 {code}을(를) 통해 모델을 호출합니다. {code2}에 모델 제공자를 추가하고 env_key로 지정한 환경 변수에 API Key를 넣으세요.",
+  "tenant.docsClientDeepseekHarnessBody": "DeepSeek Harness(dsh)는 {code}을(를) 통해 모델을 호출합니다. Settings → Models에서 사용자 지정 모델 API를 추가하고 OpenAI Chat Completions 프로토콜을 선택하거나, {code2}에 제공자를 작성하고 apiKeyEnv로 지정한 환경 변수에 API Key를 넣으세요. Claude Code처럼 Claude 모델을 사용하려면 @huahao/dsh-llm-claude 플러그인을 설치하고 라우트 프로토콜을 Anthropic Messages로 설정하세요. 모델 id는 claude-로 시작해야 합니다.",
   "tenant.docsClientOpenaiSdkBody": "공식 Python·Node.js SDK에서는 base_url을 {code}(으)로 설정하기만 하면 되고 나머지 사용법은 같습니다. 코드를 바꾸지 않고 환경 변수 {code2}와 OPENAI_API_KEY만 설정할 수도 있습니다.",
   "tenant.docsClientAnthropicSdkBody": "base_url에는 기본 URL 자체를 넣으면 SDK가 {code2}을(를) 알아서 덧붙입니다. 실수로 {code}을(를) 붙여도 정상 동작합니다. API Key는 평소처럼 x-api-key 헤더로 보내면 됩니다.",
   "tenant.docsClientOllamaTitle": "Ollama 클라이언트",

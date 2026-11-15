@@ -862,6 +862,7 @@ const tenant = {
   "tenant.docsClientsIntro": "閘道相容 OpenAI、Anthropic 與 Ollama 協定，常見工具只需更換基底網址與 API Key。範例中的 {code} 請替換為在 {link} 建立的金鑰；在下方填入模型名稱後，範例會自動替換。",
   "tenant.docsClientClaudeCodeBody": "Claude Code 透過 {code} 呼叫模型。設定下列環境變數後執行 claude 即可；也可以寫入 {code2} 的 env 欄位長期生效。ANTHROPIC_MODEL 可省略，用於指定預設模型。",
   "tenant.docsClientCodexBody": "Codex CLI 透過 {code} 呼叫模型。在 {code2} 中新增一個模型提供者，並將 API Key 放入 env_key 指定的環境變數。",
+  "tenant.docsClientDeepseekHarnessBody": "DeepSeek Harness（dsh）透過 {code} 呼叫模型。在 Settings → Models 中新增自訂模型 API 並選擇 OpenAI Chat Completions 協定，或將提供者寫入 {code2}，並將 API Key 放入 apiKeyEnv 指定的環境變數。要像 Claude Code 一樣使用 Claude 模型，須安裝 @huahao/dsh-llm-claude 外掛，並將路由協定設為 Anthropic Messages；模型 id 須以 claude- 開頭。",
   "tenant.docsClientOpenaiSdkBody": "官方 Python 與 Node.js SDK 只要將 base_url 設為 {code}，其餘用法不變。也可以只設定環境變數 {code2} 與 OPENAI_API_KEY，不必修改程式碼。",
   "tenant.docsClientAnthropicSdkBody": "base_url 填入基底網址本身，SDK 會自行組合出 {code2}；誤加 {code} 也能正常存取。API Key 照常以 x-api-key 標頭送出即可。",
   "tenant.docsClientOllamaTitle": "Ollama 用戶端",
