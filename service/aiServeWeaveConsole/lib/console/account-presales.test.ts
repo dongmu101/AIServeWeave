@@ -130,7 +130,10 @@ test("refund reasons are required and bounded like the control plane's", () => {
 
 test("the public catalog lists presales with their kind and availability", () => {
   const catalog = parseCatalog({ packages: [], accounts: [], prices: [], presales: [{ id: "pre_a", kind: "codex", name: "Codex", price_minor: 900, currency: "EUR", available: false }] });
-  assert.deepEqual(catalog.presales, [{ id: "pre_a", kind: "codex", name: "Codex", priceMinor: 900, currency: "EUR", available: false }]);
+  assert.deepEqual(catalog.presales, [{ id: "pre_a", kind: "codex", name: "Codex", priceMinor: 900, currency: "EUR", available: false, remaining: null }]);
+  const counted = parseCatalog({ packages: [], accounts: [], prices: [], presales: [{ id: "pre_a", kind: "codex", name: "Codex", price_minor: 900, currency: "EUR", available: true, remaining: 3 }] });
+  assert.equal(counted.presales[0].remaining, 3);
+  assert.throws(() => parseCatalog({ packages: [], accounts: [], prices: [], presales: [{ id: "pre_a", kind: "codex", name: "Codex", price_minor: 900, currency: "EUR", available: true, remaining: -1 }] }));
   assert.deepEqual(parseCatalog({ packages: [], accounts: [], prices: [] }).presales, []);
   assert.throws(() => parseCatalog({ packages: [], accounts: [], prices: [], presales: [{ id: "pre_a", kind: "grok", name: "x", price_minor: 1, currency: "EUR", available: true }] }));
 });

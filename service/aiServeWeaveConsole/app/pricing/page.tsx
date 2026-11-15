@@ -135,10 +135,13 @@ export default async function PricingPage() {
                   <Card key={presale.id}>
                     <CardHeader>
                       <CardTitle className="wrap-anywhere">{presale.name}</CardTitle>
-                      <p className="text-sm text-muted-foreground">{accountKindLabel(presale.kind)} · {t("tenant.presaleBadge")}</p>
+                      <p className="text-sm text-muted-foreground">{accountKindLabel(presale.kind)}</p>
                     </CardHeader>
                     <CardContent className="grid gap-3">
                       <p className="text-sm text-muted-foreground">{t("tenant.presaleDelivery")}</p>
+                      {presale.available && presale.remaining !== null ? (
+                        <p className="text-sm font-medium">{t("pricing.remaining", { count: presale.remaining })}</p>
+                      ) : null}
                       <div className="flex items-center justify-between gap-3">
                         <p className="text-lg font-semibold">
                           {t("tenant.accountMonthlyPrice", { price: formatMoney(presale.priceMinor, presale.currency, locale) })}

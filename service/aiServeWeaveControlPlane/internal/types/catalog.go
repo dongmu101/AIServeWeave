@@ -29,9 +29,11 @@ type CatalogAccount struct {
 }
 
 // CatalogPresale is one listed presale; Available is false once its
-// capacity is taken. It carries no product id or counts.
+// capacity is taken, and Remaining is the number of places still open. It
+// carries no product id.
 //
-// CatalogPresale 是一个上架的预售；名额占满后 Available 为 false。不含产品 id 与数量。
+// CatalogPresale 是一个上架的预售；名额占满后 Available 为 false，Remaining 是仍未被占用
+// 的名额数。不含产品 id。
 type CatalogPresale struct {
 	ID         string `json:"id"`
 	Kind       string `json:"kind"`
@@ -39,6 +41,7 @@ type CatalogPresale struct {
 	PriceMinor int64  `json:"price_minor"`
 	Currency   string `json:"currency"`
 	Available  bool   `json:"available"`
+	Remaining  int    `json:"remaining"`
 }
 
 // CatalogPrice is one alias's price per million tokens, in micro-credits.

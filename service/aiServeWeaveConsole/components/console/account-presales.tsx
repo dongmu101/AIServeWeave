@@ -209,7 +209,7 @@ function PresaleCatalog({ resource, operator = false, canPurchase = false, metho
               <Badge variant="secondary" className="shrink-0">{accountKindLabel(presale.kind)}</Badge>
             </div>
             <div className="flex flex-wrap gap-2">
-              <Badge variant="outline"><Message id="tenant.presaleBadge" /></Badge>
+              {operator ? <Badge variant="outline"><Message id="tenant.presaleBadge" /></Badge> : null}
               {!presale.active ? <Badge variant="outline"><Message id="tenant.accountArchived" /></Badge> : null}
               {presale.active && !open ? <Badge variant="destructive"><Message id="tenant.presaleSoldOut" /></Badge> : null}
             </div>

@@ -137,7 +137,7 @@ func TestPresaleHTTPLifecycleAndSafeProjection(t *testing.T) {
 
 	catalog := serve(getCatalog(services), http.MethodGet, "/billing/v1/catalog", "", nil, nil)
 	body := catalog.Body.String()
-	if catalog.Code != 200 || !strings.Contains(body, `"presales":[{"id":"pre_on","kind":"claude","name":"Claude presale","price_minor":1500,"currency":"USD","available":true}]`) {
+	if catalog.Code != 200 || !strings.Contains(body, `"presales":[{"id":"pre_on","kind":"claude","name":"Claude presale","price_minor":1500,"currency":"USD","available":true,"remaining":1}]`) {
 		t.Fatal("catalog presales", body)
 	}
 	if strings.Contains(body, "pdt_presale_secret") || strings.Contains(body, "pre_off") {

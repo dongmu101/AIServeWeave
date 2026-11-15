@@ -77,7 +77,7 @@ const core = {
   "tenant.accountInsufficientCredit": "Créditos insuficientes. Recarga antes de comprar o renovar.",
   "tenant.accountCheckoutDisabled": "El pago en línea no está activado, por lo que ahora no se pueden comprar cuentas. Ponte en contacto con el operador de la plataforma.",
   "tenant.billingPaymentUnavailable": "El servicio de pagos no está disponible temporalmente. Inténtelo de nuevo más tarde.",
-  "tenant.presaleUnavailable": "La preventa ha agotado su cupo, su precio cambió o se archivó. Actualiza e inténtalo de nuevo.",
+  "tenant.presaleUnavailable": "Esta oferta ha agotado su cupo, su precio cambió o se archivó. Actualiza e inténtalo de nuevo.",
   "tenant.presaleAssignUnavailable": "No se puede asignar esta cuenta: está ocupada o en el pago de otro inquilino, su tipo no coincide, su nodo no está abierto a este inquilino o el pedido ya no está pendiente de entrega (por ejemplo, hay un reembolso en curso). Actualiza e inténtalo de nuevo.",
   "tenant.refundUnavailable": "Este pedido no se puede reembolsar ahora: puede que ya haya un reembolso en curso, que esté reembolsado por completo o que esté en disputa. Actualiza e inténtalo de nuevo."
 } as const;

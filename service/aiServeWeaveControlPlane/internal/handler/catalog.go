@@ -37,8 +37,11 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 			out.Accounts[i] = types.CatalogAccount{ID: a.ID, Kind: a.Kind, Name: a.Name, PriceMinor: a.PriceMinor, Currency: a.Currency}
 		}
 		for i, p := range c.Presales {
+			// A payment that settles after its hold may push Outstanding past
+			// Capacity; the catalog then shows no places left.
+			// 超过占用时长才完成的付款可能让 Outstanding 超过 Capacity，此时目录显示没有剩余名额。
 			out.Presales[i] = types.CatalogPresale{ID: p.ID, Kind: p.Kind, Name: p.Name, PriceMinor: p.PriceMinor, Currency: p.Currency,
-				Available: ctx.Logic.PresaleFiatAvailable(p)}
+				Available: ctx.Logic.PresaleFiatAvailable(p), Remaining: max(p.Capacity-p.Outstanding, 0)}
 		}
 		for i, p := range c.Prices {
 			out.Prices[i] = types.CatalogPrice{Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok}

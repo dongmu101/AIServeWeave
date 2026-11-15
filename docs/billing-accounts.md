@@ -130,7 +130,7 @@ Billing:
 
 分配请求只接受 `account_id`，返回 `200` 订单（运维视图）。订单不存在、不是预售订单或账号不存在返回 `404`；订单未付款、已分配、已退款、争议中或有进行中的退款，账号类型不符、被其他商户持有或结账占用、所在节点不对该商户开放时返回 `409`；平台会话以外的调用返回 `401`/`403`。分配是写操作，Console 不自动重试。
 
-公开价格目录 `GET /billing/v1/catalog`（Console `/pricing`）列出当前可购买的账号，每项为 `{id, kind?, name, price_minor, currency}`；另有 `presales`，每项为 `{id, kind, name, price_minor, currency, available}`，名额已满时 `available` 为 `false`。两者都不含产品 ID、节点、租户与名额数字，只在 `Billing.Enabled` 时列出；旧版无法币价格、下架或仍被持有的账号以及下架的预售不列出。
+公开价格目录 `GET /billing/v1/catalog`（Console `/pricing`）列出当前可购买的账号，每项为 `{id, kind?, name, price_minor, currency}`；另有 `presales`，每项为 `{id, kind, name, price_minor, currency, available, remaining}`，名额已满时 `available` 为 `false`，`remaining` 是剩余名额数（`capacity - outstanding`，不小于 0），价格页在可购买时显示它。两者都不含产品 ID、节点与租户，只在 `Billing.Enabled` 时列出；旧版无法币价格、下架或仍被持有的账号以及下架的预售不列出。
 
 订单列表（`/admin/v1/billing/orders`、`/operator/v1/billing/orders`）中，账号订单的 `package_id` 为空、带 `account_id`；付款开通后带 `account_expires_at`。已付款却没有 `account_expires_at` 的账号订单表示未能开通，需要退款。预售订单的 `package_id` 同样为空，改带 `presale_id`；已付款且没有 `account_expires_at` 表示**待发货**，而不是开通失败；分配后同时带 `account_id` 与 `account_expires_at`。平台订单列表接受 `fulfillment=awaiting`，只返回待发货的预售订单，其他取值返回 `400`。
 

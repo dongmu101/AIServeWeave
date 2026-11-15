@@ -467,7 +467,11 @@ export function parseCreditPackages(value: unknown): CreditPackage[] {
 export interface Catalog {
   packages: Pick<CreditPackage, "id" | "name" | "kind" | "creditsMicro" | "priceMinor" | "currency" | "minAmountMinor" | "maxAmountMinor">[];
   accounts: { id: string; name: string; priceMinor: number; currency: string }[];
-  presales: { id: string; kind: "claude" | "codex"; name: string; priceMinor: number; currency: string; available: boolean }[];
+  /** `remaining` is the number of places still open; null from a control
+   * plane from before it was sent.
+   *
+   * `remaining` 是仍未被占用的名额数；早于该字段的控制面不发送，此时为 null。 */
+  presales: { id: string; kind: "claude" | "codex"; name: string; priceMinor: number; currency: string; available: boolean; remaining: number | null }[];
   prices: Pick<ModelPrice, "model" | "inputMicroPerMTok" | "outputMicroPerMTok">[];
 }
 
@@ -511,7 +515,8 @@ export function parseCatalog(value: unknown): Catalog {
       if (priceMinor <= 0 || !/^[A-Z]{3}$/.test(currency) || (kind !== "claude" && kind !== "codex")) {
         fail();
       }
-      return { id: required(presale, "id"), kind, name: required(presale, "name"), priceMinor, currency, available: boolean(presale, "available") };
+      const remaining = presale.remaining === undefined || presale.remaining === null ? null : count(presale, "remaining");
+      return { id: required(presale, "id"), kind, name: required(presale, "name"), priceMinor, currency, available: boolean(presale, "available"), remaining };
     }),
     prices: list(source.prices, item => {
       const price = record(item);
