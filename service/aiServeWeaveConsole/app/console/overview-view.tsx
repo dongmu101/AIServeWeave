@@ -47,26 +47,6 @@ export function OverviewView({ user, expiresAt }: { user: SessionUser; expiresAt
           </dl>
         </CardContent>
       </Card>
-
-      <Card>
-        <CardHeader>
-          <CardTitle><Message id="tenant.currentBoundaries" /></CardTitle>
-        </CardHeader>
-        <CardContent>
-          <ul className="grid gap-2 text-sm text-muted-foreground">
-            <li>
-              <Message id="tenant.theConsoleCallsOnlyTheControlPlaneS" /></li>
-            <li>
-              <Message id="tenant.signingOutClearsOnlyThisConsoleSSession" /></li>
-            <li>
-              <Message id="tenant.theRoleShownOnThePageOnlyDetermines" /></li>
-            <li>
-              <Message id="tenant.userApiKeyAndAuditListsArePaginated" /></li>
-            <li>
-              <Message id="tenant.theRunsPageIsALiveViewNot" /></li>
-          </ul>
-        </CardContent>
-      </Card>
     </div>
   );
 }
