@@ -195,7 +195,7 @@ make help                                     # 全部目标与变量
 
 | 服务 | 默认上限 | 配套参数 | 覆盖变量 |
 | --- | --- | --- | --- |
-| mysql | 768m | buffer pool 256M | `MYSQL_MEM_LIMIT`、`MYSQL_INNODB_BUFFER_POOL_SIZE` |
+| mysql | 1024m | buffer pool 512M | `MYSQL_MEM_LIMIT`、`MYSQL_INNODB_BUFFER_POOL_SIZE` |
 | gateway | 512m | `GOMEMLIMIT=400MiB` | `GATEWAY_MEM_LIMIT`、`GATEWAY_GOMEMLIMIT` |
 | controlplane | 384m | `GOMEMLIMIT=300MiB` | `CONTROLPLANE_MEM_LIMIT`、`CONTROLPLANE_GOMEMLIMIT` |
 | console | 384m | V8 堆 256 MB | `CONSOLE_MEM_LIMIT`、`CONSOLE_NODE_HEAP_MB` |
@@ -208,13 +208,10 @@ Gateway 刻意不限制请求体大小，并发大请求（如 Claude Code）占
 
 ### MySQL 与日志
 
-- MySQL 关闭 performance_schema 与 binlog，buffer pool 256M，最大连接数 60。这套单实例部署
-  不做主从复制，也不做按时间点恢复，备份走 mysqldump（见 [database-recovery.md](database-recovery.md)）。
-  旧部署升级后，数据卷里已有的 `binlog.*` 文件不会再被使用，确认无用后可以删除：
-
-  ```bash
-  docker compose exec mysql sh -c 'rm -f /var/lib/mysql/binlog.[0-9]* /var/lib/mysql/binlog.index'
-  ```
+- MySQL 关闭 performance_schema，buffer pool 512M，最大连接数 256。binlog 保持开启
+  （`sync_binlog=1`），默认保留 7 天（`MYSQL_BINLOG_EXPIRE_SECONDS`），用于 mysqldump 之后的
+  按时间点恢复，见 [database-recovery.md](database-recovery.md)「按时间点恢复」。binlog 与数据
+  在同一个卷上，只能挽回误操作；要防磁盘损坏，需把 binlog 文件定期复制到别的机器。
 
 - 所有容器日志使用 json-file 驱动轮转，每个容器最多保留 3 个 10 MB 文件。
   `docker compose logs` 只能看到轮转后保留的部分。

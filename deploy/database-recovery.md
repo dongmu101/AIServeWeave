@@ -144,6 +144,24 @@ mysql --defaults-extra-file=/secure/restore.cnf aisw_restore < controlplane.sql
 
 `--skip-masking-policies` 是 MySQL 9.7 的 mysqldump 默认会导出 masking policy，需要 `mysql.column_masking_policy` 的 SELECT 权限，业务账户没有，不跳过会备份失败。所有业务表必须为 InnoDB，备份期间禁止 DDL。保留退出码，失败的文件不算备份；恢复不使用 `--force`，遇错即停止。MySQL 的 DDL 无法把整个恢复包在一个可回滚事务里。[mysqldump](https://dev.mysql.com/doc/refman/9.7/en/mysqldump.html)
 
+## 按时间点恢复（MySQL binlog）
+
+部署里的 MySQL 开启 binlog（`sync_binlog=1`，ROW 格式），默认保留 7 天（`MYSQL_BINLOG_EXPIRE_SECONDS`）。全量备份加其后的 binlog 可以恢复到误操作之前的那一刻。保留时长必须长于备份间隔，否则两次备份之间的 binlog 会先被清理。binlog 与数据在同一个卷上，只能挽回误操作；要防磁盘损坏，需把 `/var/lib/mysql/binlog.*` 定期复制到别的机器。
+
+1. **备份时记下 binlog 位置。**在上一节的 mysqldump 命令里加 `--source-data=2`，转储开头会写出一行注释 `-- CHANGE REPLICATION SOURCE TO SOURCE_LOG_FILE='binlog.000012', SOURCE_LOG_POS=157;`。这需要备份账号有 `RELOAD` 与 `REPLICATION CLIENT` 权限（业务账号没有，可用 root），且 binlog 已开启，否则 mysqldump 报错退出。`upgrade.sh` 自动做的升级前备份不带这个参数，不能作为按时间点恢复的起点。
+2. **找到误操作的位置。**在 mysql 容器里用 `mysqlbinlog --base64-output=DECODE-ROWS -v binlog.000012 | less` 查找，记下误操作开始前的时间或位置。
+3. **先按上一节恢复全量备份**到空库 `aisw_restore`。
+4. **重放 binlog**，从备份记录的位置开始，到误操作之前停止。源库名不同于恢复库名时用 `--rewrite-db` 改写；多个 binlog 文件按顺序一次传入：
+
+```sh
+mysqlbinlog --start-position=157 --stop-datetime='2026-11-15 10:29:59' \
+  --database=aiserveweave --rewrite-db='aiserveweave->aisw_restore' \
+  binlog.000012 binlog.000013 |
+  mysql --defaults-extra-file=/secure/restore.cnf aisw_restore
+```
+
+`--stop-datetime` 按秒截断，同一秒内误操作之前的事务也会被丢弃；需要精确时改用 `--stop-position`。重放期间不要启动控制面。之后按下一节检查并切换。本流程尚未在真实环境演练。[mysqlbinlog](https://dev.mysql.com/doc/refman/9.7/en/mysqlbinlog.html)、[时间点恢复](https://dev.mysql.com/doc/refman/9.7/en/point-in-time-recovery-binlog.html)
+
 ## 恢复后的检查与切换
 
 1. 将目标版本控制面配置指向恢复库，运行 `-migrate status`。如果恢复的是旧版本备份，按上面的升级流程执行 `up` 再检查。

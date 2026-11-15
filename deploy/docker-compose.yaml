@@ -96,22 +96,24 @@ services:
     #
     # Sized for a small single host. performance_schema alone takes 100 MB+
     # and nothing here reads it. Only the control plane connects, with
-    # MaxOpenConns 20, so 60 connections leave room for backups and a shell.
-    # The binary log serves replication and point-in-time recovery, neither of
-    # which this single-instance deployment uses (backups are mysqldump, see
-    # database-recovery.md), and costs an fsync per commit plus disk.
+    # MaxOpenConns 20; the rest of max-connections is headroom for backups
+    # and a shell. The binary log stays on (MySQL's default, with
+    # sync_binlog=1) so a mysqldump plus the binlog after it can recover to a
+    # point in time; binlogs older than MYSQL_BINLOG_EXPIRE_SECONDS (default
+    # 7 days) are purged. See database-recovery.md.
     #
     # 按单台小主机调整。仅 performance_schema 就占 100 MB 以上，而这里没有任何东西读它。
-    # 只有控制面连库，MaxOpenConns 为 20，60 个连接给备份与手工排查留了余量。binlog 服务于
-    # 主从复制与按时间点恢复，这套单实例部署两者都不用（备份走 mysqldump，见
-    # database-recovery.md），却要每次提交多一次 fsync 并占用磁盘。
+    # 只有控制面连库，MaxOpenConns 为 20，max-connections 其余部分给备份与手工排查留余量。
+    # binlog 保持开启（MySQL 默认，sync_binlog=1），mysqldump 加其后的 binlog 可以恢复到
+    # 指定时间点；早于 MYSQL_BINLOG_EXPIRE_SECONDS（默认 7 天）的 binlog 自动清理。
+    # 见 database-recovery.md。
     command:
       - --performance-schema=OFF
       - --innodb-buffer-pool-size=${MYSQL_INNODB_BUFFER_POOL_SIZE:-512M}
       - --innodb-log-buffer-size=16M
       - --temptable-max-ram=64M
       - --max-connections=256
-      - --disable-log-bin
+      - --binlog-expire-logs-seconds=${MYSQL_BINLOG_EXPIRE_SECONDS:-604800}
     mem_limit: ${MYSQL_MEM_LIMIT:-1024m}
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-aiserveweave}
