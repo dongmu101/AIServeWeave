@@ -119,7 +119,7 @@ services:
       MYSQL_USER: ${MYSQL_USER:-aiserveweave}
       MYSQL_PASSWORD: ${MYSQL_PASSWORD:-aiserveweave}
     ports:
-      - "127.0.0.1:${MYSQL_PORT:-3306}:3306"
+      - "${MYSQL_PORT:-3306}:3306"
     volumes:
       - mysql-data:/var/lib/mysql
     healthcheck:
