@@ -18,6 +18,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { parseUsageSummary, type UsageSummary, type UsageSummaryEntry } from "@/lib/console/usage";
+import { parseApiKeys, parseUsers, type ApiKeySummary, type Page, type User } from "@/lib/console/contract";
 import { CHART_COLORS } from "@/lib/console/chart-colors";
 
 /** localToIso turns a `datetime-local` input value into an RFC 3339
@@ -90,6 +91,12 @@ export function UsageView() {
     query,
     parse: parseUsageSummary,
   });
+  const byKey = useResource<UsageSummary>({
+    method: "GET",
+    path: "/admin/v1/usage/summary",
+    query: { ...query, group_by: "key" },
+    parse: parseUsageSummary,
+  });
 
   function applyWindow(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -147,7 +154,16 @@ export function UsageView() {
       ) : resource.data.items.length === 0 ? (
         <EmptyState title={t("tenant.noUsageRecordsInTheSelectedTimeRange")} description={t("tenant.tryADifferentTimeRangeOrCheckWhether")} />
       ) : (
-        <UsageSummaryBody items={resource.data.items} />
+        <>
+          <UsageSummaryBody items={resource.data.items} />
+          {byKey.error ? (
+            <ErrorState message={byKey.error} onRetry={byKey.reload} />
+          ) : byKey.loading || !byKey.data ? (
+            <LoadingState label={t("tenant.loadingUsage")} rows={3} />
+          ) : (
+            <UsageByKeyTable items={byKey.data.items} />
+          )}
+        </>
       )}
     </div>
   );
@@ -217,5 +233,75 @@ function UsageSummaryBody({ items }: { items: UsageSummaryEntry[] }) {
         </TableBody>
       </Table>
     </>
+  );
+}
+
+/** usageByKeyRows orders per-(user, key, model) rows by user, then key, then
+ * total tokens, so one user's keys and models read together.
+ *
+ * usageByKeyRows 按用户、key、总 token 排序每个 (用户, key, 模型) 行，使同一用户的
+ * key 与模型排在一起。 */
+function usageByKeyRows(items: UsageSummaryEntry[]): UsageSummaryEntry[] {
+  return [...items].sort(
+    (a, b) =>
+      a.userId.localeCompare(b.userId) || a.keyId.localeCompare(b.keyId) || b.totalTokens - a.totalTokens
+  );
+}
+
+/** UsageByKeyTable shows input and output tokens per user, key and model.
+ * Names come from the first page of users and keys; an id not found there
+ * (a deleted key, or beyond that page) is shown as the id itself.
+ *
+ * UsageByKeyTable 展示每个用户、key、模型的输入与输出 token。名称取自用户与 key 列表
+ * 的第一页；找不到的 id（已删除的 key，或不在该页内）直接显示 id。 */
+function UsageByKeyTable({ items }: { items: UsageSummaryEntry[] }) {
+  const { locale, t } = useI18n();
+  const users = useResource<Page<User>>({ method: "GET", path: "/admin/v1/users", query: { limit: "200" }, parse: parseUsers });
+  const keys = useResource<Page<ApiKeySummary>>({ method: "GET", path: "/admin/v1/apikeys", query: { limit: "200" }, parse: parseApiKeys });
+  const userLabel = (id: string) => {
+    if (!id) return t("tenant.unattributed");
+    const user = users.data?.items.find((u) => u.id === id);
+    return user ? user.name || user.email : id;
+  };
+  const keyLabel = (id: string) => {
+    if (!id) return t("tenant.unattributed");
+    const key = keys.data?.items.find((k) => k.id === id);
+    return key ? `${key.name} (${key.display})` : id;
+  };
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="text-sm font-medium"><Message id="tenant.usageByUserAndKey" /></CardTitle>
+        <p className="text-xs text-muted-foreground"><Message id="tenant.usageByUserAndKeyHint" /></p>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead><Message id="tenant.users" /></TableHead>
+              <TableHead>API Key</TableHead>
+              <TableHead><Message id="tenant.models_98fd0c" /></TableHead>
+              <TableHead>Prompt token</TableHead>
+              <TableHead>Completion token</TableHead>
+              <TableHead><Message id="tenant.totalTokens" /></TableHead>
+              <TableHead><Message id="tenant.requests" /></TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {usageByKeyRows(items).map((item) => (
+              <TableRow key={`${item.userId}/${item.keyId}/${item.model}`}>
+                <TableCell>{userLabel(item.userId)}</TableCell>
+                <TableCell>{keyLabel(item.keyId)}</TableCell>
+                <TableCell><code className="text-xs">{item.model}</code></TableCell>
+                <TableCell>{item.promptTokens.toLocaleString(locale)}</TableCell>
+                <TableCell>{item.completionTokens.toLocaleString(locale)}</TableCell>
+                <TableCell>{item.totalTokens.toLocaleString(locale)}</TableCell>
+                <TableCell>{item.requestCount.toLocaleString(locale)}</TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
   );
 }

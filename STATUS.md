@@ -1,3 +1,17 @@
+# 用量按用户与 API Key 归属（2026-11-15）
+
+用量账本新增 key 与用户维度，可看每个用户、每个 key、每个模型的输入与输出 token：
+
+- **Gateway**：用量记录附发起请求的 `key_id`。
+- **控制面**：`usage_records/0003` 新增 `key_id`、`user_id` 两列；入账时按 key 查创建者写入 `user_id`，之后删除 key 或用户不影响归属。`/admin/v1/usage/summary` 与 `/operator/v1/usage/summary` 新增 `group_by=key`，按 `(tenant, user, key, model)` 分组。
+- **Console**：租户「用量」页新增「按用户与 Key 的用量」表，名称取自用户与 key 列表首页（200 条），找不到的显示 id。
+
+升级须知：**先升级控制面，再升级 Gateway**（旧控制面会拒绝带 `key_id` 的批次并丢弃）。迁移只加两列带默认值的列；升级前的历史用量显示为「未归属」。`sql/init.sql` 已同步。
+
+已通过的检查：控制面与 Gateway 默认测试；临时 MySQL 9.7 与 PostgreSQL 16 上 gormstore 全部 live 用例（含升级前数据保留与按 key 分组查询）；Console typecheck、lint 与单元测试。
+
+尚未验收：真实环境端到端（Gateway 推送 → Console 显示）。
+
 # 增长表按时间分区（2026-11-14）
 
 控制面五张持续增长的表改为按时间 RANGE 分区，MySQL 9.7 与 PostgreSQL 都做，两边表结构一致：

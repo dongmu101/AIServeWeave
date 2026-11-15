@@ -24,6 +24,10 @@ import { ApiError } from "./errors.ts";
  * 自己在问哪个租户。 */
 export interface UsageSummaryEntry {
   tenantId: string;
+  /** userId and keyId are set only for `group_by=key`; "" means unattributed.
+   * userId 与 keyId 只在 `group_by=key` 时出现；"" 表示未归属。 */
+  userId: string;
+  keyId: string;
   model: string;
   promptTokens: number;
   completionTokens: number;
@@ -96,6 +100,8 @@ function parseEntry(value: unknown): UsageSummaryEntry {
   const source = record(value);
   return {
     tenantId: optionalText(source, "tenant_id"),
+    userId: optionalText(source, "user_id"),
+    keyId: optionalText(source, "key_id"),
     model: required(source, "model"),
     promptTokens: num(source, "prompt_tokens"),
     completionTokens: num(source, "completion_tokens"),

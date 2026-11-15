@@ -19,6 +19,7 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 	var gotBody struct {
 		Records []struct {
 			RequestID string `json:"request_id"`
+			KeyID     string `json:"key_id"`
 		} `json:"records"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +38,7 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 		t.Fatalf("NewUsageLedgerClient() error = %v, want nil", err)
 	}
 	err = client.PushUsageRecords(context.Background(), []httpapi.UsageRecord{
-		{RequestID: "req_1", TenantID: "tnt_1", Model: "llama3", Endpoint: "chat", PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CreatedAt: time.Now()},
+		{RequestID: "req_1", TenantID: "tnt_1", Model: "llama3", Endpoint: "chat", PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CreatedAt: time.Now(), KeyID: "key_1"},
 	})
 	if err != nil {
 		t.Fatalf("PushUsageRecords() error = %v, want nil", err)
@@ -45,8 +46,8 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 	if gotAuth != "Bearer internal-secret" {
 		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer internal-secret")
 	}
-	if len(gotBody.Records) != 1 || gotBody.Records[0].RequestID != "req_1" {
-		t.Errorf("posted body records = %+v, want one record with request_id req_1", gotBody.Records)
+	if len(gotBody.Records) != 1 || gotBody.Records[0].RequestID != "req_1" || gotBody.Records[0].KeyID != "key_1" {
+		t.Errorf("posted body records = %+v, want one record with request_id req_1 and key_id key_1", gotBody.Records)
 	}
 }
 

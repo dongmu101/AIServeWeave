@@ -132,3 +132,44 @@ func TestSummarizeUsageOperatorRejectsAMalformedUntil(t *testing.T) {
 		t.Fatalf("status = %d, want 400 for a malformed until", w.Code)
 	}
 }
+
+func TestSummarizeUsageTenantGroupsByKeyOnRequest(t *testing.T) {
+	st := memstore.New()
+	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
+	now := time.Now()
+	if err := st.CreateUsageRecords(t.Context(), []model.UsageRecord{
+		{ID: "req_a", TenantID: "tnt_1", KeyID: "key_a", UserID: "usr_a", Model: "llama3", Endpoint: "chat", PromptTokens: 4, CompletionTokens: 6, TotalTokens: 10, CreatedAt: now},
+		{ID: "req_b", TenantID: "tnt_1", KeyID: "key_b", UserID: "usr_b", Model: "llama3", Endpoint: "chat", TotalTokens: 20, CreatedAt: now},
+	}); err != nil {
+		t.Fatalf("seeding CreateUsageRecords() error = %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?group_by=key", nil)
+	req = req.WithContext(withActor(req.Context(), logic.Actor{TenantID: "tnt_1"}))
+	w := httptest.NewRecorder()
+	summarizeUsageTenant(ctx)(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
+	}
+	var resp types.UsageSummaryResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("unmarshal response: %v", err)
+	}
+	if len(resp.Items) != 2 || resp.Items[0].KeyID != "key_a" || resp.Items[0].UserID != "usr_a" ||
+		resp.Items[0].PromptTokens != 4 || resp.Items[0].CompletionTokens != 6 || resp.Items[1].KeyID != "key_b" {
+		t.Fatalf("resp.Items = %+v, want key_a (usr_a, 4/6) then key_b", resp.Items)
+	}
+}
+
+func TestSummarizeUsageTenantRejectsAnUnknownGroupBy(t *testing.T) {
+	st := memstore.New()
+	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
+	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?group_by=tenant", nil)
+	req = req.WithContext(withActor(req.Context(), logic.Actor{TenantID: "tnt_1"}))
+	w := httptest.NewRecorder()
+	summarizeUsageTenant(ctx)(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 for an unknown group_by", w.Code)
+	}
+}

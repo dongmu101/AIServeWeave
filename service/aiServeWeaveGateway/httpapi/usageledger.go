@@ -75,6 +75,13 @@ type UsageRecord struct {
 	// 控制面据此不对所有者自己的硬件计费。其他记录都不带它，因此没有商户自有节点的部署
 	// 推送的内容保持不变。
 	NodeID string
+	// KeyID is the API key that made the request, so the control plane can
+	// attribute usage to a key and to the user who created it. It is empty
+	// for a request without a key identity.
+	//
+	// KeyID 是发起请求的 API key，使控制面能把用量归属到 key 及其创建者。没有 key
+	// 身份的请求为空。
+	KeyID string
 }
 
 // usageLedgerSink is what recordUsage hands a finished usage record to. It

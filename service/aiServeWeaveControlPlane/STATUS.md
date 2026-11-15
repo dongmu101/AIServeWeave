@@ -828,7 +828,9 @@ usage_records(
   prompt_tokens      BIGINT NOT NULL,
   completion_tokens  BIGINT NOT NULL,
   total_tokens       BIGINT NOT NULL,
-  created_at         TIMESTAMP NOT NULL  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
+  created_at         TIMESTAMP NOT NULL,  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
+  key_id             VARCHAR(32) NOT NULL DEFAULT '',  -- usage_records/0003：发起请求的 API key
+  user_id            VARCHAR(32) NOT NULL DEFAULT ''   -- usage_records/0003：该 key 的创建者，入账时解析
 );
 CREATE INDEX idx_usage_records_tenant_model_created ON usage_records (tenant_id, model, created_at);
 CREATE INDEX idx_usage_records_created              ON usage_records (created_at, id);
@@ -836,10 +838,13 @@ CREATE INDEX idx_usage_records_created              ON usage_records (created_at
 
 `POST /internal/v1/usagerecords`（`requireSharedSecret(ctx.Config.InternalToken, ...)` 守卫，与请求日志推送同一信任级别）接受一批记录，**去重规则就是主键本身**：`id` 唯一约束加 `clause.OnConflict{DoNothing: true}`，一次被重试的批量推送第二次到达时被静默跳过，不会让同一次请求的用量被计两次——不存在另一道独立的去重步骤。批内缺少必填字段（`request_id`/`tenant_id`/`model`/`endpoint`）的记录被跳过而不是让整批失败，响应用 `accepted` 计数报告实际写入条数。
 
+**按用户与 key 归属**：记录可带可选的 `key_id`（Gateway 填身份里的 key）。入账时控制面按 `(tenant_id, key_id)` 查 `api_keys.created_by` 写入 `user_id`，每批每个 key 只查一次；key 已不存在时 `user_id` 留空，其他读取错误让整批失败由 Gateway 重试。`user_id` 在写入时定格，之后删除 key 或用户不影响归属。`usage_records/0003` 之前的记录两列为空，显示为「未归属」。
+
 **结算规则是对这张只追加表的聚合读取，而不是另外存储的一张派生表**：`SummarizeUsage` 按 `(tenant_id, model)` 分组，在可选的 `since`/`until` 时间窗口内对 `prompt_tokens`/`completion_tokens`/`total_tokens` 求和、对行数计数，在数据库内聚合（`SUM`/`COUNT`/`GROUP BY`）而不是把整批行读到 Go 里再求和：
 
 - `GET /admin/v1/usage/summary`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，响应省略 `tenant_id` 字段。
 - `GET /operator/v1/usage/summary`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则汇总全部租户，响应保留 `tenant_id` 字段。
+- 两个端点都接受可选的 `group_by`：缺省或 `model` 按 `(tenant_id, model)` 分组，形状不变；`key` 改按 `(tenant_id, user_id, key_id, model)` 分组，每行多出 `user_id`、`key_id`（为空时省略）。其他取值返回 400。Console 的「用量」页用它显示各用户、各 key、各模型的输入与输出 token。
 
 **这两个端点只做用量汇总，不做定价**：它们只回答「这个租户在这个窗口内，按这个模型，消耗了多少 token、发了多少次请求」。按单价扣费由「计费与充值」一节在同一个推送端点的入账事务里完成，结果存在独立的 `usage_charges` 表，不改这两个端点的形状。
 

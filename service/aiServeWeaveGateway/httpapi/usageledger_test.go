@@ -60,6 +60,9 @@ func TestRecordUsageLedgerFieldsMatchTheCall(t *testing.T) {
 	if got.TenantID != "tnt_9" {
 		t.Errorf("TenantID = %q, want tnt_9", got.TenantID)
 	}
+	if got.KeyID != "key_9" {
+		t.Errorf("KeyID = %q, want key_9", got.KeyID)
+	}
 	if got.Model != "mistral" {
 		t.Errorf("Model = %q, want mistral", got.Model)
 	}

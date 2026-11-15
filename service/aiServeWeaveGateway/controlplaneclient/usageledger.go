@@ -117,6 +117,10 @@ type usageRecordWire struct {
 	// which refuses unknown fields, still accepts every record without one.
 	// NodeID 为空时省略，使不认识它、且拒绝未知字段的旧控制面仍接受所有不带它的记录。
 	NodeID string `json:"node_id,omitempty"`
+	// KeyID is the API key that made the request. A control plane that
+	// predates it refuses the field, so it must be upgraded first.
+	// KeyID 是发起请求的 API key。不认识它的旧控制面会拒绝该字段，因此须先升级控制面。
+	KeyID string `json:"key_id,omitempty"`
 }
 
 // PushUsageRecords implements httpapi.UsageLedgerClient. An empty batch is
@@ -148,6 +152,7 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 			TotalTokens:      r.TotalTokens,
 			CreatedAt:        r.CreatedAt,
 			NodeID:           r.NodeID,
+			KeyID:            r.KeyID,
 		}
 	}
 

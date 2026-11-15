@@ -858,6 +858,11 @@ type UsageRecordFilter struct {
 	TenantID string
 	Since    time.Time
 	Until    time.Time
+	// ByKey adds user_id and key_id to the grouping, giving one row per
+	// (tenant, user, key, model).
+	//
+	// ByKey 把 user_id 与 key_id 加入分组，得到每个 (tenant, user, key, model) 一行。
+	ByKey bool
 }
 
 // UsageSummary is one (tenant, model) group's totals over the queried
@@ -874,7 +879,12 @@ type UsageRecordFilter struct {
 // 派生表。包含 RequestCount，是因为一个对着外部账单核对的结算流程，对请求
 // 计数的需要不亚于对 token 汇总的需要。
 type UsageSummary struct {
-	TenantID         string
+	TenantID string
+	// UserID and KeyID are set only when the filter groups ByKey.
+	//
+	// UserID 与 KeyID 只在 filter 按 ByKey 分组时填写。
+	UserID           string
+	KeyID            string
 	Model            string
 	PromptTokens     int64
 	CompletionTokens int64

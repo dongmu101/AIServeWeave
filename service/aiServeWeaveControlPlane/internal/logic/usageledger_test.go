@@ -79,3 +79,44 @@ func TestCreateUsageRecordsSkipsADuplicateRequestID(t *testing.T) {
 		t.Fatalf("SummarizeUsage() = %+v, want TotalTokens=10, RequestCount=1 (the retried push must not double-count)", summary)
 	}
 }
+
+func TestCreateUsageRecordsAttributesUsageToTheKeysCreator(t *testing.T) {
+	f := newFixture(t)
+	created, err := f.svc.CreateAPIKey(context.Background(), f.ownerAt, "k", 0)
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	base := logic.CreateUsageRecordParams{TenantID: f.tenant.ID, Model: "llama3", Endpoint: "chat", PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5, CreatedAt: time.Now()}
+	withKey, unknownKey, noKey := base, base, base
+	withKey.RequestID, withKey.KeyID = "req_key", created.Key.ID
+	unknownKey.RequestID, unknownKey.KeyID = "req_gone", "key_gone"
+	noKey.RequestID = "req_none"
+
+	accepted, err := f.svc.CreateUsageRecords(context.Background(), []logic.CreateUsageRecordParams{withKey, unknownKey, noKey})
+	if err != nil || accepted != 3 {
+		t.Fatalf("CreateUsageRecords() = %d, %v, want 3, nil (a deleted key keeps its record)", accepted, err)
+	}
+
+	summary, err := f.svc.SummarizeUsage(context.Background(), store.UsageRecordFilter{TenantID: f.tenant.ID, ByKey: true})
+	if err != nil {
+		t.Fatalf("SummarizeUsage() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, row := range summary {
+		got[row.KeyID] = row.UserID
+	}
+	want := map[string]string{"": "", "key_gone": "", created.Key.ID: f.owner.ID}
+	if len(got) != len(want) {
+		t.Fatalf("SummarizeUsage(ByKey) = %+v, want one row per key %v", summary, want)
+	}
+	for keyID, userID := range want {
+		if got[keyID] != userID {
+			t.Errorf("key %q user = %q, want %q", keyID, got[keyID], userID)
+		}
+	}
+
+	byModel, err := f.svc.SummarizeUsage(context.Background(), store.UsageRecordFilter{TenantID: f.tenant.ID})
+	if err != nil || len(byModel) != 1 || byModel[0].TotalTokens != 15 || byModel[0].KeyID != "" {
+		t.Fatalf("SummarizeUsage() = %+v, %v, want one llama3 row of 15 tokens without a key", byModel, err)
+	}
+}

@@ -685,6 +685,11 @@ type UsageRecordRequest struct {
 	//
 	// NodeID 只对商户自有节点发送；记录所属租户拥有该节点时，这次请求不计费。
 	NodeID string `json:"node_id,omitempty"`
+	// KeyID is the API key that made the request; the control plane resolves
+	// the key's creator from it.
+	//
+	// KeyID 是发起请求的 API key；控制面据此解析出 key 的创建者。
+	KeyID string `json:"key_id,omitempty"`
 }
 
 // CreateUsageRecordsRequest is the body of POST /internal/v1/usagerecords.
@@ -713,7 +718,13 @@ type CreateUsageRecordsResponse struct {
 // 输出单元。TenantID 在租户自助端点上为空，与 renderRequestLog 已经遵循的
 // 同一种 includeTenant 约定相同：那里租户已经由调用方自己的会话隐含。
 type UsageSummaryEntryResponse struct {
-	TenantID         string `json:"tenant_id,omitempty"`
+	TenantID string `json:"tenant_id,omitempty"`
+	// UserID and KeyID are present only for group_by=key. Either is empty
+	// for usage recorded before attribution existed.
+	//
+	// UserID 与 KeyID 只在 group_by=key 时出现。归属功能上线前记录的用量两者为空。
+	UserID           string `json:"user_id,omitempty"`
+	KeyID            string `json:"key_id,omitempty"`
 	Model            string `json:"model"`
 	PromptTokens     int64  `json:"prompt_tokens"`
 	CompletionTokens int64  `json:"completion_tokens"`

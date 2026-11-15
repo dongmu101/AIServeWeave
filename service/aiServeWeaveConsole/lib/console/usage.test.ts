@@ -68,3 +68,16 @@ test("an empty items list parses cleanly", () => {
   const summary = parseUsageSummary({ items: [] });
   assert.deepEqual(summary.items, []);
 });
+
+test("parses a by-key usage summary with user_id and key_id", () => {
+  const summary = parseUsageSummary({
+    items: [
+      { user_id: "usr_1", key_id: "key_1", model: "m", prompt_tokens: 3, completion_tokens: 2, total_tokens: 5, request_count: 1 },
+      { model: "m", prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, request_count: 1 },
+    ],
+  });
+  assert.equal(summary.items[0]?.userId, "usr_1");
+  assert.equal(summary.items[0]?.keyId, "key_1");
+  assert.equal(summary.items[1]?.userId, "");
+  assert.equal(summary.items[1]?.keyId, "");
+});

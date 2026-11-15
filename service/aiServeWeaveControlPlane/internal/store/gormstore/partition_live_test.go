@@ -60,10 +60,12 @@ func (f partitionFixture) load(t *testing.T, ctx context.Context, db *gorm.DB, s
 	if err := st.CreateRequestLogs(ctx, f.requestLogs()); err != nil {
 		t.Fatal(err)
 	}
-	if err := st.CreateUsageRecords(ctx, []model.UsageRecord{
+	// The pre-partition schema has no key_id or user_id yet.
+	// 分区前的表结构还没有 key_id 与 user_id。
+	if err := db.WithContext(ctx).Omit("KeyID", "UserID").Create(&[]model.UsageRecord{
 		{ID: "use_old", TenantID: "tnt_p", Model: "m", Endpoint: "chat", PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3, CreatedAt: f.now.AddDate(0, 0, -70)},
 		{ID: "use_recent", TenantID: "tnt_p", Model: "m", Endpoint: "chat", PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30, CreatedAt: f.now.Add(-time.Hour)},
-	}); err != nil {
+	}).Error; err != nil {
 		t.Fatal(err)
 	}
 	if err := st.UpsertRollup(ctx, []model.MetricsHistoryPoint{
@@ -146,8 +148,20 @@ func TestLivePartitionUpgradePreservesData(t *testing.T) {
 		var maxID int64
 		st, f, before := upgradedDatabase(t, ctx, db)
 		for table, column := range partitionedTableColumns {
-			after := snapshot(t, db, table)
+			// A different statement text keeps PostgreSQL from reusing the
+			// pre-upgrade plan for a table that has since gained columns.
+			// 换一个语句文本，避免 PostgreSQL 对已新增列的表复用升级前的执行计划。
+			after := snapshot(t, db.Where("TRUE"), table)
 			want := before[table]
+			if table == "usage_records" {
+				for _, row := range after {
+					if row["key_id"] != "" || row["user_id"] != "" {
+						t.Errorf("usage_records %v key_id/user_id = %q/%q, want empty for a pre-upgrade row", row["id"], row["key_id"], row["user_id"])
+					}
+					delete(row, "key_id")
+					delete(row, "user_id")
+				}
+			}
 			if table == "audit_logs" {
 				for i, row := range after {
 					if row["id"] == "aud_null" {
@@ -226,6 +240,16 @@ func TestLivePartitionQueriesMatchAfterUpgrade(t *testing.T) {
 		summary, err := st.SummarizeUsage(ctx, store.UsageRecordFilter{TenantID: "tnt_p"})
 		if err != nil || len(summary) != 1 || summary[0].TotalTokens != 33 || summary[0].RequestCount != 2 {
 			t.Errorf("SummarizeUsage = %+v, %v", summary, err)
+		}
+		// Rows written before key attribution group under an empty key.
+		// 归属功能上线前写入的行归入空 key 分组。
+		if err := st.CreateUsageRecords(ctx, []model.UsageRecord{{ID: "req_keyed", TenantID: "tnt_p", KeyID: "key_p", UserID: "usr_p", Model: summary[0].Model, Endpoint: "chat", PromptTokens: 1, CompletionTokens: 1, TotalTokens: 2, CreatedAt: f.now}}); err != nil {
+			t.Fatal(err)
+		}
+		byKey, err := st.SummarizeUsage(ctx, store.UsageRecordFilter{TenantID: "tnt_p", ByKey: true})
+		if err != nil || len(byKey) != 2 || byKey[0].KeyID != "" || byKey[0].TotalTokens != 33 ||
+			byKey[1].KeyID != "key_p" || byKey[1].UserID != "usr_p" || byKey[1].TotalTokens != 2 {
+			t.Errorf("SummarizeUsage(ByKey) = %+v, %v", byKey, err)
 		}
 		// Audit pagination walks newest first across month partitions.
 		// 审计分页跨月份分区按最新优先遍历。

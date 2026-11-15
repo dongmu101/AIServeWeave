@@ -1977,7 +1977,7 @@ func createUsageRecords(ctx *svc.ServiceContext) http.HandlerFunc {
 			batch[i] = logic.CreateUsageRecordParams{
 				RequestID: rec.RequestID, TenantID: rec.TenantID, Model: rec.Model, Endpoint: rec.Endpoint,
 				PromptTokens: rec.PromptTokens, CompletionTokens: rec.CompletionTokens, TotalTokens: rec.TotalTokens,
-				CreatedAt: rec.CreatedAt, NodeID: rec.NodeID,
+				CreatedAt: rec.CreatedAt, NodeID: rec.NodeID, KeyID: rec.KeyID,
 			}
 		}
 		accepted, err := ctx.Logic.CreateUsageRecords(r.Context(), batch)
@@ -1996,10 +1996,11 @@ func createUsageRecords(ctx *svc.ServiceContext) http.HandlerFunc {
 func usageSummaryFilterFrom(query url.Values) (store.UsageRecordFilter, bool) {
 	since, sinceOK := timeParam(query.Get("since"))
 	until, untilOK := timeParam(query.Get("until"))
-	if !sinceOK || !untilOK {
+	groupBy := query.Get("group_by")
+	if !sinceOK || !untilOK || (groupBy != "" && groupBy != "model" && groupBy != "key") {
 		return store.UsageRecordFilter{}, false
 	}
-	return store.UsageRecordFilter{Since: since, Until: until}, true
+	return store.UsageRecordFilter{Since: since, Until: until, ByKey: groupBy == "key"}, true
 }
 
 // renderUsageSummary converts one aggregated group to its wire form.
@@ -2010,6 +2011,7 @@ func usageSummaryFilterFrom(query url.Values) (store.UsageRecordFilter, bool) {
 // 限定的端点上为 false，与 renderRequestLog 已经遵循的同一种约定。
 func renderUsageSummary(u store.UsageSummary, includeTenant bool) types.UsageSummaryEntryResponse {
 	out := types.UsageSummaryEntryResponse{
+		UserID: u.UserID, KeyID: u.KeyID,
 		Model: u.Model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
 		TotalTokens: u.TotalTokens, RequestCount: u.RequestCount,
 	}
@@ -2034,7 +2036,7 @@ func summarizeUsageTenant(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		filter, ok := usageSummaryFilterFrom(r.URL.Query())
 		if !ok {
-			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps, and group_by must be model or key")
 			return
 		}
 		filter.TenantID = actor.TenantID
@@ -2064,7 +2066,7 @@ func summarizeUsageOperator(ctx *svc.ServiceContext) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		filter, ok := usageSummaryFilterFrom(r.URL.Query())
 		if !ok {
-			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps")
+			writeError(w, http.StatusBadRequest, "since and until must be RFC 3339 timestamps, and group_by must be model or key")
 			return
 		}
 		filter.TenantID = r.URL.Query().Get("tenant_id")

@@ -40,6 +40,8 @@ func (s *Store) CreateUsageRecords(ctx context.Context, records []model.UsageRec
 // 匿名结构体切片时，需要一个带匹配列名 tag 的具名类型。
 type usageSummaryRow struct {
 	TenantID         string `gorm:"column:tenant_id"`
+	UserID           string `gorm:"column:user_id"`
+	KeyID            string `gorm:"column:key_id"`
 	Model            string `gorm:"column:model"`
 	PromptTokens     int64  `gorm:"column:prompt_tokens"`
 	CompletionTokens int64  `gorm:"column:completion_tokens"`
@@ -66,21 +68,25 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 	if !filter.Until.IsZero() {
 		db = db.Where("created_at < ?", filter.Until)
 	}
+	groups := "tenant_id, model"
+	if filter.ByKey {
+		groups = "tenant_id, user_id, key_id, model"
+	}
 	var rows []usageSummaryRow
 	err := db.Select(
-		"tenant_id, model, " +
+		groups + ", " +
 			"SUM(prompt_tokens) AS prompt_tokens, " +
 			"SUM(completion_tokens) AS completion_tokens, " +
 			"SUM(total_tokens) AS total_tokens, " +
 			"COUNT(*) AS request_count",
-	).Group("tenant_id, model").Order("tenant_id, model").Scan(&rows).Error
+	).Group(groups).Order(groups).Scan(&rows).Error
 	if err != nil {
 		return nil, translate(err)
 	}
 	out := make([]store.UsageSummary, len(rows))
 	for i, r := range rows {
 		out[i] = store.UsageSummary{
-			TenantID: r.TenantID, Model: r.Model,
+			TenantID: r.TenantID, UserID: r.UserID, KeyID: r.KeyID, Model: r.Model,
 			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens,
 			TotalTokens: r.TotalTokens, RequestCount: r.RequestCount,
 		}

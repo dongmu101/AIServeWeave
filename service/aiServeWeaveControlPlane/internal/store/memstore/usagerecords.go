@@ -30,7 +30,7 @@ func (s *Store) CreateUsageRecords(_ context.Context, records []model.UsageRecor
 func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter) ([]store.UsageSummary, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	type key struct{ tenantID, model string }
+	type key struct{ tenantID, userID, keyID, model string }
 	totals := map[key]*store.UsageSummary{}
 	for _, r := range s.usageRecords {
 		if filter.TenantID != "" && r.TenantID != filter.TenantID {
@@ -42,10 +42,13 @@ func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter
 		if !filter.Until.IsZero() && !r.CreatedAt.Before(filter.Until) {
 			continue
 		}
-		k := key{r.TenantID, r.Model}
+		k := key{tenantID: r.TenantID, model: r.Model}
+		if filter.ByKey {
+			k.userID, k.keyID = r.UserID, r.KeyID
+		}
 		agg, ok := totals[k]
 		if !ok {
-			agg = &store.UsageSummary{TenantID: r.TenantID, Model: r.Model}
+			agg = &store.UsageSummary{TenantID: k.tenantID, UserID: k.userID, KeyID: k.keyID, Model: k.model}
 			totals[k] = agg
 		}
 		agg.PromptTokens += r.PromptTokens
@@ -58,10 +61,17 @@ func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter
 		out = append(out, *agg)
 	}
 	sort.Slice(out, func(i, j int) bool {
-		if out[i].TenantID != out[j].TenantID {
-			return out[i].TenantID < out[j].TenantID
+		a, b := out[i], out[j]
+		if a.TenantID != b.TenantID {
+			return a.TenantID < b.TenantID
 		}
-		return out[i].Model < out[j].Model
+		if a.UserID != b.UserID {
+			return a.UserID < b.UserID
+		}
+		if a.KeyID != b.KeyID {
+			return a.KeyID < b.KeyID
+		}
+		return a.Model < b.Model
 	})
 	return out, nil
 }

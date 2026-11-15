@@ -386,6 +386,10 @@ ALTER TABLE usage_records
  ADD PRIMARY KEY (id, created_at)
  PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
 
+-- usage_records/mysql/0003_add_usage_records_key_user.sql
+ALTER TABLE usage_records ADD COLUMN key_id VARCHAR(32) NOT NULL DEFAULT '';
+ALTER TABLE usage_records ADD COLUMN user_id VARCHAR(32) NOT NULL DEFAULT '';
+
 -- ============================================================
 -- api_docs
 -- ============================================================

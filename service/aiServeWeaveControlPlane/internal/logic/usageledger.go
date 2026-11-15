@@ -9,6 +9,7 @@ package logic
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -32,6 +33,10 @@ type CreateUsageRecordParams struct {
 	//
 	// NodeID 是服务该请求的商户自有节点，没有则为空。
 	NodeID string
+	// KeyID is the API key that made the request, or empty.
+	//
+	// KeyID 是发起请求的 API key，没有则为空。
+	KeyID string
 }
 
 // Column widths of usage_records (and usage_charges), in bytes.
@@ -42,6 +47,7 @@ const (
 	maxUsageTenantID  = 32
 	maxUsageModel     = 128
 	maxUsageEndpoint  = 24
+	maxUsageKeyID     = 32
 )
 
 // CreateUsageRecords persists a batch of records, skipping — not failing on
@@ -71,7 +77,7 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 			continue
 		}
 		if len(p.RequestID) > maxUsageRequestID || len(p.TenantID) > maxUsageTenantID ||
-			len(p.Model) > maxUsageModel || len(p.Endpoint) > maxUsageEndpoint {
+			len(p.Model) > maxUsageModel || len(p.Endpoint) > maxUsageEndpoint || len(p.KeyID) > maxUsageKeyID {
 			slog.Warn("skipping a usage record too long for its columns", slog.String("tenant_id", truncate(p.TenantID, maxUsageTenantID)))
 			continue
 		}
@@ -85,10 +91,14 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 			TotalTokens:      p.TotalTokens,
 			CreatedAt:        p.CreatedAt,
 			NodeID:           p.NodeID,
+			KeyID:            p.KeyID,
 		})
 	}
 	if len(records) == 0 {
 		return 0, nil
+	}
+	if err := s.attributeUsageToUsers(ctx, records); err != nil {
+		return 0, err
 	}
 	// With billing on, the records and their charges commit together, so a
 	// record is never in the ledger uncharged nor charged twice.
@@ -105,6 +115,38 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 		return 0, err
 	}
 	return len(records), nil
+}
+
+// attributeUsageToUsers fills each record's UserID with its key's creator,
+// looking each distinct key up once. A key that no longer exists leaves
+// UserID empty rather than failing the batch; any other read error fails it,
+// so the Gateway retries instead of writing records without their user.
+//
+// attributeUsageToUsers 把每条记录的 UserID 填为其 key 的创建者，每个不同的 key 只查
+// 一次。key 已不存在时 UserID 留空，而不是让整批失败；其他读取错误则让整批失败，使
+// Gateway 重试，而不是写入缺少用户的记录。
+func (s *Service) attributeUsageToUsers(ctx context.Context, records []model.UsageRecord) error {
+	type keyRef struct{ tenantID, keyID string }
+	creators := map[keyRef]string{}
+	for i := range records {
+		ref := keyRef{records[i].TenantID, records[i].KeyID}
+		if ref.keyID == "" {
+			continue
+		}
+		creator, ok := creators[ref]
+		if !ok {
+			key, err := s.store.GetAPIKey(ctx, ref.tenantID, ref.keyID)
+			switch {
+			case err == nil:
+				creator = key.CreatedBy
+			case !errors.Is(err, store.ErrNotFound):
+				return err
+			}
+			creators[ref] = creator
+		}
+		records[i].UserID = creator
+	}
+	return nil
 }
 
 // SummarizeUsage reads the settlement aggregation over persisted usage

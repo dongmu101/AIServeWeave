@@ -47,6 +47,15 @@ type UsageRecord struct {
 	CompletionTokens int64     `gorm:"not null"`
 	TotalTokens      int64     `gorm:"not null"`
 	CreatedAt        time.Time `gorm:"primaryKey;not null"`
+	// KeyID is the API key that made the request, as the Gateway reported
+	// it. UserID is that key's creator, resolved when the record is written
+	// so the attribution survives the key's or the user's later deletion.
+	// Both are empty for records written before they existed.
+	//
+	// KeyID 是 Gateway 上报的、发起请求的 API key。UserID 是该 key 的创建者，在写入
+	// 记录时解析，使归属在 key 或用户之后被删除时依然保留。两者出现之前写入的记录为空。
+	KeyID  string `gorm:"size:32;not null;default:''"`
+	UserID string `gorm:"size:32;not null;default:''"`
 	// NodeID is the tenant-owned node that served the request, as the Gateway
 	// reported it, or empty. It is used to price the record and not stored.
 	//

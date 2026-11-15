@@ -110,6 +110,7 @@ func (h *handlers) ledgerUsage(ctx context.Context, nodeID string, usage runtime
 	}
 	accepted := h.usageLedger.enqueue(UsageRecord{
 		NodeID:           nodeID,
+		KeyID:            identity.KeyID,
 		RequestID:        requestIDFrom(ctx),
 		TenantID:         identity.TenantID,
 		Model:            model,
