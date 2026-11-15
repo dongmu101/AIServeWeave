@@ -1,8 +1,7 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 
-import { Message } from "@/components/i18n/message";
-import { LEGAL_PATHS, SiteFooter } from "@/components/site/site-footer";
+import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
 import { buttonVariants } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -80,8 +79,6 @@ export default async function PricingPage() {
   };
   const empty = catalog !== null && catalog.accounts.length + catalog.presales.length + catalog.packages.length + catalog.prices.length === 0;
 
-  const linkClass = "underline underline-offset-4 hover:text-foreground";
-
   return (
     <>
     <SiteHeader signInNext={BUY_TARGET} />
@@ -90,12 +87,6 @@ export default async function PricingPage() {
         <div className="space-y-1">
           <h1 className="font-heading text-2xl font-semibold tracking-tight">{t("pricing.heading")}</h1>
           <p className="text-sm text-muted-foreground">{t("pricing.subtitle")}</p>
-          <p className="text-sm text-muted-foreground">
-            <Message id="site.purchaseNote" values={{
-              terms: <Link href={LEGAL_PATHS.terms} className={linkClass}>{t("site.terms")}</Link>,
-              refund: <Link href={LEGAL_PATHS.refund} className={linkClass}>{t("site.refund")}</Link>,
-            }} />
-          </p>
         </div>
       </header>
 
