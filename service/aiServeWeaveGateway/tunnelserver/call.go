@@ -2,8 +2,6 @@ package tunnelserver
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -12,6 +10,7 @@ import (
 	"time"
 
 	tunnelv1 "AIServeWeave/api/proto/tunnel/v1"
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
@@ -454,15 +453,15 @@ func slotDeathError(cause error) error {
 }
 
 // newRequestID mints the request_id carried on every frame of one request. It
-// is random rather than sequential because it appears in both sides' logs and
+// is a UUIDv7 rather than a counter because it appears in both sides' logs and
 // must not leak how many requests a replica has served.
 func newRequestID() string {
-	var buf [16]byte
-	if _, err := rand.Read(buf[:]); err != nil {
+	id, err := idgen.New()
+	if err != nil {
 		// crypto/rand failing is not a condition a request can recover
 		// from, but a correlation id is not worth killing a request over:
 		// fall back to a value that is still unique per process.
 		return "req-" + strconv.FormatInt(time.Now().UnixNano(), 36)
 	}
-	return hex.EncodeToString(buf[:])
+	return id
 }

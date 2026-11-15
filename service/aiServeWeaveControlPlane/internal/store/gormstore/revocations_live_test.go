@@ -278,7 +278,7 @@ func TestLiveConcurrentRevocationsReachFinalGeneration(t *testing.T) {
 		fixture := seedRevocationFixture(t, ctx, st, model.StatusActive)
 		keyIDs := []string{fixture.keyID}
 		for i := 1; i < producers; i++ {
-			key := &model.APIKey{ID: model.NewID(model.PrefixAPIKey), TenantID: fixture.tenantID, CreatedBy: fixture.userID, Name: "concurrent", Hash: model.NewID(model.PrefixAPIKey) + model.NewID(model.PrefixAPIKey), Display: "aisw-live", Status: model.StatusActive}
+			key := &model.APIKey{ID: model.NewID(model.PrefixAPIKey), TenantID: fixture.tenantID, CreatedBy: fixture.userID, Name: "concurrent", Hash: liveKeyHash(model.NewID(model.PrefixAPIKey)), Display: "aisw-live", Status: model.StatusActive}
 			if err := st.CreateAPIKey(ctx, key); err != nil {
 				t.Fatalf("CreateAPIKey[%d] error = %v, want nil", i, err)
 			}
@@ -393,7 +393,7 @@ func seedRevocationFixture(t *testing.T, ctx context.Context, st *gormstore.Stor
 	if err := st.CreateUser(ctx, &model.User{ID: fixture.userID, TenantID: fixture.tenantID, Email: fixture.userID + "@example.com", PasswordHash: "digest", Role: model.RoleMember, Status: userStatus}); err != nil {
 		t.Fatalf("CreateUser member error = %v, want nil", err)
 	}
-	if err := st.CreateAPIKey(ctx, &model.APIKey{ID: fixture.keyID, TenantID: fixture.tenantID, CreatedBy: fixture.userID, Name: "key", Hash: fixture.keyID + fixture.keyID, Display: "aisw-live", Status: model.StatusActive}); err != nil {
+	if err := st.CreateAPIKey(ctx, &model.APIKey{ID: fixture.keyID, TenantID: fixture.tenantID, CreatedBy: fixture.userID, Name: "key", Hash: liveKeyHash(fixture.keyID), Display: "aisw-live", Status: model.StatusActive}); err != nil {
 		t.Fatalf("CreateAPIKey error = %v, want nil", err)
 	}
 	return fixture

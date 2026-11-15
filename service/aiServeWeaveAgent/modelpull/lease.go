@@ -1,10 +1,10 @@
 package modelpull
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"os"
+
+	"AIServeWeave/common/idgen"
 )
 
 const (
@@ -87,11 +87,10 @@ func (l *Ledger) newLease(path string, base, quotaBytes, sizeHint int64) *ledger
 	if chunk < minLeaseBytes {
 		chunk = minLeaseBytes
 	}
-	var raw [8]byte
-	_, _ = rand.Read(raw[:])
+	leaseID, _ := idgen.New()
 	return &ledgerLease{
 		ledger:     l,
-		id:         hex.EncodeToString(raw[:]),
+		id:         leaseID,
 		path:       path,
 		quotaBytes: quotaBytes,
 		chunk:      chunk,

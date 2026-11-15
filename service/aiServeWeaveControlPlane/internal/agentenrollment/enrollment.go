@@ -7,7 +7,6 @@ import (
 	"archive/zip"
 	"bytes"
 	"context"
-	"crypto/rand"
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/hex"
@@ -22,6 +21,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/runtime"
 )
 
@@ -123,15 +123,17 @@ type Credential struct {
 	CASHA256  string
 }
 
-// NewNodeID returns a random node ID of the form node_<32 hex>.
+// NewNodeID returns a node ID of the form node_<32 hex>, the hex being an
+// idgen UUIDv7.
 //
-// NewNodeID 返回形如 node_<32 位十六进制> 的随机节点 ID。
+// NewNodeID 返回形如 node_<32 位十六进制> 的节点 ID，十六进制部分是 idgen 铸造的
+// UUIDv7。
 func NewNodeID() (string, error) {
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
+	id, err := idgen.New()
+	if err != nil {
 		return "", errors.New("agentenrollment: identity generation failed")
 	}
-	return "node_" + hex.EncodeToString(id[:]), nil
+	return "node_" + id, nil
 }
 
 // MintCredential issues a token bound to nodeID without building an archive.
@@ -162,11 +164,11 @@ func (s *Service) MintCredential(ctx context.Context, nodeID string, ttl time.Du
 //
 // Create 分配随机新节点 ID 后签发绑定令牌。地址仅写入下载内容，绝不作为服务端网络目标。
 func (s *Service) Create(ctx context.Context, registry, gateway string, ttl time.Duration) (Bundle, error) {
-	var id [16]byte
-	if _, err := rand.Read(id[:]); err != nil {
-		return Bundle{}, errors.New("agentenrollment: identity generation failed")
+	nodeID, err := NewNodeID()
+	if err != nil {
+		return Bundle{}, err
 	}
-	return s.CreateNode(ctx, "node_"+hex.EncodeToString(id[:]), registry, gateway, ttl)
+	return s.CreateNode(ctx, nodeID, registry, gateway, ttl)
 }
 
 // CreateNode is Create for a node ID the caller already chose, such as a

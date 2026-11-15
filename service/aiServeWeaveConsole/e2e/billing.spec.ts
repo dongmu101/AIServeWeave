@@ -520,7 +520,7 @@ test("Alipay redeems with one action id across a lost answer and opens the purch
 const EZFP_AT = "2026-11-12T00:00:00Z";
 const EZFP_METHODS = { dodo: true, alipay: false, ezfp: true, ezfp_types: ["alipay", "wxpay"] };
 const CNY_PACKAGE = { id: "pkg_fixed", name: "CNY pack", kind: "fixed", credits_micro: 10_000_000, price_minor: 6800, currency: "CNY", active: true, sort_order: 1, dodo_available: true, ezfp_available: true, created_at: EZFP_AT, updated_at: EZFP_AT };
-const EZFP_ORDER_ID = `ord_${"0123456789abcdef".repeat(2).slice(0, 28)}`;
+const EZFP_ORDER_ID = `ord_${"0123456789abcdef".repeat(2)}`;
 const ezfpOverview = (patch: Record<string, unknown> = {}) => ({ ...BILLING_OVERVIEW, packages: [CNY_PACKAGE], payment_methods: EZFP_METHODS, ...patch });
 
 test("choosing WeChat Pay sends one EZFP checkout with provider and pay_type and redirects", async ({ page }) => {

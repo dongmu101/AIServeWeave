@@ -239,12 +239,15 @@ test("an EZFP checkout adds provider and pay_type, and Dodo adds nothing", () =>
 });
 
 test("an EZFP return names an order only when it carries our id and EZFP's trade number", () => {
-  const id = `ord_${"0123456789abcdef".repeat(2).slice(0, 28)}`;
+  const id = `ord_${"0123456789abcdef".repeat(2)}`;
+  const legacy = `ord_${"0123456789abcdef".repeat(2).slice(0, 28)}`;
   assert.equal(ezfpReturnOrderId({ out_trade_no: id, trade_no: "2026111200001", trade_status: "TRADE_SUCCESS", sign: "x" }), id);
+  assert.equal(ezfpReturnOrderId({ out_trade_no: legacy, trade_no: "T1" }), legacy, "an order created before UUIDv7 ids still returns");
   assert.equal(ezfpReturnOrderId({ out_trade_no: id, trade_no: "T1" }), id, "trade_status is not read at all");
   for (const params of [
     {}, { out_trade_no: id }, { trade_no: "T1" }, { out_trade_no: id, trade_no: "" },
-    { out_trade_no: "ord_ABCDEF0123456789abcdef012345", trade_no: "T1" },
+    { out_trade_no: "ord_ABCDEF0123456789abcdef0123456789", trade_no: "T1" },
+    { out_trade_no: `${legacy}00`, trade_no: "T1" },
     { out_trade_no: `${id}0`, trade_no: "T1" }, { out_trade_no: id.slice(0, -1), trade_no: "T1" },
     { out_trade_no: `x${id}`, trade_no: "T1" }, { out_trade_no: `${id}\n`, trade_no: "T1" },
     { out_trade_no: [id, id], trade_no: "T1" }, { out_trade_no: id, trade_no: ["T1"] },

@@ -100,6 +100,27 @@ func (f partitionFixture) load(t *testing.T, ctx context.Context, db *gorm.DB, s
 	}
 }
 
+// freshConnections closes the pool's idle connections. A migration that
+// widens a column changes the result type of a query cached before it, and
+// PostgreSQL rejects the cached plan once ("cached plan must not change result
+// type"). A server never meets this: it migrates before its first query, and
+// an upgrade stops every replica first. A test that snapshots through the same
+// pool on both sides of the upgrade does, so it starts over after migrating.
+//
+// freshConnections 关闭连接池中的空闲连接。加宽列的迁移会改变迁移前已缓存查询的
+// 结果类型，PostgreSQL 会拒绝一次该缓存计划（"cached plan must not change result
+// type"）。服务端不会遇到：它在第一次查询前完成迁移，升级也会先停掉全部副本。在
+// 升级前后都通过同一连接池取快照的测试会遇到，因此迁移后要换新连接。
+func freshConnections(t *testing.T, db *gorm.DB) {
+	t.Helper()
+	pool, err := db.DB()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.SetMaxIdleConns(0)
+	pool.SetMaxIdleConns(2)
+}
+
 func snapshot(t *testing.T, db *gorm.DB, table string) []map[string]any {
 	t.Helper()
 	var rows []map[string]any
@@ -136,6 +157,7 @@ func upgradedDatabase(t *testing.T, ctx context.Context, db *gorm.DB) (*gormstor
 	if err := st.MigrateAll(ctx, false); err != nil {
 		t.Fatalf("upgrade MigrateAll: %v", err)
 	}
+	freshConnections(t, db)
 	if err := st.CheckSchema(ctx); err != nil {
 		t.Fatalf("CheckSchema after upgrade: %v", err)
 	}
@@ -313,11 +335,17 @@ func TestLivePartitionResumeAndRollback(t *testing.T) {
 		if err := st.MigrateAll(ctx, false); err != nil {
 			t.Fatalf("MigrateAll: %v", err)
 		}
+		freshConnections(t, db)
 		if db.Name() == "mysql" {
 			// A conversion that finished its ALTER but not its ledger update is
-			// completed by an explicit resume without converting twice.
+			// completed by an explicit resume without converting twice. The
+			// migrations after it never ran in that state, so their rows go.
 			// ALTER 已完成、账本未更新的转换，由显式 resume 补完，不会再次转换。
+			// 处于这种状态时其后的迁移从未执行，因此删掉它们的账本行。
 			_, wantNames, _, _ := gormstore.PartitionLayoutForTest(db, "request_logs")
+			if err := db.Exec("DELETE FROM schema_migrations_request_logs WHERE id > ?", "0004_partition_request_logs.sql").Error; err != nil {
+				t.Fatal(err)
+			}
 			if err := db.Table("schema_migrations_request_logs").Where("id = ?", "0004_partition_request_logs.sql").Update("dirty", true).Error; err != nil {
 				t.Fatal(err)
 			}

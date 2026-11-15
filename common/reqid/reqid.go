@@ -13,26 +13,27 @@ package reqid
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
+
+	"AIServeWeave/common/idgen"
 )
 
 type contextKey struct{}
 
-// New returns a fresh 16-byte hex-encoded id. A broken OS entropy source is
-// not a condition worth crashing a request over, so it falls back to a fixed
-// sentinel instead of panicking — degraded correlation for one request beats
-// a downed handler.
+// New returns a fresh id from idgen: a UUIDv7 as 32 hex characters, so
+// request ids sort in the order they were minted. A broken OS entropy source
+// is not a condition worth crashing a request over, so it falls back to a
+// fixed sentinel instead of panicking — degraded correlation for one request
+// beats a downed handler.
 //
-// New 返回一个新的 16 字节十六进制 id。操作系统熵源损坏不值得让一次请求崩溃，
-// 因此退化为一个固定哨兵值而不是 panic——一次请求关联能力下降，好过 handler 被
-// 打挂。
+// New 返回一个由 idgen 铸造的新 id：32 位十六进制的 UUIDv7，因此请求 id 按铸造顺序
+// 排序。操作系统熵源损坏不值得让一次请求崩溃，因此退化为一个固定哨兵值而不是
+// panic——一次请求关联能力下降，好过 handler 被打挂。
 func New() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := idgen.New()
+	if err != nil {
 		return "unavailable"
 	}
-	return hex.EncodeToString(b[:])
+	return id
 }
 
 // WithValue attaches id to ctx.

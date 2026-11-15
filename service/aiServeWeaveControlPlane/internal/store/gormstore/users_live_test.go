@@ -2,6 +2,8 @@ package gormstore_test
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"os"
 	"sync"
@@ -17,6 +19,16 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/gormstore"
 )
+
+// liveKeyHash derives a distinct 64-character api_keys.hash from id, the width
+// of the column, whatever the length of the id.
+//
+// liveKeyHash 从 id 派生一个互不相同的 64 字符 api_keys.hash，与列宽一致，不受 id
+// 长度影响。
+func liveKeyHash(id string) string {
+	sum := sha256.Sum256([]byte(id))
+	return hex.EncodeToString(sum[:])
+}
 
 func lifecycleStores(t *testing.T, test func(*testing.T, *gormstore.Store)) {
 	t.Helper()
@@ -75,7 +87,7 @@ func TestLiveUserLifecyclePreservesOwnerAndRevokesKeys(t *testing.T) {
 		}
 		keys := make([]*model.APIKey, len(owners))
 		for i, owner := range owners {
-			keys[i] = &model.APIKey{ID: model.NewID(model.PrefixAPIKey), TenantID: tenantID, CreatedBy: owner.ID, Name: "key", Hash: owner.ID + owner.ID, Display: "aisw-live", Status: model.StatusActive}
+			keys[i] = &model.APIKey{ID: model.NewID(model.PrefixAPIKey), TenantID: tenantID, CreatedBy: owner.ID, Name: "key", Hash: liveKeyHash(owner.ID), Display: "aisw-live", Status: model.StatusActive}
 			if err := st.CreateAPIKey(ctx, keys[i]); err != nil {
 				t.Fatalf("CreateAPIKey: %v", err)
 			}

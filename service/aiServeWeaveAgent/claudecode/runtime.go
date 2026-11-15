@@ -13,6 +13,7 @@ import (
 	"os"
 	"sync"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
@@ -291,7 +292,7 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		defer close(out.done)
 		defer close(out.items)
 		diagnostics := newMessagesRoundDiagnostics(parsed.isNative(), len(parsed.Safeguards) > 0)
-		roundID := randomID()
+		roundID := idgen.MustNew()
 		r.logger.Info("Claude Messages round started", "runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path, "request_bytes", len(req.JSON))
 		writer := &nativeWriter{stream: out, header: make(http.Header), status: 200, diagnostics: diagnostics}
 		err := r.bridge.respond(ctx, writer, s, true)

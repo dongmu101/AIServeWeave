@@ -2,14 +2,13 @@ package ratelimit
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/quota"
 	"AIServeWeave/common/runtime"
 )
@@ -330,9 +329,9 @@ func (l *redisLease) Release(ctx context.Context, tokens int) {
 }
 
 func newLeaseID() (string, error) {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
+	id, err := idgen.New()
+	if err != nil {
 		return "", fmt.Errorf("ratelimit: generating a lease id: %w", err)
 	}
-	return hex.EncodeToString(b[:]), nil
+	return id, nil
 }

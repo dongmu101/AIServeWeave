@@ -98,7 +98,7 @@ const RolePlatformOperator = "platform_operator"
 // 都以它限定范围——这个限定就是多租户本身，且它由 store 层强制执行，而不是留给每个
 // handler 自己记得。
 type Tenant struct {
-	ID     string `gorm:"primaryKey;size:32"`
+	ID     string `gorm:"primaryKey;size:40"`
 	Name   string `gorm:"size:128;not null"`
 	Status string `gorm:"size:16;not null;index"`
 	// The three limit columns are the tenant's quota, stored here rather than
@@ -154,8 +154,8 @@ func (Tenant) TableName() string { return "tenants" }
 // User 是一个登录 Console 的人。它的 PasswordHash 是本系统中唯一适合使用慢哈希的
 // 地方：与 API Key 不同，密码是人自己选的，因此它一定活在某人已经拥有的字典里。
 type User struct {
-	ID       string `gorm:"primaryKey;size:32"`
-	TenantID string `gorm:"size:32;not null;index"`
+	ID       string `gorm:"primaryKey;size:40"`
+	TenantID string `gorm:"size:40;not null;index"`
 	// Email is unique across the whole deployment, not per tenant: it is the
 	// sign-in identifier, and an identifier that needs a tenant alongside it
 	// to be unique is one a person cannot type into a login form.
@@ -206,7 +206,7 @@ func (User) TableName() string { return "users" }
 // 不同的登录入口（不同端点、不同会话范围——见 PlatformScope），因此同一个人
 // 同时持有两者，并不是 email 唯一性约束想要防止的那种身份冲突。
 type PlatformOperator struct {
-	ID           string `gorm:"primaryKey;size:32"`
+	ID           string `gorm:"primaryKey;size:40"`
 	Email        string `gorm:"size:255;not null;uniqueIndex"`
 	PasswordHash string `gorm:"size:120;not null"`
 	Name         string `gorm:"size:128"`
@@ -228,15 +228,15 @@ func (PlatformOperator) TableName() string { return "platform_operators" }
 // APIKey 是调用方向 Gateway 出示的一个凭据。明文只存在于创建它那次调用的响应里；
 // 留在这里的是用于检索它的哈希，以及列表可以展示的那个显示形式。
 type APIKey struct {
-	ID       string `gorm:"primaryKey;size:32"`
-	TenantID string `gorm:"size:32;not null;index"`
+	ID       string `gorm:"primaryKey;size:40"`
+	TenantID string `gorm:"size:40;not null;index"`
 	// CreatedBy is the user who minted the key. It survives that user's
 	// deletion, because an audit trail that loses its actor when the actor
 	// leaves is not an audit trail.
 	//
 	// CreatedBy 是铸造该 key 的用户。它在该用户被删除后依然保留，因为一条会随行为人
 	// 离开而丢失行为人的审计线索，不算审计线索。
-	CreatedBy string `gorm:"size:32;not null"`
+	CreatedBy string `gorm:"size:40;not null"`
 	Name      string `gorm:"size:128;not null"`
 	// Hash is the SHA-256 of the plaintext, and the column every verification
 	// looks up by. It is unique: two rows with one hash would mean one key
@@ -470,13 +470,13 @@ const (
 // AuditLog 是一次管理操作的记录，对应 README 的「所有管理操作写入审计日志」。它是
 // 只追加的：本服务不会更新或删除该表的任何一行，这正是它成为证据而非状态的原因。
 type AuditLog struct {
-	ID       string `gorm:"primaryKey;size:32"`
-	TenantID string `gorm:"size:32;not null;index"`
+	ID       string `gorm:"primaryKey;size:40"`
+	TenantID string `gorm:"size:40;not null;index"`
 	// ActorID is the user who performed the action, or empty for an action
 	// performed by the system itself.
 	//
 	// ActorID 是执行该动作的用户；由系统自身执行的动作则为空。
-	ActorID string `gorm:"size:32;index"`
+	ActorID string `gorm:"size:40;index"`
 	Action  string `gorm:"size:64;not null;index"`
 	// Target names what was acted on — an id, never the object's contents.
 	//
@@ -515,7 +515,7 @@ func (AuditLog) TableName() string { return "audit_logs" }
 type ModelAccess struct {
 	Scope      string    `gorm:"primaryKey;size:64"`
 	ModelsJSON string    `gorm:"column:models_json;not null"`
-	UpdatedBy  string    `gorm:"size:32;not null"`
+	UpdatedBy  string    `gorm:"size:40;not null"`
 	UpdatedAt  time.Time `gorm:"not null"`
 }
 
@@ -531,7 +531,7 @@ type NodeAccess struct {
 	Mode        string    `gorm:"size:16;not null;default:dedicated"`
 	NodeID      string    `gorm:"primaryKey;size:128"`
 	TenantsJSON string    `gorm:"column:tenants_json;not null"`
-	UpdatedBy   string    `gorm:"size:32;not null"`
+	UpdatedBy   string    `gorm:"size:40;not null"`
 	UpdatedAt   time.Time `gorm:"not null"`
 }
 
@@ -552,15 +552,15 @@ func (NodeAccess) TableName() string { return "node_access" }
 // TenantNodesConf.MaxCreatesPerDay 计数。
 type TenantNode struct {
 	NodeID    string    `gorm:"primaryKey;size:128"`
-	TenantID  string    `gorm:"size:32;not null;index:idx_tenant_nodes_tenant_created,priority:1"`
-	CreatedBy string    `gorm:"size:32;not null"`
+	TenantID  string    `gorm:"size:40;not null;index:idx_tenant_nodes_tenant_created,priority:1"`
+	CreatedBy string    `gorm:"size:40;not null"`
 	CreatedAt time.Time `gorm:"not null;index:idx_tenant_nodes_tenant_created,priority:2"`
 	// EnrollBy is when the bundle's one-time token expires.
 	//
 	// EnrollBy 是接入包一次性令牌的过期时间。
 	EnrollBy  time.Time `gorm:"not null"`
 	RevokedAt *time.Time
-	RevokedBy string `gorm:"size:32;not null"`
+	RevokedBy string `gorm:"size:40;not null"`
 }
 
 // TableName pins the table name, as Tenant.TableName does.
@@ -579,10 +579,10 @@ func (TenantNode) TableName() string { return "tenant_nodes" }
 type AgentInstallCode struct {
 	CodeHash     string    `gorm:"primaryKey;size:64"`
 	NodeID       string    `gorm:"size:128;not null"`
-	TenantID     string    `gorm:"size:32;not null"`
+	TenantID     string    `gorm:"size:40;not null"`
 	RegistryAddr string    `gorm:"size:255;not null"`
 	GatewayAddr  string    `gorm:"size:255;not null"`
-	CreatedBy    string    `gorm:"size:32;not null"`
+	CreatedBy    string    `gorm:"size:40;not null"`
 	CreatedAt    time.Time `gorm:"not null"`
 	ExpiresAt    time.Time `gorm:"not null"`
 	// RedeemedAt is set by the one conditional update that redeems the code.
@@ -614,7 +614,7 @@ type NodeProvider struct {
 	ModelsJSON    string    `gorm:"type:text;not null"`
 	KeyCiphertext string    `gorm:"type:text;not null"`
 	KeyLast4      string    `gorm:"size:8;not null"`
-	UpdatedBy     string    `gorm:"size:32;not null"`
+	UpdatedBy     string    `gorm:"size:40;not null"`
 	CreatedAt     time.Time `gorm:"not null"`
 	UpdatedAt     time.Time `gorm:"not null"`
 }

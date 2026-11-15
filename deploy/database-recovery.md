@@ -82,6 +82,25 @@ P07 会接管既有 AutoMigrate 基础表，补齐缺失的配额和 `last_login
 - `schema` 检查会校验五张表的分区列与兜底分区；被人工去掉分区或删掉兜底分区时，控制面按表名拒绝启动。
 - 没有反向迁移。回退只能恢复升级前的备份并使用匹配的旧二进制；旧二进制遇到新版本号会拒绝启动。
 
+## ID 列加宽（base 0018 / billing 0011 / request_logs 0005 / usage_records 0004 / response_turns 0003 / alerting 0003 / routes 0003 / workflowtemplates 0004 / jobs 0006）
+
+控制面实体 ID（`tnt_`、`usr_`、`key_`、`aud_` 等前缀）改为前缀加 32 位十六进制的 UUIDv7，长 36 字符，原来是前缀加 28 位随机十六进制，长 32 字符。本次迁移把所有保存这类 ID 的列从 `VARCHAR(32)` 加宽到 `VARCHAR(40)`：主键、`tenant_id`、`key_id`、`user_id`，以及 `created_by`、`updated_by`、`actor_id` 这类记录操作人的列。只加宽列，不改数据。旧 ID 继续有效，新旧格式可以在同一张表里共存。
+
+| 迁移 | 涉及的表 |
+| --- | --- |
+| `base/0018_widen_id_columns.sql` | `tenants`、`users`、`platform_operators`、`api_keys`、`audit_logs`、`model_access`、`node_access`、`tenant_nodes`、`agent_install_codes`、`node_providers` |
+| `billing/0011_widen_id_columns.sql` | `tenant_billing`、`credit_packages`、`model_prices`、`checkout_orders`、`credit_ledger`、`usage_charges`、`refund_requests`、`account_sales`、`account_purchases`、`account_presales`、`alipay_purchases`、`alipay_redemptions` |
+| `request_logs/0005`、`response_turns/0003`、`usage_records/0004` | 三张分区表的 `tenant_id`，以及 `usage_records` 的 `key_id`、`user_id` |
+| `alerting/0003`、`routes/0003`、`workflowtemplates/0004` | `alert_instances.acknowledged_by`、`route_revisions.actor_id`、`workflow_template_revisions.actor_id` |
+| `jobs/0006_widen_tenant_id.sql`（仅 MySQL） | `jobs.tenant_id`、`job_artifacts.tenant_id` |
+
+升级步骤与常规升级相同：先备份，执行 `-migrate up`，再用 `-migrate status` 确认全部 applied。**必须先迁移，再启动新二进制。**新版本的 `CheckSchema` 要求这些列至少 40 字符，没迁移的库会被拒绝启动。旧二进制遇到新版本号会按「未知版本」拒绝启动。回退要恢复旧库，或者使用与库匹配的二进制。新 ID 已经写入后，就不能再把列收窄回 32 字符。
+
+**锁与耗时：**
+
+- **MySQL（InnoDB）**：utf8mb4 下 32 字符和 40 字符都在 255 字节以内，长度前缀不变，所以加宽 `VARCHAR` 是 `ALGORITHM=INPLACE` 的纯元数据修改，不复制表，不重建索引，主键列和分区表也一样。2026-11-15 在 MySQL 9.7.2 上用 `ALGORITHM=INPLACE, LOCK=NONE` 验证过，分区表和带默认值的列都能在线执行。语句只在开始和结束时短暂持有元数据锁，表上有长事务时会排队。迁移语句只扩大列宽，可以重复执行，中断后用 `-migrate resume` 续跑即可。
+- **PostgreSQL**：加宽 `varchar` 不重写表，也不重建索引，只在一个短事务里持有 `ACCESS EXCLUSIVE` 锁。还在运行的旧进程里，迁移前缓存过的预处理语句会因为结果类型变了，报一次 `cached plan must not change result type`，pgx 随后会让该缓存失效。按上文升级流程先停掉全部副本，就不会遇到。
+
 ## 失败处理
 
 - **锁竞争**：另一个迁移进程持有同库会话锁时立即失败；等其退出后重试。分区维护与保留期清理也短暂使用这把锁，维护遇到时跳过本轮，清理最多等待 2 分钟。DDL 与锁使用同一个专用连接，整个迁移调用默认最多五分钟，可用 `Database.MigrationTimeout` 调整。连接终止会释放数据库会话锁。

@@ -89,7 +89,7 @@ func checkModelSchema(db *gorm.DB, value any) error {
 					case "digest":
 						size = 64
 					case "actor_id":
-						size = 32
+						size = model.IDSize
 					case "description":
 						compatible = kind == "text" || kind == "mediumtext" || kind == "longtext"
 					default:

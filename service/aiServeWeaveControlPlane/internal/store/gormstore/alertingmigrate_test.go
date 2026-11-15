@@ -33,8 +33,8 @@ func TestLoadAlertingMigrationsParsesEmbeddedSQL(t *testing.T) {
 			if err != nil {
 				t.Fatalf("loadMigrations(alerting, %s) error = %v, want nil", dialect, err)
 			}
-			if len(files) != 2 {
-				t.Fatalf("loadMigrations(alerting, %s) returned %d files, want 2 (alert_rules + alert_instances)", dialect, len(files))
+			if len(files) != 3 {
+				t.Fatalf("loadMigrations(alerting, %s) returned %d files, want 3 (alert_rules + alert_instances + widen acknowledged_by)", dialect, len(files))
 			}
 		})
 	}

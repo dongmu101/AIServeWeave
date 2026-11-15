@@ -34,10 +34,12 @@ func TestLoadUsageRecordsMigrationsParsesEmbeddedSQL(t *testing.T) {
 				t.Fatalf("loadMigrations(usage_records, %s) error = %v, want nil", dialect, err)
 			}
 			// 0001 creates the table; 0002 converts it to time partitions; 0003
-			// adds key_id and user_id.
-			// 0001 建表；0002 把它转换为按时间分区；0003 新增 key_id 与 user_id。
-			if len(files) != 3 {
-				t.Fatalf("loadMigrations(usage_records, %s) returned %d files, want 3", dialect, len(files))
+			// adds key_id and user_id; 0004 widens the id columns to hold UUIDv7
+			// ids.
+			// 0001 建表；0002 把它转换为按时间分区；0003 新增 key_id 与 user_id；0004
+			// 加宽 id 列以容纳 UUIDv7 id。
+			if len(files) != 4 {
+				t.Fatalf("loadMigrations(usage_records, %s) returned %d files, want 4", dialect, len(files))
 			}
 		})
 	}

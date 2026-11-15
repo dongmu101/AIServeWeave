@@ -30,7 +30,7 @@ func ValidAccountKind(kind string) bool {
 // 为其分配一个同类型的空闲包月账号，一个月自分配时起算。Capacity 限制仍在等待账号的
 // 订单数，包括 AccountCheckoutHold 内的待付款结账。Kind 创建后不可更改。
 type AccountPresale struct {
-	ID            string `gorm:"primaryKey;size:32"`
+	ID            string `gorm:"primaryKey;size:40"`
 	Kind          string `gorm:"size:16;not null"`
 	Name          string `gorm:"size:128;not null"`
 	PriceMinor    int64  `gorm:"not null"`

@@ -51,7 +51,7 @@ import "time"
 // 揭示这种区别——与本包别处 store.ErrNotFound 采用的是同一种不可区分）。
 type ResponseTurn struct {
 	ID                 string    `gorm:"primaryKey;size:64"`
-	TenantID           string    `gorm:"size:32;not null;index:idx_response_turns_tenant"`
+	TenantID           string    `gorm:"size:40;not null;index:idx_response_turns_tenant"`
 	PreviousResponseID string    `gorm:"size:64;not null;default:''"`
 	Model              string    `gorm:"size:128;not null;default:''"`
 	Messages           string    `gorm:"type:text;not null"`

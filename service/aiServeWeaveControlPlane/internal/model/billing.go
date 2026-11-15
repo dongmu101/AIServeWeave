@@ -107,7 +107,7 @@ const (
 //
 // TenantBilling 是一个租户的计费状态。没有这一行的租户是余额为零的 exempt 租户。
 type TenantBilling struct {
-	TenantID       string `gorm:"primaryKey;size:32"`
+	TenantID       string `gorm:"primaryKey;size:40"`
 	Mode           string `gorm:"size:16;not null"`
 	BalanceMicro   int64  `gorm:"not null"`
 	DodoCustomerID string `gorm:"size:64;not null"`
@@ -139,7 +139,7 @@ func (b TenantBilling) Blocked() bool {
 // [MinAmountMinor, MaxAmountMinor] 之内。充值包只下架（Active 为 false）而不删除，因为
 // 订单仍然指向它们。
 type CreditPackage struct {
-	ID                       string `gorm:"primaryKey;size:32"`
+	ID                       string `gorm:"primaryKey;size:40"`
 	Name                     string `gorm:"size:128;not null"`
 	Kind                     string `gorm:"size:16;not null"`
 	DodoProductID            string `gorm:"size:64;not null"`
@@ -190,7 +190,7 @@ type ModelPrice struct {
 	Model              string `gorm:"primaryKey;size:128"`
 	InputMicroPerMTok  int64  `gorm:"column:input_micro_per_m_tok;not null"`
 	OutputMicroPerMTok int64  `gorm:"column:output_micro_per_m_tok;not null"`
-	UpdatedBy          string `gorm:"size:32;not null"`
+	UpdatedBy          string `gorm:"size:40;not null"`
 	UpdatedAt          time.Time
 }
 
@@ -263,9 +263,9 @@ func nonNegative(v int64) uint64 {
 // DodoSessionID 与 DodoPaymentID 都是 "ezfp:<trade_no>"。前缀使不同服务商的 id 在唯一
 // 索引下永远不会冲突，所有按付款查找订单的规则也都无需改动。
 type CheckoutOrder struct {
-	ID        string `gorm:"primaryKey;size:32"`
-	TenantID  string `gorm:"size:32;not null"`
-	PackageID string `gorm:"size:32;not null"`
+	ID        string `gorm:"primaryKey;size:40"`
+	TenantID  string `gorm:"size:40;not null"`
+	PackageID string `gorm:"size:40;not null"`
 	// DodoProductID is the package's product when the order was created,
 	// kept so a refund names the item the payment bought even after the
 	// package is pointed at another product. Empty for orders created before
@@ -286,7 +286,7 @@ type CheckoutOrder struct {
 	PaidAmountMinor int64  `gorm:"not null"`
 	PaidCurrency    string `gorm:"size:8;not null"`
 	Status          string `gorm:"size:16;not null"`
-	CreatedBy       string `gorm:"size:32;not null"`
+	CreatedBy       string `gorm:"size:40;not null"`
 	// AccountID is the monthly account a fiat order buys one month of; empty
 	// for a credit order, whose PackageID is set instead. AccountExpiresAt
 	// is the expiry the paid order granted, nil until granted — a paid order
@@ -295,7 +295,7 @@ type CheckoutOrder struct {
 	// AccountID 是法币订单所购一个月的包月账号；点数订单为空并改设 PackageID。
 	// AccountExpiresAt 是付款后开通到的到期时间，开通前为 nil——已付款却仍为 nil 的订单
 	// 无法开通，需要运维退款。
-	AccountID        string     `gorm:"size:32;not null"`
+	AccountID        string     `gorm:"size:40;not null"`
 	AccountExpiresAt *time.Time `gorm:"column:account_expires_at"`
 	// PresaleID is the presale a fiat order buys one month of. Payment only
 	// marks it paid; an operator's assignment later sets AccountID and
@@ -305,7 +305,7 @@ type CheckoutOrder struct {
 	// PresaleID 是法币订单所购一个月的预售。付款只把它标为已付款；之后由运维分配时
 	// 设置 AccountID 与 AccountExpiresAt。已付款但 AccountExpiresAt 为 nil 的预售订单
 	// 是在等待分配账号，而不是开通失败。
-	PresaleID string `gorm:"size:32;not null"`
+	PresaleID string `gorm:"size:40;not null"`
 	// AlipayAmount is the Alipay units a presale order was paid with; zero
 	// for an order paid through Dodo. Alipay can neither report a payment
 	// nor undo a consumption, so such an order is never refundable here.
@@ -531,17 +531,17 @@ const (
 // 给出答复。AmountMinor 以付款币种计，含税。CreditsMicro 是批准时从余额中冻结的点数，
 // 退款失败时原样退回。DodoRefundID 一旦设置即唯一。
 type RefundRequest struct {
-	ID           string  `gorm:"primaryKey;size:32"`
-	TenantID     string  `gorm:"size:32;not null"`
-	OrderID      string  `gorm:"size:32;not null"`
+	ID           string  `gorm:"primaryKey;size:40"`
+	TenantID     string  `gorm:"size:40;not null"`
+	OrderID      string  `gorm:"size:40;not null"`
 	Source       string  `gorm:"size:16;not null"`
 	Status       string  `gorm:"size:16;not null"`
 	AmountMinor  int64   `gorm:"not null"`
 	Currency     string  `gorm:"size:8;not null"`
 	CreditsMicro int64   `gorm:"not null"`
 	Reason       string  `gorm:"size:1024;not null"`
-	RequestedBy  string  `gorm:"size:32;not null"`
-	ReviewedBy   string  `gorm:"size:32;not null"`
+	RequestedBy  string  `gorm:"size:40;not null"`
+	ReviewedBy   string  `gorm:"size:40;not null"`
 	ReviewNote   string  `gorm:"size:1024;not null"`
 	DodoRefundID *string `gorm:"size:64"`
 	Failure      string  `gorm:"size:256;not null"`
@@ -571,14 +571,14 @@ func (r RefundRequest) Active() bool {
 // 余额，因此读取租户历史无需重放。IdempotencyKey 一旦设置即唯一：重放的 webhook 正是靠
 // 它变成空操作。
 type CreditLedgerEntry struct {
-	ID                string  `gorm:"primaryKey;size:32"`
-	TenantID          string  `gorm:"size:32;not null"`
+	ID                string  `gorm:"primaryKey;size:40"`
+	TenantID          string  `gorm:"size:40;not null"`
 	Kind              string  `gorm:"size:24;not null"`
 	AmountMicro       int64   `gorm:"not null"`
 	BalanceAfterMicro int64   `gorm:"not null"`
 	Ref               string  `gorm:"size:128;not null"`
 	IdempotencyKey    *string `gorm:"size:160"`
-	ActorID           string  `gorm:"size:32;not null"`
+	ActorID           string  `gorm:"size:40;not null"`
 	CreatedAt         time.Time
 }
 
@@ -595,7 +595,7 @@ func (CreditLedgerEntry) TableName() string { return "credit_ledger" }
 // 重推多少次，一条用量记录最多扣费一次。
 type UsageCharge struct {
 	RequestID string `gorm:"primaryKey;size:64"`
-	TenantID  string `gorm:"size:32;not null"`
+	TenantID  string `gorm:"size:40;not null"`
 	Model     string `gorm:"size:128;not null"`
 	CostMicro int64  `gorm:"not null"`
 	// Charged reports whether CostMicro was taken from a balance, false for

@@ -37,14 +37,15 @@ func TestLoadRequestLogsMigrationsParsesEmbeddedSQL(t *testing.T) {
 			// that the operator cross-tenant search and the retention sweep
 			// need, since neither filters by tenant_id; 0003 adds the failure
 			// fields (model, error code, message and detail); 0004 converts the
-			// table to daily partitions on created_at.
+			// table to daily partitions on created_at; 0005 widens tenant_id to
+			// hold UUIDv7 ids.
 			//
 			// 0001 建表；0002 补上一个纯 (created_at, id) 索引，供跨租户的
 			// 运维检索与保留期清理使用——两者都不按 tenant_id 过滤；0003 增加
 			// 失败字段（模型、错误码、错误信息与详情）；0004 把表转换为按 created_at
-			// 按天分区。
-			if len(files) != 4 {
-				t.Fatalf("loadMigrations(request_logs, %s) returned %d files, want 4", dialect, len(files))
+			// 按天分区；0005 加宽 tenant_id 以容纳 UUIDv7 id。
+			if len(files) != 5 {
+				t.Fatalf("loadMigrations(request_logs, %s) returned %d files, want 5", dialect, len(files))
 			}
 		})
 	}

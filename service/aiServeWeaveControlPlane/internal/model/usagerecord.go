@@ -40,7 +40,7 @@ import "time"
 // modelroute 别名内，见 Gateway 的 usageledger.go。
 type UsageRecord struct {
 	ID               string    `gorm:"primaryKey;size:64"`
-	TenantID         string    `gorm:"size:32;not null"`
+	TenantID         string    `gorm:"size:40;not null"`
 	Model            string    `gorm:"size:128;not null"`
 	Endpoint         string    `gorm:"size:24;not null"`
 	PromptTokens     int64     `gorm:"not null"`
@@ -54,8 +54,8 @@ type UsageRecord struct {
 	//
 	// KeyID 是 Gateway 上报的、发起请求的 API key。UserID 是该 key 的创建者，在写入
 	// 记录时解析，使归属在 key 或用户之后被删除时依然保留。两者出现之前写入的记录为空。
-	KeyID  string `gorm:"size:32;not null;default:''"`
-	UserID string `gorm:"size:32;not null;default:''"`
+	KeyID  string `gorm:"size:40;not null;default:''"`
+	UserID string `gorm:"size:40;not null;default:''"`
 	// NodeID is the tenant-owned node that served the request, as the Gateway
 	// reported it, or empty. It is used to price the record and not stored.
 	//

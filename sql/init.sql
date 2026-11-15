@@ -201,6 +201,36 @@ ALTER TABLE audit_logs
  ADD PRIMARY KEY (id, created_at)
  PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
 
+-- base/mysql/0018_widen_id_columns.sql
+ALTER TABLE tenants
+ MODIFY id VARCHAR(40) NOT NULL;
+ALTER TABLE users
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE platform_operators
+ MODIFY id VARCHAR(40) NOT NULL;
+ALTER TABLE api_keys
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY created_by VARCHAR(40) NOT NULL;
+ALTER TABLE audit_logs
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY actor_id VARCHAR(40) NULL;
+ALTER TABLE model_access
+ MODIFY updated_by VARCHAR(40) NOT NULL;
+ALTER TABLE node_access
+ MODIFY updated_by VARCHAR(40) NOT NULL;
+ALTER TABLE tenant_nodes
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY created_by VARCHAR(40) NOT NULL,
+ MODIFY revoked_by VARCHAR(40) NOT NULL DEFAULT '';
+ALTER TABLE agent_install_codes
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY created_by VARCHAR(40) NOT NULL;
+ALTER TABLE node_providers
+ MODIFY updated_by VARCHAR(40) NOT NULL;
+
 -- ============================================================
 -- routes
 -- ============================================================
@@ -220,6 +250,10 @@ CREATE TABLE IF NOT EXISTS route_actives (
  id INTEGER PRIMARY KEY CHECK (id = 1),
  revision BIGINT NOT NULL DEFAULT 0
 ) ENGINE=InnoDB;
+
+-- routes/mysql/0003_widen_actor_id.sql
+ALTER TABLE route_revisions
+ MODIFY actor_id VARCHAR(40) NOT NULL;
 
 -- ============================================================
 -- workflow_templates
@@ -250,6 +284,10 @@ CREATE TABLE IF NOT EXISTS workflow_template_actives (
 
 -- workflowtemplates/mysql/0003_workflow_template_ui_workflow.sql
 ALTER TABLE workflow_template_revisions ADD COLUMN workflow_json MEDIUMTEXT NOT NULL DEFAULT ('');
+
+-- workflowtemplates/mysql/0004_widen_actor_id.sql
+ALTER TABLE workflow_template_revisions
+ MODIFY actor_id VARCHAR(40) NOT NULL;
 
 -- ============================================================
 -- metrics_history
@@ -305,6 +343,10 @@ ALTER TABLE request_logs
  ADD PRIMARY KEY (id, created_at)
  PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
 
+-- request_logs/mysql/0005_widen_tenant_id.sql
+ALTER TABLE request_logs
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+
 -- ============================================================
 -- alerting
 -- ============================================================
@@ -341,6 +383,10 @@ CREATE TABLE alert_instances (
  INDEX idx_alert_instances_created (created_at, id)
 ) ENGINE=InnoDB;
 
+-- alerting/mysql/0003_widen_acknowledged_by.sql
+ALTER TABLE alert_instances
+ MODIFY acknowledged_by VARCHAR(40) NOT NULL DEFAULT '';
+
 -- ============================================================
 -- response_turns
 -- ============================================================
@@ -361,6 +407,10 @@ ALTER TABLE response_turns
  DROP PRIMARY KEY,
  ADD PRIMARY KEY (id, created_at)
  PARTITION BY RANGE COLUMNS(created_at) (PARTITION p_max VALUES LESS THAN (MAXVALUE));
+
+-- response_turns/mysql/0003_widen_tenant_id.sql
+ALTER TABLE response_turns
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
 
 -- ============================================================
 -- usage_records
@@ -389,6 +439,12 @@ ALTER TABLE usage_records
 -- usage_records/mysql/0003_add_usage_records_key_user.sql
 ALTER TABLE usage_records ADD COLUMN key_id VARCHAR(32) NOT NULL DEFAULT '';
 ALTER TABLE usage_records ADD COLUMN user_id VARCHAR(32) NOT NULL DEFAULT '';
+
+-- usage_records/mysql/0004_widen_id_columns.sql
+ALTER TABLE usage_records
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY key_id VARCHAR(40) NOT NULL DEFAULT '',
+ MODIFY user_id VARCHAR(40) NOT NULL DEFAULT '';
 
 -- ============================================================
 -- api_docs
@@ -624,6 +680,51 @@ CREATE INDEX idx_checkout_orders_provider ON checkout_orders (provider, status, 
 -- billing/mysql/0010_order_deletion.sql
 ALTER TABLE checkout_orders ADD COLUMN tenant_deleted_at DATETIME(6) NULL;
 
+-- billing/mysql/0011_widen_id_columns.sql
+ALTER TABLE tenant_billing
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE credit_packages
+ MODIFY id VARCHAR(40) NOT NULL;
+ALTER TABLE model_prices
+ MODIFY updated_by VARCHAR(40) NOT NULL;
+ALTER TABLE checkout_orders
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY package_id VARCHAR(40) NOT NULL,
+ MODIFY created_by VARCHAR(40) NOT NULL,
+ MODIFY account_id VARCHAR(40) NOT NULL DEFAULT '',
+ MODIFY presale_id VARCHAR(40) NOT NULL DEFAULT '';
+ALTER TABLE credit_ledger
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY actor_id VARCHAR(40) NOT NULL;
+ALTER TABLE usage_charges
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE refund_requests
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY order_id VARCHAR(40) NOT NULL,
+ MODIFY requested_by VARCHAR(40) NOT NULL,
+ MODIFY reviewed_by VARCHAR(40) NOT NULL;
+ALTER TABLE account_sales
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE account_purchases
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY account_id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE account_presales
+ MODIFY id VARCHAR(40) NOT NULL;
+ALTER TABLE alipay_purchases
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY created_by VARCHAR(40) NOT NULL;
+ALTER TABLE alipay_redemptions
+ MODIFY id VARCHAR(40) NOT NULL,
+ MODIFY tenant_id VARCHAR(40) NOT NULL,
+ MODIFY created_by VARCHAR(40) NOT NULL,
+ MODIFY presale_order_id VARCHAR(40) NOT NULL DEFAULT '';
+
 -- ============================================================
 -- jobs
 -- ============================================================
@@ -674,3 +775,9 @@ ALTER TABLE job_artifacts
 
 -- jobs/0005_add_job_artifacts_type_created_index.sql
 ALTER TABLE job_artifacts ADD INDEX idx_job_artifacts_type_created (type, created_at, id);
+
+-- jobs/0006_widen_tenant_id.sql
+ALTER TABLE jobs
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE job_artifacts
+ MODIFY tenant_id VARCHAR(40) NOT NULL;

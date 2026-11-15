@@ -47,8 +47,8 @@ const LedgerKindAlipayTopup = "alipay_topup"
 // AlipayPurchase 是一次已保存的购买意图：以 ID 为编号发往一人付的参数，保存下来使重试
 // 原样重复。ActionID 是浏览器为一次点击生成的编号，在租户内唯一。
 type AlipayPurchase struct {
-	ID          string    `gorm:"primaryKey;size:32"`
-	TenantID    string    `gorm:"size:32;not null;uniqueIndex:idx_alipay_purchases_action,priority:1"`
+	ID          string    `gorm:"primaryKey;size:40"`
+	TenantID    string    `gorm:"size:40;not null;uniqueIndex:idx_alipay_purchases_action,priority:1"`
 	ActionID    string    `gorm:"size:64;not null;uniqueIndex:idx_alipay_purchases_action,priority:2"`
 	SkuID       string    `gorm:"size:128;not null"`
 	CallbackURL string    `gorm:"size:512;not null"`
@@ -56,7 +56,7 @@ type AlipayPurchase struct {
 	PurchaseURL string    `gorm:"size:2048;not null"`
 	ExpireTime  string    `gorm:"size:64;not null"`
 	ReasonCode  string    `gorm:"size:64;not null"`
-	CreatedBy   string    `gorm:"size:32;not null"`
+	CreatedBy   string    `gorm:"size:40;not null"`
 	CreatedAt   time.Time `gorm:"not null"`
 	UpdatedAt   time.Time `gorm:"not null"`
 }
@@ -74,8 +74,8 @@ func (AlipayPurchase) TableName() string { return "alipay_purchases" }
 // AlipayRedemption 把租户支付宝额度中的 Amount 个单位兑换为 CreditsMicro 点数，两者在
 // 创建时确定。ID 是核销的幂等编号；点数以 "alipay:<ID>" 为键，在把它标为成功的同一事务中入账。
 type AlipayRedemption struct {
-	ID             string `gorm:"primaryKey;size:32"`
-	TenantID       string `gorm:"size:32;not null;uniqueIndex:idx_alipay_redemptions_action,priority:1"`
+	ID             string `gorm:"primaryKey;size:40"`
+	TenantID       string `gorm:"size:40;not null;uniqueIndex:idx_alipay_redemptions_action,priority:1"`
 	ActionID       string `gorm:"size:64;not null;uniqueIndex:idx_alipay_redemptions_action,priority:2"`
 	Amount         int64  `gorm:"not null"`
 	QuotaUnit      string `gorm:"size:8;not null"`
@@ -90,8 +90,8 @@ type AlipayRedemption struct {
 	//
 	// PresaleOrderID 是这次兑换所支付的预售订单；兑换为点数时为空。这类兑换不入账点数：
 	// 成功时把订单标为已付款，失败时把订单标为失败。
-	PresaleOrderID string    `gorm:"size:32;not null"`
-	CreatedBy      string    `gorm:"size:32;not null"`
+	PresaleOrderID string    `gorm:"size:40;not null"`
+	CreatedBy      string    `gorm:"size:40;not null"`
 	CreatedAt      time.Time `gorm:"not null"`
 	UpdatedAt      time.Time `gorm:"not null"`
 }

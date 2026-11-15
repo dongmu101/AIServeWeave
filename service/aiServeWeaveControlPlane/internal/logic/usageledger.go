@@ -44,10 +44,10 @@ type CreateUsageRecordParams struct {
 // usage_records（及 usage_charges）的列宽，单位为字节。
 const (
 	maxUsageRequestID = 64
-	maxUsageTenantID  = 32
+	maxUsageTenantID  = model.IDSize
 	maxUsageModel     = 128
 	maxUsageEndpoint  = 24
-	maxUsageKeyID     = 32
+	maxUsageKeyID     = model.IDSize
 )
 
 // CreateUsageRecords persists a batch of records, skipping — not failing on

@@ -15,14 +15,13 @@ package cliagent
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"io"
 	"os"
 	"sync"
 	"time"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/runtime"
 )
 
@@ -436,10 +435,4 @@ func (r *Runtime) Rerank(context.Context, runtime.RerankRequest) (runtime.Rerank
 	return runtime.RerankResponse{}, r.wrap("rerank", errUnsupported)
 }
 
-func randomHex() string {
-	var b [12]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic("system entropy unavailable")
-	}
-	return hex.EncodeToString(b[:])
-}
+func randomHex() string { return idgen.MustNew() }

@@ -1,0 +1,4 @@
+ALTER TABLE jobs
+ MODIFY tenant_id VARCHAR(40) NOT NULL;
+ALTER TABLE job_artifacts
+ MODIFY tenant_id VARCHAR(40) NOT NULL;

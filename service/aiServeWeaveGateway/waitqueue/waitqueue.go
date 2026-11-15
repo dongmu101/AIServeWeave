@@ -58,8 +58,6 @@ package waitqueue
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"hash/fnv"
 	"log/slog"
@@ -71,6 +69,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/runtime"
 )
 
@@ -377,7 +376,6 @@ func (q *Queue) storeError(op string, err error) {
 }
 
 func newTicketID() string {
-	var b [12]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	id, _ := idgen.New()
+	return id
 }

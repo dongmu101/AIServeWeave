@@ -67,7 +67,7 @@ type Job struct {
 	// 主键而不是另设一个代理键：这个 id 本就全局唯一，也是此后关于这个 job 的
 	// 每一次写入据以定位的键，因此重复的创建天然会被这同一个唯一性拒绝。
 	ID         string `gorm:"primaryKey;size:64"`
-	TenantID   string `gorm:"size:32;not null;index:idx_jobs_tenant_created;index:idx_jobs_tenant_status"`
+	TenantID   string `gorm:"size:40;not null;index:idx_jobs_tenant_created;index:idx_jobs_tenant_status"`
 	WorkflowID string `gorm:"size:128;not null"`
 	// WorkflowVersion is an opaque, template-author-chosen string. Workflow
 	// template versioning (STATUS.md's P03) does not exist yet, so this
@@ -169,7 +169,7 @@ func (j Job) Terminal() bool {
 type JobArtifact struct {
 	ID          string    `gorm:"primaryKey;size:64"`
 	JobID       string    `gorm:"size:64;not null;index:idx_job_artifacts_job"`
-	TenantID    string    `gorm:"size:32;not null;index:idx_job_artifacts_tenant"`
+	TenantID    string    `gorm:"size:40;not null;index:idx_job_artifacts_tenant"`
 	Filename    string    `gorm:"size:512;not null"`
 	Subfolder   string    `gorm:"size:512;not null;default:''"`
 	Type        string    `gorm:"size:32;not null;default:''"`

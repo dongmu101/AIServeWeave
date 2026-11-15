@@ -1,12 +1,11 @@
 package httpapi
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"log/slog"
 	"net/http"
 	"time"
 
+	"AIServeWeave/common/reqid"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/workflowview"
 	"AIServeWeave/service/aiServeWeaveGateway/jobqueue"
@@ -927,14 +926,9 @@ func (w *statusWriter) Flush() {
 // 在穿过这层包装后依然有效。
 func (w *statusWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
-func newRequestID() string {
-	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		// crypto/rand.Read only fails if the OS entropy source is broken,
-		// which is not a condition a request-correlation ID should crash
-		// the handler over; a fixed sentinel just means correlation is
-		// degraded for that one request.
-		return "unavailable"
-	}
-	return hex.EncodeToString(b[:])
-}
+// newRequestID mints a request id with reqid.New: a UUIDv7 as 32 hex
+// characters. Job, artifact, response and item ids reuse it behind a prefix.
+//
+// newRequestID 用 reqid.New 铸造请求 id：32 位十六进制的 UUIDv7。Job、产物、
+// response 与 item 的 id 在它前面加前缀复用它。
+func newRequestID() string { return reqid.New() }

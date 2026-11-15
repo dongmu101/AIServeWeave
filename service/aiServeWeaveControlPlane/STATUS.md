@@ -1,3 +1,11 @@
+## 标识符改为 UUIDv7（2026-11-15）
+
+控制面实体 ID（`model.NewID`）改为前缀加 `common/idgen` 铸造的 UUIDv7（32 位十六进制，不带连字符），共 36 字符，原来是前缀加 28 位随机十六进制。同一实体的 ID 按创建顺序排序，新行追加在主键索引右端。所有保存这类 ID 的列（主键、`tenant_id`、`key_id`、`user_id`，以及 `created_by`/`updated_by`/`actor_id`/`requested_by`/`reviewed_by`/`revoked_by`/`acknowledged_by` 这类操作人列）由 `VARCHAR(32)` 加宽到 `VARCHAR(40)`，宽度定义在 `model.IDSize`。model 标签按它写成 `size:40`；`schemacheck` 里 `actor_id` 的默认宽度和 `usageledger` 的长度上限直接引用这个常量。节点 ID（`agentenrollment.NewNodeID`）与 Gateway 推送来的 `request_logs.id` 也是 UUIDv7，长度不变。
+
+迁移：`base/0018`、`billing/0011`、`request_logs/0005`、`usage_records/0004`、`response_turns/0003`、`alerting/0003`、`routes/0003`、`workflowtemplates/0004`（两种方言），以及只支持 MySQL 的 `jobs/0006`。只加宽列，旧 ID 继续有效；`sql/init.sql` 已同步。必须先迁移再启动新控制面。升级与锁的影响见[数据库升级与恢复](../../deploy/database-recovery.md#id-列加宽base-0018--billing-0011--request_logs-0005--usage_records-0004--response_turns-0003--alerting-0003--routes-0003--workflowtemplates-0004--jobs-0006)。
+
+验证：控制面默认测试通过；临时 MySQL 9.7.2 与 PostgreSQL 16 上 gormstore 的 live 用例全部通过，包括 `CheckSchema` 对加宽后列宽的检查；另在 MySQL 9.7.2 上确认分区表、主键列和带默认值的列加宽都能以 `ALGORITHM=INPLACE, LOCK=NONE` 执行。live 夹具改动两处：API key 的 hash 改用 `sha256(id)`，原来把两个 ID 拼接，ID 变长后超出 64 字符；分区用例迁移后换用新连接，避免 PostgreSQL 拒绝迁移前缓存的执行计划。MySQL resume 用例在把 0004 标为 dirty 时，同时删掉其后迁移的账本行。
+
 ## 增长表按时间分区（2026-11-14）
 
 `request_logs`（按天）、`usage_records`（按月）、`metrics_history_points`（按天，按 `bucket_at`）、`response_turns`（按天）、`audit_logs`（按月）在 MySQL 9.7 与 PostgreSQL 上统一改为按时间 RANGE 分区。保留期改为「至少保留 N 天」：清理每小时运行，只整段删除过期分区，截止时间所在的分区整段保留（最多多留一个分区周期），零散迟到行分批删除（每批 5000 行）；分区 DDL 失败时退回分批逐行删除。新增 `ResponseTurnRetention`（默认 30 天）、`AuditLogRetention`（默认 400 天）、`Database.MigrationTimeout`（默认 5 分钟）、`Database.MaintenanceDSN`（运行账号没有 DDL 权限时执行分区 DDL 的账号）；按天分区的表保留期上限 3650 天。启动时及之后每小时预建未来分区（`internal/partitionmaint`），与迁移共用非阻塞会话锁；每张表有兜底分区，维护落后时写入不会失败；积压超过 20 万行时交给 `-migrate up`。
@@ -786,7 +794,7 @@ MetricsHistory:
 ```sql
 request_logs(
   id           VARCHAR(64) PRIMARY KEY,  -- Gateway 侧 common/reqid 铸造的 request_id，不是代理键
-  tenant_id    VARCHAR(32) NOT NULL,
+  tenant_id    VARCHAR(40) NOT NULL,     -- request_logs/0005 由 32 加宽
   key_display  VARCHAR(64) NOT NULL,     -- apikey.Display 的展示形式，不是完整 key 或哈希
   endpoint     VARCHAR(16) NOT NULL,     -- 封闭枚举，Gateway requestLogEndpoint 的短名：models/chat/embeddings/responses/images/messages/transcriptions/translations/rerank/ollama_chat/ollama_generate/ollama_embed
   status_code  SMALLINT NOT NULL,
@@ -822,15 +830,15 @@ CREATE INDEX idx_request_logs_tenant_outcome_created ON request_logs (tenant_id,
 ```sql
 usage_records(
   id                 VARCHAR(64) PRIMARY KEY,  -- Gateway 侧 common/reqid 铸造的 request_id，即去重键本身
-  tenant_id          VARCHAR(32)  NOT NULL,
+  tenant_id          VARCHAR(40)  NOT NULL,  -- usage_records/0004 由 32 加宽
   model              VARCHAR(128) NOT NULL,    -- 已解析的 modelroute 别名，不是客户端自由文本
   endpoint           VARCHAR(24)  NOT NULL,    -- 封闭枚举，七个协议前门之一
   prompt_tokens      BIGINT NOT NULL,
   completion_tokens  BIGINT NOT NULL,
   total_tokens       BIGINT NOT NULL,
   created_at         TIMESTAMP NOT NULL,  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
-  key_id             VARCHAR(32) NOT NULL DEFAULT '',  -- usage_records/0003：发起请求的 API key
-  user_id            VARCHAR(32) NOT NULL DEFAULT ''   -- usage_records/0003：该 key 的创建者，入账时解析
+  key_id             VARCHAR(40) NOT NULL DEFAULT '',  -- usage_records/0003：发起请求的 API key（0004 加宽）
+  user_id            VARCHAR(40) NOT NULL DEFAULT ''   -- usage_records/0003：该 key 的创建者，入账时解析（0004 加宽）
 );
 CREATE INDEX idx_usage_records_tenant_model_created ON usage_records (tenant_id, model, created_at);
 CREATE INDEX idx_usage_records_created              ON usage_records (created_at, id);
@@ -1033,7 +1041,7 @@ alert_instances(
   created_at        TIMESTAMP,                 -- 首次触发时间；复用共享 keyset 分页助手固定的 created_at/id 排序，与 P09a 的 RequestLog.ID 同一命名理由
   last_evaluated_at TIMESTAMP,
   resolved_at       TIMESTAMP NULL,
-  acknowledged_by   VARCHAR(32) NOT NULL DEFAULT '',
+  acknowledged_by   VARCHAR(40) NOT NULL DEFAULT '',  -- alerting/0003 由 32 加宽
   acknowledged_at   TIMESTAMP NULL,
   notify_status     VARCHAR(16) NOT NULL,      -- pending/sent/failed/skipped
   notify_attempts   INT NOT NULL DEFAULT 0
@@ -1058,7 +1066,7 @@ Gateway 的 `POST /v1/responses` 默认无状态：`store`/`previous_response_id
 ```sql
 response_turns(
   id                     VARCHAR(64) PRIMARY KEY,  -- Gateway 铸造的 response id
-  tenant_id              VARCHAR(32) NOT NULL,
+  tenant_id              VARCHAR(40) NOT NULL,  -- response_turns/0003 由 32 加宽
   previous_response_id   VARCHAR(64) NOT NULL DEFAULT '',  -- 空表示根轮次
   model                  VARCHAR(128) NOT NULL DEFAULT '',
   messages               TEXT NOT NULL,  -- 不透明 JSON，本服务从不解析

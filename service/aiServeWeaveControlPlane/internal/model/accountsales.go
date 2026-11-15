@@ -15,7 +15,7 @@ import "time"
 // 账号类型（AccountKindClaude / AccountKindCodex），旧版商品为空，补填前不能用于预售
 // 分配；一旦填写不可更改。
 type AccountSale struct {
-	ID            string    `gorm:"primaryKey;size:32"`
+	ID            string    `gorm:"primaryKey;size:40"`
 	NodeID        string    `gorm:"size:128;not null;uniqueIndex:idx_account_sales_target"`
 	RuntimeID     string    `gorm:"size:128;not null;uniqueIndex:idx_account_sales_target"`
 	Kind          string    `gorm:"size:16;not null"`
@@ -24,7 +24,7 @@ type AccountSale struct {
 	Currency      string    `gorm:"size:8;not null"`
 	DodoProductID string    `gorm:"size:64;not null"`
 	Active        bool      `gorm:"not null"`
-	TenantID      string    `gorm:"size:32;not null"`
+	TenantID      string    `gorm:"size:40;not null"`
 	ExpiresAt     time.Time `gorm:"not null"`
 	UpdatedAt     time.Time `gorm:"not null"`
 }

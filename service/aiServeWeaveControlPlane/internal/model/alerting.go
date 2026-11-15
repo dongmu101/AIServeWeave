@@ -100,7 +100,7 @@ type AlertInstance struct {
 	CreatedAt       time.Time // first fired at; see doc comment above
 	LastEvaluatedAt time.Time
 	ResolvedAt      *time.Time
-	AcknowledgedBy  string `gorm:"size:32;not null;default:''"`
+	AcknowledgedBy  string `gorm:"size:40;not null;default:''"`
 	AcknowledgedAt  *time.Time
 	NotifyStatus    string `gorm:"size:16;not null"`
 	NotifyAttempts  int    `gorm:"not null;default:0"`

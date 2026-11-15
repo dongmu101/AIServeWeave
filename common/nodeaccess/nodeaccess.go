@@ -8,14 +8,14 @@
 package nodeaccess
 
 import (
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"slices"
 	"sort"
 	"strings"
 	"unicode"
 	"unicode/utf8"
+
+	"AIServeWeave/common/idgen"
 )
 
 // MaxDedicatedNodes caps how many nodes may be dedicated at once. Every key
@@ -179,11 +179,11 @@ func NewTenantNodeID(tenantID string) (string, error) {
 		len(TenantNodePrefix)+len(tenantID)+1+tenantNodeSuffixLen > MaxIDBytes {
 		return "", errors.New("nodeaccess: tenant id cannot own a node")
 	}
-	var random [tenantNodeSuffixLen / 2]byte
-	if _, err := rand.Read(random[:]); err != nil {
+	suffix, err := idgen.New()
+	if err != nil {
 		return "", errors.New("nodeaccess: random source failed")
 	}
-	return TenantNodePrefix + tenantID + "." + hex.EncodeToString(random[:]), nil
+	return TenantNodePrefix + tenantID + "." + suffix, nil
 }
 
 // OwnerOf reports whether nodeID is tenant-owned and, if so, which tenant owns

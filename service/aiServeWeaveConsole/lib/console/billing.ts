@@ -1063,10 +1063,12 @@ export function isPaymentReturn(params: Readonly<Record<string, string | string[
 }
 
 /** EZFP_ORDER_ID is the shape of an order id the control plane issues:
- * `ord_` and 28 lowercase hex digits.
+ * `ord_` and 32 lowercase hex digits (a UUIDv7), or 28 for an order created
+ * before ids became UUIDv7, which may still be awaiting payment.
  *
- * EZFP_ORDER_ID 是控制面签发的订单 id 的形状：`ord_` 加 28 位小写十六进制。 */
-const EZFP_ORDER_ID = /^ord_[0-9a-f]{28}$/;
+ * EZFP_ORDER_ID 是控制面签发的订单 id 的形状：`ord_` 加 32 位小写十六进制（UUIDv7）；
+ * id 改为 UUIDv7 之前创建的订单是 28 位，可能仍在等待付款，因此也接受。 */
+const EZFP_ORDER_ID = /^ord_(?:[0-9a-f]{32}|[0-9a-f]{28})$/;
 
 /** ezfpReturnOrderId reads the order id off an EZFP return redirect, or
  * null when the page was not reached that way. EZFP appends its own

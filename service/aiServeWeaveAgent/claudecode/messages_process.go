@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
@@ -571,7 +572,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					seenIDs[current.ID] = true
 					upstreamID := current.ID
 					if !native {
-						current.ID = "toolu_aisw_" + randomID()
+						current.ID = "toolu_aisw_" + idgen.MustNew()
 					}
 					publicIDs[upstreamID] = current.ID
 					if stopped != "" {

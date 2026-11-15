@@ -42,7 +42,7 @@ import "time"
 // 检索中显示。
 type RequestLog struct {
 	ID         string    `gorm:"primaryKey;size:64"`
-	TenantID   string    `gorm:"size:32;not null"`
+	TenantID   string    `gorm:"size:40;not null"`
 	KeyDisplay string    `gorm:"size:64;not null"`
 	Endpoint   string    `gorm:"size:16;not null"`
 	StatusCode int       `gorm:"not null"`

@@ -1,9 +1,6 @@
 package model
 
-import (
-	"crypto/rand"
-	"encoding/hex"
-)
+import "AIServeWeave/common/idgen"
 
 // ID prefixes, one per entity. A primary key that says what it identifies
 // turns a foreign key mix-up from a silent wrong answer into an obvious one:
@@ -29,29 +26,32 @@ const (
 	PrefixRefundRequest    = "rfd_"
 )
 
-// randomBytes is the entropy in an id. 14 bytes leaves a 32-character id
-// after the four-character prefix and hex encoding, which fits the size:32
-// columns above with nothing to spare — the two numbers are chosen together
-// and neither may move alone.
+// IDSize is the column width, in characters, of every column that holds an
+// id from NewID: a four-character prefix and a 32-character idgen UUIDv7 make
+// 36, and the rest is headroom for a longer prefix. The size:40 tags in this
+// package and the VARCHAR(40) columns in the migrations follow it.
 //
-// randomBytes 是一个 id 中的随机字节数。14 字节在四字符前缀与 hex 编码之后正好得到
-// 32 字符的 id，不多不少地填满上面那些 size:32 的列——这两个数字是一起定下的，任何
-// 一个都不能单独改动。
-const randomBytes = 14
+// IDSize 是所有保存 NewID 所铸 id 的列的宽度（字符数）：四字符前缀加 32 字符的
+// idgen UUIDv7 共 36 字符，余下的是给更长前缀留的余量。本包的 size:40 标签和迁移里的
+// VARCHAR(40) 列都按它定。
+const IDSize = 40
 
-// NewID mints an identifier with the given prefix. It panics only if the
-// system's random source fails, which is not a condition this service can
-// serve through: an id from a degraded source risks colliding with an existing
-// row, and a control plane that quietly writes over another tenant's record is
+// NewID mints an identifier with the given prefix: the prefix followed by an
+// idgen UUIDv7, so ids of one entity sort in creation order and new rows land
+// at the right edge of the primary-key index. It panics only if the system's
+// random source fails, which is not a condition this service can serve
+// through: an id from a degraded source risks colliding with an existing row,
+// and a control plane that quietly writes over another tenant's record is
 // worse than one that stops.
 //
-// NewID 用给定前缀铸造一个标识符。仅当系统随机源失败时才 panic，而那不是本服务可以
+// NewID 用给定前缀铸造一个标识符：前缀加一个 idgen UUIDv7，因此同一实体的 id 按创建
+// 顺序排序，新行落在主键索引的右端。仅当系统随机源失败时才 panic，而那不是本服务可以
 // 带病继续服务的情况：来自降级随机源的 id 有与既有行碰撞的风险，而一个悄悄覆盖了
 // 另一个租户记录的控制面，比一个停下来的控制面更糟。
 func NewID(prefix string) string {
-	buf := make([]byte, randomBytes)
-	if _, err := rand.Read(buf); err != nil {
+	id, err := idgen.New()
+	if err != nil {
 		panic("controlplane: the system random source failed while minting an id: " + err.Error())
 	}
-	return prefix + hex.EncodeToString(buf)
+	return prefix + id
 }

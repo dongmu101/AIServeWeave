@@ -1,0 +1,2 @@
+ALTER TABLE request_logs
+ ALTER COLUMN tenant_id TYPE VARCHAR(40);

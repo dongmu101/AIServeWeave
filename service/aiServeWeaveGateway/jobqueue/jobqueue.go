@@ -36,8 +36,6 @@ package jobqueue
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -46,6 +44,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"AIServeWeave/common/idgen"
 	"AIServeWeave/common/runtime"
 )
 
@@ -637,7 +636,6 @@ func (q *Queue) storeError(op string, err error) {
 }
 
 func newIntentID() string {
-	var b [8]byte
-	_, _ = rand.Read(b[:])
-	return hex.EncodeToString(b[:])
+	id, _ := idgen.New()
+	return id
 }
