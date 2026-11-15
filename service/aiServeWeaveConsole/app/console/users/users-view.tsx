@@ -20,6 +20,8 @@ import { DataTable } from "@/components/console/data-table";
 import { Pager } from "@/components/console/pager";
 import { ErrorState, LoadingState } from "@/components/console/states";
 import { usePagedResource } from "@/components/console/use-paged-resource";
+import { UsageByModelCell, useUsageByKey } from "@/components/console/usage-by-model";
+import type { ModelUsage } from "@/lib/console/usage";
 import {
   useDebouncedValue,
   useUrlFilters,
@@ -58,7 +60,7 @@ const helper = createColumnHelper<typeof features, User>();
 // then left out entirely rather than rendered empty.
 //
 // 查看者无权管理用户时 onManage 为 null，此时整列省略，而不是渲染一列空白。
-const columns = (t: Translator, locale: Locale, currentUserId: string, onManage: ((user: User) => void) | null) => (helper.columns([
+const columns = (t: Translator, locale: Locale, currentUserId: string, onManage: ((user: User) => void) | null, usage: Map<string, ModelUsage[]> | undefined) => (helper.columns([
   helper.accessor("name", {
     header: t("tenant.name"),
     cell: (info) => info.getValue() || <span className="text-muted-foreground"><Message id="tenant.notProvided" /></span>,
@@ -77,6 +79,11 @@ const columns = (t: Translator, locale: Locale, currentUserId: string, onManage:
   helper.accessor("status", {
     header: t("tenant.status"),
     cell: (info) => (info.getValue() === "active" ? t("tenant.normal") : info.getValue()),
+  }),
+  helper.display({
+    id: "usage",
+    header: t("tenant.tokenUsage"),
+    cell: (info) => <UsageByModelCell usage={usage?.get(info.row.original.id)} />,
   }),
   helper.accessor("lastLoginAt", {
     header: t("tenant.lastSignedIn"),
@@ -124,9 +131,10 @@ export function UsersView({ role, currentUserId }: { role: string; currentUserId
   const [target, setTarget] = React.useState<User | null>(null);
   const rows = users.items ?? NO_USERS;
   const manageable = canManageUsers(role);
+  const usage = useUsageByKey();
   const localizedColumns = React.useMemo(
-    () => columns(t, locale, currentUserId, manageable ? setTarget : null),
-    [t, locale, currentUserId, manageable]
+    () => columns(t, locale, currentUserId, manageable ? setTarget : null, usage?.byUser),
+    [t, locale, currentUserId, manageable, usage]
   );
   const table = useTable({ features, columns: localizedColumns, data: rows });
 

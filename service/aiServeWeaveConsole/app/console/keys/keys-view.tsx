@@ -19,6 +19,7 @@ import { Pager } from "@/components/console/pager";
 import { ErrorState, LoadingState } from "@/components/console/states";
 import { useConsoleRequest } from "@/components/console/use-console-request";
 import { usePagedResource } from "@/components/console/use-paged-resource";
+import { UsageByModelCell, useUsageByKey } from "@/components/console/usage-by-model";
 import {
   useDebouncedValue,
   useUrlFilters,
@@ -93,6 +94,7 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
   });
 
   const rows = keys.items ?? NO_KEYS;
+  const usage = useUsageByKey();
 
   const columns = React.useMemo(
     () =>
@@ -131,6 +133,11 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
         helper.accessor("expiresAt", {
           header: t("tenant.expiresAt"),
           cell: (info) => formatDateTime(info.getValue(), NEVER_EXPIRES, locale),
+        }),
+        helper.display({
+          id: "usage",
+          header: t("tenant.tokenUsage"),
+          cell: (info) => <UsageByModelCell usage={usage?.byKey.get(info.row.original.id)} />,
         }),
         helper.accessor("lastUsedAt", {
           header: t("tenant.lastUsed"),
@@ -171,7 +178,7 @@ export function KeysView({ role, userId }: { role: string; userId: string }) {
           },
         }),
       ]),
-    [role, userId, t, locale]
+    [role, userId, t, locale, usage]
   );
 
   const table = useTable({ features, columns, data: rows });

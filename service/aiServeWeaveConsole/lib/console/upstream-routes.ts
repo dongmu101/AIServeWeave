@@ -187,7 +187,7 @@ const ROUTES: readonly UpstreamRoute[] = [
   {
     method: "GET",
     segments: [literal("admin"), literal("v1"), literal("usage"), literal("summary")],
-    query: ["since", "until"],
+    query: ["since", "until", "group_by"],
   },
   {
     method: "GET",
@@ -307,7 +307,7 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("alerts")], query: ["limit", "cursor", "status", "rule_id", "since", "until"] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("alerts"), param(), literal("acknowledge")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("requests")], query: ["limit", "cursor", "since", "until", "status", "request_id", "tenant_id"] },
-  { method: "GET", segments: [literal("operator"), literal("v1"), literal("usage"), literal("summary")], query: ["since", "until", "tenant_id"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("usage"), literal("summary")], query: ["since", "until", "tenant_id", "group_by"] },
   // Prepaid billing administration; see the tenant table for why these may 404.
   // 预充值计费管理；为何可能回 404 见租户表的说明。
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages")], query: [] },

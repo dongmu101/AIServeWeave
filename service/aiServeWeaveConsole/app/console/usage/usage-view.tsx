@@ -1,24 +1,22 @@
 "use client";
 import type { Translator } from "@/lib/i18n/translate";
 
-
-
-
 import { useI18n } from "@/components/i18n/provider";
 import { Message } from "@/components/i18n/message";
-
 
 import * as React from "react";
 import ReactECharts from "echarts-for-react";
 
 import { EmptyState, ErrorState, LoadingState } from "@/components/console/states";
+import { UsageByModelCell } from "@/components/console/usage-by-model";
 import { useResource } from "@/components/console/use-resource";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
-import { parseUsageSummary, type UsageSummary, type UsageSummaryEntry } from "@/lib/console/usage";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { parseApiKeys, parseUsers, type ApiKeySummary, type Page, type User } from "@/lib/console/contract";
+import { parseUsageSummary, usageByModel, type UsageSummary, type UsageSummaryEntry } from "@/lib/console/usage";
 import { CHART_COLORS } from "@/lib/console/chart-colors";
 
 /** localToIso turns a `datetime-local` input value into an RFC 3339
@@ -35,7 +33,9 @@ function localToIso(value: string): string {
   return Number.isNaN(parsed.getTime()) ? "" : parsed.toISOString();
 }
 
-function totalsOf(items: UsageSummaryEntry[]) {
+type Totals = { promptTokens: number; completionTokens: number; totalTokens: number; requestCount: number };
+
+function totalsOf(items: UsageSummaryEntry[]): Totals {
   return items.reduce(
     (acc, item) => ({
       promptTokens: acc.promptTokens + item.promptTokens,
@@ -47,35 +47,66 @@ function totalsOf(items: UsageSummaryEntry[]) {
   );
 }
 
-function tokensByModelOption(items: UsageSummaryEntry[], t: Translator) {
+/** groupTotals sums rows per id (a user id or a key id), largest total first.
+ * An empty id is kept as its own group: unattributed usage.
+ *
+ * groupTotals 按 id（用户 id 或 key id）汇总各行，按总量从大到小排列。空 id 单独成组，
+ * 即未归属的用量。 */
+function groupTotals(items: UsageSummaryEntry[], pick: (item: UsageSummaryEntry) => string) {
+  const groups = new Map<string, UsageSummaryEntry[]>();
+  for (const item of items) {
+    const id = pick(item);
+    groups.set(id, [...(groups.get(id) ?? []), item]);
+  }
+  return [...groups.entries()]
+    .map(([id, rows]) => ({ id, rows, totals: totalsOf(rows) }))
+    .sort((a, b) => b.totals.totalTokens - a.totals.totalTokens);
+}
+
+function tokensByModelOption(items: UsageSummaryEntry[], t: Translator, locale: string) {
+  const compact = new Intl.NumberFormat(locale, { notation: "compact" });
   const sorted = [...items].sort((a, b) => b.totalTokens - a.totalTokens);
   return {
     color: CHART_COLORS,
     tooltip: { trigger: "axis", axisPointer: { type: "shadow" } },
-    grid: { left: 140, right: 24, top: 16, bottom: 24 },
-    xAxis: { type: "value", name: "token" },
+    legend: { bottom: 0 },
+    grid: { left: 8, right: 24, top: 8, bottom: 32, containLabel: true },
+    xAxis: { type: "value", splitNumber: 3, axisLabel: { formatter: (value: number) => compact.format(value) } },
     yAxis: { type: "category", data: sorted.map((item) => item.model), inverse: true },
-    series: [{ type: "bar", name: t("tenant.totalTokens"), data: sorted.map((item) => item.totalTokens) }],
+    series: [
+      { type: "bar", stack: "tokens", name: t("tenant.inputTokens"), data: sorted.map((item) => item.promptTokens) },
+      { type: "bar", stack: "tokens", name: t("tenant.outputTokens"), data: sorted.map((item) => item.completionTokens) },
+    ],
   };
 }
 
+type Range = "all" | "7d" | "30d" | "custom";
+
+/** daysAgoIso is the instant `days` days before now, for a preset range.
+ * daysAgoIso 是距今 `days` 天前的时刻，用于预设时间范围。 */
+function daysAgoIso(days: number): string {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
 /**
- * UsageView shows this tenant's token consumption by model over an optional
- * time window.
+ * UsageView shows this tenant's token consumption over an optional time
+ * window: totals, then by model, by user and by API key.
  *
  * The window is unbounded by default: an empty `since`/`until` is a valid
  * request the backend answers by summing every record, not an error state —
  * so a tenant who has never set a window still sees their full usage rather
  * than an empty page.
  *
- * UsageView 展示本租户按模型统计的 token 消耗，时间窗口可选。
+ * UsageView 展示本租户在可选时间窗口内的 token 消耗：先是合计，再按模型、用户与
+ * API Key 分别展示。
  *
  * 窗口默认不设边界：空的 `since`/`until` 是后端会正常回答（对全部记录求和）的
  * 合法请求，不是一种错误状态——因此从未设置过窗口的租户看到的是完整用量，而不是
  * 一个空页面。
  */
 export function UsageView() {
-  const {t } = useI18n();
+  const { t } = useI18n();
+  const [range, setRange] = React.useState<Range>("all");
   const [sinceInput, setSinceInput] = React.useState("");
   const [untilInput, setUntilInput] = React.useState("");
   const [since, setSince] = React.useState("");
@@ -88,15 +119,17 @@ export function UsageView() {
   const resource = useResource<UsageSummary>({
     method: "GET",
     path: "/admin/v1/usage/summary",
-    query,
-    parse: parseUsageSummary,
-  });
-  const byKey = useResource<UsageSummary>({
-    method: "GET",
-    path: "/admin/v1/usage/summary",
     query: { ...query, group_by: "key" },
     parse: parseUsageSummary,
   });
+
+  function pickRange(next: Range) {
+    setRange(next);
+    if (next === "custom") return;
+    const days = next === "7d" ? 7 : next === "30d" ? 30 : 0;
+    setSince(days ? daysAgoIso(days) : "");
+    setUntil("");
+  }
 
   function applyWindow(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -104,48 +137,50 @@ export function UsageView() {
     setUntil(localToIso(untilInput));
   }
 
+  const ranges: { value: Range; label: string }[] = [
+    { value: "all", label: t("tenant.rangeAll") },
+    { value: "7d", label: t("tenant.rangeLast7Days") },
+    { value: "30d", label: t("tenant.rangeLast30Days") },
+    { value: "custom", label: t("tenant.rangeCustom") },
+  ];
+
   return (
     <div className="grid gap-6">
-      <div>
-        <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.usage" /></h1>
-        <p className="text-sm text-muted-foreground">
-          <Message id="tenant.tokenConsumptionByModelFromThePersistentUsage" /></p>
+      <div className="flex flex-wrap items-end justify-between gap-4">
+        <div>
+          <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="tenant.usage" /></h1>
+          <p className="text-sm text-muted-foreground">
+            <Message id="tenant.tokenConsumptionByModelFromThePersistentUsage" /></p>
+        </div>
+        <div className="flex flex-wrap gap-1" role="group" aria-label={t("tenant.applyTimeRange")}>
+          {ranges.map((option) => (
+            <Button
+              key={option.value}
+              type="button"
+              size="sm"
+              variant={range === option.value ? "default" : "outline"}
+              aria-pressed={range === option.value}
+              onClick={() => pickRange(option.value)}
+            >
+              {option.label}
+            </Button>
+          ))}
+        </div>
       </div>
 
-      <form onSubmit={applyWindow} className="flex flex-wrap items-end gap-3">
-        <div className="grid gap-1">
-          <label htmlFor="usage-since" className="text-xs text-muted-foreground"><Message id="tenant.startTimeOptional" /></label>
-          <Input
-            id="usage-since"
-            type="datetime-local"
-            value={sinceInput}
-            onChange={(event) => setSinceInput(event.target.value)}
-          />
-        </div>
-        <div className="grid gap-1">
-          <label htmlFor="usage-until" className="text-xs text-muted-foreground"><Message id="tenant.endTimeOptional" /></label>
-          <Input
-            id="usage-until"
-            type="datetime-local"
-            value={untilInput}
-            onChange={(event) => setUntilInput(event.target.value)}
-          />
-        </div>
-        <Button type="submit"><Message id="tenant.applyTimeRange" /></Button>
-        {since || until ? (
-          <Button
-            type="button"
-            variant="ghost"
-            onClick={() => {
-              setSinceInput("");
-              setUntilInput("");
-              setSince("");
-              setUntil("");
-            }}
-          >
-            <Message id="tenant.clear_7b15e5" /></Button>
-        ) : null}
-      </form>
+      {range === "custom" ? (
+        <form onSubmit={applyWindow} className="flex flex-wrap items-end gap-3">
+          <div className="grid gap-1">
+            <label htmlFor="usage-since" className="text-xs text-muted-foreground"><Message id="tenant.startTimeOptional" /></label>
+            <Input id="usage-since" type="datetime-local" value={sinceInput} onChange={(event) => setSinceInput(event.target.value)} />
+          </div>
+          <div className="grid gap-1">
+            <label htmlFor="usage-until" className="text-xs text-muted-foreground"><Message id="tenant.endTimeOptional" /></label>
+            <Input id="usage-until" type="datetime-local" value={untilInput} onChange={(event) => setUntilInput(event.target.value)} />
+          </div>
+          <Button type="submit" size="sm"><Message id="tenant.applyTimeRange" /></Button>
+        </form>
+      ) : null}
 
       {resource.error ? (
         <ErrorState message={resource.error} onRetry={resource.reload} />
@@ -154,110 +189,130 @@ export function UsageView() {
       ) : resource.data.items.length === 0 ? (
         <EmptyState title={t("tenant.noUsageRecordsInTheSelectedTimeRange")} description={t("tenant.tryADifferentTimeRangeOrCheckWhether")} />
       ) : (
-        <>
-          <UsageSummaryBody items={resource.data.items} />
-          {byKey.error ? (
-            <ErrorState message={byKey.error} onRetry={byKey.reload} />
-          ) : byKey.loading || !byKey.data ? (
-            <LoadingState label={t("tenant.loadingUsage")} rows={3} />
-          ) : (
-            <UsageByKeyTable items={byKey.data.items} />
-          )}
-        </>
+        <UsageBody items={resource.data.items} />
       )}
     </div>
   );
 }
 
-function UsageSummaryBody({ items }: { items: UsageSummaryEntry[] }) {
+function UsageBody({ items }: { items: UsageSummaryEntry[] }) {
   const { locale, t } = useI18n();
   const totals = totalsOf(items);
-  const sorted = [...items].sort((a, b) => b.totalTokens - a.totalTokens);
+  const tiles = [
+    { label: t("tenant.inputTokens"), value: totals.promptTokens },
+    { label: t("tenant.outputTokens"), value: totals.completionTokens },
+    { label: t("tenant.totalTokens"), value: totals.totalTokens },
+    { label: t("tenant.requests"), value: totals.requestCount },
+  ];
   return (
     <>
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-sm font-medium"><Message id="tenant.total_92bcbf" /></CardTitle>
-        </CardHeader>
-        <CardContent>
-          <dl className="grid gap-x-6 gap-y-3 sm:grid-cols-4">
-            <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">Prompt token</dt>
-              <dd className="text-sm">{totals.promptTokens.toLocaleString(locale)}</dd>
-            </div>
-            <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground">Completion token</dt>
-              <dd className="text-sm">{totals.completionTokens.toLocaleString(locale)}</dd>
-            </div>
-            <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground"><Message id="tenant.totalTokens" /></dt>
-              <dd className="text-sm">{totals.totalTokens.toLocaleString(locale)}</dd>
-            </div>
-            <div className="grid gap-1">
-              <dt className="text-xs text-muted-foreground"><Message id="tenant.requests" /></dt>
-              <dd className="text-sm">{totals.requestCount.toLocaleString(locale)}</dd>
-            </div>
-          </dl>
-        </CardContent>
-      </Card>
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+        {tiles.map((tile) => (
+          <Card key={tile.label}>
+            <CardContent className="grid gap-1">
+              <span className="text-xs text-muted-foreground">{tile.label}</span>
+              <span className="text-2xl font-semibold tabular-nums">{tile.value.toLocaleString(locale)}</span>
+            </CardContent>
+          </Card>
+        ))}
+      </div>
 
+      <Tabs defaultValue="model">
+        <TabsList className="w-fit">
+          <TabsTrigger value="model" className="flex-none px-3"><Message id="tenant.byModel" /></TabsTrigger>
+          <TabsTrigger value="user" className="flex-none px-3"><Message id="tenant.byUser" /></TabsTrigger>
+          <TabsTrigger value="key" className="flex-none px-3"><Message id="tenant.byKey" /></TabsTrigger>
+        </TabsList>
+        <TabsContent value="model" className="pt-2">
+          <ByModel items={items} />
+        </TabsContent>
+        <TabsContent value="user" className="pt-2">
+          <ByUserOrKey items={items} dimension="user" />
+        </TabsContent>
+        <TabsContent value="key" className="pt-2">
+          <ByUserOrKey items={items} dimension="key" />
+        </TabsContent>
+      </Tabs>
+    </>
+  );
+}
+
+function TotalsCells({ totals }: { totals: Totals }) {
+  const { locale } = useI18n();
+  return (
+    <>
+      <TableCell className="text-right tabular-nums">{totals.promptTokens.toLocaleString(locale)}</TableCell>
+      <TableCell className="text-right tabular-nums">{totals.completionTokens.toLocaleString(locale)}</TableCell>
+      <TableCell className="text-right tabular-nums">{totals.totalTokens.toLocaleString(locale)}</TableCell>
+      <TableCell className="text-right tabular-nums">{totals.requestCount.toLocaleString(locale)}</TableCell>
+    </>
+  );
+}
+
+function TotalsHeads() {
+  return (
+    <>
+      <TableHead className="text-right"><Message id="tenant.inputTokens" /></TableHead>
+      <TableHead className="text-right"><Message id="tenant.outputTokens" /></TableHead>
+      <TableHead className="text-right"><Message id="tenant.totalTokens" /></TableHead>
+      <TableHead className="text-right"><Message id="tenant.requests" /></TableHead>
+    </>
+  );
+}
+
+function ByModel({ items }: { items: UsageSummaryEntry[] }) {
+  const { locale, t } = useI18n();
+  const models = groupTotals(items, (item) => item.model);
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
       <Card>
         <CardHeader>
           <CardTitle className="text-sm font-medium"><Message id="tenant.totalTokensByModel" /></CardTitle>
         </CardHeader>
         <CardContent>
-          <ReactECharts option={tokensByModelOption(items, t)} style={{ height: Math.max(160, sorted.length * 36) }} notMerge />
+          <ReactECharts
+            option={tokensByModelOption(models.map((m) => ({ ...m.totals, model: m.id, tenantId: "", userId: "", keyId: "" })), t, locale)}
+            style={{ height: Math.max(200, models.length * 40 + 60) }}
+            notMerge
+          />
         </CardContent>
       </Card>
-
-      <Table>
-        <TableHeader>
-          <TableRow>
-            <TableHead><Message id="tenant.models_98fd0c" /></TableHead>
-            <TableHead>Prompt token</TableHead>
-            <TableHead>Completion token</TableHead>
-            <TableHead><Message id="tenant.totalTokens" /></TableHead>
-            <TableHead><Message id="tenant.requests" /></TableHead>
-          </TableRow>
-        </TableHeader>
-        <TableBody>
-          {sorted.map((item) => (
-            <TableRow key={item.model}>
-              <TableCell><code className="text-xs">{item.model}</code></TableCell>
-              <TableCell>{item.promptTokens.toLocaleString(locale)}</TableCell>
-              <TableCell>{item.completionTokens.toLocaleString(locale)}</TableCell>
-              <TableCell>{item.totalTokens.toLocaleString(locale)}</TableCell>
-              <TableCell>{item.requestCount.toLocaleString(locale)}</TableCell>
-            </TableRow>
-          ))}
-        </TableBody>
-      </Table>
-    </>
+      <Card>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead><Message id="tenant.models_98fd0c" /></TableHead>
+                <TotalsHeads />
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {models.map((model) => (
+                <TableRow key={model.id}>
+                  <TableCell><code className="text-xs">{model.id}</code></TableCell>
+                  <TotalsCells totals={model.totals} />
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </div>
   );
 }
 
-/** usageByKeyRows orders per-(user, key, model) rows by user, then key, then
- * total tokens, so one user's keys and models read together.
+/** ByUserOrKey lists usage per user or per key, with each row's per-model
+ * breakdown. Names come from the first page of users and keys; an id not found
+ * there (a deleted key, or beyond that page) is shown as the id itself.
  *
- * usageByKeyRows 按用户、key、总 token 排序每个 (用户, key, 模型) 行，使同一用户的
- * key 与模型排在一起。 */
-function usageByKeyRows(items: UsageSummaryEntry[]): UsageSummaryEntry[] {
-  return [...items].sort(
-    (a, b) =>
-      a.userId.localeCompare(b.userId) || a.keyId.localeCompare(b.keyId) || b.totalTokens - a.totalTokens
-  );
-}
-
-/** UsageByKeyTable shows input and output tokens per user, key and model.
- * Names come from the first page of users and keys; an id not found there
- * (a deleted key, or beyond that page) is shown as the id itself.
- *
- * UsageByKeyTable 展示每个用户、key、模型的输入与输出 token。名称取自用户与 key 列表
- * 的第一页；找不到的 id（已删除的 key，或不在该页内）直接显示 id。 */
-function UsageByKeyTable({ items }: { items: UsageSummaryEntry[] }) {
-  const { locale, t } = useI18n();
+ * ByUserOrKey 按用户或按 key 列出用量，每行附各模型明细。名称取自用户与 key 列表的
+ * 第一页；找不到的 id（已删除的 key，或不在该页内）直接显示 id。 */
+function ByUserOrKey({ items, dimension }: { items: UsageSummaryEntry[]; dimension: "user" | "key" }) {
+  const { t } = useI18n();
   const users = useResource<Page<User>>({ method: "GET", path: "/admin/v1/users", query: { limit: "200" }, parse: parseUsers });
   const keys = useResource<Page<ApiKeySummary>>({ method: "GET", path: "/admin/v1/apikeys", query: { limit: "200" }, parse: parseApiKeys });
+  const pick = dimension === "user" ? (item: UsageSummaryEntry) => item.userId : (item: UsageSummaryEntry) => item.keyId;
+  const groups = groupTotals(items, pick);
   const userLabel = (id: string) => {
     if (!id) return t("tenant.unattributed");
     const user = users.data?.items.find((u) => u.id === id);
@@ -270,38 +325,43 @@ function UsageByKeyTable({ items }: { items: UsageSummaryEntry[] }) {
   };
   return (
     <Card>
-      <CardHeader>
-        <CardTitle className="text-sm font-medium"><Message id="tenant.usageByUserAndKey" /></CardTitle>
+      <CardContent className="grid gap-3">
         <p className="text-xs text-muted-foreground"><Message id="tenant.usageByUserAndKeyHint" /></p>
-      </CardHeader>
-      <CardContent>
         <Table>
           <TableHeader>
             <TableRow>
-              <TableHead><Message id="tenant.users" /></TableHead>
-              <TableHead>API Key</TableHead>
-              <TableHead><Message id="tenant.models_98fd0c" /></TableHead>
-              <TableHead>Prompt token</TableHead>
-              <TableHead>Completion token</TableHead>
-              <TableHead><Message id="tenant.totalTokens" /></TableHead>
-              <TableHead><Message id="tenant.requests" /></TableHead>
+              <TableHead>{dimension === "user" ? <Message id="tenant.users" /> : "API Key"}</TableHead>
+              {dimension === "key" ? <TableHead><Message id="tenant.users" /></TableHead> : null}
+              <TableHead><Message id="tenant.tokenUsage" /></TableHead>
+              <TotalsHeads />
             </TableRow>
           </TableHeader>
           <TableBody>
-            {usageByKeyRows(items).map((item) => (
-              <TableRow key={`${item.userId}/${item.keyId}/${item.model}`}>
-                <TableCell>{userLabel(item.userId)}</TableCell>
-                <TableCell>{keyLabel(item.keyId)}</TableCell>
-                <TableCell><code className="text-xs">{item.model}</code></TableCell>
-                <TableCell>{item.promptTokens.toLocaleString(locale)}</TableCell>
-                <TableCell>{item.completionTokens.toLocaleString(locale)}</TableCell>
-                <TableCell>{item.totalTokens.toLocaleString(locale)}</TableCell>
-                <TableCell>{item.requestCount.toLocaleString(locale)}</TableCell>
+            {groups.map((group) => (
+              <TableRow key={group.id || "-"} className="align-top">
+                <NameCell label={dimension === "user" ? userLabel(group.id) : keyLabel(group.id)} muted={!group.id} />
+                {dimension === "key" ? <NameCell label={userLabel(group.rows[0]?.userId ?? "")} muted={!group.rows[0]?.userId} /> : null}
+                <TableCell>
+                  <UsageByModelCell usage={usageByModel(group.rows, () => "all").get("all")} />
+                </TableCell>
+                <TotalsCells totals={group.totals} />
               </TableRow>
             ))}
           </TableBody>
         </Table>
       </CardContent>
     </Card>
+  );
+}
+
+/** NameCell truncates a user or key name so one long name cannot widen the
+ * table; the full name stays in the tooltip.
+ *
+ * NameCell 截断过长的用户或 key 名称，避免一个长名称撑宽整张表；完整名称保留在提示中。 */
+function NameCell({ label, muted }: { label: string; muted: boolean }) {
+  return (
+    <TableCell className={muted ? "text-muted-foreground" : undefined}>
+      <span className="block max-w-48 truncate" title={label}>{label}</span>
+    </TableCell>
   );
 }

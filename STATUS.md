@@ -4,7 +4,8 @@
 
 - **Gateway**：用量记录附发起请求的 `key_id`。
 - **控制面**：`usage_records/0003` 新增 `key_id`、`user_id` 两列；入账时按 key 查创建者写入 `user_id`，之后删除 key 或用户不影响归属。`/admin/v1/usage/summary` 与 `/operator/v1/usage/summary` 新增 `group_by=key`，按 `(tenant, user, key, model)` 分组。
-- **Console**：租户「用量」页新增「按用户与 Key 的用量」表，名称取自用户与 key 列表首页（200 条），找不到的显示 id。
+- **Console**：租户「用量」页改为：时间范围预设（全部 / 近 7 天 / 近 30 天 / 自定义）、四项合计卡片（输入、输出、总 token、请求数），以及「按模型 / 按用户 / 按 Key」三个标签页；名称取自用户与 key 列表首页（200 条），找不到的显示 id。`/api/admin/*` 与 `/api/operator/*` 的用量汇总白名单放行 `group_by`（首次上线漏放，按 Key 统计实际拿到的是按模型数据）。
+- **Console**：「API Key」页与「用户」页新增「Token 用量」列，按模型列出该 key / 该用户的全部输入与输出 token（不限时间窗口）。
 
 升级须知：**先升级控制面，再升级 Gateway**（旧控制面会拒绝带 `key_id` 的批次并丢弃）。迁移只加两列带默认值的列；升级前的历史用量显示为「未归属」。`sql/init.sql` 已同步。
 

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseUsageSummary } from "./usage.ts";
+import { parseUsageSummary, usageByModel } from "./usage.ts";
 import { ApiError } from "./errors.ts";
 
 test("parses a tenant-scoped usage summary without tenant_id", () => {
@@ -80,4 +80,22 @@ test("parses a by-key usage summary with user_id and key_id", () => {
   assert.equal(summary.items[0]?.keyId, "key_1");
   assert.equal(summary.items[1]?.userId, "");
   assert.equal(summary.items[1]?.keyId, "");
+});
+
+test("usageByModel folds rows per id and model, skipping unattributed rows", () => {
+  const { items } = parseUsageSummary({
+    items: [
+      { user_id: "usr_1", key_id: "key_a", model: "m1", prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, request_count: 1 },
+      { user_id: "usr_1", key_id: "key_b", model: "m1", prompt_tokens: 10, completion_tokens: 20, total_tokens: 30, request_count: 1 },
+      { user_id: "usr_1", key_id: "key_b", model: "m2", prompt_tokens: 100, completion_tokens: 200, total_tokens: 300, request_count: 1 },
+      { model: "m1", prompt_tokens: 5, completion_tokens: 5, total_tokens: 10, request_count: 1 },
+    ],
+  });
+  const byUser = usageByModel(items, (item) => item.userId);
+  assert.deepEqual(byUser.get("usr_1"), [
+    { model: "m2", promptTokens: 100, completionTokens: 200 },
+    { model: "m1", promptTokens: 11, completionTokens: 22 },
+  ]);
+  assert.equal(byUser.size, 1);
+  assert.deepEqual(usageByModel(items, (item) => item.keyId).get("key_a"), [{ model: "m1", promptTokens: 1, completionTokens: 2 }]);
 });
