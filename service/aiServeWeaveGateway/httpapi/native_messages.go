@@ -515,8 +515,11 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 			obj["message"] = response
 			data, _ = json.Marshal(obj)
 			if value, ok := response["usage"].(map[string]any); ok {
-				if n, ok := value["input_tokens"].(float64); ok {
-					usage.PromptTokens = int(n)
+				// Cache reads and writes are input too; the Messages API
+				// reports them beside input_tokens.
+				// 缓存读取与写入同样是输入；Messages API 把它们放在 input_tokens 旁边报告。
+				if counted, err := nativeMessagesUsage(value, false); err == nil {
+					usage = counted
 				}
 			}
 		case "content_block_start":
@@ -590,6 +593,8 @@ func (h *handlers) nativeMessagesOutput(w http.ResponseWriter, r *http.Request, 
 					protocolError("invalid native Messages usage")
 					return
 				}
+			} else if counted, countErr := nativeMessagesUsage(prior, false); countErr == nil {
+				usage = counted
 			}
 		case "message_stop":
 			if !req.Stream {

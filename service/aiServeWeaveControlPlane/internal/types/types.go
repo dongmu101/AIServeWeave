@@ -713,6 +713,16 @@ type UsageRecordRequest struct {
 	//
 	// KeyID 是发起请求的 API key；控制面据此解析出 key 的创建者。
 	KeyID string `json:"key_id,omitempty"`
+	// Details breaks the totals down by meter and Attributes carries the
+	// request facts pricing may key on (common/pricing). A record whose
+	// details or attributes break the limits keeps its totals and loses
+	// only those, so its tokens are billed at the base price.
+	//
+	// Details 按计量项细分总数，Attributes 携带计价可能依据的请求属性
+	// （common/pricing）。明细或属性违反上限的记录保留其总数，只丢掉明细与属性，使其
+	// token 按基础价计费。
+	Details    map[string]int64  `json:"details,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // CreateUsageRecordsRequest is the body of POST /internal/v1/usagerecords.

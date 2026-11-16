@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 )
 
@@ -110,23 +111,33 @@ type functionCallDTO struct {
 }
 
 type usageDTO struct {
-	PromptTokens            int `json:"prompt_tokens"`
-	CompletionTokens        int `json:"completion_tokens"`
-	TotalTokens             int `json:"total_tokens"`
+	PromptTokens        int `json:"prompt_tokens"`
+	CompletionTokens    int `json:"completion_tokens"`
+	TotalTokens         int `json:"total_tokens"`
+	PromptTokensDetails *struct {
+		CachedTokens int `json:"cached_tokens"`
+	} `json:"prompt_tokens_details"`
 	CompletionTokensDetails *struct {
 		ReasoningTokens int `json:"reasoning_tokens"`
 	} `json:"completion_tokens_details"`
 }
 
-// toRuntime converts the wire usage, including the reasoning share of the
-// completion tokens when the backend breaks it out.
+// toRuntime converts the wire usage, including the cached share of the
+// prompt tokens and the reasoning share of the completion tokens when the
+// backend breaks them out. OpenAI's prompt_tokens already counts the cached
+// tokens, so they become a detail and the total is left as reported.
 //
-// toRuntime 转换线上的用量；后端单独报告时一并带上补全 token 中的思考部分。
+// toRuntime 转换线上的用量；后端单独报告时一并带上提示 token 中命中缓存的部分与补全
+// token 中的思考部分。OpenAI 的 prompt_tokens 已经计入缓存 token，因此缓存部分作为
+// 明细，总数保持原样。
 func (u usageDTO) toRuntime() runtime.Usage {
 	out := runtime.Usage{
 		PromptTokens:     u.PromptTokens,
 		CompletionTokens: u.CompletionTokens,
 		TotalTokens:      u.TotalTokens,
+	}
+	if u.PromptTokensDetails != nil {
+		out.AddDetail(pricing.MeterCacheRead, int64(u.PromptTokensDetails.CachedTokens))
 	}
 	if u.CompletionTokensDetails != nil {
 		out.ReasoningTokens = u.CompletionTokensDetails.ReasoningTokens

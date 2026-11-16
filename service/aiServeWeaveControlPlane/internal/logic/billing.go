@@ -133,6 +133,11 @@ type CreditPackageInput struct {
 type TenantBillingView struct {
 	Tenant  model.Tenant
 	Billing model.TenantBilling
+	// PricePlanID is the tenant's current price plan, set only when billing
+	// is enabled.
+	//
+	// PricePlanID 是租户当前所属的价格方案，只在开启计费时填写。
+	PricePlanID string
 }
 
 func (s *Service) billingEnabled() bool { return s.billing != nil }
@@ -682,13 +687,19 @@ func (s *Service) ListBillingTenants(ctx context.Context, actor Actor, query sto
 	if err != nil {
 		return store.Page[TenantBillingView]{}, err
 	}
+	var plans map[string]string
+	if s.billingEnabled() {
+		if plans, err = s.tenantPricePlans(ctx, ids); err != nil {
+			return store.Page[TenantBillingView]{}, err
+		}
+	}
 	out := store.Page[TenantBillingView]{NextCursor: tenants.NextCursor, Items: make([]TenantBillingView, len(tenants.Items))}
 	for i, t := range tenants.Items {
 		row, ok := rows[t.ID]
 		if !ok {
 			row = model.TenantBilling{TenantID: t.ID, Mode: model.BillingModeExempt}
 		}
-		out.Items[i] = TenantBillingView{Tenant: t, Billing: row}
+		out.Items[i] = TenantBillingView{Tenant: t, Billing: row, PricePlanID: plans[t.ID]}
 	}
 	return out, nil
 }

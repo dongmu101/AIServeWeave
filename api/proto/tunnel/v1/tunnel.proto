@@ -1212,6 +1212,13 @@ message Usage {
   int64 completion_tokens = 2;
   int64 total_tokens = 3;
   int64 reasoning_tokens = 4;           // the part of completion_tokens spent reasoning; 0 when unreported
+  // details breaks prompt_tokens and completion_tokens down by meter
+  // (common/pricing): meter name -> quantity, each a part of its parent, for
+  // example "input.cache_read". A receiver that does not know a meter prices
+  // it as its parent, so a newer sender is never billed less.
+  map<string, int64> details = 5;
+  // attributes are request facts pricing may key on (a service tier).
+  map<string, string> attributes = 6;
 }
 
 message EmbeddingRequest {

@@ -24,6 +24,7 @@ var httpapiMetrics = []string{
 	MetricRequestLogDroppedTotal,
 	MetricRequestLogPushFailedTotal,
 	MetricUsageLedgerDroppedTotal,
+	MetricUsageDetailsDroppedTotal,
 	MetricUsageLedgerPushFailedTotal,
 	MetricWorkflowJobsTotal,
 	MetricWorkflowJobDurationSeconds,

@@ -476,6 +476,67 @@ type BillingConf struct {
 	// Ezfp 经易支付（EZFP）为 Dodo 所服务的同一批结账（充值包、包月账号与预售）收取人民币
 	// 付款，只适用于以 CNY 标价的商品。它可与 Dodo 并存，也可单独使用。
 	Ezfp EzfpConf `json:",optional"`
+	// PriceCatalog keeps the official price list (LiteLLM) in sync. See
+	// .scratch/token-pricing/spec.md「价目表」.
+	//
+	// PriceCatalog 让官方价目表（LiteLLM）保持同步。见
+	// .scratch/token-pricing/spec.md「价目表」。
+	PriceCatalog PriceCatalogConf `json:",optional"`
+}
+
+// PriceCatalogConf configures the official price list sync. The built-in
+// snapshot is imported when the catalog is empty, whatever these say.
+//
+// PriceCatalogConf 配置官方价目表的同步。价目表为空时，无论这里怎么配置都会导入内置快照。
+type PriceCatalogConf struct {
+	// URL is the upstream price list; empty means the LiteLLM file on
+	// GitHub raw. Where GitHub raw is unreachable, use a mirror or the
+	// GitHub API contents address, which the sync's Accept header makes
+	// return the file itself.
+	//
+	// URL 是上游价目表；为空表示 GitHub raw 上的 LiteLLM 文件。连不上 GitHub raw 的地方，
+	// 改用镜像或 GitHub API 的 contents 地址——同步时带的 Accept 头会让它直接返回文件本身。
+	URL string `json:",optional"`
+	// RefreshInterval is how often each replica fetches URL; zero turns the
+	// periodic fetch off, leaving the built-in snapshot and the operator's
+	// manual sync. At least 10 minutes otherwise, so replicas stay within
+	// the GitHub API's unauthenticated limit.
+	//
+	// RefreshInterval 是每个副本拉取 URL 的间隔；为零时关闭定时拉取，只用内置快照与运维的
+	// 手动同步。否则至少 10 分钟，使各副本不超出 GitHub API 未认证的频率限制。
+	RefreshInterval time.Duration `json:",default=24h"`
+	// AutoApplyMaxChangePercent is the largest relative change of an
+	// existing price that takes effect without an operator; zero sends
+	// every price change to review. New entries always take effect; a price
+	// removed, falling to zero or rising from zero always waits.
+	//
+	// AutoApplyMaxChangePercent 是已有单价无需运维即可生效的最大相对变动；为零时所有改价
+	// 都要审核。新条目总是直接生效；单价被删除、降为 0 或从 0 上涨总是要等待审核。
+	AutoApplyMaxChangePercent int `json:",default=30"`
+}
+
+// minPriceCatalogRefresh is the shortest periodic fetch interval accepted.
+//
+// minPriceCatalogRefresh 是可接受的最短定时拉取间隔。
+const minPriceCatalogRefresh = 10 * time.Minute
+
+// validate checks the price catalog settings.
+//
+// validate 校验价目表设置。
+func (p PriceCatalogConf) validate() error {
+	if p.URL != "" {
+		parsed, err := url.Parse(p.URL)
+		if err != nil || (parsed.Scheme != "https" && parsed.Scheme != "http") || parsed.Host == "" || parsed.User != nil || len(p.URL) > 512 {
+			return errors.New("config: Billing.PriceCatalog.URL must be an absolute http(s) URL of at most 512 bytes without credentials")
+		}
+	}
+	if p.RefreshInterval < 0 || (p.RefreshInterval > 0 && p.RefreshInterval < minPriceCatalogRefresh) {
+		return errors.New("config: Billing.PriceCatalog.RefreshInterval must be 0 (off) or at least 10m")
+	}
+	if p.AutoApplyMaxChangePercent < 0 || p.AutoApplyMaxChangePercent > 1000 {
+		return errors.New("config: Billing.PriceCatalog.AutoApplyMaxChangePercent must be between 0 and 1000")
+	}
+	return nil
 }
 
 // EzfpConf configures 易支付. The keys come from the environment, as
@@ -1292,6 +1353,9 @@ func (b BillingConf) validate() error {
 		if err := b.Ezfp.validate(); err != nil {
 			return err
 		}
+	}
+	if err := b.PriceCatalog.validate(); err != nil {
+		return err
 	}
 	if b.SignupGrantCredits < 0 || b.SignupGrantCredits > math.MaxInt64/1_000_000 {
 		return errors.New("config: Billing.SignupGrantCredits is out of range")

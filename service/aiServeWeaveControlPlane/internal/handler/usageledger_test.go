@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +38,49 @@ func TestCreateUsageRecordsAcceptsAValidEntryAndSkipsAnInvalidOne(t *testing.T) 
 	}
 	if resp.Accepted != 1 {
 		t.Fatalf("resp.Accepted = %d, want 1 (only the well-formed record)", resp.Accepted)
+	}
+}
+
+// capturingUsageStore records what CreateUsageRecords was asked to write.
+// capturingUsageStore 记录 CreateUsageRecords 被要求写入的内容。
+type capturingUsageStore struct {
+	*memstore.Store
+	written []model.UsageRecord
+}
+
+func (s *capturingUsageStore) CreateUsageRecords(ctx context.Context, records []model.UsageRecord) error {
+	s.written = append(s.written, records...)
+	return s.Store.CreateUsageRecords(ctx, records)
+}
+
+func TestCreateUsageRecordsAcceptsDetailsAndAttributes(t *testing.T) {
+	st := &capturingUsageStore{Store: memstore.New()}
+	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
+	body := `{"records":[
+		{"request_id":"req_1","tenant_id":"tnt_1","model":"claude","endpoint":"anthropic_messages","prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"created_at":"2026-09-11T08:00:00Z",
+		 "details":{"input.cache_read":600,"input.cache_write":300},"attributes":{"service_tier":"flex"}},
+		{"request_id":"req_2","tenant_id":"tnt_1","model":"claude","endpoint":"anthropic_messages","prompt_tokens":10,"total_tokens":10,"created_at":"2026-09-11T08:00:00Z",
+		 "details":{"input.cache_read":-1}}
+	]}`
+	w := httptest.NewRecorder()
+	createUsageRecords(ctx)(w, httptest.NewRequest(http.MethodPost, "/internal/v1/usagerecords", strings.NewReader(body)))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
+	}
+	var resp types.CreateUsageRecordsResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Accepted != 2 {
+		t.Fatalf("accepted = %d (%v), want 2: invalid details drop only the details", resp.Accepted, err)
+	}
+	if len(st.written) != 2 {
+		t.Fatalf("wrote %d records, want 2", len(st.written))
+	}
+	first, second := st.written[0], st.written[1]
+	if first.CacheReadTokens != 600 || first.CacheWriteTokens != 300 || first.Details == nil || !strings.Contains(*first.Details, `"service_tier":"flex"`) {
+		t.Errorf("first record = %+v, want its cache columns and details", first)
+	}
+	if second.Details != nil || second.PromptTokens != 10 {
+		t.Errorf("second record = %+v, want its totals without details", second)
 	}
 }
 

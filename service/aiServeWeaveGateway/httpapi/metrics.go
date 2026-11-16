@@ -139,6 +139,16 @@ const (
 	// 原因是有界推送缓冲或重试积压已满，或其批次被控制面拒绝、用尽了推送次数。斜率
 	// 非零意味着账本正在丢失最近的用量，而不是服务这次请求本身出了问题。
 	MetricUsageLedgerDroppedTotal = "gateway_usage_ledger_dropped_total"
+	// MetricUsageDetailsDroppedTotal counts usage details and attributes
+	// dropped before a push for breaking common/pricing's limits (a bad
+	// meter name, a negative count, too many entries). The record itself is
+	// still pushed, so its tokens are billed at the base price; a non-zero
+	// slope points at a backend reporting malformed usage.
+	//
+	// MetricUsageDetailsDroppedTotal 统计推送前因违反 common/pricing 的限制（计量项名称
+	// 不合法、数量为负、条目过多）而被丢弃的用量明细与属性。记录本身照常推送，因此其
+	// token 按基础价计费；斜率非零说明某个后端上报了格式不对的用量。
+	MetricUsageDetailsDroppedTotal = "gateway_usage_details_dropped_total"
 	// MetricUsageLedgerPushFailedTotal counts batches that reached
 	// PushUsageRecords but failed to reach the control plane or were refused
 	// by it — mirrors MetricRequestLogPushFailedTotal exactly.
@@ -377,6 +387,10 @@ func Descriptions() metrics.Descriptions {
 			Kind: metrics.KindCounter,
 			Help: "Usage-ledger records dropped because the push buffer was full.",
 		},
+		MetricUsageDetailsDroppedTotal: {
+			Kind: metrics.KindCounter,
+			Help: "Usage details and attributes dropped before a push for breaking the pricing limits; the record is still pushed.",
+		},
 		MetricUsageLedgerPushFailedTotal: {
 			Kind: metrics.KindCounter,
 			Help: "Usage-ledger batches that reached the control plane call but failed (network error or non-200 status).",
@@ -605,6 +619,14 @@ func (r *recorder) RequestLogPushFailed() {
 // UsageLedgerDropped 记录一条因推送缓冲已满而被丢弃的用量记录。
 func (r *recorder) UsageLedgerDropped() {
 	r.sink.Counter(MetricUsageLedgerDroppedTotal, nil).Add(1)
+}
+
+// UsageDetailsDropped records n usage details or attributes dropped before a
+// push.
+//
+// UsageDetailsDropped 记录推送前被丢弃的 n 个用量明细或属性。
+func (r *recorder) UsageDetailsDropped(n int) {
+	r.sink.Counter(MetricUsageDetailsDroppedTotal, nil).Add(float64(n))
 }
 
 // UsageLedgerPushFailed records one batch that reached PushUsageRecords but

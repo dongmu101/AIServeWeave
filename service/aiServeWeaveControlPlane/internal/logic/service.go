@@ -237,6 +237,7 @@ type Service struct {
 	tenantNodes          *TenantNodeConfig
 	nodeProviders        *NodeProviderConfig
 	agentInstall         *AgentInstallConfig
+	priceCatalog         *PriceCatalogConfig
 }
 
 // Option configures a Service.

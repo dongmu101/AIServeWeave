@@ -82,6 +82,18 @@ type UsageRecord struct {
 	// KeyID 是发起请求的 API key，使控制面能把用量归属到 key 及其创建者。没有 key
 	// 身份的请求为空。
 	KeyID string
+	// Details breaks PromptTokens and CompletionTokens down by meter
+	// (common/pricing), already filtered by pricing.SanitizeDetails so the
+	// control plane's strict check cannot refuse the batch over it. Nil when
+	// there is no breakdown.
+	//
+	// Details 按计量项（common/pricing）细分 PromptTokens 与 CompletionTokens，已经过
+	// pricing.SanitizeDetails 过滤，使控制面的严格校验不会因它拒绝整批。没有细分时为 nil。
+	Details map[string]int64
+	// Attributes are request facts pricing may key on, filtered the same way.
+	//
+	// Attributes 是计价可能依据的请求属性，以同样方式过滤。
+	Attributes map[string]string
 }
 
 // usageLedgerSink is what recordUsage hands a finished usage record to. It

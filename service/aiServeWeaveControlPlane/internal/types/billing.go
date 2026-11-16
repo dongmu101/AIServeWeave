@@ -260,6 +260,11 @@ type BillingTenant struct {
 	BalanceMicro int64     `json:"balance_micro"`
 	Blocked      bool      `json:"blocked"`
 	CreatedAt    time.Time `json:"created_at"`
+	// PricePlanID is the tenant's current price plan, present only when
+	// billing is enabled.
+	//
+	// PricePlanID 是租户当前所属的价格方案，只在开启计费时出现。
+	PricePlanID string `json:"price_plan_id,omitempty"`
 }
 
 // BillingTenantListResponse is one page of tenants with billing state.

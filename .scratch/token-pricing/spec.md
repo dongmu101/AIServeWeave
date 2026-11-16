@@ -1,6 +1,8 @@
 # 按官方价 × 倍率计费（参照 sub2api）
 
-Status: needs-triage
+Status: ready-for-agent
+
+实施（2026-11-16）：任务拆分见 [issues/](issues/)。共享词汇（计量项命名、明细上限、单价表类型）在 `common/pricing`。
 
 Triage（2026-11-16）：参照 [sub2api](https://github.com/Wei-Shaw/sub2api) 的 token 计价方式。已确定：
 
@@ -128,15 +130,16 @@ input.cache_write.1h  按 100 计
 | `cache_read_input_token_cost` | `input.cache_read` | 0 |
 | `cache_creation_input_token_cost` | `input.cache_write` | 0 |
 | `cache_creation_input_token_cost_above_1hr` | `input.cache_write.1h` | 0 |
+| `cache_creation_input_token_cost_above_12hr` | `input.cache_write.12h` | 0 |
 | `output_cost_per_reasoning_token` | `output.reasoning` | 0 |
-| 上述字段加 `_above_<N>k_tokens` 后缀 | 同上 | `N × 1000` |
-| `long_context_input_token_threshold` 加 `long_context_input_cost_multiplier` / `long_context_output_cost_multiplier` | `input`、`output` 的所有计量项乘以对应倍率 | 阈值 |
+| 上述字段加 `_above_<N>k_tokens` 后缀（如 `cache_creation_input_token_cost_above_1hr_above_200k_tokens`） | 同上 | `N × 1000` |
 
 - 单价从「USD / token」乘以 1e12 换成「micro 点 / 百万 token」，四舍五入成整数。
 - **补齐档位**：某档只给了 `input`、`output` 的单价，没给子项（例如没有 `cache_read_input_token_cost_above_200k_tokens`）时，子项按「基础档子项单价 × 该档根单价 / 基础档根单价」补齐，并标记为推算值。不补齐的话，长上下文请求的缓存部分会按基础档收费。
-- 其他字段（priority、flex、batches、音频、图片、搜索、按秒计价等，上游一共有 52 种计价字段）本期不导入。**每个条目的原始 JSON 照样保存**，以后要支持新维度时只需改映射、重新导入，不必重新抓取，也不必改表。
+- 其他字段（priority、flex、batches、音频、图片、搜索、按秒计价等，上游一共有 172 种计价字段）本期不导入。**每个条目的原始 JSON 照样保存**，以后要支持新维度时只需改映射、重新导入，不必重新抓取，也不必改表。
 - 只收录 `mode` 为 `chat`、`completion`、`responses`、`embedding`，且 `input` 或 `output` 至少一个单价大于 0 的条目。全为 0 的条目（例如 `ollama/*`）不收录，以免本地模型被标成免费。
-- 本机连不上 GitHub raw，目前只读到 sub2api 整理过的副本（218 个条目）。实现前须用上游原始文件核对字段名，`long_context_*` 这组字段也可能是 sub2api 自己加的。解析器对两种写法都支持，不认识的字段忽略。
+- 字段名的组合顺序是：基础名 → TTL（`_above_1hr`、`_above_12hr`）→ 档位（`_above_<N>k_tokens`）→ 服务等级（`_priority`、`_flex`、`_batches`、`_ultrafast` 等）。本期只导入没有服务等级后缀的字段。值不是数字的字段（例如 `search_context_cost_per_query` 是对象）跳过。
+- 已用上游原始文件核对（2026-11-16，5993 个条目、172 种计价字段，按上面的规则保留 3689 个）：档位后缀在上游有 32k、100k、128k、200k、256k、272k、512k，长上下文的各个计量项大多给了明确单价。sub2api 副本中的 `long_context_*` 倍率字段是 sub2api 自己加的，上游没有，不支持。
 
 ### 同步与审核
 
@@ -145,7 +148,10 @@ input.cache_write.1h  按 100 计
 - **比对**：把新数据与当前生效的价目表逐个条目比较。
   - 新条目：自动生效。
   - 已有条目的任何一条单价出现以下情况时，整个条目进入待审核：变为 0；被删除；相对变动超过 `AutoApplyMaxChangePercent`。新出现的单价（例如原本没有 1 小时缓存价），与它原先回落到的单价比较。其余变动自动生效。
-  - 上游删除的条目：进入待审核，标记为「上游已删除」，在运维确认之前继续使用原价。
+  - 上游删除的条目：进入待审核，标记为「上游已删除」，在运维确认之前继续使用原价。批准删除后标为 `removed`，不再可被参照；之后上游若再列出它，按新条目自动加入。
+  - 以下情况也一律进入待审核：单价从 0 上涨；已有条目新出现一个原本没有、也找不到可回落比较的计量项。
+  - 根之下、或基础档之上的 0 单价视为上游缺漏，导入时直接去掉，让查找回落到父项或基础档（只会多收、不会少收）；根的基础档保留 0（例如 embedding 的输出价）。
+  - 启动时价目表为空就先导入内嵌快照，开启定时同步时再立即拉一次远端；导入失败且没有定时同步可以顺带重试时，每 10 分钟重试一次。远端同步间隔最短 10 分钟，`AutoApplyMaxChangePercent` 允许 0–1000。手动同步接口的时限为 60 秒。一次同步按条目写的审计最多 200 条，另有一条摘要统计全部变动。
 - **审核**：运维逐条批准或拒绝。批准后从批准时刻起生效。拒绝后保留原价，上游内容不变就不再提醒。
 - 自动生效、批准、拒绝都写审计 `billing.catalog.*`，记录条目名称与单价变化。
 - **多副本**：各副本独立拉取，写入时用同步状态行上的内容哈希做比较并交换，同一份上游内容只有一个副本会写入。
@@ -157,7 +163,7 @@ input.cache_write.1h  按 100 计
 
 | 键 | 默认 | 含义 |
 | --- | --- | --- |
-| `URL` | LiteLLM 在 GitHub raw 上的地址 | 远端价目表。中国大陆常连不上 GitHub raw，可以换成镜像 |
+| `URL` | LiteLLM 在 GitHub raw 上的地址 | 远端价目表。中国大陆常连不上 GitHub raw，可以换成镜像，或者 GitHub API 地址 `https://api.github.com/repos/BerriAI/litellm/contents/model_prices_and_context_window.json`（未认证时每小时限 60 次，每天同步一次足够）。拉取时一律带 `Accept: application/vnd.github.raw`，两种地址都直接返回 JSON |
 | `RefreshInterval` | `24h` | 远端同步间隔；`0` 表示不拉远端 |
 | `AutoApplyMaxChangePercent` | `30` | 已有条目改价时，自动生效的最大相对变动；`0` 表示所有改价都要审核 |
 
@@ -197,7 +203,7 @@ input.cache_write.1h  按 100 计
 | 定价配置（参照模型、覆盖价、模型倍率、默认价、全部价格方案） | 每次修改追加一个完整版本 `pricing_revisions`（JSON 文档），带生效时间。运维的修改接口须带上所基于的版本号，版本已变化时返回 409 |
 | 租户所属方案 | `tenant_price_plans` 每行带 `valid_from` / `valid_to` |
 
-另有一个全局的定价版本号，上述任何数据变化时加一。控制面在扣费事务里读取这个版本号，与进程内缓存不同时就重新加载，所以各副本永远用最新的价格数据计价，不需要等定时刷新。
+价目表与定价配置各自维护一个版本号（`catalog_sync_state` 与 `pricing_config_state`），数据变化时在同一个事务里加一。两者分开，是为了让价目表（第 2 项）与定价配置（第 3 项）可以独立实现。控制面在扣费事务里读取这两个版本号，与进程内缓存不同时就重新加载，所以各副本永远用最新的价格数据计价，不需要等定时刷新。
 
 ## 单笔计价
 
@@ -318,16 +324,18 @@ input.cache_write.1h  按 100 计
 | Gateway 推送 `/internal/v1/usagerecords` | 记录新增 `details`、`attributes` 两个对象，为空时省略 |
 
 - `attributes` 本期没有生产方，只是先放进协议，供以后的服务等级、批处理等使用，免得到时又要控制面先升级一轮。
-- 控制面校验：每条记录最多 32 个明细、8 个属性；名称须符合计量项命名规则；数量不能为负；属性值最长 64 字节。不符合时整批拒绝，与现有的严格校验一致。
-- **Gateway 推送前按同样的规则过滤**：不合规的明细或属性直接丢弃，并记录指标，记录本身照常推送。否则 Agent 只要有一个 bug，就会让整批用量被拒绝，造成漏记漏扣。
+- 控制面校验：每条记录最多 32 个明细、8 个属性；名称须符合计量项命名规则；数量不能为负；属性值最长 64 字节。不符合时**只丢掉这条记录的明细与属性**并记一条警告，记录本身照常入账，按基础价计费。不整批拒绝：Gateway 会丢弃被控制面拒绝的批次，整批拒绝等于漏记用量；这与现有的「跳过有问题的条目、不让整批失败」原则一致。（实现时修订，原写法是整批拒绝。）
+- **Gateway 推送前按同样的规则过滤**：不合规的明细或属性直接丢弃，并记录指标 `gateway_usage_details_dropped_total`，记录本身照常推送。控制面的检查只是兜底。
+- **请求体上限**：控制面 `/internal/v1/usagerecords` 的上限由 256KB 提高到 4MiB。整批 500 条在上限允许的最坏情况（每条 32 个明细、8 个属性）下约 2MB，超出上限的批次会被拒绝并丢弃，所以上限按最坏情况定。
 - 这两个对象加进协议以后，新增计量项不再需要改协议，也不需要控制面先升级。
 - 旧 Agent 不上报明细，全部按 `input` / `output` 的基础价收费，与现在相同。
+- **修正既有漏计**：Gateway 的原生 Messages 路径（Claude CLI 桥接）原本只把 `input_tokens` 计为输入，而 Messages API 的 `input_tokens` 不含缓存读取与写入，所以这条路径的缓存 token 从未计入用量、配额与费用。实现第 1 项时一并修正：缓存读取与写入计入输入，并记为明细；透传路径照旧计入每次采样（`iterations`），公开返回的 usage 不变。
 
 ## 数据变更
 
 迁移要同时提供 PostgreSQL 与 MySQL 版本，并同步 `sql/init.sql`。
 
-### `usage_records/0004_pricing.sql`
+### `usage_records/0005_pricing.sql`
 
 新增：
 
@@ -374,23 +382,25 @@ input.cache_write.1h  按 100 计
 - 升级前的费用只存在 `usage_charges` 里。提供一个可选的分批回填命令（例如 `-migrate backfill-usage-cost`，可以重复执行），在低峰期按分区把 `cost_micro` 与 `charged` 写进 `usage_records`。不回填时，这些记录在 Console 显示为「升级前」，也不计入汇总费用。
 - `usage_charges` 本期保留不删，留给回填命令使用；下一个版本的迁移再删除。
 
-### `billing/0012_pricing.sql`
+### `billing` 命名空间
+
+分三个迁移文件，分别对应实施第 2、3、5 项：`0012_price_catalog.sql`（价目表的四张表）、`0013_pricing_config.sql`（`pricing_revisions`、`tenant_price_plans`、`pricing_config_state`）、`0014_usage_ledger.sql`（`credit_ledger` 与 `tenant_billing` 加列）。
 
 | 表 | 说明 |
 | --- | --- |
-| `catalog_models` | 价目表条目：`model` 主键、`provider`、`mode`、原始 JSON、状态（`active` / `removed_upstream`）、被拒绝的上游内容哈希、时间 |
+| `catalog_models` | 价目表条目：`model` 主键（最长 255 字节，MySQL 用 `utf8mb4_bin`，避免只差大小写的条目名在主键上冲突）、`provider`、`mode`、原始 JSON、状态（`active` / `removed_upstream` / `removed`）、被拒绝的上游内容哈希、时间 |
 | `catalog_prices` | 价目表单价：`model`、`meter`、`variant`、`above_input_tokens`、`price_micro_per_m`、`derived`、`valid_from`、`valid_to` |
 | `catalog_pending` | 待审核的变动：条目、类型（改价 / 删除）、拟采用的单价、上游内容哈希、发现时间 |
-| `catalog_sync_state` | 单行：来源、内容哈希、条目数、同步时间、最后一次错误 |
+| `catalog_sync_state` | 单行：来源、内容哈希、条目数、同步时间、最后一次错误，以及价目表版本号（单价每次变化加一） |
 | `pricing_revisions` | 定价配置版本：自增 `id`、`effective_at`、JSON 文档、`created_by`、备注 |
 | `tenant_price_plans` | 租户所属方案：`tenant_id`、`plan_id`、`valid_from`、`valid_to` |
-| `pricing_state` | 单行：全局定价版本号 |
+| `pricing_config_state` | 单行：定价配置版本号（新增定价配置版本或租户方案变化时加一） |
 | `credit_ledger`（加列） | `period_start DATETIME NULL`、`period_end DATETIME NULL`：用量账目的第一笔与最后一笔扣费时间，其他账目为空；`request_count BIGINT NOT NULL DEFAULT 0` |
 | `tenant_billing`（加列） | 累计中的用量：`usage_acc_micro`、`usage_acc_count`（`BIGINT NOT NULL DEFAULT 0`）、`usage_acc_since`、`usage_acc_last`、`usage_acc_until`（`DATETIME NULL`，`usage_acc_until` 建索引供封账任务扫描）；上一条账目的时间 `last_ledger_at DATETIME NULL` |
 
 `credit_ledger` 现在可能已经很大，须确认两种数据库上加列都是即时完成，不会整表复制。
 
-迁移把现有的 `model_prices` 转换成第一个定价配置版本：每一行变成该别名的覆盖价（输入、输出），模型倍率 1；`*` 行变成默认价；再建立系数为 1 的默认方案。`model_prices` 表保留不删，以便回退时对照，但不再读写。
+现有的 `model_prices` 转换成第一个定价配置版本：每一行变成该别名的覆盖价（输入、输出），模型倍率 1；`*` 行变成默认价；再建立系数为 1 的默认方案。转换不写在迁移 SQL 里，而是在第一次读取定价配置时由控制面完成（两种数据库生成 JSON 的写法差别太大，memstore 也要同一套逻辑）；它在 `pricing_config_state` 的行锁下进行，多个副本同时执行也只会写入一个第 1 版。迁移只建表并种下版本号那一行。`model_prices` 表保留不删，以便回退时对照，但第 4 项之后不再读写。
 
 ## API
 
@@ -463,6 +473,7 @@ input.cache_write.1h  按 100 计
 - 原本落到 `*` 默认价的别名，只要名称与价目表条目完全一致，升级后就按官方价收费。升级后先在「模型定价」页核对售价。
 - 1 点 = 1 美元成为定价基准。现有余额与充值包的点数不变，运维须按这个单位重新核对充值包的价格。
 - 已有的 `model_prices` 行变成覆盖价，模型倍率与默认方案系数都是 1，这些别名升级前后价格完全一致。
+- **Claude CLI 桥接的用量会明显增加**：原生 Messages 路径修正了缓存 token 漏计（见「上报链路」），升级 Gateway 后，这条路径的输入 token、配额消耗与费用都会按实际的缓存读取与写入计算。Claude Code 的输入大部分是缓存读取，增幅可能很大，升级前应通知相关商户。
 - 计价改为按请求时间取价：升级前就已发出、升级后才入账的请求，也按升级时生效的新配置计价（升级前没有版本历史）。
 - 扣费防重改由 `usage_records` 承担，**不能直接换回旧版控制面**：旧版只查 `usage_charges`，升级期间入账的记录如果再被重发，会被重复扣费。回退必须恢复升级前的备份，与 2026-11-14 的分区迁移相同。
 - 升级前的费用要运行回填命令后，才会出现在用量汇总与明细里。
@@ -495,9 +506,9 @@ input.cache_write.1h  按 100 计
 
 ## 实施拆分（确认后写入 `issues/`）
 
-1. **计量项上报**：`runtime.Usage`、各 adapter、隧道协议、Agent runtime、Gateway 推送；控制面接收、校验并写入 `usage_records/0004` 的明细与缓存列（这一步还不计价）。
+1. **计量项上报**：`runtime.Usage`、各 adapter、隧道协议、Agent runtime、Gateway 推送；控制面接收、校验并写入 `usage_records/0005` 的明细与缓存列（这一步还不计价）。
 2. **价目表**：解析与字段映射、补齐档位、带有效期的存储、内嵌快照、同步与比对、审核；运维价目表 API。
-3. **定价配置与价格方案**：版本存储、`model_prices` 转换、方案与租户方案历史、全局定价版本号；运维定价与方案 API。
+3. **定价配置与价格方案**：版本存储、`model_prices` 转换、方案与租户方案历史、定价配置版本号；运维定价与方案 API。
 4. **计价引擎与扣费防重**：`common/pricing` 纯函数包；`chargeUsage` 改用它，写入费用列与明细；扣费防重改由 `usage_records` 承担，`usage_charges` 停止写入；回填命令。
 5. **余额账目按天封账**：`tenant_billing` 与 `credit_ledger` 加列、扣费事务累加、`applyCredit` 先封账、账目时间严格递增、后台封账任务、`Billing.LedgerTimezone`、memstore；账目 API 的新字段与 `pending_usage`；压缩命令。
 6. **查询 API**：汇总加列、逐笔明细、租户价格、公开目录、未定价提示。

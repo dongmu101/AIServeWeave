@@ -202,7 +202,8 @@ func startStream(base *oaibase.Base, resp *http.Response, cancel context.CancelF
 						input = *ev.Usage // cumulative counts supersede message_start / 累计值取代 message_start 中的值
 					}
 				}
-				out.Usage = &runtime.Usage{PromptTokens: input.prompt(), CompletionTokens: output, TotalTokens: input.prompt() + output}
+				counted := input.toRuntime(output)
+				out.Usage = &counted
 			case "message_stop":
 				s.CloseWithError(nil)
 				return

@@ -1083,6 +1083,8 @@ type Store interface {
 	Alerting
 	APIDocs
 	Billing
+	PricingConfig
+	PriceCatalog
 }
 
 // CheckoutOrderFilter narrows a checkout-order list. An empty field does not

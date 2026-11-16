@@ -16,7 +16,7 @@ func TestAccountSalesRoutesWithoutPaymentProvider(t *testing.T) {
 			t.Errorf("%s: got %d, want authentication guard (401)", path, got)
 		}
 	}
-	for _, path := range []string{"/operator/v1/billing/packages", "/operator/v1/billing/model-prices"} {
+	for _, path := range []string{"/operator/v1/billing/packages", "/operator/v1/billing/model-prices", "/operator/v1/billing/pricing", "/operator/v1/billing/plans"} {
 		if got := h.call(http.MethodGet, path, "", nil, nil); got != http.StatusNotFound {
 			t.Errorf("payment route %s: got %d, want disabled (404)", path, got)
 		}

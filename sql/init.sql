@@ -446,6 +446,18 @@ ALTER TABLE usage_records
  MODIFY key_id VARCHAR(40) NOT NULL DEFAULT '',
  MODIFY user_id VARCHAR(40) NOT NULL DEFAULT '';
 
+-- usage_records/mysql/0005_pricing.sql
+ALTER TABLE usage_records
+ ADD COLUMN cache_read_tokens BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN cache_write_tokens BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN cost_micro BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN base_cost_micro BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN rate_ppm BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN price_source VARCHAR(16) NOT NULL DEFAULT '',
+ ADD COLUMN details TEXT NULL,
+ ADD COLUMN charged BOOLEAN NULL,
+ ALGORITHM=INSTANT;
+
 -- ============================================================
 -- api_docs
 -- ============================================================
@@ -724,6 +736,81 @@ ALTER TABLE alipay_redemptions
  MODIFY tenant_id VARCHAR(40) NOT NULL,
  MODIFY created_by VARCHAR(40) NOT NULL,
  MODIFY presale_order_id VARCHAR(40) NOT NULL DEFAULT '';
+
+-- billing/mysql/0012_price_catalog.sql
+CREATE TABLE IF NOT EXISTS catalog_models (
+ model VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY,
+ provider VARCHAR(64) NOT NULL,
+ mode VARCHAR(32) NOT NULL,
+ status VARCHAR(24) NOT NULL,
+ prices_hash VARCHAR(64) NOT NULL,
+ rejected_hash VARCHAR(64) NOT NULL DEFAULT '',
+ raw_json MEDIUMTEXT NOT NULL,
+ created_at DATETIME(6) NOT NULL,
+ updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS catalog_prices (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ model VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NOT NULL,
+ meter VARCHAR(64) NOT NULL,
+ variant VARCHAR(32) NOT NULL DEFAULT '',
+ above_input_tokens BIGINT NOT NULL DEFAULT 0,
+ price_micro_per_m BIGINT NOT NULL,
+ derived BOOLEAN NOT NULL DEFAULT FALSE,
+ valid_from DATETIME(6) NOT NULL,
+ valid_to DATETIME(6) NULL
+) ENGINE=InnoDB;
+CREATE INDEX idx_catalog_prices_model_from ON catalog_prices (model, valid_from);
+CREATE INDEX idx_catalog_prices_valid_to ON catalog_prices (valid_to);
+CREATE TABLE IF NOT EXISTS catalog_pending (
+ model VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin PRIMARY KEY,
+ kind VARCHAR(16) NOT NULL,
+ proposed_json MEDIUMTEXT NOT NULL,
+ prices_hash VARCHAR(64) NOT NULL,
+ max_change_bp BIGINT NOT NULL,
+ detected_at DATETIME(6) NOT NULL,
+ updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+CREATE TABLE IF NOT EXISTS catalog_sync_state (
+ id BIGINT PRIMARY KEY,
+ source VARCHAR(512) NOT NULL DEFAULT '',
+ content_hash VARCHAR(64) NOT NULL DEFAULT '',
+ embedded_hash VARCHAR(64) NOT NULL DEFAULT '',
+ entry_count BIGINT NOT NULL DEFAULT 0,
+ version BIGINT NOT NULL DEFAULT 0,
+ synced_at DATETIME(6) NULL,
+ checked_at DATETIME(6) NULL,
+ last_error VARCHAR(512) NOT NULL DEFAULT '',
+ last_error_at DATETIME(6) NULL
+) ENGINE=InnoDB;
+INSERT IGNORE INTO catalog_sync_state (id) VALUES (1);
+
+-- billing/mysql/0013_pricing_config.sql
+CREATE TABLE IF NOT EXISTS pricing_revisions (
+ id BIGINT AUTO_INCREMENT PRIMARY KEY,
+ effective_at DATETIME(6) NOT NULL,
+ document MEDIUMTEXT NOT NULL,
+ created_by VARCHAR(40) NOT NULL,
+ summary VARCHAR(512) NOT NULL,
+ created_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+CREATE INDEX idx_pricing_revisions_effective ON pricing_revisions (effective_at, id);
+CREATE TABLE IF NOT EXISTS tenant_price_plans (
+ id VARCHAR(40) PRIMARY KEY,
+ tenant_id VARCHAR(40) NOT NULL,
+ plan_id VARCHAR(40) NOT NULL,
+ valid_from DATETIME(6) NOT NULL,
+ valid_to DATETIME(6) NULL,
+ created_by VARCHAR(40) NOT NULL
+) ENGINE=InnoDB;
+CREATE INDEX idx_tenant_price_plans_tenant ON tenant_price_plans (tenant_id, valid_from);
+CREATE INDEX idx_tenant_price_plans_plan ON tenant_price_plans (plan_id, valid_to);
+CREATE TABLE IF NOT EXISTS pricing_config_state (
+ id INT PRIMARY KEY,
+ version BIGINT NOT NULL,
+ updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+INSERT IGNORE INTO pricing_config_state (id, version, updated_at) VALUES (1, 0, UTC_TIMESTAMP(6));
 
 -- ============================================================
 -- jobs

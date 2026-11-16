@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 )
 
@@ -111,8 +112,9 @@ func (p *claudeParser) line(event []byte, out sink) (bool, error) {
 			}
 		}
 		var err error
-		p.usage, err = usageFrom(object(obj["usage"]),
+		p.usage, err = usageWithDetails(object(obj["usage"]),
 			[][]string{{"input_tokens", "inputTokens"}, {"cache_read_input_tokens", "cacheReadInputTokens"}, {"cache_creation_input_tokens", "cacheCreationInputTokens"}},
+			[]string{"", pricing.MeterCacheRead, pricing.MeterCacheWrite},
 			[][]string{{"output_tokens", "outputTokens"}})
 		p.done = err == nil
 		return p.done, err

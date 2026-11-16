@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"maps"
 	"net/http"
 	"strconv"
 	"time"
 
 	"AIServeWeave/common/nodeaccess"
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
 )
@@ -108,7 +110,10 @@ func (h *handlers) ledgerUsage(ctx context.Context, nodeID string, usage runtime
 	if _, owned := nodeaccess.OwnerOf(nodeID); !owned {
 		nodeID = ""
 	}
+	details, attributes := h.usageDetails(usage)
 	accepted := h.usageLedger.enqueue(UsageRecord{
+		Details:          details,
+		Attributes:       attributes,
 		NodeID:           nodeID,
 		KeyID:            identity.KeyID,
 		RequestID:        requestIDFrom(ctx),
@@ -123,6 +128,34 @@ func (h *handlers) ledgerUsage(ctx context.Context, nodeID string, usage runtime
 	if !accepted {
 		h.metrics.UsageLedgerDropped()
 	}
+}
+
+// usageDetails returns the details and attributes a ledger record carries:
+// the backend's breakdown plus the reasoning share as
+// pricing.MeterReasoning, filtered so that one misbehaving backend cannot
+// get a whole batch refused by the control plane's strict check. Dropped
+// entries are counted, and the record itself is kept.
+//
+// usageDetails 返回账本记录携带的明细与属性：后端的细分，加上作为
+// pricing.MeterReasoning 的推理部分，并经过过滤，使一个行为异常的后端不会让控制面的
+// 严格校验拒绝整批。被丢弃的项计入指标，记录本身保留。
+func (h *handlers) usageDetails(usage runtime.Usage) (map[string]int64, map[string]string) {
+	raw := usage.Details
+	if usage.ReasoningTokens > 0 {
+		raw = maps.Clone(raw)
+		if raw == nil {
+			raw = map[string]int64{}
+		}
+		if _, reported := raw[pricing.MeterReasoning]; !reported {
+			raw[pricing.MeterReasoning] = int64(usage.ReasoningTokens)
+		}
+	}
+	details, droppedDetails := pricing.SanitizeDetails(raw)
+	attributes, droppedAttributes := pricing.SanitizeAttributes(usage.Attributes)
+	if dropped := droppedDetails + droppedAttributes; dropped > 0 {
+		h.metrics.UsageDetailsDropped(dropped)
+	}
+	return details, attributes
 }
 
 // rateLimit wraps next with quota enforcement. It is a no-op for a request

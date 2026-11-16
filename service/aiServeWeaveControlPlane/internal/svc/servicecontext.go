@@ -46,6 +46,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/metricshistory"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/modelpullrouter"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/partitionmaint"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/pricecatalog"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/redeemgate"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/registryclient"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/remoteproviderrouter"
@@ -240,6 +241,12 @@ type ServiceContext struct {
 	// ezfpCancel/ezfpDone 关停易支付付款与退款恢复循环；未开启易支付计费时为 nil。
 	ezfpCancel context.CancelFunc
 	ezfpDone   chan struct{}
+	// priceCatalogCancel/priceCatalogDone tear down the price list sync;
+	// nil unless billing is enabled.
+	//
+	// priceCatalogCancel/priceCatalogDone 关停价目表同步循环；未开启计费时为 nil。
+	priceCatalogCancel context.CancelFunc
+	priceCatalogDone   chan struct{}
 
 	// RemoteProviderRouter is non-nil when RemoteProviders is configured; the
 	// node provider routes are mounted only then.
@@ -469,6 +476,16 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 			}
 		}
 		logicOpts = append(logicOpts, logic.WithBilling(billingCfg))
+		catalogURL := cfg.Billing.PriceCatalog.URL
+		if catalogURL == "" {
+			catalogURL = pricecatalog.DefaultURL
+		}
+		logicOpts = append(logicOpts, logic.WithPriceCatalog(logic.PriceCatalogConfig{
+			Remote:           pricecatalog.HTTPSource{URL: catalogURL},
+			Embedded:         pricecatalog.Embedded(),
+			RefreshInterval:  cfg.Billing.PriceCatalog.RefreshInterval,
+			MaxChangePercent: cfg.Billing.PriceCatalog.AutoApplyMaxChangePercent,
+		}))
 	}
 
 	var remoteProviderRouter *remoteproviderrouter.Router
@@ -562,6 +579,17 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		go func() {
 			defer close(ezfpDone)
 			svcLogic.RunEzfpRecovery(epCtx, ezfpRecoveryInterval)
+		}()
+	}
+
+	var priceCatalogCancel context.CancelFunc
+	var priceCatalogDone chan struct{}
+	if cfg.Billing.Enabled {
+		pcCtx, pcCancel := context.WithCancel(ctx)
+		priceCatalogCancel, priceCatalogDone = pcCancel, make(chan struct{})
+		go func() {
+			defer close(priceCatalogDone)
+			svcLogic.RunPriceCatalogSync(pcCtx)
 		}()
 	}
 
@@ -708,6 +736,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		alipayDone:                alipayDone,
 		ezfpCancel:                ezfpCancel,
 		ezfpDone:                  ezfpDone,
+		priceCatalogCancel:        priceCatalogCancel,
+		priceCatalogDone:          priceCatalogDone,
 		RemoteProviderRouter:      remoteProviderRouter,
 		usageRetentionCancel:      urCancel,
 		usageRetentionDone:        urDone,
@@ -892,6 +922,10 @@ func (s *ServiceContext) Close() error {
 	if s.ezfpCancel != nil {
 		s.ezfpCancel()
 		<-s.ezfpDone
+	}
+	if s.priceCatalogCancel != nil {
+		s.priceCatalogCancel()
+		<-s.priceCatalogDone
 	}
 	if s.nodeProvidersCancel != nil {
 		s.nodeProvidersCancel()

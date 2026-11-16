@@ -62,6 +62,68 @@ type UsageRecord struct {
 	// NodeID 是 Gateway 上报的、服务该请求的商户自有节点，没有则为空。它只用于给记录
 	// 定价，不被存储。
 	NodeID string `gorm:"-"`
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache reads and
+	// writes (every TTL), taken out of Details so summaries can add them up;
+	// both are part of PromptTokens. Other meters live only in Details.
+	//
+	// CacheReadTokens 与 CacheWriteTokens 是提示缓存的读取与写入（各种 TTL 合计），从
+	// Details 中取出，使汇总可以求和；两者都是 PromptTokens 的一部分。其他计量项只存在
+	// Details 中。
+	CacheReadTokens  int64 `gorm:"not null;default:0"`
+	CacheWriteTokens int64 `gorm:"not null;default:0"`
+	// CostMicro, BaseCostMicro, RatePPM, PriceSource and Charged are what
+	// charging decided for the record; they stay zero and empty until
+	// pricing writes them (.scratch/token-pricing, item 04), and for records
+	// written with billing off. Charged is nil for those records.
+	//
+	// CostMicro、BaseCostMicro、RatePPM、PriceSource 与 Charged 是扣费为这条记录所作
+	// 的决定；在计价写入它们之前（.scratch/token-pricing 第 04 项），以及计费关闭时写入
+	// 的记录，它们保持为零或空，Charged 为 nil。
+	CostMicro     int64  `gorm:"not null;default:0"`
+	BaseCostMicro int64  `gorm:"not null;default:0"`
+	RatePPM       int64  `gorm:"column:rate_ppm;not null;default:0"`
+	PriceSource   string `gorm:"size:16;not null;default:''"`
+	Charged       *bool
+	// Details is the record's meter breakdown as UsageDetails JSON, or nil
+	// when the Gateway reported none.
+	//
+	// Details 是这条记录按计量项的细分（UsageDetails 的 JSON），Gateway 没有上报时为 nil。
+	Details *string `gorm:"type:text"`
+}
+
+// UsageDetailsVersion is the format version UsageDetails is written with.
+//
+// UsageDetailsVersion 是写入 UsageDetails 时所用的格式版本。
+const UsageDetailsVersion = 1
+
+// UsageDetails is the JSON stored in usage_records.details: the meter tree
+// of the request and, once charged, how it was priced. Every field but V
+// and Meters is optional, so the format can grow without a migration; a
+// reader must ignore fields it does not know. See
+// .scratch/token-pricing/spec.md「单笔计价」.
+//
+// UsageDetails 是存在 usage_records.details 中的 JSON：请求的计量项树，以及扣费后的
+// 计价过程。除 V 与 Meters 外的字段都是可选的，使格式无需迁移就能扩展；读取方必须忽略
+// 不认识的字段。见 .scratch/token-pricing/spec.md「单笔计价」。
+type UsageDetails struct {
+	V          int               `json:"v"`
+	Meters     []UsageMeterLine  `json:"m"`
+	Attributes map[string]string `json:"attrs,omitempty"`
+	// Adjusted is set when a parent meter was raised to the sum of its
+	// children because the reported counts were inconsistent.
+	// Adjusted 在因上报计数不一致、父项被提高到子项之和时设置。
+	Adjusted bool `json:"adj,omitempty"`
+}
+
+// UsageMeterLine is one meter of a UsageDetails: Q is the quantity after
+// the parent-not-below-children correction. The pricing fields are filled
+// when the record is charged.
+//
+// UsageMeterLine 是 UsageDetails 中的一个计量项：Q 是经过「父项不小于子项之和」校正后
+// 的数量。计价相关的字段在扣费时填写。
+type UsageMeterLine struct {
+	K string `json:"k"`
+	Q int64  `json:"q"`
 }
 
 // TableName returns "usage_records", the table UsageRecord persists to.

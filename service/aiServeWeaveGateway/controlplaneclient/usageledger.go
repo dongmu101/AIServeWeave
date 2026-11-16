@@ -121,6 +121,16 @@ type usageRecordWire struct {
 	// predates it refuses the field, so it must be upgraded first.
 	// KeyID 是发起请求的 API key。不认识它的旧控制面会拒绝该字段，因此须先升级控制面。
 	KeyID string `json:"key_id,omitempty"`
+	// Details and Attributes break the totals down by meter and carry the
+	// request facts pricing may key on (common/pricing). Both are omitted
+	// when empty; a control plane that predates them refuses them, so it
+	// must be upgraded first. Once it knows these two fields, new meters
+	// need no further protocol change.
+	// Details 与 Attributes 按计量项细分总数，并携带计价可能依据的请求属性
+	// （common/pricing）。两者为空时省略；不认识它们的旧控制面会拒绝，因此须先升级
+	// 控制面。控制面认识这两个字段之后，新增计量项不再需要改协议。
+	Details    map[string]int64  `json:"details,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // PushUsageRecords implements httpapi.UsageLedgerClient. An empty batch is
@@ -153,6 +163,8 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 			CreatedAt:        r.CreatedAt,
 			NodeID:           r.NodeID,
 			KeyID:            r.KeyID,
+			Details:          r.Details,
+			Attributes:       r.Attributes,
 		}
 	}
 

@@ -372,6 +372,7 @@ func listBillingTenants(ctx *svc.ServiceContext) http.HandlerFunc {
 			items[i] = types.BillingTenant{
 				ID: v.Tenant.ID, Name: v.Tenant.Name, Status: v.Tenant.Status, Mode: v.Billing.Mode,
 				BalanceMicro: v.Billing.BalanceMicro, Blocked: v.Billing.Blocked(), CreatedAt: v.Tenant.CreatedAt,
+				PricePlanID: v.PricePlanID,
 			}
 		}
 		writeJSON(w, http.StatusOK, types.BillingTenantListResponse{Items: items, NextCursor: page.NextCursor})

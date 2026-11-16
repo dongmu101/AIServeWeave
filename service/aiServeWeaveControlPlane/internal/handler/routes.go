@@ -187,6 +187,38 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodPut, "/operator/v1/billing/model-prices", requirePlatformSession, putModelPrice(ctx)),
 			billingRoute(http.MethodDelete, "/operator/v1/billing/model-prices", requirePlatformSession, deleteModelPrice(ctx)),
 		})
+		// The versioned pricing configuration (.scratch/token-pricing):
+		// default price, per-alias settings, price plans and tenants' plans.
+		//
+		// 带版本的定价配置（.scratch/token-pricing）：默认价、按别名的设置、价格方案与
+		// 租户所属方案。
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/operator/v1/billing/pricing", requirePlatformSession, getPricingConfig(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/pricing/models", requirePlatformSession, putPricingModel(ctx)),
+			billingRoute(http.MethodDelete, "/operator/v1/billing/pricing/models", requirePlatformSession, deletePricingModel(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/pricing/default-prices", requirePlatformSession, putDefaultPrices(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/pricing/revisions", requirePlatformSession, listPricingRevisions(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/plans", requirePlatformSession, listPricePlans(ctx)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/plans", requirePlatformSession, savePricePlan(ctx, true)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/plans/:id", requirePlatformSession, savePricePlan(ctx, false)),
+			billingRoute(http.MethodDelete, "/operator/v1/billing/plans/:id", requirePlatformSession, deletePricePlan(ctx)),
+			billingRoute(http.MethodPut, "/operator/v1/billing/tenants/:id/plan", requirePlatformSession, setTenantPricePlan(ctx)),
+		})
+		// The price catalog: the official price list, and the review of the
+		// upstream changes that do not take effect on their own. A manual
+		// sync fetches the upstream list, so it gets the fetch's bound.
+		//
+		// 价目表：官方单价，以及对不能自动生效的上游变动的审核。手动同步要拉取上游价目表，
+		// 因此使用拉取的时限。
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/operator/v1/billing/catalog", requirePlatformSession, listPriceCatalog(ctx)),
+			billingRoute(http.MethodGet, "/operator/v1/billing/catalog/pending", requirePlatformSession, listCatalogPending(ctx)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/catalog/pending/approve", requirePlatformSession, decideCatalogPending(ctx, true)),
+			billingRoute(http.MethodPost, "/operator/v1/billing/catalog/pending/reject", requirePlatformSession, decideCatalogPending(ctx, false)),
+		})
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodPost, "/operator/v1/billing/catalog/sync", requirePlatformSession, syncPriceCatalog(ctx)),
+		}, rest.WithTimeout(CatalogSyncTimeout))
 	}
 	// Alipay (一人付) redeems quota bought in Alipay into credits. Its routes
 	// call 一人付, so they get the provider-call bound.

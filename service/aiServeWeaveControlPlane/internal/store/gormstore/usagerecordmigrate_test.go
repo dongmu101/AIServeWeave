@@ -35,11 +35,11 @@ func TestLoadUsageRecordsMigrationsParsesEmbeddedSQL(t *testing.T) {
 			}
 			// 0001 creates the table; 0002 converts it to time partitions; 0003
 			// adds key_id and user_id; 0004 widens the id columns to hold UUIDv7
-			// ids.
+			// ids; 0005 adds the meter breakdown and pricing columns.
 			// 0001 建表；0002 把它转换为按时间分区；0003 新增 key_id 与 user_id；0004
-			// 加宽 id 列以容纳 UUIDv7 id。
-			if len(files) != 4 {
-				t.Fatalf("loadMigrations(usage_records, %s) returned %d files, want 4", dialect, len(files))
+			// 加宽 id 列以容纳 UUIDv7 id；0005 新增计量项细分与计价列。
+			if len(files) != 5 {
+				t.Fatalf("loadMigrations(usage_records, %s) returned %d files, want 5", dialect, len(files))
 			}
 		})
 	}
