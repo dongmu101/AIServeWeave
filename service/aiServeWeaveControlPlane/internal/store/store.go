@@ -1369,15 +1369,21 @@ type Billing interface {
 	// AdjustCredit 把 entry.AmountMicro 记入 entry.TenantID 的余额，并追加填好结果余额
 	// 的 entry。
 	AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry) (model.CreditLedgerEntry, bool, error)
-	// ChargeUsage inserts records as CreateUsageRecords does and charges every
-	// one of charges not already charged, in one transaction. A charge whose
-	// request id is already in usage_charges is skipped, so a re-pushed batch
-	// is charged once.
+	// ChargeUsage inserts the records whose id is not yet in usage_records
+	// and charges each of them its CostMicro when its tenant is prepaid, in
+	// one transaction; the store sets each inserted record's Charged. The
+	// ids are looked up across every partition, without created_at, under
+	// the tenants' billing-row locks, so a re-pushed record is neither
+	// inserted nor charged twice even when its created_at differs. now dates
+	// the ledger entries. usage_charges is no longer written; see
+	// .scratch/token-pricing/spec.md「扣费防重并入 usage_records」.
 	//
-	// ChargeUsage 像 CreateUsageRecords 一样插入 records，并在同一事务中对 charges 里
-	// 尚未扣费的每一条扣费。请求 id 已在 usage_charges 中的费用会被跳过，因此重推的
-	// 批次只扣费一次。
-	ChargeUsage(ctx context.Context, records []model.UsageRecord, charges []model.UsageCharge) (blockedChanged bool, err error)
+	// ChargeUsage 在一个事务中插入 id 尚不在 usage_records 中的记录，并在其租户为
+	// prepaid 时按 CostMicro 扣费；每条插入记录的 Charged 由 store 设置。id 在租户计费
+	// 行的锁下、不带 created_at 地跨所有分区查找，因此重推的记录即使 created_at 不同，
+	// 也既不会重复插入，也不会重复扣费。now 是账目的时间。usage_charges 不再写入；见
+	// .scratch/token-pricing/spec.md「扣费防重并入 usage_records」。
+	ChargeUsage(ctx context.Context, records []model.UsageRecord, now time.Time) (blockedChanged bool, err error)
 	// ApplyBillingEvent applies one verified provider event exactly once.
 	//
 	// ApplyBillingEvent 对一个已验签的服务商事件恰好应用一次。

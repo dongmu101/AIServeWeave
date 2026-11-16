@@ -17,7 +17,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -482,49 +481,6 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 	return result, nil
 }
 
-// chargeUsage prices records and charges them in one store transaction,
-// dropping cached verifications when a tenant's balance ran out. A request
-// served by the tenant's own node costs nothing.
-//
-// chargeUsage 为 records 定价并在一次 store 事务中扣费；租户余额耗尽时丢弃已缓存的
-// 校验结果。由商户自己的节点服务的请求不收费。
-func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) error {
-	prices, err := s.store.ListModelPrices(ctx)
-	if err != nil {
-		return err
-	}
-	byModel := make(map[string]model.ModelPrice, len(prices))
-	for _, p := range prices {
-		byModel[p.Model] = p
-	}
-	now := s.clock.Now()
-	charges := make([]model.UsageCharge, 0, len(records))
-	for _, r := range records {
-		price, ok := byModel[r.Model]
-		if !ok {
-			price = byModel[model.DefaultPriceModel]
-		}
-		cost := price.Cost(r.PromptTokens, r.CompletionTokens)
-		// A tenant's own hardware is not billed; the charge row is still
-		// written, at zero, so reports count the request.
-		// 商户自己的硬件不计费；费用行仍以零写入，使报表能计入这次请求。
-		if owner, owned := nodeaccess.OwnerOf(r.NodeID); owned && owner == r.TenantID {
-			cost = 0
-		}
-		charges = append(charges, model.UsageCharge{
-			RequestID: r.ID, TenantID: r.TenantID, Model: r.Model, CostMicro: cost, CreatedAt: now,
-		})
-	}
-	changed, err := s.store.ChargeUsage(ctx, records, charges)
-	if err != nil {
-		return err
-	}
-	if changed && s.invalidator != nil {
-		s.invalidator.InvalidateAll(ctx)
-	}
-	return nil
-}
-
 // billingBlocked reports whether key verification must refuse the tenant for
 // its balance. A store failure is returned rather than read as "not
 // blocked", so the Gateway sees an unavailable dependency, not a free pass.
@@ -614,58 +570,6 @@ func (s *Service) UpdateCreditPackage(ctx context.Context, actor Actor, id strin
 	}
 	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingPackageUpdate, pkg.ID, fmt.Sprintf("active=%t", pkg.Active), actor.IP)
 	return pkg, nil
-}
-
-// ListModelPrices returns every price, for the operator.
-//
-// ListModelPrices 返回全部单价，供运维使用。
-func (s *Service) ListModelPrices(ctx context.Context, actor Actor) ([]model.ModelPrice, error) {
-	if err := s.requireBillingOperator(actor); err != nil {
-		return nil, err
-	}
-	return s.store.ListModelPrices(ctx)
-}
-
-// PutModelPrice sets one alias's price; model.DefaultPriceModel sets the
-// default. A new price applies to usage the Gateway reports from now on.
-//
-// PutModelPrice 设置一个别名的单价；model.DefaultPriceModel 设置默认单价。新单价
-// 适用于此后 Gateway 上报的用量。
-func (s *Service) PutModelPrice(ctx context.Context, actor Actor, alias string, inputMicroPerMTok, outputMicroPerMTok int64) (model.ModelPrice, error) {
-	if err := s.requireBillingOperator(actor); err != nil {
-		return model.ModelPrice{}, err
-	}
-	alias = strings.TrimSpace(alias)
-	if alias == "" || len(alias) > 128 ||
-		inputMicroPerMTok < 0 || inputMicroPerMTok > model.MaxPriceMicroPerMTok ||
-		outputMicroPerMTok < 0 || outputMicroPerMTok > model.MaxPriceMicroPerMTok {
-		return model.ModelPrice{}, ErrInvalidInput
-	}
-	price := model.ModelPrice{
-		Model: alias, InputMicroPerMTok: inputMicroPerMTok, OutputMicroPerMTok: outputMicroPerMTok,
-		UpdatedBy: actor.UserID, UpdatedAt: s.clock.Now(),
-	}
-	if err := s.store.PutModelPrice(ctx, price); err != nil {
-		return model.ModelPrice{}, translate(err)
-	}
-	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingPriceUpdate, truncate(alias, 64),
-		fmt.Sprintf("input=%d output=%d", inputMicroPerMTok, outputMicroPerMTok), actor.IP)
-	return price, nil
-}
-
-// DeleteModelPrice removes one alias's price, so it falls back to the
-// default.
-//
-// DeleteModelPrice 删除一个别名的单价，使其回落到默认单价。
-func (s *Service) DeleteModelPrice(ctx context.Context, actor Actor, alias string) error {
-	if err := s.requireBillingOperator(actor); err != nil {
-		return err
-	}
-	if err := s.store.DeleteModelPrice(ctx, alias); err != nil {
-		return translate(err)
-	}
-	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingPriceDelete, truncate(alias, 64), "", actor.IP)
-	return nil
 }
 
 // ListBillingTenants pages through tenants with their billing state.

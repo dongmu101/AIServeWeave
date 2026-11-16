@@ -239,16 +239,21 @@ func (s *Store) CurrentCatalogPrices(context.Context) (store.CatalogPriceSet, er
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	c := s.catalog()
-	prices := map[string][]model.CatalogPrice{}
+	set := store.CatalogPriceSet{Version: c.sync.Version, Prices: map[string][]model.CatalogPrice{}}
 	for _, row := range c.prices {
 		if row.ValidTo == nil {
-			prices[row.Model] = append(prices[row.Model], row)
+			set.Prices[row.Model] = append(set.Prices[row.Model], row)
+		} else if row.ValidTo.After(set.ChangedAt) {
+			set.ChangedAt = *row.ValidTo
+		}
+		if row.ValidFrom.After(set.ChangedAt) {
+			set.ChangedAt = row.ValidFrom
 		}
 	}
-	for name := range prices {
-		store.SortCatalogPrices(prices[name])
+	for name := range set.Prices {
+		store.SortCatalogPrices(set.Prices[name])
 	}
-	return store.CatalogPriceSet{Version: c.sync.Version, Prices: prices}, nil
+	return set, nil
 }
 
 // current returns the prices of name in effect, sorted.

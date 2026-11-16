@@ -2,8 +2,6 @@
 
 Status: ready-for-agent
 
-Blocked by: 04
-
 规格：[spec.md](../spec.md)「API」。
 
 ## 范围
@@ -14,6 +12,8 @@ Blocked by: 04
 - 公开目录 `/billing/v1/catalog` 改为默认方案下的售价。
 - 未定价提示所需的数据（价格来源为 `none` 的别名、最近 24 小时 `price_source = none` 的用量数）。
 - Console `/api/admin/*`、`/api/operator/*` 白名单放行新接口与参数。
+
+- 注意（第 4 项之后）：公开目录 `/billing/v1/catalog` 目前仍读取 `model_prices`，内容已经不是实际售价，本项必须改掉。
 
 ## 验收
 

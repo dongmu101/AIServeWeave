@@ -127,48 +127,53 @@ func (s *Store) AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry)
 }
 
 // ChargeUsage implements store.Billing. The tenant rows are locked in id
-// order before the already-charged check, so two concurrent pushes of the
-// same batch serialize on them and the second sees the first's charges.
+// order before the already-recorded check, so two concurrent pushes of the
+// same batch serialize on them and the second sees the first's records.
+//
+// The already-recorded check reads usage_records by id alone. usage_records
+// is partitioned by created_at, so its primary key is (id, created_at) and
+// cannot by itself keep an id unique; reading by id across every partition
+// under the tenant locks does, even for a resend whose created_at differs.
+// With monthly partitions kept 400 days that is about fourteen primary-key
+// probes per id.
 //
 // The transaction runs at READ COMMITTED on both databases. That is what lets
-// the already-charged check be a plain read: after the tenant locks, it sees
-// every charge committed by the push that held them. A locking read would
-// work too, but under MySQL's default REPEATABLE READ a locking read of
-// request ids that do not exist yet takes gap locks, and two replicas pushing
-// unrelated batches would deadlock inserting into each other's gaps.
-// Tenants without a billing row are exempt, so a concurrent duplicate for
-// one of them only meets the primary key and inserts nothing.
+// the check be a plain read: after the tenant locks, it sees every record
+// committed by the push that held them. A locking read would work too, but
+// under MySQL's default REPEATABLE READ a locking read of ids that do not
+// exist yet takes gap locks, and two replicas pushing unrelated batches would
+// deadlock inserting into each other's gaps. Tenants without a billing row
+// are exempt and not locked; a concurrent duplicate for one of them meets the
+// primary key when its created_at is the same, and at worst adds a report
+// row, never a charge, when it is not.
 //
-// ChargeUsage 实现 store.Billing。在检查「是否已扣费」之前，按 id 顺序锁定租户行，
-// 因此同一批次的两次并发推送会在这些行上串行化，后一次能看到前一次的扣费。
+// ChargeUsage 实现 store.Billing。在检查「是否已入账」之前，按 id 顺序锁定租户行，
+// 因此同一批次的两次并发推送会在这些行上串行化，后一次能看到前一次写入的记录。
 //
-// 事务在两种数据库上都以 READ COMMITTED 运行，这使「是否已扣费」的检查可以是普通读：
-// 拿到租户锁之后，它能看到持有这些锁的那次推送已提交的全部扣费。锁定读也能达到目的，
-// 但在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 request id 做锁定读会加间隙锁，
-// 两个副本推送互不相关的批次时会因向对方的间隙插入而死锁。没有计费行的租户是 exempt，
-// 它们的并发重复只会撞上主键，什么也不插入。
-func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, charges []model.UsageCharge) (bool, error) {
-	if len(records) == 0 && len(charges) == 0 {
+// 「是否已入账」的检查只按 id 读取 usage_records。usage_records 按 created_at 分区，
+// 主键是 (id, created_at)，单靠它无法保证 id 唯一；在租户锁之下按 id 跨所有分区读取则
+// 可以，即使重发的记录 created_at 不同也一样。按月分区、保留 400 天时，每个 id 约是
+// 14 次主键探查。
+//
+// 事务在两种数据库上都以 READ COMMITTED 运行，这使检查可以是普通读：拿到租户锁之后，
+// 它能看到持有这些锁的那次推送已提交的全部记录。锁定读也能达到目的，但在 MySQL 默认的
+// REPEATABLE READ 下，对尚不存在的 id 做锁定读会加间隙锁，两个副本推送互不相关的批次时
+// 会因向对方的间隙插入而死锁。没有计费行的租户是 exempt，不加锁；它们的并发重复在
+// created_at 相同时会撞上主键，不同时最多多出一行报表记录，绝不会多扣费。
+func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, now time.Time) (bool, error) {
+	if len(records) == 0 {
 		return false, nil
 	}
 	changed := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if len(records) > 0 {
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&records).Error; err != nil {
-				return err
-			}
-		}
-		if len(charges) == 0 {
-			return nil
-		}
-		tenantIDs := make([]string, 0, len(charges))
-		requestIDs := make([]string, 0, len(charges))
+		tenantIDs := make([]string, 0, len(records))
+		ids := make([]string, 0, len(records))
 		seenTenant := map[string]bool{}
-		for _, c := range charges {
-			requestIDs = append(requestIDs, c.RequestID)
-			if !seenTenant[c.TenantID] {
-				seenTenant[c.TenantID] = true
-				tenantIDs = append(tenantIDs, c.TenantID)
+		for _, r := range records {
+			ids = append(ids, r.ID)
+			if !seenTenant[r.TenantID] {
+				seenTenant[r.TenantID] = true
+				tenantIDs = append(tenantIDs, r.TenantID)
 			}
 		}
 		sort.Strings(tenantIDs)
@@ -182,33 +187,33 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, ch
 			byTenant[b.TenantID] = b
 		}
 		var existing []string
-		if err := tx.Model(&model.UsageCharge{}).
-			Where("request_id IN ?", requestIDs).Pluck("request_id", &existing).Error; err != nil {
+		if err := tx.Model(&model.UsageRecord{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
 			return err
 		}
-		charged := make(map[string]bool, len(existing))
+		recorded := make(map[string]bool, len(existing))
 		for _, id := range existing {
-			charged[id] = true
+			recorded[id] = true
 		}
 
-		fresh := make([]model.UsageCharge, 0, len(charges))
+		fresh := make([]model.UsageRecord, 0, len(records))
 		debit := map[string]int64{}
 		count := map[string]int{}
-		for _, c := range charges {
-			if charged[c.RequestID] {
+		for _, r := range records {
+			if recorded[r.ID] {
 				continue
 			}
-			charged[c.RequestID] = true
-			b, ok := byTenant[c.TenantID]
-			c.Charged = ok && b.Mode == model.BillingModePrepaid && c.CostMicro > 0
-			if c.Charged {
-				if debit[c.TenantID] > math.MaxInt64-c.CostMicro {
+			recorded[r.ID] = true
+			b, ok := byTenant[r.TenantID]
+			charged := ok && b.Mode == model.BillingModePrepaid && r.CostMicro > 0
+			r.Charged = &charged
+			if charged {
+				if debit[r.TenantID] > math.MaxInt64-r.CostMicro {
 					return errBalanceOverflow
 				}
-				debit[c.TenantID] += c.CostMicro
-				count[c.TenantID]++
+				debit[r.TenantID] += r.CostMicro
+				count[r.TenantID]++
 			}
-			fresh = append(fresh, c)
+			fresh = append(fresh, r)
 		}
 		if len(fresh) == 0 {
 			return nil
@@ -216,7 +221,6 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, ch
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&fresh).Error; err != nil {
 			return err
 		}
-		now := fresh[0].CreatedAt
 		for _, tenantID := range tenantIDs {
 			amount := debit[tenantID]
 			if amount == 0 {

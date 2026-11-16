@@ -264,6 +264,14 @@ func (s *Store) CurrentCatalogPrices(ctx context.Context) (store.CatalogPriceSet
 		if err := s.db.WithContext(ctx).Where("valid_to IS NULL").Find(&rows).Error; err != nil {
 			return store.CatalogPriceSet{}, err
 		}
+		var bounds struct {
+			LastFrom *time.Time
+			LastTo   *time.Time
+		}
+		if err := s.db.WithContext(ctx).Model(&model.CatalogPrice{}).
+			Select("MAX(valid_from) AS last_from, MAX(valid_to) AS last_to").Scan(&bounds).Error; err != nil {
+			return store.CatalogPriceSet{}, err
+		}
 		after, err := s.CatalogSyncState(ctx)
 		if err != nil {
 			return store.CatalogPriceSet{}, err
@@ -281,7 +289,13 @@ func (s *Store) CurrentCatalogPrices(ctx context.Context) (store.CatalogPriceSet
 		for name := range prices {
 			store.SortCatalogPrices(prices[name])
 		}
-		return store.CatalogPriceSet{Version: after.Version, Prices: prices}, nil
+		set := store.CatalogPriceSet{Version: after.Version, Prices: prices}
+		for _, t := range []*time.Time{bounds.LastFrom, bounds.LastTo} {
+			if t != nil && t.After(set.ChangedAt) {
+				set.ChangedAt = t.UTC()
+			}
+		}
+		return set, nil
 	}
 }
 

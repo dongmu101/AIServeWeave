@@ -453,10 +453,14 @@ func TestLivePartitionWritesStayIdempotent(t *testing.T) {
 		if err := db.Create(&model.TenantBilling{TenantID: "tnt_c", Mode: model.BillingModePrepaid, BalanceMicro: 1000, DodoCustomerID: ""}).Error; err != nil {
 			t.Fatal(err)
 		}
-		charged := model.UsageRecord{ID: "req_charged", TenantID: "tnt_c", Model: "m", Endpoint: "chat", TotalTokens: 5, CreatedAt: at}
-		charge := model.UsageCharge{RequestID: "req_charged", TenantID: "tnt_c", Model: "m", CostMicro: 100, CreatedAt: at}
+		charged := model.UsageRecord{ID: "req_charged", TenantID: "tnt_c", Model: "m", Endpoint: "chat", TotalTokens: 5, CreatedAt: at, CostMicro: 100}
 		for i := 0; i < 2; i++ {
-			if _, err := st.ChargeUsage(ctx, []model.UsageRecord{charged}, []model.UsageCharge{charge}); err != nil {
+			// The resend lands in another month's partition: the id alone
+			// still keeps it from being charged twice.
+			// 重发落在另一个月的分区：仅凭 id 仍能防止重复扣费。
+			resend := charged
+			resend.CreatedAt = at.AddDate(0, i, 0)
+			if _, err := st.ChargeUsage(ctx, []model.UsageRecord{resend}, at); err != nil {
 				t.Fatalf("charge %d: %v", i, err)
 			}
 		}

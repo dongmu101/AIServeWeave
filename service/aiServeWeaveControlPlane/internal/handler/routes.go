@@ -182,11 +182,6 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	// 计费与自助注册一样，只在部署开启时挂载。webhook 是公开的：服务商无法持有会话，
 	// 认证它的是 Standard Webhooks 签名。
 	if ctx.Config.Billing.Enabled {
-		server.AddRoutes([]rest.Route{
-			billingRoute(http.MethodGet, "/operator/v1/billing/model-prices", requirePlatformSession, listModelPrices(ctx)),
-			billingRoute(http.MethodPut, "/operator/v1/billing/model-prices", requirePlatformSession, putModelPrice(ctx)),
-			billingRoute(http.MethodDelete, "/operator/v1/billing/model-prices", requirePlatformSession, deleteModelPrice(ctx)),
-		})
 		// The versioned pricing configuration (.scratch/token-pricing):
 		// default price, per-alias settings, price plans and tenants' plans.
 		//

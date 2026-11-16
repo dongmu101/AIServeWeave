@@ -222,33 +222,6 @@ type CreditPackageListResponse struct {
 	Items []CreditPackage `json:"items"`
 }
 
-// ModelPrice is one alias's price per million tokens, in micro-credits.
-//
-// ModelPrice 是一个别名每百万 token 的单价，单位为 micro 点。
-type ModelPrice struct {
-	Model              string    `json:"model"`
-	InputMicroPerMTok  int64     `json:"input_micro_per_mtok"`
-	OutputMicroPerMTok int64     `json:"output_micro_per_mtok"`
-	UpdatedBy          string    `json:"updated_by"`
-	UpdatedAt          time.Time `json:"updated_at"`
-}
-
-// ModelPriceListResponse is every price.
-//
-// ModelPriceListResponse 是全部单价。
-type ModelPriceListResponse struct {
-	Items []ModelPrice `json:"items"`
-}
-
-// ModelPriceRequest sets one alias's price.
-//
-// ModelPriceRequest 设置一个别名的单价。
-type ModelPriceRequest struct {
-	Model              string `json:"model"`
-	InputMicroPerMTok  int64  `json:"input_micro_per_mtok"`
-	OutputMicroPerMTok int64  `json:"output_micro_per_mtok"`
-}
-
 // BillingTenant is one tenant with its billing state.
 //
 // BillingTenant 是一个租户及其计费状态。

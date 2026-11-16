@@ -31,7 +31,6 @@ type billingState struct {
 	prices   map[string]model.ModelPrice
 	orders   map[string]model.CheckoutOrder
 	ledger   []model.CreditLedgerEntry
-	charges  map[string]model.UsageCharge
 	webhooks map[string]model.BillingWebhookEvent
 	refunds  map[string]model.RefundRequest
 
@@ -47,7 +46,6 @@ func newBillingState() billingState {
 		packages: map[string]model.CreditPackage{},
 		prices:   map[string]model.ModelPrice{},
 		orders:   map[string]model.CheckoutOrder{},
-		charges:  map[string]model.UsageCharge{},
 		webhooks: map[string]model.BillingWebhookEvent{},
 		refunds:  map[string]model.RefundRequest{},
 
@@ -144,51 +142,44 @@ func (s *Store) AdjustCredit(_ context.Context, entry model.CreditLedgerEntry) (
 // ChargeUsage implements store.Billing.
 //
 // ChargeUsage 实现 store.Billing。
-func (s *Store) ChargeUsage(_ context.Context, records []model.UsageRecord, charges []model.UsageCharge) (bool, error) {
+func (s *Store) ChargeUsage(_ context.Context, records []model.UsageRecord, now time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Everything is priced and checked before anything is written, so an
-	// overflow leaves the store as it was, as gormstore's rollback does.
-	// 先完成全部定价与检查再写入，溢出时 store 保持原样，与 gormstore 的回滚一致。
+	// Everything is checked before anything is written, so an overflow
+	// leaves the store as it was, as gormstore's rollback does.
+	// 先完成全部检查再写入，溢出时 store 保持原样，与 gormstore 的回滚一致。
 	debit := map[string]int64{}
 	count := map[string]int{}
 	var order []string
-	fresh := make([]model.UsageCharge, 0, len(charges))
+	fresh := make([]model.UsageRecord, 0, len(records))
 	seen := map[string]bool{}
-	for _, c := range charges {
-		if _, done := s.billing.charges[c.RequestID]; done || seen[c.RequestID] {
+	for _, r := range records {
+		if _, exists := s.usageRecords[r.ID]; exists || seen[r.ID] {
 			continue
 		}
-		seen[c.RequestID] = true
-		b, ok := s.billing.tenants[c.TenantID]
-		c.Charged = ok && b.Mode == model.BillingModePrepaid && c.CostMicro > 0
-		if c.Charged {
-			if debit[c.TenantID] > math.MaxInt64-c.CostMicro {
+		seen[r.ID] = true
+		b, ok := s.billing.tenants[r.TenantID]
+		charged := ok && b.Mode == model.BillingModePrepaid && r.CostMicro > 0
+		r.Charged = &charged
+		if charged {
+			if debit[r.TenantID] > math.MaxInt64-r.CostMicro {
 				return false, errBalanceOverflow
 			}
-			if _, counted := debit[c.TenantID]; !counted {
-				order = append(order, c.TenantID)
+			if _, counted := debit[r.TenantID]; !counted {
+				order = append(order, r.TenantID)
 			}
-			debit[c.TenantID] += c.CostMicro
-			count[c.TenantID]++
+			debit[r.TenantID] += r.CostMicro
+			count[r.TenantID]++
 		}
-		fresh = append(fresh, c)
+		fresh = append(fresh, r)
 	}
 	for _, tenantID := range order {
 		if s.billing.tenants[tenantID].BalanceMicro < math.MinInt64+debit[tenantID] {
 			return false, errBalanceOverflow
 		}
 	}
-
-	for _, r := range records {
-		if _, exists := s.usageRecords[r.ID]; !exists {
-			s.usageRecords[r.ID] = r
-		}
-	}
-	var now time.Time
-	for _, c := range fresh {
-		s.billing.charges[c.RequestID] = c
-		now = c.CreatedAt
+	for _, r := range fresh {
+		s.usageRecords[r.ID] = r
 	}
 	changed := false
 	for _, tenantID := range order {

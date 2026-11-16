@@ -298,60 +298,6 @@ func saveCreditPackage(ctx *svc.ServiceContext, create bool) http.HandlerFunc {
 	})
 }
 
-// listModelPrices handles GET /operator/v1/billing/model-prices.
-//
-// listModelPrices 处理 GET /operator/v1/billing/model-prices。
-func listModelPrices(ctx *svc.ServiceContext) http.HandlerFunc {
-	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
-		prices, err := ctx.Logic.ListModelPrices(r.Context(), actor)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		items := make([]types.ModelPrice, len(prices))
-		for i, p := range prices {
-			items[i] = renderModelPrice(p)
-		}
-		writeJSON(w, http.StatusOK, types.ModelPriceListResponse{Items: items})
-	})
-}
-
-// putModelPrice handles PUT /operator/v1/billing/model-prices. The alias
-// travels in the body rather than the path because aliases may contain "/";
-// the alias "*" sets the default price.
-//
-// putModelPrice 处理 PUT /operator/v1/billing/model-prices。别名放在请求体而不是
-// 路径里，因为别名可能包含 "/"；别名 "*" 设置默认单价。
-func putModelPrice(ctx *svc.ServiceContext) http.HandlerFunc {
-	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
-		var req types.ModelPriceRequest
-		if !decode(w, r, &req) {
-			return
-		}
-		price, err := ctx.Logic.PutModelPrice(r.Context(), actor, req.Model, req.InputMicroPerMTok, req.OutputMicroPerMTok)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, renderModelPrice(price))
-	})
-}
-
-// deleteModelPrice handles DELETE /operator/v1/billing/model-prices?model=,
-// with the alias in the query for the reason putModelPrice gives.
-//
-// deleteModelPrice 处理 DELETE /operator/v1/billing/model-prices?model=，别名放在
-// 查询参数里，理由见 putModelPrice。
-func deleteModelPrice(ctx *svc.ServiceContext) http.HandlerFunc {
-	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
-		if err := ctx.Logic.DeleteModelPrice(r.Context(), actor, r.URL.Query().Get("model")); err != nil {
-			respondErr(w, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-}
-
 // listBillingTenants handles GET /operator/v1/billing/tenants, accepting the
 // same status and q filters as GET /operator/v1/tenants.
 //
@@ -599,11 +545,4 @@ func renderCreditPackage(pkg model.CreditPackage, operator bool) types.CreditPac
 		out.DodoProductID = pkg.DodoProductID
 	}
 	return out
-}
-
-func renderModelPrice(p model.ModelPrice) types.ModelPrice {
-	return types.ModelPrice{
-		Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok,
-		UpdatedBy: p.UpdatedBy, UpdatedAt: p.UpdatedAt,
-	}
 }

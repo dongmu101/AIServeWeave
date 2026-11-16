@@ -173,6 +173,14 @@ type CatalogPendingEntry struct {
 type CatalogPriceSet struct {
 	Version int64
 	Prices  map[string][]model.CatalogPrice
+	// ChangedAt is the latest valid_from or valid_to of any price, current
+	// or closed: the set is the catalog in effect at every moment from
+	// ChangedAt on, so an entry absent from it had no price then either.
+	// Zero for an empty catalog.
+	// ChangedAt 是所有单价（生效中或已关闭）中最晚的 valid_from 或 valid_to：从
+	// ChangedAt 起的每一刻，生效中的价目表都就是这个集合，因此集合中没有的条目在那时也
+	// 没有单价。价目表为空时为零值。
+	ChangedAt time.Time
 }
 
 // CatalogTx is the transaction-scoped access the catalog rules need. The

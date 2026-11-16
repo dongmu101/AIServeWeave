@@ -50,7 +50,7 @@ func main() {
 func run() error {
 	configFile := flag.String("f", "etc/controlplane.yaml", "path to the configuration file")
 	showVersion := flag.Bool("version", false, "print the version and exit")
-	migrate := flag.String("migrate", "", "database-only command: up, status, or resume")
+	migrate := flag.String("migrate", "", "database-only command: up, status, resume, or backfill-usage-cost")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default, empty disables it")
 	flag.Parse()

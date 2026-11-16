@@ -151,6 +151,7 @@ func applyUsageDetails(record *model.UsageRecord, details map[string]int64, attr
 		slog.Warn("dropping invalid usage attributes", slog.String("tenant_id", record.TenantID), slog.Any("error", err))
 		attributes = nil
 	}
+	record.ReportedDetails, record.ReportedAttributes = details, attributes
 	if len(details) == 0 && len(attributes) == 0 {
 		return
 	}

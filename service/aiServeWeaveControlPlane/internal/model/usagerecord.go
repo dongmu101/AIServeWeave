@@ -89,7 +89,36 @@ type UsageRecord struct {
 	//
 	// Details 是这条记录按计量项的细分（UsageDetails 的 JSON），Gateway 没有上报时为 nil。
 	Details *string `gorm:"type:text"`
+	// ReportedDetails and ReportedAttributes are the validated breakdown and
+	// request facts the Gateway sent, kept for pricing; they are stored only
+	// inside Details.
+	//
+	// ReportedDetails 与 ReportedAttributes 是 Gateway 发来、已经校验过的细分与请求
+	// 属性，留给计价使用；它们只以 Details 的形式存储。
+	ReportedDetails    map[string]int64  `gorm:"-"`
+	ReportedAttributes map[string]string `gorm:"-"`
 }
+
+// Price sources a charged usage record names in PriceSource: where the
+// prices it was charged at came from. See .scratch/token-pricing/spec.md
+// 「定价与价格方案」. An empty PriceSource is a record written before pricing
+// existed or with billing off.
+//
+// 已扣费的用量记录在 PriceSource 中注明的价格来源：扣费所用的单价从哪里来。见
+// .scratch/token-pricing/spec.md「定价与价格方案」。PriceSource 为空表示记录写于
+// 计价出现之前，或写于计费关闭时。
+const (
+	PriceSourceOverride  = "override"
+	PriceSourceCatalog   = "catalog"
+	PriceSourceDefault   = "default"
+	PriceSourcePlanFixed = "plan_fixed"
+	PriceSourceNone      = "none"
+	// PriceSourceLegacy marks a record whose cost was backfilled from
+	// usage_charges: charged under the per-model prices before this pricing.
+	// PriceSourceLegacy 标记从 usage_charges 回填费用的记录：按本计价之前的按模型单价
+	// 扣费。
+	PriceSourceLegacy = "legacy"
+)
 
 // UsageDetailsVersion is the format version UsageDetails is written with.
 //
@@ -113,6 +142,30 @@ type UsageDetails struct {
 	// children because the reported counts were inconsistent.
 	// Adjusted 在因上报计数不一致、父项被提高到子项之和时设置。
 	Adjusted bool `json:"adj,omitempty"`
+	// The fields below say how the record was priced; they are absent on a
+	// record written with billing off.
+	// 以下字段说明记录是如何计价的；计费关闭时写入的记录没有它们。
+	//
+	// Revision is the pricing configuration revision, Plan the tenant's
+	// price plan, Source the price source (PriceSource*), Ref the catalog
+	// entry when Source is catalog (shown to operators only), Tier the tier
+	// the request fell in and Rate the combined rate in parts per million.
+	// Revision 是定价配置版本，Plan 是租户的价格方案，Source 是价格来源
+	// （PriceSource*），Ref 是 Source 为 catalog 时的价目表条目（只向运维显示），
+	// Tier 是请求所落入的档位，Rate 是以百万分之一为单位的总倍率。
+	Revision int64  `json:"rev,omitempty"`
+	Plan     string `json:"plan,omitempty"`
+	Source   string `json:"src,omitempty"`
+	Ref      string `json:"ref,omitempty"`
+	Tier     int64  `json:"tier,omitempty"`
+	Rate     int64  `json:"rate,omitempty"`
+	// OwnNode is set when the tenant's own node served the request: it is
+	// priced as usual but not charged.
+	// OwnNode 在请求由租户自己的节点服务时设置：照常计价，但不扣费。
+	OwnNode bool `json:"own,omitempty"`
+	// Unpriced is set when some billed quantity found no price.
+	// Unpriced 在有计费数量找不到单价时设置。
+	Unpriced bool `json:"unpriced,omitempty"`
 }
 
 // UsageMeterLine is one meter of a UsageDetails: Q is the quantity after
@@ -124,6 +177,14 @@ type UsageDetails struct {
 type UsageMeterLine struct {
 	K string `json:"k"`
 	Q int64  `json:"q"`
+	// X is Q less the meter's children, P the base unit price applied to it
+	// (micro-credits per million units) and C its cost at the record's
+	// rate, rounded up on its own.
+	// X 是 Q 减去子项之后的数量，P 是用于它的基础单价（micro 点 / 百万单位），C 是它按
+	// 记录的倍率计算、单独向上取整的费用。
+	X int64 `json:"x,omitempty"`
+	P int64 `json:"p,omitempty"`
+	C int64 `json:"c,omitempty"`
 }
 
 // TableName returns "usage_records", the table UsageRecord persists to.

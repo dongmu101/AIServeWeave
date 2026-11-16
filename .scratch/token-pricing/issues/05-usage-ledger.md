@@ -2,8 +2,6 @@
 
 Status: ready-for-agent
 
-Blocked by: 04（改同一个扣费事务）
-
 规格：[spec.md](../spec.md)「余额账目（`credit_ledger`）」。
 
 ## 范围
