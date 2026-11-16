@@ -15,7 +15,6 @@ import {
   formatScaled,
   formatSignedCredits,
   isPaymentReturn,
-  modelPriceRequest,
   packageDraft,
   packageRequest,
   parseBillingOverview,
@@ -26,7 +25,6 @@ import {
   parseCreditPackages,
   parseCreditsInput,
   parseLedgerPage,
-  parseModelPrices,
   parseMoneyInput,
   parsePaymentMethods,
   parseOrderPage,
@@ -77,8 +75,6 @@ test("billing responses parse in the shapes the control plane sends", () => {
   assert.equal(orders.items[0]?.paymentId, "");
   assert.equal(orders.nextCursor, null);
 
-  const prices = parseModelPrices({ items: [{ model: "*", input_micro_per_mtok: 1_000_000, output_micro_per_mtok: 2_000_000, updated_by: "op_1", updated_at: at }] });
-  assert.equal(prices[0]?.model, "*");
   const tenants = parseBillingTenants({ items: [{ id: "tnt_1", name: "", status: "active", mode: "exempt", balance_micro: 0, blocked: false, created_at: at }] });
   assert.equal(tenants.items[0]?.mode, "exempt");
 
@@ -105,7 +101,6 @@ test("billing parsers reject what the contract does not allow", () => {
     { name: "ledger cursor not a string", run: () => parseLedgerPage({ items: [], next_cursor: 3 }) },
     { name: "ledger missing kind", run: () => parseLedgerPage({ items: [{ id: "l", amount_micro: 1, balance_after_micro: 1, ref: "", created_at: at }] }) },
     { name: "order negative refund", run: () => parseOrderPage({ items: [{ id: "o", package_id: "p", amount_minor: 1, currency: "USD", credits_micro: 1, refunded_minor: -1, status: "paid", created_at: at, updated_at: at }] }) },
-    { name: "price negative", run: () => parseModelPrices({ items: [{ model: "m", input_micro_per_mtok: -1, output_micro_per_mtok: 0, updated_by: "", updated_at: at }] }) },
     { name: "tenant unknown mode", run: () => parseBillingTenants({ items: [{ id: "t", name: "", status: "active", mode: "free", balance_micro: 0, blocked: false, created_at: at }] }) },
   ];
   for (const item of cases) {
@@ -306,20 +301,7 @@ test("package drafts validate per kind and zero the other kind's fields", () => 
   assert.equal(packageRequest(round).problem, null);
 });
 
-test("model prices and adjustments convert credits to micro-credits", () => {
-  assert.deepEqual(modelPriceRequest({ model: " * ", input: "1.5", output: "0" }), { problem: null, request: { model: "*", input_micro_per_mtok: 1_500_000, output_micro_per_mtok: 0 } });
-  assert.deepEqual(modelPriceRequest({ model: "org/model:tag", input: "1000000", output: "1000000" }).problem, null);
-  const prices: { name: string; draft: { model: string; input: string; output: string }; problem: string }[] = [
-    { name: "blank alias", draft: { model: "", input: "1", output: "1" }, problem: "model" },
-    { name: "long alias", draft: { model: "m".repeat(129), input: "1", output: "1" }, problem: "model" },
-    { name: "above the cap", draft: { model: "m", input: "1000000.000001", output: "1" }, problem: "price" },
-    { name: "negative", draft: { model: "m", input: "-1", output: "1" }, problem: "price" },
-    { name: "blank output", draft: { model: "m", input: "1", output: "" }, problem: "price" },
-  ];
-  for (const item of prices) {
-    assert.equal(modelPriceRequest(item.draft).problem, item.problem, item.name);
-  }
-
+test("adjustments convert credits to micro-credits", () => {
   assert.deepEqual(adjustRequest({ amount: "-12.5", reason: " chargeback " }), { problem: null, request: { amount_micro: -12_500_000, reason: "chargeback" } });
   const adjustments: { name: string; draft: { amount: string; reason: string }; problem: string }[] = [
     { name: "zero", draft: { amount: "0", reason: "r" }, problem: "amount" },

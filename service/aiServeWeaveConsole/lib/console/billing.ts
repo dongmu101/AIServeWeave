@@ -188,6 +188,40 @@ export interface LedgerEntry {
   balanceAfterMicro: number;
   ref: string;
   createdAt: string;
+  /** periodStart, periodEnd and requestCount describe a usage entry sealed
+   * by a control plane with token pricing (.scratch/token-pricing「余额账目」):
+   * its first and last charge and how many charged requests. null and 0
+   * otherwise.
+   *
+   * periodStart、periodEnd 与 requestCount 描述由带 token 计价的控制面封账的一条用量账目
+   * （.scratch/token-pricing「余额账目」）：它的第一笔与最后一笔扣费，以及扣费请求数。
+   * 其余情况为 null 与 0。 */
+  periodStart: string | null;
+  periodEnd: string | null;
+  requestCount: number;
+}
+
+/** PendingUsage mirrors types.PendingUsage: usage already taken off the
+ * balance but not yet sealed into a ledger entry. amountMicro is negative
+ * like a usage entry's, so the latest entry's balance plus it is the
+ * balance.
+ *
+ * PendingUsage 镜像 types.PendingUsage：已经从余额中扣除、但尚未封账成账目的用量。
+ * amountMicro 与用量账目一样为负数，因此最新一条账目的余额加上它就是当前余额。 */
+export interface PendingUsage {
+  amountMicro: number;
+  requestCount: number;
+  since: string | null;
+  last: string | null;
+  sealAt: string | null;
+}
+
+/** LedgerPage is a ledger page and, for one tenant's ledger, its pending
+ * usage.
+ *
+ * LedgerPage 是一页账目，以及（单一租户的账目时）尚未封账的用量。 */
+export interface LedgerPage extends Page<LedgerEntry> {
+  pendingUsage: PendingUsage | null;
 }
 
 /** CheckoutOrder mirrors types.CheckoutOrder. `tenantId` is "" on the tenant
@@ -601,14 +635,42 @@ export function parseLedgerEntry(value: unknown): LedgerEntry {
     balanceAfterMicro: integer(source, "balance_after_micro"),
     ref: text(source, "ref"),
     createdAt: timestamp(source, "created_at"),
+    periodStart: optionalTimestamp(source, "period_start"),
+    periodEnd: optionalTimestamp(source, "period_end"),
+    requestCount: optionalCount(source, "request_count"),
   };
 }
 
-/** parseLedgerPage validates one page of the ledger.
+/** optionalTimestamp reads an `omitempty` timestamp; absent is null.
+ * optionalTimestamp 读取一个 `omitempty` 的时间戳；缺席为 null。 */
+function optionalTimestamp(source: Record<string, unknown>, key: string): string | null {
+  const value = source[key];
+  return value === undefined || value === null ? null : timestamp(source, key);
+}
+
+/** parsePendingUsage validates a types.PendingUsage.
+ * parsePendingUsage 校验一个 types.PendingUsage。 */
+export function parsePendingUsage(value: unknown): PendingUsage {
+  const source = record(value);
+  return {
+    amountMicro: integer(source, "amount_micro"),
+    requestCount: count(source, "request_count"),
+    since: optionalTimestamp(source, "since"),
+    last: optionalTimestamp(source, "last"),
+    sealAt: optionalTimestamp(source, "seal_at"),
+  };
+}
+
+/** parseLedgerPage validates one page of the ledger and, on one tenant's
+ * ledger, its pending usage.
  *
- * parseLedgerPage 校验一页账目。 */
-export function parseLedgerPage(value: unknown): Page<LedgerEntry> {
-  return page(value, parseLedgerEntry);
+ * parseLedgerPage 校验一页账目，以及单一租户账目的尚未封账用量。 */
+export function parseLedgerPage(value: unknown): LedgerPage {
+  const pending = record(value).pending_usage;
+  return {
+    ...page(value, parseLedgerEntry),
+    pendingUsage: pending === undefined || pending === null ? null : parsePendingUsage(pending),
+  };
 }
 
 /** parseCheckoutOrder validates one types.CheckoutOrder.
@@ -676,27 +738,6 @@ function orderPayType(source: Record<string, unknown>): string {
  * parseOrderPage 校验一页结账订单。 */
 export function parseOrderPage(value: unknown): Page<CheckoutOrder> {
   return page(value, parseCheckoutOrder);
-}
-
-/** parseModelPrice validates one types.ModelPrice.
- *
- * parseModelPrice 校验一个 types.ModelPrice。 */
-export function parseModelPrice(value: unknown): ModelPrice {
-  const source = record(value);
-  return {
-    model: required(source, "model"),
-    inputMicroPerMTok: count(source, "input_micro_per_mtok"),
-    outputMicroPerMTok: count(source, "output_micro_per_mtok"),
-    updatedBy: text(source, "updated_by"),
-    updatedAt: timestamp(source, "updated_at"),
-  };
-}
-
-/** parseModelPrices validates GET /operator/v1/billing/model-prices.
- *
- * parseModelPrices 校验 GET /operator/v1/billing/model-prices。 */
-export function parseModelPrices(value: unknown): ModelPrice[] {
-  return list(record(value).items, parseModelPrice);
 }
 
 function parseBillingTenant(value: unknown): BillingTenant {
@@ -1002,29 +1043,6 @@ export function packageRequest(draft: PackageDraft): { request: PackageRequest; 
     request: { ...base, credits_per_minor_unit_micro: rate, min_amount_minor: min, max_amount_minor: max, sort_order: sortOrder },
     problem: null,
   };
-}
-
-/** PriceProblem names what a model price draft gets wrong.
- *
- * PriceProblem 指出模型单价草稿哪里出错。 */
-export type PriceProblem = "model" | "price";
-
-/** modelPriceRequest validates a price typed in credits per million tokens
- * and builds types.ModelPriceRequest in micro-credits.
- *
- * modelPriceRequest 校验以「点/百万 token」输入的单价，并以 micro 点构造
- * types.ModelPriceRequest。 */
-export function modelPriceRequest(draft: { model: string; input: string; output: string }):
-  | { request: { model: string; input_micro_per_mtok: number; output_micro_per_mtok: number }; problem: null }
-  | { request: null; problem: PriceProblem } {
-  const model = draft.model.trim();
-  if (model === "" || new TextEncoder().encode(model).length > MAX_TEXT_RUNES) return { request: null, problem: "model" };
-  const input = parseCreditsInput(draft.input);
-  const output = parseCreditsInput(draft.output);
-  if (input === null || output === null || input > MAX_PRICE_MICRO_PER_MTOK || output > MAX_PRICE_MICRO_PER_MTOK) {
-    return { request: null, problem: "price" };
-  }
-  return { request: { model, input_micro_per_mtok: input, output_micro_per_mtok: output }, problem: null };
 }
 
 /** AdjustProblem names what a balance adjustment draft gets wrong.

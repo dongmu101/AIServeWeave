@@ -1,3 +1,40 @@
+# 按 token 计价：官方价 × 倍率（2026-11-16）
+
+点数计费改为参照 [sub2api](https://github.com/Wei-Shaw/sub2api) 的计价方式：**售价 = 基础价 × 模型倍率 × 方案系数**，1 点 = 1 美元。规则、运维设置与升级步骤见[按 token 计价](docs/billing-token-pricing.md)，设计与取舍见 `.scratch/token-pricing/`。
+
+- **计量项**：用量按 `input`、`input.cache_read`、`input.cache_write`（含 `.1h`）、`output`、`output.reasoning` 分别计价；子项没有单价时按父项计费，不会少收。支持长上下文档位。新增计量项不必改协议，也不必改表。
+- **价目表**：内置 LiteLLM 价目表快照，按配置定时同步；新条目自动生效，大幅改价、降为 0 与删除等运维审核。
+- **定价配置与价格方案**：按别名设置参照模型、覆盖价、模型倍率；默认价；价格方案（默认系数、按别名的系数或固定售价），租户属于一个方案。每次修改追加版本，**按请求时间计价**。
+- **每笔费用明细**：用量记录保存原价、实扣、倍率、价格来源与各计量项的单价和费用。
+- **扣费防重**改由按月分区的 `usage_records` 承担，`usage_charges` 不再写入（它不分区也不清理，会无限增长）。
+- **余额账目**：扣费累计在租户计费行上，按 `Billing.LedgerTimezone` 每天封成一条用量账目，遇到其他资金事件先封账；账目只追加、不修改。
+- **上报链路**：Anthropic / OpenAI adapter、隧道协议、Agent 的 Claude 风格 / Cursor / Codex CLI runtime 上报缓存与推理明细；Gateway 推送前过滤。**修正既有漏计**：Gateway 原生 Messages 路径（Claude CLI 桥接）原本漏计缓存读取与写入。
+- **查询接口**：用量汇总新增缓存与费用列、逐笔明细、租户价格、运维有效价格与未定价提示；公开目录改为默认方案下的售价。旧的 `/operator/v1/billing/model-prices` 已移除。
+- **Console**：运维的模型定价、价目表审核、价格方案；租户的用量费用与逐笔明细、模型价格、账目「进行中」与时间段，见 [Console STATUS](service/aiServeWeaveConsole/STATUS.md)。
+
+升级须知：
+
+- **顺序**：先控制面与 Console（一起），再 Gateway，最后 Agent。用量推送新增 `details`、`attributes` 字段，旧控制面会拒绝整批。
+- **迁移**：`usage_records/0005`（即时加列）、`usage_records/0006`（索引 `(tenant_id, created_at, id)`：**PostgreSQL 建索引期间阻塞用量写入**，MySQL 在线执行；大表须先在恢复副本上计时）、`billing/0012`–`0014`。`sql/init.sql` 已同步。
+- **行为变更**：名称与价目表条目完全一致、原本落到 `*` 默认价的别名，升级后按官方价收费；1 点 = 1 美元成为定价基准，请重新核对充值包；已有 `model_prices` 行转换为覆盖价，价格不变；**Claude CLI 桥接的用量与费用会明显增加**（缓存 token 开始计入），升级前请通知相关商户。
+- **不能直接回退**到旧版控制面（旧版只查 `usage_charges` 防重，重发的记录会被重复扣费），回退须恢复备份。
+- **可选维护命令**：`-migrate backfill-usage-cost`（把升级前费用写回 `usage_records`）、`-migrate compact-usage-ledger`（按天合并升级前的用量账目，会改写财务记录，须先备份）。
+- **新配置**：`Billing.PriceCatalog`（`URL`、`RefreshInterval`、`AutoApplyMaxChangePercent`）、`Billing.LedgerTimezone`（默认 UTC，台湾或大陆市场建议 `Asia/Taipei` / `Asia/Shanghai`）。
+
+已通过的检查：
+
+- 全仓 `go vet` 与默认测试；`common/pricing`、控制面 store、logic、handler、config、e2e 与 Gateway `httpapi` / `controlplaneclient` 的竞态检查。
+- 临时 PostgreSQL 16 与 MySQL 9.7 上 gormstore 全部 live 用例，新增：价目表（含按完整快照导入）、定价配置、扣费防重（含跨月分区重发与并发推送）、余额链（含同一微秒、时钟倒退、扣费 / 入账 / 封账并发、升级前的旧租户）、回填与压缩命令、用量查询；分区升级用例同步了新列。
+- 计价引擎单元测试含规格的计算示例；上游 LiteLLM 原始文件（5993 个条目）解析与过滤。
+- Console 409 项单元测试、类型检查、lint 与生产构建；Playwright 新增运维定价与租户用量用例，与计费相关用例合跑 181 项通过。`billing.spec.ts:382` 失败：断言的文案在 HEAD 中就不存在，与本次无关。
+
+尚未验收：
+
+- 真实控制面、Gateway、Agent 与 Console 的端到端计价联调。
+- 真实 Claude Code、Codex CLI 上报的缓存字段（尤其是 1 小时缓存）。
+- 从真实网络同步上游价目表。
+- 生产规模数据上 `usage_records/0006` 的建索引耗时。
+
 # Studio 首页与会话鉴权（2026-11-16）
 
 新服务 [Studio](service/aiServeWeaveStudio/README.md)：面向租户成员的 AI 工作台，规格见 `.scratch/studio-chat-flows/spec.md`。本次交付首页与它所需的后端：

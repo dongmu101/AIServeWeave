@@ -1,3 +1,15 @@
+## 按 token 计价的运维与租户页面（2026-11-16）
+
+配合控制面的[按 token 计价](../../docs/billing-token-pricing.md)：
+
+- **运维计费页**：「模型单价」改为「模型定价」（价格来源、参照条目、基础价、模型倍率、默认方案售价；搜索价目表选参照模型、从官方价复制成覆盖价、默认价、价目表同步状态与立即同步），新增「价目表审核」（新旧对照、批准 / 拒绝、角标）与「价格方案」；商户列表新增价格方案与未封账用量；未定价提示。所有修改带 `base_revision`，冲突时重新读取并提示。实现在 `components/console/token-pricing.tsx`、`lib/console/pricing.ts`。
+- **租户用量页**：消耗点数卡片；按模型 / 用户 / Key 三个标签页新增缓存读取、缓存写入与费用列；新增「明细」标签页（`/admin/v1/usage/records`，每页 50 条游标分页，可按模型与 Key 筛选，逐行展开各计量项；标记「升级前」「按旧单价回填」「自有节点不计费」「未定价」「未扣余额」）。用量页可从查询参数 `tab`、`since`、`until` 打开（经过校验）。实现在 `app/console/usage/usage-records.tsx`、`lib/console/usage-records.ts`。
+- **API Key 页与用户页**：Token 用量旁显示点数。
+- **租户计费页**：新增「模型价格」分区（`?tab=prices`）；账目最上面显示「进行中」一行；用量账目显示时间段与请求数，并链接到对应时间的明细（只在租户页）。账目表 `billing-tables.tsx` 是两边共用的，「进行中」与时间段在运维按单一租户查询账目时也会显示。
+- 点数与费用列只在汇总或明细带费用时显示（即控制面开启计费时）。已移除对 `/operator/v1/billing/model-prices` 的全部调用；白名单同步。文案八种语言。
+
+验证：Console 409 项单元测试、TS7 类型检查、`tsc6`、lint（仅既有 alerts 页警告）与生产构建通过。Playwright 新增 `token-pricing.spec.ts`、`usage-pricing.spec.ts`（宽屏与 320px 无横向滚动），与计费、运维文案用例合跑 181 项通过、1 项失败：`billing.spec.ts:382`（「a full presale explains itself」）断言的文案「预售名额已满」在 HEAD 的文案里就不存在，与本次无关。分身在全套用例中另外看到的既有失败：`console-header.spec.ts` 两项、`console.spec.ts` 三项（已记录）、`docs-guide` 三项（文档示例数为 8，测试期望 7）。浏览器使用隔离回环服务与模拟 API，未接真实控制面。
+
 ## 计费页默认账号购买（2026-11-14）
 
 商户直接访问 `/console/billing` 时优先选中可用的「账号购买」分区；显式标签、支付回跳和无预售商品时的回退沿用原流程。使用说明见[账号预售](../../docs/billing-accounts.md#账号预售)。

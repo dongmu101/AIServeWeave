@@ -1,6 +1,8 @@
 # 09 文档
 
-Status: ready-for-agent
+Status: ready-for-human
+
+实现（2026-11-16）：文档已全部写完。
 
 Blocked by: 01–08
 
@@ -26,4 +28,4 @@ Blocked by: 01–08
 - `deploy/database-recovery.md`：新增「按 token 计价」迁移一节，修正分区一节的扣费去重说明。
 - `docs/billing-alipay.md`：模型售价的设置入口。
 
-待第 7、8 项合并后：根 STATUS 交付记录、Console README 与 STATUS 的计费页说明。
+第 7、8 项合并后补上：根 STATUS 交付记录（含升级须知）、Console README（接口表新增用量行、计费两行与运维 / 租户计费页说明）、Console STATUS 新条目。

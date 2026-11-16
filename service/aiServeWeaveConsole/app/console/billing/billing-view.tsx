@@ -9,6 +9,7 @@ import { AlipayBilling, hasPresaleIntent } from "@/components/console/alipay-bil
 import { PayChoiceButtons } from "@/components/console/pay-choice-buttons";
 
 import { BillingDisabled, LedgerTable, OrdersTable } from "@/components/console/billing-tables";
+import { TenantPrices } from "@/components/console/tenant-prices";
 import { ErrorMessage } from "@/components/i18n/error-message";
 import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
@@ -55,11 +56,12 @@ type ReturnState = "pending" | "settled" | "exhausted";
  * what has happened.
  *
  * BILLING_TABS 是页面的分区，依次为可购买的内容与已发生的记录。 */
-const BILLING_TABS = ["presales", "accounts", "packages", "alipay", "orders", "ledger"] as const;
+const BILLING_TABS = ["presales", "accounts", "packages", "alipay", "prices", "orders", "ledger"] as const;
 type BillingTab = (typeof BILLING_TABS)[number];
 
 const TAB_KEYS: Record<BillingTab, MessageKey> = {
   packages: "tenant.billingPackages",
+  prices: "tenant.billingPrices",
   alipay: "tenant.billingAlipay",
   accounts: "tenant.accountMonthly",
   presales: "tenant.presale",
@@ -305,6 +307,9 @@ export function BillingView({ role, returning, alipayReturning = false, ezfpRetu
         </TabsContent>
         <TabsContent value="presales" className="mt-2">
           <PresaleSales resource={presales} canPurchase={canPurchase} methods={methods} resume={alipayReturning} />
+        </TabsContent>
+        <TabsContent value="prices" className="mt-2">
+          <TenantPrices />
         </TabsContent>
         <TabsContent value="orders" className="mt-2">
           <OrdersTable key={historyKey} canDelete={canPurchaseCredits(role)} />
