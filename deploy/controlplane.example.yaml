@@ -245,15 +245,17 @@ TenantNodes:
 # AccountSales:
 #   Enabled: true
 
-# 计费与充值（Dodo Payments）：默认关闭。开启后租户可预付购买点数，用量按运维配置的
-# 模型单价从余额扣减，prepaid 租户余额耗尽时 Gateway 返回 402。先在 deploy/.env 填好
+# 计费与充值（Dodo Payments）：默认关闭。开启后租户可预付购买点数（1 点 = 1 美元），用量
+# 按「官方价目表 × 倍率」计价后从余额扣减，prepaid 租户余额耗尽时 Gateway 返回 402；
+# 计价规则见 docs/billing-token-pricing.md。先在 deploy/.env 填好
 # AISW_DODO_API_KEY 与 AISW_DODO_WEBHOOK_SECRET（前缀 dodo_test_ / dodo_live_ 须与
 # Environment 一致），在 Dodo 控制台把 webhook 指向 <控制面公网地址>/billing/v1/dodo/webhook，
 # 再取消注释。ReturnURL 是付款后回跳的 Console 计费页。详见 ControlPlane STATUS「计费与充值」。
 #
 # Billing and top-ups (Dodo Payments): off by default. When enabled, tenants
-# prepay for credits, usage is charged against the balance at the operator's
-# model prices, and Gateway answers 402 once a prepaid tenant's balance runs
+# prepay for credits (1 credit = 1 USD), usage is priced at the official
+# price list times rates (docs/billing-token-pricing.md) and charged against
+# the balance, and Gateway answers 402 once a prepaid tenant's balance runs
 # out. Fill AISW_DODO_API_KEY and AISW_DODO_WEBHOOK_SECRET in deploy/.env
 # first (the dodo_test_ / dodo_live_ prefix must match Environment), point
 # the Dodo dashboard's webhook at <public control plane URL>/billing/v1/dodo/webhook,
@@ -308,4 +310,20 @@ TenantNodes:
 #     Types: [alipay, wxpay]
 #     NotifyURL: https://console.example.com/billing/v1/ezfp/notify
 #     ReturnURL: https://console.example.com/console/billing
+#
+# 价目表（LiteLLM）：首次启动导入内置快照，之后按 RefreshInterval 拉取远端；新条目自动
+# 生效，改价超过 AutoApplyMaxChangePercent、降为 0 或删除时等运维在 Console 审核。中国大陆
+# 常连不上 GitHub raw，可改用镜像或下面的 GitHub API 地址；RefreshInterval: 0 只用内置快照。
+# LedgerTimezone 是用量账目的日界时区（每个租户每天一条用量账目）。
+#
+# Price list (LiteLLM): the built-in snapshot is imported on first start, then
+# the remote list is fetched every RefreshInterval; new entries apply on their
+# own, larger changes and removals wait for review in the Console.
+# RefreshInterval: 0 keeps the built-in snapshot. LedgerTimezone ends a day of
+# usage on the balance ledger.
+#   PriceCatalog:
+#     URL: https://api.github.com/repos/BerriAI/litellm/contents/model_prices_and_context_window.json
+#     RefreshInterval: 24h
+#     AutoApplyMaxChangePercent: 30
+#   LedgerTimezone: Asia/Taipei
 

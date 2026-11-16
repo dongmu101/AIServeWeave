@@ -108,7 +108,7 @@ MySQL 的 DSN 必须带 `parseTime=True`，否则每个 `time.Time` 列都会扫
 
 **列表分页索引（2026-11-10）。** `ListUsers`、`ListAPIKeys`、`ListAudit` 经 `readPage` 以 `WHERE tenant_id = ? ORDER BY created_at DESC, id DESC`（可再叠加状态/角色/动作/时间范围过滤）做游标分页，原先只有单列 `tenant_id` 索引，每页都要对该租户的全部行排序。新增基础迁移 `base/{postgres,mysql}/0016_list_pagination_indexes.sql`：`idx_users_tenant_created`、`idx_api_keys_tenant_created`、`idx_audit_logs_tenant_created`，均为 `(tenant_id, created_at, id)`。`ListJobArtifactsBefore`（`WHERE type = ? AND created_at < ? ORDER BY created_at, id LIMIT n`，产物保留期清理使用）原先没有可用索引，新增 MySQL 专用的 `jobs/0005_add_job_artifacts_type_created_index.sql`：`idx_job_artifacts_type_created (type, created_at, id)`。`jobs` 表的 `(tenant_id, created_at, id)`、`request_logs`、`billing` 各表本来就有对应的复合索引。旧的单列 `idx_users_tenant_id`、`idx_api_keys_tenant_id`、`idx_audit_logs_tenant_id` **保留**：它们由 `model` 的 `index` 标签声明，启动时的 `CheckSchema` 要求它们存在，删掉会让服务拒绝启动；它们已被新索引的最左前缀覆盖，要清理必须先改模型标签并发版，本次不做。升级步骤与锁表影响见[数据库升级与恢复](../../deploy/database-recovery.md#列表分页索引迁移base-0016--jobs-0005)。`sql/init.sql` 现由 `gormstore.TestInitSQLMatchesMigrations` 约束，新增迁移后用 `UPDATE_INIT_SQL=1 go test ./service/aiServeWeaveControlPlane/internal/store/gormstore -run TestInitSQLMatchesMigrations` 重新生成。这两份迁移没有在真实 PostgreSQL 或 MySQL 上执行过（默认测试只验证 SQL 文件的方言一致、版本连续和 `init.sql` 同步）。
 
-**增长表按时间分区（2026-11-14）。** `request_logs`、`usage_records`、`metrics_history_points`、`response_turns`、`audit_logs` 按时间 RANGE 分区，分区清单只有一份（`gormstore/partitions.go` 的 `partitionedTables`），迁移展开、维护、清理和 schema 检查都读它。转换迁移里的 `/*aisw:partitions table=…*/` 占位在执行时按最旧一行与当前日期展开，校验和覆盖的是模板，所以账本稳定；MySQL 上表已分区时跳过 ALTER，保证 `resume` 可以重复执行。主键必须包含分区列（MySQL 9.7 仍有这一限制），因此是 `(id, 分区列)`：用量记录的去重依赖 Gateway 重发时沿用原 `created_at`（`usageledger_createdat_test.go` 固定了这一点），扣费去重仍由不分区的 `usage_charges.request_id` 保证；`response_turns` 的 `created_at` 取控制面时钟，写入前先在最近 24 小时内按 id 查找。分区 DDL 在 `WithMaintenanceDB` 指定的连接池上执行（`Database.MaintenanceDSN`），锁按数据库区分，所以与迁移互斥；保留期清理最多等锁 2 分钟，锁忙就跳过，元数据锁超时就重试，其它 DDL 失败退回分批逐行删除。schema 检查会校验分区列与兜底分区；PostgreSQL 分区父表的索引由 `readIndexes` 自行读取（GORM 驱动只看普通表）。审计删除放在独立的 `store.AuditRetention` 接口里，`store.Audit` 仍然没有删除方法。
+**增长表按时间分区（2026-11-14）。** `request_logs`、`usage_records`、`metrics_history_points`、`response_turns`、`audit_logs` 按时间 RANGE 分区，分区清单只有一份（`gormstore/partitions.go` 的 `partitionedTables`），迁移展开、维护、清理和 schema 检查都读它。转换迁移里的 `/*aisw:partitions table=…*/` 占位在执行时按最旧一行与当前日期展开，校验和覆盖的是模板，所以账本稳定；MySQL 上表已分区时跳过 ALTER，保证 `resume` 可以重复执行。主键必须包含分区列（MySQL 9.7 仍有这一限制），因此是 `(id, 分区列)`：用量记录的去重依赖 Gateway 重发时沿用原 `created_at`（`usageledger_createdat_test.go` 固定了这一点），扣费去重原本由不分区的 `usage_charges.request_id` 保证，2026-11-16 起改为扣费事务在租户行锁下按 `id` 跨分区查找 `usage_records`（见「计费与充值 / 扣费」）；`response_turns` 的 `created_at` 取控制面时钟，写入前先在最近 24 小时内按 id 查找。分区 DDL 在 `WithMaintenanceDB` 指定的连接池上执行（`Database.MaintenanceDSN`），锁按数据库区分，所以与迁移互斥；保留期清理最多等锁 2 分钟，锁忙就跳过，元数据锁超时就重试，其它 DDL 失败退回分批逐行删除。schema 检查会校验分区列与兜底分区；PostgreSQL 分区父表的索引由 `readIndexes` 自行读取（GORM 驱动只看普通表）。审计删除放在独立的 `store.AuditRetention` 接口里，`store.Audit` 仍然没有删除方法。
 
 ## 本地起一套
 
@@ -151,7 +151,7 @@ go run ./service/aiServeWeaveGateway \
 
 | 守卫 | 路由 |
 | --- | --- |
-| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`、只读 `GET /admin/v1/api-docs*`（仅已发布页面）；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型单价、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind`、`available` 与剩余名额数 `remaining`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
+| 公开 | `POST /admin/v1/auth/login`、`POST /admin/v1/platform/auth/login`、只读 `GET /admin/v1/api-docs*`（仅已发布页面）；`Signup.Enabled` 时另有 `POST /admin/v1/auth/signup`（见「租户自助注册」）；`Billing.Enabled` 且配置了 Dodo 时另有 `POST /billing/v1/dodo/webhook`（靠 Standard Webhooks 签名而不是会话鉴权，见「计费与充值」）；`Billing.Enabled` 或 `AccountSales.Enabled` 时另有只读 `GET /billing/v1/catalog`（无需会话，返回上架充值包、模型售价（默认方案下，见「计费与充值 / 接口」）、当前可买的包月账号与上架的账号预售，只含名称与价格（账号为 `price_minor` + `currency` 法币月价，未设法币价格的旧商品不列出；预售另带 `kind`、`available` 与剩余名额数 `remaining`），不含 `dodo_product_id`、节点与租户信息；`Cache-Control: public, max-age=60`；只开账号包月时因无法结账，三个列表都为空） |
 | 会话（JWT，租户） | `/admin/v1/users`、`/admin/v1/apikeys`、`/admin/v1/audit`、`/admin/v1/tenants/current`、`/admin/v1/tenants/limits`、`/admin/v1/workflows`、`/admin/v1/jobs*`；`Billing.Enabled` 时另有全部 `/admin/v1/billing*`（含账号法币结账；结账、门户、退款只在配置 Dodo 时挂载，`/admin/v1/billing/alipay*` 只在 `Billing.Alipay.Enabled` 时挂载），`AccountSales.Enabled` 可独立开启账号、概览与账目读取 |
 | 会话（JWT，平台运维，STATUS.md 的 P01） | `/operator/v1/*`（机群清单只读 + 节点写路径 + 租户列表与模型授权；`Billing.Enabled` 时另有全部 `/operator/v1/billing/*`，`AccountSales.Enabled` 可独立开启账号、商户余额管理与账目读取），见「机群清单」「节点写路径」「模型授权」「计费与充值」各节 |
 | BootstrapToken | `POST /admin/v1/tenants`、`POST /admin/v1/platform/operators`（P01 引导创建平台运维账户，复用同一把密钥，理由见「平台运维身份」一节） |
@@ -838,13 +838,28 @@ usage_records(
   total_tokens       BIGINT NOT NULL,
   created_at         TIMESTAMP NOT NULL,  -- PostgreSQL: TIMESTAMPTZ；MySQL: DATETIME(6)
   key_id             VARCHAR(40) NOT NULL DEFAULT '',  -- usage_records/0003：发起请求的 API key（0004 加宽）
-  user_id            VARCHAR(40) NOT NULL DEFAULT ''   -- usage_records/0003：该 key 的创建者，入账时解析（0004 加宽）
+  user_id            VARCHAR(40) NOT NULL DEFAULT '',  -- usage_records/0003：该 key 的创建者，入账时解析（0004 加宽）
+  cache_read_tokens  BIGINT NOT NULL DEFAULT 0,        -- usage_records/0005：从明细取出的缓存读取（prompt_tokens 的一部分）
+  cache_write_tokens BIGINT NOT NULL DEFAULT 0,        -- usage_records/0005：缓存写入，含 1 小时缓存
+  cost_micro         BIGINT NOT NULL DEFAULT 0,        -- usage_records/0005 起是计价结果，见「计费与充值」
+  base_cost_micro    BIGINT NOT NULL DEFAULT 0,
+  rate_ppm           BIGINT NOT NULL DEFAULT 0,
+  price_source       VARCHAR(16) NOT NULL DEFAULT '',
+  details            TEXT NULL,                        -- 计量项明细与计价过程（JSON，带格式版本）
+  charged            BOOLEAN NULL                      -- 是否实际扣了余额；计费关闭时写入的与升级前的记录为 NULL
 );
 CREATE INDEX idx_usage_records_tenant_model_created ON usage_records (tenant_id, model, created_at);
 CREATE INDEX idx_usage_records_created              ON usage_records (created_at, id);
+CREATE INDEX idx_usage_records_tenant_created       ON usage_records (tenant_id, created_at, id);  -- usage_records/0006
 ```
 
-`POST /internal/v1/usagerecords`（`requireSharedSecret(ctx.Config.InternalToken, ...)` 守卫，与请求日志推送同一信任级别）接受一批记录，**去重规则就是主键本身**：`id` 唯一约束加 `clause.OnConflict{DoNothing: true}`，一次被重试的批量推送第二次到达时被静默跳过，不会让同一次请求的用量被计两次——不存在另一道独立的去重步骤。批内缺少必填字段（`request_id`/`tenant_id`/`model`/`endpoint`）的记录被跳过而不是让整批失败，响应用 `accepted` 计数报告实际写入条数。
+表按 `created_at` 按月分区（`usage_records/0002`），主键因此是 `(id, created_at)`。
+
+`POST /internal/v1/usagerecords`（`requireSharedSecret(ctx.Config.InternalToken, ...)` 守卫，与请求日志推送同一信任级别）接受一批记录。批内缺少必填字段（`request_id`/`tenant_id`/`model`/`endpoint`）的记录被跳过而不是让整批失败，响应用 `accepted` 计数报告实际写入条数。请求体上限 `handler.MaxUsageRecordsBodyBytes` 为 4 MiB，按一整批 500 条、每条带满明细的最坏情况（约 2 MB）定量。
+
+**去重**：计费关闭时靠主键 `(id, created_at)` 加 `clause.OnConflict{DoNothing: true}`，依赖 Gateway 重发时沿用首次的 `created_at`。计费开启时由扣费事务在租户行锁下按 `id` 跨所有分区查找，`created_at` 不同的重发也不会重复入账或扣费，见「计费与充值 / 扣费」。
+
+**计量项明细**（2026-11-16）：记录可带 `details`（计量项名称 → 数量，例如 `input.cache_read`）与 `attributes`（请求属性，目前没有生产方），规则在 `common/pricing`：名称格式、每条最多 32 个明细与 8 个属性、数量非负、明细是 `prompt_tokens` / `completion_tokens` 的一部分。不合规时只丢掉这条记录的明细与属性并记一条警告，记录照常入账、按基础价计费，不整批拒绝（Gateway 会丢弃被拒绝的批次）；Gateway 推送前已按同样规则过滤。明细存进 `details`（JSON，校正「父项不小于子项之和」后的完整计量项树），缓存读取与写入另外存进两个数值列供汇总求和。
 
 **按用户与 key 归属**：记录可带可选的 `key_id`（Gateway 填身份里的 key）。入账时控制面按 `(tenant_id, key_id)` 查 `api_keys.created_by` 写入 `user_id`，每批每个 key 只查一次；key 已不存在时 `user_id` 留空，其他读取错误让整批失败由 Gateway 重试。`user_id` 在写入时定格，之后删除 key 或用户不影响归属。`usage_records/0003` 之前的记录两列为空，显示为「未归属」。
 
@@ -853,21 +868,25 @@ CREATE INDEX idx_usage_records_created              ON usage_records (created_at
 - `GET /admin/v1/usage/summary`——`requireSession` 守卫，自动按调用者的 `tenant_id` 过滤，响应省略 `tenant_id` 字段。
 - `GET /operator/v1/usage/summary`——`requirePlatformSession` 守卫，可选 `tenant_id` 查询参数做跨租户过滤，不传则汇总全部租户，响应保留 `tenant_id` 字段。
 - 两个端点都接受可选的 `group_by`：缺省或 `model` 按 `(tenant_id, model)` 分组，形状不变；`key` 改按 `(tenant_id, user_id, key_id, model)` 分组，每行多出 `user_id`、`key_id`（为空时省略）。其他取值返回 400。Console 的「用量」页用它显示各用户、各 key、各模型的输入与输出 token。
+- 每行另带 `cache_read_tokens`、`cache_write_tokens`，开启计费时带 `cost_micro`。
 
-**这两个端点只做用量汇总，不做定价**：它们只回答「这个租户在这个窗口内，按这个模型，消耗了多少 token、发了多少次请求」。按单价扣费由「计费与充值」一节在同一个推送端点的入账事务里完成，结果存在独立的 `usage_charges` 表，不改这两个端点的形状。
+**汇总只读取入账时已算好的费用，不重新计价**：费用由「计费与充值」一节在推送端点的入账事务里写进同一张表，汇总仍是一次分组求和。
+
+**逐笔明细**：`GET /admin/v1/usage/records`（租户会话，强制本租户）与 `GET /operator/v1/usage/records`（平台会话，可选 `tenant_id`），新的在前，游标分页、每页最多 200 条，可选 `since`、`until`、`model`、`key_id`。明细 JSON 解码后重新组装，不透传原文：租户版不含价目表参照条目、方案与配置版本；计费关闭时不含任何费用与单价字段；没有明细的旧记录按总数补出 input、output 两行。分页走 `usage_records/0006` 的 `(tenant_id, created_at, id)` 索引。
 
 **保留期默认 400 天**（`config.DefaultUsageRecordRetention`，`Config.UsageRecordRetention` 可覆盖）——比 `request_logs` 的 30 天长得多，因为这里支撑的是结算而非诊断：几个月后的一次账单争议仍然需要这条账本记录。`internal/usageretention` 是一个独立的后台协程，每 24 小时运行一次，与 `internal/requestlogretention` 同一形状但不共享代码——两张表是互不相关的数据、互不相关的保留策略；与 `MetricsHistory` 不同，这个清理协程**只要表已迁移就无条件运行**。
 
-已知缺口：未做真实 PostgreSQL/MySQL live 测试验证双数据库迁移与聚合查询（默认测试套件——memstore 的等价聚合实现 + gormstore 的标准 GORM 分组求和写法——已通过即视为完成，与 P09 新增表同一先例）。
+2026-11-16 起，迁移、分组汇总与逐笔明细查询都有 gormstore live 用例，在临时 PostgreSQL 16 与 MySQL 9.7 上通过。
 
 ## 计费与充值
 
-租户预付购买**点数**，用量按运维配置的模型单价从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402。支付服务商是 Dodo Payments、支付宝（一人付，2026-11-11 新增）与易支付（EZFP，2026-11-12 新增），可任意并存，也可只配一个（`Billing.Enabled` 至少需要其一）。Dodo 与易支付是法币结账通道，服务充值包、账号包月与预售，易支付只收 CNY 标价的商品；支付宝（一人付）兑换额度。规则见下文「支付宝（一人付）」「易支付（EZFP）」、[支付宝说明](../../docs/billing-alipay.md)与[易支付说明](../../docs/billing-ezfp.md)。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
+租户预付购买**点数**（1 点 = 1 美元），用量按「官方价目表 × 倍率」计价后从余额扣减，prepaid 租户余额耗尽后 Gateway 返回 402；计价规则、运维设置与升级步骤见[按 token 计价](../../docs/billing-token-pricing.md)。支付服务商是 Dodo Payments、支付宝（一人付，2026-11-11 新增）与易支付（EZFP，2026-11-12 新增），可任意并存，也可只配一个（`Billing.Enabled` 至少需要其一）。Dodo 与易支付是法币结账通道，服务充值包、账号包月与预售，易支付只收 CNY 标价的商品；支付宝（一人付）兑换额度。规则见下文「支付宝（一人付）」「易支付（EZFP）」、[支付宝说明](../../docs/billing-alipay.md)与[易支付说明](../../docs/billing-ezfp.md)。支付与按用量扣费由 `Billing.Enabled` 开关控制，**默认关闭**：关闭时支付路由不挂载（`404`）、Key 校验不因余额拦截，用量推送仍只写账本。账号包月、余额管理与账目读取可由 `AccountSales.Enabled` 独立开启，无需支付服务商；两个开关都关闭时不挂载任何计费路由。
 
 ```
 Console ──/admin|/operator 白名单──▶ 控制面 ──SDK──▶ Dodo（结账会话、客户、客户门户）
 Dodo ──webhook（Standard Webhooks 签名）──▶ 控制面：入账/退款/争议，同一事务内改余额并推进 generation
-Gateway ──POST /internal/v1/usagerecords──▶ 控制面：写账本的同一事务内按单价扣费
+Gateway ──POST /internal/v1/usagerecords──▶ 控制面：按请求时间计价，写账本的同一事务内扣费并累计到计费行
+控制面 ──定时──▶ LiteLLM 价目表（新条目自动生效，大幅改价与删除待运维审核）
 Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 时 Gateway 返回 402
 ```
 
@@ -890,12 +909,18 @@ Gateway ◀──verify 响应带 billing_blocked── prepaid 且余额 ≤ 0 
 | `Billing.Ezfp.Types` | `[alipay, wxpay]` | 提供给租户的付款方式，只能是 `alipay`、`wxpay`、`usdt`，不可重复；`usdt` 不在默认值中，须明确列出（USDT 仍按人民币金额下单，由易支付换算） |
 | `Billing.Ezfp.NotifyURL` / `ReturnURL` | 空 | 开启时必填，绝对 HTTPS，不带凭据、query、fragment，≤512 字节；前者是本控制面公开的 `/billing/v1/ezfp/notify`，后者是 Console 计费页 |
 | `Billing.Ezfp.BaseURL` | 空 | 可选，覆盖接口基址（默认 `https://www.ezfp.cn/`），须为 HTTPS，供测试替身使用 |
+| `Billing.PriceCatalog.URL` | LiteLLM（GitHub raw） | 远端价目表；可换成镜像或 GitHub API 地址，拉取时带 `Accept: application/vnd.github.raw`，限 30 秒、20 MB |
+| `Billing.PriceCatalog.RefreshInterval` | `24h` | 远端同步间隔，最短 10 分钟；`0` 只用内置快照 |
+| `Billing.PriceCatalog.AutoApplyMaxChangePercent` | `30` | 已有条目改价可自动生效的最大相对变动，0–1000 |
+| `Billing.LedgerTimezone` | `UTC` | 用量账目日界的 IANA 时区；名称无效拒绝启动，`config` 包内置 `time/tzdata` |
 
 Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhook`，订阅 `payment.succeeded`、`payment.failed`、`payment.cancelled`、`refund.succeeded`、`dispute.opened`、`dispute.won`、`dispute.cancelled`。`deploy/docker-compose.yaml` 把控制面端口只绑定在 `127.0.0.1`，Dodo 要能投递，需要由反向代理把这一条路径（且只需这一条）暴露到公网。
 
 ### 单位与模式
 
-- **点数与 micro**：1 点 = 1,000,000 micro（`model.MicroPerCredit`），余额、账目、订单都以 micro 存 `BIGINT`。模型单价单位是「micro / 百万 token」，单笔费用 = `ceil((prompt × 输入单价 + completion × 输出单价) / 1e6)`，在 128 位内精确计算，超出 int64 时饱和为最大值而不是变成 0，因此 Gateway 上报的 token 数再大也不会让请求免费；单价上限 `model.MaxPriceMicroPerMTok` 只是对运维输入的合理性校验。别名没有单价时用 `*` 默认价；默认价也没有就记 0（照样写 `usage_charges` 行，报表能看出哪些用量没定价）。
+- **点数与 micro**：1 点 = 1 美元 = 1,000,000 micro（`model.MicroPerCredit`），余额、账目、订单都以 micro 存 `BIGINT`。单价单位是「micro 点 / 百万单位」（token 计量项即每百万 token），倍率以百万分之一为单位（`pricing.RateOne`）。
+- **计价**（2026-11-16，取代按别名的输入、输出两价）：`common/pricing.Compute` 是不依赖存储的纯函数，按计量项树计费——每个计量项按「自身数量 − 子项数量」、在所选长上下文档位下查单价（同名逐档 → 默认变体 → 父项），用 `math/big` 精确运算，原价与实扣都向上取整，超出 int64 饱和为最大值。单价来源依次是方案固定售价、覆盖价、价目表条目（参照模型或别名本身，完全一致）、默认价，都没有记为 `none`；总倍率 = 模型倍率 × 方案系数。规则详见[按 token 计价](../../docs/billing-token-pricing.md)。
+- **按请求时间计价**：`logic/usagepricing.go` 缓存「最新定价配置版本」与「当前价目表」，每批先读两个版本号（`pricing_config_state`、`catalog_sync_state`），变化才重新加载；请求时间早于最新配置的生效时间、或早于价目表最后一次变化（所有单价行中最晚的 `valid_from` / `valid_to`）时回数据库按时间查询；租户方案每批只按最早与最晚的请求时间各查一次。请求时间在未来时按当前时间。
 - **计费模式按租户**：新增 `account_monthly` 账号独享包月模式，规则见[账号包月说明](../../docs/billing-accounts.md)；原有 `prepaid` 扣余额、余额 ≤ 0 时拦截；`exempt` 只记录费用、不动余额也不拦截。`tenant_billing` **没有行即视为 exempt**，因此存量租户与 BootstrapToken 创建的租户无需回填即保持原行为；`Billing.Enabled` 时自助注册的租户在租户行写入之后、owner 写入之前写入 prepaid 行与 `grant` 账目（这两行在同一个 store 事务里）。租户行、计费行、owner 之间没有事务，但这个顺序保证失败时留下的是一个没有 owner 的惰性租户，而不是一个能登录、却因缺行而被当作 exempt 的租户。运维可随时切换模式。exempt 租户也能购买点数，点数会入账，但在切换为 prepaid 之前不会被使用。
 - **只计 token**：图像生成、工作流 Job 等不按 token 计量的前门只受准入约束，不扣费。
 
@@ -905,19 +930,25 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 | 表 | 作用 |
 | --- | --- |
-| `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id` |
+| `tenant_billing` | 每租户一行：`mode`、`balance_micro`、`dodo_customer_id`；`0014` 起另有尚未封账的用量累计（`usage_acc_*`）与上一条账目时间 `last_ledger_at` |
 | `credit_packages` | 充值包（`pkg_`）：`fixed` 为固定价格产品对应固定点数；`custom` 为 Dodo Pay What You Want 产品，按 `credits_per_minor_unit_micro` 换算，金额在 `min_amount_minor`–`max_amount_minor` 内 |
-| `model_prices` | 别名单价，`*` 为默认价 |
+| `model_prices` | 旧的别名单价（`*` 为默认价）。2026-11-16 起只在首次读取定价配置时转换成第一个配置版本，之后不再读写，表保留供回退对照 |
+| `catalog_models` / `catalog_prices` / `catalog_pending` / `catalog_sync_state` | 价目表（`0012`）：条目与上游原始 JSON、按计量项 / 变体 / 档位的单价（带 `valid_from` / `valid_to`）、待审核变动、同步状态与价目表版本号 |
+| `pricing_revisions` / `tenant_price_plans` / `pricing_config_state` | 定价配置（`0013`）：每次修改追加的完整 JSON 文档（参照模型、覆盖价、模型倍率、默认价、价格方案）、租户所属方案历史、配置版本号。首个版本由 `EnsurePricingConfig` 在 `pricing_config_state` 行锁下从 `model_prices` 转换，多副本只写一次 |
 | `checkout_orders` | 结账订单（`ord_`）：点数在**创建订单时**算定，webhook 只核对不重算；`dodo_payment_id` 唯一；付款成功后记下实付金额与币种（`paid_amount_minor`/`paid_currency`，`0002_checkout_paid.sql`），退款以它为基准。`provider`（`dodo`/`ezfp`/`opcpay`）与 `pay_type`（易支付的 `alipay`/`wxpay`/`usdt`）见 `0009_ezfp.sql`，旧行为空，空值按 `alipay_amount` 推断为一人付或 Dodo。易支付订单的 `dodo_session_id`/`dodo_payment_id` 存 `ezfp:<trade_no>`，前缀使不同服务商的 id 在唯一索引下不冲突 |
-| `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`usage`/`refund`/`dispute`/`dispute_reversal`/`adjust`，带 `balance_after`；`idempotency_key` 唯一 |
-| `usage_charges` | 每个 `request_id` 一行费用，是扣费的幂等依据 |
+| `credit_ledger` | 余额的全部变动（`led_`）：`grant`/`topup`/`usage`/`refund`/`dispute`/`dispute_reversal`/`adjust`，带 `balance_after`；`idempotency_key` 唯一。只追加：除存量压缩命令外，控制面不 UPDATE 或 DELETE 这张表。`0014` 起用量账目带 `period_start`、`period_end`、`request_count` |
+| `usage_charges` | 2026-11-16 起不再写入：扣费防重与费用都移到 `usage_records`。保留供 `-migrate backfill-usage-cost` 回填，下一个版本删除 |
 | `billing_webhook_events` | 已处理的 `webhook-id`，用于去重 |
 
-费用写进独立的 `usage_charges` 而不是给 `usage_records` 加列：`usage_records` 命名空间的迁移文件数在现有测试与部署中被当作不变量，加列会让未开计费的部署也承担一次 schema 变更，独立表则只随 `billing` 命名空间出现。
+费用原本写进独立的 `usage_charges`，理由是不让未开计费的部署承担 `usage_records` 的 schema 变更。`usage_records/0003` 之后这个理由已不成立，而 `usage_charges` 每个请求一行、不分区也不清理，会无限增长，所以 2026-11-16 起费用列与扣费防重都放进按月分区、保留 400 天的 `usage_records`。
 
 ### 扣费
 
-`POST /internal/v1/usagerecords` 在计费开启时改走 `Store.ChargeUsage`，一个 **READ COMMITTED** 事务内：按 `DoNothing` 插入用量行 → 按租户 id 顺序对已有的 `tenant_billing` 行加 `FOR UPDATE`（没有行的租户是 exempt，不锁也不补行）→ 普通读已存在的 `usage_charges` → 只为尚未计费的 `request_id` 插入费用 → prepaid 租户扣减余额，每租户每批写一条 `usage` 账目。Gateway 并发重推同一批时，后到的事务在租户锁上等前一个提交，再读到它的费用行，不会重复扣费。隔离级别固定为 READ COMMITTED：在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 `request_id` 做锁定读会加间隙锁，两个副本推送互不相关的批次也会互相死锁。
+`POST /internal/v1/usagerecords` 在计费开启时先为每条记录计价（写入费用列与 `details`），再走 `Store.ChargeUsage(records, now, sealAt)`，一个 **READ COMMITTED** 事务内：按租户 id 顺序对已有的 `tenant_billing` 行加 `FOR UPDATE`（没有行的租户是 exempt，不锁也不补行）→ 按 `id` 普通读 `usage_records`（不带 `created_at`，跨所有分区，按月分区保留 400 天约 14 次主键探查）→ 只插入尚不存在的记录并设置 `charged` → prepaid 租户扣减余额，金额累计到计费行，不再每批写账目（见下文「余额账目」）。Gateway 并发重推同一批时，后到的事务在租户锁上等前一个提交，再读到它的记录，不会重复扣费；`created_at` 不同的重发同样查得到。隔离级别固定为 READ COMMITTED：在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 id 做锁定读会加间隙锁，两个副本推送互不相关的批次也会互相死锁。由商户自有节点服务的请求照常计价、`cost_micro` 记 0。
+
+**余额账目**（2026-11-16）：累计在三个时机封成一条 `usage` 账目——扣费时发现已过 `Billing.LedgerTimezone` 的午夜（`sealAt`）、`applyCredit` 写入任何其他账目之前（同一事务）、`RunUsageLedgerSeal` 每分钟扫描 `usage_acc_until` 到期的租户（每轮最多 500 个，每个租户一个事务并在锁内复查）。共用规则在 `store/usageledger.go`。账目时间经 `NextLedgerTime` 严格递增（至少比上一条晚 1 微秒；`last_ledger_at` 为空的旧租户先从账目读最新时间）。余额链由共享场景 `storetest.UsageLedger` / `CheckLedgerChain` 守护。只有注册赠送、`applyCredit` 与封账三处写账目，退款、争议、支付宝入账、调整都经过 `applyCredit`。
+
+**维护命令**：`-migrate backfill-usage-cost` 把 `usage_charges` 的费用写回没有价格来源的记录（`price_source = legacy`，倍率 1）；`-migrate compact-usage-ledger` 按账目时区合并升级前同一天、中间没有其他账目的连续用量账目，设置了 `Database.MaintenanceDSN` 时用它执行。两者都先检查表结构、可重复执行、以 JSON 行输出进度；`-migrate` 为此同时读取配置文件的 `Billing` 段。
 
 批内超出列宽的记录（`request_id` 64、`tenant_id` 32、`model` 128、`endpoint` 24 字节）与缺字段的记录一样被跳过，不会让整批被数据库拒绝：Gateway 会重试失败的批次并让新批次排在其后，一个每次都失败的批次会卡住所有租户的扣费。Gateway 的用量推送由「从不重试」改为有界退避重试，见 [Gateway STATUS](../aiServeWeaveGateway/STATUS.md#按租户模型的持久化用量账本statusmd-的-p2)。
 
@@ -955,21 +986,28 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 | `GET /admin/v1/billing` | 租户会话 | 模式、余额、是否拦截、上架的充值包 |
 | `POST /admin/v1/billing/checkout` | 租户 owner/admin | `{package_id, amount_minor?, provider?, pay_type?}`，`fixed` 包不得带金额，`custom` 包金额须在范围内；省略 `provider` 为 Dodo，`"ezfp"` 须带已配置的 `pay_type` 且商品为 CNY。返回 `201 {order_id, checkout_url}`。经 Dodo 首次购买时为租户创建 Dodo 客户；并发的首次购买以先记录的客户为准。服务商未配置或商品不能经它购买 `404`，选择非法 `400`，服务商出错或超时 `503` |
 | `POST /admin/v1/billing/portal` | 租户 owner/admin | 返回 Dodo 客户门户链接（发票、付款记录）；尚无客户时 `404` |
-| `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页；订单带 `provider`、`pay_type`，易支付订单的 `payment_id` 是去掉前缀的交易号 |
+| `GET /admin/v1/billing/ledger`、`/orders` | 租户会话 | 本租户账目与订单，游标分页；订单带 `provider`、`pay_type`，易支付订单的 `payment_id` 是去掉前缀的交易号。用量账目带 `period_start`、`period_end`、`request_count`；账目响应带 `pending_usage`（尚未封账的累计，金额为负：最新一条 `balance_after` 加上它就是余额） |
+| `GET /admin/v1/billing/prices` | 租户会话 | 本租户方案下、已获授权的路由别名的各计量项与各档售价，只给总倍率 |
 | `POST /admin/v1/billing/orders/:id/refresh` | 租户会话 | 仅易支付；就本租户一笔待付款的易支付订单查询易支付，已付款则结算，返回订单（同一订单 5 秒内只查一次）；不是本租户的易支付订单 `404` |
 | `GET`、`POST /billing/v1/ezfp/notify` | 公开（RSA 签名） | 仅易支付；验签后结算，纯文本答复：最终结果 `200 success`，签名错误 `401 fail`，存储出错 `500 fail` |
 | `GET/POST /operator/v1/billing/packages`、`PUT .../packages/:id` | 平台会话 | 充值包管理；下架用 `active: false`，不删除（订单引用它） |
-| `GET/PUT/DELETE /operator/v1/billing/model-prices` | 平台会话 | 单价；别名可能含 `/`，因此 PUT 的别名放在请求体 `model`，DELETE 用 `?model=` |
-| `GET /operator/v1/billing/tenants` | 平台会话 | 租户及其模式与余额 |
+| `GET /operator/v1/billing/pricing`；`PUT/DELETE .../pricing/models`；`PUT .../pricing/default-prices`；`GET .../pricing/revisions` | 平台会话 | 定价配置与历史版本。修改都须带 `base_revision`（缺失 `400`，过期 `409`），每次追加一个完整版本；别名可能含 `/`，放在请求体或 `?model=`；参照模型须是价目表中未被批准删除的条目 |
+| `GET/POST /operator/v1/billing/plans`、`PUT/DELETE .../plans/:id` | 平台会话 | 价格方案；默认方案与还有租户在用的方案不能删除（`409`） |
+| `PUT /operator/v1/billing/tenants/:id/plan` | 平台会话 | `{plan_id}`，`null` 回到默认方案；方案不存在 `400` |
+| `GET /operator/v1/billing/effective-prices` | 平台会话 | 路由别名 ∪ 已配置别名的价格来源、参照条目、基础价与售价，可选 `plan_id`（不存在 `404`）；另带 `unpriced_aliases`、`unpriced_requests_24h` |
+| `GET /operator/v1/billing/catalog`、`.../catalog/pending`；`POST .../catalog/sync`、`.../catalog/pending/approve`、`.../reject` | 平台会话 | 价目表查询（`q` 前缀）与同步状态、待审核变动、立即同步（路由超时 60 秒）、批准或拒绝 |
+| `GET /operator/v1/billing/tenants` | 平台会话 | 租户及其模式、余额、方案与尚未封账的累计 |
 | `PUT /operator/v1/billing/tenants/:id/mode` | 平台会话 | `{mode}`，`204` |
 | `POST /operator/v1/billing/tenants/:id/adjust` | 平台会话 | `{amount_micro, reason}`，写 `adjust` 账目 |
-| `GET /operator/v1/billing/orders`、`/ledger` | 平台会话 | 跨租户，可选 `tenant_id` |
+| `GET /operator/v1/billing/orders`、`/ledger` | 平台会话 | 跨租户，可选 `tenant_id`；带 `tenant_id` 时账目响应带 `pending_usage` |
+
+旧的 `/operator/v1/billing/model-prices` 于 2026-11-16 移除。公开目录 `GET /billing/v1/catalog` 的模型价格改为默认方案下的售价：保留 `input_micro_per_mtok` / `output_micro_per_mtok`（基础档售价），另带 `items` 列出全部计量项与档位；没有任何单价的别名不列出。
 
 结账与门户两条路由会调用 Dodo，单独设了 `handler.BillingCallTimeout`（9 秒）的超时，低于 Console 默认 10 秒的上游超时；其余路由沿用服务默认的 3 秒。SDK 单次尝试 4 秒、最多重试 1 次，整体再受这条路由超时约束。超时可能留下一张永远 `pending` 的订单，或一个未被记录的 Dodo 客户，两者都不影响余额。
 
 `GET /admin/v1/billing` 的 `payment_methods` 为 `{dodo, alipay, ezfp, ezfp_types}`，充值包另带 `dodo_available`/`ezfp_available`；Dodo 或易支付之一配置时挂载充值包、三个结账、退款申请与运维退款路由，客户门户与 Dodo webhook 只随 Dodo 挂载。
 
-写操作的审计动作：`billing.package.create`/`update`、`billing.price.update`/`delete`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`（易支付结账在说明中带 `via ezfp <type>`）。
+写操作的审计动作：`billing.package.create`/`update`、`billing.tenant.mode`、`billing.tenant.adjust`、`billing.checkout.create`（易支付结账在说明中带 `via ezfp <type>`）；定价与价目表：`billing.pricing.model.set`/`delete`、`billing.pricing.default.set`、`billing.plan.create`/`update`/`delete`、`billing.tenant.plan`、`billing.catalog.sync`/`auto_apply`/`approve`/`reject`（一次同步按条目写的审计最多 200 条，另有一条摘要）。`billing.price.update`/`delete` 只出现在旧记录中。
 
 ### 支付宝（一人付）
 
@@ -1009,9 +1047,11 @@ Dodo 控制台里要把 webhook 指向 `<控制面地址>/billing/v1/dodo/webhoo
 
 - Dodo 测试环境已联调到真实付款（2026-10-29）：结账会话、客户、客户门户都是真实 API 调用；测试卡付款后，用真实的 payment 对象签名投递 `payment.succeeded` 并入账；扣费、余额转负后的 `billing_blocked` 翻转、手工调整后的恢复都已验证。webhook 不是由 Dodo 直接推送的，因为联调机器没有公网地址；Gateway 的 402 没有接真实 Gateway 联调。
 - Dodo 测试账户在付款结算前钱包余额为 0，无法发起真实退款（`INSUFFICIENT_WALLET_FUNDS`），因此退款与争议只用按 SDK 结构构造的事件验证过。
-- 未做真实 PostgreSQL/MySQL live 测试验证 `billing` 迁移与 `FOR UPDATE` 扣费事务（memstore 等价实现已覆盖语义）。
+- `billing` 迁移、`FOR UPDATE` 扣费事务、余额账目与维护命令都有 gormstore live 用例，2026-11-16 在临时 PostgreSQL 16 与 MySQL 9.7 上通过；真实控制面、Gateway、Agent 与 Console 的端到端计价尚未联调。
+- 价目表只用模拟来源与上游原始文件验证，未从真实网络同步。真实 Claude Code、Codex CLI 上报的缓存字段（含 1 小时缓存）未实测。
+- `usage_records/0006` 在 PostgreSQL 分区父表上建索引期间阻塞写入，生产规模的耗时未测。
 - Gateway 用量推送的重试只在进程内，副本崩溃会丢失尚未送达的批次，对应用量不扣费。
-- `usage_charges` 与 `billing_webhook_events` 还没有保留期清理，会随用量与事件持续增长。
+- `billing_webhook_events` 还没有保留期清理，会随事件持续增长。`usage_charges` 已停止写入，下一个版本删除。
 - 手工调整余额（`/adjust`）没有幂等键，重复提交会记两次；Console 只发送一次、不自动重试。
 - 易支付只用模拟接口验证（签名向量、客户端、logic、handler、真实客户端经 HTTPS 的 e2e，临时 PostgreSQL 16 / MySQL 8.0 上的 0009 迁移与 `storetest.EzfpOrders`）：未用真实商户号联调；手机微信 jump 页面、`out_refund_no` 是否真正防重复、通知重投是否重新签名都未实测。`clientip` 是 Console 的地址，微信手机 H5 支付可能因此受限。易支付后台手工发起的退款不会同步进系统；多副本各自运行恢复，查询量随副本数增加。
 - 支付宝（一人付）只用模拟接口验证：未配置真实 `opcpay_api_key`，没有只读查询过真实 `/capabilities`、`/product`，没有真实购买与核销。只支持次数/积分套餐；一人付通知（webhook）未接入，到账靠读取额度；一人付无退款，已兑换的点数如需退回只能运维手工调整，支付宝侧额度不返还；支付宝支付的预售订单同样不能在系统内退款。次数包每次核销只能扣 1，预售的支付宝额度数量大于 1 须使用积分包。

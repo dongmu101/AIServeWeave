@@ -105,6 +105,17 @@
 - 2026-11-01：Ubuntu 上允许 `--user root`（`install.sh` 与 `agent.sh` 都支持），安装时打印一行警告；默认服务账户仍是 `aiserveweave`。systemd 单元不变（无额外加固），root 下 Agent 及其启动的 CLI 拥有 root 权限。默认测试只在 Linux 上覆盖暂存树，真实 root 服务启动未验证。
 - 2026-11-01 一行命令安装：[install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1) 下载并校验制品、兑换一次性码，再调用 `agent.sh`/`agent.ps1` 安装；`agent.ps1` 同步支持本地提交号版本。Agent 二进制与隧道协议无变化。使用见 [一行命令安装](../../deploy/agent/README.md#一行命令安装)，真实系统未验收。
 
+## 用量的计量项明细（2026-11-16）
+
+为配合[按 token 计价](../../docs/billing-token-pricing.md)，Agent 在上游报告时把缓存与推理用量分开上报，经隧道 `Usage` 的 `details = 5`（计量项名称 → 数量）与 `attributes = 6` 送到 Gateway；`PromptTokens` 仍计入全部输入，明细只是它的一部分。
+
+- **Claude 风格与 Cursor 的 CLI 输出**（`cliagent`）：`cache_read_input_tokens` / `cacheReadTokens` 记为 `input.cache_read`，`cache_creation_input_tokens` / `cacheWriteTokens` 记为 `input.cache_write`，`cache_creation.ephemeral_1h_input_tokens` 记为其中的 `input.cache_write.1h`。
+- **Codex**（`codexcli`）：`thread/tokenUsage/updated` 的 `cachedInputTokens` 记为 `input.cache_read`。
+- **托管供应商**：经 `common/runtime` 的 Anthropic 与 OpenAI adapter 填写，与 Gateway 直连上游同一套。
+- Claude Code 原生 Messages 桥接只转发原始事件，用量由 Gateway 解析，见 [Gateway STATUS「按租户/模型的持久化用量账本」](../aiServeWeaveGateway/STATUS.md#按租户模型的持久化用量账本statusmd-的-p2)。
+
+旧版 Agent 不上报明细，缓存 token 按普通输入价收费，与升级前相同；升级顺序是控制面、Gateway、Agent。字段名按各 CLI 现有输出与协议文档实现，未用真实 CLI 实机验收（尤其是 1 小时缓存的字段）。
+
 ## 尚未交付的范围
 
 - **资源感知调度**：Gateway 已按 Hello 上报的静态 GPU 显存做准入过滤。实时 CPU/内存采集、心跳上报、Agent 本机准入（资源闸门 + 分类信号量）与 Gateway 资源紧张降级已于 2026-11-14 交付，默认测试与 Linux 容器（cgroup 256 MiB）、macOS 本机实测采样通过，真实负载与 Windows 实机未验收。GPU 实时利用率、cgroup CPU 配额换算未做。

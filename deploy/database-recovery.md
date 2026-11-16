@@ -62,7 +62,7 @@ P07 会接管既有 AutoMigrate 基础表，补齐缺失的配额和 `last_login
 
 **不兼容变更（升级前必读）：**
 
-- 五张表的主键由 `(id)` 改为 `(id, 分区列)`。MySQL 9.7 仍要求主键和唯一键包含分区列，也仍不支持分区表上的外键，这是官方限制。用量记录的去重依赖 Gateway 重发时沿用原 `created_at`（已有测试覆盖）；扣费去重仍由不分区的 `usage_charges.request_id` 保证。
+- 五张表的主键由 `(id)` 改为 `(id, 分区列)`。MySQL 9.7 仍要求主键和唯一键包含分区列，也仍不支持分区表上的外键，这是官方限制。用量记录的去重依赖 Gateway 重发时沿用原 `created_at`（已有测试覆盖）；扣费去重当时由不分区的 `usage_charges.request_id` 保证，2026-11-16 起改由扣费事务按 `id` 跨分区查找（见下文「按 token 计价」）。
 - `audit_logs.created_at` 改为 `NOT NULL`，已有的 NULL 回填为迁移执行时间。
 - 保留期改为「至少保留 N 天」，最多多留一个分区周期（见下文「保留期清理」）。
 - 新增的两项保留期会在升级后第一轮清理（启动约 1 小时后）时删除超过保留期的对话轮次和审计记录；被删除的 `previous_response_id` 与未知 id 一样返回未找到。合规要求更长的部署，先调大 `ResponseTurnRetention` / `AuditLogRetention` 再升级。
@@ -100,6 +100,19 @@ P07 会接管既有 AutoMigrate 基础表，补齐缺失的配额和 `last_login
 
 - **MySQL（InnoDB）**：utf8mb4 下 32 字符和 40 字符都在 255 字节以内，长度前缀不变，所以加宽 `VARCHAR` 是 `ALGORITHM=INPLACE` 的纯元数据修改，不复制表，不重建索引，主键列和分区表也一样。2026-11-15 在 MySQL 9.7.2 上用 `ALGORITHM=INPLACE, LOCK=NONE` 验证过，分区表和带默认值的列都能在线执行。语句只在开始和结束时短暂持有元数据锁，表上有长事务时会排队。迁移语句只扩大列宽，可以重复执行，中断后用 `-migrate resume` 续跑即可。
 - **PostgreSQL**：加宽 `varchar` 不重写表，也不重建索引，只在一个短事务里持有 `ACCESS EXCLUSIVE` 锁。还在运行的旧进程里，迁移前缓存过的预处理语句会因为结果类型变了，报一次 `cached plan must not change result type`，pgx 随后会让该缓存失效。按上文升级流程先停掉全部副本，就不会遇到。
+
+## 按 token 计价（usage_records 0005 / 0006，billing 0012 / 0013 / 0014）
+
+| 迁移 | 内容 | 锁与耗时 |
+| --- | --- | --- |
+| `usage_records/0005_pricing.sql` | 缓存与费用列、明细 JSON、`charged` | 即时加列：MySQL `ALGORITHM=INSTANT`（分区表上已验证），PostgreSQL 常量默认值不重写表 |
+| `usage_records/0006_tenant_created_index.sql` | 索引 `(tenant_id, created_at, id)` | MySQL `ALGORITHM=INPLACE, LOCK=NONE`，在线建索引、不阻塞写入但耗时与数据量成正比；PostgreSQL 在分区父表上 `CREATE INDEX`，**期间阻塞 `usage_records` 的写入**（分区父表不支持 `CONCURRENTLY`），用量入账会暂停直到建完。大表先在恢复副本上计时，安排在低峰期 |
+| `billing/0012_price_catalog.sql`、`0013_pricing_config.sql` | 价目表与定价配置的新表 | 新建表 |
+| `billing/0014_usage_ledger.sql` | `tenant_billing` 累计字段与索引；`credit_ledger` 的 `period_start`、`period_end`、`request_count` | `tenant_billing` 是小表；`credit_ledger` 加列在 MySQL 用 `ALGORITHM=INSTANT` |
+
+升级须先迁移、再启动新控制面，并与 Console 一起升级；之后再升级 Gateway 与 Agent。**不能直接换回旧二进制**：扣费防重已改由 `usage_records` 承担，旧版只查 `usage_charges`，升级期间入账的记录若被 Gateway 重发会被重复扣费。回退须恢复升级前的备份。
+
+两个可选的维护命令（可重复执行、可中断后再执行）：`-migrate backfill-usage-cost` 把升级前的费用从 `usage_charges` 写回 `usage_records`；`-migrate compact-usage-ledger` 按 `Billing.LedgerTimezone` 合并升级前同一天的连续用量账目，会删除账目行，执行前须备份，设置了 `Database.MaintenanceDSN` 时用它执行。规则与行为变更见[按 token 计价](../docs/billing-token-pricing.md#升级)。
 
 ## 失败处理
 
