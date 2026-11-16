@@ -51,6 +51,14 @@ type Identity struct {
 	// nil，静态 key 与免认证两种模式下它也保持为 nil。中间件把它交给调度器——每个
 	// 节点都在那里被选出。
 	Nodes *nodeaccess.Policy
+	// UserID and Role name the signed-in tenant user behind a Studio
+	// session (studio.go). They are empty for an API key, whose requests are
+	// attributed to the key instead.
+	//
+	// UserID 与 Role 指明 Studio 会话背后已登录的租户用户（studio.go）。API Key
+	// 的请求归属到 key 本身，这两项为空。
+	UserID string
+	Role   string
 	// BillingBlocked marks a prepaid tenant whose balance is exhausted. The
 	// key authenticated; the request is refused with 402 so the caller tops
 	// up rather than replacing a key that works.

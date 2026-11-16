@@ -115,6 +115,8 @@ func run() error {
 		"token presented to the control plane's internal endpoint; must match its InternalToken. Prefer AISW_CONTROL_PLANE_TOKEN over this flag, which is visible in a process listing")
 	keyCacheTTL := flag.Duration("key-cache-ttl", controlplaneclient.DefaultCacheTTL,
 		"how long a verified API key is trusted while revocation watching is healthy; also bounds the documented commit-before-notification crash window")
+	studio := flag.Bool("studio", false,
+		"mount the Studio API (/studio/v1), authenticated by Console session tokens; requires -control-plane-addr")
 	tunnelAddr := flag.String("tunnel-addr", "", "address the tunnel listener binds, e.g. :8443; empty disables the tunnel")
 	certFile := flag.String("tls-cert", "", "PEM certificate this replica presents to Agents")
 	keyFile := flag.String("tls-key", "", "PEM private key for -tls-cert")
@@ -322,6 +324,9 @@ func run() error {
 	verifier, err := keyVerifier(*controlPlaneAddr, *controlPlaneToken, *keyCacheTTL, logger)
 	if err != nil {
 		return err
+	}
+	if *studio && verifier == nil {
+		return errors.New("-studio requires -control-plane-addr: Studio sessions are verified by the control plane")
 	}
 	if verifier != nil {
 		watchCtx, stopWatch := context.WithCancel(ctx)
@@ -564,6 +569,13 @@ func run() error {
 	}
 	defer closeWorkflowQueue()
 	httpCfg.WorkflowQueue = workflowQueue
+	if *studio {
+		// Assigned only when enabled: a nil *Verifier boxed into the interface
+		// would not be a nil interface, and would mount the Studio API.
+		// 仅在开启时赋值：装箱进接口的 nil *Verifier 不是 nil 接口，会误挂载 Studio API。
+		httpCfg.StudioSessions = verifier
+		logger.Info("serving the Studio API at /studio/v1")
+	}
 	front := httpapi.New(sched, httpCfg)
 
 	// The docs routes are registered on a mux that wraps front rather than

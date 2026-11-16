@@ -406,6 +406,13 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	})
 	server.AddRoutes([]rest.Route{
 		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/sessions/verify",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/sessions/verify", requireSharedSecret(ctx.Config.InternalToken, verifySession(ctx))),
+		},
+	})
+	server.AddRoutes([]rest.Route{
+		{
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/apikeys/revocations/watch",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/apikeys/revocations/watch", requireSharedSecret(ctx.Config.InternalToken, watchAPIKeyRevocations(ctx))),

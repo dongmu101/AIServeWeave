@@ -302,6 +302,14 @@ func (v *Verifier) cached(hash string) (httpapi.Identity, bool, uint64) {
 // 只缓存成功的校验。缓存拒绝结果会让一个用编造 key 试探的调用方把这张表塞满不为任何人
 // 服务的条目，而拒绝本来就是那条「往返一次、且没人在等」的路径。
 func (v *Verifier) store(hash string, identity httpapi.Identity, epoch uint64) {
+	v.storeFor(hash, identity, epoch, v.ttl)
+}
+
+// storeFor is store with an explicit lifetime; session verifications use a
+// shorter one than keys (see VerifySession).
+//
+// storeFor 是带显式有效期的 store；会话校验用比 key 更短的有效期（见 VerifySession）。
+func (v *Verifier) storeFor(hash string, identity httpapi.Identity, epoch uint64, ttl time.Duration) {
 	now := v.clock.Now()
 
 	v.mu.Lock()
@@ -326,19 +334,29 @@ func (v *Verifier) store(hash string, identity httpapi.Identity, epoch uint64) {
 			clear(v.entries)
 		}
 	}
-	v.entries[hash] = entry{identity: identity, expiry: now.Add(v.ttl)}
+	v.entries[hash] = entry{identity: identity, expiry: now.Add(ttl)}
 }
 
 // ask performs one verification call against the control plane.
 //
 // ask 向控制面发起一次校验调用。
 func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, error) {
-	body, err := json.Marshal(map[string]string{"hash": hash})
+	return v.askAt(ctx, "/internal/v1/apikeys/verify", map[string]string{"hash": hash}, httpapi.ErrKeyRejected)
+}
+
+// askAt posts payload to one of the control plane's verification endpoints
+// and decodes the identity both of them answer with. rejected is the error a
+// 404 maps to.
+//
+// askAt 把 payload 发往控制面的某个校验端点，并解码两者共同的身份应答。rejected 是
+// 404 所映射的错误。
+func (v *Verifier) askAt(ctx context.Context, path string, payload any, rejected error) (httpapi.Identity, error) {
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return httpapi.Identity{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		v.endpoint+"/internal/v1/apikeys/verify", bytes.NewReader(body))
+		v.endpoint+path, bytes.NewReader(body))
 	if err != nil {
 		return httpapi.Identity{}, err
 	}
@@ -368,7 +386,9 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			// exhausted balance.
 			//
 			// BillingBlocked 仅在租户为 prepaid 且余额耗尽时出现。
-			BillingBlocked bool `json:"billing_blocked"`
+			BillingBlocked bool   `json:"billing_blocked"`
+			UserID         string `json:"user_id"`
+			Role           string `json:"role"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&decoded); err != nil {
 			return httpapi.Identity{}, fmt.Errorf("controlplaneclient: decoding the verification: %w", err)
@@ -381,7 +401,7 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 			// 只差一次 join。
 			return httpapi.Identity{}, errors.New("controlplaneclient: the control plane returned no tenant")
 		}
-		identity := httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, Limits: decoded.Limits, BillingBlocked: decoded.BillingBlocked}
+		identity := httpapi.Identity{TenantID: decoded.TenantID, KeyID: decoded.KeyID, UserID: decoded.UserID, Role: decoded.Role, Limits: decoded.Limits, BillingBlocked: decoded.BillingBlocked}
 		if !decoded.Models.Unrestricted() {
 			identity.Models = &decoded.Models
 		}
@@ -394,7 +414,7 @@ func (v *Verifier) ask(ctx context.Context, hash string) (httpapi.Identity, erro
 		return identity, nil
 
 	case http.StatusNotFound:
-		return httpapi.Identity{}, httpapi.ErrKeyRejected
+		return httpapi.Identity{}, rejected
 
 	case http.StatusUnauthorized, http.StatusForbidden:
 		// This Gateway's own token was refused. That is a deployment fault,

@@ -1677,6 +1677,55 @@ func verifyKey(ctx *svc.ServiceContext) http.HandlerFunc {
 	}
 }
 
+// verifySession handles POST /internal/v1/sessions/verify: a Gateway asking
+// whether a Studio caller's Console session is live, and what its tenant may
+// consume. It applies requireSession's checks — signature, tenant scope and
+// the live Redis session — then the same tenant verification an API key gets.
+// Every rejection is the same 404, as with verifyKey; a session store outage
+// is 503 so the Gateway answers 503 rather than signing the user out.
+//
+// verifySession 处理 POST /internal/v1/sessions/verify：Gateway 询问一个 Studio
+// 调用方的 Console 会话是否有效，以及它的租户能消费什么。它执行与 requireSession
+// 相同的检查——签名、租户范围与 Redis 中的有效会话——再做与 API Key 相同的租户校验。
+// 与 verifyKey 一样，所有拒绝都是同一个 404；会话存储故障返回 503，使 Gateway 回答
+// 503 而不是把用户登出。
+func verifySession(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		var req types.SessionVerifyRequest
+		if !decode(w, r, &req) {
+			return
+		}
+		claims, err := ctx.Issuer.Parse(req.Token)
+		if err != nil || claims.TenantID == model.PlatformScope {
+			respondErr(w, logic.ErrNotFound)
+			return
+		}
+		if ctx.Sessions == nil {
+			respondErr(w, logic.ErrUnavailable)
+			return
+		}
+		err = ctx.Sessions.Validate(r.Context(), claims.SessionID, session.Subject{Kind: session.SubjectTenantUser, ID: claims.UserID}, claims.TenantID, claims.Role)
+		switch {
+		case errors.Is(err, session.ErrUnavailable):
+			respondErr(w, logic.ErrUnavailable)
+			return
+		case err != nil:
+			respondErr(w, logic.ErrNotFound)
+			return
+		}
+		verification, err := ctx.Logic.VerifyTenant(r.Context(), claims.TenantID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, types.SessionVerifyResponse{
+			VerifyResponse: renderVerification(verification),
+			UserID:         claims.UserID,
+			Role:           claims.Role,
+		})
+	}
+}
+
 // renderVerification writes a verification in the Gateway's wire form, where
 // an unrestricted model policy is two absent lists rather than a null.
 //

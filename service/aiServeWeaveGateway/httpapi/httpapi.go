@@ -37,6 +37,13 @@ type Config struct {
 	// Verifier 对着控制面解析 API Key。设置了它时以它为准，APIKeys 会被忽略；
 	// 三种模式见 auth.go。
 	Verifier KeyVerifier
+	// StudioSessions verifies Console session tokens for the Studio API
+	// (/studio/v1). nil leaves the Studio API unmounted: every /studio/ path
+	// then falls through to the ordinary API-key front door and is a 401/404.
+	//
+	// StudioSessions 为 Studio API（/studio/v1）校验 Console 会话令牌。为 nil 时
+	// 不挂载 Studio API：所有 /studio/ 路径都落到普通的 API Key 前门，得到 401/404。
+	StudioSessions SessionVerifier
 	// APIKeys is the static set of accepted Bearer tokens, used when no
 	// Verifier is configured. Empty means authentication is disabled — see
 	// auth.go's warning about that.
@@ -642,8 +649,12 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	//
 	// 限流器坐在鉴权内侧、路由外侧：在 key 被解析出来之前没有可执行的租户，而一旦有了
 	// 租户，每条路由都受配额约束。
+	front := withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))))
+	if cfg.StudioSessions != nil {
+		front = withStudio(front, h.studioHandler(cfg.StudioSessions, logger))
+	}
 	return &Server{
-		Handler:           withWriteDeadline(writeStallTimeout, withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))))),
+		Handler:           withWriteDeadline(writeStallTimeout, front),
 		handlers:          h,
 		syncer:            syncer,
 		persister:         persister,

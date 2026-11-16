@@ -1,3 +1,23 @@
+# Studio 首页与会话鉴权（2026-11-16）
+
+新服务 [Studio](service/aiServeWeaveStudio/README.md)：面向租户成员的 AI 工作台，规格见 `.scratch/studio-chat-flows/spec.md`。本次交付首页与它所需的后端：
+
+- **控制面**：新增内部接口 `POST /internal/v1/sessions/verify`，校验 Console 会话并返回与 API Key 同形的租户授权，外加用户与角色。租户授权的计算抽成 `VerifyTenant`，由 key 校验与会话校验共用。
+- **Gateway**：新增开关 `-studio`，挂载 `/studio/v1`（`me`、`models`）。会话令牌与 API Key 互不通用。会话校验结果最多缓存 5 秒，见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#studio-api-与会话鉴权2026-11-16)。
+- **Studio**：登录与登出、首页（侧边栏、问候、输入框、「+」菜单上传文件、模型选择）。**发送消息尚未接入**。
+
+升级须知：先升级控制面，再以 `-studio` 启动 Gateway。不开启 `-studio` 时行为不变。
+
+已通过的检查：
+
+- Gateway 与控制面的默认测试。新增用例：
+  - Gateway Studio 前门的鉴权矩阵、两扇前门凭据隔离、未开启时不挂载、模型授权过滤；
+  - 控制面 e2e：真实登录 → Gateway 客户端校验 → 登出后失效，以及平台运维、伪造令牌与 API Key 被拒。
+- Studio 的 lint、typecheck、18 项单元测试和生产构建。
+- 用桩上游在无头 Chromium 中走通登录、首页、附件、模型选择与退出流程。
+
+尚未验收：真实控制面、Gateway 与 Studio 的联调。
+
 # 用量按用户与 API Key 归属（2026-11-15）
 
 用量账本新增 key 与用户维度，可看每个用户、每个 key、每个模型的输入与输出 token：

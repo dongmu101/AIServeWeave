@@ -296,7 +296,27 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	// 这里读取租户是为了拿它的限制，顺便也检查它。一个被暂停的租户，其 key 若仍能
 	// 通过认证，就会让「暂停」在唯一要紧的那条路径上失去意义——推理请求路径正是租户
 	// 的 key 真正被使用的地方。
-	tenant, err := s.store.GetTenant(ctx, key.TenantID)
+	verification, err := s.VerifyTenant(ctx, key.TenantID)
+	if err != nil {
+		return Verification{}, err
+	}
+	verification.KeyID = key.ID
+	return verification, nil
+}
+
+// VerifyTenant is the tenant half of a verification: the limits, policies and
+// billing state a Gateway enforces for any credential of tenantID. A
+// suspended or missing tenant reports ErrNotFound, so a credential of it is
+// refused exactly as an unknown one is. Studio's session verification
+// shares it with VerifyKeyHash, so the two credentials cannot drift apart in
+// what they let a tenant consume.
+//
+// VerifyTenant 是校验结果中属于租户的那一半：Gateway 对 tenantID 的任何凭据所执行的
+// 限额、授权与计费状态。租户已暂停或不存在时报 ErrNotFound，其凭据因而与未知凭据被
+// 同样拒绝。Studio 的会话校验与 VerifyKeyHash 共用它，两种凭据在「租户能消费什么」
+// 上因此不会分叉。
+func (s *Service) VerifyTenant(ctx context.Context, tenantID string) (Verification, error) {
+	tenant, err := s.store.GetTenant(ctx, tenantID)
 	if err != nil {
 		if errors.Is(err, store.ErrNotFound) {
 			return Verification{}, ErrNotFound
@@ -322,7 +342,7 @@ func (s *Service) VerifyKeyHash(ctx context.Context, hash string) (Verification,
 	if err != nil {
 		return Verification{}, err
 	}
-	verification := Verification{TenantID: key.TenantID, KeyID: key.ID, Limits: tenant.Limits(), BillingBlocked: blocked}
+	verification := Verification{TenantID: tenant.ID, Limits: tenant.Limits(), BillingBlocked: blocked}
 	if !policy.Unrestricted() {
 		verification.Models = &policy
 	}

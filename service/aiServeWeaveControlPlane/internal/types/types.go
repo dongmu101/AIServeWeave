@@ -447,6 +447,29 @@ type VerifyResponse struct {
 	BillingBlocked bool `json:"billing_blocked,omitempty"`
 }
 
+// SessionVerifyRequest is a Gateway's Studio session check. It carries the
+// Console session token itself: unlike an API key, a session token is
+// already a signed, short-lived credential that this service issued, and only
+// this service holds the secret that verifies it.
+//
+// SessionVerifyRequest 是 Gateway 对 Studio 会话的校验请求。它携带控制面会话令牌
+// 本身：与 API Key 不同，会话令牌是本服务签发的、已签名且短期有效的凭据，只有本服务
+// 持有校验它的密钥。
+type SessionVerifyRequest struct {
+	Token string `json:"token"`
+}
+
+// SessionVerifyResponse is VerifyResponse plus the signed-in user. KeyID is
+// always empty: the request is attributed to the user, not to a key.
+//
+// SessionVerifyResponse 是 VerifyResponse 加上已登录用户。KeyID 恒为空：请求归属到
+// 用户而不是某把 key。
+type SessionVerifyResponse struct {
+	VerifyResponse
+	UserID string `json:"user_id"`
+	Role   string `json:"role"`
+}
+
 // TenantListResponse is one page of tenants for a platform operator.
 //
 // TenantListResponse 是给平台运维的一页租户。

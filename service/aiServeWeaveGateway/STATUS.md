@@ -159,6 +159,26 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
 
 `InternalToken` 用 `AISW_CONTROL_PLANE_TOKEN` 环境变量传，不要用 `-control-plane-token` flag —— flag 在 `ps` 输出里可见。
 
+## Studio API 与会话鉴权（2026-11-16）
+
+`-studio`（默认关闭，须同时配置 `-control-plane-addr`）挂载 `/studio/v1/*`，供 [Studio](../aiServeWeaveStudio/README.md) 使用。实现在 `httpapi/studio.go` 与 `controlplaneclient/session.go`。
+
+- **凭据互不通用**：`/studio/` 下的路径只接受 `Authorization: Bearer <控制面会话令牌>`，`/v1/*` 只接受 API Key。形如 API Key 的令牌在 Studio 前门直接 401，不发往控制面，避免明文 key 离开 Gateway。
+- **校验**：调用控制面 `POST /internal/v1/sessions/verify`（凭 `InternalToken`）。返回与 API Key 校验同形的租户授权（限额、模型授权、节点访问、账号策略、余额状态），另附 `user_id`、`role`。
+  - 拒绝时返回 401。
+  - 控制面不可达时返回 503，不会把用户登出。
+  - 平台运维会话、已登出会话、已暂停租户的会话都被拒绝。
+- **缓存**：按令牌的 SHA-256 缓存最多 5 秒（`SessionCacheTTL`，且不超过 `-key-cache-ttl`），与 key 缓存共用同一张表和吊销监听。登出与会话吊销不推进吊销 generation，因此**已登出的令牌在单个副本上最多仍可用 5 秒**。
+- **复用现有约束**：会话身份经过与 API Key 相同的模型授权、节点访问、402 余额与账号到期判断，以及租户限流。
+- **端点**：
+  - `GET /studio/v1/me`：返回 `tenant_id`、`user_id`、`role`。
+  - `GET /studio/v1/models`：与同租户 key 读 `/v1/models` 的列表相同，形状为 `{data:[{id,name}]}`。
+  - 未知路径返回 404。
+  - 错误体统一为 `{"error":{"code","message"}}`，所有响应都带 `Cache-Control: no-store`。
+- **尚未接入**：Studio 请求还不进入请求检索。对话与编排端点见 [Studio 规格](../../.scratch/studio-chat-flows/spec.md)。
+
+升级顺序：先升级控制面（新增内部接口），再以 `-studio` 启动 Gateway。
+
 ## 工作流 Job
 
 三个端点已落地，实现在 `httpapi/jobs.go`、`httpapi/jobevents.go`、`httpapi/jobstore.go` 与 `workflow/`：
