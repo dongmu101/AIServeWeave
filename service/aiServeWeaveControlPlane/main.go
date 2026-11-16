@@ -50,7 +50,7 @@ func main() {
 func run() error {
 	configFile := flag.String("f", "etc/controlplane.yaml", "path to the configuration file")
 	showVersion := flag.Bool("version", false, "print the version and exit")
-	migrate := flag.String("migrate", "", "database-only command: up, status, resume, or backfill-usage-cost")
+	migrate := flag.String("migrate", "", "database-only command: up, status, resume, backfill-usage-cost, or compact-usage-ledger")
 	metricsAddr := flag.String("metrics-addr", "127.0.0.1:9090",
 		"address the Prometheus /metrics listener binds; loopback by default, empty disables it")
 	flag.Parse()
@@ -78,13 +78,16 @@ func run() error {
 	// 仓库的文件只写出它们的名字，取值由部署自己的密钥管理提供。没有它，每个部署都得
 	// 自己模板化这个文件，而那件事常见的捷径就是把真实取值提交上去。
 	if *migrate != "" {
-		var databaseConfig struct{ Database config.DatabaseConf }
+		var databaseConfig struct {
+			Database config.DatabaseConf
+			Billing  config.BillingConf `json:",optional"`
+		}
 		if err := conf.Load(*configFile, &databaseConfig, conf.UseEnv()); err != nil {
 			return err
 		}
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 		defer stop()
-		return svc.RunDatabaseCommand(ctx, databaseConfig.Database, *migrate, os.Stdout)
+		return svc.RunDatabaseCommand(ctx, databaseConfig.Database, databaseConfig.Billing, *migrate, os.Stdout)
 	}
 
 	var cfg config.Config

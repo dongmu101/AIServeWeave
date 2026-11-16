@@ -23,6 +23,9 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	// Billing.LedgerTimezone must resolve on images without zoneinfo.
+	// 镜像里没有 zoneinfo 时，Billing.LedgerTimezone 也必须能解析。
+	_ "time/tzdata"
 
 	"github.com/zeromicro/go-zero/rest"
 
@@ -482,6 +485,27 @@ type BillingConf struct {
 	// PriceCatalog 让官方价目表（LiteLLM）保持同步。见
 	// .scratch/token-pricing/spec.md「价目表」。
 	PriceCatalog PriceCatalogConf `json:",optional"`
+	// LedgerTimezone is the IANA time zone whose midnight ends a day of
+	// usage on the balance ledger (.scratch/token-pricing/spec.md「余额
+	// 账目」), such as Asia/Taipei. Time zone data is built into the binary.
+	// A change applies to accumulations opened after it.
+	//
+	// LedgerTimezone 是余额账目以其午夜作为用量日界的 IANA 时区
+	// （.scratch/token-pricing/spec.md「余额账目」），例如 Asia/Taipei。时区数据已
+	// 内置于二进制中。修改只影响之后新开的累计。
+	LedgerTimezone string `json:",default=UTC"`
+}
+
+// LedgerLocation returns the location LedgerTimezone names; validate has
+// already rejected an unknown name, and an empty one is UTC.
+//
+// LedgerLocation 返回 LedgerTimezone 所指的时区；validate 已经拒绝了未知名称，空值
+// 表示 UTC。
+func (b BillingConf) LedgerLocation() (*time.Location, error) {
+	if b.LedgerTimezone == "" {
+		return time.UTC, nil
+	}
+	return time.LoadLocation(b.LedgerTimezone)
 }
 
 // PriceCatalogConf configures the official price list sync. The built-in
@@ -1356,6 +1380,9 @@ func (b BillingConf) validate() error {
 	}
 	if err := b.PriceCatalog.validate(); err != nil {
 		return err
+	}
+	if _, err := b.LedgerLocation(); err != nil {
+		return fmt.Errorf("config: Billing.LedgerTimezone %q is not a known IANA time zone", b.LedgerTimezone)
 	}
 	if b.SignupGrantCredits < 0 || b.SignupGrantCredits > math.MaxInt64/1_000_000 {
 		return errors.New("config: Billing.SignupGrantCredits is out of range")

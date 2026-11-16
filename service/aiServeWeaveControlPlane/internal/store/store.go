@@ -890,6 +890,29 @@ type UsageSummary struct {
 	CompletionTokens int64
 	TotalTokens      int64
 	RequestCount     int64
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache parts of
+	// PromptTokens; CostMicro is the cost charging decided for the group's
+	// records (zero for records written with billing off or before pricing).
+	//
+	// CacheReadTokens 与 CacheWriteTokens 是 PromptTokens 中提示缓存的部分；CostMicro
+	// 是扣费为该分组记录算出的费用（计费关闭时或计价出现之前写入的记录为零）。
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	CostMicro        int64
+}
+
+// UsageRecordListFilter narrows a ListUsageRecords call. TenantID is
+// required on the tenant endpoint and optional for the operator; an empty
+// field does not filter. Since is inclusive and Until exclusive.
+//
+// UsageRecordListFilter 收窄一次 ListUsageRecords 调用。TenantID 在租户端点上必填，
+// 对运维可选；字段为空表示不筛选。Since 含、Until 不含。
+type UsageRecordListFilter struct {
+	TenantID string
+	Model    string
+	KeyID    string
+	Since    time.Time
+	Until    time.Time
 }
 
 // UsageRecords persists the control plane's durable per-tenant/model token
@@ -915,6 +938,16 @@ type UsageRecords interface {
 	// SummarizeUsage 把 usage_records 聚合成 filter 窗口内每个 (tenant,
 	// model) 分组一行——即结算查询。
 	SummarizeUsage(ctx context.Context, filter UsageRecordFilter) ([]UsageSummary, error)
+	// ListUsageRecords lists records newest first, (created_at, id)
+	// descending, one page at a time.
+	//
+	// ListUsageRecords 按最新优先（(created_at, id) 降序）逐页列出记录。
+	ListUsageRecords(ctx context.Context, query ListQuery, filter UsageRecordListFilter) (Page[model.UsageRecord], error)
+	// CountUsageRecordsBySource counts the records created at or after since
+	// whose price source is source, across tenants.
+	//
+	// CountUsageRecordsBySource 跨租户统计 since 及之后创建、价格来源为 source 的记录数。
+	CountUsageRecordsBySource(ctx context.Context, source string, since time.Time) (int64, error)
 	// DeleteUsageRecordsBefore ages out rows older than before, for the
 	// retention sweeper, with DeleteRequestLogsBefore's "kept at least until
 	// before" contract.
@@ -1085,6 +1118,7 @@ type Store interface {
 	Billing
 	PricingConfig
 	PriceCatalog
+	UsageLedger
 }
 
 // CheckoutOrderFilter narrows a checkout-order list. An empty field does not
@@ -1375,15 +1409,19 @@ type Billing interface {
 	// ids are looked up across every partition, without created_at, under
 	// the tenants' billing-row locks, so a re-pushed record is neither
 	// inserted nor charged twice even when its created_at differs. now dates
-	// the ledger entries. usage_charges is no longer written; see
-	// .scratch/token-pricing/spec.md「扣费防重并入 usage_records」.
+	// any usage ledger entry an expired accumulation is sealed into, and a
+	// new accumulation is due at sealAt (store.AccrueUsage). usage_charges is
+	// no longer written; see .scratch/token-pricing/spec.md「扣费防重并入
+	// usage_records」「余额账目」.
 	//
 	// ChargeUsage 在一个事务中插入 id 尚不在 usage_records 中的记录，并在其租户为
 	// prepaid 时按 CostMicro 扣费；每条插入记录的 Charged 由 store 设置。id 在租户计费
 	// 行的锁下、不带 created_at 地跨所有分区查找，因此重推的记录即使 created_at 不同，
-	// 也既不会重复插入，也不会重复扣费。now 是账目的时间。usage_charges 不再写入；见
-	// .scratch/token-pricing/spec.md「扣费防重并入 usage_records」。
-	ChargeUsage(ctx context.Context, records []model.UsageRecord, now time.Time) (blockedChanged bool, err error)
+	// 也既不会重复插入，也不会重复扣费。扣费金额累计在计费行上而不是逐批写账目：now 是
+	// 已到期累计封账成账目的时间，新开的累计在 sealAt 到期（store.AccrueUsage）。
+	// usage_charges 不再写入；见 .scratch/token-pricing/spec.md「扣费防重并入
+	// usage_records」「余额账目」。
+	ChargeUsage(ctx context.Context, records []model.UsageRecord, now, sealAt time.Time) (blockedChanged bool, err error)
 	// ApplyBillingEvent applies one verified provider event exactly once.
 	//
 	// ApplyBillingEvent 对一个已验签的服务商事件恰好应用一次。

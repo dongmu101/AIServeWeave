@@ -2,7 +2,7 @@
 
 Status: ready-for-human
 
-实现（2026-11-16）：代码与默认测试已完成，等待与第 2、3 项合并后统一跑 live 数据库用例。
+实现（2026-11-16）：代码与默认测试已完成，live 数据库用例已在 PostgreSQL 16 与 MySQL 9.7 上通过（2026-11-16）。
 
 规格：[spec.md](../spec.md)「计量项」「上报链路」「数据变更 / `usage_records/0005_pricing.sql`」。
 

@@ -2060,14 +2060,18 @@ func usageSummaryFilterFrom(query url.Values) (store.UsageRecordFilter, bool) {
 //
 // renderUsageSummary 把一个聚合分组转换成线上形式。includeTenant 在按租户
 // 限定的端点上为 false，与 renderRequestLog 已经遵循的同一种约定。
-func renderUsageSummary(u store.UsageSummary, includeTenant bool) types.UsageSummaryEntryResponse {
+func renderUsageSummary(u store.UsageSummary, includeTenant, costs bool) types.UsageSummaryEntryResponse {
 	out := types.UsageSummaryEntryResponse{
 		UserID: u.UserID, KeyID: u.KeyID,
 		Model: u.Model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
 		TotalTokens: u.TotalTokens, RequestCount: u.RequestCount,
+		CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens,
 	}
 	if includeTenant {
 		out.TenantID = u.TenantID
+	}
+	if costs {
+		out.CostMicro = int64Ptr(u.CostMicro)
 	}
 	return out
 }
@@ -2098,7 +2102,7 @@ func summarizeUsageTenant(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		out := make([]types.UsageSummaryEntryResponse, len(summary))
 		for i, u := range summary {
-			out[i] = renderUsageSummary(u, false)
+			out[i] = renderUsageSummary(u, false, ctx.Logic.UsageCostsVisible())
 		}
 		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
 	}
@@ -2128,7 +2132,7 @@ func summarizeUsageOperator(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		out := make([]types.UsageSummaryEntryResponse, len(summary))
 		for i, u := range summary {
-			out[i] = renderUsageSummary(u, true)
+			out[i] = renderUsageSummary(u, true, ctx.Logic.UsageCostsVisible())
 		}
 		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
 	}

@@ -114,6 +114,19 @@ func CombinedRate(rates ...int64) int64 {
 	return saturate(new(big.Int).Quo(scaled.Add(scaled, half), den))
 }
 
+// ApplyRates returns price at the product of rates, rounded to the nearest
+// micro-credit per million units and saturating: a sale price for display.
+// Compute keeps the exact product when it charges.
+//
+// ApplyRates 返回 price 乘以 rates 乘积后的结果，四舍五入到每百万单位的 micro 点并饱和：
+// 用于展示的售价。Compute 扣费时使用精确的乘积。
+func ApplyRates(price int64, rates ...int64) int64 {
+	num, den := rateFraction(rates)
+	scaled := new(big.Int).Mul(big.NewInt(max(price, 0)), num)
+	half := new(big.Int).Rsh(den, 1)
+	return saturate(new(big.Int).Quo(scaled.Add(scaled, half), den))
+}
+
 // SelectTier returns the tier a request with inputTotal input tokens falls
 // in under variant: the highest AboveInputTokens among the list's prices
 // for that variant (or the default variant) that inputTotal exceeds, 0 when

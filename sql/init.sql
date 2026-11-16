@@ -458,6 +458,9 @@ ALTER TABLE usage_records
  ADD COLUMN charged BOOLEAN NULL,
  ALGORITHM=INSTANT;
 
+-- usage_records/mysql/0006_tenant_created_index.sql
+ALTER TABLE usage_records ADD INDEX idx_usage_records_tenant_created (tenant_id, created_at, id), ALGORITHM=INPLACE, LOCK=NONE;
+
 -- ============================================================
 -- api_docs
 -- ============================================================
@@ -811,6 +814,21 @@ CREATE TABLE IF NOT EXISTS pricing_config_state (
  updated_at DATETIME(6) NOT NULL
 ) ENGINE=InnoDB;
 INSERT IGNORE INTO pricing_config_state (id, version, updated_at) VALUES (1, 0, UTC_TIMESTAMP(6));
+
+-- billing/mysql/0014_usage_ledger.sql
+ALTER TABLE tenant_billing
+ ADD COLUMN usage_acc_micro BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN usage_acc_count BIGINT NOT NULL DEFAULT 0,
+ ADD COLUMN usage_acc_since DATETIME(6) NULL,
+ ADD COLUMN usage_acc_last DATETIME(6) NULL,
+ ADD COLUMN usage_acc_until DATETIME(6) NULL,
+ ADD COLUMN last_ledger_at DATETIME(6) NULL;
+CREATE INDEX idx_tenant_billing_usage_acc_until ON tenant_billing (usage_acc_until);
+ALTER TABLE credit_ledger
+ ADD COLUMN period_start DATETIME(6) NULL,
+ ADD COLUMN period_end DATETIME(6) NULL,
+ ADD COLUMN request_count BIGINT NOT NULL DEFAULT 0,
+ ALGORITHM=INSTANT;
 
 -- ============================================================
 -- jobs

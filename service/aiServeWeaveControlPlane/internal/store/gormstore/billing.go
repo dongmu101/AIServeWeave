@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -56,6 +55,8 @@ func (s *Store) InitTenantBilling(ctx context.Context, billing model.TenantBilli
 		if grant != nil {
 			billing.BalanceMicro = grant.AmountMicro
 			grant.BalanceAfterMicro = grant.AmountMicro
+			grant.CreatedAt = store.NextLedgerTime(nil, grant.CreatedAt)
+			billing.LastLedgerAt = &grant.CreatedAt
 		}
 		if err := tx.Create(&billing).Error; err != nil {
 			return err
@@ -160,7 +161,7 @@ func (s *Store) AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry)
 // REPEATABLE READ 下，对尚不存在的 id 做锁定读会加间隙锁，两个副本推送互不相关的批次时
 // 会因向对方的间隙插入而死锁。没有计费行的租户是 exempt，不加锁；它们的并发重复在
 // created_at 相同时会撞上主键，不同时最多多出一行报表记录，绝不会多扣费。
-func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, now time.Time) (bool, error) {
+func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, now, sealAt time.Time) (bool, error) {
 	if len(records) == 0 {
 		return false, nil
 	}
@@ -227,23 +228,24 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, no
 				continue
 			}
 			b := byTenant[tenantID]
+			before := b.BalanceMicro
+			if store.SealDue(b, now) {
+				if err := sealUsage(tx, &b, now); err != nil {
+					return err
+				}
+			}
 			after := b.BalanceMicro - amount
 			if after > b.BalanceMicro {
 				return errBalanceOverflow
 			}
-			if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
-				Updates(map[string]any{"balance_micro": after, "updated_at": now}).Error; err != nil {
+			b.BalanceMicro = after
+			store.AccrueUsage(&b, amount, count[tenantID], now, sealAt)
+			columns := store.UsageAccumulationColumns(b)
+			columns["balance_micro"], columns["updated_at"] = after, now
+			if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).Updates(columns).Error; err != nil {
 				return err
 			}
-			entry := model.CreditLedgerEntry{
-				ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindUsage,
-				AmountMicro: -amount, BalanceAfterMicro: after, Ref: fmt.Sprintf("%d requests", count[tenantID]),
-				CreatedAt: now,
-			}
-			if err := tx.Create(&entry).Error; err != nil {
-				return err
-			}
-			if b.Blocked() != (model.TenantBilling{Mode: b.Mode, BalanceMicro: after}).Blocked() {
+			if (model.TenantBilling{Mode: b.Mode, BalanceMicro: before}).Blocked() != b.Blocked() {
 				changed = true
 			}
 		}
@@ -579,12 +581,21 @@ func applyCredit(tx *gorm.DB, entry *model.CreditLedgerEntry) (changed, duplicat
 	if err != nil {
 		return false, false, err
 	}
+	// The pending usage is sealed first, so the usage entry lands before
+	// this one and the balance chain holds (store.SealUsage).
+	// 先为尚未封账的用量封账，使用量账目排在本条之前，余额链保持成立（store.SealUsage）。
+	if err := sealUsage(tx, &row, entry.CreatedAt); err != nil {
+		return false, false, err
+	}
 	after, ok := addBalance(row.BalanceMicro, entry.AmountMicro)
 	if !ok {
 		return false, false, errBalanceOverflow
 	}
-	if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", entry.TenantID).
-		Updates(map[string]any{"balance_micro": after, "updated_at": entry.CreatedAt}).Error; err != nil {
+	entry.CreatedAt = store.NextLedgerTime(row.LastLedgerAt, entry.CreatedAt)
+	row.LastLedgerAt = &entry.CreatedAt
+	columns := store.UsageAccumulationColumns(row)
+	columns["balance_micro"], columns["updated_at"] = after, entry.CreatedAt
+	if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", entry.TenantID).Updates(columns).Error; err != nil {
 		return false, false, err
 	}
 	entry.BalanceAfterMicro = after
@@ -687,4 +698,78 @@ func addBalance(balance, delta int64) (int64, bool) {
 		return 0, false
 	}
 	return balance + delta, true
+}
+
+// sealUsage seals row's pending usage into a ledger entry inside tx, row
+// being locked; the caller writes the changed row back. A row that predates
+// LastLedgerAt reads it from the ledger first.
+//
+// sealUsage 在 tx 内把 row 尚未封账的用量封成一条账目（row 已加锁）；由调用方把改动后
+// 的行写回。早于 LastLedgerAt 出现的行会先从账目中读取它。
+func sealUsage(tx *gorm.DB, row *model.TenantBilling, now time.Time) error {
+	if row.UsageAccCount == 0 {
+		return nil
+	}
+	if err := loadLastLedgerAt(tx, row); err != nil {
+		return err
+	}
+	entry := store.SealUsage(row, now)
+	return tx.Create(entry).Error
+}
+
+// loadLastLedgerAt fills row.LastLedgerAt from the tenant's latest ledger
+// entry when it is still unset.
+//
+// loadLastLedgerAt 在 row.LastLedgerAt 尚未设置时，用租户最新一条账目的时间填写它。
+func loadLastLedgerAt(tx *gorm.DB, row *model.TenantBilling) error {
+	if row.LastLedgerAt != nil {
+		return nil
+	}
+	var last struct{ At *time.Time }
+	if err := tx.Model(&model.CreditLedgerEntry{}).Select("MAX(created_at) AS at").
+		Where("tenant_id = ?", row.TenantID).Scan(&last).Error; err != nil {
+		return err
+	}
+	if last.At != nil {
+		at := last.At.UTC()
+		row.LastLedgerAt = &at
+	}
+	return nil
+}
+
+// SealDueUsage implements store.UsageLedger. Each tenant is sealed in its
+// own READ COMMITTED transaction under its billing-row lock and re-checked
+// there, so replicas running it at once seal each accumulation once.
+//
+// SealDueUsage 实现 store.UsageLedger。每个租户在各自的 READ COMMITTED 事务中、在其
+// 计费行锁之下封账，并在锁内重新检查，因此各副本同时执行也只会为每个累计封账一次。
+func (s *Store) SealDueUsage(ctx context.Context, now time.Time) (int, error) {
+	var due []string
+	if err := s.db.WithContext(ctx).Model(&model.TenantBilling{}).
+		Where("usage_acc_until IS NOT NULL AND usage_acc_until <= ?", now).
+		Order("usage_acc_until").Limit(store.SealDueBatch).Pluck("tenant_id", &due).Error; err != nil {
+		return 0, translate(err)
+	}
+	sealed := 0
+	for _, tenantID := range due {
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var row model.TenantBilling
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ?", tenantID).Take(&row).Error; err != nil {
+				return err
+			}
+			if !store.SealDue(row, now) {
+				return nil
+			}
+			if err := sealUsage(tx, &row, now); err != nil {
+				return err
+			}
+			sealed++
+			return tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
+				Updates(store.UsageAccumulationColumns(row)).Error
+		}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+		if err != nil {
+			return sealed, translate(err)
+		}
+	}
+	return sealed, nil
 }

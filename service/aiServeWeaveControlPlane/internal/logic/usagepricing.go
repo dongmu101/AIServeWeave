@@ -306,7 +306,7 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 		text := string(encoded)
 		r.Details = &text
 	}
-	changed, err := s.store.ChargeUsage(ctx, records, now)
+	changed, err := s.store.ChargeUsage(ctx, records, now, store.NextLocalMidnight(now, s.ledgerLocation()))
 	if err != nil {
 		return err
 	}
@@ -314,4 +314,14 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 		s.invalidator.InvalidateAll(ctx)
 	}
 	return nil
+}
+
+// ledgerLocation is the time zone of the usage ledger's days.
+//
+// ledgerLocation 是用量账目日界所用的时区。
+func (s *Service) ledgerLocation() *time.Location {
+	if s.billing == nil || s.billing.LedgerLocation == nil {
+		return time.UTC
+	}
+	return s.billing.LedgerLocation
 }

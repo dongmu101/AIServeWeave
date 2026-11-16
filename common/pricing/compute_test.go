@@ -184,6 +184,26 @@ func TestComputeRoundingRatesAndSaturation(t *testing.T) {
 	}
 }
 
+func TestApplyRates(t *testing.T) {
+	cases := []struct {
+		price int64
+		rates []int64
+		want  int64
+	}{
+		{3_000_000, nil, 3_000_000},
+		{3_000_000, []int64{1_500_000, 800_000}, 3_600_000},
+		{1, []int64{500_000}, 1}, // 0.5 rounds up / 0.5 向上舍入
+		{1, []int64{499_999}, 0},
+		{-5, []int64{RateOne}, 0},
+		{MaxPriceMicroPerM, []int64{MaxRate, MaxRate, MaxRate, MaxRate}, math.MaxInt64},
+	}
+	for _, c := range cases {
+		if got := ApplyRates(c.price, c.rates...); got != c.want {
+			t.Errorf("ApplyRates(%d, %v) = %d, want %d", c.price, c.rates, got, c.want)
+		}
+	}
+}
+
 // TestComputeAdjustsInconsistentCounts checks that a child larger than its
 // parent raises the parent, so the request is charged for at least what was
 // reported.

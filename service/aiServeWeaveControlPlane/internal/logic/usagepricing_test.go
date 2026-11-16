@@ -25,11 +25,11 @@ type capturingChargeStore struct {
 	charged []model.UsageRecord
 }
 
-func (s *capturingChargeStore) ChargeUsage(ctx context.Context, records []model.UsageRecord, now time.Time) (bool, error) {
+func (s *capturingChargeStore) ChargeUsage(ctx context.Context, records []model.UsageRecord, now, sealAt time.Time) (bool, error) {
 	s.mu.Lock()
 	s.charged = append(s.charged, records...)
 	s.mu.Unlock()
-	return s.Store.ChargeUsage(ctx, records, now)
+	return s.Store.ChargeUsage(ctx, records, now, sealAt)
 }
 
 // chargingFixture is a billing-enabled fixture whose tenant is prepaid with

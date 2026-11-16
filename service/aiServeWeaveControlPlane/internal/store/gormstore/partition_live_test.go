@@ -62,7 +62,8 @@ func (f partitionFixture) load(t *testing.T, ctx context.Context, db *gorm.DB, s
 	}
 	// The pre-partition schema has no key_id or user_id yet.
 	// 分区前的表结构还没有 key_id 与 user_id。
-	if err := db.WithContext(ctx).Omit("KeyID", "UserID").Create(&[]model.UsageRecord{
+	if err := db.WithContext(ctx).Omit("KeyID", "UserID", "CacheReadTokens", "CacheWriteTokens", "CostMicro", "BaseCostMicro",
+		"RatePPM", "PriceSource", "Charged", "Details").Create(&[]model.UsageRecord{
 		{ID: "use_old", TenantID: "tnt_p", Model: "m", Endpoint: "chat", PromptTokens: 1, CompletionTokens: 2, TotalTokens: 3, CreatedAt: f.now.AddDate(0, 0, -70)},
 		{ID: "use_recent", TenantID: "tnt_p", Model: "m", Endpoint: "chat", PromptTokens: 10, CompletionTokens: 20, TotalTokens: 30, CreatedAt: f.now.Add(-time.Hour)},
 	}).Error; err != nil {
@@ -182,6 +183,21 @@ func TestLivePartitionUpgradePreservesData(t *testing.T) {
 					}
 					delete(row, "key_id")
 					delete(row, "user_id")
+					// usage_records/0005 adds the pricing columns with their
+					// defaults: zero, empty, or NULL.
+					// usage_records/0005 以默认值新增计价列：零、空字符串或 NULL。
+					for _, column := range []string{"cache_read_tokens", "cache_write_tokens", "cost_micro", "base_cost_micro", "rate_ppm"} {
+						if n, ok := row[column].(int64); !ok || n != 0 {
+							t.Errorf("usage_records %v %s = %v, want 0 for a pre-upgrade row", row["id"], column, row[column])
+						}
+						delete(row, column)
+					}
+					if row["price_source"] != "" || row["details"] != nil || row["charged"] != nil {
+						t.Errorf("usage_records %v pricing = %q/%v/%v, want empty for a pre-upgrade row", row["id"], row["price_source"], row["details"], row["charged"])
+					}
+					delete(row, "price_source")
+					delete(row, "details")
+					delete(row, "charged")
 				}
 			}
 			if table == "audit_logs" {
@@ -460,7 +476,7 @@ func TestLivePartitionWritesStayIdempotent(t *testing.T) {
 			// 重发落在另一个月的分区：仅凭 id 仍能防止重复扣费。
 			resend := charged
 			resend.CreatedAt = at.AddDate(0, i, 0)
-			if _, err := st.ChargeUsage(ctx, []model.UsageRecord{resend}, at); err != nil {
+			if _, err := st.ChargeUsage(ctx, []model.UsageRecord{resend}, at, at.Add(time.Hour)); err != nil {
 				t.Fatalf("charge %d: %v", i, err)
 			}
 		}

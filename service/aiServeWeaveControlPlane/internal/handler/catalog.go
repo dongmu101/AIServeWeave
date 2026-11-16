@@ -44,7 +44,7 @@ func getCatalog(ctx *svc.ServiceContext) http.HandlerFunc {
 				Available: ctx.Logic.PresaleFiatAvailable(p), Remaining: max(p.Capacity-p.Outstanding, 0)}
 		}
 		for i, p := range c.Prices {
-			out.Prices[i] = types.CatalogPrice{Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok}
+			out.Prices[i] = catalogPrice(p)
 		}
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		writeJSON(w, http.StatusOK, out)

@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -17,203 +16,59 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/types"
 )
 
-func TestCreateUsageRecordsAcceptsAValidEntryAndSkipsAnInvalidOne(t *testing.T) {
+// TestLedgerShowsPendingUsageAndPeriods checks that the ledger reports the
+// usage not yet sealed and, once sealed, the entry's period and request
+// count; and that an operator sees a tenant's pending usage only when naming
+// the tenant.
+func TestLedgerShowsPendingUsageAndPeriods(t *testing.T) {
 	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	body := `{"records":[
-		{"request_id":"req_ok","tenant_id":"tnt_1","model":"llama3","endpoint":"chat","prompt_tokens":10,"completion_tokens":5,"total_tokens":15,"created_at":"2026-09-11T08:00:00Z"},
-		{"endpoint":"chat"}
-	]}`
-	req := httptest.NewRequest(http.MethodPost, "/internal/v1/usagerecords", strings.NewReader(body))
-	w := httptest.NewRecorder()
-
-	createUsageRecords(ctx)(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
+	ctx := context.Background()
+	t0 := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	services := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock(), logic.WithBilling(logic.BillingConfig{Provider: &accountHandlerProvider{}}))}
+	if err := st.InitTenantBilling(ctx, model.TenantBilling{TenantID: "tnt_l", Mode: model.BillingModePrepaid, BalanceMicro: 1000, CreatedAt: t0, UpdatedAt: t0}, nil); err != nil {
+		t.Fatal(err)
 	}
-	var resp types.CreateUsageRecordsResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+	if _, err := st.ChargeUsage(ctx, []model.UsageRecord{
+		{ID: "req_l1", TenantID: "tnt_l", Model: "m", Endpoint: "chat", PromptTokens: 1, TotalTokens: 1, CreatedAt: t0, CostMicro: 30},
+		{ID: "req_l2", TenantID: "tnt_l", Model: "m", Endpoint: "chat", PromptTokens: 1, TotalTokens: 1, CreatedAt: t0, CostMicro: 20},
+	}, t0, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
 	}
-	if resp.Accepted != 1 {
-		t.Fatalf("resp.Accepted = %d, want 1 (only the well-formed record)", resp.Accepted)
-	}
-}
-
-// capturingUsageStore records what CreateUsageRecords was asked to write.
-// capturingUsageStore 记录 CreateUsageRecords 被要求写入的内容。
-type capturingUsageStore struct {
-	*memstore.Store
-	written []model.UsageRecord
-}
-
-func (s *capturingUsageStore) CreateUsageRecords(ctx context.Context, records []model.UsageRecord) error {
-	s.written = append(s.written, records...)
-	return s.Store.CreateUsageRecords(ctx, records)
-}
-
-func TestCreateUsageRecordsAcceptsDetailsAndAttributes(t *testing.T) {
-	st := &capturingUsageStore{Store: memstore.New()}
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	body := `{"records":[
-		{"request_id":"req_1","tenant_id":"tnt_1","model":"claude","endpoint":"anthropic_messages","prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"created_at":"2026-09-11T08:00:00Z",
-		 "details":{"input.cache_read":600,"input.cache_write":300},"attributes":{"service_tier":"flex"}},
-		{"request_id":"req_2","tenant_id":"tnt_1","model":"claude","endpoint":"anthropic_messages","prompt_tokens":10,"total_tokens":10,"created_at":"2026-09-11T08:00:00Z",
-		 "details":{"input.cache_read":-1}}
-	]}`
-	w := httptest.NewRecorder()
-	createUsageRecords(ctx)(w, httptest.NewRequest(http.MethodPost, "/internal/v1/usagerecords", strings.NewReader(body)))
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
-	}
-	var resp types.CreateUsageRecordsResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Accepted != 2 {
-		t.Fatalf("accepted = %d (%v), want 2: invalid details drop only the details", resp.Accepted, err)
-	}
-	if len(st.written) != 2 {
-		t.Fatalf("wrote %d records, want 2", len(st.written))
-	}
-	first, second := st.written[0], st.written[1]
-	if first.CacheReadTokens != 600 || first.CacheWriteTokens != 300 || first.Details == nil || !strings.Contains(*first.Details, `"service_tier":"flex"`) {
-		t.Errorf("first record = %+v, want its cache columns and details", first)
-	}
-	if second.Details != nil || second.PromptTokens != 10 {
-		t.Errorf("second record = %+v, want its totals without details", second)
-	}
-}
-
-func TestSummarizeUsageTenantScopesToTheCallersTenant(t *testing.T) {
-	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	now := time.Now()
-	if err := st.CreateUsageRecords(t.Context(), []model.UsageRecord{
-		{ID: "req_mine", TenantID: "tnt_1", Model: "llama3", Endpoint: "chat", TotalTokens: 10, CreatedAt: now},
-		{ID: "req_other", TenantID: "tnt_2", Model: "llama3", Endpoint: "chat", TotalTokens: 99, CreatedAt: now},
-	}); err != nil {
-		t.Fatalf("seeding CreateUsageRecords() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary", nil)
-	req = req.WithContext(withActor(req.Context(), logic.Actor{TenantID: "tnt_1"}))
-	w := httptest.NewRecorder()
-	summarizeUsageTenant(ctx)(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
-	}
-	var resp types.UsageSummaryResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if len(resp.Items) != 1 || resp.Items[0].TotalTokens != 10 {
-		t.Fatalf("resp.Items = %+v, want exactly tnt_1's 10 tokens (tnt_2's row must not leak in)", resp.Items)
-	}
-	if resp.Items[0].TenantID != "" {
-		t.Errorf("resp.Items[0].TenantID = %q, want empty on the tenant-scoped endpoint", resp.Items[0].TenantID)
-	}
-}
-
-func TestSummarizeUsageTenantRejectsAMalformedSince(t *testing.T) {
-	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?since=not-a-time", nil)
-	req = req.WithContext(withActor(req.Context(), logic.Actor{TenantID: "tnt_1"}))
-	w := httptest.NewRecorder()
-	summarizeUsageTenant(ctx)(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for a malformed since", w.Code)
-	}
-}
-
-func TestSummarizeUsageOperatorAggregatesAcrossTenantsWhenNoneIsGiven(t *testing.T) {
-	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	now := time.Now()
-	if err := st.CreateUsageRecords(t.Context(), []model.UsageRecord{
-		{ID: "req_a", TenantID: "tnt_a", Model: "llama3", Endpoint: "chat", TotalTokens: 10, CreatedAt: now},
-		{ID: "req_b", TenantID: "tnt_b", Model: "llama3", Endpoint: "chat", TotalTokens: 20, CreatedAt: now},
-	}); err != nil {
-		t.Fatalf("seeding CreateUsageRecords() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/operator/v1/usage/summary", nil)
-	w := httptest.NewRecorder()
-	summarizeUsageOperator(ctx)(w, req)
-
-	var resp types.UsageSummaryResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if len(resp.Items) != 2 {
-		t.Fatalf("resp.Items = %+v, want both tenants' groups with no tenant_id filter", resp.Items)
-	}
-	for _, item := range resp.Items {
-		if item.TenantID == "" {
-			t.Errorf("item %+v has an empty TenantID, want it populated on the operator endpoint", item)
+	read := func(target string, actor logic.Actor, operator bool) types.LedgerListResponse {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodGet, target, nil).WithContext(withActor(ctx, actor))
+		w := httptest.NewRecorder()
+		listBillingLedger(services, operator)(w, r)
+		var out types.LedgerListResponse
+		if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &out) != nil {
+			t.Fatal(w.Code, w.Body.String())
 		}
+		return out
+	}
+	tenantActor := logic.Actor{TenantID: "tnt_l", UserID: "usr", Role: model.RoleOwner}
+	operator := logic.Actor{TenantID: model.PlatformScope, UserID: "operator", Role: model.RolePlatformOperator}
+
+	got := read("/admin/v1/billing/ledger", tenantActor, false)
+	if len(got.Items) != 0 || got.PendingUsage == nil || got.PendingUsage.AmountMicro != -50 || got.PendingUsage.RequestCount != 2 ||
+		got.PendingUsage.SealAt == nil || !got.PendingUsage.SealAt.Equal(t0.Add(time.Hour)) {
+		t.Fatalf("tenant ledger = %+v", got)
+	}
+	if read("/operator/v1/billing/ledger", operator, true).PendingUsage != nil {
+		t.Fatal("a cross-tenant ledger has no single pending accumulation")
+	}
+	if p := read("/operator/v1/billing/ledger?tenant_id=tnt_l", operator, true).PendingUsage; p == nil || p.AmountMicro != -50 {
+		t.Fatalf("operator ledger for one tenant: pending = %+v", p)
 	}
 
-	req = httptest.NewRequest(http.MethodGet, "/operator/v1/usage/summary?tenant_id=tnt_a", nil)
-	w = httptest.NewRecorder()
-	summarizeUsageOperator(ctx)(w, req)
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
+	if _, err := st.SealDueUsage(ctx, t0.Add(time.Hour)); err != nil {
+		t.Fatal(err)
 	}
-	if len(resp.Items) != 1 || resp.Items[0].TotalTokens != 10 {
-		t.Fatalf("resp.Items = %+v, want exactly tnt_a's 10 tokens when tenant_id=tnt_a", resp.Items)
+	got = read("/admin/v1/billing/ledger", tenantActor, false)
+	if got.PendingUsage != nil || len(got.Items) != 1 {
+		t.Fatalf("after sealing = %+v", got)
 	}
-}
-
-func TestSummarizeUsageOperatorRejectsAMalformedUntil(t *testing.T) {
-	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	req := httptest.NewRequest(http.MethodGet, "/operator/v1/usage/summary?until=not-a-time", nil)
-	w := httptest.NewRecorder()
-	summarizeUsageOperator(ctx)(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for a malformed until", w.Code)
-	}
-}
-
-func TestSummarizeUsageTenantGroupsByKeyOnRequest(t *testing.T) {
-	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	now := time.Now()
-	if err := st.CreateUsageRecords(t.Context(), []model.UsageRecord{
-		{ID: "req_a", TenantID: "tnt_1", KeyID: "key_a", UserID: "usr_a", Model: "llama3", Endpoint: "chat", PromptTokens: 4, CompletionTokens: 6, TotalTokens: 10, CreatedAt: now},
-		{ID: "req_b", TenantID: "tnt_1", KeyID: "key_b", UserID: "usr_b", Model: "llama3", Endpoint: "chat", TotalTokens: 20, CreatedAt: now},
-	}); err != nil {
-		t.Fatalf("seeding CreateUsageRecords() error = %v", err)
-	}
-
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?group_by=key", nil)
-	req = req.WithContext(withActor(req.Context(), logic.Actor{TenantID: "tnt_1"}))
-	w := httptest.NewRecorder()
-	summarizeUsageTenant(ctx)(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200, body=%s", w.Code, w.Body.String())
-	}
-	var resp types.UsageSummaryResponse
-	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
-		t.Fatalf("unmarshal response: %v", err)
-	}
-	if len(resp.Items) != 2 || resp.Items[0].KeyID != "key_a" || resp.Items[0].UserID != "usr_a" ||
-		resp.Items[0].PromptTokens != 4 || resp.Items[0].CompletionTokens != 6 || resp.Items[1].KeyID != "key_b" {
-		t.Fatalf("resp.Items = %+v, want key_a (usr_a, 4/6) then key_b", resp.Items)
-	}
-}
-
-func TestSummarizeUsageTenantRejectsAnUnknownGroupBy(t *testing.T) {
-	st := memstore.New()
-	ctx := &svc.ServiceContext{Logic: logic.New(st, runtime.NewSystemClock())}
-	req := httptest.NewRequest(http.MethodGet, "/admin/v1/usage/summary?group_by=tenant", nil)
-	req = req.WithContext(withActor(req.Context(), logic.Actor{TenantID: "tnt_1"}))
-	w := httptest.NewRecorder()
-	summarizeUsageTenant(ctx)(w, req)
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400 for an unknown group_by", w.Code)
+	if e := got.Items[0]; e.Kind != model.LedgerKindUsage || e.AmountMicro != -50 || e.BalanceAfterMicro != 950 || e.RequestCount != 2 ||
+		e.PeriodStart == nil || !e.PeriodStart.Equal(t0) || e.PeriodEnd == nil {
+		t.Fatalf("sealed entry = %+v", e)
 	}
 }

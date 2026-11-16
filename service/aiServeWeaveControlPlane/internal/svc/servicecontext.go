@@ -247,6 +247,12 @@ type ServiceContext struct {
 	// priceCatalogCancel/priceCatalogDone 关停价目表同步循环；未开启计费时为 nil。
 	priceCatalogCancel context.CancelFunc
 	priceCatalogDone   chan struct{}
+	// usageSealCancel/usageSealDone tear down the usage ledger seal; nil
+	// when billing is off.
+	//
+	// usageSealCancel/usageSealDone 关停用量账目的定时封账；未开启计费时为 nil。
+	usageSealCancel context.CancelFunc
+	usageSealDone   chan struct{}
 
 	// RemoteProviderRouter is non-nil when RemoteProviders is configured; the
 	// node provider routes are mounted only then.
@@ -429,10 +435,15 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		logicOpts = append(logicOpts, logic.WithAccountSales())
 	}
 	if cfg.Billing.Enabled {
+		ledgerLocation, err := cfg.Billing.LedgerLocation()
+		if err != nil {
+			return nil, err
+		}
 		billingCfg := logic.BillingConfig{
 			ReturnURL:          cfg.Billing.ReturnURL,
 			SignupGrantCredits: cfg.Billing.SignupGrantCredits,
 			RefundWindowDays:   cfg.Billing.RefundWindowDays,
+			LedgerLocation:     ledgerLocation,
 		}
 		if cfg.Billing.DodoConfigured() {
 			provider, err := dodo.New(dodo.Config{
@@ -582,6 +593,16 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		}()
 	}
 
+	var usageSealCancel context.CancelFunc
+	var usageSealDone chan struct{}
+	if cfg.Billing.Enabled {
+		usCtx, usCancel := context.WithCancel(ctx)
+		usageSealCancel, usageSealDone = usCancel, make(chan struct{})
+		go func() {
+			defer close(usageSealDone)
+			svcLogic.RunUsageLedgerSeal(usCtx)
+		}()
+	}
 	var priceCatalogCancel context.CancelFunc
 	var priceCatalogDone chan struct{}
 	if cfg.Billing.Enabled {
@@ -738,6 +759,8 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		ezfpDone:                  ezfpDone,
 		priceCatalogCancel:        priceCatalogCancel,
 		priceCatalogDone:          priceCatalogDone,
+		usageSealCancel:           usageSealCancel,
+		usageSealDone:             usageSealDone,
 		RemoteProviderRouter:      remoteProviderRouter,
 		usageRetentionCancel:      urCancel,
 		usageRetentionDone:        urDone,
@@ -922,6 +945,10 @@ func (s *ServiceContext) Close() error {
 	if s.ezfpCancel != nil {
 		s.ezfpCancel()
 		<-s.ezfpDone
+	}
+	if s.usageSealCancel != nil {
+		s.usageSealCancel()
+		<-s.usageSealDone
 	}
 	if s.priceCatalogCancel != nil {
 		s.priceCatalogCancel()

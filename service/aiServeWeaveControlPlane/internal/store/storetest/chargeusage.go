@@ -21,18 +21,19 @@ type ChargeUsageStore interface {
 // ChargeUsage checks that usage_records keeps charging exactly once
 // (.scratch/token-pricing/spec.md「扣费防重并入 usage_records」): a resend is
 // neither recorded nor charged again even when its created_at lands in
-// another month, only prepaid tenants are charged, every charged batch
-// writes one usage ledger entry per tenant, and concurrent pushes of the
-// same batch charge once.
+// another month, only prepaid tenants are charged, charges accumulate on the
+// billing row instead of writing ledger entries, and concurrent pushes of
+// the same batch charge once.
 //
 // ChargeUsage 检查 usage_records 能保证恰好扣费一次（.scratch/token-pricing/spec.md
 // 「扣费防重并入 usage_records」）：重发的记录即使 created_at 落在另一个月，也不会再次
-// 入账或扣费；只有 prepaid 租户被扣费；每个扣费批次为每个租户写一条用量账目；同一批的
+// 入账或扣费；只有 prepaid 租户被扣费；扣费累计在计费行上而不是写账目；同一批的
 // 并发推送只扣费一次。
 func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 	t.Helper()
 	ctx := context.Background()
 	t0 := time.Date(2026, 11, 16, 8, 0, 0, 0, time.UTC)
+	sealAt := t0.Add(16 * time.Hour)
 	for _, b := range []model.TenantBilling{
 		{TenantID: "tnt_prepaid", Mode: model.BillingModePrepaid, BalanceMicro: 10_000, CreatedAt: t0, UpdatedAt: t0},
 		{TenantID: "tnt_exempt", Mode: model.BillingModeExempt, BalanceMicro: 10_000, CreatedAt: t0, UpdatedAt: t0},
@@ -52,6 +53,14 @@ func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 			t.Fatal(err)
 		}
 		return b.BalanceMicro
+	}
+	pending := func(tenant string) (int64, int64) {
+		t.Helper()
+		b, err := st.GetTenantBilling(ctx, tenant)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return b.UsageAccMicro, b.UsageAccCount
 	}
 	usageEntries := func(tenant string) int {
 		t.Helper()
@@ -85,7 +94,7 @@ func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 		record("req_e", "tnt_prepaid", 0, t0),
 		record("req_a", "tnt_prepaid", 300, t0), // duplicate inside the batch / 批内重复
 	}
-	if _, err := st.ChargeUsage(ctx, batch, t0); err != nil {
+	if _, err := st.ChargeUsage(ctx, batch, t0, sealAt); err != nil {
 		t.Fatal(err)
 	}
 	if got := balance("tnt_prepaid"); got != 9_500 {
@@ -94,8 +103,13 @@ func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 	if got := balance("tnt_exempt"); got != 10_000 {
 		t.Fatalf("exempt balance = %d, want it untouched", got)
 	}
-	if usageEntries("tnt_prepaid") != 1 || usageEntries("tnt_exempt") != 0 {
-		t.Fatal("a charged batch writes one usage ledger entry for the prepaid tenant only")
+	// Charging accumulates instead of writing a ledger entry per batch.
+	// 扣费改为累计，不再逐批写账目。
+	if micro, n := pending("tnt_prepaid"); micro != 500 || n != 2 || usageEntries("tnt_prepaid") != 0 {
+		t.Fatalf("prepaid accumulation = %d over %d, %d entries; want 500 over 2 and no entry", micro, n, usageEntries("tnt_prepaid"))
+	}
+	if _, n := pending("tnt_exempt"); n != 0 {
+		t.Fatal("an exempt tenant accumulates nothing")
 	}
 	if requests("tnt_prepaid") != 3 || requests("tnt_exempt") != 1 || requests("tnt_nobilling") != 1 {
 		t.Fatal("every distinct record is recorded once, charged or not")
@@ -104,16 +118,16 @@ func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 	// Resends, one in another month's partition, change nothing.
 	// 重发（其中一条落在另一个月的分区）不改变任何东西。
 	resend := []model.UsageRecord{record("req_a", "tnt_prepaid", 300, t0), record("req_b", "tnt_prepaid", 200, t0.AddDate(0, 1, 0))}
-	if _, err := st.ChargeUsage(ctx, resend, t0.Add(time.Minute)); err != nil {
+	if _, err := st.ChargeUsage(ctx, resend, t0.Add(time.Minute), sealAt); err != nil {
 		t.Fatal(err)
 	}
-	if balance("tnt_prepaid") != 9_500 || usageEntries("tnt_prepaid") != 1 || requests("tnt_prepaid") != 3 {
+	if micro, _ := pending("tnt_prepaid"); balance("tnt_prepaid") != 9_500 || micro != 500 || requests("tnt_prepaid") != 3 {
 		t.Fatal("a resend must be neither recorded nor charged again")
 	}
 
 	// Running out of balance reports the blocked change.
 	// 余额耗尽时报告拦截状态的变化。
-	changed, err := st.ChargeUsage(ctx, []model.UsageRecord{record("req_f", "tnt_small", 80, t0)}, t0)
+	changed, err := st.ChargeUsage(ctx, []model.UsageRecord{record("req_f", "tnt_small", 80, t0)}, t0, sealAt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +144,7 @@ func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_, errs[i] = st.ChargeUsage(ctx, append([]model.UsageRecord(nil), same...), t0)
+			_, errs[i] = st.ChargeUsage(ctx, append([]model.UsageRecord(nil), same...), t0, sealAt)
 		}(i)
 	}
 	wg.Wait()
@@ -139,7 +153,7 @@ func ChargeUsage(t *testing.T, st ChargeUsageStore) {
 			t.Fatal(err)
 		}
 	}
-	if balance("tnt_prepaid") != 9_300 || usageEntries("tnt_prepaid") != 2 {
-		t.Fatalf("balance = %d after concurrent pushes, want 9300 and one more ledger entry", balance("tnt_prepaid"))
+	if micro, n := pending("tnt_prepaid"); balance("tnt_prepaid") != 9_300 || micro != 700 || n != 4 {
+		t.Fatalf("balance = %d, accumulation %d over %d after concurrent pushes; want 9300 and 700 over 4", balance("tnt_prepaid"), micro, n)
 	}
 }

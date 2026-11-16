@@ -763,6 +763,14 @@ type UsageSummaryEntryResponse struct {
 	CompletionTokens int64  `json:"completion_tokens"`
 	TotalTokens      int64  `json:"total_tokens"`
 	RequestCount     int64  `json:"request_count"`
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache parts of
+	// PromptTokens. CostMicro appears only with billing on.
+	//
+	// CacheReadTokens 与 CacheWriteTokens 是 PromptTokens 中提示缓存的部分。CostMicro
+	// 只在开启计费时出现。
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	CostMicro        *int64 `json:"cost_micro,omitempty"`
 }
 
 // UsageSummaryResponse is the settlement query's full result: one entry per

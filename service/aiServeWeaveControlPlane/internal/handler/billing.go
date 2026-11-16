@@ -157,12 +157,22 @@ func listBillingLedger(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 			items[i] = types.LedgerEntry{
 				ID: e.ID, Kind: e.Kind, AmountMicro: e.AmountMicro, BalanceAfterMicro: e.BalanceAfterMicro,
 				Ref: e.Ref, CreatedAt: e.CreatedAt,
+				PeriodStart: e.PeriodStart, PeriodEnd: e.PeriodEnd, RequestCount: e.RequestCount,
 			}
 			if operator {
 				items[i].TenantID = e.TenantID
 			}
 		}
-		writeJSON(w, http.StatusOK, types.LedgerListResponse{Items: items, NextCursor: page.NextCursor})
+		resp := types.LedgerListResponse{Items: items, NextCursor: page.NextCursor}
+		row, pending, err := ctx.Logic.PendingUsage(r.Context(), actor, filter.TenantID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		if pending {
+			resp.PendingUsage = renderPendingUsage(row)
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 }
 
@@ -319,6 +329,9 @@ func listBillingTenants(ctx *svc.ServiceContext) http.HandlerFunc {
 				ID: v.Tenant.ID, Name: v.Tenant.Name, Status: v.Tenant.Status, Mode: v.Billing.Mode,
 				BalanceMicro: v.Billing.BalanceMicro, Blocked: v.Billing.Blocked(), CreatedAt: v.Tenant.CreatedAt,
 				PricePlanID: v.PricePlanID,
+			}
+			if v.Billing.UsageAccCount > 0 {
+				items[i].PendingUsage = renderPendingUsage(v.Billing)
 			}
 		}
 		writeJSON(w, http.StatusOK, types.BillingTenantListResponse{Items: items, NextCursor: page.NextCursor})
@@ -545,4 +558,14 @@ func renderCreditPackage(pkg model.CreditPackage, operator bool) types.CreditPac
 		out.DodoProductID = pkg.DodoProductID
 	}
 	return out
+}
+
+// renderPendingUsage converts a billing row's accumulation to its wire form.
+//
+// renderPendingUsage 把计费行上的累计转换为线上形式。
+func renderPendingUsage(row model.TenantBilling) *types.PendingUsage {
+	return &types.PendingUsage{
+		AmountMicro: -row.UsageAccMicro, RequestCount: row.UsageAccCount,
+		Since: row.UsageAccSince, Last: row.UsageAccLast, SealAt: row.UsageAccUntil,
+	}
 }

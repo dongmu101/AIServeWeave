@@ -199,6 +199,15 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			billingRoute(http.MethodDelete, "/operator/v1/billing/plans/:id", requirePlatformSession, deletePricePlan(ctx)),
 			billingRoute(http.MethodPut, "/operator/v1/billing/tenants/:id/plan", requirePlatformSession, setTenantPricePlan(ctx)),
 		})
+		// Prices as charging resolves them now: every alias under one plan
+		// for the operator, the caller's own under its plan for a tenant.
+		//
+		// 按扣费当前的解析方式得出的价格：运维看所有别名在某个方案下的价格，租户看自己方案
+		// 下的价格。
+		server.AddRoutes([]rest.Route{
+			billingRoute(http.MethodGet, "/operator/v1/billing/effective-prices", requirePlatformSession, getEffectivePrices(ctx)),
+			billingRoute(http.MethodGet, "/admin/v1/billing/prices", requireSession, getTenantPrices(ctx)),
+		})
 		// The price catalog: the official price list, and the review of the
 		// upstream changes that do not take effect on their own. A manual
 		// sync fetches the upstream list, so it gets the fetch's bound.
@@ -389,6 +398,10 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 		// 的、由会话限定范围的只读聚合。
 		{Method: http.MethodGet, Path: "/admin/v1/usage/summary", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/usage/summary", requireSession(ctx, summarizeUsageTenant(ctx)))},
 		{Method: http.MethodGet, Path: "/operator/v1/usage/summary", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/usage/summary", requirePlatformSession(ctx, summarizeUsageOperator(ctx)))},
+		// Per-request usage, with costs when billing is on
+		// (.scratch/token-pricing). / 逐笔用量，开启计费时带费用（.scratch/token-pricing）。
+		{Method: http.MethodGet, Path: "/admin/v1/usage/records", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/usage/records", requireSession(ctx, listUsageRecordsTenant(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/usage/records", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/usage/records", requirePlatformSession(ctx, listUsageRecordsOperator(ctx)))},
 		// Alert rule CRUD (STATUS.md's P09/C29), platform-wide like fleet
 		// metrics themselves.
 		//

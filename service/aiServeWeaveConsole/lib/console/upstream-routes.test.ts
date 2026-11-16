@@ -525,10 +525,26 @@ test("operator billing routes resolve only on the operator surface with their ow
     { name: "replace package", method: "PUT", path: "/operator/v1/billing/packages/pkg_1", search: "" },
     { name: "no package delete", method: "DELETE", path: "/operator/v1/billing/packages/pkg_1", search: null },
     { name: "traversal as package id", method: "PUT", path: "/operator/v1/billing/packages/..", search: null },
-    { name: "list prices", method: "GET", path: "/operator/v1/billing/model-prices", search: "" },
-    { name: "put price", method: "PUT", path: "/operator/v1/billing/model-prices", query: "model=x", search: "" },
-    { name: "delete price takes only the alias", method: "DELETE", path: "/operator/v1/billing/model-prices", query: "model=org%2Fm&tenant_id=t", search: "?model=org%2Fm" },
-    { name: "an alias is never a path segment", method: "PUT", path: "/operator/v1/billing/model-prices/m", search: null },
+    { name: "the removed per-model prices are gone", method: "GET", path: "/operator/v1/billing/model-prices", search: null },
+    { name: "pricing configuration", method: "GET", path: "/operator/v1/billing/pricing", query: "debug=1", search: "" },
+    { name: "set an alias's pricing", method: "PUT", path: "/operator/v1/billing/pricing/models", query: "model=x", search: "" },
+    { name: "delete an alias's pricing takes the alias and base", method: "DELETE", path: "/operator/v1/billing/pricing/models", query: "model=org%2Fm&base_revision=3&tenant_id=t", search: "?model=org%2Fm&base_revision=3" },
+    { name: "an alias is never a path segment", method: "PUT", path: "/operator/v1/billing/pricing/models/m", search: null },
+    { name: "default prices", method: "PUT", path: "/operator/v1/billing/pricing/default-prices", search: "" },
+    { name: "revisions", method: "GET", path: "/operator/v1/billing/pricing/revisions", query: "limit=20&cursor=c&x=1", search: "?limit=20&cursor=c" },
+    { name: "list plans", method: "GET", path: "/operator/v1/billing/plans", search: "" },
+    { name: "create plan", method: "POST", path: "/operator/v1/billing/plans", search: "" },
+    { name: "replace plan", method: "PUT", path: "/operator/v1/billing/plans/plan_1", search: "" },
+    { name: "delete plan takes its base", method: "DELETE", path: "/operator/v1/billing/plans/plan_1", query: "base_revision=4&x=1", search: "?base_revision=4" },
+    { name: "assign a tenant's plan", method: "PUT", path: "/operator/v1/billing/tenants/tnt_1/plan", search: "" },
+    { name: "effective prices by plan", method: "GET", path: "/operator/v1/billing/effective-prices", query: "plan_id=plan_1&tenant_id=t", search: "?plan_id=plan_1" },
+    { name: "price catalog", method: "GET", path: "/operator/v1/billing/catalog", query: "q=claude&status=active&limit=5&x=1", search: "?limit=5&q=claude&status=active" },
+    { name: "catalog sync", method: "POST", path: "/operator/v1/billing/catalog/sync", search: "" },
+    { name: "catalog sync is not readable", method: "GET", path: "/operator/v1/billing/catalog/sync", search: null },
+    { name: "catalog reviews", method: "GET", path: "/operator/v1/billing/catalog/pending", search: "" },
+    { name: "approve a review", method: "POST", path: "/operator/v1/billing/catalog/pending/approve", search: "" },
+    { name: "reject a review", method: "POST", path: "/operator/v1/billing/catalog/pending/reject", search: "" },
+    { name: "per-request usage", method: "GET", path: "/operator/v1/usage/records", query: "tenant_id=t&model=m&key_id=k&since=a&until=b&limit=5&cursor=c&x=1", search: "?since=a&until=b&tenant_id=t&model=m&key_id=k&limit=5&cursor=c" },
     { name: "list tenants", method: "GET", path: "/operator/v1/billing/tenants", query: "limit=25&cursor=c&status=active&q=acme&debug=1", search: "?limit=25&cursor=c&status=active&q=acme" },
     { name: "set mode", method: "PUT", path: "/operator/v1/billing/tenants/tnt_1/mode", search: "" },
     { name: "mode is not readable", method: "GET", path: "/operator/v1/billing/tenants/tnt_1/mode", search: null },
@@ -565,4 +581,14 @@ test("tenant node providers are allowlisted on the admin surface only", () => {
   assert.equal(resolve("POST", node), null);
   assert.equal(resolve("PUT", node), null);
   assert.equal(resolve("GET", `${node}/remote-openai/extra`), null);
+});
+
+test("tenant usage records and prices are allowlisted on the admin surface only", () => {
+  const operatorResolve = (method: string, path: string) => resolveOperatorUpstream(method, path.split("/").filter(Boolean), new URLSearchParams());
+  const records = resolve("GET", "/admin/v1/usage/records", "model=m&key_id=k&since=a&until=b&limit=5&cursor=c&tenant_id=other");
+  assert.equal(records?.search, "?since=a&until=b&model=m&key_id=k&limit=5&cursor=c", "a tenant never names another tenant");
+  assert.equal(resolve("GET", "/admin/v1/billing/prices", "plan_id=p")?.search, "");
+  assert.equal(resolve("GET", "/admin/v1/billing/effective-prices", ""), null);
+  assert.equal(operatorResolve("GET", "/admin/v1/usage/records"), null);
+  assert.equal(operatorResolve("GET", "/admin/v1/billing/prices"), null);
 });

@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing"
@@ -52,6 +53,11 @@ type BillingConfig struct {
 	//
 	// Ezfp 是易支付，为以 CNY 标价的商品提供的第二个法币服务商。为 nil 时关闭。
 	Ezfp *EzfpConfig
+	// LedgerLocation is the time zone whose midnight ends a day of usage on
+	// the ledger (Billing.LedgerTimezone); nil is UTC.
+	// LedgerLocation 是用量账目以其午夜为日界的时区（Billing.LedgerTimezone）；nil
+	// 表示 UTC。
+	LedgerLocation *time.Location
 }
 
 // WithBilling turns billing on. Without it the Service charges nothing,
@@ -393,6 +399,34 @@ func (s *Service) ListBillingLedger(ctx context.Context, actor Actor, query stor
 	}
 	page, err := s.store.ListCreditLedger(ctx, query, filter)
 	return page, translate(err)
+}
+
+// PendingUsage returns the billing row whose accumulation a tenant's ledger
+// list shows as pending, scoped as ListBillingLedger is: a tenant reads its
+// own, an operator names one. It reports false when nothing is accumulating
+// or no single tenant is named.
+//
+// PendingUsage 返回租户账目列表中显示为「进行中」的累计所在的计费行，范围限定同
+// ListBillingLedger：租户读自己的，运维指定一个租户。没有累计或没有指定单一租户时报告
+// false。
+func (s *Service) PendingUsage(ctx context.Context, actor Actor, tenantID string) (model.TenantBilling, bool, error) {
+	if !s.accountsEnabled() {
+		return model.TenantBilling{}, false, ErrNotFound
+	}
+	if !isPlatformActor(actor) {
+		tenantID = actor.TenantID
+	}
+	if tenantID == "" {
+		return model.TenantBilling{}, false, nil
+	}
+	row, err := s.store.GetTenantBilling(ctx, tenantID)
+	if errors.Is(err, store.ErrNotFound) {
+		return model.TenantBilling{}, false, nil
+	}
+	if err != nil {
+		return model.TenantBilling{}, false, translate(err)
+	}
+	return row, row.UsageAccCount > 0, nil
 }
 
 // ListBillingOrders reads checkout orders, scoped as ListBillingLedger is.

@@ -306,7 +306,7 @@ input.cache_write.1h  按 100 计
 
 ### 显示
 
-- 账目接口另外返回 `pending_usage`（累计金额、请求数、起止时间）。Console 把它显示在账目页最上面的「进行中」一行，并注明尚未封账。
+- 账目接口另外返回 `pending_usage`（累计金额、请求数、起止时间、封账期限）。金额与用量账目一样为负数：最新一条账目的 `balance_after` 加上它就是余额。只有单一租户的账目列表（租户自己的，或运维带 `tenant_id` 查询）才带它。Console 把它显示在账目页最上面的「进行中」一行，并注明尚未封账。
 - 用量账目显示时间段（`period_start`–`period_end`）和请求数，并链接到用量页这段时间的明细。账目按扣费时间分段，用量页按请求时间筛选，两者的边缘可能差几秒，页面上注明。
 - `ref` 照旧写「N requests」，旧版 Console 也能显示。
 - 运维的租户列表新增「未封账用量」。
@@ -433,7 +433,7 @@ input.cache_write.1h  按 100 计
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
 | `GET` | `/admin/v1/billing/prices` | 本租户已获授权的别名，按本租户的方案算出的各计量项、各档售价（`Billing.Enabled`） |
-| `GET` | `/admin/v1/usage/records` | **新增**。逐笔明细，新的在前，游标分页，每页最多 200 条；可选 `from`、`to`、`model`、`key_id`。每行包含：`request_id`、`created_at`、`model`、`endpoint`、`key_id`、`user_id`、输入与输出总数、计量项明细。开启计费时另带 `cost_micro`、`base_cost_micro`、`rate_ppm`、`price_source`、`charged`、各计量项的售价与费用。不包含 `ref` |
+| `GET` | `/admin/v1/usage/records` | **新增**。逐笔明细，新的在前，游标分页，每页最多 200 条；可选 `since`、`until`（与汇总接口一致）、`model`、`key_id`。每行包含：`request_id`、`created_at`、`model`、`endpoint`、`key_id`、`user_id`、输入与输出总数、计量项明细。开启计费时另带 `cost_micro`、`base_cost_micro`、`rate_ppm`、`price_source`、`charged`、各计量项的售价与费用。不包含 `ref` |
 
 所有字段都直接取自 `usage_records`，不需要关联其他表。
 
@@ -442,6 +442,10 @@ input.cache_write.1h  按 100 计
 ### 用量汇总
 
 `/admin/v1/usage/summary` 与 `/operator/v1/usage/summary` 的每行新增 `cache_read_tokens`、`cache_write_tokens`，开启计费时另带 `cost_micro`。仍是同一张表的一次分组求和。控制面 STATUS 中「这两个端点只做用量汇总，不做定价」改为：汇总只读取入账时已算好的费用，不重新计价。
+
+### 未定价提示
+
+`effective-prices` 响应带 `unpriced_aliases`（没有任何单价的路由别名）与 `unpriced_requests_24h`（最近 24 小时 `price_source = none` 的用量数，跨租户）。
 
 ### 公开目录
 
