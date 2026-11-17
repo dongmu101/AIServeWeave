@@ -338,13 +338,16 @@ check_image_tag() {
     warn "deploy/docker-compose.yaml 与镜像 ${tag} 构建时不同，之后新增的启动参数旧镜像不认识。对照: git -C $ROOT_DIR diff $commit HEAD -- deploy/docker-compose.yaml"
 }
 
-# pull_images pulls every AIServeWeave image at the configured tag. It pulls
+# pull_images pulls every AIServeWeave image at the configured tag and
+# returns non-zero when any of them is missing; prepare_images decides what a
+# failure means. It pulls
 # all of them even when only some services were named: compose builds an
 # image it cannot find for a service with a build section, and building on
 # the host is exactly what this mode avoids. Unchanged images pull nothing,
 # and compose recreates only containers whose image changed.
 #
-# pull_images 按配置的 tag 拉取全部 AIServeWeave 镜像。即使只点名了部分服务也全部拉取：
+# pull_images 按配置的 tag 拉取全部 AIServeWeave 镜像，有任何一个缺失时返回非零；失败意味着
+# 什么由 prepare_images 决定。即使只点名了部分服务也全部拉取：
 # 对带 build 段的服务，compose 找不到镜像时会在本机构建，而这正是本模式要避免的。未变化的
 # 镜像不会产生下载，compose 也只重建镜像有变化的容器。
 pull_images() {
@@ -353,21 +356,54 @@ pull_images() {
   check_image_tag "$tag"
   log "拉取预构建镜像 ${repo:-ghcr.io/dongmu101}/aiserveweave-*:${tag}"
   # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
-  compose pull $BUILD_ORDER ||
-    die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已在构建机对该提交 make publish）；仓库为私有时先 docker login。代码可能已更新，服务未改动"
+  compose pull $BUILD_ORDER
+}
+
+# build_missing_images builds, one at a time, the AIServeWeave images that are
+# not on this host, under the names compose will start. Services sharing an
+# image (registry-init and registry) build it once.
+#
+# build_missing_images 逐个构建本机缺失的 AIServeWeave 镜像，名字与 compose 将启动的一致。
+# 共用镜像的服务（registry-init 与 registry）只构建一次。
+build_missing_images() {
+  local version="$1" service image built=0
+  for service in $BUILD_ORDER; do
+    image="$(compose config --images "$service")"
+    docker image inspect "$image" >/dev/null 2>&1 && continue
+    (( built == 1 )) || check_memory
+    built=1
+    build_images "$version" "$service"
+  done
 }
 
 # prepare_images makes the images that compose up will start: pulled when
 # AISW_IMAGE_TAG names a release, otherwise built from this checkout.
 #
+# In follow mode the tag is this checkout's own version, so an image nobody
+# published yet (make publish not run for this commit) can be built here from
+# the same code under the same name; the upgrade goes on instead of stopping.
+# A tag pinned with --image-tag names a release that should exist, so a
+# failed pull there still stops the upgrade.
+#
 # prepare_images 准备 compose up 要启动的镜像：AISW_IMAGE_TAG 指定了 release 时拉取，
 # 否则从当前检出构建。
+#
+# 跟随模式下 tag 就是当前检出的版本，因此尚未发布的镜像（该提交没有 make publish）可以在本机
+# 用同一份代码、以同一个名字构建，升级继续而不是中止。用 --image-tag 固定的 tag 指向一个本应
+# 存在的 release，拉取失败时仍然中止。
 prepare_images() {
-  local version="$1" tag
+  local version="$1" tag repo
   shift
   tag="$(image_tag)"
   if [[ -n "$tag" ]]; then
-    pull_images "$tag"
+    pull_images "$tag" && return 0
+    repo="${AISW_IMAGE_REPO:-$(env_get AISW_IMAGE_REPO)}"
+    if [[ "$(env_get AISW_IMAGE_FOLLOW)" == true && "$tag" == "$version" ]]; then
+      warn "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的全部镜像（该提交未 make publish），改为在本机构建缺失的镜像"
+      build_missing_images "$version"
+      return 0
+    fi
+    die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已在构建机对该提交 make publish）；仓库为私有时先 docker login。代码可能已更新，服务未改动"
   else
     check_memory
     build_images "$version" "$@"
