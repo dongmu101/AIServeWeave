@@ -18,7 +18,7 @@ cd "$DEPLOY_DIR"
 #
 # BUILD_ORDER 一次只构建一个镜像。Compose 默认并行构建，四个 Go 与 Next.js 构建同时跑会
 # 耗尽一台 4 GiB 的主机。
-BUILD_ORDER="registry-init registry controlplane gateway console"
+BUILD_ORDER="registry-init registry controlplane gateway console studio"
 
 # SECRET_KEYS are the independent secrets .env.example asks for, generated
 # with openssl rand -base64 32; the Console session secret takes 48 bytes.
@@ -131,6 +131,12 @@ fill_secrets() {
   done
   if [[ -z "$(env_get AISW_CONSOLE_SESSION_SECRET)" ]]; then
     env_set AISW_CONSOLE_SESSION_SECRET "$(openssl rand -base64 48)"
+    filled=$((filled + 1))
+  fi
+  # Studio seals its own cookie and must not share the Console's secret.
+  # Studio 密封自己的 Cookie，不能与 Console 共用密钥。
+  if [[ -z "$(env_get AISW_STUDIO_SESSION_SECRET)" ]]; then
+    env_set AISW_STUDIO_SESSION_SECRET "$(openssl rand -base64 48)"
     filled=$((filled + 1))
   fi
   (( filled == 0 )) || log "已生成 $filled 个空缺的密钥"

@@ -496,6 +496,9 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
 |---|---|---|---|
 | `open7x.com`、`www` | Console `:3000`，`/agent/` 转 Gateway `:8080` | 代理（橙色云） | 可用 Cloudflare Origin CA |
 | `api.open7x.com` | Gateway `:8080` | 仅 DNS（灰色云） | 必须公开受信，如 Let's Encrypt |
+| `studio.open7x.com` | Studio `:3100` | 代理（橙色云） | 可用 Cloudflare Origin CA（须覆盖该域名） |
+
+Studio 随 Compose 一起启动（Gateway 以 `-studio` 挂载 Studio API），会话密钥 `AISW_STUDIO_SESSION_SECRET` 由脚本自动生成。HTTPS 之后在 `deploy/.env` 设置 `AISW_STUDIO_COOKIE_SECURE=true`；设置 `AISW_CONSOLE_STUDIO_URL=https://studio.open7x.com` 后控制台顶栏显示 Studio 入口。
 
 API 不经过 Cloudflare 代理：非 Enterprise 方案的请求体上限为 100 MB，低于 Gateway 工作流上传的
 200 MiB；源站 100 秒内未返回响应头即返回 524，且无法调整。流式请求有心跳不受影响，非流式长请求会失败。

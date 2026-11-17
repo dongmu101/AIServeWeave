@@ -38,7 +38,7 @@ usage() {
   cat <<'EOF'
 用法: deploy/upgrade.sh [选项] [服务...]
 
-  服务...           只重建这些服务（registry-init registry controlplane gateway console），默认全部
+  服务...           只重建这些服务（registry-init registry controlplane gateway console studio），默认全部
   --no-pull         不拉取代码，直接用当前工作区重建
   --force           兼容旧用法，无作用（代码没有新提交时也会照常重建）
   --no-backup       跳过 MySQL 与 Registry 备份

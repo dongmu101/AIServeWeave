@@ -487,6 +487,39 @@ services:
       retries: 3
       start_period: 20s
 
+  studio:
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-studio:${AISW_IMAGE_TAG:-local}
+    build:
+      context: ../service/aiServeWeaveStudio
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${STUDIO_MEM_LIMIT:-384m}
+    environment:
+      # 与 Console 相同的理由：把 V8 老生代堆限制在容器上限之下。
+      # Same reason as the Console: keep the V8 old-space heap below the container limit.
+      NODE_OPTIONS: --max-old-space-size=${STUDIO_NODE_HEAP_MB:-256}
+      AISW_STUDIO_CONTROL_PLANE_URL: http://controlplane:8090
+      # Gateway 须以 -studio 启动（见下方 gateway 的 command）。
+      # The Gateway must run with -studio (see its command below).
+      AISW_STUDIO_GATEWAY_URL: http://gateway:8080
+      AISW_STUDIO_SESSION_SECRET: ${AISW_STUDIO_SESSION_SECRET:?set it in deploy/.env — openssl rand -base64 48}
+      # 本地 Compose 使用回环 HTTP；部署在 HTTPS 之后时启用 Secure Cookie。
+      # Local Compose uses HTTP on loopback. Enable Secure cookies behind HTTPS.
+      AISW_STUDIO_COOKIE_SECURE: ${AISW_STUDIO_COOKIE_SECURE:-false}
+    ports:
+      - "127.0.0.1:${STUDIO_PORT:-3100}:3100"
+    depends_on:
+      controlplane:
+        condition: service_started
+      gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
   gateway:
     image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-gateway:${AISW_IMAGE_TAG:-local}
     build:
@@ -523,6 +556,10 @@ services:
       - -registry-addr=registry:9443
       - -registry-ca=/registry-data/ca/ca-cert.pem
       - -control-plane-addr=http://controlplane:8090
+      # Mount /studio/v1 for the Studio service below; session tokens are
+      # verified with the control plane using AISW_CONTROL_PLANE_TOKEN.
+      # 为下面的 Studio 服务挂载 /studio/v1；会话令牌经控制面校验，凭 AISW_CONTROL_PLANE_TOKEN。
+      - -studio
       - -redis-addr=redis:6379
       # 跨副本队列（默认关闭），都依赖上面的 Redis；这里的 Redis 没有 maxmemory，等同于
       # noeviction，队列状态不会被淘汰。所有副本升级后再打开，见 Gateway STATUS「工作流 Job
