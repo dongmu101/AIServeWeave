@@ -6,6 +6,7 @@ import { ConsoleShell } from "@/app/console/console-shell";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
 import { PUBLIC_DOCS_HEADER, PUBLIC_DOCS_ROOT } from "@/lib/console/public-docs";
+import { studioUrl } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -53,7 +54,7 @@ export default async function ConsoleLayout({
   }
 
   return (
-    <ConsoleShell user={session.user}>
+    <ConsoleShell user={session.user} studioUrl={studioUrl()}>
       {children}
     </ConsoleShell>
   );

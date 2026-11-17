@@ -34,6 +34,7 @@ import {
   ServerIcon,
   SettingsIcon,
   ShieldCheckIcon,
+  SparklesIcon,
   UserRoundIcon,
   UsersIcon,
   type LucideIcon,
@@ -121,9 +122,14 @@ function navItemClass(active: boolean): string {
  */
 export function ConsoleShell({
   user,
+  studioUrl,
   children,
 }: {
   user: SessionUser;
+  /** studioUrl links to Studio in a new tab; null hides the entry.
+   *
+   * studioUrl 在新分页打开 Studio；为 null 时不显示入口。 */
+  studioUrl: string | null;
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -236,6 +242,19 @@ export function ConsoleShell({
               </DropdownMenuContent>
             </DropdownMenu>
           </nav>
+          {studioUrl ? (
+            <a
+              href={studioUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label={t("tenant.studio")}
+              title={t("tenant.studio")}
+              className={buttonVariants({ variant: "ghost", size: "sm", className: "shrink-0" })}
+            >
+              <SparklesIcon aria-hidden="true" className="text-brand" />
+              <span className="hidden sm:inline">{t("tenant.studio")}</span>
+            </a>
+          ) : null}
           <SupportLink label={t("common.telegramSupport")} />
           <LanguageSwitcher />
           <DropdownMenu>

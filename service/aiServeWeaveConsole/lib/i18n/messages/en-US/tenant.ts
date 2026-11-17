@@ -92,6 +92,7 @@ const tenant = {
   "tenant.aiServicesModels": "AI services & models",
   "tenant.workflows": "Workflows",
   "tenant.apiDocumentation": "API documentation",
+  "tenant.studio": "Studio",
   "tenant.workflowTemplates": "Templates",
   "tenant.runs": "Runs",
   "tenant.runHistory": "Run history",

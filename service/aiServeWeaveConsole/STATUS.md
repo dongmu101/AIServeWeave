@@ -1,3 +1,9 @@
+## 顶栏 Studio 入口（2026-11-17）
+
+设置 `AISW_CONSOLE_STUDIO_URL`（Studio 的公开地址，可带路径前缀）后，控制台顶栏在客服链接左侧显示「Studio」，在新分页打开；未设置或不是绝对 http(s) URL 时不显示。Studio 有自己的登录，这里只是链接。实现在 `lib/server/config.ts` 的 `studioUrl`、`app/console/console-shell.tsx`；Compose 与 `deploy/.env.example` 已同步。
+
+验证：lint、typecheck、409 项单元测试与生产构建通过。未在浏览器中查看，未接真实 Studio。
+
 ## 按 token 计价的运维与租户页面（2026-11-16）
 
 配合控制面的[按 token 计价](../../docs/billing-token-pricing.md)：

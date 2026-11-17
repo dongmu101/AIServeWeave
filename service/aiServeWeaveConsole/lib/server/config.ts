@@ -187,6 +187,31 @@ export function publicGatewayUrl(): string {
   }
 }
 
+/** studioUrl is the public address of Studio, the separate chat workspace the
+ * console header links to. Studio is its own service with its own sign-in, so
+ * this is only a link; unset or malformed, there is no entry to show and it
+ * returns null. Like publicGatewayUrl it keeps a path prefix.
+ *
+ * studioUrl 是 Studio 的公开地址，控制台顶栏链接到这个独立的对话工作台。Studio 是
+ * 单独的服务、有自己的登录，这里只是一个链接；未设置或格式不对时没有入口可显示，返回
+ * null。与 publicGatewayUrl 一样保留路径前缀。 */
+export function studioUrl(): string | null {
+  const raw = process.env.AISW_CONSOLE_STUDIO_URL?.trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+    }
+  } catch {
+    // Fall through to no entry. / 退回为不显示入口。
+  }
+  console.warn("[console] AISW_CONSOLE_STUDIO_URL is not an absolute http(s) URL; the Studio entry is hidden.");
+  return null;
+}
+
 /**
  * sessionSecret reads the key material the session cookie is sealed with.
  *

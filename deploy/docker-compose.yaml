@@ -459,6 +459,9 @@ services:
       # Public Gateway address the API docs print as the base URL, e.g. https://api.open7x.com.
       # API 文档示例中显示的公开 Gateway 基地址，如 https://api.open7x.com；留空时退回内部地址。
       AISW_CONSOLE_PUBLIC_GATEWAY_URL: ${AISW_CONSOLE_PUBLIC_GATEWAY_URL:-}
+      # Public Studio address linked from the console header; empty hides the entry.
+      # 控制台顶栏 Studio 入口的公开地址；留空时不显示入口。
+      AISW_CONSOLE_STUDIO_URL: ${AISW_CONSOLE_STUDIO_URL:-}
       # Operator facts stated on /terms, /privacy, /refund and the page footers.
       # 公开条款页与页脚陈述的营运方资讯；未设置时显示方括号占位符。
       AISW_CONSOLE_LEGAL_SERVICE_NAME: ${AISW_CONSOLE_LEGAL_SERVICE_NAME:-}
