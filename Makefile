@@ -50,6 +50,10 @@ FORCE           ?= 0
 HUB_REPO          ?= docker.io/dongmu101
 PUBLISH_PLATFORMS ?= linux/amd64,linux/arm64
 PUBLISH_TAGS      ?= $(VERSION)
+# Studio is published but not yet started by deploy/docker-compose.yaml, so it
+# stays out of SERVICES (images / push / deploy).
+# Studio 只发布；deploy/docker-compose.yaml 尚未启动它，因此不在 SERVICES（images / push / deploy）里。
+PUBLISH_SERVICES  ?= $(SERVICES) studio
 BUILDER           ?= aisw-multiarch
 # BuildKit steps run at once in that builder. A multi-platform build otherwise
 # compiles Go for every platform at the same time, which a Docker Desktop VM
@@ -94,6 +98,7 @@ help: ## 列出可用目标与变量
 	@echo "    HUB_REPO=...           publish 推送到的仓库（$(HUB_REPO)）"
 	@echo "    PUBLISH_TAGS=\"...\"     publish 的 tag，如 \"v0.2.0 latest\"（默认当前版本）"
 	@echo "    PUBLISH_PLATFORMS=...  publish 的平台（$(PUBLISH_PLATFORMS)）"
+	@echo "    PUBLISH_SERVICES=\"...\" publish 的服务（$(PUBLISH_SERVICES)）"
 	@echo "    当前版本: $(VERSION)"
 
 # Warns only: a build may still fit, and the fix (Docker Desktop settings) is
@@ -182,9 +187,9 @@ deploy: check-server check-git images push ## 构建 + 送达 + 在服务器上 
 # docker-container 驱动的 builder，这里以独立名字创建一次，不改动默认 builder。tag 取
 # git describe，指明了提交；服务器据此核对自己的 compose 文件（deploy/lib.sh 的
 # check_image_tag）。
-publish: check-git check-docker-mem builder $(addprefix publish-,$(SERVICES)) ## 构建 amd64 + arm64 镜像并推送到 Docker Hub
+publish: check-git check-docker-mem builder $(addprefix publish-,$(PUBLISH_SERVICES)) ## 构建 amd64 + arm64 镜像并推送到 Docker Hub
 	@echo "==> 已推送到 $(HUB_REPO)（$(PUBLISH_PLATFORMS)）:"
-	@for s in $(SERVICES); do for t in $(PUBLISH_TAGS); do echo "    $(HUB_REPO)/aiserveweave-$${s}:$${t}"; done; done
+	@for s in $(PUBLISH_SERVICES); do for t in $(PUBLISH_TAGS); do echo "    $(HUB_REPO)/aiserveweave-$${s}:$${t}"; done; done
 	@echo
 	@echo "  服务器上部署:"
 	@echo "    首次: 在 deploy/.env 设置 AISW_IMAGE_REPO=$(HUB_REPO)，再 deploy/upgrade.sh --follow"
@@ -206,8 +211,15 @@ publish-console:
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  $(LABEL_ARGS) $(call hub_tags,console) service/aiServeWeaveConsole
 
+# Studio, like the Console, has its own context and Dockerfile.
+# Studio 与 Console 一样有自己的构建上下文与 Dockerfile。
+publish-studio:
+	@echo "==> 构建并推送 studio（$(PUBLISH_PLATFORMS)）"
+	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
+	  $(LABEL_ARGS) $(call hub_tags,studio) service/aiServeWeaveStudio
+
 publish-%:
-	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console）" >&2; exit 1; }
+	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console studio）" >&2; exit 1; }
 	@echo "==> 构建并推送 $*（$(PUBLISH_PLATFORMS)，版本 $(VERSION)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  --build-arg SERVICE=$(SERVICE_$*) --build-arg VERSION=$(VERSION) $(GOPROXY_ARG) \
@@ -216,3 +228,4 @@ publish-%:
 
 clean: ## 删除 save 产生的压缩包
 	rm -rf $(OUT_DIR)
+
