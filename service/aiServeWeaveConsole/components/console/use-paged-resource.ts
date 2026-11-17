@@ -18,8 +18,13 @@ import { useResource, type Resource } from "@/components/console/use-resource";
  *
  * PagedResource 是一次一页地读取的列表。
  */
-export interface PagedResource<T> extends Omit<Resource<Page<T>>, "data"> {
+export interface PagedResource<T, P extends Page<T> = Page<T>> extends Omit<Resource<Page<T>>, "data"> {
   items: T[] | null;
+  /** data is the current page as parsed, for fields beside the items (a
+   * ledger's pending usage); null until it loads.
+   *
+   * data 是解析后的当前页，用于条目之外的字段（例如账目的尚未封账用量）；载入前为 null。 */
+  data: P | null;
   /** pageNumber is one-based, for display. It is a position in this session's
    * paging, not a claim about how many pages exist — the API sends no total.
    *
@@ -50,7 +55,7 @@ export interface PagedResource<T> extends Omit<Resource<Page<T>>, "data"> {
  * 筛选条件改变会回到第一页。这不是为了方便：游标指的是某一份已排序、已筛选列表中的
  * 位置，把它带过一次筛选变更，等于要求服务端继续一份已经不存在的列表。
  */
-export function usePagedResource<T>(spec: {
+export function usePagedResource<T, P extends Page<T> = Page<T>>(spec: {
   path: string;
   surface?: "admin" | "operator";
   /** filters are the query parameters other than paging. Empty values are
@@ -60,8 +65,8 @@ export function usePagedResource<T>(spec: {
    * 变成 `?q=`。 */
   filters: Record<string, string>;
   pageSize: number;
-  parse: (value: unknown) => Page<T>;
-}): PagedResource<T> {
+  parse: (value: unknown) => P;
+}): PagedResource<T, P> {
   const filterKey = `${spec.surface ?? "admin"}|${spec.path}|${JSON.stringify(spec.filters)}|${spec.pageSize}`;
   const [history, setHistory] = React.useState<string[]>([...INITIAL_HISTORY]);
   const [lastFilterKey, setLastFilterKey] = React.useState(filterKey);
@@ -79,7 +84,7 @@ export function usePagedResource<T>(spec: {
 
   const query = pageQuery(spec.filters, spec.pageSize, currentCursor(history));
 
-  const page = useResource<Page<T>>({
+  const page = useResource<P>({
     method: "GET",
     path: spec.path,
     surface: spec.surface,
@@ -89,6 +94,7 @@ export function usePagedResource<T>(spec: {
 
   return {
     items: page.data?.items ?? null,
+    data: page.data ?? null,
     error: page.error,
     errorKind: page.errorKind,
     loading: page.loading,

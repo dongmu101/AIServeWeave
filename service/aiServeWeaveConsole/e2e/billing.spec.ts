@@ -1,4 +1,4 @@
-import { test, expect, BILLING_OVERVIEW } from "./fixtures.ts";
+import { test, expect, BILLING_OVERVIEW, PRICING_CONFIG } from "./fixtures.ts";
 import { deriveSessionKey, seal, SESSION_COOKIE } from "../lib/console/session-payload.ts";
 
 const CHECKOUT_URL = "https://checkout.example.invalid/session/p10";
@@ -274,7 +274,7 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
     if (request.method() === "GET") return route.fallback();
     const url = new URL(request.url());
     writes.push({ method: request.method(), path: url.pathname + url.search, body: request.postDataJSON() });
-    if (url.pathname.endsWith("/model-prices")) await route.fulfill({ json: { model: "fixture-model", input_micro_per_mtok: 1_500_000, output_micro_per_mtok: 0, updated_by: "op_p10", updated_at: "2026-09-12T00:00:00Z" } });
+    if (url.pathname.endsWith("/pricing/models")) await route.fulfill({ json: PRICING_CONFIG });
     else if (url.pathname.endsWith("/adjust")) await route.fulfill({ json: { id: "led_adj", tenant_id: "tnt_p10", kind: "adjust", amount_micro: -2_500_000, balance_after_micro: 0, ref: "chargeback", created_at: "2026-09-12T00:00:00Z" } });
     else await route.fulfill({ status: 201, json: { id: "pkg_new", name: "JPY pack", kind: "fixed", credits_micro: 1_000_000, price_minor: 1000, currency: "JPY", active: true, sort_order: 0, dodo_product_id: "pdt_jpy", created_at: "2026-09-12T00:00:00Z", updated_at: "2026-09-12T00:00:00Z" } });
   });
@@ -293,11 +293,10 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
   await dialog.getByRole("button", { name: "创建", exact: true }).click();
   await expect(dialog).toHaveCount(0);
 
-  await page.getByRole("tab", { name: "模型单价", exact: true }).click();
-  await page.getByRole("button", { name: "设置单价", exact: true }).click();
+  await page.getByRole("tab", { name: "模型定价", exact: true }).click();
+  await page.getByRole("button", { name: "设置别名定价", exact: true }).click();
   await page.getByRole("dialog").getByLabel("模型别名", { exact: true }).fill("fixture-model");
-  await page.getByRole("dialog").getByLabel("输入单价（点/百万 token）", { exact: true }).fill("1.5");
-  await page.getByRole("dialog").getByLabel("输出单价（点/百万 token）", { exact: true }).fill("0");
+  await page.getByRole("dialog").getByLabel("模型倍率", { exact: true }).fill("1.5");
   await page.getByRole("dialog").getByRole("button", { name: "保存", exact: true }).click();
   await expect(page.getByRole("dialog")).toHaveCount(0);
 
@@ -310,7 +309,7 @@ test("operator billing edits send micro-credit and minor-unit integers", async (
 
   expect(writes).toEqual([
     { method: "POST", path: "/api/operator/operator/v1/billing/packages", body: { name: "JPY pack", kind: "fixed", dodo_product_id: "pdt_jpy", currency: "JPY", active: true, credits_micro: 1_000_000, price_minor: 1000, credits_per_minor_unit_micro: 0, min_amount_minor: 0, max_amount_minor: 0, sort_order: 0 } },
-    { method: "PUT", path: "/api/operator/operator/v1/billing/model-prices", body: { model: "fixture-model", input_micro_per_mtok: 1_500_000, output_micro_per_mtok: 0 } },
+    { method: "PUT", path: "/api/operator/operator/v1/billing/pricing/models", body: { model: "fixture-model", catalog_model: "", prices: [], rate_ppm: 1_500_000, base_revision: 7 } },
     { method: "POST", path: "/api/operator/operator/v1/billing/tenants/tnt_p10/adjust", body: { amount_micro: -2_500_000, reason: "chargeback" } },
   ]);
 });

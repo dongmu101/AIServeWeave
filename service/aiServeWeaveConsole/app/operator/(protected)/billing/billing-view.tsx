@@ -17,6 +17,7 @@ import { useResource } from "@/components/console/use-resource";
 import { ErrorMessage } from "@/components/i18n/error-message";
 import { Message } from "@/components/i18n/message";
 import { useI18n } from "@/components/i18n/provider";
+import { CatalogReviewSection, PendingBadge, PlansSection, PricingSection, TenantPlanSelect, usePendingReviews, usePricePlans } from "@/components/console/token-pricing";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -27,30 +28,24 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   adjustRequest,
-  DEFAULT_PRICE_MODEL,
   emptyPackageDraft,
   formatCredits,
   formatMoney,
-  formatScaled,
-  modelPriceRequest,
   packageDraft,
   packageRequest,
   parseBillingTenants,
   parseCreditPackage,
   parseCreditPackages,
   parseLedgerEntry,
-  parseModelPrice,
-  parseModelPrices,
   type BillingMode,
   type BillingTenant,
   type CreditPackage,
-  type ModelPrice,
   type PackageDraft,
   type PackageKind,
   type PackageProblem,
 } from "@/lib/console/billing";
 import { parseNoContent } from "@/lib/console/contract";
-import { formatDateTime } from "@/lib/console/format";
+import { parsePricingConfig, parseTenantPricing, type PricingConfig, type TenantPricing } from "@/lib/console/pricing";
 import type { MessageKey } from "@/lib/i18n/messages";
 import type { Translator } from "@/lib/i18n/translate";
 
@@ -81,6 +76,7 @@ function modeLabel(mode: BillingMode, t: Translator): string {
  */
 export function BillingAdminView() {
   const { t } = useI18n();
+  const pending = usePendingReviews();
   return <div className="grid gap-4">
     <div>
       <h1 className="font-heading text-xl font-semibold tracking-tight"><Message id="operator.billing" /></h1>
@@ -92,6 +88,8 @@ export function BillingAdminView() {
         <TabsTrigger value="accounts" className="flex-none"><Message id="tenant.accountMonthly" /></TabsTrigger>
         <TabsTrigger value="presales" className="flex-none"><Message id="tenant.presale" /></TabsTrigger>
         <TabsTrigger value="prices" className="flex-none"><Message id="operator.billingPrices" /></TabsTrigger>
+        <TabsTrigger value="review" className="flex-none"><Message id="operator.billingCatalogReview" /><PendingBadge pending={pending} /></TabsTrigger>
+        <TabsTrigger value="plans" className="flex-none"><Message id="operator.billingPlans" /></TabsTrigger>
         <TabsTrigger value="tenants" className="flex-none"><Message id="operator.billingTenants" /></TabsTrigger>
         <TabsTrigger value="orders" className="flex-none"><Message id="tenant.billingOrders" /></TabsTrigger>
         <TabsTrigger value="ledger" className="flex-none"><Message id="tenant.billingLedger" /></TabsTrigger>
@@ -99,7 +97,9 @@ export function BillingAdminView() {
       <TabsContent value="packages" className="pt-2"><PackagesSection /></TabsContent>
       <TabsContent value="accounts" className="pt-2"><AccountSales operator /></TabsContent>
       <TabsContent value="presales" className="pt-2"><PresaleAdmin /></TabsContent>
-      <TabsContent value="prices" className="pt-2"><PricesSection /></TabsContent>
+      <TabsContent value="prices" className="pt-2"><PricingSection /></TabsContent>
+      <TabsContent value="review" className="pt-2"><CatalogReviewSection pending={pending} /></TabsContent>
+      <TabsContent value="plans" className="pt-2"><PlansSection /></TabsContent>
       <TabsContent value="tenants" className="pt-2"><TenantsSection /></TabsContent>
       <TabsContent value="orders" className="pt-2"><FilteredHistory kind="orders" /></TabsContent>
       <TabsContent value="ledger" className="pt-2"><FilteredHistory kind="ledger" /></TabsContent>
@@ -120,14 +120,14 @@ function FilteredHistory({ kind }: { kind: "orders" | "ledger" }) {
 }
 
 /** PackagesUnavailable explains a missing package list: billing off, or on
- * with neither Dodo nor EZFP (Alipay only), told apart by whether model prices
- * answer.
+ * with neither Dodo nor EZFP (Alipay only), told apart by whether the pricing
+ * configuration answers.
  *
  * PackagesUnavailable 解释充值包列表为何缺席：计费关闭，或已开启但既未配置 Dodo 也未配置
- * 易支付（只有支付宝），以模型单价是否可读来区分。 */
+ * 易支付（只有支付宝），以定价配置是否可读来区分。 */
 function PackagesUnavailable() {
   const { t } = useI18n();
-  const prices = useResource<ModelPrice[]>({ method: "GET", surface: "operator", path: "/operator/v1/billing/model-prices", parse: parseModelPrices });
+  const prices = useResource<PricingConfig>({ method: "GET", surface: "operator", path: "/operator/v1/billing/pricing", parse: parsePricingConfig });
   if (prices.loading) return <LoadingState label={t("operator.loading")} rows={2} />;
   if (prices.errorKind === "not_found" || prices.error) return <BillingDisabled />;
   return <EmptyState title={t("operator.billingNeedsDodo")} description={t("operator.billingNeedsDodoDescription")} />;
@@ -272,127 +272,19 @@ function PackageDialog({ editing, onClose, onSaved }: { editing: CreditPackage |
   </Dialog>;
 }
 
-/** PricesSection lists model prices and sets or removes them. The alias goes
- * in the body (or, for delete, the query) because aliases may contain "/".
+/** OperatorTenant is a tenant-list row with its price plan and pending usage.
  *
- * PricesSection 列出模型单价并设置或删除它们。别名放在请求体（删除时放在查询参数）
- * 里，因为别名可能包含 "/"。 */
-function PricesSection() {
-  const { t, locale } = useI18n();
-  const run = useConsoleRequest();
-  const prices = useResource<ModelPrice[]>({ method: "GET", surface: "operator", path: "/operator/v1/billing/model-prices", parse: parseModelPrices });
-  const [editor, setEditor] = React.useState<{ price: ModelPrice | null; nonce: number } | null>(null);
-  const [removing, setRemoving] = React.useState<ModelPrice | null>(null);
-  const nonce = React.useRef(0);
-  const open = (price: ModelPrice | null) => { nonce.current += 1; setEditor({ price, nonce: nonce.current }); };
+ * OperatorTenant 是带价格方案与未封账用量的租户列表行。 */
+type OperatorTenant = BillingTenant & TenantPricing;
 
-  if (prices.errorKind === "not_found") return <BillingDisabled />;
-  return <Card>
-    <CardHeader className="flex flex-wrap items-center justify-between gap-3">
-      <CardTitle><Message id="operator.billingPrices" /></CardTitle>
-      <Button onClick={() => open(null)}><Message id="operator.billingSetPrice" /></Button>
-    </CardHeader>
-    <CardContent className="grid gap-3">
-      <p className="text-xs text-muted-foreground"><Message id="operator.billingPriceHint" /></p>
-      {prices.error ? <ErrorState message={prices.error} onRetry={prices.reload} /> : prices.loading || !prices.data ? <LoadingState label={t("operator.loading")} rows={3} /> : prices.data.length === 0 ? <EmptyState title={t("operator.billingNoPrices")} /> : <Table>
-        <TableHeader><TableRow>
-          <TableHead><Message id="operator.billingModel" /></TableHead>
-          <TableHead className="text-right"><Message id="operator.billingInputPrice" /></TableHead>
-          <TableHead className="text-right"><Message id="operator.billingOutputPrice" /></TableHead>
-          <TableHead><Message id="tenant.time" /></TableHead>
-          <TableHead><span className="sr-only"><Message id="common.edit" /></span></TableHead>
-        </TableRow></TableHeader>
-        <TableBody>{prices.data.map((price) => <TableRow key={price.model}>
-          <TableCell className="max-w-64"><span className="flex flex-wrap items-center gap-2"><code className="text-xs break-all">{price.model}</code>{price.model === DEFAULT_PRICE_MODEL ? <Badge variant="secondary"><Message id="operator.billingDefaultPrice" /></Badge> : null}</span></TableCell>
-          <TableCell className="text-right font-mono">{formatCredits(price.inputMicroPerMTok, locale)}</TableCell>
-          <TableCell className="text-right font-mono">{formatCredits(price.outputMicroPerMTok, locale)}</TableCell>
-          <TableCell className="text-xs text-muted-foreground"><span className="break-all">{t("operator.billingUpdated", { actor: price.updatedBy || "—", time: formatDateTime(price.updatedAt, undefined, locale) })}</span></TableCell>
-          <TableCell><span className="flex flex-wrap gap-2">
-            <Button size="sm" variant="outline" onClick={() => open(price)} aria-label={t("operator.billingEditPrice", { model: price.model })}><Message id="common.edit" /></Button>
-            <Button size="sm" variant="ghost" onClick={() => setRemoving(price)}><Message id="common.delete" /></Button>
-          </span></TableCell>
-        </TableRow>)}</TableBody>
-      </Table>}
-    </CardContent>
-    {editor ? <PriceDialog key={editor.nonce} price={editor.price} onClose={() => setEditor(null)} onSaved={prices.reload} /> : null}
-    <ConfirmDialog
-      open={removing !== null}
-      onOpenChange={(next) => { if (!next) setRemoving(null); }}
-      title={t("common.delete")}
-      destructive
-      confirmLabel={t("common.delete")}
-      description={removing ? t("operator.billingDeletePriceConfirm", { model: removing.model }) : ""}
-      onConfirm={async () => {
-        if (!removing) return;
-        await run({ method: "DELETE", surface: "operator", path: "/operator/v1/billing/model-prices", query: { model: removing.model }, parse: parseNoContent });
-        toast.success(<Message id="operator.billingPriceDeleted" />);
-        setRemoving(null);
-        prices.reload();
-      }}
-    />
-  </Card>;
-}
-
-/** PriceDialog sets one alias's price, typed in credits per million tokens.
+/** parseOperatorTenants validates a tenant-list page, pricing fields
+ * included.
  *
- * PriceDialog 设置一个别名的单价，以「点/百万 token」输入。 */
-function PriceDialog({ price, onClose, onSaved }: { price: ModelPrice | null; onClose: () => void; onSaved: () => void }) {
-  const { t } = useI18n();
-  const run = useConsoleRequest();
-  const [model, setModel] = React.useState(price?.model ?? "");
-  const [input, setInput] = React.useState(price ? formatScaled(price.inputMicroPerMTok, 6) : "");
-  const [output, setOutput] = React.useState(price ? formatScaled(price.outputMicroPerMTok, 6) : "");
-  const [pending, setPending] = React.useState(false);
-  const [error, setError] = React.useState<React.ReactNode>(null);
-
-  async function submit(event: React.FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (pending) return;
-    const built = modelPriceRequest({ model, input, output });
-    if (built.problem !== null) {
-      setError(<Message id={built.problem === "model" ? "operator.billingProblemModel" : "operator.billingProblemPriceValue"} />);
-      return;
-    }
-    setPending(true);
-    setError(null);
-    try {
-      await run({ method: "PUT", surface: "operator", path: "/operator/v1/billing/model-prices", body: built.request, parse: parseModelPrice });
-      toast.success(<Message id="operator.billingPriceSaved" />);
-      onSaved();
-      onClose();
-    } catch (failure) {
-      setError(<ErrorMessage error={failure} />);
-      setPending(false);
-    }
-  }
-
-  return <Dialog open onOpenChange={(next) => { if (!next && !pending) onClose(); }}>
-    <DialogContent className="sm:max-w-md">
-      <form onSubmit={submit} className="grid gap-4" noValidate>
-        <DialogHeader>
-          <DialogTitle>{price ? t("operator.billingEditPrice", { model: price.model }) : t("operator.billingSetPrice")}</DialogTitle>
-          <DialogDescription><Message id="operator.billingPriceHint" /></DialogDescription>
-        </DialogHeader>
-        <div className="grid gap-2">
-          <label htmlFor="price-model" className="text-sm font-medium"><Message id="operator.billingModel" /></label>
-          <Input id="price-model" value={model} onChange={(e) => setModel(e.target.value)} disabled={pending || price !== null} placeholder={DEFAULT_PRICE_MODEL} autoComplete="off" spellCheck={false} />
-        </div>
-        <div className="grid gap-2">
-          <label htmlFor="price-input" className="text-sm font-medium"><Message id="operator.billingInputPrice" /></label>
-          <Input id="price-input" inputMode="decimal" value={input} onChange={(e) => setInput(e.target.value)} disabled={pending} />
-        </div>
-        <div className="grid gap-2">
-          <label htmlFor="price-output" className="text-sm font-medium"><Message id="operator.billingOutputPrice" /></label>
-          <Input id="price-output" inputMode="decimal" value={output} onChange={(e) => setOutput(e.target.value)} disabled={pending} />
-        </div>
-        <FormError message={error} />
-        <DialogFooter>
-          <Button type="button" variant="outline" disabled={pending} onClick={onClose}><Message id="common.cancel" /></Button>
-          <SubmitButton pending={pending}><Message id="common.save" /></SubmitButton>
-        </DialogFooter>
-      </form>
-    </DialogContent>
-  </Dialog>;
+ * parseOperatorTenants 校验一页租户列表，包括计价字段。 */
+function parseOperatorTenants(value: unknown) {
+  const base = parseBillingTenants(value);
+  const pricing = parseTenantPricing(value);
+  return { ...base, items: base.items.map((tenant): OperatorTenant => ({ ...tenant, ...(pricing.get(tenant.id) ?? { pricePlanId: "", pendingUsage: null }) })) };
 }
 
 /** TenantsSection lists tenants with their billing state, switches modes and
@@ -403,7 +295,8 @@ function TenantsSection() {
   const { t, locale } = useI18n();
   const run = useConsoleRequest();
   const [query, setQuery] = React.useState("");
-  const tenants = usePagedResource<BillingTenant>({ path: "/operator/v1/billing/tenants", surface: "operator", filters: { q: query }, pageSize: TENANT_PAGE_SIZE, parse: parseBillingTenants });
+  const tenants = usePagedResource<OperatorTenant>({ path: "/operator/v1/billing/tenants", surface: "operator", filters: { q: query }, pageSize: TENANT_PAGE_SIZE, parse: parseOperatorTenants });
+  const plans = usePricePlans();
   const [switching, setSwitching] = React.useState<{ tenant: BillingTenant; mode: BillingMode } | null>(null);
   const [adjusting, setAdjusting] = React.useState<BillingTenant | null>(null);
 
@@ -418,6 +311,8 @@ function TenantsSection() {
             <TableHead><Message id="tenant.tenant" /></TableHead>
             <TableHead><Message id="tenant.billingMode" /></TableHead>
             <TableHead className="text-right"><Message id="tenant.billingBalance" /></TableHead>
+            <TableHead className="text-right"><Message id="operator.tenantPending" /></TableHead>
+            <TableHead><Message id="operator.tenantPlan" /></TableHead>
             <TableHead><span className="sr-only"><Message id="tenant.action" /></span></TableHead>
           </TableRow></TableHeader>
           <TableBody>{tenants.items.map((tenant) => {
@@ -426,6 +321,8 @@ function TenantsSection() {
               <TableCell className="max-w-64"><span className="grid gap-0.5"><span className="flex flex-wrap items-center gap-2 break-all">{tenant.name || tenant.id}{tenant.status !== "active" ? <Badge variant="destructive">{tenant.status}</Badge> : null}</span><code className="text-xs text-muted-foreground break-all">{tenant.id}</code></span></TableCell>
               <TableCell><span className="flex flex-wrap gap-1"><Badge variant={tenant.mode === "exempt" ? "secondary" : "outline"}>{modeLabel(tenant.mode, t)}</Badge>{tenant.blocked && tenant.mode === "prepaid" ? <Badge variant="destructive"><Message id="operator.billingBlocked" /></Badge> : null}</span></TableCell>
               <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(tenant.balanceMicro, locale)}</TableCell>
+              <TableCell className="text-right whitespace-nowrap text-xs">{tenant.pendingUsage ? t("operator.tenantPendingValue", { credits: formatCredits(-tenant.pendingUsage.amountMicro, locale), count: tenant.pendingUsage.requestCount }) : "—"}</TableCell>
+              <TableCell>{plans.data ? <TenantPlanSelect tenantId={tenant.id} tenantName={tenant.name || tenant.id} planId={tenant.pricePlanId} plans={plans.data.items} onSaved={tenants.reload} /> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
               <TableCell><span className="flex flex-wrap gap-2">
                 <Button size="sm" variant="outline" onClick={() => setSwitching({ tenant, mode: next })}>{next === "exempt" ? t("operator.billingMakeExempt") : t("operator.billingMakePrepaid")}</Button>
                 {tenant.mode !== "account_monthly" ? <Button size="sm" variant="outline" onClick={() => setSwitching({ tenant, mode: "account_monthly" })}><Message id="tenant.billingModeAccountMonthly" /></Button> : null}

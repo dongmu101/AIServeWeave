@@ -113,6 +113,26 @@ type TenantBilling struct {
 	DodoCustomerID string `gorm:"size:64;not null"`
 	CreatedAt      time.Time
 	UpdatedAt      time.Time
+	// The usage accumulated since the last usage ledger entry
+	// (.scratch/token-pricing/spec.md「余额账目」): its amount (already taken
+	// off BalanceMicro), how many charged requests it covers, its first and
+	// last charge, and when it must be sealed into a ledger entry. Count is
+	// zero and the times nil when nothing is accumulating.
+	//
+	// 自上一条用量账目以来累计的用量（.scratch/token-pricing/spec.md「余额账目」）：
+	// 金额（已经从 BalanceMicro 中扣除）、涵盖的扣费请求数、第一笔与最后一笔扣费时间，
+	// 以及最迟须封账成账目的时间。没有累计时 Count 为零、各时间为 nil。
+	UsageAccMicro int64      `gorm:"not null;default:0"`
+	UsageAccCount int64      `gorm:"not null;default:0"`
+	UsageAccSince *time.Time `gorm:""`
+	UsageAccLast  *time.Time `gorm:""`
+	UsageAccUntil *time.Time `gorm:"index:idx_tenant_billing_usage_acc_until"`
+	// LastLedgerAt is the created_at of the tenant's latest ledger entry,
+	// which every new entry must come after; nil until the first entry
+	// written by this release, when the store reads it from the ledger.
+	// LastLedgerAt 是租户最新一条账目的 created_at，每条新账目都必须晚于它；本版本写入
+	// 第一条账目之前为 nil，届时由 store 从账目中读取。
+	LastLedgerAt *time.Time `gorm:""`
 }
 
 // TableName pins the table name.
@@ -580,6 +600,15 @@ type CreditLedgerEntry struct {
 	IdempotencyKey    *string `gorm:"size:160"`
 	ActorID           string  `gorm:"size:40;not null"`
 	CreatedAt         time.Time
+	// PeriodStart, PeriodEnd and RequestCount describe a usage entry: the
+	// first and last charge it seals and how many charged requests. They are
+	// empty on every other kind and on usage entries written before this
+	// release.
+	// PeriodStart、PeriodEnd 与 RequestCount 描述一条用量账目：它所封存的第一笔与最后
+	// 一笔扣费，以及扣费请求数。其他类型的账目，以及本版本之前写入的用量账目，它们为空。
+	PeriodStart  *time.Time `gorm:""`
+	PeriodEnd    *time.Time `gorm:""`
+	RequestCount int64      `gorm:"not null;default:0"`
 }
 
 // TableName pins the table name.

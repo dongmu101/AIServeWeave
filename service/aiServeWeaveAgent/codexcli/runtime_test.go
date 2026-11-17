@@ -3,6 +3,7 @@
 package codexcli
 
 import (
+	"AIServeWeave/common/pricing"
 	"bufio"
 	"bytes"
 	"context"
@@ -46,6 +47,9 @@ func TestRuntimeLifecycle(t *testing.T) {
 	response, err := r.Chat(t.Context(), req)
 	if err != nil || response.Message.Content != "Hello world" || response.FinishReason != "stop" || response.Usage.TotalTokens != 8 {
 		t.Fatalf("response=%+v error=%v, want Hello world, stop and 8 tokens", response, err)
+	}
+	if response.Usage.PromptTokens != 5 || response.Usage.Details[pricing.MeterCacheRead] != 2 {
+		t.Fatalf("usage=%+v, want 5 prompt tokens of which 2 cached", response.Usage)
 	}
 	req.Model = "tool-model"
 	first, err := r.Chat(t.Context(), req)

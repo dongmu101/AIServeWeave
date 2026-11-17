@@ -157,12 +157,22 @@ func listBillingLedger(ctx *svc.ServiceContext, operator bool) http.HandlerFunc 
 			items[i] = types.LedgerEntry{
 				ID: e.ID, Kind: e.Kind, AmountMicro: e.AmountMicro, BalanceAfterMicro: e.BalanceAfterMicro,
 				Ref: e.Ref, CreatedAt: e.CreatedAt,
+				PeriodStart: e.PeriodStart, PeriodEnd: e.PeriodEnd, RequestCount: e.RequestCount,
 			}
 			if operator {
 				items[i].TenantID = e.TenantID
 			}
 		}
-		writeJSON(w, http.StatusOK, types.LedgerListResponse{Items: items, NextCursor: page.NextCursor})
+		resp := types.LedgerListResponse{Items: items, NextCursor: page.NextCursor}
+		row, pending, err := ctx.Logic.PendingUsage(r.Context(), actor, filter.TenantID)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		if pending {
+			resp.PendingUsage = renderPendingUsage(row)
+		}
+		writeJSON(w, http.StatusOK, resp)
 	})
 }
 
@@ -298,60 +308,6 @@ func saveCreditPackage(ctx *svc.ServiceContext, create bool) http.HandlerFunc {
 	})
 }
 
-// listModelPrices handles GET /operator/v1/billing/model-prices.
-//
-// listModelPrices 处理 GET /operator/v1/billing/model-prices。
-func listModelPrices(ctx *svc.ServiceContext) http.HandlerFunc {
-	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
-		prices, err := ctx.Logic.ListModelPrices(r.Context(), actor)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		items := make([]types.ModelPrice, len(prices))
-		for i, p := range prices {
-			items[i] = renderModelPrice(p)
-		}
-		writeJSON(w, http.StatusOK, types.ModelPriceListResponse{Items: items})
-	})
-}
-
-// putModelPrice handles PUT /operator/v1/billing/model-prices. The alias
-// travels in the body rather than the path because aliases may contain "/";
-// the alias "*" sets the default price.
-//
-// putModelPrice 处理 PUT /operator/v1/billing/model-prices。别名放在请求体而不是
-// 路径里，因为别名可能包含 "/"；别名 "*" 设置默认单价。
-func putModelPrice(ctx *svc.ServiceContext) http.HandlerFunc {
-	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
-		var req types.ModelPriceRequest
-		if !decode(w, r, &req) {
-			return
-		}
-		price, err := ctx.Logic.PutModelPrice(r.Context(), actor, req.Model, req.InputMicroPerMTok, req.OutputMicroPerMTok)
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		writeJSON(w, http.StatusOK, renderModelPrice(price))
-	})
-}
-
-// deleteModelPrice handles DELETE /operator/v1/billing/model-prices?model=,
-// with the alias in the query for the reason putModelPrice gives.
-//
-// deleteModelPrice 处理 DELETE /operator/v1/billing/model-prices?model=，别名放在
-// 查询参数里，理由见 putModelPrice。
-func deleteModelPrice(ctx *svc.ServiceContext) http.HandlerFunc {
-	return withActorHandler(func(w http.ResponseWriter, r *http.Request, actor logic.Actor) {
-		if err := ctx.Logic.DeleteModelPrice(r.Context(), actor, r.URL.Query().Get("model")); err != nil {
-			respondErr(w, err)
-			return
-		}
-		w.WriteHeader(http.StatusNoContent)
-	})
-}
-
 // listBillingTenants handles GET /operator/v1/billing/tenants, accepting the
 // same status and q filters as GET /operator/v1/tenants.
 //
@@ -372,6 +328,10 @@ func listBillingTenants(ctx *svc.ServiceContext) http.HandlerFunc {
 			items[i] = types.BillingTenant{
 				ID: v.Tenant.ID, Name: v.Tenant.Name, Status: v.Tenant.Status, Mode: v.Billing.Mode,
 				BalanceMicro: v.Billing.BalanceMicro, Blocked: v.Billing.Blocked(), CreatedAt: v.Tenant.CreatedAt,
+				PricePlanID: v.PricePlanID,
+			}
+			if v.Billing.UsageAccCount > 0 {
+				items[i].PendingUsage = renderPendingUsage(v.Billing)
 			}
 		}
 		writeJSON(w, http.StatusOK, types.BillingTenantListResponse{Items: items, NextCursor: page.NextCursor})
@@ -600,9 +560,12 @@ func renderCreditPackage(pkg model.CreditPackage, operator bool) types.CreditPac
 	return out
 }
 
-func renderModelPrice(p model.ModelPrice) types.ModelPrice {
-	return types.ModelPrice{
-		Model: p.Model, InputMicroPerMTok: p.InputMicroPerMTok, OutputMicroPerMTok: p.OutputMicroPerMTok,
-		UpdatedBy: p.UpdatedBy, UpdatedAt: p.UpdatedAt,
+// renderPendingUsage converts a billing row's accumulation to its wire form.
+//
+// renderPendingUsage 把计费行上的累计转换为线上形式。
+func renderPendingUsage(row model.TenantBilling) *types.PendingUsage {
+	return &types.PendingUsage{
+		AmountMicro: -row.UsageAccMicro, RequestCount: row.UsageAccCount,
+		Since: row.UsageAccSince, Last: row.UsageAccLast, SealAt: row.UsageAccUntil,
 	}
 }

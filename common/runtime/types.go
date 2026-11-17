@@ -703,6 +703,37 @@ type Usage struct {
 	//
 	// ReasoningTokens 是 CompletionTokens 中用于思考的部分；后端不单独报告时为 0。
 	ReasoningTokens int
+	// Details breaks PromptTokens and CompletionTokens down by meter
+	// (common/pricing): meter name → quantity, each a part of its parent,
+	// for example pricing.MeterCacheRead. PromptTokens always counts every
+	// input token, cached ones included. Nil when the backend reports no
+	// breakdown; the reasoning share stays in ReasoningTokens.
+	//
+	// Details 按计量项（common/pricing）细分 PromptTokens 与 CompletionTokens：计量项
+	// 名称 → 数量，每一项都是其父项的一部分，例如 pricing.MeterCacheRead。
+	// PromptTokens 始终计入全部输入 token，包括命中缓存的部分。后端不报告细分时为
+	// nil；推理部分仍放在 ReasoningTokens。
+	Details map[string]int64
+	// Attributes are facts about the request that pricing may key on, such
+	// as a service tier. Nothing sets them yet.
+	//
+	// Attributes 是计价可能依据的请求属性，例如服务等级。目前还没有任何地方设置它。
+	Attributes map[string]string
+}
+
+// AddDetail adds n to meter name's quantity in u.Details, allocating the map
+// on first use. A non-positive n is ignored.
+//
+// AddDetail 把 n 加到 u.Details 中计量项 name 的数量上，首次使用时分配 map。n 不为正
+// 时忽略。
+func (u *Usage) AddDetail(name string, n int64) {
+	if n <= 0 {
+		return
+	}
+	if u.Details == nil {
+		u.Details = make(map[string]int64, 2)
+	}
+	u.Details[name] += n
 }
 
 type ToolCall struct {

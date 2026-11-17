@@ -112,14 +112,41 @@ type LedgerEntry struct {
 	BalanceAfterMicro int64     `json:"balance_after_micro"`
 	Ref               string    `json:"ref"`
 	CreatedAt         time.Time `json:"created_at"`
+	// PeriodStart, PeriodEnd and RequestCount are set on a usage entry
+	// written by this release: the first and last charge it covers and how
+	// many charged requests.
+	//
+	// PeriodStart、PeriodEnd 与 RequestCount 出现在本版本写入的用量账目上：它涵盖的
+	// 第一笔与最后一笔扣费，以及扣费请求数。
+	PeriodStart  *time.Time `json:"period_start,omitempty"`
+	PeriodEnd    *time.Time `json:"period_end,omitempty"`
+	RequestCount int64      `json:"request_count,omitempty"`
 }
 
-// LedgerListResponse is one page of ledger entries.
+// PendingUsage is usage already taken off the balance but not yet sealed
+// into a ledger entry. AmountMicro is negative, like a usage entry's: the
+// latest entry's balance_after plus AmountMicro is the balance.
 //
-// LedgerListResponse 是一页账目。
+// PendingUsage 是已经从余额中扣除、但尚未封账成账目的用量。AmountMicro 与用量账目一样
+// 为负数：最新一条账目的 balance_after 加上 AmountMicro 就是余额。
+type PendingUsage struct {
+	AmountMicro  int64      `json:"amount_micro"`
+	RequestCount int64      `json:"request_count"`
+	Since        *time.Time `json:"since,omitempty"`
+	Last         *time.Time `json:"last,omitempty"`
+	SealAt       *time.Time `json:"seal_at,omitempty"`
+}
+
+// LedgerListResponse is one page of ledger entries. PendingUsage is present
+// when the list is one tenant's (the tenant's own, or the operator's with a
+// tenant_id) and something is accumulating.
+//
+// LedgerListResponse 是一页账目。列表属于单一租户（租户自己的，或运维带 tenant_id 查询
+// 的）且有累计时，带有 PendingUsage。
 type LedgerListResponse struct {
-	Items      []LedgerEntry `json:"items"`
-	NextCursor string        `json:"next_cursor,omitempty"`
+	Items        []LedgerEntry `json:"items"`
+	NextCursor   string        `json:"next_cursor,omitempty"`
+	PendingUsage *PendingUsage `json:"pending_usage,omitempty"`
 }
 
 // CheckoutOrder is one purchase attempt. TenantID is omitted on the tenant's
@@ -222,33 +249,6 @@ type CreditPackageListResponse struct {
 	Items []CreditPackage `json:"items"`
 }
 
-// ModelPrice is one alias's price per million tokens, in micro-credits.
-//
-// ModelPrice 是一个别名每百万 token 的单价，单位为 micro 点。
-type ModelPrice struct {
-	Model              string    `json:"model"`
-	InputMicroPerMTok  int64     `json:"input_micro_per_mtok"`
-	OutputMicroPerMTok int64     `json:"output_micro_per_mtok"`
-	UpdatedBy          string    `json:"updated_by"`
-	UpdatedAt          time.Time `json:"updated_at"`
-}
-
-// ModelPriceListResponse is every price.
-//
-// ModelPriceListResponse 是全部单价。
-type ModelPriceListResponse struct {
-	Items []ModelPrice `json:"items"`
-}
-
-// ModelPriceRequest sets one alias's price.
-//
-// ModelPriceRequest 设置一个别名的单价。
-type ModelPriceRequest struct {
-	Model              string `json:"model"`
-	InputMicroPerMTok  int64  `json:"input_micro_per_mtok"`
-	OutputMicroPerMTok int64  `json:"output_micro_per_mtok"`
-}
-
 // BillingTenant is one tenant with its billing state.
 //
 // BillingTenant 是一个租户及其计费状态。
@@ -260,6 +260,16 @@ type BillingTenant struct {
 	BalanceMicro int64     `json:"balance_micro"`
 	Blocked      bool      `json:"blocked"`
 	CreatedAt    time.Time `json:"created_at"`
+	// PricePlanID is the tenant's current price plan, present only when
+	// billing is enabled.
+	//
+	// PricePlanID 是租户当前所属的价格方案，只在开启计费时出现。
+	PricePlanID string `json:"price_plan_id,omitempty"`
+	// PendingUsage is the usage not yet sealed into a ledger entry, when
+	// any.
+	//
+	// PendingUsage 是尚未封账成账目的用量；没有时省略。
+	PendingUsage *PendingUsage `json:"pending_usage,omitempty"`
 }
 
 // BillingTenantListResponse is one page of tenants with billing state.

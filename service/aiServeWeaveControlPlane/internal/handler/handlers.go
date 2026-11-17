@@ -1966,20 +1966,21 @@ func listRequestLogsOperator(ctx *svc.ServiceContext) http.HandlerFunc {
 }
 
 // MaxUsageRecordsBodyBytes bounds the body of POST /internal/v1/usagerecords.
-// It reuses MaxRequestLogsBodyBytes's own sizing logic: a usage record has
-// three extra integer fields and one shorter one (endpoint vs
-// outcome/status_code combined) than a request-log record, so the two
-// constants stay close; this one keeps its own value rather than aliasing
-// MaxRequestLogsBodyBytes so the two batches' sizes can be tuned
-// independently without a shared-constant surprise.
+// It is sized for a full Gateway batch (500 records) at the worst case
+// common/pricing allows per record — 32 details with 64-byte meter names and
+// 8 attributes, about 4 KB — which comes to about 2 MB; a typical batch is
+// well under 300 KB. A batch over the limit is refused and the Gateway drops
+// it, so the limit must cover the worst case rather than the usual one. It
+// keeps its own value rather than aliasing MaxRequestLogsBodyBytes so the
+// two batches' sizes can be tuned independently.
 //
-// MaxUsageRecordsBodyBytes 限定 POST /internal/v1/usagerecords 请求体的
-// 大小。它沿用 MaxRequestLogsBodyBytes 自己的定量逻辑：一条用量记录比一条
-// 请求日志记录多三个整数字段、少一个字段(endpoint 对比
-// outcome/status_code 合计)，两个常量因此接近；这里保留自己的取值而不是
-// 直接别名 MaxRequestLogsBodyBytes，好让两个批次的大小能够独立调整，而不会
-// 共享常量带来意外。
-const MaxUsageRecordsBodyBytes = 256 << 10
+// MaxUsageRecordsBodyBytes 限定 POST /internal/v1/usagerecords 请求体的大小。它按
+// 一整批 Gateway 记录（500 条）在 common/pricing 允许的单条最坏情况下定量——32 个明细、
+// 计量项名称 64 字节、外加 8 个属性，每条约 4 KB——合计约 2 MB；一般的批次远低于
+// 300 KB。超过上限的批次会被拒绝并被 Gateway 丢弃，因此上限必须覆盖最坏情况而不是
+// 一般情况。这里保留自己的取值而不是别名 MaxRequestLogsBodyBytes，好让两个批次的大小
+// 能够独立调整。
+const MaxUsageRecordsBodyBytes = 4 << 20
 
 // decodeUsageRecords allows a bounded batch of usage records — mirroring
 // decodeRequestLogs exactly, for the same reason (see
@@ -2027,6 +2028,7 @@ func createUsageRecords(ctx *svc.ServiceContext) http.HandlerFunc {
 				RequestID: rec.RequestID, TenantID: rec.TenantID, Model: rec.Model, Endpoint: rec.Endpoint,
 				PromptTokens: rec.PromptTokens, CompletionTokens: rec.CompletionTokens, TotalTokens: rec.TotalTokens,
 				CreatedAt: rec.CreatedAt, NodeID: rec.NodeID, KeyID: rec.KeyID, UserID: rec.UserID,
+				Details: rec.Details, Attributes: rec.Attributes,
 			}
 		}
 		accepted, err := ctx.Logic.CreateUsageRecords(r.Context(), batch)
@@ -2058,14 +2060,18 @@ func usageSummaryFilterFrom(query url.Values) (store.UsageRecordFilter, bool) {
 //
 // renderUsageSummary 把一个聚合分组转换成线上形式。includeTenant 在按租户
 // 限定的端点上为 false，与 renderRequestLog 已经遵循的同一种约定。
-func renderUsageSummary(u store.UsageSummary, includeTenant bool) types.UsageSummaryEntryResponse {
+func renderUsageSummary(u store.UsageSummary, includeTenant, costs bool) types.UsageSummaryEntryResponse {
 	out := types.UsageSummaryEntryResponse{
 		UserID: u.UserID, KeyID: u.KeyID,
 		Model: u.Model, PromptTokens: u.PromptTokens, CompletionTokens: u.CompletionTokens,
 		TotalTokens: u.TotalTokens, RequestCount: u.RequestCount,
+		CacheReadTokens: u.CacheReadTokens, CacheWriteTokens: u.CacheWriteTokens,
 	}
 	if includeTenant {
 		out.TenantID = u.TenantID
+	}
+	if costs {
+		out.CostMicro = int64Ptr(u.CostMicro)
 	}
 	return out
 }
@@ -2096,7 +2102,7 @@ func summarizeUsageTenant(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		out := make([]types.UsageSummaryEntryResponse, len(summary))
 		for i, u := range summary {
-			out[i] = renderUsageSummary(u, false)
+			out[i] = renderUsageSummary(u, false, ctx.Logic.UsageCostsVisible())
 		}
 		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
 	}
@@ -2126,7 +2132,7 @@ func summarizeUsageOperator(ctx *svc.ServiceContext) http.HandlerFunc {
 		}
 		out := make([]types.UsageSummaryEntryResponse, len(summary))
 		for i, u := range summary {
-			out[i] = renderUsageSummary(u, true)
+			out[i] = renderUsageSummary(u, true, ctx.Logic.UsageCostsVisible())
 		}
 		writeJSON(w, http.StatusOK, types.UsageSummaryResponse{Items: out})
 	}

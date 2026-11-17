@@ -48,9 +48,25 @@ type CatalogPresale struct {
 //
 // CatalogPrice 是一个别名每百万 token 的单价，单位为 micro 点。
 type CatalogPrice struct {
-	Model              string `json:"model"`
-	InputMicroPerMTok  int64  `json:"input_micro_per_mtok"`
-	OutputMicroPerMTok int64  `json:"output_micro_per_mtok"`
+	Model string `json:"model"`
+	// InputMicroPerMTok and OutputMicroPerMTok are the base-tier input and
+	// output sale prices under the default plan; Items lists every sale
+	// price, cache and long-context tiers included.
+	// InputMicroPerMTok 与 OutputMicroPerMTok 是默认方案下基础档的输入与输出售价；Items
+	// 列出全部售价，包括缓存与长上下文档位。
+	InputMicroPerMTok  int64              `json:"input_micro_per_mtok"`
+	OutputMicroPerMTok int64              `json:"output_micro_per_mtok"`
+	Items              []CatalogPriceItem `json:"items"`
+}
+
+// CatalogPriceItem is one sale price, in micro-credits per million units.
+//
+// CatalogPriceItem 是一条售价，单位为 micro 点 / 百万单位。
+type CatalogPriceItem struct {
+	Meter            string `json:"meter"`
+	Variant          string `json:"variant,omitempty"`
+	AboveInputTokens int64  `json:"above_input_tokens,omitempty"`
+	PriceMicroPerM   int64  `json:"price_micro_per_m"`
 }
 
 // CatalogResponse is GET /billing/v1/catalog.

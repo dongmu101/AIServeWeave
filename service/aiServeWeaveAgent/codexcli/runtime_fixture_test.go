@@ -66,7 +66,7 @@ func runtimeFixture() {
 			for _, text := range []string{result[:len(result)/2], result[len(result)/2:]} {
 				send(map[string]any{"method": "item/agentMessage/delta", "params": map[string]any{"threadId": "thread1", "turnId": "turn1", "itemId": "message1", "delta": text}})
 			}
-			send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": "thread1", "turnId": "turn1", "tokenUsage": map[string]any{"last": map[string]int{"inputTokens": 5, "outputTokens": 3, "totalTokens": 8}}}})
+			send(map[string]any{"method": "thread/tokenUsage/updated", "params": map[string]any{"threadId": "thread1", "turnId": "turn1", "tokenUsage": map[string]any{"last": map[string]int{"inputTokens": 5, "cachedInputTokens": 2, "outputTokens": 3, "totalTokens": 8}}}})
 			send(map[string]any{"method": "turn/completed", "params": map[string]any{"threadId": "thread1", "turn": map[string]string{"id": "turn1", "status": "completed"}}})
 		default:
 			send(map[string]any{"id": msg.ID, "result": map[string]any{}})

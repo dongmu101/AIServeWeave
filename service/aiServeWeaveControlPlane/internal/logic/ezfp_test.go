@@ -13,6 +13,7 @@ import (
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store/storetest"
 )
 
 // fakeEzfp records what the logic asks 易支付 for and answers as each test
@@ -495,6 +496,10 @@ func TestEzfpRefunds(t *testing.T) {
 	if err != nil || refundable[third] != 6800 {
 		t.Fatalf("refundable = %v, %v", refundable, err)
 	}
+	// Top-ups, refund holds, settlements and releases keep the balance chain
+	// sound (.scratch/token-pricing「余额账目」).
+	// 充值、退款冻结、结算与释放都保持余额链健全（.scratch/token-pricing「余额账目」）。
+	storetest.CheckLedgerChain(t, f.store, f.tenant.ID)
 }
 
 func mustOrder(t *testing.T, f *fixture, id string) model.CheckoutOrder {

@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { parseUsageSummary, usageByModel } from "./usage.ts";
+import { addCost, billingShown, parseUsageSummary, usageByModel } from "./usage.ts";
 import { ApiError } from "./errors.ts";
 
 test("parses a tenant-scoped usage summary without tenant_id", () => {
@@ -93,9 +93,40 @@ test("usageByModel folds rows per id and model, skipping unattributed rows", () 
   });
   const byUser = usageByModel(items, (item) => item.userId);
   assert.deepEqual(byUser.get("usr_1"), [
-    { model: "m2", promptTokens: 100, completionTokens: 200 },
-    { model: "m1", promptTokens: 11, completionTokens: 22 },
+    { model: "m2", promptTokens: 100, completionTokens: 200, costMicro: null },
+    { model: "m1", promptTokens: 11, completionTokens: 22, costMicro: null },
   ]);
   assert.equal(byUser.size, 1);
-  assert.deepEqual(usageByModel(items, (item) => item.keyId).get("key_a"), [{ model: "m1", promptTokens: 1, completionTokens: 2 }]);
+  assert.deepEqual(usageByModel(items, (item) => item.keyId).get("key_a"), [{ model: "m1", promptTokens: 1, completionTokens: 2, costMicro: null }]);
+});
+
+test("cache tokens and cost are optional: absent from an older control plane or with billing off", () => {
+  const { items } = parseUsageSummary({
+    items: [
+      { model: "m", prompt_tokens: 1000, completion_tokens: 5, total_tokens: 1005, request_count: 1, cache_read_tokens: 600, cache_write_tokens: 300, cost_micro: 3105 },
+      { model: "m", prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, request_count: 1 },
+    ],
+  });
+  assert.equal(items[0]?.cacheReadTokens, 600);
+  assert.equal(items[0]?.cacheWriteTokens, 300);
+  assert.equal(items[0]?.costMicro, 3105);
+  assert.equal(items[1]?.cacheReadTokens, 0);
+  assert.equal(items[1]?.costMicro, null);
+  assert.equal(billingShown(items), true);
+  assert.equal(billingShown(items.slice(1)), false);
+  assert.throws(() => parseUsageSummary({ items: [{ model: "m", prompt_tokens: 1, completion_tokens: 1, total_tokens: 2, request_count: 1, cost_micro: "1" }] }), ApiError);
+});
+
+test("usageByModel adds up costs, staying null while no row has one", () => {
+  const { items } = parseUsageSummary({
+    items: [
+      { key_id: "key_a", model: "m1", prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, request_count: 1, cost_micro: 10 },
+      { key_id: "key_a", model: "m1", prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, request_count: 1 },
+      { key_id: "key_a", model: "m1", prompt_tokens: 1, completion_tokens: 2, total_tokens: 3, request_count: 1, cost_micro: 5 },
+    ],
+  });
+  assert.equal(usageByModel(items, (item) => item.keyId).get("key_a")?.[0]?.costMicro, 15);
+  assert.equal(addCost(null, null), null);
+  assert.equal(addCost(null, 0), 0);
+  assert.equal(addCost(3, null), 3);
 });

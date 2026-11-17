@@ -33,6 +33,17 @@ export interface UsageSummaryEntry {
   completionTokens: number;
   totalTokens: number;
   requestCount: number;
+  /** cacheReadTokens and cacheWriteTokens are the prompt-cache reads and
+   * writes, both part of promptTokens; 0 from a control plane that predates
+   * them. costMicro is the credits charged, in micro-credits, or null when
+   * billing is off (the field is absent then).
+   *
+   * cacheReadTokens 与 cacheWriteTokens 是提示缓存的读取与写入，都是 promptTokens 的
+   * 一部分；不支持它们的旧控制面为 0。costMicro 是消耗的点数（micro 点）；计费关闭时
+   * 该字段缺席，为 null。 */
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+  costMicro: number | null;
 }
 
 /** UsageSummary is the parsed response of a usage summary endpoint.
@@ -86,6 +97,19 @@ function num(source: Record<string, unknown>, key: string): number {
   return value;
 }
 
+/** optionalNum reads an optional number, `fallback` when absent.
+ * optionalNum 读取一个可选数字，缺席时为 `fallback`。 */
+function optionalNum<F extends number | null>(source: Record<string, unknown>, key: string, fallback: F): number | F {
+  const value = source[key];
+  if (value === undefined || value === null) {
+    return fallback;
+  }
+  if (typeof value !== "number" || !Number.isFinite(value)) {
+    fail();
+  }
+  return value;
+}
+
 function list<T>(value: unknown, parse: (item: unknown) => T): T[] {
   if (value === undefined || value === null) {
     return [];
@@ -107,7 +131,24 @@ function parseEntry(value: unknown): UsageSummaryEntry {
     completionTokens: num(source, "completion_tokens"),
     totalTokens: num(source, "total_tokens"),
     requestCount: num(source, "request_count"),
+    cacheReadTokens: optionalNum(source, "cache_read_tokens", 0),
+    cacheWriteTokens: optionalNum(source, "cache_write_tokens", 0),
+    costMicro: optionalNum(source, "cost_micro", null),
   };
+}
+
+/** billingShown reports whether a summary carries costs: the control plane
+ * sends cost_micro only with billing on.
+ *
+ * billingShown 报告汇总是否带有费用：控制面只在开启计费时发送 cost_micro。 */
+export function billingShown(items: readonly UsageSummaryEntry[]): boolean {
+  return items.some((item) => item.costMicro !== null);
+}
+
+/** addCost adds two optional costs: null only while both are null.
+ * addCost 相加两个可选费用：两者都为 null 时才是 null。 */
+export function addCost(a: number | null, b: number | null): number | null {
+  return a === null && b === null ? null : (a ?? 0) + (b ?? 0);
 }
 
 /** parseUsageSummary validates a usage summary response.
@@ -125,6 +166,9 @@ export interface ModelUsage {
   model: string;
   promptTokens: number;
   completionTokens: number;
+  /** costMicro is the credits charged, null when billing is off.
+   * costMicro 是消耗的点数，计费关闭时为 null。 */
+  costMicro: number | null;
 }
 
 /** usageByModel folds a `group_by=key` summary into per-model usage for each
@@ -143,9 +187,10 @@ export function usageByModel(items: UsageSummaryEntry[], pick: (item: UsageSumma
       models = new Map();
       totals.set(id, models);
     }
-    const entry = models.get(item.model) ?? { model: item.model, promptTokens: 0, completionTokens: 0 };
+    const entry = models.get(item.model) ?? { model: item.model, promptTokens: 0, completionTokens: 0, costMicro: null };
     entry.promptTokens += item.promptTokens;
     entry.completionTokens += item.completionTokens;
+    entry.costMicro = addCost(entry.costMicro, item.costMicro);
     models.set(item.model, entry);
   }
   const out = new Map<string, ModelUsage[]>();

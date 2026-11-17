@@ -5,6 +5,7 @@ import (
 	"strings"
 	"time"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 )
 
@@ -365,6 +366,28 @@ type usage struct {
 	OutputTokens             int `json:"output_tokens"`
 	CacheCreationInputTokens int `json:"cache_creation_input_tokens"`
 	CacheReadInputTokens     int `json:"cache_read_input_tokens"`
+	// CacheCreation splits CacheCreationInputTokens by TTL, when the API
+	// reports it.
+	// CacheCreation 在 API 报告时按 TTL 拆分 CacheCreationInputTokens。
+	CacheCreation *struct {
+		Ephemeral1hInputTokens int `json:"ephemeral_1h_input_tokens"`
+	} `json:"cache_creation"`
+}
+
+// toRuntime converts the usage, with output as the completion count: every
+// input token, cached or not, in PromptTokens, and the cache reads and
+// writes as details.
+//
+// toRuntime 转换用量，以 output 作为补全数：PromptTokens 计入全部输入 token（无论
+// 是否命中缓存），缓存读取与写入作为明细。
+func (u usage) toRuntime(output int) runtime.Usage {
+	out := runtime.Usage{PromptTokens: u.prompt(), CompletionTokens: output, TotalTokens: u.prompt() + output}
+	out.AddDetail(pricing.MeterCacheRead, int64(u.CacheReadInputTokens))
+	out.AddDetail(pricing.MeterCacheWrite, int64(u.CacheCreationInputTokens))
+	if u.CacheCreation != nil {
+		out.AddDetail(pricing.MeterCacheWrite1h, int64(u.CacheCreation.Ephemeral1hInputTokens))
+	}
+	return out
 }
 
 // prompt counts every input token, cached or not, as OpenAI's prompt_tokens does.
@@ -437,6 +460,6 @@ func toChatResponse(resp messagesResponse, createdAt time.Time) runtime.ChatResp
 			out.Message.ToolCalls = append(out.Message.ToolCalls, runtime.ToolCall{ID: b.ID, Type: "function", Function: runtime.FunctionCall{Name: b.Name, Arguments: args}})
 		}
 	}
-	out.Usage = runtime.Usage{PromptTokens: resp.Usage.prompt(), CompletionTokens: resp.Usage.OutputTokens, TotalTokens: resp.Usage.prompt() + resp.Usage.OutputTokens}
+	out.Usage = resp.Usage.toRuntime(resp.Usage.OutputTokens)
 	return out
 }

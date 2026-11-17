@@ -191,6 +191,11 @@ const ROUTES: readonly UpstreamRoute[] = [
   },
   {
     method: "GET",
+    segments: [literal("admin"), literal("v1"), literal("usage"), literal("records")],
+    query: ["since", "until", "model", "key_id", "limit", "cursor"],
+  },
+  {
+    method: "GET",
     segments: [literal("admin"), literal("v1"), literal("requests")],
     query: ["limit", "cursor", "since", "until", "status", "request_id"],
   },
@@ -205,6 +210,7 @@ const ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("checkout")], query: [] },
   { method: "POST", segments: [literal("admin"), literal("v1"), literal("billing"), literal("portal")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("ledger")], query: ["limit", "cursor", "kind"] },
+  { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("prices")], query: [] },
   { method: "GET", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders")], query: ["limit", "cursor", "status"] },
   { method: "DELETE", segments: [literal("admin"), literal("v1"), literal("billing"), literal("orders"), param()], query: [] },
   // EZFP (易支付) re-check: asks the control plane to query EZFP for the
@@ -308,14 +314,35 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("alerts"), param(), literal("acknowledge")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("requests")], query: ["limit", "cursor", "since", "until", "status", "request_id", "tenant_id"] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("usage"), literal("summary")], query: ["since", "until", "tenant_id", "group_by"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("usage"), literal("records")], query: ["since", "until", "tenant_id", "model", "key_id", "limit", "cursor"] },
   // Prepaid billing administration; see the tenant table for why these may 404.
   // 预充值计费管理；为何可能回 404 见租户表的说明。
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages")], query: [] },
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("packages"), param()], query: [] },
-  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("model-prices")], query: [] },
-  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("model-prices")], query: [] },
-  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("billing"), literal("model-prices")], query: ["model"] },
+  // Token pricing (.scratch/token-pricing): the versioned configuration
+  // and price plans, the official price catalog and its review, and prices
+  // as charging resolves them. An alias may contain "/", so it travels in
+  // the body or in ?model=, never as a path segment.
+  // token 计价（.scratch/token-pricing）：带版本的定价配置与价格方案、官方价目表及其
+  // 审核，以及按扣费解析方式得出的价格。别名可能含 "/"，因此放在请求体或 ?model= 中，
+  // 从不作为路径段。
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("pricing")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("pricing"), literal("models")], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("billing"), literal("pricing"), literal("models")], query: ["model", "base_revision"] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("pricing"), literal("default-prices")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("pricing"), literal("revisions")], query: ["limit", "cursor"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("plans")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("plans")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("plans"), param()], query: [] },
+  { method: "DELETE", segments: [literal("operator"), literal("v1"), literal("billing"), literal("plans"), param()], query: ["base_revision"] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("plan")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("effective-prices")], query: ["plan_id"] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog")], query: ["limit", "cursor", "q", "status"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("sync")], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("pending")], query: ["limit", "cursor"] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("pending"), literal("approve")], query: [] },
+  { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("catalog"), literal("pending"), literal("reject")], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants")], query: ["limit", "cursor", "status", "q"] },
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("mode")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("billing"), literal("tenants"), param(), literal("adjust")], query: [] },

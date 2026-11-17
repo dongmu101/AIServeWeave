@@ -47,6 +47,9 @@ type usageSummaryRow struct {
 	CompletionTokens int64  `gorm:"column:completion_tokens"`
 	TotalTokens      int64  `gorm:"column:total_tokens"`
 	RequestCount     int64  `gorm:"column:request_count"`
+	CacheReadTokens  int64  `gorm:"column:cache_read_tokens"`
+	CacheWriteTokens int64  `gorm:"column:cache_write_tokens"`
+	CostMicro        int64  `gorm:"column:cost_micro"`
 }
 
 // SummarizeUsage implements store.UsageRecords — the settlement query. It
@@ -78,7 +81,10 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 			"SUM(prompt_tokens) AS prompt_tokens, " +
 			"SUM(completion_tokens) AS completion_tokens, " +
 			"SUM(total_tokens) AS total_tokens, " +
-			"COUNT(*) AS request_count",
+			"COUNT(*) AS request_count, " +
+			"SUM(cache_read_tokens) AS cache_read_tokens, " +
+			"SUM(cache_write_tokens) AS cache_write_tokens, " +
+			"SUM(cost_micro) AS cost_micro",
 	).Group(groups).Order(groups).Scan(&rows).Error
 	if err != nil {
 		return nil, translate(err)
@@ -89,9 +95,50 @@ func (s *Store) SummarizeUsage(ctx context.Context, filter store.UsageRecordFilt
 			TenantID: r.TenantID, UserID: r.UserID, KeyID: r.KeyID, Model: r.Model,
 			PromptTokens: r.PromptTokens, CompletionTokens: r.CompletionTokens,
 			TotalTokens: r.TotalTokens, RequestCount: r.RequestCount,
+			CacheReadTokens: r.CacheReadTokens, CacheWriteTokens: r.CacheWriteTokens, CostMicro: r.CostMicro,
 		}
 	}
 	return out, nil
+}
+
+// ListUsageRecords implements store.UsageRecords. A tenant's page walks
+// idx_usage_records_tenant_created (tenant_id, created_at, id) backwards
+// across the monthly partitions; the operator's cross-tenant page walks
+// idx_usage_records_created.
+//
+// ListUsageRecords 实现 store.UsageRecords。租户的分页沿
+// idx_usage_records_tenant_created (tenant_id, created_at, id) 跨月分区倒序扫描；运维
+// 的跨租户分页沿 idx_usage_records_created 扫描。
+func (s *Store) ListUsageRecords(ctx context.Context, query store.ListQuery, filter store.UsageRecordListFilter) (store.Page[model.UsageRecord], error) {
+	db := s.db.WithContext(ctx).Model(&model.UsageRecord{})
+	if filter.TenantID != "" {
+		db = db.Where("tenant_id = ?", filter.TenantID)
+	}
+	if filter.Model != "" {
+		db = db.Where("model = ?", filter.Model)
+	}
+	if filter.KeyID != "" {
+		db = db.Where("key_id = ?", filter.KeyID)
+	}
+	if !filter.Since.IsZero() {
+		db = db.Where("created_at >= ?", filter.Since)
+	}
+	if !filter.Until.IsZero() {
+		db = db.Where("created_at < ?", filter.Until)
+	}
+	return readPage(db, query, func(r model.UsageRecord) (time.Time, string) { return r.CreatedAt, r.ID })
+}
+
+// CountUsageRecordsBySource implements store.UsageRecords. It scans the
+// window along idx_usage_records_created, so it is meant for short windows.
+//
+// CountUsageRecordsBySource 实现 store.UsageRecords。它沿 idx_usage_records_created
+// 扫描时间窗口，因此只适合短窗口。
+func (s *Store) CountUsageRecordsBySource(ctx context.Context, source string, since time.Time) (int64, error) {
+	var n int64
+	err := s.db.WithContext(ctx).Model(&model.UsageRecord{}).
+		Where("created_at >= ? AND price_source = ?", since, source).Count(&n).Error
+	return n, translate(err)
 }
 
 // DeleteUsageRecordsBefore implements store.UsageRecords.

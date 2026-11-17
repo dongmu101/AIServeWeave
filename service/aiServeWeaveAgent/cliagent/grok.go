@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 )
 
@@ -256,6 +257,20 @@ func (p *grokParser) finish() (*runtime.Usage, error) { return p.usage, nil }
 // （见 sumCounts）；obj 为 nil 表示没有用量。单独报告缓存输入的方言把它列为独立
 // 的输入组，使缓存命中同样计入配额。
 func usageFrom(obj map[string]json.RawMessage, input, output [][]string) (*runtime.Usage, error) {
+	return usageWithDetails(obj, input, nil, output)
+}
+
+// usageWithDetails is usageFrom that also records input group i as a
+// detail of meter inputMeters[i] ("" or a short slice records nothing), so a
+// dialect reporting cache reads and writes separately keeps them apart for
+// pricing. A cache-write meter also picks up the one-hour share from the
+// usage's cache_creation object, the way the Messages API reports it.
+//
+// usageWithDetails 是同时把第 i 个输入组记为计量项 inputMeters[i] 明细的
+// usageFrom（为 "" 或切片较短时不记录），使分别报告缓存读取与写入的方言在计价时把它们
+// 区分开。缓存写入计量项还会像 Messages API 那样，从用量的 cache_creation 对象中取出
+// 1 小时缓存的部分。
+func usageWithDetails(obj map[string]json.RawMessage, input [][]string, inputMeters []string, output [][]string) (*runtime.Usage, error) {
 	if obj == nil {
 		return nil, nil
 	}
@@ -267,5 +282,26 @@ func usageFrom(obj map[string]json.RawMessage, input, output [][]string) (*runti
 	if err != nil {
 		return nil, err
 	}
-	return tokenUsage(in, out), nil
+	usage := tokenUsage(in, out)
+	if usage == nil {
+		return nil, nil
+	}
+	for i, meter := range inputMeters {
+		if meter == "" || i >= len(input) {
+			continue
+		}
+		n, err := count(obj, input[i]...)
+		if err != nil {
+			return nil, err
+		}
+		usage.AddDetail(meter, int64(n))
+		if meter == pricing.MeterCacheWrite {
+			hour, err := count(object(obj["cache_creation"]), "ephemeral_1h_input_tokens", "ephemeral1hInputTokens")
+			if err != nil {
+				return nil, err
+			}
+			usage.AddDetail(pricing.MeterCacheWrite1h, int64(min(hour, n)))
+		}
+	}
+	return usage, nil
 }

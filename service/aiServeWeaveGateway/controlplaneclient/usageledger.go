@@ -124,6 +124,16 @@ type usageRecordWire struct {
 	// UserID is the signed-in Studio user of a keyless request.
 	// UserID 是无 key 请求的 Studio 登录用户。
 	UserID string `json:"user_id,omitempty"`
+	// Details and Attributes break the totals down by meter and carry the
+	// request facts pricing may key on (common/pricing). Both are omitted
+	// when empty; a control plane that predates them refuses them, so it
+	// must be upgraded first. Once it knows these two fields, new meters
+	// need no further protocol change.
+	// Details 与 Attributes 按计量项细分总数，并携带计价可能依据的请求属性
+	// （common/pricing）。两者为空时省略；不认识它们的旧控制面会拒绝，因此须先升级
+	// 控制面。控制面认识这两个字段之后，新增计量项不再需要改协议。
+	Details    map[string]int64  `json:"details,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // PushUsageRecords implements httpapi.UsageLedgerClient. An empty batch is
@@ -157,6 +167,8 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 			NodeID:           r.NodeID,
 			KeyID:            r.KeyID,
 			UserID:           r.UserID,
+			Details:          r.Details,
+			Attributes:       r.Attributes,
 		}
 	}
 

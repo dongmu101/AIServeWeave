@@ -719,6 +719,16 @@ type UsageRecordRequest struct {
 	// UserID 是 Studio 请求的登录用户，这类请求没有 key。KeyID 非空时忽略它，以 key 的
 	// 创建者为准。
 	UserID string `json:"user_id,omitempty"`
+	// Details breaks the totals down by meter and Attributes carries the
+	// request facts pricing may key on (common/pricing). A record whose
+	// details or attributes break the limits keeps its totals and loses
+	// only those, so its tokens are billed at the base price.
+	//
+	// Details 按计量项细分总数，Attributes 携带计价可能依据的请求属性
+	// （common/pricing）。明细或属性违反上限的记录保留其总数，只丢掉明细与属性，使其
+	// token 按基础价计费。
+	Details    map[string]int64  `json:"details,omitempty"`
+	Attributes map[string]string `json:"attributes,omitempty"`
 }
 
 // CreateUsageRecordsRequest is the body of POST /internal/v1/usagerecords.
@@ -759,6 +769,14 @@ type UsageSummaryEntryResponse struct {
 	CompletionTokens int64  `json:"completion_tokens"`
 	TotalTokens      int64  `json:"total_tokens"`
 	RequestCount     int64  `json:"request_count"`
+	// CacheReadTokens and CacheWriteTokens are the prompt-cache parts of
+	// PromptTokens. CostMicro appears only with billing on.
+	//
+	// CacheReadTokens 与 CacheWriteTokens 是 PromptTokens 中提示缓存的部分。CostMicro
+	// 只在开启计费时出现。
+	CacheReadTokens  int64  `json:"cache_read_tokens"`
+	CacheWriteTokens int64  `json:"cache_write_tokens"`
+	CostMicro        *int64 `json:"cost_micro,omitempty"`
 }
 
 // UsageSummaryResponse is the settlement query's full result: one entry per

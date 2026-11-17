@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 )
 
@@ -139,8 +140,9 @@ func (p *cursorParser) line(event []byte, out sink) (bool, error) {
 			}
 		}
 		var err error
-		p.usage, err = usageFrom(object(obj["usage"]),
+		p.usage, err = usageWithDetails(object(obj["usage"]),
 			[][]string{{"inputTokens", "input_tokens"}, {"cacheReadTokens", "cache_read_input_tokens"}, {"cacheWriteTokens", "cache_creation_input_tokens"}},
+			[]string{"", pricing.MeterCacheRead, pricing.MeterCacheWrite},
 			[][]string{{"outputTokens", "output_tokens"}})
 		p.done = err == nil
 		return p.done, err

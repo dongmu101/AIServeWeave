@@ -9,10 +9,14 @@ package logic
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
+	"maps"
+	"slices"
 	"time"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
@@ -42,6 +46,13 @@ type CreateUsageRecordParams struct {
 	//
 	// UserID 是无 key 请求（Studio）的登录用户，只在 KeyID 为空时使用。
 	UserID string
+	// Details and Attributes are the Gateway's meter breakdown and request
+	// facts (common/pricing), or nil.
+	//
+	// Details 与 Attributes 是 Gateway 上报的计量项细分与请求属性（common/pricing），
+	// 没有则为 nil。
+	Details    map[string]int64
+	Attributes map[string]string
 }
 
 // Column widths of usage_records (and usage_charges), in bytes.
@@ -90,7 +101,7 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 		if p.KeyID == "" {
 			userID = p.UserID
 		}
-		records = append(records, model.UsageRecord{
+		record := model.UsageRecord{
 			UserID:           userID,
 			ID:               p.RequestID,
 			TenantID:         p.TenantID,
@@ -102,7 +113,9 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 			CreatedAt:        p.CreatedAt,
 			NodeID:           p.NodeID,
 			KeyID:            p.KeyID,
-		})
+		}
+		applyUsageDetails(&record, p.Details, p.Attributes)
+		records = append(records, record)
 	}
 	if len(records) == 0 {
 		return 0, nil
@@ -125,6 +138,49 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 		return 0, err
 	}
 	return len(records), nil
+}
+
+// applyUsageDetails stores the record's meter breakdown: the details JSON
+// and the cache columns summaries add up. Details or attributes that break
+// common/pricing's limits are dropped with a warning while the record is
+// kept, the same skip-don't-fail rule as an over-long field: the record's
+// totals still bill at the base price, and refusing the batch would lose its
+// usage, since the Gateway drops a batch the control plane refuses. The
+// Gateway already filters by the same rules, so this is a backstop.
+//
+// applyUsageDetails 保存记录的计量项细分：明细 JSON，以及汇总时求和的缓存列。违反
+// common/pricing 限制的明细或属性会被丢弃并记一条警告，记录本身保留，与超长字段同样
+// 采取「跳过而不失败」的规则：记录的总数仍按基础价计费，而拒绝整批会丢失其中的用量，
+// 因为 Gateway 会丢弃被控制面拒绝的批次。Gateway 已经按同样的规则过滤，这里只是兜底。
+func applyUsageDetails(record *model.UsageRecord, details map[string]int64, attributes map[string]string) {
+	if err := pricing.ValidateDetails(details); err != nil {
+		slog.Warn("dropping invalid usage details", slog.String("tenant_id", record.TenantID), slog.Any("error", err))
+		details = nil
+	}
+	if err := pricing.ValidateAttributes(attributes); err != nil {
+		slog.Warn("dropping invalid usage attributes", slog.String("tenant_id", record.TenantID), slog.Any("error", err))
+		attributes = nil
+	}
+	record.ReportedDetails, record.ReportedAttributes = details, attributes
+	if len(details) == 0 && len(attributes) == 0 {
+		return
+	}
+	quantities, adjusted := pricing.Quantities(record.PromptTokens, record.CompletionTokens, details)
+	record.CacheReadTokens = quantities[pricing.MeterCacheRead]
+	record.CacheWriteTokens = quantities[pricing.MeterCacheWrite]
+	doc := model.UsageDetails{V: model.UsageDetailsVersion, Meters: make([]model.UsageMeterLine, 0, len(quantities)), Adjusted: adjusted}
+	if len(attributes) > 0 {
+		doc.Attributes = attributes
+	}
+	for _, name := range slices.Sorted(maps.Keys(quantities)) {
+		doc.Meters = append(doc.Meters, model.UsageMeterLine{K: name, Q: quantities[name]})
+	}
+	encoded, err := json.Marshal(doc)
+	if err != nil {
+		return // a map of strings and integers always encodes / 字符串与整数组成的 map 总能编码
+	}
+	text := string(encoded)
+	record.Details = &text
 }
 
 // attributeUsageToUsers fills each record's UserID with its key's creator,

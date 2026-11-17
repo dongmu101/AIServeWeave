@@ -11,7 +11,9 @@ import (
 // Catalog 是任何人无需登录即可读取的购买信息。
 type Catalog struct {
 	Packages []model.CreditPackage
-	Prices   []model.ModelPrice
+	// Prices are the routed aliases' prices under the default plan.
+	// Prices 是路由别名在默认方案下的价格。
+	Prices   []EffectivePrice
 	Accounts []model.AccountSale
 	// Presales are the listed, priced presales; callers render only their
 	// kind, name, price and PresaleAvailable.
@@ -37,13 +39,13 @@ func (s *Service) Catalog(ctx context.Context) (Catalog, error) {
 	if !s.accountsEnabled() {
 		return Catalog{}, ErrNotFound
 	}
-	out := Catalog{Packages: []model.CreditPackage{}, Prices: []model.ModelPrice{}, Accounts: []model.AccountSale{}, Presales: []store.PresaleStock{}}
+	out := Catalog{Packages: []model.CreditPackage{}, Prices: []EffectivePrice{}, Accounts: []model.AccountSale{}, Presales: []store.PresaleStock{}}
 	if !s.billingEnabled() {
 		return out, nil
 	}
 	var err error
-	if out.Prices, err = s.store.ListModelPrices(ctx); err != nil {
-		return Catalog{}, translate(err)
+	if out.Prices, err = s.defaultPlanPrices(ctx); err != nil {
+		return Catalog{}, err
 	}
 	// Packages, accounts and presales are bought through a fiat checkout,
 	// Dodo's or 易支付's; an item is listed when one of them can sell it.

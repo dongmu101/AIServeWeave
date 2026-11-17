@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"AIServeWeave/common/modelroute"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
@@ -29,9 +30,14 @@ func TestCatalogIsPublicAndSafe(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// gpt-x is routed and priced (model_prices becomes its override); local
+	// is routed but nothing prices it, so the catalog leaves it out.
+	// gpt-x 有路由且有单价（model_prices 转成它的覆盖价）；local 有路由但没有任何单价，
+	// 因此目录不列出它。
 	if err := st.PutModelPrice(ctx, model.ModelPrice{Model: "gpt-x", InputMicroPerMTok: 1, OutputMicroPerMTok: 2, UpdatedBy: "ops_secret", UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
+	publishTestRoutes(t, service, "gpt-x", "local-unpriced")
 	sales := []model.AccountSale{
 		{ID: "acc_on", NodeID: "node-secret", RuntimeID: "rt-secret", Name: "Claude A", PriceMinor: 1999, Currency: "USD", DodoProductID: "pdt_account_secret", Active: true},
 		{ID: "acc_off", NodeID: "node-off", RuntimeID: "rt-off", Name: "Archived", PriceMinor: 1999, Currency: "USD", DodoProductID: "pdt_account_secret"},
@@ -65,12 +71,13 @@ func TestCatalogIsPublicAndSafe(t *testing.T) {
 		t.Fatal(w.Code, w.Body.String())
 	}
 	body := w.Body.String()
-	for _, want := range []string{"Starter", "Claude A", "gpt-x", "acc_on", "pkg_on", `"price_minor":1999`, `"currency":"USD"`} {
+	for _, want := range []string{"Starter", "Claude A", "gpt-x", "acc_on", "pkg_on", `"price_minor":1999`, `"currency":"USD"`,
+		`"input_micro_per_mtok":1`, `"output_micro_per_mtok":2`, `"meter":"input"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("catalog lacks %q: %s", want, body)
 		}
 	}
-	for _, leak := range []string{"pdt_secret", "pdt_old", "Retired", "Archived", "Held", "Legacy", "pdt_account_secret", "node-", "rt-", "tenant_id", "buyer", "ops_secret", "updated_by"} {
+	for _, leak := range []string{"pdt_secret", "pdt_old", "Retired", "Archived", "Held", "Legacy", "pdt_account_secret", "node-", "rt-", "tenant_id", "buyer", "ops_secret", "updated_by", "local-unpriced", `"ref"`, `"source"`} {
 		if strings.Contains(body, leak) {
 			t.Fatalf("catalog leaks %q: %s", leak, body)
 		}
@@ -100,5 +107,24 @@ func TestCatalogAccountsOnlyWithoutBilling(t *testing.T) {
 	getCatalog(&svc.ServiceContext{Logic: service})(w, httptest.NewRequest(http.MethodGet, "/billing/v1/catalog", nil))
 	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"packages":[]`) || !strings.Contains(w.Body.String(), `"accounts":[]`) {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+// publishTestRoutes publishes one route per alias, each to a runtime model
+// of the same name.
+// publishTestRoutes 为每个别名发布一条路由，各自指向同名的运行时模型。
+func publishTestRoutes(t *testing.T, service *logic.Service, aliases ...string) {
+	t.Helper()
+	routes := make([]modelroute.Route, len(aliases))
+	for i, alias := range aliases {
+		routes[i] = modelroute.Route{Model: alias, Targets: []modelroute.Target{{RuntimeModel: alias}}}
+	}
+	operator := logic.Actor{TenantID: model.PlatformScope, UserID: "operator", Role: model.RolePlatformOperator}
+	current, err := service.CurrentRoutes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := service.PublishRoutes(context.Background(), operator, current.Revision, routes); err != nil {
+		t.Fatal(err)
 	}
 }

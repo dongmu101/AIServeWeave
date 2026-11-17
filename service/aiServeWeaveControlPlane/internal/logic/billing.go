@@ -15,9 +15,9 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 	"unicode/utf8"
 
-	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/billing"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
@@ -53,6 +53,11 @@ type BillingConfig struct {
 	//
 	// Ezfp 是易支付，为以 CNY 标价的商品提供的第二个法币服务商。为 nil 时关闭。
 	Ezfp *EzfpConfig
+	// LedgerLocation is the time zone whose midnight ends a day of usage on
+	// the ledger (Billing.LedgerTimezone); nil is UTC.
+	// LedgerLocation 是用量账目以其午夜为日界的时区（Billing.LedgerTimezone）；nil
+	// 表示 UTC。
+	LedgerLocation *time.Location
 }
 
 // WithBilling turns billing on. Without it the Service charges nothing,
@@ -133,6 +138,11 @@ type CreditPackageInput struct {
 type TenantBillingView struct {
 	Tenant  model.Tenant
 	Billing model.TenantBilling
+	// PricePlanID is the tenant's current price plan, set only when billing
+	// is enabled.
+	//
+	// PricePlanID 是租户当前所属的价格方案，只在开启计费时填写。
+	PricePlanID string
 }
 
 func (s *Service) billingEnabled() bool { return s.billing != nil }
@@ -391,6 +401,34 @@ func (s *Service) ListBillingLedger(ctx context.Context, actor Actor, query stor
 	return page, translate(err)
 }
 
+// PendingUsage returns the billing row whose accumulation a tenant's ledger
+// list shows as pending, scoped as ListBillingLedger is: a tenant reads its
+// own, an operator names one. It reports false when nothing is accumulating
+// or no single tenant is named.
+//
+// PendingUsage 返回租户账目列表中显示为「进行中」的累计所在的计费行，范围限定同
+// ListBillingLedger：租户读自己的，运维指定一个租户。没有累计或没有指定单一租户时报告
+// false。
+func (s *Service) PendingUsage(ctx context.Context, actor Actor, tenantID string) (model.TenantBilling, bool, error) {
+	if !s.accountsEnabled() {
+		return model.TenantBilling{}, false, ErrNotFound
+	}
+	if !isPlatformActor(actor) {
+		tenantID = actor.TenantID
+	}
+	if tenantID == "" {
+		return model.TenantBilling{}, false, nil
+	}
+	row, err := s.store.GetTenantBilling(ctx, tenantID)
+	if errors.Is(err, store.ErrNotFound) {
+		return model.TenantBilling{}, false, nil
+	}
+	if err != nil {
+		return model.TenantBilling{}, false, translate(err)
+	}
+	return row, row.UsageAccCount > 0, nil
+}
+
 // ListBillingOrders reads checkout orders, scoped as ListBillingLedger is.
 //
 // ListBillingOrders 读取结账订单，范围限定同 ListBillingLedger。
@@ -475,49 +513,6 @@ func (s *Service) HandleBillingWebhook(ctx context.Context, payload []byte, head
 		slog.String("type", event.Type), slog.String("outcome", result.Outcome),
 		slog.String("order_id", result.OrderID), slog.String("tenant_id", result.TenantID))
 	return result, nil
-}
-
-// chargeUsage prices records and charges them in one store transaction,
-// dropping cached verifications when a tenant's balance ran out. A request
-// served by the tenant's own node costs nothing.
-//
-// chargeUsage 为 records 定价并在一次 store 事务中扣费；租户余额耗尽时丢弃已缓存的
-// 校验结果。由商户自己的节点服务的请求不收费。
-func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) error {
-	prices, err := s.store.ListModelPrices(ctx)
-	if err != nil {
-		return err
-	}
-	byModel := make(map[string]model.ModelPrice, len(prices))
-	for _, p := range prices {
-		byModel[p.Model] = p
-	}
-	now := s.clock.Now()
-	charges := make([]model.UsageCharge, 0, len(records))
-	for _, r := range records {
-		price, ok := byModel[r.Model]
-		if !ok {
-			price = byModel[model.DefaultPriceModel]
-		}
-		cost := price.Cost(r.PromptTokens, r.CompletionTokens)
-		// A tenant's own hardware is not billed; the charge row is still
-		// written, at zero, so reports count the request.
-		// 商户自己的硬件不计费；费用行仍以零写入，使报表能计入这次请求。
-		if owner, owned := nodeaccess.OwnerOf(r.NodeID); owned && owner == r.TenantID {
-			cost = 0
-		}
-		charges = append(charges, model.UsageCharge{
-			RequestID: r.ID, TenantID: r.TenantID, Model: r.Model, CostMicro: cost, CreatedAt: now,
-		})
-	}
-	changed, err := s.store.ChargeUsage(ctx, records, charges)
-	if err != nil {
-		return err
-	}
-	if changed && s.invalidator != nil {
-		s.invalidator.InvalidateAll(ctx)
-	}
-	return nil
 }
 
 // billingBlocked reports whether key verification must refuse the tenant for
@@ -611,58 +606,6 @@ func (s *Service) UpdateCreditPackage(ctx context.Context, actor Actor, id strin
 	return pkg, nil
 }
 
-// ListModelPrices returns every price, for the operator.
-//
-// ListModelPrices 返回全部单价，供运维使用。
-func (s *Service) ListModelPrices(ctx context.Context, actor Actor) ([]model.ModelPrice, error) {
-	if err := s.requireBillingOperator(actor); err != nil {
-		return nil, err
-	}
-	return s.store.ListModelPrices(ctx)
-}
-
-// PutModelPrice sets one alias's price; model.DefaultPriceModel sets the
-// default. A new price applies to usage the Gateway reports from now on.
-//
-// PutModelPrice 设置一个别名的单价；model.DefaultPriceModel 设置默认单价。新单价
-// 适用于此后 Gateway 上报的用量。
-func (s *Service) PutModelPrice(ctx context.Context, actor Actor, alias string, inputMicroPerMTok, outputMicroPerMTok int64) (model.ModelPrice, error) {
-	if err := s.requireBillingOperator(actor); err != nil {
-		return model.ModelPrice{}, err
-	}
-	alias = strings.TrimSpace(alias)
-	if alias == "" || len(alias) > 128 ||
-		inputMicroPerMTok < 0 || inputMicroPerMTok > model.MaxPriceMicroPerMTok ||
-		outputMicroPerMTok < 0 || outputMicroPerMTok > model.MaxPriceMicroPerMTok {
-		return model.ModelPrice{}, ErrInvalidInput
-	}
-	price := model.ModelPrice{
-		Model: alias, InputMicroPerMTok: inputMicroPerMTok, OutputMicroPerMTok: outputMicroPerMTok,
-		UpdatedBy: actor.UserID, UpdatedAt: s.clock.Now(),
-	}
-	if err := s.store.PutModelPrice(ctx, price); err != nil {
-		return model.ModelPrice{}, translate(err)
-	}
-	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingPriceUpdate, truncate(alias, 64),
-		fmt.Sprintf("input=%d output=%d", inputMicroPerMTok, outputMicroPerMTok), actor.IP)
-	return price, nil
-}
-
-// DeleteModelPrice removes one alias's price, so it falls back to the
-// default.
-//
-// DeleteModelPrice 删除一个别名的单价，使其回落到默认单价。
-func (s *Service) DeleteModelPrice(ctx context.Context, actor Actor, alias string) error {
-	if err := s.requireBillingOperator(actor); err != nil {
-		return err
-	}
-	if err := s.store.DeleteModelPrice(ctx, alias); err != nil {
-		return translate(err)
-	}
-	s.audit(ctx, model.PlatformScope, actor.UserID, model.ActionBillingPriceDelete, truncate(alias, 64), "", actor.IP)
-	return nil
-}
-
 // ListBillingTenants pages through tenants with their billing state.
 //
 // ListBillingTenants 分页读取租户及其计费状态。
@@ -682,13 +625,19 @@ func (s *Service) ListBillingTenants(ctx context.Context, actor Actor, query sto
 	if err != nil {
 		return store.Page[TenantBillingView]{}, err
 	}
+	var plans map[string]string
+	if s.billingEnabled() {
+		if plans, err = s.tenantPricePlans(ctx, ids); err != nil {
+			return store.Page[TenantBillingView]{}, err
+		}
+	}
 	out := store.Page[TenantBillingView]{NextCursor: tenants.NextCursor, Items: make([]TenantBillingView, len(tenants.Items))}
 	for i, t := range tenants.Items {
 		row, ok := rows[t.ID]
 		if !ok {
 			row = model.TenantBilling{TenantID: t.ID, Mode: model.BillingModeExempt}
 		}
-		out.Items[i] = TenantBillingView{Tenant: t, Billing: row}
+		out.Items[i] = TenantBillingView{Tenant: t, Billing: row, PricePlanID: plans[t.ID]}
 	}
 	return out, nil
 }

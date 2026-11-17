@@ -55,6 +55,9 @@ func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter
 		agg.CompletionTokens += r.CompletionTokens
 		agg.TotalTokens += r.TotalTokens
 		agg.RequestCount++
+		agg.CacheReadTokens += r.CacheReadTokens
+		agg.CacheWriteTokens += r.CacheWriteTokens
+		agg.CostMicro += r.CostMicro
 	}
 	out := make([]store.UsageSummary, 0, len(totals))
 	for _, agg := range totals {
@@ -74,6 +77,38 @@ func (s *Store) SummarizeUsage(_ context.Context, filter store.UsageRecordFilter
 		return a.Model < b.Model
 	})
 	return out, nil
+}
+
+// ListUsageRecords implements store.UsageRecords.
+func (s *Store) ListUsageRecords(_ context.Context, query store.ListQuery, filter store.UsageRecordListFilter) (store.Page[model.UsageRecord], error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []model.UsageRecord
+	for _, r := range s.usageRecords {
+		if (filter.TenantID != "" && r.TenantID != filter.TenantID) || (filter.Model != "" && r.Model != filter.Model) ||
+			(filter.KeyID != "" && r.KeyID != filter.KeyID) {
+			continue
+		}
+		if (!filter.Since.IsZero() && r.CreatedAt.Before(filter.Since)) || (!filter.Until.IsZero() && !r.CreatedAt.Before(filter.Until)) {
+			continue
+		}
+		out = append(out, r)
+	}
+	sortNewestFirst(out, func(r model.UsageRecord) (time.Time, string) { return r.CreatedAt, r.ID })
+	return paginate(out, query, func(r model.UsageRecord) (time.Time, string) { return r.CreatedAt, r.ID })
+}
+
+// CountUsageRecordsBySource implements store.UsageRecords.
+func (s *Store) CountUsageRecordsBySource(_ context.Context, source string, since time.Time) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var n int64
+	for _, r := range s.usageRecords {
+		if r.PriceSource == source && !r.CreatedAt.Before(since) {
+			n++
+		}
+	}
+	return n, nil
 }
 
 // DeleteUsageRecordsBefore implements store.UsageRecords.

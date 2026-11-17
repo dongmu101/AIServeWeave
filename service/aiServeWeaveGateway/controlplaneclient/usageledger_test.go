@@ -5,11 +5,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/service/aiServeWeaveGateway/controlplaneclient"
 	"AIServeWeave/service/aiServeWeaveGateway/httpapi"
 )
@@ -17,10 +20,7 @@ import (
 func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 	var gotAuth string
 	var gotBody struct {
-		Records []struct {
-			RequestID string `json:"request_id"`
-			KeyID     string `json:"key_id"`
-		} `json:"records"`
+		Records []map[string]json.RawMessage `json:"records"`
 	}
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		gotAuth = r.Header.Get("Authorization")
@@ -38,7 +38,9 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 		t.Fatalf("NewUsageLedgerClient() error = %v, want nil", err)
 	}
 	err = client.PushUsageRecords(context.Background(), []httpapi.UsageRecord{
-		{RequestID: "req_1", TenantID: "tnt_1", Model: "llama3", Endpoint: "chat", PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CreatedAt: time.Now(), KeyID: "key_1"},
+		{RequestID: "req_1", TenantID: "tnt_1", Model: "llama3", Endpoint: "chat", PromptTokens: 10, CompletionTokens: 5, TotalTokens: 15, CreatedAt: time.Now(), KeyID: "key_1",
+			Details: map[string]int64{"input.cache_read": 6}, Attributes: map[string]string{"service_tier": "flex"}},
+		{RequestID: "req_2", TenantID: "tnt_1", Model: "llama3", Endpoint: "chat", PromptTokens: 1, TotalTokens: 1, CreatedAt: time.Now()},
 	})
 	if err != nil {
 		t.Fatalf("PushUsageRecords() error = %v, want nil", err)
@@ -46,8 +48,21 @@ func TestPushUsageRecordsPostsTheBatchAndAuthenticates(t *testing.T) {
 	if gotAuth != "Bearer internal-secret" {
 		t.Errorf("Authorization header = %q, want %q", gotAuth, "Bearer internal-secret")
 	}
-	if len(gotBody.Records) != 1 || gotBody.Records[0].RequestID != "req_1" || gotBody.Records[0].KeyID != "key_1" {
-		t.Errorf("posted body records = %+v, want one record with request_id req_1 and key_id key_1", gotBody.Records)
+	if len(gotBody.Records) != 2 {
+		t.Fatalf("posted %d records, want 2", len(gotBody.Records))
+	}
+	first, second := gotBody.Records[0], gotBody.Records[1]
+	if string(first["request_id"]) != `"req_1"` || string(first["key_id"]) != `"key_1"` ||
+		string(first["details"]) != `{"input.cache_read":6}` || string(first["attributes"]) != `{"service_tier":"flex"}` {
+		t.Errorf("first posted record = %s, want request_id req_1, key_id key_1 and its details and attributes", first)
+	}
+	// A control plane that predates these fields refuses them, so empty
+	// ones must be left out.
+	// 不认识这些字段的旧控制面会拒绝它们，因此为空时必须省略。
+	for _, field := range []string{"key_id", "node_id", "details", "attributes"} {
+		if _, present := second[field]; present {
+			t.Errorf("second posted record carries an empty %s field: %s", field, second)
+		}
 	}
 }
 
@@ -81,7 +96,7 @@ func TestPushUsageRecordsMaxBatchFitsTheControlPlanesBodyLimit(t *testing.T) {
 	// handler.MaxUsageRecordsBodyBytes — duplicated here, not imported, for
 	// the same cross-service reason TestPushRequestLogsMaxBatchFitsTheControlPlanesBodyLimit
 	// already documents.
-	const controlPlaneMaxUsageRecordsBodyBytes = 256 << 10
+	const controlPlaneMaxUsageRecordsBodyBytes = 4 << 20
 
 	var gotBodyBytes int
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -100,6 +115,24 @@ func TestPushUsageRecordsMaxBatchFitsTheControlPlanesBodyLimit(t *testing.T) {
 		t.Fatalf("NewUsageLedgerClient() error = %v, want nil", err)
 	}
 
+	// Every record carries the most details and attributes common/pricing
+	// allows, with the longest names, values and counts, so the batch is the
+	// largest a Gateway can send.
+	// 每条记录都带上 common/pricing 允许的最多明细与属性，名称、取值与计数都取最长，
+	// 使这一批成为 Gateway 可能发出的最大批次。
+	details := make(map[string]int64, pricing.MaxDetails)
+	for i := 0; i < pricing.MaxDetails; i++ {
+		name := fmt.Sprintf("input.m%02d", i)
+		details[name+strings.Repeat("x", pricing.MaxMeterNameLen-len(name))] = math.MaxInt64
+	}
+	attributes := make(map[string]string, pricing.MaxAttributes)
+	for i := 0; i < pricing.MaxAttributes; i++ {
+		key := fmt.Sprintf("a%02d", i)
+		attributes[key+strings.Repeat("k", pricing.MaxAttributeKeyLen-len(key))] = strings.Repeat("v", pricing.MaxAttributeValLen)
+	}
+	if pricing.ValidateDetails(details) != nil || pricing.ValidateAttributes(attributes) != nil {
+		t.Fatal("the worst-case details must be valid")
+	}
 	now := time.Now()
 	records := make([]httpapi.UsageRecord, httpapi.DefaultUsageLedgerBatchSize)
 	for i := range records {
@@ -112,6 +145,9 @@ func TestPushUsageRecordsMaxBatchFitsTheControlPlanesBodyLimit(t *testing.T) {
 			CompletionTokens: 123456,
 			TotalTokens:      246912,
 			CreatedAt:        now,
+			KeyID:            fmt.Sprintf("key_%036x", i),
+			Details:          details,
+			Attributes:       attributes,
 		}
 	}
 	if err := client.PushUsageRecords(context.Background(), records); err != nil {

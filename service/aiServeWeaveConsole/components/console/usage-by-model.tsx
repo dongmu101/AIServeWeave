@@ -4,6 +4,7 @@ import * as React from "react";
 
 import { useI18n } from "@/components/i18n/provider";
 import { useResource } from "@/components/console/use-resource";
+import { formatCredits } from "@/lib/console/billing";
 import { parseUsageSummary, usageByModel, type ModelUsage, type UsageSummary } from "@/lib/console/usage";
 
 /** useUsageByKey reads the tenant's all-time usage grouped by key and returns
@@ -28,9 +29,10 @@ export function useUsageByKey(): { byKey: Map<string, ModelUsage[]>; byUser: Map
   }, [summary.data]);
 }
 
-/** UsageByModelCell lists one row's input and output tokens per model.
+/** UsageByModelCell lists one row's input and output tokens per model, and
+ * the credits used when billing is on.
  *
- * UsageByModelCell 按模型列出一行的输入与输出 token。 */
+ * UsageByModelCell 按模型列出一行的输入与输出 token，开启计费时另列消耗的点数。 */
 export function UsageByModelCell({ usage }: { usage: ModelUsage[] | undefined }) {
   const { locale, t } = useI18n();
   if (!usage || usage.length === 0) {
@@ -43,6 +45,7 @@ export function UsageByModelCell({ usage }: { usage: ModelUsage[] | undefined })
           <code>{entry.model}</code>{" "}
           <span className="text-muted-foreground">{t("tenant.usageInput")}</span> {entry.promptTokens.toLocaleString(locale)}{" · "}
           <span className="text-muted-foreground">{t("tenant.usageOutput")}</span> {entry.completionTokens.toLocaleString(locale)}
+          {entry.costMicro !== null ? <>{" · "}<span className="text-muted-foreground">{t("tenant.usageCost")}</span> {formatCredits(entry.costMicro, locale)}</> : null}
         </li>
       ))}
     </ul>

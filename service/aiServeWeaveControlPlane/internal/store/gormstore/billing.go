@@ -4,7 +4,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"math"
 	"sort"
 	"time"
@@ -56,6 +55,8 @@ func (s *Store) InitTenantBilling(ctx context.Context, billing model.TenantBilli
 		if grant != nil {
 			billing.BalanceMicro = grant.AmountMicro
 			grant.BalanceAfterMicro = grant.AmountMicro
+			grant.CreatedAt = store.NextLedgerTime(nil, grant.CreatedAt)
+			billing.LastLedgerAt = &grant.CreatedAt
 		}
 		if err := tx.Create(&billing).Error; err != nil {
 			return err
@@ -127,48 +128,53 @@ func (s *Store) AdjustCredit(ctx context.Context, entry model.CreditLedgerEntry)
 }
 
 // ChargeUsage implements store.Billing. The tenant rows are locked in id
-// order before the already-charged check, so two concurrent pushes of the
-// same batch serialize on them and the second sees the first's charges.
+// order before the already-recorded check, so two concurrent pushes of the
+// same batch serialize on them and the second sees the first's records.
+//
+// The already-recorded check reads usage_records by id alone. usage_records
+// is partitioned by created_at, so its primary key is (id, created_at) and
+// cannot by itself keep an id unique; reading by id across every partition
+// under the tenant locks does, even for a resend whose created_at differs.
+// With monthly partitions kept 400 days that is about fourteen primary-key
+// probes per id.
 //
 // The transaction runs at READ COMMITTED on both databases. That is what lets
-// the already-charged check be a plain read: after the tenant locks, it sees
-// every charge committed by the push that held them. A locking read would
-// work too, but under MySQL's default REPEATABLE READ a locking read of
-// request ids that do not exist yet takes gap locks, and two replicas pushing
-// unrelated batches would deadlock inserting into each other's gaps.
-// Tenants without a billing row are exempt, so a concurrent duplicate for
-// one of them only meets the primary key and inserts nothing.
+// the check be a plain read: after the tenant locks, it sees every record
+// committed by the push that held them. A locking read would work too, but
+// under MySQL's default REPEATABLE READ a locking read of ids that do not
+// exist yet takes gap locks, and two replicas pushing unrelated batches would
+// deadlock inserting into each other's gaps. Tenants without a billing row
+// are exempt and not locked; a concurrent duplicate for one of them meets the
+// primary key when its created_at is the same, and at worst adds a report
+// row, never a charge, when it is not.
 //
-// ChargeUsage 实现 store.Billing。在检查「是否已扣费」之前，按 id 顺序锁定租户行，
-// 因此同一批次的两次并发推送会在这些行上串行化，后一次能看到前一次的扣费。
+// ChargeUsage 实现 store.Billing。在检查「是否已入账」之前，按 id 顺序锁定租户行，
+// 因此同一批次的两次并发推送会在这些行上串行化，后一次能看到前一次写入的记录。
 //
-// 事务在两种数据库上都以 READ COMMITTED 运行，这使「是否已扣费」的检查可以是普通读：
-// 拿到租户锁之后，它能看到持有这些锁的那次推送已提交的全部扣费。锁定读也能达到目的，
-// 但在 MySQL 默认的 REPEATABLE READ 下，对尚不存在的 request id 做锁定读会加间隙锁，
-// 两个副本推送互不相关的批次时会因向对方的间隙插入而死锁。没有计费行的租户是 exempt，
-// 它们的并发重复只会撞上主键，什么也不插入。
-func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, charges []model.UsageCharge) (bool, error) {
-	if len(records) == 0 && len(charges) == 0 {
+// 「是否已入账」的检查只按 id 读取 usage_records。usage_records 按 created_at 分区，
+// 主键是 (id, created_at)，单靠它无法保证 id 唯一；在租户锁之下按 id 跨所有分区读取则
+// 可以，即使重发的记录 created_at 不同也一样。按月分区、保留 400 天时，每个 id 约是
+// 14 次主键探查。
+//
+// 事务在两种数据库上都以 READ COMMITTED 运行，这使检查可以是普通读：拿到租户锁之后，
+// 它能看到持有这些锁的那次推送已提交的全部记录。锁定读也能达到目的，但在 MySQL 默认的
+// REPEATABLE READ 下，对尚不存在的 id 做锁定读会加间隙锁，两个副本推送互不相关的批次时
+// 会因向对方的间隙插入而死锁。没有计费行的租户是 exempt，不加锁；它们的并发重复在
+// created_at 相同时会撞上主键，不同时最多多出一行报表记录，绝不会多扣费。
+func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, now, sealAt time.Time) (bool, error) {
+	if len(records) == 0 {
 		return false, nil
 	}
 	changed := false
 	err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
-		if len(records) > 0 {
-			if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&records).Error; err != nil {
-				return err
-			}
-		}
-		if len(charges) == 0 {
-			return nil
-		}
-		tenantIDs := make([]string, 0, len(charges))
-		requestIDs := make([]string, 0, len(charges))
+		tenantIDs := make([]string, 0, len(records))
+		ids := make([]string, 0, len(records))
 		seenTenant := map[string]bool{}
-		for _, c := range charges {
-			requestIDs = append(requestIDs, c.RequestID)
-			if !seenTenant[c.TenantID] {
-				seenTenant[c.TenantID] = true
-				tenantIDs = append(tenantIDs, c.TenantID)
+		for _, r := range records {
+			ids = append(ids, r.ID)
+			if !seenTenant[r.TenantID] {
+				seenTenant[r.TenantID] = true
+				tenantIDs = append(tenantIDs, r.TenantID)
 			}
 		}
 		sort.Strings(tenantIDs)
@@ -182,33 +188,33 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, ch
 			byTenant[b.TenantID] = b
 		}
 		var existing []string
-		if err := tx.Model(&model.UsageCharge{}).
-			Where("request_id IN ?", requestIDs).Pluck("request_id", &existing).Error; err != nil {
+		if err := tx.Model(&model.UsageRecord{}).Where("id IN ?", ids).Pluck("id", &existing).Error; err != nil {
 			return err
 		}
-		charged := make(map[string]bool, len(existing))
+		recorded := make(map[string]bool, len(existing))
 		for _, id := range existing {
-			charged[id] = true
+			recorded[id] = true
 		}
 
-		fresh := make([]model.UsageCharge, 0, len(charges))
+		fresh := make([]model.UsageRecord, 0, len(records))
 		debit := map[string]int64{}
 		count := map[string]int{}
-		for _, c := range charges {
-			if charged[c.RequestID] {
+		for _, r := range records {
+			if recorded[r.ID] {
 				continue
 			}
-			charged[c.RequestID] = true
-			b, ok := byTenant[c.TenantID]
-			c.Charged = ok && b.Mode == model.BillingModePrepaid && c.CostMicro > 0
-			if c.Charged {
-				if debit[c.TenantID] > math.MaxInt64-c.CostMicro {
+			recorded[r.ID] = true
+			b, ok := byTenant[r.TenantID]
+			charged := ok && b.Mode == model.BillingModePrepaid && r.CostMicro > 0
+			r.Charged = &charged
+			if charged {
+				if debit[r.TenantID] > math.MaxInt64-r.CostMicro {
 					return errBalanceOverflow
 				}
-				debit[c.TenantID] += c.CostMicro
-				count[c.TenantID]++
+				debit[r.TenantID] += r.CostMicro
+				count[r.TenantID]++
 			}
-			fresh = append(fresh, c)
+			fresh = append(fresh, r)
 		}
 		if len(fresh) == 0 {
 			return nil
@@ -216,30 +222,30 @@ func (s *Store) ChargeUsage(ctx context.Context, records []model.UsageRecord, ch
 		if err := tx.Clauses(clause.OnConflict{DoNothing: true}).Create(&fresh).Error; err != nil {
 			return err
 		}
-		now := fresh[0].CreatedAt
 		for _, tenantID := range tenantIDs {
 			amount := debit[tenantID]
 			if amount == 0 {
 				continue
 			}
 			b := byTenant[tenantID]
+			before := b.BalanceMicro
+			if store.SealDue(b, now) {
+				if err := sealUsage(tx, &b, now); err != nil {
+					return err
+				}
+			}
 			after := b.BalanceMicro - amount
 			if after > b.BalanceMicro {
 				return errBalanceOverflow
 			}
-			if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
-				Updates(map[string]any{"balance_micro": after, "updated_at": now}).Error; err != nil {
+			b.BalanceMicro = after
+			store.AccrueUsage(&b, amount, count[tenantID], now, sealAt)
+			columns := store.UsageAccumulationColumns(b)
+			columns["balance_micro"], columns["updated_at"] = after, now
+			if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).Updates(columns).Error; err != nil {
 				return err
 			}
-			entry := model.CreditLedgerEntry{
-				ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindUsage,
-				AmountMicro: -amount, BalanceAfterMicro: after, Ref: fmt.Sprintf("%d requests", count[tenantID]),
-				CreatedAt: now,
-			}
-			if err := tx.Create(&entry).Error; err != nil {
-				return err
-			}
-			if b.Blocked() != (model.TenantBilling{Mode: b.Mode, BalanceMicro: after}).Blocked() {
+			if (model.TenantBilling{Mode: b.Mode, BalanceMicro: before}).Blocked() != b.Blocked() {
 				changed = true
 			}
 		}
@@ -575,12 +581,21 @@ func applyCredit(tx *gorm.DB, entry *model.CreditLedgerEntry) (changed, duplicat
 	if err != nil {
 		return false, false, err
 	}
+	// The pending usage is sealed first, so the usage entry lands before
+	// this one and the balance chain holds (store.SealUsage).
+	// 先为尚未封账的用量封账，使用量账目排在本条之前，余额链保持成立（store.SealUsage）。
+	if err := sealUsage(tx, &row, entry.CreatedAt); err != nil {
+		return false, false, err
+	}
 	after, ok := addBalance(row.BalanceMicro, entry.AmountMicro)
 	if !ok {
 		return false, false, errBalanceOverflow
 	}
-	if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", entry.TenantID).
-		Updates(map[string]any{"balance_micro": after, "updated_at": entry.CreatedAt}).Error; err != nil {
+	entry.CreatedAt = store.NextLedgerTime(row.LastLedgerAt, entry.CreatedAt)
+	row.LastLedgerAt = &entry.CreatedAt
+	columns := store.UsageAccumulationColumns(row)
+	columns["balance_micro"], columns["updated_at"] = after, entry.CreatedAt
+	if err := tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", entry.TenantID).Updates(columns).Error; err != nil {
 		return false, false, err
 	}
 	entry.BalanceAfterMicro = after
@@ -683,4 +698,78 @@ func addBalance(balance, delta int64) (int64, bool) {
 		return 0, false
 	}
 	return balance + delta, true
+}
+
+// sealUsage seals row's pending usage into a ledger entry inside tx, row
+// being locked; the caller writes the changed row back. A row that predates
+// LastLedgerAt reads it from the ledger first.
+//
+// sealUsage 在 tx 内把 row 尚未封账的用量封成一条账目（row 已加锁）；由调用方把改动后
+// 的行写回。早于 LastLedgerAt 出现的行会先从账目中读取它。
+func sealUsage(tx *gorm.DB, row *model.TenantBilling, now time.Time) error {
+	if row.UsageAccCount == 0 {
+		return nil
+	}
+	if err := loadLastLedgerAt(tx, row); err != nil {
+		return err
+	}
+	entry := store.SealUsage(row, now)
+	return tx.Create(entry).Error
+}
+
+// loadLastLedgerAt fills row.LastLedgerAt from the tenant's latest ledger
+// entry when it is still unset.
+//
+// loadLastLedgerAt 在 row.LastLedgerAt 尚未设置时，用租户最新一条账目的时间填写它。
+func loadLastLedgerAt(tx *gorm.DB, row *model.TenantBilling) error {
+	if row.LastLedgerAt != nil {
+		return nil
+	}
+	var last struct{ At *time.Time }
+	if err := tx.Model(&model.CreditLedgerEntry{}).Select("MAX(created_at) AS at").
+		Where("tenant_id = ?", row.TenantID).Scan(&last).Error; err != nil {
+		return err
+	}
+	if last.At != nil {
+		at := last.At.UTC()
+		row.LastLedgerAt = &at
+	}
+	return nil
+}
+
+// SealDueUsage implements store.UsageLedger. Each tenant is sealed in its
+// own READ COMMITTED transaction under its billing-row lock and re-checked
+// there, so replicas running it at once seal each accumulation once.
+//
+// SealDueUsage 实现 store.UsageLedger。每个租户在各自的 READ COMMITTED 事务中、在其
+// 计费行锁之下封账，并在锁内重新检查，因此各副本同时执行也只会为每个累计封账一次。
+func (s *Store) SealDueUsage(ctx context.Context, now time.Time) (int, error) {
+	var due []string
+	if err := s.db.WithContext(ctx).Model(&model.TenantBilling{}).
+		Where("usage_acc_until IS NOT NULL AND usage_acc_until <= ?", now).
+		Order("usage_acc_until").Limit(store.SealDueBatch).Pluck("tenant_id", &due).Error; err != nil {
+		return 0, translate(err)
+	}
+	sealed := 0
+	for _, tenantID := range due {
+		err := s.db.WithContext(ctx).Transaction(func(tx *gorm.DB) error {
+			var row model.TenantBilling
+			if err := tx.Clauses(clause.Locking{Strength: "UPDATE"}).Where("tenant_id = ?", tenantID).Take(&row).Error; err != nil {
+				return err
+			}
+			if !store.SealDue(row, now) {
+				return nil
+			}
+			if err := sealUsage(tx, &row, now); err != nil {
+				return err
+			}
+			sealed++
+			return tx.Model(&model.TenantBilling{}).Where("tenant_id = ?", tenantID).
+				Updates(store.UsageAccumulationColumns(row)).Error
+		}, &sql.TxOptions{Isolation: sql.LevelReadCommitted})
+		if err != nil {
+			return sealed, translate(err)
+		}
+	}
+	return sealed, nil
 }

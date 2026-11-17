@@ -3,7 +3,6 @@ package memstore
 import (
 	"context"
 	"errors"
-	"fmt"
 	"maps"
 	"math"
 	"sort"
@@ -31,7 +30,6 @@ type billingState struct {
 	prices   map[string]model.ModelPrice
 	orders   map[string]model.CheckoutOrder
 	ledger   []model.CreditLedgerEntry
-	charges  map[string]model.UsageCharge
 	webhooks map[string]model.BillingWebhookEvent
 	refunds  map[string]model.RefundRequest
 
@@ -47,7 +45,6 @@ func newBillingState() billingState {
 		packages: map[string]model.CreditPackage{},
 		prices:   map[string]model.ModelPrice{},
 		orders:   map[string]model.CheckoutOrder{},
-		charges:  map[string]model.UsageCharge{},
 		webhooks: map[string]model.BillingWebhookEvent{},
 		refunds:  map[string]model.RefundRequest{},
 
@@ -96,6 +93,8 @@ func (s *Store) InitTenantBilling(_ context.Context, billing model.TenantBilling
 	if grant != nil {
 		billing.BalanceMicro = grant.AmountMicro
 		grant.BalanceAfterMicro = grant.AmountMicro
+		grant.CreatedAt = store.NextLedgerTime(nil, grant.CreatedAt)
+		billing.LastLedgerAt = &grant.CreatedAt
 		s.billing.ledger = append(s.billing.ledger, *grant)
 	}
 	s.billing.tenants[billing.TenantID] = billing
@@ -144,63 +143,56 @@ func (s *Store) AdjustCredit(_ context.Context, entry model.CreditLedgerEntry) (
 // ChargeUsage implements store.Billing.
 //
 // ChargeUsage 实现 store.Billing。
-func (s *Store) ChargeUsage(_ context.Context, records []model.UsageRecord, charges []model.UsageCharge) (bool, error) {
+func (s *Store) ChargeUsage(_ context.Context, records []model.UsageRecord, now, sealAt time.Time) (bool, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	// Everything is priced and checked before anything is written, so an
-	// overflow leaves the store as it was, as gormstore's rollback does.
-	// 先完成全部定价与检查再写入，溢出时 store 保持原样，与 gormstore 的回滚一致。
+	// Everything is checked before anything is written, so an overflow
+	// leaves the store as it was, as gormstore's rollback does.
+	// 先完成全部检查再写入，溢出时 store 保持原样，与 gormstore 的回滚一致。
 	debit := map[string]int64{}
 	count := map[string]int{}
 	var order []string
-	fresh := make([]model.UsageCharge, 0, len(charges))
+	fresh := make([]model.UsageRecord, 0, len(records))
 	seen := map[string]bool{}
-	for _, c := range charges {
-		if _, done := s.billing.charges[c.RequestID]; done || seen[c.RequestID] {
+	for _, r := range records {
+		if _, exists := s.usageRecords[r.ID]; exists || seen[r.ID] {
 			continue
 		}
-		seen[c.RequestID] = true
-		b, ok := s.billing.tenants[c.TenantID]
-		c.Charged = ok && b.Mode == model.BillingModePrepaid && c.CostMicro > 0
-		if c.Charged {
-			if debit[c.TenantID] > math.MaxInt64-c.CostMicro {
+		seen[r.ID] = true
+		b, ok := s.billing.tenants[r.TenantID]
+		charged := ok && b.Mode == model.BillingModePrepaid && r.CostMicro > 0
+		r.Charged = &charged
+		if charged {
+			if debit[r.TenantID] > math.MaxInt64-r.CostMicro {
 				return false, errBalanceOverflow
 			}
-			if _, counted := debit[c.TenantID]; !counted {
-				order = append(order, c.TenantID)
+			if _, counted := debit[r.TenantID]; !counted {
+				order = append(order, r.TenantID)
 			}
-			debit[c.TenantID] += c.CostMicro
-			count[c.TenantID]++
+			debit[r.TenantID] += r.CostMicro
+			count[r.TenantID]++
 		}
-		fresh = append(fresh, c)
+		fresh = append(fresh, r)
 	}
 	for _, tenantID := range order {
 		if s.billing.tenants[tenantID].BalanceMicro < math.MinInt64+debit[tenantID] {
 			return false, errBalanceOverflow
 		}
 	}
-
-	for _, r := range records {
-		if _, exists := s.usageRecords[r.ID]; !exists {
-			s.usageRecords[r.ID] = r
-		}
-	}
-	var now time.Time
-	for _, c := range fresh {
-		s.billing.charges[c.RequestID] = c
-		now = c.CreatedAt
+	for _, r := range fresh {
+		s.usageRecords[r.ID] = r
 	}
 	changed := false
 	for _, tenantID := range order {
 		b := s.billing.tenants[tenantID]
 		before := b.Blocked()
+		if store.SealDue(b, now) {
+			s.sealUsage(&b, now)
+		}
 		b.BalanceMicro -= debit[tenantID]
 		b.UpdatedAt = now
+		store.AccrueUsage(&b, debit[tenantID], count[tenantID], now, sealAt)
 		s.billing.tenants[tenantID] = b
-		s.billing.ledger = append(s.billing.ledger, model.CreditLedgerEntry{
-			ID: model.NewID(model.PrefixCreditLedger), TenantID: tenantID, Kind: model.LedgerKindUsage,
-			AmountMicro: -debit[tenantID], BalanceAfterMicro: b.BalanceMicro, Ref: requestsRef(count[tenantID]), CreatedAt: now,
-		})
 		if before != b.Blocked() {
 			changed = true
 		}
@@ -578,6 +570,11 @@ func (s *Store) applyCredit(entry *model.CreditLedgerEntry) (changed, duplicate 
 		(entry.AmountMicro < 0 && row.BalanceMicro < math.MinInt64-entry.AmountMicro) {
 		return false, false, errBalanceOverflow
 	}
+	// The pending usage is sealed first, as gormstore's applyCredit does.
+	// 先为尚未封账的用量封账，与 gormstore 的 applyCredit 一致。
+	s.sealUsage(&row, entry.CreatedAt)
+	entry.CreatedAt = store.NextLedgerTime(s.lastLedgerAt(row), entry.CreatedAt)
+	row.LastLedgerAt = &entry.CreatedAt
 	before := row.Blocked()
 	row.BalanceMicro += entry.AmountMicro
 	row.UpdatedAt = entry.CreatedAt
@@ -699,6 +696,56 @@ func (l memLedger) LedgerAmount(key string) (int64, bool, error) {
 	return e.AmountMicro, ok, nil
 }
 
-func requestsRef(n int) string {
-	return fmt.Sprintf("%d requests", n)
+// sealUsage is gormstore's sealUsage over the maps; the caller holds s.mu
+// and stores row back.
+//
+// sealUsage 是 gormstore 中 sealUsage 在映射上的对应实现；调用方须持有 s.mu 并把 row
+// 写回。
+func (s *Store) sealUsage(row *model.TenantBilling, now time.Time) {
+	if row.UsageAccCount == 0 {
+		return
+	}
+	row.LastLedgerAt = s.lastLedgerAt(*row)
+	s.billing.ledger = append(s.billing.ledger, *store.SealUsage(row, now))
+}
+
+// lastLedgerAt returns row.LastLedgerAt, or the tenant's latest ledger time
+// when it is unset. The caller holds s.mu.
+//
+// lastLedgerAt 返回 row.LastLedgerAt；未设置时返回租户最新一条账目的时间。调用方须持有
+// s.mu。
+func (s *Store) lastLedgerAt(row model.TenantBilling) *time.Time {
+	if row.LastLedgerAt != nil {
+		return row.LastLedgerAt
+	}
+	var last *time.Time
+	for i := range s.billing.ledger {
+		e := &s.billing.ledger[i]
+		if e.TenantID == row.TenantID && (last == nil || e.CreatedAt.After(*last)) {
+			at := e.CreatedAt
+			last = &at
+		}
+	}
+	return last
+}
+
+// SealDueUsage implements store.UsageLedger.
+//
+// SealDueUsage 实现 store.UsageLedger。
+func (s *Store) SealDueUsage(_ context.Context, now time.Time) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	sealed := 0
+	for tenantID, row := range s.billing.tenants {
+		if sealed >= store.SealDueBatch {
+			break
+		}
+		if !store.SealDue(row, now) {
+			continue
+		}
+		s.sealUsage(&row, now)
+		s.billing.tenants[tenantID] = row
+		sealed++
+	}
+	return sealed, nil
 }

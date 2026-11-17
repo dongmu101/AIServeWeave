@@ -27,8 +27,12 @@ import {
   parseOrderPage,
   type CheckoutOrder,
   type LedgerEntry,
+  type LedgerPage,
+  type PendingUsage,
 } from "@/lib/console/billing";
 import { formatDateTime } from "@/lib/console/format";
+import { ledgerUsageHref } from "@/lib/console/usage-records";
+import Link from "next/link";
 import { parseNoContent } from "@/lib/console/contract";
 import type { MessageKey } from "@/lib/i18n/messages";
 import type { Translator } from "@/lib/i18n/translate";
@@ -175,9 +179,14 @@ export function LedgerTable({ surface = "admin", tenantId = "" }: { surface?: "a
   const [kind, setKind] = React.useState("");
   const filters: Record<string, string> = { kind };
   if (surface === "operator") filters.tenant_id = tenantId;
-  const ledger = usePagedResource<LedgerEntry>({ path: pathFor(surface, "ledger"), surface, filters, pageSize: PAGE_SIZE, parse: parseLedgerPage });
+  const ledger = usePagedResource<LedgerEntry, LedgerPage>({ path: pathFor(surface, "ledger"), surface, filters, pageSize: PAGE_SIZE, parse: parseLedgerPage });
   const operator = surface === "operator";
   const id = `${surface}-ledger-kind`;
+  // The pending usage sits above the newest entry, so it shows on the first
+  // page only, and only when no filter hides usage entries.
+  // 尚未封账的用量位于最新一条账目之上，因此只在第一页、且筛选条件不排除用量账目时显示。
+  const pending = ledger.pageNumber === 1 && (kind === "" || kind === "usage") ? ledger.data?.pendingUsage ?? null : null;
+  const showUsageNote = !operator && (ledger.items?.some((entry) => entry.periodStart !== null) ?? false);
 
   return <Card>
     <CardHeader className="flex flex-wrap items-center justify-between gap-3">
@@ -193,7 +202,7 @@ export function LedgerTable({ surface = "admin", tenantId = "" }: { surface?: "a
       </Select>
     </CardHeader>
     <CardContent className="grid gap-3">
-      {ledger.errorKind === "not_found" ? <BillingDisabled /> : ledger.error ? <ErrorState message={ledger.error} onRetry={ledger.reload} /> : ledger.loading || !ledger.items ? <LoadingState label={t("tenant.billingLoadingLedger")} rows={3} /> : ledger.items.length === 0 ? <EmptyState title={t("tenant.billingNoLedger")} /> : <>
+      {ledger.errorKind === "not_found" ? <BillingDisabled /> : ledger.error ? <ErrorState message={ledger.error} onRetry={ledger.reload} /> : ledger.loading || !ledger.items ? <LoadingState label={t("tenant.billingLoadingLedger")} rows={3} /> : ledger.items.length === 0 && !pending ? <EmptyState title={t("tenant.billingNoLedger")} /> : <>
         <Table>
           <TableHeader><TableRow>
             <TableHead><Message id="tenant.time" /></TableHead>
@@ -203,19 +212,55 @@ export function LedgerTable({ surface = "admin", tenantId = "" }: { surface?: "a
             <TableHead className="text-right"><Message id="tenant.billingBalanceAfter" /></TableHead>
             <TableHead><Message id="tenant.billingReference" /></TableHead>
           </TableRow></TableHeader>
-          <TableBody>{ledger.items.map((entry) => <TableRow key={entry.id}>
-            <TableCell className="whitespace-nowrap">{formatDateTime(entry.createdAt, undefined, locale)}</TableCell>
-            {operator ? <TableCell><code className="text-xs break-all">{entry.tenantId}</code></TableCell> : null}
-            <TableCell className="whitespace-nowrap">{ledgerKindLabel(entry.kind, t)}</TableCell>
-            <TableCell className={`text-right font-mono whitespace-nowrap ${entry.amountMicro < 0 ? "text-destructive" : ""}`}>{formatSignedCredits(entry.amountMicro, locale)}</TableCell>
-            <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(entry.balanceAfterMicro, locale)}</TableCell>
-            <TableCell className="max-w-64"><span className="text-xs break-all">{entry.ref || "—"}</span></TableCell>
-          </TableRow>)}</TableBody>
+          <TableBody>
+            {pending ? <PendingUsageRow pending={pending} operator={operator} /> : null}
+            {ledger.items.map((entry) => <TableRow key={entry.id}>
+              <TableCell className="whitespace-nowrap">{formatDateTime(entry.createdAt, undefined, locale)}</TableCell>
+              {operator ? <TableCell><code className="text-xs break-all">{entry.tenantId}</code></TableCell> : null}
+              <TableCell className="whitespace-nowrap">{ledgerKindLabel(entry.kind, t)}</TableCell>
+              <TableCell className={`text-right font-mono whitespace-nowrap ${entry.amountMicro < 0 ? "text-destructive" : ""}`}>{formatSignedCredits(entry.amountMicro, locale)}</TableCell>
+              <TableCell className="text-right font-mono whitespace-nowrap">{formatCredits(entry.balanceAfterMicro, locale)}</TableCell>
+              <TableCell className="max-w-64">
+                {entry.periodStart !== null && entry.periodEnd !== null ? <span className="grid gap-0.5 text-xs">
+                  <span>{t("tenant.billingUsagePeriod", {
+                    start: formatDateTime(entry.periodStart, undefined, locale),
+                    end: formatDateTime(entry.periodEnd, undefined, locale),
+                    count: entry.requestCount.toLocaleString(locale),
+                  })}</span>
+                  {operator ? null : <Link href={ledgerUsageHref(entry.periodStart, entry.periodEnd)} className="w-fit font-medium text-accent-foreground underline underline-offset-4"><Message id="tenant.billingUsageDetails" /></Link>}
+                </span> : <span className="text-xs break-all">{entry.ref || "—"}</span>}
+              </TableCell>
+            </TableRow>)}
+          </TableBody>
         </Table>
+        {showUsageNote ? <p className="text-xs text-muted-foreground"><Message id="tenant.billingUsageEdgeNote" /></p> : null}
         <Pager resource={ledger} loadedCount={ledger.items.length} />
       </>}
     </CardContent>
   </Card>;
+}
+
+/** PendingUsageRow is the ledger's first row while usage is accumulating:
+ * already taken off the balance but not yet sealed into an entry
+ * (.scratch/token-pricing「余额账目」). It has no balance of its own: the
+ * newest entry's balance plus this amount is the balance.
+ *
+ * PendingUsageRow 是累计进行中时账目的第一行：已经从余额中扣除、但尚未封账成账目
+ * （.scratch/token-pricing「余额账目」）。它没有自己的余额：最新一条账目的余额加上这笔
+ * 金额就是当前余额。 */
+function PendingUsageRow({ pending, operator }: { pending: PendingUsage; operator: boolean }) {
+  const { t, locale } = useI18n();
+  return <TableRow className="bg-muted/40">
+    <TableCell className="whitespace-nowrap"><Badge variant="outline"><Message id="tenant.billingPendingUsage" /></Badge></TableCell>
+    {operator ? <TableCell /> : null}
+    <TableCell className="whitespace-nowrap">{ledgerKindLabel("usage", t)}</TableCell>
+    <TableCell className="text-right font-mono whitespace-nowrap text-destructive">{formatSignedCredits(pending.amountMicro, locale)}</TableCell>
+    <TableCell className="text-right text-muted-foreground">—</TableCell>
+    <TableCell className="max-w-64"><span className="text-xs">{t("tenant.billingPendingNote", {
+      count: pending.requestCount.toLocaleString(locale),
+      time: formatDateTime(pending.sealAt, "—", locale),
+    })}</span></TableCell>
+  </TableRow>;
 }
 
 /**

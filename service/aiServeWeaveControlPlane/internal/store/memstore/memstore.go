@@ -66,6 +66,10 @@ type Store struct {
 	alertInstances       map[string]model.AlertInstance
 	apiDocs              map[string]model.APIDoc
 	billing              billingState
+	pricingConfig        pricingConfigState
+	// priceCatalog backs store.PriceCatalog; it is created on first use.
+	// priceCatalog 支撑 store.PriceCatalog；首次使用时创建。
+	priceCatalog *priceCatalogState
 }
 
 // New returns an empty store.

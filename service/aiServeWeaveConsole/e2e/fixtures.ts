@@ -23,6 +23,28 @@ const fixedPackage = { id: "pkg_fixed", name: LONG_TEXT, kind: "fixed", credits_
 const customPackage = { id: "pkg_custom", name: "Custom top-up", kind: "custom", currency: "USD", credits_per_minor_unit_micro: 10_000, min_amount_minor: 500, max_amount_minor: 100_000, active: true, sort_order: 2, created_at: at, updated_at: at };
 const ledgerEntry = { id: "led_p10", kind: "topup", amount_micro: 10_000_000, balance_after_micro: 12_345_678, ref: LONG_TEXT, created_at: at };
 const order = { id: "ord_p10", package_id: fixedPackage.id, amount_minor: 999, currency: "USD", credits_micro: 10_000_000, refunded_minor: 0, status: "paid", payment_id: "pay_p10", created_at: at, updated_at: at };
+/** PRICING_CONFIG, EFFECTIVE_PRICES and CATALOG_ENTRY are the operator token
+ * pricing reads (.scratch/token-pricing); tests override them per case.
+ * PRICING_CONFIG、EFFECTIVE_PRICES 与 CATALOG_ENTRY 是运维 token 计价的读取样本
+ * （.scratch/token-pricing）；各用例可按需覆盖。 */
+export const PRICING_CONFIG = {
+  revision: { id: 7, effective_at: at, created_by: "op_p10", summary: "fixture", created_at: at },
+  default_prices: [{ meter: "input", price_micro_per_m: 1_000_000 }, { meter: "output", price_micro_per_m: 2_000_000 }],
+  models: [{ model: `org/${LONG_TEXT}`, catalog_model: "claude-x", prices: null, rate_ppm: 1_500_000 }],
+  plans: [{ id: "plan_default", name: "Default", default_rate_ppm: 1_000_000, is_default: true, models: null }],
+  default_plan: "plan_default",
+};
+export const EFFECTIVE_PRICES = {
+  revision: 7, plan_id: "plan_default", unpriced_aliases: [], unpriced_requests_24h: 0,
+  items: [{ model: `org/${LONG_TEXT}`, routed: true, source: "catalog", ref: "claude-x", model_rate_ppm: 1_500_000, plan_rate_ppm: 1_000_000, rate_ppm: 1_500_000, items: [
+    { meter: "input", base_micro_per_m: 3_000_000, sale_micro_per_m: 4_500_000 },
+    { meter: "output", base_micro_per_m: 15_000_000, sale_micro_per_m: 22_500_000 },
+    { meter: "input", above_input_tokens: 200_000, base_micro_per_m: 6_000_000, sale_micro_per_m: 9_000_000 },
+  ] }],
+};
+export const CATALOG_ENTRY = { model: "claude-x", provider: "anthropic", mode: "chat", status: "active", updated_at: at, prices: [
+  { meter: "input", price_micro_per_m: 3_000_000 }, { meter: "output", price_micro_per_m: 15_000_000 }, { meter: "input.cache_read", price_micro_per_m: 300_000 },
+] };
 /** BILLING_OVERVIEW is the tenant billing read; tests override it per case.
  * BILLING_OVERVIEW 是租户计费读取的样本；各用例可按需覆盖。 */
 export const BILLING_OVERVIEW = { mode: "prepaid", balance_micro: 12_345_678, blocked: false, has_customer: true, packages: [fixedPackage, customPackage] };
@@ -67,7 +89,11 @@ async function installFixtures(page: Page, unexpected: string[]) {
       else if (path === "/admin/v1/billing/ledger") json = { items: [ledgerEntry], next_cursor: "" };
       else if (path === "/admin/v1/billing/orders") json = { items: [order], next_cursor: "" };
       else if (path === "/operator/v1/billing/packages") json = { items: [{ ...fixedPackage, dodo_product_id: "pdt_fixed" }, { ...customPackage, active: false, dodo_product_id: LONG_TEXT.slice(0, 64) }] };
-      else if (path === "/operator/v1/billing/model-prices") json = { items: [{ model: "*", input_micro_per_mtok: 1_000_000, output_micro_per_mtok: 2_000_000, updated_by: "op_p10", updated_at: at }, { model: `org/${LONG_TEXT}`, input_micro_per_mtok: 500_000, output_micro_per_mtok: 1_500_000, updated_by: "op_p10", updated_at: at }] };
+      else if (path === "/operator/v1/billing/pricing") json = PRICING_CONFIG;
+      else if (path === "/operator/v1/billing/effective-prices") json = EFFECTIVE_PRICES;
+      else if (path === "/operator/v1/billing/catalog") json = { items: [CATALOG_ENTRY], next_cursor: "", sync: { source: "embedded", entry_count: 3689, version: 1, synced_at: at, last_error: "" } };
+      else if (path === "/operator/v1/billing/catalog/pending") json = { items: [], next_cursor: "" };
+      else if (path === "/operator/v1/billing/plans") json = { revision: PRICING_CONFIG.revision, items: PRICING_CONFIG.plans };
       else if (path === "/operator/v1/billing/tenants") json = { items: [{ id: user.tenant_id, name: LONG_TEXT, status: "active", mode: "prepaid", balance_micro: 0, blocked: true, created_at: at }], next_cursor: "" };
       else if (path === "/operator/v1/billing/orders") json = { items: [{ ...order, tenant_id: user.tenant_id }], next_cursor: "" };
       else if (path === "/operator/v1/billing/ledger") json = { items: [{ ...ledgerEntry, tenant_id: user.tenant_id }], next_cursor: "" };
@@ -78,6 +104,8 @@ async function installFixtures(page: Page, unexpected: string[]) {
       else if (path === "/admin/v1/apikeys") json = { items: [key], next_cursor: "" };
       else if (path === "/admin/v1/models") json = { collected_at: at, partial: false, services: [{ agent_id: "agent-fixture", service_id: "ollama-fixture", kind: "ollama", node_online: true, state: "healthy", models: [{ id: "fixture-model", capabilities: { chat: "supported" } }] }] };
       else if (path.endsWith("/usage/summary")) json = { items: [{ tenant_id: user.tenant_id, model: "fixture-model", prompt_tokens: 100, completion_tokens: 50, total_tokens: 150, request_count: 2 }] };
+      else if (path === "/admin/v1/usage/records") json = { items: [], next_cursor: "" };
+      else if (path === "/admin/v1/billing/prices") json = { items: [] };
       else if (path.endsWith("/requests")) {
         const data = auditPage(url);
         json = { ...data, items: data.items.map(row => ({ request_id: row.id.replace("audit_", "req_"), key_display: key.display, endpoint: "chat", outcome: "ok", status_code: 200, duration_ms: 42, created_at: at })) };

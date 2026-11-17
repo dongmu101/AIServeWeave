@@ -15,6 +15,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"time"
 
 	"google.golang.org/protobuf/proto"
@@ -1171,7 +1172,8 @@ func chatMessageDeltaFromProto(pb *tunnelv1.ChatMessageDelta) runtime.ChatMessag
 // usageToProto returns nil for nil or all-zero usage, so an intermediate
 // stream event stays as small as possible.
 func usageToProto(u *runtime.Usage) *tunnelv1.Usage {
-	if u == nil || (u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 && u.ReasoningTokens == 0) {
+	if u == nil || (u.PromptTokens == 0 && u.CompletionTokens == 0 && u.TotalTokens == 0 && u.ReasoningTokens == 0 &&
+		len(u.Details) == 0 && len(u.Attributes) == 0) {
 		return nil
 	}
 	return &tunnelv1.Usage{
@@ -1179,19 +1181,34 @@ func usageToProto(u *runtime.Usage) *tunnelv1.Usage {
 		CompletionTokens: int64(u.CompletionTokens),
 		TotalTokens:      int64(u.TotalTokens),
 		ReasoningTokens:  int64(u.ReasoningTokens),
+		Details:          maps.Clone(u.Details),
+		Attributes:       maps.Clone(u.Attributes),
 	}
 }
 
+// usageFromProto restores usage. Empty details and attributes stay nil, so
+// a usage from an Agent that predates them compares equal to one built
+// locally without them.
+//
+// usageFromProto 还原用量。空的明细与属性保持为 nil，使来自不支持它们的旧 Agent 的
+// 用量，与本地构造的、没有它们的用量相等。
 func usageFromProto(pb *tunnelv1.Usage) *runtime.Usage {
 	if pb == nil {
 		return nil
 	}
-	return &runtime.Usage{
+	out := &runtime.Usage{
 		PromptTokens:     int(pb.GetPromptTokens()),
 		CompletionTokens: int(pb.GetCompletionTokens()),
 		TotalTokens:      int(pb.GetTotalTokens()),
 		ReasoningTokens:  int(pb.GetReasoningTokens()),
 	}
+	if len(pb.GetDetails()) > 0 {
+		out.Details = maps.Clone(pb.GetDetails())
+	}
+	if len(pb.GetAttributes()) > 0 {
+		out.Attributes = maps.Clone(pb.GetAttributes())
+	}
+	return out
 }
 
 // -----------------------------------------------------------------------

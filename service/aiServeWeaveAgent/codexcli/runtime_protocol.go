@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 )
 
@@ -158,7 +159,10 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			WillRetry  bool            `json:"willRetry"`
 			TokenUsage struct {
 				Last struct {
-					Input     int `json:"inputTokens"`
+					Input int `json:"inputTokens"`
+					// Cached is the part of Input served from the prompt cache.
+					// Cached 是 Input 中由提示缓存提供的部分。
+					Cached    int `json:"cachedInputTokens"`
 					Output    int `json:"outputTokens"`
 					Reasoning int `json:"reasoningOutputTokens"`
 					Total     int `json:"totalTokens"`
@@ -235,12 +239,15 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			}
 		case "thread/tokenUsage/updated":
 			last := n.TokenUsage.Last
-			if n.ThreadID != thread.Thread.ID || n.TurnID != turnID || last.Input < 0 || last.Output < 0 || last.Reasoning < 0 || last.Total < 0 {
+			if n.ThreadID != thread.Thread.ID || n.TurnID != turnID || last.Input < 0 || last.Cached < 0 || last.Output < 0 || last.Reasoning < 0 || last.Total < 0 {
 				return ErrProtocol
 			}
-			// reasoningOutputTokens is the reasoning share of outputTokens.
-			// reasoningOutputTokens 是 outputTokens 中用于思考的部分。
+			// reasoningOutputTokens is the reasoning share of outputTokens, and
+			// cachedInputTokens the cached share of inputTokens.
+			// reasoningOutputTokens 是 outputTokens 中用于思考的部分，cachedInputTokens 是
+			// inputTokens 中命中缓存的部分。
 			usage = &runtime.Usage{PromptTokens: last.Input, CompletionTokens: last.Output, TotalTokens: last.Total, ReasoningTokens: last.Reasoning}
+			usage.AddDetail(pricing.MeterCacheRead, int64(min(last.Cached, last.Input)))
 		case "turn/completed":
 			if n.ThreadID != thread.Thread.ID || n.Turn.ID != turnID {
 				return ErrProtocol

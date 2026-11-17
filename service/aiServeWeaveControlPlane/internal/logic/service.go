@@ -237,6 +237,8 @@ type Service struct {
 	tenantNodes          *TenantNodeConfig
 	nodeProviders        *NodeProviderConfig
 	agentInstall         *AgentInstallConfig
+	priceCatalog         *PriceCatalogConfig
+	pricingCache         *usagePricingCache
 }
 
 // Option configures a Service.
@@ -318,7 +320,7 @@ func New(st store.Store, clock runtime.Clock, opts ...Option) *Service {
 	if clock == nil {
 		clock = runtime.NewSystemClock()
 	}
-	s := &Service{store: st, clock: clock}
+	s := &Service{store: st, clock: clock, pricingCache: &usagePricingCache{}}
 	for _, opt := range opts {
 		opt(s)
 	}
