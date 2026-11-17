@@ -139,6 +139,12 @@ fill_secrets() {
     env_set AISW_STUDIO_SESSION_SECRET "$(openssl rand -base64 48)"
     filled=$((filled + 1))
   fi
+  # Shared by the Console and Studio for signing in from the Console.
+  # Console 与 Studio 共用，用于从 Console 免密码登录 Studio。
+  if [[ -z "$(env_get AISW_STUDIO_HANDOFF_SECRET)" ]]; then
+    env_set AISW_STUDIO_HANDOFF_SECRET "$(openssl rand -base64 48)"
+    filled=$((filled + 1))
+  fi
   (( filled == 0 )) || log "已生成 $filled 个空缺的密钥"
 }
 

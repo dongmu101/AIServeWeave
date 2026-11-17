@@ -1,3 +1,4 @@
+import { handoffKey } from "@/lib/studio/handoff-ticket";
 import { deriveSessionKey } from "@/lib/studio/session-payload";
 
 /**
@@ -62,6 +63,54 @@ function absoluteURL(name: string, fallback: string): string {
  * ephemeral per-process secret, so sessions end when the dev server restarts.
  *
  * sessionSecret 在生产环境必填；开发环境退回进程级临时密钥，开发服务器重启后会话即失效。 */
+/** HandoffConfig is what receiving a sign-in from the Console needs.
+ * HandoffConfig 是接收来自 Console 的登录所需的配置。 */
+export interface HandoffConfig {
+  key: Buffer;
+  /** consoleOrigins, when non-empty, are the only origins a ticket may be
+   * posted from; empty accepts a same-site post (studio.example.com from
+   * example.com).
+   *
+   * consoleOrigins 非空时，票据只能从这些来源提交；为空时接受同站点的提交（例如从
+   * example.com 到 studio.example.com）。 */
+  consoleOrigins: string[];
+}
+
+let handoffCached: HandoffConfig | null | undefined;
+
+/** handoffConfig reads AISW_STUDIO_HANDOFF_SECRET (shared with the Console)
+ * and AISW_STUDIO_CONSOLE_URL. Without a usable secret it is null and the
+ * handoff route sends everyone to sign in.
+ *
+ * handoffConfig 读取 AISW_STUDIO_HANDOFF_SECRET（与 Console 共用）与
+ * AISW_STUDIO_CONSOLE_URL。没有可用密钥时为 null，交接路由把所有人送去登录。 */
+export function handoffConfig(): HandoffConfig | null {
+  if (handoffCached !== undefined) return handoffCached;
+  const secret = process.env.AISW_STUDIO_HANDOFF_SECRET?.trim();
+  let key: Buffer | null = null;
+  if (secret) {
+    try {
+      key = handoffKey(secret);
+    } catch {
+      console.warn("[studio] AISW_STUDIO_HANDOFF_SECRET is shorter than 32 characters; sign-in from the Console is off.");
+    }
+  }
+  const consoleOrigins = (process.env.AISW_STUDIO_CONSOLE_URL ?? "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean)
+    .flatMap((value) => {
+      try {
+        return [new URL(value).origin];
+      } catch {
+        console.warn("[studio] ignoring an AISW_STUDIO_CONSOLE_URL entry that is not an absolute URL");
+        return [];
+      }
+    });
+  handoffCached = key ? { key, consoleOrigins } : null;
+  return handoffCached;
+}
+
 function sessionSecret(): string {
   const configured = process.env.AISW_STUDIO_SESSION_SECRET?.trim();
   if (configured) {

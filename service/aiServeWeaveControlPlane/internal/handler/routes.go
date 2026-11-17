@@ -340,6 +340,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session", requireSession(ctx, sessionAction(ctx.Logic.Logout)))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/session/handoff", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session/handoff", requireSession(ctx, handoffSession(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/password", requireSession(ctx, changeOwnPassword(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/sessions/revoke", requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions)))},
 		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/session", requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout)))},

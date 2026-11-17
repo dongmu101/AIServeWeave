@@ -55,7 +55,9 @@ FORCE           ?= 0
 # Docker Hub publishing / 推送到 Docker Hub
 HUB_REPO          ?= docker.io/dongmu101
 PUBLISH_PLATFORMS ?= linux/amd64,linux/arm64
-PUBLISH_TAGS      ?= $(VERSION)
+# latest lets a server pull with deploy/upgrade.sh --image-tag latest.
+# latest 让服务器可以用 deploy/upgrade.sh --image-tag latest 拉取。
+PUBLISH_TAGS      ?= $(VERSION) latest
 BUILDER           ?= aisw-multiarch
 # BuildKit steps run at once in that builder. A multi-platform build otherwise
 # compiles Go for every platform at the same time, which a Docker Desktop VM
@@ -83,7 +85,7 @@ SERVICE_registry     := aiServeWeaveRegistry
 SERVICE_controlplane := aiServeWeaveControlPlane
 SERVICE_gateway      := aiServeWeaveGateway
 
-.PHONY: help images local push save deploy publish builder builder-reset check-docker-mem check-server check-git clean
+.PHONY: help images local push save deploy publish tag-latest builder builder-reset check-docker-mem check-server check-git clean
 
 help: ## 列出可用目标与变量
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -98,7 +100,7 @@ help: ## 列出可用目标与变量
 	@echo "    UPGRADE_ARGS=\"...\"     deploy 时附加给服务器 upgrade.sh 的参数，如 --no-backup"
 	@echo "    FORCE=1                deploy / publish 时跳过「工作区干净且已推送」检查"
 	@echo "    HUB_REPO=...           publish 推送到的仓库（$(HUB_REPO)）"
-	@echo "    PUBLISH_TAGS=\"...\"     publish 的 tag，如 \"v0.2.0 latest\"（默认当前版本）"
+	@echo "    PUBLISH_TAGS=\"...\"     publish 的 tag，如 \"v0.2.0 latest\"（默认当前版本与 latest）"
 	@echo "    PUBLISH_PLATFORMS=...  publish 的平台（$(PUBLISH_PLATFORMS)）"
 	@echo "    当前版本: $(VERSION)"
 
@@ -200,6 +202,16 @@ publish: check-git check-docker-mem builder $(addprefix publish-,$(SERVICES)) ##
 	@echo "  服务器上部署:"
 	@echo "    首次: 在 deploy/.env 设置 AISW_IMAGE_REPO=$(HUB_REPO)，再 deploy/upgrade.sh --follow"
 	@echo "    之后: deploy/upgrade.sh"
+
+# tag-latest points latest at an already published VERSION without building
+# anything: the registry copies the manifest, so it takes seconds.
+#
+# tag-latest 把 latest 指向一个已发布的 VERSION，不构建任何东西：仓库端复制清单，几秒完成。
+tag-latest: ## 把已发布的 VERSION 标为 latest（不构建），如 make tag-latest VERSION=v0.1.0-169-g397ddc0bc8c3
+	@for s in $(SERVICES); do \
+	  echo "==> $(HUB_REPO)/aiserveweave-$${s}:$(VERSION) -> latest"; \
+	  docker buildx imagetools create -t $(HUB_REPO)/aiserveweave-$${s}:latest $(HUB_REPO)/aiserveweave-$${s}:$(VERSION); \
+	done
 
 builder:
 	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || { \

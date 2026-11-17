@@ -1,3 +1,7 @@
+## Studio 免密码登录：会话交接（2026-11-17）
+
+新增 `POST /admin/v1/auth/session/handoff`（租户会话）：为同一账户另签一个独立会话，以登录响应形状返回。账户须仍为启用、角色与会话一致；平台运维会话与已登出会话返回 401（停用或角色变化为 403）。按登录记审计（detail `session handoff`），不更新最近登录时间。实现在 `internal/handler/handlers.go` 的 `handoffSession`、`internal/logic/sessions.go` 的 `SessionHandoffUser`。e2e `TestSessionHandoffIssuesAnIndependentSession` 覆盖：新令牌指向同一用户、原会话登出后仍有效、能在 Gateway 校验通过、拒绝平台运维/缺失/已登出会话。
+
 ## Studio 对话存储（2026-11-16）
 
 新增 `studio_conversations`、`studio_messages`（迁移命名空间 `studio`，`0001`、`0002`，MySQL 与 PostgreSQL），`sql/init.sql` 已同步。实现在 `internal/logic/studio.go`、`internal/store/*/studio.go`、`internal/handler/studio.go`。

@@ -79,3 +79,44 @@ func TestSessionVerificationRefusesWhatIsNotATenantSession(t *testing.T) {
 		t.Errorf("a session token as the internal credential: status = %d, want 401", status)
 	}
 }
+
+// TestSessionHandoffIssuesAnIndependentSession covers how Console signs the
+// same person into Studio: the handed-off session names the same user,
+// verifies at the Gateway, and outlives logging out of the original; a
+// platform operator's session and a missing one get nothing.
+//
+// TestSessionHandoffIssuesAnIndependentSession 覆盖 Console 如何让同一个人登录
+// Studio：交接出的会话指向同一用户、能在 Gateway 校验通过，并且在原会话登出后依然有效；
+// 平台运维会话与缺失的会话拿不到任何东西。
+func TestSessionHandoffIssuesAnIndependentSession(t *testing.T) {
+	h := newHarness(t)
+	created, original := bootstrap(h, "Acme", "handoff-owner@example.com")
+
+	var handed types.LoginResponse
+	if status := h.call(http.MethodPost, "/admin/v1/auth/session/handoff", original, nil, &handed); status != http.StatusOK {
+		t.Fatalf("handoff status = %d, want 200", status)
+	}
+	if handed.Token == "" || handed.Token == original {
+		t.Fatalf("handoff token must be a new, non-empty token")
+	}
+	if handed.User.TenantID != created.Tenant.ID || handed.User.Email != "handoff-owner@example.com" {
+		t.Errorf("handoff user = %+v, want the original's account", handed.User)
+	}
+
+	if status := h.call(http.MethodDelete, "/admin/v1/auth/session", original, nil, nil); status != http.StatusNoContent {
+		t.Fatalf("logout status = %d", status)
+	}
+	if status := h.call(http.MethodGet, "/admin/v1/users", handed.Token, nil, nil); status != http.StatusOK {
+		t.Errorf("handed-off session after the original logged out: status = %d, want 200", status)
+	}
+	if _, err := gatewayVerifier(h, newSteppableClock()).VerifySession(context.Background(), handed.Token); err != nil {
+		t.Errorf("handed-off session at the Gateway: %v", err)
+	}
+
+	platform := bootstrapPlatformOperator(h, "handoff-operator@example.com")
+	for name, token := range map[string]string{"platform operator": platform, "none": "", "logged out": original} {
+		if status := h.call(http.MethodPost, "/admin/v1/auth/session/handoff", token, nil, nil); status != http.StatusUnauthorized {
+			t.Errorf("%s: status = %d, want 401", name, status)
+		}
+	}
+}

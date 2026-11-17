@@ -7,6 +7,7 @@ import (
 
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // Logout revokes only the current session and records a non-secret audit row
@@ -85,4 +86,32 @@ func sessionError(err error) error {
 	default:
 		return err
 	}
+}
+
+// SessionHandoffUser returns the account behind actor's session so the caller
+// can issue it a second, independent session — how a Console session signs
+// the same person into Studio without a password. The account must still be
+// active and hold the role the session asserts; a demoted or disabled user
+// gets nothing new. The event is audited as a login, since that is what it
+// grants.
+//
+// SessionHandoffUser 返回 actor 会话背后的账户，供调用方为它另签一个独立会话——Console
+// 会话无需密码即可让同一个人登录 Studio，靠的就是它。账户须仍处于启用状态，且角色与会话
+// 主张的一致；被降级或停用的用户拿不到新会话。该事件按登录记入审计，因为它授予的正是登录。
+func (s *Service) SessionHandoffUser(ctx context.Context, actor Actor) (model.User, error) {
+	if actor.UserID == "" || actor.TenantID == "" || isPlatformActor(actor) {
+		return model.User{}, ErrForbidden
+	}
+	user, err := s.store.GetUser(ctx, actor.TenantID, actor.UserID)
+	if err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			return model.User{}, ErrForbidden
+		}
+		return model.User{}, err
+	}
+	if user.Status != model.StatusActive || user.Role != actor.Role {
+		return model.User{}, ErrForbidden
+	}
+	s.audit(ctx, user.TenantID, user.ID, model.ActionUserLogin, user.ID, "session handoff", actor.IP)
+	return user, nil
 }

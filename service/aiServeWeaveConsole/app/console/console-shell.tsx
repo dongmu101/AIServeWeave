@@ -122,14 +122,15 @@ function navItemClass(active: boolean): string {
  */
 export function ConsoleShell({
   user,
-  studioUrl,
+  studio,
   children,
 }: {
   user: SessionUser;
-  /** studioUrl links to Studio in a new tab; null hides the entry.
+  /** studio is the Studio entry: its address and whether this Console can
+   * sign the user straight in; null hides the entry.
    *
-   * studioUrl 在新分页打开 Studio；为 null 时不显示入口。 */
-  studioUrl: string | null;
+   * studio 是 Studio 入口：地址，以及本 Console 能否直接让用户登录；为 null 时不显示。 */
+  studio: { url: string; handoff: boolean } | null;
   children: React.ReactNode;
 }) {
   const { t } = useI18n();
@@ -242,11 +243,12 @@ export function ConsoleShell({
               </DropdownMenuContent>
             </DropdownMenu>
           </nav>
-          {studioUrl ? (
+          {studio ? (
             <a
-              href={studioUrl}
+              href={studio.url}
               target="_blank"
               rel="noopener noreferrer"
+              onClick={(event) => openStudio(event, studio)}
               aria-label={t("tenant.studio")}
               title={t("tenant.studio")}
               className={buttonVariants({ variant: "ghost", size: "sm", className: "shrink-0" })}
@@ -310,4 +312,60 @@ export function ConsoleShell({
 function roleLabel(role: string, t: Translator): string {
   const key = ({ owner: "common.owner", admin: "common.administrator", member: "common.member" } as const)[role as Role];
   return key ? t(key) : role;
+}
+
+/**
+ * openStudio signs the user into Studio in a new tab without a password. The
+ * tab is opened synchronously, inside the click, so no popup blocker stops
+ * it; the Console server then mints a ticket and the tab receives it as a
+ * form post (a body, never a URL). Any failure sends the tab to Studio's own
+ * sign-in. Modified clicks keep the plain link.
+ *
+ * openStudio 无需密码即在新分页让用户登录 Studio。分页在点击当下同步打开，弹窗拦截不会
+ * 阻止它；随后 Console 服务端签出票据，分页以表单提交（请求体，绝不放进 URL）接收它。任何
+ * 失败都把分页送到 Studio 自己的登录页。带修饰键的点击保留普通链接行为。
+ */
+async function openStudio(
+  event: React.MouseEvent<HTMLAnchorElement>,
+  studio: { url: string; handoff: boolean }
+) {
+  if (!studio.handoff || event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) {
+    return;
+  }
+  event.preventDefault();
+  const name = `aisw-studio-${Date.now()}`;
+  const tab = window.open("about:blank", name);
+  try {
+    const response = await fetch("/api/studio-handoff", {
+      method: "POST",
+      credentials: "same-origin",
+      cache: "no-store",
+      headers: { Accept: "application/json" },
+    });
+    if (!response.ok) {
+      throw new Error("handoff refused");
+    }
+    const { action, ticket } = (await response.json()) as { action?: unknown; ticket?: unknown };
+    if (typeof action !== "string" || typeof ticket !== "string") {
+      throw new Error("handoff contract");
+    }
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = action;
+    form.target = tab ? name : "_self";
+    const input = document.createElement("input");
+    input.type = "hidden";
+    input.name = "ticket";
+    input.value = ticket;
+    form.append(input);
+    document.body.append(form);
+    form.submit();
+    form.remove();
+  } catch {
+    if (tab) {
+      tab.location.href = studio.url;
+    } else {
+      window.location.href = studio.url;
+    }
+  }
 }

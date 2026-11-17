@@ -462,6 +462,10 @@ services:
       # Public Studio address linked from the console header; empty hides the entry.
       # 控制台顶栏 Studio 入口的公开地址；留空时不显示入口。
       AISW_CONSOLE_STUDIO_URL: ${AISW_CONSOLE_STUDIO_URL:-}
+      # Shared with Studio: seals the ticket that signs a Console user into
+      # Studio without a password. Empty makes the entry a plain link.
+      # 与 Studio 共用：密封让 Console 用户免密码登录 Studio 的票据；为空时入口只是普通链接。
+      AISW_STUDIO_HANDOFF_SECRET: ${AISW_STUDIO_HANDOFF_SECRET:-}
       # Operator facts stated on /terms, /privacy, /refund and the page footers.
       # 公开条款页与页脚陈述的营运方资讯；未设置时显示方括号占位符。
       AISW_CONSOLE_LEGAL_SERVICE_NAME: ${AISW_CONSOLE_LEGAL_SERVICE_NAME:-}
@@ -506,6 +510,12 @@ services:
       # 本地 Compose 使用回环 HTTP；部署在 HTTPS 之后时启用 Secure Cookie。
       # Local Compose uses HTTP on loopback. Enable Secure cookies behind HTTPS.
       AISW_STUDIO_COOKIE_SECURE: ${AISW_STUDIO_COOKIE_SECURE:-false}
+      # 与 Console 共用的交接密钥；AISW_STUDIO_CONSOLE_URL 可限定只接受这些 Console 来源
+      # （逗号分隔），留空时只接受同站点提交。
+      # Handoff secret shared with the Console; AISW_STUDIO_CONSOLE_URL may pin the
+      # Console origins (comma-separated); empty accepts same-site posts only.
+      AISW_STUDIO_HANDOFF_SECRET: ${AISW_STUDIO_HANDOFF_SECRET:-}
+      AISW_STUDIO_CONSOLE_URL: ${AISW_STUDIO_CONSOLE_URL:-}
     ports:
       - "127.0.0.1:${STUDIO_PORT:-3100}:3100"
     depends_on:

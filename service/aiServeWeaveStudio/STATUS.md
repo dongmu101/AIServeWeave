@@ -1,5 +1,9 @@
 # Studio 开发状态
 
+## 从 Console 免密码登录（2026-11-17）
+
+`POST /api/session/handoff` 接收 Console 以表单提交的密封票据（`lib/studio/handoff-ticket.ts`，AES-256-GCM，密钥由 `AISW_STUDIO_HANDOFF_SECRET` 派生，60 秒有效），写入 Studio 会话后 303 到首页；此处已有的另一个会话先尽力吊销。来源校验（`lib/studio/handoff-origin.ts`）：设置了 `AISW_STUDIO_CONSOLE_URL` 时只接受其中的来源，否则只接受同站点提交，防止别处页面把访客登进别人的账户。任何失败都 303 到登录页。验证：lint、typecheck、39 项单元测试（新增票据与来源校验）与生产构建通过；未接真实 Console 走通。
+
 规格：[.scratch/studio-chat-flows/spec.md](../../.scratch/studio-chat-flows/spec.md)。
 
 ## 对话（2026-11-16）

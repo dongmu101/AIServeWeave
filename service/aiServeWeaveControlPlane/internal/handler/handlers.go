@@ -52,20 +52,8 @@ func login(ctx *svc.ServiceContext) http.HandlerFunc {
 			respondErr(w, err)
 			return
 		}
-		sessionID := session.NewID()
-		signed, expiry, err := ctx.Issuer.Issue(sessionClaims(sessionID, user))
-		if err != nil {
-			respondErr(w, err)
-			return
-		}
-		if err := ctx.Sessions.Create(r.Context(), session.Record{
-			ID:        sessionID,
-			Subject:   session.Subject{Kind: session.SubjectTenantUser, ID: user.ID},
-			TenantID:  user.TenantID,
-			Role:      user.Role,
-			ExpiresAt: expiry,
-		}); err != nil {
-			respondSessionCreateErr(w, err)
+		sessionID, signed, expiry, ok := issueTenantSession(w, r, ctx, user)
+		if !ok {
 			return
 		}
 		if err := ctx.Logic.RecordUserLogin(r.Context(), &user, clientIP(r)); err != nil {
@@ -79,6 +67,60 @@ func login(ctx *svc.ServiceContext) http.HandlerFunc {
 			User:      renderUser(user),
 		})
 	}
+}
+
+// handoffSession issues the caller's account a second, independent session,
+// answered in login's shape. Console uses it to sign the same person into
+// Studio; logging out of either leaves the other alone.
+//
+// handoffSession 为调用方的账户另签一个独立会话，以登录的响应形状回答。Console 用它让
+// 同一个人登录 Studio；退出其中一个不影响另一个。
+func handoffSession(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		user, err := ctx.Logic.SessionHandoffUser(r.Context(), actor)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		_, signed, expiry, ok := issueTenantSession(w, r, ctx, user)
+		if !ok {
+			return
+		}
+		writeJSON(w, http.StatusOK, types.LoginResponse{
+			Token:     signed,
+			ExpiresAt: expiry,
+			User:      renderUser(user),
+		})
+	}
+}
+
+// issueTenantSession signs a session token for user and records the
+// server-side session behind it. On failure it has written the response.
+//
+// issueTenantSession 为 user 签发会话令牌并记录其背后的服务端会话。失败时已写出响应。
+func issueTenantSession(w http.ResponseWriter, r *http.Request, ctx *svc.ServiceContext, user model.User) (string, string, time.Time, bool) {
+	sessionID := session.NewID()
+	signed, expiry, err := ctx.Issuer.Issue(sessionClaims(sessionID, user))
+	if err != nil {
+		respondErr(w, err)
+		return "", "", time.Time{}, false
+	}
+	if err := ctx.Sessions.Create(r.Context(), session.Record{
+		ID:        sessionID,
+		Subject:   session.Subject{Kind: session.SubjectTenantUser, ID: user.ID},
+		TenantID:  user.TenantID,
+		Role:      user.Role,
+		ExpiresAt: expiry,
+	}); err != nil {
+		respondSessionCreateErr(w, err)
+		return "", "", time.Time{}, false
+	}
+	return sessionID, signed, expiry, true
 }
 
 // sessionAction adapts a no-body session mutation to an HTTP handler.

@@ -1,4 +1,5 @@
 import { deriveSessionKey } from "@/lib/console/session-payload";
+import { handoffKey } from "@/lib/console/studio-handoff";
 
 /**
  * This module reads the Console server's configuration. Nothing here is
@@ -210,6 +211,29 @@ export function studioUrl(): string | null {
   }
   console.warn("[console] AISW_CONSOLE_STUDIO_URL is not an absolute http(s) URL; the Studio entry is hidden.");
   return null;
+}
+
+/** studioHandoff is what signing into Studio from the Console needs: where
+ * Studio receives the ticket and the key that seals it. Both
+ * AISW_CONSOLE_STUDIO_URL and AISW_STUDIO_HANDOFF_SECRET (shared with Studio)
+ * must be set; otherwise it is null and the entry is a plain link to Studio's
+ * sign-in.
+ *
+ * studioHandoff 是从 Console 登录 Studio 所需的：Studio 接收票据的地址与密封票据的
+ * 密钥。须同时设置 AISW_CONSOLE_STUDIO_URL 与 AISW_STUDIO_HANDOFF_SECRET（与 Studio
+ * 共用）；否则为 null，入口只是指向 Studio 登录页的普通链接。 */
+export function studioHandoff(): { action: string; key: Buffer } | null {
+  const base = studioUrl();
+  const secret = process.env.AISW_STUDIO_HANDOFF_SECRET?.trim();
+  if (!base || !secret) {
+    return null;
+  }
+  try {
+    return { action: `${base}/api/session/handoff`, key: handoffKey(secret) };
+  } catch {
+    console.warn("[console] AISW_STUDIO_HANDOFF_SECRET is shorter than 32 characters; the Studio entry falls back to Studio's sign-in.");
+    return null;
+  }
 }
 
 /**
