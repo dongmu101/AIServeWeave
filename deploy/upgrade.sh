@@ -220,8 +220,8 @@ fi
 
 START="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 log "重建有变化的容器（Gateway 重建会断开隧道，Agent 自动重连）"
-# shellcheck disable=SC2086 # empty or one flag / 为空或一个参数
-compose up -d $UP_FLAGS
+# shellcheck disable=SC2086 # empty or one flag, then service names / 为空或一个参数，然后是服务名
+compose up -d $UP_FLAGS $(up_services)
 
 health_check || warn "部分服务未就绪，见上方提示"
 count_errors "$START"

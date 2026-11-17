@@ -359,48 +359,115 @@ pull_images() {
   compose pull $BUILD_ORDER
 }
 
-# build_missing_images builds, one at a time, the AIServeWeave images that are
-# not on this host, under the names compose will start. Services sharing an
-# image (registry-init and registry) build it once.
+# latest_published_tag walks back from HEAD and prints the version of the
+# newest commit whose images are all on the registry, checking at most 50
+# commits. It asks the registry for manifests only and downloads nothing.
 #
-# build_missing_images 逐个构建本机缺失的 AIServeWeave 镜像，名字与 compose 将启动的一致。
-# 共用镜像的服务（registry-init 与 registry）只构建一次。
-build_missing_images() {
-  local version="$1" service image built=0
+# latest_published_tag 从 HEAD 往回找，输出镜像已全部发布到仓库的最近一个提交的版本，最多
+# 检查 50 个提交。只向仓库查询清单，不下载任何东西。
+latest_published_tag() {
+  local commit tag service image ok
+  for commit in $(git -C "$ROOT_DIR" rev-list --max-count=50 HEAD); do
+    tag="$(git -C "$ROOT_DIR" describe --tags --always --abbrev=12 "$commit" 2>/dev/null)" || continue
+    ok=1
+    for service in $BUILD_ORDER; do
+      image="$(compose config --images "$service")"
+      docker manifest inspect "${image%:*}:${tag}" >/dev/null 2>&1 || { ok=0; break; }
+    done
+    if (( ok == 1 )); then
+      printf '%s' "$tag"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# running_image_tag prints the tag of the image the first running
+# AIServeWeave container was started from, or fails when none is running.
+#
+# running_image_tag 输出第一个正在运行的 AIServeWeave 容器所用镜像的 tag；没有在运行的
+# 容器时失败。
+running_image_tag() {
+  local service id image
+  for service in $BUILD_ORDER; do
+    id="$(compose ps -q "$service" 2>/dev/null)" || continue
+    [[ -n "$id" ]] || continue
+    image="$(docker inspect -f '{{.Config.Image}}' "$id" 2>/dev/null)" || continue
+    [[ "$image" == */aiserveweave-*:* ]] || continue
+    printf '%s' "${image##*:}"
+    return 0
+  done
+  return 1
+}
+
+# missing_services prints the AIServeWeave services whose image is not on
+# this host under the current tag.
+#
+# missing_services 输出当前 tag 下本机没有镜像的 AIServeWeave 服务。
+missing_services() {
+  local service image
   for service in $BUILD_ORDER; do
     image="$(compose config --images "$service")"
-    docker image inspect "$image" >/dev/null 2>&1 && continue
-    (( built == 1 )) || check_memory
-    built=1
-    build_images "$version" "$service"
+    docker image inspect "$image" >/dev/null 2>&1 || printf '%s ' "$service"
+  done
+}
+
+# SKIP_SERVICES lists the services prepare_images found no image for; the
+# caller starts every other service and leaves these out.
+#
+# SKIP_SERVICES 列出 prepare_images 找不到镜像的服务；调用方启动其余服务，跳过这些。
+SKIP_SERVICES=""
+
+# up_services prints the services compose up should start: all of them, or,
+# when some have no image, all but those.
+#
+# up_services 输出 compose up 要启动的服务：全部；有服务没有镜像时，排除它们。
+up_services() {
+  [[ -n "$SKIP_SERVICES" ]] || return 0
+  local service
+  for service in $(compose config --services); do
+    [[ " $SKIP_SERVICES " == *" $service "* ]] || printf '%s ' "$service"
   done
 }
 
 # prepare_images makes the images that compose up will start: pulled when
 # AISW_IMAGE_TAG names a release, otherwise built from this checkout.
 #
-# In follow mode the tag is this checkout's own version, so an image nobody
-# published yet (make publish not run for this commit) can be built here from
-# the same code under the same name; the upgrade goes on instead of stopping.
-# A tag pinned with --image-tag names a release that should exist, so a
-# failed pull there still stops the upgrade.
+# In follow mode, when this commit's images were never published, nothing is
+# built on the host: the newest earlier commit whose images were published is
+# pulled instead. Failing that, the tag goes back to the one the running
+# containers use, and a service with no image under it is skipped with a
+# warning. A tag pinned with --image-tag
+# names a release that should exist, so a failed pull there stops the upgrade.
 #
 # prepare_images 准备 compose up 要启动的镜像：AISW_IMAGE_TAG 指定了 release 时拉取，
 # 否则从当前检出构建。
 #
-# 跟随模式下 tag 就是当前检出的版本，因此尚未发布的镜像（该提交没有 make publish）可以在本机
-# 用同一份代码、以同一个名字构建，升级继续而不是中止。用 --image-tag 固定的 tag 指向一个本应
-# 存在的 release，拉取失败时仍然中止。
+# 跟随模式下，该提交的镜像从未发布时不在本机构建：改为拉取镜像已发布的最近一个更早提交。
+# 也找不到时，tag 退回正在运行的容器所用的 tag，该 tag 下没有镜像的服务跳过并警告。用 --image-tag 固定的 tag 指向
+# 一个本应存在的 release，拉取失败时中止。
 prepare_images() {
-  local version="$1" tag repo
+  local version="$1" tag repo running published
   shift
   tag="$(image_tag)"
   if [[ -n "$tag" ]]; then
     pull_images "$tag" && return 0
     repo="${AISW_IMAGE_REPO:-$(env_get AISW_IMAGE_REPO)}"
     if [[ "$(env_get AISW_IMAGE_FOLLOW)" == true && "$tag" == "$version" ]]; then
-      warn "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的全部镜像（该提交未 make publish），改为在本机构建缺失的镜像"
-      build_missing_images "$version"
+      log "查找镜像已发布的最近一个提交"
+      if published="$(latest_published_tag)" && [[ "$published" != "$tag" ]]; then
+        warn "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的镜像（该提交未发布），改用最近已发布的 ${published}，不在本机构建"
+        env_set AISW_IMAGE_TAG "$published"
+        pull_images "$published" && return 0
+      fi
+      running="$(running_image_tag)" ||
+        die "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的镜像，本机也没有正在运行的服务可沿用：先 make publish，或 deploy/upgrade.sh --image-tag <已发布的版本>"
+      warn "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的镜像（该提交未发布），不在本机构建，沿用正在运行的镜像 ${running}"
+      env_set AISW_IMAGE_TAG "$running"
+      pull_images "$running" >/dev/null 2>&1 || true
+      SKIP_SERVICES="$(missing_services)"
+      [[ -z "$SKIP_SERVICES" ]] ||
+        warn "以下服务在 ${running} 下没有镜像，本次不启动：${SKIP_SERVICES}（发布镜像后重跑 deploy/upgrade.sh）"
       return 0
     fi
     die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已在构建机对该提交 make publish）；仓库为私有时先 docker login。代码可能已更新，服务未改动"
