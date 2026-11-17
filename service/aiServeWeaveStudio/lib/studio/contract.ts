@@ -120,6 +120,27 @@ export function errorMessage(code: string): string {
       return "请求太频繁，请稍后重试。";
     case "forbidden_origin":
       return "请求来源无效，请刷新页面后重试。";
+    case "model_unavailable":
+      return "所选模型当前不可用，请换一个模型。";
+    case "limit_reached":
+      return "对话数量或消息数量已达上限，请删除旧对话或新开对话。";
+    case "conflict":
+      return "对话已在别处更新，请刷新后重试。";
+    case "not_found":
+      return "对话不存在或已被删除。";
+    case "timeout":
+      return "模型响应超时，请稍后重试。";
+    case "invalid_request":
+      return "请求无效，请检查后重试。";
+    case "body_too_large":
+    case "too_large":
+      return "消息太长，请缩短后重试。";
+    case "upstream_error":
+      return "模型返回了错误，请重试或换一个模型。";
+    case "stream_interrupted":
+      return "回复中断，请重试。";
+    case "storage_unavailable":
+      return "对话存储暂不可用，请稍后重试。";
     case "verification_unavailable":
     case "upstream":
     case "upstream_contract":

@@ -2026,7 +2026,7 @@ func createUsageRecords(ctx *svc.ServiceContext) http.HandlerFunc {
 			batch[i] = logic.CreateUsageRecordParams{
 				RequestID: rec.RequestID, TenantID: rec.TenantID, Model: rec.Model, Endpoint: rec.Endpoint,
 				PromptTokens: rec.PromptTokens, CompletionTokens: rec.CompletionTokens, TotalTokens: rec.TotalTokens,
-				CreatedAt: rec.CreatedAt, NodeID: rec.NodeID, KeyID: rec.KeyID,
+				CreatedAt: rec.CreatedAt, NodeID: rec.NodeID, KeyID: rec.KeyID, UserID: rec.UserID,
 			}
 		}
 		accepted, err := ctx.Logic.CreateUsageRecords(r.Context(), batch)

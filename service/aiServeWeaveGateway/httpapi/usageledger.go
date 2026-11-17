@@ -82,6 +82,10 @@ type UsageRecord struct {
 	// KeyID 是发起请求的 API key，使控制面能把用量归属到 key 及其创建者。没有 key
 	// 身份的请求为空。
 	KeyID string
+	// UserID is the signed-in user of a Studio request, which has no key.
+	//
+	// UserID 是 Studio 请求的登录用户，这类请求没有 key。
+	UserID string
 }
 
 // usageLedgerSink is what recordUsage hands a finished usage record to. It

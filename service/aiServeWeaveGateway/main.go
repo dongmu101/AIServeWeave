@@ -574,6 +574,15 @@ func run() error {
 		// would not be a nil interface, and would mount the Studio API.
 		// 仅在开启时赋值：装箱进接口的 nil *Verifier 不是 nil 接口，会误挂载 Studio API。
 		httpCfg.StudioSessions = verifier
+		token := *controlPlaneToken
+		if token == "" {
+			token = os.Getenv(controlPlaneTokenEnv)
+		}
+		conversations, err := controlplaneclient.NewStudioClient(controlplaneclient.StudioClientConfig{Endpoint: *controlPlaneAddr, Token: token})
+		if err != nil {
+			return err
+		}
+		httpCfg.StudioStore = conversations
 		logger.Info("serving the Studio API at /studio/v1")
 	}
 	front := httpapi.New(sched, httpCfg)

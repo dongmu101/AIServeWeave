@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { pickModel } from "./model-preference.ts";
+import { chooseModel, pickModel } from "./model-preference.ts";
 
 const models = [{ id: "a" }, { id: "b" }];
 
@@ -16,4 +16,11 @@ test("pickModel falls back to the first model", () => {
 
 test("pickModel is empty when nothing is offered", () => {
   assert.equal(pickModel([], "a"), "");
+});
+
+test("chooseModel takes the first candidate still offered", () => {
+  const models = [{ id: "a" }, { id: "b" }];
+  assert.equal(chooseModel(models, null, "gone", "b", "a"), "b");
+  assert.equal(chooseModel(models, undefined, "gone"), "a");
+  assert.equal(chooseModel([], "a"), "");
 });

@@ -82,3 +82,17 @@ func TestRecordUsageIsANoOpWhenNoLedgerIsConfigured(t *testing.T) {
 	// package already follows.
 	h.recordUsage(ctx, runtime.Usage{TotalTokens: 5}, time.Millisecond, UsageEndpointChat, "llama3")
 }
+
+// A Studio request has no key; its record names the signed-in user instead.
+// Studio 请求没有 key，其记录改为写明登录用户。
+func TestRecordUsageCarriesTheStudioUser(t *testing.T) {
+	sink := &fakeUsageLedgerSink{}
+	h := &handlers{usageLedger: sink, metrics: newRecorder(nil), clock: runtime.NewSystemClock()}
+	ctx := context.WithValue(context.Background(), identityKey{}, Identity{TenantID: "tnt_9", UserID: "usr_9"})
+
+	h.recordUsage(ctx, runtime.Usage{PromptTokens: 2, CompletionTokens: 1, TotalTokens: 3}, time.Millisecond, UsageEndpointChat, "llama3")
+
+	if len(sink.records) != 1 || sink.records[0].UserID != "usr_9" || sink.records[0].KeyID != "" {
+		t.Fatalf("records = %+v, want one keyless record for usr_9", sink.records)
+	}
+}

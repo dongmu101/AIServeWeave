@@ -1,3 +1,20 @@
+## Studio 对话存储（2026-11-16）
+
+新增 `studio_conversations`、`studio_messages`（迁移命名空间 `studio`，`0001`、`0002`，MySQL 与 PostgreSQL），`sql/init.sql` 已同步。实现在 `internal/logic/studio.go`、`internal/store/*/studio.go`、`internal/handler/studio.go`。
+
+- **内部接口**（凭 `InternalToken`，归属由查询参数 `tenant_id`、`user_id` 指定，跨归属一律 404）：
+  - `POST`、`GET /internal/v1/studio/conversations`：新建；按 `updated_at` 倒序分页，`q` 按标题搜索（不区分大小写）。
+  - `GET`、`PATCH`、`DELETE /internal/v1/studio/conversations/:id`。
+  - `GET …/:id/messages`：按 `seq` 递增分页。
+  - `POST …/:id/turns`：写入用户消息，或重新生成（删除最后一条用户消息之后的内容）。`replace_from_id` 必须指向用户消息，否则 409。
+  - `POST …/:id/replies`：写入回答，按 id 幂等；轮次已被新轮次取代时 409 `studio_stale_turn`。
+- **上限**：每用户 1000 个对话、每对话 200 条消息（超出 409 `studio_limit`）；标题 200 字符、系统提示 16 KiB、用户消息 128 KiB、回答 1 MiB。首条消息自动取首行前 40 字作标题。
+- **用量**：`usage_records` 入账请求新增可选 `user_id`，只在 `key_id` 为空时采用。
+
+尚未交付：对话表分区与保留期；删除用户或租户时清理对话。
+
+验证：默认测试、共享 store 契约（memstore 与 gormstore）、e2e（真实 Gateway 客户端往返与内部令牌校验）；临时 MySQL 9.7 与 PostgreSQL 16 上 live 用例通过。
+
 ## 标识符改为 UUIDv7（2026-11-15）
 
 控制面实体 ID（`model.NewID`）改为前缀加 `common/idgen` 铸造的 UUIDv7（32 位十六进制，不带连字符），共 36 字符，原来是前缀加 28 位随机十六进制。同一实体的 ID 按创建顺序排序，新行追加在主键索引右端。所有保存这类 ID 的列（主键、`tenant_id`、`key_id`、`user_id`，以及 `created_by`/`updated_by`/`actor_id`/`requested_by`/`reviewed_by`/`revoked_by`/`acknowledged_by` 这类操作人列）由 `VARCHAR(32)` 加宽到 `VARCHAR(40)`，宽度定义在 `model.IDSize`。model 标签按它写成 `size:40`；`schemacheck` 里 `actor_id` 的默认宽度和 `usageledger` 的长度上限直接引用这个常量。节点 ID（`agentenrollment.NewNodeID`）与 Gateway 推送来的 `request_logs.id` 也是 UUIDv7，长度不变。

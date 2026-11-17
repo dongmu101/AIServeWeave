@@ -726,6 +726,44 @@ ALTER TABLE alipay_redemptions
  MODIFY presale_order_id VARCHAR(40) NOT NULL DEFAULT '';
 
 -- ============================================================
+-- studio
+-- ============================================================
+
+-- studio/mysql/0001_create_studio_conversations.sql
+CREATE TABLE studio_conversations (
+ id VARCHAR(40) NOT NULL,
+ tenant_id VARCHAR(40) NOT NULL,
+ user_id VARCHAR(40) NOT NULL,
+ title VARCHAR(200) NOT NULL,
+ model VARCHAR(128) NOT NULL,
+ system_prompt TEXT NOT NULL,
+ created_at DATETIME(6) NOT NULL,
+ updated_at DATETIME(6) NOT NULL,
+ PRIMARY KEY (id),
+ INDEX idx_studio_conversations_owner (tenant_id, user_id, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- studio/mysql/0002_create_studio_messages.sql
+CREATE TABLE studio_messages (
+ id VARCHAR(40) NOT NULL,
+ conversation_id VARCHAR(40) NOT NULL,
+ tenant_id VARCHAR(40) NOT NULL,
+ user_id VARCHAR(40) NOT NULL,
+ seq BIGINT NOT NULL,
+ role VARCHAR(16) NOT NULL,
+ content MEDIUMTEXT NOT NULL,
+ reasoning MEDIUMTEXT NOT NULL,
+ status VARCHAR(16) NOT NULL,
+ model VARCHAR(128) NOT NULL,
+ prompt_tokens BIGINT NOT NULL DEFAULT 0,
+ completion_tokens BIGINT NOT NULL DEFAULT 0,
+ error_code VARCHAR(64) NOT NULL DEFAULT '',
+ created_at DATETIME(6) NOT NULL,
+ PRIMARY KEY (id),
+ UNIQUE KEY uk_studio_messages_seq (conversation_id, seq)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- ============================================================
 -- jobs
 -- ============================================================
 

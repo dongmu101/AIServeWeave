@@ -120,3 +120,30 @@ func TestCreateUsageRecordsAttributesUsageToTheKeysCreator(t *testing.T) {
 		t.Fatalf("SummarizeUsage() = %+v, %v, want one llama3 row of 15 tokens without a key", byModel, err)
 	}
 }
+
+func TestCreateUsageRecordsTakesTheStudioUserOnlyWithoutAKey(t *testing.T) {
+	f := newFixture(t)
+	created, err := f.svc.CreateAPIKey(context.Background(), f.ownerAt, "k", 0)
+	if err != nil {
+		t.Fatalf("CreateAPIKey() error = %v", err)
+	}
+	base := logic.CreateUsageRecordParams{TenantID: f.tenant.ID, Model: "llama3", Endpoint: "chat", PromptTokens: 3, CompletionTokens: 2, TotalTokens: 5, CreatedAt: time.Now()}
+	studio, keyed := base, base
+	studio.RequestID, studio.UserID = "req_studio", "usr_studio"
+	keyed.RequestID, keyed.KeyID, keyed.UserID = "req_keyed", created.Key.ID, "usr_claimed"
+
+	if _, err := f.svc.CreateUsageRecords(context.Background(), []logic.CreateUsageRecordParams{studio, keyed}); err != nil {
+		t.Fatalf("CreateUsageRecords() error = %v", err)
+	}
+	summary, err := f.svc.SummarizeUsage(context.Background(), store.UsageRecordFilter{TenantID: f.tenant.ID, ByKey: true})
+	if err != nil {
+		t.Fatalf("SummarizeUsage() error = %v", err)
+	}
+	got := map[string]string{}
+	for _, row := range summary {
+		got[row.KeyID] = row.UserID
+	}
+	if got[""] != "usr_studio" || got[created.Key.ID] != f.owner.ID {
+		t.Fatalf("SummarizeUsage(ByKey) users = %v, want the Studio user for the keyless row and the key's creator for the keyed one", got)
+	}
+}

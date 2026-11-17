@@ -44,6 +44,12 @@ type Config struct {
 	// StudioSessions 为 Studio API（/studio/v1）校验 Console 会话令牌。为 nil 时
 	// 不挂载 Studio API：所有 /studio/ 路径都落到普通的 API Key 前门，得到 401/404。
 	StudioSessions SessionVerifier
+	// StudioStore persists Studio conversations. nil leaves the conversation
+	// endpoints unmounted while /studio/v1/me and /studio/v1/models still work.
+	//
+	// StudioStore 持久化 Studio 对话。为 nil 时不挂载对话端点，/studio/v1/me 与
+	// /studio/v1/models 仍可用。
+	StudioStore StudioStore
 	// APIKeys is the static set of accepted Bearer tokens, used when no
 	// Verifier is configured. Empty means authentication is disabled — see
 	// auth.go's warning about that.
@@ -651,7 +657,7 @@ func New(sched *scheduler.Scheduler, cfg Config) *Server {
 	// 租户，每条路由都受配额约束。
 	front := withAnthropicBasePath(h.observe(withLogging(logger, auth.middleware(h.requestLogMiddleware(h.rateLimit(mux))))))
 	if cfg.StudioSessions != nil {
-		front = withStudio(front, h.studioHandler(cfg.StudioSessions, logger))
+		front = withStudio(front, h.studioHandler(cfg.StudioSessions, cfg.StudioStore, logger))
 	}
 	return &Server{
 		Handler:           withWriteDeadline(writeStallTimeout, front),

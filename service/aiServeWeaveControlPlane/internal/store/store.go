@@ -1077,6 +1077,7 @@ type Store interface {
 	Jobs
 	JobArtifacts
 	ResponseTurns
+	StudioConversations
 	MetricsHistory
 	RequestLogs
 	UsageRecords
