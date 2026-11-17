@@ -36,6 +36,12 @@ TAG             ?= local
 # to pull from it in follow mode, so the two must agree.
 # 与 deploy/lib.sh 的 source_version 同一条命令：服务器在跟随模式下据此推出要拉取的 tag，两边必须一致。
 VERSION         ?= $(shell git describe --tags --always --dirty --abbrev=12 2>/dev/null || echo dev)
+# Evaluate it once: ?= is recursive, so every recipe would rerun git describe,
+# and a commit made while publish runs would tag images and print a version
+# that differ from what was pushed.
+# 只求值一次：?= 是递归展开，每个 recipe 都会重跑 git describe；publish 运行期间提交代码，
+# 各镜像的 tag 与最后打印的版本就会与实际推送的不一致。
+VERSION         := $(VERSION)
 SERVICES        ?= registry controlplane gateway console
 AGENT_PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 GOPROXY         ?=
