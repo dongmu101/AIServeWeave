@@ -8,6 +8,10 @@ import (
 )
 
 func runtimeFixture() {
+	if os.Getenv("AISW_CODEX_STDERR_FIXTURE") == "1" {
+		_, _ = os.Stderr.WriteString("Error: Not logged in. Run codex login PRIVATE_MARKER\n")
+		os.Exit(1)
+	}
 	dec, enc := json.NewDecoder(os.Stdin), json.NewEncoder(os.Stdout)
 	send := func(v any) {
 		if enc.Encode(v) != nil {
@@ -34,6 +38,10 @@ func runtimeFixture() {
 		case "account/read":
 			send(map[string]any{"id": msg.ID, "result": map[string]any{"account": map[string]string{"type": "chatgpt"}}})
 		case "model/list":
+			if os.Getenv("AISW_CODEX_CATALOG_FAILS") == "1" {
+				send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32603, "message": "catalog unavailable"}})
+				continue
+			}
 			send(map[string]any{"id": msg.ID, "result": map[string]any{"data": []any{map[string]string{"model": "fixture-model"}}, "nextCursor": nil}})
 		case "thread/start":
 			var params struct {

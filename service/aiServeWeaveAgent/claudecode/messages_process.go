@@ -46,10 +46,21 @@ var errTerminalStop = errors.New("CLI terminal response complete")
 // cliNotification 识别 CLI 生命周期元数据，不包含提供方的回复事件。
 func cliNotification(kind, subtype string) bool {
 	switch kind {
-	case "auth_status", "tool_progress", "tool_use_summary", "prompt_suggestion":
+	case "auth_status", "tool_progress", "tool_use_summary", "prompt_suggestion", "keep_alive":
 		return true
 	case "system":
 		return subtype != "" && subtype != "init"
+	}
+	return false
+}
+
+// knownEnvelope reports whether kind is a top-level stream-json type
+// bridgeEvents handles itself.
+// knownEnvelope 报告 kind 是否为 bridgeEvents 自行处理的顶层 stream-json 类型。
+func knownEnvelope(kind string) bool {
+	switch kind {
+	case "system", "assistant", "user", "rate_limit_event", "result", "stream_event":
+		return true
 	}
 	return false
 }
@@ -250,7 +261,8 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 	}
 	env := slices.Clone(b.cliEnv())
 	cmd := exec.CommandContext(s.ctx, b.program, args...)
-	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), io.Discard
+	stderr := &cliprocess.StderrTail{}
+	cmd.Dir, cmd.Stdin, cmd.Stderr = dir, strings.NewReader(prompt), stderr
 	cmd.Env = append(env, "CLAUDE_CODE_MAX_OUTPUT_TOKENS="+strconv.Itoa(s.request.MaxTokens))
 	if !native {
 		cmd.Env = append(cmd.Env, "MAX_THINKING_TOKENS="+strconv.Itoa(budget), "CLAUDE_CODE_DISABLE_ADAPTIVE_THINKING=1", "CLAUDE_CODE_DISABLE_EXPERIMENTAL_BETAS=1", "DISABLE_PROMPT_CACHING=1")
@@ -334,8 +346,9 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 			return errProbeSetup
 		}
 	}
-	cmd.WaitDelay = 2 * time.Second
-	if cliprocess.Configure(cmd) != nil {
+	cmd.WaitDelay = cliStopGrace
+	kill, err := cliprocess.ConfigureGraceful(cmd, cliStopGrace)
+	if err != nil {
 		return errCLIStart
 	}
 	out, err := cmd.StdoutPipe()
@@ -346,10 +359,13 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		_ = out.Close()
 		return errCLIStart
 	}
-	defer func() { _ = cmd.Cancel() }()
+	defer func() { _ = kill() }()
 	final, err := bridgeEvents(out, s)
-	if err != nil {
-		_ = cmd.Cancel()
+	// A canceled session stops through its context, which lets the CLI handle
+	// SIGTERM first (see cliStopGrace); every other stop is immediate.
+	// 被取消的会话经其上下文停止，让 CLI 先处理 SIGTERM（见 cliStopGrace）；其他停止一律立即执行。
+	if err != nil && s.ctx.Err() == nil {
+		_ = kill()
 	}
 	waitErr := cmd.Wait()
 	if s.ctx.Err() != nil {
@@ -361,10 +377,10 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		return s.send(final, nil)
 	}
 	if err != nil {
-		return err
+		return withStderr(err, stderr)
 	}
 	if waitErr != nil {
-		return errCLIExit
+		return withStderr(errCLIExit, stderr)
 	}
 	return s.send(final, nil)
 }
@@ -450,13 +466,16 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			return nil, protocolError("oversized_event")
 		}
 		var envelope struct {
-			Type          string          `json:"type"`
-			Subtype       string          `json:"subtype"`
-			IsError       bool            `json:"is_error"`
-			Error         string          `json:"error"`
-			Tools         []string        `json:"tools"`
-			Event         json.RawMessage `json:"event"`
-			RateLimitInfo struct {
+			Type    string          `json:"type"`
+			Subtype string          `json:"subtype"`
+			IsError bool            `json:"is_error"`
+			Error   string          `json:"error"`
+			Tools   []string        `json:"tools"`
+			Event   json.RawMessage `json:"event"`
+			// StartupFailureReason names why the CLI refused to start.
+			// StartupFailureReason 说明 CLI 拒绝启动的原因。
+			StartupFailureReason string `json:"startup_failure_reason"`
+			RateLimitInfo        struct {
 				Status   string `json:"status"`
 				ResetsAt int64  `json:"resetsAt"`
 			} `json:"rate_limit_info"`
@@ -470,6 +489,19 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		// 通知可出现在结果之前或之后，不进入推理回复，也不推翻成功结果；结果前的额度
 		// 事件仍参与下方拒绝分类。
 		if cliNotification(envelope.Type, envelope.Subtype) || (finished && envelope.Type == "rate_limit_event") {
+			continue
+		}
+		// A native round's model output arrives only in stream_event, whose
+		// order is still checked below, so a top-level type a newer CLI added
+		// carries nothing the caller needs and is skipped, before or after
+		// the result. conversation_reset changes what the stream means and
+		// control_request waits for an answer, so both still fail the round,
+		// as does any unknown type in a bridged round.
+		// 原生回合的模型输出只经 stream_event 到达，其顺序仍在下方校验，因此新版 CLI 新增的
+		// 顶层类型不含调用方需要的内容，无论在结果之前还是之后都跳过。conversation_reset 会改变
+		// 流的含义、control_request 会等待答复，二者仍让回合失败；桥接回合中的任何未知类型也是如此。
+		if native && !knownEnvelope(envelope.Type) && envelope.Type != "conversation_reset" && envelope.Type != "control_request" {
+			s.ignoredEvents.Add(1)
 			continue
 		}
 		if finished {
@@ -512,6 +544,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				}
 				if refreshBusy || loginRefreshBusy(line) {
 					return nil, errLoginRefreshBusy
+				}
+				if reason := startupFailureReason(envelope.StartupFailureReason); reason != "" {
+					return nil, &cliStartupFailure{reason: reason}
 				}
 				if rejection != nil {
 					return nil, rejection
@@ -617,12 +652,16 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 				if !active || !blockActive || event.Index != index {
 					return nil, protocolError("unexpected_block_delta")
 				}
+				// A native round forwards every delta as the Messages API
+				// would; only a bridged round, which rebuilds the content
+				// itself, limits them to what it understands.
+				// 原生回合像 Messages API 一样转发所有增量；只有自行重建内容的桥接回合限定为它能理解的增量。
 				if (current.Type == "tool_use" || (native && current.Type == "server_tool_use")) && event.Delta.Type == "input_json_delta" {
 					arguments += event.Delta.PartialJSON
 					if len(arguments) > maxEventBytes {
 						return nil, errCapacity
 					}
-				} else if !(current.Type == "text" && (event.Delta.Type == "text_delta" || (native && event.Delta.Type == "citations_delta"))) && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) && !(native && current.Type == "compaction" && event.Delta.Type == "compaction_delta") {
+				} else if !native && !(current.Type == "text" && event.Delta.Type == "text_delta") && !(current.Type == "thinking" && (event.Delta.Type == "thinking_delta" || event.Delta.Type == "signature_delta")) {
 					return nil, protocolError("unsupported_block_delta")
 				}
 			case "content_block_stop":
@@ -685,7 +724,12 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 						return nil, protocolError("unsupported_stop_reason")
 					}
 				default:
-					return nil, protocolError("unsupported_stop_reason")
+					// A native round ends at a stop reason it does not know
+					// like any other terminal reason: forwarded, then the CLI stops.
+					// 原生回合遇到不认识的停止原因时，与其他终止原因一样结束：转发后停止 CLI。
+					if !native || stopReason == "" {
+						return nil, protocolError("unsupported_stop_reason")
+					}
 				}
 			case "message_stop":
 				if !active || blockActive || stopReason == "" {
@@ -712,7 +756,15 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			case "ping":
 				continue
 			default:
-				return nil, protocolError("unsupported_stream_event")
+				// The Messages API may add event types and asks clients to
+				// skip ones they do not know, so a native round forwards
+				// them. An error event keeps failing the round, which then
+				// carries the captured upstream answer (see withUpstream).
+				// Messages API 可能新增事件类型，并要求客户端跳过不认识的类型，因此原生回合转发它们。
+				// error 事件仍让回合失败，回合随后携带截获的上游应答（见 withUpstream）。
+				if !native || event.Type == "error" {
+					return nil, protocolError("unsupported_stream_event")
+				}
 			}
 			switch event.Type {
 			case "content_block_start", "content_block_delta", "content_block_stop":

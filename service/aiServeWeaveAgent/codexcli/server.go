@@ -3,7 +3,6 @@ package codexcli
 import (
 	"bufio"
 	"context"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -65,10 +64,12 @@ func startServer(ctx context.Context, executable string, env []string, image, pr
 	if seeds != "" {
 		restoreSeed(seeds, dir)
 	}
+	stderr := &cliprocess.StderrTail{}
 	cmd := exec.CommandContext(ctx, path, serverArgs(dir, image)...)
-	cmd.Dir, cmd.Env, cmd.Stderr = dir, env, io.Discard
-	cmd.WaitDelay = 2 * time.Second
-	if err := cliprocess.Configure(cmd); err != nil {
+	cmd.Dir, cmd.Env, cmd.Stderr = dir, env, stderr
+	cmd.WaitDelay = processStopGrace
+	kill, err := cliprocess.ConfigureGraceful(cmd, processStopGrace)
+	if err != nil {
 		return err
 	}
 	in, err := cmd.StdinPipe()
@@ -88,10 +89,18 @@ func startServer(ctx context.Context, executable string, env []string, image, pr
 	stop := func() {
 		if !stopped {
 			stopped = true
-			_ = cmd.Cancel()
+			// A canceled request stops through ctx, which lets app-server
+			// handle SIGTERM first (see processStopGrace); every other stop
+			// is immediate. The second kill reaps what outlived the leader.
+			// 被取消的请求经 ctx 停止，让 app-server 先处理 SIGTERM（见 processStopGrace）；
+			// 其他停止一律立即执行。第二次 kill 回收比组长进程活得更久的进程。
+			if ctx.Err() == nil {
+				_ = kill()
+			}
 			_ = in.Close()
 			_ = out.Close()
 			_ = cmd.Wait()
+			_ = kill()
 		}
 	}
 	defer stop()
@@ -107,6 +116,40 @@ func startServer(ctx context.Context, executable string, env []string, image, pr
 		// 只有已退出的进程才会让数据库文件处于静止状态。
 		stop()
 		promoteSeed(seeds, dir, time.Now())
+	}
+	if err != nil && ctx.Err() == nil {
+		// Wait has drained standard error once stop returns.
+		// stop 返回时 Wait 已读完标准错误。
+		stop()
+		err = withStderr(err, stderr)
+	}
+	return err
+}
+
+// processStopGrace is how long a canceled app-server has to handle SIGTERM
+// before its process group is killed; codex-cli 0.169.0 exits about 0.08 s
+// after SIGTERM, so this rarely runs out. It lets a process canceled while
+// refreshing its login save the new token instead of losing it.
+// processStopGrace 是被取消的 app-server 在进程组被杀之前处理 SIGTERM 的时间；codex-cli
+// 0.169.0 收到 SIGTERM 后约 0.08 秒退出，因此很少用完。它让在刷新登录时被取消的进程能保存
+// 新令牌，而不是将其丢失。
+const processStopGrace = 2 * time.Second
+
+// stderrNote attaches the fixed category of a failed app-server's standard
+// error (see cliprocess.StderrTail) to its failure; the text never leaves
+// the Agent.
+// stderrNote 把失败 app-server 标准错误的固定分类（见 cliprocess.StderrTail）附加到其失败上；
+// 文本从不离开 Agent。
+type stderrNote struct {
+	error
+	category string
+}
+
+func (n *stderrNote) Unwrap() error { return n.error }
+
+func withStderr(err error, stderr *cliprocess.StderrTail) error {
+	if category := stderr.Category(); category != "" {
+		return &stderrNote{error: err, category: category}
 	}
 	return err
 }

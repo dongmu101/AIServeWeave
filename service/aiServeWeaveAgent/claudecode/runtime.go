@@ -303,8 +303,11 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 				outcome = "canceled"
 			}
 		}
-		r.logger.Info("Claude Messages round finished", "runtime_id", r.cfg.ID, "round_id", roundID,
-			"message_path", diagnostics.path, "outcome", outcome, "safeguard_status", diagnostics.status)
+		finished := []any{"runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path, "outcome", outcome, "safeguard_status", diagnostics.status}
+		if ignored := s.ignoredEvents.Load(); ignored > 0 {
+			finished = append(finished, "ignored_cli_events", ignored)
+		}
+		r.logger.Info("Claude Messages round finished", finished...)
 		s.mu.Lock()
 		s.busy = false
 		keep := err == nil && s.waiting && !s.request.isNative()
@@ -379,6 +382,14 @@ func (r *Runtime) roundError(err error) error {
 	var eventFailure *cliEventError
 	if errors.As(err, &eventFailure) {
 		attrs = append(attrs, "cli_event_line", eventFailure.line, "cli_event_error", eventFailure.reason)
+	}
+	var startup *cliStartupFailure
+	if errors.As(err, &startup) {
+		attrs = append(attrs, "cli_startup_failure", startup.reason)
+	}
+	var stderr *cliStderrNote
+	if errors.As(err, &stderr) {
+		attrs = append(attrs, "cli_stderr", stderr.category)
 	}
 	r.logger.Warn("Claude Messages round failed", attrs...)
 	if errors.Is(err, context.DeadlineExceeded) {

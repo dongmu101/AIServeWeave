@@ -14,7 +14,7 @@ runtimes:
     kind: codex
 ```
 
-不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，每次都冷启动一个 app-server，受 `probe_timeout`（默认 60 秒）限制；紧接着的下一次检查（Probe 后的 Discover、恢复中的 Health 后的 Discover）在 5 秒内复用上一次成功的结果一次，不再启动第二个进程。app-server 在空的 `sqlite_home` 中启动时，会把 CODEX_HOME 下的整个 `sessions` 目录建一遍索引；会话积累到 GB 级时，这一步要耗数秒 CPU。因此每个 app-server 进程（探测、额度查询、对话与生图）仍使用新建的私有 `sqlite_home`，但启动前先从该账户的「种子」复制一份状态库（`state_*.sqlite` 及其 `-wal`），只需为此后新增的会话建索引。种子只取自成功结束的非推理进程（模型目录探测与额度查询），最多每 5 分钟更新一次；推理进程的状态库含有该请求的会话，用完即删，从不成为种子。memories、goals、queue 与 logs 不复制，始终从空开始，因此不会有内容跨请求。种子位于用户缓存目录的 `AIServeWeave/codex-state/<账户目录摘要>/`（macOS 为 `~/Library/Caches`，Linux 为 `$XDG_CACHE_HOME` 或 `~/.cache`），权限 0700，每个账户目录一份；只在进程退出后复制，先写暂存目录再原子改名发布，被取代的种子保留 1 分钟后删除。首次运行、种子复制失败或缓存目录不可用时，退回从头建索引。超时错误会写明卡在哪一步（如 `no reply to initialize after 60s`）。启动仍然很慢时，可以把旧会话移出 CODEX_HOME，或在运行时声明里调大 `probe_timeout`（见 [Agent README](../README.md#探测期限)）。
+不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，每次都冷启动一个 app-server，受 `probe_timeout`（默认 60 秒）限制。Health 每隔约 10 秒运行一次，只做 `initialize` 与 `account/read` 确认登录，不读取模型目录（2026-11-18 起；此前每次都完整读取目录）；目录由 Probe 和每 5 分钟一次的 Discover 读取。Probe 后紧接着的 Discover 在 5 秒内复用上一次成功的结果一次，不再启动第二个进程。app-server 在空的 `sqlite_home` 中启动时，会把 CODEX_HOME 下的整个 `sessions` 目录建一遍索引；会话积累到 GB 级时，这一步要耗数秒 CPU。因此每个 app-server 进程（探测、额度查询、对话与生图）仍使用新建的私有 `sqlite_home`，但启动前先从该账户的「种子」复制一份状态库（`state_*.sqlite` 及其 `-wal`），只需为此后新增的会话建索引。种子只取自成功结束的非推理进程（模型目录探测与额度查询），最多每 5 分钟更新一次；推理进程的状态库含有该请求的会话，用完即删，从不成为种子。memories、goals、queue 与 logs 不复制，始终从空开始，因此不会有内容跨请求。种子位于用户缓存目录的 `AIServeWeave/codex-state/<账户目录摘要>/`（macOS 为 `~/Library/Caches`，Linux 为 `$XDG_CACHE_HOME` 或 `~/.cache`），权限 0700，每个账户目录一份；只在进程退出后复制，先写暂存目录再原子改名发布，被取代的种子保留 1 分钟后删除。首次运行、种子复制失败或缓存目录不可用时，退回从头建索引。超时错误会写明卡在哪一步（如 `no reply to initialize after 60s`）。启动仍然很慢时，可以把旧会话移出 CODEX_HOME，或在运行时声明里调大 `probe_timeout`（见 [Agent README](../README.md#探测期限)）。
 
 每个请求启动独立临时进程和 ephemeral thread，经公开 `thread/inject_items` 保留消息角色、function_call 的 call_id 和 function_call_output 的结果，不把工具结果伪装成用户提示词。历史完整注入后以空 input 启动回合；首次动态工具回调转换成 runtime.ToolCall，返回调用方后终止整个进程组。下一轮重新注入完整历史继续，Agent 不保存跨请求线程映射。
 
@@ -57,6 +57,10 @@ app-server 发来的单帧最多 1 MiB，一个回合的生成文本（回复加
 | `contextWindowExceeded`、`badRequest`、`cyberPolicy`、`misalignmentPolicyViolation` | `invalid_config` | 400 | 针对请求本身，换节点结果相同；不计入熔断 |
 | `serverOverloaded` | `backpressure`（可重试） | 429 | 尚未提交的请求换下一个候选 |
 | 其他（含断流、连接失败、`internalServerError`） | `upstream_error` | 502 | 计入熔断 |
+
+回合之外的本机失败：协议流损坏（`ErrProtocol`）、出现未放行的条目或审批请求（`ErrUnexpectedTool`）、加载了未获准的指令文件（`ErrIsolation`），2026-11-18 起都按 `upstream_error` 报告，与 Claude 运行时对同类失败的处理一致。此前它们以 400 `protocol_error` 应答，客户端会误以为是自己的请求有问题。请求本身不合法（`ErrConfig`）仍是 400。
+
+app-server 失败时，Agent 只保留其标准错误的最后 8 KiB，并归入固定分类附在错误信息末尾，例如 `Codex operation failed: upstream_error (cli_stderr: login_required)`。这条信息会出现在健康状态与 Gateway 日志中，原文从不离开 Agent。分类有：`login_required`、`unknown_option`、`config_invalid`、`database_locked`、`disk_full`、`out_of_memory`、`too_many_open_files`、`permission_denied`、`network`、`crashed`，无法识别时为 `other`。
 
 2026-11-18 之前，额度以外的失败一律是 `upstream_error`。上下文过长这类调用方造成的错误也会以 502 应答并计入熔断，同一用户反复重试可能让整个节点被熔断。
 
@@ -121,6 +125,8 @@ report, err := codexcli.Probe(ctx, codexcli.Config{
 - 只接受 ChatGPT 登录，不读取、复制或转发 `auth.json`/token；保留原有认证目录环境变量，过滤 API Key 与网关地址覆盖。
 - 每次独立进程、0700 临时工作目录、ephemeral thread、只读 sandbox；关闭 shell、MCP/插件/Hook 自动加载等非实验能力。收到未允许的 item 或审批请求即失败，不自动批准。
 - 功能开关一律用 `-c features.<名称>=false/true` 设置，不用 `--disable`/`--enable`。codex-cli 0.169.0 实测：`--disable` 遇到 CLI 不认识的名称会在启动时退出（`Unknown feature flag`），而未知的 `-c` 键会被忽略。新版本删掉某个功能时（`multi_agent` 已标为 deprecated），用 `--disable` 会让所有请求与健康检查失败。两种写法的效果相同，`config/read` 报告的功能一致。
+- 另外关闭 0.169.0 默认开启的宿主工具 `browser_use`、`browser_use_external`、`computer_use`、`in_app_browser`、`sleep_tool`。模型一旦调用它们，回合会因条目未获放行而失败。这一项尚未用真实账户跑工具往返（`TestLiveCallerToolRoundTrip`）复验，需要确认它们不会像 `code_mode_host` 那样连带隐藏客户端动态工具。条目白名单另外放行 `functionCallOutput`：它只记录工具结果，不在本机执行任何操作。
+- 请求被取消（客户端断开、超时、运行时关闭）时，先向进程组发送 SIGTERM，2 秒后再发 SIGKILL，让正在刷新登录的进程有机会保存新令牌。0.169.0 收到 SIGTERM 后约 0.08 秒退出。正常结束与隔离失败仍立即终止。
 - 关闭 `unbounded_connection_retries`（0.169.0 默认开启）。开启时，断网后 app-server 每隔 5 秒到 60 秒重连一次、永不停止，请求只能等到总期限才结束。关闭后改用 CLI 的有限重试，失败的回合交给 Gateway 换节点。
 - 保留本机 Codex 账户目录中原生的 `AGENTS.md` / `AGENTS.override.md`，并报告来源数量；项目和其他来源的指令一律拒绝。账户通用指令会参与实验推理，这不等于空白账户环境。
 - 每帧最多 1 MiB，帧数不设上限（由实验期限约束），每会话仅允许两个指定工具调用。错误仅暴露固定类别；报告不含模型正文、指令内容、文件路径或凭据。

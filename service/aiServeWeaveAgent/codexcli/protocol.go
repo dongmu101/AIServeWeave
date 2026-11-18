@@ -106,8 +106,11 @@ func (p *protocol) read() (frame, error) {
 		}
 		itemType = n.Item.Type
 		switch {
+		// Only items that run nothing on this machine are admitted;
+		// functionCallOutput records a tool result and executes nothing.
+		// 只放行不在本机执行任何操作的条目；functionCallOutput 记录工具结果，不执行任何操作。
 		case itemType == "userMessage", itemType == "agentMessage", itemType == "reasoning", itemType == "plan",
-			itemType == "dynamicToolCall", itemType == "contextCompaction":
+			itemType == "dynamicToolCall", itemType == "contextCompaction", itemType == "functionCallOutput":
 		case itemType == "imageGeneration" && p.image:
 		default:
 			return frame{}, ErrUnexpectedTool

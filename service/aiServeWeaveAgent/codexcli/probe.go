@@ -225,7 +225,11 @@ func serverArgs(dir string, image bool) []string {
 	args := []string{"app-server", "--listen", "stdio://"}
 	// Keep code_mode_host available: disabling it also hides client dynamic tools.
 	// 保留 code_mode_host：关闭它也会让客户端动态工具不可见。
-	for _, feature := range []string{"shell_tool", "unified_exec", "shell_snapshot", "multi_agent", "apps", "plugins", "hooks", "skill_search", "skill_mcp_dependency_install", "image_generation", "view_image", "code_mode", "unbounded_connection_retries"} {
+	for _, feature := range []string{"shell_tool", "unified_exec", "shell_snapshot", "multi_agent", "apps", "plugins", "hooks", "skill_search", "skill_mcp_dependency_install", "image_generation", "view_image", "code_mode", "unbounded_connection_retries",
+		// Host tools later releases turned on by default (codex-cli 0.169.0):
+		// a call to one would fail the turn as an unadmitted item.
+		// 后续版本默认开启的宿主工具（codex-cli 0.169.0）：调用它们会因条目未获放行而让回合失败。
+		"browser_use", "browser_use_external", "computer_use", "in_app_browser", "sleep_tool"} {
 		if image && feature == "image_generation" {
 			continue
 		}

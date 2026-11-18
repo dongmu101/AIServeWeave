@@ -82,6 +82,13 @@ before upgrading; do not assume a `0.x` bump is safe by default.
   - CLI 报告「另一个进程正在刷新登录」时，改按可重试的 `backpressure` 报告，Gateway 换下一个候选；以前以 502 应答并计入熔断。
   - 每个 CLI 进程都带 `DISABLE_AUTOUPDATER=1` 与 `CLAUDE_CODE_OAUTH_401_WAIT_MS=30000`。后者未写入官方文档，真实并发刷新尚未验收。
   - 只需升级 Agent。见 [故障排查](service/aiServeWeaveAgent/claudecode/README.md#终止原因与故障排查)。
+- Agent CLI 运行时的未知事件、终止与诊断：
+  - Claude 原生回合跳过新版 CLI 新增的顶层事件，并原样转发不认识的流事件、增量与停止原因；兼容桥接保持严格。
+  - Codex 的协议流与隔离失败从 400 改为 502，与 Claude 一致；Codex 健康检查不再每 10 秒读取模型目录；另外关闭新版默认开启的宿主工具。
+  - 两种 CLI 的推理请求被取消时，先 SIGTERM，2 秒后 SIGKILL。
+  - 失败时只记录 stderr 的固定分类与 Claude 的 `startup_failure_reason`。
+  - Claude 进程新增 `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1` 与 `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`。
+  - 只需升级 Agent。
 - Claude 原生直通遇到未声明工具时整轮失败：模型调用本轮 `tools` 未声明的工具（例如尚未载入 schema 的延迟工具）时，Agent 以 `unsafe_tools` 中止回合，客户端重试同一轮反复得到 400。原生回合（含 `safeguards`）现原样转发这类调用，由调用方答复「没有这个工具」，与直连 API 一致；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝，兼容桥接保持严格。只需升级 Agent。见[诊断记录](docs/acceptance/claude-unsafe-tools-2026-11-11/README.md#根因确认与修复同日稍后)。
 
 - Claude CLI 契约加固：原生进程显式拒绝所有本机工具，保留调用方定义与工具身份；兼容合法认证/工具进度通知及成功结果后的额度通知。本机协议、工具隔离、设置与启动失败改为后端错误（正文前 HTTP 502），真实上游 400/429/529 和恢复分类保持原有透传。新增动态工具名、ToolSearch、通知顺序及真实 CLI 隔离回归，见[验证记录](docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；平台分发安装包需刷新 Gateway 镜像内置的 Agent 制品。原生产 `unsafe_tools` 的具体分支仍未复现。

@@ -26,7 +26,7 @@ func TestServerArgsSetFeaturesThroughConfig(t *testing.T) {
 		if slices.Contains(args, "--disable") || slices.Contains(args, "--enable") {
 			t.Fatalf("args=%q, want features set only through -c", args)
 		}
-		for _, want := range []string{"features.unbounded_connection_retries=false", "features.shell_tool=false", "features.skip_host_skill_discovery=true"} {
+		for _, want := range []string{"features.unbounded_connection_retries=false", "features.shell_tool=false", "features.skip_host_skill_discovery=true", "features.sleep_tool=false", "features.computer_use=false"} {
 			if !slices.Contains(args, want) {
 				t.Fatalf("image=%t args=%q, want %s", image, args, want)
 			}
@@ -141,5 +141,68 @@ func TestRuntimeInjectsLargeHistory(t *testing.T) {
 	response, err := r.Chat(t.Context(), req)
 	if err != nil || response.Message.Content != "Hello world" {
 		t.Fatalf("response=%+v error=%v, want Hello world", response, err)
+	}
+}
+
+// TestHealthChecksLoginOnly keeps Health off the model catalogue, which
+// Discover still reads and reports.
+// TestHealthChecksLoginOnly 确保 Health 不读取模型目录；目录仍由 Discover 读取并报告。
+func TestHealthChecksLoginOnly(t *testing.T) {
+	r := fixtureRuntime(t)
+	r.env = append(r.env, "AISW_CODEX_CATALOG_FAILS=1")
+	if report, err := r.Health(t.Context()); err != nil || report.State != runtime.StateHealthy {
+		t.Fatalf("report=%+v error=%v, want healthy without a catalogue read", report, err)
+	}
+	if _, err := r.Discover(t.Context()); err == nil {
+		t.Fatal("discover succeeded, want the catalogue failure reported")
+	}
+}
+
+// TestBackendFailuresAre502 reports a broken stream, an unadmitted item and
+// unapproved instructions as backend failures, like the Claude runtime.
+// TestBackendFailuresAre502 把流损坏、未放行的条目与未获准的指令报告为后端失败，与 Claude 运行时一致。
+func TestBackendFailuresAre502(t *testing.T) {
+	r := fixtureRuntime(t)
+	for _, err := range []error{ErrProtocol, ErrUnexpectedTool, ErrIsolation} {
+		var rtErr *runtime.RuntimeError
+		if !errors.As(r.wrap("chat_stream", err), &rtErr) || rtErr.Code != runtime.ErrorUpstream {
+			t.Fatalf("%v wrapped=%+v, want upstream_error", err, rtErr)
+		}
+	}
+	var rtErr *runtime.RuntimeError
+	if !errors.As(r.wrap("chat_stream", ErrConfig), &rtErr) || rtErr.Code != runtime.ErrorInvalidConfig {
+		t.Fatalf("wrapped=%+v, want an invalid request to stay invalid_config", rtErr)
+	}
+}
+
+// TestFailedServerReportsStderrCategory names the fixed category of what a
+// failed app-server wrote to standard error, never the text.
+// TestFailedServerReportsStderrCategory 指明失败的 app-server 写入标准错误内容的固定分类，从不包含文本。
+func TestFailedServerReportsStderrCategory(t *testing.T) {
+	r := fixtureRuntime(t)
+	r.env = append(r.env, "AISW_CODEX_STDERR_FIXTURE=1")
+	_, err := r.Chat(t.Context(), chatRequest())
+	var rtErr *runtime.RuntimeError
+	if !errors.As(err, &rtErr) || !strings.Contains(rtErr.Message, "(cli_stderr: login_required)") || strings.Contains(rtErr.Error(), "PRIVATE_MARKER") {
+		t.Fatalf("error=%v, want the login_required category without the text", err)
+	}
+	if _, err := r.Health(t.Context()); err == nil || !strings.Contains(err.Error(), "cli_stderr: login_required") {
+		t.Fatalf("health error=%v, want the category in the health summary", err)
+	}
+}
+
+// TestFunctionCallOutputItemIsAdmitted admits the item that records a tool
+// result, which runs nothing on this machine.
+// TestFunctionCallOutputItemIsAdmitted 放行记录工具结果的条目，它不在本机执行任何操作。
+func TestFunctionCallOutputItemIsAdmitted(t *testing.T) {
+	frame := `{"method":"item/completed","params":{"threadId":"thread1","turnId":"turn1","item":{"type":"functionCallOutput","id":"i1"}}}` + "\n"
+	p := &protocol{scanner: bufio.NewScanner(strings.NewReader(frame)), output: io.Discard}
+	if _, err := p.read(); err != nil {
+		t.Fatalf("error=%v, want functionCallOutput admitted", err)
+	}
+	frame = `{"method":"item/started","params":{"threadId":"thread1","turnId":"turn1","item":{"type":"commandExecution","id":"i2"}}}` + "\n"
+	p = &protocol{scanner: bufio.NewScanner(strings.NewReader(frame)), output: io.Discard}
+	if _, err := p.read(); !errors.Is(err, ErrUnexpectedTool) {
+		t.Fatalf("error=%v, want local command execution refused", err)
 	}
 }

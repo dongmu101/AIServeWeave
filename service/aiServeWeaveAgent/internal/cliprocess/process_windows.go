@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -125,4 +126,15 @@ func Start(cmd *exec.Cmd) error {
 		return nil
 	}
 	return fail(errors.New("CLI initial thread unavailable"))
+}
+
+// ConfigureGraceful is Configure on Windows, which has no signal a CLI can
+// handle before its job is closed: cancellation and kill both close the job.
+// ConfigureGraceful 在 Windows 上等同于 Configure：Windows 没有 CLI 能在作业关闭前处理的
+// 信号，取消与 kill 都会关闭作业。
+func ConfigureGraceful(cmd *exec.Cmd, _ time.Duration) (kill func() error, err error) {
+	if err := Configure(cmd); err != nil {
+		return nil, err
+	}
+	return cmd.Cancel, nil
 }

@@ -53,6 +53,64 @@ type quotaError struct {
 func (e *quotaError) Error() string { return errQuotaExhausted.Error() }
 func (e *quotaError) Unwrap() error { return errQuotaExhausted }
 
+// cliStopGrace is how long a canceled inference CLI has to handle SIGTERM
+// before its process group is killed. Claude Code 2.1.326 exits about 0.55 s
+// after SIGTERM, so this rarely runs out; it lets a CLI canceled while
+// refreshing its login save the new token instead of losing it.
+// cliStopGrace 是被取消的推理 CLI 在进程组被杀之前处理 SIGTERM 的时间。Claude Code 2.1.326
+// 收到 SIGTERM 后约 0.55 秒退出，因此很少用完；它让在刷新登录时被取消的 CLI 能保存新令牌，
+// 而不是将其丢失。
+const cliStopGrace = 2 * time.Second
+
+// cliStderrNote attaches the fixed category of a failed CLI's standard error
+// (see cliprocess.StderrTail) to its failure; the text never leaves the Agent.
+// cliStderrNote 把失败 CLI 标准错误的固定分类（见 cliprocess.StderrTail）附加到其失败上；
+// 文本从不离开 Agent。
+type cliStderrNote struct {
+	error
+	category string
+}
+
+func (n *cliStderrNote) Unwrap() error { return n.error }
+
+// withStderr attaches stderr's category to err when the CLI wrote anything.
+// withStderr 在 CLI 写过任何内容时，把 stderr 的分类附加到 err 上。
+func withStderr(err error, stderr *cliprocess.StderrTail) error {
+	if category := stderr.Category(); category != "" {
+		return &cliStderrNote{error: err, category: category}
+	}
+	return err
+}
+
+// cliStartupFailure is a result in which the CLI named why it refused to
+// start (startup_failure_reason, see CLAUDE_CODE_STARTUP_FAILURE_RESULTS);
+// reason is reduced to a bounded identifier.
+// cliStartupFailure 是 CLI 在其中说明拒绝启动原因的结果（startup_failure_reason，见
+// CLAUDE_CODE_STARTUP_FAILURE_RESULTS）；reason 被限制为有界标识符。
+type cliStartupFailure struct{ reason string }
+
+func (e *cliStartupFailure) Error() string { return errCLIResult.Error() }
+func (e *cliStartupFailure) Unwrap() error { return errCLIResult }
+
+// startupFailureReason keeps reason only when it is a short lower-case
+// identifier, the shape of every documented value, and "other" otherwise.
+// startupFailureReason 仅在 reason 是较短的小写标识符（所有已记录取值的形状）时保留它，
+// 否则为 "other"。
+func startupFailureReason(reason string) string {
+	if reason == "" {
+		return ""
+	}
+	if len(reason) > 64 {
+		return "other"
+	}
+	for _, c := range reason {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '_') {
+			return "other"
+		}
+	}
+	return reason
+}
+
 // withAccountDir points env's CLAUDE_CONFIG_DIR at dir, replacing any
 // inherited value; an empty dir returns env unchanged.
 // withAccountDir 把 env 中的 CLAUDE_CONFIG_DIR 指向 dir，替换继承来的值；dir 为空时
@@ -173,6 +231,12 @@ func probeArgs(model, configPath string) []string {
 //     so a CLI that ignores it behaves as before. 30 seconds covers a
 //     concurrent refresh while bounding the extra wait when a login has
 //     really expired.
+//   - CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK stops the CLI from retrying a
+//     failed stream as a non-streaming request. A native round's document
+//     reaches only the streamed request (see upstreamProxy), so the fallback
+//     would send the CLI's placeholder prompt, spend quota and still fail.
+//   - CLAUDE_CODE_STARTUP_FAILURE_RESULTS makes a CLI that refuses to start
+//     say why in a result (startup_failure_reason) instead of on stderr only.
 //
 // cliDefaults 设置在 Agent 启动的每个 CLI 进程上，位于继承变量过滤之后（过滤会丢掉它们，
 // 即使 Agent 自己的环境设置了）：
@@ -183,7 +247,19 @@ func probeArgs(model, configPath string) []string {
 //     令牌，而不是让回合失败。这里多个 CLI 进程共用一个账户目录，而其刷新令牌只能使用一次。
 //     该变量不在官方文档中（Claude Code 2.1.326 会读取它），不认识它的 CLI 行为不变。30 秒
 //     足以覆盖并发刷新，同时限制登录确实过期时多出的等待。
-var cliDefaults = []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000"}
+//   - CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK 阻止 CLI 把失败的流式请求改为非流式重试。
+//     原生回合的文档只进入流式请求（见 upstreamProxy），回退会发出 CLI 的占位提示词，消耗
+//     额度后仍然失败。
+//   - CLAUDE_CODE_STARTUP_FAILURE_RESULTS 让拒绝启动的 CLI 在结果中说明原因
+//     （startup_failure_reason），而不是只写到 stderr。
+//
+// Telemetry switches (DISABLE_TELEMETRY, CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC)
+// are left alone: both also stop feature-flag fetching, and the safeguards
+// path was accepted with flags fetched.
+// 遥测开关（DISABLE_TELEMETRY、CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC）保持不动：两者都会
+// 同时停止拉取功能开关，而 safeguards 路径是在拉取功能开关的状态下验收的。
+var cliDefaults = []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000",
+	"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1"}
 
 func probeEnv(source []string) []string {
 	allowed := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "LANG": true, "LC_ALL": true, "TMPDIR": true, "CLAUDE_CONFIG_DIR": true,

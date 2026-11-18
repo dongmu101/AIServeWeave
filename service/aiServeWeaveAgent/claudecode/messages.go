@@ -16,6 +16,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"AIServeWeave/common/runtime"
@@ -350,6 +351,10 @@ type messagesSession struct {
 	// the CLI (see upstreamProxy); nil for compatibility sessions.
 	// upstream 在 CLI 之下记录真实上游对原生回合的应答（见 upstreamProxy）；兼容会话为 nil。
 	upstream *upstreamCapture
+	// ignoredEvents counts top-level CLI events a native round skipped
+	// because this Agent does not know their type (see bridgeEvents).
+	// ignoredEvents 统计原生回合因本 Agent 不认识其类型而跳过的顶层 CLI 事件（见 bridgeEvents）。
+	ignoredEvents atomic.Int64
 }
 
 type messagesBridge struct {

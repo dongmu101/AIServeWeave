@@ -20,6 +20,10 @@ func TestMain(m *testing.M) {
 			terminalProcessFixture()
 			os.Exit(0)
 		}
+		if os.Getenv("AISW_CLAUDE_STDERR_FIXTURE") == "1" {
+			fmt.Fprintln(os.Stderr, "Error: Not logged in · Please run /login PRIVATE_MARKER")
+			os.Exit(1)
+		}
 		if os.Getenv("AISW_CLAUDE_USAGE_FIXTURE") == "1" {
 			usageProcessFixture()
 			os.Exit(0)

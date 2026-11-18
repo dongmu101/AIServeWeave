@@ -162,7 +162,8 @@ func TestLoginRefreshBusyIsRetryable(t *testing.T) {
 // TestProbeEnvSetsCLIDefaults 即使继承环境带有其他值（过滤会丢掉它们），也设置 Agent 固定的 CLI 变量。
 func TestProbeEnvSetsCLIDefaults(t *testing.T) {
 	env := probeEnv([]string{"PATH=/bin", "DISABLE_AUTOUPDATER=0", "CLAUDE_CODE_OAUTH_401_WAIT_MS=1", "ANTHROPIC_API_KEY=PRIVATE_MARKER"})
-	want := []string{"PATH=/bin", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000"}
+	want := []string{"PATH=/bin", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000",
+		"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1"}
 	if strings.Join(env, "\n") != strings.Join(want, "\n") {
 		t.Fatalf("env=%q, want %q", env, want)
 	}

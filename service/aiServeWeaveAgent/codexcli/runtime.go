@@ -59,12 +59,12 @@ type Runtime struct {
 
 // catalogReuse is how long a successful catalogue read may answer the next
 // one. The Manager checks identity and then reads the catalogue back to back
-// (Probe then Discover, or a recovering Health then Discover), and each read
-// cold-starts an app-server that can take most of the probe deadline.
+// (Probe then Discover), and each read cold-starts an app-server that can
+// take most of the probe deadline. Health reads no catalogue (see checkLogin).
 //
 // catalogReuse 是一次成功的目录读取可以代答下一次读取的时长。Manager 会紧接着先查身份
-// 再读目录（Probe 后 Discover，或恢复中的 Health 后 Discover），而每次读取都要冷启动
-// 一个可能耗掉大半探测期限的 app-server。
+// 再读目录（Probe 后 Discover），而每次读取都要冷启动一个可能耗掉大半探测期限的
+// app-server。Health 不读取目录（见 checkLogin）。
 const catalogReuse = 5 * time.Second
 
 // defaultMaxConcurrent applies when max_concurrent is not configured. Every
@@ -206,8 +206,19 @@ func (r *Runtime) wrap(operation string, err error) error {
 		code = runtime.ErrorBackpressure
 	case errors.Is(err, ErrRPC), errors.Is(err, ErrTurn), errors.Is(err, errNoImage):
 		code = runtime.ErrorUpstream
+	case errors.Is(err, ErrProtocol), errors.Is(err, ErrUnexpectedTool), errors.Is(err, ErrIsolation):
+		// A broken stream or an isolation failure is the backend's, not the
+		// caller's request: 502, as the Claude runtime reports the same failures.
+		// 流损坏或隔离失败属于后端而不是调用方的请求：以 502 报告，与 Claude 运行时对同类失败的处理一致。
+		code = runtime.ErrorUpstream
 	}
 	rtErr := &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: runtime.KindCodex, Operation: operation, Message: "Codex operation failed: " + string(code), Cause: err}
+	var note *stderrNote
+	if errors.As(err, &note) {
+		// A fixed category only; the CLI's text stays in the Agent.
+		// 只有固定分类；CLI 的文本留在 Agent 内。
+		rtErr.Message += " (cli_stderr: " + note.category + ")"
+	}
 	if code == runtime.ErrorBackpressure {
 		// Busy, not broken: an uncommitted request may move to another node.
 		// 忙而非坏：尚未提交的请求可以换到另一个节点。
@@ -307,12 +318,17 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 		r.catalog, r.catalogAt = nil, time.Time{}
 	}
 	r.mu.Unlock()
-	wrapped := r.wrap("discover", err)
+	return models, r.stalled(r.wrap("discover", err), err, server, started)
+}
+
+// stalled names, in the error of a read that ran out of probe_timeout, the
+// step that never answered: a slow initialize points at the CLI's own
+// start-up, a slow account/read at the network.
+// stalled 在耗尽 probe_timeout 的读取的错误中指明没有应答的步骤：initialize 慢说明 CLI 自身
+// 启动慢，account/read 慢说明网络慢。
+func (r *Runtime) stalled(wrapped, err error, server *protocol, started time.Time) error {
 	var rtErr *runtime.RuntimeError
 	if errors.Is(err, context.DeadlineExceeded) && errors.As(wrapped, &rtErr) {
-		// Name the step that never answered: a slow initialize points at the
-		// CLI's own start-up, a slow account/read at the network.
-		// 指明没有应答的步骤：initialize 慢说明 CLI 自身启动慢，account/read 慢说明网络慢。
 		step := "app-server start"
 		if server != nil && server.pending != "" {
 			step = server.pending
@@ -320,7 +336,33 @@ func (r *Runtime) inspect(ctx context.Context) ([]runtime.Model, error) {
 		rtErr.Message += fmt.Sprintf(" (no reply to %s after %s; probe_timeout is %s)",
 			step, r.deps.Clock.Now().Sub(started).Round(time.Second), r.cfg.ProbeTimeout)
 	}
-	return models, wrapped
+	return wrapped
+}
+
+// checkLogin starts app-server and confirms its ChatGPT login (initialize
+// and account/read) without reading the model catalogue, which Discover
+// refreshes on its own schedule. Health runs every few seconds, so it costs
+// one local start rather than a catalogue read each time.
+// checkLogin 启动 app-server 并确认其 ChatGPT 登录（initialize 与 account/read），不读取模型
+// 目录，目录由 Discover 按自己的周期刷新。Health 每隔几秒运行一次，因此每次只花一次本地启动，
+// 而不是一次目录读取。
+func (r *Runtime) checkLogin(ctx context.Context) error {
+	ctx, finish, touch, err := r.operation(ctx, r.cfg.ProbeTimeout, 0)
+	if err != nil {
+		return err
+	}
+	defer finish()
+	started := r.deps.Clock.Now()
+	var server *protocol
+	err = withReadServer(ctx, r.executable, r.env, func(p *protocol, _ string) error {
+		p.activity = touch
+		server = p
+		return initializeServer(p)
+	})
+	if cause := context.Cause(ctx); cause != nil {
+		err = cause
+	}
+	return r.stalled(r.wrap("health", err), err, server, started)
 }
 
 // recentCatalog hands out the last successful inspect once, if it finished
@@ -456,11 +498,11 @@ func (r *Runtime) Probe(ctx context.Context) (runtime.ProbeResult, error) {
 	return runtime.ProbeResult{Kind: runtime.KindCodex, IdentityVerified: err == nil, Evidence: "local ChatGPT app-server authentication and model catalog", ProbedAt: r.deps.Clock.Now()}, err
 }
 
-// Health checks authentication without issuing a model inference request.
-// Health 检查登录状态，不发起模型推理请求。
+// Health checks the ChatGPT login without inference or a catalogue read (see checkLogin).
+// Health 检查 ChatGPT 登录，不执行推理，也不读取目录（见 checkLogin）。
 func (r *Runtime) Health(ctx context.Context) (runtime.HealthReport, error) {
 	start := r.deps.Clock.Now()
-	_, err := r.inspect(ctx)
+	err := r.checkLogin(ctx)
 	report := runtime.HealthReport{State: runtime.StateHealthy, CheckedAt: r.deps.Clock.Now(), Latency: r.deps.Clock.Now().Sub(start)}
 	if err != nil {
 		report.State = runtime.StateUnhealthy
