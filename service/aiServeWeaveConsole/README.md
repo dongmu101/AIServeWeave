@@ -229,7 +229,7 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 
 平台 Cookie `aisw_operator_session` 与租户 `aisw_console_session` 可同时存在，均为 HttpOnly、SameSite=Lax，并使用不同加密用途。退出运维先撤销上游 Redis 会话，只清理平台 Cookie，不退出租户会话。
 
-`/operator/fleet` 展示 Registry 账本（含待审批、离线节点）及 Gateway 合并观测，支持审批、禁用/启用、进入/退出维护；写操作确认后执行一次，成功会刷新两份状态，失败不自动重试。`/operator/operators` 管理平台运维账户，`/operator/account` 管理自己的密码与会话。退出运维先撤销服务端 JWT，只清理平台 Cookie，不影响租户会话。
+`/operator/fleet` 按节点合并展示 Registry 账本（含待审批、离线节点）、Gateway 合并观测与共享策略：每台节点一张卡片，期望与观测各占自己的字段，任一来源读取失败时单独提示而不当作空。页面顶部的状态卡片（全部/待审批/在线/离线/维护中/已禁用）兼作筛选，搜索覆盖节点 ID、版本、标签与运行时。支持审批、禁用/启用、进入/退出维护、开启/停止共享与删除，禁用与删除收在卡片的「节点操作」菜单；写操作确认后执行一次，成功会刷新三份状态，失败不自动重试。`/operator/operators` 管理平台运维账户，`/operator/account` 管理自己的密码与会话。退出运维先撤销服务端 JWT，只清理平台 Cookie，不影响租户会话。
 
 `/operator/audit` 经 `GET /operator/v1/audit` 查询平台范围，支持动作、操作者、时间与游标分页，不依赖 Fleet/Registry 配置。审计沿用控制面现有的尽力写入语义，不是完整事务账本。
 

@@ -40,10 +40,14 @@ export function FleetFreshness({
   collectedAt,
   replicas,
   partial,
+  note = true,
 }: {
   collectedAt: string;
   replicas: ReplicaStatus[];
   partial: boolean;
+  /** note=false leaves the replica caveat to a page that states it elsewhere.
+   * note=false 时由页面在别处说明副本口径。 */
+  note?: boolean;
 }) {
   const { locale, t } = useI18n();
   return (
@@ -71,7 +75,7 @@ export function FleetFreshness({
           </Badge>
         ))}
       </div>
-      {replicas.length > 0 ? (
+      {!note ? null : replicas.length > 0 ? (
         <p className="text-xs text-muted-foreground">
           <Message id="common.eachReplicaKnowsOnlyTheNodesConnectedTo" /></p>
       ) : (
