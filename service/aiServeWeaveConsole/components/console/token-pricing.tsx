@@ -21,6 +21,7 @@ import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCredits } from "@/lib/console/billing";
 import { formatDateTime } from "@/lib/console/format";
+import { parseRouteSnapshot } from "@/lib/console/model-routes";
 import {
   catalogItems,
   EDITED_METERS,
@@ -242,6 +243,7 @@ export function PricingSection() {
       key={editing.nonce}
       alias={editing.alias}
       setting={editing.alias ? settings.get(editing.alias) ?? null : null}
+      configured={settings}
       revision={cfg.revision.id}
       onClose={() => setEditing(null)}
       onSaved={reload}
@@ -398,9 +400,10 @@ function DefaultPriceDialog({ prices, revision, onClose, onSaved }: { prices: Pr
  * model rate, or clears its settings.
  *
  * ModelPricingDialog 设置一个别名的参照模型、覆盖价与模型倍率，或清除其设置。 */
-function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
+function ModelPricingDialog({ alias, setting, configured, revision, onClose, onSaved }: {
   alias: string | null;
   setting: PricingModel | null;
+  configured: ReadonlyMap<string, PricingModel>;
   revision: number;
   onClose: () => void;
   onSaved: () => void;
@@ -417,6 +420,13 @@ function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
   const [error, setError] = React.useState<React.ReactNode>(null);
   const [removing, setRemoving] = React.useState(false);
   const search = React.useDeferredValue(reference.trim());
+  // Only a new alias offers a pick list: published route aliases that have
+  // no pricing settings yet. Picking an already configured one would
+  // overwrite it with blank fields, so those are edited from the table.
+  // 只有新建别名时提供选择列表：已发布、尚未有定价设置的路由别名。选择已配置的
+  // 别名会用空白字段覆盖原设置，因此它们只从表格里编辑。
+  const routes = useResource({ method: "GET", surface: "operator", path: "/operator/v1/routes", parse: parseRouteSnapshot });
+  const choices = React.useMemo(() => [...new Set((routes.data?.routes ?? []).map((route) => route.model))].filter((name) => !configured.has(name)).sort(), [routes.data, configured]);
   const matches = useResource<CatalogPage>({
     method: "GET", surface: "operator", path: "/operator/v1/billing/catalog",
     query: { q: search, limit: "8" }, parse: parseCatalogPage,
@@ -493,7 +503,12 @@ function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
         </DialogHeader>
         <div className="grid gap-1">
           <label htmlFor="pricing-model" className="text-sm font-medium"><Message id="operator.billingModel" /></label>
+          {alias === null && choices.length > 0 ? <select aria-label={t("operator.pricingAliasPick")} className={SELECT_CLASS} value={choices.includes(model.trim()) ? model.trim() : ""} disabled={pending} onChange={(e) => { if (e.target.value) setModel(e.target.value); }}>
+            <option value="">{t("operator.pricingAliasPick")}</option>
+            {choices.map((name) => <option key={name} value={name}>{name}</option>)}
+          </select> : null}
           <Input id="pricing-model" value={model} onChange={(e) => setModel(e.target.value)} disabled={pending || alias !== null} autoComplete="off" spellCheck={false} />
+          {alias === null && routes.data ? <p className="text-xs text-muted-foreground"><Message id={choices.length > 0 ? "operator.pricingAliasHint" : "operator.pricingAliasNone"} /></p> : null}
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-reference" className="text-sm font-medium"><Message id="operator.pricingReference" /></label>
