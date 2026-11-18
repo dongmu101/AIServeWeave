@@ -43,6 +43,12 @@
 
 `claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行；带 `safeguards` 的原生请求保留完整结构与工具身份，Agent CLI 不注册本地执行工具，每轮独立调用真实上游。无该字段时默认同样原样直通（见下方「未带 safeguards 的原生直通」），旧节点等情形继续使用隔离 MCP 桥接；Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链保持原会话；请求要求思考时转换预算，客户端回传的思考被丢弃。支持文本、Messages 图片/文档/本平台视频附件与调用方工具循环，不代表完整 Anthropic API 兼容。
 
+- **回合分段计时（2026-11-18）**：
+  - 新增 `internal/cliphase`。Claude 原生回合与 Codex 对话回合在结束日志中记录各阶段到达时间、上游连接等待（Claude）、进程 CPU 与峰值内存；Codex 新增 `Codex round finished` 日志。`/metrics` 新增 `agent_cli_phase_seconds` 等四个直方图。
+  - 离线基准 `TestCLIStartupBenchmark`（`AISW_CLI_BENCH=1`，两个包各一个）走 Agent 真实的代码路径，不联网、不消耗额度。
+  - 本机基线：Claude 2.1.327 到模型请求发出 p50 188 ms；codex 0.169.0 到能接收回合 p50 59 ms。
+  - 基准发现：Claude CLI 在模型请求之前，每个回合要先等完约 3–5 个发往 api.anthropic.com 的请求（`policy_limits`、`settings`、功能开关等）。上游不可达时，它会在这一步重试约 18 秒。
+  - 线上分布尚未采集；P2 各项是否值得做，取决于部署后的数据。见 [README「本机 CLI 回合分段计时」](README.md#本机-cli-回合分段计时)。
 - **未知事件、终止与诊断（2026-11-18）**：
   - 原生回合跳过不认识的顶层事件，并计入 `ignored_cli_events`；不认识的流事件、增量与停止原因原样转发，未知停止原因按终止处理。`conversation_reset`、`control_request` 与流内 `error` 仍让回合失败；兼容桥接保持严格。`keep_alive` 视为通知。
   - 推理请求被取消时，先 SIGTERM，2 秒后 SIGKILL（新增 `cliprocess.ConfigureGraceful`）。正常结束与隔离失败仍立即终止。实测 2.1.326 收到 SIGTERM 后约 0.55 秒退出。

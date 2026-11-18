@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"log/slog"
 	"slices"
 	"strings"
 	"testing"
 
+	"AIServeWeave/common/metrics"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 )
 
 // TestServerArgsSetFeaturesThroughConfig keeps feature switches on -c so a
@@ -204,5 +207,44 @@ func TestFunctionCallOutputItemIsAdmitted(t *testing.T) {
 	p = &protocol{scanner: bufio.NewScanner(strings.NewReader(frame)), output: io.Discard}
 	if _, err := p.read(); !errors.Is(err, ErrUnexpectedTool) {
 		t.Fatalf("error=%v, want local command execution refused", err)
+	}
+}
+
+// TestRoundLogsPhases runs a chat round through a real subprocess and finds
+// every phase, the history size and the process usage in its log and metrics.
+// TestRoundLogsPhases 经真实子进程运行一个对话回合，并在日志与指标中找到每个阶段、历史大小
+// 与进程资源。
+func TestRoundLogsPhases(t *testing.T) {
+	r := fixtureRuntime(t)
+	var logs bytes.Buffer
+	registry := metrics.New(cliphase.Descriptions())
+	r.deps.Logger, r.deps.Metrics = slog.New(slog.NewJSONHandler(&logs, nil)), registry
+	if _, err := r.Chat(t.Context(), chatRequest()); err != nil {
+		t.Fatal(err)
+	}
+	var record map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(logs.String()), "\n") {
+		var entry map[string]any
+		if json.Unmarshal([]byte(line), &entry) == nil && entry["msg"] == "Codex round finished" {
+			record = entry
+		}
+	}
+	if record["outcome"] != "completed" || record["history_bytes"] == float64(0) {
+		t.Fatalf("round log=%v, want a completed round with its history size", record)
+	}
+	for _, phase := range []string{cliphase.ProcessStarted, cliphase.CLIReady, cliphase.LoginChecked, cliphase.ThreadStarted, cliphase.HistoryInjected, cliphase.TurnStarted, cliphase.FirstEvent, cliphase.Done, cliphase.Exited} {
+		if _, ok := record[phase+"_ms"]; !ok {
+			t.Fatalf("round log=%v, want %s_ms", record, phase)
+		}
+	}
+	if _, ok := record["cli_cpu_ms"]; !ok {
+		t.Fatalf("round log=%v, want cli_cpu_ms", record)
+	}
+	var out strings.Builder
+	if err := registry.Render(&out); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(out.String(), `agent_cli_phase_seconds_count{kind="codex",phase="turn_started",runtime_id="codex-local"} 1`) {
+		t.Fatalf("exposition lacks the turn_started phase:\n%s", out.String())
 	}
 }

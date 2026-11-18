@@ -47,6 +47,10 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 
 app-server 发来的单帧最多 1 MiB，一个回合的生成文本（回复加思考摘要）最多 1 MiB。注入的历史最多 32 MiB，与 Claude Messages 请求的上限一致。消息数、工具数和 RPC 帧数都不设上限：长时间的智能体会话是常态，历史是否过长由模型上下文窗口判断。codex-cli 0.169.0 实测能接受 17 MB 的 `thread/inject_items`。2026-11-18 之前的上限是历史 1 MiB、2048 条消息、128 个工具、10000 个 RPC 帧。流式输出大约每个 token 一帧，所以长回答会在中途被截断；长会话会被拒为 400。模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制，app-server 自行重试时发出的 `willRetry` 通知不算进展，不会重置空闲期限。流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
 
+## 回合日志与计时
+
+每个对话回合结束时记录 INFO 级 `Codex round finished`，带 `runtime_id`、`outcome`（`completed` / `failed` / `canceled`）、注入历史的字节数 `history_bytes`，以及各阶段耗时、进程 CPU 与内存（2026-11-18 起），不记录任何内容。字段、指标与离线基准见 [Agent README「本机 CLI 回合分段计时」](../README.md#本机-cli-回合分段计时)。
+
 ## 失败分类
 
 失败回合按 `codexErrorInfo` 分类，上游的错误文本从不读取：

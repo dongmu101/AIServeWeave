@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -622,18 +623,20 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 		return nil, err
 	}
 	s := &chatStream{items: make(chan streamResult), ctx: ctx, cancel: cancel, done: make(chan struct{}), runtime: r}
+	phases := cliphase.New(r.deps.Clock)
 	go func() {
 		defer close(s.done)
 		defer release()
 		defer finish()
 		defer close(s.items)
-		err := withServer(ctx, r.executable, r.env, func(p *protocol, dir string) error {
+		err := withServer(ctx, r.executable, r.env, phases, func(p *protocol, dir string) error {
 			p.activity = touch
 			return runChat(p, dir, req, input, accountInstructions(r.env), s.send)
 		})
 		if cause := context.Cause(ctx); cause != nil {
 			err = cause
 		}
+		r.logRound(phases, input.historyBytes, err)
 		if err != nil {
 			select {
 			case s.items <- streamResult{err: r.wrap("chat_stream", err)}:
@@ -642,6 +645,28 @@ func (r *Runtime) ChatStream(parent context.Context, req runtime.ChatRequest) (r
 		}
 	}()
 	return s, nil
+}
+
+// logRound records one chat round's outcome and phase timings (see
+// cliphase), never its content. A stream the consumer closed early counts
+// as canceled.
+// logRound 记录一个对话回合的结果与阶段耗时（见 cliphase），从不记录其内容。被消费方提前
+// 关闭的流计为 canceled。
+func (r *Runtime) logRound(phases *cliphase.Timeline, historyBytes int, err error) {
+	phases.Observe(r.deps.Metrics, r.cfg.ID, runtime.KindCodex)
+	if r.deps.Logger == nil {
+		return
+	}
+	outcome := "completed"
+	switch {
+	case err == nil, errors.Is(err, errFinished):
+	case errors.Is(err, context.Canceled), errors.Is(err, runtime.ErrStreamClosed):
+		outcome = "canceled"
+	default:
+		outcome = "failed"
+	}
+	attrs := append([]any{"runtime_id", r.cfg.ID, "outcome", outcome, "history_bytes", historyBytes}, phases.LogAttrs()...)
+	r.deps.Logger.Info("Codex round finished", attrs...)
 }
 
 // Chat collects a bounded non-streaming response using the same protocol

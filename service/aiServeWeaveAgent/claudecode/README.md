@@ -219,6 +219,8 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
 
+原生回合的结束日志还带有各阶段耗时、上游连接等待以及进程 CPU 与内存（2026-11-18 起），字段、指标与离线基准见 [Agent README「本机 CLI 回合分段计时」](../README.md#本机-cli-回合分段计时)。
+
 Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude Messages round started` 和 `Claude Messages round finished`，共同携带本地随机 `round_id`、`runtime_id` 与 `message_path`。`native_safeguards` 表示本轮进入带安全上下文的原生路径，`native` 表示未带 `safeguards` 的原生直通，`mcp_bridge` 表示兼容桥接。结束日志包含 `outcome`（`completed` / `failed` / `canceled`）与 `safeguard_status`：`available`、`unsupported`、`unavailable`、`missing`（未收到对应结果）、`unknown`（未来状态）、`invalid`（结果形状异常）、`mixed`（同轮出现不同状态）；`native` 与 `mcp_bridge` 为 `not_requested`。只观察已投递结果，不改写判定或将 `available` 等同于工具已获准；不记录提示词、历史、工具参数、工具 ID、判定原因或凭据。客户端设为 `1` 后应结合这两个字段检查实际路径及上游支持状态。新增日志需更新并重启 Agent，Gateway 无需修改。
 
 手动用 `go run` 启动时，日志默认写到终端，不会自动生成部署脚本使用的 `agent.log`。可用 `go run . -config /绝对路径/agent.yaml -log-file /绝对路径/agent.log` 留存日志，再查 `Claude Messages request rejected` 和 `Claude Messages round failed`。对齐日志时使用时间戳自身的 UTC 偏移，例如 Agent 的 `21:03+09:00` 与 Gateway 的 `12:03Z` 是同一时刻。

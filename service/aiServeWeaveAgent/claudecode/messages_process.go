@@ -19,6 +19,7 @@ import (
 
 	"AIServeWeave/common/idgen"
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -359,8 +360,12 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		_ = out.Close()
 		return errCLIStart
 	}
+	s.phases.Mark(cliphase.ProcessStarted)
 	defer func() { _ = kill() }()
 	final, err := bridgeEvents(out, s)
+	if err == nil || errors.Is(err, errStopSequence) || errors.Is(err, errTerminalStop) {
+		s.phases.Mark(cliphase.Done)
+	}
 	// A canceled session stops through its context, which lets the CLI handle
 	// SIGTERM first (see cliStopGrace); every other stop is immediate.
 	// 被取消的会话经其上下文停止，让 CLI 先处理 SIGTERM（见 cliStopGrace）；其他停止一律立即执行。
@@ -368,6 +373,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		_ = kill()
 	}
 	waitErr := cmd.Wait()
+	s.phases.Exited(cmd.ProcessState)
 	if s.ctx.Err() != nil {
 		return context.Cause(s.ctx)
 	}
@@ -462,6 +468,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 		// that falls silent for generationTimeout is reclaimed.
 		// 任何输出都算进展：重启空闲阶段计时器，只回收沉默满 generationTimeout 的 CLI。
 		s.touch()
+		if lineNumber == 1 {
+			s.phases.Mark(cliphase.CLIReady)
+		}
 		if len(line) > maxEventBytes {
 			return nil, protocolError("oversized_event")
 		}

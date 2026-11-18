@@ -166,6 +166,10 @@ type chatInput struct {
 	// effort 与 summary 是 turn/start 的思考覆盖项，为空表示沿用 CLI 默认值；由
 	// Runtime.reasoningFor 推导。
 	effort, summary string
+	// historyBytes is the size of the injected history, logged with each
+	// round's phases so slow injections can be told from large ones.
+	// historyBytes 是注入历史的大小，与每个回合的阶段一起记录，以区分注入慢是否因为历史大。
+	historyBytes int
 }
 
 // clientName maps a tool name app-server called back to the client's name.
@@ -301,5 +305,6 @@ func prepareChat(req runtime.ChatRequest) (chatInput, error) {
 	if err != nil || len(data) > maxHistoryBytes {
 		return out, ErrConfig
 	}
+	out.historyBytes = len(data)
 	return out, nil
 }

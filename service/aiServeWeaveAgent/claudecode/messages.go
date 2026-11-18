@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 )
 
 // maxRequestBytes bounds a loopback experiment request at the Messages API's
@@ -355,6 +356,11 @@ type messagesSession struct {
 	// because this Agent does not know their type (see bridgeEvents).
 	// ignoredEvents 统计原生回合因本 Agent 不认识其类型而跳过的顶层 CLI 事件（见 bridgeEvents）。
 	ignoredEvents atomic.Int64
+	// phases times a native round, which owns its CLI process from start to
+	// exit; nil for compatibility sessions, whose process spans rounds.
+	// phases 为原生回合计时，原生回合从启动到退出独占其 CLI 进程；兼容会话的进程跨越多个
+	// 回合，为 nil。
+	phases *cliphase.Timeline
 }
 
 type messagesBridge struct {
@@ -791,7 +797,8 @@ func (b *messagesBridge) acquire(owner principal, req messagesRequest) (*message
 	cancel := func() { cancelCause(context.Canceled) }
 	s := &messagesSession{processor: b.processor, owner: owner, request: req, messages: req.Messages, ctx: ctx, cancel: cancel, cancelCause: cancelCause, done: make(chan struct{}), events: make(chan bridgeEvent), busy: true, pending: make(map[string]*pendingTool), changed: make(chan struct{}), activity: make(chan bool, 1)}
 	if req.isNative() {
-		s.upstream = &upstreamCapture{}
+		s.phases = cliphase.New(b.clock)
+		s.upstream = &upstreamCapture{phases: s.phases}
 	}
 	b.sessions[s] = true
 	b.wg.Add(1)

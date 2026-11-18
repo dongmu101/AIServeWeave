@@ -19,6 +19,11 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- Agent 本机 CLI 回合分段计时：
+  - Claude 原生回合与 Codex 对话回合在结束日志中记录进程启动、CLI 就绪、模型请求发出、上游响应头、首个事件、结束、退出等阶段的耗时，以及上游连接等待、进程 CPU 与峰值内存。
+  - Codex 新增 `Codex round finished` 日志；`/metrics` 新增 `agent_cli_phase_seconds`、`agent_cli_upstream_connect_seconds`、`agent_cli_process_cpu_seconds`、`agent_cli_process_max_rss_bytes`。
+  - 新增离线基准 `TestCLIStartupBenchmark`（`AISW_CLI_BENCH=1`），不联网、不消耗额度。
+  - 只需升级 Agent。见 [Agent README](service/aiServeWeaveAgent/README.md#本机-cli-回合分段计时)。
 - Gateway 工作流持久队列（`jobqueue/`，Redis + `github.com/hibiken/asynq` v0.25.1）：`-workflow-queue-max-wait > 0`（必须配 `-redis-addr`）后，JSON 工作流提交与 ComfyUI 图像生成进入全集群队列，任一副本的 worker 在节点空闲时派发。新增 flag `-workflow-queue-concurrency`（默认 8）与 `-workflow-queue-name`（默认 `aisw-workflow`）；`-workflow-queue-max-waiters` 改为全集群长度上限（默认 64），`-workflow-queue-retry-interval` 默认 1s。提交答 202 `queued`，`durability` 新增 `shared_queue`，Job 视图新增 `error_code`（`queue_timeout`、`submit_outcome_unknown`、`node_not_allowed`、`cancelled`、`internal_error`）；队列满答 429 `queue_full`（`Retry-After: 5`），入队结果无法确认答 503 `queue_unavailable`。投递至少一次、提交至多一次（意图标记，结果未知不重提）。事件流对排队 job 推送 `queue_changed`。新增指标 `gateway_workflow_queue_*`，移除 `gateway_scheduler_queue_*`。
 - Gateway 对话等待改为全集群 Redis FIFO（`waitqueue/`，按请求模型分通道）：`-chat-queue-max-wait > 0`（必须配 `-redis-addr`）后，候选全忙的新 Chat/Responses/Messages 请求在共享队列中按头部窗口（新增 `-chat-queue-head-window`，默认 8）与停滞逃逸重试，派发仍在原副本；新增 `-chat-queue-name`（默认 `aisw-chat`），`-chat-queue-retry-interval` 最小 50ms、`-chat-queue-max-waiters` 最大 1024。`-chat-queue-max-waiters` 改为全集群上限。Redis 故障时立即 429。新增指标 `gateway_scheduler_chat_queue_store_errors_total`，`gateway_scheduler_chat_queue_depth` 改为本副本等待数。
 - Agent 实时负载与整机准入（`admission/`）：采集实时 CPU、内存、负载均值（Linux `/proc` + cgroup v2、macOS sysctl 估算 CPU、Windows kernel32，不引入 gopsutil），经心跳新字段 `Heartbeat.load`（`NodeLoad`，隧道 proto 字段 4，只增不改）上报；可选资源闸门 `-admission-cpu-high`/`-admission-memory-low`（带迟滞）与本机分类信号量 `-admission-cli-max`/`-admission-general-max`（满时有界等待 `-admission-queue-max-wait` 默认 5s、`-admission-queue-max-waiters` 默认 16，之后可重试背压），YAML `admission:` 区块，新增 `agent_admission_*` 与 `agent_host_*` 指标。默认全部关闭。Gateway 把资源紧张节点在所有调度策略中排到最后（不跳过），`/internal/v1/nodes` 输出 `load`，新增 `tunnel_server_node_pressure`；Console 机群页显示「实时负载」与「资源紧张」。升级顺序不限：旧 Gateway 忽略字段 4，旧 Agent 显示为「未上报」。

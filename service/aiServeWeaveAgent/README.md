@@ -269,6 +269,60 @@ admission:
 - `agent_host_load_average_1m`
 - `agent_host_sample_errors_total`
 
+## 本机 CLI 回合分段计时
+
+Gateway 的 `gateway_http_ttft_seconds`、`tunnel_server_stream_first_event_seconds` 和 Agent 的 `tunnel_stream_first_event_seconds` 已能把首 token 延迟拆成前门、隧道、Agent 三段。2026-11-18 起，Agent 这一段再按本机 CLI 回合拆开，用来判断预热进程、共享上游连接等优化值不值得做。计时只覆盖 Claude 原生回合与 Codex 对话回合；兼容桥接的进程跨越多个回合，不计时。只记录耗时与进程资源，不记录任何内容。
+
+每个回合结束时，`Claude Messages round finished` 与新增的 `Codex round finished`（另带 `outcome` 和注入历史大小 `history_bytes`）日志都带上以下字段。除特别说明外，都是从回合开始算起、到达该阶段的毫秒数：
+
+| 字段 | 含义 | Claude | Codex |
+| --- | --- | --- | --- |
+| `process_started_ms` | CLI 进程已运行 | ✓ | ✓ |
+| `cli_ready_ms` | Claude 首行输出；Codex 的 `initialize` 应答 | ✓ | ✓ |
+| `login_checked_ms`、`thread_started_ms`、`history_injected_ms`、`turn_started_ms` | `account/read`、`thread/start`、`thread/inject_items`、`turn/start` 的应答 | | ✓ |
+| `request_sent_ms` | 模型请求到达 Agent 的每进程代理 | ✓ | |
+| `upstream_headers_ms` | 上游响应头到达代理 | ✓ | |
+| `first_event_ms` | 首个模型事件交给 Gateway | ✓ | ✓ |
+| `done_ms` | 从 CLI 收到最后一个模型事件 | ✓ | ✓ |
+| `exited_ms` | CLI 进程已回收 | ✓ | ✓ |
+| `upstream_connect_ms`、`upstream_conn_reused` | 模型请求等待上游连接的时长，以及是否复用了连接（时长，不是偏移） | ✓ | |
+| `cli_cpu_ms`、`cli_max_rss_kb` | 该进程用掉的 CPU 时间与峰值内存（Windows 不报告内存） | ✓ | ✓ |
+
+本机 `/metrics` 上的对应指标：
+
+- `agent_cli_phase_seconds{runtime_id,kind,phase}`
+- `agent_cli_upstream_connect_seconds{runtime_id,kind,reused}`
+- `agent_cli_process_cpu_seconds{runtime_id,kind}`
+- `agent_cli_process_max_rss_bytes{runtime_id,kind}`
+
+怎么读：
+
+- Claude 的 `request_sent_ms` 就是预热进程最多能省下的时间。它包含 CLI 在模型请求之前必须等完的请求：`GET /api/claude_code/policy_limits`、`GET /api/claude_code/settings`、功能开关 `POST /api/eval/sdk-…`，偶尔还有 `bootstrap`、`penguin_mode`，每个回合大约 3–5 个，都发往 api.anthropic.com。
+- 每进程代理在这些启动请求上已经建好连接，模型请求通常直接复用，所以 `upstream_connect_ms` 多为 0。每个进程新建连接的成本算在 `cli_ready_ms` 里，不在 `upstream_connect_ms` 里。
+- 拿线上的 `cli_ready_ms` 减去下面的本机基线，大致就是启动请求的网络耗时，也就是同账户共享上游连接能省下的上限。
+- Codex 的 `history_injected_ms` 是预热进程最多能省下的时间。`turn_started_ms` 到 `first_event_ms` 之间主要是模型本身。
+
+离线基准不联网、不消耗额度。它走 Agent 真实的启动参数和代码路径，冷启动的数字可以在不同 CLI 版本、不同主机之间直接比较：
+
+```bash
+# Claude：本机冒充 api.anthropic.com，跑完整原生回合，并列出模型请求之前的请求
+AISW_CLI_BENCH=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestCLIStartupBenchmark$' -v -count=1
+# Codex：临时 CODEX_HOME、拒绝一切外连；可带入真实 sessions 目录与指定大小的历史
+AISW_CLI_BENCH=1 AISW_CODEX_BENCH_SESSIONS=$HOME/.codex/sessions AISW_CODEX_BENCH_HISTORY_KB=4096 \
+  go test ./service/aiServeWeaveAgent/codexcli -run '^TestCLIStartupBenchmark$' -v -count=1
+```
+
+`AISW_CLI_BENCH_RUNS` 设置次数（默认 20），`AISW_CLAUDE_PATH`、`AISW_CODEX_PATH` 指定 CLI。2026-11-18 在 macOS arm64 开发机上测得的基线（各 20 次，p50 / p95）：
+
+| | 能发出模型请求或接收回合 | 每回合 CPU | 峰值内存 |
+| --- | --- | --- | --- |
+| Claude Code 2.1.327 原生回合 | `request_sent` 188 / 463 ms | 266 ms | 约 222 MB |
+| codex-cli 0.169.0，256 KB 历史 | `history_injected` 59 / 203 ms | 67 ms | 约 93 MB |
+| 同上，带入 44 MB 会话历史 | 160 / 213 ms | 111 ms | 约 97 MB |
+| 同上，4 MiB 历史 | 116 / 170 ms | 146 ms | 约 142 MB |
+
+回环没有网络往返，线上数字会更高。
+
 ## Gemini CLI 图片生成
 
 在本地声明 `kind: gemini-cli`，通过 Gemini CLI 官方 Nano Banana 扩展提供 `gemini-image` 图片模型，复用 Gateway 的 `/v1/images/generations` 与既有图像流隧道。该后端仅支持单张文生图，直接调用扩展的固定 MCP 工具；凭据只从 Agent 本机环境读取。现有 `kind: gemini` 的托管聊天用途不变。

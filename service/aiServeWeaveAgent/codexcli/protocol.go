@@ -9,6 +9,8 @@ import (
 	"io"
 	"path/filepath"
 	"strings"
+
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 )
 
 // maxFrameBytes bounds one frame app-server sends, and the reply and reasoning
@@ -56,6 +58,18 @@ type protocol struct {
 	// can say which step stalled.
 	// pending 是正在等待应答的请求方法，超时时据此说明卡在哪一步。
 	pending string
+	// phases, when not nil, records when each start-up reply arrived (see replyPhase).
+	// phases 不为 nil 时记录各启动应答到达的时刻（见 replyPhase）。
+	phases *cliphase.Timeline
+}
+
+// replyPhase names the phase a successful reply to method completes.
+// replyPhase 给出 method 的成功应答所完成的阶段。
+var replyPhase = map[string]string{
+	"initialize":          cliphase.CLIReady,
+	"account/read":        cliphase.LoginChecked,
+	"thread/start":        cliphase.ThreadStarted,
+	"thread/inject_items": cliphase.HistoryInjected,
 }
 
 func (p *protocol) write(v any) error {
@@ -173,6 +187,9 @@ func (p *protocol) request(id int, method string, params any, result any) error 
 			return ErrProtocol
 		}
 		p.pending = ""
+		if phase, ok := replyPhase[method]; ok {
+			p.phases.Mark(phase)
+		}
 		return nil
 	}
 }

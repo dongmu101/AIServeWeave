@@ -17,6 +17,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -30,6 +31,9 @@ type Runtime struct {
 	modelsMu sync.RWMutex
 	models   map[string]struct{}
 	logger   *slog.Logger
+	// metrics receives each native round's phase timings; nil records nothing.
+	// metrics 接收每个原生回合的阶段耗时；为 nil 时不记录。
+	metrics runtime.Metrics
 }
 
 var _ runtime.MessagesRuntime = (*Runtime)(nil)
@@ -70,7 +74,7 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 		if logger == nil {
 			logger = slog.Default()
 		}
-		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger}, nil
+		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger, metrics: deps.Metrics}, nil
 	}
 }
 
@@ -307,6 +311,10 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 		if ignored := s.ignoredEvents.Load(); ignored > 0 {
 			finished = append(finished, "ignored_cli_events", ignored)
 		}
+		// Phase timings are recorded only for native rounds (see messagesSession.phases).
+		// 只有原生回合记录阶段耗时（见 messagesSession.phases）。
+		finished = append(finished, s.phases.LogAttrs()...)
+		s.phases.Observe(r.metrics, r.cfg.ID, runtime.KindClaude)
 		r.logger.Info("Claude Messages round finished", finished...)
 		s.mu.Lock()
 		s.busy = false
@@ -521,6 +529,7 @@ func (w *nativeWriter) Write(data []byte) (int, error) {
 		if !w.forwarded {
 			w.forwarded = true
 			item.event.Header = w.stream.s.upstream.successHeader()
+			w.stream.s.phases.Mark(cliphase.FirstEvent)
 		}
 		select {
 		case w.stream.items <- item:

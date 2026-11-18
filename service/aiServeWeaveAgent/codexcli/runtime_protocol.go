@@ -9,6 +9,7 @@ import (
 
 	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 )
 
 // runChat turns canonical history into isolated app-server events. Reply
@@ -26,6 +27,7 @@ import (
 // item/reasoning/textDelta 只在开启 show_raw_agent_reasoning 时发送，本隔离服务从不
 // 开启；万一到达也会被忽略，避免两者交错。回复与摘要共用一个 maxFrameBytes 上限。
 func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, instructions []string, emit func(runtime.ChatEvent) error) error {
+	emit = timedEmit(p.phases, emit)
 	if err := initializeServer(p); err != nil {
 		return err
 	}
@@ -119,6 +121,7 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 		}
 		turnID = result.Turn.ID
 	}
+	p.phases.Mark(cliphase.TurnStarted)
 	event := runtime.ChatEvent{ID: turnID, Model: thread.Model}
 	var usage *runtime.Usage
 	textBytes := 0    // reply and reasoning summary together / 回复与思考摘要合计
@@ -274,6 +277,22 @@ func runChat(p *protocol, dir string, req runtime.ChatRequest, input chatInput, 
 			}
 			return turnFailure(p, n.Error)
 		}
+	}
+}
+
+// timedEmit marks FirstEvent on the first event emit passes on and Done on
+// the one that finishes the response.
+// timedEmit 在 emit 转交的第一个事件上标记 FirstEvent，在结束响应的事件上标记 Done。
+func timedEmit(phases *cliphase.Timeline, emit func(runtime.ChatEvent) error) func(runtime.ChatEvent) error {
+	if phases == nil {
+		return emit
+	}
+	return func(event runtime.ChatEvent) error {
+		phases.Mark(cliphase.FirstEvent)
+		if event.FinishReason != "" {
+			phases.Mark(cliphase.Done)
+		}
+		return emit(event)
 	}
 }
 
