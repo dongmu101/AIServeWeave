@@ -8,7 +8,9 @@ import { BillingDisabled } from "@/components/console/billing-tables";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { EmptyState, ErrorState, FormError, LoadingState } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
+import { Pager } from "@/components/console/pager";
 import { useConsoleRequest } from "@/components/console/use-console-request";
+import { usePagedResource } from "@/components/console/use-paged-resource";
 import { useResource } from "@/components/console/use-resource";
 import { ErrorMessage } from "@/components/i18n/error-message";
 import { Message } from "@/components/i18n/message";
@@ -20,6 +22,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCredits } from "@/lib/console/billing";
+import { CATALOG_HISTORY_ACTIONS, parseCatalogHistoryDetail, type CatalogHistoryAction } from "@/lib/console/catalog-history";
+import { parseAuditEntries, parsePlatformOperators, type AuditEntry } from "@/lib/console/contract";
 import { formatDateTime } from "@/lib/console/format";
 import { parseRouteSnapshot } from "@/lib/console/model-routes";
 import {
@@ -571,8 +575,10 @@ export function CatalogReviewSection({ pending }: { pending: ReturnType<typeof u
   const run = useConsoleRequest();
   const [deciding, setDeciding] = React.useState<{ item: CatalogPending; approve: boolean } | null>(null);
 
+  const [historyNonce, setHistoryNonce] = React.useState(0);
+
   if (pending.errorKind === "not_found") return <BillingDisabled />;
-  return <Card>
+  return <div className="grid gap-4"><Card>
     <CardHeader><CardTitle><Message id="operator.billingCatalogReview" /></CardTitle></CardHeader>
     <CardContent className="grid gap-3">
       <p className="text-sm text-muted-foreground"><Message id="operator.reviewHint" /></p>
@@ -625,11 +631,76 @@ export function CatalogReviewSection({ pending }: { pending: ReturnType<typeof u
           await run({ method: "POST", surface: "operator", path, body: { model: deciding.item.model }, parse: parseCatalogDecision });
         } finally {
           pending.reload();
+          setHistoryNonce((n) => n + 1);
         }
         toast.success(<Message id={deciding.approve ? "operator.reviewApproved" : "operator.reviewRejected"} />);
         setDeciding(null);
       }}
     />
+  </Card>
+  <CatalogHistorySection key={historyNonce} />
+  </div>;
+}
+
+const HISTORY_LABELS: Record<CatalogHistoryAction, MessageKey> = {
+  "billing.catalog.approve": "operator.reviewHistoryApproved",
+  "billing.catalog.reject": "operator.reviewHistoryRejected",
+  "billing.catalog.auto_apply": "operator.reviewHistoryAutoApplied",
+};
+
+/**
+ * CatalogHistorySection lists past catalog decisions of one kind from the
+ * platform audit log, with who made them. Operator ids are shown by name
+ * when they are on the first page of operator accounts.
+ *
+ * CatalogHistorySection 从平台审计日志列出某一类过往的价目表决定及其操作人。操作人 id
+ * 在运维账户第一页中能找到时显示为名称。
+ */
+function CatalogHistorySection() {
+  const { t, locale } = useI18n();
+  const [action, setAction] = React.useState<CatalogHistoryAction>("billing.catalog.approve");
+  const history = usePagedResource<AuditEntry>({ path: "/operator/v1/audit", surface: "operator", filters: { action }, pageSize: 25, parse: parseAuditEntries });
+  const operators = useResource({ method: "GET", surface: "operator", path: "/operator/v1/operators", query: { limit: "200" }, parse: parsePlatformOperators });
+  const names = React.useMemo(() => new Map((operators.data?.items ?? []).map((op) => [op.id, op.name ? `${op.name} (${op.email})` : op.email])), [operators.data]);
+  const credits = (value: number | null) => (value === null ? "—" : formatCredits(value, locale));
+
+  return <Card>
+    <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+      <CardTitle><Message id="operator.reviewHistory" /></CardTitle>
+      <select aria-label={t("operator.reviewHistory")} className={`${SELECT_CLASS} h-8 w-auto`} value={action} onChange={(e) => setAction(e.target.value as CatalogHistoryAction)}>
+        {CATALOG_HISTORY_ACTIONS.map((value) => <option key={value} value={value}>{t(HISTORY_LABELS[value])}</option>)}
+      </select>
+    </CardHeader>
+    <CardContent className="grid gap-3">
+      <p className="text-sm text-muted-foreground"><Message id="operator.reviewHistoryHint" /></p>
+      {history.error ? <ErrorState message={history.error} onRetry={history.reload} /> : !history.items ? <LoadingState label={t("operator.loading")} rows={2} /> : history.items.length === 0 ? <EmptyState title={t("operator.reviewHistoryEmpty")} /> : <Table>
+        <TableHeader><TableRow>
+          <TableHead><Message id="tenant.time" /></TableHead>
+          <TableHead><Message id="operator.billingModel" /></TableHead>
+          <TableHead><Message id="operator.reviewHistoryActor" /></TableHead>
+          <TableHead className="text-right"><Message id="operator.reviewHistoryInput" /></TableHead>
+          <TableHead className="text-right"><Message id="operator.reviewHistoryOutput" /></TableHead>
+          <TableHead>IP</TableHead>
+        </TableRow></TableHeader>
+        <TableBody>{history.items.map((entry) => {
+          const detail = parseCatalogHistoryDetail(entry.detail);
+          const priced = action === "billing.catalog.approve";
+          return <TableRow key={entry.id}>
+            <TableCell className="whitespace-nowrap text-xs">{formatDateTime(entry.createdAt, undefined, locale)}</TableCell>
+            <TableCell className="max-w-64"><span className="flex flex-wrap items-center gap-2">
+              <code className="text-xs break-all">{entry.target}</code>
+              {detail.kind === "remove" ? <Badge variant="destructive">{t("operator.reviewKindRemove")}</Badge> : detail.kind === "change" ? <Badge variant="secondary">{t("operator.reviewKindChange")}</Badge> : null}
+              {detail.maxChange ? <span className="text-xs text-muted-foreground">{t("operator.reviewMaxChange", { change: detail.maxChange })}</span> : null}
+            </span></TableCell>
+            <TableCell className="max-w-56 text-xs break-all">{entry.actorId === "" ? t("operator.reviewHistorySystem") : names.get(entry.actorId) ?? <code>{entry.actorId}</code>}</TableCell>
+            <TableCell className="text-right font-mono whitespace-nowrap text-xs">{priced ? `${credits(detail.inputBefore)} → ${credits(detail.inputAfter)}` : "—"}</TableCell>
+            <TableCell className="text-right font-mono whitespace-nowrap text-xs">{priced ? `${credits(detail.outputBefore)} → ${credits(detail.outputAfter)}` : "—"}</TableCell>
+            <TableCell className="font-mono text-xs">{entry.ip || "—"}</TableCell>
+          </TableRow>;
+        })}</TableBody>
+      </Table>}
+      <Pager resource={history} loadedCount={history.items?.length ?? 0} />
+    </CardContent>
   </Card>;
 }
 
