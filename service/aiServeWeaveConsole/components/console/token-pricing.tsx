@@ -25,6 +25,7 @@ import { formatCredits } from "@/lib/console/billing";
 import { CATALOG_HISTORY_ACTIONS, parseCatalogHistoryDetail, type CatalogHistoryAction } from "@/lib/console/catalog-history";
 import { parseAuditEntries, parsePlatformOperators, type AuditEntry } from "@/lib/console/contract";
 import { formatDateTime } from "@/lib/console/format";
+import { parseGatewaySnapshot, type FleetSnapshot } from "@/lib/console/fleet";
 import { parseRouteSnapshot } from "@/lib/console/model-routes";
 import {
   catalogItems,
@@ -430,7 +431,18 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
   // 只有新建别名时提供选择列表：已发布、尚未有定价设置的路由别名。选择已配置的
   // 别名会用空白字段覆盖原设置，因此它们只从表格里编辑。
   const routes = useResource({ method: "GET", surface: "operator", path: "/operator/v1/routes", parse: parseRouteSnapshot });
-  const choices = React.useMemo(() => [...new Set((routes.data?.routes ?? []).map((route) => route.model))].filter((name) => !configured.has(name)).sort(), [routes.data, configured]);
+  // Node-reported model ids are offered too: a request may name one
+  // directly when no route covers it.
+  // 也提供节点上报的模型 id：没有路由覆盖时，请求可以直接使用它。
+  const fleet = useResource<FleetSnapshot>({ method: "GET", surface: "operator", path: "/operator/v1/nodes", query: { gateway: "default" }, parse: parseGatewaySnapshot });
+  const routeChoices = React.useMemo(() => [...new Set((routes.data?.routes ?? []).map((route) => route.model))].filter((name) => !configured.has(name)).sort(), [routes.data, configured]);
+  const nodeChoices = React.useMemo(() => {
+    const runtimes = [...(fleet.data?.replicas[0]?.localRuntimes ?? []), ...(fleet.data?.nodes ?? []).flatMap((node) => node.runtimes)];
+    const taken = new Set(routeChoices);
+    return [...new Set(runtimes.flatMap((rt) => rt.models.map((m) => m.id)))].filter((name) => name !== "" && !taken.has(name) && !configured.has(name)).sort();
+  }, [fleet.data, routeChoices, configured]);
+  const choices = React.useMemo(() => [...routeChoices, ...nodeChoices], [routeChoices, nodeChoices]);
+  const choicesLoaded = routes.data !== null || routes.error !== null;
   const matches = useResource<CatalogPage>({
     method: "GET", surface: "operator", path: "/operator/v1/billing/catalog",
     query: { q: search, limit: "8" }, parse: parseCatalogPage,
@@ -465,6 +477,22 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
     if (alias === null && (name === "" || new TextEncoder().encode(name).length > 128)) {
       setError(<Message id="operator.billingProblemModel" />);
       return;
+    }
+    // The control plane refuses a reference the catalog lacks with a bare
+    // 400, so it is checked here first to name the cause.
+    // 控制面对价目表中不存在的参照模型只返回笼统的 400，因此先在这里检查，以便说明原因。
+    const ref = reference.trim();
+    if (ref !== "") {
+      try {
+        const page = await run({ method: "GET", surface: "operator", path: "/operator/v1/billing/catalog", query: { q: ref, limit: "1" }, parse: parseCatalogPage });
+        if (!page.items.some((item) => item.model === ref)) {
+          setError(t("operator.pricingReferenceMissing", { model: ref }));
+          return;
+        }
+      } catch {
+        // Left to the control plane, which checks it again on save.
+        // 交给控制面，它在保存时会再检查一次。
+      }
     }
     const ratePPM = parseRateInput(rate);
     if (ratePPM === null) {
@@ -507,12 +535,13 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
         </DialogHeader>
         <div className="grid gap-1">
           <label htmlFor="pricing-model" className="text-sm font-medium"><Message id="operator.billingModel" /></label>
-          {alias === null && choices.length > 0 ? <select aria-label={t("operator.pricingAliasPick")} className={SELECT_CLASS} value={choices.includes(model.trim()) ? model.trim() : ""} disabled={pending} onChange={(e) => { if (e.target.value) setModel(e.target.value); }}>
-            <option value="">{t("operator.pricingAliasPick")}</option>
-            {choices.map((name) => <option key={name} value={name}>{name}</option>)}
+          {alias === null ? <select aria-label={t("operator.pricingAliasPick")} className={SELECT_CLASS} value={choices.includes(model.trim()) ? model.trim() : ""} disabled={pending || choices.length === 0} onChange={(e) => setModel(e.target.value)}>
+            <option value="">{!choicesLoaded ? t("operator.loading") : choices.length > 0 ? t("operator.pricingAliasPick") : t("operator.pricingAliasNoChoices")}</option>
+            {routeChoices.length > 0 ? <optgroup label={t("operator.pricingAliasGroupRoutes")}>{routeChoices.map((name) => <option key={name} value={name}>{name}</option>)}</optgroup> : null}
+            {nodeChoices.length > 0 ? <optgroup label={t("operator.pricingAliasGroupNodes")}>{nodeChoices.map((name) => <option key={name} value={name}>{name}</option>)}</optgroup> : null}
           </select> : null}
           <Input id="pricing-model" value={model} onChange={(e) => setModel(e.target.value)} disabled={pending || alias !== null} autoComplete="off" spellCheck={false} />
-          {alias === null && routes.data ? <p className="text-xs text-muted-foreground"><Message id={choices.length > 0 ? "operator.pricingAliasHint" : "operator.pricingAliasNone"} /></p> : null}
+          {alias === null && choicesLoaded ? <p className="text-xs text-muted-foreground"><Message id={choices.length > 0 ? "operator.pricingAliasHint" : "operator.pricingAliasNone"} /></p> : null}
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-reference" className="text-sm font-medium"><Message id="operator.pricingReference" /></label>
