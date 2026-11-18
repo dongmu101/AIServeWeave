@@ -71,6 +71,8 @@ Agent 的两条执行路径分别隔离：
 AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestNativeCLI' -count=1 -timeout=180s -v
 ```
 
+Agent 启动的每个 CLI 进程（推理、认证检查、模型目录与额度查询）都带 `DISABLE_AUTOUPDATER=1`（[官方环境变量](https://code.claude.com/docs/en/env-vars)），不会在仍有请求运行时自行替换已安装的版本。Agent 只向 CLI 传递白名单内的环境变量，用户自己设置的这类变量会被过滤掉，因此由 Agent 显式设置。它管不到同一系统账户下交互使用的 Claude Code（包括 IDE 扩展）：2026-11-18 在开发机上观察到，PATH 上的 CLI 在使用过程中被自动从 `2.1.326` 更新为 `2.1.327`。生产主机应让 Agent 使用固定版本的 CLI，做法见 [Agent README](../README.md#claude-code)，升级时先跑上面的门控测试。
+
 本次审查、回归与部署边界见[CLI 契约记录](../../../docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；Gateway 推理协议无需改动。平台分发安装包时，还需刷新 Gateway 镜像内的 Agent 制品，已有节点仍须各自升级。
 
 ## Claude Code auto 服务端安全检查
@@ -199,6 +201,11 @@ CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_wind
 本机 CLI 设置失败、启动失败、非法流、失败结果、工具隔离失败、异常退出及缺少结果按 `upstream_error` 报告（响应开始前 HTTP 502，SSE 已开始时以错误事件结束），避免将 Agent 故障误报为调用方请求 400；诊断分类仍保留，且不因此开启自动重试。实际捕获的上游 400/429/529 及错误文档继续按上游返回，能力拒绝仍保留客户端恢复分类，超时仍为 504。
 
 失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
+
+同一账户的多个 CLI 进程共用一份登录，而刷新令牌只能使用一次，并发刷新时会有进程失败（[官方 issue #24317](https://github.com/anthropics/claude-code/issues/24317)，[错误说明](https://code.claude.com/docs/en/errors)）。2026-11-18 起有两项处理：
+
+- CLI 报告「另一个进程正在刷新登录」（`another Claude Code process is refreshing it`，出现在合成错误消息或错误结果中）时，记为 `reason=login_refresh_busy`，按可重试的 `backpressure` 报告，Gateway 在首个事件之前换下一个候选。以前这种情况记为 `cli_result`，以 502 应答并计入熔断。只匹配 CLI 自己的错误（带 `error` 字段的合成消息或错误结果），不匹配模型输出。
+- 每个 CLI 进程都带 `CLAUDE_CODE_OAUTH_401_WAIT_MS=30000`：访问令牌刚被另一个进程轮换、请求收到 401 时，CLI 在凭据存储中等待新令牌，而不是直接失败。这个变量不在官方文档中，是从 Claude Code `2.1.326` 的程序里确认的；不认识它的 CLI 行为不变。登录确实过期时，每个请求最多多等 30 秒。尚未在真实并发刷新中验收。
 
 2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（桥接回合中上游返回未声明的工具名，或原生回合中返回未声明的本机 CLI 工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。三类拒绝继续保留，公开错误按上段的后端失败规则处理。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
 

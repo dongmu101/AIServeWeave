@@ -11,6 +11,57 @@ import (
 
 var rejectedThinkingType = regexp.MustCompile(`(?i)thinking\.type[^a-z]{1,8}(enabled|adaptive).*?not supported|\b(adaptive) thinking is not supported`)
 
+// loginRefreshBusyText is the part Claude Code's two wordings of a refresh
+// held by another process share ("Failed to refresh OAuth token: another
+// Claude Code process is refreshing it or exited mid-refresh…" and "Could not
+// refresh your login because another Claude Code process is refreshing it
+// (or exited mid-refresh)…", Claude Code 2.1.326; see the errors page of the
+// official documentation).
+// loginRefreshBusyText 是 Claude Code 两种「另一个进程正在刷新」措辞的共同部分（Claude Code
+// 2.1.326；见官方文档的错误页）。
+const loginRefreshBusyText = "another Claude Code process is refreshing it"
+
+// loginRefreshBusy reports whether raw is the CLI's own error saying another
+// process holds the login refresh: a synthetic assistant error message, or
+// an error result. Model output is never matched: it carries neither the
+// error field nor the synthetic model.
+//
+// loginRefreshBusy 报告 raw 是否为 CLI 自己说明另一个进程正在刷新登录的错误：合成的
+// assistant 错误消息，或错误结果。从不匹配模型输出：模型输出既没有 error 字段，也不是
+// 合成模型。
+func loginRefreshBusy(raw json.RawMessage) bool {
+	var envelope struct {
+		Type    string `json:"type"`
+		Error   string `json:"error"`
+		IsError bool   `json:"is_error"`
+		Result  string `json:"result"`
+		Message struct {
+			Model   string `json:"model"`
+			Content []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &envelope) != nil {
+		return false
+	}
+	switch envelope.Type {
+	case "assistant":
+		if envelope.Error == "" || envelope.Message.Model != "<synthetic>" {
+			return false
+		}
+		for _, block := range envelope.Message.Content {
+			if block.Type == "text" && strings.Contains(block.Text, loginRefreshBusyText) {
+				return true
+			}
+		}
+	case "result":
+		return envelope.IsError && strings.Contains(envelope.Result, loginRefreshBusyText)
+	}
+	return false
+}
+
 // messagesAPIRejection reads only CLI-marked synthetic API errors and returns fixed recovery classes.
 // messagesAPIRejection 只读取 CLI 标记的合成 API 错误，并返回固定的恢复分类。
 func messagesAPIRejection(raw json.RawMessage, req messagesRequest) error {

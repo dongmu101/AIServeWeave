@@ -9,6 +9,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"strings"
@@ -101,7 +102,16 @@ func TestPrepareChat(t *testing.T) {
 			r.Messages[0].ContentParts = []runtime.ContentPart{{Type: "image_url"}}
 		}, errUnsupported},
 		{"empty", func(r *runtime.ChatRequest) { r.Messages = nil }, ErrConfig},
-		{"oversized", func(r *runtime.ChatRequest) { r.Messages[0].Content = strings.Repeat("x", maxFrameBytes) }, ErrConfig},
+		{"history past the old 1 MiB bound", func(r *runtime.ChatRequest) { r.Messages[0].Content = strings.Repeat("x", 2*maxFrameBytes) }, nil},
+		{"many messages and tools", func(r *runtime.ChatRequest) {
+			for i := 0; i < 3000; i++ {
+				r.Messages = append(r.Messages, runtime.ChatMessage{Role: "user", Content: "turn"})
+			}
+			for i := 0; i < 200; i++ {
+				r.Tools = append(r.Tools, runtime.Tool{Type: "function", Function: runtime.FunctionDefinition{Name: fmt.Sprintf("tool_%d", i), Parameters: json.RawMessage(`{"type":"object"}`)}})
+			}
+		}, nil},
+		{"oversized", func(r *runtime.ChatRequest) { r.Messages[0].Content = strings.Repeat("x", maxHistoryBytes) }, ErrConfig},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			req := chatRequest()

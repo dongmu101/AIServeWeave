@@ -17,6 +17,20 @@ import (
 var errUnsupported = errors.New("codexcli: request feature is unsupported")
 var errFinished = errors.New("codexcli: operation finished")
 
+var (
+	// errTurnRejected is a turn the upstream refused for the request itself:
+	// too long for the model's context window, malformed, or against a content
+	// policy. Any node would refuse it the same way, so it is the caller's to
+	// change and never counts against this node.
+	// errTurnRejected 表示上游因请求本身拒绝的回合：超出模型上下文窗口、格式错误或违反内容
+	// 政策。换任何节点都会同样拒绝，因此需要调用方修改，也从不计入本节点的失败。
+	errTurnRejected = fmt.Errorf("%w: upstream rejected the request", ErrTurn)
+	// errTurnOverloaded is a turn refused because the upstream is overloaded;
+	// another node, or this one a little later, may serve it.
+	// errTurnOverloaded 表示上游过载而被拒绝的回合；另一个节点或稍后的本节点可能可以处理。
+	errTurnOverloaded = fmt.Errorf("%w: upstream overloaded", ErrTurn)
+)
+
 // Runtime serves remote inference using an isolated local Codex process per call.
 // Runtime 为每次远程推理创建独立本地 Codex 进程。
 type Runtime struct {
@@ -184,10 +198,21 @@ func (r *Runtime) wrap(operation string, err error) error {
 		code = runtime.ErrorCapability
 	case errors.Is(err, errRateLimited), errors.Is(err, errQuotaExhausted):
 		code = runtime.ErrorRateLimited
+	case errors.Is(err, errTurnRejected):
+		// A request error, not a node failure: answered 400, never counted by the breaker.
+		// 属于请求错误而非节点故障：以 400 应答，从不计入熔断。
+		code = runtime.ErrorInvalidConfig
+	case errors.Is(err, errTurnOverloaded):
+		code = runtime.ErrorBackpressure
 	case errors.Is(err, ErrRPC), errors.Is(err, ErrTurn), errors.Is(err, errNoImage):
 		code = runtime.ErrorUpstream
 	}
 	rtErr := &runtime.RuntimeError{Code: code, RuntimeID: r.cfg.ID, Kind: runtime.KindCodex, Operation: operation, Message: "Codex operation failed: " + string(code), Cause: err}
+	if code == runtime.ErrorBackpressure {
+		// Busy, not broken: an uncommitted request may move to another node.
+		// 忙而非坏：尚未提交的请求可以换到另一个节点。
+		rtErr.Retryable = true
+	}
 	if code == runtime.ErrorRateLimited {
 		// Another account may still have quota, so the Gateway may move an
 		// uncommitted request on; RetryAfter tells it how long to leave this one.

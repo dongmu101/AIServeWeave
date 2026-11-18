@@ -362,6 +362,8 @@ func (r *Runtime) roundError(err error) error {
 		reason = "unsafe_tools"
 	case errors.Is(err, errQuotaExhausted):
 		reason = "quota_exhausted"
+	case errors.Is(err, errLoginRefreshBusy):
+		reason = "login_refresh_busy"
 	case errors.Is(err, errCLIStart):
 		reason = "cli_start"
 	case errors.Is(err, errProbeSetup):
@@ -382,6 +384,13 @@ func (r *Runtime) roundError(err error) error {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &runtime.RuntimeError{Code: runtime.ErrorTimeout, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
 			Message: "Claude Messages operation failed: " + string(runtime.ErrorTimeout)}
+	}
+	if errors.Is(err, errLoginRefreshBusy) {
+		// Busy, not broken: the session may start on another node or account
+		// now, and on this one again once the other process has refreshed.
+		// 忙而非坏：会话现在可以在另一个节点或账户上开启，待另一个进程刷新完成后也可以再回到本节点。
+		return &runtime.RuntimeError{Code: runtime.ErrorBackpressure, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
+			Message: "Claude Messages operation failed: " + string(runtime.ErrorBackpressure), Retryable: true}
 	}
 	if errors.Is(err, errMissingResult) || errors.Is(err, errCLIExit) || errors.Is(err, errCLIProtocol) ||
 		errors.Is(err, errCLIResult) || errors.Is(err, errUnsafeTools) || errors.Is(err, errCLIStart) || errors.Is(err, errProbeSetup) {

@@ -411,6 +411,11 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	// 而不是 CLI 故障。
 	var quota *quotaError
 	var rejection error
+	// refreshBusy is set once the CLI reports that another process holds its
+	// login refresh; the failure that follows is then transient, not a broken CLI.
+	// refreshBusy 在 CLI 报告另一个进程正在刷新其登录后被设置；随后的失败据此视为暂时性的，
+	// 而不是 CLI 故障。
+	refreshBusy := false
 	finished, active, blockActive := false, false, false
 	native := s.request.isNative()
 	// aliases are the upstream names this round gave caller tools (see
@@ -489,6 +494,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			if native && envelope.Error != "" {
 				rejection = messagesAPIRejection(line, s.request)
 			}
+			if envelope.Error != "" && loginRefreshBusy(line) {
+				refreshBusy = true
+			}
 		case "user":
 		case "rate_limit_event":
 			if envelope.RateLimitInfo.Status == "rejected" {
@@ -501,6 +509,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 			if envelope.IsError || envelope.Subtype != "success" || len(final) == 0 || active {
 				if quota != nil {
 					return nil, quota
+				}
+				if refreshBusy || loginRefreshBusy(line) {
+					return nil, errLoginRefreshBusy
 				}
 				if rejection != nil {
 					return nil, rejection
@@ -763,6 +774,9 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 	if !finished {
 		if quota != nil {
 			return nil, quota
+		}
+		if refreshBusy {
+			return nil, errLoginRefreshBusy
 		}
 		return nil, errMissingResult
 	}

@@ -198,19 +198,40 @@ func appServerArgs(dir string) []string { return serverArgs(dir, false) }
 
 // serverArgs builds the isolated app-server command line. image leaves only
 // the hosted image_generation tool enabled; every other host tool stays off.
+//
+// Features are set with -c features.<name>=..., never --disable/--enable:
+// --disable exits at start-up on a name the CLI no longer knows ("Unknown
+// feature flag"), so a release that drops a feature (multi_agent is already
+// deprecated) would fail every request and health check, while an unknown
+// -c key is ignored. The two forms are otherwise equivalent (config/read on
+// codex-cli 0.169.0 reports the same features).
+//
+// unbounded_connection_retries is off so a lost connection ends in the
+// CLI's bounded retries and a failed turn the Gateway can move elsewhere;
+// with it on, app-server reconnects forever and the request only ends at its
+// deadline.
+//
 // serverArgs 构造隔离的 app-server 命令行。image 只额外保留托管的
 // image_generation 工具，其余宿主工具一律关闭。
+//
+// 功能开关一律用 -c features.<名称>=... 设置，不用 --disable/--enable：遇到 CLI 已不认识的
+// 名称时 --disable 会在启动时退出（"Unknown feature flag"），某个版本删掉一个功能
+// （multi_agent 已标为 deprecated）就会让所有请求与健康检查失败，而未知的 -c 键会被忽略。
+// 两种写法在其他方面等价（codex-cli 0.169.0 上 config/read 报告的功能相同）。
+//
+// 关闭 unbounded_connection_retries，使断网以 CLI 的有限重试和一个失败回合结束，Gateway
+// 可以换节点；开启时 app-server 无限重连，请求只能等到期限才结束。
 func serverArgs(dir string, image bool) []string {
 	args := []string{"app-server", "--listen", "stdio://"}
 	// Keep code_mode_host available: disabling it also hides client dynamic tools.
 	// 保留 code_mode_host：关闭它也会让客户端动态工具不可见。
-	for _, feature := range []string{"shell_tool", "unified_exec", "shell_snapshot", "multi_agent", "apps", "plugins", "hooks", "skill_search", "skill_mcp_dependency_install", "image_generation", "view_image", "code_mode"} {
+	for _, feature := range []string{"shell_tool", "unified_exec", "shell_snapshot", "multi_agent", "apps", "plugins", "hooks", "skill_search", "skill_mcp_dependency_install", "image_generation", "view_image", "code_mode", "unbounded_connection_retries"} {
 		if image && feature == "image_generation" {
 			continue
 		}
-		args = append(args, "--disable", feature)
+		args = append(args, "-c", "features."+feature+"=false")
 	}
-	args = append(args, "--enable", "skip_host_skill_discovery")
+	args = append(args, "-c", "features.skip_host_skill_discovery=true")
 	for _, value := range []string{`mcp_servers={}`, `hooks={}`, `plugins={}`, `web_search="disabled"`, `tools.view_image=false`, `project_doc_max_bytes=0`,
 		`history.persistence="none"`, `analytics.enabled=false`, `forced_login_method="chatgpt"`, "sqlite_home=" + strconv.Quote(dir), "log_dir=" + strconv.Quote(dir)} {
 		args = append(args, "-c", value)

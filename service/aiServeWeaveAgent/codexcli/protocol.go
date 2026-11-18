@@ -11,7 +11,28 @@ import (
 	"strings"
 )
 
+// maxFrameBytes bounds one frame app-server sends, and the reply and reasoning
+// summary of one turn together; only a finished image may exceed it.
+// maxFrameBytes 限制 app-server 发来的单帧，以及一个回合的回复与思考摘要合计；只有
+// 已完成的图像可以超过它。
 const maxFrameBytes = 1 << 20
+
+// maxHistoryBytes bounds the history injected into one thread at the 32 MiB a
+// Claude Messages request may carry. app-server itself accepts far larger
+// frames (a 17 MB thread/inject_items on codex-cli 0.169.0), so whether a
+// history is too long is the model's context window to decide, reported as
+// contextWindowExceeded, not this adapter's.
+//
+// maxHistoryBytes 以 Claude Messages 请求可携带的 32 MiB 限制注入单个线程的历史。
+// app-server 本身接受大得多的帧（codex-cli 0.169.0 上 17 MB 的 thread/inject_items），
+// 因此历史是否过长由模型上下文窗口判断并以 contextWindowExceeded 报告，而不是由本适配器判断。
+const maxHistoryBytes = 32 << 20
+
+// maxWriteFrameBytes bounds one request this adapter writes: the injected
+// history or thread/start's tool definitions, plus the JSON-RPC envelope.
+// maxWriteFrameBytes 限制本适配器写出的单个请求：注入的历史或 thread/start 的工具定义，
+// 再加上 JSON-RPC 外层。
+const maxWriteFrameBytes = maxHistoryBytes + 1<<20
 
 type frame struct {
 	ID     json.RawMessage `json:"id"`
@@ -39,7 +60,7 @@ type protocol struct {
 
 func (p *protocol) write(v any) error {
 	data, err := json.Marshal(v)
-	if err != nil || len(data) > maxFrameBytes {
+	if err != nil || len(data) > maxWriteFrameBytes {
 		return ErrProtocol
 	}
 	data = append(data, '\n')
@@ -50,14 +71,20 @@ func (p *protocol) write(v any) error {
 	return nil
 }
 
+// read returns the next frame. Nothing caps how many frames a turn may send:
+// each reply token arrives as its own delta, so a frame count would cut long
+// answers short, and the request and idle deadlines already bound a process
+// that never stops. Every frame except a retry notice counts as activity for
+// the idle deadline (see retryNotice).
+//
+// read 返回下一帧。一个回合可以发送多少帧不设上限：回复的每个 token 都单独作为一个增量
+// 到达，按帧数设限会截断长回答，而请求期限与空闲期限已经约束了不停输出的进程。除重试通知
+// 外的每一帧都计入空闲期限的活动（见 retryNotice）。
 func (p *protocol) read() (frame, error) {
-	if p.report.Events >= 10000 || !p.scanner.Scan() {
+	if !p.scanner.Scan() {
 		return frame{}, ErrProtocol
 	}
 	p.report.Events++
-	if p.activity != nil {
-		p.activity()
-	}
 	data := p.scanner.Bytes()
 	limit := maxFrameBytes
 	if p.image {
@@ -91,7 +118,29 @@ func (p *protocol) read() (frame, error) {
 	if len(data) > maxFrameBytes && (msg.Method != "item/completed" || itemType != "imageGeneration") {
 		return frame{}, ErrProtocol
 	}
+	if p.activity != nil && !retryNotice(msg) {
+		p.activity()
+	}
 	return msg, nil
+}
+
+// retryNotice reports whether msg is an "error" notification app-server sends
+// while it retries the upstream itself (willRetry). Such notices are not
+// progress: a reconnect loop that keeps announcing itself must still reach
+// the idle deadline, so the Gateway can try another node instead of waiting
+// for the request deadline.
+//
+// retryNotice 报告 msg 是否为 app-server 自行重试上游期间发出的 "error" 通知（willRetry）。
+// 这类通知不算进展：不断自我报告的重连循环仍必须到达空闲期限，使 Gateway 能换节点，
+// 而不是一直等到请求期限。
+func retryNotice(msg frame) bool {
+	if msg.Method != "error" {
+		return false
+	}
+	var n struct {
+		WillRetry bool `json:"willRetry"`
+	}
+	return json.Unmarshal(msg.Params, &n) == nil && n.WillRetry
 }
 
 func (p *protocol) request(id int, method string, params any, result any) error {

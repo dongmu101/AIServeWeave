@@ -288,16 +288,24 @@ const rateLimitReadID = 6
 // rateLimitExceeded mean the account, not the node, is spent: they become a
 // quotaError, and while the app-server is still up it is asked — without
 // inference — when the exhausted window resets, so the Gateway can set this
-// account aside for exactly that long. Any other failure stays ErrTurn. The
-// upstream message is never read.
+// account aside for exactly that long. contextWindowExceeded, badRequest,
+// cyberPolicy and misalignmentPolicyViolation are about the request itself
+// and become errTurnRejected; serverOverloaded becomes errTurnOverloaded.
+// Any other failure stays ErrTurn. The upstream message is never read.
 //
 // turnFailure 对失败回合的 TurnError 分类。usageLimitExceeded 与 rateLimitExceeded
 // 表示用完的是账户而不是节点：它们成为 quotaError；趁 app-server 还在，再（不执行推理地）
-// 询问用尽的窗口何时重置，让 Gateway 恰好把这个账户搁置那么久。其他失败仍是 ErrTurn。
+// 询问用尽的窗口何时重置，让 Gateway 恰好把这个账户搁置那么久。contextWindowExceeded、
+// badRequest、cyberPolicy 与 misalignmentPolicyViolation 针对的是请求本身，成为
+// errTurnRejected；serverOverloaded 成为 errTurnOverloaded。其他失败仍是 ErrTurn。
 // 上游的错误文本从不读取。
 func turnFailure(p *protocol, raw json.RawMessage) error {
 	switch failureCode(raw) {
 	case "usageLimitExceeded", "rateLimitExceeded":
+	case "contextWindowExceeded", "badRequest", "cyberPolicy", "misalignmentPolicyViolation":
+		return errTurnRejected
+	case "serverOverloaded":
+		return errTurnOverloaded
 	default:
 		return ErrTurn
 	}

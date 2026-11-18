@@ -181,15 +181,19 @@ func (in chatInput) clientName(wire string) string {
 // Positive output limits are advisory: app-server cannot enforce them. Tools
 // are registered under wireToolName with a normalizeToolSchema schema, so a
 // reserved or overlong client name, or a schema that only omits "object",
-// does not fail the turn.
+// does not fail the turn. The number of messages and tools is not capped and
+// the history may reach maxHistoryBytes: a long agent session is the normal
+// case, and the model's context window, not this adapter, decides when it is
+// too long.
 //
 // prepareChat 保留有序消息及工具历史，不把工具结果拼成普通提示词。
 // 正数输出上限仅作兼容接收：app-server 无法执行该上限。工具以 wireToolName 注册、
 // schema 经 normalizeToolSchema 整理，因此客户端的保留名或超长名、以及只是漏写
-// "object" 的 schema 都不会让回合失败。
+// "object" 的 schema 都不会让回合失败。消息与工具的数量不设上限，历史最多可达
+// maxHistoryBytes：长时间的智能体会话是常态，何时过长由模型上下文窗口而不是本适配器判断。
 func prepareChat(req runtime.ChatRequest) (chatInput, error) {
 	out := chatInput{allowed: map[string]bool{}, original: map[string]string{}, tools: []any{}}
-	if len(req.Messages) == 0 || len(req.Messages) > 2048 || len(req.Tools) > 128 || len(req.Model) > 256 {
+	if len(req.Messages) == 0 || len(req.Model) > 256 {
 		return out, ErrConfig
 	}
 	if req.MaxTokens != nil && *req.MaxTokens <= 0 {
@@ -294,7 +298,7 @@ func prepareChat(req runtime.ChatRequest) (chatInput, error) {
 		return out, ErrConfig
 	}
 	data, err := json.Marshal(out.items)
-	if err != nil || len(data) > maxFrameBytes-1024 {
+	if err != nil || len(data) > maxHistoryBytes {
 		return out, ErrConfig
 	}
 	return out, nil

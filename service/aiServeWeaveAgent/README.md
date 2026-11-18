@@ -88,8 +88,9 @@ runtimes:
 也可以在设置页面「本地 AI」分组选择 Claude Code CLI。Gateway 必须配置控制面 API Key 校验和共享 `-redis-addr`；静态 key 没有租户归属，不能用于原生 Claude 续接。
 
 - 模型目录由 CLI 的 `initialize` 控制请求获取，不执行推理；只发布 `resolvedModel` 返回的真实 ID，不发布 `default`、`sonnet`、`opus` 等简称，请求的模型 ID 原样传给 `--model`。启用别名路由时，公共别名须指向目录中实际存在的目标。
-- 每个运行时默认 8 个 CLI 会话，`max_concurrent` 最多 32；名额满时淘汰等待工具结果最久的空闲会话。CLI 生成阶段沉默两分钟才回收，持续输出的长回合不受限。
+- 每个运行时默认 8 个 CLI 会话，`max_concurrent` 最多 32；名额满时淘汰等待工具结果最久的空闲会话。CLI 生成阶段沉默 10 分钟才回收，持续输出的长回合不受限。
 - 客户端需要关闭缓存和实验 beta；原版 Claude Code 客户端建议关闭 thinking。
+- 固定 CLI 版本：Agent 启动的 CLI 都带 `DISABLE_AUTOUPDATER=1`，但同一系统账户下交互使用的 Claude Code（包括 IDE 扩展）仍会自动更新 PATH 上的同一份 CLI。生产主机应以专用服务账户运行 Agent，且不在该账户下交互使用 `claude`；也可以把固定版本装到专用目录并放在 Agent PATH 的最前面。升级前先跑门控测试，见 [CLI 版本与工具隔离](claudecode/README.md#cli-版本与工具隔离)。
 - 请求参数、续接规则与联调命令见 [Claude 包说明](claudecode/README.md)。
 
 ### Codex

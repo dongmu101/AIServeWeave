@@ -29,6 +29,12 @@ var (
 	errCapacity      = errors.New("CLI session capacity exceeded")
 	errClosed        = errors.New("CLI session closed")
 	errCallRejected  = errors.New("CLI tool result rejected")
+	// errLoginRefreshBusy means the CLI could not refresh its login because
+	// another process sharing the account directory was refreshing it; Claude
+	// Code calls this transient.
+	// errLoginRefreshBusy 表示 CLI 无法刷新登录，因为共用账户目录的另一个进程正在刷新；
+	// Claude Code 认为这是暂时性的。
+	errLoginRefreshBusy = errors.New("CLI login refresh held by another process")
 	// errQuotaExhausted is what a quotaError matches with errors.Is.
 	// errQuotaExhausted 是 quotaError 用 errors.Is 匹配的哨兵。
 	errQuotaExhausted = errors.New("CLI account usage limit reached")
@@ -152,6 +158,33 @@ func probeArgs(model, configPath string) []string {
 		"--disable-slash-commands", "--no-chrome", "--no-session-persistence", "--system-prompt", "You are a protocol test assistant. Use only the provided probe tool; do not access any files or commands."}
 }
 
+// cliDefaults are set on every CLI process the Agent starts, after the
+// inherited variables are filtered (which would drop them even when the
+// Agent's own environment sets them):
+//
+//   - DISABLE_AUTOUPDATER keeps a CLI the Agent started from replacing the
+//     installed version under requests still running; upgrades go through
+//     the Agent's re-verification instead.
+//   - CLAUDE_CODE_OAUTH_401_WAIT_MS lets a process whose access token another
+//     process has just rotated wait for the new token in the credential store
+//     instead of failing the round. Several CLI processes share one account
+//     directory here, and its refresh token works only once. The variable is
+//     not in the official documentation (it is read by Claude Code 2.1.326),
+//     so a CLI that ignores it behaves as before. 30 seconds covers a
+//     concurrent refresh while bounding the extra wait when a login has
+//     really expired.
+//
+// cliDefaults 设置在 Agent 启动的每个 CLI 进程上，位于继承变量过滤之后（过滤会丢掉它们，
+// 即使 Agent 自己的环境设置了）：
+//
+//   - DISABLE_AUTOUPDATER 防止 Agent 启动的 CLI 在仍有请求运行时替换已安装的版本；升级改走
+//     Agent 的复验流程。
+//   - CLAUDE_CODE_OAUTH_401_WAIT_MS 让访问令牌刚被另一个进程轮换的进程在凭据存储中等待新
+//     令牌，而不是让回合失败。这里多个 CLI 进程共用一个账户目录，而其刷新令牌只能使用一次。
+//     该变量不在官方文档中（Claude Code 2.1.326 会读取它），不认识它的 CLI 行为不变。30 秒
+//     足以覆盖并发刷新，同时限制登录确实过期时多出的等待。
+var cliDefaults = []string{"DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000"}
+
 func probeEnv(source []string) []string {
 	allowed := map[string]bool{"PATH": true, "HOME": true, "USER": true, "LOGNAME": true, "LANG": true, "LC_ALL": true, "TMPDIR": true, "CLAUDE_CONFIG_DIR": true,
 		"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true, "http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true,
@@ -163,5 +196,5 @@ func probeEnv(source []string) []string {
 			out = append(out, entry)
 		}
 	}
-	return out
+	return append(out, cliDefaults...)
 }
