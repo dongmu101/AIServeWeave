@@ -340,6 +340,7 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodDelete, Path: "/admin/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session", requireSession(ctx, sessionAction(ctx.Logic.Logout)))},
+		{Method: http.MethodPost, Path: "/admin/v1/auth/session/handoff", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/session/handoff", requireSession(ctx, handoffSession(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/auth/password", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/password", requireSession(ctx, changeOwnPassword(ctx)))},
 		{Method: http.MethodPost, Path: "/admin/v1/auth/sessions/revoke", Handler: instrumented(ctx.MetricsRegistry, "/admin/v1/auth/sessions/revoke", requireSession(ctx, sessionAction(ctx.Logic.RevokeOwnSessions)))},
 		{Method: http.MethodDelete, Path: "/operator/v1/auth/session", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/auth/session", requirePlatformSession(ctx, sessionAction(ctx.Logic.Logout)))},
@@ -544,6 +545,50 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 			Method:  http.MethodGet,
 			Path:    "/internal/v1/responses/:id",
 			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/responses/:id", requireSharedSecret(ctx.Config.InternalToken, getResponseTurn(ctx))),
+		},
+		// Studio conversations are written by the Gateway on behalf of a
+		// member whose session it verified, so they share the InternalToken.
+		//
+		// Studio 对话由 Gateway 代表已校验会话的成员写入，因此同样使用 InternalToken。
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/studio/conversations",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations", requireSharedSecret(ctx.Config.InternalToken, createStudioConversation(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/studio/conversations",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations", requireSharedSecret(ctx.Config.InternalToken, listStudioConversations(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/studio/conversations/:id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id", requireSharedSecret(ctx.Config.InternalToken, getStudioConversation(ctx))),
+		},
+		{
+			Method:  http.MethodPatch,
+			Path:    "/internal/v1/studio/conversations/:id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id", requireSharedSecret(ctx.Config.InternalToken, updateStudioConversation(ctx))),
+		},
+		{
+			Method:  http.MethodDelete,
+			Path:    "/internal/v1/studio/conversations/:id",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id", requireSharedSecret(ctx.Config.InternalToken, deleteStudioConversation(ctx))),
+		},
+		{
+			Method:  http.MethodGet,
+			Path:    "/internal/v1/studio/conversations/:id/messages",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id/messages", requireSharedSecret(ctx.Config.InternalToken, listStudioMessages(ctx))),
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/studio/conversations/:id/turns",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id/turns", requireSharedSecret(ctx.Config.InternalToken, beginStudioTurn(ctx))),
+		},
+		{
+			Method:  http.MethodPost,
+			Path:    "/internal/v1/studio/conversations/:id/replies",
+			Handler: instrumented(ctx.MetricsRegistry, "/internal/v1/studio/conversations/:id/replies", requireSharedSecret(ctx.Config.InternalToken, appendStudioReply(ctx))),
 		},
 	})
 	// Request-log push (STATUS.md's P09/C28) shares the same InternalToken as

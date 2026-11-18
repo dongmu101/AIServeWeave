@@ -66,10 +66,13 @@ func withStudio(front, studio http.Handler) http.Handler {
 // studioHandler 组装 Studio 前门：会话鉴权、租户配额，然后是 Studio 路由。它与 API
 // Key 前门共用调度器、模型与节点授权和限流器，因此租户在这里能消费的，不会多于用一把
 // key 能消费的。
-func (h *handlers) studioHandler(sessions SessionVerifier, logger *slog.Logger) http.Handler {
+func (h *handlers) studioHandler(sessions SessionVerifier, conversations StudioStore, logger *slog.Logger) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /studio/v1/me", h.studioMe)
 	mux.HandleFunc("GET /studio/v1/models", h.studioModels)
+	if conversations != nil {
+		h.mountStudioConversations(mux, conversations, logger)
+	}
 	mux.HandleFunc("/studio/", func(w http.ResponseWriter, _ *http.Request) {
 		writeStudioError(w, http.StatusNotFound, "not_found", "no such Studio endpoint")
 	})
@@ -104,11 +107,11 @@ func studioAuth(sessions SessionVerifier, logger *slog.Logger, next http.Handler
 			writeStudioError(w, http.StatusServiceUnavailable, "verification_unavailable", "cannot verify the session right now")
 			return
 		}
-		if identity.BillingBlocked && startsBillableWork(r) {
+		if identity.BillingBlocked && studioStartsBillableWork(r) {
 			writeStudioError(w, http.StatusPaymentRequired, "insufficient_balance", "the account balance is exhausted")
 			return
 		}
-		if identity.Accounts != nil && identity.Accounts.Only && !identity.Accounts.Active(time.Now()) && startsBillableWork(r) {
+		if identity.Accounts != nil && identity.Accounts.Only && !identity.Accounts.Active(time.Now()) && studioStartsBillableWork(r) {
 			writeStudioError(w, http.StatusPaymentRequired, "account_subscription_expired", "renew an account subscription to continue")
 			return
 		}
@@ -116,6 +119,16 @@ func studioAuth(sessions SessionVerifier, logger *slog.Logger, next http.Handler
 		ctx = withSchedulingAccess(ctx, identity.TenantID, identity.Accounts, identity.Models, identity.Nodes)
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
+}
+
+// studioStartsBillableWork reports whether r may dispatch inference: only
+// sending a message does. Managing conversations stays available to a
+// member whose balance is exhausted, so they can still read and tidy them.
+//
+// studioStartsBillableWork 报告 r 是否可能派发推理：只有发送消息会。余额耗尽的成员仍可
+// 管理对话，以便查看与整理。
+func studioStartsBillableWork(r *http.Request) bool {
+	return r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/messages")
 }
 
 // bearer extracts a Bearer credential.

@@ -21,6 +21,12 @@ interface Route {
 const ROUTES: Route[] = [
   { method: "GET", pattern: ["me"], query: [] },
   { method: "GET", pattern: ["models"], query: [] },
+  { method: "GET", pattern: ["conversations"], query: ["q", "cursor", "limit"] },
+  { method: "POST", pattern: ["conversations"], query: [] },
+  { method: "GET", pattern: ["conversations", ":id"], query: [] },
+  { method: "PATCH", pattern: ["conversations", ":id"], query: [] },
+  { method: "DELETE", pattern: ["conversations", ":id"], query: [] },
+  { method: "GET", pattern: ["conversations", ":id", "messages"], query: ["after_seq", "limit"] },
 ];
 
 const SEGMENT = /^[A-Za-z0-9_-]{1,128}$/;

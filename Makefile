@@ -4,7 +4,7 @@
 # 在本机构建 AIServeWeave 镜像，再送到自己构建不动的服务器上（见 deploy/README.md
 # 「小内存主机」）。
 #
-#   make images                              # 为服务器平台构建四个镜像（默认 linux/amd64）
+#   make images                              # 为服务器平台构建五个镜像（默认 linux/amd64）
 #   make push SERVER=user@host               # 经 ssh 把镜像 load 到服务器
 #   make deploy SERVER=user@host             # 构建 + 送达 + 在服务器上 upgrade.sh --no-build
 #   make publish                             # 构建 amd64 + arm64 镜像并推送到 Docker Hub
@@ -36,7 +36,13 @@ TAG             ?= local
 # to pull from it in follow mode, so the two must agree.
 # 与 deploy/lib.sh 的 source_version 同一条命令：服务器在跟随模式下据此推出要拉取的 tag，两边必须一致。
 VERSION         ?= $(shell git describe --tags --always --dirty --abbrev=12 2>/dev/null || echo dev)
-SERVICES        ?= registry controlplane gateway console
+# Evaluate it once: ?= is recursive, so every recipe would rerun git describe,
+# and a commit made while publish runs would tag images and print a version
+# that differ from what was pushed.
+# 只求值一次：?= 是递归展开，每个 recipe 都会重跑 git describe；publish 运行期间提交代码，
+# 各镜像的 tag 与最后打印的版本就会与实际推送的不一致。
+VERSION         := $(VERSION)
+SERVICES        ?= registry controlplane gateway console studio
 AGENT_PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 GOPROXY         ?=
 SERVER          ?=
@@ -49,7 +55,9 @@ FORCE           ?= 0
 # Docker Hub publishing / 推送到 Docker Hub
 HUB_REPO          ?= docker.io/dongmu101
 PUBLISH_PLATFORMS ?= linux/amd64,linux/arm64
-PUBLISH_TAGS      ?= $(VERSION)
+# latest lets a server pull with deploy/upgrade.sh --image-tag latest.
+# latest 让服务器可以用 deploy/upgrade.sh --image-tag latest 拉取。
+PUBLISH_TAGS      ?= $(VERSION) latest
 BUILDER           ?= aisw-multiarch
 # BuildKit steps run at once in that builder. A multi-platform build otherwise
 # compiles Go for every platform at the same time, which a Docker Desktop VM
@@ -77,7 +85,7 @@ SERVICE_registry     := aiServeWeaveRegistry
 SERVICE_controlplane := aiServeWeaveControlPlane
 SERVICE_gateway      := aiServeWeaveGateway
 
-.PHONY: help images local push save deploy publish builder builder-reset check-docker-mem check-server check-git clean
+.PHONY: help images local push save deploy publish tag-latest builder builder-reset check-docker-mem check-server check-git clean
 
 help: ## 列出可用目标与变量
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -92,7 +100,7 @@ help: ## 列出可用目标与变量
 	@echo "    UPGRADE_ARGS=\"...\"     deploy 时附加给服务器 upgrade.sh 的参数，如 --no-backup"
 	@echo "    FORCE=1                deploy / publish 时跳过「工作区干净且已推送」检查"
 	@echo "    HUB_REPO=...           publish 推送到的仓库（$(HUB_REPO)）"
-	@echo "    PUBLISH_TAGS=\"...\"     publish 的 tag，如 \"v0.2.0 latest\"（默认当前版本）"
+	@echo "    PUBLISH_TAGS=\"...\"     publish 的 tag，如 \"v0.2.0 latest\"（默认当前版本与 latest）"
 	@echo "    PUBLISH_PLATFORMS=...  publish 的平台（$(PUBLISH_PLATFORMS)）"
 	@echo "    当前版本: $(VERSION)"
 
@@ -112,15 +120,20 @@ images: check-docker-mem $(addprefix image-,$(SERVICES)) ## 为 PLATFORM 构建�
 local: ## 为本机平台构建，供本地 docker compose up 试跑
 	@$(MAKE) --no-print-directory images PLATFORM=$(NATIVE_PLATFORM)
 
-# The Console has its own context and Dockerfile and takes no build args.
-# Console 有自己的构建上下文与 Dockerfile，不接受构建参数。
+# The Console and Studio have their own contexts and Dockerfiles and take no build args.
+# Console 与 Studio 有各自的构建上下文与 Dockerfile，不接受构建参数。
 image-console:
 	@echo "==> 构建 console（$(PLATFORM)）"
 	docker buildx build --platform $(PLATFORM) --load \
 	  -t $(REPO)/aiserveweave-console:$(TAG) service/aiServeWeaveConsole
 
+image-studio:
+	@echo "==> 构建 studio（$(PLATFORM)）"
+	docker buildx build --platform $(PLATFORM) --load \
+	  -t $(REPO)/aiserveweave-studio:$(TAG) service/aiServeWeaveStudio
+
 image-%:
-	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console）" >&2; exit 1; }
+	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console studio）" >&2; exit 1; }
 	@echo "==> 构建 $*（$(PLATFORM)，版本 $(VERSION)）"
 	docker buildx build --platform $(PLATFORM) --load \
 	  --build-arg SERVICE=$(SERVICE_$*) --build-arg VERSION=$(VERSION) $(GOPROXY_ARG) \
@@ -190,6 +203,16 @@ publish: check-git check-docker-mem builder $(addprefix publish-,$(SERVICES)) ##
 	@echo "    首次: 在 deploy/.env 设置 AISW_IMAGE_REPO=$(HUB_REPO)，再 deploy/upgrade.sh --follow"
 	@echo "    之后: deploy/upgrade.sh"
 
+# tag-latest points latest at an already published VERSION without building
+# anything: the registry copies the manifest, so it takes seconds.
+#
+# tag-latest 把 latest 指向一个已发布的 VERSION，不构建任何东西：仓库端复制清单，几秒完成。
+tag-latest: ## 把已发布的 VERSION 标为 latest（不构建），如 make tag-latest VERSION=v0.1.0-169-g397ddc0bc8c3
+	@for s in $(SERVICES); do \
+	  echo "==> $(HUB_REPO)/aiserveweave-$${s}:$(VERSION) -> latest"; \
+	  docker buildx imagetools create -t $(HUB_REPO)/aiserveweave-$${s}:latest $(HUB_REPO)/aiserveweave-$${s}:$(VERSION); \
+	done
+
 builder:
 	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || { \
 	  echo "==> 创建多平台 builder $(BUILDER)（同时执行 $(BUILD_PARALLELISM) 个构建步骤）"; \
@@ -206,8 +229,15 @@ publish-console:
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  $(LABEL_ARGS) $(call hub_tags,console) service/aiServeWeaveConsole
 
+# Studio, like the Console, has its own context and Dockerfile.
+# Studio 与 Console 一样有自己的构建上下文与 Dockerfile。
+publish-studio:
+	@echo "==> 构建并推送 studio（$(PUBLISH_PLATFORMS)）"
+	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
+	  $(LABEL_ARGS) $(call hub_tags,studio) service/aiServeWeaveStudio
+
 publish-%:
-	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console）" >&2; exit 1; }
+	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console studio）" >&2; exit 1; }
 	@echo "==> 构建并推送 $*（$(PUBLISH_PLATFORMS)，版本 $(VERSION)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  --build-arg SERVICE=$(SERVICE_$*) --build-arg VERSION=$(VERSION) $(GOPROXY_ARG) \
@@ -216,3 +246,4 @@ publish-%:
 
 clean: ## 删除 save 产生的压缩包
 	rm -rf $(OUT_DIR)
+

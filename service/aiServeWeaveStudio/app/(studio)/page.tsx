@@ -1,4 +1,4 @@
-import { Composer } from "@/components/studio/composer";
+import { NewConversation } from "@/components/studio/new-conversation";
 import { BrandMark } from "@/components/studio/brand";
 import { errorMessage, greetingName } from "@/lib/studio/contract";
 import { loadModels, requireSession } from "@/lib/server/studio";
@@ -18,7 +18,7 @@ export default async function HomePage() {
           <BrandMark className="size-9 shrink-0 sm:size-10" />
           <span>嗨，{greetingName(session.user)}</span>
         </h1>
-        <Composer
+        <NewConversation
           models={models.kind === "ok" ? models.models : []}
           modelsError={models.kind === "error" ? errorMessage(models.code) : ""}
         />

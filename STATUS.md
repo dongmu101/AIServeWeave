@@ -1,3 +1,21 @@
+# Studio 对话（2026-11-16）
+
+[Studio](service/aiServeWeaveStudio/README.md) 可以发送消息了：新建对话、流式回答、思考过程、重新生成、停止、历史、重命名与删除。规格见 `.scratch/studio-chat-flows/spec.md`。
+
+- **控制面**：新增 `studio_conversations`、`studio_messages` 两张表（迁移命名空间 `studio`，两种方言），以及 8 个内部接口 `/internal/v1/studio/conversations/*`（凭 `InternalToken`）。用量记录新增可选 `user_id`，只在没有 `key_id` 时采用，用于 Studio 的无 key 请求。
+- **Gateway**：`-studio` 下新增对话 CRUD 与 `POST /studio/v1/conversations/{id}/messages`（SSE）。发送在进程内走与 `/v1/chat/completions` 相同的调度路径，回答由 Gateway 写回控制面。见 [Gateway STATUS](service/aiServeWeaveGateway/STATUS.md#studio-api-与会话鉴权2026-11-16)。
+- **Studio**：引入 Vercel AI SDK（`ai` 7、`@ai-sdk/react` 4）。BFF 把 Gateway 帧翻译成 UI 消息流，自身不存储。
+
+升级须知：先迁移并升级控制面（`sql/init.sql` 已同步），再升级 Gateway。Gateway 以 `-studio` 启动时，须用 `-control-plane-token` 或 `AISW_CONTROL_PLANE_TOKEN` 提供内部令牌。
+
+已通过的检查：
+
+- Gateway 与控制面的默认测试，Gateway Studio 用例带 `-race`。控制面共享 store 契约覆盖归属隔离、分页、搜索、重新生成、幂等与过期回答、上限、删除。e2e 用真实 Gateway 客户端走通对话全流程。
+- 临时 MySQL 9.7 与 PostgreSQL 16 上的 live 用例。
+- Studio 的 lint、typecheck、33 项单元测试和生产构建；用桩上游在无头 Chromium 中走通发送、Markdown、思考过程、刷新后历史、重新生成、停止后「已中断」、拒绝后恢复输入、重命名、删除当前对话。
+
+尚未交付：附件发送、编辑后重发、服务端停止接口、异步生成标题、对话表分区与保留期、删除用户或租户时清理对话。尚未验收：接真实模型的全链路联调。
+
 # 按 token 计价：官方价 × 倍率（2026-11-16）
 
 点数计费改为参照 [sub2api](https://github.com/Wei-Shaw/sub2api) 的计价方式：**售价 = 基础价 × 模型倍率 × 方案系数**，1 点 = 1 美元。规则、运维设置与升级步骤见[按 token 计价](docs/billing-token-pricing.md)，设计与取舍见 `.scratch/token-pricing/`。

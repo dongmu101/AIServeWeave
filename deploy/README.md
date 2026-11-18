@@ -136,7 +136,8 @@ deploy/upgrade.sh
 
 跟随模式下，脚本快进代码后以新提交的 `git describe` 为 tag 拉取镜像，这正是 `make publish` 为同一提交推送的
 tag，因此代码与镜像总是出自同一个提交。版本里的哈希两边都固定为 12 位，否则 git 会按仓库大小自动决定长度。
-`make publish` 尚未完成时，拉取会失败并中止，服务不受影响，等推送完成后重跑即可。
+该提交没有 `make publish` 时，脚本不在主机上构建：沿 git 历史往回（最多 50 个提交）找镜像已全部发布的最近一个版本，
+拉取并启动它；也找不到时沿用正在运行的镜像，没有镜像的服务跳过并警告。用 `--image-tag` 固定的版本拉取失败时中止，服务不受影响。
 
 - 固定到某个版本（例如回滚）：`deploy/upgrade.sh --image-tag v0.1.0-107-g3625aafe4e56`，同时关闭跟随模式，
   恢复跟随用 `--follow`。
@@ -496,6 +497,9 @@ Gateway 重建会断开现有隧道，Agent 自动重连，无需重新注册。
 |---|---|---|---|
 | `open7x.com`、`www` | Console `:3000`，`/agent/` 转 Gateway `:8080` | 代理（橙色云） | 可用 Cloudflare Origin CA |
 | `api.open7x.com` | Gateway `:8080` | 仅 DNS（灰色云） | 必须公开受信，如 Let's Encrypt |
+| `studio.open7x.com` | Studio `:3100` | 代理（橙色云） | 可用 Cloudflare Origin CA（须覆盖该域名） |
+
+Studio 随 Compose 一起启动（Gateway 以 `-studio` 挂载 Studio API），会话密钥 `AISW_STUDIO_SESSION_SECRET` 由脚本自动生成。HTTPS 之后在 `deploy/.env` 设置 `AISW_STUDIO_COOKIE_SECURE=true`；设置 `AISW_CONSOLE_STUDIO_URL=https://studio.open7x.com` 后控制台顶栏显示 Studio 入口。
 
 API 不经过 Cloudflare 代理：非 Enterprise 方案的请求体上限为 100 MB，低于 Gateway 工作流上传的
 200 MiB；源站 100 秒内未返回响应头即返回 524，且无法调整。流式请求有心跳不受影响，非流式长请求会失败。

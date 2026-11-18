@@ -26,3 +26,15 @@ test("query parameters not on the route's list are dropped", () => {
   const params = new URLSearchParams("tenant_id=other&limit=5");
   assert.equal(resolveStudioRoute("GET", ["models"], params)?.search, "");
 });
+
+test("conversation routes are allowed with their own query parameters", () => {
+  const params = new URLSearchParams("q=go&cursor=abc&tenant_id=other");
+  assert.deepEqual(resolveStudioRoute("GET", ["conversations"], params), { method: "GET", path: "/studio/v1/conversations", search: "?q=go&cursor=abc" });
+  assert.equal(resolveStudioRoute("PATCH", ["conversations", "cnv_1"], none)?.path, "/studio/v1/conversations/cnv_1");
+  assert.equal(resolveStudioRoute("DELETE", ["conversations", "cnv_1"], none)?.path, "/studio/v1/conversations/cnv_1");
+  assert.equal(resolveStudioRoute("GET", ["conversations", "cnv_1", "messages"], new URLSearchParams("after_seq=3"))?.search, "?after_seq=3");
+});
+
+test("sending is not on the forward list: it has its own streaming route", () => {
+  assert.equal(resolveStudioRoute("POST", ["conversations", "cnv_1", "messages"], none), null);
+});

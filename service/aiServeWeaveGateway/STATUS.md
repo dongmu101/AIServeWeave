@@ -175,9 +175,14 @@ go run ./service/aiServeWeaveGateway -comfyui-managed-addr 127.0.0.1:8093 ...
   - `GET /studio/v1/models`：与同租户 key 读 `/v1/models` 的列表相同，形状为 `{data:[{id,name}]}`。
   - 未知路径返回 404。
   - 错误体统一为 `{"error":{"code","message"}}`，所有响应都带 `Cache-Control: no-store`。
-- **尚未接入**：Studio 请求还不进入请求检索。对话与编排端点见 [Studio 规格](../../.scratch/studio-chat-flows/spec.md)。
+- **对话**（`httpapi/studio_conversations.go`，存储经 `controlplaneclient/studio.go` 调控制面 `/internal/v1/studio/conversations/*`）：
+  - `GET`、`POST /studio/v1/conversations`；`GET`、`PATCH`、`DELETE /studio/v1/conversations/{id}`；`GET /studio/v1/conversations/{id}/messages`。
+  - `POST /studio/v1/conversations/{id}/messages`：body 为 `{content, model}` 或 `{regenerate: true, model}`。先校验模型在本租户可用、写入轮次，再以 SSE 返回帧 `message_start`、`thinking_delta`、`text_delta`、`usage`、`error`、`message_stop`。生成在进程内走 `/v1/chat/completions` 的同一调度路径，`X-Session-Id` 取对话 id。结束后 Gateway 用独立 context 写回回答（最多 3 次），状态为 `complete`、`incomplete`（客户端断开）或 `error`。错误帧只带固定文案，不转发上游原文。
+  - 只有发送会触发计费判断（402），读写对话不受余额影响。用量以会话的 `user_id` 归属，不带 `key_id`。
+  - 未配置存储时不挂载对话端点。`-studio` 下 `main.go` 用 `-control-plane-token`（或 `AISW_CONTROL_PLANE_TOKEN`）构建客户端。
+- **尚未接入**：Studio 请求还不进入请求检索；没有服务端停止接口（停止靠断开连接）；附件不发送。编排端点见 [Studio 规格](../../.scratch/studio-chat-flows/spec.md)。
 
-升级顺序：先升级控制面（新增内部接口），再以 `-studio` 启动 Gateway。
+升级顺序：先迁移并升级控制面（新增内部接口与 `studio` 表），再以 `-studio` 启动 Gateway。
 
 ## 工作流 Job
 

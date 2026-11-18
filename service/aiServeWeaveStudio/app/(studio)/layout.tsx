@@ -1,6 +1,6 @@
 import { StudioShell } from "@/components/studio/studio-shell";
-import { greetingName } from "@/lib/studio/contract";
-import { requireSession } from "@/lib/server/studio";
+import { errorMessage, greetingName } from "@/lib/studio/contract";
+import { loadConversations, requireSession } from "@/lib/server/studio";
 
 /**
  * The signed-in frame: sidebar plus main area. Only display fields of the
@@ -10,8 +10,16 @@ import { requireSession } from "@/lib/server/studio";
  */
 export default async function StudioLayout({ children }: LayoutProps<"/">) {
   const session = await requireSession("/");
+  const conversations = await loadConversations(session, "/");
   return (
-    <StudioShell user={{ displayName: greetingName(session.user), email: session.user.email, role: session.user.role }}>
+    <StudioShell
+      user={{ displayName: greetingName(session.user), email: session.user.email, role: session.user.role }}
+      conversations={
+        conversations.kind === "ok"
+          ? { items: conversations.page.conversations, error: "" }
+          : { items: [], error: errorMessage(conversations.code) }
+      }
+    >
       {children}
     </StudioShell>
   );

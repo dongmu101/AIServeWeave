@@ -121,6 +121,9 @@ type usageRecordWire struct {
 	// predates it refuses the field, so it must be upgraded first.
 	// KeyID 是发起请求的 API key。不认识它的旧控制面会拒绝该字段，因此须先升级控制面。
 	KeyID string `json:"key_id,omitempty"`
+	// UserID is the signed-in Studio user of a keyless request.
+	// UserID 是无 key 请求的 Studio 登录用户。
+	UserID string `json:"user_id,omitempty"`
 	// Details and Attributes break the totals down by meter and carry the
 	// request facts pricing may key on (common/pricing). Both are omitted
 	// when empty; a control plane that predates them refuses them, so it
@@ -163,6 +166,7 @@ func (c *UsageLedgerClient) PushUsageRecords(ctx context.Context, records []http
 			CreatedAt:        r.CreatedAt,
 			NodeID:           r.NodeID,
 			KeyID:            r.KeyID,
+			UserID:           r.UserID,
 			Details:          r.Details,
 			Attributes:       r.Attributes,
 		}

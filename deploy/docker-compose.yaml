@@ -459,6 +459,13 @@ services:
       # Public Gateway address the API docs print as the base URL, e.g. https://api.open7x.com.
       # API 文档示例中显示的公开 Gateway 基地址，如 https://api.open7x.com；留空时退回内部地址。
       AISW_CONSOLE_PUBLIC_GATEWAY_URL: ${AISW_CONSOLE_PUBLIC_GATEWAY_URL:-}
+      # Public Studio address linked from the console header; empty hides the entry.
+      # 控制台顶栏 Studio 入口的公开地址；留空时不显示入口。
+      AISW_CONSOLE_STUDIO_URL: ${AISW_CONSOLE_STUDIO_URL:-}
+      # Shared with Studio: seals the ticket that signs a Console user into
+      # Studio without a password. Empty makes the entry a plain link.
+      # 与 Studio 共用：密封让 Console 用户免密码登录 Studio 的票据；为空时入口只是普通链接。
+      AISW_STUDIO_HANDOFF_SECRET: ${AISW_STUDIO_HANDOFF_SECRET:-}
       # Operator facts stated on /terms, /privacy, /refund and the page footers.
       # 公开条款页与页脚陈述的营运方资讯；未设置时显示方括号占位符。
       AISW_CONSOLE_LEGAL_SERVICE_NAME: ${AISW_CONSOLE_LEGAL_SERVICE_NAME:-}
@@ -479,6 +486,45 @@ services:
       # 无凭据检查 UI，后端可用性独立判断。每次探测都新起一个 node 进程（数十 MB 内存与一次
       # CPU 尖峰），因此每分钟一次而不是每 30 秒。
       test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3000/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 60s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  studio:
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-studio:${AISW_IMAGE_TAG:-local}
+    build:
+      context: ../service/aiServeWeaveStudio
+    restart: unless-stopped
+    logging: *logging
+    mem_limit: ${STUDIO_MEM_LIMIT:-384m}
+    environment:
+      # 与 Console 相同的理由：把 V8 老生代堆限制在容器上限之下。
+      # Same reason as the Console: keep the V8 old-space heap below the container limit.
+      NODE_OPTIONS: --max-old-space-size=${STUDIO_NODE_HEAP_MB:-256}
+      AISW_STUDIO_CONTROL_PLANE_URL: http://controlplane:8090
+      # Gateway 须以 -studio 启动（见下方 gateway 的 command）。
+      # The Gateway must run with -studio (see its command below).
+      AISW_STUDIO_GATEWAY_URL: http://gateway:8080
+      AISW_STUDIO_SESSION_SECRET: ${AISW_STUDIO_SESSION_SECRET:?set it in deploy/.env — openssl rand -base64 48}
+      # 本地 Compose 使用回环 HTTP；部署在 HTTPS 之后时启用 Secure Cookie。
+      # Local Compose uses HTTP on loopback. Enable Secure cookies behind HTTPS.
+      AISW_STUDIO_COOKIE_SECURE: ${AISW_STUDIO_COOKIE_SECURE:-false}
+      # 与 Console 共用的交接密钥；AISW_STUDIO_CONSOLE_URL 可限定只接受这些 Console 来源
+      # （逗号分隔），留空时只接受同站点提交。
+      # Handoff secret shared with the Console; AISW_STUDIO_CONSOLE_URL may pin the
+      # Console origins (comma-separated); empty accepts same-site posts only.
+      AISW_STUDIO_HANDOFF_SECRET: ${AISW_STUDIO_HANDOFF_SECRET:-}
+      AISW_STUDIO_CONSOLE_URL: ${AISW_STUDIO_CONSOLE_URL:-}
+    ports:
+      - "127.0.0.1:${STUDIO_PORT:-3100}:3100"
+    depends_on:
+      controlplane:
+        condition: service_started
+      gateway:
+        condition: service_started
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:3100/login', {signal: AbortSignal.timeout(4000)}).then(r => process.exit(r.status === 200 ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 60s
       timeout: 5s
       retries: 3
@@ -520,6 +566,10 @@ services:
       - -registry-addr=registry:9443
       - -registry-ca=/registry-data/ca/ca-cert.pem
       - -control-plane-addr=http://controlplane:8090
+      # Mount /studio/v1 for the Studio service below; session tokens are
+      # verified with the control plane using AISW_CONTROL_PLANE_TOKEN.
+      # 为下面的 Studio 服务挂载 /studio/v1；会话令牌经控制面校验，凭 AISW_CONTROL_PLANE_TOKEN。
+      - -studio
       - -redis-addr=redis:6379
       # 跨副本队列（默认关闭），都依赖上面的 Redis；这里的 Redis 没有 maxmemory，等同于
       # noeviction，队列状态不会被淘汰。所有副本升级后再打开，见 Gateway STATUS「工作流 Job

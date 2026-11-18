@@ -92,6 +92,7 @@ const tenant = {
   "tenant.aiServicesModels": "KI-Dienste und Modelle",
   "tenant.workflows": "Workflows",
   "tenant.apiDocumentation": "API-Dokumentation",
+  "tenant.studio": "Studio",
   "tenant.workflowTemplates": "Vorlagen",
   "tenant.runs": "Ausführungen",
   "tenant.runHistory": "Ausführungsverlauf",

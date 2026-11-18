@@ -1,3 +1,11 @@
+## 顶栏 Studio 入口（2026-11-17）
+
+设置 `AISW_CONSOLE_STUDIO_URL`（Studio 的公开地址，可带路径前缀）后，控制台顶栏在客服链接左侧显示「Studio」，在新分页打开；未设置或不是绝对 http(s) URL 时不显示。Studio 有自己的登录，这里只是链接。实现在 `lib/server/config.ts` 的 `studioUrl`、`app/console/console-shell.tsx`；Compose 与 `deploy/.env.example` 已同步。
+
+验证：lint、typecheck、409 项单元测试与生产构建通过。未在浏览器中查看，未接真实 Studio。
+
+同时设置 `AISW_STUDIO_HANDOFF_SECRET`（与 Studio 共用）时，点击入口直接登录 Studio：点击当下打开新分页，`POST /api/studio-handoff`（同源校验）请控制面 `POST /admin/v1/auth/session/handoff` 另签一个独立会话，密封成 60 秒有效的票据（`lib/console/studio-handoff.ts`，与 Studio 的 `lib/studio/handoff-ticket.ts` 内容相同），浏览器以表单 POST 提交到 Studio 的 `/api/session/handoff`。浏览器只见密文；退出任一边不影响另一边。失败时新分页落到 Studio 登录页。未设置密钥时入口是普通链接。验证：lint、typecheck、tsc6、413 项单元测试与生产构建通过；未在浏览器中走通。
+
 ## 按 token 计价的运维与租户页面（2026-11-16）
 
 配合控制面的[按 token 计价](../../docs/billing-token-pricing.md)：

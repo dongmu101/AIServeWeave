@@ -35,7 +35,11 @@ export function jsonResponse(status: number, body: unknown): Response {
  * rawJsonResponse 原样转发一个上游的 JSON 文档。
  */
 export function rawJsonResponse(status: number, text: string): Response {
-  return new Response(text, { status, headers: headers() });
+  // A null-body status (204 from a delete) must not carry even an empty body:
+  // the Response constructor throws on one.
+  // 无响应体的状态（删除返回的 204）连空响应体都不能带：Response 构造函数会因此抛错。
+  const bodyless = status === 204 || status === 205 || status === 304;
+  return new Response(bodyless ? null : text, { status, headers: headers() });
 }
 
 /**

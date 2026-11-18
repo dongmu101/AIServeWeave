@@ -713,6 +713,12 @@ type UsageRecordRequest struct {
 	//
 	// KeyID 是发起请求的 API key；控制面据此解析出 key 的创建者。
 	KeyID string `json:"key_id,omitempty"`
+	// UserID is the signed-in user of a Studio request, which has no key.
+	// It is ignored when KeyID is set: the key's creator wins.
+	//
+	// UserID 是 Studio 请求的登录用户，这类请求没有 key。KeyID 非空时忽略它，以 key 的
+	// 创建者为准。
+	UserID string `json:"user_id,omitempty"`
 	// Details breaks the totals down by meter and Attributes carries the
 	// request facts pricing may key on (common/pricing). A record whose
 	// details or attributes break the limits keeps its totals and loses

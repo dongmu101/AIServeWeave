@@ -24,6 +24,8 @@ const (
 	PrefixCheckoutOrder    = "ord_"
 	PrefixCreditLedger     = "led_"
 	PrefixRefundRequest    = "rfd_"
+	PrefixConversation     = "cnv_"
+	PrefixMessage          = "msg_"
 )
 
 // IDSize is the column width, in characters, of every column that holds an

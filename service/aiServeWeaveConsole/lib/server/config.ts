@@ -1,4 +1,5 @@
 import { deriveSessionKey } from "@/lib/console/session-payload";
+import { handoffKey } from "@/lib/console/studio-handoff";
 
 /**
  * This module reads the Console server's configuration. Nothing here is
@@ -184,6 +185,54 @@ export function publicGatewayUrl(): string {
     return gatewayUrl();
   } catch {
     return DEFAULT_GATEWAY_URL;
+  }
+}
+
+/** studioUrl is the public address of Studio, the separate chat workspace the
+ * console header links to. Studio is its own service with its own sign-in, so
+ * this is only a link; unset or malformed, there is no entry to show and it
+ * returns null. Like publicGatewayUrl it keeps a path prefix.
+ *
+ * studioUrl 是 Studio 的公开地址，控制台顶栏链接到这个独立的对话工作台。Studio 是
+ * 单独的服务、有自己的登录，这里只是一个链接；未设置或格式不对时没有入口可显示，返回
+ * null。与 publicGatewayUrl 一样保留路径前缀。 */
+export function studioUrl(): string | null {
+  const raw = process.env.AISW_CONSOLE_STUDIO_URL?.trim();
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+      return `${parsed.origin}${parsed.pathname.replace(/\/+$/, "")}`;
+    }
+  } catch {
+    // Fall through to no entry. / 退回为不显示入口。
+  }
+  console.warn("[console] AISW_CONSOLE_STUDIO_URL is not an absolute http(s) URL; the Studio entry is hidden.");
+  return null;
+}
+
+/** studioHandoff is what signing into Studio from the Console needs: where
+ * Studio receives the ticket and the key that seals it. Both
+ * AISW_CONSOLE_STUDIO_URL and AISW_STUDIO_HANDOFF_SECRET (shared with Studio)
+ * must be set; otherwise it is null and the entry is a plain link to Studio's
+ * sign-in.
+ *
+ * studioHandoff 是从 Console 登录 Studio 所需的：Studio 接收票据的地址与密封票据的
+ * 密钥。须同时设置 AISW_CONSOLE_STUDIO_URL 与 AISW_STUDIO_HANDOFF_SECRET（与 Studio
+ * 共用）；否则为 null，入口只是指向 Studio 登录页的普通链接。 */
+export function studioHandoff(): { action: string; key: Buffer } | null {
+  const base = studioUrl();
+  const secret = process.env.AISW_STUDIO_HANDOFF_SECRET?.trim();
+  if (!base || !secret) {
+    return null;
+  }
+  try {
+    return { action: `${base}/api/session/handoff`, key: handoffKey(secret) };
+  } catch {
+    console.warn("[console] AISW_STUDIO_HANDOFF_SECRET is shorter than 32 characters; the Studio entry falls back to Studio's sign-in.");
+    return null;
   }
 }
 

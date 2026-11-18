@@ -8,7 +8,9 @@ import { BillingDisabled } from "@/components/console/billing-tables";
 import { ConfirmDialog } from "@/components/console/confirm-dialog";
 import { EmptyState, ErrorState, FormError, LoadingState } from "@/components/console/states";
 import { SubmitButton } from "@/components/console/submit-button";
+import { Pager } from "@/components/console/pager";
 import { useConsoleRequest } from "@/components/console/use-console-request";
+import { usePagedResource } from "@/components/console/use-paged-resource";
 import { useResource } from "@/components/console/use-resource";
 import { ErrorMessage } from "@/components/i18n/error-message";
 import { Message } from "@/components/i18n/message";
@@ -20,7 +22,11 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { formatCredits } from "@/lib/console/billing";
+import { CATALOG_HISTORY_ACTIONS, parseCatalogHistoryDetail, type CatalogHistoryAction } from "@/lib/console/catalog-history";
+import { parseAuditEntries, parsePlatformOperators, type AuditEntry } from "@/lib/console/contract";
 import { formatDateTime } from "@/lib/console/format";
+import { parseGatewaySnapshot, type FleetSnapshot } from "@/lib/console/fleet";
+import { parseRouteSnapshot } from "@/lib/console/model-routes";
 import {
   catalogItems,
   EDITED_METERS,
@@ -242,6 +248,7 @@ export function PricingSection() {
       key={editing.nonce}
       alias={editing.alias}
       setting={editing.alias ? settings.get(editing.alias) ?? null : null}
+      configured={settings}
       revision={cfg.revision.id}
       onClose={() => setEditing(null)}
       onSaved={reload}
@@ -398,9 +405,10 @@ function DefaultPriceDialog({ prices, revision, onClose, onSaved }: { prices: Pr
  * model rate, or clears its settings.
  *
  * ModelPricingDialog 设置一个别名的参照模型、覆盖价与模型倍率，或清除其设置。 */
-function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
+function ModelPricingDialog({ alias, setting, configured, revision, onClose, onSaved }: {
   alias: string | null;
   setting: PricingModel | null;
+  configured: ReadonlyMap<string, PricingModel>;
   revision: number;
   onClose: () => void;
   onSaved: () => void;
@@ -417,6 +425,24 @@ function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
   const [error, setError] = React.useState<React.ReactNode>(null);
   const [removing, setRemoving] = React.useState(false);
   const search = React.useDeferredValue(reference.trim());
+  // Only a new alias offers a pick list: published route aliases that have
+  // no pricing settings yet. Picking an already configured one would
+  // overwrite it with blank fields, so those are edited from the table.
+  // 只有新建别名时提供选择列表：已发布、尚未有定价设置的路由别名。选择已配置的
+  // 别名会用空白字段覆盖原设置，因此它们只从表格里编辑。
+  const routes = useResource({ method: "GET", surface: "operator", path: "/operator/v1/routes", parse: parseRouteSnapshot });
+  // Node-reported model ids are offered too: a request may name one
+  // directly when no route covers it.
+  // 也提供节点上报的模型 id：没有路由覆盖时，请求可以直接使用它。
+  const fleet = useResource<FleetSnapshot>({ method: "GET", surface: "operator", path: "/operator/v1/nodes", query: { gateway: "default" }, parse: parseGatewaySnapshot });
+  const routeChoices = React.useMemo(() => [...new Set((routes.data?.routes ?? []).map((route) => route.model))].filter((name) => !configured.has(name)).sort(), [routes.data, configured]);
+  const nodeChoices = React.useMemo(() => {
+    const runtimes = [...(fleet.data?.replicas[0]?.localRuntimes ?? []), ...(fleet.data?.nodes ?? []).flatMap((node) => node.runtimes)];
+    const taken = new Set(routeChoices);
+    return [...new Set(runtimes.flatMap((rt) => rt.models.map((m) => m.id)))].filter((name) => name !== "" && !taken.has(name) && !configured.has(name)).sort();
+  }, [fleet.data, routeChoices, configured]);
+  const choices = React.useMemo(() => [...routeChoices, ...nodeChoices], [routeChoices, nodeChoices]);
+  const choicesLoaded = routes.data !== null || routes.error !== null;
   const matches = useResource<CatalogPage>({
     method: "GET", surface: "operator", path: "/operator/v1/billing/catalog",
     query: { q: search, limit: "8" }, parse: parseCatalogPage,
@@ -451,6 +477,22 @@ function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
     if (alias === null && (name === "" || new TextEncoder().encode(name).length > 128)) {
       setError(<Message id="operator.billingProblemModel" />);
       return;
+    }
+    // The control plane refuses a reference the catalog lacks with a bare
+    // 400, so it is checked here first to name the cause.
+    // 控制面对价目表中不存在的参照模型只返回笼统的 400，因此先在这里检查，以便说明原因。
+    const ref = reference.trim();
+    if (ref !== "") {
+      try {
+        const page = await run({ method: "GET", surface: "operator", path: "/operator/v1/billing/catalog", query: { q: ref, limit: "1" }, parse: parseCatalogPage });
+        if (!page.items.some((item) => item.model === ref)) {
+          setError(t("operator.pricingReferenceMissing", { model: ref }));
+          return;
+        }
+      } catch {
+        // Left to the control plane, which checks it again on save.
+        // 交给控制面，它在保存时会再检查一次。
+      }
     }
     const ratePPM = parseRateInput(rate);
     if (ratePPM === null) {
@@ -493,7 +535,13 @@ function ModelPricingDialog({ alias, setting, revision, onClose, onSaved }: {
         </DialogHeader>
         <div className="grid gap-1">
           <label htmlFor="pricing-model" className="text-sm font-medium"><Message id="operator.billingModel" /></label>
+          {alias === null ? <select aria-label={t("operator.pricingAliasPick")} className={SELECT_CLASS} value={choices.includes(model.trim()) ? model.trim() : ""} disabled={pending || choices.length === 0} onChange={(e) => setModel(e.target.value)}>
+            <option value="">{!choicesLoaded ? t("operator.loading") : choices.length > 0 ? t("operator.pricingAliasPick") : t("operator.pricingAliasNoChoices")}</option>
+            {routeChoices.length > 0 ? <optgroup label={t("operator.pricingAliasGroupRoutes")}>{routeChoices.map((name) => <option key={name} value={name}>{name}</option>)}</optgroup> : null}
+            {nodeChoices.length > 0 ? <optgroup label={t("operator.pricingAliasGroupNodes")}>{nodeChoices.map((name) => <option key={name} value={name}>{name}</option>)}</optgroup> : null}
+          </select> : null}
           <Input id="pricing-model" value={model} onChange={(e) => setModel(e.target.value)} disabled={pending || alias !== null} autoComplete="off" spellCheck={false} />
+          {alias === null && choicesLoaded ? <p className="text-xs text-muted-foreground"><Message id={choices.length > 0 ? "operator.pricingAliasHint" : "operator.pricingAliasNone"} /></p> : null}
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-reference" className="text-sm font-medium"><Message id="operator.pricingReference" /></label>
@@ -556,8 +604,10 @@ export function CatalogReviewSection({ pending }: { pending: ReturnType<typeof u
   const run = useConsoleRequest();
   const [deciding, setDeciding] = React.useState<{ item: CatalogPending; approve: boolean } | null>(null);
 
+  const [historyNonce, setHistoryNonce] = React.useState(0);
+
   if (pending.errorKind === "not_found") return <BillingDisabled />;
-  return <Card>
+  return <div className="grid gap-4"><Card>
     <CardHeader><CardTitle><Message id="operator.billingCatalogReview" /></CardTitle></CardHeader>
     <CardContent className="grid gap-3">
       <p className="text-sm text-muted-foreground"><Message id="operator.reviewHint" /></p>
@@ -610,11 +660,76 @@ export function CatalogReviewSection({ pending }: { pending: ReturnType<typeof u
           await run({ method: "POST", surface: "operator", path, body: { model: deciding.item.model }, parse: parseCatalogDecision });
         } finally {
           pending.reload();
+          setHistoryNonce((n) => n + 1);
         }
         toast.success(<Message id={deciding.approve ? "operator.reviewApproved" : "operator.reviewRejected"} />);
         setDeciding(null);
       }}
     />
+  </Card>
+  <CatalogHistorySection key={historyNonce} />
+  </div>;
+}
+
+const HISTORY_LABELS: Record<CatalogHistoryAction, MessageKey> = {
+  "billing.catalog.approve": "operator.reviewHistoryApproved",
+  "billing.catalog.reject": "operator.reviewHistoryRejected",
+  "billing.catalog.auto_apply": "operator.reviewHistoryAutoApplied",
+};
+
+/**
+ * CatalogHistorySection lists past catalog decisions of one kind from the
+ * platform audit log, with who made them. Operator ids are shown by name
+ * when they are on the first page of operator accounts.
+ *
+ * CatalogHistorySection 从平台审计日志列出某一类过往的价目表决定及其操作人。操作人 id
+ * 在运维账户第一页中能找到时显示为名称。
+ */
+function CatalogHistorySection() {
+  const { t, locale } = useI18n();
+  const [action, setAction] = React.useState<CatalogHistoryAction>("billing.catalog.approve");
+  const history = usePagedResource<AuditEntry>({ path: "/operator/v1/audit", surface: "operator", filters: { action }, pageSize: 25, parse: parseAuditEntries });
+  const operators = useResource({ method: "GET", surface: "operator", path: "/operator/v1/operators", query: { limit: "200" }, parse: parsePlatformOperators });
+  const names = React.useMemo(() => new Map((operators.data?.items ?? []).map((op) => [op.id, op.name ? `${op.name} (${op.email})` : op.email])), [operators.data]);
+  const credits = (value: number | null) => (value === null ? "—" : formatCredits(value, locale));
+
+  return <Card>
+    <CardHeader className="flex flex-row flex-wrap items-center justify-between gap-2">
+      <CardTitle><Message id="operator.reviewHistory" /></CardTitle>
+      <select aria-label={t("operator.reviewHistory")} className={`${SELECT_CLASS} h-8 w-auto`} value={action} onChange={(e) => setAction(e.target.value as CatalogHistoryAction)}>
+        {CATALOG_HISTORY_ACTIONS.map((value) => <option key={value} value={value}>{t(HISTORY_LABELS[value])}</option>)}
+      </select>
+    </CardHeader>
+    <CardContent className="grid gap-3">
+      <p className="text-sm text-muted-foreground"><Message id="operator.reviewHistoryHint" /></p>
+      {history.error ? <ErrorState message={history.error} onRetry={history.reload} /> : !history.items ? <LoadingState label={t("operator.loading")} rows={2} /> : history.items.length === 0 ? <EmptyState title={t("operator.reviewHistoryEmpty")} /> : <Table>
+        <TableHeader><TableRow>
+          <TableHead><Message id="tenant.time" /></TableHead>
+          <TableHead><Message id="operator.billingModel" /></TableHead>
+          <TableHead><Message id="operator.reviewHistoryActor" /></TableHead>
+          <TableHead className="text-right"><Message id="operator.reviewHistoryInput" /></TableHead>
+          <TableHead className="text-right"><Message id="operator.reviewHistoryOutput" /></TableHead>
+          <TableHead>IP</TableHead>
+        </TableRow></TableHeader>
+        <TableBody>{history.items.map((entry) => {
+          const detail = parseCatalogHistoryDetail(entry.detail);
+          const priced = action === "billing.catalog.approve";
+          return <TableRow key={entry.id}>
+            <TableCell className="whitespace-nowrap text-xs">{formatDateTime(entry.createdAt, undefined, locale)}</TableCell>
+            <TableCell className="max-w-64"><span className="flex flex-wrap items-center gap-2">
+              <code className="text-xs break-all">{entry.target}</code>
+              {detail.kind === "remove" ? <Badge variant="destructive">{t("operator.reviewKindRemove")}</Badge> : detail.kind === "change" ? <Badge variant="secondary">{t("operator.reviewKindChange")}</Badge> : null}
+              {detail.maxChange ? <span className="text-xs text-muted-foreground">{t("operator.reviewMaxChange", { change: detail.maxChange })}</span> : null}
+            </span></TableCell>
+            <TableCell className="max-w-56 text-xs break-all">{entry.actorId === "" ? t("operator.reviewHistorySystem") : names.get(entry.actorId) ?? <code>{entry.actorId}</code>}</TableCell>
+            <TableCell className="text-right font-mono whitespace-nowrap text-xs">{priced ? `${credits(detail.inputBefore)} → ${credits(detail.inputAfter)}` : "—"}</TableCell>
+            <TableCell className="text-right font-mono whitespace-nowrap text-xs">{priced ? `${credits(detail.outputBefore)} → ${credits(detail.outputAfter)}` : "—"}</TableCell>
+            <TableCell className="font-mono text-xs">{entry.ip || "—"}</TableCell>
+          </TableRow>;
+        })}</TableBody>
+      </Table>}
+      <Pager resource={history} loadedCount={history.items?.length ?? 0} />
+    </CardContent>
   </Card>;
 }
 

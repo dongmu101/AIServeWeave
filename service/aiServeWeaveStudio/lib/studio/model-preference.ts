@@ -14,3 +14,16 @@ export function pickModel(models: { id: string }[], stored: string | null): stri
   if (stored && models.some((model) => model.id === stored)) return stored;
   return models[0]?.id ?? "";
 }
+
+/** chooseModel picks the first candidate still offered, else the first
+ * model. A conversation passes its own model before the stored preference,
+ * so continuing it keeps the model it was using.
+ *
+ * chooseModel 取第一个仍在列表中的候选，否则取第一个模型。对话会把自己的模型放在已存
+ * 偏好之前，因此继续对话时沿用它原来的模型。 */
+export function chooseModel(models: { id: string }[], ...candidates: Array<string | null | undefined>): string {
+  for (const candidate of candidates) {
+    if (candidate && models.some((model) => model.id === candidate)) return candidate;
+  }
+  return models[0]?.id ?? "";
+}

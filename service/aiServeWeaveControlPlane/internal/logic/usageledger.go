@@ -41,6 +41,11 @@ type CreateUsageRecordParams struct {
 	//
 	// KeyID 是发起请求的 API key，没有则为空。
 	KeyID string
+	// UserID is the signed-in user of a keyless (Studio) request. It is used
+	// only when KeyID is empty.
+	//
+	// UserID 是无 key 请求（Studio）的登录用户，只在 KeyID 为空时使用。
+	UserID string
 	// Details and Attributes are the Gateway's meter breakdown and request
 	// facts (common/pricing), or nil.
 	//
@@ -88,11 +93,16 @@ func (s *Service) CreateUsageRecords(ctx context.Context, batch []CreateUsageRec
 			continue
 		}
 		if len(p.RequestID) > maxUsageRequestID || len(p.TenantID) > maxUsageTenantID ||
-			len(p.Model) > maxUsageModel || len(p.Endpoint) > maxUsageEndpoint || len(p.KeyID) > maxUsageKeyID {
+			len(p.Model) > maxUsageModel || len(p.Endpoint) > maxUsageEndpoint || len(p.KeyID) > maxUsageKeyID || len(p.UserID) > model.IDSize {
 			slog.Warn("skipping a usage record too long for its columns", slog.String("tenant_id", truncate(p.TenantID, maxUsageTenantID)))
 			continue
 		}
+		userID := ""
+		if p.KeyID == "" {
+			userID = p.UserID
+		}
 		record := model.UsageRecord{
+			UserID:           userID,
 			ID:               p.RequestID,
 			TenantID:         p.TenantID,
 			Model:            p.Model,

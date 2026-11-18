@@ -57,6 +57,8 @@ type Store struct {
 	jobs                 map[string]model.Job
 	artifacts            map[string]model.JobArtifact
 	responseTurns        map[string]model.ResponseTurn
+	studioConversations  map[string]model.StudioConversation
+	studioMessages       map[string][]model.StudioMessage
 	metricsHistory       []model.MetricsHistoryPoint
 	requestLogs          map[string]model.RequestLog
 	usageRecords         map[string]model.UsageRecord
@@ -88,6 +90,8 @@ func New() *Store {
 		jobs:                 map[string]model.Job{},
 		artifacts:            map[string]model.JobArtifact{},
 		responseTurns:        map[string]model.ResponseTurn{},
+		studioConversations:  map[string]model.StudioConversation{},
+		studioMessages:       map[string][]model.StudioMessage{},
 		requestLogs:          map[string]model.RequestLog{},
 		usageRecords:         map[string]model.UsageRecord{},
 		alertRules:           map[string]model.AlertRule{},

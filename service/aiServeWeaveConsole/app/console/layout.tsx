@@ -6,6 +6,7 @@ import { ConsoleShell } from "@/app/console/console-shell";
 import { SiteFooter } from "@/components/site/site-footer";
 import { SiteHeader } from "@/components/site/site-header";
 import { PUBLIC_DOCS_HEADER, PUBLIC_DOCS_ROOT } from "@/lib/console/public-docs";
+import { studioHandoff, studioUrl } from "@/lib/server/config";
 import { readSession } from "@/lib/server/session";
 
 /**
@@ -53,8 +54,16 @@ export default async function ConsoleLayout({
   }
 
   return (
-    <ConsoleShell user={session.user}>
+    <ConsoleShell user={session.user} studio={studioEntry()}>
       {children}
     </ConsoleShell>
   );
+}
+
+/** studioEntry describes the header's Studio entry, or null to hide it.
+ *
+ * studioEntry 描述顶栏的 Studio 入口；为 null 时不显示。 */
+function studioEntry(): { url: string; handoff: boolean } | null {
+  const url = studioUrl();
+  return url ? { url, handoff: studioHandoff() !== null } : null;
 }
