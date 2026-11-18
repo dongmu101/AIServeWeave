@@ -233,6 +233,8 @@ Playwright 结果、失败截图与 trace 位于 `test-results/`，指定窄屏�
 
 `/operator/audit` 经 `GET /operator/v1/audit` 查询平台范围，支持动作、操作者、时间与游标分页，不依赖 Fleet/Registry 配置。审计沿用控制面现有的尽力写入语义，不是完整事务账本。
 
+`/operator/usage` 经 `GET /operator/v1/usage/summary` 每个时间窗口读取一次跨租户汇总（不带 `tenant_id`），在页面内按租户与按模型折叠：顶部为总 token、输入（含缓存读写）、输出、请求数与开启计费时的消耗点数，下方「按租户 / 按模型」两张表带占比条与合计行。时间窗口提供全部、近 7 天、近 30 天与自定义；点击租户名称或用租户选择器收窄到单个租户，切换时间窗口时保留所选租户。租户名称取自 `GET /operator/v1/tenants` 第一页（200 条），不在其中或读取失败时显示租户 ID。
+
 ## 模型与路由管理（C24 / P02）
 
 `/operator/models` 直接展示当前 Gateway 上报的本地 AI 模型与后端连接，使用 `GET /operator/v1/nodes?gateway=default`，对应控制面 `Fleet.Gateways` 中第一个 Gateway（默认 Compose 中只有一个 Gateway）。“Gateway 本机 AI 服务”区域显示各副本 `local_runtimes` 中的 Ollama/vLLM 服务，即使未连接 Agent 也可见；本机服务支持搜索，与 Agent 清单单独展示。本机发现仅提供清单，通过 Gateway API 推理仍需接入 Agent；容器回环地址指容器自身，Compose 显式配置宿主机发现端点，可通过 `GATEWAY_LOCAL_OLLAMA_URL` / `GATEWAY_LOCAL_VLLM_URL` 覆盖。页面显示 Gateway 标识与地址、节点在线状态、Agent 版本和心跳，以及后端类型、服务地址、健康状态、版本、检查延迟、发现时间、模型 ID 和上报能力。支持搜索、在线节点筛选、手动刷新和每 15 秒自动刷新，后台标签页暂停刷新。仅查询此 Gateway 的观测，不混入其他副本的节点、模型或健康状态；该 Gateway 不可读时显示错误并移除旧数据，不将失败显示为零连接。平台页沿用现有“模型”导航与平台会话；租户另有独立的裁剪目录入口。后端健康与模型存在不代表已配置路由或可调度；调用名称与范围仍以模型路由为准。
