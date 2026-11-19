@@ -346,7 +346,7 @@ func (s *studioConversations) send(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	question := history[len(history)-1]
-	replyID := studioMessagePrefix + idgen.MustNew()
+	replyID := studioMessagePrefix + idgen.New()
 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache, no-store")

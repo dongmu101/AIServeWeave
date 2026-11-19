@@ -435,4 +435,4 @@ func (r *Runtime) Rerank(context.Context, runtime.RerankRequest) (runtime.Rerank
 	return runtime.RerankResponse{}, r.wrap("rerank", errUnsupported)
 }
 
-func randomHex() string { return idgen.MustNew() }
+func randomHex() string { return idgen.New() }

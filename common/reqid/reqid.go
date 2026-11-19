@@ -20,20 +20,12 @@ import (
 type contextKey struct{}
 
 // New returns a fresh id from idgen: a UUIDv7 as 32 hex characters, so
-// request ids sort in the order they were minted. A broken OS entropy source
-// is not a condition worth crashing a request over, so it falls back to a
-// fixed sentinel instead of panicking — degraded correlation for one request
-// beats a downed handler.
+// request ids sort in the order they were minted.
 //
 // New 返回一个由 idgen 铸造的新 id：32 位十六进制的 UUIDv7，因此请求 id 按铸造顺序
-// 排序。操作系统熵源损坏不值得让一次请求崩溃，因此退化为一个固定哨兵值而不是
-// panic——一次请求关联能力下降，好过 handler 被打挂。
+// 排序。
 func New() string {
-	id, err := idgen.New()
-	if err != nil {
-		return "unavailable"
-	}
-	return id
+	return idgen.New()
 }
 
 // WithValue attaches id to ctx.

@@ -179,11 +179,7 @@ func NewTenantNodeID(tenantID string) (string, error) {
 		len(TenantNodePrefix)+len(tenantID)+1+tenantNodeSuffixLen > MaxIDBytes {
 		return "", errors.New("nodeaccess: tenant id cannot own a node")
 	}
-	suffix, err := idgen.New()
-	if err != nil {
-		return "", errors.New("nodeaccess: random source failed")
-	}
-	return TenantNodePrefix + tenantID + "." + suffix, nil
+	return TenantNodePrefix + tenantID + "." + idgen.New(), nil
 }
 
 // OwnerOf reports whether nodeID is tenant-owned and, if so, which tenant owns

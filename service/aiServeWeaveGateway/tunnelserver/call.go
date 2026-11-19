@@ -5,7 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"strconv"
 	"sync"
 	"time"
 
@@ -456,12 +455,5 @@ func slotDeathError(cause error) error {
 // is a UUIDv7 rather than a counter because it appears in both sides' logs and
 // must not leak how many requests a replica has served.
 func newRequestID() string {
-	id, err := idgen.New()
-	if err != nil {
-		// crypto/rand failing is not a condition a request can recover
-		// from, but a correlation id is not worth killing a request over:
-		// fall back to a value that is still unique per process.
-		return "req-" + strconv.FormatInt(time.Now().UnixNano(), 36)
-	}
-	return id
+	return idgen.New()
 }

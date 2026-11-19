@@ -40,20 +40,10 @@ const IDSize = 40
 
 // NewID mints an identifier with the given prefix: the prefix followed by an
 // idgen UUIDv7, so ids of one entity sort in creation order and new rows land
-// at the right edge of the primary-key index. It panics only if the system's
-// random source fails, which is not a condition this service can serve
-// through: an id from a degraded source risks colliding with an existing row,
-// and a control plane that quietly writes over another tenant's record is
-// worse than one that stops.
+// at the right edge of the primary-key index.
 //
 // NewID 用给定前缀铸造一个标识符：前缀加一个 idgen UUIDv7，因此同一实体的 id 按创建
-// 顺序排序，新行落在主键索引的右端。仅当系统随机源失败时才 panic，而那不是本服务可以
-// 带病继续服务的情况：来自降级随机源的 id 有与既有行碰撞的风险，而一个悄悄覆盖了
-// 另一个租户记录的控制面，比一个停下来的控制面更糟。
+// 顺序排序，新行落在主键索引的右端。
 func NewID(prefix string) string {
-	id, err := idgen.New()
-	if err != nil {
-		panic("controlplane: the system random source failed while minting an id: " + err.Error())
-	}
-	return prefix + id
+	return prefix + idgen.New()
 }

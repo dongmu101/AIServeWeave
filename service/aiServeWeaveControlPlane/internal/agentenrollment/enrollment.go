@@ -128,12 +128,8 @@ type Credential struct {
 //
 // NewNodeID 返回形如 node_<32 位十六进制> 的节点 ID，十六进制部分是 idgen 铸造的
 // UUIDv7。
-func NewNodeID() (string, error) {
-	id, err := idgen.New()
-	if err != nil {
-		return "", errors.New("agentenrollment: identity generation failed")
-	}
-	return "node_" + id, nil
+func NewNodeID() string {
+	return "node_" + idgen.New()
 }
 
 // MintCredential issues a token bound to nodeID without building an archive.
@@ -164,11 +160,7 @@ func (s *Service) MintCredential(ctx context.Context, nodeID string, ttl time.Du
 //
 // Create 分配随机新节点 ID 后签发绑定令牌。地址仅写入下载内容，绝不作为服务端网络目标。
 func (s *Service) Create(ctx context.Context, registry, gateway string, ttl time.Duration) (Bundle, error) {
-	nodeID, err := NewNodeID()
-	if err != nil {
-		return Bundle{}, err
-	}
-	return s.CreateNode(ctx, nodeID, registry, gateway, ttl)
+	return s.CreateNode(ctx, NewNodeID(), registry, gateway, ttl)
 }
 
 // CreateNode is Create for a node ID the caller already chose, such as a

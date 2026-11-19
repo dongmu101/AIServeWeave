@@ -241,10 +241,7 @@ func (r *Redis) Acquire(ctx context.Context, tenantID string, limits quota.Limit
 	if limits.Unlimited() {
 		return noopLease{}, nil
 	}
-	leaseID, err := newLeaseID()
-	if err != nil {
-		return nil, err
-	}
+	leaseID := idgen.New()
 	now := r.clock.Now().UnixMilli()
 
 	raw, err := acquireScript.Run(ctx, r.client,
@@ -326,12 +323,4 @@ func (l *redisLease) Release(ctx context.Context, tokens int) {
 	l.once.Do(func() {
 		_ = l.owner.release(ctx, l.tenantID, l.leaseID, l.limits, tokens)
 	})
-}
-
-func newLeaseID() (string, error) {
-	id, err := idgen.New()
-	if err != nil {
-		return "", fmt.Errorf("ratelimit: generating a lease id: %w", err)
-	}
-	return id, nil
 }

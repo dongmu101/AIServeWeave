@@ -376,6 +376,5 @@ func (q *Queue) storeError(op string, err error) {
 }
 
 func newTicketID() string {
-	id, _ := idgen.New()
-	return id
+	return idgen.New()
 }

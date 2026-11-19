@@ -1,39 +1,33 @@
 package idgen_test
 
 import (
-	"encoding/hex"
 	"testing"
-
-	"github.com/google/uuid"
+	"uuid"
 
 	"AIServeWeave/common/idgen"
 )
 
 func TestNewIsHexUUIDv7(t *testing.T) {
-	id, err := idgen.New()
-	if err != nil {
-		t.Fatal(err)
-	}
+	id := idgen.New()
 	if len(id) != idgen.Len {
 		t.Fatalf("len(New()) = %d, want %d", len(id), idgen.Len)
 	}
-	raw, err := hex.DecodeString(id)
+	u, err := uuid.Parse(id)
 	if err != nil {
-		t.Fatalf("New() = %q is not hex: %v", id, err)
+		t.Fatalf("New() = %q is not a hex UUID: %v", id, err)
 	}
-	u, err := uuid.FromBytes(raw)
-	if err != nil {
-		t.Fatal(err)
+	if v := u[6] >> 4; v != 7 {
+		t.Errorf("New() = %q has version %d, want 7", id, v)
 	}
-	if u.Version() != 7 || u.Variant() != uuid.RFC4122 {
-		t.Errorf("New() = %q has version %d variant %v, want 7 RFC4122", id, u.Version(), u.Variant())
+	if u[8]&0xc0 != 0x80 {
+		t.Errorf("New() = %q has variant bits %02b, want 10 (RFC 9562)", id, u[8]>>6)
 	}
 }
 
 func TestNewSortsInMintOrder(t *testing.T) {
-	prev := idgen.MustNew()
+	prev := idgen.New()
 	for range 10000 {
-		next := idgen.MustNew()
+		next := idgen.New()
 		if next <= prev {
 			t.Fatalf("id %q minted after %q does not sort after it", next, prev)
 		}

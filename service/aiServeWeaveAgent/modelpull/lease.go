@@ -87,7 +87,7 @@ func (l *Ledger) newLease(path string, base, quotaBytes, sizeHint int64) *ledger
 	if chunk < minLeaseBytes {
 		chunk = minLeaseBytes
 	}
-	leaseID, _ := idgen.New()
+	leaseID := idgen.New()
 	return &ledgerLease{
 		ledger:     l,
 		id:         leaseID,

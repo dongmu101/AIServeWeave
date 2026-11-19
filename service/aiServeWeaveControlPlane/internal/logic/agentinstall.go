@@ -130,10 +130,7 @@ func (s *Service) CreateOperatorInstall(ctx context.Context, actor Actor, regist
 	if !agentenrollment.ValidAddress(registry) || !agentenrollment.ValidAddress(gateway) {
 		return InstallIssue{}, ErrInvalidInput
 	}
-	nodeID, err := agentenrollment.NewNodeID()
-	if err != nil {
-		return InstallIssue{}, ErrUnavailable
-	}
+	nodeID := agentenrollment.NewNodeID()
 	if ttl < 15*time.Minute || ttl > 24*time.Hour || (credential != "" && credential != InstallCredentialCode && credential != InstallCredentialToken) {
 		return InstallIssue{}, ErrInvalidInput
 	}

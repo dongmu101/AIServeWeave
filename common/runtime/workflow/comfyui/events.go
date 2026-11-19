@@ -74,14 +74,7 @@ func newEventMux(client *Client, dialer runtime.WSDialer, clock runtime.Clock, l
 // submission, so the server only streams back events for work this instance
 // submitted.
 func newClientID() string {
-	id, err := idgen.New()
-	if err != nil {
-		// crypto/rand failing is not recoverable here, and a fixed id would
-		// silently mix two Agents' event streams together; the timestamp
-		// keeps them distinct without pretending to be random.
-		return "aiserveweave-" + time.Now().UTC().Format("20060102150405.000000000")
-	}
-	return id
+	return idgen.New()
 }
 
 // ensureConnected dials the event stream if it is not already running. It

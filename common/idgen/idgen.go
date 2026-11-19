@@ -18,8 +18,7 @@ package idgen
 
 import (
 	"encoding/hex"
-
-	"github.com/google/uuid"
+	"uuid"
 )
 
 // Len is the length of an id returned by New.
@@ -27,27 +26,13 @@ import (
 // Len 是 New 返回的 id 的长度。
 const Len = 32
 
-// New returns a fresh UUIDv7 as 32 hex characters. Within one process the ids
-// it returns are strictly increasing, even inside one millisecond. It fails
-// only when the system random source does.
+// New returns a fresh UUIDv7 from the standard library uuid package as 32 hex
+// characters. The ids it returns sort in mint order unless the system clock
+// moves backwards.
 //
-// New 返回一个新的 UUIDv7，形式为 32 位十六进制。同一进程内返回的 id 严格递增，同一
-// 毫秒内也是如此。仅当系统随机源失败时返回错误。
-func New() (string, error) {
-	u, err := uuid.NewV7()
-	if err != nil {
-		return "", err
-	}
-	return hex.EncodeToString(u[:]), nil
-}
-
-// MustNew is New for callers that cannot serve through a broken random source.
-//
-// MustNew 是 New 的变体，供无法在随机源损坏时继续服务的调用方使用。
-func MustNew() string {
-	id, err := New()
-	if err != nil {
-		panic("idgen: the system random source failed: " + err.Error())
-	}
-	return id
+// New 返回一个由标准库 uuid 包铸造的新 UUIDv7，形式为 32 位十六进制。除非系统时钟
+// 回拨，返回的 id 按铸造顺序排序。
+func New() string {
+	u := uuid.NewV7()
+	return hex.EncodeToString(u[:])
 }

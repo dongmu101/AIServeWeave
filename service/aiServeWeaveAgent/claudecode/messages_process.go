@@ -642,7 +642,7 @@ func bridgeEvents(reader io.Reader, s *messagesSession) (json.RawMessage, error)
 					seenIDs[current.ID] = true
 					upstreamID := current.ID
 					if !native {
-						current.ID = "toolu_aisw_" + idgen.MustNew()
+						current.ID = "toolu_aisw_" + idgen.New()
 					}
 					publicIDs[upstreamID] = current.ID
 					if stopped != "" {

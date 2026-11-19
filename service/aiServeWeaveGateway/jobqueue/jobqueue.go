@@ -636,6 +636,5 @@ func (q *Queue) storeError(op string, err error) {
 }
 
 func newIntentID() string {
-	id, _ := idgen.New()
-	return id
+	return idgen.New()
 }
