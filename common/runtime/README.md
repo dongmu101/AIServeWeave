@@ -815,17 +815,17 @@ registering
 
 ### 思考开关与兜底解析器
 
-`ChatRequest.Reasoning`（`*ReasoningConfig{Enabled, Effort, BudgetTokens}`）是协议无关的思考开关，nil 表示调用方没要求。它是**提示**：`oaibase` 在发现结果明确报告模型 `reasoning` 为 `unsupported` 时去掉它（Ollama 会拒绝发给非思考模型的开关），`unknown` 时照发，从不因此拒绝请求——vLLM 等后端的思考能力取决于模型与 chat template，几乎总是 `unknown`。档位与预算互相换算：`minimal` 1024、`low` 2048、`medium` 8192、`high` 16384、`xhigh` 32768 token；两者都没给时取 `medium`。
+`ChatRequest.Reasoning`（`*ReasoningConfig{Enabled, Effort, BudgetTokens}`）是协议无关的思考开关，nil 表示调用方没要求。它是**提示**：`oaibase` 在发现结果明确报告模型 `reasoning` 为 `unsupported` 时去掉它（Ollama 会拒绝发给非思考模型的开关），`unknown` 时照发，从不因此拒绝请求——vLLM 等后端的思考能力取决于模型与 chat template，几乎总是 `unknown`。档位由低到高为 `minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`ultra`（后两档 2026-11-19 起，对应 Codex 为 gpt-6.2 等模型提供的档位）。档位与预算互相换算：`minimal` 1024、`low` 2048、`medium` 8192、`high` 16384、`xhigh` 32768 token，`max` 与 `ultra` 沿用 `xhigh` 的 32768，预算也从不反推为这两档；两者都没给时取 `medium`。
 
 `openai` 层按后端种类映射（`reasoning.go`），以下字段都已建模，`Extra` 不能再写：
 
 | 种类 | 开启 | 关闭 |
 | --- | --- | --- |
-| vllm、sglang、trtllm、tokenspeed | `chat_template_kwargs: {enable_thinking: true, thinking: true}`（前者给 Qwen3、后者给 DeepSeek-V3.1，模板忽略不认识的那个），有档位时另发折算到 low/medium/high 的 `reasoning_effort` | `chat_template_kwargs` 两项为 false |
-| ollama | `reasoning_effort` 折算到 low/medium/high，没给档位取 medium | `reasoning_effort: "none"` |
+| vllm、sglang、trtllm、tokenspeed | `chat_template_kwargs: {enable_thinking: true, thinking: true}`（前者给 Qwen3、后者给 DeepSeek-V3.1，模板忽略不认识的那个），有档位时另发折算到 low/medium/high 的 `reasoning_effort`（xhigh、max、ultra 记为 high） | `chat_template_kwargs` 两项为 false |
+| ollama | `reasoning_effort` 折算到 low/medium/high（xhigh、max、ultra 记为 high），没给档位取 medium | `reasoning_effort: "none"` |
 | qwen | `enable_thinking: true`，给了档位或预算时另发 `thinking_budget` | `enable_thinking: false` |
 | zhipu | `thinking: {type: "enabled"}` | `thinking: {type: "disabled"}` |
-| 其余托管供应商 | 有档位时发 `reasoning_effort`，没有则不发、沿用供应商默认 | `reasoning_effort: "none"` |
+| 其余托管供应商 | 有档位时原样发 `reasoning_effort`（含 `max`、`ultra`，供应商不认识时由其拒绝），没有则不发、沿用供应商默认 | `reasoning_effort: "none"` |
 
 Anthropic 适配器发 `thinking: {type: "enabled", budget_tokens}`：调用方给的预算原样发送；由档位换算的预算收进 `max_tokens - 1` 以内，不足 1024 时不开启；调用方没给 `max_tokens` 时在预算之上再加默认的 4096。关闭发 `{type: "disabled"}`。详见 [anthropic README](anthropic/README.md)。
 

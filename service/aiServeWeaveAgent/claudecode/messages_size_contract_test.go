@@ -42,7 +42,7 @@ func nativeFixtureEnvironment(t *testing.T, handler http.Handler) []string {
 	}
 	base := append(withAccountDir(probeEnv(os.Environ()), t.TempDir()), "ANTHROPIC_API_KEY=loopback-fixture-only", "NODE_EXTRA_CA_CERTS="+caFile,
 		"DISABLE_TELEMETRY=1", "DISABLE_NON_ESSENTIAL_MODEL_CALLS=1")
-	proxy, err := startUpstreamProxy(&upstreamCapture{}, base)
+	proxy, err := startUpstreamProxy(&upstreamCapture{}, base, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

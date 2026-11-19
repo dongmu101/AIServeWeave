@@ -32,7 +32,7 @@ func reasoningFromEffort(effort, field string) (*runtime.ReasoningConfig, error)
 	case runtime.ValidReasoningEffort(effort):
 		return &runtime.ReasoningConfig{Enabled: true, Effort: effort}, nil
 	}
-	return nil, fmt.Errorf("%s must be one of none, minimal, low, medium, high, xhigh", field)
+	return nil, fmt.Errorf("%s must be one of none, minimal, low, medium, high, xhigh, max, ultra", field)
 }
 
 // responsesReasoning is the Responses API's "reasoning" object. Summary is
@@ -115,11 +115,16 @@ func anthropicOutputEffort(raw json.RawMessage) string {
 }
 
 // anthropicEffortLevel maps an Anthropic effort onto a runtime reasoning
-// level: low, medium, high and xhigh keep their names, max takes the highest
-// runtime level, and anything else is "" so Budget falls back to medium.
+// level: low, medium, high and xhigh keep their names, max takes xhigh, and
+// anything else is "" so Budget falls back to medium. max stays on xhigh
+// rather than the runtime's own max: xhigh is the highest level every
+// backend already accepted for it, so a backend that does not know max
+// never starts refusing these requests.
 //
 // anthropicEffortLevel 把 Anthropic 的 effort 映射为 runtime 思考档位：low、medium、high、
-// xhigh 同名保留，max 取 runtime 的最高档，其他值返回 ""，由 Budget 回落到 medium。
+// xhigh 同名保留，max 取 xhigh，其他值返回 ""，由 Budget 回落到 medium。max 保持映射到
+// xhigh 而不是 runtime 自己的 max：xhigh 是所有后端此前都已接受的最高档，不认识 max 的
+// 后端因此不会开始拒绝这类请求。
 func anthropicEffortLevel(effort string) string {
 	switch effort {
 	case runtime.ReasoningEffortLow, runtime.ReasoningEffortMedium, runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh:

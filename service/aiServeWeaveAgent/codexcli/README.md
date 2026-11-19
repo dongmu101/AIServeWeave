@@ -41,9 +41,9 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 
 请求中的 `reasoning`（`ChatRequest.Reasoning`）是提示，映射为 `turn/start` 的 `effort` 与 `summary`：
 
-- app-server 只接受模型声明过的 effort，所以 Agent 在发现时记下 `model/list` 的 `supportedReasoningEfforts`，把请求档位换成最接近的已声明档位（距离相同取较高者）。关闭思考时取已声明的最低档位，模型提供 `none` 时即为 `none`。
+- app-server 只接受模型声明过的 effort，所以 Agent 在发现时记下 `model/list` 的 `supportedReasoningEfforts`，把请求档位换成最接近的已声明档位（距离相同取较高者）。档位由低到高为 `none`、`minimal`、`low`、`medium`、`high`、`xhigh`、`max`、`ultra`；2026-11-19 起包含 `max` 与 `ultra`，codex-cli 0.170.0 为 gpt-6.2-sol、gpt-6.2-astra 等声明到 `ultra`，gpt-6-luna 等到 `max`，请求 `ultra` 时得到模型声明的最高档。此前 Agent 不认识这两档，最高只能用到 `xhigh`。关闭思考时取已声明的最低档位，模型提供 `none` 时即为 `none`。
 - 要求思考却没给档位时不覆盖 effort（沿用模型默认），只设置 `summary: "auto"`；开启思考时都设置 `summary: "auto"`。
-- 模型没有声明任何 effort，或最近一次发现中没有出现该模型时，不做任何覆盖，请求照常执行。提示从不导致请求被拒绝。
+- 模型没有声明任何 effort、最近一次发现中没有出现该模型，或请求的档位本适配器不认识时，不做任何覆盖，请求照常执行。提示从不导致请求被拒绝。
 
 app-server 发来的单帧最多 1 MiB，一个回合的生成文本（回复加思考摘要）最多 1 MiB。注入的历史最多 32 MiB，与 Claude Messages 请求的上限一致。消息数、工具数和 RPC 帧数都不设上限：长时间的智能体会话是常态，历史是否过长由模型上下文窗口判断。codex-cli 0.169.0 实测能接受 17 MB 的 `thread/inject_items`。2026-11-18 之前的上限是历史 1 MiB、2048 条消息、128 个工具、10000 个 RPC 帧。流式输出大约每个 token 一帧，所以长回答会在中途被截断；长会话会被拒为 400。模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制，app-server 自行重试时发出的 `willRetry` 通知不算进展，不会重置空闲期限。流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
 

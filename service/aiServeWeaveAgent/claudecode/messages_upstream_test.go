@@ -71,7 +71,7 @@ func testUpstreamProxyCloseCancelsPendingConnect(t *testing.T, secure bool) {
 		parent.Start()
 	}
 	t.Cleanup(parent.Close)
-	p, err := startUpstreamProxy(&upstreamCapture{}, []string{"HTTPS_PROXY=" + parent.URL})
+	p, err := startUpstreamProxy(&upstreamCapture{}, []string{"HTTPS_PROXY=" + parent.URL}, nil)
 	if err != nil {
 		unblock()
 		t.Fatal(err)
@@ -129,7 +129,7 @@ func TestUpstreamProxyEstablishedConnectSurvivesDialCancellation(t *testing.T) {
 		_, _ = io.Copy(conn, buffered)
 	}))
 	t.Cleanup(parent.Close)
-	p, err := startUpstreamProxy(&upstreamCapture{}, []string{"HTTPS_PROXY=" + parent.URL})
+	p, err := startUpstreamProxy(&upstreamCapture{}, []string{"HTTPS_PROXY=" + parent.URL}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -209,14 +209,14 @@ func TestUpstreamSSEMultilineFailure(t *testing.T) {
 				_, _ = io.WriteString(w, wire)
 			}))
 			capture := &upstreamCapture{}
-			p, err := startUpstreamProxy(capture, env)
+			p, err := startUpstreamProxy(capture, env, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			t.Cleanup(p.close)
 			input := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"stream":true}`))
 			response := httptest.NewRecorder()
-			p.forward(response, input, &url.URL{Scheme: "https", Host: upstreamAPIHost, Path: "/v1/messages"}, true)
+			p.forward(response, input, &url.URL{Scheme: "https", Host: upstreamAPIHost, Path: "/v1/messages"}, true, true)
 			if response.Code != 200 || response.Body.String() != wire {
 				t.Fatal("upstream stream changed during capture")
 			}

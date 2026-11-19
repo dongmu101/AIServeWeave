@@ -145,7 +145,6 @@ function RuntimeCard({ runtime: rt }: { runtime: NodeRuntime }) {
       <Badge variant="outline">{rt.kind || t("tenant.unknownType")}</Badge>
       <Badge variant={rt.state === "healthy" ? "secondary" : "outline"}>{STATE_LABELS(t)[rt.state] ?? rt.state}</Badge>
       <Badge variant="outline">{rt.identityVerified ? t("tenant.identityVerified") : t("tenant.identityNotVerified")}</Badge>
-      <span className="text-xs text-muted-foreground"><Message id="tenant.models_4678e8" values={{ count: rt.models.length }} /></span>
     </div>
     <dl className="my-3 grid gap-2 text-xs sm:grid-cols-2">
       <Fact label={t("tenant.serviceAddress")} value={rt.baseUrl || (rt.kind === "codex" || rt.kind === "claude" ? t("tenant.localCli") : t("tenant.notReported"))} />
@@ -154,7 +153,9 @@ function RuntimeCard({ runtime: rt }: { runtime: NodeRuntime }) {
       <Fact label={t("tenant.modelsDiscoveredAt")} value={formatDateTime(rt.discoveredAt, t("tenant.notDiscoveredYet"), locale)} />
     </dl>
     {rt.degraded.length > 0 ? <p className="mb-2 text-xs text-muted-foreground"><Message id="tenant.degraded_0dfb3a" values={{ value: rt.degraded.join("；") }} /></p> : null}
-    {rt.models.length === 0 ? <p className="text-sm text-muted-foreground"><Message id="tenant.noModelsDiscoveredYet" /></p> : <ul className="grid gap-2">
+    {rt.models.length === 0 ? <p className="text-sm text-muted-foreground"><Message id="tenant.noModelsDiscoveredYet" /></p> : <details className="rounded-md border p-3">
+      <summary className="cursor-pointer text-sm font-semibold"><Message id="tenant.models_4678e8" values={{ count: rt.models.length }} /></summary>
+      <ul className="mt-3 grid gap-2">
       {rt.models.map(model => <li key={model.id} className="min-w-0 rounded-md bg-muted/40 p-3">
         <code className="break-all text-sm">{model.id}</code>
         <div className="mt-2 flex flex-wrap gap-1">
@@ -162,7 +163,8 @@ function RuntimeCard({ runtime: rt }: { runtime: NodeRuntime }) {
             Object.entries(model.capabilities).map(([capability, support]) => <Badge key={capability} variant="outline" className="h-auto max-w-full whitespace-normal break-all text-xs">{capability} · {SUPPORT_LABELS(t)[support] ?? support}</Badge>)}
         </div>
       </li>)}
-    </ul>}
+      </ul>
+    </details>}
   </section>;
 }
 

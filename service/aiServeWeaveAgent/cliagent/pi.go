@@ -51,13 +51,14 @@ func piTurn(_, _, prompt, model string) ([]string, []byte) {
 
 // piReasoningArgs maps ChatRequest.Reasoning onto Pi's --thinking level:
 // "off" when thinking is turned off, the requested level otherwise (Pi
-// accepts minimal through xhigh, the same vocabulary), and "medium" when the
-// caller asked to think without naming a level. Pi itself clamps a level to
+// accepts minimal through xhigh, the same vocabulary; max and ultra fold to
+// xhigh), and "medium" when the caller asked to think without naming a level. Pi itself clamps a level to
 // what the selected model supports and ignores it for a model that cannot
 // think, so this never makes a turn fail.
 //
 // piReasoningArgs 把 ChatRequest.Reasoning 映射为 Pi 的 --thinking 档位：关闭思考时
-// 为 "off"，否则为请求的档位（Pi 接受 minimal 到 xhigh，词汇相同）；调用方要求思考
+// 为 "off"，否则为请求的档位（Pi 接受 minimal 到 xhigh，词汇相同；max 与 ultra 折算为
+// xhigh）；调用方要求思考
 // 却没给档位时为 "medium"。Pi 自己会把档位收敛到所选模型支持的范围，对不会思考的
 // 模型则忽略它，因此这不会让回合失败。
 func piReasoningArgs(reasoning runtime.ReasoningConfig) []string {
@@ -65,7 +66,10 @@ func piReasoningArgs(reasoning runtime.ReasoningConfig) []string {
 		return []string{"--thinking", "off"}
 	}
 	level := reasoning.EffortLevel()
-	if !runtime.ValidReasoningEffort(level) {
+	switch {
+	case level == runtime.ReasoningEffortMax || level == runtime.ReasoningEffortUltra:
+		level = runtime.ReasoningEffortXHigh // Pi stops at xhigh / Pi 最高到 xhigh
+	case !runtime.ValidReasoningEffort(level):
 		level = runtime.ReasoningEffortMedium
 	}
 	return []string{"--thinking", level}

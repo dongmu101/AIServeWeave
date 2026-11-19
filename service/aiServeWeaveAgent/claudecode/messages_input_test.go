@@ -78,7 +78,7 @@ func TestLargeNativeProxyForwarding(t *testing.T) {
 			if err != nil || payload == nil {
 				t.Fatal("expected a large native request")
 			}
-			proxy, err := startUpstreamProxy(&upstreamCapture{}, env, payload)
+			proxy, err := startUpstreamProxy(&upstreamCapture{}, env, nil, payload)
 			if err != nil {
 				t.Fatal(err)
 			}

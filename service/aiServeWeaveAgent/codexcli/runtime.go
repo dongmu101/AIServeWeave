@@ -389,22 +389,26 @@ func (r *Runtime) recentCatalog() ([]runtime.Model, bool) {
 
 // codexEfforts is app-server's reasoning effort vocabulary, lowest first.
 // codexEfforts 是 app-server 的思考强度词汇，由低到高排列。
-var codexEfforts = []string{"none", runtime.ReasoningEffortMinimal, runtime.ReasoningEffortLow, runtime.ReasoningEffortMedium, runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh}
+var codexEfforts = []string{"none", runtime.ReasoningEffortMinimal, runtime.ReasoningEffortLow, runtime.ReasoningEffortMedium, runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh, runtime.ReasoningEffortMax, runtime.ReasoningEffortUltra}
 
 // reasoningFor maps the ChatRequest.Reasoning hint onto turn/start's effort
 // and summary. app-server accepts only an effort the model advertises, so the
 // requested level is replaced by the nearest advertised one (the higher on a
 // tie); turning thinking off asks for the lowest advertised level, which is
 // "none" where the model offers it. A model with no advertised efforts, or
-// one not seen by the last discovery, gets no override at all, so the hint
-// never makes a turn fail. summary "auto" asks for reasoning summaries when
-// thinking is on; Codex hands up summaries, not its raw chain of thought.
+// one not seen by the last discovery, or a requested level this adapter does
+// not know, gets no override at all, so the hint never makes a turn fail.
+// summary "auto" asks for reasoning summaries when thinking is on; Codex
+// hands up summaries, not its raw chain of thought. The vocabulary runs up to
+// max and ultra, which gpt-6.2 and similar models advertise; a model that
+// stops lower gets its nearest level.
 //
 // reasoningFor 把 ChatRequest.Reasoning 提示映射为 turn/start 的 effort 与 summary。
 // app-server 只接受模型声明过的 effort，因此请求的档位会换成最接近的已声明档位
 // （距离相同时取较高者）；关闭思考时请求已声明的最低档位，模型提供 "none" 时即为
-// "none"。没有声明任何 effort 的模型，或最近一次发现中未出现的模型，不做任何覆盖，
-// 这个提示因此永远不会让回合失败。开启思考时 summary 取 "auto" 以请求思考摘要；
+// "none"。没有声明任何 effort 的模型、最近一次发现中未出现的模型，或本适配器不认识的
+// 请求档位，都不做任何覆盖，这个提示因此永远不会让回合失败。词汇一直到 gpt-6.2 等模型
+// 声明的 max 与 ultra；最高档更低的模型得到最接近的档位。开启思考时 summary 取 "auto" 以请求思考摘要；
 // Codex 递上来的是摘要，而不是原始思考链。
 func (r *Runtime) reasoningFor(model string, reasoning *runtime.ReasoningConfig) (effort, summary string) {
 	if reasoning == nil {
@@ -424,6 +428,9 @@ func (r *Runtime) reasoningFor(model string, reasoning *runtime.ReasoningConfig)
 			return "", summary // think at the model's default level / 以模型默认档位思考
 		}
 		want = slices.Index(codexEfforts, level)
+		if want < 0 {
+			return "", summary // think at the model's default level / 以模型默认档位思考
+		}
 	}
 	best, bestRank, bestDistance := "", -1, len(codexEfforts)
 	for _, option := range supported {

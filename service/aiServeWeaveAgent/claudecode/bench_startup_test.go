@@ -188,7 +188,7 @@ func benchFixtureEnvironment(t *testing.T, handler http.Handler) []string {
 		t.Fatal(err)
 	}
 	base := append(withAccountDir(probeEnv(os.Environ()), t.TempDir()), "ANTHROPIC_API_KEY=loopback-fixture-only", "NODE_EXTRA_CA_CERTS="+caFile)
-	proxy, err := startUpstreamProxy(&upstreamCapture{}, base)
+	proxy, err := startUpstreamProxy(&upstreamCapture{}, base, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
