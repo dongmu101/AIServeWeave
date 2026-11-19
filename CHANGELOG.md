@@ -19,6 +19,11 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Added
 
+- Agent 本机 CLI 回合分段计时：
+  - Claude 原生回合与 Codex 对话回合在结束日志中记录进程启动、CLI 就绪、模型请求发出、上游响应头、首个事件、结束、退出等阶段的耗时，以及上游连接等待、进程 CPU 与峰值内存。
+  - Codex 新增 `Codex round finished` 日志；`/metrics` 新增 `agent_cli_phase_seconds`、`agent_cli_upstream_connect_seconds`、`agent_cli_process_cpu_seconds`、`agent_cli_process_max_rss_bytes`。
+  - 新增离线基准 `TestCLIStartupBenchmark`（`AISW_CLI_BENCH=1`），不联网、不消耗额度。
+  - 只需升级 Agent。见 [Agent README](service/aiServeWeaveAgent/README.md#本机-cli-回合分段计时)。
 - Gateway 工作流持久队列（`jobqueue/`，Redis + `github.com/hibiken/asynq` v0.25.1）：`-workflow-queue-max-wait > 0`（必须配 `-redis-addr`）后，JSON 工作流提交与 ComfyUI 图像生成进入全集群队列，任一副本的 worker 在节点空闲时派发。新增 flag `-workflow-queue-concurrency`（默认 8）与 `-workflow-queue-name`（默认 `aisw-workflow`）；`-workflow-queue-max-waiters` 改为全集群长度上限（默认 64），`-workflow-queue-retry-interval` 默认 1s。提交答 202 `queued`，`durability` 新增 `shared_queue`，Job 视图新增 `error_code`（`queue_timeout`、`submit_outcome_unknown`、`node_not_allowed`、`cancelled`、`internal_error`）；队列满答 429 `queue_full`（`Retry-After: 5`），入队结果无法确认答 503 `queue_unavailable`。投递至少一次、提交至多一次（意图标记，结果未知不重提）。事件流对排队 job 推送 `queue_changed`。新增指标 `gateway_workflow_queue_*`，移除 `gateway_scheduler_queue_*`。
 - Gateway 对话等待改为全集群 Redis FIFO（`waitqueue/`，按请求模型分通道）：`-chat-queue-max-wait > 0`（必须配 `-redis-addr`）后，候选全忙的新 Chat/Responses/Messages 请求在共享队列中按头部窗口（新增 `-chat-queue-head-window`，默认 8）与停滞逃逸重试，派发仍在原副本；新增 `-chat-queue-name`（默认 `aisw-chat`），`-chat-queue-retry-interval` 最小 50ms、`-chat-queue-max-waiters` 最大 1024。`-chat-queue-max-waiters` 改为全集群上限。Redis 故障时立即 429。新增指标 `gateway_scheduler_chat_queue_store_errors_total`，`gateway_scheduler_chat_queue_depth` 改为本副本等待数。
 - Agent 实时负载与整机准入（`admission/`）：采集实时 CPU、内存、负载均值（Linux `/proc` + cgroup v2、macOS sysctl 估算 CPU、Windows kernel32，不引入 gopsutil），经心跳新字段 `Heartbeat.load`（`NodeLoad`，隧道 proto 字段 4，只增不改）上报；可选资源闸门 `-admission-cpu-high`/`-admission-memory-low`（带迟滞）与本机分类信号量 `-admission-cli-max`/`-admission-general-max`（满时有界等待 `-admission-queue-max-wait` 默认 5s、`-admission-queue-max-waiters` 默认 16，之后可重试背压），YAML `admission:` 区块，新增 `agent_admission_*` 与 `agent_host_*` 指标。默认全部关闭。Gateway 把资源紧张节点在所有调度策略中排到最后（不跳过），`/internal/v1/nodes` 输出 `load`，新增 `tunnel_server_node_pressure`；Console 机群页显示「实时负载」与「资源紧张」。升级顺序不限：旧 Gateway 忽略字段 4，旧 Agent 显示为「未上报」。
@@ -71,6 +76,24 @@ before upgrading; do not assume a `0.x` bump is safe by default.
 
 ### Fixed
 
+- Agent Codex 运行时误伤正常请求：
+  - 长回答在约一万 token 处被截断：原因是每请求最多 10000 个 RPC 帧，现已去掉。
+  - 长会话被拒为 400：注入历史的上限从 1 MiB 提高到 32 MiB，并取消 2048 条消息、128 个工具的上限。
+  - app-server 的功能开关改用 `-c features.*`：`--disable` 遇到新版 CLI 删掉的功能名会让每次启动失败。
+  - 断网时请求挂到总期限：关闭默认开启的无限重连 `unbounded_connection_retries`，`willRetry` 通知不再重置空闲期限。
+  - 上下文过长等请求错误改为 400 `invalid_config`，不再以 502 计入节点熔断；`serverOverloaded` 改为可重试的 `backpressure`。
+  - 只需升级 Agent。见 [Codex 包说明](service/aiServeWeaveAgent/codexcli/README.md#失败分类)。
+- Agent Claude 运行时：
+  - CLI 报告「另一个进程正在刷新登录」时，改按可重试的 `backpressure` 报告，Gateway 换下一个候选；以前以 502 应答并计入熔断。
+  - 每个 CLI 进程都带 `DISABLE_AUTOUPDATER=1` 与 `CLAUDE_CODE_OAUTH_401_WAIT_MS=30000`。后者未写入官方文档，真实并发刷新尚未验收。
+  - 只需升级 Agent。见 [故障排查](service/aiServeWeaveAgent/claudecode/README.md#终止原因与故障排查)。
+- Agent CLI 运行时的未知事件、终止与诊断：
+  - Claude 原生回合跳过新版 CLI 新增的顶层事件，并原样转发不认识的流事件、增量与停止原因；兼容桥接保持严格。
+  - Codex 的协议流与隔离失败从 400 改为 502，与 Claude 一致；Codex 健康检查不再每 10 秒读取模型目录；另外关闭新版默认开启的宿主工具。
+  - 两种 CLI 的推理请求被取消时，先 SIGTERM，2 秒后 SIGKILL。
+  - 失败时只记录 stderr 的固定分类与 Claude 的 `startup_failure_reason`。
+  - Claude 进程新增 `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1` 与 `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`。
+  - 只需升级 Agent。
 - Claude 原生直通遇到未声明工具时整轮失败：模型调用本轮 `tools` 未声明的工具（例如尚未载入 schema 的延迟工具）时，Agent 以 `unsafe_tools` 中止回合，客户端重试同一轮反复得到 400。原生回合（含 `safeguards`）现原样转发这类调用，由调用方答复「没有这个工具」，与直连 API 一致；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝，兼容桥接保持严格。只需升级 Agent。见[诊断记录](docs/acceptance/claude-unsafe-tools-2026-11-11/README.md#根因确认与修复同日稍后)。
 
 - Claude CLI 契约加固：原生进程显式拒绝所有本机工具，保留调用方定义与工具身份；兼容合法认证/工具进度通知及成功结果后的额度通知。本机协议、工具隔离、设置与启动失败改为后端错误（正文前 HTTP 502），真实上游 400/429/529 和恢复分类保持原有透传。新增动态工具名、ToolSearch、通知顺序及真实 CLI 隔离回归，见[验证记录](docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；平台分发安装包需刷新 Gateway 镜像内置的 Agent 制品。原生产 `unsafe_tools` 的具体分支仍未复现。

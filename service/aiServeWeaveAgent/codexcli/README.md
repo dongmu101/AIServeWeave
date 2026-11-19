@@ -14,7 +14,7 @@ runtimes:
     kind: codex
 ```
 
-不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，每次都冷启动一个 app-server，受 `probe_timeout`（默认 60 秒）限制；紧接着的下一次检查（Probe 后的 Discover、恢复中的 Health 后的 Discover）在 5 秒内复用上一次成功的结果一次，不再启动第二个进程。app-server 在空的 `sqlite_home` 中启动时，会把 CODEX_HOME 下的整个 `sessions` 目录建一遍索引；会话积累到 GB 级时，这一步要耗数秒 CPU。因此每个 app-server 进程（探测、额度查询、对话与生图）仍使用新建的私有 `sqlite_home`，但启动前先从该账户的「种子」复制一份状态库（`state_*.sqlite` 及其 `-wal`），只需为此后新增的会话建索引。种子只取自成功结束的非推理进程（模型目录探测与额度查询），最多每 5 分钟更新一次；推理进程的状态库含有该请求的会话，用完即删，从不成为种子。memories、goals、queue 与 logs 不复制，始终从空开始，因此不会有内容跨请求。种子位于用户缓存目录的 `AIServeWeave/codex-state/<账户目录摘要>/`（macOS 为 `~/Library/Caches`，Linux 为 `$XDG_CACHE_HOME` 或 `~/.cache`），权限 0700，每个账户目录一份；只在进程退出后复制，先写暂存目录再原子改名发布，被取代的种子保留 1 分钟后删除。首次运行、种子复制失败或缓存目录不可用时，退回从头建索引。超时错误会写明卡在哪一步（如 `no reply to initialize after 60s`）。启动仍然很慢时，可以把旧会话移出 CODEX_HOME，或在运行时声明里调大 `probe_timeout`（见 [Agent README](../README.md#探测期限)）。
+不配置 `base_url`、API Key、Headers 或 TLS。Agent 与 `codex login` 必须使用同一系统账户及原有 CODEX_HOME；声明了 `account_dir` 时改用该目录作为 CODEX_HOME，可在同一台机器上挂多个账户（见 [Agent 多账户说明](../README.md#同一-cli-的多个账户)）。显式运行时白名单需包含 codex-local。模型目录由 app-server 的 `model/list` 提供；Probe/Health/Discover 不调用模型推理，每次都冷启动一个 app-server，受 `probe_timeout`（默认 60 秒）限制。Health 每隔约 10 秒运行一次，只做 `initialize` 与 `account/read` 确认登录，不读取模型目录（2026-11-18 起；此前每次都完整读取目录）；目录由 Probe 和每 5 分钟一次的 Discover 读取。Probe 后紧接着的 Discover 在 5 秒内复用上一次成功的结果一次，不再启动第二个进程。app-server 在空的 `sqlite_home` 中启动时，会把 CODEX_HOME 下的整个 `sessions` 目录建一遍索引；会话积累到 GB 级时，这一步要耗数秒 CPU。因此每个 app-server 进程（探测、额度查询、对话与生图）仍使用新建的私有 `sqlite_home`，但启动前先从该账户的「种子」复制一份状态库（`state_*.sqlite` 及其 `-wal`），只需为此后新增的会话建索引。种子只取自成功结束的非推理进程（模型目录探测与额度查询），最多每 5 分钟更新一次；推理进程的状态库含有该请求的会话，用完即删，从不成为种子。memories、goals、queue 与 logs 不复制，始终从空开始，因此不会有内容跨请求。种子位于用户缓存目录的 `AIServeWeave/codex-state/<账户目录摘要>/`（macOS 为 `~/Library/Caches`，Linux 为 `$XDG_CACHE_HOME` 或 `~/.cache`），权限 0700，每个账户目录一份；只在进程退出后复制，先写暂存目录再原子改名发布，被取代的种子保留 1 分钟后删除。首次运行、种子复制失败或缓存目录不可用时，退回从头建索引。超时错误会写明卡在哪一步（如 `no reply to initialize after 60s`）。启动仍然很慢时，可以把旧会话移出 CODEX_HOME，或在运行时声明里调大 `probe_timeout`（见 [Agent README](../README.md#探测期限)）。
 
 每个请求启动独立临时进程和 ephemeral thread，经公开 `thread/inject_items` 保留消息角色、function_call 的 call_id 和 function_call_output 的结果，不把工具结果伪装成用户提示词。历史完整注入后以空 input 启动回合；首次动态工具回调转换成 runtime.ToolCall，返回调用方后终止整个进程组。下一轮重新注入完整历史继续，Agent 不保存跨请求线程映射。
 
@@ -45,7 +45,28 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 - 要求思考却没给档位时不覆盖 effort（沿用模型默认），只设置 `summary: "auto"`；开启思考时都设置 `summary: "auto"`。
 - 模型没有声明任何 effort，或最近一次发现中没有出现该模型时，不做任何覆盖，请求照常执行。提示从不导致请求被拒绝。
 
-单帧、注入历史及生成文本各最多 1 MiB，每请求最多 2048 条消息、128 个工具、10000 个 RPC 帧；模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制；流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
+app-server 发来的单帧最多 1 MiB，一个回合的生成文本（回复加思考摘要）最多 1 MiB。注入的历史最多 32 MiB，与 Claude Messages 请求的上限一致。消息数、工具数和 RPC 帧数都不设上限：长时间的智能体会话是常态，历史是否过长由模型上下文窗口判断。codex-cli 0.169.0 实测能接受 17 MB 的 `thread/inject_items`。2026-11-18 之前的上限是历史 1 MiB、2048 条消息、128 个工具、10000 个 RPC 帧。流式输出大约每个 token 一帧，所以长回答会在中途被截断；长会话会被拒为 400。模型目录最多 256 项/16 页。请求总期限及流空闲期限由 runtime.Clock 控制，app-server 自行重试时发出的 `willRetry` 通知不算进展，不会重置空闲期限。流不预读无限事件，关闭会取消并回收进程。所有错误只含固定类别，不输出 RPC、提示词、工具结果或认证信息。
+
+## 回合日志与计时
+
+每个对话回合结束时记录 INFO 级 `Codex round finished`，带 `runtime_id`、`outcome`（`completed` / `failed` / `canceled`）、注入历史的字节数 `history_bytes`，以及各阶段耗时、进程 CPU 与内存（2026-11-18 起），不记录任何内容。字段、指标与离线基准见 [Agent README「本机 CLI 回合分段计时」](../README.md#本机-cli-回合分段计时)。
+
+## 失败分类
+
+失败回合按 `codexErrorInfo` 分类，上游的错误文本从不读取：
+
+| `codexErrorInfo` | 运行时错误 | Gateway 应答 | 说明 |
+| --- | --- | --- | --- |
+| `usageLimitExceeded`、`rateLimitExceeded` | `rate_limited`（可重试，带恢复时长） | 429 | 见 [额度耗尽与限流](../README.md#额度耗尽与限流) |
+| `contextWindowExceeded`、`badRequest`、`cyberPolicy`、`misalignmentPolicyViolation` | `invalid_config` | 400 | 针对请求本身，换节点结果相同；不计入熔断 |
+| `serverOverloaded` | `backpressure`（可重试） | 429 | 尚未提交的请求换下一个候选 |
+| 其他（含断流、连接失败、`internalServerError`） | `upstream_error` | 502 | 计入熔断 |
+
+回合之外的本机失败：协议流损坏（`ErrProtocol`）、出现未放行的条目或审批请求（`ErrUnexpectedTool`）、加载了未获准的指令文件（`ErrIsolation`），2026-11-18 起都按 `upstream_error` 报告，与 Claude 运行时对同类失败的处理一致。此前它们以 400 `protocol_error` 应答，客户端会误以为是自己的请求有问题。请求本身不合法（`ErrConfig`）仍是 400。
+
+app-server 失败时，Agent 只保留其标准错误的最后 8 KiB，并归入固定分类附在错误信息末尾，例如 `Codex operation failed: upstream_error (cli_stderr: login_required)`。这条信息会出现在健康状态与 Gateway 日志中，原文从不离开 Agent。分类有：`login_required`、`unknown_option`、`config_invalid`、`database_locked`、`disk_full`、`out_of_memory`、`too_many_open_files`、`permission_denied`、`network`、`crashed`，无法识别时为 `other`。
+
+2026-11-18 之前，额度以外的失败一律是 `upstream_error`。上下文过长这类调用方造成的错误也会以 502 应答并计入熔断，同一用户反复重试可能让整个节点被熔断。
 
 ## 图像生成
 
@@ -53,7 +74,7 @@ Codex 的思考以 **摘要** 形式透出：`item/reasoning/summaryTextDelta` �
 
 `Runtime.GenerateImage` 实现 `runtime.ImageRuntime`：
 
-- 每次请求一个独立的临时进程。只有这个进程不带 `--disable image_generation`，shell、MCP、插件、`view_image` 等其余宿主工具照旧关闭；Chat 进程的参数不变，Chat 回合里出现 `imageGeneration` 条目仍会被拒绝。
+- 每次请求一个独立的临时进程。只有这个进程不带 `features.image_generation=false`，shell、MCP、插件、`view_image` 等其余宿主工具照旧关闭；Chat 进程的参数不变，Chat 回合里出现 `imageGeneration` 条目仍会被拒绝。
 - 不注册动态工具，固定的 `baseInstructions` 要求只生成一张图，调用方提示词作为 `turn/start` 的唯一用户输入。出现工具回调、审批请求或未声明的指令文件即失败。
 - 收到第一个完成的 `imageGeneration` 条目就停止并回收进程组，一次请求不会产出两张图。图像取自 `result` 的 base64，按魔数判定格式，只接受 PNG/JPEG/WebP/GIF，解码后不超过 32 MiB。
 - 只有生图进程的 `imageGeneration` 完成帧可以放宽到 48 MiB（一张 1024² PNG 的 base64 就约 2.2 MB），其余帧仍受 1 MiB 限制。
@@ -107,8 +128,12 @@ report, err := codexcli.Probe(ctx, codexcli.Config{
 - 使用 `initialize` → `account/read` → `thread/start` → `turn/start`；开启 `experimentalApi` 后接收 `item/tool/call` 并按请求 ID 返回结果。
 - 只接受 ChatGPT 登录，不读取、复制或转发 `auth.json`/token；保留原有认证目录环境变量，过滤 API Key 与网关地址覆盖。
 - 每次独立进程、0700 临时工作目录、ephemeral thread、只读 sandbox；关闭 shell、MCP/插件/Hook 自动加载等非实验能力。收到未允许的 item 或审批请求即失败，不自动批准。
+- 功能开关一律用 `-c features.<名称>=false/true` 设置，不用 `--disable`/`--enable`。codex-cli 0.169.0 实测：`--disable` 遇到 CLI 不认识的名称会在启动时退出（`Unknown feature flag`），而未知的 `-c` 键会被忽略。新版本删掉某个功能时（`multi_agent` 已标为 deprecated），用 `--disable` 会让所有请求与健康检查失败。两种写法的效果相同，`config/read` 报告的功能一致。
+- 另外关闭 0.169.0 默认开启的宿主工具 `browser_use`、`browser_use_external`、`computer_use`、`in_app_browser`、`sleep_tool`。模型一旦调用它们，回合会因条目未获放行而失败。这一项尚未用真实账户跑工具往返（`TestLiveCallerToolRoundTrip`）复验，需要确认它们不会像 `code_mode_host` 那样连带隐藏客户端动态工具。条目白名单另外放行 `functionCallOutput`：它只记录工具结果，不在本机执行任何操作。
+- 请求被取消（客户端断开、超时、运行时关闭）时，先向进程组发送 SIGTERM，2 秒后再发 SIGKILL，让正在刷新登录的进程有机会保存新令牌。0.169.0 收到 SIGTERM 后约 0.08 秒退出。正常结束与隔离失败仍立即终止。
+- 关闭 `unbounded_connection_retries`（0.169.0 默认开启）。开启时，断网后 app-server 每隔 5 秒到 60 秒重连一次、永不停止，请求只能等到总期限才结束。关闭后改用 CLI 的有限重试，失败的回合交给 Gateway 换节点。
 - 保留本机 Codex 账户目录中原生的 `AGENTS.md` / `AGENTS.override.md`，并报告来源数量；项目和其他来源的指令一律拒绝。账户通用指令会参与实验推理，这不等于空白账户环境。
-- 每帧最多 1 MiB、最多 10000 帧，每会话仅允许两个指定工具调用。错误仅暴露固定类别；报告不含模型正文、指令内容、文件路径或凭据。
+- 每帧最多 1 MiB，帧数不设上限（由实验期限约束），每会话仅允许两个指定工具调用。错误仅暴露固定类别；报告不含模型正文、指令内容、文件路径或凭据。
 - 核对线程、turn、工具名、参数与调用 ID；重复或跨会话调用失败。CLI 终态、两个实际回调以及调用方随机结果均满足时才报告通过。
 - 取消和任何退出路径都清理 app-server 进程组。默认测试使用假子进程，不访问模型服务。
 

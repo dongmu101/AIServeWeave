@@ -43,6 +43,19 @@
 
 `claudecode/` 注册本地 `kind: claude`，通过原生 Messages 隧道服务 Gateway `/v1/messages`，并经 Gateway 转换服务 `/v1/chat/completions` 与 `/v1/responses`。工具在调用方电脑执行；带 `safeguards` 的原生请求保留完整结构与工具身份，Agent CLI 不注册本地执行工具，每轮独立调用真实上游。无该字段时默认同样原样直通（见下方「未带 safeguards 的原生直通」），旧节点等情形继续使用隔离 MCP 桥接；Chat 的普通多轮历史转换成带角色的文本上下文，活动工具链保持原会话；请求要求思考时转换预算，客户端回传的思考被丢弃。支持文本、Messages 图片/文档/本平台视频附件与调用方工具循环，不代表完整 Anthropic API 兼容。
 
+- **回合分段计时（2026-11-18）**：
+  - 新增 `internal/cliphase`。Claude 原生回合与 Codex 对话回合在结束日志中记录各阶段到达时间、上游连接等待（Claude）、进程 CPU 与峰值内存；Codex 新增 `Codex round finished` 日志。`/metrics` 新增 `agent_cli_phase_seconds` 等四个直方图。
+  - 离线基准 `TestCLIStartupBenchmark`（`AISW_CLI_BENCH=1`，两个包各一个）走 Agent 真实的代码路径，不联网、不消耗额度。
+  - 本机基线：Claude 2.1.327 到模型请求发出 p50 188 ms；codex 0.169.0 到能接收回合 p50 59 ms。
+  - 基准发现：Claude CLI 在模型请求之前，每个回合要先等完约 3–5 个发往 api.anthropic.com 的请求（`policy_limits`、`settings`、功能开关等）。上游不可达时，它会在这一步重试约 18 秒。
+  - 线上分布尚未采集；P2 各项是否值得做，取决于部署后的数据。见 [README「本机 CLI 回合分段计时」](README.md#本机-cli-回合分段计时)。
+- **未知事件、终止与诊断（2026-11-18）**：
+  - 原生回合跳过不认识的顶层事件，并计入 `ignored_cli_events`；不认识的流事件、增量与停止原因原样转发，未知停止原因按终止处理。`conversation_reset`、`control_request` 与流内 `error` 仍让回合失败；兼容桥接保持严格。`keep_alive` 视为通知。
+  - 推理请求被取消时，先 SIGTERM，2 秒后 SIGKILL（新增 `cliprocess.ConfigureGraceful`）。正常结束与隔离失败仍立即终止。实测 2.1.326 收到 SIGTERM 后约 0.55 秒退出。
+  - 失败日志新增 `cli_stderr`（标准错误最后 8 KiB 归入的固定分类）与 `cli_startup_failure`（CLI 给出的 `startup_failure_reason`）。真实 2.1.327 以无效代理复现得到 `proxy_invalid`。
+  - 每个 CLI 进程新增 `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1` 与 `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`。遥测开关会连带停止拉取功能开关，未设置。
+  - 默认测试、竞态检查与 Windows/Linux 交叉编译通过；真实订阅与生产链路未验收。见 [故障排查](claudecode/README.md#终止原因与故障排查)。
+- **CLI 自动更新与并发登录刷新（2026-11-18）**：Agent 启动的每个 CLI 进程都带 `DISABLE_AUTOUPDATER=1` 和 `CLAUDE_CODE_OAUTH_401_WAIT_MS=30000`。后者不在官方文档中，是从 2.1.326 的程序里确认的。CLI 报告「另一个进程正在刷新登录」时，改按可重试的 `backpressure` 报告，日志 `reason=login_refresh_busy`，Gateway 会换下一个候选；以前按 `cli_result` 以 502 应答并计入熔断。开发机上观察到，交互使用的 Claude Code 会把 PATH 上的同一份 CLI 自动更新（2.1.326 → 2.1.327）；生产主机固定版本的做法见 [README](README.md#claude-code)。默认测试与竞态检查通过，新测试在旧实现上失败；真实并发刷新与 401 等待尚未验收。见 [故障排查](claudecode/README.md#终止原因与故障排查)。
 - **Claude Code 2.1.323 复验（2026-11-13）**：Agent 代码无需修改。逐条核对 changelog：`--permission-mode auto` 不可用时改为 Manual 启动、含 `sandbox` 键的无效 `--settings` 拒绝启动、hook 心跳、`ALL_PROXY` 不再用于策略请求等变更均不影响 Agent 的无头进程。本机 `2.1.323` 与 `2.1.322` 的全部 7 组 `TestNativeCLI*` 离线契约测试均通过，结果一致；真实订阅、Agent 主机实机与生产链路未验收。门控测试须在装有待验 CLI 的主机上执行，见 [验收记录](../../docs/acceptance/claude-code-2.1.323-2026-11-13/README.md)。
 - **原生回合放行未声明工具（2026-11-11）**：16:28–16:29 连续 400 的根因已确认：五次失败都是原生或 safeguards 回合的 `unsafe_tools`，模型调用了本轮 `tools` 未声明的工具（与等待数据库就绪时调用尚未载入 schema 的延迟工具 `Monitor` 的时间吻合；Agent 不记录工具名，属推断），Agent 中止整轮，Claude Code 重试同一轮时模型做同样选择，五次全部失败。原生回合的工具由调用方执行、本机 CLI 已禁用全部本地工具，因此改为原样转发未声明的工具调用，由调用方答复「没有这个工具」；名称为本机 CLI 自有工具（`EndConversation`、`mcp__` 前缀）时仍拒绝，兼容桥接保持严格。新增 `TestNativeForwardsUndeclaredTool`（原生与 safeguards 各一，已确认旧实现下失败）并扩充 `TestUnsafeToolFailureLocation`；Agent 默认测试与 claudecode 竞态检查通过。已部署到 Agent 主机（19:24 重启）并在该主机用 Go 1.27.4 复跑新测试；真实验证：本机 Claude Code `2.1.322` 经生产 Gateway 让模型直接调用未声明的 `WaitForPort`，客户端收到并回复「No such tool available」，两轮均 `completed`，重启后 `unsafe_tools` 为 0。
 
@@ -76,6 +89,19 @@
 - **支持**：文本、SSE、function/custom/namespace 工具循环、JSON Schema 输出（一次响应最多一个工具调用）；思考摘要作为独立 `ReasoningContent` 透出，思考提示映射为 `turn/start` 的 `effort`/`summary`；账户能生图时额外发布 `codex-image`，经 `/v1/images/generations` 每次生成一张图。
 - **不支持**：图片/音频/文件输入、嵌入、重排、采样参数、强制工具选择、远程压缩。
 - **自动发现**：见上方 `clidiscovery/`。
+- **健康检查、终止与诊断（2026-11-18，P1）**：
+  - Health 只做 `initialize` 与 `account/read` 确认登录，不再每 10 秒读取一次模型目录。
+  - 协议流损坏、未放行条目与未获准指令从 400 `protocol_error` 改为 502 `upstream_error`，与 Claude 一致。
+  - 失败信息末尾附上 stderr 的固定分类（`cli_stderr: …`）；被取消的请求先 SIGTERM、2 秒后 SIGKILL（实测 0.169.0 约 0.08 秒退出）。
+  - 另外关闭默认开启的宿主工具 `browser_use`、`browser_use_external`、`computer_use`、`in_app_browser`、`sleep_tool`；条目白名单放行只记录结果的 `functionCallOutput`。
+  - 真实 0.169.0 确认 19 个功能开关生效；尚未用真实账户跑 `TestLiveCallerToolRoundTrip`，确认新关闭的功能不会连带隐藏客户端动态工具。
+- **放宽误伤上限、启动参数与失败分类（2026-11-18）**：
+  - 去掉每请求 10000 个 RPC 帧的上限。流式输出大约每个 token 一帧，长回答原本会在中途被截断，并以 400 报错。
+  - 注入历史的上限从 1 MiB 提高到 32 MiB，取消 2048 条消息和 128 个工具的上限；codex-cli 0.169.0 实测能接受 17 MB 的注入。
+  - 功能开关从 `--disable`/`--enable` 改为 `-c features.*`。旧写法遇到 CLI 删掉的功能名会在启动时退出。
+  - 关闭默认开启的 `unbounded_connection_retries`，`willRetry` 通知不再重置空闲期限。以前断网时请求要挂到总期限才失败。
+  - `contextWindowExceeded`、`badRequest` 及两类内容政策失败改为 400 `invalid_config`，不计入熔断；`serverOverloaded` 改为可重试的 `backpressure`。
+  - 默认测试与竞态检查通过，新测试在旧实现上失败；真实 0.169.0 用新参数启动，`config/read` 确认各功能开关生效。真实长回答、断网与上下文溢出尚未验收。见 [Codex 包说明](codexcli/README.md#失败分类)。
 
 接入步骤见 [README「Codex」](README.md#codex)，上限与验收见 [Codex 包说明](codexcli/README.md) 与 [Gateway 工具循环](../aiServeWeaveGateway/STATUS.md#工具循环与-codex-cli-接入)。[实验命令](../../experiments/codex-cli-bridge/README.md) 保留为独立合成验证器。
 

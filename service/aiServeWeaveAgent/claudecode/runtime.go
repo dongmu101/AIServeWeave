@@ -17,6 +17,7 @@ import (
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/common/tunnelwire"
 	"AIServeWeave/service/aiServeWeaveAgent/attachments"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 	"AIServeWeave/service/aiServeWeaveAgent/internal/cliprocess"
 )
 
@@ -30,6 +31,9 @@ type Runtime struct {
 	modelsMu sync.RWMutex
 	models   map[string]struct{}
 	logger   *slog.Logger
+	// metrics receives each native round's phase timings; nil records nothing.
+	// metrics 接收每个原生回合的阶段耗时；为 nil 时不记录。
+	metrics runtime.Metrics
 }
 
 var _ runtime.MessagesRuntime = (*Runtime)(nil)
@@ -70,7 +74,7 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 		if logger == nil {
 			logger = slog.Default()
 		}
-		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger}, nil
+		return &Runtime{cfg: cfg, bridge: bridge, root: root, cancel: cancel, logger: logger, metrics: deps.Metrics}, nil
 	}
 }
 
@@ -303,8 +307,15 @@ func (r *Runtime) Messages(parent context.Context, req runtime.MessagesRequest) 
 				outcome = "canceled"
 			}
 		}
-		r.logger.Info("Claude Messages round finished", "runtime_id", r.cfg.ID, "round_id", roundID,
-			"message_path", diagnostics.path, "outcome", outcome, "safeguard_status", diagnostics.status)
+		finished := []any{"runtime_id", r.cfg.ID, "round_id", roundID, "message_path", diagnostics.path, "outcome", outcome, "safeguard_status", diagnostics.status}
+		if ignored := s.ignoredEvents.Load(); ignored > 0 {
+			finished = append(finished, "ignored_cli_events", ignored)
+		}
+		// Phase timings are recorded only for native rounds (see messagesSession.phases).
+		// 只有原生回合记录阶段耗时（见 messagesSession.phases）。
+		finished = append(finished, s.phases.LogAttrs()...)
+		s.phases.Observe(r.metrics, r.cfg.ID, runtime.KindClaude)
+		r.logger.Info("Claude Messages round finished", finished...)
 		s.mu.Lock()
 		s.busy = false
 		keep := err == nil && s.waiting && !s.request.isNative()
@@ -362,6 +373,8 @@ func (r *Runtime) roundError(err error) error {
 		reason = "unsafe_tools"
 	case errors.Is(err, errQuotaExhausted):
 		reason = "quota_exhausted"
+	case errors.Is(err, errLoginRefreshBusy):
+		reason = "login_refresh_busy"
 	case errors.Is(err, errCLIStart):
 		reason = "cli_start"
 	case errors.Is(err, errProbeSetup):
@@ -378,10 +391,25 @@ func (r *Runtime) roundError(err error) error {
 	if errors.As(err, &eventFailure) {
 		attrs = append(attrs, "cli_event_line", eventFailure.line, "cli_event_error", eventFailure.reason)
 	}
+	var startup *cliStartupFailure
+	if errors.As(err, &startup) {
+		attrs = append(attrs, "cli_startup_failure", startup.reason)
+	}
+	var stderr *cliStderrNote
+	if errors.As(err, &stderr) {
+		attrs = append(attrs, "cli_stderr", stderr.category)
+	}
 	r.logger.Warn("Claude Messages round failed", attrs...)
 	if errors.Is(err, context.DeadlineExceeded) {
 		return &runtime.RuntimeError{Code: runtime.ErrorTimeout, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
 			Message: "Claude Messages operation failed: " + string(runtime.ErrorTimeout)}
+	}
+	if errors.Is(err, errLoginRefreshBusy) {
+		// Busy, not broken: the session may start on another node or account
+		// now, and on this one again once the other process has refreshed.
+		// 忙而非坏：会话现在可以在另一个节点或账户上开启，待另一个进程刷新完成后也可以再回到本节点。
+		return &runtime.RuntimeError{Code: runtime.ErrorBackpressure, RuntimeID: r.cfg.ID, Kind: runtime.KindClaude, Operation: "messages",
+			Message: "Claude Messages operation failed: " + string(runtime.ErrorBackpressure), Retryable: true}
 	}
 	if errors.Is(err, errMissingResult) || errors.Is(err, errCLIExit) || errors.Is(err, errCLIProtocol) ||
 		errors.Is(err, errCLIResult) || errors.Is(err, errUnsafeTools) || errors.Is(err, errCLIStart) || errors.Is(err, errProbeSetup) {
@@ -501,6 +529,7 @@ func (w *nativeWriter) Write(data []byte) (int, error) {
 		if !w.forwarded {
 			w.forwarded = true
 			item.event.Header = w.stream.s.upstream.successHeader()
+			w.stream.s.phases.Mark(cliphase.FirstEvent)
 		}
 		select {
 		case w.stream.items <- item:

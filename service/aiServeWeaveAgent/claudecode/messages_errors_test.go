@@ -107,3 +107,64 @@ func TestMessagesRejectionRequiresFailedAPIRound(t *testing.T) {
 		})
 	}
 }
+
+// TestLoginRefreshBusyIsRetryable reports a login refresh another process
+// holds as a retryable busy node in bridged and native rounds, whether the
+// CLI says so in a synthetic message, in its result, or ends without one,
+// and never matches the same words in model output.
+// TestLoginRefreshBusyIsRetryable 在桥接与原生回合中，把另一个进程正在刷新登录报告为可重试的
+// 繁忙节点；无论 CLI 在合成消息、结果中说明，还是没有结果就结束；模型输出中的相同字句从不匹配。
+func TestLoginRefreshBusyIsRetryable(t *testing.T) {
+	const notice = "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. PRIVATE_MARKER"
+	synthetic := `{"type":"assistant","error":"authentication_failed","is_api_error_message":true,"message":{"model":"<synthetic>","content":[{"type":"text","text":"` + notice + `"}]}}` + "\n"
+	result := `{"type":"result","subtype":"success","is_error":true,"result":"` + notice + `"}` + "\n"
+	plainResult := `{"type":"result","subtype":"success","is_error":true,"result":"PRIVATE_MARKER"}` + "\n"
+	modelText := `{"type":"assistant","message":{"model":"claude-sonnet-4-6","content":[{"type":"text","text":"` + notice + `"}]}}` + "\n"
+	for _, tc := range []struct {
+		name, wire string
+		want       error
+	}{
+		{"synthetic message then result", synthetic + plainResult, errLoginRefreshBusy},
+		{"result only", result, errLoginRefreshBusy},
+		{"synthetic message without result", synthetic, errLoginRefreshBusy},
+		{"model output is not a CLI notice", modelText + plainResult, errCLIResult},
+	} {
+		for _, request := range []messagesRequest{testMessagesRequest(), guardedRequest()} {
+			t.Run(tc.name+"/native="+map[bool]string{true: "yes", false: "no"}[request.isNative()], func(t *testing.T) {
+				s := &messagesSession{ctx: context.Background(), request: request, events: make(chan bridgeEvent, 4)}
+				_, cause := bridgeEvents(strings.NewReader(tc.wire), s)
+				if !errors.Is(cause, tc.want) {
+					t.Fatalf("error=%v, want %v", cause, tc.want)
+				}
+				if tc.want != errLoginRefreshBusy {
+					return
+				}
+				var logs bytes.Buffer
+				r := &Runtime{cfg: runtime.Config{ID: "fixture"}, logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+				var failure *runtime.RuntimeError
+				if !errors.As(r.roundError(cause), &failure) || failure.Code != runtime.ErrorBackpressure || !failure.Retryable {
+					t.Fatalf("public=%+v, want retryable backpressure", failure)
+				}
+				var record map[string]any
+				if json.Unmarshal(logs.Bytes(), &record) != nil || record["reason"] != "login_refresh_busy" {
+					t.Fatalf("diagnostic=%s, want reason login_refresh_busy", &logs)
+				}
+				if strings.Contains(logs.String()+failure.Error(), "PRIVATE_MARKER") {
+					t.Fatal("CLI text reached logs or caller")
+				}
+			})
+		}
+	}
+}
+
+// TestProbeEnvSetsCLIDefaults sets the Agent's fixed CLI variables even when
+// the inherited environment carries other values, which filtering drops.
+// TestProbeEnvSetsCLIDefaults 即使继承环境带有其他值（过滤会丢掉它们），也设置 Agent 固定的 CLI 变量。
+func TestProbeEnvSetsCLIDefaults(t *testing.T) {
+	env := probeEnv([]string{"PATH=/bin", "DISABLE_AUTOUPDATER=0", "CLAUDE_CODE_OAUTH_401_WAIT_MS=1", "ANTHROPIC_API_KEY=PRIVATE_MARKER"})
+	want := []string{"PATH=/bin", "DISABLE_AUTOUPDATER=1", "CLAUDE_CODE_OAUTH_401_WAIT_MS=30000",
+		"CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1", "CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1"}
+	if strings.Join(env, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("env=%q, want %q", env, want)
+	}
+}

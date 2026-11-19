@@ -94,6 +94,12 @@ const SOURCE_LABELS: Record<PriceSource, MessageKey> = {
  * CATALOG_PENDING_LIMIT 是一次读取显示的审核数；队列通常只有几条，超出时角标显示 "N+"。 */
 const CATALOG_PENDING_LIMIT = 200;
 
+/** REFERENCE_CHOICES is how many catalog matches the reference pick list
+ * shows; typing more of the name narrows a longer list.
+ *
+ * REFERENCE_CHOICES 是参照模型选择列表显示的价目表匹配数；更长的列表靠多输入几个字收窄。 */
+const REFERENCE_CHOICES = 50;
+
 function meterLabel(meter: string, t: Translator): string {
   return meter in METER_LABELS ? t(METER_LABELS[meter as EditedMeter]) : meter;
 }
@@ -424,7 +430,14 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
   const [pending, setPending] = React.useState(false);
   const [error, setError] = React.useState<React.ReactNode>(null);
   const [removing, setRemoving] = React.useState(false);
-  const search = React.useDeferredValue(reference.trim());
+  // The reference pick list is a catalog prefix search on what was typed
+  // into the reference box, or on the alias while nothing is typed. Picking
+  // from the list does not change the search, so the other matches stay
+  // listed to pick from again.
+  // 参照模型的选择列表按参照输入框里手动输入的内容做价目表前缀搜索，未输入时按别名搜索。
+  // 从列表选择不改变搜索，其他匹配项仍留在列表里可以重新选择。
+  const [query, setQuery] = React.useState("");
+  const search = React.useDeferredValue(query.trim() || model.trim());
   // Only a new alias offers a pick list: published route aliases that have
   // no pricing settings yet. Picking an already configured one would
   // overwrite it with blank fields, so those are edited from the table.
@@ -445,7 +458,7 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
   const choicesLoaded = routes.data !== null || routes.error !== null;
   const matches = useResource<CatalogPage>({
     method: "GET", surface: "operator", path: "/operator/v1/billing/catalog",
-    query: { q: search, limit: "8" }, parse: parseCatalogPage,
+    query: { q: search, limit: search.length >= 2 ? String(REFERENCE_CHOICES) : "1" }, parse: parseCatalogPage,
   });
 
   async function copyOfficial() {
@@ -525,7 +538,16 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
     }
   }
 
-  const options = search.length >= 2 ? (matches.data?.items ?? []).filter((item) => item.status !== "removed") : [];
+  const found = search.length >= 2 ? (matches.data?.items ?? []).filter((item) => item.status !== "removed") : [];
+  // The saved reference stays listed even when the alias search does not
+  // reach it, so an existing setting shows as picked.
+  // 已保存的参照模型即使不在按别名搜索的结果里也保留在列表中，现有设置因此显示为已选中。
+  const saved = setting?.catalogModel ?? "";
+  const options = saved !== "" && reference.trim() === saved && !found.some((item) => item.model === saved) ? [{ model: saved, provider: "" }, ...found] : found;
+  const referencePlaceholder = search.length < 2 ? t("operator.pricingReferenceTypeMore")
+    : matches.loading ? t("operator.loading")
+    : options.length > 0 ? t("operator.pricingReferencePick")
+    : t("operator.pricingSearchNoMatch", { prefix: search });
   return <Dialog open onOpenChange={(next) => { if (!next && !pending) onClose(); }}>
     <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
       <form onSubmit={submit} className="grid gap-4" noValidate>
@@ -545,10 +567,13 @@ function ModelPricingDialog({ alias, setting, configured, revision, onClose, onS
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-reference" className="text-sm font-medium"><Message id="operator.pricingReference" /></label>
-          <Input id="pricing-reference" list="pricing-reference-options" value={reference} onChange={(e) => setReference(e.target.value)} disabled={pending} autoComplete="off" spellCheck={false} />
-          <datalist id="pricing-reference-options">{options.map((item) => <option key={item.model} value={item.model}>{item.provider}</option>)}</datalist>
+          <select aria-label={t("operator.pricingReferencePick")} className={SELECT_CLASS} value={options.some((item) => item.model === reference.trim()) ? reference.trim() : ""} disabled={pending || options.length === 0} onChange={(e) => setReference(e.target.value)}>
+            <option value="">{referencePlaceholder}</option>
+            {options.map((item) => <option key={item.model} value={item.model}>{item.provider ? `${item.model} · ${item.provider}` : item.model}</option>)}
+            {search.length >= 2 && matches.data?.nextCursor ? <option value="" disabled>{t("operator.pricingReferenceMore", { count: REFERENCE_CHOICES })}</option> : null}
+          </select>
+          <Input id="pricing-reference" value={reference} onChange={(e) => { setReference(e.target.value); setQuery(e.target.value); }} disabled={pending} autoComplete="off" spellCheck={false} />
           <p className="text-xs text-muted-foreground"><Message id="operator.pricingReferenceHint" /></p>
-          {search.length >= 2 && matches.data && options.length === 0 ? <p className="text-xs text-muted-foreground"><Message id="operator.pricingSearchNoMatch" /></p> : null}
         </div>
         <div className="grid gap-1">
           <label htmlFor="pricing-rate" className="text-sm font-medium"><Message id="operator.pricingModelRate" /></label>

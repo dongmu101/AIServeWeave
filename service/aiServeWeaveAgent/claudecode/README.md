@@ -71,6 +71,10 @@ Agent 的两条执行路径分别隔离：
 AISW_CLAUDE_CONTRACT_TEST=1 go test ./service/aiServeWeaveAgent/claudecode -run '^TestNativeCLI' -count=1 -timeout=180s -v
 ```
 
+Agent 启动的每个 CLI 进程（推理、认证检查、模型目录与额度查询）都带 `CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK=1`（[官方环境变量](https://code.claude.com/docs/en/env-vars)），禁止 CLI 把失败的流式请求改为非流式重试。原生回合的调用方文档只合并进流式请求，非流式回退会发出 CLI 自己的占位提示词，消耗额度后仍然失败。遥测开关（`DISABLE_TELEMETRY`、`CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`）没有设置：两者都会同时停止拉取功能开关，而 safeguards 路径是在拉取功能开关的状态下验收的，需要在真实主机上复验后才能开启。
+
+这些进程还都带 `DISABLE_AUTOUPDATER=1`（[官方环境变量](https://code.claude.com/docs/en/env-vars)），不会在仍有请求运行时自行替换已安装的版本。Agent 只向 CLI 传递白名单内的环境变量，用户自己设置的这类变量会被过滤掉，因此由 Agent 显式设置。它管不到同一系统账户下交互使用的 Claude Code（包括 IDE 扩展）：2026-11-18 在开发机上观察到，PATH 上的 CLI 在使用过程中被自动从 `2.1.326` 更新为 `2.1.327`。生产主机应让 Agent 使用固定版本的 CLI，做法见 [Agent README](../README.md#claude-code)，升级时先跑上面的门控测试。
+
 本次审查、回归与部署边界见[CLI 契约记录](../../../docs/acceptance/claude-cli-contract-2026-11-11/README.md)。现有节点需更新并重启 Agent；Gateway 推理协议无需改动。平台分发安装包时，还需刷新 Gateway 镜像内的 Agent 制品，已有节点仍须各自升级。
 
 ## Claude Code auto 服务端安全检查
@@ -194,15 +198,28 @@ Chat Completions 的 `stop` 仍明确返回 400，未接入此模拟。此行为
 
 以下常驻 CLI 和 409 续接说明适用于兼容桥接（MCP）路径；原生直通与带安全上下文的请求每轮独立，不使用该续接绑定。
 
-CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态。`auth_status`、`tool_progress`、`tool_use_summary`、`prompt_suggestion` 与非初始化 `system` 生命周期通知在结果前后均只由本机消费，不进入公开回复；成功结果后的额度通知也不推翻已完成的结果。结果前的额度拒绝仍参与失败分类。通知不能替代模型回复或成功结果；新的初始化、额外模型输出、重复结果、`conversation_reset` 及未知顶层事件仍明确拒绝，不能把语义变化当成普通通知忽略。事件分类参考 [Agent SDK 类型](https://code.claude.com/docs/en/agent-sdk/typescript)。
+CLI 返回的 `max_tokens`、`stop_sequence`、`refusal` 和 `model_context_window_exceeded` 作为终止响应传给客户端，保留原始 `stop_reason` 与已生成内容；收到完整 `message_stop` 后停止该 CLI，避免 CLI 的自动恢复续写越过调用方的输出边界。`tool_use` 仍保留原进程等待工具结果。自然结束 `end_turn` 继续校验 CLI 最终成功结果和退出状态。`auth_status`、`tool_progress`、`tool_use_summary`、`prompt_suggestion` 与非初始化 `system` 生命周期通知在结果前后均只由本机消费，不进入公开回复；成功结果后的额度通知也不推翻已完成的结果。结果前的额度拒绝仍参与失败分类。通知不能替代模型回复或成功结果；新的初始化、额外模型输出、重复结果和 `conversation_reset` 仍明确拒绝，不能把语义变化当成普通通知忽略。`keep_alive` 同样只是通知。
+
+2026-11-18 起，对 CLI 不认识的内容，原生回合与兼容桥接回合分开处理：
+
+- **原生回合**：新版 CLI 新增的顶层事件类型直接跳过（结果之前或之后都一样），回合结束日志记下跳过的数量 `ignored_cli_events`。原生回合的模型输出只经 `stream_event` 到达，其顺序仍照常校验，所以这些事件不含调用方需要的内容。`stream_event` 中不认识的事件类型、增量类型与停止原因原样转发，与 Messages API 的约定一致：API 可能新增事件，由客户端跳过不认识的。不认识的停止原因按终止原因处理，转发后停止 CLI。仍会让回合失败的有：`conversation_reset`、`control_request`（会等待答复），以及流中的 `error` 事件（随后附带截获的上游应答）。
+- **兼容桥接回合**：继续拒绝一切未知内容，因为它要自行重建回复内容。事件分类参考 [Agent SDK 类型](https://code.claude.com/docs/en/agent-sdk/typescript)。
 
 本机 CLI 设置失败、启动失败、非法流、失败结果、工具隔离失败、异常退出及缺少结果按 `upstream_error` 报告（响应开始前 HTTP 502，SSE 已开始时以错误事件结束），避免将 Agent 故障误报为调用方请求 400；诊断分类仍保留，且不因此开启自动重试。实际捕获的上游 400/429/529 及错误文档继续按上游返回，能力拒绝仍保留客户端恢复分类，超时仍为 504。
 
-失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
+失败时 Agent 记录 `Claude Messages round failed`，包含 `runtime_id` 和固定的 `reason` 分类（如 `cli_protocol`、`cli_result`、`cli_exit`、`missing_result`、`unsafe_tools`）；CLI 事件解析器拒绝时额外记录 `cli_event_line` 与固定的 `cli_event_error`（如 `unsupported_stop_reason`、`ambiguous_tool_call`）。CLI 写过标准错误时，记录其最后 8 KiB 归入的固定分类 `cli_stderr`（如 `login_required`、`unknown_option`、`config_invalid`、`disk_full`、`out_of_memory`，无法识别时为 `other`）。CLI 拒绝启动时，记录它给出的 `startup_failure_reason`，字段为 `cli_startup_failure`（如 `proxy_invalid`、`config_file_invalid`）；为此每个 CLI 进程都带 `CLAUDE_CODE_STARTUP_FAILURE_RESULTS=1`。已观察到的失败即使遇到调用方断开，也会记录分类。这些字段不包含消息内容、工具参数、CLI 原始输出或任意错误文本。公开错误仍隐去底层细节。
+
+同一账户的多个 CLI 进程共用一份登录，而刷新令牌只能使用一次，并发刷新时会有进程失败（[官方 issue #24317](https://github.com/anthropics/claude-code/issues/24317)，[错误说明](https://code.claude.com/docs/en/errors)）。2026-11-18 起有两项处理：
+
+- CLI 报告「另一个进程正在刷新登录」（`another Claude Code process is refreshing it`，出现在合成错误消息或错误结果中）时，记为 `reason=login_refresh_busy`，按可重试的 `backpressure` 报告，Gateway 在首个事件之前换下一个候选。以前这种情况记为 `cli_result`，以 502 应答并计入熔断。只匹配 CLI 自己的错误（带 `error` 字段的合成消息或错误结果），不匹配模型输出。
+- 推理请求被取消（客户端断开、超时、会话回收、运行时关闭）时，先向 CLI 进程组发送 SIGTERM，2 秒后再发 SIGKILL，让正在刷新登录的进程有机会保存新令牌，不至于留下已作废的旧令牌。Claude Code 2.1.326 收到 SIGTERM 后约 0.55 秒退出。回合正常结束（包括工具回合的终止）与隔离失败仍立即终止：此时 CLI 已经空闲，或者必须立刻停止；而终止事件要等进程退出后才发给客户端，改成 SIGTERM 会让每个工具回合慢半秒。
+- 每个 CLI 进程都带 `CLAUDE_CODE_OAUTH_401_WAIT_MS=30000`：访问令牌刚被另一个进程轮换、请求收到 401 时，CLI 在凭据存储中等待新令牌，而不是直接失败。这个变量不在官方文档中，是从 Claude Code `2.1.326` 的程序里确认的；不认识它的 CLI 行为不变。登录确实过期时，每个请求最多多等 30 秒。尚未在真实并发刷新中验收。
 
 2026-11-11 起，`unsafe_tools` 同样附带事件行号，并区分 `unexpected_local_tool`（CLI 初始化注册了不允许的本机工具）、`undeclared_upstream_tool`（桥接回合中上游返回未声明的工具名，或原生回合中返回未声明的本机 CLI 工具名）和 `missing_upstream_tool_id`（工具调用缺少 ID）。三类拒绝继续保留，公开错误按上段的后端失败规则处理。查看运行中 Agent 的实际 `-log-file`；旧手动运行的 `/tmp` 日志可能已停止更新，不能与后来启动的 LaunchAgent 混用。
 
 进入生成回合之前拒绝请求时，Agent 另记录 `Claude Messages request rejected`，带 `runtime_id`、错误码和固定的 `reason`。续接历史、配置、归属、忙碌状态、结果数量、额外内容、重复结果及已消费结果分别分类；配置不匹配另带 `config_changes`，只列出 `system`、`tools`、`max_tokens`、`api_version` 等变更字段名，不含值、哈希或身份凭据。`invalid_config` 是运行时错误分类，并不特指 YAML 配置错误。入口拒绝的公开错误也携带本地运行时 ID，便于关联 Gateway 日志。此诊断需更新并重启 Agent，Gateway 无需修改。
+
+原生回合的结束日志还带有各阶段耗时、上游连接等待以及进程 CPU 与内存（2026-11-18 起），字段、指标与离线基准见 [Agent README「本机 CLI 回合分段计时」](../README.md#本机-cli-回合分段计时)。
 
 Agent 的生产 Messages 入口为每个已接纳回合记录 INFO 级 `Claude Messages round started` 和 `Claude Messages round finished`，共同携带本地随机 `round_id`、`runtime_id` 与 `message_path`。`native_safeguards` 表示本轮进入带安全上下文的原生路径，`native` 表示未带 `safeguards` 的原生直通，`mcp_bridge` 表示兼容桥接。结束日志包含 `outcome`（`completed` / `failed` / `canceled`）与 `safeguard_status`：`available`、`unsupported`、`unavailable`、`missing`（未收到对应结果）、`unknown`（未来状态）、`invalid`（结果形状异常）、`mixed`（同轮出现不同状态）；`native` 与 `mcp_bridge` 为 `not_requested`。只观察已投递结果，不改写判定或将 `available` 等同于工具已获准；不记录提示词、历史、工具参数、工具 ID、判定原因或凭据。客户端设为 `1` 后应结合这两个字段检查实际路径及上游支持状态。新增日志需更新并重启 Agent，Gateway 无需修改。
 

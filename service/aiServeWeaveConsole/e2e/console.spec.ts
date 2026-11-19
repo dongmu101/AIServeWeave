@@ -17,7 +17,7 @@ const pages = [
   "/console/jobs/history/job_p10", "/console/settings", "/console/account",
   "/operator/fleet", "/operator/models", "/operator/routes", "/operator/workflow-templates",
   "/operator/workflows", "/operator/audit", "/operator/requests", "/operator/metrics",
-  "/operator/operators", "/operator/account", "/operator/billing",
+  "/operator/operators", "/operator/account", "/operator/billing", "/operator/usage",
 ];
 
 for (const width of [1440, 390, 320]) {

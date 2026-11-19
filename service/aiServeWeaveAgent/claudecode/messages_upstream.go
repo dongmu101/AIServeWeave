@@ -21,14 +21,17 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveAgent/internal/cliphase"
 
 	"golang.org/x/net/http/httpproxy"
 	"golang.org/x/net/proxy"
@@ -74,6 +77,32 @@ type upstreamRecord struct {
 type upstreamCapture struct {
 	mu   sync.Mutex
 	last *upstreamRecord
+	// phases receives when the model request reached the proxy, its wait for
+	// an upstream connection and its response headers; nil records nothing.
+	// phases 接收模型请求到达代理的时刻、它等待上游连接的时间以及响应头到达的时刻；为 nil 时不记录。
+	phases *cliphase.Timeline
+}
+
+// timeConnect marks the model request as sent and returns it traced, so
+// the time it waits for an upstream connection, and whether it reused one,
+// reach the round's phases. Only the first request of a round counts: a
+// CLI retry finds the connection its first attempt opened.
+// timeConnect 把模型请求标记为已发出，并返回带跟踪的请求，使其等待上游连接的时间及是否复用
+// 连接进入回合的阶段记录。只计回合的第一个请求：CLI 重试时会用到首次尝试打开的连接。
+func (c *upstreamCapture) timeConnect(out *http.Request) *http.Request {
+	if c.phases == nil {
+		return out
+	}
+	c.phases.Mark(cliphase.RequestSent)
+	var asked atomic.Int64
+	return out.WithContext(httptrace.WithClientTrace(out.Context(), &httptrace.ClientTrace{
+		GetConn: func(string) { asked.Store(time.Now().UnixNano()) },
+		GotConn: func(info httptrace.GotConnInfo) {
+			if start := asked.Load(); start != 0 {
+				c.phases.Connected(time.Duration(time.Now().UnixNano()-start), info.Reused)
+			}
+		},
+	}))
 }
 
 func (c *upstreamCapture) record(r *upstreamRecord) {
@@ -663,10 +692,16 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 	} else {
 		out.Host = upstreamAPIHost
 	}
+	if primary {
+		out = p.capture.timeConnect(out)
+	}
 	response, err := p.transport.RoundTrip(out)
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		return
+	}
+	if primary {
+		p.capture.phases.Mark(cliphase.UpstreamHeaders)
 	}
 	defer response.Body.Close()
 	header := response.Header.Clone()

@@ -36,6 +36,7 @@ test("model pricing warns about unpriced aliases, copies the official price and 
   await page.getByRole("button", { name: `编辑 org/${LONG_TEXT} 的定价`, exact: true }).click();
   const dialog = page.getByRole("dialog");
   await expect(dialog.getByLabel("参照模型（价目表条目）", { exact: true })).toHaveValue("claude-x");
+  await expect(dialog.getByLabel("从价目表中选择…", { exact: true })).toHaveValue("claude-x");
   await expect(dialog.getByLabel("模型倍率", { exact: true })).toHaveValue("1.5");
   await dialog.getByRole("button", { name: "从官方价复制", exact: true }).click();
   await expect(dialog.getByLabel("输入单价（点 / 百万 token）", { exact: true })).toHaveValue("3");

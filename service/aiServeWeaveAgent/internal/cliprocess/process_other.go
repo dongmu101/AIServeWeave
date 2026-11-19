@@ -5,6 +5,7 @@ package cliprocess
 import (
 	"errors"
 	"os/exec"
+	"time"
 )
 
 // Configure refuses systems without process-tree reclamation support.
@@ -14,3 +15,9 @@ func Configure(*exec.Cmd) error { return errors.New("CLI process platform unsupp
 // Start refuses systems without process-tree reclamation support.
 // Start 拒绝不支持进程树回收的系统。
 func Start(*exec.Cmd) error { return errors.New("CLI process platform unsupported") }
+
+// ConfigureGraceful refuses systems without process-tree reclamation support.
+// ConfigureGraceful 拒绝不支持进程树回收的系统。
+func ConfigureGraceful(*exec.Cmd, time.Duration) (func() error, error) {
+	return nil, errors.New("CLI process platform unsupported")
+}

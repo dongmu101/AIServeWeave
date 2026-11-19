@@ -224,19 +224,23 @@ builder-reset: ## 删除并重建多平台 builder（改了 BUILD_PARALLELISM �
 	-docker buildx rm $(BUILDER)
 	@$(MAKE) --no-print-directory builder
 
-publish-console:
+# Each per-service target also checks memory and prepares the builder, so
+# running one alone (make publish-console) warns the same way publish does.
+# 每个单服务目标也检查内存并准备 builder，单独运行（如 make publish-console）时与
+# publish 一样给出警告。
+publish-console: check-docker-mem builder
 	@echo "==> 构建并推送 console（$(PUBLISH_PLATFORMS)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  $(LABEL_ARGS) $(call hub_tags,console) service/aiServeWeaveConsole
 
 # Studio, like the Console, has its own context and Dockerfile.
 # Studio 与 Console 一样有自己的构建上下文与 Dockerfile。
-publish-studio:
+publish-studio: check-docker-mem builder
 	@echo "==> 构建并推送 studio（$(PUBLISH_PLATFORMS)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  $(LABEL_ARGS) $(call hub_tags,studio) service/aiServeWeaveStudio
 
-publish-%:
+publish-%: check-docker-mem builder
 	@test -n "$(SERVICE_$*)" || { echo "未知服务: $*（可选: registry controlplane gateway console studio）" >&2; exit 1; }
 	@echo "==> 构建并推送 $*（$(PUBLISH_PLATFORMS)，版本 $(VERSION)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
