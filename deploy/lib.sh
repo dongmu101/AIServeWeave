@@ -388,7 +388,7 @@ latest_version() {
   # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
   AISW_IMAGE_TAG="$LATEST_TAG" compose pull $BUILD_ORDER >&2 || return 1
   for service in $BUILD_ORDER; do
-    image="$(AISW_IMAGE_TAG="$LATEST_TAG" compose config --images "$service")"
+    image="$(AISW_IMAGE_TAG="$LATEST_TAG" service_image "$service")"
     version="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image" 2>/dev/null)"
     if [[ -z "$version" || "$version" == "<no value>" ]]; then
       warn "${image} 没有 org.opencontainers.image.version 标签，无法确定它的版本"
@@ -421,6 +421,18 @@ running_image_tag() {
   return 1
 }
 
+# service_image prints the image of one AIServeWeave service. compose config
+# --images also lists the images of the services it depends on (gateway
+# prints mysql, redis and registry too), so only the service's own
+# aiserveweave-<name> line is kept; registry-init runs the registry image.
+#
+# service_image 输出一个 AIServeWeave 服务自己的镜像。compose config --images 还会列出它所
+# 依赖服务的镜像（gateway 会连带输出 mysql、redis 与 registry），因此只保留该服务自己的
+# aiserveweave-<名字> 那一行；registry-init 使用 registry 镜像。
+service_image() {
+  compose config --images "$1" | grep -m1 "/aiserveweave-${1%-init}:" || true
+}
+
 # missing_services prints the AIServeWeave services whose image is not on
 # this host under the current tag.
 #
@@ -428,7 +440,7 @@ running_image_tag() {
 missing_services() {
   local service image
   for service in $BUILD_ORDER; do
-    image="$(compose config --images "$service")"
+    image="$(service_image "$service")"
     docker image inspect "$image" >/dev/null 2>&1 || printf '%s ' "$service"
   done
 }
