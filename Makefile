@@ -178,8 +178,15 @@ save: ## 把镜像存成压缩包，供无法直连 ssh 时手工拷贝
 check-git:
 	@if [[ -n "$$(git status --porcelain --untracked-files=no)" ]]; then \
 	  echo "工作区有未提交的改动，镜像与服务器拉到的代码不一致（FORCE=1 跳过）" >&2; [[ "$(FORCE)" == 1 ]]; fi
-	@if [[ "$$(git rev-parse HEAD)" != "$$(git rev-parse '@{u}' 2>/dev/null)" ]]; then \
-	  echo "HEAD 与上游分支不一致，先 git push（FORCE=1 跳过；服务器不想拉代码时加 UPGRADE_ARGS=--no-pull）" >&2; [[ "$(FORCE)" == 1 ]]; fi
+	@git fetch --quiet 2>/dev/null || echo "警告: git fetch 失败，按本地记录的上游分支比较，可能已过期" >&2
+	@head="$$(git rev-parse HEAD)" up="$$(git rev-parse '@{u}' 2>/dev/null)"; \
+	if [[ "$$head" != "$$up" ]]; then \
+	  if [[ -n "$$up" ]] && git merge-base --is-ancestor HEAD "$$up"; then \
+	    echo "上游分支有本地没有的新提交（$$(git describe --tags --always --abbrev=12 "$$up")），服务器会跟随那个版本，先 git pull（FORCE=1 跳过）" >&2; \
+	  else \
+	    echo "HEAD 与上游分支不一致，先 git push（FORCE=1 跳过；服务器不想拉代码时加 UPGRADE_ARGS=--no-pull）" >&2; \
+	  fi; \
+	  [[ "$(FORCE)" == 1 ]]; fi
 
 deploy: check-server check-git images push ## 构建 + 送达 + 在服务器上 upgrade.sh --no-build
 	@echo "==> 在 $(SERVER) 上重新部署"

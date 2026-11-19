@@ -114,7 +114,7 @@ deploy/upgrade.sh --image-tag v0.2.0                                   # 已有�
 ### 推送到 Docker Hub，主机拉取
 
 在开发机执行 `make publish`：构建 amd64 与 arm64 两种架构的镜像，以 `git describe` 版本（如
-`v0.1.0-107-g3625aaf`）为 tag，推送到 `docker.io/dongmu101/aiserveweave-<服务>`。要求本机工作区干净且已推送。
+`v0.1.0-107-g3625aaf`）为 tag，推送到 `docker.io/dongmu101/aiserveweave-<服务>`。要求本机工作区干净、且与上游分支同一个提交（发布前会先 `git fetch`；上游有新提交时先 `git pull`，否则服务器跟随的版本没有镜像）。
 
 ```bash
 docker login                              # 首次
