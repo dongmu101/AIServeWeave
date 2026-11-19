@@ -34,7 +34,7 @@ usage() {
 镜像来源（默认从源码构建）:
   --image-tag vX.Y.Z         拉取该 release 的预构建镜像（GHCR），主机上不构建；写入 .env 的
                              AISW_IMAGE_TAG。小内存主机（如 2 核 3G）推荐
-  --follow                   拉取 make publish 为当前提交推送的镜像，之后 upgrade.sh 继续跟随；
+  --follow                   拉取 make publish 最近推送的 :latest 镜像，之后 upgrade.sh 继续跟随；
                              写入 .env 的 AISW_IMAGE_FOLLOW=true，需同时设置 AISW_IMAGE_REPO
   --goproxy URL              源码构建时的 Go 模块代理，如 https://goproxy.cn,direct
 
@@ -126,7 +126,7 @@ fi
 [[ -z "$IMAGE_TAG_ARG" || $FOLLOW == 0 ]] || die "--image-tag 与 --follow 不能同时使用"
 [[ -z "$IMAGE_TAG_ARG" ]] || env_set AISW_IMAGE_TAG "$IMAGE_TAG_ARG"
 (( FOLLOW == 0 )) || env_set AISW_IMAGE_FOLLOW true
-follow_commit_images
+follow_latest_images
 [[ -z "$ADVERTISE_ADDR" ]] || env_set GATEWAY_ADVERTISE_ADDR "$ADVERTISE_ADDR"
 if [[ -n "$AGENT_URL" ]]; then
   [[ "$AGENT_URL" =~ ^https://[^/?#]+$ ]] || die "--agent-public-url 必须是 https 站点根地址，如 https://open7x.com"

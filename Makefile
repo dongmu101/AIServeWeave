@@ -32,9 +32,9 @@ SHELL := /bin/bash
 PLATFORM        ?= linux/amd64
 REPO            ?= ghcr.io/dongmu101
 TAG             ?= local
-# Same command as source_version in deploy/lib.sh: the server derives the tag
-# to pull from it in follow mode, so the two must agree.
-# 与 deploy/lib.sh 的 source_version 同一条命令：服务器在跟随模式下据此推出要拉取的 tag，两边必须一致。
+# Same command as source_version in deploy/lib.sh, so a version tag names the
+# same commit on both sides; follow mode pins AISW_IMAGE_TAG to it.
+# 与 deploy/lib.sh 的 source_version 同一条命令，版本 tag 在两边指向同一个提交；跟随模式把 AISW_IMAGE_TAG 固定为它。
 VERSION         ?= $(shell git describe --tags --always --dirty --abbrev=12 2>/dev/null || echo dev)
 # Evaluate it once: ?= is recursive, so every recipe would rerun git describe,
 # and a commit made while publish runs would tag images and print a version
@@ -182,7 +182,7 @@ check-git:
 	@head="$$(git rev-parse HEAD)" up="$$(git rev-parse '@{u}' 2>/dev/null)"; \
 	if [[ "$$head" != "$$up" ]]; then \
 	  if [[ -n "$$up" ]] && git merge-base --is-ancestor HEAD "$$up"; then \
-	    echo "上游分支有本地没有的新提交（$$(git describe --tags --always --abbrev=12 "$$up")），服务器会跟随那个版本，先 git pull（FORCE=1 跳过）" >&2; \
+	    echo "上游分支有本地没有的新提交（$$(git describe --tags --always --abbrev=12 "$$up")），服务器会快进到那个提交，镜像应出自同一提交，先 git pull（FORCE=1 跳过）" >&2; \
 	  else \
 	    echo "HEAD 与上游分支不一致，先 git push（FORCE=1 跳过；服务器不想拉代码时加 UPGRADE_ARGS=--no-pull）" >&2; \
 	  fi; \

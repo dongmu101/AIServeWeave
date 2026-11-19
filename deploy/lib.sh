@@ -365,27 +365,42 @@ pull_images() {
   compose pull $BUILD_ORDER
 }
 
-# latest_published_tag walks back from HEAD and prints the version of the
-# newest commit whose images are all on the registry, checking at most 50
-# commits. It asks the registry for manifests only and downloads nothing.
+# LATEST_TAG is the moving tag make publish pushes alongside each version;
+# follow mode pulls it.
 #
-# latest_published_tag 从 HEAD 往回找，输出镜像已全部发布到仓库的最近一个提交的版本，最多
-# 检查 50 个提交。只向仓库查询清单，不下载任何东西。
-latest_published_tag() {
-  local commit tag service image ok
-  for commit in $(git -C "$ROOT_DIR" rev-list --max-count=50 HEAD); do
-    tag="$(git -C "$ROOT_DIR" describe --tags --always --abbrev=12 "$commit" 2>/dev/null)" || continue
-    ok=1
-    for service in $BUILD_ORDER; do
-      image="$(compose config --images "$service")"
-      docker manifest inspect "${image%:*}:${tag}" >/dev/null 2>&1 || { ok=0; break; }
-    done
-    if (( ok == 1 )); then
-      printf '%s' "$tag"
-      return 0
+# LATEST_TAG 是 make publish 随每个版本一并推送的浮动 tag；跟随模式拉取它。
+LATEST_TAG=latest
+
+# latest_version pulls every AIServeWeave image at LATEST_TAG and prints the
+# version they were built from, read from the org.opencontainers.image.version
+# label make publish sets. It fails when a pull fails, a label is missing, or
+# the images disagree (a make publish still pushing, or one that stopped
+# halfway). It starts nothing, so a failure leaves the running services alone.
+#
+# latest_version 拉取 LATEST_TAG 下的全部 AIServeWeave 镜像，并从 make publish 设置的
+# org.opencontainers.image.version 标签读出它们构建自哪个版本，输出该版本。拉取失败、缺少
+# 标签，或各镜像版本不一致（make publish 仍在推送，或中途停下）时失败。它不启动任何东西，
+# 失败时正在运行的服务不受影响。
+latest_version() {
+  local repo service image version versions=""
+  repo="${AISW_IMAGE_REPO:-$(env_get AISW_IMAGE_REPO)}"
+  log "拉取最新镜像 ${repo:-ghcr.io/dongmu101}/aiserveweave-*:${LATEST_TAG}" >&2
+  # shellcheck disable=SC2086 # BUILD_ORDER is a list of service names / 服务名列表
+  AISW_IMAGE_TAG="$LATEST_TAG" compose pull $BUILD_ORDER >&2 || return 1
+  for service in $BUILD_ORDER; do
+    image="$(AISW_IMAGE_TAG="$LATEST_TAG" compose config --images "$service")"
+    version="$(docker image inspect -f '{{index .Config.Labels "org.opencontainers.image.version"}}' "$image" 2>/dev/null)"
+    if [[ -z "$version" || "$version" == "<no value>" ]]; then
+      warn "${image} 没有 org.opencontainers.image.version 标签，无法确定它的版本"
+      return 1
     fi
+    [[ " $versions " == *" $version "* ]] || versions+="${versions:+ }$version"
   done
-  return 1
+  if [[ "$versions" == *" "* ]]; then
+    warn "${LATEST_TAG} 下各服务的镜像版本不一致（${versions}），可能 make publish 仍在推送或中途停下"
+    return 1
+  fi
+  printf '%s' "$versions"
 }
 
 # running_image_tag prints the tag of the image the first running
@@ -439,43 +454,44 @@ up_services() {
 # prepare_images makes the images that compose up will start: pulled when
 # AISW_IMAGE_TAG names a release, otherwise built from this checkout.
 #
-# In follow mode, when this commit's images were never published, nothing is
-# built on the host: the newest earlier commit whose images were published is
-# pulled instead. Failing that, the tag goes back to the one the running
-# containers use, and a service with no image under it is skipped with a
-# warning. A tag pinned with --image-tag
-# names a release that should exist, so a failed pull there stops the upgrade.
+# In follow mode it pulls the latest published images and pins AISW_IMAGE_TAG
+# to the version they carry, so .env, rollback and the compose check name a
+# real version rather than latest. When latest cannot be resolved, nothing is
+# built on the host: the tag goes back to the one the running containers use,
+# and a service with no image under it is skipped with a warning. A tag pinned
+# with --image-tag names a release that should exist, so a failed pull there
+# stops the upgrade.
 #
 # prepare_images 准备 compose up 要启动的镜像：AISW_IMAGE_TAG 指定了 release 时拉取，
 # 否则从当前检出构建。
 #
-# 跟随模式下，该提交的镜像从未发布时不在本机构建：改为拉取镜像已发布的最近一个更早提交。
-# 也找不到时，tag 退回正在运行的容器所用的 tag，该 tag 下没有镜像的服务跳过并警告。用 --image-tag 固定的 tag 指向
-# 一个本应存在的 release，拉取失败时中止。
+# 跟随模式下拉取最新发布的镜像，并把 AISW_IMAGE_TAG 固定为镜像所带的版本，让 .env、回滚与
+# compose 核对指向一个确切版本而不是 latest。latest 无法确定版本时不在本机构建：tag 退回
+# 正在运行的容器所用的 tag，该 tag 下没有镜像的服务跳过并警告。用 --image-tag 固定的 tag
+# 指向一个本应存在的 release，拉取失败时中止。
 prepare_images() {
-  local version="$1" tag repo running published
+  local version="$1" tag repo running latest
   shift
   tag="$(image_tag)"
+  repo="${AISW_IMAGE_REPO:-$(env_get AISW_IMAGE_REPO)}"
+  if [[ "$(env_get AISW_IMAGE_FOLLOW)" == true && -z "${AISW_IMAGE_TAG+x}" ]]; then
+    if latest="$(latest_version)"; then
+      env_set AISW_IMAGE_TAG "$latest"
+      log "最新发布的镜像版本：${latest}（代码 ${version}）"
+      pull_images "$latest" && return 0
+    fi
+    running="$(running_image_tag)" ||
+      die "无法从 ${repo:-ghcr.io/dongmu101} 拉取可用的 ${LATEST_TAG} 镜像，本机也没有正在运行的服务可沿用：先 make publish，或 deploy/upgrade.sh --image-tag <已发布的版本>"
+    warn "无法使用 ${repo:-ghcr.io/dongmu101} 上的 ${LATEST_TAG} 镜像，不在本机构建，沿用正在运行的镜像 ${running}"
+    env_set AISW_IMAGE_TAG "$running"
+    pull_images "$running" >/dev/null 2>&1 || true
+    SKIP_SERVICES="$(missing_services)"
+    [[ -z "$SKIP_SERVICES" ]] ||
+      warn "以下服务在 ${running} 下没有镜像，本次不启动：${SKIP_SERVICES}（发布镜像后重跑 deploy/upgrade.sh）"
+    return 0
+  fi
   if [[ -n "$tag" ]]; then
     pull_images "$tag" && return 0
-    repo="${AISW_IMAGE_REPO:-$(env_get AISW_IMAGE_REPO)}"
-    if [[ "$(env_get AISW_IMAGE_FOLLOW)" == true && "$tag" == "$version" ]]; then
-      log "查找镜像已发布的最近一个提交"
-      if published="$(latest_published_tag)" && [[ "$published" != "$tag" ]]; then
-        warn "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的镜像（该提交未发布），改用最近已发布的 ${published}，不在本机构建"
-        env_set AISW_IMAGE_TAG "$published"
-        pull_images "$published" && return 0
-      fi
-      running="$(running_image_tag)" ||
-        die "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的镜像，本机也没有正在运行的服务可沿用：先 make publish，或 deploy/upgrade.sh --image-tag <已发布的版本>"
-      warn "${repo:-ghcr.io/dongmu101} 上没有 ${tag} 的镜像（该提交未发布），不在本机构建，沿用正在运行的镜像 ${running}"
-      env_set AISW_IMAGE_TAG "$running"
-      pull_images "$running" >/dev/null 2>&1 || true
-      SKIP_SERVICES="$(missing_services)"
-      [[ -z "$SKIP_SERVICES" ]] ||
-        warn "以下服务在 ${running} 下没有镜像，本次不启动：${SKIP_SERVICES}（发布镜像后重跑 deploy/upgrade.sh）"
-      return 0
-    fi
     die "镜像拉取失败：确认 ${repo:-ghcr.io/dongmu101} 上已有 ${tag}（release 流水线成功，或已在构建机对该提交 make publish）；仓库为私有时先 docker login。代码可能已更新，服务未改动"
   else
     check_memory
@@ -511,28 +527,25 @@ up_flags() {
   [[ -z "$(image_tag)" ]] || printf '%s' --no-build
 }
 
-# follow_commit_images points AISW_IMAGE_TAG at this checkout's version when
-# AISW_IMAGE_FOLLOW is true. That version is the tag make publish pushes for
-# the same commit, so an upgrade that fast-forwarded the code pulls images
-# built from exactly that code. The tag is written into .env, so a manual
-# docker compose up afterwards starts the same images.
+# follow_latest_images prepares follow mode (AISW_IMAGE_FOLLOW=true): it sets
+# AISW_IMAGE_TAG to latest so compose and up_flags treat this as a pull,
+# and prepare_images then pins it to the version the pulled images carry.
+# The code is still fast-forwarded, but the images are whatever make publish
+# pushed last, which may be an older or newer commit than this checkout.
 #
-# follow_commit_images 在 AISW_IMAGE_FOLLOW 为 true 时把 AISW_IMAGE_TAG 指向当前检出的
-# 版本。这个版本正是 make publish 为同一提交推送的 tag，因此快进了代码的升级拉取到的，正是由
-# 这份代码构建的镜像。tag 写入 .env，之后手工 docker compose up 启动的也是同一批镜像。
-follow_commit_images() {
+# follow_latest_images 为跟随模式（AISW_IMAGE_FOLLOW=true）做准备：把 AISW_IMAGE_TAG 设为
+# latest，让 compose 与 up_flags 按拉取模式处理，随后 prepare_images 把它固定为拉到的镜像所带
+# 的版本。代码照常快进，但镜像是 make publish 最后一次推送的那批，可能比当前检出旧或新。
+follow_latest_images() {
   [[ "$(env_get AISW_IMAGE_FOLLOW)" == true ]] || return 0
-  local version
-  version="$(source_version)"
-  case "$version" in
-    dev) die "跟随模式需要 git 检出来确定版本，取不到 git 版本" ;;
-    *-dirty) die "跟随模式下工作区不能有未提交的改动（版本 ${version}），make publish 不会推送这个版本" ;;
-  esac
-  [[ -z "${AISW_IMAGE_TAG+x}" ]] || warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，跟随模式不会生效"
+  if [[ -n "${AISW_IMAGE_TAG+x}" ]]; then
+    warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，跟随模式不会生效"
+    return 0
+  fi
   [[ -n "$(env_get AISW_IMAGE_REPO)" ]] ||
     warn "未设置 AISW_IMAGE_REPO，将从 ghcr.io/dongmu101 拉取；make publish 默认推送到 Docker Hub，应设置 AISW_IMAGE_REPO=docker.io/dongmu101"
-  env_set AISW_IMAGE_TAG "$version"
-  log "跟随当前提交的镜像：${version}"
+  env_set AISW_IMAGE_TAG "$LATEST_TAG"
+  log "跟随模式：拉取最新发布的镜像（${LATEST_TAG}）"
 }
 
 # source_version names the checkout being built, for each binary's -version.

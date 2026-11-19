@@ -27,7 +27,7 @@
 #   deploy/upgrade.sh gateway console      # rebuild only these services
 #   deploy/upgrade.sh --no-pull            # rebuild the current checkout as it is
 #   deploy/upgrade.sh --image-tag v0.2.0   # pull that release's images instead of building
-#   deploy/upgrade.sh --follow             # from now on, pull the images make publish pushed for each new commit
+#   deploy/upgrade.sh --follow             # from now on, pull the latest images make publish pushed
 #   deploy/upgrade.sh --no-build           # start images already loaded here (make push)
 #   deploy/upgrade.sh --help
 set -euo pipefail
@@ -44,7 +44,8 @@ usage() {
   --no-backup       跳过 MySQL 与 Registry 备份
   --backup-dir DIR  备份目录（默认 ~/aiserveweave-backups）
   --follow          开启跟随模式（写入 .env 的 AISW_IMAGE_FOLLOW=true）：之后每次升级拉取
-                    make publish 为新提交推送的镜像，直接运行 deploy/upgrade.sh 即可
+                    make publish 最近推送的 :latest 镜像，并把 AISW_IMAGE_TAG 固定为其版本，
+                    直接运行 deploy/upgrade.sh 即可
   --image-tag TAG   固定拉取这个版本的预构建镜像（写入 .env 的 AISW_IMAGE_TAG），并关闭跟随
                     模式；传空字符串 '' 切回源码构建。拉取模式下总是拉取全部服务的镜像
   --no-build        不构建也不拉取，直接启动本机已有的镜像（在别处构建后 load 进来，见根目录
@@ -95,9 +96,9 @@ if (( PULL == 1 )); then
 $dirty"
 
   log "拉取 $(git -C "$ROOT_DIR" rev-parse --abbrev-ref '@{u}')"
-  # Tags too: git describe on this host must match the build machine's, the
-  # version follow mode pulls by.
-  # 连同 tag 一起拉：本机的 git describe 必须与构建机一致，跟随模式按它拉取镜像。
+  # Tags too: the compose check (check_image_tag) resolves a release vX.Y.Z
+  # through its git tag.
+  # 连同 tag 一起拉：compose 核对（check_image_tag）要靠 git tag 找到 release vX.Y.Z 的提交。
   git -C "$ROOT_DIR" fetch --quiet --tags
   old="$(git -C "$ROOT_DIR" rev-parse HEAD)"
   new="$(git -C "$ROOT_DIR" rev-parse '@{u}')"
@@ -181,7 +182,7 @@ if (( SET_TAG == 1 )); then
   fi
 fi
 (( FOLLOW == 0 )) || env_set AISW_IMAGE_FOLLOW true
-(( NO_BUILD == 1 )) || follow_commit_images
+(( NO_BUILD == 1 )) || follow_latest_images
 fill_secrets
 ensure_controlplane_config
 ensure_access_log_off
