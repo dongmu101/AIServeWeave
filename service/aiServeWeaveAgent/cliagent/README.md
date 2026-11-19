@@ -208,7 +208,7 @@ OpenCode 与 Pi 透传所有 `*_API_KEY`，这同样包括托管供应商用的�
 
 请求中的 `reasoning`（`ChatRequest.Reasoning`）是提示：
 
-- Pi 映射为 `--thinking`：关闭思考为 `off`，否则为请求的档位（`minimal`–`xhigh`），要求思考却没给档位时为 `medium`。Pi 自己按所选模型收敛档位。
+- Pi 映射为 `--thinking`：关闭思考为 `off`，否则为请求的档位（`minimal`–`xhigh`；`max`、`ultra` 记为 `xhigh`），要求思考却没给档位时为 `medium`。Pi 自己按所选模型收敛档位。
 - 其余 CLI 没有可用的思考开关（Cursor 由模型名决定是否思考，OpenCode 的 variant 是各供应商自己的名字），提示被丢弃，请求照常执行，不会因此被拒绝。
 
 非零退出即使已经输出了部分文本，也按失败处理。进程以零状态退出、却没有给出成功条件时，如果输出中出现了未登录措辞，按 `unauthorized` 处理，否则按协议错误处理。

@@ -295,12 +295,12 @@ func suffixEffort(reasoning runtime.ReasoningConfig) string {
 
 // ollamaModelSuffix applies a model suffix to an Ollama request's model and
 // think fields. Ollama's think takes a boolean or "low"/"medium"/"high", so
-// minimal maps to low and xhigh to high. Without a suffix both are returned
-// unchanged.
+// minimal maps to low and xhigh, max and ultra to high. Without a suffix both
+// are returned unchanged.
 //
 // ollamaModelSuffix 把模型后缀应用到 Ollama 请求的 model 与 think 字段。Ollama 的 think
-// 取布尔值或 "low"/"medium"/"high"，因此 minimal 映射为 low、xhigh 映射为 high。没有后缀时
-// 两者原样返回。
+// 取布尔值或 "low"/"medium"/"high"，因此 minimal 映射为 low，xhigh、max 与 ultra 映射为
+// high。没有后缀时两者原样返回。
 func ollamaModelSuffix(model string, think json.RawMessage) (string, json.RawMessage) {
 	base, reasoning, ok := parseModelSuffix(model)
 	if !ok {
@@ -313,7 +313,7 @@ func ollamaModelSuffix(model string, think json.RawMessage) (string, json.RawMes
 	switch level {
 	case runtime.ReasoningEffortMinimal:
 		level = runtime.ReasoningEffortLow
-	case runtime.ReasoningEffortXHigh:
+	case runtime.ReasoningEffortXHigh, runtime.ReasoningEffortMax, runtime.ReasoningEffortUltra:
 		level = runtime.ReasoningEffortHigh
 	}
 	data, _ := json.Marshal(level)

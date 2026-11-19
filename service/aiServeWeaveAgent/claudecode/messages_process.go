@@ -338,7 +338,7 @@ func (b *messagesBridge) runProcess(s *messagesSession) error {
 		if capture == nil {
 			capture = &upstreamCapture{}
 		}
-		proxy, err := startUpstreamProxy(capture, env, nativeRequest)
+		proxy, err := startUpstreamProxy(capture, env, b.pool, nativeRequest)
 		if err != nil {
 			return errProbeSetup
 		}

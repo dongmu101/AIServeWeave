@@ -218,7 +218,12 @@ type upstreamProxy struct {
 	accepted  *connQueue
 	capture   *upstreamCapture
 	transport *http.Transport
+	// shared is the runtime's connection pool for decrypted upstreamAPIHost
+	// requests; nil sends them over transport.
+	// shared 是运行时用于解密后 upstreamAPIHost 请求的连接池；为 nil 时经 transport 发送。
+	shared    *upstreamPool
 	route     func(*url.URL) (*url.URL, error)
+	roots     *x509.CertPool
 	proxyURL  string
 	authority string
 	caPEM     []byte
@@ -238,33 +243,159 @@ type upstreamProxy struct {
 	stop context.CancelFunc
 }
 
-// startUpstreamProxy starts a capture proxy whose outbound routing follows
-// the proxy and CA settings in env, the environment the CLI would otherwise
-// have used.
+// upstreamRouting reads the proxy and CA settings in env, the environment the
+// CLI would otherwise have used: route picks the proxy for a URL, roots
+// verifies upstream certificates, and extraCA names the CA bundle env
+// already trusted.
 //
-// startUpstreamProxy 启动截获代理，出站路由遵循 env 中的代理与 CA 设置，即 CLI 原本会使用的环境。
-func startUpstreamProxy(capture *upstreamCapture, env []string, request ...[]byte) (*upstreamProxy, error) {
-	caPEM, leaf, err := upstreamCertificates()
-	if err != nil {
-		return nil, err
-	}
+// upstreamRouting 读取 env（CLI 原本会使用的环境）中的代理与 CA 设置：route 为 URL 选择
+// 代理，roots 用于校验上游证书，extraCA 是 env 原本已信任的 CA 证书包路径。
+func upstreamRouting(env []string) (route func(*url.URL) (*url.URL, error), roots *x509.CertPool, extraCA string) {
 	values := envValues(env)
 	config := httpproxy.Config{
 		HTTPProxy:  firstValue(values, "HTTP_PROXY", "http_proxy"),
 		HTTPSProxy: firstValue(values, "HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"),
 		NoProxy:    firstValue(values, "NO_PROXY", "no_proxy"),
 	}
-	route := config.ProxyFunc()
 	roots, err := x509.SystemCertPool()
 	if err != nil || roots == nil {
 		roots = x509.NewCertPool()
 	}
-	extraCA := values["NODE_EXTRA_CA_CERTS"]
+	extraCA = values["NODE_EXTRA_CA_CERTS"]
 	if extraCA != "" {
 		if data, err := os.ReadFile(extraCA); err == nil {
 			roots.AppendCertsFromPEM(data)
 		}
 	}
+	return config.ProxyFunc(), roots, extraCA
+}
+
+// upstreamPool holds the connections to upstreamAPIHost that every round of
+// one runtime — one account directory — shares, HTTP/2 multiplexed when the
+// upstream offers it, so the CLI's start-up calls and model request reuse an
+// established connection instead of each process paying a new handshake.
+// Runtimes never share a pool, so accounts are never linked at the
+// connection level. Routing follows the runtime's environment, the same as a
+// per-process transport: every round of a runtime starts from the same
+// environment, so the first round's routing is every round's. Only close
+// ends its connections: a round ends its own requests through their contexts.
+//
+// upstreamPool 持有一个运行时（一个账户目录）所有回合共用的到 upstreamAPIHost 的连接，
+// 上游支持时以 HTTP/2 多路复用，使 CLI 的启动请求与模型请求复用已建好的连接，而不是每个
+// 进程各付一次握手。运行时之间从不共用连接池，账户因此不会在连接层面被关联。路由遵循
+// 运行时的环境，与每进程的 transport 相同：同一运行时的每个回合都从同一份环境开始，
+// 第一个回合的路由即所有回合的路由。只有 close 会结束其连接：回合通过请求上下文结束
+// 自己的请求。
+type upstreamPool struct {
+	once      sync.Once
+	transport *http.Transport
+	mu        sync.Mutex
+	conns     map[net.Conn]bool
+	closed    bool
+}
+
+// upstreamPoolIdle is how long an idle shared connection is kept.
+// upstreamPoolIdle 是共用连接空闲时保留的时长。
+const upstreamPoolIdle = 90 * time.Second
+
+func newUpstreamPool() *upstreamPool {
+	return &upstreamPool{conns: make(map[net.Conn]bool)}
+}
+
+// roundTripper returns the shared transport, built on first use with route
+// and roots from the runtime's environment, or nil once the pool is closed
+// or for a nil pool; the caller then uses its own connections.
+// roundTripper 返回共用的 transport（首次使用时以运行时环境得出的 route 与 roots 构建）；
+// 连接池已关闭或为 nil 时返回 nil，调用方随即使用自己的连接。
+func (p *upstreamPool) roundTripper(route func(*url.URL) (*url.URL, error), roots *x509.CertPool) http.RoundTripper {
+	if p == nil {
+		return nil
+	}
+	p.once.Do(func() {
+		p.transport = &http.Transport{
+			Proxy:               func(r *http.Request) (*url.URL, error) { return route(r.URL) },
+			TLSClientConfig:     &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12},
+			ForceAttemptHTTP2:   true,
+			TLSHandshakeTimeout: 30 * time.Second,
+			IdleConnTimeout:     upstreamPoolIdle,
+			MaxIdleConnsPerHost: maxSessions,
+		}
+		p.transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+			var dialer net.Dialer
+			conn, err := dialer.DialContext(ctx, network, address)
+			if err != nil {
+				return nil, err
+			}
+			p.mu.Lock()
+			defer p.mu.Unlock()
+			if p.closed {
+				_ = conn.Close()
+				return nil, net.ErrClosed
+			}
+			p.conns[conn] = true
+			return &poolConn{Conn: conn, pool: p}, nil
+		}
+	})
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	return p.transport
+}
+
+// close releases every shared connection. Rounds still running keep working
+// on their own connections from then on.
+// close 释放全部共用连接。此后仍在运行的回合改用自己的连接。
+func (p *upstreamPool) close() {
+	if p == nil {
+		return
+	}
+	p.mu.Lock()
+	p.closed = true
+	conns := p.conns
+	p.conns = make(map[net.Conn]bool)
+	p.mu.Unlock()
+	for conn := range conns {
+		_ = conn.Close()
+	}
+	if p.transport != nil {
+		p.transport.CloseIdleConnections()
+	}
+}
+
+// poolConn removes itself from the pool's set when closed.
+// poolConn 关闭时把自己从连接池的集合中移除。
+type poolConn struct {
+	net.Conn
+	pool *upstreamPool
+	once sync.Once
+}
+
+func (c *poolConn) Close() error {
+	c.once.Do(func() {
+		c.pool.mu.Lock()
+		delete(c.pool.conns, c.Conn)
+		c.pool.mu.Unlock()
+	})
+	return c.Conn.Close()
+}
+
+// startUpstreamProxy starts a capture proxy whose outbound routing follows
+// the proxy and CA settings in env, the environment the CLI would otherwise
+// have used. shared, when not nil, carries the decrypted upstreamAPIHost
+// requests; tunnels to other hosts and a failure of the shared connection
+// use the proxy's own connections, as without it.
+//
+// startUpstreamProxy 启动截获代理，出站路由遵循 env 中的代理与 CA 设置，即 CLI 原本会使用的环境。
+// shared 不为 nil 时承载解密后的 upstreamAPIHost 请求；到其他主机的隧道以及共用连接出错时，
+// 照旧使用代理自己的连接。
+func startUpstreamProxy(capture *upstreamCapture, env []string, shared *upstreamPool, request ...[]byte) (*upstreamProxy, error) {
+	caPEM, leaf, err := upstreamCertificates()
+	if err != nil {
+		return nil, err
+	}
+	route, roots, extraCA := upstreamRouting(env)
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		return nil, err
@@ -272,7 +403,7 @@ func startUpstreamProxy(capture *upstreamCapture, env []string, request ...[]byt
 	token := randomID()
 	ctx, stop := context.WithCancel(context.Background())
 	p := &upstreamProxy{
-		ctx: ctx, stop: stop,
+		ctx: ctx, stop: stop, shared: shared, roots: roots,
 		listener: listener, accepted: newConnQueue(listener.Addr()), capture: capture, route: route,
 		proxyURL:  "http://aisw:" + token + "@" + listener.Addr().String(),
 		authority: "Basic " + base64.StdEncoding.EncodeToString([]byte("aisw:"+token)),
@@ -423,7 +554,7 @@ func (p *upstreamProxy) serveProxy(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
-		p.forward(w, r, r.URL, false)
+		p.forward(w, r, r.URL, false, false)
 		return
 	}
 	host, port, err := net.SplitHostPort(r.Host)
@@ -580,8 +711,16 @@ func (p *upstreamProxy) dialThrough(ctx context.Context, target string) (net.Con
 // serveUpstream 把解密后的请求转发到真实 API 主机。
 func (p *upstreamProxy) serveUpstream(w http.ResponseWriter, r *http.Request) {
 	target := &url.URL{Scheme: "https", Host: upstreamAPIHost, Path: r.URL.Path, RawPath: r.URL.RawPath, RawQuery: r.URL.RawQuery}
-	p.forward(w, r, target, r.Method == http.MethodPost && r.URL.Path == "/v1/messages")
+	p.forward(w, r, target, r.Method == http.MethodPost && r.URL.Path == "/v1/messages", true)
 }
+
+// maxReplayBytes bounds the body of a start-up or side call the proxy keeps
+// so it can resend the call on its own connection when the shared one
+// fails; a larger body is streamed and not resent.
+//
+// maxReplayBytes 限制代理为在共用连接出错时改用自己的连接重发而保留的启动请求或旁路调用
+// 请求体大小；更大的请求体按流转发，不重发。
+const maxReplayBytes = 1 << 20
 
 // hopHeaders are request and response headers that belong to one connection.
 // hopHeaders 是只属于单个连接的请求头与响应头。
@@ -603,17 +742,53 @@ func stripHop(h http.Header) {
 // receives a native document override when settings could not hold it; the
 // CLI's side calls and all response bytes are relayed unchanged.
 //
+// A sharable request — a decrypted upstreamAPIHost call — goes over the
+// runtime's shared pool when there is one. If it fails there on a reused
+// connection before any response, it is sent once more over the proxy's own
+// connections, the path it would have taken without the pool, provided its
+// whole body was kept; the CLI would otherwise retry the same call itself.
+//
 // forward 中继请求和响应，字节到达即刷新。仅要求流式输出的主 Messages 调用在设置文件
 // 容纳不下原生文档时接收覆盖；CLI 旁路调用及响应字节保持原样。
-func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL, messages bool) {
+//
+// 可共用的请求（解密后的 upstreamAPIHost 调用）在运行时有连接池时经连接池发送。它在
+// 复用的连接上于收到任何响应之前出错时，只要完整请求体已保留，就改经代理自己的连接
+// （没有连接池时本应走的路径）再发一次；否则 CLI 也会自己重试同一个调用。
+func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *url.URL, messages, sharable bool) {
 	if !p.begin() {
 		w.WriteHeader(http.StatusServiceUnavailable)
 		return
 	}
 	defer p.handlers.Done()
+	// The proxy's end cancels the request itself, since a shared connection
+	// outlives the proxy and is not closed with it.
+	// 代理结束时直接取消请求，因为共用连接比代理存活更久，不会随代理关闭。
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer context.AfterFunc(p.ctx, cancel)()
+	var shared http.RoundTripper
+	if sharable {
+		shared = p.shared.roundTripper(p.route, p.roots)
+	}
 	body := io.Reader(r.Body)
+	// kept is the whole request body when it was read, so the request can
+	// be sent again; replayable also covers a request without a body.
+	// kept 是已完整读取的请求体，请求因此可以重发；replayable 还涵盖没有请求体的请求。
+	var kept []byte
+	replayable := r.ContentLength == 0
 	primary := false
 	var replacement []byte
+	if !messages && shared != nil && r.ContentLength != 0 {
+		head, err := io.ReadAll(io.LimitReader(r.Body, maxReplayBytes+1))
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		if len(head) <= maxReplayBytes {
+			kept, replayable = head, true
+		}
+		body = io.MultiReader(bytes.NewReader(head), r.Body)
+	}
 	if messages {
 		head, err := io.ReadAll(io.LimitReader(r.Body, maxCapturedRequestBytes+1))
 		if err != nil {
@@ -661,6 +836,9 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 				return
 			}
 		}
+		if len(head) <= maxCapturedRequestBytes {
+			kept, replayable = head, true
+		}
 		body = io.MultiReader(bytes.NewReader(head), r.Body)
 	}
 	if r.ContentLength == 0 {
@@ -668,8 +846,9 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 	}
 	if replacement != nil {
 		body = bytes.NewReader(replacement)
+		kept, replayable = replacement, true
 	}
-	out, err := http.NewRequestWithContext(r.Context(), r.Method, target.String(), body)
+	out, err := http.NewRequestWithContext(ctx, r.Method, target.String(), body)
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		return
@@ -695,7 +874,32 @@ func (p *upstreamProxy) forward(w http.ResponseWriter, r *http.Request, target *
 	if primary {
 		out = p.capture.timeConnect(out)
 	}
-	response, err := p.transport.RoundTrip(out)
+	resend := func() io.ReadCloser {
+		if r.ContentLength == 0 {
+			return http.NoBody
+		}
+		return io.NopCloser(bytes.NewReader(kept))
+	}
+	var response *http.Response
+	if shared == nil {
+		response, err = p.transport.RoundTrip(out)
+	} else {
+		var reused atomic.Bool
+		out = out.WithContext(httptrace.WithClientTrace(out.Context(), &httptrace.ClientTrace{
+			GotConn: func(info httptrace.GotConnInfo) { reused.Store(reused.Load() || info.Reused) },
+		}))
+		if replayable {
+			// The transport may then retry by itself on a connection the upstream closed while idle.
+			// transport 因此可以在上游关闭了空闲连接时自行重试。
+			out.GetBody = func() (io.ReadCloser, error) { return resend(), nil }
+		}
+		response, err = shared.RoundTrip(out)
+		if err != nil && reused.Load() && replayable && ctx.Err() == nil {
+			retry := out.Clone(out.Context())
+			retry.Body = resend()
+			response, err = p.transport.RoundTrip(retry)
+		}
+	}
 	if err != nil {
 		w.WriteHeader(http.StatusBadGateway)
 		return

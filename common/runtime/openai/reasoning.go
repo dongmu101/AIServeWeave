@@ -85,16 +85,16 @@ func (c *Client) applyReasoning(dto *chatCompletionRequest, r *runtime.Reasoning
 }
 
 // threeLevelEffort folds an effort level onto the low/medium/high scale
-// vLLM and Ollama accept: minimal rounds up to low, xhigh down to high, and
-// no level becomes medium.
+// vLLM and Ollama accept: minimal rounds up to low, xhigh, max and ultra down
+// to high, and no level becomes medium.
 //
 // threeLevelEffort 把思考强度折算到 vLLM 与 Ollama 接受的 low/medium/high 三档：
-// minimal 向上取 low，xhigh 向下取 high，没有档位时取 medium。
+// minimal 向上取 low，xhigh、max 与 ultra 向下取 high，没有档位时取 medium。
 func threeLevelEffort(effort string) string {
 	switch effort {
 	case runtime.ReasoningEffortMinimal, runtime.ReasoningEffortLow:
 		return runtime.ReasoningEffortLow
-	case runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh:
+	case runtime.ReasoningEffortHigh, runtime.ReasoningEffortXHigh, runtime.ReasoningEffortMax, runtime.ReasoningEffortUltra:
 		return runtime.ReasoningEffortHigh
 	}
 	return runtime.ReasoningEffortMedium

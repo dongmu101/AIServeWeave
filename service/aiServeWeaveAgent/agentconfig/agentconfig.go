@@ -324,6 +324,16 @@ type RuntimeConfig struct {
 	// 较慢时（例如其 sessions 目录变得很大）调大它；取值须在 (0, MaxProbeTimeout] 内。
 	// 设置页面没有这个字段；从页面保存时保留文件里已有的值。
 	ProbeTimeout string `yaml:"probe_timeout,omitempty"`
+	// ShareUpstreamConnections, for a claude runtime, controls whether its
+	// rounds share connections to api.anthropic.com; nil and true share,
+	// false gives every CLI process its own connections again. Other kinds
+	// ignore it. The setup page has no field for it; a save from the page
+	// keeps whatever the file already says.
+	//
+	// ShareUpstreamConnections 控制 claude 运行时的各回合是否共用到 api.anthropic.com 的
+	// 连接；nil 与 true 表示共用，false 使每个 CLI 进程重新各自建立连接。其他种类忽略它。
+	// 设置页面没有这个字段；从页面保存时保留文件里已有的值。
+	ShareUpstreamConnections *bool `yaml:"share_upstream_connections,omitempty"`
 }
 
 // MaxProbeTimeout caps RuntimeConfig.ProbeTimeout. A probe holds the
@@ -482,6 +492,9 @@ func Save(path string, cfg *Config) error {
 		}
 		if rc.ProbeTimeout != "" {
 			entry["probe_timeout"] = rc.ProbeTimeout
+		}
+		if rc.ShareUpstreamConnections != nil {
+			entry["share_upstream_connections"] = *rc.ShareUpstreamConnections
 		}
 		runtimes[i] = entry
 	}

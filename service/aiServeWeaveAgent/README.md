@@ -154,6 +154,17 @@ runtimes:
 
 本地 CLI 启动较慢时（CLI 本地状态很大，例如 Codex 的 `sessions` 目录积累到 GB 级；机器负载高；网络需走代理），探测会超时，运行时保持未就绪并定期重试。原因会写进 Agent 日志：首次失败、原因变化时各记一条 `runtime not ready; retrying`，原因不变时每 10 分钟重复一次，超时还带 `hint` 字段；已就绪的运行时变为不健康或恢复时也各记一条。自动发现的 `codex-local` 使用默认期限；要调整，就在 `runtimes:` 里显式声明 `kind: codex`。
 
+### 共用上游连接
+
+`kind: claude` 运行时的各回合默认共用到 `api.anthropic.com` 的连接，CLI 的启动请求与模型请求不再每个进程各建一次连接（细节见 [claudecode README](claudecode/README.md#上游响应头与错误透传)）。不同运行时（不同 `account_dir`）从不共用。出问题时可按运行时关闭，回到每个进程各自建连：
+
+```yaml
+runtimes:
+  - {id: claude-code-local, kind: claude, share_upstream_connections: false}
+```
+
+该字段只在本地配置生效，Gateway 下发的配置不能设置或改动它；其他种类忽略它。设置页面不展示该字段，但保存时按 id 与 kind 保留；修改后热重载即生效（运行时会被替换）。
+
 ## 本地 CLI 账户额度
 
 正常运行的 Agent 在本地配置页面（`-config-ui-addr`）的「推理后端」中显示「CLI 账户额度」。只查询本地声明的 `kind: codex` / `kind: claude`（配置文件声明的，以及 Agent 自动发现并注册的 `codex-local`；后者不会因热重载而被移出），每个运行时一行（名称后附运行时 ID）；声明了不同 `account_dir` 的运行时各自查询自己的账户（见[同一 CLI 的多个账户](#同一-cli-的多个账户)）。仅配置模式尚未启动运行时，不执行账户查询。
@@ -298,8 +309,8 @@ Gateway 的 `gateway_http_ttft_seconds`、`tunnel_server_stream_first_event_seco
 怎么读：
 
 - Claude 的 `request_sent_ms` 就是预热进程最多能省下的时间。它包含 CLI 在模型请求之前必须等完的请求：`GET /api/claude_code/policy_limits`、`GET /api/claude_code/settings`、功能开关 `POST /api/eval/sdk-…`，偶尔还有 `bootstrap`、`penguin_mode`，每个回合大约 3–5 个，都发往 api.anthropic.com。
-- 每进程代理在这些启动请求上已经建好连接，模型请求通常直接复用，所以 `upstream_connect_ms` 多为 0。每个进程新建连接的成本算在 `cli_ready_ms` 里，不在 `upstream_connect_ms` 里。
-- 拿线上的 `cli_ready_ms` 减去下面的本机基线，大致就是启动请求的网络耗时，也就是同账户共享上游连接能省下的上限。
+- 启动请求已经建好连接，模型请求通常直接复用，所以 `upstream_connect_ms` 多为 0。新建连接的成本算在 `cli_ready_ms` 里，不在 `upstream_connect_ms` 里。2026-11-19 起同一运行时的回合共用上游连接（见[共用上游连接](#共用上游连接)），连接已建好时 `cli_ready_ms` 不再包含握手。
+- 拿线上的 `cli_ready_ms` 减去下面的本机基线，大致就是启动请求的网络耗时（握手加往返）。共用连接只省握手，往返仍在。
 - Codex 的 `history_injected_ms` 是预热进程最多能省下的时间。`turn_started_ms` 到 `first_event_ms` 之间主要是模型本身。
 
 离线基准不联网、不消耗额度。它走 Agent 真实的启动参数和代码路径，冷启动的数字可以在不同 CLI 版本、不同主机之间直接比较：

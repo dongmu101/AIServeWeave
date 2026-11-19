@@ -378,6 +378,11 @@ type messagesBridge struct {
 	// env 是 CLI 的环境变量，运行时声明了 AccountDir 时带有 CLAUDE_CONFIG_DIR；
 	// 为 nil 时使用 Agent 自己的环境。
 	env []string
+	// pool is the runtime's shared connection pool to api.anthropic.com,
+	// released by close; nil gives every process its own connections.
+	// pool 是运行时共用的 api.anthropic.com 连接池，由 close 释放；为 nil 时每个进程使用
+	// 自己的连接。
+	pool *upstreamPool
 	// start is replaced by offline fixtures, never by HTTP input.
 	// start 仅由离线测试替换，从不取自 HTTP 输入。
 	start func(*messagesSession)
@@ -467,6 +472,7 @@ func (b *messagesBridge) close() {
 	}
 	b.mu.Unlock()
 	b.wg.Wait()
+	b.pool.close()
 }
 
 func (b *messagesBridge) authenticate(r *http.Request) (principal, bool) {

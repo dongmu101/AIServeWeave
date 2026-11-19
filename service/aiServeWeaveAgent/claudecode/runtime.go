@@ -70,6 +70,9 @@ func NewFactoryWithAttachments(executable string, processor *attachments.Process
 		}
 		bridge.capacity = cfg.MaxConcurrent
 		bridge.env = withAccountDir(probeEnv(os.Environ()), cfg.AccountDir)
+		if !cfg.DisableSharedUpstream {
+			bridge.pool = newUpstreamPool()
+		}
 		logger := deps.Logger
 		if logger == nil {
 			logger = slog.Default()

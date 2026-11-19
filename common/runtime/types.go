@@ -199,6 +199,14 @@ type Config struct {
 	// 环境，即单账户部署。声明两个同种类、目录不同的运行时，就是一个 Agent 服务多个账户的
 	// 方式。必须是绝对路径。仅限本地，从不通过隧道接收。
 	AccountDir string
+	// DisableSharedUpstream turns off, for a claude runtime, the connection
+	// pool its rounds share to api.anthropic.com, so every CLI process opens
+	// its own upstream connections again. Other kinds ignore it. Local only;
+	// it is never accepted over the tunnel.
+	//
+	// DisableSharedUpstream 关闭 claude 运行时各回合共用的 api.anthropic.com 连接池，
+	// 使每个 CLI 进程重新各自建立上游连接。其他种类忽略它。仅限本地，从不通过隧道接收。
+	DisableSharedUpstream bool
 }
 
 // The fallback reasoning parsers Config.ReasoningParser may name.
@@ -363,10 +371,10 @@ type ReasoningConfig struct {
 	// Enabled false explicitly turns thinking off.
 	// Enabled 为 false 表示显式关闭思考。
 	Enabled bool
-	// Effort is one of ReasoningEffortMinimal through ReasoningEffortXHigh,
+	// Effort is one of ReasoningEffortMinimal through ReasoningEffortUltra,
 	// or "" when the caller gave none.
 	//
-	// Effort 是 ReasoningEffortMinimal 到 ReasoningEffortXHigh 之一；调用方没给时为 ""。
+	// Effort 是 ReasoningEffortMinimal 到 ReasoningEffortUltra 之一；调用方没给时为 ""。
 	Effort string
 	// BudgetTokens caps the tokens spent thinking, or 0 when the caller
 	// gave none.
@@ -375,21 +383,30 @@ type ReasoningConfig struct {
 	BudgetTokens int
 }
 
-// The effort levels ReasoningConfig.Effort may hold, OpenAI's vocabulary.
-// ReasoningConfig.Effort 可取的思考强度，沿用 OpenAI 的词汇。
+// The effort levels ReasoningConfig.Effort may hold, OpenAI's vocabulary,
+// lowest first. max and ultra are the levels above xhigh that Codex offers
+// for models such as gpt-6.2; an adapter whose backend stops lower folds them
+// onto its own highest level.
+//
+// ReasoningConfig.Effort 可取的思考强度，沿用 OpenAI 的词汇，由低到高。max 与 ultra 是
+// Codex 为 gpt-6.2 等模型提供的高于 xhigh 的档位；后端最高档更低的适配器把它们折算到
+// 自己的最高档。
 const (
 	ReasoningEffortMinimal = "minimal"
 	ReasoningEffortLow     = "low"
 	ReasoningEffortMedium  = "medium"
 	ReasoningEffortHigh    = "high"
 	ReasoningEffortXHigh   = "xhigh"
+	ReasoningEffortMax     = "max"
+	ReasoningEffortUltra   = "ultra"
 )
 
 // ValidReasoningEffort reports whether effort is one of the levels above.
 // ValidReasoningEffort 报告 effort 是否为上述强度之一。
 func ValidReasoningEffort(effort string) bool {
 	switch effort {
-	case ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh:
+	case ReasoningEffortMinimal, ReasoningEffortLow, ReasoningEffortMedium, ReasoningEffortHigh, ReasoningEffortXHigh,
+		ReasoningEffortMax, ReasoningEffortUltra:
 		return true
 	}
 	return false
@@ -398,10 +415,13 @@ func ValidReasoningEffort(effort string) bool {
 // reasoningBudgets maps each effort level to the thinking budget Budget
 // derives from it, and back again for EffortLevel. The steps follow
 // Anthropic's guidance: 1024 tokens is its minimum budget, and returns
-// diminish past roughly 32k.
+// diminish past roughly 32k. max and ultra therefore share xhigh's budget,
+// and a budget never maps back to them: a backend that takes a budget gets
+// no more than it did for xhigh.
 //
 // reasoningBudgets 是 Budget 从各强度换算出的思考预算，EffortLevel 反向使用。档位依照
-// Anthropic 的建议：1024 token 是其最小预算，超过约 32k 后收益递减。
+// Anthropic 的建议：1024 token 是其最小预算，超过约 32k 后收益递减。因此 max 与 ultra
+// 沿用 xhigh 的预算，预算也从不反推为这两档：按预算思考的后端得到的不会多于 xhigh。
 var reasoningBudgets = []struct {
 	effort string
 	budget int
@@ -440,8 +460,11 @@ func (r ReasoningConfig) Budget() int {
 		return r.BudgetTokens
 	}
 	effort := r.Effort
-	if effort == "" {
+	switch effort {
+	case "":
 		effort = ReasoningEffortMedium
+	case ReasoningEffortMax, ReasoningEffortUltra:
+		effort = ReasoningEffortXHigh
 	}
 	for _, step := range reasoningBudgets {
 		if step.effort == effort {
