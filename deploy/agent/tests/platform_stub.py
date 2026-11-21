@@ -29,6 +29,9 @@ class Platform:
         self.redeem_status = 200
         self.redeem_bodies = []
         self.fail_download = False
+        # Addresses handed out on redeem; tests point them at reachable or unreachable hosts.
+        # 兑换时下发的地址；测试把它们指向可达或不可达的主机。
+        self.registry_addr, self.gateway_addr = 'registry.test:9443', 'gateway.test:8443'
         self.goos, self.arch = goos, arch
         stub = self
 
@@ -67,8 +70,8 @@ class Platform:
                 if stub.redeem_status != 200:
                     self.reply(stub.redeem_status, b'{"error":{"code":"invalid_code"}}')
                     return
-                self.reply(200, json.dumps({'node_id': 'node-redeemed', 'registry_addr': 'registry.test:9443',
-                                            'gateway_addr': 'gateway.test:8443', 'ca_pem': CA_PEM, 'ca_sha256': CA_SHA,
+                self.reply(200, json.dumps({'node_id': 'node-redeemed', 'registry_addr': stub.registry_addr,
+                                            'gateway_addr': stub.gateway_addr, 'ca_pem': CA_PEM, 'ca_sha256': CA_SHA,
                                             'bootstrap_token': TOKEN, 'token_expires_at': '2030-01-01T00:00:00Z'},
                                            separators=(',', ':')).encode())
 

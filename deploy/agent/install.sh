@@ -37,6 +37,7 @@ Options:
   --user NAME                  Ubuntu service account (default aiserveweave, created if missing)
   --path PATH                  Background CLI PATH, passed to agent.sh
   --upgrade                    Upgrade an installed node; no credential needed
+  --skip-network-check         Do not check that the Registry and Gateway addresses are reachable
   --root PATH --stage          Prepare a tree without starting a service (for tests)
 USAGE
 }
@@ -45,7 +46,7 @@ fail() { echo "install: $*" >&2; exit 1; }
 log() { echo "==> $*"; }
 
 code= node_id= token= ca_sha256= registry= gateway= bundle= source=platform version= platform=
-service_user= cli_path= upgrade=false root= stage=false
+service_user= cli_path= upgrade=false root= stage=false skip_network_check=false replace_unfinished=false redeemed=false
 goos= arch= state= tmp= binary= asset= base_url=
 
 cleanup() { [ -z "$tmp" ] || rm -rf "$tmp"; }
@@ -64,6 +65,7 @@ parse_args() {
       --help|-h) usage; exit 0;;
       --upgrade) upgrade=true; shift; continue;;
       --stage) stage=true; shift; continue;;
+      --skip-network-check) skip_network_check=true; shift; continue;;
       --code) code=$(value_of "$@");;
       --node-id) node_id=$(value_of "$@");;
       --token) token=$(value_of "$@");;
@@ -151,7 +153,14 @@ check_inputs() {
     [ "$modes" -eq 0 ] || fail "--upgrade does not take a credential"
     [ -f "$state/agent.yaml" ] || fail "no installed Agent found for --upgrade"
   elif [ -f "$state/agent.yaml" ]; then
-    fail "an Agent is already installed here; use --upgrade to update it (a new credential would not replace its identity)"
+    # A node certificate means the node registered and has an identity worth
+    # keeping. Without one the earlier install never got through (wrong
+    # address, expired token), so a new credential may replace it.
+    # 有节点证书说明节点已注册、身份需要保留。没有证书说明上次安装没走通（地址错误、令牌
+    # 过期），新的凭据可以替换它。
+    [ ! -s "$state/identity/node.crt" ] ||
+      fail "an Agent is already installed and registered here; use --upgrade to update it (a new credential would not replace its identity)"
+    replace_unfinished=true
   fi
   if [ -n "$token$node_id$ca_sha256$registry$gateway" ]; then
     [ -n "$token" ] && [ -n "$node_id" ] && [ -n "$ca_sha256" ] && [ -n "$registry" ] && [ -n "$gateway" ] ||
@@ -248,7 +257,7 @@ redeem() {
     -o "$tmp/redeem.json" -w '%{http_code}' "$platform/agent/v1/redeem") || fail "cannot reach the platform to redeem the install code"
   code=
   case "$status" in
-    200) ;;
+    200) redeemed=true;;
     404) fail "the install code is invalid, already used or expired; ask for a new one";;
     429) fail "too many attempts; wait a minute and retry";;
     *) fail "the platform could not redeem the install code (HTTP $status); retry later";;
@@ -291,6 +300,62 @@ bundle_credential() {
   require_ca_sha256 "$ca_sha256"
 }
 
+# check_endpoint records a problem unless HOST:PORT resolves and accepts a TCP
+# connection. It speaks no protocol: once connected, any answer, even a TLS or
+# HTTP error, counts as reachable.
+# check_endpoint 检查 HOST:PORT 能否解析并接受 TCP 连接，否则记下问题。它不讲任何协议：
+# 一旦连上，任何回应（包括 TLS 或 HTTP 错误）都算可达。
+check_endpoint() {
+  local label=$1 addr=$2 host port rc=0 connected
+  host=${addr%:*}; port=${addr##*:}
+  if [ -z "$host" ] || ! [[ "$port" =~ ^[0-9]+$ ]]; then network_problems+=("$label address $addr is not HOST:PORT"); return; fi
+  connected=$(curl --silent --insecure --output /dev/null --write-out '%{time_connect}' \
+    --connect-timeout 10 --max-time 20 "https://$host:$port/" </dev/null) || rc=$?
+  case "$rc" in
+    6) network_problems+=("$label $addr: the name $host does not resolve (DNS); is the address right?");;
+    7) network_problems+=("$label $addr: nothing accepts connections on port $port");;
+    28) case "$connected" in ""|0|0.0*) network_problems+=("$label $addr: no answer within 10s (firewall or wrong port?)");; esac;;
+  esac
+}
+
+# check_network makes sure the node can reach the Registry and every Gateway
+# before anything is installed, so a wrong address fails here in seconds
+# instead of as an Agent restarting until its enrollment token expires.
+# check_network 在安装任何东西之前确认节点能连上 Registry 与每个 Gateway，使错误地址在这里
+# 几秒内失败，而不是变成 Agent 反复重启、直到接入令牌过期。
+check_network() {
+  ! $skip_network_check || return 0
+  log "checking the Registry ($registry) and Gateway ($gateway) addresses"
+  network_problems=()
+  local endpoint endpoints
+  check_endpoint Registry "$registry"
+  IFS=, read -r -a endpoints <<<"$gateway"
+  for endpoint in "${endpoints[@]}"; do check_endpoint Gateway "$endpoint"; done
+  [ "${#network_problems[@]}" -gt 0 ] || return 0
+  printf 'install: %s\n' "${network_problems[@]}" >&2
+  if $redeemed; then
+    fail "nothing was installed. The install code is used up: if the address is wrong, correct it on the platform; then generate a new code and run this again"
+  fi
+  fail "nothing was installed; correct the addresses or this machine's network, then run this again"
+}
+
+# set_aside_unfinished stops an earlier install that never registered and
+# moves its state away, keeping it for inspection, so the new credential
+# starts clean.
+# set_aside_unfinished 停止一次从未注册成功的旧安装，把它的状态目录移开（保留以便排查），
+# 让新凭据从干净状态开始。
+set_aside_unfinished() {
+  $replace_unfinished || return 0
+  local aside
+  aside="$state.unfinished-$(date +%Y%m%d%H%M%S)"
+  log "an earlier install never registered; moving it aside to $aside"
+  if ! $stage; then
+    if [ "$goos" = linux ]; then systemctl stop aiserveweave-agent.service 2>/dev/null || true
+    else launchctl bootout "gui/$(id -u)/com.aiserveweave.agent" 2>/dev/null || true; fi
+  fi
+  mv "$state" "$aside"
+}
+
 ensure_service_user() {
   [ "$goos" = linux ] && ! $stage || return 0
   [ -n "$service_user" ] || service_user=aiserveweave
@@ -330,6 +395,8 @@ main() {
   if [ -n "$bundle" ]; then bundle_credential
   elif [ -n "$token" ]; then token_credential
   else redeem; fi
+  check_network
+  set_aside_unfinished
   ensure_service_user
   run_agent_sh install --node-id "$node_id" --registry "$registry" --gateway "$gateway" \
     --ca-file "$tmp/ca.pem" --token-file "$tmp/bootstrap-token"

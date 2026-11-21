@@ -53,13 +53,15 @@ class InstallScriptTests(unittest.TestCase):
         lines = ''.join(f'{hashlib.sha256(data).hexdigest()}  {name}\n' for name, data in self.files.items())
         self.files['SHA256SUMS.txt'] = lines.encode()
 
-    def run_install(self, args, success=True, stdin_script=False, no_tty=True):
+    def run_install(self, args, success=True, stdin_script=False, no_tty=True, network_check=False):
         """Runs install.sh, optionally piped through bash -s the way the platform serves it.
 
         运行 install.sh；可选地像平台下发时那样通过 bash -s 管道执行。
         """
         env = dict(os.environ, CURL_CA_BUNDLE=str(self.cert))
         common = ['--stage', '--root', str(self.root), '--user', pwd.getpwuid(os.getuid()).pw_name]
+        if not network_check:
+            common.append('--skip-network-check')
         if stdin_script:
             script = INSTALL.read_text().replace('__AISW_PLATFORM_URL__', self.platform.url)
             cmd, stdin = ['bash', '-s', '--', *common, *args], script
@@ -159,7 +161,7 @@ class InstallScriptTests(unittest.TestCase):
     def test_code_is_prompted_on_the_terminal_without_echo(self):
         env = dict(os.environ, CURL_CA_BUNDLE=str(self.cert))
         cmd = ['bash', str(INSTALL), '--platform', self.platform.url, '--stage', '--root', str(self.root),
-               '--user', pwd.getpwuid(os.getuid()).pw_name]
+               '--user', pwd.getpwuid(os.getuid()).pw_name, '--skip-network-check']
         pid, fd = pty.fork()
         if pid == 0:
             os.execvpe('bash', cmd, env)
@@ -186,12 +188,50 @@ class InstallScriptTests(unittest.TestCase):
     def test_installed_node_requires_upgrade(self):
         self.run_install(['--code', CODE])
         (self.root / 'state/agent.yaml').write_text('existing configuration')
+        (self.root / 'state/identity/node.crt').write_text('registered node certificate')
         result = self.run_install(['--code', CODE], success=False)
         self.assertIn('--upgrade', result.stderr)
         self.assertEqual(len(self.platform.redeem_bodies), 1)
         self.run_install(['--upgrade'])
         self.assertEqual(len(self.platform.redeem_bodies), 1)
         self.assertEqual((self.root / 'state/agent.yaml').read_text(), 'existing configuration')
+
+    def test_unfinished_install_is_replaced_by_a_new_code(self):
+        self.run_install(['--code', CODE])
+        (self.root / 'state/agent.yaml').write_text('unfinished configuration')
+        self.run_install(['--code', CODE])
+        self.assertEqual(len(self.platform.redeem_bodies), 2)
+        self.assert_installed()
+        aside = [p for p in self.root.iterdir() if p.name.startswith('state.unfinished-')]
+        self.assertEqual(len(aside), 1)
+        self.assertEqual((aside[0] / 'agent.yaml').read_text(), 'unfinished configuration')
+
+    def test_unreachable_addresses_install_nothing(self):
+        self.platform.registry_addr = 'registry.www.invalid:9443'
+        result = self.run_install(['--code', CODE], success=False, network_check=True)
+        self.assertIn('does not resolve', result.stderr)
+        self.assertIn('generate a new code', result.stderr)
+        self.assert_not_installed()
+
+    def test_refused_port_installs_nothing(self):
+        import socket
+        with socket.socket() as probe:
+            probe.bind(('127.0.0.1', 0))
+            free_port = probe.getsockname()[1]
+        port = self.platform.server.server_address[1]
+        self.platform.registry_addr = f'127.0.0.1:{port}'
+        self.platform.gateway_addr = f'127.0.0.1:{port},127.0.0.1:{free_port}'
+        result = self.run_install(['--code', CODE], success=False, network_check=True)
+        self.assertIn(f'Gateway 127.0.0.1:{free_port}: nothing accepts connections', result.stderr)
+        self.assertNotIn('Registry', result.stderr.split('nothing accepts')[0].splitlines()[-1])
+        self.assert_not_installed()
+
+    def test_reachable_addresses_pass_the_network_check(self):
+        port = self.platform.server.server_address[1]
+        self.platform.registry_addr = self.platform.gateway_addr = f'127.0.0.1:{port}'
+        result = self.run_install(['--code', CODE], network_check=True)
+        self.assertIn('checking the Registry', result.stdout)
+        self.assert_installed()
 
     def test_upgrade_needs_an_installed_agent_and_no_credential(self):
         self.assertIn('no installed Agent', self.run_install(['--upgrade'], success=False).stderr)

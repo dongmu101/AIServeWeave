@@ -139,13 +139,63 @@ service_start() {
   if [ "$goos" = linux ]; then systemctl start aiserveweave-agent.service
   else launchctl bootstrap "gui/$(id -u)" "$HOME/Library/LaunchAgents/com.aiserveweave.agent.plist"; fi
 }
+# last_error prints the newest error the Agent logged. The Agent never logs
+# tokens or keys, so the line is safe to show.
+# last_error 打印 Agent 记录的最新一条错误。Agent 从不记录令牌或密钥，这一行可以直接展示。
+last_error() {
+  if [ "$goos" = linux ]; then journalctl -u aiserveweave-agent.service -n 300 -o cat --no-pager 2>/dev/null
+  else tail -n 300 "$HOME/Library/Logs/AIServeWeave/Agent/agent.log" 2>/dev/null; fi |
+    grep '"level":"ERROR"' | tail -n 1 | sed -n 's/.*"error":"\([^"]*\)".*/\1/p'
+}
+# explain_failure turns the Agent's last error into what to do about it.
+# explain_failure 把 Agent 的最后一条错误翻译成处理办法。
+explain_failure() {
+  local err hint
+  err=$(last_error || true)
+  if [ -z "$err" ]; then
+    if [ "$goos" = linux ]; then echo "agent deployment: see journalctl -u aiserveweave-agent -n 50" >&2
+    else echo "agent deployment: see $HOME/Library/Logs/AIServeWeave/Agent/agent.log" >&2; fi
+    return
+  fi
+  echo "agent deployment: the Agent reports: $err" >&2
+  case "$err" in
+    *Unauthenticated*|*"invalid or expired"*)
+      hint="the one-time enrollment token is invalid or expired. Generate a new install code on the platform and run the installer again; it replaces this unfinished install";;
+    *"pending operator approval"*) hint="an operator must approve this node on the platform; the Agent keeps retrying";;
+    *"different key"*) hint="this node_id is registered to another machine; an operator must confirm the reinstall, or issue a new install code";;
+    *disabled*) hint="an operator disabled this node on the platform";;
+    *Unavailable*|*connection_failed*|*"no such host"*|*refused*|*timeout*|*deadline*)
+      hint="the Registry or Gateway cannot be reached. Check the addresses in $config, DNS and the firewall; the Agent keeps retrying";;
+    *) hint="";;
+  esac
+  [ -z "$hint" ] || echo "agent deployment: $hint" >&2
+}
 wait_ready() {
   if $stage; then return; fi
   for ((attempt=0;attempt<120;attempt++));do
     if control status >"$work/status" 2>/dev/null && grep -q '"phase":"running"' "$work/status"; then cat "$work/status";return;fi
     sleep 1
   done
+  explain_failure
   fail "Agent local control did not become ready; inspect logs, then retry or rollback"
+}
+# wait_tunnel waits for a first install to reach the far end of the chain: a
+# Gateway tunnel connected with the new node certificate. The service keeps
+# retrying either way; this only tells the person installing whether it works.
+# wait_tunnel 等待首次安装走到链路的另一端：用新节点证书连上 Gateway 隧道。无论结果如何服务
+# 都会继续重试；这里只是告诉安装者它是否已经通了。
+wait_tunnel() {
+  if $stage; then return; fi
+  local states
+  for ((attempt=0;attempt<90;attempt++));do
+    if control status >"$work/status" 2>/dev/null && grep -Eq '"(connected|serving)":[1-9]' "$work/status"; then
+      echo "Gateway tunnel connected; the node is online.";return
+    fi
+    sleep 1
+  done
+  states=$(sed -n 's/.*"gateway_states":\({[^}]*}\).*/\1/p' "$work/status" 2>/dev/null || true)
+  explain_failure
+  fail "the Agent runs but no Gateway tunnel connected within 90s (tunnels: ${states:-none}); the service keeps retrying"
 }
 load_environment
 case "$command_name" in
@@ -298,4 +348,5 @@ if ! $stage;then
 fi
 service_start
 wait_ready
+[ "$command_name" != install ] || wait_tunnel
 echo "$command_name complete: $version ($goos/$arch). Node connectivity and real requests require separate acceptance."

@@ -51,6 +51,8 @@ curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | bash -s -- --c
 | 校验 | 先下载 Agent、`agent.sh`/`agent.ps1` 与 `SHA256SUMS.txt`，逐个校验摘要，全部通过才兑换。任何校验失败都不消耗兑换码 |
 | Ubuntu | `--user NAME` 指定服务账户（默认 `aiserveweave`，不存在则创建）；`--path` 传给 `agent.sh` 作为后台 CLI 的 PATH |
 | 升级 | `--upgrade`/`-Upgrade` 升级已安装节点，不需要凭据，沿用现有配置与身份 |
+| 链路检查（Ubuntu/macOS） | 兑换后、安装前检查兑换结果里的 Registry 与每个 Gateway 地址能否解析并建立 TCP 连接，任一不通即报出是哪个地址、哪种问题（DNS／端口拒绝／超时），不安装任何东西；此时兑换码已用掉，修正地址后重新生成。`--skip-network-check` 跳过（如节点只能经代理出网）。首次安装成功启动后继续等待 Gateway 隧道连上（最多 90 秒）才报告完成；等不到或启动失败时打印 Agent 最后一条错误及处理建议（令牌过期、地址不通、待审批、节点被禁用等） |
+| 重装未完成的安装 | 节点从未注册成功（`identity/node.crt` 不存在）时，可直接用新兑换码重跑：脚本停止旧服务，把旧状态目录改名为 `<状态目录>.unfinished-<时间>` 保留排查，再全新安装。已注册节点仍须 `--upgrade` |
 | 排错 | `404 invalid_code`：码错误、已用、已过期或节点已删除，不区分原因，须重新生成；`429`：兑换过于频繁，按 `Retry-After` 等待；`503`：平台暂不可用，码未消耗时可在到期前重试 |
 
 注意：
@@ -58,7 +60,7 @@ curl -fsSL --proto '=https' https://open7x.com/agent/install.sh | bash -s -- --c
 - 命令里的兑换码等同一次性接入凭据，只在可信终端使用；执行后码即失效，但仍不要贴进工单或聊天。脚本不把码、令牌写入日志或错误文本；Ubuntu/macOS 通过标准输入把码交给 `curl`，不出现在进程参数里。
 - 脚本只接受 HTTPS 平台地址，下载与重定向都限制为 HTTPS。`curl … | bash` 的信任根是平台站点的 TLS 证书与域名；需要先审阅脚本时，先下载 `install.sh` 再执行。
 - Windows 不要在管理员窗口运行，脚本会拒绝提权。计划任务在该用户登录后运行，沿用下文 Windows 约定。
-- 已安装节点的机器不要重新兑换，升级改用 `--upgrade`。
+- 已注册的节点不要重新兑换，升级改用 `--upgrade`；从未注册成功的安装可以直接用新码重跑（见上表）。Windows 安装器暂未包含链路检查与未完成安装替换。
 - 默认服务账户是 `aiserveweave`（不存在则创建）。需要用 root 运行时（例如 Codex、Claude 已登录在 root 下）加 `--user root`：不需要额外开关，安装时会打印一行警告。Agent 和它启动的每个 CLI 都拥有 root 权限，并读取 root 的家目录与 CLI 登录；从 root 改回普通账户或反之，仍属于需要显式身份迁移的更换。
 - 节点上已装并登录 Codex CLI 时，Agent 启动后两分钟内会自动注册为 `codex-local`，不需要手写 YAML；条件是用 `--user` 指定的服务账户执行过 `codex login`，且 `codex` 在服务的 PATH 里（npm 全局目录等用 `--path` 补上）。其他推理后端（Ollama、vLLM 等）仍要先在节点上装好。
 - 一行命令不会取代手动流程，也不改变 CLI 登录、模型安装等节点侧责任。
