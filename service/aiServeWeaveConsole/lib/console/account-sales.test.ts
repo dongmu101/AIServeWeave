@@ -101,3 +101,9 @@ test("monthly account routes isolate tenant checkout from operator inventory wri
   assert.equal(resolveUpstream("PUT", ["admin", "v1", "billing", "accounts", "acc_a"], new URLSearchParams()), null);
   assert.equal(resolveOperatorUpstream("DELETE", ["operator", "v1", "billing", "accounts", "acc_a"], new URLSearchParams()), null);
 });
+
+test("account and tenant ids take the control plane's full NewID length", () => {
+  const row = parseAccountSale({ ...sale, id: "acc_01a1fe6fb347714ab77fffecb795135d", tenant_id: "tnt_01a1fe6fb347714ab77fffecb795135d" });
+  assert.equal(row.id, "acc_01a1fe6fb347714ab77fffecb795135d");
+  assert.equal(row.tenantId, "tnt_01a1fe6fb347714ab77fffecb795135d");
+});

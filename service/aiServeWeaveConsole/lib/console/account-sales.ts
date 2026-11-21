@@ -59,6 +59,13 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new ApiError("contract");
   return value as Record<string, unknown>;
 }
+/** MAX_ID_BYTES bounds an id the control plane minted: a prefix and a
+ * 32-character UUIDv7 (36 today, VARCHAR(40) in the schema), with the same
+ * 64-byte ceiling the control plane checks on path ids.
+ *
+ * MAX_ID_BYTES 是控制面所铸 id 的上界：前缀加 32 字符 UUIDv7（当前 36 字符，schema 中
+ * 为 VARCHAR(40)），与控制面校验路径 id 的 64 字节上限一致。 */
+const MAX_ID_BYTES = 64;
 function text(value: unknown, max: number): string {
   if (typeof value !== "string" || !value || new TextEncoder().encode(value).length > max) throw new ApiError("contract");
   return value;
@@ -85,14 +92,14 @@ export function parseAccountSale(value: unknown): AccountSale {
   if (typeof row.active !== "boolean" || typeof row.owned !== "boolean") throw new ApiError("contract");
   const priceMinor = price(row.price_minor);
   const result = {
-    id: text(row.id, 32), nodeId: text(row.node_id, 128), runtimeId: text(row.runtime_id, 128),
+    id: text(row.id, MAX_ID_BYTES), nodeId: text(row.node_id, 128), runtimeId: text(row.runtime_id, 128),
     kind: parseAccountKind(row.kind, true), name: text(row.name, 512), priceMinor, currency: currency(row.currency, priceMinor > 0),
     dodoProductId: optional(row.dodo_product_id, MAX_PRODUCT_ID_BYTES),
     dodoAvailable: optionalBoolean(row, "dodo_available", priceMinor > 0),
     ezfpAvailable: optionalBoolean(row, "ezfp_available", false),
     active: row.active, owned: row.owned,
     expiresAt: row.expires_at === undefined ? null : timestamp(row.expires_at),
-    tenantId: optional(row.tenant_id, 32),
+    tenantId: optional(row.tenant_id, MAX_ID_BYTES),
   };
   if (result.owned && result.expiresAt === null) throw new ApiError("contract");
   return result;

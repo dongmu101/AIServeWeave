@@ -161,3 +161,12 @@ test("presale routes keep tenant checkout and operator delivery on separate surf
   assert.equal(resolveOperatorUpstream("DELETE", ["operator", "v1", "billing", "presales", "pre_a"], new URLSearchParams()), null);
   assert.equal(resolveOperatorUpstream("GET", ["operator", "v1", "billing", "orders", "ord_a", "assign"], new URLSearchParams()), null);
 });
+
+test("presale and refund ids take the control plane's full NewID length", () => {
+  // A four-character prefix and a 32-character UUIDv7, as model.NewID mints.
+  // 四字符前缀加 32 字符 UUIDv7，与 model.NewID 所铸一致。
+  const id = "pre_01a1fe6fb347714ab77fffecb795135d";
+  assert.equal(parseAccountPresale({ ...tenantView, id, alipay_amount: 160, alipay_available: true, capacity: 2, outstanding: 0 }).id, id);
+  assert.equal(parseRefundCreated({ id: "rfd_01a1fe6fb347714ab77fffecb795135d", status: "pending" }).id, "rfd_01a1fe6fb347714ab77fffecb795135d");
+  assert.throws(() => parseAccountPresale({ ...tenantView, id: "p".repeat(65) }));
+});
