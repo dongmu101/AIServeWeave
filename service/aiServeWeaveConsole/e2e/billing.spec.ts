@@ -456,7 +456,7 @@ test("operators create a presale and assign an awaiting order an account of the 
   expect(assignWrites).toEqual([{ account_id: "acc_free" }]);
 });
 
-test("Alipay redeems with one action id across a lost answer and opens the purchase entry", async ({ page }) => {
+test("Alipay shows credits only, books unclaimed quota with one action id across a lost answer, and opens the purchase entry", async ({ page }) => {
   const at = "2026-11-11T08:00:00Z";
   const overview = {
     capability_status: "ENABLED", product_name: "点数包", billing_mode: "QUANTITY", quota_unit: "POINT", supported: true, can_purchase: true, can_redeem: true,
@@ -479,6 +479,7 @@ test("Alipay redeems with one action id across a lost answer and opens the purch
       await route.fulfill({ status: 503, json: { error: "opcpay: internal detail" } });
       return;
     }
+    overview.access = { total: 100, used: 100, remaining: 0 };
     await route.fulfill({ json: { id: "apr_1", action_id: body.action_id, amount: body.amount, quota_unit: "POINT", credits_micro: body.amount * 2_000_000, status: "succeeded", reason_code: "", created_at: at, updated_at: at } });
   });
   await page.route("**/api/admin/admin/v1/billing/alipay/purchases", async route => {
@@ -490,22 +491,20 @@ test("Alipay redeems with one action id across a lost answer and opens the purch
   await page.goto("/console/billing");
   await expect(page.getByRole("tab", { name: "支付宝", exact: true })).toHaveAttribute("aria-selected", "true");
   await expect(page.getByRole("tab", { name: "充值包", exact: true })).toHaveCount(0);
-  await expect(page.getByText("60 积分", { exact: true })).toBeVisible();
-  const amount = page.getByLabel("兑换数量（积分）", { exact: true });
-  const redeem = page.getByRole("button", { name: "兑换为点数", exact: true });
-  await amount.fill("61");
-  await expect(page.getByText("支付宝额度不足，请先用支付宝购买套餐。", { exact: true })).toBeVisible();
-  await expect(redeem).toBeDisabled();
-  await amount.fill("5");
-  await expect(page.getByText("可获得 10 点", { exact: true })).toBeVisible();
-  await redeem.click();
+  await expect(page.getByText("200 点", { exact: true })).toBeVisible();
+  await expect(page.locator("main")).not.toContainText("积分");
+  await expect(page.getByText("有 120 点已付款、尚未入账。", { exact: true })).toBeVisible();
+  const claim = page.getByRole("button", { name: "入账", exact: true });
+  await claim.click();
   await expect(page.locator("main").getByRole("alert")).toHaveText("支付服务暂时不可用，请稍后再试。");
   await expect(page.locator("main")).not.toContainText("internal detail");
   await expect(page.getByText(/上次请求结果未知/).first()).toBeVisible();
-  await redeem.click();
-  await expect(page.getByText("兑换成功，已记入 10 点。", { exact: true })).toBeVisible();
+  await claim.click();
+  await expect(page.getByText("已入账 120 点。", { exact: true })).toBeVisible();
+  await expect(claim).toHaveCount(0);
   expect(redeems).toHaveLength(2);
   expect(redeems[0]).toEqual(redeems[1]);
+  expect(redeems[0].amount).toBe(60);
   expect(Object.keys(redeems[0]).sort()).toEqual(["action_id", "amount"]);
   await page.screenshot({ path: "test-results/alipay-billing.png", fullPage: true });
 
@@ -513,6 +512,50 @@ test("Alipay redeems with one action id across a lost answer and opens the purch
   await page.waitForURL(entry);
   expect(purchases).toHaveLength(1);
   expect(Object.keys(purchases[0] as object).sort()).toEqual(["action_id", "sku_id"]);
+});
+
+test("back from buying a plan, Alipay books the arrived quota as credits once", async ({ page }) => {
+  const at = "2026-11-11T08:00:00Z";
+  let reads = 0;
+  const overview = (remaining: number) => ({
+    capability_status: "ENABLED", product_name: "点数包", billing_mode: "QUANTITY", quota_unit: "POINT", supported: true, can_purchase: true, can_redeem: true,
+    plans: [{ sku_id: "sku_10", name: "10", price: "75.00", currency: "CNY", quota_unit: "POINT", quota_amount: 10 }],
+    access: { total: remaining, used: 0, remaining }, credits_per_unit_micro: 1_000_000, max_amount: 99_999_999, pending: null,
+  });
+  let remaining = 2;
+  const redeems: { action_id: string; amount: number }[] = [];
+  await page.addInitScript(() => {
+    if (!sessionStorage.getItem("seeded")) {
+      sessionStorage.setItem("seeded", "1");
+      localStorage.setItem("aisw.alipay.topup-intent", JSON.stringify({ quota: 10, baseline: 2, saved_at: Date.now() - 1000 }));
+    }
+  });
+  await page.route("**/api/admin/admin/v1/billing", route => route.fulfill({ json: { ...BILLING_OVERVIEW, has_customer: false, packages: [], payment_methods: { dodo: false, alipay: true } } }));
+  await page.route("**/api/admin/admin/v1/billing/alipay", route => {
+    reads += 1;
+    // The plan reaches the quota on the third read. 第三次读取时套餐到账。
+    if (reads === 3 && redeems.length === 0) remaining = 12;
+    return route.fulfill({ json: overview(remaining) });
+  });
+  await page.route(/\/api\/admin\/admin\/v1\/billing\/alipay\/redemptions(\?|$)/, async route => {
+    if (route.request().method() === "GET") {
+      await route.fulfill({ json: { items: [], next_cursor: "" } });
+      return;
+    }
+    const body = route.request().postDataJSON();
+    redeems.push(body);
+    remaining = 0;
+    await route.fulfill({ json: { id: "apr_1", action_id: body.action_id, amount: body.amount, quota_unit: "POINT", credits_micro: body.amount * 1_000_000, status: "succeeded", reason_code: "", created_at: at, updated_at: at } });
+  });
+
+  await page.goto("/console/billing?tab=alipay&alipay_return=1");
+  await expect(page.getByText("已入账 12 点。", { exact: true })).toBeVisible({ timeout: 20_000 });
+  expect(redeems).toHaveLength(1);
+  expect(redeems[0].amount).toBe(12);
+  expect(await page.evaluate(() => localStorage.getItem("aisw.alipay.topup-intent"))).toBeNull();
+  await page.reload();
+  await expect(page.getByText("10 点", { exact: true })).toBeVisible();
+  expect(redeems).toHaveLength(1);
 });
 
 // ---- 易支付 (EZFP) ----

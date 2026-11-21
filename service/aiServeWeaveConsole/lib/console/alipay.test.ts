@@ -4,17 +4,22 @@ import assert from "node:assert/strict";
 import {
   actionOutcome,
   checkRedeemAmount,
+  claimAmount,
   decodePresaleIntent,
+  decodeTopUpIntent,
   encodePresaleIntent,
+  encodeTopUpIntent,
   formatPlanPrice,
   newActionId,
   parseAlipayOverview,
   parseAlipayPurchase,
   parseAlipayRedemption,
   parseAlipayRedemptionPage,
+  planCreditsMicro,
   presaleQuotaArrived,
   presaleTopUp,
   quotaShort,
+  topUpArrived,
   PRESALE_INTENT_TTL_MS,
   type AlipayPlan,
 } from "./alipay.ts";
@@ -139,4 +144,43 @@ test("presaleQuotaArrived needs a known quota that covers the intent", () => {
   assert.equal(presaleQuotaArrived({ access: { total: 2500, used: 0, remaining: 2500 } }, { amount: 2500 }), true);
   assert.equal(presaleQuotaArrived({ access: { total: 2499, used: 0, remaining: 2499 } }, { amount: 2500 }), false);
   assert.equal(presaleQuotaArrived({ access: null }, { amount: 1 }), false);
+});
+
+test("planCreditsMicro shows a plan as the credits it books", () => {
+  const overview = { quotaUnit: "POINT", creditsPerUnitMicro: 1_000_000 };
+  assert.equal(planCreditsMicro({ quotaUnit: "POINT", quotaAmount: 10 }, overview), 10_000_000);
+  assert.equal(planCreditsMicro({ quotaUnit: "", quotaAmount: 10 }, overview), 10_000_000, "unit left out");
+  assert.equal(planCreditsMicro({ quotaUnit: "COUNT", quotaAmount: 10 }, overview), null, "another unit");
+  assert.equal(planCreditsMicro({ quotaUnit: "POINT", quotaAmount: 0 }, overview), null, "no quota");
+  assert.equal(planCreditsMicro({ quotaUnit: "POINT", quotaAmount: 99_999_999 }, { quotaUnit: "POINT", creditsPerUnitMicro: 1_000_000_000_000 }), null, "overflow");
+});
+
+test("claimAmount books all the quota, bounded, and nothing while unsure", () => {
+  const base = { access: { total: 50, used: 20, remaining: 30 }, maxAmount: 99_999_999, pending: null, canRedeem: true };
+  assert.equal(claimAmount(base), 30);
+  assert.equal(claimAmount({ ...base, maxAmount: 1 }), 1, "a count package redeems one at a time");
+  assert.equal(claimAmount({ ...base, access: null }), 0);
+  assert.equal(claimAmount({ ...base, canRedeem: false }), 0);
+  assert.equal(claimAmount({ ...base, access: { total: 0, used: 0, remaining: 0 } }), 0);
+  const pending = parseAlipayRedemption(redemption);
+  assert.equal(claimAmount({ ...base, pending }), 0);
+});
+
+test("a top-up intent round-trips and expires", () => {
+  const now = 1_800_000_000_000;
+  const intent = { quota: 10, baseline: 3, savedAt: now - 1000 };
+  assert.deepEqual(decodeTopUpIntent(encodeTopUpIntent(intent), now), intent);
+  assert.equal(decodeTopUpIntent(encodeTopUpIntent(intent), now - 2000), null, "from the future");
+  assert.equal(decodeTopUpIntent(encodeTopUpIntent({ ...intent, savedAt: now - PRESALE_INTENT_TTL_MS - 1 }), now), null, "expired");
+  assert.equal(decodeTopUpIntent(null, now), null);
+  assert.equal(decodeTopUpIntent("[]", now), null);
+  assert.equal(decodeTopUpIntent(JSON.stringify({ quota: 0, baseline: 0, saved_at: now }), now), null);
+  assert.equal(decodeTopUpIntent(JSON.stringify({ quota: 1, baseline: -1, saved_at: now }), now), null);
+});
+
+test("topUpArrived waits for the plan on top of the earlier quota", () => {
+  const intent = { quota: 10, baseline: 3 };
+  assert.equal(topUpArrived({ access: { total: 13, used: 0, remaining: 13 } }, intent), true);
+  assert.equal(topUpArrived({ access: { total: 12, used: 0, remaining: 12 } }, intent), false);
+  assert.equal(topUpArrived({ access: null }, intent), false);
 });

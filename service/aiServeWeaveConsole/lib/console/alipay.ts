@@ -368,3 +368,96 @@ export function decodePresaleIntent(raw: string | null, now: number): PresaleInt
 export function presaleQuotaArrived(overview: Pick<AlipayOverview, "access">, intent: Pick<PresaleIntent, "amount">): boolean {
   return overview.access !== null && overview.access.remaining >= intent.amount;
 }
+
+/** planCreditsMicro is what a plan's quota redeems into, the figure the page
+ * shows in place of the quota: tenants buy credits, never Alipay units. It is
+ * null when the plan's unit is not the overview's or the product overflows.
+ *
+ * planCreditsMicro 是一档套餐的额度可兑换的点数，页面以它代替额度展示：租户购买的是点数，
+ * 从不是支付宝单位。套餐单位与概览不同或乘积溢出时为 null。 */
+export function planCreditsMicro(plan: Pick<AlipayPlan, "quotaUnit" | "quotaAmount">, overview: Pick<AlipayOverview, "quotaUnit" | "creditsPerUnitMicro">): number | null {
+  if (plan.quotaAmount < 1 || (plan.quotaUnit !== "" && plan.quotaUnit !== overview.quotaUnit)) {
+    return null;
+  }
+  const credits = plan.quotaAmount * overview.creditsPerUnitMicro;
+  return Number.isSafeInteger(credits) ? credits : null;
+}
+
+/** claimAmount is how much of the quota one redemption books: all of it, up
+ * to the per-redemption maximum, and nothing while the quota is unknown or a
+ * redemption is still pending (the control plane would refuse a second).
+ *
+ * claimAmount 是一次兑换入账的额度：全部额度，以单次上限为界；额度未知或仍有待确认兑换
+ * 时为 0（控制面会拒绝第二笔）。 */
+export function claimAmount(overview: Pick<AlipayOverview, "access" | "maxAmount" | "pending" | "canRedeem">): number {
+  if (overview.access === null || overview.pending !== null || !overview.canRedeem) {
+    return 0;
+  }
+  return Math.max(0, Math.min(overview.access.remaining, overview.maxAmount));
+}
+
+/** TopUpIntent remembers, across the trip to Alipay, that the tenant bought a
+ * plan for credits: its quota and the quota already there when they left.
+ * Back on the page, once Alipay reports quota covering both, it is booked as
+ * credits. It lives in the browser only and proves nothing — the control
+ * plane still consumes the quota before booking anything.
+ *
+ * TopUpIntent 在前往支付宝的往返期间记住租户为充值点数购买了套餐：套餐额度，以及离开时
+ * 已有的额度。回到页面、支付宝报告的额度覆盖两者之后，就把它入账为点数。它只存在于浏览器，
+ * 不证明任何事——控制面仍须先核销额度才会入账。 */
+export interface TopUpIntent {
+  quota: number;
+  baseline: number;
+  savedAt: number;
+}
+
+/** TOP_UP_INTENT_KEY is the localStorage key of the pending TopUpIntent.
+ *
+ * TOP_UP_INTENT_KEY 是待完成 TopUpIntent 的 localStorage 键。 */
+export const TOP_UP_INTENT_KEY = "aisw.alipay.topup-intent";
+
+/** encodeTopUpIntent serializes an intent for storage.
+ *
+ * encodeTopUpIntent 把意图序列化以便存储。 */
+export function encodeTopUpIntent(intent: TopUpIntent): string {
+  return JSON.stringify({ quota: intent.quota, baseline: intent.baseline, saved_at: intent.savedAt });
+}
+
+/** decodeTopUpIntent reads a stored intent, refusing anything malformed, from
+ * the future or older than PRESALE_INTENT_TTL_MS.
+ *
+ * decodeTopUpIntent 读取已存储的意图，拒绝格式不符、来自未来或早于
+ * PRESALE_INTENT_TTL_MS 的内容。 */
+export function decodeTopUpIntent(raw: string | null, now: number): TopUpIntent | null {
+  if (raw === null) {
+    return null;
+  }
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return null;
+  }
+  if (typeof value !== "object" || value === null) {
+    return null;
+  }
+  const { quota, baseline, saved_at: savedAt } = value as Record<string, unknown>;
+  if (typeof quota !== "number" || !Number.isSafeInteger(quota) || quota < 1) {
+    return null;
+  }
+  if (typeof baseline !== "number" || !Number.isSafeInteger(baseline) || baseline < 0) {
+    return null;
+  }
+  if (typeof savedAt !== "number" || !Number.isFinite(savedAt) || savedAt > now || now - savedAt > PRESALE_INTENT_TTL_MS) {
+    return null;
+  }
+  return { quota, baseline, savedAt };
+}
+
+/** topUpArrived reports whether the quota now holds the plan bought on top of
+ * what was there before.
+ *
+ * topUpArrived 报告额度此刻是否已在原有额度之上包含所购套餐。 */
+export function topUpArrived(overview: Pick<AlipayOverview, "access">, intent: Pick<TopUpIntent, "quota" | "baseline">): boolean {
+  return overview.access !== null && overview.access.remaining >= intent.baseline + intent.quota;
+}
