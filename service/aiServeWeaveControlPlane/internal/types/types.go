@@ -42,6 +42,13 @@ type AgentEnrollmentRequest struct {
 type AgentEnrollmentCAResponse struct {
 	CAPEM    string `json:"ca_pem"`
 	CASHA256 string `json:"ca_sha256"`
+	// RegistryAddr and GatewayAddr are TenantNodes' configured external
+	// addresses, absent when not configured; the page uses them as defaults.
+	//
+	// RegistryAddr 与 GatewayAddr 是 TenantNodes 配置的对外地址，未配置时不出现；页面以它们
+	// 作为默认值。
+	RegistryAddr string `json:"registry_addr,omitempty"`
+	GatewayAddr  string `json:"gateway_addr,omitempty"`
 }
 
 // AgentEnrollmentResponse carries a one-time credential archive as bounded base64.

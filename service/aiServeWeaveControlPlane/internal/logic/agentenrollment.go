@@ -26,6 +26,16 @@ func (s *Service) AgentEnrollmentCA(actor Actor) (agentenrollment.Certificate, e
 	return ca, nil
 }
 
+// AgentEnrollmentAddresses returns the configured external Registry and
+// Gateway addresses, both empty when none are configured. They are only the
+// page's defaults: the operator may still edit them per bundle.
+//
+// AgentEnrollmentAddresses 返回已配置的对外 Registry 与 Gateway 地址，未配置时两者都为
+// 空。它们只是页面默认值，运维仍可按接入包修改。
+func (s *Service) AgentEnrollmentAddresses() (registry, gateway string) {
+	return s.enrollmentAddrs[0], s.enrollmentAddrs[1]
+}
+
 // CreateAgentEnrollment issues one new-node bundle and records a credential-free audit.
 //
 // CreateAgentEnrollment 签发一个新节点接入包并记录不含凭据的审计。

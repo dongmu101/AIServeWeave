@@ -21,13 +21,15 @@ export function AgentEnrollmentView() {
   const { t, locale } = useI18n();
   const ca = useResource({ method: "GET", surface: "operator", path: "/operator/v1/agent-enrollment", parse: parseEnrollmentCA });
   const run = useConsoleRequest();
-  // Addresses default to the conventional hosts of this site's own domain until the operator edits them.
-  // 地址默认取本站域名下约定的主机，直到运维修改为止。
+  // Addresses default to the control plane's configured ones (TenantNodes.RegistryAddr/GatewayAddr),
+  // else to the conventional hosts of this site's own domain, until the operator edits them.
+  // 地址默认取控制面配置的地址（TenantNodes.RegistryAddr/GatewayAddr），没有时取本站域名下约定的主机，
+  // 直到运维修改为止。
   const host = React.useSyncExternalStore(subscribeNothing, siteHost, () => "");
   const [registryInput, setRegistry] = React.useState<string | null>(null);
   const [gatewayInput, setGateway] = React.useState<string | null>(null);
-  const registry = registryInput ?? (host ? `registry.${host}:9443` : "");
-  const gateway = gatewayInput ?? (host ? `agent.${host}:8443` : "");
+  const registry = registryInput ?? ca.data?.registryAddr ?? (host ? `registry.${host}:9443` : "");
+  const gateway = gatewayInput ?? ca.data?.gatewayAddr ?? (host ? `agent.${host}:8443` : "");
   const [shared, setShared] = React.useState(false);
   const [ttl, setTTL] = React.useState("60");
   const [pending, setPending] = React.useState(false);

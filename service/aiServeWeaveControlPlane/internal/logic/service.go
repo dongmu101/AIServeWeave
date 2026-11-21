@@ -228,6 +228,7 @@ type Service struct {
 	sessions             session.Store
 	registryClient       RegistryClient
 	agentEnrollment      AgentEnrollment
+	enrollmentAddrs      [2]string
 	modelPullRouter      ModelPullRouter
 	comfyUIManagedRouter ComfyUIManagedRouter
 	billing              *BillingConfig
@@ -283,6 +284,14 @@ func WithRegistryClient(client RegistryClient) Option {
 // WithAgentEnrollment 启用仅供平台运维使用的公开 CA 和接入包下载。
 func WithAgentEnrollment(enrollment AgentEnrollment) Option {
 	return func(s *Service) { s.agentEnrollment = enrollment }
+}
+
+// WithEnrollmentAddresses sets the configured external Registry and Gateway
+// addresses the operator enrollment page offers as its defaults.
+//
+// WithEnrollmentAddresses 设置运维接入页默认填入的、已配置的对外 Registry 与 Gateway 地址。
+func WithEnrollmentAddresses(registry, gateway string) Option {
+	return func(s *Service) { s.enrollmentAddrs = [2]string{registry, gateway} }
 }
 
 // WithModelPullRouter gives the Service a way to forward model-pull

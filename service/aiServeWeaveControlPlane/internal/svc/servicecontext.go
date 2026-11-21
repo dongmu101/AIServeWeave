@@ -393,6 +393,13 @@ func NewServiceContext(ctx context.Context, cfg config.Config) (*ServiceContext,
 		if cfg.Registry.CACertFile != "" {
 			enrollment = agentenrollment.New(registryClient, cfg.Registry.CACertFile, clock)
 			logicOpts = append(logicOpts, logic.WithAgentEnrollment(enrollment))
+			// The operator page defaults to the addresses tenant bundles carry,
+			// even with tenant nodes turned off, instead of guessing from its own host.
+			//
+			// 运维页默认使用商户接入包所写的地址（即使商户节点已关闭），而不是按自身域名猜测。
+			if agentenrollment.ValidAddress(cfg.TenantNodes.RegistryAddr) && agentenrollment.ValidAddress(cfg.TenantNodes.GatewayAddr) {
+				logicOpts = append(logicOpts, logic.WithEnrollmentAddresses(cfg.TenantNodes.RegistryAddr, cfg.TenantNodes.GatewayAddr))
+			}
 		}
 	}
 	// Active requires the Registry and its CA file, so enrollment is set

@@ -14,6 +14,12 @@ test("enrollment parsing bounds binary data and rejects unsafe filenames", () =>
   }
   const pem = "-----BEGIN CERTIFICATE-----\nY2VydA==\n-----END CERTIFICATE-----\n";
   assert.equal(parseEnrollmentCA({ ca_pem: pem, ca_sha256: "a".repeat(64) }).pem, pem);
+  assert.equal(parseEnrollmentCA({ ca_pem: pem, ca_sha256: "a".repeat(64) }).registryAddr, null);
+  const configured = parseEnrollmentCA({ ca_pem: pem, ca_sha256: "a".repeat(64), registry_addr: "registry.example.com:9443", gateway_addr: "agent.example.com:8443" });
+  assert.deepEqual([configured.registryAddr, configured.gatewayAddr], ["registry.example.com:9443", "agent.example.com:8443"]);
+  for (const bad of [42, "", "no-port", "a b:1", "x".repeat(250) + ":9443"]) {
+    assert.throws(() => parseEnrollmentCA({ ca_pem: pem, ca_sha256: "a".repeat(64), registry_addr: bad }));
+  }
   assert.throws(() => parseEnrollmentCA({ ca_pem: pem + "-----BEGIN PRIVATE KEY-----\nsecret\n-----END PRIVATE KEY-----", ca_sha256: "a".repeat(64) }));
 });
 

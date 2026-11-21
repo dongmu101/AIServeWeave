@@ -21,7 +21,8 @@ func agentEnrollmentCA(ctx *svc.ServiceContext) http.HandlerFunc {
 			respondErr(w, err)
 			return
 		}
-		writeJSON(w, http.StatusOK, types.AgentEnrollmentCAResponse{CAPEM: ca.PEM, CASHA256: ca.SHA256})
+		registry, gateway := ctx.Logic.AgentEnrollmentAddresses()
+		writeJSON(w, http.StatusOK, types.AgentEnrollmentCAResponse{CAPEM: ca.PEM, CASHA256: ca.SHA256, RegistryAddr: registry, GatewayAddr: gateway})
 	}
 }
 

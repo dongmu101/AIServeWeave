@@ -1,8 +1,9 @@
 import { ApiError } from "./errors.ts";
 
-/** EnrollmentCA mirrors the public certificate download response.
- * EnrollmentCA 镜像公开证书下载响应。 */
-export interface EnrollmentCA { pem: string; sha256: string }
+/** EnrollmentCA mirrors the public certificate download response; the addresses are the
+ * configured defaults, null when the control plane has none.
+ * EnrollmentCA 镜像公开证书下载响应；地址是已配置的默认值，控制面未配置时为 null。 */
+export interface EnrollmentCA { pem: string; sha256: string; registryAddr: string | null; gatewayAddr: string | null }
 
 /** EnrollmentBundle holds a new node's credential archive only in page memory.
  * EnrollmentBundle 仅在页面内存保留新节点的凭据压缩包。 */
@@ -13,7 +14,15 @@ export interface EnrollmentBundle { nodeId: string; expiresAt: string; filename:
 export function parseEnrollmentCA(value: unknown): EnrollmentCA {
   const data = record(value);
   if (typeof data.ca_pem !== "string" || data.ca_pem.length > 65536 || !/^(?:-----BEGIN CERTIFICATE-----\n[A-Za-z0-9+/=\n]+\n-----END CERTIFICATE-----\n)+$/.test(data.ca_pem) || typeof data.ca_sha256 !== "string" || !/^[a-f0-9]{64}$/.test(data.ca_sha256)) throw new ApiError("contract");
-  return { pem: data.ca_pem, sha256: data.ca_sha256 };
+  return { pem: data.ca_pem, sha256: data.ca_sha256, registryAddr: optionalAddress(data.registry_addr), gatewayAddr: optionalAddress(data.gateway_addr) };
+}
+
+// optionalAddress accepts an absent field or a host:port the control plane has already validated.
+// optionalAddress 接受缺省字段，或控制面已校验过的 host:port。
+function optionalAddress(value: unknown): string | null {
+  if (value === undefined) return null;
+  if (typeof value !== "string" || value.length > 253 || !/^[A-Za-z0-9.-]+:\d{1,5}$/.test(value)) throw new ApiError("contract");
+  return value;
 }
 
 /** parseEnrollmentBundle bounds binary decoding and enforces a fixed safe filename.

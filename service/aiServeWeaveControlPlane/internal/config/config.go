@@ -360,10 +360,11 @@ type TenantNodesConf struct {
 	Enabled bool `json:",default=true"`
 	// RegistryAddr and GatewayAddr are the externally reachable host:port
 	// pairs written into each bundle. They are download content only, never
-	// addresses this service connects to.
+	// addresses this service connects to. The operator enrollment page also
+	// uses them as its defaults, even when Enabled is false.
 	//
 	// RegistryAddr 与 GatewayAddr 是写进每个接入包的对外可达 host:port。它们只是下载
-	// 内容，从不是本服务要连接的地址。
+	// 内容，从不是本服务要连接的地址。运维接入页也以它们作为默认值，即使 Enabled 为 false。
 	RegistryAddr string `json:",optional"`
 	GatewayAddr  string `json:",optional"`
 	// MaxPerTenant bounds a tenant's nodes that are not deleted.

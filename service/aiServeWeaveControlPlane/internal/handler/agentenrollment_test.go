@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"AIServeWeave/common/runtime"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/agentenrollment"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/session"
@@ -80,6 +82,56 @@ func TestAgentEnrollmentHandlerRejectsNodeOverrideAndExtremeTTL(t *testing.T) {
 			var body map[string]any
 			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
 				t.Fatal(err)
+			}
+		})
+	}
+}
+
+type enrollmentCAStub struct{}
+
+func (enrollmentCAStub) CA() (agentenrollment.Certificate, error) {
+	return agentenrollment.Certificate{PEM: "public-ca", SHA256: "cafe"}, nil
+}
+
+func (enrollmentCAStub) Create(context.Context, string, string, time.Duration) (agentenrollment.Bundle, error) {
+	return agentenrollment.Bundle{}, nil
+}
+
+// TestAgentEnrollmentCAOffersConfiguredAddresses checks the page receives the
+// configured addresses as defaults, and none when they are not configured.
+//
+// TestAgentEnrollmentCAOffersConfiguredAddresses 检查页面拿到已配置的地址作为默认值，
+// 未配置时不带地址。
+func TestAgentEnrollmentCAOffersConfiguredAddresses(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		opts              []logic.Option
+		registry, gateway string
+	}{
+		{"configured", []logic.Option{logic.WithAgentEnrollment(enrollmentCAStub{}), logic.WithEnrollmentAddresses("registry.example.com:9443", "agent.example.com:8443")}, "registry.example.com:9443", "agent.example.com:8443"},
+		{"not configured", []logic.Option{logic.WithAgentEnrollment(enrollmentCAStub{})}, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &svc.ServiceContext{Logic: logic.New(memstore.New(), runtime.NewSystemClock(), tc.opts...)}
+			req := httptest.NewRequest(http.MethodGet, "/operator/v1/agent-enrollment", nil)
+			req = req.WithContext(withActor(req.Context(), logic.Actor{UserID: "op_1", TenantID: model.PlatformScope, Role: model.RolePlatformOperator}))
+			w := httptest.NewRecorder()
+			agentEnrollmentCA(ctx)(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("status=%d, want 200", w.Code)
+			}
+			var body map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &body); err != nil {
+				t.Fatal(err)
+			}
+			for key, want := range map[string]string{"registry_addr": tc.registry, "gateway_addr": tc.gateway} {
+				got, present := body[key]
+				if want == "" && present {
+					t.Errorf("%s=%v, want absent", key, got)
+				}
+				if want != "" && got != want {
+					t.Errorf("%s=%v, want %q", key, got, want)
+				}
 			}
 		})
 	}
