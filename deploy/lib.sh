@@ -293,7 +293,7 @@ build_images() {
   if (( $# > 0 )); then services=("$@"); else read -r -a services <<<"$BUILD_ORDER"; fi
   [[ -z "${GOPROXY_ARG:-}" ]] || args+=(--build-arg "GOPROXY=$GOPROXY_ARG")
   for service in "${services[@]}"; do
-    log "构建 ${service}（${version}）"
+    log "构建 ${service}（镜像 latest，版本 ${version}）"
     compose build "${args[@]}" "$service" || die "$service 构建失败"
   done
 }

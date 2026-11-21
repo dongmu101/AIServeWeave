@@ -34,7 +34,7 @@
 # trust model in tunnel/identity.go, where the Registry CA is the only root an
 # Agent trusts.
 #
-# 镜像来源：AISW_IMAGE_TAG 留空时从源码构建，镜像标为 :local；设为一个已发布的
+# 镜像来源：AISW_IMAGE_TAG 留空时从源码构建，镜像标为 :latest；设为一个已发布的
 # vX.Y.Z 时，install.sh / upgrade.sh 改为从 GHCR 拉取 release 流水线推送的同版本
 # 镜像，主机上不再跑 Go 与 Next.js 构建。小内存主机（如 2 核 3G）应走后者。
 #
@@ -42,7 +42,7 @@
 # 默认值按 3 GiB 主机给出，可在 .env 中覆盖（见 .env.example 的「资源上限」）。
 #
 # Image source: with AISW_IMAGE_TAG empty, images are built from source and
-# tagged :local; set to a released vX.Y.Z, install.sh / upgrade.sh pull that
+# tagged :latest; set to a released vX.Y.Z, install.sh / upgrade.sh pull that
 # version's images from GHCR (pushed by the release workflow) and the host
 # runs no Go or Next.js build. Small hosts (e.g. 2 cores, 3 GiB) should do
 # the latter.
@@ -175,7 +175,7 @@ services:
   registry-init:
     # registry-init 与 registry 是同一个镜像，名字一致，构建或拉取一次即可。
     # registry-init and registry are one image under one name, built or pulled once.
-    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-registry:${AISW_IMAGE_TAG:-local}
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-registry:${AISW_IMAGE_TAG:-latest}
     build:
       context: ..
       args:
@@ -191,7 +191,7 @@ services:
     restart: "no"
 
   registry:
-    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-registry:${AISW_IMAGE_TAG:-local}
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-registry:${AISW_IMAGE_TAG:-latest}
     build:
       context: ..
       args:
@@ -258,7 +258,7 @@ services:
         condition: service_completed_successfully
 
   controlplane:
-    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-controlplane:${AISW_IMAGE_TAG:-local}
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-controlplane:${AISW_IMAGE_TAG:-latest}
     build:
       context: ..
       args:
@@ -440,7 +440,7 @@ services:
         fi
 
   console:
-    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-console:${AISW_IMAGE_TAG:-local}
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-console:${AISW_IMAGE_TAG:-latest}
     build:
       context: ../service/aiServeWeaveConsole
     restart: unless-stopped
@@ -492,7 +492,7 @@ services:
       start_period: 20s
 
   studio:
-    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-studio:${AISW_IMAGE_TAG:-local}
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-studio:${AISW_IMAGE_TAG:-latest}
     build:
       context: ../service/aiServeWeaveStudio
     restart: unless-stopped
@@ -531,7 +531,7 @@ services:
       start_period: 20s
 
   gateway:
-    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-gateway:${AISW_IMAGE_TAG:-local}
+    image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-gateway:${AISW_IMAGE_TAG:-latest}
     build:
       context: ..
       args:

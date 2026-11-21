@@ -193,7 +193,7 @@ evidence yet for a real multi-replica mixed-version cluster.
 `deploy/docker-compose.yaml` 里每个 AIServeWeave 自己的服务（`registry-init`、`registry`、
 `controlplane`、`console`、`gateway`）同时带 `build:` 与
 `image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-<service>:${AISW_IMAGE_TAG:-local}`。
-`AISW_IMAGE_TAG` 留空时从源码构建，镜像标为 `:local`；设为已发布的 `vX.Y.Z` 时就是本节流水线
+`AISW_IMAGE_TAG` 留空时从源码构建，镜像标为 `:latest`；设为已发布的 `vX.Y.Z` 时就是本节流水线
 推送的镜像（`registry-init` 与 `registry` 共用 `aiserveweave-registry`）。因此只需要一份编排
 文件，不必手工改 YAML：
 
@@ -210,7 +210,7 @@ Each of AIServeWeave's own services in `deploy/docker-compose.yaml` carries
 both `build:` and
 `image: ${AISW_IMAGE_REPO:-ghcr.io/dongmu101}/aiserveweave-<service>:${AISW_IMAGE_TAG:-local}`.
 With `AISW_IMAGE_TAG` empty the images are built from source and tagged
-`:local`; set to a released `vX.Y.Z`, they are the images this workflow
+`:latest`; set to a released `vX.Y.Z`, they are the images this workflow
 pushed. One orchestration file serves both, with no hand-edited YAML: check
 out the tag, then run `deploy/install.sh --image-tag vX.Y.Z` (or
 `deploy/upgrade.sh --image-tag vX.Y.Z` for an existing deployment), or set
