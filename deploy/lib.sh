@@ -554,8 +554,14 @@ follow_latest_images() {
     warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，跟随模式不会生效"
     return 0
   fi
-  [[ -n "$(env_get AISW_IMAGE_REPO)" ]] ||
-    warn "未设置 AISW_IMAGE_REPO，将从 ghcr.io/dongmu101 拉取；make publish 默认推送到 Docker Hub，应设置 AISW_IMAGE_REPO=docker.io/dongmu101"
+  # make release / make publish push to Docker Hub, while compose defaults to
+  # GHCR; follow mode pulls from where they push unless told otherwise.
+  # make release / make publish 推送到 Docker Hub，而 compose 默认是 GHCR；跟随模式除非另行指定，
+  # 从它们推送的位置拉取。
+  if [[ -z "$(env_get AISW_IMAGE_REPO)" && -z "${AISW_IMAGE_REPO:-}" ]]; then
+    env_set AISW_IMAGE_REPO docker.io/dongmu101
+    log "未设置 AISW_IMAGE_REPO，写入 docker.io/dongmu101（make release / make publish 推送的位置）"
+  fi
   env_set AISW_IMAGE_TAG "$LATEST_TAG"
   log "跟随模式：拉取最新发布的镜像（${LATEST_TAG}）"
 }

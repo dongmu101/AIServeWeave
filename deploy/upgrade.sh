@@ -23,7 +23,8 @@
 # 快进不能悄悄把它们合并掉。
 #
 # Usage:
-#   deploy/upgrade.sh                      # pull, back up, rebuild everything that changed
+#   deploy/upgrade.sh                      # pull code and the latest published images (:latest), back up, restart what changed
+#   deploy/upgrade.sh --build              # build the images from this checkout instead (needs ~6 GiB memory + swap)
 #   deploy/upgrade.sh gateway console      # rebuild only these services
 #   deploy/upgrade.sh --no-pull            # rebuild the current checkout as it is
 #   deploy/upgrade.sh --image-tag v0.2.0   # pull that release's images instead of building
@@ -38,7 +39,13 @@ usage() {
   cat <<'EOF'
 用法: deploy/upgrade.sh [选项] [服务...]
 
-  服务...           只重建这些服务（registry-init registry controlplane gateway console studio），默认全部
+  默认（跟随模式）  拉取代码与 make release / make publish 最近推送的 :latest 镜像，重启有变化的
+                    容器，不在本机构建；.env 未设置 AISW_IMAGE_REPO 时写入 docker.io/dongmu101。
+                    已用 --image-tag 固定版本的部署保持固定，恢复跟随用 --follow
+
+  服务...           源码构建时只重建这些服务（registry-init registry controlplane gateway console studio），默认全部
+  --build           改为从当前代码在本机构建镜像（写入 .env：AISW_IMAGE_FOLLOW=false，清空
+                    AISW_IMAGE_TAG），需要约 6 GiB 内存加 swap；恢复拉取用 --follow
   --no-pull         不拉取代码，直接用当前工作区重建
   --force           兼容旧用法，无作用（代码没有新提交时也会照常重建）
   --no-backup       跳过 MySQL 与 Registry 备份
@@ -58,7 +65,7 @@ EOF
 
 ORIGINAL_ARGS=("$@")
 PULL=1 BACKUP=1 PRUNE=0 FROM="" GOPROXY_ARG=""
-SET_TAG=0 IMAGE_TAG_ARG="" NO_BUILD=0 FOLLOW=0
+SET_TAG=0 IMAGE_TAG_ARG="" NO_BUILD=0 FOLLOW=0 BUILD=0
 BACKUP_DIR="${AISW_BACKUP_DIR:-$HOME/aiserveweave-backups}"
 SERVICES=()
 while (($# > 0)); do
@@ -68,6 +75,7 @@ while (($# > 0)); do
     --no-backup) BACKUP=0; shift ;;
     --no-build) NO_BUILD=1; shift ;;
     --follow) FOLLOW=1; shift ;;
+    --build) BUILD=1; shift ;;
     --backup-dir) BACKUP_DIR="${2:?}"; shift 2 ;;
     --goproxy) GOPROXY_ARG="${2:?}"; shift 2 ;;
     --image-tag)
@@ -172,16 +180,27 @@ fi
 # ---- configuration that a new version may require ----
 ensure_env
 OLD_TAG="$(image_tag)"
-(( SET_TAG == 0 || FOLLOW == 0 )) || die "--image-tag 与 --follow 不能同时使用"
+(( SET_TAG + FOLLOW + BUILD <= 1 )) || die "--image-tag、--follow 与 --build 只能选一个"
+if (( BUILD == 1 )); then SET_TAG=1 IMAGE_TAG_ARG=""; fi
 if (( SET_TAG == 1 )); then
   [[ -z "${AISW_IMAGE_TAG+x}" ]] || warn "shell 环境里设置了 AISW_IMAGE_TAG，它优先于 .env，--image-tag 写入 .env 的值不会生效"
   env_set AISW_IMAGE_TAG "$IMAGE_TAG_ARG"
-  if [[ "$(env_get AISW_IMAGE_FOLLOW)" == true ]]; then
-    env_set AISW_IMAGE_FOLLOW ""
+  # false, not empty: an empty AISW_IMAGE_FOLLOW with no tag means the default, follow mode.
+  # 写 false 而不是留空：AISW_IMAGE_FOLLOW 为空且没有 tag 时就是默认的跟随模式。
+  [[ "$(env_get AISW_IMAGE_FOLLOW)" != true ]] ||
     log "已关闭跟随模式，固定为 ${IMAGE_TAG_ARG:-源码构建}；恢复跟随用 --follow"
-  fi
+  env_set AISW_IMAGE_FOLLOW false
 fi
 (( FOLLOW == 0 )) || env_set AISW_IMAGE_FOLLOW true
+# Follow mode is the default: a deployment that has chosen nothing (no tag,
+# no AISW_IMAGE_FOLLOW) pulls the latest published images rather than
+# building on the host. One pinned with --image-tag stays pinned.
+# 跟随模式是默认：什么都没选过的部署（没有 tag、没有 AISW_IMAGE_FOLLOW）拉取最新发布的镜像，
+# 而不是在本机构建。用 --image-tag 固定过的部署保持固定。
+if (( NO_BUILD == 0 )) && [[ -z "$(env_get AISW_IMAGE_FOLLOW)" && -z "$(image_tag)" ]]; then
+  env_set AISW_IMAGE_FOLLOW true
+  log "默认拉取最新发布的镜像（跟随模式）；改为在本机构建用 --build"
+fi
 (( NO_BUILD == 1 )) || follow_latest_images
 fill_secrets
 ensure_controlplane_config

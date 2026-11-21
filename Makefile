@@ -216,8 +216,7 @@ publish: check-git check-docker-mem builder $(addprefix publish-,$(SERVICES)) ##
 	@for s in $(SERVICES); do for t in $(PUBLISH_TAGS); do echo "    $(HUB_REPO)/aiserveweave-$${s}:$${t}"; done; done
 	@echo
 	@echo "  服务器上部署:"
-	@echo "    首次: 在 deploy/.env 设置 AISW_IMAGE_REPO=$(HUB_REPO)，再 deploy/upgrade.sh --follow"
-	@echo "    之后: deploy/upgrade.sh"
+	@echo "    deploy/upgrade.sh（默认拉取 :latest；曾用 --image-tag 或 --build 的部署先 deploy/upgrade.sh --follow 一次）"
 
 # tag-latest points latest at an already published VERSION without building
 # anything: the registry copies the manifest, so it takes seconds.
@@ -234,21 +233,21 @@ tag-latest: ## 把已发布的 VERSION 标为 latest（不构建），如 make t
 # and the Docker Hub images, whose Gateway bakes in the same version's Agent
 # (what the platform serves under /agent/download/). The Gateway only names
 # the GitHub repository for a vX.Y.Z version, so both sides must carry the
-# same tag on the same commit. With SERVER set, the server then pins
-# AISW_IMAGE_TAG to it.
+# same tag on the same commit. With SERVER set, the server then pulls the
+# :latest images just pushed (follow mode).
 #
 # release 把同一个正式版本发到两边：GitHub Release（二进制与安装脚本，即
 # `install.sh --source github` 下载的内容）与 Docker Hub 镜像（其中 Gateway 内置同版本的
 # Agent，即平台在 /agent/download/ 下提供的内容）。Gateway 只在版本为 vX.Y.Z 时给出
-# GitHub 仓库，因此两边必须是同一提交上的同一个 tag。设置 SERVER 时，再让服务器把
-# AISW_IMAGE_TAG 固定到这个版本。
+# GitHub 仓库，因此两边必须是同一提交上的同一个 tag。设置 SERVER 时，再让服务器拉取刚推送的
+# :latest 镜像（跟随模式）。
 release: release-check ## 同一正式版本发 GitHub Release + Docker Hub 镜像，如 make release VERSION=v0.1.1 [SERVER=user@host]
 	@$(MAKE) --no-print-directory release-tag
 	@$(MAKE) --no-print-directory release-github
 	@$(MAKE) --no-print-directory release-agent-dist
 	@$(MAKE) --no-print-directory publish PUBLISH_TAGS="$(VERSION) latest" AGENT_DIST=$(RELEASE_AGENT_DIST)
 	@if [[ -n "$(SERVER)" ]]; then $(MAKE) --no-print-directory release-server; else \
-	  echo; echo "  服务器上部署: deploy/upgrade.sh --image-tag $(VERSION)（或 make release-server VERSION=$(VERSION) SERVER=user@host）"; fi
+	  echo; echo "  服务器上部署: deploy/upgrade.sh（或 make release-server SERVER=user@host）"; fi
 	@echo
 	@echo "==> $(VERSION) 已发布。部署后确认: curl -fsS https://<平台域名>/agent/v1/manifest 的 version 为 $(VERSION) 且带 github 字段"
 
@@ -310,9 +309,9 @@ release-agent-dist:
 	  cd "$${dir}"; if command -v sha256sum >/dev/null 2>&1; then sha256sum -- * > SHA256SUMS.txt; else shasum -a 256 -- * > SHA256SUMS.txt; fi; \
 	  echo "==> Gateway 内置 Agent 制品: $${dir}（$$(($$(wc -l < SHA256SUMS.txt))) 个文件，与 Release 字节一致）"
 
-release-server: check-server ## 让 SERVER 拉取并固定到 VERSION 的镜像（deploy/upgrade.sh --image-tag）
-	@echo "==> 在 $(SERVER) 上部署 $(VERSION)"
-	$(SSH) -t $(SERVER) 'cd $(REMOTE_DIR) && deploy/upgrade.sh --image-tag $(VERSION) $(UPGRADE_ARGS)'
+release-server: check-server ## 让 SERVER 拉取最新发布的 :latest 镜像并重启（deploy/upgrade.sh --follow）
+	@echo "==> 在 $(SERVER) 上部署最新发布的镜像"
+	$(SSH) -t $(SERVER) 'cd $(REMOTE_DIR) && deploy/upgrade.sh --follow $(UPGRADE_ARGS)'
 
 builder:
 	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || { \
