@@ -44,6 +44,7 @@ type Store struct {
 	tenants           map[string]model.Tenant
 	modelAccess       map[string]model.ModelAccess
 	nodeAccess        map[string]model.NodeAccess
+	nodeBilling       map[string]model.NodeBilling
 	tenantNodes       map[string]model.TenantNode
 	// nodeProviders and nodeProviderVersions back store.NodeProviders.
 	// nodeProviders 与 nodeProviderVersions 支撑 store.NodeProviders。
@@ -80,6 +81,7 @@ func New() *Store {
 		tenants:              map[string]model.Tenant{},
 		modelAccess:          map[string]model.ModelAccess{},
 		nodeAccess:           map[string]model.NodeAccess{},
+		nodeBilling:          map[string]model.NodeBilling{},
 		tenantNodes:          map[string]model.TenantNode{},
 		nodeProviders:        map[nodeProviderKey]model.NodeProvider{},
 		nodeProviderVersions: map[string]model.NodeProviderVersion{},
@@ -230,6 +232,40 @@ func (s *Store) DeleteNodeAccess(_ context.Context, nodeID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	delete(s.nodeAccess, nodeID)
+	return nil
+}
+
+// ListNodeBilling reads every free node's row, ordered by node id.
+//
+// ListNodeBilling 按节点 id 顺序读取每台免费节点的行。
+func (s *Store) ListNodeBilling(_ context.Context) ([]model.NodeBilling, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	rows := make([]model.NodeBilling, 0, len(s.nodeBilling))
+	for _, row := range s.nodeBilling {
+		rows = append(rows, row)
+	}
+	sort.Slice(rows, func(i, j int) bool { return rows[i].NodeID < rows[j].NodeID })
+	return rows, nil
+}
+
+// PutNodeBilling inserts or replaces one node's row.
+//
+// PutNodeBilling 插入或替换某台节点的行。
+func (s *Store) PutNodeBilling(_ context.Context, row *model.NodeBilling) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.nodeBilling[row.NodeID] = *row
+	return nil
+}
+
+// DeleteNodeBilling removes one node's row, if there is one.
+//
+// DeleteNodeBilling 删除某台节点的行（如果存在）。
+func (s *Store) DeleteNodeBilling(_ context.Context, nodeID string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	delete(s.nodeBilling, nodeID)
 	return nil
 }
 

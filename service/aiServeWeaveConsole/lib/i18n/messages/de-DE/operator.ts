@@ -1,4 +1,11 @@
 const operator = {
+  "operator.freeNode": "Kostenlos",
+  "operator.makeNodeFree": "Kostenlos machen",
+  "operator.makeNodeCharged": "Wieder berechnen",
+  "operator.makeNodeFreeConfirm": "Die von diesem Agent bediente Nutzung wird wie üblich bepreist, den Mandanten aber nicht berechnet. Gilt für Nutzung, die nach der Änderung erfasst wird. Fortfahren?",
+  "operator.makeNodeChargedConfirm": "Die von diesem Agent bediente Nutzung wird den Mandanten wieder berechnet, ab der nach der Änderung erfassten Nutzung. Fortfahren?",
+  "operator.nodeBillingSaved": "Abrechnungseinstellung gespeichert.",
+  "operator.nodeBilling": "Abrechnungseinstellungen",
   "operator.enableNodeSharing": "Freigabe aktivieren",
   "operator.disableNodeSharing": "Freigabe beenden",
   "operator.stopNodeSharingConfirm": "Gewöhnliche Mandanten verlieren den Zugriff auf diesen Knoten. Gültige exklusive Konten und bereits laufende Aufgaben bleiben erhalten.",

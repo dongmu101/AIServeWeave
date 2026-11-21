@@ -329,6 +329,26 @@ type NodeAccess interface {
 	DeleteNodeAccess(ctx context.Context, nodeID string) error
 }
 
+// NodeBilling persists the platform nodes marked free, one row each.
+//
+// NodeBilling 持久化被标记为免费的平台节点，每台一行。
+type NodeBilling interface {
+	// ListNodeBilling reads every row, ordered by node id. The logic layer
+	// caps the rows at nodeaccess.MaxDedicatedNodes.
+	//
+	// ListNodeBilling 按节点 id 顺序读取全部行。logic 层把行数限制在
+	// nodeaccess.MaxDedicatedNodes 以内。
+	ListNodeBilling(ctx context.Context) ([]model.NodeBilling, error)
+	// PutNodeBilling inserts or replaces the row for row.NodeID.
+	//
+	// PutNodeBilling 插入或替换 row.NodeID 对应的行。
+	PutNodeBilling(ctx context.Context, row *model.NodeBilling) error
+	// DeleteNodeBilling removes the row for nodeID; no row is not an error.
+	//
+	// DeleteNodeBilling 删除 nodeID 对应的行；本来没有行不算错误。
+	DeleteNodeBilling(ctx context.Context, nodeID string) error
+}
+
 // TenantNodes persists the nodes tenants enrolled themselves. Ownership is in
 // each node_id; these rows list, count and audit them.
 //
@@ -1098,6 +1118,7 @@ type Store interface {
 	Tenants
 	ModelAccess
 	NodeAccess
+	NodeBilling
 	TenantNodes
 	NodeProviders
 	AgentInstallCodes

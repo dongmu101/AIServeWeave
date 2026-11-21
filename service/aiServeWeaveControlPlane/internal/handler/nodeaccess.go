@@ -125,3 +125,62 @@ func approveNode(ctx *svc.ServiceContext) http.HandlerFunc {
 		w.WriteHeader(http.StatusNoContent)
 	}
 }
+
+// listNodeBilling handles GET /operator/v1/node-billing: every free platform node.
+//
+// listNodeBilling 处理 GET /operator/v1/node-billing：全部免费平台节点。
+func listNodeBilling(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		entries, err := ctx.Logic.ListNodeBilling(r.Context(), actor)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		out := types.NodeBillingListResponse{Items: make([]types.NodeBilling, 0, len(entries))}
+		for _, entry := range entries {
+			out.Items = append(out.Items, renderNodeBilling(entry, true))
+		}
+		writeJSON(w, http.StatusOK, out)
+	}
+}
+
+// setNodeBilling handles PUT /operator/v1/node-billing/:node_id.
+//
+// setNodeBilling 处理 PUT /operator/v1/node-billing/:node_id。
+func setNodeBilling(ctx *svc.ServiceContext) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		actor, ok := actorFrom(r.Context())
+		if !ok {
+			writeError(w, http.StatusUnauthorized, "unauthorized")
+			return
+		}
+		var req types.SetNodeBillingRequest
+		if !decodeNodeAccess(w, r, &req) {
+			return
+		}
+		if req.Free == nil {
+			respondErr(w, logic.ErrInvalidInput)
+			return
+		}
+		entry, err := ctx.Logic.SetNodeBilling(r.Context(), actor, pathvar.Vars(r)["node_id"], *req.Free)
+		if err != nil {
+			respondErr(w, err)
+			return
+		}
+		writeJSON(w, http.StatusOK, renderNodeBilling(entry, *req.Free))
+	}
+}
+
+func renderNodeBilling(entry logic.NodeBillingEntry, free bool) types.NodeBilling {
+	out := types.NodeBilling{NodeID: entry.NodeID, Free: free, UpdatedBy: entry.UpdatedBy}
+	if !entry.UpdatedAt.IsZero() {
+		at := entry.UpdatedAt
+		out.UpdatedAt = &at
+	}
+	return out
+}

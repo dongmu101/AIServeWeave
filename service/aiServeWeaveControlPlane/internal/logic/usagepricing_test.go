@@ -3,6 +3,7 @@ package logic_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sync"
 	"testing"
@@ -316,5 +317,35 @@ func TestChargeUsageLeavesTheTenantsOwnNodeUnbilled(t *testing.T) {
 	}
 	if billing, _ := f.store.GetTenantBilling(ctx, f.tenant.ID); billing.BalanceMicro != 1_000_000_000 {
 		t.Fatalf("balance = %d, want it untouched", billing.BalanceMicro)
+	}
+}
+
+func TestChargeUsageLeavesAFreePlatformNodeUnbilled(t *testing.T) {
+	f, capture := chargingFixture(t)
+	ctx := context.Background()
+	applyClaudeCatalog(t, f, 3e-6, f.clock.Now())
+	if _, err := f.svc.SetNodeBilling(ctx, accountOperator, "node-free", true); err != nil {
+		t.Fatal(err)
+	}
+	p := cachedRequest("req_free", "claude-x", f.clock.Now())
+	p.NodeID = "node-free"
+	r := pushOne(t, f, capture, p)
+	if r.CostMicro != 0 || r.BaseCostMicro != 3105 || !usageDetailsOf(t, r).FreeNode {
+		t.Fatalf("free-node record = cost %d base %d, want 0 charged and 3105 recorded", r.CostMicro, r.BaseCostMicro)
+	}
+	if billing, _ := f.store.GetTenantBilling(ctx, f.tenant.ID); billing.BalanceMicro != 1_000_000_000 {
+		t.Fatalf("balance = %d, want it untouched", billing.BalanceMicro)
+	}
+
+	if _, err := f.svc.SetNodeBilling(ctx, accountOperator, "node-free", false); err != nil {
+		t.Fatal(err)
+	}
+	p = cachedRequest("req_charged", "claude-x", f.clock.Now())
+	p.NodeID = "node-free"
+	if r := pushOne(t, f, capture, p); r.CostMicro != 3105 || usageDetailsOf(t, r).FreeNode {
+		t.Fatalf("charged-again record = cost %d, want 3105", r.CostMicro)
+	}
+	if _, err := f.svc.SetNodeBilling(ctx, accountOperator, fmt.Sprintf("tnode.%s.%032x", f.tenant.ID, 7), true); !errors.Is(err, logic.ErrConflict) {
+		t.Fatalf("tenant-owned node err = %v, want ErrConflict", err)
 	}
 }

@@ -210,6 +210,17 @@ go run ./service/aiServeWeaveGateway \
 - **升级**：先更新全部 Gateway，再迁移/升级控制面和 Console。旧 Gateway 不执行默认不共享。未明确开放共享的既有 Agent 也会变为非共享，需运维按意图配置。
 - **验证**：控制面默认及相关竞态测试通过；隔离 MySQL 通过新迁移、模式持久化与账号事务，PostgreSQL live 和真实 CLI 尚未验收。
 
+### 节点免费 / 收费（2026-11-21）
+
+平台运维可把单台平台 Agent 设为**免费**：它服务的用量照常计价（明细保留本应产生的费用），但 `cost_micro` 为 0、不扣租户余额，明细标记 `free`，用量查询返回 `free_node: true`。**没有配置的节点收费**。商户自有节点仍始终对所有者免费，不能设置（`409`）。
+
+- **接口**：`GET /operator/v1/node-billing` 返回全部免费节点 `{items: [{node_id, free: true, updated_by, updated_at}]}`；`PUT /operator/v1/node-billing/:node_id` 请求体 `{free: bool}`，`free` 必填。上限 1000 台。
+- **生效时间**：按**扣费时**的设置决定，而不是请求发生时；变更前发出、变更后入账的用量按新设置。设置不保留历史。
+- **存储与迁移**：基础迁移 `0019_node_billing.sql`（PostgreSQL/MySQL）新建 `node_billing`，有行即免费。删除节点时一并删除。
+- **审计**：`node_billing.update`，详情 `free=true|false`。
+- **升级**：先升级控制面，再升级 Gateway。新 Gateway 对所有节点上报 `node_id`（旧版只上报商户自有节点），旧 Gateway 下平台节点免费不生效。
+- **验证**：控制面默认测试（含免费 / 恢复收费 / 自有节点拒绝）通过；MySQL / PostgreSQL live 与真实环境尚未验收。
+
 完整操作与 HTTP 契约见[Agent 共享设置](../../docs/agent-sharing.md)。
 
 ### 商户自有节点

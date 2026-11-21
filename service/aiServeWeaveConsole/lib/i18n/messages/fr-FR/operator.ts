@@ -1,4 +1,11 @@
 const operator = {
+  "operator.freeNode": "Gratuit",
+  "operator.makeNodeFree": "Rendre gratuit",
+  "operator.makeNodeCharged": "Facturer l'usage",
+  "operator.makeNodeFreeConfirm": "L'usage servi par cet Agent sera tarifé comme d'habitude mais non facturé aux locataires. S'applique à l'usage enregistré après la modification. Continuer ?",
+  "operator.makeNodeChargedConfirm": "L'usage servi par cet Agent sera de nouveau facturé aux locataires, à partir de l'usage enregistré après la modification. Continuer ?",
+  "operator.nodeBillingSaved": "Paramètre de facturation enregistré.",
+  "operator.nodeBilling": "Paramètres de facturation",
   "operator.enableNodeSharing": "Activer le partage",
   "operator.disableNodeSharing": "Arrêter le partage",
   "operator.stopNodeSharingConfirm": "Les locataires ordinaires perdront l’accès à ce nœud. Les comptes exclusifs valides et les tâches déjà démarrées restent disponibles.",

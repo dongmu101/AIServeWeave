@@ -271,6 +271,10 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 	if err != nil {
 		return err
 	}
+	free, err := s.freeNodes(ctx, records)
+	if err != nil {
+		return err
+	}
 	for i := range records {
 		r := &records[i]
 		price, err := s.resolveUsagePrice(ctx, snap, r.Model, plans[i], moments[i])
@@ -298,6 +302,11 @@ func (s *Service) chargeUsage(ctx context.Context, records []model.UsageRecord) 
 		// 商户自己的硬件不计费；记录仍保留本应产生的费用明细。
 		if owner, owned := nodeaccess.OwnerOf(r.NodeID); owned && owner == r.TenantID {
 			r.CostMicro, doc.OwnNode = 0, true
+		} else if free[r.NodeID] {
+			// An operator made this platform node free; the record keeps
+			// what it would have cost, as for an own node.
+			// 运维把这台平台节点设为免费；与自有节点相同，记录保留本应产生的费用明细。
+			r.CostMicro, doc.FreeNode = 0, true
 		}
 		encoded, err := json.Marshal(doc)
 		if err != nil {

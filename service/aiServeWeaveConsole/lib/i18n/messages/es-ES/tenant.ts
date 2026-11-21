@@ -928,6 +928,7 @@ const tenant = {
   "tenant.usageNotCharged": "No descontado del saldo",
   "tenant.pricingPreUpgrade": "Antes de la actualización",
   "tenant.pricingLegacy": "Completado con precios anteriores",
+  "tenant.pricingFreeNode": "Nodo gratuito, sin cargo",
   "tenant.pricingOwnNode": "Nodo propio, sin cargo",
   "tenant.pricingUnpriced": "Sin precio definido",
   "tenant.priceSourceCatalog": "Precio oficial",

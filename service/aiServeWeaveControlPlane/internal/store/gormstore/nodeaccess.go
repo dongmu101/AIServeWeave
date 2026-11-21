@@ -36,3 +36,29 @@ func (s *Store) PutNodeAccess(ctx context.Context, row *model.NodeAccess) error 
 func (s *Store) DeleteNodeAccess(ctx context.Context, nodeID string) error {
 	return translate(s.db.WithContext(ctx).Where("node_id = ?", nodeID).Delete(&model.NodeAccess{}).Error)
 }
+
+// ListNodeBilling reads every free node's row, ordered by node id.
+//
+// ListNodeBilling 按节点 id 顺序读取每台免费节点的行。
+func (s *Store) ListNodeBilling(ctx context.Context) ([]model.NodeBilling, error) {
+	rows := []model.NodeBilling{}
+	err := s.db.WithContext(ctx).Order("node_id").Find(&rows).Error
+	return rows, translate(err)
+}
+
+// PutNodeBilling inserts or replaces one node's row as a single upsert.
+//
+// PutNodeBilling 以一次 upsert 插入或替换某台节点的行。
+func (s *Store) PutNodeBilling(ctx context.Context, row *model.NodeBilling) error {
+	return translate(s.db.WithContext(ctx).Clauses(clause.OnConflict{
+		Columns:   []clause.Column{{Name: "node_id"}},
+		DoUpdates: clause.AssignmentColumns([]string{"updated_by", "updated_at"}),
+	}).Create(row).Error)
+}
+
+// DeleteNodeBilling removes one node's row, if there is one.
+//
+// DeleteNodeBilling 删除某台节点的行（如果存在）。
+func (s *Store) DeleteNodeBilling(ctx context.Context, nodeID string) error {
+	return translate(s.db.WithContext(ctx).Where("node_id = ?", nodeID).Delete(&model.NodeBilling{}).Error)
+}

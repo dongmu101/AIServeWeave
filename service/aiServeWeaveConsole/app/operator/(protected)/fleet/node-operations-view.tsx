@@ -25,6 +25,7 @@ import {
   type FleetStatusFilter,
 } from "@/lib/console/fleet-board";
 import { parseNodeAccess, parseNodeAccessList, tenantNodeOwner } from "@/lib/console/node-access";
+import { parseNodeBilling, parseNodeBillingList } from "@/lib/console/node-billing";
 import { nodeActionLabels, nodeActionRequest, parseNodeStates, type NodeAction } from "@/lib/console/node-ops";
 import { MessageError } from "@/lib/i18n/problem";
 import type { Translator } from "@/lib/i18n/translate";
@@ -72,10 +73,12 @@ export function NodeOperationsView() {
   const registry = useResource({ method: "GET", surface: "operator", path: "/operator/v1/nodes/states", parse: parseNodeStates });
   const sharing = useResource({ method: "GET", surface: "operator", path: "/operator/v1/node-access", parse: parseNodeAccessList });
   const fleet = useResource({ method: "GET", surface: "operator", path: "/operator/v1/nodes", parse: parseFleetSnapshot });
+  const billing = useResource({ method: "GET", surface: "operator", path: "/operator/v1/node-billing", parse: parseNodeBillingList });
   const run = useConsoleRequest();
   const desired = useSettled(registry);
   const access = useSettled(sharing);
   const snapshot = useSettled(fleet);
+  const freeNodes = useSettled(billing);
 
   const [query, setQuery] = React.useState("");
   const [status, setStatus] = React.useState<FleetStatusFilter>("all");
@@ -83,13 +86,14 @@ export function NodeOperationsView() {
   const [approving, setApproving] = React.useState(false);
   const [selected, setSelected] = React.useState<{ nodeId: string; action: NodeAction } | null>(null);
   const [sharingTarget, setSharingTarget] = React.useState<{ nodeId: string; mode: "private" | "shared"; replacesDedicated: boolean } | null>(null);
+  const [billingTarget, setBillingTarget] = React.useState<{ nodeId: string; free: boolean } | null>(null);
   const [notice, setNotice] = React.useState<React.ReactNode>(null);
-  const selectionOpen = selected !== null || sharingTarget !== null;
+  const selectionOpen = selected !== null || sharingTarget !== null || billingTarget !== null;
 
   const board = React.useMemo(() => mergeFleetBoard(desired, snapshot?.nodes ?? null, access), [desired, snapshot, access]);
   const counts = React.useMemo(() => countByStatus(board), [board]);
   const shown = board.filter((node) => matchesStatus(node, status) && matchesFleetQuery(node, query));
-  const refreshing = registry.loading || sharing.loading || fleet.loading;
+  const refreshing = registry.loading || sharing.loading || fleet.loading || billing.loading;
   const settled = (desired !== null || registry.error !== null) && (snapshot !== null || fleet.error !== null);
   const labels = nodeActionLabels(locale);
 
@@ -97,6 +101,7 @@ export function NodeOperationsView() {
     registry.reload();
     sharing.reload();
     fleet.reload();
+    billing.reload();
   }
 
   function requestAction(nodeId: string, action: NodeAction) {
@@ -201,6 +206,7 @@ export function NodeOperationsView() {
           {registry.error ? <SourceAlert title={t("operator.registryState")} message={registry.error} onRetry={registry.reload} /> : null}
           {fleet.error ? <SourceAlert title={t("operator.liveFleetGatewayObservations")} message={fleet.error} onRetry={fleet.reload} /> : null}
           {sharing.error ? <SourceAlert title={t("operator.sharingSettings")} message={sharing.error} onRetry={sharing.reload} /> : null}
+          {billing.error ? <SourceAlert title={t("operator.nodeBilling")} message={billing.error} onRetry={billing.reload} /> : null}
 
           {shown.length > 0 ? (
             <ul className="grid gap-3">
@@ -210,8 +216,10 @@ export function NodeOperationsView() {
                     node={node}
                     busy={selectionOpen}
                     sharingReady={access !== null && !sharing.loading}
+                    free={freeNodes === null || billing.loading ? null : freeNodes.has(node.nodeId)}
                     onAction={(action) => requestAction(node.nodeId, action)}
                     onSharing={() => requestSharing(node.nodeId)}
+                    onBilling={() => setBillingTarget({ nodeId: node.nodeId, free: !(freeNodes?.has(node.nodeId) ?? false) })}
                   />
                 </li>
               ))}
@@ -250,6 +258,29 @@ export function NodeOperationsView() {
             throw new MessageError("operator.theWriteResultForIsUnconfirmedRefreshStatus", {}, failure);
           } finally {
             sharing.reload();
+          }
+        }}
+      />
+      <ConfirmDialog
+        open={billingTarget !== null}
+        onOpenChange={(open) => { if (!open) setBillingTarget(null); }}
+        title={t(billingTarget?.free ? "operator.makeNodeFree" : "operator.makeNodeCharged")}
+        confirmLabel={t("operator.confirmAction")}
+        description={billingTarget ? <>
+          <span className="font-mono break-all">{billingTarget.nodeId}</span>：
+          <Message id={billingTarget.free ? "operator.makeNodeFreeConfirm" : "operator.makeNodeChargedConfirm"} />
+        </> : ""}
+        onConfirm={async () => {
+          if (!billingTarget) return;
+          setNotice(null);
+          try {
+            await run({ method: "PUT", surface: "operator", path: `/operator/v1/node-billing/${encodeURIComponent(billingTarget.nodeId)}`,
+              body: { free: billingTarget.free }, parse: parseNodeBilling });
+            setNotice(<Message id="operator.nodeBillingSaved" />);
+          } catch (failure) {
+            throw new MessageError("operator.theWriteResultForIsUnconfirmedRefreshStatus", {}, failure);
+          } finally {
+            billing.reload();
           }
         }}
       />

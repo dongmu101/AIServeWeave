@@ -56,6 +56,8 @@ export function pricingNoteKey(kind: RecordPricing): MessageKey | null {
       return "tenant.pricingLegacy";
     case "own_node":
       return "tenant.pricingOwnNode";
+    case "free_node":
+      return "tenant.pricingFreeNode";
     case "unpriced":
       return "tenant.pricingUnpriced";
     default:

@@ -928,6 +928,7 @@ const tenant = {
   "tenant.usageNotCharged": "未扣余额",
   "tenant.pricingPreUpgrade": "升级前",
   "tenant.pricingLegacy": "按旧单价回填",
+  "tenant.pricingFreeNode": "免费节点不计费",
   "tenant.pricingOwnNode": "自有节点不计费",
   "tenant.pricingUnpriced": "未定价",
   "tenant.priceSourceCatalog": "官方价",

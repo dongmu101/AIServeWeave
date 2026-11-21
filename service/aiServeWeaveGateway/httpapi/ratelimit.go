@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"time"
 
-	"AIServeWeave/common/nodeaccess"
 	"AIServeWeave/common/pricing"
 	"AIServeWeave/common/runtime"
 	"AIServeWeave/service/aiServeWeaveGateway/ratelimit"
@@ -89,13 +88,14 @@ func (h *handlers) recordUsageOn(ctx context.Context, nodeID string, usage runti
 // omit it on intermediate chunks; there is nothing to bill) and a request
 // with no resolved tenant identity (an unauthenticated deployment has no
 // tenant to ledger against — the same no-op rateLimit already applies).
-// nodeID reaches the record only when it is tenant-owned.
+// nodeID reaches the record so the control plane can leave a tenant's own
+// node, or a platform node an operator made free, unbilled.
 //
 // ledgerUsage 在配置了账本、且确有内容可记时，把用量入队进持久化用量账本。
 // 两种情形会跳过入队而不是写入一条记录：全零用量（部分后端在中间 chunk 上
 // 不上报用量；此时无可计费之物）与没有解析出租户身份的请求（未启用鉴权的
 // 部署没有可记账的租户——与 rateLimit 已经采用的同一种空操作）。
-// nodeID 只有在属于商户自有节点时才写入记录。
+// nodeID 写入记录，使控制面不对商户自有节点或运维设为免费的平台节点计费。
 func (h *handlers) ledgerUsage(ctx context.Context, nodeID string, usage runtime.Usage, endpoint, model string) {
 	if h.usageLedger == nil {
 		return
@@ -106,9 +106,6 @@ func (h *handlers) ledgerUsage(ctx context.Context, nodeID string, usage runtime
 	identity, ok := IdentityFrom(ctx)
 	if !ok || identity.TenantID == "" {
 		return
-	}
-	if _, owned := nodeaccess.OwnerOf(nodeID); !owned {
-		nodeID = ""
 	}
 	details, attributes := h.usageDetails(usage)
 	accepted := h.usageLedger.enqueue(UsageRecord{

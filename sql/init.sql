@@ -231,6 +231,13 @@ ALTER TABLE agent_install_codes
 ALTER TABLE node_providers
  MODIFY updated_by VARCHAR(40) NOT NULL;
 
+-- base/mysql/0019_node_billing.sql
+CREATE TABLE IF NOT EXISTS node_billing (
+    node_id VARCHAR(128) PRIMARY KEY,
+    updated_by VARCHAR(40) NOT NULL,
+    updated_at DATETIME(6) NOT NULL
+) ENGINE=InnoDB;
+
 -- ============================================================
 -- routes
 -- ============================================================

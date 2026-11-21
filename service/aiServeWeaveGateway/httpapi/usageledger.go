@@ -66,14 +66,12 @@ type UsageRecord struct {
 	CompletionTokens int
 	TotalTokens      int
 	CreatedAt        time.Time
-	// NodeID is the node that served the request, set only for a
-	// tenant-owned node (common/nodeaccess.OwnerOf), where it lets the control
-	// plane leave the owner's own hardware unbilled. Every other record omits
-	// it, so a push from a deployment without tenant-owned nodes is unchanged.
+	// NodeID is the node that served the request, or empty when none did.
+	// The control plane leaves a tenant's own node, and a platform node an
+	// operator made free, unbilled.
 	//
-	// NodeID 是服务该请求的节点，仅对商户自有节点（common/nodeaccess.OwnerOf）设置，
-	// 控制面据此不对所有者自己的硬件计费。其他记录都不带它，因此没有商户自有节点的部署
-	// 推送的内容保持不变。
+	// NodeID 是服务该请求的节点，没有则为空。控制面不对商户自有节点以及运维设为免费的
+	// 平台节点计费。
 	NodeID string
 	// KeyID is the API key that made the request, so the control plane can
 	// attribute usage to a key and to the user who created it. It is empty

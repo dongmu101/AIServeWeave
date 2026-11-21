@@ -56,11 +56,13 @@ type UsageRecord struct {
 	// 记录时解析，使归属在 key 或用户之后被删除时依然保留。两者出现之前写入的记录为空。
 	KeyID  string `gorm:"size:40;not null;default:''"`
 	UserID string `gorm:"size:40;not null;default:''"`
-	// NodeID is the tenant-owned node that served the request, as the Gateway
-	// reported it, or empty. It is used to price the record and not stored.
+	// NodeID is the node that served the request, as the Gateway reported
+	// it, or empty. It decides whether the record is charged (a tenant's own
+	// node, or a platform node made free, is not) and is not stored. Older
+	// Gateways report only tenant-owned nodes.
 	//
-	// NodeID 是 Gateway 上报的、服务该请求的商户自有节点，没有则为空。它只用于给记录
-	// 定价，不被存储。
+	// NodeID 是 Gateway 上报的、服务该请求的节点，没有则为空。它决定记录是否扣费（商户
+	// 自有节点或被设为免费的平台节点不扣费），不被存储。旧版 Gateway 只上报商户自有节点。
 	NodeID string `gorm:"-"`
 	// CacheReadTokens and CacheWriteTokens are the prompt-cache reads and
 	// writes (every TTL), taken out of Details so summaries can add them up;
@@ -163,6 +165,10 @@ type UsageDetails struct {
 	// priced as usual but not charged.
 	// OwnNode 在请求由租户自己的节点服务时设置：照常计价，但不扣费。
 	OwnNode bool `json:"own,omitempty"`
+	// FreeNode is set when a platform node an operator made free served the
+	// request: it is priced as usual but not charged.
+	// FreeNode 在请求由运维设为免费的平台节点服务时设置：照常计价，但不扣费。
+	FreeNode bool `json:"free,omitempty"`
 	// Unpriced is set when some billed quantity found no price.
 	// Unpriced 在有计费数量找不到单价时设置。
 	Unpriced bool `json:"unpriced,omitempty"`

@@ -62,7 +62,7 @@ func renderUsageRecord(r model.UsageRecord, operator, costs bool) types.UsageRec
 	if costs {
 		out.CostMicro, out.BaseCostMicro, out.RatePPM = int64Ptr(r.CostMicro), int64Ptr(r.BaseCostMicro), int64Ptr(r.RatePPM)
 		out.PriceSource, out.Charged = r.PriceSource, r.Charged
-		out.Tier, out.OwnNode, out.Unpriced = doc.Tier, doc.OwnNode, doc.Unpriced
+		out.Tier, out.OwnNode, out.FreeNode, out.Unpriced = doc.Tier, doc.OwnNode, doc.FreeNode, doc.Unpriced
 		if operator {
 			out.Ref = doc.Ref
 		}

@@ -540,6 +540,32 @@ type SetNodeAccessRequest struct {
 	Tenants []string `json:"tenants"`
 }
 
+// NodeBilling is one platform node marked free.
+//
+// NodeBilling 是一台被标记为免费的平台节点。
+type NodeBilling struct {
+	NodeID    string     `json:"node_id"`
+	Free      bool       `json:"free"`
+	UpdatedBy string     `json:"updated_by,omitempty"`
+	UpdatedAt *time.Time `json:"updated_at,omitempty"`
+}
+
+// NodeBillingListResponse is every free platform node; a node absent from
+// it is charged. It is capped at nodeaccess.MaxDedicatedNodes.
+//
+// NodeBillingListResponse 是全部免费平台节点；不在其中的节点收费。上限为
+// nodeaccess.MaxDedicatedNodes。
+type NodeBillingListResponse struct {
+	Items []NodeBilling `json:"items"`
+}
+
+// SetNodeBillingRequest makes a platform node free or charged.
+//
+// SetNodeBillingRequest 把一台平台节点设为免费或收费。
+type SetNodeBillingRequest struct {
+	Free *bool `json:"free"`
+}
+
 // RevocationGenerationResponse is one notification cursor or heartbeat.
 //
 // RevocationGenerationResponse 是一次失效通知游标或心跳。

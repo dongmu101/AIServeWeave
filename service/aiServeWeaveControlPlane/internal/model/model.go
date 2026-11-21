@@ -385,6 +385,11 @@ const (
 	// ActionNodeAccessUpdate 记录一次运维替换某节点专属租户（common/nodeaccess）的
 	// 操作。它的 TenantID 与其他平台动作一样是 PlatformScope，目标是节点 id。
 	ActionNodeAccessUpdate = "node_access.update"
+	// ActionNodeBillingUpdate records an operator making a platform node free
+	// or charged again. Its target is the node id.
+	//
+	// ActionNodeBillingUpdate 记录运维把一台平台节点设为免费或恢复收费。目标是节点 id。
+	ActionNodeBillingUpdate = "node_billing.update"
 	// ActionTenantNodeCreate records a tenant creating an enrollment bundle
 	// for a node of its own. The token is never recorded.
 	//
@@ -539,6 +544,21 @@ type NodeAccess struct {
 //
 // TableName 钉死表名，与 Tenant.TableName 同理。
 func (NodeAccess) TableName() string { return "node_access" }
+
+// NodeBilling marks a platform node free: usage it serves is priced as usual
+// but not charged. No row means the node is charged.
+//
+// NodeBilling 把一台平台节点标记为免费：它服务的用量照常计价，但不扣费。没有行表示收费。
+type NodeBilling struct {
+	NodeID    string    `gorm:"primaryKey;size:128"`
+	UpdatedBy string    `gorm:"size:40;not null"`
+	UpdatedAt time.Time `gorm:"not null"`
+}
+
+// TableName pins the table name, as Tenant.TableName does.
+//
+// TableName 钉死表名，与 Tenant.TableName 同理。
+func (NodeBilling) TableName() string { return "node_billing" }
 
 // TenantNode is a node a tenant enrolled itself. Ownership is carried by the
 // node_id (common/nodeaccess.OwnerOf), not by this row: the row exists to

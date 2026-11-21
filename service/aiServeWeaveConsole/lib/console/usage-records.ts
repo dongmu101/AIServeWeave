@@ -59,6 +59,7 @@ export interface UsageRecord {
   charged: boolean | null;
   tier: number;
   ownNode: boolean;
+  freeNode: boolean;
   unpriced: boolean;
 }
 
@@ -120,6 +121,7 @@ export function parseUsageRecord(value: unknown): UsageRecord {
     charged: optionalFlag(source, "charged"),
     tier: optionalInteger(source, "tier") ?? 0,
     ownNode: optionalFlag(source, "own_node") ?? false,
+    freeNode: optionalFlag(source, "free_node") ?? false,
     unpriced: optionalFlag(source, "unpriced") ?? false,
   };
 }
@@ -133,21 +135,23 @@ export function parseUsageRecordPage(value: unknown): Page<UsageRecord> {
 /** RecordPricing is how a record's pricing reads for the tenant: `off` with
  * billing off, `pre_upgrade` for a record written before pricing, `legacy`
  * for a cost backfilled from the old per-model prices, `own_node` for a
- * request the tenant's own node served (priced, not charged), `unpriced`
+ * request the tenant's own node served (priced, not charged), `free_node`
+ * for one a platform node the operator made free served, `unpriced`
  * when nothing priced it, and `priced` otherwise.
  *
  * RecordPricing 是一条记录的计价在租户看来的样子：计费关闭为 `off`；计价出现之前写入的
  * 记录为 `pre_upgrade`；从旧的按模型单价回填的费用为 `legacy`；由租户自有节点服务的
- * 请求为 `own_node`（照常计价但不扣费）；没有任何单价时为 `unpriced`；其余为 `priced`。 */
-export type RecordPricing = "off" | "pre_upgrade" | "legacy" | "own_node" | "unpriced" | "priced";
+ * 请求为 `own_node`（照常计价但不扣费）；由运维设为免费的平台节点服务的请求为 `free_node`；没有任何单价时为 `unpriced`；其余为 `priced`。 */
+export type RecordPricing = "off" | "pre_upgrade" | "legacy" | "own_node" | "free_node" | "unpriced" | "priced";
 
 /** recordPricing classifies a record for display.
  * recordPricing 为展示而给一条记录分类。 */
-export function recordPricing(r: Pick<UsageRecord, "costMicro" | "priceSource" | "ownNode" | "unpriced">): RecordPricing {
+export function recordPricing(r: Pick<UsageRecord, "costMicro" | "priceSource" | "ownNode" | "unpriced"> & { freeNode?: boolean }): RecordPricing {
   if (r.costMicro === null) return "off";
   if (r.priceSource === "") return "pre_upgrade";
   if (r.priceSource === "legacy") return "legacy";
   if (r.ownNode) return "own_node";
+  if (r.freeNode) return "free_node";
   if (r.priceSource === "none" || r.unpriced) return "unpriced";
   return "priced";
 }

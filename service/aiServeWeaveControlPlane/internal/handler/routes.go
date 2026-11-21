@@ -80,6 +80,8 @@ func RegisterHandlers(server *rest.Server, ctx *svc.ServiceContext) {
 	server.AddRoutes([]rest.Route{
 		{Method: http.MethodGet, Path: "/operator/v1/node-access", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/node-access", requirePlatformSession(ctx, listNodeAccess(ctx)))},
 		{Method: http.MethodPut, Path: "/operator/v1/node-access/:node_id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/node-access/:node_id", requirePlatformSession(ctx, setNodeAccess(ctx)))},
+		{Method: http.MethodGet, Path: "/operator/v1/node-billing", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/node-billing", requirePlatformSession(ctx, listNodeBilling(ctx)))},
+		{Method: http.MethodPut, Path: "/operator/v1/node-billing/:node_id", Handler: instrumented(ctx.MetricsRegistry, "/operator/v1/node-billing/:node_id", requirePlatformSession(ctx, setNodeBilling(ctx)))},
 	}, rest.WithMaxBytes(nodeaccess.MaxDocumentBytes))
 
 	server.AddRoutes([]rest.Route{

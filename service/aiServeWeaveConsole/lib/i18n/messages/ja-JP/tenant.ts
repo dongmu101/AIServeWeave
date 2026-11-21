@@ -928,6 +928,7 @@ const tenant = {
   "tenant.usageNotCharged": "残高からは差し引かれていません",
   "tenant.pricingPreUpgrade": "アップグレード前",
   "tenant.pricingLegacy": "旧単価で補完",
+  "tenant.pricingFreeNode": "無料ノードのため課金なし",
   "tenant.pricingOwnNode": "自社ノードのため課金なし",
   "tenant.pricingUnpriced": "価格未設定",
   "tenant.priceSourceCatalog": "公式価格",

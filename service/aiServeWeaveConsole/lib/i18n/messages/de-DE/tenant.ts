@@ -940,6 +940,7 @@ const tenant = {
   "tenant.usageNotCharged": "Nicht vom Guthaben abgezogen",
   "tenant.pricingPreUpgrade": "Vor dem Upgrade",
   "tenant.pricingLegacy": "Mit alten Preisen nachgetragen",
+  "tenant.pricingFreeNode": "Kostenloser Knoten, nicht berechnet",
   "tenant.pricingOwnNode": "Eigener Knoten, nicht berechnet",
   "tenant.pricingUnpriced": "Kein Preis festgelegt",
   "tenant.priceSourceCatalog": "Offizieller Preis",

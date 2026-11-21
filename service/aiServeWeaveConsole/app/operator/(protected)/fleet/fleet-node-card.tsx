@@ -51,16 +51,21 @@ export function FleetNodeCard({
   node,
   busy,
   sharingReady,
+  free,
   onAction,
   onSharing,
+  onBilling,
 }: {
   node: FleetBoardNode;
   /** busy disables every write while a confirmation is open. / 确认框打开时 busy 禁用全部写操作。 */
   busy: boolean;
   /** sharingReady is false while the sharing policy is loading or failed. / 共享策略加载中或读取失败时为 false。 */
   sharingReady: boolean;
+  /** free is whether the node is free, or null while billing settings are loading or failed. / free 表示节点是否免费；收费设置加载中或读取失败时为 null。 */
+  free: boolean | null;
   onAction: (action: NodeAction) => void;
   onSharing: () => void;
+  onBilling: () => void;
 }) {
   const { locale, t } = useI18n();
   const { desired, observed } = node;
@@ -74,7 +79,7 @@ export function FleetNodeCard({
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1.5">
             <h2 className="mr-1 min-w-0 font-mono text-sm font-semibold break-all">{node.nodeId}</h2>
             <LivenessBadge liveness={node.liveness} />
-            <StatusBadges node={node} owner={owner} />
+            <StatusBadges node={node} owner={owner} free={free === true} />
           </div>
           {observed ? <ObservedMeta node={observed} /> : null}
         </div>
@@ -92,6 +97,11 @@ export function FleetNodeCard({
             {owner === null ? (
               <Button size="sm" variant="outline" disabled={busy || !sharingReady || !addressable} onClick={onSharing}>
                 <Message id={node.access === "shared" ? "operator.disableNodeSharing" : "operator.enableNodeSharing"} />
+              </Button>
+            ) : null}
+            {owner === null ? (
+              <Button size="sm" variant="outline" disabled={busy || free === null || !addressable} onClick={onBilling}>
+                <Message id={free ? "operator.makeNodeCharged" : "operator.makeNodeFree"} />
               </Button>
             ) : null}
             {owner === null && addressable ? (
@@ -169,7 +179,7 @@ function LivenessBadge({ liveness }: { liveness: Liveness }) {
 /** StatusBadges lists only the states that need reading. Maintenance names its
  * source when intent and observation disagree.
  * StatusBadges 只列出需要阅读的状态；期望与观测不一致时，维护徽章写明来源。 */
-function StatusBadges({ node, owner }: { node: FleetBoardNode; owner: string | null }) {
+function StatusBadges({ node, owner, free }: { node: FleetBoardNode; owner: string | null; free: boolean }) {
   const { t } = useI18n();
   const { desired, observed } = node;
   const wanted = desired?.maintenance === true;
@@ -198,6 +208,7 @@ function StatusBadges({ node, owner }: { node: FleetBoardNode; owner: string | n
           {t(node.access === "shared" ? "operator.sharedNode" : node.access === "dedicated" ? "operator.dedicatedNode" : "operator.privateNode")}
         </Badge>
       ) : null}
+      {free && owner === null ? <Badge variant="outline" className={STATUS_TONES.online.badge}>{t("operator.freeNode")}</Badge> : null}
       {node.inRegistry === false ? <Badge variant="outline" className="border-dashed text-muted-foreground">{t("operator.notInRegistry")}</Badge> : null}
     </>
   );

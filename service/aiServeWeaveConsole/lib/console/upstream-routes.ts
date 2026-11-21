@@ -278,6 +278,8 @@ const OPERATOR_ROUTES: readonly UpstreamRoute[] = [
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("model-access"), param()], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("node-access")], query: [] },
   { method: "PUT", segments: [literal("operator"), literal("v1"), literal("node-access"), param()], query: [] },
+  { method: "GET", segments: [literal("operator"), literal("v1"), literal("node-billing")], query: [] },
+  { method: "PUT", segments: [literal("operator"), literal("v1"), literal("node-billing"), param()], query: [] },
   { method: "GET", segments: [literal("operator"), literal("v1"), literal("routes")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("validate")], query: [] },
   { method: "POST", segments: [literal("operator"), literal("v1"), literal("routes"), literal("publish")], query: [] },

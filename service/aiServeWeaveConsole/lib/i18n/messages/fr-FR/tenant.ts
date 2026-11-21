@@ -940,6 +940,7 @@ const tenant = {
   "tenant.usageNotCharged": "Non déduit du solde",
   "tenant.pricingPreUpgrade": "Avant la mise à niveau",
   "tenant.pricingLegacy": "Reporté aux anciens prix",
+  "tenant.pricingFreeNode": "Nœud gratuit, non facturé",
   "tenant.pricingOwnNode": "Nœud propre, non facturé",
   "tenant.pricingUnpriced": "Aucun prix défini",
   "tenant.priceSourceCatalog": "Prix officiel",

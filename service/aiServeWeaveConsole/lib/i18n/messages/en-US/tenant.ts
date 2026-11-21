@@ -940,6 +940,7 @@ const tenant = {
   "tenant.usageNotCharged": "Not deducted from the balance",
   "tenant.pricingPreUpgrade": "Before upgrade",
   "tenant.pricingLegacy": "Backfilled at old prices",
+  "tenant.pricingFreeNode": "Free node, not billed",
   "tenant.pricingOwnNode": "Own node, not billed",
   "tenant.pricingUnpriced": "No price set",
   "tenant.priceSourceCatalog": "Official price",

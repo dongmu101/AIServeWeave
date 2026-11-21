@@ -1,4 +1,11 @@
 const operator = {
+  "operator.freeNode": "무료",
+  "operator.makeNodeFree": "무료로 설정",
+  "operator.makeNodeCharged": "과금 재개",
+  "operator.makeNodeFreeConfirm": "이 Agent가 처리한 사용량은 평소처럼 계산되지만 테넌트에게 과금되지 않습니다. 변경 후 기록된 사용량부터 적용됩니다. 계속할까요?",
+  "operator.makeNodeChargedConfirm": "이 Agent가 처리한 사용량은 변경 후 기록된 것부터 다시 테넌트에게 과금됩니다. 계속할까요?",
+  "operator.nodeBillingSaved": "과금 설정을 저장했습니다.",
+  "operator.nodeBilling": "과금 설정",
   "operator.enableNodeSharing": "공유 활성화",
   "operator.disableNodeSharing": "공유 중지",
   "operator.stopNodeSharingConfirm": "일반 테넌트는 이 노드를 사용할 수 없게 됩니다. 유효한 독점 계정 권한과 이미 시작한 작업은 유지됩니다.",

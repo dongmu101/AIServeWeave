@@ -1,4 +1,11 @@
 const operator = {
+  "operator.freeNode": "免费",
+  "operator.makeNodeFree": "设为免费",
+  "operator.makeNodeCharged": "恢复收费",
+  "operator.makeNodeFreeConfirm": "这台 Agent 服务的用量将照常计价，但不向租户扣费；对变更之后入账的用量生效。确定继续吗？",
+  "operator.makeNodeChargedConfirm": "这台 Agent 服务的用量将恢复向租户扣费，从变更之后入账的用量开始。确定继续吗？",
+  "operator.nodeBillingSaved": "收费设置已保存。",
+  "operator.nodeBilling": "收费设置",
   "operator.enableNodeSharing": "开启共享",
   "operator.disableNodeSharing": "停止共享",
   "operator.stopNodeSharingConfirm": "停止共享后，普通租户将不能使用这台节点；有效的独享账号权益仍保留，已开始的任务继续执行。",

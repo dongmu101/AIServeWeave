@@ -1,4 +1,11 @@
 const operator = {
+  "operator.freeNode": "Free",
+  "operator.makeNodeFree": "Make free",
+  "operator.makeNodeCharged": "Charge usage",
+  "operator.makeNodeFreeConfirm": "Usage served by this Agent will be priced as usual but not charged to tenants. It applies to usage recorded after the change. Continue?",
+  "operator.makeNodeChargedConfirm": "Usage served by this Agent will be charged to tenants again, starting with usage recorded after the change. Continue?",
+  "operator.nodeBillingSaved": "Billing setting saved.",
+  "operator.nodeBilling": "Billing settings",
   "operator.enableNodeSharing": "Enable sharing",
   "operator.disableNodeSharing": "Stop sharing",
   "operator.stopNodeSharingConfirm": "Ordinary tenants will lose access to this node. Valid exclusive account leases remain available and work already started continues.",

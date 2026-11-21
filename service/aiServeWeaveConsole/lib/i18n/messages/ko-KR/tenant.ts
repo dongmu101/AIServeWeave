@@ -928,6 +928,7 @@ const tenant = {
   "tenant.usageNotCharged": "잔액에서 차감되지 않음",
   "tenant.pricingPreUpgrade": "업그레이드 이전",
   "tenant.pricingLegacy": "이전 단가로 보완",
+  "tenant.pricingFreeNode": "무료 노드, 과금 없음",
   "tenant.pricingOwnNode": "자체 노드, 과금 없음",
   "tenant.pricingUnpriced": "가격 미설정",
   "tenant.priceSourceCatalog": "공식 가격",

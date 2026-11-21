@@ -447,6 +447,9 @@ func (s *Service) DeleteNode(ctx context.Context, actor Actor, nodeID string) er
 		if err := s.store.DeleteNodeAccess(ctx, nodeID); err != nil {
 			return translate(err)
 		}
+		if err := s.store.DeleteNodeBilling(ctx, nodeID); err != nil {
+			return translate(err)
+		}
 		if s.invalidator != nil {
 			s.invalidator.InvalidateAll(ctx)
 		}

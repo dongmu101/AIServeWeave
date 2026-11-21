@@ -40,6 +40,7 @@ type UsageRecordResponse struct {
 	Charged       *bool  `json:"charged,omitempty"`
 	Tier          int64  `json:"tier,omitempty"`
 	OwnNode       bool   `json:"own_node,omitempty"`
+	FreeNode      bool   `json:"free_node,omitempty"`
 	Unpriced      bool   `json:"unpriced,omitempty"`
 	// Ref is the catalog entry the record was priced from; operator only.
 	// Ref 是记录计价所依据的价目表条目；仅运维可见。
