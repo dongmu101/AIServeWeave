@@ -8,6 +8,7 @@ import (
 	"AIServeWeave/common/quota"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/logic"
 	"AIServeWeave/service/aiServeWeaveControlPlane/internal/model"
+	"AIServeWeave/service/aiServeWeaveControlPlane/internal/store"
 )
 
 // TestCurrentTenantIsReadableByEveryRole covers the asymmetry between reading
@@ -93,5 +94,27 @@ func TestCurrentTenantIsScopedToTheSession(t *testing.T) {
 
 	if _, err := f.svc.CurrentTenant(context.Background(), stranger); !errors.Is(err, logic.ErrNotFound) {
 		t.Errorf("CurrentTenant() error = %v, want ErrNotFound", err)
+	}
+}
+
+// TestCreateTenantWithTakenEmailWritesNoTenant covers deploy's bootstrap
+// container, which repeats CreateTenant on every `docker compose up`: a repeat
+// must answer conflict without leaving an ownerless tenant behind.
+//
+// TestCreateTenantWithTakenEmailWritesNoTenant 覆盖部署里每次 `docker compose up`
+// 都会重复 CreateTenant 的 bootstrap 容器：重复调用必须答冲突，且不留下没有 owner 的租户。
+func TestCreateTenantWithTakenEmailWritesNoTenant(t *testing.T) {
+	f := newFixture(t)
+	ctx := context.Background()
+	_, _, err := f.svc.CreateTenant(ctx, "Acme", "owner@example.com", testPassword, "10.0.0.1")
+	if !errors.Is(err, logic.ErrConflict) {
+		t.Fatalf("CreateTenant with a taken email: err = %v, want ErrConflict", err)
+	}
+	page, err := f.store.ListTenants(ctx, store.ListQuery{}, store.TenantFilter{})
+	if err != nil {
+		t.Fatalf("ListTenants: %v", err)
+	}
+	if len(page.Items) != 1 {
+		t.Fatalf("tenants = %d, want 1: a refused CreateTenant left a tenant row", len(page.Items))
 	}
 }

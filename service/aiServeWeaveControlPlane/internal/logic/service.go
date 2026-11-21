@@ -385,6 +385,15 @@ func (s *Service) CreateTenant(ctx context.Context, name, ownerEmail, ownerPassw
 	if name == "" || ownerEmail == "" {
 		return model.Tenant{}, model.User{}, ErrInvalidInput
 	}
+	// An email already in use is refused before the tenant row is written.
+	// Deploy's bootstrap container repeats this call on every `docker compose
+	// up`; without the check each repeat left another ownerless tenant behind.
+	//
+	// 已被占用的邮箱在写租户行之前就被拒绝。部署里的 bootstrap 容器每次 `docker
+	// compose up` 都会重复这次调用；没有这个检查时，每重复一次就留下一个没有 owner 的租户。
+	if err := s.ownerEmailFree(ctx, ownerEmail); err != nil {
+		return model.Tenant{}, model.User{}, err
+	}
 
 	tenant, owner, err := s.createTenantWithOwner(ctx, name, ownerEmail, ownerPassword, quota.Limits{}, false)
 	if err != nil {
@@ -438,10 +447,7 @@ func (s *Service) SignUpTenant(ctx context.Context, name, ownerEmail, ownerPassw
 		return model.Tenant{}, model.User{}, ErrInvalidInput
 	}
 
-	switch _, err := s.store.GetUserByEmail(ctx, ownerEmail); {
-	case err == nil:
-		return model.Tenant{}, model.User{}, ErrConflict
-	case !errors.Is(err, store.ErrNotFound):
+	if err := s.ownerEmailFree(ctx, ownerEmail); err != nil {
 		return model.Tenant{}, model.User{}, err
 	}
 
@@ -492,6 +498,21 @@ func bareEmail(email string) (string, bool) {
 		return "", false
 	}
 	return email, true
+}
+
+// ownerEmailFree returns ErrConflict when a user already holds email. The
+// check and the later insert are not atomic; see SignUpTenant.
+//
+// ownerEmailFree 在邮箱已被某个用户占用时返回 ErrConflict。检查与之后的插入不是原子的，
+// 见 SignUpTenant。
+func (s *Service) ownerEmailFree(ctx context.Context, email string) error {
+	switch _, err := s.store.GetUserByEmail(ctx, email); {
+	case err == nil:
+		return ErrConflict
+	case !errors.Is(err, store.ErrNotFound):
+		return err
+	}
+	return nil
 }
 
 // createTenantWithOwner is the insert path CreateTenant and SignUpTenant
