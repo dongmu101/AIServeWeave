@@ -90,10 +90,13 @@ export function AgentEnrollmentView() {
 
 function subscribeNothing() { return () => {}; }
 
-// siteHost is this site's domain name, or "" for localhost and IP addresses where no convention applies.
-// siteHost 是本站域名；localhost 与 IP 地址没有约定，返回 ""。
+// siteHost is this site's domain name without a leading "www." (the conventional hosts are
+// registry.<domain> and agent.<domain>, not registry.www.<domain>), or "" for localhost and IP
+// addresses where no convention applies.
+// siteHost 是去掉开头 "www." 的本站域名（约定主机是 registry.<域名> 与 agent.<域名>，而不是
+// registry.www.<域名>）；localhost 与 IP 地址没有约定，返回 ""。
 function siteHost(): string {
-  const host = window.location.hostname;
+  const host = window.location.hostname.replace(/^www\./i, "");
   return /^[a-z0-9-]+(\.[a-z0-9-]+)+$/i.test(host) && !/^\d+(\.\d+){3}$/.test(host) ? host : "";
 }
 
