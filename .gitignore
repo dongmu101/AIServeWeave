@@ -15,3 +15,8 @@ dist/
 *.test
 data/open7x
 deploy/config.open7x.yaml
+
+# Runtime identity material and tokens written by local Registry / Agent runs.
+/data/
+service/aiServeWeaveRegistry/data/
+service/aiServeWeaveAgent/data/
