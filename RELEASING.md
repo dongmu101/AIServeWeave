@@ -119,6 +119,17 @@ signal handling), are unverified on Windows, and get no Windows artifacts.
 7. Once the pipeline finishes, check the Releases page for a complete set of
    artifacts and spot-check one platform with the checksum verification below.
 
+### 本地一键发布两边 / `make release`
+
+不依赖 CI 时，在干净且已推送的 `main` 上执行：
+
+```bash
+make release VERSION=v0.1.1                    # GitHub Release + Docker Hub 镜像
+make release VERSION=v0.1.1 SERVER=root@host   # 另在服务器上 deploy/upgrade.sh --image-tag v0.1.1
+```
+
+它依次：校验 `VERSION` 为 `vX.Y.Z` 且 GitHub 上尚无同名 Release、工作区干净且已推送；在 HEAD 打 tag 并推送；用 `scripts/build-release.sh` 编译并以 `gh release create` 上传 `SHA256SUMS.txt` 列出的全部文件（有 CHANGELOG 小节时取其为 release notes，否则自动生成）；`make publish` 把同版本镜像（Gateway 内置同版本 Agent）推到 Docker Hub 的 `:VERSION` 与 `:latest`。两边版本一致后，平台 manifest 才会给出 GitHub 下载地址，`install.sh --source github` 才可用。推 tag 同样触发 `release.yml`；它发现 Release 已存在时跳过创建。服务器 `.env` 的 `AISW_IMAGE_REPO` 须指向 `HUB_REPO`（默认 `docker.io/dongmu101`）。
+
 ## 校验和验证 / Verifying checksums
 
 ```bash

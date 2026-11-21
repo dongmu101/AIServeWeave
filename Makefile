@@ -8,6 +8,7 @@
 #   make push SERVER=user@host               # 经 ssh 把镜像 load 到服务器
 #   make deploy SERVER=user@host             # 构建 + 送达 + 在服务器上 upgrade.sh --no-build
 #   make publish                             # 构建 amd64 + arm64 镜像并推送到 Docker Hub
+#   make release VERSION=v0.1.1 [SERVER=...] # 同一版本发 GitHub Release 与镜像，可选部署服务器
 #   make help
 #
 # Images are tagged $(REPO)/aiserveweave-<service>:$(TAG), which with the
@@ -85,7 +86,7 @@ SERVICE_registry     := aiServeWeaveRegistry
 SERVICE_controlplane := aiServeWeaveControlPlane
 SERVICE_gateway      := aiServeWeaveGateway
 
-.PHONY: help images local push save deploy publish tag-latest builder builder-reset check-docker-mem check-server check-git clean
+.PHONY: help images local push save deploy publish tag-latest release release-check release-tag release-github release-server builder builder-reset check-docker-mem check-server check-git clean
 
 help: ## 列出可用目标与变量
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -219,6 +220,68 @@ tag-latest: ## 把已发布的 VERSION 标为 latest（不构建），如 make t
 	  echo "==> $(HUB_REPO)/aiserveweave-$${s}:$(VERSION) -> latest"; \
 	  docker buildx imagetools create -t $(HUB_REPO)/aiserveweave-$${s}:latest $(HUB_REPO)/aiserveweave-$${s}:$(VERSION); \
 	done
+
+# release ships one official version to both sides: the GitHub Release
+# (binaries and install scripts, what `install.sh --source github` downloads)
+# and the Docker Hub images, whose Gateway bakes in the same version's Agent
+# (what the platform serves under /agent/download/). The Gateway only names
+# the GitHub repository for a vX.Y.Z version, so both sides must carry the
+# same tag on the same commit. With SERVER set, the server then pins
+# AISW_IMAGE_TAG to it.
+#
+# release 把同一个正式版本发到两边：GitHub Release（二进制与安装脚本，即
+# `install.sh --source github` 下载的内容）与 Docker Hub 镜像（其中 Gateway 内置同版本的
+# Agent，即平台在 /agent/download/ 下提供的内容）。Gateway 只在版本为 vX.Y.Z 时给出
+# GitHub 仓库，因此两边必须是同一提交上的同一个 tag。设置 SERVER 时，再让服务器把
+# AISW_IMAGE_TAG 固定到这个版本。
+release: release-check ## 同一正式版本发 GitHub Release + Docker Hub 镜像，如 make release VERSION=v0.1.1 [SERVER=user@host]
+	@$(MAKE) --no-print-directory release-tag
+	@$(MAKE) --no-print-directory release-github
+	@$(MAKE) --no-print-directory publish PUBLISH_TAGS="$(VERSION) latest"
+	@if [[ -n "$(SERVER)" ]]; then $(MAKE) --no-print-directory release-server; else \
+	  echo; echo "  服务器上部署: deploy/upgrade.sh --image-tag $(VERSION)（或 make release-server VERSION=$(VERSION) SERVER=user@host）"; fi
+	@echo
+	@echo "==> $(VERSION) 已发布。部署后确认: curl -fsS https://<平台域名>/agent/v1/manifest 的 version 为 $(VERSION) 且带 github 字段"
+
+release-check:
+	@[[ "$(VERSION)" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$$ ]] || { \
+	  echo "release 需要正式版本号 vX.Y.Z，如 make release VERSION=v0.1.1（当前: $(VERSION)）" >&2; exit 1; }
+	@command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1 || { echo "需要 GitHub CLI 并已 gh auth login" >&2; exit 1; }
+	@if gh release view "$(VERSION)" >/dev/null 2>&1; then \
+	  echo "GitHub 上已有 $(VERSION) 的 Release：换一个版本号，或先 gh release delete $(VERSION) --cleanup-tag" >&2; exit 1; fi
+	@$(MAKE) --no-print-directory check-git
+
+# The tag goes on HEAD, which check-git has confirmed is pushed, so the
+# server's upgrade.sh fast-forwards to the very commit the images came from.
+# tag 打在 HEAD 上，check-git 已确认它已推送，服务器 upgrade.sh 快进到的正是镜像所出自的提交。
+release-tag:
+	@if git rev-parse -q --verify "refs/tags/$(VERSION)" >/dev/null; then \
+	  [[ "$$(git rev-list -n1 "$(VERSION)")" == "$$(git rev-parse HEAD)" ]] || { \
+	    echo "tag $(VERSION) 已存在但不指向 HEAD：换一个版本号，或确认后 git tag -d $(VERSION)" >&2; exit 1; }; \
+	else echo "==> 打 tag $(VERSION)"; git tag -a "$(VERSION)" -m "$(VERSION)"; fi
+	git push origin "refs/tags/$(VERSION)"
+
+# Notes come from the CHANGELOG section when there is one, like release.yml;
+# otherwise GitHub generates them. Uploads exactly what SHA256SUMS.txt lists.
+# release notes 有 CHANGELOG 小节时取自该小节（与 release.yml 相同），否则由 GitHub 生成。
+# 上传的文件正是 SHA256SUMS.txt 列出的那些。
+release-github:
+	@echo "==> 编译 $(VERSION) 二进制"
+	VERSION="$(VERSION)" scripts/build-release.sh
+	@notes="$$(mktemp)"; trap 'rm -f "$${notes}"' EXIT; \
+	  awk -v ver="## [$(VERSION:v%=%)]" ' \
+	    index($$0, ver) == 1 { found=1; next } \
+	    found && (/^## \[/ || /^\[.*\]: http/) { exit } \
+	    found { print }' CHANGELOG.md > "$${notes}"; \
+	  if [[ -s "$${notes}" ]]; then note_args=(--notes-file "$${notes}"); else \
+	    echo "CHANGELOG.md 没有 [$(VERSION:v%=%)] 小节，改用 GitHub 自动生成的 release notes" >&2; note_args=(--generate-notes); fi; \
+	  files=(dist/SHA256SUMS.txt); while read -r _ name; do files+=("dist/$${name}"); done < dist/SHA256SUMS.txt; \
+	  echo "==> 创建 GitHub Release $(VERSION)（$${#files[@]} 个文件）"; \
+	  gh release create "$(VERSION)" --verify-tag --title "$(VERSION)" "$${note_args[@]}" "$${files[@]}"
+
+release-server: check-server ## 让 SERVER 拉取并固定到 VERSION 的镜像（deploy/upgrade.sh --image-tag）
+	@echo "==> 在 $(SERVER) 上部署 $(VERSION)"
+	$(SSH) -t $(SERVER) 'cd $(REMOTE_DIR) && deploy/upgrade.sh --image-tag $(VERSION) $(UPGRADE_ARGS)'
 
 builder:
 	@docker buildx inspect $(BUILDER) >/dev/null 2>&1 || { \

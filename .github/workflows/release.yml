@@ -187,7 +187,14 @@ jobs:
       - name: gh release create
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        # make release creates the Release from a local build before this
+        # workflow gets here; keep that one instead of failing.
+        # make release 在本流水线走到这里之前已用本地构建创建了 Release；保留它，不报错。
         run: |
+          if gh release view "${GITHUB_REF_NAME}" >/dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} 已存在（make release 创建），跳过 / already exists, skipping"
+            exit 0
+          fi
           gh release create "${GITHUB_REF_NAME}" \
             --title "${GITHUB_REF_NAME}" \
             --notes-file release-notes.md \
