@@ -45,6 +45,12 @@ VERSION         ?= $(shell git describe --tags --always --dirty --abbrev=12 2>/d
 VERSION         := $(VERSION)
 SERVICES        ?= registry controlplane gateway console studio
 AGENT_PLATFORMS ?= linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
+# A directory whose $(VERSION)/ holds prebuilt Agent artifacts for the
+# Gateway image (see agent-prebuilt in the Dockerfile); empty compiles them in
+# the image. make release sets it to the GitHub Release's own files.
+# 一个目录，其 $(VERSION)/ 下放 Gateway 镜像要内置的预编译 Agent 制品（见 Dockerfile 的
+# agent-prebuilt）；留空则在镜像里编译。make release 把它设为 GitHub Release 自己的文件。
+AGENT_DIST      ?=
 GOPROXY         ?=
 SERVER          ?=
 REMOTE_DIR      ?= AIServeWeave
@@ -76,6 +82,8 @@ ARCH            := $(lastword $(subst /, ,$(PLATFORM)))
 NATIVE_PLATFORM := linux/$(shell uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 IMAGES          := $(foreach s,$(SERVICES),$(REPO)/aiserveweave-$(s):$(TAG))
 GOPROXY_ARG     := $(if $(GOPROXY),--build-arg GOPROXY=$(GOPROXY))
+AGENT_ARGS      := --build-arg "AGENT_PLATFORMS=$(AGENT_PLATFORMS)" \
+                   $(if $(AGENT_DIST),--build-context agent-prebuilt=$(AGENT_DIST))
 LABEL_ARGS      := --label org.opencontainers.image.source=$(SOURCE_URL) \
                    --label org.opencontainers.image.revision=$(shell git rev-parse HEAD 2>/dev/null) \
                    --label org.opencontainers.image.version=$(VERSION) \
@@ -86,7 +94,7 @@ SERVICE_registry     := aiServeWeaveRegistry
 SERVICE_controlplane := aiServeWeaveControlPlane
 SERVICE_gateway      := aiServeWeaveGateway
 
-.PHONY: help images local push save deploy publish tag-latest release release-check release-tag release-github release-server builder builder-reset check-docker-mem check-server check-git clean
+.PHONY: help images local push save deploy publish tag-latest release release-check release-tag release-github release-agent-dist release-server builder builder-reset check-docker-mem check-server check-git clean
 
 help: ## 列出可用目标与变量
 	@grep -E '^[a-zA-Z_-]+:.*## ' $(MAKEFILE_LIST) | awk -F':.*## ' '{printf "  \033[36m%-10s\033[0m %s\n", $$1, $$2}'
@@ -138,7 +146,7 @@ image-%:
 	@echo "==> 构建 $*（$(PLATFORM)，版本 $(VERSION)）"
 	docker buildx build --platform $(PLATFORM) --load \
 	  --build-arg SERVICE=$(SERVICE_$*) --build-arg VERSION=$(VERSION) $(GOPROXY_ARG) \
-	  $(if $(filter gateway,$*),--build-arg "AGENT_PLATFORMS=$(AGENT_PLATFORMS)") \
+	  $(if $(filter gateway,$*),$(AGENT_ARGS)) \
 	  -t $(REPO)/aiserveweave-$*:$(TAG) .
 
 check-server:
@@ -237,7 +245,8 @@ tag-latest: ## 把已发布的 VERSION 标为 latest（不构建），如 make t
 release: release-check ## 同一正式版本发 GitHub Release + Docker Hub 镜像，如 make release VERSION=v0.1.1 [SERVER=user@host]
 	@$(MAKE) --no-print-directory release-tag
 	@$(MAKE) --no-print-directory release-github
-	@$(MAKE) --no-print-directory publish PUBLISH_TAGS="$(VERSION) latest"
+	@$(MAKE) --no-print-directory release-agent-dist
+	@$(MAKE) --no-print-directory publish PUBLISH_TAGS="$(VERSION) latest" AGENT_DIST=$(RELEASE_AGENT_DIST)
 	@if [[ -n "$(SERVER)" ]]; then $(MAKE) --no-print-directory release-server; else \
 	  echo; echo "  服务器上部署: deploy/upgrade.sh --image-tag $(VERSION)（或 make release-server VERSION=$(VERSION) SERVER=user@host）"; fi
 	@echo
@@ -279,6 +288,28 @@ release-github:
 	  echo "==> 创建 GitHub Release $(VERSION)（$${#files[@]} 个文件）"; \
 	  gh release create "$(VERSION)" --verify-tag --title "$(VERSION)" "$${note_args[@]}" "$${files[@]}"
 
+# release-agent-dist lays out, from the Release's own files, the directory the
+# Gateway serves under /agent/download/<VERSION>/: the bare Agent binaries for
+# AGENT_PLATFORMS, the four install scripts and a SHA256SUMS.txt of just those.
+# The Gateway image copies it instead of compiling the Agent again.
+#
+# release-agent-dist 用 Release 自己的文件摆出 Gateway 在 /agent/download/<VERSION>/ 下
+# 提供的目录：AGENT_PLATFORMS 的 Agent 裸二进制、四个安装脚本，以及只覆盖这些文件的
+# SHA256SUMS.txt。Gateway 镜像直接拷贝它，不再重新编译 Agent。
+RELEASE_AGENT_DIST := dist/agent-dist
+release-agent-dist:
+	@test -f dist/SHA256SUMS.txt || { echo "dist/ 里没有 Release 产物，先 make release-github VERSION=$(VERSION)" >&2; exit 1; }
+	@dir="$(RELEASE_AGENT_DIST)/$(VERSION)"; rm -rf "$(RELEASE_AGENT_DIST)"; mkdir -p "$${dir}"; \
+	  for platform in $(AGENT_PLATFORMS); do \
+	    goos="$${platform%/*}"; goarch="$${platform#*/}"; ext=""; [[ "$${goos}" != windows ]] || ext=.exe; \
+	    file="dist/aiserveweave-agent_$(VERSION)_$${goos}_$${goarch}$${ext}"; \
+	    [[ -f "$${file}" ]] || { echo "缺少 $${file}：dist/ 不是 $(VERSION) 的产物，或 AGENT_PLATFORMS 超出了 build-release.sh 的平台" >&2; exit 1; }; \
+	    cp -p "$${file}" "$${dir}/"; \
+	  done; \
+	  for script in agent.sh agent.ps1 install.sh install.ps1; do cp -p "dist/$${script}" "$${dir}/"; done; \
+	  cd "$${dir}"; if command -v sha256sum >/dev/null 2>&1; then sha256sum -- * > SHA256SUMS.txt; else shasum -a 256 -- * > SHA256SUMS.txt; fi; \
+	  echo "==> Gateway 内置 Agent 制品: $${dir}（$$(($$(wc -l < SHA256SUMS.txt))) 个文件，与 Release 字节一致）"
+
 release-server: check-server ## 让 SERVER 拉取并固定到 VERSION 的镜像（deploy/upgrade.sh --image-tag）
 	@echo "==> 在 $(SERVER) 上部署 $(VERSION)"
 	$(SSH) -t $(SERVER) 'cd $(REMOTE_DIR) && deploy/upgrade.sh --image-tag $(VERSION) $(UPGRADE_ARGS)'
@@ -315,7 +346,7 @@ publish-%: check-docker-mem builder
 	@echo "==> 构建并推送 $*（$(PUBLISH_PLATFORMS)，版本 $(VERSION)）"
 	docker buildx build --builder $(BUILDER) --platform $(PUBLISH_PLATFORMS) --push \
 	  --build-arg SERVICE=$(SERVICE_$*) --build-arg VERSION=$(VERSION) $(GOPROXY_ARG) \
-	  $(if $(filter gateway,$*),--build-arg "AGENT_PLATFORMS=$(AGENT_PLATFORMS)") \
+	  $(if $(filter gateway,$*),$(AGENT_ARGS)) \
 	  $(LABEL_ARGS) $(call hub_tags,$*) .
 
 clean: ## 删除 save 产生的压缩包

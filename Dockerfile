@@ -79,16 +79,37 @@ RUN --mount=type=cache,target=/go/pkg/mod \
 # agent-dist 为 AGENT_PLATFORMS 中的每个平台交叉编译 Agent，并摆出 Gateway 在 /agent/
 # 下提供的目录。只有 SERVICE 是 Gateway 时才真正干活；其他服务只留下一个空目录，镜像之间
 # 的差别仅此而已。
+#
+# agent-prebuilt can be replaced with already-built artifacts:
+# --build-context agent-prebuilt=DIR, where DIR/<VERSION>/ holds the Agent
+# binaries, the four scripts and their SHA256SUMS.txt (make release passes the
+# GitHub Release's own files, so both sides serve the same bytes). They are
+# copied after a checksum check instead of being compiled. Without it the stage
+# is the build stage, which has no /<VERSION>/SHA256SUMS.txt, so the Agent is
+# compiled as before.
+#
+# agent-prebuilt 可以换成已编译好的制品：--build-context agent-prebuilt=DIR，其中
+# DIR/<VERSION>/ 放 Agent 二进制、四个脚本及其 SHA256SUMS.txt（make release 传入的正是
+# GitHub Release 自己的文件，使两边提供相同的字节）。校验摘要后直接拷贝，不再编译。不传时
+# 该阶段就是 build 阶段，里面没有 /<VERSION>/SHA256SUMS.txt，Agent 照旧编译。
+FROM build AS agent-prebuilt
+
 FROM build AS agent-dist
 ARG VERSION=dev
 ARG AGENT_PLATFORMS="linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64"
 ARG SERVICE
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
+    --mount=type=bind,from=agent-prebuilt,target=/prebuilt \
     set -eu; \
     mkdir -p /opt/aisw/agent-dist; \
     if [ "$SERVICE" != aiServeWeaveGateway ]; then exit 0; fi; \
     dir="/opt/aisw/agent-dist/${VERSION}"; \
+    if [ -f "/prebuilt/${VERSION}/SHA256SUMS.txt" ]; then \
+      cp -R "/prebuilt/${VERSION}" "$dir"; \
+      cd "$dir" && sha256sum -c SHA256SUMS.txt; \
+      exit 0; \
+    fi; \
     mkdir -p "$dir"; \
     for platform in $AGENT_PLATFORMS; do \
       goos="${platform%/*}"; goarch="${platform#*/}"; ext=""; \
