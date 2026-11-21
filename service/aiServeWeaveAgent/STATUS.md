@@ -129,6 +129,7 @@
 [部署入口](../../deploy/agent/README.md) 提供 Ubuntu systemd、macOS Apple Silicon LaunchAgent 与 Windows 11 原生用户计划任务。Windows Go 适配包括身份 ACL、受保护写入与恢复记录、同用户 named pipe、执行前加入 Job 的 CLI 后代回收、大小写不敏感环境与无 shell npm 入口、磁盘余量（`internal/localstate`、`internal/localcontrol`、`internal/cliprocess`）。`-init-config`、`-check-config`、`-control` 和 `-log-file`（`internal/rotatelog`）供部署维护；原有手动启动方式保留。身份与 YAML 写入使用临时文件替换，证书组通过受保护 pending 记录恢复。运行时 Close 的上下文限制等待，进程另有最终停止期限。
 
 - 目标为 Ubuntu 22.04/24.04/26.04 × amd64/arm64、Windows 11 25H2/26H2 × amd64/arm64，以及 macOS 15/26/27 arm64；26H1 Windows 新硬件单独验证。真实系统均未验收，见 [矩阵](../../deploy/agent/acceptance.md)。
+- 2026-11-21：Ubuntu 上 `install.sh` 未指定 `--user` 时改为以执行安装的账户运行（`sudo` 调用者，否则当前账户，可能是 root），不再默认创建 `aiserveweave`；已安装节点与 `--upgrade` 沿用已保存的账户。只做了语法检查，真实安装未验证。
 - 2026-11-01：Ubuntu 上允许 `--user root`（`install.sh` 与 `agent.sh` 都支持），安装时打印一行警告；默认服务账户仍是 `aiserveweave`。systemd 单元不变（无额外加固），root 下 Agent 及其启动的 CLI 拥有 root 权限。默认测试只在 Linux 上覆盖暂存树，真实 root 服务启动未验证。
 - 2026-11-01 一行命令安装：[install.sh](../../deploy/agent/install.sh) 与 [install.ps1](../../deploy/agent/install.ps1) 下载并校验制品、兑换一次性码，再调用 `agent.sh`/`agent.ps1` 安装；`agent.ps1` 同步支持本地提交号版本。Agent 二进制与隧道协议无变化。使用见 [一行命令安装](../../deploy/agent/README.md#一行命令安装)，真实系统未验收。
 

@@ -34,7 +34,8 @@ Options:
   --source platform|github|https://DIR  Where the Agent comes from (default platform)
   --version VERSION            Default: the platform's version
   --platform URL               Platform origin; built in when the platform served this script
-  --user NAME                  Ubuntu service account (default aiserveweave, created if missing)
+  --user NAME                  Ubuntu service account (default: the account running the installer,
+                               the sudo caller under sudo; a named account is created if missing)
   --path PATH                  Background CLI PATH, passed to agent.sh
   --upgrade                    Upgrade an installed node; no credential needed
   --skip-network-check         Do not check that the Registry and Gateway addresses are reachable
@@ -358,7 +359,15 @@ set_aside_unfinished() {
 
 ensure_service_user() {
   [ "$goos" = linux ] && ! $stage || return 0
-  [ -n "$service_user" ] || service_user=aiserveweave
+  # Without --user the Agent runs as whoever ran the installer: the sudo
+  # caller when there is one, otherwise the current account (root included),
+  # so the CLI logins already made under that account are used as they are.
+  # 未指定 --user 时以执行安装的账户运行：经 sudo 时取调用者，否则取当前账户（含 root），
+  # 直接沿用该账户下已有的 CLI 登录。
+  if [ -z "$service_user" ]; then
+    service_user=${SUDO_USER:-}
+    [ -n "$service_user" ] || service_user=$(id -un)
+  fi
   [[ "$service_user" =~ ^[a-z_][a-z0-9_-]*$ ]] || fail "invalid --user"
   if ! id "$service_user" >/dev/null 2>&1; then
     log "creating service account $service_user"
